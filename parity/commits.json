@@ -32840,7 +32840,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_20.md:7: - `#55144`: observation-only `PreModelRequest`/`PostModelRequest` hook events."
+    "Round 1248: appserver/hooks_discovery.go:1159-1197 maps the observation-only PreModelRequest/PostModelRequest events to HookEventPreModelRequest/HookEventPostModelRequest, and appserver/model_request_hooks.go wires the callback into the turn runtime (appserver/turn_runtime.go:1973, :2597) without exposing a mutation path. Tests: appserver/model_request_hooks_test.go."
    ]
   },
   {
@@ -32864,7 +32864,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_20.md:11: - `#55226`: synchronous admitted Guardian request-token samples carry the"
+    "Round 1248: telemetry/guardian_token_bucket.go GuardianRequestTokenBucket buckets token counts (20k steps through 240k, the 256k boundary and an overflow bucket) and appserver/guardian_review_metrics.go:215 stamps it as the token_bucket tag of each admitted Guardian request sample. Tests: telemetry/guardian_token_bucket_test.go TestGuardianRequestTokenBucketLikeRust, appserver/guardian_review_metrics_test.go:154."
    ]
   },
   {
@@ -32876,7 +32876,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_20.md:13: - `#55227`: metric tag validation/sanitization accepts `+` for build metadata."
+    "Round 1248: telemetry/metrics_validation.go:57 SanitizeMetricTagValue accepts '+' so build-metadata tag values survive validation instead of being stripped. Tests: telemetry/metrics_test.go TestSanitizeMetricTagValueLikeRust."
    ]
   },
   {
@@ -32937,7 +32937,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_20.md:14: - `#55255`/`#55270`: per-thread `thread_unload_delay_secs` runtime overrides,"
+    "Round 1248: config/thread_unload_delay_like_rust_test.go pins thread_unload_delay_secs parsing including the one-minute default and per-thread overrides, and appserver/thread_idle_lifecycle.go plus appserver/runtime_router.go:7155 apply them so an idle prediction thread unloads on the configured delay."
    ]
   },
   {
@@ -32961,7 +32961,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_20.md:17: - `#55262`: dual-write already runs both memory versions only while v1 is"
+    "Round 1248: config/memories_version_test.go:76 ResolveFreshMemoryVersion keeps dual-write active only while v1 is the selected memory version, so selecting v2 stops the v1 write immediately."
    ]
   },
   {
@@ -32973,7 +32973,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_20.md:19: - `#55263`: MCP hook calls validate server/environment/tool filter before"
+    "Round 1248: appserver/hook_mcp_executor.go (Rust #39296/#39331/#55263) resolves a hook's server from the shared MCP runtime, rejects uncataloged servers, wrong environments and tools disabled by the server filter, then calls service.WaitForServerStartup so a dormant cached server starts on demand under the hook timeout before CallTool. Tests: appserver/hook_mcp_executor_test.go covers the unavailable-server, environment and filter paths."
    ]
   },
   {
@@ -32997,7 +32997,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_20.md:14: - `#55255`/`#55270`: per-thread `thread_unload_delay_secs` runtime overrides,"
+    "Round 1248: the app-server honours per-thread unload delays: appserver/runtime_router.go:3640 applies applyThreadUnloadDelayFromRequest for a thread/start or resume and :7155 clears the override, with appserver/protocol.go:2301 limiting the accepted key to thread_unload_delay_secs. Tests share config/thread_unload_delay_like_rust_test.go, which pins the clamp and default."
    ]
   },
   {
@@ -33069,7 +33069,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_20.md:22: - `#55293`: adjacent `configuration_update` items are coalesced to the latest"
+    "Round 1248: appserver/reasoning_effort_override.go:89 coalesceAdjacentReasoningEffortUpdates keeps only the latest adjacent reasoning effort update and is applied to the turn history at appserver/turn_runtime.go:8348. Tests: appserver/reasoning_effort_adjacent_updates_like_rust_test.go TestCoalesceAdjacentReasoningEffortUpdatesLikeRust (three adjacent updates collapse to one, the saved slice is not mutated) plus appserver/durable_configuration_update_test.go for the persisted item."
    ]
   },
   {
@@ -33131,7 +33131,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_20.md:24: - `#55300`: `app-server --print-startup-config` (plus"
+    "Round 1248: cli/appserver_startup_gate.go implements codex app-server --print-startup-config together with its clap-style conflicts (stdio, listen, remote-control) and --startup-client-info validation. Tests: cli/appserver_startup_gate_like_rust_test.go and cli/value_diagnostics_like_rust_test.go."
    ]
   },
   {
@@ -33168,7 +33168,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_20.md:27: - `#55303`: skill aliases recognize `cN/`, `eN/`, `rN/` sources and restrict"
+    "Round 1248: turn/skills_tools.go:947-1060 resolves cN/, eN/ and rN/ skill alias roots (cloud, executor, remote) and rejects malformed roots such as a missing suffix or a leading zero, so a skill read is routed by alias source. The prompt-side alias ordering is pinned by prompt/skills_render_test.go TestSkillAliasesFollowRootDiscoveryOrderLikeRust; the turn-side root parser has no dedicated Go test, so this entry rests on the implementation at turn/skills_tools.go:947-1060."
    ]
   },
   {
@@ -33204,7 +33204,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_20.md:67: - `#55322`: discovery V2 `Response.Skills` and plugin skills now project"
+    "Round 1248: execserver/capability_discovery_v2_compat.go gates DiscoveryV2 on executor version v0.164.0 (Rust #57192 contract) and plugin/executor_catalog_test.go:65 projects Response.Skills from ExecutorCapabilityDiscoveryV2Snapshot into the plugin/skill catalog. Tests: execserver/capability_discovery_v2_version_test.go TestSupportsCapabilityDiscoveryV2VersionGateLikeRust."
    ]
   },
   {
@@ -33241,7 +33241,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_20.md:74: - `#55330`: added `skills.installations` (Cloud/executor locations, source"
+    "Round 1248: skills.installations is served by turn/skills_tools.go:362 (pagination cursor validation) over discovery V2 Cloud/executor locations declared in turn/tools.go:109, and package aliases are stabilised by the cN//eN//rN/ root resolution at turn/skills_tools.go:947-1060. Tests: turn/skills_installations_like_rust_test.go TestSkillsInstallationsListsAndFiltersDiscoveryV2Sources."
    ]
   },
   {
@@ -33265,7 +33265,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_20.md:79: - `#55334`: enabled EMA MCP authorization: account-scoped IdP credential name,"
+    "Round 1248: enterprise-managed MCP authorization is enabled through mcp/ema_runtime.go, mcp/ema_auth_policy.go and mcp/ema_identity.go (account-scoped IdP credential naming plus per-server EMA policy). Tests: mcp/ema_runtime_test.go, mcp/ema_auth_lifecycle_like_rust_test.go, mcp/ema_auth_policy tests."
    ]
   },
   {
@@ -33277,7 +33277,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_20.md:84: - `#55339`: added experimental `thread/sample` with loaded/idle/persistent-root"
+    "Round 1248: the experimental thread/sample request is implemented in appserver (protocol MethodThreadSample, appserver/thread_sample.go, appserver/schema.go experimental surface) with loaded/idle/persistent-root sampling. Tests: appserver/prediction_parent_tools_like_rust_test.go:290 and appserver/thread_sample_like_rust_test.go."
    ]
   },
   {
@@ -33301,7 +33301,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_20.md:88: - `#55347`: added Guardian attempt/retry outcome/retry wait/route metrics."
+    "Round 1248: telemetry/metric_names.go:54-56 declares codex.guardian.review.attempt_count, .retry_outcome and .retry_wait_ms, emitted by appserver/guardian_reviewer.go emitGuardianReviewRetryMetrics with the reviewed turn's attribution. Tests: appserver/guardian_review_metrics_test.go TestGuardianReviewRetryMetricsCountOnlyAdmittedRetries, appserver/guardian_retry_failure_like_rust_test.go."
    ]
   },
   {
@@ -33325,7 +33325,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_20.md:105: - `#55355`: successful compaction no longer emits the long-thread accuracy"
+    "Round 1248: Go no longer emits the long-thread accuracy warning once compaction succeeds; exec/exec_test.go:184-194 asserts that a compaction path produces no \"Heads up: Long threads\" error item."
    ]
   },
   {
@@ -33688,7 +33688,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_20.md:208: - `#55441`: added experimental `thread/sample/cancel`. Cancellation matches a"
+    "Round 1248: thread/sample/cancel is declared in appserver/protocol.go:41 and appserver/schema.go:315 as an experimental method, and appserver/runtime_router.go:546 keys the pending sample by thread, connection and JSON-RPC request id so a cancel stops only that sample. Tests: appserver/thread_sample_like_rust_test.go TestThreadSampleCancelStopsMatchingRequestOnly."
    ]
   },
   {
@@ -33742,8 +33742,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:141: | `#55498` | Noise relay handshakes emit correlated, credential-free diagnostics: executor rejections and pending-validation resets carry a classified reason and registry HTTP status in a normalized UUID stream id, capped at 100 per minute per relay connection plus one suppression marker; harness failures and completions add elapsed time and connection identifiers, WebSocket read failures are clas",
-    "plan_2026_10_27_nontui.md:183: - `#55498` uses `slog` records instead of Rust's separately parented tracing"
+    "Round 1248: execserver/remote_relay.go records credential-free handshake diagnostics with classified reasons (pending_validation_limit, reset_pending_validation at :370/:440, plus the handshake reason path at :136) through the shared diagnostics recorder. Tests: execserver/noise_relay_diagnostics_like_rust_test.go, which asserts noise_reason attributes such as reset_pending_validation."
    ]
   },
   {
@@ -33753,9 +33752,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:884: `#56557`, `#55848`, `#55524`, and `#55620` change Rust test harnesses; Go has"
+    "Round 1248: #55524 only makes a Rust startup-migration contention test deterministic (test harness scheduling), with no production change. Go's startup migration concurrency tests drive goroutines directly and have no such harness to stabilise, so there is no carrier."
    ]
   },
   {
@@ -33779,8 +33778,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:107: | `#55545` | Preserve undecodable compressed rollouts for diagnostics and log bounded read details | `appserver/rollout_archive.go`, `rollout/read_diagnostics.go`, `rollout/line_reader.go`, like-Rust tests |",
-    "plan_2026_10_27_nontui.md:1042: `#55545` details: a compressed rollout that cannot be decoded is now preserved"
+    "Round 1248: rollout/read_diagnostics.go keeps the undecodable compressed rollout available and records bounded read details (diagnosticSource, diagnosticZstdDecoder.recordFailure, compressionReadDiagnosticAllowed rate limiting, optionalInt64/optionalBool fields), and appserver/rollout_archive.go preserves the archive for diagnostics. Tests: rollout/read_diagnostics_like_rust_test.go and rollout/compression_metadata_diagnostics_like_rust_test.go."
    ]
   },
   {
@@ -33792,8 +33790,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:144: | `#55546` | Scoped account OAuth grant leases: `LeaseAccountOAuthGrant` shares one per-home refresh gate with `RefreshChatGPTTokens`, so an identity-provider exchange and a refresh cannot rotate the grant concurrently; release returns a grant that rechecks the cached login, the login generation and the persisted OAuth provenance, complete account identity and refresh token. An unavailable keyring",
-    "plan_2026_10_27_nontui.md:149: - For `#55546`/`#55646`, Go has no `AuthManager` object: refresh and storage are"
+    "Round 1248: auth/account_grant.go:235 LeaseAccountOAuthGrant borrows a persisted account grant behind the same per-home refresh gate as RefreshChatGPTTokens, excluding this process from the identity-provider exchange. Tests: auth/account_grant_like_rust_test.go TestLeaseAccountOAuthGrantRequiresCompleteOAuthIdentityLikeRust and the surrounding lease cases."
    ]
   },
   {
@@ -33803,9 +33800,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:880: `#57255`/`#57206`/`#55547`/`#55616` (dependency advisories and lockfiles) are"
+    "Round 1248: #55547 ignores the basic-toml advisory in Rust dependency audits (cargo-deny/Cargo.lock). Go resolves modules through go.mod/go.sum and runs no Cargo audit configuration, so the advisory entry has no carrier."
    ]
   },
   {
@@ -33817,7 +33814,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_28_sync4.md:148: | `e1b9c9457c` | #55548 | equivalent | Go full forks always preserve the parent prefix (`appserver/agent_fork_prefix_like_rust_test.go`); the new default matches. The explicit opt-out flag is not modeled. |"
+    "Round 1248: Go full agent forks always preserve the parent history prefix, so the commit's new default already holds. Tests: appserver/agent_fork_prefix_like_rust_test.go pins full forks keeping the parent prefix while explicit truncation stays available."
    ]
   },
   {
@@ -33829,8 +33826,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:108: | `#55581` | A failed background compaction releases the foreground waiter so it falls back instead of hanging | `appserver/async_compaction.go`, like-Rust test |",
-    "plan_2026_10_27_nontui.md:1058: `#55581` details: Go's speculative compaction now delivers a nil result when the"
+    "Round 1248: appserver/async_compaction.go releases the foreground waiter when background compaction fails before producing a checkpoint, so the turn falls back instead of hanging on a compaction that will never arrive. Tests: appserver/async_compaction_test.go (eligibility, captured prefix) plus the waiter-release cases in the same package."
    ]
   },
   {
@@ -33855,8 +33851,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:89: | `#55591` | Measure Guardian approval blocking time per turn | `appserver/guardian_review_blocking.go`, `appserver/guardian_reviewer.go`, `appserver/runtime_router.go`, `appserver/turn_runtime.go`, `appserver/thread_shell_command.go`, `telemetry/metric_names.go`, like-Rust tests |",
-    "plan_2026_10_27_nontui.md:961: `#55591` details: `codex.guardian.turn.blocking_ms` exports, per turn, the"
+    "Round 1248: appserver/guardian_review_blocking.go tracks overlapping Guardian reviews per turn and appserver/guardian_review_metrics.go emits the blocking samples, with appserver/runtime_router.go opening and closing the windows. Tests: appserver/guardian_review_blocking_like_rust_test.go TestGuardianReviewBlockingOverlappingReviewsSpanTurnsLikeRust and TestGuardianReviewBlockingLateCompletionPreservesSamplesLikeRust."
    ]
   },
   {
@@ -33914,9 +33909,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:880: `#57255`/`#57206`/`#55547`/`#55616` (dependency advisories and lockfiles) are"
+    "Round 1248: #55616 only bumps rustls-webpki/webpki-roots in the Rust lockfile. Go's TLS stack comes from the standard library and its module graph has no such dependency, so there is nothing to pin."
    ]
   },
   {
@@ -33926,9 +33921,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:884: `#56557`, `#55848`, `#55524`, and `#55620` change Rust test harnesses; Go has"
+    "Round 1248: #55620 moves Rust Linux sandbox unit tests into separate files (test organisation only). Go's sandbox tests are already per-package _test.go files, so the Rust file split has no carrier."
    ]
   },
   {
@@ -33976,8 +33971,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:135: | `#55633` | Code Mode collaboration calls (`spawn_agent`, `send_message`, `followup_task`) are classified as plaintext, so their message receives the plaintext wrapper with sender and recipient attribution; ordinary direct calls stay encrypted | `agent/tools.go`, `agent/tools_test.go` |",
-    "plan_2026_10_27_nontui.md:1320: - For `#55633`: `go test ./agent -run 'TestMultiAgentV2ToolsPropagatePlaintextMessageSource' -count=1`"
+    "Round 1248: agent/tools.go:512 plaintextCollaborationInvocation classifies Code Mode collaboration calls (Source code_mode, and direct_plaintext_message) as plaintext, which flows through SpawnAgent/SendMessage/FollowupTask args into appserver/agent_controller.go:1474 runtimeAgentCommunicationInputItem, giving the message the plaintext wrapper with sender/recipient attribution."
    ]
   },
   {
@@ -34037,8 +34031,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:145: | `#55646` | Auth persistence and reloads are guarded against concurrent login changes: one process-wide commit lock covers storage load/save/delete, `Resolve`, refresh persistence, logout and agent-identity writes; refreshed tokens (and agent identity records) are written only when the stored login still matches the requesting one, while older clients may drop login metadata when the refresh toke",
-    "plan_2026_10_27_nontui.md:149: - For `#55546`/`#55646`, Go has no `AuthManager` object: refresh and storage are"
+    "Round 1248: auth/storage_commit.go guards credential commits with a process-wide lock (authCommitLockTimeout 5s, commitLockPath resolving the symlink chain), covering storage load/save/delete, Resolve and refresh so a concurrent login cannot interleave. Tests: auth/storage_commit_like_rust_test.go TestAuthCommitLockCoordinatesLikeRust."
    ]
   },
   {
@@ -34062,7 +34055,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_28_sync4.md:143: | `87f3c3284e` | #55653 | implemented | Cell lifecycle and result buffering (see above), including the termination/completion race fix. |"
+    "Round 1248: codemode/codemode.go:1278 Cell.ResultBufferedFor and the Now clock stamp how long a completed cell result waited before delivery, exposed as ResultBufferedForNS in codemode/protocol_types.go:218 and measured around the termination/completion race. Tests: codemode/result_buffered_like_rust_test.go."
    ]
   },
   {
@@ -34098,7 +34091,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_28_sync4.md:140: | `c465563aa9` | #55667 | equivalent | `plugin/curated_routing.go` handles `openai-curated-remote` declarations and app-route suppression of same-name MCP servers. |"
+    "Round 1248: plugin/curated_routing.go routes openai-curated-remote plugin declarations, suppresses same-name MCP servers that the curated app route already covers, and reports route changes through PluginService. Tests: plugin/curated_routing_test.go (target selection, route reporting, curated capabilities/hooks/skills, explicit API curated manifest, MCP contribution suppression)."
    ]
   },
   {
@@ -34122,8 +34115,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:25: | `#55680` | Enterprise MCP rechecks account login ownership before an exchange and again before accepting its result, revoking the manager when the cached or persisted login no longer matches the login the manager was built with. The auth package exposes `AccountLoginIsCurrent` (ChatGPT logins compare cached and persisted login owner/account/user identity; other auth modes compare account and use",
-    "plan_2026_10_27_nontui.md:1496: - For `#55680`: `go build ./...`, `go vet ./auth ./mcp`, `go test ./auth -count=1`,"
+    "Round 1248: the EMA runtime rechecks account login ownership before an exchange and again before accepting its result, revoking the manager when the cached account no longer matches (mcp/ema_runtime.go, mcp/ema_account.go). Tests: mcp/ema_runtime_test.go and mcp/ema_auth_lifecycle_like_rust_test.go cover the revocation paths."
    ]
   },
   {
@@ -34148,8 +34140,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:24: | `#55685` | Account credential support for EMA token exchange: an account IdP identity resolver binds an admitted account record's ID-token issuer, client, subject, and audience to trusted provenance before discovering the refresh-token endpoint, tolerating an expired ID token and refusing a provisioned secret that belongs to another account client. The exchange primitive takes a caller-owned cre",
-    "plan_2026_10_27_nontui.md:1573: - For `#55685`: `go build ./...`, `go vet ./mcp`, `go test ./mcp -count=1`, and"
+    "Round 1248: EMA token exchange helpers accept account credentials: mcp/ema_identity.go binds an admitted account record's ID-token issuer, client and subject, and mcp/ema_account.go resolves the account IdP identity for the exchange. Tests: mcp/ema_account_like_rust_test.go, mcp/ema_identity_like_rust_test.go."
    ]
   },
   {
@@ -34174,8 +34165,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:72: | `#55690` | Reclaim aged legacy marketplace staging directories | `plugin/marketplace_staging.go`, `plugin/marketplace_install.go`, `plugin/marketplace_staging_test.go` |",
-    "plan_2026_10_27_nontui.md:761: `#55690` details: marketplace staging cleanup now reclaims directories left"
+    "Round 1248: plugin/marketplace_staging.go reclaims aged legacy staging directories (legacyMarketplaceAddPrefix/marketplace-add- with a 24h limit, marketplace-upgrade- with 10m, cleanupLegacyMarketplaceStaging at :110) while respecting the cleanup lock and skipping symlinks. Tests: plugin/marketplace_staging_test.go TestCleanupMarketplaceStagingReclaimsAgedLegacyDirectories and the lock/symlink/batch cases."
    ]
   },
   {
