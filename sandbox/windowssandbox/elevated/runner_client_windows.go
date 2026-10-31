@@ -76,6 +76,11 @@ func spawnRunnerTransport(codexHome string, cwd string, creds *SandboxCredential
 	if strings.TrimSpace(runnerExe) == "" {
 		runnerExe = "codex-command-runner.exe"
 	}
+	// A registered Core launch runs the alias the service wrote into the setup
+	// receipt; the app-contained runner is only the unlocked fallback.
+	if alias := strings.TrimSpace(request.RegisteredAlias); alias != "" {
+		runnerExe = alias
+	}
 	runnerFullCommand := argvToCommandLine([]string{
 		runnerExe,
 		windowsCommandRunnerFlag,

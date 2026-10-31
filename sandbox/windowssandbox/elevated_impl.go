@@ -32,6 +32,17 @@ type ElevatedSandboxProfileCaptureRequest struct {
 	Capture CaptureRequest
 }
 
+// registeredRunnerAliasForSpawn resolves the service-written alias a registered
+// Core launch must run instead of the app-contained runner. Legacy runtimes
+// keep the materialized helper, and a missing receipt is an error rather than a
+// silent fallback (Rust spawn_runner_transport).
+func registeredRunnerAliasForSpawn(codexHome string, username string) (string, error) {
+	if !RegisteredCoreRequested() {
+		return "", nil
+	}
+	return RegisteredRunnerAlias(codexHome, username)
+}
+
 func SpawnWindowsSandboxElevatedRunnerTransport(capture *CaptureRequest) (*elevated.RunnerTransport, error) {
 	if capture == nil {
 		return nil, ErrInvalidRequest
@@ -107,6 +118,11 @@ func SpawnWindowsSandboxElevatedRunnerTransport(capture *CaptureRequest) (*eleva
 				name = selected
 			}
 			request.PrivateDesktopName = name
+			alias, err := registeredRunnerAliasForSpawn(capture.CodexHome, creds.Username)
+			if err != nil {
+				return nil, err
+			}
+			request.RegisteredAlias = alias
 			return elevated.SpawnRunnerTransport(capture.CodexHome, capture.CWD, &creds, "", request)
 		},
 		func() (elevated.SandboxCredentials, error) {
@@ -217,6 +233,12 @@ func RunWindowsSandboxCaptureForPermissionProfileElevated(req *ElevatedSandboxPr
 				name = selected
 			}
 			request.PrivateDesktopName = name
+			alias, err := registeredRunnerAliasForSpawn(capture.CodexHome, creds.Username)
+			if err != nil {
+				_ = LogNote(capture.CodexHome, "elevated runner alias unavailable: "+err.Error())
+				return nil, err
+			}
+			request.RegisteredAlias = alias
 			transport, err := elevated.SpawnRunnerTransport(capture.CodexHome, capture.CWD, &creds, "", request)
 			if err != nil {
 				_ = LogNote(capture.CodexHome, "elevated runner transport failed: "+err.Error())

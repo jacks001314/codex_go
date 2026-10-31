@@ -23,6 +23,8 @@ var (
 	selectSandboxCredentialsForCredentials = SelectSandboxCredentials
 	sandboxAccountFlagsForCredentials      = readSandboxAccountFlags
 	provisionViaServiceForCredentials      = provisionWindowsSandboxViaService
+	loadInstallationForReadiness           = LoadInstallation
+	currentProcessPackageName              = CurrentProcessPackageFullName
 )
 
 // runAutomaticSetupForCredentials prefers an installed provisioning service at
@@ -388,7 +390,7 @@ func SandboxSetupIsComplete(codexHome string) (bool, error) {
 		return false, nil
 	}
 	if !CurrentSetupRuntime().IsLegacy() {
-		ready, err := registeredSetupIsReady()
+		ready, err := registeredSetupIsReady(codexHome)
 		if err != nil || !ready {
 			return false, nil
 		}
@@ -396,13 +398,43 @@ func SandboxSetupIsComplete(codexHome string) (bool, error) {
 	return true, nil
 }
 
-// registeredSetupIsReady checks the receipt Go can verify for an opt-in
-// registered Core. The service-owned installation record and staged alias do
-// not exist in Go's direct-setup architecture, so the observable requirement is
-// that the requesting process actually carries an OS package identity
-// (Rust `registered_setup_is_ready`).
-func registeredSetupIsReady() (bool, error) {
-	return CurrentProcessHasPackageIdentity()
+// registeredSetupIsReady checks the service receipt for an opt-in registered
+// Core (Rust `registered_setup_is_ready`): both managed accounts must exist and
+// be enabled, the process must run from an installed package, and the committed
+// receipt must name that package and this Codex home.
+func registeredSetupIsReady(codexHome string) (bool, error) {
+	for _, username := range []string{OfflineUsername, OnlineUsername} {
+		flags, found, err := sandboxAccountFlagsForCredentials(username)
+		if err != nil {
+			return false, err
+		}
+		if sandboxAccountDisabled(flags, found) {
+			return false, nil
+		}
+	}
+	fullName, hasPackage, err := currentProcessPackageName()
+	if err != nil || !hasPackage {
+		return false, err
+	}
+	record, err := loadInstallationForReadiness()
+	if err != nil || record == nil {
+		return false, err
+	}
+	if !installationHomeMatches(record.CodexHome, codexHome) {
+		return false, nil
+	}
+	registration, err := record.RuntimeRegistration()
+	if err != nil {
+		return false, err
+	}
+	return registration.ReadyForPackage(fullName), nil
+}
+
+// sandboxAccountDisabled reports an account the service receipt cannot rely on
+// (Rust `local_user_flags(account)` with UF_ACCOUNTDISABLE).
+func sandboxAccountDisabled(flags uint32, found bool) bool {
+	const userFlagAccountDisable = 0x0002
+	return !found || flags&userFlagAccountDisable != 0
 }
 
 func WriteSandboxUsersFile(codexHome string, users *SandboxUsersFile) error {

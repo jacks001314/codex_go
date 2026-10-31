@@ -4,7 +4,6 @@ package windowssandbox
 
 import (
 	"fmt"
-	"path/filepath"
 
 	"golang.org/x/sys/windows"
 )
@@ -32,11 +31,7 @@ func RegisteredCoreNeedsRefresh(codexHome string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	canonicalHome, err := filepath.EvalSymlinks(codexHome)
-	if err != nil {
-		return false, fmt.Errorf("canonicalize Codex home: %w", err)
-	}
-	if record.CodexHome != canonicalHome || runtime.ReadyPackage == nil {
+	if !installationHomeMatches(record.CodexHome, codexHome) || runtime.ReadyPackage == nil {
 		return false, nil
 	}
 	ready := *runtime.ReadyPackage

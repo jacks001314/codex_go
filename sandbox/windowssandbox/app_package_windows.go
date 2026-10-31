@@ -35,3 +35,9 @@ func CurrentProcessHasPackageIdentity() (bool, error) {
 	}
 	return PackageIdentityDecision(hasIdentity, RegisteredCoreRequested())
 }
+
+// CurrentProcessPackageFullName reports the package version the running process
+// was launched from (Rust current_package_full_name).
+func CurrentProcessPackageFullName() (string, bool, error) {
+	return PackageFullNameForProcess(windows.CurrentProcess())
+}

@@ -52,6 +52,11 @@ type SpawnRequest struct {
 	StdinOpen         bool                           `json:"stdin_open"`
 	// PrivateDesktopName is kept alive by the parent across runner exits.
 	PrivateDesktopName string `json:"private_desktop_name"`
+	// RegisteredAlias is the service-written execution alias a registered Core
+	// launch runs instead of the app-contained runner (Rust
+	// spawn_runner_transport). It is parent-process state, so it never crosses
+	// the runner protocol.
+	RegisteredAlias string `json:"-"`
 }
 
 type SpawnReady struct {
