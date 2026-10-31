@@ -32,7 +32,7 @@ func TestWriteSandboxUserSecrets(t *testing.T) {
 	}
 	defer func() { resolveSIDStringForSecrets = originalResolve }()
 	home := t.TempDir()
-	if err := WriteSandboxUserSecrets(home, "offline", "offline-password", "online", "online-password"); err != nil {
+	if err := WriteSandboxUserSecrets(home, "offline", "offline-password", "online", "online-password", false); err != nil {
 		t.Fatalf("WriteSandboxUserSecrets() error = %v", err)
 	}
 	users, err := windowssandbox.ReadSandboxUsersFile(home)

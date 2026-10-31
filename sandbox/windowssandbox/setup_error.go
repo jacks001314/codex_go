@@ -88,6 +88,18 @@ func ClearSetupErrorReport(codexHome string) error {
 }
 
 func WriteSetupErrorReport(codexHome string, report *SetupErrorReport) error {
+	return writeSetupErrorReport(codexHome, report, func(path string, data []byte) error {
+		return os.WriteFile(path, data, 0o600)
+	})
+}
+
+// WriteSetupErrorReportForProvisioning writes the report through a fresh
+// handle relative to the pinned sandbox directory (Rust #42342).
+func WriteSetupErrorReportForProvisioning(codexHome string, report *SetupErrorReport) error {
+	return writeSetupErrorReport(codexHome, report, WriteFileAtomically)
+}
+
+func writeSetupErrorReport(codexHome string, report *SetupErrorReport, write func(string, []byte) error) error {
 	if report == nil {
 		return ErrInvalidRequest
 	}
@@ -99,7 +111,7 @@ func WriteSetupErrorReport(codexHome string, report *SetupErrorReport) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(SetupErrorPath(codexHome), data, 0o600)
+	return write(SetupErrorPath(codexHome), data)
 }
 
 func ReadSetupErrorReport(codexHome string) (*SetupErrorReport, error) {

@@ -317,6 +317,19 @@ func registeredSetupIsReady() (bool, error) {
 }
 
 func WriteSandboxUsersFile(codexHome string, users *SandboxUsersFile) error {
+	return writeSandboxUsersFile(codexHome, users, func(path string, data []byte) error {
+		return os.WriteFile(path, data, 0o600)
+	})
+}
+
+// WriteSandboxUsersFileForProvisioning replaces the credentials file through a
+// fresh handle relative to the pinned secrets directory instead of writing
+// through a caller-controlled destination entry (Rust #42342).
+func WriteSandboxUsersFileForProvisioning(codexHome string, users *SandboxUsersFile) error {
+	return writeSandboxUsersFile(codexHome, users, WriteFileAtomically)
+}
+
+func writeSandboxUsersFile(codexHome string, users *SandboxUsersFile, write func(string, []byte) error) error {
 	if users == nil {
 		return ErrInvalidRequest
 	}
@@ -327,7 +340,7 @@ func WriteSandboxUsersFile(codexHome string, users *SandboxUsersFile) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(SandboxUsersPath(codexHome), data, 0o600)
+	return write(SandboxUsersPath(codexHome), data)
 }
 
 func ReadSandboxUsersFile(codexHome string) (*SandboxUsersFile, error) {

@@ -67,7 +67,7 @@ func run(args []string, stdout io.Writer, stderr io.Writer) error {
 			"failed to create sandbox dir %s: %v", sbzDir, err,
 		)
 	}
-	log, err := openSetupLog(sbzDir)
+	log, err := openSetupLog(sbzDir, payload.Mode)
 	if err != nil {
 		return setupFailuref(
 			windowssandbox.SetupErrorHelperLogFailed,
@@ -86,7 +86,7 @@ func run(args []string, stdout io.Writer, stderr io.Writer) error {
 			failure = windowssandbox.NewSetupFailure(windowssandbox.SetupErrorHelperUnknownError, windowssandbox.SetupErrorChain(err))
 		}
 		report := &windowssandbox.SetupErrorReport{Code: failure.Code, Message: failure.Message}
-		if writeErr := windowssandbox.WriteSetupErrorReport(payload.CodexHome, report); writeErr != nil {
+		if writeErr := writeSetupErrorReport(payload, report); writeErr != nil {
 			setupLogLine(log, fmt.Sprintf("setup error report write failed: %v", writeErr))
 			_ = windowssandbox.LogNoteInDir(sbzDir, fmt.Sprintf("setup error report write failed: %v", writeErr))
 		}
@@ -157,9 +157,15 @@ func runSetupPayload(payload *setupPayload, log io.Writer, sbxDir string) error 
 		defer lock.Release()
 	}
 	writesSetupMarker := !payload.RefreshOnly && payload.Mode != setupModeReadACLsOnly
+	var marker *os.File
 	if writesSetupMarker {
-		if err := prepareSetupMarker(payload.CodexHome, payload.RealUser); err != nil {
+		prepared, err := prepareSetupMarker(payload)
+		if err != nil {
 			return err
+		}
+		marker = prepared
+		if marker != nil {
+			defer marker.Close()
 		}
 	}
 	switch payload.Mode {
@@ -179,7 +185,7 @@ func runSetupPayload(payload *setupPayload, log io.Writer, sbxDir string) error 
 		return setupFailuref(windowssandbox.SetupErrorHelperRequestArgsFailed, "unknown setup mode: %s", payload.Mode)
 	}
 	if writesSetupMarker {
-		if err := commitSetupMarker(payload.CodexHome, payload.OfflineUsername, payload.OnlineUsername, payload.ProxyPorts, payload.AllowLocalBinding); err != nil {
+		if err := commitSetupMarker(marker, payload.CodexHome, payload.OfflineUsername, payload.OnlineUsername, payload.ProxyPorts, payload.AllowLocalBinding); err != nil {
 			return setupFailuref(windowssandbox.SetupErrorHelperSetupMarkerWriteFailed, "commit setup marker failed: %s", windowssandbox.SetupErrorChain(err))
 		}
 	}
@@ -471,7 +477,7 @@ func readMaskAllowsOrLog(root string, sids []string, label string, readMask uint
 }
 
 func provisionAndHideSandboxUsers(payload *setupPayload, log io.Writer, sbxDir string) error {
-	if err := ProvisionSandboxUsers(payload.CodexHome, payload.OfflineUsername, payload.OnlineUsername, log); err != nil {
+	if err := ProvisionSandboxUsers(payload.CodexHome, payload.OfflineUsername, payload.OnlineUsername, log, payload.Mode == setupModeProvision); err != nil {
 		if extractSetupFailure(err) != nil {
 			return err
 		}
@@ -621,26 +627,41 @@ func encodeSetupPayload(payload *setupPayload) (string, error) {
 	return base64.StdEncoding.EncodeToString(data), nil
 }
 
-func prepareSetupMarker(codexHome string, realUser string) error {
-	if err := os.MkdirAll(windowssandbox.SandboxDir(codexHome), 0o700); err != nil {
-		return setupFailuref(windowssandbox.SetupErrorHelperSandboxDirCreateFailed, "failed to create sandbox dir %s: %s", windowssandbox.SandboxDir(codexHome), windowssandbox.SetupErrorChain(err))
+// prepareSetupMarker mirrors Rust #42342: service provisioning creates a
+// protected marker relative to the pinned sandbox directory and keeps the
+// exclusive handle until commit, while legacy setup only clears the entry so
+// commitSetupMarker can rewrite it.
+func prepareSetupMarker(payload *setupPayload) (*os.File, error) {
+	if payload.Mode == setupModeProvision {
+		file, err := windowssandbox.PrepareProvisioningSetupMarker(payload.CodexHome, payload.RealUser)
+		if err != nil {
+			return nil, setupFailuref(windowssandbox.SetupErrorHelperSetupMarkerWriteFailed, "prepare setup marker failed: %s", windowssandbox.SetupErrorChain(err))
+		}
+		return file, nil
 	}
-	if err := os.Remove(windowssandbox.SetupMarkerPath(codexHome)); err != nil && !os.IsNotExist(err) {
-		return setupFailuref(windowssandbox.SetupErrorHelperSetupMarkerWriteFailed, "prepare setup marker failed: %s", windowssandbox.SetupErrorChain(err))
+	if err := os.MkdirAll(windowssandbox.SandboxDir(payload.CodexHome), 0o700); err != nil {
+		return nil, setupFailuref(windowssandbox.SetupErrorHelperSandboxDirCreateFailed, "failed to create sandbox dir %s: %s", windowssandbox.SandboxDir(payload.CodexHome), windowssandbox.SetupErrorChain(err))
 	}
-	return nil
+	if err := os.Remove(windowssandbox.SetupMarkerPath(payload.CodexHome)); err != nil && !os.IsNotExist(err) {
+		return nil, setupFailuref(windowssandbox.SetupErrorHelperSetupMarkerWriteFailed, "prepare setup marker failed: %s", windowssandbox.SetupErrorChain(err))
+	}
+	return nil, nil
 }
 
-func commitSetupMarker(codexHome string, offlineUsername string, onlineUsername string, proxyPorts []uint16, allowLocalBinding bool) error {
+func commitSetupMarker(retained *os.File, codexHome string, offlineUsername string, onlineUsername string, proxyPorts []uint16, allowLocalBinding bool) error {
 	createdAt := time.Now().UTC().Format(time.RFC3339)
-	return windowssandbox.WriteSetupMarker(codexHome, &windowssandbox.SetupMarker{
+	marker := &windowssandbox.SetupMarker{
 		Version:           windowssandbox.SetupVersion,
 		OfflineUsername:   offlineUsername,
 		OnlineUsername:    onlineUsername,
 		CreatedAt:         &createdAt,
 		ProxyPorts:        append([]uint16(nil), proxyPorts...),
 		AllowLocalBinding: allowLocalBinding,
-	})
+	}
+	if retained != nil {
+		return windowssandbox.WriteProvisioningSetupMarker(retained, marker)
+	}
+	return windowssandbox.WriteSetupMarker(codexHome, marker)
 }
 
 // grantUserProfileReadAttributes mirrors Rust #49690's non-inheriting
@@ -683,6 +704,7 @@ func lockSandboxBinDir(payload *setupPayload, sandboxGroupSID []byte, log io.Wri
 		// Rust #42330: the bin dir is often inside the workspace, so inherited
 		// write/delete ACEs would let the sandbox replace its own runner.
 		true,
+		payload.Mode == setupModeProvision,
 	)
 	if err != nil {
 		return setupFailuref(
@@ -705,6 +727,7 @@ func lockPersistentSandboxDirs(payload *setupPayload, sandboxGroupSID []byte, lo
 		uint32(windows.FILE_GENERIC_READ|windows.FILE_GENERIC_WRITE|windows.FILE_GENERIC_EXECUTE|windows.DELETE),
 		uint32(windows.FILE_GENERIC_READ|windows.FILE_GENERIC_WRITE|windows.FILE_GENERIC_EXECUTE),
 		false,
+		payload.Mode == setupModeProvision,
 	)
 	if err != nil {
 		return setupFailuref(windowssandbox.SetupErrorHelperSandboxLockFailed, "lock sandbox dir %s failed: %s", sandboxDir, windowssandbox.SetupErrorChain(err))
@@ -718,6 +741,7 @@ func lockPersistentSandboxDirs(payload *setupPayload, sandboxGroupSID []byte, lo
 		uint32(windows.FILE_GENERIC_READ|windows.FILE_GENERIC_WRITE|windows.FILE_GENERIC_EXECUTE|windows.DELETE),
 		uint32(windows.FILE_GENERIC_READ|windows.FILE_GENERIC_WRITE|windows.FILE_GENERIC_EXECUTE),
 		false,
+		payload.Mode == setupModeProvision,
 	)
 	if err != nil {
 		return setupFailuref(windowssandbox.SetupErrorHelperSandboxLockFailed, "lock sandbox secrets dir %s failed: %s", secretsDir, windowssandbox.SetupErrorChain(err))
@@ -729,8 +753,24 @@ func lockPersistentSandboxDirs(payload *setupPayload, sandboxGroupSID []byte, lo
 	return nil
 }
 
-func lockSandboxDir(dir string, realUser string, sandboxGroupSID []byte, sandboxGroupAccessMode windows.ACCESS_MODE, sandboxGroupMask uint32, realUserMask uint32, protectDACL bool) error {
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+func lockSandboxDir(dir string, realUser string, sandboxGroupSID []byte, sandboxGroupAccessMode windows.ACCESS_MODE, sandboxGroupMask uint32, realUserMask uint32, protectDACL bool, pinned bool) error {
+	var pinnedHandle windows.Handle
+	if pinned {
+		// Rust #42342: service provisioning applies the DACL through a pinned,
+		// reparse-free handle, so the mutation cannot be redirected after path
+		// validation.
+		handle, err := windowssandbox.OpenDirectoryNoReparse(
+			dir,
+			windows.READ_CONTROL|windows.WRITE_DAC,
+			windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
+			windowssandbox.DirectoryOpenOrCreate,
+		)
+		if err != nil {
+			return err
+		}
+		pinnedHandle = handle
+		defer windows.CloseHandle(pinnedHandle)
+	} else if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
 	systemSID, err := resolveSIDString("SYSTEM")
@@ -782,11 +822,17 @@ func lockSandboxDir(dir string, realUser string, sandboxGroupSID []byte, sandbox
 	if protectDACL {
 		securityInformation |= windows.PROTECTED_DACL_SECURITY_INFORMATION
 	}
-	if err := windows.SetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT, securityInformation, nil, nil, newACL, nil); err != nil {
+	var setErr error
+	if pinned {
+		setErr = windows.SetSecurityInfo(pinnedHandle, windows.SE_FILE_OBJECT, securityInformation, nil, nil, newACL, nil)
+	} else {
+		setErr = windows.SetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT, securityInformation, nil, nil, newACL, nil)
+	}
+	if setErr != nil {
 		runtime.KeepAlive(sids)
 		runtime.KeepAlive(explicitEntries)
 		runtime.KeepAlive(newACL)
-		return err
+		return setErr
 	}
 	runtime.KeepAlive(sids)
 	runtime.KeepAlive(explicitEntries)
@@ -802,11 +848,26 @@ func resolveSIDString(name string) (string, error) {
 	return windowssandbox.StringFromSIDBytes(sid), nil
 }
 
-func openSetupLog(sbxDir string) (*os.File, error) {
+// openSetupLog opens the daily sandbox log for legacy setup, while service
+// provisioning gets a fresh log created relative to the pinned sandbox
+// directory (Rust #42342 open_setup_log).
+func openSetupLog(sbxDir string, mode setupMode) (*os.File, error) {
 	if err := os.MkdirAll(sbxDir, 0o700); err != nil {
 		return nil, err
 	}
+	if mode == setupModeProvision {
+		return windowssandbox.OpenProvisioningSetupLog(sbxDir)
+	}
 	return os.OpenFile(windowssandbox.CurrentLogFilePathForBaseDir(sbxDir), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+}
+
+// writeSetupErrorReport keeps service provisioning from writing through a
+// caller-controlled report entry (Rust #42342).
+func writeSetupErrorReport(payload *setupPayload, report *windowssandbox.SetupErrorReport) error {
+	if payload.Mode == setupModeProvision {
+		return windowssandbox.WriteSetupErrorReportForProvisioning(payload.CodexHome, report)
+	}
+	return windowssandbox.WriteSetupErrorReport(payload.CodexHome, report)
 }
 
 func setupLogLine(log io.Writer, line string) {

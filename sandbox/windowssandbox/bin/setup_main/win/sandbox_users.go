@@ -36,7 +36,7 @@ func EnsureSandboxUsersGroup(log io.Writer) error {
 	return EnsureLocalGroup(SandboxUsersGroup, SandboxUsersGroupComment, log)
 }
 
-func ProvisionSandboxUsers(codexHome string, offlineUsername string, onlineUsername string, log io.Writer) error {
+func ProvisionSandboxUsers(codexHome string, offlineUsername string, onlineUsername string, log io.Writer, forProvisioning bool) error {
 	if err := EnsureSandboxUsersGroup(log); err != nil {
 		return err
 	}
@@ -54,7 +54,7 @@ func ProvisionSandboxUsers(codexHome string, offlineUsername string, onlineUsern
 	if err := EnsureSandboxUser(onlineUsername, onlinePassword, log); err != nil {
 		return err
 	}
-	return WriteSandboxUserSecrets(codexHome, offlineUsername, offlinePassword, onlineUsername, onlinePassword)
+	return WriteSandboxUserSecrets(codexHome, offlineUsername, offlinePassword, onlineUsername, onlinePassword, forProvisioning)
 }
 
 func EnsureSandboxUser(username string, password string, log io.Writer) error {
@@ -68,7 +68,7 @@ func RandomSandboxPassword() (string, error) {
 	return password.Generate(24, 6, 6, false, false)
 }
 
-func WriteSandboxUserSecrets(codexHome string, offlineUser string, offlinePassword string, onlineUser string, onlinePassword string) error {
+func WriteSandboxUserSecrets(codexHome string, offlineUser string, offlinePassword string, onlineUser string, onlinePassword string, forProvisioning bool) error {
 	offlineSID, err := resolveSIDStringForSecrets(offlineUser)
 	if err != nil {
 		return fmt.Errorf("resolve offline sandbox account SID: %w", err)
@@ -85,7 +85,7 @@ func WriteSandboxUserSecrets(codexHome string, offlineUser string, offlinePasswo
 	if err != nil {
 		return fmt.Errorf("dpapi protect failed for online user: %w", err)
 	}
-	return windowssandbox.WriteSandboxUsersFile(codexHome, &windowssandbox.SandboxUsersFile{
+	users := &windowssandbox.SandboxUsersFile{
 		Version: windowssandbox.SetupVersion,
 		Offline: windowssandbox.SandboxUserRecord{
 			Username: offlineUser,
@@ -97,7 +97,11 @@ func WriteSandboxUserSecrets(codexHome string, offlineUser string, offlinePasswo
 			Password: base64.StdEncoding.EncodeToString(onlineBlob),
 			SID:      onlineSID,
 		},
-	})
+	}
+	if forProvisioning {
+		return windowssandbox.WriteSandboxUsersFileForProvisioning(codexHome, users)
+	}
+	return windowssandbox.WriteSandboxUsersFile(codexHome, users)
 }
 
 func logSetupLine(log io.Writer, line string) {
