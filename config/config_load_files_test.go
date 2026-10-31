@@ -84,7 +84,16 @@ func TestValidateLoadedConfigFilesReadsModelCatalog(t *testing.T) {
 		t.Fatalf("empty catalog error = %v", err)
 	}
 
-	write("ok.json", []byte(`{"models": [{"slug": "m"}]}`))
+	write("partial.json", []byte(`{"models": [{"slug": "m"}]}`))
+	if err := ValidateLoadedConfigFiles(map[string]any{"model_catalog_json": "partial.json"}, dir); err == nil ||
+		!strings.HasSuffix(err.Error(), "as JSON: missing field `display_name` at line 1 column 25") {
+		t.Fatalf("incomplete catalog error = %v", err)
+	}
+
+	write("ok.json", []byte(`{"models": [{"slug":"m","display_name":"M","supported_reasoning_levels":[],`+
+		`"shell_type":"shell_command","visibility":"list","supported_in_api":true,"priority":1,`+
+		`"support_verbosity":true,"truncation_policy":{"mode":"tokens","limit":5},`+
+		`"experimental_supported_tools":[],"model_messages":{"instructions_template":"x"}}]}`))
 	if err := ValidateLoadedConfigFiles(map[string]any{"model_catalog_json": "ok.json"}, dir); err != nil {
 		t.Fatalf("catalog with a model rejected: %v", err)
 	}

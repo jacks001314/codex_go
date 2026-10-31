@@ -2034,8 +2034,8 @@ document while it builds the config, after the semantic checks.
   `model_catalog_json path `<path>` must contain at least one model`.
 - Evidence: 22 documents covering missing files, directories, empty files, bad
   UTF-8, ordering, `~`, absolute paths and catalog payloads are byte-identical
-  to 0.166 except the four catalog JSON-parse cases listed under Still open
-  (`p51diff.py`, `out/r51-diff1.txt`). The 437-document top-level corpus is now
+  to 0.166, including the catalog JSON-parse cases since entry 67 replaced the
+  `encoding/json` diagnostics (`p51diff_p_p52.py`, `out/r51-diff1.txt`). The 437-document top-level corpus is now
   byte-identical (`out/r51-top.txt`), and the 172/81/47 corpora keep 0 diffs.
   Regressions: `TestValidateLoadedConfigFilesReadsPathSettings`,
   `TestValidateLoadedConfigFilesReadsModelCatalog`,
@@ -2080,8 +2080,55 @@ surface follows the `toml` crate rather than `go-toml`.
   `TestReadConfigDocumentFileReportsSyntaxDiagnostic` and
   `TestTOMLDiagnosticIgnoresOtherErrors` in `config`.
 
+### 67. `model_catalog_json`: serde_json's structure and diagnostics
+
+Rust parses the catalog with `serde_json::from_slice::<ModelsResponse>`, so every
+syntax error, type mismatch, missing field and unknown variant names the serde
+type and a byte position; Go answered with `encoding/json`'s wording and never
+walked the model fields.
+
+- **Reader.** `config/model_catalog_json.go` carries a small serde_json-shaped
+  reader over the raw bytes: `expected ident`, `expected value`, `` `expected `:` ``,
+  `key must be a string`, `trailing comma`, `invalid number`,
+  `invalid escape`, `control character (\u0000-\u001F) found while parsing a
+  string`, `EOF while parsing a value|an object|a list|a string` and
+  `trailing characters`, positioned as `at line L column C` from the consumed
+  byte offset (serde's `peek_position` is `min(len, idx + 1)`).
+- **Tables.** `ModelsResponse`, `ModelInfoWithLegacyBaseInstructions`,
+  `ModelInfo` and `ModelMessages` are walked field by field, so missing
+  required members (`slug`, `display_name`, `shell_type`, ...), duplicate
+  fields, ``invalid type: integer `5`, expected a string``,
+  struct-from-sequence
+  length errors and enum `unknown variant` all print serde's text. The tables
+  with required members are `TruncationPolicyConfig`, `ReasoningEffortPreset`,
+  `ModelAvailabilityNux`, `ModelServiceTier`, `ModelInfoUpgrade`,
+  `ModelTokenBudgetConfig`, `ConfirmationPolicies` (both members optional) and
+  `ModelAccessPrograms`; the remaining nested message tables are all-optional
+  and accept any object.
+- **Quirks kept.** A float where an integer is required reports `invalid type:
+  map, expected i64` (serde peeks the buffered value), an unknown
+  `available_access_programs.cyber` entry is dropped instead of rejected, and
+  the `cyber` list itself is required.
+- **Surfaces.** `ValidateLoadedConfigFiles` keeps both wrappers
+  (``failed to parse model_catalog_json path `<path>` as JSON: <error>`` and
+  `must contain at least one model`).
+- Evidence: the 138-document syntax/type corpus, the 148-document mutation
+  corpus and the 24 nested-table documents report 0 diffs against 0.166
+  (`out/r53-diff1.txt`, `out/r53-diff-fuzz.txt`, `out/r53-table10.txt`), and
+  the 437/172/81/47 corpora keep 0 diffs. Regressions:
+  `TestValidateModelCatalogJSONReportsSerdeDiagnostics` (76 documents),
+  `TestValidateModelCatalogJSONAcceptsCatalog` and
+  `TestValidateModelCatalogJSONAcceptsLegacyBaseInstructions` in `config`.
+
 ## Verification
 
+- Round 53 adds the catalog JSON diagnostics (entry 67): 138 syntax/type
+  documents, 148 mutated documents and 24 nested-table documents are
+  byte-identical to 0.166 (`out/r53-diff1.txt`, `out/r53-diff-fuzz.txt`,
+  `out/r53-table10.txt`), the 22-document path corpus loses the last four
+  `model_catalog_json` diffs, and the 437/172/81/47 corpora keep 0 diffs.
+  `go test -count=1 -vet=off -run TestValidateModelCatalogJSON ./config`
+  passes in a clean worktree.
 - Round 52 adds the TOML syntax diagnostics (entry 66): the 111-document
   syntax corpus is byte-identical to 0.166 for `mcp list`, `mcp remove`,
   `login status` and `exec` (0 diffs; the three `exec` timeouts are valid
@@ -2631,17 +2678,10 @@ surface follows the `toml` crate rather than `go-toml`.
     clap's missing-required block like Rust.
 - The load pass now covers the 104 top-level field types, enums, `features`,
   the `mcp_servers` entries (entry 61), every struct table serde walks
-  (entries 62-64) and the file reads `Config::load` performs on the three
-  path-valued settings (entry 65), so a missing instructions or prompt file and
-  a catalog with no models fail like Rust. What is left of that surface is the
-  `model_catalog_json` JSON parse itself: Go reports its own `encoding/json`
-  wording where serde_json says `missing field `slug` at line 1 column 14`, and
-  Go does not validate the model entries' mandatory fields (`slug`,
-  `display_name`, `supported_reasoning_levels`, `shell_type`, `visibility`,
-  `supported_in_api`, `priority`, `availability_nux`, `upgrade`), so
-  `{"models": [{}]}` and `{"models": [{"slug": "m"}]}` load in Go where Rust
-  rejects them (`out/r51-diff1.txt`). The empty-catalog and bad-UTF-8 cases do
-  match.
+  (entries 62-64), the file reads `Config::load` performs on the three
+  path-valued settings (entry 65) and the `model_catalog_json` parse itself
+  (entry 67), so a missing instructions or prompt file, a catalog with no
+  models and a malformed model entry fail the way 0.166 does.
 - `mcp_servers` spelled as an inline table (`mcp_servers = { alpha = { .. } }`)
   still goes through the whole-document renderer: toml_edit converts the value
   into a table and prints a `[mcp_servers ]` header (the space comes from the

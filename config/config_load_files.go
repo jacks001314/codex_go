@@ -1,7 +1,6 @@
 package config
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -50,13 +49,11 @@ func ValidateLoadedConfigFiles(values map[string]any, codexHome string) error {
 	if !utf8.Valid(data) {
 		return fmt.Errorf("stream did not contain valid UTF-8")
 	}
-	var catalog struct {
-		Models []json.RawMessage `json:"models"`
-	}
-	if err := json.Unmarshal(data, &catalog); err != nil {
+	models, err := validateModelCatalogJSON(data)
+	if err != nil {
 		return fmt.Errorf("failed to parse model_catalog_json path `%s` as JSON: %s", path, err.Error())
 	}
-	if len(catalog.Models) == 0 {
+	if models == 0 {
 		return fmt.Errorf("model_catalog_json path `%s` must contain at least one model", path)
 	}
 	return nil
