@@ -95,6 +95,7 @@ func useRegisteredCleanupSeams(t *testing.T) {
 func registeredCleanupLifecycle(t *testing.T, record *windowssandbox.InstallationRecord) *Lifecycle {
 	t.Helper()
 	lifecycle := &Lifecycle{
+		subscribe: noUninstallSubscription,
 		installation: &lifecycleInstallation{
 			record:    record,
 			codexHome: record.CodexHome,

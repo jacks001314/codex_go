@@ -102,6 +102,20 @@ func refreshProvisioningSession(stopped func() bool, onSessionChange func() erro
 	return !stopped(), nil
 }
 
+// NewPackagedProvisioningBroker builds the package lifecycle when the service
+// starts, so a missing package identity is a startup failure instead of a
+// service that cannot observe its own uninstall (Rust
+// service::service_main_inner).
+func NewPackagedProvisioningBroker(setup SetupRunner) ServiceBroker {
+	return func(state *ServiceState) error {
+		lifecycle, err := NewLifecycle()
+		if err != nil {
+			return err
+		}
+		return NewProvisioningBroker(lifecycle, setup)(state)
+	}
+}
+
 // NewProvisioningBroker returns the broker the SCM host runs: it serves the
 // provisioning pipe, enforces managed policy and registers uninstall owners
 // through the lifecycle (Rust service::service_main_inner and

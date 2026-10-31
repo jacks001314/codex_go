@@ -56,6 +56,7 @@ func TestRestoreAuthenticatedUserSkipsWithoutARecord(t *testing.T) {
 func TestRestoreAuthenticatedUserSkipsARetainedInstallation(t *testing.T) {
 	loaded := false
 	lifecycle := &Lifecycle{
+		subscribe:    noUninstallSubscription,
 		installation: &lifecycleInstallation{record: &windowssandbox.InstallationRecord{UserSID: "S-1-5-21-1"}, codexHome: "C:\\Users\\owner"},
 		loadRecord: func() (*windowssandbox.InstallationRecord, error) {
 			loaded = true
@@ -74,6 +75,7 @@ func TestRestoreAuthenticatedUserRegistersTheRecordedOwner(t *testing.T) {
 	home := t.TempDir()
 	saved := 0
 	lifecycle := &Lifecycle{
+		subscribe: noUninstallSubscription,
 		loadRecord: func() (*windowssandbox.InstallationRecord, error) {
 			return &windowssandbox.InstallationRecord{UserSID: currentUserSID(t), CodexHome: home, SessionID: 2}, nil
 		},
@@ -108,6 +110,7 @@ func TestRestoreAuthenticatedUserRegistersTheRecordedOwner(t *testing.T) {
 func TestRestoreAuthenticatedUserRefusesADifferentLoggedInUser(t *testing.T) {
 	saved := 0
 	lifecycle := &Lifecycle{
+		subscribe: noUninstallSubscription,
 		loadRecord: func() (*windowssandbox.InstallationRecord, error) {
 			return &windowssandbox.InstallationRecord{UserSID: "S-1-5-21-9-9-9", CodexHome: t.TempDir()}, nil
 		},
@@ -143,6 +146,7 @@ func TestRestoreAuthenticatedUserSkipsAnotherPackageFamily(t *testing.T) {
 	}
 	t.Cleanup(func() { querySessionUserToken = previous })
 	lifecycle := &Lifecycle{
+		subscribe: noUninstallSubscription,
 		loadRecord: func() (*windowssandbox.InstallationRecord, error) {
 			return &windowssandbox.InstallationRecord{
 				UserSID: "S-1-5-21-1",
@@ -166,6 +170,7 @@ func TestRestoreRecordedOwnerFallsBackToAnotherSession(t *testing.T) {
 	home := t.TempDir()
 	saves := 0
 	lifecycle := &Lifecycle{
+		subscribe: noUninstallSubscription,
 		loadRecord: func() (*windowssandbox.InstallationRecord, error) {
 			return &windowssandbox.InstallationRecord{UserSID: currentUserSID(t), CodexHome: home, SessionID: 3}, nil
 		},
@@ -198,6 +203,7 @@ func TestRestoreRecordedOwnerFallsBackToAnotherSession(t *testing.T) {
 
 func TestRestoreRecordedOwnerReportsTheRecordedFailure(t *testing.T) {
 	lifecycle := &Lifecycle{
+		subscribe: noUninstallSubscription,
 		loadRecord: func() (*windowssandbox.InstallationRecord, error) {
 			return &windowssandbox.InstallationRecord{UserSID: currentUserSID(t), CodexHome: t.TempDir(), SessionID: 3}, nil
 		},

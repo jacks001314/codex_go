@@ -10,5 +10,5 @@ func runServiceMode(mode RunMode) error {
 	if mode != RunModeService {
 		return errors.New("unsupported sandbox service run mode")
 	}
-	return RunService(NewProvisioningBroker(NewLifecycle(), RunPackagedSetup))
+	return RunService(NewPackagedProvisioningBroker(RunPackagedSetup))
 }

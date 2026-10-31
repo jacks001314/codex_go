@@ -138,6 +138,7 @@ func TestCleanUpResourcesRemovesCreatedHomeAndRuntimeCacheLikeRust(t *testing.T)
 		t.Fatalf("create runtime cache: %v", err)
 	}
 	lifecycle := &Lifecycle{
+		subscribe: noUninstallSubscription,
 		installation: newCleanupTestInstallation(t, home, &windowssandbox.DesktopInstallation{
 			CreatedCodexHome: true,
 			CacheHome:        cache,
@@ -171,6 +172,7 @@ func TestCleanUpResourcesRevokesSandboxACEsAndPreservesARetainedHomeLikeRust(t *
 		return nil
 	}
 	lifecycle := &Lifecycle{
+		subscribe: noUninstallSubscription,
 		installation: newCleanupTestInstallation(t, home, &windowssandbox.DesktopInstallation{
 			CreatedCodexHome: true,
 		}),
@@ -191,6 +193,7 @@ func TestCleanUpResourcesPrunesAnEmptyRetainedHomeLikeRust(t *testing.T) {
 	useCleanupSeams(t)
 	home := t.TempDir()
 	lifecycle := &Lifecycle{
+		subscribe: noUninstallSubscription,
 		installation: newCleanupTestInstallation(t, home, &windowssandbox.DesktopInstallation{
 			CreatedCodexHome: true,
 		}),
@@ -236,7 +239,7 @@ func TestCleanUpResourcesKeepsDesktopDataWhenOwnerReinstalledLikeRust(t *testing
 			}},
 		},
 	}
-	lifecycle := &Lifecycle{installation: installation}
+	lifecycle := &Lifecycle{subscribe: noUninstallSubscription, installation: installation}
 	if err := lifecycle.CleanUpResources(&fakeCleanupFinisher{}, record); err != nil {
 		t.Fatalf("CleanUpResources() error = %v", err)
 	}
@@ -275,7 +278,7 @@ func TestCleanUpResourcesRemovesOwnerDataOnlyAfterUninstallAndWithoutRetentionLi
 			}},
 		},
 	}
-	lifecycle := &Lifecycle{installation: installation}
+	lifecycle := &Lifecycle{subscribe: noUninstallSubscription, installation: installation}
 	lifecycle.uninstalling.Store(true)
 	if err := lifecycle.CleanUpResources(&fakeCleanupFinisher{}, record); err != nil {
 		t.Fatalf("CleanUpResources() error = %v", err)
@@ -294,7 +297,7 @@ func TestCleanUpResourcesSkipsDesktopDirectoriesWithoutADesktopRecordLikeRust(t 
 		revoked = append(revoked, path)
 		return nil
 	}
-	lifecycle := &Lifecycle{installation: newCleanupTestInstallation(t, home, nil)}
+	lifecycle := &Lifecycle{subscribe: noUninstallSubscription, installation: newCleanupTestInstallation(t, home, nil)}
 	if err := lifecycle.CleanUpResources(&fakeCleanupFinisher{}, nil); err != nil {
 		t.Fatalf("CleanUpResources() error = %v", err)
 	}
@@ -312,6 +315,7 @@ func TestCleanUpResourcesReportsDesktopDirectoryFailuresLikeRust(t *testing.T) {
 	writeCleanUninstallPreference(t, home, true)
 	cleanupRemoveAll = func(path string) error { return errors.New("sharing violation") }
 	lifecycle := &Lifecycle{
+		subscribe: noUninstallSubscription,
 		installation: newCleanupTestInstallation(t, home, &windowssandbox.DesktopInstallation{
 			CreatedCodexHome: true,
 		}),

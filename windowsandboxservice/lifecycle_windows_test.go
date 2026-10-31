@@ -29,6 +29,7 @@ func TestLifecycleRefusesADifferentOwnerOrHome(t *testing.T) {
 	}
 	saved := 0
 	lifecycle := &Lifecycle{
+		subscribe:  noUninstallSubscription,
 		loadRecord: func() (*windowssandbox.InstallationRecord, error) { return previous, nil },
 		saveRecord: func(record *windowssandbox.InstallationRecord) (*windowssandbox.InstallationRecord, error) {
 			saved++
@@ -59,6 +60,7 @@ func TestLifecycleMergesDesktopOwnershipAndPinsTheHome(t *testing.T) {
 	}
 	saved := 0
 	lifecycle := &Lifecycle{
+		subscribe:  noUninstallSubscription,
 		loadRecord: func() (*windowssandbox.InstallationRecord, error) { return previous, nil },
 		saveRecord: func(record *windowssandbox.InstallationRecord) (*windowssandbox.InstallationRecord, error) {
 			saved++
@@ -89,6 +91,7 @@ func TestLifecycleReusesARetainedInstallation(t *testing.T) {
 	home := t.TempDir()
 	saves := 0
 	lifecycle := &Lifecycle{
+		subscribe:  noUninstallSubscription,
 		loadRecord: func() (*windowssandbox.InstallationRecord, error) { return nil, nil },
 		saveRecord: func(record *windowssandbox.InstallationRecord) (*windowssandbox.InstallationRecord, error) {
 			saves++
@@ -122,6 +125,7 @@ func TestLifecycleReusesARetainedInstallation(t *testing.T) {
 func TestLifecycleSkipsCleanupWhenTheHomeCannotBePinned(t *testing.T) {
 	saves := 0
 	lifecycle := &Lifecycle{
+		subscribe:  noUninstallSubscription,
 		loadRecord: func() (*windowssandbox.InstallationRecord, error) { return nil, nil },
 		saveRecord: func(record *windowssandbox.InstallationRecord) (*windowssandbox.InstallationRecord, error) {
 			saves++
@@ -147,6 +151,7 @@ func TestLifecycleSkipsCleanupWhenTheHomeCannotBePinned(t *testing.T) {
 
 func TestLifecycleRequiresAnOwnerToken(t *testing.T) {
 	lifecycle := &Lifecycle{
+		subscribe:  noUninstallSubscription,
 		loadRecord: func() (*windowssandbox.InstallationRecord, error) { return nil, nil },
 		saveRecord: func(record *windowssandbox.InstallationRecord) (*windowssandbox.InstallationRecord, error) {
 			return record, nil
@@ -162,6 +167,7 @@ func TestLifecycleServesRegistrationRequests(t *testing.T) {
 	home := t.TempDir()
 	saved := 0
 	lifecycle := &Lifecycle{
+		subscribe:  noUninstallSubscription,
 		loadRecord: func() (*windowssandbox.InstallationRecord, error) { return nil, nil },
 		saveRecord: func(record *windowssandbox.InstallationRecord) (*windowssandbox.InstallationRecord, error) {
 			saved++

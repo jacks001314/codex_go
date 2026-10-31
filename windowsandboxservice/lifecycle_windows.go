@@ -24,25 +24,50 @@ type Lifecycle struct {
 	installation *lifecycleInstallation
 	uninstalling atomic.Bool
 	preinstalled bool
+	packageName  string
 	loadRecord   func() (*windowssandbox.InstallationRecord, error)
 	saveRecord   func(*windowssandbox.InstallationRecord) (*windowssandbox.InstallationRecord, error)
+	subscribe    func(packageName, ownerSID string, uninstalling *atomic.Bool, token windows.Token) (*packageUninstallSubscription, error)
 }
 
 type lifecycleInstallation struct {
-	record    *windowssandbox.InstallationRecord
-	codexHome string
-	token     windows.Token
-	handles   []windows.Handle
-	guard     windows.Handle
+	record       *windowssandbox.InstallationRecord
+	codexHome    string
+	token        windows.Token
+	handles      []windows.Handle
+	guard        windows.Handle
+	subscription *packageUninstallSubscription
 }
 
-// NewLifecycle returns a lifecycle bound to the real installation store.
-func NewLifecycle() *Lifecycle {
+// lifecyclePackageName is the seam the lifecycle captures its own package full
+// name through (Rust Package::Current().Id().FullName()).
+var lifecyclePackageName = func() (string, error) {
+	fullName, present, err := windowssandbox.CurrentProcessPackageFullName()
+	if err != nil {
+		return "", err
+	}
+	if !present {
+		return "", errors.New("the sandbox service has no package identity")
+	}
+	return fullName, nil
+}
+
+// NewLifecycle returns a lifecycle bound to the running package and the real
+// installation store. A service without package identity cannot observe its own
+// uninstall, so construction fails instead of running blind (Rust
+// PackageLifecycle::new).
+func NewLifecycle() (*Lifecycle, error) {
+	packageName, err := lifecyclePackageName()
+	if err != nil {
+		return nil, fmt.Errorf("read the current package identity: %w", err)
+	}
 	return &Lifecycle{
+		packageName:  packageName,
 		preinstalled: lifecyclePreinstalled(),
 		loadRecord:   windowssandbox.LoadInstallation,
 		saveRecord:   windowssandbox.SaveInstallationRecord,
-	}
+		subscribe:    subscribePackageUninstalling,
+	}, nil
 }
 
 // Uninstalling exposes the pending-uninstall flag the package uninstall event
@@ -111,14 +136,44 @@ func (lifecycle *Lifecycle) RegisterOwner(record *windowssandbox.InstallationRec
 		LogError(EventServiceFailed, "skipping sandbox file cleanup because the home could not be pinned: "+ErrorMessage(err))
 		codexHome, handles, guard = "", nil, 0
 	}
+	// A first owner must be observable: the service retires only once the
+	// owner's package is gone, so an unwatched installation is refused rather
+	// than cleaned up blind.
+	subscription, err := lifecycle.subscribeUninstalls(record.UserSID, token)
+	if err != nil {
+		closeHandles(handles)
+		if guard != 0 {
+			_ = windows.CloseHandle(guard)
+		}
+		return nil, err
+	}
 	lifecycle.installation = &lifecycleInstallation{
-		record:    saved,
-		codexHome: codexHome,
-		token:     token,
-		handles:   handles,
-		guard:     guard,
+		record:       saved,
+		codexHome:    codexHome,
+		token:        token,
+		handles:      handles,
+		guard:        guard,
+		subscription: subscription,
 	}
 	return saved, nil
+}
+
+// subscribeUninstalls opens the owner's package uninstall notification stream
+// (Rust PackageCatalog::OpenForCurrentUser plus PackageUninstalling).
+func (lifecycle *Lifecycle) subscribeUninstalls(ownerSID string, token windows.Token) (*packageUninstallSubscription, error) {
+	subscribe := lifecycle.subscribe
+	if subscribe == nil {
+		subscribe = subscribePackageUninstalling
+	}
+	subscription, err := subscribe(lifecycle.packageName, ownerSID, &lifecycle.uninstalling, token)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"%w: %s",
+			unavailable("subscribe to authenticated package uninstall notifications"),
+			ErrorMessage(err),
+		)
+	}
+	return subscription, nil
 }
 
 // ServeProvisioningRequest provisions one authenticated request with this
@@ -289,6 +344,10 @@ func (lifecycle *Lifecycle) Close() {
 	if lifecycle.installation == nil {
 		return
 	}
+	// Drop the uninstall registration before the pinned directories so the
+	// catalog cannot deliver an event against handles that are already closed
+	// (Rust PackageLifecycle::drop).
+	lifecycle.installation.subscription.Close()
 	closeHandles(lifecycle.installation.handles)
 	if lifecycle.installation.guard != 0 {
 		_ = windows.CloseHandle(lifecycle.installation.guard)

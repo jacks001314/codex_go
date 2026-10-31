@@ -51,6 +51,7 @@ var (
 	procRoInitialize              = modCombase.NewProc("RoInitialize")
 	procRoUninitialize            = modCombase.NewProc("RoUninitialize")
 	procRoActivateInstance        = modCombase.NewProc("RoActivateInstance")
+	procRoGetActivationFactory    = modCombase.NewProc("RoGetActivationFactory")
 	procWindowsCreateString       = modCombase.NewProc("WindowsCreateString")
 	procWindowsDeleteString       = modCombase.NewProc("WindowsDeleteString")
 	procWindowsGetStringLen       = modCombase.NewProc("WindowsGetStringLen")
