@@ -290,6 +290,7 @@ func goTopLevelDirectoriesSnapshot() []string {
 		"utils",
 		"voicehost",
 		"websocketauth",
+		"windowsandboxservice",
 		"worktree",
 	}
 }
