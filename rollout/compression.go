@@ -457,17 +457,6 @@ func compressRolloutIfColdInner(path string, threadID string, writerStore *sessi
 	if err := temp.Sync(); err != nil {
 		return "", 0, 0, err
 	}
-	// Encoding and verification do not block writers. Take ownership before the
-	// final state check and publication so an active writer's append can neither
-	// race the check nor be lost with the source file (Rust #44138).
-	writer, err := writerStore.AcquireWriter(session.ThreadID(threadID))
-	if err != nil {
-		if errors.Is(err, session.ErrConflict) {
-			return compressionSkippedBusy, before.size, 0, nil
-		}
-		return "", 0, 0, err
-	}
-	defer func() { _ = writer.Close() }()
 	same, err := sameRolloutState(path, before)
 	if err != nil {
 		return "", 0, 0, err
@@ -491,6 +480,24 @@ func compressRolloutIfColdInner(path string, threadID string, writerStore *sessi
 	}
 	if err := temp.Close(); err != nil {
 		return "", 0, 0, err
+	}
+	// Encoding and verification do not block writers. Take publication ownership
+	// only now, so an active writer's append can neither race the final state
+	// check nor be lost with the source file (Rust #44138).
+	publication, err := writerStore.TryAcquireForPublication(session.ThreadID(threadID))
+	if err != nil {
+		if errors.Is(err, session.ErrConflict) {
+			return compressionSkippedBusy, before.size, 0, nil
+		}
+		return "", 0, 0, err
+	}
+	defer func() { _ = publication.Release() }()
+	same, err = sameRolloutState(path, before)
+	if err != nil {
+		return "", 0, 0, err
+	}
+	if !same {
+		return compressionSkippedChanged, before.size, 0, nil
 	}
 	if _, err := os.Stat(compressedPath); err == nil {
 		return compressionSkippedAlreadyCompressed, before.size, 0, nil

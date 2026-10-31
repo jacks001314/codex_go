@@ -471,6 +471,22 @@ func PathForThread(codexHome string, threadID string, now time.Time) string {
 }
 
 func Resume(path string) (*Recorder, error) {
+	return resume(path)
+}
+
+// ResumeWithWriter opens an existing rollout for appends while the caller keeps
+// cross-process ownership of the thread (Rust's `open_rollout_for_append` with a
+// writer lock and `RolloutRecorder::new_with_writer_lock`). Materializing a
+// compressed rollout and opening the plain file both happen under the lock, and
+// the caller releases it only after the append has been flushed.
+func ResumeWithWriter(path string, writer *session.WriterLock) (*Recorder, error) {
+	if writer == nil {
+		return nil, errors.New("writer lock is required")
+	}
+	return resume(path)
+}
+
+func resume(path string) (*Recorder, error) {
 	plain := PlainRolloutPath(strings.TrimSpace(path))
 	if plain == "" {
 		return nil, errors.New("rollout path is required")

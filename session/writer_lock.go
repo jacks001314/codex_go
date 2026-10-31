@@ -28,6 +28,17 @@ type WriterLock struct {
 	once        sync.Once
 }
 
+// PublicationLock keeps the home coordination lock held while a rollout file is
+// replaced. Rust #44138 (`WriterLockCoordinator::try_acquire_for_publication`)
+// probes the thread lock under coordination and keeps only coordination: every
+// writer takes coordination before opening its thread lock, so no writer can
+// start between the final file-state check and the publish/remove pair.
+type PublicationLock struct {
+	coordinator *writerLockCoordinator
+	probe       *flock.Flock
+	once        sync.Once
+}
+
 type writerLockCoordinator struct {
 	directory    string
 	coordination *flock.Flock
@@ -70,6 +81,21 @@ func (s *Store) AcquireWriters(threadIDs []ThreadID) ([]*WriterLock, error) {
 	return locks, nil
 }
 
+// TryAcquireForPublication probes a thread while holding the home coordination
+// lock. It reports ErrConflict while a live writer owns the thread and
+// otherwise returns a guard that keeps coordination locked until Release.
+// The probe never creates a thread lock file, so a missing file means the
+// thread is idle (Rust opens the lock without O_CREATE for the same reason).
+func (s *Store) TryAcquireForPublication(threadID ThreadID) (*PublicationLock, error) {
+	if s == nil {
+		return nil, fmt.Errorf("thread store is nil")
+	}
+	if err := validateThreadID(threadID); err != nil {
+		return nil, err
+	}
+	return s.writerLocks().tryAcquireForPublication(threadID)
+}
+
 func (s *Store) writerLocks() *writerLockCoordinator {
 	s.writerLocksOnce.Do(func() {
 		s.writerLockCoordinator = newWriterLockCoordinator(s.root)
@@ -96,6 +122,54 @@ func (c *writerLockCoordinator) acquire(threadID ThreadID) (*WriterLock, error) 
 		return nil, fmt.Errorf("%w: thread %s already has an active writer", ErrConflict, threadID)
 	}
 	return &WriterLock{coordinator: c, path: path, lock: fileLock}, nil
+}
+
+func (c *writerLockCoordinator) tryAcquireForPublication(threadID ThreadID) (*PublicationLock, error) {
+	if err := os.MkdirAll(c.directory, 0o700); err != nil {
+		return nil, fmt.Errorf("create thread writer lock directory: %w", err)
+	}
+	if err := lockWriterCoordination(c.coordination); err != nil {
+		return nil, err
+	}
+	path := filepath.Join(c.directory, string(threadID)+".lock")
+	probe := flock.New(path, flock.SetFlag(os.O_RDWR))
+	locked, err := probe.TryLock()
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			// No lock file means no writer ever owned the thread; coordination
+			// alone guards publication and the file stays absent.
+			return &PublicationLock{coordinator: c}, nil
+		}
+		_ = c.coordination.Unlock()
+		return nil, fmt.Errorf("probe thread writer lock %s: %w", path, err)
+	}
+	if !locked {
+		_ = c.coordination.Unlock()
+		return nil, fmt.Errorf("%w: thread %s already has an active writer", ErrConflict, threadID)
+	}
+	return &PublicationLock{coordinator: c, probe: probe}, nil
+}
+
+// Release drops the probe and the coordination lock without deleting the thread
+// lock file: publication is not the thread's owner, so the file belongs to the
+// next real writer.
+func (p *PublicationLock) Release() error {
+	if p == nil {
+		return nil
+	}
+	var releaseErr error
+	p.once.Do(func() {
+		if p.probe != nil {
+			if err := p.probe.Unlock(); err != nil {
+				releaseErr = err
+			}
+			p.probe = nil
+		}
+		if err := p.coordinator.coordination.Unlock(); releaseErr == nil && err != nil {
+			releaseErr = err
+		}
+	})
+	return releaseErr
 }
 
 func (l *WriterLock) Close() error {

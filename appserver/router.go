@@ -280,6 +280,23 @@ func (r *Router) acquireLifecycleWriters(threadIDs []session.ThreadID) ([]*sessi
 	return r.threadManager().AcquireLifecycleWriters(r.store, threadIDs)
 }
 
+// acquireMetadataRolloutWriter mirrors Rust #44138's ownership step for legacy
+// rollout metadata patches: take the thread writer lock before any store or
+// SQLite write so a competing writer is rejected up front instead of racing the
+// appended SessionMeta. A live paginated thread already owns its writer and is
+// reused instead of re-acquired.
+func (r *Router) acquireMetadataRolloutWriter(threadID session.ThreadID) (*session.WriterLock, func(), error) {
+	acquired, err := r.acquireLifecycleWriters([]session.ThreadID{threadID})
+	if err != nil {
+		return nil, nil, err
+	}
+	var lock *session.WriterLock
+	if len(acquired) > 0 {
+		lock = acquired[0]
+	}
+	return lock, func() { closeTemporaryWriters(acquired) }, nil
+}
+
 func (r *Router) releaseLiveThreads(threadIDs []session.ThreadID) {
 	r.threadManager().ReleaseLiveThreads(threadIDs)
 }
@@ -587,7 +604,7 @@ func (r *Router) materializeThreadHistory(threadID session.ThreadID, path string
 	return state.MaterializeThreadHistory(context.Background(), db, string(threadID), path, initialOrdinal, subagentHistoryStartOrdinal)
 }
 
-func (r *Router) appendThreadMetadataRollout(record *session.Record, now time.Time) error {
+func (r *Router) appendThreadMetadataRollout(record *session.Record, now time.Time, writer *session.WriterLock) error {
 	if r == nil || r.store == nil || record == nil {
 		return nil
 	}
@@ -599,7 +616,12 @@ func (r *Router) appendThreadMetadataRollout(record *session.Record, now time.Ti
 	if err != nil {
 		return nil
 	}
-	recorder, err := rollout.Resume(path)
+	var recorder *rollout.Recorder
+	if writer != nil {
+		recorder, err = rollout.ResumeWithWriter(path, writer)
+	} else {
+		recorder, err = rollout.Resume(path)
+	}
 	if err != nil {
 		return err
 	}
@@ -3477,13 +3499,29 @@ func (r *Router) handleThreadMemoryModeSet(request *Request) (*ThreadMemoryModeS
 		}
 	}
 	record.Metadata.MemoryMode = string(params.Mode)
+	// Rust #44138: a legacy memory-mode patch takes cross-process ownership
+	// before the store or SQLite write so a competing writer is rejected before
+	// any part of the patch is committed. Paginated metadata lives in SQLite and
+	// stops before the legacy SessionMeta append.
+	var metadataWriter *session.WriterLock
+	releaseWriter := func() {}
+	if !threadUsesPaginatedHistory(record) {
+		var lockErr error
+		metadataWriter, releaseWriter, lockErr = r.acquireMetadataRolloutWriter(threadID)
+		if lockErr != nil {
+			return nil, lockErr
+		}
+	}
+	defer releaseWriter()
 	record.UpdatedAt = r.now().UTC()
 	record.RecencyAt = record.UpdatedAt
 	if err := r.saveThreadRecord(record); err != nil {
 		return nil, err
 	}
-	if err := r.appendThreadMetadataRollout(record, r.now().UTC()); err != nil {
-		return nil, err
+	if !threadUsesPaginatedHistory(record) {
+		if err := r.appendThreadMetadataRollout(record, r.now().UTC(), metadataWriter); err != nil {
+			return nil, err
+		}
 	}
 	if err := updateRustStateThreadMemoryMode(codexHomeFromSessionStore(r.store), params.ThreadID, params.Mode); err != nil {
 		return nil, fmt.Errorf("failed to update sqlite thread memory mode: %w", err)
@@ -3624,13 +3662,28 @@ func (r *Router) handleThreadMetadataUpdate(request *Request) (*ThreadMetadataUp
 	if err != nil {
 		return nil, err
 	}
+	// Rust #44138: a legacy git-info patch takes cross-process ownership before
+	// the store or SQLite write so a competing writer is rejected before any
+	// part of the patch is committed. Paginated metadata lives in SQLite only.
+	var metadataWriter *session.WriterLock
+	releaseWriter := func() {}
+	if params.GitInfo != nil && !threadUsesPaginatedHistory(current) {
+		var lockErr error
+		metadataWriter, releaseWriter, lockErr = r.acquireMetadataRolloutWriter(session.ThreadID(params.ThreadID))
+		if lockErr != nil {
+			return nil, lockErr
+		}
+	}
+	defer releaseWriter()
 	record, err := r.updateThreadMetadata(session.ThreadID(params.ThreadID), &patch, true)
 	if err != nil {
 		return nil, threadMetadataWriteError(params.ThreadID, err)
 	}
 	if params.GitInfo != nil {
-		if err := r.appendThreadMetadataRollout(record, r.now().UTC()); err != nil {
-			return nil, err
+		if !threadUsesPaginatedHistory(record) {
+			if err := r.appendThreadMetadataRollout(record, r.now().UTC(), metadataWriter); err != nil {
+				return nil, err
+			}
 		}
 		if err := updateRustStateThreadGitInfo(codexHomeFromSessionStore(r.store), params.ThreadID, record.Metadata.Git); err != nil {
 			return nil, fmt.Errorf("failed to update sqlite thread git metadata: %w", err)

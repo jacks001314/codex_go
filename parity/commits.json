@@ -10527,9 +10527,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 3/7; needs review: WriterLockGuard, materialize_rollout_for_append, new_with_writer_lock, try_acquire_for_publication"
+    "Round 1143: WriterLockGuard maps to session.WriterLock, and rollouts materialize for append through rollout.ResumeWithWriter, the Go form of materialize_rollout_for_append(path, writer_lock) / RolloutRecorder::new_with_writer_lock: compressed-rollout materialization and the plain-file open both run under the caller's guard.",
+    "session.PublicationLock + Store.TryAcquireForPublication mirror try_acquire_for_publication: take the bounded coordination lock, probe the thread lock without O_CREATE (missing file = idle), return ErrConflict for a live writer, and keep coordination locked through publication without deleting the probed file (tests: TestTryAcquireForPublicationSkipsLiveWriterAndHoldsCoordination, TestTryAcquireForPublicationDoesNotCreateThreadLockFile).",
+    "rollout/compression.go now encodes, copies access metadata, verifies and syncs before taking ownership, then rechecks the source under coordination, publishes with a no-clobber rename, rechecks again and removes the source; a busy thread reports SkippedBusy. TestRolloutCompressionPublicationLeavesNoWriterLockLikeRust also proves an unlocked stale lock file is idle and no lock file is created for an idle thread.",
+    "appserver/router.go takes writer ownership through acquireMetadataRolloutWriter before the store or SQLite write for legacy memory-mode and git-info patches, reuses a live paginated thread's writer, and stops before the legacy SessionMeta append for paginated threads (Rust's paginated early return). Tests: TestRouterThreadMemoryModeSetRejectsActiveWriterLikeRust, TestRouterThreadMetadataUpdateRejectsActiveWriterLikeRust; neither the session record nor the state SQLite row changes on conflict, and TestRouterMemoryModeSetAppendsRolloutMetadata still covers the successful append.",
+    "Go's Recorder writes inline under its mutex and Close syncs, so Rust's background writer task, discard(), wait_for_exit() and deferred-item queue have no Go counterpart to stop before deletion; ownership is held for the synchronous append instead."
    ]
   },
   {

@@ -702,7 +702,7 @@ func TestRouterRolloutFlushReconcilesStateAndLazilyProjectsHistory(t *testing.T)
 		t.Fatal(err)
 	}
 	paginated.Metadata.Git["branch"] = "new-rollout-branch"
-	if err := router.appendThreadMetadataRollout(paginated, fixedTime().Add(2*time.Second)); err != nil {
+	if err := router.appendThreadMetadataRollout(paginated, fixedTime().Add(2*time.Second), nil); err != nil {
 		t.Fatal(err)
 	}
 	var title string

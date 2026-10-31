@@ -1645,6 +1645,105 @@ func TestRouterThreadMemoryModeSetUpdatesRustStateSQLiteLikeRust(t *testing.T) {
 	}
 }
 
+// Rust parity: codex-rs/thread-store/src/local/update_thread_metadata.rs at
+// #44138. A legacy rollout metadata patch takes cross-process writer ownership
+// before the store or SQLite write, so a competing writer is rejected before any
+// part of the patch is committed.
+func TestRouterThreadMemoryModeSetRejectsActiveWriterLikeRust(t *testing.T) {
+	root := t.TempDir()
+	sqliteHome := t.TempDir()
+	t.Setenv("CODEX_SQLITE_HOME", sqliteHome)
+	store := session.NewStore(root)
+	threadID := session.ThreadID("thread-memory-mode-owned")
+	createRecord(t, store, threadID, fixedTime())
+	stateDB := openRouterTestSQLite(t, filepath.Join(sqliteHome, rustStateSQLiteFilename))
+	routerTestExecSQL(t, stateDB, `CREATE TABLE threads (id TEXT PRIMARY KEY, memory_mode TEXT NOT NULL DEFAULT 'enabled')`)
+	routerTestExecSQL(t, stateDB, `INSERT INTO threads (id, memory_mode) VALUES (?, 'enabled')`, string(threadID))
+
+	owner, err := session.NewStore(root).AcquireWriter(threadID)
+	if err != nil {
+		t.Fatalf("AcquireWriter(owner) error = %v", err)
+	}
+	defer owner.Close()
+	before, err := store.Read(threadID, true, true)
+	if err != nil {
+		t.Fatalf("Read thread before conflict error = %v", err)
+	}
+
+	response := NewRouter(store).Handle(requestWithParams(t, IntID(1), MethodThreadMemoryModeSet, ThreadMemoryModeSetParams{
+		ThreadID: string(threadID),
+		Mode:     ThreadMemoryModeDisabled,
+	}))
+	if response.Error == nil || response.Error.Code != -32600 || !strings.Contains(response.Error.Message, "already has an active writer") {
+		t.Fatalf("thread/memoryMode/set response = %+v, want ownership conflict", response)
+	}
+	if got := routerTestScalarString(t, stateDB, `SELECT memory_mode FROM threads WHERE id = ?`, string(threadID)); got != "enabled" {
+		t.Fatalf("sqlite memory_mode after conflict = %q, want enabled", got)
+	}
+	record, err := store.Read(threadID, true, true)
+	if err != nil {
+		t.Fatalf("Read thread after conflict error = %v", err)
+	}
+	if record.Metadata.MemoryMode != before.Metadata.MemoryMode {
+		t.Fatalf("store memory mode after conflict = %q, want %q", record.Metadata.MemoryMode, before.Metadata.MemoryMode)
+	}
+
+	if err := owner.Close(); err != nil {
+		t.Fatalf("owner.Close() error = %v", err)
+	}
+	released := NewRouter(store).Handle(requestWithParams(t, IntID(2), MethodThreadMemoryModeSet, ThreadMemoryModeSetParams{
+		ThreadID: string(threadID),
+		Mode:     ThreadMemoryModeDisabled,
+	}))
+	if released.Error != nil {
+		t.Fatalf("thread/memoryMode/set after release error = %+v", released.Error)
+	}
+	if got := routerTestScalarString(t, stateDB, `SELECT memory_mode FROM threads WHERE id = ?`, string(threadID)); got != "disabled" {
+		t.Fatalf("sqlite memory_mode after release = %q, want disabled", got)
+	}
+}
+
+// Rust parity: codex-rs/thread-store/src/local/update_thread_metadata.rs at
+// #44138. Git-info patches share the same ownership gate as memory-mode patches.
+func TestRouterThreadMetadataUpdateRejectsActiveWriterLikeRust(t *testing.T) {
+	root := t.TempDir()
+	sqliteHome := t.TempDir()
+	t.Setenv("CODEX_SQLITE_HOME", sqliteHome)
+	store := session.NewStore(root)
+	threadID := session.ThreadID("thread-git-owned")
+	createRecord(t, store, threadID, fixedTime())
+	stateDB := openRouterTestSQLite(t, filepath.Join(sqliteHome, rustStateSQLiteFilename))
+	routerTestExecSQL(t, stateDB, `CREATE TABLE threads (id TEXT PRIMARY KEY, git_sha TEXT, git_branch TEXT, git_origin_url TEXT)`)
+	routerTestExecSQL(t, stateDB, `INSERT INTO threads (id) VALUES (?)`, string(threadID))
+
+	owner, err := session.NewStore(root).AcquireWriter(threadID)
+	if err != nil {
+		t.Fatalf("AcquireWriter(owner) error = %v", err)
+	}
+	defer owner.Close()
+
+	sha := "abc123"
+	response := NewRouter(store).Handle(requestWithParams(t, IntID(1), MethodThreadMetadataUpdate, ThreadMetadataUpdateParams{
+		ThreadID: string(threadID),
+		GitInfo: &ThreadMetadataGitInfoPatch{
+			SHA: OptionalString{Set: true, Value: &sha},
+		},
+	}))
+	if response.Error == nil || response.Error.Code != -32600 || !strings.Contains(response.Error.Message, "already has an active writer") {
+		t.Fatalf("thread/metadata/update response = %+v, want ownership conflict", response)
+	}
+	if got := routerTestScalarNullString(t, stateDB, `SELECT git_sha FROM threads WHERE id = ?`, string(threadID)); got.Valid {
+		t.Fatalf("sqlite git_sha after conflict = %+v, want NULL", got)
+	}
+	record, err := store.Read(threadID, true, true)
+	if err != nil {
+		t.Fatalf("Read thread after conflict error = %v", err)
+	}
+	if len(record.Metadata.Git) != 0 {
+		t.Fatalf("store git after conflict = %#v, want empty", record.Metadata.Git)
+	}
+}
+
 func TestRouterSetNameAndMetadata(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	router := NewRouter(store)
