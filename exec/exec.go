@@ -1309,10 +1309,16 @@ type execEventSink struct {
 	turnDiff        *execTurnDiffState
 	internalHandler func(protocol.ThreadEvent)
 	err             error
+	// nextItemID / rawToExecItemID mirror Rust's
+	// EventProcessorWithJsonOutput: the exec JSON stream numbers every thread
+	// item from one counter (`item_N`) and reuses the started id for the
+	// matching completion of non-message items.
+	nextItemID      atomic.Uint64
+	rawToExecItemID map[string]string
 }
 
 func newExecEventSink(stdout io.Writer, encodeJSON bool) *execEventSink {
-	sink := &execEventSink{turnDiff: newExecTurnDiffState()}
+	sink := &execEventSink{turnDiff: newExecTurnDiffState(), rawToExecItemID: map[string]string{}}
 	if encodeJSON && stdout != nil {
 		sink.encoder = json.NewEncoder(stdout)
 		sink.encoder.SetEscapeHTML(false)
@@ -1342,7 +1348,8 @@ func (s *execEventSink) Emit(event protocol.ThreadEvent) error {
 		return s.err
 	}
 	if s.encoder != nil {
-		if err := s.encoder.Encode(event); err != nil {
+		encoded := s.assignExecItemID(event)
+		if err := s.encoder.Encode(encoded); err != nil {
 			s.err = err
 			return err
 		}
@@ -1351,6 +1358,46 @@ func (s *execEventSink) Emit(event protocol.ThreadEvent) error {
 		s.human.HandleEvent(event)
 	}
 	return nil
+}
+
+// assignExecItemID mirrors event_processor_with_jsonl_output.rs: started and
+// updated items take a fresh `item_N` and remember it by raw id; a completion
+// reuses that id for tool-like items, while agent messages and reasoning always
+// take a fresh id (Rust maps them with next_item_id on completion only).
+func (s *execEventSink) assignExecItemID(event protocol.ThreadEvent) protocol.ThreadEvent {
+	switch event.Type {
+	case "item.started", "item.updated", "item.completed":
+	default:
+		return event
+	}
+	if event.Item == nil {
+		return event
+	}
+	item := *event.Item
+	rawID := item.ID
+	if event.Type == "item.completed" && (item.Type == "agent_message" || item.Type == "reasoning") {
+		item.ID = s.nextExecItemID()
+		event.Item = &item
+		return event
+	}
+	if mapped, ok := s.rawToExecItemID[rawID]; ok && rawID != "" {
+		item.ID = mapped
+		if event.Type == "item.completed" {
+			delete(s.rawToExecItemID, rawID)
+		}
+		event.Item = &item
+		return event
+	}
+	item.ID = s.nextExecItemID()
+	if rawID != "" {
+		s.rawToExecItemID[rawID] = item.ID
+	}
+	event.Item = &item
+	return event
+}
+
+func (s *execEventSink) nextExecItemID() string {
+	return fmt.Sprintf("item_%d", s.nextItemID.Add(1)-1)
 }
 
 func (s *execEventSink) EmitInternal(event protocol.ThreadEvent) {

@@ -6387,11 +6387,67 @@ func TestRunJSONSuppressesResponsesDeltasUntilFinalEvents(t *testing.T) {
 		!strings.Contains(stdout.String(), `"output_tokens":2`) {
 		t.Fatalf("stdout after completion = %q", stdout.String())
 	}
-	if !strings.Contains(stdout.String(), `"type":"item.completed","item":{"id":"msg-1","type":"agent_message","text":"hello world"}`) {
+	// Rust's JSONL processor numbers items from a global `item_N` counter
+	// (event_processor_with_jsonl_output.rs::next_item_id), so the final
+	// assistant message never carries the raw response id.
+	if !strings.Contains(stdout.String(), `"type":"agent_message","text":"hello world"`) {
 		t.Fatalf("stdout missing final assistant item = %q", stdout.String())
+	}
+	if strings.Contains(stdout.String(), `"id":"msg-1"`) {
+		t.Fatalf("stdout kept the raw response id for the assistant item = %q", stdout.String())
 	}
 	if strings.Contains(stdout.String(), `"type":"item.delta"`) {
 		t.Fatalf("stdout emitted non-Rust delta event: %q", stdout.String())
+	}
+}
+
+// TestExecJSONItemIDsMatchRustCounterLikeRust pins
+// event_processor_with_jsonl_output.rs's id lifecycle: every item draws from
+// one `item_N` counter, a started tool item keeps its id on completion, and
+// agent messages always take a fresh id.
+func TestExecJSONItemIDsMatchRustCounterLikeRust(t *testing.T) {
+	var stdout bytes.Buffer
+	sink := newExecEventSink(&stdout, true)
+	emit := func(event protocol.ThreadEvent) {
+		t.Helper()
+		if err := sink.Emit(event); err != nil {
+			t.Fatalf("Emit returned error: %v", err)
+		}
+	}
+	command := protocol.ThreadItem{ID: "chatcmpl-tool-1", Type: "command_execution"}
+	emit(protocol.ItemStarted(command))
+	command.Status = "completed"
+	emit(protocol.ItemCompleted(command))
+	emit(protocol.ItemCompleted(protocol.ErrorItem("warning-1", "host missing")))
+	emit(protocol.ItemCompleted(protocol.ThreadItem{ID: "msg-9", Type: "agent_message", Text: "done"}))
+	emit(protocol.ItemCompleted(protocol.ThreadItem{ID: "msg-10", Type: "agent_message", Text: "done again"}))
+	todo := protocol.ThreadItem{ID: "todo-list-call", Type: "todo_list"}
+	emit(protocol.ItemStarted(todo))
+	emit(protocol.ItemUpdated(todo))
+
+	var ids []string
+	decoder := json.NewDecoder(&stdout)
+	for decoder.More() {
+		var event protocol.ThreadEvent
+		if err := decoder.Decode(&event); err != nil {
+			t.Fatalf("Decode returned error: %v", err)
+		}
+		if event.Item == nil {
+			continue
+		}
+		ids = append(ids, event.Item.ID)
+	}
+	want := []string{"item_0", "item_0", "item_1", "item_2", "item_3", "item_4", "item_4"}
+	if len(ids) != len(want) {
+		t.Fatalf("item ids = %#v, want %#v", ids, want)
+	}
+	for index := range want {
+		if ids[index] != want[index] {
+			t.Fatalf("item ids = %#v, want %#v", ids, want)
+		}
+	}
+	if strings.Contains(stdout.String(), "warning-1") || strings.Contains(stdout.String(), "chatcmpl-tool-1") {
+		t.Fatalf("stdout leaked raw item ids: %q", stdout.String())
 	}
 }
 
