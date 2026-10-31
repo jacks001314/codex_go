@@ -1828,9 +1828,10 @@ func TestParseAppServerDaemonUpdate(t *testing.T) {
 	if daemon.Action != "update" || !daemon.FromCLI || !daemon.Yes {
 		t.Fatalf("parsed daemon options = %#v", daemon)
 	}
-	if _, err := Parse([]string{"app-server", "daemon", "update", "--yes"}); err == nil ||
-		err.Error() != "`--yes` requires `--from-cli`" {
-		t.Fatalf("update --yes error = %v", err)
+	usageErr := requireClapUsageError(t, []string{"app-server", "daemon", "update", "--yes"})
+	if usageErr.Message != requiredArgumentsMessage("--from-cli") ||
+		usageErr.Usage != "Usage: codex app-server daemon update --from-cli --yes" {
+		t.Fatalf("update --yes error = %v", usageErr)
 	}
 	if _, err := Parse([]string{"app-server", "daemon", "update", "--unknown"}); err == nil {
 		t.Fatal("an unknown update option must fail")

@@ -1117,8 +1117,71 @@ one-off captures.
     `TestUnknownLongFlagWithoutSuggestionLikeRust`, and the round 44 session
     suggestion tests keep passing through the new table lookup.
 
+47. **Long-flag tables for the rest of the command tree, and clap's usage
+    rules** - entry 46 covered the root, the `exec` family, the session commands
+    and `codex review`. The other groups still answered an unknown flag with a
+    Go-only `unknown <command> option <flag>`, a bare `unexpected argument ...
+    found` without a usage block, or the static page where clap echoes the
+    options it already accepted.
+    - `clapCommandLongFlags` now records 71 command paths. The 64 added here are
+      agents, app, app-server (+ daemon start/stop/restart/version/bootstrap/
+      update/enable-remote-control/disable-remote-control and the generate-*
+      leaves), apply, cloud (+ exec/status/list/apply/diff), completion, debug
+      (+ app-server send-message-v2, models, prompt-input), doctor, exec-server
+      (+ forward), features (+ list/enable/disable), login (+ status), logout,
+      mcp (+ add/get/list/login/logout/remove), migrate-nfs-db,
+      migrate-rollouts, plugin (+ add/list/remove and every marketplace
+      subcommand), queue, remote-control (+ start/stop/pair), sandbox (+
+      uninstall) and update. The audit script walks the 0.166 `--help` tree (86
+      paths) and finds an option-bearing path without a table only where the
+      session commands share `clapSessionMutationLongFlags`, plus Rust's hidden
+      aliases, which the tables keep on purpose because clap still scores them.
+    - `clapStringSmartUsage` follows `clap_builder/src/output/usage.rs`:
+      `[OPTIONS]` survives only while nothing is marked present, the required
+      options come first, the accepted ones follow in argv order and the
+      positionals close the block (`Options::write_args` unrolls the
+      requirements before the `used` ids). The optional `[COMMAND]` placeholder
+      stays on the static page.
+    - Group parsers report slot-aware clap diagnostics instead of Go strings:
+      `plugin add|remove` and every `plugin marketplace` leaf (`unexpected
+      argument 'src'`, a missing `<PLUGIN[@MARKETPLACE]>`), `features
+      enable|disable` (an unknown flag beats the extra positional, a bound slot
+      renders `<FEATURE>`), `app-server generate-ts|generate-json-schema|
+      generate-internal-json-schema` (`--outs` suggests `--out <DIR>`, a missing
+      `--out` prints clap's required-argument block), the bare `app-server
+      daemon <sub>` commands (which now echo `--config` in the smart usage),
+      `debug app-server send-message-v2`, `exec-server forward` (its own page
+      with the three required options), `login status`, `sandbox uninstall` and
+      `doctor`.
+    - clap's `requires` relation on `app-server daemon update --yes` prints the
+      missing `--from-cli` block instead of Go's own sentence, and
+      `plugin marketplace upgrade <a> <b>` reports the second positional like
+      clap.
+    - Commands whose positional captures trailing values (`mcp add`, `sandbox`)
+      stack the did-you-mean tip and the `--` workaround tip, and a suggested
+      flag whose placeholder carries an `=` (`--config <key=value>`) is no
+      longer truncated by the inline-value split.
+    Evidence: live comparisons against 0.166 - 127 new cases
+    (`out/round32-group-suggestions.txt` 26/26,
+    `out/round32-group-boundaries.txt` 26/26, `out/round32-group-edges.txt`
+    20/20, `out/round32-group-named-cases.txt` 12/12, the daemon / marketplace /
+    uninstall probes 14/14, 13/13 and 3/3) plus 118 round 29-31 regression cases
+    (`out/round32-all-probes.txt`, 0 diffs). `go test ./cli ./sandbox
+    ./applypatch ./prompt ./review ./cmd/... ./tcptunnel` passes with
+    `TestSubcommandGroupFlagDiagnosticsLikeRust` (120 Rust-captured cases);
+    `go test -vet=off ./app` still fails only `TestExecJSONEndToEnd`.
+
 ## Verification
 
+- The remaining command groups match Rust 0.166 on clap's flag diagnostics:
+  127 live cases cover the did-you-mean tip, the `--` workaround tip, clap's
+  smart usage ordering, the required-argument blocks and the daemon /
+  marketplace / uninstall leaves (`out/round32-*.txt`), and the 118 round 29-31
+  regression cases stay at 0 diffs (`out/round32-all-probes.txt`).
+  `go test ./cli ./sandbox ./applypatch ./prompt ./review ./cmd/...
+  ./tcptunnel` passes, `TestSubcommandGroupFlagDiagnosticsLikeRust` pins 120 of
+  those cases, and `go test -vet=off ./app` keeps only the
+  `TestExecJSONEndToEnd` baseline.
 - Session subcommand parsing matches Rust 0.166: the 14 subcommand-diagnostic
   cases (`out/round29-session-diag.txt`), the 10 archive/delete/unarchive cases
   (`out/round29-mutation.txt`) and the 30 queue cases
@@ -1415,12 +1478,11 @@ one-off captures.
   `No sessions found to resume.`, `Session not found: <id>` or
   `Error: thread not found`. The argument surface itself now matches, so the
   remaining gap is the TUI start gate in the non-interactive path.
-- Long-flag did-you-mean and the smart usage block are modelled for the root
-  command, the `exec` family, the session commands and `codex review` (entry
-  46). Groups whose flags are still missing from `clapCommandLongFlags` keep the
-  plain `--` tip where clap suggests a flag: `codex mcp list --trnsport`,
-  `codex plugin list --markeplace`, `codex app-server --lsiten` and the `debug` /
-  `features` / `cloud` groups.
+- Long-flag did-you-mean and the smart usage block now cover every command path
+  the 0.166 help tree exposes with options (entries 46 and 47; the audit compares
+  the tables against the help pages). What the audit reports next to the tables
+  is only Rust's hidden aliases (`--yolo`, `--not-so-yolo`,
+  `--experimental-json`), which the tables keep because clap still scores them.
 - OS-level error text is now Rust-shaped on the exec surfaces; other commands
   that print `%v` of a `*os.PathError` (for example some `apply_patch` paths)
   still show Go's `open <path>: <English text>` wording.
@@ -1428,18 +1490,17 @@ one-off captures.
   family and the subcommand surface (unexpected arguments, missing required
   arguments, unrecognized subcommands with did-you-mean, missing values, and the
   nested `sandbox setup` parser). What is still Go-shaped:
-  - clap's flag did-you-mean is modelled for the root, `exec`, session and
-    `review` commands (entry 46); the remaining groups still need their
-    long-flag tables; see the dedicated Still open bullet.
+  - clap's flag did-you-mean now covers the whole command tree (entries 46 and
+    47); see the dedicated Still open bullet for the two remaining details.
   - shared options inside a subcommand (entry 37): `--enable`/`--disable` are
     accepted everywhere and rendered in the usage block, but the hand-written
     `exec` family usage lines (`exec resume --last --enable f --bogus`,
     `exec fork --enable f`) do not echo them yet - Rust prints
     `--last --enable <FEATURE>` / `--enable <FEATURE> <SESSION_ID>`. A pending
-    value followed by an *unknown* flag (`codex mcp get -c -x1`) also still
-    reports the pending value, where clap reports `unexpected argument '-x'
-    found` first, because Go has no per-command flag table to test the token
-    against. `codex review --config a=b` keeps working through the subcommand
+    value followed by an *unknown* flag (`codex mcp get -c -x1`) still reports
+    the pending value, where clap reports `unexpected argument '-x' found`
+    first, because the subcommand parsers consume a value eagerly instead of
+    testing the next token against the command's flag table. `codex review --config a=b` keeps working through the subcommand
     parser's own `-c` handling, which mirrors Rust's merged override order.
   - the missing-required blocks are aligned (entry 40): `execpolicy check`,
     `stdio-to-uds` and `tcp-tunnel` print clap's block with exit 2, including

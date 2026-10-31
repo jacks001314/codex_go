@@ -1674,8 +1674,14 @@ func parseLogin(args []string, login *LoginOptions) error {
 		case arg == "status":
 			login.Action = "status"
 		case strings.HasPrefix(arg, "-"):
+			if login.Action == "status" {
+				return unexpectedSubcommandArgumentError("login status", arg)
+			}
 			return unexpectedSubcommandArgumentError("login", arg)
 		default:
+			if login.Action == "status" {
+				return unexpectedSubcommandArgumentError("login status", arg)
+			}
 			return unrecognizedSubcommandWithSuggestion(arg, subcommandUsageTexts["login"].usage, subcommandCandidates["login"])
 		}
 	}
@@ -1851,16 +1857,24 @@ func parseFeatures(args []string, features *FeatureOptions) error {
 			return unexpectedSubcommandArgumentError("features list", args[1])
 		}
 	case "enable", "disable":
-		if len(args) == 1 {
-			return missingRequiredArgumentsError("features "+features.Action, "<FEATURE>")
+		command := "features " + features.Action
+		bound := false
+		for i := 1; i < len(args); i++ {
+			arg := args[i]
+			// clap rejects an unknown flag before it counts the positional, so
+			// the flag diagnostic wins over the "too many values" one.
+			if arg != "-" && strings.HasPrefix(arg, "-") {
+				return clapUnexpectedLongFlagError(command, arg, args[1:i])
+			}
+			if bound {
+				return unexpectedArgumentWithoutTip(arg, subcommandUsageTexts[command].usage)
+			}
+			features.Feature = arg
+			bound = true
 		}
-		if len(args) > 2 {
-			return unexpectedArgumentWithoutTip(args[2], subcommandUsageTexts["features "+features.Action].usage)
+		if !bound {
+			return missingRequiredArgumentsError(command, "<FEATURE>")
 		}
-		if args[1] != "-" && strings.HasPrefix(args[1], "-") {
-			return unexpectedSubcommandArgumentError("features "+features.Action, args[1])
-		}
-		features.Feature = args[1]
 	default:
 		return unrecognizedSubcommandForGroup("features", features.Action)
 	}
@@ -2237,16 +2251,16 @@ func parsePlugin(args []string, plugin *PluginOptions) error {
 			case strings.HasPrefix(arg, "-c"):
 				plugin.ConfigOverrides = append(plugin.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
 			case strings.HasPrefix(arg, "-"):
-				return unexpectedSubcommandArgumentError("plugin "+plugin.Action, arg)
+				return clapUnexpectedLongFlagError("plugin "+plugin.Action, arg, args[1:i])
 			default:
 				if plugin.Plugin != "" {
-					return fmt.Errorf("plugin %s accepts exactly one PLUGIN", plugin.Action)
+					return unexpectedArgumentWithoutTip(arg, subcommandUsageTexts["plugin "+plugin.Action].usage)
 				}
 				plugin.Plugin = arg
 			}
 		}
 		if plugin.Plugin == "" {
-			return fmt.Errorf("plugin %s requires PLUGIN", plugin.Action)
+			return missingRequiredArgumentsError("plugin "+plugin.Action, "<PLUGIN[@MARKETPLACE]>")
 		}
 	case "list":
 		for i := 1; i < len(args); i++ {
@@ -2392,7 +2406,7 @@ func parsePluginMarketplace(args []string, marketplace *PluginMarketplaceOptions
 				return unexpectedSubcommandArgumentError("plugin marketplace upgrade", arg)
 			default:
 				if marketplace.Name != "" {
-					return errors.New("plugin marketplace upgrade accepts at most one MARKETPLACE_NAME")
+					return unexpectedArgumentWithoutTip(arg, subcommandUsageTexts["plugin marketplace upgrade"].usage)
 				}
 				marketplace.Name = arg
 			}
@@ -2444,10 +2458,10 @@ func parseSandbox(args []string, sandbox *SandboxOptions) error {
 			switch {
 			case arg == "-h" || arg == "--help":
 				sandbox.UninstallHelp = true
+			case strings.HasPrefix(arg, "-"):
+				return clapUnexpectedLongFlagError("sandbox uninstall", arg, args[1:i])
 			default:
-				// clap reports the first unexpected argument for a no-argument
-				// subcommand with this wording.
-				return fmt.Errorf("unexpected argument '%s' found", arg)
+				return unexpectedArgumentWithoutTip(arg, subcommandUsageTexts["sandbox uninstall"].usage)
 			}
 		}
 		return nil
@@ -3195,7 +3209,13 @@ func parseExecServer(args []string, execServer *ExecServerOptions) error {
 			execServer.AWSServiceSet = true
 		default:
 			if strings.HasPrefix(arg, "-") {
-				return unexpectedSubcommandArgumentError("exec-server", arg)
+				// Once `forward` is bound clap reports against that subcommand,
+				// whose page lists the three required forwarding options.
+				command := "exec-server"
+				if execServer.Forward != "" {
+					command += " forward"
+				}
+				return clapUnexpectedLongFlagError(command, arg, args[:i])
 			}
 			return unexpectedSubcommandArgumentError("exec-server", arg)
 		}
@@ -3604,8 +3624,15 @@ func parseAppServerDaemon(args []string, daemon *AppServerDaemonOptions) error {
 	}
 	switch daemon.Action {
 	case "start", "restart", "enable-remote-control", "disable-remote-control", "stop", "version":
-		if len(args) != 1 {
-			return fmt.Errorf("app-server daemon %s does not accept arguments", daemon.Action)
+		// clap attaches the global --config/--enable/--disable to every leaf,
+		// so only an unknown flag or a stray positional reaches this branch.
+		command := "app-server daemon " + daemon.Action
+		for i := 1; i < len(args); i++ {
+			arg := args[i]
+			if strings.HasPrefix(arg, "-") {
+				return clapUnexpectedLongFlagError(command, arg, args[1:i])
+			}
+			return unexpectedArgumentWithoutTip(arg, subcommandUsageTexts[command].usage)
 		}
 	case "pid-update-loop":
 		for i := 1; i < len(args); i++ {
@@ -3649,7 +3676,12 @@ func parseAppServerDaemon(args []string, daemon *AppServerDaemonOptions) error {
 			}
 		}
 		if daemon.Yes && !daemon.FromCLI {
-			return errors.New("`--yes` requires `--from-cli`")
+			// clap models this as `requires = "from_cli"`, so it reports the
+			// missing flag and echoes both options in the usage block.
+			return &UsageError{
+				Message: requiredArgumentsMessage("--from-cli"),
+				Usage:   "Usage: codex app-server daemon update --from-cli --yes",
+			}
 		}
 	default:
 		return unrecognizedSubcommandForGroup("app-server daemon", daemon.Action)
@@ -4003,13 +4035,13 @@ func parseAppServerGenerate(action string, args []string, generate *AppServerGen
 			generate.Experimental = true
 		default:
 			if strings.HasPrefix(arg, "-") {
-				return unexpectedSubcommandArgumentError("app-server "+action, arg)
+				return clapUnexpectedLongFlagError("app-server "+action, arg, args[:i])
 			}
-			return unexpectedSubcommandArgumentError("app-server "+action, arg)
+			return unexpectedArgumentWithoutTip(arg, subcommandUsageTexts["app-server "+action].usage)
 		}
 	}
 	if generate.OutDir == "" {
-		return fmt.Errorf("app-server %s requires --out DIR", action)
+		return missingRequiredArgumentsError("app-server "+action, "--out <DIR>")
 	}
 	return nil
 }
@@ -4053,11 +4085,17 @@ func parseUpdate(args []string, update *UpdateOptions) error {
 }
 
 func parseCompletion(args []string, completion *CompletionOptions) error {
-	if len(args) > 1 {
-		return errors.New("completion accepts at most one shell")
-	}
-	if len(args) == 1 {
-		completion.Shell = args[0]
+	// Shell defaults to bash, so track binding separately from the value.
+	bound := false
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "-") && arg != "-" {
+			return unexpectedSubcommandArgumentError("completion", arg)
+		}
+		if bound {
+			return unexpectedPositionalError(arg, subcommandUsageTexts["completion"].usage)
+		}
+		completion.Shell = arg
+		bound = true
 	}
 	return nil
 }
@@ -4090,7 +4128,7 @@ func parseDoctor(args []string, doctor *DoctorOptions) error {
 		case strings.HasPrefix(arg, "--probe-filesystem-path="):
 			doctor.ProbeFilesystemPath = strings.TrimPrefix(arg, "--probe-filesystem-path=")
 		case strings.HasPrefix(arg, "-"):
-			return unexpectedArgumentWithoutTip(arg, doctorUsageText)
+			return clapUnexpectedLongFlagError("doctor", arg, args[:i])
 		default:
 			return unexpectedArgumentWithoutTip(arg, doctorUsageText)
 		}
@@ -4218,7 +4256,11 @@ func parseRemoteControl(args []string, remote *RemoteControlOptions) error {
 			remote.Subcommand = arg
 		default:
 			if strings.HasPrefix(arg, "-") {
-				return unexpectedSubcommandArgumentError("remote-control", arg)
+				command := "remote-control"
+				if remote.Subcommand != "" {
+					command += " " + remote.Subcommand
+				}
+				return unexpectedSubcommandArgumentError(command, arg)
 			}
 			return unrecognizedSubcommandWithSuggestion(arg, subcommandUsageTexts["remote-control"].usage, subcommandCandidates["remote-control"])
 		}
@@ -4452,10 +4494,22 @@ func parseDebug(args []string, debug *DebugOptions) error {
 		debug.AppServerAction = args[1]
 		switch debug.AppServerAction {
 		case "send-message-v2":
-			if len(args) != 3 {
-				return errors.New("debug app-server send-message-v2 requires USER_MESSAGE")
+			command := "debug app-server send-message-v2"
+			bound := false
+			for i := 2; i < len(args); i++ {
+				arg := args[i]
+				if strings.HasPrefix(arg, "-") {
+					return clapUnexpectedLongFlagError(command, arg, args[2:i])
+				}
+				if bound {
+					return unexpectedArgumentWithoutTip(arg, subcommandUsageTexts[command].usage)
+				}
+				debug.AppServerMessage = arg
+				bound = true
 			}
-			debug.AppServerMessage = args[2]
+			if !bound {
+				return missingRequiredArgumentsError(command, "<USER_MESSAGE>")
+			}
 		default:
 			return unrecognizedSubcommandForGroup("debug app-server", debug.AppServerAction)
 		}

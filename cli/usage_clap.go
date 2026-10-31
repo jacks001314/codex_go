@@ -200,54 +200,76 @@ var subcommandUsageTexts = map[string]subcommandUsageText{
 	"mcp login":                         {"Usage: codex mcp login [OPTIONS] <NAME>", true},
 	"mcp logout":                        {"Usage: codex mcp logout [OPTIONS] <NAME>", true},
 	"mcp remove":                        {"Usage: codex mcp remove [OPTIONS] <NAME>", true},
+	"plugin add":                        {"Usage: codex plugin add [OPTIONS] <PLUGIN[@MARKETPLACE]>", true},
 	"plugin list":                       {"Usage: codex plugin list [OPTIONS]", false},
 	"plugin marketplace add":            {"Usage: codex plugin marketplace add [OPTIONS] <SOURCE>", true},
+	"plugin remove":                     {"Usage: codex plugin remove [OPTIONS] <PLUGIN[@MARKETPLACE]>", true},
 	"plugin marketplace list":           {"Usage: codex plugin marketplace list [OPTIONS]", false},
 	"plugin marketplace upgrade":        {"Usage: codex plugin marketplace upgrade [OPTIONS] [MARKETPLACE_NAME]", true},
 	"plugin marketplace remove":         {"Usage: codex plugin marketplace remove [OPTIONS] <MARKETPLACE_NAME>", true},
 	"sandbox":                           {"Usage: codex sandbox [OPTIONS] [COMMAND]... [COMMAND]", true},
+	"sandbox uninstall":                 {"Usage: codex sandbox uninstall [OPTIONS]", false},
 	"cloud exec":                        {"Usage: codex cloud exec [OPTIONS] --env <ENV_ID> [QUERY]", true},
 	"cloud status":                      {"Usage: codex cloud status [OPTIONS] <TASK_ID>", true},
 	"cloud list":                        {"Usage: codex cloud list [OPTIONS]", false},
 	"responses-api-proxy":               {"Usage: codex responses-api-proxy [OPTIONS]", false},
 	"exec-server":                       {"Usage: codex exec-server [OPTIONS] [COMMAND]", false},
+	"exec-server forward":               {"Usage: codex exec-server forward [OPTIONS] --remote <URL> --environment-id <ID> --connect <URL>", false},
 	"app-server":                        {"Usage: codex app-server [OPTIONS] [COMMAND]", false},
 	"app-server proxy":                  {"Usage: codex app-server proxy [OPTIONS]", false},
 	"app-server daemon pid-update-loop": {"Usage: codex app-server daemon pid-update-loop [OPTIONS]", false},
 	"app-server daemon bootstrap":       {"Usage: codex app-server daemon bootstrap [OPTIONS]", false},
 	"app-server daemon update":          {"Usage: codex app-server daemon update [OPTIONS]", false},
-	"queue":                             {"Usage: codex queue [OPTIONS] --thread <THREAD> --message <TEXT>", false},
-	"agents":                            {"Usage: codex agents [OPTIONS]", false},
-	"app":                               {"Usage: codex app [OPTIONS] [PATH]", true},
-	"update":                            {"Usage: codex update [OPTIONS]", false},
-	"migrate-nfs-db":                    {"Usage: codex migrate-nfs-db [OPTIONS]", false},
-	"migrate-rollouts":                  {"Usage: codex migrate-rollouts [OPTIONS]", false},
-	"apply":                             {"Usage: codex apply [OPTIONS] <TASK_ID>", true},
-	"remote-control":                    {"Usage: codex remote-control [OPTIONS] [COMMAND]", false},
-	"delete":                            {"Usage: codex delete [OPTIONS] <SESSION>", true},
-	"resume":                            {"Usage: codex resume [OPTIONS] [SESSION_ID] [PROMPT]", true},
-	"fork":                              {"Usage: codex fork [OPTIONS] [SESSION_ID] [PROMPT]", true},
-	"archive":                           {"Usage: codex archive [OPTIONS] <SESSION>", true},
-	"unarchive":                         {"Usage: codex unarchive [OPTIONS] <SESSION>", true},
-	"debug models":                      {"Usage: codex debug models [OPTIONS]", false},
-	"debug prompt-input":                {"Usage: codex debug prompt-input [OPTIONS] [PROMPT]", true},
-	"debug trace-reduce":                {"Usage: codex debug trace-reduce [OPTIONS] <TRACE_BUNDLE>", true},
-	"debug clear-memories":              {"Usage: codex debug clear-memories [OPTIONS]", false},
-	"features list":                     {"Usage: codex features list [OPTIONS]", false},
-	"features enable":                   {"Usage: codex features enable [OPTIONS] <FEATURE>", true},
-	"features disable":                  {"Usage: codex features disable [OPTIONS] <FEATURE>", true},
-	"features":                          {"Usage: codex features [OPTIONS] <COMMAND>", false},
-	"exec fork":                         {"Usage: codex exec fork [OPTIONS] <SESSION_ID> [PROMPT]", true},
-	"mcp":                               {"Usage: codex mcp [OPTIONS] <COMMAND>", false},
-	"plugin":                            {"Usage: codex plugin [OPTIONS] <COMMAND>", false},
-	"plugin marketplace":                {"Usage: codex plugin marketplace [OPTIONS] <COMMAND>", false},
-	"debug":                             {"Usage: codex debug [OPTIONS] <COMMAND>", false},
-	"debug app-server":                  {"Usage: codex debug app-server [OPTIONS] <COMMAND>", false},
-	"execpolicy":                        {"Usage: codex execpolicy [OPTIONS] <COMMAND>", false},
-	"app-server daemon":                 {"Usage: codex app-server daemon [OPTIONS] <COMMAND>", false},
-	"cloud":                             {"Usage: codex cloud [OPTIONS] [COMMAND]", false},
-	"cloud apply":                       {"Usage: codex cloud apply [OPTIONS] <TASK_ID>", true},
-	"cloud diff":                        {"Usage: codex cloud diff [OPTIONS] <TASK_ID>", true},
+	"app-server daemon start":           {"Usage: codex app-server daemon start [OPTIONS]", false},
+	"app-server daemon stop":            {"Usage: codex app-server daemon stop [OPTIONS]", false},
+	"app-server daemon restart":         {"Usage: codex app-server daemon restart [OPTIONS]", false},
+	"app-server daemon version":         {"Usage: codex app-server daemon version [OPTIONS]", false},
+	"app-server daemon enable-remote-control":  {"Usage: codex app-server daemon enable-remote-control [OPTIONS]", false},
+	"app-server daemon disable-remote-control": {"Usage: codex app-server daemon disable-remote-control [OPTIONS]", false},
+	"debug app-server send-message-v2":         {"Usage: codex debug app-server send-message-v2 [OPTIONS] <USER_MESSAGE>", true},
+	"app-server generate-json-schema":          {"Usage: codex app-server generate-json-schema [OPTIONS] --out <DIR>", false},
+	"app-server generate-internal-json-schema": {
+		"Usage: codex app-server generate-internal-json-schema [OPTIONS] --out <DIR>", false,
+	},
+	"app-server generate-ts": {"Usage: codex app-server generate-ts [OPTIONS] --out <DIR>", false},
+	"queue":                  {"Usage: codex queue [OPTIONS] --thread <THREAD> --message <TEXT>", false},
+	"completion":             {"Usage: codex completion [OPTIONS] [SHELL]", true},
+	"agents":                 {"Usage: codex agents [OPTIONS]", false},
+	"app":                    {"Usage: codex app [OPTIONS] [PATH]", true},
+	"update":                 {"Usage: codex update [OPTIONS]", false},
+	"migrate-nfs-db":         {"Usage: codex migrate-nfs-db [OPTIONS]", false},
+	"migrate-rollouts":       {"Usage: codex migrate-rollouts [OPTIONS]", false},
+	"apply":                  {"Usage: codex apply [OPTIONS] <TASK_ID>", true},
+	"remote-control":         {"Usage: codex remote-control [OPTIONS] [COMMAND]", false},
+	"remote-control start":   {"Usage: codex remote-control start [OPTIONS]", false},
+	"remote-control stop":    {"Usage: codex remote-control stop [OPTIONS]", false},
+	"remote-control pair":    {"Usage: codex remote-control pair [OPTIONS]", false},
+	"delete":                 {"Usage: codex delete [OPTIONS] <SESSION>", true},
+	"resume":                 {"Usage: codex resume [OPTIONS] [SESSION_ID] [PROMPT]", true},
+	"fork":                   {"Usage: codex fork [OPTIONS] [SESSION_ID] [PROMPT]", true},
+	"archive":                {"Usage: codex archive [OPTIONS] <SESSION>", true},
+	"unarchive":              {"Usage: codex unarchive [OPTIONS] <SESSION>", true},
+	"debug models":           {"Usage: codex debug models [OPTIONS]", false},
+	"debug prompt-input":     {"Usage: codex debug prompt-input [OPTIONS] [PROMPT]", true},
+	"debug trace-reduce":     {"Usage: codex debug trace-reduce [OPTIONS] <TRACE_BUNDLE>", true},
+	"debug clear-memories":   {"Usage: codex debug clear-memories [OPTIONS]", false},
+	"features list":          {"Usage: codex features list [OPTIONS]", false},
+	"features enable":        {"Usage: codex features enable [OPTIONS] <FEATURE>", true},
+	"features disable":       {"Usage: codex features disable [OPTIONS] <FEATURE>", true},
+	"features":               {"Usage: codex features [OPTIONS] <COMMAND>", false},
+	"exec fork":              {"Usage: codex exec fork [OPTIONS] <SESSION_ID> [PROMPT]", true},
+	"login status":           {"Usage: codex login status [OPTIONS]", false},
+	"mcp":                    {"Usage: codex mcp [OPTIONS] <COMMAND>", false},
+	"plugin":                 {"Usage: codex plugin [OPTIONS] <COMMAND>", false},
+	"plugin marketplace":     {"Usage: codex plugin marketplace [OPTIONS] <COMMAND>", false},
+	"debug":                  {"Usage: codex debug [OPTIONS] <COMMAND>", false},
+	"debug app-server":       {"Usage: codex debug app-server [OPTIONS] <COMMAND>", false},
+	"execpolicy":             {"Usage: codex execpolicy [OPTIONS] <COMMAND>", false},
+	"doctor":                 {"Usage: codex doctor [OPTIONS]", false},
+	"app-server daemon":      {"Usage: codex app-server daemon [OPTIONS] <COMMAND>", false},
+	"cloud":                  {"Usage: codex cloud [OPTIONS] [COMMAND]", false},
+	"cloud apply":            {"Usage: codex cloud apply [OPTIONS] <TASK_ID>", true},
+	"cloud diff":             {"Usage: codex cloud diff [OPTIONS] <TASK_ID>", true},
 }
 
 // unexpectedSubcommandArgumentError mirrors clap for a subcommand: the `--`
@@ -259,10 +281,22 @@ func unexpectedSubcommandArgumentError(command, arg string) error {
 	}
 	name := flagNameOnly(arg)
 	message := "unexpected argument '" + name + "' found"
-	if spec.hasPositional {
+	suggestion, hasSuggestion := clapLongFlagSuggestionFor(command, arg)
+	if hasSuggestion {
+		message += "\n\n  tip: a similar argument exists: '--" + suggestion.matched + "'"
+	} else if spec.hasPositional {
 		message += "\n\n  tip: to pass '" + name + "' as a value, use '-- " + name + "'"
 	}
-	return &UsageError{Message: message, Usage: spec.usage, SmartUsage: true}
+	if hasSuggestion && clapTrailingPositionalCommands[command] {
+		// clap still prints the `--` workaround for commands whose positional
+		// captures trailing values (`-- <COMMAND>...`) and stacks both tips.
+		message += "\n  tip: to pass '" + name + "' as a value, use '-- " + name + "'"
+	}
+	usageErr := &UsageError{Message: message, Usage: spec.usage, SmartUsage: true}
+	if hasSuggestion {
+		usageErr.Suggested = clapLongFlagUsageToken(command, suggestion.primary)
+	}
+	return usageErr
 }
 
 // unexpectedArgumentWithoutTip is clap's diagnostic for commands that declare no
@@ -284,6 +318,10 @@ type UsageError struct {
 	// echoes the options it already consumed. The exec family renders its own
 	// usage lines and leaves this false.
 	SmartUsage bool
+	// Suggested is the usage token of the flag clap suggests for an unknown
+	// argument. clap marks the suggestion present, so the usage block echoes it
+	// next to the options the parser already consumed.
+	Suggested string
 	// Raw marks diagnostics raised through clap::Error::raw, which print the
 	// message alone: no usage block and no trailing `--help` hint.
 	Raw bool
@@ -457,6 +495,9 @@ func decorateSubcommandClapUsage(err error, args []string) error {
 		return err
 	}
 	used := clapUsageOptionTokens(args, stopAt)
+	if usageErr.Suggested != "" {
+		used = append(used, usageErr.Suggested)
+	}
 	if strings.HasPrefix(usageErr.Usage, "Usage: codex queue ") {
 		if strings.HasPrefix(usageErr.Message, "unexpected argument '") && !clapLooksLikeOption(stopAt) {
 			// clap keeps the plain table block for a stray positional.
@@ -535,6 +576,11 @@ func clapUsageOptionTokens(args []string, stopAt string) []string {
 // clapUsageOptionToken renders one option the way clap's usage block does and
 // reports whether the following argv token was its value.
 func clapUsageOptionToken(arg string) (string, bool) {
+	if strings.Contains(arg, " ") {
+		// Already rendered by clapLongFlagUsageToken: placeholders may carry an
+		// "=" (`--config <key=value>`), which is not an inline value here.
+		return arg, false
+	}
 	name, hasInlineValue := arg, false
 	if trimmed, _, ok := strings.Cut(arg, "="); ok {
 		name, hasInlineValue = trimmed, true
@@ -552,6 +598,18 @@ func clapUsageOptionToken(arg string) (string, bool) {
 // [OPTIONS] placeholder is replaced when present, otherwise the options go in
 // front of the first positional (or at the end for option-only commands).
 func usageWithUsedOptions(usage string, used []string) string {
+	// clap renders the optional subcommand placeholder only in the static page:
+	// its smart usage lists the used arguments and the required ones.
+	if fields := strings.Fields(usage); len(fields) > 0 {
+		kept := fields[:0]
+		for _, field := range fields {
+			if field == "[COMMAND]" {
+				continue
+			}
+			kept = append(kept, field)
+		}
+		usage = strings.Join(kept, " ")
+	}
 	echoed := make([]string, 0, len(used))
 	for _, token := range used {
 		// clap only prints options the static usage does not already list;
@@ -562,7 +620,20 @@ func usageWithUsedOptions(usage string, used []string) string {
 		echoed = append(echoed, token)
 	}
 	if len(echoed) == 0 {
-		return usage
+		if len(used) == 0 {
+			return usage
+		}
+		// clap prints [OPTIONS] only while nothing is marked present: a used
+		// option the block already lists (a required one) still drops it.
+		fields := strings.Fields(usage)
+		kept := fields[:0]
+		for _, field := range fields {
+			if field == "[OPTIONS]" {
+				continue
+			}
+			kept = append(kept, field)
+		}
+		return strings.Join(kept, " ")
 	}
 	joined := strings.Join(echoed, " ")
 	if strings.Contains(usage, "[OPTIONS]") {
@@ -616,6 +687,13 @@ var clapCommandPositionalSlots = map[string][]sessionPositionalSlot{
 	"exec resume": {{name: "SESSION_ID"}, {name: "PROMPT"}},
 	"exec fork":   {{name: "SESSION_ID", required: true}, {name: "PROMPT"}},
 	"exec review": {{name: "PROMPT"}},
+	// Group subcommands with a single positional: clap still renders the slot
+	// in smart usage once the value is bound.
+	"features enable":                  {{name: "FEATURE", required: true}},
+	"features disable":                 {{name: "FEATURE", required: true}},
+	"plugin add":                       {{name: "PLUGIN[@MARKETPLACE]", required: true}},
+	"plugin remove":                    {{name: "PLUGIN[@MARKETPLACE]", required: true}},
+	"debug app-server send-message-v2": {{name: "USER_MESSAGE", required: true}},
 }
 
 // clapCommandLongFlags lists the long options each command declares, in
@@ -679,6 +757,222 @@ var clapCommandLongFlags = map[string][]string{
 	"unarchive": clapSessionMutationLongFlags,
 	"delete":    append(append([]string{}, clapSessionMutationLongFlags...), "force"),
 	"review":    {"strict-config", "uncommitted", "base", "commit", "title", "help"},
+	"agents": {
+		"config", "enable", "remote", "disable", "remote-auth-token-env", "cd",
+		"no-alt-screen", "help",
+	},
+	"app": {
+		"config", "download-url", "enable", "disable", "help",
+	},
+	"app-server": {
+		"config", "startup-sign-out", "enable", "print-startup-config", "disable",
+		"startup-client-info", "cloud-skills-snapshot", "code-mode-host", "strict-config",
+		"listen", "stdio", "analytics-default-enabled", "ws-auth", "ws-token-file",
+		"ws-token-sha256", "ws-shared-secret-file", "ws-issuer", "ws-audience",
+		"ws-max-clock-skew-seconds", "help",
+	},
+	"app-server daemon": {
+		"config", "enable", "disable", "help",
+	},
+	"app-server generate-json-schema": {
+		"config", "out", "enable", "experimental", "disable", "help",
+	},
+	"app-server generate-ts": {
+		"config", "out", "enable", "prettier", "disable", "experimental", "help",
+	},
+	"app-server daemon bootstrap": {
+		"config", "remote-control", "enable", "disable", "help",
+	},
+	"app-server daemon disable-remote-control": {
+		"config", "enable", "disable", "help",
+	},
+	"app-server daemon enable-remote-control": {
+		"config", "enable", "disable", "help",
+	},
+	"app-server daemon restart": {
+		"config", "enable", "disable", "help",
+	},
+	"app-server daemon start": {
+		"config", "enable", "disable", "help",
+	},
+	"app-server daemon stop": {
+		"config", "enable", "disable", "help",
+	},
+	"app-server daemon update": {
+		"config", "from-cli", "enable", "yes", "disable", "help",
+	},
+	"app-server daemon version": {
+		"config", "enable", "disable", "help",
+	},
+	"app-server proxy": {
+		"config", "sock", "enable", "disable", "help",
+	},
+	"apply": {
+		"config", "enable", "disable", "help",
+	},
+	"cloud": {
+		"config", "enable", "disable", "help", "version",
+	},
+	"cloud apply": {
+		"attempt", "config", "enable", "disable", "help",
+	},
+	"cloud diff": {
+		"attempt", "config", "enable", "disable", "help",
+	},
+	"cloud exec": {
+		"config", "env", "attempts", "enable", "branch", "disable", "help",
+	},
+	"cloud list": {
+		"config", "env", "enable", "limit", "cursor", "disable", "json", "help",
+	},
+	"cloud status": {
+		"config", "enable", "disable", "help",
+	},
+	"completion": {
+		"config", "enable", "disable", "help",
+	},
+	"debug": {
+		"config", "enable", "disable", "help",
+	},
+	"debug app-server send-message-v2": {
+		"config", "enable", "disable", "help",
+	},
+	"debug app-server": {
+		"config", "enable", "disable", "help",
+	},
+	"debug models": {
+		"bundled", "config", "enable", "disable", "help",
+	},
+	"debug prompt-input": {
+		"config", "image", "enable", "disable", "help",
+	},
+	"doctor": {
+		"config", "enable", "json", "disable", "network-only", "summary", "all", "no-color",
+		"ascii", "help",
+	},
+	"exec-server": {
+		"config", "enable", "strict-config", "disable", "linux-sandbox-pid-namespace",
+		"proxy-private-ips-via-upstream", "concurrent-requests", "listen", "ws-auth",
+		"ws-token-file", "ws-token-sha256", "ws-shared-secret-file", "ws-issuer",
+		"ws-audience", "ws-max-clock-skew-seconds", "remote", "remote-transport",
+		"environment-id", "name", "use-agent-identity-auth", "executor-credential-stdin",
+		"aws-sigv4", "aws-profile", "aws-region", "aws-service", "exit-on-stdin-close",
+		"help",
+	},
+	"exec-server forward": {
+		"config", "connect", "enable", "strict-config", "disable",
+		"linux-sandbox-pid-namespace", "proxy-private-ips-via-upstream", "remote",
+		"remote-transport", "environment-id", "name", "use-agent-identity-auth",
+		"executor-credential-stdin", "aws-sigv4", "aws-profile", "aws-region", "aws-service",
+		"exit-on-stdin-close", "help",
+	},
+	"features": {
+		"config", "enable", "disable", "help",
+	},
+	"features disable": {
+		"config", "enable", "disable", "help",
+	},
+	"features enable": {
+		"config", "enable", "disable", "help",
+	},
+	"features list": {
+		"config", "enable", "disable", "help",
+	},
+	"login": {
+		"config", "with-api-key", "enable", "with-access-token", "disable", "device-auth",
+		"help",
+	},
+	"login status": {
+		"config", "enable", "disable", "help",
+	},
+	"logout": {
+		"config", "enable", "disable", "help",
+	},
+	"mcp": {
+		"config", "enable", "disable", "help",
+	},
+	"mcp add": {
+		"config", "env", "enable", "url", "bearer-token-env-var", "disable",
+		"oauth-client-id", "oauth-client-secret", "oauth-client-registration",
+		"oauth-resource", "help",
+	},
+	"mcp get": {
+		"config", "json", "enable", "disable", "help",
+	},
+	"mcp list": {
+		"config", "json", "enable", "disable", "help",
+	},
+	"mcp login": {
+		"config", "no-browser", "enable", "scopes", "disable", "oauth-client-registration",
+		"help",
+	},
+	"mcp logout": {
+		"config", "enable", "disable", "help",
+	},
+	"mcp remove": {
+		"config", "enable", "disable", "help",
+	},
+	"migrate-nfs-db": {
+		"config", "staging-dir", "enable", "disable", "help",
+	},
+	"migrate-rollouts": {
+		"apply", "config", "enable", "thread", "disable", "max-mib-per-second", "json",
+		"verbose", "help",
+	},
+	"plugin": {
+		"config", "enable", "disable", "help",
+	},
+	"plugin add": {
+		"config", "marketplace", "enable", "json", "disable", "help",
+	},
+	"plugin list": {
+		"config", "marketplace", "enable", "json", "available", "disable", "help",
+	},
+	"plugin marketplace add": {
+		"config", "ref", "enable", "sparse", "disable", "json", "help",
+	},
+	"plugin marketplace list": {
+		"config", "json", "enable", "disable", "help",
+	},
+	"plugin marketplace remove": {
+		"config", "json", "enable", "disable", "help",
+	},
+	"plugin marketplace upgrade": {
+		"config", "json", "enable", "disable", "help",
+	},
+	"plugin marketplace": {
+		"config", "enable", "disable", "help",
+	},
+	"plugin remove": {
+		"config", "marketplace", "enable", "json", "disable", "help",
+	},
+	"queue": {
+		"thread", "enable", "message", "disable", "resume", "remote",
+		"remote-auth-token-env", "profile", "strict-config", "config", "help", "cd",
+	},
+	"remote-control": {
+		"config", "json", "enable", "no-daemon", "disable", "help",
+	},
+	"remote-control pair": {
+		"config", "json", "enable", "disable", "help",
+	},
+	"remote-control start": {
+		"config", "json", "enable", "disable", "help",
+	},
+	"remote-control stop": {
+		"config", "json", "enable", "disable", "help",
+	},
+	"sandbox": {
+		"config", "sandbox-state-json", "enable", "sandbox-state-readable-root", "disable",
+		"sandbox-state-disable-network", "permission-profile", "profile", "cd",
+		"include-managed-config", "help",
+	},
+	"sandbox uninstall": {
+		"config", "enable", "disable", "help",
+	},
+	"update": {
+		"config", "enable", "disable", "help",
+	},
 }
 
 // clapSessionMutationLongFlags are the shared options `codex archive`,
@@ -702,8 +996,13 @@ var clapLongFlagAliases = map[string]string{
 // command: `--image` is num_args = 1.. at the root and on the session commands
 // but takes a single value inside `codex exec resume`/`fork`.
 var clapLongFlagPlaceholderOverrides = map[string]map[string]string{
-	"exec resume": {"image": "<FILE>"},
-	"exec fork":   {"image": "<FILE>"},
+	"exec resume":         {"image": "<FILE>"},
+	"exec fork":           {"image": "<FILE>"},
+	"mcp add":             {"env": "<KEY=VALUE>"},
+	"sandbox":             {"profile": "<CONFIG_PROFILE>"},
+	"exec-server":         {"remote": "<URL>"},
+	"exec-server forward": {"remote": "<URL>"},
+	"migrate-rollouts":    {"thread": "<THREAD_ID>"},
 }
 
 // clapLongFlagSuggestion is one did-you-mean hit: matched is the spelling clap
@@ -737,6 +1036,26 @@ func clapSuggestLongFlag(command, flag string) (clapLongFlagSuggestion, bool) {
 	return clapLongFlagSuggestion{matched: best, primary: primary}, true
 }
 
+// clapTrailingPositionalCommands declare a positional that captures the
+// remaining values (`-- <COMMAND>...`), so clap keeps the `--` workaround tip
+// even when it suggests a similar flag.
+var clapTrailingPositionalCommands = map[string]bool{
+	"mcp add": true,
+	"sandbox": true,
+}
+
+// clapLongFlagSuggestionFor returns clap's did-you-mean hit for an unknown long
+// flag, or false when the command has no table or the token is not a long flag.
+func clapLongFlagSuggestionFor(command, arg string) (clapLongFlagSuggestion, bool) {
+	if !strings.HasPrefix(arg, "--") {
+		return clapLongFlagSuggestion{}, false
+	}
+	if _, ok := clapCommandLongFlags[command]; !ok {
+		return clapLongFlagSuggestion{}, false
+	}
+	return clapSuggestLongFlag(command, arg)
+}
+
 // clapLongFlagUsageToken renders one long flag the way clap's usage block does.
 func clapLongFlagUsageToken(command, name string) string {
 	primary := name
@@ -768,12 +1087,21 @@ func clapLongFlagPlaceholder(command, name string) string {
 func clapUnexpectedLongFlagError(command, arg string, consumed []string) error {
 	name := flagNameOnly(arg)
 	message := "unexpected argument '" + name + "' found"
+	trailingTip := "\n\n  tip: to pass '" + name + "' as a value, use '-- " + name + "'"
 	suggestion, ok := clapSuggestLongFlag(command, name)
 	if !ok {
+		if !clapCommandHasPositionals(command) {
+			trailingTip = ""
+		}
 		return &UsageError{
-			Message: message + "\n\n  tip: to pass '" + name + "' as a value, use '-- " + name + "'",
+			Message: message + trailingTip,
 			Usage:   clapCommandUsageAfter(command, consumed),
 		}
+	}
+	if clapTrailingPositionalCommands[command] {
+		// clap skips the `--` workaround once it suggests a flag, unless the
+		// command captures trailing values; both tips stack on separate lines.
+		message += strings.TrimPrefix(trailingTip, "\n\n")
 	}
 	echoed := append(append([]string{}, consumed...), clapLongFlagUsageToken(command, suggestion.primary))
 	return &UsageError{
@@ -791,6 +1119,20 @@ func clapCommandUsageAfter(command string, consumed []string) string {
 		return clapCommandUsageText(command)
 	}
 	return clapSmartUsage(command, consumed)
+}
+
+// clapCommandHasPositionals reports whether clap offers the `--` workaround tip
+// on a command: it needs a positional argument to pass the value to.
+func clapCommandHasPositionals(command string) bool {
+	switch command {
+	case "", "exec":
+		// Both declare a single PROMPT positional.
+		return true
+	}
+	if _, ok := clapCommandPositionalSlots[command]; ok {
+		return true
+	}
+	return subcommandUsageTexts[command].hasPositional
 }
 
 func clapCommandUsageText(command string) string {
@@ -847,11 +1189,79 @@ func sessionClapUsage(command string, consumed []string) string {
 	return clapSmartUsage(command, consumed)
 }
 
-// clapSmartUsage renders clap's smart usage block: the options clap already
+// clapSmartUsage renders clap's smart usage block. Commands with a positional
+// slot table use the slot renderer; the rest drop [OPTIONS] and echo the options
+// clap marked present in front of their remaining block.
+func clapSmartUsage(command string, consumed []string) string {
+	if _, ok := clapCommandPositionalSlots[command]; ok {
+		return clapSlotSmartUsage(command, consumed)
+	}
+	return clapStringSmartUsage(command, consumed)
+}
+
+// clapStringSmartUsage covers the commands without a positional slot table:
+// clap only prints [OPTIONS] while nothing was marked present
+// (clap_builder/src/output/usage.rs), so the echoed options replace it.
+func clapStringSmartUsage(command string, consumed []string) string {
+	base := clapCommandUsageText(command)
+	if base == "" || clapRequiredKeepsOptions[command] {
+		return base
+	}
+	used, _ := clapUsageState(command, consumed)
+	if len(used) == 0 {
+		return base
+	}
+	body := strings.TrimPrefix(base, "Usage: codex "+command+" ")
+	body = strings.Replace(body, "[OPTIONS]", "", 1)
+	bodyFields := strings.Fields(body)
+	// The optional subcommand placeholder only belongs to the static page.
+	kept := bodyFields[:0]
+	for _, field := range bodyFields {
+		if field != "[COMMAND]" {
+			kept = append(kept, field)
+		}
+	}
+	bodyFields = kept
+	// clap writes the required options first, then the options it consumed
+	// (Options::write_args unrolls requirements before the `used` ids) and the
+	// positionals last.
+	lead, trailing := clapSplitRequiredOptions(bodyFields)
+	echo := make([]string, 0, len(used))
+	for _, token := range used {
+		if strings.Contains(body, token) {
+			continue
+		}
+		echo = append(echo, token)
+	}
+	fields := make([]string, 0, len(lead)+len(echo)+len(trailing))
+	fields = append(fields, lead...)
+	fields = append(fields, echo...)
+	fields = append(fields, trailing...)
+	return strings.Join(append([]string{"Usage: codex " + command}, fields...), " ")
+}
+
+// clapSplitRequiredOptions splits a usage body into the leading option block
+// (each option with its placeholder) and the trailing positionals.
+func clapSplitRequiredOptions(fields []string) (lead, trailing []string) {
+	split := 0
+	for split < len(fields) {
+		field := fields[split]
+		if !strings.HasPrefix(field, "-") {
+			break
+		}
+		split++
+		if split < len(fields) && strings.HasPrefix(fields[split], "<") {
+			split++
+		}
+	}
+	return fields[:split], fields[split:]
+}
+
+// clapSlotSmartUsage renders clap's smart usage block: the options clap already
 // accepted in argv order, then the positional slots, with every bound slot (and
 // every required one) in angle brackets. The static page is returned while
 // nothing was consumed.
-func clapSmartUsage(command string, consumed []string) string {
+func clapSlotSmartUsage(command string, consumed []string) string {
 	base := clapCommandUsageText(command)
 	slots, hasSlots := clapCommandPositionalSlots[command]
 	if !hasSlots {
