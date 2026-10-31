@@ -88,12 +88,100 @@ func TestSpliceMCPTablesKeepsDocumentTriviaLikeTomlEdit(t *testing.T) {
 	}
 }
 
-// TestSpliceMCPTablesRefusesInlineTablesLikeTomlEdit pins the shape this writer
-// still leaves to the whole-document renderer: toml_edit turns an inline
-// `mcp_servers = { .. }` value into a `[mcp_servers ]` header.
-func TestSpliceMCPTablesRefusesInlineTablesLikeTomlEdit(t *testing.T) {
-	document := "mcp_servers = { docs = { url = \"https://a/mcp\" } }\n\n[other]\nkey = 1\n"
-	if _, ok := spliceMCPTablesIntoDocument(document, NewOrderedTable()); ok {
-		t.Fatalf("inline mcp_servers should fall back to the whole-document renderer")
+// TestSpliceMCPTablesConvertsInlineValuesLikeTomlEdit pins what the Rust 0.166
+// binary writes when the seed document spells `mcp_servers` as an inline table:
+// toml_edit turns that value into a regular table
+// (document_helpers::table_from_inline), so the surviving servers keep their
+// inline spelling under a header that carries the key's decor, the key is
+// printed after the other root values, and only new servers become tables.
+func TestSpliceMCPTablesConvertsInlineValuesLikeTomlEdit(t *testing.T) {
+	withServer := func(table *OrderedTable, name string, fields ...any) *OrderedTable {
+		value := NewOrderedTable()
+		for i := 0; i+1 < len(fields); i += 2 {
+			value.Set(fields[i].(string), fields[i+1])
+		}
+		table.Set(name, value)
+		return table
+	}
+	inline := func(name string, fields ...any) *OrderedTable {
+		return withServer(NewOrderedTable(), name, fields...)
+	}
+	cases := []struct {
+		name     string
+		document string
+		servers  *OrderedTable
+		want     string
+	}{
+		{
+			name:     "the key decor becomes the header of the converted table",
+			document: "mcp_servers = { alpha = { command = \"a\" } }\n",
+			servers:  inline("alpha", "command", "cmd"),
+			want:     "[mcp_servers ]\nalpha = { command = \"cmd\" }\n",
+		},
+		{
+			name:     "new servers follow the converted table as their own tables",
+			document: "mcp_servers = { alpha = { command = \"a\" } }\n",
+			servers:  withServer(inline("alpha", "command", "a"), "gamma", "command", "cmd"),
+			want:     "[mcp_servers ]\nalpha = { command = \"a\" }\n\n[mcp_servers.gamma]\ncommand = \"cmd\"\n",
+		},
+		{
+			name:     "a comment above the key moves inside the header",
+			document: "# c\nmcp_servers = { alpha = { command = \"a\" } } # trailing\ntop = 1\n",
+			servers:  withServer(inline("alpha", "command", "a"), "gamma", "command", "cmd"),
+			want:     "top = 1\n\n[# c\nmcp_servers ]\nalpha = { command = \"a\" }\n\n[mcp_servers.gamma]\ncommand = \"cmd\"\n",
+		},
+		{
+			name:     "an empty inline table prints no header",
+			document: "x = 1\nmcp_servers = {}\n",
+			servers:  inline("gamma", "command", "cmd"),
+			want:     "x = 1\n\n[mcp_servers.gamma]\ncommand = \"cmd\"\n",
+		},
+		{
+			name:     "removing every server removes the inline key",
+			document: "model = \"x\"\nmcp_servers = { alpha = { command = \"a\", args = [\"-q\"] } }\napproval_policy = \"never\"\n",
+			servers:  nil,
+			want:     "model = \"x\"\napproval_policy = \"never\"\n",
+		},
+		{
+			name:     "a merge keeps the pair decor and drops the stale field",
+			document: "model = \"x\"\nmcp_servers = { alpha = { command = \"a\", args = [\"-q\"] } }\napproval_policy = \"never\"\n",
+			servers:  inline("alpha", "command", "aaa"),
+			want:     "model = \"x\"\napproval_policy = \"never\"\n\n[mcp_servers ]\nalpha = { command = \"aaa\"}\n",
+		},
+		{
+			name:     "a new field keeps the separator the merge leaves behind",
+			document: "mcp_servers = { alpha = { command = \"a\" } }\n",
+			servers:  inline("alpha", "command", "a", "args", []string{"x", "y"}),
+			want:     "[mcp_servers ]\nalpha = { command = \"a\" , args = [\"x\", \"y\"] }\n",
+		},
+		{
+			name:     "an explicit header with inline servers keeps both",
+			document: "[mcp_servers]\nalpha = { command = \"a\" }\n",
+			servers:  withServer(inline("alpha", "command", "a"), "gamma", "command", "cmd"),
+			want:     "[mcp_servers]\nalpha = { command = \"a\" }\n\n[mcp_servers.gamma]\ncommand = \"cmd\"\n",
+		},
+		{
+			name:     "an empty explicit header stays above the new tables",
+			document: "[mcp_servers]\n",
+			servers:  inline("gamma", "command", "cmd"),
+			want:     "[mcp_servers]\n\n[mcp_servers.gamma]\ncommand = \"cmd\"\n",
+		},
+		{
+			name:     "an empty document still accepts a new server",
+			document: "",
+			servers:  inline("gamma", "command", "cmd"),
+			want:     "[mcp_servers.gamma]\ncommand = \"cmd\"\n",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := spliceMCPTablesIntoDocument(tc.document, tc.servers)
+			if !ok {
+				t.Fatalf("splice refused document %q", tc.document)
+			}
+			if got != tc.want {
+				t.Fatalf("document mismatch\n got: %q\nwant: %q", got, tc.want)
+			}
+		})
 	}
 }

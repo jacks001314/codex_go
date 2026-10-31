@@ -2120,8 +2120,48 @@ walked the model fields.
   `TestValidateModelCatalogJSONAcceptsCatalog` and
   `TestValidateModelCatalogJSONAcceptsLegacyBaseInstructions` in `config`.
 
+### 68. Inline `mcp_servers` values: toml_edit's table conversion
+
+`replace_mcp_servers` edits the document in place, and
+`document_helpers::ensure_table_for_write` turns an inline `mcp_servers` value
+into a regular table (`table_from_inline`) before inserting the replacement
+servers. Go refused those documents and fell back to the whole-document
+writer, so `mcp add` rewrote `mcp_servers = { alpha = { .. } }` as
+`[mcp_servers.alpha]` blocks and `mcp remove` left the inline value untouched.
+
+- **Header.** The converted table prints the key's decor: a comment above the
+  key lands inside the brackets (`[# c\nmcp_servers ]`) and the space before
+  `=` becomes the trailing blank in the header (`mcp_servers = { .. }` prints
+  `[mcp_servers ]`, `mcp_servers={ .. }` prints `[mcp_servers]`). A trailing
+  comment after the value is dropped with the value's decor, and an empty inline
+  table prints no header at all.
+- **Order.** toml_edit prints the root values before the tables, so the
+  converted table moves below the other root keys; new servers follow it as
+  `[mcp_servers.<name>]` tables one blank line below.
+- **Pairs.** Surviving servers keep their inline spelling: `table_from_inline`
+  keeps each value's prefix and clears its suffix, so `alpha ={command="a"}` and
+  `alpha = { command = "a" }` both survive verbatim apart from the default key
+  suffix (`alpha =`). Merging a changed server follows
+  `document_helpers::merge_inline_table`: dropped fields disappear with their
+  comma, kept fields keep their own decor, and a new field arrives as
+  `, name = value` with the serializer's default ` ` before the value, which is
+  why `mcp add alpha -- a x y` prints `{ command = "a" , args = ["x", "y"] }`.
+- **Explicit section.** A `[mcp_servers]` header whose body spells servers
+  inline keeps that header and those lines; only new names become sub-tables.
+- Evidence: 25 seed documents (inline values with and without comments, empty
+  tables, explicit sections, CRLF files, empty files) x `mcp add <name> -- cmd`,
+  `mcp add <existing>`, `mcp add <name> -- cmd args`, `mcp add --env`,
+  `mcp add --url` and three `mcp remove` shapes (200 runs) are byte-identical
+  to 0.166 (`out/r54-inline.txt`). Regressions:
+  `TestSpliceMCPTablesConvertsInlineValuesLikeTomlEdit` (ten documents) and
+  `TestSpliceMCPTablesKeepsDocumentTriviaLikeTomlEdit` in `config`.
+
 ## Verification
 
+- Round 54 adds the inline `mcp_servers` writer (entry 68): the 25 seed
+  documents x eight `mcp add`/`mcp remove` shapes (200 runs) are byte-identical
+  to 0.166 (`out/r54-inline.txt`), and `go test -count=1 -vet=off ./config ./cli ./mcp`
+  passes in a clean worktree while `./app` keeps only the two known baselines.
 - Round 53 adds the catalog JSON diagnostics (entry 67): 138 syntax/type
   documents, 148 mutated documents and 24 nested-table documents are
   byte-identical to 0.166 (`out/r53-diff1.txt`, `out/r53-diff-fuzz.txt`,
@@ -2682,11 +2722,6 @@ walked the model fields.
   path-valued settings (entry 65) and the `model_catalog_json` parse itself
   (entry 67), so a missing instructions or prompt file, a catalog with no
   models and a malformed model entry fail the way 0.166 does.
-- `mcp_servers` spelled as an inline table (`mcp_servers = { alpha = { .. } }`)
-  still goes through the whole-document renderer: toml_edit converts the value
-  into a table and prints a `[mcp_servers ]` header (the space comes from the
-  key's decor) with the servers that stay inline untouched, which the document
-  splice deliberately leaves to the old writer.
 - `codex mcp add --url` still decides its may-or-may-not-require-login hint
   from a live OAuth discovery. Go caps that probe at two seconds while Rust
   uses its requested timeout, so the same URL can print the hint in Go and
