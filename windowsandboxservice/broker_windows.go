@@ -119,9 +119,8 @@ func NewPackagedProvisioningBroker(setup SetupRunner) ServiceBroker {
 // NewProvisioningBroker returns the broker the SCM host runs: it serves the
 // provisioning pipe, enforces managed policy and registers uninstall owners
 // through the lifecycle (Rust service::service_main_inner and
-// runtime_lifecycle::run). Owner-aware uninstall cleanup is not wired yet, so a
-// session change restores the recorded owner without checking a removed
-// runtime.
+// runtime_lifecycle::run). Each session change restores the recorded owner and
+// retires the sandbox once that owner's package is gone.
 func NewProvisioningBroker(lifecycle *Lifecycle, setup SetupRunner) ServiceBroker {
 	return func(state *ServiceState) error {
 		// Release the retained pins and owner token when the service stops
@@ -130,25 +129,32 @@ func NewProvisioningBroker(lifecycle *Lifecycle, setup SetupRunner) ServiceBroke
 		handler := func(identity *ClientIdentity, request *ServiceRequest, sandboxSID []byte, stopped func() bool) (provisionservice.Response, error) {
 			return RunProvisioning(identity, request, sandboxSID, stopped, lifecycle.RegisterOwner, setup)
 		}
-		return RunProvisioningPipe(func() bool { return state.Shutdown() }, BrokerHooks{
+		admission := &ownerAdmission{lifecycle: lifecycle}
+		if err := RunProvisioningPipe(func() bool { return state.Shutdown() }, BrokerHooks{
 			OnReady: func() error {
+				if err := admission.restoreOwner(); err != nil {
+					return err
+				}
 				if err := state.ReportStatus(ServiceRunning, NoError); err != nil {
 					return err
 				}
 				LogInformation(EventServiceStarted, "The Codex sandbox service is running.")
 				return nil
 			},
-			OnSessionChange: func() error { return restoreOwnerForBroker(lifecycle) },
-		}, handler, MachinePolicyValidator)
+			OnSessionChange: func() error { return admission.check(state) },
+		}, handler, MachinePolicyValidator); err != nil {
+			return err
+		}
+		return admission.finish(state)
 	}
 }
 
 // restoreOwnerForBroker restores the recorded owner between admissions. A
-// failure is logged and does not stop the listener, so other clients can still
-// use elevated setup (Rust runtime_lifecycle::run restore_owner).
-func restoreOwnerForBroker(lifecycle *Lifecycle) error {
+// restore failure is logged and does not stop the listener, so other clients can
+// still use elevated setup; restoring durable account state is the caller's
+// fatal step (Rust runtime_lifecycle::run restore_owner).
+func restoreOwnerForBroker(lifecycle *Lifecycle) {
 	if err := lifecycle.RestoreRecordedOwner(); err != nil {
 		LogError(EventServiceFailed, "unable to restore package uninstall listener: "+ErrorMessage(err))
 	}
-	return nil
 }

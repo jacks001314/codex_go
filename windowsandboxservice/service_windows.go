@@ -24,6 +24,7 @@ type ServiceState struct {
 	pipeName      string
 	shutdown      atomic.Bool
 	stopRequested atomic.Bool
+	ownerRemoved  atomic.Bool
 	currentStatus atomic.Uint32
 	statusHandle  windows.Handle
 }
@@ -39,6 +40,10 @@ func (state *ServiceState) Shutdown() bool { return state.shutdown.Load() }
 
 // StopRequested reports whether the SCM asked for a stop rather than a shutdown.
 func (state *ServiceState) StopRequested() bool { return state.stopRequested.Load() }
+
+// OwnerRemoved reports whether the service retired the sandbox because its
+// owner uninstalled the app (Rust ServiceStopReason::OwnerRemoved).
+func (state *ServiceState) OwnerRemoved() bool { return state.ownerRemoved.Load() }
 
 // CurrentStatus returns the last state reported to the SCM.
 func (state *ServiceState) CurrentStatus() uint32 { return state.currentStatus.Load() }
@@ -131,7 +136,10 @@ func runServiceMain(state *ServiceState) error {
 		return err
 	}
 	stopped := provisionservice.ServiceStopReasonShutdown
-	if state.StopRequested() {
+	switch {
+	case state.OwnerRemoved():
+		stopped = provisionservice.ServiceStopReasonOwnerRemoved
+	case state.StopRequested():
 		stopped = provisionservice.ServiceStopReasonStopRequested
 	}
 	stopped.Record(0)

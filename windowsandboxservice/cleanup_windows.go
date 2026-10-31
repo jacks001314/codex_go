@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 
@@ -69,6 +70,41 @@ func (lifecycle *Lifecycle) CleanUpResources(prepared SandboxCleanupFinisher, ru
 		return errors.New("the authenticated package installation was not recorded")
 	}
 	return cleanUpInstallation(lifecycle, lifecycle.installation, prepared, runtimeRecord)
+}
+
+// CleanUp ports PackageLifecycle::clean_up: it holds the sandbox setup lock for
+// the whole teardown, then runs the registered runtime cleanup for a recorded
+// runtime or retires the legacy installation record before native cleanup.
+func (lifecycle *Lifecycle) CleanUp() error {
+	if lifecycle == nil {
+		return errors.New("missing sandbox lifecycle")
+	}
+	// The registered transaction re-acquires the setup mutex while preparing the
+	// managed logons; keeping one OS thread makes that recursion legal.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	lock, err := windowssandbox.AcquireSandboxSetupLock(pipeSetupLockTimeoutMillis)
+	if err != nil {
+		return fmt.Errorf("acquire the sandbox setup lock: %w", err)
+	}
+	defer lock.Release()
+	record, err := runtimeLoadInstallation()
+	if err != nil {
+		return err
+	}
+	if record != nil {
+		return lifecycle.CleanUpRegisteredRuntime(record)
+	}
+	// Preserve the legacy path's ownership retirement before native preparation.
+	if err := windowssandbox.RemoveInstallation(); err != nil {
+		return err
+	}
+	prepared, err := windowssandbox.PrepareSandboxCleanup()
+	if err != nil {
+		return err
+	}
+	defer prepared.Release()
+	return lifecycle.CleanUpResources(prepared, nil)
 }
 
 // cleanUpInstallation keeps the owner's home and ancestors pinned until the
