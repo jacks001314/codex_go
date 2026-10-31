@@ -2331,8 +2331,51 @@ fields such as `shell_type` in the wrong place.
   `TestRuntimeRouterSkillsIncludeInstructionsFalseHidesCatalogButAllowsExplicitExecutorSkillLikeRust`
   now keys off the catalog entry text and locator instead of the `## Skills`
   heading, which the bundled base instructions legitimately carry.
+### 75. `debug clear-memories`, `execpolicy` read failures and empty `plugin list --json`
+
+`debug clear-memories` targeted a hand-written set of legacy files instead of
+the runtime's memories databases, `execpolicy check` reported a missing rules
+file as a single `failed to read policy at <p>: <go err>` line, and
+`plugin list --json` marshalled two nil slices into `null`.
+
+- **clear-memories.** Rust's `run_debug_clear_memories_command` clears the rows
+  of every memories database that already exists
+  (`StateRuntime::clear_memory_data_in_sqlite_home` for `memories_1.sqlite` and
+  `memories_v2_1.sqlite`), then empties the three memory roots
+  (`memories`, `memories_v2`, `memories_extensions`) and prints
+  `Cleared memory state from <memories_1.sqlite>. Cleared memory directories
+  under <codex home>.` - or `No memories db found at <memories_1.sqlite>.`
+  when no database was created. The database file itself is never removed. Go
+  now resolves the SQLite home through the effective config (managed config
+  included) and prints the same two sentences. `state.ClearMemoryDataInSqliteHome`
+  reuses the extracted `clearMemoryDataInPool`, and
+  `memories.ClearRootsContents` owns the directory cleanup.
+- **execpolicy.** `LoadPolicies` now renders anyhow's context chain -
+  `failed to read policy at <p>`, a blank line, `Caused by:` and the cause
+  indented by four spaces - and rewrites `*os.PathError`/`syscall.Errno`
+  causes the way `std::io::Error` displays them: on Windows the localized
+  `FormatMessageW` text without its trailing CRLF plus ` (os error N)`, on
+  other platforms the system message plus ` (os error N)`
+  (`execpolicy/os_error_windows.go`, `execpolicy/os_error_other.go`).
+- **plugin list --json.** Both lists start as empty slices, so an install-free
+  home prints `"installed": []` and `"available": []` like Rust's `Vec::new()`.
+- Evidence: `out/r66-verify.txt` - `debug clear-memories` on an empty home and
+  on a home with a database plus memory roots, `execpolicy check` with a
+  missing rules file and `plugin list --json` all match 0.166 in rc, stdout,
+  stderr and the resulting home tree (4/4). `out/r66msg.txt` records the
+  `Cleared memory state ...` line. `go test -vet=off ./execpolicy ./state
+  ./app` keeps only the two known `./app` baselines.
+- Regressions: `TestDebugClearMemories` in `app` (both sentences, the
+  database file surviving, the roots emptied),
+  `TestLoadPoliciesMissingFileMatchesRustContextChain` in `execpolicy` and
+  `TestPluginListJSONEmptyHomeMatchesRustEmptyArrays` in `app`.
 ## Verification
 
+- Round 62 aligns `debug clear-memories`, `execpolicy` read failures and
+  `plugin list --json` (entry 75): four probes match 0.166 in rc, stdout,
+  stderr and the home tree (`out/r66-verify.txt`, 4/4), and
+  `go test -vet=off ./execpolicy ./state ./app` keeps only the two known
+  `./app` baselines.
 - Round 61 makes `debug models` print the bundled catalog (entry 74): the
   745,260-byte snapshot is byte-identical to 0.166 from three working
   directories (`out/r64-models.txt`), the offline fallback serves the same 12
@@ -2857,6 +2900,16 @@ fields such as `shell_type` in the wrong place.
   ./cmd/... ./tcptunnel` passes.
 ## Still open
 
+- `execpolicy check` still answers a syntactically invalid rules file with
+  Go's parser text where Rust prints `failed to parse policy at <p>` chained to
+  `starlark error: error: Parse error: ...` with a source snippet and caret;
+  reproducing the full Starlark diagnostic model is not done yet.
+- `go test ./parity` fails six registry/surface comparisons because the local
+  Rust checkout (`b0f977c3a9`) predates upstream changes the Go tree already
+  carries: `suppress_model_change_announcements` (#58405) is implemented in Go
+  while `features/src/lib.rs` at that revision does not list it, and
+  `deferred_tool_world_state` became stable and enabled by default (#58410)
+  after the checkout. These are snapshot staleness, not Go defects.
 - Override diagnostics the 0.166 binary still answers from its own runtime:
   `remote-control --config=` reports the daemon version mismatch instead of
   Rust's `foreground app-server exited before remote control became ready`

@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"codex_go/state"
 )
 
 func TestDebugModelsOutputsBundledCatalog(t *testing.T) {
@@ -82,6 +85,21 @@ func TestDebugTraceReduce(t *testing.T) {
 func TestDebugClearMemories(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)
+	sqliteConfig, err := state.SqliteConfigForCodexHome(home)
+	if err != nil {
+		t.Fatalf("SqliteConfigForCodexHome error = %v", err)
+	}
+	memoriesDBPath := sqliteConfig.MemoriesDBPath()
+
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), []string{"debug", "clear-memories"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatalf("debug clear-memories returned error: %v", err)
+	}
+	wantMissing := fmt.Sprintf("No memories db found at %s. Cleared memory directories under %s.\n", memoriesDBPath, home)
+	if stdout.String() != wantMissing {
+		t.Fatalf("stdout = %q, want %q", stdout.String(), wantMissing)
+	}
+
 	memoriesDir := filepath.Join(home, "memories")
 	if err := os.MkdirAll(memoriesDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll error = %v", err)
@@ -89,15 +107,25 @@ func TestDebugClearMemories(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(memoriesDir, "memory.md"), []byte("stale"), 0o600); err != nil {
 		t.Fatalf("WriteFile memory error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(home, "memories.sqlite"), []byte("fake"), 0o600); err != nil {
-		t.Fatalf("WriteFile db error = %v", err)
+	database, err := sqliteConfig.OpenMemoriesDB(context.Background())
+	if err != nil {
+		t.Fatalf("OpenMemoriesDB error = %v", err)
 	}
-	var stdout bytes.Buffer
+	if err := database.Close(); err != nil {
+		t.Fatalf("Close memories db error = %v", err)
+	}
+
+	stdout.Reset()
 	if err := Run(context.Background(), []string{"debug", "clear-memories"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
 		t.Fatalf("debug clear-memories returned error: %v", err)
 	}
-	if !strings.Contains(stdout.String(), "Cleared memory state") {
-		t.Fatalf("stdout = %q", stdout.String())
+	wantCleared := fmt.Sprintf("Cleared memory state from %s. Cleared memory directories under %s.\n", memoriesDBPath, home)
+	if stdout.String() != wantCleared {
+		t.Fatalf("stdout = %q, want %q", stdout.String(), wantCleared)
+	}
+	// Rust only deletes the memory rows, so the database file itself stays.
+	if _, err := os.Stat(memoriesDBPath); err != nil {
+		t.Fatalf("memories db stat error = %v", err)
 	}
 	entries, err := os.ReadDir(memoriesDir)
 	if err != nil {

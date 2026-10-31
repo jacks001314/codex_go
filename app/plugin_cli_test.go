@@ -375,6 +375,19 @@ func TestPluginAddListRemove(t *testing.T) {
 	}
 }
 
+func TestPluginListJSONEmptyHomeMatchesRustEmptyArrays(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), []string{"plugin", "list", "--json"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatalf("plugin list --json returned error: %v", err)
+	}
+	output := stdout.String()
+	if !strings.Contains(output, `"installed": []`) || !strings.Contains(output, `"available": []`) {
+		t.Fatalf("stdout = %q, want empty arrays instead of null", output)
+	}
+}
+
 func TestPluginSelectionValidatesSegments(t *testing.T) {
 	valid, err := parsePluginSelection("sample-1@debug_2", "")
 	if err != nil {

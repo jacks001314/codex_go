@@ -225,7 +225,7 @@ func LoadPolicies(paths []string) (*Policy, error) {
 	for _, path := range paths {
 		data, err := os.ReadFile(path)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read policy at %s: %w", path, err)
+			return nil, policyContextError("failed to read policy at "+path, err)
 		}
 		if err := policy.Parse(path, string(data)); err != nil {
 			return nil, fmt.Errorf("failed to parse policy at %s: %w", path, err)
@@ -234,6 +234,15 @@ func LoadPolicies(paths []string) (*Policy, error) {
 	return policy, nil
 }
 
+// policyContextError renders anyhow's context chain for a policy file: the
+// context line, a blank line, then the cause indented by four spaces.
+func policyContextError(context string, err error) error {
+	cause := err.Error()
+	if message, ok := rustOSErrorMessage(err); ok {
+		cause = message
+	}
+	return fmt.Errorf("%s\n\nCaused by:\n    %s", context, strings.ReplaceAll(cause, "\n", "\n    "))
+}
 func (p *Policy) Parse(identifier string, input string) error {
 	if p == nil {
 		return fmt.Errorf("policy is nil")

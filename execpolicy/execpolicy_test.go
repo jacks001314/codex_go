@@ -470,6 +470,21 @@ func TestCheckRejectsInvalidNetworkRule(t *testing.T) {
 	}
 }
 
+func TestLoadPoliciesMissingFileMatchesRustContextChain(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing.rules")
+	_, err := LoadPolicies([]string{path})
+	if err == nil {
+		t.Fatalf("LoadPolicies() error = nil, want failure")
+	}
+	prefix := "failed to read policy at " + path + "\n\nCaused by:\n    "
+	if !strings.HasPrefix(err.Error(), prefix) {
+		t.Fatalf("error = %q, want prefix %q", err.Error(), prefix)
+	}
+	if !strings.Contains(err.Error(), "(os error 2)") {
+		t.Fatalf("error = %q, want a Rust-style os error code", err.Error())
+	}
+}
+
 func TestCheckNoMatchRendersEmptyMatchedRules(t *testing.T) {
 	path := writePolicy(t, `
 prefix_rule(

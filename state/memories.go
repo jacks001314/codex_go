@@ -93,10 +93,16 @@ func (r *StateRuntime) ClearMemoryData(ctx context.Context) error {
 	if err := r.requireMemoriesRuntime(); err != nil {
 		return err
 	}
+	return clearMemoryDataInPool(ctx, r.memoriesDB)
+}
+
+// clearMemoryDataInPool deletes the memory job and output rows of one
+// memories database (Rust memories::clear_memory_data_in_pool).
+func clearMemoryDataInPool(ctx context.Context, db *sql.DB) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	tx, err := BeginImmediateTx(ctx, r.memoriesDB)
+	tx, err := BeginImmediateTx(ctx, db)
 	if err != nil {
 		return fmt.Errorf("begin memory reset: %w", err)
 	}

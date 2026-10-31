@@ -33,6 +33,7 @@ import (
 	"codex_go/execserver/hostconfig"
 	"codex_go/features"
 	"codex_go/install"
+	"codex_go/memories"
 	"codex_go/model"
 	codexnetwork "codex_go/network"
 	"codex_go/rollout"
@@ -2204,7 +2205,7 @@ func runDebug(opts cli.DebugOptions, root *cli.RootOptions, stdout io.Writer) er
 		fmt.Fprintln(stdout, output)
 		return nil
 	case "clear-memories":
-		return runDebugClearMemories(stdout)
+		return runDebugClearMemories(&opts, root, stdout)
 	case "config":
 		return runDebugConfig(stdout)
 	default:
@@ -2244,32 +2245,42 @@ func runDebugAppServer(opts *cli.DebugOptions, stdout io.Writer) error {
 	}
 }
 
-func runDebugClearMemories(stdout io.Writer) error {
+// runDebugClearMemories mirrors Rust run_debug_clear_memories_command: clear
+// the memory rows of every memories database that exists, then the memory
+// roots, and report the v1 database path in the status line.
+func runDebugClearMemories(opts *cli.DebugOptions, root *cli.RootOptions, stdout io.Writer) error {
 	codexHome := auth.DefaultCodexHome()
-	memoriesPath := filepath.Join(codexHome, "memories")
-	clearedMemoryDir, err := clearDirectoryContents(memoriesPath)
+	var rawOverrides []string
+	if root != nil {
+		rawOverrides = append(rawOverrides, root.ConfigOverrides...)
+	}
+	if opts != nil {
+		rawOverrides = append(rawOverrides, opts.ConfigOverrides...)
+	}
+	effective, err := config.LoadEffectiveWithOptions(codexHome, &config.EffectiveOptions{
+		RawOverrides:         rawOverrides,
+		IncludeManagedConfig: true,
+	})
 	if err != nil {
 		return err
 	}
-	removedFiles := []string{}
-	for _, name := range []string{"memories.sqlite", "memory.sqlite", "state.sqlite"} {
-		path := filepath.Join(codexHome, name)
-		if err := os.Remove(path); err == nil {
-			removedFiles = append(removedFiles, path)
-		} else if !os.IsNotExist(err) {
-			return err
-		}
+	sqliteConfig, err := state.SqliteConfigForCodexHomeWithOverride(codexHome, effective.SQLiteHome())
+	if err != nil {
+		return err
 	}
-	if len(removedFiles) > 0 {
-		fmt.Fprintf(stdout, "Cleared memory state from %s.", strings.Join(removedFiles, ", "))
+	cleared, err := state.ClearMemoryDataInSqliteHome(context.Background(), sqliteConfig)
+	if err != nil {
+		return err
+	}
+	if err := memories.ClearRootsContents(codexHome); err != nil {
+		return err
+	}
+	if cleared {
+		fmt.Fprintf(stdout, "Cleared memory state from %s.", sqliteConfig.MemoriesDBPath())
 	} else {
-		fmt.Fprintf(stdout, "No memories db found under %s.", codexHome)
+		fmt.Fprintf(stdout, "No memories db found at %s.", sqliteConfig.MemoriesDBPath())
 	}
-	if clearedMemoryDir {
-		fmt.Fprintf(stdout, " Cleared memory directories under %s.\n", memoriesPath)
-	} else {
-		fmt.Fprintf(stdout, " No memory directories found under %s.\n", memoriesPath)
-	}
+	fmt.Fprintf(stdout, " Cleared memory directories under %s.\n", codexHome)
 	return nil
 }
 

@@ -397,7 +397,12 @@ func runPluginList(ctx *pluginCLIContext, opts *cli.PluginOptions, stdout io.Wri
 	}
 	writer := bufio.NewWriter(stdout)
 	if opts.JSON {
-		output := pluginListJSONOutput{}
+		// Rust serialises Vec::new() for both lists, so an install-free home
+		// still prints empty arrays instead of Go's null.
+		output := pluginListJSONOutput{
+			Installed: []pluginListJSONEntry{},
+			Available: []pluginListJSONEntry{},
+		}
 		for _, marketplace := range entries {
 			for _, summary := range marketplace.Plugins {
 				entry := pluginListEntryFromSummary(summary)
