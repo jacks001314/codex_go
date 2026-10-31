@@ -5,6 +5,8 @@ package windowsandboxservice
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -404,4 +406,355 @@ func PrepareRuntimeCleanup(record *windowssandbox.InstallationRecord) (*windowss
 		}
 	}
 	return record, nil
+}
+
+// runtimeLogonExistingAccount is the seam provision/repair log on through.
+var runtimeLogonExistingAccount = windowssandbox.LogonExistingSandboxAccount
+
+// runtimeRegistrationPollInterval and runtimeRegistrationSleep pace the
+// terminal-status loop (Rust sleeps 50ms between status reads).
+var (
+	runtimeRegistrationPollInterval = 50 * time.Millisecond
+	runtimeRegistrationSleep        = time.Sleep
+)
+
+// ProvisionRegisteredRuntime registers both managed accounts in the current
+// package and grants their AppData metadata access (Rust
+// registered_runtime::provision). The caller holds the setup mutex from owner
+// admission through readiness, and no runner launch performs package
+// deployment.
+func ProvisionRegisteredRuntime(
+	identity *ClientIdentity,
+	record *windowssandbox.InstallationRecord,
+	fullName string,
+	stopped func() bool,
+) error {
+	if identity == nil {
+		return errors.New("missing authenticated provisioning client")
+	}
+	if record == nil {
+		return errors.New("missing installation record")
+	}
+	if err := ValidateRuntimeRecord(record); err != nil {
+		return err
+	}
+	runtime, err := record.RuntimeRegistration()
+	if err != nil {
+		return err
+	}
+	family := runtime.PackageFamily
+	if family == "" {
+		return errors.New("registered runtime ownership is missing a package family")
+	}
+	profiles := make([]*RuntimeAccountProfile, 0, 2)
+	installed := make([]bool, 0, 2)
+	accounts := make([]windowssandbox.RuntimeAccountRegistration, 0, 2)
+	closed := make([]bool, 0, 2)
+	release := true
+	defer func() {
+		if !release {
+			return
+		}
+		for index, profile := range profiles {
+			if profile != nil && !closed[index] {
+				_ = profile.Close()
+			}
+		}
+	}()
+	for _, account := range []windowssandbox.SandboxRuntimeAccount{
+		windowssandbox.SandboxRuntimeAccountOffline,
+		windowssandbox.SandboxRuntimeAccountOnline,
+	} {
+		token, err := logonRegisteredRuntimeAccount(identity, account)
+		if err != nil {
+			return fmt.Errorf("log on managed runtime account %s: %w", account, err)
+		}
+		expectedSID := ""
+		for _, entry := range runtime.Accounts {
+			if entry.Account == account {
+				expectedSID = entry.UserSID
+				break
+			}
+		}
+		profile, err := LoadRuntimeAccountProfile(token, account, expectedSID)
+		if err != nil {
+			_ = token.Close()
+			return fmt.Errorf("prepare managed runtime profile for %s: %w", account, err)
+		}
+		profiles = append(profiles, profile)
+		closed = append(closed, false)
+		packages, err := runtimeRegisteredPackages(profile.UserSID, family)
+		if err != nil {
+			return fmt.Errorf("query existing runtime packages for %s: %w", account, err)
+		}
+		if expectedSID == "" && len(packages) != 0 {
+			return errors.New("sandbox account has a runtime registration not owned by this service")
+		}
+		hasPackage := false
+		for _, name := range packages {
+			if name == fullName {
+				hasPackage = true
+				break
+			}
+		}
+		aliasPath, err := registeredRunnerAlias(profile.Token(), family)
+		if err != nil {
+			return fmt.Errorf("resolve runtime alias location for %s: %w", account, err)
+		}
+		accounts = append(accounts, windowssandbox.RuntimeAccountRegistration{
+			Account:   account,
+			UserSID:   profile.UserSID,
+			AliasPath: &aliasPath,
+		})
+		installed = append(installed, hasPackage)
+	}
+	receiptCurrent := runtime.ReadyForPackage(fullName) && sameRuntimeAccounts(runtime.Accounts, accounts)
+	if receiptCurrent {
+		for _, hasPackage := range installed {
+			if !hasPackage {
+				receiptCurrent = false
+				break
+			}
+		}
+	}
+	// Both exact SIDs are durable before either package registration or metadata
+	// grant, so an idempotent setup check never revokes a valid launch receipt.
+	runtime.Accounts = accounts
+	if !receiptCurrent {
+		runtime.ReadyPackage = nil
+		if err := windowssandbox.SaveInstallation(record); err != nil {
+			return fmt.Errorf("persist managed runtime account registration: %w", err)
+		}
+	}
+	for index, profile := range profiles {
+		if !installed[index] {
+			operation, err := startRuntimePackageRegistration(profile, fullName)
+			if err != nil {
+				return fmt.Errorf("start managed runtime package registration: %w", err)
+			}
+			status, err := waitForRuntimeRegistration(operation, stopped)
+			if err != nil {
+				if errors.Is(err, ErrRuntimeSetupInterrupted) {
+					// The typed error bypasses response handling and cleanup: keep the
+					// in-flight operation and its profile alive until this own-process
+					// service exits.
+					operation.Retain()
+					release = false
+					return ErrRuntimeSetupInterrupted
+				}
+				operation.Close()
+				return err
+			}
+			result := readRegistrationResult(operation, status)
+			operation.Close()
+			if err := result.check(); err != nil {
+				return err
+			}
+			packages, err := runtimeRegisteredPackages(profile.UserSID, family)
+			if err != nil {
+				return fmt.Errorf("verify managed runtime package registration: %w", err)
+			}
+			registered := false
+			for _, name := range packages {
+				if name == fullName {
+					registered = true
+					break
+				}
+			}
+			if !registered {
+				return errors.New("runtime registration completed without the expected package")
+			}
+		}
+		if err := GrantRuntimeMetadata(identity.Token, profile.UserSID, record); err != nil {
+			return fmt.Errorf("grant managed runtime metadata permissions: %w", err)
+		}
+		if err := profile.UnloadProfile(); err != nil {
+			return err
+		}
+		if err := profile.Close(); err != nil {
+			return err
+		}
+		closed[index] = true
+	}
+	if !receiptCurrent {
+		ready := fullName
+		runtime.ReadyPackage = &ready
+		if err := windowssandbox.SaveInstallation(record); err != nil {
+			return fmt.Errorf("persist completed managed runtime registration: %w", err)
+		}
+	}
+	return nil
+}
+
+// logonRegisteredRuntimeAccount logs on one managed account as the pinned owner.
+func logonRegisteredRuntimeAccount(identity *ClientIdentity, account windowssandbox.SandboxRuntimeAccount) (windows.Token, error) {
+	var token windows.Token
+	err := withOwnerImpersonation(identity.Token, func() error {
+		var pins []windows.Handle
+		if err := pinExistingAncestors(windowssandbox.SandboxSecretsDir(identity.CodexHome), &pins); err != nil {
+			return err
+		}
+		defer closeHandles(pins)
+		loggedOn, err := runtimeLogonExistingAccount(identity.CodexHome, account)
+		token = loggedOn
+		return err
+	})
+	if err != nil {
+		return 0, err
+	}
+	return token, nil
+}
+
+// registeredRunnerAlias is the package-scoped alias path the receipt records.
+func registeredRunnerAlias(profileToken windows.Token, family string) (string, error) {
+	localAppData, err := runtimeKnownFolderPath(profileToken, &knownFolderLocalAppData, 0)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(localAppData, "Microsoft", "WindowsApps", family, windowssandbox.AppCoreRunnerAlias), nil
+}
+
+// startRuntimePackageRegistration deploys the package as the managed account.
+func startRuntimePackageRegistration(profile *RuntimeAccountProfile, fullName string) (*AsyncOperation, error) {
+	var operation *AsyncOperation
+	err := withOwnerImpersonation(profile.Token(), func() error {
+		manager, err := OpenPackageManager()
+		if err != nil {
+			return err
+		}
+		defer manager.Close()
+		started, err := manager.RegisterPackageByFullNameAsync(fullName)
+		operation = started
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return operation, nil
+}
+
+// waitForRuntimeRegistration polls until the deployment reaches a terminal
+// status, reporting an unreadable status once and honoring service shutdown.
+func waitForRuntimeRegistration(operation *AsyncOperation, stopped func() bool) (int32, error) {
+	statusErrorLogged := false
+	for {
+		if stopped != nil && stopped() {
+			return 0, ErrRuntimeSetupInterrupted
+		}
+		status, err := operation.Status()
+		switch {
+		case err != nil:
+			if !statusErrorLogged {
+				LogError(
+					EventServiceFailed,
+					"runtime registration status unavailable; retaining request: "+ErrorMessage(err),
+				)
+				statusErrorLogged = true
+			}
+		case status == asyncStatusStarted:
+		case status == asyncStatusCompleted, status == asyncStatusCanceled, status == asyncStatusError:
+			return status, nil
+		}
+		runtimeRegistrationSleep(runtimeRegistrationPollInterval)
+	}
+}
+
+// sameRuntimeAccounts reports an identical recorded account set.
+func sameRuntimeAccounts(recorded []windowssandbox.RuntimeAccountRegistration, current []windowssandbox.RuntimeAccountRegistration) bool {
+	if len(recorded) != len(current) {
+		return false
+	}
+	for index := range recorded {
+		left := recorded[index]
+		right := current[index]
+		if left.Account != right.Account || left.UserSID != right.UserSID || left.CleanupLogonPending != right.CleanupLogonPending {
+			return false
+		}
+		if (left.AliasPath == nil) != (right.AliasPath == nil) {
+			return false
+		}
+		if left.AliasPath != nil && *left.AliasPath != *right.AliasPath {
+			return false
+		}
+	}
+	return true
+}
+
+// CredentialsNeedRepair mirrors Rust provisioning/registered.rs::credentials_need_repair:
+// a credential mismatch on either account requires a full setup only after the
+// recorded account identities still prove ownership. Every non-credential error
+// is returned unchanged and never rotates passwords.
+func CredentialsNeedRepair(
+	record *windowssandbox.InstallationRecord,
+	logon func(windowssandbox.SandboxRuntimeAccount) (windows.Token, error),
+) (bool, error) {
+	if err := ValidateRuntimeRecord(record); err != nil {
+		return false, err
+	}
+	runtime, err := record.RuntimeRegistration()
+	if err != nil {
+		return false, err
+	}
+	needsRepair := false
+	for _, account := range []windowssandbox.SandboxRuntimeAccount{
+		windowssandbox.SandboxRuntimeAccountOffline,
+		windowssandbox.SandboxRuntimeAccountOnline,
+	} {
+		expectedSID := ""
+		for _, entry := range runtime.Accounts {
+			if entry.Account == account {
+				expectedSID = entry.UserSID
+				break
+			}
+		}
+		token, err := logon(account)
+		if err != nil {
+			var mismatch *windowssandbox.SandboxAccountCredentialMismatch
+			if errors.As(err, &mismatch) {
+				needsRepair = true
+				continue
+			}
+			return false, err
+		}
+		_, validateErr := ValidateRuntimeTarget(token, account, expectedSID)
+		_ = token.Close()
+		if validateErr != nil {
+			return false, validateErr
+		}
+	}
+	if !needsRepair {
+		return false, nil
+	}
+	// Never reset recorded replacement accounts or unrecorded runtime
+	// registrations. An initial migration has no recorded account SIDs yet.
+	for _, account := range []windowssandbox.SandboxRuntimeAccount{
+		windowssandbox.SandboxRuntimeAccountOffline,
+		windowssandbox.SandboxRuntimeAccountOnline,
+	} {
+		sid, err := runtimeResolveSIDString(account.Username())
+		if err != nil {
+			return false, err
+		}
+		recorded := ""
+		for _, entry := range runtime.Accounts {
+			if entry.Account == account {
+				recorded = entry.UserSID
+				break
+			}
+		}
+		if recorded != "" {
+			if sid != recorded {
+				return false, errors.New("managed runtime account was replaced")
+			}
+			continue
+		}
+		packages, err := runtimeRegisteredPackages(sid, runtime.PackageFamily)
+		if err != nil {
+			return false, err
+		}
+		if len(packages) != 0 {
+			return false, errors.New("sandbox account has a runtime registration not owned by this service")
+		}
+	}
+	return true, nil
 }
