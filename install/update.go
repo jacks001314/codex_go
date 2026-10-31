@@ -268,13 +268,22 @@ func (r *ExecCommandRunner) Run(ctx context.Context, command string, args []stri
 		return r.runWindowsUpdate(ctx, command, args)
 	}
 	actualCommand, actualArgs := updateCommandAndArgs(command, args)
-	cmd := exec.CommandContext(ctx, actualCommand, actualArgs...)
+	cmd := newNonWindowsUpdateCommand(ctx, actualCommand, actualArgs)
 	// Rust #48483: the updater is piped, so it must not allocate a console window
 	// when the CLI itself has no console.
 	envutil.SuppressConsoleWindow(cmd)
 	cmd.Stdout = r.Stdout
 	cmd.Stderr = r.Stderr
 	return cmd.Run()
+}
+
+// newNonWindowsUpdateCommand builds the updater process outside the project.
+// Package managers search parent directories for project configuration and
+// hooks, so the updater must not inherit the user's project cwd.
+func newNonWindowsUpdateCommand(ctx context.Context, command string, args []string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, command, args...)
+	cmd.Dir = "/"
+	return cmd
 }
 
 // runWindowsUpdate resolves and executes a Windows update command. It runs from

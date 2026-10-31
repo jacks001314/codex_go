@@ -804,6 +804,8 @@ func LoadEffectiveWithOptions(codexHome string, opts *EffectiveOptions) (*Config
 	}
 	ApplyOverrides(cfg.Values, overrides)
 	applyDisablePasteBurstOverride(overrides, cfg.Values)
+	// Rust #58428: app settings from enabled plugins apply connector-wide.
+	mergePluginApps(cfg.Values)
 	// Feature overrides can enable memories, so the fresh-profile memory version
 	// is resolved again after the CLI layers land (Rust #56211).
 	cfg.resolveFreshMemoryVersion(codexHome)

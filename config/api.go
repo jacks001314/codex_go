@@ -3062,6 +3062,9 @@ func mergeConfigLayers(layers []Layer) (map[string]any, map[string]LayerMetadata
 		fillOrigins("", layerValues, LayerMetadata{Name: layers[i].Name, Version: layers[i].Version}, origins)
 	}
 	pruneDisplacedCredentialProviderOrigins(values, origins)
+	if mergePluginApps(values) {
+		projectPluginAppsOrigins(values, origins)
+	}
 	return values, origins
 }
 

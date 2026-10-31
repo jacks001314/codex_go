@@ -40088,9 +40088,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Round 1194: registered when the alignment anchor moved from cbe16d525c2d7362fc3d4726143288e932905daa to 67f0994b532b8740f14b5b738af7b7b2a915b1d6; not audited yet."
+    "Round 1198: install.ExecCommandRunner now builds every non-Windows updater through newNonWindowsUpdateCommand, which sets cmd.Dir to / so package managers cannot read project-local configuration or hooks; the Windows branch keeps its existing temporary-directory behavior. newNonWindowsUpdateCommand still receives the command/args already normalized by updateCommandAndArgs, preserving the WSL path normalization. Tests: TestNonWindowsUpdateCommandRunsOutsideTheProjectLikeRust asserts the process working directory and the pnpm add -g argument vector, mirroring Rust #58403 package_update_runs_outside_the_project; go test ./install -run Update -count=1."
    ]
   },
   {
@@ -40196,9 +40196,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Round 1194: registered when the alignment anchor moved from cbe16d525c2d7362fc3d4726143288e932905daa to 67f0994b532b8740f14b5b738af7b7b2a915b1d6; not audited yet."
+    "Round 1198: added config/plugin_apps.go mirroring Rust connectors app_tool_policy (#58428). pluginAppsOverlays collects [plugins.<id>.apps] tables from plugins that are explicitly enabled or allowed by the _default policy, sorts plugin names ascending and applies them in reverse order so the alphabetically earlier plugin wins conflicts, drops the plugin-local _default table, and applies the explicit top-level apps table last so top-level fields win. mergePluginApps writes the merged table to values[apps]; it runs in mergeConfigLayers (config read/preview) and LoadWithOptions (runtime effective config), so apps.AppsConfigFromValues sees plugin settings. projectPluginAppsOrigins replaces apps.* origins with the origins of the layers that supplied each overlay path, skipping plugin _default paths, matching Rust apps_config_origins_from_layer_stack. Tests: TestPluginAppsOverlaysApplyConnectorWideLikeRust, TestPluginAppsOverlaysSkipDisabledPluginsLikeRust and TestPluginAppsOriginsProjectedLikeRust; go test ./config -count=1 and go test ./apps -count=1."
    ]
   },
   {
