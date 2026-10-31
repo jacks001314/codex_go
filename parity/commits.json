@@ -6329,9 +6329,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "sandbox/windowssandbox/bin/setup_main/win/run_windows.go lockSandboxDir now takes protectDACL and applies PROTECTED_DACL_SECURITY_INFORMATION, mirroring Rust #42330 DaclInheritance::Protected.",
+    "lockSandboxBinDir passes protectDACL=true (the bin dir is usually codexHome/.sandbox-bin inside the writable workspace), while the persistent sandbox and secrets dirs keep inherited ACEs as in Rust lock_persistent_sandbox_dirs.",
+    "Test sandbox_bin_acl_windows_test.go TestLockSandboxBinDirBlocksInheritedWriteForRunnerFilesLikeRust covers both full and provision-only modes: it grants the workspace capability SID inherited write on the workspace, locks the bin dir, then asserts the capability SID loses WRITE/DELETE on the dir, an existing runner and a newly written runner while Authenticated Users keeps READ/EXECUTE. The test fails with the flag removed (observed), so it guards the regression."
    ]
   },
   {
@@ -7737,9 +7739,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust #42833 added SYSTEMROOT to WINDOWS_SANDBOX_WRAPPER_SETUP_ENV_ALLOWLIST because the out-of-process wrapper rebuilt its env from a curated map before ShellExecuteExW elevation.",
+    "Go has no curated wrapper env: cmd/internal/codexmain dispatches --run-as-windows-sandbox in the same process, and sandbox/windowssandbox/setup_windows.go elevates with ShellExecuteExW without an lpEnvironment override, so the setup helper inherits the caller process environment including SystemRoot (the same source Rust copies from std::env::vars_os()).",
+    "The env map that does reach a spawned helper keeps SystemRoot: execserver/fs_helper.go fsHelperEnvironmentFrom preserves PATH/SystemDrive/SystemRoot/LOCALAPPDATA case-insensitively, covered by execserver/fs_helper_test.go TestFSHelperEnvironmentPreservesWindowsSystemRootLikeRust."
    ]
   },
   {

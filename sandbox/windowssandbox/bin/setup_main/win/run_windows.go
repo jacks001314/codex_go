@@ -633,6 +633,9 @@ func lockSandboxBinDir(payload *setupPayload, sandboxGroupSID []byte, log io.Wri
 		windows.SET_ACCESS,
 		uint32(windows.FILE_GENERIC_READ|windows.FILE_GENERIC_EXECUTE),
 		uint32(windows.FILE_GENERIC_READ|windows.FILE_GENERIC_WRITE|windows.FILE_GENERIC_EXECUTE|windows.DELETE),
+		// Rust #42330: the bin dir is often inside the workspace, so inherited
+		// write/delete ACEs would let the sandbox replace its own runner.
+		true,
 	)
 	if err != nil {
 		return setupFailuref(
@@ -654,6 +657,7 @@ func lockPersistentSandboxDirs(payload *setupPayload, sandboxGroupSID []byte, lo
 		windows.SET_ACCESS,
 		uint32(windows.FILE_GENERIC_READ|windows.FILE_GENERIC_WRITE|windows.FILE_GENERIC_EXECUTE|windows.DELETE),
 		uint32(windows.FILE_GENERIC_READ|windows.FILE_GENERIC_WRITE|windows.FILE_GENERIC_EXECUTE),
+		false,
 	)
 	if err != nil {
 		return setupFailuref(windowssandbox.SetupErrorHelperSandboxLockFailed, "lock sandbox dir %s failed: %s", sandboxDir, windowssandbox.SetupErrorChain(err))
@@ -666,6 +670,7 @@ func lockPersistentSandboxDirs(payload *setupPayload, sandboxGroupSID []byte, lo
 		windows.DENY_ACCESS,
 		uint32(windows.FILE_GENERIC_READ|windows.FILE_GENERIC_WRITE|windows.FILE_GENERIC_EXECUTE|windows.DELETE),
 		uint32(windows.FILE_GENERIC_READ|windows.FILE_GENERIC_WRITE|windows.FILE_GENERIC_EXECUTE),
+		false,
 	)
 	if err != nil {
 		return setupFailuref(windowssandbox.SetupErrorHelperSandboxLockFailed, "lock sandbox secrets dir %s failed: %s", secretsDir, windowssandbox.SetupErrorChain(err))
@@ -677,7 +682,7 @@ func lockPersistentSandboxDirs(payload *setupPayload, sandboxGroupSID []byte, lo
 	return nil
 }
 
-func lockSandboxDir(dir string, realUser string, sandboxGroupSID []byte, sandboxGroupAccessMode windows.ACCESS_MODE, sandboxGroupMask uint32, realUserMask uint32) error {
+func lockSandboxDir(dir string, realUser string, sandboxGroupSID []byte, sandboxGroupAccessMode windows.ACCESS_MODE, sandboxGroupMask uint32, realUserMask uint32, protectDACL bool) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
@@ -726,7 +731,11 @@ func lockSandboxDir(dir string, realUser string, sandboxGroupSID []byte, sandbox
 	if err != nil {
 		return err
 	}
-	if err := windows.SetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION, nil, nil, newACL, nil); err != nil {
+	securityInformation := windows.SECURITY_INFORMATION(windows.DACL_SECURITY_INFORMATION)
+	if protectDACL {
+		securityInformation |= windows.PROTECTED_DACL_SECURITY_INFORMATION
+	}
+	if err := windows.SetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT, securityInformation, nil, nil, newACL, nil); err != nil {
 		runtime.KeepAlive(sids)
 		runtime.KeepAlive(explicitEntries)
 		runtime.KeepAlive(newACL)
