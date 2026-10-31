@@ -7154,9 +7154,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 3/4; needs review: project_config_warning"
+    "config.ProjectConfigWarning + ConfigService.ProjectConfigWarningForCWD port Rust project_config_warning (codex-rs/app-server/src/lib.rs): disabled project layers listed low-to-high with trust-key reasons.",
+    "appserver.configWarningsForInitialize delivers the condensed warning as one configWarning at initialize; tui/app.BuildProjectConfigWarningMessages renders the same text.",
+    "Go TUI already coalesces startup diagnostics into the summary cell (tui/history_cell/startup_warnings.go, tui/chatwidget/warnings.go, tui/chatwidget/mcp_startup.go).",
+    "Tests: go test ./config -run TestProjectConfigWarning -count=1; go test ./appserver -run TestRuntimeRouterInitializeEmitsProjectConfigWarning -count=1; go test ./config ./appserver ./parity -count=1."
    ]
   },
   {

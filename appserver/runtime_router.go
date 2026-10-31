@@ -8164,6 +8164,12 @@ func (r *RuntimeRouter) configWarningsForInitialize() []config.ConfigWarningNoti
 	if ignored := r.services.Config.IgnoredSettingsWarning(""); strings.TrimSpace(ignored) != "" {
 		warnings = append(warnings, config.ConfigWarningNotification{Summary: ignored})
 	}
+	// Rust app-server startup: project layers the trust decision disabled are
+	// reported once in the condensed form the TUI renders below the session
+	// header (codex-rs/app-server/src/lib.rs project_config_warning).
+	if projectWarning := r.services.Config.ProjectConfigWarningForCWD(r.services.DefaultCWD); strings.TrimSpace(projectWarning) != "" {
+		warnings = append(warnings, config.ConfigWarningNotification{Summary: projectWarning})
+	}
 	// Rust app-server startup: the bubblewrap warning joins the config warnings,
 	// so a session whose sandbox cannot use bubblewrap learns why.
 	if profile := r.services.Config.EffectivePermissionProfileForCWD(r.services.DefaultCWD); profile != nil {
