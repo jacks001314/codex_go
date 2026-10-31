@@ -71,7 +71,16 @@ func (s *guardianReviewHistoryState) evictKind(userKind bool) {
 	}
 	removeCount := 0
 	if len(indices) > maxGuardianReviewItemsPerKind {
-		removeCount = (len(indices) + 1) / 2
+		// Rust #43798 counts the entries retained before this append. Non-user
+		// overflow drops the oldest half of them so the following appends do not
+		// evict again and invalidate Guardian's transcript cursor. User messages
+		// keep their separate limit and lose one entry at a time.
+		existing := len(indices) - 1
+		retained := maxGuardianReviewItemsPerKind - 1
+		if !userKind {
+			retained = existing / 2
+		}
+		removeCount = existing - retained
 	}
 	for _, index := range indices[:removeCount] {
 		if encoded, err := json.Marshal(s.items[index]); err == nil {

@@ -919,8 +919,12 @@ func (r *ExecutedToolCallRecorder) registerGroup(groupID string, outputCallID st
 	// releasing their pending-call budget. The group whose output is about to
 	// make the late records attachable again is never discarded, and late
 	// records are kept until pressure requires the cleanup.
-	for r.capacityPressure(groupID) {
-		if !r.evictFinishedGroup(groupID) {
+	for {
+		needsCellSlot := len(r.groups) >= maxPendingExecutedToolCalls && r.groups[groupID] == nil
+		if !needsCellSlot && r.pendingNestedCalls() < maxPendingExecutedToolCalls {
+			break
+		}
+		if !r.evictFinishedGroup(groupID, needsCellSlot) {
 			break
 		}
 	}
@@ -984,21 +988,18 @@ func (r *ExecutedToolCallRecorder) reclaimOrphanedOutputs() {
 	}
 }
 
-// capacityPressure mirrors Rust #46712's registration loop condition: the
-// recorder must make room when the group budget is exhausted for a group that
-// is not registered yet, or when the pending nested calls reach the budget.
-func (r *ExecutedToolCallRecorder) capacityPressure(groupID string) bool {
-	return (len(r.groups) >= maxPendingExecutedToolCalls && r.groups[groupID] == nil) ||
-		r.pendingNestedCalls() >= maxPendingExecutedToolCalls
-}
-
 // evictFinishedGroup removes one finished group that no output mapping reaches
 // any more, revoking its completeness (lost evidence cannot become complete
 // again) and releasing the pending calls it held. The group being registered is
 // protected because its output is what makes its own late records attachable
 // (Rust #46712). The lowest group ID is evicted when several qualify, so the
 // choice does not depend on Go's map iteration order.
-func (r *ExecutedToolCallRecorder) evictFinishedGroup(protectedGroupID string) bool {
+//
+// Rust #47174 only admits an empty finished group while reclaiming a cell slot:
+// removing such a group frees no pending-call capacity, and its completion state
+// is the metadata needed to certify an empty tool-call inventory on a later
+// wait. Under pending-call pressure only groups holding pending calls qualify.
+func (r *ExecutedToolCallRecorder) evictFinishedGroup(protectedGroupID string, needsCellSlot bool) bool {
 	mapped := make(map[string]struct{}, len(r.outputs))
 	for _, groupID := range r.outputs {
 		mapped[groupID] = struct{}{}
@@ -1011,6 +1012,9 @@ func (r *ExecutedToolCallRecorder) evictFinishedGroup(protectedGroupID string) b
 		// Rust evicts cells that are Complete or Incomplete: a finished
 		// inventory, or one whose completeness was already revoked.
 		if !group.finished && !group.incomplete && !r.groupInvalid(groupID) {
+			continue
+		}
+		if !needsCellSlot && len(group.pending) == 0 {
 			continue
 		}
 		if _, reachable := mapped[groupID]; reachable {

@@ -9551,9 +9551,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "appserver/guardian_review_history.go evictKind batches half of the existing non-user entries but drops one user message at a time, keeping the separate limit; guardian_review_history_bounds_like_rust_test.go covers both paths"
    ]
   },
   {
@@ -18119,9 +18119,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "execserver/fs_helper.go fsHelperEnvironmentFrom keeps PATH, SystemDrive, SystemRoot and LOCALAPPDATA case-insensitively on Windows (superset from Rust #56468); execserver/fs_helper_test.go covers mixed-case retention and secret exclusion"
    ]
   },
   {
@@ -18371,9 +18371,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "turn/executed_tool_calls.go evictFinishedGroup admits empty finished groups only while a cell slot is needed (Rust #47174); turn/executed_tool_calls_capacity_test.go covers empty-inventory survival under pending-call pressure and cell-slot eviction"
    ]
   },
   {
@@ -19847,9 +19847,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "appserver/message_board.go registeredPath derives paths from the session source with the root fallback, validates caller/recipient ownership through the agent registry, and Notify checks the recipient board (matches Rust agent_control.resolve semantics)"
    ]
   },
   {

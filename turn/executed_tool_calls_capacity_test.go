@@ -110,3 +110,67 @@ func TestExecutedToolCallRecorderEvictsUnreachableFinishedGroupsLikeRust(t *test
 	assertCompleteCodeModeCellAttachment(t, recorder, "fresh", "fresh-output", "recovered")
 	assertCompleteCodeModeCellAttachment(t, recorder, "kept", "kept-output", "kept")
 }
+
+// Mirrors Rust #47174: reaching the pending tool-call limit must not evict a
+// finished empty cell. Removing it frees no pending-call capacity and loses the
+// metadata that certifies an empty inventory on a later wait.
+func TestExecutedToolCallRecorderKeepsEmptyCellsUnderPendingPressureLikeRust(t *testing.T) {
+	recorder := NewExecutedToolCallRecorder()
+	// The finished empty cell holds evidence even without calls; drop its output
+	// mapping the way reclamation would so the eviction can reach it.
+	recorder.RegisterCell("empty", "empty-output")
+	recorder.FinishCell("empty")
+	delete(recorder.outputs, "empty-output")
+	// A single finished cell holds the entire pending-call budget.
+	for index := 0; index < maxPendingExecutedToolCalls; index++ {
+		recorder.RecordToolCall(codeModeNestedInvocation("full-call-"+strconv.Itoa(index), "full", "full"), model.ToolModeCodeMode)
+	}
+	recorder.FinishCell("full")
+	if got := recorder.pendingNestedCalls(); got != maxPendingExecutedToolCalls {
+		t.Fatalf("pending nested calls = %d, want %d", got, maxPendingExecutedToolCalls)
+	}
+
+	recorder.StartCell("fresh", "fresh-output")
+	if recorder.groups["cell:empty"] == nil {
+		t.Fatal("pending-call pressure evicted an empty cell that freed no capacity")
+	}
+	if recorder.groups["cell:full"] != nil {
+		t.Fatal("pending-call pressure kept the cell holding the pending budget")
+	}
+	if !recorder.groupInvalid("cell:full") {
+		t.Fatal("the evicted cell kept its completeness")
+	}
+	if recorder.groups["cell:fresh"] == nil {
+		t.Fatal("fresh cell registration was refused under pending-call pressure")
+	}
+}
+
+// Mirrors Rust #47174: an empty finished cell stays eligible while the recorder
+// needs a cell slot, because that slot is released without discarding pending
+// calls.
+func TestExecutedToolCallRecorderEvictsEmptyCellsForCellSlotsLikeRust(t *testing.T) {
+	recorder := NewExecutedToolCallRecorder()
+	for index := 0; index < maxPendingExecutedToolCalls; index++ {
+		cellID := "empty-" + strconv.Itoa(index)
+		recorder.RegisterCell(cellID, cellID+"-output")
+		recorder.FinishCell(cellID)
+		delete(recorder.outputs, cellID+"-output")
+	}
+	if got := len(recorder.groups); got != maxPendingExecutedToolCalls {
+		t.Fatalf("finished cells = %d, want %d", got, maxPendingExecutedToolCalls)
+	}
+	if got := recorder.pendingNestedCalls(); got != 0 {
+		t.Fatalf("pending nested calls = %d, want 0", got)
+	}
+
+	recorder.RegisterCell("fresh", "fresh-output")
+	if recorder.groups["cell:fresh"] == nil {
+		t.Fatal("cell-slot pressure could not reclaim a finished empty cell")
+	}
+	if recorder.groups["cell:empty-0"] != nil {
+		t.Fatal("the eviction kept the oldest finished empty cell")
+	}
+	if got := len(recorder.groups); got != maxPendingExecutedToolCalls {
+		t.Fatalf("groups = %d, want %d", got, maxPendingExecutedToolCalls)
+	}
+}
