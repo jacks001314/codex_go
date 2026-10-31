@@ -16684,9 +16684,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust initialized Guardian reviewers from the user and thread instructions captured in the review session reuse key so a review cannot see instructions that changed after the action was generated. Go never polls the live parent for instructions either: the review request leaves Instructions empty (appserver/guardian_reviewer.go:1647) and the applied instructions reach the reviewer only as captured retained evidence rendered into the prompt's retained_user_instructions section (state/guardian.go:873), so the review is structurally bound to the applied snapshot. Drift is still caught: guardianReviewContextChanged re-reads the retained root authorization and transcript after each attempt and forces the stale-authorization retry or a failed-closed denial (appserver/guardian_reviewer.go:3475). Verified with go test ./appserver -run Guardian -count=1."
    ]
   },
   {
