@@ -7075,6 +7075,10 @@ func (r *RuntimeRouter) markThreadUnloaded(threadID string) {
 	r.forgetThreadRetainedContext(threadID)
 	r.forgetGuardianReviewHistory(threadID)
 	r.internalHost.forgetThread(threadID)
+	// Rust #45672 ties the reusable reviewer to the thread lifecycle: the
+	// thread-stop hook shuts the pool down, so a closed runtime never keeps a
+	// response chain, prior-review cursor or completed-review count.
+	r.forgetGuardianReviewerSession(threadID)
 	r.forgetGuardianBlocking(threadID)
 	r.forgetGuardianCatalogRefresh(threadID)
 	r.forgetPermissionGrants(threadID)

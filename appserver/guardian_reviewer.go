@@ -1015,6 +1015,63 @@ func (r *modelGuardianReviewer) sessionFor(threadID string) *guardianSessionRunn
 	return session
 }
 
+// existingSessionFor returns the reviewer a thread already owns. Lifecycle
+// resets use it so they never create reviewer state for a thread that has not
+// reviewed yet.
+func (r *modelGuardianReviewer) existingSessionFor(threadID string) *guardianSessionRunner {
+	if r == nil || r.agent == nil {
+		return nil
+	}
+	if runner, ok := r.agent.(*guardianSessionRunner); ok {
+		return runner
+	}
+	r.sessionsMu.Lock()
+	defer r.sessionsMu.Unlock()
+	return r.sessions[strings.TrimSpace(threadID)]
+}
+
+// DropThreadSession discards the reusable reviewer owned by one thread. Rust
+// keeps the ReviewerPool and its ReviewerTasks in the thread store, so the
+// thread-stop hook is what tears them down (#45672); Go's reusable reviewer is
+// host-owned, so unloading the thread is the same ownership boundary and the
+// thread's response chain, prior-review cursor and completed count go with it.
+// An explicitly supplied session runner is shared by construction and stays.
+func (r *modelGuardianReviewer) DropThreadSession(threadID string) {
+	if r == nil {
+		return
+	}
+	key := strings.TrimSpace(threadID)
+	if key == "" {
+		return
+	}
+	if _, shared := r.agent.(*guardianSessionRunner); shared {
+		return
+	}
+	r.sessionsMu.Lock()
+	delete(r.sessions, key)
+	r.sessionsMu.Unlock()
+}
+
+// guardianThreadReviewerSession is implemented by reviewers that own reusable
+// per-thread sessions.
+type guardianThreadReviewerSession interface {
+	DropThreadSession(threadID string)
+}
+
+// forgetGuardianReviewerSession drops a closed thread's reusable reviewer with
+// the rest of its runtime state (Rust #45672 moves reviewer lifetime ownership
+// into the thread lifecycle).
+func (r *RuntimeRouter) forgetGuardianReviewerSession(threadID string) {
+	if r == nil || r.services.GuardianReviewer == nil {
+		return
+	}
+	owner, ok := r.services.GuardianReviewer.(guardianThreadReviewerSession)
+	if !ok {
+		return
+	}
+	owner.DropThreadSession(threadID)
+}
+
 // Review reports the decision and rejection message of one approval review.
 // Callers that need Guardian's structured assessment use ReviewAssessment.
 func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, targetItemID string, action state.Action) (state.ReviewDecision, string, error) {
@@ -3285,7 +3342,7 @@ func (r *RuntimeRouter) resetGuardianAfterParentCompaction(threadID string, comp
 	if !ok {
 		return
 	}
-	sessionRunner := runner.sessionFor(threadID)
+	sessionRunner := runner.existingSessionFor(threadID)
 	if sessionRunner == nil {
 		return
 	}
@@ -3336,7 +3393,7 @@ func (r *RuntimeRouter) resetGuardianAfterParentHistoryReset(threadID string) {
 	if !ok {
 		return
 	}
-	sessionRunner := runner.sessionFor(threadID)
+	sessionRunner := runner.existingSessionFor(threadID)
 	if sessionRunner == nil {
 		return
 	}
