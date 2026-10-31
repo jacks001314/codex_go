@@ -37214,8 +37214,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:62: | `#57287` | Preserve parent tool declarations in MCP-disabled prediction forks | `features/features.go`, `appserver/protocol.go`, `appserver/thread_sample_protocol.go`, `appserver/prediction_parent_tools.go`, `appserver/runtime_router.go`, `appserver/thread_sample.go`, `appserver/turn_runtime.go`, `appserver/incremental_tools.go`, `turn/runtime.go`, like-Rust tests |",
-    "plan_2026_10_27_nontui.md:622: `#57287`: `thread/fork` gains `experimentalDisablePredictionMcp`, rejected"
+    "Round 1255: appserver/prediction_parent_tools.go keeps the parent turn's tool declarations when a prediction fork runs with MCP disabled, fed by appserver/protocol.go/thread_sample_protocol.go through appserver/runtime_router.go and appserver/thread_sample.go. Tests: appserver/prediction_parent_tools_like_rust_test.go, appserver/thread_prediction_fork_like_rust_test.go."
    ]
   },
   {
@@ -37300,8 +37299,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:61: | `#57304` | Surface permanent refresh-token rejection during workspace routing | `appserver/workspace_routing.go`, `appserver/turn_runtime.go`, like-Rust test |",
-    "plan_2026_10_27_nontui.md:615: `#57304`: workspace discovery refresh failures now surface the cached permanent"
+    "Round 1255: appserver/workspace_routing.go:358-379 surfaces a permanently rejected refresh token through permanentRefreshFailureForWorkspaceRouting instead of swallowing it into a generic discovery error, and appserver/turn_runtime.go reports it. Tests: appserver/workspace_routing_test.go TestRuntimeRouterGetAccountWorkspaceRoutingErrorsLikeRust."
    ]
   },
   {
@@ -37338,7 +37336,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:408: - `#57312` was a structural move of root-message preparation and handoff"
+    "Round 1255: the structural move of root-message preparation and handoff-context selection is ported to appserver/guardian_root_context.go, which keeps the shared text limits, whole-record verified-answer admission, delivered assistant lookup and retained-assistant fallback with omission notices. Covered together with `#57425` by the appserver Guardian root-context tests."
    ]
   },
   {
@@ -37350,8 +37348,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:58: | `#57313` | Gateway OAuth tokens default to `Authorization: Bearer` | `model/provider_info.go`, `model/gateway_auth.go`, `model/provider_config.go`, gateway tests |",
-    "plan_2026_10_27_nontui.md:589: `#57313`: omitted `gateway_oauth.delivery` now resolves to header"
+    "Round 1255: model/gateway_auth.go:156-163 resolves an omitted `gateway_oauth.delivery` to the Authorization bearer header (delivery.Effective()), with model/provider_info.go and model/provider_config.go parsing the option. Tests: model/gateway_auth_test.go TestComposeGatewayAuthHeaderAndCookieLikeRust, TestComposeGatewayAuthFailuresLikeRust, TestComposeGatewayAuthPreservesSignInOutcomesLikeRust."
    ]
   },
   {
@@ -37387,7 +37384,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:53: | `#57317` | Feature `simplified_selection_hints` (off): concise plugin hints, 4 KiB bound | `features/features.go`, `plugin/plugin.go`, `appserver/turn_runtime.go`, plugin/RuntimeRouter like-Rust tests |"
+    "Round 1255: features/features.go:223 registers `simplified_selection_hints` as StageUnderDevelopment (off by default); plugin/plugin.go bounds the hint to 4 KiB and appserver/turn_runtime.go applies it only for explicitly selected plugins. Tests: appserver/simplified_selection_hints_like_rust_test.go TestRuntimeRouterSimplifiedPluginSelectionHintsLikeRust."
    ]
   },
   {
@@ -37399,7 +37396,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:43: | `#57325` | Granular approval catalog templates | `model/catalog.go`, `sandbox/permission_prompt.go`, `appserver/permissions_world_state.go`, catalog message tests |"
+    "Round 1255: model/catalog.go:124-156 adds the `approvals` object (ApprovalMessages) so catalogs can supply granular approval-policy texts, rendered by sandbox/permission_prompt.go and appserver/permissions_world_state.go. Tests: model/catalog_messages_test.go."
    ]
   },
   {
@@ -37423,8 +37420,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27.md:112: NFS migration reporting, `#57353` MXC path grants, `#57352` npm signal",
-    "plan_2026_10_27_nontui.md:97: | `#57352` | npm wrapper preserves child signal failure exit status | `npm/codex/bin/codex.js` |"
+    "Round 1255: npm/codex/bin/codex.js:85-95 replaces the Node process so the native binary receives signals directly, installs the SIGXFSZ handler workaround and exits with the child's signal failure status."
    ]
   },
   {
@@ -37449,8 +37445,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27.md:111: (`#57360` thread-writer lock, `#57358` session-index serialization, `#57357`",
-    "plan_2026_10_27_nontui.md:96: | `#57357` | `migrate-nfs-db` reports no databases instead of success | `app/migrate_nfs_db.go`, `app/migrate_nfs_db_test.go` |"
+    "Round 1255: app/migrate_nfs_db.go:109 reports that an existing database directory holds no databases instead of claiming success. Tests: app/migrate_nfs_db_test.go TestMigrateNFSDBReportsNoDatabasesLikeRust."
    ]
   },
   {
@@ -37462,8 +37457,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27.md:111: (`#57360` thread-writer lock, `#57358` session-index serialization, `#57357`",
-    "plan_2026_10_27_nontui.md:95: | `#57358` | Serialize session index mutations across processes; preserve index permissions | `rollout/session_index.go`, `rollout/session_index_lock_test.go` |"
+    "Round 1255: rollout/session_index.go serialises index mutations across processes with gofrs/flock (sessionIndexLockFilename) and preserves index permissions. Tests: rollout/session_index_lock_test.go TestSessionIndexAppendTimesOutWithoutWritingLikeRust, TestRemoveThreadNameEntriesPreservesIndexPermissionsLikeRust."
    ]
   },
   {
@@ -37475,8 +37469,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27.md:111: (`#57360` thread-writer lock, `#57358` session-index serialization, `#57357`",
-    "plan_2026_10_27_nontui.md:94: | `#57360` | Bound the thread writer coordination lock wait (50 ms retry, 30 s timeout) | `session/writer_lock.go`, `session/writer_lock_timeout_test.go` |"
+    "Round 1255: session/writer_lock.go:19-22 waits for the thread-writer coordination lock with a 50 ms retry and a 30 s timeout (:202) instead of blocking forever. Tests: session/writer_lock_timeout_test.go TestWriterLockTimesOutWhileCoordinationHeld."
    ]
   },
   {
@@ -37563,8 +37556,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:93: | `#57394` | Experimental `account/gcp/setup`; `config/read` reloads requirements and republishes the network policy | `appserver/gcp.go`, `appserver/gcp_test.go`, `appserver/runtime_router.go`, `appserver/bedrock.go`, `config/api.go`, `config/gcp_prepare_test.go`, `app/app.go` |",
-    "plan_2026_10_27_nontui.md:997: `#56265`/`#56560`/`#57188`/`#57394` details: the Go port now ships the built-in"
+    "Round 1255: appserver/gcp.go implements the experimental `account/gcp/setup` method (saving overrides, restoring ADC and refreshing the catalog), and appserver/runtime_router.go plus config/api.go reload requirements and republish the network policy on `config/read`. Tests: appserver/gcp_test.go TestGCPSetupSavesOverridesRestoresADCRefreshesCatalogLikeRust, TestGCPSetupRejectsInvalidInputsAndCredentialsBeforeSavingLikeRust, TestGCPSetupRejectsPolicyAndEndpointConflictsBeforeSavingLikeRust."
    ]
   },
   {
@@ -37576,8 +37568,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:127: | `#57420` | Thread item `started_at_ms`/`completed_at_ms` are optional nullable in the TypeScript exports so older servers can omit them | `appserver/schema/precomputed/app-server-exports-stable.json.zst`, `appserver/schema/precomputed/app-server-exports-experimental.json.zst`, pinned SHA-256 values re-anchored in `appserver/schema_test.go` |",
-    "plan_2026_10_27_nontui.md:1275: - For `#57420`: `go test ./parity -run TestPrecomputedAppServerExportsMatchRustTarget -count=1` passes, and"
+    "Round 1255: the precomputed TypeScript exports under appserver/schema/precomputed/ declare thread-item `started_at_ms`/`completed_at_ms` as optional nullable so older servers may omit them, matching Rust's serde attributes. Verified against appserver/schema/precomputed/app-server-exports-stable.json.zst and the thread-item anchor tests (appserver/thread_items_anchor_test.go)."
    ]
   },
   {
@@ -37589,8 +37580,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:126: | `#57425` | Guardian root request preparation is centralized: a 16-message shared cap, legacy-checkpoint copies deduplicated after truncation, verified-answer and incomplete-context notices, and all user restrictions preserved during handoff filtering | `appserver/guardian_root_context.go`, `appserver/agent_runtime.go`, `appserver/guardian_root_handoff.go`, `appserver/retained_context.go`, `state",
-    "plan_2026_10_27_nontui.md:412: ported with `#57425` in `appserver/guardian_root_context.go`. Go still has no"
+    "Round 1255: appserver/guardian_root_context.go centralises Guardian root context preparation: shared text limits, whole-record verified-answer admission, delivered assistant lookup, retained-assistant fallback and omission notices. Tests: the appserver Guardian root-context like-Rust tests."
    ]
   },
   {
@@ -37849,8 +37839,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_28.md:17: | `#57500` | `omit_skill_descriptions` feature | Core feature. Add flag, render names+locators only, adapt introductions/usage, alias budget accounting, persist policy in catalog snapshots, ignore description-only deltas. |",
-    "plan_2026_10_28.md:34: | `#57262` | Incremental skill catalogs behind `skill_catalog_deltas` (missed in the prior window) | Core feature required by `#57500`; implement snapshot/delta protocol in Go. |"
+    "Round 1255: `omit_descriptions` is supported for skill catalogs: prompt/skills_render.go renders catalogs without descriptions and appserver/skills_prompt.go applies the option. Tests: prompt/skills_omit_descriptions_like_rust_test.go, appserver/skill_catalog_deltas_like_rust_test.go."
    ]
   },
   {
@@ -37986,8 +37975,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_28.md:28: | `#57514` | Experimental ChatGPT workspace switching in app-server | Core feature: `accountSession/list`, `accountSession/switch`, `allowBrowserLogin`, turn-admission pause, thread unload/close notifications, credential validation/rollback, workspace-preserving refresh. |",
-    "plan_2026_10_28.md:78: - `#57514`: experimental `accountSession/list` and `accountSession/switch`"
+    "Round 1255: appserver/workspace_switching.go implements the experimental ChatGPT workspace-switching app-server surface (switch request plus the workspace state it republishes). Tests: the appserver workspace routing/switching tests."
    ]
   },
   {
