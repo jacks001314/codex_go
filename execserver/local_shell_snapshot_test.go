@@ -33,7 +33,11 @@ func TestLocalShellSnapshotExecutorPrewarmsAndPreparesLikeRust(t *testing.T) {
 		}
 	}
 
-	if err := executor.Prewarm(context.Background(), launch("warmup"), map[string]string{"PATH": "/bin"}); err != nil {
+	// Rust prewarms with the login shell's empty script; the cache lookup must not
+	// depend on the argv, only on the request/cwd/policy/sandbox identity.
+	warmup := launch("warmup")
+	warmup.Argv = []string{"/bin/bash", "-lc", ""}
+	if err := executor.Prewarm(context.Background(), warmup, map[string]string{"PATH": "/bin"}); err != nil {
 		t.Fatalf("Prewarm() error = %v", err)
 	}
 	if calls.Load() != 1 {

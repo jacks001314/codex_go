@@ -19,6 +19,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"codex_go/envutil"
 	"codex_go/execpolicy"
 	"codex_go/execserver"
 	"codex_go/network"
@@ -676,6 +677,41 @@ var localLaunchPrependPathDirs = execserver.LocalPrependPathDirs
 // test can stand in for the executor's capture.
 var prepareLocalShellSnapshot = func(ctx context.Context, params *execserver.ExecParams, captureEnv map[string]string) (*execserver.ExecParams, error) {
 	return execserver.LocalShellSnapshots().Prepare(ctx, params, captureEnv)
+}
+
+// prewarmLocalShellSnapshot captures a speculative local snapshot. It is a
+// variable so a test can stand in for the executor's capture.
+var prewarmLocalShellSnapshot = func(ctx context.Context, params *execserver.ExecParams, captureEnv map[string]string) error {
+	return execserver.LocalShellSnapshots().Prewarm(ctx, params, captureEnv)
+}
+
+// PrewarmLocalShellSnapshot warms the local executor's snapshot for one launch
+// shape without starting the model's command, mirroring Rust
+// `Session::prewarm_shell_snapshots` (#42137). The capture uses the same shell,
+// directory and environment policy a later launch uses, so that launch finds a
+// cached entry instead of paying for the first capture.
+func PrewarmLocalShellSnapshot(ctx context.Context, req *ShellRequest) error {
+	if req == nil || req.LocalShellSnapshot == nil || req.Shell.Shell == nil {
+		return nil
+	}
+	// Rust's prewarm runs the shell's login invocation with an empty script.
+	argv := req.Shell.Shell.DeriveExecArgs("", true)
+	if len(argv) < 3 {
+		return nil
+	}
+	env := shellRequestEnv(req)
+	// Rust's prewarm inserts CODEX_THREAD_ID explicitly, so an inherited value
+	// from the parent process cannot leak into the captured state.
+	if threadID := strings.TrimSpace(req.ThreadID); threadID != "" {
+		envutil.SetThreadIDEnv(env, &threadID)
+	}
+	return prewarmLocalShellSnapshot(ctx, &execserver.ExecParams{
+		ProcessID:     "shell-snapshot-warmup-" + uuid.NewString(),
+		Argv:          argv,
+		CWD:           req.CWD,
+		Env:           env,
+		ShellSnapshot: req.LocalShellSnapshot,
+	}, env)
 }
 
 // unifiedExecExplicitPathOverride reports whether the launch's shell environment

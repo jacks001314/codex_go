@@ -18,9 +18,11 @@ import (
 	"time"
 
 	"codex_go/config"
+	"codex_go/execpolicy"
 	execserverclient "codex_go/execserver"
 	"codex_go/features"
 	"codex_go/network"
+	"codex_go/sandbox"
 	"codex_go/session"
 	"codex_go/shell"
 	"codex_go/telemetry"
@@ -212,6 +214,7 @@ func (r *RuntimeRouter) shellSnapshotV2ProviderForTurn(threadID string, cfg *con
 		return nil
 	}
 	threadCWD := r.shellSnapshotThreadCWD(threadID)
+	r.prewarmShellSnapshotV2(threadID, threadCWD, cfg)
 	return func(_ context.Context, request tool.SnapshotProviderRequest) tool.SnapshotProviderResult {
 		if !request.AllowLoginShell || !shellSnapshotShellSupported(request.ShellType) {
 			return tool.SnapshotProviderResult{}
@@ -240,6 +243,111 @@ func (r *RuntimeRouter) shellSnapshotV2ProviderForTurn(threadID string, cfg *con
 		}
 		return tool.SnapshotProviderResult{Local: snapshot}
 	}
+}
+
+// shellSnapshotV2PrewarmTimeout bounds one speculative capture, mirroring Rust
+// SNAPSHOT_TIMEOUT.
+const shellSnapshotV2PrewarmTimeout = 10 * time.Second
+
+// shellSnapshotV2Prewarm runs one speculative executor capture. It is a
+// variable so tests can observe the prewarm without a POSIX shell.
+var shellSnapshotV2Prewarm = func(ctx context.Context, request *tool.ShellRequest) error {
+	return tool.PrewarmLocalShellSnapshot(ctx, request)
+}
+
+// prewarmShellSnapshotV2 mirrors Rust `Session::prewarm_shell_snapshots`
+// (core/src/unified_exec/shell_snapshot.rs:32-152): once a turn's tools and
+// permissions are fixed, speculate the local environment's capture so the first
+// exec_command does not pay for it. Remote and deferred environments, managed
+// networking, an untrusted project and UnlessTrusted approval stay on the lazy
+// capture path.
+func (r *RuntimeRouter) prewarmShellSnapshotV2(threadID string, threadCWD string, cfg *config.Config) {
+	if r == nil || cfg == nil || strings.TrimSpace(threadID) == "" {
+		return
+	}
+	// Rust requires the exec_command tool to be registered for this turn.
+	if !features.Enabled(cfg.FeatureSettings(), "unified_exec") {
+		return
+	}
+	if !localShellSnapshotV2Supported() || !cfg.AllowLoginShell() {
+		return
+	}
+	if strings.TrimSpace(threadCWD) == "" {
+		threadCWD = r.shellSnapshotThreadCWD(threadID)
+	}
+	if strings.TrimSpace(threadCWD) == "" {
+		return
+	}
+	if r.shellSnapshotV2PrewarmBlocked(threadID, threadCWD, cfg) {
+		return
+	}
+	shellType, shellPath, remote := r.sessionShellForThread(threadID)
+	if remote || strings.TrimSpace(shellPath) == "" || !shellSnapshotShellSupported(shellType) {
+		return
+	}
+	// Rust speculates once per session (`state.shell_snapshot_prewarm`); later
+	// turns reuse the executor's cached capture instead of starting another
+	// speculative launch.
+	r.shellSnapshotsMu.Lock()
+	if r.shellSnapshotV2Prewarmed == nil {
+		r.shellSnapshotV2Prewarmed = map[string]struct{}{}
+	}
+	if _, started := r.shellSnapshotV2Prewarmed[threadID]; started {
+		r.shellSnapshotsMu.Unlock()
+		return
+	}
+	r.shellSnapshotV2Prewarmed[threadID] = struct{}{}
+	r.shellSnapshotsMu.Unlock()
+	request := &tool.ShellRequest{
+		CWD:      threadCWD,
+		ThreadID: threadID,
+		Shell:    tool.ShellInvocation{Shell: &tool.Shell{Type: shellType, Path: shellPath}, UseLoginShell: true},
+		LocalShellSnapshot: &execserverclient.ShellSnapshotRequest{
+			ScopeID: threadID + ":" + execserverclient.LocalEnvironmentID,
+			Shell:   execserverclient.ShellInfo{Name: string(shellType), Path: shellPath},
+		},
+	}
+	if table := r.shellSnapshotEnvironmentPolicyTable(cfg); len(table) > 0 {
+		request.EnvPolicy = execpolicy.EnvPolicyFromShellEnvironmentPolicy(table, threadCWD)
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), shellSnapshotV2PrewarmTimeout)
+		defer cancel()
+		_ = shellSnapshotV2Prewarm(ctx, request)
+	}()
+}
+
+// shellSnapshotV2PrewarmBlocked reports the turn settings Rust refuses to
+// speculate under: an untrusted project, UnlessTrusted approval, or a managed
+// network (a capture shell must not run before the proxy is in place).
+func (r *RuntimeRouter) shellSnapshotV2PrewarmBlocked(threadID string, cwd string, cfg *config.Config) bool {
+	if cfg == nil {
+		return true
+	}
+	if policy, ok := parseTurnApprovalPolicy(cfg.Values["approval_policy"]); ok && policy == sandbox.ApprovalUnlessTrusted {
+		return true
+	}
+	if level, ok := cfg.ProjectTrustLevelForLookup(config.ProjectTrustLookupFromNativePath(cwd)); ok && strings.EqualFold(level, "untrusted") {
+		return true
+	}
+	r.managedNetworksMu.Lock()
+	managed := r.managedNetworks[threadID] != nil
+	r.managedNetworksMu.Unlock()
+	if managed {
+		return true
+	}
+	featuresTable, ok := cfg.Values["features"].(map[string]any)
+	if !ok {
+		return false
+	}
+	switch value := featuresTable["network_proxy"].(type) {
+	case bool:
+		return value
+	case map[string]any:
+		enabled, ok := value["enabled"].(bool)
+		return ok && enabled
+	}
+	return false
 }
 
 // shellSnapshotV2EnvironmentSupported reads
@@ -556,6 +664,7 @@ func (r *RuntimeRouter) closeThreadShellSnapshots(threadID string) {
 	r.shellSnapshotsMu.Lock()
 	builder := r.shellSnapshots[threadID]
 	delete(r.shellSnapshots, threadID)
+	delete(r.shellSnapshotV2Prewarmed, threadID)
 	r.shellSnapshotsMu.Unlock()
 	if builder != nil {
 		builder.Close()

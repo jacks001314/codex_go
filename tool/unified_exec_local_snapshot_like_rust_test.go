@@ -90,3 +90,50 @@ func TestUnifiedExecLocalLaunchFailsWhenSnapshotPreparationFails(t *testing.T) {
 		t.Fatalf("Exec() error = %v, want %v", err, boom)
 	}
 }
+
+// Rust #42137: the turn prewarm captures through the same launch shape a later
+// command uses — the shell's login invocation with an empty script, the
+// environment's directory, and the thread metadata.
+func TestPrewarmLocalShellSnapshotUsesLoginInvocationLikeRust(t *testing.T) {
+	previous := prewarmLocalShellSnapshot
+	var got *execserver.ExecParams
+	prewarmLocalShellSnapshot = func(_ context.Context, params *execserver.ExecParams, captureEnv map[string]string) error {
+		got = params
+		return nil
+	}
+	t.Cleanup(func() { prewarmLocalShellSnapshot = previous })
+
+	err := PrewarmLocalShellSnapshot(context.Background(), &ShellRequest{
+		CWD:      "/repo",
+		ThreadID: "thread-1",
+		Shell: ShellInvocation{
+			Shell:         &Shell{Type: ShellBash, Path: "/bin/bash"},
+			UseLoginShell: true,
+		},
+		LocalShellSnapshot: &execserver.ShellSnapshotRequest{
+			ScopeID: "thread-1:local",
+			Shell:   execserver.ShellInfo{Name: "bash", Path: "/bin/bash"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("PrewarmLocalShellSnapshot() error = %v", err)
+	}
+	if got == nil {
+		t.Fatal("the executor never received the prewarm")
+	}
+	if strings.Join(got.Argv, "\x00") != strings.Join([]string{"/bin/bash", "-lc", ""}, "\x00") {
+		t.Fatalf("prewarm argv = %#v, want the login invocation with an empty script", got.Argv)
+	}
+	if got.CWD != "/repo" {
+		t.Fatalf("prewarm cwd = %q", got.CWD)
+	}
+	if got.Env["CODEX_THREAD_ID"] != "thread-1" {
+		t.Fatalf("prewarm env = %#v, want the thread metadata", got.Env)
+	}
+	if !strings.HasPrefix(got.ProcessID, "shell-snapshot-warmup-") {
+		t.Fatalf("prewarm process id = %q", got.ProcessID)
+	}
+	if got.ShellSnapshot == nil || got.ShellSnapshot.ScopeID != "thread-1:local" {
+		t.Fatalf("prewarm snapshot = %#v", got.ShellSnapshot)
+	}
+}

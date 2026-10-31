@@ -485,9 +485,12 @@ type RuntimeRouter struct {
 	// keeps one ShellSnapshot per session and drops it with the session).
 	shellSnapshotsMu sync.Mutex
 	shellSnapshots   map[string]*tool.SnapshotBuilder
-	mcpEventStreams  *mcpEventStreamManager
-	skillShadowMu    sync.Mutex
-	skillShadowState map[string]*skillShadowThreadState
+	// shellSnapshotV2Prewarmed records threads whose v2 executor prewarm
+	// already started (Rust keeps one prewarm handle per session).
+	shellSnapshotV2Prewarmed map[string]struct{}
+	mcpEventStreams          *mcpEventStreamManager
+	skillShadowMu            sync.Mutex
+	skillShadowState         map[string]*skillShadowThreadState
 	// skillShadowWG tracks background shadow-ranking workers so shutdown can
 	// drain queued observations (Rust #49812).
 	skillShadowWG    sync.WaitGroup
