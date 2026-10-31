@@ -1878,8 +1878,52 @@ command accepted it, wrote files and exited 0.
   `TestValidateMCPServersValuesUsesServerRelativePaths` and
   `TestValidateLoadedConfigSemantics` in `config`.
 
+### 62. Nested config tables: profiles, model_providers, windows, history and shell policy
+
+Entry 61 replays the top-level `ConfigToml` shapes; the nested tables still let
+Go accept documents Rust rejects at bootstrap.
+
+- **`profiles.<name>`** is a `ConfigProfile`: field types plus the enums
+  `approval_policy`, `approvals_reviewer`, `sandbox_mode`,
+  `model_reasoning_summary`, `model_verbosity`, `personality`, `web_search`,
+  and `tui.session_picker_view` (`expected `comfortable` or `dense``), with
+  `features` as a boolean-only sub-table and `tools`/`analytics`/`windows` as
+  structs. `model_reasoning_effort` and `plan_mode_reasoning_effort` accept any
+  string in Rust, so they stay unvalidated, and unknown keys stay allowed.
+- **`model_providers.<id>`** is a `ModelProviderInfo`: string/bool/u64 fields,
+  `http_headers`/`query_params`/`env_http_headers` as string maps, and
+  `wire_api` as the single-variant `responses` enum that keeps serde's own
+  `wire_api = "chat"` removal message. After serde reads every entry, Rust's
+  `validate_model_providers` reports against the table itself:
+  `model_providers.<id>: provider name must not be empty`, and
+  `model_providers contains reserved built-in provider IDs: ...` for `openai`
+  (unless it only sets `model_catalog_url`), `ollama` and `lmstudio`.
+- **`windows`, `history`, `shell_environment_policy`** carry their own field
+  sets: `windows.sandbox` (`elevated`/`unelevated`/`mxc`),
+  `history.persistence` (`save-all`/`none`) with `max_bytes` as `usize` (a
+  negative literal reports `invalid value: integer `-1`, expected usize`), and
+  the shell policy's `inherit` enum, boolean flags and string-map `set`.
+- **Table-header positions.** The shell policy's `exclude`, `include_only` and
+  `filters` deserialize through a custom filter reader, so serde reports them at
+  the `[shell_environment_policy]` header (`<path>:<line>:1: <message>`)
+  instead of a dotted path;
+  `config.ConfigDocumentLocator.shellEnvironmentPolicyPosition` reproduces
+  that, including a header that does not sit on line 1.
+- Evidence: three focused corpora against the 0.166 binary are byte-identical:
+  33 profile documents (`p48prof3.py`), 21 provider documents (`p48mp3.py`) and
+  27 windows/history/shell documents (`p48w3.py`); the 437-document top-level
+  corpus stays at 3 diffs (`out/r48-diff1.txt`). Regressions:
+  `TestValidateNestedConfigTables` in `config`.
+
 ## Verification
 
+- Round 48 extends the load pass into the nested tables (entry 62). Three
+  focused corpora are byte-identical to 0.166: 33 `[profiles.*]` documents
+  (`p48prof3.py`), 21 `[model_providers.*]` documents (`p48mp3.py`) and 27
+  `windows`/`history`/`shell_environment_policy` documents (`p48w3.py`); the
+  437-document top-level corpus keeps its 3 known diffs (`out/r48-diff1.txt`).
+  `go test -count=1 -vet=off ./config ./cli ./mcp` passes in a clean worktree
+  and `./app` keeps only the two known baselines.
 - Round 47 adds serde's typed pass to the `mcp` commands (entry 61). A 437
   document corpus x `mcp list|get|add|remove|login|logout` is 434/437
   byte-identical (`out/r47-diff7.txt`); the three leftovers are the missing
@@ -2391,12 +2435,14 @@ command accepted it, wrote files and exited 0.
     subcommand paths print clap's `-h`/`--help`/`help <topic>` pages plus the
     `--help=<value>` diagnostic, and `codex execpolicy check -hx` now reaches
     clap's missing-required block like Rust.
-- The load pass covers the 104 top-level field types, enums, the `features`
-  sub-table and the `mcp_servers` entries (entry 61), but not the nested
-  schemas: `[profiles.x] model = 1` still loads in Go where Rust reports
-  `invalid type: integer `1`, expected a string` in `profiles.x.model`, and the
-  same gap applies to the other nested tables (`shell_environment_policy`,
-  `history`, `tui`, ...). The three path-valued fields
+- The load pass covers the 104 top-level field types, enums, `features`, the
+  `mcp_servers` entries (entry 61) and the `profiles`, `model_providers`,
+  `windows`, `history` and `shell_environment_policy` tables (entry 62), but
+  the top-level `[tui]` table and the other struct tables (`agents`, `apps`,
+  `auto_review`, `browser_use`, ...) still accept any value inside them: a
+  `tui.notifications = 5` document loads in Go where Rust reports `data did not
+  match any variant of untagged enum Notifications` in `tui`. The three
+  path-valued fields
   (`model_instructions_file`, `model_catalog_json`,
   `experimental_compact_prompt_file`) are not read during load either, so a
   missing file is accepted instead of failing with Rust's `failed to read ...

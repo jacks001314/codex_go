@@ -46,9 +46,16 @@ func ValidateConfigDocumentValues(values map[string]any, document *ConfigDocumen
 			continue
 		}
 		if err := validateConfigFieldValue(kind, values[field], field); err != nil {
-			if contextErr, ok := err.(*ConfigValueError); ok && kind.positional && document != nil {
-				if positioned := document.positionalConfigError(contextErr, field, kind.dualPositional); positioned != nil {
-					return positioned
+			if contextErr, ok := err.(*ConfigValueError); ok && document != nil {
+				if field == "shell_environment_policy" {
+					if positioned := document.shellEnvironmentPolicyPosition(contextErr); positioned != nil {
+						return positioned
+					}
+				}
+				if kind.positional {
+					if positioned := document.positionalConfigError(contextErr, field, kind.dualPositional); positioned != nil {
+						return positioned
+					}
 				}
 			}
 			return err
@@ -67,6 +74,75 @@ func ValidateConfigDocumentValues(values map[string]any, document *ConfigDocumen
 	}
 	if servers, ok := values["mcp_servers"]; ok {
 		return validateMCPServersTable(servers, "mcp_servers")
+	}
+	if providers, ok := values["model_providers"].(map[string]any); ok {
+		return validateModelProvidersSemantics(providers)
+	}
+	return nil
+}
+
+// configChatWireAPIRemovedMessage is the wire_api rejection Rust raises from
+// WireApi's deserializer.
+const configChatWireAPIRemovedMessage = "`wire_api = \"chat\"` is no longer supported.\n" +
+	"How to fix: set `wire_api = \"responses\"` in your provider config.\n" +
+	"More info: https://github.com/openai/codex/discussions/7782"
+
+// reservedConfigModelProviderIDs are the built-in providers a user may not
+// override. `amazon-bedrock`, `amazon-bedrock-runtime` and `gcp` are exempt.
+var reservedConfigModelProviderIDs = []string{"lmstudio", "ollama", "openai"}
+
+// validateModelProvidersSemantics replays Rust's validate_model_providers, which
+// runs after serde has read every entry and reports its failures against the
+// whole table.
+func validateModelProvidersSemantics(providers map[string]any) error {
+	var conflicts []string
+	for _, key := range sortedConfigKeys(providers) {
+		provider, ok := providers[key].(map[string]any)
+		if !ok {
+			continue
+		}
+		if key == "openai" {
+			onlyCatalogURL := true
+			for name := range provider {
+				if name != "model_catalog_url" {
+					onlyCatalogURL = false
+					break
+				}
+			}
+			if onlyCatalogURL {
+				continue
+			}
+		}
+		for _, reserved := range reservedConfigModelProviderIDs {
+			if key == reserved {
+				conflicts = append(conflicts, "`"+key+"`")
+				break
+			}
+		}
+	}
+	if len(conflicts) > 0 {
+		return &ConfigValueError{
+			message: "model_providers contains reserved built-in provider IDs: " + strings.Join(conflicts, ", ") +
+				". Built-in providers cannot be overridden. Rename your custom provider (for example, `openai-custom`).",
+			path: "model_providers",
+		}
+	}
+	for _, key := range sortedConfigKeys(providers) {
+		provider, ok := providers[key].(map[string]any)
+		if !ok {
+			continue
+		}
+		switch key {
+		case "openai", "amazon-bedrock", "amazon-bedrock-runtime", "gcp":
+			continue
+		}
+		name, _ := provider["name"].(string)
+		if strings.TrimSpace(name) == "" {
+			return &ConfigValueError{
+				message: "model_providers." + key + ": provider name must not be empty",
+				path:    "model_providers",
+			}
+		}
 	}
 	return nil
 }
@@ -218,12 +294,76 @@ func validateConfigFieldValue(kind configFieldKind, value any, path string) erro
 			return configInvalidType(value, "a map", path)
 		}
 	case configKindStruct:
-		if _, ok := value.(map[string]any); !ok {
+		table, ok := value.(map[string]any)
+		if !ok {
 			return configInvalidType(value, "struct "+kind.expected, path)
+		}
+		return validateConfigStructFields(kind, table, path)
+	case configKindStructMap:
+		table, ok := value.(map[string]any)
+		if !ok {
+			return configInvalidType(value, "a map", path)
+		}
+		for _, name := range sortedConfigKeys(table) {
+			entry, ok := table[name].(map[string]any)
+			if !ok {
+				return configInvalidType(table[name], "struct "+kind.expected, appendConfigPath(path, name))
+			}
+			if err := validateConfigStructFields(kind, entry, appendConfigPath(path, name)); err != nil {
+				return err
+			}
 		}
 	case configKindTaggedEnum:
 		if _, ok := value.(map[string]any); !ok {
 			return configInvalidType(value, "internally tagged enum "+kind.expected, path)
+		}
+	case configKindStringMap:
+		table, ok := value.(map[string]any)
+		if !ok {
+			return configInvalidType(value, "a map", path)
+		}
+		for _, name := range sortedConfigKeys(table) {
+			if _, ok := table[name].(string); !ok {
+				return configInvalidType(table[name], "a string", appendConfigPath(path, name))
+			}
+		}
+	case configKindEnumMap:
+		table, ok := value.(map[string]any)
+		if !ok {
+			return configInvalidType(value, "a map", path)
+		}
+		for _, name := range sortedConfigKeys(table) {
+			if err := validateConfigEnumValue(kind, table[name], appendConfigPath(path, name)); err != nil {
+				return err
+			}
+		}
+	case configKindStringSequence:
+		items, ok := value.([]any)
+		if !ok {
+			return configInvalidType(value, "a sequence", path)
+		}
+		for _, item := range items {
+			if _, ok := item.(string); !ok {
+				return configInvalidType(item, "a string", path)
+			}
+		}
+	case configKindUsize:
+		if !isConfigInteger(value) {
+			return configInvalidType(value, kind.expected, path)
+		}
+		if count, ok := value.(int64); ok && count < 0 {
+			return &ConfigValueError{message: fmt.Sprintf("invalid value: integer `%d`, expected %s", count, kind.expected), path: path}
+		}
+	case configKindWireAPI:
+		name, ok := value.(string)
+		if !ok {
+			return configInvalidType(value, "a string", path)
+		}
+		if name == "chat" {
+			return &ConfigValueError{message: configChatWireAPIRemovedMessage, path: path}
+		}
+		if name != "responses" {
+			return &ConfigValueError{message: "unknown variant `" + name + "`, expected `responses`", path: path}
 		}
 	case configKindEnum:
 		return validateConfigEnumValue(kind, value, path)
@@ -231,6 +371,36 @@ func validateConfigFieldValue(kind configFieldKind, value any, path string) erro
 		return validateConfigUntaggedEnumValue(value, path)
 	}
 	return nil
+}
+
+// validateConfigStructFields descends into a struct's own fields in the order
+// serde walks them. Unknown keys stay allowed, as they do in Rust.
+func validateConfigStructFields(kind configFieldKind, table map[string]any, path string) error {
+	if kind.boolValues {
+		for _, name := range sortedConfigKeys(table) {
+			if _, ok := table[name].(bool); !ok {
+				return configInvalidType(table[name], "a boolean", path)
+			}
+		}
+		return nil
+	}
+	for _, name := range sortedConfigKeys(table) {
+		field, ok := kind.fields[name]
+		if !ok {
+			continue
+		}
+		if err := validateConfigFieldValue(field, table[name], appendConfigPath(path, name)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func appendConfigPath(base string, name string) string {
+	if base == "" {
+		return name
+	}
+	return base + "." + name
 }
 
 // validateConfigUntaggedEnumValue mirrors serde's error for an untagged repr
@@ -360,6 +530,38 @@ func (d *ConfigDocumentLocator) positionalConfigError(base *ConfigValueError, fi
 	// anyhow aligns the continuation of a numbered cause under its text, so the
 	// path line of the inner serde error carries three extra spaces.
 	return &ConfigValueError{message: "0: " + location + "\n1: " + base.message + "\n   in `" + field + "`"}
+}
+
+// shellEnvironmentPolicyPosition renders the three filter fields the way their
+// custom deserializer does: the position of the `[shell_environment_policy]`
+// header, then the bare message.
+func (d *ConfigDocumentLocator) shellEnvironmentPolicyPosition(base *ConfigValueError) error {
+	for _, field := range []string{"exclude", "include_only", "filters"} {
+		prefix := "shell_environment_policy." + field
+		if base.path != prefix && !strings.HasPrefix(base.path, prefix+".") {
+			continue
+		}
+		line, column, ok := tomlTableHeaderPosition(d.Text, "shell_environment_policy")
+		if !ok {
+			return nil
+		}
+		return &ConfigValueError{message: fmt.Sprintf("%s:%d:%d: %s", d.Path, line, column, base.message)}
+	}
+	return nil
+}
+
+// tomlTableHeaderPosition reports where a `[table]` header starts, as a 1-based
+// line and the column of its opening bracket.
+func tomlTableHeaderPosition(text string, table string) (int, int, bool) {
+	offset := 0
+	for _, raw := range strings.SplitAfter(text, "\n") {
+		trimmed := strings.TrimLeft(raw, " \t")
+		if strings.HasPrefix(trimmed, "["+table+"]") || strings.HasPrefix(trimmed, "[["+table+"]]") {
+			return lineColumnAt(text, offset+len(raw)-len(trimmed))
+		}
+		offset += len(raw)
+	}
+	return 0, 0, false
 }
 
 // tomlFieldValuePosition reports where a top-level `field = value` puts its
