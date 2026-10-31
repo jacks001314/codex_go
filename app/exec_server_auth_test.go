@@ -299,6 +299,57 @@ func TestExecServerRegistryAuthConcurrentRefreshesShareOneRefreshLikeRust(t *tes
 	}
 }
 
+// TestExecServerRegistryAuthRaceWithInFlightRefreshJoinsTheGuardLikeRust
+// mirrors Rust's queued-caller coverage: a registration that resolves the
+// credential while another exchange is still in flight must wait for that
+// refresh instead of reporting a transient "outcome is unknown" failure.
+func TestExecServerRegistryAuthRaceWithInFlightRefreshJoinsTheGuardLikeRust(t *testing.T) {
+	home := t.TempDir()
+	saveExecServerChatGPTAuthForTest(t, home, map[string]any{
+		"access_token": "old-token", "account_id": "workspace-123", "refresh_token": "refresh-token",
+	})
+	var refreshCalls atomic.Int32
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	refreshServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		refreshCalls.Add(1)
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-release
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"access_token": "new-token", "refresh_token": "new-refresh-token",
+		})
+	}))
+	defer refreshServer.Close()
+	t.Setenv(auth.RefreshTokenURLEnvOverride, refreshServer.URL)
+
+	provider := execServerAuthForTest(t, home, refreshServer.Client())
+	rejected, err := provider.ResolveAuthHeaders(context.Background())
+	if err != nil {
+		t.Fatalf("ResolveAuthHeaders() error = %v", err)
+	}
+	first := make(chan bool, 1)
+	go func() { first <- provider.RefreshAfterUnauthorized(context.Background(), rejected) }()
+	<-started
+	go func() {
+		// Hold the exchange open until the racing caller resolved the unsettled
+		// generation and queued on the refresh guard.
+		time.Sleep(50 * time.Millisecond)
+		close(release)
+	}()
+	if !provider.RefreshAfterUnauthorized(context.Background(), rejected) {
+		t.Fatal("RefreshAfterUnauthorized() racing an in-flight exchange = false, want the shared refresh")
+	}
+	if !<-first {
+		t.Fatal("in-flight RefreshAfterUnauthorized() = false, want true")
+	}
+	if got := refreshCalls.Load(); got != 1 {
+		t.Fatalf("refresh calls = %d, want 1 shared refresh", got)
+	}
+}
+
 // TestRemoteExecServerRefreshesChatGPTAuthAndReplaysLikeRust is the CLI-level
 // equivalent of Rust's auth_refresh_tests: a running executor whose ChatGPT
 // credential is rejected refreshes it, reloads the store, and replays the

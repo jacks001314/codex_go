@@ -33,7 +33,6 @@ type execServerRegistryAuth struct {
 	// rotation of the same owner is followed; a different owner is rejected
 	// (Rust #58251 ReloadingChatgptAuthProvider).
 	identity *execServerCredentialIdentity
-
 }
 
 func newExecServerRegistryAuth(codexHome string, storeOptions *auth.StoreOptions, httpClient *http.Client, expected *auth.AuthDotJSON) *execServerRegistryAuth {
@@ -64,6 +63,16 @@ func (a *execServerRegistryAuth) ResolveAuthHeaders(ctx context.Context) (http.H
 // unchanged.
 func (a *execServerRegistryAuth) RefreshAfterUnauthorized(ctx context.Context, rejected http.Header) bool {
 	current, headers, err := a.resolveAuth(ctx)
+	if err != nil && errors.Is(err, execserver.ErrRegistryCredentialsTransient) {
+		// Rust's unauthorized recovery joins the refresh guard before it checks
+		// the credential generation (AuthManager::refresh_token_if_unchanged), so
+		// a caller that raced an in-flight exchange reads the settled credential
+		// instead of failing with a transient "outcome is unknown" error. Waiting
+		// on the same guard keeps concurrent registrations sharing one refresh.
+		a.refreshMu.Lock()
+		a.refreshMu.Unlock()
+		current, headers, err = a.resolveAuth(ctx)
+	}
 	if err != nil || current == nil || len(headers) == 0 {
 		return false
 	}

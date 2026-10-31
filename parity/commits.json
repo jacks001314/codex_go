@@ -39897,7 +39897,8 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30_round1015.md item 2: pre-send credential deadlines classify as ErrRegistryCredentialsTransient and app/exec_server_auth.go re-reads storage after a refresh error (a27c78f9)"
+    "update/plan_2026_10_30_round1015.md item 2: pre-send credential deadlines classify as ErrRegistryCredentialsTransient and app/exec_server_auth.go re-reads storage after a refresh error (a27c78f9)",
+    "Round 1177: RefreshAfterUnauthorized now waits once on the refresh guard when resolveAuth reports a transient credential error, so a registration that races an in-flight exchange reuses the settled credential instead of failing with 'executor refresh outcome is unknown'. That matches AuthManager::refresh_token_if_unchanged, where queued callers join the guard before the checked_headers generation check. TestExecServerRegistryAuthRaceWithInFlightRefreshJoinsTheGuardLikeRust holds the exchange open to pin the race (fails without the fix); TestExecServerRegistryAuthConcurrentRefreshesShareOneRefreshLikeRust no longer flakes when the whole ./app package runs."
    ]
   },
   {
