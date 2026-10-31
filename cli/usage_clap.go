@@ -133,16 +133,104 @@ func valueRequiredError(flag string) error {
 	return &UsageError{Message: message}
 }
 
+// pendingValueRequiredError is clap's "a value is required" diagnostic together
+// with the token the parser refused to bind. When that token turns out to be an
+// undeclared flag, clap reports the unknown argument instead.
+func pendingValueRequiredError(flag string, args []string, i int) error {
+	err := valueRequiredError(flag)
+	usageErr, ok := err.(*UsageError)
+	if !ok {
+		return err
+	}
+	if i+1 < len(args) {
+		usageErr.PendingFlag = args[i]
+		usageErr.PendingNext = args[i+1]
+	}
+	return usageErr
+}
+
 // flagNameOnly is clap's rendering of an unexpected flag: the `=value` part of a
 // long option is dropped.
 func flagNameOnly(arg string) string {
-	if !strings.HasPrefix(arg, "--") {
+	if !strings.HasPrefix(arg, "-") {
 		return arg
 	}
-	if index := strings.IndexByte(arg, '='); index >= 0 {
-		return arg[:index]
+	if strings.HasPrefix(arg, "--") {
+		if index := strings.IndexByte(arg, '='); index >= 0 {
+			return arg[:index]
+		}
+		return arg
+	}
+	// clap names an unknown short flag by its first character only, so `-x1`
+	// reports `-x`.
+	if len(arg) > 2 {
+		return arg[:2]
 	}
 	return arg
+}
+
+// clapLooksLikeShortFlag reports whether the token is a short-flag token, which
+// clap diagnoses against the command's static usage page.
+func clapLooksLikeShortFlag(arg string) bool {
+	return len(arg) > 1 && arg[0] == '-' && arg[1] != '-'
+}
+
+// clapCommandDeclaresLongFlag reports whether the command declares the long flag
+// spelled in arg (inline `=value` is ignored, hidden aliases count).
+func clapCommandDeclaresLongFlag(command, arg string) bool {
+	if !strings.HasPrefix(arg, "--") {
+		return false
+	}
+	name := strings.TrimPrefix(flagNameOnly(arg), "--")
+	flags, ok := clapCommandLongFlags[command]
+	if !ok {
+		return false
+	}
+	for _, declared := range flags {
+		if declared == name {
+			return true
+		}
+		if primary, ok := clapLongFlagAliases[name]; ok && primary == declared {
+			return true
+		}
+		if primary, ok := clapLongFlagAliases[declared]; ok && primary == name {
+			return true
+		}
+	}
+	return false
+}
+
+// clapCommandDeclaresShortFlag reports whether the command declares the short
+// flag spelled in arg.
+func clapCommandDeclaresShortFlag(command, arg string) bool {
+	name := clapShortFlagName(arg)
+	flags, ok := clapCommandShortFlags[command]
+	if !ok {
+		flags = clapDefaultShortFlags
+	}
+	for _, declared := range flags {
+		if declared == name {
+			return true
+		}
+	}
+	return false
+}
+
+// clapShortFlagName is the spelling clap prints for a short-flag token.
+func clapShortFlagName(arg string) string {
+	return flagNameOnly(arg)
+}
+
+// clapUnexpectedShortFlagError renders clap's diagnostic for an unknown short
+// flag: the static usage page (clap resolves short flags before it records the
+// accepted options) and the `--` workaround tip when a positional exists.
+func clapUnexpectedShortFlagError(command, arg string) error {
+	name := clapShortFlagName(arg)
+	message := "unexpected argument '" + name + "' found"
+	if clapCommandHasPositionals(command) {
+		message += "\n\n  tip: to pass '" + name + "' as a value, use '-- " + name + "'"
+	}
+	return &UsageError{Message: message, Usage: clapCommandUsageText(command)}
 }
 
 // unexpectedRootArgumentError mirrors clap's root diagnostic, including the
@@ -279,6 +367,9 @@ func unexpectedSubcommandArgumentError(command, arg string) error {
 	if !ok {
 		return fmt.Errorf("unknown %s option %s", command, arg)
 	}
+	if clapLooksLikeShortFlag(arg) {
+		return clapUnexpectedShortFlagError(command, arg)
+	}
 	name := flagNameOnly(arg)
 	message := "unexpected argument '" + name + "' found"
 	suggestion, hasSuggestion := clapLongFlagSuggestionFor(command, arg)
@@ -325,6 +416,12 @@ type UsageError struct {
 	// Raw marks diagnostics raised through clap::Error::raw, which print the
 	// message alone: no usage block and no trailing `--help` hint.
 	Raw bool
+	// PendingFlag and PendingNext describe "a value is required for ..." raised
+	// because the following token looked like an option. clap resolves that
+	// token first, so an undeclared flag wins over the pending value; the
+	// subcommand decorator re-checks it against the leaf command's tables.
+	PendingFlag string
+	PendingNext string
 }
 
 func (e *UsageError) Error() string { return e.Message }
@@ -475,9 +572,17 @@ func requiredArgumentsMessage(missing ...string) string {
 // [OPTIONS] placeholder from the usage block and echoes the options it saw, in
 // the order they appeared. Errors clap raises before it parsed any option (an
 // unknown token first in argv) keep the plain table usage.
-func decorateSubcommandClapUsage(err error, args []string) error {
+func decorateSubcommandClapUsage(command Command, err error, args []string) error {
 	usageErr, ok := err.(*UsageError)
-	if !ok || usageErr.Usage == "" || !usageErr.SmartUsage {
+	if !ok {
+		return err
+	}
+	if usageErr.PendingNext != "" {
+		if replacement, ok := clapPendingValueError(string(command), args, usageErr.PendingFlag, usageErr.PendingNext); ok {
+			return replacement
+		}
+	}
+	if usageErr.Usage == "" || !usageErr.SmartUsage {
 		return err
 	}
 	stopAt := ""
@@ -494,7 +599,7 @@ func decorateSubcommandClapUsage(err error, args []string) error {
 	if usageErr.Usage == subcommandUsageTexts["mcp add"].usage {
 		return err
 	}
-	used := clapUsageOptionTokens(args, stopAt)
+	used := clapUsageOptionTokens(string(command), args, stopAt)
 	if usageErr.Suggested != "" {
 		used = append(used, usageErr.Suggested)
 	}
@@ -516,6 +621,104 @@ func decorateSubcommandClapUsage(err error, args []string) error {
 	}
 	usageErr.Usage = usageWithUsedOptions(usageErr.Usage, used)
 	return err
+}
+
+// clapPendingValueError re-reads a pending-value diagnostic the way clap does:
+// it resolves the token that follows the value-less option first, so `-c -x1`
+// reports `unexpected argument '-x' found` and `-c --bogus` reports the long
+// flag, while a declared flag (`-c --json`) keeps the missing-value message.
+func clapPendingValueError(command string, args []string, pendingFlag, next string) (error, bool) {
+	at := -1
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == pendingFlag && args[i+1] == next {
+			at = i
+			break
+		}
+	}
+	if at < 0 {
+		return nil, false
+	}
+	leaf, prefix := clapLeafCommandFor(command, args)
+	if leaf == "" && command != "" {
+		return nil, false
+	}
+	if prefix > at {
+		return nil, false
+	}
+	if clapLooksLikeShortFlag(next) {
+		if clapCommandDeclaresShortFlag(leaf, next) {
+			return nil, false
+		}
+		return clapUnexpectedShortFlagError(leaf, next), true
+	}
+	if !strings.HasPrefix(next, "--") {
+		return nil, false
+	}
+	if clapCommandDeclaresLongFlag(leaf, next) {
+		return nil, false
+	}
+	return clapUnexpectedLongFlagError(leaf, next, args[prefix:at]), true
+}
+
+// decorateRootPendingValueError applies the same lookahead to the root command,
+// which does not go through the subcommand decorator.
+func decorateRootPendingValueError(err error, args []string) error {
+	usageErr, ok := err.(*UsageError)
+	if !ok || usageErr.PendingNext == "" {
+		return err
+	}
+	if replacement, ok := clapPendingValueError("", args, usageErr.PendingFlag, usageErr.PendingNext); ok {
+		return replacement
+	}
+	return err
+}
+
+// clapEffectiveCommand resolves the command path the flag tables are keyed by
+// from the argv tokens that name the nested subcommand, so `app-server daemon
+// update -y` resolves past the bare `app-server` entry. It keeps the given
+// command when no nested path matches.
+func clapEffectiveCommand(command string, args []string) string {
+	if leaf, _ := clapLeafCommandFor(command, args); leaf != "" {
+		return leaf
+	}
+	return command
+}
+
+// clapLeafCommandFor resolves the command path the flag tables are keyed by and
+// the number of argv tokens that name it. The longest matching key wins, so
+// `plugin marketplace add` resolves past the bare `plugin` entry.
+func clapLeafCommandFor(command string, args []string) (string, int) {
+	best, bestLen := command, 0
+	for key := range clapCommandLongFlags {
+		if command == "" {
+			if key == "" {
+				continue
+			}
+			continue
+		}
+		if !strings.HasPrefix(key, command+" ") {
+			continue
+		}
+		tokens := strings.Split(key, " ")
+		named := len(tokens) - 1
+		if named > len(args) || named <= bestLen {
+			continue
+		}
+		matches := true
+		for i := 0; i < named; i++ {
+			if args[i] != tokens[i+1] {
+				matches = false
+				break
+			}
+		}
+		if matches {
+			best, bestLen = key, named
+		}
+	}
+	if _, ok := clapCommandLongFlags[best]; !ok {
+		return "", 0
+	}
+	return best, bestLen
 }
 
 // queueVisibleUsageOptions keeps the options clap echoes for `codex queue`.
@@ -551,7 +754,8 @@ var queueEchoableUsageOptions = map[string]bool{
 // clapUsageOptionTokens renders the options clap accepted, stopping in front of
 // the token that produced the diagnostic. Option values are folded into the
 // flag token so `--enable x` renders as `--enable <FEATURE>`.
-func clapUsageOptionTokens(args []string, stopAt string) []string {
+func clapUsageOptionTokens(command string, args []string, stopAt string) []string {
+	command = clapEffectiveCommand(command, args)
 	used := make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -564,7 +768,7 @@ func clapUsageOptionTokens(args []string, stopAt string) []string {
 		if stopAt != "" && flagNameOnly(arg) == stopAt {
 			break
 		}
-		token, consumedValue := clapUsageOptionToken(arg)
+		token, consumedValue := clapUsageOptionToken(command, arg)
 		used = append(used, token)
 		if consumedValue {
 			i++
@@ -575,7 +779,7 @@ func clapUsageOptionTokens(args []string, stopAt string) []string {
 
 // clapUsageOptionToken renders one option the way clap's usage block does and
 // reports whether the following argv token was its value.
-func clapUsageOptionToken(arg string) (string, bool) {
+func clapUsageOptionToken(command, arg string) (string, bool) {
 	if strings.Contains(arg, " ") {
 		// Already rendered by clapLongFlagUsageToken: placeholders may carry an
 		// "=" (`--config <key=value>`), which is not an inline value here.
@@ -584,6 +788,14 @@ func clapUsageOptionToken(arg string) (string, bool) {
 	name, hasInlineValue := arg, false
 	if trimmed, _, ok := strings.Cut(arg, "="); ok {
 		name, hasInlineValue = trimmed, true
+	}
+	if spellings, ok := clapCommandShortFlagLongs[command]; ok {
+		if spec, known := spellings[name]; known {
+			if spec.placeholder == "" {
+				return spec.long, false
+			}
+			return spec.long + " " + spec.placeholder, !hasInlineValue
+		}
 	}
 	if spec, known := valueOptionSpecs[name]; known {
 		return spec.long + " " + spec.placeholder, !hasInlineValue
@@ -1005,6 +1217,81 @@ var clapLongFlagPlaceholderOverrides = map[string]map[string]string{
 	"migrate-rollouts":    {"thread": "<THREAD_ID>"},
 }
 
+// clapCommandShortFlags lists the short aliases each command declares,
+// taken from `codex <command> --help`. Commands that only carry the global
+// -c/--config and -h/--help are omitted; clapCommandDeclaresShortFlag falls
+// back to clapDefaultShortFlags for them.
+var clapCommandShortFlags = map[string][]string{
+	"":                                {"-c", "-i", "-m", "-p", "-s", "-C", "-a", "-h", "-V"},
+	"agents":                          {"-c", "-C", "-h"},
+	"app-server daemon update":        {"-c", "-y", "-h"},
+	"app-server generate-json-schema": {"-c", "-o", "-h"},
+	"app-server generate-ts":          {"-c", "-o", "-p", "-h"},
+	"archive":                         {"-i", "-m", "-p", "-s", "-C", "-c", "-h"},
+	"cloud":                           {"-c", "-h", "-V"},
+	"debug prompt-input":              {"-c", "-i", "-h"},
+	"delete":                          {"-i", "-m", "-p", "-s", "-C", "-c", "-h"},
+	"exec":                            {"-c", "-i", "-m", "-p", "-s", "-C", "-o", "-h", "-V"},
+	"exec fork":                       {"-c", "-i", "-m", "-o", "-h"},
+	"exec resume":                     {"-c", "-i", "-m", "-o", "-h"},
+	"exec review":                     {"-c", "-m", "-o", "-h"},
+	"fork":                            {"-c", "-i", "-m", "-p", "-s", "-C", "-a", "-h", "-V"},
+	"plugin add":                      {"-c", "-m", "-h"},
+	"plugin list":                     {"-c", "-m", "-h"},
+	"plugin remove":                   {"-c", "-m", "-h"},
+	"queue":                           {"-p", "-c", "-h", "-C"},
+	"resume":                          {"-c", "-i", "-m", "-p", "-s", "-C", "-a", "-h", "-V"},
+	"sandbox":                         {"-c", "-P", "-p", "-C", "-h"},
+	"unarchive":                       {"-i", "-m", "-p", "-s", "-C", "-c", "-h"},
+}
+
+// clapDefaultShortFlags are the aliases every leaf inherits from the global
+// --config and --help arguments.
+var clapDefaultShortFlags = []string{"-c", "-h"}
+
+// clapCommandShortFlagLongs maps the short aliases whose long spelling differs
+// from the shared table, taken from `codex <command> --help`. clap echoes the
+// long spelling in its smart usage block, so `plugin add -m x` renders
+// `--marketplace <MARKETPLACE>` while `exec -m x` keeps `--model <MODEL>`; an
+// empty placeholder marks a boolean alias such as `-y/--yes`.
+var clapCommandShortFlagLongs = map[string]map[string]clapValueOption{
+	"app-server daemon update": {
+		"-y": {"--yes", "", nil},
+	},
+	"app-server generate-json-schema": {
+		"-o": {"--out", "<DIR>", nil},
+	},
+	"app-server generate-ts": {
+		"-o": {"--out", "<DIR>", nil},
+		"-p": {"--prettier", "<PRETTIER_BIN>", nil},
+	},
+	"exec": {
+		"-o": {"--output-last-message", "<FILE>", nil},
+	},
+	"exec fork": {
+		"-o": {"--output-last-message", "<FILE>", nil},
+	},
+	"exec resume": {
+		"-o": {"--output-last-message", "<FILE>", nil},
+	},
+	"exec review": {
+		"-o": {"--output-last-message", "<FILE>", nil},
+	},
+	"plugin add": {
+		"-m": {"--marketplace", "<MARKETPLACE>", nil},
+	},
+	"plugin list": {
+		"-m": {"--marketplace", "<MARKETPLACE>", nil},
+	},
+	"plugin remove": {
+		"-m": {"--marketplace", "<MARKETPLACE>", nil},
+	},
+	"sandbox": {
+		"-P": {"--permission-profile", "<NAME>", nil},
+		"-p": {"--profile", "<CONFIG_PROFILE>", nil},
+	},
+}
+
 // clapLongFlagSuggestion is one did-you-mean hit: matched is the spelling clap
 // names in the tip, primary the long name it echoes in the usage block.
 type clapLongFlagSuggestion struct {
@@ -1085,6 +1372,9 @@ func clapLongFlagPlaceholder(command, name string) string {
 // `--` workaround tip, or the did-you-mean tip plus the suggested flag folded
 // into the smart usage block when clap scores one above its cutoff.
 func clapUnexpectedLongFlagError(command, arg string, consumed []string) error {
+	if clapLooksLikeShortFlag(arg) {
+		return clapUnexpectedShortFlagError(command, arg)
+	}
 	name := flagNameOnly(arg)
 	message := "unexpected argument '" + name + "' found"
 	trailingTip := "\n\n  tip: to pass '" + name + "' as a value, use '-- " + name + "'"
@@ -1155,6 +1445,9 @@ func clapCommandUsageText(command string) string {
 // on a session subcommand: options clap already consumed are echoed in clap's
 // smart usage block, and the positional slots reflect what the parser bound.
 func sessionUnexpectedArgumentError(command string, consumed []string, arg string) error {
+	if clapLooksLikeShortFlag(arg) {
+		return clapUnexpectedShortFlagError(command, arg)
+	}
 	name := flagNameOnly(arg)
 	if suggestion, ok := clapSuggestLongFlag(command, name); ok {
 		// clap scores the unknown flag against the declared ones and folds the
@@ -1290,6 +1583,7 @@ func clapSlotSmartUsage(command string, consumed []string) string {
 // 1.., so every following non-flag token is one of its values, not a positional;
 // `codex exec resume`/`fork` take a single value instead.
 func clapUsageState(command string, consumed []string) ([]string, int) {
+	command = clapEffectiveCommand(command, consumed)
 	used := make([]string, 0, len(consumed))
 	seen := make(map[string]bool, len(consumed))
 	bound := 0
@@ -1303,7 +1597,7 @@ func clapUsageState(command string, consumed []string) ([]string, int) {
 			bound++
 			continue
 		}
-		token, consumesValue := clapUsageOptionToken(arg)
+		token, consumesValue := clapUsageOptionToken(command, arg)
 		if clapImageIsSingleValue(command) {
 			token = strings.Replace(token, "--image <FILE>...", "--image <FILE>", 1)
 		}

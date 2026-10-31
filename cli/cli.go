@@ -203,6 +203,9 @@ type LoginOptions struct {
 type FeatureOptions struct {
 	Action  string
 	Feature string
+	// ConfigOverrides collects clap's global `-c`/`--config`; the feature
+	// subcommands accept the flag but never read the values.
+	ConfigOverrides []string
 }
 
 type MCPOptions struct {
@@ -550,10 +553,16 @@ type AppOptions struct {
 
 type UpdateOptions struct {
 	JSON bool
+	// ConfigOverrides collects clap's global `-c`/`--config`; `codex update`
+	// accepts the flag but never reads the values.
+	ConfigOverrides []string
 }
 
 type CompletionOptions struct {
 	Shell string
+	// ConfigOverrides collects clap's global `-c`/`--config`; `codex
+	// completion` accepts the flag but never reads the values.
+	ConfigOverrides []string
 }
 
 type DoctorOptions struct {
@@ -570,6 +579,8 @@ type DoctorOptions struct {
 	// (Rust #46543): doctor exits with the probe's status before loading
 	// configuration.
 	ProbeFilesystemPath string
+	// ConfigOverrides collects clap's global `-c`/`--config`.
+	ConfigOverrides []string
 }
 
 // MigrateNFSDBOptions mirrors Rust cli/src/migrate_nfs_db.rs
@@ -658,6 +669,9 @@ type DebugOptions struct {
 	TraceOutput      string
 	AppServerMessage string
 	Args             []string
+	// ConfigOverrides collects clap's global `-c`/`--config`; Rust's debug
+	// subcommands accept it but never read the values.
+	ConfigOverrides []string
 }
 
 type ReviewOptions struct {
@@ -732,7 +746,7 @@ func Parse(args []string) (*Parsed, error) {
 		return p, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, decorateRootPendingValueError(err, args)
 	}
 	if len(rest) == 0 {
 		return p, p.Validate()
@@ -744,7 +758,7 @@ func Parse(args []string) (*Parsed, error) {
 		// only then runs the post-parse gates; Parsed.Validate applies the
 		// --strict-config and --worktree rejections in that order.
 		if _, err := parseSubcommand(p, rest[1:]); err != nil {
-			return nil, decorateSubcommandClapUsage(err, rest[1:])
+			return nil, decorateSubcommandClapUsage(p.Command, err, rest[1:])
 		}
 		if err := p.validateExecAutoReview(); err != nil {
 			return nil, err
@@ -1853,14 +1867,42 @@ func parseFeatures(args []string, features *FeatureOptions) error {
 	features.Action = args[0]
 	switch features.Action {
 	case "list":
-		if len(args) != 1 {
-			return unexpectedSubcommandArgumentError("features list", args[1])
+		for i := 1; i < len(args); i++ {
+			arg := args[i]
+			switch {
+			case arg == "-c" || arg == "--config":
+				value, next, err := requireValue(args, i, arg)
+				if err != nil {
+					return err
+				}
+				features.ConfigOverrides = append(features.ConfigOverrides, value)
+				i = next
+			case strings.HasPrefix(arg, "--config="):
+				features.ConfigOverrides = append(features.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
+			case strings.HasPrefix(arg, "-c"):
+				features.ConfigOverrides = append(features.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
+			default:
+				return unexpectedSubcommandArgumentError("features list", arg)
+			}
 		}
 	case "enable", "disable":
 		command := "features " + features.Action
 		bound := false
 		for i := 1; i < len(args); i++ {
 			arg := args[i]
+			if arg == "-c" || arg == "--config" {
+				value, next, err := requireValue(args, i, arg)
+				if err != nil {
+					return err
+				}
+				features.ConfigOverrides = append(features.ConfigOverrides, value)
+				i = next
+				continue
+			}
+			if strings.HasPrefix(arg, "--config=") {
+				features.ConfigOverrides = append(features.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
+				continue
+			}
 			// clap rejects an unknown flag before it counts the positional, so
 			// the flag diagnostic wins over the "too many values" one.
 			if arg != "-" && strings.HasPrefix(arg, "-") {
@@ -1964,27 +2006,32 @@ func parseMCP(args []string, mcp *MCPOptions) error {
 			}
 		}
 	case "get":
+		// clap stops option parsing at `--`, so every later token is a
+		// positional: `mcp get -- --json` names the server `--json`.
+		afterSeparator := false
 		for i := 1; i < len(args); i++ {
 			arg := args[i]
 			switch {
-			case arg == "--json":
+			case !afterSeparator && arg == "--":
+				afterSeparator = true
+			case !afterSeparator && arg == "--json":
 				mcp.JSON = true
-			case arg == "-c" || arg == "--config":
+			case !afterSeparator && (arg == "-c" || arg == "--config"):
 				value, next, err := requireValue(args, i, arg)
 				if err != nil {
 					return err
 				}
 				mcp.ConfigOverrides = append(mcp.ConfigOverrides, value)
 				i = next
-			case strings.HasPrefix(arg, "--config="):
+			case !afterSeparator && strings.HasPrefix(arg, "--config="):
 				mcp.ConfigOverrides = append(mcp.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
-			case strings.HasPrefix(arg, "-c"):
+			case !afterSeparator && strings.HasPrefix(arg, "-c"):
 				mcp.ConfigOverrides = append(mcp.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
-			case strings.HasPrefix(arg, "-"):
+			case !afterSeparator && strings.HasPrefix(arg, "-"):
 				return unexpectedSubcommandArgumentError("mcp get", arg)
 			default:
 				if mcp.Name != "" {
-					return errors.New("mcp get accepts exactly one NAME")
+					return unexpectedPositionalError(arg, subcommandUsageTexts["mcp get"].usage)
 				}
 				mcp.Name = arg
 			}
@@ -4073,29 +4120,53 @@ func parseApp(args []string, app *AppOptions) error {
 }
 
 func parseUpdate(args []string, update *UpdateOptions) error {
-	_ = update
-	if len(args) == 0 {
-		return nil
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "-c" || arg == "--config":
+			value, next, err := requireValue(args, i, arg)
+			if err != nil {
+				return err
+			}
+			update.ConfigOverrides = append(update.ConfigOverrides, value)
+			i = next
+		case strings.HasPrefix(arg, "--config="):
+			update.ConfigOverrides = append(update.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
+		case strings.HasPrefix(arg, "-c"):
+			update.ConfigOverrides = append(update.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
+		default:
+			return unexpectedSubcommandArgumentError("update", arg)
+		}
 	}
-	arg := args[0]
-	if strings.HasPrefix(arg, "-") {
-		return unexpectedSubcommandArgumentError("update", arg)
-	}
-	return unexpectedSubcommandArgumentError("update", arg)
+	return nil
 }
 
 func parseCompletion(args []string, completion *CompletionOptions) error {
 	// Shell defaults to bash, so track binding separately from the value.
 	bound := false
-	for _, arg := range args {
-		if strings.HasPrefix(arg, "-") && arg != "-" {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "-c" || arg == "--config":
+			value, next, err := requireValue(args, i, arg)
+			if err != nil {
+				return err
+			}
+			completion.ConfigOverrides = append(completion.ConfigOverrides, value)
+			i = next
+		case strings.HasPrefix(arg, "--config="):
+			completion.ConfigOverrides = append(completion.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
+		case strings.HasPrefix(arg, "-c"):
+			completion.ConfigOverrides = append(completion.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
+		case strings.HasPrefix(arg, "-") && arg != "-":
 			return unexpectedSubcommandArgumentError("completion", arg)
+		default:
+			if bound {
+				return unexpectedPositionalError(arg, subcommandUsageTexts["completion"].usage)
+			}
+			completion.Shell = arg
+			bound = true
 		}
-		if bound {
-			return unexpectedPositionalError(arg, subcommandUsageTexts["completion"].usage)
-		}
-		completion.Shell = arg
-		bound = true
 	}
 	return nil
 }
@@ -4127,6 +4198,17 @@ func parseDoctor(args []string, doctor *DoctorOptions) error {
 			i = next
 		case strings.HasPrefix(arg, "--probe-filesystem-path="):
 			doctor.ProbeFilesystemPath = strings.TrimPrefix(arg, "--probe-filesystem-path=")
+		case arg == "-c" || arg == "--config":
+			value, next, err := requireValue(args, i, arg)
+			if err != nil {
+				return err
+			}
+			doctor.ConfigOverrides = append(doctor.ConfigOverrides, value)
+			i = next
+		case strings.HasPrefix(arg, "--config="):
+			doctor.ConfigOverrides = append(doctor.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
+		case strings.HasPrefix(arg, "-c"):
+			doctor.ConfigOverrides = append(doctor.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
 		case strings.HasPrefix(arg, "-"):
 			return clapUnexpectedLongFlagError("doctor", arg, args[:i])
 		default:
@@ -4476,14 +4558,23 @@ func parseDebug(args []string, debug *DebugOptions) error {
 	debug.Subcommand = args[0]
 	switch debug.Subcommand {
 	case "models":
-		for _, arg := range args[1:] {
-			switch arg {
-			case "--bundled":
+		for i := 1; i < len(args); i++ {
+			arg := args[i]
+			switch {
+			case arg == "--bundled":
 				debug.BundledModels = true
-			default:
-				if strings.HasPrefix(arg, "-") {
-					return unexpectedSubcommandArgumentError("debug models", arg)
+			case arg == "-c" || arg == "--config":
+				value, next, err := requireValue(args, i, arg)
+				if err != nil {
+					return err
 				}
+				debug.ConfigOverrides = append(debug.ConfigOverrides, value)
+				i = next
+			case strings.HasPrefix(arg, "--config="):
+				debug.ConfigOverrides = append(debug.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
+			case strings.HasPrefix(arg, "-c"):
+				debug.ConfigOverrides = append(debug.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
+			default:
 				return unexpectedSubcommandArgumentError("debug models", arg)
 			}
 		}
@@ -4498,6 +4589,19 @@ func parseDebug(args []string, debug *DebugOptions) error {
 			bound := false
 			for i := 2; i < len(args); i++ {
 				arg := args[i]
+				if arg == "-c" || arg == "--config" {
+					value, next, err := requireValue(args, i, arg)
+					if err != nil {
+						return err
+					}
+					debug.ConfigOverrides = append(debug.ConfigOverrides, value)
+					i = next
+					continue
+				}
+				if strings.HasPrefix(arg, "--config=") {
+					debug.ConfigOverrides = append(debug.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
+					continue
+				}
 				if strings.HasPrefix(arg, "-") {
 					return clapUnexpectedLongFlagError(command, arg, args[2:i])
 				}
@@ -4517,6 +4621,23 @@ func parseDebug(args []string, debug *DebugOptions) error {
 		for i := 1; i < len(args); i++ {
 			arg := args[i]
 			switch {
+			case arg == "--":
+				// clap stops option parsing here, so the rest is the prompt.
+				if i+1 < len(args) {
+					debug.Prompt = strings.Join(args[i+1:], " ")
+				}
+				return nil
+			case arg == "-c" || arg == "--config":
+				value, next, err := requireValue(args, i, arg)
+				if err != nil {
+					return err
+				}
+				debug.ConfigOverrides = append(debug.ConfigOverrides, value)
+				i = next
+			case strings.HasPrefix(arg, "--config="):
+				debug.ConfigOverrides = append(debug.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
+			case strings.HasPrefix(arg, "-c"):
+				debug.ConfigOverrides = append(debug.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
 			case arg == "--image" || arg == "-i":
 				value, next, err := requireValue(args, i, arg)
 				if err != nil {
@@ -4548,6 +4669,17 @@ func parseDebug(args []string, debug *DebugOptions) error {
 				debug.TraceOutput = strings.TrimPrefix(arg, "--output=")
 			case strings.HasPrefix(arg, "-o") && arg != "-o":
 				debug.TraceOutput = strings.TrimPrefix(arg, "-o")
+			case arg == "-c" || arg == "--config":
+				value, next, err := requireValue(args, i, arg)
+				if err != nil {
+					return err
+				}
+				debug.ConfigOverrides = append(debug.ConfigOverrides, value)
+				i = next
+			case strings.HasPrefix(arg, "--config="):
+				debug.ConfigOverrides = append(debug.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
+			case strings.HasPrefix(arg, "-c"):
+				debug.ConfigOverrides = append(debug.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
 			case strings.HasPrefix(arg, "-"):
 				return unexpectedSubcommandArgumentError("debug trace-reduce", arg)
 			default:
@@ -4561,8 +4693,23 @@ func parseDebug(args []string, debug *DebugOptions) error {
 			return missingRequiredArgumentsError("debug trace-reduce", "<TRACE_BUNDLE>")
 		}
 	case "clear-memories":
-		if len(args) != 1 {
-			return unexpectedSubcommandArgumentError("debug clear-memories", args[1])
+		for i := 1; i < len(args); i++ {
+			arg := args[i]
+			switch {
+			case arg == "-c" || arg == "--config":
+				value, next, err := requireValue(args, i, arg)
+				if err != nil {
+					return err
+				}
+				debug.ConfigOverrides = append(debug.ConfigOverrides, value)
+				i = next
+			case strings.HasPrefix(arg, "--config="):
+				debug.ConfigOverrides = append(debug.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
+			case strings.HasPrefix(arg, "-c"):
+				debug.ConfigOverrides = append(debug.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
+			default:
+				return unexpectedSubcommandArgumentError("debug clear-memories", arg)
+			}
 		}
 	case "config":
 		if len(args) != 1 {
@@ -4601,7 +4748,7 @@ func consumeConfigOverrides(args []string, overrides *[]string) ([]string, error
 		switch {
 		case args[0] == "-c" || args[0] == "--config":
 			if len(args) < 2 || clapLooksLikeOption(args[1]) {
-				return nil, valueRequiredError("--config")
+				return nil, pendingValueRequiredError("--config", args, 0)
 			}
 			*overrides = append(*overrides, args[1])
 			args = args[2:]
@@ -4673,7 +4820,7 @@ func (p *Parsed) splitSubcommandFeatureFlags(args []string) ([]string, error) {
 		// clap refuses to take a leading-dash token as an option value and
 		// reports the pending value instead.
 		if i+1 >= len(args) || clapLooksLikeOption(args[i+1]) {
-			return nil, valueRequiredError(name)
+			return nil, pendingValueRequiredError(name, args, i)
 		}
 		p.appendFeatureFlag(name, args[i+1])
 		i++
@@ -4948,7 +5095,7 @@ func requireValue(args []string, i int, flag string) (string, int, error) {
 	// argument declares allow_hyphen_values, so `-c --json` reports the pending
 	// value instead of eating the next flag.
 	if i+1 >= len(args) || clapLooksLikeOption(args[i+1]) {
-		return "", i, valueRequiredError(flag)
+		return "", i, pendingValueRequiredError(flag, args, i)
 	}
 	return args[i+1], i + 1, nil
 }

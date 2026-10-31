@@ -1171,6 +1171,59 @@ one-off captures.
     `TestSubcommandGroupFlagDiagnosticsLikeRust` (120 Rust-captured cases);
     `go test -vet=off ./app` still fails only `TestExecJSONEndToEnd`.
 
+48. **Short-flag diagnostics, the pending-value order and `-c` on every leaf** -
+   entry 47 taught the long flags, but a short alias was still resolved as a
+   value flag from one shared table (so `plugin add -m x` echoed
+   `--model <MODEL>` instead of `--marketplace <MARKETPLACE>`), an unknown
+   short alias reached the pending-value diagnostic instead of clap's
+   `unexpected argument '-x' found`, and the global `-c`/`--config` was only
+   wired into some parsers.
+   - `clapCommandShortFlags` records the 21 command paths whose short aliases
+     differ from the inherited `-c`/`-h` pair (taken from the 0.166 `--help`
+     tree), and `clapCommandShortFlagLongs` keeps the long spelling clap echoes
+     for the aliases that differ per command: `-m` is `--marketplace` under
+     `plugin`, `-o` is `--output-last-message` for the `exec` family,
+     `-y` is the boolean `--yes` on `app-server daemon update`, `-o`/`-p` are
+     `--out`/`--prettier` on the `app-server generate-*` leaves and `sandbox -p`
+     keeps its own `<CONFIG_PROFILE>` placeholder.
+   - An unknown short alias is named by its first letter (`codex -X1` reports
+     `-X`) and always renders the command's *static* usage page, because clap
+     resolves short flags before it records the accepted options:
+     `mcp get --json -X` keeps `[OPTIONS] <NAME>` while the long-flag branch
+     would have echoed `--json`.
+   - `UsageError` carries `PendingFlag`/`PendingNext`, so a value-less option is
+     diagnosed in clap's order: `-c -x1` reports `unexpected argument '-x' found`
+     (static page), `-c --bogus` reports the long flag through the did-you-mean
+     table, and a *declared* flag (`-c --json`, `-c -c x`, `-c -h`) keeps
+     `a value is required for '--config <key=value>'`. `requireValue`,
+     `consumeConfigOverrides` and `splitSubcommandFeatureFlags` all raise the
+     pending form; `decorateRootPendingValueError` covers the root command.
+   - `clapEffectiveCommand` resolves the nested command path from argv before the
+     flag tables are consulted, so `app-server daemon update -y` and
+     `plugin marketplace add` style paths pick their own spellings.
+   - clap's global `-c`/`--config` now reaches the leaves that rejected it:
+     `doctor`, `update`, `completion`, `features list|enable|disable`,
+     `debug models|prompt-input|trace-reduce|clear-memories|app-server`, and the
+     smart usage echoes `--config <key=value>` in argv order
+     (`codex doctor -c a=b --bogus` prints `Usage: codex doctor --config
+     <key=value>`).
+   - `--` ends option parsing for `mcp get`, so `mcp get -- --json` names the
+     server `--json`, `mcp get --` reports the missing `<NAME>`, and an
+     overflowing positional (`mcp get -- a b`, `mcp get a b`) reports
+     `unexpected argument 'b' found` against the static page instead of the
+     Go-only `mcp get accepts exactly one NAME`.
+   Evidence: live comparisons against 0.166 - `out/round33-short-flags.txt`
+   (20/20), `out/round33-usage-spelling.txt` (8/8), the pending-value probes
+   6/6 and 9/9, the `--`/`-c` probes 5/5, 8/8 and 11/12 (the remaining case is
+   `sandbox -c a=b echo hi`, where Go's sandbox launcher hangs instead of
+   reporting the Windows `CreateProcessAsUserW` failure) plus 307 round 29-32
+   regression cases at 0 diffs (`out/round33-regress.txt`). `go test ./cli
+   ./sandbox ./applypatch ./prompt ./review ./cmd/... ./tcptunnel` passes, with
+   `TestShortFlagDiagnosticsLikeRust`, `TestPendingValueResolutionLikeRust`,
+   `TestShortFlagUsageSpellingLikeRust` and
+   `TestSubcommandConfigOverrideAcceptanceLikeRust` pinning the Rust-captured
+   cases.
+
 ## Verification
 
 - The remaining command groups match Rust 0.166 on clap's flag diagnostics:
@@ -1182,6 +1235,15 @@ one-off captures.
   ./tcptunnel` passes, `TestSubcommandGroupFlagDiagnosticsLikeRust` pins 120 of
   those cases, and `go test -vet=off ./app` keeps only the
   `TestExecJSONEndToEnd` baseline.
+- Short-flag diagnostics, pending-value resolution and the global
+  `-c`/`--config` match Rust 0.166: 20 short-flag cases
+  (`out/round33-short-flags.txt`), 8 per-command usage-spelling cases
+  (`out/round33-usage-spelling.txt`), the pending-value and `--`/`-c` probes
+  (6/6, 9/9, 5/5, 8/8) and the 307-case round 29-32 regression
+  (`out/round33-regress.txt`) are byte-identical. Four tests pin the captured
+  cases: `TestShortFlagDiagnosticsLikeRust`,
+  `TestPendingValueResolutionLikeRust`, `TestShortFlagUsageSpellingLikeRust` and
+  `TestSubcommandConfigOverrideAcceptanceLikeRust`.
 - Session subcommand parsing matches Rust 0.166: the 14 subcommand-diagnostic
   cases (`out/round29-session-diag.txt`), the 10 archive/delete/unarchive cases
   (`out/round29-mutation.txt`) and the 30 queue cases
@@ -1496,12 +1558,11 @@ one-off captures.
     accepted everywhere and rendered in the usage block, but the hand-written
     `exec` family usage lines (`exec resume --last --enable f --bogus`,
     `exec fork --enable f`) do not echo them yet - Rust prints
-    `--last --enable <FEATURE>` / `--enable <FEATURE> <SESSION_ID>`. A pending
-    value followed by an *unknown* flag (`codex mcp get -c -x1`) still reports
-    the pending value, where clap reports `unexpected argument '-x' found`
-    first, because the subcommand parsers consume a value eagerly instead of
-    testing the next token against the command's flag table. `codex review --config a=b` keeps working through the subcommand
-    parser's own `-c` handling, which mirrors Rust's merged override order.
+    `--last --enable <FEATURE>` / `--enable <FEATURE> <SESSION_ID>`. The
+    pending-value order is aligned since entry 48 (`codex mcp get -c -x1`
+    reports `unexpected argument '-x' found`), and `codex review --config a=b`
+    keeps working through the subcommand parser's own `-c` handling, which
+    mirrors Rust's merged override order.
   - the missing-required blocks are aligned (entry 40): `execpolicy check`,
     `stdio-to-uds` and `tcp-tunnel` print clap's block with exit 2, including
     the consumed-flag echo in the usage. What remains Go-shaped on those
