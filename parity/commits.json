@@ -7546,9 +7546,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust c9fac4dd releases the global thread_list_state_permit around cold-resume config loading so unrelated thread metadata updates and MCP requests are not blocked; it reloads config when persisted metadata/settings/cwd changed and rejoins concurrently resumed threads.",
+    "Go has no global metadata permit: cold resume takes per-thread writer ownership through ThreadManager.AcquireLiveThreadRetention (liveThreadsMu is released when the call returns, appserver/thread_manager.go:197) and loads config via RuntimeRouter.effectiveConfigForTurn -> config.LoadWithOptions (appserver/turn_runtime.go:10363) outside any shared lock, so unrelated metadata updates and MCP requests are never serialized behind resume config loading.",
+    "Go already re-reads the stored snapshot under the acquired retention (refreshedResumeRecord, Rust #49599) and rejects archived threads before ownership is taken; no permit-scoped reload loop is needed."
    ]
   },
   {
