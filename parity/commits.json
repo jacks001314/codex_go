@@ -8835,9 +8835,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 3/9; needs review: ParentCompactionError, ReviewAction, decide_approval, encrypted_parent_compaction, from_approval_action"
+    "Round 1239: approvals route through Go's Guardian decision pipeline. appserver/guardian_reviewer.go reuses a usable cached/serving low-risk assessment, forces a full review for oversized actions (scoring_failure), an explicit fresh requirement, elevated risk, stale-scoring lag and unusable authorization, keeps the user-approval MCP `js` fast path, and carries review_reason on Guardian assessment events so strict reasons (elevated_risk, stale_score, incompatible_compaction, scoring_failure, authorization_changed) emit autoApprovalReview/strictReviewRequired. Tests: go test ./appserver -run 'GuardianDenial|GuardianStrictReview|GuardianCachedApproval|GuardianDenials|GuardianTurnHooks' -count=1."
    ]
   },
   {
@@ -11521,9 +11521,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "N/A by architecture: Go records Guardian reporting/denial metrics directly in appserver/state; it has no Guardian extension boundary that owns those counters."
+    "Round 1239: Guardian reporting and denial accounting live in Go's own carriers. Denial counts follow the active turn and are cleared by the turn-completion/interruption hooks (appserver/guardian_denial_lifecycle_like_rust_test.go, guardian_active_turn_denials_like_rust_test.go), the denial limit interrupts the turn with codex_error_info tooManyDenials (guardian_extension_interruption_like_rust_test.go, guardian_reviewer.go), and failed-review evidence is bounded by MaxGuardianReviewRecords/PerThread/Bytes in state/guardian_feedback.go. Tests: go test ./appserver -run 'GuardianDenial|GuardianDenials|GuardianTurnHooks' -count=1; go test ./state -run 'GuardianFeedback|GuardianReview' -count=1."
    ]
   },
   {
