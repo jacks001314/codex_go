@@ -1861,7 +1861,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "Rust-only allocation optimization replacing serde_json::to_string with a counting writer. Go uses encoding/json plus byte-length accounting in the same budget paths; the observable limits and omission metadata are already covered, and there is no public or wire contract to freeze."
+    "Round 1236 (re-audit): still N/A. The commit streams JSON into a byte counter so history estimation and executed-tool-call limits stop materializing strings. Go measures the same payloads by marshaling once (model/executed_tool_calls.go MarshalJSON plus its byte accounting, session/history.go) and keeps the existing error fallback, so the allocation-avoidance refactor has no Go counterpart to port; no observable behavior changes."
    ]
   },
   {
@@ -4267,7 +4267,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "Rust-only performance refactor of thread history/chat-composer indexes; Go's history store and TUI use different lookup data structures, and there is no observable contract change to carry."
+    "Round 1236 (re-audit): still N/A. Rust lazily indexes large thread-history turns for late item updates and remaps TUI reverse-search matches to Unicode byte ranges. Go's thread history is rebuilt per turn with first-occurrence lookups (appserver/router.go thread history helpers) and its history search lives in the TUI package owned elsewhere; the observable first-occurrence and Unicode-boundary semantics are already the Go behavior, so only the Rust indexing strategy differs."
    ]
   },
   {
@@ -10915,9 +10915,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "N/A by architecture: Go has no suspended-turn recovery path or runtime effort pin that can append a second configuration_update on resume. The request builder appends post-prompt effort updates once per request; there is no recover-after-suspend flow to deduplicate."
+    "Round 1236 (audit): reasoningoverride/reasoningoverride.go OverrideInputItems reuses a matching trusted tail `configuration_update` (LatestTrustedUpdate with establishedIsTail) before consulting the pin, so a recovered turn adds no duplicate update while the runtime pin is still unset; RequestEffort keeps the sampling pin. exec/reasoning_effort_override_test.go and appserver/reasoning_effort_override_history_test.go cover the single-update result. Tests: go test ./reasoningoverride ./exec ./appserver -run 'ReasoningEffortOverride|OverrideInputItems' -count=1."
    ]
   },
   {
@@ -12382,9 +12382,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "The deprecated thread/rollback app-server method was never exposed by codex_go, so there is nothing to remove. appserver/protocol.go registers thread/revert (MethodThreadRevert) and no thread/rollback method; app/prompt_edit.go and appserver/router.go implement and dispatch only thread/revert. The rollback* helpers in appserver (rollbackThreadForkInitialization, rollbackThreadResumeInitialization, rollbackThreadStartInitialization, rollbackReviewHistory) are internal transaction cleanup, not the removed API. Test: go test ./appserver -run 'ThreadRevert|InternalSession' -count=1."
+    "Round 1236 (audit): Go never exposed `thread/rollback`, so the removal is already the Go surface: appserver has no MethodThreadRollback/ThreadRollbackParams (rg finds only parity test comments) and an unknown method takes the generic rejection path. The historical markers the commit keeps are present: rollout/context_baseline.go folds `thread_rolled_back` lines (ThreadRolledBack) out of the baseline, rollout/migrate_test.go keeps legacy markers readable, and rollout/guardian_review_history_like_rust_test.go appends them. Tests: go test ./rollout ./appserver -run 'RolledBack|Rollback' -count=1."
    ]
   },
   {
@@ -13068,7 +13068,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "Not applicable: #45428 is a Rust-internal allocation change (destructure the owned McpServerStatusSnapshot into the response with HashMap::remove instead of get().cloned()) with no observable contract change. Go has no owned snapshot object: MCPService.ListStatusCheckedWithObserver copies the statuses out of the mutex-guarded live s.servers/s.configs maps under s.mu using cloneMCPServerStatus/cloneServerConfig, and populateStatusInventories hands each worker goroutine its own clone, so consuming the service state in place is neither possible nor safe. Pagination and the missing-entry defaults (empty tools/resources/resource_templates, Unsupported auth status) keep their existing behavior, already covered by TestListStatusAndToolCall, TestMCPStatusPaginationInvalidRequestErrors, TestMCPServerStatusDetailZeroValueMatchesToolsAndAuthOnly and TestMCPServerStatusWireIncludesStateAndError, which pass."
+    "Round 1236 (re-audit): still N/A. The commit moves MCP server status entries out of the owned snapshot maps instead of cloning them. Go builds each mcpServerStatus response from the live registry under its own lock (appserver MCP status helpers) and never clones a retained snapshot map, so the move-instead-of-clone refactor has no carrier; pagination and missing-entry defaults are covered by the existing appserver MCP status tests."
    ]
   },
   {
@@ -13618,9 +13618,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "N/A by architecture: Rust relocates daemon packages within its CLI installation layout. Go already ships daemon code as first-class appserverdaemon modules and has no equivalent standalone CLI package tree to rearrange."
+    "Round 1236 (audit): appserverdaemon/migration.go ports app-server-daemon::migration (staged `.migration-current` selection, binary capability probe, running/stopped migration), installer.go exposes the deferred-selection and daemon-only modes, lifecycle.go takes the installer lock around the switcher, manual_update.go requires daemon-only support for a daemon-owned root, and separate daemon/updater PID files live beside the update loop. migration_test.go TestRunDaemonMigrationLikeRust and manual_update_test.go cover it. Tests: go test ./appserverdaemon -run 'Migration|Daemon|Update' -count=1."
    ]
   },
   {
@@ -13787,7 +13787,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "N/A by architecture: the upstream commit only moves Rust child-agent configuration helpers from multi_agents_common.rs into agent/child_config.rs without behavior changes. Go already keeps child/spawn configuration in the agent/appserver modules with the same inheritance call sites."
+    "Round 1236 (re-audit): still N/A. Rust centralizes child-agent configuration in core/src/agent/child_config.rs. Go's child agents receive their configuration from the spawn request and the app-server environment inheritance layer (appserver/environment*.go, agent/), which already keep the child's model, provider and permission inputs together, so the Rust module extraction has no separate carrier."
    ]
   },
   {
@@ -16326,9 +16326,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "N/A by architecture: Go has no ephemeral `thread_title` worker session and does not apply the managed reasoning-effort override machinery to memory-consolidation requests. Memory consolidation selects its provider-preferred model and request-level effort directly, so there is no override exemption to add."
+    "Round 1236 (audit): appserver/reasoning_effort_override.go reasoningEffortOverrideExempt exempts Guardian reviewer sessions, memory consolidation (ThreadSourceMemoryConsolidation and the legacy memory_consolidation source) and ephemeral `thread_title` threads, while persisted thread_title threads keep the normal behavior; reasoningEffortOverrideEnabled ANDs that exemption into the feature gate so filtering, pinning and update injection all follow it. app/recap.go tags ephemeral title threads with `thread_title`, and app/remote_tui.go hides `system`/`thread_title` from the agents overview. Tests: go test ./appserver -run 'ReasoningEffortOverrideExemptsFixedEffortWorkers|ReasoningEffortOverride' -count=1."
    ]
   },
   {
@@ -16593,7 +16593,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "N/A by architecture: Go accounts rollout/goal budgets through its state and appserver turn accounting rather than a Rust LocalAgentControl budget object. This is a module-boundary refactor with no separate Go control object to move."
+    "Round 1236 (re-audit): still N/A. The commit encapsulates rollout budget accounting inside Rust's LocalAgentControl. Go has no LocalAgentControl type: the budget itself is resolved from configuration (config.RolloutBudgetConfig, config/rollout_budget_test.go) and applied by the session/turn accounting path, so the controller encapsulation has no counterpart."
    ]
   },
   {
@@ -18442,9 +18442,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "N/A by architecture: the upstream commit only moves Rust CLI startup code into cli/src/exec_server_command.rs without changing behavior. Go already keeps exec-server startup in dedicated packages and has no equivalent monolithic cli/src/main.rs to extract."
+    "Round 1236 (audit): the Go exec-server startup entry points are already separated from the top-level CLI: cli/cli.go owns the `codex exec-server` arguments (including --executor-credential-stdin and the strict-config merge) and app/app.go owns transport validation, configuration loading, authentication and shutdown orchestration, with the Rust module named in the comments. Tests: go test ./cli ./app -run 'ExecServer' -count=1."
    ]
   },
   {
