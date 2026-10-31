@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"codex_go/config"
+	"codex_go/features"
 	"codex_go/sandbox"
 )
 
@@ -210,6 +211,7 @@ func guardianReviewerReadOnlyProfile(profile *sandbox.PermissionProfile) *sandbo
 func guardianReviewerDisabledFeatures() []string {
 	return []string{
 		"apps",
+		"context_management",
 		"hooks",
 		"multi_agent",
 		"current_time_reminder",
@@ -230,6 +232,18 @@ func guardianReviewerDisabledFeatures() []string {
 		"web_search_cached",
 		"web_search_request",
 	}
+}
+
+// guardianReviewerTokenBudgetEnabled mirrors Rust #43912: the reviewer's own
+// isolated config disables Feature::TokenBudget, so the parent turn's captured
+// token-budget activation must not force the reviewer onto context rollover.
+// Managed requirements can still pin the feature on, in which case #41221's
+// captured parent preferences decide the rollover.
+func guardianReviewerTokenBudgetEnabled(prepared *guardianReviewerPreparedOptions) bool {
+	if prepared == nil || prepared.Config == nil {
+		return false
+	}
+	return features.Enabled(prepared.Config.FeatureSettings(), "token_budget")
 }
 
 // guardianReviewerDisableFeature turns a feature off without discarding its

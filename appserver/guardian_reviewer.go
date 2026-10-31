@@ -1185,7 +1185,9 @@ func (r *modelGuardianReviewer) review(ctx context.Context, threadID, turnID, ta
 	}
 	if runner, ok := r.agent.(*guardianSessionRunner); ok {
 		runner.EnsureReviewPolicy(plan.NodeReplPolicy)
-		if r.rolloverForTokenBudget != nil && r.rolloverForTokenBudget(threadID, turnID) {
+		// Rust #43912 checks the reviewer session's own feature gate, which
+		// disables token-budget mode even when the parent turn enabled it.
+		if guardianReviewerTokenBudgetEnabled(plan.Prepared) && r.rolloverForTokenBudget != nil && r.rolloverForTokenBudget(threadID, turnID) {
 			runner.RolloverForContext()
 			contextChanged = true
 		}

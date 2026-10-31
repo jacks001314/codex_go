@@ -9873,9 +9873,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Guardian reviewer isolation disables context_management in addition to token_budget, and review rollover consults the reviewer's own prepared feature gate, so a parent turn's token-budget activation cannot start a fresh reviewer chain (Rust #43912). An explicit disabled feature also keeps model defaults from reactivating token-budget mode. Tests: go test ./appserver -run 'Guardian' -count=1"
    ]
   },
   {
