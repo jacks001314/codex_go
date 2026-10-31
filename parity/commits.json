@@ -9335,9 +9335,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "blocked_precondition",
    "evidence": [
-    "Partial symbol coverage 3/8; needs review: LifecycleLock, NativeProvider, access_control, device_supported, run_with_cancellation"
+    "Rust codex-user-verification/platform_macos creates P-256 Secure Enclave keys in the Data Protection Keychain with biometric access control through LAContext, serializes cross-process operations with a cancellable file lock, and maps native failures to structured verification errors (lifecycle_lock.rs, native_operation.rs, platform_macos/provider.rs). Go exposes the matching UserVerificationProvider seam in appserver/user_verification_runtime.go but ships only UnsupportedUserVerificationProvider, so macOS reports providerUnavailable exactly like a Rust build without a native backend. A faithful backend needs cgo Security.framework/Secure Enclave/LAContext bindings plus macOS hardware with enrolled biometrics to build and verify; neither is available in this Windows environment, so the gap is recorded as a platform precondition."
    ]
   },
   {
