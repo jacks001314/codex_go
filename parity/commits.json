@@ -36690,9 +36690,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:424: - `#57228` is N/A: Rust gives the daemon control-socket `start_pairing` client a"
+    "Rust #57228 gives daemon-side pairing one 35-second deadline: connecting, initializing and the pairing response share it, the response is read without a per-message timeout, and a status notification cannot extend it. Go now mirrors it: `appserverdaemon.StartRemoteControlPairingOnSocket` (`appserverdaemon/client.go`) uses `RemoteControlPairingTimeout = 35s` as one deadline for `connectUnixSocketWithRetry`, the initialize handshake and `requestPairing`; the client read deadline is set once and an interleaved `remoteControl/status/changed` notification is consumed without refreshing it, while an invalid-params answer is rejected instead of retried. `remote-control pair` (`app/remote_control.go`) relays the request to the running daemon's control socket (`NewLifecycleRunnerForCodexHome(...).Daemon.Paths.SocketPath`) instead of starting an in-process pairing session, and `--no-daemon` stays rejected. Tests: TestStartRemoteControlPairingRequestsManualCodeLikeRust, TestStartRemoteControlPairingDeadlineSurvivesStatusNotificationLikeRust, TestStartRemoteControlPairingRejectsInvalidParamsLikeRust (`go test ./appserverdaemon -run StartRemoteControlPairing -count=1`); TestRemoteControlPairUsesRunningDaemonLikeRust, TestRemoteControlPairJSONLikeRust, TestRemoteControlPairRequiresManualCodeLikeRust, TestRemoteControlPairRejectsNoDaemonLikeRust (`go test ./app -run TestRemoteControl -count=1`)."
    ]
   },
   {

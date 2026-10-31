@@ -312,10 +312,18 @@ func runRemoteControlStop(opts cli.RemoteControlOptions, stdout io.Writer) error
 	return nil
 }
 
+// remoteControlPairOnSocket asks a running managed daemon for a manual pairing
+// code (Rust `codex_app_server_daemon::start_remote_control_pairing`). It is a
+// variable so tests can exercise the dispatch without a live daemon.
+var remoteControlPairOnSocket = appserverdaemon.StartRemoteControlPairingOnSocket
+
+// runRemoteControlPair mirrors Rust remote_control_cmd's Pair branch: the
+// already-running daemon app-server owns the pairing session, so this command
+// only relays the request over its control socket (#57228). `--no-daemon`
+// cannot select this branch because runRemoteControl rejects the combination.
 func runRemoteControlPair(opts cli.RemoteControlOptions, stdout io.Writer) error {
-	manager := newRemoteControlManager()
-	manager.Enable(&remotecontrol.EnableParams{Ephemeral: true})
-	response, err := manager.StartPairing(&remotecontrol.PairingStartParams{ManualCode: true})
+	runner := appserverdaemon.NewLifecycleRunnerForCodexHome(auth.DefaultCodexHome(), "")
+	response, err := remoteControlPairOnSocket(runner.Daemon.Paths.SocketPath)
 	if err != nil {
 		return err
 	}

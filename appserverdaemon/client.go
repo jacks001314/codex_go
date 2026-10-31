@@ -28,6 +28,11 @@ const (
 	// ControlSocketResponseTimeout bounds one control-socket exchange (Rust
 	// client::CONTROL_SOCKET_RESPONSE_TIMEOUT).
 	ControlSocketResponseTimeout = 2 * time.Second
+	// RemoteControlPairingTimeout bounds one `remote-control pair` exchange
+	// (Rust PAIRING_TIMEOUT, #57228): connecting, initializing and waiting for
+	// the pairing response share one deadline, so status notifications and a
+	// slow daemon cannot extend it.
+	RemoteControlPairingTimeout = 35 * time.Second
 )
 
 var errRemoteControlInvalidParams = errors.New("remote-control request returned invalid params")
@@ -297,6 +302,29 @@ func DisableRemoteControlOnSocket(socketPath string, connectTimeout time.Duratio
 	defer conn.Close(websocket.StatusNormalClosure, "")
 	client := newLocalSocketRemoteControlClient(conn)
 	return client.disableRemoteControl()
+}
+
+// StartRemoteControlPairingOnSocket asks an already-running managed daemon for
+// a manual pairing code over its control socket (Rust app-server-daemon
+// client::start_pairing, #57228). The whole exchange shares one deadline and
+// the pairing response is read without a per-message timeout; neither the
+// connect retry loop nor an interleaved status notification may extend it.
+func StartRemoteControlPairingOnSocket(socketPath string) (*remotecontrol.PairingStartResponse, error) {
+	if err := EnsureSupportedPlatform(); err != nil {
+		return nil, err
+	}
+	deadline := time.Now().Add(RemoteControlPairingTimeout)
+	conn, err := connectUnixSocketWithRetry(socketPath, time.Until(deadline), 25*time.Millisecond)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+	client := newLocalSocketRemoteControlClient(conn)
+	client.setDeadline(deadline)
+	if _, err := client.initialize(); err != nil {
+		return nil, err
+	}
+	return client.requestPairing()
 }
 
 func ProbeAppServerVersionOnSocket(socketPath string, timeout time.Duration) (string, error) {
@@ -626,6 +654,30 @@ func (c *localSocketRemoteControlClient) requestEnable(params any) (RemoteContro
 		return RemoteControlReadyStatus{}, fmt.Errorf("failed to parse remoteControl/enable response: %w", err)
 	}
 	return ReadyStatusFromEnable(&response), nil
+}
+
+// requestPairing sends the manual pairing request Rust's start_pairing_inner
+// sends and rejects an invalid-params answer instead of retrying without
+// parameters, matching the upstream contract (#57228).
+func (c *localSocketRemoteControlClient) requestPairing() (*remotecontrol.PairingStartResponse, error) {
+	request := PairingStartRequest()
+	if err := c.sendMessage(BuildRemoteControlRequest(request.Method, request.Params)); err != nil {
+		return nil, fmt.Errorf("failed to send %s request: %w", request.Method, err)
+	}
+	result, err := c.readRemoteControlResponse(request.Method)
+	switch {
+	case errors.Is(err, errControlSocketTimeout):
+		return nil, fmt.Errorf("timed out waiting for %s response", request.Method)
+	case errors.Is(err, errRemoteControlInvalidParams):
+		return nil, fmt.Errorf("%s rejected manual pairing parameters", request.Method)
+	case err != nil:
+		return nil, err
+	}
+	var response remotecontrol.PairingStartResponse
+	if err := json.Unmarshal(result, &response); err != nil {
+		return nil, fmt.Errorf("failed to parse %s response: %w", request.Method, err)
+	}
+	return &response, nil
 }
 
 func (c *localSocketRemoteControlClient) requestDisableWithFallback() (RemoteControlReadyStatus, error) {
