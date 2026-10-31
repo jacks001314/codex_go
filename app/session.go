@@ -27,14 +27,62 @@ import (
 	"github.com/google/uuid"
 )
 
+// guardSessionTUIStart mirrors Rust run_interactive_tui for the commands that
+// launch the interactive picker (resume/fork): the --no-daemon/--remote
+// combination and the TERM gate run before the configuration is loaded, the
+// remote endpoint is resolved or the session store is touched.
+// requireSessionTUIStreams then replays tui::init, which refuses a
+// non-terminal stdin and stdout.
+func guardSessionTUIStart(opts *cli.SessionOptions, root *cli.RootOptions, stdin io.Reader, stderr io.Writer) error {
+	remoteRoot := mergedSessionRemoteOptions(opts, root)
+	// Rust keeps the endpoint and the token env var apart here: only an actual
+	// --remote endpoint makes --no-daemon fatal.
+	if strings.TrimSpace(remoteRoot.Remote) != "" {
+		var shared *cli.SharedOptions
+		if opts != nil {
+			shared = &opts.Shared
+		}
+		if interactiveRootNoDaemon(root, shared) {
+			return interactiveFatalExit(stderr, daemonNoDaemonWithRemote)
+		}
+	}
+	if err := guardInteractiveDumbTerminal(stdin, stderr, os.Getenv("TERM")); err != nil {
+		return interactiveFatalExit(stderr, err.Error())
+	}
+	// resolve_remote_endpoint runs after the TERM gate and reports the usage
+	// error through AppExitInfo::fatal (`ERROR: ...`).
+	if strings.TrimSpace(remoteRoot.RemoteAuthEnv) != "" && strings.TrimSpace(remoteRoot.Remote) == "" {
+		return interactiveFatalExit(stderr, "`--remote-auth-token-env` requires `--remote`.")
+	}
+	return nil
+}
+
+// requireSessionTUIStreams mirrors tui::init: stdin is checked before stdout and
+// both failures surface as a plain anyhow error (`Error: ...`, exit 1).
+func requireSessionTUIStreams(stdin io.Reader, stdout io.Writer) error {
+	if !isSessionTerminal(stdin) {
+		return errors.New("stdin is not a terminal")
+	}
+	if !isSessionTerminal(stdout) {
+		return errors.New("stdout is not a terminal")
+	}
+	return nil
+}
+
 const sessionPickerPageSize = 20
 
-func runSessionResume(opts *cli.SessionOptions, root *cli.RootOptions, stdout io.Writer) error {
-	if err := loadSessionRuntimeConfig(opts, root); err != nil {
+func runSessionResume(opts *cli.SessionOptions, root *cli.RootOptions, stdin io.Reader, stdout, stderr io.Writer) error {
+	if err := guardSessionTUIStart(opts, root, stdin, stderr); err != nil {
+		return err
+	}
+	if err := loadSessionRuntimeConfigWithPrefix(opts, root, "Error parsing -c overrides: ", true); err != nil {
 		return err
 	}
 	endpoint, err := resolveSessionRemoteEndpoint(opts, root)
 	if err != nil {
+		return err
+	}
+	if err := requireSessionTUIStreams(stdin, stdout); err != nil {
 		return err
 	}
 	if endpoint != nil {
@@ -82,7 +130,7 @@ func runSessionResume(opts *cli.SessionOptions, root *cli.RootOptions, stdout io
 }
 
 func runSessionArchive(opts *cli.SessionOptions, root *cli.RootOptions, stdout io.Writer) error {
-	if err := loadSessionRuntimeConfig(opts, root); err != nil {
+	if err := loadSessionRuntimeConfigWithPrefix(opts, root, "failed to parse -c overrides: ", false); err != nil {
 		return err
 	}
 	endpoint, err := resolveSessionRemoteEndpoint(opts, root)
@@ -117,7 +165,7 @@ func runSessionArchive(opts *cli.SessionOptions, root *cli.RootOptions, stdout i
 }
 
 func runSessionUnarchive(opts *cli.SessionOptions, root *cli.RootOptions, stdout io.Writer) error {
-	if err := loadSessionRuntimeConfig(opts, root); err != nil {
+	if err := loadSessionRuntimeConfigWithPrefix(opts, root, "failed to parse -c overrides: ", false); err != nil {
 		return err
 	}
 	endpoint, err := resolveSessionRemoteEndpoint(opts, root)
@@ -159,7 +207,7 @@ func runSessionUnarchive(opts *cli.SessionOptions, root *cli.RootOptions, stdout
 }
 
 func runSessionDelete(opts *cli.SessionOptions, root *cli.RootOptions, stdin io.Reader, stdout, stderr io.Writer) error {
-	if err := loadSessionRuntimeConfig(opts, root); err != nil {
+	if err := loadSessionRuntimeConfigWithPrefix(opts, root, "failed to parse -c overrides: ", false); err != nil {
 		return err
 	}
 	endpoint, err := resolveSessionRemoteEndpoint(opts, root)
@@ -275,12 +323,18 @@ func isSessionTerminal(value any) bool {
 	return prompt.IsTerminalFile(file)
 }
 
-func runSessionFork(opts *cli.SessionOptions, root *cli.RootOptions, stdout io.Writer) error {
-	if err := loadSessionRuntimeConfig(opts, root); err != nil {
+func runSessionFork(opts *cli.SessionOptions, root *cli.RootOptions, stdin io.Reader, stdout, stderr io.Writer) error {
+	if err := guardSessionTUIStart(opts, root, stdin, stderr); err != nil {
+		return err
+	}
+	if err := loadSessionRuntimeConfigWithPrefix(opts, root, "Error parsing -c overrides: ", true); err != nil {
 		return err
 	}
 	endpoint, err := resolveSessionRemoteEndpoint(opts, root)
 	if err != nil {
+		return err
+	}
+	if err := requireSessionTUIStreams(stdin, stdout); err != nil {
 		return err
 	}
 	if endpoint != nil {
@@ -374,6 +428,14 @@ func localSessionRouterRequest(store *session.Store, method appserver.Method, pa
 }
 
 func loadSessionRuntimeConfig(opts *cli.SessionOptions, root *cli.RootOptions) error {
+	return loadSessionRuntimeConfigWithPrefix(opts, root, "", false)
+}
+
+// loadSessionRuntimeConfigWithPrefix renders the override diagnostics the way
+// the calling command does in Rust: the interactive resume/fork path prints
+// `Error parsing -c overrides: ...` without the runtime head, while the archive
+// family reports `Error: failed to parse -c overrides: ...`.
+func loadSessionRuntimeConfigWithPrefix(opts *cli.SessionOptions, root *cli.RootOptions, prefix string, silent bool) error {
 	loadOpts := &config.EffectiveOptions{}
 	if root != nil {
 		loadOpts.RawOverrides = append(loadOpts.RawOverrides, root.ConfigOverrides...)
@@ -382,6 +444,15 @@ func loadSessionRuntimeConfig(opts *cli.SessionOptions, root *cli.RootOptions) e
 	if opts != nil {
 		loadOpts.RawOverrides = append(loadOpts.RawOverrides, opts.ConfigOverrides...)
 		loadOpts.StrictConfig = loadOpts.StrictConfig || opts.StrictConfig
+	}
+	if prefix != "" && len(loadOpts.RawOverrides) > 0 {
+		if err := config.ValidateOverrides(loadOpts.RawOverrides); err != nil {
+			message := prefix + err.Error()
+			if silent {
+				return exitMessagef("%s", message)
+			}
+			return errors.New(message)
+		}
 	}
 	_, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), loadOpts)
 	return err
@@ -1462,7 +1533,7 @@ func runSessionQueue(opts *cli.QueueOptions, root *cli.RootOptions, stdout, stde
 		StrictConfig:    opts.StrictConfig,
 		ConfigOverrides: append([]string(nil), opts.ConfigOverrides...),
 	}
-	if err := loadSessionRuntimeConfig(sessionOpts, root); err != nil {
+	if err := loadSessionRuntimeConfigWithPrefix(sessionOpts, root, "failed to parse -c overrides: ", false); err != nil {
 		return err
 	}
 	endpoint, err := resolveSessionRemoteEndpoint(sessionOpts, root)

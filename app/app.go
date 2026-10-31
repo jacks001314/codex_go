@@ -200,7 +200,7 @@ func RunWithOptions(ctx context.Context, args []string, stdin io.Reader, stdout,
 	case cli.CommandExecpolicy:
 		return runExecpolicy(&parsed.Execpolicy, stdout)
 	case cli.CommandResume:
-		return runSessionResume(&parsed.Session, &parsed.Root, stdout)
+		return runSessionResume(&parsed.Session, &parsed.Root, stdin, stdout, stderr)
 	case cli.CommandArchive:
 		return runSessionArchive(&parsed.Session, &parsed.Root, stdout)
 	case cli.CommandDelete:
@@ -208,7 +208,7 @@ func RunWithOptions(ctx context.Context, args []string, stdin io.Reader, stdout,
 	case cli.CommandUnarchive:
 		return runSessionUnarchive(&parsed.Session, &parsed.Root, stdout)
 	case cli.CommandFork:
-		return runSessionFork(&parsed.Session, &parsed.Root, stdout)
+		return runSessionFork(&parsed.Session, &parsed.Root, stdin, stdout, stderr)
 	case cli.CommandQueue:
 		return runSessionQueue(&parsed.Queue, &parsed.Root, stdout, stderr)
 	case cli.CommandTcpTunnel:

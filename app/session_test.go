@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -25,6 +26,7 @@ import (
 )
 
 func TestLocalSessionCommandsOperateOnRustRolloutWithoutGoSnapshot(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)
 	const threadID = "0198f100-0000-7000-8000-000000000001"
@@ -51,7 +53,7 @@ func TestLocalSessionCommandsOperateOnRustRolloutWithoutGoSnapshot(t *testing.T)
 	}
 
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), []string{"resume"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+	if err := Run(context.Background(), []string{"resume"}, newTerminalReader(""), terminalOut(&stdout), &bytes.Buffer{}); err != nil {
 		t.Fatalf("rollout picker error: %v", err)
 	}
 	if !strings.Contains(stdout.String(), threadID) || !strings.Contains(stdout.String(), "Rust Session") {
@@ -59,7 +61,7 @@ func TestLocalSessionCommandsOperateOnRustRolloutWithoutGoSnapshot(t *testing.T)
 	}
 
 	stdout.Reset()
-	if err := Run(context.Background(), []string{"resume", "Rust Session"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+	if err := Run(context.Background(), []string{"resume", "Rust Session"}, newTerminalReader(""), terminalOut(&stdout), &bytes.Buffer{}); err != nil {
 		t.Fatalf("rollout resume error: %v", err)
 	}
 	if !strings.Contains(stdout.String(), `"action": "resumed"`) || !strings.Contains(stdout.String(), `"id": "`+threadID+`"`) {
@@ -191,6 +193,7 @@ func TestSQLiteSessionRolloutValidRejectsMismatchedMeta(t *testing.T) {
 }
 
 func TestLocalSessionForksRustRolloutWithoutGoSnapshot(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)
 	const threadID = "0198f100-0000-7000-8000-000000000011"
@@ -210,7 +213,7 @@ func TestLocalSessionForksRustRolloutWithoutGoSnapshot(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), []string{"fork", "Rust Fork Source"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+	if err := Run(context.Background(), []string{"fork", "Rust Fork Source"}, newTerminalReader(""), terminalOut(&stdout), &bytes.Buffer{}); err != nil {
 		t.Fatalf("rollout fork error: %v", err)
 	}
 	var summary struct {
@@ -243,6 +246,7 @@ func assertCLIStateThreadArchived(t *testing.T, home, threadID string, want bool
 }
 
 func TestSessionArchiveUnarchiveForkAndDeleteFlow(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)
 	store := session.NewStore(filepath.Join(home, "sessions"))
@@ -284,7 +288,7 @@ func TestSessionArchiveUnarchiveForkAndDeleteFlow(t *testing.T) {
 	}
 
 	stdout.Reset()
-	if err := Run(context.Background(), []string{"fork", string(threadID)}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+	if err := Run(context.Background(), []string{"fork", string(threadID)}, newTerminalReader(""), terminalOut(&stdout), &bytes.Buffer{}); err != nil {
 		t.Fatalf("fork returned error: %v", err)
 	}
 	if !strings.Contains(stdout.String(), `"action": "forked"`) {
@@ -421,6 +425,7 @@ func TestSessionMutationsResolvePositionalNameLikeRust(t *testing.T) {
 }
 
 func TestSessionResumeLast(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)
 	store := session.NewStore(filepath.Join(home, "sessions"))
@@ -437,7 +442,7 @@ func TestSessionResumeLast(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), []string{"resume", "--last"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+	if err := Run(context.Background(), []string{"resume", "--last"}, newTerminalReader(""), terminalOut(&stdout), &bytes.Buffer{}); err != nil {
 		t.Fatalf("resume returned error: %v", err)
 	}
 	if !strings.Contains(stdout.String(), `"id": "newer"`) {
@@ -446,6 +451,7 @@ func TestSessionResumeLast(t *testing.T) {
 }
 
 func TestSessionResumeByName(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)
 	store := session.NewStore(filepath.Join(home, "sessions"))
@@ -458,7 +464,7 @@ func TestSessionResumeByName(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), []string{"resume", "Design"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+	if err := Run(context.Background(), []string{"resume", "Design"}, newTerminalReader(""), terminalOut(&stdout), &bytes.Buffer{}); err != nil {
 		t.Fatalf("resume positional name returned error: %v", err)
 	}
 	if !strings.Contains(stdout.String(), `"id": "older"`) {
@@ -469,6 +475,7 @@ func TestSessionResumeByName(t *testing.T) {
 // TestSessionResumeAmbiguousNameRejectedLikeRust covers Rust #43315: a label
 // that matches two sessions must be disambiguated with a UUID.
 func TestSessionResumeAmbiguousNameRejectedLikeRust(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)
 	store := session.NewStore(filepath.Join(home, "sessions"))
@@ -482,7 +489,7 @@ func TestSessionResumeAmbiguousNameRejectedLikeRust(t *testing.T) {
 		}
 	}
 
-	err := Run(context.Background(), []string{"resume", "Design"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	err := Run(context.Background(), []string{"resume", "Design"}, newTerminalReader(""), terminalOut(&bytes.Buffer{}), &bytes.Buffer{})
 	if err == nil || !strings.Contains(err.Error(), "Multiple sessions match 'Design'") ||
 		!strings.Contains(err.Error(), "older") || !strings.Contains(err.Error(), "newer") {
 		t.Fatalf("resume ambiguous name error = %v", err)
@@ -538,6 +545,7 @@ func TestSessionArchiveAmbiguousNameRejectedLikeRust(t *testing.T) {
 }
 
 func TestSessionRemoteFlagsValidateBeforeLocalStore(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)
 	store := session.NewStore(filepath.Join(home, "sessions"))
@@ -620,13 +628,20 @@ func TestSessionRemoteFlagsValidateBeforeLocalStore(t *testing.T) {
 	default:
 	}
 
-	err = Run(context.Background(), []string{"--remote-auth-token-env", "CODEX_REMOTE_AUTH_TOKEN", "resume", string(threadID)}, strings.NewReader(""), &stdout, &bytes.Buffer{})
-	if err == nil || err.Error() != "`--remote-auth-token-env` requires `--remote`." {
-		t.Fatalf("remote auth without remote error = %v", err)
+	// Rust answers this from run_interactive_tui's resolve_remote_endpoint
+	// call, which reports usage errors as `ERROR: ...` with exit 1.
+	var resumeStderr bytes.Buffer
+	err = Run(context.Background(), []string{"--remote-auth-token-env", "CODEX_REMOTE_AUTH_TOKEN", "resume", string(threadID)}, newTerminalReader(""), terminalOut(&stdout), &resumeStderr)
+	if code := ExitCode(err); code != 1 {
+		t.Fatalf("remote auth without remote exit = %d (%v)", code, err)
+	}
+	if got, want := resumeStderr.String(), "ERROR: `--remote-auth-token-env` requires `--remote`.\n"; got != want {
+		t.Fatalf("remote auth without remote stderr = %q, want %q", got, want)
 	}
 }
 
 func TestSessionRemoteCommandsResolveNameThroughAppServer(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -716,7 +731,7 @@ func TestSessionRemoteCommandsResolveNameThroughAppServer(t *testing.T) {
 	}
 
 	stdout.Reset()
-	if err := Run(ctx, []string{"--remote", remoteArg, "fork", "Remote Active"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+	if err := Run(ctx, []string{"--remote", remoteArg, "fork", "Remote Active"}, newTerminalReader(""), terminalOut(&stdout), &bytes.Buffer{}); err != nil {
 		t.Fatalf("remote fork by name returned error: %v", err)
 	}
 	if !strings.Contains(stdout.String(), `"action": "forked"`) || !strings.Contains(stdout.String(), `"id": "thread-forked"`) || !strings.Contains(stdout.String(), `"itemCount": 2`) {
@@ -724,7 +739,7 @@ func TestSessionRemoteCommandsResolveNameThroughAppServer(t *testing.T) {
 	}
 
 	stdout.Reset()
-	if err := Run(ctx, []string{"--remote", remoteArg, "resume", "Remote Active"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+	if err := Run(ctx, []string{"--remote", remoteArg, "resume", "Remote Active"}, newTerminalReader(""), terminalOut(&stdout), &bytes.Buffer{}); err != nil {
 		t.Fatalf("remote resume by name returned error: %v", err)
 	}
 	if !strings.Contains(stdout.String(), `"action": "resumed"`) || !strings.Contains(stdout.String(), `"id": "thread-active"`) || !strings.Contains(stdout.String(), `"itemCount": 2`) {
@@ -783,6 +798,7 @@ func remoteSessionTestThread(id string, name string, archived bool, turns int) m
 }
 
 func TestSessionForkByName(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)
 	store := session.NewStore(filepath.Join(home, "sessions"))
@@ -800,7 +816,7 @@ func TestSessionForkByName(t *testing.T) {
 	})
 
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), []string{"fork", "Fork Me"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+	if err := Run(context.Background(), []string{"fork", "Fork Me"}, newTerminalReader(""), terminalOut(&stdout), &bytes.Buffer{}); err != nil {
 		t.Fatalf("fork positional name returned error: %v", err)
 	}
 	if !strings.Contains(stdout.String(), `"action": "forked"`) || !strings.Contains(stdout.String(), `"preview": "source"`) {
@@ -809,6 +825,7 @@ func TestSessionForkByName(t *testing.T) {
 }
 
 func TestSessionForkPositionalNameCopiesAllHistory(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)
 	store := session.NewStore(filepath.Join(home, "sessions"))
@@ -835,7 +852,7 @@ func TestSessionForkPositionalNameCopiesAllHistory(t *testing.T) {
 	})
 
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), []string{"fork", "Snapshot Source"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+	if err := Run(context.Background(), []string{"fork", "Snapshot Source"}, newTerminalReader(""), terminalOut(&stdout), &bytes.Buffer{}); err != nil {
 		t.Fatalf("fork positional name returned error: %v", err)
 	}
 	payload := decodeSessionSummaryPayload(t, &stdout)
@@ -855,6 +872,7 @@ func TestSessionForkPositionalNameCopiesAllHistory(t *testing.T) {
 }
 
 func TestSessionResumePickerListsInteractiveCandidates(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)
 	store := session.NewStore(filepath.Join(home, "sessions"))
@@ -912,7 +930,7 @@ func TestSessionResumePickerListsInteractiveCandidates(t *testing.T) {
 	})
 
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), []string{"resume"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+	if err := Run(context.Background(), []string{"resume"}, newTerminalReader(""), terminalOut(&stdout), &bytes.Buffer{}); err != nil {
 		t.Fatalf("resume picker returned error: %v", err)
 	}
 	payload := decodeSessionPickerResponse(t, &stdout)
@@ -931,6 +949,7 @@ func TestSessionResumePickerListsInteractiveCandidates(t *testing.T) {
 }
 
 func TestSessionResumePickerIncludeNonInteractive(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)
 	store := session.NewStore(filepath.Join(home, "sessions"))
@@ -972,7 +991,7 @@ func TestSessionResumePickerIncludeNonInteractive(t *testing.T) {
 	})
 
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), []string{"resume", "--include-non-interactive"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+	if err := Run(context.Background(), []string{"resume", "--include-non-interactive"}, newTerminalReader(""), terminalOut(&stdout), &bytes.Buffer{}); err != nil {
 		t.Fatalf("resume picker returned error: %v", err)
 	}
 	payload := decodeSessionPickerResponse(t, &stdout)
@@ -982,6 +1001,7 @@ func TestSessionResumePickerIncludeNonInteractive(t *testing.T) {
 }
 
 func TestSessionResumePickerAllIncludesArchived(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)
 	store := session.NewStore(filepath.Join(home, "sessions"))
@@ -1003,7 +1023,7 @@ func TestSessionResumePickerAllIncludesArchived(t *testing.T) {
 	})
 
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), []string{"resume", "--all"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+	if err := Run(context.Background(), []string{"resume", "--all"}, newTerminalReader(""), terminalOut(&stdout), &bytes.Buffer{}); err != nil {
 		t.Fatalf("resume picker returned error: %v", err)
 	}
 	payload := decodeSessionPickerResponse(t, &stdout)
@@ -1016,6 +1036,7 @@ func TestSessionResumePickerAllIncludesArchived(t *testing.T) {
 }
 
 func TestSessionResumeLastUsesPickerFilters(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)
 	store := session.NewStore(filepath.Join(home, "sessions"))
@@ -1053,7 +1074,7 @@ func TestSessionResumeLastUsesPickerFilters(t *testing.T) {
 	})
 
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), []string{"resume", "--last"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+	if err := Run(context.Background(), []string{"resume", "--last"}, newTerminalReader(""), terminalOut(&stdout), &bytes.Buffer{}); err != nil {
 		t.Fatalf("resume --last returned error: %v", err)
 	}
 	if !strings.Contains(stdout.String(), `"id": "interactive"`) {
@@ -1061,7 +1082,7 @@ func TestSessionResumeLastUsesPickerFilters(t *testing.T) {
 	}
 
 	stdout.Reset()
-	if err := Run(context.Background(), []string{"resume", "--last", "--include-non-interactive"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+	if err := Run(context.Background(), []string{"resume", "--last", "--include-non-interactive"}, newTerminalReader(""), terminalOut(&stdout), &bytes.Buffer{}); err != nil {
 		t.Fatalf("resume --last --include-non-interactive returned error: %v", err)
 	}
 	if !strings.Contains(stdout.String(), `"id": "exec-newer"`) {
@@ -1069,7 +1090,7 @@ func TestSessionResumeLastUsesPickerFilters(t *testing.T) {
 	}
 
 	stdout.Reset()
-	if err := Run(context.Background(), []string{"resume", "--last", "--all"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+	if err := Run(context.Background(), []string{"resume", "--last", "--all"}, newTerminalReader(""), terminalOut(&stdout), &bytes.Buffer{}); err != nil {
 		t.Fatalf("resume --last --all returned error: %v", err)
 	}
 	if !strings.Contains(stdout.String(), `"id": "archived-newest"`) {
@@ -1078,6 +1099,7 @@ func TestSessionResumeLastUsesPickerFilters(t *testing.T) {
 }
 
 func TestSessionForkPickerListsCandidates(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)
 	store := session.NewStore(filepath.Join(home, "sessions"))
@@ -1091,7 +1113,7 @@ func TestSessionForkPickerListsCandidates(t *testing.T) {
 	})
 
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), []string{"fork"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+	if err := Run(context.Background(), []string{"fork"}, newTerminalReader(""), terminalOut(&stdout), &bytes.Buffer{}); err != nil {
 		t.Fatalf("fork picker returned error: %v", err)
 	}
 	payload := decodeSessionPickerResponse(t, &stdout)
@@ -1107,6 +1129,7 @@ func TestSessionForkPickerListsCandidates(t *testing.T) {
 }
 
 func TestSessionRuntimeLoadsStrictConfig(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)
 	if err := os.WriteFile(config.ConfigPath(home), []byte("foo = \"bar\"\n"), 0o600); err != nil {
@@ -1116,7 +1139,7 @@ func TestSessionRuntimeLoadsStrictConfig(t *testing.T) {
 		{"--strict-config", "resume", "--last"},
 		{"archive", "--strict-config", "missing-session"},
 	} {
-		err := Run(context.Background(), args, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+		err := Run(context.Background(), args, newTerminalReader(""), terminalOut(&bytes.Buffer{}), &bytes.Buffer{})
 		if err == nil || !strings.Contains(err.Error(), "unknown configuration field `foo`") {
 			t.Fatalf("Run(%v) error = %v, want strict config error", args, err)
 		}
@@ -1124,6 +1147,7 @@ func TestSessionRuntimeLoadsStrictConfig(t *testing.T) {
 }
 
 func TestSessionRuntimeLoadsConfigOverrides(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)
 	if err := os.WriteFile(config.ConfigPath(home), []byte("model = \"gpt-5\"\n"), 0o600); err != nil {
@@ -1133,7 +1157,7 @@ func TestSessionRuntimeLoadsConfigOverrides(t *testing.T) {
 		{"--strict-config", "-c", "foo=bar", "resume", "--last"},
 		{"resume", "--strict-config", "-c", "foo=bar", "--last"},
 	} {
-		err := Run(context.Background(), args, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+		err := Run(context.Background(), args, newTerminalReader(""), terminalOut(&bytes.Buffer{}), &bytes.Buffer{})
 		if err == nil || !strings.Contains(err.Error(), "unknown configuration field `foo`") {
 			t.Fatalf("Run(%v) error = %v, want strict override error", args, err)
 		}
@@ -1250,6 +1274,14 @@ func sessionItemIDs(items []session.Item) []string {
 	}
 	return ids
 }
+
+// sessionTerminalOutput lets the resume/fork TUI start gate (tui::init parity)
+// see a terminal while the test still inspects the buffered bytes.
+type sessionTerminalOutput struct{ io.Writer }
+
+func (sessionTerminalOutput) IsTerminal() bool { return true }
+
+func terminalOut(w io.Writer) sessionTerminalOutput { return sessionTerminalOutput{Writer: w} }
 
 type terminalReader struct {
 	*strings.Reader

@@ -1654,8 +1654,53 @@ one-off captures.
   `TestAppServerPrintStartupConfigSkipsTransportValidationLikeRust`, all
   generated from the 0.166 binary through `p42cmp.py`.
 
+### 57. resume/fork TUI start gate: TERM, remote usage errors and override wording
+
+- **Order of the checks.** Rust routes `codex resume` and `codex fork` through
+  `run_interactive_tui`, so four checks answer before the session store is
+  read: `--no-daemon` together with an actual `--remote` endpoint prints
+  `ERROR: --no-daemon cannot be used with --remote.` (an auth-token env var
+  alone does not count), TERM `dumb` without a terminal on both stdin and
+  stderr prints `ERROR: TERM is set to "dumb". Refusing to start the
+  interactive TUI because no terminal is available for a confirmation prompt
+  (stdin/stderr is not a TTY). Run in a supported terminal or unset TERM.`,
+  `--remote-auth-token-env` without `--remote` prints
+  ``ERROR: `--remote-auth-token-env` requires `--remote`.``, and `tui::init`
+  then refuses a non-terminal stdin (`stdin is not a terminal`) and finally a
+  non-terminal stdout (`stdout is not a terminal`) with the plain `Error:` head
+  and exit 1. Go's `guardSessionTUIStart` and `requireSessionTUIStreams` replay
+  that order, and `app.Run` now hands stdin/stderr to both commands.
+- **Override wording.** resume/fork parse the overrides with the interactive
+  CLI context, so an invalid value prints `Error parsing -c overrides: ...`
+  without the runtime head, while the archive/delete/unarchive/queue family
+  reports `Error: failed to parse -c overrides: ...`;
+  `loadSessionRuntimeConfigWithPrefix` renders both.
+- **Remote validation stays behind the gate.** `--remote ws://x resume --last`
+  still fails with the `invalid remote address` diagnostic for `ws://x` after
+  the TERM gate, exactly where Rust resolves the endpoint (before `tui::init`).
+- **Headless picker no longer reachable.** Rust has no non-terminal resume
+  path, so the Go session picker/summary JSON is now gated the same way; the
+  tests that exercise it pass a terminal-simulating reader/writer
+  (`newTerminalReader`, `terminalOut`) and pin `TERM` per case.
+- Evidence: `TestSessionTUIStartGateLikeRust` (46 exact rc/stderr/error
+  captures from the 0.166 binary), `out/round43-tui-gate.txt` (96 cases:
+  29 argument shapes x TERM dumb/unset/xterm) and
+  `out/round43-session-cli.txt` (36 archive/queue/override cases).
+
 ## Verification
 
+- The resume/fork start gate matches Rust 0.166 on all 96 argument-shape/TERM
+  combinations (`out/round43-tui-gate.txt`) and the 36 archive/queue/override
+  cases (`out/round43-session-cli.txt`): exit code, stderr and stdout are
+  identical, including the `ERROR:`/`Error:` heads and the
+  `failed to parse -c overrides:` wording. The only harness timeouts are
+  `queue ... -c x=` on the Rust side, which starts a daemon and never returns
+  within the probe window. `go test -count=1 -vet=off ./cli ./config ./plugin`
+  passes in a clean worktree of the commit and `./app` passes in the shared
+  tree; a clean worktree still shows the two pre-existing
+  `TestInteractiveSlashCommandsUpdateTUIState` /
+  `TestInteractiveSlashCommandRejectsGoOnlyApproval` failures noted under
+  entry 56, whose fixes are uncommitted in the shared tree.
 - The app-server startup gate matches Rust 0.166 on every case of the 159-entry
   matrix (`out/round42-compare.txt` via `p42cmp.py`, exit code plus full stderr
   and stdout) and the 28 accepted combinations start the server without a
@@ -2093,12 +2138,6 @@ one-off captures.
   (`out/round42-version-*.txt`), so a release build that stamps the version
   matches Rust without a code change.
 
-- `codex resume`/`codex fork` without a TTY: Rust refuses to start the TUI
-  (`ERROR: TERM is set to "dumb". Refusing to start the interactive TUI ...`)
-  before it resolves the session, while Go runs headless and reports
-  `No sessions found to resume.`, `Session not found: <id>` or
-  `Error: thread not found`. The argument surface itself now matches, so the
-  remaining gap is the TUI start gate in the non-interactive path.
 - Long-flag did-you-mean and the smart usage block now cover every command path
   the 0.166 help tree exposes with options (entries 46 and 47; the audit compares
   the tables against the help pages). What the audit reports next to the tables
