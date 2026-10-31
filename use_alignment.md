@@ -825,8 +825,61 @@ one-off captures.
     `app/group_help_meta_like_rust_test.go` (11 long/short/help cases plus the
     eight bare-invocation stderr/exit-2 cases).
 
+39. **Every `-h`/`--help` page, root meta actions and `--help=<value>`** - Go
+    answered `unexpected argument '--help' found` for every command outside the
+    eight groups of entry 38. `cli/subcommand_help.go` now carries the pages
+    captured verbatim from 0.166 for the root command and all 79 subcommand
+    paths (80 keys, both the `-h` summary and the `--help`/`help` long layer,
+    including `execpolicy check`, `stdio-to-uds`, `tcp-tunnel` and
+    `responses-api-proxy`, which no parent page lists under `Commands`), plus a
+    per-command flag table that records which flags take a value.
+    `SubcommandHelpRequestFor` walks the argv the way clap does:
+    - the path advances only over known subcommands, so `codex mcp list --json
+      --help` reaches the `mcp list` page past a boolean flag while an unknown
+      flag before `--help` hands the argv back to the parser;
+    - `-h` selects the summary layout, `--help` the long one, and `help <topic>`
+      the long page of a nested topic (`codex mcp help get`);
+    - a value-taking flag swallows the next token, so `queue --thread --help`
+      keeps clap's pending-value behaviour instead of printing help, while
+      `mcp get -c foo --help` and `mcp get -cfoo --help` do print it; `--` and
+      unknown flags hand the argv back to the command's parser;
+    - `-h<cluster>` fires on the first character like clap, except for
+      `execpolicy check`, whose `<COMMAND>...` positional allows hyphen values
+      (the generator records that exception by probing 0.166);
+    - `--help=<value>` renders clap's `unexpected value '<value>' for '--help'
+      found; no more were expected` block with the usage 0.166 prints, captured
+      per command because clap echoes the help flag among the options it saw.
+    Root parsing gained clap's meta actions, which fire before any subcommand
+    runs: `codex -h exec`, `codex -hx exec` and `codex --help -c foo` print the
+    root page, `codex -V exec` prints the version, `codex help <topic>` (at any
+    depth, also after root options) prints that page, and an unknown topic
+    segment renders `unrecognized subcommand '<name>'` with the usage of the
+    deepest command clap resolved (`codex help sandbox bogus`). The exec family
+    keeps its own captured pages but gained the same `-h<cluster>` and
+    `--help=<value>` handling, and a regression test pins `ExecHelpText` to the
+    generic pages so `codex help exec` and `codex exec --help` stay
+    byte-identical. Evidence: 434 live comparisons against 0.166 (80 paths x
+    {`--help`, `-h`, `--help=x`, `-hx`} + 79 `help <path>` + 12 short-flag + 23
+    root cases) are byte-identical on stdout, stderr and exit status apart from
+    the build version string and `execpolicy check -hx`, which falls through to
+    the missing-required block listed under Still open; the earlier 160-page
+    probe and the 80 unknown-argument / 56 missing-argument regression probes
+    still report 0 diffs. Regressions:
+    `cli/subcommand_help_like_rust_test.go`,
+    `cli/root_meta_help_like_rust_test.go` and
+    `app/subcommand_help_meta_like_rust_test.go`.
+
 ## Verification
 
+- The full help surface is byte-identical to Rust 0.166: `probe_subhelp_r24`
+  compares 434 invocations (80 paths x `--help`/`-h`/`--help=x`/`-hx`, 79
+  `help <path>`, 12 short-flag and 23 root cases) on stdout, stderr and exit
+  status. The only difference is `execpolicy check -hx`, which fails on the
+  missing-required diagnostic still listed under Still open. The 160-page probe
+  and the 80 unknown-argument / 56 missing-argument regressions stay at 0 diffs
+  (`out/round24-subcommand-help.txt`). `go test ./cli` passes, and
+  `go test ./cli ./applypatch ./prompt ./review ./cmd/...` is green while
+  `go test -vet=off ./exec ./app` keeps its 9 and 2 pre-existing failures.
 - `go test ./config/`, `go test ./tui/onboarding/`, `go test ./tui/...` pass;
   `go test ./app/` keeps its two pre-existing unrelated failures
   (`TestExecJSONEndToEnd`, `TestLocalSessionForksRustRolloutWithoutGoSnapshot`),
@@ -1077,16 +1130,11 @@ one-off captures.
     single missing option instead of `--proxy-url`/`--proxy-origins-file`/
     `--target`). Those parsers live outside `cli.Parse`'s table-driven surface,
     so they need their own usage snapshots before they can print clap blocks.
-  - the eight group pages are aligned (entry 38); every *other* command still
-    rejects `-h`/`--help` with `unexpected argument '--help' found`. That covers
-    the leaf commands (`codex mcp get --help`, `codex features list --help`,
-    `codex cloud exec --help`, ...), the non-group top-level commands
-    (`codex cloud`, `codex app-server`, `codex sandbox`, `codex agents`,
-    `codex resume`, `codex update`, ...) and `codex <group> help <topic>`
-    (`codex mcp help get`), which Rust answers with that leaf's long page.
-    `cli/group_help.go` shows the capture-and-embed pattern; the remaining work
-    is generating the same short/long pairs for those commands and routing them
-    in their parsers.
+  - the help surface is aligned (entry 39): the root command and all 79
+    subcommand paths print clap's `-h`/`--help`/`help <topic>` pages plus the
+    `--help=<value>` diagnostic. The one help invocation that still differs is
+    `codex execpolicy check -hx`, and only because it falls through to the
+    Go-shaped missing-required block described above.
   - `codex mcp add --oauth-client-registration <AUTO|CIMD|DCR>` is a Rust flag Go
     does not parse yet, and clap treats `--user=` as a satisfied (empty) value for
     the nested `setup` parser where Go reports the missing group.

@@ -681,6 +681,8 @@ type Parsed struct {
 	Debug             DebugOptions
 	TcpTunnel         TcpTunnelOptions
 	GroupHelp         *GroupHelpRequest
+	SubcommandHelp    *SubcommandHelpRequest
+	RootVersion       bool
 	RawSubcommand     []string
 }
 
@@ -705,6 +707,14 @@ func Parse(args []string) (*Parsed, error) {
 	}
 
 	rest, promptOnly, err := parseRoot(args, &p.Root)
+	if signal, ok := err.(*rootMetaSignal); ok {
+		if signal.kind == rootMetaVersion {
+			p.RootVersion = true
+			return p, nil
+		}
+		p.SubcommandHelp = &SubcommandHelpRequest{Path: signal.topic, Short: signal.short}
+		return p, nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -812,6 +822,19 @@ func parseSubcommand(p *Parsed, args []string) (*Parsed, error) {
 	if request := groupHelpRequestFor(p.Command, args); request != nil {
 		p.GroupHelp = request
 		return p, nil
+	}
+	// The exec family renders its own pages (and `-V`) from exec_help.go.
+	if p.Command != CommandExec {
+		if request := SubcommandHelpRequestFor(string(p.Command), args); request != nil {
+			if request.UnexpectedValue != nil {
+				return nil, &UsageError{
+					Message: "unexpected value '" + *request.UnexpectedValue + "' for '--help' found; no more were expected",
+					Usage:   subcommandHelpValueUsages[request.Path],
+				}
+			}
+			p.SubcommandHelp = request
+			return p, nil
+		}
 	}
 	remaining, err := p.splitSubcommandFeatureFlags(args)
 	if err != nil {
@@ -968,6 +991,53 @@ func (p *Parsed) remoteUnsupportedSubcommandName() string {
 	}
 }
 
+// rootMetaKind names the root-level actions clap performs while parsing the
+// root command, before any subcommand runs.
+type rootMetaKind int
+
+const (
+	rootMetaHelp rootMetaKind = iota
+	rootMetaVersion
+)
+
+// rootMetaSignal carries a root-level help/version action out of parseRoot.
+// clap fires these as soon as the flag is parsed, so the remaining arguments
+// never reach a subcommand.
+type rootMetaSignal struct {
+	kind  rootMetaKind
+	short bool
+	topic string
+}
+
+func (s *rootMetaSignal) Error() string { return "root meta action" }
+
+// rootHelpTopic resolves clap's `help [TOPIC...]` subcommand: a known path
+// prints that page, and an unknown segment is reported against the deepest
+// command clap managed to resolve.
+func rootHelpTopic(args []string) error {
+	path := ""
+	index := 0
+	for index < len(args) {
+		candidate := args[index]
+		if path != "" {
+			candidate = path + " " + candidate
+		}
+		if _, ok := subcommandHelpPages[candidate]; !ok {
+			break
+		}
+		path = candidate
+		index++
+	}
+	if index == len(args) {
+		return &rootMetaSignal{kind: rootMetaHelp, topic: path}
+	}
+	usage := rootUsageText
+	if path != "" {
+		usage = subcommandHelpUsages[path]
+	}
+	return unrecognizedSubcommandError(args[index], usage)
+}
+
 func parseRoot(args []string, root *RootOptions) ([]string, bool, error) {
 	var rest []string
 	promptSet := false
@@ -1005,6 +1075,24 @@ func parseRoot(args []string, root *RootOptions) ([]string, bool, error) {
 			}
 		}
 		switch {
+		case arg == "--help":
+			return nil, false, &rootMetaSignal{kind: rootMetaHelp}
+		case strings.HasPrefix(arg, "--help="):
+			return nil, false, &UsageError{
+				Message: "unexpected value '" + strings.TrimPrefix(arg, "--help=") + "' for '--help' found; no more were expected",
+				Usage:   rootUsageText,
+			}
+		case arg == "-h" || (len(arg) > 2 && strings.HasPrefix(arg, "-h") && !strings.HasPrefix(arg, "--")):
+			return nil, false, &rootMetaSignal{kind: rootMetaHelp, short: true}
+		case arg == "--version" || arg == "-V" || (len(arg) > 2 && strings.HasPrefix(arg, "-V") && !strings.HasPrefix(arg, "--")):
+			return nil, false, &rootMetaSignal{kind: rootMetaVersion}
+		case strings.HasPrefix(arg, "--version="):
+			return nil, false, &UsageError{
+				Message: "unexpected value '" + strings.TrimPrefix(arg, "--version=") + "' for '--version' found; no more were expected",
+				Usage:   rootUsageText,
+			}
+		case arg == "help" && !promptSet:
+			return nil, false, rootHelpTopic(args[i+1:])
 		case arg == "-c" || arg == "--config":
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
@@ -1094,6 +1182,11 @@ func parseExec(args []string, exec *ExecOptions) error {
 			exec.Help = &ExecHelpRequest{Kind: ExecHelpExec}
 			return nil
 		case arg == "-h":
+			exec.Help = &ExecHelpRequest{Kind: ExecHelpExec, Short: true}
+			return nil
+		case strings.HasPrefix(arg, "--help="):
+			return execHelpValueError(arg, execUsageText)
+		case len(arg) > 2 && strings.HasPrefix(arg, "-h") && !strings.HasPrefix(arg, "--"):
 			exec.Help = &ExecHelpRequest{Kind: ExecHelpExec, Short: true}
 			return nil
 		case arg == "-V" || arg == "--version":
@@ -1232,6 +1325,11 @@ func parseExecResume(args []string, exec *ExecOptions) error {
 		case arg == "-h":
 			exec.Help = &ExecHelpRequest{Kind: ExecHelpResume, Short: true}
 			return nil
+		case strings.HasPrefix(arg, "--help="):
+			return execHelpValueError(arg, execResumeHelpValueUsageText)
+		case len(arg) > 2 && strings.HasPrefix(arg, "-h") && !strings.HasPrefix(arg, "--"):
+			exec.Help = &ExecHelpRequest{Kind: ExecHelpResume, Short: true}
+			return nil
 		case arg == "-V" || arg == "--version":
 			exec.Help = &ExecHelpRequest{Version: true}
 			return nil
@@ -1364,6 +1462,11 @@ func parseExecFork(args []string, exec *ExecOptions) error {
 			exec.Help = &ExecHelpRequest{Kind: ExecHelpFork}
 			return nil
 		case arg == "-h":
+			exec.Help = &ExecHelpRequest{Kind: ExecHelpFork, Short: true}
+			return nil
+		case strings.HasPrefix(arg, "--help="):
+			return execHelpValueError(arg, execForkHelpValueUsageText)
+		case len(arg) > 2 && strings.HasPrefix(arg, "-h") && !strings.HasPrefix(arg, "--"):
 			exec.Help = &ExecHelpRequest{Kind: ExecHelpFork, Short: true}
 			return nil
 		case arg == "-V" || arg == "--version":
@@ -1523,6 +1626,11 @@ func parseReview(args []string, review *ReviewOptions, exec *ExecOptions) error 
 			// `codex exec review --help` prints the exec review page; the
 			// top-level `codex review` command has its own surface.
 			exec.Help = &ExecHelpRequest{Kind: ExecHelpReview, Short: arg == "-h"}
+			return nil
+		case exec != nil && strings.HasPrefix(arg, "--help="):
+			return execHelpValueError(arg, execReviewHelpValueUsageText)
+		case exec != nil && len(arg) > 2 && strings.HasPrefix(arg, "-h") && !strings.HasPrefix(arg, "--"):
+			exec.Help = &ExecHelpRequest{Kind: ExecHelpReview, Short: true}
 			return nil
 		case exec != nil && (arg == "-V" || arg == "--version"):
 			exec.Help = &ExecHelpRequest{Version: true}

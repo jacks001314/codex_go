@@ -284,7 +284,20 @@ const (
 	execResumeUsageText = "Usage: codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]"
 	execForkUsageText   = "Usage: codex exec fork [OPTIONS] <SESSION_ID> [PROMPT]"
 	execReviewUsageText = "Usage: codex exec review [OPTIONS] [PROMPT]"
+
+	execResumeHelpValueUsageText = "Usage: codex exec resume --help [SESSION_ID] [PROMPT]"
+	execForkHelpValueUsageText   = "Usage: codex exec fork --help <SESSION_ID> [PROMPT]"
+	execReviewHelpValueUsageText = "Usage: codex exec review --help [PROMPT]"
 )
+
+// execHelpValueError renders clap's `--help=<value>` diagnostic for the exec
+// family, whose parsers carry their own usage blocks.
+func execHelpValueError(arg, usage string) error {
+	return &UsageError{
+		Message: "unexpected value '" + strings.TrimPrefix(arg, "--help=") + "' for '--help' found; no more were expected",
+		Usage:   usage,
+	}
+}
 
 // execResumeUsageTextFor renders clap's resume usage line. clap prints the
 // session selector flag instead of [OPTIONS] once the caller supplied it,

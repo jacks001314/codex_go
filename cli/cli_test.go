@@ -1324,12 +1324,33 @@ func TestParseSandboxUninstallRespectsCommandSeparator(t *testing.T) {
 }
 
 func TestParseSandboxUninstallHelpAndUnexpectedArguments(t *testing.T) {
-	help, err := Parse([]string{"sandbox", "uninstall", "--help"})
+	// The generic help router owns `-h`/`--help`, so the sandbox commands keep
+	// no UninstallHelp bit of their own.
+	help, err := Parse([]string{"sandbox", "--help"})
+	if err != nil {
+		t.Fatalf("Parse sandbox --help returned error: %v", err)
+	}
+	if help.SubcommandHelp == nil || help.SubcommandHelp.Path != "sandbox" || help.SubcommandHelp.Short {
+		t.Fatalf("help sandbox = %#v", help.SubcommandHelp)
+	}
+
+	uninstall, err := Parse([]string{"sandbox", "uninstall", "--help"})
 	if err != nil {
 		t.Fatalf("Parse sandbox uninstall --help returned error: %v", err)
 	}
-	if !help.Sandbox.Uninstall || !help.Sandbox.UninstallHelp {
-		t.Fatalf("help sandbox = %#v", help.Sandbox)
+	if uninstall.SubcommandHelp == nil || uninstall.SubcommandHelp.Path != "sandbox uninstall" || uninstall.SubcommandHelp.Short {
+		t.Fatalf("help sandbox uninstall = %#v", uninstall.SubcommandHelp)
+	}
+	if uninstall.Sandbox.Uninstall || uninstall.Sandbox.UninstallHelp {
+		t.Fatalf("help sandbox uninstall leaked options: %#v", uninstall.Sandbox)
+	}
+
+	short, err := Parse([]string{"sandbox", "uninstall", "-h"})
+	if err != nil {
+		t.Fatalf("Parse sandbox uninstall -h returned error: %v", err)
+	}
+	if short.SubcommandHelp == nil || !short.SubcommandHelp.Short || short.SubcommandHelp.Path != "sandbox uninstall" {
+		t.Fatalf("short help sandbox uninstall = %#v", short.SubcommandHelp)
 	}
 
 	_, err = Parse([]string{"sandbox", "uninstall", "unexpected"})
