@@ -120,10 +120,12 @@ func TestParseQueueCommandLikeRust(t *testing.T) {
 }
 
 func TestParseQueueCommandRejectsInvalidLikeRust(t *testing.T) {
+	// clap accepts an empty --thread (and --thread=) as a present value and
+	// fails later with "No active session found matching ''", so only the
+	// genuinely missing or malformed forms are rejected here.
 	for _, args := range [][]string{
 		{"queue", "--message", "hello"},                             // missing --thread
 		{"queue", "--thread", "thread-1"},                           // missing --message
-		{"queue", "--thread", "", "--message", "hi"},                // empty --thread
 		{"queue", "--thread", "t", "--message", "  "},               // blank --message
 		{"queue", "--thread", "t", "--message", "hi", "positional"}, // positional arg
 		{"queue", "--thread", "t", "--message", "hi", "--bogus"},    // unknown option
@@ -1592,14 +1594,13 @@ func TestParseExecServerAndStdioToUDS(t *testing.T) {
 }
 
 func TestParseExecServerForwardModeLikeRust(t *testing.T) {
-	// Rust #39249: `exec-server forward --connect ws://HOST:PORT` registers an
-	// existing WebSocket exec-server as a remote environment.
-	parsed, err := Parse([]string{"exec-server", "forward", "--connect", "ws://127.0.0.1:7777", "--name", "worker-a"})
-	if err != nil {
-		t.Fatalf("Parse exec-server forward returned error: %v", err)
-	}
-	if parsed.Command != CommandExecServer || parsed.ExecServer.Forward != "ws://127.0.0.1:7777" {
-		t.Fatalf("exec-server forward = %#v", parsed.ExecServer)
+	// Rust #39249: `forward` is a clap subcommand whose --remote,
+	// --environment-id and --connect options are required, so clap reports them
+	// before any runtime validation (verified against codex 0.166).
+	_, err := Parse([]string{"exec-server", "forward", "--connect", "ws://127.0.0.1:7777", "--name", "worker-a"})
+	if err == nil || !strings.Contains(err.Error(), "the following required arguments were not provided") ||
+		!strings.Contains(err.Error(), "--remote <URL>") || !strings.Contains(err.Error(), "--environment-id <ID>") {
+		t.Fatalf("exec-server forward error = %v", err)
 	}
 	// Missing --connect is rejected.
 	if _, err := Parse([]string{"exec-server", "forward"}); err == nil || !strings.Contains(err.Error(), "--connect") {
@@ -1609,8 +1610,17 @@ func TestParseExecServerForwardModeLikeRust(t *testing.T) {
 	if _, err := Parse([]string{"exec-server", "--connect", "ws://127.0.0.1:7777", "--remote", "ws://registry:9000"}); err == nil || !strings.Contains(err.Error(), "cannot be combined") {
 		t.Fatalf("forward + remote error = %v", err)
 	}
+	// The legacy `--connect` spelling without the forward token still binds the
+	// forwarding URL.
+	parsed, err := Parse([]string{"exec-server", "--connect", "ws://127.0.0.1:7777", "--name", "worker-a"})
+	if err != nil {
+		t.Fatalf("Parse exec-server --connect returned error: %v", err)
+	}
+	if parsed.Command != CommandExecServer || parsed.ExecServer.Forward != "ws://127.0.0.1:7777" {
+		t.Fatalf("exec-server connect = %#v", parsed.ExecServer)
+	}
 	// Non-WebSocket connect URL is rejected.
-	if _, err := Parse([]string{"exec-server", "forward", "--connect", "tcp://bad"}); err == nil || !strings.Contains(err.Error(), "ws://") {
+	if _, err := Parse([]string{"exec-server", "--connect", "tcp://bad"}); err == nil || !strings.Contains(err.Error(), "ws://") {
 		t.Fatalf("bad connect URL error = %v", err)
 	}
 }
@@ -1688,13 +1698,13 @@ func TestParseAppServerListenValidation(t *testing.T) {
 	}
 
 	_, err = Parse([]string{"app-server", "--listen", "http://foo"})
-	wantUnsupported := "unsupported --listen URL `http://foo`; expected `stdio://`, `unix://`, `unix://PATH`, `ws://IP:PORT`, or `off`"
+	wantUnsupported := "invalid value 'http://foo' for '--listen <URL>': unsupported --listen URL `http://foo`; expected `stdio://`, `unix://`, `unix://PATH`, `ws://IP:PORT`, or `off`"
 	if err == nil || err.Error() != wantUnsupported {
 		t.Fatalf("Parse unsupported listen error = %v, want %q", err, wantUnsupported)
 	}
 
 	_, err = Parse([]string{"app-server", "--listen", "ws://localhost:8765"})
-	wantInvalidWS := "invalid websocket --listen URL `ws://localhost:8765`; expected `ws://IP:PORT`"
+	wantInvalidWS := "invalid value 'ws://localhost:8765' for '--listen <URL>': invalid websocket --listen URL `ws://localhost:8765`; expected `ws://IP:PORT`"
 	if err == nil || err.Error() != wantInvalidWS {
 		t.Fatalf("Parse invalid websocket listen error = %v, want %q", err, wantInvalidWS)
 	}

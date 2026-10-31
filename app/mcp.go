@@ -830,6 +830,12 @@ func printTable(stdout io.Writer, headers []string, rows [][7]string) {
 	}
 	printRow := func(cells []string) {
 		for i, cell := range cells {
+			// Rows are declared as [7]string so every table shares one width
+			// shape; tables with fewer headers print only the columns they
+			// declare instead of indexing past widths.
+			if i >= len(widths) {
+				break
+			}
 			if i > 0 {
 				fmt.Fprint(stdout, "  ")
 			}

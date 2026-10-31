@@ -68,6 +68,9 @@ func TestParseExecServerWebSocketAuthFlagsLikeRust(t *testing.T) {
 			want: "WebSocket listener auth cannot be used with --remote or forward",
 		},
 		{
+			// Rust's forward subcommand declares no --ws-* flags, so clap
+			// reports the first one as an unexpected argument (verified against
+			// codex 0.166).
 			name: "forward is incompatible with listener auth",
 			args: []string{
 				"exec-server", "forward",
@@ -75,7 +78,7 @@ func TestParseExecServerWebSocketAuthFlagsLikeRust(t *testing.T) {
 				"--ws-auth", "capability-token",
 				"--ws-token-sha256", digest,
 			},
-			want: "WebSocket listener auth cannot be used with --remote or forward",
+			want: "unexpected argument '--ws-auth' found",
 		},
 		{
 			name: "stdio listener cannot authenticate upgrades",

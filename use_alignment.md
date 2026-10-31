@@ -1290,8 +1290,77 @@ one-off captures.
    `TestExecReviewAcceptsGlobalOptionsLikeRust` pinning the new surface;
    `go test -vet=off ./app` keeps only the known baselines.
 
+50. **Inline `--flag=` values, per-command placeholders and `exec-server`'s
+   required groups** - the 0.166 surface sweep only probed the space form
+   (`--flag <value>`), so this round gave every value flag three inline shapes:
+   `--flag=bogusval --bogus`, `--flag=` and `--flag --strict-config`. 185 of
+   the 1,068 probes diverged.
+   - clap validates an inline value while it matches that token, so
+     `--flag=bogusval` reports the value-parser error even when an undeclared
+     flag follows, while the space form still defers. `deferClapValueError`
+     returns inline diagnostics immediately:
+     `app-server --ws-auth=bogusval --bogus` reports `invalid value 'bogusval'
+     for '--ws-auth <MODE>'` with the possible values, and `exec
+     --thread-source=bogusval --bogus` now parses the inline form at all.
+   - clap rejects an empty inline value wherever its parser wants a non-empty
+     one: `--cd=`, `--add-dir=`, `--image=`, `--output-schema=`,
+     `--output-last-message=`, `--message=`, `--staging-dir=`, `--out=`,
+     `--prettier=`, `--cloud-skills-snapshot=`, `--ws-token-file=`,
+     `--ws-shared-secret-file=`, `--ws-auth=` and `--cyber-access-program=`
+     print `a value is required for '<flag> <PLACEHOLDER>' but none was
+     supplied` (plus possible values where clap lists them) instead of a silent
+     empty string or a Go-only message.
+   - the empty arms reuse Rust's parser wording: `--profile=` reports
+     `invalid --profile value` with the empty name and the
+     `pass a plain name such as work` hint, `--thread=` (migrate-rollouts)
+     reports `invalid length: expected length 32 for simple format, found 0`,
+     `--startup-client-info=` reports `EOF while
+     parsing a value at line 1 column 0`, and the integer parsers separate
+     `cannot parse integer from empty string` from `invalid digit found in
+     string`.
+   - placeholders are per command again: `exec fork`/`exec resume` echo
+     `--image <FILE>` (not `<FILE>...`), `exec-server forward` echoes
+     `--remote <URL>` (not `<ADDR>`), `sandbox --permission-profile` reports
+     `<NAME>` and `sandbox --sandbox-state-readable-root` reports
+     `<SANDBOX_STATE_READABLE_ROOT>`.
+   - possible-values flags validate inside the scan: `--ws-auth`,
+     `--remote-transport`, `--listen` and `--cyber-access-program` report
+     clap's `invalid value '<v>' for '<flag> <PH>'` with their enum values
+     instead of Go's wording (`unknown --ws-auth mode`, `unsupported --listen
+     URL`), and `app-server --listen` keeps the empty-value arm.
+   - `exec-server` renders clap's required groups: `forward` requires
+     `--remote`, `--environment-id` and `--connect`, any `--aws-*` option pulls
+     in `--aws-sigv4`, and both the missing list and the usage line follow the
+     options argv actually supplied (`forward --aws-profile=` lists all four;
+     `exec-server --aws-profile=` lists the remote pair plus `--aws-sigv4`).
+     Go used to start the server and hang instead of failing.
+   - `--ws-*` on the `forward` subcommand is an unexpected argument like Rust
+     (the subcommand declares no listener auth), and `queue --thread=` counts as
+     a supplied (empty) value, so the required list keeps only `--message`.
+   - `printTable` stops at the headers a table declares: the two-column
+     `plugin marketplace list` used to index past `widths` and panic on a
+     non-empty marketplace list (`--config=`).
+   Evidence: `out/round36-inline.txt` (1,068 probes, 1,008 byte-identical, 60
+   left: 14 TERM/Desktop TUI environment, 26 daemon-version or signed-out
+   runtime noise), the earlier 497-case bad-value sweep
+   (`out/round36-r34-flag-surface.txt`, 497/497), the 78 round-34 fixes
+   (`out/round36-r34-fixed.log`, 78/78), the 16 ordering cases
+   (`out/round36-r35-order.log`, 16/16) and 31 round 29-34 probes
+   (`out/round36-regress.txt`, `out/round36-regress2.txt`) at 0 diffs.
+   `go test ./cli ./sandbox ./applypatch ./prompt ./review ./cmd/...
+   ./tcptunnel` passes; `TestParseExecServerForwardModeLikeRust`,
+   `TestParseExecServerWebSocketAuthFlagsLikeRust`,
+   `TestParseAppServerListenValidation` and `TestParseQueueCommandRejectsInvalidLikeRust`
+   were re-captured from 0.166.
+
 ## Verification
 
+- Inline `--flag=` and empty-value diagnostics match Rust 0.166:
+  `out/round36-inline.txt` walks 68 command paths x every value flag in three
+  shapes (1,068 probes) and ends at 60 diffs, all of them TERM TUI, daemon
+  version or signed-out runtime chatter; the bad-value sweep
+  `out/round36-r34-flag-surface.txt` stays 497/497 and the 31 round 29-34
+  probes in `out/round36-regress.txt` / `out/round36-regress2.txt` stay at 0.
 - The exec family echoes the global `--enable`/`--disable` in argv order:
   `out/round35-enable-order.txt` covers 16 orderings (both directions, the
   `--image` merge, `--disable`, `exec review`/`exec fork`, `--las` with a
@@ -1609,6 +1678,26 @@ one-off captures.
   byte-identical. `go test ./cli ./sandbox ./applypatch ./prompt ./review
   ./cmd/... ./tcptunnel` passes.
 ## Still open
+
+- Empty `-c`/`--config=` overrides: clap accepts the empty value and the config
+  layer rejects it later (`Error: Invalid override (missing '='):` /
+  `Error parsing -c overrides: Invalid override (missing '='):` for the
+  exec/review/login family, `Error: error parsing -c overrides: ...` for
+  `app-server`), while Go either drops the override (`features list`,
+  `plugin list`, `debug models`, `migrate-rollouts`, `sandbox`) or prints its
+  own lowercase wording. Aligning needs the per-command prefix threaded through
+  `config.LoadEffective`.
+- `migrate-rollouts --thread=bogusval` only matches the empty arm of Rust's uuid
+  parser; a non-hex character needs the whole uuid grammar message
+  (`invalid character: expected an optional prefix of `urn:uuid:` followed by
+  [0-9a-fA-F-], found `o` at 2`).
+- `exec-server forward` still rejects `--remote` outright (pinned by
+  `TestExecServerRejectsMissingOrConflictingRemoteOptionsLikeRust`), where Rust
+  allows the direct-transport combination; the Go forward runtime has no
+  remote-registration path.
+- `queue --thread "" --message hi` parses in both CLIs, but Rust fails later with
+  `No active session found matching ''` while Go reports `Error: SESSION is
+  required`.
 
 - `codex resume`/`codex fork` without a TTY: Rust refuses to start the TUI
   (`ERROR: TERM is set to "dumb". Refusing to start the interactive TUI ...`)

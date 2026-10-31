@@ -104,9 +104,14 @@ var subcommandValuePlaceholders = map[string]string{
 	"--ws-audience":                 "<AUDIENCE>",
 	"--ws-issuer":                   "<ISSUER>",
 	"--ws-max-clock-skew-seconds":   "<SECONDS>",
+	"--ws-auth":                     "<MODE>",
 	"--ws-shared-secret-file":       "<PATH>",
 	"--ws-token-file":               "<PATH>",
 	"--ws-token-sha256":             "<HEX>",
+	"--connect":                     "<URL>",
+	"--aws-profile":                 "<PROFILE>",
+	"--aws-region":                  "<REGION>",
+	"--aws-service":                 "<SERVICE>",
 	"--proxy-url":                   "<PROXY_URL>",
 	"--proxy-origins-file":          "<PROXY_ORIGINS_FILE>",
 	"--target":                      "<TARGET>",
@@ -117,13 +122,32 @@ var subcommandValuePlaceholders = map[string]string{
 	"--color":                       "<COLOR>",
 }
 
+// clapProfileValueError mirrors clap's ConfigProfile value parser: the name is
+// validated while argv is matched, and an empty name reports the same wording.
+func clapProfileValueError(flag, placeholder, value string) error {
+	return &UsageError{Message: "invalid value '" + value + "' for '" + flag + " " + placeholder + "': invalid --profile value `" + value + "`; pass a plain name such as `work`"}
+}
+
+// subcommandValuePossibleValues lists the possible values a subcommand flag
+// advertises in its missing-value diagnostic; clap repeats them whenever the
+// argument is a possible-values parser.
+var subcommandValuePossibleValues = map[string][]string{
+	"--ws-auth":              {"capability-token", "signed-bearer-token"},
+	"--remote-transport":     {"noise", "direct"},
+	"--cyber-access-program": {"standard", "daybreak_blue", "daybreak_red"},
+}
+
 // valueRequiredError mirrors clap's missing-value diagnostic for a known flag
 // and falls back to the historical Go wording for anything unmapped.
 func valueRequiredError(flag string) error {
 	spec, ok := valueOptionSpecs[flag]
 	if !ok {
 		if placeholder, known := subcommandValuePlaceholders[flag]; known {
-			return &UsageError{Message: "a value is required for '" + flag + " " + placeholder + "' but none was supplied"}
+			message := "a value is required for '" + flag + " " + placeholder + "' but none was supplied"
+			if possible := subcommandValuePossibleValues[flag]; len(possible) > 0 {
+				message += "\n  [possible values: " + strings.Join(possible, ", ") + "]"
+			}
+			return &UsageError{Message: message}
 		}
 		return fmt.Errorf("%s requires a value", flag)
 	}
@@ -148,6 +172,16 @@ func pendingValueRequiredError(flag string, args []string, i int) error {
 		usageErr.PendingNext = args[i+1]
 	}
 	return usageErr
+}
+
+// missingValueNamedError is clap's "a value is required" diagnostic for a flag
+// whose placeholder depends on the enclosing subcommand.
+func missingValueNamedError(flag, placeholder string, possible []string) error {
+	message := "a value is required for '" + flag + " " + placeholder + "' but none was supplied"
+	if len(possible) > 0 {
+		message += "\n  [possible values: " + strings.Join(possible, ", ") + "]"
+	}
+	return &UsageError{Message: message}
 }
 
 // pendingValueRequiredPlaceholderError is pendingValueRequiredError for a flag

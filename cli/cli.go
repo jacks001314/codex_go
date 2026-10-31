@@ -325,11 +325,20 @@ type StdioToUDSOptions struct {
 type ExecServerOptions struct {
 	StrictConfig bool
 	// ConfigOverrides collects clap's global `-c`/`--config`.
-	ConfigOverrides      []string
-	Listen               string
-	ListenSet            bool
-	Remote               string
-	Forward              string
+	ConfigOverrides []string
+	Listen          string
+	ListenSet       bool
+	Remote          string
+	Forward         string
+	// ForwardBound records the literal `forward` token: clap then requires
+	// --remote, --environment-id and --connect on that subcommand.
+	ForwardBound     bool
+	RemoteSet        bool
+	EnvironmentIDSet bool
+	ConnectSet       bool
+	// AWSFlagSet records any of the --aws-profile/region/service options: clap
+	// then requires --aws-sigv4 as well.
+	AWSFlagSet           bool
 	EnvironmentID        string
 	Name                 string
 	UseAgentIdentityAuth bool
@@ -410,12 +419,14 @@ func applyWebSocketAuthFlag(args []string, index int, arg string, options *WebSo
 		if err != nil {
 			return true, index, err
 		}
-		options.WSAuth = value
-		options.WSAuthSet = true
+		if err := setWebSocketAuthMode(options, value); err != nil {
+			return true, index, err
+		}
 		return true, next, nil
 	case strings.HasPrefix(arg, "--ws-auth="):
-		options.WSAuth = strings.TrimPrefix(arg, "--ws-auth=")
-		options.WSAuthSet = true
+		if err := setWebSocketAuthMode(options, strings.TrimPrefix(arg, "--ws-auth=")); err != nil {
+			return true, index, err
+		}
 		return true, index, nil
 	case arg == "--ws-token-file":
 		value, next, err := requireValue(args, index, arg)
@@ -426,7 +437,11 @@ func applyWebSocketAuthFlag(args []string, index int, arg string, options *WebSo
 		options.WSTokenFileSet = true
 		return true, next, nil
 	case strings.HasPrefix(arg, "--ws-token-file="):
-		options.WSTokenFile = strings.TrimPrefix(arg, "--ws-token-file=")
+		value := strings.TrimPrefix(arg, "--ws-token-file=")
+		if value == "" {
+			return true, index, valueRequiredError("--ws-token-file")
+		}
+		options.WSTokenFile = value
 		options.WSTokenFileSet = true
 		return true, index, nil
 	case arg == "--ws-token-sha256":
@@ -450,7 +465,11 @@ func applyWebSocketAuthFlag(args []string, index int, arg string, options *WebSo
 		options.WSSharedSecretFileSet = true
 		return true, next, nil
 	case strings.HasPrefix(arg, "--ws-shared-secret-file="):
-		options.WSSharedSecretFile = strings.TrimPrefix(arg, "--ws-shared-secret-file=")
+		value := strings.TrimPrefix(arg, "--ws-shared-secret-file=")
+		if value == "" {
+			return true, index, valueRequiredError("--ws-shared-secret-file")
+		}
+		options.WSSharedSecretFile = value
 		options.WSSharedSecretFileSet = true
 		return true, index, nil
 	case arg == "--ws-issuer":
@@ -656,8 +675,11 @@ type SessionOptions struct {
 // QueueOptions mirrors Rust cli/src/queue_cmd.rs QueueCommand (#39092):
 // submit a text message through thread/queue/add for an existing session.
 type QueueOptions struct {
-	Thread  string
-	Message string
+	Thread string
+	// ThreadSet records that --thread was supplied, including the empty inline
+	// form clap accepts as a present (if empty) value.
+	ThreadSet bool
+	Message   string
 	// Resume mirrors Rust queue_cmd.rs `--resume` (#57232): after queueing,
 	// ask the daemon or explicit --remote server to resume an unloaded thread.
 	Resume          bool
@@ -1346,6 +1368,8 @@ func parseExec(args []string, exec *ExecOptions) error {
 			}
 			exec.ThreadSource = value
 			return parseExec(args[next:], exec)
+		case strings.HasPrefix(arg, "--thread-source="):
+			exec.ThreadSource = strings.TrimPrefix(arg, "--thread-source=")
 		case arg == "--cyber-access-program":
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
@@ -1379,7 +1403,11 @@ func parseExec(args []string, exec *ExecOptions) error {
 			exec.OutputSchema = value
 			i = next
 		case strings.HasPrefix(arg, "--output-schema="):
-			exec.OutputSchema = strings.TrimPrefix(arg, "--output-schema=")
+			value := strings.TrimPrefix(arg, "--output-schema=")
+			if value == "" {
+				return valueRequiredError("--output-schema")
+			}
+			exec.OutputSchema = value
 		case arg == "--color":
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
@@ -1407,7 +1435,11 @@ func parseExec(args []string, exec *ExecOptions) error {
 			exec.LastMessageFile = value
 			i = next
 		case strings.HasPrefix(arg, "--output-last-message="):
-			exec.LastMessageFile = strings.TrimPrefix(arg, "--output-last-message=")
+			value := strings.TrimPrefix(arg, "--output-last-message=")
+			if value == "" {
+				return valueRequiredError("--output-last-message")
+			}
+			exec.LastMessageFile = value
 		case arg == "-c" || arg == "--config":
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
@@ -1456,14 +1488,18 @@ func parseExecResume(args []string, exec *ExecOptions) error {
 		if arg == "--image" || arg == "-i" {
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
-				return err
+				return pendingValueRequiredPlaceholderError("--image", "<FILE>", args, i)
 			}
 			exec.Shared.Images = append(exec.Shared.Images, splitComma(value)...)
 			i = next
 			continue
 		}
 		if strings.HasPrefix(arg, "--image=") {
-			exec.Shared.Images = append(exec.Shared.Images, splitComma(strings.TrimPrefix(arg, "--image="))...)
+			value := strings.TrimPrefix(arg, "--image=")
+			if value == "" {
+				return missingValueNamedError("--image", "<FILE>", nil)
+			}
+			exec.Shared.Images = append(exec.Shared.Images, splitComma(value)...)
 			continue
 		}
 		if handled, err := parseExecGlobalOption(args, &i, exec, &deferred); handled {
@@ -1546,14 +1582,18 @@ func parseExecFork(args []string, exec *ExecOptions) error {
 		if arg == "--image" || arg == "-i" {
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
-				return err
+				return pendingValueRequiredPlaceholderError("--image", "<FILE>", args, i)
 			}
 			exec.Fork.Images = append(exec.Fork.Images, splitComma(value)...)
 			i = next
 			continue
 		}
 		if strings.HasPrefix(arg, "--image=") {
-			exec.Fork.Images = append(exec.Fork.Images, splitComma(strings.TrimPrefix(arg, "--image="))...)
+			value := strings.TrimPrefix(arg, "--image=")
+			if value == "" {
+				return missingValueNamedError("--image", "<FILE>", nil)
+			}
+			exec.Fork.Images = append(exec.Fork.Images, splitComma(value)...)
 			continue
 		}
 		if handled, err := parseExecGlobalOption(args, &i, exec, &deferred); handled {
@@ -1839,12 +1879,16 @@ func parseExecGlobalOption(args []string, i *int, exec *ExecOptions, deferred *e
 			return true, err
 		}
 		if err := setExecCyberAccessProgram(exec, value); err != nil {
-			deferClapValueError(args, i, deferred, err)
+			if !deferClapValueError(args, i, deferred, err) {
+				return true, err
+			}
 		}
 		*i = next
 	case strings.HasPrefix(arg, "--cyber-access-program="):
 		if err := setExecCyberAccessProgram(exec, strings.TrimPrefix(arg, "--cyber-access-program=")); err != nil {
-			deferClapValueError(args, i, deferred, err)
+			if !deferClapValueError(args, i, deferred, err) {
+				return true, err
+			}
 		}
 	case arg == "--skip-git-repo-check":
 		exec.SkipGitRepoCheck = true
@@ -1862,7 +1906,11 @@ func parseExecGlobalOption(args []string, i *int, exec *ExecOptions, deferred *e
 		exec.OutputSchema = value
 		*i = next
 	case strings.HasPrefix(arg, "--output-schema="):
-		exec.OutputSchema = strings.TrimPrefix(arg, "--output-schema=")
+		value := strings.TrimPrefix(arg, "--output-schema=")
+		if value == "" {
+			return true, valueRequiredError("--output-schema")
+		}
+		exec.OutputSchema = value
 	case arg == "--json" || arg == "--experimental-json":
 		exec.JSON = true
 	case arg == "--output-last-message" || arg == "-o":
@@ -1873,7 +1921,11 @@ func parseExecGlobalOption(args []string, i *int, exec *ExecOptions, deferred *e
 		exec.LastMessageFile = value
 		*i = next
 	case strings.HasPrefix(arg, "--output-last-message="):
-		exec.LastMessageFile = strings.TrimPrefix(arg, "--output-last-message=")
+		value := strings.TrimPrefix(arg, "--output-last-message=")
+		if value == "" {
+			return true, valueRequiredError("--output-last-message")
+		}
+		exec.LastMessageFile = value
 	case isExecGlobalSharedArg(arg):
 		handled, err := parseSharedOption(args, i, &exec.Shared)
 		if err != nil {
@@ -1902,9 +1954,10 @@ func deferClapValueError(args []string, i *int, deferred *error, err error) bool
 	if !usageErr.Raw && !missingValue && !strings.HasPrefix(usageErr.Message, "invalid value '") {
 		return false
 	}
-	// An inline `--flag=` is one token that clap validates on the spot, so an
-	// empty inline value reports before the unknown-argument pass.
-	if missingValue && *i < len(args) && strings.Contains(args[*i], "=") {
+	// An inline `--flag=value` is one token that clap validates while it
+	// matches, so both the empty-value and the value-parser diagnostics report
+	// before the unknown-argument pass. Only the space form defers.
+	if *i < len(args) && strings.Contains(args[*i], "=") {
 		return false
 	}
 	if *deferred == nil {
@@ -2678,7 +2731,7 @@ func parseSandbox(args []string, sandbox *SandboxOptions) error {
 		case arg == "--permission-profile" || arg == "--permissions-profile" || arg == "-P":
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
-				return err
+				return pendingValueRequiredPlaceholderError("--permission-profile", "<NAME>", args, i)
 			}
 			sandbox.PermissionProfile = value
 			i = next
@@ -2699,7 +2752,11 @@ func parseSandbox(args []string, sandbox *SandboxOptions) error {
 			sandbox.ConfigProfile = value
 			i = next
 		case strings.HasPrefix(arg, "--profile="):
-			sandbox.ConfigProfile = strings.TrimPrefix(arg, "--profile=")
+			value := strings.TrimPrefix(arg, "--profile=")
+			if value == "" {
+				return clapProfileValueError("--profile", "<CONFIG_PROFILE>", value)
+			}
+			sandbox.ConfigProfile = value
 		case strings.HasPrefix(arg, "-p") && arg != "-p":
 			sandbox.ConfigProfile = strings.TrimPrefix(arg, "-p")
 		case arg == "--cd" || arg == "-C":
@@ -2710,7 +2767,11 @@ func parseSandbox(args []string, sandbox *SandboxOptions) error {
 			sandbox.CWD = filepath.Clean(value)
 			i = next
 		case strings.HasPrefix(arg, "--cd="):
-			sandbox.CWD = filepath.Clean(strings.TrimPrefix(arg, "--cd="))
+			value := strings.TrimPrefix(arg, "--cd=")
+			if value == "" {
+				return valueRequiredError("--cd")
+			}
+			sandbox.CWD = filepath.Clean(value)
 		case strings.HasPrefix(arg, "-C") && arg != "-C":
 			sandbox.CWD = filepath.Clean(strings.TrimPrefix(arg, "-C"))
 		case arg == "--include-managed-config":
@@ -2729,7 +2790,7 @@ func parseSandbox(args []string, sandbox *SandboxOptions) error {
 		case arg == "--sandbox-state-readable-root":
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
-				return err
+				return pendingValueRequiredPlaceholderError("--sandbox-state-readable-root", "<SANDBOX_STATE_READABLE_ROOT>", args, i)
 			}
 			path, err := absoluteCLIPath(value)
 			if err != nil {
@@ -3272,6 +3333,23 @@ func parseStdioToUDS(args []string, stdio *StdioToUDSOptions) error {
 	return nil
 }
 
+var execServerRemoteTransports = []string{"noise", "direct"}
+
+// setExecServerRemoteTransport mirrors clap's ValueEnum parsing for
+// `--remote-transport`.
+func setExecServerRemoteTransport(execServer *ExecServerOptions, value string) error {
+	if value == "" {
+		return missingValueError("--remote-transport <REMOTE_TRANSPORT>", execServerRemoteTransports)
+	}
+	switch value {
+	case "noise", "direct":
+		execServer.RemoteTransport = value
+		execServer.RemoteTransportSet = true
+		return nil
+	}
+	return invalidValueError(value, "--remote-transport <REMOTE_TRANSPORT>", execServerRemoteTransports)
+}
+
 func parseExecServer(args []string, execServer *ExecServerOptions) error {
 	var deferred error
 	execServer.ConcurrentRequests = 1
@@ -3288,7 +3366,11 @@ func parseExecServer(args []string, execServer *ExecServerOptions) error {
 		switch {
 		case strings.HasPrefix(arg, "--ws-"):
 			// Rust #47601 shares WebsocketAuthArgs between the app-server and the
-			// exec-server listeners.
+			// exec-server listeners. The `forward` subcommand does not declare
+			// them, so clap reports the first one as unexpected.
+			if execServer.ForwardBound {
+				return clapUnexpectedLongFlagError("exec-server forward", arg, args[:i])
+			}
 			handled, next, err := applyWebSocketAuthFlag(args, i, arg, &execServer.WebSocketAuthOptions)
 			if !handled {
 				return unexpectedSubcommandArgumentError("exec-server", arg)
@@ -3307,6 +3389,7 @@ func parseExecServer(args []string, execServer *ExecServerOptions) error {
 				return fmt.Errorf("exec-server forward mode is already configured")
 			}
 			execServer.Forward = "forward"
+			execServer.ForwardBound = true
 		case arg == "--strict-config":
 			execServer.StrictConfig = true
 		case arg == "--listen":
@@ -3321,35 +3404,38 @@ func parseExecServer(args []string, execServer *ExecServerOptions) error {
 			execServer.Listen = strings.TrimPrefix(arg, "--listen=")
 			execServer.ListenSet = true
 		case arg == "--remote":
-			if i+1 >= len(args) {
-				return &UsageError{Message: "a value is required for '--remote <URL>' but none was supplied"}
-			}
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
-				return err
+				return pendingValueRequiredPlaceholderError("--remote", "<URL>", args, i)
 			}
 			execServer.Remote = value
+			execServer.RemoteSet = true
 			i = next
 		case strings.HasPrefix(arg, "--remote="):
 			execServer.Remote = strings.TrimPrefix(arg, "--remote=")
+			execServer.RemoteSet = true
 		case arg == "--connect":
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
-				return err
+				return pendingValueRequiredPlaceholderError("--connect", "<URL>", args, i)
 			}
 			execServer.Forward = value
+			execServer.ConnectSet = true
 			i = next
 		case strings.HasPrefix(arg, "--connect="):
 			execServer.Forward = strings.TrimPrefix(arg, "--connect=")
+			execServer.ConnectSet = true
 		case arg == "--environment-id":
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
 				return err
 			}
 			execServer.EnvironmentID = value
+			execServer.EnvironmentIDSet = true
 			i = next
 		case strings.HasPrefix(arg, "--environment-id="):
 			execServer.EnvironmentID = strings.TrimPrefix(arg, "--environment-id=")
+			execServer.EnvironmentIDSet = true
 		case arg == "--name":
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
@@ -3418,43 +3504,55 @@ func parseExecServer(args []string, execServer *ExecServerOptions) error {
 			if err != nil {
 				return err
 			}
-			execServer.RemoteTransport = value
-			execServer.RemoteTransportSet = true
+			if err := setExecServerRemoteTransport(execServer, value); err != nil {
+				if !deferClapValueError(args, &i, &deferred, err) {
+					return err
+				}
+			}
 			i = next
 		case strings.HasPrefix(arg, "--remote-transport="):
-			execServer.RemoteTransport = strings.TrimPrefix(arg, "--remote-transport=")
-			execServer.RemoteTransportSet = true
+			if err := setExecServerRemoteTransport(execServer, strings.TrimPrefix(arg, "--remote-transport=")); err != nil {
+				if !deferClapValueError(args, &i, &deferred, err) {
+					return err
+				}
+			}
 		case arg == "--aws-sigv4":
 			execServer.AWSSigV4 = true
 		case arg == "--aws-profile":
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
-				return err
+				return pendingValueRequiredPlaceholderError("--aws-profile", "<PROFILE>", args, i)
 			}
 			execServer.AWSProfile = value
+			execServer.AWSFlagSet = true
 			i = next
 		case strings.HasPrefix(arg, "--aws-profile="):
 			execServer.AWSProfile = strings.TrimPrefix(arg, "--aws-profile=")
+			execServer.AWSFlagSet = true
 		case arg == "--aws-region":
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
-				return err
+				return pendingValueRequiredPlaceholderError("--aws-region", "<REGION>", args, i)
 			}
 			execServer.AWSRegion = value
+			execServer.AWSFlagSet = true
 			i = next
 		case strings.HasPrefix(arg, "--aws-region="):
 			execServer.AWSRegion = strings.TrimPrefix(arg, "--aws-region=")
+			execServer.AWSFlagSet = true
 		case arg == "--aws-service":
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
-				return err
+				return pendingValueRequiredPlaceholderError("--aws-service", "<SERVICE>", args, i)
 			}
 			execServer.AWSService = value
 			execServer.AWSServiceSet = true
+			execServer.AWSFlagSet = true
 			i = next
 		case strings.HasPrefix(arg, "--aws-service="):
 			execServer.AWSService = strings.TrimPrefix(arg, "--aws-service=")
 			execServer.AWSServiceSet = true
+			execServer.AWSFlagSet = true
 		default:
 			if strings.HasPrefix(arg, "-") {
 				// Once `forward` is bound clap reports against that subcommand,
@@ -3493,11 +3591,67 @@ func parseExecServer(args []string, execServer *ExecServerOptions) error {
 	if forward != "" && forward != "forward" && execServer.Remote != "" {
 		return errors.New("exec-server forward cannot be combined with --remote")
 	}
+	if !execServer.ForwardBound && execServer.AWSSigV4 && (!execServer.RemoteSet || !execServer.EnvironmentIDSet) {
+		// clap renders the SigV4 requirement group with --environment-id first.
+		var missing []string
+		if !execServer.EnvironmentIDSet {
+			missing = append(missing, "--environment-id <ID>")
+		}
+		if !execServer.RemoteSet {
+			missing = append(missing, "--remote <URL>")
+		}
+		return &UsageError{
+			Message:    requiredArgumentsMessage(missing...),
+			Usage:      "Usage: codex exec-server --environment-id <ID> --remote <URL> --aws-sigv4",
+			SmartUsage: true,
+		}
+	}
+	if !execServer.ForwardBound && execServer.AWSFlagSet {
+		// Any --aws-profile/--aws-region/--aws-service pulls in --aws-sigv4,
+		// which in turn requires the remote registration options.
+		var missing []string
+		if !execServer.RemoteSet {
+			missing = append(missing, "--remote <URL>")
+		}
+		if !execServer.EnvironmentIDSet {
+			missing = append(missing, "--environment-id <ID>")
+		}
+		if !execServer.AWSSigV4 {
+			missing = append(missing, "--aws-sigv4")
+		}
+		if len(missing) > 0 {
+			return &UsageError{
+				Message:    requiredArgumentsMessage(missing...),
+				Usage:      "Usage: codex exec-server --remote <URL> --environment-id <ID> --aws-sigv4",
+				SmartUsage: true,
+			}
+		}
+	}
 	if execServer.Remote != "" && execServer.EnvironmentID == "" {
 		return errors.New("--environment-id is required when --remote is set")
 	}
-	if forward == "forward" && execServer.Remote == "" {
-		return errors.New("exec-server forward requires --connect ws://HOST:PORT")
+	if execServer.ForwardBound {
+		var missing []string
+		if !execServer.RemoteSet {
+			missing = append(missing, "--remote <URL>")
+		}
+		if !execServer.EnvironmentIDSet {
+			missing = append(missing, "--environment-id <ID>")
+		}
+		if !execServer.ConnectSet {
+			missing = append(missing, "--connect <URL>")
+		}
+		awsRequired := execServer.AWSFlagSet
+		if awsRequired {
+			missing = append(missing, "--aws-sigv4")
+		}
+		if len(missing) > 0 {
+			usage := "Usage: codex exec-server forward --remote <URL> --environment-id <ID> --connect <URL>"
+			if awsRequired {
+				usage += " --aws-sigv4"
+			}
+			return &UsageError{Message: requiredArgumentsMessage(missing...), Usage: usage, SmartUsage: true}
+		}
 	}
 	if forward != "" && forward != "forward" && !strings.HasPrefix(forward, "ws://") && !strings.HasPrefix(forward, "wss://") {
 		return fmt.Errorf("exec-server forward requires --connect ws://HOST:PORT, got %q", forward)
@@ -3624,12 +3778,25 @@ func parseAppServer(args []string, appServer *AppServerOptions) error {
 			if err != nil {
 				return err
 			}
-			appServer.Listen = value
-			listenSet = true
+			if err := validateAppServerListenArg(value); err != nil {
+				if !deferClapValueError(args, &i, &deferred, err) {
+					return err
+				}
+			} else {
+				appServer.Listen = value
+				listenSet = true
+			}
 			i = next
 		case strings.HasPrefix(arg, "--listen="):
-			appServer.Listen = strings.TrimPrefix(arg, "--listen=")
-			listenSet = true
+			value := strings.TrimPrefix(arg, "--listen=")
+			if err := validateAppServerListenArg(value); err != nil {
+				if !deferClapValueError(args, &i, &deferred, err) {
+					return err
+				}
+			} else {
+				appServer.Listen = value
+				listenSet = true
+			}
 		case arg == "--stdio":
 			appServer.Stdio = true
 		case arg == "--remote-control":
@@ -3692,7 +3859,11 @@ func parseAppServer(args []string, appServer *AppServerOptions) error {
 			appServer.CloudSkillsSnapshot = value
 			i = next
 		case strings.HasPrefix(arg, "--cloud-skills-snapshot="):
-			appServer.CloudSkillsSnapshot = strings.TrimPrefix(arg, "--cloud-skills-snapshot=")
+			value := strings.TrimPrefix(arg, "--cloud-skills-snapshot=")
+			if value == "" {
+				return valueRequiredError("--cloud-skills-snapshot")
+			}
+			appServer.CloudSkillsSnapshot = value
 		case strings.HasPrefix(arg, "--ws-"):
 			handled, next, err := applyWebSocketAuthFlag(args, i, arg, &appServer.WebSocketAuthOptions)
 			if !handled {
@@ -3783,6 +3954,18 @@ func validateAppServerCodeModeHostURL(value string) error {
 	}
 	if (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" {
 		return raw("gRPC code-mode host URL must not contain a path or query")
+	}
+	return nil
+}
+
+// validateAppServerListenArg renders clap's value-parser diagnostic for
+// `--listen`, which rejects the empty inline value the plain parser accepts.
+func validateAppServerListenArg(value string) error {
+	if value == "" {
+		return &UsageError{Message: "invalid value '' for '--listen <URL>': unsupported --listen URL ``; expected `stdio://`, `unix://`, `unix://PATH`, `ws://IP:PORT`, or `off`"}
+	}
+	if err := validateAppServerListen(value); err != nil {
+		return &UsageError{Message: "invalid value '" + value + "' for '--listen <URL>': " + err.Error()}
 	}
 	return nil
 }
@@ -4050,9 +4233,11 @@ func parseQueue(args []string, queue *QueueOptions) error {
 				return err
 			}
 			queue.Thread = value
+			queue.ThreadSet = true
 			i = next
 		case strings.HasPrefix(arg, "--thread="):
 			queue.Thread = strings.TrimPrefix(arg, "--thread=")
+			queue.ThreadSet = true
 		case arg == "--message":
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
@@ -4061,7 +4246,11 @@ func parseQueue(args []string, queue *QueueOptions) error {
 			queue.Message = value
 			i = next
 		case strings.HasPrefix(arg, "--message="):
-			queue.Message = strings.TrimPrefix(arg, "--message=")
+			value := strings.TrimPrefix(arg, "--message=")
+			if value == "" {
+				return valueRequiredError("--message")
+			}
+			queue.Message = value
 		case arg == "--remote":
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
@@ -4102,7 +4291,7 @@ func parseQueue(args []string, queue *QueueOptions) error {
 		}
 	}
 	var missing []string
-	if strings.TrimSpace(queue.Thread) == "" {
+	if !queue.ThreadSet {
 		missing = append(missing, "--thread <THREAD>")
 	}
 	if strings.TrimSpace(queue.Message) == "" {
@@ -4221,7 +4410,11 @@ func parseAgents(args []string, agents *AgentsOptions) error {
 			i = next
 			continue
 		case strings.HasPrefix(arg, "--cd="):
-			agents.Cwd = strings.TrimPrefix(arg, "--cd=")
+			value := strings.TrimPrefix(arg, "--cd=")
+			if value == "" {
+				return valueRequiredError("--cd")
+			}
+			agents.Cwd = value
 			continue
 		case arg == "--no-alt-screen":
 			agents.NoAltScreen = true
@@ -4353,9 +4546,17 @@ func parseAppServerGenerate(action string, args []string, generate *AppServerGen
 			generate.OutDir = value
 			i = next
 		case strings.HasPrefix(arg, "--out="):
-			generate.OutDir = strings.TrimPrefix(arg, "--out=")
+			value := strings.TrimPrefix(arg, "--out=")
+			if value == "" {
+				return missingValueNamedError("--out", "<DIR>", nil)
+			}
+			generate.OutDir = value
 		case strings.HasPrefix(arg, "-o") && arg != "-o":
-			generate.OutDir = strings.TrimPrefix(arg, "-o")
+			value := strings.TrimPrefix(strings.TrimPrefix(arg, "-o"), "=")
+			if value == "" {
+				return missingValueNamedError("--out", "<DIR>", nil)
+			}
+			generate.OutDir = value
 		case action == "generate-ts" && (arg == "--prettier" || arg == "-p"):
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
@@ -4364,9 +4565,17 @@ func parseAppServerGenerate(action string, args []string, generate *AppServerGen
 			generate.Prettier = value
 			i = next
 		case action == "generate-ts" && strings.HasPrefix(arg, "--prettier="):
-			generate.Prettier = strings.TrimPrefix(arg, "--prettier=")
+			value := strings.TrimPrefix(arg, "--prettier=")
+			if value == "" {
+				return missingValueNamedError("--prettier", "<PRETTIER_BIN>", nil)
+			}
+			generate.Prettier = value
 		case action == "generate-ts" && strings.HasPrefix(arg, "-p") && arg != "-p":
-			generate.Prettier = strings.TrimPrefix(arg, "-p")
+			value := strings.TrimPrefix(strings.TrimPrefix(arg, "-p"), "=")
+			if value == "" {
+				return missingValueNamedError("--prettier", "<PRETTIER_BIN>", nil)
+			}
+			generate.Prettier = value
 		case action != "generate-internal-json-schema" && arg == "--experimental":
 			generate.Experimental = true
 		default:
@@ -4535,6 +4744,9 @@ func parseMigrateNFSDB(args []string, options *MigrateNFSDBOptions) error {
 			if err != nil {
 				return err
 			}
+			if strings.HasPrefix(arg, "--staging-dir=") && value == "" {
+				return valueRequiredError("--staging-dir")
+			}
 			options.StagingDir = value
 			i = next
 		case strings.HasPrefix(arg, "-"):
@@ -4570,6 +4782,9 @@ func parseMigrateRollouts(args []string, options *MigrateRolloutsOptions) error 
 			if err != nil {
 				return err
 			}
+			if value == "" {
+				return &UsageError{Message: "invalid value '' for '--thread <THREAD_ID>': invalid length: expected length 32 for simple format, found 0"}
+			}
 			options.Threads = append(options.Threads, value)
 			i = next
 		case arg == "--max-mib-per-second" || strings.HasPrefix(arg, "--max-mib-per-second="):
@@ -4581,7 +4796,7 @@ func parseMigrateRollouts(args []string, options *MigrateRolloutsOptions) error 
 			var invalid error
 			switch {
 			case err != nil:
-				invalid = &UsageError{Message: "invalid value '" + value + "' for '--max-mib-per-second <MIB>': invalid digit found in string"}
+				invalid = &UsageError{Message: "invalid value '" + value + "' for '--max-mib-per-second <MIB>': " + clapIntegerParseDetail(value)}
 			case parsed == 0:
 				invalid = &UsageError{Message: "invalid value '" + value + "' for '--max-mib-per-second <MIB>': 0 is not in 1..18446744073709551615"}
 			}
@@ -4998,7 +5213,11 @@ func parseDebug(args []string, debug *DebugOptions) error {
 				debug.Images = append(debug.Images, splitComma(value)...)
 				i = next
 			case strings.HasPrefix(arg, "--image="):
-				debug.Images = append(debug.Images, splitComma(strings.TrimPrefix(arg, "--image="))...)
+				value := strings.TrimPrefix(arg, "--image=")
+				if value == "" {
+					return missingImageValueError()
+				}
+				debug.Images = append(debug.Images, splitComma(value)...)
 			case strings.HasPrefix(arg, "-"):
 				return unexpectedSubcommandArgumentError("debug prompt-input", arg)
 			default:
@@ -5304,7 +5523,11 @@ func parseSharedOptionWithImages(args []string, i *int, shared *SharedOptions, v
 		*i = next
 		return true, nil
 	case strings.HasPrefix(arg, "--profile="):
-		shared.Profile = strings.TrimPrefix(arg, "--profile=")
+		value := strings.TrimPrefix(arg, "--profile=")
+		if value == "" {
+			return false, clapProfileValueError("--profile", "<CONFIG_PROFILE_V2>", value)
+		}
+		shared.Profile = value
 		return true, nil
 	case strings.HasPrefix(arg, "-p") && arg != "-p":
 		shared.Profile = strings.TrimPrefix(arg, "-p")
@@ -5352,7 +5575,11 @@ func parseSharedOptionWithImages(args []string, i *int, shared *SharedOptions, v
 		*i = next
 		return true, nil
 	case strings.HasPrefix(arg, "--cd="):
-		shared.CWD = filepath.Clean(strings.TrimPrefix(arg, "--cd="))
+		value := strings.TrimPrefix(arg, "--cd=")
+		if value == "" {
+			return false, valueRequiredError("--cd")
+		}
+		shared.CWD = filepath.Clean(value)
 		return true, nil
 	case arg == "--add-dir":
 		value, next, err := requireValue(args, *i, arg)
@@ -5363,7 +5590,11 @@ func parseSharedOptionWithImages(args []string, i *int, shared *SharedOptions, v
 		*i = next
 		return true, nil
 	case strings.HasPrefix(arg, "--add-dir="):
-		shared.AddDirs = append(shared.AddDirs, filepath.Clean(strings.TrimPrefix(arg, "--add-dir=")))
+		value := strings.TrimPrefix(arg, "--add-dir=")
+		if value == "" {
+			return false, valueRequiredError("--add-dir")
+		}
+		shared.AddDirs = append(shared.AddDirs, filepath.Clean(value))
 		return true, nil
 	default:
 		return false, nil
@@ -5405,6 +5636,24 @@ func parseTUIOnlyOption(args []string, i *int, shared *SharedOptions) (bool, err
 	default:
 		return false, nil
 	}
+}
+
+var webSocketAuthModes = []string{"capability-token", "signed-bearer-token"}
+
+// setWebSocketAuthMode mirrors clap's ValueEnum parsing for `--ws-auth`: the
+// value is validated while argv is matched, so an invalid or empty inline value
+// reports before any later unknown-argument diagnostic.
+func setWebSocketAuthMode(options *WebSocketAuthOptions, value string) error {
+	if value == "" {
+		return missingValueError("--ws-auth <MODE>", webSocketAuthModes)
+	}
+	switch value {
+	case "capability-token", "signed-bearer-token":
+		options.WSAuth = value
+		options.WSAuthSet = true
+		return nil
+	}
+	return invalidValueError(value, "--ws-auth <MODE>", webSocketAuthModes)
 }
 
 func setApprovalPolicy(shared *SharedOptions, value string) error {
@@ -5517,6 +5766,9 @@ func validateStartupClientInfo(value string) error {
 	invalid := func(detail string) error {
 		return &UsageError{Message: "invalid value '" + value + "' for '--startup-client-info <STARTUP_CLIENT_INFO>': " + detail}
 	}
+	if value == "" {
+		return invalid("EOF while parsing a value at line 1 column 0")
+	}
 	var raw any
 	if err := json.Unmarshal([]byte(value), &raw); err != nil {
 		if strings.Contains(err.Error(), "unexpected end of JSON input") {
@@ -5560,7 +5812,7 @@ func validateLinuxSandboxPIDNamespace(value string) error {
 func parseConcurrentRequestsValue(value string) (int, error) {
 	parsed, err := strconv.Atoi(strings.TrimSpace(value))
 	if err != nil {
-		return 0, &UsageError{Message: "invalid value '" + value + "' for '--concurrent-requests <COUNT>': invalid digit found in string"}
+		return 0, &UsageError{Message: "invalid value '" + value + "' for '--concurrent-requests <COUNT>': " + clapIntegerParseDetail(value)}
 	}
 	if parsed <= 0 {
 		return 0, &UsageError{Message: "invalid value '" + value + "' for '--concurrent-requests <COUNT>': number would be zero for non-zero type"}
@@ -5584,10 +5836,19 @@ func parseBoundedInt64(value string, name string, min int64, max int64) (int64, 
 	return parsed, nil
 }
 
+// clapIntegerParseDetail is the Rust integer parser's message for a value that
+// failed to parse; an empty string names EOF instead of a bad digit.
+func clapIntegerParseDetail(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "cannot parse integer from empty string"
+	}
+	return "invalid digit found in string"
+}
+
 func parseUint64Flag(flag string, value string) (uint64, error) {
 	parsed, err := strconv.ParseUint(strings.TrimSpace(value), 10, 64)
 	if err != nil {
-		return 0, &UsageError{Message: "invalid value '" + value + "' for '" + flag + " <SECONDS>': invalid digit found in string"}
+		return 0, &UsageError{Message: "invalid value '" + value + "' for '" + flag + " <SECONDS>': " + clapIntegerParseDetail(value)}
 	}
 	return parsed, nil
 }
