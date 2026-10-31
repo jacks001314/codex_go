@@ -131,8 +131,10 @@ func TestAppInstalledForceRefreshReplacesThreadToolsLikeRust(t *testing.T) {
 
 	generationBefore := mcpService.Generation()
 	refreshed := installed(2, true)
-	if mcpService.Generation() == generationBefore {
-		t.Fatal("app/installed force refresh did not bump the MCP service generation")
+	// Rust #43031: the forced refresh publishes only the Apps client's catalog,
+	// so unrelated MCP clients and their prepared calls stay valid.
+	if mcpService.Generation() != generationBefore {
+		t.Fatal("app/installed force refresh invalidated unrelated MCP clients")
 	}
 	if !hasInstalledAppID(refreshed.Apps, "calendar") || len(refreshed.Apps) != 1 {
 		t.Fatalf("refreshed installed apps = %#v", refreshed.Apps)
@@ -155,8 +157,8 @@ func TestAppInstalledForceRefreshReplacesThreadToolsLikeRust(t *testing.T) {
 	if threadless.Error != nil {
 		t.Fatalf("threadless app/installed error = %#v", threadless.Error)
 	}
-	if mcpService.Generation() == generationBefore {
-		t.Fatal("threadless force refresh did not bump the MCP service generation")
+	if mcpService.Generation() != generationBefore {
+		t.Fatal("threadless force refresh invalidated unrelated MCP clients")
 	}
 	tools = runtimeToolNames(t, router.runtimeMCPToolsForTest(threadID, mcpService))
 	if !containsString(tools, "search_v3") || containsString(tools, "search_v2") {

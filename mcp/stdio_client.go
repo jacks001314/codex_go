@@ -76,7 +76,11 @@ type stdioClient struct {
 	// startupInputReceived records that the helper asked its chat for input
 	// before it finished starting, which binds it to that chat and keeps it out
 	// of the shared pool (Rust #57211).
-	startupInputReceived               bool
+	startupInputReceived bool
+	// catalog is the tool catalog this exact connection has published. Shared
+	// pooled helpers keep one catalog per live connection (Rust #43031).
+	catalogOnce                        sync.Once
+	catalog                            *clientToolCatalog
 	supportsSandboxStateMetaCapability bool
 	// elicitationCancellations remembers server cancellations for this
 	// connection so elicitations return `cancel` instead of hanging
@@ -93,6 +97,18 @@ type stdioClient struct {
 	// toolListChanges counts tools/list_changed notifications received on this
 	// connection, so a catalog captured before one is never reused (Rust #54656).
 	toolListChanges mcpToolListRevision
+}
+
+// toolCatalog returns the catalog owned by this connection, creating an empty
+// one on first use.
+func (c *stdioClient) toolCatalog() *clientToolCatalog {
+	if c == nil {
+		return nil
+	}
+	c.catalogOnce.Do(func() {
+		c.catalog = newClientToolCatalog(nil)
+	})
+	return c.catalog
 }
 
 // os/exec copies a child's output from background goroutines. Keep each

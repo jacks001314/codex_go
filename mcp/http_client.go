@@ -189,6 +189,22 @@ type httpClient struct {
 	// connection, so a catalog captured before one is never reused
 	// (Rust #54656).
 	toolListChanges mcpToolListRevision
+	// catalog is the tool catalog this exact connection has published. It is
+	// created lazily so callers without a catalog keep working (Rust #43031).
+	catalogOnce sync.Once
+	catalog     *clientToolCatalog
+}
+
+// toolCatalog returns the catalog owned by this connection, creating an empty
+// one on first use.
+func (c *httpClient) toolCatalog() *clientToolCatalog {
+	if c == nil {
+		return nil
+	}
+	c.catalogOnce.Do(func() {
+		c.catalog = newClientToolCatalog(nil)
+	})
+	return c.catalog
 }
 
 type httpClientCallOptions struct {

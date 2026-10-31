@@ -29,6 +29,8 @@ func (r *RuntimeRouter) mcpElicitationsAllowedForApproval(cfg *config.Config, ap
 // elicitation hooks. Request routes through the service's client-facing
 // elicitation handler; RefreshCodexApps invalidates the service so the next
 // turn re-lists the refreshed Codex Apps catalog (Go lists tools per turn).
+// Rust's post-elicitation path forces a fresh MCP runtime
+// (hard_refresh_latest_codex_apps_tools), which this maps to Refresh().
 func (r *RuntimeRouter) mcpAuthElicitationOptions(mcpService *mcp.MCPService) *mcp.AuthElicitationOptions {
 	if r == nil || mcpService == nil {
 		return nil

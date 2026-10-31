@@ -8072,9 +8072,14 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 3/12; needs review: ClientToolCatalogRevision, CodexAppsToolSnapshot, ToolCatalogSnapshot, listed_tools, refresh_codex_apps_client_catalog"
+    "mcp/client_tool_catalog.go adds the client-owned catalog: revisioned snapshots, a serialized refresh that advances only on success, and runWithRevision holding catalog authority across a call (Rust ClientToolCatalog).",
+    "mcp/http_client.go and mcp/stdio_client.go lazily attach one catalog per live connection, so reconnects start at revision zero and pooled stdio helpers share their exact connection catalog.",
+    "mcp/codex_apps_catalog.go implements CodexAppsToolSnapshot, RefreshCodexAppsTools, refreshClientToolCatalog, liveClientToolCatalog, and publishClientCatalogTools; the refresh reuses the exact Apps client and lists tools only.",
+    "mcp/binding.go keys bindings by client catalog plus revision, prefers the refreshed client inventory, rejects stale calls before preparation, and holds the revision through execution; unrelated servers stay at revision zero.",
+    "appserver/apps_mcp_accessible.go publishes only the Apps client catalog on a forced refresh and keeps the retained inventory when the refresh fails, without bumping the service generation.",
+    "Tests: mcp/client_tool_catalog_like_rust_test.go covers refreshed catalogs surviving client reuse, unrelated prepared calls staying valid, failed refreshes keeping the published catalog, and publication waiting for active calls; appserver/app_installed_refresh_test.go asserts the forced refresh leaves unrelated clients valid."
    ]
   },
   {

@@ -1,6 +1,7 @@
 package appserver
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -16,14 +17,36 @@ func (p *mcpAccessibleAppsProvider) ListAccessibleApps(params *apps.AppAccessibl
 	if p == nil || p.service == nil {
 		return &apps.AppAccessibleListResponse{}, nil
 	}
-	if params != nil && params.ForceRefetch {
-		p.service.Refresh()
-	}
-	forceRefetch := params != nil && params.ForceRefetch
 	threadID := ""
+	if params != nil && params.ForceRefetch {
+		// Rust #43031: a forced refresh publishes only the Apps client's
+		// catalog, so other MCP servers keep their connections and the calls
+		// prepared against them stay valid.
+		snapshot, err := p.service.RefreshCodexAppsTools(context.Background())
+		if err == nil {
+			return &apps.AppAccessibleListResponse{
+				Apps:           mcpAccessibleAppEntries(snapshot.Tools),
+				CodexAppsReady: true,
+			}, nil
+		}
+		// Rust #43039: a failed forced refresh keeps the last working catalog,
+		// so report the retained Apps inventory and let app/installed decide
+		// whether that catalog can be published.
+		if retained, retainedErr := p.accessibleAppsFromStatus(threadID, true); retainedErr == nil {
+			return retained, nil
+		}
+		return nil, err
+	}
 	if params != nil {
 		threadID = strings.TrimSpace(params.ThreadID)
 	}
+	return p.accessibleAppsFromStatus(threadID, false)
+}
+
+// accessibleAppsFromStatus answers discovery from the retained status surface.
+// When failOnEmpty is set a failed Apps server without a retained catalog is
+// reported so a forced refresh does not publish an empty catalog.
+func (p *mcpAccessibleAppsProvider) accessibleAppsFromStatus(threadID string, failOnEmpty bool) (*apps.AppAccessibleListResponse, error) {
 	statusParams := &mcp.MCPListServerStatusParams{
 		Detail: &mcp.MCPServerStatusDetail{
 			Mode:         mcp.MCPServerStatusDetailToolsAndAuthOnly,
@@ -37,8 +60,8 @@ func (p *mcpAccessibleAppsProvider) ListAccessibleApps(params *apps.AppAccessibl
 	if err != nil {
 		return nil, err
 	}
-	connectorTools := []mcp.ConnectorToolInfo{}
 	ready := false
+	entries := make([]apps.AppEntry, 0)
 	if status != nil {
 		for i := range status.Data {
 			serverName := status.Data[i].Name
@@ -48,21 +71,25 @@ func (p *mcpAccessibleAppsProvider) ListAccessibleApps(params *apps.AppAccessibl
 			if !mcp.IsCodexAppsMCPServerName(serverName) {
 				continue
 			}
-			if forceRefetch && status.Data[i].State == mcp.MCPServerFailed && len(status.Data[i].Tools) == 0 {
-				// Rust #43039: report the failed refresh so app/installed keeps
-				// the last working catalog instead of publishing an empty one.
+			if failOnEmpty && status.Data[i].State == mcp.MCPServerFailed && len(status.Data[i].Tools) == 0 {
 				return nil, fmt.Errorf("failed to refresh tools for MCP server %q", strings.TrimSpace(serverName))
 			}
 			ready = ready || status.Data[i].State == "" || status.Data[i].State == mcp.MCPServerReady
-			connectorTools = append(connectorTools, mcp.ConnectorToolInfoFromMCPTools(serverName, status.Data[i].Tools)...)
+			entries = append(entries, mcpAccessibleAppEntries(status.Data[i].Tools)...)
 		}
 	}
-	connectors := mcp.ConnectorAccessibleFromMCPTools(connectorTools)
+	return &apps.AppAccessibleListResponse{Apps: entries, CodexAppsReady: ready}, nil
+}
+
+// mcpAccessibleAppEntries renders raw Codex Apps tools as installable app
+// entries. App-specific enablement policy is applied by the caller.
+func mcpAccessibleAppEntries(tools []mcp.MCPToolInfo) []apps.AppEntry {
+	connectors := mcp.ConnectorAccessibleFromMCPTools(mcp.ConnectorToolInfoFromMCPTools(mcp.CodexAppsServerName, tools))
 	out := make([]apps.AppEntry, 0, len(connectors))
 	for i := range connectors {
 		out = append(out, appEntryFromMCPConnector(&connectors[i]))
 	}
-	return &apps.AppAccessibleListResponse{Apps: out, CodexAppsReady: ready}, nil
+	return out
 }
 
 func appEntryFromMCPConnector(connector *mcp.ConnectorAppInfo) apps.AppEntry {
