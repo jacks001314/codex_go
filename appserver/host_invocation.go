@@ -248,6 +248,67 @@ func (r *RuntimeRouter) inheritedChildDynamicTools(threadID string, cfg *config.
 	return cloneRawMessages(record.Metadata.DynamicTools)
 }
 
+// inheritedExecPolicy returns the host-transported policy installed for a
+// reserved child thread, if any (Rust #58406).
+func (r *RuntimeRouter) inheritedExecPolicy(threadID string) *execpolicy.Policy {
+	if r == nil {
+		return nil
+	}
+	r.inheritedExecPolicyMu.Lock()
+	defer r.inheritedExecPolicyMu.Unlock()
+	return r.inheritedExecPolicies[strings.TrimSpace(threadID)]
+}
+
+// installInheritedChildExecPolicy mirrors Rust spawn_host_child_thread's
+// PreparedChildInheritance.exec_policy (#58406): the transported snapshot is
+// validated against this destination and installed as an independent manager
+// for the reserved child. A rejected snapshot fails the child start instead of
+// silently falling back to the destination policy.
+func (r *RuntimeRouter) installInheritedChildExecPolicy(threadID string, created *agent.PreparedChildContext) error {
+	if r == nil || created == nil || created.ExecPolicy == nil {
+		return nil
+	}
+	destination := execpolicy.InheritedExecPolicyDestination{
+		// Go resolves the command policy only from managed config and never adds
+		// user or project *.rules files, so the destination is managed-only
+		// (Rust ConfigLayerStack::ignore_user_and_project_exec_policy_rules).
+		IgnoreUserAndProjectRules: true,
+		Requirements:              r.managedExecPolicyRequirements(),
+	}
+	installed, err := execpolicy.InstallInheritedExecPolicy(&execpolicy.InheritedExecPolicy{
+		Policy:             created.ExecPolicy.Policy(),
+		SourceRequirements: created.ExecPolicySourceRequirements,
+	}, destination)
+	if err != nil {
+		return err
+	}
+	r.inheritedExecPolicyMu.Lock()
+	if r.inheritedExecPolicies == nil {
+		r.inheritedExecPolicies = map[string]*execpolicy.Policy{}
+	}
+	r.inheritedExecPolicies[strings.TrimSpace(threadID)] = installed
+	r.inheritedExecPolicyMu.Unlock()
+	return nil
+}
+
+func (r *RuntimeRouter) discardInheritedExecPolicy(threadID string) {
+	if r == nil {
+		return
+	}
+	r.inheritedExecPolicyMu.Lock()
+	delete(r.inheritedExecPolicies, strings.TrimSpace(threadID))
+	r.inheritedExecPolicyMu.Unlock()
+}
+
+func (r *RuntimeRouter) discardAllInheritedExecPolicies() {
+	if r == nil {
+		return
+	}
+	r.inheritedExecPolicyMu.Lock()
+	r.inheritedExecPolicies = map[string]*execpolicy.Policy{}
+	r.inheritedExecPolicyMu.Unlock()
+}
+
 func (r *RuntimeRouter) createReservedChild(ctx context.Context, threadID string, created *agent.PreparedChildContext, request agent.ThreadCreateRequest, reservation agent.HostThreadSpawnReservation, invocation *agent.ToolInvocationContext) (*agent.SpawnAgentResult, error) {
 	if r == nil {
 		return nil, errors.New("agent runtime is unavailable")
@@ -271,6 +332,20 @@ func (r *RuntimeRouter) createReservedChild(ctx context.Context, threadID string
 	}
 	if invocation != nil && !invocation.Active() {
 		return nil, fmt.Errorf("spawning tool call finished")
+	}
+	// Rust #58406: install the transported policy before the child starts, and
+	// drop it again if the start never completes.
+	installedChildPolicy := false
+	if created.ExecPolicy != nil {
+		if err := r.installInheritedChildExecPolicy(string(reservedThreadID), created); err != nil {
+			return nil, err
+		}
+		installedChildPolicy = true
+		defer func() {
+			if installedChildPolicy {
+				r.discardInheritedExecPolicy(string(reservedThreadID))
+			}
+		}()
 	}
 	params := r.activeTurnParams(callerThreadID)
 	if params == nil {
@@ -339,6 +414,7 @@ func (r *RuntimeRouter) createReservedChild(ctx context.Context, threadID string
 	if err != nil {
 		return nil, err
 	}
+	installedChildPolicy = false
 	if invocation != nil && !invocation.Active() {
 		runtimeController.cleanupProvisionalSpawn(string(reservedThreadID))
 		return nil, fmt.Errorf("spawning tool call finished")

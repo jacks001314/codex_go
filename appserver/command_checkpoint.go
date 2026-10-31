@@ -18,7 +18,11 @@ func (r *RuntimeRouter) managedCommandPolicyForThread(threadID string) *execpoli
 		return nil
 	}
 	var policy *execpolicy.RequirementsPolicy
-	if r.services.Config != nil {
+	if inherited := r.inheritedExecPolicy(threadID); inherited != nil {
+		// Rust #58406: a host-transported snapshot replaces the destination
+		// manager entirely; environment attachments still tighten it below.
+		policy = execpolicy.NewRequirementsPolicy(inherited)
+	} else if r.services.Config != nil {
 		if read := r.services.Config.Requirements(); read != nil && read.Requirements != nil {
 			policy = read.Requirements.Rules
 		}

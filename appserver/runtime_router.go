@@ -32,6 +32,7 @@ import (
 	"codex_go/compact"
 	"codex_go/config"
 	codexctx "codex_go/context"
+	"codex_go/execpolicy"
 	"codex_go/execserver"
 	"codex_go/features"
 	"codex_go/historynotes"
@@ -751,8 +752,14 @@ type RuntimeRouter struct {
 	agentActivitySignals map[string]chan struct{}
 	agentMessagesMu      sync.Mutex
 	agentMessages        map[string][]any
-	nodeReplEvidenceMu   sync.Mutex
-	nodeReplEvidence     map[string]*codexctx.NodeReplReviewEvidence
+	// inheritedExecPolicies holds host-transported managed command policies
+	// installed for reserved child threads (Rust #58406
+	// PreparedChildInheritance.exec_policy -> ExecPolicyManager::from_inherited).
+	// Each entry is an independent copy owned by that thread.
+	inheritedExecPolicyMu sync.Mutex
+	inheritedExecPolicies map[string]*execpolicy.Policy
+	nodeReplEvidenceMu    sync.Mutex
+	nodeReplEvidence      map[string]*codexctx.NodeReplReviewEvidence
 	// retainedContexts is the thread-owned retained evidence the Guardian review
 	// prompt renders (Rust's session-owned `RetainedContext`). It is seeded from
 	// the thread's newest compaction checkpoint and then kept current from the
@@ -1007,6 +1014,7 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 		agentActivity:              map[string]chan string{},
 		agentActivitySignals:       map[string]chan struct{}{},
 		agentMessages:              map[string][]any{},
+		inheritedExecPolicies:      map[string]*execpolicy.Policy{},
 		networkPolicy:              embeddedEffectiveNetworkPolicy(services.EmbeddedNetworkPolicy),
 		localNetworkPolicy:         embeddedLocalNetworkPolicy(services.EmbeddedNetworkPolicy),
 		messageBoardHandles:        map[string]agentboard.Board{},

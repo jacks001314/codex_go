@@ -1310,6 +1310,7 @@ func (r *RuntimeRouter) discardRuntimeAgentMessages(threadID string) {
 	r.agentMessagesMu.Lock()
 	delete(r.agentMessages, threadID)
 	r.agentMessagesMu.Unlock()
+	r.discardInheritedExecPolicy(threadID)
 }
 
 func (r *RuntimeRouter) discardAllRuntimeAgentMessages() {
@@ -1319,6 +1320,7 @@ func (r *RuntimeRouter) discardAllRuntimeAgentMessages() {
 	r.agentMessagesMu.Lock()
 	r.agentMessages = map[string][]any{}
 	r.agentMessagesMu.Unlock()
+	r.discardAllInheritedExecPolicies()
 }
 
 func (r *RuntimeRouter) runtimeAgentIdentity(threadID string) (string, string) {

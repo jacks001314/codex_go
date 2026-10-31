@@ -42,6 +42,40 @@ type PrefixRule struct {
 	Source           string
 }
 
+// Clone returns a deep copy of the policy so an independent manager can apply
+// later amendments without changing the source session (Rust
+// ExecPolicyManager::from_snapshot clones the transported policy, #58406).
+func (p *Policy) Clone() *Policy {
+	if p == nil {
+		return nil
+	}
+	clone := &Policy{NetworkRules: append([]NetworkRule(nil), p.NetworkRules...)}
+	clone.Rules = make([]PrefixRule, 0, len(p.Rules))
+	for _, rule := range p.Rules {
+		cloned := rule
+		cloned.Pattern = make([][]string, 0, len(rule.Pattern))
+		for _, token := range rule.Pattern {
+			cloned.Pattern = append(cloned.Pattern, append([]string(nil), token...))
+		}
+		cloned.MatchExamples = clonePolicyCommands(rule.MatchExamples)
+		cloned.NotMatchExamples = clonePolicyCommands(rule.NotMatchExamples)
+		clone.Rules = append(clone.Rules, cloned)
+	}
+	clone.HostExecutables = cloneHostExecutables(p.HostExecutables)
+	return clone
+}
+
+func clonePolicyCommands(commands [][]string) [][]string {
+	if len(commands) == 0 {
+		return nil
+	}
+	out := make([][]string, 0, len(commands))
+	for _, command := range commands {
+		out = append(out, append([]string(nil), command...))
+	}
+	return out
+}
+
 // AllowedPrefixes ports Rust Policy::get_allowed_prefixes: every allow rule's
 // pattern, with per-token alternatives rendered as `[a|b]` (Rust
 // render_pattern_token). Prefixes are canonicalized so callers can compare sets.
