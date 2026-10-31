@@ -36234,7 +36234,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_28_sync4.md:115: | `b8f6d25ce7` | #57179 | N/A | Go has no `AuthProvider::resolve_auth_headers` or equivalent header-auth interface. |"
+    "N/A by API shape: Rust deletes `AuthProvider::resolve_auth_headers` and routes header-only authentication through the async `apply_auth_headers`. Go already has a single such interface: `model.ResolveProviderAuth` returns `model.AuthHeaders`, whose `ApplyRequest` applies headers and refreshes/signs per attempt (replacing superseded credentials) and returns the signed body (`model/auth.go`), and every caller uses that returned map, so there is no second resolver to remove."
    ]
   },
   {
@@ -36436,7 +36436,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:367: - `#57202` is N/A: the commit instruments a returned Rust tool-runtime future"
+    "N/A by observability carrier: Rust instruments the returned tool-runtime future with the spawned dispatch task's `tracing` span so completion and cancellation handling stay inside `dispatch_tool_call_with_state`. Go has no `tracing` span hierarchy for tool dispatch: wrapped executors report through `UnifiedExecSpanSink` and metric tags (`tool/shell_executor.go`), and the dispatch path is a plain call whose result and cancellation need no parent span, so there is no parent-child span relationship to preserve."
    ]
   },
   {
@@ -36702,9 +36702,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:380: - `#57229` is N/A: removes Rust code-mode cell-actor pending-initial-yield state."
+    "Rust #57229 removes the pending initial-yield plumbing from the cell actor and keeps a completed cell's event and original timestamp when an observer has disconnected, so a later observation reports the full buffering duration. Go's cell store already has that contract: `CellStore.Complete`/`CompleteIfRunning` keep terminal output on the cell, `Cell.CompletedAt` stamps the original completion, and `SessionRuntime.responseForCell` recomputes `ResultBufferedForNS = now - CompletedAt` on every wait (the #55653 carrier), so a late or retried observation reports the whole elapsed interval. Tests: TestCellStoreCompleteDoesNotOverwriteTerminationLikeRust and TestCellStoreCompleteIfRunningCompletesRunningCellLikeRust (`codemode/cell_complete_terminated_like_rust_test.go`), TestSessionRuntimeBufferedResultLikeRust (`codemode/result_buffered_like_rust_test.go`); `go test ./codemode -run 'CellStore|SessionRuntimeBuffered' -count=1`."
    ]
   },
   {
@@ -36949,7 +36949,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:376: - `#57257` is N/A: removes redundant connector-directory loads and clones in"
+    "N/A by consumer absence: Rust's `connectors` crate filters suggestible connectors before loading the cached directory and clones only matching entries into the suggestion list. Go's `apps` package (`apps/directory.go`, `apps/connectors.go`) builds and filters directory/accessible snapshots for the Apps MCP surface, but no Go consumer builds tool suggestions from a discoverable-connector directory, so the redundant lookup and clone this commit removes do not exist. The preserved behaviors (accessible apps excluded even when disabled, placeholder entries for connectors missing from the directory) correspond to `apps.filterAccessibleAppsForDirectory` and `apps.mergeDirectorySnapshots`."
    ]
   },
   {
@@ -36961,7 +36961,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:416: - `#57258` is N/A: Rust's remote plugin catalog reduces cache probing overhead"
+    "N/A by carrier: Rust's remote plugin catalog probes cache availability without deserializing plugin records and rejects stale catalogs from a 256-byte header prefix. Go's `plugin/remote_catalog.go` reads a cached catalog once (`readRemoteCatalogCache` at `remoteCatalogCachePath`) and validates the envelope and `plugins` array in that same unmarshal; there is no separate availability or freshness probe to optimize, so this is a Rust-only performance change with no behavior delta."
    ]
   },
   {
@@ -37161,7 +37161,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:260: - `#57276` (extension world-state window prefixes) is N/A: Rust adds"
+    "N/A by subsystem absence: Rust adds `WorldStateSectionContribution::with_window_prefix()` so extension-supplied developer fragments render as separate messages before retained history, including after compaction. Go has no extension API and no extension world-state contributions (there is no `extensions` package; `context` world state is assembled from MCP tools/instructions and retained history), so there is no section contribution that could opt into a window prefix."
    ]
   },
   {
@@ -38258,8 +38258,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_28_sync2.md:23: | `#57572` | Apps catalogs without shared snapshots | Verify: Go has no shared Apps snapshot; add per-connection catalog accessor only if a consumer exists. |",
-    "October plan records a structural/inapplicability disposition for the Go architecture."
+    "N/A by architecture: Rust adds `ConnectorRuntimeManager::without_shared_snapshot()` so a thread with Apps snapshot sharing disabled keeps its own catalog and skips disk caching. Go has no shared Apps snapshot: each runtime MCP service (`appserver/mcp_runtime_coordinator.go`) builds its catalog from its own `apps` directory and accessible snapshots, and nothing shares those snapshots across threads, so the unshared behavior is the only behavior and there is no sharing mode to toggle."
    ]
   },
   {
@@ -38284,7 +38283,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_28_sync2.md:25: | `#57575`/`#57593` | HTTP client refactor + empty file removal | Verify: no behavior delta in Go. |"
+    "N/A by carrier: Rust's commit is an internal `codex-http-client` refactor (construct the direct transport inside `HttpClient::new`, reuse `without_request_logging` in `new_without_request_logging`, bind awaited request results before matching). Go has no such constructor pair: HTTP clients are built where providers and transports are constructed (`model` provider clients, `model/responses_agent.go` websocket client, `model/aws_http_client.go`), so there is no duplicated transport-selection branch to consolidate and no observable behavior to port."
    ]
   },
   {
@@ -38473,7 +38472,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_28_sync4.md:186: | `04e365c698` | #57618 | N/A | Release sampling prompts after stream setup. Go does not implement the legacy `notify` config hook, so there is no notification-text extraction and no retained sampling prompt or media payload to release. |"
+    "N/A by feature absence: Rust extracts notification text from the first attempt before consuming the sampling prompt, so image and audio payloads are released once the stream is set up. Go does not implement the legacy `notify` config hook - `notify` appears only in the known-key tables (`config/config.go:1079`, `config/config_toml_schema.go:355`) and nothing consumes it - so there is no notification text to extract and no retained sampling prompt in the request path."
    ]
   },
   {
@@ -38846,7 +38845,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "update/plan_2026_10_30.md:163: #57790 N/A — Guardian prompt 准备重构（无行为变化）"
+    "N/A by carrier: Rust centralizes synchronous Guardian prompt preparation in shared `guardian-context` APIs (split evidence collection from composition, measure reviewer-history tokens only when images and a context window require it, share delivery filtering with budget checks). Go has no `guardian-context` crate: preparation, budget checks and history live in one in-process path (`appserver/guardian_review_history.go`, `appserver/guardian_root_context.go`, the `retainedctx` package), so there is no second preparation implementation to unify. The observable budget/omission behavior is pinned by guardian_retained_omissions_like_rust_test.go, guardian_image_budget_like_rust_test.go and guardian_request_budget_like_rust_test.go."
    ]
   },
   {
@@ -38894,7 +38893,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "update/plan_2026_10_30.md:167: #57818 N/A — 配置处理性能优化（无行为变化）"
+    "N/A by carrier (performance-only): Rust skips path resolution for empty TOML tables, avoids scanning project trust entries after an exact miss (and picks the smallest Windows case-insensitive match without sorting), and builds the effective config for credential-origin filtering only when origins exist. Go's loader resolves paths only for present keys and merges packaged/user/project layers in `config/api.go`, producing identical configuration values; the commit changes no observable output or error text."
    ]
   },
   {
