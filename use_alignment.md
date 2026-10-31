@@ -2824,8 +2824,71 @@ migrated file entirely (the parser is `unwrap_or(None)`).
   `rollout/canonical_migration_turn_context_rust_shape_test.go`, and
   `go test -count=1 ./rollout` passes.
 
+### 85. `migrate-rollouts` converts legacy completion events into turn items like Rust
+
+0.166 turns the remaining legacy completion events into completed `TurnItem`
+records instead of carrying them through verbatim. Go's replay now mirrors
+`legacy_event.rs::completed_item` for `mcp_tool_call_end`, `web_search_end`,
+`context_compacted`, `entered_review_mode`, `exited_review_mode`,
+`sub_agent_activity` and `dynamic_tool_call_response`:
+
+- **Turn selection.** `canonicalizer.rs` writes an item whose explicit
+  `turn_id` differs from the active turn into that turn, reuses a turn id it has
+  already opened without emitting another `task_started`, and opens an implicit
+  `task_started`/`task_complete` pair named after the id the first time it sees
+  it; `legacyEventTurnID` now does the same for converted events and for
+  `patch_apply_end` / `exec_command_end`, and every path drops buffered
+  reasoning first.
+- **`mcp_tool_call_end`.** Rebuilt as `McpToolCall` with serde's camelCase
+  optionals (`connectorId`, `mcpAppResourceUri`, `mcpAppUi`, `linkId`,
+  `appName`, `actionName`, `pluginId`, `readOnlyHint`), `arguments` kept as the
+  opaque JSON value, `result` re-serialized in `CallToolResult` order
+  (`content`, `structuredContent`, `isError`, `_meta`), `status` taken from
+  `is_success()` (`failed` for `Err` *and* for `Ok` with `isError: true`), and
+  `duration` decoded through serde's strict `{ "secs", "nanos" }` visitor.
+- **`web_search_end`.** Rebuilt as `WebSearch`; `action` follows the snake_case
+  Responses enum (`search` with `query`/`queries`, `open_page`, `find_in_page`
+  with `url`/`pattern`, unknown tags decoding to `{"type":"other"}`), and
+  `results` stays opaque JSON.
+- **`context_compacted` / review mode / sub-agent / dynamic tool.** Each becomes
+  its completed item: `ContextCompaction` with a synthesized `item-N` id,
+  `EnteredReviewMode` (the target is rebuilt from `ReviewTarget`, a legacy
+  `prompt` is promoted to a `custom` target by `line_parser`, and the hint
+  defaults to `Review requested.`), `ExitedReviewMode` (`review_output: null`
+  when absent, otherwise re-serialized in `ReviewOutputEvent` order with
+  findings, code location and line range rebuilt and f32 confidence scores
+  printed the way `ryu` prints them), `SubAgentActivity` (validated `kind` enum,
+  UUID `agent_thread_id` and `/root`-shaped `agent_path`, with `model` and
+  `reasoning_effort` always written), and `DynamicToolCall` with camelCase
+  `content_items` (`inputText`/`inputImage`/`inputAudio`) and the strict
+  duration shape.
+- **Dropped records.** Any converted event the modern types cannot decode is
+  dropped the way Rust's failed parse is: a `mcp_tool_call_end` without
+  `duration`/`invocation`/an `Ok`-or-`Err` result or with an unknown
+  `mcp_app_ui` shape, a `web_search_end` without an action, an
+  `exited_review_mode` whose review output misses a required field, a
+  `sub_agent_activity` with an unknown `kind`, malformed thread id or relative
+  agent path, and a `dynamic_tool_call_response` with an unknown content item
+  tag.
+- Evidence: `out/r78-convert.txt` compares 44 payloads against 0.166 at 44/44
+  byte-identical with identical `bytes_processed` (`out/r78-probe2.txt`,
+  `out/r78-probe3.txt` and `out/r78-float.txt` keep the probes behind the
+  `mcp_app_ui`, duration, enum and f32 formatting rules), the `out/r75*`,
+  `out/r76*` and `out/r77*` regressions still report `FAILURES 0`, and
+  `TestCanonicalizeRolloutConvertsLegacyEventItemsLikeRust` (24 subtests) freezes
+  the Rust bytes and counters in
+  `rollout/canonical_migration_legacy_event_items_rust_shape_test.go`.
+
 ## Verification
 
+- Round 72 converts the remaining legacy `migrate-rollouts` completion events
+  (`mcp_tool_call_end`, `web_search_end`, `context_compacted`, both review-mode
+  events, `sub_agent_activity`, `dynamic_tool_call_response`) into completed
+  `TurnItem` records like 0.166 (entry 85): `out/r78-convert.txt` reports 44/44
+  payloads byte-identical with identical `bytes_processed`, the `out/r75*`,
+  `out/r76*` and `out/r77*` probes still report `FAILURES 0`, and the new
+  `TestCanonicalizeRolloutConvertsLegacyEventItemsLikeRust` subtests freeze them
+  (`go test -count=1 ./rollout` passes).
 - Round 71 re-serializes `migrate-rollouts` `turn_context` and `compacted`
   records like 0.166 (entry 84): `out/r77-turn-context-compacted.txt` reports
   20/20 payloads byte-identical with identical `bytes_processed`, the earlier
@@ -3463,12 +3526,13 @@ migrated file entirely (the parser is `unwrap_or(None)`).
   `patch_apply_end` -> `FileChange` conversion (entries 82 and 83,
   `out/r76-events.txt` 5/5, `out/r76-compressed-cases.txt` 6/6) and
   `turn_context` / `compacted` are re-serialized like 0.166 (entry 84,
-  `out/r77-turn-context-compacted.txt` 20/20). What is left is the other half of
-  the paginated event policy: legacy `mcp_tool_call_end`, `web_search_end`,
-  `image_generation_end`, `context_compacted`, `entered_review_mode`,
-  `exited_review_mode`, `sub_agent_activity` and `dynamic_tool_call_response`
-  are still carried over verbatim, where Rust converts each into a completed
-  `TurnItem`. An `item_completed` whose item decodes but whose nested values
+  `out/r77-turn-context-compacted.txt` 20/20), and the legacy completion events
+  are converted into completed `TurnItem` records like Rust (entry 85,
+  `out/r78-convert.txt` 44/44). What is left of the paginated event policy is
+  only `image_generation_end`, which is still carried over verbatim because its
+  `image` reference flattens into the event payload, so Go would have to rebuild
+  `GeneratedImageRef` field by field. An `item_completed` whose item decodes but
+  whose nested values
   Rust rejects (for example an unknown `phase`) still survives Go's shallower
   check, and a `turn_context` carrying `permission_profile` /
   `file_system_sandbox_policy` passes those nested payloads through instead of

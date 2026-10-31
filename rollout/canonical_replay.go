@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1162,6 +1164,20 @@ func (w *canonicalReplayWriter) replayEvent(entry canonicalReplayLine) error {
 		return w.writeCommandExecution(entry)
 	case "patch_apply_end":
 		return w.writePatchApplyEnd(entry)
+	case "mcp_tool_call_end":
+		return w.writeMcpToolCall(entry)
+	case "web_search_end":
+		return w.writeWebSearch(entry)
+	case "context_compacted":
+		return w.writeContextCompaction(entry)
+	case "entered_review_mode":
+		return w.writeReviewMode(entry, true)
+	case "exited_review_mode":
+		return w.writeReviewMode(entry, false)
+	case "sub_agent_activity":
+		return w.writeSubAgentActivity(entry)
+	case "dynamic_tool_call_response":
+		return w.writeDynamicToolCall(entry)
 	case "item_completed":
 		if !canonicalTurnItemDecodes(entry.payload) {
 			return nil
@@ -1183,17 +1199,849 @@ func (w *canonicalReplayWriter) replayEvent(entry canonicalReplayLine) error {
 // events or they are converted to completed items by a step Go has not ported
 // yet. Everything else a legacy rollout can contain is dropped by Rust.
 var legacyEventPassthrough = map[string]bool{
-	"thread_goal_updated":        true,
-	"thread_rolled_back":         true,
-	"thread_settings_applied":    true,
-	"mcp_tool_call_end":          true,
-	"web_search_end":             true,
-	"image_generation_end":       true,
-	"context_compacted":          true,
-	"entered_review_mode":        true,
-	"exited_review_mode":         true,
-	"sub_agent_activity":         true,
-	"dynamic_tool_call_response": true,
+	"thread_goal_updated":     true,
+	"thread_rolled_back":      true,
+	"thread_settings_applied": true,
+	// The image-generation event flattens its image reference into the event,
+	// which Go does not rebuild field by field yet.
+	"image_generation_end": true,
+}
+
+// legacyEventTurnID picks the turn a converted legacy event belongs to,
+// mirroring canonicalizer.rs: an explicit id keeps that turn, a first-time
+// explicit id opens an implicit turn named after it, and a missing id opens the
+// rollout-{line} turn. Every path drops buffered reasoning first.
+func (w *canonicalReplayWriter) legacyEventTurnID(entry canonicalReplayLine) (string, error) {
+	w.reasoning = nil
+	turnID := canonicalRawString(entry.payload, "turn_id")
+	if turnID == "" {
+		return w.ensureTurn(entry.timestamp, entry.sourceIndex)
+	}
+	if w.activeTurnID != "" || w.knownTurnIDs[turnID] {
+		return turnID, nil
+	}
+	if err := w.startImplicitTurn(entry.timestamp, turnID); err != nil {
+		return "", err
+	}
+	return turnID, nil
+}
+
+// canonicalStrictString decodes a required JSON string and rejects null or
+// non-string values, matching serde's String deserializer.
+func canonicalStrictString(value json.RawMessage) (string, bool) {
+	if len(value) == 0 || canonicalRawIsNull(value) {
+		return "", false
+	}
+	return canonicalRawJSONStringValue(value)
+}
+
+// canonicalStrictInt decodes a required JSON integer, matching serde's integer
+// deserializers that reject fractional numbers.
+func canonicalStrictInt(value json.RawMessage) (int64, bool) {
+	if len(value) == 0 || canonicalRawIsNull(value) {
+		return 0, false
+	}
+	var number int64
+	if err := json.Unmarshal(value, &number); err != nil {
+		return 0, false
+	}
+	return number, true
+}
+
+// canonicalDuration replays serde's std::time::Duration shape, whose visitor
+// accepts only the secs and nanos keys and rejects unknown fields.
+func canonicalDuration(value json.RawMessage) ([]byte, bool) {
+	fields, err := canonicalRawFields(value)
+	if err != nil {
+		return nil, false
+	}
+	for key := range fields {
+		if key != "secs" && key != "nanos" {
+			return nil, false
+		}
+	}
+	secs, ok := canonicalStrictInt(fields["secs"])
+	if !ok || secs < 0 {
+		return nil, false
+	}
+	nanos, ok := canonicalStrictInt(fields["nanos"])
+	if !ok || nanos < 0 || nanos > 999999999 {
+		return nil, false
+	}
+	out := newCanonicalJSONObject()
+	_ = out.field("secs", secs)
+	_ = out.field("nanos", nanos)
+	return out.finish(), true
+}
+
+// canonicalCallToolResult replays CallToolResult's camelCase field order and
+// drops fields the modern type does not know.
+func canonicalCallToolResult(value json.RawMessage) ([]byte, bool, bool) {
+	fields, err := canonicalRawFields(value)
+	if err != nil {
+		return nil, false, false
+	}
+	content, ok := fields["content"]
+	if !ok || canonicalRawIsNull(content) {
+		return nil, false, false
+	}
+	var entries []json.RawMessage
+	if err := json.Unmarshal(content, &entries); err != nil {
+		return nil, false, false
+	}
+	out := newCanonicalJSONObject()
+	_ = out.rawField("content", content)
+	if raw, present := fields["structuredContent"]; present && !canonicalRawIsNull(raw) {
+		_ = out.rawField("structuredContent", raw)
+	}
+	isError := false
+	if raw, present := fields["isError"]; present && !canonicalRawIsNull(raw) {
+		flag, ok := canonicalRawJSONBool(raw)
+		if !ok {
+			return nil, false, false
+		}
+		_ = out.rawField("isError", raw)
+		isError = flag
+	}
+	if raw, present := fields["_meta"]; present && !canonicalRawIsNull(raw) {
+		_ = out.rawField("_meta", raw)
+	}
+	return out.finish(), isError, true
+}
+
+// canonicalMcpAppUi replays McpAppUi's camelCase shape.
+func canonicalMcpAppUi(value json.RawMessage) ([]byte, bool) {
+	fields, err := canonicalRawFields(value)
+	if err != nil {
+		return nil, false
+	}
+	resourceURI, ok := canonicalStrictString(fields["resourceUri"])
+	if !ok {
+		return nil, false
+	}
+	mode, ok := canonicalStrictString(fields["preferredModelDisplayMode"])
+	if !ok || (mode != "inline" && mode != "fullscreen") {
+		return nil, false
+	}
+	out := newCanonicalJSONObject()
+	_ = out.field("resourceUri", resourceURI)
+	_ = out.field("preferredModelDisplayMode", mode)
+	return out.finish(), true
+}
+
+// canonicalWebSearchAction replays the Responses API web search action enum.
+// Unknown action types decode as the Other variant in Rust, which serializes
+// back as {"type":"other"}.
+func canonicalWebSearchAction(value json.RawMessage) ([]byte, bool) {
+	fields, err := canonicalRawFields(value)
+	if err != nil {
+		return nil, false
+	}
+	kind, ok := canonicalStrictString(fields["type"])
+	if !ok {
+		kind = "other"
+	}
+	out := newCanonicalJSONObject()
+	switch kind {
+	case "search":
+		_ = out.field("type", kind)
+		if raw, present := fields["query"]; present && !canonicalRawIsNull(raw) {
+			text, ok := canonicalRawJSONStringValue(raw)
+			if !ok {
+				return nil, false
+			}
+			_ = out.field("query", text)
+		}
+		if raw, present := fields["queries"]; present && !canonicalRawIsNull(raw) {
+			var queries []string
+			if err := json.Unmarshal(raw, &queries); err != nil {
+				return nil, false
+			}
+			_ = out.field("queries", queries)
+		}
+	case "open_page", "find_in_page":
+		_ = out.field("type", kind)
+		for _, key := range []string{"url", "pattern"} {
+			if raw, present := fields[key]; present && !canonicalRawIsNull(raw) {
+				text, ok := canonicalRawJSONStringValue(raw)
+				if !ok {
+					return nil, false
+				}
+				_ = out.field(key, text)
+			}
+		}
+	default:
+		_ = out.field("type", "other")
+	}
+	return out.finish(), true
+}
+
+// writeWebSearch converts a legacy web_search_end event into the WebSearch
+// completed item.
+func (w *canonicalReplayWriter) writeWebSearch(entry canonicalReplayLine) error {
+	fields, err := canonicalRawFields(entry.payload)
+	if err != nil {
+		return err
+	}
+	callID, ok := canonicalStrictString(fields["call_id"])
+	if !ok {
+		return nil
+	}
+	query, ok := canonicalStrictString(fields["query"])
+	if !ok {
+		return nil
+	}
+	action, ok := canonicalWebSearchAction(fields["action"])
+	if !ok {
+		return nil
+	}
+	out := newCanonicalJSONObject()
+	_ = out.field("type", "WebSearch")
+	_ = out.field("id", callID)
+	_ = out.field("query", query)
+	_ = out.rawField("action", action)
+	if raw, present := fields["results"]; present && !canonicalRawIsNull(raw) {
+		var results []json.RawMessage
+		if err := json.Unmarshal(raw, &results); err != nil {
+			return nil
+		}
+		_ = out.rawField("results", raw)
+	}
+	turnID, err := w.legacyEventTurnID(entry)
+	if err != nil {
+		return err
+	}
+	return w.writeItemCompleted(entry.timestamp, turnID, out.finish())
+}
+
+// writeContextCompaction converts a legacy context_compacted event into the
+// ContextCompaction completed item.
+func (w *canonicalReplayWriter) writeContextCompaction(entry canonicalReplayLine) error {
+	out := newCanonicalJSONObject()
+	_ = out.field("type", "ContextCompaction")
+	_ = out.field("id", w.itemID())
+	turnID, err := w.legacyEventTurnID(entry)
+	if err != nil {
+		return err
+	}
+	return w.writeItemCompleted(entry.timestamp, turnID, out.finish())
+}
+
+// writeMcpToolCall converts a legacy mcp_tool_call_end event into the
+// McpToolCall completed item (legacy_event.rs completed_item).
+func (w *canonicalReplayWriter) writeMcpToolCall(entry canonicalReplayLine) error {
+	fields, err := canonicalRawFields(entry.payload)
+	if err != nil {
+		return err
+	}
+	callID, ok := canonicalStrictString(fields["call_id"])
+	if !ok {
+		return nil
+	}
+	invocation, err := canonicalRawFields(fields["invocation"])
+	if err != nil {
+		return nil
+	}
+	server, ok := canonicalStrictString(invocation["server"])
+	if !ok {
+		return nil
+	}
+	tool, ok := canonicalStrictString(invocation["tool"])
+	if !ok {
+		return nil
+	}
+	duration, ok := canonicalDuration(fields["duration"])
+	if !ok {
+		return nil
+	}
+	result, resultErr := canonicalRawFields(fields["result"])
+	if resultErr != nil {
+		return nil
+	}
+	status := "completed"
+	var resultOut, errorOut []byte
+	if payload, present := result["Ok"]; present {
+		converted, isError, ok := canonicalCallToolResult(payload)
+		if !ok {
+			return nil
+		}
+		resultOut = converted
+		if isError {
+			status = "failed"
+		}
+	} else if message, present := result["Err"]; present {
+		text, ok := canonicalStrictString(message)
+		if !ok {
+			return nil
+		}
+		status = "failed"
+		inner := newCanonicalJSONObject()
+		_ = inner.field("message", text)
+		errorOut = inner.finish()
+	} else {
+		return nil
+	}
+	arguments := []byte("null")
+	if raw, present := invocation["arguments"]; present && !canonicalRawIsNull(raw) {
+		arguments = raw
+	}
+	out := newCanonicalJSONObject()
+	_ = out.field("type", "McpToolCall")
+	_ = out.field("id", callID)
+	_ = out.field("server", server)
+	_ = out.field("tool", tool)
+	_ = out.rawField("arguments", arguments)
+	for _, pair := range []struct{ key, name string }{
+		{"connector_id", "connectorId"},
+		{"mcp_app_resource_uri", "mcpAppResourceUri"},
+	} {
+		if raw, present := fields[pair.key]; present && !canonicalRawIsNull(raw) {
+			text, ok := canonicalStrictString(raw)
+			if !ok {
+				return nil
+			}
+			_ = out.field(pair.name, text)
+		}
+	}
+	if raw, present := fields["mcp_app_ui"]; present && !canonicalRawIsNull(raw) {
+		converted, ok := canonicalMcpAppUi(raw)
+		if !ok {
+			return nil
+		}
+		_ = out.rawField("mcpAppUi", converted)
+	}
+	for _, pair := range []struct{ key, name string }{
+		{"link_id", "linkId"},
+		{"app_name", "appName"},
+		{"action_name", "actionName"},
+		{"plugin_id", "pluginId"},
+	} {
+		if raw, present := fields[pair.key]; present && !canonicalRawIsNull(raw) {
+			text, ok := canonicalStrictString(raw)
+			if !ok {
+				return nil
+			}
+			_ = out.field(pair.name, text)
+		}
+	}
+	if raw, present := fields["read_only_hint"]; present && !canonicalRawIsNull(raw) {
+		flag, ok := canonicalRawJSONBool(raw)
+		if !ok {
+			return nil
+		}
+		_ = out.field("readOnlyHint", flag)
+	}
+	_ = out.field("status", status)
+	if resultOut != nil {
+		_ = out.rawField("result", resultOut)
+	} else {
+		_ = out.rawField("error", errorOut)
+	}
+	_ = out.rawField("duration", duration)
+	turnID, err := w.legacyEventTurnID(entry)
+	if err != nil {
+		return err
+	}
+	return w.writeItemCompleted(entry.timestamp, turnID, out.finish())
+}
+
+// canonicalReviewTarget replays ReviewTarget's internally tagged camelCase
+// enum, dropping fields the modern type does not carry.
+func canonicalReviewTarget(value json.RawMessage) ([]byte, bool) {
+	fields, err := canonicalRawFields(value)
+	if err != nil {
+		return nil, false
+	}
+	kind, ok := canonicalStrictString(fields["type"])
+	if !ok {
+		return nil, false
+	}
+	out := newCanonicalJSONObject()
+	_ = out.field("type", kind)
+	switch kind {
+	case "uncommittedChanges":
+	case "baseBranch":
+		branch, ok := canonicalStrictString(fields["branch"])
+		if !ok {
+			return nil, false
+		}
+		_ = out.field("branch", branch)
+	case "commit":
+		sha, ok := canonicalStrictString(fields["sha"])
+		if !ok {
+			return nil, false
+		}
+		_ = out.field("sha", sha)
+		if raw, present := fields["title"]; present && !canonicalRawIsNull(raw) {
+			title, ok := canonicalRawJSONStringValue(raw)
+			if !ok {
+				return nil, false
+			}
+			_ = out.field("title", title)
+		} else {
+			_ = out.rawField("title", []byte("null"))
+		}
+	case "custom":
+		instructions, ok := canonicalStrictString(fields["instructions"])
+		if !ok {
+			return nil, false
+		}
+		_ = out.field("instructions", instructions)
+	default:
+		return nil, false
+	}
+	return out.finish(), true
+}
+
+// canonicalReviewFinding replays ReviewFinding's field order.
+func canonicalReviewFinding(value json.RawMessage) ([]byte, bool) {
+	fields, err := canonicalRawFields(value)
+	if err != nil {
+		return nil, false
+	}
+	title, ok := canonicalStrictString(fields["title"])
+	if !ok {
+		return nil, false
+	}
+	body, ok := canonicalStrictString(fields["body"])
+	if !ok {
+		return nil, false
+	}
+	score, ok := canonicalFloat32JSON(fields["confidence_score"])
+	if !ok {
+		return nil, false
+	}
+	priority, ok := canonicalStrictInt(fields["priority"])
+	if !ok || priority < -2147483648 || priority > 2147483647 {
+		return nil, false
+	}
+	location, err := canonicalRawFields(fields["code_location"])
+	if err != nil {
+		return nil, false
+	}
+	filePath, ok := canonicalStrictString(location["absolute_file_path"])
+	if !ok {
+		return nil, false
+	}
+	lineRange, err := canonicalRawFields(location["line_range"])
+	if err != nil {
+		return nil, false
+	}
+	start, ok := canonicalStrictInt(lineRange["start"])
+	if !ok || start < 0 || start > 4294967295 {
+		return nil, false
+	}
+	end, ok := canonicalStrictInt(lineRange["end"])
+	if !ok || end < 0 || end > 4294967295 {
+		return nil, false
+	}
+	rng := newCanonicalJSONObject()
+	_ = rng.field("start", start)
+	_ = rng.field("end", end)
+	place := newCanonicalJSONObject()
+	_ = place.field("absolute_file_path", filePath)
+	_ = place.rawField("line_range", rng.finish())
+	out := newCanonicalJSONObject()
+	_ = out.field("title", title)
+	_ = out.field("body", body)
+	_ = out.rawField("confidence_score", score)
+	_ = out.field("priority", priority)
+	_ = out.rawField("code_location", place.finish())
+	return out.finish(), true
+}
+
+// canonicalReviewOutput replays ReviewOutputEvent's field order.
+func canonicalReviewOutput(value json.RawMessage) ([]byte, bool) {
+	fields, err := canonicalRawFields(value)
+	if err != nil {
+		return nil, false
+	}
+	rawFindings, ok := fields["findings"]
+	if !ok || canonicalRawIsNull(rawFindings) {
+		return nil, false
+	}
+	var findings []json.RawMessage
+	if err := json.Unmarshal(rawFindings, &findings); err != nil {
+		return nil, false
+	}
+	converted := make([][]byte, 0, len(findings))
+	for _, raw := range findings {
+		finding, ok := canonicalReviewFinding(raw)
+		if !ok {
+			return nil, false
+		}
+		converted = append(converted, finding)
+	}
+	correctness, ok := canonicalStrictString(fields["overall_correctness"])
+	if !ok {
+		return nil, false
+	}
+	explanation, ok := canonicalStrictString(fields["overall_explanation"])
+	if !ok {
+		return nil, false
+	}
+	score, ok := canonicalFloat32JSON(fields["overall_confidence_score"])
+	if !ok {
+		return nil, false
+	}
+	out := newCanonicalJSONObject()
+	_ = out.rawField("findings", canonicalContentArray(converted))
+	_ = out.field("overall_correctness", correctness)
+	_ = out.field("overall_explanation", explanation)
+	_ = out.rawField("overall_confidence_score", score)
+	return out.finish(), true
+}
+
+// canonicalFloat32JSON renders a JSON number the way serde_json/ryu render an
+// f32: shortest round-tripping digits, decimal notation while the decimal
+// exponent stays in [-4, 16), scientific notation with a signed exponent
+// otherwise.
+func canonicalFloat32JSON(value json.RawMessage) ([]byte, bool) {
+	if len(value) == 0 || canonicalRawIsNull(value) {
+		return nil, false
+	}
+	trimmed := bytes.TrimSpace(value)
+	if len(trimmed) == 0 {
+		return nil, false
+	}
+	if first := trimmed[0]; first != '-' && (first < '0' || first > '9') {
+		return nil, false
+	}
+	var parsed float64
+	if err := json.Unmarshal(trimmed, &parsed); err != nil {
+		return nil, false
+	}
+	number := float32(parsed)
+	if math.IsInf(float64(number), 0) {
+		return nil, false
+	}
+	scientific := strconv.FormatFloat(float64(number), 'e', -1, 32)
+	mantissa, exponentText, found := strings.Cut(scientific, "e")
+	if !found {
+		return nil, false
+	}
+	exponent, err := strconv.Atoi(exponentText)
+	if err != nil {
+		return nil, false
+	}
+	negative := strings.HasPrefix(mantissa, "-")
+	digits := strings.Replace(strings.TrimPrefix(mantissa, "-"), ".", "", 1)
+	var builder strings.Builder
+	if negative {
+		builder.WriteByte('-')
+	}
+	if exponent >= -4 && exponent < 16 {
+		if exponent >= 0 {
+			whole := exponent + 1
+			if whole >= len(digits) {
+				builder.WriteString(digits)
+				builder.WriteString(strings.Repeat("0", whole-len(digits)))
+				builder.WriteString(".0")
+			} else {
+				builder.WriteString(digits[:whole])
+				builder.WriteByte('.')
+				builder.WriteString(digits[whole:])
+			}
+		} else {
+			builder.WriteString("0.")
+			builder.WriteString(strings.Repeat("0", -exponent-1))
+			builder.WriteString(digits)
+		}
+	} else {
+		builder.WriteString(digits[:1])
+		if len(digits) > 1 {
+			builder.WriteByte('.')
+			builder.WriteString(digits[1:])
+		}
+		builder.WriteByte('e')
+		if exponent >= 0 {
+			builder.WriteByte('+')
+		}
+		builder.WriteString(strconv.Itoa(exponent))
+	}
+	return []byte(builder.String()), true
+}
+
+// writeReviewMode converts entered_review_mode and exited_review_mode events
+// into their completed items.
+func (w *canonicalReplayWriter) writeReviewMode(entry canonicalReplayLine, entered bool) error {
+	fields, err := canonicalRawFields(entry.payload)
+	if err != nil {
+		return err
+	}
+	itemID := ""
+	if text, ok := canonicalStrictString(fields["item_id"]); ok {
+		itemID = text
+	}
+	if itemID == "" {
+		itemID = w.itemID()
+	}
+	out := newCanonicalJSONObject()
+	if entered {
+		target, present := fields["target"]
+		if !present || canonicalRawIsNull(target) {
+			prompt, ok := canonicalStrictString(fields["prompt"])
+			if !ok {
+				return nil
+			}
+			custom := newCanonicalJSONObject()
+			_ = custom.field("type", "custom")
+			_ = custom.field("instructions", prompt)
+			target = custom.finish()
+		}
+		convertedTarget, ok := canonicalReviewTarget(target)
+		if !ok {
+			return nil
+		}
+		hint := "Review requested."
+		if raw, present := fields["user_facing_hint"]; present && !canonicalRawIsNull(raw) {
+			text, ok := canonicalRawJSONStringValue(raw)
+			if !ok {
+				return nil
+			}
+			hint = text
+		}
+		_ = out.field("type", "EnteredReviewMode")
+		_ = out.field("id", itemID)
+		_ = out.rawField("target", convertedTarget)
+		_ = out.field("user_facing_hint", hint)
+	} else {
+		reviewOutput := []byte("null")
+		if raw, present := fields["review_output"]; present && !canonicalRawIsNull(raw) {
+			converted, ok := canonicalReviewOutput(raw)
+			if !ok {
+				return nil
+			}
+			reviewOutput = converted
+		}
+		_ = out.field("type", "ExitedReviewMode")
+		_ = out.field("id", itemID)
+		_ = out.rawField("review_output", reviewOutput)
+	}
+	turnID, err := w.legacyEventTurnID(entry)
+	if err != nil {
+		return err
+	}
+	return w.writeItemCompleted(entry.timestamp, turnID, out.finish())
+}
+
+// canonicalUUID reports whether value is a canonical 8-4-4-4-12 UUID string,
+// matching ThreadId's uuid::Uuid deserializer.
+func canonicalUUID(value json.RawMessage) (string, bool) {
+	text, ok := canonicalStrictString(value)
+	if !ok || len(text) != 36 {
+		return "", false
+	}
+	for index, char := range text {
+		switch index {
+		case 8, 13, 18, 23:
+			if char != '-' {
+				return "", false
+			}
+		default:
+			if !strings.ContainsRune("0123456789abcdefABCDEF", char) {
+				return "", false
+			}
+		}
+	}
+	return text, true
+}
+
+// canonicalAgentPath validates AgentPath's absolute /root or /morpheus shape.
+func canonicalAgentPath(value json.RawMessage) (string, bool) {
+	text, ok := canonicalStrictString(value)
+	if !ok {
+		return "", false
+	}
+	if text == "/morpheus" || text == "/root" {
+		return text, true
+	}
+	if !strings.HasPrefix(text, "/root/") || strings.HasSuffix(text, "/") {
+		return "", false
+	}
+	for _, segment := range strings.Split(strings.TrimPrefix(text, "/root/"), "/") {
+		if segment == "" {
+			return "", false
+		}
+		for _, char := range segment {
+			valid := (char >= 'a' && char <= 'z') || (char >= '0' && char <= '9') || char == '_'
+			if !valid {
+				return "", false
+			}
+		}
+	}
+	return text, true
+}
+
+// writeSubAgentActivity converts a legacy sub_agent_activity event into the
+// SubAgentActivity completed item.
+func (w *canonicalReplayWriter) writeSubAgentActivity(entry canonicalReplayLine) error {
+	fields, err := canonicalRawFields(entry.payload)
+	if err != nil {
+		return err
+	}
+	eventID, ok := canonicalStrictString(fields["event_id"])
+	if !ok {
+		return nil
+	}
+	kind, ok := canonicalStrictString(fields["kind"])
+	if !ok {
+		return nil
+	}
+	switch kind {
+	case "started", "interacted", "interrupted", "completed":
+	default:
+		return nil
+	}
+	agentThreadID, ok := canonicalUUID(fields["agent_thread_id"])
+	if !ok {
+		return nil
+	}
+	agentPath, ok := canonicalAgentPath(fields["agent_path"])
+	if !ok {
+		return nil
+	}
+	out := newCanonicalJSONObject()
+	_ = out.field("type", "SubAgentActivity")
+	for _, key := range []string{"model", "reasoning_effort"} {
+		text := ""
+		hasText := false
+		if raw, present := fields[key]; present && !canonicalRawIsNull(raw) {
+			text, hasText = canonicalRawJSONStringValue(raw)
+			if !hasText {
+				return nil
+			}
+		}
+		if hasText {
+			_ = out.field(key, text)
+		} else {
+			_ = out.rawField(key, []byte("null"))
+		}
+	}
+	_ = out.field("id", eventID)
+	_ = out.field("kind", kind)
+	_ = out.field("agent_thread_id", agentThreadID)
+	_ = out.field("agent_path", agentPath)
+	turnID, err := w.legacyEventTurnID(entry)
+	if err != nil {
+		return err
+	}
+	return w.writeItemCompleted(entry.timestamp, turnID, out.finish())
+}
+
+// canonicalDynamicContentItem replays DynamicToolCallOutputContentItem's
+// internally tagged camelCase enum.
+func canonicalDynamicContentItem(value json.RawMessage) ([]byte, bool) {
+	fields, err := canonicalRawFields(value)
+	if err != nil {
+		return nil, false
+	}
+	kind, ok := canonicalStrictString(fields["type"])
+	if !ok {
+		return nil, false
+	}
+	out := newCanonicalJSONObject()
+	_ = out.field("type", kind)
+	switch kind {
+	case "inputText":
+		text, ok := canonicalStrictString(fields["text"])
+		if !ok {
+			return nil, false
+		}
+		_ = out.field("text", text)
+	case "inputImage":
+		url, ok := canonicalStrictString(fields["imageUrl"])
+		if !ok {
+			return nil, false
+		}
+		_ = out.field("imageUrl", url)
+	case "inputAudio":
+		url, ok := canonicalStrictString(fields["audioUrl"])
+		if !ok {
+			return nil, false
+		}
+		_ = out.field("audioUrl", url)
+	default:
+		return nil, false
+	}
+	return out.finish(), true
+}
+
+// writeDynamicToolCall converts a legacy dynamic_tool_call_response event into
+// the DynamicToolCall completed item.
+func (w *canonicalReplayWriter) writeDynamicToolCall(entry canonicalReplayLine) error {
+	fields, err := canonicalRawFields(entry.payload)
+	if err != nil {
+		return err
+	}
+	callID, ok := canonicalStrictString(fields["call_id"])
+	if !ok {
+		return nil
+	}
+	tool, ok := canonicalStrictString(fields["tool"])
+	if !ok {
+		return nil
+	}
+	arguments, ok := fields["arguments"]
+	if !ok {
+		return nil
+	}
+	success, ok := canonicalRawJSONBool(fields["success"])
+	if !ok {
+		return nil
+	}
+	rawContent, ok := fields["content_items"]
+	if !ok || canonicalRawIsNull(rawContent) {
+		return nil
+	}
+	var items []json.RawMessage
+	if err := json.Unmarshal(rawContent, &items); err != nil {
+		return nil
+	}
+	converted := make([][]byte, 0, len(items))
+	for _, raw := range items {
+		item, ok := canonicalDynamicContentItem(raw)
+		if !ok {
+			return nil
+		}
+		converted = append(converted, item)
+	}
+	duration, ok := canonicalDuration(fields["duration"])
+	if !ok {
+		return nil
+	}
+	out := newCanonicalJSONObject()
+	_ = out.field("type", "DynamicToolCall")
+	_ = out.field("id", callID)
+	if raw, present := fields["namespace"]; present && !canonicalRawIsNull(raw) {
+		text, ok := canonicalRawJSONStringValue(raw)
+		if !ok {
+			return nil
+		}
+		_ = out.field("namespace", text)
+	}
+	_ = out.field("tool", tool)
+	_ = out.rawField("arguments", arguments)
+	if success {
+		_ = out.field("status", "completed")
+	} else {
+		_ = out.field("status", "failed")
+	}
+	_ = out.rawField("content_items", canonicalContentArray(converted))
+	_ = out.field("success", success)
+	if raw, present := fields["error"]; present && !canonicalRawIsNull(raw) {
+		text, ok := canonicalRawJSONStringValue(raw)
+		if !ok {
+			return nil
+		}
+		_ = out.field("error", text)
+	}
+	_ = out.rawField("duration", duration)
+	turnID, err := w.legacyEventTurnID(entry)
+	if err != nil {
+		return err
+	}
+	return w.writeItemCompleted(entry.timestamp, turnID, out.finish())
 }
 
 // canonicalTurnItemRequiredFields lists the fields 0.166's TurnItem variants
@@ -1274,15 +2122,9 @@ func (w *canonicalReplayWriter) writePatchApplyEnd(entry canonicalReplayLine) er
 			return nil
 		}
 	}
-	turnID := canonicalRawString(entry.payload, "turn_id")
-	if turnID == "" || turnID == w.activeTurnID {
-		ensured, err := w.ensureTurn(entry.timestamp, entry.sourceIndex)
-		if err != nil {
-			return err
-		}
-		turnID = ensured
-	} else {
-		w.reasoning = nil
+	turnID, err := w.legacyEventTurnID(entry)
+	if err != nil {
+		return err
 	}
 	item, err := canonicalFileChangeItem(fields)
 	if err != nil {
@@ -1367,15 +2209,9 @@ func (w *canonicalReplayWriter) writeReasoning(entry canonicalReplayLine) error 
 }
 
 func (w *canonicalReplayWriter) writeCommandExecution(entry canonicalReplayLine) error {
-	turnID := canonicalRawString(entry.payload, "turn_id")
-	if turnID == "" || turnID == w.activeTurnID {
-		ensured, err := w.ensureTurn(entry.timestamp, entry.sourceIndex)
-		if err != nil {
-			return err
-		}
-		turnID = ensured
-	} else {
-		w.reasoning = nil
+	turnID, err := w.legacyEventTurnID(entry)
+	if err != nil {
+		return err
 	}
 	item, err := canonicalCommandExecutionItem(entry.payload)
 	if err != nil {
