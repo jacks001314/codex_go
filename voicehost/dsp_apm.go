@@ -40,6 +40,17 @@ func (p *audioProcessor) reset() {
 	p.delay.reset()
 }
 
+// resetRender drops the echo reference history after a speaker epoch change,
+// so audio decoded for the retired epoch cannot keep cancelling capture, while
+// the capture-side noise floor, gain, and filter history stay intact.
+func (p *audioProcessor) resetRender() {
+	if p == nil {
+		return
+	}
+	p.echo.reset()
+	p.delay.reset()
+}
+
 // processRender feeds one 10 ms echo reference frame (the decoded audio that is
 // about to be played), delayed by the configured stream delay so it aligns with
 // the capture frame that may still carry its echo.

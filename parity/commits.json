@@ -8426,9 +8426,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 6/10; needs review: PlaybackPort, PlaybackState, PlaybackWriter, fail_if_current"
+    "Round 1155: Rust #43244 adds a GstAudioSink subclass backed by a bounded mono F32LE PlaybackWriter (partial writes, cancellation on speaker epoch changes, delay accounting) and recreates the CPAL stream on epoch changes. Go has no GStreamer dependency; the equivalent contract lives in pcmPipeline: playback is a bounded block queue that keeps the newest audio (TestPipelineQueueIsBounded, TestVoicePlayoutKeepsNewestAudio), every queued block carries its speaker generation and pushPlayback rejects blocks for a disabled or retired generation (TestPipelineSuppressionNeverReplaysAudio), speaker transitions drain queued playback and render blocks and now also reset the echo reference while preserving capture history (speaker_transition_echo_reset_like_rust_test.go), and the miniaudio device callback pulls samples so PlaybackWriter partial writes and AudioSink::delay negotiation have no pull-model analogue. GStreamer/CPAL Bazel and Cargo dependency changes are Rust build inputs with no Go counterpart. Verified with go test ./voicehost -count=1 and go build ./..."
    ]
   },
   {
@@ -8438,9 +8438,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 5/7; needs review: reset_render, set_speaker_disabled"
+    "Round 1155: ports the remaining speaker-boundary behavior and audits the rest. Rust #43248 runs received RTP through a per-epoch jitter/decode/sink pipeline and discards queued audio plus echo references on speaker transitions while keeping capture history. The Go pull-model sink has the same observable contract: voiceIncoming admits RTP into a bounded 64-packet/1 s window per speaker epoch and rejects packets from a retired epoch, voicePlayout releases packets after the 60 ms jitter latency and drops anything older than 1 s, mediaSession.drainPlayout decodes at most 64 packets per pass and pushes 10 ms blocks into the epoch-tagged playback queue, and pcmPipeline.setControls drains the playback and render queues whenever the speaker epoch changes. New in this round: audioProcessor.resetRender drops the echo-canceller reference history and delay line on a speaker epoch change while preserving noise-floor, gain and capture-filter history, and mediaSession.setControls calls it exactly when the speaker generation changes; voicehost/speaker_transition_echo_reset_like_rust_test.go covers it (echo reference frames reset to zero while the AGC gain is preserved). Design difference: the Rust sink delay() and partial-write accounting exist for the GStreamer AudioSink subclass; the Go miniaudio callback pulls samples directly, so no sink-side delay estimate is needed. Verified with go test ./voicehost -count=1 and go build ./..."
    ]
   },
   {

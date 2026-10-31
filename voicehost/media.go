@@ -565,7 +565,13 @@ func (m *mediaSession) setControls(controls AudioControls) error {
 		}
 	}
 	if m.pipeline != nil {
+		speakerBefore := m.pipeline.speaker.current()
 		m.pipeline.setControls(controls)
+		// Rust #43248: a speaker epoch change discards the echo references queued
+		// for the retired epoch while capture-side processing history is kept.
+		if m.apm != nil && speakerBefore != m.pipeline.speaker.current() {
+			m.apm.resetRender()
+		}
 	}
 	return nil
 }
