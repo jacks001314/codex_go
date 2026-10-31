@@ -40,6 +40,7 @@ var (
 	modRuntimeNetapi32           = windows.NewLazySystemDLL("netapi32.dll")
 	modRuntimeUserenv            = windows.NewLazySystemDLL("userenv.dll")
 	procRuntimeNetUserGetInfo    = modRuntimeNetapi32.NewProc("NetUserGetInfo")
+	procRuntimeNetUserSetInfo    = modRuntimeNetapi32.NewProc("NetUserSetInfo")
 	procRuntimeNetApiBufferFree  = modRuntimeNetapi32.NewProc("NetApiBufferFree")
 	procRuntimeLoadUserProfile   = modRuntimeUserenv.NewProc("LoadUserProfileW")
 	procRuntimeUnloadUserProfile = modRuntimeUserenv.NewProc("UnloadUserProfile")
