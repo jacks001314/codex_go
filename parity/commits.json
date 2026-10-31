@@ -6360,9 +6360,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "Round 1190 (audit): N/A by architecture - the commit adds the windows-sandbox-service provisioning wire format (provisioning_protocol.rs: ProvisioningMessage, FramedProvisioningMessage, PROVISIONING_PROTOCOL_VERSION, SANDBOX_PROVISIONING_PIPE_NAME, and the readiness predicate sandbox_setup_is_complete_with_settings) plus shared framed-JSON, sandbox-group and SID helpers. Go has no provisioning service or client: rg finds no provisioning protocol type, pipe name, installation record or service handle, and the only windows_sandbox_service occurrence is the under-development feature flag in features/features.go. The elevated path keeps its own ipc_framed/pipe plumbing and marker comparison, so these symbols have no consumer and no behavior to port."
+    "Round 1206/1207 carry the provisioning protocol in sandbox/windowssandbox/provisionservice: protocol.go defines ProtocolVersion 1, the \\\\.\\pipe\\OpenAI.CodexSandbox name, the pre-dispatch \"sandbox group changed before authentication\" refusal, the versioned flattened Frame, the internally tagged register_installation_request/provision_sandbox_request/provision_sandbox_response messages, deny_unknown_fields provisioning payloads that omit registered_core/refresh_only when false, WindowsSandboxProxyListeners http/socks ports and status-tagged ok/unavailable/error responses. framing.go mirrors framed_io: little-endian u32 length prefix, the 8 MiB frame bound, EOF as no frame, and PeekNamedPipe complete-frame readiness on a 5 ms poll with the remaining deadline. The setup_main sandbox_users SID helpers are carried by winutil_windows.go (SIDBytesFromString/StringFromSIDBytes) and identity_logon_windows.go (resolveSandboxAccountSID). Tests: protocol_test.go, transmission coverage in transport_windows_test.go, and sandbox/windowssandbox/provisioning_settings_test.go for the helper/settings projections."
    ]
   },
   {
@@ -6372,9 +6372,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "Round 1190 (audit): N/A by architecture - adds the authenticated provisioning client in provisioning_client.rs: named-pipe server verification against the running CodexSandboxService process, versioned request/response exchange, ERROR_PIPE_BUSY/timeout/disconnect classification, and construction of WindowsSandboxProvisioningSettings and WindowsSandboxProxyListeners from the permission profile and proxy environment. Go has no Windows sandbox service, service pipe, or service request/response types and always provisions through the direct elevated helper, so neither the client nor its proxy-listener classification has a carrier."
+    "Round 1206 carries the authenticated client in sandbox/windowssandbox/provisionservice: client.go implements grouped provisioning with per-request deadlines, workload-identity routing, the registered-Core no-fallback refusal, unavailable classification for closed or timed-out replies, the one-shot group-change reconnect and the two-restart registration-refresh resume; transport_windows.go opens the impersonated pipe, waits out a busy server, verifies GetNamedPipeServerProcessId against the running CodexSandboxService SCM ProcessId before writing the request, and polls for complete frames; identity.go validates the package-family hint and qualifies the pipe name. The settings/listener projections live in provisioning_settings.go with case-insensitive proxy schemes, inherited HTTP/SOCKS classification, explicit proxy-port overrides and unclassified-protocol filtering. Tests: client_test.go, identity_test.go, transport_windows_test.go, provisioning_settings_test.go and provisioning_automatic_setup_test.go."
    ]
   },
   {
