@@ -775,7 +775,7 @@ func resolveCommandExecSandbox(params *CommandExecParams, cwd string, resolver C
 		if resolved == nil || resolved.Profile == nil {
 			return nil, jsonRPCInvalidRequest(fmt.Sprintf("command/exec permissionProfile %q did not resolve to a profile", profileID))
 		}
-		if err := mergeManagedDenyRead(resolved.Profile, managedDenyRead); err != nil {
+		if err := mergeManagedDenyRead(resolved.Profile, managedDenyRead, cwd); err != nil {
 			return nil, jsonRPCInvalidRequest(err.Error())
 		}
 		resolvedID := strings.TrimSpace(resolved.ID)
@@ -799,7 +799,7 @@ func resolveCommandExecSandbox(params *CommandExecParams, cwd string, resolver C
 		return &commandExecSandboxResolution{PermissionProfileID: &profileID, PermissionProfile: profile}, nil
 	default:
 		profileID := commandExecSandboxPolicyProfileID(params.SandboxPolicy)
-		if err := mergeManagedDenyRead(profile, managedDenyRead); err != nil {
+		if err := mergeManagedDenyRead(profile, managedDenyRead, cwd); err != nil {
 			return nil, jsonRPCInvalidRequest(err.Error())
 		}
 		return &commandExecSandboxResolution{PermissionProfileID: &profileID, PermissionProfile: profile}, nil
@@ -809,7 +809,14 @@ func resolveCommandExecSandbox(params *CommandExecParams, cwd string, resolver C
 // mergeManagedDenyRead appends the managed deny_read rules to a permission
 // profile and rejects overrides that would grant read access to a managed
 // denied path (#40004).
-func mergeManagedDenyRead(profile *sandbox.PermissionProfile, managedDenyRead []sandbox.FileSystemSandboxEntry) error {
+//
+// Rust #43939 shares the managed-denial validation through `DenyReadValidator`
+// so a concrete readable grant that reopens a managed denial is reported as a
+// conflict. Go has no FileSystemSandboxPolicy carrier here; the selected
+// profile's explicit writable roots are the concrete read-capable entries the
+// executor context can validate, exactly like Rust's explicit `writable_roots`
+// Path entries.
+func mergeManagedDenyRead(profile *sandbox.PermissionProfile, managedDenyRead []sandbox.FileSystemSandboxEntry, cwd string) error {
 	if profile == nil || len(managedDenyRead) == 0 {
 		return nil
 	}
@@ -818,8 +825,56 @@ func mergeManagedDenyRead(profile *sandbox.PermissionProfile, managedDenyRead []
 	if profile.Disabled || (profile.SandboxPolicy != nil && profile.SandboxPolicy.Kind == sandbox.SandboxDangerFullAccess) {
 		return fmt.Errorf("sandbox policy grants full access and conflicts with managed deny_read rules")
 	}
+	selected := append(commandExecSelectedReadableEntries(profile), managedDenyRead...)
+	if err := sandbox.ValidateManagedDenyRead(managedDenyRead, selected, managedDenyReadContext(cwd)); err != nil {
+		return err
+	}
 	profile.DeniedReadEntries = config.AppendFilesystemDenyReadEntries(profile.DeniedReadEntries, managedDenyRead)
 	return nil
+}
+
+// commandExecSelectedReadableEntries returns the concrete read-capable entries
+// a command/exec profile grants. Symbolic entries (root, :slash_tmp,
+// project_roots) stay symbolic, so the executor resolves them with its own
+// path facts.
+func commandExecSelectedReadableEntries(profile *sandbox.PermissionProfile) []sandbox.FileSystemSandboxEntry {
+	if profile == nil || profile.SandboxPolicy == nil {
+		return nil
+	}
+	entries := make([]sandbox.FileSystemSandboxEntry, 0, len(profile.SandboxPolicy.WritableRoots))
+	for _, root := range profile.SandboxPolicy.WritableRoots {
+		if strings.TrimSpace(root) == "" {
+			continue
+		}
+		entries = append(entries, sandbox.FileSystemSandboxEntry{
+			Path:   sandbox.FileSystemPath{Type: "path", Path: root},
+			Access: sandbox.FileSystemAccessWrite,
+		})
+	}
+	return entries
+}
+
+// managedDenyReadContext mirrors the executor facts Rust's config validator
+// builds for managed denials: the resolved cwd as the workspace root, the host
+// home for `~` globs, and TMPDIR metadata for `:tmpdir` denials.
+func managedDenyReadContext(cwd string) sandbox.DenyReadContext {
+	resolvedCWD := strings.TrimSpace(cwd)
+	if resolvedCWD == "" {
+		if workingDir, err := os.Getwd(); err == nil {
+			resolvedCWD = workingDir
+		}
+	}
+	home, _ := os.UserHomeDir()
+	temporaryDirectories := []string{}
+	if tmpdir := strings.TrimSpace(os.Getenv("TMPDIR")); tmpdir != "" {
+		temporaryDirectories = append(temporaryDirectories, tmpdir)
+	}
+	return sandbox.DenyReadContext{
+		CWD:                  resolvedCWD,
+		WorkspaceRoots:       []string{resolvedCWD},
+		UserHomeDir:          home,
+		TemporaryDirectories: &temporaryDirectories,
+	}
 }
 
 func commandExecSandboxPolicyProfileID(policy *sandbox.SandboxPolicy) string {

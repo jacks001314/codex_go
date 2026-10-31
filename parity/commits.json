@@ -10012,9 +10012,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/10; needs review: DenyReadValidator, DenyReadViolation, can_read_path, get_unreadable_globs_with_context, has_context_read_denials"
+    "Ported the executor-context deny-read API in sandbox/deny_read_target.go: DenyReadContext, DenyReadViolation, PreparedReadDenials (Rust ReadDenyMatcher::try_new_with_context), DenyReadValidator, ValidateManagedDenyRead, HasContextReadDenials, CanReadPathWithContext, and ReadDenyGlobsWithContext. Construction validates the executor cwd and workspace roots, expands `~` globs against the executor home, requires `:tmpdir` metadata, materializes project-root denials for every workspace root, keeps `:slash_tmp` POSIX-only, rejects reversed character classes, and denies foreign-convention candidates.",
+    "Tests: sandbox/deny_read_target_like_rust_test.go mirrors Rust target_tests.rs (POSIX/Windows/UNC path matrix, case folding, /tmp convention, tmpdir metadata, project roots, readable-path-before-missing-required precedence, fail-closed malformed or unresolvable denials); go test ./sandbox/ -count=1 passes.",
+    "appserver/command_exec.go: mergeManagedDenyRead runs ValidateManagedDenyRead over the selected profile's explicit writable roots plus the managed denials, so a readable or writable carveout inside a managed denial is rejected with Rust's shadowed-denial message before the denials are appended; appserver/command_exec_deny_read_test.go covers the conflict and the unrelated-root case.",
+    "No separate Go carrier for workspace_write_with_path_uris / with_materialized_project_roots_for_path_uris: permission materialization is config.permissionProfileBuilder.materializedEntriesForWorkspaceRoots over ConfigPathContext URI facts. sandbox/windows_deny_read_glob.go already splits both separators and drops empty components, matching PathConvention::Windows.path_segments."
    ]
   },
   {

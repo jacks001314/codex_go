@@ -51,21 +51,22 @@ func TestManagedDenyReadEntriesFromPermsExtractsDenyPaths(t *testing.T) {
 }
 
 func TestMergeManagedDenyReadPreservesRulesAndRejectsConflicts(t *testing.T) {
+	cwd := t.TempDir()
 	managed := []sandbox.FileSystemSandboxEntry{{
-		Path:   sandbox.FileSystemPath{Type: "path", Path: "/secret"},
+		Path:   sandbox.FileSystemPath{Type: "path", Path: filepath.Join(cwd, "secret")},
 		Access: sandbox.FileSystemAccessDeny,
 	}}
 	profile := &sandbox.PermissionProfile{}
-	if err := mergeManagedDenyRead(profile, managed); err != nil {
+	if err := mergeManagedDenyRead(profile, managed, cwd); err != nil {
 		t.Fatalf("merge should succeed on a permissive profile: %v", err)
 	}
-	if !profile.HasDenyReadEntries() || !profile.DeniesReadPath(filepath.Clean("/secret")) {
+	if !profile.HasDenyReadEntries() || !profile.DeniesReadPath(filepath.Join(cwd, "secret")) {
 		t.Fatalf("managed deny_read not merged into profile: %+v", profile.DeniedReadEntries)
 	}
 
 	// A profile that already denies the path is not a conflict (it is retained).
 	profile2 := &sandbox.PermissionProfile{DeniedReadEntries: managed}
-	if err := mergeManagedDenyRead(profile2, managed); err != nil {
+	if err := mergeManagedDenyRead(profile2, managed, cwd); err != nil {
 		t.Fatalf("repeat merge should be allowed: %v", err)
 	}
 	if len(profile2.DeniedReadEntries) != 1 {
@@ -74,7 +75,37 @@ func TestMergeManagedDenyReadPreservesRulesAndRejectsConflicts(t *testing.T) {
 
 	// A full-access profile conflicts with managed deny_read.
 	fullAccess := &sandbox.PermissionProfile{Disabled: true}
-	if err := mergeManagedDenyRead(fullAccess, managed); err == nil {
+	if err := mergeManagedDenyRead(fullAccess, managed, cwd); err == nil {
 		t.Fatal("full-access profile should be rejected as a conflict")
+	}
+}
+
+// Mirrors Rust #43939: a concrete readable grant that reopens a managed denial
+// is a conflict, not something the appended denial silently overrides.
+func TestMergeManagedDenyReadRejectsReadableGrantInsideManagedDenyLikeRust(t *testing.T) {
+	cwd := t.TempDir()
+	denied := filepath.Join(cwd, "secret")
+	managed := []sandbox.FileSystemSandboxEntry{{
+		Path:   sandbox.FileSystemPath{Type: "path", Path: denied},
+		Access: sandbox.FileSystemAccessDeny,
+	}}
+	conflicting := &sandbox.PermissionProfile{SandboxPolicy: &sandbox.SandboxPolicy{
+		Kind:          sandbox.SandboxWorkspaceWrite,
+		WritableRoots: []string{filepath.Join(denied, "carveout")},
+	}}
+	err := mergeManagedDenyRead(conflicting, managed, cwd)
+	if err == nil || err.Error() != sandbox.DenyReadShadowedMessage {
+		t.Fatalf("merge error = %v, want the shadowed-denial conflict", err)
+	}
+	if len(conflicting.DeniedReadEntries) != 0 {
+		t.Fatalf("conflicting merge mutated denials: %+v", conflicting.DeniedReadEntries)
+	}
+
+	unrelated := &sandbox.PermissionProfile{SandboxPolicy: &sandbox.SandboxPolicy{
+		Kind:          sandbox.SandboxWorkspaceWrite,
+		WritableRoots: []string{filepath.Join(cwd, "work")},
+	}}
+	if err := mergeManagedDenyRead(unrelated, managed, cwd); err != nil {
+		t.Fatalf("unrelated writable root must merge: %v", err)
 	}
 }
