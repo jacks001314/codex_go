@@ -20535,9 +20535,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "Round 275 (audit): N/A - websocket prewarm readiness is part of the Rust async sampling client. Go's model client does not maintain a prewarmed sampling WebSocket connection."
+    "Round 1241 (re-audit, supersedes the Round 275 N/A): the Go model client does keep a prewarmed Responses WebSocket. model/responses_agent.go websocketSessionPrewarmed mirrors Rust's is_prewarmed (a request was sent and the socket is not observed closed) and Prewarm returns without preparing when the socket is warm, recording codex.startup_prewarm.websocket_check with outcome ready or needs_prewarm (Rust #47745/#47709). Tests: model/prewarm_resume_reuse_like_rust_test.go TestResponsesAgentRunnerResumePrewarmSkipsWarmAndRepairsClosedSocketLikeRust."
    ]
   },
   {
@@ -31828,9 +31828,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "Round 729 (audit): N/A by architecture. Go write_stdin reviews retained additional permissions through hooks/Guardian/user review and bounds NUL/size, but app-server has no per-environment active granted-permissions set or filesystem grant-order comparison, so Rust's additional_permissions_preapproved expiry path has no carrier. Tests: go test ./appserver -run WriteStdin -count=1; evidence update/r165_54119_stdin_active_grants_audit_2026_10_18.md"
+    "Round 1241: write_stdin under an active sandbox grant reaches review when prompts are disabled for the sandbox. appserver/runtime_router.go routes the stdin review through the active grant (Rust #54119) and appserver/write_stdin_active_grants_like_rust_test.go covers active and session grants, Guardian routing, stale-grant rejection and network grants: go test ./appserver -run 'TestWriteStdin' -count=1."
    ]
   },
   {
@@ -33042,9 +33042,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "plan_2026_10_20.md:49: - `#55287`/`#55288` Go rejects EMA MCP connections entirely; there is no"
+    "Round 1241 (re-audit): enterprise managed MCP authentication can no longer ride a revoked grant across a config reload or account switch. mcp/ema_runtime.go wraps the runtime HTTP client in emaScopeCheckingDoer, which rechecks the account owner and bound policy at the HTTP boundary, and grant lookups are keyed by login generation, issuer and registration so a superseded manager's dispatch stops (Rust #55287/#55288/#55696). Tests: mcp/ema_runtime_test.go (RevokesOnLoginGenerationChange, RevokesWhenAccountLoginChanges), mcp/ema_auth_lifecycle_like_rust_test.go (HoldsRequestsWhilePolicyStale, ScopeCheckingDoerChecksPolicy). Residual: Go cancels through generation-keyed revocation at the dispatch boundary instead of a per-reload CancellationToken."
    ]
   },
   {
@@ -33909,10 +33909,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "plan_2026_10_27.md:101: | `#55607` | N/A: Go's security-setup prefetch already skips the request when no usable auth header exists, matching `.to_auth_headers().ok()?`. |",
-    "plan_2026_10_27_nontui.md:36: | `#55607` | Auth header construction is fallible so a request is never sent with missing or partial credentials: the API auth provider, telemetry, and request application propagate errors; a provider that requires Codex auth reports a transient error when managed authentication is unavailable (catalog identity stays computable); transient MCP auth errors are retryable while auth build errors and "
+    "Round 1241: authentication header failures surface before the request is sent. codexapi/auth.go, model.ResolveProviderAuth (model/auth.go) and mcp/http_client.go return the provider-auth-unavailable error ahead of dispatch (Rust #55607); model/auth_unavailable_like_rust_test.go (TestResolveProviderAuthReportsUnavailableManagedAuthLikeRust) and codexapi/provider_test.go pin the error surface."
    ]
   },
   {
@@ -34019,10 +34018,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:111: | `#55644` | Pending injections interrupt `wait_agent` and `clock.sleep` | `turn/steer_mailbox.go`, `turn/tool_dispatcher.go`, `turn/agent_loop.go`, `tool/step_activity.go`, `tool/handlers.go`, `appserver/agent_controller.go`, `exec/agent_controller.go`, like-Rust tests |",
-    "plan_2026_10_27_nontui.md:1086: `#55644` details: `SteerMailbox` records a pending notifying injection per"
+    "Round 1241: pending injections interrupt agent waits and sleeps. turn/steer_mailbox.go, tool/step_activity.go (clock sleep), tool/handlers.go wait_agent and the appserver/exec agent controllers publish live activity so a pending injection preempts the wait (Rust #55644). Tests: turn/steer_mailbox_activity_like_rust_test.go, tool/clock_sleep_activity_like_rust_test.go, appserver/pending_injection_wait_like_rust_test.go."
    ]
   },
   {
@@ -34208,10 +34206,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:110: | `#55692` | Tool-registration metrics carry the effective `incremental_tools` mode | `turn/tool_registration_metrics.go`, `turn/agent_loop.go`, `turn/runtime.go`, `appserver/turn_runtime.go`, like-Rust tests |",
-    "plan_2026_10_27_nontui.md:1077: `#55692` details: `codex.tools.registered` now carries an"
+    "Round 1241: tool registration metrics carry the effective incremental-tools mode. turn/tool_registration_metrics.go tags every registration with the resolved mode and turn/agent_loop.go plus appserver/turn_runtime.go report it for the turn (Rust #55692); appserver/incremental_tools_metrics_like_rust_test.go (TestAppTurnConfigReportsEffectiveIncrementalToolsLikeRust)."
    ]
   },
   {
@@ -34273,10 +34270,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:210: - `#55705` is structurally N/A: Rust moves cloud skill contents out of a",
-    "plan_2026_10_27_nontui.md:1392: - For `#55705`: `go test ./appserver -run 'OrchestratorSkill' -count=1` passes."
+    "Round 1241: cloud skill cache state lives under the catalog lock. The orchestrator skill cache is keyed by resource generation, cleared on an auth-scope change and preserved across an approval-policy refresh (Rust #55705); appserver/orchestrator_skill_cache_revision_test.go. The scope-change half of #55696 shares that test."
    ]
   },
   {
@@ -34460,10 +34456,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "plan_2026_10_27.md:90: | `#55923` | N/A for TUI: thread model settings are persisted and replayed by core/rollout; the TUI diff is test-only. |",
-    "plan_2026_10_27_nontui.md:37: | `#55923` | Preserve thread model settings across resume and revert: a cold resume restores the thread-owned service tier, reasoning summary, and personality unless the caller overrides them; the selected tier is kept for persistence and settings snapshots while the effective tier is filtered against the model (flex is always preserved); `thread/revert` carries the runtime model, service tier, an"
+    "Round 1241: thread model settings survive resume and revert. rollout/session_items.go and appserver/persisted_model_settings.go persist the latest model, service tier and effort settings; ThreadResume and ThreadRevert restore them and the turn-start checkpoint precedes user input (Rust #55923). Tests: appserver/persisted_model_settings_like_rust_test.go (5 cases), rollout/persisted_model_settings_like_rust_test.go, model/service_tier_flex_test.go."
    ]
   },
   {
@@ -34648,10 +34643,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:99: | `#55991` | Avoid double-counting retained reasoning when the server reports it as included | `compact/compact.go`, `compact/compact_test.go`, `turn/agent_loop.go`, `appserver/turn_runtime.go`, `appserver/runtime_router_test.go`, `exec/exec.go` |",
-    "plan_2026_10_27_nontui.md:1231: - For `#57241`/`#55991`/`#56211`: `go test ./compact ./config ./memories ./turn ./exec -count=1`, `go test ./appserver -run 'GuardianNativeAgentMessage|GuardianReviewTranscript|GuardianTranscriptCarries|GuardianReviewDelivers|MemoryStatus|CompactTokenStatusForTurn' -count=1` and `go build ./...` pass."
+    "Round 1241: retained reasoning is not double counted. compact/compact.go and the exec token estimators honor server-reported reasoning-included usage, and appserver reports the same compact token status for the turn (Rust #55991). Tests: compact TestEstimateActiveContextTokensHonorsServerReasoningIncluded, appserver TestCompactTokenStatusForTurnHonorsServerReasoningIncluded."
    ]
   },
   {
@@ -34999,7 +34993,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:224: - `#56124`'s reviewer-event forwarding is structurally N/A: Rust installs a"
+    "Round 1241 (re-audit): still not applicable. Rust installs a parent observer on a private Guardian review session and forwards its RecordedItem/TurnAborted private events as rawResponseItem/completed and interrupted turn/completed notifications under the reviewer's own thread and turn ids. Go's Guardian reviewer is an inline model session inside the parent turn (appserver/guardian_reviewer.go, guardianSessionRunner) with no app-server reviewer thread, turn identity or private event stream to forward, so features.go registers guardian_recorded_items for configuration parity only. The feature is disabled by default and staged under_development; forwarding needs a reviewer session identity first."
    ]
   },
   {
@@ -35583,10 +35577,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:38: | `#56330` | Interrupts and Plan mode stop reserved agent-message wakes: an interrupt during model discovery rejects the unstarted reservation without a terminal event, preserves its mail for an explicit turn, and blocks later automatic wakes until a new turn starts. Plan mode rejects the wake but does not mark the thread stopped. Accepted wakes keep their admission configuration, and finishing tu",
-    "plan_2026_10_27_nontui.md:1414: - For `#56330`: `go build ./appserver/... ./turn/... ./app/...`,"
+    "Round 1241: interrupts and Plan mode stop reserved agent-message wakes. appserver/agent_controller.go reserves the wake, revalidates after discovery, rejects an unstarted reservation on interrupt while keeping its mail for an explicit turn, and a finishing turn ignores late interrupts (Rust #56330). Tests: appserver/agent_message_wake_controls_like_rust_test.go, plus TestFinishingTurnIgnoresInterruptLikeRust and TestQueueOnlyAgentMessageWakesCompletedRootLikeRust."
    ]
   },
   {
@@ -36183,10 +36176,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "plan_2026_10_27.md:91: | `#57172` | N/A for TUI rendering: the TUI diff is a payload-wrapper refactor so Rust can read protocol lifecycle timestamps; Go's TUI renders no per-item elapsed duration from those fields, and the protocol fields are owned by the core lane. |",
-    "plan_2026_10_27_nontui.md:55: | `#57172` | Lifecycle timestamps on app-server thread items | `appserver/protocol.go`, `appserver/item_lifecycle_times.go`, `appserver/router.go`, `appserver/runtime_router.go`, `appserver/turn_runtime.go`, `state/thread_history_query.go`, like-Rust tests |"
+    "Round 1241: app-server thread items expose lifecycle timestamps. appserver/item_lifecycle_times.go builds the created/updated pairs, protocol.go and router.go emit them and state/thread_history_query.go reads them back (Rust #57172); appserver/runtime_router_test.go (assertItemLifecyclePairLikeRust, TestThreadItemLifecycleTimestampsSerializeLikeRust, TestBuildThreadItemLifecycleTimesFromMetadata)."
    ]
   },
   {
@@ -36272,10 +36264,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:112: | `#57181` | Optional names on untrusted additional context validate before input admission | `turn/api.go`, `appserver/runtime_router.go`, like-Rust tests |",
-    "plan_2026_10_27_nontui.md:1100: `#57181` details: an `AdditionalContextEntry` name is optional and only valid"
+    "Round 1241: untrusted additional context entries carry optional names. turn/additional_context validation runs in sorted key order before admission and appserver/runtime_router.go maps a validation failure onto an invalid-request error without mutating the turn (Rust #57181). Tests: turn/additional_context_name_like_rust_test.go, appserver/additional_context_name_like_rust_test.go (turn/start, turn/steer, pre-admission rejection)."
    ]
   },
   {
@@ -36438,10 +36429,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:77: | `#57201` | Capture direct-tool critical paths behind `critical_path_timing` | `criticalpath/critical_path.go`, `tooltiming/tool_timing.go`, `features/features.go`, `turn/turn.go`, `turn/tool_dispatcher.go`, `turn/agent_loop.go`, `turn/runtime.go`, `appserver/turn_runtime.go`, `appserver/thread_manager.go`, `telemetry/turn_event.go`, like-Rust tests |",
-    "plan_2026_10_27_nontui.md:805: `#57209` `#57201` `#57207` details: `codex_turn_event` carries Rust's eight"
+    "Round 1241: direct-tool critical paths are captured behind a default-off feature. turn/turn.go and turn/tool_dispatcher.go record serial and parallel call durations plus invalidation, telemetry/turn_event.go serializes the profile, and appserver/turn_runtime.go reports incomplete rather than disabled when capture never froze (Rust #57201). Tests: turn/tool_dispatcher_critical_path_test.go, turn/critical_path_timing_test.go, telemetry TestCodexTurnEventCriticalPathDisabledMatchesRust, appserver/critical_path_timing_like_rust_test.go."
    ]
   },
   {
@@ -36668,10 +36658,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "plan_2026_10_27.md:96: | `#57225` `#56055` | N/A: the TUI diff only adds new (unused) struct fields to test fixtures. |",
-    "plan_2026_10_27_nontui.md:70: | `#56552` `#57225` `#57226` `#55975` | DELETE journaling on NFS: initialize new databases, migrate existing WAL databases under managed enforcement, ship `codex migrate-nfs-db` | `state/sqlite.go`, `state/nfs_migration.go`, `state/nfs_lock.go`, `config/api.go`, `config/config.go`, `config/requirements_file.go`, `appserver/runtime_router.go`, `appserver/websocket.go`, `appserver/message_board.go`,"
+    "Round 1241: NFS databases get managed DELETE journaling. state/nfs_migration.go inspects the header, confirms the permission change and converts a WAL database with a resumable replacement, staying out of corruption recovery on failure; state/sqlite.go, config/api.go and appserver/websocket.go wire the unsafe enforce_sqlite_journal_mode requirement and cli/cli.go exposes migrate-nfs-db (Rust #57225). Tests: state/nfs_migration_test.go (3 cases are Unix-only and skip on Windows), config/requirements_nfs_journal_test.go. Residual: the journal-mode requirement itself is a config-time check, not an online nfstools probe."
    ]
   },
   {
@@ -36731,10 +36720,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "plan_2026_10_27.md:89: | `#57232` | N/A for TUI: `codex queue --resume` is parsed and executed in `cli`/`app` (core lane). |",
-    "plan_2026_10_27_nontui.md:45: | `#57232` | `codex queue --resume` resumes an unloaded thread | `cli/cli.go`, `app/session.go`, `app/app.go`, app queue tests |"
+    "Round 1241: codex queue --resume resumes the unloaded thread after queueing. cli/cli.go accepts the inherited --resume flag and app/session.go resumes the local embedded app server or the selected remote thread after a successful queue, warning instead of failing when resume fails (Rust #57232). Tests: cli TestParseQueueCommandLikeRust and TestParseQueueRejectsUnsupportedOptionsLikeRust pin the flag plumbing; app/queue_test.go covers the queue client paths."
    ]
   },
   {
@@ -37213,10 +37201,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:54: | `#57279` | Untrusted additional context as agent-namespaced tool outputs | `turn/api.go`, `appserver/additional_context.go`, `appserver/turn_runtime.go`, `appserver/runtime_router.go`, like-Rust tests |",
-    "plan_2026_10_27_nontui.md:545: `#57279` details: with `features.untrusted_as_tool_output` enabled, untrusted"
+    "Round 1241: untrusted additional context renders as named tool outputs. turn/api.go and appserver/turn_runtime.go wrap each context entry as an agent-namespaced tool output with truncation, and steer places them ahead of user input (Rust #57279). Tests: appserver/additional_context_like_rust_test.go (tool outputs, derived names, truncation, feature-off preservation, steer ordering)."
    ]
   },
   {
@@ -37349,10 +37336,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "plan_2026_10_27.md:95: | `#57293` | N/A for TUI: model catalogs are core data; the TUI diff only updates snapshots and Bedrock catalog tests. |",
-    "plan_2026_10_27_nontui.md:42: | `#57293` | Add GPT-6.1 Terra to bundled/Bedrock catalogs | `model/provider_info.go`, `model/catalog.go`, `model/catalog_test.go` |"
+    "Round 1241: GPT-6.1 Terra is in the bundled and Bedrock catalogs. model/provider_info.go adds AmazonBedrockGPT61TerraModelID and provider.go/catalog.go admit it with the long-context V2 metadata (Rust #57293). Tests: model TestAmazonBedrockModelCatalog, TestAmazonBedrockModelCatalogLikeRust, TestFallbackBundledCatalogCarriesGPT6FamilyLikeRust. The TUI snapshot half is tracked separately."
    ]
   },
   {
@@ -38149,10 +38135,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "plan_2026_10_28_sync2.md:13: | `#57538` | Host-assigned user input IDs (`msg_input_<uuid>`) | Port: turn-start/steer user message ids from `client_user_message_id`, reject `msg_input_` namespace on raw ingestion, keep ids when item ids are enabled. |",
-    "plan_2026_10_28_sync2.md:49: | `#57538` | `turn/api.go`, `appserver/turn_runtime.go`, `session/user_input_ids.go` | `session/user_input_ids_like_rust_test.go`, `appserver/user_input_ids_like_rust_test.go` |"
+    "Round 1241: host-assigned user input ids survive into Responses messages. protocol/response_item_id.go derives the admitted id, turn/api.go keeps user_item_uuid off the wire, and session/rollout store it separately so identical steered inputs stay distinct (Rust #57538). Tests: appserver/user_input_ids_like_rust_test.go (TestAdmittedUserInputResponseItemIDsLikeRust, TestSteerUserInputIDsStayDistinctLikeRust)."
    ]
   },
   {
@@ -38444,10 +38429,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "plan_2026_10_28_sync3.md:16: | `#57606` `939f5decb2` | `codex doctor --network-only` | TUI/doctor lane (`doctor/`). Not modified here. |",
-    "plan_2026_10_28_sync3.md:22: - `#57606`: `doctor/` is owned by the TUI lane; this window does not touch it."
+    "Round 1241: codex doctor --network-only runs a focused diagnostic set. cli/cli.go parses the flag and doctor/doctor.go runs only provider reachability and Responses WebSocket checks, stopping on a config failure (Rust #57606). Tests: doctor/network_only_like_rust_test.go (2 cases), cli TestParseDoctorNetworkOnlyFlag."
    ]
   },
   {
@@ -38482,10 +38466,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "plan_2026_10_28_sync3.md:13: | `#57615` `68b67f0ff4` | Preserve rollout tracing across sub-agent reloads; share Code Mode cell generations | Port the Code Mode half: allocate cell generations from a provider/host-scoped counter so a reloaded thread's replacement session cannot reuse cell IDs. Rollout-trace half is N/A (Go has no rollout-trace subsystem). |",
-    "plan_2026_10_28_sync3.md:20: - `#57615` rollout tracing: `rg -n \"ThreadResumed|rollout_thread_trace|ThreadTraceContext\" --glob '*.go'` returns nothing; Go has no trace bundle/`ThreadStarted` emitter, so reattaching children to a root trace and recording aborted traces on startup failure have no Go target."
+    "Round 1241: code-mode cell generations survive sub-agent reloads. The codemode remote, process and gRPC session providers allocate a fresh cell generation per host session so a reloaded session cannot reuse the previous session's cell ids (Rust #57615). Tests: codemode/session_generation_like_rust_test.go (web socket and gRPC). The rollout-trace half has no Go counterpart because Go has no sub-agent trace exporter."
    ]
   },
   {
@@ -38507,10 +38490,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "plan_2026_10_28_sync5.md:104: | `4aa14ea373` | #57626 | TUI lane | Removes the \"`model_provider` must be implicit\" condition from the Rust Bedrock onboarding wizard and updates its tests; only `codex-rs/tui/src/lib.rs`, `lib_tests.rs`, and `onboarding/auth.rs` change. The Go counterpart lives in `tui/onboarding/*` and `tui/app/startup_prompts.go`, which belong to the other lane. |",
-    "plan_2026_10_28_sync6.md:7: - Rust `origin/main`: `4aa14ea373` (only the TUI-lane `#57626` arrived after"
+    "Round 1241: the Bedrock setup wizard follows the effective provider. app/interactive_onboarding.go mirrors should_show_bedrock_setup_wizard for explicitly configured OpenAI providers (Rust #57626); app/interactive_onboarding_test.go TestBedrockSetupWizardFollowsEffectiveProviderLikeRust. The TUI presentation half is tracked separately."
    ]
   },
   {
