@@ -1140,6 +1140,24 @@ func linuxSandboxArgvWindowIndex(argv []string, window []string) int {
 	return -1
 }
 
+// linuxSandboxArgvWindowIndexAfter returns the first exact match of window at or
+// after start, or -1.
+func linuxSandboxArgvWindowIndexAfter(argv []string, window []string, start int) int {
+	for i := start; i >= 0 && i+len(window) <= len(argv); i++ {
+		matched := true
+		for j := range window {
+			if argv[i+j] != window[j] {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return i
+		}
+	}
+	return -1
+}
+
 // linuxSandboxArgvWindowCount counts the exact matches of window inside argv.
 func linuxSandboxArgvWindowCount(argv []string, window []string) int {
 	count := 0
@@ -1264,6 +1282,66 @@ func TestLinuxBwrapPlatformDefaultReadRootsUseTmpfsRootLikeRust(t *testing.T) {
 		}
 		if index := linuxSandboxArgvWindowIndex(argv, []string{"--ro-bind", root, root}); index < 0 {
 			t.Fatalf("the platform default read root %s must be bound read-only:\n%#v", root, argv)
+		}
+	}
+}
+
+// TestLinuxBwrapNestedWritableRootsMountCarveoutsInDepthOrderLikeRust mirrors
+// Rust #47623: writable roots bind shallowest-first, a parent's read-only
+// carveout is mounted before the deeper writable root that lives under it, and a
+// carveout owned by that deeper root is mounted exactly once, after its bind.
+// The policy lists the nested root first, so the order cannot come from input.
+func TestLinuxBwrapNestedWritableRootsMountCarveoutsInDepthOrderLikeRust(t *testing.T) {
+	root := t.TempDir()
+	docs := filepath.Join(root, "docs")
+	public := filepath.Join(docs, "public")
+	metadataNames := []string{".git", ".agents", ".gcode", ".aws"}
+	for _, name := range metadataNames {
+		if err := os.MkdirAll(filepath.Join(public, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	profileJSON := fmt.Sprintf(
+		`{"type":"managed","file_system":{"type":"restricted","entries":[`+
+			`{"path":{"type":"special","value":{"kind":"minimal"}},"access":"read"},`+
+			`{"path":{"type":"path","path":%q},"access":"write"},`+
+			`{"path":{"type":"path","path":%q},"access":"read"},`+
+			`{"path":{"type":"path","path":%q},"access":"write"},`+
+			`{"path":{"type":"path","path":%q},"access":"read"}`+
+			`]},"network":"enabled"}`,
+		public, docs, root, filepath.Join(public, ".git"),
+	)
+	argv := linuxSandboxCaptureBwrapArgv(t, t.TempDir(), profileJSON, root)
+	if index := linuxSandboxArgvWindowIndex(argv, []string{"--tmpfs", "/", "--dev", "/dev"}); index < 0 {
+		t.Fatalf("a `minimal` read policy must start from an empty root:\n%#v", argv)
+	}
+	parentBind := linuxSandboxArgvWindowIndex(argv, []string{"--bind", root, root})
+	nestedBind := linuxSandboxArgvWindowIndex(argv, []string{"--bind", public, public})
+	if parentBind < 0 || nestedBind < 0 {
+		t.Fatalf("both writable roots must be bound (parent=%d nested=%d):\n%#v", parentBind, nestedBind, argv)
+	}
+	if parentBind > nestedBind {
+		t.Fatalf("the parent writable root must bind before its nested root:\n%#v", argv)
+	}
+	docsCarveout := linuxSandboxArgvWindowIndexAfter(argv, []string{"--ro-bind", docs, docs}, parentBind)
+	if docsCarveout < 0 || docsCarveout > nestedBind {
+		t.Fatalf("the parent read-only carveout must precede the nested writable bind (carveout=%d nested=%d):\n%#v", docsCarveout, nestedBind, argv)
+	}
+	for _, name := range metadataNames {
+		metadataPath := filepath.Join(public, name)
+		for index := parentBind; index+3 <= nestedBind; index++ {
+			if argv[index] == "--ro-bind" && argv[index+1] == metadataPath && argv[index+2] == metadataPath {
+				t.Fatalf("a carveout owned by the nested root must not be mounted before it is bound:\n%#v", argv)
+			}
+		}
+		count := 0
+		for index := nestedBind; index+3 <= len(argv); index++ {
+			if argv[index] == "--ro-bind" && argv[index+1] == metadataPath && argv[index+2] == metadataPath {
+				count++
+			}
+		}
+		if count != 1 {
+			t.Fatalf("metadata carveout %s must be mounted exactly once after the nested bind, got %d:\n%#v", metadataPath, count, argv)
 		}
 	}
 }

@@ -1050,37 +1050,35 @@ func execBubblewrap(cmd *linuxSandboxCommand, inner []string) error {
 			args = append(args, "--ro-bind", root, root)
 		}
 	}
-	for _, root := range fs.writableRoots(cmd.SandboxPolicyCWD) {
-		if root == "/" {
-			// Rebinding `/` shadows that device tree, so Rust recreates it
-			// together with shared memory (`bwrap.rs:650-657`).
-			args = append(args, "--bind", "/", "/")
-			args = append(args, "--dev", "/dev", "--bind-try", "/dev/shm", "/dev/shm")
-			continue
-		}
-		if _, err := os.Stat(root); err == nil {
-			args = append(args, "--bind", root, root)
-		}
-	}
+	// Rust binds writable roots shallowest-first (`sorted_writable_roots`) and
+	// re-applies each root's read-only carveouts right after that bind, so a
+	// deeper writable root is bound over its parent's read-only view. Mounting
+	// every carveout after every bind would let a parent carveout shadow a
+	// nested writable root (#47623).
+	writableRoots := fs.writableRoots(cmd.SandboxPolicyCWD)
+	sort.SliceStable(writableRoots, func(left, right int) bool {
+		return linuxSandboxPathDepth(writableRoots[left]) < linuxSandboxPathDepth(writableRoots[right])
+	})
+	fullWriteRoot := containsPath(writableRoots, "/")
 	// Rust re-applies read-only protections only for subpaths a writable
 	// root would otherwise expose (`append_read_only_subpath_args`,
 	// `bwrap.rs:1243-1257`): the read baseline is already read-only, and an
 	// extra `--ro-bind / /` re-mounts the host root over the device tree and
 	// over the writable roots bound above. Ordinary read entries that no
 	// writable root covers keep the baseline protection.
-	writableRoots := fs.writableRoots(cmd.SandboxPolicyCWD)
-	fullWriteRoot := false
+	protectedReadOnlySubpaths := fs.protectedReadOnlySubpaths(cmd.SandboxPolicyCWD)
 	for _, root := range writableRoots {
 		if root == "/" {
-			fullWriteRoot = true
-			break
-		}
-	}
-	for _, path := range fs.protectedReadOnlySubpaths(cmd.SandboxPolicyCWD) {
-		if !fullWriteRoot && !linuxSandboxPathWithin(writableRoots, path) {
+			// Rebinding `/` shadows that device tree, so Rust recreates it
+			// together with shared memory (`bwrap.rs:650-657`).
+			args = append(args, "--bind", "/", "/")
+			args = append(args, "--dev", "/dev", "--bind-try", "/dev/shm", "/dev/shm")
+		} else if _, err := os.Stat(root); err == nil {
+			args = append(args, "--bind", root, root)
+		} else {
 			continue
 		}
-		args = append(args, "--ro-bind", path, path)
+		args = appendProtectedReadOnlySubpathArgs(args, protectedReadOnlySubpaths, writableRoots, root, fullWriteRoot)
 	}
 	wslgMaskedByAncestor := false
 	if fs != nil {
@@ -1164,6 +1162,49 @@ func linuxSandboxPathWithin(roots []string, path string) bool {
 		}
 	}
 	return false
+}
+
+// linuxSandboxPathDepth counts path components, mirroring Rust `path_depth`
+// (`bwrap.rs`) so writable roots bind shallowest-first.
+func linuxSandboxPathDepth(path string) int {
+	cleaned := filepath.Clean(path)
+	if cleaned == string(filepath.Separator) {
+		return 0
+	}
+	return strings.Count(cleaned, string(filepath.Separator))
+}
+
+// linuxSandboxDeepestWritableRoot returns the deepest writable root containing
+// path. Rust attributes a read-only carveout to the writable root that mounts
+// immediately before it, which is that deepest root.
+func linuxSandboxDeepestWritableRoot(roots []string, path string) string {
+	deepest := ""
+	for _, root := range roots {
+		if !pathWithinRoot(path, root) {
+			continue
+		}
+		if deepest == "" || linuxSandboxPathDepth(root) > linuxSandboxPathDepth(deepest) {
+			deepest = root
+		}
+	}
+	return deepest
+}
+
+// appendProtectedReadOnlySubpathArgs mounts the read-only carveouts owned by
+// root directly after its writable bind (Rust `append_read_only_subpath_args`
+// per writable root). Carveouts under a deeper writable root are deferred to
+// that root so its bind is not shadowed by a parent's read-only view (#47623).
+func appendProtectedReadOnlySubpathArgs(args []string, subpaths []string, writableRoots []string, root string, fullWriteRoot bool) []string {
+	for _, path := range subpaths {
+		if !fullWriteRoot && !linuxSandboxPathWithin(writableRoots, path) {
+			continue
+		}
+		if linuxSandboxDeepestWritableRoot(writableRoots, path) != root {
+			continue
+		}
+		args = append(args, "--ro-bind", path, path)
+	}
+	return args
 }
 
 func appendUnreadableRootBwrapArgs(args *[]string, path string) (int, error) {

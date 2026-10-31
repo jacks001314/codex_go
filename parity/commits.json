@@ -19787,9 +19787,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Go's bwrap builder now binds writable roots shallowest-first and mounts each root's protected read-only carveouts right after that bind, attributing every carveout to its deepest containing writable root: a parent carveout can no longer shadow a nested writable bind, and metadata carveouts shared with the deeper root are mounted exactly once after it. A Linux argv regression test uses an empty-root policy and lists the nested writable root before its parent, asserting parent-first binds, the parent carveout before the nested bind, and one post-bind mount per nested metadata path."
    ]
   },
   {
