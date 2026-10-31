@@ -20997,9 +20997,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "blocked_precondition",
+   "status": "complete",
    "evidence": [
-    "Go macOS Seatbelt policy skips glob_pattern deny-read entries entirely (sandbox/seatbelt.go seatbeltDeniedReadPaths), so there is no unreadable-glob regex policy and no ancestor-unlink rule to exempt; the directory-move refinement needs that glob enforcement first"
+    "Go macOS Seatbelt policy now mirrors Rust build_seatbelt_unreadable_glob_policy: restricted deny globs resolve against cwd, translate to anchored read/write regex denies (globstar, component * and ?, character classes, brace alternation, backslash escapes), canonicalized static prefixes add symlink-target denies, and ancestor directory unlink denies are skipped for root-anchored recursive literal basenames whose deny widens to (/.*)? for descendants; sandbox tests cover each rule (#18096/#47920)."
    ]
   },
   {

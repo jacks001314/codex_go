@@ -434,3 +434,171 @@ func seatbeltHasParameterPrefix(parameters []seatbeltParameter, prefix string) b
 	}
 	return false
 }
+
+// Mirrors Rust #18096: Seatbelt cannot evaluate the filesystem policy's glob
+// syntax itself, so each unreadable glob becomes anchored read/write denies plus
+// unlink protection for the directories that could contain matches.
+func TestBuildSeatbeltPolicyDeniesUnreadableGlobsLikeRust(t *testing.T) {
+	profile := WorkspaceWritePermissionProfile()
+	profile.DeniedReadEntries = []FileSystemSandboxEntry{{
+		Path:   FileSystemPath{Type: "glob_pattern", Pattern: "/workspace/**/*.env"},
+		Access: FileSystemAccessDeny,
+	}}
+	policy, _, err := buildSeatbeltPolicy("/workspace", &profile, nil, "")
+	if err != nil {
+		t.Fatalf("buildSeatbeltPolicy: %v", err)
+	}
+	for _, want := range []string{
+		`(deny file-read* (regex #"^/workspace/(.*/)?[^/]*\.env$"))`,
+		`(deny file-write* (regex #"^/workspace/(.*/)?[^/]*\.env$"))`,
+		`(deny file-write-unlink (require-all (vnode-type DIRECTORY) (regex #"^/workspace/.*$")))`,
+	} {
+		if !strings.Contains(policy, want) {
+			t.Fatalf("policy missing %q:\n%s", want, policy)
+		}
+	}
+	if lastAllow := strings.LastIndex(policy, "(allow "); lastAllow > strings.Index(policy, `(deny file-read* (regex`) {
+		t.Fatalf("glob deny must follow every allowance:\n%s", policy)
+	}
+}
+
+// Mirrors Rust's `seatbelt_regex_for_glob` unit tests: the supported git-style
+// glob subset translates to the same anchored Seatbelt regex.
+func TestSeatbeltRegexForGlobMatchesRust(t *testing.T) {
+	cases := []struct {
+		pattern string
+		exact   bool
+		want    string
+	}{
+		{"/tmp/repo/**/*.env", false, `^/tmp/repo/(.*/)?[^/]*\.env$`},
+		{"/tmp/repo/*/file[0-9]?.txt", false, `^/tmp/repo/[^/]*/file[0-9][^/]\.txt$`},
+		{"/tmp/repo/{.env,secrets.yml}", false, `^/tmp/repo/(\.env|secrets\.yml)$`},
+		{"/tmp/repo/{private", true, `^/tmp/repo/(private)$`},
+		{`/tmp/repo/config\?.env`, false, `^/tmp/repo/config\?\.env(/.*)?$`},
+		{"/tmp/repo/[*.env", false, `^/tmp/repo/\[[^/]*\.env$`},
+		{"/tmp/repo/[!a]x", false, `^/tmp/repo/[^a]x$`},
+		{"/tmp/literal", false, `^/tmp/literal(/.*)?$`},
+		{"/tmp/literal", true, `^/tmp/literal$`},
+	}
+	for _, testCase := range cases {
+		got, ok := seatbeltRegexForGlob(testCase.pattern, testCase.exact)
+		if !ok || got != testCase.want {
+			t.Fatalf("seatbeltRegexForGlob(%q, exact=%v) = %q, %v; want %q", testCase.pattern, testCase.exact, got, ok, testCase.want)
+		}
+	}
+	if _, ok := seatbeltRegexForGlob("", false); ok {
+		t.Fatal("empty pattern accepted")
+	}
+}
+
+// Mirrors Rust #47920: a root-anchored recursive literal basename stays denied
+// after ancestor moves, so it skips the ancestor unlink denies and extends its
+// deny to descendants of a matching directory. Scoped and nonliteral patterns
+// keep the ancestor protection.
+func TestBuildSeatbeltPolicyGlobalLiteralBasenameSkipsAncestorUnlinkLikeRust(t *testing.T) {
+	literal := WorkspaceWritePermissionProfile()
+	literal.DeniedReadEntries = []FileSystemSandboxEntry{{
+		Path:   FileSystemPath{Type: "glob_pattern", Pattern: "/**/.env"},
+		Access: FileSystemAccessDeny,
+	}}
+	policy, _, err := buildSeatbeltPolicy("/workspace", &literal, nil, "")
+	if err != nil {
+		t.Fatalf("buildSeatbeltPolicy: %v", err)
+	}
+	for _, want := range []string{
+		`(deny file-read* (regex #"^/(.*/)?\.env(/.*)?$"))`,
+		`(deny file-write* (regex #"^/(.*/)?\.env(/.*)?$"))`,
+	} {
+		if !strings.Contains(policy, want) {
+			t.Fatalf("policy missing %q:\n%s", want, policy)
+		}
+	}
+	if strings.Contains(policy, "(vnode-type DIRECTORY) (regex #") {
+		t.Fatalf("global literal basename should not deny ancestor unlinks:\n%s", policy)
+	}
+
+	nonliteral := WorkspaceWritePermissionProfile()
+	nonliteral.DeniedReadEntries = []FileSystemSandboxEntry{{
+		Path:   FileSystemPath{Type: "glob_pattern", Pattern: "/**/*.env"},
+		Access: FileSystemAccessDeny,
+	}}
+	nonliteralPolicy, _, err := buildSeatbeltPolicy("/workspace", &nonliteral, nil, "")
+	if err != nil {
+		t.Fatalf("buildSeatbeltPolicy: %v", err)
+	}
+	for _, want := range []string{
+		`(deny file-read* (regex #"^/(.*/)?[^/]*\.env$"))`,
+		`(deny file-write-unlink (require-all (vnode-type DIRECTORY) (regex #"^/.*$")))`,
+		`(deny file-write-unlink (require-all (vnode-type DIRECTORY) (regex #"^/$")))`,
+	} {
+		if !strings.Contains(nonliteralPolicy, want) {
+			t.Fatalf("nonliteral policy missing %q:\n%s", want, nonliteralPolicy)
+		}
+	}
+}
+
+// Mirrors Rust's canonicalized static-prefix coverage: the deny must also cover
+// the symlink target of the glob's static directory prefix.
+func TestSeatbeltUnreadableGlobPolicyCanonicalizesStaticPrefixLikeRust(t *testing.T) {
+	previous := seatbeltSymlinkResolver
+	seatbeltSymlinkResolver = func(path string) string {
+		if cleanSeatbeltPath(path) == "/linkroot" {
+			return "/realroot"
+		}
+		return ""
+	}
+	t.Cleanup(func() { seatbeltSymlinkResolver = previous })
+
+	profile := ReadOnlyPermissionProfile()
+	profile.DeniedReadEntries = []FileSystemSandboxEntry{{
+		Path:   FileSystemPath{Type: "glob_pattern", Pattern: "/linkroot/**/*.env"},
+		Access: FileSystemAccessDeny,
+	}}
+	policy, _, err := buildSeatbeltPolicy("/workspace", &profile, nil, "")
+	if err != nil {
+		t.Fatalf("buildSeatbeltPolicy: %v", err)
+	}
+	for _, want := range []string{
+		`(deny file-read* (regex #"^/linkroot/(.*/)?[^/]*\.env$"))`,
+		`(deny file-read* (regex #"^/realroot/(.*/)?[^/]*\.env$"))`,
+		`(deny file-write* (regex #"^/realroot/(.*/)?[^/]*\.env$"))`,
+	} {
+		if !strings.Contains(policy, want) {
+			t.Fatalf("policy missing %q:\n%s", want, policy)
+		}
+	}
+}
+
+// Mirrors Rust's relative-glob resolution: a relative deny glob is anchored at
+// the sandbox cwd, and because it is scoped it keeps ancestor unlink denies.
+func TestBuildSeatbeltPolicyResolvesRelativeGlobsAgainstCWDLikeRust(t *testing.T) {
+	profile := ReadOnlyPermissionProfile()
+	profile.DeniedReadEntries = []FileSystemSandboxEntry{{
+		Path:   FileSystemPath{Type: "glob_pattern", Pattern: "**/.env"},
+		Access: FileSystemAccessDeny,
+	}}
+	policy, _, err := buildSeatbeltPolicy("/workspace", &profile, nil, "")
+	if err != nil {
+		t.Fatalf("buildSeatbeltPolicy: %v", err)
+	}
+	for _, want := range []string{
+		`(deny file-read* (regex #"^/workspace/(.*/)?\.env$"))`,
+		`(deny file-write-unlink (require-all (vnode-type DIRECTORY) (regex #"^/workspace/.*$")))`,
+	} {
+		if !strings.Contains(policy, want) {
+			t.Fatalf("policy missing %q:\n%s", want, policy)
+		}
+	}
+}
+
+// An unrestricted profile contributes no unreadable globs.
+func TestBuildSeatbeltPolicyUnrestrictedProfileSkipsGlobDeniesLikeRust(t *testing.T) {
+	profile := PermissionProfile{SandboxPolicy: NewDangerFullAccessPolicy(), NetworkEnabled: true}
+	policy, _, err := buildSeatbeltPolicy("/workspace", &profile, nil, "")
+	if err != nil {
+		t.Fatalf("buildSeatbeltPolicy: %v", err)
+	}
+	if strings.Contains(policy, "(regex #") {
+		t.Fatalf("unrestricted profile emitted glob denies:\n%s", policy)
+	}
+}

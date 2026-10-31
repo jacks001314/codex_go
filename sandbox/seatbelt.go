@@ -9,6 +9,8 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+
+	"codex_go/utils"
 )
 
 const macOSSeatbeltExecutable = "/usr/bin/sandbox-exec"
@@ -209,6 +211,11 @@ func buildSeatbeltPolicyWithManagedNetwork(cwd string, profile *PermissionProfil
 			}
 		}
 	}
+	// Rust #18096/#47920: Seatbelt cannot evaluate the filesystem policy's glob
+	// syntax directly, so every unreadable glob becomes anchored read/write
+	// denies after all allowances. Global literal basenames skip the ancestor
+	// unlink denies because moving an ancestor cannot expose them.
+	lines = append(lines, seatbeltUnreadableGlobPolicy(profile, cwd)...)
 	// Rust #46571: renaming an allowed ancestor relocates its protected
 	// descendants past their pathname carveouts. Keep these unlink denies last so
 	// no broader allowance can reopen the rename operation.
@@ -594,6 +601,311 @@ func seatbeltDeniedReadPaths(entries []FileSystemSandboxEntry) []string {
 		}
 	}
 	return cleanAbsoluteSeatbeltPaths(paths)
+}
+
+// seatbeltUnreadableGlobPatterns mirrors Rust's `get_unreadable_globs_with_cwd`
+// for Seatbelt's POSIX path semantics: only a restricted profile contributes,
+// every deny glob is resolved against the cwd, and the patterns are sorted and
+// deduplicated.
+func seatbeltUnreadableGlobPatterns(profile *PermissionProfile, cwd string) []string {
+	wire := rustPermissionProfileWireFromPermissionProfile(profile)
+	if wire.Type != "managed" || wire.FileSys == nil || wire.FileSys.Type != "restricted" {
+		return nil
+	}
+	var patterns []string
+	for _, entry := range profile.DeniedReadEntries {
+		if entry.Access != FileSystemAccessDeny || entry.Path.Type != "glob_pattern" || entry.Path.Value != nil {
+			continue
+		}
+		if pattern := seatbeltResolveGlobAgainstCWD(entry.Path.Pattern, cwd); pattern != "" {
+			patterns = append(patterns, pattern)
+		}
+	}
+	sort.Strings(patterns)
+	return dedupeSortedStrings(patterns)
+}
+
+// seatbeltResolveGlobAgainstCWD mirrors `AbsolutePathBuf::resolve_path_against_base`
+// without touching the host filesystem: home-relative patterns expand, relative
+// patterns join the cwd, and Seatbelt's POSIX separators are preserved.
+func seatbeltResolveGlobAgainstCWD(pattern string, cwd string) string {
+	pattern = strings.TrimSpace(pattern)
+	if pattern == "" {
+		return ""
+	}
+	if expanded, ok := materializeHomeRelativePermissionGlob(pattern, utils.ConventionPosix); ok {
+		pattern = expanded
+	}
+	if !isSeatbeltAbsolutePath(pattern) {
+		cwd = strings.TrimSpace(cwd)
+		if cwd == "" {
+			return ""
+		}
+		if strings.HasPrefix(cwd, "/") && !strings.Contains(pattern, `\`) {
+			pattern = pathpkg.Join(cwd, pattern)
+		} else {
+			pattern = filepath.Join(cwd, pattern)
+		}
+	}
+	return cleanSeatbeltPath(pattern)
+}
+
+// seatbeltUnreadableGlobPolicy mirrors Rust's
+// `build_seatbelt_unreadable_glob_policy`: translate each unreadable glob into
+// anchored read and write denies, and deny renaming the directories that could
+// contain matches so protected files cannot be moved past the glob's scope.
+func seatbeltUnreadableGlobPolicy(profile *PermissionProfile, cwd string) []string {
+	unreadableGlobs := seatbeltUnreadableGlobPatterns(profile, cwd)
+	if len(unreadableGlobs) == 0 {
+		return nil
+	}
+	var policy []string
+	for _, pattern := range unreadableGlobs {
+		patterns := []string{pattern}
+		if canonical, ok := canonicalizeGlobStaticPrefixForSandbox(pattern); ok {
+			patterns = append(patterns, canonical)
+		}
+		sort.Strings(patterns)
+		patterns = dedupeSortedStrings(patterns)
+		for _, pattern := range patterns {
+			// A root-anchored recursive literal basename remains denied after any
+			// ancestor move, including for files created after policy generation.
+			// Scoped or multi-component patterns still need ancestor protection.
+			globalLiteralBasename := seatbeltGlobalLiteralBasename(pattern)
+			regex, ok := seatbeltRegexForGlob(pattern, false)
+			if !ok {
+				continue
+			}
+			if globalLiteralBasename {
+				// Replace the compiler's end anchor to also protect descendants
+				// when the matching basename belongs to a directory.
+				regex = regex[:len(regex)-1] + "(/.*)?$"
+			}
+			regex = strings.ReplaceAll(regex, `"`, `\"`)
+			policy = append(policy,
+				fmt.Sprintf(`(deny file-read* (regex #"%s"))`, regex),
+				fmt.Sprintf(`(deny file-write* (regex #"%s"))`, regex),
+			)
+			if globalLiteralBasename {
+				continue
+			}
+			for _, ancestor := range seatbeltGlobAncestors(pattern) {
+				ancestorRegex, ok := seatbeltRegexForGlob(ancestor, true)
+				if !ok {
+					continue
+				}
+				ancestorRegex = strings.ReplaceAll(ancestorRegex, `"`, `\"`)
+				policy = append(policy, fmt.Sprintf(
+					`(deny file-write-unlink (require-all (vnode-type DIRECTORY) (regex #"%s")))`,
+					ancestorRegex,
+				))
+			}
+		}
+	}
+	return policy
+}
+
+// seatbeltGlobalLiteralBasename reports whether pattern is a root-anchored
+// recursive glob whose basename is a single literal path component (#47920).
+func seatbeltGlobalLiteralBasename(pattern string) bool {
+	name, ok := strings.CutPrefix(pattern, "/**/")
+	if !ok || name == "" || name == "." || name == ".." {
+		return false
+	}
+	return !strings.ContainsAny(name, "/*?[]{}"+"\\")
+}
+
+// canonicalizeGlobStaticPrefixForSandbox mirrors Rust's
+// `canonicalize_glob_static_prefix_for_sandbox`: resolve the static directory
+// prefix through symlinks so the generated denies also cover the real target.
+func canonicalizeGlobStaticPrefixForSandbox(pattern string) (string, bool) {
+	firstGlob := strings.IndexAny(pattern, `*?[]{\`)
+	if firstGlob < 0 {
+		return normalizeSeatbeltGlobSandboxPath(pattern)
+	}
+	staticPrefix := pattern[:firstGlob]
+	prefixEnd := 0
+	if strings.HasSuffix(staticPrefix, "/") {
+		prefixEnd = len(staticPrefix) - 1
+	} else if index := strings.LastIndex(staticPrefix, "/"); index >= 0 {
+		prefixEnd = index
+	}
+	if prefixEnd == 0 {
+		return "", false
+	}
+	root, ok := normalizeSeatbeltGlobSandboxPath(pattern[:prefixEnd])
+	if !ok {
+		return "", false
+	}
+	normalized := root + pattern[prefixEnd:]
+	if normalized == pattern {
+		return "", false
+	}
+	return normalized, true
+}
+
+// normalizeSeatbeltGlobSandboxPath mirrors `normalize_path_for_sandbox`: only
+// absolute paths qualify, and a resolvable path uses its canonical target while
+// an unresolvable one keeps its lexically normalized form.
+func normalizeSeatbeltGlobSandboxPath(value string) (string, bool) {
+	if !isSeatbeltAbsolutePath(value) {
+		return "", false
+	}
+	cleaned := cleanSeatbeltPath(value)
+	if resolved := seatbeltSymlinkResolver(cleaned); resolved != "" {
+		return resolved, true
+	}
+	return cleaned, true
+}
+
+// seatbeltGlobAncestors returns the parent directories of a pattern, matching
+// `Path::ancestors().skip(1)` for the platform that owns the pattern.
+func seatbeltGlobAncestors(pattern string) []string {
+	ancestors := []string{}
+	current := pattern
+	for {
+		var parent string
+		if strings.HasPrefix(current, "/") {
+			parent = pathpkg.Dir(current)
+		} else {
+			parent = filepath.Dir(current)
+		}
+		if parent == current || parent == "" || parent == "." {
+			break
+		}
+		ancestors = append(ancestors, parent)
+		if parent == "/" {
+			break
+		}
+		current = parent
+	}
+	return ancestors
+}
+
+// seatbeltRegexForGlob mirrors Rust's `seatbelt_regex_for_glob`: translate the
+// supported git-style glob subset into an anchored Seatbelt regex. `*` and `?`
+// stay within one path component, `**/` can consume zero or more components,
+// closed character classes remain classes, brace groups become alternations,
+// and backslashes escape metacharacters. Literal patterns match descendants
+// unless exact matching is requested.
+func seatbeltRegexForGlob(pattern string, exact bool) (string, bool) {
+	if pattern == "" {
+		return "", false
+	}
+	var regex strings.Builder
+	regex.WriteByte('^')
+	chars := []rune(pattern)
+	index := 0
+	sawGlob := false
+	alternateDepth := 0
+	for index < len(chars) {
+		ch := chars[index]
+		index++
+		switch ch {
+		case '*':
+			sawGlob = true
+			if index < len(chars) && chars[index] == '*' {
+				index++
+				if index < len(chars) && chars[index] == '/' {
+					index++
+					regex.WriteString("(.*/)?")
+				} else {
+					regex.WriteString(".*")
+				}
+			} else {
+				regex.WriteString("[^/]*")
+			}
+		case '?':
+			sawGlob = true
+			regex.WriteString("[^/]")
+		case '\\':
+			if index < len(chars) {
+				regex.WriteString(regexLiteEscape(string(chars[index])))
+				index++
+			} else {
+				regex.WriteString(`\\`)
+			}
+		case '{':
+			sawGlob = true
+			alternateDepth++
+			regex.WriteByte('(')
+		case '}':
+			if alternateDepth > 0 {
+				alternateDepth--
+				regex.WriteByte(')')
+			} else {
+				regex.WriteString(regexLiteEscape("}"))
+			}
+		case ',':
+			if alternateDepth > 0 {
+				regex.WriteByte('|')
+			} else {
+				regex.WriteString(regexLiteEscape(","))
+			}
+		case '[':
+			sawGlob = true
+			classStart := index
+			var class []rune
+			closed := false
+			for index < len(chars) {
+				classCh := chars[index]
+				index++
+				if classCh == ']' {
+					closed = true
+					break
+				}
+				class = append(class, classCh)
+			}
+			if !closed {
+				index = classStart
+				regex.WriteString(`\[`)
+				continue
+			}
+			regex.WriteByte('[')
+			for classIndex, classCh := range class {
+				switch {
+				case classIndex == 0 && classCh == '!':
+					regex.WriteByte('^')
+				case classIndex == 0 && classCh == '^':
+					regex.WriteString(`\^`)
+				case classCh == '\\':
+					regex.WriteString(`\\`)
+				default:
+					regex.WriteRune(classCh)
+				}
+			}
+			regex.WriteByte(']')
+		case ']':
+			sawGlob = true
+			regex.WriteString(`\]`)
+		default:
+			regex.WriteString(regexLiteEscape(string(ch)))
+		}
+	}
+	// Path ancestors can end inside a brace alternative when a branch contains a
+	// separator, such as `/repo/{private/nested,other}` -> `/repo/{private`.
+	// Close those partial groups so their directory prefixes stay protected.
+	for range alternateDepth {
+		regex.WriteByte(')')
+	}
+	if !sawGlob && !exact {
+		regex.WriteString("(/.*)?")
+	}
+	regex.WriteByte('$')
+	return regex.String(), true
+}
+
+// regexLiteEscape mirrors `regex_lite::escape`, which Rust's Seatbelt policy
+// generator uses for literal glob characters.
+func regexLiteEscape(value string) string {
+	var builder strings.Builder
+	for _, ch := range value {
+		if strings.ContainsRune(`\.+*?()|[]{}^$#&-~`, ch) {
+			builder.WriteByte('\\')
+		}
+		builder.WriteRune(ch)
+	}
+	return builder.String()
 }
 
 func cleanAbsoluteSeatbeltPaths(paths []string) []string {
