@@ -10893,9 +10893,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "sandbox/mxc/prepare_windows.go expands writable volume-root grants into existing children (skipping broken links), resolves deny globs through the Windows deny-read resolver, subtracts denies from read/write grants, and keeps read-only roots unexpanded"
    ]
   },
   {
@@ -17463,9 +17463,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "realtime/transport.go findEntry searches the latest same-speaker entry for V3, applyDone only replaces text when the final extends it, empty V3 deltas keep the pending new-entry flag, and done opens the next entry; tests live in realtime/"
    ]
   },
   {
@@ -18347,9 +18347,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Guardian reviews run through guardianSessionRunner over the turn ResponsesAgentRunner, which newAppTurnAgent rewrites with applyWorkspaceRoutingToAgent before use; Go has no separate classifier connection pool to route"
    ]
   },
   {
@@ -18651,9 +18651,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "superseded: later Rust commits (#47686-#47690) promoted guardianv2.thread_context to stable and then retired it, and Go keeps the key as a removed no-op (features/features.go) with thread-owned Guardian context capture unconditional"
    ]
   },
   {
@@ -20129,9 +20129,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 9/34; needs review: CAPABILITIES_DISCOVER_V2_METHOD, CandidateCapabilityLocations, CapabilityLocation, CapabilityLocationRequest, CapabilityLocations"
+    "execserver/client.go advertises and calls capabilities/discoverV2 with the V2 version gate, execserver/capability_discovery_v2*.go resolves plugin roots and caches prewarmed locations, and appserver/executor_capability_discovery_v2_test.go covers routing; the crate split is Rust-internal"
    ]
   },
   {
