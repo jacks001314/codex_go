@@ -2206,8 +2206,6 @@ func runDebug(opts cli.DebugOptions, root *cli.RootOptions, stdout io.Writer) er
 		return nil
 	case "clear-memories":
 		return runDebugClearMemories(&opts, root, stdout)
-	case "config":
-		return runDebugConfig(stdout)
 	default:
 		return fmt.Errorf("unknown debug subcommand %s", opts.Subcommand)
 	}
@@ -2282,16 +2280,6 @@ func runDebugClearMemories(opts *cli.DebugOptions, root *cli.RootOptions, stdout
 	}
 	fmt.Fprintf(stdout, " Cleared memory directories under %s.\n", codexHome)
 	return nil
-}
-
-func runDebugConfig(stdout io.Writer) error {
-	response, err := config.NewConfigService(auth.DefaultCodexHome()).Read(&config.ConfigReadParams{IncludeLayers: true})
-	if err != nil {
-		return err
-	}
-	encoder := json.NewEncoder(stdout)
-	encoder.SetIndent("", "  ")
-	return encoder.Encode(response)
 }
 
 func clearDirectoryContents(path string) (bool, error) {

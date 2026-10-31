@@ -1708,7 +1708,8 @@ func (s *PluginService) RemoveMarketplace(params *MarketplaceRemoveParams) (*Mar
 		}
 	}
 	s.mu.Unlock()
-	if err := removeMarketplaceConfig(configPath, name); err != nil {
+	removedConfig, err := removeMarketplaceConfig(configPath, name)
+	if err != nil {
 		return nil, err
 	}
 	if err := removeInstalledPluginConfigsForMarketplace(configPath, name); err != nil {
@@ -1716,6 +1717,28 @@ func (s *PluginService) RemoveMarketplace(params *MarketplaceRemoveParams) (*Mar
 	}
 	if err := removeMaterializedMarketplacePlugins(installRoot, name); err != nil {
 		return nil, err
+	}
+	// Rust deletes `marketplace_install_root/<name>` for cloned marketplaces
+	// and reports it as the removed root; a local marketplace root points at
+	// the user's own directory and is never touched.
+	removedClone := false
+	if installRoot != "" && marketplace.SourceType == string(MarketplaceSourceGit) {
+		if safeName, err := safeMarketplaceDirName(name); err == nil {
+			destination := filepath.Join(installRoot, safeName)
+			if info, statErr := os.Stat(destination); statErr == nil {
+				if info.IsDir() {
+					if err := os.RemoveAll(destination); err != nil {
+						return nil, err
+					}
+				}
+				removedClone = true
+			} else if !os.IsNotExist(statErr) {
+				return nil, statErr
+			}
+		}
+	}
+	if !existed && !removedConfig && !removedClone {
+		return nil, fmt.Errorf("%w: marketplace `%s` is not configured or installed", ErrInvalidPluginRequest, name)
 	}
 	var installedRoot *string
 	if existed {

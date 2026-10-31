@@ -2369,8 +2369,64 @@ file as a single `failed to read policy at <p>: <go err>` line, and
   database file surviving, the roots emptied),
   `TestLoadPoliciesMissingFileMatchesRustContextChain` in `execpolicy` and
   `TestPluginListJSONEmptyHomeMatchesRustEmptyArrays` in `app`.
+### 76. Hidden `debug` help pages, group subcommand resolution and marketplace listing/removal
+
+Three surfaces still diverged: the hidden `debug` subcommands had no help
+pages, a group command answered an unknown child followed by `--help` with its
+own help page, and the plugin marketplace commands reported a marketplace that
+does not exist.
+
+- **Hidden help pages.** Rust ships `debug clear-memories` and `debug
+  trace-reduce` behind `#[clap(hide = true)]`; both still render full clap
+  pages for `--help` and `-h`. Go printed the `debug` group page for either
+  spelling. `subcommandHelpPages`/`subcommandShortHelpPages` now carry both
+  pages verbatim, together with their `Usage:` blocks and flag tables.
+- **Group resolution before the help action.** clap resolves a group's child
+  before running the help action, so `codex debug config --help`, `codex mcp
+  nosuch --help`, `codex plugin nosuch --help`, `codex features nosuch
+  --help` and `codex app-server nosuch --help` all answer
+  `error: unrecognized subcommand '<name>'` with the group usage and rc 2. Go
+  printed the group help with rc 0. `SubcommandHelpRequestFor` now stops at a
+  bare word under any group listed in `subcommandCandidates`, letting the
+  normal parse produce clap's diagnostic. Commands that take positionals
+  (`exec`, `resume`, `mcp get`) keep printing their own help page.
+- **`debug config` removed.** Go carried a hidden `debug config` subcommand
+  that dumped the effective config with origins and layers; neither 0.166 nor
+  current upstream has such a subcommand (their `DebugSubcommand` enum lists
+  only models, app-server, prompt-input, trace-reduce and clear-memories), so
+  it is gone and `codex debug config` is now clap's unrecognized-subcommand
+  error. The `/debug-config` TUI renderer is unaffected.
+- **Marketplace listing.** `plugin marketplace list` printed one row with an
+  empty name and root, because the plugin service emits a synthetic unnamed
+  entry for unattributed plugins. Rust lists only configured and installed
+  marketplaces, so the command filters unnamed entries: an empty home now
+  prints `No plugin marketplaces in scope.` and `{"marketplaces": []}`.
+- **Marketplace removal.** `plugin marketplace remove nosuch` answered
+  `Removed marketplace `nosuch`.` with rc 0. Rust removes the user config
+  entry and the cloned `marketplace_install_root/<name>`, and fails with
+  `marketplace `nosuch` is not configured or installed` when neither existed.
+  `PluginService.RemoveMarketplace` now tracks both removals, deletes the
+  clone for Git marketplaces (never a local root the user owns) and raises the
+  same invalid-request error, which the CLI prints bare like Rust.
+- Evidence: `out/r67-sweep.txt` - 24 command surfaces, 22 byte-identical to
+  0.166 (rc and stdout/stderr); the only remaining diffs are the
+  `completion powershell` and `completion fish` scripts. `go test -vet=off
+  ./cli ./plugin` passes; `./app` and `./appserver` keep only their known
+  baselines.
+- Regressions: `TestHiddenDebugHelpPagesLikeRust` and
+  `TestGroupUnknownChildWithHelpErrorsLikeRust` in `cli`,
+  `TestPluginMarketplaceListSkipsUnnamedEntriesLikeRust` and
+  `TestPluginMarketplaceRemoveUnknownErrorsLikeRust` in `app`, and
+  `TestRemoveMarketplaceUnknownMatchesRust` /
+  `TestRemoveMarketplaceDeletesGitCloneLikeRust` in `plugin`.
+
 ## Verification
 
+- Round 63 aligns the hidden `debug` help pages, clap's group-first subcommand
+  resolution and the marketplace listing/removal paths (entry 76): 22 of 24
+  swept command surfaces match 0.166 byte for byte (`out/r67-sweep.txt`), with
+  only the two completion scripts open; `go test -vet=off ./cli ./plugin`
+  passes and `./app`/`./appserver` keep only their known baselines.
 - Round 62 aligns `debug clear-memories`, `execpolicy` read failures and
   `plugin list --json` (entry 75): four probes match 0.166 in rc, stdout,
   stderr and the home tree (`out/r66-verify.txt`, 4/4), and
@@ -3030,11 +3086,6 @@ file as a single `failed to read policy at <p>: <go err>` line, and
   falls back to the bundled copy, while the Go CLI has no online
   models-manager client wired into `runDebug`. The bundled path is now
   byte-identical to 0.166 and the offline fallback serves the same catalog.
-- `codex debug config` is a hidden Go-only subcommand that dumps the
-  effective config with origins and layers; 0.166 answers `error:
-  unrecognized subcommand 'config'`. Neither help page lists it, so the help
-  surface still matches, and removing it would drop a developer diagnostic
-  that `app/debug_cli_test.go` and `app/app_test.go` exercise.
 - `debug prompt-input` still prints Go's `SessionPrompt` message list (5.9k
   characters: skills instructions, environment context and user text as
   `content` blocks) instead of Rust's `build_prompt_input` output (65k

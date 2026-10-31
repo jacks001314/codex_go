@@ -571,6 +571,17 @@ func runPluginMarketplaceList(ctx *pluginCLIContext, opts *cli.PluginMarketplace
 		return err
 	}
 	entries := filterPluginMarketplaceEntries(list.Marketplaces, "")
+	// Rust lists only configured and installed marketplaces; the plugin
+	// service emits one synthetic entry for unattributed plugins whose name
+	// and root are empty, which is not a marketplace in scope.
+	named := make([]plugin.PluginMarketplaceEntry, 0, len(entries))
+	for _, marketplace := range entries {
+		if strings.TrimSpace(marketplace.Name) == "" {
+			continue
+		}
+		named = append(named, marketplace)
+	}
+	entries = named
 	if opts.JSON {
 		output := marketplaceListJSONOutput{Marketplaces: make([]marketplaceListJSONEntry, 0, len(entries))}
 		for _, marketplace := range entries {
@@ -666,7 +677,7 @@ func runPluginMarketplaceRemove(ctx *pluginCLIContext, opts *cli.PluginMarketpla
 	}
 	outcome, err := ctx.service.RemoveMarketplace(&plugin.MarketplaceRemoveParams{MarketplaceName: opts.Name})
 	if err != nil {
-		return err
+		return pluginMarketplaceSourceError(err)
 	}
 	if opts.JSON {
 		output := map[string]any{

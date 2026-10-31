@@ -5608,10 +5608,6 @@ func parseDebug(args []string, debug *DebugOptions) error {
 				return unexpectedSubcommandArgumentError("debug clear-memories", arg)
 			}
 		}
-	case "config":
-		if len(args) != 1 {
-			return errors.New("debug config does not accept arguments")
-		}
 	default:
 		return unrecognizedSubcommandForGroup("debug", debug.Subcommand)
 	}
