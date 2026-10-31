@@ -24,6 +24,9 @@ import (
 )
 
 const (
+	// responsesProxyOpenAIResponsesURL is the only upstream accepted with
+	// workload identity (Rust responses-api-proxy OPENAI_RESPONSES_URL, #55320).
+	responsesProxyOpenAIResponsesURL      = "https://api.openai.com/v1/responses"
 	responsesProxyOpenAITokenURL          = "https://auth.openai.com/oauth/token"
 	responsesProxyMaxTokenBytes           = 16 * 1024
 	responsesProxyMaxResponseBytes        = 64 * 1024

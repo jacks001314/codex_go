@@ -33189,9 +33189,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "plan_2026_10_20.md:66: - `#55320`: not applicable; Go has no responses-api-proxy component."
+    "Round 1241 (re-ported): GitHub Actions workload identity works through the Responses API proxy. cli/cli.go parses --github-oidc with --oidc-audience, --identity-provider-id, --service-account-id and --github-oidc-request-url under clap's requires/requires_all relations, app/responses_api_proxy.go builds responsesProxyGithubOIDC plus the federated resolver only after the upstream is confirmed to be the default OpenAI endpoint, and the initial token exchange completes before server info is published (Rust #55320, superseding the plan_2026_10_20 N/A that assumed Go had no proxy component). Tests: cli/responses_api_proxy_oidc_like_rust_test.go, app/responses_api_proxy_github_oidc_like_rust_test.go, app/responses_api_proxy_auth_like_rust_test.go."
    ]
   },
   {
@@ -35052,9 +35052,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "plan_2026_10_28_sync4.md:128: | `67fb9da4b6` | #56153 | N/A | Go has no EMA/enterprise MCP token exchange; `agent/invocation.go` records that EMA-authenticated MCP servers cannot be transferred. |"
+    "Round 1241 (re-audit): enterprise MCP authentication failures keep their safe diagnostics. mcp/ema_auth_policy.go safeMCPEMAOAuthErrorCode allowlists OAuth error codes (invalid_scope, insufficient_user_authentication and the rest) so provider text cannot leak secrets, mcp/ema_exchange.go reports the stage and HTTP status beside the code, and MCPEMARequestNotSentError keeps its reason (Rust #56153; supersedes the sync4 N/A that assumed Go had no EMA exchange). Tests: mcp/ema_auth_lifecycle_like_rust_test.go TestMCPEMAExchangeClassifiesAuthFailuresByStageLikeRust and TestEMATokenSourceErrorClassificationLikeRust, mcp/ema_exchange_test.go allowlist cases."
    ]
   },
   {

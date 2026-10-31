@@ -63,23 +63,25 @@ type responsesAPIProxyExchangeDump struct {
 }
 
 func runResponsesAPIProxy(ctx context.Context, opts *cli.ResponsesAPIProxyOptions, stdin io.Reader, stdout, stderr io.Writer) error {
-	server, err := newResponsesAPIProxyServer(opts, stdin)
+	server, err := newResponsesAPIProxyServer(ctx, opts, stdin)
 	if err != nil {
 		return err
 	}
 	return server.Run(ctx, stdout, stderr)
 }
 
-func newResponsesAPIProxyServer(opts *cli.ResponsesAPIProxyOptions, stdin io.Reader) (*responsesAPIProxyServer, error) {
+func newResponsesAPIProxyServer(ctx context.Context, opts *cli.ResponsesAPIProxyOptions, stdin io.Reader) (*responsesAPIProxyServer, error) {
 	if opts == nil {
 		opts = &cli.ResponsesAPIProxyOptions{}
 	}
-	authHeader, err := readResponsesAPIProxyAuthHeader(stdin)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	upstreamValue := firstNonEmptyLocal(opts.UpstreamURL, responsesProxyOpenAIResponsesURL)
+	auth, err := newResponsesAPIProxyAuth(ctx, opts, upstreamValue, stdin)
 	if err != nil {
 		return nil, err
 	}
-	auth := responsesProxyAPIKeyAuth{header: authHeader}
-	upstreamValue := firstNonEmptyLocal(opts.UpstreamURL, "https://api.openai.com/v1/responses")
 	upstreamURL, err := url.Parse(upstreamValue)
 	if err != nil {
 		return nil, fmt.Errorf("parsing --upstream-url: %w", err)
@@ -103,6 +105,67 @@ func newResponsesAPIProxyServer(opts *cli.ResponsesAPIProxyOptions, stdin io.Rea
 		proxy.dumper = &responsesAPIProxyDumper{dir: opts.DumpDir, nextSeq: &proxy.nextDumpSeq}
 	}
 	return proxy, nil
+}
+
+// newResponsesAPIProxyAuth mirrors Rust's Args::auth (#55320). An API key is
+// read from stdin by default; --github-oidc accepts only the default OpenAI
+// Responses endpoint, requires the workload identity settings, reads the GitHub
+// request token from stdin, and completes the initial token exchange before the
+// caller publishes server info.
+func newResponsesAPIProxyAuth(ctx context.Context, opts *cli.ResponsesAPIProxyOptions, upstream string, stdin io.Reader) (responsesProxyAuth, error) {
+	if opts == nil || !opts.GithubOIDC {
+		authHeader, err := readResponsesAPIProxyAuthHeader(stdin)
+		if err != nil {
+			return nil, err
+		}
+		return responsesProxyAPIKeyAuth{header: authHeader}, nil
+	}
+	if upstream != responsesProxyOpenAIResponsesURL {
+		return nil, errors.New("workload identity requires the default OpenAI Responses endpoint")
+	}
+	provider, err := requiredResponsesProxyWorkloadSetting(opts.IdentityProviderID, "--identity-provider-id")
+	if err != nil {
+		return nil, err
+	}
+	serviceAccount, err := requiredResponsesProxyWorkloadSetting(opts.ServiceAccountID, "--service-account-id")
+	if err != nil {
+		return nil, err
+	}
+	audience, err := requiredResponsesProxyWorkloadSetting(opts.OIDCAudience, "--oidc-audience")
+	if err != nil {
+		return nil, err
+	}
+	requestURL, err := requiredResponsesProxyWorkloadSetting(opts.GithubOIDCRequestURL, "--github-oidc-request-url")
+	if err != nil {
+		return nil, err
+	}
+	source, err := newResponsesProxyGithubOIDC(requestURL, audience, stdin)
+	if err != nil {
+		return nil, err
+	}
+	auth, err := responsesProxyNewFederatedAuth(source, provider, serviceAccount)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := auth.Header(ctx); err != nil {
+		return nil, err
+	}
+	return auth, nil
+}
+
+// requiredResponsesProxyWorkloadSetting mirrors Rust's required() helper: the
+// flag must be present and must not be blank, and the message names the flag.
+func requiredResponsesProxyWorkloadSetting(value, flag string) (string, error) {
+	if strings.TrimSpace(value) == "" {
+		return "", fmt.Errorf("workload identity requires a nonempty %s", flag)
+	}
+	return value, nil
+}
+
+// responsesProxyNewFederatedAuth is replaced in tests so the initial workload
+// identity exchange can be observed without reaching the OpenAI token endpoint.
+var responsesProxyNewFederatedAuth = func(source responsesProxySubjectTokenSource, provider, serviceAccount string) (responsesProxyAuth, error) {
+	return newResponsesProxyFederatedAuth(source, provider, serviceAccount)
 }
 
 func (s *responsesAPIProxyServer) Run(ctx context.Context, stdout, stderr io.Writer) error {

@@ -322,6 +322,19 @@ type ResponsesAPIProxyOptions struct {
 	HTTPShutdown bool
 	UpstreamURL  string
 	DumpDir      string
+	// GithubOIDC selects GitHub Actions workload identity instead of an API key
+	// on stdin (Rust responses-api-proxy Args::github_oidc, #55320).
+	GithubOIDC           bool
+	OIDCAudience         string
+	IdentityProviderID   string
+	ServiceAccountID     string
+	GithubOIDCRequestURL string
+	// The Set fields mirror clap's presence-based requires relations: an empty
+	// value still satisfies clap, and the proxy rejects it when building auth.
+	OIDCAudienceSet         bool
+	IdentityProviderIDSet   bool
+	ServiceAccountIDSet     bool
+	GithubOIDCRequestURLSet bool
 }
 
 type StdioToUDSOptions struct {
@@ -3505,6 +3518,44 @@ func parseResponsesAPIProxy(args []string, proxy *ResponsesAPIProxyOptions) erro
 			i = next
 		case strings.HasPrefix(arg, "--dump-dir="):
 			proxy.DumpDir = strings.TrimPrefix(arg, "--dump-dir=")
+		case arg == "--github-oidc":
+			proxy.GithubOIDC = true
+		case arg == "--oidc-audience":
+			value, next, err := requireValue(args, i, arg)
+			if err != nil {
+				return err
+			}
+			proxy.OIDCAudience, proxy.OIDCAudienceSet = value, true
+			i = next
+		case strings.HasPrefix(arg, "--oidc-audience="):
+			proxy.OIDCAudience, proxy.OIDCAudienceSet = strings.TrimPrefix(arg, "--oidc-audience="), true
+		case arg == "--identity-provider-id":
+			value, next, err := requireValue(args, i, arg)
+			if err != nil {
+				return err
+			}
+			proxy.IdentityProviderID, proxy.IdentityProviderIDSet = value, true
+			i = next
+		case strings.HasPrefix(arg, "--identity-provider-id="):
+			proxy.IdentityProviderID, proxy.IdentityProviderIDSet = strings.TrimPrefix(arg, "--identity-provider-id="), true
+		case arg == "--service-account-id":
+			value, next, err := requireValue(args, i, arg)
+			if err != nil {
+				return err
+			}
+			proxy.ServiceAccountID, proxy.ServiceAccountIDSet = value, true
+			i = next
+		case strings.HasPrefix(arg, "--service-account-id="):
+			proxy.ServiceAccountID, proxy.ServiceAccountIDSet = strings.TrimPrefix(arg, "--service-account-id="), true
+		case arg == "--github-oidc-request-url":
+			value, next, err := requireValue(args, i, arg)
+			if err != nil {
+				return err
+			}
+			proxy.GithubOIDCRequestURL, proxy.GithubOIDCRequestURLSet = value, true
+			i = next
+		case strings.HasPrefix(arg, "--github-oidc-request-url="):
+			proxy.GithubOIDCRequestURL, proxy.GithubOIDCRequestURLSet = strings.TrimPrefix(arg, "--github-oidc-request-url="), true
 		default:
 			if strings.HasPrefix(arg, "-") {
 				return unexpectedSubcommandArgumentError("responses-api-proxy", arg)
@@ -3512,7 +3563,53 @@ func parseResponsesAPIProxy(args []string, proxy *ResponsesAPIProxyOptions) erro
 			return unexpectedSubcommandArgumentError("responses-api-proxy", arg)
 		}
 	}
-	return nil
+	return responsesAPIProxyRequiresError(proxy)
+}
+
+// responsesAPIProxyRequiresError mirrors the clap relations on the workload
+// identity flags (#55320): --github-oidc requires all four settings, and each
+// setting requires --github-oidc. clap resolves presence, not emptiness, so a
+// blank value still parses and is rejected when the proxy builds its auth.
+func responsesAPIProxyRequiresError(proxy *ResponsesAPIProxyOptions) error {
+	settings := []struct {
+		flag        string
+		placeholder string
+		set         bool
+	}{
+		{"--oidc-audience", "<AUDIENCE>", proxy.OIDCAudienceSet},
+		{"--identity-provider-id", "<ID>", proxy.IdentityProviderIDSet},
+		{"--service-account-id", "<ID>", proxy.ServiceAccountIDSet},
+		{"--github-oidc-request-url", "<URL>", proxy.GithubOIDCRequestURLSet},
+	}
+	if !proxy.GithubOIDC {
+		usage := "Usage: codex responses-api-proxy"
+		for _, setting := range settings {
+			if !setting.set {
+				continue
+			}
+			usage += " " + setting.flag + " " + setting.placeholder
+		}
+		if usage == "Usage: codex responses-api-proxy" {
+			return nil
+		}
+		return &UsageError{
+			Message: "the following required arguments were not provided:\n  --github-oidc",
+			Usage:   usage + " --github-oidc",
+		}
+	}
+	var missing []string
+	for _, setting := range settings {
+		if !setting.set {
+			missing = append(missing, "  "+setting.flag+" "+setting.placeholder)
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	return &UsageError{
+		Message: "the following required arguments were not provided:\n" + strings.Join(missing, "\n"),
+		Usage:   "Usage: codex responses-api-proxy --github-oidc <--oidc-audience <AUDIENCE>|--identity-provider-id <ID>|--service-account-id <ID>|--github-oidc-request-url <URL>>",
+	}
 }
 
 // stdioToUDSUnexpectedUsage is the usage clap prints once the flag parser was
