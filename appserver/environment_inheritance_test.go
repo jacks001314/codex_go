@@ -45,7 +45,7 @@ func TestInheritableEnvironmentSelectionsLikeRust(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := inheritableEnvironmentSelections(tc.in, false)
+			got := inheritableEnvironmentSelections(tc.in)
 			if len(got) != len(tc.want) {
 				t.Fatalf("inheritableEnvironmentSelections() = %#v, want ids %v", got, tc.want)
 			}
@@ -57,7 +57,7 @@ func TestInheritableEnvironmentSelectionsLikeRust(t *testing.T) {
 		})
 	}
 	// The helper must not alias its input.
-	got := inheritableEnvironmentSelections([]map[string]any{ready}, false)
+	got := inheritableEnvironmentSelections([]map[string]any{ready})
 	got[0]["cwd"] = "/mutated"
 	if ready["cwd"] != "/remote" {
 		t.Fatalf("inheritableEnvironmentSelections aliased its input: %#v", ready)
@@ -67,13 +67,20 @@ func TestInheritableEnvironmentSelectionsLikeRust(t *testing.T) {
 		"cwd":           "/configured",
 		"config":        environmentConfigStateToAny(EnvironmentConfigState{Kind: EnvironmentConfigFromThread}),
 	}
-	configuredOnly := inheritableEnvironmentSelections([]map[string]any{ready, pending, fromThread, failed}, true)
-	if len(configuredOnly) != 1 || selectionEnvironmentID(configuredOnly[0]) != "configured" {
-		t.Fatalf("configured-only inheritance = %#v", configuredOnly)
+	// Rust #55331 removed the configured-only inheritance mode: a temporary
+	// attachment is inherited with the rest of the invoking step's snapshot.
+	inherited := inheritableEnvironmentSelections([]map[string]any{ready, pending, fromThread, failed})
+	if len(inherited) != 3 {
+		t.Fatalf("inherited = %#v", inherited)
+	}
+	for i, want := range []string{"remote", "starting", "configured"} {
+		if selectionEnvironmentID(inherited[i]) != want {
+			t.Fatalf("inherited[%d] = %#v, want %q", i, inherited[i], want)
+		}
 	}
 }
 
-func TestRuntimeAgentControllerConfiguredEnvironmentInheritanceFeatureLikeRust(t *testing.T) {
+func TestRuntimeAgentControllerIgnoresRemovedEnvironmentInheritanceFeatureLikeRust(t *testing.T) {
 	home := t.TempDir()
 	if err := os.WriteFile(config.ConfigPath(home), []byte("[features]\nsubagent_thread_environments = true\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -107,8 +114,10 @@ func TestRuntimeAgentControllerConfiguredEnvironmentInheritanceFeatureLikeRust(t
 		t.Fatal(err)
 	}
 	persisted := environmentSelectionsFromAny(record.Metadata.Extra[runtimeEnvironmentSelectionsExtraKey])
-	if len(persisted) != 1 || selectionEnvironmentID(persisted[0]) != "configured" {
-		t.Fatalf("configured child environments = %#v", persisted)
+	// Rust #55331 deleted subagent_thread_environments; setting the vestigial key
+	// no longer narrows inheritance to configured attachments.
+	if len(persisted) != 2 || selectionEnvironmentID(persisted[0]) != "temporary" || selectionEnvironmentID(persisted[1]) != "configured" {
+		t.Fatalf("child environments = %#v, want the invoking step snapshot", persisted)
 	}
 }
 
