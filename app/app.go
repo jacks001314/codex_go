@@ -261,7 +261,9 @@ func runGroupHelp(request *cli.GroupHelpRequest, stdout, stderr io.Writer) error
 // with status 2, matching the Rust CLI.
 func writeClapDiagnostic(stderr io.Writer, diagnostic *cli.UsageError) error {
 	if stderr != nil && diagnostic != nil {
-		if diagnostic.Usage != "" {
+		if diagnostic.Raw {
+			fmt.Fprintf(stderr, "error: %s\n", diagnostic.Message)
+		} else if diagnostic.Usage != "" {
 			fmt.Fprintf(stderr, "error: %s\n\n%s\n\nFor more information, try '--help'.\n", diagnostic.Message, diagnostic.Usage)
 		} else {
 			fmt.Fprintf(stderr, "error: %s\n\nFor more information, try '--help'.\n", diagnostic.Message)

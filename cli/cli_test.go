@@ -154,13 +154,13 @@ func TestParseQueueRejectsUnsupportedOptionsLikeRust(t *testing.T) {
 		{withBase("--image", "shot.png"), "does not support image attachments"},
 		{withBase("-i", "shot.png"), "does not support image attachments"},
 		{withBase("--sandbox", "read-only"), "does not support `--sandbox`"},
-		{withBase("--ask-for-approval", "never"), "does not support `--ask-for-approval`"},
+		{withBase("--ask-for-approval", "never"), "unexpected argument '--ask-for-approval' found"},
 		{withBase("--add-dir", "/tmp"), "does not support `--add-dir`"},
-		{withBase("--search"), "does not support `--search`"},
+		{withBase("--search"), "unexpected argument '--search' found"},
 		{withBase("--oss"), "does not support `--oss`"},
 		{withBase("--remote", "ws://127.0.0.1:1234", "--cd", "/tmp"), "does not support `--cd` with `--remote`"},
 		{append([]string{"--cd", "/tmp", "queue"}, append([]string{"--remote", "ws://127.0.0.1:1234"}, base...)...), "does not support `--cd` with `--remote`"},
-		{append([]string{"queue"}, append([]string{"--thread", "t", "--message", "hi", "prompt"})...), "positional prompt"},
+		{append([]string{"queue"}, append([]string{"--thread", "t", "--message", "hi", "prompt"})...), "unexpected argument 'prompt' found"},
 	}
 	for _, tc := range tests {
 		_, err := Parse(tc.args)
@@ -947,22 +947,6 @@ func TestParseResumeLastAndPrompt(t *testing.T) {
 	}
 }
 
-func TestParseSessionLastRejectsExplicitSessionAndPrompt(t *testing.T) {
-	for _, args := range [][]string{
-		{"resume", "--last", "session-1", "continue here"},
-		{"resume", "session-1", "--last", "continue here"},
-		{"fork", "--last", "session-1", "continue here"},
-		{"fork", "session-1", "--last", "continue here"},
-	} {
-		t.Run(strings.Join(args, " "), func(t *testing.T) {
-			_, err := Parse(args)
-			if err == nil || !strings.Contains(err.Error(), "--last conflicts with SESSION_ID and prompt") {
-				t.Fatalf("Parse(%v) error = %v", args, err)
-			}
-		})
-	}
-}
-
 func TestParseArchiveAndDelete(t *testing.T) {
 	deleteID := "123e4567-e89b-12d3-a456-426614174000"
 	archive, err := Parse([]string{"archive", "thread-1"})
@@ -1075,9 +1059,11 @@ func TestParseForkRejectsSnapshotOptionsLikeRust(t *testing.T) {
 		{"fork", "--ephemeral", "thread-1"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
-			_, err := Parse(args)
-			if err == nil || !strings.Contains(err.Error(), "unknown session option") {
-				t.Fatalf("Parse(%v) error = %v", args, err)
+			// Rust no longer declares these spawn-history flags, so clap reports
+			// an unexpected argument (with a --last suggestion where it scores).
+			usageErr := requireClapUsageError(t, args)
+			if !strings.HasPrefix(usageErr.Message, "unexpected argument '"+flagNameOnly(args[1])+"' found") {
+				t.Fatalf("Parse(%v) message = %q", args, usageErr.Message)
 			}
 		})
 	}

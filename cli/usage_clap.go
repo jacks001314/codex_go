@@ -211,6 +211,8 @@ var subcommandUsageTexts = map[string]subcommandUsageText{
 	"apply":                             {"Usage: codex apply [OPTIONS] <TASK_ID>", true},
 	"remote-control":                    {"Usage: codex remote-control [OPTIONS] [COMMAND]", false},
 	"delete":                            {"Usage: codex delete [OPTIONS] <SESSION>", true},
+	"resume":                            {"Usage: codex resume [OPTIONS] [SESSION_ID] [PROMPT]", true},
+	"fork":                              {"Usage: codex fork [OPTIONS] [SESSION_ID] [PROMPT]", true},
 	"archive":                           {"Usage: codex archive [OPTIONS] <SESSION>", true},
 	"unarchive":                         {"Usage: codex unarchive [OPTIONS] <SESSION>", true},
 	"debug models":                      {"Usage: codex debug models [OPTIONS]", false},
@@ -268,6 +270,9 @@ type UsageError struct {
 	// echoes the options it already consumed. The exec family renders its own
 	// usage lines and leaves this false.
 	SmartUsage bool
+	// Raw marks diagnostics raised through clap::Error::raw, which print the
+	// message alone: no usage block and no trailing `--help` hint.
+	Raw bool
 }
 
 func (e *UsageError) Error() string { return e.Message }
@@ -464,11 +469,54 @@ func decorateSubcommandClapUsage(err error, args []string) error {
 		return err
 	}
 	used := clapUsageOptionTokens(args, stopAt)
+	if strings.HasPrefix(usageErr.Usage, "Usage: codex queue ") {
+		if strings.HasPrefix(usageErr.Message, "unexpected argument '") && !clapLooksLikeOption(stopAt) {
+			// clap keeps the plain table block for a stray positional.
+			return err
+		}
+		used = queueVisibleUsageOptions(used)
+		// clap rebuilds the usage line once it consumed an option, so the
+		// [OPTIONS] placeholder disappears even when the consumed options are
+		// the required ones the block already lists.
+		if len(used) > 0 {
+			usageErr.Usage = strings.Replace(usageErr.Usage, "[OPTIONS] ", "", 1)
+		}
+	}
 	if len(used) == 0 {
 		return err
 	}
 	usageErr.Usage = usageWithUsedOptions(usageErr.Usage, used)
 	return err
+}
+
+// queueVisibleUsageOptions keeps the options clap echoes for `codex queue`.
+// QueueCommand hides every inherited option except the ones
+// queue_cmd::restricted_options allows, and clap never echoes hidden options.
+func queueVisibleUsageOptions(used []string) []string {
+	kept := make([]string, 0, len(used))
+	for _, token := range used {
+		name, _, _ := strings.Cut(token, " ")
+		if queueEchoableUsageOptions[name] {
+			kept = append(kept, token)
+		}
+	}
+	return kept
+}
+
+// queueEchoableUsageOptions is the complement of queue_cmd::restricted_options,
+// keyed by flag (the value placeholder is part of the echoed token, not the key).
+var queueEchoableUsageOptions = map[string]bool{
+	"--thread":                true,
+	"--message":               true,
+	"--remote":                true,
+	"--remote-auth-token-env": true,
+	"--config":                true,
+	"--enable":                true,
+	"--disable":               true,
+	"--profile":               true,
+	"--strict-config":         true,
+	"--cd":                    true,
+	"--resume":                true,
 }
 
 // clapUsageOptionTokens renders the options clap accepted, stopping in front of
@@ -558,6 +606,132 @@ func clapOptionPlaceholder(option string) string {
 		return spec.placeholder
 	}
 	return subcommandValuePlaceholders[option]
+}
+
+// sessionPositionalSlot is one positional slot of a session subcommand.
+type sessionPositionalSlot struct {
+	name     string
+	required bool
+}
+
+// sessionPositionalSlots lists the positional slots clap binds for the session
+// subcommands (`codex resume`, `codex fork`, `codex archive`, `codex unarchive`
+// and `codex delete`), in declaration order.
+var sessionPositionalSlots = map[string][]sessionPositionalSlot{
+	"resume":    {{name: "SESSION_ID"}, {name: "PROMPT"}},
+	"fork":      {{name: "SESSION_ID"}, {name: "PROMPT"}},
+	"archive":   {{name: "SESSION", required: true}},
+	"unarchive": {{name: "SESSION", required: true}},
+	"delete":    {{name: "SESSION", required: true}},
+}
+
+// sessionUnexpectedArgumentError mirrors clap's diagnostic for an unknown token
+// on a session subcommand: options clap already consumed are echoed in clap's
+// smart usage block, and the positional slots reflect what the parser bound.
+func sessionUnexpectedArgumentError(command string, consumed []string, arg string) error {
+	name := flagNameOnly(arg)
+	if similar, ok := sessionSimilarArgumentTips[name]; ok {
+		// clap scores the unknown flag against the declared ones and folds the
+		// suggested argument into the smart usage block as well.
+		return &UsageError{
+			Message: "unexpected argument '" + name + "' found\n\n  tip: a similar argument exists: '" + similar + "'",
+			Usage:   sessionClapUsage(command, append(append([]string{}, consumed...), similar)),
+		}
+	}
+	return &UsageError{
+		Message: "unexpected argument '" + name + "' found\n\n  tip: to pass '" + name + "' as a value, use '-- " + name + "'",
+		Usage:   sessionClapUsage(command, consumed),
+	}
+}
+
+// sessionSimilarArgumentTips mirrors clap's "a similar argument exists" tip for
+// removed spawn-history flags whose spelling is closest to `--last`.
+var sessionSimilarArgumentTips = map[string]string{
+	"--last-n":       "--last",
+	"--last-turn-id": "--last",
+}
+
+// sessionLastPromptConflictError renders clap's conflict diagnostic for
+// `--last` combined with an explicit SESSION_ID and PROMPT: Rust marks the TUI
+// prompt argument as conflicts_with = "last" for `codex resume`/`codex fork`.
+func sessionLastPromptConflictError(command string) error {
+	return &UsageError{
+		Message: "the argument '--last' cannot be used with '[PROMPT]'",
+		Usage:   "Usage: codex " + command + " --last <SESSION_ID> [PROMPT]",
+	}
+}
+
+// sessionClapUsage builds clap's smart usage block for a session subcommand
+// diagnostic: consumed options are echoed in argv order and every positional
+// slot shows whether the parser already bound it. clap prints the plain table
+// block while nothing has been consumed yet.
+func sessionClapUsage(command string, consumed []string) string {
+	spec, ok := subcommandUsageTexts[command]
+	if !ok {
+		return ""
+	}
+	slots, hasSlots := sessionPositionalSlots[command]
+	if !hasSlots {
+		return spec.usage
+	}
+	used, bound := clapSessionUsageState(consumed)
+	if len(used) == 0 && bound == 0 {
+		return spec.usage
+	}
+	fields := make([]string, 0, len(used)+len(slots)+1)
+	fields = append(fields, "Usage: codex "+command)
+	fields = append(fields, used...)
+	for idx, slot := range slots {
+		if slot.required || idx < bound {
+			fields = append(fields, "<"+slot.name+">")
+			continue
+		}
+		fields = append(fields, "["+slot.name+"]")
+	}
+	return strings.Join(fields, " ")
+}
+
+// clapSessionUsageState replays the tokens clap already accepted and returns the
+// option tokens clap echoes in its smart usage block plus the number of bound
+// positionals. The session subcommands declare `--image` as num_args = 1.., so
+// every following non-flag token is one of its values, not a positional.
+func clapSessionUsageState(consumed []string) ([]string, int) {
+	used := make([]string, 0, len(consumed))
+	seen := make(map[string]bool, len(consumed))
+	bound := 0
+	for i := 0; i < len(consumed); i++ {
+		arg := consumed[i]
+		if arg == "--" {
+			bound += len(consumed) - i - 1
+			break
+		}
+		if !clapLooksLikeOption(arg) {
+			bound++
+			continue
+		}
+		token, consumesValue := clapUsageOptionToken(arg)
+		if !seen[token] {
+			seen[token] = true
+			used = append(used, token)
+		}
+		if isSessionVariadicImageFlag(arg) {
+			for i+1 < len(consumed) && consumed[i+1] != "--" && !clapLooksLikeOption(consumed[i+1]) {
+				i++
+			}
+			continue
+		}
+		if !consumesValue {
+			continue
+		}
+		i++
+	}
+	return used, bound
+}
+
+// isSessionVariadicImageFlag reports whether arg is the `--image` spelling of a
+// session subcommand, which Rust declares with num_args = 1..
+func isSessionVariadicImageFlag(arg string) bool {
+	return arg == "--image" || arg == "-i" || strings.HasPrefix(arg, "--image=")
 }
 
 // missingRequiredArgumentsError mirrors clap's diagnostic for absent required

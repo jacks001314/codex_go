@@ -3582,14 +3582,20 @@ func parseQueue(args []string, queue *QueueOptions) error {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		// Rust #57273: queue rejects inherited options that cannot affect a
-		// queued message, with dedicated wording for the common cases.
-		switch {
-		case arg == "--model" || arg == "-m" || strings.HasPrefix(arg, "--model=") || (strings.HasPrefix(arg, "-m") && arg != "-m"):
-			return errors.New("`codex queue` does not support `--model`; queued messages use the thread's model")
-		case arg == "--image" || arg == "-i" || strings.HasPrefix(arg, "--image="):
-			return errors.New("`codex queue` does not support image attachments")
+		// queued message. clap validates required arguments first, so those
+		// rejections live in validateQueueSharedOptions after the loop.
+		if arg == "--" {
+			// Queue declares no positional arguments: clap ends option parsing
+			// here and reports the first token behind it.
+			if i+1 < len(args) {
+				return unexpectedSubcommandArgumentError("queue", args[i+1])
+			}
+			break
 		}
-		if handled, err := parseSharedOption(args, &i, &queue.Shared); err != nil {
+		if queueUndeclaredOption(arg) {
+			return queueUnexpectedArgumentError(queueUndeclaredSpelling(arg))
+		}
+		if handled, err := parseSharedOptionVariadicImages(args, &i, &queue.Shared); err != nil {
 			return err
 		} else if handled {
 			continue
@@ -3659,7 +3665,9 @@ func parseQueue(args []string, queue *QueueOptions) error {
 		case strings.HasPrefix(arg, "-"):
 			return unexpectedSubcommandArgumentError("queue", arg)
 		default:
-			return errors.New("`codex queue` does not accept a positional prompt; use `--message`")
+			// Queue declares no positional arguments, so clap reports a bare word
+			// as an unexpected argument.
+			return unexpectedSubcommandArgumentError("queue", arg)
 		}
 	}
 	var missing []string
@@ -3678,19 +3686,64 @@ func parseQueue(args []string, queue *QueueOptions) error {
 	return nil
 }
 
+// queueUndeclaredSpelling is clap's rendering of an undeclared queue option:
+// an attached short-flag value is reported as the short flag alone.
+func queueUndeclaredSpelling(arg string) string {
+	if strings.HasPrefix(arg, "-a") && !strings.HasPrefix(arg, "--") && arg != "-a" {
+		return "-a"
+	}
+	return arg
+}
+
+// queueSimilarArgumentTips mirrors clap's "a similar argument exists" tip for
+// the undeclared options whose name is close enough to a declared one.
+var queueSimilarArgumentTips = map[string]string{
+	"--no-worktree":            "--worktree",
+	"--model-reasoning-effort": "--model",
+}
+
+// queueUnexpectedArgumentError renders clap's unexpected-argument diagnostic for
+// a token QueueCommand never declares.
+func queueUnexpectedArgumentError(arg string) error {
+	similar, ok := queueSimilarArgumentTips[arg]
+	if !ok {
+		return unexpectedSubcommandArgumentError("queue", arg)
+	}
+	return &UsageError{
+		Message:    "unexpected argument '" + arg + "' found\n\n  tip: a similar argument exists: '" + similar + "'",
+		Usage:      subcommandUsageTexts["queue"].usage,
+		SmartUsage: true,
+	}
+}
+
+// queueUndeclaredOption reports options the shared session parsers accept but
+// Rust's QueueCommand never declares: clap rejects them as unexpected arguments
+// before any validation runs.
+func queueUndeclaredOption(arg string) bool {
+	switch arg {
+	case "-a", "--ask-for-approval", "--search", "--no-alt-screen", "--no-daemon",
+		"--no-worktree", "--model-reasoning-effort", "--reasoning-effort":
+		return true
+	}
+	if strings.HasPrefix(arg, "--ask-for-approval=") || strings.HasPrefix(arg, "--model-reasoning-effort=") || strings.HasPrefix(arg, "--reasoning-effort=") {
+		return true
+	}
+	return strings.HasPrefix(arg, "-a") && !strings.HasPrefix(arg, "--")
+}
+
 // validateQueueSharedOptions mirrors Rust queue_cmd.rs restricted_options
 // (#57273): queue accepts --remote, --remote-auth-token-env, --config,
 // --enable/--disable, --profile, --strict-config, --worktree, --no-daemon and
 // a local --cd, but rejects other inherited session options.
 func validateQueueSharedOptions(shared SharedOptions, remoteSpecified bool) error {
 	if remoteSpecified && shared.CWD != "" {
-		return errors.New("`codex queue` does not support `--cd` with `--remote`")
+		return queueUnsupportedError("`codex queue` does not support `--cd` with `--remote`")
 	}
 	if shared.Model != "" {
-		return errors.New("`codex queue` does not support `--model`; queued messages use the thread's model")
+		return queueUnsupportedError("`codex queue` does not support `--model`; queued messages use the thread's model")
 	}
 	if len(shared.Images) > 0 {
-		return errors.New("`codex queue` does not support image attachments")
+		return queueUnsupportedError("`codex queue` does not support image attachments")
 	}
 	for _, unsupported := range []struct {
 		name string
@@ -3708,11 +3761,19 @@ func validateQueueSharedOptions(shared SharedOptions, remoteSpecified bool) erro
 		{"--dangerously-bypass-hook-trust", shared.DangerouslyBypassHookTrust},
 	} {
 		if unsupported.used {
-			return fmt.Errorf("`codex queue` does not support `%s`", unsupported.name)
+			return queueUnsupportedError(fmt.Sprintf("`codex queue` does not support `%s`", unsupported.name))
 		}
 	}
 	return nil
 }
+
+// queueUnsupportedError mirrors queue_cmd.rs restricted_options: Rust reports
+// these through clap, so they render with the `error:` prefix and exit status 2
+// but carry no usage block.
+func queueUnsupportedError(message string) error {
+	return &UsageError{Message: message, Raw: true}
+}
+
 func parseAgents(args []string, agents *AgentsOptions) error {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -4085,10 +4146,26 @@ func parseRemoteControl(args []string, remote *RemoteControlOptions) error {
 	return nil
 }
 
+// parseSessionSelection parses `codex resume` / `codex fork`. Both share Rust's
+// ResumeCommand/ForkCommand shape: at most two positionals (SESSION_ID and
+// PROMPT, the latter marked conflicts_with = "last"), a variadic `--image`, and
+// clap-shaped diagnostics for unknown tokens.
 func parseSessionSelection(args []string, session *SessionOptions, includeNonInteractive bool) error {
+	command := "fork"
+	if includeNonInteractive {
+		command = "resume"
+	}
+	var positionals []string
+	bindPositional := func(value string) error {
+		if len(positionals) == len(sessionPositionalSlots[command]) {
+			return unexpectedPositionalError(value, subcommandUsageTexts[command].usage)
+		}
+		positionals = append(positionals, value)
+		return nil
+	}
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
-		if handled, err := parseSharedOption(args, &i, &session.Shared); err != nil {
+		if handled, err := parseSharedOptionVariadicImages(args, &i, &session.Shared); err != nil {
 			return err
 		} else if handled {
 			continue
@@ -4099,7 +4176,11 @@ func parseSessionSelection(args []string, session *SessionOptions, includeNonInt
 			continue
 		}
 		if arg == "--" {
-			session.Prompt = strings.Join(args[i+1:], " ")
+			for _, value := range args[i+1:] {
+				if err := bindPositional(value); err != nil {
+					return err
+				}
+			}
 			break
 		}
 		switch {
@@ -4144,26 +4225,29 @@ func parseSessionSelection(args []string, session *SessionOptions, includeNonInt
 		case strings.HasPrefix(arg, "-c") && arg != "-C":
 			session.ConfigOverrides = append(session.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
 		case strings.HasPrefix(arg, "-"):
-			return fmt.Errorf("unknown session option %s", arg)
+			return sessionUnexpectedArgumentError(command, args[:i], arg)
 		default:
-			if session.Last {
-				if session.Target != "" || len(args[i:]) > 1 {
-					return errors.New("--last conflicts with SESSION_ID and prompt")
-				}
-				session.Prompt = arg
-				return nil
+			if err := bindPositional(arg); err != nil {
+				return err
 			}
-			if session.Target == "" {
-				session.Target = arg
-				continue
-			}
-			session.Prompt = strings.Join(args[i:], " ")
-			return nil
 		}
 	}
-	if session.Last && session.Target != "" {
-		session.Prompt = session.Target
-		session.Target = ""
+	if session.Last && len(positionals) > 1 {
+		return sessionLastPromptConflictError(command)
+	}
+	switch len(positionals) {
+	case 0:
+	case 1:
+		// Rust keeps `--last PROMPT` valid: clap binds the single positional to
+		// SESSION_ID, and the resume path reinterprets it as the prompt.
+		if session.Last {
+			session.Prompt = positionals[0]
+		} else {
+			session.Target = positionals[0]
+		}
+	default:
+		session.Target = positionals[0]
+		session.Prompt = positionals[1]
 	}
 	return nil
 }
@@ -4171,15 +4255,26 @@ func parseSessionSelection(args []string, session *SessionOptions, includeNonInt
 func parseSessionMutation(args []string, session *SessionOptions, command string, allowForce bool) error {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
-		if handled, err := parseSharedOption(args, &i, &session.Shared); err != nil {
+		if handled, err := parseSharedOptionVariadicImages(args, &i, &session.Shared); err != nil {
 			return err
 		} else if handled {
 			continue
 		}
+		if arg == "--" {
+			for _, value := range args[i+1:] {
+				if session.Target != "" {
+					return unexpectedPositionalError(value, subcommandUsageTexts[command].usage)
+				}
+				session.Target = value
+			}
+			break
+		}
 		switch {
 		case arg == "--force":
 			if !allowForce {
-				return fmt.Errorf("--force is not supported for %s", command)
+				// Rust declares --force only on `codex delete`, so clap reports an
+				// unknown flag for archive/unarchive.
+				return sessionUnexpectedArgumentError(command, args[:i], arg)
 			}
 			session.Force = true
 		case arg == "--remote":
@@ -4214,10 +4309,10 @@ func parseSessionMutation(args []string, session *SessionOptions, command string
 		case strings.HasPrefix(arg, "-c") && arg != "-C":
 			session.ConfigOverrides = append(session.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
 		case strings.HasPrefix(arg, "-"):
-			return unexpectedSubcommandArgumentError(command, arg)
+			return sessionUnexpectedArgumentError(command, args[:i], arg)
 		default:
 			if session.Target != "" {
-				return fmt.Errorf("%s accepts exactly one SESSION", command)
+				return unexpectedPositionalError(arg, subcommandUsageTexts[command].usage)
 			}
 			session.Target = arg
 		}
@@ -4509,22 +4604,21 @@ func parseSharedOptionWithImages(args []string, i *int, shared *SharedOptions, v
 		*i = next
 		return true, nil
 	case strings.HasPrefix(arg, "--image="):
+		// clap stops a num_args = 1.. option at an inline value, so
+		// `--image=a.png b.png` leaves b.png to the positional slots.
 		value := strings.TrimPrefix(arg, "--image=")
 		images := splitComma(value)
 		if len(images) == 0 {
 			return false, missingImageValueError()
 		}
 		shared.Images = append(shared.Images, images...)
-		if variadicImages {
-			values, next, err := requireVariadicValuesFrom(args, *i+1, arg)
-			if err != nil {
-				return false, err
-			}
-			for _, extra := range values {
-				shared.Images = append(shared.Images, splitComma(extra)...)
-			}
-			*i = next - 1
+		return true, nil
+	case strings.HasPrefix(arg, "-i="):
+		images := splitComma(strings.TrimPrefix(arg, "-i="))
+		if len(images) == 0 {
+			return false, missingImageValueError()
 		}
+		shared.Images = append(shared.Images, images...)
 		return true, nil
 	case arg == "--model" || arg == "-m":
 		value, next, err := requireValue(args, *i, arg)

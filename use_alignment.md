@@ -990,8 +990,56 @@ one-off captures.
     `TestMCPAddTransportGroupMetaLikeRust` and
     `TestMCPAddEnvWithoutCommandLikeRust`.
 
+44. **Session subcommand clap surface and variadic `--image`** - Rust's
+    `resume`/`fork`/`archive`/`unarchive`/`delete` all flatten
+    `SharedCliOptions`, whose `--image` is `num_args = 1..`; Go's session
+    parsers still read a single value, so `codex resume -i a.png b.png` bound
+    `b.png` as SESSION_ID (`Session not found: b.png`) and
+    `codex archive nosuch -i a.png b.png` printed the Go-only
+    `archive accepts exactly one SESSION`.
+    - `--image`/`-i` now swallows every following non-flag token (comma
+      splitting kept). An inline value (`--image=a.png`, `-i=a.png`) stops the
+      run, matching clap, so `archive --image=a.png b.png X` reports
+      `unexpected argument 'X' found`; `--` also terminates the run and the
+      tokens behind it fill the positional slots (`archive -i a.png b.png --
+      c` archives `c`).
+    - Diagnostics are now clap's: unknown flags render the smart usage block
+      (consumed options in argv order plus bound slots, `[OPTIONS]` dropped once
+      anything was consumed), a third positional keeps the plain table block
+      (`unexpected argument 'c' found`), and `--last` with SESSION_ID + PROMPT
+      reports clap's `the argument '--last' cannot be used with '[PROMPT]'`.
+    - Removed spawn-history flags get clap's suggestion: `fork --last-n 2`
+      prints `tip: a similar argument exists: '--last'` and echoes `--last` in
+      the usage block.
+    - `codex queue` now mirrors `queue_cmd.rs`: clap validates `--thread` and
+      `--message` before `restricted_options` runs, so `queue -i a.png` reports
+      the missing-required block while `queue --thread t --message m -i a.png`
+      reports the raw clap error (exit 2, no usage block and no `--help` hint).
+      Hidden inherited options stay out of the smart usage, and the options
+      QueueCommand never declares (`-a`, `--search`, `--no-alt-screen`,
+      `--no-daemon`, `--no-worktree`, `--model-reasoning-effort`) are clap
+      unexpected arguments.
+    Evidence: live comparisons against 0.166 - `out/round29-session-diag.txt`
+    (14/14), `out/round29-mutation.txt` (10/10), `out/round29-queue.txt`
+    (30/30), plus 12 queue-usage and 12 session-usage cases at 0 diffs. The
+    12-case `resume`/`fork` image run (`out/round29-resume-img.txt`) now differs
+    only in the non-TTY TUI gate recorded under Still open. `go test ./cli`
+    passes with `TestSessionVariadicImagesLikeRust`,
+    `TestSessionVariadicImagesConsumeSessionLikeRust`,
+    `TestSessionUnexpectedArgumentDiagnosticsLikeRust`,
+    `TestSessionLastPromptConflictLikeRust`,
+    `TestSessionRemovedFlagDiagnosticsLikeRust` and
+    `TestQueueClapDiagnosticsLikeRust`.
+
 ## Verification
 
+- Session subcommand parsing matches Rust 0.166: the 14 subcommand-diagnostic
+  cases (`out/round29-session-diag.txt`), the 10 archive/delete/unarchive cases
+  (`out/round29-mutation.txt`) and the 30 queue cases
+  (`out/round29-queue.txt`) are byte-identical, and `go test ./cli ./sandbox
+  ./applypatch ./prompt ./review ./cmd/... ./tcptunnel` passes. `go test
+  -vet=off ./app` still fails only the two known baselines plus the known flaky
+  auth-concurrency test.
 - The missing-required surface matches Rust 0.166: `probe_missing_r25` and
   `probe_r25i` compare 34 tcp-tunnel / execpolicy / stdio-to-uds invocations
   (`out/round25-hidden-diagnostics.txt`); the only difference is the
@@ -1257,8 +1305,18 @@ one-off captures.
 
 ## Still open
 
-- `codex resume -i a.png b.png` (TUI picker path) also uses Rust's variadic
-  `--image`; Go's session parser was left single-value pending a pty capture.
+- `codex resume`/`codex fork` without a TTY: Rust refuses to start the TUI
+  (`ERROR: TERM is set to "dumb". Refusing to start the interactive TUI ...`)
+  before it resolves the session, while Go runs headless and reports
+  `No sessions found to resume.`, `Session not found: <id>` or
+  `Error: thread not found`. The argument surface itself now matches, so the
+  remaining gap is the TUI start gate in the non-interactive path.
+- clap's flag did-you-mean is only modelled for the keys measured this round
+  (`--last-n`/`--last-turn-id` -> `--last`, `--no-worktree` -> `--worktree`,
+  `--model-reasoning-effort` -> `--model`). Other commands still get the plain
+  `--` tip where clap suggests a flag: `codex delete --name x --force` prints
+  `tip: a similar argument exists: '--enable'` and echoes that flag in the usage
+  (`Usage: codex delete --enable <FEATURE> <SESSION>`).
 - OS-level error text is now Rust-shaped on the exec surfaces; other commands
   that print `%v` of a `*os.PathError` (for example some `apply_patch` paths)
   still show Go's `open <path>: <English text>` wording.
@@ -1266,11 +1324,9 @@ one-off captures.
   family and the subcommand surface (unexpected arguments, missing required
   arguments, unrecognized subcommands with did-you-mean, missing values, and the
   nested `sandbox setup` parser). What is still Go-shaped:
-  - clap's flag did-you-mean: `codex delete --name x --force` prints
-    `tip: a similar argument exists: '--enable'` and echoes that flag in the usage
-    (`Usage: codex delete --enable <FEATURE> <SESSION>`); Go prints the plain
-    `--` tip. Aligning needs the per-command long-flag table and clap's used-flag
-    usage rendering.
+  - clap's flag did-you-mean is partly modelled (entry 44) but still needs a
+    per-command long-flag table for full coverage; see the dedicated Still open
+    bullet.
   - shared options inside a subcommand (entry 37): `--enable`/`--disable` are
     accepted everywhere and rendered in the usage block, but the hand-written
     `exec` family usage lines (`exec resume --last --enable f --bogus`,

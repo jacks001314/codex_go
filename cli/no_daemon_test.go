@@ -1,10 +1,14 @@
 package cli
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestNoDaemonParsesLikeRust mirrors Rust cli/src/main.rs #46088: --no-daemon is
 // accepted on the interactive root and preserved through resume/fork (before or
-// after the subcommand), the hidden agents spelling, and queue.
+// after the subcommand) and the hidden agents spelling; QueueCommand never
+// declares it, so clap rejects it after `queue`.
 func TestNoDaemonParsesLikeRust(t *testing.T) {
 	parsed, err := Parse([]string{"--no-daemon"})
 	if err != nil {
@@ -37,11 +41,10 @@ func TestNoDaemonParsesLikeRust(t *testing.T) {
 		t.Fatalf("agents --no-daemon = %#v", parsed.Agents)
 	}
 
-	parsed, err = Parse([]string{"queue", "--thread", "thread-1", "--message", "hi", "--no-daemon"})
-	if err != nil {
+	// Rust's QueueCommand never declares --no-daemon, so clap rejects it after
+	// the subcommand; the root spelling keeps working (checked above).
+	if _, err := Parse([]string{"queue", "--thread", "thread-1", "--message", "hi", "--no-daemon"}); err == nil ||
+		!strings.Contains(err.Error(), "unexpected argument '--no-daemon' found") {
 		t.Fatalf("Parse(queue --no-daemon) error = %v", err)
-	}
-	if !parsed.Queue.Shared.NoDaemon {
-		t.Fatalf("queue --no-daemon = %#v", parsed.Queue.Shared)
 	}
 }
