@@ -70,8 +70,12 @@ func RunProvisioningPipe(stopped func() bool, hooks BrokerHooks, handler Authent
 			_ = windows.DisconnectNamedPipe(listener.Pipe)
 			continue
 		}
-		response := HandleRequest(listener.Pipe, process, listener.SandboxSID, stopped, policy, handler)
+		response, err := HandleRequest(listener.Pipe, process, listener.SandboxSID, stopped, policy, handler)
 		process.Close()
+		if err != nil {
+			// A retained registration escapes request handling without a response.
+			return err
+		}
 		if err := WriteResponse(listener.Pipe, response, stopped); err != nil {
 			return err
 		}

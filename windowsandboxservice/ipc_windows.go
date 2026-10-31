@@ -117,7 +117,8 @@ func WriteResponse(pipe windows.Handle, response provisionservice.Response, stop
 // HandleRequest reads, validates, authenticates, policy-checks and dispatches one
 // request. A request the service cannot serve becomes Unavailable; every other
 // failure becomes a bounded Error (Rust ipc::handle_request plus ipc::run's
-// response mapping).
+// response mapping). The only non-nil error is ErrRuntimeSetupInterrupted,
+// which must escape without answering the client.
 func HandleRequest(
 	pipe windows.Handle,
 	process *AuthorizedClientProcess,
@@ -125,31 +126,34 @@ func HandleRequest(
 	stopped func() bool,
 	policy PolicyValidator,
 	handler AuthenticatedRequestHandler,
-) provisionservice.Response {
+) (provisionservice.Response, error) {
 	raw, err := ReadProvisioningRequest(pipe, stopped)
 	if err != nil {
-		return failureResponse(err)
+		return failureResponse(err), nil
 	}
 	request, err := ValidateRequest(raw)
 	if err != nil {
-		return failureResponse(err)
+		return failureResponse(err), nil
 	}
 	identity, err := AuthenticateClient(pipe, process, sandboxSID, request)
 	if err != nil {
-		return failureResponse(err)
+		return failureResponse(err), nil
 	}
 	defer identity.Close()
 	if err := validateProvisioningPolicy(identity, request, policy); err != nil {
-		return failureResponse(err)
+		return failureResponse(err), nil
 	}
 	if handler == nil {
-		return failureResponse(errors.New("the provisioning service has no request handler"))
+		return failureResponse(errors.New("the provisioning service has no request handler")), nil
 	}
 	response, err := handler(identity, request, sandboxSID, stopped)
 	if err != nil {
-		return failureResponse(err)
+		if errors.Is(err, ErrRuntimeSetupInterrupted) {
+			return provisionservice.Response{}, err
+		}
+		return failureResponse(err), nil
 	}
-	return response
+	return response, nil
 }
 
 func validateProvisioningPolicy(identity *ClientIdentity, request *ServiceRequest, policy PolicyValidator) error {

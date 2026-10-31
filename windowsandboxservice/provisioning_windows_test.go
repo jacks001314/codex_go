@@ -52,13 +52,58 @@ func TestRunProvisioningRegistersTheOwnerForRegistrationOnly(t *testing.T) {
 	}
 }
 
-func TestRunProvisioningRefusesRegisteredCoreUntilTheTransactionIsPorted(t *testing.T) {
+func TestRunProvisioningRunsTheRegisteredTransactionUnderTheSetupLock(t *testing.T) {
 	identity := testIdentity(t, t.TempDir())
 	identity.Runtime = windowssandbox.SetupRuntimeRegistered
 	request := &ServiceRequest{Provision: &ProvisioningRequest{CodexHome: identity.CodexHome, RegisteredCore: true}}
-	_, err := RunProvisioning(identity, request, nil, nil, nil, nil)
-	if err == nil || !strings.Contains(err.Error(), "registered Core provisioning is not available") {
-		t.Fatalf("RunProvisioning() error = %v, want the registered-Core refusal", err)
+	registered := false
+	registrar := func(record *windowssandbox.InstallationRecord, token windows.Token, setupRuntime windowssandbox.SetupRuntime) (*windowssandbox.InstallationRecord, error) {
+		registered = true
+		_ = token.Close()
+		return record, nil
+	}
+	group := "S-1-5-21-9-9-9-513"
+	previousResolve := runtimeResolveSIDString
+	t.Cleanup(func() { runtimeResolveSIDString = previousResolve })
+	runtimeResolveSIDString = func(string) (string, error) { return group, nil }
+	sandboxSID, err := windowssandbox.SIDBytesFromString(group)
+	if err != nil {
+		t.Fatalf("SIDBytesFromString(%s) error = %v", group, err)
+	}
+	// The transaction acquires the setup lock, checks the sandbox group
+	// generation, admits the owner and then refuses an unpackaged service.
+	_, err = RunProvisioning(identity, request, sandboxSID, nil, registrar, nil)
+	if err == nil || !strings.Contains(err.Error(), "no package identity") {
+		t.Fatalf("RunProvisioning(registered) error = %v, want the package-identity refusal", err)
+	}
+	if !registered {
+		t.Fatal("RunProvisioning(registered) never admitted the owner")
+	}
+}
+
+func TestRunRegisteredProvisioningRefusesAReplacedSandboxGroup(t *testing.T) {
+	identity := testIdentity(t, t.TempDir())
+	identity.Runtime = windowssandbox.SetupRuntimeRegistered
+	request := &ProvisioningRequest{CodexHome: identity.CodexHome, RegisteredCore: true}
+	previousResolve := runtimeResolveSIDString
+	t.Cleanup(func() { runtimeResolveSIDString = previousResolve })
+	runtimeResolveSIDString = func(string) (string, error) { return "S-1-5-21-9-9-9-513", nil }
+	stale, err := windowssandbox.SIDBytesFromString("S-1-5-21-9-9-9-9999")
+	if err != nil {
+		t.Fatalf("SIDBytesFromString() error = %v", err)
+	}
+	registered := false
+	registrar := func(record *windowssandbox.InstallationRecord, token windows.Token, setupRuntime windowssandbox.SetupRuntime) (*windowssandbox.InstallationRecord, error) {
+		registered = true
+		_ = token.Close()
+		return record, nil
+	}
+	_, err = RunRegisteredProvisioning(identity, request, stale, nil, registrar, nil)
+	if err == nil || err.Error() != "sandbox group changed before authentication" {
+		t.Fatalf("RunRegisteredProvisioning(stale group) error = %v", err)
+	}
+	if registered {
+		t.Fatal("RunRegisteredProvisioning(stale group) admitted an owner")
 	}
 }
 
