@@ -4171,7 +4171,12 @@ func (r *Router) readPaginatedThreadItems(params *ThreadItemsReadParams) (*Threa
 			if err != nil {
 				return nil, err
 			}
-			response.Data = append(response.Data, ThreadItemEntry{TurnID: stored.TurnID, Item: item})
+			response.Data = append(response.Data, ThreadItemEntry{
+				TurnID:        stored.TurnID,
+				Item:          item,
+				StartedAtMS:   stored.StartedAtMS,
+				CompletedAtMS: stored.CompletedAtMS,
+			})
 		}
 		if result.NextCursor == nil || len(seen) >= len(params.ItemIDs) {
 			break
@@ -4267,7 +4272,12 @@ func (r *Router) buildPaginatedThreadItemsResponse(params *ThreadItemsListParams
 		if err != nil {
 			return nil, err
 		}
-		data = append(data, ThreadItemEntry{TurnID: stored.TurnID, Item: item})
+		data = append(data, ThreadItemEntry{
+			TurnID:        stored.TurnID,
+			Item:          item,
+			StartedAtMS:   stored.StartedAtMS,
+			CompletedAtMS: stored.CompletedAtMS,
+		})
 	}
 	return &ThreadItemsListResponse{Data: data, NextCursor: page.NextCursor, BackwardsCursor: page.BackwardsCursor}, nil
 }

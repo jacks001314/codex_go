@@ -3423,6 +3423,11 @@ type ThreadItemsListResponse struct {
 type ThreadItemEntry struct {
 	TurnID string     `json:"turnId"`
 	Item   ThreadItem `json:"item"`
+	// StartedAtMS and CompletedAtMS are the producer-recorded lifecycle times
+	// from the stored item (Rust #47114). Existing rows and older writers leave
+	// them unknown, so the keys are always present and serialize as null.
+	StartedAtMS   *int64 `json:"startedAtMs"`
+	CompletedAtMS *int64 `json:"completedAtMs"`
 }
 
 // ThreadItemsReadParams mirrors Rust's experimental ThreadItemsReadParams
@@ -3502,7 +3507,12 @@ func BuildItemsReadResponse(record *session.Record, params *ThreadItemsReadParam
 		if !requested[strings.TrimSpace(threadItem.ID)] {
 			continue
 		}
-		response.Data = append(response.Data, ThreadItemEntry{TurnID: threadItem.TurnID, Item: threadItem})
+		response.Data = append(response.Data, ThreadItemEntry{
+			TurnID:        threadItem.TurnID,
+			Item:          threadItem,
+			StartedAtMS:   threadItem.StartedAtMS,
+			CompletedAtMS: threadItem.CompletedAtMS,
+		})
 	}
 	return response, nil
 }
@@ -4137,7 +4147,12 @@ func BuildItemsResponse(record *session.Record, params *ThreadItemsListParams) (
 		if params.TurnID != nil && threadItem.TurnID != *params.TurnID {
 			continue
 		}
-		items = append(items, ThreadItemEntry{TurnID: threadItem.TurnID, Item: threadItem})
+		items = append(items, ThreadItemEntry{
+			TurnID:        threadItem.TurnID,
+			Item:          threadItem,
+			StartedAtMS:   threadItem.StartedAtMS,
+			CompletedAtMS: threadItem.CompletedAtMS,
+		})
 	}
 	if params.SortDirection == SortDesc {
 		for left, right := 0, len(items)-1; left < right; left, right = left+1, right-1 {

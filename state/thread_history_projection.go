@@ -328,12 +328,14 @@ WHERE thread_turns.rollout_end_ordinal IS NULL
 		if _, err := conn.ExecContext(ctx, `
 INSERT INTO thread_items (
     thread_id, turn_id, item_id, rollout_ordinal, updated_at_ordinal,
-    created_at_ms, item_type, item_json
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    created_at_ms, started_at_ms, completed_at_ms, item_type, item_json
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(thread_id, turn_id, item_id) DO UPDATE SET
     updated_at_ordinal = excluded.updated_at_ordinal,
+    started_at_ms = COALESCE(thread_items.started_at_ms, excluded.started_at_ms),
+    completed_at_ms = COALESCE(thread_items.completed_at_ms, excluded.completed_at_ms),
     item_type = excluded.item_type,
-    item_json = excluded.item_json`, threadID, item.TurnID, item.ItemID, ordinal, ordinal, *item.StartedAtMS, item.ItemType, string(item.ItemJSON)); err != nil {
+    item_json = excluded.item_json`, threadID, item.TurnID, item.ItemID, ordinal, ordinal, *item.StartedAtMS, nullableInt64(item.StartedAtMS), nullableInt64(item.CompletedAtMS), item.ItemType, string(item.ItemJSON)); err != nil {
 			return fmt.Errorf("project thread item: %w", err)
 		}
 		switch item.ItemType {

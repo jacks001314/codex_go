@@ -18023,9 +18023,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1117 (audit): Cargo/Bazel dependency-feature pruning in Rust #47088 has no Go carrier; Go modules carry no default-feature graph."
    ]
   },
   {
@@ -18035,9 +18035,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1117 (audit): Rust #47089 is an internal refactor that serializes ClientResponse through the untagged payload enum without changing wire shapes. Go responses are typed structs marshaled once at the transport boundary with no per-variant serialization match, so there is no corresponding code path to change and the wire shapes stay unchanged."
    ]
   },
   {
@@ -18047,9 +18047,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1117 (audit): Go has no DescriptorPolicy layer. Local stdio MCP servers launch through os/exec with only stdin/stdout/stderr wired (StdinPipe/StdoutPipe/Stderr), no ExtraFiles, and the Go runtime opens its own descriptors close-on-exec, so unrelated descriptors created by the process do not propagate; os/exec exposes no pre-exec hook to close descriptors inherited by the Go process itself, so Rust StdioOnly has no Go carrier."
    ]
   },
   {
@@ -18155,9 +18155,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1117 (parity): thread history now persists producer-recorded started_at_ms/completed_at_ms (INSERT plus COALESCE on conflict, matching Rust #47114), and thread/items/list and thread/items/read expose nullable startedAtMs/completedAtMs on every ThreadItemEntry from the stored row; legacy rollout entries fall back to the item payload, and unknown times serialize null. Tests: go test ./state ./appserver -run ItemLifecycle."
    ]
   },
   {
@@ -22816,9 +22816,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1117 (audit): Go already matches Rust #49032 for database settings. initializeDatabaseSettings only sets incremental auto_vacuum on a schema-empty database before enabling WAL, preserves existing auto-vacuum modes (including FULL and NONE) and DELETE journals without taking the writer lock, and keeps busy_timeout/synchronous on every connection; state/sqlite_settings_test.go covers opening and growing pools under an active writer lock. The stderr span-entry/exit half is Rust tracing-specific; Go uses slog without per-span stderr records. Tests: go test ./state -run TestOpenReadWritePoolPreservesExistingSettingsUnderWriteLockLikeRust."
    ]
   },
   {
