@@ -25,6 +25,11 @@ type execHumanRenderer struct {
 	// lastTurnDiff mirrors Rust's `last_turn_diff`: the most recently reported
 	// accumulated turn diff, so repeated notifications print only once.
 	lastTurnDiff string
+	// agentMessageRendered and lastAgentMessage mirror Rust's
+	// `final_message_rendered` / `final_message`: the transcript already showed
+	// the reply, so the human final-output step must not print it a second time.
+	agentMessageRendered bool
+	lastAgentMessage     string
 }
 
 func newExecHumanRenderer(stderr io.Writer, colorFlag string) *execHumanRenderer {
@@ -170,6 +175,10 @@ func (h *execHumanRenderer) renderItemCompleted(item protocol.ThreadItem) {
 		h.renderMCPToolCallCompleted(item)
 	case "web_search":
 		fmt.Fprintf(h.stderr, "%s %s\n", h.style(ansiBold, "web search:"), item.Query)
+	case "agent_message":
+		// Rust renders every completed AgentMessage into the transcript and
+		// remembers it as the final message (event_processor_with_human_output.rs).
+		h.renderAgentMessage(item.Text)
 	case "reasoning":
 		// Rust renders the reasoning item completion dimmed, and only when agent
 		// reasoning is not hidden.
@@ -184,6 +193,15 @@ func (h *execHumanRenderer) renderItemCompleted(item protocol.ThreadItem) {
 	case "error":
 		fmt.Fprintf(h.stderr, "%s %s\n", h.style(ansiYellow+ansiBold, "warning:"), item.Message)
 	}
+}
+
+func (h *execHumanRenderer) renderAgentMessage(text string) {
+	if h == nil || h.stderr == nil || text == "" {
+		return
+	}
+	fmt.Fprintf(h.stderr, "%s\n%s\n", h.style(ansiItalic+ansiMagenta, "codex"), text)
+	h.agentMessageRendered = true
+	h.lastAgentMessage = text
 }
 
 func (h *execHumanRenderer) renderCommandExecutionCompleted(item protocol.ThreadItem) {

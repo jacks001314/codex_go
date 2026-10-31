@@ -1601,11 +1601,13 @@ func TestRunHumanPrintsFinalMessageToStderrWhenBothStreamsAreTTY(t *testing.T) {
 	if stdout.String() != "" {
 		t.Fatalf("stdout = %q, want empty", stdout.String())
 	}
+	// Rust renders the transcript label styled (italic + magenta) and the reply
+	// body unstyled, mirroring event_processor_with_human_output.rs.
 	for _, want := range []string{
 		"gcode v",
 		"approval: never",
 		"tokens used\n15\n",
-		"codex\ndone\n",
+		"\x1b[3m\x1b[35mcodex\x1b[0m\ndone\n",
 	} {
 		if !strings.Contains(stderr.String(), want) {
 			t.Fatalf("stderr missing %q: %q", want, stderr.String())

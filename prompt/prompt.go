@@ -108,8 +108,7 @@ func IsTerminalReader(reader io.Reader) bool {
 	if !ok {
 		return false
 	}
-	info, err := file.Stat()
-	return err == nil && info.Mode()&os.ModeCharDevice != 0
+	return IsTerminalFile(file)
 }
 
 func Resolve(promptArg string, stdin io.Reader) (string, error) {

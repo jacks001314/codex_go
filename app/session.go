@@ -18,6 +18,7 @@ import (
 	"codex_go/auth"
 	"codex_go/cli"
 	"codex_go/config"
+	"codex_go/prompt"
 	"codex_go/rollout"
 	"codex_go/session"
 	"codex_go/state"
@@ -271,8 +272,7 @@ func isSessionTerminal(value any) bool {
 	if !ok {
 		return false
 	}
-	info, err := file.Stat()
-	return err == nil && info.Mode()&os.ModeCharDevice != 0
+	return prompt.IsTerminalFile(file)
 }
 
 func runSessionFork(opts *cli.SessionOptions, root *cli.RootOptions, stdout io.Writer) error {

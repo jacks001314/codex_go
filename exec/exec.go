@@ -676,12 +676,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	}
 
 	if req.Exec.LastMessageFile != "" {
-		if err := os.WriteFile(req.Exec.LastMessageFile, []byte(lastMessage), 0o600); err != nil {
-			return nil, err
-		}
-		if !hasLastMessage && stderr != nil {
-			fmt.Fprintf(stderr, "Warning: no last agent message; wrote empty content to %s\n", req.Exec.LastMessageFile)
-		}
+		writeLastMessageFile(stderr, req.Exec.LastMessageFile, lastMessage, hasLastMessage)
 	}
 
 	if err := emitFinalEventsFromAgentResult(eventSink, turnResult, compactedThisTurn); err != nil {
@@ -695,7 +690,13 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 			}
 		}
 		if hasLastMessage {
-			if err := writeHumanFinalMessage(stdout, stderr, lastMessage); err != nil {
+			label := "codex"
+			rendered := false
+			if human := eventSink.human; human != nil {
+				label = human.style(ansiItalic+ansiMagenta, "codex")
+				rendered = human.agentMessageRendered && human.lastAgentMessage == lastMessage
+			}
+			if err := writeHumanFinalMessage(stdout, stderr, lastMessage, rendered, label); err != nil {
 				return nil, err
 			}
 		}
@@ -2726,13 +2727,24 @@ func loadOutputSchema(path string) (any, error) {
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, &prompt.DirectExitError{Text: fmt.Sprintf("Failed to read output schema file %s: %v", path, err)}
+		return nil, &prompt.DirectExitError{Text: fmt.Sprintf("Failed to read output schema file %s: %v", path, ioErrorMessage(err))}
 	}
 	var value any
 	if err := json.Unmarshal(data, &value); err != nil {
 		return nil, &prompt.DirectExitError{Text: fmt.Sprintf("Output schema file %s is not valid JSON: %v", path, err)}
 	}
 	return value, nil
+}
+
+// ioErrorMessage mirrors Rust's io::Error Display, which reports only the
+// underlying reason; Go's *os.PathError would otherwise repeat the path that
+// the caller already printed.
+func ioErrorMessage(err error) error {
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) {
+		return pathErr.Err
+	}
+	return err
 }
 
 func baseInstructionsForConfig(cfg *config.Config) (string, error) {
@@ -3014,24 +3026,50 @@ func effectiveReasoningSummary(cfg *config.Config) string {
 	)
 }
 
-func writeHumanFinalMessage(stdout io.Writer, stderr io.Writer, message string) error {
+// writeHumanFinalMessage mirrors Rust's final-output pair
+// (event_processor_with_human_output.rs print_final_output): a non-terminal
+// stdout always receives the reply, while a fully interactive run only repeats
+// the reply when the transcript did not already render it.
+func writeHumanFinalMessage(stdout io.Writer, stderr io.Writer, message string, rendered bool, label string) error {
 	if message == "" {
 		return nil
 	}
-	if isTerminalWriter(stdout) && isTerminalWriter(stderr) {
-		_, err := fmt.Fprintf(stderr, "codex\n%s\n", message)
+	if !(isTerminalWriter(stdout) && isTerminalWriter(stderr)) {
+		_, err := fmt.Fprintln(stdout, message)
 		return err
 	}
-	_, err := fmt.Fprintln(stdout, message)
+	if rendered {
+		return nil
+	}
+	_, err := fmt.Fprintf(stderr, "%s\n%s\n", label, message)
 	return err
+}
+
+// writeLastMessageFile mirrors event_processor.rs handle_last_message: a failed
+// write is reported and ignored, and a turn without an agent message still
+// writes an empty file and warns.
+func writeLastMessageFile(stderr io.Writer, path string, message string, hasMessage bool) {
+	if err := os.WriteFile(path, []byte(message), 0o600); err != nil && stderr != nil {
+		fmt.Fprintf(stderr, "Failed to write last message file %q: %v\n", path, ioErrorMessage(err))
+	}
+	if !hasMessage && stderr != nil {
+		fmt.Fprintf(stderr, "Warning: no last agent message; wrote empty content to %s\n", path)
+	}
 }
 
 func isTerminalWriter(writer io.Writer) bool {
 	if writer == nil {
 		return false
 	}
-	terminal, ok := writer.(interface{ IsTerminal() bool })
-	return ok && terminal.IsTerminal()
+	if terminal, ok := writer.(interface{ IsTerminal() bool }); ok {
+		return terminal.IsTerminal()
+	}
+	// Rust checks std::io::stdout().is_terminal(), so the bare process streams
+	// must be probed through the console instead of only through wrappers.
+	if file, ok := writer.(*os.File); ok {
+		return prompt.IsTerminalFile(file)
+	}
+	return false
 }
 
 func finalMessageForAgentResult(result *turn.AgentLoopResult) (string, bool) {
