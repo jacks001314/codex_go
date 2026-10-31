@@ -3,10 +3,12 @@ package mcp
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -16,6 +18,21 @@ const (
 	mcpDiscoveryHelperModeEnv = "MCP_STDIO_DISCOVERY_MODE"
 	mcpDiscoveryHelperMarkers = "MCP_STDIO_DISCOVERY_MARKERS"
 )
+
+// TestShouldRestartLegacyHandshakeOnClosedTransportLikeRust pins Rust's
+// LegacyFallbackFailed arm (stdio_handshake.rs): when discovery fell back in
+// place but the helper had already exited, the initialize write fails with a
+// closed pipe and a fresh helper must run the legacy handshake instead of
+// surfacing the write error.
+func TestShouldRestartLegacyHandshakeOnClosedTransportLikeRust(t *testing.T) {
+	writeErr := &os.PathError{Op: "write", Path: "|1", Err: syscall.EPIPE}
+	if !shouldRestartLegacyHandshake(writeErr) {
+		t.Fatalf("shouldRestartLegacyHandshake(%v) = false, want the broken pipe to restart", writeErr)
+	}
+	if shouldRestartLegacyHandshake(&os.PathError{Op: "write", Path: "|1", Err: errors.New("boom")}) {
+		t.Fatal("unrelated write failure must not restart the helper")
+	}
+}
 
 // TestMCPDiscoverLocalStdioHandshakeRecoveryLikeRust covers Rust #57210: an
 // unmarked local stdio helper that cannot finish discovery is recovered with a

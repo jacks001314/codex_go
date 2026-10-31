@@ -18,20 +18,41 @@ type scriptedHandshakeTransport struct {
 	requests     []HostRequest
 	responses    []HostToClient
 	closed       bool
+	readable     chan struct{}
+}
+
+// wakeReader must be called with t.mu held.
+func (t *scriptedHandshakeTransport) wakeReader() {
+	if t.readable == nil {
+		t.readable = make(chan struct{}, 1)
+	}
+	select {
+	case t.readable <- struct{}{}:
+	default:
+	}
 }
 
 func (t *scriptedHandshakeTransport) Read(ctx context.Context, target any) (bool, error) {
-	t.mu.Lock()
-	if len(t.responses) > 0 {
-		response := t.responses[0]
-		t.responses = t.responses[1:]
+	for {
+		t.mu.Lock()
+		if len(t.responses) > 0 {
+			response := t.responses[0]
+			t.responses = t.responses[1:]
+			t.mu.Unlock()
+			*target.(*HostToClient) = response
+			return true, nil
+		}
+		if t.readable == nil {
+			t.readable = make(chan struct{}, 1)
+		}
+		readable := t.readable
 		t.mu.Unlock()
-		*target.(*HostToClient) = response
-		return true, nil
+		select {
+		case <-readable:
+		case <-ctx.Done():
+			return false, ctx.Err()
+		}
 	}
-	t.mu.Unlock()
-	<-ctx.Done()
-	return false, ctx.Err()
 }
 
 func (t *scriptedHandshakeTransport) Write(_ context.Context, message any) error {
@@ -40,18 +61,20 @@ func (t *scriptedHandshakeTransport) Write(_ context.Context, message any) error
 		return nil
 	}
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	switch envelope.Type {
 	case "connection/hello":
 		t.responses = append(t.responses, HostToClient{Type: "connection/ready", Hello: &HostHello{SelectedVersion: ProtocolV1, Capabilities: t.capabilities}})
 	case "operation/request":
 		if envelope.Request == nil {
+			t.mu.Unlock()
 			return nil
 		}
 		t.requests = append(t.requests, *envelope.Request)
 		response := SessionReady(envelope.Request.SessionID)
 		t.responses = append(t.responses, HostOperationResponse(envelope.ID, ResultOK(response)))
 	}
+	t.wakeReader()
+	t.mu.Unlock()
 	return nil
 }
 

@@ -961,6 +961,13 @@ func shouldRestartLegacyHandshake(err error) bool {
 		errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.ErrClosedPipe) {
 		return true
 	}
+	// Rust's LegacyFallbackFailed arm restarts the helper when the fallback
+	// initialize fails with a broken pipe or connection reset (a helper that
+	// already exited while the client was writing). Windows surfaces that as
+	// ERROR_NO_DATA/ERROR_BROKEN_PIPE instead of Go's io.ErrClosedPipe.
+	if isMCPClosedTransportError(err) {
+		return true
+	}
 	if errors.Is(err, errMCPModernProtocolUnsupported) {
 		return false
 	}

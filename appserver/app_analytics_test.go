@@ -19,7 +19,7 @@ func waitForAppMentionedEvent(t *testing.T, sink *recordingTurnEventSink) teleme
 	select {
 	case event := <-sink.appMentioned:
 		return event
-	case <-time.After(2 * time.Second):
+	case <-time.After(asyncTestWaitTimeout):
 		t.Fatal("timed out waiting for codex_app_mentioned")
 		return telemetry.CodexAppMentionedEventRequest{}
 	}
@@ -30,7 +30,7 @@ func waitForAppUsedEvent(t *testing.T, sink *recordingTurnEventSink) telemetry.C
 	select {
 	case event := <-sink.appUsed:
 		return event
-	case <-time.After(2 * time.Second):
+	case <-time.After(asyncTestWaitTimeout):
 		t.Fatal("timed out waiting for codex_app_used")
 		return telemetry.CodexAppUsedEventRequest{}
 	}

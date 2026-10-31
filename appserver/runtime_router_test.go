@@ -59,6 +59,12 @@ import (
 	"github.com/google/uuid"
 )
 
+// asyncTestWaitTimeout bounds the async assertions used across this package.
+// The routers under test complete in milliseconds when idle, but the package
+// runs hundreds of tests concurrently and under a full go test ./... the
+// scheduler and temp-file IO can delay a turn well past two seconds.
+const asyncTestWaitTimeout = 10 * time.Second
+
 func TestRuntimeMCPConfigUsesSharedHTTPClient(t *testing.T) {
 	shared := &http.Client{}
 	router := NewRuntimeRouter(RuntimeServices{HTTPClient: shared})
@@ -27025,7 +27031,7 @@ func waitForRuntimeAgentRequest(t *testing.T, agent *recordingRuntimeAgent) mode
 	select {
 	case request := <-agent.requests:
 		return request
-	case <-time.After(2 * time.Second):
+	case <-time.After(asyncTestWaitTimeout):
 		t.Fatal("timed out waiting for runtime agent request")
 	}
 	return model.AgentRequest{}
@@ -27036,7 +27042,7 @@ func waitForBlockingReviewRuntimeAgentRequest(t *testing.T, agent *blockingRevie
 	select {
 	case request := <-agent.requests:
 		return request
-	case <-time.After(2 * time.Second):
+	case <-time.After(asyncTestWaitTimeout):
 		t.Fatal("timed out waiting for blocking review runtime agent request")
 	}
 	return model.AgentRequest{}
@@ -27782,7 +27788,7 @@ func waitForBlockingAgentStart(t *testing.T, agent *blockingAgent) {
 	t.Helper()
 	select {
 	case <-agent.started:
-	case <-time.After(2 * time.Second):
+	case <-time.After(asyncTestWaitTimeout):
 		t.Fatal("timed out waiting for blocking agent start")
 	}
 }
@@ -27851,7 +27857,7 @@ func waitForTurnTerminalStatus(t *testing.T, sink *NotificationBuffer, turnID st
 
 func waitForTurnCompletedStatus(t *testing.T, sink *NotificationBuffer, turnID string, status TurnStatus) *TurnCompletedNotification {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(asyncTestWaitTimeout)
 	var last []*Notification
 	for time.Now().Before(deadline) {
 		last = sink.List()

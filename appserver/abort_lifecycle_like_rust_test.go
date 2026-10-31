@@ -75,7 +75,7 @@ func TestInterruptCallbackCompletesBeforeTurnAbortedLikeRust(t *testing.T) {
 				if err != nil {
 					t.Fatalf("abort operation error = %v", err)
 				}
-			case <-time.After(3 * time.Second):
+			case <-time.After(asyncTestWaitTimeout):
 				t.Fatal("abort operation did not finish after the interrupt callback was released")
 			}
 			waitForTurnCompletedStatus(t, sink, turnID, TurnStatusInterrupted)
@@ -162,7 +162,7 @@ func blockingInterruptHookCommand(startedPath string, releasePath string) string
 
 func waitForAbortLifecycleStart(t *testing.T, path string, done <-chan error) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(asyncTestWaitTimeout)
 	for time.Now().Before(deadline) {
 		if info, err := os.Stat(path); err == nil && info.Size() > 0 {
 			return

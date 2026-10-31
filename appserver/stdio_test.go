@@ -199,6 +199,23 @@ func TestStdioShutdownWatchdogArmsOnce(t *testing.T) {
 	}
 }
 
+// TestStdioShutdownWatchdogDisarmsAfterShutdown pins that the deadline covers
+// teardown only. Previously the timer kept running after Serve returned and
+// terminated the hosting process later, which broke any test binary that ran
+// longer than the deadline.
+func TestStdioShutdownWatchdogDisarmsAfterShutdown(t *testing.T) {
+	fired := make(chan struct{}, 1)
+	watchdog := &stdioShutdownWatchdog{timeout: 10 * time.Millisecond, onTimeout: func() { fired <- struct{}{} }}
+	watchdog.arm()
+	watchdog.disarm()
+	watchdog.disarm()
+	select {
+	case <-fired:
+		t.Fatal("shutdown watchdog fired after teardown finished")
+	case <-time.After(150 * time.Millisecond):
+	}
+}
+
 func TestStdioServerHandlesJSONRPCLine(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	router := NewDefaultRuntimeRouter(store, t.TempDir())

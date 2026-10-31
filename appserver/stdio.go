@@ -85,6 +85,7 @@ func (s *StdioServer) ServeWithShutdown(stdin io.Reader, stdout io.Writer) error
 		return err
 	}
 	watchdog := &stdioShutdownWatchdog{timeout: stdioShutdownWatchdogTimeout}
+	defer watchdog.disarm()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	stopSignals := installStdioShutdownSignals(ctx, cancel, watchdog.arm)
@@ -96,9 +97,12 @@ func (s *StdioServer) ServeWithShutdown(stdin io.Reader, stdout io.Writer) error
 
 type stdioShutdownWatchdog struct {
 	timeout time.Duration
-	once    sync.Once
 	// onTimeout overrides the default exit behavior in tests.
 	onTimeout func()
+
+	mu       sync.Mutex
+	timer    *time.Timer
+	disarmed bool
 }
 
 // arm starts the shutdown deadline. The first EOF or SIGTERM wins so a later
@@ -107,16 +111,35 @@ func (w *stdioShutdownWatchdog) arm() {
 	if w == nil {
 		return
 	}
-	w.once.Do(func() {
-		time.AfterFunc(w.timeout, func() {
-			if w.onTimeout != nil {
-				w.onTimeout()
-				return
-			}
-			fmt.Fprintln(os.Stderr, "app-server shutdown timed out; exiting")
-			os.Exit(1)
-		})
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.disarmed || w.timer != nil {
+		return
+	}
+	w.timer = time.AfterFunc(w.timeout, func() {
+		if w.onTimeout != nil {
+			w.onTimeout()
+			return
+		}
+		fmt.Fprintln(os.Stderr, "app-server shutdown timed out; exiting")
+		os.Exit(1)
 	})
+}
+
+// disarm stops the deadline once teardown finished. The deadline only guards
+// shutdown work: a timer left running after Serve returns would terminate the
+// hosting process (or a test binary running later tests) even though shutdown
+// already completed.
+func (w *stdioShutdownWatchdog) disarm() {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.disarmed = true
+	if w.timer != nil {
+		w.timer.Stop()
+	}
 }
 
 func serveJSONLineConnection(router *RuntimeRouter, stdin io.Reader, stdout io.Writer) error {
