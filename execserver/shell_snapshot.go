@@ -471,22 +471,33 @@ func shellSnapshotScriptIndex(argv []string, info ShellInfo) int {
 	return -1
 }
 
+// shellSnapshotKey mirrors Rust's cache entry identity
+// (exec-server/src/shell_snapshot.rs `ShellSnapshotCache::prepare`): the scope
+// request, the working directory, the environment policy and the sandbox. The
+// resolved launch environment is deliberately excluded, exactly like upstream,
+// because replay re-exports the launch's own environment over the restored
+// state; keying on it would make every tool call (which carries its own call
+// id) capture again.
 func shellSnapshotKey(params *ExecParams, shellType shell.ShellType) (string, error) {
-	envData, err := json.Marshal(params.Env)
-	if err != nil {
-		return "", err
-	}
 	policyData, err := json.Marshal(params.EnvPolicy)
 	if err != nil {
 		return "", err
+	}
+	sandboxData, err := json.Marshal(params.Sandbox)
+	if err != nil {
+		return "", err
+	}
+	cwd := params.CWD
+	if key, ok := utils.PathIdentityKey(cwd); ok {
+		cwd = key
 	}
 	return strings.Join([]string{
 		params.ShellSnapshot.ScopeID,
 		string(shellType),
 		params.ShellSnapshot.Shell.Path,
-		params.CWD,
-		string(envData),
+		cwd,
 		string(policyData),
+		string(sandboxData),
 	}, "\x00"), nil
 }
 

@@ -147,6 +147,9 @@ type SnapshotProviderResult struct {
 	// Remote asks the selected executor to capture and replay its own shell
 	// snapshot. Path is used for local environments.
 	Remote *execserverclient.ShellSnapshotRequest
+	// Local asks the in-process executor to capture and replay its own shell
+	// snapshot for a local launch (Rust #39957).
+	Local *execserverclient.ShellSnapshotRequest
 	// ObserveCommandOutcome, when non-nil, is called exactly once after the
 	// launch decides whether it replayed the snapshot. used is Rust's
 	// `snapshot_used = wrapped != command`: true when the command was rewritten

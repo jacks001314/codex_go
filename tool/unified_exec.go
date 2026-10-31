@@ -445,9 +445,29 @@ func (m *UnifiedExecManager) Exec(ctx context.Context, req *ShellRequest, callID
 	if runtime.GOOS == "windows" && req.PermissionProfile != nil && !req.PermissionProfile.Disabled {
 		return m.execWindowsSandbox(ctx, req, callID, processID)
 	}
-	cmd := osexec.Command(req.Command[0], req.Command[1:]...)
+	command := req.Command
+	launchEnv := shellRequestEnv(req)
+	if req.LocalShellSnapshot != nil {
+		prepared, prepareErr := prepareLocalShellSnapshot(ctx, &execserver.ExecParams{
+			ProcessID:     fmt.Sprintf("unified-exec-%d", processID),
+			Argv:          append([]string(nil), req.Command...),
+			CWD:           req.CWD,
+			Env:           launchEnv,
+			ShellSnapshot: req.LocalShellSnapshot,
+		}, launchEnv)
+		if prepareErr != nil {
+			m.releaseProcessID(processID)
+			emitUnifiedExecLaunchFailure(req, callID, prepareErr)
+			return nil, prepareErr
+		}
+		if prepared != nil {
+			command = prepared.Argv
+			launchEnv = prepared.Env
+		}
+	}
+	cmd := osexec.Command(command[0], command[1:]...)
 	cmd.Dir = req.CWD
-	cmd.Env = envSlice(shellRequestEnv(req))
+	cmd.Env = envSlice(launchEnv)
 	openSession := startUnifiedExecSessionTrace(m, req.UnifiedExecThreadID, req.UnifiedExecTurnID, callID)
 	started, err := startUnifiedExecCommand(cmd, req.TTY)
 	openSession.finish(err, ctx)
@@ -650,6 +670,13 @@ func waitForUnifiedExecOutputDrain(readers *sync.WaitGroup, closers []io.ReadClo
 // report is the in-process one (Rust #49467 uses `Environment::info()` for the
 // local environment). It is a variable so tests can substitute the report.
 var localLaunchPrependPathDirs = execserver.LocalPrependPathDirs
+
+// prepareLocalShellSnapshot applies the local executor's shell snapshot to a
+// launch the tool runs in this process (Rust #39957). It is a variable so a
+// test can stand in for the executor's capture.
+var prepareLocalShellSnapshot = func(ctx context.Context, params *execserver.ExecParams, captureEnv map[string]string) (*execserver.ExecParams, error) {
+	return execserver.LocalShellSnapshots().Prepare(ctx, params, captureEnv)
+}
 
 // unifiedExecExplicitPathOverride reports whether the launch's shell environment
 // policy sets PATH itself; Rust keeps that value instead of restoring the

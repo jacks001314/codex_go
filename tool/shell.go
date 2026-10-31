@@ -164,13 +164,17 @@ type ShellRequest struct {
 	// (#49467): when enabled, a POSIX login-shell launch restores the
 	// executor-reported PATH directories inside the shell so nested commands
 	// still find bundled tools after login startup resets PATH.
-	LoginShellPackagePath        bool
-	UnifiedExecEnvironmentID     string
-	UnifiedExecUserHomeDir       string
-	EnforceManagedNetwork        bool
-	ManagedNetwork               *network.ProxyManagedNetworkSandboxContext
-	RemoteNetworkProxy           *execserver.RemoteNetworkProxyLaunchConfig
-	RemoteShellSnapshot          *execserver.ShellSnapshotRequest
+	LoginShellPackagePath    bool
+	UnifiedExecEnvironmentID string
+	UnifiedExecUserHomeDir   string
+	EnforceManagedNetwork    bool
+	ManagedNetwork           *network.ProxyManagedNetworkSandboxContext
+	RemoteNetworkProxy       *execserver.RemoteNetworkProxyLaunchConfig
+	RemoteShellSnapshot      *execserver.ShellSnapshotRequest
+	// LocalShellSnapshot asks the in-process executor to capture and replay its
+	// own shell snapshot for this launch (Rust #39957 `ExecParams::shell_snapshot`
+	// on a local environment). Remote launches use RemoteShellSnapshot.
+	LocalShellSnapshot           *execserver.ShellSnapshotRequest
 	NetworkPolicyDecider         network.ProxyPolicyDecider
 	NetworkPolicyDecisionTimeout time.Duration
 	// WarningSink receives best-effort user-visible launch warnings. It is

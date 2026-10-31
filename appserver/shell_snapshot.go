@@ -57,10 +57,44 @@ func (r *RuntimeRouter) shellSnapshotPruneLookup() shell.SnapshotPruneLookup {
 }
 
 // shellSnapshotProviderForTurn returns the snapshot provider this turn's shell
-// executor asks, or nil when the session has no snapshot. The feature gate is
-// Rust's `Feature::ShellSnapshot`; the session's builder is created on first use
-// and closed when the thread unloads.
+// executor asks, or nil when the session has no snapshot.
+//
+// Rust keeps two independent mechanisms: the session file snapshot
+// (`Feature::ShellSnapshot`) and the executor-owned snapshot requested through
+// `shell_snapshot_request` (`Feature::ShellSnapshotV2`). Both may be enabled, so
+// the provider answers with the file path, the executor request, or both.
 func (r *RuntimeRouter) shellSnapshotProviderForTurn(threadID string, cfg *config.Config) func(context.Context, tool.SnapshotProviderRequest) tool.SnapshotProviderResult {
+	if r == nil || cfg == nil {
+		return nil
+	}
+	v2 := r.shellSnapshotV2ProviderForTurn(threadID, cfg)
+	if !features.Enabled(cfg.FeatureSettings(), "shell_snapshot") {
+		return v2
+	}
+	v1 := r.shellSnapshotV1ProviderForTurn(threadID, cfg)
+	if v1 == nil || v2 == nil {
+		if v1 != nil {
+			return v1
+		}
+		return v2
+	}
+	return func(ctx context.Context, request tool.SnapshotProviderRequest) tool.SnapshotProviderResult {
+		result := v1(ctx, request)
+		executorSnapshot := v2(ctx, request)
+		if executorSnapshot.Remote != nil {
+			// Rust #39957 scopes the executor snapshot to the thread and the
+			// selected environment, so it supersedes the v1 remote request.
+			result.Remote = executorSnapshot.Remote
+		}
+		result.Local = executorSnapshot.Local
+		return result
+	}
+}
+
+// shellSnapshotV1ProviderForTurn returns the session file snapshot provider. The
+// feature gate is Rust's `Feature::ShellSnapshot`; the session's builder is
+// created on first use and closed when the thread unloads.
+func (r *RuntimeRouter) shellSnapshotV1ProviderForTurn(threadID string, cfg *config.Config) func(context.Context, tool.SnapshotProviderRequest) tool.SnapshotProviderResult {
 	if r == nil || cfg == nil || !features.Enabled(cfg.FeatureSettings(), "shell_snapshot") {
 		return nil
 	}
@@ -157,6 +191,70 @@ func (r *RuntimeRouter) shellSnapshotProviderForTurn(threadID string, cfg *confi
 			},
 		}
 	}
+}
+
+// localShellSnapshotV2Supported reports the local executor's shell snapshot v2
+// capability. It is a variable so a test can stand in for a POSIX host.
+var localShellSnapshotV2Supported = execserverclient.LocalShellSnapshotV2Supported
+
+// shellSnapshotV2ProviderForTurn mirrors Rust `shell_snapshot_request`
+// (core/src/unified_exec/shell_snapshot.rs:169-196): the executor-owned snapshot
+// is requested only when the `shell_snapshot_v2` feature is on, the selected
+// environment advertises the capability, the launch runs in the environment's
+// own directory, and the resolved shell is a POSIX login shell. The scope is
+// `thread:environment`, like Rust's `shell_snapshot_request` scope id.
+func (r *RuntimeRouter) shellSnapshotV2ProviderForTurn(threadID string, cfg *config.Config) func(context.Context, tool.SnapshotProviderRequest) tool.SnapshotProviderResult {
+	if r == nil || cfg == nil || !features.Enabled(cfg.FeatureSettings(), "shell_snapshot_v2") {
+		return nil
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return nil
+	}
+	threadCWD := r.shellSnapshotThreadCWD(threadID)
+	return func(_ context.Context, request tool.SnapshotProviderRequest) tool.SnapshotProviderResult {
+		if !request.AllowLoginShell || !shellSnapshotShellSupported(request.ShellType) {
+			return tool.SnapshotProviderResult{}
+		}
+		// Rust compares the launch directory with the environment's selection
+		// directory; a command in another directory has no captured state.
+		if threadCWD != "" && !sameDirectory(request.CWD, threadCWD) {
+			return tool.SnapshotProviderResult{}
+		}
+		if !r.shellSnapshotV2EnvironmentSupported(request) {
+			return tool.SnapshotProviderResult{}
+		}
+		environmentID := strings.TrimSpace(request.EnvironmentID)
+		if environmentID == "" {
+			environmentID = execserverclient.LocalEnvironmentID
+		}
+		snapshot := &execserverclient.ShellSnapshotRequest{
+			ScopeID: threadID + ":" + environmentID,
+			Shell: execserverclient.ShellInfo{
+				Name: string(request.ShellType),
+				Path: strings.TrimSpace(request.ShellPath),
+			},
+		}
+		if request.Remote {
+			return tool.SnapshotProviderResult{Remote: snapshot}
+		}
+		return tool.SnapshotProviderResult{Local: snapshot}
+	}
+}
+
+// shellSnapshotV2EnvironmentSupported reads
+// `turn_environment.shell_snapshot_v2_supported`: the local executor advertises
+// it on POSIX hosts, and a remote environment advertises it through its cached
+// environment info.
+func (r *RuntimeRouter) shellSnapshotV2EnvironmentSupported(request tool.SnapshotProviderRequest) bool {
+	if !request.Remote {
+		return localShellSnapshotV2Supported()
+	}
+	if r == nil || r.services.Environment == nil {
+		return false
+	}
+	info, ok := r.services.Environment.CachedInfo(strings.TrimSpace(request.EnvironmentID))
+	return ok && info != nil && info.Capabilities.ShellSnapshotV2
 }
 
 // shellSnapshotBrokerCapture is the credential-broker state a protected

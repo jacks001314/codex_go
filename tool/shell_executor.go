@@ -999,6 +999,12 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 			req.RemoteShellSnapshot = snapshot.Remote
 			snapshotUsed = true
 		}
+		// The executor-owned snapshot (Rust #39957) is replayed by the selected
+		// executor, so it does not rewrite the command here and stays outside the
+		// session-file snapshot observation.
+		if snapshot.Local != nil {
+			req.LocalShellSnapshot = snapshot.Local
+		}
 		if req.Env[network.CredentialBrokerActiveEnvKey] == "1" && !remoteEnvironment &&
 			snapshot.Path == "" && snapshot.Remote == nil &&
 			credentialBrokerProtectedShell(snapshotShell.Type) {
