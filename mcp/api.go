@@ -3312,7 +3312,7 @@ func (s *MCPService) stdioClientForServer(name string, config *ServerConfig) *st
 		lease   *mcpChatLease
 	)
 	if s.mcpStdioSharingEligible(name, config) {
-		client, lease, release = sharedMCPStdioConnections.acquire(mcpStdioPoolKey(key, config), func() *stdioClient {
+		client, lease, release = sharedMCPStdioConnections.acquire(mcpStdioPoolKey(key, config, mcpStdioAuthScopeFor(authChanges)), func() *stdioClient {
 			created := newMCPStdioClientWithCapabilities(config, mcpClientFeatures{
 				OpenAIForm:       openAIForm,
 				UserVerification: userVerification,
@@ -3391,6 +3391,31 @@ func (s *MCPService) authChangeSourceSnapshot() MCPAuthChangeSource {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.authChangeSource
+}
+
+// mcpStdioAuthScope returns the credential scope that keeps a pooled stdio
+// connection private to one credential source (Rust #57211 ConnectionKey's
+// auth_state): sharing survives a credential refresh but not an owner or login
+// change. A source that cannot describe its scope stays one opaque scope, and a
+// service without a source shares freely like Rust's absent auth_state.
+func (s *MCPService) mcpStdioAuthScope() string {
+	return mcpStdioAuthScopeFor(s.authChangeSourceSnapshot())
+}
+
+// mcpStdioAuthScopeFor derives the pool scope from an already captured source
+// so callers holding the service lock never re-enter it.
+func mcpStdioAuthScopeFor(source MCPAuthChangeSource) string {
+	if source == nil {
+		return "auth=none"
+	}
+	scoper, ok := source.(MCPConnectionAuthScoper)
+	if !ok {
+		return "auth=opaque"
+	}
+	if scope := strings.TrimSpace(scoper.MCPConnectionAuthScope()); scope != "" {
+		return scope
+	}
+	return "auth=none"
 }
 
 // SetAuthChangeSource installs the source used to notify opted-in stdio MCP

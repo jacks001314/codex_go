@@ -36537,7 +36537,8 @@
    "status": "complete",
    "evidence": [
     "plan_2026_10_27_nontui.md:33: | `#57211` | Share eligible local stdio MCP connections across chats: the `mcp_connection_sharing` feature also pools local stdio helpers that negotiated MCP 2026-07-28, keyed by helper identity, environment, client capabilities, startup budget, and catalog limit. Later chats join a ready connection and still list their own catalog; input requests keep using the calling chat's callback. Legacy hel",
-    "plan_2026_10_27_nontui.md:1454: - For `#57211`: `go build ./...`, `go test ./mcp -count=1`,"
+    "plan_2026_10_27_nontui.md:1454: - For `#57211`: `go build ./...`, `go test ./mcp -count=1`,",
+    "Round 1241 completion: pooled stdio connections are also scoped by credential source, matching Rust's `ConnectionKey::auth_state`. `MCPService.mcpStdioAuthScope`/`mcpStdioAuthScopeFor` (`mcp/api.go`) fold an `mcp.MCPConnectionAuthScoper` scope into `mcpStdioPoolKey` (`mcp/connection_pool.go`), and `appserver/mcp_auth_changes.go` implements the scoper from the router's auth tracker as tracker identity plus owner and login generations, so a credential refresh keeps a shared helper while an owner or login change starts a new one. Tests: TestMCPStdioPoolKeyIncludesCredentialScopeLikeRust, TestMCPStdioAuthScopeUsesCredentialSourceLikeRust, TestMCPConnectionSharingStaysPrivateAcrossCredentialSourcesLikeRust (`go test ./mcp -count=1`), TestMCPConnectionAuthScopeSurvivesRefreshButNotOwnerChangeLikeRust (`go test ./appserver -run TestMCPConnectionAuthScopeSurvivesRefreshButNotOwnerChangeLikeRust -count=1`)."
    ]
   },
   {

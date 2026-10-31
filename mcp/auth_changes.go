@@ -38,6 +38,17 @@ type MCPAuthChangeSource interface {
 	AuthChanged() <-chan struct{}
 }
 
+// MCPConnectionAuthScoper is implemented by auth-change sources that can name
+// the credential scope a pooled stdio connection belongs to (Rust #57211
+// ConnectionKey::auth_state compares owner, source and login generations).
+// Sources that do not implement it stay a single opaque scope.
+type MCPConnectionAuthScoper interface {
+	// MCPConnectionAuthScope returns one string per credential source. Equal
+	// strings may share a pooled connection; a credential refresh that keeps
+	// the same login continuity must keep the same string.
+	MCPConnectionAuthScope() string
+}
+
 // MCPAuthChangeSourceFunc adapts functions to MCPAuthChangeSource.
 type MCPAuthChangeSourceFunc struct {
 	State   func() MCPAuthChangeState

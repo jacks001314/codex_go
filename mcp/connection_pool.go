@@ -227,16 +227,18 @@ func (s *MCPService) mcpStdioSharingEligible(name string, config *ServerConfig) 
 }
 
 // mcpStdioPoolKey scopes sharing to connections that can serve another chat:
-// the same helper, environment, client capabilities, startup budget and catalog
-// limit.
-func mcpStdioPoolKey(connectionKey string, config *ServerConfig) string {
+// the same helper, environment, client capabilities, startup budget, catalog
+// limit, and credential scope. Rust #57211 compares owner, source and login
+// generations in ConnectionKey::auth_state, so a credential refresh keeps a
+// shared connection while a different credential source never joins it.
+func mcpStdioPoolKey(connectionKey string, config *ServerConfig, authScope string) string {
 	startup := time.Duration(0)
 	catalogLimit := 0
 	if config != nil {
 		startup = config.StartupTimeout
 		catalogLimit = config.CatalogItemLimit
 	}
-	return fmt.Sprintf("%s|sharing|startup=%d|catalog=%d", connectionKey, startup, catalogLimit)
+	return fmt.Sprintf("%s|sharing|startup=%d|catalog=%d|%s", connectionKey, startup, catalogLimit, authScope)
 }
 
 // newMCPConnectionLeaseID mints a host-owned lease identifier.
