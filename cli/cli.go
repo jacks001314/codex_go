@@ -661,7 +661,7 @@ type MigrateRolloutsOptions struct {
 }
 
 type ApplyOptions struct {
-	Patch           string
+	TaskID          string
 	ConfigOverrides []string
 }
 
@@ -5173,12 +5173,14 @@ func parseApply(args []string, apply *ApplyOptions) error {
 		case strings.HasPrefix(arg, "-"):
 			return unexpectedSubcommandArgumentError("apply", arg)
 		default:
-			if i+1 < len(args) {
-				return errors.New("apply accepts at most one PATCH")
+			if apply.TaskID != "" {
+				return &UsageError{Message: "unexpected argument '" + arg + "' found", Usage: "Usage: codex apply [OPTIONS] <TASK_ID>", SmartUsage: true}
 			}
-			apply.Patch = arg
-			return nil
+			apply.TaskID = arg
 		}
+	}
+	if apply.TaskID != "" {
+		return nil
 	}
 	if len(apply.ConfigOverrides) > 0 {
 		return &UsageError{Message: requiredArgumentsMessage("<TASK_ID>"), Usage: "Usage: codex apply --config <key=value> <TASK_ID>"}

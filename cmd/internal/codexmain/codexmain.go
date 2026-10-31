@@ -56,7 +56,9 @@ func Main(args []string, argv0 string, stdin io.Reader, stdout, stderr io.Writer
 
 	exe, _ := os.Executable()
 	var aliases *cli.DispatchAliasGuard
-	if prepared, err := cli.PrepareArg0Aliases(auth.DefaultCodexHome(), exe, os.Getenv("PATH")); err == nil {
+	if err := cli.ValidateArg0AliasHome(auth.DefaultCodexHome()); err != nil {
+		fmt.Fprintln(stderr, "WARNING: proceeding, even though we could not create PATH aliases:", err)
+	} else if prepared, err := cli.PrepareArg0Aliases(auth.DefaultCodexHome(), exe, os.Getenv("PATH")); err == nil {
 		aliases = prepared
 		defer aliases.Cleanup()
 		_ = os.Setenv("PATH", aliases.UpdatedPATH)

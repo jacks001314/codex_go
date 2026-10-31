@@ -19,10 +19,10 @@ import (
 	"strings"
 	"time"
 
-	"codex_go/applypatch"
 	"codex_go/appserver"
 	"codex_go/appserverdaemon"
 	"codex_go/auth"
+	"codex_go/chatgptapi"
 	"codex_go/cli"
 	"codex_go/config"
 	"codex_go/doctor"
@@ -32,6 +32,7 @@ import (
 	"codex_go/execserver"
 	"codex_go/execserver/hostconfig"
 	"codex_go/features"
+	"codex_go/gitutils"
 	"codex_go/install"
 	"codex_go/memories"
 	"codex_go/model"
@@ -170,7 +171,7 @@ func RunWithOptions(ctx context.Context, args []string, stdin io.Reader, stdout,
 		}
 		return nil
 	case cli.CommandApply:
-		return runApply(parsed.Apply, parsed.Root, stdin, stdout)
+		return runApply(ctx, parsed.Apply, parsed.Root, stdout)
 	case cli.CommandMigrateRollouts:
 		return runMigrateRollouts(parsed.MigrateRollouts, parsed.Root, stdout, stderr)
 	case cli.CommandMigrateNFSDB:
@@ -1398,28 +1399,95 @@ func writeFileCreatingParent(path string, data []byte) error {
 	return os.WriteFile(path, data, 0o600)
 }
 
-func runApply(opts cli.ApplyOptions, root cli.RootOptions, stdin io.Reader, stdout io.Writer) error {
-	patch := opts.Patch
-	if strings.TrimSpace(patch) == "" {
-		data, err := io.ReadAll(stdin)
-		if err != nil {
-			return err
-		}
-		patch = string(data)
-	}
-	if strings.TrimSpace(patch) == "" {
-		return errors.New("apply requires a patch argument or patch text on stdin")
-	}
-	cwd := root.Shared.CWD
-	if cwd == "" {
-		cwd = "."
-	}
-	result, err := applypatch.Apply(patch, &applypatch.ApplyOptions{CWD: cwd})
+// defaultChatGPTBackendBaseURL is Rust's production chatgpt_base_url.
+const defaultChatGPTBackendBaseURL = "https://chatgpt.com/backend-api"
+
+// runApply mirrors Rust run_apply_command: load the effective config, resolve
+// ChatGPT auth, fetch the task turn from the backend and apply its PR diff with
+// `git apply --3way`.
+func runApply(ctx context.Context, opts cli.ApplyOptions, root cli.RootOptions, stdout io.Writer) error {
+	codexHome := auth.DefaultCodexHome()
+	overrides := append(append([]string(nil), root.ConfigOverrides...), opts.ConfigOverrides...)
+	loaded, err := config.LoadEffectiveWithOptions(codexHome, &config.EffectiveOptions{
+		RawOverrides:         overrides,
+		IncludeManagedConfig: true,
+	})
 	if err != nil {
 		return err
 	}
-	_, err = io.WriteString(stdout, result.Summary())
+	resolved, err := auth.NewStore(codexHome).Resolve()
+	if err != nil {
+		return err
+	}
+	if resolved == nil {
+		return errors.New("ChatGPT auth not available")
+	}
+	authHeaders, err := model.AuthHeadersFromAuth(resolved.Auth)
+	if err != nil {
+		return err
+	}
+	switch resolved.Auth.Mode() {
+	case "chatgpt", "chatgptAuthTokens":
+	default:
+		return errors.New("ChatGPT backend requests require Codex backend auth")
+	}
+	if strings.TrimSpace(authHeaders.Headers.Get("ChatGPT-Account-ID")) == "" {
+		return errors.New("ChatGPT account ID not available, please re-run `codex login`")
+	}
+	baseURL := firstNonEmptyLocal(
+		cloudConfigStringValue(loaded.Values, "chatgpt_base_url"),
+		defaultChatGPTBackendBaseURL,
+	)
+	baseURL, err = chatgptapi.ValidateChatGPTBaseURL(baseURL)
+	if err != nil {
+		return err
+	}
+	client := chatgptapi.NewCloudClientWithoutRedirects(&chatgptapi.CloudClientOptions{
+		BaseURL: baseURL,
+		Headers: authHeaders.Headers,
+	})
+	task, err := chatgptapi.GetTask(ctx, client, opts.TaskID)
+	if err != nil {
+		return err
+	}
+	if err := applyTaskDiff(ctx, task, root.Shared.CWD); err != nil {
+		return err
+	}
+	_, err = io.WriteString(stdout, "Successfully applied diff\n")
 	return err
+}
+
+// applyTaskDiff applies Rust apply_diff_from_task: the current diff turn must
+// carry a `pr` output item, and a non-zero `git apply` exit reports the
+// applied/skipped/conflicted counts with the command output.
+func applyTaskDiff(ctx context.Context, task *chatgptapi.GetTaskResponse, cwd string) error {
+	if task == nil || task.CurrentDiffTaskTurn == nil {
+		return errors.New("No diff turn found")
+	}
+	diff := ""
+	for _, item := range task.CurrentDiffTaskTurn.OutputItems {
+		if item.Kind != "pr" || item.OutputDiff == nil || item.OutputDiff.Diff == nil {
+			continue
+		}
+		diff = *item.OutputDiff.Diff
+		break
+	}
+	if diff == "" {
+		return errors.New("No PR output item found")
+	}
+	if strings.TrimSpace(cwd) == "" {
+		cwd = "."
+	}
+	result, err := gitutils.ApplyPatch(&gitutils.ApplyRequest{CWD: cwd, Diff: diff})
+	if err != nil {
+		return err
+	}
+	if result.ExitCode != 0 {
+		return fmt.Errorf("Git apply failed (applied=%d, skipped=%d, conflicts=%d)\nstdout:\n%s\nstderr:\n%s",
+			len(result.AppliedPaths), len(result.SkippedPaths), len(result.ConflictedPaths), result.Stdout, result.Stderr)
+	}
+	_ = ctx
+	return nil
 }
 
 // indexedRolloutPathsForMigration reads the state database's thread index so a
@@ -2352,7 +2420,12 @@ func runLogin(ctx context.Context, opts cli.LoginOptions, stdin io.Reader, stdou
 	// Rust installs a small file-backed tracing layer for direct `codex login`
 	// flows so sanitized credential-storage fallback warnings stay visible
 	// (#49384). The handler is restored when the command returns.
-	restoreLoginLogging := installLoginFileLogging(codexHome, loadedConfig)
+	// `login status` only reads the credential store; Rust leaves no log file
+	// behind for it, so the tracing layer is installed for real sign-ins only.
+	restoreLoginLogging := func() {}
+	if opts.Action != "status" {
+		restoreLoginLogging = installLoginFileLogging(codexHome, loadedConfig)
+	}
 	defer restoreLoginLogging()
 	authStoreOptions := authStoreOptionsFromLoadedConfig(loadedConfig)
 	store := auth.NewStoreWithOptions(codexHome, authStoreOptions)
@@ -2607,13 +2680,17 @@ func runFeatures(opts cli.FeatureOptions, root cli.RootOptions, stdout io.Writer
 		if err := config.SetFeature(auth.DefaultCodexHome(), opts.Feature, enabled); err != nil {
 			return err
 		}
-		// Mirrors Rust cli/src/main.rs maybe_print_under_development_feature_warning:
-		// enabling an under-development feature prints a suppression hint.
+		// Rust prints the confirmation first and only then the
+		// under-development suppression hint (maybe_print_under_development_feature_warning).
+		if enabled {
+			fmt.Fprintf(stdout, "Enabled feature `%s` in config.toml.\n", opts.Feature)
+		} else {
+			fmt.Fprintf(stdout, "Disabled feature `%s` in config.toml.\n", opts.Feature)
+		}
 		if enabled && features.StageFor(opts.Feature) == features.StageUnderDevelopment && !underDevelopmentWarningSuppressed(root) {
 			fmt.Fprintf(stderr, "Under-development features enabled: %s. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in %s.\n",
 				opts.Feature, config.ConfigPath(auth.DefaultCodexHome()))
 		}
-		fmt.Fprintf(stdout, "%s feature %s\n", title(opts.Action), opts.Feature)
 		return nil
 	default:
 		return fmt.Errorf("unknown features subcommand %s", opts.Action)

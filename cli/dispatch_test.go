@@ -336,3 +336,21 @@ func TestDispatchPathsForProcessUsesAliasesAndLinuxFallback(t *testing.T) {
 		t.Fatalf("execve wrapper should not fallback without aliases: %q", withoutAliases.MainExecveWrapperExe)
 	}
 }
+
+// TestValidateArg0AliasHomeRefusesTempHomeLikeRust pins Rust's production-only
+// guard in prepare_path_entry_for_codex_aliases: a CODEX_HOME beneath the
+// system temp directory must fail before any helper directory is created.
+func TestValidateArg0AliasHomeRefusesTempHomeLikeRust(t *testing.T) {
+	if err := ValidateArg0AliasHome(t.TempDir()); err == nil {
+		t.Fatalf("ValidateArg0AliasHome(temp home) = nil, want refusal")
+	}
+	home := t.TempDir()
+	if err := ValidateArg0AliasHome(filepath.Join(home, "nested")); err == nil {
+		t.Fatalf("ValidateArg0AliasHome(nested temp home) = nil, want refusal")
+	}
+	// A sibling of the temp root is outside it and stays allowed.
+	allowed := filepath.Join(filepath.Dir(os.TempDir()), "codex-arg0-home-test")
+	if err := ValidateArg0AliasHome(allowed); err != nil {
+		t.Fatalf("ValidateArg0AliasHome(%q) = %v, want nil", allowed, err)
+	}
+}

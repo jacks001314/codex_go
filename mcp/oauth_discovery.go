@@ -575,6 +575,18 @@ func mcpOAuthProbeChallenge(ctx context.Context, client *http.Client, serverURL 
 	if response.Body != nil {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 1024))
 	}
+	// Rust (rmcp AuthorizationManager::resolve_metadata) classifies the initial
+	// probe before looking for a challenge: transient server-side failures are
+	// discovery errors, which surface as McpOAuthLoginSupport::Unknown so `mcp
+	// add` hints at a possible login, while 4xx answers mean "no authorization
+	// support" and stay silent.
+	if mcpOAuthProbeIsTransientFailure(response.StatusCode) {
+		return "", nil, &mcpOAuthMetadataHTTPStatusError{
+			URL:        strings.TrimSpace(serverURL),
+			StatusCode: response.StatusCode,
+			Status:     response.Status,
+		}
+	}
 	metadataURL := ""
 	var scopes []string
 	for _, challenge := range response.Header.Values("WWW-Authenticate") {
@@ -586,6 +598,16 @@ func mcpOAuthProbeChallenge(ctx context.Context, client *http.Client, serverURL 
 		}
 	}
 	return metadataURL, scopes, nil
+}
+
+// mcpOAuthProbeIsTransientFailure reports the statuses rmcp treats as a
+// transient OAuth discovery failure rather than a definitive "no OAuth support".
+func mcpOAuthProbeIsTransientFailure(statusCode int) bool {
+	switch statusCode {
+	case http.StatusRequestTimeout, http.StatusTooEarly, http.StatusTooManyRequests:
+		return true
+	}
+	return statusCode >= 500
 }
 
 func fetchMCPOAuthAuthorizationServerMetadata(ctx context.Context, client *http.Client, metadataURL string) (*oauthAuthorizationServerMetadata, bool, error) {

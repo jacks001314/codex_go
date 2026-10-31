@@ -75,6 +75,42 @@ func DispatchKind(argv0 string, argv1 string) string {
 	return ""
 }
 
+// ValidateArg0AliasHome mirrors Rust's production-only guard in
+// prepare_path_entry_for_codex_aliases: helpers must never be written beneath
+// the system temp directory, where another process could replace them.
+// Rust only enforces this outside debug builds, so the check lives here and is
+// invoked from the production entry point rather than from PrepareArg0Aliases.
+func ValidateArg0AliasHome(codexHome string) error {
+	home := strings.TrimSpace(codexHome)
+	if home == "" {
+		return nil
+	}
+	tempRoot := os.TempDir()
+	absoluteHome, err := filepath.Abs(home)
+	if err != nil {
+		return nil
+	}
+	absoluteTemp, err := filepath.Abs(tempRoot)
+	if err != nil {
+		return nil
+	}
+	relative, err := filepath.Rel(absoluteTemp, absoluteHome)
+	if err != nil {
+		return nil
+	}
+	if relative == "." || (relative != ".." && !strings.HasPrefix(relative, ".."+string(os.PathSeparator))) {
+		// Rust renders `std::env::temp_dir()` (which keeps its trailing
+		// separator) and `AbsolutePathBuf`'s Debug wrapper, so the warning text
+		// carries both details verbatim.
+		displayTemp := absoluteTemp
+		if !strings.HasSuffix(displayTemp, string(os.PathSeparator)) {
+			displayTemp += string(os.PathSeparator)
+		}
+		return fmt.Errorf("Refusing to create helper binaries under temporary dir %q (codex_home: AbsolutePathBuf(%q))", displayTemp, absoluteHome)
+	}
+	return nil
+}
+
 func PrepareArg0Aliases(codexHome string, currentExe string, existingPATH string) (*DispatchAliasGuard, error) {
 	codexHome = strings.TrimSpace(codexHome)
 	if codexHome == "" {

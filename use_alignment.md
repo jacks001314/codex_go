@@ -2420,8 +2420,74 @@ does not exist.
   `TestRemoveMarketplaceUnknownMatchesRust` /
   `TestRemoveMarketplaceDeletesGitCloneLikeRust` in `plugin`.
 
+### 77. `codex apply <TASK_ID>` fetches a task diff (plus features wording, login-status logging and MCP OAuth classification)
+
+`codex apply` took a patch body from stdin or a shell argument and ran the
+Go-only patch applier. Rust's `apply` takes a TASK_ID, resolves the task from the
+ChatGPT backend and applies the turn's `output_diff` with `git apply --3way`, so
+the command now follows that path and the Go-only one is gone.
+
+- **`apply` semantics.** The positional is `TASK_ID`; a second positional is
+  clap's `error: unexpected argument '<arg>' found` with
+  `Usage: codex apply [OPTIONS] <TASK_ID>` and rc 2. The command loads the
+  effective config with managed layers, resolves ChatGPT auth
+  (`Error: ChatGPT auth not available` and rc 1 when absent), requires the
+  chatgpt backend mode and a `ChatGPT-Account-ID` header
+  (`ChatGPT account ID not available, please re-run `codex login``), reads
+  `chatgpt_base_url` or the production default, validates it, then `GET`s
+  `/wham/tasks/<task-id>`. A missing diff turn prints `No diff turn found`, a
+  turn without the PR output item prints `No PR output item found`, a failed
+  apply prints Rust's `Git apply failed (applied=N, skipped=N, conflicts=N)`
+  block with stdout/stderr, and success prints `Successfully applied diff`.
+- **New `gitutils` package.** `ApplyPatch` writes the diff to a temporary file
+  and runs `git apply --3way` (pre-staging reverted paths), `ResolveGitRoot`
+  reports `not a git repository`, and `ParseGitApplyOutput` is now a faithful
+  port of `codex-git-utils`: captured paths are unquoted and C-unescaped, 4xx
+  style `error: patch failed` lines are *skipped* rather than conflicted, a
+  three-way merge failure is attributed to the last `Checking patch` path, and
+  the final precedence is conflicts > applied > skipped.
+- **New `chatgptapi.GetTask`.** `GET /wham/tasks/<id>` reuses the cloud client
+  and decodes `output_diff.diff` plus the turn status the apply path needs.
+- **`features enable/disable`.** Both now print Rust's
+  `Enabled feature `<name>` in config.toml.` / ``Disabled feature `<name>` in
+  config.toml.`` on stdout *before* the under-development warning on stderr.
+- **`login status` logging.** `codex login status` no longer installs the login
+  file logger, so a status check leaves no `log/codex-login.log`; it still
+  prints `Not logged in` on stderr with rc 1 when no credentials exist.
+- **arg0 helper guard.** The production entry point now refuses to create PATH
+  aliases when `CODEX_HOME` sits under the system temp directory, printing
+  Rust's `WARNING: proceeding, even though we could not create PATH aliases:
+  Refusing to create helper binaries under temporary dir "<temp>" (codex_home:
+  AbsolutePathBuf("<home>"))` and creating nothing; previously Go left an empty
+  `tmp/arg0-windows` directory behind.
+- **`mcp add --url` OAuth classification.** The initial probe's status decides
+  between `McpOAuthLoginSupport::Unsupported` and `::Unknown`: 4xx answers stay
+  silent, while 5xx/408/425/429 become discovery errors and print
+  `MCP server may or may not require login. Run `codex mcp login <name>` to
+  login.` Go treated every non-challenge response as "unsupported".
+- Evidence: `out/r68-sweep.txt` compares rc, stdout/stderr and the whole home
+  tree for 8 surfaces against 0.166 (5 identical); `out/r68-probe.txt` shows both
+  binaries agreeing on 6 probe statuses (200/401/404/405 silent, 500/503 hint).
+  `go test -vet=off ./cli ./gitutils ./chatgptapi ./mcp ./plugin ./state`
+  passes, and `./app` keeps only its two known baselines.
+- Regressions: `TestApplyRequiresTaskIDLikeRust`,
+  `TestParseApplyRejectsExtraArgumentsLikeRust`, `TestApplyWithoutAuthMatchesRust`,
+  `TestFeaturesEnableDisablePrintRustMessages`, `TestLoginStatusLeavesNoLogFile`,
+  `TestApplyPatchAppliesDiffInRepository` / `TestParseGitApplyOutputLikeRust` in
+  `gitutils`, `TestGetTaskFetchesOutputDiff` in `chatgptapi`,
+  `TestValidateArg0AliasHomeRefusesTempHomeLikeRust` in `cli`, and
+  `TestDiscoverStreamableHTTPOAuthClassifiesProbeStatusLikeRust` in `mcp`.
+
 ## Verification
 
+- Round 64 replaces the Go-only stdin `apply` with Rust's task-diff flow and
+  aligns the `features enable/disable` wording, `login status` logging, the arg0
+  temp-home guard and the `mcp add --url` OAuth classification (entry 77):
+  `out/r68-sweep.txt` compares rc, stdout/stderr and the home tree for 8
+  surfaces (5 byte-identical), `out/r68-probe.txt` shows both binaries
+  classifying six probe statuses identically, and
+  `go test -vet=off ./cli ./gitutils ./chatgptapi ./mcp ./plugin ./state` passes
+  while `./app` keeps only its two known baselines.
 - Round 63 aligns the hidden `debug` help pages, clap's group-first subcommand
   resolution and the marketplace listing/removal paths (entry 76): 22 of 24
   swept command surfaces match 0.166 byte for byte (`out/r67-sweep.txt`), with
@@ -2956,6 +3022,17 @@ does not exist.
   ./cmd/... ./tcptunnel` passes.
 ## Still open
 
+- `mcp add --url https://example.com/mcp` still differs in this sandbox: Rust's
+  TLS stack rejects the intercepted certificate, so its discovery fails and the
+  login hint prints, while Go's system store trusts the chain, reaches the CDN's
+  404 and stays silent. The classification itself now matches
+  (`out/r68-probe.txt`), so this is a certificate/transport difference rather
+  than command behaviour.
+- `login status` leaves Go's home tree empty while 0.166 writes its own
+  `tmp/arg0-windows/codex-arg0*/apply_patch.bat` helpers. Those files belong to
+  the Rust binary's dispatch layer and are created before the CLI parses
+  arguments, so Go does not mirror them; Go's equivalents are only produced by
+  its production entry point and refuse a temp-dir `CODEX_HOME` like Rust.
 - `execpolicy check` still answers a syntactically invalid rules file with
   Go's parser text where Rust prints `failed to parse policy at <p>` chained to
   `starlark error: error: Parse error: ...` with a source snippet and caret;

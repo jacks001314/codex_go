@@ -1458,3 +1458,53 @@ func writeJSON(t *testing.T, w http.ResponseWriter, value any) {
 		t.Fatalf("Encode() error = %v", err)
 	}
 }
+
+// TestDiscoverStreamableHTTPOAuthClassifiesProbeStatusLikeRust pins the
+// classification observed from Rust's `codex mcp add --url` (rmcp
+// AuthorizationManager::resolve_metadata): 4xx answers mean the resource has no
+// authorization support, while transient server-side failures must stay
+// discovery errors so `mcp add` prints the "may or may not require login" hint.
+func TestDiscoverStreamableHTTPOAuthClassifiesProbeStatusLikeRust(t *testing.T) {
+	cases := []struct {
+		status      int
+		wantUnknown bool
+	}{
+		{status: http.StatusOK},
+		{status: http.StatusUnauthorized},
+		{status: http.StatusForbidden},
+		{status: http.StatusNotFound},
+		{status: http.StatusMethodNotAllowed},
+		{status: http.StatusRequestTimeout, wantUnknown: true},
+		{status: http.StatusTooEarly, wantUnknown: true},
+		{status: http.StatusTooManyRequests, wantUnknown: true},
+		{status: http.StatusInternalServerError, wantUnknown: true},
+		{status: http.StatusBadGateway, wantUnknown: true},
+		{status: http.StatusServiceUnavailable, wantUnknown: true},
+	}
+	for _, testCase := range cases {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/mcp" {
+				http.NotFound(w, r)
+				return
+			}
+			w.WriteHeader(testCase.status)
+		}))
+		discovery, err := DiscoverStreamableHTTPOAuth(context.Background(), server.URL+"/mcp", server.Client())
+		server.Close()
+		if testCase.wantUnknown {
+			if err == nil {
+				t.Fatalf("status %d: error = nil, want discovery failure", testCase.status)
+			}
+			if discovery != nil {
+				t.Fatalf("status %d: discovery = %#v, want nil", testCase.status, discovery)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("status %d: error = %v, want no support", testCase.status, err)
+		}
+		if discovery != nil {
+			t.Fatalf("status %d: discovery = %#v, want nil", testCase.status, discovery)
+		}
+	}
+}

@@ -34,7 +34,7 @@ func TestRustSubcommandSurfaceParity(t *testing.T) {
 		{name: "sandbox", args: []string{"sandbox", "--", "echo"}, want: CommandSandbox},
 		{name: "debug", args: []string{"debug", "models"}, want: CommandDebug},
 		{name: "execpolicy", args: []string{"execpolicy", "check", "--rules", "policy.rules", "echo"}, want: CommandExecpolicy},
-		{name: "apply", args: []string{"apply", "*** Begin Patch\n*** End Patch"}, want: CommandApply},
+		{name: "apply", args: []string{"apply", "task-abc"}, want: CommandApply},
 		{name: "resume", args: []string{"resume", "--last"}, want: CommandResume},
 		{name: "archive", args: []string{"archive", "thread-1"}, want: CommandArchive},
 		{name: "delete", args: []string{"delete", "thread-1"}, want: CommandDelete},
@@ -215,7 +215,7 @@ func TestRustSubcommandAliasParity(t *testing.T) {
 		want  Command
 	}{
 		{alias: "e", args: []string{"e", "hello"}, want: CommandExec},
-		{alias: "a", args: []string{"a", "*** Begin Patch\n*** End Patch"}, want: CommandApply},
+		{alias: "a", args: []string{"a", "task-abc"}, want: CommandApply},
 		{alias: "cloud-tasks", args: []string{"cloud-tasks", "status", "task-1"}, want: CommandCloud},
 	}
 
@@ -1464,20 +1464,19 @@ func TestParseExecpolicyCheckHyphenCommandBeforeRulesConsumesTrailingArgs(t *tes
 	}
 }
 
-func TestParseApplyAcceptsSinglePatchArgument(t *testing.T) {
-	patch := "*** Begin Patch\n*** End Patch"
-	parsed, err := Parse([]string{"apply", patch})
+func TestParseApplyAcceptsTaskID(t *testing.T) {
+	parsed, err := Parse([]string{"apply", "task-abc"})
 	if err != nil {
 		t.Fatalf("Parse returned error: %v", err)
 	}
-	if parsed.Command != CommandApply || parsed.Apply.Patch != patch {
+	if parsed.Command != CommandApply || parsed.Apply.TaskID != "task-abc" {
 		t.Fatalf("parsed = %#v", parsed)
 	}
 }
 
-func TestParseApplyRejectsExtraPatchArguments(t *testing.T) {
-	_, err := Parse([]string{"apply", "patch-one", "patch-two"})
-	if err == nil || err.Error() != "apply accepts at most one PATCH" {
+func TestParseApplyRejectsExtraArgumentsLikeRust(t *testing.T) {
+	_, err := Parse([]string{"apply", "task-one", "task-two"})
+	if err == nil || err.Error() != "unexpected argument 'task-two' found" {
 		t.Fatalf("Parse error = %v", err)
 	}
 }
