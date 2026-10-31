@@ -779,7 +779,7 @@ func TestParseDebugTooling(t *testing.T) {
 
 func TestParseDebugRejectsUnknownSubcommandLikeRust(t *testing.T) {
 	_, err := Parse([]string{"debug", "unknown-tool"})
-	if err == nil || err.Error() != "unknown debug subcommand unknown-tool" {
+	if err == nil || err.Error() != "unrecognized subcommand 'unknown-tool'" {
 		t.Fatalf("Parse error = %v", err)
 	}
 }
@@ -910,7 +910,7 @@ func TestParseExecFork(t *testing.T) {
 		t.Fatalf("exec fork --worktree = %#v", worktreeFork.Exec)
 	}
 
-	if _, err := Parse([]string{"exec", "fork"}); err == nil || err.Error() != "exec fork requires SESSION_ID" {
+	if _, err := Parse([]string{"exec", "fork"}); err == nil || !strings.Contains(err.Error(), "the following required arguments were not provided:\n  <SESSION_ID>") {
 		t.Fatalf("missing session error = %v", err)
 	}
 }
@@ -986,7 +986,8 @@ func TestParseArchiveAndDelete(t *testing.T) {
 	}
 
 	_, err = Parse([]string{"delete", "--force", "--name", "Thread One"})
-	if err == nil || !strings.Contains(err.Error(), "unknown delete option --name") {
+	// clap also suggests a similar flag for --name; Go only reports the flag.
+	if err == nil || !strings.Contains(err.Error(), "unexpected argument '--name' found") {
 		t.Fatalf("name force delete error = %v", err)
 	}
 }
@@ -1016,7 +1017,7 @@ func TestParseSessionMutationRejectsTUIOnlyFlagsLikeRust(t *testing.T) {
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			_, err := Parse(args)
-			if err == nil || !strings.Contains(err.Error(), "unknown") {
+			if err == nil || !strings.Contains(err.Error(), "unexpected argument") {
 				t.Fatalf("Parse(%v) error = %v", args, err)
 			}
 		})
@@ -1086,7 +1087,7 @@ func TestParseSessionMutationRequiresTarget(t *testing.T) {
 	if err == nil {
 		t.Fatal("Parse returned nil error, want failure")
 	}
-	if !strings.Contains(err.Error(), "requires SESSION") {
+	if !strings.Contains(err.Error(), "the following required arguments were not provided:\n  <SESSION>") {
 		t.Fatalf("error = %q", err.Error())
 	}
 }
@@ -1254,11 +1255,11 @@ func TestParseSandbox(t *testing.T) {
 		}
 	} else {
 		_, err := Parse([]string{"sandbox", "--allow-unix-socket=run/codex.sock", "--", "echo"})
-		if err == nil || !strings.Contains(err.Error(), "unknown sandbox option --allow-unix-socket") {
+		if err == nil || !strings.Contains(err.Error(), "unexpected argument '--allow-unix-socket' found") {
 			t.Fatalf("allow unix socket error = %v", err)
 		}
 		_, err = Parse([]string{"sandbox", "--log-denials", "--", "echo"})
-		if err == nil || !strings.Contains(err.Error(), "unknown sandbox option --log-denials") {
+		if err == nil || !strings.Contains(err.Error(), "unexpected argument '--log-denials' found") {
 			t.Fatalf("log denials error = %v", err)
 		}
 	}
@@ -1361,9 +1362,9 @@ func TestParseSandboxSetupRejectsMissingRequiredFlags(t *testing.T) {
 		args []string
 		want string
 	}{
-		{name: "missing user", args: []string{"sandbox", "setup", "--elevated"}, want: "--user or --current-user is required"},
-		{name: "missing codex home", args: []string{"sandbox", "setup", "--elevated", "--user", `DOMAIN\alice`}, want: "--codex-home is required with --user"},
-		{name: "user conflict", args: []string{"sandbox", "setup", "--elevated", "--current-user", "--user", `DOMAIN\alice`, "--codex-home", `C:\Users\alice\.gcode`}, want: "--user conflicts with --current-user"},
+		{name: "missing user", args: []string{"sandbox", "setup", "--elevated"}, want: "error: the following required arguments were not provided:\n  <--user <USER>|--current-user>\n\nUsage: setup --elevated <--user <USER>|--current-user>\n\nFor more information, try '--help'.\n"},
+		{name: "missing codex home", args: []string{"sandbox", "setup", "--elevated", "--user", `DOMAIN\alice`}, want: "error: the following required arguments were not provided:\n  --codex-home <DIR>\n\nUsage: setup --codex-home <DIR> --elevated <--user <USER>|--current-user>\n\nFor more information, try '--help'.\n"},
+		{name: "user conflict", args: []string{"sandbox", "setup", "--elevated", "--current-user", "--user", `DOMAIN\alice`, "--codex-home", `C:\Users\alice\.gcode`}, want: "error: the argument '--current-user' cannot be used with '--user <USER>'\n\nUsage: setup --elevated --codex-home <DIR> <--user <USER>|--current-user>\n\nFor more information, try '--help'.\n"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1463,7 +1464,7 @@ func TestParseCloudCommands(t *testing.T) {
 
 func TestParseCloudStatusRejectsExtrasInOrder(t *testing.T) {
 	_, err := Parse([]string{"cloud", "status", "--json", "task-1"})
-	if err == nil || err.Error() != "unknown cloud status option --json" {
+	if err == nil || err.Error() != "unexpected argument '--json' found\n\n  tip: to pass '--json' as a value, use '-- --json'" {
 		t.Fatalf("cloud status option error = %v", err)
 	}
 	_, err = Parse([]string{"cloud", "status", "task-1", "task-2"})
@@ -1761,7 +1762,7 @@ func TestParseAppServerWebSocketAuthFlags(t *testing.T) {
 	}
 
 	_, err = Parse([]string{"app-server", "--allow-unauthenticated-non-loopback-ws"})
-	if err == nil || !strings.Contains(err.Error(), "unknown app-server option --allow-unauthenticated-non-loopback-ws") {
+	if err == nil || !strings.Contains(err.Error(), "unexpected argument '--allow-unauthenticated-non-loopback-ws' found") {
 		t.Fatalf("Parse removed insecure non-loopback flag error = %v", err)
 	}
 }
@@ -1870,7 +1871,7 @@ func TestParseUpdate(t *testing.T) {
 	}
 
 	_, err = Parse([]string{"update", "--json"})
-	if err == nil || !strings.Contains(err.Error(), "unknown update option --json") {
+	if err == nil || !strings.Contains(err.Error(), "unexpected argument '--json' found") {
 		t.Fatalf("Parse update --json error = %v", err)
 	}
 }
@@ -1903,7 +1904,7 @@ func TestParseMigrateRolloutsCommandLikeRust(t *testing.T) {
 	if _, err := Parse([]string{"migrate-rollouts", "--max-mib-per-second", "0"}); err == nil {
 		t.Fatal("Parse accepted zero max-mib-per-second")
 	}
-	if _, err := Parse([]string{"migrate-rollouts", "--bogus"}); err == nil || !strings.Contains(err.Error(), "unknown migrate-rollouts option") {
+	if _, err := Parse([]string{"migrate-rollouts", "--bogus"}); err == nil || !strings.Contains(err.Error(), "unexpected argument '--bogus' found") {
 		t.Fatalf("Parse unknown option error = %v", err)
 	}
 }

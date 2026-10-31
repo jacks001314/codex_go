@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -882,8 +883,14 @@ func TestDesktopAppCommandOutput(t *testing.T) {
 }
 
 func TestUpdateCommandRejectsJSONFlag(t *testing.T) {
-	err := Run(context.Background(), []string{"update", "--json"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
-	if err == nil || !strings.Contains(err.Error(), "unknown update option --json") {
-		t.Fatalf("update --json error = %v", err)
+	var stderr bytes.Buffer
+	err := Run(context.Background(), []string{"update", "--json"}, strings.NewReader(""), &bytes.Buffer{}, &stderr)
+	var exitErr *ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Fatalf("update --json error = %v, want clap diagnostic with exit status 2", err)
+	}
+	if !strings.Contains(stderr.String(), "error: unexpected argument '--json' found") ||
+		!strings.Contains(stderr.String(), "Usage: codex update [OPTIONS]") {
+		t.Fatalf("update --json stderr = %q", stderr.String())
 	}
 }

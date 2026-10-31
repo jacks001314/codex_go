@@ -854,13 +854,19 @@ func TestDebugPromptInput(t *testing.T) {
 }
 
 func TestDebugUnknownSubcommandDoesNotExposeGoPortMessage(t *testing.T) {
-	var stdout bytes.Buffer
-	err := Run(context.Background(), []string{"debug", "unknown-tool"}, strings.NewReader(""), &stdout, &bytes.Buffer{})
-	if err == nil || err.Error() != "unknown debug subcommand unknown-tool" {
-		t.Fatalf("debug unknown error = %v", err)
+	var stdout, stderr bytes.Buffer
+	err := Run(context.Background(), []string{"debug", "unknown-tool"}, strings.NewReader(""), &stdout, &stderr)
+	var exitErr *ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Fatalf("debug unknown error = %v, want clap diagnostic with exit status 2", err)
 	}
-	if strings.Contains(err.Error(), "not implemented") || strings.Contains(err.Error(), "Go port") {
-		t.Fatalf("debug unknown exposed stale wording: %v", err)
+	diagnostic := stderr.String()
+	if !strings.Contains(diagnostic, "error: unrecognized subcommand 'unknown-tool'") ||
+		!strings.Contains(diagnostic, "Usage: codex debug [OPTIONS] <COMMAND>") {
+		t.Fatalf("debug unknown stderr = %q", diagnostic)
+	}
+	if strings.Contains(diagnostic, "not implemented") || strings.Contains(diagnostic, "Go port") {
+		t.Fatalf("debug unknown exposed stale wording: %q", diagnostic)
 	}
 }
 

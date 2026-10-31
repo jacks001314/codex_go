@@ -36,7 +36,7 @@ func TestStandaloneRejectsUnknownOptionBeforeStartup(t *testing.T) {
 	if stdout.Len() != 0 {
 		t.Fatalf("stdout = %q", stdout.String())
 	}
-	if !strings.Contains(stderr.String(), "unknown exec-server option") {
+	if !strings.Contains(stderr.String(), "unexpected argument '--unknown' found") {
 		t.Fatalf("stderr = %q", stderr.String())
 	}
 }

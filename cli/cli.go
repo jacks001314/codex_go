@@ -248,6 +248,11 @@ type SandboxOptions struct {
 	LogDenials            bool
 	ConfigOverrides       []string
 	Command               []string
+
+	// setupUserFirst records that `--user` was supplied before
+	// `--current-user`, so the nested setup parser names the arguments in
+	// clap's order when it reports the conflict.
+	setupUserFirst bool
 }
 
 type ExecpolicyOptions struct {
@@ -1408,7 +1413,7 @@ func parseExecFork(args []string, exec *ExecOptions) error {
 		}
 	}
 	if len(positionals) == 0 {
-		return errors.New("exec fork requires SESSION_ID")
+		return missingRequiredArgumentsError("exec fork", "<SESSION_ID>")
 	}
 	if len(positionals) > 2 {
 		return unexpectedPositionalError(positionals[2], execForkUsageText)
@@ -1474,9 +1479,9 @@ func parseLogin(args []string, login *LoginOptions) error {
 		case arg == "status":
 			login.Action = "status"
 		case strings.HasPrefix(arg, "-"):
-			return fmt.Errorf("unknown login option %s", arg)
+			return unexpectedSubcommandArgumentError("login", arg)
 		default:
-			return fmt.Errorf("unknown login action %s", arg)
+			return unrecognizedSubcommandWithSuggestion(arg, subcommandUsageTexts["login"].usage, subcommandCandidates["login"])
 		}
 	}
 	return nil
@@ -1561,7 +1566,7 @@ func parseReview(args []string, review *ReviewOptions, exec *ExecOptions) error 
 			if exec != nil {
 				return unexpectedArgumentError(arg, execReviewUsageText)
 			}
-			return fmt.Errorf("unknown review option %s", arg)
+			return unexpectedSubcommandArgumentError("review", arg)
 		default:
 			if review.Uncommitted || review.Base != "" || review.Commit != "" {
 				return errors.New("PROMPT conflicts with --uncommitted, --base, and --commit")
@@ -1598,7 +1603,7 @@ func parseLogout(args []string, login *LoginOptions) error {
 		case strings.HasPrefix(arg, "-c"):
 			login.ConfigOverrides = append(login.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
 		default:
-			return fmt.Errorf("unknown logout option %s", arg)
+			return unexpectedSubcommandArgumentError("logout", arg)
 		}
 	}
 	return nil
@@ -1612,15 +1617,21 @@ func parseFeatures(args []string, features *FeatureOptions) error {
 	switch features.Action {
 	case "list":
 		if len(args) != 1 {
-			return errors.New("features list does not accept arguments")
+			return unexpectedSubcommandArgumentError("features list", args[1])
 		}
 	case "enable", "disable":
-		if len(args) != 2 {
-			return fmt.Errorf("features %s requires FEATURE", features.Action)
+		if len(args) == 1 {
+			return missingRequiredArgumentsError("features "+features.Action, "<FEATURE>")
+		}
+		if len(args) > 2 {
+			return unexpectedArgumentWithoutTip(args[2], subcommandUsageTexts["features "+features.Action].usage)
+		}
+		if args[1] != "-" && strings.HasPrefix(args[1], "-") {
+			return unexpectedSubcommandArgumentError("features "+features.Action, args[1])
 		}
 		features.Feature = args[1]
 	default:
-		return fmt.Errorf("unknown features subcommand %s", features.Action)
+		return unrecognizedSubcommandForGroup("features", features.Action)
 	}
 	return nil
 }
@@ -1652,9 +1663,9 @@ func parseMCP(args []string, mcp *MCPOptions) error {
 			case strings.HasPrefix(arg, "-c"):
 				mcp.ConfigOverrides = append(mcp.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
 			case strings.HasPrefix(arg, "-"):
-				return fmt.Errorf("unknown mcp list option %s", arg)
+				return unexpectedSubcommandArgumentError("mcp list", arg)
 			default:
-				return fmt.Errorf("mcp list does not accept argument %s", arg)
+				return unexpectedSubcommandArgumentError("mcp list", arg)
 			}
 		}
 	case "get":
@@ -1675,7 +1686,7 @@ func parseMCP(args []string, mcp *MCPOptions) error {
 			case strings.HasPrefix(arg, "-c"):
 				mcp.ConfigOverrides = append(mcp.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
 			case strings.HasPrefix(arg, "-"):
-				return fmt.Errorf("unknown mcp get option %s", arg)
+				return unexpectedSubcommandArgumentError("mcp get", arg)
 			default:
 				if mcp.Name != "" {
 					return errors.New("mcp get accepts exactly one NAME")
@@ -1684,18 +1695,19 @@ func parseMCP(args []string, mcp *MCPOptions) error {
 			}
 		}
 		if mcp.Name == "" {
-			return errors.New("mcp get requires NAME")
+			return missingRequiredArgumentsError("mcp get", "<NAME>")
 		}
 	case "add":
-		if len(args) < 2 {
-			return errors.New("mcp add requires NAME")
-		}
-		mcp.Name = args[1]
-		for i := 2; i < len(args); i++ {
+		for i := 1; i < len(args); i++ {
 			arg := args[i]
 			switch {
 			case arg == "--":
-				mcp.Command = append(mcp.Command, args[i+1:]...)
+				rest := args[i+1:]
+				if len(rest) > 0 && mcp.Name == "" {
+					mcp.Name = rest[0]
+					rest = rest[1:]
+				}
+				mcp.Command = append(mcp.Command, rest...)
 				i = len(args)
 			case arg == "--url":
 				value, next, err := requireValue(args, i, arg)
@@ -1707,6 +1719,9 @@ func parseMCP(args []string, mcp *MCPOptions) error {
 			case strings.HasPrefix(arg, "--url="):
 				mcp.URL = strings.TrimPrefix(arg, "--url=")
 			case arg == "--env":
+				if i+1 >= len(args) {
+					return &UsageError{Message: "a value is required for '--env <KEY=VALUE>' but none was supplied"}
+				}
 				value, next, err := requireValue(args, i, arg)
 				if err != nil {
 					return err
@@ -1770,12 +1785,26 @@ func parseMCP(args []string, mcp *MCPOptions) error {
 				mcp.ConfigOverrides = append(mcp.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
 			case strings.HasPrefix(arg, "-c"):
 				mcp.ConfigOverrides = append(mcp.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
-			case strings.HasPrefix(arg, "-"):
-				return fmt.Errorf("unknown mcp add option %s", arg)
+			case strings.HasPrefix(arg, "-") && arg != "-":
+				return unexpectedSubcommandArgumentError("mcp add", arg)
 			default:
+				if mcp.Name == "" {
+					mcp.Name = arg
+					continue
+				}
 				mcp.Command = append(mcp.Command, args[i:]...)
 				i = len(args)
 			}
+		}
+		if mcp.Name == "" || (mcp.URL == "" && len(mcp.Command) == 0) {
+			var missing []string
+			if mcp.URL == "" && len(mcp.Command) == 0 {
+				missing = append(missing, "<COMMAND|--url <URL>>")
+			}
+			if mcp.Name == "" {
+				missing = append(missing, "<NAME>")
+			}
+			return missingRequiredArgumentsError("mcp add", missing...)
 		}
 		if mcp.URL != "" && len(mcp.Command) > 0 {
 			return errors.New("mcp add accepts either --url or COMMAND, not both")
@@ -1798,9 +1827,6 @@ func parseMCP(args []string, mcp *MCPOptions) error {
 		if mcp.URL == "" && mcp.OAuthResource != "" {
 			return errors.New("mcp add --oauth-resource requires --url")
 		}
-		if mcp.URL == "" && len(mcp.Command) == 0 {
-			return errors.New("mcp add requires --url URL or COMMAND")
-		}
 	case "remove", "logout":
 		for i := 1; i < len(args); i++ {
 			arg := args[i]
@@ -1817,7 +1843,7 @@ func parseMCP(args []string, mcp *MCPOptions) error {
 			case strings.HasPrefix(arg, "-c"):
 				mcp.ConfigOverrides = append(mcp.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
 			case strings.HasPrefix(arg, "-"):
-				return fmt.Errorf("unknown mcp %s option %s", mcp.Action, arg)
+				return unexpectedSubcommandArgumentError("mcp "+mcp.Action, arg)
 			default:
 				if mcp.Name != "" {
 					return fmt.Errorf("mcp %s accepts exactly one NAME", mcp.Action)
@@ -1826,7 +1852,7 @@ func parseMCP(args []string, mcp *MCPOptions) error {
 			}
 		}
 		if mcp.Name == "" {
-			return fmt.Errorf("mcp %s requires NAME", mcp.Action)
+			return missingRequiredArgumentsError("mcp "+mcp.Action, "<NAME>")
 		}
 	case "login":
 		for i := 1; i < len(args); i++ {
@@ -1855,7 +1881,7 @@ func parseMCP(args []string, mcp *MCPOptions) error {
 			case strings.HasPrefix(arg, "-c"):
 				mcp.ConfigOverrides = append(mcp.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
 			case strings.HasPrefix(arg, "-"):
-				return fmt.Errorf("unknown mcp login option %s", arg)
+				return unexpectedSubcommandArgumentError("mcp login", arg)
 			default:
 				if mcp.Name != "" {
 					return errors.New("mcp login accepts exactly one NAME")
@@ -1864,10 +1890,10 @@ func parseMCP(args []string, mcp *MCPOptions) error {
 			}
 		}
 		if mcp.Name == "" {
-			return errors.New("mcp login requires NAME")
+			return missingRequiredArgumentsError("mcp login", "<NAME>")
 		}
 	default:
-		return fmt.Errorf("unknown mcp subcommand %s", mcp.Action)
+		return unrecognizedSubcommandForGroup("mcp", mcp.Action)
 	}
 	return nil
 }
@@ -1907,7 +1933,7 @@ func parsePlugin(args []string, plugin *PluginOptions) error {
 			case strings.HasPrefix(arg, "-c"):
 				plugin.ConfigOverrides = append(plugin.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
 			case strings.HasPrefix(arg, "-"):
-				return fmt.Errorf("unknown plugin %s option %s", plugin.Action, arg)
+				return unexpectedSubcommandArgumentError("plugin "+plugin.Action, arg)
 			default:
 				if plugin.Plugin != "" {
 					return fmt.Errorf("plugin %s accepts exactly one PLUGIN", plugin.Action)
@@ -1949,9 +1975,9 @@ func parsePlugin(args []string, plugin *PluginOptions) error {
 			case strings.HasPrefix(arg, "-c"):
 				plugin.ConfigOverrides = append(plugin.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
 			case strings.HasPrefix(arg, "-"):
-				return fmt.Errorf("unknown plugin list option %s", arg)
+				return unexpectedSubcommandArgumentError("plugin list", arg)
 			default:
-				return fmt.Errorf("plugin list does not accept argument %s", arg)
+				return unexpectedSubcommandArgumentError("plugin list", arg)
 			}
 		}
 		if plugin.Available && !plugin.JSON {
@@ -1960,7 +1986,7 @@ func parsePlugin(args []string, plugin *PluginOptions) error {
 	case "marketplace":
 		return parsePluginMarketplace(args[1:], &plugin.Marketplace)
 	default:
-		return fmt.Errorf("unknown plugin subcommand %s", plugin.Action)
+		return unrecognizedSubcommandForGroup("plugin", plugin.Action)
 	}
 	return nil
 }
@@ -2007,7 +2033,7 @@ func parsePluginMarketplace(args []string, marketplace *PluginMarketplaceOptions
 			case strings.HasPrefix(arg, "-c"):
 				marketplace.ConfigOverrides = append(marketplace.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
 			case strings.HasPrefix(arg, "-"):
-				return fmt.Errorf("unknown plugin marketplace add option %s", arg)
+				return unexpectedSubcommandArgumentError("plugin marketplace add", arg)
 			default:
 				if marketplace.Source != "" {
 					return errors.New("plugin marketplace add accepts exactly one SOURCE")
@@ -2016,7 +2042,7 @@ func parsePluginMarketplace(args []string, marketplace *PluginMarketplaceOptions
 			}
 		}
 		if marketplace.Source == "" {
-			return errors.New("plugin marketplace add requires SOURCE")
+			return missingRequiredArgumentsError("plugin marketplace add", "<SOURCE>")
 		}
 	case "list":
 		for i := 1; i < len(args); i++ {
@@ -2036,9 +2062,9 @@ func parsePluginMarketplace(args []string, marketplace *PluginMarketplaceOptions
 			case strings.HasPrefix(arg, "-c"):
 				marketplace.ConfigOverrides = append(marketplace.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
 			case strings.HasPrefix(arg, "-"):
-				return fmt.Errorf("unknown plugin marketplace list option %s", arg)
+				return unexpectedSubcommandArgumentError("plugin marketplace list", arg)
 			default:
-				return fmt.Errorf("plugin marketplace list does not accept argument %s", arg)
+				return unexpectedSubcommandArgumentError("plugin marketplace list", arg)
 			}
 		}
 	case "upgrade":
@@ -2059,7 +2085,7 @@ func parsePluginMarketplace(args []string, marketplace *PluginMarketplaceOptions
 			case strings.HasPrefix(arg, "-c"):
 				marketplace.ConfigOverrides = append(marketplace.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
 			case strings.HasPrefix(arg, "-"):
-				return fmt.Errorf("unknown plugin marketplace upgrade option %s", arg)
+				return unexpectedSubcommandArgumentError("plugin marketplace upgrade", arg)
 			default:
 				if marketplace.Name != "" {
 					return errors.New("plugin marketplace upgrade accepts at most one MARKETPLACE_NAME")
@@ -2085,7 +2111,7 @@ func parsePluginMarketplace(args []string, marketplace *PluginMarketplaceOptions
 			case strings.HasPrefix(arg, "-c"):
 				marketplace.ConfigOverrides = append(marketplace.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
 			case strings.HasPrefix(arg, "-"):
-				return fmt.Errorf("unknown plugin marketplace remove option %s", arg)
+				return unexpectedSubcommandArgumentError("plugin marketplace remove", arg)
 			default:
 				if marketplace.Name != "" {
 					return errors.New("plugin marketplace remove accepts exactly one MARKETPLACE_NAME")
@@ -2094,10 +2120,10 @@ func parsePluginMarketplace(args []string, marketplace *PluginMarketplaceOptions
 			}
 		}
 		if marketplace.Name == "" {
-			return errors.New("plugin marketplace remove requires MARKETPLACE_NAME")
+			return missingRequiredArgumentsError("plugin marketplace remove", "<MARKETPLACE_NAME>")
 		}
 	default:
-		return fmt.Errorf("unknown plugin marketplace subcommand %s", marketplace.Action)
+		return unrecognizedSubcommandForGroup("plugin marketplace", marketplace.Action)
 	}
 	return nil
 }
@@ -2130,17 +2156,32 @@ func parseSandbox(args []string, sandbox *SandboxOptions) error {
 			case arg == "--elevated":
 				sandbox.Elevated = true
 			case arg == "--current-user":
+				if strings.TrimSpace(sandbox.User) == "" {
+					sandbox.setupUserFirst = false
+				}
 				sandbox.CurrentUser = true
 			case arg == "--user":
+				if i+1 >= len(args) {
+					return sandboxSetupMissingValueError("--user <USER>")
+				}
 				value, next, err := requireValue(args, i, arg)
 				if err != nil {
 					return err
 				}
 				sandbox.User = value
+				if !sandbox.CurrentUser {
+					sandbox.setupUserFirst = true
+				}
 				i = next
 			case strings.HasPrefix(arg, "--user="):
 				sandbox.User = strings.TrimPrefix(arg, "--user=")
+				if !sandbox.CurrentUser {
+					sandbox.setupUserFirst = true
+				}
 			case arg == "--codex-home":
+				if i+1 >= len(args) {
+					return sandboxSetupMissingValueError("--codex-home <DIR>")
+				}
 				value, next, err := requireValue(args, i, arg)
 				if err != nil {
 					return err
@@ -2150,10 +2191,7 @@ func parseSandbox(args []string, sandbox *SandboxOptions) error {
 			case strings.HasPrefix(arg, "--codex-home="):
 				sandbox.CodexHome = strings.TrimPrefix(arg, "--codex-home=")
 			default:
-				if strings.HasPrefix(arg, "-") {
-					return fmt.Errorf("unknown sandbox setup option %s", arg)
-				}
-				return fmt.Errorf("sandbox setup does not accept argument %s", arg)
+				return sandboxSetupArgumentError(sandbox, arg)
 			}
 		}
 		return validateSandboxSetupParseDependencies(sandbox)
@@ -2182,6 +2220,9 @@ func parseSandbox(args []string, sandbox *SandboxOptions) error {
 		case strings.HasPrefix(arg, "-P") && arg != "-P":
 			sandbox.PermissionProfile = strings.TrimPrefix(arg, "-P")
 		case arg == "--profile" || arg == "-p":
+			if i+1 >= len(args) {
+				return &UsageError{Message: "a value is required for '--profile <CONFIG_PROFILE>' but none was supplied"}
+			}
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
 				return err
@@ -2237,7 +2278,7 @@ func parseSandbox(args []string, sandbox *SandboxOptions) error {
 			sandbox.SandboxDisableNetwork = true
 		case arg == "--allow-unix-socket":
 			if runtime.GOOS != "darwin" {
-				return fmt.Errorf("unknown sandbox option %s", arg)
+				return unexpectedSubcommandArgumentError("sandbox", arg)
 			}
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
@@ -2251,7 +2292,7 @@ func parseSandbox(args []string, sandbox *SandboxOptions) error {
 			i = next
 		case strings.HasPrefix(arg, "--allow-unix-socket="):
 			if runtime.GOOS != "darwin" {
-				return fmt.Errorf("unknown sandbox option %s", arg)
+				return unexpectedSubcommandArgumentError("sandbox", arg)
 			}
 			path, err := absoluteCLIPath(strings.TrimPrefix(arg, "--allow-unix-socket="))
 			if err != nil {
@@ -2260,7 +2301,7 @@ func parseSandbox(args []string, sandbox *SandboxOptions) error {
 			sandbox.AllowUnixSockets = append(sandbox.AllowUnixSockets, path)
 		case arg == "--log-denials":
 			if runtime.GOOS != "darwin" {
-				return fmt.Errorf("unknown sandbox option %s", arg)
+				return unexpectedSubcommandArgumentError("sandbox", arg)
 			}
 			sandbox.LogDenials = true
 		case arg == "-c" || arg == "--config":
@@ -2275,7 +2316,7 @@ func parseSandbox(args []string, sandbox *SandboxOptions) error {
 		case strings.HasPrefix(arg, "-c"):
 			sandbox.ConfigOverrides = append(sandbox.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
 		case strings.HasPrefix(arg, "-"):
-			return fmt.Errorf("unknown sandbox option %s", arg)
+			return unexpectedSubcommandArgumentError("sandbox", arg)
 		default:
 			sandbox.Command = append(sandbox.Command, args[i:]...)
 			return validate()
@@ -2335,13 +2376,16 @@ func validateSandboxSetupParseDependencies(sandbox *SandboxOptions) error {
 		return nil
 	}
 	if sandbox.CurrentUser && strings.TrimSpace(sandbox.User) != "" {
-		return errors.New("--user conflicts with --current-user")
+		if sandbox.setupUserFirst {
+			return sandboxSetupConflictError("--user <USER>", "--current-user", sandbox)
+		}
+		return sandboxSetupConflictError("--current-user", "--user <USER>", sandbox)
 	}
 	if !sandbox.CurrentUser && strings.TrimSpace(sandbox.User) == "" {
-		return errors.New("--user or --current-user is required")
+		return sandboxSetupMissingUserError(sandbox)
 	}
 	if strings.TrimSpace(sandbox.User) != "" && strings.TrimSpace(sandbox.CodexHome) == "" {
-		return errors.New("--codex-home is required with --user")
+		return sandboxSetupMissingCodexHomeError(sandbox)
 	}
 	return nil
 }
@@ -2389,7 +2433,7 @@ func parseExecpolicy(args []string, execpolicy *ExecpolicyOptions) error {
 			return errors.New("execpolicy check requires COMMAND")
 		}
 	default:
-		return fmt.Errorf("unknown execpolicy subcommand %s", execpolicy.Action)
+		return unrecognizedSubcommandForGroup("execpolicy", execpolicy.Action)
 	}
 	return nil
 }
@@ -2454,21 +2498,21 @@ func parseCloud(args []string, cloud *CloudOptions) error {
 			case strings.HasPrefix(arg, "-c"):
 				cloud.ConfigOverrides = append(cloud.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
 			case strings.HasPrefix(arg, "-"):
-				return fmt.Errorf("unknown cloud exec option %s", arg)
+				return unexpectedSubcommandArgumentError("cloud exec", arg)
 			default:
 				cloud.Query = strings.Join(args[i:], " ")
 				i = len(args)
 			}
 		}
 		if cloud.Environment == "" {
-			return errors.New("cloud exec requires --env ENV_ID")
+			return missingRequiredArgumentsError("cloud exec", "--env <ENV_ID>")
 		}
 	case "status":
 		for i := 1; i < len(args); i++ {
 			arg := args[i]
 			switch {
 			case strings.HasPrefix(arg, "-"):
-				return fmt.Errorf("unknown cloud status option %s", arg)
+				return unexpectedSubcommandArgumentError("cloud status", arg)
 			default:
 				if cloud.TaskID != "" {
 					return errors.New("cloud status accepts exactly one TASK_ID")
@@ -2477,7 +2521,7 @@ func parseCloud(args []string, cloud *CloudOptions) error {
 			}
 		}
 		if cloud.TaskID == "" {
-			return errors.New("cloud status requires TASK_ID")
+			return missingRequiredArgumentsError("cloud status", "<TASK_ID>")
 		}
 	case "list":
 		for i := 1; i < len(args); i++ {
@@ -2532,9 +2576,9 @@ func parseCloud(args []string, cloud *CloudOptions) error {
 			case strings.HasPrefix(arg, "-c"):
 				cloud.ConfigOverrides = append(cloud.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
 			case strings.HasPrefix(arg, "-"):
-				return fmt.Errorf("unknown cloud list option %s", arg)
+				return unexpectedSubcommandArgumentError("cloud list", arg)
 			default:
-				return fmt.Errorf("cloud list does not accept argument %s", arg)
+				return unexpectedSubcommandArgumentError("cloud list", arg)
 			}
 		}
 	case "apply", "diff":
@@ -2559,7 +2603,7 @@ func parseCloud(args []string, cloud *CloudOptions) error {
 				}
 				cloud.Attempt = attempt
 			case strings.HasPrefix(arg, "-"):
-				return fmt.Errorf("unknown cloud %s option %s", cloud.Action, arg)
+				return unexpectedSubcommandArgumentError("cloud "+cloud.Action, arg)
 			default:
 				if cloud.TaskID != "" {
 					return fmt.Errorf("cloud %s accepts exactly one TASK_ID", cloud.Action)
@@ -2568,10 +2612,10 @@ func parseCloud(args []string, cloud *CloudOptions) error {
 			}
 		}
 		if cloud.TaskID == "" {
-			return fmt.Errorf("cloud %s requires TASK_ID", cloud.Action)
+			return missingRequiredArgumentsError("cloud "+cloud.Action, "<TASK_ID>")
 		}
 	default:
-		return fmt.Errorf("unknown cloud subcommand %s", cloud.Action)
+		return unrecognizedSubcommandForGroup("cloud", cloud.Action)
 	}
 	return nil
 }
@@ -2629,9 +2673,9 @@ func parseResponsesAPIProxy(args []string, proxy *ResponsesAPIProxyOptions) erro
 			proxy.DumpDir = strings.TrimPrefix(arg, "--dump-dir=")
 		default:
 			if strings.HasPrefix(arg, "-") {
-				return fmt.Errorf("unknown responses-api-proxy option %s", arg)
+				return unexpectedSubcommandArgumentError("responses-api-proxy", arg)
 			}
-			return fmt.Errorf("responses-api-proxy does not accept argument %s", arg)
+			return unexpectedSubcommandArgumentError("responses-api-proxy", arg)
 		}
 	}
 	return nil
@@ -2657,7 +2701,7 @@ func parseExecServer(args []string, execServer *ExecServerOptions) error {
 				return err
 			}
 			if !handled {
-				return fmt.Errorf("unknown exec-server option %s", arg)
+				return unexpectedSubcommandArgumentError("exec-server", arg)
 			}
 			i = next
 		case arg == "forward":
@@ -2681,6 +2725,9 @@ func parseExecServer(args []string, execServer *ExecServerOptions) error {
 			execServer.Listen = strings.TrimPrefix(arg, "--listen=")
 			execServer.ListenSet = true
 		case arg == "--remote":
+			if i+1 >= len(args) {
+				return &UsageError{Message: "a value is required for '--remote <URL>' but none was supplied"}
+			}
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
 				return err
@@ -2770,9 +2817,9 @@ func parseExecServer(args []string, execServer *ExecServerOptions) error {
 			execServer.AWSServiceSet = true
 		default:
 			if strings.HasPrefix(arg, "-") {
-				return fmt.Errorf("unknown exec-server option %s", arg)
+				return unexpectedSubcommandArgumentError("exec-server", arg)
 			}
-			return fmt.Errorf("exec-server does not accept argument %s", arg)
+			return unexpectedSubcommandArgumentError("exec-server", arg)
 		}
 	}
 	if !execServer.ExitOnStdinClose {
@@ -2982,7 +3029,7 @@ func parseAppServer(args []string, appServer *AppServerOptions) error {
 				return err
 			}
 			if !handled {
-				return fmt.Errorf("unknown app-server option %s", arg)
+				return unexpectedSubcommandArgumentError("app-server", arg)
 			}
 			i = next
 			i = next
@@ -2994,7 +3041,7 @@ func parseAppServer(args []string, appServer *AppServerOptions) error {
 			}
 			appServer.WSMaxClockSkewSeconds = &parsed
 		case strings.HasPrefix(arg, "-"):
-			return fmt.Errorf("unknown app-server option %s", arg)
+			return unexpectedSubcommandArgumentError("app-server", arg)
 		default:
 			appServer.Subcommand = append(appServer.Subcommand, args[i:]...)
 			var err error
@@ -3006,7 +3053,7 @@ func parseAppServer(args []string, appServer *AppServerOptions) error {
 			case "generate-ts", "generate-json-schema", "generate-internal-json-schema":
 				err = parseAppServerGenerate(appServer.Subcommand[0], args[i+1:], &appServer.Generate)
 			default:
-				return fmt.Errorf("unknown app-server subcommand %s", appServer.Subcommand[0])
+				return unrecognizedSubcommandForGroup("app-server", appServer.Subcommand[0])
 			}
 			if err != nil {
 				return err
@@ -3187,17 +3234,14 @@ func parseAppServerDaemon(args []string, daemon *AppServerDaemonOptions) error {
 			switch args[i] {
 			case "--restore-release":
 				if i+1 >= len(args) {
-					return errors.New("app-server daemon pid-update-loop --restore-release requires a value")
+					return &UsageError{Message: "a value is required for '--restore-release <RESTORE_RELEASE>' but none was supplied"}
 				}
 				i++
 				daemon.RestoreRelease = strings.TrimSpace(args[i])
 			case "--check-package-ownership":
 				daemon.CheckPackageOwnership = true
 			default:
-				if strings.HasPrefix(args[i], "-") {
-					return fmt.Errorf("unknown app-server daemon pid-update-loop option %s", args[i])
-				}
-				return fmt.Errorf("app-server daemon pid-update-loop does not accept argument %s", args[i])
+				return unexpectedSubcommandArgumentError("app-server daemon pid-update-loop", args[i])
 			}
 		}
 	case "bootstrap":
@@ -3207,9 +3251,9 @@ func parseAppServerDaemon(args []string, daemon *AppServerDaemonOptions) error {
 				daemon.RemoteControl = true
 			default:
 				if strings.HasPrefix(arg, "-") {
-					return fmt.Errorf("unknown app-server daemon bootstrap option %s", arg)
+					return unexpectedSubcommandArgumentError("app-server daemon bootstrap", arg)
 				}
-				return fmt.Errorf("app-server daemon bootstrap does not accept argument %s", arg)
+				return unexpectedSubcommandArgumentError("app-server daemon bootstrap", arg)
 			}
 		}
 	case "update":
@@ -3221,16 +3265,16 @@ func parseAppServerDaemon(args []string, daemon *AppServerDaemonOptions) error {
 				daemon.Yes = true
 			default:
 				if strings.HasPrefix(arg, "-") {
-					return fmt.Errorf("unknown app-server daemon update option %s", arg)
+					return unexpectedSubcommandArgumentError("app-server daemon update", arg)
 				}
-				return fmt.Errorf("app-server daemon update does not accept argument %s", arg)
+				return unexpectedSubcommandArgumentError("app-server daemon update", arg)
 			}
 		}
 		if daemon.Yes && !daemon.FromCLI {
 			return errors.New("`--yes` requires `--from-cli`")
 		}
 	default:
-		return fmt.Errorf("unknown app-server daemon subcommand %s", daemon.Action)
+		return unrecognizedSubcommandForGroup("app-server daemon", daemon.Action)
 	}
 	return nil
 }
@@ -3314,19 +3358,23 @@ func parseQueue(args []string, queue *QueueOptions) error {
 		case strings.HasPrefix(arg, "-c") && arg != "-C":
 			queue.ConfigOverrides = append(queue.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
 		case strings.HasPrefix(arg, "-"):
-			return fmt.Errorf("unknown queue option %s", arg)
+			return unexpectedSubcommandArgumentError("queue", arg)
 		default:
 			return errors.New("`codex queue` does not accept a positional prompt; use `--message`")
 		}
 	}
-	if err := validateQueueSharedOptions(queue.Shared, strings.TrimSpace(queue.Remote) != ""); err != nil {
-		return err
-	}
+	var missing []string
 	if strings.TrimSpace(queue.Thread) == "" {
-		return errors.New("`codex queue` requires --thread <THREAD>")
+		missing = append(missing, "--thread <THREAD>")
 	}
 	if strings.TrimSpace(queue.Message) == "" {
-		return errors.New("`codex queue` requires --message <TEXT>")
+		missing = append(missing, "--message <TEXT>")
+	}
+	if len(missing) > 0 {
+		return missingRequiredArgumentsError("queue", missing...)
+	}
+	if err := validateQueueSharedOptions(queue.Shared, strings.TrimSpace(queue.Remote) != ""); err != nil {
+		return err
 	}
 	return nil
 }
@@ -3447,9 +3495,9 @@ func parseAgents(args []string, agents *AgentsOptions) error {
 			agents.ConfigOverrides = append(agents.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
 		default:
 			if strings.HasPrefix(arg, "-") {
-				return fmt.Errorf("unknown agents option %s", arg)
+				return unexpectedSubcommandArgumentError("agents", arg)
 			}
-			return fmt.Errorf("`codex agents` does not accept argument %s", arg)
+			return unexpectedSubcommandArgumentError("agents", arg)
 		}
 	}
 	if agents.Shared.NoAltScreen {
@@ -3476,9 +3524,9 @@ func parseAppServerProxy(args []string, proxy *AppServerProxyOptions) error {
 			proxy.SocketPath = strings.TrimPrefix(arg, "--sock=")
 		default:
 			if strings.HasPrefix(arg, "-") {
-				return fmt.Errorf("unknown app-server proxy option %s", arg)
+				return unexpectedSubcommandArgumentError("app-server proxy", arg)
 			}
-			return fmt.Errorf("app-server proxy does not accept argument %s", arg)
+			return unexpectedSubcommandArgumentError("app-server proxy", arg)
 		}
 	}
 	return nil
@@ -3515,9 +3563,9 @@ func parseAppServerGenerate(action string, args []string, generate *AppServerGen
 			generate.Experimental = true
 		default:
 			if strings.HasPrefix(arg, "-") {
-				return fmt.Errorf("unknown app-server %s option %s", action, arg)
+				return unexpectedSubcommandArgumentError("app-server "+action, arg)
 			}
-			return fmt.Errorf("app-server %s does not accept argument %s", action, arg)
+			return unexpectedSubcommandArgumentError("app-server "+action, arg)
 		}
 	}
 	if generate.OutDir == "" {
@@ -3541,7 +3589,7 @@ func parseApp(args []string, app *AppOptions) error {
 		case strings.HasPrefix(arg, "--download-url="):
 			app.DownloadURL = strings.TrimPrefix(arg, "--download-url=")
 		case strings.HasPrefix(arg, "-"):
-			return fmt.Errorf("unknown app option %s", arg)
+			return unexpectedSubcommandArgumentError("app", arg)
 		default:
 			if app.Path != "." {
 				return errors.New("app accepts at most one PATH")
@@ -3559,9 +3607,9 @@ func parseUpdate(args []string, update *UpdateOptions) error {
 	}
 	arg := args[0]
 	if strings.HasPrefix(arg, "-") {
-		return fmt.Errorf("unknown update option %s", arg)
+		return unexpectedSubcommandArgumentError("update", arg)
 	}
-	return fmt.Errorf("update does not accept argument %s", arg)
+	return unexpectedSubcommandArgumentError("update", arg)
 }
 
 func parseCompletion(args []string, completion *CompletionOptions) error {
@@ -3625,9 +3673,9 @@ func parseMigrateNFSDB(args []string, options *MigrateNFSDBOptions) error {
 			options.StagingDir = value
 			i = next
 		case strings.HasPrefix(arg, "-"):
-			return fmt.Errorf("unknown migrate-nfs-db option %s", arg)
+			return unexpectedSubcommandArgumentError("migrate-nfs-db", arg)
 		default:
-			return fmt.Errorf("migrate-nfs-db does not accept argument %s", arg)
+			return unexpectedSubcommandArgumentError("migrate-nfs-db", arg)
 		}
 	}
 	return nil
@@ -3644,6 +3692,9 @@ func parseMigrateRollouts(args []string, options *MigrateRolloutsOptions) error 
 		case arg == "--verbose":
 			options.Verbose = true
 		case arg == "--thread" || strings.HasPrefix(arg, "--thread="):
+			if arg == "--thread" && i+1 >= len(args) {
+				return &UsageError{Message: "a value is required for '--thread <THREAD_ID>' but none was supplied"}
+			}
 			value, next, err := optionalFlagValue(args, i, arg, "--thread")
 			if err != nil {
 				return err
@@ -3663,9 +3714,9 @@ func parseMigrateRollouts(args []string, options *MigrateRolloutsOptions) error 
 			i = next
 		default:
 			if strings.HasPrefix(arg, "-") {
-				return fmt.Errorf("unknown migrate-rollouts option %s", arg)
+				return unexpectedSubcommandArgumentError("migrate-rollouts", arg)
 			}
-			return fmt.Errorf("migrate-rollouts does not accept argument %s", arg)
+			return unexpectedSubcommandArgumentError("migrate-rollouts", arg)
 		}
 	}
 	return nil
@@ -3697,7 +3748,7 @@ func parseApply(args []string, apply *ApplyOptions) error {
 		case strings.HasPrefix(arg, "-c"):
 			apply.ConfigOverrides = append(apply.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
 		case strings.HasPrefix(arg, "-"):
-			return fmt.Errorf("unknown apply option %s", arg)
+			return unexpectedSubcommandArgumentError("apply", arg)
 		default:
 			if i+1 < len(args) {
 				return errors.New("apply accepts at most one PATCH")
@@ -3706,7 +3757,10 @@ func parseApply(args []string, apply *ApplyOptions) error {
 			return nil
 		}
 	}
-	return nil
+	if len(apply.ConfigOverrides) > 0 {
+		return &UsageError{Message: requiredArgumentsMessage("<TASK_ID>"), Usage: "Usage: codex apply --config <key=value> <TASK_ID>"}
+	}
+	return missingRequiredArgumentsError("apply", "<TASK_ID>")
 }
 
 func parseRemoteControl(args []string, remote *RemoteControlOptions) error {
@@ -3724,9 +3778,9 @@ func parseRemoteControl(args []string, remote *RemoteControlOptions) error {
 			remote.Subcommand = arg
 		default:
 			if strings.HasPrefix(arg, "-") {
-				return fmt.Errorf("unknown remote-control option %s", arg)
+				return unexpectedSubcommandArgumentError("remote-control", arg)
 			}
-			return fmt.Errorf("unknown remote-control subcommand %s", arg)
+			return unrecognizedSubcommandWithSuggestion(arg, subcommandUsageTexts["remote-control"].usage, subcommandCandidates["remote-control"])
 		}
 	}
 	return nil
@@ -3861,7 +3915,7 @@ func parseSessionMutation(args []string, session *SessionOptions, command string
 		case strings.HasPrefix(arg, "-c") && arg != "-C":
 			session.ConfigOverrides = append(session.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
 		case strings.HasPrefix(arg, "-"):
-			return fmt.Errorf("unknown %s option %s", command, arg)
+			return unexpectedSubcommandArgumentError(command, arg)
 		default:
 			if session.Target != "" {
 				return fmt.Errorf("%s accepts exactly one SESSION", command)
@@ -3870,7 +3924,7 @@ func parseSessionMutation(args []string, session *SessionOptions, command string
 		}
 	}
 	if session.Target == "" {
-		return fmt.Errorf("%s requires SESSION", command)
+		return missingRequiredArgumentsError(command, "<SESSION>")
 	}
 	if command == string(CommandDelete) && session.Force {
 		if !isUUIDLike(session.Target) {
@@ -3912,9 +3966,9 @@ func parseDebug(args []string, debug *DebugOptions) error {
 				debug.BundledModels = true
 			default:
 				if strings.HasPrefix(arg, "-") {
-					return fmt.Errorf("unknown debug models option %s", arg)
+					return unexpectedSubcommandArgumentError("debug models", arg)
 				}
-				return fmt.Errorf("debug models does not accept argument %s", arg)
+				return unexpectedSubcommandArgumentError("debug models", arg)
 			}
 		}
 	case "app-server":
@@ -3929,7 +3983,7 @@ func parseDebug(args []string, debug *DebugOptions) error {
 			}
 			debug.AppServerMessage = args[2]
 		default:
-			return fmt.Errorf("unknown debug app-server subcommand %s", debug.AppServerAction)
+			return unrecognizedSubcommandForGroup("debug app-server", debug.AppServerAction)
 		}
 	case "prompt-input":
 		for i := 1; i < len(args); i++ {
@@ -3945,7 +3999,7 @@ func parseDebug(args []string, debug *DebugOptions) error {
 			case strings.HasPrefix(arg, "--image="):
 				debug.Images = append(debug.Images, splitComma(strings.TrimPrefix(arg, "--image="))...)
 			case strings.HasPrefix(arg, "-"):
-				return fmt.Errorf("unknown debug prompt-input option %s", arg)
+				return unexpectedSubcommandArgumentError("debug prompt-input", arg)
 			default:
 				debug.Prompt = strings.Join(args[i:], " ")
 				return nil
@@ -3967,7 +4021,7 @@ func parseDebug(args []string, debug *DebugOptions) error {
 			case strings.HasPrefix(arg, "-o") && arg != "-o":
 				debug.TraceOutput = strings.TrimPrefix(arg, "-o")
 			case strings.HasPrefix(arg, "-"):
-				return fmt.Errorf("unknown debug trace-reduce option %s", arg)
+				return unexpectedSubcommandArgumentError("debug trace-reduce", arg)
 			default:
 				if debug.TraceBundle != "" {
 					return errors.New("debug trace-reduce accepts exactly one TRACE_BUNDLE")
@@ -3976,18 +4030,18 @@ func parseDebug(args []string, debug *DebugOptions) error {
 			}
 		}
 		if debug.TraceBundle == "" {
-			return errors.New("debug trace-reduce requires TRACE_BUNDLE")
+			return missingRequiredArgumentsError("debug trace-reduce", "<TRACE_BUNDLE>")
 		}
 	case "clear-memories":
 		if len(args) != 1 {
-			return errors.New("debug clear-memories does not accept arguments")
+			return unexpectedSubcommandArgumentError("debug clear-memories", args[1])
 		}
 	case "config":
 		if len(args) != 1 {
 			return errors.New("debug config does not accept arguments")
 		}
 	default:
-		return fmt.Errorf("unknown debug subcommand %s", debug.Subcommand)
+		return unrecognizedSubcommandForGroup("debug", debug.Subcommand)
 	}
 	return nil
 }

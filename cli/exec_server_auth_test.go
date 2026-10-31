@@ -108,7 +108,7 @@ func TestParseExecServerWebSocketAuthFlagsLikeRust(t *testing.T) {
 		{
 			name: "unknown websocket auth flag",
 			args: []string{"exec-server", "--ws-unknown", "value"},
-			want: "unknown exec-server option --ws-unknown",
+			want: "unexpected argument '--ws-unknown' found",
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {

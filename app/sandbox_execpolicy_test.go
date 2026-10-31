@@ -130,7 +130,7 @@ func TestSandboxSetupValidatesBeforePlatformCheck(t *testing.T) {
 	}
 
 	err = Run(context.Background(), []string{"sandbox", "setup", "--elevated"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
-	if err == nil || !strings.Contains(err.Error(), "--user or --current-user is required") {
+	if err == nil || !strings.Contains(err.Error(), "the following required arguments were not provided:\n  <--user <USER>|--current-user>") {
 		t.Fatalf("sandbox setup missing user error = %v", err)
 	}
 }

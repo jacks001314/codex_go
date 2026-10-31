@@ -356,9 +356,14 @@ func TestSessionMutationsResolveNameSelector(t *testing.T) {
 		t.Fatal("unarchive positional name did not unarchive selected session")
 	}
 
-	err = Run(context.Background(), []string{"delete", "--force", "--name", "Design"}, strings.NewReader(""), &stdout, &bytes.Buffer{})
-	if err == nil || !strings.Contains(err.Error(), "unknown delete option --name") {
-		t.Fatalf("delete --force --name error = %v", err)
+	var stderr bytes.Buffer
+	err = Run(context.Background(), []string{"delete", "--force", "--name", "Design"}, strings.NewReader(""), &stdout, &stderr)
+	var exitErr *ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Fatalf("delete --force --name error = %v, want clap diagnostic with exit status 2", err)
+	}
+	if !strings.Contains(stderr.String(), "error: unexpected argument '--name' found") {
+		t.Fatalf("delete --force --name stderr = %q", stderr.String())
 	}
 }
 
