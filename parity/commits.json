@@ -18122,9 +18122,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+     "Rust #47106 fixes a case where a delayed Code Mode skill call resolved the active turn at completion, losing the originating turn's metrics and metadata; it retains the originating SkillTurnMetrics and carries its turn metadata into the analytics TrackEventsContext. Go never resolves the active turn in that path: the skill analytics closure is built for one turn and carries turnID/modelID explicitly (implicitSkillInvocationEventProvider and explicitSkillInputItemsForTurnWithProvider), trackSkillInvocationEvent uses those captured values for the OTEL skill_invocation log and the analytics event's turn_id/thread_id/model_slug, plugin usage is recorded by the captured (threadID, turnID) key (recordSkillTurnPluginUsage/skillTurnReasoningEffort), and turn metadata for the event is the event params themselves rather than a live lookup. Tests: go test ./appserver -run 'Skill' -count=1 (existing skill telemetry and shadow-selection tests cover the captured attribution)."
    ]
   },
   {
@@ -18979,9 +18979,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+     "Rust #47349 emits <recommended_plugins> with the developer role and appends it to the developer context after the other sections, while legacy user-role recommendations in existing rollouts stay recognized. Go now renders the fragment with RoleDeveloper (context/fragments.go) and emits it through buildRenderedMessage, so the recommendation is a developer-role message instead of a fixed user message (appserver/turn_runtime.go recommendedPluginInputItems); the turn-start assembly collects it before the other context items and appends it last, after the deferred-tools, explicit-app and current-time sections, matching Rust's position at the end of developer_sections. The eventmap marker list still matches the tag so legacy user-role rollout items continue to parse. Tests: TestRecommendedPluginsEmitDeveloperRoleMessageLikeRust and the updated TestRecommendedPluginsInstructions; existing plugin/recommended-plugin router tests still pass. Verified with go test ./context -count=1, go test ./appserver -run 'Plugin|TurnStart|Instruction|Permissions' -count=1 (only the known unrelated TestStdioServerHandlesConcurrentTurnStarts fails), and go test ./eventmap -count=1."
    ]
   },
   {

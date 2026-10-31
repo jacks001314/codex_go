@@ -170,7 +170,7 @@ func TestImagegenSkillInstructionsPreserveContentsLikeRust(t *testing.T) {
 func TestRecommendedPluginsInstructions(t *testing.T) {
 	fragment := NewRecommendedPluginsInstructions([]RecommendedPlugin{{ID: "docs@market", Name: "Docs"}})
 	rendered := Render(fragment)
-	if rendered == nil || rendered.Role != RoleUser {
+	if rendered == nil || rendered.Role != RoleDeveloper {
 		t.Fatalf("Render(recommended plugins) = %#v", rendered)
 	}
 	for _, want := range []string{"<recommended_plugins>", "request_plugin_install", "- Docs (docs@market)", "</recommended_plugins>"} {

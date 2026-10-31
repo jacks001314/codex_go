@@ -8486,7 +8486,7 @@ func (r *RuntimeRouter) appTurnConfigWithOptions(ctx context.Context, threadID s
 	} else if item != nil {
 		inputItems = append(inputItems, item)
 	}
-	inputItems = append(inputItems, r.recommendedPluginInputItems(threadID, cfg)...)
+	recommendedPluginItems := r.recommendedPluginInputItems(threadID, cfg)
 	inputItems = append(inputItems, r.explicitAppInputItems(threadID, params, cfg)...)
 	// Rust #45716: the explicitly named connectors join the thread's selection
 	// (which decides whether a later app call is explicit or implicit) and each
@@ -8498,6 +8498,9 @@ func (r *RuntimeRouter) appTurnConfigWithOptions(ctx context.Context, threadID s
 		return nil, err
 	}
 	inputItems = append(inputItems, currentTimeInputItems...)
+	// Rust #47349 appends recommended plugins to the shared developer context
+	// after every other section, so they are emitted last here as well.
+	inputItems = append(inputItems, recommendedPluginItems...)
 	stepInstructionBase := instructions
 	instructions = r.instructionsWithPluginContext(threadID, cfg, params, instructions)
 	var skillInputItems []any
@@ -10092,14 +10095,12 @@ func (r *RuntimeRouter) recommendedPluginInputItems(threadID string, cfg *config
 	if rendered == nil || strings.TrimSpace(rendered.Content) == "" {
 		return nil
 	}
-	return []any{map[string]any{
-		"type": "message",
-		"role": "user",
-		"content": []map[string]any{{
-			"type": "input_text",
-			"text": rendered.Content,
-		}},
-	}}
+	// Rust #47349: recommendations carry the developer role (legacy rollouts
+	// keep user-role matching in eventmap for compatibility).
+	if item := buildRenderedMessage(rendered); item != nil {
+		return []any{item}
+	}
+	return nil
 }
 
 func (r *RuntimeRouter) explicitAppInputItems(threadID string, params *turn.TurnStartParams, cfg *config.Config) []any {

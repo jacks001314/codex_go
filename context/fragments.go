@@ -477,7 +477,7 @@ func NewRecommendedPluginsInstructions(plugins []RecommendedPlugin) *Recommended
 }
 
 func (p *RecommendedPluginsInstructions) Role() string {
-	return RoleUser
+	return RoleDeveloper
 }
 
 func (p *RecommendedPluginsInstructions) Markers() (string, string) {
