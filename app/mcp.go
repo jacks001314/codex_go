@@ -1102,6 +1102,11 @@ func (s *mcpCLIStore) validateUserConfigSemantics() error {
 	if err := config.ValidateLoadedConfigSemantics(loaded.Values); err != nil {
 		return mcpLoadConfigurationError(err)
 	}
+	// Config::load also reads the path-valued settings, so a missing
+	// instructions or prompt file fails `codex mcp list` in Rust.
+	if err := config.ValidateLoadedConfigFiles(loaded.Values, s.codexHome); err != nil {
+		return mcpLoadConfigurationError(err)
+	}
 	return nil
 }
 

@@ -2005,8 +2005,52 @@ same path.
   `out/r50-tui.txt`, `out/r50-top.txt`). Regressions:
   `TestValidateRemainingConfigTables` in `config`.
 
+### 65. Config::load reads the three path settings
+
+The typed pass accepted a document naming a missing file; Rust fails the same
+document while it builds the config, after the semantic checks.
+
+- **Resolution.** `model_instructions_file`,
+  `experimental_compact_prompt_file` and `model_catalog_json` go through the
+  serde `AbsolutePathBuf` guard, so a relative value is joined to the codex home
+  (`model_instructions_file = "x"` looks at `<home>\x`), `~/...` expands to the
+  user's home, and an empty value resolves to the codex home itself.
+- **Read failures.** Rust's `io::Error` Display on Windows is the localized
+  `FormatMessage` text plus ` (os error <code>)`, so a missing file reports
+  `failed to read model instructions file <path>: <localized> (os error 2)`, a
+  directory reports `(os error 5)`, and a missing parent reports `(os error 3)`.
+  Go now renders the same text with `windows.FormatMessage`, and opens the
+  target with read access only so a directory reports access denied instead of
+  `ERROR_INVALID_FUNCTION`.
+- **Order.** The instructions file is read first, then the compact prompt file,
+  then the catalog; an earlier serde or semantic failure still wins, and the
+  catalog's read error keeps Rust's bare wording (no `failed to read ...`
+  wrapper, `stream did not contain valid UTF-8` for bad bytes).
+- **Empty files.** A blank or whitespace-only instructions or prompt file
+  reports `<subject> is empty: <path>`, and invalid UTF-8 inside them reports
+  `failed to read <subject> <path>: invalid utf-8 sequence of N bytes from index
+  I`.
+- **Catalog contents.** A catalog without models reports
+  `model_catalog_json path `<path>` must contain at least one model`.
+- Evidence: 22 documents covering missing files, directories, empty files, bad
+  UTF-8, ordering, `~`, absolute paths and catalog payloads are byte-identical
+  to 0.166 except the four catalog JSON-parse cases listed under Still open
+  (`p51diff.py`, `out/r51-diff1.txt`). The 437-document top-level corpus is now
+  byte-identical (`out/r51-top.txt`), and the 172/81/47 corpora keep 0 diffs.
+  Regressions: `TestValidateLoadedConfigFilesReadsPathSettings`,
+  `TestValidateLoadedConfigFilesReadsModelCatalog`,
+  `TestValidateLoadedConfigFilesKeepsSerdeOrder` and
+  `TestResolveConfigFilePath` in `config`.
+
 ## Verification
 
+- Round 51 adds the `Config::load` file reads (entry 65): 22 path-setting
+  documents match 0.166 except four `model_catalog_json` JSON-parse cases
+  (`out/r51-diff1.txt`), the 437-document top-level corpus drops from 3 diffs to
+  0 (`out/r51-top.txt`), and the 172/81/47 corpora keep 0 diffs
+  (`out/r51-tables.txt`, `out/r51-nested.txt`, `out/r51-tui.txt`).
+  `go test -count=1 -vet=off ./config ./cli ./mcp` passes in a clean worktree
+  and `./app` keeps only the two known baselines.
 - Round 50 types the remaining struct tables (entry 64): 172 documents across
   `auto_review`, `memories`, `skills`, `agents`, `apps`, `audio`, `browser_use`,
   `computer_use`, `hooks`, `notice`, `otel`, `permissions`, `plugins`,
@@ -2542,14 +2586,18 @@ same path.
     `--help=<value>` diagnostic, and `codex execpolicy check -hx` now reaches
     clap's missing-required block like Rust.
 - The load pass now covers the 104 top-level field types, enums, `features`,
-  the `mcp_servers` entries (entry 61) and every struct table serde walks
-  (entries 62-64): no subtable accepts an untyped value any more, so
-  `[auto_review] conversation_history_max_output_tokens = "x"` is rejected at
-  that path like Rust. What the load pass still does not do is read the three
-  path-valued fields (`model_instructions_file`, `model_catalog_json`,
-  `experimental_compact_prompt_file`), so a missing file is accepted instead of
-  failing with Rust's `failed to read ... <path>: <os error>`, whose text is
-  Windows-localized.
+  the `mcp_servers` entries (entry 61), every struct table serde walks
+  (entries 62-64) and the file reads `Config::load` performs on the three
+  path-valued settings (entry 65), so a missing instructions or prompt file and
+  a catalog with no models fail like Rust. What is left of that surface is the
+  `model_catalog_json` JSON parse itself: Go reports its own `encoding/json`
+  wording where serde_json says `missing field `slug` at line 1 column 14`, and
+  Go does not validate the model entries' mandatory fields (`slug`,
+  `display_name`, `supported_reasoning_levels`, `shell_type`, `visibility`,
+  `supported_in_api`, `priority`, `availability_nux`, `upgrade`), so
+  `{"models": [{}]}` and `{"models": [{"slug": "m"}]}` load in Go where Rust
+  rejects them (`out/r51-diff1.txt`). The empty-catalog and bad-UTF-8 cases do
+  match.
 - TOML syntax errors keep Go's `toml: ...` wording: Rust prints `0:
   <path>:<line>:<column>: <message>` plus the annotated snippet (`1 | [broken`
   with a caret) under both `failed to load bootstrap configuration` and
