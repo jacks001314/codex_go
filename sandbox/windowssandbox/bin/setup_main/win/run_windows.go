@@ -149,6 +149,13 @@ func runSetupPayload(payload *setupPayload, log io.Writer, sbxDir string) error 
 	if err := validateSetupRuntimeForProvisioning(payload); err != nil {
 		return err
 	}
+	if setupModeProvisionsAccounts(payload.Mode, payload.RefreshOnly) {
+		lock, err := windowssandbox.AcquireSandboxSetupLock(windowssandbox.InfiniteSandboxSetupLockTimeout)
+		if err != nil {
+			return setupFailuref(windowssandbox.SetupErrorHelperSandboxLockFailed, "acquire sandbox setup lock: %s", windowssandbox.SetupErrorChain(err))
+		}
+		defer lock.Release()
+	}
 	writesSetupMarker := !payload.RefreshOnly && payload.Mode != setupModeReadACLsOnly
 	if writesSetupMarker {
 		if err := prepareSetupMarker(payload.CodexHome, payload.RealUser); err != nil {
@@ -177,6 +184,16 @@ func runSetupPayload(payload *setupPayload, log io.Writer, sbxDir string) error 
 		}
 	}
 	return nil
+}
+
+// setupModeProvisionsAccounts mirrors Rust SetupMode::provisions_accounts:
+// only account-provisioning runs take the machine-wide setup lock. ACL refresh
+// and read-only repair may still run beside an active sandbox.
+func setupModeProvisionsAccounts(mode setupMode, refreshOnly bool) bool {
+	if refreshOnly {
+		return false
+	}
+	return mode == setupModeFull || mode == setupModeProvision
 }
 
 // validateSetupRuntimeForProvisioning keeps registered Core accounts owned by

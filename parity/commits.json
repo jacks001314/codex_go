@@ -6578,9 +6578,14 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "partial",
    "evidence": [
-    "Partial symbol coverage 15/34; needs review: DesktopInstallation, EVENT_CLEANUP_FINISHED, EVENT_CLEANUP_STARTED, EVENT_SERVICE_FAILED, InstallationRecord"
+    "sandbox/windowssandbox/setup_lock_windows.go adds the machine-wide Global\\CodexSandboxSetup mutex; the setup helper takes it only for account-provisioning modes (Full without refresh, ProvisionOnly), matching Rust SetupMode::provisions_accounts.",
+    "sandbox/windowssandbox/uninstall_cleanup_windows.go disables both sandbox accounts through NetUserInfo level 1008, enumerates their processes with WTSEnumerateProcessesW, checks each opened token SID to defeat PID reuse, terminates and waits up to 5s, and waits for matching LSA logon sessions to disappear. Preparation failures restore the original account flags.",
+    "CleanUpPackagedWindowsSandbox removes only .sandbox, .sandbox-secrets and .sandbox-bin under an absolute pinned home, runs the desktop callback while accounts stay disabled, then removes WFP/firewall rules, hidden-user entries, accounts and (only when no earlier step failed) the sandbox group. CleanUpLegacyWindowsSandbox now shares the same preparation and keeps all user files.",
+    "Tests: TestDisabledSandboxUsersDisableAndRestoreLikeRust, TestPrepareSandboxCleanupRestoresFlagsWhenProcessStopFailsLikeRust, TestFinishSandboxCleanupRemovesOnlyPinnedSandboxDirectoriesLikeRust, TestFinishSandboxCleanupContinuesAfterDesktopFailureLikeRust, TestFinishSandboxCleanupRetainsGroupAfterEarlierFailureLikeRust, TestSetupModeProvisionsAccountsLikeRust, plus live NetUserGetInfo coverage for the current account.",
+    "Residual service-owned behavior not carried: recording the authenticated owner and observing package uninstall events across service restarts/session changes, pinning the desktop-owner identity while impersonating it for desktop cleanup, retained cleanup tokens, and reprovisioning accounts after an interrupted cleanup before restoring network access.",
+    "Verified with go build ./sandbox/windowssandbox/..., go test ./sandbox/windowssandbox/... -count=1 and go vet ./sandbox/windowssandbox/.... The LSA logon-session probe is skipped on this non-admin host (STATUS_ACCESS_DENIED), matching Rust cleanup requiring administrator privileges."
    ]
   },
   {

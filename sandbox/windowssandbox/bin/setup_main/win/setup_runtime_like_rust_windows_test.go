@@ -41,3 +41,24 @@ func TestRegisteredRuntimeRejectsHelperOwnedProvisioningLikeRust(t *testing.T) {
 		t.Fatalf("nil payload error = %v", err)
 	}
 }
+
+func TestSetupModeProvisionsAccountsLikeRust(t *testing.T) {
+	cases := []struct {
+		name        string
+		mode        setupMode
+		refreshOnly bool
+		want        bool
+	}{
+		{"full", setupModeFull, false, true},
+		{"provision-only", setupModeProvision, false, true},
+		{"refresh", setupModeFull, true, false},
+		{"read-acls-only", setupModeReadACLsOnly, false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := setupModeProvisionsAccounts(tc.mode, tc.refreshOnly); got != tc.want {
+				t.Fatalf("setupModeProvisionsAccounts(%q, %t) = %t, want %t", tc.mode, tc.refreshOnly, got, tc.want)
+			}
+		})
+	}
+}

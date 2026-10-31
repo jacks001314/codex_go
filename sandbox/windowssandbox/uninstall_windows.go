@@ -5,6 +5,7 @@ package windowssandbox
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"unsafe"
@@ -35,11 +36,11 @@ var (
 // cleanUpLegacyWindowsSandbox mirrors Rust uninstall_windows::
 // clean_up_legacy_windows_sandbox (#50437).
 //
-// Rust also serializes against sandbox setup through the machine-wide
-// `Global\CodexSandboxSetup` mutex, retires the registered runtime
-// installation, and disables/waits out the sandbox accounts before removing
-// them. Those primitives have no Go carrier yet (see layout.go), so the cleanup
-// starts at the resource removal and reports each step it could not finish.
+// Cleanup serializes with setup through the machine-wide
+// `Global\CodexSandboxSetup` mutex, disables the sandbox accounts, waits for
+// their processes and logon tokens to exit, and then removes each independent
+// resource. The registered-runtime installation record remains service-owned
+// and has no Go carrier yet.
 func cleanUpLegacyWindowsSandbox(report func(string)) error {
 	if report == nil {
 		report = func(string) {}
@@ -51,21 +52,124 @@ func cleanUpLegacyWindowsSandbox(report func(string)) error {
 	if !elevated {
 		return errors.New("sandbox cleanup requires administrator privileges")
 	}
+	lock, err := AcquireSandboxSetupLock(5000)
+	if err != nil {
+		return err
+	}
+	defer lock.Release()
+	if _, err := prepareSandboxCleanupForRemoval(); err != nil {
+		return err
+	}
 	// The legacy path has no pinned Codex home, so it keeps every sandbox
 	// directory and its filesystem permissions (Rust
 	// clean_up_legacy_windows_sandbox -> clean_up_packaged_windows_sandbox(None)).
-	report("skipping sandbox directories: no pinned home")
+	return finishSandboxCleanup(nil, report, nil, defaultSandboxCleanupSteps())
+}
+
+// cleanUpPackagedWindowsSandbox removes resources created for one authenticated
+// installation. The home and its ancestors stay pinned until cleanUpDesktop
+// runs, while the sandbox accounts remain disabled (Rust #42375).
+func cleanUpPackagedWindowsSandbox(codexHome string, report func(string), cleanUpDesktop func() error) error {
+	if report == nil {
+		report = func(string) {}
+	}
+	if err := validateCleanupCodexHome(codexHome); err != nil {
+		return err
+	}
+	elevated, err := isElevated()
+	if err != nil {
+		return fmt.Errorf("determine elevation state: %w", err)
+	}
+	if !elevated {
+		return errors.New("sandbox cleanup requires administrator privileges")
+	}
+	lock, err := AcquireSandboxSetupLock(5000)
+	if err != nil {
+		return err
+	}
+	defer lock.Release()
+	if _, err := prepareSandboxCleanupForRemoval(); err != nil {
+		return err
+	}
+	return finishSandboxCleanup(&codexHome, report, cleanUpDesktop, defaultSandboxCleanupSteps())
+}
+
+// prepareSandboxCleanupForRemoval disables the sandbox accounts and waits for
+// their processes and logon tokens to exit before any protection is removed.
+// Nothing has been torn down yet, so a preparation failure restores the
+// original account flags and keeps the setup lock released.
+func prepareSandboxCleanupForRemoval() (*disabledSandboxUsers, error) {
+	users := &disabledSandboxUsers{}
+	if err := users.disable(); err != nil {
+		var failures []string
+		failures = append(failures, err.Error())
+		if restoreErr := users.restore(); restoreErr != nil {
+			failures = append(failures, restoreErr.Error())
+		}
+		return nil, errors.New(strings.Join(failures, "; "))
+	}
+	if err := stopSandboxCleanupProcesses(users); err != nil {
+		var failures []string
+		failures = append(failures, err.Error())
+		if restoreErr := users.restore(); restoreErr != nil {
+			failures = append(failures, restoreErr.Error())
+		}
+		return nil, errors.New(strings.Join(failures, "; "))
+	}
+	return users, nil
+}
+
+type sandboxCleanupSteps struct {
+	removeWFPFilters    func() error
+	removeFirewallRules func() error
+	unhideUsers         func() error
+	removeUsers         func(func(string)) error
+	removeGroup         func() error
+}
+
+func defaultSandboxCleanupSteps() sandboxCleanupSteps {
+	return sandboxCleanupSteps{
+		removeWFPFilters:    removeLegacyWFPFilters,
+		removeFirewallRules: removeLegacyFirewallRules,
+		unhideUsers: func() error {
+			return unhideSandboxUsers([]string{OfflineUsername, OnlineUsername})
+		},
+		removeUsers: removeLegacySandboxUsers,
+		removeGroup: removeLegacySandboxGroup,
+	}
+}
+
+func finishSandboxCleanup(codexHome *string, report func(string), cleanUpDesktop func() error, steps sandboxCleanupSteps) error {
+	if report == nil {
+		report = func(string) {}
+	}
 	var failures []string
+	if codexHome != nil {
+		if err := validateCleanupCodexHome(*codexHome); err != nil {
+			return err
+		}
+		failures = append(failures, removeSandboxDirectories(*codexHome, report)...)
+	} else {
+		report("skipping sandbox directories: no pinned home")
+	}
+	if cleanUpDesktop != nil {
+		if err := cleanUpDesktop(); err != nil {
+			message := fmt.Sprintf("clean up desktop: failed, %v", err)
+			report(message)
+			failures = append(failures, message)
+		}
+	}
 	for _, step := range []struct {
 		name string
 		run  func() error
 	}{
-		{"remove WFP filters", removeLegacyWFPFilters},
-		{"remove firewall rules", removeLegacyFirewallRules},
-		{"remove hidden-user entries", func() error {
-			return unhideSandboxUsers([]string{OfflineUsername, OnlineUsername})
-		}},
+		{"remove WFP filters", steps.removeWFPFilters},
+		{"remove firewall rules", steps.removeFirewallRules},
+		{"remove hidden-user entries", steps.unhideUsers},
 	} {
+		if step.run == nil {
+			continue
+		}
 		if err := step.run(); err != nil {
 			message := fmt.Sprintf("%s: failed, %v", step.name, err)
 			report(message)
@@ -74,14 +178,28 @@ func cleanUpLegacyWindowsSandbox(report func(string)) error {
 		}
 		report(step.name + ": completed")
 	}
-	if err := removeLegacySandboxUsers(report); err != nil {
-		failures = append(failures, err.Error())
+	if steps.removeUsers != nil {
+		if err := steps.removeUsers(report); err != nil {
+			failures = append(failures, err.Error())
+		}
 	}
-	if err := removeLegacySandboxGroupAfter(failures, report, removeLegacySandboxGroup); err != nil {
-		failures = append(failures, err.Error())
+	if steps.removeGroup != nil {
+		if err := removeLegacySandboxGroupAfter(failures, report, steps.removeGroup); err != nil {
+			failures = append(failures, err.Error())
+		}
 	}
 	if len(failures) > 0 {
 		return errors.New(strings.Join(failures, "; "))
+	}
+	return nil
+}
+
+func validateCleanupCodexHome(codexHome string) error {
+	if strings.TrimSpace(codexHome) == "" {
+		return errors.New("sandbox cleanup requires a pinned Codex home")
+	}
+	if !filepath.IsAbs(codexHome) {
+		return errors.New("sandbox cleanup requires an absolute Codex home")
 	}
 	return nil
 }
