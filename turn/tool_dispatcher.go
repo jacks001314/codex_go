@@ -565,6 +565,22 @@ func (d *ToolDispatcher) stepTelemetryTags(invocation *tool.Invocation) map[stri
 	return attributed
 }
 
+// SetRouter replaces the router the following sampling step dispatches through
+// (Rust #44242 rebuilds each step's tool plan from the step's captured model).
+// Callers swap it between steps, after the previous step's tool batch finished;
+// invocations already dispatched keep the executor they were built with. The
+// step's resolved tool mode travels with the plan, so call bookkeeping follows
+// the same surface the model was offered.
+func (d *ToolDispatcher) SetRouter(router *tool.Router) {
+	if d == nil || router == nil {
+		return
+	}
+	d.router = router
+	if mode := strings.TrimSpace(router.ToolMode()); mode != "" {
+		d.toolMode = mode
+	}
+}
+
 // SetStepModel applies the producing model's output-truncation policy to the
 // tools of the current sampling step (Rust #44243). The agent loop drains each
 // step's tools before asking for the next step's settings, so the policy is

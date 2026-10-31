@@ -98,10 +98,25 @@ type RuntimeOptions struct {
 	// model settings (#44242), so a model the turn did not start on can add a
 	// tool or change a tool's schema for the following step.
 	StepToolSurface func(model string)
+	// StepToolPlan, when set, rebuilds a later sampling step's complete tool
+	// plan from that step's captured model (Rust `built_tools`). The returned
+	// router replaces the turn's for that step and for dispatch until the next
+	// rebuild; a nil plan keeps the turn-start tool plan.
+	StepToolPlan func(model string) (*StepToolPlan, error)
 	// InvocationRegistry opts this turn into live V2 tool-call lookup and unique
 	// active call IDs (Rust #57586 HostToolInvocationLookup). A nil registry
 	// leaves dispatch unchanged.
 	InvocationRegistry *agent.InvocationRegistry
+}
+
+// StepToolPlan is one sampling step's rebuilt tool plan (Rust's per-step
+// `ToolRouter`). Router and HostedTools replace the turn's plans from that step
+// on; ReplaceHostedTools distinguishes "no hosted declarations" from "keep the
+// turn's".
+type StepToolPlan struct {
+	Router             *tool.Router
+	HostedTools        []any
+	ReplaceHostedTools bool
 }
 
 type Runtime struct {
@@ -133,6 +148,9 @@ type Runtime struct {
 	dynamicToolStepRefresh       bool
 	multiAgentOverridesForModel  func(model string)
 	stepToolSurface              func(model string)
+	stepToolPlan                 func(model string) (*StepToolPlan, error)
+	stepToolPlanModel            string
+	dynamicToolCatalog           []DynamicToolSpec
 	invocationRegistry           *agent.InvocationRegistry
 }
 
@@ -188,6 +206,8 @@ func NewRuntime(options *RuntimeOptions) *Runtime {
 		dynamicToolStepRefresh:       options.DynamicToolStepRefresh,
 		multiAgentOverridesForModel:  options.MultiAgentOverridesForModel,
 		stepToolSurface:              options.StepToolSurface,
+		stepToolPlan:                 options.StepToolPlan,
+		dynamicToolCatalog:           append([]DynamicToolSpec(nil), options.DynamicTools...),
 		invocationRegistry:           options.InvocationRegistry,
 	}
 }
@@ -259,7 +279,46 @@ func (r *Runtime) ReplaceDynamicTools(tools []DynamicToolSpec) error {
 		registry.SetExposure(name, tool.ExposureHidden)
 	}
 	r.dynamicToolNames = next
+	r.dynamicToolCatalog = append(r.dynamicToolCatalog[:0], tools...)
 	return nil
+}
+
+// reapplyDynamicToolCatalog re-registers the turn's current dynamic tools on a
+// router rebuilt for a later sampling step (Rust #44242 rebuilds the plan, and
+// #57553 keeps the replaced catalog dispatchable). Calls already emitted by the
+// previous step keep their original executors.
+func (r *Runtime) reapplyDynamicToolCatalog() {
+	if r == nil || len(r.dynamicToolCatalog) == 0 {
+		return
+	}
+	_ = r.ReplaceDynamicTools(append([]DynamicToolSpec(nil), r.dynamicToolCatalog...))
+}
+
+// applyStepToolPlan swaps in the tool plan rebuilt for a later sampling step's
+// model (Rust `built_tools` planning each step from its captured settings).
+// A failed rebuild keeps the previous plan so the step still samples instead of
+// losing its tools.
+func (r *Runtime) applyStepToolPlan(modelID string, dispatcher *ToolDispatcher) {
+	if r == nil || r.stepToolPlan == nil {
+		return
+	}
+	modelID = strings.TrimSpace(modelID)
+	if modelID == "" || modelID == r.stepToolPlanModel {
+		return
+	}
+	plan, err := r.stepToolPlan(modelID)
+	if err != nil || plan == nil || plan.Router == nil {
+		return
+	}
+	r.stepToolPlanModel = modelID
+	r.router = plan.Router
+	if dispatcher != nil {
+		dispatcher.SetRouter(plan.Router)
+	}
+	if plan.ReplaceHostedTools {
+		r.hostedTools = append([]any(nil), plan.HostedTools...)
+	}
+	r.reapplyDynamicToolCatalog()
 }
 
 func isDynamicToolSpec(spec tool.Spec) bool {
@@ -449,7 +508,12 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 		visibleSpecs = r.modelVisibleSpecsForRequest(effectiveToolMode)
 		loopRequest.Tools = model.ResponsesToolsFromSpecs(visibleSpecs)
 	}
-	if r.codeModeMessagesForModel != nil || r.dynamicToolStepRefresh || r.multiAgentOverridesForModel != nil || r.stepToolSurface != nil {
+	var dispatcher *ToolDispatcher
+	// The turn's own model starts on the turn-start plan, so a later step only
+	// asks the host to plan when the model actually changed (Rust `built_tools`
+	// runs per step, but rebuilding an identical plan is pure overhead here).
+	r.stepToolPlanModel = strings.TrimSpace(loopRequest.Model)
+	if r.codeModeMessagesForModel != nil || r.dynamicToolStepRefresh || r.multiAgentOverridesForModel != nil || r.stepToolSurface != nil || r.stepToolPlan != nil {
 		loopRequest.ToolsForStep = func(modelID string) []any {
 			if r.codeModeMessagesForModel != nil {
 				r.applyCodeModeMessagesForModel(modelID)
@@ -460,6 +524,7 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 			if r.stepToolSurface != nil {
 				r.stepToolSurface(strings.TrimSpace(modelID))
 			}
+			r.applyStepToolPlan(modelID, dispatcher)
 			return buildTools()
 		}
 	}
@@ -472,6 +537,29 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 	loopRequest.Tools = MergeHostedTools(MergeHostedTools(loopRequest.Tools, r.hostedTools), request.HostedTools)
 	loopRequest.Tools = filterAllowedHostedTools(loopRequest.Tools, r.allowedTools)
 	loopRequest.InterruptOnCancel = r.interruptOnCancel
+	dispatcher = NewToolDispatcher(&ToolDispatcherOptions{
+		Router:                      r.router,
+		Hooks:                       r.hooks,
+		Now:                         r.now,
+		PostToolInputItems:          request.PostToolInputItems,
+		OnToolStarted:               request.OnToolStarted,
+		OnToolCompleted:             request.OnToolCompleted,
+		EmitCodeModeNestedLifecycle: request.EmitCodeModeNestedLifecycle,
+		OnCodeModeNotify:            request.OnCodeModeNotify,
+		InjectResponseItems:         r.codeModeResponseItemInjector(request.ThreadID, request.TurnID),
+		ThreadID:                    request.ThreadID,
+		TurnID:                      request.TurnID,
+		ExecutedToolCalls:           executedToolCalls,
+		ToolMode:                    firstNonEmpty(r.router.ToolMode(), loopRequest.ToolMode),
+		InstantInterrupt:            r.instantInterrupt,
+		Truncation:                  r.truncationPolicy(loopRequest.Model),
+		TruncationForModel:          r.truncationPolicy,
+		OnToolOutputExternalContext: r.toolOutputExternalContextHandler(loopRequest.ThreadID),
+		Tracer:                      loopRequest.Tracer,
+		CriticalPathTiming:          loopRequest.CriticalPathTiming,
+		TimingState:                 loopRequest.Timing,
+		InvocationRegistry:          r.invocationRegistry,
+	})
 	return NewAgentLoop(&AgentLoopOptions{
 		Agent:                   r.agent,
 		SteerMailbox:            r.steerMailbox,
@@ -479,32 +567,10 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 		MCPAttribution:          r.executedToolCalls,
 		ToolRegistrationMetrics: r.toolRegistrationMetrics,
 		ToolRegistrationCounts:  r.toolRegistrationCounts,
-		Dispatcher: NewToolDispatcher(&ToolDispatcherOptions{
-			Router:                      r.router,
-			Hooks:                       r.hooks,
-			Now:                         r.now,
-			PostToolInputItems:          request.PostToolInputItems,
-			OnToolStarted:               request.OnToolStarted,
-			OnToolCompleted:             request.OnToolCompleted,
-			EmitCodeModeNestedLifecycle: request.EmitCodeModeNestedLifecycle,
-			OnCodeModeNotify:            request.OnCodeModeNotify,
-			InjectResponseItems:         r.codeModeResponseItemInjector(request.ThreadID, request.TurnID),
-			ThreadID:                    request.ThreadID,
-			TurnID:                      request.TurnID,
-			ExecutedToolCalls:           executedToolCalls,
-			ToolMode:                    firstNonEmpty(r.router.ToolMode(), loopRequest.ToolMode),
-			InstantInterrupt:            r.instantInterrupt,
-			Truncation:                  r.truncationPolicy(loopRequest.Model),
-			TruncationForModel:          r.truncationPolicy,
-			OnToolOutputExternalContext: r.toolOutputExternalContextHandler(loopRequest.ThreadID),
-			Tracer:                      loopRequest.Tracer,
-			CriticalPathTiming:          loopRequest.CriticalPathTiming,
-			TimingState:                 loopRequest.Timing,
-			InvocationRegistry:          r.invocationRegistry,
-		}),
-		MaxTurns:               r.maxTurns,
-		Now:                    r.now,
-		DeferMailboxPreemption: r.deferMailboxPreemption,
+		Dispatcher:              dispatcher,
+		MaxTurns:                r.maxTurns,
+		Now:                     r.now,
+		DeferMailboxPreemption:  r.deferMailboxPreemption,
 	}).Run(ctx, &loopRequest)
 }
 

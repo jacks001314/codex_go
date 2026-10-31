@@ -360,17 +360,24 @@ type RuntimeRouter struct {
 	// model-catalog refresh per parent thread (Rust #57789).
 	guardianCatalogRefreshMu sync.Mutex
 	guardianCatalogRefreshes map[string]*guardianCatalogRefreshAttempt
-	sink                     NotificationSink
-	requests                 ServerRequestSink
-	turnsMu                  *sync.Mutex
-	active                   map[string]*activeRuntimeTurn
-	diffs                    map[string]*runtimeutil.DiffTracker
-	ephemeralMu              *sync.RWMutex
-	ephemeralThreads         map[string]*session.Record
-	subscriptionsMu          *sync.Mutex
-	threadSubscriptions      map[string]map[string]struct{}
-	clientInfoMu             sync.RWMutex
-	clientInfo               map[string]ClientInfo
+	// stepToolPlansMu guards stepToolPlans, the tool inputs a turn assembles
+	// once and replays when a later sampling step switches models (Rust
+	// #44242's built_tools plans every step from that step's captured model).
+	// The store keeps the newest turn per thread, so it stays bounded by the
+	// live threads without hooking the turn lifecycle.
+	stepToolPlansMu     sync.Mutex
+	stepToolPlans       map[string]rememberedTurnToolInputs
+	sink                NotificationSink
+	requests            ServerRequestSink
+	turnsMu             *sync.Mutex
+	active              map[string]*activeRuntimeTurn
+	diffs               map[string]*runtimeutil.DiffTracker
+	ephemeralMu         *sync.RWMutex
+	ephemeralThreads    map[string]*session.Record
+	subscriptionsMu     *sync.Mutex
+	threadSubscriptions map[string]map[string]struct{}
+	clientInfoMu        sync.RWMutex
+	clientInfo          map[string]ClientInfo
 	// closedConnections records transports that already reported closure, so a
 	// request that outlived its connection cannot re-subscribe it after slow
 	// startup (Rust #50380).
@@ -16820,7 +16827,10 @@ func (r *RuntimeRouter) buildTurnRuntimeContext(ctx context.Context, params *tur
 		DynamicToolStepRefresh:      r.services.AllowPersistentDynamicToolUpdates,
 		MultiAgentOverridesForModel: r.multiAgentOverrideRefresher(params, turnID, turnConfig),
 		StepToolSurface:             r.stepToolSurfaceRefresher(router, params, turnID, cwd),
-		InvocationRegistry:          invocationRegistry,
+		// Rust #44242: a step that switches models is planned from that
+		// step's captured settings instead of the turn-start plan.
+		StepToolPlan:       r.stepToolPlanForTurn(params.ThreadID, turnID),
+		InvocationRegistry: invocationRegistry,
 	})
 	// A replacement accepted while this turn is running publishes onto this
 	// runtime, which refreshes the tool list before the next sampling step.
@@ -17737,6 +17747,9 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	if err != nil {
 		return nil, err
 	}
+	// Rust #44242: a later sampling step plans its tools from that step's
+	// captured settings, so keep the assembled options for the step rebuild.
+	r.rememberTurnToolOptions(threadID, strings.TrimSpace(turnID), cwd, params, cfg, options)
 	// Rust #53369: an unavailable message board must not reject turn
 	// construction. Calls to the missing board tools reach the model as ordinary
 	// unsupported-call errors while the rest of the turn continues.
