@@ -13468,7 +13468,16 @@ func (r *RuntimeRouter) feedbackTransport() *FeedbackTransport {
 	}
 	var client model.HTTPDoer
 	if r != nil {
-		client = r.httpClientForConfig(cfg)
+		// Rust's feedback transport never follows redirects and keeps its request
+		// logging off; the per-attempt context deadline is the only budget.
+		if base := r.policyHTTPClientForConfig(cfg); base != nil {
+			clone := *base
+			clone.CheckRedirect = func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			}
+			clone.Timeout = 0
+			client = &clone
+		}
 	}
 	return &FeedbackTransport{HTTP: client, DSN: FeedbackSentryDSN}
 }

@@ -154,6 +154,32 @@ func TestFeedbackTransportPostsSentryEnvelopeAuthLikeRust(t *testing.T) {
 	}
 }
 
+func TestFeedbackTransportDoesNotFollowRedirectsLikeRust(t *testing.T) {
+	var followed int32
+	redirected := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&followed, 1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer redirected.Close()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, redirected.URL, http.StatusTemporaryRedirect)
+	}))
+	defer server.Close()
+	router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(t.TempDir())})
+	transport := router.feedbackTransport()
+	transport.DSN = feedbackTestDSN(t, server.URL)
+	delivery := transport.Send(context.Background(), []byte("{}\n"))
+	if !delivery.Confirmed || delivery.Accepted {
+		t.Fatalf("delivery = %#v, want the redirect itself reported", delivery)
+	}
+	if delivery.Status != http.StatusTemporaryRedirect {
+		t.Fatalf("status = %d, want %d", delivery.Status, http.StatusTemporaryRedirect)
+	}
+	if got := atomic.LoadInt32(&followed); got != 0 {
+		t.Fatalf("redirect target requests = %d, want 0", got)
+	}
+}
+
 func TestFeedbackRetryAfterParsesSecondsAndDatesLikeRust(t *testing.T) {
 	if delay, ok := parseFeedbackRetryAfter("8"); !ok || delay != 8*time.Second {
 		t.Fatalf("seconds = %v %v", delay, ok)
