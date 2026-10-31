@@ -183,7 +183,7 @@ func TestParseQueueRejectsUnsupportedOptionsLikeRust(t *testing.T) {
 		{withBase("--oss"), "does not support `--oss`"},
 		{withBase("--remote", "ws://127.0.0.1:1234", "--cd", "/tmp"), "does not support `--cd` with `--remote`"},
 		{append([]string{"--cd", "/tmp", "queue"}, append([]string{"--remote", "ws://127.0.0.1:1234"}, base...)...), "does not support `--cd` with `--remote`"},
-		{append([]string{"queue"}, append([]string{"--thread", "t", "--message", "hi", "prompt"})...), "unexpected argument 'prompt' found"},
+		{[]string{"queue", "--thread", "t", "--message", "hi", "prompt"}, "unexpected argument 'prompt' found"},
 	}
 	for _, tc := range tests {
 		_, err := Parse(tc.args)

@@ -29,3 +29,17 @@ func TestCrossPlatformBuildsCompile(t *testing.T) {
 		}
 	}
 }
+
+// TestGoVetIsClean keeps the tree free of the findings the toolchain reports
+// for dead appends and context cancels that do not run on every return path
+// (appserver/thread_sample.go leaked one). go vet is part of the release gate,
+// so a new finding must fail here instead of accumulating.
+func TestGoVetIsClean(t *testing.T) {
+	cmd := exec.Command("go", "vet", "./...")
+	cmd.Dir = filepath.Join("..")
+	cmd.Env = os.Environ()
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go vet ./... failed: %v\n%s", err, out)
+	}
+}

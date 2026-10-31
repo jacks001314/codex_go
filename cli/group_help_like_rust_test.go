@@ -23,7 +23,7 @@ func TestGroupHelpRequestsLikeRust(t *testing.T) {
 	}
 	for _, group := range groups {
 		t.Run(group.name, func(t *testing.T) {
-			bare := append(append([]string(nil), group.path...))
+			bare := append([]string(nil), group.path...)
 			parsed, err := Parse(bare)
 			if err != nil {
 				t.Fatalf("Parse(%v) error = %v", bare, err)

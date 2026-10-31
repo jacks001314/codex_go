@@ -231,10 +231,12 @@ func threadSampleInterruptOnCancel(cfg *config.Config, params *ThreadSampleParam
 }
 
 func (r *RuntimeRouter) registerThreadSampleCancel(request *Request) (context.Context, func()) {
-	base, cancel := context.WithCancel(context.Background())
 	if r == nil || request == nil {
-		return base, func() {}
+		// Nothing is registered, so no cancel is needed; creating a cancelable
+		// context here would leak it (go vet context leak check).
+		return context.Background(), func() {}
 	}
+	base, cancel := context.WithCancel(context.Background())
 	key := threadSampleCancelKey(request.ConnectionID, request.ID)
 	r.threadSampleMu.Lock()
 	if r.threadSampleCancels == nil {

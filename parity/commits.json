@@ -33280,6 +33280,7 @@
    ],
    "status": "complete",
    "evidence": [
+   "Round 1276: thread/sample cancellation registers a per-request cancel func, but the nil-router/nil-request guard returned a cancelable context whose cancel never ran (go vet context-leak finding); the guard now returns context.Background() and only registered samples build a cancelable context. parity TestGoVetIsClean keeps `go vet ./...` green, which also forced the two dead `append(...)` calls in the cli tests to be spelled out.",
     "Round 1248: the experimental thread/sample request is implemented in appserver (protocol MethodThreadSample, appserver/thread_sample.go, appserver/schema.go experimental surface) with loaded/idle/persistent-root sampling. Tests: appserver/prediction_parent_tools_like_rust_test.go:290 and appserver/thread_sample_like_rust_test.go."
    ]
   },
