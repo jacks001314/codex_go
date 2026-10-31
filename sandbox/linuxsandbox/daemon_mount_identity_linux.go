@@ -12,25 +12,32 @@ import (
 )
 
 // daemonSocketIdentity reports the opened socket directory's mount device as
-// "major:minor" and its mount ID, mirroring Rust's
-// `daemon_socket_mask_paths` (#46125): the ID comes from the descriptor's
-// fdinfo entry, with a statx fallback for kernels that omit it there.
-func daemonSocketIdentity(directory string) (string, string, error) {
+// "major:minor", its mount ID and its filesystem, mirroring Rust's
+// `daemon_socket_mask_paths` (#46125, #47968): the ID comes from the
+// descriptor's fdinfo entry, with a statx fallback for kernels that omit it
+// there. Btrfs subvolumes report a per-subvolume st_dev, so the descriptor's
+// fstatfs result authorizes the device mismatch in mountinfo.
+func daemonSocketIdentity(directory string) (string, string, daemonSocketFilesystem, error) {
 	file, err := os.Open(directory)
 	if err != nil {
-		return "", "", err
+		return "", "", daemonSocketFilesystemOther, err
 	}
 	defer file.Close()
 	info, err := file.Stat()
 	if err != nil {
-		return "", "", err
+		return "", "", daemonSocketFilesystemOther, err
 	}
 	system, ok := info.Sys().(*unix.Stat_t)
 	if !ok {
-		return "", "", errDaemonSocketIsolation
+		return "", "", daemonSocketFilesystemOther, errDaemonSocketIsolation
 	}
 	device := fmt.Sprintf("%d:%d", unix.Major(uint64(system.Dev)), unix.Minor(uint64(system.Dev)))
-	return device, daemonSocketMountID(file), nil
+	filesystem := daemonSocketFilesystemOther
+	var statfs unix.Statfs_t
+	if err := unix.Fstatfs(int(file.Fd()), &statfs); err == nil && statfs.Type == unix.BTRFS_SUPER_MAGIC {
+		filesystem = daemonSocketFilesystemBtrfs
+	}
+	return device, daemonSocketMountID(file), filesystem, nil
 }
 
 // daemonSocketMountID reads the mount ID shared with /proc/self/mountinfo. An

@@ -1112,7 +1112,7 @@ func execBubblewrap(cmd *linuxSandboxCommand, inner []string) error {
 		if err != nil {
 			return err
 		}
-		device, mountID, err := daemonSocketIdentity(daemonDirectory)
+		device, mountID, filesystem, err := daemonSocketIdentity(daemonDirectory)
 		if err != nil {
 			return fmt.Errorf("cannot establish app-server socket mount isolation: %w", err)
 		}
@@ -1127,7 +1127,7 @@ func execBubblewrap(cmd *linuxSandboxCommand, inner []string) error {
 		if wslgMask {
 			maskedRoot = wslgDistroRoot
 		}
-		if err := validateDaemonSocketMountIsolation(daemonDirectory, device, mountID, mountinfo, maskedRoot); err != nil {
+		if err := validateDaemonSocketMountIsolation(daemonDirectory, device, filesystem, mountID, mountinfo, maskedRoot); err != nil {
 			return err
 		}
 		args = append(args, "--tmpfs", daemonDirectory)

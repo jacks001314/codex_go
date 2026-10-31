@@ -24,7 +24,7 @@ func TestValidateDaemonSocketMountIsolationLikeRust(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := validateDaemonSocketMountIsolation(directory, tc.device, tc.mountID, []byte(tc.mounts), "")
+			err := validateDaemonSocketMountIsolation(directory, tc.device, daemonSocketFilesystemOther, tc.mountID, []byte(tc.mounts), "")
 			if tc.wantFail && err == nil {
 				t.Fatalf("mountinfo %q was accepted", tc.mounts)
 			}
@@ -39,7 +39,7 @@ func TestValidateDaemonSocketMountIsolationLikeRust(t *testing.T) {
 }
 
 func TestValidateDaemonSocketMountIsolationRejectsMalformedMountinfo(t *testing.T) {
-	if err := validateDaemonSocketMountIsolation("/tmp/codex-daemon-1000", "0:1", "", []byte("broken line\n"), ""); err == nil {
+	if err := validateDaemonSocketMountIsolation("/tmp/codex-daemon-1000", "0:1", daemonSocketFilesystemOther, "", []byte("broken line\n"), ""); err == nil {
 		t.Fatal("malformed mountinfo was accepted")
 	}
 }
@@ -65,7 +65,7 @@ func TestValidateDaemonSocketMountIsolationNamespaceMountsLikeRust(t *testing.T)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			mounts := "1 0 0:1 / / rw - ext4 disk rw\n" + tc.mount + "\n"
-			err := validateDaemonSocketMountIsolation(directory, "0:1", "", []byte(mounts), "")
+			err := validateDaemonSocketMountIsolation(directory, "0:1", daemonSocketFilesystemOther, "", []byte(mounts), "")
 			if tc.wantFail && err == nil {
 				t.Fatalf("mount %q was accepted", tc.mount)
 			}
@@ -82,7 +82,7 @@ func TestValidateDaemonSocketMountIsolationNamespaceMountKeepsAliasChecksLikeRus
 	mounts := "1 0 0:1 / / rw - ext4 disk rw\n" +
 		"2 1 0:2 net:[4026531840] /run/netns/example rw - nsfs nsfs rw\n" +
 		"3 1 0:1 /tmp/codex-daemon-1000 /alias rw - ext4 disk rw\n"
-	err := validateDaemonSocketMountIsolation("/tmp/codex-daemon-1000", "0:1", "", []byte(mounts), "")
+	err := validateDaemonSocketMountIsolation("/tmp/codex-daemon-1000", "0:1", daemonSocketFilesystemOther, "", []byte(mounts), "")
 	if err == nil {
 		t.Fatal("socket alias behind an unrelated namespace mount was accepted")
 	}

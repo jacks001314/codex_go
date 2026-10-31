@@ -19,6 +19,15 @@ import (
 
 var errDaemonSocketIsolation = errors.New("cannot establish app-server socket mount isolation")
 
+// daemonSocketFilesystem distinguishes the opened socket directory's
+// filesystem when its st_dev can legitimately differ from mountinfo.
+type daemonSocketFilesystem int
+
+const (
+	daemonSocketFilesystemOther daemonSocketFilesystem = iota
+	daemonSocketFilesystemBtrfs
+)
+
 type daemonMount struct {
 	id          string
 	parent      string
@@ -26,16 +35,19 @@ type daemonMount struct {
 	root        string
 	rootIsPath  bool
 	destination string
+	filesystem  string
 }
 
 // validateDaemonSocketMountIsolation rejects host mount layouts that would
 // expose the app-server rendezvous directory beyond the paths bwrap masks.
 //
-// device is the socket directory's mount device as "major:minor" and mountID
-// the mount ID read from the opened directory (empty when the kernel cannot
-// report one). maskedRoot is a subtree the sandbox masks separately, so an
-// alias there does not count as exposed.
-func validateDaemonSocketMountIsolation(directory string, device string, mountID string, mountinfo []byte, maskedRoot string) error {
+// device is the socket directory's mount device as "major:minor". filesystem
+// identifies the opened descriptor so a Btrfs subvolume's per-subvolume st_dev
+// may differ from the superblock device in mountinfo. mountID is the mount ID
+// read from the opened directory (empty when the kernel cannot report one).
+// maskedRoot is a subtree the sandbox masks separately, so an alias there does
+// not count as exposed.
+func validateDaemonSocketMountIsolation(directory string, device string, filesystem daemonSocketFilesystem, mountID string, mountinfo []byte, maskedRoot string) error {
 	directory = filepath.Clean(directory)
 	if directory == "." || directory == "/" {
 		return errDaemonSocketIsolation
@@ -48,21 +60,33 @@ func validateDaemonSocketMountIsolation(directory string, device string, mountID
 	var location string
 	containingID := ""
 	containingDestination := ""
+	mountDevice := device
 	if mountID != "" {
 		selected := -1
 		for index := range mounts {
-			if mounts[index].id == mountID {
-				selected = index
-				break
+			if mounts[index].id != mountID {
+				continue
 			}
+			if selected >= 0 {
+				return errDaemonSocketIsolation
+			}
+			selected = index
 		}
 		if selected < 0 {
 			return errDaemonSocketIsolation
 		}
 		mount := mounts[selected]
-		if mount.device != device || !mount.rootIsPath {
+		// Btrfs reports a per-subvolume st_dev, while mountinfo uses the
+		// superblock device. Only a verified Btrfs descriptor may authorize the
+		// mismatch, and only when that mount also reports Btrfs.
+		if mount.device != device &&
+			(filesystem != daemonSocketFilesystemBtrfs || mount.filesystem != "btrfs") {
 			return errDaemonSocketIsolation
 		}
+		if !mount.rootIsPath {
+			return errDaemonSocketIsolation
+		}
+		mountDevice = mount.device
 		relative, ok := relativeWithin(directory, mount.destination)
 		if !ok {
 			return errDaemonSocketIsolation
@@ -103,10 +127,11 @@ func validateDaemonSocketMountIsolation(directory string, device string, mountID
 		nested := mount.destination != directory && pathWithin(mount.destination, directory)
 		aliasPath := ""
 		aliasSet := false
-		// Rust only derives aliases between mounts of the socket's own device:
-		// another filesystem mounted at an overlapping path is a different
-		// backing store, not a visible duplicate of the socket directory.
-		if mount.device == device && mount.rootIsPath {
+		// Rust only derives aliases between mounts of the socket's own device
+		// (either identity when Btrfs reports a per-subvolume st_dev): another
+		// filesystem mounted at an overlapping path is a different backing
+		// store, not a visible duplicate of the socket directory.
+		if (mount.device == device || mount.device == mountDevice) && mount.rootIsPath {
 			if relative, ok := relativeWithin(location, mount.root); ok {
 				aliasPath = joinMountPath(mount.destination, relative)
 				aliasSet = true
@@ -196,6 +221,10 @@ func parseDaemonMounts(mountinfo []byte) ([]daemonMount, error) {
 			return nil, errDaemonSocketIsolation
 		}
 		root, rootErr := mountinfoPath(fields[3])
+		filesystem, ok := mountinfoFilesystem(fields[5:])
+		if !ok {
+			return nil, errDaemonSocketIsolation
+		}
 		mounts = append(mounts, daemonMount{
 			id:          fields[0],
 			parent:      fields[1],
@@ -203,9 +232,25 @@ func parseDaemonMounts(mountinfo []byte) ([]daemonMount, error) {
 			root:        root,
 			rootIsPath:  rootErr == nil,
 			destination: destination,
+			filesystem:  filesystem,
 		})
 	}
 	return mounts, nil
+}
+
+// mountinfoFilesystem returns the mount's filesystem type, which follows the
+// optional-fields separator ("-" fstype source super-options).
+func mountinfoFilesystem(fields []string) (string, bool) {
+	for index := 0; index < len(fields); index++ {
+		if fields[index] != "-" {
+			continue
+		}
+		if index+1 >= len(fields) {
+			return "", false
+		}
+		return fields[index+1], true
+	}
+	return "", false
 }
 
 func daemonSocketMountError(path string) error {

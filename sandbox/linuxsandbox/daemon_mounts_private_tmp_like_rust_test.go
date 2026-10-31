@@ -16,7 +16,7 @@ import (
 // no independently masked subtree.
 func checkDaemonMountsLikeRust(t *testing.T, directory string, device string, mountID string, mountinfo string, allow bool) {
 	t.Helper()
-	err := validateDaemonSocketMountIsolation(directory, device, mountID, []byte(mountinfo), "")
+	err := validateDaemonSocketMountIsolation(directory, device, daemonSocketFilesystemOther, mountID, []byte(mountinfo), "")
 	if allow && err != nil {
 		t.Fatalf("mountinfo %q (device %s, mount id %q) error = %v", mountinfo, device, mountID, err)
 	}
@@ -153,13 +153,13 @@ func TestDaemonMountsMaskedWSLGAliasKeepsOtherAliasesLikeRust(t *testing.T) {
 	exposed := mounts + "3 1 0:1 /tmp /host-tmp rw - ext4 disk rw\n"
 	directory := "/tmp/codex-daemon-1000"
 	for _, mountID := range []string{"1", ""} {
-		if err := validateDaemonSocketMountIsolation(directory, "0:1", mountID, []byte(mounts), ""); err == nil {
+		if err := validateDaemonSocketMountIsolation(directory, "0:1", daemonSocketFilesystemOther, mountID, []byte(mounts), ""); err == nil {
 			t.Fatalf("unmasked WSLg alias (mount id %q) was accepted", mountID)
 		}
-		if err := validateDaemonSocketMountIsolation(directory, "0:1", mountID, []byte(mounts), wslgDistroRoot); err != nil {
+		if err := validateDaemonSocketMountIsolation(directory, "0:1", daemonSocketFilesystemOther, mountID, []byte(mounts), wslgDistroRoot); err != nil {
 			t.Fatalf("masked WSLg alias (mount id %q) error = %v", mountID, err)
 		}
-		err := validateDaemonSocketMountIsolation(directory, "0:1", mountID, []byte(exposed), wslgDistroRoot)
+		err := validateDaemonSocketMountIsolation(directory, "0:1", daemonSocketFilesystemOther, mountID, []byte(exposed), wslgDistroRoot)
 		if err == nil || !strings.Contains(err.Error(), "unsupported host mount") {
 			t.Fatalf("exposed alias beside WSLg (mount id %q) error = %v", mountID, err)
 		}

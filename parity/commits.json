@@ -9885,9 +9885,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1120: the upstream commit only adds tracing instrument spans and attributes for agents_md and local filesystem operations, with no public API or behaviour change; Go tracehook models exec-server process lifecycle spans and these paths carry no context to attach an equivalent span."
    ]
   },
   {
@@ -10509,7 +10509,7 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "partial",
    "evidence": [
     "Partial symbol coverage 3/7; needs review: WriterLockGuard, materialize_rollout_for_append, new_with_writer_lock, try_acquire_for_publication"
    ]
@@ -10581,9 +10581,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1120: Go thread startup does not join MCP discovery; MCP prewarm runs asynchronously after the thread is retained, and LiveThreadRetention already discards its writer on initialization failure (Rust #45487), so the cancelled-join writer leak has no Go equivalent."
    ]
   },
   {
@@ -20017,9 +20017,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1120: RuntimeRouter.httpClientForConfig and policyHTTPClientForConfig wrap the transport with network.PolicyHTTPDoer or network.PolicyHTTPClient whenever the managed application policy is restricted, so each redirect hop is rechecked and proxy/custom-CA clients stay policy-bound; realtime, AWS auth and application-network paths share the same seam."
    ]
   },
   {
@@ -20357,9 +20357,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1120: the history-notes backend uses RuntimeRouter.httpClientForConfig and image-generation options receive the same policy-bound model.HTTPDoer, so both extensions honor the managed application network policy and configured proxy route instead of a default client."
    ]
   },
   {
@@ -21286,9 +21286,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1120: sandbox/linuxsandbox now records the opened socket directory filesystem with fstatfs, parses mountinfo fstype, and permits a device mismatch only for a verified Btrfs descriptor whose selected mount also reports btrfs; aliases are checked under both the stat and mount device identities. daemon_mounts_btrfs_like_rust_test.go covers verified acceptance, unverified filesystems, duplicate mount IDs and unsafe aliases; Linux build, vet and test compilation pass."
    ]
   },
   {
