@@ -4984,6 +4984,9 @@ func parseCompletion(args []string, completion *CompletionOptions) error {
 			if bound {
 				return unexpectedPositionalError(arg, subcommandUsageTexts["completion"].usage)
 			}
+			if err := validateCompletionShell(arg); err != nil {
+				return err
+			}
 			completion.Shell = arg
 			bound = true
 		}

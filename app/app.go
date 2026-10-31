@@ -2581,8 +2581,17 @@ func runFeatures(opts cli.FeatureOptions, root cli.RootOptions, stdout io.Writer
 		for key, enabled := range effective.FeatureSettings() {
 			values[key] = enabled
 		}
-		for _, spec := range features.Sorted() {
-			fmt.Fprintf(stdout, "%-38s  %-18s  %t\n", spec.Key, spec.Stage, values[spec.Key])
+		sorted := features.Sorted()
+		// Mirrors Rust cli/src/main.rs FeaturesSubcommand::List: both columns
+		// are sized from the longest entry instead of fixed widths.
+		nameWidth := 0
+		stageWidth := 0
+		for _, spec := range sorted {
+			nameWidth = max(nameWidth, len(spec.Key))
+			stageWidth = max(stageWidth, len(spec.Stage))
+		}
+		for _, spec := range sorted {
+			fmt.Fprintf(stdout, "%-*s  %-*s  %t\n", nameWidth, spec.Key, stageWidth, spec.Stage, values[spec.Key])
 		}
 		return nil
 	case "enable", "disable":

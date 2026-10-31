@@ -2273,8 +2273,40 @@ only reached the error through the update wrapper.
   `TestApplyPreserveRejectsOverlappingEndOfFileChunks` and
   `TestApplyPatchExecutorInvalidMatrixDoesNotMutateWorkspace`.
 
+### 73. `completion [SHELL]` parses like clap and `features list` sizes its columns
+
+clap validates `completion`'s optional positional at parse time, so
+`codex completion bogus` exits 2 with `error: invalid value 'bogus' for
+'[SHELL]'`, the alphabetical `[possible values: bash, elvish, fish,
+powershell, zsh]` line, clap's `tip: a similar value exists` hint (`bsh` ->
+`bash`) and no usage block. Go accepted any string and only failed inside
+the generator with `Error: unsupported completion shell bogus` (exit 1).
+`validateCompletionShell` now runs in `parseCompletion` and reuses
+`invalidValueError`.
+
+`features list` printed fixed `%-38s`/`%-18s` columns, while Rust sizes both
+from the longest entry in `FEATURES` (`name_width` 39 and `stage_width` 17
+for the current table), so every row carried one extra pad. `runFeatures`
+now derives the widths from `features.Sorted()` the same way.
+
+- Evidence: `out/r61-fix.txt` - `completion bogus`, `completion bsh`,
+  `completion BASH` and `completion bash extra` are byte-identical to 0.166
+  in rc, stdout and stderr, and the 194 `features list` rows share the same
+  name/stage columns. The remaining row delta is the seven features added
+  upstream after the 0.166 branch (`apps_early_resource_discovery`,
+  `code_mode_host_output_truncation`, `gcp_setup_wizard`,
+  `incremental_exec_tools`, `interrupt_on_cancel`,
+  `suppress_model_change_announcements`, `tui_extensions_statusline`), all
+  present in `codex-rs/features/src/lib.rs` at `b0f977c3a9`.
+- Regressions: `TestCompletionShellDiagnosticsLikeRust` in `cli` and
+  `TestFeaturesListUsesDynamicColumnWidthsLikeRust` in `app`.
 ## Verification
 
+- Round 59 aligns the `completion` value diagnostics and the `features list`
+  column widths (entry 73): four completion probes match 0.166 byte for byte
+  and the shared `features list` rows align (`out/r61-fix.txt`); the extra
+  rows are post-0.166 upstream features. `go test -count=1 -vet=off ./cli`
+  passes, as do `TestFeaturesList`/`TestFeaturesEnable` in `./app`.
 - Round 58 aligns the `apply_patch` context errors (entry 72): the 14-document
   parse corpus and four context cases match 0.166 byte for byte
   (`out/r59-parse.txt`, `out/r59-context.txt`), and
@@ -2889,3 +2921,24 @@ only reached the error through the update wrapper.
   already carries the newer upstream rule (`#58238`, 2026-10-30, before the
   0.166 branch point), so Go's embedded-mode hint is forward parity, not a
   defect. The local Rust checkout is at `b0f977c3a9` (2026-10-30).
+
+- `completion` shell scripts are still Go's hand-written tables (11.7k, 2.3k,
+  6.2k, 12.1k and 2.3k characters) instead of clap_complete's full tree
+  emission (243k, 246k, 198k, 273k and 167k for bash, zsh, fish, powershell
+  and elvish). Byte parity needs a clap_complete port for all five shells
+  plus the whole clap command tree with help texts and value hints; the
+  functional coverage (every subcommand and flag) is already present, only
+  the generated layout differs.
+- `debug models` still serialises Go's own catalog struct: 10 models where
+  0.166 prints 12, `supported_reasoning_levels` as a string array instead of
+  `{"effort","description"}` objects, and a different field selection and
+  order (`default_service_tier`, `model_specialty`,
+  `supports_parallel_tool_calls`, `auto_compact_token_limit` and
+  `auto_review_model_override` are Go-side extras). Upstream's
+  `models-manager` ModelInfo owns that JSON, so aligning means generating the
+  Go catalog from the same data assets.
+- `codex debug config` is a hidden Go-only subcommand that dumps the
+  effective config with origins and layers; 0.166 answers `error:
+  unrecognized subcommand 'config'`. Neither help page lists it, so the help
+  surface still matches, and removing it would drop a developer diagnostic
+  that `app/debug_cli_test.go` and `app/app_test.go` exercise.

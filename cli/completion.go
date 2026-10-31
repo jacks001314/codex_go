@@ -46,6 +46,19 @@ var tuiOnlyCompletionOptions = []string{
 	"--no-alt-screen",
 }
 
+// completionShellValues is clap's possible-value list for the optional
+// [SHELL] positional, in the alphabetical order clap prints it.
+var completionShellValues = []string{"bash", "elvish", "fish", "powershell", "zsh"}
+
+// validateCompletionShell applies clap's value parser for `completion [SHELL]`.
+func validateCompletionShell(value string) error {
+	for _, allowed := range completionShellValues {
+		if value == allowed {
+			return nil
+		}
+	}
+	return invalidValueError(value, "[SHELL]", completionShellValues)
+}
 func GenerateCompletion(shell string, commandName string) (string, error) {
 	if strings.TrimSpace(commandName) == "" {
 		commandName = "codex"
