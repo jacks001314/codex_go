@@ -137,13 +137,23 @@ func TestParseQueueCommandRejectsInvalidLikeRust(t *testing.T) {
 	for _, args := range [][]string{
 		{"queue", "--message", "hello"},                             // missing --thread
 		{"queue", "--thread", "thread-1"},                           // missing --message
-		{"queue", "--thread", "t", "--message", "  "},               // blank --message
+		{"queue", "--thread", "t", "--message", ""},                 // empty --message
+		{"queue", "--thread", "t", "--message="},                    // empty attached --message
 		{"queue", "--thread", "t", "--message", "hi", "positional"}, // positional arg
 		{"queue", "--thread", "t", "--message", "hi", "--bogus"},    // unknown option
 	} {
 		if _, err := Parse(args); err == nil {
 			t.Fatalf("Parse(%v) succeeded, want error", args)
 		}
+	}
+	// NonEmptyStringValueParser only rejects an empty value, so whitespace
+	// reaches the runtime like any other text.
+	parsed, err := Parse([]string{"queue", "--thread", "t", "--message", "  "})
+	if err != nil {
+		t.Fatalf("Parse(queue blank message) error = %v", err)
+	}
+	if parsed.Queue.Message != "  " {
+		t.Fatalf("Queue.Message = %q, want two spaces", parsed.Queue.Message)
 	}
 }
 

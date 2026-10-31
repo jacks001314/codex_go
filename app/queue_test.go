@@ -115,8 +115,15 @@ func TestRunSessionQueueRejectsModelConfigOverrideLikeRust(t *testing.T) {
 }
 
 func TestRunSessionQueueRequiresMessageLikeRust(t *testing.T) {
+	t.Setenv("CODEX_HOME", t.TempDir())
 	var stdout, stderr strings.Builder
-	if err := runSessionQueue(&cli.QueueOptions{Thread: "thread-1", Message: "  "}, nil, &stdout, &stderr); err == nil || !strings.Contains(err.Error(), "requires --message") {
+	if err := runSessionQueue(&cli.QueueOptions{Thread: "thread-1", Message: ""}, nil, &stdout, &stderr); err == nil || !strings.Contains(err.Error(), "requires --message") {
+		t.Fatalf("runSessionQueue(empty message) error = %v", err)
+	}
+	// Rust parses --message with NonEmptyStringValueParser, which only rejects an
+	// empty value: a whitespace-only message reaches the session lookup intact.
+	err := runSessionQueue(&cli.QueueOptions{Thread: "thread-1", Message: "  "}, nil, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "No active session found matching 'thread-1'.") {
 		t.Fatalf("runSessionQueue(blank message) error = %v", err)
 	}
 }

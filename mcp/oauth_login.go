@@ -467,9 +467,35 @@ func MCPOAuthCallbackID(serverURL string) (string, error) {
 	if strings.TrimSpace(parsed.Host) == "" {
 		return "", fmt.Errorf("MCP server URL %q must include a host", serverURL)
 	}
+	// Rust hashes the URL as the `url` crate serializes it, which lowercases the
+	// scheme and host, drops a default port, adds the "/" root path and strips
+	// the fragment. Getting this exactly right matters: the ID persisted by
+	// `codex mcp add` is the one login later validates.
 	parsed.Fragment = ""
+	parsed.Scheme = strings.ToLower(parsed.Scheme)
+	parsed.Host = mcpOAuthNormalizedHost(parsed.Scheme, parsed.Host)
+	if parsed.Path == "" {
+		parsed.Path = "/"
+	}
 	digest := sha256.Sum256([]byte(parsed.String()))
 	return base64.RawURLEncoding.EncodeToString(digest[:9]), nil
+}
+
+// mcpOAuthNormalizedHost mirrors the url crate's host serialization for the
+// callback-ID hash: lowercase, and no port that the scheme already implies.
+func mcpOAuthNormalizedHost(scheme string, host string) string {
+	lowered := strings.ToLower(host)
+	defaultPort := ""
+	switch scheme {
+	case "http", "ws":
+		defaultPort = ":80"
+	case "https", "wss":
+		defaultPort = ":443"
+	}
+	if defaultPort != "" && strings.HasSuffix(lowered, defaultPort) {
+		lowered = strings.TrimSuffix(lowered, defaultPort)
+	}
+	return lowered
 }
 
 func AppendMCPOAuthCallbackID(redirectURI string, callbackID string) (string, error) {

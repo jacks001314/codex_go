@@ -261,16 +261,25 @@ func runMCPAdd(ctx context.Context, store *mcpCLIStore, opts *cli.MCPOptions, st
 	if err := validateMCPServerName(opts.Name); err != nil {
 		return err
 	}
-	if strings.TrimSpace(opts.OAuthClientSecret) != "" && strings.TrimSpace(opts.OAuthClientID) == "" {
-		return errors.New("oauth client secret requires an OAuth client ID")
+	// Rust validates the pair after clap: an empty secret is rejected outright,
+	// and a present-but-empty client ID cannot carry a secret.
+	if opts.OAuthClientSecretSet {
+		if strings.TrimSpace(opts.OAuthClientSecret) == "" {
+			return errors.New("--oauth-client-secret must not be empty")
+		}
+		if !opts.OAuthClientIDSet || strings.TrimSpace(opts.OAuthClientID) == "" {
+			return errors.New("--oauth-client-secret requires a nonempty --oauth-client-id")
+		}
 	}
 	server := &mcpCLIServer{
 		Name:    opts.Name,
 		Enabled: true,
 	}
-	if strings.TrimSpace(opts.URL) != "" {
+	if opts.URLSet || strings.TrimSpace(opts.URL) != "" {
 		server.Type = "streamable_http"
-		server.URL = strings.TrimSpace(opts.URL)
+		// Rust persists the raw --url value; an empty value still selects the
+		// streamable-HTTP transport and writes `url = ""`.
+		server.URL = opts.URL
 		server.BearerTokenEnvVar = strings.TrimSpace(opts.BearerTokenEnvVar)
 		server.OAuthClientID = strings.TrimSpace(opts.OAuthClientID)
 		server.OAuthClientSecret = strings.TrimSpace(opts.OAuthClientSecret)
@@ -281,11 +290,28 @@ func runMCPAdd(ctx context.Context, store *mcpCLIStore, opts *cli.MCPOptions, st
 		server.Args = append([]string(nil), opts.Command[1:]...)
 		server.Env = cloneStringMap(opts.Env)
 	}
+	// Rust discovers before saving so the persisted callback matches what the
+	// provider is registered for, then persists the callback URL whenever a
+	// client ID was supplied (even an empty one).
+	support := mcpOAuthLoginSupport(ctx, server, store.httpClient)
+	if opts.OAuthClientIDSet {
+		callbackMode := mcp.MCPOAuthCallbackSpecific
+		if support.Kind == mcpOAuthLoginSupported && support.Discovery != nil && support.Discovery.CallbackMode != "" {
+			callbackMode = support.Discovery.CallbackMode
+		}
+		callbackURL, err := mcp.ResolveMCPOAuthCallbackURL(server.URL, nil, callbackMode)
+		if err != nil {
+			return err
+		}
+		server.OAuthCallbackURL = callbackURL
+	}
 	if err := store.Upsert(opts.ConfigOverrides, server); err != nil {
 		return err
 	}
 	fmt.Fprintf(stdout, "Added global MCP server '%s'.\n", opts.Name)
-	support := mcpOAuthLoginSupport(ctx, server, store.httpClient)
+	if server.OAuthCallbackURL != "" {
+		fmt.Fprintf(stdout, "OAuth callback URL: %s\n", server.OAuthCallbackURL)
+	}
 	switch support.Kind {
 	case mcpOAuthLoginSupported:
 		fmt.Fprintln(stdout, "Detected OAuth support. Starting OAuth flow…")

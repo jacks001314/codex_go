@@ -715,7 +715,7 @@ func resolveRemoteSessionTargetForResume(ctx context.Context, client *remoteAppS
 }
 
 func resolveRemoteSessionMutationTarget(ctx context.Context, client *remoteAppServerTUIClient, opts *cli.SessionOptions, action remoteSessionAction) (remoteResolvedSessionTarget, error) {
-	if opts == nil || strings.TrimSpace(opts.Target) == "" {
+	if opts == nil {
 		return remoteResolvedSessionTarget{}, errors.New("SESSION is required")
 	}
 	target := strings.TrimSpace(opts.Target)
@@ -957,15 +957,14 @@ func resolveSessionTarget(store *session.Store, opts *cli.SessionOptions) (sessi
 }
 
 func resolveSessionMutationTarget(store *session.Store, opts *cli.SessionOptions, archived *bool) (session.ThreadID, error) {
+	target := ""
 	if opts != nil {
-		if target := strings.TrimSpace(opts.Target); target != "" {
-			if isUUIDLike(target) {
-				return session.ThreadID(target), nil
-			}
-			return sessionIDByNameWithArchiveFilter(store, target, archived)
-		}
+		target = strings.TrimSpace(opts.Target)
 	}
-	return "", errors.New("SESSION is required")
+	if isUUIDLike(target) {
+		return session.ThreadID(target), nil
+	}
+	return sessionIDByNameWithArchiveFilter(store, target, archived)
 }
 
 func latestSessionID(store *session.Store, opts *cli.SessionOptions) (session.ThreadID, error) {
@@ -1052,6 +1051,11 @@ func sessionIDByName(store *session.Store, opts *cli.SessionOptions, name string
 func sessionIDByNameWithArchiveFilter(store *session.Store, name string, archived *bool) (session.ThreadID, error) {
 	if store == nil {
 		return "", errors.New("session store is nil")
+	}
+	// Rust stores thread names as Option<String>, so an empty target can never
+	// equal an unnamed session and reports the same miss as any other label.
+	if strings.TrimSpace(name) == "" {
+		return "", fmt.Errorf("No %s session found matching '%s'.", sessionMutationSearchScope(archived), name)
 	}
 	var ids []session.ThreadID
 	seen := map[session.ThreadID]bool{}
@@ -1521,7 +1525,9 @@ func runSessionQueue(opts *cli.QueueOptions, root *cli.RootOptions, stdout, stde
 			return errors.New("`codex queue` does not support a `model` config override; queued messages use the thread's model")
 		}
 	}
-	message := strings.TrimSpace(opts.Message)
+	// Rust's NonEmptyStringValueParser only rejects a truly empty value, so the
+	// queued text is passed through verbatim (whitespace is a valid message).
+	message := opts.Message
 	if message == "" {
 		return errors.New("`codex queue` requires --message <TEXT>")
 	}
@@ -1642,10 +1648,10 @@ func resumeRemoteThreadIfUnloaded(ctx context.Context, client *remoteAppServerTU
 // active session name, preferring the most recent duplicate
 // (Rust SessionNameMatch::FirstIncludingNonInteractive, #39385).
 func resolveQueueSessionTarget(store *session.Store, opts *cli.SessionOptions) (session.ThreadID, error) {
-	if opts == nil || strings.TrimSpace(opts.Target) == "" {
-		return "", errors.New("SESSION is required")
+	target := ""
+	if opts != nil {
+		target = strings.TrimSpace(opts.Target)
 	}
-	target := strings.TrimSpace(opts.Target)
 	if isUUIDLike(target) {
 		return session.ThreadID(target), nil
 	}
@@ -1655,6 +1661,9 @@ func resolveQueueSessionTarget(store *session.Store, opts *cli.SessionOptions) (
 func sessionIDByUniqueActiveName(store *session.Store, name string) (session.ThreadID, error) {
 	if store == nil {
 		return "", errors.New("session store is nil")
+	}
+	if strings.TrimSpace(name) == "" {
+		return "", fmt.Errorf("No active session found matching '%s'.", name)
 	}
 	records, err := listSessionsByArchived(store, false)
 	if err != nil {

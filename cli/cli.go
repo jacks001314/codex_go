@@ -218,10 +218,16 @@ type MCPOptions struct {
 	OAuthClientSecret       string
 	OAuthResource           string
 	OAuthClientRegistration string
-	Env                     map[string]string
-	Command                 []string
-	Scopes                  []string
-	ConfigOverrides         []string
+	// URLSet, OAuthClientIDSet and OAuthClientSecretSet record that clap received
+	// the option, since Rust treats an empty value as present (its String
+	// parsers accept "" and only NonEmptyStringValueParser rejects it).
+	URLSet               bool
+	OAuthClientIDSet     bool
+	OAuthClientSecretSet bool
+	Env                  map[string]string
+	Command              []string
+	Scopes               []string
+	ConfigOverrides      []string
 	// NoBrowser prints the authorization URL and accepts a pasted callback
 	// instead of launching a browser (Rust #44629).
 	NoBrowser bool
@@ -680,6 +686,9 @@ type QueueOptions struct {
 	// form clap accepts as a present (if empty) value.
 	ThreadSet bool
 	Message   string
+	// MessageSet records that --message was supplied. Rust parses it with
+	// NonEmptyStringValueParser, so only an empty value is rejected.
+	MessageSet bool
 	// Resume mirrors Rust queue_cmd.rs `--resume` (#57232): after queueing,
 	// ask the daemon or explicit --remote server to resume an unloaded thread.
 	Resume          bool
@@ -2262,31 +2271,9 @@ func mcpAddFlagSeen(args []string, flag string) bool {
 // argument is reported against the root command with the bare argument id,
 // while `requires_all` violations keep the `mcp add` usage block.
 func mcpAddRequiresError(args []string, mcp *MCPOptions) error {
-	clientIDSeen := mcpAddFlagSeen(args, "--oauth-client-id")
-	secretSeen := mcpAddFlagSeen(args, "--oauth-client-secret")
-	urlMissing := mcp.URL == "" && (clientIDSeen || secretSeen ||
-		mcpAddFlagSeen(args, "--oauth-resource") ||
-		mcpAddFlagSeen(args, "--oauth-client-registration") ||
-		mcpAddFlagSeen(args, "--bearer-token-env-var"))
-	clientIDMissing := secretSeen && !clientIDSeen
-	switch {
-	case urlMissing && clientIDMissing:
-		return &UsageError{
-			Message: requiredArgumentsMessage("--url <URL>", "--oauth-client-id <CLIENT_ID>"),
-			Usage:   subcommandUsageTexts["mcp add"].usage,
-		}
-	case urlMissing:
-		return &UsageError{
-			Message: "the following required argument was not provided: url",
-			Usage:   rootUsageText,
-		}
-	case clientIDMissing:
-		return &UsageError{
-			Message: requiredArgumentsMessage("--oauth-client-id <CLIENT_ID>"),
-			Usage:   subcommandUsageTexts["mcp add"].usage,
-		}
-	}
-	if secretSeen && strings.TrimSpace(mcp.OAuthClientSecret) == "" {
+	// The `requires` diagnostics themselves are merged into the missing-argument
+	// report in the `add` branch, so only the post-clap value checks remain.
+	if mcp.OAuthClientSecretSet && strings.TrimSpace(mcp.OAuthClientSecret) == "" {
 		return errors.New("--oauth-client-secret must not be empty")
 	}
 	return nil
@@ -2327,6 +2314,7 @@ func parseMCP(args []string, mcp *MCPOptions) error {
 	case "get":
 		// clap stops option parsing at `--`, so every later token is a
 		// positional: `mcp get -- --json` names the server `--json`.
+		nameSeen := false
 		afterSeparator := false
 		for i := 1; i < len(args); i++ {
 			arg := args[i]
@@ -2349,22 +2337,27 @@ func parseMCP(args []string, mcp *MCPOptions) error {
 			case !afterSeparator && strings.HasPrefix(arg, "-"):
 				return unexpectedSubcommandArgumentError("mcp get", arg)
 			default:
-				if mcp.Name != "" {
+				if nameSeen {
 					return unexpectedPositionalError(arg, subcommandUsageTexts["mcp get"].usage)
 				}
+				nameSeen = true
 				mcp.Name = arg
 			}
 		}
-		if mcp.Name == "" {
+		// clap accepts an explicitly empty NAME; the runtime then reports the
+		// server as missing, so only an absent positional is a usage error.
+		if !nameSeen {
 			return missingRequiredArgumentsError("mcp get", "<NAME>")
 		}
 	case "add":
+		nameSeen := false
 		for i := 1; i < len(args); i++ {
 			arg := args[i]
 			switch {
 			case arg == "--":
 				rest := args[i+1:]
-				if len(rest) > 0 && mcp.Name == "" {
+				if len(rest) > 0 && !nameSeen {
+					nameSeen = true
 					mcp.Name = rest[0]
 					rest = rest[1:]
 				}
@@ -2376,9 +2369,11 @@ func parseMCP(args []string, mcp *MCPOptions) error {
 					return err
 				}
 				mcp.URL = value
+				mcp.URLSet = true
 				i = next
 			case strings.HasPrefix(arg, "--url="):
 				mcp.URL = strings.TrimPrefix(arg, "--url=")
+				mcp.URLSet = true
 			case arg == "--env":
 				if i+1 >= len(args) {
 					return &UsageError{Message: "a value is required for '--env <KEY=VALUE>' but none was supplied"}
@@ -2414,18 +2409,22 @@ func parseMCP(args []string, mcp *MCPOptions) error {
 					return err
 				}
 				mcp.OAuthClientID = value
+				mcp.OAuthClientIDSet = true
 				i = next
 			case strings.HasPrefix(arg, "--oauth-client-id="):
 				mcp.OAuthClientID = strings.TrimPrefix(arg, "--oauth-client-id=")
+				mcp.OAuthClientIDSet = true
 			case arg == "--oauth-client-secret":
 				value, next, err := requireValue(args, i, arg)
 				if err != nil {
 					return err
 				}
 				mcp.OAuthClientSecret = value
+				mcp.OAuthClientSecretSet = true
 				i = next
 			case strings.HasPrefix(arg, "--oauth-client-secret="):
 				mcp.OAuthClientSecret = strings.TrimPrefix(arg, "--oauth-client-secret=")
+				mcp.OAuthClientSecretSet = true
 			case arg == "--oauth-resource":
 				value, next, err := requireValue(args, i, arg)
 				if err != nil {
@@ -2464,7 +2463,8 @@ func parseMCP(args []string, mcp *MCPOptions) error {
 			case strings.HasPrefix(arg, "-") && arg != "-":
 				return unexpectedSubcommandArgumentError("mcp add", arg)
 			default:
-				if mcp.Name == "" {
+				if !nameSeen {
+					nameSeen = true
 					mcp.Name = arg
 					continue
 				}
@@ -2472,20 +2472,42 @@ func parseMCP(args []string, mcp *MCPOptions) error {
 				i = len(args)
 			}
 		}
-		if mcp.Name == "" || (mcp.URL == "" && len(mcp.Command) == 0) {
-			var missing []string
-			if mcp.URL == "" && len(mcp.Command) == 0 {
-				missing = append(missing, "<COMMAND|--url <URL>>")
-			}
-			if mcp.Name == "" {
-				missing = append(missing, "<NAME>")
+		// clap merges every unmet requirement into one report: an empty --url
+		// still satisfies the transport group, the HTTP-only options require
+		// --url once a command selects stdio, and --oauth-client-secret
+		// requires --oauth-client-id. A report that holds only `--url <URL>` is
+		// rendered against the root command with the bare argument id.
+		oauthOptionSeen := mcp.OAuthClientIDSet || mcp.OAuthClientSecretSet ||
+			mcpAddFlagSeen(args, "--oauth-resource") ||
+			mcpAddFlagSeen(args, "--bearer-token-env-var") ||
+			mcpAddFlagSeen(args, "--oauth-client-registration")
+		urlRequired := oauthOptionSeen && !mcp.URLSet && len(mcp.Command) > 0
+		var missing []string
+		if urlRequired {
+			missing = append(missing, "--url <URL>")
+		}
+		if mcp.OAuthClientSecretSet && !mcp.OAuthClientIDSet {
+			missing = append(missing, "--oauth-client-id <CLIENT_ID>")
+		}
+		if !mcp.URLSet && len(mcp.Command) == 0 {
+			missing = append(missing, "<COMMAND|--url <URL>>")
+		}
+		if !nameSeen {
+			missing = append(missing, "<NAME>")
+		}
+		if len(missing) > 0 {
+			if len(missing) == 1 && missing[0] == "--url <URL>" {
+				return &UsageError{
+					Message: "the following required argument was not provided: url",
+					Usage:   rootUsageText,
+				}
 			}
 			return missingRequiredArgumentsError("mcp add", missing...)
 		}
 		if err := mcpAddRequiresError(args, mcp); err != nil {
 			return err
 		}
-		if mcp.URL != "" && len(mcp.Command) > 0 {
+		if mcp.URLSet && len(mcp.Command) > 0 {
 			return &UsageError{
 				Message: "the argument '--url <URL>' cannot be used with '[COMMAND]...'",
 				Usage:   subcommandUsageTexts["mcp add"].usage,
@@ -2493,10 +2515,11 @@ func parseMCP(args []string, mcp *MCPOptions) error {
 		}
 		// `--env` belongs to the stdio argument group, so clap selects that
 		// transport even when --url is present and then finds no command.
-		if mcp.URL != "" && len(mcp.Env) > 0 {
+		if mcp.URLSet && len(mcp.Env) > 0 {
 			return errors.New("command is required")
 		}
 	case "remove", "logout":
+		nameSeen := false
 		for i := 1; i < len(args); i++ {
 			arg := args[i]
 			switch {
@@ -2514,16 +2537,18 @@ func parseMCP(args []string, mcp *MCPOptions) error {
 			case strings.HasPrefix(arg, "-"):
 				return unexpectedSubcommandArgumentError("mcp "+mcp.Action, arg)
 			default:
-				if mcp.Name != "" {
-					return fmt.Errorf("mcp %s accepts exactly one NAME", mcp.Action)
+				if nameSeen {
+					return unexpectedPositionalError(arg, subcommandUsageTexts["mcp "+mcp.Action].usage)
 				}
+				nameSeen = true
 				mcp.Name = arg
 			}
 		}
-		if mcp.Name == "" {
+		if !nameSeen {
 			return missingRequiredArgumentsError("mcp "+mcp.Action, "<NAME>")
 		}
 	case "login":
+		nameSeen := false
 		for i := 1; i < len(args); i++ {
 			arg := args[i]
 			switch {
@@ -2567,13 +2592,14 @@ func parseMCP(args []string, mcp *MCPOptions) error {
 			case strings.HasPrefix(arg, "-"):
 				return unexpectedSubcommandArgumentError("mcp login", arg)
 			default:
-				if mcp.Name != "" {
-					return errors.New("mcp login accepts exactly one NAME")
+				if nameSeen {
+					return unexpectedPositionalError(arg, subcommandUsageTexts["mcp login"].usage)
 				}
+				nameSeen = true
 				mcp.Name = arg
 			}
 		}
-		if mcp.Name == "" {
+		if !nameSeen {
 			return missingRequiredArgumentsError("mcp login", "<NAME>")
 		}
 	default:
@@ -4422,7 +4448,14 @@ func parseQueue(args []string, queue *QueueOptions) error {
 			if err != nil {
 				return err
 			}
+			// NonEmptyStringValueParser rejects only a truly empty value, so
+			// `--message "  "` reaches the runtime while `--message ""` is
+			// clap's empty-value diagnostic.
+			if value == "" {
+				return valueRequiredError("--message")
+			}
 			queue.Message = value
+			queue.MessageSet = true
 			i = next
 		case strings.HasPrefix(arg, "--message="):
 			value := strings.TrimPrefix(arg, "--message=")
@@ -4430,6 +4463,7 @@ func parseQueue(args []string, queue *QueueOptions) error {
 				return valueRequiredError("--message")
 			}
 			queue.Message = value
+			queue.MessageSet = true
 		case arg == "--remote":
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
@@ -4473,7 +4507,7 @@ func parseQueue(args []string, queue *QueueOptions) error {
 	if !queue.ThreadSet {
 		missing = append(missing, "--thread <THREAD>")
 	}
-	if strings.TrimSpace(queue.Message) == "" {
+	if !queue.MessageSet {
 		missing = append(missing, "--message <TEXT>")
 	}
 	if len(missing) > 0 {
@@ -5205,6 +5239,9 @@ func parseSessionSelection(args []string, session *SessionOptions, includeNonInt
 
 func parseSessionMutation(args []string, session *SessionOptions, command string, allowForce bool) error {
 	var deferred error
+	// clap accepts an explicitly passed empty value for <SESSION>; only a
+	// missing positional is reported as a required argument.
+	positionalSeen := false
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if handled, err := parseSharedOptionVariadicImages(args, &i, &session.Shared); err != nil {
@@ -5217,9 +5254,10 @@ func parseSessionMutation(args []string, session *SessionOptions, command string
 		}
 		if arg == "--" {
 			for _, value := range args[i+1:] {
-				if session.Target != "" {
+				if positionalSeen {
 					return unexpectedPositionalError(value, subcommandUsageTexts[command].usage)
 				}
+				positionalSeen = true
 				session.Target = value
 			}
 			break
@@ -5266,16 +5304,17 @@ func parseSessionMutation(args []string, session *SessionOptions, command string
 		case strings.HasPrefix(arg, "-"):
 			return sessionUnexpectedArgumentError(command, args[:i], arg)
 		default:
-			if session.Target != "" {
+			if positionalSeen {
 				return unexpectedPositionalError(arg, subcommandUsageTexts[command].usage)
 			}
+			positionalSeen = true
 			session.Target = arg
 		}
 	}
 	if deferred != nil {
 		return deferred
 	}
-	if session.Target == "" {
+	if !positionalSeen {
 		return missingRequiredArgumentsError(command, "<SESSION>")
 	}
 	if command == string(CommandDelete) && session.Force {

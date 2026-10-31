@@ -1739,8 +1739,72 @@ every sibling section.
   `TestRenderTOMLSortsPlainMapSections`, `TestOrderedTableMarshalJSONMatchesMap`
   in `config`.
 
+### 59. Empty values are present values: `mcp` NAME/`--url`, `queue --message` and session lookups
+
+clap separates "the token is missing" from "the token is empty": an empty
+string is a present `Option`/`String` value, while `NonEmptyStringValueParser`
+argtypes reject it at parse time. Go tested trimmed emptiness, so
+`codex archive ""`, `codex mcp get ""` and `codex queue --message ""` took the
+clap diagnostic path where Rust reaches its runtime.
+
+- **Session mutations and queue targets.** `parseSessionMutation` and the
+  `queue` parser key off a `positionalSeen` flag instead of `Target != ""`, so
+  `archive ""`, `delete ""`, `unarchive ""` and `queue --thread ""` reach
+  `resolveSessionMutationTarget`/`resolveQueueSessionTarget`, which print Rust's
+  `No <scope> session found matching '<target>'.` / `No active session found
+  matching '<target>'.`. The name index (`sessionIDByNameWithArchiveFilter`,
+  `sessionIDByUniqueActiveName`) treats an empty needle as a miss because Rust
+  compares `Option<String>`, never `""`. `resolveRemoteSessionMutationTarget`
+  keeps `SESSION is required` only for the nil-options case.
+- **`mcp` NAME presence.** `MCPOptions` gained `URLSet`/`OAuthClientIDSet`/
+  `OAuthClientSecretSet`, and `get`/`add`/`remove`/`login`/`logout` track
+  `nameSeen`, so `codex mcp get ""` reaches `No MCP server named '' found.`
+  (remove: `invalid server name '' ...`; login: `... found in configuration.`)
+  and a second positional reports clap's `unexpected argument '<arg>' found`
+  block against the static page instead of the Go-only
+  `mcp remove accepts exactly one NAME`.
+- **`mcp add` requires.** The required-argument report is one clap block:
+  `--url <URL>` and `--oauth-client-id <CLIENT_ID>` when an OAuth flag was seen,
+  then `<COMMAND|--url <URL>>`, then `<NAME>`; when `--url` is the only missing
+  piece the message is the singular `the following required argument was not
+  provided: url` with the root usage page. `--url=` satisfies the transport
+  choice and is persisted as `url = ""`, and an empty
+  `--oauth-client-secret` reports `must not be empty`.
+- **`queue --message`.** An empty `--message`/`--message=` is clap's
+  `a value is required for '--message <TEXT>' but none was supplied`, while
+  `"  "` is a legal message (Rust does not trim), and the required check uses
+  `MessageSet` rather than a trimmed comparison.
+- **OAuth callback URLs.** `mcp add --oauth-client-id` resolves the callback URL
+  before writing, so `OAuth callback URL: <url>` prints after
+  `Added global MCP server` and `[mcp_servers.<name>.oauth] callback_url` is
+  persisted. `MCPOAuthCallbackID` normalizes the parsed URL the way the `url`
+  crate serializes it: lowercased scheme and host, http/ws:80 and https/wss:443
+  dropped, an empty path spelled `/`, and the fragment cleared.
+- Evidence: a 164-case sweep (ten command paths x empty positional, extra
+  positional, and every `--flag=` / `--flag=bogus`) has no deterministic diff
+  against Rust 0.166 (`out/r45-empty.txt`); the three Rust probe timeouts
+  (`archive ""`, `delete ""`, `unarchive ""`) are SAME when rerun with a 120 s
+  window, and the 14 session-command shapes are all SAME. Callback IDs match
+  Rust for `https://a` -> `q5hkBE_CdBkI`, `https://A.Example` -> `vv3kmKRbbIII`,
+  `https://a:443/mcp` -> `CwkrpmlhFpeS`, `http://a:80/mcp` -> `1oX_iem5GZNa`
+  and `https://mcp.example.com/mcp?tenant=one` -> `XuuuHAzzHOni`. Regressions:
+  `TestMCPEmptyNameIsPresentLikeClap`,
+  `TestMCPExtraPositionalIsUnexpectedArgumentLikeClap`,
+  `TestMCPAddEmptyURLSatisfiesTransportLikeClap`,
+  `TestMCPAddOAuthRequiresLikeClap`,
+  `TestQueueEmptyMessageIsClapEmptyValueLikeRust` and
+  `TestMCPOAuthCallbackIDMatchesRustURLSerialization`.
+
 ## Verification
 
+- Round 45 covers the empty-value and session-lookup family. The 164-case
+  empty/extra-positional sweep (`out/r45-empty.txt`) has no deterministic diff
+  once the three Rust probe timeouts are rerun (`p45slow.py`), the 14 session
+  command shapes are all SAME (`p45sess_wt.py`, `p45sess2_wt.py`), and
+  `mcp add`'s callback URL, `--url=` persistence and merged `requires` block
+  match 0.166 byte for byte (`p45mcp4.py`, `p45cb4.py`).
+  `go test -count=1 -vet=off ./cli ./mcp ./config` passes in the clean
+  worktree and `./app` keeps only the two known baselines.
 - The resume/fork start gate matches Rust 0.166 on all 96 argument-shape/TERM
   combinations (`out/round43-tui-gate.txt`) and the 36 archive/queue/override
   cases (`out/round43-session-cli.txt`): exit code, stderr and stdout are
@@ -2179,9 +2243,6 @@ every sibling section.
   `TestExecServerRejectsMissingOrConflictingRemoteOptionsLikeRust`), where Rust
   allows the direct-transport combination; the Go forward runtime has no
   remote-registration path.
-- `queue --thread "" --message hi` parses in both CLIs, but Rust fails later with
-  `No active session found matching ''` while Go reports `Error: SESSION is
-  required`.
 - `app-server --print-startup-config` writes
   `"appServerVersion":"0.0.0"` where Rust reports its own `0.166.0`. This is
   build-time injection, not a hard-coded value: `doctor.Version()` reads
