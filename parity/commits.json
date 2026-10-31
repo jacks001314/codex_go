@@ -6337,9 +6337,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust-only build tooling: third_party/voice/assemble_package.py and package_runtime.py validate a prepared GStreamer runtime receipt and copy only its declared libraries into the package. codex_go has no assemble_package.py or prepared-runtime receipt; scripts/build.{sh,ps1} stage the self-contained Go helper and optional prepared Opus dylib directly, and voicehost/runtime_package.go inspects the packaged helper/codec without native runtime libraries."
    ]
   },
   {
@@ -8197,9 +8197,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 14/18; needs review: RealtimeWebrtcSession, RealtimeWebrtcSessionHandle, StartedRealtimeWebrtcSession, begin_audio_controls"
+    "Rust RealtimeWebrtcSession/RealtimeWebrtcSessionHandle/StartedRealtimeWebrtcSession map to voicehost.RealtimeSession/SessionHandle/StartedSession (session.go): offer before answer, devices opened after negotiation, queued startup controls drained and the merged snapshot applied before audio, ordered control transitions, queue saturation failing closed, close/context cancellation retiring the helper, audio-state polling with peak accumulation/clamping/consumption, typed ConnectionError classification, and packaged helper availability via IsSupportedPackage. begin_audio_controls' enqueue-then-await split is realized synchronously inside the actor (applyStartupControls) with the same ordering guarantee. Tests: voicehost/session_test.go (startup control ordering, saturation, helper loss, package support, failure classification)."
    ]
   },
   {
@@ -8209,9 +8209,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust-only third_party/voice/sdk.py exports GStreamer/GLib headers, development libraries and relocatable pkg-config metadata from an inspected native build. codex_go third_party/voice only builds Opus (prepare_opus.py, sources.json); the Go helper imports no native voice SDK and loads only the optional prepared Opus library."
    ]
   },
   {
@@ -8233,9 +8233,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust-only: GIO is a required SDK/runtime dependency root for the GStreamer bindings (third_party/voice runtime preparers and package_runtime.py). codex_go voicehost has no GStreamer/GLib/GIO linkage; audio devices come from miniaudio via malgo and codec loading is limited to the prepared Opus dylib."
    ]
   },
   {
@@ -8342,9 +8342,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust-only: makes --runtime mandatory in third_party/voice/assemble_package.py because native bindings need shared libraries before main. codex_go has no assembly step; scripts/build.* compile a self-contained Go helper and warn, rather than fail, when the optional Opus codec is unprepared, and voicehost/runtime_package.go reports codec absence through SupportsMedia."
    ]
   },
   {
@@ -10179,9 +10179,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust-only Apple release pipeline (.github/workflows/rust-release.yml, build-codex-package-archive.sh, codex-voice-host.entitlements.plist, third_party/voice licenses and NOTICE): builds, signs and notarizes the GStreamer-based helper and seals runtime receipts. codex_go archives already stage codex-resources/voice/{bin,lib} through scripts/release.sh and scripts/build.*, and its unsigned Go helper has no Apple entitlements or native runtime receipt to seal; no Go carrier required."
    ]
   },
   {
