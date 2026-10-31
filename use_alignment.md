@@ -1915,8 +1915,49 @@ Go accept documents Rust rejects at bootstrap.
   corpus stays at 3 diffs (`out/r48-diff1.txt`). Regressions:
   `TestValidateNestedConfigTables` in `config`.
 
+### 63. The TUI table: flattened notification settings, presets and keymap
+
+`[tui]` was the largest remaining untyped table. It mixes ordinary fields with
+`#[serde(flatten)] notification_settings`, which changes where serde reports a
+failure.
+
+- **Named fields.** Booleans, `theme`/`pet` strings, `status_line` and
+  `terminal_title` as string sequences, `mouse_scroll_speed` as `f64`,
+  `terminal_resize_reflow_max_rows` as `usize`, and the enums `copy_on_select`
+  (`auto`/`always`/`never`), `right_click_paste` (`auto`/`on`/`off`),
+  `alternate_screen`, `pet_anchor` (`composer`/`screen-bottom`),
+  `session_picker_view`, `agents_overview_grouping`
+  (`project`/`status`/`model`) and `resume_cwd` (`current`/`session`), with
+  `effects`/`rendering` as boolean structs and `keymap.global` as
+  `TuiGlobalKeymap`.
+- **Flattened notifications.** `notifications` is an untagged enum that accepts
+  a boolean or a list of strings, and `notification_method`/
+  `notification_condition` are externally tagged enums whose non-string form
+  reads `invalid type: ..., expected string or map` (an empty table reads
+  `invalid value: map, expected map with a single key`). All three report
+  against `tui` itself, and serde reads them only after the named fields, so
+  `[tui] notifications = 5` plus `[tui.effects] starfield = 5` reports the
+  effect.
+- **Presets.** `presets` is a map of `QuickDial`, whose `input` is mandatory:
+  a table without it reports `missing field `input`` at `tui.presets.<key>`.
+- **Untagged enum shape.** `forced_chatgpt_workspace_id` still accepts a bare
+  string, while `Notifications` does not, so the untagged validator now carries
+  which representations it may accept instead of assuming the `Repr` rules.
+- Evidence: 47 `[tui]` documents covering every field, the flatten ordering and
+  the presets cases are byte-identical to 0.166 (`p49tui5.py`,
+  `out/r49-tui5.txt`); the 81-document nested corpus and the 437-document
+  top-level corpus keep 0 and 3 diffs (`out/r49-diff1.txt`). Regressions:
+  `TestValidateTuiConfigTable` in `config`.
+
 ## Verification
 
+- Round 49 types the `[tui]` table (entry 63): 47 documents covering every
+  field, the `#[serde(flatten)]` notification ordering and the `presets`
+  `missing field` case are byte-identical to 0.166 (`out/r49-tui5.txt`); the
+  81-document nested corpus and 437-document top-level corpus keep 0 and 3
+  diffs (`out/r49-diff1.txt`). `go test -count=1 -vet=off ./config ./cli
+  ./mcp` passes in a clean worktree and `./app` keeps only the two known
+  baselines.
 - Round 48 extends the load pass into the nested tables (entry 62). Three
   focused corpora are byte-identical to 0.166: 33 `[profiles.*]` documents
   (`p48prof3.py`), 21 `[model_providers.*]` documents (`p48mp3.py`) and 27
@@ -2438,11 +2479,10 @@ Go accept documents Rust rejects at bootstrap.
 - The load pass covers the 104 top-level field types, enums, `features`, the
   `mcp_servers` entries (entry 61) and the `profiles`, `model_providers`,
   `windows`, `history` and `shell_environment_policy` tables (entry 62), but
-  the top-level `[tui]` table and the other struct tables (`agents`, `apps`,
-  `auto_review`, `browser_use`, ...) still accept any value inside them: a
-  `tui.notifications = 5` document loads in Go where Rust reports `data did not
-  match any variant of untagged enum Notifications` in `tui`. The three
-  path-valued fields
+  the remaining struct tables (`agents`, `apps`, `auto_review`, `browser_use`,
+  `audio`, `cloud`, ...) still accept any value inside them: an
+  `[auto_review] conversation_history_max_output_tokens = "x"` document loads
+  in Go where Rust rejects it at that path. The three path-valued fields
   (`model_instructions_file`, `model_catalog_json`,
   `experimental_compact_prompt_file`) are not read during load either, so a
   missing file is accepted instead of failing with Rust's `failed to read ...

@@ -368,7 +368,7 @@ func validateConfigFieldValue(kind configFieldKind, value any, path string) erro
 	case configKindEnum:
 		return validateConfigEnumValue(kind, value, path)
 	case configKindUntaggedEnum:
-		return validateConfigUntaggedEnumValue(value, path)
+		return validateConfigUntaggedEnumValue(kind, value, path)
 	}
 	return nil
 }
@@ -384,13 +384,26 @@ func validateConfigStructFields(kind configFieldKind, table map[string]any, path
 		}
 		return nil
 	}
-	for _, name := range sortedConfigKeys(table) {
-		field, ok := kind.fields[name]
-		if !ok {
-			continue
+	// serde reads the named fields first and the flattened ones afterwards, so a
+	// bad `tui.effects.starfield` wins over a bad `tui.notifications`.
+	for pass := 0; pass < 2; pass++ {
+		for _, name := range sortedConfigKeys(table) {
+			field, ok := kind.fields[name]
+			if !ok || field.flattenPath != (pass == 1) {
+				continue
+			}
+			fieldPath := appendConfigPath(path, name)
+			if field.flattenPath {
+				fieldPath = path
+			}
+			if err := validateConfigFieldValue(field, table[name], fieldPath); err != nil {
+				return err
+			}
 		}
-		if err := validateConfigFieldValue(field, table[name], appendConfigPath(path, name)); err != nil {
-			return err
+	}
+	for _, name := range kind.required {
+		if _, ok := table[name]; !ok {
+			return &ConfigValueError{message: "missing field `" + name + "`", path: path}
 		}
 	}
 	return nil
@@ -406,8 +419,11 @@ func appendConfigPath(base string, name string) string {
 // validateConfigUntaggedEnumValue mirrors serde's error for an untagged repr
 // (`forced_chatgpt_workspace_id`), which reports one "did not match any
 // variant" message instead of a type mismatch.
-func validateConfigUntaggedEnumValue(value any, path string) error {
-	if _, ok := value.(string); ok {
+func validateConfigUntaggedEnumValue(kind configFieldKind, value any, path string) error {
+	if _, ok := value.(string); ok && kind.allowString {
+		return nil
+	}
+	if _, ok := value.(bool); ok && kind.allowBool {
 		return nil
 	}
 	if items, ok := value.([]any); ok {
@@ -422,7 +438,11 @@ func validateConfigUntaggedEnumValue(value any, path string) error {
 			return nil
 		}
 	}
-	return &ConfigValueError{message: "data did not match any variant of untagged enum Repr", path: path}
+	name := kind.expected
+	if name == "" {
+		name = "Repr"
+	}
+	return &ConfigValueError{message: "data did not match any variant of untagged enum " + name, path: path}
 }
 
 func validateConfigEnumValue(kind configFieldKind, value any, path string) error {
@@ -432,10 +452,16 @@ func validateConfigEnumValue(kind configFieldKind, value any, path string) error
 		// inline table names a variant while every other type is a unit variant.
 		table, isTable := value.(map[string]any)
 		if !isTable {
+			if kind.stringOrMap {
+				return configInvalidType(value, "string or map", path)
+			}
 			return &ConfigValueError{message: "invalid type: unit variant, expected string only", path: path}
 		}
 		keys := sortedConfigKeys(table)
 		if len(keys) == 0 {
+			if kind.stringOrMap {
+				return &ConfigValueError{message: "invalid value: map, expected map with a single key", path: path}
+			}
 			return &ConfigValueError{message: "invalid type: unit variant, expected string only", path: path}
 		}
 		name = keys[0]

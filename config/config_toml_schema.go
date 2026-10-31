@@ -53,6 +53,19 @@ type configFieldKind struct {
 	// tablePositional marks a nested field whose custom deserializer reports
 	// the position of its enclosing table header.
 	tablePositional bool
+	// flattenPath marks a `#[serde(flatten)]` field: serde reports its failures
+	// against the enclosing table, and only after the named fields.
+	flattenPath bool
+	// required lists the struct's mandatory fields; a table without them
+	// reports `missing field`.
+	required []string
+	// stringOrMap selects serde's `expected string or map` wording for an
+	// externally tagged enum that is not a bare unit variant.
+	stringOrMap bool
+	// allowBool lets an untagged enum accept a boolean variant; allowString does
+	// the same for a bare string.
+	allowBool   bool
+	allowString bool
 }
 
 // configProfileFields is ConfigProfile (config/src/profile_toml.rs). Fields that
@@ -145,6 +158,75 @@ var configShellEnvironmentPolicyFields = map[string]configFieldKind{
 	"experimental_use_profile": {kind: configKindBool},
 }
 
+// configTuiFields is Tui (config/src/types.rs). The notification settings come
+// in through `#[serde(flatten)]`, which is why their failures are reported
+// against `tui` itself.
+var configTuiFields = map[string]configFieldKind{
+	"animations":                      {kind: configKindBool},
+	"screen_reader_detection_done":    {kind: configKindBool},
+	"effects":                         {kind: configKindStruct, expected: "TuiEffects", fields: configTuiEffectsFields},
+	"rendering":                       {kind: configKindStruct, expected: "TuiRendering", fields: configTuiRenderingFields},
+	"show_tooltips":                   {kind: configKindBool},
+	"show_server_version_notice":      {kind: configKindBool},
+	"auto_recap":                      {kind: configKindBool},
+	"disable_paste_burst":             {kind: configKindBool},
+	"vim_mode_default":                {kind: configKindBool},
+	"question_esc_back":               {kind: configKindBool},
+	"raw_output_mode":                 {kind: configKindBool},
+	"fullscreen_transcript":           {kind: configKindBool},
+	"mouse_scroll_speed":              {kind: configKindFloat, expected: "f64"},
+	"copy_on_select":                  {kind: configKindEnum, variants: []string{"auto", "always", "never"}},
+	"copy_on_select_clear_selection":  {kind: configKindBool},
+	"right_click_paste":               {kind: configKindEnum, variants: []string{"auto", "on", "off"}},
+	"alternate_screen":                {kind: configKindEnum, variants: []string{"auto", "always", "never"}},
+	"status_line":                     {kind: configKindStringSequence},
+	"status_line_use_colors":          {kind: configKindBool},
+	"terminal_title":                  {kind: configKindStringSequence},
+	"theme":                           {kind: configKindString},
+	"pet":                             {kind: configKindString},
+	"pet_anchor":                      {kind: configKindEnum, variants: []string{"composer", "screen-bottom"}},
+	"session_picker_view":             {kind: configKindEnum, variants: []string{"comfortable", "dense"}},
+	"agents_overview_grouping":        {kind: configKindEnum, variants: []string{"project", "status", "model"}},
+	"resume_cwd":                      {kind: configKindEnum, variants: []string{"current", "session"}},
+	"keymap":                          {kind: configKindStruct, expected: "TuiKeymap", fields: configTuiKeymapFields},
+	"presets":                         {kind: configKindStructMap, expected: "QuickDial", fields: configQuickDialFields, required: []string{"input"}},
+	"model_availability_nux":          {kind: configKindStruct, expected: "ModelAvailabilityNuxConfig"},
+	"terminal_resize_reflow_max_rows": {kind: configKindUsize, expected: "usize"},
+	"notifications":                   {kind: configKindUntaggedEnum, expected: "Notifications", allowBool: true, flattenPath: true},
+	"notification_method":             {kind: configKindEnum, variants: []string{"auto", "osc9", "bel"}, stringOrMap: true, flattenPath: true},
+	"notification_condition":          {kind: configKindEnum, variants: []string{"unfocused", "always"}, stringOrMap: true, flattenPath: true},
+}
+
+// configTuiEffectsFields is TuiEffects: six boolean toggles.
+var configTuiEffectsFields = map[string]configFieldKind{
+	"starfield": {kind: configKindBool},
+	"shimmer":   {kind: configKindBool},
+	"welcome":   {kind: configKindBool},
+	"effort":    {kind: configKindBool},
+	"progress":  {kind: configKindBool},
+	"title":     {kind: configKindBool},
+}
+
+// configTuiRenderingFields is TuiRendering.
+var configTuiRenderingFields = map[string]configFieldKind{
+	"mermaid": {kind: configKindBool},
+	"math":    {kind: configKindBool},
+	"tables":  {kind: configKindBool},
+	"lists":   {kind: configKindBool},
+}
+
+// configTuiKeymapFields is the subset of TuiKeymap whose shape the 0.166 binary
+// reports; the per-context tables are left to the TUI itself.
+var configTuiKeymapFields = map[string]configFieldKind{
+	"global": {kind: configKindStruct, expected: "TuiGlobalKeymap"},
+}
+
+// configQuickDialFields is QuickDial (serialized as `Preset`).
+var configQuickDialFields = map[string]configFieldKind{
+	"input": {kind: configKindString},
+	"label": {kind: configKindString},
+}
+
 // configProfileTuiFields is ProfileTui, the profile-scoped subset of the TUI
 // settings.
 var configProfileTuiFields = map[string]configFieldKind{
@@ -195,7 +277,7 @@ var configTomlFields = map[string]configFieldKind{
 	"feedback":                                   {kind: configKindStruct, expected: "FeedbackConfigToml"},
 	"file_opener":                                {kind: configKindEnum, variants: []string{"vscode", "vscode-insiders", "windsurf", "cursor", "none"}},
 	"forced_login_method":                        {kind: configKindEnum, variants: []string{"chatgpt", "api"}},
-	"forced_chatgpt_workspace_id":                {kind: configKindUntaggedEnum, expected: "Repr"},
+	"forced_chatgpt_workspace_id":                {kind: configKindUntaggedEnum, expected: "Repr", allowString: true},
 	"ghost_snapshot":                             {kind: configKindStruct, expected: "GhostSnapshotToml"},
 	"goals":                                      {kind: configKindStruct, expected: "GoalsToml"},
 	"hide_agent_reasoning":                       {kind: configKindBool},
@@ -261,7 +343,7 @@ var configTomlFields = map[string]configFieldKind{
 	"tool_output_token_limit":                    {kind: configKindInteger, expected: "usize"},
 	"tool_suggest":                               {kind: configKindStruct, expected: "ToolSuggestConfig"},
 	"tools":                                      {kind: configKindStruct, expected: "ToolsToml"},
-	"tui":                                        {kind: configKindStruct, expected: "Tui"},
+	"tui":                                        {kind: configKindStruct, expected: "Tui", fields: configTuiFields},
 	"web_search":                                 {kind: configKindEnum, variants: []string{"disabled", "cached", "indexed", "live"}},
 	"windows":                                    {kind: configKindStruct, expected: "WindowsToml", fields: configWindowsFields},
 }
