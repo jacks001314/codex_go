@@ -19843,9 +19843,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1152: Rust #47625 removes the startup rejection of features.token_budget.use_history_notes_extension for models without supports_experimental_context. Go carried the same #44883 gate in appserver/token_budget_history_notes.go, called from appTurnConfigWithOptions after ResolveTokenBudgetConfig, and rejected every model whose catalog entry did not advertise supports_experimental_context (the bundled fallback catalog sets it for none), so the extension could not be enabled explicitly or through model defaults. Removed the validator, its call site, and its unit test; resolved token-budget behavior is otherwise unchanged because the gate was only a model-capability precondition. Tests: appserver/token_budget_history_notes_unsupported_context_like_rust_test.go starts turns for a catalog model with supports_experimental_context=false both with the extension enabled explicitly and with model-owned token_budget defaults, asserting ConfiguredTokenBudget.UseHistoryNotesExtension, UseModelTokenBudgetDefaults, and TokenBudgetFeatureEnabled. Verified with go test ./appserver -run \"TokenBudget|HistoryNotes|HistoryIngest\" -count=1 and go build ./..."
    ]
   },
   {

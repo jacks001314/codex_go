@@ -8396,11 +8396,6 @@ func (r *RuntimeRouter) appTurnConfigWithOptions(ctx context.Context, threadID s
 	if tokenBudget.Enabled {
 		featureEnabled = true
 	}
-	// Rust #44883: the explicit history-notes extension gate is only valid for a
-	// starting model that supports experimental context.
-	if err := validateTokenBudgetHistoryNotesModel(modelProviderConfig.Model, modelInfo, tokenBudget); err != nil {
-		return nil, err
-	}
 	if item, err := r.contextWindowGuidanceWorldStateInputItem(
 		threadID,
 		tokenBudget.Enabled && modelInfo != nil && modelInfo.ContextWindow > 0,
