@@ -3,7 +3,9 @@
 package win
 
 import (
+	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -92,6 +94,104 @@ func TestPrepareSetupMarkerLegacyModeReopensAtCommit(t *testing.T) {
 	}
 	if _, err := os.Stat(windowssandbox.SetupMarkerPath(home)); err != nil {
 		t.Fatalf("legacy marker missing: %v", err)
+	}
+}
+
+// TestProvisionOnlyNotesUseRetainedSetupLogLikeRust pins Rust setup_log_writer
+// plus append_line (#42342): once provisioning retains a fresh log, log_note
+// lines land there instead of the daily rolling log.
+func TestProvisionOnlyNotesUseRetainedSetupLogLikeRust(t *testing.T) {
+	dir := t.TempDir()
+	log, err := openSetupLog(dir, setupModeProvision)
+	if err != nil {
+		t.Fatalf("openSetupLog(provision) error = %v", err)
+	}
+	restoreSetupLog := windowssandbox.RetainSetupLog(log)
+	defer restoreSetupLog()
+	if err := windowssandbox.LogNoteInDir(dir, "provisioning note"); err != nil {
+		log.Close()
+		t.Fatalf("LogNoteInDir() error = %v", err)
+	}
+	name := filepath.Join(dir, filepath.Base(log.Name()))
+	if err := log.Close(); err != nil {
+		t.Fatalf("close setup log error = %v", err)
+	}
+	data, err := os.ReadFile(name)
+	if err != nil {
+		t.Fatalf("read setup log error = %v", err)
+	}
+	if !strings.Contains(string(data), "provisioning note") {
+		t.Fatalf("setup log = %q, want the provisioning note", data)
+	}
+	if daily, err := filepath.Glob(filepath.Join(dir, "sandbox.*.log")); err != nil {
+		t.Fatalf("glob daily logs error = %v", err)
+	} else if len(daily) != 0 {
+		t.Fatalf("daily logs = %v, want none while provisioning retains a log", daily)
+	}
+}
+
+// TestReleasedSetupLogDropsLateNotesLikeRust pins release_setup_log (#42342):
+// after release the slot stays initialized, so late notes are dropped instead of
+// reopening a caller-controlled daily log.
+func TestReleasedSetupLogDropsLateNotesLikeRust(t *testing.T) {
+	dir := t.TempDir()
+	log, err := openSetupLog(dir, setupModeProvision)
+	if err != nil {
+		t.Fatalf("openSetupLog(provision) error = %v", err)
+	}
+	restoreSetupLog := windowssandbox.RetainSetupLog(log)
+	defer restoreSetupLog()
+	name := filepath.Join(dir, filepath.Base(log.Name()))
+	windowssandbox.ReleaseSetupLog()
+	if err := windowssandbox.LogNoteInDir(dir, "late note"); err != nil {
+		log.Close()
+		t.Fatalf("LogNoteInDir() after release error = %v", err)
+	}
+	if err := log.Close(); err != nil {
+		t.Fatalf("close setup log error = %v", err)
+	}
+	data, err := os.ReadFile(name)
+	if err != nil {
+		t.Fatalf("read setup log error = %v", err)
+	}
+	if strings.Contains(string(data), "late note") {
+		t.Fatalf("setup log = %q, want the late note dropped", data)
+	}
+	if daily, err := filepath.Glob(filepath.Join(dir, "sandbox.*.log")); err != nil {
+		t.Fatalf("glob daily logs error = %v", err)
+	} else if len(daily) != 0 {
+		t.Fatalf("daily logs = %v, want none after release", daily)
+	}
+}
+
+// TestTopLevelSetupErrorUsesFreshLogLikeRust pins Rust setup_main main(): an
+// unparsed payload defaults to the ProvisionOnly fresh log and never appends to
+// an existing caller-controlled daily log (#42342).
+func TestTopLevelSetupErrorUsesFreshLogLikeRust(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	if err := run(nil, io.Discard, io.Discard); err == nil {
+		t.Fatal("run(nil) error = nil, want a payload error")
+	}
+	sbxDir := windowssandbox.SandboxDir(home)
+	fresh, err := filepath.Glob(filepath.Join(sbxDir, "sandbox-*.log"))
+	if err != nil {
+		t.Fatalf("glob fresh logs error = %v", err)
+	}
+	if len(fresh) != 1 {
+		t.Fatalf("fresh logs = %v, want exactly one", fresh)
+	}
+	data, err := os.ReadFile(fresh[0])
+	if err != nil {
+		t.Fatalf("read fresh log error = %v", err)
+	}
+	if !strings.Contains(string(data), "top-level error") {
+		t.Fatalf("fresh log = %q, want the top-level error", data)
+	}
+	if daily, err := filepath.Glob(filepath.Join(sbxDir, "sandbox.*.log")); err != nil {
+		t.Fatalf("glob daily logs error = %v", err)
+	} else if len(daily) != 0 {
+		t.Fatalf("daily logs = %v, want none for an unparsed payload", daily)
 	}
 }
 

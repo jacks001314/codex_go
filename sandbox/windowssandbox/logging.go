@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 )
@@ -15,6 +16,56 @@ const (
 	LogFileSuffix          = "log"
 	MaxLogFiles            = 90
 )
+
+var (
+	setupLogMu   sync.Mutex
+	setupLogInit bool
+	setupLogFile *os.File
+)
+
+// RetainSetupLog routes every later LogNoteInDir call into file and stops the
+// daily rolling-log fallback, mirroring Rust setup_log_writer plus append_line
+// (Rust #42342). Provisioning never appends to a caller-controlled log entry.
+// The returned func restores the previous state for in-process callers.
+func RetainSetupLog(file *os.File) func() {
+	setupLogMu.Lock()
+	defer setupLogMu.Unlock()
+	previousInit := setupLogInit
+	previousFile := setupLogFile
+	setupLogInit = true
+	setupLogFile = file
+	return func() {
+		setupLogMu.Lock()
+		defer setupLogMu.Unlock()
+		setupLogInit = previousInit
+		setupLogFile = previousFile
+	}
+}
+
+// ReleaseSetupLog drops the retained handle but keeps the slot initialized so
+// late diagnostics cannot reopen a caller-controlled daily log (Rust
+// release_setup_log).
+func ReleaseSetupLog() {
+	setupLogMu.Lock()
+	defer setupLogMu.Unlock()
+	setupLogInit = true
+	setupLogFile = nil
+}
+
+// writeSetupLogLine reports handled=false when notes still belong to the daily
+// log, and handled=true when the retained setup log consumed or dropped the line.
+func writeSetupLogLine(line string) (bool, error) {
+	setupLogMu.Lock()
+	defer setupLogMu.Unlock()
+	if !setupLogInit {
+		return false, nil
+	}
+	if setupLogFile == nil {
+		return true, nil
+	}
+	_, err := setupLogFile.WriteString(line)
+	return true, err
+}
 
 func CurrentLogFilePath(codexHome string) string {
 	return CurrentLogFilePathForCodexHome(codexHome)
@@ -33,13 +84,16 @@ func LogNote(codexHome string, note string) error {
 }
 
 func LogNoteInDir(baseDir string, note string) error {
+	line := fmt.Sprintf("[%s %s] %s\n", time.Now().Format("2006-01-02 15:04:05.000"), exeLabel(), note)
+	if handled, err := writeSetupLogLine(line); handled {
+		return err
+	}
 	if strings.TrimSpace(baseDir) == "" {
 		return ErrInvalidRequest
 	}
 	if err := os.MkdirAll(baseDir, 0o700); err != nil {
 		return err
 	}
-	line := fmt.Sprintf("[%s %s] %s\n", time.Now().Format("2006-01-02 15:04:05.000"), exeLabel(), note)
 	f, err := os.OpenFile(CurrentLogFilePathForBaseDir(baseDir), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return err

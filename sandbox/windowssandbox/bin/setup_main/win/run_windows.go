@@ -59,6 +59,7 @@ func (p *setupPayload) sandboxUsernames() []string {
 func run(args []string, stdout io.Writer, stderr io.Writer) error {
 	payload, err := payloadFromArgs(args)
 	if err != nil {
+		logTopLevelSetupError(err)
 		return err
 	}
 	sbzDir := windowssandbox.SandboxDir(payload.CodexHome)
@@ -76,6 +77,11 @@ func run(args []string, stdout io.Writer, stderr io.Writer) error {
 		)
 	}
 	defer log.Close()
+	if payload.Mode == setupModeProvision {
+		restoreSetupLog := windowssandbox.RetainSetupLog(log)
+		defer restoreSetupLog()
+		defer windowssandbox.ReleaseSetupLog()
+	}
 
 	err = runSetupPayload(payload, log, sbzDir)
 	if err != nil {
@@ -144,6 +150,26 @@ func payloadFromArgs(args []string) (*setupPayload, error) {
 		return nil, setupFailuref(windowssandbox.SetupErrorHelperRequestArgsFailed, "codex_home is required")
 	}
 	return &payload, nil
+}
+
+// logTopLevelSetupError mirrors Rust's setup_main main(): an unparsed payload
+// defaults to the ProvisionOnly fresh log, so a malformed request can never
+// append to an existing caller-controlled daily log (Rust #42342).
+func logTopLevelSetupError(err error) {
+	codexHome := strings.TrimSpace(os.Getenv("CODEX_HOME"))
+	if codexHome == "" {
+		return
+	}
+	sbxDir := windowssandbox.SandboxDir(codexHome)
+	if mkErr := os.MkdirAll(sbxDir, 0o700); mkErr != nil {
+		return
+	}
+	log, openErr := windowssandbox.OpenProvisioningSetupLog(sbxDir)
+	if openErr != nil {
+		return
+	}
+	defer log.Close()
+	setupLogLine(log, "top-level error: "+windowssandbox.SetupErrorChain(err))
 }
 
 func runSetupPayload(payload *setupPayload, log io.Writer, sbxDir string) error {
