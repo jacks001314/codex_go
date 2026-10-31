@@ -49,5 +49,5 @@ func writeCLIError(stderr io.Writer, err error) {
 		fmt.Fprintln(stderr, err.Error())
 		return
 	}
-	fmt.Fprintln(stderr, FormatError(err))
+	fmt.Fprintln(stderr, FormatCLIError(err))
 }
