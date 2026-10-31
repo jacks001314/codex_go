@@ -94,11 +94,16 @@ func TestRunJSONAndLastMessage(t *testing.T) {
 		t.Fatalf("last message file = %q, want %q", string(data), result.LastMessage)
 	}
 	record := loadSessionRecord(t, home, result.ThreadID)
-	if got := record.Items; len(got) != 2 || got[0].Role != "user" || got[1].Role != "assistant" {
+	if got := record.Items; len(got) != 3 || got[0].Role != "user" || got[2].Role != "assistant" {
 		t.Fatalf("session items = %#v", got)
 	}
-	if record.Items[1].Metadata["timingProfile"] == nil || record.Items[1].Metadata["timing_profile"] == nil {
-		t.Fatalf("assistant timing profile metadata = %#v", record.Items[1].Metadata)
+	// The turn records its harness-authored reasoning configuration between the
+	// user item and the answer (Rust's retained ConfigurationUpdate).
+	if update := record.Items[1]; update.Type != "configuration_update" || update.Metadata["kind"] != "configuration_update" {
+		t.Fatalf("recorded configuration update = %#v", update)
+	}
+	if record.Items[2].Metadata["timingProfile"] == nil || record.Items[2].Metadata["timing_profile"] == nil {
+		t.Fatalf("assistant timing profile metadata = %#v", record.Items[2].Metadata)
 	}
 	if record.Metadata.Source != "exec" || record.Metadata.ThreadSource != "user" {
 		t.Fatalf("session metadata = %#v", record.Metadata)
@@ -754,6 +759,17 @@ func TestRunJSONCodeModeLegacyShellCommandFailureCanRecoverBeforeSingleFinal(t *
 	}
 }
 
+// isExecWebsocketUpgrade reports whether an httptest request is a Responses
+// WebSocket handshake. The built-in OpenAI provider advertises
+// supports_websockets, so a plain-HTTP fixture must answer the upgrade with 426
+// (UPGRADE_REQUIRED): that is the only handshake status both Rust and Go treat
+// as "this endpoint speaks HTTP only" and fall back on. Rust's own exec/app
+// fixtures express the same thing by pinning a mock provider with
+// `supports_websockets = false`.
+func isExecWebsocketUpgrade(r *http.Request) bool {
+	return strings.EqualFold(strings.TrimSpace(r.Header.Get("Upgrade")), "websocket")
+}
+
 func TestNewRunnerDefaultsToResponsesAPI(t *testing.T) {
 	home := t.TempDir()
 	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
@@ -766,6 +782,10 @@ func TestNewRunnerDefaultsToResponsesAPI(t *testing.T) {
 	}
 	seen := make(chan observedRequest, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isExecWebsocketUpgrade(r) {
+			w.WriteHeader(http.StatusUpgradeRequired)
+			return
+		}
 		seen <- observedRequest{
 			path:          r.URL.Path,
 			authorization: r.Header.Get("Authorization"),
@@ -814,6 +834,10 @@ func TestRunExecForwardsCyberAccessProgramOnResponsesWireLikeRust(t *testing.T) 
 	}
 	seen := make(chan map[string]any, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isExecWebsocketUpgrade(r) {
+			w.WriteHeader(http.StatusUpgradeRequired)
+			return
+		}
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			t.Errorf("ReadAll request body returned error: %v", err)
@@ -1399,6 +1423,10 @@ func TestRunResponsesRequestIncludesStandaloneImageGenerationByDefaultLikeRust(t
 	}
 	var recordedBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isExecWebsocketUpgrade(r) {
+			w.WriteHeader(http.StatusUpgradeRequired)
+			return
+		}
 		if r.URL.Path != "/v1/responses" {
 			t.Fatalf("request path = %q, want /v1/responses", r.URL.Path)
 		}
@@ -1453,6 +1481,10 @@ func TestRunResponsesReviewRequestDisablesImageGenerationToolsLikeRust(t *testin
 	}
 	var recordedBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isExecWebsocketUpgrade(r) {
+			w.WriteHeader(http.StatusUpgradeRequired)
+			return
+		}
 		if err := json.NewDecoder(r.Body).Decode(&recordedBody); err != nil {
 			t.Fatalf("Decode request body returned error: %v", err)
 		}
@@ -1716,6 +1748,10 @@ func TestRunResponsesRequestIncludesOutputSchemaLikeRust(t *testing.T) {
 
 	var recordedBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isExecWebsocketUpgrade(r) {
+			w.WriteHeader(http.StatusUpgradeRequired)
+			return
+		}
 		if r.URL.Path != "/v1/responses" {
 			t.Fatalf("request path = %q, want /v1/responses", r.URL.Path)
 		}
@@ -2185,11 +2221,14 @@ func TestRunExecResumeAppendsToExistingSession(t *testing.T) {
 		t.Fatalf("PreviousResponseID = %q, want empty for fresh-process resume like Rust", agent.request.PreviousResponseID)
 	}
 	record := loadSessionRecord(t, home, "thread-existing")
-	if len(record.Items) != 4 {
+	if len(record.Items) != 5 {
 		t.Fatalf("items = %#v", record.Items)
 	}
-	if record.Items[2].Text != "new question" || record.Items[3].Text != "resume answer" {
+	if record.Items[2].Text != "new question" || record.Items[4].Text != "resume answer" {
 		t.Fatalf("new items = %#v", record.Items[2:])
+	}
+	if record.Items[3].Type != "configuration_update" {
+		t.Fatalf("recorded configuration update = %#v", record.Items[3])
 	}
 	if record.Metadata.SessionPrefix == "" {
 		t.Fatalf("session prefix was not recorded: %#v", record.Metadata)
@@ -2871,8 +2910,11 @@ func TestRunExecResumeAcceptsImagesAfterSubcommandLikeRust(t *testing.T) {
 	}
 
 	record := loadSessionRecord(t, home, "thread-image-resume")
-	if len(record.Items) != 4 {
+	if len(record.Items) != 5 {
 		t.Fatalf("items = %#v", record.Items)
+	}
+	if record.Items[3].Type != "configuration_update" {
+		t.Fatalf("recorded configuration update = %#v", record.Items[3])
 	}
 	userItem := record.Items[2]
 	if len(userItem.Content) != 3 ||
@@ -4500,7 +4542,7 @@ func TestRunExecutesToolLoopWithInjectedRouter(t *testing.T) {
 	if result.LastMessage != "done" || strings.TrimSpace(stdout.String()) != "done" {
 		t.Fatalf("result=%#v stdout=%q", result, stdout.String())
 	}
-	if len(agent.requests) != 2 || len(agent.requests[1].InputItems) != 5 {
+	if len(agent.requests) != 2 || len(agent.requests[1].InputItems) != 6 {
 		t.Fatalf("agent requests = %#v", agent.requests)
 	}
 	if !agentRequestToolsContainPlainFunction(&agent.requests[0], "echo") ||
