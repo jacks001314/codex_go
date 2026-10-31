@@ -40076,9 +40076,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "Round 1194: registered when the alignment anchor moved from cbe16d525c2d7362fc3d4726143288e932905daa to 67f0994b532b8740f14b5b738af7b7b2a915b1d6; not audited yet."
+    "Round 1197: #58399 only sets JEMALLOC_SYS_WITH_MALLOC_CONF=narenas_ratio:0.25 in CODEOWNERS-adjacent Rust build configuration (codex-rs/.cargo/config.toml and the MODULE.bazel jemalloc crate annotation). The Go port has no jemalloc dependency, no Cargo profile, and no Bazel build, so there is no Go surface to align."
    ]
   },
   {
@@ -40244,9 +40244,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Round 1194: registered when the alignment anchor moved from cbe16d525c2d7362fc3d4726143288e932905daa to 67f0994b532b8740f14b5b738af7b7b2a915b1d6; not audited yet."
+    "Round 1197: model.ModelMessages now carries Apps *AppsMessages with UsageInstructions *string, mirroring Rust protocol::openai_models::AppsMessages from #58441. The field is decoded in ModelMessages.UnmarshalJSON and transported verbatim with no runtime interpretation: null and missing keep no apps object, while explicit null/empty/whitespace/literal/501-rune values keep their exact bytes and the empty object round-trips. Tests: TestAppsMessagesPreserveNullableAndLiteralWireValuesLikeRust; go test ./model -run AppsMessages -count=1."
    ]
   },
   {
@@ -40292,9 +40292,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "Round 1194: registered when the alignment anchor moved from cbe16d525c2d7362fc3d4726143288e932905daa to 67f0994b532b8740f14b5b738af7b7b2a915b1d6; not audited yet."
+    "Round 1197: #58456 keeps terminal response.incomplete output items on ResponseIncompleteError so a failed inference trace attempt can record them, then truncates them from the streamed items. Go has no inference-trace attempt subsystem (recorded in update/plan_2026_10_28_baseline.md for #57563); its ResponseIncompleteError carries reason, response ID and usage only, and the streamed items reachable by the turn are unchanged, so the partial-output trace evidence has no Go consumer."
    ]
   },
   {
@@ -40316,9 +40316,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "Round 1194: registered when the alignment anchor moved from cbe16d525c2d7362fc3d4726143288e932905daa to 67f0994b532b8740f14b5b738af7b7b2a915b1d6; not audited yet."
+    "Round 1197: #58459 only touches Rust CI plumbing: .bazelrc and run-bazel-ci.sh set INSTA_UPDATE=no, and the Rust OTLP HTTP loopback test gets an explicit stop channel plus provider construction reordering. Go has no Bazel/INSTA build and its OTLP loopback tests are Go-native; no runtime behavior changes."
    ]
   }
  ]

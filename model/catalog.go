@@ -106,11 +106,14 @@ func isH1Heading(line string) bool {
 }
 
 type ModelMessages struct {
-	InstructionsTemplate string                     `json:"instructions_template,omitempty"`
-	CollaborationModes   *CollaborationModeMessages `json:"collaboration_modes,omitempty"`
-	MultiAgent           *MultiAgentMessages        `json:"multi_agent,omitempty"`
-	TokenBudget          *ModelTokenBudgetConfig    `json:"token_budget,omitempty"`
-	AutoReview           *AutoReviewMessages        `json:"auto_review,omitempty"`
+	InstructionsTemplate string `json:"instructions_template,omitempty"`
+	// Apps carries optional model-owned Apps wording; it is transported without
+	// runtime interpretation.
+	Apps               *AppsMessages              `json:"apps,omitempty"`
+	CollaborationModes *CollaborationModeMessages `json:"collaboration_modes,omitempty"`
+	MultiAgent         *MultiAgentMessages        `json:"multi_agent,omitempty"`
+	TokenBudget        *ModelTokenBudgetConfig    `json:"token_budget,omitempty"`
+	AutoReview         *AutoReviewMessages        `json:"auto_review,omitempty"`
 	// Approvals is the catalog's `approvals` object (Rust
 	// ModelMessages::approvals); missing or null uses the built-in texts.
 	Approvals *ApprovalMessages `json:"approvals,omitempty"`
@@ -135,6 +138,11 @@ type ModelMessages struct {
 type CollaborationModeMessages struct {
 	Default *string `json:"default"`
 	Plan    *string `json:"plan"`
+}
+
+// AppsMessages mirrors Rust protocol::openai_models::AppsMessages.
+type AppsMessages struct {
+	UsageInstructions *string `json:"usage_instructions,omitempty"`
 }
 
 // ApprovalMessages mirrors Rust protocol::openai_models::ApprovalMessages:
@@ -618,6 +626,7 @@ func (m *ModelMessages) RequestUserInputAsyncParametersOverride() *string {
 func (m *ModelMessages) UnmarshalJSON(data []byte) error {
 	var raw struct {
 		InstructionsTemplate   string                     `json:"instructions_template"`
+		Apps                   *AppsMessages              `json:"apps"`
 		CollaborationModes     *CollaborationModeMessages `json:"collaboration_modes"`
 		MultiAgent             *MultiAgentMessages        `json:"multi_agent"`
 		TokenBudget            *ModelTokenBudgetConfig    `json:"token_budget"`
@@ -634,6 +643,7 @@ func (m *ModelMessages) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	m.InstructionsTemplate = raw.InstructionsTemplate
+	m.Apps = raw.Apps
 	m.CollaborationModes = raw.CollaborationModes
 	m.MultiAgent = raw.MultiAgent
 	m.TokenBudget = raw.TokenBudget
