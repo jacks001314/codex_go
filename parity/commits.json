@@ -35925,8 +35925,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:70: | `#56552` `#57225` `#57226` `#55975` | DELETE journaling on NFS: initialize new databases, migrate existing WAL databases under managed enforcement, ship `codex migrate-nfs-db` | `state/sqlite.go`, `state/nfs_migration.go`, `state/nfs_lock.go`, `config/api.go`, `config/config.go`, `config/requirements_file.go`, `appserver/runtime_router.go`, `appserver/websocket.go`, `appserver/message_board.go`,",
-    "plan_2026_10_27_nontui.md:719: `#56552` `#57225` `#57226` details: a writable SQLite pool now probes the"
+    "Round 1252: state/sqlite.go:34-37 defines sqliteJournalModeDelete and initialises new databases in DELETE journaling when NFS is detected, while :133 honours the `unsafe_enforce_sqlite_journal_mode` requirement for existing databases; state/nfs_migration.go plus app/migrate_nfs_db.go perform the explicit migration. Tests: state/nfs_migration_test.go TestNFSDatabaseNeedsMigrationInspectsHeaderLikeRust, TestNFSMigrationConvertsWALDatabaseLikeRust; state/sqlite_test.go."
    ]
   },
   {
@@ -35951,7 +35950,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:29: | `#56554` | Masked AWS credentials for local proxy signing: a local sandboxed process receives the placeholder access key and dummy secret/token of the selected signing pair, `AWS_CA_BUNDLE` defaults to the managed MITM trust bundle, and every environment value plus the protected shell snapshot is scrubbed of configured real credentials. Signing pairs apply only when the proxy is enabled with MIT"
+    "Round 1252: network/proxy_aws_sigv4.go masks AWS credentials for local proxy signing: a sandboxed process receives the placeholder access key with dummy secret/token for the selected signing pair, AWS_CA_BUNDLE defaults to the managed MITM trust bundle, and the protected shell snapshot keeps the masked values. Tests: network/proxy_aws_sigv4_env_test.go TestLocalManagedNetworkMasksAWSCredentialsLikeRust, TestRemoteEnvironmentKeepsAWSCredentialsLikeRust, TestLocalManagedNetworkSkipsAWSSigningWithoutBrokerLikeRust."
    ]
   },
   {
@@ -35985,9 +35984,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:884: `#56557`, `#55848`, `#55524`, and `#55620` change Rust test harnesses; Go has"
+    "Round 1252: not applicable — Rust test-only change exercising retained sampling in the Guardian transport tests; Go Guardian transport tests already drive the same path directly."
    ]
   },
   {
@@ -36011,8 +36010,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:91: | `#56560` | `model_providers.gcp.project_id`/`location` override the environment | `model/provider_info.go`, `model/provider_config.go`, `model/gcp_test.go` |",
-    "plan_2026_10_27_nontui.md:997: `#56265`/`#56560`/`#57188`/`#57394` details: the Go port now ships the built-in"
+    "Round 1252: model/provider_config.go:342-343 reads `model_providers.gcp.project_id` and `location`, and model/provider_info.go applies them over the environment for the built-in GCP provider. Tests: model/gcp_test.go TestGCPBuiltInProviderLikeRust, TestGCPConfiguredBaseURLBypassesProjectDiscoveryLikeRust, TestMergeGCPProviderOverridesLikeRust, TestGCPConfigOverridePreservesExplicitEmptyValuesLikeRust."
    ]
   },
   {
@@ -36137,7 +36135,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:27: | `#57174` | Scoped request-body secret substitution in MITM hooks: a `body_secret_substitution` action replaces opaque 16-256 byte ASCII placeholders with proxy-held secrets using byte-exact, non-recursive, bounded matching after destination authorization and before signing. Payloads with encoded, streaming-signed, or integrity-protected framing, request trailers, mismatched content length, overl"
+    "Round 1252: network/proxy_secret_substitution.go implements the `body_secret_substitution` MITM hook action: opaque 16-256 byte ASCII placeholders are replaced byte-exactly, non-recursively and within bounds after destination authorisation and before signing. Tests: network/proxy_secret_substitution_test.go TestBodySubstitutionReplacesOnlyOriginalBytes, TestBodySubstitutionRejectsIntegrityProtectedPayloads, TestBodySubstitutionRejectsMismatchedContentLength, TestBodySubstitutionConfigValidation."
    ]
   },
   {
@@ -36162,8 +36160,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:113: | `#57176` | Sync Guardian transcripts resolve the node_repl output cap from the turn's evidence mode | `appserver/node_repl_evidence.go`, `appserver/guardian_reviewer.go`, `appserver/turn_runtime.go`, like-Rust test |",
-    "plan_2026_10_27_nontui.md:431: `#57176` details: the synchronous transcript's node_repl output cap now"
+    "Round 1252: appserver/node_repl_evidence.go resolves the node_repl output cap from the turn's evidence mode so truncation is deferred until prompt preparation, and appserver/guardian_reviewer.go plus appserver/turn_runtime.go pass the evidence mode through. Tests: appserver/node_repl_evidence_test.go TestNodeReplAutoReviewRequiredForModelHonorsGuardianPolicy and the like-Rust Guardian transcript tests."
    ]
   },
   {
@@ -36175,8 +36172,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:86: | `#57178` | Route FedRAMP API keys to government endpoints by default | `auth/api_key.go`, `model/fedramp_routing.go`, `model/auth.go`, `model/provider.go`, `model/models_identity.go`, `config/config.go`, `appserver/runtime_router.go`, `appserver/realtime_runtime.go`, `doctor/doctor.go`, like-Rust tests |",
-    "plan_2026_10_27_nontui.md:976: `#57178` details: `sk-proj-fedramp-` and `sk-svcacct-fedramp-` prefixes are"
+    "Round 1252: model/fedramp_routing.go routes FedRAMP API keys to the government endpoints by default, wired through auth/api_key.go, model/auth.go, model/provider.go, config/config.go, appserver/runtime_router.go, appserver/realtime_runtime.go and doctor/doctor.go. Tests: model/fedramp_routing_like_rust_test.go TestFedrampAPIKeyRoutingFollowsSelectedProviderCredentialLikeRust, TestFedrampRoutingPreservesExplicitBaseURLOverridesLikeRust, TestFedrampRoutingSkipsCommandAndNonOpenAIProvidersLikeRust."
    ]
   },
   {
@@ -36200,8 +36196,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:17: | `#57180` | Strict standalone proxy config: the `codex-network-proxy` binary accepts `--strict`, which requires an explicit `constraints` object, rejects `metadata` and unknown fields at every level, and rejects documents over the size limit by reading at most limit+1 bytes. The permissive path keeps optional constraints and metadata, and both share normalization, scheme/port, placeholder, `aws_s",
-    "plan_2026_10_27_nontui.md:1482: - For `#57180`: `go build ./...`, `go vet ./network`, `go test ./network -run 'StaticProxyConfig|Standalone' -count=1`,"
+    "Round 1252: network/standalone_config.go parses constraint-aware standalone proxy documents, and the strict path requires an explicit `constraints` object while rejecting `metadata`, unknown fields at every level, trailing JSON values and oversized documents. Tests: network/standalone_config_test.go TestStandaloneProxyConfigRejectsUnknownFieldsAtEveryLevel, TestStandaloneProxyConfigRejectsTrailingJSONValues, TestStandaloneProxyConfigEnablesMITMForLimitedModeAndHooks."
    ]
   },
   {
@@ -36225,8 +36220,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:117: | `#57185` | Unified-exec captured output keeps Rust's byte-omission marker through model truncation | `tool/unified_exec_buffer.go`, `tool/unified_exec.go`, `tool/shell.go`, `tool/shell_executor.go`, like-Rust tests |",
-    "plan_2026_10_27_nontui.md:474: `#57185` details: unified-exec collection drains its head/tail buffers with"
+    "Round 1252: tool/unified_exec_buffer.go:7,79 keeps Rust's byte-omission marker through model truncation (DrainWithOmissionMarker / SnapshotWithOmissionMarker), with tool/unified_exec.go and tool/shell_executor.go routing captured output through it. Tests: tool/unified_exec_test.go TestUnifiedExecHeadTailBufferRendersOmissionMarkerLikeRust, tool/unified_exec_output_drain_test.go TestLocalUnifiedExecOutputDrainIsBoundedAfterExitLikeRust."
    ]
   },
   {
@@ -36238,8 +36232,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:75: | `#57186` | Fail closed on unreadable deny-glob search root metadata errors | `sandbox/linuxsandbox/bwrap.go`, `sandbox/linuxsandbox/unreadable_glob_root_test.go` |",
-    "plan_2026_10_27_nontui.md:797: `#57186` details: the ripgrep-backed deny-glob expander now inspects each"
+    "Round 1252: sandbox/linuxsandbox/bwrap.go inspectUnreadableGlobSearchRoot resolves symlinked directories and now fails closed when the search root metadata cannot be read. Tests: sandbox/linuxsandbox/unreadable_glob_root_test.go TestInspectUnreadableGlobSearchRootLikeRust, TestInspectUnreadableGlobSearchRootFollowsDirectorySymlinks, TestInspectUnreadableGlobSearchRootFailsOnMetadataErrorLikeRust."
    ]
   },
   {
@@ -36251,8 +36244,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:66: | `#57187` | Advisory rollout budgets with optional limit enforcement | `config/rollout_budget.go`, `config/config.go`, `runtimeutil/budget.go`, `appserver/runtime_router.go`, config/budget tests |",
-    "plan_2026_10_27_nontui.md:684: `#57187` details: `features.rollout_budget.enforce_limit` defaults to `true`"
+    "Round 1252: config/rollout_budget.go resolves advisory rollout budgets (weights defaulted, `enforce_limit` optional) and runtimeutil/budget.go applies the limit only when enforced, wired through appserver/runtime_router.go. Tests: config/rollout_budget_test.go TestRolloutBudgetConfigResolvesLikeRust, TestRolloutBudgetConfigDefaultsWeightsLikeRust, TestRolloutBudgetConfigEnforceLimitLikeRust."
    ]
   },
   {
@@ -36264,8 +36256,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:92: | `#57188` | `model_providers.gcp.credential_file` for command auth | `model/provider_info.go`, `model/auth.go`, `model/provider_config.go`, `model/gcp_test.go` |",
-    "plan_2026_10_27_nontui.md:997: `#56265`/`#56560`/`#57188`/`#57394` details: the Go port now ships the built-in"
+    "Round 1252: model/provider_config.go:344 reads `model_providers.gcp.credential_file` and :231,568 validate it for command authentication, with model/auth.go and model/provider_info.go consuming the override. Tests: model/gcp_test.go TestGCPProviderDefaultAuthBoundToStartupCWDLikeRust and the credential-file validation cases."
    ]
   },
   {
@@ -36277,7 +36268,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_28_sync4.md:114: | `245691b2dc` | #57191 | equivalent | `tool/unified_exec_process_unix.go` reads `StdoutPipe` and `StderrPipe` directly, with no broadcast channel that can skip lagged chunks. |"
+    "Round 1252: tool/unified_exec_process_unix.go reads StdoutPipe and StderrPipe directly, so no broadcast channel can skip lagged chunks in captured output. Tests: tool/unified_exec_output_drain_test.go TestLocalUnifiedExecOutputDrainIsBoundedAfterExitLikeRust, tool/unified_exec_pipe_launch_unix_test.go."
    ]
   },
   {
@@ -36289,8 +36280,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:64: | `#57192` | Gate capability discovery V2 on executor version | `execserver/capability_discovery_v2_compat.go`, `execserver/client.go`, `appserver/executor_capability_discovery_v2.go`, `appserver/initialize.go`, `cmd/codex/main.go`, version tests |",
-    "plan_2026_10_27_nontui.md:656: `#57192` details: V2 discovery now requires both the `capabilityDiscoveryV2`"
+    "Round 1252: execserver/capability_discovery_v2_compat.go SupportsCapabilityDiscoveryV2:17 gates executor capability discovery V2 on the executor's semantic version, consumed by execserver/client.go, appserver/executor_capability_discovery_v2.go, appserver/initialize.go and cmd/codex/main.go. Tests: execserver/capability_discovery_v2_version_test.go."
    ]
   },
   {
@@ -36351,8 +36341,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:79: | `#57198` | `PreToolUse` hook input reports the local command's resolved working directory | `tool/hooks.go`, `tool/shell_executor.go`, `appserver/hooks_events.go`, `appserver/tool_hooks_adapter.go`, like-Rust tests |",
-    "plan_2026_10_27_nontui.md:841: `#57198` `#57203` details: tool hook requests now carry a `toolCWD` that"
+    "Round 1252: appserver/hooks_events.go reports the tool execution directory in PreToolUse hook input, so the local command working directory matches Rust. Tests: appserver/hooks_tool_cwd_like_rust_test.go TestHookInputCWDReportsToolExecutionDirectoryLikeRust."
    ]
   },
   {
