@@ -43,6 +43,32 @@ func execResumeUsageTextFor(last, all bool) string {
 	}
 }
 
+// execResumeFlagUsageText renders clap's resume usage for an unexpected flag:
+// supplied positionals are shown with angle brackets, the `[OPTIONS]`
+// placeholder disappears, and --last/--all are echoed.
+func execResumeFlagUsageText(last, all bool, supplied int) string {
+	if !last && !all && supplied == 0 {
+		return execResumeUsageText
+	}
+	var builder strings.Builder
+	builder.WriteString("Usage: codex exec resume ")
+	switch {
+	case last:
+		builder.WriteString("--last ")
+	case all:
+		builder.WriteString("--all ")
+	}
+	switch supplied {
+	case 0:
+		builder.WriteString("[SESSION_ID] [PROMPT]")
+	case 1:
+		builder.WriteString("<SESSION_ID> [PROMPT]")
+	default:
+		builder.WriteString("<SESSION_ID> <PROMPT>")
+	}
+	return builder.String()
+}
+
 func unexpectedArgumentError(arg, usage string) error {
 	return &UsageError{
 		Message: "unexpected argument '" + arg + "' found\n\n  tip: to pass '" + arg + "' as a value, use '-- " + arg + "'",

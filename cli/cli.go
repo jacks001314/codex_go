@@ -1260,28 +1260,26 @@ func parseExecResume(args []string, exec *ExecOptions) error {
 		case strings.HasPrefix(arg, "-c") && arg != "-C":
 			exec.ConfigOverrides = append(exec.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
 		case strings.HasPrefix(arg, "-"):
-			return unexpectedArgumentError(arg, execResumeUsageTextFor(exec.Resume.Last, exec.Resume.All))
+			return unexpectedArgumentError(arg, execResumeFlagUsageText(exec.Resume.Last, exec.Resume.All, len(positionals)))
 		default:
 			positionals = append(positionals, arg)
 		}
 	}
-	if exec.Resume.Last {
-		if len(positionals) > 1 {
-			return errors.New("exec resume --last accepts at most one prompt")
-		}
-		if len(positionals) == 1 {
-			exec.Resume.Prompt = positionals[0]
-		}
+	// Rust's ResumeArgsRaw binds SESSION_ID then PROMPT and lets clap reject a
+	// third positional, while `From<ResumeArgsRaw>` turns the single positional
+	// of `--last` into the prompt.
+	if exec.Resume.Last && len(positionals) == 1 {
+		exec.Resume.Prompt = positionals[0]
 		return nil
 	}
-	switch len(positionals) {
-	case 0:
-		return nil
-	case 1:
+	if len(positionals) > 2 {
+		return unexpectedPositionalError(positionals[2], execResumeUsageText)
+	}
+	if len(positionals) >= 1 {
 		exec.Resume.SessionID = positionals[0]
-	default:
-		exec.Resume.SessionID = positionals[0]
-		exec.Resume.Prompt = strings.Join(positionals[1:], " ")
+	}
+	if len(positionals) == 2 {
+		exec.Resume.Prompt = positionals[1]
 	}
 	return nil
 }
@@ -1398,9 +1396,12 @@ func parseExecFork(args []string, exec *ExecOptions) error {
 	if len(positionals) == 0 {
 		return errors.New("exec fork requires SESSION_ID")
 	}
+	if len(positionals) > 2 {
+		return unexpectedPositionalError(positionals[2], execForkUsageText)
+	}
 	exec.Fork.SessionID = positionals[0]
-	if len(positionals) > 1 {
-		exec.Fork.Prompt = strings.Join(positionals[1:], " ")
+	if len(positionals) == 2 {
+		exec.Fork.Prompt = positionals[1]
 	}
 	return nil
 }
@@ -1551,8 +1552,14 @@ func parseReview(args []string, review *ReviewOptions, exec *ExecOptions) error 
 			if review.Uncommitted || review.Base != "" || review.Commit != "" {
 				return errors.New("PROMPT conflicts with --uncommitted, --base, and --commit")
 			}
-			review.Prompt = strings.Join(args[i:], " ")
-			return nil
+			// Rust's review takes a single PROMPT positional.
+			if review.Prompt != "" {
+				if exec != nil {
+					return unexpectedPositionalError(arg, execReviewUsageText)
+				}
+				return fmt.Errorf("unexpected argument '%s' found", arg)
+			}
+			review.Prompt = arg
 		}
 	}
 	if review.CommitTitle != "" && review.Commit == "" {
