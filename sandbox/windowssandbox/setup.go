@@ -201,6 +201,12 @@ var proxyEnvKeys = []string{
 	"wss_proxy",
 }
 
+// ProxyEnvKeys lists the proxy variables consulted for offline firewall
+// settings, in setup's precedence order (Rust setup::PROXY_ENV_KEYS).
+func ProxyEnvKeys() []string {
+	return append([]string(nil), proxyEnvKeys...)
+}
+
 const allowLocalBindingEnvKey = "CODEX_NETWORK_ALLOW_LOCAL_BINDING"
 
 var UserProfileRootExclusions = []string{

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 
+	"codex_go/sandbox/windowssandbox/provisionservice"
+
 	json "github.com/goccy/go-json"
 )
 
@@ -15,11 +17,47 @@ type SandboxCredentials struct {
 }
 
 var (
-	runElevatedSetupForCredentials         = RunElevatedSetup
+	runElevatedSetupForCredentials         = runAutomaticSetupForCredentials
+	runElevatedSetupFallbackForCredentials = RunElevatedSetup
 	runSetupRefreshForCredentials          = RunSetupRefreshForRequest
 	selectSandboxCredentialsForCredentials = SelectSandboxCredentials
 	sandboxAccountFlagsForCredentials      = readSandboxAccountFlags
+	provisionViaServiceForCredentials      = provisionWindowsSandboxViaService
 )
+
+// runAutomaticSetupForCredentials prefers an installed provisioning service at
+// launch time and falls back to the elevated helper only when the service is
+// unavailable (Rust run_automatic_setup). Service errors propagate.
+func runAutomaticSetupForCredentials(request *SandboxSetupRequest) error {
+	if request == nil {
+		return ErrInvalidRequest
+	}
+	settings := provisionservice.Settings{}
+	if request.OfflineProxySettings != nil {
+		settings.ProxyPorts = append([]uint16{}, request.OfflineProxySettings.ProxyPorts...)
+		settings.AllowLocalBinding = request.OfflineProxySettings.AllowLocalBinding
+	}
+	listeners := FilterProvisioningListeners(
+		ProvisioningListenersFromProxyEnvironment(request.Env),
+		settings.ProxyPorts,
+	)
+	outcome, err := provisionViaServiceForCredentials(request.CodexHome, settings, listeners)
+	if err != nil {
+		return err
+	}
+	if outcome == provisionservice.Provisioned {
+		return nil
+	}
+	return runElevatedSetupFallbackForCredentials(request)
+}
+
+// provisionWindowsSandboxViaService provisions through the authenticated
+// packaged service. Registered Core never falls back (Client refuses it).
+func provisionWindowsSandboxViaService(codexHome string, settings provisionservice.Settings, listeners provisionservice.Listeners) (provisionservice.Outcome, error) {
+	client := provisionservice.NewClient()
+	client.RegisteredCore = RegisteredCoreRequested
+	return client.ProvisionWindowsSandbox(codexHome, settings, listeners)
+}
 
 func RequireLogonSandboxCreds(codexHome string) (*SandboxCredentials, error) {
 	return selectSandboxCredentialsForCredentials(codexHome, SandboxNetworkIdentityOffline)

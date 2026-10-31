@@ -8,9 +8,12 @@ import (
 	"runtime"
 	"strings"
 
+	"codex_go/auth"
 	"codex_go/config"
+	"codex_go/features"
 	"codex_go/sandbox"
 	"codex_go/sandbox/windowssandbox"
+	"codex_go/sandbox/windowssandbox/provisionservice"
 )
 
 type WindowsSandboxSetupRunner func(*WindowsSandboxSetupRuntimeRequest) error
@@ -23,6 +26,9 @@ type WindowsSandboxSetupRuntimeRequest struct {
 	PermissionProfile   *sandbox.PermissionProfile
 	WorkspaceRoots      []string
 	Env                 map[string]string
+	// UseService prefers the packaged provisioning service before the elevated
+	// helper (registered Core or the windows_sandbox_service feature).
+	UseService bool
 }
 
 func (r *RuntimeRouter) windowsSandboxSetupCWD(param *string) (string, error) {
@@ -82,6 +88,7 @@ func (r *RuntimeRouter) windowsSandboxSetupRuntimeRequest(mode sandbox.WindowsSe
 		PermissionProfile:   resolved.Profile,
 		WorkspaceRoots:      workspaceRoots,
 		Env:                 windowsSandboxSetupEnvMap(os.Environ()),
+		UseService:          windowssandbox.RegisteredCoreRequested() || features.Enabled(cfg.FeatureSettings(), "windows_sandbox_service"),
 	}, nil
 }
 
@@ -143,6 +150,15 @@ func defaultWindowsSandboxSetupRunner(request *WindowsSandboxSetupRuntimeRequest
 	case sandbox.WindowsSetupElevated:
 		if runtime.GOOS != "windows" {
 			return errors.New("elevated Windows sandbox setup is only supported on Windows")
+		}
+		if request.UseService {
+			// Workload identity is process-local, so the service cannot use it;
+			// the shared helper path below keeps the caller's configuration.
+			if !auth.IsWorkloadIdentitySelected() {
+				if err := runWindowsSandboxServiceSetup(request); err != nil {
+					return err
+				}
+			}
 		}
 		permissions, err := windowssandbox.ResolvePermissions(request.PermissionProfile, request.WorkspaceRoots)
 		if err != nil {
@@ -268,4 +284,38 @@ func windowsSandboxSetupEnvMap(values []string) map[string]string {
 		out[key] = value
 	}
 	return out
+}
+
+// runWindowsSandboxServiceSetup provisions through the authenticated packaged
+// service before the shared setup path. An Unavailable outcome falls through to
+// the elevated helper; only registered Core refuses that fallback.
+func runWindowsSandboxServiceSetup(request *WindowsSandboxSetupRuntimeRequest) error {
+	registeredCore := windowssandbox.RegisteredCoreRequested()
+	if request.PermissionProfile == nil || !request.PermissionProfile.Disabled {
+		permissions, err := windowssandbox.ResolvePermissions(request.PermissionProfile, request.WorkspaceRoots)
+		if err != nil {
+			if registeredCore {
+				return fmt.Errorf("registered Core requires a service-compatible sandbox policy: %w", err)
+			}
+			// A completed provisioning can still be refreshed by the shared path.
+			return nil
+		}
+		if err := permissions.ValidateElevatedFilesystemPolicy(); err != nil {
+			return err
+		}
+	} else if !registeredCore {
+		// Legacy setup keeps using the shared path for a disabled profile.
+		return nil
+	}
+	if registeredCore {
+		if err := provisionservice.StartServiceForSetup(); err != nil {
+			return err
+		}
+	}
+	settings := windowssandbox.ProvisioningSettingsFromEnvironment(request.PermissionProfile, request.Env)
+	listeners := windowssandbox.ProvisioningListenersFromEnvironment(request.PermissionProfile, request.Env)
+	client := provisionservice.NewClient()
+	client.RegisteredCore = windowssandbox.RegisteredCoreRequested
+	_, err := client.ProvisionWindowsSandbox(request.CodexHome, settings, listeners)
+	return err
 }
