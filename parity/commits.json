@@ -38278,10 +38278,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "Round 1262: partial — the exec-server half is present: execserver/server.go:565 advertises fsWatchMissing, execserver/missing_watch.go:35 implements the Linux watch, and execserver/missing_watch_like_rust_test.go:13 plus missing_watch_linux_test.go:17 cover it.",
-    "Residual: appserver/turn_runtime.go:11354 caches remote executor skill discovery in a sync.Once entry and never calls execserver Client.WatchMissing, so an initially empty remote skills root remains cached after files appear. Rust #57598's EmptyRemoteRootsCache invalidation has no Go caller yet."
+    "appserver/skills_remote_watch.go:20 routes selected remote skill discovery through one cached catalog and installs an empty-root observation; appserver/turn_runtime.go:11354 calls it for remote environments.",
+    "appserver/skills_remote_watch.go:39 dials a persistent executor client, checks fsWatchMissing, registers execserver Client.WatchMissing in the background, and invalidates the catalog on fs/missingChanged; appserver/skills_remote_watch.go:111 only evicts the matching generation and appserver/skills_remote_watch.go:141 closes observations at router shutdown.",
+    "appserver/empty_remote_skill_cache_like_rust_test.go:202 proves an empty catalog is rescanned after the watch fires, :230 proves non-empty catalogs do not watch, and :244 proves executors without fsWatchMissing keep ordinary caching.",
+    "execserver/server.go:565 advertises fsWatchMissing; execserver/missing_watch.go:35 implements the Linux observation; execserver/missing_watch_like_rust_test.go:13 and execserver/missing_watch_linux_test.go:17 cover the protocol and watch."
    ]
   },
   {

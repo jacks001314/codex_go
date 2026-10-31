@@ -581,19 +581,27 @@ type RuntimeRouter struct {
 	// catalogMetricsSeen remembers the last published skill and plugin catalog
 	// signature per thread so reused discovery is not measured twice
 	// (Rust #56530).
-	catalogMetricsMu       sync.Mutex
-	catalogMetricsSeen     map[string]string
-	skillWarningsMu        sync.Mutex
-	skillWarnings          map[string]map[string]struct{}
-	selectedSkillMu        sync.Mutex
-	selectedSkills         map[string]map[string]*runtimeSelectedSkillCatalog
-	skillTurnMetricsMu     sync.Mutex
-	skillTurnMetrics       map[string]*skillTurnMetricState
-	unifiedExecPersistMu   sync.Mutex
-	unifiedExecPendingMu   sync.Mutex
-	unifiedExecPending     map[string][]session.Item
-	unifiedExecAnalyticsMu sync.Mutex
-	unifiedExecAnalytics   map[string]unifiedExecAnalyticsContext
+	catalogMetricsMu   sync.Mutex
+	catalogMetricsSeen map[string]string
+	skillWarningsMu    sync.Mutex
+	skillWarnings      map[string]map[string]struct{}
+	selectedSkillMu    sync.Mutex
+	selectedSkills     map[string]map[string]*runtimeSelectedSkillCatalog
+	// emptyRemoteSkillWatchMu guards the persistent fs/watchMissing
+	// observations registered for empty remote selected skill roots
+	// (Rust #57598). A watch is tied to one selected catalog generation so a
+	// stale notification cannot drop a newer discovery.
+	emptyRemoteSkillWatchMu     sync.Mutex
+	emptyRemoteSkillWatches     map[string]*runtimeEmptyRemoteSkillWatch
+	emptyRemoteSkillWatchCtx    context.Context
+	emptyRemoteSkillWatchCancel context.CancelFunc
+	skillTurnMetricsMu          sync.Mutex
+	skillTurnMetrics            map[string]*skillTurnMetricState
+	unifiedExecPersistMu        sync.Mutex
+	unifiedExecPendingMu        sync.Mutex
+	unifiedExecPending          map[string][]session.Item
+	unifiedExecAnalyticsMu      sync.Mutex
+	unifiedExecAnalytics        map[string]unifiedExecAnalyticsContext
 	// toolItemModelContexts carries the invoking model context of a tool item
 	// from its start notification to its completion event (Rust #45445: the
 	// analytics reducer stores it with the item's start timestamp and keeps the
@@ -2760,6 +2768,7 @@ func (r *RuntimeRouter) BeginDraining() {
 }
 
 func (r *RuntimeRouter) close() error {
+	r.stopEmptyRemoteSkillWatches()
 	r.stopThreadIdleLifecycle()
 	r.modelsRefreshWorker.shutdown()
 	// A managed daemon's recovery snapshot must be taken while its turns are

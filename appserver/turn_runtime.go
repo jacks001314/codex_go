@@ -11350,21 +11350,11 @@ func (r *RuntimeRouter) selectedCapabilitySkillEntriesForRuntimeSnapshotWithSand
 		}
 		cacheKey := executorSkillRootCacheKey(selected) + "\x00" + executorSkillSandboxContextKey(sandboxContext)
 		if environmentRecord, ok := r.selectedCapabilityEnvironmentRecord(&selected.Location); ok {
-			cached := r.selectedCapabilitySkillCatalog(threadID, cacheKey)
-			cached.once.Do(func() {
-				cached.entries, cached.warnings, cached.err = discoverRemoteEnvironmentSkillsWithSandbox(ctx, environmentRecord, selected.Location.Path, sandboxContext)
-				if cached.err != nil {
-					cached.partial = true
-					cached.warnings = append(cached.warnings, "executor skills unavailable: "+cached.err.Error())
-					cached.err = nil
-				}
-				applyExecutorSkillDisplayPaths(cached.entries, selected.ID)
-			})
-			cloned := cloneSkills(cached.entries)
+			cloned, catalogWarnings, catalogPartial := r.remoteSelectedSkillCatalog(ctx, threadID, cacheKey, selected, environmentRecord, sandboxContext)
 			attributeExecutorSkillPluginIDs(cloned, selected.ID, rootPluginIDs)
 			entries = append(entries, cloned...)
-			warnings = append(warnings, cached.warnings...)
-			partial = partial || cached.partial
+			warnings = append(warnings, catalogWarnings...)
+			partial = partial || catalogPartial
 			continue
 		}
 		if r.selectedCapabilityEnvironmentRequired(&selected.Location) {
