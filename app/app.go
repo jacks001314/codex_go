@@ -956,7 +956,7 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 	}
 	var cloudConfigBundle *config.CloudConfigLoader
 	var resolved *auth.ResolvedAuth
-	if !opts.ExecutorCredentialStdin && !opts.UseAgentIdentityAuth {
+	if !opts.ExecutorCredentialStdin && !opts.UseAgentIdentityAuth && !opts.AWSSigV4 {
 		if bootstrapConfig.RequiresRemoteConfig() {
 			cloudConfigBundle, err = cloudConfigBundleLoaderForRun(ctx, codexHome, bootstrapConfig, nil)
 			if err != nil {
@@ -987,6 +987,12 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 		return err
 	}
 	publishApplicationNetworkPolicy(loadedConfig)
+	if strings.EqualFold(strings.TrimSpace(opts.RemoteTransport), "direct") {
+		// Rust #42781: the direct transport registers `direct_jsonrpc_v1` and
+		// signs both the registry request and the WebSocket handshake instead of
+		// using the registry's account credential.
+		return runExecServerRemoteWithDirectTransport(ctx, opts, loadedConfig, baseURL, environmentID, preferMXC, environmentConfigReader, stdin)
+	}
 	if opts.ExecutorCredentialStdin {
 		// Rust #54434: the scoped credential pipe replaces account
 		// authentication and workload identity, and it owns the parent
@@ -1068,6 +1074,81 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 		EnvironmentConfigReader:    environmentConfigReader,
 		AllowedSymlinkedCodexHome:  loadedConfig.AllowedSymlinkedCodexHome(),
 	})
+}
+
+// runExecServerRemoteWithDirectTransport mirrors Rust #42781's direct remote
+// executor: the registry and handshake authenticate with AWS SigV4, so the
+// account store is never consulted.
+func runExecServerRemoteWithDirectTransport(
+	ctx context.Context,
+	opts *cli.ExecServerOptions,
+	loadedConfig *config.Config,
+	baseURL string,
+	environmentID string,
+	preferMXC *bool,
+	environmentConfigReader execserver.EnvironmentConfigReader,
+	stdin io.Reader,
+) error {
+	signer, err := execServerDirectSigner(opts)
+	if err != nil {
+		return err
+	}
+	return runExecServerRemoteWithParentLifetime(ctx, stdin, opts.ExitOnStdinClose, execserver.RemoteEnvironmentConfig{
+		BaseURL:                    baseURL,
+		EnvironmentID:              environmentID,
+		Name:                       strings.TrimSpace(opts.Name),
+		Transport:                  execserver.RemoteTransportDirect,
+		DirectSigner:               signer,
+		HTTPClient:                 policyHTTPClient(loadedConfig, codexnetwork.NewHTTPClient(loadedConfig.RespectSystemProxyEnabled(), 0)),
+		PreferMXC:                  preferMXC,
+		ProxyPrivateIPsViaUpstream: opts.ProxyPrivateIPsViaUpstream,
+		EnvironmentConfigReader:    environmentConfigReader,
+		AllowedSymlinkedCodexHome:  loadedConfig.AllowedSymlinkedCodexHome(),
+	})
+}
+
+// execServerDirectSigner mirrors Rust cli/src/exec_server_auth.rs
+// `aws_sigv4_auth_provider`: an explicit profile wins over the default
+// credential chain, blank profile/region values are ignored, and every request
+// is signed with the AWS SDK's SigV4 signer.
+func execServerDirectSigner(opts *cli.ExecServerOptions) (execserver.DirectHandshakeSigner, error) {
+	if opts == nil || !opts.AWSSigV4 {
+		return nil, nil
+	}
+	context, err := auth.LoadAWSAuthContext(&auth.AWSAuthConfig{
+		Profile: strings.TrimSpace(opts.AWSProfile),
+		Region:  strings.TrimSpace(opts.AWSRegion),
+		Service: strings.TrimSpace(opts.AWSService),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &execServerSigV4Signer{context: context}, nil
+}
+
+type execServerSigV4Signer struct {
+	context *auth.AWSAuthContext
+}
+
+func (s *execServerSigV4Signer) SignRequest(ctx context.Context, method string, rawURL string, headers http.Header, body []byte) (string, http.Header, error) {
+	if s == nil || s.context == nil {
+		return "", nil, errors.New("AWS SigV4 signing context is required")
+	}
+	signed, err := s.context.Sign(&auth.AWSAuthRequestToSign{
+		Method:  method,
+		URL:     rawURL,
+		Headers: headers,
+		Body:    body,
+	})
+	if err != nil {
+		// Rust maps retryable credential failures to AuthError::Transient and
+		// everything else to AuthError::Build.
+		if errors.Is(err, auth.ErrAWSAuthMissingCredentials) {
+			return "", nil, fmt.Errorf("%w: %v", execserver.ErrDirectSigningTransient, err)
+		}
+		return "", nil, err
+	}
+	return signed.URL, signed.Headers, nil
 }
 
 // runExecServerRemoteWithExecutorCredential mirrors Rust #54434's scoped mode

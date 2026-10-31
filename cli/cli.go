@@ -306,6 +306,18 @@ type ExecServerOptions struct {
 	// destinations use the configured upstream proxy. Destination policy still
 	// decides access, and the setting defaults to disabled.
 	ProxyPrivateIPsViaUpstream bool
+	// RemoteTransport mirrors Rust #42781 `--remote-transport`: "noise" (the
+	// default rendezvous transport) or "direct" (plain JSON-RPC over an
+	// authenticated WebSocket).
+	RemoteTransport    string
+	RemoteTransportSet bool
+	// AWSSigV4 mirrors Rust #42781 `--aws-sigv4`: sign Direct registration and
+	// WebSocket handshake requests with AWS SigV4.
+	AWSSigV4      bool
+	AWSProfile    string
+	AWSRegion     string
+	AWSService    string
+	AWSServiceSet bool
 	WebSocketAuthOptions
 }
 
@@ -2679,6 +2691,48 @@ func parseExecServer(args []string, execServer *ExecServerOptions) error {
 		case arg == "--proxy-private-ips-via-upstream":
 			// Rust #48568: clap `ArgAction::SetTrue`, so the flag takes no value.
 			execServer.ProxyPrivateIPsViaUpstream = true
+		case arg == "--remote-transport":
+			value, next, err := requireValue(args, i, arg)
+			if err != nil {
+				return err
+			}
+			execServer.RemoteTransport = value
+			execServer.RemoteTransportSet = true
+			i = next
+		case strings.HasPrefix(arg, "--remote-transport="):
+			execServer.RemoteTransport = strings.TrimPrefix(arg, "--remote-transport=")
+			execServer.RemoteTransportSet = true
+		case arg == "--aws-sigv4":
+			execServer.AWSSigV4 = true
+		case arg == "--aws-profile":
+			value, next, err := requireValue(args, i, arg)
+			if err != nil {
+				return err
+			}
+			execServer.AWSProfile = value
+			i = next
+		case strings.HasPrefix(arg, "--aws-profile="):
+			execServer.AWSProfile = strings.TrimPrefix(arg, "--aws-profile=")
+		case arg == "--aws-region":
+			value, next, err := requireValue(args, i, arg)
+			if err != nil {
+				return err
+			}
+			execServer.AWSRegion = value
+			i = next
+		case strings.HasPrefix(arg, "--aws-region="):
+			execServer.AWSRegion = strings.TrimPrefix(arg, "--aws-region=")
+		case arg == "--aws-service":
+			value, next, err := requireValue(args, i, arg)
+			if err != nil {
+				return err
+			}
+			execServer.AWSService = value
+			execServer.AWSServiceSet = true
+			i = next
+		case strings.HasPrefix(arg, "--aws-service="):
+			execServer.AWSService = strings.TrimPrefix(arg, "--aws-service=")
+			execServer.AWSServiceSet = true
 		default:
 			if strings.HasPrefix(arg, "-") {
 				return fmt.Errorf("unknown exec-server option %s", arg)
@@ -2737,6 +2791,50 @@ func parseExecServer(args []string, execServer *ExecServerOptions) error {
 	}
 	if execServer.ExecutorCredentialStdin && execServer.UseAgentIdentityAuth {
 		return errors.New("--executor-credential-stdin conflicts with --use-agent-identity-auth")
+	}
+	// Rust #42781: `--remote-transport` and the `--aws-*` family require the
+	// remote registration arguments, and the direct transport requires SigV4.
+	transport := strings.ToLower(strings.TrimSpace(execServer.RemoteTransport))
+	switch transport {
+	case "":
+		transport = "noise"
+	case "noise", "direct":
+	default:
+		return fmt.Errorf("invalid --remote-transport value %q; expected noise or direct", execServer.RemoteTransport)
+	}
+	execServer.RemoteTransport = transport
+	if strings.TrimSpace(execServer.AWSService) == "" {
+		execServer.AWSService = "execute-api"
+	}
+	if execServer.RemoteTransportSet && execServer.Remote == "" {
+		return errors.New("--remote-transport requires --remote")
+	}
+	if execServer.AWSSigV4 && execServer.Remote == "" && forward == "" {
+		return errors.New("--aws-sigv4 requires --remote")
+	}
+	if execServer.AWSProfile != "" && !execServer.AWSSigV4 {
+		return errors.New("--aws-profile requires --aws-sigv4")
+	}
+	if execServer.AWSRegion != "" && !execServer.AWSSigV4 {
+		return errors.New("--aws-region requires --aws-sigv4")
+	}
+	if execServer.AWSServiceSet && !execServer.AWSSigV4 {
+		return errors.New("--aws-service requires --aws-sigv4")
+	}
+	if execServer.AWSSigV4 && transport != "direct" {
+		return errors.New("--aws-sigv4 requires --remote-transport direct")
+	}
+	if transport == "direct" && !execServer.AWSSigV4 {
+		return errors.New("--remote-transport direct requires --aws-sigv4")
+	}
+	if execServer.AWSSigV4 && execServer.UseAgentIdentityAuth {
+		return errors.New("--aws-sigv4 conflicts with --use-agent-identity-auth")
+	}
+	if execServer.AWSSigV4 && execServer.ExecutorCredentialStdin {
+		return errors.New("--aws-sigv4 conflicts with --executor-credential-stdin")
+	}
+	if transport == "direct" && forward == "forward" {
+		return errors.New("direct exec-server transport does not support forwarding")
 	}
 	return execServer.ValidateWebsocketAuthFlags()
 }

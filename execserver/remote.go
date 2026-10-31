@@ -82,6 +82,13 @@ type RemoteEnvironmentConfig struct {
 	// to select scoped auth is WithExecutorCredentialAuth, which enforces the
 	// URL restrictions of Rust #54346.
 	authMode registryAuthMode
+	// Transport mirrors Rust ExecServerRemoteTransport (#42781): the Noise
+	// rendezvous transport by default, or the direct JSON-RPC WebSocket
+	// transport that authenticates the registry and handshake with SigV4.
+	Transport RemoteEnvironmentTransport
+	// DirectSigner signs Direct registrations and WebSocket handshakes. It is
+	// only consulted when Transport is RemoteTransportDirect.
+	DirectSigner DirectHandshakeSigner
 }
 
 // WithExecutorCredentialAuth selects Rust's scoped executor-credential mode
@@ -96,6 +103,11 @@ type RemoteEnvironmentConfig struct {
 func (cfg RemoteEnvironmentConfig) WithExecutorCredentialAuth() (RemoteEnvironmentConfig, error) {
 	if err := requireSecureOrLoopback(cfg.BaseURL, "https"); err != nil {
 		return cfg, err
+	}
+	// Rust #42781: the direct transport authenticates with its own auth
+	// provider, so scoped executor credentials cannot be combined with it.
+	if cfg.Transport == RemoteTransportDirect {
+		return cfg, errors.New("environment registry config error: scoped executor credentials are not supported by the direct exec-server transport")
 	}
 	cfg.authMode = registryAuthModeExecutorCredential
 	return cfg, nil
@@ -240,18 +252,22 @@ func RunRemoteEnvironment(ctx context.Context, cfg RemoteEnvironmentConfig) erro
 		cfg.MaxBackoff = defaultRemoteMaxBackoff
 	}
 
-	identity, err := generateRemoteNoiseIdentity()
-	if err != nil {
-		return fmt.Errorf("failed to generate Noise relay identity: %w", err)
-	}
-	defer identity.Destroy()
-
 	server := NewServerWithHTTPClient(cfg.HTTPClient)
 	server.SetPreferMXC(cfg.PreferMXC)
 	server.SetProxyPrivateIPsViaUpstream(cfg.ProxyPrivateIPsViaUpstream)
 	server.SetEnvironmentConfigReader(cfg.EnvironmentConfigReader)
 	server.SetAllowedSymlinkedCodexHome(cfg.AllowedSymlinkedCodexHome)
 	defer server.shutdownSessions()
+	if cfg.Transport == RemoteTransportDirect {
+		return runDirectEnvironment(ctx, cfg, server)
+	}
+
+	identity, err := generateRemoteNoiseIdentity()
+	if err != nil {
+		return fmt.Errorf("failed to generate Noise relay identity: %w", err)
+	}
+	defer identity.Destroy()
+
 	backoff := newRemoteReconnectBackoff(cfg.Backoff, cfg.MaxBackoff)
 	registration, err := registerRemoteEnvironmentWithRetry(ctx, cfg, identity.PublicKey())
 	if err != nil {
