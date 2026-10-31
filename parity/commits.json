@@ -10281,9 +10281,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "Partial symbol coverage 3/11; needs review: brokered_credential_binding_env_keys, brokered_credential_dummy_env_keys, brokered_credential_env_keys, brokered_credential_marker_env_keys, brokered_credential_value_env_keys"
+    "Rust #44049 only moves credential-broker environment/marker helpers and credential prioritization/selection into dedicated modules while preserving behavior and exports. Go's equivalents already live in network/proxy_credential_broker.go (ProxyBrokeredCredentialDummyEnvKeys, ProxyBrokeredCredentialEnvKeys, updateBrokeredCredentialsMarker, selectCredential) and network/snapshot_credentials.go; the Rust module names and private exports have no Go counterpart, so there is no behavioral or public-contract change to port. Prior alignment record: update/plan_2026_09_11.md (#44049)."
    ]
   },
   {
