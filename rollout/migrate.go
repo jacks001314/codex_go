@@ -39,12 +39,12 @@ const (
 
 // MigrationOutcome mirrors Rust RolloutMigrationOutcome.
 type MigrationOutcome struct {
-	ThreadID       *string                 `json:"thread_id,omitempty"`
+	ThreadID       *string                 `json:"thread_id"`
 	RolloutPath    string                  `json:"rollout_path"`
 	Status         MigrationStatus         `json:"status"`
 	FailureReason  *MigrationFailureReason `json:"failure_reason,omitempty"`
 	BytesProcessed uint64                  `json:"bytes_processed"`
-	Message        *string                 `json:"message,omitempty"`
+	Message        *string                 `json:"message"`
 }
 
 // MigrationReport mirrors Rust RolloutMigrationReport.
@@ -57,11 +57,22 @@ type MigrationOptions struct {
 	Apply           bool
 	ThreadIDs       []string
 	MaxMibPerSecond uint64
+	// Progress receives one update per inspected path, mirroring Rust
+	// LocalThreadStore::migrate_rollouts_with_progress. OutcomeStatus is nil for
+	// paths skipped before inspection because they belong to an unselected thread.
+	Progress func(MigrationProgress)
 	// IndexedRollouts is the state database's thread-to-rollout index. Migrating
 	// selected threads uses it to skip rollout headers that provably belong to
 	// unrelated threads (Rust #57483). It stays empty when the index is
 	// unavailable, and then every candidate header is inspected.
 	IndexedRollouts []MigrationIndexedRollout
+}
+
+// MigrationProgress mirrors Rust thread-store RolloutMigrationProgress.
+type MigrationProgress struct {
+	ProcessedPaths int
+	TotalPaths     int
+	OutcomeStatus  *MigrationStatus
 }
 
 // MigrationIndexedRollout is one state-database index row: the thread that owns
@@ -99,7 +110,7 @@ func MigrateRollouts(codexHome string, options MigrationOptions) (*MigrationRepo
 	}
 	var paths []string
 	for _, root := range roots {
-		collected, err := CollectRolloutPaths(root)
+		collected, err := migrationRolloutPaths(root)
 		if err != nil {
 			// A missing sessions directory is not an error; an unreadable one
 			// surfaces in per-file outcomes only when files exist.
@@ -108,20 +119,57 @@ func MigrateRollouts(codexHome string, options MigrationOptions) (*MigrationRepo
 			}
 			continue
 		}
+		// Rust sorts each root descending (newest rollout first) and keeps the
+		// active tree ahead of the archived one.
+		sort.Sort(sort.Reverse(sort.StringSlice(collected)))
 		paths = append(paths, collected...)
 	}
-	sort.Strings(paths)
 	if len(options.ThreadIDs) > 0 {
 		paths = pruneUnselectedIndexedRolloutPaths(paths, options)
 	}
-	for _, path := range paths {
+	totalPaths := len(paths)
+	for index, path := range paths {
 		outcome, ok := inspectRolloutPath(codexHome, path, options)
-		if !ok {
-			continue
+		if ok {
+			report.Outcomes = append(report.Outcomes, *outcome)
 		}
-		report.Outcomes = append(report.Outcomes, *outcome)
+		if options.Progress != nil {
+			update := MigrationProgress{ProcessedPaths: index + 1, TotalPaths: totalPaths}
+			if ok {
+				status := outcome.Status
+				update.OutcomeStatus = &status
+			}
+			options.Progress(update)
+		}
 	}
 	return report, nil
+}
+
+// migrationRolloutPaths collects the rollout files Rust migration inspects: the
+// names starting with "rollout-" and ending in .jsonl or .jsonl.zst, skipping a
+// compressed file that already has its plain counterpart.
+func migrationRolloutPaths(root string) ([]string, error) {
+	collected, err := CollectRolloutPaths(root)
+	if err != nil {
+		return nil, err
+	}
+	paths := make([]string, 0, len(collected))
+	for _, path := range collected {
+		name := filepath.Base(path)
+		if !strings.HasPrefix(name, "rollout-") {
+			continue
+		}
+		switch {
+		case strings.HasSuffix(name, ".jsonl"):
+			paths = append(paths, path)
+		case strings.HasSuffix(name, ".jsonl.zst"):
+			if _, statErr := os.Stat(strings.TrimSuffix(path, ".zst")); statErr == nil {
+				continue
+			}
+			paths = append(paths, path)
+		}
+	}
+	return paths, nil
 }
 
 func inspectRolloutPath(codexHome string, path string, options MigrationOptions) (*MigrationOutcome, bool) {

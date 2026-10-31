@@ -458,6 +458,21 @@ func runWindowsSandboxPlan(ctx context.Context, plan *sandbox.CommandRunPlan, en
 	return nil
 }
 
+func initializeMigrateRolloutsState(codexHome string) error {
+	config, err := state.SqliteConfigForCodexHome(codexHome)
+	if err != nil {
+		return err
+	}
+	runtime, err := state.InitStateRuntime(context.Background(), config, "openai")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = runtime.Close()
+	}()
+	return state.WaitForRolloutBackfill(context.Background(), runtime, codexHome, state.RolloutBackfillOptions{})
+}
+
 func projectMigratedRollouts(codexHome string, report *rollout.MigrationReport) error {
 	if report == nil {
 		return nil
@@ -1397,12 +1412,36 @@ func indexedRolloutPathsForMigration(codexHome string) []rollout.MigrationIndexe
 
 func runMigrateRollouts(opts cli.MigrateRolloutsOptions, root cli.RootOptions, stdout io.Writer, stderr io.Writer) error {
 	codexHome := auth.DefaultCodexHome()
+	progress := newMigrationProgress(opts.Apply, opts.JSON, stderr)
+	progress.begin()
+	// Mirrors Rust: an apply run measures thread storage before migrating so the
+	// human report can show how much the paginated history freed or added.
+	var threadStorageBefore *uint64
+	threadHistoryDBPath := ""
+	if opts.Apply && !opts.JSON {
+		if path, pathErr := migrationThreadHistoryDBPath(codexHome); pathErr == nil {
+			threadHistoryDBPath = path
+			if bytes, bytesErr := migrationThreadStorageBytes(codexHome, path); bytesErr == nil {
+				threadStorageBefore = &bytes
+			}
+		}
+	}
+	if opts.Apply {
+		// Mirrors Rust: an apply run initializes local thread metadata (including
+		// its rollout index) before scanning, so the state index can prune
+		// rollouts that provably belong to unselected threads.
+		if err := initializeMigrateRolloutsState(codexHome); err != nil {
+			return fmt.Errorf("failed to initialize local thread metadata: %w", err)
+		}
+	}
 	report, err := rollout.MigrateRollouts(codexHome, rollout.MigrationOptions{
 		Apply:           opts.Apply,
 		ThreadIDs:       opts.Threads,
 		MaxMibPerSecond: opts.MaxMibPerSecond,
 		IndexedRollouts: indexedRolloutPathsForMigration(codexHome),
+		Progress:        progress.update,
 	})
+	progress.finish()
 	if err != nil {
 		return err
 	}
@@ -1416,6 +1455,12 @@ func runMigrateRollouts(opts cli.MigrateRolloutsOptions, root cli.RootOptions, s
 			return err
 		}
 	}
+	var threadStorage *[2]uint64
+	if threadStorageBefore != nil {
+		if after, bytesErr := migrationThreadStorageBytes(codexHome, threadHistoryDBPath); bytesErr == nil {
+			threadStorage = &[2]uint64{*threadStorageBefore, after}
+		}
+	}
 	if opts.JSON {
 		data, marshalErr := rollout.RenderJSONReport(report)
 		if marshalErr != nil {
@@ -1426,7 +1471,7 @@ func runMigrateRollouts(opts cli.MigrateRolloutsOptions, root cli.RootOptions, s
 			return err
 		}
 	} else {
-		printMigrateRolloutsHumanReport(report, opts, stdout)
+		printMigrateRolloutsHumanReport(report, opts, progress.elapsed(), threadStorage, stdout)
 	}
 	for _, outcome := range report.Outcomes {
 		if outcome.Status == rollout.MigrationStatusFailed {
@@ -1435,47 +1480,73 @@ func runMigrateRollouts(opts cli.MigrateRolloutsOptions, root cli.RootOptions, s
 	}
 	return nil
 }
-
-func printMigrateRolloutsHumanReport(report *rollout.MigrationReport, opts cli.MigrateRolloutsOptions, stdout io.Writer) {
-	counts := map[rollout.MigrationStatus]int{}
+func printMigrateRolloutsHumanReport(report *rollout.MigrationReport, opts cli.MigrateRolloutsOptions, elapsed time.Duration, threadStorage *[2]uint64, stdout io.Writer) {
+	counts := migrationCounts{}
 	for _, outcome := range report.Outcomes {
-		counts[outcome.Status]++
+		counts.observe(outcome.Status)
 	}
 	completion := "Scan complete"
+	label := "eligible"
+	counted := counts.eligible
 	if opts.Apply {
 		completion = "Migration complete"
+		label = "migrated"
+		counted = counts.migrated
 	}
-	fmt.Fprintf(stdout, "%s.\n", completion)
-	migrated := "eligible"
-	if opts.Apply {
-		migrated = "migrated"
-	}
+	fmt.Fprintf(stdout, "%s in %s.\n", completion, formatMigrationElapsed(elapsed))
 	fmt.Fprintf(stdout, "Scanned %d rollout(s): %d %s, %d already paginated, %d skipped (%d empty, %d busy), %d failed.\n",
 		len(report.Outcomes),
-		counts[rollout.MigrationStatusEligible]+counts[rollout.MigrationStatusMigrated],
-		migrated,
-		counts[rollout.MigrationStatusAlreadyPaginated],
-		counts[rollout.MigrationStatusSkippedEmpty]+counts[rollout.MigrationStatusSkippedBusy],
-		counts[rollout.MigrationStatusSkippedEmpty],
-		counts[rollout.MigrationStatusSkippedBusy],
-		counts[rollout.MigrationStatusFailed],
+		counted,
+		label,
+		counts.alreadyPaginated,
+		counts.skipped(),
+		counts.skippedEmpty,
+		counts.skippedBusy,
+		counts.failed,
 	)
-	if !opts.Apply && counts[rollout.MigrationStatusEligible] > 0 {
+	if threadStorage != nil {
+		fmt.Fprintf(stdout, "Disk used for thread storage: %s -> %s\n", formatMigrationBytes(threadStorage[0]), formatMigrationBytes(threadStorage[1]))
+	}
+	if !opts.Apply && counts.eligible > 0 {
 		fmt.Fprintln(stdout, "Run `codex migrate-rollouts --apply` to migrate eligible sessions.")
 	}
-	if !opts.Verbose {
+	if opts.Verbose {
+		for _, outcome := range report.Outcomes {
+			printMigrateRolloutsOutcome(outcome, stdout)
+		}
 		return
 	}
+	exceptions := make([]rollout.MigrationOutcome, 0, len(report.Outcomes))
 	for _, outcome := range report.Outcomes {
-		threadID := "unknown"
-		if outcome.ThreadID != nil && strings.TrimSpace(*outcome.ThreadID) != "" {
-			threadID = strings.TrimSpace(*outcome.ThreadID)
+		if outcome.Status == rollout.MigrationStatusSkippedBusy || outcome.Status == rollout.MigrationStatusFailed {
+			exceptions = append(exceptions, outcome)
 		}
-		if outcome.Message != nil {
-			fmt.Fprintf(stdout, "%s\t%s\t%s\n", rollout.FormatOutcomeStatus(outcome.Status), threadID, *outcome.Message)
-		} else {
-			fmt.Fprintf(stdout, "%s\t%s\n", rollout.FormatOutcomeStatus(outcome.Status), threadID)
-		}
+	}
+	if len(exceptions) == 0 {
+		return
+	}
+	fmt.Fprintln(stdout)
+	shown := len(exceptions)
+	if shown > migrationMaxExceptionDetails {
+		shown = migrationMaxExceptionDetails
+	}
+	for _, outcome := range exceptions[:shown] {
+		printMigrateRolloutsOutcome(outcome, stdout)
+	}
+	if len(exceptions) > migrationMaxExceptionDetails {
+		fmt.Fprintf(stdout, "... and %d more; rerun with --json for the complete report.\n", len(exceptions)-migrationMaxExceptionDetails)
+	}
+}
+
+func printMigrateRolloutsOutcome(outcome rollout.MigrationOutcome, stdout io.Writer) {
+	threadID := "unknown"
+	if outcome.ThreadID != nil && strings.TrimSpace(*outcome.ThreadID) != "" {
+		threadID = strings.TrimSpace(*outcome.ThreadID)
+	}
+	if outcome.Message != nil {
+		fmt.Fprintf(stdout, "%s\t%s\t%s\n", rollout.FormatOutcomeStatus(outcome.Status), threadID, *outcome.Message)
+	} else {
+		fmt.Fprintf(stdout, "%s\t%s\n", rollout.FormatOutcomeStatus(outcome.Status), threadID)
 	}
 }
 

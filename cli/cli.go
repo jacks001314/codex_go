@@ -4782,10 +4782,14 @@ func parseMigrateRollouts(args []string, options *MigrateRolloutsOptions) error 
 			if err != nil {
 				return err
 			}
-			if value == "" {
-				return &UsageError{Message: "invalid value '' for '--thread <THREAD_ID>': invalid length: expected length 32 for simple format, found 0"}
+			if detail, ok := uuidValueDiagnostic(value); !ok {
+				invalid := &UsageError{Message: "invalid value '" + value + "' for '--thread <THREAD_ID>': " + detail}
+				if !deferClapValueError(args, &i, &deferred, invalid) {
+					return invalid
+				}
+			} else {
+				options.Threads = append(options.Threads, value)
 			}
-			options.Threads = append(options.Threads, value)
 			i = next
 		case arg == "--max-mib-per-second" || strings.HasPrefix(arg, "--max-mib-per-second="):
 			value, next, err := optionalFlagValue(args, i, arg, "--max-mib-per-second", "<MIB>")

@@ -1406,8 +1406,75 @@ one-off captures.
    `TestCloudSignInHintPrecedesOverrideDiagnostics` and
    `TestShortConfigOverrideDropsAttachedEquals` pin 22 captured cases.
 
+52. **`migrate-rollouts`: the uuid `--thread` grammar, the progress line and the
+    human report** - the inline sweep still left `migrate-rollouts
+    --thread=bogusval --bogus` reporting `invalid uuid`, and every human report
+    was missing the stderr progress line, the elapsed suffix, the disk line and
+    the exception block.
+    - `cli/uuid_value.go` ports uuid 1.20's `try_parse` plus
+      `InvalidUuid::into_err`, so `--thread` accepts exactly Rust's shapes
+      (32-digit simple, 36-digit hyphenated, 38-character `{...}` and
+      45-character `urn:uuid:` + hyphenated) and reports the crate's wording:
+      `invalid character: expected an optional prefix of `urn:uuid:` followed by
+      [0-9a-fA-F-], found `<c>` at <index>`, `invalid length: expected length 32
+      for simple format, found <n>`, `invalid group count: expected 5, found <n>`
+      and `invalid group length in group <g>: expected <n>, found <n>`. The crate
+      measures the last group against the whole input, so
+      `{12345678-1234-1234-1234-1234567890}` reports `expected 12, found 12`.
+      Value errors keep clap's inline/space split: `--thread=b` reports at once,
+      `--thread b --bogus` still reports the unexpected argument.
+    - `rollout.MigrateRollouts` takes a `Progress` callback fed once per
+      discovered path (nil status when the thread selection prunes it), and
+      discovery now follows Rust's per-root order: names starting with
+      `rollout-`, a `.jsonl.zst` shadow skipped when its plain file exists, and
+      each root sorted descending with the active tree before the archived one.
+    - `app/migrate_rollouts_progress.go` renders Rust's `MigrationProgress`:
+      `Scanning local rollouts...` on stderr, the 250 ms TTY line
+      (`\r\x1b[2K<line>`) or the non-TTY line every 1,000 paths and at the end,
+      `Checking`/`Migrating rollouts  <n>/<total> (<p>%)  •  ...  •  <elapsed>`
+      with Rust's elapsed format, and the clearing write on finish. `--json`
+      stays quiet.
+    - `printMigrateRolloutsHumanReport` prints `<completion> in <elapsed>.`, the
+      `Disk used for thread storage: <before> -> <after>` line for `--apply`
+      (`format_bytes`' KB/MB/GB thresholds over `sessions` +
+      `archived_sessions` and the thread-history database plus `-wal`/`-shm`) and,
+      without `--verbose`, Rust's exception block: a blank line, up to 20
+      `skipped busy`/`failed` rows and
+      `... and <n> more; rerun with --json for the complete report.`.
+    - `--apply` initializes local thread metadata (and its rollout backfill)
+      before scanning, like Rust's `state_db::try_init`, so the state index
+      prunes rollouts that provably belong to unselected threads. The JSON report
+      keeps `"thread_id"`/`"message"` as `null` instead of dropping them.
+    Evidence: `out/p38g-uuid.txt` (26 uuid shapes, 26/26) and
+    `out/p38k-migrate.txt` (8 migrate-rollouts scenarios - empty home, dry run,
+    `--verbose`, `--json`, `--apply`, `--apply --json`, both `--thread` forms -
+    at 7 byte-identical, the remaining one being the `bytes_processed` counter
+    listed under Still open). The 1,068-case inline sweep is now 1,031 identical
+    with 0 new diffs (`out/round38-inline.txt`), and the 497 bad-value cases,
+    78 round-34 fixes, 16 ordering cases and 31 round 29-34 probes stay at 0.
+    `TestMigrateRolloutsProgressMatchesRust`,
+    `TestMigrateRolloutsHumanReportMatchesRust`,
+    `TestMigrateRolloutsHumanReportTruncatesExceptionsLikeRust`,
+    `TestMigrationProgressPlainMatchesRust`,
+    `TestMigrationProgressQuietForJSONMatchesRust`,
+    `TestMigrationProgressTTYMatchesRust`,
+    `TestFormatMigrationElapsedMatchesRust` and
+    `TestFormatMigrationBytesMatchesRust` pin the captured behavior.
+
 ## Verification
 
+- `migrate-rollouts` matches Rust 0.166 on the uuid `--thread` grammar and the
+  human report: `out/p38g-uuid.txt` covers 26 accepted/rejected uuid shapes
+  (26/26) and `out/p38k-migrate.txt` compares 8 scenarios at 7 byte-identical,
+  leaving only the `bytes_processed` counter. The 1,068-case inline sweep ends
+  at 1,031 identical with 0 new diffs (`out/round38-inline.txt`), and the 497
+  bad-value cases (`out/round38-r34-flag-surface.txt`), 78 round-34 fixes
+  (`out/round38-r34-fixed.log`), 16 ordering cases
+  (`out/round38-r35-order.log`) and 31 round 29-34 probes
+  (`out/round38-regress.txt`, `out/round38-regress2.txt`) stay at 0 diffs.
+  `go test -count=1 -vet=off ./cli ./sandbox ./applypatch ./prompt ./review
+  ./cmd/... ./tcptunnel ./config ./rollout` passes; `go test -vet=off ./app`
+  keeps the two known baselines plus the known flaky auth-concurrency test.
 - Empty `-c`/`--config=` overrides match Rust 0.166: `out/round37-inline.txt`
   repeats the 1,068-case inline sweep and ends at 38 diffs, none of them a
   `--config=` case beyond environment noise (22 fixed). The bad-value sweep
@@ -1748,10 +1815,16 @@ one-off captures.
   Rust parses the state JSON first, because Go's `--sandbox-state-json` text is
   still `invalid sandbox run request: ...` rather than serde's
   `invalid --sandbox-state-json value: ...` wording.
-- `migrate-rollouts --thread=bogusval` only matches the empty arm of Rust's uuid
-  parser; a non-hex character needs the whole uuid grammar message
-  (`invalid character: expected an optional prefix of `urn:uuid:` followed by
-  [0-9a-fA-F-], found `o` at 2`).
+- `migrate-rollouts --apply` still reports `bytes_processed: 0` where Rust
+  counts every byte its canonicalizer read and wrote through the rate limiter
+  (2,827 for a 282-byte legacy rollout), and the paginated rollout Go publishes
+  is not byte-identical: Rust writes the synthetic `task_started`/`task_complete`
+  events with the record timestamp and fills `session_id`/`base_instructions` in
+  `session_meta`, while Go stamps the synthetic events with the current time and
+  omits those optional fields (879 vs 1,077 bytes for the same input). The
+  `Disk used for thread storage` line follows Rust's rule but not its numbers,
+  because Rust leaves the thread-history WAL uncheckpointed while Go checkpoints
+  it (290.2 KB vs 88.6 KB in the same probe).
 - `exec-server forward` still rejects `--remote` outright (pinned by
   `TestExecServerRejectsMissingOrConflictingRemoteOptionsLikeRust`), where Rust
   allows the direct-transport combination; the Go forward runtime has no
