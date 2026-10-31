@@ -33,6 +33,7 @@ import (
 	"codex_go/rollout"
 	"codex_go/sandbox"
 	"codex_go/session"
+	"codex_go/shell"
 	"codex_go/tool"
 	"codex_go/turn"
 
@@ -7629,5 +7630,74 @@ func TestExecEnvironmentContextDefaultTemplateUnchangedLikeRust(t *testing.T) {
 		"</environment_context>"
 	if got != want {
 		t.Fatalf("default environment context =\n%q\nwant\n%q", got, want)
+	}
+}
+
+func TestExecJSONCommandExecutionUsesResolvedShellArgvLikeRust(t *testing.T) {
+	var stdout bytes.Buffer
+	sink := newExecEventSink(&stdout, true)
+	collector := &execStreamEventCollector{sink: sink, allowLoginShell: true}
+	invocation := &tool.Invocation{
+		CallID:   "call-1",
+		ToolName: tool.ToolName{Name: tool.DefaultExecCommandToolName},
+		Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"cmd":"echo hi"}`},
+	}
+	collector.ToolStarted(context.Background(), invocation, time.Now())
+
+	resolved, err := tool.ResolveCommand(&tool.ExecCommandArgs{Cmd: "echo hi"}, tool.NewDefaultShell(), true)
+	if err != nil {
+		t.Fatalf("ResolveCommand returned error: %v", err)
+	}
+	wantCommand := shell.ShlexJoin(resolved.Command)
+
+	var event struct {
+		Type string         `json:"type"`
+		Item map[string]any `json:"item"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &event); err != nil {
+		t.Fatalf("decode exec JSON: %v", err)
+	}
+	if event.Type != "item.started" {
+		t.Fatalf("event type = %q, want item.started", event.Type)
+	}
+	if got, _ := event.Item["command"].(string); got != wantCommand {
+		t.Fatalf("command = %q, want %q", got, wantCommand)
+	}
+	if _, ok := event.Item["metadata"]; ok {
+		t.Fatalf("exec JSON leaked TUI metadata: %#v", event.Item)
+	}
+	exitCode, present := event.Item["exit_code"]
+	if !present {
+		t.Fatalf("exec JSON dropped exit_code: %#v", event.Item)
+	}
+	if exitCode != nil {
+		t.Fatalf("exit_code = %#v, want null while running", exitCode)
+	}
+}
+
+func TestExecInternalCommandItemKeepsTUICommandAndMetadataLikeRust(t *testing.T) {
+	var stdout bytes.Buffer
+	sink := newExecEventSink(&stdout, true)
+	var internal []protocol.ThreadEvent
+	sink.internalHandler = func(event protocol.ThreadEvent) {
+		internal = append(internal, event)
+	}
+	collector := &execStreamEventCollector{sink: sink, allowLoginShell: true}
+	invocation := &tool.Invocation{
+		CallID:   "call-2",
+		ToolName: tool.ToolName{Name: tool.DefaultExecCommandToolName},
+		Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"cmd":"echo hi"}`},
+	}
+	collector.ToolStarted(context.Background(), invocation, time.Now())
+
+	if len(internal) != 1 || internal[0].Item == nil {
+		t.Fatalf("internal events = %#v, want one item", internal)
+	}
+	item := internal[0].Item
+	if item.Command != "echo hi" {
+		t.Fatalf("internal command = %q, want the model script", item.Command)
+	}
+	if source, _ := item.Metadata["source"].(string); source != "unifiedExecStartup" {
+		t.Fatalf("internal metadata = %#v, want unifiedExecStartup source", item.Metadata)
 	}
 }

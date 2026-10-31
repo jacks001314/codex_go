@@ -45,6 +45,7 @@ import (
 	"codex_go/rollout"
 	"codex_go/sandbox"
 	"codex_go/session"
+	"codex_go/shell"
 	"codex_go/telemetry"
 	"codex_go/tool"
 	"codex_go/turn"
@@ -400,6 +401,8 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	}
 	eventSink := newExecEventSink(stdout, req.Exec.JSON)
 	eventSink.internalHandler = req.InternalEventHandler
+	streamCollector := &execStreamEventCollector{sink: eventSink, workingDirectory: requestCWD(req), allowLoginShell: cfg.AllowLoginShell()}
+	streamCollector.streamAssistantDeltas = req.Exec.StreamAssistantDeltas
 	if !req.Exec.JSON && stderr != nil {
 		eventSink.human = newExecHumanRendererWithReasoning(
 			stderr,
@@ -425,6 +428,20 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 			return nil, err
 		}
 	}
+	// Rust emits every session warning before `turn.started`: the config
+	// diagnostics, then the synthetic-model warning, then the sandbox notice. The
+	// TUI therefore still counts them inside its startup window (source
+	// "Startup"), exactly like the Rust client.
+	for _, warning := range config.NewConfigService(r.CodexHome).ConfigWarningsForCWD(requestCWD(req)) {
+		streamCollector.Warning(warning)
+	}
+	// Rust Session::maybe_emit_model_warnings_for_turn: a model that resolved to
+	// synthesized metadata warns at every turn start, so the TUI footer badge and
+	// the f2 viewer both count it (the TUI dedupes repeats for the same slug).
+	if warning, ok := fallbackModelMetadataWarning(modelID, modelInfo); ok {
+		streamCollector.Warning(warning)
+	}
+	emitStartupBwrapWarning(cfg, req, streamCollector)
 	if req.OnTurnStarted != nil {
 		req.OnTurnStarted(threadID, turnID)
 	}
@@ -488,14 +505,6 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 			runPrompt = ""
 		}
 	}
-	streamCollector := &execStreamEventCollector{sink: eventSink, workingDirectory: requestCWD(req)}
-	streamCollector.streamAssistantDeltas = req.Exec.StreamAssistantDeltas
-	// Rust passes config.startup_warnings into the exec session, whose client
-	// renders each as a warning item.
-	for _, warning := range config.NewConfigService(r.CodexHome).ConfigWarningsForCWD(requestCWD(req)) {
-		streamCollector.Warning(warning)
-	}
-	emitStartupBwrapWarning(cfg, req, streamCollector)
 	mcpService, mcpTools, mcpConnectors := r.configuredMCPRuntimeForConfig(cfg, resolvedAuth)
 	var webSearchOptions *turn.WebSearchOptions
 	var imageGenerationOptions *turn.ImageGenerationOptions
@@ -973,10 +982,13 @@ type execStreamEventCollector struct {
 	workingDirectory      string
 	events                []protocol.ThreadEvent
 	streamAssistantDeltas bool
-	streamedAgentText     map[string]string
-	completedAgentItems   map[string]bool
-	retrying              bool
-	warningCount          int
+	// allowLoginShell is the turn's allow_login_shell setting; Rust uses the
+	// login mode when it derives the argv reported in exec JSON.
+	allowLoginShell     bool
+	streamedAgentText   map[string]string
+	completedAgentItems map[string]bool
+	retrying            bool
+	warningCount        int
 }
 
 func (c *execStreamEventCollector) Handle(event *model.ResponsesStreamEvent) {
@@ -1144,6 +1156,7 @@ func (c *execStreamEventCollector) ToolStarted(_ context.Context, invocation *to
 	if command == "" {
 		return
 	}
+	c.recordExecCommandDisplay(invocation)
 	item := protocol.CommandExecutionItem(
 		firstNonEmpty(invocation.CallID, "command-execution"),
 		command,
@@ -1169,6 +1182,7 @@ func (c *execStreamEventCollector) ToolCompleted(_ context.Context, execution *t
 		c.emitInternal(protocol.ItemStarted(item))
 		c.emitInternal(protocol.ItemCompleted(item))
 	}
+	c.recordExecCommandDisplay(execution.Invocation)
 	for _, event := range eventsFromToolExecution(execution) {
 		c.emit(event)
 	}
@@ -1315,10 +1329,15 @@ type execEventSink struct {
 	// matching completion of non-message items.
 	nextItemID      atomic.Uint64
 	rawToExecItemID map[string]string
+	// execCommandDisplay carries the shell-formatted argv of a command call by
+	// its raw call id. Rust's exec JSON reports
+	// CommandExecutionPresentation::from_raw (the resolved shell argv), while
+	// the TUI and human renderer keep showing the model's bare script.
+	execCommandDisplay map[string]string
 }
 
 func newExecEventSink(stdout io.Writer, encodeJSON bool) *execEventSink {
-	sink := &execEventSink{turnDiff: newExecTurnDiffState(), rawToExecItemID: map[string]string{}}
+	sink := &execEventSink{turnDiff: newExecTurnDiffState(), rawToExecItemID: map[string]string{}, execCommandDisplay: map[string]string{}}
 	if encodeJSON && stdout != nil {
 		sink.encoder = json.NewEncoder(stdout)
 		sink.encoder.SetEscapeHTML(false)
@@ -1349,7 +1368,13 @@ func (s *execEventSink) Emit(event protocol.ThreadEvent) error {
 	}
 	if s.encoder != nil {
 		encoded := s.assignExecItemID(event)
-		if err := s.encoder.Encode(encoded); err != nil {
+		var err error
+		if payload, ok := execJSONCommandExecutionPayload(encoded); ok {
+			err = s.encoder.Encode(payload)
+		} else {
+			err = s.encoder.Encode(encoded)
+		}
+		if err != nil {
 			s.err = err
 			return err
 		}
@@ -1375,6 +1400,19 @@ func (s *execEventSink) assignExecItemID(event protocol.ThreadEvent) protocol.Th
 	}
 	item := *event.Item
 	rawID := item.ID
+	if item.Type == "command_execution" {
+		// Rust's exec JSON item type (exec/src/exec_events.rs) has no metadata
+		// field, and its command is the shlex-joined argv core resolved for the
+		// model's script. Both conversions stay on the JSON path so the TUI keeps
+		// the bare script plus its background-terminal metadata.
+		item.Metadata = nil
+		if display, ok := s.execCommandDisplay[rawID]; ok && rawID != "" {
+			item.Command = display
+		}
+		if event.Type == "item.completed" && rawID != "" {
+			delete(s.execCommandDisplay, rawID)
+		}
+	}
 	if event.Type == "item.completed" && (item.Type == "agent_message" || item.Type == "reasoning") {
 		item.ID = s.nextExecItemID()
 		event.Item = &item
@@ -3819,6 +3857,130 @@ func commandFromShellInvocation(invocation *tool.Invocation) string {
 	return strings.TrimSpace(invocation.Payload.Input)
 }
 
+// recordExecCommandDisplay remembers the shell-formatted argv Rust's exec JSON
+// reports for a command call. ToolStarted runs before the shell executor
+// resolves its argv, so the display string is derived from the same
+// resolution (core/src/shell.rs::derive_exec_args) the executor applies.
+func (c *execStreamEventCollector) recordExecCommandDisplay(invocation *tool.Invocation) {
+	if c == nil || c.sink == nil || invocation == nil || !tool.IsShellCommandToolName(invocation.ToolName) {
+		return
+	}
+	display := execShellDisplayCommand(invocation, c.allowLoginShell)
+	if display == "" {
+		return
+	}
+	c.sink.mu.Lock()
+	defer c.sink.mu.Unlock()
+	if c.sink.execCommandDisplay == nil {
+		c.sink.execCommandDisplay = map[string]string{}
+	}
+	c.sink.execCommandDisplay[firstNonEmpty(invocation.CallID, "command-execution")] = display
+}
+
+// execShellDisplayCommand mirrors the command Rust puts in CommandExecutionItem:
+// CommandExecutionPresentation::from_raw over the command array core resolved
+// for the model's script, formatted with shlex_join (app-server-protocol
+// item_builders.rs). The array is the session shell plus its flags and the raw
+// script; runtime-only rewrites (UTF-8 prefix, sandbox wrapper, snapshot replay)
+// stay out of it, exactly like Rust's ExecCommandBegin.
+func execShellDisplayCommand(invocation *tool.Invocation, allowLoginShell bool) string {
+	if invocation == nil {
+		return ""
+	}
+	var payload struct {
+		Cmd     string `json:"cmd"`
+		Command any    `json:"command"`
+		Shell   string `json:"shell"`
+		Login   *bool  `json:"login"`
+	}
+	if raw := strings.TrimSpace(invocation.Payload.Arguments); raw != "" {
+		_ = json.Unmarshal([]byte(raw), &payload)
+	}
+	script := ""
+	switch command := payload.Command.(type) {
+	case string:
+		script = command
+	case []any:
+		// The `shell` tool hands Codex a ready-made argv.
+		tokens := make([]string, 0, len(command))
+		for _, token := range command {
+			if value, ok := token.(string); ok {
+				tokens = append(tokens, value)
+			}
+		}
+		if len(tokens) > 0 {
+			return shell.ShlexJoin(tokens)
+		}
+	}
+	if strings.TrimSpace(script) == "" {
+		script = payload.Cmd
+	}
+	if strings.TrimSpace(script) == "" {
+		return ""
+	}
+	resolved, err := tool.ResolveCommand(&tool.ExecCommandArgs{
+		Cmd:   script,
+		Shell: payload.Shell,
+		Login: payload.Login,
+	}, tool.NewDefaultShell(), allowLoginShell)
+	if err != nil || resolved == nil || len(resolved.Command) == 0 {
+		return ""
+	}
+	return shell.ShlexJoin(resolved.Command)
+}
+
+// execJSONCommandExecutionEvent describes one item event whose payload is a
+// command execution. Rust's exec JSON shape (exec/src/exec_events.rs) is
+// {id, type, command, aggregated_output, exit_code, status} with exit_code
+// present (and null) while the command is still running.
+type execJSONCommandExecutionEvent struct {
+	Type string                       `json:"type"`
+	Item execJSONCommandExecutionItem `json:"item"`
+}
+
+type execJSONCommandExecutionItem struct {
+	ID               string `json:"id"`
+	Type             string `json:"type"`
+	Command          string `json:"command"`
+	AggregatedOutput string `json:"aggregated_output"`
+	ExitCode         *int   `json:"exit_code"`
+	Status           string `json:"status"`
+}
+
+func execJSONCommandExecutionPayload(event protocol.ThreadEvent) (execJSONCommandExecutionEvent, bool) {
+	switch event.Type {
+	case "item.started", "item.updated", "item.completed":
+	default:
+		return execJSONCommandExecutionEvent{}, false
+	}
+	item := event.Item
+	if item == nil || item.Type != "command_execution" {
+		return execJSONCommandExecutionEvent{}, false
+	}
+	aggregated := ""
+	if item.AggregatedOutput != nil {
+		aggregated = *item.AggregatedOutput
+	}
+	// Rust keeps exit code None until the process exits; the field itself is
+	// always serialized, so a running command reports null.
+	exitCode := (*int)(nil)
+	if item.ExitCode != nil {
+		code := *item.ExitCode
+		exitCode = &code
+	}
+	return execJSONCommandExecutionEvent{
+		Type: event.Type,
+		Item: execJSONCommandExecutionItem{
+			ID:               item.ID,
+			Type:             item.Type,
+			Command:          item.Command,
+			AggregatedOutput: aggregated,
+			ExitCode:         exitCode,
+			Status:           item.Status,
+		},
+	}, true
+}
+
 func commandExecutionStatusFromOutput(output *tool.Output) string {
 	if output == nil {
 		return "in_progress"
@@ -5014,6 +5176,20 @@ func execModelInfo(modelID string, cfg *config.Config) model.ModelInfo {
 		return model.NewStaticModelsManager(*catalog).GetModelInfo(modelID, modelConfig)
 	}
 	return model.NewStaticModelsManager(model.BundledModelsResponse()).GetModelInfo(modelID, modelConfig)
+}
+
+// fallbackModelMetadataWarning mirrors Rust's
+// `Session::maybe_emit_model_warnings_for_turn` message for a turn whose model
+// resolved to synthesized metadata instead of a catalog entry.
+func fallbackModelMetadataWarning(modelID string, info model.ModelInfo) (string, bool) {
+	slug := strings.TrimSpace(modelID)
+	if slug == "" || !info.UsedFallbackModelMetadata {
+		return "", false
+	}
+	return fmt.Sprintf(
+		"Model metadata for `%s` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.",
+		slug,
+	), true
 }
 
 func execModelTokenBudgetDefaults(info model.ModelInfo) *config.TokenBudgetDefaults {
