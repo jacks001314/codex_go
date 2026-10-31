@@ -8994,9 +8994,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Audited Rust #43529 against Go appserverdaemon: LifecycleRunner.start/startWithFeatureOverrides and restart call ensureManagedUpdater for both reused and fresh backends, updater failures are warning-only, remote-control restarts re-ensure the updater, and ensureManagedUpdater keeps a live updater while the latest-channel marker exists but the release/publication is inconsistent, stopping it only when the marker or auto-update preference is removed. Tests: go test ./appserverdaemon -run 'LifecycleRunner|StableStandaloneRelease|Updater' -count=1. Go has no app-server-daemon README mirror, so the Rust documentation edits have no Go counterpart."
    ]
   },
   {
