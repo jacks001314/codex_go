@@ -38942,7 +38942,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:180: #57848 完成 — 新增 `codemode/output_collection.go`（BoundedOutput：1MiB 文本滚动头尾保留、8MiB 图像/62MiB 音频独立配额、32768 项上限、媒体驱逐回收空间）与 `codemode/output_render.go`（共享 token 预算格式化 + 有界丢失提示聚合）；`codemode/protocol_host.go` 补 `BoundedOu"
+    "codemode/output_collection.go:13 implements the bounded collector and codemode/output_render.go:11 renders typed text/media observations; codemode/output_collection_like_rust_test.go:71 and codemode/output_render_like_rust_test.go:18 cover eviction, media budgets and rendering."
    ]
   },
   {
@@ -38954,7 +38954,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:181: #57850 完成 — `SessionRuntime` 新增 `outputTruncation`/`SetOutputTruncation`/`OutputTruncationMode`；Cell 记录 `OutputItems`（`AppendOutputItems`/`AppendTerminatedOutputItems`）；每次 observation 经 `renderObservation` 按自身预算渲"
+    "codemode/session_runtime.go:477 applies bounded collection to each observation and truncates diagnostics in the same budget; codemode/session_output_truncation_like_rust_test.go:52 covers the wired runtime path."
    ]
   },
   {
@@ -39326,7 +39326,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:212: #58125 完成 — 核心对齐待实现"
+    "codemode/protocol_host.go:638 adds WaitSessionRequestWithBudget and the negotiated maxOutputTokens frame; codemode/output_truncation_negotiation_like_rust_test.go:118 and :189 cover remote negotiation and built-in host forcing."
    ]
   },
   {
@@ -39386,7 +39386,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:217: #58140 完成 — 改为搜索请求时解析路由（`turn.WebSearchOptions.PrepareRequest`），与 Rust 在 `WebSearchTool::run` 内解析一致；`go test ./appserver -run StandaloneWebSearch` ✅"
+    "appserver/web_search_runtime.go:51 resolves the thread workspace route at search-request time so standalone web search uses the same routing as model requests; appserver/web_search_workspace_routing_like_rust_test.go:15 covers routing and :68 the failure propagation."
    ]
   },
   {
@@ -39410,7 +39410,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:219: #58147 完成 — 独立 web search 失败改为回传模型的 failed tool output，并截断到 1KiB UTF-8 边界"
+    "appserver/web_search_runtime.go:109 converts search failures into a model-facing failed tool result and turn/web_search.go bounds the error text; turn/web_search_test.go:255 covers the bounded failure output."
    ]
   },
   {
@@ -39506,7 +39506,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:227: #58172 完成 — 核心对齐待实现"
+    "rollout/trace_reduce.go:25 requires a terminated completion marker, :147 validates referenced payload bodies and :212 enforces UTF-8 JSON; rollout/trace_replay_validation_like_rust_test.go:13 and :54 cover both replay checks."
    ]
   },
   {
@@ -39518,7 +39518,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:228: #58182 完成 — permissions.network 下的受管网络要求"
+    "config/requirements_file.go:121 rejects reserved profile spellings and :127 lifts permissions.network to the managed network requirement; config/permissions_network_requirements_like_rust_test.go:11 covers lifting, rejection and one-surface conflicts."
    ]
   },
   {
@@ -39542,7 +39542,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:230: #58190 完成 — 核心对齐待实现"
+    "model/provider_info.go:481 exposes cyber_access_programs and model/access_programs.go:54 lets non-OpenAI providers opt in; model/provider_cyber_access_capability_like_rust_test.go:9 covers the capability gate."
    ]
   },
   {
@@ -39614,7 +39614,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:236: #58221 完成 — realtime V3 转录保留到 conversation history（10 文件）"
+    "appserver/realtime_runtime.go:692 and realtime/transport.go:748 carry completed V3 transcript chunks through handoff without the old byte budget; appserver/realtime_transcript_retention_like_rust_test.go:29 and realtime/transcript_retention_like_rust_test.go:20 cover retention and flush ordering."
    ]
   },
   {
@@ -39686,7 +39686,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30_round1014.md item 6: remote executor credential reload (96d18153)"
+    "execserver/remote_auth.go:21 classifies credential failures before registration as retryable and execserver/remote.go:410 avoids replaying an ambiguous write; execserver/remote_credential_retry_like_rust_test.go:17 covers retry and single registration."
    ]
   },
   {
@@ -39794,7 +39794,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30_round1014.md item 15: transient auth reload failures (96d18153)"
+    "model/auth_recovery.go:229 treats an unreadable or malformed auth.json as a transient reload failure instead of unauthorized; model/auth_recovery_storage_failure_like_rust_test.go:16 and :61 cover reload and post-restore retry."
    ]
   },
   {
@@ -39806,7 +39806,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30_round1015.md item 7: agentboard/mcp_server.go republishes executor schemas, maps results and protocol errors, and scopes dedup per turn; agentboard/mcp_server_like_rust_test.go covers discovery, calls, identity spoofing, bounded reads, and read-only denial"
+    "agentboard/mcp_server.go:74 defines the message-board MCP adapter and :89 binds a caller-scoped tool selection; agentboard/mcp_server_like_rust_test.go:27 covers discovery and tool calls."
    ]
   },
   {
@@ -39818,7 +39818,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30_round1015.md item 6: auth/oauth.go re-reads the keyring at commit and writes only the file fallback when unreadable; stale recovered generations are rejected (1de38a00)"
+    "auth/auth.go:405 persists rotated fallback tokens when the keyring is unreadable and :407 preserves an unknown keyring generation; auth/keyring_fallback_refresh_like_rust_test.go:25 covers fallback refresh and stale recovery."
    ]
   },
   {
@@ -39830,7 +39830,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30_round1015.md item 5: a cancelled proxy context withdraws the prompt and emits serverRequest/resolved; TestNetworkApprovalDisconnectedRequestWithdrawsPromptLikeRust (eb7e1d36)"
+    "appserver/network_approval.go:233 withdraws the manual prompt when the proxy request ends and :326 releases the per-execution queue slot; appserver/network_approval_prompt_queue_like_rust_test.go:178 covers disconnected requests."
    ]
   },
   {
@@ -39842,7 +39842,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30_round1015.md item 4: appserver/network_approval.go serializes the visible manual prompt per endpoint while hook and Guardian paths bypass it (eb7e1d36)"
+    "appserver/network_approval.go:60 serializes concurrent manual approvals and :233 keys the visible prompt by endpoint; appserver/network_approval_prompt_queue_like_rust_test.go:57 covers per-endpoint queueing, grant reuse and cancellation."
    ]
   },
   {
@@ -39879,7 +39879,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30_round1015.md item 1 plus this round: shared pre-tool-use handling lives in tool/hooks.go DispatchWithHooksAfterPreHooks and the exported tool.PreToolUseBlockMessage/PreToolUseStoppedMessage used by appserver/thread_guardian_review.go"
+    "tool/hooks.go:490 exposes the shared PreToolUse handler and appserver/thread_guardian_review.go:330 applies it to direct Guardian review; appserver/guardian_direct_pre_tool_use_like_rust_test.go:20 covers the hook path."
    ]
   },
   {
