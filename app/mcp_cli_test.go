@@ -444,7 +444,10 @@ func TestMCPHTTPLoginLogout(t *testing.T) {
 	if err := Run(context.Background(), []string{"mcp", "list", "--json"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
 		t.Fatalf("mcp list returned error: %v", err)
 	}
-	if !strings.Contains(stdout.String(), `"auth_status": "notLoggedIn"`) {
+	// No token is stored and the placeholder host never answers OAuth
+	// discovery, which 0.166 reports as `unknown` (LoggedOut only follows a
+	// successful metadata probe).
+	if !strings.Contains(stdout.String(), `"auth_status": "unknown"`) {
 		t.Fatalf("list without token stdout = %q", stdout.String())
 	}
 
@@ -462,7 +465,7 @@ func TestMCPHTTPLoginLogout(t *testing.T) {
 	if err := Run(context.Background(), []string{"mcp", "list", "--json"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
 		t.Fatalf("mcp list returned error: %v", err)
 	}
-	if !strings.Contains(stdout.String(), `"auth_status": "oAuth"`) {
+	if !strings.Contains(stdout.String(), `"auth_status": "o_auth"`) {
 		t.Fatalf("list with token stdout = %q", stdout.String())
 	}
 

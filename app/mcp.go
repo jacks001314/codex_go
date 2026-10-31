@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -84,22 +85,43 @@ type mcpListJSONEntry struct {
 	Name              string            `json:"name"`
 	Enabled           bool              `json:"enabled"`
 	DisabledReason    *string           `json:"disabled_reason"`
-	Transport         map[string]any    `json:"transport"`
-	StartupTimeoutSec *float64          `json:"startup_timeout_sec"`
-	ToolTimeoutSec    *float64          `json:"tool_timeout_sec"`
-	AuthStatus        mcp.MCPAuthStatus `json:"auth_status"`
+	Transport         any               `json:"transport"`
+	StartupTimeoutSec *json.Number      `json:"startup_timeout_sec"`
+	ToolTimeoutSec    *json.Number      `json:"tool_timeout_sec"`
+	AuthStatus        string            `json:"auth_status"`
 }
 
 type mcpGetJSONEntry struct {
-	Name              string         `json:"name"`
-	Enabled           bool           `json:"enabled"`
-	DisabledReason    *string        `json:"disabled_reason"`
-	Transport         map[string]any `json:"transport"`
-	EnabledTools      any            `json:"enabled_tools"`
-	DisabledTools     any            `json:"disabled_tools"`
-	OmitToolsFrom     any            `json:"omit_tools_from"`
-	StartupTimeoutSec *float64       `json:"startup_timeout_sec"`
-	ToolTimeoutSec    *float64       `json:"tool_timeout_sec"`
+	Name              string       `json:"name"`
+	Enabled           bool         `json:"enabled"`
+	DisabledReason    *string      `json:"disabled_reason"`
+	Transport         any          `json:"transport"`
+	EnabledTools      any          `json:"enabled_tools"`
+	DisabledTools     any          `json:"disabled_tools"`
+	StartupTimeoutSec *json.Number `json:"startup_timeout_sec"`
+	ToolTimeoutSec    *json.Number `json:"tool_timeout_sec"`
+}
+
+// mcpStdioTransportJSON spells a stdio transport in the order serde_json keeps
+// for the 0.166 `mcp get/list --json` payloads (the crate enables
+// preserve_order, so the object is not sorted). An empty args list stays `[]`.
+type mcpStdioTransportJSON struct {
+	Type    string            `json:"type"`
+	Command string            `json:"command"`
+	Args    []string          `json:"args"`
+	Env     map[string]string `json:"env"`
+	EnvVars any               `json:"env_vars"`
+	CWD     *string           `json:"cwd"`
+}
+
+// mcpHTTPTransportJSON spells a streamable HTTP transport the same way.
+type mcpHTTPTransportJSON struct {
+	Type              string            `json:"type"`
+	URL               string            `json:"url"`
+	BearerTokenEnvVar *string           `json:"bearer_token_env_var"`
+	HTTPHeaders       map[string]string `json:"http_headers"`
+	EnvHTTPHeaders    map[string]string `json:"env_http_headers"`
+	HTTPHeadersHelper *string           `json:"http_headers_helper"`
 }
 
 func runMCP(ctx context.Context, opts *cli.MCPOptions, stdin io.Reader, stdout io.Writer) error {
@@ -138,12 +160,13 @@ func runMCPList(ctx context.Context, store *mcpCLIStore, opts *cli.MCPOptions, s
 				Enabled:           server.Enabled,
 				DisabledReason:    stringPtrIfNotEmptyLocal(server.DisabledReason),
 				Transport:         mcpServerTransportJSON(server),
-				StartupTimeoutSec: cloneFloat64Ptr(server.StartupTimeoutSec),
-				ToolTimeoutSec:    cloneFloat64Ptr(server.ToolTimeoutSec),
-				AuthStatus:        mcpServerAuthStatus(oauthStore, name, server),
+				StartupTimeoutSec: mcpSecondsJSON(server.StartupTimeoutSec),
+				ToolTimeoutSec:    mcpSecondsJSON(server.ToolTimeoutSec),
+				AuthStatus:        mcpAuthStatusJSON(ctx, oauthStore, name, server),
 			})
 		}
 		encoder := json.NewEncoder(stdout)
+		encoder.SetEscapeHTML(false)
 		encoder.SetIndent("", "  ")
 		return encoder.Encode(entries)
 	}
@@ -155,7 +178,7 @@ func runMCPList(ctx context.Context, store *mcpCLIStore, opts *cli.MCPOptions, s
 	httpRows := make([][]string, 0, len(names))
 	for _, name := range names {
 		server := cfg.Servers[name]
-		authStatus := mcpAuthStatusDisplay(mcpServerAuthStatus(oauthStore, name, server))
+		authStatus := mcpAuthStatusDisplay(mcpServerAuthStatus(ctx, oauthStore, name, server))
 		if server.Type == "streamable_http" {
 			httpRows = append(httpRows, []string{
 				name,
@@ -205,11 +228,11 @@ func runMCPGet(ctx context.Context, store *mcpCLIStore, opts *cli.MCPOptions, st
 			Transport:         mcpServerTransportJSON(server),
 			EnabledTools:      stringSliceJSONValue(server.EnabledTools),
 			DisabledTools:     stringSliceJSONValue(server.DisabledTools),
-			OmitToolsFrom:     stringSliceJSONValue(server.OmitToolsFrom),
-			StartupTimeoutSec: cloneFloat64Ptr(server.StartupTimeoutSec),
-			ToolTimeoutSec:    cloneFloat64Ptr(server.ToolTimeoutSec),
+			StartupTimeoutSec: mcpSecondsJSON(server.StartupTimeoutSec),
+			ToolTimeoutSec:    mcpSecondsJSON(server.ToolTimeoutSec),
 		}
 		encoder := json.NewEncoder(stdout)
+		encoder.SetEscapeHTML(false)
 		encoder.SetIndent("", "  ")
 		return encoder.Encode(&entry)
 	}
@@ -238,6 +261,11 @@ func runMCPGet(ctx context.Context, store *mcpCLIStore, opts *cli.MCPOptions, st
 		fmt.Fprintf(stdout, "  bearer_token_env_var: %s\n", dashIfEmpty(server.BearerTokenEnvVar))
 		fmt.Fprintf(stdout, "  http_headers: %s\n", mcpServerHeaderDisplay(server.HTTPHeaders, true))
 		fmt.Fprintf(stdout, "  env_http_headers: %s\n", mcpServerHeaderDisplay(server.EnvHTTPHeaders, false))
+		helperDisplay := "-"
+		if strings.TrimSpace(server.HTTPHeadersHelper) != "" {
+			helperDisplay = "<redacted>"
+		}
+		fmt.Fprintf(stdout, "  http_headers_helper: %s\n", helperDisplay)
 	} else {
 		fmt.Fprintf(stdout, "  command: %s\n", server.Command)
 		fmt.Fprintf(stdout, "  args: %s\n", mcpServerArgsDisplay(server))
@@ -637,24 +665,46 @@ func sortedMCPServerNames(servers map[string]*mcpCLIServer) []string {
 	return names
 }
 
-func mcpServerTransportJSON(server *mcpCLIServer) map[string]any {
+func mcpServerTransportJSON(server *mcpCLIServer) any {
 	if server.Type == "streamable_http" {
-		return map[string]any{
-			"type":                 "streamable_http",
-			"url":                  server.URL,
-			"bearer_token_env_var": stringPtrIfNotEmptyLocal(server.BearerTokenEnvVar),
-			"http_headers":         stringMapJSONValue(server.HTTPHeaders),
-			"env_http_headers":     stringMapJSONValue(server.EnvHTTPHeaders),
+		var helper *string
+		if strings.TrimSpace(server.HTTPHeadersHelper) != "" {
+			redacted := "<redacted>"
+			helper = &redacted
+		}
+		return mcpHTTPTransportJSON{
+			Type:              "streamable_http",
+			URL:               server.URL,
+			BearerTokenEnvVar: stringPtrIfNotEmptyLocal(server.BearerTokenEnvVar),
+			HTTPHeaders:       cloneStringMap(server.HTTPHeaders),
+			EnvHTTPHeaders:    cloneStringMap(server.EnvHTTPHeaders),
+			HTTPHeadersHelper: helper,
 		}
 	}
-	return map[string]any{
-		"type":     "stdio",
-		"command":  server.Command,
-		"args":     append([]string(nil), server.Args...),
-		"env":      stringMapJSONValue(server.Env),
-		"env_vars": mcpServerEnvVarsJSONValue(server.EnvVars),
-		"cwd":      stringPtrIfNotEmptyLocal(server.CWD),
+	args := make([]string, len(server.Args))
+	copy(args, server.Args)
+	return mcpStdioTransportJSON{
+		Type:    "stdio",
+		Command: server.Command,
+		Args:    args,
+		Env:     cloneStringMap(server.Env),
+		EnvVars: mcpServerEnvVarsJSONValue(server.EnvVars),
+		CWD:     stringPtrIfNotEmptyLocal(server.CWD),
 	}
+}
+
+// mcpSecondsJSON renders a timeout the way serde_json prints f64 seconds: an
+// integral value keeps its fractional `.0`.
+func mcpSecondsJSON(value *float64) *json.Number {
+	if value == nil {
+		return nil
+	}
+	text := strconv.FormatFloat(*value, 'f', -1, 64)
+	if !strings.ContainsAny(text, ".eE") {
+		text += ".0"
+	}
+	number := json.Number(text)
+	return &number
 }
 
 func mcpServerRuntimeConfig(name string, server *mcpCLIServer, codexHome string) mcp.ServerConfig {
@@ -685,13 +735,69 @@ func mcpServerRuntimeConfig(name string, server *mcpCLIServer, codexHome string)
 	}
 }
 
-func mcpServerAuthStatus(store *mcp.OAuthStore, name string, server *mcpCLIServer) mcp.MCPAuthStatus {
-	config := mcpServerRuntimeConfig(name, server, "")
-	status, err := store.AuthStatus(name, &config)
-	if err != nil {
+func mcpServerAuthStatus(ctx context.Context, store *mcp.OAuthStore, name string, server *mcpCLIServer) mcp.MCPAuthStatus {
+	if server == nil || !server.Enabled || server.Type != "streamable_http" || strings.TrimSpace(server.URL) == "" {
 		return mcp.MCPAuthUnsupported
 	}
-	return status
+	config := mcpServerRuntimeConfig(name, server, "")
+	// compute_auth_status mirrors rmcp-client's auth_status_before_discovery:
+	// a configured bearer token or Authorization header decides before any
+	// store or discovery work, and stored credentials decide the rest.
+	if strings.TrimSpace(config.BearerTokenEnvVar) != "" {
+		return mcp.MCPAuthBearerToken
+	}
+	if mcpServerHasAuthorizationHeader(server) {
+		return mcp.MCPAuthBearerToken
+	}
+	tokens, err := store.Load(config.OAuthCredentialName(name), config.URL)
+	if err != nil {
+		// compute_auth_statuses reports Unknown when the probe itself fails, for
+		// example when the credential store cannot be read.
+		return mcp.MCPAuthUnknown
+	}
+	if tokens != nil {
+		if tokens.Usable(time.Now()) {
+			return mcp.MCPAuthOAuth
+		}
+		return mcp.MCPAuthNotLoggedIn
+	}
+	if strings.TrimSpace(server.HTTPHeadersHelper) != "" {
+		// Status inspection never runs an arbitrary local helper, so a server
+		// without stored credentials stays unknown until startup or login.
+		return mcp.MCPAuthUnknown
+	}
+	return mcpDiscoverStreamableHTTPAuthStatus(ctx, server)
+}
+
+// mcpDiscoverStreamableHTTPAuthStatus reports what OAuth metadata discovery says
+// about a server that carries no configured credentials.
+func mcpDiscoverStreamableHTTPAuthStatus(ctx context.Context, server *mcpCLIServer) mcp.MCPAuthStatus {
+	client := &http.Client{Timeout: 5 * time.Second}
+	discovery, err := mcp.DiscoverStreamableHTTPOAuth(ctx, server.URL, client)
+	if err != nil {
+		return mcp.MCPAuthUnknown
+	}
+	if discovery != nil {
+		return mcp.MCPAuthNotLoggedIn
+	}
+	return mcp.MCPAuthUnsupported
+}
+
+// mcpServerHasAuthorizationHeader reports whether the server carries an explicit
+// Authorization header, which makes the transport bearer-token authenticated
+// before any discovery (auth_status_before_discovery).
+func mcpServerHasAuthorizationHeader(server *mcpCLIServer) bool {
+	for name, value := range server.HTTPHeaders {
+		if strings.EqualFold(strings.TrimSpace(name), "Authorization") && strings.TrimSpace(value) != "" {
+			return true
+		}
+	}
+	for name, envVar := range server.EnvHTTPHeaders {
+		if strings.EqualFold(strings.TrimSpace(name), "Authorization") && strings.TrimSpace(os.Getenv(strings.TrimSpace(envVar))) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func mcpServerTransportLabel(server *mcpCLIServer) string {
@@ -773,6 +879,27 @@ func mcpServerToolListDisplay(tools []string) string {
 	return strings.Join(tools, ", ")
 }
 
+// mcpAuthStatusJSON renders the status the way the 0.166 `mcp list --json`
+// payload does: the core `McpAuthStatus` enum is serialized with
+// `rename_all = "snake_case"` (`o_auth`, `not_logged_in`, ...), while the
+// app-server protocol uses the camelCase variant names.
+func mcpAuthStatusJSON(ctx context.Context, store *mcp.OAuthStore, name string, server *mcpCLIServer) string {
+	switch mcpServerAuthStatus(ctx, store, name, server) {
+	case mcp.MCPAuthUnknown:
+		return "unknown"
+	case mcp.MCPAuthUnsupported:
+		return "unsupported"
+	case mcp.MCPAuthNotLoggedIn:
+		return "not_logged_in"
+	case mcp.MCPAuthBearerToken:
+		return "bearer_token"
+	case mcp.MCPAuthOAuth:
+		return "o_auth"
+	default:
+		return string(mcp.MCPAuthUnsupported)
+	}
+}
+
 func mcpAuthStatusDisplay(status mcp.MCPAuthStatus) string {
 	switch status {
 	case mcp.MCPAuthNotLoggedIn:
@@ -781,6 +908,8 @@ func mcpAuthStatusDisplay(status mcp.MCPAuthStatus) string {
 		return "Bearer token"
 	case mcp.MCPAuthOAuth:
 		return "OAuth"
+	case mcp.MCPAuthUnknown:
+		return "Unknown"
 	default:
 		return "Unsupported"
 	}

@@ -2156,8 +2156,61 @@ writer, so `mcp add` rewrote `mcp_servers = { alpha = { .. } }` as
   `TestSpliceMCPTablesConvertsInlineValuesLikeTomlEdit` (ten documents) and
   `TestSpliceMCPTablesKeepsDocumentTriviaLikeTomlEdit` in `config`.
 
+### 69. `mcp get`/`mcp list`: serde's key order, f64 seconds and the auth status enum
+
+The JSON payloads are built with `serde_json::json!` in a crate that enables
+`preserve_order`, so keys print in the order the macro spells them, timeouts go
+through `Duration::as_secs_f64()` and the status comes from the core
+`McpAuthStatus` enum. Go built the payloads from `map[string]any`
+(`encoding/json` sorts keys), wrote integral timeouts as `3`, escaped
+`<redacted>` as `\u003c...` and printed the app-server's camelCase status
+names.
+
+- **Transport order.** A stdio transport prints `type, command, args, env,
+  env_vars, cwd` and a streamable HTTP one prints `type, url,
+  bearer_token_env_var, http_headers, env_http_headers, http_headers_helper`.
+  Absent maps stay `null`, an empty `args` list stays `[]`, and empty strings
+  inside `args` survive.
+- **`mcp get` fields.** The JSON branch carries `name, enabled, disabled_reason,
+  transport, enabled_tools, disabled_tools, startup_timeout_sec,
+  tool_timeout_sec` and no `omit_tools_from` (that key only exists in the config
+  file). `mcp list` entries carry `name, enabled, disabled_reason, transport,
+  startup_timeout_sec, tool_timeout_sec, auth_status`.
+- **Redaction.** `http_headers_helper` is reported as the literal `<redacted>`
+  (`map(|_| "<redacted>")`) in `mcp get --json`; the text branches print
+  `http_headers_helper: <redacted>` and `-` when unset, and serde's string
+  escaping is not HTML escaping.
+- **Seconds.** `startup_timeout_sec`/`tool_timeout_sec` print as f64 (`3.0`,
+  `1.5`) because `as_secs_f64` never drops the fractional part.
+- **Auth status.** `compute_auth_status` answers `Unknown` when the probe
+  errors and `Unsupported` for a disabled or stdio server; streamable HTTP
+  follows `auth_status_before_discovery`: a configured `bearer_token_env_var` or
+  `Authorization` header is `Bearer token`, stored credentials are `OAuth` or
+  `Not logged in`, a `http_headers_helper` never runs during status inspection
+  (so without stored credentials the state stays `Unknown`), and everything
+  else falls through to a five-second OAuth metadata discovery where
+  `Ok(Some)` is `Not logged in`, `Ok(None)` is `Unsupported` and an error is
+  `Unknown`. The text column prints the enum's `Display` names, while the JSON
+  payload uses the enum's `rename_all = "snake_case"` names (`unsupported`,
+  `not_logged_in`, `bearer_token`, `o_auth`, `unknown`) - the CLI payload
+  therefore differs from the app-server protocol's camelCase.
+- Evidence: 8 configs x four `mcp list`/`mcp get` shapes (32 runs), six configs
+  x `mcp get --json`/`mcp list --json` (18 runs) and a 12-config auth matrix x
+  `mcp list`, `mcp list --json`, `mcp get --json` (36 runs) are byte-identical
+  to 0.166 (`out/r55-mcp.txt`, `out/r55-mcpjson.txt`, `out/r56-auth.txt`).
+  Regressions: `TestMCPGetJSONMatchesRustSerialization`,
+  `TestMCPListJSONMatchesRustSerialization` and
+  `TestMCPListJSONReportsStoredCredentialsLikeRust` in `app`.
+
 ## Verification
 
+- Round 55 aligns the `mcp get`/`mcp list` payloads (entry 69): the 32 text
+  runs, the 18 JSON runs and the 36-run auth matrix are byte-identical to 0.166
+  (`out/r55-mcp.txt`, `out/r55-mcpjson.txt`, `out/r56-auth.txt`), and
+  `go test -count=1 -vet=off ./config ./cli ./mcp` passes in a clean worktree
+  while `./app` keeps only the two known baselines
+  (`TestInteractiveSlashCommandsUpdateTUIState`,
+  `TestInteractiveSlashCommandRejectsGoOnlyApproval`).
 - Round 54 adds the inline `mcp_servers` writer (entry 68): the 25 seed
   documents x eight `mcp add`/`mcp remove` shapes (200 runs) are byte-identical
   to 0.166 (`out/r54-inline.txt`), and `go test -count=1 -vet=off ./config ./cli ./mcp`
