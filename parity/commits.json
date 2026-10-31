@@ -18806,9 +18806,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "superseded: later Rust commits (#47686-#47690) promoted guardianv2.thread_context to stable and then retired it, and Go keeps the key as a removed no-op (features/features.go) with thread-owned Guardian context capture unconditional"
+    "Round 1237: superseded and satisfied by #47689 (certified complete) - Guardian thread context capture is unconditional. features/features.go registers guardianv2.thread_context as a removed compatibility no-op, appserver/guardian_reviewer.go fixes threadContext=true so parent-compaction review resets always retain thread context regardless of the Guardian v2 enabled toggle, and bumpGuardianUserMessageRevision invalidates an in-flight review after later user input. Tests: go test ./appserver -run 'Guardian' -count=1; go test ./features ./config -count=1."
    ]
   },
   {
@@ -18866,9 +18866,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "N/A by architecture: Rust persists Guardian review threads and derives compact list/display metadata in the thread store. Go's synchronous Guardian reviewer runs model review sessions without creating persisted review threads, so there is no review-thread metadata row to compact."
+    "Round 1237: Guardian review threads use compact display metadata. session.GuardianThreadTitle/GuardianThreadPreview own the values; state/backfill.go metadataIsGuardianReview keeps user_message, item_completed user messages and thread_goal_updated out of title/preview/first_user_message and applies the Guardian defaults on session meta; rollout.BuildThreadItem reports the \"Approval review\" preview with an empty first_user_message and stops scanning synthetic prompts; upsertRolloutThread keeps an explicit existing title/name. Tests: go test ./state -run 'TestGuardianReview' -count=1; go test ./state ./rollout -count=1."
    ]
   },
   {

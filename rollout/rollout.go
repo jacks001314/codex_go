@@ -2820,6 +2820,14 @@ func BuildThreadItem(path string, archived bool) (ThreadItem, bool) {
 			if created, err := time.Parse(time.RFC3339, line.Meta.Timestamp); err == nil {
 				item.CreatedAt = created.UTC()
 			}
+			if session.IsGuardianReviewSource(item.Source) {
+				// Rust #47302 (codex-rs/rollout/src/list.rs): a Guardian review
+				// thread's synthetic approval prompt is not display metadata. The
+				// summary uses the compact preview and stops scanning user messages.
+				item.Preview = session.GuardianThreadPreview
+				item.FirstUserMessage = ""
+				break
+			}
 			continue
 		}
 		if !lineItemTime(line).IsZero() {

@@ -417,6 +417,32 @@ func applySessionMetaToBackfill(metadata *rolloutThreadMetadata, meta *rollout.S
 		metadata.creatorAccountID = strings.TrimSpace(meta.CreatorAccountID)
 	}
 	applyGitToBackfill(metadata, meta.Git)
+	if metadataIsGuardianReview(metadata) {
+		applyGuardianDisplayDefaults(metadata)
+	}
+}
+
+// metadataIsGuardianReview mirrors codex-rs/state/src/extract.rs
+// metadata_is_guardian_review (Rust #47302): the rollout source identifies an
+// internal Guardian review thread whose user messages are synthetic approval
+// prompts rather than user input.
+func metadataIsGuardianReview(metadata *rolloutThreadMetadata) bool {
+	return metadata != nil && session.IsGuardianReviewSource(metadata.source)
+}
+
+// applyGuardianDisplayDefaults mirrors the Guardian defaults Rust applies in
+// ThreadMetadataBuilder (Rust #47302): compact title and preview, with no
+// first user message derived from the synthetic approval prompt.
+func applyGuardianDisplayDefaults(metadata *rolloutThreadMetadata) {
+	if metadata == nil {
+		return
+	}
+	if strings.TrimSpace(metadata.title) == "" {
+		metadata.title = session.GuardianThreadTitle
+	}
+	if strings.TrimSpace(metadata.preview) == "" {
+		metadata.preview = session.GuardianThreadPreview
+	}
 }
 
 func applyTurnContextToBackfill(metadata *rolloutThreadMetadata, raw json.RawMessage) {
@@ -451,18 +477,27 @@ func applyEventToBackfill(metadata *rolloutThreadMetadata, raw json.RawMessage) 
 			}
 		}
 	case "user_message":
-		applyUserPreviewToBackfill(metadata, userTextFromEvent(event), true)
+		if !metadataIsGuardianReview(metadata) {
+			applyUserPreviewToBackfill(metadata, userTextFromEvent(event), true)
+		}
 	case "item_completed":
 		item, _ := event["item"].(map[string]any)
 		itemType := normalizeBackfillKind(stringFromJSON(item["type"]))
 		if itemType == "user_message" {
-			applyUserPreviewToBackfill(metadata, userTextFromEvent(item), true)
+			if !metadataIsGuardianReview(metadata) {
+				applyUserPreviewToBackfill(metadata, userTextFromEvent(item), true)
+			}
 		} else if preview, ok := delegatedPreviewFromBackfillItem(item); ok {
 			// Rust #50462 (codex-rs/state/src/extract.rs): delegated turns have no
 			// user message but must still be discoverable; fill only the preview.
 			applyDelegatedPreviewToBackfill(metadata, preview)
 		}
 	case "thread_goal_updated":
+		// Rust #47302: a Guardian review thread's goal never feeds display
+		// metadata; the synthetic prompt is not user input.
+		if metadataIsGuardianReview(metadata) {
+			return
+		}
 		goal, _ := event["goal"].(map[string]any)
 		if metadata.preview == "" {
 			metadata.preview = strings.TrimSpace(stringFromJSON(goal["objective"]))
@@ -554,8 +589,10 @@ func (r *StateRuntime) upsertRolloutThread(ctx context.Context, metadata rollout
 	if exists {
 		existingTitleTrimmed := strings.TrimSpace(existing.title.String)
 		incomingTitleTrimmed := strings.TrimSpace(metadata.title)
+		// Rust #47302: a Guardian thread's default title never replaces an
+		// explicit name recorded for the thread.
 		if existingTitleTrimmed != "" && strings.TrimSpace(existing.firstUserMessage.String) != existingTitleTrimmed &&
-			(incomingTitleTrimmed == "" || strings.TrimSpace(metadata.firstUserMessage) == incomingTitleTrimmed) {
+			(metadataIsGuardianReview(&metadata) || incomingTitleTrimmed == "" || strings.TrimSpace(metadata.firstUserMessage) == incomingTitleTrimmed) {
 			metadata.title = existing.title.String
 		}
 		if metadata.historyMode == "paginated" && existing.historyMode.String == "paginated" {

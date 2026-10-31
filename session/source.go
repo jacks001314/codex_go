@@ -14,6 +14,14 @@ import (
 // form is "subagent_guardian".
 const GuardianReviewSource = "subagent_guardian"
 
+// Guardian review display metadata (Rust #47302, codex-rs/state/src/extract.rs).
+// Guardian review threads use synthetic approval prompts as user messages, so
+// thread listings show compact metadata instead of the prompt text.
+const (
+	GuardianThreadTitle   = "Guardian review"
+	GuardianThreadPreview = "Approval review"
+)
+
 // IsGuardianReviewSource mirrors codex_state::is_guardian_review_source
 // (codex-rs/state/src/extract.rs): only the legacy subagent "other" source
 // named "guardian" identifies a Guardian review thread.
