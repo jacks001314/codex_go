@@ -969,7 +969,7 @@ func sessionIDByName(store *session.Store, opts *cli.SessionOptions, name string
 	}
 	ids := append(legacyIDs, recordIDs...)
 	if len(ids) == 0 {
-		return "", fmt.Errorf("No session found matching '%s'.", name)
+		return "", fmt.Errorf("Session not found: %s", name)
 	}
 	if len(ids) > 1 {
 		// Rust #43315: distinct label matches must be disambiguated by UUID.

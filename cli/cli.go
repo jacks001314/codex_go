@@ -1149,6 +1149,10 @@ func parseExecResume(args []string, exec *ExecOptions) error {
 			break
 		}
 		switch {
+		case arg == "-":
+			// Rust's resume prompt is a positional, so `resume --last -` forces
+			// stdin the same way the root `exec -` sentinel does.
+			positionals = append(positionals, arg)
 		case arg == "--help":
 			exec.Help = &ExecHelpRequest{Kind: ExecHelpResume}
 			return nil

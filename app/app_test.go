@@ -142,42 +142,56 @@ func writeAppResponseSSE(w io.Writer, payload string) {
 
 func TestLoginStatusLogoutFlow(t *testing.T) {
 	t.Setenv("CODEX_HOME", t.TempDir())
-	var stdout bytes.Buffer
-	if err := Run(context.Background(), []string{"login", "--with-api-key"}, strings.NewReader("sk-test\n"), &stdout, &bytes.Buffer{}); err != nil {
+	// Rust prints every login/logout status line with eprintln!, so stdout stays
+	// empty for these commands.
+	var stdout, stderr bytes.Buffer
+	if err := Run(context.Background(), []string{"login", "--with-api-key"}, strings.NewReader("sk-test\n"), &stdout, &stderr); err != nil {
 		t.Fatalf("login returned error: %v", err)
 	}
-	if !strings.Contains(stdout.String(), "API key saved. "+apiKeyAuthenticationNotice) {
-		t.Fatalf("login stdout = %q", stdout.String())
+	if !strings.Contains(stderr.String(), "API key saved. "+apiKeyAuthenticationNotice) {
+		t.Fatalf("login stderr = %q", stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("login stdout = %q, want empty", stdout.String())
 	}
 
-	stdout.Reset()
-	if err := Run(context.Background(), []string{"login", "status"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+	stderr.Reset()
+	if err := Run(context.Background(), []string{"login", "status"}, strings.NewReader(""), &stdout, &stderr); err != nil {
 		t.Fatalf("status returned error: %v", err)
 	}
-	if !strings.Contains(stdout.String(), "API key configured") {
-		t.Fatalf("status stdout = %q", stdout.String())
+	if !strings.Contains(stderr.String(), "API key configured") {
+		t.Fatalf("status stderr = %q", stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("status stdout = %q, want empty", stdout.String())
 	}
 
-	stdout.Reset()
-	if err := Run(context.Background(), []string{"logout"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+	stderr.Reset()
+	if err := Run(context.Background(), []string{"logout"}, strings.NewReader(""), &stdout, &stderr); err != nil {
 		t.Fatalf("logout returned error: %v", err)
 	}
-	if !strings.Contains(stdout.String(), "Successfully logged out") {
-		t.Fatalf("logout stdout = %q", stdout.String())
+	if !strings.Contains(stderr.String(), "Successfully logged out") {
+		t.Fatalf("logout stderr = %q", stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("logout stdout = %q, want empty", stdout.String())
 	}
 }
 
 func TestLoginStatusNotLoggedInReturnsExitError(t *testing.T) {
 	clearAuthEnvApp(t)
 	t.Setenv("CODEX_HOME", t.TempDir())
-	var stdout bytes.Buffer
-	err := Run(context.Background(), []string{"login", "status"}, strings.NewReader(""), &stdout, &bytes.Buffer{})
+	var stdout, stderr bytes.Buffer
+	err := Run(context.Background(), []string{"login", "status"}, strings.NewReader(""), &stdout, &stderr)
 	var exitErr *ExitError
 	if !errors.As(err, &exitErr) || exitErr.Code != 1 || !exitErr.Silent {
 		t.Fatalf("status error = %+v, want silent exit 1", err)
 	}
-	if !strings.Contains(stdout.String(), "Not logged in") {
-		t.Fatalf("status stdout = %q", stdout.String())
+	if !strings.Contains(stderr.String(), "Not logged in") {
+		t.Fatalf("status stderr = %q", stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("status stdout = %q, want empty", stdout.String())
 	}
 }
 
@@ -202,12 +216,12 @@ func TestLoginStatusAuthStorageErrorUsesExitMessage(t *testing.T) {
 func TestLoginStatusUsesEnv(t *testing.T) {
 	t.Setenv("CODEX_HOME", t.TempDir())
 	t.Setenv("OPENAI_API_KEY", "sk-env-secret")
-	var stdout bytes.Buffer
-	if err := Run(context.Background(), []string{"login", "status"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+	var stdout, stderr bytes.Buffer
+	if err := Run(context.Background(), []string{"login", "status"}, strings.NewReader(""), &stdout, &stderr); err != nil {
 		t.Fatalf("status returned error: %v", err)
 	}
-	if !strings.Contains(stdout.String(), "***") {
-		t.Fatalf("status stdout = %q", stdout.String())
+	if !strings.Contains(stderr.String(), "***") {
+		t.Fatalf("status stderr = %q", stderr.String())
 	}
 }
 
@@ -223,8 +237,8 @@ func TestLoginWithKeyringStoreFailsWithoutAnOSKeyringLikeRust(t *testing.T) {
 	t.Cleanup(func() { auth.OSKeyringAvailable = previousKeyring })
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)
-	var stdout bytes.Buffer
-	err := Run(context.Background(), []string{"-c", `cli_auth_credentials_store="keyring"`, "login", "--with-api-key"}, strings.NewReader("sk-keyring\n"), &stdout, &bytes.Buffer{})
+	var stdout, stderr bytes.Buffer
+	err := Run(context.Background(), []string{"-c", `cli_auth_credentials_store="keyring"`, "login", "--with-api-key"}, strings.NewReader("sk-keyring\n"), &stdout, &stderr)
 	if err == nil || !strings.Contains(err.Error(), auth.KeyringUnavailableError) {
 		t.Fatalf("keyring login error = %v, want the keyring-unavailable error", err)
 	}
@@ -232,20 +246,20 @@ func TestLoginWithKeyringStoreFailsWithoutAnOSKeyringLikeRust(t *testing.T) {
 		t.Fatalf("auth.json should not exist after a failed keyring login: %v", err)
 	}
 
-	stdout.Reset()
-	if err := Run(context.Background(), []string{"-c", `cli_auth_credentials_store="auto"`, "login", "--with-api-key"}, strings.NewReader("sk-keyring\n"), &stdout, &bytes.Buffer{}); err != nil {
+	stderr.Reset()
+	if err := Run(context.Background(), []string{"-c", `cli_auth_credentials_store="auto"`, "login", "--with-api-key"}, strings.NewReader("sk-keyring\n"), &stdout, &stderr); err != nil {
 		t.Fatalf("auto login returned error: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(home, "auth.json")); err != nil {
 		t.Fatalf("auto login did not persist auth.json: %v", err)
 	}
 
-	stdout.Reset()
-	if err := Run(context.Background(), []string{"-c", `cli_auth_credentials_store="auto"`, "login", "status"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+	stderr.Reset()
+	if err := Run(context.Background(), []string{"-c", `cli_auth_credentials_store="auto"`, "login", "status"}, strings.NewReader(""), &stdout, &stderr); err != nil {
 		t.Fatalf("status returned error: %v", err)
 	}
-	if !strings.Contains(stdout.String(), "API key configured") {
-		t.Fatalf("status stdout = %q", stdout.String())
+	if !strings.Contains(stderr.String(), "API key configured") {
+		t.Fatalf("status stderr = %q", stderr.String())
 	}
 }
 
@@ -457,12 +471,12 @@ func TestLoginWithAccessTokenWritesOnlyPersonalAccessToken(t *testing.T) {
 	defer server.Close()
 	t.Setenv(auth.AuthAPIBaseURLEnv, server.URL)
 
-	var stdout bytes.Buffer
-	if err := Run(context.Background(), []string{"-c", `forced_chatgpt_workspace_id=["workspace-allowed"]`, "login", "--with-access-token"}, strings.NewReader("at-login-test\n"), &stdout, &bytes.Buffer{}); err != nil {
+	var stdout, stderr bytes.Buffer
+	if err := Run(context.Background(), []string{"-c", `forced_chatgpt_workspace_id=["workspace-allowed"]`, "login", "--with-access-token"}, strings.NewReader("at-login-test\n"), &stdout, &stderr); err != nil {
 		t.Fatalf("login returned error: %v", err)
 	}
-	if !strings.Contains(stdout.String(), auth.LoginFlowSuccessMessage) {
-		t.Fatalf("login stdout = %q", stdout.String())
+	if !strings.Contains(stderr.String(), auth.LoginFlowSuccessMessage) {
+		t.Fatalf("login stderr = %q", stderr.String())
 	}
 	var stored map[string]any
 	data, err := os.ReadFile(filepath.Join(home, "auth.json"))
@@ -540,23 +554,23 @@ func TestLoginChatGPTDeviceAuth(t *testing.T) {
 	}))
 	defer server.Close()
 
-	var stdout bytes.Buffer
-	if err := Run(context.Background(), []string{"login", "--device-auth", "--experimental_issuer", server.URL}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+	var stdout, stderr bytes.Buffer
+	if err := Run(context.Background(), []string{"login", "--device-auth", "--experimental_issuer", server.URL}, strings.NewReader(""), &stdout, &stderr); err != nil {
 		t.Fatalf("device login returned error: %v", err)
 	}
-	if !strings.Contains(stdout.String(), "CODEX-GO") {
-		t.Fatalf("device stdout = %q", stdout.String())
+	if !strings.Contains(stderr.String(), "CODEX-GO") {
+		t.Fatalf("device stderr = %q", stderr.String())
 	}
-	if !strings.Contains(stdout.String(), auth.LoginFlowSuccessMessage) {
-		t.Fatalf("device stdout missing success message: %q", stdout.String())
+	if !strings.Contains(stderr.String(), auth.LoginFlowSuccessMessage) {
+		t.Fatalf("device stderr missing success message: %q", stderr.String())
 	}
 
-	stdout.Reset()
-	if err := Run(context.Background(), []string{"login", "status"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+	stderr.Reset()
+	if err := Run(context.Background(), []string{"login", "status"}, strings.NewReader(""), &stdout, &stderr); err != nil {
 		t.Fatalf("status returned error: %v", err)
 	}
-	if !strings.Contains(stdout.String(), "Logged in using ChatGPT") {
-		t.Fatalf("status stdout = %q", stdout.String())
+	if !strings.Contains(stderr.String(), "Logged in using ChatGPT") {
+		t.Fatalf("status stderr = %q", stderr.String())
 	}
 }
 
@@ -956,11 +970,11 @@ func TestInteractiveSlashCommandsUpdateTUIState(t *testing.T) {
 	}
 	output := stdout.String()
 	for _, want := range []string{
-		"Codex TUI commands:",
+		"Unrecognized command '/help'. Type \"/\" for a list of supported commands.",
+		"Unrecognized command '/approval'. Type \"/\" for a list of supported commands.",
+		"Unrecognized command '/sandbox'. Type \"/\" for a list of supported commands.",
 		"Codex TUI keymap:",
 		"Model: gpt-test",
-		"Approval: never",
-		"Sandbox: :workspace",
 		"Permissions: approval=never sandbox=:danger-full-access",
 		"Feature network_proxy enabled.",
 		"hello tui",
@@ -1183,7 +1197,9 @@ func TestAppServerRequirementsFromFileParsesFullRequirements(t *testing.T) {
 	}
 }
 
-func TestInteractiveSlashCommandRejectsInvalidApproval(t *testing.T) {
+// Rust 0.166 exposes no /approval command (SlashCommand has Permissions only),
+// so line mode answers it with the unrecognized-command notice.
+func TestInteractiveSlashCommandRejectsGoOnlyApproval(t *testing.T) {
 	useEmbeddedLaunch(t)
 	t.Setenv("TERM", "xterm-256color")
 	t.Setenv("CODEX_HOME", t.TempDir())
@@ -1191,7 +1207,7 @@ func TestInteractiveSlashCommandRejectsInvalidApproval(t *testing.T) {
 	if err := Run(context.Background(), []string{}, strings.NewReader("/approval always\n/exit\n"), &stdout, &bytes.Buffer{}); err != nil {
 		t.Fatalf("interactive returned error: %v", err)
 	}
-	if !strings.Contains(stdout.String(), "Approval must be one of untrusted, on-request, never.") {
+	if !strings.Contains(stdout.String(), "Unrecognized command '/approval'. Type \"/\" for a list of supported commands.") {
 		t.Fatalf("stdout = %q", stdout.String())
 	}
 }

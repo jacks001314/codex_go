@@ -317,17 +317,16 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	if extra := strings.TrimSpace(req.AdditionalInstructions); extra != "" {
 		instructions = strings.Join(nonEmptyStrings([]string{extra, instructions}), "\n\n")
 	}
+	prompt, resumeContext, err := r.promptForRequest(req, cfg, stdin, stderr)
+	if err != nil {
+		return nil, err
+	}
 	var outputSchema any
 	if !execForkOnlyRequest(req) {
 		outputSchema, err = loadOutputSchema(req.Exec.OutputSchema)
 		if err != nil {
 			return nil, err
 		}
-	}
-
-	prompt, resumeContext, err := r.promptForRequest(req, cfg, stdin)
-	if err != nil {
-		return nil, err
 	}
 	requestInputs := requestTurnUserInputs(req)
 	if strings.TrimSpace(prompt) == "" && len(requestInputs) == 0 && len(req.AdditionalInputItems) == 0 &&
@@ -2270,9 +2269,9 @@ func resumePreviousResponseID(ctx *execResumeContext) string {
 	return ""
 }
 
-func (r *Runner) promptForRequest(req *Request, cfg *config.Config, stdin io.Reader) (string, *execResumeContext, error) {
+func (r *Runner) promptForRequest(req *Request, cfg *config.Config, stdin io.Reader, stderr io.Writer) (string, *execResumeContext, error) {
 	if req.Exec.Subcommand == "review" {
-		prompt, _, err := review.BuildPromptFromOptions(req.Exec.Review, stdin, &review.GitDiffProvider{
+		prompt, _, err := review.BuildPromptFromOptionsWithStderr(req.Exec.Review, stdin, stderr, &review.GitDiffProvider{
 			Dir: requestCWD(req),
 		})
 		if err != nil {
@@ -2288,7 +2287,7 @@ func (r *Runner) promptForRequest(req *Request, cfg *config.Config, stdin io.Rea
 		if req.Exec.Resume.Prompt == "" && (len(req.Input) > 0 || len(req.AdditionalInputItems) > 0) {
 			return "", &execResumeContext{Record: record}, nil
 		}
-		resumePrompt, err := resolveExecResumePrompt(req.Exec.Resume.Prompt, stdin)
+		resumePrompt, err := resolveExecResumePrompt(req.Exec.Resume.Prompt, stdin, stderr)
 		if err != nil {
 			return "", nil, err
 		}
@@ -2309,7 +2308,7 @@ func (r *Runner) promptForRequest(req *Request, cfg *config.Config, stdin io.Rea
 		promptText := ""
 		if !forkOnly && promptArg != "" {
 			var err error
-			promptText, err = resolveExecResumePrompt(promptArg, stdin)
+			promptText, err = resolveExecResumePrompt(promptArg, stdin, stderr)
 			if err != nil {
 				return "", nil, err
 			}
@@ -2318,7 +2317,7 @@ func (r *Runner) promptForRequest(req *Request, cfg *config.Config, stdin io.Rea
 				promptArg = "-"
 			}
 			var err error
-			promptText, err = resolveExecResumePrompt(promptArg, stdin)
+			promptText, err = resolveExecResumePrompt(promptArg, stdin, stderr)
 			if err != nil {
 				return "", nil, err
 			}
@@ -2377,7 +2376,7 @@ func (r *Runner) promptForRequest(req *Request, cfg *config.Config, stdin io.Rea
 	if req.Exec.Prompt == "" && (len(req.Input) > 0 || len(req.AdditionalInputItems) > 0) {
 		return "", nil, nil
 	}
-	resolved, err := prompt.Resolve(req.Exec.Prompt, stdin)
+	resolved, err := prompt.ResolveRootPrompt(req.Exec.Prompt, stdin, stderr)
 	return resolved, nil, err
 }
 
@@ -2385,11 +2384,8 @@ func execForkOnlyRequest(req *Request) bool {
 	return req != nil && req.Exec.Subcommand == "fork" && strings.TrimSpace(req.Exec.Fork.Prompt) == "" && len(req.Input) == 0 && len(req.AdditionalInputItems) == 0
 }
 
-func resolveExecResumePrompt(promptArg string, stdin io.Reader) (string, error) {
-	if promptArg != "" && promptArg != "-" {
-		return promptArg, nil
-	}
-	return prompt.Resolve(promptArg, stdin)
+func resolveExecResumePrompt(promptArg string, stdin io.Reader, stderr io.Writer) (string, error) {
+	return prompt.ResolveExecPrompt(promptArg, stdin, stderr)
 }
 
 func execAdditionalInputIdentity(items []any) string {
@@ -2730,11 +2726,11 @@ func loadOutputSchema(path string) (any, error) {
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to read output schema file %s: %w", path, err)
+		return nil, &prompt.DirectExitError{Text: fmt.Sprintf("Failed to read output schema file %s: %v", path, err)}
 	}
 	var value any
 	if err := json.Unmarshal(data, &value); err != nil {
-		return nil, fmt.Errorf("Output schema file %s is not valid JSON: %w", path, err)
+		return nil, &prompt.DirectExitError{Text: fmt.Sprintf("Output schema file %s is not valid JSON: %v", path, err)}
 	}
 	return value, nil
 }
@@ -6245,7 +6241,7 @@ func execResumeThreadIDForTarget(store *session.Store, resume *cli.ExecResumeOpt
 	} else if !errors.Is(err, session.ErrThreadNotFound) && !errors.Is(err, session.ErrInvalidThreadID) {
 		return "", err
 	}
-	return "", fmt.Errorf("No session found matching '%s'.", target)
+	return "", fmt.Errorf("Session not found: %s", target)
 }
 
 func execResumeRecordByExactName(store *session.Store, resume *cli.ExecResumeOptions, name string, cwd string) (*session.Record, error) {

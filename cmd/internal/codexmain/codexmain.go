@@ -4,6 +4,7 @@ package codexmain
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -70,11 +71,28 @@ func Main(args []string, argv0 string, stdin io.Reader, stdout, stderr io.Writer
 	}
 	if err := app.RunWithOptions(context.Background(), runArgs, stdin, stdout, stderr, &app.RunOptions{DispatchPaths: &dispatchPaths}); err != nil {
 		if app.ShouldPrintError(err) {
-			fmt.Fprintln(stderr, err)
+			printRunError(stderr, err)
 		}
 		return app.ExitCode(err)
 	}
 	return 0
+}
+
+// printRunError mirrors how Rust reports failures: errors that bubble out of
+// main are anyhow errors and print as `Error: <message>`, while paths that exit
+// with a pre-rendered message (Go's ExitError with Message) keep their own text,
+// exactly like Rust's `eprintln!(...); process::exit(1)` call sites.
+func printRunError(stderr io.Writer, err error) {
+	var exitErr *app.ExitError
+	if errors.As(err, &exitErr) && exitErr.Message != "" {
+		fmt.Fprintln(stderr, exitErr.Message)
+		return
+	}
+	if message, ok := app.DirectExitMessage(err); ok {
+		fmt.Fprintln(stderr, message)
+		return
+	}
+	fmt.Fprintf(stderr, "Error: %v\n", err)
 }
 
 // dispatchInternalHelper runs the helper modes Rust's arg0 dispatch selects

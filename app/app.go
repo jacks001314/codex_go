@@ -97,7 +97,7 @@ func RunWithOptions(ctx context.Context, args []string, stdin io.Reader, stdout,
 	case cli.CommandLogout:
 		logout := parsed.Login
 		logout.ConfigOverrides = append(append([]string(nil), parsed.Root.ConfigOverrides...), logout.ConfigOverrides...)
-		return runLogout(ctx, logout, stdout)
+		return runLogout(ctx, logout, stderr)
 	case cli.CommandFeatures:
 		return runFeatures(parsed.Features, parsed.Root, stdout, stderr)
 	case cli.CommandMCP:
@@ -2162,23 +2162,23 @@ func runLogin(ctx context.Context, opts cli.LoginOptions, stdin io.Reader, stdou
 			return exitMessagef("Error checking login status: %v", err)
 		}
 		if current == nil {
-			fmt.Fprintln(stdout, "Not logged in")
+			fmt.Fprintln(stderr, "Not logged in")
 			return &ExitError{Code: 1, Silent: true}
 		}
 		switch (&current.Auth).Mode() {
 		case "api-key":
-			fmt.Fprintf(stdout, "API key configured - %s\n", auth.SafeFormatLoginKey(current.Auth.OpenAIAPIKey))
-			fmt.Fprintln(stdout, apiKeyAuthenticationNotice)
+			fmt.Fprintf(stderr, "API key configured - %s\n", auth.SafeFormatLoginKey(current.Auth.OpenAIAPIKey))
+			fmt.Fprintln(stderr, apiKeyAuthenticationNotice)
 		case "personal-access-token":
-			fmt.Fprintln(stdout, "Logged in using personal access token")
+			fmt.Fprintln(stderr, "Logged in using personal access token")
 		case "agent-identity":
-			fmt.Fprintln(stdout, "Logged in using access token")
+			fmt.Fprintln(stderr, "Logged in using access token")
 		case "chatgpt":
-			fmt.Fprintln(stdout, "Logged in using ChatGPT")
+			fmt.Fprintln(stderr, "Logged in using ChatGPT")
 		case "bedrock-api-key":
-			fmt.Fprintln(stdout, "Logged in using Amazon Bedrock API key")
+			fmt.Fprintln(stderr, "Logged in using Amazon Bedrock API key")
 		default:
-			fmt.Fprintf(stdout, "Logged in using %s\n", (&current.Auth).Mode())
+			fmt.Fprintf(stderr, "Logged in using %s\n", (&current.Auth).Mode())
 		}
 		return nil
 	case opts.APIKey != nil:
@@ -2196,7 +2196,7 @@ func runLogin(ctx context.Context, opts cli.LoginOptions, stdin io.Reader, stdou
 		if err := store.Save(auth.FromAPIKey(secret)); err != nil {
 			return exitMessagef("Error logging in: %v", err)
 		}
-		fmt.Fprintf(stdout, "API key saved. %s\n", apiKeyAuthenticationNotice)
+		fmt.Fprintf(stderr, "API key saved. %s\n", apiKeyAuthenticationNotice)
 		return nil
 	case opts.WithAccessToken:
 		if !loadedConfig.IsLoginMethodAllowed(config.ForcedLoginMethodChatGPT) {
@@ -2213,7 +2213,7 @@ func runLogin(ctx context.Context, opts cli.LoginOptions, stdin io.Reader, stdou
 		if err := store.Save(snapshot); err != nil {
 			return exitMessagef("Error logging in with access token: %v", err)
 		}
-		fmt.Fprintln(stdout, auth.LoginFlowSuccessMessage)
+		fmt.Fprintln(stderr, auth.LoginFlowSuccessMessage)
 		return nil
 	case opts.DeviceAuth:
 		if !loadedConfig.IsLoginMethodAllowed(config.ForcedLoginMethodChatGPT) {
@@ -2221,11 +2221,11 @@ func runLogin(ctx context.Context, opts cli.LoginOptions, stdin io.Reader, stdou
 		}
 		clearExistingAuthBeforeLogin(ctx, codexHome, authStoreOptions)
 		loginOptions := chatGPTLoginOAuthOptions(codexHome, loadedConfig, opts, authStoreOptions)
-		loginOptions.DevicePrompt = stdout
+		loginOptions.DevicePrompt = stderr
 		if err := auth.RunDeviceCodeLogin(ctx, loginOptions); err != nil {
 			return exitMessagef("Error logging in with device code: %v", err)
 		}
-		fmt.Fprintln(stdout, auth.LoginFlowSuccessMessage)
+		fmt.Fprintln(stderr, auth.LoginFlowSuccessMessage)
 		return nil
 	default:
 		if !loadedConfig.IsLoginMethodAllowed(config.ForcedLoginMethodChatGPT) {
@@ -2238,10 +2238,10 @@ func runLogin(ctx context.Context, opts cli.LoginOptions, stdin io.Reader, stdou
 		if err != nil {
 			return exitMessagef("Error logging in: %v", err)
 		}
-		fmt.Fprintln(stdout, auth.LoginFlowServerStartMessage(server.Port, server.AuthURL))
+		fmt.Fprintln(stderr, auth.LoginFlowServerStartMessage(server.Port, server.AuthURL))
 		err = <-server.Done
 		if err == nil {
-			fmt.Fprintln(stdout, auth.LoginFlowSuccessMessage)
+			fmt.Fprintln(stderr, auth.LoginFlowSuccessMessage)
 		}
 		if err != nil {
 			return exitMessagef("Error logging in: %v", err)
@@ -2314,7 +2314,7 @@ func authStoreOptionsFromConfig(codexHome string, overrides []string) (*auth.Sto
 	return authStoreOptionsFromLoadedConfig(loaded), nil
 }
 
-func runLogout(ctx context.Context, opts cli.LoginOptions, stdout io.Writer) error {
+func runLogout(ctx context.Context, opts cli.LoginOptions, stderr io.Writer) error {
 	codexHome := auth.DefaultCodexHome()
 	authStoreOptions, err := authStoreOptionsFromConfig(codexHome, opts.ConfigOverrides)
 	if err != nil {
@@ -2325,9 +2325,9 @@ func runLogout(ctx context.Context, opts cli.LoginOptions, stdout io.Writer) err
 		return exitMessagef("Error logging out: %v", err)
 	}
 	if removed {
-		fmt.Fprintln(stdout, "Successfully logged out")
+		fmt.Fprintln(stderr, "Successfully logged out")
 	} else {
-		fmt.Fprintln(stdout, "Not logged in")
+		fmt.Fprintln(stderr, "Not logged in")
 	}
 	return nil
 }

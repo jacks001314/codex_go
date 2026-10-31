@@ -26,6 +26,14 @@ type mergeBaseProvider interface {
 }
 
 func BuildTarget(opts cli.ReviewOptions, stdin io.Reader) (Target, error) {
+	return BuildTargetWithStderr(opts, stdin, io.Discard)
+}
+
+// BuildTargetWithStderr resolves the review target the way Rust's
+// exec::build_review_request does. A custom prompt uses resolve_prompt, so a
+// positional prompt is taken verbatim, `-` forces stdin and piped stdin is only
+// read for the `-` sentinel; Rust's stdin notices go to stderr.
+func BuildTargetWithStderr(opts cli.ReviewOptions, stdin io.Reader, stderr io.Writer) (Target, error) {
 	switch {
 	case opts.Uncommitted:
 		return Target{Kind: "uncommitted"}, nil
@@ -34,7 +42,7 @@ func BuildTarget(opts cli.ReviewOptions, stdin io.Reader) (Target, error) {
 	case opts.Commit != "":
 		return Target{Kind: "commit", Commit: opts.Commit, CommitTitle: opts.CommitTitle}, nil
 	case opts.Prompt != "":
-		prompt, err := prompt.Resolve(opts.Prompt, stdin)
+		prompt, err := prompt.ResolveExecPrompt(opts.Prompt, stdin, stderr)
 		if err != nil {
 			return Target{}, err
 		}
@@ -49,7 +57,13 @@ func BuildTarget(opts cli.ReviewOptions, stdin io.Reader) (Target, error) {
 }
 
 func BuildPromptFromOptions(opts cli.ReviewOptions, stdin io.Reader, provider DiffProvider) (string, Target, error) {
-	target, err := BuildTarget(opts, stdin)
+	return BuildPromptFromOptionsWithStderr(opts, stdin, io.Discard, provider)
+}
+
+// BuildPromptFromOptionsWithStderr is BuildPromptFromOptions with Rust's stdin
+// notices routed to stderr.
+func BuildPromptFromOptionsWithStderr(opts cli.ReviewOptions, stdin io.Reader, stderr io.Writer, provider DiffProvider) (string, Target, error) {
+	target, err := BuildTargetWithStderr(opts, stdin, stderr)
 	if err != nil {
 		return "", Target{}, err
 	}

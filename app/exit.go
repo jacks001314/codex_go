@@ -39,6 +39,22 @@ func ExitCode(err error) int {
 	return 1
 }
 
+// DirectExitMessenger marks errors whose text Rust prints verbatim with
+// eprintln! right before process::exit. Those messages never gain anyhow's
+// "Error: " prefix, so the process entry point prints them as-is.
+type DirectExitMessenger interface {
+	DirectExitMessage() string
+}
+
+// DirectExitMessage returns the verbatim message carried by err, if any.
+func DirectExitMessage(err error) (string, bool) {
+	var messenger DirectExitMessenger
+	if errors.As(err, &messenger) {
+		return messenger.DirectExitMessage(), true
+	}
+	return "", false
+}
+
 func ShouldPrintError(err error) bool {
 	if err == nil {
 		return false

@@ -2,12 +2,115 @@ package prompt
 
 import (
 	"errors"
+	"fmt"
 	"io"
+	"os"
 	"strconv"
 	"strings"
 	"unicode/utf16"
 	"unicode/utf8"
 )
+
+// StdinPromptBehavior mirrors codex-rs/exec/src/lib.rs::StdinPromptBehavior.
+type StdinPromptBehavior int
+
+const (
+	// RequiredIfPiped reads stdin only when no positional prompt was given,
+	// which is the legacy `codex exec` behavior for piped input.
+	RequiredIfPiped StdinPromptBehavior = iota
+	// Forced always treats stdin as the prompt (`codex exec -`).
+	Forced
+	// OptionalAppend treats piped stdin as extra context for a positional
+	// prompt instead of replacing it.
+	OptionalAppend
+)
+
+// DirectExitError is an error Rust prints verbatim with eprintln! before
+// exiting, so it must not pick up the "Error: " prefix anyhow errors get.
+type DirectExitError struct {
+	Text string
+}
+
+func (e *DirectExitError) Error() string { return e.Text }
+
+// DirectExitMessage reports the verbatim text for app.DirectExitMessenger.
+func (e *DirectExitError) DirectExitMessage() string { return e.Text }
+
+// ReadStdinPrompt mirrors exec::read_prompt_from_stdin: it prints Rust's
+// stderr notices, reports whether stdin contributed text, and returns the same
+// errors. `ok` is false only for OptionalAppend with nothing to append.
+func ReadStdinPrompt(stdin io.Reader, stderr io.Writer, behavior StdinPromptBehavior) (string, bool, error) {
+	stdinIsTerminal := IsTerminalReader(stdin)
+	switch behavior {
+	case RequiredIfPiped:
+		if stdinIsTerminal {
+			return "", false, &DirectExitError{Text: "No prompt provided. Either specify one as an argument or pipe the prompt into stdin."}
+		}
+		fmt.Fprintln(stderr, "Reading prompt from stdin...")
+	case OptionalAppend:
+		if stdinIsTerminal {
+			return "", false, nil
+		}
+		fmt.Fprintln(stderr, "Reading additional input from stdin...")
+	}
+
+	text, err := readAllString(stdin)
+	if err != nil {
+		return "", false, fmt.Errorf("Failed to read prompt from stdin: %v", err)
+	}
+	if strings.TrimSpace(text) == "" {
+		if behavior == OptionalAppend {
+			return "", false, nil
+		}
+		return "", false, &DirectExitError{Text: "No prompt provided via stdin."}
+	}
+	return text, true, nil
+}
+
+// ResolveExecPrompt mirrors exec::resolve_prompt: a positional prompt is used
+// verbatim (stdin is not read), `-` forces stdin, and a missing prompt reads
+// piped stdin or fails when stdin is a terminal.
+func ResolveExecPrompt(promptArg string, stdin io.Reader, stderr io.Writer) (string, error) {
+	if promptArg != "" && promptArg != "-" {
+		return promptArg, nil
+	}
+	behavior := RequiredIfPiped
+	if promptArg == "-" {
+		behavior = Forced
+	}
+	text, _, err := ReadStdinPrompt(stdin, stderr, behavior)
+	return text, err
+}
+
+// ResolveRootPrompt mirrors exec::resolve_root_prompt: a positional prompt
+// keeps piped stdin as a `<stdin>` context block, everything else falls through
+// to ResolveExecPrompt.
+func ResolveRootPrompt(promptArg string, stdin io.Reader, stderr io.Writer) (string, error) {
+	if promptArg != "" && promptArg != "-" {
+		text, ok, err := ReadStdinPrompt(stdin, stderr, OptionalAppend)
+		if err != nil {
+			return "", err
+		}
+		if !ok {
+			return promptArg, nil
+		}
+		return WithStdinContext(promptArg, text), nil
+	}
+	return ResolveExecPrompt(promptArg, stdin, stderr)
+}
+
+// IsTerminalReader reports whether reading from reader would wait on a user.
+func IsTerminalReader(reader io.Reader) bool {
+	if terminal, ok := reader.(interface{ IsTerminal() bool }); ok {
+		return terminal.IsTerminal()
+	}
+	file, ok := reader.(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := file.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
+}
 
 func Resolve(promptArg string, stdin io.Reader) (string, error) {
 	stdinText, err := readAllString(stdin)
