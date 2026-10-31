@@ -84,7 +84,7 @@ func TestApplyPreserveRejectsOverlappingEndOfFileChunks(t *testing.T) {
 	if err == nil {
 		t.Fatal("Apply() error = nil, want overlapping chunk failure")
 	}
-	if !strings.Contains(err.Error(), "failed to find expected lines") {
+	if !strings.Contains(err.Error(), "Failed to find expected lines in ") {
 		t.Fatalf("Apply() error = %v", err)
 	}
 	data, err := os.ReadFile(target)

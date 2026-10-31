@@ -568,7 +568,7 @@ func TestApplyPatchExecutorInvalidMatrixDoesNotMutateWorkspace(t *testing.T) {
 			if err == nil {
 				t.Fatalf("Execute() = %#v, nil; want verification error", output)
 			}
-			if test.verificationError && !strings.Contains(err.Error(), "failed to find expected lines") {
+			if test.verificationError && !strings.Contains(err.Error(), "Failed to find expected lines in ") {
 				t.Fatalf("Execute() error = %v; want missing-context verification error", err)
 			}
 			assertApplyPatchFile(t, filepath.Join(cwd, "keep.txt"), "keep\n")

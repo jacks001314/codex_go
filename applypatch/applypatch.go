@@ -1011,9 +1011,9 @@ func applyUpdate(fs FileSystem, cwd string, change *Change) (*AppliedFile, error
 	if err != nil {
 		return nil, fmt.Errorf("Failed to read file to update %s: %s", path, rustIOMessage(err))
 	}
-	updated, err := applyUpdateDiffToContent(string(data), change)
+	updated, err := applyUpdateDiffToContent(string(data), change, path)
 	if err != nil {
-		return nil, fmt.Errorf("%w in %s", err, path)
+		return nil, err
 	}
 	outPath := path
 	outDisplayPath := change.Path
@@ -1050,15 +1050,15 @@ func applyUpdate(fs FileSystem, cwd string, change *Change) (*AppliedFile, error
 
 // applyUnifiedDiffToContent always preserves the target file's existing line
 // endings (Rust #51203 removed the legacy LF-normalizing mode).
-func applyUnifiedDiffToContent(content string, diff string) (string, error) {
-	return applyUnifiedDiffToContentPreserving(content, diff)
+func applyUnifiedDiffToContent(content string, diff string, pathLabel string) (string, error) {
+	return applyUnifiedDiffToContentPreserving(content, diff, pathLabel)
 }
 
-func applyUpdateDiffToContent(content string, change *Change) (string, error) {
+func applyUpdateDiffToContent(content string, change *Change, pathLabel string) (string, error) {
 	if change != nil && change.MovePath != "" && strings.TrimSpace(change.UnifiedDiff) == "" {
 		return content, nil
 	}
-	return applyUnifiedDiffToContent(content, change.UnifiedDiff)
+	return applyUnifiedDiffToContent(content, change.UnifiedDiff, pathLabel)
 }
 
 type updateChunk struct {

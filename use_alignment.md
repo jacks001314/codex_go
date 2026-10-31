@@ -2251,8 +2251,34 @@ appended `: <cause>` to the delete and write contexts, returned the raw
   `TestApplyWriteFailuresPrintOnlyRustContextLine` and
   `TestApplyUpdateDirectoryReportsRustReadError` in `applypatch`.
 
+### 72. `apply_patch` context errors name the file the way `compute_replacements` does
+
+`compute_replacements` reports a missing `@@` anchor as
+`Failed to find context '<ctx>' in <path>` and a hunk body that does not match
+as `Failed to find expected lines in <path>:\n<lines>`. Go printed
+`failed to find context '<ctx>'` and appended the path after the body
+(`failed to find expected lines:\n<lines> in <path>`), because the file name
+only reached the error through the update wrapper.
+
+- **Path threading.** `applyUnifiedDiffToContent`, `applyUpdateDiffToContent`
+  and `computeReplacementsPreserving` now take the resolved path, so both
+  messages spell Rust's text and the wrapper no longer appends ` in <path>`.
+- Evidence: the 14-document parse/validation corpus and four context cases
+  (missing anchor, single- and multi-line bodies, EOF body) are byte-identical
+  to 0.166 (`out/r59-parse.txt`, `out/r59-context.txt`), and the ten
+  write/delete documents keep 0 diffs (`out/r58-patch.txt`). Regressions:
+  `TestApplyContextMismatchKeepsRustWording` in `applypatch`, plus the
+  `Failed to find expected lines in ` prefixes pinned by
+  `TestApplyRejectsMissingContext`,
+  `TestApplyPreserveRejectsOverlappingEndOfFileChunks` and
+  `TestApplyPatchExecutorInvalidMatrixDoesNotMutateWorkspace`.
+
 ## Verification
 
+- Round 58 aligns the `apply_patch` context errors (entry 72): the 14-document
+  parse corpus and four context cases match 0.166 byte for byte
+  (`out/r59-parse.txt`, `out/r59-context.txt`), and
+  `go test -count=1 -vet=off ./applypatch ./tool ./app` passes.
 - Round 57 aligns the `apply_patch` failure text (entry 71): ten
   `--codex-run-as-apply-patch` documents match 0.166 byte for byte
   (`out/r58-patch.txt`, `out/r58-patch-extra.txt`), and

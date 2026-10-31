@@ -28,7 +28,7 @@ import (
 // local directory never contains it. Both the preflight read (which must not
 // stat/read the host filesystem) and the committed write therefore have to run
 // over the exec-server wire. A regression that reads the target locally during
-// verification fails here as "failed to find expected lines" because the local
+// verification fails here as "Failed to find expected lines in <path>:" because the local
 // file is missing.
 func TestApplyPatchRoutesToSelectedRemoteEnvironmentLikeRust(t *testing.T) {
 	serverURL, stop := startEnvironmentFileSystemExecServer(t)

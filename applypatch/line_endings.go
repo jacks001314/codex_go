@@ -240,7 +240,7 @@ func normalizeSearchLine(value string) string {
 // applyUnifiedDiffToContentPreserving applies the patch while retaining the
 // original line endings of untouched and context lines, using the file's first
 // line ending for inserted or replaced lines.
-func applyUnifiedDiffToContentPreserving(content string, diff string) (string, error) {
+func applyUnifiedDiffToContentPreserving(content string, diff string, pathLabel string) (string, error) {
 	chunks, err := parseUpdateChunks(diff)
 	if err != nil {
 		return "", err
@@ -250,7 +250,7 @@ func applyUnifiedDiffToContentPreserving(content string, diff string) (string, e
 	}
 	file := parseSourceFile(content)
 	originalLines := file.lineTexts()
-	replacements, err := computeReplacementsPreserving(originalLines, chunks)
+	replacements, err := computeReplacementsPreserving(originalLines, chunks, pathLabel)
 	if err != nil {
 		return "", err
 	}
@@ -262,7 +262,7 @@ func applyUnifiedDiffToContentPreserving(content string, diff string) (string, e
 // in PreserveLineEndings mode: context lines occur on both sides of a patch
 // chunk and are kept in place so their exact contents and terminators survive,
 // especially in mixed-ending files.
-func computeReplacementsPreserving(originalLines []string, chunks []*updateChunk) ([]replacement, error) {
+func computeReplacementsPreserving(originalLines []string, chunks []*updateChunk, pathLabel string) ([]replacement, error) {
 	var replacements []replacement
 	lineIndex := 0
 	for _, chunk := range chunks {
@@ -272,7 +272,7 @@ func computeReplacementsPreserving(originalLines []string, chunks []*updateChunk
 		if strings.TrimSpace(chunk.changeContext) != "" {
 			idx := seekSequence(originalLines, []string{chunk.changeContext}, lineIndex, false)
 			if idx < 0 {
-				return nil, fmt.Errorf("failed to find context '%s'", chunk.changeContext)
+				return nil, fmt.Errorf("Failed to find context '%s' in %s", chunk.changeContext, pathLabel)
 			}
 			lineIndex = idx + 1
 		}
@@ -298,7 +298,7 @@ func computeReplacementsPreserving(originalLines []string, chunks []*updateChunk
 			found = seekSequence(originalLines, pattern, lineIndex, chunk.isEndOfFile)
 		}
 		if found < 0 {
-			return nil, fmt.Errorf("failed to find expected lines:\n%s", strings.Join(chunk.oldLines, "\n"))
+			return nil, fmt.Errorf("Failed to find expected lines in %s:\n%s", pathLabel, strings.Join(chunk.oldLines, "\n"))
 		}
 
 		oldStart := 0

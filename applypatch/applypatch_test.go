@@ -401,7 +401,7 @@ func TestApplyRejectsMissingContext(t *testing.T) {
 	if err == nil {
 		t.Fatal("Apply returned nil error, want failure")
 	}
-	if !strings.Contains(err.Error(), "failed to find expected lines") {
+	if !strings.Contains(err.Error(), "Failed to find expected lines in ") {
 		t.Fatalf("error = %v", err)
 	}
 	if got := readApplyFile(t, dir, "target.txt"); got != "actual\n" {

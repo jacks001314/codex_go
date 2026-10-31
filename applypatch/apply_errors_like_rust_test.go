@@ -80,3 +80,30 @@ func TestApplyUpdateDirectoryReportsRustReadError(t *testing.T) {
 		t.Fatalf("stderr = %q, want %q", stderr, want)
 	}
 }
+
+func TestApplyContextMismatchKeepsRustWording(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "f.txt")
+	if err := os.WriteFile(target, []byte("hello\nworld\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	code, stderr := runApplyCLI(t, dir, "*** Begin Patch\n*** Update File: f.txt\n@@\n-zzz\n+yyy\n*** End Patch")
+	if code != 1 {
+		t.Fatalf("code = %d, want 1 (stderr %q)", code, stderr)
+	}
+	// compute_replacements names the file before the context lines.
+	if want := "Failed to find expected lines in " + target + ":\nzzz\n"; stderr != want {
+		t.Fatalf("stderr = %q, want %q", stderr, want)
+	}
+	if got, err := os.ReadFile(target); err != nil || string(got) != "hello\nworld\n" {
+		t.Fatalf("target mutated = %q, %v", got, err)
+	}
+
+	code, stderr = runApplyCLI(t, dir, "*** Begin Patch\n*** Update File: f.txt\n@@ nope\n-hello\n+bye\n*** End Patch")
+	if code != 1 {
+		t.Fatalf("code = %d, want 1 (stderr %q)", code, stderr)
+	}
+	if want := "Failed to find context 'nope' in " + target + "\n"; stderr != want {
+		t.Fatalf("stderr = %q, want %q", stderr, want)
+	}
+}
