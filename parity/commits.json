@@ -9513,9 +9513,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1175: initialize projects the userVerification MCP extension only for an opted-in in-process codex-tui or stdio Codex Desktop connection whose provider reports DeviceSupported(); the ceremony is delivered only to that owning connection, a response from any other connection cannot resolve it, thread replay skips it, a transport close releases ownership and cancels its pending ceremony before unrelated RPC handlers drain, and an authentication revision change cancels pending ceremonies. appserver/user_verification_ownership_like_rust_test.go covers owner-only resolution, replay exclusion, auth-change cancellation and disconnect ownership handoff. Tests: go build ./...; go test ./appserver -run 'UserVerification|ServerRequest|Elicitation|HumanApproval' -count=1; full go test ./appserver keeps only the 4 pre-existing failures."
    ]
   },
   {

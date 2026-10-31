@@ -268,6 +268,9 @@ readLoop:
 	// it keeps the process and its thread writers alive after stdio EOF
 	// (Rust #42668).
 	router.CancelRemoteControlOperations()
+	// Rust releases user-verification ownership when the transport closes, not
+	// after unrelated RPC handlers drain (#43715).
+	router.releaseUserVerificationConnection(connectionID)
 	requests.Wait()
 	router.ConnectionClosed(connectionID)
 	if scanErr != nil {

@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"unicode/utf8"
 
+	"codex_go/mcp"
 	"codex_go/sandbox"
 	"codex_go/utils"
 )
@@ -47,9 +48,13 @@ type ServerRequestBroker struct {
 	// answer a managed humanCommand checkpoint.
 	humanApprovalConnections map[string]bool
 	sink                     ServerRequestSink
-	onRequested              func(request *ServerRequest)
-	onResolved               func(request *ServerRequest)
-	onResponse               func(request *ServerRequest, response *Response)
+	// verificationAuth reports the router's current credential revision. A
+	// pending user-verification request belongs to the account revision that
+	// created it (Rust user_verification_auth.rs).
+	verificationAuth func() uint64
+	onRequested      func(request *ServerRequest)
+	onResolved       func(request *ServerRequest)
+	onResponse       func(request *ServerRequest, response *Response)
 }
 
 type serverRequestResult struct {
@@ -67,6 +72,11 @@ type pendingServerRequest struct {
 	// response may resolve it.
 	humanApproval           bool
 	humanApprovalRecipients map[string]struct{}
+	// verification marks a native user-verification request. Only its owner
+	// connection may answer it, and only under the credential revision that
+	// created it (Rust #43715).
+	verification             bool
+	verificationAuthRevision uint64
 }
 
 func NewServerRequestBroker() *ServerRequestBroker {
@@ -176,6 +186,34 @@ func (b *ServerRequestBroker) SetResolvedResponseCallback(callback func(request 
 	b.onResponse = callback
 }
 
+// SetVerificationAuth installs the credential-revision reader that binds a
+// pending user-verification request to the account that created it.
+func (b *ServerRequestBroker) SetVerificationAuth(read func() uint64) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.verificationAuth = read
+}
+
+func (b *ServerRequestBroker) verificationRevision() (uint64, bool) {
+	if b == nil || b.verificationAuth == nil {
+		return 0, false
+	}
+	return b.verificationAuth(), true
+}
+
+// serverRequestIsUserVerification reports whether the request is a native
+// user-verification elicitation, which is owned by a single connection.
+func serverRequestIsUserVerification(request *ServerRequest) bool {
+	if request == nil || request.Method != ServerRequestMCPElicitation {
+		return false
+	}
+	params, ok := request.Params.(*MCPElicitationRequestParams)
+	return ok && params != nil && params.Mode == mcp.UserVerificationMode
+}
+
 func (b *ServerRequestBroker) Request(ctx context.Context, method ServerRequestMethod, params any, target any) error {
 	return b.RequestToConnection(ctx, "", method, params, target)
 }
@@ -190,7 +228,18 @@ func (b *ServerRequestBroker) RequestToConnection(ctx context.Context, connectio
 	id := b.nextRequestID()
 	ch := make(chan *serverRequestResult, 1)
 	request := &ServerRequest{ID: StringID(id), Method: method, Params: params}
-	sink := b.register(id, &pendingServerRequest{ch: ch, request: request, connectionID: connectionID})
+	entry := &pendingServerRequest{ch: ch, request: request, connectionID: connectionID}
+	if serverRequestIsUserVerification(request) {
+		// A native verification ceremony belongs to the connection it is
+		// delivered to and to the credential revision that started it
+		// (Rust #43715).
+		entry.verification = true
+		entry.connectionID = normalizeConnectionID(connectionID)
+		if revision, ok := b.verificationRevision(); ok {
+			entry.verificationAuthRevision = revision
+		}
+	}
+	sink := b.register(id, entry)
 	if sink == nil {
 		b.unregister(id)
 		return fmt.Errorf("%w: server request sink is not configured", ErrInvalidRequest)
@@ -251,17 +300,48 @@ func (b *ServerRequestBroker) RequestToConnection(ctx context.Context, connectio
 // deadline. Rust 38035 propagates MCP elicitation delivery failures the same
 // way, dropping the pending-request guard immediately.
 func (b *ServerRequestBroker) RejectPending(connectionID string, err error) int {
+	connectionID = strings.TrimSpace(connectionID)
+	return b.rejectPendingEntries(func(entry *pendingServerRequest) bool {
+		return entry.connectionID == connectionID || entry.connectionID == ""
+	}, err)
+}
+
+// CancelVerificationPending cancels the user-verification requests owned by a
+// connection that closed, so ownership moves to a live host before unrelated
+// RPC handlers finish draining (Rust #43715).
+func (b *ServerRequestBroker) CancelVerificationPending(connectionID string, err error) int {
+	connectionID = normalizeConnectionID(connectionID)
+	return b.rejectPendingEntries(func(entry *pendingServerRequest) bool {
+		return entry.verification && entry.connectionID == connectionID
+	}, err)
+}
+
+// CancelStaleVerificationPending cancels user-verification requests created
+// under an older credential revision (Rust user_verification_auth.rs).
+func (b *ServerRequestBroker) CancelStaleVerificationPending() int {
+	current, ok := b.verificationRevision()
+	if !ok {
+		return 0
+	}
+	return b.rejectPendingEntries(func(entry *pendingServerRequest) bool {
+		return entry.verification && entry.verificationAuthRevision != current
+	}, context.Canceled)
+}
+
+// rejectPendingEntries claims and fails every pending request matching the
+// predicate. The waiter learns about the rejection immediately instead of
+// hanging until its context deadline.
+func (b *ServerRequestBroker) rejectPendingEntries(matches func(*pendingServerRequest) bool, err error) int {
 	if b == nil {
 		return 0
 	}
-	connectionID = strings.TrimSpace(connectionID)
 	b.mu.Lock()
 	rejected := make([]*pendingServerRequest, 0, len(b.pending))
 	for id, entry := range b.pending {
 		if entry == nil {
 			continue
 		}
-		if entry.connectionID != connectionID && entry.connectionID != "" {
+		if matches != nil && !matches(entry) {
 			continue
 		}
 		if !entry.claim() {
@@ -380,7 +460,7 @@ func (b *ServerRequestBroker) ResolveFromConnection(connectionID string, respons
 		return false, nil
 	}
 	id := response.ID.String()
-	if !b.authorizeHumanApprovalResponse(id, connectionID) {
+	if !b.authorizeResponseConnection(id, connectionID) {
 		return false, nil
 	}
 	entry := b.claimPending(id)
@@ -406,6 +486,38 @@ func (b *ServerRequestBroker) ResolveFromConnection(connectionID string, respons
 	}
 	entry.ch <- &serverRequestResult{data: data}
 	return true, nil
+}
+
+// authorizeResponseConnection reports whether the responding connection may
+// resolve the pending request. A user-verification request is owned by the one
+// connection it was delivered to and by the credential revision that created
+// it (Rust #43715); a response after an authentication change is dropped with
+// the pending request canceled instead of resolving it.
+func (b *ServerRequestBroker) authorizeResponseConnection(id string, connectionID string) bool {
+	b.mu.Lock()
+	entry := b.pending[id]
+	if entry == nil {
+		b.mu.Unlock()
+		return false
+	}
+	if entry.verification && connectionID != "" {
+		if normalized := normalizeConnectionID(connectionID); normalized != entry.connectionID {
+			b.mu.Unlock()
+			return false
+		}
+	}
+	verification := entry.verification
+	revision := entry.verificationAuthRevision
+	b.mu.Unlock()
+	if verification {
+		if current, ok := b.verificationRevision(); ok && current != revision {
+			b.rejectPendingEntries(func(candidate *pendingServerRequest) bool {
+				return candidate == entry
+			}, context.Canceled)
+			return false
+		}
+	}
+	return b.authorizeHumanApprovalResponse(id, connectionID)
 }
 
 func serverRequestErrorDetail(method ServerRequestMethod, message string) string {
@@ -581,6 +693,12 @@ func (b *ServerRequestBroker) pendingRequestsForThread(threadID string) ([]*Serv
 	ids := make([]string, 0, len(b.pending))
 	for id, entry := range b.pending {
 		if entry == nil || entry.request == nil {
+			continue
+		}
+		if entry.verification {
+			// A native verification ceremony stays with its owner connection;
+			// replaying it to another subscriber would hand over the proof
+			// (Rust #43715).
 			continue
 		}
 		if serverRequestThreadID(entry.request) == threadID {

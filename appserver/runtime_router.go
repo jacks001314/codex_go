@@ -1019,6 +1019,7 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 	router.services.ServerRequests.SetRequestedCallback(router.noteServerRequestPending)
 	router.services.ServerRequests.SetResolvedCallback(router.notifyServerRequestResolved)
 	router.services.ServerRequests.SetResolvedResponseCallback(router.handleServerRequestResolvedResponse)
+	router.services.ServerRequests.SetVerificationAuth(router.verificationAuthRevisionSnapshot)
 	// Rust #51974 records the selected Windows sandbox backend at app-server
 	// startup so diagnostics can tell MXC/disabled/unelevated/elevated apart.
 	// Logging is Windows-only and best effort.
@@ -1194,6 +1195,13 @@ func (r *RuntimeRouter) authRevisionSnapshot(context.Context) (uint64, error) {
 	return r.authRevision, nil
 }
 
+// verificationAuthRevisionSnapshot exposes the credential revision to the
+// server-request broker, which pins a native verification request to it.
+func (r *RuntimeRouter) verificationAuthRevisionSnapshot() uint64 {
+	revision, _ := r.authRevisionSnapshot(context.Background())
+	return revision
+}
+
 func (r *RuntimeRouter) noteAuthChanged() {
 	if r == nil {
 		return
@@ -1290,6 +1298,11 @@ func (r *RuntimeRouter) afterAuthChanged(ownerChanged bool) {
 	}
 	if r.mcpRuntimes != nil {
 		r.mcpRuntimes.invalidateAll()
+	}
+	// Rust watch_user_verification_auth: a credential change cancels every
+	// pending device ceremony that began under the previous revision.
+	if r.services.ServerRequests != nil {
+		r.services.ServerRequests.CancelStaleVerificationPending()
 	}
 	r.prewarmLoadedMCPThreads()
 }
@@ -2680,14 +2693,13 @@ func (r *RuntimeRouter) ConnectionClosed(connectionID string) {
 	r.clearConnectionRequestAttestation(connectionID)
 	r.clearConnectionMCPOpenAIForm(connectionID)
 	r.clearConnectionMCPStandardFormInput(connectionID)
-	r.clearConnectionUserVerification(connectionID)
+	r.releaseUserVerificationConnection(connectionID)
 	r.cancelThreadSamplesForConnection(connectionID)
 	if r.mcpEventStreams != nil {
 		r.mcpEventStreams.stopConnection(connectionID)
 	}
 	r.syncMCPOpenAIFormElicitationCapability()
 	r.syncMCPStandardFormInputCapability()
-	r.syncMCPUserVerificationCapability()
 	if r.services.CommandExec != nil {
 		r.services.CommandExec.ConnectionClosed(connectionID)
 	}
@@ -3125,6 +3137,22 @@ func (r *RuntimeRouter) clearConnectionUserVerification(connectionID string) {
 	r.clientInfoMu.Lock()
 	defer r.clientInfoMu.Unlock()
 	delete(r.userVerification, connectionID)
+}
+
+// releaseUserVerificationConnection stops routing native verification to a
+// connection whose transport closed and cancels the ceremonies it owned.
+// Rust releases this ownership when the transport closes, before unrelated RPC
+// handlers finish draining, so a live host can own the next request (#43715).
+func (r *RuntimeRouter) releaseUserVerificationConnection(connectionID string) {
+	if r == nil {
+		return
+	}
+	connectionID = normalizeConnectionID(connectionID)
+	r.clearConnectionUserVerification(connectionID)
+	if r.services.ServerRequests != nil {
+		r.services.ServerRequests.CancelVerificationPending(connectionID, context.Canceled)
+	}
+	r.syncMCPUserVerificationCapability()
 }
 
 func (r *RuntimeRouter) clearConnectionRequestAttestation(connectionID string) {
@@ -20763,6 +20791,7 @@ func (r *RuntimeRouter) requireServerRequests() *ServerRequestBroker {
 		r.services.ServerRequests.SetSink(r.requests)
 		r.services.ServerRequests.SetResolvedCallback(r.notifyServerRequestResolved)
 		r.services.ServerRequests.SetResolvedResponseCallback(r.handleServerRequestResolvedResponse)
+		r.services.ServerRequests.SetVerificationAuth(r.verificationAuthRevisionSnapshot)
 	}
 	return r.services.ServerRequests
 }

@@ -327,6 +327,9 @@ func serveWebSocketConnectionWithCompression(
 			// closes before the handler waits for in-flight requests. Active
 			// turns stay owned by Router.Close.
 			router.BeginDraining()
+			// Verify ceremonies stop belonging to this peer as soon as its
+			// transport closes (Rust #43715).
+			router.releaseUserVerificationConnection(connectionID)
 			router.ConnectionClosed(connectionID)
 		})
 	}
