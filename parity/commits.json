@@ -38450,9 +38450,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "Round 1259: partial — otelinit/otelinit.go builds a provider from options, but app/daemon_telemetry.go has no account-switch hook that rebuilds or re-activates the trace exporter after the signed-in account changes, so Rust #57657 has no Go counterpart yet. Residual: re-activate the exporter when the account/auth snapshot changes. Tests today: otelinit/otelinit_test.go (provider construction only)."
+    "appserver/runtime_router.go:2259 installs or clears the request tracer on every provider swap, including nil providers when tracing is disabled, and appserver/runtime_router.go:2309 keeps the auth-change reloader running from startup; appserver/runtime_router.go:2350 rebuilds and installs the provider after an account change.",
+    "appserver/otel_reloader_test.go:170 TestOtelProviderActivatesTraceExporterAfterAccountChangeLikeRust starts with metrics enabled and tracing disabled, switches the config to an OTLP trace exporter, wakes the reloader through noteAuthChanged, and verifies the post-switch request span is exported with the inbound parent trace ID.",
+    "appserver/otel_tracer_reload_like_rust_test.go:16 TestInstallOtelProviderClearsTracerWhenTracingDisabledLikeRust verifies that installing a nil provider removes the previous tracer, matching the no-op tracer requirement in Rust #57657."
    ]
   },
   {
