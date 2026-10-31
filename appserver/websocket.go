@@ -323,6 +323,10 @@ func serveWebSocketConnectionWithCompression(
 	var cleanupOnce sync.Once
 	cleanupConnection := func() {
 		cleanupOnce.Do(func() {
+			// Rust #43959: once the transport stops reading, turn admission
+			// closes before the handler waits for in-flight requests. Active
+			// turns stay owned by Router.Close.
+			router.BeginDraining()
 			router.ConnectionClosed(connectionID)
 		})
 	}

@@ -2689,6 +2689,16 @@ func (r *RuntimeRouter) Close() error {
 	return r.closeErr
 }
 
+// BeginDraining closes turn admission while leaving active turns running, so a
+// transport can stop accepting new work before waiting for its in-flight
+// requests and only then tear the turns down (Rust #43959).
+func (r *RuntimeRouter) BeginDraining() {
+	if r == nil || r.threads == nil {
+		return
+	}
+	r.threads.BeginDraining()
+}
+
 func (r *RuntimeRouter) close() error {
 	r.stopThreadIdleLifecycle()
 	r.modelsRefreshWorker.shutdown()

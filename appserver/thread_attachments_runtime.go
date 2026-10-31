@@ -71,6 +71,11 @@ func (r *Router) addThreadAttachment(params *ThreadAttachmentAddParams) (*Thread
 	if err != nil {
 		return nil, err
 	}
+	lifecycleLocks, err := r.reserveThreadAttachmentLifecycle(params.ThreadID)
+	if err != nil {
+		return nil, err
+	}
+	defer closeTemporaryWriters(lifecycleLocks)
 	record, err := r.threadAttachmentRecord(params.ThreadID)
 	if err != nil {
 		return nil, err
@@ -272,6 +277,11 @@ func (r *Router) removeThreadAttachment(params *ThreadAttachmentRemoveParams) (*
 	if err := params.Validate(); err != nil {
 		return nil, nil, err
 	}
+	lifecycleLocks, err := r.reserveThreadAttachmentLifecycle(params.ThreadID)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer closeTemporaryWriters(lifecycleLocks)
 	record, err := r.threadAttachmentRecord(params.ThreadID)
 	if err != nil {
 		return nil, nil, err
@@ -294,6 +304,22 @@ func (r *Router) removeThreadAttachment(params *ThreadAttachmentRemoveParams) (*
 		return nil, nil, err
 	}
 	return &ThreadAttachmentRemoveResponse{}, removed, nil
+}
+
+// reserveThreadAttachmentLifecycle mirrors Rust #44350: attachment mutations
+// reserve the same per-thread lifecycle writer as archive, delete and fork so a
+// queued request cannot update metadata of a thread that is being removed.
+// Live threads already own that writer, so the reservation is a no-op for them.
+func (r *Router) reserveThreadAttachmentLifecycle(threadID string) ([]*session.WriterLock, error) {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return nil, invalidParams("thread id is required")
+	}
+	locks, err := r.acquireLifecycleWriters([]session.ThreadID{session.ThreadID(threadID)})
+	if err != nil {
+		return nil, writerOwnershipError(err)
+	}
+	return locks, nil
 }
 
 func (r *Router) threadAttachmentRecord(threadID string) (*session.Record, error) {

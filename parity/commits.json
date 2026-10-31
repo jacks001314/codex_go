@@ -10125,7 +10125,7 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
     "Partial symbol coverage 2/5; needs review: TurnPermit, begin_drain, subscribe_active"
    ]
@@ -10761,9 +10761,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "partial",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1121: the remote_compaction_v2 toggle is already retired from the feature registry while the model-client beta header still advertises it, and compaction uses the streamed Responses v2 path. The upstream tool_search_output trimming and base-instruction token estimate at the streamed compaction boundary are not implemented in the Go compact request builder."
    ]
   },
   {
@@ -11170,7 +11170,7 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
     "Partial symbol coverage 3/7; needs review: AddThreadAttachmentParams, ListThreadAttachmentsParams, RemoveThreadAttachmentParams, with_state_db"
    ]
@@ -17951,7 +17951,7 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
     "Partial symbol coverage 13/17; needs review: MAX_MCP_ATTRIBUTION_BYTES, MCP_ATTRIBUTION_CLIENT_METADATA_KEY, persist_rollout_items, to_json_string_bounded"
    ]
@@ -18503,7 +18503,7 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
     "Partial symbol coverage 1/2; needs review: pin_v2_residency"
    ]

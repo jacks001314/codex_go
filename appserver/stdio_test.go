@@ -139,6 +139,9 @@ func TestServeJSONLineConnectionArmsShutdownOnEOF(t *testing.T) {
 	default:
 		t.Fatal("shutdown watchdog was not armed on EOF")
 	}
+	if !router.threads.IsClosing() {
+		t.Fatal("turn admission stayed open after EOF")
+	}
 }
 
 // TestServeJSONLineConnectionStopsOnContextCancel covers the SIGTERM path: a
@@ -172,6 +175,9 @@ func TestServeJSONLineConnectionStopsOnContextCancel(t *testing.T) {
 	case <-armed:
 	default:
 		t.Fatal("shutdown watchdog was not armed on cancellation")
+	}
+	if !router.threads.IsClosing() {
+		t.Fatal("turn admission stayed open after cancellation")
 	}
 }
 

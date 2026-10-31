@@ -642,6 +642,19 @@ func (m *ThreadManager) IsClosing() bool {
 	return m.closing
 }
 
+// BeginDraining closes turn admission without taking or cancelling active
+// turns. Shutdown uses it before waiting for in-flight requests so automatic
+// continuations cannot start new work while the connection drains; a later
+// BeginShutdown still owns and interrupts the remaining turns (Rust #43959).
+func (m *ThreadManager) BeginDraining() {
+	if m == nil {
+		return
+	}
+	m.turnsMu.Lock()
+	m.closing = true
+	m.turnsMu.Unlock()
+}
+
 // TurnAdmissionPause keeps turn admission closed until Release is called. A
 // dropped pause (released exactly once) restores the previous state.
 type TurnAdmissionPause struct {

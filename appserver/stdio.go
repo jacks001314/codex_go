@@ -255,6 +255,10 @@ readLoop:
 	if onShutdown != nil {
 		onShutdown()
 	}
+	// Close turn admission before waiting for in-flight requests so automatic
+	// continuations cannot start new work while the connection drains
+	// (Rust #43959). Active turns keep running until Router.Close.
+	router.BeginDraining()
 	// A pending remote-control enrollment must stop before RPC drain, otherwise
 	// it keeps the process and its thread writers alive after stdio EOF
 	// (Rust #42668).
