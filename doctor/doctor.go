@@ -158,10 +158,15 @@ type Options struct {
 	// NetworkOnly limits the report to effective configuration, network
 	// environment, provider HTTP reachability and Responses WebSocket checks
 	// (Rust #57606 `codex doctor --network-only`).
-	NetworkOnly   bool
-	CodexHome     string
-	Root          cli.RootOptions
-	DispatchPaths *cli.DispatchPaths
+	NetworkOnly bool
+	// ManagedConfigLoader, when set, applies the managed bundle of a locally
+	// required configuration server before doctor reports effective settings,
+	// and rejects a run whose applied server does not match the requirement
+	// (Rust #57175).
+	ManagedConfigLoader func(ctx context.Context, codexHome string, bootstrap *config.Config) (*config.CloudConfigLoader, error)
+	CodexHome           string
+	Root                cli.RootOptions
+	DispatchPaths       *cli.DispatchPaths
 }
 
 type Builder struct {
@@ -1032,13 +1037,7 @@ func configCheck(codexHome string, opts *Options) *DoctorCheck {
 		opts = &Options{}
 	}
 	loadStarted := time.Now()
-	cfg, err := config.LoadEffectiveWithOptions(codexHome, &config.EffectiveOptions{
-		Profile:         opts.Root.Shared.Profile,
-		CWD:             opts.Root.Shared.CWD,
-		RawOverrides:    append([]string(nil), opts.Root.ConfigOverrides...),
-		EnableFeatures:  append([]string(nil), opts.Root.EnableFeatures...),
-		DisableFeatures: append([]string(nil), opts.Root.DisableFeatures...),
-	})
+	cfg, err := loadEffectiveConfigForDoctor(codexHome, opts)
 	loadDuration := time.Since(loadStarted)
 	details := []string{"config.toml: " + config.ConfigPath(codexHome)}
 	if err != nil {
@@ -1984,6 +1983,7 @@ func authStoreOptionsForDoctor(codexHome string, opts *Options) (*auth.StoreOpti
 }
 
 func loadEffectiveConfigForDoctor(codexHome string, opts *Options) (*config.Config, error) {
+	ctx := context.Background()
 	effective := &config.EffectiveOptions{}
 	if opts != nil {
 		effective.Profile = opts.Root.Shared.Profile
@@ -1992,7 +1992,39 @@ func loadEffectiveConfigForDoctor(codexHome string, opts *Options) (*config.Conf
 		effective.EnableFeatures = append([]string(nil), opts.Root.EnableFeatures...)
 		effective.DisableFeatures = append([]string(nil), opts.Root.DisableFeatures...)
 	}
-	return config.LoadEffectiveWithOptions(codexHome, effective)
+	bootstrap, err := config.LoadEffectiveWithOptions(codexHome, effective)
+	if err != nil || bootstrap == nil || !bootstrap.RequiresRemoteConfig() {
+		return bootstrap, err
+	}
+	// Rust #57175: a configuration that requires a customer-hosted server is
+	// reported with that server's managed bundle applied, and a run whose
+	// applied server differs from the requirement is a load failure.
+	if opts == nil || opts.ManagedConfigLoader == nil {
+		return nil, fmt.Errorf("%w: the required configuration server bundle was not applied", config.ErrConfigServerMismatch)
+	}
+	loader, err := opts.ManagedConfigLoader(ctx, codexHome, bootstrap)
+	if err != nil {
+		return nil, err
+	}
+	effective.IncludeManagedConfig = true
+	effective.ManagedConfigPath = filepath.Join(codexHome, "managed_config.toml")
+	effective.CloudConfigBundle = loader
+	loaded, err := config.LoadEffectiveWithOptions(codexHome, effective)
+	if err != nil {
+		return nil, err
+	}
+	var applied *config.ConfigServer
+	var required *config.ConfigServer
+	if loader != nil {
+		applied = loader.ConfigServer()
+	}
+	if loaded.Requirements != nil {
+		required = loaded.Requirements.ConfigServer
+	}
+	if err := config.ValidateAppliedConfigServer(applied, required); err != nil {
+		return nil, err
+	}
+	return loaded, nil
 }
 
 func effectiveProviderIDForDoctor(opts *Options, cfg *config.Config) string {

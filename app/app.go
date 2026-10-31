@@ -149,7 +149,10 @@ func RunWithOptions(ctx context.Context, args []string, stdin io.Reader, stdout,
 			ASCII:       parsed.Doctor.ASCII,
 			Feedback:    parsed.Doctor.Feedback,
 			NetworkOnly: parsed.Doctor.NetworkOnly,
-			Root:        parsed.Root,
+			ManagedConfigLoader: func(ctx context.Context, codexHome string, bootstrap *config.Config) (*config.CloudConfigLoader, error) {
+				return configServerCloudConfigBundleLoaderForRun(ctx, codexHome, bootstrap, bootstrap.Requirements.ConfigServer)
+			},
+			Root: parsed.Root,
 			DispatchPaths: func() *cli.DispatchPaths {
 				if runOpts == nil || runOpts.DispatchPaths == nil {
 					return nil
@@ -2351,6 +2354,28 @@ func runLogin(ctx context.Context, opts cli.LoginOptions, stdin io.Reader, stdou
 	if opts.WithAPIKey && opts.WithAccessToken {
 		return exitMessagef(loginCredentialSourceConflict)
 	}
+	// Rust #57175: when local administration requires a customer-hosted
+	// configuration server, login signs in there instead of ChatGPT (browser and
+	// device-code flows) or signs in first and then stores the API key or access
+	// token. `login status` never signs in.
+	if opts.Action != "status" && loadedConfig.RequiresRemoteConfig() {
+		if err := ensureConfigServerLogin(ctx, codexHome, loadedConfig.Requirements, func(url string) {
+			fmt.Fprintf(stderr, "Sign in to the configuration server. If your browser did not open, navigate to this URL:\n\n%s\n\n", url)
+		}); err != nil {
+			return exitMessagef("Error logging in: %v", err)
+		}
+		reloaded, err := loadManagedLoginConfig(ctx, codexHome, opts.ConfigOverrides)
+		if err != nil {
+			return exitMessagef("Error loading configuration: %v", err)
+		}
+		loadedConfig = reloaded
+		authStoreOptions = authStoreOptionsFromLoadedConfig(loadedConfig)
+		if opts.DeviceAuth || (!opts.WithAPIKey && !opts.WithAccessToken) {
+			fmt.Fprintln(stderr, auth.LoginFlowSuccessMessage)
+			return nil
+		}
+	}
+
 	switch {
 	case opts.Action == "status":
 		current, err := store.Resolve()
@@ -2512,15 +2537,24 @@ func authStoreOptionsFromConfig(codexHome string, overrides []string) (*auth.Sto
 
 func runLogout(ctx context.Context, opts cli.LoginOptions, stderr io.Writer) error {
 	codexHome := auth.DefaultCodexHome()
-	authStoreOptions, err := authStoreOptionsFromConfig(codexHome, opts.ConfigOverrides)
+	loadedConfig, err := config.LoadEffective(codexHome, opts.ConfigOverrides, nil, nil)
 	if err != nil {
-		return err
+		return exitMessagef("Error loading configuration: %v", err)
 	}
-	removed, err := auth.LogoutWithRevoke(ctx, codexHome, authStoreOptions)
+	removed, err := auth.LogoutWithRevoke(ctx, codexHome, authStoreOptionsFromLoadedConfig(loadedConfig))
 	if err != nil {
 		return exitMessagef("Error logging out: %v", err)
 	}
-	if removed {
+	// Rust #57175: a config-server grant belongs to this machine, so logout
+	// clears it alongside the OpenAI credentials.
+	configServerRemoved := false
+	if loadedConfig.RequiresRemoteConfig() {
+		configServerRemoved, err = logoutConfigServer(ctx, codexHome, loadedConfig.Requirements)
+		if err != nil {
+			return exitMessagef("Error logging out: %v", err)
+		}
+	}
+	if removed || configServerRemoved {
 		fmt.Fprintln(stderr, "Successfully logged out")
 	} else {
 		fmt.Fprintln(stderr, "Not logged in")
