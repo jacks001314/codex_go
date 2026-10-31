@@ -666,9 +666,355 @@ func (w *canonicalReplayWriter) replay(entry canonicalReplayLine) error {
 		return w.writeRecordWithMetadata(entry.timestamp, entry.lineType, entry.payload, entry.metadata)
 	}
 	if entry.lineType != "event_msg" {
-		return w.writeRecordWithMetadata(entry.timestamp, entry.lineType, entry.payload, entry.metadata)
+		payload := entry.payload
+		if entry.lineType == "turn_context" {
+			normalized, ok, err := canonicalTurnContextPayload(entry.payload)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				// Rust decodes the record into TurnContextItem first and drops
+				// the whole line when that fails.
+				return nil
+			}
+			payload = normalized
+		}
+		if entry.lineType == "compacted" {
+			normalized, ok, err := canonicalCompactedPayload(entry.payload)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return nil
+			}
+			payload = normalized
+		}
+		return w.writeRecordWithMetadata(entry.timestamp, entry.lineType, payload, entry.metadata)
 	}
 	return w.replayEvent(entry)
+}
+
+// canonicalTurnContextPayload re-serializes a legacy turn_context record the way
+// 0.166's TurnContextItem does: the struct's own field order, optional fields
+// dropped when unset, and legacy sandbox/approval spellings normalized. A record
+// the modern type cannot decode is dropped like Rust's failed parse.
+func canonicalTurnContextPayload(source json.RawMessage) ([]byte, bool, error) {
+	fields, err := canonicalRawFields(source)
+	if err != nil {
+		return nil, false, err
+	}
+	cwd, ok := canonicalRawJSONString(fields["cwd"])
+	if !ok {
+		return nil, false, nil
+	}
+	model, ok := canonicalRawJSONString(fields["model"])
+	if !ok {
+		return nil, false, nil
+	}
+	approval, ok, err := canonicalApprovalPolicy(fields["approval_policy"])
+	if err != nil || !ok {
+		return nil, false, err
+	}
+	sandbox, ok, err := canonicalSandboxPolicy(fields["sandbox_policy"])
+	if err != nil || !ok {
+		return nil, false, err
+	}
+	computed := map[string][]byte{
+		"cwd":             cwd,
+		"approval_policy": approval,
+		"sandbox_policy":  sandbox,
+		"model":           model,
+	}
+	out := newCanonicalJSONObject()
+	for _, key := range []string{
+		"turn_id",
+		"root_turn_id",
+		"disabled_plugin_ids",
+		"cwd",
+		"approval_policy",
+		"approvals_reviewer",
+		"sandbox_policy",
+		"permission_profile",
+		"active_permission_profile",
+		"file_system_sandbox_policy",
+		"model",
+		"comp_hash",
+		"collaboration_mode",
+		"multi_agent_version",
+		"realtime_active",
+		"cyber_access_program",
+		"effort",
+		"summary",
+	} {
+		if value, ok := computed[key]; ok {
+			if err := out.rawField(key, value); err != nil {
+				return nil, false, err
+			}
+			continue
+		}
+		value, present := fields[key]
+		if !present || canonicalRawIsNull(value) {
+			continue
+		}
+		if key == "collaboration_mode" {
+			normalized, ok, err := canonicalCollaborationMode(value)
+			if err != nil || !ok {
+				return nil, false, err
+			}
+			value = normalized
+		}
+		if err := out.rawField(key, value); err != nil {
+			return nil, false, err
+		}
+	}
+	return out.finish(), true, nil
+}
+
+// canonicalRawJSONString returns the raw JSON for a string field.
+func canonicalRawJSONString(value json.RawMessage) ([]byte, bool) {
+	text, ok := canonicalRawJSONStringValue(value)
+	if !ok {
+		return nil, false
+	}
+	return []byte(marshalCanonicalString(text)), true
+}
+
+// marshalCanonicalString encodes a string the way serde_json does.
+func marshalCanonicalString(text string) string {
+	encoded, err := json.Marshal(text)
+	if err != nil {
+		return `""`
+	}
+	return string(encoded)
+}
+
+// canonicalApprovalPolicy mirrors AskForApproval's decoding: "on-failure" is an
+// alias of "on-request", granular approvals keep their tagged object, and any
+// other spelling fails the parse.
+func canonicalApprovalPolicy(value json.RawMessage) ([]byte, bool, error) {
+	if len(value) == 0 || canonicalRawIsNull(value) {
+		return nil, false, nil
+	}
+	var text string
+	if err := json.Unmarshal(value, &text); err == nil {
+		switch text {
+		case "untrusted", "on-request", "never":
+			return []byte(marshalCanonicalString(text)), true, nil
+		case "on-failure":
+			return []byte(`"on-request"`), true, nil
+		default:
+			return nil, false, nil
+		}
+	}
+	var tagged map[string]json.RawMessage
+	if err := json.Unmarshal(value, &tagged); err != nil {
+		return nil, false, nil
+	}
+	if _, ok := tagged["granular"]; !ok {
+		return nil, false, nil
+	}
+	return value, true, nil
+}
+
+// canonicalSandboxPolicy mirrors SandboxPolicy's decoding and serialization:
+// the legacy "mode" key becomes "type", unknown fields disappear, and each
+// variant emits exactly the fields the modern type always writes.
+func canonicalSandboxPolicy(value json.RawMessage) ([]byte, bool, error) {
+	if len(value) == 0 || canonicalRawIsNull(value) {
+		return nil, false, nil
+	}
+	fields, err := canonicalRawFields(value)
+	if err != nil {
+		return nil, false, err
+	}
+	policyType := ""
+	if raw, ok := fields["type"]; ok {
+		if policyType, ok = canonicalRawJSONStringValue(raw); !ok {
+			return nil, false, nil
+		}
+	} else if raw, ok := fields["mode"]; ok {
+		if policyType, ok = canonicalRawJSONStringValue(raw); !ok {
+			return nil, false, nil
+		}
+	}
+	out := newCanonicalJSONObject()
+	switch policyType {
+	case "danger-full-access":
+		_ = out.field("type", policyType)
+	case "read-only":
+		_ = out.field("type", policyType)
+		if raw, ok := fields["network_access"]; ok {
+			enabled, ok := canonicalRawJSONBool(raw)
+			if !ok {
+				return nil, false, nil
+			}
+			if enabled {
+				_ = out.rawField("network_access", []byte("true"))
+			}
+		}
+	case "external-sandbox":
+		_ = out.field("type", policyType)
+		access := "restricted"
+		if raw, ok := fields["network_access"]; ok {
+			name, ok := canonicalRawJSONStringValue(raw)
+			if !ok || (name != "restricted" && name != "enabled") {
+				return nil, false, nil
+			}
+			access = name
+		}
+		_ = out.field("network_access", access)
+	case "workspace-write":
+		_ = out.field("type", policyType)
+		if raw, ok := fields["writable_roots"]; ok && !canonicalRawIsNull(raw) {
+			var roots []string
+			if err := json.Unmarshal(raw, &roots); err != nil {
+				return nil, false, nil
+			}
+			if len(roots) > 0 {
+				_ = out.rawField("writable_roots", raw)
+			}
+		}
+		for _, key := range []string{"network_access", "exclude_tmpdir_env_var", "exclude_slash_tmp"} {
+			enabled := false
+			if raw, ok := fields[key]; ok {
+				var okBool bool
+				if enabled, okBool = canonicalRawJSONBool(raw); !okBool {
+					return nil, false, nil
+				}
+			}
+			_ = out.field(key, enabled)
+		}
+	default:
+		return nil, false, nil
+	}
+	return out.finish(), true, nil
+}
+
+func canonicalRawJSONStringValue(value json.RawMessage) (string, bool) {
+	var text string
+	if err := json.Unmarshal(value, &text); err != nil {
+		return "", false
+	}
+	return text, true
+}
+
+func canonicalRawJSONBool(value json.RawMessage) (bool, bool) {
+	var flag bool
+	if err := json.Unmarshal(value, &flag); err != nil {
+		return false, false
+	}
+	return flag, true
+}
+
+// canonicalCollaborationMode mirrors CollaborationMode's field order and the
+// legacy settings migration line_parser performs before decoding.
+func canonicalCollaborationMode(value json.RawMessage) ([]byte, bool, error) {
+	fields, err := canonicalRawFields(value)
+	if err != nil {
+		return nil, false, err
+	}
+	mode, ok := canonicalRawJSONStringValue(fields["mode"])
+	if !ok || (mode != "default" && mode != "plan") {
+		return nil, false, nil
+	}
+	settingsRaw, ok := fields["settings"]
+	if !ok {
+		legacy := map[string]json.RawMessage{}
+		for _, key := range []string{"model", "reasoning_effort", "developer_instructions"} {
+			if raw, present := fields[key]; present {
+				legacy[key] = raw
+			}
+		}
+		if len(legacy) == 0 {
+			return nil, false, nil
+		}
+		combined, err := json.Marshal(legacy)
+		if err != nil {
+			return nil, false, err
+		}
+		settingsRaw = combined
+	}
+	settingsFields, err := canonicalRawFields(settingsRaw)
+	if err != nil {
+		return nil, false, err
+	}
+	if _, ok := canonicalRawJSONStringValue(settingsFields["model"]); !ok {
+		return nil, false, nil
+	}
+	// Settings keeps its optional fields in the output: 0.166 serializes both
+	// as null when unset.
+	outSettings := newCanonicalJSONObject()
+	model, _ := canonicalRawJSONStringValue(settingsFields["model"])
+	if err := outSettings.field("model", model); err != nil {
+		return nil, false, err
+	}
+	for _, key := range []string{"reasoning_effort", "developer_instructions"} {
+		raw, present := settingsFields[key]
+		if !present || canonicalRawIsNull(raw) {
+			raw = []byte("null")
+		}
+		if err := outSettings.rawField(key, raw); err != nil {
+			return nil, false, err
+		}
+	}
+	out := newCanonicalJSONObject()
+	if err := out.field("mode", mode); err != nil {
+		return nil, false, err
+	}
+	if err := out.rawField("settings", outSettings.finish()); err != nil {
+		return nil, false, err
+	}
+	return out.finish(), true, nil
+}
+
+// canonicalCompactedPayload re-serializes a compacted record with
+// CompactedItemWire's field order; the two trailing nullable fields always
+// serialize, which is what 0.166 writes.
+func canonicalCompactedPayload(source json.RawMessage) ([]byte, bool, error) {
+	fields, err := canonicalRawFields(source)
+	if err != nil {
+		return nil, false, err
+	}
+	message, ok := canonicalRawJSONStringValue(fields["message"])
+	if !ok {
+		return nil, false, nil
+	}
+	out := newCanonicalJSONObject()
+	if err := out.field("message", message); err != nil {
+		return nil, false, err
+	}
+	for _, key := range []string{
+		"replacement_history",
+		"replacement_history_metadata",
+		"guardian_history",
+		"retained_context",
+		"mcp_resource_origins",
+		"window_number",
+		"first_window_id",
+		"previous_window_id",
+		"window_id",
+	} {
+		if raw, present := fields[key]; present && !canonicalRawIsNull(raw) {
+			if err := out.rawField(key, raw); err != nil {
+				return nil, false, err
+			}
+		}
+	}
+	for _, key := range []string{"compaction_response_id", "latest_token_usage_record"} {
+		raw, present := fields[key]
+		if !present || canonicalRawIsNull(raw) {
+			raw = []byte("null")
+		}
+		if err := out.rawField(key, raw); err != nil {
+			return nil, false, err
+		}
+	}
+	if raw, present := fields["resume_metadata"]; present && !canonicalRawIsNull(raw) {
+		if err := out.rawField("resume_metadata", raw); err != nil {
+			return nil, false, err
+		}
+	}
+	return out.finish(), true, nil
 }
 
 // canonicalResponseItemTypes are the response-item payloads a legacy rollout

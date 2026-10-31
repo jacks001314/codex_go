@@ -2777,8 +2777,61 @@ small allow-list of events and drops everything transient.
   `TestRuntimeRouterConfigServiceKeepsManagedConfigFreshLikeRust` under the full
   parallel run, which passes when run alone).
 
+### 84. `migrate-rollouts` re-serializes `turn_context` and `compacted` like Rust
+
+0.166 does not carry those two record types through untouched: every legacy line
+is decoded into the modern `RolloutLine` and written back through
+`serde_json`, so `turn_context` loses whatever `TurnContextItem` does not model,
+`compacted` gains the two nullable trailer fields `CompactedItemWire` always
+serializes, and a record the modern types cannot decode drops out of the
+migrated file entirely (the parser is `unwrap_or(None)`).
+
+- **`turn_context`.** The payload is rebuilt in `TurnContextItem` field order
+  (`turn_id`, `root_turn_id`, `disabled_plugin_ids`, `cwd`, `approval_policy`,
+  `approvals_reviewer`, `sandbox_policy`, `permission_profile`,
+  `active_permission_profile`, `file_system_sandbox_policy`, `model`,
+  `comp_hash`, `collaboration_mode`, `multi_agent_version`, `realtime_active`,
+  `cyber_access_program`, `effort`, `summary`), unset optionals disappear and
+  unknown keys are dropped. `approval_policy` keeps `untrusted` / `on-request` /
+  `never`, rewrites the legacy alias `on-failure` to `on-request`, and keeps a
+  tagged granular object. `sandbox_policy` maps the legacy `mode` key onto
+  `type` and then re-serializes each variant exactly as `SandboxPolicy` does:
+  `read-only` emits `network_access` only when true, `external-sandbox` always
+  emits the `restricted`/`enabled` enum (a bare boolean fails the decode),
+  `workspace-write` always emits `network_access`, `exclude_tmpdir_env_var` and
+  `exclude_slash_tmp` and keeps `writable_roots` only when non-empty, and
+  `danger-full-access` is a bare tag. `collaboration_mode` follows the same
+  treatment, including `line_parser`'s legacy migration of `model` /
+  `reasoning_effort` / `developer_instructions` into `settings` (whose optional
+  fields always serialize, as `null` when unset).
+- **`compacted`.** The payload is rebuilt in `CompactedItemWire` order and
+  `compaction_response_id` plus `latest_token_usage_record` are always written
+  (`null` when the source omits them); the other wire fields only appear when
+  present.
+- **Dropped records.** A `turn_context` without `cwd` / `model` /
+  `approval_policy` / a decodable `sandbox_policy`, or with an unknown approval
+  or sandbox spelling, and a `compacted` without a string `message`, are dropped
+  like Rust's failed parse.
+- Evidence: `out/r77-turn-context-compacted.txt` compares 20 payloads
+  (`turn_context`: legacy `workspace-write`, `read-only` network flag,
+  `danger-full-access`, both `external-sandbox` spellings, writable roots plus a
+  junk key, the `on-failure` alias, optional fields, three undecodable records,
+  two collaboration modes; `compacted`: five shapes) against 0.166 at 20/20
+  byte-identical with identical `bytes_processed`; `out/r76-events.txt`,
+  `out/r76-migrate-compare.txt` and `out/r77-turn-context-rust*.txt` keep the
+  earlier probes green. `TestCanonicalizeRolloutReserializesTurnContextAndCompactedLikeRust`
+  (10 subtests) freezes the Rust bytes and counters in
+  `rollout/canonical_migration_turn_context_rust_shape_test.go`, and
+  `go test -count=1 ./rollout` passes.
+
 ## Verification
 
+- Round 71 re-serializes `migrate-rollouts` `turn_context` and `compacted`
+  records like 0.166 (entry 84): `out/r77-turn-context-compacted.txt` reports
+  20/20 payloads byte-identical with identical `bytes_processed`, the earlier
+  `out/r76-*` probes still match, and the new
+  `TestCanonicalizeRolloutReserializesTurnContextAndCompactedLikeRust` subtests
+  freeze them (`go test -count=1 ./rollout` passes).
 - Round 70 closes the `migrate-rollouts` record-shape and compressed-source
   gaps (entry 83): `out/r76-events.txt` reports 5/5 shapes byte-identical to
   0.166 with identical `bytes_processed`, `out/r76-compressed-cases.txt` 6/6
@@ -3408,18 +3461,19 @@ small allow-list of events and drops everything transient.
 - `migrate-rollouts --apply` now matches 0.166 for plain and `.jsonl.zst`
   sources, including the transient/retired records Rust drops and the
   `patch_apply_end` -> `FileChange` conversion (entries 82 and 83,
-  `out/r76-events.txt` 5/5, `out/r76-compressed-cases.txt` 6/6). What is left is
-  the other half of the paginated event policy: legacy `mcp_tool_call_end`,
-  `web_search_end`, `image_generation_end`, `context_compacted`,
-  `entered_review_mode`, `exited_review_mode`, `sub_agent_activity` and
-  `dynamic_tool_call_response` are still carried over verbatim, where Rust
-  converts each into a completed `TurnItem`. Go also re-serializes neither
-  `turn_context` (Rust fills the sandbox policy defaults and reorders the
-  fields) nor `compacted` (Rust appends null `compaction_response_id` /
-  `latest_token_usage_record`), and an `item_completed` whose item decodes but
-  whose nested values Rust rejects (for example an unknown `phase`) still
-  survives Go's shallower check. The `Disk used for thread storage` line follows
-  Rust's rule but not its numbers, because Rust leaves the thread-history WAL
+  `out/r76-events.txt` 5/5, `out/r76-compressed-cases.txt` 6/6) and
+  `turn_context` / `compacted` are re-serialized like 0.166 (entry 84,
+  `out/r77-turn-context-compacted.txt` 20/20). What is left is the other half of
+  the paginated event policy: legacy `mcp_tool_call_end`, `web_search_end`,
+  `image_generation_end`, `context_compacted`, `entered_review_mode`,
+  `exited_review_mode`, `sub_agent_activity` and `dynamic_tool_call_response`
+  are still carried over verbatim, where Rust converts each into a completed
+  `TurnItem`. An `item_completed` whose item decodes but whose nested values
+  Rust rejects (for example an unknown `phase`) still survives Go's shallower
+  check, and a `turn_context` carrying `permission_profile` /
+  `file_system_sandbox_policy` passes those nested payloads through instead of
+  re-serializing them. The `Disk used for thread storage` line follows Rust's
+  rule but not its numbers, because Rust leaves the thread-history WAL
   uncheckpointed while Go checkpoints it (290.2 KB vs 88.6 KB in the same
   probe).
 - `exec-server forward` still rejects `--remote` outright (pinned by
