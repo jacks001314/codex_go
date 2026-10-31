@@ -484,39 +484,69 @@ func TestBaseInstructionsUpdateLikeRust(t *testing.T) {
 // instruction content are tracked independently, and a changed window appends
 // one replacement/removal notice without rewriting the existing prefix.
 func TestModelInstructionsUpdateLikeRust(t *testing.T) {
-	hash, updates := ModelInstructionsUpdate("gpt-test", "Base instructions.", "", "", false)
+	hash, updates, _ := ModelInstructionsUpdate("gpt-test", "Base instructions.", "", "", false, false)
 	if len(updates) != 1 || updates[0].Placement != WorldStatePrefix ||
 		!sameWorldStateJSON(t, []any{liteDeveloperMessage("Base instructions.", BaseInstructionsContentKind)}, MergeWorldStateUpdates(updates)) {
 		t.Fatalf("new window update = %#v", updates)
 	}
 	if updates := func() []WorldStateUpdate {
-		_, out := ModelInstructionsUpdate("gpt-test", "Base instructions.", "gpt-test", hash, true)
+		_, out, _ := ModelInstructionsUpdate("gpt-test", "Base instructions.", "gpt-test", hash, true, false)
 		return out
 	}(); len(updates) != 0 {
 		t.Fatalf("unchanged update = %#v", updates)
 	}
-	if _, updates := ModelInstructionsUpdate("gpt-test", "Instructions.", "gpt-test", hash, true); len(updates) != 1 {
+	if _, updates, _ := ModelInstructionsUpdate("gpt-test", "Instructions.", "gpt-test", hash, true, false); len(updates) != 1 {
 		t.Fatalf("replacement update = %#v", updates)
 	} else if !strings.Contains(updates[0].Text, "The following instructions replace the previous base instructions:") ||
 		!strings.Contains(updates[0].Text, "Instructions.") {
 		t.Fatalf("replacement item = %#v", updates[0])
 	}
-	removedHash, removed := ModelInstructionsUpdate("gpt-test", "", "gpt-test", hash, true)
+	removedHash, removed, _ := ModelInstructionsUpdate("gpt-test", "", "gpt-test", hash, true, false)
 	if removedHash == "" || len(removed) != 1 {
 		t.Fatalf("removal update = %#v", removed)
 	}
 	if !strings.Contains(removed[0].Text, "The previous base instructions no longer apply. No replacement base instructions are active.") {
 		t.Fatalf("removal item = %#v", removed[0])
 	}
-	_, modelOnly := ModelInstructionsUpdate("gpt-next", "Instructions.", "gpt-test", BaseInstructionsHash("Instructions."), true)
+	_, modelOnly, _ := ModelInstructionsUpdate("gpt-next", "Instructions.", "gpt-test", BaseInstructionsHash("Instructions."), true, false)
 	if len(modelOnly) != 1 || !strings.Contains(modelOnly[0].Text, "The current model is gpt-next.") ||
 		strings.Contains(modelOnly[0].Text, "replace the previous") {
 		t.Fatalf("model-only item = %#v", modelOnly)
 	}
 	// A legacy hash-only snapshot tracks the new model silently with its
 	// unchanged instructions, avoiding an upgrade-time false model change.
-	if _, legacy := ModelInstructionsUpdate("gpt-test", "Base instructions.", "", hash, true); len(legacy) != 0 {
+	if _, legacy, _ := ModelInstructionsUpdate("gpt-test", "Base instructions.", "", hash, true, false); len(legacy) != 0 {
 		t.Fatalf("legacy snapshot update = %#v", legacy)
+	}
+}
+
+// Rust #58405: with suppress_model_change_announcements a model switch omits the
+// model ID, still sends changed instructions, and advances the recorded hash so
+// repeated turns of the same window stay quiet.
+func TestModelInstructionsUpdateSuppressesModelChangeAnnouncementsLikeRust(t *testing.T) {
+	hash := BaseInstructionsHash("instructions")
+	switched, updates, advance := ModelInstructionsUpdate("gpt-next", "instructions", "gpt-old", hash, true, true)
+	if switched != hash {
+		t.Fatalf("suppressed model switch hash = %q, want %q", switched, hash)
+	}
+	if len(updates) != 0 {
+		t.Fatalf("suppressed model switch updates = %#v, want none", updates)
+	}
+	if !advance {
+		t.Fatal("suppressed model switch must advance the recorded model snapshot")
+	}
+	if _, repeated, repeatedAdvance := ModelInstructionsUpdate("gpt-next", "instructions", "gpt-next", switched, true, true); len(repeated) != 0 || repeatedAdvance {
+		t.Fatalf("repeated suppressed turn updates = %#v, want none", repeated)
+	}
+	_, changed, _ := ModelInstructionsUpdate("gpt-next", "new instructions", "gpt-old", hash, true, true)
+	if len(changed) != 1 {
+		t.Fatalf("suppressed model switch with new instructions updates = %#v, want one", changed)
+	}
+	if strings.Contains(changed[0].Text, "The current model is gpt-next.") {
+		t.Fatalf("suppressed update announced the model: %#v", changed[0])
+	}
+	if !strings.Contains(changed[0].Text, "new instructions") {
+		t.Fatalf("suppressed update lost the instructions: %#v", changed[0])
 	}
 }
 

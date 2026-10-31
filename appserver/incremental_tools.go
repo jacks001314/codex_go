@@ -60,6 +60,17 @@ func incrementalToolsEnabledForTurn(cfg *config.Config, info *model.ModelInfo) b
 	return features.Enabled(cfg.FeatureSettings(), "incremental_tools")
 }
 
+// suppressModelChangeAnnouncements reports the default-off feature that omits
+// the model ID announcement from incremental context after a model switch while
+// still sending changed base instructions and tool definitions (Rust #58405).
+func (r *RuntimeRouter) suppressModelChangeAnnouncements() bool {
+	cfg := r.effectiveConfigForSessionTelemetry()
+	if cfg == nil {
+		return false
+	}
+	return features.Enabled(cfg.FeatureSettings(), "suppress_model_change_announcements")
+}
+
 func incrementalToolMessageOverrides(messages *model.ModelMessages) *session.IncrementalToolMessageOverrides {
 	if messages == nil || messages.Tools == nil || messages.Tools.IncrementalTools == nil {
 		return nil
@@ -159,7 +170,7 @@ func (r *RuntimeRouter) incrementalToolCatalogForTurnWithModelMessages(threadID 
 		// so this is its single call site.
 		session.RecordChangedToolMetrics(definitions, previousHashes, previousKnown, hashes)
 	}
-	baseHash, baseUpdates := session.ModelInstructionsUpdate(modelID, instructions, previousModel, previousBaseHash, baseKnown)
+	baseHash, baseUpdates, advanceModelSnapshot := session.ModelInstructionsUpdate(modelID, instructions, previousModel, previousBaseHash, baseKnown, r.suppressModelChangeAnnouncements())
 	items := session.MergeWorldStateUpdates(append(toolUpdates, baseUpdates...))
 	for i := range items {
 		if identified, ok := incrementalToolCatalogRequestItem(items[i], threadID); ok {
@@ -183,7 +194,7 @@ func (r *RuntimeRouter) incrementalToolCatalogForTurnWithModelMessages(threadID 
 		state.TopLevelTools = snapshot
 		updated = true
 	}
-	if changed || !baseKnown || baseHash != previousBaseHash {
+	if changed || advanceModelSnapshot {
 		snapshot, encodeErr := session.EncodeModelInstructionsSnapshot(windowNumber, modelID, baseHash)
 		if encodeErr != nil {
 			return incrementalToolCatalogResult{}, encodeErr

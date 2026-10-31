@@ -198,10 +198,17 @@ var Registry = []Spec{
 	{Key: "apps_mcp_path_override", Stage: StageRemoved},
 	{Key: "tool_search", Stage: StageRemoved},
 	{Key: "tool_search_always_defer_mcp_tools", Stage: StageRemoved, DefaultEnabled: true},
-	{Key: "deferred_tool_world_state", Stage: StageUnderDevelopment},
+	// Rust (codex-rs/features/src/lib.rs #58410): deferred tools keep their
+	// world-state entries by default; promoted to stable and enabled by
+	// default.
+	{Key: "deferred_tool_world_state", Stage: StageStable, DefaultEnabled: true},
 	// Rust (codex-rs/features/src/lib.rs #50464): track top-level tool
 	// definitions in world state and emit incremental context updates.
 	{Key: "incremental_tools", Stage: StageStable, DefaultEnabled: true},
+	// Rust (codex-rs/features/src/lib.rs #58405): omit the model ID
+	// announcement from incremental context after a model switch while still
+	// sending changed base instructions and tool definitions.
+	{Key: "suppress_model_change_announcements", Stage: StageStable, DefaultEnabled: false},
 	// Rust (codex-rs/features/src/lib.rs #58122): diff CodeModeOnly exec
 	// definitions within the incremental tool catalog.
 	{Key: "incremental_exec_tools", Stage: StageUnderDevelopment, DefaultEnabled: false},

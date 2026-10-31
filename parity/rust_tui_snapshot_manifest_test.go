@@ -48,8 +48,8 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	// snapshot landed in this window (1437 -> 1452). Round 1017 re-anchored to
 	// upstream b0f977c3a9: the onboarding, app, and bottom-pane suites gained
 	// goldens in the intervening windows (1452 -> 1466).
-	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1466 {
-		t.Fatalf("Rust TUI snapshot total drift: got %d want 1466", got)
+	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1468 {
+		t.Fatalf("Rust TUI snapshot total drift: got %d want 1468", got)
 	}
 
 	gotDirs := rustTUISnapshotDirs(t, root)
@@ -215,7 +215,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// #46680-#46710 added the shared picker presentation and filled-tab
 			// snapshots; #46734/#46749/#46751 added the clipped mention popup,
 			// the customized shortcut overlays and the narrow warnings view.
-			Files:    259,
+			Files:    260,
 			Owner:    "tui/bottom_pane",
 			Focus:    "composer, footer, slash popup, approval overlays, MCP elicitation, queued input, and bottom pane layout",
 			Priority: []string{"composer", "approval", "status", "mcp", "slash"},
@@ -482,7 +482,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// guard.
 			// #48562 removed the clear-UI fast-status and thread-read-model
 			// header snapshots with the boxed card.
-			Files:    200,
+			Files:    201,
 			Owner:    "tui, tui/markdown, tui/app",
 			Focus:    "diff render, markdown render, keymap, resume picker, pager overlay, model migration, and status indicator snapshots",
 			Priority: []string{"diff", "markdown", "status", "session", "keymap"},

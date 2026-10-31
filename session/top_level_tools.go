@@ -530,31 +530,34 @@ func BaseInstructionsUpdate(text string, previousKnown bool) (string, []WorldSta
 // independently tracked model identity and base instructions (#53872). A new
 // window records the base instructions as a prefix; an existing window appends
 // a model-instructions notice only when the model or instruction hash changed.
-func ModelInstructionsUpdate(modelID string, text string, previousModel string, previousHash string, previousKnown bool) (string, []WorldStateUpdate) {
+// suppressModelChangeAnnouncements omits the model ID while still sending
+// changed instructions (Rust #58405). advance reports that the caller must
+// persist the returned hash/model snapshot even when no update was emitted, so
+// a suppressed model switch is still recognized on later turns.
+func ModelInstructionsUpdate(modelID string, text string, previousModel string, previousHash string, previousKnown bool, suppressModelChangeAnnouncements bool) (string, []WorldStateUpdate, bool) {
 	hash := BaseInstructionsHash(text)
 	if !previousKnown {
 		if strings.TrimSpace(text) == "" {
-			return hash, nil
+			return hash, nil, true
 		}
 		return hash, []WorldStateUpdate{{
 			Placement: WorldStatePrefix,
 			Role:      "developer",
 			Text:      text,
 			Kind:      BaseInstructionsContentKind,
-		}}
+		}}, true
 	}
 	modelID = strings.TrimSpace(modelID)
 	previousModel = strings.TrimSpace(previousModel)
 	modelChanged := previousModel != "" && modelID != "" && previousModel != modelID
 	instructionsChanged := hash != previousHash
-	if !modelChanged && !instructionsChanged {
-		return hash, nil
+	announceModel := modelChanged && !suppressModelChangeAnnouncements
+	if !announceModel && !instructionsChanged {
+		return hash, nil, modelChanged
 	}
-	fragment := contextfrag.ModelInstructionsFragment{Model: modelID}
-	if modelChanged {
+	fragment := contextfrag.ModelInstructionsFragment{}
+	if announceModel {
 		fragment.Model = modelID
-	} else {
-		fragment.Model = ""
 	}
 	if instructionsChanged {
 		instructions := text
@@ -562,14 +565,14 @@ func ModelInstructionsUpdate(modelID string, text string, previousModel string, 
 	}
 	rendered := contextfrag.Render(fragment)
 	if rendered == nil {
-		return hash, nil
+		return hash, nil, true
 	}
 	return hash, []WorldStateUpdate{{
 		Placement: WorldStateStandalone,
 		Role:      rendered.Role,
 		Text:      rendered.Content,
 		Kind:      rendered.ContentKind,
-	}}
+	}}, true
 }
 
 // BaseInstructionsHash hashes a base-instruction fragment the way Rust's

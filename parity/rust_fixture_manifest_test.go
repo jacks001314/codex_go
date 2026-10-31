@@ -161,7 +161,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// fixtures landed across the intervening sync windows.
 			// Re-anchored to upstream e8e6a922c0: `scenarios_reserved_spawn.rs`
 			// (#57586) plus the reserved-child fixtures landed in this window.
-			Files: 409,
+			Files: 410,
 			Owner: "turn, model, tool, session",
 			Focus: "core agent loop, model client, session, tools, sandbox, resume",
 			Required: []string{

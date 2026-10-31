@@ -3,6 +3,8 @@ package appserver
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -620,4 +622,70 @@ func TestIncrementalToolCatalogReplacementPrefixFirstLikeRust(t *testing.T) {
 	if !replay.Active || replay.Prefix || len(replay.SessionItems) != 0 {
 		t.Fatalf("replaced window turn = %#v, want a replay without updates", replay)
 	}
+}
+
+// TestIncrementalToolCatalogSuppressesModelChangeAnnouncementsLikeRust mirrors
+// Rust #58405: with suppress_model_change_announcements enabled, a model switch
+// in an existing window sends no model ID announcement while changed
+// instructions still produce an update.
+func TestIncrementalToolCatalogSuppressesModelChangeAnnouncementsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte("[features]\nsuppress_model_change_announcements = true\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	store := session.NewStore(t.TempDir())
+	now := time.Now().UTC()
+	record := &session.Record{
+		ID:        session.ThreadID("thread-suppressed"),
+		SessionID: "thread-suppressed",
+		CreatedAt: now,
+		UpdatedAt: now,
+		RecencyAt: now,
+		Metadata:  session.Metadata{CWD: t.TempDir(), Model: "gpt-5.4"},
+	}
+	if err := store.Create(record); err != nil {
+		t.Fatal(err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store), Config: config.NewConfigService(home)})
+	if !router.suppressModelChangeAnnouncements() {
+		t.Fatal("suppressModelChangeAnnouncements() = false, want the configured feature")
+	}
+	definitions := incrementalCatalogLikeRust("Run a command.", incrementalToolSearchLikeRust())
+	instructions := "Use the available tools to help the user."
+	first, err := router.incrementalToolCatalogForTurnWithModel("thread-suppressed", nil, definitions, instructions, "gpt-5.4", "turn-1", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !first.Active || !first.Prefix {
+		t.Fatalf("window start = %#v, want an active prefix", first)
+	}
+	history := incrementalHistoryItems(t, router, "thread-suppressed")
+	switched, err := router.incrementalToolCatalogForTurnWithModel("thread-suppressed", history, definitions, instructions, "gpt-next", "turn-2", now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range switched.Items {
+		if strings.Contains(anyJSON(t, item), "The current model is") {
+			t.Fatalf("suppressed model switch emitted a model announcement: %#v", item)
+		}
+	}
+	changed, err := router.incrementalToolCatalogForTurnWithModel("thread-suppressed", history, definitions, "Updated instructions.", "gpt-next", "turn-3", now.Add(2*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changed.Items) != 1 || !strings.Contains(anyJSON(t, changed.Items[0]), "Updated instructions.") {
+		t.Fatalf("suppressed model switch with new instructions = %#v, want only the instruction update", changed.Items)
+	}
+	if strings.Contains(anyJSON(t, changed.Items[0]), "The current model is") {
+		t.Fatalf("instruction update announced the model: %#v", changed.Items[0])
+	}
+}
+
+func anyJSON(t *testing.T, value any) string {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("Marshal error = %v", err)
+	}
+	return string(data)
 }
