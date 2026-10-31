@@ -46,10 +46,7 @@ func configServerCloudConfigBundleLoaderForRunWithDeps(ctx context.Context, code
 	if err != nil {
 		return nil, err
 	}
-	var manager *auth.GatewayAuthManager
-	if server.OAuth != nil {
-		manager = auth.NewOAuthSessionManager(configServerOAuthSessionConfig(server.OAuth), codexHome, client, store)
-	}
+	manager := newConfigServerAuthManager(codexHome, server, client, store)
 	namespace := configServerCacheNamespace(endpoint, manager)
 	loader := config.NewCloudConfigLoader(func() (*config.CloudConfigBundle, error) {
 		loadCtx, cancel := context.WithTimeout(ctx, configServerFetchTimeout)
