@@ -20413,7 +20413,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "Round 276 (audit): N/A for the prewarm/repair half - Go's model client has no cached sampling WebSocket session or idle prewarm task. The environment-selection half is covered separately by currentTurnEnvironmentSelections (#47970)."
+    "Round 1241 (re-audit): the connection half of Rust #47701 is now present in Go - model/responses_agent.go keeps a cached Responses WebSocket whose websocketSessionPrewarmed mirrors is_prewarmed, appserver/session_startup_prewarm.go shares an in-flight warmup with later resumes, reuses a healthy connection and repairs a closed one, and scheduling is skipped while the thread has an active turn. What Go still lacks is Rust's host-callable CodexThread::prewarm() entry point: prewarm is scheduled from thread start and idle resume only, and neither the Go nor the Rust app-server protocol exposes a prewarm request. The environment-selection half is covered by currentTurnEnvironmentSelections (#47970)."
    ]
   },
   {
@@ -33054,9 +33054,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "plan_2026_10_20.md:49: - `#55287`/`#55288` Go rejects EMA MCP connections entirely; there is no"
+    "Round 1241 (re-audit, supersedes the plan_2026_10_20 N/A): enterprise MCP request authority is rechecked at the HTTP boundary. mcp/ema_runtime.go installs emaScopeCheckingDoer around the runtime HTTP client so every dispatch revalidates the account owner and the bound policy revision, aborting a reload or account switch that happened after ApplyHTTPRequest returned (Rust #55287/#55288/#55696). Tests: mcp/ema_auth_lifecycle_like_rust_test.go TestEMAScopeCheckingDoerChecksPolicyLikeRust and TestEMAAuthManagerHoldsRequestsWhilePolicyStaleLikeRust; mcp/ema_runtime_test.go revocation cases."
    ]
   },
   {
@@ -37310,10 +37310,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "plan_2026_10_27.md:24: | Transcript | `#57291` | User prompt presentation is explicit (plain/spoken) rather than an ad-hoc boolean. | Done |",
-    "plan_2026_10_27.md:102: | `#55597` | N/A: pure Rust refactor extracting user-prompt helpers; Go already has the shared prompt helpers used by `#57291`. |"
+    "Round 1241 (re-audit, supersedes the earlier N/A): user message presentation is an explicit type. tui/history_cell/messages.go defines UserMessagePresentation with Plain and Spoken plus UserHistoryCell.IsSpoken(), and the prompt renderer routes its style and whitespace checks through it (Rust #57291). Test: tui/history_cell/history_cell_test.go TestUserMessagePresentationLikeRust (go test ./tui/history_cell)."
    ]
   },
   {
