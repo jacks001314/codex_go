@@ -2302,6 +2302,13 @@ now derives the widths from `features.Sorted()` the same way.
   `TestFeaturesListUsesDynamicColumnWidthsLikeRust` in `app`.
 ## Verification
 
+- Round 60 sweeps 20 uncovered command surfaces (`completion --help`,
+  `features --help|list --help|enable --help|disable|enable <unknown>`,
+  `debug models --help`, `execpolicy` and `execpolicy check` help,
+  `responses-api-proxy`, `stdio-to-uds`, `tcp-tunnel`, `plugin list --help`,
+  `plugin remove`, `mcp list --help`, `login`, `logout`, `update` and `cloud`
+  help): 19 match 0.166 byte for byte, the only diff is `debug
+  prompt-input` (`out/r62-sweep.txt`).
 - Round 59 aligns the `completion` value diagnostics and the `features list`
   column widths (entry 73): four completion probes match 0.166 byte for byte
   and the shared `features list` rows align (`out/r61-fix.txt`); the extra
@@ -2942,3 +2949,10 @@ now derives the widths from `features.Sorted()` the same way.
   unrecognized subcommand 'config'`. Neither help page lists it, so the help
   surface still matches, and removing it would drop a developer diagnostic
   that `app/debug_cli_test.go` and `app/app_test.go` exercise.
+- `debug prompt-input` still prints Go's `SessionPrompt` message list (5.9k
+  characters: skills instructions, environment context and user text as
+  `content` blocks) instead of Rust's `build_prompt_input` output (65k
+  characters of `ResponseItem`s: `additional_tools` naming the `functions`
+  namespace with `exec` and its JSON schema, then the developer/user items).
+  Aligning means serialising the tool definitions and the prompt-assembly
+  order the core session builder produces.
