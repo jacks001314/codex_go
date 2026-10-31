@@ -42,6 +42,13 @@ type GuardianElasticItem struct {
 	ImageURL  string
 	TokenCost int
 	Retention GuardianElasticRetention
+	// Exact marks content delivered verbatim (the planned action JSON), which
+	// entry preparation never shortens (Rust #58444).
+	Exact bool
+	// Incomplete marks an entry whose source was shortened during elastic
+	// preparation, so callers projecting it back to retained evidence do not
+	// treat it as a complete revision (Rust #58444).
+	Incomplete bool
 }
 
 // GuardianElasticSectionOutput is one composed section, named for the source
@@ -57,6 +64,9 @@ type GuardianElasticSectionOutput struct {
 type GuardianElasticContext struct {
 	Sections  []GuardianElasticSectionOutput
 	Truncated bool
+	// Truncations records evidence shortened during entry preparation, in
+	// section order (Rust #58444).
+	Truncations []GuardianElasticTruncation
 }
 
 // GuardianElasticRequestBudget is the complete input allowance and the context

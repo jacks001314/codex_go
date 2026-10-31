@@ -124,6 +124,13 @@ func (e *NodeReplReviewEvidence) Clear() {
 // SnapshotSince returns a renderable fragment for responses admitted after the
 // given reviewed sequence, or nil when nothing new has been admitted.
 func (e *NodeReplReviewEvidence) SnapshotSince(reviewedSequence uint64) *NodeReplReviewEvidenceFragment {
+	return e.SnapshotSinceWithBudgeting(reviewedSequence, GuardianContextBudgetingFixed)
+}
+
+// SnapshotSinceWithBudgeting returns a snapshot prepared with the selected
+// request policy (Rust ContextBudgeting, #58454). Elastic snapshots keep every
+// admitted response and only report the storage omission count.
+func (e *NodeReplReviewEvidence) SnapshotSinceWithBudgeting(reviewedSequence uint64, budgeting GuardianContextBudgeting) *NodeReplReviewEvidenceFragment {
 	if e == nil {
 		return nil
 	}
@@ -146,6 +153,7 @@ func (e *NodeReplReviewEvidence) SnapshotSince(reviewedSequence uint64) *NodeRep
 		responses:        responses,
 		omittedResponses: firstSequence - (reviewedSequence + 1),
 		sequence:         e.nextSequence,
+		budgeting:        budgeting,
 	}
 }
 
@@ -155,6 +163,7 @@ type NodeReplReviewEvidenceFragment struct {
 	responses        []nodeReplReviewResponse
 	omittedResponses uint64
 	sequence         uint64
+	budgeting        GuardianContextBudgeting
 }
 
 // Sequence reports the highest response sequence included in this snapshot.
@@ -223,6 +232,11 @@ func (f *NodeReplReviewEvidenceFragment) Body() string {
 // the layout's budget. Responses before the returned index are added to the
 // snapshot's own omitted count (Rust select_node_repl_responses).
 func (f *NodeReplReviewEvidenceFragment) selectResponses(layout nodeReplEvidenceLayout) (int, uint64) {
+	if f.budgeting == GuardianContextBudgetingElastic {
+		// Rust #58454: elastic preparation keeps every captured response; only
+		// the snapshot's own storage omissions are reported.
+		return 0, f.omittedResponses
+	}
 	start, end := f.Markers()
 	noticeBytes := nodeReplTextNoticeBytes
 	if layout == nodeReplEvidenceMultimodalLayout {

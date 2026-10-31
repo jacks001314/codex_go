@@ -70,6 +70,15 @@ type guardianRootPreparedContext struct {
 // prepareGuardianRootContext applies the fixed root request policy without
 // discarding the captured sources.
 func prepareGuardianRootContext(input guardianRootPreparationInput, legacy []retainedctx.RetainedUserMessage) guardianRootPreparedContext {
+	return prepareGuardianRootContextWithBudgeting(input, legacy, codexctx.GuardianContextBudgetingFixed)
+}
+
+// prepareGuardianRootContextWithBudgeting applies the selected root request
+// policy without discarding the captured sources. Elastic preparation keeps
+// every candidate and its captured text so elastic allocation can decide which
+// whole entries to keep (Rust ContextBudgeting, #58454).
+func prepareGuardianRootContextWithBudgeting(input guardianRootPreparationInput, legacy []retainedctx.RetainedUserMessage, budgeting codexctx.GuardianContextBudgeting) guardianRootPreparedContext {
+	elastic := budgeting == codexctx.GuardianContextBudgetingElastic
 	missingRootInstructions := input.missingRootInstructions
 	missingAssistantContext := input.missingAssistantContext
 	missingVerifiedAnswers := input.missingVerifiedAnswers
@@ -77,11 +86,11 @@ func prepareGuardianRootContext(input guardianRootPreparationInput, legacy []ret
 	// Verified answers stay whole; ordinary root user text keeps its budget.
 	messages := make([]guardianRootCandidate, 0, len(input.userMessages))
 	for _, candidate := range input.userMessages {
-		if candidate.message.Kind == state.RootMessageUserInput &&
+		if !elastic && candidate.message.Kind == state.RootMessageUserInput &&
 			!guardianRootAnswerFits(len(candidate.message.Text)) {
 			continue
 		}
-		if candidate.message.Kind == state.RootMessageUser {
+		if !elastic && candidate.message.Kind == state.RootMessageUser {
 			candidate.message.Text, _ = codexctx.GuardianTruncateText(candidate.message.Text, guardianMaxRootMessageTokens)
 		}
 		messages = append(messages, candidate)
@@ -94,32 +103,41 @@ func prepareGuardianRootContext(input guardianRootPreparationInput, legacy []ret
 	}
 	var legacyMessages []state.RootMessage
 	latestLegacyTurnID := ""
-	if missingRootInstructions && legacyCapacity > 0 {
+	if missingRootInstructions && (elastic || legacyCapacity > 0) {
 		for _, candidate := range legacy {
-			text, _ := codexctx.GuardianTruncateText(candidate.Text, guardianMaxRootMessageTokens)
+			// ID-less checkpoints identify sources by their stored excerpt,
+			// independently of the text preparation renders.
+			retainedText, _ := codexctx.GuardianTruncateText(candidate.Text, guardianMaxRootMessageTokens)
 			// Legacy records without IDs historically match after the
 			// request-size cap, so workers receive one copy.
-			if guardianRootLegacySourceMatched(input.retainedUserSources, candidate, text) {
+			if guardianRootLegacySourceMatched(input.retainedUserSources, candidate, retainedText) {
 				continue
+			}
+			text := retainedText
+			if elastic {
+				text = candidate.Text
 			}
 			if turnID := strings.TrimSpace(candidate.TurnID); turnID != "" {
 				latestLegacyTurnID = turnID
 			}
 			legacyMessages = append(legacyMessages, state.RootMessage{Kind: state.RootMessageUser, Text: text})
-			if len(legacyMessages) > legacyCapacity {
+			if !elastic && len(legacyMessages) > legacyCapacity {
 				legacyMessages = legacyMessages[1:]
 			}
 		}
 	}
 
-	assistants := guardianPrepareRootAssistantMessages(input.assistantMessages, input.retainedAssistants, missingAssistantContext)
+	assistants := guardianPrepareRootAssistantMessagesWithBudgeting(input.assistantMessages, input.retainedAssistants, missingAssistantContext, budgeting)
 	missingAssistantContext = assistants.missingContext
 	messages = append(messages, assistants.messages...)
 
 	sort.SliceStable(messages, func(i, j int) bool {
 		return guardianRootCandidateSortLess(messages[i], messages[j])
 	})
-	selection := guardianSelectRootHandoffIndices(messages, input.handoffBoundaries)
+	var selection map[int]struct{}
+	if !elastic {
+		selection = guardianSelectRootHandoffIndices(messages, input.handoffBoundaries)
+	}
 	if selection != nil {
 		kept := make([]guardianRootCandidate, 0, len(messages))
 		for index, message := range messages {
@@ -136,9 +154,12 @@ func prepareGuardianRootContext(input guardianRootPreparationInput, legacy []ret
 
 	// Apply one shared cap so user records and confirmed questions compete
 	// while keeping omissions explicit.
-	removed := len(messages) - guardianMaxRootMessages
-	if removed < 0 {
-		removed = 0
+	removed := 0
+	if !elastic {
+		removed = len(messages) - guardianMaxRootMessages
+		if removed < 0 {
+			removed = 0
+		}
 	}
 	for _, message := range messages[:removed] {
 		switch message.message.Kind {
@@ -155,11 +176,13 @@ func prepareGuardianRootContext(input guardianRootPreparationInput, legacy []ret
 	sort.SliceStable(messages, func(i, j int) bool {
 		return guardianRootCandidateFinalLess(messages[i], messages[j])
 	})
-	if remaining := guardianMaxRootMessages - len(messages); len(legacyMessages) > remaining {
-		if remaining < 0 {
-			remaining = 0
+	if !elastic {
+		if remaining := guardianMaxRootMessages - len(messages); len(legacyMessages) > remaining {
+			if remaining < 0 {
+				remaining = 0
+			}
+			legacyMessages = legacyMessages[len(legacyMessages)-remaining:]
 		}
-		legacyMessages = legacyMessages[len(legacyMessages)-remaining:]
 	}
 
 	out := make([]state.RootMessage, 0, len(messages)+len(legacyMessages)+4)
@@ -243,6 +266,20 @@ func guardianPrepareRootAssistantMessages(
 	retainedAssistants []guardianRootRetainedAssistant,
 	missingContext bool,
 ) guardianRootPreparedAssistants {
+	return guardianPrepareRootAssistantMessagesWithBudgeting(assistantMessages, retainedAssistants, missingContext, codexctx.GuardianContextBudgetingFixed)
+}
+
+// guardianPrepareRootAssistantMessagesWithBudgeting mirrors Rust's
+// prepare_root_assistant_messages: elastic preparation keeps captured assistant
+// text and complete retained stand-ins, while fixed preparation filters and
+// truncates during the request (Rust #58454).
+func guardianPrepareRootAssistantMessagesWithBudgeting(
+	assistantMessages []guardianRootCandidate,
+	retainedAssistants []guardianRootRetainedAssistant,
+	missingContext bool,
+	budgeting codexctx.GuardianContextBudgeting,
+) guardianRootPreparedAssistants {
+	elastic := budgeting == codexctx.GuardianContextBudgetingElastic
 	liveIDs := map[string]struct{}{}
 	for _, candidate := range assistantMessages {
 		if id := strings.TrimSpace(candidate.messageID); id != "" {
@@ -267,7 +304,7 @@ func guardianPrepareRootAssistantMessages(
 				continue
 			}
 		}
-		message, ok := state.RetainedAssistantMessage(&retained.message)
+		message, ok := guardianRootRetainedAssistantMessage(&retained.message, elastic)
 		if !ok {
 			missingContext = true
 			continue
@@ -287,11 +324,13 @@ func guardianPrepareRootAssistantMessages(
 		text := candidate.message.Text
 		if retained != nil {
 			order, hasOrder = retained.order, true
-			if message, ok := state.RetainedAssistantMessage(&retained.message); ok {
+			if message, ok := guardianRootRetainedAssistantMessage(&retained.message, elastic); ok {
 				text = message.Text
 			}
 		}
-		text, _ = codexctx.GuardianTruncateText(text, guardianMaxRootMessageTokens)
+		if !elastic {
+			text, _ = codexctx.GuardianTruncateText(text, guardianMaxRootMessageTokens)
+		}
 		if !hasOrder {
 			messages = append(messages, guardianRootCandidate{
 				message: state.RootMessage{Kind: state.RootMessageUnorderedAssistant, Text: text},
@@ -310,6 +349,19 @@ func guardianPrepareRootAssistantMessages(
 type guardianRootPreparedAssistants struct {
 	messages       []guardianRootCandidate
 	missingContext bool
+}
+
+// guardianRootRetainedAssistantMessage mirrors Rust's root_retained_assistant:
+// fixed preparation requires a renderable retained message, while elastic
+// preparation keeps complete captured messages as-is (Rust #58454).
+func guardianRootRetainedAssistantMessage(message *retainedctx.RetainedUserMessage, elastic bool) (state.RootMessage, bool) {
+	if !elastic {
+		return state.RetainedAssistantMessage(message)
+	}
+	if message == nil || !message.Complete {
+		return state.RootMessage{}, false
+	}
+	return state.RootMessage{Kind: state.RootMessageAssistant, Text: message.Text}, true
 }
 
 func guardianRootCandidateIsAssistant(candidate guardianRootCandidate) bool {
