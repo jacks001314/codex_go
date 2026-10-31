@@ -422,6 +422,12 @@ func (r *RuntimeRouter) emitArtifactOperationForCommandItem(threadID string, tur
 			"output_format":     operation.OutputFormat,
 			"execution_backend": "unified_exec",
 		}
+		// Rust #44242: the exec-command begin metric clone carries the issuing
+		// step's model (`session_telemetry.with_model(ctx.model_info.slug, ...)`),
+		// so the tag follows a mid-turn model change.
+		if modelSlug := r.artifactOperationModelSlug(threadID, turnID, item); modelSlug != "" {
+			tags[telemetry.MCPCallModelTag] = telemetry.SanitizeMetricTagValue(modelSlug)
+		}
 		sink.Counter(telemetry.ArtifactOperationStartedMetric, 1, tags)
 		sink.Histogram(telemetry.ArtifactOperationExpectedOutputCountMetric, operation.ExpectedOutputCount, tags)
 	}

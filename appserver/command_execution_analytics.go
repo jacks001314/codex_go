@@ -236,3 +236,38 @@ func int32PtrFromThreadItemData(item *ThreadItem, keys ...string) *int32 {
 	out := int32(*value)
 	return &out
 }
+
+// artifactOperationModelSlug reports the model captured for the command that
+// produced an artifact-operation marker (Rust's exec-command begin reads
+// `ctx.model_info.slug`). The start-time context recorded for the command item
+// is authoritative; the turn's resolved settings only stand in when no start
+// was observed, mirroring the model attribution of the command's analytics
+// event (#44242).
+func (r *RuntimeRouter) artifactOperationModelSlug(threadID string, turnID string, item *ThreadItem) string {
+	if r == nil || item == nil {
+		return ""
+	}
+	if context, ok := r.peekToolItemModelContext(threadID, turnID, threadItemExternalID(item)); ok && !context.isZero() {
+		if slug := strings.TrimSpace(context.ModelSlug); slug != "" {
+			return slug
+		}
+	}
+	return strings.TrimSpace(r.modelInvocationContextForTurn(threadID, turnID).ModelSlug)
+}
+
+// peekToolItemModelContext reports the model context recorded for a command
+// item without consuming it. The analytics event consumes the same entry later
+// in the completion path, so the metric tag cannot take it.
+func (r *RuntimeRouter) peekToolItemModelContext(threadID string, turnID string, itemID string) (modelInvocationContext, bool) {
+	if r == nil {
+		return modelInvocationContext{}, false
+	}
+	itemID = strings.TrimSpace(itemID)
+	if itemID == "" {
+		return modelInvocationContext{}, false
+	}
+	r.toolItemModelContextsMu.Lock()
+	defer r.toolItemModelContextsMu.Unlock()
+	context, ok := r.toolItemModelContexts[toolItemModelContextKey(threadID, turnID, itemID)]
+	return context, ok
+}

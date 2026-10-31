@@ -141,6 +141,40 @@ func TestAttributeSessionCommandItemsPreservesHistoryFields(t *testing.T) {
 	}
 }
 
+// Rust #44242: the exec-command begin metric clone is created with
+// `session_telemetry.with_model(ctx.model_info.slug, ...)`, so both
+// artifact-operation metrics carry the issuing step's model.
+func TestArtifactOperationMetricsCarryStepModelLikeRust(t *testing.T) {
+	metrics := state.NewTaskMetrics()
+	router := &RuntimeRouter{services: RuntimeServices{TurnMetrics: metrics}}
+	item := &ThreadItem{
+		ID: "item-artifact-model",
+		Data: map[string]any{
+			"pluginId":   "presentations@openai-primary-runtime",
+			"scriptPath": "skills/presentations/container_tools/mark_artifact_operation_started.mjs",
+			"command":    "python /plugins/presentations/skills/presentations/container_tools/mark_artifact_operation_started.mjs --operation-kind create --expected-output-count 2 --output-format pptx",
+		},
+	}
+	router.rememberToolItemModelContext("thread-art", "turn-art", "item-artifact-model", modelInvocationContext{
+		ModelSlug: "step-artifact-model",
+	})
+	router.emitArtifactOperationForCommandItem("thread-art", "turn-art", item)
+	records := metrics.Records()
+	if len(records) != 2 {
+		t.Fatalf("metric records = %#v", records)
+	}
+	for _, record := range records {
+		if got := record.Tags[telemetry.MCPCallModelTag]; got != "step-artifact-model" {
+			t.Fatalf("%s model tag = %q, want the issuing step's model (%#v)", record.Name, got, record.Tags)
+		}
+	}
+	// The metric tag reads the start-time context without consuming it, so the
+	// command completion path still attributes its analytics event to the step.
+	if context, ok := router.peekToolItemModelContext("thread-art", "turn-art", "item-artifact-model"); !ok || context.ModelSlug != "step-artifact-model" {
+		t.Fatalf("peeked model context = %#v, ok=%v", context, ok)
+	}
+}
+
 func TestEmitArtifactOperationForCommandItemLikeRust(t *testing.T) {
 	analytics := newRecordingTurnEventSink()
 	metrics := state.NewTaskMetrics()
