@@ -2562,16 +2562,46 @@ func parseExecpolicy(args []string, execpolicy *ExecpolicyOptions) error {
 				i = len(args)
 			}
 		}
-		if len(execpolicy.Rules) == 0 {
-			return errors.New("execpolicy check requires --rules PATH")
-		}
-		if len(execpolicy.Command) == 0 {
-			return errors.New("execpolicy check requires COMMAND")
+		if err := execpolicyCheckMissingRequired(execpolicy); err != nil {
+			return err
 		}
 	default:
 		return unrecognizedSubcommandForGroup("execpolicy", execpolicy.Action)
 	}
 	return nil
+}
+
+// execpolicyCheckUsage renders clap's usage for `execpolicy check`: the
+// required `--rules` placeholder, then every boolean clap already consumed, then
+// the variadic command.
+func execpolicyCheckUsage(execpolicy *ExecpolicyOptions) string {
+	usage := "Usage: codex execpolicy check --rules <PATH>"
+	if execpolicy.Pretty {
+		usage += " --pretty"
+	}
+	if execpolicy.ResolveHostExecutables {
+		usage += " --resolve-host-executables"
+	}
+	return usage + " <COMMAND>..."
+}
+
+// execpolicyCheckMissingRequired mirrors clap's block for the two required
+// arguments of `execpolicy check`, in declaration order.
+func execpolicyCheckMissingRequired(execpolicy *ExecpolicyOptions) error {
+	var missing []string
+	if len(execpolicy.Rules) == 0 {
+		missing = append(missing, "--rules <PATH>")
+	}
+	if len(execpolicy.Command) == 0 {
+		missing = append(missing, "<COMMAND>...")
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	return &UsageError{
+		Message: requiredArgumentsMessage(missing...),
+		Usage:   execpolicyCheckUsage(execpolicy),
+	}
 }
 
 func parseCloud(args []string, cloud *CloudOptions) error {
@@ -2817,11 +2847,35 @@ func parseResponsesAPIProxy(args []string, proxy *ResponsesAPIProxyOptions) erro
 	return nil
 }
 
+// stdioToUDSUnexpectedUsage is the usage clap prints once the flag parser was
+// involved: `[OPTIONS]` stays because the command declares no options beyond
+// help.
+const stdioToUDSUnexpectedUsage = "Usage: codex stdio-to-uds [OPTIONS] <SOCKET_PATH>"
+
 func parseStdioToUDS(args []string, stdio *StdioToUDSOptions) error {
-	if len(args) != 1 {
-		return errors.New("stdio-to-uds requires exactly one SOCKET_PATH")
+	var positionals []string
+	afterSeparator := false
+	for _, arg := range args {
+		if !afterSeparator && arg == "--" {
+			afterSeparator = true
+			continue
+		}
+		if !afterSeparator && len(arg) > 1 && strings.HasPrefix(arg, "-") {
+			return unexpectedArgumentError(arg, stdioToUDSUnexpectedUsage)
+		}
+		positionals = append(positionals, arg)
 	}
-	stdio.SocketPath = args[0]
+	switch {
+	case len(positionals) == 0:
+		// clap prints the positional-only usage when nothing was consumed.
+		return &UsageError{
+			Message: requiredArgumentsMessage("<SOCKET_PATH>"),
+			Usage:   "Usage: codex stdio-to-uds <SOCKET_PATH>",
+		}
+	case len(positionals) > 1:
+		return unexpectedPositionalError(positionals[1], stdioToUDSUnexpectedUsage)
+	}
+	stdio.SocketPath = positionals[0]
 	return nil
 }
 

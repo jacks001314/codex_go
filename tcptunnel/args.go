@@ -8,7 +8,9 @@ package tcptunnel
 import (
 	"fmt"
 	"net"
+	"net/netip"
 	"net/url"
+	"regexp"
 	"strings"
 )
 
@@ -38,101 +40,216 @@ type Args struct {
 	DiagnosticsJSON bool
 }
 
+// Diagnostic mirrors a clap argument diagnostic for the hidden `tcp-tunnel`
+// command so the CLI can print the same block, trailing hint and exit status as
+// Rust.
+type Diagnostic struct {
+	// Message is clap's diagnostic body without the leading "error: ".
+	Message string
+	// Usage is the "Usage: ..." block; it is empty for diagnostics clap prints
+	// without one (invalid and missing values).
+	Usage string
+}
+
+func (d *Diagnostic) Error() string { return d.Message }
+
+const (
+	tcpTunnelRequiredUsage   = "Usage: codex tcp-tunnel --proxy-url <PROXY_URL> --proxy-origins-file <PROXY_ORIGINS_FILE> --target <TARGET>"
+	tcpTunnelUnexpectedUsage = "Usage: codex tcp-tunnel [OPTIONS] --proxy-url <PROXY_URL> --proxy-origins-file <PROXY_ORIGINS_FILE> --target <TARGET>"
+	tcpTunnelGroupUsage      = "Usage: codex tcp-tunnel <--proxy-url <PROXY_URL>|--proxy-origins-file <PROXY_ORIGINS_FILE>|--target <TARGET>|--listen-addr <LISTEN_ADDR>|--auth-token-stdin|--auth-token-updates-stdin|--connect-headers-stdin|--diagnostics-json>"
+)
+
+// tcpTunnelValueFlags maps the value-taking flags to clap's placeholders.
+var tcpTunnelValueFlags = map[string]string{
+	"--proxy-url":          "<PROXY_URL>",
+	"--proxy-origins-file": "<PROXY_ORIGINS_FILE>",
+	"--target":             "<TARGET>",
+	"--listen-addr":        "<LISTEN_ADDR>",
+}
+
+// tcpTunnelFlagOrder is the order clap lists the required options in.
+var tcpTunnelFlagOrder = []string{"--proxy-url", "--proxy-origins-file", "--target"}
+
 // ParseArgs parses the `codex tcp-tunnel` argument list with clap's shape: long
-// options with a separated or `=`-attached value, and the same requirement
-// rules (`--auth-token-updates-stdin` and `--connect-headers-stdin` require
-// `--auth-token-stdin`).
+// options with a separated or `=`-attached value, the same requirement rules
+// (`--auth-token-updates-stdin` and `--connect-headers-stdin` require
+// `--auth-token-stdin`), and clap's value parsers for the proxy URL and the
+// listen address.
 func ParseArgs(argv []string) (*Args, error) {
 	args := &Args{ListenAddr: DefaultListenAddr}
 	seen := map[string]bool{}
+	var consumed []string
+	valueFlags, boolFlags := 0, 0
 	for i := 0; i < len(argv); i++ {
 		arg := argv[i]
 		name, value, hasValue := strings.Cut(arg, "=")
-		takeValue := func() (string, error) {
+		if placeholder, takesValue := tcpTunnelValueFlags[name]; takesValue {
+			var parsed string
 			if hasValue {
-				return value, nil
+				parsed = value
+			} else {
+				if i+1 >= len(argv) {
+					return nil, &Diagnostic{Message: "a value is required for '" + name + " " + placeholder + "' but none was supplied"}
+				}
+				i++
+				parsed = argv[i]
 			}
-			if i+1 >= len(argv) {
-				return "", fmt.Errorf("a value is required for '%s' but none was supplied", name)
+			if reason, ok := tcpTunnelValueProblem(name, parsed); !ok {
+				return nil, &Diagnostic{Message: "invalid value '" + parsed + "' for '" + name + " " + placeholder + "': " + reason}
 			}
-			i++
-			return argv[i], nil
+			switch name {
+			case "--proxy-url":
+				args.ProxyURL = parsed
+			case "--proxy-origins-file":
+				args.ProxyOriginsFile = parsed
+			case "--target":
+				args.Target = parsed
+			case "--listen-addr":
+				args.ListenAddr = parsed
+			}
+			seen[name] = true
+			consumed = append(consumed, name)
+			valueFlags++
+			continue
 		}
 		switch name {
-		case "--proxy-url":
-			v, err := takeValue()
-			if err != nil {
-				return nil, err
-			}
-			args.ProxyURL = v
-			seen["--proxy-url"] = true
-		case "--proxy-origins-file":
-			v, err := takeValue()
-			if err != nil {
-				return nil, err
-			}
-			args.ProxyOriginsFile = v
-			seen["--proxy-origins-file"] = true
-		case "--target":
-			v, err := takeValue()
-			if err != nil {
-				return nil, err
-			}
-			args.Target = v
-			seen["--target"] = true
-		case "--listen-addr":
-			v, err := takeValue()
-			if err != nil {
-				return nil, err
-			}
-			args.ListenAddr = v
-			seen["--listen-addr"] = true
-		case "--auth-token-stdin":
+		case "--auth-token-stdin", "--auth-token-updates-stdin", "--connect-headers-stdin", "--diagnostics-json":
 			if hasValue {
-				return nil, fmt.Errorf("unexpected value for '--auth-token-stdin'")
+				return nil, &Diagnostic{
+					Message: "unexpected value '" + value + "' for '" + name + "' found; no more were expected",
+					Usage:   tcpTunnelUnexpectedValueUsage(name, valueFlags, boolFlags),
+				}
 			}
-			args.AuthTokenStdin = true
-		case "--auth-token-updates-stdin":
-			if hasValue {
-				return nil, fmt.Errorf("unexpected value for '--auth-token-updates-stdin'")
+			switch name {
+			case "--auth-token-stdin":
+				args.AuthTokenStdin = true
+			case "--auth-token-updates-stdin":
+				args.AuthTokenUpdatesStdin = true
+			case "--connect-headers-stdin":
+				args.ConnectHeadersStdin = true
+			case "--diagnostics-json":
+				args.DiagnosticsJSON = true
 			}
-			args.AuthTokenUpdatesStdin = true
-		case "--connect-headers-stdin":
-			if hasValue {
-				return nil, fmt.Errorf("unexpected value for '--connect-headers-stdin'")
-			}
-			args.ConnectHeadersStdin = true
-		case "--diagnostics-json":
-			if hasValue {
-				return nil, fmt.Errorf("unexpected value for '--diagnostics-json'")
-			}
-			args.DiagnosticsJSON = true
+			consumed = append(consumed, name)
+			boolFlags++
 		default:
-			if strings.HasPrefix(name, "-") {
-				return nil, fmt.Errorf("unexpected argument '%s' found", arg)
+			reported := arg
+			if hasValue && strings.HasPrefix(arg, "--") {
+				reported = name
 			}
-			return nil, fmt.Errorf("unexpected argument '%s' found", arg)
+			return nil, &Diagnostic{Message: "unexpected argument '" + reported + "' found", Usage: tcpTunnelUnexpectedUsage}
 		}
 	}
-	if !seen["--proxy-url"] {
-		return nil, fmt.Errorf("the following required arguments were not provided:\n  --proxy-url <PROXY_URL>")
+	requiresAuth := (args.AuthTokenUpdatesStdin || args.ConnectHeadersStdin) && !args.AuthTokenStdin
+	var missing []string
+	for _, name := range tcpTunnelFlagOrder {
+		if !seen[name] {
+			missing = append(missing, name+" "+tcpTunnelValueFlags[name])
+		}
 	}
-	if !seen["--proxy-origins-file"] {
-		return nil, fmt.Errorf("the following required arguments were not provided:\n  --proxy-origins-file <PROXY_ORIGINS_FILE>")
+	if requiresAuth {
+		missing = append(missing, "--auth-token-stdin")
 	}
-	if !seen["--target"] {
-		return nil, fmt.Errorf("the following required arguments were not provided:\n  --target <TARGET>")
-	}
-	if args.AuthTokenUpdatesStdin && !args.AuthTokenStdin {
-		return nil, fmt.Errorf("the following required arguments were not provided:\n  --auth-token-stdin")
-	}
-	if args.ConnectHeadersStdin && !args.AuthTokenStdin {
-		return nil, fmt.Errorf("the following required arguments were not provided:\n  --auth-token-stdin")
-	}
-	if _, _, err := net.SplitHostPort(args.ListenAddr); err != nil {
-		return nil, fmt.Errorf("invalid value '%s' for '--listen-addr <LISTEN_ADDR>': %v", args.ListenAddr, err)
+	if len(missing) > 0 {
+		return nil, &Diagnostic{
+			Message: tcpTunnelRequiredMessage(missing),
+			Usage:   tcpTunnelMissingUsage(requiresAuth, consumed),
+		}
 	}
 	return args, nil
+}
+
+func tcpTunnelRequiredMessage(missing []string) string {
+	message := "the following required arguments were not provided:"
+	for _, name := range missing {
+		message += "\n  " + name
+	}
+	return message
+}
+
+// tcpTunnelMissingUsage echoes the required options plus every optional flag
+// clap already consumed, in argv order (Rust's clap smart usage).
+func tcpTunnelMissingUsage(requiresAuth bool, consumed []string) string {
+	usage := tcpTunnelRequiredUsage
+	added := map[string]bool{}
+	if requiresAuth {
+		usage += " --auth-token-stdin"
+		added["--auth-token-stdin"] = true
+	}
+	for _, name := range consumed {
+		if added[name] {
+			continue
+		}
+		for _, required := range tcpTunnelFlagOrder {
+			if name == required {
+				added[name] = true
+				break
+			}
+		}
+		if added[name] {
+			continue
+		}
+		if placeholder, ok := tcpTunnelValueFlags[name]; ok {
+			usage += " " + name + " " + placeholder
+		} else {
+			usage += " " + name
+		}
+		added[name] = true
+	}
+	return usage
+}
+
+// tcpTunnelUnexpectedValueUsage mirrors clap's usage block for a value attached
+// to a boolean flag: clap lists the required options plus the offending flag
+// while at most one other option was consumed, and falls back to its required
+// group rendering otherwise.
+func tcpTunnelUnexpectedValueUsage(name string, valueFlags, boolFlags int) string {
+	if boolFlags == 0 && valueFlags <= 1 {
+		return tcpTunnelRequiredUsage + " " + name
+	}
+	return tcpTunnelGroupUsage
+}
+
+// tcpTunnelValueProblem runs clap's value parser for the flag: the URL parser
+// Rust uses (`url::Url`) and `std::net::SocketAddr` for the listen address. The
+// reason strings match the underlying crates so the diagnostic is identical.
+func tcpTunnelValueProblem(name, value string) (string, bool) {
+	switch name {
+	case "--proxy-url":
+		return tcpTunnelURLProblem(value)
+	case "--listen-addr":
+		if _, err := netip.ParseAddrPort(value); err != nil {
+			return "invalid socket address syntax", false
+		}
+	}
+	return "", true
+}
+
+var tcpTunnelSchemePrefix = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*:`)
+
+// tcpTunnelURLProblem mirrors `url::Url::parse`'s diagnostics for the cases a
+// proxy URL can hit.
+func tcpTunnelURLProblem(raw string) (string, bool) {
+	if !tcpTunnelSchemePrefix.MatchString(raw) {
+		return "relative URL without a base", false
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		switch {
+		case strings.Contains(err.Error(), "invalid port"):
+			return "invalid port number", false
+		case strings.Contains(err.Error(), "missing ']'") || strings.Contains(err.Error(), "invalid character \"[\""):
+			return "invalid IPv6 address", false
+		}
+		return "relative URL without a base", false
+	}
+	switch parsed.Scheme {
+	case "http", "https", "ftp", "ws", "wss":
+		if parsed.Host == "" {
+			return "empty host", false
+		}
+	}
+	return "", true
 }
 
 // ProxyTarget is the validated CONNECT target and proxy address pair.

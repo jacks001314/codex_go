@@ -869,8 +869,56 @@ one-off captures.
     `cli/root_meta_help_like_rust_test.go` and
     `app/subcommand_help_meta_like_rust_test.go`.
 
+40. **Clap blocks for `execpolicy check`, `stdio-to-uds` and `tcp-tunnel`** -
+    these three parsers answered in Go wording at exit 1 (`Error: execpolicy
+    check requires --rules PATH`, `Error: stdio-to-uds requires exactly one
+    SOCKET_PATH`, `Error: the following required arguments were not provided:
+    --proxy-url <PROXY_URL>`), so `codex execpolicy check -hx` could not reach
+    clap's block either. Go now renders clap's diagnostics for all three:
+    - `execpolicy check` prints the required list in declaration order
+      (`--rules <PATH>` then `<COMMAND>...`) with a usage that echoes the
+      booleans clap already consumed (`--pretty`,
+      `--resolve-host-executables`), and keeps treating a hyphen-leading token
+      as the start of `<COMMAND>...`, so `codex execpolicy check --dry-run
+      --rules r` still reports only the missing `--rules <PATH>`.
+    - `stdio-to-uds` prints the positional-only usage
+      (`Usage: codex stdio-to-uds <SOCKET_PATH>`) when the path is missing, and
+      clap's `unexpected argument` block with the `[OPTIONS]` usage (plus the
+      `--` tip for an unknown flag) once an option-like token is involved; `--`
+      still binds the path.
+    - `tcp-tunnel` moved its argument diagnostics into `tcptunnel.ParseArgs`,
+      which returns clap-shaped `Diagnostic`s the CLI renders as usage errors:
+      pending values carry the placeholder (`a value is required for
+      '--proxy-url <PROXY_URL>' ...`), unknown flags print the `[OPTIONS]`
+      usage, missing options are listed in declaration order with the options
+      clap consumed echoed in argv order, the `requires = "auth_token_stdin"`
+      pair adds `--auth-token-stdin` to both the list and the usage,
+      `--flag=value` on a boolean renders clap's `unexpected value` block
+      (required-only usage while at most one value option was consumed, clap's
+      required-group rendering otherwise), and the value parsers mirror Rust's
+      `url::Url` (`relative URL without a base`, `empty host`, `invalid port
+      number`, `invalid IPv6 address`) and `SocketAddr` (`invalid socket
+      address syntax`).
+    Evidence: 34 live comparisons against 0.166 (16 execpolicy/stdio/tcp-tunnel
+    argument shapes plus 18 tcp-tunnel value and usage shapes) differ only in
+    the `stdio-to-uds` connect attempt listed under Still open; the 434-case
+    help probe now reports 0 diffs (was 1), and the 80 unknown-argument and 56
+    missing-argument regressions stay at 0. Regressions:
+    `cli/hidden_command_diagnostics_like_rust_test.go` and
+    `app/hidden_command_diagnostics_meta_like_rust_test.go`.
+
 ## Verification
 
+- The missing-required surface matches Rust 0.166: `probe_missing_r25` and
+  `probe_r25i` compare 34 tcp-tunnel / execpolicy / stdio-to-uds invocations
+  (`out/round25-hidden-diagnostics.txt`); the only difference is the
+  `stdio-to-uds <path>` connect attempt on Windows. The 434-case help probe is
+  now at 0 diffs, and `go test ./cli ./tcptunnel ./applypatch ./prompt ./review
+  ./cmd/...` passes. `go test -vet=off ./app` in the shared working tree also
+  fails `TestExecServerRegistryAuthConcurrentRefreshesShareOneRefreshLikeRust`;
+  that test passes on a clean `f0ee41de` checkout with these cli/tcptunnel
+  changes applied, so the failure comes from another agent's in-flight edits
+  rather than this round.
 - The full help surface is byte-identical to Rust 0.166: `probe_subhelp_r24`
   compares 434 invocations (80 paths x `--help`/`-h`/`--help=x`/`-hx`, 79
   `help <path>`, 12 short-flag and 23 root cases) on stdout, stderr and exit
@@ -1119,22 +1167,23 @@ one-off captures.
     found` first, because Go has no per-command flag table to test the token
     against. `codex review --config a=b` keeps working through the subcommand
     parser's own `-c` handling, which mirrors Rust's merged override order.
-  - three subcommands still answer missing-required arguments in Go
-    wording instead of clap's block, and exit 1 rather than 2: `execpolicy`
-    (`Error: execpolicy requires a subcommand`, Rust prints clap's
-    `requires a subcommand but one was not provided` with `[subcommands: check,
-    help]`), `execpolicy check` (`requires --rules PATH` vs clap's
-    `--rules <PATH>` + `<COMMAND>...`), `stdio-to-uds` (`requires exactly one
-    SOCKET_PATH`, and on Windows it validates the path before clap would reject
-    an unknown flag) and `tcp-tunnel` (`requires a value`-style errors plus a
-    single missing option instead of `--proxy-url`/`--proxy-origins-file`/
-    `--target`). Those parsers live outside `cli.Parse`'s table-driven surface,
-    so they need their own usage snapshots before they can print clap blocks.
+  - the missing-required blocks are aligned (entry 40): `execpolicy check`,
+    `stdio-to-uds` and `tcp-tunnel` print clap's block with exit 2, including
+    the consumed-flag echo in the usage. What remains Go-shaped on those
+    surfaces:
+    - `codex stdio-to-uds <path>` rejects a non-pipe path on Windows
+      (`Error: stdio-to-uds on Windows requires a named pipe path, got
+      <path>`), where Rust attempts an AF_UNIX connect and reports
+      `failed to connect to socket at <absolute path>` with `Caused by:` and the
+      OS error. Aligning needs a Windows AF_UNIX transport in the Go runtime.
+    - the `tcp-tunnel` value parsers cover the URL cases a proxy URL can hit
+      (relative URL, empty host, invalid port, invalid IPv6); exotic `url`
+      crate variants (IDNA, domain characters) fall back to the relative-URL
+      text.
   - the help surface is aligned (entry 39): the root command and all 79
     subcommand paths print clap's `-h`/`--help`/`help <topic>` pages plus the
-    `--help=<value>` diagnostic. The one help invocation that still differs is
-    `codex execpolicy check -hx`, and only because it falls through to the
-    Go-shaped missing-required block described above.
+    `--help=<value>` diagnostic, and `codex execpolicy check -hx` now reaches
+    clap's missing-required block like Rust.
   - `codex mcp add --oauth-client-registration <AUTO|CIMD|DCR>` is a Rust flag Go
     does not parse yet, and clap treats `--user=` as a satisfied (empty) value for
     the nested `setup` parser where Go reports the missing group.

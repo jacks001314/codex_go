@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -1423,8 +1424,15 @@ func TestParseExecpolicyCheck(t *testing.T) {
 
 func TestParseExecpolicyCheckHyphenCommandBeforeRulesConsumesTrailingArgs(t *testing.T) {
 	_, err := Parse([]string{"execpolicy", "check", "--dry-run", "--rules", "policy.rules"})
-	if err == nil || err.Error() != "execpolicy check requires --rules PATH" {
-		t.Fatalf("Parse error = %v, want missing rules because --dry-run starts COMMAND", err)
+	var usage *UsageError
+	if !errors.As(err, &usage) {
+		t.Fatalf("Parse error = %v, want clap's missing-rules block", err)
+	}
+	if want := "the following required arguments were not provided:\n  --rules <PATH>"; usage.Message != want {
+		t.Fatalf("message = %q, want %q", usage.Message, want)
+	}
+	if want := "Usage: codex execpolicy check --rules <PATH> <COMMAND>..."; usage.Usage != want {
+		t.Fatalf("usage = %q, want %q", usage.Usage, want)
 	}
 }
 
