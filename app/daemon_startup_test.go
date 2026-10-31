@@ -212,13 +212,15 @@ func TestNoDaemonRejectionsLikeRust(t *testing.T) {
 		t.Fatalf("interactive rejection = %q", stderr.String())
 	}
 
-	// Rust #58239: agents may run embedded, so only the remote combination is
-	// rejected.
+	// 0.166 rejects --no-daemon for the agents overview outright, and the
+	// rejection is printed as an ERROR line before the remote combination is
+	// even considered.
+	var agentsStderr strings.Builder
 	if err := runAgentsCommandWithIO(context.Background(), &cli.AgentsOptions{
 		NoDaemon: true,
 		Remote:   "unix:///tmp/codex.sock",
-	}, nil, strings.NewReader(""), io.Discard); err == nil || !strings.Contains(err.Error(), "--no-daemon cannot be used with --remote.") {
-		t.Fatalf("agents --no-daemon --remote error = %v", err)
+	}, nil, strings.NewReader(""), io.Discard, &agentsStderr); err == nil || !strings.Contains(agentsStderr.String(), "cannot be used with codex agents") {
+		t.Fatalf("agents --no-daemon error = %v stderr = %q", err, agentsStderr.String())
 	}
 
 	if err := runSessionQueue(&cli.QueueOptions{

@@ -523,7 +523,9 @@ func runPluginMarketplaceAdd(ctx *pluginCLIContext, opts *cli.PluginMarketplaceO
 		SparsePaths: append([]string(nil), opts.SparsePaths...),
 	})
 	if err != nil {
-		return err
+		// Rust surfaces the marketplace-source diagnostics as-is; the plugin
+		// request wrapper only exists inside the app-server RPC payload.
+		return pluginMarketplaceSourceError(err)
 	}
 	if opts.JSON {
 		output := map[string]any{
@@ -542,6 +544,20 @@ func runPluginMarketplaceAdd(ctx *pluginCLIContext, opts *cli.PluginMarketplaceO
 	}
 	fmt.Fprintf(stdout, "Installed marketplace root: %s\n", outcome.InstalledRoot)
 	return nil
+}
+
+// pluginMarketplaceSourceError drops the ErrInvalidPluginRequest wrapper so the
+// CLI prints the bare reason Rust reports.
+func pluginMarketplaceSourceError(err error) error {
+	if !errors.Is(err, plugin.ErrInvalidPluginRequest) {
+		return err
+	}
+	prefix := plugin.ErrInvalidPluginRequest.Error() + ": "
+	message := strings.TrimPrefix(err.Error(), prefix)
+	if message == err.Error() {
+		return err
+	}
+	return errors.New(message)
 }
 
 func runPluginMarketplaceList(ctx *pluginCLIContext, opts *cli.PluginMarketplaceOptions, stdout io.Writer) error {

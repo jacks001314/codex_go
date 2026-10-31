@@ -21,16 +21,21 @@ import (
 // interactive terminal the full-screen agents-overview dashboard
 // (#39094/#39112) is opened; otherwise the active session list is rendered as a
 // text overview.
-func runAgentsCommand(ctx context.Context, opts *cli.AgentsOptions, root *cli.RootOptions, stdout io.Writer) error {
-	return runAgentsCommandWithIO(ctx, opts, root, os.Stdin, stdout)
+func runAgentsCommand(ctx context.Context, opts *cli.AgentsOptions, root *cli.RootOptions, stdout, stderr io.Writer) error {
+	return runAgentsCommandWithIO(ctx, opts, root, os.Stdin, stdout, stderr)
 }
 
-func runAgentsCommandWithIO(ctx context.Context, opts *cli.AgentsOptions, root *cli.RootOptions, stdin io.Reader, stdout io.Writer) error {
+func runAgentsCommandWithIO(ctx context.Context, opts *cli.AgentsOptions, root *cli.RootOptions, stdin io.Reader, stdout, stderr io.Writer) error {
 	// Rust #58239: `codex agents` follows the normal daemon startup rules, so
 	// --no-daemon (including the agents-only spelling) opens the command center
 	// against an embedded app server. Only --remote conflicts: the target cannot
 	// be both embedded and remote.
 	noDaemon := interactiveRootNoDaemon(root, agentsSharedOptions(opts))
+	if noDaemon {
+		// Rust #58239 keeps the overview on a shared server: both spellings of
+		// --no-daemon are rejected before any session or server work starts.
+		return interactiveFatalExit(stderr, daemonNoDaemonWithAgents)
+	}
 	remoteRoot := &cli.RootOptions{}
 	if root != nil {
 		*remoteRoot = *root
@@ -46,9 +51,6 @@ func runAgentsCommandWithIO(ctx context.Context, opts *cli.AgentsOptions, root *
 		cwdOverride = strings.TrimSpace(opts.Cwd)
 	}
 	if strings.TrimSpace(remoteRoot.Remote) != "" || strings.TrimSpace(remoteRoot.RemoteAuthEnv) != "" {
-		if noDaemon {
-			return errors.New(daemonNoDaemonWithRemote)
-		}
 		endpoint, err := resolveInteractiveRemoteEndpoint(remoteRoot)
 		if err != nil {
 			return err

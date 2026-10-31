@@ -214,7 +214,7 @@ func RunWithOptions(ctx context.Context, args []string, stdin io.Reader, stdout,
 	case cli.CommandTcpTunnel:
 		return tcptunnel.Run(ctx, &parsed.TcpTunnel.Args, stdin, stdout, stderr)
 	case cli.CommandAgents:
-		return runAgentsCommandWithIO(ctx, &parsed.Agents, &parsed.Root, stdin, stdout)
+		return runAgentsCommandWithIO(ctx, &parsed.Agents, &parsed.Root, stdin, stdout, stderr)
 	case cli.CommandUpdate:
 		return runUpdate(ctx, &parsed.Update, stdout, stderr)
 	default:

@@ -825,6 +825,9 @@ func Parse(args []string) (*Parsed, error) {
 			return nil, err
 		}
 		if _, err := parseSubcommand(p, rest[1:]); err != nil {
+			if promoted, ok := clapPromoteDeferredValueError(p, rest[1:], err); ok {
+				return nil, decorateSubcommandClapUsage(p.Command, promoted, rest[1:])
+			}
 			if clapPostParseValidationError(err) {
 				if repeatErr := clapRepeatedValueOptionError(leaf, rest[1:]); repeatErr != nil {
 					return nil, repeatErr
@@ -1874,7 +1877,12 @@ func parseReview(args []string, review *ReviewOptions, exec *ExecOptions, overri
 				if exec != nil {
 					return unexpectedPositionalError(arg, execReviewUsageText)
 				}
-				return fmt.Errorf("unexpected argument '%s' found", arg)
+				// clap reports the stray PROMPT with its plain table usage; the
+				// smart-usage decorator leaves it alone because no option was used.
+				return &UsageError{
+					Message: "unexpected argument '" + arg + "' found",
+					Usage:   clapCommandUsageText("review"),
+				}
 			}
 			recordReviewPosition(positions, "prompt", i)
 			review.Prompt = arg
@@ -2032,14 +2040,9 @@ func parseExecGlobalOption(args []string, i *int, exec *ExecOptions, deferred *e
 // recorded error is reported once the scan finishes. It reports whether err is
 // such a value diagnostic, in which case the value token is skipped.
 func deferClapValueError(args []string, i *int, deferred *error, err error) bool {
-	usageErr, ok := err.(*UsageError)
-	if !ok {
-		return false
-	}
 	// Raw diagnostics and clap's empty-value diagnostic are value-parser
 	// errors too: they defer so an undeclared flag later in argv still wins.
-	missingValue := strings.HasPrefix(usageErr.Message, "a value is required for '")
-	if !usageErr.Raw && !missingValue && !strings.HasPrefix(usageErr.Message, "invalid value '") {
+	if !clapDeferredValueDiagnostic(err) {
 		return false
 	}
 	// An inline `--flag=value` is one token that clap validates while it
@@ -2055,6 +2058,86 @@ func deferClapValueError(args []string, i *int, deferred *error, err error) bool
 		*i++
 	}
 	return true
+}
+
+// clapDeferredValueDiagnostic reports whether err is one of the value
+// diagnostics the subcommand parsers postpone. clap raises them once the next
+// token completes the value, so a flag that arrives first wins instead.
+func clapDeferredValueDiagnostic(err error) bool {
+	usageErr, ok := err.(*UsageError)
+	if !ok {
+		return false
+	}
+	if usageErr.Raw {
+		return true
+	}
+	return strings.HasPrefix(usageErr.Message, "invalid value '") ||
+		strings.HasPrefix(usageErr.Message, "a value is required for '")
+}
+
+// clapUnexpectedArgumentToken extracts the token an "unexpected argument"
+// diagnostic names.
+func clapUnexpectedArgumentToken(err error) (string, bool) {
+	usageErr, ok := err.(*UsageError)
+	if !ok {
+		return "", false
+	}
+	const prefix = "unexpected argument '"
+	if !strings.HasPrefix(usageErr.Message, prefix) {
+		return "", false
+	}
+	rest := usageErr.Message[len(prefix):]
+	end := strings.Index(rest, "'")
+	if end < 0 {
+		return "", false
+	}
+	return rest[:end], true
+}
+
+// clapPromoteDeferredValueError replays the tokens that precede an undeclared
+// flag. clap validates a space-form value only once the next token is
+// recognised, so a value error whose value is the token right before the flag
+// never runs; any earlier value error wins over the unknown-argument
+// diagnostic.
+func clapPromoteDeferredValueError(p *Parsed, args []string, err error) (error, bool) {
+	if p == nil {
+		return nil, false
+	}
+	token, ok := clapUnexpectedArgumentToken(err)
+	if !ok || !clapLooksLikeOption(token) {
+		return nil, false
+	}
+	stop := -1
+	for i, arg := range args {
+		if arg == token || strings.HasPrefix(arg, token+"=") {
+			stop = i
+			break
+		}
+	}
+	if stop <= 0 {
+		return nil, false
+	}
+	midErr := clapReplaySubcommand(p, args[:stop])
+	if midErr == nil || !clapDeferredValueDiagnostic(midErr) {
+		return nil, false
+	}
+	if prevErr := clapReplaySubcommand(p, args[:stop-1]); prevErr == nil || prevErr.Error() != midErr.Error() {
+		// The failing value is the token immediately before the undeclared
+		// flag: clap never completes it, so the unknown-argument diagnostic
+		// stands.
+		return nil, false
+	}
+	return midErr, true
+}
+
+// clapReplaySubcommand re-runs the subcommand parser over a token prefix to
+// observe the diagnostic that prefix alone raises. The replay starts from a
+// pristine command state: the failed run already bound options and
+// positionals, which would turn the replay's own positionals into extras.
+func clapReplaySubcommand(p *Parsed, args []string) error {
+	clone := &Parsed{Command: p.Command, RawSubcommand: p.RawSubcommand}
+	_, err := parseSubcommand(clone, args)
+	return err
 }
 
 func parseLogout(args []string, login *LoginOptions) error {
@@ -5861,41 +5944,6 @@ func parseKeyValueFlag(value string, flag string) (string, string, error) {
 // `--startup-client-info`: the value must decode into the ClientInfo struct, so
 // scalars, arrays and syntax errors are rejected before the server starts.
 // serde's wording is reproduced for the shapes encoding/json can classify.
-func validateStartupClientInfo(value string) error {
-	invalid := func(detail string) error {
-		return &UsageError{Message: "invalid value '" + value + "' for '--startup-client-info <STARTUP_CLIENT_INFO>': " + detail}
-	}
-	if value == "" {
-		return invalid("EOF while parsing a value at line 1 column 0")
-	}
-	var raw any
-	if err := json.Unmarshal([]byte(value), &raw); err != nil {
-		if strings.Contains(err.Error(), "unexpected end of JSON input") {
-			return invalid("EOF while parsing an object at line 1 column 1")
-		}
-		return invalid("expected value at line 1 column 1")
-	}
-	column := strconv.Itoa(len(strings.TrimSpace(value)))
-	switch typed := raw.(type) {
-	case map[string]any:
-		return nil
-	case []any:
-		return invalid("invalid length " + strconv.Itoa(len(typed)) + ", expected struct ClientInfo with 3 elements at line 1 column " + column)
-	case string:
-		return invalid("invalid type: string " + strconv.Quote(typed) + ", expected struct ClientInfo at line 1 column " + column)
-	case bool:
-		return invalid("invalid type: boolean `" + strconv.FormatBool(typed) + "`, expected struct ClientInfo at line 1 column " + column)
-	case float64:
-		if typed == float64(int64(typed)) {
-			return invalid("invalid type: integer `" + strconv.FormatInt(int64(typed), 10) + "`, expected struct ClientInfo at line 1 column " + column)
-		}
-		return invalid("invalid type: floating point `" + strconv.FormatFloat(typed, 'g', -1, 64) + "`, expected struct ClientInfo at line 1 column " + column)
-	case nil:
-		return invalid("invalid type: null, expected struct ClientInfo at line 1 column " + column)
-	}
-	return invalid("expected struct ClientInfo at line 1 column " + column)
-}
-
 // validateLinuxSandboxPIDNamespace applies clap's value parser for the global
 // `--linux-sandbox-pid-namespace <MODE>` flag.
 func validateLinuxSandboxPIDNamespace(value string) error {

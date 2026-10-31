@@ -31,6 +31,8 @@ const (
 	daemonNoDaemonWithRemote = "--no-daemon cannot be used with --remote."
 	// daemonNoDaemonWithQueue mirrors the Rust rejection text.
 	daemonNoDaemonWithQueue = "--no-daemon cannot be used with codex queue. Queuing must discover the shared server to avoid writing through a separate server."
+	// daemonNoDaemonWithAgents mirrors the Rust rejection text.
+	daemonNoDaemonWithAgents = "--no-daemon cannot be used with codex agents. The agents overview requires a shared server. Use codex --no-daemon to work without it."
 )
 
 // daemonServerFeatureKeys mirrors Rust daemon_startup::SERVER_FEATURES: shared

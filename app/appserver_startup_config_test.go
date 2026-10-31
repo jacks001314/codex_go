@@ -69,10 +69,18 @@ func TestAppServerStartupClientInfoValidationLikeRust(t *testing.T) {
 		t.Fatalf("valid client info error = %v", err)
 	}
 	stdout.Reset()
-	if err := Run(context.Background(), []string{"app-server", "--print-startup-config", "--startup-client-info", `{"version":"1"}`}, strings.NewReader(""), &stdout, &stderr); err == nil {
+	stderr.Reset()
+	// 0.166 validates the ClientInfo while clap parses the flag, so the missing
+	// field is a usage diagnostic on stderr rather than a structured app-server
+	// error on stdout.
+	err := Run(context.Background(), []string{"app-server", "--print-startup-config", "--startup-client-info", `{"version":"1"}`}, strings.NewReader(""), &stdout, &stderr)
+	if err == nil {
 		t.Fatal("client info without a name was accepted")
 	}
-	if !strings.Contains(stdout.String(), `"error"`) {
-		t.Fatalf("missing structured error: %q", stdout.String())
+	if want := "error: invalid value '{\"version\":\"1\"}' for '--startup-client-info <STARTUP_CLIENT_INFO>': missing field `name` at line 1 column 15"; !strings.Contains(stderr.String(), want) {
+		t.Fatalf("stderr = %q, want %q", stderr.String(), want)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
 	}
 }

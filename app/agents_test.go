@@ -3,6 +3,8 @@ package app
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"strings"
 	"testing"
 
@@ -43,7 +45,7 @@ func TestRunAgentsCommandWithIOFallsBackToTextOverviewOffTerminal(t *testing.T) 
 	defer func() { newAgentsDashboardStore = previous }()
 	var stdout bytes.Buffer
 	var stdin bytes.Buffer
-	if err := runAgentsCommandWithIO(context.Background(), &cli.AgentsOptions{}, nil, &stdin, &stdout); err != nil {
+	if err := runAgentsCommandWithIO(context.Background(), &cli.AgentsOptions{}, nil, &stdin, &stdout, io.Discard); err != nil {
 		t.Fatalf("runAgentsCommandWithIO() error = %v", err)
 	}
 	out := stdout.String()
@@ -54,30 +56,33 @@ func TestRunAgentsCommandWithIOFallsBackToTextOverviewOffTerminal(t *testing.T) 
 	}
 }
 
-// TestRunAgentsCommandNoDaemonUsesEmbeddedOverviewLikeRust covers Rust #58239:
-// `codex agents --no-daemon` no longer requires a shared server, so off a
-// terminal it renders the overview from the local session store.
-func TestRunAgentsCommandNoDaemonUsesEmbeddedOverviewLikeRust(t *testing.T) {
-	store := session.NewStore(t.TempDir())
-	if err := store.Create(&session.Record{
-		ID:        "44444444-4444-4444-4444-444444444444",
-		SessionID: "s-4",
-		Title:     "embedded-overview",
-		Metadata:  session.Metadata{HistoryMode: "legacy", Source: "cli"},
-	}); err != nil {
-		t.Fatalf("Create() error = %v", err)
+// TestRunAgentsCommandRejectsNoDaemonLikeRust covers the 0.166 rejection: the
+// overview always needs a shared server, so both spellings of --no-daemon print
+// the ERROR line and exit 1 without touching the session store.
+func TestRunAgentsCommandRejectsNoDaemonLikeRust(t *testing.T) {
+	const want = "ERROR: --no-daemon cannot be used with codex agents. The agents overview requires a shared server. Use codex --no-daemon to work without it."
+	cases := map[string]*cli.RootOptions{
+		"root":  {Shared: cli.SharedOptions{NoDaemon: true}},
+		"agent": nil,
 	}
-	previous := newAgentsDashboardStore
-	newAgentsDashboardStore = func() *session.Store { return store }
-	defer func() { newAgentsDashboardStore = previous }()
-	var stdout bytes.Buffer
-	var stdin bytes.Buffer
-	root := &cli.RootOptions{Shared: cli.SharedOptions{NoDaemon: true}}
-	if err := runAgentsCommandWithIO(context.Background(), &cli.AgentsOptions{}, root, &stdin, &stdout); err != nil {
-		t.Fatalf("runAgentsCommandWithIO(--no-daemon) error = %v", err)
-	}
-	if !strings.Contains(stdout.String(), "embedded-overview") {
-		t.Fatalf("embedded overview = %q", stdout.String())
+	for name, root := range cases {
+		opts := &cli.AgentsOptions{}
+		if root == nil {
+			opts.NoDaemon = true
+		}
+		var stdout, stderr bytes.Buffer
+		var stdin bytes.Buffer
+		err := runAgentsCommandWithIO(context.Background(), opts, root, &stdin, &stdout, &stderr)
+		var exit *ExitError
+		if !errors.As(err, &exit) || exit.Code != 1 || !exit.Silent {
+			t.Fatalf("%s: error = %v, want silent exit 1", name, err)
+		}
+		if strings.TrimSpace(stderr.String()) != want {
+			t.Fatalf("%s: stderr = %q", name, stderr.String())
+		}
+		if stdout.Len() != 0 {
+			t.Fatalf("%s: stdout = %q, want empty", name, stdout.String())
+		}
 	}
 }
 

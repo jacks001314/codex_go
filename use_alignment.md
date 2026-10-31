@@ -1555,7 +1555,74 @@ one-off captures.
     `TestRepeatableOptionsStayAcceptedLikeRust` the repeatable accepted set and
     `TestExecThreadSourceConsumesItsValueLikeRust` the arity fix.
 
+### 55. Space-form value timing, positional usage blocks, agents --no-daemon and the ClientInfo schema
+
+- **Lazy space-form validation.** clap validates a space-form option value only
+  when the *next* token is one it recognises, so an undeclared flag directly
+  after the value wins while any earlier value error preempts a later unknown
+  flag. `Parse` now replays the argv prefix before the offending flag
+  (`clapPromoteDeferredValueError`) and promotes the deferred value diagnostic
+  unless the failing value is the token right before the flag. `exec --color
+  bogus --json --bogus`, `exec --color bogus prompt --bogus` and `app-server
+  --listen a --strict-config --bogus` report the invalid value, while
+  `exec --color bogus --bogus` keeps `unexpected argument '--bogus' found`.
+- **Positional offenders keep the plain usage block.** clap matches a stray
+  positional with an empty "used" set, so `mcp list --json x`,
+  `agents --config c x`, `agents --remote ws://x x`, `review --uncommitted x y`,
+  `logout --config c x` and `update --config c x` all print `[OPTIONS]` instead
+  of echoing the consumed option (`login --device-code x` is the one command
+  that renders its required group member). `codex review` now raises the stray
+  PROMPT as a clap diagnostic (`error: unexpected argument 'y' found` plus the
+  table usage) instead of a bare `Error:` line.
+- **`agents --no-daemon`.** Both spellings print
+  `ERROR: --no-daemon cannot be used with codex agents. The agents overview
+  requires a shared server. Use codex --no-daemon to work without it.` and exit
+  1 before touching the session store; `runAgentsCommandWithIO` gained the
+  stderr writer so the message is a raw `ERROR:` line, not `Error:`. The smart
+  usage never echoes `--no-daemon` for the agents command
+  (`agents --no-daemon --bogus` keeps `Usage: codex agents [OPTIONS]`), because
+  the overview pulls the switch from the shared root parser.
+- **`plugin marketplace add`.** The CLI unwraps `ErrInvalidPluginRequest`, so a
+  bad source prints `invalid marketplace source format; expected owner/repo, a
+  git URL, or a local marketplace path` without the `invalid plugin request: `
+  prefix the app-server RPC payload carries.
+- **ClientInfo serde schema.** `cli/startup_client_info.go` replaces the
+  `encoding/json` shortcut with a scanner that reproduces serde_json's
+  positions. `ClientInfo` is `{ name: String, version: String, title:
+  Option<String> }`: `{}` reports ``missing field `name` at line 1 column 2``,
+  `{"name":"x"}` ``missing field `version` at line 1 column 12``, `{"name":1}`
+  ``invalid type: integer `1`, expected a string at line 1 column 9``, container
+  values report `map`/`sequence` at the byte before the opening bracket, the
+  seq form requires three strings (`["a","b",null]` is rejected, a fourth
+  element reports `trailing characters`), duplicate fields report
+  ``duplicate field `name```, and the syntax diagnostics match
+  (`trailing comma`, `expected \`:\``, `expected \`,\` or \`}\``,
+  `key must be a string`, `expected ident`, `EOF while parsing a value/list/
+  object/string`, `trailing characters`). Type errors and syntax errors follow
+  serde's streaming order, so `[1,]` reports the integer element before the
+  trailing comma and `nulll` reports the type error before the trailing byte.
+  Evidence: `out/round41-startup-compare2.txt` (29/33, the four misses are the
+  new `--print-startup-config` requirement listed under Still open),
+  `out/round41-startup-lex.txt` (all 16 lexer shapes) and
+  `TestStartupClientInfoSerdeDiagnosticsLikeRust` (39 captures) plus
+  `TestValueDiagnosticOrderLikeRust` (19 captures).
+
 ## Verification
+
+- clap's value diagnostics, usage blocks and the ClientInfo schema match Rust
+  0.166: `out/round41-order-rust.txt` and `out/round41-positional-echo.txt`
+  pin the ordering/usage rules, `out/round41-startup-compare2.txt` the 33
+  ClientInfo shapes, `out/round41-startup-lex.txt` the 16 lexer shapes,
+  `out/round41-positional-compare.txt` the 14 positional usage blocks and
+  `out/round41-nodaemon.txt` the agents rejection. Regressions stay clean:
+  149/149 boolean repeats (`out/round41-bool*.json` via `p40j.py`), 129/129
+  single-value repeats (the former `--startup-client-info` miss is gone), the
+  1,068-case inline sweep at 35 diffs with 0 new and 0 fixed
+  (`out/round42-inline.txt` vs `out/round40-inline.txt`), 497/497 bad-value
+  cases (`out/round41-r34-flag-surface.txt`) and the 12 round 29-34 probe
+  groups at 0 diffs (`probe_r34x_ok.py` reports 48/48 in
+  `out/round41-r34x.txt`). `go test -count=1 -vet=off ./cli ./app ./plugin
+  ./config` and `./appserver` pass.
 
 - clap's occurrence diagnostics match Rust 0.166 across the command tree:
   `out/round40-bool.json` (149/149), `out/round40-value-invalid.json`
@@ -1950,22 +2017,26 @@ one-off captures.
 - `queue --thread "" --message hi` parses in both CLIs, but Rust fails later with
   `No active session found matching ''` while Go reports `Error: SESSION is
   required`.
-- `--startup-client-info` still skips Rust's serde schema: 0.166 rejects `{}`
-  with ``invalid value '{}' ... missing field `name` at line 1 column 2`` and
-  `{"name":"x"}` with ``missing field `version```, while Go accepts any valid
-  JSON object.
-- clap resolves a pending space-form value before it continues past a *known*
-  option: `exec --color bogus --json --bogus` and
-  `app-server --listen a --strict-config --bogus` report the invalid value,
-  while Go still lets the later unknown flag win (`deferClapValueError` only
-  knows the argv, not the command's declaration table).
-- `codex agents --no-daemon` prints 0.166's raw
-  `ERROR: --no-daemon cannot be used with codex agents. ...` line; Go opens the
-  command center against an embedded app server (nothing rejects the flag in
-  `app/agents.go`).
-- `codex plugin marketplace add` still prefixes its runtime failure with
-  `invalid plugin request: `, where 0.166 prints the bare
-  `invalid marketplace source format; ...` message.
+- `app-server`'s startup-mode requirement graph is still Go-shaped:
+  `--startup-client-info <valid>` alone and `--startup-sign-out` alone print
+  clap's `the following required arguments were not provided:
+  --print-startup-config` with `Usage: codex app-server --print-startup-config
+  --startup-client-info <STARTUP_CLIENT_INFO>`, yet `--startup-client-info ...
+  --stdio` is accepted, so the requirement is conditional in a way the Go
+  parser does not model (it accepts the flag pair outright).
+- `--print-startup-config` conflicts are runtime errors in Go: `--stdio`,
+  `--remote-control` and `--listen <URL>` print clap's
+  `the argument '--print-startup-config' cannot be used with '<flag>'` (exit 2,
+  usage echoing the consumed options) where Go prints
+  `Error: --print-startup-config conflicts with server startup options` (exit
+  1); `--stdio --listen` likewise stays
+  `Error: --stdio conflicts with --listen`.
+- `--print-startup-config=x` reports clap's
+  `unexpected value 'x' for '--print-startup-config' found; no more were
+  expected`; Go falls back to the unknown-argument suggestion path.
+- `app-server --print-startup-config` writes
+  `"appServerVersion":"0.0.0"` where Rust reports its own `0.166.0`, so the
+  printed startup config still differs outside the ClientInfo schema.
 
 - `codex resume`/`codex fork` without a TTY: Rust refuses to start the TUI
   (`ERROR: TERM is set to "dumb". Refusing to start the interactive TUI ...`)

@@ -816,6 +816,12 @@ func decorateSubcommandClapUsage(command Command, err error, args []string) erro
 	switch {
 	case strings.HasPrefix(usageErr.Message, "unexpected argument '"):
 		stopAt, _, _ = strings.Cut(strings.TrimPrefix(usageErr.Message, "unexpected argument '"), "'")
+		if !clapLooksLikeOption(stopAt) && string(command) != "login" {
+			// clap matches the stray positional with an empty "used" set, so the
+			// diagnostic keeps the plain [OPTIONS] block. `login` renders its
+			// required group member instead and is handled below.
+			return err
+		}
 	case strings.HasPrefix(usageErr.Message, "the following required arguments were not provided:"):
 		// Every option in argv was accepted, so echo all of them.
 	default:
@@ -837,6 +843,11 @@ func decorateSubcommandClapUsage(command Command, err error, args []string) erro
 		used = append(used, usageErr.Suggested)
 	}
 	leaf := clapEffectiveCommand(string(command), args)
+	if leaf == "agents" {
+		// Rust leaves --no-daemon out of the smart usage: the overview pulls it
+		// from the shared root parser, so clap never marks it used here.
+		used = clapRemoveUsageToken(used, "--no-daemon")
+	}
 	if strings.HasPrefix(usageErr.Usage, "Usage: codex queue ") {
 		if strings.HasPrefix(usageErr.Message, "unexpected argument '") && !clapLooksLikeOption(stopAt) {
 			// clap keeps the plain table block for a stray positional.
@@ -855,6 +866,18 @@ func decorateSubcommandClapUsage(command Command, err error, args []string) erro
 	}
 	usageErr.Usage = usageWithUsedOptions(usageErr.Usage, used, leaf)
 	return err
+}
+
+// clapRemoveUsageToken drops every occurrence of token from the echoed usage
+// list, keeping the remaining order.
+func clapRemoveUsageToken(tokens []string, token string) []string {
+	out := tokens[:0]
+	for _, candidate := range tokens {
+		if candidate != token {
+			out = append(out, candidate)
+		}
+	}
+	return out
 }
 
 // clapPendingValueError re-reads a pending-value diagnostic the way clap does:
@@ -2102,6 +2125,11 @@ func clapStringSmartUsage(command string, consumed []string) string {
 		return base
 	}
 	used, _ := clapUsageState(command, consumed)
+	if command == "agents" {
+		// Rust leaves --no-daemon out of the smart usage: the overview pulls it
+		// from the shared root parser, so clap never marks it used here.
+		used = clapRemoveUsageToken(used, "--no-daemon")
+	}
 	if len(used) == 0 {
 		return base
 	}
