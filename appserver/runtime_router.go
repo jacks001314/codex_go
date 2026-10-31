@@ -336,6 +336,10 @@ type RuntimeRouter struct {
 	mu                     sync.RWMutex
 	configWarningsMu       sync.Mutex
 	logDBWriteWarningOnce  sync.Once
+	// registeredCoreRefresh coalesces the readiness-path registered Core
+	// refresh so concurrent readiness calls refresh the packaged runtime once
+	// (Rust windows_sandbox_processor registration_refresh OnceCell).
+	registeredCoreRefresh sync.Once
 	// itemStartedTimesMu guards itemStartedTimes, the start times published on
 	// ItemStarted notifications so the matching ItemCompleted can report the
 	// same startedAtMs (Rust #57172 turn timing state).

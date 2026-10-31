@@ -3,6 +3,7 @@ package appserver
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -121,9 +122,17 @@ func (r *RuntimeRouter) windowsSandboxReadiness() (*sandbox.WindowsReadinessResp
 		Values:       read.Config,
 		Requirements: r.requireConfig().Requirements().Requirements,
 	})
+	codexHome := r.requireConfig().CodexHome()
+	if level == sandbox.WindowsSandboxElevated {
+		// Rust refreshes a stale registered Core before answering readiness so a
+		// package update never reports the previous receipt as ready
+		// (windows_sandbox_processor.rs). The Go router answers inline, so the
+		// refresh runs here instead of on a task that replies later.
+		r.refreshRegisteredCoreForReadiness(codexHome)
+	}
 	setupComplete := false
 	if level == sandbox.WindowsSandboxElevated {
-		setupComplete, _ = windowssandbox.SandboxSetupIsComplete(r.requireConfig().CodexHome())
+		setupComplete, _ = windowssandbox.SandboxSetupIsComplete(codexHome)
 	}
 	response := sandbox.DetermineWindowsReadinessFromState(level, setupComplete)
 	if response.Status == sandbox.WindowsReadinessNotConfigured {
@@ -317,5 +326,59 @@ func runWindowsSandboxServiceSetup(request *WindowsSandboxSetupRuntimeRequest) e
 	client := provisionservice.NewClient()
 	client.RegisteredCore = windowssandbox.RegisteredCoreRequested
 	_, err := client.ProvisionWindowsSandbox(request.CodexHome, settings, listeners)
+	return err
+}
+
+// refreshRegisteredCoreForReadiness ports the readiness half of Rust's
+// registered-Core startup refresh. Only an opted-in registered Core without a
+// workload identity refreshes, the refresh runs at most once per router like
+// Rust's OnceCell, and a failure leaves manual setup available.
+func (r *RuntimeRouter) refreshRegisteredCoreForReadiness(codexHome string) {
+	if !windowsSandboxRegisteredCoreRequested() || windowsSandboxWorkloadIdentitySelected() {
+		return
+	}
+	r.registeredCoreRefresh.Do(func() {
+		needsRefresh, err := windowsSandboxRegisteredCoreNeedsRefresh(codexHome)
+		if err != nil || !needsRefresh {
+			return
+		}
+		cwd, err := r.windowsSandboxSetupCWD(nil)
+		if err != nil {
+			return
+		}
+		profile := r.requireConfig().EffectivePermissionProfileForCWD(cwd)
+		env := windowsSandboxSetupEnvMap(os.Environ())
+		err = refreshWindowsSandboxRegisteredCore(
+			codexHome,
+			windowssandbox.ProvisioningSettingsFromEnvironment(profile, env),
+			windowssandbox.ProvisioningListenersFromEnvironment(profile, env),
+		)
+		if err != nil {
+			slog.Warn("registered Core startup refresh requires manual setup", "error", err)
+		}
+	})
+}
+
+// windowsSandboxRegisteredCoreRequested is the process-wide startup opt-in
+// (Rust app_package::registered_core_requested). Tests replace it because the
+// real capture happens once, before any test can set the environment.
+var windowsSandboxRegisteredCoreRequested = windowssandbox.RegisteredCoreRequested
+
+// windowsSandboxWorkloadIdentitySelected mirrors Rust's
+// codex_login::is_workload_identity_selected gate on the startup refresh.
+var windowsSandboxWorkloadIdentitySelected = auth.IsWorkloadIdentitySelected
+
+// windowsSandboxRegisteredCoreNeedsRefresh reads the service's committed
+// receipt without provisioning (Rust registered_core_needs_refresh).
+var windowsSandboxRegisteredCoreNeedsRefresh = windowssandbox.RegisteredCoreNeedsRefresh
+
+// refreshWindowsSandboxRegisteredCore re-registers the packaged Core through
+// the installed service (Rust refresh_registered_core_via_service).
+var refreshWindowsSandboxRegisteredCore = refreshRegisteredCoreViaService
+
+func refreshRegisteredCoreViaService(codexHome string, settings provisionservice.Settings, listeners provisionservice.Listeners) error {
+	client := provisionservice.NewClient()
+	client.RegisteredCore = windowssandbox.RegisteredCoreRequested
+	_, err := client.RefreshRegisteredCore(codexHome, settings, listeners)
 	return err
 }
