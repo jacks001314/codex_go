@@ -619,6 +619,11 @@ func applyCloudConfigBundleWithFilesystemSource(values map[string]any, requireme
 		if err := normalizeNetworkRequirementAliases(parsed); err != nil {
 			return nil, false, fmt.Errorf("%w: invalid cloud requirements: %s", ErrInvalidCloudConfig, err)
 		}
+		// Rust #56055: config_server selects which server the local machine
+		// trusts, so a fetched policy may never supply it.
+		if _, ok := mapAnyKey(parsed, "config_server", "configServer"); ok {
+			return nil, false, fmt.Errorf("%w: config_server cannot be supplied by fetched policy", ErrInvalidCloudConfig)
+		}
 		if permissions, ok := parsed["permissions"].(map[string]any); ok {
 			if _, ok := permissions["filesystem"]; ok {
 				cloudFilesystem = true

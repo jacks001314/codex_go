@@ -34921,9 +34921,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "partial",
    "evidence": [
-    "plan_2026_10_27.md:96: | `#57225` `#56055` | N/A: the TUI diff only adds new (unused) struct fields to test fixtures. |"
+    "Round 1245: config/config_server.go carries Rust #56055's local managed requirement (HTTPS-only base URL without userinfo, fragment or query; endpoint-derived bundle route codex/config/bundle; whole-block replacement in mergeConfigRequirements so endpoint and OAuth always travel together), and the new Config.ValidateAppliedConfigServer rejects a run whose required server is not the one whose bundle was applied (trailing slash normalised because it selects the same route). app/app.go now loads every startup configuration through loadEffectiveWithAppliedConfigServer (sandbox run config, exec-server registration and app-server startup), and config/cloud_config.go rejects a config_server key delivered by fetched enterprise-managed policy with the anchor's reason. Tests: config TestValidateAppliedConfigServerLikeRust, TestFetchedPolicyRejectsConfigServerLikeRust, TestCloudManagedConfigServerRejectedLikeRust (previously encoded the pre-#56055 drop semantics), app TestEffectiveConfigRejectsAppliedConfigServerMismatchLikeRust; go test ./config ./app ./doctor pass.",
+    "Residual: Rust tracks the applied server through configuration snapshots, per-role requirement overrides and managed refreshes (ConfigServer in CloudConfigBundleSnapshot, core/src/agent/role.rs, runtime_refresh.rs). Go's ConfigRequirements has a single effective layer with no role-override concept and its cloud bundle is loaded once per run, so bundle-refresh mismatch rejection has no carrier yet; if Go grows a bundle refresh, CloudConfigLoader.ConfigServer() plus ValidateAppliedConfigServer are the intended hook."
    ]
   },
   {

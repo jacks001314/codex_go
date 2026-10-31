@@ -648,14 +648,14 @@ func loadSandboxRunConfigForRunContext(ctx context.Context, opts *cli.SandboxOpt
 	if includeManagedConfig {
 		managedConfigPath = filepath.Join(codexHome, "managed_config.toml")
 	}
-	loaded, err := config.LoadEffectiveWithOptions(codexHome, &config.EffectiveOptions{
+	loaded, err := loadEffectiveWithAppliedConfigServer(codexHome, &config.EffectiveOptions{
 		Profile:              opts.ConfigProfile,
 		CWD:                  opts.CWD,
 		RawOverrides:         append([]string(nil), opts.ConfigOverrides...),
 		IncludeManagedConfig: includeManagedConfig,
 		ManagedConfigPath:    managedConfigPath,
 		CloudConfigBundle:    cloudConfigBundle,
-	})
+	}, cloudConfigBundle)
 	if err != nil {
 		return nil, err
 	}
@@ -714,6 +714,30 @@ func sandboxCloudConfigBundleForRun(ctx context.Context, codexHome string, opts 
 		return nil, err
 	}
 	return cloudConfigBundleLoaderForRun(ctx, codexHome, bootstrap, snapshot)
+}
+
+// loadEffectiveWithAppliedConfigServer loads the effective configuration with
+// an optional managed bundle loader and rejects the run when that bundle was
+// fetched from a configuration server other than the one the effective
+// requirements select (Rust #56055). A ChatGPT-backed loader carries no
+// configuration server, so it only satisfies requirements without one.
+func loadEffectiveWithAppliedConfigServer(codexHome string, opts *config.EffectiveOptions, loader *config.CloudConfigLoader) (*config.Config, error) {
+	loaded, err := config.LoadEffectiveWithOptions(codexHome, opts)
+	if err != nil {
+		return nil, err
+	}
+	var applied *config.ConfigServer
+	if loader != nil {
+		applied = loader.ConfigServer()
+	}
+	var required *config.ConfigServer
+	if loaded.Requirements != nil {
+		required = loaded.Requirements.ConfigServer
+	}
+	if err := config.ValidateAppliedConfigServer(applied, required); err != nil {
+		return nil, err
+	}
+	return loaded, nil
 }
 
 // cloudConfigBundleLoaderForRun builds the ChatGPT-backed cloud config loader
@@ -998,13 +1022,13 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 			}
 		}
 	}
-	loadedConfig, err := config.LoadEffectiveWithOptions(codexHome, &config.EffectiveOptions{
+	loadedConfig, err := loadEffectiveWithAppliedConfigServer(codexHome, &config.EffectiveOptions{
 		RawOverrides:         rootConfigOverrides,
 		StrictConfig:         strictConfig,
 		IncludeManagedConfig: true,
 		ManagedConfigPath:    filepath.Join(codexHome, "managed_config.toml"),
 		CloudConfigBundle:    cloudConfigBundle,
-	})
+	}, cloudConfigBundle)
 	if err != nil {
 		return err
 	}
@@ -1752,7 +1776,7 @@ func loadAppServerConfig(codexHome string, opts cli.AppServerOptions, root *cli.
 	loadOpts.IncludeManagedConfig = true
 	loadOpts.ManagedConfigPath = filepath.Join(codexHome, "managed_config.toml")
 	loadOpts.CloudConfigBundle = loader
-	return config.LoadEffectiveWithOptions(codexHome, loadOpts)
+	return loadEffectiveWithAppliedConfigServer(codexHome, loadOpts, loader)
 }
 
 func appServerRequirements(codexHome string, loadedConfig *config.Config) (*config.ConfigRequirements, error) {

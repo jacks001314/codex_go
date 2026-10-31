@@ -193,6 +193,37 @@ func cloneConfigServer(server *ConfigServer) *ConfigServer {
 	return &cloned
 }
 
+// ErrConfigServerMismatch reports that the managed bundle applied for a run was
+// not fetched from the configuration server the effective requirements select
+// (Rust #56055).
+var ErrConfigServerMismatch = errors.New("applied configuration server does not match the required one")
+
+// ValidateAppliedConfigServer mirrors Rust #56055's applied-server check: a
+// configuration whose effective requirements select a customer-hosted
+// configuration server must have applied a bundle fetched from exactly that
+// server.
+func ValidateAppliedConfigServer(applied, required *ConfigServer) error {
+	if required == nil {
+		return nil
+	}
+	requiredURL, err := required.ValidatedBaseURL()
+	if err != nil {
+		return err
+	}
+	if applied == nil {
+		return fmt.Errorf("%w: required %s but no bundle from it was applied", ErrConfigServerMismatch, requiredURL)
+	}
+	appliedURL, err := applied.ValidatedBaseURL()
+	if err != nil {
+		return err
+	}
+	// A trailing slash selects the same bundle route, so it is not a mismatch.
+	if strings.TrimSuffix(appliedURL, "/") != strings.TrimSuffix(requiredURL, "/") {
+		return fmt.Errorf("%w: applied %s, required %s", ErrConfigServerMismatch, appliedURL, requiredURL)
+	}
+	return nil
+}
+
 // RequiresRemoteConfig reports whether local administration requires a
 // remotely delivered managed bundle (Rust
 // ConfigRequirementsToml::requires_remote_config).

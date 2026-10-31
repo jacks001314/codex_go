@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -88,9 +89,11 @@ redirect_port = 1455
 	}
 }
 
-// Mirrors Rust: cloud-managed requirement layers cannot redirect the managed
-// configuration source.
-func TestCloudManagedConfigServerIsDroppedLikeRust(t *testing.T) {
+// Mirrors Rust #56055: cloud-managed requirement layers may never select the
+// managed configuration source. The anchor rejects the fragment instead of
+// silently dropping it, because an endpoint and its credentials must come from
+// the same local requirements layer.
+func TestCloudManagedConfigServerRejectedLikeRust(t *testing.T) {
 	local := &ConfigRequirements{ConfigServer: &ConfigServer{BaseURL: "https://local.example.com"}}
 	bundle := CloudConfigBundle{
 		RequirementsTOML: CloudConfigRequirementsTOMLBundle{EnterpriseManaged: []CloudConfigFragment{{
@@ -100,11 +103,11 @@ func TestCloudManagedConfigServerIsDroppedLikeRust(t *testing.T) {
 		}}},
 	}
 	merged, err := applyCloudConfigBundle(map[string]any{}, local, bundle, t.TempDir())
-	if err != nil {
-		t.Fatalf("applyCloudConfigBundle() error = %v", err)
+	if !errors.Is(err, ErrInvalidCloudConfig) || !strings.Contains(err.Error(), "config_server") {
+		t.Fatalf("applyCloudConfigBundle() error = %v, want an invalid cloud config error naming config_server", err)
 	}
-	if merged == nil || merged.ConfigServer == nil || merged.ConfigServer.BaseURL != "https://local.example.com" {
-		t.Fatalf("merged config server = %#v", merged.ConfigServer)
+	if merged != nil {
+		t.Fatalf("applyCloudConfigBundle() requirements = %#v, want nil", merged)
 	}
 }
 
@@ -143,5 +146,53 @@ func TestCloudConfigLoaderSnapshotCarriesConfigServerLikeRust(t *testing.T) {
 	}
 	if loader.ConfigServer() == nil {
 		t.Fatal("ConfigServer() = nil")
+	}
+}
+
+// Mirrors Rust #56055's applied-server check: a required customer-hosted
+// configuration server must be the one whose bundle was applied, while a
+// trailing slash on the base URL is not a mismatch.
+func TestValidateAppliedConfigServerLikeRust(t *testing.T) {
+	required := &ConfigServer{BaseURL: "https://required.example.com/settings"}
+	if err := ValidateAppliedConfigServer(nil, nil); err != nil {
+		t.Fatalf("ValidateAppliedConfigServer(nil, nil) = %v", err)
+	}
+	if err := ValidateAppliedConfigServer(required, required); err != nil {
+		t.Fatalf("matching server rejected: %v", err)
+	}
+	if err := ValidateAppliedConfigServer(&ConfigServer{BaseURL: "https://required.example.com/settings/"}, required); err != nil {
+		t.Fatalf("trailing slash rejected: %v", err)
+	}
+	if err := ValidateAppliedConfigServer(&ConfigServer{BaseURL: "https://other.example.com/settings"}, required); !errors.Is(err, ErrConfigServerMismatch) {
+		t.Fatalf("ValidateAppliedConfigServer(mismatch) = %v, want ErrConfigServerMismatch", err)
+	}
+	if err := ValidateAppliedConfigServer(nil, required); !errors.Is(err, ErrConfigServerMismatch) {
+		t.Fatalf("ValidateAppliedConfigServer(nil, required) = %v, want ErrConfigServerMismatch", err)
+	}
+}
+
+// Mirrors Rust #56055: a fetched policy bundle may never select the
+// customer-hosted configuration server, because that setting is a local
+// administration requirement.
+func TestFetchedPolicyRejectsConfigServerLikeRust(t *testing.T) {
+	_, _, err := applyCloudConfigBundleWithFilesystemSource(map[string]any{}, nil, CloudConfigBundle{
+		RequirementsTOML: CloudConfigRequirementsTOMLBundle{EnterpriseManaged: []CloudConfigFragment{
+			{ID: "req", Name: "Requirements", Contents: "[config_server]\nbase_url = \"https://config.example.com/settings\"\n"},
+		}},
+	}, t.TempDir())
+	if !errors.Is(err, ErrInvalidCloudConfig) || !strings.Contains(err.Error(), "config_server") {
+		t.Fatalf("applyCloudConfigBundleWithFilesystemSource() error = %v, want an invalid cloud config error naming config_server", err)
+	}
+	// The same fragment without config_server still applies.
+	requirements, _, err := applyCloudConfigBundleWithFilesystemSource(map[string]any{}, nil, CloudConfigBundle{
+		RequirementsTOML: CloudConfigRequirementsTOMLBundle{EnterpriseManaged: []CloudConfigFragment{
+			{ID: "req", Name: "Requirements", Contents: "[features]\nfast_mode = true\n"},
+		}},
+	}, t.TempDir())
+	if err != nil {
+		t.Fatalf("applyCloudConfigBundleWithFilesystemSource() error = %v", err)
+	}
+	if requirements == nil || !requirements.FeatureRequirements["fast_mode"] {
+		t.Fatalf("requirements = %#v, want fast_mode enabled", requirements)
 	}
 }
