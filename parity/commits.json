@@ -35485,8 +35485,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:59: | `#56309` `#57263` | Permission catalog path wording (`writable_root(s)`, `omitted_paths`, `denied_reads`) | `model/catalog.go`, `sandbox/permission_prompt.go`, `appserver/permissions_world_state.go`, catalog/permission tests |",
-    "plan_2026_10_27_nontui.md:596: `#56309`/`#57263`: the permission catalog in `model/catalog.go` carries"
+    "Round 1257: model/catalog.go carries the model-specific writable-root wording so permission prompts can name `writable_root`/`writable_roots` per model catalog. Tests: sandbox/permission_prompt_test.go TestPermissionPromptCatalogWritableRootsLikeRust."
    ]
   },
   {
@@ -35496,9 +35495,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:293: `#56342`, `#56312`, `#55725`, `#55710`, `#57194`, `#56011`, `#55993`. Go has"
+    "Round 1257: not applicable — Go has no rollout-trace recorder or accepted-conversation-history event model; rollout/trace_reduce.go only summarises an existing `trace.jsonl`."
    ]
   },
   {
@@ -35510,7 +35509,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_28_sync4.md:123: | `e103bbc06f` | #56313 | implemented | Catalog overrides for history, notes, `new_context`, and `get_context_remaining` (see above). |"
+    "Round 1257: catalog overrides apply to history, notes and context tools for multi-agent v2: agent/tools.go routes the override store and agent/tools_v2_overrides_test.go pins the refresh behaviour. Tests: agent/tools_v2_overrides_test.go TestMultiAgentV2CatalogOverridesApplyLikeRust, TestMultiAgentV2OverrideStoreRefreshesForModelChangeLikeRust, agent/multi_agent_v2_catalog_descriptions_like_rust_test.go."
    ]
   },
   {
@@ -35544,9 +35543,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:293: `#56342`, `#56312`, `#55725`, `#55710`, `#57194`, `#56011`, `#55993`. Go has"
+    "Round 1257: not applicable — Go has no rollout-trace request snapshots to match image content against."
    ]
   },
   {
@@ -35558,7 +35557,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_28_sync4.md:121: | `4610b573e5` | #56343 | equivalent | `appserver/executor_hooks.go` runs environment-scoped hooks with the owning working directory, shell, and network policy. |"
+    "Round 1257: appserver/environment_config.go runs environment hooks on the executor that owns the environment, with appserver/compact_hooks.go and app/hooks_tui.go consuming the resolved hook sources. Tests: appserver/environment_config_test.go."
    ]
   },
   {
@@ -35584,7 +35583,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:48: | `#56020` `#56031` `#56364` | Thread sample protocol fields and latest-turn semantics | `appserver/thread_sample.go`, `thread_sample_protocol.go`, `thread_sample_like_rust_test.go` |"
+    "Round 1257: appserver/agent_controller.go lets a caller set the thread source used for sampling instead of inferring it. Tests: appserver/agent_controller_test.go."
    ]
   },
   {
@@ -35596,8 +35595,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:105: | `#56371` | `auto_review.timeout_ms` configures the overall Guardian review budget; `0` waits without a deadline | `config/config.go`, `config/guardian_timeout_test.go`, `appserver/guardian_reviewer.go`, `appserver/agent_runtime.go`, `appserver/guardian_review_timeout_like_rust_test.go` |",
-    "plan_2026_10_27_nontui.md:1235: - For `#56371`: `go test ./config -run GuardianReviewTimeout -count=1` and `go test ./appserver -run 'GuardianReview(Timeout|Context|erUsesConfigured|erUnlimited)' -count=1` pass."
+    "Round 1257: config/config.go exposes the configurable Guardian review timeout, with validation in config/value validation tables. Tests: config/guardian_timeout_test.go TestGuardianReviewTimeoutLikeRust."
    ]
   },
   {
@@ -36299,9 +36297,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:293: `#56342`, `#56312`, `#55725`, `#55710`, `#57194`, `#56011`, `#55993`. Go has"
+    "Round 1257: not applicable — Go has no rollout-trace tool-call classification by runtime handler; tool calls are recorded on rollout items directly."
    ]
   },
   {
@@ -36313,8 +36311,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:34: | `#57196` | Isolate MCP inputs and timeouts for callers sharing a connection: input requests carry globally unique ids across requests and connections, waiting for client input pauses the request's own timeout budget instead of consuming it, and a cancelled caller on a ready — possibly shared — connection sends `notifications/cancelled` for its own request rather than failing the transport. Tool ",
-    "plan_2026_10_27_nontui.md:1465: - For `#57196`: `go test ./mcp -count=1` passes. Coverage pins unique input ids for concurrent"
+    "Round 1257: mcp/config.go plus the connection-sharing path isolate inputs and timeouts for callers sharing one stdio connection, and mcp/connection_pool.go retires a forced refresh. Tests: mcp/connection_sharing_like_rust_test.go TestMCPConnectionSharingReusesNegotiatedStdioAcrossChatsLikeRust, TestMCPConnectionSharingRetiresForcedRefreshLikeRust, TestMCPConnectionSharingKeepsLegacyAndStartupInteractiveServersPrivate."
    ]
   },
   {
@@ -36386,8 +36383,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:80: | `#57203` | Preserve the command cwd in `PermissionRequest` and `PostToolUse` hook input | `tool/hooks.go`, `tool/shell_executor.go`, `appserver/hooks_events.go`, `appserver/tool_hooks_adapter.go`, `appserver/runtime_router.go`, `appserver/network_approval.go`, like-Rust tests |",
-    "plan_2026_10_27_nontui.md:841: `#57198` `#57203` details: tool hook requests now carry a `toolCWD` that"
+    "Round 1257: appserver/hooks_events.go and appserver/hooks_discovery.go preserve the command working directory in permission and post-tool hooks. Tests: appserver/hooks_discovery_test.go, appserver/hooks_tool_cwd_like_rust_test.go TestHookInputCWDReportsToolExecutionDirectoryLikeRust."
    ]
   },
   {
@@ -36399,7 +36395,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:46: | `#57204` | Feature `untrusted_as_tool_output` (under development, off) | `features/features.go` |"
+    "Round 1257: features/features.go:354 registers `untrusted_as_tool_output` as StageUnderDevelopment with DefaultEnabled: false. Tests: features/features_test.go."
    ]
   },
   {
@@ -36409,9 +36405,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:880: `#57255`/`#57206`/`#55547`/`#55616` (dependency advisories and lockfiles) are"
+    "Round 1257: not applicable — Rust dependency-check advisory ignore (crypto-bigint timing); Go pins its own module set and has no advisory ignore list to mirror."
    ]
   },
   {
@@ -36423,8 +36419,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:78: | `#57207` | Attribute approval waits and Guardian reviews to the owning tool call | `tool/handlers.go`, `turn/tools.go`, `appserver/runtime_router.go`, `appserver/guardian_reviewer.go`, `appserver/network_approval.go`, `appserver/mcp_elicitation.go`, `appserver/mcp_tool_approval.go`, `appserver/agent_runtime.go`, like-Rust tests |",
-    "plan_2026_10_27_nontui.md:805: `#57209` `#57201` `#57207` details: `codex_turn_event` carries Rust's eight"
+    "Round 1257: appserver/guardian_review_blocking.go attributes approval waits to the owning tool call's critical-path timing. Tests: appserver/critical_path_timing_like_rust_test.go TestUserWaitTimingAttributesBlockingTimeToOwningCallLikeRust, TestUserWaitTimingWithoutOwnerInvalidatesCaptureLikeRust, TestGuardianReviewTimingUsesOwningCallLikeRust."
    ]
   },
   {
@@ -36461,8 +36456,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:32: | `#57210` | Opt-in protocol discovery for local stdio MCP servers: the disabled-by-default `mcp_connection_sharing` feature makes an eligible local stdio server (not `codex_apps`, local environment, no runtime-managed credentials, no EMA auth, no explicit legacy override) probe `server/discover` before the legacy handshake. A helper that cannot finish discovery is recovered with a fresh handshake",
-    "plan_2026_10_27_nontui.md:1441: - For `#57210`: `go build ./...`, `go test ./mcp -count=1`, and"
+    "Round 1257: mcp/protocol_discovery_metrics.go implements opt-in protocol discovery for local stdio MCP servers with its metrics observer, driven from mcp/api.go and mcp/http_client.go. Tests: mcp/protocol_discovery_metrics_test.go TestRecordProtocolDiscoveryMetricsObserverLikeRust, TestHTTPClientInitializeRecordsProtocolDiscoveryMetricsLikeRust."
    ]
   },
   {
@@ -36488,8 +36482,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:82: | `#57212` | zstd-compressed code-mode gRPC responses for clients that advertise support | `codemode/grpc_zstd.go`, `codemode/grpc_stdio_host.go`, `codemode/grpc_session_provider.go`, `codemode/grpc_process_provider.go`, `codemode/grpc_zstd_test.go` |",
-    "plan_2026_10_27_nontui.md:868: `#57212` details: the code-mode host negotiates zstd for gRPC responses."
+    "Round 1257: codemode/grpc_zstd.go negotiates and applies zstd compression for code-mode gRPC responses, used by codemode/grpc_stdio_host.go. Tests: codemode/grpc_zstd_test.go TestGrpcZstdCodecRoundTripsRepeatedly, TestGrpcCodeModeNegotiatesZstdResponses."
    ]
   },
   {
