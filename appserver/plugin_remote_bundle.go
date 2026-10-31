@@ -248,7 +248,7 @@ func validateRemotePluginVersion(version string) error {
 func validateRemotePluginBundleURL(raw string) error {
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Host == "" {
-		return fmt.Errorf("invalid remote plugin bundle URL %q", raw)
+		return fmt.Errorf("invalid remote plugin bundle URL: %s", remotePluginBundleURLParseReason(err))
 	}
 	if parsed.Scheme == "https" {
 		return nil
@@ -257,6 +257,61 @@ func validateRemotePluginBundleURL(raw string) error {
 		return nil
 	}
 	return fmt.Errorf("unsupported remote plugin bundle URL scheme %q", parsed.Scheme)
+}
+
+// remotePluginBundleURLHost keeps only the host of a bundle download URL.
+// Rust #58165 treats the URL as a secret because its query string can carry a
+// signature token, so diagnostics name the host instead of the full URL.
+func remotePluginBundleURLHost(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Hostname() == "" {
+		return "unknown-host"
+	}
+	return parsed.Hostname()
+}
+
+// remotePluginBundleURLParseReason strips the echoed input from a net/url or
+// net/http error. Both types embed the failing URL in their text, which would
+// leak the signature token (Rust #58165 keeps only the parse error).
+func remotePluginBundleURLParseReason(err error) string {
+	if err == nil {
+		return "missing host"
+	}
+	return sanitizedRemotePluginBundleCause(err).Error()
+}
+
+// sanitizedRemotePluginBundleCause unwraps the URL-carrying layers of an
+// http.Client or url.Parse error down to the transport or parse cause.
+func sanitizedRemotePluginBundleCause(err error) error {
+	for {
+		urlErr, ok := err.(*url.Error)
+		if !ok || urlErr.Err == nil {
+			return err
+		}
+		err = urlErr.Err
+	}
+}
+
+// sanitizedRemotePluginBundleError drops the request URL from an error's text
+// while preserving its cause chain for errors.Is and errors.As.
+type sanitizedRemotePluginBundleError struct {
+	cause   error
+	message string
+}
+
+func (e *sanitizedRemotePluginBundleError) Error() string { return e.message }
+
+func (e *sanitizedRemotePluginBundleError) Unwrap() error { return e.cause }
+
+func sanitizeRemotePluginBundleError(err error) error {
+	if err == nil {
+		return nil
+	}
+	sanitized := sanitizedRemotePluginBundleCause(err)
+	if sanitized == err {
+		return err
+	}
+	return &sanitizedRemotePluginBundleError{cause: err, message: sanitized.Error()}
 }
 
 func isLoopbackBundleHost(host string) bool {
@@ -269,33 +324,37 @@ func isLoopbackBundleHost(host string) bool {
 func downloadRemotePluginBundle(ctx context.Context, client interface {
 	Do(*http.Request) (*http.Response, error)
 }, bundleURL string) ([]byte, error) {
+	host := remotePluginBundleURLHost(bundleURL)
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, bundleURL, nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create remote plugin bundle download request: %s", remotePluginBundleURLParseReason(err))
 	}
 	response, err := client.Do(request)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to send remote plugin bundle download request to %s: %w", host, sanitizeRemotePluginBundleError(err))
 	}
 	defer response.Body.Close()
 	if response.Request != nil && response.Request.URL != nil {
+		if finalHost := response.Request.URL.Hostname(); finalHost != "" {
+			host = finalHost
+		}
 		if err := validateRemotePluginBundleURL(response.Request.URL.String()); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("remote plugin bundle download from %s resolved to unsupported URL scheme %q", host, response.Request.URL.Scheme)
 		}
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(response.Body, 8*1024))
-		return nil, fmt.Errorf("remote plugin bundle download failed with status %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
+		return nil, fmt.Errorf("remote plugin bundle download from %s failed with status %d: %s", host, response.StatusCode, strings.TrimSpace(string(body)))
 	}
 	if response.ContentLength > remotePluginBundleMaxDownloadBytes {
-		return nil, fmt.Errorf("remote plugin bundle exceeds maximum download size")
+		return nil, fmt.Errorf("remote plugin bundle download from %s exceeded maximum download size", host)
 	}
 	contents, err := io.ReadAll(io.LimitReader(response.Body, remotePluginBundleMaxDownloadBytes+1))
 	if err != nil {
 		return nil, err
 	}
 	if int64(len(contents)) > remotePluginBundleMaxDownloadBytes {
-		return nil, fmt.Errorf("remote plugin bundle exceeds maximum download size")
+		return nil, fmt.Errorf("remote plugin bundle download from %s exceeded maximum download size", host)
 	}
 	return contents, nil
 }

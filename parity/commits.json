@@ -37151,7 +37151,8 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27.md:11: | Token/status | `#57282` | Promote rounded `999.5K/M/B` token counts to the next unit in every compact formatter. | Done |"
+    "tui/chatwidget/token_activity.go:150: FormatTokensCompact promotes a rounded 999.5K/999.5M/999.5B count to the next compact unit (TUI lane implementation).",
+    "tui/chatwidget/token_activity_test.go:30: TestFormatTokensCompactMatchesRust covers 999_500 -> 1M, 999_500_000 -> 1B and 999_500_000_000 -> 1T."
    ]
   },
   {
@@ -37976,7 +37977,9 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_28.md:30: | `#57516` | TUI profile/provider status line items | TUI lane. |"
+    "tui/chatwidget/status_controls.go:868: the profile status-line item renders \"profile: <name>\" when a profile is selected.",
+    "tui/chatwidget/status_controls.go:884: the provider item renders \"provider: <id>\" gated on the active thread (TUI lane).",
+    "tui/chatwidget/status_controls_test.go:535: TestStatusLineProfileAndProviderItemsLikeRust."
    ]
   },
   {
@@ -38295,8 +38298,12 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_28_sync2.md:33: | `#57599` | Saved command-prefix headings | Port `approved_command_prefix_saved` heading with shared validator and event-mapping recognition. |",
-    "plan_2026_10_28_sync2.md:63: | `#57599` | `sandbox/permission_prompt.go`, `appserver/exec_policy_saved.go` | `appserver/approved_command_prefix_saved_heading_like_rust_test.go` |"
+    "sandbox/permission_prompt.go:85: ModelMessages.Permissions.ApprovedCommandPrefixSaved carries the saved-prefix catalog heading (Rust approved_command_prefix_saved).",
+    "sandbox/permission_prompt.go:410: ValidSavedPrefixHeading bounds the replacement heading like Rust.",
+    "appserver/exec_policy_saved.go:110: approvedCommandPrefixSavedText renders the saved-prefix notice with the catalog heading.",
+    "appserver/permissions_world_state.go:119: the world-state templates forward the heading; permissions_world_state.go:207 validates it.",
+    "appserver/approved_command_prefix_saved_heading_like_rust_test.go:10: TestApprovedCommandPrefixSavedHeadingLikeRust.",
+    "sandbox/approval_headings_like_rust_test.go:72: TestSavedPrefixHeadingValidationLikeRust."
    ]
   },
   {
@@ -38661,9 +38668,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "partial",
    "evidence": [
-    "update/plan_2026_10_30.md:157: #57774 完成 — 核心对齐待实现"
+    "tui/tea/composer_paste.go:23: insertComposerPaste inserts pasted text verbatim and never probes it as an image path, so Rust's regular-file guard has no Go counterpart.",
+    "update/plan_2026_11_01_round1267.md: Go attaches images only through the clipboard shortcut, so pasted-path image detection (#57774) is still missing in the TUI lane (tui/tea)."
    ]
   },
   {
@@ -38894,7 +38902,9 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:176: #57837 完成 — build.sh/build.ps1/npm build-packages.mjs 构建并在 codex-package.json 声明 codex-exec-server；真实 release 布局验证通过；测试 scripts/exec_server_package_like_rust_test.go"
+    "scripts/build.sh:126: builds cmd/codex-exec-server beside the CLI and declares \"execServer\" in codex-package.json.",
+    "scripts/build.ps1:128: builds codex-exec-server$Extension and declares execServer in codex-package.json.",
+    "scripts/exec_server_package_like_rust_test.go:14: TestPackagingShipsStandaloneExecutorLikeRust."
    ]
   },
   {
@@ -38990,7 +39000,8 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:184: #57859 完成 — provider 浏览器 OAuth 回调超时 180s→600s"
+    "auth/gatewaycallback.go:22: gatewayBrowserTimeout is 10 * time.Minute.",
+    "auth/gatewaycallback.go:135: the provider browser callback timer waits for gatewayBrowserTimeout."
    ]
   },
   {
@@ -39098,7 +39109,10 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:193: #57974 完成 — 核对为架构等价：Go ConfigService 每次 MCP refresh 重新读取完整层栈，无 per-session 插件覆盖层可丢失；已有 plugin policy refresh 测试覆盖"
+    "appserver/runtime_router.go:12833: configureMCPFromConfig re-reads the full merged config stack, so a refresh cannot drop a session plugin override layer.",
+    "appserver/plugin_install_refresh_test.go:14: TestRuntimeRouterPluginInstallRefreshesMCPRuntimesLikeRust.",
+    "appserver/plugin_refresh_test.go:36: TestEffectivePluginsChangedRefreshesDerivedStateLikeRust.",
+    "appserver/external_plugin_hook_refresh_test.go:16: TestLoadedSessionRefreshesExternallyUpdatedPluginHooksLikeRust."
    ]
   },
   {
@@ -39170,7 +39184,12 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:199: #58034 完成 — 核心对齐待实现"
+    "config/otel.go:64: OtelConfig.LogSSEDeltas; otel.go:82 defaults it to true and otel.go:108 resolves otel.log_sse_deltas.",
+    "config/otel_requirements.go:20: log_sse_deltas is a managed OTEL requirement; otel_requirements.go:162 maps camelCase variants.",
+    "telemetry/session_telemetry.go:71: LogSSEDeltas gates successful delta records; telemetry/session_telemetry.go:94 disables them from config.",
+    "telemetry/api_request.go:217: RecordSSEDelta returns before logging when success deltas are disabled.",
+    "appserver/session_telemetry.go:76: the session telemetry wiring reads otel.log_sse_deltas.",
+    "config/otel_sse_delta_requirements_like_rust_test.go:7: TestOtelSSEDeltaRequirementsLikeRust; telemetry/sse_delta_logs_like_rust_test.go:10: TestSSEDeltaLogsSwitchLikeRust."
    ]
   },
   {
@@ -39254,7 +39273,11 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:206: #58091 完成 — 记忆抽取/整合默认模型改为 gpt-6-luna / gpt-6.1-terra"
+    "model/provider.go:20: DefaultMemoryExtractionPreferredModel = \"gpt-6-luna\"; provider.go:21 consolidation = \"gpt-6.1-terra\".",
+    "model/provider.go:833: the GCP provider prefers gpt-6-luna and gpt-6.1-terra for background memory models.",
+    "appserver/memory_startup.go:365: memory startup resolves the provider preference before falling back to the defaults.",
+    "model/provider_test.go:389: TestAmazonBedrockPreferredBackgroundModelsMatchEndpointLikeRust.",
+    "appserver/memory_startup_test.go:308: the startup request asserts model.DefaultMemoryExtractionPreferredModel."
    ]
   },
   {
@@ -39374,7 +39397,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:216: #58134 完成 — openai-docs skill 资产同步（Go 缺 model-migration.md 等）"
+    "systemskills/assets/samples/openai-docs/references/model-migration.md:8: deprecation-driven migrations use the retiring model's documented replacement from the API deprecations page before running the latest-model resolver."
    ]
   },
   {
@@ -39434,7 +39457,11 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:221: #58159 完成 — 核心对齐待实现"
+    "features/features.go:446: code_mode_host_output_truncation is an under-development flag defaulting off.",
+    "appserver/runtime_router.go:2010: the flag enablement selects CodeMode host-side output truncation.",
+    "codemode/local_server_output.go:32: the local provider requests server-side truncation from Core.",
+    "exec/exec.go:1554: host-side truncation runs only when the feature is enabled.",
+    "codemode/output_truncation_negotiation_like_rust_test.go:129: sessions negotiate server truncation like Rust."
    ]
   },
   {
@@ -39458,7 +39485,12 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:223: #58165 完成 — 已核对：Go 的 remote plugin bundle 错误从不拼接 URL，无需改码"
+    "appserver/plugin_remote_bundle.go:251: invalid bundle URLs report the parse cause without echoing the URL.",
+    "appserver/plugin_remote_bundle.go:262: remotePluginBundleURLHost keeps only the host for download diagnostics.",
+    "appserver/plugin_remote_bundle.go:342: an unsupported redirect reports the host and scheme; plugin_remote_bundle.go:347 and :350 report the status and size limit with the host.",
+    "plugin/plugin_measurement_references.go:344: measurement preparation errors are sanitized.",
+    "appserver/plugin_bundle_url_diagnostics_like_rust_test.go:32: TestRemotePluginBundleInvalidURLDiagnosticsHideSignatureTokenLikeRust plus the sibling bundle tests keep signature tokens out of every error.",
+    "plugin/plugin_measurement_references_test.go:215: TestMeasurementCacheReportsSanitizedPreparationFailureLikeRust."
    ]
   },
   {
@@ -39530,7 +39562,8 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:229: #58189 完成 — 核心对齐待实现"
+    "appserver/permissions_world_state.go:66: standalone web search runs with the turn-scoped permission mode.",
+    "appserver/web_search_turn_permissions_like_rust_test.go:13: TestStandaloneWebSearchUsesTurnScopedModeLikeRust."
    ]
   },
   {
@@ -39590,7 +39623,11 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:234: #58202 完成 — provider 切换后聊天仍可访问（42 文件，拆 2-3 子轮）"
+    "app/interactive.go:3544: interactiveSessionPickerItems lists chats from every provider.",
+    "app/remote_tui.go:1599: the remote picker drops the provider filter; app/remote_tui.go:1987 remoteTUIModelProviderError decodes provider admission errors.",
+    "appserver/model_provider_requirements.go:63: ModelProviderError mirrors Rust's protocol type.",
+    "app/app_test.go:4938: TestInteractiveSessionPickerIncludesAllProvidersLikeRust.",
+    "tui/tea/model.go:4299: a provider-blocked chat advertises continue/new/other-chats keys (TUI lane)."
    ]
   },
   {
@@ -39626,7 +39663,10 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30_round1014.md item 1: CloseRelated keeps unrelated side conversations when archiving or deleting a thread (1ed4f808, app/agents_overview_embedded.go, app/agents_overview_embedded_test.go)"
+    "app/side_tui.go:189: CloseRelated closes only side conversations whose parent is in the affected subtree.",
+    "app/agents_overview_embedded.go:194: knownLocalThreadSubtree walks the persisted parent graph so lifecycle actions match the dashboard grouping.",
+    "app/interactive.go:1441: dashboard refresh, archive and delete route through the subtree-scoped CloseRelated.",
+    "app/agents_overview_embedded_test.go:184: TestInteractiveLocalSideCoordinatorCloseRelatedScopesParents."
    ]
   },
   {
