@@ -8599,7 +8599,10 @@ func (r *RuntimeRouter) appTurnConfigWithOptions(ctx context.Context, threadID s
 	if modelInfo != nil {
 		toolMode = modelInfo.ToolMode
 		autoReviewModelOverride = strings.TrimSpace(modelInfo.AutoReviewModelOverride)
-		nodeReplAutoReviewRequired = modelInfo.NodeReplAutoReviewRequired
+		// Rust #42744/#43447: the model-owned Guardian computer-use policy wins
+		// over the legacy node_repl_auto_review_required bit here too, so the
+		// turn metadata agrees with review evidence and compaction metadata.
+		nodeReplAutoReviewRequired = nodeReplAutoReviewRequiredForModel(modelInfo)
 		nodeReplDisabled = modelInfo.NodeReplDisabled
 	}
 	toolMode = model.ResolveToolMode(toolMode, cfg.FeatureSettings())
