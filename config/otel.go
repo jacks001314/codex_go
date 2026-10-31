@@ -153,11 +153,6 @@ func ValidateOtelConfigValues(values map[string]any) error {
 			return errors.New("otel.log_user_prompt must be a boolean")
 		}
 	}
-	if value, ok := otel["log_sse_deltas"]; ok && value != nil {
-		if _, valid := value.(bool); !valid {
-			return errors.New("otel.log_sse_deltas must be a boolean")
-		}
-	}
 	if value, ok := otel["log_guardian_assessments"]; ok && value != nil {
 		if _, isBool := value.(bool); !isBool {
 			return errors.New("otel.log_guardian_assessments must be a boolean")

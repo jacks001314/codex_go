@@ -31,6 +31,28 @@ const (
 	configKindTaggedEnum
 	configKindEnum
 	configKindUntaggedEnum
+	// configKindU32, configKindU64 and configKindI32 are integer widths whose
+	// serde rejection for an out-of-range literal is `invalid value`.
+	configKindU32
+	configKindU64
+	configKindI32
+	// configKindNonZeroUsize and configKindNonZeroU64 are NonZeroUsize and
+	// NonZeroU64, which reject zero as `invalid value`.
+	configKindNonZeroUsize
+	configKindNonZeroU64
+	// configKindStructSequence is a `Vec<Struct>`; a non-table element is
+	// reported against the field and its fields descend from there.
+	configKindStructSequence
+	// configKindPathSequence is a `Vec<PathBuf>`.
+	configKindPathSequence
+	// configKindStringMapOfMaps is a map of maps of strings, like
+	// `otel.tracestate`.
+	configKindStringMapOfMaps
+	// configKindValueMap is a map whose entries are checked with `entry`.
+	configKindValueMap
+	// configKindUntaggedStruct is an untagged enum of a boolean and a struct,
+	// like `tools.web_search`.
+	configKindUntaggedStruct
 )
 
 // configFieldKind is the deserializer shape of one config.toml field: the kind
@@ -66,6 +88,23 @@ type configFieldKind struct {
 	// the same for a bare string.
 	allowBool   bool
 	allowString bool
+	// nonzeroU16 lets an untagged enum accept 1..=65535 and sequences of it,
+	// the shape of MicrophoneChannels.
+	nonzeroU16 bool
+	// pathName overrides the last segment of the field's reported path, the way
+	// a `#[serde(alias)]` still reports the canonical field name.
+	pathName string
+	// entry is the element shape of a map- or sequence-shaped field; it is a
+	// pointer so the shape can nest inside itself.
+	entry *configFieldKind
+	// flattenEntries marks a `#[serde(flatten)]` map: every key the named
+	// fields do not claim is an entry, and serde reports its failures against
+	// the enclosing table instead of the entry's own path.
+	flattenEntries bool
+	// structVariants are the externally tagged variants that carry fields;
+	// variantStructNames spells the type serde prints for a non-table payload.
+	structVariants        map[string]string
+	structVariantRequired []string
 }
 
 // configProfileFields is ConfigProfile (config/src/profile_toml.rs). Fields that
@@ -240,24 +279,24 @@ var configProfileTuiFields = map[string]configFieldKind{
 // positions, `projects` and `project_root_markers` aside), so the validator
 // never rejects a document Rust accepts.
 var configTomlFields = map[string]configFieldKind{
-	"agents":                           {kind: configKindStruct, expected: "AgentsToml"},
+	"agents":                           {kind: configKindStruct, expected: "AgentsToml", fields: configAgentsFields, flattenEntries: true, entry: &configFieldKind{kind: configKindStruct, expected: "AgentRoleToml", fields: configAgentRoleFields}},
 	"allow_login_shell":                {kind: configKindBool},
 	"allow_symlinked_codex_home":       {kind: configKindBool},
-	"analytics":                        {kind: configKindStruct, expected: "AnalyticsConfigToml"},
+	"analytics":                        {kind: configKindStruct, expected: "AnalyticsConfigToml", fields: configAnalyticsFields},
 	"approval_policy":                  {kind: configKindEnum, variants: []string{"untrusted", "on-failure", "on-request", "granular", "never"}},
 	"approvals_reviewer":               {kind: configKindEnum, variants: []string{"user", "auto_review", "guardian_subagent"}},
-	"apps":                             {kind: configKindStruct, expected: "AppsConfigToml"},
+	"apps":                             {kind: configKindStruct, expected: "AppsConfigToml", fields: configAppsFields, flattenEntries: true, entry: &configFieldKind{kind: configKindStruct, expected: "AppConfig", fields: configAppFields}},
 	"apps_mcp_product_sku":             {kind: configKindString},
-	"audio":                            {kind: configKindStruct, expected: "RealtimeAudioToml"},
-	"auto_review":                      {kind: configKindStruct, expected: "AutoReviewToml"},
+	"audio":                            {kind: configKindStruct, expected: "RealtimeAudioToml", fields: configAudioFields},
+	"auto_review":                      {kind: configKindStruct, expected: "AutoReviewToml", fields: configAutoReviewFields},
 	"background_terminal_max_timeout":  {kind: configKindInteger, expected: "u64"},
-	"browser_use":                      {kind: configKindStruct, expected: "BrowserUseConfigToml"},
+	"browser_use":                      {kind: configKindStruct, expected: "BrowserUseConfigToml", fields: configBrowserUseFields},
 	"chatgpt_base_url":                 {kind: configKindString},
 	"check_for_update_on_startup":      {kind: configKindBool},
 	"cli_auth_credentials_store":       {kind: configKindEnum, variants: []string{"file", "keyring", "auto", "ephemeral"}},
-	"cloud":                            {kind: configKindStruct, expected: "CloudToml"},
+	"cloud":                            {kind: configKindStruct, expected: "CloudToml", fields: configCloudFields},
 	"compact_prompt":                   {kind: configKindString},
-	"computer_use":                     {kind: configKindStruct, expected: "ComputerUseConfigToml"},
+	"computer_use":                     {kind: configKindStruct, expected: "ComputerUseConfigToml", fields: configComputerUseFields},
 	"daybreak":                         {kind: configKindBool},
 	"default_permissions":              {kind: configKindString},
 	"desktop":                          {kind: configKindMap},
@@ -274,15 +313,15 @@ var configTomlFields = map[string]configFieldKind{
 	"experimental_thread_store_endpoint":         {kind: configKindString},
 	"experimental_use_unified_exec_tool":         {kind: configKindBool},
 	"features":                                   {kind: configKindStruct, expected: "FeaturesToml"},
-	"feedback":                                   {kind: configKindStruct, expected: "FeedbackConfigToml"},
+	"feedback":                                   {kind: configKindStruct, expected: "FeedbackConfigToml", fields: configFeedbackFields},
 	"file_opener":                                {kind: configKindEnum, variants: []string{"vscode", "vscode-insiders", "windsurf", "cursor", "none"}},
 	"forced_login_method":                        {kind: configKindEnum, variants: []string{"chatgpt", "api"}},
 	"forced_chatgpt_workspace_id":                {kind: configKindUntaggedEnum, expected: "Repr", allowString: true},
-	"ghost_snapshot":                             {kind: configKindStruct, expected: "GhostSnapshotToml"},
-	"goals":                                      {kind: configKindStruct, expected: "GoalsToml"},
+	"ghost_snapshot":                             {kind: configKindStruct, expected: "GhostSnapshotToml", fields: configGhostSnapshotFields},
+	"goals":                                      {kind: configKindStruct, expected: "GoalsToml", fields: configGoalsFields},
 	"hide_agent_reasoning":                       {kind: configKindBool},
 	"history":                                    {kind: configKindStruct, expected: "History", fields: configHistoryFields},
-	"hooks":                                      {kind: configKindStruct, expected: "HooksToml"},
+	"hooks":                                      {kind: configKindStruct, expected: "HooksToml", fields: configHooksFields},
 	"include_apps_instructions":                  {kind: configKindBool},
 	"include_collaboration_mode_instructions":    {kind: configKindBool},
 	"include_environment_context":                {kind: configKindBool},
@@ -293,13 +332,13 @@ var configTomlFields = map[string]configFieldKind{
 	"js_repl_node_path":                          {kind: configKindPathString},
 	"log_dir":                                    {kind: configKindPathString},
 	"marketplaces":                               {kind: configKindMap},
-	"mcp_enterprise_managed_auth":                {kind: configKindStruct, expected: "McpEnterpriseManagedAuthConfig"},
+	"mcp_enterprise_managed_auth":                {kind: configKindStruct, expected: "McpEnterpriseManagedAuthConfig", fields: configMcpEnterpriseManagedAuthFields, required: []string{"idp"}},
 	"mcp_oauth_callback_port":                    {kind: configKindInteger, expected: "u16"},
 	"mcp_oauth_callback_url":                     {kind: configKindString},
 	"mcp_oauth_credentials_store":                {kind: configKindEnum, variants: []string{"auto", "file", "keyring"}},
 	"mcp_optional_startup_grace_ms":              {kind: configKindInteger, expected: "u64"},
 	"mcp_servers":                                {kind: configKindMap},
-	"memories":                                   {kind: configKindStruct, expected: "MemoriesToml"},
+	"memories":                                   {kind: configKindStruct, expected: "MemoriesToml", fields: configMemoriesFields},
 	"model":                                      {kind: configKindString},
 	"model_auto_compact_token_limit":             {kind: configKindInteger, expected: "i64"},
 	"model_auto_compact_token_limit_scope":       {kind: configKindEnum, variants: []string{"total", "body_after_prefix"}},
@@ -312,37 +351,37 @@ var configTomlFields = map[string]configFieldKind{
 	"model_reasoning_effort":                     {kind: configKindString},
 	"model_reasoning_summary":                    {kind: configKindEnum, variants: []string{"auto", "concise", "detailed", "none"}},
 	"model_verbosity":                            {kind: configKindEnum, variants: []string{"low", "medium", "high"}},
-	"notice":                                     {kind: configKindStruct, expected: "Notice"},
+	"notice":                                     {kind: configKindStruct, expected: "Notice", fields: configNoticeFields},
 	"notify":                                     {kind: configKindSequence},
 	"openai_base_url":                            {kind: configKindString},
-	"orchestrator":                               {kind: configKindStruct, expected: "OrchestratorToml"},
+	"orchestrator":                               {kind: configKindStruct, expected: "OrchestratorToml", fields: configOrchestratorFields},
 	"oss_provider":                               {kind: configKindString},
-	"otel":                                       {kind: configKindStruct, expected: "OtelConfigToml"},
-	"permissions":                                {kind: configKindStruct, expected: "PermissionsToml"},
+	"otel":                                       {kind: configKindStruct, expected: "OtelConfigToml", fields: configOtelFields},
+	"permissions":                                {kind: configKindStruct, expected: "PermissionsToml", fields: configPermissionsFields, flattenEntries: true, entry: &configFieldKind{kind: configKindStruct, expected: "PermissionProfileToml", fields: configPermissionsProfileFields}},
 	"personality":                                {kind: configKindEnum, variants: []string{"none", "friendly", "pragmatic"}},
 	"plan_mode_reasoning_effort":                 {kind: configKindString},
-	"plugins":                                    {kind: configKindStruct, expected: "PluginsConfigToml"},
+	"plugins":                                    {kind: configKindStruct, expected: "PluginsConfigToml", fields: configPluginsFields, flattenEntries: true, entry: &configFieldKind{kind: configKindStruct, expected: "PluginConfig", fields: configPluginFields}},
 	"profile":                                    {kind: configKindString},
 	"profiles":                                   {kind: configKindStructMap, expected: "ConfigProfile", fields: configProfileFields},
 	"project_root_markers":                       {kind: configKindSequence, positional: true},
 	"projects":                                   {kind: configKindMap, positional: true, dualPositional: true},
 	"project_doc_fallback_filenames":             {kind: configKindSequence},
 	"project_doc_max_bytes":                      {kind: configKindInteger, expected: "usize"},
-	"realtime":                                   {kind: configKindStruct, expected: "RealtimeToml"},
+	"realtime":                                   {kind: configKindStruct, expected: "RealtimeToml", fields: configRealtimeFields},
 	"responses_api_metadata":                     {kind: configKindMap},
 	"review_model":                               {kind: configKindString},
 	"sandbox_mode":                               {kind: configKindEnum, variants: []string{"read-only", "workspace-write", "danger-full-access"}},
-	"sandbox_workspace_write":                    {kind: configKindStruct, expected: "SandboxWorkspaceWrite"},
+	"sandbox_workspace_write":                    {kind: configKindStruct, expected: "SandboxWorkspaceWrite", fields: configSandboxWorkspaceWriteFields},
 	"service_tier":                               {kind: configKindString},
 	"shell_environment_policy":                   {kind: configKindStruct, expected: "ShellEnvironmentPolicyTomlRaw", fields: configShellEnvironmentPolicyFields},
 	"show_raw_agent_reasoning":                   {kind: configKindBool},
-	"skills":                                     {kind: configKindStruct, expected: "SkillsConfig"},
+	"skills":                                     {kind: configKindStruct, expected: "SkillsConfig", fields: configSkillsFields},
 	"sqlite_home":                                {kind: configKindPathString},
 	"suppress_unstable_features_warning":         {kind: configKindBool},
 	"thread_unload_delay_secs":                   {kind: configKindInteger, expected: "u64"},
 	"tool_output_token_limit":                    {kind: configKindInteger, expected: "usize"},
-	"tool_suggest":                               {kind: configKindStruct, expected: "ToolSuggestConfig"},
-	"tools":                                      {kind: configKindStruct, expected: "ToolsToml"},
+	"tool_suggest":                               {kind: configKindStruct, expected: "ToolSuggestConfig", fields: configToolSuggestFields},
+	"tools":                                      {kind: configKindStruct, expected: "ToolsToml", fields: configToolsFields},
 	"tui":                                        {kind: configKindStruct, expected: "Tui", fields: configTuiFields},
 	"web_search":                                 {kind: configKindEnum, variants: []string{"disabled", "cached", "indexed", "live"}},
 	"windows":                                    {kind: configKindStruct, expected: "WindowsToml", fields: configWindowsFields},

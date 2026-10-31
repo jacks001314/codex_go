@@ -45,7 +45,7 @@ func ValidateConfigDocumentValues(values map[string]any, document *ConfigDocumen
 		if !ok {
 			continue
 		}
-		if err := validateConfigFieldValue(kind, values[field], field); err != nil {
+		if err := validateConfigFieldValue(kind, values[field], field, false); err != nil {
 			if contextErr, ok := err.(*ConfigValueError); ok && document != nil {
 				if field == "shell_environment_policy" {
 					if positioned := document.shellEnvironmentPolicyPosition(contextErr); positioned != nil {
@@ -227,7 +227,7 @@ func validateMCPServerValue(table map[string]any, path string) error {
 		if !ok {
 			continue
 		}
-		if err := validateConfigFieldValue(field.kind, value, path+"."+field.name); err != nil {
+		if err := validateConfigFieldValue(field.kind, value, path+"."+field.name, false); err != nil {
 			return err
 		}
 	}
@@ -260,7 +260,7 @@ func validateMCPServerValue(table map[string]any, path string) error {
 	return &ConfigValueError{message: "invalid transport", path: path}
 }
 
-func validateConfigFieldValue(kind configFieldKind, value any, path string) error {
+func validateConfigFieldValue(kind configFieldKind, value any, path string, collapse bool) error {
 	switch kind.kind {
 	case configKindString:
 		if _, ok := value.(string); !ok {
@@ -298,19 +298,90 @@ func validateConfigFieldValue(kind configFieldKind, value any, path string) erro
 		if !ok {
 			return configInvalidType(value, "struct "+kind.expected, path)
 		}
-		return validateConfigStructFields(kind, table, path)
+		return validateConfigStructFields(kind, table, path, collapse)
 	case configKindStructMap:
 		table, ok := value.(map[string]any)
 		if !ok {
 			return configInvalidType(value, "a map", path)
 		}
 		for _, name := range sortedConfigKeys(table) {
+			entryPath := configChildPath(collapse, path, name)
 			entry, ok := table[name].(map[string]any)
 			if !ok {
-				return configInvalidType(table[name], "struct "+kind.expected, appendConfigPath(path, name))
+				return configInvalidType(table[name], "struct "+kind.expected, entryPath)
 			}
-			if err := validateConfigStructFields(kind, entry, appendConfigPath(path, name)); err != nil {
+			if err := validateConfigStructFields(kind, entry, entryPath, collapse); err != nil {
 				return err
+			}
+		}
+	case configKindStructSequence:
+		items, ok := value.([]any)
+		if !ok {
+			return configInvalidType(value, "a sequence", path)
+		}
+		for _, item := range items {
+			table, ok := item.(map[string]any)
+			if !ok {
+				return configInvalidType(item, "struct "+kind.expected, path)
+			}
+			if err := validateConfigStructFields(kind, table, path, collapse); err != nil {
+				return err
+			}
+		}
+	case configKindPathSequence:
+		items, ok := value.([]any)
+		if !ok {
+			return configInvalidType(value, "a sequence", path)
+		}
+		for _, item := range items {
+			if _, ok := item.(string); !ok {
+				return configInvalidType(item, "path string", path)
+			}
+		}
+	case configKindStringMapOfMaps:
+		table, ok := value.(map[string]any)
+		if !ok {
+			return configInvalidType(value, "a map", path)
+		}
+		for _, name := range sortedConfigKeys(table) {
+			innerPath := configChildPath(collapse, path, name)
+			inner, ok := table[name].(map[string]any)
+			if !ok {
+				return configInvalidType(table[name], "a map", innerPath)
+			}
+			for _, key := range sortedConfigKeys(inner) {
+				if _, ok := inner[key].(string); !ok {
+					return configInvalidType(inner[key], "a string", configChildPath(collapse, innerPath, key))
+				}
+			}
+		}
+	case configKindValueMap:
+		table, ok := value.(map[string]any)
+		if !ok {
+			return configInvalidType(value, "a map", path)
+		}
+		for _, name := range sortedConfigKeys(table) {
+			if err := validateConfigFieldValue(*kind.entry, table[name], configChildPath(collapse, path, name), collapse); err != nil {
+				return err
+			}
+		}
+	case configKindUntaggedStruct:
+		if kind.allowBool {
+			if _, ok := value.(bool); ok {
+				return nil
+			}
+		}
+		table, ok := value.(map[string]any)
+		if !ok {
+			return configUntaggedEnumError(kind.expected, path)
+		}
+		for _, name := range sortedConfigKeys(table) {
+			field, ok := kind.fields[name]
+			if !ok {
+				continue
+			}
+			if err := validateConfigFieldValue(field, table[name], appendConfigPath(path, name), false); err != nil {
+				return configUntaggedEnumError(kind.expected, path)
 			}
 		}
 	case configKindTaggedEnum:
@@ -324,7 +395,7 @@ func validateConfigFieldValue(kind configFieldKind, value any, path string) erro
 		}
 		for _, name := range sortedConfigKeys(table) {
 			if _, ok := table[name].(string); !ok {
-				return configInvalidType(table[name], "a string", appendConfigPath(path, name))
+				return configInvalidType(table[name], "a string", configChildPath(collapse, path, name))
 			}
 		}
 	case configKindEnumMap:
@@ -333,7 +404,7 @@ func validateConfigFieldValue(kind configFieldKind, value any, path string) erro
 			return configInvalidType(value, "a map", path)
 		}
 		for _, name := range sortedConfigKeys(table) {
-			if err := validateConfigEnumValue(kind, table[name], appendConfigPath(path, name)); err != nil {
+			if err := validateConfigEnumValue(kind, table[name], configChildPath(collapse, path, name)); err != nil {
 				return err
 			}
 		}
@@ -347,12 +418,21 @@ func validateConfigFieldValue(kind configFieldKind, value any, path string) erro
 				return configInvalidType(item, "a string", path)
 			}
 		}
-	case configKindUsize:
+	case configKindUsize, configKindU64, configKindU32, configKindI32:
+		expected := configIntegerExpected(kind)
 		if !isConfigInteger(value) {
-			return configInvalidType(value, kind.expected, path)
+			return configInvalidType(value, expected, path)
 		}
-		if count, ok := value.(int64); ok && count < 0 {
-			return &ConfigValueError{message: fmt.Sprintf("invalid value: integer `%d`, expected %s", count, kind.expected), path: path}
+		if count := configIntegerValue(value); !configIntegerInRange(kind.kind, count) {
+			return &ConfigValueError{message: fmt.Sprintf("invalid value: integer `%d`, expected %s", count, expected), path: path}
+		}
+	case configKindNonZeroUsize, configKindNonZeroU64:
+		expected := configIntegerExpected(kind)
+		if !isConfigInteger(value) {
+			return configInvalidType(value, expected, path)
+		}
+		if count := configIntegerValue(value); count <= 0 {
+			return &ConfigValueError{message: fmt.Sprintf("invalid value: integer `%d`, expected %s", count, expected), path: path}
 		}
 	case configKindWireAPI:
 		name, ok := value.(string)
@@ -375,7 +455,7 @@ func validateConfigFieldValue(kind configFieldKind, value any, path string) erro
 
 // validateConfigStructFields descends into a struct's own fields in the order
 // serde walks them. Unknown keys stay allowed, as they do in Rust.
-func validateConfigStructFields(kind configFieldKind, table map[string]any, path string) error {
+func validateConfigStructFields(kind configFieldKind, table map[string]any, path string, collapse bool) error {
 	if kind.boolValues {
 		for _, name := range sortedConfigKeys(table) {
 			if _, ok := table[name].(bool); !ok {
@@ -392,11 +472,29 @@ func validateConfigStructFields(kind configFieldKind, table map[string]any, path
 			if !ok || field.flattenPath != (pass == 1) {
 				continue
 			}
-			fieldPath := appendConfigPath(path, name)
+			fieldName := name
+			if field.pathName != "" {
+				fieldName = field.pathName
+			}
+			fieldPath := configChildPath(collapse, path, fieldName)
+			childCollapse := collapse
 			if field.flattenPath {
 				fieldPath = path
+				childCollapse = true
 			}
-			if err := validateConfigFieldValue(field, table[name], fieldPath); err != nil {
+			if err := validateConfigFieldValue(field, table[name], fieldPath, childCollapse); err != nil {
+				return err
+			}
+		}
+	}
+	if kind.flattenEntries {
+		// A `#[serde(flatten)]` map owns every key the named fields did not
+		// claim, and serde reports its failures against this table.
+		for _, name := range sortedConfigKeys(table) {
+			if _, ok := kind.fields[name]; ok {
+				continue
+			}
+			if err := validateConfigFieldValue(*kind.entry, table[name], path, true); err != nil {
 				return err
 			}
 		}
@@ -416,6 +514,57 @@ func appendConfigPath(base string, name string) string {
 	return base + "." + name
 }
 
+// configChildPath keeps a flattened entry's descendants on the enclosing
+// table's path: serde reports every failure inside a `#[serde(flatten)]` map
+// against the table that holds it.
+func configChildPath(collapse bool, base string, name string) string {
+	if collapse {
+		return base
+	}
+	return appendConfigPath(base, name)
+}
+
+func configIntegerExpected(kind configFieldKind) string {
+	if kind.expected != "" {
+		return kind.expected
+	}
+	switch kind.kind {
+	case configKindU32:
+		return "u32"
+	case configKindU64:
+		return "u64"
+	case configKindI32:
+		return "i32"
+	case configKindNonZeroUsize:
+		return "a nonzero usize"
+	case configKindNonZeroU64:
+		return "a nonzero u64"
+	}
+	return kind.expected
+}
+
+func configIntegerValue(value any) int64 {
+	switch typed := value.(type) {
+	case int64:
+		return typed
+	case int:
+		return int64(typed)
+	}
+	return 0
+}
+
+func configIntegerInRange(kind configValueKind, value int64) bool {
+	switch kind {
+	case configKindUsize, configKindU64:
+		return value >= 0
+	case configKindU32:
+		return value >= 0 && value <= 4294967295
+	case configKindI32:
+		return value >= -2147483648 && value <= 2147483647
+	}
+	return true
+}
+
 // validateConfigUntaggedEnumValue mirrors serde's error for an untagged repr
 // (`forced_chatgpt_workspace_id`), which reports one "did not match any
 // variant" message instead of a type mismatch.
@@ -425,6 +574,25 @@ func validateConfigUntaggedEnumValue(kind configFieldKind, value any, path strin
 	}
 	if _, ok := value.(bool); ok && kind.allowBool {
 		return nil
+	}
+	if kind.nonzeroU16 {
+		if count, ok := value.(int64); ok && count >= 1 && count <= 65535 {
+			return nil
+		}
+		if items, ok := value.([]any); ok {
+			allChannels := true
+			for _, item := range items {
+				count, ok := item.(int64)
+				if !ok || count < 1 || count > 65535 {
+					allChannels = false
+					break
+				}
+			}
+			if allChannels {
+				return nil
+			}
+		}
+		return configUntaggedEnumError(kind.expected, path)
 	}
 	if items, ok := value.([]any); ok {
 		allStrings := true
@@ -438,7 +606,10 @@ func validateConfigUntaggedEnumValue(kind configFieldKind, value any, path strin
 			return nil
 		}
 	}
-	name := kind.expected
+	return configUntaggedEnumError(kind.expected, path)
+}
+
+func configUntaggedEnumError(name string, path string) error {
 	if name == "" {
 		name = "Repr"
 	}
@@ -446,11 +617,13 @@ func validateConfigUntaggedEnumValue(kind configFieldKind, value any, path strin
 }
 
 func validateConfigEnumValue(kind configFieldKind, value any, path string) error {
-	name, ok := value.(string)
-	if !ok {
+	name, isString := value.(string)
+	var table map[string]any
+	if !isString {
 		// serde reads a non-string value as an externally tagged variant, so an
 		// inline table names a variant while every other type is a unit variant.
-		table, isTable := value.(map[string]any)
+		var isTable bool
+		table, isTable = value.(map[string]any)
 		if !isTable {
 			if kind.stringOrMap {
 				return configInvalidType(value, "string or map", path)
@@ -465,6 +638,21 @@ func validateConfigEnumValue(kind configFieldKind, value any, path string) error
 			return &ConfigValueError{message: "invalid type: unit variant, expected string only", path: path}
 		}
 		name = keys[0]
+	}
+	if structName, isStruct := kind.structVariants[name]; isStruct {
+		if isString {
+			return &ConfigValueError{message: "invalid type: unit variant, expected struct variant", path: path}
+		}
+		payload, isTable := table[name].(map[string]any)
+		if !isTable {
+			return configInvalidType(table[name], "struct variant "+structName, path)
+		}
+		for _, required := range kind.structVariantRequired {
+			if _, ok := payload[required]; !ok {
+				return &ConfigValueError{message: "missing field `" + required + "`", path: path}
+			}
+		}
+		return nil
 	}
 	for _, variant := range kind.variants {
 		if name == variant {

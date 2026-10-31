@@ -1949,8 +1949,73 @@ failure.
   top-level corpus keep 0 and 3 diffs (`out/r49-diff1.txt`). Regressions:
   `TestValidateTuiConfigTable` in `config`.
 
+### 64. The remaining struct config tables: flattened maps, integer widths and struct variants
+
+Entry 61 typed the 104 top-level `ConfigToml` fields, entry 62 the nested
+`profiles`/`model_providers`/`windows`/`history`/`shell_environment_policy`
+tables and entry 63 `[tui]`. This round types every other subtable serde walks
+at load, so a document 0.166 refuses is refused here with the same body and the
+same path.
+
+- **Tables.** `auto_review`, `memories`, `skills` (with its `Vec<SkillConfig>`
+  entries), `agents`, `apps`, `analytics`, `audio`, `browser_use`, `cloud`,
+  `computer_use` (including the macOS bundle ids and the Windows `exes`
+  entries), `feedback`, `ghost_snapshot`, `goals`, `hooks` (the eleven
+  `HookEventsToml` events, `MatcherGroup` and `HookStateToml`),
+  `mcp_enterprise_managed_auth` (with its mandatory `idp`), `notice`,
+  `orchestrator`, `otel`, `permissions`, `plugins`, `realtime`,
+  `sandbox_workspace_write`, `tool_suggest` and `tools`.
+- **Integer widths.** `u32`, `u64`, `i32`, `usize` and the two `NonZero`
+  types reject an out-of-range literal with `invalid value: integer ...`,
+  while a float or a string still reads `invalid type: ...`. `agents.max_depth`
+  therefore fails on `1.5` (type) and on `2147483648` (value).
+- **Flattened maps.** `agents`, `apps`, `plugins` and `permissions` are
+  `#[serde(flatten)]` maps: every key their named fields do not claim is an
+  entry, and serde reports the entry's failures against the *table*, not the
+  entry. The collapse is inherited by nested structs, so
+  `[apps.foo] tools = { x = 5 }` reports `expected struct AppToolConfig` at
+  `apps`, and `[permissions.x.network] mode = "bogus"` reports at
+  `permissions`. Named fields of the same table keep their own path:
+  `[apps._default] enabled = 5` still reads `apps._default.enabled`, and
+  `[plugins._default] enabled = 5` reads `plugins._default.enabled`.
+- **Sequences of structs.** `skills.config`, `computer_use.windows.exes` and
+  `tool_suggest.discoverables` keep the field path for both the item type and
+  the item's own fields (`skills.config.path`), and a missing mandatory field
+  is reported at the sequence path (`missing field `enabled`` at
+  `skills.config`).
+- **Struct variants.** `otel.exporter`/`trace_exporter`/`metrics_exporter` are
+  externally tagged with two unit and two struct variants: a bare `otlp-http`
+  reads `invalid type: unit variant, expected struct variant`, a non-table
+  payload `expected struct variant OtelExporterKind::OtlpHttp`, and an empty
+  payload `missing field `endpoint``.
+- **Untagged shapes.** `audio.microphone_channel` accepts 1..=65535 or a
+  sequence of them and otherwise reports the untagged message, and
+  `tools.web_search` is bool-or-struct so every wrong field inside it collapses
+  into the single `WebSearchToolConfigInput` message.
+- **Aliases.** `agents.max_threads` reports the canonical
+  `agents.max_concurrent_threads_per_session` path, as serde does.
+- **`otel.log_sse_deltas`.** 0.166 has no such field in `OtelConfigToml`, so a
+  non-boolean value is ignored there; the Go loader's earlier pre-emptive
+  `otel.log_sse_deltas must be a boolean` rejection is gone and the value is
+  still honoured when it *is* a boolean.
+- Evidence: 172 documents covering every table above are byte-identical to
+  0.166 (`p50diff.py`, `out/r50-diff2.txt`), the 81-document nested corpus and
+  the 47-document `[tui]` corpus stay at 0 diffs while the 437-document
+  top-level corpus keeps its 3 known diffs (`out/r50-nested.txt`,
+  `out/r50-tui.txt`, `out/r50-top.txt`). Regressions:
+  `TestValidateRemainingConfigTables` in `config`.
+
 ## Verification
 
+- Round 50 types the remaining struct tables (entry 64): 172 documents across
+  `auto_review`, `memories`, `skills`, `agents`, `apps`, `audio`, `browser_use`,
+  `computer_use`, `hooks`, `notice`, `otel`, `permissions`, `plugins`,
+  `realtime`, `tool_suggest`, `tools` and the rest are byte-identical to 0.166
+  (`out/r50-diff2.txt`), with the 81-document nested corpus, the 47-document
+  `[tui]` corpus and the 437-document top-level corpus keeping 0, 0 and 3
+  diffs (`out/r50-nested.txt`, `out/r50-tui.txt`, `out/r50-top.txt`).
+  `go test -count=1 -vet=off ./config ./cli ./mcp` passes in a clean worktree
+  and `./app` keeps only the two known baselines.
 - Round 49 types the `[tui]` table (entry 63): 47 documents covering every
   field, the `#[serde(flatten)]` notification ordering and the `presets`
   `missing field` case are byte-identical to 0.166 (`out/r49-tui5.txt`); the
@@ -2476,17 +2541,15 @@ failure.
     subcommand paths print clap's `-h`/`--help`/`help <topic>` pages plus the
     `--help=<value>` diagnostic, and `codex execpolicy check -hx` now reaches
     clap's missing-required block like Rust.
-- The load pass covers the 104 top-level field types, enums, `features`, the
-  `mcp_servers` entries (entry 61) and the `profiles`, `model_providers`,
-  `windows`, `history` and `shell_environment_policy` tables (entry 62), but
-  the remaining struct tables (`agents`, `apps`, `auto_review`, `browser_use`,
-  `audio`, `cloud`, ...) still accept any value inside them: an
-  `[auto_review] conversation_history_max_output_tokens = "x"` document loads
-  in Go where Rust rejects it at that path. The three path-valued fields
-  (`model_instructions_file`, `model_catalog_json`,
-  `experimental_compact_prompt_file`) are not read during load either, so a
-  missing file is accepted instead of failing with Rust's `failed to read ...
-  <path>: <os error>`, whose text is Windows-localized.
+- The load pass now covers the 104 top-level field types, enums, `features`,
+  the `mcp_servers` entries (entry 61) and every struct table serde walks
+  (entries 62-64): no subtable accepts an untyped value any more, so
+  `[auto_review] conversation_history_max_output_tokens = "x"` is rejected at
+  that path like Rust. What the load pass still does not do is read the three
+  path-valued fields (`model_instructions_file`, `model_catalog_json`,
+  `experimental_compact_prompt_file`), so a missing file is accepted instead of
+  failing with Rust's `failed to read ... <path>: <os error>`, whose text is
+  Windows-localized.
 - TOML syntax errors keep Go's `toml: ...` wording: Rust prints `0:
   <path>:<line>:<column>: <message>` plus the annotated snippet (`1 | [broken`
   with a caret) under both `failed to load bootstrap configuration` and
