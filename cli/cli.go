@@ -254,24 +254,27 @@ type PluginMarketplaceOptions struct {
 }
 
 type SandboxOptions struct {
-	Setup                 bool
-	Elevated              bool
-	User                  string
-	CurrentUser           bool
-	CodexHome             string
-	Uninstall             bool
-	UninstallHelp         bool
-	PermissionProfile     string
-	ConfigProfile         string
-	CWD                   string
-	IncludeManagedConfig  bool
-	SandboxStateJSON      string
-	SandboxReadableRoots  []string
-	SandboxDisableNetwork bool
-	AllowUnixSockets      []string
-	LogDenials            bool
-	ConfigOverrides       []string
-	Command               []string
+	Setup                bool
+	Elevated             bool
+	User                 string
+	CurrentUser          bool
+	CodexHome            string
+	Uninstall            bool
+	UninstallHelp        bool
+	PermissionProfile    string
+	ConfigProfile        string
+	CWD                  string
+	IncludeManagedConfig bool
+	SandboxStateJSON     string
+	// SandboxStateJSONProvided records `--sandbox-state-json` even when the
+	// value is empty: Rust still decodes an empty payload and reports EOF.
+	SandboxStateJSONProvided bool
+	SandboxReadableRoots     []string
+	SandboxDisableNetwork    bool
+	AllowUnixSockets         []string
+	LogDenials               bool
+	ConfigOverrides          []string
+	Command                  []string
 
 	// setupUserFirst records that `--user` was supplied before
 	// `--current-user`, so the nested setup parser names the arguments in
@@ -3009,10 +3012,12 @@ func parseSandbox(args []string, sandbox *SandboxOptions) error {
 				return err
 			}
 			sandbox.SandboxStateJSON = value
+			sandbox.SandboxStateJSONProvided = true
 			sandboxStateJSONSet = true
 			i = next
 		case strings.HasPrefix(arg, "--sandbox-state-json="):
 			sandbox.SandboxStateJSON = strings.TrimPrefix(arg, "--sandbox-state-json=")
+			sandbox.SandboxStateJSONProvided = true
 			sandboxStateJSONSet = true
 		case arg == "--sandbox-state-readable-root":
 			value, next, err := requireValue(args, i, arg)

@@ -107,6 +107,9 @@ func RunWithOptions(ctx context.Context, args []string, stdin io.Reader, stdout,
 	if err := validateFeatureToggles(parsed.Root.EnableFeatures, parsed.Root.DisableFeatures); err != nil {
 		return err
 	}
+	if err := validateSandboxStateJSONBeforeConfig(parsed); err != nil {
+		return err
+	}
 	if err := validateCommandOverrides(parsed); err != nil {
 		return err
 	}

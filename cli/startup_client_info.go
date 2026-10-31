@@ -379,7 +379,7 @@ func clapClientInfoDetail(node *clapJSONNode) string {
 		}
 		return ""
 	default:
-		return clapClientInfoScalarDetail(node, "struct ClientInfo")
+		return clapJSONScalarDetail(node, "struct ClientInfo")
 	}
 }
 
@@ -387,10 +387,10 @@ func clapClientInfoStringDetail(scanner *clapJSONScanner, node *clapJSONNode) st
 	if node.kind == clapJSONString {
 		return ""
 	}
-	return clapClientInfoScalarDetail(node, "a string")
+	return clapJSONScalarDetail(node, "a string")
 }
 
-func clapClientInfoScalarDetail(node *clapJSONNode, expected string) string {
+func clapJSONScalarDetail(node *clapJSONNode, expected string) string {
 	scanner := node.scanner
 	switch node.kind {
 	case clapJSONNull:

@@ -2609,8 +2609,61 @@ stray `)` was treated as valid.
   stderr the regression table was generated from). `go test -count=1 -vet=off
   ./execpolicy` passes, including `TestPolicyDiagnosticsMatchRust166`.
 
+### 81. `sandbox --sandbox-state-json` decodes like serde and before the overrides
+
+`--sandbox-state-json` carries `codex_mcp::SandboxState`, which 0.166 decodes
+with serde_json at the top of `run_command_under_sandbox` - before it parses
+`-c` overrides, loads config or even looks at the command. Go parsed the value
+much later, through `encoding/json`, and wrapped every failure as
+`invalid sandbox run request: ...`; so `codex sandbox --config= --sandbox-state-json={}`
+reported the override, `--sandbox-state-json=` reported `sandbox requires
+COMMAND`, and a value 0.166 rejects with a caret-less serde message came back as
+`json: cannot unmarshal ...`.
+
+- **Ordering.** `app.validateSandboxStateJSONBeforeConfig` runs between
+  `cli.Parse` and `validateCommandOverrides`, so a malformed state wins over a
+  malformed override and over the missing-command check, exactly as upstream.
+  `cli.SandboxOptions` gained `SandboxStateJSONProvided` because
+  `--sandbox-state-json=` is an empty payload serde still decodes (it reports
+  `EOF while parsing a value`), not an absent flag.
+- **serde diagnostics.** `cli/sandbox_state_json.go` reuses the serde-compatible
+  scanner behind `--startup-client-info` (whose scalar helper is now
+  `clapJSONScalarDetail`) and reproduces the five shapes `SandboxState` can
+  produce: syntax errors (`expected ident`, `EOF while parsing an object`,
+  `trailing characters` with line/column), `invalid type: integer <n>, expected
+  a string`, `duplicate field <name>`, `missing field <name>` (declaration
+  order, reported at the closing brace) and the untagged-enum
+  `data did not match any variant of untagged enum PermissionProfileDe`, whose
+  position is the end of the buffered value or the bracket that follows it.
+  Required fields are `permissionProfile` and `sandboxCwd`; the launcher path is
+  an optional string, the two booleans default to false and unknown fields are
+  ignored. A positional sequence is accepted when it carries the three required
+  values, and a sixth element is `trailing characters`.
+- **PathUri.** `sandboxCwd` is a `file:` URI upstream, not a native path, so
+  `cli` now parses the scheme (`unsupported path URI scheme <name>` for a
+  Windows path spelled as a URI, `invalid URI: relative URL without a base` for
+  `/home/x`), normalises `file:tmp` to `file:///tmp`, decodes drive and UNC
+  authorities and rewrites the payload with the native path before handing it to
+  the runner.
+  A URI describing another platform's convention reproduces anyhow's chain:
+  `sandbox state cwd is not native to this host` / `Caused by:` /
+  `'file:///home/x' is invalid on 'windows'`.
+- **Effect.** `codex sandbox --sandbox-state-json=...` now accepts the payload
+  0.166's MCP launcher actually forwards (`file:///C:/...`); Go previously
+  rejected every one of them as not native.
+- Evidence: 49 payloads compared against the 0.166 binary
+  (`out/r74-state.txt`, `out/r74-syntax.txt`); 40 are byte-identical and the 9
+  remaining ones share one cause (below). The regression table is
+  `cli/sandbox_state_json_test.go`, generated from `out/r74-rust-expectations.json`.
+
 ## Verification
 
+- Round 68 makes `sandbox --sandbox-state-json` decode like serde before the
+  `-c` overrides and the command check (entry 81): `out/r74-state.txt` and
+  `out/r74-syntax.txt` compare 49 payloads against 0.166 (40 identical, the
+  other 9 all one Windows-backend cause now listed under Still open), and
+  `go test -count=1 -vet=off ./cli ./sandbox ./config` passes with `./app`
+  keeping only its two known baselines.
 - Round 67 gives `execpolicy check` starlark's diagnostic model (entry 80):
   `out/r73-execpolicy.txt` reports 33/33 identical against 0.166,
   `out/r73-suggest.txt` covers 36 did-you-mean shapes with 0 diffs and
@@ -3202,10 +3255,19 @@ stray `)` was treated as valid.
   Rust's `foreground app-server exited before remote control became ready`
   chain, `update --config=` prints Go's install-detection wording, and
   `fork`/`resume`/`agents` report the override before Rust's TERM gate.
-  `sandbox --config= --sandbox-state-json=` also reports the override where
-  Rust parses the state JSON first, because Go's `--sandbox-state-json` text is
-  still `invalid sandbox run request: ...` rather than serde's
-  `invalid --sandbox-state-json value: ...` wording.
+- `sandbox --sandbox-state-json` still diverges once the payload decodes: the
+  legacy empty profile (`"permissionProfile":{}`) is `Managed { Restricted }`
+  upstream, so 0.166 reaches its backend and prints
+  `windows sandbox failed: Restricted read-only access requires the elevated
+  Windows sandbox backend`, while Go classifies it as no profile and answers
+  `only managed permission profiles can be enforced by the Windows sandbox`;
+  the same nine payloads in `out/r74-state.txt` show it. Mapping the empty
+  legacy profile onto Go's managed path would enter Go's real Windows sandbox,
+  which already hangs for `--permission-profile :read-only` on this host, so
+  the backend lane has to be fixed first. `sandbox` with a valid state and no
+  command is also Go's `sandbox requires COMMAND` where 0.166 runs the empty
+  command and either reports `sandbox command must not be empty` (disabled or
+  external profile) or the backend error.
 - `migrate-rollouts --apply` still reports `bytes_processed: 0` where Rust
   counts every byte its canonicalizer read and wrote through the rate limiter
   (2,827 for a 282-byte legacy rollout), and the paginated rollout Go publishes
