@@ -1184,11 +1184,20 @@ func (r *modelGuardianReviewer) review(ctx context.Context, threadID, turnID, ta
 		}
 	}
 	requiredReview := r.requiredReview != nil && r.requiredReview(threadID, turnID)
+	reviewReason := state.GuardianReviewReasonPolicy
+	if requiredReview {
+		reviewReason = state.GuardianReviewReasonFreshRequired
+	}
 	// Rust #44569: a cached low-risk assessment must not cover an action the
 	// reviewer could never admit, including expanded approval arguments. An
 	// oversized action always runs the full review (which defers to the user or
 	// fails closed), while later small actions keep reusing their score.
 	oversizedAction := r.guardianActionExceedsReviewBudget(threadID, turnID, action, session)
+	if !requiredReview && oversizedAction {
+		// Rust's cached_evidence reports an oversized action as a scoring
+		// failure before it can reuse a score.
+		reviewReason = state.GuardianReviewReasonScoringFailure
+	}
 	// Rust #58075: a final serving assessment may replace the synchronous
 	// review for a low-risk action. An explicit fresh-review requirement, an
 	// elevated-risk value, or a stale/incomplete authorization still runs the
@@ -1212,6 +1221,16 @@ func (r *modelGuardianReviewer) review(ctx context.Context, threadID, turnID, ta
 				}
 				return state.DecisionApproved, nil, "serving assessment", nil
 			}
+			switch {
+			case assessment.RequiresReview:
+				reviewReason = state.GuardianReviewReasonElevatedRisk
+			case !assessment.Authorization.RetainedContextComplete:
+				// Rust's cached_evidence treats an incomplete retained context
+				// as a policy-driven review rather than a changed authorization.
+				reviewReason = state.GuardianReviewReasonPolicy
+			default:
+				reviewReason = state.GuardianReviewReasonAuthorizationChanged
+			}
 		}
 	}
 	if !requiredReview && r.approvalsReviewer != nil && strings.EqualFold(r.approvalsReviewer(threadID, turnID), string(config.ApprovalsReviewerUser)) &&
@@ -1230,12 +1249,8 @@ func (r *modelGuardianReviewer) review(ctx context.Context, threadID, turnID, ta
 		// Rust #55347: a synchronous model review that did not race an async
 		// approval is the `required_sync` route. Go's reviewer is synchronous,
 		// so the distinction is the configured fresh-review requirement.
-		routeReason := "policy"
-		if requiredReview {
-			routeReason = "fresh_required"
-		}
 		r.metrics.Counter(telemetry.GuardianReviewRouteMetric, 1, map[string]string{
-			"route": "required_sync", "reason": routeReason,
+			"route": "required_sync", "reason": string(reviewReason),
 		})
 	}
 	reviewStartedAt := time.Now()
@@ -1258,7 +1273,7 @@ func (r *modelGuardianReviewer) review(ctx context.Context, threadID, turnID, ta
 	if store == nil {
 		store = state.NewReviewStore()
 	}
-	event, err := store.Start(turnID, targetItemID, action)
+	event, err := store.StartWithReason(turnID, targetItemID, action, reviewReason)
 	if err != nil {
 		attribution.Decision = state.DecisionAborted
 		attribution.TerminalStatus = "aborted"
@@ -2960,6 +2975,22 @@ func guardianTranscriptIsCompactionSummary(item *session.Item) bool {
 	return sessionItemIsCompactionOutput(item)
 }
 
+// guardianReviewReasonRequiresStrictNotification mirrors the Rust app-server
+// check introduced with #43462: only an in-progress review whose trigger is one
+// of these strict reasons emits autoApprovalReview/strictReviewRequired.
+func guardianReviewReasonRequiresStrictNotification(reason state.GuardianReviewReason) bool {
+	switch reason {
+	case state.GuardianReviewReasonElevatedRisk,
+		state.GuardianReviewReasonStaleScore,
+		state.GuardianReviewReasonIncompatibleCompaction,
+		state.GuardianReviewReasonScoringFailure,
+		state.GuardianReviewReasonAuthorizationChanged:
+		return true
+	default:
+		return false
+	}
+}
+
 func (r *RuntimeRouter) notifyGuardianReviewEvent(threadID string, event *state.Event) {
 	if r == nil || event == nil {
 		return
@@ -2993,6 +3024,11 @@ func (r *RuntimeRouter) notifyGuardianReviewEvent(threadID string, event *state.
 		r.notify(NotificationItemGuardianApprovalReviewStarted, &ItemGuardianApprovalReviewStartedNotification{
 			ThreadID: threadID, TurnID: event.TurnID, StartedAtMS: uint64(event.StartedAtMS), ReviewID: event.ID, TargetItemID: targetItemID, Review: review, Action: action,
 		})
+		if event.ReviewReason != nil && guardianReviewReasonRequiresStrictNotification(*event.ReviewReason) {
+			r.notify(NotificationStrictReviewRequired, &StrictReviewRequiredNotification{
+				ThreadID: threadID, TurnID: event.TurnID, StartedAtMS: uint64(event.StartedAtMS),
+			})
+		}
 		return
 	}
 	completedAt := event.StartedAtMS

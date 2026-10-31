@@ -100,6 +100,7 @@ func TestGuardianAskUserFallsBackToUserApprovalLikeRust(t *testing.T) {
 // assessment still approves a small action, while an action that cannot fit the
 // reviewer budget falls through to the full review and defers to the user.
 func TestGuardianServingAssessmentDoesNotCoverOversizedActionLikeRust(t *testing.T) {
+	var events []*state.Event
 	newReviewer := func(t *testing.T) *modelGuardianReviewer {
 		t.Helper()
 		return &modelGuardianReviewer{
@@ -111,6 +112,9 @@ func TestGuardianServingAssessmentDoesNotCoverOversizedActionLikeRust(t *testing
 			syncImageContextWindow: func(string, string) (int64, bool) { return 400, true },
 			servingAssessment:      func(string, string, string) *state.ServingAssessment { return &state.ServingAssessment{} },
 			servingAuthorization:   func(string, string) state.ServingAuthorization { return state.ServingAuthorization{} },
+			notify: func(_ string, event *state.Event) {
+				events = append(events, event)
+			},
 		}
 	}
 	small := state.Action{Type: "command", Command: "ls", CWD: "/repo"}
@@ -129,5 +133,13 @@ func TestGuardianServingAssessmentDoesNotCoverOversizedActionLikeRust(t *testing
 	}
 	if decision != state.DecisionAskUser {
 		t.Fatalf("oversized action decision = %q, want the user fallback", decision)
+	}
+	if len(events) == 0 {
+		t.Fatal("oversized action did not emit a Guardian review event")
+	}
+	for _, event := range events {
+		if event.ReviewReason == nil || *event.ReviewReason != state.GuardianReviewReasonScoringFailure {
+			t.Fatalf("oversized action review reason = %#v, want scoring_failure", event.ReviewReason)
+		}
 	}
 }

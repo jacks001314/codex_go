@@ -72,6 +72,63 @@ func TestEventLifecycle(t *testing.T) {
 	}
 }
 
+func TestGuardianReviewReasonMatchesRust(t *testing.T) {
+	for _, testCase := range []struct {
+		reason  GuardianReviewReason
+		encoded string
+	}{
+		{GuardianReviewReasonPolicy, `"policy"`},
+		{GuardianReviewReasonFreshRequired, `"fresh_required"`},
+		{GuardianReviewReasonMissingScore, `"missing_score"`},
+		{GuardianReviewReasonStaleScore, `"stale_score"`},
+		{GuardianReviewReasonInvalidScore, `"invalid_score"`},
+		{GuardianReviewReasonIncompatibleCompaction, `"incompatible_compaction"`},
+		{GuardianReviewReasonElevatedRisk, `"elevated_risk"`},
+		{GuardianReviewReasonScoringFailure, `"scoring_failure"`},
+		{GuardianReviewReasonAuthorizationChanged, `"authorization_changed"`},
+		{GuardianReviewReasonUnknown, `"unknown"`},
+	} {
+		data, err := json.Marshal(testCase.reason)
+		if err != nil || string(data) != testCase.encoded {
+			t.Fatalf("Marshal(%q) = %s, %v; want %s", testCase.reason, data, err, testCase.encoded)
+		}
+		var decoded GuardianReviewReason
+		if err := json.Unmarshal(data, &decoded); err != nil || decoded != testCase.reason {
+			t.Fatalf("Unmarshal(%s) = %q, %v", data, decoded, err)
+		}
+	}
+
+	var unknown GuardianReviewReason
+	if err := json.Unmarshal([]byte(`"future_review_reason"`), &unknown); err != nil || unknown != GuardianReviewReasonUnknown {
+		t.Fatalf("unknown reason = %q, %v", unknown, err)
+	}
+
+	store := NewReviewStore()
+	store.SetClock(fixedGuardianTime)
+	event, err := store.StartWithReason("turn-a", "item-a", Action{
+		Type: "command", Command: "ls", CWD: "/repo", Source: CommandSourceShell,
+	}, GuardianReviewReasonElevatedRisk)
+	if err != nil {
+		t.Fatalf("StartWithReason() error = %v", err)
+	}
+	if event.ReviewReason == nil || *event.ReviewReason != GuardianReviewReasonElevatedRisk {
+		t.Fatalf("started review reason = %#v", event.ReviewReason)
+	}
+	completed, err := store.Complete(event.ID, Assessment{
+		RiskLevel: RiskHigh, UserAuthorization: AuthorizationLow, Outcome: OutcomeDeny, Rationale: "too risky",
+	})
+	if err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+	if completed.ReviewReason == nil || *completed.ReviewReason != GuardianReviewReasonElevatedRisk {
+		t.Fatalf("completed review reason = %#v", completed.ReviewReason)
+	}
+	data, err := json.Marshal(completed)
+	if err != nil || !strings.Contains(string(data), `"reviewReason":"elevated_risk"`) {
+		t.Fatalf("completed event JSON = %s, %v", data, err)
+	}
+}
+
 func TestTimeoutAndAbort(t *testing.T) {
 	event, err := NewInProgressEvent("review-a", "turn-a", "", Action{Type: "network_access", Host: "example.com", Protocol: "https", Port: 443}, fixedGuardianTime())
 	if err != nil {

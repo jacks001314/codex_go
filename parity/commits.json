@@ -8849,9 +8849,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "Round 1079 (partial): the deleted hooks have no Go counterpart. appserver/guardian_reviewer.go has no ApprovalReviewContributor registry and keeps one fast-decision policy (full access, initial computer-use call, serving assessment, user-mode node-REPL) feeding the shared model review; agent_runtime.go injects a single emitGuardianV2FastDecision hook. Upstream retained the guardian v2 fast-decision event/metric, which Go mirrors (telemetry.NewGuardianV2FastDecisionEvent, GuardianV2FastDecisionMetric). Residual: Go models no GuardianReviewReason - state.Event has no review_reason, modelGuardianReviewer.Review takes no reason, and the synchronous review only labels its route metric policy/fresh_required."
+    "Round 1147 (complete): the deleted legacy hooks have no Go counterpart, so no runtime path needed removal. Go previously modeled no GuardianReviewReason; state/guardian.go now defines the Rust values with snake_case serialization and unknown fallback, state.Event carries ReviewReason, and ReviewStore.StartWithReason preserves it through every terminal transition. appserver/guardian_reviewer.go derives policy, fresh_required, scoring_failure for oversized actions, elevated_risk for a retained assessment requiring review, and authorization_changed for a changed serving authorization; incomplete retained context remains policy. The same reason feeds codex.guardian.review.route. notifyGuardianReviewEvent emits autoApprovalReview/strictReviewRequired only for an in-progress review with elevated_risk, stale_score, incompatible_compaction, scoring_failure, or authorization_changed. No ApprovalReviewContributor registry or asynchronous scorer exists in Go, so async-only causes are not fabricated."
    ]
   },
   {

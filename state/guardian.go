@@ -259,10 +259,55 @@ type Event struct {
 	UserAuthorization *UserAuthorization `json:"userAuthorization,omitempty"`
 	Rationale         string             `json:"rationale,omitempty"`
 	DecisionSource    *DecisionSource    `json:"decisionSource,omitempty"`
-	Action            Action             `json:"action"`
+	// ReviewReason is the request-scoped trigger that sent this review to
+	// Guardian (Rust GuardianAssessmentEvent::review_reason). It is absent on
+	// events recorded before the field existed.
+	ReviewReason *GuardianReviewReason `json:"reviewReason,omitempty"`
+	Action       Action                `json:"action"`
 	// GuardianContextMode is host telemetry attribution, not part of the
 	// persisted or client-visible review event.
 	GuardianContextMode string `json:"-"`
+}
+
+// GuardianReviewReason mirrors Rust's GuardianReviewReason
+// (codex-rs/protocol/src/approvals.rs). Values serialize as snake_case, and an
+// unknown future value decodes to Unknown like serde's #[serde(other)].
+type GuardianReviewReason string
+
+const (
+	GuardianReviewReasonPolicy                 GuardianReviewReason = "policy"
+	GuardianReviewReasonFreshRequired          GuardianReviewReason = "fresh_required"
+	GuardianReviewReasonMissingScore           GuardianReviewReason = "missing_score"
+	GuardianReviewReasonStaleScore             GuardianReviewReason = "stale_score"
+	GuardianReviewReasonInvalidScore           GuardianReviewReason = "invalid_score"
+	GuardianReviewReasonIncompatibleCompaction GuardianReviewReason = "incompatible_compaction"
+	GuardianReviewReasonElevatedRisk           GuardianReviewReason = "elevated_risk"
+	GuardianReviewReasonScoringFailure         GuardianReviewReason = "scoring_failure"
+	GuardianReviewReasonAuthorizationChanged   GuardianReviewReason = "authorization_changed"
+	GuardianReviewReasonUnknown                GuardianReviewReason = "unknown"
+)
+
+func (r *GuardianReviewReason) UnmarshalJSON(data []byte) error {
+	var value string
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	switch reason := GuardianReviewReason(value); reason {
+	case GuardianReviewReasonPolicy,
+		GuardianReviewReasonFreshRequired,
+		GuardianReviewReasonMissingScore,
+		GuardianReviewReasonStaleScore,
+		GuardianReviewReasonInvalidScore,
+		GuardianReviewReasonIncompatibleCompaction,
+		GuardianReviewReasonElevatedRisk,
+		GuardianReviewReasonScoringFailure,
+		GuardianReviewReasonAuthorizationChanged,
+		GuardianReviewReasonUnknown:
+		*r = reason
+	default:
+		*r = GuardianReviewReasonUnknown
+	}
+	return nil
 }
 
 func NewInProgressEvent(id string, turnID string, targetItemID string, action Action, now time.Time) (*Event, error) {
@@ -497,11 +542,23 @@ func (s *ReviewStore) NewReviewID() string {
 }
 
 func (s *ReviewStore) Start(turnID string, targetItemID string, action Action) (*Event, error) {
+	return s.startReview(turnID, targetItemID, action, nil)
+}
+
+// StartWithReason starts a review with the request-scoped trigger Rust records
+// on GuardianAssessmentEvent::review_reason. The reason is retained on the
+// stored event so every terminal transition keeps it.
+func (s *ReviewStore) StartWithReason(turnID string, targetItemID string, action Action, reason GuardianReviewReason) (*Event, error) {
+	return s.startReview(turnID, targetItemID, action, &reason)
+}
+
+func (s *ReviewStore) startReview(turnID string, targetItemID string, action Action, reason *GuardianReviewReason) (*Event, error) {
 	id := s.NewReviewID()
 	event, err := NewInProgressEvent(id, turnID, targetItemID, action, s.now())
 	if err != nil {
 		return nil, err
 	}
+	event.ReviewReason = reason
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.events[id] = event
