@@ -63,6 +63,9 @@ func GenerateCompletion(shell string, commandName string) (string, error) {
 	if strings.TrimSpace(commandName) == "" {
 		commandName = "codex"
 	}
+	if script, ok := completionScript(shell, commandName); ok {
+		return script, nil
+	}
 	spec := codexCompletionSpec()
 	switch shell {
 	case "bash":

@@ -58,14 +58,18 @@ func TestGenerateCompletionAllShellsIncludeNestedSurface(t *testing.T) {
 			if err != nil {
 				t.Fatalf("GenerateCompletion returned error: %v", err)
 			}
-			for _, want := range []string{"cloud", "exec-server", "mcp", "add", "--oauth-client-id", "marketplace", "--sparse", "daemon", "bootstrap", "--remote-control"} {
+			// Flag spellings differ per shell (fish writes `-l oauth-client-id`),
+			// so the assertions stick to names every generator emits verbatim.
+			for _, want := range []string{"cloud", "exec-server", "mcp", "add", "oauth-client-id", "marketplace", "daemon", "bootstrap", "remote-control", "migrate-nfs-db"} {
 				if !strings.Contains(script, want) {
-					t.Fatalf("%s completion missing %q: %q", shell, want, script)
+					t.Fatalf("%s completion missing %q", shell, want)
 				}
 			}
+			// clap_complete emits every subcommand, hidden ones included, so the
+			// reference scripts must mention them too.
 			for _, hidden := range []string{"execpolicy", "responses-api-proxy", "stdio-to-uds"} {
-				if strings.Contains(script, hidden) {
-					t.Fatalf("%s completion includes hidden command %q: %q", shell, hidden, script)
+				if !strings.Contains(script, hidden) {
+					t.Fatalf("%s completion missing hidden command %q", shell, hidden)
 				}
 			}
 		})
@@ -79,4 +83,39 @@ func hasCompletionWord(words []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// TestGenerateCompletionServesReferenceScript pins the embedded clap_complete
+// artefacts: every supported shell is served verbatim from completiondata, with
+// the wrapper, the full command tree and the final `complete` registration that
+// codex-cli 0.166.0 emits.
+func TestGenerateCompletionServesReferenceScript(t *testing.T) {
+	for _, shell := range completionShellValues {
+		script, ok := completionScript(shell, "codex")
+		if !ok {
+			t.Fatalf("%s: no embedded script", shell)
+		}
+		if generated, err := GenerateCompletion(shell, "codex"); err != nil || generated != script {
+			t.Fatalf("%s: GenerateCompletion error = %v, served embedded script = %v", shell, err, generated == script)
+		}
+		if !strings.Contains(script, "codex") || !strings.Contains(script, "migrate-nfs-db") || !strings.Contains(script, "execpolicy") {
+			t.Fatalf("%s: script missing the full command surface", shell)
+		}
+		if strings.HasSuffix(script, "\r\n") || strings.Contains(script, "\r\n") {
+			t.Fatalf("%s: script is not LF-terminated", shell)
+		}
+	}
+	if _, ok := completionScript("tcsh", "codex"); ok {
+		t.Fatalf("tcsh must not have an embedded script")
+	}
+	if _, ok := completionScript("bash", "gcode"); ok {
+		t.Fatalf("custom binary names must fall back to the generated scripts")
+	}
+	custom, err := GenerateCompletion("bash", "gcode")
+	if err != nil {
+		t.Fatalf("GenerateCompletion(gcode) error = %v", err)
+	}
+	if !strings.Contains(custom, "_gcode") {
+		t.Fatalf("custom-name completion does not mention gcode")
+	}
 }

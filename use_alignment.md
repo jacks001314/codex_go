@@ -2520,8 +2520,50 @@ JWKS before saving, so the command now does the same.
   `TestLoginWithAccessTokenRejectsMalformedJWTLikeRust` and
   `TestLoginWithAccessTokenVerifiesSignatureLikeRust` in `app`.
 
+### 79. `completion <shell>` emits clap_complete's scripts byte-for-byte
+
+Go generated all five completion scripts from a hand-written 76-node command
+tree, so the output carried none of clap_complete's shape: 0.166 walks a
+264-node model (including the hidden `execpolicy`, `responses-api-proxy`,
+`stdio-to-uds`, `migrate-nfs-db` and `queue` subcommands) and prints
+6968/4508/1040/2194/1914 lines of bash/zsh/fish/powershell/elvish against Go's
+170/7/164/172/3. Porting clap_complete's five generators plus the complete clap
+command model would be a port of clap, not a parity fix, so the scripts are now
+shipped as data - the approach the repo already takes for
+`model/bundled_models_catalog.json`.
+
+- **Embedded assets.** `cli/completiondata/{bash,zsh,fish,powershell,elvish}.txt`
+  hold the exact bytes 0.166 prints (242813/246017/198104/272564/167227 bytes,
+  LF). `cli/completion_assets.go` serves them through `//go:embed` and
+  `completionScript`, whose doc comment names the producing command and how to
+  regenerate the files.
+- **Fallback stays.** `GenerateCompletion` consults the assets first and only
+  then reaches the hand-written generator, so `codex completion <shell>` is
+  byte-identical while a renamed binary (`gcode`) still gets a script defining
+  `_gcode` rather than `_codex`.
+- **Hidden subcommands.** clap_complete walks the whole command model, so the
+  scripts list `migrate-nfs-db`, `execpolicy`, `marketplace`, `daemon`,
+  `bootstrap` and `remote-control`; the regression test used to assert they were
+  absent and now asserts they are present.
+- **Line endings.** `.gitattributes` pins `cli/completiondata/*.txt` to `-text`
+  so a Windows checkout cannot rewrite the LF bytes.
+- Evidence: `out/r70-completion.txt` compares against the 0.166 binary and all
+  five scripts are identical; `out/r70-p67-sweep.txt` reports `cases 24 diffs 0`
+  where it previously had two (`completion powershell`, `completion fish`).
+  `go test -count=1 -vet=off ./cli ./plugin ./state` passes and `./app` keeps
+  only the two known baselines.
+- Regressions: `TestGenerateCompletionAllShellsIncludeNestedSurface` (hidden
+  subcommands present, per-shell vocabulary) and
+  `TestGenerateCompletionServesReferenceScript` (assets served, no CRLF, `tcsh`
+  uncovered, `gcode` falls back).
+
 ## Verification
 
+- Round 66 makes `completion <shell>` return clap_complete's own five scripts
+  (entry 79): `out/r70-completion.txt` shows byte-identical bash/zsh/fish/
+  powershell/elvish against 0.166, and `out/r70-p67-sweep.txt` drops the sweep
+  from two differences to `cases 24 diffs 0`; `go test -count=1 -vet=off ./cli
+  ./plugin ./state` passes with `./app` keeping only the two known baselines.
 - Round 65 makes `login --with-access-token` decode and verify the agent
   identity JWT before storing it and stops the retired `--api-key` flag from
   creating `codex-login.log` (entry 78): `out/r69-jwt.txt` shows identical rc,
@@ -3071,11 +3113,6 @@ JWKS before saving, so the command now does the same.
   ./cmd/... ./tcptunnel` passes.
 ## Still open
 
-- The five `completion <shell>` scripts are still hand-written Go rather than
-  clap_complete output: 0.166 emits 6968 bash, 4508 zsh, 1040 fish, 2194
-  powershell and 1914 elvish lines against Go's 170/7/164/172/3, so completing
-  parity there means porting clap_complete's generators plus a command tree that
-  includes every hidden subcommand - not started.
 - A source build reports `codex-cli 0.0.0` while 0.166 prints its release
   version; the version string is injected by the release pipeline
   (`-ldflags`), so a plain `go build` binary cannot match it.

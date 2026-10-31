@@ -1,0 +1,1914 @@
+
+use builtin;
+use str;
+
+set edit:completion:arg-completer[codex] = {|@words|
+    fn spaces {|n|
+        builtin:repeat $n ' ' | str:join ''
+    }
+    fn cand {|text desc|
+        edit:complex-candidate $text &display=$text' '(spaces (- 14 (wcswidth $text)))$desc
+    }
+    var command = 'codex'
+    for word $words[1..-1] {
+        if (str:has-prefix $word '-') {
+            break
+        }
+        set command = $command';'$word
+    }
+    var completions = [
+        &'codex'= {
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand --remote 'Connect the TUI to a remote app server endpoint'
+            cand --remote-auth-token-env 'Name of the environment variable containing the bearer token to send to a remote app server websocket'
+            cand -i 'Optional image(s) to attach to the initial prompt'
+            cand --image 'Optional image(s) to attach to the initial prompt'
+            cand -m 'Model the agent should use'
+            cand --model 'Model the agent should use'
+            cand --local-provider 'Specify which local provider to use (lmstudio or ollama). If not specified with --oss, will use config default or show selection'
+            cand -p 'Layer $CODEX_HOME/<name>.config.toml on top of the base user config'
+            cand --profile 'Layer $CODEX_HOME/<name>.config.toml on top of the base user config'
+            cand -s 'Select the sandbox policy to use when executing model-generated shell commands'
+            cand --sandbox 'Select the sandbox policy to use when executing model-generated shell commands'
+            cand -C 'Tell the agent to use the specified directory as its working root'
+            cand --cd 'Tell the agent to use the specified directory as its working root'
+            cand --add-dir 'Additional directories that should be writable alongside the primary workspace'
+            cand -a 'Configure when the model requires human approval before executing a command'
+            cand --ask-for-approval 'Configure when the model requires human approval before executing a command'
+            cand --strict-config 'Error out when config.toml contains fields that are not recognized by this version of Codex'
+            cand --oss 'Use open-source provider'
+            cand --dangerously-bypass-hook-trust 'Run enabled hooks without requiring persisted hook trust for this invocation. DANGEROUS. Intended only for automation that already vets hook sources'
+            cand --worktree 'Run the session in a new managed Git worktree'
+            cand --dangerously-bypass-approvals-and-sandbox 'Skip all confirmation prompts and execute commands without sandboxing. EXTREMELY DANGEROUS. Intended solely for running in environments that are externally sandboxed'
+            cand --approve-for-me 'Route approval requests through automatic review using the workspace-write sandbox'
+            cand --search 'Enable live web search. When enabled, the native Responses `web_search` tool is available to the model (no per‑call approval)'
+            cand --no-alt-screen 'Disable alternate screen mode'
+            cand --no-daemon 'Run without the shared background server, even if it is already running'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+            cand -V 'Print version'
+            cand --version 'Print version'
+            cand agents 'Browse all agent sessions on the shared local app-server daemon'
+            cand tcp-tunnel 'Internal: forward a local TCP socket through an HTTP/3 CONNECT proxy'
+            cand exec 'Run Codex non-interactively'
+            cand e 'Run Codex non-interactively'
+            cand review 'Run a code review non-interactively'
+            cand login 'Manage login'
+            cand logout 'Remove stored authentication credentials'
+            cand mcp 'Manage external MCP servers for Codex'
+            cand plugin 'Manage Codex plugins'
+            cand app-server '[experimental] Run the app server or related tooling'
+            cand remote-control '[experimental] Manage the app-server daemon with remote control enabled'
+            cand app 'Launch the Desktop app (opens the app installer if missing)'
+            cand completion 'Generate shell completion scripts'
+            cand update 'Update Codex to the latest version'
+            cand doctor 'Diagnose local Codex installation, config, auth, and runtime health'
+            cand sandbox 'Run commands within a Codex-provided sandbox'
+            cand debug 'Debugging tools'
+            cand execpolicy 'Execpolicy tooling'
+            cand apply 'Apply the latest diff produced by Codex agent as a `git apply` to your local working tree'
+            cand a 'Apply the latest diff produced by Codex agent as a `git apply` to your local working tree'
+            cand resume 'Resume a previous interactive session (picker by default; use --last to continue the most recent)'
+            cand queue 'Queue a message for an existing session'
+            cand archive 'Archive a saved session by id or session name'
+            cand delete 'Permanently delete a saved session by id or session name'
+            cand migrate-rollouts 'Inspect or migrate legacy local sessions to paginated thread history'
+            cand migrate-nfs-db '[experimental] Migrate configured SQLite databases to DELETE mode in place'
+            cand unarchive 'Unarchive a saved session by id or session name'
+            cand fork 'Fork a previous interactive session (picker by default; use --last to fork the most recent)'
+            cand cloud '[EXPERIMENTAL] Browse tasks from Codex Cloud and apply changes locally'
+            cand responses-api-proxy 'Internal: run the responses API proxy'
+            cand stdio-to-uds 'Internal: relay stdio to a Unix domain socket'
+            cand exec-server '[EXPERIMENTAL] Run the standalone exec-server service'
+            cand features 'Inspect feature flags'
+            cand help 'Print this message or the help of the given subcommand(s)'
+        }
+        &'codex;agents'= {
+            cand --remote 'Connect the TUI to a remote app server endpoint'
+            cand --remote-auth-token-env 'Name of the environment variable containing the bearer token to send to a remote app server websocket'
+            cand -C 'Use this directory for new tasks on a remote server'
+            cand --cd 'Use this directory for new tasks on a remote server'
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand --no-daemon 'The agents overview requires a shared server; this option is rejected'
+            cand --no-alt-screen 'Disable alternate screen mode'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;tcp-tunnel'= {
+            cand --proxy-url 'HTTPS origin of the HTTP/3 proxy'
+            cand --proxy-origins-file 'File containing one exact approved HTTPS proxy origin per line'
+            cand --target 'CONNECT target authority, including a nonzero port'
+            cand --listen-addr 'listen-addr'
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand --auth-token-stdin 'Read the initial bearer from stdin'
+            cand --auth-token-updates-stdin 'Read replacement bearers from stdin and stop when the controlling pipe closes'
+            cand --connect-headers-stdin 'Read a JSON list of extension-header name/value pairs before the first bearer'
+            cand --diagnostics-json 'Emit credential-safe JSON diagnostics on stderr instead of human-readable errors'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;exec'= {
+            cand -i 'Optional image(s) to attach to the initial prompt'
+            cand --image 'Optional image(s) to attach to the initial prompt'
+            cand --local-provider 'Specify which local provider to use (lmstudio or ollama). If not specified with --oss, will use config default or show selection'
+            cand -p 'Layer $CODEX_HOME/<name>.config.toml on top of the base user config'
+            cand --profile 'Layer $CODEX_HOME/<name>.config.toml on top of the base user config'
+            cand -s 'Select the sandbox policy to use when executing model-generated shell commands'
+            cand --sandbox 'Select the sandbox policy to use when executing model-generated shell commands'
+            cand -C 'Tell the agent to use the specified directory as its working root'
+            cand --cd 'Tell the agent to use the specified directory as its working root'
+            cand --add-dir 'Additional directories that should be writable alongside the primary workspace'
+            cand -m 'Model the agent should use'
+            cand --model 'Model the agent should use'
+            cand --thread-source 'Source classification for newly created or forked threads'
+            cand --cyber-access-program 'Request an experimental Cyber access program for this turn (OpenAI provider only). Omit to use server defaults. Not supported with review; fork requires a prompt'
+            cand --output-schema 'Path to a JSON Schema file describing the model''s final response shape'
+            cand --color 'Specifies color settings for use in the output'
+            cand -o 'Specifies file where the last message from the agent should be written'
+            cand --output-last-message 'Specifies file where the last message from the agent should be written'
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand --strict-config 'Error out when config.toml contains fields that are not recognized by this version of Codex'
+            cand --oss 'Use open-source provider'
+            cand --approve-for-me 'Route approval requests through automatic review using the workspace-write sandbox'
+            cand --dangerously-bypass-approvals-and-sandbox 'Skip all confirmation prompts and execute commands without sandboxing. EXTREMELY DANGEROUS. Intended solely for running in environments that are externally sandboxed'
+            cand --dangerously-bypass-hook-trust 'Run enabled hooks without requiring persisted hook trust for this invocation. DANGEROUS. Intended only for automation that already vets hook sources'
+            cand --worktree 'Run the session in a new managed Git worktree'
+            cand --skip-git-repo-check 'Allow running Codex outside a Git repository'
+            cand --ephemeral 'Run without persisting session files to disk'
+            cand --ignore-user-config 'Do not load `$CODEX_HOME/config.toml`; auth still uses `CODEX_HOME`'
+            cand --ignore-rules 'Do not load user or project execpolicy `.rules` files'
+            cand --json 'Print events to stdout as JSONL'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+            cand -V 'Print version'
+            cand --version 'Print version'
+            cand resume 'Resume a previous session by id or pick the most recent with --last'
+            cand fork 'Fork a previous session by id into a new session'
+            cand review 'Run a code review against the current repository'
+            cand help 'Print this message or the help of the given subcommand(s)'
+        }
+        &'codex;e'= {
+            cand -i 'Optional image(s) to attach to the initial prompt'
+            cand --image 'Optional image(s) to attach to the initial prompt'
+            cand --local-provider 'Specify which local provider to use (lmstudio or ollama). If not specified with --oss, will use config default or show selection'
+            cand -p 'Layer $CODEX_HOME/<name>.config.toml on top of the base user config'
+            cand --profile 'Layer $CODEX_HOME/<name>.config.toml on top of the base user config'
+            cand -s 'Select the sandbox policy to use when executing model-generated shell commands'
+            cand --sandbox 'Select the sandbox policy to use when executing model-generated shell commands'
+            cand -C 'Tell the agent to use the specified directory as its working root'
+            cand --cd 'Tell the agent to use the specified directory as its working root'
+            cand --add-dir 'Additional directories that should be writable alongside the primary workspace'
+            cand -m 'Model the agent should use'
+            cand --model 'Model the agent should use'
+            cand --thread-source 'Source classification for newly created or forked threads'
+            cand --cyber-access-program 'Request an experimental Cyber access program for this turn (OpenAI provider only). Omit to use server defaults. Not supported with review; fork requires a prompt'
+            cand --output-schema 'Path to a JSON Schema file describing the model''s final response shape'
+            cand --color 'Specifies color settings for use in the output'
+            cand -o 'Specifies file where the last message from the agent should be written'
+            cand --output-last-message 'Specifies file where the last message from the agent should be written'
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand --strict-config 'Error out when config.toml contains fields that are not recognized by this version of Codex'
+            cand --oss 'Use open-source provider'
+            cand --approve-for-me 'Route approval requests through automatic review using the workspace-write sandbox'
+            cand --dangerously-bypass-approvals-and-sandbox 'Skip all confirmation prompts and execute commands without sandboxing. EXTREMELY DANGEROUS. Intended solely for running in environments that are externally sandboxed'
+            cand --dangerously-bypass-hook-trust 'Run enabled hooks without requiring persisted hook trust for this invocation. DANGEROUS. Intended only for automation that already vets hook sources'
+            cand --worktree 'Run the session in a new managed Git worktree'
+            cand --skip-git-repo-check 'Allow running Codex outside a Git repository'
+            cand --ephemeral 'Run without persisting session files to disk'
+            cand --ignore-user-config 'Do not load `$CODEX_HOME/config.toml`; auth still uses `CODEX_HOME`'
+            cand --ignore-rules 'Do not load user or project execpolicy `.rules` files'
+            cand --json 'Print events to stdout as JSONL'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+            cand -V 'Print version'
+            cand --version 'Print version'
+            cand resume 'Resume a previous session by id or pick the most recent with --last'
+            cand fork 'Fork a previous session by id into a new session'
+            cand review 'Run a code review against the current repository'
+            cand help 'Print this message or the help of the given subcommand(s)'
+        }
+        &'codex;exec;resume'= {
+            cand -i 'Optional image(s) to attach to the prompt sent after resuming'
+            cand --image 'Optional image(s) to attach to the prompt sent after resuming'
+            cand -m 'Model the agent should use'
+            cand --model 'Model the agent should use'
+            cand --thread-source 'Source classification for newly created or forked threads'
+            cand --cyber-access-program 'Request an experimental Cyber access program for this turn (OpenAI provider only). Omit to use server defaults. Not supported with review; fork requires a prompt'
+            cand --output-schema 'Path to a JSON Schema file describing the model''s final response shape'
+            cand -o 'Specifies file where the last message from the agent should be written'
+            cand --output-last-message 'Specifies file where the last message from the agent should be written'
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand --last 'Resume the most recent recorded session (newest) without specifying an id'
+            cand --all 'Show all sessions (disables cwd filtering)'
+            cand --strict-config 'Error out when config.toml contains fields that are not recognized by this version of Codex'
+            cand --dangerously-bypass-approvals-and-sandbox 'Skip all confirmation prompts and execute commands without sandboxing. EXTREMELY DANGEROUS. Intended solely for running in environments that are externally sandboxed'
+            cand --dangerously-bypass-hook-trust 'Run enabled hooks without requiring persisted hook trust for this invocation. DANGEROUS. Intended only for automation that already vets hook sources'
+            cand --worktree 'Run the session in a new managed Git worktree'
+            cand --skip-git-repo-check 'Allow running Codex outside a Git repository'
+            cand --ephemeral 'Run without persisting session files to disk'
+            cand --ignore-user-config 'Do not load `$CODEX_HOME/config.toml`; auth still uses `CODEX_HOME`'
+            cand --ignore-rules 'Do not load user or project execpolicy `.rules` files'
+            cand --json 'Print events to stdout as JSONL'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;e;resume'= {
+            cand -i 'Optional image(s) to attach to the prompt sent after resuming'
+            cand --image 'Optional image(s) to attach to the prompt sent after resuming'
+            cand -m 'Model the agent should use'
+            cand --model 'Model the agent should use'
+            cand --thread-source 'Source classification for newly created or forked threads'
+            cand --cyber-access-program 'Request an experimental Cyber access program for this turn (OpenAI provider only). Omit to use server defaults. Not supported with review; fork requires a prompt'
+            cand --output-schema 'Path to a JSON Schema file describing the model''s final response shape'
+            cand -o 'Specifies file where the last message from the agent should be written'
+            cand --output-last-message 'Specifies file where the last message from the agent should be written'
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand --last 'Resume the most recent recorded session (newest) without specifying an id'
+            cand --all 'Show all sessions (disables cwd filtering)'
+            cand --strict-config 'Error out when config.toml contains fields that are not recognized by this version of Codex'
+            cand --dangerously-bypass-approvals-and-sandbox 'Skip all confirmation prompts and execute commands without sandboxing. EXTREMELY DANGEROUS. Intended solely for running in environments that are externally sandboxed'
+            cand --dangerously-bypass-hook-trust 'Run enabled hooks without requiring persisted hook trust for this invocation. DANGEROUS. Intended only for automation that already vets hook sources'
+            cand --worktree 'Run the session in a new managed Git worktree'
+            cand --skip-git-repo-check 'Allow running Codex outside a Git repository'
+            cand --ephemeral 'Run without persisting session files to disk'
+            cand --ignore-user-config 'Do not load `$CODEX_HOME/config.toml`; auth still uses `CODEX_HOME`'
+            cand --ignore-rules 'Do not load user or project execpolicy `.rules` files'
+            cand --json 'Print events to stdout as JSONL'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;exec;fork'= {
+            cand -i 'Optional image(s) to attach to the prompt sent after forking'
+            cand --image 'Optional image(s) to attach to the prompt sent after forking'
+            cand -m 'Model the agent should use'
+            cand --model 'Model the agent should use'
+            cand --thread-source 'Source classification for newly created or forked threads'
+            cand --cyber-access-program 'Request an experimental Cyber access program for this turn (OpenAI provider only). Omit to use server defaults. Not supported with review; fork requires a prompt'
+            cand --output-schema 'Path to a JSON Schema file describing the model''s final response shape'
+            cand -o 'Specifies file where the last message from the agent should be written'
+            cand --output-last-message 'Specifies file where the last message from the agent should be written'
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand --strict-config 'Error out when config.toml contains fields that are not recognized by this version of Codex'
+            cand --dangerously-bypass-approvals-and-sandbox 'Skip all confirmation prompts and execute commands without sandboxing. EXTREMELY DANGEROUS. Intended solely for running in environments that are externally sandboxed'
+            cand --dangerously-bypass-hook-trust 'Run enabled hooks without requiring persisted hook trust for this invocation. DANGEROUS. Intended only for automation that already vets hook sources'
+            cand --worktree 'Run the session in a new managed Git worktree'
+            cand --skip-git-repo-check 'Allow running Codex outside a Git repository'
+            cand --ephemeral 'Run without persisting session files to disk'
+            cand --ignore-user-config 'Do not load `$CODEX_HOME/config.toml`; auth still uses `CODEX_HOME`'
+            cand --ignore-rules 'Do not load user or project execpolicy `.rules` files'
+            cand --json 'Print events to stdout as JSONL'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;e;fork'= {
+            cand -i 'Optional image(s) to attach to the prompt sent after forking'
+            cand --image 'Optional image(s) to attach to the prompt sent after forking'
+            cand -m 'Model the agent should use'
+            cand --model 'Model the agent should use'
+            cand --thread-source 'Source classification for newly created or forked threads'
+            cand --cyber-access-program 'Request an experimental Cyber access program for this turn (OpenAI provider only). Omit to use server defaults. Not supported with review; fork requires a prompt'
+            cand --output-schema 'Path to a JSON Schema file describing the model''s final response shape'
+            cand -o 'Specifies file where the last message from the agent should be written'
+            cand --output-last-message 'Specifies file where the last message from the agent should be written'
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand --strict-config 'Error out when config.toml contains fields that are not recognized by this version of Codex'
+            cand --dangerously-bypass-approvals-and-sandbox 'Skip all confirmation prompts and execute commands without sandboxing. EXTREMELY DANGEROUS. Intended solely for running in environments that are externally sandboxed'
+            cand --dangerously-bypass-hook-trust 'Run enabled hooks without requiring persisted hook trust for this invocation. DANGEROUS. Intended only for automation that already vets hook sources'
+            cand --worktree 'Run the session in a new managed Git worktree'
+            cand --skip-git-repo-check 'Allow running Codex outside a Git repository'
+            cand --ephemeral 'Run without persisting session files to disk'
+            cand --ignore-user-config 'Do not load `$CODEX_HOME/config.toml`; auth still uses `CODEX_HOME`'
+            cand --ignore-rules 'Do not load user or project execpolicy `.rules` files'
+            cand --json 'Print events to stdout as JSONL'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;exec;review'= {
+            cand --base 'Review changes against the given base branch'
+            cand --commit 'Review the changes introduced by a commit'
+            cand --title 'Optional commit title to display in the review summary'
+            cand -m 'Model the agent should use'
+            cand --model 'Model the agent should use'
+            cand --thread-source 'Source classification for newly created or forked threads'
+            cand --cyber-access-program 'Request an experimental Cyber access program for this turn (OpenAI provider only). Omit to use server defaults. Not supported with review; fork requires a prompt'
+            cand --output-schema 'Path to a JSON Schema file describing the model''s final response shape'
+            cand -o 'Specifies file where the last message from the agent should be written'
+            cand --output-last-message 'Specifies file where the last message from the agent should be written'
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand --uncommitted 'Review staged, unstaged, and untracked changes'
+            cand --strict-config 'Error out when config.toml contains fields that are not recognized by this version of Codex'
+            cand --dangerously-bypass-approvals-and-sandbox 'Skip all confirmation prompts and execute commands without sandboxing. EXTREMELY DANGEROUS. Intended solely for running in environments that are externally sandboxed'
+            cand --dangerously-bypass-hook-trust 'Run enabled hooks without requiring persisted hook trust for this invocation. DANGEROUS. Intended only for automation that already vets hook sources'
+            cand --worktree 'Run the session in a new managed Git worktree'
+            cand --skip-git-repo-check 'Allow running Codex outside a Git repository'
+            cand --ephemeral 'Run without persisting session files to disk'
+            cand --ignore-user-config 'Do not load `$CODEX_HOME/config.toml`; auth still uses `CODEX_HOME`'
+            cand --ignore-rules 'Do not load user or project execpolicy `.rules` files'
+            cand --json 'Print events to stdout as JSONL'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;e;review'= {
+            cand --base 'Review changes against the given base branch'
+            cand --commit 'Review the changes introduced by a commit'
+            cand --title 'Optional commit title to display in the review summary'
+            cand -m 'Model the agent should use'
+            cand --model 'Model the agent should use'
+            cand --thread-source 'Source classification for newly created or forked threads'
+            cand --cyber-access-program 'Request an experimental Cyber access program for this turn (OpenAI provider only). Omit to use server defaults. Not supported with review; fork requires a prompt'
+            cand --output-schema 'Path to a JSON Schema file describing the model''s final response shape'
+            cand -o 'Specifies file where the last message from the agent should be written'
+            cand --output-last-message 'Specifies file where the last message from the agent should be written'
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand --uncommitted 'Review staged, unstaged, and untracked changes'
+            cand --strict-config 'Error out when config.toml contains fields that are not recognized by this version of Codex'
+            cand --dangerously-bypass-approvals-and-sandbox 'Skip all confirmation prompts and execute commands without sandboxing. EXTREMELY DANGEROUS. Intended solely for running in environments that are externally sandboxed'
+            cand --dangerously-bypass-hook-trust 'Run enabled hooks without requiring persisted hook trust for this invocation. DANGEROUS. Intended only for automation that already vets hook sources'
+            cand --worktree 'Run the session in a new managed Git worktree'
+            cand --skip-git-repo-check 'Allow running Codex outside a Git repository'
+            cand --ephemeral 'Run without persisting session files to disk'
+            cand --ignore-user-config 'Do not load `$CODEX_HOME/config.toml`; auth still uses `CODEX_HOME`'
+            cand --ignore-rules 'Do not load user or project execpolicy `.rules` files'
+            cand --json 'Print events to stdout as JSONL'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;exec;help'= {
+            cand resume 'Resume a previous session by id or pick the most recent with --last'
+            cand fork 'Fork a previous session by id into a new session'
+            cand review 'Run a code review against the current repository'
+            cand help 'Print this message or the help of the given subcommand(s)'
+        }
+        &'codex;exec;help;resume'= {
+        }
+        &'codex;exec;help;fork'= {
+        }
+        &'codex;exec;help;review'= {
+        }
+        &'codex;exec;help;help'= {
+        }
+        &'codex;e;help'= {
+            cand resume 'Resume a previous session by id or pick the most recent with --last'
+            cand fork 'Fork a previous session by id into a new session'
+            cand review 'Run a code review against the current repository'
+            cand help 'Print this message or the help of the given subcommand(s)'
+        }
+        &'codex;e;help;resume'= {
+        }
+        &'codex;e;help;fork'= {
+        }
+        &'codex;e;help;review'= {
+        }
+        &'codex;e;help;help'= {
+        }
+        &'codex;review'= {
+            cand --base 'Review changes against the given base branch'
+            cand --commit 'Review the changes introduced by a commit'
+            cand --title 'Optional commit title to display in the review summary'
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand --strict-config 'Error out when config.toml contains fields that are not recognized by this version of Codex'
+            cand --uncommitted 'Review staged, unstaged, and untracked changes'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;login'= {
+            cand --api-key '(deprecated) Previously accepted the API key directly; now exits with guidance to use --with-api-key'
+            cand --experimental_issuer 'EXPERIMENTAL: Use custom OAuth issuer base URL (advanced) Override the OAuth issuer base URL (advanced)'
+            cand --experimental_client-id 'EXPERIMENTAL: Use custom OAuth client ID (advanced)'
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand --with-api-key 'Read the API key from stdin (e.g. `printenv OPENAI_API_KEY | codex login --with-api-key`)'
+            cand --with-access-token 'Read the access token from stdin (e.g. `printenv CODEX_ACCESS_TOKEN | codex login --with-access-token`)'
+            cand --device-auth 'device-auth'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+            cand status 'Show login status'
+            cand help 'Print this message or the help of the given subcommand(s)'
+        }
+        &'codex;login;status'= {
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;login;help'= {
+            cand status 'Show login status'
+            cand help 'Print this message or the help of the given subcommand(s)'
+        }
+        &'codex;login;help;status'= {
+        }
+        &'codex;login;help;help'= {
+        }
+        &'codex;logout'= {
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;mcp'= {
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+            cand list 'list'
+            cand get 'get'
+            cand add 'add'
+            cand remove 'remove'
+            cand login 'login'
+            cand logout 'logout'
+            cand help 'Print this message or the help of the given subcommand(s)'
+        }
+        &'codex;mcp;list'= {
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand --json 'Output the configured servers as JSON'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;mcp;get'= {
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand --json 'Output the server configuration as JSON'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;mcp;add'= {
+            cand --env 'Environment variables to set when launching the server. Only valid with stdio servers'
+            cand --url 'URL for a streamable HTTP MCP server'
+            cand --bearer-token-env-var 'Optional environment variable to read for a bearer token. Only valid with streamable HTTP servers'
+            cand --oauth-client-id 'Optional OAuth client identifier to use for this MCP server'
+            cand --oauth-client-secret 'Optional OAuth client secret for the pre-registered client'
+            cand --oauth-client-registration 'OAuth client-registration strategy for the immediate login only'
+            cand --oauth-resource 'Optional OAuth resource parameter to include during MCP login'
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;mcp;remove'= {
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;mcp;login'= {
+            cand --scopes 'Comma-separated list of OAuth scopes to request'
+            cand --oauth-client-registration 'OAuth client-registration strategy for this login only'
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand --no-browser 'Print the authorization URL and accept the callback URL without opening a browser'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;mcp;logout'= {
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;mcp;help'= {
+            cand list 'list'
+            cand get 'get'
+            cand add 'add'
+            cand remove 'remove'
+            cand login 'login'
+            cand logout 'logout'
+            cand help 'Print this message or the help of the given subcommand(s)'
+        }
+        &'codex;mcp;help;list'= {
+        }
+        &'codex;mcp;help;get'= {
+        }
+        &'codex;mcp;help;add'= {
+        }
+        &'codex;mcp;help;remove'= {
+        }
+        &'codex;mcp;help;login'= {
+        }
+        &'codex;mcp;help;logout'= {
+        }
+        &'codex;mcp;help;help'= {
+        }
+        &'codex;plugin'= {
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+            cand add 'Install a plugin from a configured or remote marketplace'
+            cand list 'List plugins available from configured and remote marketplaces'
+            cand marketplace 'Add, list, upgrade, or remove configured plugin marketplaces'
+            cand remove 'Uninstall a plugin and remove its local cache'
+            cand help 'Print this message or the help of the given subcommand(s)'
+        }
+        &'codex;plugin;add'= {
+            cand -m 'Marketplace name to use when PLUGIN does not include @MARKETPLACE'
+            cand --marketplace 'Marketplace name to use when PLUGIN does not include @MARKETPLACE'
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand --json 'Output install result as JSON'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;plugin;list'= {
+            cand -m 'Only list plugins from this marketplace name'
+            cand --marketplace 'Only list plugins from this marketplace name'
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand --json 'Output plugin list as JSON'
+            cand --available 'Include uninstalled marketplace plugins in the JSON output'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;plugin;marketplace'= {
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+            cand add 'Add a local or Git marketplace to the configured marketplace sources'
+            cand list 'List plugin marketplaces Codex is currently considering and their roots'
+            cand upgrade 'Refresh configured Git marketplace snapshots'
+            cand remove 'Remove a configured marketplace source by name'
+            cand help 'Print this message or the help of the given subcommand(s)'
+        }
+        &'codex;plugin;marketplace;add'= {
+            cand --ref 'Git ref to fetch for Git marketplace sources'
+            cand --sparse 'Sparse checkout path for Git marketplace sources. Can be repeated'
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand --json 'Output add result as JSON'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;plugin;marketplace;list'= {
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand --json 'Output marketplace list as JSON'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;plugin;marketplace;upgrade'= {
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand --json 'Output upgrade result as JSON'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;plugin;marketplace;remove'= {
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand --json 'Output remove result as JSON'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;plugin;marketplace;help'= {
+            cand add 'Add a local or Git marketplace to the configured marketplace sources'
+            cand list 'List plugin marketplaces Codex is currently considering and their roots'
+            cand upgrade 'Refresh configured Git marketplace snapshots'
+            cand remove 'Remove a configured marketplace source by name'
+            cand help 'Print this message or the help of the given subcommand(s)'
+        }
+        &'codex;plugin;marketplace;help;add'= {
+        }
+        &'codex;plugin;marketplace;help;list'= {
+        }
+        &'codex;plugin;marketplace;help;upgrade'= {
+        }
+        &'codex;plugin;marketplace;help;remove'= {
+        }
+        &'codex;plugin;marketplace;help;help'= {
+        }
+        &'codex;plugin;remove'= {
+            cand -m 'Marketplace name to use when PLUGIN does not include @MARKETPLACE'
+            cand --marketplace 'Marketplace name to use when PLUGIN does not include @MARKETPLACE'
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand --json 'Output remove result as JSON'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;plugin;help'= {
+            cand add 'Install a plugin from a configured or remote marketplace'
+            cand list 'List plugins available from configured and remote marketplaces'
+            cand marketplace 'Add, list, upgrade, or remove configured plugin marketplaces'
+            cand remove 'Uninstall a plugin and remove its local cache'
+            cand help 'Print this message or the help of the given subcommand(s)'
+        }
+        &'codex;plugin;help;add'= {
+        }
+        &'codex;plugin;help;list'= {
+        }
+        &'codex;plugin;help;marketplace'= {
+            cand add 'Add a local or Git marketplace to the configured marketplace sources'
+            cand list 'List plugin marketplaces Codex is currently considering and their roots'
+            cand upgrade 'Refresh configured Git marketplace snapshots'
+            cand remove 'Remove a configured marketplace source by name'
+        }
+        &'codex;plugin;help;marketplace;add'= {
+        }
+        &'codex;plugin;help;marketplace;list'= {
+        }
+        &'codex;plugin;help;marketplace;upgrade'= {
+        }
+        &'codex;plugin;help;marketplace;remove'= {
+        }
+        &'codex;plugin;help;remove'= {
+        }
+        &'codex;plugin;help;help'= {
+        }
+        &'codex;app-server'= {
+            cand --startup-client-info 'ClientInfo JSON used for configuration/auth request identity'
+            cand --cloud-skills-snapshot 'Load frozen cloud skills from a JSON snapshot instead of a live skill service'
+            cand --code-mode-host 'Connect to a remote code-mode host instead of starting a local host'
+            cand --listen 'Transport endpoint URL. Supported values: `stdio://` (default), `unix://`, `unix://PATH`, `ws://IP:PORT`, `off`'
+            cand --ws-auth 'Authentication mode for incoming WebSocket connections'
+            cand --ws-token-file 'Absolute path to the capability-token file'
+            cand --ws-token-sha256 'Hex-encoded SHA-256 digest of the capability token'
+            cand --ws-shared-secret-file 'Absolute path to the shared secret file for signed JWT bearer tokens'
+            cand --ws-issuer 'Expected issuer for signed JWT bearer tokens'
+            cand --ws-audience 'Expected audience for signed JWT bearer tokens'
+            cand --ws-max-clock-skew-seconds 'Maximum clock skew when validating signed JWT bearer tokens'
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand --startup-sign-out 'Sign out using the managed auth path before loading fresh startup requirements'
+            cand --print-startup-config 'Validate configuration and print requirements as JSON without starting the app server'
+            cand --strict-config 'Error out when config.toml contains fields that are not recognized by this version of Codex'
+            cand --stdio 'Use stdio as the transport (equivalent to `--listen stdio://`)'
+            cand --remote-control 'Enable remote control for this app-server process without changing persistence'
+            cand --managed-daemon 'Save loaded threads during managed daemon shutdown'
+            cand --analytics-default-enabled 'Controls whether analytics are enabled by default'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+            cand daemon 'Manage the local app-server daemon'
+            cand proxy 'Proxy stdio bytes to the running app-server control socket'
+            cand generate-ts '[experimental] Generate TypeScript bindings for the app server protocol'
+            cand generate-json-schema '[experimental] Generate JSON Schema for the app server protocol'
+            cand generate-internal-json-schema '[internal] Generate internal JSON Schema artifacts for Codex tooling'
+            cand help 'Print this message or the help of the given subcommand(s)'
+        }
+        &'codex;app-server;daemon'= {
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+            cand bootstrap 'Install durable local app-server management for SSH-driven use'
+            cand start 'Start the local app server daemon if it is not already running'
+            cand restart 'Restart the local app server daemon'
+            cand update 'Update the daemon package (may interrupt running work)'
+            cand enable-remote-control 'Enable remote control for future starts and a currently running managed daemon'
+            cand disable-remote-control 'Disable remote control for future starts and a currently running managed daemon'
+            cand stop 'Stop the local app server daemon'
+            cand version 'Print local CLI and running app-server versions as JSON'
+            cand pid-update-loop '[internal] Run the detached pid-backed standalone updater loop'
+            cand help 'Print this message or the help of the given subcommand(s)'
+        }
+        &'codex;app-server;daemon;bootstrap'= {
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand --remote-control 'Launch the managed app-server with remote control enabled'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;app-server;daemon;start'= {
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;app-server;daemon;restart'= {
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;app-server;daemon;update'= {
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand --from-cli 'Copy and pin this CLI package'
+            cand -y 'Confirm replacing the daemon package without an interactive prompt'
+            cand --yes 'Confirm replacing the daemon package without an interactive prompt'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;app-server;daemon;enable-remote-control'= {
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;app-server;daemon;disable-remote-control'= {
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;app-server;daemon;stop'= {
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;app-server;daemon;version'= {
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;app-server;daemon;pid-update-loop'= {
+            cand --restore-release 'Authorize one production restoration of this selected release'
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand --check-package-ownership 'Check support for daemon-owned packages without starting the updater'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;app-server;daemon;help'= {
+            cand bootstrap 'Install durable local app-server management for SSH-driven use'
+            cand start 'Start the local app server daemon if it is not already running'
+            cand restart 'Restart the local app server daemon'
+            cand update 'Update the daemon package (may interrupt running work)'
+            cand enable-remote-control 'Enable remote control for future starts and a currently running managed daemon'
+            cand disable-remote-control 'Disable remote control for future starts and a currently running managed daemon'
+            cand stop 'Stop the local app server daemon'
+            cand version 'Print local CLI and running app-server versions as JSON'
+            cand pid-update-loop '[internal] Run the detached pid-backed standalone updater loop'
+            cand help 'Print this message or the help of the given subcommand(s)'
+        }
+        &'codex;app-server;daemon;help;bootstrap'= {
+        }
+        &'codex;app-server;daemon;help;start'= {
+        }
+        &'codex;app-server;daemon;help;restart'= {
+        }
+        &'codex;app-server;daemon;help;update'= {
+        }
+        &'codex;app-server;daemon;help;enable-remote-control'= {
+        }
+        &'codex;app-server;daemon;help;disable-remote-control'= {
+        }
+        &'codex;app-server;daemon;help;stop'= {
+        }
+        &'codex;app-server;daemon;help;version'= {
+        }
+        &'codex;app-server;daemon;help;pid-update-loop'= {
+        }
+        &'codex;app-server;daemon;help;help'= {
+        }
+        &'codex;app-server;proxy'= {
+            cand --sock 'Path to the app-server Unix domain socket to connect to'
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;app-server;generate-ts'= {
+            cand -o 'Output directory where .ts files will be written'
+            cand --out 'Output directory where .ts files will be written'
+            cand -p 'Optional path to the Prettier executable to format generated files'
+            cand --prettier 'Optional path to the Prettier executable to format generated files'
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand --experimental 'Include experimental methods and fields in the generated output'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;app-server;generate-json-schema'= {
+            cand -o 'Output directory where the schema bundle will be written'
+            cand --out 'Output directory where the schema bundle will be written'
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand --experimental 'Include experimental methods and fields in the generated output'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;app-server;generate-internal-json-schema'= {
+            cand -o 'Output directory where internal JSON Schema artifacts will be written'
+            cand --out 'Output directory where internal JSON Schema artifacts will be written'
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;app-server;help'= {
+            cand daemon 'Manage the local app-server daemon'
+            cand proxy 'Proxy stdio bytes to the running app-server control socket'
+            cand generate-ts '[experimental] Generate TypeScript bindings for the app server protocol'
+            cand generate-json-schema '[experimental] Generate JSON Schema for the app server protocol'
+            cand generate-internal-json-schema '[internal] Generate internal JSON Schema artifacts for Codex tooling'
+            cand help 'Print this message or the help of the given subcommand(s)'
+        }
+        &'codex;app-server;help;daemon'= {
+            cand bootstrap 'Install durable local app-server management for SSH-driven use'
+            cand start 'Start the local app server daemon if it is not already running'
+            cand restart 'Restart the local app server daemon'
+            cand update 'Update the daemon package (may interrupt running work)'
+            cand enable-remote-control 'Enable remote control for future starts and a currently running managed daemon'
+            cand disable-remote-control 'Disable remote control for future starts and a currently running managed daemon'
+            cand stop 'Stop the local app server daemon'
+            cand version 'Print local CLI and running app-server versions as JSON'
+            cand pid-update-loop '[internal] Run the detached pid-backed standalone updater loop'
+        }
+        &'codex;app-server;help;daemon;bootstrap'= {
+        }
+        &'codex;app-server;help;daemon;start'= {
+        }
+        &'codex;app-server;help;daemon;restart'= {
+        }
+        &'codex;app-server;help;daemon;update'= {
+        }
+        &'codex;app-server;help;daemon;enable-remote-control'= {
+        }
+        &'codex;app-server;help;daemon;disable-remote-control'= {
+        }
+        &'codex;app-server;help;daemon;stop'= {
+        }
+        &'codex;app-server;help;daemon;version'= {
+        }
+        &'codex;app-server;help;daemon;pid-update-loop'= {
+        }
+        &'codex;app-server;help;proxy'= {
+        }
+        &'codex;app-server;help;generate-ts'= {
+        }
+        &'codex;app-server;help;generate-json-schema'= {
+        }
+        &'codex;app-server;help;generate-internal-json-schema'= {
+        }
+        &'codex;app-server;help;help'= {
+        }
+        &'codex;remote-control'= {
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand --json 'Emit machine-readable JSON'
+            cand --no-daemon 'Run an embedded app-server in the foreground until Ctrl-C'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+            cand start 'Start the app-server daemon with remote control enabled'
+            cand stop 'Stop the app-server daemon'
+            cand pair 'Create and print a short-lived manual pairing code'
+            cand help 'Print this message or the help of the given subcommand(s)'
+        }
+        &'codex;remote-control;start'= {
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand --json 'Emit machine-readable JSON'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;remote-control;stop'= {
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand --json 'Emit machine-readable JSON'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;remote-control;pair'= {
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand --json 'Emit machine-readable JSON'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;remote-control;help'= {
+            cand start 'Start the app-server daemon with remote control enabled'
+            cand stop 'Stop the app-server daemon'
+            cand pair 'Create and print a short-lived manual pairing code'
+            cand help 'Print this message or the help of the given subcommand(s)'
+        }
+        &'codex;remote-control;help;start'= {
+        }
+        &'codex;remote-control;help;stop'= {
+        }
+        &'codex;remote-control;help;pair'= {
+        }
+        &'codex;remote-control;help;help'= {
+        }
+        &'codex;app'= {
+            cand --download-url 'Override the app installer download URL (advanced)'
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;completion'= {
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;update'= {
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;doctor'= {
+            cand --probe-filesystem-path 'Internal isolated filesystem probe; exits before loading configuration'
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand --json 'Emit a redacted machine-readable report'
+            cand --network-only 'Run config, network environment, provider HTTP, and Responses WebSocket checks'
+            cand --feedback 'Limit database integrity scans when collecting a feedback attachment'
+            cand --summary 'Only show grouped check rows and the final count summary'
+            cand --all 'Expand long lists in detailed human output'
+            cand --no-color 'Disable ANSI color in human output'
+            cand --ascii 'Use ASCII status labels and separators in human output'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;sandbox'= {
+            cand --sandbox-state-json 'Opaque JSON value from `codex/sandbox-state` to apply directly'
+            cand --sandbox-state-readable-root 'Add a readable root to the supplied sandbox state. Repeat for multiple roots'
+            cand -P 'Named permissions profile to apply from the active configuration stack'
+            cand --permission-profile 'Named permissions profile to apply from the active configuration stack'
+            cand -p 'Layer $CODEX_HOME/<name>.config.toml on top of the base user config'
+            cand --profile 'Layer $CODEX_HOME/<name>.config.toml on top of the base user config'
+            cand -C 'Working directory used for profile resolution and command execution'
+            cand --cd 'Working directory used for profile resolution and command execution'
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand --sandbox-state-disable-network 'Disable direct network access in the supplied sandbox state'
+            cand --include-managed-config 'Include managed requirements while resolving an explicit permissions profile'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+            cand uninstall 'Remove the legacy Windows sandbox''s machine-wide accounts and network rules'
+            cand help 'Print this message or the help of the given subcommand(s)'
+        }
+        &'codex;sandbox;uninstall'= {
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;sandbox;help'= {
+            cand uninstall 'Remove the legacy Windows sandbox''s machine-wide accounts and network rules'
+            cand help 'Print this message or the help of the given subcommand(s)'
+        }
+        &'codex;sandbox;help;uninstall'= {
+        }
+        &'codex;sandbox;help;help'= {
+        }
+        &'codex;debug'= {
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+            cand models 'Render the raw model catalog as JSON'
+            cand app-server 'Tooling: helps debug the app server'
+            cand prompt-input 'Render the model-visible prompt input list as JSON'
+            cand trace-reduce 'Replay a rollout trace bundle and write reduced state JSON'
+            cand clear-memories 'Internal: reset local memory state for a fresh start'
+            cand help 'Print this message or the help of the given subcommand(s)'
+        }
+        &'codex;debug;models'= {
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand --bundled 'Skip refresh and dump only the bundled catalog shipped with this binary'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;debug;app-server'= {
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+            cand send-message-v2 'send-message-v2'
+            cand help 'Print this message or the help of the given subcommand(s)'
+        }
+        &'codex;debug;app-server;send-message-v2'= {
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;debug;app-server;help'= {
+            cand send-message-v2 'send-message-v2'
+            cand help 'Print this message or the help of the given subcommand(s)'
+        }
+        &'codex;debug;app-server;help;send-message-v2'= {
+        }
+        &'codex;debug;app-server;help;help'= {
+        }
+        &'codex;debug;prompt-input'= {
+            cand -i 'Optional image(s) to attach to the user prompt'
+            cand --image 'Optional image(s) to attach to the user prompt'
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;debug;trace-reduce'= {
+            cand -o 'Output path for reduced RolloutTrace JSON. Defaults to TRACE_BUNDLE/state.json'
+            cand --output 'Output path for reduced RolloutTrace JSON. Defaults to TRACE_BUNDLE/state.json'
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;debug;clear-memories'= {
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;debug;help'= {
+            cand models 'Render the raw model catalog as JSON'
+            cand app-server 'Tooling: helps debug the app server'
+            cand prompt-input 'Render the model-visible prompt input list as JSON'
+            cand trace-reduce 'Replay a rollout trace bundle and write reduced state JSON'
+            cand clear-memories 'Internal: reset local memory state for a fresh start'
+            cand help 'Print this message or the help of the given subcommand(s)'
+        }
+        &'codex;debug;help;models'= {
+        }
+        &'codex;debug;help;app-server'= {
+            cand send-message-v2 'send-message-v2'
+        }
+        &'codex;debug;help;app-server;send-message-v2'= {
+        }
+        &'codex;debug;help;prompt-input'= {
+        }
+        &'codex;debug;help;trace-reduce'= {
+        }
+        &'codex;debug;help;clear-memories'= {
+        }
+        &'codex;debug;help;help'= {
+        }
+        &'codex;execpolicy'= {
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+            cand check 'Check execpolicy files against a command'
+            cand help 'Print this message or the help of the given subcommand(s)'
+        }
+        &'codex;execpolicy;check'= {
+            cand -r 'Paths to execpolicy rule files to evaluate (repeatable)'
+            cand --rules 'Paths to execpolicy rule files to evaluate (repeatable)'
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand --pretty 'Pretty-print the JSON output'
+            cand --resolve-host-executables 'Resolve absolute program paths against basename rules, gated by any `host_executable()` definitions in the loaded policy files'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;execpolicy;help'= {
+            cand check 'Check execpolicy files against a command'
+            cand help 'Print this message or the help of the given subcommand(s)'
+        }
+        &'codex;execpolicy;help;check'= {
+        }
+        &'codex;execpolicy;help;help'= {
+        }
+        &'codex;apply'= {
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;a'= {
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;resume'= {
+            cand --remote 'Connect the TUI to a remote app server endpoint'
+            cand --remote-auth-token-env 'Name of the environment variable containing the bearer token to send to a remote app server websocket'
+            cand -i 'Optional image(s) to attach to the initial prompt'
+            cand --image 'Optional image(s) to attach to the initial prompt'
+            cand -m 'Model the agent should use'
+            cand --model 'Model the agent should use'
+            cand --local-provider 'Specify which local provider to use (lmstudio or ollama). If not specified with --oss, will use config default or show selection'
+            cand -p 'Layer $CODEX_HOME/<name>.config.toml on top of the base user config'
+            cand --profile 'Layer $CODEX_HOME/<name>.config.toml on top of the base user config'
+            cand -s 'Select the sandbox policy to use when executing model-generated shell commands'
+            cand --sandbox 'Select the sandbox policy to use when executing model-generated shell commands'
+            cand -C 'Tell the agent to use the specified directory as its working root'
+            cand --cd 'Tell the agent to use the specified directory as its working root'
+            cand --add-dir 'Additional directories that should be writable alongside the primary workspace'
+            cand -a 'Configure when the model requires human approval before executing a command'
+            cand --ask-for-approval 'Configure when the model requires human approval before executing a command'
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand --last 'Continue the most recent session without showing the picker'
+            cand --all 'Show all sessions (disables cwd filtering and shows CWD column)'
+            cand --include-non-interactive 'Include non-interactive sessions in the resume picker and --last selection'
+            cand --strict-config 'Error out when config.toml contains fields that are not recognized by this version of Codex'
+            cand --oss 'Use open-source provider'
+            cand --dangerously-bypass-hook-trust 'Run enabled hooks without requiring persisted hook trust for this invocation. DANGEROUS. Intended only for automation that already vets hook sources'
+            cand --worktree 'Run the session in a new managed Git worktree'
+            cand --dangerously-bypass-approvals-and-sandbox 'Skip all confirmation prompts and execute commands without sandboxing. EXTREMELY DANGEROUS. Intended solely for running in environments that are externally sandboxed'
+            cand --approve-for-me 'Route approval requests through automatic review using the workspace-write sandbox'
+            cand --search 'Enable live web search. When enabled, the native Responses `web_search` tool is available to the model (no per‑call approval)'
+            cand --no-alt-screen 'Disable alternate screen mode'
+            cand --no-daemon 'Run without the shared background server, even if it is already running'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+            cand -V 'Print version'
+            cand --version 'Print version'
+        }
+        &'codex;queue'= {
+            cand --thread 'Session UUID or exact session name'
+            cand --message 'Message text to queue'
+            cand --remote 'Connect the TUI to a remote app server endpoint'
+            cand --remote-auth-token-env 'Name of the environment variable containing the bearer token to send to a remote app server websocket'
+            cand -i 'Optional image(s) to attach to the initial prompt'
+            cand --image 'Optional image(s) to attach to the initial prompt'
+            cand -m 'Model the agent should use'
+            cand --model 'Model the agent should use'
+            cand --local-provider 'Specify which local provider to use (lmstudio or ollama). If not specified with --oss, will use config default or show selection'
+            cand -p 'Layer $CODEX_HOME/<name>.config.toml on top of the base user config'
+            cand --profile 'Layer $CODEX_HOME/<name>.config.toml on top of the base user config'
+            cand -s 'Select the sandbox policy to use when executing model-generated shell commands'
+            cand --sandbox 'Select the sandbox policy to use when executing model-generated shell commands'
+            cand -C 'Tell the agent to use the specified directory as its working root'
+            cand --cd 'Tell the agent to use the specified directory as its working root'
+            cand --add-dir 'Additional directories that should be writable alongside the primary workspace'
+            cand -c 'Override a startup configuration value (key=value). Queued messages use the thread''s model.'
+            cand --config 'Override a startup configuration value (key=value). Queued messages use the thread''s model.'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand --resume 'After queueing, try to resume the thread on the local daemon or selected --remote server. A failed resume produces a warning and the command still succeeds'
+            cand --oss 'Use open-source provider'
+            cand --approve-for-me 'Route approval requests through automatic review using the workspace-write sandbox'
+            cand --dangerously-bypass-approvals-and-sandbox 'Skip all confirmation prompts and execute commands without sandboxing. EXTREMELY DANGEROUS. Intended solely for running in environments that are externally sandboxed'
+            cand --dangerously-bypass-hook-trust 'Run enabled hooks without requiring persisted hook trust for this invocation. DANGEROUS. Intended only for automation that already vets hook sources'
+            cand --worktree 'Run the session in a new managed Git worktree'
+            cand --strict-config 'Error out when config.toml contains fields that are not recognized by this version of Codex'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;archive'= {
+            cand --remote 'Connect the TUI to a remote app server endpoint'
+            cand --remote-auth-token-env 'Name of the environment variable containing the bearer token to send to a remote app server websocket'
+            cand -i 'Optional image(s) to attach to the initial prompt'
+            cand --image 'Optional image(s) to attach to the initial prompt'
+            cand -m 'Model the agent should use'
+            cand --model 'Model the agent should use'
+            cand --local-provider 'Specify which local provider to use (lmstudio or ollama). If not specified with --oss, will use config default or show selection'
+            cand -p 'Layer $CODEX_HOME/<name>.config.toml on top of the base user config'
+            cand --profile 'Layer $CODEX_HOME/<name>.config.toml on top of the base user config'
+            cand -s 'Select the sandbox policy to use when executing model-generated shell commands'
+            cand --sandbox 'Select the sandbox policy to use when executing model-generated shell commands'
+            cand -C 'Tell the agent to use the specified directory as its working root'
+            cand --cd 'Tell the agent to use the specified directory as its working root'
+            cand --add-dir 'Additional directories that should be writable alongside the primary workspace'
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand --oss 'Use open-source provider'
+            cand --approve-for-me 'Route approval requests through automatic review using the workspace-write sandbox'
+            cand --dangerously-bypass-approvals-and-sandbox 'Skip all confirmation prompts and execute commands without sandboxing. EXTREMELY DANGEROUS. Intended solely for running in environments that are externally sandboxed'
+            cand --dangerously-bypass-hook-trust 'Run enabled hooks without requiring persisted hook trust for this invocation. DANGEROUS. Intended only for automation that already vets hook sources'
+            cand --worktree 'Run the session in a new managed Git worktree'
+            cand --strict-config 'Error out when config.toml contains fields that are not recognized by this version of Codex'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;delete'= {
+            cand --remote 'Connect the TUI to a remote app server endpoint'
+            cand --remote-auth-token-env 'Name of the environment variable containing the bearer token to send to a remote app server websocket'
+            cand -i 'Optional image(s) to attach to the initial prompt'
+            cand --image 'Optional image(s) to attach to the initial prompt'
+            cand -m 'Model the agent should use'
+            cand --model 'Model the agent should use'
+            cand --local-provider 'Specify which local provider to use (lmstudio or ollama). If not specified with --oss, will use config default or show selection'
+            cand -p 'Layer $CODEX_HOME/<name>.config.toml on top of the base user config'
+            cand --profile 'Layer $CODEX_HOME/<name>.config.toml on top of the base user config'
+            cand -s 'Select the sandbox policy to use when executing model-generated shell commands'
+            cand --sandbox 'Select the sandbox policy to use when executing model-generated shell commands'
+            cand -C 'Tell the agent to use the specified directory as its working root'
+            cand --cd 'Tell the agent to use the specified directory as its working root'
+            cand --add-dir 'Additional directories that should be writable alongside the primary workspace'
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand --oss 'Use open-source provider'
+            cand --approve-for-me 'Route approval requests through automatic review using the workspace-write sandbox'
+            cand --dangerously-bypass-approvals-and-sandbox 'Skip all confirmation prompts and execute commands without sandboxing. EXTREMELY DANGEROUS. Intended solely for running in environments that are externally sandboxed'
+            cand --dangerously-bypass-hook-trust 'Run enabled hooks without requiring persisted hook trust for this invocation. DANGEROUS. Intended only for automation that already vets hook sources'
+            cand --worktree 'Run the session in a new managed Git worktree'
+            cand --strict-config 'Error out when config.toml contains fields that are not recognized by this version of Codex'
+            cand --force 'Delete without prompting. SESSION must be a UUID'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;migrate-rollouts'= {
+            cand --thread 'Restrict inspection or migration to one or more thread IDs'
+            cand --max-mib-per-second 'Limit aggregate rollout read and write throughput, in MiB per second'
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand --apply 'Publish the migration. Without this flag the command only reports eligible sessions'
+            cand --json 'Emit the complete per-thread report as JSON'
+            cand --verbose 'Print one line for every inspected rollout'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;migrate-nfs-db'= {
+            cand --staging-dir 'Use a local directory with space for the database and WAL files. The default is the system temporary directory'
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;unarchive'= {
+            cand --remote 'Connect the TUI to a remote app server endpoint'
+            cand --remote-auth-token-env 'Name of the environment variable containing the bearer token to send to a remote app server websocket'
+            cand -i 'Optional image(s) to attach to the initial prompt'
+            cand --image 'Optional image(s) to attach to the initial prompt'
+            cand -m 'Model the agent should use'
+            cand --model 'Model the agent should use'
+            cand --local-provider 'Specify which local provider to use (lmstudio or ollama). If not specified with --oss, will use config default or show selection'
+            cand -p 'Layer $CODEX_HOME/<name>.config.toml on top of the base user config'
+            cand --profile 'Layer $CODEX_HOME/<name>.config.toml on top of the base user config'
+            cand -s 'Select the sandbox policy to use when executing model-generated shell commands'
+            cand --sandbox 'Select the sandbox policy to use when executing model-generated shell commands'
+            cand -C 'Tell the agent to use the specified directory as its working root'
+            cand --cd 'Tell the agent to use the specified directory as its working root'
+            cand --add-dir 'Additional directories that should be writable alongside the primary workspace'
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand --oss 'Use open-source provider'
+            cand --approve-for-me 'Route approval requests through automatic review using the workspace-write sandbox'
+            cand --dangerously-bypass-approvals-and-sandbox 'Skip all confirmation prompts and execute commands without sandboxing. EXTREMELY DANGEROUS. Intended solely for running in environments that are externally sandboxed'
+            cand --dangerously-bypass-hook-trust 'Run enabled hooks without requiring persisted hook trust for this invocation. DANGEROUS. Intended only for automation that already vets hook sources'
+            cand --worktree 'Run the session in a new managed Git worktree'
+            cand --strict-config 'Error out when config.toml contains fields that are not recognized by this version of Codex'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;fork'= {
+            cand --remote 'Connect the TUI to a remote app server endpoint'
+            cand --remote-auth-token-env 'Name of the environment variable containing the bearer token to send to a remote app server websocket'
+            cand -i 'Optional image(s) to attach to the initial prompt'
+            cand --image 'Optional image(s) to attach to the initial prompt'
+            cand -m 'Model the agent should use'
+            cand --model 'Model the agent should use'
+            cand --local-provider 'Specify which local provider to use (lmstudio or ollama). If not specified with --oss, will use config default or show selection'
+            cand -p 'Layer $CODEX_HOME/<name>.config.toml on top of the base user config'
+            cand --profile 'Layer $CODEX_HOME/<name>.config.toml on top of the base user config'
+            cand -s 'Select the sandbox policy to use when executing model-generated shell commands'
+            cand --sandbox 'Select the sandbox policy to use when executing model-generated shell commands'
+            cand -C 'Tell the agent to use the specified directory as its working root'
+            cand --cd 'Tell the agent to use the specified directory as its working root'
+            cand --add-dir 'Additional directories that should be writable alongside the primary workspace'
+            cand -a 'Configure when the model requires human approval before executing a command'
+            cand --ask-for-approval 'Configure when the model requires human approval before executing a command'
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand --last 'Fork the most recent session without showing the picker'
+            cand --all 'Show all sessions (disables cwd filtering and shows CWD column)'
+            cand --strict-config 'Error out when config.toml contains fields that are not recognized by this version of Codex'
+            cand --oss 'Use open-source provider'
+            cand --dangerously-bypass-hook-trust 'Run enabled hooks without requiring persisted hook trust for this invocation. DANGEROUS. Intended only for automation that already vets hook sources'
+            cand --worktree 'Run the session in a new managed Git worktree'
+            cand --dangerously-bypass-approvals-and-sandbox 'Skip all confirmation prompts and execute commands without sandboxing. EXTREMELY DANGEROUS. Intended solely for running in environments that are externally sandboxed'
+            cand --approve-for-me 'Route approval requests through automatic review using the workspace-write sandbox'
+            cand --search 'Enable live web search. When enabled, the native Responses `web_search` tool is available to the model (no per‑call approval)'
+            cand --no-alt-screen 'Disable alternate screen mode'
+            cand --no-daemon 'Run without the shared background server, even if it is already running'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+            cand -V 'Print version'
+            cand --version 'Print version'
+        }
+        &'codex;cloud'= {
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+            cand -V 'Print version'
+            cand --version 'Print version'
+            cand exec 'Submit a new Codex Cloud task without launching the TUI'
+            cand status 'Show the status of a Codex Cloud task'
+            cand list 'List Codex Cloud tasks'
+            cand apply 'Apply the diff for a Codex Cloud task locally'
+            cand diff 'Show the unified diff for a Codex Cloud task'
+            cand help 'Print this message or the help of the given subcommand(s)'
+        }
+        &'codex;cloud;exec'= {
+            cand --env 'Target environment identifier (see `codex cloud` to browse)'
+            cand --attempts 'Number of assistant attempts (best-of-N)'
+            cand --branch 'Git branch to run in Codex Cloud (defaults to current branch)'
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;cloud;status'= {
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;cloud;list'= {
+            cand --env 'Filter tasks by environment identifier'
+            cand --limit 'Maximum number of tasks to return (1-20)'
+            cand --cursor 'Pagination cursor returned by a previous call'
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand --json 'Emit JSON instead of plain text'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;cloud;apply'= {
+            cand --attempt 'Attempt number to apply (1-based)'
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;cloud;diff'= {
+            cand --attempt 'Attempt number to display (1-based)'
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;cloud;help'= {
+            cand exec 'Submit a new Codex Cloud task without launching the TUI'
+            cand status 'Show the status of a Codex Cloud task'
+            cand list 'List Codex Cloud tasks'
+            cand apply 'Apply the diff for a Codex Cloud task locally'
+            cand diff 'Show the unified diff for a Codex Cloud task'
+            cand help 'Print this message or the help of the given subcommand(s)'
+        }
+        &'codex;cloud;help;exec'= {
+        }
+        &'codex;cloud;help;status'= {
+        }
+        &'codex;cloud;help;list'= {
+        }
+        &'codex;cloud;help;apply'= {
+        }
+        &'codex;cloud;help;diff'= {
+        }
+        &'codex;cloud;help;help'= {
+        }
+        &'codex;responses-api-proxy'= {
+            cand --port 'Port to listen on. If not set, an ephemeral port is used'
+            cand --server-info 'Path to a JSON file to write startup info (single line). Includes {"port": <u16>}'
+            cand --upstream-url 'Absolute URL the proxy should forward requests to (defaults to OpenAI)'
+            cand --dump-dir 'Directory where request/response dumps should be written as JSON'
+            cand --oidc-audience 'Audience configured on the OpenAI workload identity provider'
+            cand --identity-provider-id 'OpenAI workload identity provider ID'
+            cand --service-account-id 'OpenAI service account ID selected by the provider mapping'
+            cand --github-oidc-request-url 'HTTPS token-request URL from GitHub''s runner-provided ACTIONS_ID_TOKEN_REQUEST_URL'
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand --http-shutdown 'Enable HTTP shutdown endpoint at GET /shutdown'
+            cand --github-oidc 'Authenticate to the OpenAI API using GitHub Actions workload identity. In this mode stdin supplies the GitHub OIDC request token, not an API key'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;stdio-to-uds'= {
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;exec-server'= {
+            cand --linux-sandbox-pid-namespace 'Linux PID namespace: isolate (default) or inherit. Inherit allows signals to other same-UID processes; enable only when provisioning a dedicated environment'
+            cand --concurrent-requests 'Maximum number of requests to process concurrently on each connection'
+            cand --listen 'Transport endpoint URL. Supported values: `ws://IP:PORT` (default), `stdio`, `stdio://`'
+            cand --ws-auth 'Authentication mode for incoming WebSocket connections'
+            cand --ws-token-file 'Absolute path to the capability-token file'
+            cand --ws-token-sha256 'Hex-encoded SHA-256 digest of the capability token'
+            cand --ws-shared-secret-file 'Absolute path to the shared secret file for signed JWT bearer tokens'
+            cand --ws-issuer 'Expected issuer for signed JWT bearer tokens'
+            cand --ws-audience 'Expected audience for signed JWT bearer tokens'
+            cand --ws-max-clock-skew-seconds 'Maximum clock skew when validating signed JWT bearer tokens'
+            cand --remote 'Register this exec-server as a remote environment using the given base URL'
+            cand --remote-transport 'Transport used for the remote executor connection'
+            cand --environment-id 'Environment id to attach to when registering remotely'
+            cand --name 'Human-readable environment name'
+            cand --aws-profile 'AWS profile used for SigV4 authentication'
+            cand --aws-region 'AWS signing region. Uses the SDK region chain when omitted'
+            cand --aws-service 'AWS signing service'
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand --strict-config 'Error out when config.toml contains fields that are not recognized by this version of Codex'
+            cand --proxy-private-ips-via-upstream 'Allow permitted private IP destinations to use the configured upstream proxy. If no valid upstream proxy applies to the request protocol, connect directly. Loopback stays local. This flag does not require upstream routing'
+            cand --use-agent-identity-auth 'Use Agent Identity auth from CODEX_ACCESS_TOKEN for remote registration'
+            cand --executor-credential-stdin 'Read rotating executor credentials from stdin; exit when the pipe closes'
+            cand --aws-sigv4 'Sign Direct registration and WebSocket handshake requests with AWS SigV4'
+            cand --exit-on-stdin-close 'Exit when the parent-owned standard-input pipe closes'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+            cand forward 'Register an existing WebSocket exec-server as a remote environment'
+            cand help 'Print this message or the help of the given subcommand(s)'
+        }
+        &'codex;exec-server;forward'= {
+            cand --connect 'Destination exec-server WebSocket URL'
+            cand --linux-sandbox-pid-namespace 'Linux PID namespace: isolate (default) or inherit. Inherit allows signals to other same-UID processes; enable only when provisioning a dedicated environment'
+            cand --remote 'Register this exec-server as a remote environment using the given base URL'
+            cand --remote-transport 'Transport used for the remote executor connection'
+            cand --environment-id 'Environment id to attach to when registering remotely'
+            cand --name 'Human-readable environment name'
+            cand --aws-profile 'AWS profile used for SigV4 authentication'
+            cand --aws-region 'AWS signing region. Uses the SDK region chain when omitted'
+            cand --aws-service 'AWS signing service'
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand --strict-config 'Error out when config.toml contains fields that are not recognized by this version of Codex'
+            cand --proxy-private-ips-via-upstream 'Allow permitted private IP destinations to use the configured upstream proxy. If no valid upstream proxy applies to the request protocol, connect directly. Loopback stays local. This flag does not require upstream routing'
+            cand --use-agent-identity-auth 'Use Agent Identity auth from CODEX_ACCESS_TOKEN for remote registration'
+            cand --executor-credential-stdin 'Read rotating executor credentials from stdin; exit when the pipe closes'
+            cand --aws-sigv4 'Sign Direct registration and WebSocket handshake requests with AWS SigV4'
+            cand --exit-on-stdin-close 'Exit when the parent-owned standard-input pipe closes'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;exec-server;help'= {
+            cand forward 'Register an existing WebSocket exec-server as a remote environment'
+            cand help 'Print this message or the help of the given subcommand(s)'
+        }
+        &'codex;exec-server;help;forward'= {
+        }
+        &'codex;exec-server;help;help'= {
+        }
+        &'codex;features'= {
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+            cand list 'List known features with their stage and effective state'
+            cand enable 'Enable a feature in config.toml'
+            cand disable 'Disable a feature in config.toml'
+            cand help 'Print this message or the help of the given subcommand(s)'
+        }
+        &'codex;features;list'= {
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;features;enable'= {
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;features;disable'= {
+            cand -c 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --config 'Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed as TOML. If it fails to parse as TOML, the raw string is used as a literal'
+            cand --enable 'Enable a feature (repeatable). Equivalent to `-c features.<name>=true`'
+            cand --disable 'Disable a feature (repeatable). Equivalent to `-c features.<name>=false`'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
+        }
+        &'codex;features;help'= {
+            cand list 'List known features with their stage and effective state'
+            cand enable 'Enable a feature in config.toml'
+            cand disable 'Disable a feature in config.toml'
+            cand help 'Print this message or the help of the given subcommand(s)'
+        }
+        &'codex;features;help;list'= {
+        }
+        &'codex;features;help;enable'= {
+        }
+        &'codex;features;help;disable'= {
+        }
+        &'codex;features;help;help'= {
+        }
+        &'codex;help'= {
+            cand agents 'Browse all agent sessions on the shared local app-server daemon'
+            cand tcp-tunnel 'Internal: forward a local TCP socket through an HTTP/3 CONNECT proxy'
+            cand exec 'Run Codex non-interactively'
+            cand review 'Run a code review non-interactively'
+            cand login 'Manage login'
+            cand logout 'Remove stored authentication credentials'
+            cand mcp 'Manage external MCP servers for Codex'
+            cand plugin 'Manage Codex plugins'
+            cand app-server '[experimental] Run the app server or related tooling'
+            cand remote-control '[experimental] Manage the app-server daemon with remote control enabled'
+            cand app 'Launch the Desktop app (opens the app installer if missing)'
+            cand completion 'Generate shell completion scripts'
+            cand update 'Update Codex to the latest version'
+            cand doctor 'Diagnose local Codex installation, config, auth, and runtime health'
+            cand sandbox 'Run commands within a Codex-provided sandbox'
+            cand debug 'Debugging tools'
+            cand execpolicy 'Execpolicy tooling'
+            cand apply 'Apply the latest diff produced by Codex agent as a `git apply` to your local working tree'
+            cand resume 'Resume a previous interactive session (picker by default; use --last to continue the most recent)'
+            cand queue 'Queue a message for an existing session'
+            cand archive 'Archive a saved session by id or session name'
+            cand delete 'Permanently delete a saved session by id or session name'
+            cand migrate-rollouts 'Inspect or migrate legacy local sessions to paginated thread history'
+            cand migrate-nfs-db '[experimental] Migrate configured SQLite databases to DELETE mode in place'
+            cand unarchive 'Unarchive a saved session by id or session name'
+            cand fork 'Fork a previous interactive session (picker by default; use --last to fork the most recent)'
+            cand cloud '[EXPERIMENTAL] Browse tasks from Codex Cloud and apply changes locally'
+            cand responses-api-proxy 'Internal: run the responses API proxy'
+            cand stdio-to-uds 'Internal: relay stdio to a Unix domain socket'
+            cand exec-server '[EXPERIMENTAL] Run the standalone exec-server service'
+            cand features 'Inspect feature flags'
+            cand help 'Print this message or the help of the given subcommand(s)'
+        }
+        &'codex;help;agents'= {
+        }
+        &'codex;help;tcp-tunnel'= {
+        }
+        &'codex;help;exec'= {
+            cand resume 'Resume a previous session by id or pick the most recent with --last'
+            cand fork 'Fork a previous session by id into a new session'
+            cand review 'Run a code review against the current repository'
+        }
+        &'codex;help;exec;resume'= {
+        }
+        &'codex;help;exec;fork'= {
+        }
+        &'codex;help;exec;review'= {
+        }
+        &'codex;help;review'= {
+        }
+        &'codex;help;login'= {
+            cand status 'Show login status'
+        }
+        &'codex;help;login;status'= {
+        }
+        &'codex;help;logout'= {
+        }
+        &'codex;help;mcp'= {
+            cand list 'list'
+            cand get 'get'
+            cand add 'add'
+            cand remove 'remove'
+            cand login 'login'
+            cand logout 'logout'
+        }
+        &'codex;help;mcp;list'= {
+        }
+        &'codex;help;mcp;get'= {
+        }
+        &'codex;help;mcp;add'= {
+        }
+        &'codex;help;mcp;remove'= {
+        }
+        &'codex;help;mcp;login'= {
+        }
+        &'codex;help;mcp;logout'= {
+        }
+        &'codex;help;plugin'= {
+            cand add 'Install a plugin from a configured or remote marketplace'
+            cand list 'List plugins available from configured and remote marketplaces'
+            cand marketplace 'Add, list, upgrade, or remove configured plugin marketplaces'
+            cand remove 'Uninstall a plugin and remove its local cache'
+        }
+        &'codex;help;plugin;add'= {
+        }
+        &'codex;help;plugin;list'= {
+        }
+        &'codex;help;plugin;marketplace'= {
+            cand add 'Add a local or Git marketplace to the configured marketplace sources'
+            cand list 'List plugin marketplaces Codex is currently considering and their roots'
+            cand upgrade 'Refresh configured Git marketplace snapshots'
+            cand remove 'Remove a configured marketplace source by name'
+        }
+        &'codex;help;plugin;marketplace;add'= {
+        }
+        &'codex;help;plugin;marketplace;list'= {
+        }
+        &'codex;help;plugin;marketplace;upgrade'= {
+        }
+        &'codex;help;plugin;marketplace;remove'= {
+        }
+        &'codex;help;plugin;remove'= {
+        }
+        &'codex;help;app-server'= {
+            cand daemon 'Manage the local app-server daemon'
+            cand proxy 'Proxy stdio bytes to the running app-server control socket'
+            cand generate-ts '[experimental] Generate TypeScript bindings for the app server protocol'
+            cand generate-json-schema '[experimental] Generate JSON Schema for the app server protocol'
+            cand generate-internal-json-schema '[internal] Generate internal JSON Schema artifacts for Codex tooling'
+        }
+        &'codex;help;app-server;daemon'= {
+            cand bootstrap 'Install durable local app-server management for SSH-driven use'
+            cand start 'Start the local app server daemon if it is not already running'
+            cand restart 'Restart the local app server daemon'
+            cand update 'Update the daemon package (may interrupt running work)'
+            cand enable-remote-control 'Enable remote control for future starts and a currently running managed daemon'
+            cand disable-remote-control 'Disable remote control for future starts and a currently running managed daemon'
+            cand stop 'Stop the local app server daemon'
+            cand version 'Print local CLI and running app-server versions as JSON'
+            cand pid-update-loop '[internal] Run the detached pid-backed standalone updater loop'
+        }
+        &'codex;help;app-server;daemon;bootstrap'= {
+        }
+        &'codex;help;app-server;daemon;start'= {
+        }
+        &'codex;help;app-server;daemon;restart'= {
+        }
+        &'codex;help;app-server;daemon;update'= {
+        }
+        &'codex;help;app-server;daemon;enable-remote-control'= {
+        }
+        &'codex;help;app-server;daemon;disable-remote-control'= {
+        }
+        &'codex;help;app-server;daemon;stop'= {
+        }
+        &'codex;help;app-server;daemon;version'= {
+        }
+        &'codex;help;app-server;daemon;pid-update-loop'= {
+        }
+        &'codex;help;app-server;proxy'= {
+        }
+        &'codex;help;app-server;generate-ts'= {
+        }
+        &'codex;help;app-server;generate-json-schema'= {
+        }
+        &'codex;help;app-server;generate-internal-json-schema'= {
+        }
+        &'codex;help;remote-control'= {
+            cand start 'Start the app-server daemon with remote control enabled'
+            cand stop 'Stop the app-server daemon'
+            cand pair 'Create and print a short-lived manual pairing code'
+        }
+        &'codex;help;remote-control;start'= {
+        }
+        &'codex;help;remote-control;stop'= {
+        }
+        &'codex;help;remote-control;pair'= {
+        }
+        &'codex;help;app'= {
+        }
+        &'codex;help;completion'= {
+        }
+        &'codex;help;update'= {
+        }
+        &'codex;help;doctor'= {
+        }
+        &'codex;help;sandbox'= {
+            cand uninstall 'Remove the legacy Windows sandbox''s machine-wide accounts and network rules'
+        }
+        &'codex;help;sandbox;uninstall'= {
+        }
+        &'codex;help;debug'= {
+            cand models 'Render the raw model catalog as JSON'
+            cand app-server 'Tooling: helps debug the app server'
+            cand prompt-input 'Render the model-visible prompt input list as JSON'
+            cand trace-reduce 'Replay a rollout trace bundle and write reduced state JSON'
+            cand clear-memories 'Internal: reset local memory state for a fresh start'
+        }
+        &'codex;help;debug;models'= {
+        }
+        &'codex;help;debug;app-server'= {
+            cand send-message-v2 'send-message-v2'
+        }
+        &'codex;help;debug;app-server;send-message-v2'= {
+        }
+        &'codex;help;debug;prompt-input'= {
+        }
+        &'codex;help;debug;trace-reduce'= {
+        }
+        &'codex;help;debug;clear-memories'= {
+        }
+        &'codex;help;execpolicy'= {
+            cand check 'Check execpolicy files against a command'
+        }
+        &'codex;help;execpolicy;check'= {
+        }
+        &'codex;help;apply'= {
+        }
+        &'codex;help;resume'= {
+        }
+        &'codex;help;queue'= {
+        }
+        &'codex;help;archive'= {
+        }
+        &'codex;help;delete'= {
+        }
+        &'codex;help;migrate-rollouts'= {
+        }
+        &'codex;help;migrate-nfs-db'= {
+        }
+        &'codex;help;unarchive'= {
+        }
+        &'codex;help;fork'= {
+        }
+        &'codex;help;cloud'= {
+            cand exec 'Submit a new Codex Cloud task without launching the TUI'
+            cand status 'Show the status of a Codex Cloud task'
+            cand list 'List Codex Cloud tasks'
+            cand apply 'Apply the diff for a Codex Cloud task locally'
+            cand diff 'Show the unified diff for a Codex Cloud task'
+        }
+        &'codex;help;cloud;exec'= {
+        }
+        &'codex;help;cloud;status'= {
+        }
+        &'codex;help;cloud;list'= {
+        }
+        &'codex;help;cloud;apply'= {
+        }
+        &'codex;help;cloud;diff'= {
+        }
+        &'codex;help;responses-api-proxy'= {
+        }
+        &'codex;help;stdio-to-uds'= {
+        }
+        &'codex;help;exec-server'= {
+            cand forward 'Register an existing WebSocket exec-server as a remote environment'
+        }
+        &'codex;help;exec-server;forward'= {
+        }
+        &'codex;help;features'= {
+            cand list 'List known features with their stage and effective state'
+            cand enable 'Enable a feature in config.toml'
+            cand disable 'Disable a feature in config.toml'
+        }
+        &'codex;help;features;list'= {
+        }
+        &'codex;help;features;enable'= {
+        }
+        &'codex;help;features;disable'= {
+        }
+        &'codex;help;help'= {
+        }
+    ]
+    $completions[$command]
+}
