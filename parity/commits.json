@@ -4552,9 +4552,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "blocked_precondition",
+   "status": "complete",
    "evidence": [
-    "Blocked precondition: Go has no diagnostic report upload transport at all. appserver feedback only builds the report event and attachments locally (PrepareUpload/SaveFeedback, app/remote_tui.go), and there is no Sentry envelope client, no HTTP/gzip envelope sender, no retry or rate-limit headers, and no delivery outcome type to harden. Without that transport the per-attachment envelope shipment, encoded/decoded size bounds, priority-preserving truncation, and retry-without-replaying-the-core-event contracts cannot be implemented or tested. Precondition: a diagnostic report (Sentry envelope) transport in the Go tree."
+    "feedback/upload now actually delivers the report: appserver/feedback_upload.go encodes Sentry envelopes (gzip at BestSpeed, raw fallback when compression does not shrink, decoded-size accounting), posts them to the DSN envelope endpoint with `X-Sentry-Auth` and `Content-Encoding: gzip`, and parses `Retry-After` (seconds or HTTP date) plus `X-Sentry-Rate-Limits` for the error/attachment categories. The event is accepted before any attachment is read; each whole attachment is one envelope linked to the accepted event id, and the decoded envelope is bounded by the 200 MiB limit with the 1 MiB event limit. Tests: TestFeedbackEnvelopeEncodingMatchesSentryWireLikeRust, TestFeedbackEnvelopeKeepsIncompressiblePayloadRawLikeRust, TestFeedbackTransportPostsSentryEnvelopeAuthLikeRust, TestFeedbackRetryAfterParsesSecondsAndDatesLikeRust, TestFeedbackSentryRateLimitDelayIgnoresUnrelatedCategoriesLikeRust; verified with go test ./appserver -run 'Feedback' -count=1."
    ]
   },
   {
@@ -5559,9 +5559,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "blocked_precondition",
+   "status": "complete",
    "evidence": [
-    "Blocked precondition: same missing transport as #41569 - Go prepares feedback uploads locally (appserver/feedback.go PrepareUpload, app/remote_tui.go) but never sends an envelope, so there is no shared five-minute deadline, no per-attachment send loop to stop on deadline or rate limit, and no app-server upload slot accounting. The overloaded JSON-RPC error and concurrency-slot release tests require that upload path. Precondition: the diagnostic report transport plus an app-server upload concurrency gate."
+    "Feedback uploads now share one five-minute deadline (Rust UPLOAD_TIMEOUT) across the event and every attachment: sendFeedbackEnvelope never starts an attempt past the deadline, retries only attachments (250ms/500ms, exact bytes), stops and marks the report rate-limited when the upstream imposes an error/attachment quota or a cooldown longer than the remaining budget, and skips later files after a cooldown so they cannot bypass a rate limit. RuntimeRouter.handleFeedbackUpload holds one of three upload permits until the upload finishes and answers a fourth concurrent request with the overloaded code -32001; feedback.enabled=false is rejected with Rust's 'sending feedback is disabled by configuration'. Tests: TestFeedbackUploadRetriesOnlyAttachmentsLikeRust, TestFeedbackUploadRetriesAttachmentTwiceThenContinuesLikeRust, TestFeedbackUploadSkipsLaterAttachmentsAfterRateLimitLikeRust, TestFeedbackUploadLimitRejectsFourthConcurrentRequestLikeRust, TestFeedbackUploadRejectsDisabledFeedbackLikeRust; verified with go test ./appserver -run 'Feedback' -count=1 (full package leaves only the four pre-existing file-change/analytics failures)."
    ]
   },
   {
