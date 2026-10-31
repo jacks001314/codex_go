@@ -38462,9 +38462,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "Round 1259: partial — config/api.go:655-743 exposes managed OpenTelemetry requirement types (endpoint, headers, metadata) and app/daemon_telemetry.go consumes them through otelinit, but PEM client-identity support (certificate/key pairs and their redaction) is absent from both config/api.go and otelinit. Residual: add PEM client identities to OtelRequirements, the wire form, redaction and otelinit binding. Tests today: otelinit/otelinit_test.go."
+    "Round 1260: config/otel_requirements.go now exposes `span_attributes` and `tracestate` on wireOtelRequirements (json `span_attributes` / `tracestate`, cloned through cloneStringMap/cloneTracestate) so app-server ConfigRequirements reads carry the managed metadata, matching Rust core/src/config/otel.rs and app-server-protocol v2 config.rs:517-518; nested write protection is otelRequirementForConfigPath (:597-616) which pins `otel.span_attributes.<attr>` and `otel.tracestate.<member>[.<field>]` while leaving unmanaged siblings writable; PEM client identities are loaded for OTLP HTTP (telemetry/metrics_otlp.go:289-319) and gRPC (telemetry/metrics_grpc.go:88-116). Tests: config/otel_requirements_wire_like_rust_test.go TestConfigRequirementsOtelWireShapeLikeRust, config/otel_requirements_test.go (write-protection cases), telemetry/metrics_otlp_test.go, telemetry/metrics_grpc_test.go."
    ]
   },
   {
