@@ -103,10 +103,10 @@ type ResponsesStreamEvent struct {
 }
 
 // terminalProviderStreamError recognizes Rust's `parse_terminal_provider_error`
-// (codex-api/src/error.rs, #47967/#56445) for streamed errors: an error object
-// whose `code` is `flex_unavailable` or `model_not_found`, either as the SSE
-// event's top-level `error` field or as the `response.error` payload of a
-// `response.failed` event.
+// (codex-api/src/error.rs, #47967/#56445/#58434) for streamed errors: an error
+// object whose `code` is `flex_unavailable`, `model_not_found` or one of the
+// audio validation codes, either as the SSE event's top-level `error` field or
+// as the `response.error` payload of a `response.failed` event.
 func terminalProviderStreamError(data []byte) (*codexapi.APIError, bool) {
 	var payload struct {
 		Error    *responsesAgentAPIErrorBody `json:"error"`
@@ -132,7 +132,21 @@ func terminalProviderError(body *responsesAgentAPIErrorBody, status int) *codexa
 	if body == nil {
 		return nil
 	}
-	switch responseErrorCode(body) {
+	code := responseErrorCode(body)
+	if audioValidationErrorCodes[code] {
+		// Rust #58434: audio validation failures are terminal on a statusless
+		// error or an HTTP 400, keep the provider message, and fall back to a
+		// fixed copy when it is absent or blank.
+		if status != 0 && status != http.StatusBadRequest {
+			return nil
+		}
+		message := strings.TrimSpace(body.Message)
+		if message == "" {
+			message = AudioInputFallbackMessage
+		}
+		return &codexapi.APIError{Kind: codexapi.ErrorInvalidAudioInput, Status: status, Message: message}
+	}
+	switch code {
 	case "flex_unavailable":
 		if status != 0 && status != http.StatusTooManyRequests {
 			return nil
@@ -580,7 +594,7 @@ func isRetryableResponsesStreamError(err error) bool {
 			return true
 		case codexapi.ErrorContextWindowExceeded, codexapi.ErrorQuotaExceeded,
 			codexapi.ErrorUsageNotIncluded, codexapi.ErrorInvalidRequest,
-			codexapi.ErrorInvalidPrompt,
+			codexapi.ErrorInvalidPrompt, codexapi.ErrorInvalidAudioInput,
 			codexapi.ErrorCyberPolicy, codexapi.ErrorBioPolicy,
 			codexapi.ErrorFlexUnavailable, codexapi.ErrorModelNotFound:
 			return false
@@ -2807,6 +2821,11 @@ func responseFailedError(data []byte) error {
 	// Rust checks the Flex shape with `Value::get("code")` before decoding the
 	// strict error body, so a Flex-capacity failure ends the turn even when
 	// another field is malformed (Rust #47967, #48229).
+	if _, message, ok := audioInputErrorBody(rawError); ok {
+		// Rust #58434: audio validation failures are terminal and keep the
+		// provider message (falling back when it is absent or blank).
+		return &codexapi.APIError{Kind: codexapi.ErrorInvalidAudioInput, Message: message}
+	}
 	if _, message, ok := flexUnavailableErrorBody(rawError); ok {
 		return &codexapi.APIError{
 			Kind:    codexapi.ErrorFlexUnavailable,
@@ -3006,6 +3025,35 @@ func modelNotFoundErrorBody(rawError []byte) (string, string, bool) {
 		return "", "", false
 	}
 	message := "model_not_found"
+	if body.Message != nil && strings.TrimSpace(*body.Message) != "" {
+		message = strings.TrimSpace(*body.Message)
+	}
+	return *body.Code, message, true
+}
+
+// audioValidationErrorCodes are the provider codes Rust classifies as terminal
+// invalid audio input (codex-api/src/error.rs, #58434).
+var audioValidationErrorCodes = map[string]bool{
+	"audio_too_large":           true,
+	"audio_too_short":           true,
+	"invalid_audio":             true,
+	"invalid_audio_data":        true,
+	"invalid_audio_format":      true,
+	"missing_audio_sample_rate": true,
+}
+
+// audioInputErrorBody recognizes Rust's audio validation codes without
+// requiring the rest of the error object to decode, and applies the fixed
+// fallback copy when the provider message is absent or blank (Rust #58434).
+func audioInputErrorBody(rawError []byte) (string, string, bool) {
+	var body struct {
+		Code    *string `json:"code"`
+		Message *string `json:"message"`
+	}
+	if err := json.Unmarshal(rawError, &body); err != nil || body.Code == nil || !audioValidationErrorCodes[*body.Code] {
+		return "", "", false
+	}
+	message := AudioInputFallbackMessage
 	if body.Message != nil && strings.TrimSpace(*body.Message) != "" {
 		message = strings.TrimSpace(*body.Message)
 	}

@@ -38,6 +38,15 @@ func TestTelemetryInvalidPromptMessageLikeRust(t *testing.T) {
 	}
 }
 
+// Rust #58434 groups InvalidAudioInput with invalid requests in telemetry
+// without exposing the provider body.
+func TestTelemetryInvalidAudioInputMessageLikeRust(t *testing.T) {
+	api := &ResponseAPIError{Kind: ResponseAPIInvalidAudioInput, Message: "secret detail"}
+	if got := TelemetryResponseAPIErrorMessage(api); got != "invalid request" {
+		t.Fatalf("TelemetryResponseAPIErrorMessage() = %q", got)
+	}
+}
+
 func TestTelemetryMessagesOmitHTTPBody(t *testing.T) {
 	transport := &ResponseTransportError{Kind: ResponseTransportHTTP, Status: 401, Message: "secret body"}
 	if got := TelemetryResponseTransportErrorMessage(transport); got != "http 401" {

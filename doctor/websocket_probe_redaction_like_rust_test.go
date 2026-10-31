@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"codex_go/codexapi"
 	"codex_go/model"
 )
 
@@ -54,6 +55,14 @@ func TestWebsocketProbeErrorDetailsRedactWireValuesLikeRust(t *testing.T) {
 		if strings.Contains(detail, secret) || strings.Contains(detail, "example.com") {
 			t.Fatalf("detail leaked a wire value: %q", detail)
 		}
+	}
+	// Rust #58434 names an audio validation rejection without the body.
+	audioDetail := websocketProbeErrorDetail(&codexapi.ResponsesWebsocketProbeError{
+		Status: http.StatusBadRequest,
+		Kind:   codexapi.ErrorInvalidAudioInput,
+	})
+	if audioDetail != "handshake error: invalid audio input: [redacted]" {
+		t.Fatalf("audio detail = %q", audioDetail)
 	}
 	if got := closeReasonDetail(""); got != "empty" {
 		t.Fatalf("empty close reason detail = %q", got)

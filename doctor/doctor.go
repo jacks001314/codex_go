@@ -3499,6 +3499,11 @@ func websocketProbeErrorDetail(probeErr *codexapi.ResponsesWebsocketProbeError) 
 	if probeErr.Status == http.StatusSwitchingProtocols {
 		return "handshake stream error: [redacted]"
 	}
+	if probeErr.Kind == codexapi.ErrorInvalidAudioInput {
+		// Rust #58434: a rejected upgrade whose body carries an audio
+		// validation code names that classification and hides the body.
+		return "handshake error: invalid audio input: [redacted]"
+	}
 	if probeErr.Status != 0 {
 		statusText := strings.TrimSpace(http.StatusText(probeErr.Status))
 		if statusText == "" {

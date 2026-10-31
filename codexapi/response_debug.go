@@ -92,6 +92,10 @@ const (
 	// failure (Rust #57452).
 	ResponseAPIPolicyCapacityUnavailable ResponseAPIErrorKind = "policyCapacityUnavailable"
 	ResponseAPIModelNotFound             ResponseAPIErrorKind = "modelNotFound"
+	// ResponseAPIInvalidAudioInput is the response-debug label for audio
+	// validation failures, which telemetry groups with invalid requests
+	// (Rust #58434).
+	ResponseAPIInvalidAudioInput ResponseAPIErrorKind = "invalidAudioInput"
 )
 
 type ResponseAPIError struct {
@@ -129,7 +133,7 @@ func TelemetryResponseAPIErrorMessage(err *ResponseAPIError) string {
 		return "retryable error"
 	case ResponseAPIRateLimit:
 		return "rate limit"
-	case ResponseAPIInvalidRequest, ResponseAPIInvalidPrompt:
+	case ResponseAPIInvalidRequest, ResponseAPIInvalidPrompt, ResponseAPIInvalidAudioInput:
 		return "invalid request"
 	case ResponseAPICyberPolicy:
 		return "cyber policy"

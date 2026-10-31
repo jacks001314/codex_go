@@ -33,6 +33,10 @@ const (
 	// ErrorModelNotFound is the terminal provider failure for a
 	// `model_not_found` error code (Rust #56445).
 	ErrorModelNotFound APIErrorKind = "modelNotFound"
+	// ErrorInvalidAudioInput is the terminal provider failure for audio
+	// validation codes (Rust #58434). It surfaces as BadRequest and is never
+	// retried because resending the same audio cannot succeed.
+	ErrorInvalidAudioInput APIErrorKind = "invalidAudioInput"
 )
 
 type APIError struct {
@@ -150,6 +154,10 @@ func (e *APIError) Error() string {
 		if strings.TrimSpace(e.Message) == "" {
 			return "model_not_found"
 		}
+		return e.Message
+	case ErrorInvalidAudioInput:
+		// Rust's CodexErrorDetails::InvalidAudioInput displays the provider
+		// message verbatim; classification supplies the fallback text.
 		return e.Message
 	default:
 		return e.Message

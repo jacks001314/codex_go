@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -72,6 +74,10 @@ type ResponsesWebsocketProbeError struct {
 	Stage   ResponsesWebsocketProbeFailureStage
 	Status  int
 	Headers http.Header
+	// Kind is the terminal provider classification of a rejected upgrade body,
+	// when the body carries one (Rust #58434). Diagnostic renderers use it to
+	// name the failure without echoing the body.
+	Kind APIErrorKind
 }
 
 func (e *ResponsesWebsocketProbeError) Error() string {
@@ -89,7 +95,37 @@ func (e *ResponsesWebsocketProbeError) String() string {
 	if e == nil {
 		return "ResponsesWebsocketProbeError<nil>"
 	}
-	return fmt.Sprintf("ResponsesWebsocketProbeError{stage:%s status:%d error:[redacted] headers:[redacted]}", e.Stage, e.Status)
+	return fmt.Sprintf("ResponsesWebsocketProbeError{stage:%s status:%d kind:%s error:[redacted] headers:[redacted]}", e.Stage, e.Status, e.Kind)
+}
+
+// terminalProviderErrorKindFromResponse classifies a rejected upgrade body with
+// the audio validation codes Rust's parse_terminal_provider_error recognizes at
+// HTTP 400 (Rust #58434). Only the classification leaves this helper; the body
+// never reaches diagnostics.
+func terminalProviderErrorKindFromResponse(response *http.Response) APIErrorKind {
+	if response == nil || response.Body == nil || response.StatusCode != http.StatusBadRequest {
+		return ""
+	}
+	// The WebSocket client retains at most the first kilobyte of the body for
+	// debugging, so read exactly that prefix.
+	body, err := io.ReadAll(io.LimitReader(response.Body, 1024))
+	if err != nil {
+		return ""
+	}
+	var payload struct {
+		Error struct {
+			Code *string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil || payload.Error.Code == nil {
+		return ""
+	}
+	switch *payload.Error.Code {
+	case "audio_too_large", "audio_too_short", "invalid_audio", "invalid_audio_data",
+		"invalid_audio_format", "missing_audio_sample_rate":
+		return ErrorInvalidAudioInput
+	}
+	return ""
 }
 
 // ResponsesWebsocketProbeOptions configures a probe. The dial options carry the
@@ -122,6 +158,7 @@ func ProbeResponsesWebsocket(ctx context.Context, endpoint string, options *Resp
 		if response != nil {
 			probeErr.Status = response.StatusCode
 			probeErr.Headers = AllowlistedWebsocketTrackingHeaders(response.Header)
+			probeErr.Kind = terminalProviderErrorKindFromResponse(response)
 		}
 		if websocketProbeErrorIsTLS(err) {
 			probeErr.Stage = ResponsesWebsocketProbeFailureStageTLS

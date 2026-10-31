@@ -120,6 +120,32 @@ func TestProbeResponsesWebsocketReportsEmptyCloseAs1005LikeRust(t *testing.T) {
 	}
 }
 
+// Rust #58434: a rejected upgrade whose body carries an audio validation code
+// is classified so diagnostics can name the failure without echoing the body.
+func TestProbeResponsesWebsocketClassifiesAudioInputLikeRust(t *testing.T) {
+	const secret = "private-audio-detail"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = fmt.Fprint(w, `{"error":{"code":"invalid_audio_format","message":"`+secret+`"}}`)
+	}))
+	defer server.Close()
+	endpoint := strings.Replace(server.URL, "http://", "ws://", 1) + "/v1/responses"
+	_, probeErr := ProbeResponsesWebsocket(t.Context(), endpoint, nil)
+	if probeErr == nil {
+		t.Fatal("probe succeeded against a rejected upgrade")
+	}
+	if probeErr.Status != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", probeErr.Status)
+	}
+	if probeErr.Kind != ErrorInvalidAudioInput {
+		t.Fatalf("kind = %q, want invalidAudioInput", probeErr.Kind)
+	}
+	if rendered := fmt.Sprintf("%v %+v", probeErr, probeErr); strings.Contains(rendered, secret) {
+		t.Fatalf("probe error leaked the body: %s", rendered)
+	}
+}
+
 func newRawProbeServer(t *testing.T, afterUpgrade func(net.Conn, *bufio.ReadWriter)) *httptest.Server {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

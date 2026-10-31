@@ -104,6 +104,11 @@ func TestAPIErrorDisplayMatchesRustLikeRust(t *testing.T) {
 			err:  &APIError{Kind: ErrorModelNotFound},
 			want: "model_not_found",
 		},
+		{
+			name: "invalid audio input",
+			err:  &APIError{Kind: ErrorInvalidAudioInput, Message: "Invalid recording."},
+			want: "Invalid recording.",
+		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			if got := testCase.err.Error(); got != testCase.want {

@@ -40220,9 +40220,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "partial",
    "evidence": [
-    "Round 1194: registered when the alignment anchor moved from cbe16d525c2d7362fc3d4726143288e932905daa to 67f0994b532b8740f14b5b738af7b7b2a915b1d6; not audited yet."
+    "Round 1199: codexapi.ErrorInvalidAudioInput (\"invalidAudioInput\") mirrors Rust #58434. model.terminalProviderError, responseFailedError, and websocketTerminalProviderError classify the six audio validation codes (audio_too_large, audio_too_short, invalid_audio, invalid_audio_data, invalid_audio_format, missing_audio_sample_rate) for statusless errors and HTTP 400, preserving the provider message with the \"Invalid audio input.\" fallback; isRetryableResponsesStreamError and the guardian retry policy keep them terminal. codexapi.ResponsesWebsocketProbeError classifies a rejected upgrade body so doctor renders \"handshake error: invalid audio input: [redacted]\", and codexapi.ResponseAPIInvalidAudioInput groups the kind under the response-debug \"invalid request\" telemetry label. Tests: model/responses_audio_input_like_rust_test.go, codexapi/error_display_test.go, codexapi/response_debug_test.go, codexapi/websocket_probe_test.go, doctor/websocket_probe_redaction_like_rust_test.go. Residual: appserver/turn_runtime.go turnAnalyticsErrorFieldsFromAPIError still needs the BadRequest/invalid_audio_input arm; that file is owned by a parallel agent's uncommitted work."
    ]
   },
   {

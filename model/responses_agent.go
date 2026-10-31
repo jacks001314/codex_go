@@ -1878,27 +1878,40 @@ func websocketEventErrorMessage(event map[string]any) string {
 }
 
 // websocketTerminalProviderError maps a statusless or 400/403/404
-// `model_not_found` WebSocket error event to the terminal provider failure
-// (Rust #56445). Like Rust, the provider message is preserved and the event
-// status, when present, must be one of the eligible codes.
+// `model_not_found` WebSocket error event, or a statusless/400 audio validation
+// code, to the terminal provider failure (Rust #56445/#58434). Like Rust, the
+// provider message is preserved and the event status, when present, must be one
+// of the eligible codes.
 func websocketTerminalProviderError(event map[string]any) *codexapi.APIError {
-	if strings.TrimSpace(websocketEventErrorCode(event)) != "model_not_found" {
-		return nil
-	}
+	code := strings.TrimSpace(websocketEventErrorCode(event))
 	status, _ := uint64FromAny(event["status"])
 	if status > 65535 {
 		status = 0
 	}
-	switch status {
-	case 0, http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound:
-	default:
-		return nil
+	switch code {
+	case "model_not_found":
+		switch status {
+		case 0, http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound:
+		default:
+			return nil
+		}
+		message := strings.TrimSpace(websocketEventError(event))
+		if message == "" {
+			message = "model_not_found"
+		}
+		return &codexapi.APIError{Kind: codexapi.ErrorModelNotFound, Status: int(status), Message: message}
 	}
-	message := strings.TrimSpace(websocketEventError(event))
-	if message == "" {
-		message = "model_not_found"
+	if audioValidationErrorCodes[code] {
+		if status != 0 && status != http.StatusBadRequest {
+			return nil
+		}
+		message := strings.TrimSpace(websocketEventErrorMessage(event))
+		if message == "" {
+			message = AudioInputFallbackMessage
+		}
+		return &codexapi.APIError{Kind: codexapi.ErrorInvalidAudioInput, Status: int(status), Message: message}
 	}
-	return &codexapi.APIError{Kind: codexapi.ErrorModelNotFound, Status: int(status), Message: message}
+	return nil
 }
 
 // websocketUsageLimitError mirrors Rust's wrapped-WebSocket usage-limit
@@ -4523,6 +4536,9 @@ const (
 	CyberPolicyFallbackMessage   = "This request has been flagged for possible cybersecurity risk."
 	BioPolicyFallbackMessage     = "This content was flagged for possible biological risk."
 	InvalidPromptFallbackMessage = "Invalid request."
+	// AudioInputFallbackMessage is Rust's copy for audio validation failures
+	// whose provider message is absent or blank (Rust #58434).
+	AudioInputFallbackMessage = "Invalid audio input."
 )
 
 func fallbackPolicyMessage(message string, fallback string) string {
