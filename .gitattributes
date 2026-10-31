@@ -2,3 +2,4 @@ state/migrations/**/*.sql text eol=lf
 tui/chatwidget/prompt_for_plan_mode.md text eol=lf
 model/bundled_models_catalog.json -text
 cli/completiondata/*.txt -text
+prompt/collaboration_mode_plan.md text eol=lf

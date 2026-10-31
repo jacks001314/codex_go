@@ -5660,6 +5660,7 @@
    ],
    "status": "complete",
    "evidence": [
+   "Round 1273: the Windows dangerous-command rules are platform-independent string matching (they also classify a remote Windows executor driven from a POSIX host), but the file sat behind the implicit `_windows.go` build constraint, so the tree stopped compiling for linux and darwin. It is now execpolicy/dangerous_command_winrules.go (no build constraint, same behavior on Windows) and parity TestCrossPlatformBuildsCompile keeps every non-host release target building.",
     "Round 1032 (partial): executableLookupKeyForPlatform now applies target-platform basename, Windows drive-prefix, case, and executable-suffix normalization like Rust #42113, with regression coverage.",
     "Model-facing exec_command launch failures now return `exec_command failed: ...` bounded to 900 retained bytes with middle truncation and never prepend the rejected command; cancellation errors stay unwrapped.",
     "Unified-exec process IDs were already monotonic across release; added a regression test proving a released id is not reused.",
@@ -6611,6 +6612,7 @@
    ],
    "status": "complete",
    "evidence": [
+   "Round 1273: the !windows stub imported golang.org/x/sys/windows for the retained-token parameter, which broke every non-Windows build of sandbox/windowssandbox (and therefore execserver, tool and agent). The parameter is now the cross-platform RetainedLogonToken alias (windows.Token on Windows, an opaque struct off it), so callers are unchanged, and parity TestCrossPlatformBuildsCompile guards the gate.",
     "sandbox/windowssandbox/setup_lock_windows.go adds the machine-wide Global\\CodexSandboxSetup mutex; the setup helper takes it only for account-provisioning modes (Full without refresh, ProvisionOnly), matching Rust SetupMode::provisions_accounts.",
     "sandbox/windowssandbox/uninstall_cleanup_windows.go disables both sandbox accounts through NetUserInfo level 1008, enumerates their processes with WTSEnumerateProcessesW, checks each opened token SID to defeat PID reuse, terminates and waits up to 5s, and waits for matching LSA logon sessions to disappear. Preparation failures restore the original account flags.",
     "CleanUpPackagedWindowsSandbox removes only .sandbox, .sandbox-secrets and .sandbox-bin under an absolute pinned home, runs the desktop callback while accounts stay disabled, then removes WFP/firewall rules, hidden-user entries, accounts and (only when no earlier step failed) the sandbox group. CleanUpLegacyWindowsSandbox now shares the same preparation and keeps all user files.",

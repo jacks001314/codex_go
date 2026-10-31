@@ -8,6 +8,10 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+// RetainedLogonToken is a Windows logon token that must survive sandbox
+// cleanup (Rust retains the trusted runtime finalizer's private logins).
+type RetainedLogonToken = windows.Token
+
 // PreparedSandboxCleanup holds the machine-wide setup lock after the sandbox
 // accounts were disabled and their processes and logon tokens exited, while
 // every network protection and filesystem permission is still intact (Rust
@@ -35,7 +39,7 @@ func PrepareSandboxCleanup() (*PreparedSandboxCleanup, error) {
 // fresh, private logins for distinct managed sandbox accounts; ordinary
 // processes are still stopped (Rust
 // prepare_packaged_windows_sandbox_cleanup_with_retained_tokens).
-func PrepareSandboxCleanupWithRetainedTokens(tokens []windows.Token) (*PreparedSandboxCleanup, error) {
+func PrepareSandboxCleanupWithRetainedTokens(tokens []RetainedLogonToken) (*PreparedSandboxCleanup, error) {
 	return prepareSandboxCleanupGuard(tokens)
 }
 

@@ -2,7 +2,9 @@
 
 package windowssandbox
 
-import "golang.org/x/sys/windows"
+// RetainedLogonToken is unavailable off Windows: there are no logon tokens to
+// retain, so the stub stands in for the Windows token type.
+type RetainedLogonToken struct{}
 
 // PreparedSandboxCleanup is unavailable off Windows.
 type PreparedSandboxCleanup struct{}
@@ -14,7 +16,7 @@ func PrepareSandboxCleanup() (*PreparedSandboxCleanup, error) {
 
 // PrepareSandboxCleanupWithRetainedTokens reports that native sandbox cleanup
 // is Windows-only.
-func PrepareSandboxCleanupWithRetainedTokens([]windows.Token) (*PreparedSandboxCleanup, error) {
+func PrepareSandboxCleanupWithRetainedTokens([]RetainedLogonToken) (*PreparedSandboxCleanup, error) {
 	return nil, unsupported("uninstall.prepare_packaged_windows_sandbox_cleanup_with_retained_tokens")
 }
 
