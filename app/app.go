@@ -1678,6 +1678,9 @@ func runAppServer(ctx context.Context, opts cli.AppServerOptions, root *cli.Root
 		return err
 	}
 	runtimeOptions.EnvironmentProviderSnapshot = &environmentProvider
+	// Rust #57175: keep the config server's managed-configuration loader so
+	// later config/read calls observe refreshed enterprise policies.
+	runtimeOptions.CloudConfigLoader = loadedConfig.CloudConfigLoader()
 	runtimeOptions.FeatureEnablement = featureEnablementFromRoot(root)
 	runtimeOptions.Requirements = requirements
 	runtimeOptions.EnableLogDB = true

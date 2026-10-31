@@ -307,6 +307,12 @@ type RuntimeRouterOptions struct {
 	// MCPToolRequestMetaHook is the host-scoped private MCP request metadata
 	// hook installed for new threads. Per-thread overrides win.
 	MCPToolRequestMetaHook *mcp.MCPToolRequestMetaHook
+	// CloudConfigLoader is the managed-configuration loader the startup config
+	// was resolved from. The router hands it to its ConfigService so every
+	// config/read observes the latest config-server bundle and rewritten
+	// managed files instead of the startup snapshot (Rust #57175
+	// ConfigManager::current_managed_config_loader).
+	CloudConfigLoader *config.CloudConfigLoader
 }
 
 type RuntimeRouter struct {
@@ -1815,6 +1821,11 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 	}
 	if options != nil && options.Requirements != nil {
 		configService.SetRequirementsIfDifferentFromLoaded(options.Requirements)
+	}
+	if options != nil && options.CloudConfigLoader != nil {
+		// Rust #57175: the app-server keeps the config server's managed-config
+		// loader, so later reads see refreshed enterprise policies.
+		configService.SetCloudConfigLoader(options.CloudConfigLoader)
 	}
 	pluginService := plugin.NewPluginService()
 	pluginService.SetCodexHome(codexHome)

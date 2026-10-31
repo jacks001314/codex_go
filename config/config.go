@@ -57,6 +57,11 @@ type Config struct {
 	// ConfigLayerStack::cloud_config_binding). It does not change the
 	// configuration contents and is never serialized.
 	cloudConfigBinding *CloudConfigBundleBinding
+	// cloudConfigLoader is the managed-configuration loader this configuration
+	// was resolved from. Long-lived hosts keep it so every later read observes
+	// the latest config-server bundle (Rust #57175
+	// ConfigManager::current_managed_config_loader). It is never serialized.
+	cloudConfigLoader *CloudConfigLoader
 	// resolvedMemoryVersion is the memory pipeline selected during config load.
 	// Fresh profiles with memories enabled select V2 when no V1 workspace exists
 	// (Rust #56211); an explicit `memories.version` still wins. It is never
@@ -467,6 +472,7 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 	requirementsHadFilesystem := requirementsHaveFilesystem(requirements)
 	cloudRequirementsHadFilesystem := false
 	var cloudConfigBinding *CloudConfigBundleBinding
+	var cloudConfigLoader *CloudConfigLoader
 	if opts != nil && opts.IncludeManagedConfig && opts.CloudConfigBundle != nil {
 		// Rust #49269: the loader returns the bundle together with the policy
 		// revision binding it was resolved from, and the binding travels with
@@ -485,6 +491,7 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 			cloudRequirementsHadFilesystem = cloudFilesystem
 		}
 		cloudConfigBinding = snapshot.Binding
+		cloudConfigLoader = opts.CloudConfigBundle
 	}
 	applyManagedApprovalsReviewerGuardianV2Override(values, requirements)
 	applyManagedAuthBackendOverride(values, requirements)
@@ -513,6 +520,7 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 		allowedSymlinkedCodexHome:    allowedSymlinkedCodexHome,
 		isProjectless:                isProjectless,
 		cloudConfigBinding:           cloudConfigBinding,
+		cloudConfigLoader:            cloudConfigLoader,
 		chatgptBaseURLExplicit:       chatgptBaseURLExplicit,
 		filesystemRequirementsSource: filesystemRequirementsSource,
 	}
@@ -611,6 +619,16 @@ func (c *Config) CloudConfigBinding() *CloudConfigBundleBinding {
 		return nil
 	}
 	return c.cloudConfigBinding
+}
+
+// CloudConfigLoader returns the managed-configuration loader this
+// configuration was resolved from (Rust #57175). Hosts that outlive one
+// configuration load re-read it so managed values stay fresh.
+func (c *Config) CloudConfigLoader() *CloudConfigLoader {
+	if c == nil {
+		return nil
+	}
+	return c.cloudConfigLoader
 }
 
 // FilesystemRequirementsSource reports where the managed filesystem policy was
