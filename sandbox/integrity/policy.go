@@ -295,28 +295,53 @@ func explicitCarveouts(entries []sandbox.FileSystemSandboxEntry, cwd string) []s
 
 // protectedMetadataNames mirrors upstream
 // `protected_metadata_names_for_writable_root` (permissions.rs:2526-2549): a
-// workspace metadata name stays protected under the root until the policy grants
-// a write rule for that metadata path itself.
+// workspace metadata name stays protected under `root` unless the policy grants
+// write access to that exact metadata path. Upstream asks the local matcher's
+// `can_write_path`, which resolves the policy access and then only lifts the
+// metadata denial when a write entry names the metadata path itself; a broader
+// writable root above it and a nested rule below it both keep the name
+// protected (permissions.rs:1051-1086).
+//
+// Go's writable-root list is keyed by resolved entry path, so upstream's
+// `raw_writable_roots` aliases collapse into `root` itself and every candidate
+// metadata path is joined once per root.
 func protectedMetadataNames(entries []sandbox.FileSystemSandboxEntry, root string, cwd string) []string {
 	var protected []string
 	for _, name := range sandboxpath.DefaultProtectedMetadataNames() {
-		metadataPath := filepath.Join(root, name)
-		granted := false
-		for _, entry := range entries {
-			if entry.Access != sandbox.FileSystemAccessWrite || entry.Path.Type == "glob_pattern" {
-				continue
-			}
-			resolved := sandbox.ResolveFileSystemEntryPath(entry.Path, cwd)
-			if resolved != "" && sandboxpath.PathWithin(resolved, metadataPath) {
-				granted = true
-				break
-			}
-		}
-		if !granted {
+		if !metadataPathWriteGranted(entries, filepath.Join(root, name), cwd) {
 			protected = append(protected, name)
 		}
 	}
 	return protected
+}
+
+// metadataPathWriteGranted mirrors `can_write_path` for a writable root's
+// metadata path: the resolved policy access must be write and some write entry
+// must name that path. The comparison is URI-native so Windows case and
+// separator spellings fold together while POSIX paths stay byte-exact, and a
+// metadata path that has no URI representation stays protected.
+func metadataPathWriteGranted(entries []sandbox.FileSystemSandboxEntry, metadataPath string, cwd string) bool {
+	if sandbox.ResolveFileSystemEntryAccess(entries, metadataPath, cwd) != sandbox.FileSystemAccessWrite {
+		return false
+	}
+	metadataURI, ok := utils.InferredPathURI(metadataPath)
+	if !ok {
+		return false
+	}
+	for _, entry := range entries {
+		if entry.Access != sandbox.FileSystemAccessWrite || entry.Path.Type == "glob_pattern" {
+			continue
+		}
+		resolved := sandbox.ResolveFileSystemEntryPath(entry.Path, cwd)
+		if resolved == "" {
+			continue
+		}
+		entryURI, ok := utils.InferredPathURI(resolved)
+		if ok && entryURI.Equal(metadataURI) {
+			return true
+		}
+	}
+	return false
 }
 
 // dropListedPaths removes the paths an explicit entry already governs, matching
