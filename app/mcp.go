@@ -26,9 +26,13 @@ import (
 var openMCPLoginBrowser = auth.OpenBrowser
 
 const (
-	mcpCLIOAuthDiscoveryTimeout = 2 * time.Second
-	mcpCLIOAuthCallbackTimeout  = 5 * time.Minute
-	mcpCLIOAuthCallbackMaxBytes = 64 * 1024
+	// mcpCLIAuthDiscoveryTimeout caps an OAuth metadata probe the way 0.166's
+	// OAuthDiscoveryTimeout::LOCAL does (its DISCOVERY_TIMEOUT is five seconds).
+	mcpCLIAuthDiscoveryTimeout = 5 * time.Second
+	// mcpCLIOAuthLoginStartTimeout bounds starting the local callback server.
+	mcpCLIOAuthLoginStartTimeout = 2 * time.Second
+	mcpCLIOAuthCallbackTimeout   = 5 * time.Minute
+	mcpCLIOAuthCallbackMaxBytes  = 64 * 1024
 )
 
 type mcpCLIConfig struct {
@@ -82,13 +86,13 @@ type mcpCLIEnvVar struct {
 }
 
 type mcpListJSONEntry struct {
-	Name              string            `json:"name"`
-	Enabled           bool              `json:"enabled"`
-	DisabledReason    *string           `json:"disabled_reason"`
-	Transport         any               `json:"transport"`
-	StartupTimeoutSec *json.Number      `json:"startup_timeout_sec"`
-	ToolTimeoutSec    *json.Number      `json:"tool_timeout_sec"`
-	AuthStatus        string            `json:"auth_status"`
+	Name              string       `json:"name"`
+	Enabled           bool         `json:"enabled"`
+	DisabledReason    *string      `json:"disabled_reason"`
+	Transport         any          `json:"transport"`
+	StartupTimeoutSec *json.Number `json:"startup_timeout_sec"`
+	ToolTimeoutSec    *json.Number `json:"tool_timeout_sec"`
+	AuthStatus        string       `json:"auth_status"`
 }
 
 type mcpGetJSONEntry struct {
@@ -462,9 +466,9 @@ func mcpOAuthLoginSupport(ctx context.Context, server *mcpCLIServer, client *htt
 	if server == nil || server.Type != "streamable_http" || strings.TrimSpace(server.BearerTokenEnvVar) != "" {
 		return mcpOAuthLoginSupportResult{Kind: mcpOAuthLoginUnsupported}
 	}
-	timeoutCtx, cancel := context.WithTimeout(contextOrBackground(ctx), mcpCLIOAuthDiscoveryTimeout)
+	timeoutCtx, cancel := context.WithTimeout(contextOrBackground(ctx), mcpCLIAuthDiscoveryTimeout)
 	defer cancel()
-	client = mcpCLIHTTPClientWithTimeout(client, mcpCLIOAuthDiscoveryTimeout)
+	client = mcpCLIHTTPClientWithTimeout(client, mcpCLIAuthDiscoveryTimeout)
 	discovery, err := mcp.DiscoverStreamableHTTPOAuth(timeoutCtx, server.URL, client)
 	if err != nil {
 		return mcpOAuthLoginSupportResult{Kind: mcpOAuthLoginUnknown, Err: err}
@@ -514,8 +518,8 @@ func performMCPCLIOAuthLogin(ctx context.Context, store *mcpCLIStore, name strin
 	if store == nil || server == nil || discovery == nil {
 		return fmt.Errorf("OAuth login requires a discovered streamable HTTP server")
 	}
-	httpClient := mcpCLIHTTPClientWithTimeout(store.httpClient, mcpCLIOAuthDiscoveryTimeout)
-	startCtx, cancelStart := context.WithTimeout(contextOrBackground(ctx), mcpCLIOAuthDiscoveryTimeout)
+	httpClient := mcpCLIHTTPClientWithTimeout(store.httpClient, mcpCLIOAuthLoginStartTimeout)
+	startCtx, cancelStart := context.WithTimeout(contextOrBackground(ctx), mcpCLIOAuthLoginStartTimeout)
 	runtimeConfig := mcpServerRuntimeConfig(name, server, store.codexHome)
 	// A registered client keeps the exact callback its provider expects; an
 	// existing client ID without a stored callback resolves the mix-up defense
@@ -772,7 +776,7 @@ func mcpServerAuthStatus(ctx context.Context, store *mcp.OAuthStore, name string
 // mcpDiscoverStreamableHTTPAuthStatus reports what OAuth metadata discovery says
 // about a server that carries no configured credentials.
 func mcpDiscoverStreamableHTTPAuthStatus(ctx context.Context, server *mcpCLIServer) mcp.MCPAuthStatus {
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := &http.Client{Timeout: mcpCLIAuthDiscoveryTimeout}
 	discovery, err := mcp.DiscoverStreamableHTTPOAuth(ctx, server.URL, client)
 	if err != nil {
 		return mcp.MCPAuthUnknown

@@ -587,6 +587,34 @@ func TestMCPAddUnknownOAuthPrintsLoginHint(t *testing.T) {
 	}
 }
 
+func TestMCPAddSlowOAuthProbeKeepsWaitingLikeRust(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	var requests atomic.Int32
+	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if requests.Add(1) == 1 {
+			// 0.166 caps the add-time probe at OAuthDiscoveryTimeout::LOCAL
+			// (five seconds), so a first answer slower than the old two second
+			// cap must still resolve to "unsupported" instead of "unknown".
+			time.Sleep(2500 * time.Millisecond)
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer issuer.Close()
+
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), []string{"mcp", "add", "slow", "--url", issuer.URL + "/mcp"}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatalf("mcp add returned error: %v", err)
+	}
+	text := stdout.String()
+	if strings.Contains(text, "MCP server may or may not require login") {
+		t.Fatalf("slow probe gave up before the five second cap:\n%s", text)
+	}
+	if strings.Contains(text, "Detected OAuth support") {
+		t.Fatalf("add stdout should not start OAuth:\n%s", text)
+	}
+}
+
 func TestMCPAddPersistsOAuthClientSecretWithoutPrintingItLikeRust(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)

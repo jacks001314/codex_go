@@ -2202,8 +2202,29 @@ names.
   `TestMCPListJSONMatchesRustSerialization` and
   `TestMCPListJSONReportsStoredCredentialsLikeRust` in `app`.
 
+### 70. `mcp add --url`: the login hint probe keeps Rust's five second cap
+
+`run_add` asks `oauth_login_support(..., OAuthDiscoveryTimeout::LOCAL, ...)`, and
+`LOCAL` caps every discovery request at `DISCOVERY_TIMEOUT` (five seconds). Go
+capped the same probe at two seconds, gave up first and reported `Unknown`, so a
+server that answered slowly printed "MCP server may or may not require login" in
+Go and stayed silent in Rust.
+
+- **Cap.** `mcpCLIAuthDiscoveryTimeout` is five seconds and is shared by the
+  add-time hint probe and the `mcp list` status probe; starting the local
+  callback server keeps its own `mcpCLIOAuthLoginStartTimeout`.
+- Evidence: a first request delayed 2.6s and answered with 404
+  (`out/r57-slow-probe.txt`), an immediate 404, an unreachable port and an
+  unresolvable host all match 0.166 byte for byte (`out/r57-probe.txt`); before
+  the fix the delayed case printed the hint in Go only. Regressions:
+  `TestMCPAddSlowOAuthProbeKeepsWaitingLikeRust` and
+  `TestMCPAddUnknownOAuthPrintsLoginHint` in `app`.
+
 ## Verification
 
+- Round 56 aligns the `mcp add --url` login hint probe (entry 70): the delayed,
+  immediate-404, unreachable and unresolvable probes are byte-identical to
+  0.166 (`out/r57-slow-probe.txt`, `out/r57-probe.txt`).
 - Round 55 aligns the `mcp get`/`mcp list` payloads (entry 69): the 32 text
   runs, the 18 JSON runs and the 36-run auth matrix are byte-identical to 0.166
   (`out/r55-mcp.txt`, `out/r55-mcpjson.txt`, `out/r56-auth.txt`), and
@@ -2775,13 +2796,6 @@ names.
   path-valued settings (entry 65) and the `model_catalog_json` parse itself
   (entry 67), so a missing instructions or prompt file, a catalog with no
   models and a malformed model entry fail the way 0.166 does.
-- `codex mcp add --url` still decides its may-or-may-not-require-login hint
-  from a live OAuth discovery. Go caps that probe at two seconds while Rust
-  uses its requested timeout, so the same URL can print the hint in Go and
-  stay silent in Rust
-  (`https://example.com/mcp` did both in consecutive probes, while
-  `http://127.0.0.1:1/mcp` and `https://mcp.example.invalid/mcp` print it in
-  both). The written config.toml is identical either way.
 - `apply_patch` on 2026-10-31: Rust 0.166 (`sandbox = "unelevated"`) refused to
   write under `%TEMP%` (`Access ... is denied`) while Go wrote the file; that
   sandbox-policy difference is still unaligned. Go also still appends
