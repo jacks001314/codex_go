@@ -633,6 +633,28 @@ func configPathOverlaps(segments []string, managed []string) bool {
 	return true
 }
 
+func cloneStringMap(value map[string]string) map[string]string {
+	if len(value) == 0 {
+		return nil
+	}
+	cloned := make(map[string]string, len(value))
+	for key, item := range value {
+		cloned[key] = item
+	}
+	return cloned
+}
+
+func cloneTracestate(value map[string]map[string]string) map[string]map[string]string {
+	if len(value) == 0 {
+		return nil
+	}
+	cloned := make(map[string]map[string]string, len(value))
+	for member, fields := range value {
+		cloned[member] = cloneStringMap(fields)
+	}
+	return cloned
+}
+
 func cloneOtelRequirements(value *OtelRequirements) *OtelRequirements {
 	if value == nil {
 		return nil
@@ -756,18 +778,19 @@ func mergeOtelRequirements(lower, higher *OtelRequirements) *OtelRequirements {
 // redactedOtelRequirements returns the API projection with every exporter
 // header value replaced by [redacted] (Rust #57654).
 // wireOtelRequirements is the app-server ConfigRequirements.otel shape (Rust
-// #57638). The managed TOML surface carries three extra requirements
-// (`log_sse_deltas`, `span_attributes`, `tracestate`) that the protocol type
-// does not expose, so they stay off the wire.
+// #57638). `log_sse_deltas` stays TOML-only, while `span_attributes` and
+// `tracestate` are part of the protocol type (Rust #57658).
 type wireOtelRequirements struct {
-	ToolResult             *OtelToolResultLogConfig `json:"tool_result"`
-	LogUserPrompt          *bool                    `json:"log_user_prompt"`
-	LogAgentResponses      *bool                    `json:"log_agent_responses"`
-	LogGuardianAssessments *bool                    `json:"log_guardian_assessments"`
-	Environment            *string                  `json:"environment"`
-	Exporter               *OtelExporter            `json:"exporter"`
-	TraceExporter          *OtelExporter            `json:"trace_exporter"`
-	MetricsExporter        *OtelExporter            `json:"metrics_exporter"`
+	ToolResult             *OtelToolResultLogConfig     `json:"tool_result"`
+	LogUserPrompt          *bool                        `json:"log_user_prompt"`
+	LogAgentResponses      *bool                        `json:"log_agent_responses"`
+	LogGuardianAssessments *bool                        `json:"log_guardian_assessments"`
+	Environment            *string                      `json:"environment"`
+	Exporter               *OtelExporter                `json:"exporter"`
+	TraceExporter          *OtelExporter                `json:"trace_exporter"`
+	MetricsExporter        *OtelExporter                `json:"metrics_exporter"`
+	SpanAttributes         map[string]string            `json:"span_attributes"`
+	Tracestate             map[string]map[string]string `json:"tracestate"`
 }
 
 // otelRequirementsForWire projects managed OTEL requirements onto the
@@ -786,6 +809,8 @@ func otelRequirementsForWire(value *OtelRequirements) *wireOtelRequirements {
 		Exporter:               redacted.Exporter,
 		TraceExporter:          redacted.TraceExporter,
 		MetricsExporter:        redacted.MetricsExporter,
+		SpanAttributes:         cloneStringMap(redacted.SpanAttributes),
+		Tracestate:             cloneTracestate(redacted.Tracestate),
 	}
 	if redacted.ToolResult != nil {
 		copied := *redacted.ToolResult

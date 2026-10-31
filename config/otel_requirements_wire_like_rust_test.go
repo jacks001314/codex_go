@@ -9,8 +9,8 @@ import (
 
 // TestConfigRequirementsOtelWireShapeLikeRust covers Rust #57638/#57654: the
 // configRequirements/read projection exposes exactly the protocol OTEL fields
-// (no TOML-only log_sse_deltas/span_attributes/tracestate) and never returns
-// exporter header values.
+// (span_attributes and tracestate are on the wire since Rust #57658;
+// log_sse_deltas stays TOML-only) and never returns exporter header values.
 func TestConfigRequirementsOtelWireShapeLikeRust(t *testing.T) {
 	home := t.TempDir()
 	body := `
@@ -67,6 +67,8 @@ authorization = "Bearer secret"
 		"exporter":                 true,
 		"trace_exporter":           true,
 		"metrics_exporter":         true,
+		"span_attributes":          true,
+		"tracestate":               true,
 	}
 	for key := range otel {
 		if !want[key] {
@@ -88,6 +90,14 @@ authorization = "Bearer secret"
 	exporter, ok := otel["exporter"].(map[string]any)["otlp-http"].(map[string]any)
 	if !ok {
 		t.Fatalf("exporter = %#v", otel["exporter"])
+	}
+	attributes, ok := otel["span_attributes"].(map[string]any)
+	if !ok || attributes["team"] != "core" {
+		t.Fatalf("span_attributes = %#v", otel["span_attributes"])
+	}
+	tracestate, ok := otel["tracestate"].(map[string]any)["acme.com"].(map[string]any)
+	if !ok || tracestate["tenant"] != "t1" {
+		t.Fatalf("tracestate = %#v", otel["tracestate"])
 	}
 	if exporter["protocol"] != "json" || exporter["endpoint"] != "https://collector.example/v1/logs" {
 		t.Fatalf("exporter body = %#v", exporter)
