@@ -36693,7 +36693,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:49: | `#57235` | `exec_command` reports `shell_snapshot_mode` telemetry | `tool/shell_executor.go`, `turn/tools.go`, `appserver/runtime_router.go`, `exec/exec.go` |"
+    "Round 1254: tool/shell_executor.go:100,1520 emits the `shell_snapshot_mode` telemetry tag (\"disabled\"/\"v1\"/\"v2\") on exec_command spans, fed by exec/exec.go and turn/tools.go. Tests: tool/shell_executor_test.go."
    ]
   },
   {
@@ -36715,9 +36715,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:883: - Test-only stabilizations `#57248`, `#57244`, `#57239`, `#57238`, `#57234`,"
+    "Round 1254: not applicable — Rust test-only determinism change for the MCP HTTP probe timeout test."
    ]
   },
   {
@@ -36729,8 +36729,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:115: | `#57240` | Memory baselines are bounded to 10 MiB and recover as empty snapshots under a cross-process lock | `memories/workspace.go`, `memories/workspace_test.go`, `memories/pipeline_test.go` |",
-    "plan_2026_10_27_nontui.md:455: `#57240` details: memory baselines now carry a `1` version marker under `.git`,"
+    "Round 1254: memories/workspace.go:30-33 bounds a baseline file to 10 MiB and records a `codex-baseline-version` marker so an incomplete or oversized snapshot recovers as an empty baseline under the workspace lock. Tests: memories/workspace_test.go TestWorkspaceBaselineReportsAddedModifiedDeletedAndResets, TestPrepareWorkspaceRecoversUnusableGitDirectory."
    ]
   },
   {
@@ -36742,8 +36741,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:98: | `#57241` | Encrypted Guardian transcripts honor the configured message limit instead of a hard-coded 9,000-token ceiling | `appserver/guardian_reviewer.go`, `appserver/guardian_native_agent_message_like_rust_test.go` |",
-    "plan_2026_10_27_nontui.md:1231: - For `#57241`/`#55991`/`#56211`: `go test ./compact ./config ./memories ./turn ./exec -count=1`, `go test ./appserver -run 'GuardianNativeAgentMessage|GuardianReviewTranscript|GuardianTranscriptCarries|GuardianReviewDelivers|MemoryStatus|CompactTokenStatusForTurn' -count=1` and `go build ./...` pass."
+    "Round 1254: the synchronous Guardian transcript resolves the configured message limit (state.AsyncMaxMessageEntryTokens) instead of a hard-coded 9,000-token ceiling, so encrypted agent messages above the limit are kept in the native message entry. Tests: appserver/guardian_native_agent_message_like_rust_test.go TestGuardianNativeAgentMessageHonorsConfiguredMessageLimitLikeRust."
    ]
   },
   {
@@ -36755,7 +36753,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:40: | `#57242` | Default thread unload delay is 1 minute | `config/config.go`, unload-delay test |"
+    "Round 1254: config/config.go:2227-2230 ThreadUnloadDelaySecs defaults to one minute (Rust thread_unload_delay_secs) and the config key is registered at :1108. Tests: config/config_test.go unload-delay cases."
    ]
   },
   {
@@ -36777,9 +36775,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:883: - Test-only stabilizations `#57248`, `#57244`, `#57239`, `#57238`, `#57234`,"
+    "Round 1254: not applicable — Rust test-only change waiting for process completion in the unified-exec reuse test; Go covers reuse through tool/unified_exec_*_test.go directly."
    ]
   },
   {
@@ -36813,9 +36811,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:883: - Test-only stabilizations `#57248`, `#57244`, `#57239`, `#57238`, `#57234`,"
+    "Round 1254: not applicable — Rust test-only change making login token-refresh tests wait for auth publication."
    ]
   },
   {
@@ -36862,9 +36860,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:880: `#57255`/`#57206`/`#55547`/`#55616` (dependency advisories and lockfiles) are"
+    "Round 1254: not applicable — Rust supply-chain change recording reviewed exceptions for zstd security advisories; Go pins its own module set and has no advisory exception file to mirror."
    ]
   },
   {
@@ -36950,8 +36948,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:889: - `#57262` (`skill_catalog_deltas` incremental catalogs) is a feature Go does",
-    "plan_2026_10_28.md:34: | `#57262` | Incremental skill catalogs behind `skill_catalog_deltas` (missed in the prior window) | Core feature required by `#57500`; implement snapshot/delta protocol in Go. |"
+    "Round 1254: features/features.go registers `skill_catalog_deltas`, and appserver/skill_catalog_delta.go publishes snapshot plus delta skill catalogs wired through appserver/turn_runtime.go. Tests: appserver/skill_catalog_deltas_like_rust_test.go TestSkillCatalogDeltaInitialListingLikeRust, TestSkillCatalogDeltaPublishesOnlyNewAndEditedSkillsLikeRust, TestSkillCatalogDeltaRemovalIsSilentAndKeepsBudgetLikeRust, plus appserver/skill_catalog_deltas_wiring_like_rust_test.go."
    ]
   },
   {
@@ -36963,8 +36960,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:59: | `#56309` `#57263` | Permission catalog path wording (`writable_root(s)`, `omitted_paths`, `denied_reads`) | `model/catalog.go`, `sandbox/permission_prompt.go`, `appserver/permissions_world_state.go`, catalog/permission tests |",
-    "plan_2026_10_27_nontui.md:596: `#56309`/`#57263`: the permission catalog in `model/catalog.go` carries"
+    "Round 1254: model/catalog.go:232-238 carries the permission-path wording (`writable_root`, `writable_roots`, `omitted_paths`, denied reads) and sandbox/permission_prompt.go renders it through sandbox/permission_prompt_templates.go. Tests: sandbox/permission_prompt_test.go and the model catalog wording tests."
    ]
   },
   {
@@ -37026,8 +37022,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:63: | `#57270` | Load cloud config for sandbox and remote exec-server commands | `app/app.go`, sandbox/exec-server cloud-config tests |",
-    "plan_2026_10_27_nontui.md:639: `#57270`: sandbox invocations now mirror Rust's managed-requirements mode:"
+    "Round 1254: app/app.go:645 sandboxCloudConfigBundleForRun loads the managed cloud config for sandbox and remote exec-server subcommands (also at :152-153 through ManagedConfigLoader). Tests: app/sandbox_cloud_config_test.go."
    ]
   },
   {
@@ -37051,8 +37046,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:106: | `#57272` | Code-mode output-truncation contracts: session options, wait/terminate budgets, `bounded-output-v1`, stdio and gRPC schemas | `codemode/protocol_types.go`, `codemode/protocol_host.go`, `codemode/session_provider.go`, `codemode/session_runtime.go`, `codemode/session_host.go`, `codemode/stdio_host.go`, `codemode/grpc/codex.code_mode.v1.proto`, regenerated `codemode/grpc` bindings, `code",
-    "plan_2026_10_27_nontui.md:1233: - For `#57272`: `go test ./codemode -count=1` and `go build ./...` pass; the proto was regenerated with the checked-in `protoc-gen-go`/`protoc-gen-go-grpc` plugins."
+    "Round 1254: codemode/protocol_types.go plus protocol_host.go define the `bounded-output-v1` contracts (session options, wait/terminate budgets, stdio and gRPC schemas), with session_provider.go/session_runtime.go/session_host.go implementing them. Tests: codemode/output_truncation_negotiation_like_rust_test.go."
    ]
   },
   {
@@ -37064,7 +37058,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:44: | `#57273` | `codex queue` rejects unsupported options | `cli/cli.go` (`parseQueue`, `validateQueueSharedOptions`), queue parse tests |"
+    "Round 1254: cli/cli.go:1071,1100 route `codex queue` through parseQueue and validateQueueSharedOptions, which reject options the queue command does not support. Tests: cli/cli_test.go TestParseQueueCommandLikeRust."
    ]
   },
   {
@@ -37076,8 +37070,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:114: | `#57274` | Node REPL evidence renders in Rust's multimodal layout | `context/node_repl_review_evidence.go`, like-Rust tests |",
-    "plan_2026_10_27_nontui.md:443: `#57274` details: Go's multimodal node_repl evidence now follows Rust's"
+    "Round 1254: context/node_repl_review_evidence.go renders Node REPL evidence in Rust's multimodal layout during synchronous context preparation. Tests: context/node_repl_review_evidence_test.go TestNodeReplReviewEvidenceSnapshotsKeepOrderAndEscapeMarkers, TestNodeReplReviewEvidenceMarksEmptyAndTruncatesOversized, TestNodeReplReviewEvidenceClearDropsRetainedResponses."
    ]
   },
   {
@@ -37089,8 +37082,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:101: | `#57275` | Premium `imagegen_premium` usage-limit failures keep structured metadata and fall back to the exhausted window's reset time | `turn/image_generation.go`, `turn/image_generation_test.go` |",
-    "plan_2026_10_27_nontui.md:1232: - For `#57275`: `go test ./turn -run 'ImageGenerationUsageLimit|ImageGenerationPremium|ImageGenerationErrorOutput' -count=1` passes."
+    "Round 1254: turn/image_generation.go:530-545 recognises the `imagegen_premium` and `image_gen` usage-limit failures, preserves the structured metadata and falls back to the exhausted window's reset time. Tests: turn/image_generation_test.go TestImageGenerationUsageLimitFailureDetectionLikeRust, TestImageGenerationErrorOutputCarriesUsageLimitFailure."
    ]
   },
   {
