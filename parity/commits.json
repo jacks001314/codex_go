@@ -6360,9 +6360,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "Partial symbol coverage 4/13; needs review: FramedProvisioningMessage, PROVISIONING_PROTOCOL_VERSION, ProvisioningMessage, SANDBOX_PROVISIONING_PIPE_NAME, SandboxProvisioningRequest"
+    "Round 1190 (audit): N/A by architecture - the commit adds the windows-sandbox-service provisioning wire format (provisioning_protocol.rs: ProvisioningMessage, FramedProvisioningMessage, PROVISIONING_PROTOCOL_VERSION, SANDBOX_PROVISIONING_PIPE_NAME, and the readiness predicate sandbox_setup_is_complete_with_settings) plus shared framed-JSON, sandbox-group and SID helpers. Go has no provisioning service or client: rg finds no provisioning protocol type, pipe name, installation record or service handle, and the only windows_sandbox_service occurrence is the under-development feature flag in features/features.go. The elevated path keeps its own ipc_framed/pipe plumbing and marker comparison, so these symbols have no consumer and no behavior to port."
    ]
   },
   {
@@ -6372,9 +6372,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "Partial symbol coverage 3/7; needs review: WindowsSandboxProvisioningOutcome, WindowsSandboxProxyListeners, provision_windows_sandbox_via_service, wait_for_complete_frame"
+    "Round 1190 (audit): N/A by architecture - adds the authenticated provisioning client in provisioning_client.rs: named-pipe server verification against the running CodexSandboxService process, versioned request/response exchange, ERROR_PIPE_BUSY/timeout/disconnect classification, and construction of WindowsSandboxProvisioningSettings and WindowsSandboxProxyListeners from the permission profile and proxy environment. Go has no Windows sandbox service, service pipe, or service request/response types and always provisions through the direct elevated helper, so neither the client nor its proxy-listener classification has a carrier."
    ]
   },
   {
@@ -6384,9 +6384,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "Partial symbol coverage 3/7; needs review: RunMode, log_error, log_information, run_foreground"
+    "Round 1190 (audit): N/A by architecture - creates the codex-rs/windows-sandbox-service crate (ipc.rs, service.rs with SCM service lifecycle, main.rs, main_tests.rs, BUILD.bazel/Cargo.toml entries). Go has no machine-wide Windows sandbox service binary, service control manager integration, or service-hosted IPC; parity/rust_inventory_test.go and rust_snapshot_test.go only name the crate. Go setup remains the per-user elevated helper."
    ]
   },
   {
@@ -7804,9 +7804,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "blocked_precondition",
    "evidence": [
-    "Partial symbol coverage 1/3; needs review: MxcCommand, is_available"
+    "Round 1190 (audit): blocked on native Windows MXC SDK integration, consistent with #55378. The commit adds the codex-mxc-sandbox crate whose native.rs launches requests through Microsoft MXC crates (wxc_common::sandbox_process::SandboxBackend, appcontainer_common::base_container_runner::BaseContainerRunner, learning_mode_windows::SecurityEnvironmentApi) and pins tracelogging for Windows GNU linking. Go sandbox/mxc has no native binding: run_windows.go validates the launcher request and then fails closed with NativeUnavailableMessage = \"native MXC is unavailable on this executor\", and execserver reports the windowsMxc capability false (execserver/windows_mxc_test.go). Precondition: a Go binding or FFI to MXC's native launcher (or an equivalent supported native sandbox SDK)."
    ]
   },
   {
@@ -20176,9 +20176,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1190 (audit): N/A by architecture - splits registered-runner receipt authorization in app_package.rs into distinct owner, Codex home, removal-in-progress and incomplete-setup errors (authorize_runner_receipt, including \"registered Core setup is not complete for the installed app; retry sandbox setup\") and adds operation/account context to service provisioning failures. Go has no installation record, registered runner receipt, execution alias or service provisioning path: registered mode is validated only by OS package identity and rejects helper-owned provisioning (\"registered Core requires service-owned provisioning\"), so these messages and precedence checks have nothing to clarify."
    ]
   },
   {
@@ -21121,9 +21121,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1190 (audit): N/A by architecture - the app-server windows_sandbox_processor now lets a PermissionProfile::Disabled (danger-full-access) setup request reach provision_windows_sandbox_via_service when registered Core is requested, while legacy full access still skips service provisioning and uses the shared setup path. Go has no service-provisioning branch: appserver/windows_sandbox_runtime.go resolves permissions and runs RunElevatedSetup plus RunSetupRefreshForRequest, and registered Core rejects helper-owned provisioning with \"registered Core requires service-owned provisioning\". There is no service call whose permission validation this commit could relax."
    ]
   },
   {
@@ -22274,9 +22274,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1190 (audit): N/A by architecture - adds anyhow::Context labels around managed runtime package registration inside codex-rs/windows-sandbox-service/src/registered_runtime.rs (start, finish, verify registration, grant metadata permissions, persist completed registration). Go has no service-side runtime registration, MSIX runtime package deployment, or installation record, so no analogous error path exists to annotate."
    ]
   },
   {
@@ -22810,9 +22810,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1190 (audit): N/A by architecture - provisioning_client polls service status for up to five seconds while SERVICE_START_PENDING and rechecks it when the pipe disappears during connect, also rejecting requests whose deadline expired during server authentication. Go has no provisioning service pipe or service handle; automatic setup never waits on a service and goes straight to the elevated helper, so there is no startup wait to bound."
    ]
   },
   {
@@ -23051,9 +23051,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1190 (audit): N/A by architecture - replaces free-form parser text in the service policy-rejection event with fixed stage labels and typed cloud/HTTP/io/win32 codes (policy_rejection_diagnostic in codex-rs/windows-sandbox-service/src/ipc.rs). Go runs no codex-windows-sandbox-service policy events and has no machine-policy validator in the setup path, so there is no persistent event text to sanitize."
    ]
   },
   {
