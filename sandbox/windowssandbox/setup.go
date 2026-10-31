@@ -71,7 +71,10 @@ func (m *SetupMarker) RequestMismatchReason(networkIdentity SandboxNetworkIdenti
 	if m == nil || !networkIdentity.UsesOfflineIdentity() {
 		return ""
 	}
-	if equalUint16s(m.ProxyPorts, desired.ProxyPorts) && m.AllowLocalBinding == desired.AllowLocalBinding {
+	// Rust #43930: local-binding mode has no port-specific loopback rules, so
+	// changing proxy listeners does not require a firewall update while that
+	// mode stays enabled.
+	if m.AllowLocalBinding == desired.AllowLocalBinding && (m.AllowLocalBinding || equalUint16s(m.ProxyPorts, desired.ProxyPorts)) {
 		return ""
 	}
 	return "offline firewall settings changed (stored_ports=" + fmtUint16s(m.ProxyPorts) +

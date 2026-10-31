@@ -72,6 +72,40 @@ func TestSetupMarkerRequestMismatchReason(t *testing.T) {
 	}
 }
 
+// TestSetupMarkerRequestMismatchIgnoresPortsWhenLocalBindingEnabledLikeRust
+// ports Rust #43930: while allow-local-binding stays on, changing the proxy
+// ports must not force a full elevated setup, because local-binding mode has no
+// port-specific loopback rules.
+func TestSetupMarkerRequestMismatchIgnoresPortsWhenLocalBindingEnabledLikeRust(t *testing.T) {
+	cases := []struct {
+		name           string
+		storedBinding  bool
+		desiredBinding bool
+		storedPorts    []uint16
+		desiredPorts   []uint16
+		wantMismatch   bool
+	}{
+		{"ports change with local binding", true, true, []uint16{3128}, []uint16{8080}, false},
+		{"ports cleared with local binding", true, true, []uint16{3128}, nil, false},
+		{"binding enabled newly", false, true, []uint16{3128}, []uint16{3128}, true},
+		{"binding disabled", true, false, []uint16{3128}, []uint16{3128}, true},
+		{"ports change without local binding", false, false, []uint16{3128}, []uint16{8080}, true},
+		{"ports match without local binding", false, false, []uint16{3128}, []uint16{3128}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			marker := &SetupMarker{Version: SetupVersion, ProxyPorts: tc.storedPorts, AllowLocalBinding: tc.storedBinding}
+			reason := marker.RequestMismatchReason(SandboxNetworkIdentityOffline, OfflineProxySettings{
+				ProxyPorts:        tc.desiredPorts,
+				AllowLocalBinding: tc.desiredBinding,
+			})
+			if tc.wantMismatch != (reason != "") {
+				t.Fatalf("reason = %q, wantMismatch = %t", reason, tc.wantMismatch)
+			}
+		})
+	}
+}
+
 func TestProfileReadRootsExcludesConfiguredTopLevelEntries(t *testing.T) {
 	userProfile := t.TempDir()
 	for _, name := range []string{"Documents", ".ssh", ".AWS", "Desktop"} {

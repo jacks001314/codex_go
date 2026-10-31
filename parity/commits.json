@@ -9992,9 +9992,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "sandbox/windowssandbox/setup.go SetupMarker.RequestMismatchReason now mirrors Rust #43930: when allow-local-binding is unchanged and enabled, proxy port changes alone no longer force a full elevated setup, because local-binding mode has no port-specific loopback rules (Rust setup.rs request_mismatch_reason).",
+    "Binding transitions still force full setup: (false->true) and (true->false) return the offline-firewall mismatch reason, and port changes without local binding still do too.",
+    "Tests: TestSetupMarkerRequestMismatchIgnoresPortsWhenLocalBindingEnabledLikeRust covers the Rust #43930 table (ports change/cleared with binding, binding enabled/disabled, ports without binding) and the pre-existing TestSetupMarkerRequestMismatchReason still passes."
    ]
   },
   {
