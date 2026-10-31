@@ -353,7 +353,6 @@ func tomlRunText(source string, start, end int) string {
 	return source[start-1 : end]
 }
 
-// tomlValueText returns everything after the first `=` of the line.
 // tomlRunAfterQuote reports whether the run starting at start follows a closing
 // quote, which makes the junk unsupported rather than an unquoted value.
 func tomlRunAfterQuote(source string, start int) bool {
@@ -438,13 +437,6 @@ func tomlOpenInlineTable(source string, column int) bool {
 // rejects before it tries to parse a number.
 func tomlRedundantSign(prefix string) bool {
 	return len(prefix) == 2 && (prefix[0] == '+' || prefix[0] == '-') && (prefix[1] == '+' || prefix[1] == '-')
-}
-
-func tomlValueText(source string) string {
-	if equals := strings.IndexByte(source, '='); equals >= 0 {
-		return source[equals+1:]
-	}
-	return ""
 }
 
 func tomlLooksLikeDatetime(run string) bool {
