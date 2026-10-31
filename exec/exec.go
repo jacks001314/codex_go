@@ -2281,16 +2281,24 @@ func (r *Runner) promptForRequest(req *Request, cfg *config.Config, stdin io.Rea
 		return prompt, nil, nil
 	}
 	if req.Exec.Subcommand == "resume" {
-		record, err := r.resolveExecResumeRecord(req)
+		record, err := r.resolveExecResumeRecordForMethod(req, execThreadResumeMethod)
 		if err != nil {
-			return "", nil, err
+			if !errors.Is(err, errExecResumeNoTarget) {
+				return "", nil, err
+			}
+			// Rust's resolve_resume_thread_id returns None for an unknown name or
+			// an empty --last lookup, and exec then starts a fresh thread.
+			record = nil
 		}
-		if req.Exec.Resume.Prompt == "" && (len(req.Input) > 0 || len(req.AdditionalInputItems) > 0) {
+		if record != nil && req.Exec.Resume.Prompt == "" && (len(req.Input) > 0 || len(req.AdditionalInputItems) > 0) {
 			return "", &execResumeContext{Record: record}, nil
 		}
 		resumePrompt, err := resolveExecResumePrompt(req.Exec.Resume.Prompt, stdin, stderr)
 		if err != nil {
 			return "", nil, err
+		}
+		if record == nil {
+			return resumePrompt, nil, nil
 		}
 		return resumePrompt, &execResumeContext{Record: record, UserPrompt: resumePrompt}, nil
 	}
@@ -2329,8 +2337,11 @@ func (r *Runner) promptForRequest(req *Request, cfg *config.Config, stdin io.Rea
 			SessionID: strings.TrimSpace(req.Exec.Fork.SessionID),
 			All:       true,
 		}
-		source, err := r.resolveExecResumeRecord(&resumeReq)
+		source, err := r.resolveExecResumeRecordForMethod(&resumeReq, execThreadForkMethod)
 		if err != nil {
+			if errors.Is(err, errExecResumeNoTarget) {
+				return "", nil, fmt.Errorf("Session not found: %s", strings.TrimSpace(req.Exec.Fork.SessionID))
+			}
 			return "", nil, err
 		}
 		if source.Archived {
@@ -5939,7 +5950,37 @@ func execLastUserCompactItems(items []compact.Item, count int) []compact.Item {
 	return out
 }
 
+// execThreadResumeMethod and execThreadForkMethod are the app-server methods
+// Rust names in its resume/fork error messages.
+const (
+	execThreadResumeMethod = "thread/resume"
+	execThreadForkMethod   = "thread/fork"
+	execInvalidRequestCode = -32600
+)
+
+// errExecResumeNoTarget marks Rust's resolve_resume_thread_id None result: an
+// unknown session name or an empty --last lookup makes exec start a new thread
+// instead of failing, while fork turns it into "Session not found".
+var errExecResumeNoTarget = errors.New("exec resume target not found")
+
+// execAppServerThreadError mirrors the in-process app-server layering Rust
+// prints when exec asks for a thread whose rollout is gone: the typed request
+// layer reports "<method> failed: <message> (code -32600)" and exec adds its own
+// "<method>: " context.
+func execAppServerThreadError(method string, threadID session.ThreadID) error {
+	return fmt.Errorf("%s: %s failed: no rollout found for thread id %s (code %d)",
+		method, method, threadID, execInvalidRequestCode)
+}
+
 func (r *Runner) resolveExecResumeRecord(req *Request) (*session.Record, error) {
+	method := execThreadResumeMethod
+	if req != nil && req.Exec.Subcommand == "fork" {
+		method = execThreadForkMethod
+	}
+	return r.resolveExecResumeRecordForMethod(req, method)
+}
+
+func (r *Runner) resolveExecResumeRecordForMethod(req *Request, method string) (*session.Record, error) {
 	if r == nil {
 		return nil, errors.New("exec runner is nil")
 	}
@@ -5956,7 +5997,7 @@ func (r *Runner) resolveExecResumeRecord(req *Request) (*session.Record, error) 
 			imported, importErr := latestExecResumeRolloutRecord(r.CodexHome, resume, requestCWD(req))
 			if importErr != nil {
 				if errors.Is(importErr, session.ErrThreadNotFound) {
-					return nil, err
+					return nil, errExecResumeNoTarget
 				}
 				return nil, importErr
 			}
@@ -5975,7 +6016,7 @@ func (r *Runner) resolveExecResumeRecord(req *Request) (*session.Record, error) 
 			imported, importErr := namedExecResumeRolloutRecord(r.CodexHome, resume, target, requestCWD(req))
 			if importErr != nil {
 				if errors.Is(importErr, session.ErrThreadNotFound) {
-					return nil, err
+					return nil, errExecResumeNoTarget
 				}
 				return nil, importErr
 			}
@@ -6001,7 +6042,7 @@ func (r *Runner) resolveExecResumeRecord(req *Request) (*session.Record, error) 
 		path, pathErr = rollout.FindThreadPath(r.CodexHome, string(threadID), true)
 	}
 	if pathErr != nil {
-		return nil, err
+		return nil, execAppServerThreadError(method, threadID)
 	}
 	imported, importErr := rollout.RecordFromPathResolved(r.CodexHome, path, strings.Contains(filepath.ToSlash(path), "/archived_sessions/"))
 	if importErr != nil {
