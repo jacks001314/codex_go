@@ -222,7 +222,7 @@ func TestFeedbackUploadIncludesGuardianFailuresLikeRust(t *testing.T) {
 	}
 	recordGuardianReviewFailure(threadID, []byte(`{"status":"denied","action":"{\"tool\":\"exec_command\"}"}`))
 	snapshot := &FeedbackSnapshot{Diagnostics: NewFeedbackDiagnostics(nil)}
-	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store), Feedback: snapshot})
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store), Feedback: snapshot, FeedbackUpload: newFeedbackTestTransport(t)})
 	response := router.Handle(requestWithParams(t, IntID(1), MethodFeedbackUpload, FeedbackUploadParams{
 		Classification: "bug",
 		ThreadID:       stringPointerAppserver(threadID),
@@ -240,7 +240,7 @@ func TestFeedbackUploadIncludesGuardianFailuresLikeRust(t *testing.T) {
 	}
 
 	plain := &FeedbackSnapshot{Diagnostics: NewFeedbackDiagnostics(nil)}
-	plainRouter := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store), Feedback: plain})
+	plainRouter := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store), Feedback: plain, FeedbackUpload: newFeedbackTestTransport(t)})
 	response = plainRouter.Handle(requestWithParams(t, IntID(2), MethodFeedbackUpload, FeedbackUploadParams{
 		Classification: "bug",
 		ThreadID:       stringPointerAppserver(threadID),

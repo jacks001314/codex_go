@@ -60,6 +60,8 @@ func TestFeedbackUploadFallsBackToMemoryLogsWhenSQLiteWriteFailsLikeRust(t *test
 		StateRuntime: stateRuntime,
 		LogDBHandler: logHandler,
 		Feedback:     snapshot,
+		// The fixture only inspects the prepared report; keep the upload local.
+		FeedbackUpload: newFeedbackTestTransport(t),
 	})
 	response := router.Handle(requestWithParams(t, IntID(1), MethodFeedbackUpload, FeedbackUploadParams{
 		Classification: "bug",

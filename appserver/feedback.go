@@ -129,6 +129,12 @@ type feedbackReportExceptionValue struct {
 // otherwise the display classification and thread id form the title, and a
 // reason becomes the exception value.
 func (s *FeedbackSnapshot) FeedbackReport(classification string, reason *string, clientTags map[string]string, sessionSource *string) ([]byte, error) {
+	return json.Marshal(s.feedbackReportEvent(classification, reason, clientTags, sessionSource, strings.ReplaceAll(uuid.NewString(), "-", "")))
+}
+
+// feedbackReportEvent builds the report event. A caller that must reuse a
+// stable id (the Sentry envelope's event id) passes it instead of a fresh UUID.
+func (s *FeedbackSnapshot) feedbackReportEvent(classification string, reason *string, clientTags map[string]string, sessionSource *string, eventID string) *feedbackReportEvent {
 	threadID := ""
 	if s != nil {
 		threadID = s.ThreadID
@@ -146,8 +152,8 @@ func (s *FeedbackSnapshot) FeedbackReport(classification string, reason *string,
 	if customTitle != "" {
 		title = customTitle
 	}
-	event := feedbackReportEvent{
-		EventID:   strings.ReplaceAll(uuid.NewString(), "-", ""),
+	event := &feedbackReportEvent{
+		EventID:   eventID,
 		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
 		Level:     level,
 		Message:   title,
@@ -160,7 +166,7 @@ func (s *FeedbackSnapshot) FeedbackReport(classification string, reason *string,
 	if reason != nil {
 		event.Exception = &feedbackReportException{Values: []feedbackReportExceptionValue{{Type: title, Value: *reason}}}
 	}
-	return json.Marshal(&event)
+	return event
 }
 
 // SaveFeedback writes the report, selected attachments, and a manifest to path

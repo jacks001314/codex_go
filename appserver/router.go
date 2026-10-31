@@ -5019,6 +5019,10 @@ func errorCode(err error) int {
 	if errors.As(err, &mcpRemoteErr) {
 		return int(mcpRemoteErr.Code)
 	}
+	var codedErr *jsonRPCCodedError
+	if errors.As(err, &codedErr) {
+		return codedErr.code
+	}
 	switch {
 	case errors.Is(err, ErrUnknownMethod):
 		return JSONRPCMethodNotFoundErrorCode

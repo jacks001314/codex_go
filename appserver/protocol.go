@@ -272,6 +272,9 @@ const (
 	JSONRPCMethodNotFoundErrorCode = -32601
 	JSONRPCInvalidParamsErrorCode  = -32602
 	JSONRPCInternalErrorCode       = -32603
+	// JSONRPCOverloadedErrorCode is Rust's OVERLOADED_ERROR_CODE (-32001), used
+	// when a bounded server-side worker pool is exhausted.
+	JSONRPCOverloadedErrorCode = -32001
 )
 
 var (
@@ -286,6 +289,24 @@ var (
 	// (core/src/session/rollout_budget.rs).
 	ErrSessionBudgetExceeded = errors.New("session budget exceeded")
 )
+
+// jsonRPCCodedError carries an explicit JSON-RPC error code so a handler can
+// report a protocol-specific code such as overloaded (-32001).
+type jsonRPCCodedError struct {
+	code    int
+	message string
+}
+
+func newJSONRPCCodedError(code int, message string) *jsonRPCCodedError {
+	return &jsonRPCCodedError{code: code, message: message}
+}
+
+func (e *jsonRPCCodedError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return e.message
+}
 
 type jsonRPCInvalidRequestError struct {
 	message string

@@ -72,15 +72,18 @@ type RuntimeServices struct {
 	// ConfiguredLogDir mirrors RuntimeRouterOptions.ConfiguredLogDir so the
 	// feedback collector can decide whether the legacy logs database is still
 	// the fallback source (Rust #55978).
-	ConfiguredLogDir    string
-	ThreadExtras        *ThreadExtraService
-	Realtime            *realtime.Manager
-	FS                  *FSService
-	Remote              *remotecontrol.Manager
-	Environment         *EnvironmentManager
-	Windows             *sandbox.WindowsManager
-	WindowsSetupRunner  WindowsSandboxSetupRunner
-	Feedback            *FeedbackSnapshot
+	ConfiguredLogDir   string
+	ThreadExtras       *ThreadExtraService
+	Realtime           *realtime.Manager
+	FS                 *FSService
+	Remote             *remotecontrol.Manager
+	Environment        *EnvironmentManager
+	Windows            *sandbox.WindowsManager
+	WindowsSetupRunner WindowsSandboxSetupRunner
+	Feedback           *FeedbackSnapshot
+	// FeedbackUpload is the Sentry transport behind feedback/upload. Nil uses
+	// the bundled DSN with the router's policy-aware HTTP client.
+	FeedbackUpload      *FeedbackTransport
 	Config              *config.ConfigService
 	Account             *auth.AccountManager
 	AccountOAuthOptions *auth.OAuthOptions
@@ -317,6 +320,10 @@ type RuntimeRouter struct {
 	threadUnloadDelayMu sync.Mutex
 	threadUnloadDelays  map[string]time.Duration
 	servicesMu          sync.Mutex
+	// feedbackUploads bounds concurrent feedback uploads to Rust #42096's three
+	// permits. A permit stays held until the upload itself finishes, not until the
+	// RPC waiter is cancelled.
+	feedbackUploads chan struct{}
 	// userVerificationWorkMu guards userVerificationWork, Rust #43568's single
 	// native worker slot. The worker goroutine releases it, so an operation that
 	// timed out keeps the slot busy until the provider actually returns.
@@ -911,6 +918,7 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 		threads:                    threads,
 		turnsMu:                    &threads.turnsMu,
 		emaState:                   mcp.NewEMAState(),
+		feedbackUploads:            make(chan struct{}, 3),
 		active:                     threads.active,
 		diffs:                      threads.diffs,
 		ephemeralMu:                &threads.ephemeralMu,
@@ -13374,6 +13382,11 @@ func (r *RuntimeRouter) handleWindowsSandboxSetupStart(request *Request) (*sandb
 	return response, nil
 }
 
+// handleFeedbackUpload submits a diagnostic report to Sentry (Rust
+// feedback_processor::feedback_upload). The report event is accepted first, then
+// each whole attachment is uploaded inside the same five-minute budget; any
+// attachment failure surfaces as a partial-delivery error. Three uploads may run
+// at once, and a fourth request is rejected as overloaded (-32001).
 func (r *RuntimeRouter) handleFeedbackUpload(request *Request) (*FeedbackUploadResponse, error) {
 	var params FeedbackUploadParams
 	if err := request.DecodeParams(&params); err != nil {
@@ -13382,6 +13395,17 @@ func (r *RuntimeRouter) handleFeedbackUpload(request *Request) (*FeedbackUploadR
 	if err := params.Validate(); err != nil {
 		return nil, err
 	}
+	if !r.feedbackUploadEnabled() {
+		return nil, fmt.Errorf("%w: sending feedback is disabled by configuration", ErrInvalidFeedbackRequest)
+	}
+	release, ok := r.acquireFeedbackUpload()
+	if !ok {
+		return nil, newJSONRPCCodedError(
+			JSONRPCOverloadedErrorCode,
+			"Three feedback uploads are already in progress; try again after one finishes",
+		)
+	}
+	defer release()
 	options, threadID, promptHash, err := r.prepareFeedbackResponse(params, request.ID.String(), false)
 	if err != nil {
 		return nil, err
@@ -13389,8 +13413,64 @@ func (r *RuntimeRouter) handleFeedbackUpload(request *Request) (*FeedbackUploadR
 	snapshot := r.requireFeedback()
 	snapshot.ThreadID = threadID
 	r.refreshFeedbackSnapshotLogs(snapshot)
-	snapshot.PrepareUpload(options)
+	if err := snapshot.UploadFeedback(context.Background(), options, r.feedbackTransport()); err != nil {
+		return nil, fmt.Errorf("failed to upload feedback: %w", err)
+	}
 	return &FeedbackUploadResponse{ThreadID: threadID, PromptHash: promptHash}, nil
+}
+
+// acquireFeedbackUpload takes one of the three upload permits without blocking.
+func (r *RuntimeRouter) acquireFeedbackUpload() (func(), bool) {
+	if r == nil || r.feedbackUploads == nil {
+		return func() {}, true
+	}
+	select {
+	case r.feedbackUploads <- struct{}{}:
+		return func() { <-r.feedbackUploads }, true
+	default:
+		return nil, false
+	}
+}
+
+// feedbackUploadEnabled resolves Rust's effective `feedback_enabled`: the
+// configured `feedback.enabled` value wins, and feedback stays enabled by
+// default. Managed requirements replace the configured value during config load.
+func (r *RuntimeRouter) feedbackUploadEnabled() bool {
+	if r == nil || r.services.Config == nil {
+		return true
+	}
+	read, err := r.services.Config.Read(&config.ConfigReadParams{})
+	if err != nil || read == nil {
+		return true
+	}
+	feedback, ok := read.Config["feedback"].(map[string]any)
+	if !ok {
+		return true
+	}
+	enabled, ok := feedback["enabled"].(bool)
+	if !ok {
+		return true
+	}
+	return enabled
+}
+
+// feedbackTransport returns the upload transport, defaulting to the bundled
+// Sentry DSN reached through the router's policy-aware HTTP client.
+func (r *RuntimeRouter) feedbackTransport() *FeedbackTransport {
+	if r != nil && r.services.FeedbackUpload != nil {
+		return r.services.FeedbackUpload
+	}
+	var cfg *config.Config
+	if r != nil && r.services.Config != nil {
+		if read, err := r.services.Config.Read(&config.ConfigReadParams{}); err == nil && read != nil {
+			cfg = &config.Config{Values: read.Config}
+		}
+	}
+	var client model.HTTPDoer
+	if r != nil {
+		client = r.httpClientForConfig(cfg)
+	}
+	return &FeedbackTransport{HTTP: client, DSN: FeedbackSentryDSN}
 }
 
 // handleFeedbackSave mirrors Rust's local diagnostic ZIP export (Rust #55940).
@@ -20668,7 +20748,10 @@ func isRealtimeMethod(method Method) bool {
 
 func runtimeErrorCode(err error) int {
 	var mcpRemoteErr *mcp.MCPRemoteError
+	var codedErr *jsonRPCCodedError
 	switch {
+	case errors.As(err, &codedErr) && codedErr != nil:
+		return codedErr.code
 	case errors.Is(err, ErrUnknownMethod):
 		return JSONRPCMethodNotFoundErrorCode
 	case errors.As(err, &mcpRemoteErr) && mcpRemoteErr != nil && mcpRemoteErr.Code != 0:

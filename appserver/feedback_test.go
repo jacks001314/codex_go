@@ -294,7 +294,7 @@ func TestFeedbackUploadReturnsRolloutPromptHashLikeRust(t *testing.T) {
 	if err := os.WriteFile(threadRouter.threadRolloutPath(record), []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: threadRouter, Feedback: &FeedbackSnapshot{Diagnostics: NewFeedbackDiagnostics(nil)}})
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: threadRouter, Feedback: &FeedbackSnapshot{Diagnostics: NewFeedbackDiagnostics(nil)}, FeedbackUpload: newFeedbackTestTransport(t)})
 	response := router.Handle(requestWithParams(t, IntID(1), MethodFeedbackUpload, FeedbackUploadParams{
 		Classification: "bug", ThreadID: stringPointerAppserver("thread-hash"),
 	}))
