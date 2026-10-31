@@ -3126,7 +3126,7 @@
    "status": "complete",
    "evidence": [
     "Round 115 (lead): verified complete - #40989 only widened Rust visibility (resolve_permission_profile / compile_permission_profile pub(crate) -> pub). Go already exposes the equivalent core API: config.Config.ResolveSandboxPermissionProfile and ResolveSandboxPermissionProfileWithWorkspaceRoots compile named profiles into runtime filesystem/network policies, PermissionProfileSummaries lists them, and ResolvePermissionProfileSelection applies requirement defaults. Covered by config/permissions_test.go (TestResolveSandboxPermissionProfileCompilesCustomRuntimeJSON, ...WithWorkspaceRootsAnchorsProjectRootsLikeRust) and config/permissions_test.go/permission_profile_requirements_test.go selection cases; go test ./config -run 'ResolveSandboxPermissionProfile|ResolvePermissionProfileSelection' green.",
-    "Partial symbol coverage 1/2; needs review: compile_permission_profile"
+    "Rust's compile_permission_profile is the private helper behind Config::resolve_permission_profile; Go compiles the same profiles in config.Config.ResolveSandboxPermissionProfile/ResolveSandboxPermissionProfileWithWorkspaceRoots, so the symbol has no separate Go twin."
    ]
   },
   {
@@ -6484,7 +6484,7 @@
    "status": "complete",
    "evidence": [
     "Round 115 (lead): verified complete (equivalent mechanism) - appserverdaemon/daemon_shutdown_watch.go polls CODEX_DAEMON_SHUTDOWN_FILE with a bounded u32-PID read and removes the request only when its own PID matches, and update_loop.go wires the watcher for the detached updater; pid_shutdown_windows.go requests a graceful stop for the managed app-server over the user-only /daemon/shutdown control socket and writes the plain-PID file for the updater, so Windows daemons drain instead of being force-killed. Rust uses the file for the app-server; Go's protected control socket is the equivalent user-only channel (pinned by the 'app-server must not write a shutdown file' assertion). Tests: daemon_shutdown_watch_windows_test.go and TestRequestGracefulPIDShutdownBranchesLikeRust; go test ./appserverdaemon green.",
-    "Partial symbol coverage 1/2; needs review: daemon_shutdown_signal"
+    "Rust's daemon_shutdown_signal is the Windows-only signal module; Go's equivalent is appserverdaemon/daemon_shutdown_watch.go plus the user-only /daemon/shutdown control socket requested by pid_shutdown_windows.go."
    ]
   },
   {
@@ -6718,7 +6718,7 @@
    "status": "complete",
    "evidence": [
     "Round 115 (lead): execpolicy.InjectSessionEnv sets CODEX_VERSION together with the session id after the shell environment policy (removing stale/case-variant values), appserver/thread_shell_command uses it with appServerVersion(), and turn.MCPTurnMetadataFromResponsesMetadata now treats codex_version as reserved: the harness version (appServerVersion in appserver, doctor.Version in exec) replaces any client value and an empty version removes it. The shell-snapshot half was already present (tool/shell_snapshot.go restores CODEX_VERSION). Tests: execpolicy/inject_session_env_test.go, turn TestMCPTurnMetadataFromResponsesMetadataLikeRust (9.9.9 overrides 1.2.3; empty version clears), appserver metadata-provider assertion. RC: keeping the client value fails the turn test; go build ./... + ./turn ./execpolicy green.",
-    "Partial symbol coverage 1/2; needs review: inject_session_env"
+    "Rust's inject_session_env is the core helper; Go's execpolicy.InjectSessionEnv writes the same CODEX_VERSION/CODEX_SESSION_ID pair for shell children."
    ]
   },
   {
@@ -11210,7 +11210,11 @@
    ],
    "status": "complete",
    "evidence": [
-    "Partial symbol coverage 3/7; needs review: AddThreadAttachmentParams, ListThreadAttachmentsParams, RemoveThreadAttachmentParams, with_state_db"
+    "Ports the attachment operations with lifecycle coordination: appserver/thread_attachments_runtime.go serves thread/attachment/add|list|ownerList|remove, validates params, keeps add idempotent on (attachmentType, identityKey) with an Existing outcome, bounds the per-thread identity count, paginates by (createdAt, id) and returns the Rust invalid-request messages for bad cursors.",
+    "Attachment mutations reserve the same per-thread lifecycle writer used by archive, delete and fork (reserveThreadAttachmentLifecycle -> acquireLifecycleWriters), so an add or remove cannot land after the thread was deleted or while another lifecycle operation owns it (Rust #44350 local/thread_attachments.rs).",
+    "Deletion and fork stay coordinated: attachments live on the thread record, so deleting the thread removes them atomically, and forks copy the list through setThreadAttachmentsOnRecord before publishing the new record (thread_attachments_fork_test.go).",
+    "Owner lookup honours the archive filter, orders by thread id and uses a keyset cursor, mirroring the state-backed list_thread_attachment_threads query; the store-backed difference is that Go scans thread records instead of a SQL attachment table.",
+    "Tests: go test ./appserver -run 'ThreadAttachment' -count=1 (lifecycle reservation, owner list with archived filter, list pagination, fork copy)."
    ]
   },
   {
@@ -16474,7 +16478,7 @@
    "status": "complete",
    "evidence": [
     "Round 115 (lead): verified complete - plugin/catalog.go implements the shared discovery types (PluginCatalog/PluginCatalogEntry/PluginIdentity/PluginSourceLocation/PluginListQuery), the PluginCatalogProvider batch interface, and ListPluginCatalog with Rust's empty-default for providers without a batch listing and error propagation; PluginCatalogEntry.String omits MCP declaration values (only authored names). Identity is source-independent (remote plugin ID, else local name@marketplace). Go supplies MCP resource access through service wiring instead of a query field. Tests: plugin/catalog_test.go (redaction, empty default, batch provider, error propagation, and the new stable-identity case); go test ./plugin green.",
-    "Partial symbol coverage 7/9; needs review: PluginProviderError, PluginProviderFuture"
+    "Rust's PluginProviderError/PluginProviderFuture model async provider failures; Go's PluginCatalogProvider returns (catalog, error) synchronously, so neither symbol has a Go twin."
    ]
   },
   {
@@ -17998,7 +18002,10 @@
    ],
    "status": "complete",
    "evidence": [
-    "Partial symbol coverage 13/17; needs review: MAX_MCP_ATTRIBUTION_BYTES, MCP_ATTRIBUTION_CLIENT_METADATA_KEY, persist_rollout_items, to_json_string_bounded"
+    "Cumulative attribution lives in turn/mcp_attribution.go (McpAttributionRecorder): sources are recorded per (connector, plugin, server, tool) identity, the first observing turn wins, invalid sources and checkpoints mark the Rust error reasons, and the recorder keeps revision/persisted-revision bookkeeping plus history-missing-checkpoint detection.",
+    "Checkpoints are persisted into response-item harness metadata and restored from rollout history and compaction replacements: appserver/mcp_attribution_persist.go writes the checkpoint into the first durable item of each batch, repeats it at each user-turn boundary for recent-turn forks, and acknowledges the revision only after persistence.",
+    "Request metadata: model/responses_agent.go attaches the document under `mcp_attribution` (McpAttributionClientMetadataKey) with the 16 KiB bound (MaxMcpAttributionBytes) and the payload_too_large/serialization_failed fallbacks, reserves the key from client-supplied metadata, keeps it body-only, and only for allowed OpenAI HTTPS destinations in both HTTP and WebSocket requests.",
+    "Tests: go test ./turn -run 'McpAttribution' -count=1; go test ./appserver -run 'McpAttribution' -count=1; go test ./model -run 'TestMCPAttribution' -count=1; go test ./retainedctx -count=1."
    ]
   },
   {
@@ -20939,7 +20946,7 @@
    "status": "complete",
    "evidence": [
     "Round 115 (lead): config/config.go now normalizes the whole overlay before merging (normalizeConfigKeyAliasesDeep) and normalizes base aliases only in tables the overlay reaches, mirroring Rust #47903; inline src-side normalization during the merge was removed and the overlay is deep-cloned so callers are not mutated. Tests: config/merge_alias_overlay_test.go (sparse agents overlay normalizes agents.max_threads while memories.no_memories_if_mcp_or_web_search stays raw; inserted subtree aliases are normalized recursively). RC: merging the raw overlay fails the inserted-subtree test; go test ./config and go build ./... green.",
-    "Partial symbol coverage 1/2; needs review: normalize_base_key_aliases"
+    "Rust's normalize_base_key_aliases is the base-side half of the alias normalization; Go folds both halves into normalizeConfigKeyAliasesDeep plus the overlay-only base pass in the config merge."
    ]
   },
   {
@@ -24072,7 +24079,7 @@
    "status": "complete",
    "evidence": [
     "Round 115 (lead): verified complete - appserver/application_network.go keeps the effective application policy and the separate local endpoint-restricted bootstrap policy (bootstrapAuthHTTPClient mirrors bind_bootstrap_auth), and noteAuthChanged invalidates the account-owned policy on an owner/workspace change so previous content clients and permits revoke while the local bootstrap policy stays usable. appserver/application_network_auth_test.go covers initial login, same-owner refresh, owner change revocation, bootstrap discovery survival, local denied-host enforcement, and (new) sign-out: account content acquire returns ErrNetworkPolicyRevoked while bootstrap discovery still works. go test ./appserver -run TestRuntimeRouterAuthOwnerChangeRevokesApplicationNetworkPolicyLikeRust green.",
-    "Partial symbol coverage 1/2; needs review: with_application_network_policy"
+    "Rust's with_application_network_policy swaps the cached policy handle; Go installs the same policy under appserver/application_network.go's lock (noteAuthChanged/applyApplicationNetworkPolicy), so the builder has no direct twin."
    ]
   },
   {
@@ -24378,7 +24385,7 @@
    "status": "complete",
    "evidence": [
     "Round 115 (lead): verified complete - telemetry/session_telemetry_skill.go emits the codex.skill_invocation log record with turn/skill/scope/plugin/invocation type and no contents, paths or payloads; appserver.trackSkillInvocationEvent emits it for explicit injection and for implicit detection, including successful skills.read resource reads (implicitSkillInvocationEventProvider defers resource reads until the main resource is read), independent of the analytics exporter. Tests: telemetry/session_telemetry_skill_test.go and appserver implicit/explicit/resource-backed skill invocation cases; go test ./telemetry ./appserver -run 'SkillInvocation|ImplicitSkill' green.",
-    "Partial symbol coverage 2/4; needs review: SkillInvocationType, with_user_id"
+    "Rust's SkillInvocationType/with_user_id are telemetry builder helpers; Go emits the same codex.skill_invocation record from telemetry/session_telemetry_skill.go with explicit turn/skill/scope/plugin fields and the session user id."
    ]
   },
   {
@@ -28129,7 +28136,7 @@
    "status": "complete",
    "evidence": [
     "Round 115 (lead): verified complete - app/interactive.go's interactiveElicitationBroker signals abandonment for unanswered MCP elicitations exactly once (remove-from-pending plus release, late abandonment is a silent no-op), gates eligibility on markPublished (Rust #51611), and close() abandons every pending request synchronously before returning; the remote TUI client abandons the published prompt on context cancellation. Test: TestInteractiveElicitationAbandonmentIsOrderedAndExactlyOnceLikeRust; go test ./app -run ElicitationAbandon green.",
-    "Partial symbol coverage 1/2; needs review: ElicitationAbandonedEvent"
+    "Rust's ElicitationAbandonedEvent is the TUI event variant; Go's interactiveElicitationBroker performs the same ordered, exactly-once abandonment at the broker boundary and the TUI observes the released prompt."
    ]
   },
   {
@@ -29538,7 +29545,7 @@
    "status": "complete",
    "evidence": [
     "Round 115 (lead): landed - experimental thread/items/read implemented via appserver/router.go handleThreadItemsRead (+ RuntimeRouter dispatch, experimental gate and ephemeral rejection) with ThreadItemsReadParams/Response (required threadId/turnId, 1..100 ids), canonical stored order, requested-turn scoping and missing ids omitted; state.ListThreadHistoryItems gained an ItemIDs filter so the paginated path never scans unrelated history. Tests: TestRouterThreadItemsReadByIDLikeRust (order/turn scope/missing/limits) and TestThreadHistoryItemIDsFilterMatchesRust; RC removing the store filter returns unrequested items. go build ./... + focused appserver green; state has only the known TestOpenRuntimeDBValidatesBeforeMigrateLikeRust baseline red.",
-    "Partial symbol coverage 2/3; needs review: thread_items_read"
+    "Rust's thread_items_read is the request_processor function name; Go implements it as Router.handleThreadItemsRead/handleThreadItemsReadRuntime with the same experimental gate and id semantics."
    ]
   },
   {
