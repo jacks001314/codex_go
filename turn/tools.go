@@ -67,6 +67,9 @@ type ToolRegistryOptions struct {
 	// receives private agent attribution in MCP `_meta` (Rust #58378). Nil omits
 	// both keys.
 	MCPAgentMetadataRecipient *mcp.AgentMCPMetadataRecipient
+	// MCPToolRequestMetaHook is the host-scoped private metadata hook for one
+	// server/tool registration. Nil disables the hook.
+	MCPToolRequestMetaHook *mcp.MCPToolRequestMetaHook
 	// MCPCyberAccessProgram supplies the issuing turn's explicit Cyber program
 	// for a matching agent registration (Rust turn_context.cyber_access_program).
 	MCPCyberAccessProgram func() string
@@ -1169,6 +1172,7 @@ func registerMCPToolSet(registry *tool.Registry, options *ToolRegistryOptions, t
 			TurnMetadata:                      options.MCPTurnMetadata,
 			TurnRootTurnID:                    options.MCPTurnRootTurnID,
 			AgentMetadataRecipient:            options.MCPAgentMetadataRecipient,
+			ToolRequestMetaHook:               options.MCPToolRequestMetaHook,
 			ResolvedServer:                    resolvedServer,
 			TurnCyberAccessProgram:            options.MCPCyberAccessProgram,
 			HostOwnedApps:                     info.HostOwnedApps,

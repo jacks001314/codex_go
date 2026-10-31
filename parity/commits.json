@@ -40064,9 +40064,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Round 1194: registered when the alignment anchor moved from cbe16d525c2d7362fc3d4726143288e932905daa to 67f0994b532b8740f14b5b738af7b7b2a915b1d6; not audited yet."
+    "Round 1196: added mcp/tool_request_meta.go with MCPToolRequestMetaHook and MCPToolRequestMetaProvider mirroring Rust codex-mcp tool_request_meta.rs after #58395. Matches requires the server name, remote tool name, local environment, registration source and full transport (mcpServerTransportEqual) to equal the host-supplied selection; Apply refuses to overwrite an existing key, errors on a missing metadata object or provider error, and only then calls the provider with thread/turn/call IDs. Wiring: ToolExecutorOptions.ToolRequestMetaHook applied in ToolExecutor.Execute right after request meta is built (errors return tool.RespondToModel so the caller sees the failure before dispatch), turn.ToolOptions.MCPToolRequestMetaHook forwarded to executors, and appserver RuntimeServices.MCPToolRequestMetaHook default plus per-thread SetThreadMCPToolRequestMetaHook overrides wired into the turn MCP options. Tests: TestMCPToolRequestMetaHookAddsValueForMatchingRegistrationLikeRust, TestMCPToolRequestMetaHookSkipsNonMatchingRegistrationLikeRust, TestMCPToolRequestMetaHookRejectsExistingKeyLikeRust, TestMCPToolRequestMetaHookRequiresMetadataObjectLikeRust, TestMCPToolRequestMetaHookPropagatesProviderErrorLikeRust, TestRuntimeRouterThreadMCPToolRequestMetaHookLikeRust. Verified with go build ./mcp/... ./turn/... ./appserver/..., go test ./mcp -run MCPToolRequestMeta -count=1 and go test ./appserver -run 'MCPToolRequestMeta|AgentMetadata' -count=1."
    ]
   },
   {
@@ -40172,9 +40172,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Round 1194: registered when the alignment anchor moved from cbe16d525c2d7362fc3d4726143288e932905daa to 67f0994b532b8740f14b5b738af7b7b2a915b1d6; not audited yet."
+    "Round 1196: #58418 is a pure refactor of Rust guardian/recorded_tool_call.rs (RecordedExecCall::from_item/prepare inlined into review_tool_call, which now returns GuardianReviewResult directly). The Go port already carries the same behavior in appserver/thread_guardian_review.go: guardianRecordedExecCallFromItems accepts only a completed plaintext default-namespace exec_command with a nonempty call ID, prepareRecordedExecCommand parses the arguments and environment, prepares with the UnifiedExec lifetime and rejects apply_patch-intercepted commands, and the explicit policy skip path returns the call ID with a nil assessment instead of dropping the call ID. No Go change was needed. Verified with go test ./appserver -run 'GuardianReview|RecordedExec|DirectReview' -count=1."
    ]
   },
   {

@@ -107,6 +107,7 @@ type ToolExecutorOptions struct {
 	// receives private agent attribution in every tool-call `_meta`
 	// (Rust #58378). Nil omits both keys unless the turn installed one.
 	AgentMetadataRecipient *AgentMCPMetadataRecipient
+	ToolRequestMetaHook    *MCPToolRequestMetaHook
 	// ResolvedServer is this executor's effective MCP registration. Matching the
 	// recipient requires the loaded source, plugin attribution, environment and
 	// transport, not just the server name.
@@ -215,6 +216,7 @@ type ToolExecutor struct {
 	turnMetadata                  func() map[string]any
 	turnRootTurnID                func() string
 	agentMetadataRecipient        *AgentMCPMetadataRecipient
+	toolRequestMetaHook           *MCPToolRequestMetaHook
 	resolvedServer                *ResolvedServer
 	turnCyberAccessProgram        func() string
 	hostOwnedApps                 bool
@@ -261,6 +263,7 @@ func NewToolExecutor(options *ToolExecutorOptions) *ToolExecutor {
 	executor.turnMetadata = options.TurnMetadata
 	executor.turnRootTurnID = options.TurnRootTurnID
 	executor.agentMetadataRecipient = options.AgentMetadataRecipient
+	executor.toolRequestMetaHook = options.ToolRequestMetaHook
 	executor.resolvedServer = options.ResolvedServer
 	executor.turnCyberAccessProgram = options.TurnCyberAccessProgram
 	executor.toolInputSchemaMaxBytes = options.ToolInputSchemaMaxBytes
@@ -409,6 +412,10 @@ func (e *ToolExecutor) Execute(ctx context.Context, invocation *tool.Invocation)
 		rewrittenArguments = rewritten
 	}
 	meta := e.requestMetaForCall(invocation.CallID)
+	meta, hookErr := e.applyMCPToolRequestMetaHook(meta, invocation.CallID)
+	if hookErr != nil {
+		return nil, tool.RespondToModel(hookErr.Error())
+	}
 	// Rust #40728: a server whose published permission authority is unavailable
 	// must be rejected instead of running with another owner's authority.
 	if err := e.ensureServerPermissionAuthority(); err != nil {
@@ -692,6 +699,24 @@ func (e *ToolExecutor) WaitUntilReady(ctx context.Context, invocation *tool.Invo
 		}
 	}
 	return e.mcpService().WaitForServerStartup(ctx, e.resolvedServerName(), threadID)
+}
+
+// applyMCPToolRequestMetaHook runs the host-scoped metadata hook installed for
+// this executor registration. It only mutates metadata when server, tool,
+// source and transport all match.
+func (e *ToolExecutor) applyMCPToolRequestMetaHook(meta any, callID string) (any, error) {
+	if e == nil || e.toolRequestMetaHook == nil {
+		return meta, nil
+	}
+	return e.toolRequestMetaHook.Apply(
+		meta,
+		e.resolvedServerName(),
+		e.resolvedRemoteToolName(),
+		e.resolvedServer,
+		e.threadID,
+		e.turnID,
+		callID,
+	)
 }
 
 func (e *ToolExecutor) requestMetaForCall(callID ...string) any {

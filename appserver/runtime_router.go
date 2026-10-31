@@ -303,6 +303,9 @@ type RuntimeRouterOptions struct {
 	// that receives private agent attribution in tool-call `_meta`
 	// (Rust #58378). Per-thread overrides win; nil disables the injection.
 	AgentMCPMetadataRecipient *mcp.AgentMCPMetadataRecipient
+	// MCPToolRequestMetaHook is the host-scoped private MCP request metadata
+	// hook installed for new threads. Per-thread overrides win.
+	MCPToolRequestMetaHook *mcp.MCPToolRequestMetaHook
 }
 
 type RuntimeRouter struct {
@@ -554,6 +557,9 @@ type RuntimeRouter struct {
 	agentMCPMetadataMu         sync.Mutex
 	agentMCPMetadataDefault    *mcp.AgentMCPMetadataRecipient
 	agentMCPMetadataRecipients map[string]*mcp.AgentMCPMetadataRecipient
+	mcpToolRequestMetaMu       sync.Mutex
+	mcpToolRequestMetaDefault  *mcp.MCPToolRequestMetaHook
+	mcpToolRequestMetaHooks    map[string]*mcp.MCPToolRequestMetaHook
 	pendingGoalMu              sync.Mutex
 	pendingGoalByConn          map[string][]*Notification
 	deferredGoalMode           atomic.Bool
@@ -953,6 +959,7 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 		executedToolCalls:          map[string]*turn.ExecutedToolCallRecorder{},
 		codeModeRuntimes:           map[string]*tool.CodeModeRuntime{},
 		agentMCPMetadataRecipients: map[string]*mcp.AgentMCPMetadataRecipient{},
+		mcpToolRequestMetaHooks:    map[string]*mcp.MCPToolRequestMetaHook{},
 		toolItemReviews:            map[string]toolItemReviewSummary{},
 		skillMCPPrompted:           map[string]struct{}{},
 		orchestratorSkills:         map[string]*runtimeOrchestratorSkillCatalog{},
@@ -1915,6 +1922,7 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 		// Emitted once during initialize (#49701).
 		router.stateDBRecoveryNotice = options.StateDBRecoveryNotice
 		router.agentMCPMetadataDefault = options.AgentMCPMetadataRecipient
+		router.mcpToolRequestMetaDefault = options.MCPToolRequestMetaHook
 	}
 	router.codexHomeScanCancel = func() { atomic.StoreInt32(&codexHomeScanCanceled, 1) }
 	router.configureEnvironmentHTTPPolicy()
@@ -17704,6 +17712,7 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	// Rust #58378: private agent attribution is scoped to the host-selected
 	// plugin registration installed on this thread.
 	options.MCPAgentMetadataRecipient = r.threadAgentMCPMetadataRecipient(threadID)
+	options.MCPToolRequestMetaHook = r.threadMCPToolRequestMetaHook(threadID)
 	options.MCPCyberAccessProgram = r.mcpCyberAccessProgramProvider(threadID, strings.TrimSpace(turnID))
 	options.RequestUserInputAvailableModes = requestUserInputModes
 	options.EnableCurrentTimeTool = enableCurrentTimeTool
