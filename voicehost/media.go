@@ -508,16 +508,28 @@ func (m *mediaSession) drainPlayout(now time.Time) error {
 	return nil
 }
 
-// pumpCapture encodes and sends every queued capture block.
+// pumpCapture encodes and sends every queued capture block. Capture blocks and
+// pending frames older than the processing deadline are discarded together with
+// their processing history, matching the Rust helper's backlog policy.
 func (m *mediaSession) pumpCapture(now time.Time) (int, error) {
 	if m.pipeline == nil {
 		return 0, nil
+	}
+	if m.pipeline.takeDroppedCapture() {
+		// A rejected device callback leaves older blocks queued; discard that
+		// backlog instead of resuming with audio the peer no longer needs.
+		m.dropLateCapture()
+		m.pipeline.drainCapture()
 	}
 	sent := 0
 	for index := 0; index < audioQueueCapacity; index++ {
 		block, ok := m.pipeline.readCapture(now)
 		if !ok {
 			break
+		}
+		if now.Sub(block.at) > audioProcessingDeadline {
+			m.dropLateCapture()
+			continue
 		}
 		if m.pendingAt.IsZero() {
 			m.pendingAt = block.at
@@ -528,6 +540,10 @@ func (m *mediaSession) pumpCapture(now time.Time) (int, error) {
 		}
 		m.pending = append(m.pending, samples...)
 		for len(m.pending) >= voiceFrameSamples {
+			if now.Sub(m.pendingAt) > audioProcessingDeadline {
+				m.dropLateCapture()
+				return sent, nil
+			}
 			frame := m.pending[:voiceFrameSamples]
 			if err := m.track.send(frame, m.pendingAt); err != nil {
 				return sent, err
@@ -538,6 +554,15 @@ func (m *mediaSession) pumpCapture(now time.Time) (int, error) {
 		}
 	}
 	return sent, nil
+}
+
+// dropLateCapture discards a partial frame and the processor history once the
+// capture path falls behind the processing deadline.
+func (m *mediaSession) dropLateCapture() {
+	m.dropPendingCapture()
+	if m.apm != nil {
+		m.apm.reset()
+	}
 }
 
 // dropPendingCapture discards a partial frame, which mute transitions require

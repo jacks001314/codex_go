@@ -85,6 +85,24 @@ func (q *blockQueue) drain() {
 	q.mu.Unlock()
 }
 
+// takeDroppedCapture reports and clears the capture-overflow flag. A rejected
+// device callback leaves older blocks queued, so the consumer discards that
+// backlog the way the Rust helper does after a failed queue push.
+func (p *pcmPipeline) takeDroppedCapture() bool {
+	if p == nil {
+		return false
+	}
+	return p.droppedCapture.Swap(false)
+}
+
+// drainCapture discards every queued capture block.
+func (p *pcmPipeline) drainCapture() {
+	if p == nil {
+		return
+	}
+	p.capture.drain()
+}
+
 func (q *blockQueue) length() int {
 	if q == nil {
 		return 0

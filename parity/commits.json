@@ -11882,9 +11882,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 2/6; needs review: PROCESSING_LATE, ServiceFailure, from_code, send_muted_silence"
+    "Rust #44671 capture_worker.rs/processing.rs drop capture blocks and pending frames older than MAX_PROCESSING_DELAY=500ms with APM reset, drain the capture backlog after a rejected device callback (capture_dropped), drop stale/saturated incoming media, send paced pre-encoded silence while muted, and degrade playback backlog instead of failing closed; voicehost/media.go pumpCapture now drops blocks and pending frames past audioProcessingDeadline via dropLateCapture, consumes pcmPipeline.takeDroppedCapture and drains the backlog, while existing voiceTrack.sendSilence, voiceIncoming stale/saturation drops and helper_exit.go stage contract cover the remaining semantics. Tests: voicehost/processing_deadline_like_rust_test.go (stale capture, late pending frame, overflow drain, APM reset). Verified: go test ./voicehost -count=1, go build ./..., go test ./parity -skip TestGoTopLevelDirectoryInventory -count=1"
    ]
   },
   {
