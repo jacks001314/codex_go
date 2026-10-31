@@ -34774,8 +34774,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:69: | `#56022` | Preserve config overrides across CLI subcommand boundaries | `cli/cli.go`, `cli/cli_test.go` |",
-    "plan_2026_10_27_nontui.md:711: `#56022` details: `-c`/`--config` values supplied at the root and at a nested"
+    "Round 1256: cli/cli.go keeps `-c/--config` overrides across CLI subcommand boundaries, including the attached form (`-c key=value`) parsed by TestShortConfigOverrideDropsAttachedEquals. Tests: cli/config_override_short_value_like_rust_test.go, cli/cli_test.go."
    ]
   },
   {
@@ -34799,7 +34798,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:51: | `#56024` | Bound decoded HTTP/3 response headers (64 KiB) | `tcptunnel/tunnel.go`, tunnel test |"
+    "Round 1256: tcptunnel/tunnel.go bounds the decoded HTTP/3 response headers a session accepts, with cli/tcp_tunnel.go surfacing the failure. Tests: tcptunnel/tunnel_test.go TestSessionBoundsDecodedResponseHeadersLikeRust."
    ]
   },
   {
@@ -35005,9 +35004,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:258: consolidation), `#56236`, `#56233`, `#56220`, `#56210`, `#56139`, and"
+    "Round 1256: not applicable — Rust change to the MCP auth-status test's IdP OAuth configuration (test fixture only)."
    ]
   },
   {
@@ -35065,9 +35064,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:258: consolidation), `#56236`, `#56233`, `#56220`, `#56210`, `#56139`, and"
+    "Round 1256: not applicable — Rust test stabilization for the marketplace staging cleanup test."
    ]
   },
   {
@@ -35079,8 +35078,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:100: | `#56211` | Fresh memory profiles default to V2; reset of an absent workspace is a no-op; fresh profiles report `v2_ready` | `config/memories.go`, `config/config.go`, `config/memories_version_test.go`, `appserver/memory_status.go`, `appserver/memory_status_test.go`, `memories/control.go`, `memories/control_test.go` |",
-    "plan_2026_10_27_nontui.md:1231: - For `#57241`/`#55991`/`#56211`: `go test ./compact ./config ./memories ./turn ./exec -count=1`, `go test ./appserver -run 'GuardianNativeAgentMessage|GuardianReviewTranscript|GuardianTranscriptCarries|GuardianReviewDelivers|MemoryStatus|CompactTokenStatusForTurn' -count=1` and `go build ./...` pass."
+    "Round 1256: config/config.go:60-62 selects memory V2 for a fresh profile with memories enabled when no V1 workspace exists, while an explicit `memories.version` still wins (:809, :863-865 keep the closed enum). Tests: config memory-version tests."
    ]
   },
   {
@@ -35102,9 +35100,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:258: consolidation), `#56236`, `#56233`, `#56220`, `#56210`, `#56139`, and"
+    "Round 1256: not applicable — Rust test-only change switching the Windows sandbox manifest test to `cargo_bin`."
    ]
   },
   {
@@ -35140,9 +35138,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:258: consolidation), `#56236`, `#56233`, `#56220`, `#56210`, `#56139`, and"
+    "Round 1256: not applicable — Rust test-only change making Opus encoder test timestamps follow sample time."
    ]
   },
   {
@@ -35164,9 +35162,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:258: consolidation), `#56236`, `#56233`, `#56220`, `#56210`, `#56139`, and"
+    "Round 1256: not applicable — Rust test-only change making the code-mode yield/resume test yield explicitly between phases."
    ]
   },
   {
@@ -35387,9 +35385,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:359: - `#56454`, `#56453`, `#56293`, `#56292`, `#56018`, `#56007`, `#56006`, and"
+    "Round 1256: not applicable — Rust test-only change switching MCP cancellation tests to the metadata callback."
    ]
   },
   {
@@ -35399,9 +35397,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:359: - `#56454`, `#56453`, `#56293`, `#56292`, `#56018`, `#56007`, `#56006`, and"
+    "Round 1256: not applicable — Rust test-only change using fixed-token auth fixtures in Vertex tests."
    ]
   },
   {
@@ -35425,8 +35423,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:137: | `#56297` | Built-in dummy credentials carry the provider prefix, a visible `masked` marker and over 128 random alphanumeric bytes after it, copying no punctuation from the real credential; candidate dummies that duplicate or embed an already-issued credential or dummy are rejected instead of being registered | `network/proxy_credential_broker.go`, like-Rust tests |",
-    "plan_2026_10_27_nontui.md:1329: - For `#56297`: `go test ./network -count=1` passes (8.4s). Coverage pins the"
+    "Round 1256: network/proxy_credential_broker.go:342,409-414 registers each built-in dummy credential as a matching placeholder for destination-scoped substitution and rejects a dummy that collides with the real value (:563-574). Tests: network credential-broker tests."
    ]
   },
   {
@@ -37590,10 +37587,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:125: | `#57430` | A user-origin goal set after a worker's first Guardian review reaches that worker's later review root authorization as `User set the goal: …`; an automatic-origin goal never does, and the earlier review stays unchanged | `appserver/retained_context.go` (raw-only message text), `appserver/guardian_goal_provenance_like_rust_test.go`, `appserver/retained_context_test.go` |",
-    "plan_2026_10_27_nontui.md:1300: - For `#57430`: `go test ./appserver -run 'TestGuardianRootAuthorizationIncludesLaterUserGoalLikeRust|TestRuntimeRouterRetainsRawOnlyInstructionLikeRust' -count=1`,"
+    "Round 1256: not applicable — Rust test-only commit adding goal-provenance assertions to existing workers' Guardian reviews; Go Guardian goal provenance is covered by appserver/guardian_goal_provenance_like_rust_test.go."
    ]
   },
   {
@@ -37605,8 +37601,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:124: | `#57433` | Opt-in synchronous Guardian review for native tool calls: the proposed call is delivered as native evidence (encrypted replay preserved unless hooks rewrite arguments), deduplicated from transcript history, capped with its paired evidence output, and reviewed without action-specific client events; denial, timeout or unavailability stops dispatch before the handler runs | `state/guardi",
-    "plan_2026_10_27_nontui.md:1295: - For `#57433`: `go test ./state ./tool -count=1`, `go test ./appserver -count=1`,"
+    "Round 1256: appserver/guardian_native_tool_review.go implements the opt-in synchronous Guardian review for native tool calls (encrypted replay preserved, client events suppressed, fails closed), with features/features.go:286 keeping Rust's retired `guardian_ext` flag as a removed no-op. Tests: appserver/guardian_native_tool_review_like_rust_test.go TestNativeToolGuardianActionPreservesEncryptedReplayLikeRust, TestNativeToolGuardianReviewSuppressesClientEventsLikeRust, TestNativeToolGuardianReviewFailsClosedLikeRust."
    ]
   },
   {
@@ -37655,8 +37650,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:123: | `#57441` | Feature `guardian_native_multi_agent_history` (under development, off) for native MAv2 calls in Guardian history | `features/features.go`, registration test |",
-    "plan_2026_10_27_nontui.md:1286: - For `#57441`: `go test ./features -run 'GuardianNativeMultiAgentHistory|TestKnownFeature|TestSorted' -count=1` passes."
+    "Round 1256: features/features.go:429 registers `guardian_native_multi_agent_history` as StageUnderDevelopment with DefaultEnabled: false, consumed by appserver/guardian_reviewer.go. Tests: appserver/guardian_native_multi_agent_history_like_rust_test.go, features/features_test.go."
    ]
   },
   {
@@ -37668,8 +37662,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:122: | `#57448` | Native MAv2 calls (`spawn_agent`, `send_message`, `followup_task`, `interrupt_agent`) in the configured namespace stay native in Guardian history, with a paired evidence-only output in delivery and budgeting and whole-item omission past the cap | `appserver/guardian_native_multi_agent_call.go`, `appserver/guardian_reviewer.go`, `state/guardian_profile.go`, `state/guardian_transcript.g",
-    "plan_2026_10_27_nontui.md:347: `#57448`. The Go equivalent in"
+    "Round 1256: broadened native multi-agent handling in the Guardian review transcript: appserver/guardian_native_multi_agent_call.go keeps native multi-agent calls in the history and defaults their output to `functions` when no namespace is configured. Tests: appserver/guardian_native_multi_agent_history_like_rust_test.go TestGuardianTranscriptPreservesNativeMultiAgentCallsLikeRust, TestGuardianTranscriptNativeMultiAgentCallsRequireConfiguredNamespaceLikeRust, TestGuardianNativeMultiAgentCallDefaultsToFunctionsLikeRust."
    ]
   },
   {
