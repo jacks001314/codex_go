@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -273,6 +274,15 @@ type responsesWebsocketSessionCache struct {
 type responsesWebsocketSession struct {
 	mu   sync.Mutex
 	conn *websocket.Conn
+	// requestSent records that a response.create was written on conn. Rust's
+	// WebsocketSession::is_prewarmed only treats a socket as warm once it has a
+	// last request to reuse; a dialed socket that never sent one still needs a
+	// warmup (Rust #47745).
+	requestSent bool
+	// connClosed records that the reader observed the connection ending. A
+	// completed warmup returns its client to the cache, and the next resume
+	// re-checks the socket because it may have closed since then (Rust #47709).
+	connClosed atomic.Bool
 	// routingAffinity is the parent routing pin the cached connection was
 	// opened for, and capturedAffinity is the pin its handshake returned
 	// (Rust #57710). A Guardian review reconnects when its parent affinity
@@ -876,6 +886,8 @@ func closeResponsesWebsocketSession(session *responsesWebsocketSession, reason s
 		return
 	}
 	stopResponsesWebsocketReader(session)
+	session.connClosed.Store(true)
+	session.requestSent = false
 	if session.conn == nil {
 		return
 	}
@@ -907,6 +919,9 @@ func startResponsesWebsocketReader(session *responsesWebsocketSession) chan resp
 		defer close(messages)
 		for {
 			_, data, err := conn.Read(context.Background())
+			if err != nil {
+				session.connClosed.Store(true)
+			}
 			select {
 			case messages <- responsesWebsocketReadResult{data: data, err: err}:
 			case <-done:
@@ -918,6 +933,13 @@ func startResponsesWebsocketReader(session *responsesWebsocketSession) chan resp
 		}
 	}()
 	return messages
+}
+
+// websocketSessionPrewarmed mirrors Rust's WebsocketSession::is_prewarmed: a
+// warmup may skip preparation only when the cached connection already carries a
+// request and is not known to be closed. The caller must hold session.mu.
+func websocketSessionPrewarmed(session *responsesWebsocketSession) bool {
+	return session != nil && session.conn != nil && session.requestSent && !session.connClosed.Load()
 }
 
 // stopResponsesWebsocketReader stops the reader goroutine without closing the
@@ -946,7 +968,10 @@ func (r *ResponsesAgentRunner) Prewarm(ctx context.Context, request *AgentReques
 	session := r.websocketSession(request)
 	session.mu.Lock()
 	defer session.mu.Unlock()
-	websocketReady := session.conn != nil
+	// Rust #47709/#47745: a resume warmup re-checks the cached socket instead of
+	// trusting the previous warmup's outcome. Only a socket that already carries
+	// a request and is not known closed may skip preparation.
+	websocketReady := websocketSessionPrewarmed(session)
 	if r.Metrics != nil {
 		outcome := "needs_prewarm"
 		if websocketReady {
@@ -959,6 +984,11 @@ func (r *ResponsesAgentRunner) Prewarm(ctx context.Context, request *AgentReques
 	}
 	if websocketReady {
 		return nil, nil
+	}
+	if session.conn != nil {
+		// The cached connection ended or never carried a request; drop it so the
+		// warmup redials with this resume's prepared payload.
+		closeResponsesWebsocketSession(session, "startup prewarm reconnect")
 	}
 	// Rust #47635: the warmup request is built exactly like a turn request so
 	// the preconnect carries the effective service tier, routing hint, hosted
@@ -1036,6 +1066,8 @@ func (r *ResponsesAgentRunner) Prewarm(ctx context.Context, request *AgentReques
 		return nil, err
 	}
 	session.conn = conn
+	session.connClosed.Store(false)
+	session.requestSent = false
 	payload := map[string]any{
 		"type": "response.create", "model": apiRequest.Model, "input": apiRequest.Input, "tool_choice": apiRequest.ToolChoice,
 		"parallel_tool_calls": apiRequest.ParallelToolCalls, "store": apiRequest.Store, "stream": true, "include": []string{}, "generate": false,
@@ -1074,14 +1106,30 @@ func (r *ResponsesAgentRunner) Prewarm(ctx context.Context, request *AgentReques
 	r.recordWebsocketContinuation("full", "prewarm", "warmup", false)
 	writeErr := conn.Write(connectCtx, websocket.MessageText, marshalResponsesMessage(payload))
 	r.recordWebsocketRequest(writeErr, time.Since(requestStartedAt))
-	// The prewarm dials a fresh connection (it returns early when one exists).
+	// A warmup that redialed reports a fresh transport like any other handshake.
 	r.recordWebsocketRequestRecord(ctx, writeErr, time.Since(requestStartedAt), false)
 	if writeErr != nil {
 		closeResponsesWebsocketSession(session, "prewarm write failed")
 		return nil, writeErr
 	}
+	session.requestSent = true
+	// Keep the session's single reader running after the warmup so a later
+	// resume can observe the peer closing this socket and repair it instead of
+	// trusting a stale warmup (Rust #47709).
+	messages := startResponsesWebsocketReader(session)
 	for {
-		_, data, err := conn.Read(ctx)
+		var read responsesWebsocketReadResult
+		var readOK bool
+		select {
+		case <-ctx.Done():
+			closeResponsesWebsocketSession(session, "prewarm canceled")
+			return nil, ctx.Err()
+		case read, readOK = <-messages:
+			if !readOK {
+				read.err = errors.New("responses websocket connection closed")
+			}
+		}
+		data, err := read.data, read.err
 		if err != nil {
 			closeResponsesWebsocketSession(session, "prewarm read failed")
 			return nil, fmt.Errorf("responses websocket closed before response.completed: %w", err)
@@ -1311,6 +1359,8 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 			return nil, err
 		}
 		session.conn = conn
+		session.connClosed.Store(false)
+		session.requestSent = false
 		session.routingAffinity = desiredAffinity
 		if response != nil {
 			session.capturedAffinity = network.RoutingAffinityFromResponse(endpoint, response.Header)
@@ -1332,6 +1382,9 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 	writeErr := conn.Write(ctx, websocket.MessageText, marshalResponsesMessage(payload))
 	r.recordWebsocketRequest(writeErr, time.Since(requestStartedAt))
 	r.recordWebsocketRequestRecord(ctx, writeErr, time.Since(requestStartedAt), connectionReused)
+	if writeErr == nil {
+		session.requestSent = true
+	}
 	if writeErr != nil {
 		closeResponsesWebsocketSession(session, "response write failed")
 		if !transportRetried {

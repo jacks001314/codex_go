@@ -20312,9 +20312,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1142: resume prewarm now re-checks the cached WebSocket session instead of trusting a completed warmup (Rust #47709, keeping the baseline's #47745 readiness skip). model/responses_agent.go tracks responsesWebsocketSession.requestSent plus an atomic connClosed set by the session reader; websocketSessionPrewarmed mirrors WebsocketSession::is_prewarmed (cached connection, a request already sent, not known closed). Prewarm skips preparation only for such a socket; otherwise it drops the stale or closed cached connection and redials generate=false with the full prepared input and no previous_response_id, and keeps the session's single reader running so a later resume observes the peer closing the socket. appserver/session_startup_prewarm.go now only shares an in-flight warmup (finished == false) instead of short-circuiting on a completed same-key entry; a completed resume is retried, a warm skip keeps the retained response baseline in state, and a repaired socket installs the new response id.",
+    "Tests: model/prewarm_resume_reuse_like_rust_test.go drives a warm resume with no second request and one handshake, then closes the socket and asserts the next resume redials, sends generate=false without previous_response_id, and reports warm-2. appserver/session_history_prewarm_like_rust_test.go TestIdleHistoryPrewarmRechecksCachedSocketLikeRust asserts each resume re-invokes the warmup, a warm skip retains warm-1, and a closed socket installs warm-2. Verified: go test ./model -count=1; go test ./appserver -run 'Prewarm|SessionStartup|IdleHistory|ThreadIdle|WebSocket|Residency' -count=1; go test ./turn -count=1; go test ./parity -skip TestGoTopLevelDirectoryInventory -count=1.",
+    "Residual: the prewarm handshake still omits the warmup turn's client metadata (x-codex-window-id and friends); that metadata parity belongs to #47635's prewarm/preconnect work, not this socket-routing change."
    ]
   },
   {

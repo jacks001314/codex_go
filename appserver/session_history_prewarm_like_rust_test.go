@@ -2,6 +2,7 @@ package appserver
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -10,6 +11,111 @@ import (
 	"codex_go/model"
 	"codex_go/session"
 )
+
+// socketResumePrewarmAgent models the cached WebSocket session that Rust #47709
+// routes resume prewarms through: a warmup on a warm socket skips preparation,
+// while a closed socket produces a freshly prepared response.
+type socketResumePrewarmAgent struct {
+	*prewarmingRuntimeAgent
+	mu       sync.Mutex
+	warm     bool
+	calls    int
+	prepared int
+}
+
+func (a *socketResumePrewarmAgent) Prewarm(context.Context, *model.AgentRequest) (*model.AgentResponse, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.calls++
+	if a.warm {
+		return nil, nil
+	}
+	a.warm = true
+	a.prepared++
+	return &model.AgentResponse{ResponseID: fmt.Sprintf("warm-%d", a.prepared)}, nil
+}
+
+func (a *socketResumePrewarmAgent) stats() (int, int) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.calls, a.prepared
+}
+
+func (a *socketResumePrewarmAgent) closeSocket() {
+	a.mu.Lock()
+	a.warm = false
+	a.mu.Unlock()
+}
+
+// TestIdleHistoryPrewarmRechecksCachedSocketLikeRust pins Rust #47709: a
+// completed resume warmup is returned to the cache and the next resume re-checks
+// the socket instead of reusing the previous outcome blindly. A warm skip keeps
+// the prepared baseline; a closed socket schedules a new prepared response.
+func TestIdleHistoryPrewarmRechecksCachedSocketLikeRust(t *testing.T) {
+	home := t.TempDir()
+	store := session.NewStore(t.TempDir())
+	now := time.Now().UTC()
+	record := &session.Record{
+		ID: "child", SessionID: "child", ParentThreadID: "root",
+		CreatedAt: now, UpdatedAt: now,
+		Metadata: session.Metadata{CWD: home, Model: "gpt-test", AgentPath: "/root/child", MultiAgentVersion: "v2"},
+		Items: []session.Item{
+			{ID: "user-1", Type: "message", Role: "user", Text: "first task", CreatedAt: now},
+			{ID: "assistant-1", Type: "message", Role: "assistant", Text: "first result", CreatedAt: now},
+		},
+	}
+	if err := store.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	agent := &socketResumePrewarmAgent{prewarmingRuntimeAgent: &prewarmingRuntimeAgent{
+		recordingRuntimeAgent: newRecordingRuntimeAgent("ok"),
+	}}
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Config:       config.NewConfigService(home),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	t.Cleanup(func() { _ = router.Close() })
+	retainIdleLifecycleThread(t, router, "child")
+
+	waitForPrewarm := func(calls int) *startupPrewarmState {
+		t.Helper()
+		deadline := time.Now().Add(3 * time.Second)
+		for {
+			got, _ := agent.stats()
+			state := router.startupPrewarmsSnapshot()["child"]
+			if got >= calls && state != nil && state.finished {
+				return state
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("history prewarm %d did not finish (calls=%d, state=%#v)", calls, got, state)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+
+	router.scheduleHistoryPrewarm("child")
+	if state := waitForPrewarm(1); state.responseID != "warm-1" {
+		t.Fatalf("first prewarm response id = %q, want warm-1", state.responseID)
+	}
+
+	// The completed warmup no longer short-circuits the next resume: the socket
+	// is re-checked and a warm skip keeps the prepared baseline.
+	router.scheduleHistoryPrewarm("child")
+	state := waitForPrewarm(2)
+	if state.responseID != "warm-1" {
+		t.Fatalf("warm skip response id = %q, want the retained warm-1", state.responseID)
+	}
+
+	// The peer closed the socket, so the next resume prepares a new response.
+	agent.closeSocket()
+	router.scheduleHistoryPrewarm("child")
+	state = waitForPrewarm(3)
+	if state.responseID != "warm-2" {
+		t.Fatalf("repaired prewarm response id = %q, want warm-2", state.responseID)
+	}
+}
 
 type historyPrewarmAgent struct {
 	*prewarmingRuntimeAgent

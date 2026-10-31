@@ -70,6 +70,19 @@ func (r *RuntimeRouter) scheduleStartupPrewarm(response *ThreadStartResponse) {
 	if r.startupPrewarms == nil {
 		r.startupPrewarms = map[string]*startupPrewarmState{}
 	}
+	if existing := r.startupPrewarms[threadID]; existing != nil && !existing.finished {
+		// Rust shares an in-flight warmup with every later resume instead of
+		// starting a second one.
+		r.startupPrewarmMu.Unlock()
+		return
+	}
+	// Rust #47709: a completed warmup returns its client to the cache and the
+	// next resume re-checks the socket; when that check skips preparation the
+	// completed baseline below stays valid.
+	retained := r.startupPrewarms[threadID]
+	if retained != nil && retained.consumed {
+		retained = nil
+	}
 	startedAt := time.Now().UTC()
 	r.startupPrewarms[threadID] = &startupPrewarmState{startedAt: startedAt, inputMode: "base"}
 	r.startupPrewarmMu.Unlock()
@@ -127,6 +140,11 @@ func (r *RuntimeRouter) scheduleStartupPrewarm(response *ThreadStartResponse) {
 			state.finished = true
 			state.finishedAt = finishedAt
 			state.status = status
+			if responseID == "" && err == nil && retained != nil {
+				// The warmup skipped preparation on a socket that is still warm,
+				// so the previous baseline remains the connection's last request.
+				state.responseID = retained.responseID
+			}
 		}
 		r.startupPrewarmMu.Unlock()
 		// Rust's prewarm task records these when it completes.
@@ -190,15 +208,23 @@ func (r *RuntimeRouter) scheduleHistoryPrewarm(threadID string) {
 	historyKeys := prewarmHistoryKeys(historyItems)
 
 	r.startupPrewarmMu.Lock()
-	if existing := r.startupPrewarms[threadID]; existing != nil && !existing.consumed {
-		// A ready or in-flight prewarm with the same history/settings is reused.
-		if existing.settingsKey == settingsKey && equalStringSlices(existing.historyKeys, historyKeys) {
-			r.startupPrewarmMu.Unlock()
-			return
-		}
-	}
 	if r.startupPrewarms == nil {
 		r.startupPrewarms = map[string]*startupPrewarmState{}
+	}
+	if existing := r.startupPrewarms[threadID]; existing != nil && !existing.finished {
+		// Rust keeps an in-flight warmup shared with every later resume.
+		r.startupPrewarmMu.Unlock()
+		return
+	}
+	// Rust #47709: a completed warmup returns its client to the cache and the
+	// next resume re-checks the socket, which may have closed since then. The
+	// warmup below performs that check; when it skips preparation the retained
+	// baseline is still the connection's last request.
+	retained := r.startupPrewarms[threadID]
+	if retained != nil && (retained.consumed ||
+		retained.settingsKey != settingsKey ||
+		!equalStringSlices(retained.historyKeys, historyKeys)) {
+		retained = nil
 	}
 	startedAt := time.Now().UTC()
 	r.startupPrewarms[threadID] = &startupPrewarmState{
@@ -240,6 +266,10 @@ func (r *RuntimeRouter) scheduleHistoryPrewarm(threadID string) {
 			state.finished = true
 			state.finishedAt = finishedAt
 			state.status = status
+			if responseID == "" && err == nil && retained != nil {
+				// The warmup skipped preparation, so keep the prepared baseline.
+				state.responseID = retained.responseID
+			}
 		}
 		r.startupPrewarmMu.Unlock()
 		r.recordStartupPhase("startup_prewarm_total", finishedAt.Sub(startedAt), status)
