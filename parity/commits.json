@@ -36518,8 +36518,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:84: | `#57220` | Log WebSocket compression payload statistics | `appserver/websocket_compression_stats.go`, `appserver/websocket_compression.go`, `appserver/websocket.go`, like-Rust test |",
-    "plan_2026_10_27_nontui.md:918: `#57220` details: the transport now pairs its TX and RX zstd codecs with one"
+    "Round 1259: appserver/websocket_compression.go carries websocketCompressionStats and reports the negotiated counters from the encoder (:62,108-127), so app-server WebSocket compression statistics are logged for both text and zstd frames. Tests: appserver/websocket_compression_roundtrip_test.go."
    ]
   },
   {
@@ -38049,8 +38048,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_28_sync2.md:15: | `#57552` | Image generation IDs exposed/persisted | Port `generation_id` through `codexapi/images.go`, turn image request, rollout turn items, app-server image generation items, legacy event. |",
-    "plan_2026_10_28_sync2.md:51: | `#57552` | `codexapi/images.go`, `protocol/response_item_id.go`, `rollout/turn_item.go`, `turn/image_generation.go` | `protocol/image_generation_id_like_rust_test.go`, `turn/image_generation_id_like_rust_test.go` |"
+    "Round 1259: codexapi/images.go:57-59 parses `generation_id` into ImageData.GenerationID, and turn/image_generation.go carries it through the turn item and legacy event. Tests: turn/image_generation_id_like_rust_test.go."
    ]
   },
   {
@@ -38062,8 +38060,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_28_sync2.md:16: | `#57553` | Replace dynamic tools between steps | Core: persisted `DynamicToolsUpdated` record, `allow_persistent_dynamic_tool_updates`, resume via latest record/compaction metadata, app-server replacement API. |",
-    "plan_2026_10_28_sync2.md:52: | `#57553` | `appserver/dynamic_tools_runtime.go`, `rollout/rollout.go`, `turn/dynamic_tool_runtime.go` | `appserver/dynamic_tools_replace_like_rust_test.go`, `turn/dynamic_tools_replace_like_rust_test.go`, `rollout/dynamic_tools_updated_like_rust_test.go` |"
+    "Round 1259: appserver/dynamic_tools_runtime.go plus rollout/rollout.go persist a DynamicToolsUpdated record so dynamic tools can be replaced between model steps and resume from the latest record or compaction metadata. Tests: rollout/dynamic_tools_updated_like_rust_test.go, appserver/dynamic_tools_runtime tests."
    ]
   },
   {
@@ -38113,8 +38110,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_28_sync2.md:20: | `#57567` | OpenAI `model_catalog_url` override | Port: catalog URL override for the built-in OpenAI provider. |",
-    "plan_2026_10_28_sync2.md:53: | `#57567` | `model/catalog.go`, `model/provider_config.go` | `model/model_catalog_url_override_like_rust_test.go`, `appserver/openai_catalog_url_like_rust_test.go` |"
+    "Round 1259: the built-in OpenAI provider accepts a `model_catalog_url` override, validated in model/provider_info.go:308-313 (gateway credentials must stay same-origin) and read by model/provider_config.go. Tests: model/model_catalog_url_test.go."
    ]
   },
   {
@@ -38126,8 +38122,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_28_sync2.md:21: | `#57568` | `memories.consolidation_service_tier` | Port config option with request normalization, use it for consolidation agent. |",
-    "plan_2026_10_28_sync2.md:54: | `#57568` | `config/memories.go` | `config/memories_consolidation_tier_like_rust_test.go` |"
+    "Round 1259: config/memories.go:17,79 adds `memories.consolidation_service_tier` so background consolidation uses its own service tier independent of the session tier. Tests: config/memories tests and config/value validation tables."
    ]
   },
   {
@@ -38139,8 +38134,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_28_sync2.md:22: | `#57569` | Process output/control under backpressure | Port delivery-required output notifications, non-blocking control replies, and `outputDrainTimedOut`. |",
-    "plan_2026_10_28_sync2.md:55: | `#57569` | `appserver/fs_process.go`, `pty.go`, `command_exec.go`, `process_exec.go`, `protocol/exec_events.go` | `appserver/process_exit_drain_like_rust_test.go` |"
+    "Round 1259: appserver/fs_process.go keeps process output and control replies under backpressure, reporting `outputDrainTimedOut` instead of dropping them. Tests: appserver/process_exit_drain_like_rust_test.go."
    ]
   },
   {
@@ -38164,8 +38158,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_28_sync2.md:24: | `#57573` | Filesystem-free patch command classification | Port `InterceptsCommand` (shell parsing, heredoc extraction, implicit patches) with tests. |",
-    "plan_2026_10_28_sync2.md:56: | `#57573` | `applypatch/invocation.go` | `applypatch/intercepted_command_like_rust_test.go` |"
+    "Round 1259: applypatch/invocation.go classifies intercepted patch commands without touching the filesystem (shell parsing, heredoc extraction and implicit patches). Tests: applypatch/intercepted_command_like_rust_test.go TestClassifiesInterceptedCommandsWithoutFilesystemLikeRust, TestInterceptsDirectApplyPatchArgumentsLikeRust, TestInterceptsCommandRecognizesCDPrefixLikeRust."
    ]
   },
   {
@@ -38189,8 +38182,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_28_sync2.md:26: | `#57581` | Catalog approval instruction headings | Port `request_permissions` / `auto_review_suffix` headings with shared heading validation. |",
-    "plan_2026_10_28_sync2.md:57: | `#57581` | `sandbox/permission_prompt.go`, `appserver/permissions_world_state.go` | `sandbox/approval_headings_like_rust_test.go`, `model/approval_headings_like_rust_test.go` |"
+    "Round 1259: sandbox/permission_prompt.go:95,354 replaces the bundled `request_permissions` and auto-review suffix headings with catalog-provided text under shared heading validation, driven from model catalog approval messages. Tests: sandbox/permission_prompt_test.go TestPermissionPromptCatalogWritableRootsLikeRust and the approval-heading cases."
    ]
   },
   {
@@ -38202,8 +38194,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_28_sync2.md:27: | `#57584` | Output boundaries through token truncation | Port boundary-aware formatted truncation and audio-aware item truncation. |",
-    "plan_2026_10_28_sync2.md:58: | `#57584` | `utils/outputtrunc.go`, `tool/code_mode_exec.go` | `utils/output_boundaries_like_rust_test.go`, `tool/code_mode_output_boundaries_like_rust_test.go` |"
+    "Round 1259: utils/outputtrunc.go performs boundary-aware formatted truncation (byte and token limits respect UTF-8 and encrypted content boundaries) and tool/code_mode_exec.go applies it. Tests: utils/outputtrunc_test.go TestTruncateBytesAndTokens, TestSplitStringRespectsUTF8Boundaries, TestFormattedMixedOutputPreservesEncryptedContent."
    ]
   },
   {
@@ -38215,8 +38206,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_28_sync2.md:28: | `#57585` | Unavailable image refs replaced | Port `IsResolvable` and `[image unavailable]` substitution in request preparation and compaction. |",
-    "plan_2026_10_28_sync2.md:59: | `#57585` | `attachmentstore/attachment_store.go`, `context/fragment_kinds.go`, `model/responses_agent.go` | `model/unavailable_images_like_rust_test.go` |"
+    "Round 1259: attachmentstore/attachment_store.go exposes IsResolvable and model/responses_agent.go substitutes `[image unavailable]` for unresolvable image references during request preparation and compaction. Tests: model/unavailable_images_like_rust_test.go TestResponsesInputReplacesUnavailableFileImagesLikeRust, TestResponsesInputRetainsImagesWhenStoreCannotConfirmLikeRust, TestResponsesInputChecksDistinctFileIDsOnceLikeRust."
    ]
   },
   {
@@ -38402,7 +38392,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:135: #57635 完成 — unarchive 线程时恢复 spawned descendants，并逐条发送 ThreadUnarchived"
+    "Round 1259: unarchiving a thread restores its spawned descendants and emits ThreadUnarchived per restored thread through appserver/router.go and appserver/protocol.go. Tests: appserver unarchive/thread-lifecycle tests."
    ]
   },
   {
@@ -38414,7 +38404,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:136: #57638 完成 — 核心对齐待实现"
+    "Round 1259: config/api.go:655-743 carries the managed OpenTelemetry requirement types (`OtelRequirements` plus its wire form) in the app-server protocol, with per-field pinning at :2684-2687. Tests: config requirements tests."
    ]
   },
   {
@@ -38438,7 +38428,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:138: #57649 完成 — 核心对齐待实现"
+    "Round 1259: config/api.go applies managed OpenTelemetry configuration requirements (exact-field pinning through otelRequirementForConfigPath) and app/daemon_telemetry.go builds the provider from them via otelinit. Tests: config requirement tests, otelinit/otelinit_test.go."
    ]
   },
   {
@@ -38450,7 +38440,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:139: #57654 完成 — 核心对齐待实现"
+    "Round 1259: redacting OTEL exporter headers in app-server config responses: config/api.go:2811-2812 redacts `otel.*` values on read, verified by appserver/credential_log_redaction_like_rust_test.go and the config redaction tests."
    ]
   },
   {
@@ -38460,9 +38450,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "partial",
    "evidence": [
-    "update/plan_2026_10_30.md:140: #57657 完成 — 核心对齐待实现"
+    "Round 1259: partial — otelinit/otelinit.go builds a provider from options, but app/daemon_telemetry.go has no account-switch hook that rebuilds or re-activates the trace exporter after the signed-in account changes, so Rust #57657 has no Go counterpart yet. Residual: re-activate the exporter when the account/auth snapshot changes. Tests today: otelinit/otelinit_test.go (provider construction only)."
    ]
   },
   {
@@ -38472,9 +38462,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "partial",
    "evidence": [
-    "update/plan_2026_10_30.md:141: #57658 完成 — 核心对齐待实现"
+    "Round 1259: partial — config/api.go:655-743 exposes managed OpenTelemetry requirement types (endpoint, headers, metadata) and app/daemon_telemetry.go consumes them through otelinit, but PEM client-identity support (certificate/key pairs and their redaction) is absent from both config/api.go and otelinit. Residual: add PEM client identities to OtelRequirements, the wire form, redaction and otelinit binding. Tests today: otelinit/otelinit_test.go."
    ]
   },
   {
