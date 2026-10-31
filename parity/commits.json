@@ -5656,12 +5656,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
     "Round 1032 (partial): executableLookupKeyForPlatform now applies target-platform basename, Windows drive-prefix, case, and executable-suffix normalization like Rust #42113, with regression coverage.",
     "Model-facing exec_command launch failures now return `exec_command failed: ...` bounded to 900 retained bytes with middle truncation and never prepend the rejected command; cancellation errors stay unwrapped.",
     "Unified-exec process IDs were already monotonic across release; added a regression test proving a released id is not reused.",
-    "Residual: Go has no Rust-equivalent dangerous-command classifier or unmatched-command heuristics, so commands_for_exec_policy_for_platform, dangerous_command_match_for_platform, and the executor_platform_os platform wiring cannot be ported onto an equivalent call site; remote Windows PowerShell dangerous-command semantics remain unimplemented."
+    "Round 1150: added the Rust-equivalent dangerous-command classifier (execpolicy/dangerous_command.go) with rm force-option detection, sudo/env/trap unwrapping bounded at depth 8, bash/zsh/sh -lc literal-command extraction, and PowerShell word matching, plus the Windows rules (execpolicy/dangerous_command_windows.go) for Start-Process/ShellExecute URLs, Remove-Item -Force, cmd del /f, rd /s /q, and direct GUI launches. tool/dangerous_command.go gates unified exec: a dangerous command always requires approval, is rejected when approvals are disabled, and uses the selected executor platform (linux/macos -> posix, windows or unknown -> windows, absent -> host) with a bounded rejection message. Tests: execpolicy/dangerous_command_like_rust_test.go and tool/dangerous_command_approval_like_rust_test.go. Verified: go test ./execpolicy -count=1; go test ./tool -count=1; go test ./appserver -run 'Exec|Shell|Approval' -skip TestRuntimeRouterExecutorCatalogUsesExtensionByteBudgetWithoutCoreWarningLikeRust -count=1 (that test also fails at the base commit); go build ./...; go test ./parity -skip TestGoTopLevelDirectoryInventory -count=1. Residual: Go computes prefix-rule evaluations through execpolicy/safety and managed checkpoints rather than inside shell construction, so the classifier is wired at the unified-exec preparation boundary where Rust's process manager computes the approval requirement."
    ]
   },
   {

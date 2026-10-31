@@ -726,6 +726,17 @@ func (e *ShellExecutor) prepareExecCommand(invocation *Invocation) (*execCommand
 	if err != nil {
 		return nil, RespondToModel(err.Error())
 	}
+	// Rust #42113 (unified_exec/process_manager): dangerous-command checks use
+	// the selected executor's platform, falling back to host semantics for a
+	// legacy executor that reports none. A dangerous command can never run
+	// without approval and is rejected when approvals are disabled.
+	commandPlatformOS := ""
+	if environment != nil {
+		commandPlatformOS = environment.PlatformOS
+	}
+	if err := applyDangerousCommandRequirement(req, validation.ApprovalPolicy, execpolicy.DangerousCommandPlatformForExecutorOS(commandPlatformOS), validation.PermissionsPreapproved); err != nil {
+		return nil, RespondToModel(err.Error())
+	}
 	// Rust's ExecCommand approval (and its PermissionRequest hook) names the
 	// environment the command runs in, so the resolved id must be visible before
 	// the approval callback. The implicit local executor is `local`.
