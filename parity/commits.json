@@ -34826,7 +34826,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:48: | `#56020` `#56031` `#56364` | Thread sample protocol fields and latest-turn semantics | `appserver/thread_sample.go`, `thread_sample_protocol.go`, `thread_sample_like_rust_test.go` |"
+    "Round 1249: appserver/thread_sample_protocol.go:18-21 ThreadSampleRequest.ResponsesAPIClientMetadata (json `responsesapiClientMetadata`) is threaded into the sampled turn as ResponsesAPIMetadata at appserver/thread_sample.go:159. Tests: appserver/client_metadata_patch_like_rust_test.go TestApplyResponsesAPIClientMetadataUpdatePatchRetainsKeysLikeRust / ...UpdateOrderLikeRust / ...EmptyReplacementClearsLikeRust / ...EmptyAndReservedLikeRust."
    ]
   },
   {
@@ -34888,7 +34888,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_28_sync4.md:130: | `0769c6aeeb` | #56044 | equivalent | Appserver executor cleanup hooks and the bundled cleanup allowlist. |"
+    "Round 1249: appserver/executor_hooks.go:48-51 executorPluginHookSources discovers inline cleanup hooks from execserverclient.ExecutorCapabilityDiscoveryV2Snapshot, :248 executorCleanupTargets flattens them into deduplicated calls, :319 RuntimeRouter.runExecutorCleanupHooks runs them per thread and event, and :182 executorCleanupHandlerAllowed restricts them to the bundled cleanup allowlist. Tests: appserver/bundled_hooks_test.go TestAllowlistedBundledCleanupHooksLikeRust and TestBundledCleanupHookIsBuiltinAndHiddenFromThePublicListLikeRust, appserver/bundled_hooks_interrupt_like_rust_test.go TestAllowlistedBundledCleanupHookInterruptLikeRust, appserver/executor_hooks_test.go."
    ]
   },
   {
@@ -34900,8 +34900,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:65: | `#56049` | Configured credential providers in remote credential masking | `network/proxy_credential_providers.go`, `execserver/network_policy.go`, `execserver/server.go`, `tool/unified_exec.go`, capability/masking tests |",
-    "plan_2026_10_27_nontui.md:670: `#56049` details: `RemoteNetworkProxyConfig` now carries `credentialProviders`"
+    "Round 1249: network/proxy_credential_providers.go parses configured credential providers and cloneCredentialProviders:465 copies them per policy; execserver/network_policy.go:224-227 RemoteNetworkProxyConfig.CredentialProviders ships the rules to the executor (dropped at :250 when the config is not trusted) and tool/unified_exec.go forwards the same provider map. Tests: config/credential_provider_merge_test.go, config/credential_provider_write_test.go TestConfigWriteValidatesCredentialProvidersLikeRust, execserver/network_policy_test.go."
    ]
   },
   {
@@ -34926,8 +34925,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:143: | `#56081` | Decrypted local secret snapshots are cached for every namespace: managed, Codex auth and MCP OAuth keep at most one snapshot process-wide (gateway snapshots stay with their backend), reuse requires the same file path, ciphertext hash and keyring passphrase hash, concurrent misses decrypt once, writes invalidate a matching snapshot, and every read still inspects the file and keyring | ",
-    "plan_2026_10_27_nontui.md:203: - `#56081` targets Rust's `codex-secrets` crate, and Go's `safety` local backend"
+    "Round 1249: safety/secrets.go localFileCache:241 keys one process-wide decrypted snapshot on the file path, ciphertext sha256 (:236) and keyring passphrase sha256 (:237) computed at :306-307 and compared at :316, so repeated reads reuse the snapshot while a changed file or passphrase decrypts again; gateway snapshots stay with their backend. Tests: safety/secrets_cache_like_rust_test.go TestLocalSecretCache* and TestLocalGatewayCache."
    ]
   },
   {
@@ -34988,8 +34986,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:142: | `#56127` | EMA MCP auth status inspection is owner-checked and never waits for account refresh; one lazy read of the account-scoped IdP grant is shared across admitted EMA servers, and a missing grant or read error is cached so every server reports the same state without repeating storage work | `mcp/ema_runtime.go`, like-Rust tests |",
-    "plan_2026_10_27_nontui.md:195: - `#56127` has no Go account-grant lease or refresh permit to avoid: Go's EMA"
+    "Round 1249: mcp/ema_runtime.go EMAAuthManager.CredentialsAvailable:164 and the shared emaCredentialStatus.available:202 lazily read the account-scoped IdP grant once per manager and cache a missing grant or read error, so auth-status inspection never blocks on an account refresh. Tests: mcp/config_ema_test.go TestAuthStatusForConfigReportsEMAUnsupported / TestValidateEMAAuthTransportRejectsAlternateCredentials alongside the EMA runtime tests."
    ]
   },
   {
@@ -35001,7 +34998,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_28_sync4.md:129: | `2dbe6bfa44` | #56132 | equivalent | `mcp/stdio_client.go` `doRequest` sends `notifications/cancelled` on context cancellation; `writeFrame` holds `writeMu`, so the request write precedes the cancellation. |"
+    "Round 1249: mcp/stdio_client.go:545 sends `notifications/cancelled` for a dropped response future; writeFrame serialises on writeMu so the request frame is written before the cancellation frame, and :1200 decodes the cancelled id to clear the pending entry. Tests: mcp/elicitation_cancellation_test.go (TestMCPCancelledNotificationRequestIDParsesCamelAndSnakeCase and the cancellation-memory cases)."
    ]
   },
   {
@@ -35013,7 +35010,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:50: | `#56133` | Defer agent mail after empty explicit final answers | `eventmap/stream.go`, stream tests, `turn/mailbox_preemption_test.go` |"
+    "Round 1249: eventmap/stream.go:44 records that an explicit final answer with empty text does not release queued agent mail, so the mailbox message is deferred to the next turn. Tests: turn/mailbox_preemption_test.go."
    ]
   },
   {
@@ -35049,8 +35046,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27.md:97: | `#56154` | Blocked on core schema: the debug-config renderer can only print `review_domains` once `config.NetworkRequirements` carries that field. |",
-    "plan_2026_10_27.md:196: Remaining TUI follow-ups are gated on core lanes: `#56154`"
+    "Round 1249: config.NetworkRequirements carries ReviewDomains, appserver/managed_network_constraints.go:288 copies them into the exec-server policy, execserver/network_policy.go:234-237 forwards them and :327 requires the networkProxyReviewDomains capability, and network/network.go:161-195 compiles owner and controller review selectors into the policy ahead of the allow rules. Tests: execserver/network_policy_test.go TestStartRequiresNetworkReviewDomainsCapabilityLikeRust, network/proxy_review_domains_test.go TestReviewDomainsRouteThroughApprovalLikeRust / TestReviewDomainsKeepExplicitDenialsLikeRust, network/network_environment_policy_test.go TestEnvironmentNetworkPolicyInheritsReviewDomainsLikeRust, network/network_policy_deferred_validation_like_rust_test.go (allow/deny/review compilation)."
    ]
   },
   {
@@ -35062,8 +35058,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:104: | `#56163` | Reasoning-effort override is stable and enabled by default | `features/features.go`, `features/features_test.go`, `exec/reasoning_effort_override_test.go` |",
-    "plan_2026_10_27_nontui.md:1234: - For `#56033`/`#55701`/`#56163`: `go test ./features ./config ./app -count=1`, `go test ./exec -run 'ReasoningEffort' -count=1`, `go test ./appserver -run 'ReasoningEffort|OAuth|MCP' -count=1`, and `go build ./...` pass."
+    "Round 1249: features/features.go:299 lists reasoning_effort_override as StageStable with DefaultEnabled: true. Tests: features/features_test.go, exec/reasoning_effort_override_test.go, appserver/reasoning_effort_override_test.go and appserver/reasoning_effort_override_history_test.go."
    ]
   },
   {
@@ -35075,7 +35070,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:31: | `#56182` | AWS SigV4 signing in network proxy MITM hooks: an `aws_sigv4` hook action selects requests whose `Authorization` names the placeholder access key ID, then re-signs them after policy authorization, header actions, and brokered credential injection with credentials that stay in the proxy process. Selected requests with mismatched credential scopes, presigned URLs, unsupported streaming "
+    "Round 1249: network/proxy_aws_sigv4.go implements the `aws_sigv4` hook action: it selects requests whose Authorization carries the placeholder access key id, re-signs them after policy authorisation and header actions, and keeps the real credentials inside the proxy process. Tests: network/proxy_aws_sigv4_test.go TestAWSSigV4MatchesPublishedIAMVector, TestAWSSigV4SignsPayloadAndReplacesGuestHeaders, TestAWSSigV4CredentialScopeMustMatch, TestAWSSigV4RejectsUnsupportedSigningInputs, TestAWSSigV4MasksLocalEnvironment; config parsing in network/proxy_aws_sigv4_config_test.go TestProxyConfigParsesAWSSigV4Action / TestProxyConfigParsesInlineAWSSigV4Action / TestProxyConfigRejectsInvalidAWSSigV4Credentials."
    ]
   },
   {
@@ -35236,8 +35231,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:116: | `#56250` | Resuming a thread with unchanged settings no longer appends a duplicate settings checkpoint | `rollout/session_items.go`, `rollout/rollout.go`, `appserver/router.go`, like-Rust tests |",
-    "plan_2026_10_27_nontui.md:466: `#56250` details: a resume compares the effective settings snapshot with the"
+    "Round 1249: rollout/rollout.go:728-766 persists the thread-owned settings snapshot (AppendThreadSettingsApplied*, ThreadSettingsApplied is the Rust ThreadSettingsSnapshot) and resume compares it with the effective settings, so an unchanged resume does not append a duplicate checkpoint. Tests: rollout/persisted_resume_settings_like_rust_test.go TestLatestPersistedResume*, rollout/settings_snapshot_equality_like_rust_test.go."
    ]
   },
   {
@@ -35286,8 +35280,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:138: | `#56266` | Managed-requirements denials keep their reason across runtime overlays unless a trusted host-owned Apps registration replaces the server; an explicit disable that requirements also deny stays combined through repeated filtering; standalone MCP login HTTP clients reject requirements-denied servers | `mcp/catalog_priority.go`, `mcp/config.go`, `mcp/api.go`, `config/mcp_requirements.go`,",
-    "plan_2026_10_27_nontui.md:164: - For `#56266`, Rust's `RequirementSource` is represented by Go's fixed"
+    "Round 1249: mcp/catalog_priority.go ResolveCatalogWithState:120 carries initialRequirementsDisabled reasons through runtime overlays and DisabledRegistrationIsNameVeto:53 keeps a trusted host-owned registration authoritative, with mcp/config.go and mcp/api.go applying the resolved state. Tests: mcp/config_test.go TestManagerRuntimeConfigPreservesDisableReasonsAcrossOverlay plus TestManagerRuntimeConfigAppliesBuiltInsAndOverlay / TestRuntimeConfigPluginOverlay."
    ]
   },
   {
@@ -35324,7 +35317,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:30: | `#56277` | Bound SigV4 request bodies: signing buffers at most the configured `max_body_bytes` (16 MiB cap) under a shared eight-slot buffer budget, fails closed when the body exceeds the limit or the read stalls for 30 seconds, and requires declared framing to match the buffered payload while leaving explicitly unsigned payloads unread. | `network/proxy_aws_sigv4.go`, like-Rust tests |"
+    "Round 1249: network/proxy_aws_sigv4.go:27-47 bounds signing buffers (awsSigV4MaxBodyBytes 16 MiB hard cap, DefaultAwsSigV4MaxBodyBytes 8 MiB, per-hook MaxBodyBytes) and fails closed on oversized or stalled bodies while leaving explicitly unsigned payloads unread. Tests: network/proxy_aws_sigv4_test.go TestAWSSigV4RequestsBufferCapacityAndTimeout and TestAWSSigV4UnsignedPayloadOmitsBodyRead."
    ]
   },
   {
@@ -35336,8 +35329,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:35: | `#56278` | Negotiated network policy metadata for MCP calls: an optional `NetworkPolicyMetadataProvider` on the runtime supplies call-scoped network restrictions (enabled, mode, allowed and denied domains, hard-deny allowlist misses). The experimental `codex/network-policy-meta` client capability is offered only to a trusted ChatGPT origin when a provider is configured, and policy metadata is at",
-    "plan_2026_10_27_nontui.md:1471: - For `#56278`: `go build ./...`, `go vet ./mcp`, `go test ./mcp -count=1`,"
+    "Round 1249: mcp/network_policy.go defines the optional NetworkPolicyMetadataProvider for call-scoped restrictions, mcp/client_capabilities.go offers the experimental `codex/network-policy-meta` capability only to a trusted ChatGPT origin when a provider is configured, and mcp/api.go stamps the negotiated metadata on each MCP call. Tests: mcp/network_policy_like_rust_test.go TestMCPNetworkPolicy*."
    ]
   },
   {
@@ -35361,8 +35353,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:39: | `#56284` | Supported thread originators (`codex_work_cca`, `codex_work_web`, `codex_work_desktop`, `codex_work_mobile`, `chatgpt_cca`) select isolated model managers before thread model metadata is resolved. Each partition sends its own `originator` header, reuses its manager, keeps separate in-memory and `models_cache.<originator>.json` disk catalogs, and shares runtime API-key discovery policy",
-    "plan_2026_10_27_nontui.md:1127: - For `#56284`: `go test ./model -count=1` (25.2s) and"
+    "Round 1249: model/models_originator.go parses the supported originators (:25 ParseModelCatalogOriginator), partitions managers (:49 ModelsManagerForOriginator, :73 HTTPModelsEndpoint.ForOriginator) and isolates disk catalogs via modelsOriginatorCachePath:94 (`models_cache.<originator>.json`); model/api.go and model/lazy_models.go route through those partitions and keep separate in-memory catalogs. Tests: model/models_originator_like_rust_test.go TestModelCatalogOriginator*, model/responses_agent_test.go TestResponsesAgentRunnerSendsOriginator."
    ]
   },
   {
