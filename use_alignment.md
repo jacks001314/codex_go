@@ -2656,8 +2656,88 @@ COMMAND`, and a value 0.166 rejects with a caret-less serde message came back as
   remaining ones share one cause (below). The regression table is
   `cli/sandbox_state_json_test.go`, generated from `out/r74-rust-expectations.json`.
 
+### 82. `migrate-rollouts` replays legacy records into paginated history like Rust
+
+Legacy migration is a record replay, not a session-item projection: 0.166's
+`LegacyRolloutCanonicalizer` re-emits every surviving record with the next
+stable ordinal, converts obsolete completion events into canonical turn items,
+and only then publishes the staged file. Go instead rebuilt the rollout from
+`sessionItemsFromRolloutLines`, which lost content and invented turn boundaries
+for exactly the rollouts migration exists to fix: a legacy `response_item`
+holding a `function_call`, `function_call_output` or `reasoning` payload was
+projected into a turn item, failed that conversion and disappeared; every
+legacy event without a `turn_id` produced a synthetic `turn-1`/`turn-2`
+`task_started` stamped with `time.Now()` and `started_at: null`; `token_count`
+was dropped entirely; `session_meta` printed `session_id: ""` plus Go's field
+order; timestamps lost their milliseconds; and `bytes_processed` was pinned to
+`0`.
+
+- **Head metadata.** `marshalCanonicalSessionMeta` writes Rust's `SessionMeta`
+  field order with its skip/null rules: `session_id` equals `id` (falling back
+  to the record's id, never an empty string), `model_provider` and
+  `base_instructions` always serialize (as `null` when unset),
+  `history_mode` becomes `paginated`, and `history_base` /
+  `subagent_history_start_ordinal` are dropped exactly as
+  `write_head_session_meta` does.
+- **Record replay.** `rollout/canonical_replay.go` re-reads the source records
+  (plain or `.jsonl.zst`), emits them in Rust's `RolloutLine` order
+  (`timestamp`, `ordinal`, `type`, `payload`), keeps the source timestamp
+  verbatim (milliseconds included), and passes response items and unknown
+  events through untouched. Go-written legacy rollouts that stored canonical
+  turn items inside `response_item` records (`imageGeneration`,
+  `commandExecution`, ...) are converted into `item_completed` events so resume
+  keeps them.
+- **Legacy events.** `user_message`, `agent_message`, `agent_reasoning`,
+  `agent_reasoning_raw_content` and `exec_command_end` become canonical
+  `TurnItem`s with Rust's field order and synthesized `item-N` ids (reasoning
+  accumulates into one item that is re-emitted, `exec_command_end` normalizes
+  the cwd to a `file:///C:/...` PathUri). `token_count` is normalized to
+  `{"type":"token_count","info":...,"rate_limits":...}`, and `task_started` /
+  `task_complete` / `turn_aborted` re-serialize with the protocol defaults
+  (`model_context_window: null`, `collaboration_mode_kind: "default"`).
+- **Turn boundaries.** Records without a turn id adopt Rust's implicit turn
+  `rollout-{source line index}` with `started_at`/`completed_at` taken from the
+  record timestamp, and the implicit turn is closed before the next turn starts
+  or at end of file.
+- **Rollback.** `thread_rolled_back` is now a plan operation: instruction
+  boundaries follow user messages, the turn-started records that introduce a
+  turn are adopted by that turn's first message, and `num_turns` drops whole
+  boundaries before any ordinal is assigned - so a rolled-back instruction and
+  its `task_started` disappear while the surviving turn keeps its
+  `turn-1`-style id.
+- **Byte accounting.** `CanonicalizeRolloutWithStats` returns what Rust's rate
+  limiter counts: the source bytes, the header record read twice, the staged
+  rollout written once and projected once, plus the extra unplanned pass,
+  rollback-plan pass and aborted staged writes Rust performs when a rollback
+  marker forces a second conversion.
+- Evidence: `out/r75-migrate-compare.txt` compares 8 legacy shapes
+  (response items, legacy events, explicit turn + command execution, tool-call
+  items, reasoning accumulation, aborted turn, two turns, rollback) against
+  0.166 at 8/8 byte-identical with identical `bytes_processed`
+  (2,648 / 3,896 / 3,992 / 2,769 / 3,477 / 2,207 / 7,051 / 8,353);
+  `out/r75-rollback-bytes.txt` covers three rollback variants (2,436 / 3,680 /
+  5,352, all identical); `out/r75-compressed.txt` shows a `.jsonl.zst` source
+  migrating to identical decompressed content; `out/r75-migrate-probe.txt`
+  keeps the original 4-record probe. `TestCanonicalizeRolloutReplaysResponseItemsAndNormalizesTokenCountLikeRust`,
+  `TestCanonicalizeRolloutSynthesizesImplicitTurnsLikeRust`,
+  `TestCanonicalizeRolloutConvertsCommandExecutionLikeRust`,
+  `TestCanonicalizeRolloutAccumulatesReasoningLikeRust` and
+  `TestCanonicalizeRolloutCountsRollbackConversionPassesLikeRust` freeze those
+  bytes and counters in `rollout/canonical_migration_rust_shape_test.go`;
+  `go test -count=1 ./rollout` passes, `./app` keeps only its two known
+  baselines and `./appserver` only the two pre-existing `TestSkillMCPDependency*`
+  failures.
+
 ## Verification
 
+- Round 69 makes `migrate-rollouts --apply` replay legacy records like Rust
+  (entry 82): `out/r75-migrate-compare.txt` reports 8/8 legacy shapes
+  byte-identical to 0.166 with identical `bytes_processed`,
+  `out/r75-rollback-bytes.txt` 3/3 rollback variants and
+  `out/r75-compressed.txt` identical content for a `.jsonl.zst` source;
+  `go test -count=1 ./rollout` passes with `./app` keeping only its two known
+  baselines and `./appserver` only the two pre-existing `TestSkillMCPDependency*`
+  failures.
 - Round 68 makes `sandbox --sandbox-state-json` decode like serde before the
   `-c` overrides and the command check (entry 81): `out/r74-state.txt` and
   `out/r74-syntax.txt` compare 49 payloads against 0.166 (40 identical, the
@@ -3268,16 +3348,21 @@ COMMAND`, and a value 0.166 rejects with a caret-less serde message came back as
   command is also Go's `sandbox requires COMMAND` where 0.166 runs the empty
   command and either reports `sandbox command must not be empty` (disabled or
   external profile) or the backend error.
-- `migrate-rollouts --apply` still reports `bytes_processed: 0` where Rust
-  counts every byte its canonicalizer read and wrote through the rate limiter
-  (2,827 for a 282-byte legacy rollout), and the paginated rollout Go publishes
-  is not byte-identical: Rust writes the synthetic `task_started`/`task_complete`
-  events with the record timestamp and fills `session_id`/`base_instructions` in
-  `session_meta`, while Go stamps the synthetic events with the current time and
-  omits those optional fields (879 vs 1,077 bytes for the same input). The
-  `Disk used for thread storage` line follows Rust's rule but not its numbers,
-  because Rust leaves the thread-history WAL uncheckpointed while Go checkpoints
-  it (290.2 KB vs 88.6 KB in the same probe).
+- `migrate-rollouts --apply` now replays legacy records and reports Rust's
+  `bytes_processed` for plain sources (entry 82, `out/r75-migrate-compare.txt`
+  8/8), so two deltas remain. A `.jsonl.zst` source reports 4,296 bytes in 0.166
+  and 3,808 in Go even though the migrated content is identical
+  (`out/r75-compressed.txt`): Rust accounts the compressed length plus the
+  decompressed prefix it stages, and its zstd encoder also emits a different
+  frame size than Go's (488 vs 490 bytes), so the compressed lane needs its own
+  accounting pass. 0.166 also drops legacy `patch_apply_end` and `item_completed`
+  events during replay while Go still passes unknown events through, and Go
+  re-serializes neither `turn_context` (Rust fills the sandbox policy defaults)
+  nor `compacted` (Rust appends null `compaction_response_id` /
+  `latest_token_usage_record`). The `Disk used for thread storage` line follows
+  Rust's rule but not its numbers, because Rust leaves the thread-history WAL
+  uncheckpointed while Go checkpoints it (290.2 KB vs 88.6 KB in the same
+  probe).
 - `exec-server forward` still rejects `--remote` outright (pinned by
   `TestExecServerRejectsMissingOrConflictingRemoteOptionsLikeRust`), where Rust
   allows the direct-transport combination; the Go forward runtime has no

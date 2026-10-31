@@ -206,10 +206,11 @@ func inspectRolloutPath(codexHome string, path string, options MigrationOptions)
 	if !options.Apply {
 		return migrationOutcome(&threadID, path, MigrationStatusEligible, 0, ""), true
 	}
-	if err := CanonicalizeRollout(codexHome, path); err != nil {
+	bytesProcessed, err := CanonicalizeRolloutWithStats(codexHome, path)
+	if err != nil {
 		return migrationOutcomeWithReason(&threadID, path, MigrationStatusFailed, migrationFailureReasonPtr(MigrationFailureUnknown), 0, err.Error()), true
 	}
-	return migrationOutcome(&threadID, path, MigrationStatusMigrated, 0, ""), true
+	return migrationOutcome(&threadID, path, MigrationStatusMigrated, bytesProcessed, ""), true
 }
 
 // classifyMigrationReadFailure mirrors Rust #39784: filesystem read failures

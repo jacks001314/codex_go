@@ -7,11 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/klauspost/compress/zstd"
-
-	"codex_go/session"
 )
 
 // MigrationJournalDirectory mirrors Rust publish.rs
@@ -22,7 +19,7 @@ const MigrationJournalDirectory = "rollout-migrations"
 // mirroring Rust LegacyRolloutCanonicalizer + publish helpers:
 //
 //   - reads the source rollout (plain or .jsonl.zst),
-//   - replays legacy events/items into canonical session items,
+//   - replays legacy records into canonical paginated JSONL,
 //   - writes a staged paginated rollout at ".{name}.paginated.tmp",
 //   - writes the durable ".pending" journal under rollout-migrations/,
 //   - atomically renames the staged file over the source,
@@ -31,64 +28,70 @@ const MigrationJournalDirectory = "rollout-migrations"
 // On any failure the source rollout is left untouched; a leftover staged file
 // is removed so a later run can retry.
 func CanonicalizeRollout(codexHome string, path string) error {
+	_, err := CanonicalizeRolloutWithStats(codexHome, path)
+	return err
+}
+
+// CanonicalizeRolloutWithStats migrates one legacy rollout and reports the byte
+// count Rust's migration rate limiter accounts for that file: the source bytes,
+// the header record read twice, and the staged rollout written and projected.
+func CanonicalizeRolloutWithStats(codexHome string, path string) (uint64, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
-		return errors.New("rollout path is required")
+		return 0, errors.New("rollout path is required")
 	}
 	source, err := os.Open(path)
 	if err != nil {
-		return fmt.Errorf("open source rollout: %w", err)
+		return 0, fmt.Errorf("open source rollout: %w", err)
 	}
 	sourceInfo, statErr := source.Stat()
-	if statErr != nil {
-		source.Close()
-		return fmt.Errorf("stat source rollout: %w", statErr)
-	}
 	source.Close()
+	if statErr != nil {
+		return 0, fmt.Errorf("stat source rollout: %w", statErr)
+	}
 	if sourceInfo.Size() == 0 {
-		return errors.New("rollout is empty; nothing to migrate")
+		return 0, errors.New("rollout is empty; nothing to migrate")
 	}
 
 	compressed := strings.HasSuffix(strings.ToLower(path), ".jsonl.zst")
-	lines, _, err := Load(path)
+	rawLines, decompressedBytes, err := readCanonicalReplayLines(path)
 	if err != nil {
-		return fmt.Errorf("load legacy rollout: %w", err)
+		return 0, fmt.Errorf("load legacy rollout: %w", err)
 	}
-	meta := firstSessionMetaFromLines(lines)
-	if meta == nil {
-		return fmt.Errorf("rollout contains no session metadata: %s", path)
+	meta, headerTimestamp, err := canonicalHeaderSessionMeta(rawLines)
+	if err != nil {
+		return 0, err
 	}
 	if strings.EqualFold(strings.TrimSpace(meta.HistoryMode), "paginated") {
-		return errors.New("rollout is already paginated")
+		return 0, errors.New("rollout is already paginated")
 	}
-	createdAt := parseMetaTimestamp(meta.Timestamp)
-	if createdAt.IsZero() {
-		createdAt = time.Now().UTC()
+	sourceBytes := uint64(sourceInfo.Size())
+	if compressed {
+		sourceBytes += decompressedBytes
 	}
-	items, turns := sessionItemsFromRolloutLines(lines, createdAt)
 
 	stagedPath, err := stagedRolloutPath(path)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	journalPath, err := migrationJournalPath(codexHome, strings.TrimSpace(meta.ID))
 	if err != nil {
-		return err
+		return 0, err
 	}
 	_ = os.Remove(stagedPath)
 	file, err := os.OpenFile(stagedPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {
-		return fmt.Errorf("create staged rollout: %w", err)
+		return 0, fmt.Errorf("create staged rollout: %w", err)
 	}
-	finalOrdinal, writeErr := writeCanonicalPaginated(file, meta, items, turns, createdAt)
+	bytesProcessed, finalOrdinal, writeErr := writeCanonicalReplay(file, meta, headerTimestamp, rawLines, sourceBytes)
 	closeErr := file.Close()
 	if writeErr != nil {
 		_ = os.Remove(stagedPath)
-		return writeErr
+		return 0, writeErr
 	}
 	if closeErr != nil {
 		_ = os.Remove(stagedPath)
-		return fmt.Errorf("close staged rollout: %w", closeErr)
+		return 0, fmt.Errorf("close staged rollout: %w", closeErr)
 	}
 	if isSubagentRollout(meta) {
 		// Mirrors Rust rewrite_subagent_history_boundary: a migrated subagent
@@ -96,13 +99,13 @@ func CanonicalizeRollout(codexHome string, path string) error {
 		// SQLite projection and resume skip the copied parent history prefix.
 		if err := rewriteStagedSubagentBoundary(stagedPath, finalOrdinal); err != nil {
 			_ = os.Remove(stagedPath)
-			return err
+			return 0, err
 		}
 	}
 
 	if err := writeMigrationJournal(journalPath); err != nil {
 		_ = os.Remove(stagedPath)
-		return err
+		return 0, err
 	}
 	if compressed {
 		// Mirrors Rust compress_rollout_to_path + publish: the staged plain
@@ -111,35 +114,51 @@ func CanonicalizeRollout(codexHome string, path string) error {
 		compressedStagedPath, err := stagedRolloutPathWithSuffix(path, "paginated.zst")
 		if err != nil {
 			_ = os.Remove(stagedPath)
-			return err
+			return 0, err
 		}
 		if err := compressRolloutToPath(stagedPath, compressedStagedPath); err != nil {
 			_ = os.Remove(stagedPath)
-			return err
+			return 0, err
 		}
 		_ = os.Remove(stagedPath)
 		if err := preserveRolloutAccessMetadata(path, compressedStagedPath, sourceInfo); err != nil {
 			_ = os.Remove(compressedStagedPath)
-			return fmt.Errorf("preserve rollout access metadata: %w", err)
+			return 0, fmt.Errorf("preserve rollout access metadata: %w", err)
 		}
 		if err := os.Rename(compressedStagedPath, path); err != nil {
 			_ = os.Remove(compressedStagedPath)
-			return fmt.Errorf("publish compressed staged rollout: %w", err)
+			return 0, fmt.Errorf("publish compressed staged rollout: %w", err)
 		}
 	} else {
 		if err := preserveRolloutAccessMetadata(path, stagedPath, sourceInfo); err != nil {
 			_ = os.Remove(stagedPath)
-			return fmt.Errorf("preserve rollout access metadata: %w", err)
+			return 0, fmt.Errorf("preserve rollout access metadata: %w", err)
 		}
 		if err := os.Rename(stagedPath, path); err != nil {
 			_ = os.Remove(stagedPath)
-			return fmt.Errorf("publish staged rollout: %w", err)
+			return 0, fmt.Errorf("publish staged rollout: %w", err)
 		}
 	}
 	if err := os.Remove(journalPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("remove migration journal: %w", err)
+		return 0, fmt.Errorf("remove migration journal: %w", err)
 	}
-	return nil
+	return bytesProcessed, nil
+}
+
+// canonicalHeaderSessionMeta reads the head session metadata record that the
+// canonical writer replays first.
+func canonicalHeaderSessionMeta(rawLines [][]byte) (*SessionMeta, string, error) {
+	for _, raw := range rawLines {
+		var line Line
+		if err := unmarshalLine(raw, &line); err != nil {
+			continue
+		}
+		if line.Meta == nil {
+			continue
+		}
+		return line.Meta, line.Timestamp, nil
+	}
+	return nil, "", errors.New("rollout contains no session metadata")
 }
 
 func firstSessionMetaFromLines(lines []Line) *SessionMeta {
@@ -208,132 +227,6 @@ func writeMigrationJournal(journalPath string) error {
 	return file.Close()
 }
 
-// writeCanonicalPaginated writes the canonical paginated rollout: session_meta
-// header (history_mode=paginated, no history_base), then per-turn event
-// boundaries and completed items in ordinal order.
-func writeCanonicalPaginated(file *os.File, meta *SessionMeta, items []session.Item, turns []session.TurnSnapshot, createdAt time.Time) (uint64, error) {
-	canonical := *meta
-	canonical.HistoryMode = "paginated"
-	canonical.HistoryBase = nil
-	ordinal := uint64(0)
-	head, err := json.Marshal(Line{
-		Type:      "session_meta",
-		Timestamp: createdAt.UTC().Format(time.RFC3339Nano),
-		Meta:      &canonical,
-		Ordinal:   &ordinal,
-	})
-	if err != nil {
-		return 0, fmt.Errorf("marshal canonical session meta: %w", err)
-	}
-	if _, err := file.Write(append(head, '\n')); err != nil {
-		return 0, fmt.Errorf("write canonical session meta: %w", err)
-	}
-	ordinal++
-
-	turnByID := map[string]session.TurnSnapshot{}
-	for i := range turns {
-		turnByID[turns[i].ID] = turns[i]
-	}
-	writtenTurns := map[string]bool{}
-	for i := range items {
-		item := &items[i]
-		turnID := sessionItemTurnID(item, i)
-		if turnID != "" && !writtenTurns[turnID] {
-			if turn, ok := turnByID[turnID]; ok {
-				startedAt := timeFromUnixOrZero(turn.StartedAt)
-				if err := writeCanonicalEventLine(file, "task_started", turnID, startedAt, ordinal, map[string]any{"started_at": turn.StartedAt}); err != nil {
-					return 0, err
-				}
-				ordinal++
-			} else {
-				if err := writeCanonicalEventLine(file, "task_started", turnID, time.Time{}, ordinal, map[string]any{"started_at": nil}); err != nil {
-					return 0, err
-				}
-				ordinal++
-			}
-			writtenTurns[turnID] = true
-		}
-		completedAt := item.CreatedAt
-		if completedAt.IsZero() {
-			completedAt = createdAt
-		}
-		raw, _, err := CoreTurnItemJSONFromSessionItem(item)
-		if err != nil || len(raw) == 0 {
-			// Harness-authored configuration updates and additional tool
-			// definitions persist as trusted response_item lines (Rust
-			// #43110/#50435); other unsupported items drop.
-			payload, metadata, ok := configurationUpdateRolloutItem(item)
-			if !ok {
-				payload, metadata, ok = additionalToolsRolloutItem(item)
-			}
-			if ok {
-				ordinalCopy := ordinal
-				line := Line{
-					Type:         "response_item",
-					Timestamp:    completedAt.UTC().Format(time.RFC3339Nano),
-					Item:         payload,
-					ItemMetadata: metadata,
-					ItemID:       item.ID,
-					TurnID:       turnID,
-					Ordinal:      &ordinalCopy,
-				}
-				data, marshalErr := json.Marshal(line)
-				if marshalErr != nil {
-					return 0, marshalErr
-				}
-				if _, writeErr := file.Write(append(data, '\n')); writeErr != nil {
-					return 0, writeErr
-				}
-				ordinal++
-			}
-			continue
-		}
-		if err := writeCanonicalCompletedItem(file, raw, turnID, completedAt, ordinal); err != nil {
-			return 0, err
-		}
-		ordinal++
-	}
-	for i := range turns {
-		turn := turns[i]
-		if turn.Status != "completed" && turn.Status != "" {
-			continue
-		}
-		payload := map[string]any{"completed_at": turn.CompletedAt}
-		if turn.CompletedAt != nil {
-			payload["duration_ms"] = turn.DurationMS
-		}
-		completedAt := timeFromUnixOrZero(turn.CompletedAt)
-		if err := writeCanonicalEventLine(file, "task_complete", turn.ID, completedAt, ordinal, payload); err != nil {
-			return 0, err
-		}
-		ordinal++
-	}
-	return ordinal, nil
-}
-
-func writeCanonicalEventLine(file *os.File, eventType string, turnID string, eventTime time.Time, ordinal uint64, fields map[string]any) error {
-	payload := map[string]any{"type": eventType, "turn_id": turnID}
-	for key, value := range fields {
-		payload[key] = value
-	}
-	data, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("marshal canonical event %s: %w", eventType, err)
-	}
-	timestamp := time.Now().UTC().Format(time.RFC3339Nano)
-	if !eventTime.IsZero() {
-		timestamp = eventTime.UTC().Format(time.RFC3339Nano)
-	}
-	line, err := json.Marshal(Line{Type: "event_msg", Timestamp: timestamp, Payload: data, Ordinal: &ordinal})
-	if err != nil {
-		return fmt.Errorf("marshal canonical event line: %w", err)
-	}
-	if _, err := file.Write(append(line, '\n')); err != nil {
-		return fmt.Errorf("write canonical event %s: %w", eventType, err)
-	}
-	return nil
-}
-
 // isSubagentRollout mirrors Rust migrate_rollout_path's RolloutMigrationKind
 // detection: a non-memory-consolidation session whose source is a subagent or
 // whose thread_source is "subagent" is treated as a subagent rollout.
@@ -399,41 +292,4 @@ func rewriteStagedSubagentBoundary(stagedPath string, boundary uint64) error {
 		return fmt.Errorf("rewrite staged subagent boundary: %w", err)
 	}
 	return nil
-}
-
-func writeCanonicalCompletedItem(file *os.File, raw json.RawMessage, turnID string, completedAt time.Time, ordinal uint64) error {
-	// Mirrors Rust canonicalizer write_completed_item_to_turn: the canonical
-	// paginated line is an event_msg whose payload is an ItemCompleted event
-	// wrapping the TurnItem under the `item` key.
-	completedAtMS := completedAt.UTC().UnixMilli()
-	payload := map[string]any{
-		"type":            "item_completed",
-		"turn_id":         turnID,
-		"completed_at_ms": completedAtMS,
-		"item":            json.RawMessage(raw),
-	}
-	data, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("marshal canonical item_completed payload: %w", err)
-	}
-	line, err := json.Marshal(Line{
-		Type:      "event_msg",
-		Timestamp: completedAt.UTC().Format(time.RFC3339Nano),
-		Payload:   data,
-		Ordinal:   &ordinal,
-	})
-	if err != nil {
-		return fmt.Errorf("marshal canonical completed item: %w", err)
-	}
-	if _, err := file.Write(append(line, '\n')); err != nil {
-		return fmt.Errorf("write canonical completed item: %w", err)
-	}
-	return nil
-}
-
-func timeFromUnixOrZero(value *int64) time.Time {
-	if value == nil {
-		return time.Time{}
-	}
-	return time.Unix(*value, 0).UTC()
 }
