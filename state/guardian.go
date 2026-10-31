@@ -685,15 +685,60 @@ func NotificationFromEvent(threadID string, event *Event) Notification {
 	return Notification{Method: NotificationReviewCompleted, Params: ReviewCompletedNotification{ThreadID: threadID, TurnID: event.TurnID, Review: review}}
 }
 
+type assessmentPayload struct {
+	RiskLevel         *RiskLevel         `json:"riskLevel"`
+	UserAuthorization *UserAuthorization `json:"userAuthorization"`
+	Outcome           *Outcome           `json:"outcome"`
+	Rationale         *string            `json:"rationale"`
+}
+
+// ParseAssessment mirrors Rust's parse_guardian_assessment: strict JSON is
+// preferred, a surrounding prose wrapper is tolerated, and omitted optional
+// fields fall back to outcome-specific defaults.
 func ParseAssessment(data []byte) (*Assessment, error) {
-	var assessment Assessment
-	if err := json.Unmarshal(data, &assessment); err != nil {
-		return nil, err
+	payload := &assessmentPayload{}
+	if err := json.Unmarshal(data, payload); err != nil {
+		text := string(data)
+		start := strings.IndexByte(text, '{')
+		end := strings.LastIndexByte(text, '}')
+		if start < 0 || end <= start {
+			return nil, fmt.Errorf("guardian assessment was not valid JSON: %w", err)
+		}
+		payload = &assessmentPayload{}
+		if err := json.Unmarshal([]byte(text[start:end+1]), payload); err != nil {
+			return nil, err
+		}
+	}
+	if payload.Outcome == nil {
+		return nil, fmt.Errorf("%w: assessment field outcome is required", ErrInvalidGuardianRequest)
+	}
+	outcome := *payload.Outcome
+	riskLevel := RiskLow
+	rationale := "Auto-review returned a low-risk allow decision."
+	if outcome == OutcomeDeny {
+		riskLevel = RiskHigh
+		rationale = "Auto-review returned a deny decision without a rationale."
+	}
+	if payload.RiskLevel != nil {
+		riskLevel = *payload.RiskLevel
+	}
+	userAuthorization := AuthorizationUnknown
+	if payload.UserAuthorization != nil {
+		userAuthorization = *payload.UserAuthorization
+	}
+	if payload.Rationale != nil && strings.TrimSpace(*payload.Rationale) != "" {
+		rationale = *payload.Rationale
+	}
+	assessment := &Assessment{
+		RiskLevel:         riskLevel,
+		UserAuthorization: userAuthorization,
+		Outcome:           outcome,
+		Rationale:         rationale,
 	}
 	if err := assessment.Validate(); err != nil {
 		return nil, err
 	}
-	return &assessment, nil
+	return assessment, nil
 }
 
 func BuildPrompt(action Action, transcript []string) (string, error) {

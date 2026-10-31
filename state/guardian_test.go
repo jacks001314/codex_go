@@ -272,6 +272,63 @@ func TestParseAssessmentAndPrompt(t *testing.T) {
 	}
 }
 
+func TestParseAssessmentToleratesEmbeddedJSONAndDefaultsLikeRust(t *testing.T) {
+	tests := []struct {
+		name    string
+		text    string
+		want    Assessment
+		wantErr bool
+	}{
+		{
+			name: "embedded json",
+			text: "preface {\"riskLevel\":\"medium\",\"userAuthorization\":\"low\",\"outcome\":\"allow\",\"rationale\":\"ok\"}",
+			want: Assessment{RiskLevel: RiskMedium, UserAuthorization: AuthorizationLow, Outcome: OutcomeAllow, Rationale: "ok"},
+		},
+		{
+			name: "bare allow",
+			text: `{"outcome":"allow"}`,
+			want: Assessment{RiskLevel: RiskLow, UserAuthorization: AuthorizationUnknown, Outcome: OutcomeAllow, Rationale: "Auto-review returned a low-risk allow decision."},
+		},
+		{
+			name: "bare deny",
+			text: `{"outcome":"deny"}`,
+			want: Assessment{RiskLevel: RiskHigh, UserAuthorization: AuthorizationUnknown, Outcome: OutcomeDeny, Rationale: "Auto-review returned a deny decision without a rationale."},
+		},
+		{
+			name: "empty rationale",
+			text: `{"outcome":"deny","rationale":"   "}`,
+			want: Assessment{RiskLevel: RiskHigh, UserAuthorization: AuthorizationUnknown, Outcome: OutcomeDeny, Rationale: "Auto-review returned a deny decision without a rationale."},
+		},
+		{
+			name:    "no json",
+			text:    "not json",
+			wantErr: true,
+		},
+		{
+			name:    "missing outcome",
+			text:    `{"riskLevel":"low"}`,
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ParseAssessment([]byte(tt.text))
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("ParseAssessment(%q) = %+v, want error", tt.text, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseAssessment(%q) error = %v", tt.text, err)
+			}
+			if *got != tt.want {
+				t.Fatalf("ParseAssessment(%q) = %+v, want %+v", tt.text, *got, tt.want)
+			}
+		})
+	}
+}
+
 func TestBuildPromptSerializesNetworkActionLikeRust(t *testing.T) {
 	prompt, err := BuildPrompt(Action{
 		Type:          "network_access",

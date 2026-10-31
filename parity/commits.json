@@ -8956,9 +8956,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 3/6; needs review: guardian_output_schema, parse_guardian_assessment, read_only_guardian_permission_profile"
+    "Round 1240: the shared synchronous Guardian reviewer contract now matches Rust guardian_review. state.ParseAssessment accepts strict JSON or a JSON object embedded in surrounding prose and fills omitted risk_level/user_authorization/rationale from the same outcome-derived defaults; guardianAssessmentOutputSchema requires only outcome while retaining all four optional properties; guardianReviewerReadOnlyProfile intersects the parent profile with read-only access. Tests: go test ./state -run TestParseAssessmentToleratesEmbeddedJSONAndDefaultsLikeRust -count=1 and go test ./appserver -run TestGuardianAssessmentOutputSchemaRequiresOnlyOutcomeLikeRust -count=1."
    ]
   },
   {
@@ -18660,7 +18660,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "Partial symbol coverage 1/2; needs review: pin_v2_residency"
+    "Round 1240 (re-audit): still N/A. Rust adds a V2 residency gate that pins a recipient while inter-agent submissions are queued and makes eviction acquire the runtime write guard before removing registry/residency entries. Go has no V2 residency registry or idle-worker eviction path: appserver/agent_controller.go and the agent package deliver/queue messages directly against registered runtimes and do not unload idle agent runtimes, so pin_v2_residency has no carrier and no queued message can be lost to eviction. No behaviour delta to port."
    ]
   },
   {
