@@ -740,9 +740,9 @@ func Parse(args []string) (*Parsed, error) {
 	if cmd, ok := knownCommands[rest[0]]; ok && !promptOnly {
 		p.Command = cmd
 		p.RawSubcommand = append([]string(nil), rest...)
-		if p.Root.StrictConfig && strictConfigUnsupportedBeforeSubcommandParse(cmd) {
-			return nil, fmt.Errorf("`--strict-config` is not supported for `codex %s`", cmd)
-		}
+		// Rust parses the subcommand first (so clap's own diagnostics win) and
+		// only then runs the post-parse gates; Parsed.Validate applies the
+		// --strict-config and --worktree rejections in that order.
 		if _, err := parseSubcommand(p, rest[1:]); err != nil {
 			return nil, decorateSubcommandClapUsage(err, rest[1:])
 		}
@@ -821,17 +821,6 @@ func prependConfigOverrides(parent, child []string) []string {
 	merged = append(merged, parent...)
 	merged = append(merged, child...)
 	return merged
-}
-
-func strictConfigUnsupportedBeforeSubcommandParse(command Command) bool {
-	switch command {
-	case CommandInteractive, CommandExec, CommandReview, CommandExecServer,
-		CommandResume, CommandArchive, CommandDelete, CommandUnarchive, CommandFork, CommandDoctor,
-		CommandAppServer, CommandMigrateNFSDB:
-		return false
-	default:
-		return command != ""
-	}
 }
 
 func parseSubcommand(p *Parsed, args []string) (*Parsed, error) {
@@ -933,6 +922,11 @@ func parseSubcommand(p *Parsed, args []string) (*Parsed, error) {
 }
 
 func (p *Parsed) Validate() error {
+	// Rust runs reject_unsupported_worktree_for_subcommand before the strict
+	// config and remote checks and before exec validates its own positionals.
+	if err := p.validateWorktreeSupport(); err != nil {
+		return err
+	}
 	if err := validateTUISharedOptions(p.Root.Shared); err != nil {
 		return err
 	}
@@ -963,6 +957,46 @@ func (p *Parsed) Validate() error {
 	return nil
 }
 
+// validateWorktreeSupport mirrors reject_unsupported_worktree_for_subcommand
+// (codex-rs/cli/src/main.rs): `--worktree` only creates a fresh managed
+// worktree, so it is accepted for new interactive sessions, `codex fork <ID>`,
+// `codex exec` and `codex exec fork` and rejected everywhere else.
+func (p *Parsed) validateWorktreeSupport() error {
+	worktree := p.Root.Shared.Worktree
+	switch p.Command {
+	case CommandExec:
+		worktree = worktree || p.Exec.Shared.Worktree
+	case CommandResume, CommandFork, CommandArchive, CommandUnarchive, CommandDelete:
+		worktree = worktree || p.Session.Shared.Worktree
+	case CommandQueue:
+		worktree = worktree || p.Queue.Shared.Worktree
+	}
+	if !worktree {
+		return nil
+	}
+	switch p.Command {
+	case CommandInteractive:
+		return nil
+	case CommandFork:
+		if p.Session.Target != "" && !p.Session.Last {
+			return nil
+		}
+		return errors.New("`codex fork --worktree` requires an explicit session ID")
+	case CommandExec:
+		switch p.Exec.Subcommand {
+		case "":
+			return nil
+		case "fork":
+			return nil
+		case "resume":
+			return errors.New("`--worktree` cannot resume an existing session; use `codex exec fork --worktree`")
+		case "review":
+			return errors.New("`--worktree` is not supported for code review")
+		}
+	}
+	return errors.New("`--worktree` supports new interactive sessions, `codex fork`, `codex exec`, and `codex exec fork`")
+}
+
 func validateTUISharedOptions(shared SharedOptions) error {
 	if shared.DangerouslyBypassApprovalsAndSandbox && strings.TrimSpace(shared.ApprovalPolicy) != "" {
 		return errors.New("`--dangerously-bypass-approvals-and-sandbox` conflicts with `--ask-for-approval`")
@@ -973,7 +1007,8 @@ func validateTUISharedOptions(shared SharedOptions) error {
 func (p *Parsed) unsupportedStrictConfigSubcommandName() string {
 	switch p.Command {
 	case CommandInteractive, CommandExec, CommandReview, CommandExecServer,
-		CommandResume, CommandArchive, CommandDelete, CommandUnarchive, CommandFork, CommandDoctor, CommandQueue:
+		CommandResume, CommandArchive, CommandDelete, CommandUnarchive, CommandFork, CommandDoctor, CommandQueue,
+		CommandAgents:
 		return ""
 	case CommandAppServer:
 		if len(p.AppServer.Subcommand) == 0 {
@@ -982,12 +1017,23 @@ func (p *Parsed) unsupportedStrictConfigSubcommandName() string {
 		return "app-server " + strings.Join(p.AppServer.Subcommand, " ")
 	case "app":
 		return "app"
+	case CommandRemoteControl:
+		return p.remoteControlSubcommandName()
 	default:
 		if p.Command == "" {
 			return ""
 		}
 		return string(p.Command)
 	}
+}
+
+// remoteControlSubcommandName mirrors RemoteControlCommand::subcommand_name:
+// the bare command or `remote-control <start|stop|pair>`.
+func (p *Parsed) remoteControlSubcommandName() string {
+	if p.RemoteControl.Subcommand == "" {
+		return "remote-control"
+	}
+	return "remote-control " + p.RemoteControl.Subcommand
 }
 
 func (p *Parsed) remoteUnsupportedSubcommandName() string {
@@ -999,6 +1045,8 @@ func (p *Parsed) remoteUnsupportedSubcommandName() string {
 			return "app-server"
 		}
 		return "app-server " + strings.Join(p.AppServer.Subcommand, " ")
+	case CommandRemoteControl:
+		return p.remoteControlSubcommandName()
 	default:
 		if p.Command == "" {
 			return ""
@@ -1664,6 +1712,17 @@ func parseReview(args []string, review *ReviewOptions, exec *ExecOptions) error 
 			if err := setExecCyberAccessProgram(exec, strings.TrimPrefix(arg, "--cyber-access-program=")); err != nil {
 				return err
 			}
+		case exec != nil && isExecReviewGlobalOptionArg(arg):
+			// Rust marks these SharedCliOptions entries global inside `codex
+			// exec`, so clap accepts them after the review subcommand and the
+			// post-parse worktree gate decides what to do with them.
+			handled, err := parseSharedOption(args, &i, &exec.Shared)
+			if err != nil {
+				return err
+			}
+			if !handled {
+				return unexpectedArgumentError(arg, execReviewUsageText)
+			}
 		case arg == "--uncommitted":
 			if review.Base != "" || review.Commit != "" || review.Prompt != "" {
 				return errors.New("--uncommitted conflicts with --base, --commit, and PROMPT")
@@ -1737,6 +1796,26 @@ func parseReview(args []string, review *ReviewOptions, exec *ExecOptions) error 
 		return errors.New("--title requires --commit")
 	}
 	return nil
+}
+
+// isExecReviewGlobalOptionArg lists the exec `SharedCliOptions` entries Rust
+// marks global (mark_exec_global_args): model, the two dangerous bypasses and
+// worktree. `codex exec review` therefore accepts them after the subcommand,
+// while the remaining shared options stay local to the exec root.
+func isExecReviewGlobalOptionArg(arg string) bool {
+	switch {
+	case arg == "--worktree":
+		return true
+	case arg == "--model" || arg == "-m" || strings.HasPrefix(arg, "--model="):
+		return true
+	case strings.HasPrefix(arg, "-m") && arg != "-m":
+		return true
+	case arg == "--dangerously-bypass-approvals-and-sandbox":
+		return true
+	case arg == "--dangerously-bypass-hook-trust":
+		return true
+	}
+	return false
 }
 
 func parseLogout(args []string, login *LoginOptions) error {
@@ -3840,8 +3919,9 @@ func parseAgents(args []string, agents *AgentsOptions) error {
 			i = next
 		case strings.HasPrefix(arg, "--remote-auth-token-env="):
 			agents.RemoteAuthEnv = strings.TrimPrefix(arg, "--remote-auth-token-env=")
-		case arg == "--strict-config":
-			agents.StrictConfig = true
+		// Rust's AgentsCommand does not flatten --strict-config, so clap rejects
+		// it after the subcommand; the root spelling stays valid (Agents is on
+		// Rust's strict-config allow-list).
 		case arg == "-c" || arg == "--config":
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {

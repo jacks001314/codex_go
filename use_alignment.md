@@ -1031,6 +1031,56 @@ one-off captures.
     `TestSessionRemovedFlagDiagnosticsLikeRust` and
     `TestQueueClapDiagnosticsLikeRust`.
 
+45. **`--worktree` post-parse gate, `--strict-config` timing and exec-global
+    options** - Rust's `reject_unsupported_worktree_for_subcommand`
+    (`codex-rs/cli/src/main.rs`) runs after clap parsed the subcommand, and only
+    a new interactive session, `codex fork <ID>`, `codex exec` and
+    `codex exec fork` may create a managed worktree.
+    - Go rejected `--worktree` while parsing, so the session and management
+      commands produced clap-shaped or Go-only errors. A new
+      `Parsed.validateWorktreeSupport` now runs first in `Parsed.Validate()` and
+      prints Rust's four messages verbatim: the generic
+      `` `--worktree` supports new interactive sessions, `codex fork`,
+      `codex exec`, and `codex exec fork` ``, `` `codex fork --worktree`
+      requires an explicit session ID ``, `` `--worktree` cannot resume an
+      existing session; use `codex exec fork --worktree` `` and
+      `` `--worktree` is not supported for code review ``.
+    - The gate reads the flag from the root or from the subcommand's flattened
+      shared options, so `resume --worktree abc` and
+      `queue --worktree --thread t --message m` - both clap-valid in Rust -
+      reach the same rejection.
+    - `--strict-config` no longer short-circuits before `parseSubcommand`, so
+      clap's own diagnostics win over the post-parse gate;
+      `unsupportedStrictConfigSubcommandName` allows `Agents`, and the new
+      `remoteControlSubcommandName` renders `remote-control [start|stop|pair]`
+      for both the strict-config and `--remote` gates.
+    - `codex agents --strict-config` now prints clap's
+      `unexpected argument '--strict-config' found` with
+      `Usage: codex agents [OPTIONS]`, matching Rust's `AgentsCommand`, which
+      does not flatten the flag; the root spelling `--strict-config agents`
+      stays valid.
+    - `codex exec review` accepts the exec-global options Rust marks in
+      `mark_exec_global_args` (`--model`/`-m`,
+      `--dangerously-bypass-approvals-and-sandbox`,
+      `--dangerously-bypass-hook-trust`, `--worktree`) and still rejects the
+      other shared options as clap unexpected arguments, so
+      `exec review --worktree` reaches the review rejection instead of failing
+      at the clap layer.
+    Evidence: live comparisons against 0.166 - `out/round30-worktree.txt`
+    (15/15), `out/round30-worktree-order.txt` (5/5),
+    `out/round30-exec-review.txt` (4/4), `out/round30-strict-config.txt`
+    (10/12, both diffs are Rust `queue` runs waiting for a session),
+    `out/round30-remote-control.txt` (8/9, the diff is `app-server` holding
+    stdin open) and `out/round30-exec-review-globals.txt` (4/6, the diffs are
+    clap's did-you-mean). Round 29 regressions stay green: 14/14, 30/30 and
+    10/10. `go test ./cli` passes with `TestWorktreeSupportedCommandsLikeRust`,
+    `TestWorktreeRejectedCommandsLikeRust`,
+    `TestWorktreeRunsBeforeSubcommandGatesLikeRust`,
+    `TestStrictConfigGateLikeRust`,
+    `TestAgentsRejectsStrictConfigAfterSubcommandLikeRust`,
+    `TestExecReviewAcceptsExecGlobalOptionsLikeRust` and
+    `TestMcpListRejectsWorktreeLikeRust`.
+
 ## Verification
 
 - Session subcommand parsing matches Rust 0.166: the 14 subcommand-diagnostic
@@ -1303,8 +1353,25 @@ one-off captures.
   status; the only difference is the config.toml serialization shape listed
   under Still open.
 
+- The worktree / strict-config round matches Rust 0.166: the 15 worktree
+  rejections (`out/round30-worktree.txt`), the 5 ordering cases
+  (`out/round30-worktree-order.txt`), the 4 `exec review --worktree` cases
+  (`out/round30-exec-review.txt`), the 12 strict-config combinations
+  (`out/round30-strict-config.txt`) and the 9 remote-control names
+  (`out/round30-remote-control.txt`) are byte-identical except Rust runs that
+  wait for a session or keep stdin open. `go test ./cli ./sandbox ./applypatch
+  ./prompt ./review ./cmd/... ./tcptunnel` passes and `go test -vet=off ./app`
+  keeps only the two known baselines.
+
 ## Still open
 
+- clap's "similar argument exists" suggestion is still missing on the exec
+  family: `codex exec review --no-worktree` should print
+  `tip: a similar argument exists: '--worktree'` with the smart usage
+  `Usage: codex exec review --worktree [PROMPT]`, and
+  `codex exec review --bypass-hook-trust` should suggest
+  `--dangerously-bypass-hook-trust`; Go still prints the plain `--` tip and the
+  `[OPTIONS]` usage.
 - `codex resume`/`codex fork` without a TTY: Rust refuses to start the TUI
   (`ERROR: TERM is set to "dumb". Refusing to start the interactive TUI ...`)
   before it resolves the session, while Go runs headless and reports
