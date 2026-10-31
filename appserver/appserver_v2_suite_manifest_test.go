@@ -81,6 +81,7 @@ func rustAppServerV2SuiteManifest() []rustAppServerV2SuiteCase {
 		{Module: "history_notes_extension", Owner: "token-budget, history, notes", Focus: "history and notes tools for token-budget sessions"},
 		{Module: "hooks_list", Owner: "appserver, tool", Focus: "hooks/list RPC incl. execution mode"},
 		{Module: "host_skills", Owner: "prompt, execserver", Focus: "host-provided skill discovery"},
+		{Module: "https_mock", Owner: "appserver", Focus: "shared HTTPS/TLS mock server for config, web search routing and workspace suite cases"},
 		{Module: "imagegen_extension", Owner: "tool, model", Focus: "image generation extension"},
 		{Module: "initialize", Owner: "appserver", Focus: "initialize capabilities and protocol setup"},
 		{Module: "luna_reserve", Owner: "appserver, turn", Focus: "Luna Reserve usage and return"},

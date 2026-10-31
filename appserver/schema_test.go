@@ -167,8 +167,12 @@ func TestPrecomputedExportArtifactsMatchTargetRustCommit(t *testing.T) {
 		// policyCapacityUnavailable protocol value.
 		// Re-anchored to upstream e8e6a922c0: the exports gained the process
 		// `outputDrainTimedOut` and saved-command-prefix heading schema changes.
-		{"stable", stablePrecomputedExports, "f1dd2e77afb6c2ff10d3dcbf71c6034f511ef44e4388b6c2c45747bea3565944"},
-		{"experimental", experimentalPrecomputedExports, "314b7c7a91b3b461430611c37c11980d2c328a8e32abf4a9b4d0e9dcb1593616"},
+		// Re-vendored from upstream cbe16d525c (round 1159): both artifacts were
+		// copied byte-for-byte from the pinned tree's app-server-protocol schema
+		// precomputed directory (#58380); the hashes below are computed from those
+		// exact vendored bytes.
+		{"stable", stablePrecomputedExports, "13c9fd8bb0fe664cd6e31294020ceee1dd17fae4d1a1f18d22de0e60c94a82eb"},
+		{"experimental", experimentalPrecomputedExports, "bd7961920d994b6addfe6e7d4ee6d99c84db10d09bc629a3d6a28073998a5886"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
