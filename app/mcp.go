@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -1012,16 +1013,48 @@ func (s *mcpCLIStore) Remove(overrides []string, name string) (bool, error) {
 
 func (s *mcpCLIStore) write(cfg *mcpCLIConfig) error {
 	service := config.NewConfigService(s.codexHome)
-	value := map[string]any{}
-	for _, name := range sortedMCPServerNames(cfg.Servers) {
-		value[name] = mcpServerToConfigValue(cfg.Servers[name])
+	if len(cfg.Servers) == 0 {
+		// Rust's replace_mcp_servers clears the whole table when nothing is left,
+		// so `mcp remove` on the last server leaves no `[mcp_servers]` header.
+		_, err := service.WriteValue(&config.ConfigValueWriteParams{
+			KeyPath:       "mcp_servers",
+			Value:         nil,
+			MergeStrategy: config.MergeReplace,
+		})
+		return err
+	}
+	servers := config.NewOrderedTable()
+	servers.Implicit = true
+	for _, name := range s.serverDocumentOrder(cfg) {
+		servers.Set(name, mcpServerToConfigValue(cfg.Servers[name]))
 	}
 	_, err := service.WriteValue(&config.ConfigValueWriteParams{
 		KeyPath:       "mcp_servers",
-		Value:         value,
+		Value:         servers,
 		MergeStrategy: config.MergeReplace,
 	})
 	return err
+}
+
+// serverDocumentOrder keeps the order toml_edit preserves when it edits a
+// document in place: servers already in config.toml stay where they are and new
+// names are appended.
+func (s *mcpCLIStore) serverDocumentOrder(cfg *mcpCLIConfig) []string {
+	order := make([]string, 0, len(cfg.Servers))
+	seen := map[string]bool{}
+	for _, name := range mcpServerSectionOrder(filepath.Join(s.codexHome, "config.toml")) {
+		if _, ok := cfg.Servers[name]; ok && !seen[name] {
+			seen[name] = true
+			order = append(order, name)
+		}
+	}
+	for _, name := range sortedMCPServerNames(cfg.Servers) {
+		if !seen[name] {
+			seen[name] = true
+			order = append(order, name)
+		}
+	}
+	return order
 }
 
 func mcpCLIConfigFromValues(values map[string]any) *mcpCLIConfig {
@@ -1086,106 +1119,204 @@ func mcpServerFromConfigValue(name string, table map[string]any) *mcpCLIServer {
 	return server
 }
 
-func mcpServerToConfigValue(server *mcpCLIServer) map[string]any {
-	value := map[string]any{}
+// mcpServerSectionOrder returns the server names in the order their tables
+// appear in the config file, so a write keeps toml_edit's document order: Rust
+// leaves existing tables where they are and appends new ones.
+func mcpServerSectionOrder(path string) []string {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var order []string
+	seen := map[string]bool{}
+	for _, line := range strings.Split(string(raw), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "[mcp_servers.") {
+			continue
+		}
+		end := strings.Index(trimmed, "]")
+		if end < 0 {
+			continue
+		}
+		rest := strings.TrimPrefix(trimmed[1:end], "mcp_servers.")
+		name, ok := mcpTOMLKeyPrefix(rest)
+		if !ok || name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		order = append(order, name)
+	}
+	return order
+}
+
+// mcpTOMLKeyPrefix reads the first key of a dotted TOML path and reports whether
+// what follows is a nested table rather than a stray suffix.
+func mcpTOMLKeyPrefix(text string) (string, bool) {
+	if strings.HasPrefix(text, "\"") {
+		end := strings.Index(text[1:], "\"")
+		if end < 0 {
+			return "", false
+		}
+		name := text[1 : 1+end]
+		rest := text[1+end+1:]
+		if rest == "" || strings.HasPrefix(rest, ".") {
+			return name, true
+		}
+		return "", false
+	}
+	name := text
+	if idx := strings.IndexAny(name, ". \t"); idx >= 0 {
+		name = name[:idx]
+	}
+	if name == "" {
+		return "", false
+	}
+	return name, true
+}
+
+// mcpServerToConfigValue mirrors serialize_mcp_server_table: the fields keep
+// Rust's declaration order so the written config.toml matches byte for byte.
+func mcpServerToConfigValue(server *mcpCLIServer) *config.OrderedTable {
+	value := config.NewOrderedTable()
 	if server.Type == "streamable_http" {
-		value["url"] = server.URL
+		value.Set("url", server.URL)
 		if server.BearerTokenEnvVar != "" {
-			value["bearer_token_env_var"] = server.BearerTokenEnvVar
+			value.Set("bearer_token_env_var", server.BearerTokenEnvVar)
 		}
 		if len(server.HTTPHeaders) > 0 {
-			value["http_headers"] = stringMapToAnyMap(server.HTTPHeaders)
+			value.Set("http_headers", stringMapToAnyMap(server.HTTPHeaders))
 		}
 		if len(server.EnvHTTPHeaders) > 0 {
-			value["env_http_headers"] = stringMapToAnyMap(server.EnvHTTPHeaders)
+			value.Set("env_http_headers", stringMapToAnyMap(server.EnvHTTPHeaders))
 		}
 		if server.HTTPHeadersHelper != "" {
-			value["http_headers_helper"] = server.HTTPHeadersHelper
+			value.Set("http_headers_helper", server.HTTPHeadersHelper)
 		}
-		if server.OAuthClientID != "" || server.OAuthClientSecret != "" || server.OAuthAuthorizationServerIssuer != "" || server.OAuthCallbackURL != "" {
-			oauth := map[string]any{}
-			if server.OAuthClientID != "" {
-				oauth["client_id"] = server.OAuthClientID
-			}
-			if server.OAuthClientSecret != "" {
-				oauth["client_secret"] = server.OAuthClientSecret
-			}
-			if server.OAuthCallbackURL != "" {
-				oauth["callback_url"] = server.OAuthCallbackURL
-			}
-			if server.OAuthAuthorizationServerIssuer != "" {
-				oauth["authorization_server_issuer"] = server.OAuthAuthorizationServerIssuer
-			}
-			value["oauth"] = oauth
-		}
-		if server.OAuthResource != "" {
-			value["oauth_resource"] = server.OAuthResource
-		}
-		mcpServerAddSharedConfigValue(value, server)
+		mcpServerAddSharedOrderedConfigValue(value, server)
 		return value
 	}
-	value["command"] = server.Command
+	value.Set("command", server.Command)
 	if len(server.Args) > 0 {
-		value["args"] = stringSliceToAnySlice(server.Args)
+		value.Set("args", stringSliceToAnySlice(server.Args))
 	}
 	if len(server.Env) > 0 {
-		value["env"] = stringMapToAnyMap(server.Env)
+		value.Set("env", stringMapToAnyMap(server.Env))
 	}
 	if len(server.EnvVars) > 0 {
-		value["env_vars"] = mcpEnvVarsConfigValue(server.EnvVars)
+		value.Set("env_vars", mcpEnvVarsConfigValue(server.EnvVars))
 	}
 	if server.CWD != "" {
-		value["cwd"] = server.CWD
+		value.Set("cwd", server.CWD)
 	}
-	mcpServerAddSharedConfigValue(value, server)
+	mcpServerAddSharedOrderedConfigValue(value, server)
 	return value
 }
 
-func mcpServerAddSharedConfigValue(value map[string]any, server *mcpCLIServer) {
-	if !server.Enabled {
-		value["enabled"] = false
-	}
+// mcpServerAddSharedOrderedConfigValue appends the transport-independent fields
+// in Rust's order (auth, enabled, environment_id, ..., oauth, oauth_resource,
+// tools).
+func mcpServerAddSharedOrderedConfigValue(value *config.OrderedTable, server *mcpCLIServer) {
 	if server.Auth != "" && server.Auth != "oauth" {
-		value["auth"] = server.Auth
+		value.Set("auth", server.Auth)
+	}
+	if !server.Enabled {
+		value.Set("enabled", false)
 	}
 	if server.EnvironmentID != "" && server.EnvironmentID != "local" {
-		value["environment_id"] = server.EnvironmentID
+		value.Set("environment_id", server.EnvironmentID)
 	}
 	if server.Required {
-		value["required"] = true
+		value.Set("required", true)
 	}
 	if server.StartupReadiness == string(mcp.MCPStartupReadinessCatalog) {
-		value["startup_readiness"] = string(mcp.MCPStartupReadinessCatalog)
+		value.Set("startup_readiness", string(mcp.MCPStartupReadinessCatalog))
 	}
 	if server.SupportsParallelToolCalls {
-		value["supports_parallel_tool_calls"] = true
-	}
-	if server.StartupTimeoutSec != nil {
-		value["startup_timeout_sec"] = *server.StartupTimeoutSec
-	}
-	if server.ToolTimeoutSec != nil {
-		value["tool_timeout_sec"] = *server.ToolTimeoutSec
-	}
-	if server.DefaultToolsApprovalMode != "" {
-		value["default_tools_approval_mode"] = server.DefaultToolsApprovalMode
-	}
-	if len(server.EnabledTools) > 0 {
-		value["enabled_tools"] = stringSliceToAnySlice(server.EnabledTools)
-	}
-	if len(server.DisabledTools) > 0 {
-		value["disabled_tools"] = stringSliceToAnySlice(server.DisabledTools)
-	}
-	if len(server.OmitToolsFrom) > 0 {
-		value["omit_tools_from"] = stringSliceToAnySlice(server.OmitToolsFrom)
-	}
-	if len(server.Scopes) > 0 {
-		value["scopes"] = stringSliceToAnySlice(server.Scopes)
+		value.Set("supports_parallel_tool_calls", true)
 	}
 	if server.ToolInputSchemaMaxBytes != nil && *server.ToolInputSchemaMaxBytes > 0 {
-		value["tool_input_schema_max_bytes"] = *server.ToolInputSchemaMaxBytes
+		value.Set("tool_input_schema_max_bytes", *server.ToolInputSchemaMaxBytes)
+	}
+	if len(server.OmitToolsFrom) > 0 {
+		value.Set("omit_tools_from", stringSliceToAnySlice(server.OmitToolsFrom))
+	}
+	if server.StartupTimeoutSec != nil {
+		value.Set("startup_timeout_sec", *server.StartupTimeoutSec)
+	}
+	if server.ToolTimeoutSec != nil {
+		value.Set("tool_timeout_sec", *server.ToolTimeoutSec)
+	}
+	if server.DefaultToolsApprovalMode != "" {
+		value.Set("default_tools_approval_mode", server.DefaultToolsApprovalMode)
+	}
+	if len(server.EnabledTools) > 0 {
+		value.Set("enabled_tools", stringSliceToAnySlice(server.EnabledTools))
+	}
+	if len(server.DisabledTools) > 0 {
+		value.Set("disabled_tools", stringSliceToAnySlice(server.DisabledTools))
+	}
+	if len(server.Scopes) > 0 {
+		value.Set("scopes", stringSliceToAnySlice(server.Scopes))
+	}
+	if server.OAuthClientID != "" || server.OAuthClientSecret != "" || server.OAuthAuthorizationServerIssuer != "" || server.OAuthCallbackURL != "" {
+		oauth := config.NewOrderedTable()
+		if server.OAuthClientID != "" {
+			oauth.Set("client_id", server.OAuthClientID)
+		}
+		if server.OAuthClientSecret != "" {
+			oauth.Set("client_secret", server.OAuthClientSecret)
+		}
+		if server.OAuthCallbackURL != "" {
+			oauth.Set("callback_url", server.OAuthCallbackURL)
+		}
+		if server.OAuthAuthorizationServerIssuer != "" {
+			oauth.Set("authorization_server_issuer", server.OAuthAuthorizationServerIssuer)
+		}
+		value.Set("oauth", oauth)
+	}
+	if server.OAuthResource != "" {
+		value.Set("oauth_resource", server.OAuthResource)
 	}
 	if len(server.Tools) > 0 {
-		value["tools"] = nestedAnyMapToAnyMap(server.Tools)
+		tools := config.NewOrderedTable()
+		tools.Implicit = true
+		names := make([]string, 0, len(server.Tools))
+		for name := range server.Tools {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			tools.Set(name, mcpServerToolToConfigValue(server.Tools[name]))
+		}
+		value.Set("tools", tools)
+	}
+}
+
+// mcpServerToolToConfigValue mirrors serialize_mcp_server_tool.
+func mcpServerToolToConfigValue(tool map[string]any) *config.OrderedTable {
+	value := config.NewOrderedTable()
+	if mode := stringFromAny(tool["approval_mode"]); mode != "" {
+		value.Set("approval_mode", mode)
+	}
+	if limit := positiveIntPtrFromAny(tool["output_token_limit"]); limit != nil {
+		value.Set("output_token_limit", *limit)
+	}
+	return value
+}
+
+// mcpConfigTable resolves the plain maps read from the file and the ordered
+// tables mcpServerToConfigValue builds, so readers accept both shapes.
+func mcpConfigTable(value any) (map[string]any, bool) {
+	switch table := value.(type) {
+	case map[string]any:
+		return table, true
+	case *config.OrderedTable:
+		if table == nil {
+			return nil, false
+		}
+		return table.Values, true
+	default:
+		return nil, false
 	}
 }
 
@@ -1193,7 +1324,7 @@ func mcpOAuthClientIDFromConfig(table map[string]any) string {
 	if value := stringFromAny(table["oauth_client_id"]); value != "" {
 		return value
 	}
-	oauth, ok := table["oauth"].(map[string]any)
+	oauth, ok := mcpConfigTable(table["oauth"])
 	if !ok {
 		return ""
 	}
@@ -1204,7 +1335,7 @@ func mcpOAuthClientSecretFromConfig(table map[string]any) string {
 	if value := stringFromAny(table["oauth_client_secret"]); value != "" {
 		return value
 	}
-	oauth, ok := table["oauth"].(map[string]any)
+	oauth, ok := mcpConfigTable(table["oauth"])
 	if !ok {
 		return ""
 	}
@@ -1215,7 +1346,7 @@ func mcpOAuthCallbackURLFromConfig(table map[string]any) string {
 	if value := stringFromAny(table["oauth_callback_url"]); value != "" {
 		return value
 	}
-	oauth, ok := table["oauth"].(map[string]any)
+	oauth, ok := mcpConfigTable(table["oauth"])
 	if !ok {
 		return ""
 	}
@@ -1226,7 +1357,7 @@ func mcpOAuthAuthorizationServerIssuerFromConfig(table map[string]any) string {
 	if value := stringFromAny(table["oauth_authorization_server_issuer"]); value != "" {
 		return value
 	}
-	oauth, ok := table["oauth"].(map[string]any)
+	oauth, ok := mcpConfigTable(table["oauth"])
 	if !ok {
 		return ""
 	}

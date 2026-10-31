@@ -2605,6 +2605,7 @@ func (s *ConfigService) BatchWrite(params *ConfigBatchWriteParams) (*ConfigWrite
 		return nil, err
 	}
 	values = cloneMap(values)
+	previousOrder := tomlDocumentTopLevelOrder(readConfigDocumentText(path))
 	currentVersion := configVersion(values)
 	if params.ExpectedVersion != nil && *params.ExpectedVersion != currentVersion {
 		return nil, configWriteErrorf(ConfigWriteVersionConflict, "Configuration was modified since last read. Fetch latest version and retry.")
@@ -2627,7 +2628,7 @@ func (s *ConfigService) BatchWrite(params *ConfigBatchWriteParams) (*ConfigWrite
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(path, []byte(renderTOML(values)), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(renderTOML(orderedConfigValues(values, previousOrder))), 0o600); err != nil {
 		return nil, err
 	}
 	response := &ConfigWriteResponse{
@@ -2737,7 +2738,8 @@ func (s *ConfigService) WriteSkillConfig(params *SkillConfigWriteParams) (*Confi
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(path, []byte(renderTOML(values)), 0o600); err != nil {
+	previousOrder := tomlDocumentTopLevelOrder(readConfigDocumentText(path))
+	if err := os.WriteFile(path, []byte(renderTOML(orderedConfigValues(values, previousOrder))), 0o600); err != nil {
 		return nil, err
 	}
 	return &ConfigWriteResponse{
@@ -3776,14 +3778,14 @@ func splitKeyPath(path string) []string {
 	return out
 }
 
-func getAtPath(root map[string]any, parts []string) any {
+func getAtPath(root any, parts []string) any {
 	var current any = root
 	for _, part := range parts {
-		next, ok := current.(map[string]any)
+		values, _, _, ok := tableView(current)
 		if !ok {
 			return nil
 		}
-		current = next[part]
+		current = values[part]
 	}
 	return current
 }
@@ -3926,32 +3928,230 @@ func fillOriginChildren(prefix string, value any, origin LayerMetadata, out map[
 	}
 }
 
-func renderTOML(values map[string]any) string {
-	var builder strings.Builder
-	renderScalarSection(&builder, "", values)
-	sections := collectSections(values, nil)
-	sort.Slice(sections, func(i int, j int) bool {
-		return formatTOMLPath(sections[i]) < formatTOMLPath(sections[j])
-	})
-	for _, section := range sections {
-		nested := getAtPath(values, section)
-		nestedMap, ok := nested.(map[string]any)
+// OrderedTable is a config table whose keys keep the order they were set in, so
+// a write renders it the way toml_edit renders an edited document instead of
+// sorting the keys. An implicit table has no header of its own: Rust inserts
+// `mcp_servers` as an implicit table (core/config/edit.rs replace_mcp_servers),
+// so only the per-server tables reach the file.
+type OrderedTable struct {
+	Keys     []string
+	Values   map[string]any
+	Implicit bool
+}
+
+func NewOrderedTable() *OrderedTable {
+	return &OrderedTable{Values: map[string]any{}}
+}
+
+func (t *OrderedTable) Set(key string, value any) *OrderedTable {
+	if t == nil {
+		return t
+	}
+	if t.Values == nil {
+		t.Values = map[string]any{}
+	}
+	if _, exists := t.Values[key]; !exists {
+		t.Keys = append(t.Keys, key)
+	}
+	t.Values[key] = value
+	return t
+}
+
+// MarshalJSON keeps the config fingerprint and the JSON views independent of the
+// rendering order, like the plain maps they replace.
+func (t *OrderedTable) MarshalJSON() ([]byte, error) {
+	if t == nil {
+		return []byte("null"), nil
+	}
+	return json.Marshal(t.Values)
+}
+
+// tableView resolves plain maps and ordered tables into the key order the
+// writer should follow, and reports whether the table hides its own header.
+func tableView(value any) (map[string]any, []string, bool, bool) {
+	switch typed := value.(type) {
+	case map[string]any:
+		keys := make([]string, 0, len(typed))
+		for key := range typed {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		return typed, keys, false, true
+	case *OrderedTable:
+		if typed == nil {
+			return nil, nil, false, false
+		}
+		keys := make([]string, 0, len(typed.Values))
+		for _, key := range typed.Keys {
+			if _, ok := typed.Values[key]; ok {
+				keys = append(keys, key)
+			}
+		}
+		return typed.Values, keys, typed.Implicit, true
+	default:
+		return nil, nil, false, false
+	}
+}
+
+// readConfigDocumentText returns the config document as written on disk so a
+// write can keep the top-level key order it already had. A missing file simply
+// yields no order.
+func readConfigDocumentText(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return string(stripUTF8BOM(data))
+}
+
+// orderedConfigValues wraps the top-level config table so renderTOML follows the
+// order the document already used and appends new keys at the end, like
+// toml_edit editing a document in place (core/config/edit.rs). An empty order
+// keeps the sorted rendering.
+func orderedConfigValues(values map[string]any, order []string) any {
+	if len(order) == 0 || len(values) == 0 {
+		return values
+	}
+	ordered := NewOrderedTable()
+	seen := make(map[string]bool, len(values))
+	for _, key := range order {
+		if seen[key] {
+			continue
+		}
+		value, ok := values[key]
 		if !ok {
 			continue
 		}
+		seen[key] = true
+		ordered.Set(key, value)
+	}
+	rest := make([]string, 0, len(values))
+	for key := range values {
+		if !seen[key] {
+			rest = append(rest, key)
+		}
+	}
+	sort.Strings(rest)
+	for _, key := range rest {
+		ordered.Set(key, values[key])
+	}
+	return ordered
+}
+
+// tomlDocumentTopLevelOrder lists the document's top-level keys in
+// first-appearance order: root key-value lines before the first table header
+// and table headers, both in the order the file declares them.
+func tomlDocumentTopLevelOrder(text string) []string {
+	if text == "" {
+		return nil
+	}
+	var order []string
+	seen := map[string]bool{}
+	claim := func(key string) {
+		if key == "" || seen[key] {
+			return
+		}
+		seen[key] = true
+		order = append(order, key)
+	}
+	inTable := false
+	multi := ""
+	depth := 0
+	for _, rawLine := range strings.Split(text, "\n") {
+		line := strings.TrimSpace(strings.TrimSuffix(rawLine, "\r"))
+		if multi != "" {
+			if strings.Contains(line, multi) {
+				multi = ""
+			}
+			continue
+		}
+		if depth > 0 {
+			depth += strings.Count(line, "[") - strings.Count(line, "]")
+			if depth < 0 {
+				depth = 0
+			}
+			continue
+		}
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.HasPrefix(line, "[[") {
+			inTable = true
+			claim(tomlTableHeaderKey(line, "[[", "]]"))
+			continue
+		}
+		if strings.HasPrefix(line, "[") {
+			inTable = true
+			claim(tomlTableHeaderKey(line, "[", "]"))
+			continue
+		}
+		equals := strings.Index(line, "=")
+		if equals <= 0 {
+			continue
+		}
+		if !inTable {
+			claim(tomlUnquoteKey(strings.TrimSpace(line[:equals])))
+		}
+		multi, depth = tomlValueContinuation(line[equals+1:])
+	}
+	return order
+}
+
+// tomlTableHeaderKey reads the first key of a table header, dropping any nested
+// path, so `[mcp_servers.alpha.env]` reports `mcp_servers`.
+func tomlTableHeaderKey(line string, open string, close string) string {
+	body := strings.TrimPrefix(line, open)
+	if end := strings.Index(body, close); end >= 0 {
+		body = body[:end]
+	}
+	return tomlUnquoteKey(strings.TrimSpace(body))
+}
+
+// tomlUnquoteKey returns the first dotted segment of a TOML key, unquoted.
+func tomlUnquoteKey(key string) string {
+	if strings.HasPrefix(key, "\"") {
+		if end := strings.Index(key[1:], "\""); end >= 0 {
+			return key[1 : 1+end]
+		}
+		return ""
+	}
+	if idx := strings.Index(key, "."); idx >= 0 {
+		key = key[:idx]
+	}
+	return strings.TrimSpace(key)
+}
+
+// tomlValueContinuation reports whether a value keeps the line open: a
+// multi-line string delimiter or an unclosed array.
+func tomlValueContinuation(value string) (string, int) {
+	for _, delimiter := range []string{"\"\"\"", "'''"} {
+		if strings.Count(value, delimiter)%2 == 1 {
+			return delimiter, 0
+		}
+	}
+	depth := strings.Count(value, "[") - strings.Count(value, "]")
+	if depth < 0 {
+		depth = 0
+	}
+	return "", depth
+}
+
+func renderTOML(values any) string {
+	var builder strings.Builder
+	renderScalarSection(&builder, values)
+	// Sections render in the order collectSections walks the tables: sorted keys
+	// for plain maps and insertion order for OrderedTable, which is what
+	// toml_edit keeps for a document that an edit only touched in place.
+	for _, section := range collectSections(values, nil) {
 		if builder.Len() > 0 && !strings.HasSuffix(builder.String(), "\n\n") {
 			builder.WriteByte('\n')
 		}
 		builder.WriteString("[")
 		builder.WriteString(formatTOMLPath(section))
 		builder.WriteString("]\n")
-		renderScalarSection(&builder, formatTOMLPath(section), nestedMap)
+		renderScalarSection(&builder, getAtPath(values, section))
 	}
-	arraySections := collectArrayTableSections(values, nil)
-	sort.Slice(arraySections, func(i int, j int) bool {
-		return formatTOMLPath(arraySections[i]) < formatTOMLPath(arraySections[j])
-	})
-	for _, section := range arraySections {
+	for _, section := range collectArrayTableSections(values, nil) {
 		tables, ok := tomlArrayTables(getAtPath(values, section))
 		if !ok {
 			continue
@@ -3963,58 +4163,79 @@ func renderTOML(values map[string]any) string {
 			builder.WriteString("[[")
 			builder.WriteString(formatTOMLPath(section))
 			builder.WriteString("]]\n")
-			renderScalarSection(&builder, formatTOMLPath(section), table)
+			renderScalarSection(&builder, table)
 		}
 	}
 	return builder.String()
 }
 
-func renderScalarSection(builder *strings.Builder, prefix string, values map[string]any) {
-	keys := make([]string, 0, len(values))
-	for key, value := range values {
-		if _, nested := value.(map[string]any); nested {
+func renderScalarSection(builder *strings.Builder, table any) {
+	values, keys, _, ok := tableView(table)
+	if !ok {
+		return
+	}
+	for _, key := range keys {
+		value := values[key]
+		if _, _, _, nested := tableView(value); nested {
 			continue
 		}
 		if _, nested := tomlArrayTables(value); nested {
 			continue
 		}
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
 		builder.WriteString(key)
 		builder.WriteString(" = ")
-		builder.WriteString(formatTOMLValue(values[key]))
+		builder.WriteString(formatTOMLValue(value))
 		builder.WriteByte('\n')
 	}
 }
 
-func collectSections(values map[string]any, prefix []string) [][]string {
-	var sections [][]string
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
+func collectSections(table any, prefix []string) [][]string {
+	values, keys, _, ok := tableView(table)
+	if !ok {
+		return nil
 	}
-	sort.Strings(keys)
+	var sections [][]string
 	for _, key := range keys {
-		nested, ok := values[key].(map[string]any)
-		if !ok {
-			continue
+		child := values[key]
+		if _, _, implicit, nested := tableView(child); nested {
+			path := append(append([]string(nil), prefix...), key)
+			// toml_edit only writes a header for a table that owns key-values:
+			// a table that exists purely to parent sub-tables stays implicit,
+			// so `[features.network_proxy]` keeps no `[features]` header.
+			if !implicit && hasDirectValues(child) {
+				sections = append(sections, path)
+			}
+			sections = append(sections, collectSections(child, path)...)
 		}
-		path := append(append([]string(nil), prefix...), key)
-		sections = append(sections, path)
-		sections = append(sections, collectSections(nested, path)...)
 	}
 	return sections
 }
 
-func collectArrayTableSections(values map[string]any, prefix []string) [][]string {
-	var sections [][]string
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
+// hasDirectValues reports whether the table holds a key-value of its own, as
+// opposed to only nesting other tables.
+func hasDirectValues(table any) bool {
+	values, keys, _, ok := tableView(table)
+	if !ok {
+		return false
 	}
-	sort.Strings(keys)
+	for _, key := range keys {
+		if _, _, _, nested := tableView(values[key]); nested {
+			continue
+		}
+		if _, arrayTable := tomlArrayTables(values[key]); arrayTable {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func collectArrayTableSections(table any, prefix []string) [][]string {
+	values, keys, _, ok := tableView(table)
+	if !ok {
+		return nil
+	}
+	var sections [][]string
 	for _, key := range keys {
 		value := values[key]
 		path := append(append([]string(nil), prefix...), key)
@@ -4022,8 +4243,8 @@ func collectArrayTableSections(values map[string]any, prefix []string) [][]strin
 			sections = append(sections, path)
 			continue
 		}
-		if nested, ok := value.(map[string]any); ok {
-			sections = append(sections, collectArrayTableSections(nested, path)...)
+		if _, _, _, nested := tableView(value); nested {
+			sections = append(sections, collectArrayTableSections(value, path)...)
 		}
 	}
 	return sections

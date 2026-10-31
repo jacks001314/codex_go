@@ -1596,7 +1596,7 @@ one-off captures.
   seq form requires three strings (`["a","b",null]` is rejected, a fourth
   element reports `trailing characters`), duplicate fields report
   ``duplicate field `name```, and the syntax diagnostics match
-  (`trailing comma`, `expected \`:\``, `expected \`,\` or \`}\``,
+  (`trailing comma`, `expected `:``, `expected `,` or `}``,
   `key must be a string`, `expected ident`, `EOF while parsing a value/list/
   object/string`, `trailing characters`). Type errors and syntax errors follow
   serde's streaming order, so `[1,]` reports the integer element before the
@@ -1686,6 +1686,58 @@ one-off captures.
   captures from the 0.166 binary), `out/round43-tui-gate.txt` (96 cases:
   29 argument shapes x TERM dumb/unset/xterm) and
   `out/round43-session-cli.txt` (36 archive/queue/override cases).
+
+### 58. `codex mcp add`/`remove` write the document toml_edit writes
+
+Rust edits the config document in place (`core/src/config/edit.rs`
+`replace_mcp_servers` plus `document_helpers.rs`
+`serialize_mcp_server_table`), so `codex mcp add` leaves the rest of the file
+alone and writes each server table from its struct declaration order. Go used to
+emit an empty `[mcp_servers]` header and alphabetize both the server keys and
+every sibling section.
+
+- **Implicit tables.** `config.OrderedTable` (config/api.go) carries an
+  insertion order and an `Implicit` flag. An implicit table contributes no
+  header but still nests, so the file starts with `[mcp_servers.alpha]` instead
+  of `[mcp_servers]`. Plain `map[string]any` values keep the previous sorted
+  rendering, and `MarshalJSON` delegates to the map so fingerprints and the
+  JSON views do not change.
+- **Server field order.** `mcpServerToConfigValue` sets stdio
+  `command`/`args`/`env`/`env_vars`/`cwd` and streamable-HTTP
+  `url`/`bearer_token_env_var`/`http_headers`/`env_http_headers`/
+  `http_headers_helper`, then the shared `auth`/`enabled`/`environment_id`/
+  `required`/`startup_readiness`/`supports_parallel_tool_calls`/
+  `tool_input_schema_max_bytes`/`omit_tools_from`/`startup_timeout_sec`/
+  `tool_timeout_sec`/`default_tools_approval_mode`/`enabled_tools`/
+  `disabled_tools`/`scopes`/`oauth`/`oauth_resource`/`tools`. `oauth` keeps
+  `client_id`/`client_secret`/`callback_url`/`authorization_server_issuer`, and
+  `tools` is implicit with name-sorted entries. `env`, `env_vars` children and
+  the header maps sort like Rust's `table_from_pairs`.
+- **Document order.** `mcpServerSectionOrder` reads the existing
+  `[mcp_servers.<name>]` headers and keeps that order, appending new names
+  alphabetically, so adding `alpha` after `zeta` leaves `zeta` first and
+  replacing a server rewrites it in place. `config` writes now wrap the top-level
+  table with `orderedConfigValues`/`tomlDocumentTopLevelOrder`, so unrelated
+  sections keep their position and `mcp_servers` is appended at the end. A table
+  that only parents sub-tables no longer gets a header of its own
+  (`[features.network_proxy]` without `[features]`), matching toml_edit.
+- **Removal.** An empty server set is written as a deleted key, so removing the
+  last server leaves the document empty instead of a stray `[mcp_servers]`
+  header, and other sections survive untouched.
+- Evidence: 40-case Rust 0.166/Go differential (`mcp add`/`mcp remove` over ten
+  seed documents x four command sets); the 20 remaining diffs all belong to the
+  two pre-existing writer gaps recorded under Still open (comments dropped,
+  multi-line values reflowed), none to `mcp_servers` ordering or formatting.
+  Regressions: `TestMCPAddWritesServerTableLikeTomlEdit`,
+  `TestMCPAddKeepsServerInsertionOrderLikeTomlEdit`,
+  `TestMCPAddAppendsTableAfterExistingSectionsLikeTomlEdit`,
+  `TestMCPAddReplacesExistingServerTableInPlaceLikeTomlEdit`,
+  `TestMCPRemoveLastServerEmptiesDocumentLikeTomlEdit`,
+  `TestMCPRemoveLastServerKeepsOtherSectionsLikeTomlEdit` in `app`, and
+  `TestRenderTOMLKeepsOrderedTableInsertionOrderLikeTomlEdit`,
+  `TestRenderTOMLKeepsServerFieldOrderLikeTomlEdit`,
+  `TestRenderTOMLSortsPlainMapSections`, `TestOrderedTableMarshalJSONMatchesMap`
+  in `config`.
 
 ## Verification
 
@@ -2176,12 +2228,19 @@ one-off captures.
     subcommand paths print clap's `-h`/`--help`/`help <topic>` pages plus the
     `--help=<value>` diagnostic, and `codex execpolicy check -hx` now reaches
     clap's missing-required block like Rust.
-- `codex mcp add` writes the same values but a different config.toml shape:
-  Rust inserts `mcp_servers` as an implicit table and writes each server's
-  fields in declaration order (`command`, `args`, `env`), while Go emits an
-  empty `[mcp_servers]` header and sorts keys alphabetically. Both parse back
-  identically; aligning needs implicit-table support and stable field order in
-  the config writer.
+- The config writer still normalizes the document instead of editing it in
+  place (entry 58 aligned the `mcp_servers` shape, not the whole document):
+  comments are dropped, and multi-line values are reflowed onto one line, so
+  `instructions = """ ... """` becomes `instructions = "line one\n..."` and
+  `notify = [\n  "one",\n]` becomes `notify = ["one"]`. Rust keeps the original
+  text for every key it did not change.
+- `codex mcp add --url` still decides its may-or-may-not-require-login hint
+  from a live OAuth discovery. Go caps that probe at two seconds while Rust
+  uses its requested timeout, so the same URL can print the hint in Go and
+  stay silent in Rust
+  (`https://example.com/mcp` did both in consecutive probes, while
+  `http://127.0.0.1:1/mcp` and `https://mcp.example.invalid/mcp` print it in
+  both). The written config.toml is identical either way.
 - `apply_patch` on 2026-10-31: Rust 0.166 (`sandbox = "unelevated"`) refused to
   write under `%TEMP%` (`Access ... is denied`) while Go wrote the file; that
   sandbox-policy difference is still unaligned. Go also still appends

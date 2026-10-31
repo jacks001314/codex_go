@@ -19,17 +19,17 @@ func TestMCPConfigValueRoundTripsEMAAuthorizationServerIssuer(t *testing.T) {
 		Scopes:                         []string{"tools"},
 	}
 	value := mcpServerToConfigValue(server)
-	if value["auth"] != "ema_auth" {
-		t.Fatalf("auth = %#v, want ema_auth", value["auth"])
+	if value.Values["auth"] != "ema_auth" {
+		t.Fatalf("auth = %#v, want ema_auth", value.Values["auth"])
 	}
-	oauth, ok := value["oauth"].(map[string]any)
+	oauth, ok := mcpConfigTable(value.Values["oauth"])
 	if !ok {
-		t.Fatalf("oauth = %#v", value["oauth"])
+		t.Fatalf("oauth = %#v", value.Values["oauth"])
 	}
 	if oauth["client_id"] != "resource-client" || oauth["authorization_server_issuer"] != "https://as.example" {
 		t.Fatalf("oauth = %#v", oauth)
 	}
-	parsed := mcpServerFromConfigValue("enterprise", value)
+	parsed := mcpServerFromConfigValue("enterprise", value.Values)
 	if parsed.Auth != "ema_auth" || parsed.OAuthAuthorizationServerIssuer != "https://as.example" || parsed.OAuthClientID != "resource-client" {
 		t.Fatalf("parsed = %#v", parsed)
 	}

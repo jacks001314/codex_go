@@ -852,9 +852,9 @@ func TestMCPCLIServerOAuthCallbackURLRoundTrips(t *testing.T) {
 		t.Fatalf("OAuthCallbackURL = %#v", server)
 	}
 	out := mcpServerToConfigValue(server)
-	oauth, ok := out["oauth"].(map[string]any)
+	oauth, ok := mcpConfigTable(out.Values["oauth"])
 	if !ok || oauth["callback_url"] != "http://127.0.0.1/callback/abc123" || oauth["client_id"] != "client-1" {
-		t.Fatalf("oauth = %#v", out["oauth"])
+		t.Fatalf("oauth = %#v", out.Values["oauth"])
 	}
 }
 
@@ -875,9 +875,9 @@ func TestMCPCLIServerOAuthClientSecretRoundTripsAndStaysOutOfJSONLikeRust(t *tes
 		t.Fatalf("runtime OAuthClientSecret = %q", runtimeConfig.OAuthClientSecret)
 	}
 	out := mcpServerToConfigValue(server)
-	oauth, ok := out["oauth"].(map[string]any)
+	oauth, ok := mcpConfigTable(out.Values["oauth"])
 	if !ok || oauth["client_secret"] != "configured-secret" || oauth["client_id"] != "client-1" {
-		t.Fatalf("oauth = %#v", out["oauth"])
+		t.Fatalf("oauth = %#v", out.Values["oauth"])
 	}
 	encoded, err := json.Marshal(server)
 	if err != nil {
@@ -902,8 +902,8 @@ func TestMCPCLIServerToolInputSchemaMaxBytesRoundTripsLikeRust(t *testing.T) {
 		t.Fatalf("runtime ToolInputSchemaMaxBytes = %#v", runtimeConfig.ToolInputSchemaMaxBytes)
 	}
 	out := mcpServerToConfigValue(server)
-	if value, ok := out["tool_input_schema_max_bytes"].(int); !ok || value != 12_000 {
-		t.Fatalf("round-tripped budget = %#v", out["tool_input_schema_max_bytes"])
+	if value, ok := out.Values["tool_input_schema_max_bytes"].(int); !ok || value != 12_000 {
+		t.Fatalf("round-tripped budget = %#v", out.Values["tool_input_schema_max_bytes"])
 	}
 }
 
@@ -921,12 +921,12 @@ func TestMCPCLIServerStartupReadinessRoundTripsLikeRust(t *testing.T) {
 		t.Fatalf("runtime StartupReadiness = %#v", runtimeConfig.StartupReadiness)
 	}
 	out := mcpServerToConfigValue(server)
-	if out["startup_readiness"] != "catalog" {
-		t.Fatalf("round-tripped startup_readiness = %#v", out["startup_readiness"])
+	if out.Values["startup_readiness"] != "catalog" {
+		t.Fatalf("round-tripped startup_readiness = %#v", out.Values["startup_readiness"])
 	}
 
 	defaultServer := mcpServerFromConfigValue("default", map[string]any{"command": "mcp-default"})
-	if value, ok := mcpServerToConfigValue(defaultServer)["startup_readiness"]; ok {
+	if value, ok := mcpServerToConfigValue(defaultServer).Values["startup_readiness"]; ok {
 		t.Fatalf("default startup readiness should be omitted, got %#v", value)
 	}
 }
