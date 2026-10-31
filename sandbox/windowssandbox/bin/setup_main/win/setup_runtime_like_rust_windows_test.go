@@ -22,6 +22,7 @@ func TestRegisteredRuntimeRejectsHelperOwnedProvisioningLikeRust(t *testing.T) {
 	}{
 		{name: "registered full", payload: setupPayload{Runtime: registered, Mode: setupModeFull}, wantErr: true},
 		{name: "registered provision", payload: setupPayload{Runtime: registered, Mode: setupModeProvision}, wantErr: true},
+		{name: "registered interactive provision", payload: setupPayload{Runtime: registered, Mode: setupModeInteractiveProvision}, wantErr: true},
 		{name: "registered refresh", payload: setupPayload{Runtime: registered, Mode: setupModeFull, RefreshOnly: true}},
 		{name: "registered read acls", payload: setupPayload{Runtime: registered, Mode: setupModeReadACLsOnly}},
 		{name: "legacy full", payload: setupPayload{Mode: setupModeFull}},
@@ -51,6 +52,8 @@ func TestSetupModeProvisionsAccountsLikeRust(t *testing.T) {
 	}{
 		{"full", setupModeFull, false, true},
 		{"provision-only", setupModeProvision, false, true},
+		{"interactive-provision", setupModeInteractiveProvision, false, true},
+		{"interactive-provision refresh", setupModeInteractiveProvision, true, true},
 		{"refresh", setupModeFull, true, false},
 		{"read-acls-only", setupModeReadACLsOnly, false, false},
 	}
@@ -60,5 +63,26 @@ func TestSetupModeProvisionsAccountsLikeRust(t *testing.T) {
 				t.Fatalf("setupModeProvisionsAccounts(%q, %t) = %t, want %t", tc.mode, tc.refreshOnly, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestSetupPayloadAcceptsInteractiveProvisionModeLikeRust pins Rust #42309:
+// the helper accepts the provisioning-only mode used by elevated interactive
+// setup.
+func TestSetupPayloadAcceptsInteractiveProvisionModeLikeRust(t *testing.T) {
+	encoded, err := encodeSetupPayload(&setupPayload{
+		Version:   windowssandbox.SetupVersion,
+		CodexHome: t.TempDir(),
+		Mode:      setupModeInteractiveProvision,
+	})
+	if err != nil {
+		t.Fatalf("encodeSetupPayload() error = %v", err)
+	}
+	payload, err := payloadFromArgs([]string{encoded})
+	if err != nil {
+		t.Fatalf("payloadFromArgs() error = %v", err)
+	}
+	if payload.Mode != setupModeInteractiveProvision {
+		t.Fatalf("payload.Mode = %q, want %q", payload.Mode, setupModeInteractiveProvision)
 	}
 }

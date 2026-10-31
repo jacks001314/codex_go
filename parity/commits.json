@@ -6207,9 +6207,14 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "partial",
    "evidence": [
-    "Partial symbol coverage 1/2; needs review: prepare_elevated_sandbox"
+    "sandbox/windowssandbox/setup_windows.go adds setupModeInteractiveProvision and elevatedProvisioningPayload: elevated interactive setup sends command_cwd = codex_home, empty read/write/deny roots and mode interactive-provision, so caller workspace and ACL roots no longer ride in the elevated payload.",
+    "sandbox/windowssandbox/bin/setup_main/win/run_windows.go accepts interactive-provision, runs the provision-only helper path for it, and mirrors Rust SetupMode::provisions_accounts (ProvisionOnly and InteractiveProvision always take the global setup lock; Full only without refresh; ReadAclsOnly never).",
+    "appserver/windows_sandbox_runtime.go no longer returns early when setup is already complete: it provisions identities through the elevated helper only when needed and then always runs RunSetupRefreshForRequest with the request resolved permission profile, so the active profile supplies read, write and deny paths.",
+    "Tests: TestElevatedProvisioningPayloadContainsNoCallerACLRootsLikeRust, TestSetupPayloadAcceptsInteractiveProvisionModeLikeRust, TestSetupModeProvisionsAccountsLikeRust (interactive-provision rows) and TestRegisteredRuntimeRejectsHelperOwnedProvisioningLikeRust (interactive-provision row).",
+    "Residual: the TUI enable-agent-mode handler still short-circuits or skips the always-refresh route (Rust removed that early return in tui/src/app/event_dispatch.rs); the Go carriers live in tui/** and app/windows_sandbox_tui.go, which a parallel agent owns.",
+    "Verified with go build ./sandbox/... ./appserver/..., go test ./sandbox/windowssandbox/... -count=1, go test ./appserver -run WindowsSandbox|WindowsSetup -count=1 and go test ./parity -count=1."
    ]
   },
   {

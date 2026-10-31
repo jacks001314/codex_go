@@ -19,7 +19,10 @@ const (
 	windowsSandboxSetupFlag = "--codex-run-as-windows-sandbox-setup"
 	setupModeFull           = "full"
 	setupModeProvisionOnly  = "provision-only"
-	createNoWindow          = 0x08000000
+	// setupModeInteractiveProvision provisions sandbox identities without the
+	// full ACL setup path (Rust #42309 SetupMode::InteractiveProvision).
+	setupModeInteractiveProvision = "interactive-provision"
+	createNoWindow                = 0x08000000
 
 	errorCancelled        windows.Errno = 1223
 	seeMaskNoCloseProcess               = 0x00000040
@@ -131,31 +134,38 @@ func runElevatedSetup(req *SandboxSetupRequest) error {
 			"failed to create sandbox dir %s: %v", sbxDir, err,
 		)
 	}
-	readRoots, writeRoots := BuildPayloadRoots(req, req.Overrides)
-	networkIdentity := SandboxNetworkIdentityFromPermissions(req.Permissions, req.ProxyEnforced)
-	offlineProxySettings := offlineProxySettingsForRequest(req, networkIdentity)
-	payload := &setupElevationPayload{
-		Version:           SetupVersion,
-		OfflineUsername:   OfflineUsername,
-		OnlineUsername:    OnlineUsername,
-		CodexHome:         req.CodexHome,
-		CommandCWD:        req.CommandCWD,
-		ReadRoots:         readRoots,
-		WriteRoots:        writeRoots,
-		DenyReadPaths:     BuildPayloadDenyReadPaths(req.Overrides.DenyReadPaths),
-		DenyWritePaths:    BuildPayloadDenyWritePaths(req, req.Overrides.DenyWritePaths),
-		ProxyPorts:        offlineProxySettings.ProxyPorts,
-		AllowLocalBinding: offlineProxySettings.AllowLocalBinding,
-		RealUser:          setupRealUser(req.RealUser),
-		UserProfile:       setupUserProfile(),
-		Mode:              setupModeFull,
-		Runtime:           setupPayloadRuntime(),
-	}
+	payload := elevatedProvisioningPayload(req)
 	elevated, err := isElevated()
 	if err != nil {
 		return setupFailuref(SetupErrorOrchestratorElevationCheckFailed, "failed to determine elevation state: %v", err)
 	}
 	return runSetupExe(payload, !elevated, req.CodexHome, true)
+}
+
+// elevatedProvisioningPayload keeps privileged interactive setup limited to
+// sandbox identities and proxy settings. Caller workspace and ACL roots are
+// applied afterwards by the non-elevated setup refresh
+// (Rust #42309 elevated_provisioning_payload).
+func elevatedProvisioningPayload(req *SandboxSetupRequest) *setupElevationPayload {
+	networkIdentity := SandboxNetworkIdentityFromPermissions(req.Permissions, req.ProxyEnforced)
+	offlineProxySettings := offlineProxySettingsForRequest(req, networkIdentity)
+	return &setupElevationPayload{
+		Version:           SetupVersion,
+		OfflineUsername:   OfflineUsername,
+		OnlineUsername:    OnlineUsername,
+		CodexHome:         req.CodexHome,
+		CommandCWD:        req.CodexHome,
+		ReadRoots:         []string{},
+		WriteRoots:        []string{},
+		DenyReadPaths:     []string{},
+		DenyWritePaths:    []string{},
+		ProxyPorts:        offlineProxySettings.ProxyPorts,
+		AllowLocalBinding: offlineProxySettings.AllowLocalBinding,
+		RealUser:          setupRealUser(req.RealUser),
+		UserProfile:       setupUserProfile(),
+		Mode:              setupModeInteractiveProvision,
+		Runtime:           setupPayloadRuntime(),
+	}
 }
 
 func runElevatedProvisioningSetup(req *SandboxSetupRequest) error {

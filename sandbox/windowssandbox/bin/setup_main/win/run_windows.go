@@ -21,9 +21,10 @@ import (
 )
 
 const (
-	setupModeFull         setupMode = "full"
-	setupModeProvision    setupMode = "provision-only"
-	setupModeReadACLsOnly setupMode = "read-acls-only"
+	setupModeFull                 setupMode = "full"
+	setupModeInteractiveProvision setupMode = "interactive-provision"
+	setupModeProvision            setupMode = "provision-only"
+	setupModeReadACLsOnly         setupMode = "read-acls-only"
 
 	createNoWindow       = 0x08000000
 	setupFileDeleteChild = 0x00000040
@@ -130,7 +131,7 @@ func payloadFromArgs(args []string) (*setupPayload, error) {
 		payload.Mode = setupModeFull
 	}
 	switch payload.Mode {
-	case setupModeFull, setupModeProvision, setupModeReadACLsOnly:
+	case setupModeFull, setupModeInteractiveProvision, setupModeProvision, setupModeReadACLsOnly:
 	default:
 		return nil, setupFailuref(windowssandbox.SetupErrorHelperRequestArgsFailed, "unknown setup mode: %s", payload.Mode)
 	}
@@ -173,7 +174,7 @@ func runSetupPayload(payload *setupPayload, log io.Writer, sbxDir string) error 
 		if err := runReadACLOnly(payload, log); err != nil {
 			return err
 		}
-	case setupModeProvision:
+	case setupModeProvision, setupModeInteractiveProvision:
 		if err := runProvisionOnly(payload, log, sbxDir); err != nil {
 			return err
 		}
@@ -196,10 +197,14 @@ func runSetupPayload(payload *setupPayload, log io.Writer, sbxDir string) error 
 // only account-provisioning runs take the machine-wide setup lock. ACL refresh
 // and read-only repair may still run beside an active sandbox.
 func setupModeProvisionsAccounts(mode setupMode, refreshOnly bool) bool {
-	if refreshOnly {
+	switch mode {
+	case setupModeProvision, setupModeInteractiveProvision:
+		return true
+	case setupModeFull:
+		return !refreshOnly
+	default:
 		return false
 	}
-	return mode == setupModeFull || mode == setupModeProvision
 }
 
 // validateSetupRuntimeForProvisioning keeps registered Core accounts owned by
