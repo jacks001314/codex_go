@@ -257,6 +257,10 @@ type Server struct {
 	// missingWatch holds the newest missing-path observation for this
 	// connection (Rust #57598 missing_watch.rs).
 	missingWatch missingWatchState
+	// registrationMu guards the registry-issued executor identity used only
+	// for telemetry attribution (Rust #42373).
+	registrationMu       sync.Mutex
+	executorRegistration *executorRegistrationIdentity
 }
 
 // SetPreferMXC records the startup CLI sandbox preference
@@ -362,37 +366,39 @@ type serverSessionEntry struct {
 }
 
 type processState struct {
-	id               string
-	cmd              *exec.Cmd
-	stdin            io.WriteCloser
-	starting         bool
-	terminateFn      func() error
-	signalFn         func() error
-	pipeStdin        bool
-	tty              bool
-	mu               sync.Mutex
-	cond             *sync.Cond
-	chunks           []outputChunk
-	retainedBytes    int
-	nextSeq          uint64
-	exited           bool
-	exitSequenced    bool
-	exitCode         *int
-	sandboxType      sandbox.SandboxType
-	sandboxDenied    bool
-	failure          string
-	closed           bool
-	closedSequenced  bool
-	openStreams      int
-	seenWriteIDs     map[string]bool
-	seenWriteOrder   []string
-	notify           processNotifier
-	onClosed         func()
-	retention        time.Duration
-	retentionOnce    sync.Once
-	networkProxy     *network.PreparedProxyManagedNetwork
-	policyCancel     context.CancelFunc
-	networkCloseOnce sync.Once
+	id                   string
+	cmd                  *exec.Cmd
+	stdin                io.WriteCloser
+	starting             bool
+	terminateFn          func() error
+	signalFn             func() error
+	pipeStdin            bool
+	tty                  bool
+	mu                   sync.Mutex
+	cond                 *sync.Cond
+	chunks               []outputChunk
+	retainedBytes        int
+	nextSeq              uint64
+	exited               bool
+	exitSequenced        bool
+	exitCode             *int
+	sandboxType          sandbox.SandboxType
+	sandboxDenied        bool
+	failure              string
+	closed               bool
+	closedSequenced      bool
+	openStreams          int
+	seenWriteIDs         map[string]bool
+	seenWriteOrder       []string
+	notify               processNotifier
+	onClosed             func()
+	retention            time.Duration
+	retentionOnce        sync.Once
+	networkProxy         *network.PreparedProxyManagedNetwork
+	policyCancel         context.CancelFunc
+	networkCloseOnce     sync.Once
+	telemetry            processTelemetry
+	terminationRequested bool
 }
 
 type processNotifier func(method string, params any)
@@ -1098,6 +1104,9 @@ func newSessionServerWithRuntimeOptions(httpClient *http.Client, parent *Server)
 		server.SetProxyPrivateIPsViaUpstream(parent.proxyPrivateIPsViaUpstreamValue())
 		server.SetEnvironmentConfigReader(parent.environmentConfigReaderForRead())
 		server.SetAllowedSymlinkedCodexHome(parent.allowedSymlinkedCodexHomeValue())
+		if identity := parent.executorRegistrationIdentityValue(); identity != nil {
+			server.SetExecutorRegistrationIdentity(identity.environmentID, identity.registrationID)
+		}
 	}
 	return server
 }
@@ -1946,6 +1955,7 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 			sandboxSpawnSpan.End()
 		}
 		if startErr != nil {
+			state.telemetry.spawnFailed(sandbox.SandboxTypeWindowsRestrictedToken)
 			s.releaseStartingProcess(params.ProcessID, state)
 			return nil, startErr
 		}
@@ -1977,6 +1987,7 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 				}
 			}
 			state.mu.Unlock()
+			state.telemetry.start(sandbox.SandboxTypeWindowsRestrictedToken)
 			var readers sync.WaitGroup
 			for index, reader := range started.readers {
 				if reader == nil {
@@ -2044,6 +2055,7 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 			ttySpawnSpan.End()
 		}
 		if startErr != nil {
+			state.telemetry.spawnFailed(sandboxType)
 			s.releaseStartingProcess(params.ProcessID, state)
 			return nil, startErr
 		}
@@ -2083,6 +2095,7 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 				return err
 			}
 			state.mu.Unlock()
+			state.telemetry.start(sandboxType)
 			captureDone := make(chan struct{})
 			go func() {
 				defer close(captureDone)
@@ -2162,6 +2175,7 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 		spawnSpan.End()
 	}
 	if err != nil {
+		state.telemetry.spawnFailed(sandboxType)
 		s.releaseStartingProcess(params.ProcessID, state)
 		if stdin != nil {
 			_ = stdin.Close()
@@ -2181,6 +2195,7 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 		_ = cmd.Wait()
 		return nil, requestError(-32600, fmt.Sprintf("process %s start was cancelled", params.ProcessID))
 	}
+	state.telemetry.start(sandboxType)
 	stdoutStream := "stdout"
 	stderrStream := "stderr"
 	if params.TTY {
@@ -2242,6 +2257,7 @@ func (s *Server) reserveProcessState(ctx context.Context, params *ExecParams) (*
 		seenWriteIDs: map[string]bool{},
 		notify:       processNotifierFromContext(ctx),
 		retention:    execServerExitedProcessRetention,
+		telemetry:    newProcessTelemetry(ctx, params, s.executorRegistrationIdentityValue()),
 	}
 	state.onClosed = func() {
 		timer := time.NewTimer(state.retention)
@@ -2328,6 +2344,7 @@ func (s *Server) prepareExecutorNetworkProxy(ctx context.Context, params *ExecPa
 		proxyConfig.Network,
 		preparedParams.Env,
 	)
+	processTelemetry := newProcessTelemetry(ctx, params, s.executorRegistrationIdentityValue())
 	proxyConfig.AuditMetadata = network.ProxyAuditMetadata{
 		ConversationID: launch.AuditMetadata.ConversationID,
 		AppVersion:     launch.AuditMetadata.AppVersion,
@@ -2338,6 +2355,7 @@ func (s *Server) prepareExecutorNetworkProxy(ctx context.Context, params *ExecPa
 		TerminalType:   launch.AuditMetadata.TerminalType,
 		Model:          launch.AuditMetadata.Model,
 		Slug:           launch.AuditMetadata.Slug,
+		ProcessLog:     processTelemetry.networkProcessLogMetadata(),
 	}
 	policyCtx, policyCancel := context.WithCancel(context.Background())
 	if launch.PolicyDecisionTimeoutMS != nil {
@@ -3666,6 +3684,7 @@ func (p *processState) finish(waitErr error) {
 
 func (p *processState) finishWithCode(waitErr error, explicitCode *int) {
 	p.mu.Lock()
+	alreadyExited := p.exited
 	var exitErr *exec.ExitError
 	if waitErr != nil && !errors.As(waitErr, &exitErr) {
 		p.failure = waitErr.Error()
@@ -3681,6 +3700,14 @@ func (p *processState) finishWithCode(waitErr error, explicitCode *int) {
 		p.sandboxDenied = sandbox.IsLikelySandboxDenied(p.sandboxType, p.sandboxExecOutputLocked(*p.exitCode))
 	}
 	p.exited = true
+	telemetry := p.telemetry
+	sandboxType := p.sandboxType
+	sandboxDenied := p.sandboxDenied
+	terminationRequested := p.terminationRequested
+	exitCodeValue := -1
+	if p.exitCode != nil {
+		exitCodeValue = *p.exitCode
+	}
 	var exited *ProcessExitedNotification
 	if !p.exitSequenced {
 		seq := p.nextSeq
@@ -3706,6 +3733,12 @@ func (p *processState) finishWithCode(waitErr error, explicitCode *int) {
 	p.cond.Broadcast()
 	notify := p.notify
 	p.mu.Unlock()
+	if !alreadyExited {
+		if sandboxDenied {
+			telemetry.sandboxDenied(sandboxType)
+		}
+		telemetry.exit(sandboxType, exitCodeValue, terminationRequested)
+	}
 	if notify != nil {
 		if exited != nil {
 			notify(MethodProcessExited, *exited)
@@ -3926,6 +3959,9 @@ func (p *processState) terminate() *TerminateResponse {
 	cmd := p.cmd
 	terminateFn := p.terminateFn
 	running := !p.exited && (terminateFn != nil || (cmd != nil && cmd.Process != nil))
+	if running {
+		p.terminationRequested = true
+	}
 	p.mu.Unlock()
 	if running {
 		if terminateFn != nil {

@@ -236,11 +236,21 @@ type clientProcessSession struct {
 	policy        *networkPolicyDecisionController
 	policyDone    chan struct{}
 	policyOnce    sync.Once
+	auditMu       sync.Mutex
+	audit         *networkPolicyAuditContext
 }
 
 type networkPolicyDecisionController struct {
 	decider network.ProxyPolicyDecider
 	timeout time.Duration
+}
+
+// networkPolicyAuditContext mirrors Rust's controller-side audit context. It
+// is captured from the launch request and never replaced by later process
+// operations.
+type networkPolicyAuditContext struct {
+	metadata    RemoteNetworkProxyAuditMetadata
+	executionID string
 }
 
 type HTTPBodyStream struct {
@@ -1046,6 +1056,36 @@ func (s *clientProcessSession) cancelNetworkPolicy() {
 	})
 }
 
+func (s *clientProcessSession) setNetworkPolicyAudit(audit *networkPolicyAuditContext) {
+	if s == nil {
+		return
+	}
+	s.auditMu.Lock()
+	s.audit = audit
+	s.auditMu.Unlock()
+}
+
+func (s *clientProcessSession) networkPolicyAuditSnapshot() *networkPolicyAuditContext {
+	if s == nil {
+		return nil
+	}
+	s.auditMu.Lock()
+	defer s.auditMu.Unlock()
+	return s.audit
+}
+
+func (c *Client) setProcessNetworkPolicyAudit(processID string, audit *networkPolicyAuditContext) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	session := c.sessions[processID]
+	c.mu.Unlock()
+	if session != nil {
+		session.setNetworkPolicyAudit(audit)
+	}
+}
+
 func (s *ProcessEventSubscription) publish(event ProcessEvent) {
 	const eventCapacity = 256
 	s.mu.Lock()
@@ -1092,11 +1132,25 @@ func (c *Client) Start(ctx context.Context, params *ExecParams) (*ExecResponse, 
 	if err := c.ensureNetworkReviewCapability(ctx, &request); err != nil {
 		return nil, err
 	}
+	audit := networkPolicyAuditContextFromParams(&request)
+	c.setProcessNetworkPolicyAudit(request.ProcessID, audit)
 	var response ExecResponse
 	if err := c.call(ctx, MethodProcessStart, &request, &response); err != nil {
+		c.setProcessNetworkPolicyAudit(request.ProcessID, nil)
 		return nil, err
 	}
 	return &response, nil
+}
+
+func networkPolicyAuditContextFromParams(params *ExecParams) *networkPolicyAuditContext {
+	if params == nil || params.NetworkProxy == nil {
+		return nil
+	}
+	launch := params.NetworkProxy
+	return &networkPolicyAuditContext{
+		metadata:    launch.AuditMetadata,
+		executionID: stringValue(launch.ExecutionID),
+	}
 }
 
 // ensureNetworkReviewCapability rejects a launch whose proxy carries managed
@@ -2601,12 +2655,16 @@ func (c *Client) handleNotification(method string, raw json.RawMessage) error {
 			return fmt.Errorf("invalid network policy decision notification")
 		}
 		c.mu.Lock()
-		active := c.sessions[params.ProcessID] != nil
+		session := c.sessions[params.ProcessID]
 		c.mu.Unlock()
-		if !active {
+		if session == nil {
 			return nil
 		}
-		emitNetworkPolicyDecisionAudit(params)
+		audit := session.networkPolicyAuditSnapshot()
+		if audit == nil {
+			return nil
+		}
+		emitNetworkPolicyDecisionAudit(params, audit)
 		return nil
 	case MethodFSMissingChanged:
 		if err := requireNotificationFields(raw, "watchId"); err != nil {
@@ -2638,7 +2696,10 @@ func (c *Client) handleNotification(method string, raw json.RawMessage) error {
 	return nil
 }
 
-func emitNetworkPolicyDecisionAudit(decision NetworkPolicyDecisionNotification) {
+func emitNetworkPolicyDecisionAudit(decision NetworkPolicyDecisionNotification, audit *networkPolicyAuditContext) {
+	if audit == nil {
+		return
+	}
 	method := "none"
 	if decision.Method != nil {
 		method = *decision.Method
@@ -2647,6 +2708,7 @@ func emitNetworkPolicyDecisionAudit(decision NetworkPolicyDecisionNotification) 
 	if decision.Client != nil {
 		client = *decision.Client
 	}
+	metadata := audit.metadata
 	// Rust 899d1715c8 (#38800): forwarded network policy decisions are audit
 	// telemetry. The codex_otel.log_only target keeps them available to OTEL
 	// log export while the state log DB handler excludes them from persistent
@@ -2655,7 +2717,16 @@ func emitNetworkPolicyDecisionAudit(decision NetworkPolicyDecisionNotification) 
 		"target", "codex_otel.log_only",
 		"event.name", "codex.network_proxy.policy_decision",
 		"event.timestamp", decision.Timestamp,
-		"execution.id", decision.ProcessID,
+		"conversation.id", metadata.ConversationID,
+		"app.version", metadata.AppVersion,
+		"auth_mode", metadata.AuthMode,
+		"originator", metadata.Originator,
+		"user.account_id", metadata.UserAccountID,
+		"user.email", metadata.UserEmail,
+		"terminal.type", metadata.TerminalType,
+		"model", metadata.Model,
+		"slug", metadata.Slug,
+		"execution.id", audit.executionID,
 		"network.policy.scope", decision.Scope,
 		"network.policy.decision", decision.Decision,
 		"network.policy.source", decision.Source,

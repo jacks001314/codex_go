@@ -391,6 +391,19 @@ type ProxyAuditMetadata struct {
 	TerminalType   string
 	Model          string
 	Slug           string
+	// ProcessLog carries launch-local attribution for executor-managed
+	// processes. These values are telemetry only and never authorize a request.
+	ProcessLog ProxyProcessLogMetadata
+}
+
+// ProxyProcessLogMetadata mirrors Rust #42373's process log attribution.
+type ProxyProcessLogMetadata struct {
+	ThreadID               string
+	ToolCallID             string
+	ExecutorEnvironmentID  string
+	ExecutorRegistrationID string
+	LaunchTraceID          string
+	LaunchSpanID           string
 }
 
 type ProxyAuditMetadataProvider func(ProxyPolicyRequest) ProxyAuditMetadata

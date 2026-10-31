@@ -20,19 +20,19 @@ type networkPolicyTestConnection struct {
 	closeOnce sync.Once
 }
 
-func TestEmitNetworkPolicyDecisionAuditUsesLogOnlyTarget(t *testing.T) {
+func TestEmitNetworkPolicyDecisionAuditUsesLaunchMetadataAndLogOnlyTarget(t *testing.T) {
 	var mu sync.Mutex
-	var targets []string
+	var records []map[string]any
 	previous := slog.Default()
 	slog.SetDefault(slog.New(loggingHandlerFunc(func(record slog.Record) {
+		attrs := map[string]any{}
 		record.Attrs(func(attr slog.Attr) bool {
-			if attr.Key == "target" {
-				mu.Lock()
-				targets = append(targets, attr.Value.String())
-				mu.Unlock()
-			}
+			attrs[attr.Key] = attr.Value.Any()
 			return true
 		})
+		mu.Lock()
+		records = append(records, attrs)
+		mu.Unlock()
 	})))
 	defer slog.SetDefault(previous)
 
@@ -45,12 +45,32 @@ func TestEmitNetworkPolicyDecisionAuditUsesLogOnlyTarget(t *testing.T) {
 		Host:      "example.com",
 		Port:      443,
 		Protocol:  "tcp",
+	}, &networkPolicyAuditContext{
+		metadata: RemoteNetworkProxyAuditMetadata{
+			ConversationID: "conversation-1",
+			AppVersion:     "1.2.3",
+			UserAccountID:  "account-1",
+			AuthMode:       "Chatgpt",
+			Originator:     "codex_cli_go",
+			UserEmail:      "test@example.com",
+			TerminalType:   "WindowsTerminal",
+			Model:          "gpt-5.3-codex",
+			Slug:           "gpt-5.3-codex",
+		},
+		executionID: "execution-1",
 	})
 
 	mu.Lock()
 	defer mu.Unlock()
-	if len(targets) != 1 || targets[0] != "codex_otel.log_only" {
-		t.Fatalf("audit targets = %#v, want [codex_otel.log_only]", targets)
+	if len(records) != 1 {
+		t.Fatalf("audit records = %#v, want one record", records)
+	}
+	attrs := records[0]
+	if attrs["target"] != "codex_otel.log_only" || attrs["conversation.id"] != "conversation-1" || attrs["execution.id"] != "execution-1" {
+		t.Fatalf("audit attribution = %#v", attrs)
+	}
+	if attrs["app.version"] != "1.2.3" || attrs["tool.call_id"] != nil {
+		t.Fatalf("unexpected controller audit fields = %#v", attrs)
 	}
 }
 

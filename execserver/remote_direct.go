@@ -167,6 +167,7 @@ func runDirectEnvironment(ctx context.Context, cfg RemoteEnvironmentConfig, serv
 	if err != nil {
 		return err
 	}
+	server.SetExecutorRegistrationIdentity(cfg.EnvironmentID, registration.RegistrationID)
 	var retryAttempt uint32
 	for {
 		if err := ctx.Err(); err != nil {
@@ -203,6 +204,7 @@ func runDirectEnvironment(ctx context.Context, cfg RemoteEnvironmentConfig, serv
 				if err != nil {
 					return err
 				}
+				server.SetExecutorRegistrationIdentity(cfg.EnvironmentID, registration.RegistrationID)
 			}
 			slog.Warn("direct exec-server connection failed; retrying",
 				"remote_event", "direct_connection",

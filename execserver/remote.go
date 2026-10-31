@@ -273,6 +273,7 @@ func RunRemoteEnvironment(ctx context.Context, cfg RemoteEnvironmentConfig) erro
 	if err != nil {
 		return err
 	}
+	server.SetExecutorRegistrationIdentity(registration.EnvironmentID, registration.ExecutorRegistrationID)
 	// Each connection attempt is correlated by its own request id and reported
 	// with credential-free, typed diagnostics (Rust #51483).
 	connectionAttempt := uint64(0)

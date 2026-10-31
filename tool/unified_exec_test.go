@@ -24,9 +24,27 @@ import (
 	"codex_go/execpolicy"
 	"codex_go/execserver"
 	"codex_go/network"
+	"codex_go/protocol"
 	"codex_go/sandbox"
 	"github.com/coder/websocket"
 )
+
+func TestUnifiedExecLaunchContextCarriesW3CTraceLikeRust(t *testing.T) {
+	ctx := protocol.WithTraceContext(context.Background(), &protocol.W3CTraceContext{
+		Traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+	})
+	launchCtx, cancel := unifiedExecLaunchContext(ctx)
+	defer cancel()
+	trace := execserver.TraceContextFromContext(launchCtx)
+	if trace.TraceID != "4bf92f3577b34da6a3ce929d0e0e4736" || trace.SpanID != "00f067aa0ba902b7" {
+		t.Fatalf("launch trace = %#v", trace)
+	}
+	untracedCtx, untracedCancel := unifiedExecLaunchContext(context.Background())
+	defer untracedCancel()
+	if trace := execserver.TraceContextFromContext(untracedCtx); !trace.IsZero() {
+		t.Fatalf("untraced launch context = %#v", trace)
+	}
+}
 
 // TestExecEnvPolicyFromShellPolicy pins the unified-exec wire conversion of
 // the selected environment's shell environment policy (#38902): the exec-server

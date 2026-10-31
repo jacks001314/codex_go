@@ -22,6 +22,7 @@ import (
 	"codex_go/execpolicy"
 	"codex_go/execserver"
 	"codex_go/network"
+	"codex_go/protocol"
 	"codex_go/sandbox"
 	"codex_go/utils"
 
@@ -758,7 +759,7 @@ func (m *UnifiedExecManager) execRemote(ctx context.Context, req *ShellRequest, 
 			return nil, err
 		}
 	}
-	startCtx, startCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	startCtx, startCancel := unifiedExecLaunchContext(ctx)
 	remoteCWD, err := unifiedExecPathURI(req.CWD)
 	if err != nil {
 		startCancel()
@@ -926,6 +927,20 @@ func unifiedExecWireMetadata(req *ShellRequest, callID string) *execserver.ExecM
 		metadata.ThreadID = &threadID
 	}
 	return metadata
+}
+
+// unifiedExecLaunchContext bounds process creation while carrying the launch
+// trace across the exec-server boundary. The timeout intentionally starts from
+// Background, matching the existing launch budget when the tool call itself is
+// cancelled after the process has been handed off.
+func unifiedExecLaunchContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	startCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	if trace, ok := protocol.TraceContextFromContext(ctx); ok {
+		if parsed, ok := execserver.TraceContextFromW3C(trace.Traceparent); ok {
+			startCtx = execserver.WithTraceContext(startCtx, parsed)
+		}
+	}
+	return startCtx, cancel
 }
 
 // emitUnifiedExecLaunchFailure publishes the attempt and terminal failure when

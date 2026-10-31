@@ -1907,9 +1907,6 @@ func (s *ProxyServer) recordBlockedRequest(ctx context.Context, request ProxyPol
 }
 
 func (s *ProxyServer) emitProxyPolicyAudit(request ProxyPolicyRequest, decision ProxyDecision, policyOverride bool) {
-	if s.auditSink == nil {
-		return
-	}
 	value := "allow"
 	if !decision.Allow {
 		value = string(decision.Decision)
@@ -1921,7 +1918,7 @@ func (s *ProxyServer) emitProxyPolicyAudit(request ProxyPolicyRequest, decision 
 	if s.auditProvider != nil {
 		metadata = s.auditProvider(request)
 	}
-	s.auditSink(ProxyPolicyAuditEvent{
+	event := ProxyPolicyAuditEvent{
 		Request:        request,
 		Timestamp:      time.Now().UTC().Format(time.RFC3339Nano),
 		Scope:          "domain",
@@ -1932,7 +1929,11 @@ func (s *ProxyServer) emitProxyPolicyAudit(request ProxyPolicyRequest, decision 
 		Reason:         decision.Reason,
 		PolicyOverride: policyOverride,
 		Metadata:       metadata,
-	})
+	}
+	logProxyPolicyAudit(event)
+	if s.auditSink != nil {
+		s.auditSink(event)
+	}
 }
 
 func proxyAddrString(address net.Addr) string {

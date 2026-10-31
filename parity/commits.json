@@ -6545,9 +6545,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "ExecMetadata (threadId/toolCallId) is carried on ExecParams and sent by unified exec, and launch spans plus request/response trace events exist; missing the bounded process_start/spawn_failed/sandbox_denied/process_exit events with launch trace, executor identity and exit fields, and network-policy audit attribution (#42373)"
+    "Round 1149: ExecMetadata (threadId/toolCallId) and unified-exec wire propagation already existed. Added execserver/process_telemetry.go with bounded process_start, process_spawn_failed, sandbox_denied and process_exit events carrying launch trace/span, thread, tool call, registry executor identity and Rust Debug sandbox names; captured identity from Noise/direct registration (including 409 re-registration), snapshotted it per process, propagated it to session servers, and emitted spawn-failure/start/exit from sandbox, TTY and piped paths with terminate attribution. Added W3C traceparent propagation from tool/unified_exec.go and trace_context.go. Added network ProxyProcessLogMetadata, executor-local policy audit emission with thread/tool/executor/trace fields, and controller audit context carrying launch metadata plus executionId. Tests: process_telemetry_like_rust_test.go (lifecycle, spawn failure, denial/termination, bounds), trace_context_test.go (W3C parsing), client_network_policy_test.go (controller metadata/execution id), proxy_policy_audit_like_rust_test.go (executor attribution and conversation fallback). Verified: go test ./execserver -count=1; go test ./network -count=1; go test ./tool -count=1; go test ./execserver -race -run 'ProcessTelemetry|NetworkPolicyDecisionAudit|TraceContext' -count=1; go build ./...; go test ./parity -skip TestGoTopLevelDirectoryInventory -count=1. Residual: lifecycle records use OTEL log-export targets instead of dedicated spans, and an unavailable exit code is recorded as -1."
    ]
   },
   {

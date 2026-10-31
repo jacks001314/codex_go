@@ -35,6 +35,24 @@ func TestTraceContextRoundTripAndPropagation(t *testing.T) {
 	}
 }
 
+func TestTraceContextFromW3CLikeRust(t *testing.T) {
+	trace, ok := TraceContextFromW3C("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+	if !ok || trace.TraceID != "4bf92f3577b34da6a3ce929d0e0e4736" || trace.SpanID != "00f067aa0ba902b7" {
+		t.Fatalf("W3C trace = %#v, ok = %v", trace, ok)
+	}
+	for _, traceparent := range []string{
+		"",
+		"not-a-traceparent",
+		"00-00000000000000000000000000000000-00f067aa0ba902b7-01",
+		"00-4bf92f3577b34da6a3ce929d0e0e4736-0000000000000000-01",
+		"00-4bf92f3577b34da6a3ce929d0e0e473z-00f067aa0ba902b7-01",
+	} {
+		if trace, ok := TraceContextFromW3C(traceparent); ok || !trace.IsZero() {
+			t.Fatalf("traceparent %q parsed as %#v", traceparent, trace)
+		}
+	}
+}
+
 func TestRequestDecodesTraceContext(t *testing.T) {
 	line := []byte(`{"id":1,"method":"environment/info","traceContext":{"traceId":"trace-1","spanId":"span-1"}}`)
 	var req request
