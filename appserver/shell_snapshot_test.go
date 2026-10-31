@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"codex_go/config"
+	"codex_go/network"
 	"codex_go/sandbox"
 	"codex_go/session"
 	"codex_go/state"
@@ -363,7 +364,7 @@ func TestShellSnapshotSkipsPrewarmWithTheCredentialBrokerLikeRust(t *testing.T) 
 	previous := shellSnapshotCaptureRunner
 	shellSnapshotCaptureRunner = runner.run
 	t.Cleanup(func() { shellSnapshotCaptureRunner = previous })
-	brokerConfig := "sandbox_mode = \"workspace-write\"\n[features.network_proxy]\nenabled = true\ncredential_broker = true\n"
+	brokerConfig := "sandbox_mode = \"workspace-write\"\n[features.network_proxy]\nenabled = true\nmitm = true\ncredential_broker = true\nproxy_url = \"http://127.0.0.1:0\"\nenable_socks5 = false\n[permissions.workspace-write.network]\nenabled = true\nmitm = true\ncredential_broker = true\nproxy_url = \"http://127.0.0.1:0\"\nenable_socks5 = false\n"
 	router, threadID, cwd := newShellSnapshotRouter(t, brokerConfig)
 	t.Cleanup(func() { _ = router.Close() })
 	router.services.Environment = NewEnvironmentManager(EnvironmentShellInfo{Name: "bash", Path: "/bin/bash"}, cwd)
@@ -379,16 +380,74 @@ func TestShellSnapshotSkipsPrewarmWithTheCredentialBrokerLikeRust(t *testing.T) 
 	if waitForSnapshotCaptures(runner, 1, 200*time.Millisecond) {
 		t.Fatalf("a protected session prewarmed a snapshot (captures = %d)", runner.count())
 	}
+	// A protected launch whose broker is not Ready has no snapshot to replay;
+	// Rust returns None for Starting/Unavailable broker state instead of
+	// capturing an unprotected snapshot.
 	if path := provider(context.Background(), tool.SnapshotProviderRequest{
 		ShellType:       tool.ShellBash,
 		ShellPath:       "/bin/bash",
 		CWD:             cwd,
 		AllowLoginShell: true,
-	}).Path; path == "" {
-		t.Fatal("the launch found no snapshot")
+	}).Path; path != "" {
+		t.Fatal("a protected launch without ready broker state received a snapshot")
 	}
-	if captures := runner.count(); captures != 1 {
-		t.Fatalf("captures = %d, want exactly the launch's capture", captures)
+	if captures := runner.count(); captures != 0 {
+		t.Fatalf("captures = %d, want none without ready broker state", captures)
+	}
+}
+
+// TestShellSnapshotProviderCapturesProtectedSnapshotWhenBrokerReadyLikeRust
+// covers the Ready branch of Rust #43909: once the managed network exposes the
+// broker, a protected launch captures under the virtualized environment and
+// receives the prepared keys for replay.
+func TestShellSnapshotProviderCapturesProtectedSnapshotWhenBrokerReadyLikeRust(t *testing.T) {
+	stubShellSnapshotRunner(t)
+	brokerConfig := "sandbox_mode = \"workspace-write\"\n[features.network_proxy]\nenabled = true\nmitm = true\ncredential_broker = true\n"
+	router, threadID, cwd := newShellSnapshotRouter(t, brokerConfig)
+	t.Cleanup(func() { _ = router.Close() })
+	cfg := router.effectiveWriteStdinConfig(threadID)
+	if !shellSnapshotProtected(cfg) {
+		t.Fatal("the broker configuration was not detected as protected")
+	}
+	proxyConfig := network.ProxyConfig{Network: network.DefaultProxySettings()}
+	proxyConfig.Network.Enabled = true
+	proxyConfig.Network.MITM = true
+	proxyConfig.Network.CredentialBroker = true
+	proxyConfig.Network.ProxyURL = "http://127.0.0.1:0"
+	proxyConfig.Network.EnableSocks5 = false
+	proxyConfig.Network.EnableSocks5UDP = false
+	prepared, err := network.StartProxyManagedNetwork(context.Background(), proxyConfig, map[string]string{"OPENAI_API_KEY": "sk-real-secret"})
+	if err != nil {
+		t.Fatalf("StartProxyManagedNetwork() error = %v", err)
+	}
+	router.managedNetworksMu.Lock()
+	router.managedNetworks[threadID] = prepared
+	router.managedNetworksMu.Unlock()
+	env, _, err := prepared.PrepareForEnvironment("local")
+	if err != nil {
+		t.Fatalf("PrepareForEnvironment() error = %v", err)
+	}
+	provider := router.shellSnapshotProviderForTurn(threadID, cfg)
+	if provider == nil {
+		t.Fatal("no snapshot provider")
+	}
+	profile := sandbox.WorkspaceWritePermissionProfile()
+	result := provider(context.Background(), tool.SnapshotProviderRequest{
+		ShellType:           tool.ShellBash,
+		ShellPath:           "/bin/bash",
+		CWD:                 cwd,
+		AllowLoginShell:     true,
+		PermissionProfile:   &profile,
+		PermissionProfileID: "workspace-write",
+		ShellMode:           tool.UnifiedExecShellModeDirect,
+		Protected:           true,
+		Env:                 env,
+	})
+	if result.Path == "" {
+		t.Fatal("a Ready broker launch found no snapshot")
+	}
+	if result.Env["CODEX_NETWORK_PROXY_SNAPSHOT_BROKERED_PREPARED"] != "1" {
+		t.Fatalf("prepared launch environment = %#v", result.Env)
 	}
 }
 

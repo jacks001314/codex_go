@@ -17196,7 +17196,11 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 				if err != nil {
 					return nil, err
 				}
-				return &tool.ManagedNetworkResolution{Env: env, ManagedNetwork: &sandboxContext}, nil
+				return &tool.ManagedNetworkResolution{
+					Env:                          env,
+					ManagedNetwork:               &sandboxContext,
+					RestoreUnbrokeredEnvironment: managedNetwork.RestoreUnbrokeredEnvironment,
+				}, nil
 			}
 		}
 		if cfg != nil {

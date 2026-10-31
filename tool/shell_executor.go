@@ -180,6 +180,10 @@ type ManagedNetworkResolution struct {
 	RemoteNetworkProxy           *execserver.RemoteNetworkProxyLaunchConfig
 	NetworkPolicyDecider         network.ProxyPolicyDecider
 	NetworkPolicyDecisionTimeout time.Duration
+	// RestoreUnbrokeredEnvironment restores the executor's pre-virtualization
+	// values into a child environment and removes broker activation. Rust uses
+	// it for shells that cannot replay a protected snapshot (#43909).
+	RestoreUnbrokeredEnvironment func(env map[string]string)
 }
 
 type ManagedNetworkResolver func(environmentID string, remote bool) (*ManagedNetworkResolution, error)
@@ -567,6 +571,17 @@ func unifiedExecAdditionalPermissionsSchema() map[string]any {
 	}
 }
 
+// credentialBrokerProtectedShell reports whether this shell needs a protected
+// snapshot before a brokered launch may run (Rust #43909).
+func credentialBrokerProtectedShell(shellType ShellType) bool {
+	switch shellType {
+	case ShellBash, ShellZsh:
+		return true
+	default:
+		return false
+	}
+}
+
 const unifiedExecWindowsShellGuidance = "Windows safety rules:\n" +
 	"- Do not compose destructive filesystem commands across shells. Do not enumerate paths in PowerShell and then pass them to `cmd /c`, batch builtins, or another shell for deletion or moving. Use one shell end-to-end, prefer native PowerShell cmdlets such as `Remove-Item` / `Move-Item` with `-LiteralPath`, and avoid string-built shell commands for file operations.\n" +
 	"- Before any recursive delete or move on Windows, verify the resolved absolute target paths stay within the intended workspace or explicitly named target directory. Never issue a recursive delete or move against a computed path if the final target has not been checked.\n" +
@@ -708,6 +723,21 @@ func (e *ShellExecutor) prepareExecCommand(invocation *Invocation) (*execCommand
 				validation.RemoteNetworkProxy = resolvedNetwork.RemoteNetworkProxy
 				validation.NetworkPolicyDecider = resolvedNetwork.NetworkPolicyDecider
 				validation.NetworkPolicyDecisionTimeout = resolvedNetwork.NetworkPolicyDecisionTimeout
+				if validation.Env[network.CredentialBrokerActiveEnvKey] == "1" {
+					if validation.ShellMode == UnifiedExecShellModeZshFork {
+						return nil, RespondToModel("credential brokerage does not yet support shell_zsh_fork; disable shell_zsh_fork to use the broker")
+					}
+					launchShellType := ShellBash
+					if sessionShell != nil {
+						launchShellType = sessionShell.Type
+					}
+					if strings.TrimSpace(args.Shell) != "" {
+						launchShellType = DetectShellType(args.Shell)
+					}
+					if !remoteEnvironment && (launchShellType == ShellPowerShell || launchShellType == ShellCmd) && resolvedNetwork.RestoreUnbrokeredEnvironment != nil {
+						resolvedNetwork.RestoreUnbrokeredEnvironment(validation.Env)
+					}
+				}
 			}
 		}
 	}
@@ -938,7 +968,19 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 			EnvironmentID:       req.UnifiedExecEnvironmentID,
 			Remote:              remoteEnvironment,
 			ShellMode:           validation.ShellMode,
+			Protected:           req.Env[network.CredentialBrokerActiveEnvKey] == "1",
+			Env:                 cloneEnv(req.Env),
 		})
+		if len(snapshot.Env) > 0 {
+			// A protected snapshot hands back the broker-prepared keys its replay
+			// wrapper restores from (Rust's ShellSnapshotFile::restore_credentials).
+			if req.Env == nil {
+				req.Env = map[string]string{}
+			}
+			for key, value := range snapshot.Env {
+				req.Env[key] = value
+			}
+		}
 		snapshotUsed := false
 		if snapshot.Path != "" {
 			snapshotEnv := cloneEnv(req.Env)
@@ -956,6 +998,14 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 		if snapshot.Remote != nil {
 			req.RemoteShellSnapshot = snapshot.Remote
 			snapshotUsed = true
+		}
+		if req.Env[network.CredentialBrokerActiveEnvKey] == "1" && !remoteEnvironment &&
+			snapshot.Path == "" && snapshot.Remote == nil &&
+			credentialBrokerProtectedShell(snapshotShell.Type) {
+			// Rust #43909: POSIX launches under the broker must replay a protected
+			// snapshot; running without one could let startup files restore real
+			// credentials the broker had masked.
+			return nil, RespondToModel("credential brokerage could not create a protected shell snapshot")
 		}
 		// Emit after the decision so `used` is final, exactly like Rust
 		// recording at the end of `UnifiedExecRuntime::prepare`.

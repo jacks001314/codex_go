@@ -20,6 +20,7 @@ import (
 	"codex_go/config"
 	execserverclient "codex_go/execserver"
 	"codex_go/features"
+	"codex_go/network"
 	"codex_go/session"
 	"codex_go/shell"
 	"codex_go/telemetry"
@@ -91,6 +92,12 @@ func (r *RuntimeRouter) shellSnapshotProviderForTurn(threadID string, cfg *confi
 				},
 			}
 		}
+		if protected && (!request.Protected || request.PermissionProfile == nil) {
+			// Rust only creates a protected snapshot once the credential broker
+			// is Ready and the launch has a sandbox to capture under. Starting or
+			// unavailable broker state leaves the launch without a snapshot.
+			return tool.SnapshotProviderResult{}
+		}
 		// Rust only replays the session's snapshot for the session's own
 		// directory; another directory has no captured state to restore. A
 		// protected (brokered) session is exempt, exactly like Rust's
@@ -109,6 +116,23 @@ func (r *RuntimeRouter) shellSnapshotProviderForTurn(threadID string, cfg *confi
 			AllowLoginShell:   true,
 			EnvironmentPolicy: request.EnvironmentPolicy,
 		}
+		if protected {
+			brokerCapture := r.shellSnapshotBrokerCaptureForThread(threadID, request.EnvironmentID)
+			if brokerCapture == nil {
+				return tool.SnapshotProviderResult{}
+			}
+			// Rust captures a protected snapshot per command shape: its shell,
+			// working directory, login mode, sandbox and environment policy.
+			captureRequest.AllowLoginShell = request.AllowLoginShell
+			captureRequest.PermissionProfile = request.PermissionProfile
+			captureRequest.PermissionProfileID = request.PermissionProfileID
+			captureRequest.Protected = true
+			captureRequest.Env = brokerCapture.Env
+			captureRequest.SourceEnv = brokerCapture.SourceEnv
+			captureRequest.CredentialPairs = brokerCapture.CredentialPairs
+			captureRequest.CredentialEnvKeys = brokerCapture.CredentialEnvKeys
+			captureRequest.CredentialTextUnsafe = brokerCapture.CredentialTextUnsafe
+		}
 		// The availability state is read before the capture, like Rust's peek.
 		state := r.shellSnapshotCommandState(request, protected, builder, captureRequest)
 		started := time.Now()
@@ -117,7 +141,7 @@ func (r *RuntimeRouter) shellSnapshotProviderForTurn(threadID string, cfg *confi
 		r.recordShellSnapshot(wait, reason, "execution", string(request.ShellType))
 		path := snapshot.Path()
 		if state == "" {
-			return tool.SnapshotProviderResult{Path: path}
+			return tool.SnapshotProviderResult{Path: path, Env: snapshot.BrokeredEnv()}
 		}
 		if path == "" && reason != "" {
 			// Rust tags a snapshot that cannot be made available `unavailable`.
@@ -127,10 +151,55 @@ func (r *RuntimeRouter) shellSnapshotProviderForTurn(threadID string, cfg *confi
 		}
 		return tool.SnapshotProviderResult{
 			Path: path,
+			Env:  snapshot.BrokeredEnv(),
 			ObserveCommandOutcome: func(used bool) {
 				r.recordShellSnapshotCommand(wait, state, used)
 			},
 		}
+	}
+}
+
+// shellSnapshotBrokerCapture is the credential-broker state a protected
+// snapshot captures under: the virtualized child environment, the original
+// environment used to mark stripped credentials, and the broker's mappings.
+type shellSnapshotBrokerCapture struct {
+	Env                  map[string]string
+	SourceEnv            map[string]string
+	CredentialPairs      []network.CredentialMaskPair
+	CredentialEnvKeys    []string
+	CredentialTextUnsafe func(string) bool
+}
+
+// shellSnapshotBrokerCaptureForThread returns the protected-capture state for
+// this thread, or nil when the broker is not ready. Rust rebuilds a protected
+// snapshot whenever the broker's configuration changes; Go keys its cache by
+// the resulting credential state instead.
+func (r *RuntimeRouter) shellSnapshotBrokerCaptureForThread(threadID string, environmentID string) *shellSnapshotBrokerCapture {
+	if r == nil {
+		return nil
+	}
+	threadID = strings.TrimSpace(threadID)
+	r.managedNetworksMu.Lock()
+	prepared := r.managedNetworks[threadID]
+	r.managedNetworksMu.Unlock()
+	if prepared == nil {
+		return nil
+	}
+	source := prepared.SnapshotSourceEnv()
+	if source == nil {
+		return nil
+	}
+	env, _, err := prepared.PrepareForEnvironment(environmentID)
+	if err != nil || env == nil {
+		return nil
+	}
+	pairs := prepared.PrepareSnapshotCredentialMask(source)
+	return &shellSnapshotBrokerCapture{
+		Env:                  env,
+		SourceEnv:            source,
+		CredentialPairs:      pairs,
+		CredentialEnvKeys:    prepared.SnapshotCredentialEnvKeys(),
+		CredentialTextUnsafe: prepared.SnapshotTextContainsCredential,
 	}
 }
 
@@ -314,7 +383,7 @@ func (r *RuntimeRouter) recordShellSnapshotCommand(wait time.Duration, state str
 // and a login command (Rust allows a bare `-c` only for brokered captures, which
 // Go does not have yet).
 func shellSnapshotLaunchEligible(request tool.SnapshotProviderRequest) bool {
-	if !request.AllowLoginShell {
+	if !request.AllowLoginShell && !request.Protected {
 		return false
 	}
 	return shellSnapshotShellSupported(request.ShellType)

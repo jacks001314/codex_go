@@ -3,7 +3,10 @@ package network
 import "strings"
 
 // CredentialMaskPair maps one real child credential to its brokered dummy.
+// Key is the environment variable the credential belongs to, when it came from
+// one; embedded credentials have no key.
 type CredentialMaskPair struct {
+	Key   string
 	Real  string
 	Dummy string
 }
@@ -45,7 +48,7 @@ func (p *PreparedProxyManagedNetwork) PrepareSnapshotCredentialMask(env map[stri
 			continue
 		}
 		seen[credential.RealValue] = struct{}{}
-		pairs = append(pairs, CredentialMaskPair{Real: credential.RealValue, Dummy: credential.DummyValue})
+		pairs = append(pairs, CredentialMaskPair{Key: credential.EnvVar, Real: credential.RealValue, Dummy: credential.DummyValue})
 	}
 	return pairs
 }
@@ -60,6 +63,50 @@ func MaskSnapshotText(text string, pairs []CredentialMaskPair) string {
 		text = strings.ReplaceAll(text, pair.Real, pair.Dummy)
 	}
 	return text
+}
+
+// SnapshotCredentialEnvKeys returns every environment key this broker may
+// virtualize, including declarative providers. Protected snapshots use it to
+// mark credentials the child environment no longer carries.
+func (p *PreparedProxyManagedNetwork) SnapshotCredentialEnvKeys() []string {
+	if p == nil || p.server == nil {
+		return nil
+	}
+	broker := p.server.runtimePolicy().broker
+	if broker == nil {
+		return nil
+	}
+	broker.mu.Lock()
+	defer broker.mu.Unlock()
+	if !broker.enabled {
+		return nil
+	}
+	return broker.envKeys()
+}
+
+// SnapshotTextContainsCredential reports whether snapshot text still carries a
+// real broker credential or a complete configured credential pattern. Protected
+// captures use it to reject a snapshot that would persist a secret the broker
+// could not virtualize (Rust #44040).
+func (p *PreparedProxyManagedNetwork) SnapshotTextContainsCredential(text string) bool {
+	if p == nil || p.server == nil || text == "" {
+		return false
+	}
+	broker := p.server.runtimePolicy().broker
+	if broker == nil {
+		return false
+	}
+	broker.mu.Lock()
+	defer broker.mu.Unlock()
+	if !broker.enabled {
+		return false
+	}
+	for _, credential := range broker.credentials {
+		if credential.RealValue != "" && strings.Contains(text, credential.RealValue) {
+			return true
+		}
+	}
+	return broker.containsKnownCredentialPattern(text)
 }
 
 // RestoreSnapshotCredentials restores a launch environment when masking cannot

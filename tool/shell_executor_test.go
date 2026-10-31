@@ -1264,3 +1264,118 @@ func TestShellExecutorTelemetryTagsSnapshotModeLikeRust(t *testing.T) {
 		t.Fatalf("unconfigured tags = %#v", tags)
 	}
 }
+
+// TestShellExecutorRejectsCredentialBrokerWithZshForkLikeRust covers Rust
+// #43909: brokerage and shell_zsh_fork cannot be combined because the broker
+// needs a protected snapshot the fork path cannot replay.
+func TestShellExecutorRejectsCredentialBrokerWithZshForkLikeRust(t *testing.T) {
+	runner := &fakeShellRunner{result: &ShellResult{ExitCode: 0}}
+	executor := NewShellExecutor(&ShellExecutorOptions{
+		Runner: runner,
+		Shell:  &Shell{Type: ShellBash, Path: "/bin/sh"},
+		Validation: ShellValidationOptions{
+			ApprovalPolicy: sandbox.ApprovalOnRequest,
+			CWD:            t.TempDir(),
+			ShellMode:      UnifiedExecShellModeZshFork,
+			ZshForkShell:   &Shell{Type: ShellZsh, Path: "/bin/zsh"},
+		},
+		ManagedNetworkResolver: func(environmentID string, remote bool) (*ManagedNetworkResolution, error) {
+			return &ManagedNetworkResolution{
+				Env: map[string]string{network.CredentialBrokerActiveEnvKey: "1"},
+			}, nil
+		},
+	})
+	_, err := executor.Execute(context.Background(), &Invocation{
+		CallID:   "call-broker-zsh-fork",
+		ToolName: PlainName(DefaultExecCommandToolName),
+		Payload:  Payload{Kind: PayloadFunction, Arguments: `{"cmd":"echo hi"}`},
+	})
+	if err == nil || !strings.Contains(err.Error(), "credential brokerage does not yet support shell_zsh_fork") {
+		t.Fatalf("Execute() error = %v, want the broker/zsh-fork rejection", err)
+	}
+	if runner.request != nil {
+		t.Fatalf("rejected launch reached the runner: %#v", runner.request)
+	}
+}
+
+// TestShellExecutorRestoresUnbrokeredPowerShellEnvironmentLikeRust covers Rust
+// #43909: shells that cannot replay a protected snapshot get the real
+// credentials back and lose the broker activation marker for that child.
+func TestShellExecutorRestoresUnbrokeredPowerShellEnvironmentLikeRust(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("PowerShell/Cmd brokerage behaviour is Windows-specific")
+	}
+	runner := &fakeShellRunner{result: &ShellResult{ExitCode: 0}}
+	restored := false
+	executor := NewShellExecutor(&ShellExecutorOptions{
+		Runner: runner,
+		Shell:  &Shell{Type: ShellPowerShell, Path: "powershell"},
+		Validation: ShellValidationOptions{
+			ApprovalPolicy: sandbox.ApprovalOnRequest,
+			CWD:            t.TempDir(),
+		},
+		ManagedNetworkResolver: func(environmentID string, remote bool) (*ManagedNetworkResolution, error) {
+			return &ManagedNetworkResolution{
+				Env: map[string]string{
+					network.CredentialBrokerActiveEnvKey: "1",
+					network.BrokeredCredentialsEnvKey:    `[["OPENAI_API_KEY","dummy-key"]]`,
+					"OPENAI_API_KEY":                     "dummy-key",
+				},
+				RestoreUnbrokeredEnvironment: func(env map[string]string) {
+					restored = true
+					env["OPENAI_API_KEY"] = "real-key"
+					delete(env, network.CredentialBrokerActiveEnvKey)
+					delete(env, network.BrokeredCredentialsEnvKey)
+				},
+			}, nil
+		},
+	})
+	if _, err := executor.Execute(context.Background(), &Invocation{
+		CallID:   "call-broker-powershell",
+		ToolName: PlainName(DefaultExecCommandToolName),
+		Payload:  Payload{Kind: PayloadFunction, Arguments: `{"cmd":"Write-Output hi"}`},
+	}); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if !restored {
+		t.Fatal("PowerShell launch did not ask for the unbrokered environment")
+	}
+	if runner.request == nil || runner.request.Env["OPENAI_API_KEY"] != "real-key" {
+		t.Fatalf("PowerShell launch environment = %#v", runner.request)
+	}
+	if _, ok := runner.request.Env[network.CredentialBrokerActiveEnvKey]; ok {
+		t.Fatalf("PowerShell launch kept broker activation: %#v", runner.request.Env)
+	}
+}
+
+// TestShellExecutorRejectsBrokeredPosixWithoutProtectedSnapshotLikeRust covers
+// Rust #43909: a broker-active POSIX launch with no protected snapshot is
+// rejected instead of running startup files that could restore real creds.
+func TestShellExecutorRejectsBrokeredPosixWithoutProtectedSnapshotLikeRust(t *testing.T) {
+	runner := &fakeShellRunner{result: &ShellResult{ExitCode: 0}}
+	executor := NewShellExecutor(&ShellExecutorOptions{
+		Runner: runner,
+		Shell:  &Shell{Type: ShellBash, Path: "/bin/sh"},
+		Validation: ShellValidationOptions{
+			ApprovalPolicy: sandbox.ApprovalOnRequest,
+			CWD:            t.TempDir(),
+		},
+		ManagedNetworkResolver: func(environmentID string, remote bool) (*ManagedNetworkResolution, error) {
+			return &ManagedNetworkResolution{Env: map[string]string{network.CredentialBrokerActiveEnvKey: "1"}}, nil
+		},
+		SnapshotProvider: func(context.Context, SnapshotProviderRequest) SnapshotProviderResult {
+			return SnapshotProviderResult{}
+		},
+	})
+	_, err := executor.Execute(context.Background(), &Invocation{
+		CallID:   "call-broker-missing-snapshot",
+		ToolName: PlainName(DefaultExecCommandToolName),
+		Payload:  Payload{Kind: PayloadFunction, Arguments: `{"cmd":"echo hi"}`},
+	})
+	if err == nil || !strings.Contains(err.Error(), "credential brokerage could not create a protected shell snapshot") {
+		t.Fatalf("Execute() error = %v, want the missing protected snapshot rejection", err)
+	}
+	if runner.request != nil {
+		t.Fatalf("rejected launch reached the runner: %#v", runner.request)
+	}
+}

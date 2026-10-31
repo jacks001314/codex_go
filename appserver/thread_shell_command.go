@@ -17,6 +17,7 @@ import (
 	"codex_go/envutil"
 	"codex_go/execpolicy"
 	"codex_go/model"
+	"codex_go/network"
 	"codex_go/sandbox"
 	"codex_go/session"
 	usershell "codex_go/shell"
@@ -76,7 +77,17 @@ func (r *RuntimeRouter) threadShellCommandLaunch(ctx context.Context, run *threa
 			CWD:               run.CWD,
 			AllowLoginShell:   true,
 			EnvironmentPolicy: r.shellSnapshotEnvironmentPolicyTable(cfg),
+			Protected:         env[network.CredentialBrokerActiveEnvKey] == "1",
+			Env:               env,
 		})
+		if len(snapshot.Env) > 0 {
+			if env == nil {
+				env = map[string]string{}
+			}
+			for key, value := range snapshot.Env {
+				env[key] = value
+			}
+		}
 		used := false
 		if snapshot.Path != "" {
 			wrapped := tool.MaybeWrapShellLCWithSnapshot(argv, sessionShell, snapshot.Path, explicitOverrides, env, prepends.Entries())
