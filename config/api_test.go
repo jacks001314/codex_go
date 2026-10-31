@@ -1019,3 +1019,62 @@ func TestConfigRequirementsReadSupportsIndependentSpeedModesLikeRust(t *testing.
 		t.Fatalf("encoded requirements should keep the null requirements key: %s", encoded)
 	}
 }
+
+// Rust config_processor replace_mcp_servers edits the document in place, so a
+// replace of the whole mcp_servers table keeps unrelated bytes (comments,
+// other keys) and swaps exactly the server tables. The table arrives as a
+// plain map, which used to be handed to the splicer as nil and erased every
+// server while writing nothing.
+func TestBatchWriteReplacesMCPServersTableLikeRust(t *testing.T) {
+	home := t.TempDir()
+	writeConfig(t, home, "# keep me\nmodel = \"gpt-5\"\n\n[mcp_servers.old]\nurl = \"https://old.test/mcp\"\n")
+	service := NewConfigService(home)
+	if _, err := service.BatchWrite(&ConfigBatchWriteParams{Edits: []ConfigEdit{
+		{KeyPath: "mcp_servers", Value: map[string]any{"docs": map[string]any{"enabled": true, "url": "https://docs.test/mcp"}}, MergeStrategy: MergeReplace},
+	}}); err != nil {
+		t.Fatalf("BatchWrite() error = %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(home, "config.toml"))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	text := string(data)
+	for _, want := range []string{"# keep me", "model = \"gpt-5\"", "[mcp_servers.docs]", "url = \"https://docs.test/mcp\""} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("config.toml lost %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "mcp_servers.old") {
+		t.Fatalf("replaced server survived:\n%s", text)
+	}
+	loaded, err := service.Read(&ConfigReadParams{})
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	servers, ok := loaded.Config["mcp_servers"].(map[string]any)
+	if !ok || servers["docs"] == nil || servers["old"] != nil {
+		t.Fatalf("mcp_servers after replace = %#v", loaded.Config["mcp_servers"])
+	}
+}
+
+// A replace of mcp_servers on a config that has no servers yet must still
+// write the table instead of producing an empty document.
+func TestBatchWriteReplacesMCPServersOnFreshConfigLikeRust(t *testing.T) {
+	home := t.TempDir()
+	service := NewConfigService(home)
+	if _, err := service.WriteValue(&ConfigValueWriteParams{
+		KeyPath:       "mcp_servers",
+		Value:         map[string]any{"docs": map[string]any{"enabled": true, "url": "https://docs.test/mcp"}},
+		MergeStrategy: MergeReplace,
+	}); err != nil {
+		t.Fatalf("WriteValue() error = %v", err)
+	}
+	loaded, err := service.Read(&ConfigReadParams{})
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	servers, ok := loaded.Config["mcp_servers"].(map[string]any)
+	if !ok || servers["docs"] == nil {
+		t.Fatalf("mcp_servers after replace = %#v", loaded.Config["mcp_servers"])
+	}
+}

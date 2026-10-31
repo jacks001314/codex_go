@@ -2749,7 +2749,7 @@ func (s *ConfigService) BatchWrite(params *ConfigBatchWriteParams) (*ConfigWrite
 		// Rust edits the document in place (core/src/config/edit.rs
 		// replace_mcp_servers), so comments, multi-line strings and unrelated
 		// sections keep their exact bytes instead of being re-serialized.
-		servers, _ := values["mcp_servers"].(*OrderedTable)
+		servers := orderedMCPTable(values["mcp_servers"])
 		if spliced, ok := spliceMCPTablesIntoDocument(documentText, servers); ok {
 			rendered = spliced
 		}
@@ -2769,6 +2769,29 @@ func (s *ConfigService) BatchWrite(params *ConfigBatchWriteParams) (*ConfigWrite
 	return response, nil
 }
 
+// orderedMCPTable returns the mcp_servers value in the ordered form the
+// document splicer expects. Configuration parsed from disk and tables written
+// by applyEdit are plain maps, so converting them keeps the in-place splice
+// path working instead of handing it a nil table (which drops every server).
+func orderedMCPTable(value any) *OrderedTable {
+	switch table := value.(type) {
+	case *OrderedTable:
+		return table
+	case map[string]any:
+		ordered := NewOrderedTable()
+		names := make([]string, 0, len(table))
+		for name := range table {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			ordered.Set(name, table[name])
+		}
+		return ordered
+	default:
+		return nil
+	}
+}
 // editsReplaceOnlyMCPTables reports whether a batch only rewrites the
 // mcp_servers table with a replace merge, the edit shape `codex mcp add` and
 // `codex mcp remove` issue.
