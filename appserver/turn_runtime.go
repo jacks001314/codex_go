@@ -2389,7 +2389,6 @@ func (r *RuntimeRouter) midTurnSamplingCompaction(threadID string, turnID string
 		if policy.Scope == compact.ScopeBodyAfterPrefix && policy.PrefillTokens <= 0 {
 			policy.PrefillTokens = compact.EstimateTokens(compactItemsFromSessionItems(record.Items))
 		}
-		status := compact.Evaluate(policy, int(model.AgentUsageTotalTokens(ctx.Response.Usage)))
 		var historyItems []any
 		var history []compact.Item
 		historyBuilt := false
@@ -2416,6 +2415,15 @@ func (r *RuntimeRouter) midTurnSamplingCompaction(threadID string, turnID string
 				history = append(history, item)
 			}
 		}
+		activeContextTokens := int(model.AgentUsageTotalTokens(ctx.Response.Usage))
+		if activeContextTokens <= 0 {
+			// Rust #58404: a response without usable usage keeps everything it
+			// retained in the estimate instead of reporting an empty context, which
+			// would postpone compaction while reasoning accumulates.
+			buildHistory()
+			activeContextTokens = midTurnActiveContextTokensLikeRust(history, ctx.Result, extra)
+		}
+		status := compact.Evaluate(policy, activeContextTokens)
 		if _, asyncEnabled := asyncCompactionThresholdPercent(runConfig.Config); asyncEnabled {
 			buildHistory()
 			r.maybeStartBackgroundCompaction(ctx.Context, threadID, turnID, params, runConfig, history, compact.PhaseMidTurn, &status)
@@ -6227,6 +6235,12 @@ func (r *RuntimeRouter) persistCompactTokenStatus(threadID string, modelID strin
 	extra["last_token_usage"] = lastMap
 	extra["total_token_usage"] = totalMap
 	extra["model_context_window"] = window
+	// Rust #58404: the history boundary this server-reported usage covers.
+	// The turn's items are already appended and a usage report always covers its
+	// own response, so the record length is Rust's `max(last model output item,
+	// request input item count)`. Later reads estimate only the items added after
+	// it, keeping failed or usage-less output in the estimate.
+	extra["token_usage_boundary"] = len(record.Items)
 	// Rust #55991 seeds the reasoning-inclusion state from the model's Responses
 	// Lite setting before the request and lets a server event override it. A
 	// later compaction check reads this value so lite usage is not charged twice.
@@ -6514,6 +6528,94 @@ func tokenUsageIncludesReasoning(extra map[string]any) bool {
 	return boolFromAny(extra["server_reasoning_included"])
 }
 
+// tokenUsageBoundaryFromMetadata reads the history boundary covered by the last
+// server-reported usage (Rust #58404
+// `History::last_server_reported_usage_item_count`). A negative value means the
+// persisted usage predates the boundary, so the restored-history approximation
+// (everything after the last model-generated item) still applies.
+func tokenUsageBoundaryFromMetadata(extra map[string]any) int {
+	if extra == nil {
+		return -1
+	}
+	raw, ok := extra["token_usage_boundary"]
+	if !ok || raw == nil {
+		return -1
+	}
+	boundary := intFromAny(raw)
+	if boundary < 0 {
+		return -1
+	}
+	return boundary
+}
+
+// inTurnUsageBoundaryLikeRust returns the history boundary covered by the last
+// usable usage report in an in-flight turn together with that report's context
+// total. Rust records the boundary as `max(last model output item, request input
+// item count)` for the response the usage belongs to (#58404), which in the
+// merged history is the position just after that response's last item.
+func inTurnUsageBoundaryLikeRust(history []compact.Item, result *turn.AgentLoopResult) (int, int, bool) {
+	if result == nil || len(result.Responses) == 0 {
+		return 0, 0, false
+	}
+	for i := len(result.Responses) - 1; i >= 0; i-- {
+		response := result.Responses[i]
+		if response == nil {
+			continue
+		}
+		total := int(model.AgentUsageTotalTokens(response.Usage))
+		if total <= 0 {
+			continue
+		}
+		ids := make(map[string]struct{}, len(response.Items))
+		for j := range response.Items {
+			if id := strings.TrimSpace(response.Items[j].ID); id != "" {
+				ids[id] = struct{}{}
+			}
+		}
+		if len(ids) == 0 {
+			continue
+		}
+		last := -1
+		for k := range history {
+			if history[k].ID == "" {
+				continue
+			}
+			if _, ok := ids[history[k].ID]; ok && k > last {
+				last = k
+			}
+		}
+		if last < 0 {
+			continue
+		}
+		return last + 1, total, true
+	}
+	return 0, 0, false
+}
+
+// midTurnActiveContextTokensLikeRust estimates the active context for a response
+// that reported no usable usage. The last usable report in the turn (or the
+// persisted one) sets the baseline, and only items recorded after its boundary
+// are estimated, mirroring Rust #58404 `Session::get_total_token_usage`.
+func midTurnActiveContextTokensLikeRust(history []compact.Item, result *turn.AgentLoopResult, extra map[string]any) int {
+	includesReasoning := tokenUsageIncludesReasoning(extra)
+	if boundary, lastTotal, ok := inTurnUsageBoundaryLikeRust(history, result); ok {
+		return compact.EstimateActiveContextTokensWithUsageBoundary(history, lastTotal, includesReasoning, boundary)
+	}
+	lastTotal := 0
+	if usage, ok := extra["last_token_usage"].(map[string]any); ok {
+		lastTotal = intFromAny(firstMapValue(usage, "totalTokens", "total_tokens"))
+	}
+	if lastTotal <= 0 {
+		// No usable usage report exists yet, so every retained item is estimated.
+		return compact.EstimateTokens(history)
+	}
+	boundary := tokenUsageBoundaryFromMetadata(extra)
+	if boundary > len(history) {
+		boundary = len(history)
+	}
+	return compact.EstimateActiveContextTokensWithUsageBoundary(history, lastTotal, includesReasoning, boundary)
+}
+
 func (r *RuntimeRouter) compactTokenStatusForThread(threadID string) compact.TokenStatus {
 	if r == nil {
 		return compact.TokenStatus{}
@@ -6553,8 +6655,9 @@ func (r *RuntimeRouter) compactTokenStatusForTurnWithPolicy(threadID string, mod
 		// interrupted turn). Retained reasoning is only re-estimated when the
 		// last sampling request did not report that the server already includes
 		// it (Rust #55991).
-		active = compact.EstimateActiveContextTokensWithServerReasoning(
-			compactItemsFromSessionItems(record.Items), active, tokenUsageIncludesReasoning(extra))
+		active = compact.EstimateActiveContextTokensWithUsageBoundary(
+			compactItemsFromSessionItems(record.Items), active, tokenUsageIncludesReasoning(extra),
+			tokenUsageBoundaryFromMetadata(extra))
 	}
 	policy := r.compactPolicyForTurn(modelID, params, extra)
 	if adjust != nil {
