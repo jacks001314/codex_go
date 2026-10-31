@@ -5051,6 +5051,12 @@ func turnAnalyticsErrorFieldsFromAPIError(err *codexapi.APIError) turnAnalyticsE
 		return fields("other", "invalid_prompt")
 	case codexapi.ErrorInvalidRequest:
 		return fields("badRequest", "invalid_request")
+	case codexapi.ErrorInvalidAudioInput:
+		// Rust #58434: an audio validation failure is a non-retryable input
+		// error. Rust maps CodexErrorDetails::InvalidAudioInput to
+		// CodexErrorInfo::BadRequest while analytics keeps the
+		// invalid_audio_input kind and reports no HTTP status.
+		return fields("badRequest", "invalid_audio_input")
 	case codexapi.ErrorRetryable:
 		return fields(codexErrorInfoWithHTTPStatus("responseTooManyFailedAttempts", status), "retry_limit")
 	case codexapi.ErrorTransport:
