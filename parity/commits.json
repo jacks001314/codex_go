@@ -2872,9 +2872,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "Rust-only guardian-v2 async_scorer persistence of security risk scores; Go has no async scorer/classifier extension (the synchronous reviewer path records decisions without that score model)."
+    "Round 1238: SecurityRiskScorePayload carries optional call_id and action provenance beside the per-category scores and sampled_at, AppendSecurityRiskScoreWithProvenance serializes them into the rollout-only security_risk_score line, and the legacy AppendSecurityRiskScore path leaves them absent for fail-closed/legacy scores. The record never renders as a thread item (rollout/projection.go admits it only as a known projection line). Tests: go test ./rollout -run 'SecurityRiskScore' -count=1."
    ]
   },
   {
@@ -10975,9 +10975,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "N/A by architecture: the upstream change preserves prewarmed effort through Rust's suspended-turn replay and early rollback path. Go has no suspend/resume or early-turn rollback state machine; Prewarm is a one-shot WebSocket handshake and requests carry their effort directly."
+    "Round 1238: ThreadResume no longer clears the runtime reasoning-effort pin. appserver/runtime_router.go keeps the baseline startup prewarm established while resume replays history, so the first resumed request keeps the prewarmed effort and a later selection travels as a trusted configuration_update (appserver/reasoning_effort_prewarm_like_rust_test.go). The Go tree has no thread/rollback API, so Rust's rollback-only conditional clear has no carrier at the anchor. Tests: go test ./appserver -run 'TestThreadResumePreservesPrewarmedReasoningEffortPinLikeRust|TestStartupPrewarmPinsRequestEffortLikeRust' -count=1."
    ]
   },
   {
@@ -14075,7 +14075,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "Rust #45760 sets --no-maglev --no-turbolev --no-turbo-inline-array-builtins during code-mode V8 initialization because the pinned V8 can inline Array.prototype.sort with incompatible element kinds when a comparator mutates the receiver, allowing an object to be stored in an integer-elements array, and adds an integration test that requests top-tier and Maglev optimization and inspects element kinds via native syntax. Go has no V8: code-mode cells execute through codemode.NewSobekEngine (github.com/grafana/sobek, a pure-Go ECMAScript engine, see codemode/sobek_engine.go), and a repository-wide search finds no deno_core/rusty_v8 binding, no v8:: API use and no maglev/turbolev flags, so there is no optimizer tier to disable and no element-kind representation that the miscompile could corrupt. The mitigation itself is therefore not applicable. What does carry over is the observable behaviour Rust also asserts, so codemode/array_sort_like_rust_test.go runs a cell that sorts [1,2] and [{},{}] 100 times with a comparator that fills the receiver, then sorts [object,{}] the same way and fails if the original element is still in place; the cell finishes by emitting JSON.stringify([3,1,2].sort((a,b)=>a-b)) and the test asserts the single text item is [1,2,3]. Verified with go test ./codemode -count=1."
+    "Round 1238 (re-audit): Rust disables Maglev/Turbolev/TurboFan array builtin inlining inside its embedded V8 code-mode runtime. Go's code mode runs on the Node REPL hosts (codemode/*node_repl*), so there are no V8 flags to set; the regression is specific to Rust's embedded engine."
    ]
   },
   {
@@ -14581,7 +14581,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "Go never embeds the response body or payload values in catalog decode errors: model.decodeModelsEndpointResponse returns the encoding/json error itself (SyntaxError.Offset or UnmarshalTypeError Field/Struct/Offset only), and ModelInfo contains no raw-value echo. The error is also never surfaced: RemoteModelsManager.fetchAndUpdateModels treats any endpoint error as a best-effort miss that keeps the previous catalog, so there is no CodexErr-style error to classify as RequestTimeout. The 5s deadline is a context.WithTimeout that aborts the request and is swallowed the same way; no Go caller observes a generic Timeout in place of a request timeout"
+    "Round 1238 (re-audit): Rust bounds the codex-api catalog decode diagnostic and maps the models-endpoint deadline to CodexErr::RequestTimeout. Go's decodeModelsEndpointResponse (model/models_endpoint.go) returns Go's native json errors, which name only the failing field/type and never echo the payload or response body, and the refresh deadline remains a best-effort context timeout whose failure keeps the cached or bundled catalog (models_catalog_preservation_like_rust_test.go covers context.DeadlineExceeded). Go's catalog path has no comparable error-classification surface, so there is nothing to port."
    ]
   },
   {
@@ -23194,7 +23194,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "Go diff tracking never discovers Git roots for display: RuntimeRouter diffs use runtimeutil.NewDiffTracker with no display roots, so diff display cannot wait on remote Git discovery; Rust #49082 only exempts Guardian from that discovery"
+    "Round 1238 (re-audit): Rust short-circuits diff display-root discovery for Guardian sessions so an offline secondary executor cannot stall approval revalidation. Go's turn diff rendering uses runtimeutil.NewDiffTracker, which tracks per-environment file changes and renders paths against each environment's cwd without calling gitutil.DiscoverGitRoot; Go's git-root discovery is limited to analytics/memory startup, so the stall path does not exist."
    ]
   },
   {

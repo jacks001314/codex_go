@@ -3865,8 +3865,9 @@ func (r *RuntimeRouter) dispatch(request *Request) (result any, err error) {
 			r.replayPendingServerRequestsForThread(result, request.normalizedConnectionID())
 			r.notifyRestoredTokenUsage(result)
 			if response, ok := result.(*ThreadResumeResponse); ok && response.Thread != nil {
-				// Rust #43795: a resumed session re-establishes the selected effort.
-				r.clearReasoningEffortPin(response.Thread.ID)
+				// Rust #44285: replay preserves the reasoning-effort pin that startup
+				// prewarm established, so the first request keeps that baseline and a
+				// later selection travels as a trusted configuration update.
 				r.continueThreadGoalIfIdle(response.Thread.ID)
 				r.maybeDispatchQueuedSubmissionIfIdle(response.Thread.ID)
 			}

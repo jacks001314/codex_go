@@ -213,9 +213,11 @@ func TestReasoningEffortModelSwitchReestablishesBaselineLikeRust(t *testing.T) {
 	}
 }
 
-// Rust #43795 clears the runtime pin on resume; the first request afterwards
-// re-establishes the selected effort.
-func TestThreadResumeClearsReasoningEffortPinLikeRust(t *testing.T) {
+// Rust #44285 preserves the reasoning-effort pin across replay: a resume keeps
+// the baseline startup prewarm established, so the first request still carries
+// the prewarmed medium effort while a later high selection is sent as a
+// trusted configuration update.
+func TestThreadResumePreservesPrewarmedReasoningEffortPinLikeRust(t *testing.T) {
 	home := t.TempDir()
 	now := fixedTime()
 	threadID := session.ThreadID("thread-effort-resume")
@@ -242,10 +244,13 @@ func TestThreadResumeClearsReasoningEffortPinLikeRust(t *testing.T) {
 	if resumed.Error != nil {
 		t.Fatalf("resume error = %+v", resumed.Error)
 	}
-	if _, ok := router.reasoningEffortPinState(string(threadID)).Get("gpt-5.4"); ok {
-		t.Fatal("resume must clear the request-effort baseline")
+	if pinned, ok := router.reasoningEffortPinState(string(threadID)).Get("gpt-5.4"); !ok || pinned != "medium" {
+		t.Fatalf("post-resume pin = %q,%v, want medium,true", pinned, ok)
 	}
-	if got := router.reasoningEffortForRequest(string(threadID), "gpt-5.4", "high", true, "high", true, requestEffortSampling); got != "high" {
-		t.Fatalf("post-resume effort = %q, want the re-established high", got)
+	if items := router.reasoningEffortOverrideInputItems(string(threadID), "gpt-5.4", "high", true, nil); len(items) != 1 {
+		t.Fatalf("post-resume override items = %#v, want one update", items)
+	}
+	if got := router.reasoningEffortForRequest(string(threadID), "gpt-5.4", "high", true, "high", true, requestEffortSampling); got != "medium" {
+		t.Fatalf("post-resume request effort = %q, want the preserved medium baseline", got)
 	}
 }
