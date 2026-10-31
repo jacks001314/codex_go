@@ -38726,7 +38726,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:162: #57789 完成 — `model.RefreshInMemory` + `appserver/guardian_review_catalog_refresh.go`（每 parent thread 一次共享刷新，waiter 取消不中断；override/custom catalog/guardian session 跳过；review deadline 经 `reviewPlanContext` 生效）；历史回放的"
+    "appserver/guardian_review_catalog_refresh.go:11 tracks the one-shot Guardian catalog refresh and :114 gates retries; appserver/agent_runtime.go:722 checks it before resolving the default reviewer; appserver/guardian_reviewer_catalog_refresh_like_rust_test.go:160 covers refresh, cancellation and override fallback."
    ]
   },
   {
@@ -38774,7 +38774,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:166: #57817 完成 — realtime sideband 分离仅关闭传输、不结束会话；realtime/sideband_detach_like_rust_test.go 通过"
+    "realtime/transport.go:110 closes a detached sideband transport without ending the session and :600 scopes cancellation to that observer; realtime/sideband_detach_like_rust_test.go:18 covers existing-call detach."
    ]
   },
   {
@@ -38822,7 +38822,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:170: #57824 完成 — 核心对齐待实现"
+    "appserver/feedback.go:720 merges directly attached threads into the spawned subtree and state/thread_query.go:186 exposes list_attached_thread_ids; appserver/feedback_attached_threads_like_rust_test.go:7 covers diagnostic upload membership."
    ]
   },
   {
@@ -38858,7 +38858,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:173: #57834 完成 — `guardianIsolatedReviewInput`（动作 + 捕获的历史/证据 + 父响应路由）、`modelGuardianReviewer.AssessIsolated` 走 `RunIsolated` 新会话、不发布实时审批，deadline/cancel 生效并返回 `state.Assessment` 或错误。`go test ./appserver -run TestGuard"
+    "appserver/guardian_isolated_assessment.go:44 runs AssessIsolated against captured history with its own deadline; appserver/guardian_isolated_assessment_like_rust_test.go:33 and :79 cover captured history, deadline/cancellation and missing assessments."
    ]
   },
   {
@@ -38930,7 +38930,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:179: #57841 完成 — 新增 GetProcessMetrics RPC/协议类型与 1s 有界采样（Unimplemented→Unsupported、NotRunning、失效不重置连接）、bounded 单许可采集器与 /proc 采集；测试 codemode/process_metrics_like_rust_test.go"
+    "codemode/process_metrics.go:17 models host process observations independently of sessions and :38 validates snapshots; codemode/process_metrics_like_rust_test.go:36 covers cumulative snapshots, UNIMPLEMENTED hosts and failed samples."
    ]
   },
   {
@@ -39002,7 +39002,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:185: #57861 完成 — 核心对齐待实现"
+    "mcp/api.go:1744 skips resource-template discovery for host-owned Apps registrations; mcp/hosted_apps_resource_templates_like_rust_test.go:15 covers the omission and empty status."
    ]
   },
   {
@@ -39026,7 +39026,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:187: #57864 完成 — 取消 Responses Lite turn 时允许上游中断"
+    "turn/runtime.go:72 and turn/agent_loop.go:141 interrupt upstream inference when a Responses Lite turn is cancelled; turn/interrupt_on_cancel_like_rust_test.go:26 and model/interrupt_on_cancel_like_rust_test.go:15 cover the interruption contract."
    ]
   },
   {
@@ -39146,7 +39146,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:197: #58025 完成 — 核心对齐待实现"
+    "execserver/noise_transport_diagnostics.go:6 records bounded transport diagnostics, :233 separates application queueing from reachability and :252 reports request receipt; execserver/noise_transport_diagnostics_like_rust_test.go:71 and :133 cover closure reasons and backpressure."
    ]
   },
   {
@@ -39158,7 +39158,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:198: #58028 完成 — `tool.ShellExecutor.PrepareExecCommand` 复用实时环境/权限/审批解析（不执行），`modelGuardianReviewer.ReviewAssessment` 暴露结构化 assessment，复核 transcript 省略被复核调用；测试 tool/shell_prepare_exec_command_test.go、appserver/thread_"
+    "tool/shell_executor.go:591 prepares a recorded exec call without executing it and appserver/guardian_isolated_assessment.go:44 exposes the structured assessment; tool/shell_prepare_exec_command_test.go:63 and appserver/thread_guardian_review_like_rust_test.go:110 cover recorded environment resolution and direct review."
    ]
   },
   {
@@ -39182,7 +39182,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:200: #58040 完成 — native-review 策略在注册期进入 `tool.Registry`（`NativeReviewPolicyProvider`/`NativeReviewRequired`，MAv2 executor 声明），`tool.Router.BuildToolCall` 仅为需要审查的工具保留原始 call（`Invocation.NativeCall`，缺失时合成），dispatcher 提供"
+    "tool/registry.go:155 and :1465 retain the original native tool call when review is required, and turn/tool_dispatcher.go:1531 forwards it; tool/native_review_retention_like_rust_test.go:24 and turn/native_call_retention_like_rust_test.go:13 cover the evidence path."
    ]
   },
   {
@@ -39194,7 +39194,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:201: #58045 完成 — 受管 command checkpoint 需新鲜人工批准（70 文件，拆 2-3 子轮）"
+    "appserver/command_checkpoint.go:13 and :142 require fresh human approval for managed command checkpoints; config/rules_requirements.go:11 parses the managed rules; appserver/managed_human_approval_like_rust_test.go:60 and execpolicy/prompt_user_decision_like_rust_test.go:10 cover the gate."
    ]
   },
   {
@@ -39218,7 +39218,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:203: #58071 完成 — 核心对齐待实现"
+    "state/guardian.go:168 and :177 define the shared delivered-text limits and :931 enforces them; state/guardian_text_part_bounds_like_rust_test.go:12 covers UTF-8-safe bounded delivery."
    ]
   },
   {
@@ -39230,7 +39230,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:204: #58075 完成 — `state.ServingAssessment/ServingAuthorization`；流内 assessment 按 response+item 匹配后随 turn 保留（跨 wait），review 时重新校验权限/策略与 retained 完整性；匹配的低风险值可跳过同步 review（显式 fresh 要求、`requires_review`、陈旧授权仍走完整 review），缺失则"
+    "state/guardian_serving_assessment.go:6 and :49 bind a serving assessment to its response/item authorization and appserver/guardian_serving_assessment.go:13 matches it during review; appserver/guardian_serving_assessment_like_rust_test.go:26 and :104 cover matching and low-risk replacement."
    ]
   },
   {
@@ -39278,7 +39278,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:208: #58119 完成 — 新增 `thread/guardianReview`（ThreadGuardianReviewParams/Response/Assessment、实验方法门控、schema 注册、idle/direct-input/provider 校验、订阅连接、断连取消）、空 assessment 表示策略跳过、错误映射取消/超时；测试同上"
+    "appserver/thread_guardian_review.go:16 defines thread/guardianReview, :66 cancels on disconnect and :456 samples through the thread path; appserver/thread_guardian_review_like_rust_test.go:110 and :213 cover assessment and disconnect cancellation."
    ]
   },
   {
@@ -39314,7 +39314,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:211: #58123 完成 — 核心对齐待实现"
+    "state/guardian_elastic_budget.go:9 defines elastic Guardian section policies; state/guardian_elastic_budget_like_rust_test.go:11 covers round-trip validation and empty-quota rejection."
    ]
   },
   {
@@ -39854,7 +39854,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30_round1015.md item 3: mcp/codex_apps_resources.go performs resources/list after an on-demand handshake without waiting for tools/list, plus the apps_early_resource_discovery feature key (2ffb6c77)"
+    "features/features.go:183 registers apps_early_resource_discovery and mcp/api.go:1744 uses the host-owned Apps catalog path; features/apps_early_resource_discovery_like_rust_test.go:7 and mcp/codex_apps_early_resources_like_rust_test.go:19 cover early discovery and startup bounds."
    ]
   },
   {
