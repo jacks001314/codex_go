@@ -83,7 +83,7 @@ func spawnRunnerTransport(codexHome string, cwd string, creds *SandboxCredential
 		"--pipe-out=" + pipeOutName,
 	})
 	var processInfo windows.ProcessInformation
-	startupInfo := windows.StartupInfo{Cb: uint32(unsafe.Sizeof(windows.StartupInfo{}))}
+	startupInfo := runnerStartupInfo()
 	previousErrorMode := windows.SetErrorMode(runnerErrorModeFlag)
 	err = createProcessWithLogon(creds, runnerExe, runnerFullCommand, cwd, &startupInfo, &processInfo)
 	windows.SetErrorMode(previousErrorMode)
@@ -141,6 +141,18 @@ func spawnRunnerTransport(codexHome string, cwd string, creds *SandboxCredential
 		_ = windows.CloseHandle(processInfo.Process)
 	}
 	return transport, nil
+}
+
+const startForceOffFeedback = 0x00000080
+
+// runnerStartupInfo mirrors Rust #42801: the elevated runner is launched with
+// STARTF_FORCEOFFFEEDBACK so CreateProcessWithLogonW does not leave the shell's
+// busy cursor up for the duration of the helper startup.
+func runnerStartupInfo() windows.StartupInfo {
+	return windows.StartupInfo{
+		Cb:    uint32(unsafe.Sizeof(windows.StartupInfo{})),
+		Flags: startForceOffFeedback,
+	}
 }
 
 func createProcessWithLogon(creds *SandboxCredentials, appName string, commandLine string, cwd string, startupInfo *windows.StartupInfo, processInfo *windows.ProcessInformation) error {

@@ -7085,9 +7085,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Superseded upstream: a633ebc124 (#46554) removed the private-desktop opt-out and deleted the codex.windows_sandbox.private_desktop counter, so Rust main no longer emits it (rg \"codex.windows_sandbox.private_desktop\" in codex-rs finds nothing).",
+    "Go has no windows_sandbox.private_desktop metric either; the closest telemetry, sandbox/windowssandbox/elevated/runner_metrics.go runner_result, is tracked by its own ledger entry."
    ]
   },
   {
@@ -7621,9 +7622,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "sandbox/windowssandbox/elevated/runner_client_windows.go launches the elevated command runner with CREATE_NO_WINDOW and now STARTF_FORCEOFFFEEDBACK (startForceOffFeedback), so the helper neither owns a console nor leaves the shell busy cursor up (Rust #42801).",
+    "Piped sandbox children are always console-less: process_windows.go SandboxConsoleFlags(true, ConsoleModeNoWindow) applies to every pipe-backed spawn, matching the Rust change that dropped the fs-helper-only ConsoleMode::NoWindow branch.",
+    "Test: sandbox/windowssandbox/elevated/runner_startup_flags_windows_test.go TestRunnerStartupInfoHidesBusyFeedbackLikeRust."
    ]
   },
   {
@@ -11846,9 +11849,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "partial",
    "evidence": [
-    "Partial symbol coverage 1/4; needs review: require_sandbox_account, shared_legacy_name, spawn_windows_sandbox_session_with_desktop"
+    "sandbox/windowssandbox/desktop_windows.go SharedLegacyPrivateDesktopName caches the restricted token desktop in the calling process (Rust LaunchDesktop::shared_legacy_name); the 0xC0000142 USER32 failure is covered by TestLegacyDesktopLaunchesUser32ProcessesLikeRust.",
+    "sandbox/windowssandbox/wrapper.go adds --windows-sandbox-private-desktop-name, requires a well-formed name when it is present, and wrapperCaptureRequest forwards it; sandbox/windowssandbox/lib.go and elevated_impl.go open the parent-owned desktop instead of creating one when the name is supplied.",
+    "sandbox/windowssandbox/wrapper_desktop_windows.go PrepareWindowsSandboxPrivateDesktopName ports the caller-side selection for both the restricted-token (capability roots) and elevated (require_sandbox_account + capability SIDs, no ACL refresh) levels; execserver/fs_helper.go sets PreparePrivateDesktop so filesystem helpers stop owning short-lived desktops.",
+    "Deviation kept on purpose: Go also reuses RunWindowsSandboxWrapperRequest for the in-process `codex sandbox` launch, where the desktop cache already lives in the long-lived CLI, so a missing name falls back to local selection instead of failing the launch (no strict parse error as in Rust #44658).",
+    "Tests: TestWindowsSandboxWrapperCarriesPrivateDesktopNameLikeRust, TestWindowsSandboxWrapperRejectsInvalidPrivateDesktopNameLikeRust, TestPrivateDesktopOutlivesWrapperProcessLikeRust, TestWrapperRunsWithCallerOwnedDesktopLikeRust (go test ./sandbox/windowssandbox -count=1)."
    ]
   },
   {
@@ -23923,9 +23930,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust-only test infrastructure: codex-rs/.config/nextest.toml plus Cargo test-harness settings serialize tests that share Windows sandbox accounts. Go runs go test, which does not use nextest configuration, and the shared-account tests already serialize through their own helpers."
    ]
   },
   {

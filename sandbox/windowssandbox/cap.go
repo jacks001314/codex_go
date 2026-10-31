@@ -29,11 +29,8 @@ func LoadOrCreateCapabilitySIDs(codexHome string) (*CapabilitySIDs, error) {
 	data, err := os.ReadFile(path)
 	switch {
 	case err == nil:
-		caps, loaded, err := parseCapabilitySIDs(data)
-		if err != nil {
-			return nil, err
-		}
-		if loaded {
+		caps, loaded, parseErr := parseCapabilitySIDs(data)
+		if parseErr == nil && loaded {
 			ensureCapabilitySIDMaps(caps)
 			if !isJSONObject(bytesTrimSpace(data)) {
 				if err := persistCapabilitySIDs(path, caps); err != nil {
@@ -42,6 +39,9 @@ func LoadOrCreateCapabilitySIDs(codexHome string) (*CapabilitySIDs, error) {
 			}
 			return caps, nil
 		}
+		// Rust load_or_create_cap_sids ignores a JSON file it cannot parse and
+		// rebuilds the bookkeeping instead of failing every sandboxed launch on
+		// damaged state (e.g. a truncated or doubly-terminated object).
 	case os.IsNotExist(err):
 	default:
 		return nil, err

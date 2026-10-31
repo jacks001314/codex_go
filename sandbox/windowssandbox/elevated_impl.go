@@ -2,6 +2,7 @@ package windowssandbox
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"codex_go/sandbox/windowssandbox/elevated"
@@ -97,9 +98,13 @@ func SpawnWindowsSandboxElevatedRunnerTransport(capture *CaptureRequest) (*eleva
 		capture.Command,
 		func(creds elevated.SandboxCredentials) (*elevated.RunnerTransport, error) {
 			request := spawnRequest
-			name, err := SharedPrivateDesktopForUser(creds.Username, desktopPolicy)
-			if err != nil {
-				return nil, err
+			name := strings.TrimSpace(capture.PrivateDesktopName)
+			if name == "" {
+				selected, err := SharedPrivateDesktopForUser(creds.Username, desktopPolicy)
+				if err != nil {
+					return nil, err
+				}
+				name = selected
 			}
 			request.PrivateDesktopName = name
 			return elevated.SpawnRunnerTransport(capture.CodexHome, capture.CWD, &creds, "", request)
@@ -203,9 +208,13 @@ func RunWindowsSandboxCaptureForPermissionProfileElevated(req *ElevatedSandboxPr
 		func(creds elevated.SandboxCredentials) (*elevated.RunnerTransport, error) {
 			_ = LogNote(capture.CodexHome, fmt.Sprintf("elevated runner transport attempt: user=%s cwd=%s", creds.Username, capture.CWD))
 			request := spawnRequest
-			name, err := SharedPrivateDesktopForUser(creds.Username, desktopPolicy)
-			if err != nil {
-				return nil, err
+			name := strings.TrimSpace(capture.PrivateDesktopName)
+			if name == "" {
+				selected, err := SharedPrivateDesktopForUser(creds.Username, desktopPolicy)
+				if err != nil {
+					return nil, err
+				}
+				name = selected
 			}
 			request.PrivateDesktopName = name
 			transport, err := elevated.SpawnRunnerTransport(capture.CodexHome, capture.CWD, &creds, "", request)

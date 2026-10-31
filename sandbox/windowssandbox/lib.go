@@ -3,6 +3,7 @@ package windowssandbox
 import (
 	"fmt"
 	"runtime"
+	"strings"
 
 	coresandbox "codex_go/sandbox"
 )
@@ -14,6 +15,16 @@ type LegacyPreflightRequest struct {
 	CodexHome           string
 	CWD                 string
 	Env                 map[string]string
+}
+
+// openLaunchDesktopForCapture reuses the parent-owned desktop when the wrapper
+// command line carries one (Rust #44658) and otherwise falls back to creating a
+// desktop inside this process for direct in-process callers.
+func openLaunchDesktopForCapture(req *CaptureRequest, security *LegacySessionSecurity, context *SpawnContext) (*LaunchDesktop, error) {
+	if name := strings.TrimSpace(req.PrivateDesktopName); name != "" {
+		return OpenPrivateLaunchDesktop(name)
+	}
+	return PrepareLegacyLaunchDesktop(security, context.Permissions, context.CurrentDir, context.Env, req.DenyWritePaths, context.LogsBaseDir)
 }
 
 func RunWindowsSandboxCapture(req *CaptureRequest) (*CaptureResult, error) {
@@ -65,7 +76,7 @@ func RunWindowsSandboxCaptureWithFilesystemOverrides(req *CaptureRequest) (*Capt
 	); err != nil {
 		return nil, err
 	}
-	desktop, err := PrepareLegacyLaunchDesktop(security, context.Permissions, context.CurrentDir, context.Env, req.DenyWritePaths, context.LogsBaseDir)
+	desktop, err := openLaunchDesktopForCapture(req, security, context)
 	if err != nil {
 		return nil, err
 	}

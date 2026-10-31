@@ -57,16 +57,7 @@ func PrepareLaunchDesktop(usePrivateDesktop bool) (*LaunchDesktop, error) {
 // ValidatePrivateDesktopName accepts only names created by this package. It
 // deliberately rejects the default station/desktop and injected path forms.
 func ValidatePrivateDesktopName(name string) error {
-	nonce, ok := strings.CutPrefix(name, privateDesktopPrefix)
-	if !ok || nonce == "" || len(nonce) > 32 {
-		return fmt.Errorf("invalid private desktop name")
-	}
-	for _, ch := range nonce {
-		if !((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F')) {
-			return fmt.Errorf("invalid private desktop name")
-		}
-	}
-	return nil
+	return ValidatePrivateDesktopNameFormat(name)
 }
 
 // OpenPrivateLaunchDesktop opens a parent-owned private desktop without
@@ -101,6 +92,26 @@ func SharedPrivateDesktopForUser(username string, policy DesktopPolicy) (string,
 	return sharedPrivateDesktopForSIDs(ownerSID, sandboxSID, policy)
 }
 
+// SharedLegacyPrivateDesktopName selects and caches the private desktop of the
+// restricted legacy token without opening it. Rust #44658 keeps that cache in
+// the calling process because the sandbox wrapper exits after every helper
+// request; the name then travels through the wrapper command line.
+func SharedLegacyPrivateDesktopName(security *LegacySessionSecurity, permissions *ResolvedWindowsSandboxPermissions, commandCWD string, envMap map[string]string, additionalDenyWritePaths []string, logsBaseDir string) (string, error) {
+	if security == nil || security.Token == 0 {
+		return "", ErrInvalidRequest
+	}
+	sandboxSIDBytes, err := getUserSIDBytes(windows.Token(security.Token))
+	if err != nil {
+		return "", err
+	}
+	sandboxSID := StringFromSIDBytes(sandboxSIDBytes)
+	if sandboxSID == "" {
+		return "", fmt.Errorf("sandbox token has no user SID")
+	}
+	policy := NewLegacyDesktopPolicy(permissions, commandCWD, envMap, security, additionalDenyWritePaths)
+	return sharedLegacyPrivateDesktop(policy, sandboxSID)
+}
+
 // PrepareLegacyLaunchDesktop opens the shared desktop matching the restricted
 // legacy token's account and effective permissions.
 func PrepareLegacyLaunchDesktop(security *LegacySessionSecurity, permissions *ResolvedWindowsSandboxPermissions, commandCWD string, envMap map[string]string, additionalDenyWritePaths []string, logsBaseDir string) (*LaunchDesktop, error) {
@@ -116,11 +127,39 @@ func PrepareLegacyLaunchDesktop(security *LegacySessionSecurity, permissions *Re
 		return nil, fmt.Errorf("sandbox token has no user SID")
 	}
 	policy := NewLegacyDesktopPolicy(permissions, commandCWD, envMap, security, additionalDenyWritePaths)
-	name, err := sharedPrivateDesktopForSIDs(sandboxSID, sandboxSID, policy)
+	name, err := sharedLegacyPrivateDesktop(policy, sandboxSID)
 	if err != nil {
 		return nil, err
 	}
 	return OpenPrivateLaunchDesktop(name)
+}
+
+// sharedLegacyPrivateDesktop caches the private desktop of the restricted
+// legacy token. Rust's LaunchDesktop::shared_legacy_name creates it through
+// PrivateDesktop::create: CreateDesktopW with the default security descriptor
+// and an explicit grant to the caller's logon SID. That logon SID is one of the
+// token's restricting SIDs, so a write-restricted sandbox process can open its
+// desktop during USER32 initialisation. The elevated-account SDDL variant used
+// for CreateProcessWithLogonW grants only owner/account SIDs and leaves such
+// processes failing with STATUS_DLL_INIT_FAILED (0xC0000142).
+func sharedLegacyPrivateDesktop(policy DesktopPolicy, sandboxSID string) (string, error) {
+	key := "legacy\x00" + sandboxSID + "\x00" + policy.Key()
+	sharedPrivateDesktopsMu.Lock()
+	defer sharedPrivateDesktopsMu.Unlock()
+	if desktop := sharedPrivateDesktops[key]; desktop != nil {
+		return desktop.Name, nil
+	}
+	id, err := uuid.NewRandom()
+	if err != nil {
+		return "", err
+	}
+	name := privateDesktopPrefix + strings.ReplaceAll(id.String(), "-", "")
+	desktop, err := CreateLaunchDesktop(name)
+	if err != nil {
+		return "", err
+	}
+	sharedPrivateDesktops[key] = desktop
+	return name, nil
 }
 
 func CreateLaunchDesktop(name string) (*LaunchDesktop, error) {

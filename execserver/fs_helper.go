@@ -467,6 +467,9 @@ func fsSandboxCommand(ctx *FileSystemSandboxContext, profile *sandbox.Permission
 		ProxySettingsMode:                windowsSandboxProxySettingsModeForFS(ctx.WindowsSandboxProxySettingsMode),
 		ReadRootsIncludePlatformDefaults: true,
 		CodexHome:                        fsHelperCodexHome(),
+		// Rust #44658: filesystem helpers run through short-lived wrappers, so
+		// the executor keeps the desktop alive and hands over its name.
+		PreparePrivateDesktop:            true,
 	})
 	if err != nil {
 		return nil, nil, requestError(-32602, fmt.Sprintf("failed to prepare fs sandbox: %v", err))

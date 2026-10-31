@@ -14,7 +14,7 @@ func PrepareLaunchDesktop(usePrivateDesktop bool) (*LaunchDesktop, error) {
 }
 
 func ValidatePrivateDesktopName(name string) error {
-	return unsupported("desktop.open_private")
+	return ValidatePrivateDesktopNameFormat(name)
 }
 
 func OpenPrivateLaunchDesktop(name string) (*LaunchDesktop, error) {
@@ -27,6 +27,10 @@ func SharedPrivateDesktopForUser(username string, policy DesktopPolicy) (string,
 
 func PrepareLegacyLaunchDesktop(security *LegacySessionSecurity, permissions *ResolvedWindowsSandboxPermissions, commandCWD string, envMap map[string]string, additionalDenyWritePaths []string, logsBaseDir string) (*LaunchDesktop, error) {
 	return nil, unsupported("desktop.prepare_legacy")
+}
+
+func SharedLegacyPrivateDesktopName(security *LegacySessionSecurity, permissions *ResolvedWindowsSandboxPermissions, commandCWD string, envMap map[string]string, additionalDenyWritePaths []string, logsBaseDir string) (string, error) {
+	return "", unsupported("desktop.shared_legacy_name")
 }
 
 func (d *LaunchDesktop) StartupInfoDesktop() *uint16 {

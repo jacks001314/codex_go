@@ -24,6 +24,7 @@ const (
 	envJSONFlag                          = "--env-json"
 	permissionProfileFlag                = "--permission-profile"
 	privateDesktopFlag                   = "--windows-sandbox-private-desktop"
+	privateDesktopNameFlag               = "--windows-sandbox-private-desktop-name"
 	preserveProxySettingsFlag            = "--preserve-proxy-settings"
 	proxyEnforcedFlag                    = "--proxy-enforced"
 	readRootsIncludePlatformDefaultsFlag = "--read-roots-include-platform-defaults"
@@ -58,6 +59,8 @@ type WindowsSandboxCommandArgsRequest struct {
 	DenyReadPathsOverride            []string
 	DenyWritePathsOverride           []string
 	CodexHome                        string
+	PrivateDesktopName               string
+	PreparePrivateDesktop            bool
 }
 
 type WindowsSandboxWrapperRequest struct {
@@ -114,6 +117,13 @@ func CreateWindowsSandboxCommandArgsForPermissionProfile(req WindowsSandboxComma
 	// Rust #46554 removed the private-desktop opt-out: every sandboxed launch
 	// runs on a private desktop, so the child always receives the flag.
 	args = append(args, privateDesktopFlag)
+	// Rust #44658: the caller owns the desktop cache so the desktop outlives
+	// this short-lived wrapper; the wrapper only opens the named desktop.
+	if name, err := req.privateDesktopNameForLaunch(); err != nil {
+		return nil, err
+	} else if name != "" {
+		args = append(args, privateDesktopNameFlag, name)
+	}
 	if req.ProxyEnforced {
 		args = append(args, proxyEnforcedFlag)
 	}
@@ -226,6 +236,12 @@ func ParseWindowsSandboxWrapperArgs(args []string) (*WindowsSandboxWrapperReques
 			// Accepted for compatibility with an already-built wrapper command
 			// line; the private desktop is no longer optional (Rust #46554).
 			continue
+		case privateDesktopNameFlag:
+			value, next, err := nextFlagValue(args, i, arg)
+			if err != nil {
+				return nil, err
+			}
+			req.PrivateDesktopName, i = value, next
 		case proxyEnforcedFlag:
 			req.ProxyEnforced = true
 		case preserveProxySettingsFlag:
@@ -386,6 +402,7 @@ func wrapperCaptureRequest(req *WindowsSandboxWrapperRequest) *CaptureRequest {
 		WriteRootsOverrideSet:            req.WriteRootsOverrideSet,
 		DenyReadPaths:                    cloneStrings(req.DenyReadPathsOverride),
 		DenyWritePaths:                   cloneStrings(req.DenyWritePathsOverride),
+		PrivateDesktopName:               req.PrivateDesktopName,
 	}
 }
 
@@ -484,6 +501,11 @@ func (r *WindowsSandboxCommandArgsRequest) validateForArgs() error {
 func (r *WindowsSandboxCommandArgsRequest) validateParsed() error {
 	if err := r.validateForArgs(); err != nil {
 		return err
+	}
+	if name := strings.TrimSpace(r.PrivateDesktopName); name != "" {
+		if err := ValidatePrivateDesktopName(name); err != nil {
+			return err
+		}
 	}
 	if !isWindowsSandboxAbs(r.CodexHome) {
 		return fmt.Errorf("%s must be absolute: %s", codexHomeFlag, r.CodexHome)

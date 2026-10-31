@@ -146,6 +146,34 @@ func TestWorkspaceWriteRootPathHelpers(t *testing.T) {
 	}
 }
 
+func TestLoadOrCreateCapabilitySIDsRebuildsMalformedJSON(t *testing.T) {
+	codexHome := t.TempDir()
+	const malformed = `{"workspace":"S-1-5-21-1-2-3-4","readonly":"S-1-5-21-5-6-7-8","writable_root_by_path":{"c:/temp":"S-1-5-21-9-10-11-12"}}}`
+	if err := os.WriteFile(CapSIDFile(codexHome), []byte(malformed), 0o600); err != nil {
+		t.Fatalf("write malformed cap_sid: %v", err)
+	}
+
+	caps, err := LoadOrCreateCapabilitySIDs(codexHome)
+	if err != nil {
+		t.Fatalf("LoadOrCreateCapabilitySIDs() error = %v, want rebuilt capability SIDs", err)
+	}
+	if !looksLikeCapabilitySID(caps.Workspace) || !looksLikeCapabilitySID(caps.Readonly) {
+		t.Fatalf("rebuilt caps = %#v, want fresh capability SID strings", caps)
+	}
+
+	data, err := os.ReadFile(CapSIDFile(codexHome))
+	if err != nil {
+		t.Fatalf("read rebuilt cap_sid: %v", err)
+	}
+	var rebuilt CapabilitySIDs
+	if err := json.Unmarshal(data, &rebuilt); err != nil {
+		t.Fatalf("cap_sid was not rewritten as valid JSON: %q: %v", data, err)
+	}
+	if rebuilt.Workspace != caps.Workspace || rebuilt.Readonly != caps.Readonly {
+		t.Fatalf("rewritten cap_sid = %#v, want %#v", rebuilt, caps)
+	}
+}
+
 func looksLikeCapabilitySID(value string) bool {
 	parts := strings.Split(value, "-")
 	if len(parts) != 8 {

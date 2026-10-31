@@ -166,6 +166,93 @@ func TestLegacyDesktopReusesOnlyEquivalentPermissionsLikeRust(t *testing.T) {
 	_ = changed.Close()
 }
 
+// TestLegacyDesktopLaunchesUser32ProcessesLikeRust guards the legacy desktop
+// ACL. Rust's PrivateDesktop::create grants the caller's logon SID, and that
+// SID is one of the restricted legacy token's restricting SIDs. Without the
+// grant, processes that initialise USER32 (pwsh, powershell, where, whoami)
+// cannot open their desktop and exit with STATUS_DLL_INIT_FAILED
+// (0xC0000142) while cmd.exe still runs.
+func TestLegacyDesktopLaunchesUser32ProcessesLikeRust(t *testing.T) {
+	whereExe := filepath.Join(os.Getenv("SystemRoot"), "System32", "where.exe")
+	if _, err := os.Stat(whereExe); err != nil {
+		t.Skipf("where.exe unavailable: %v", err)
+	}
+	workspace := t.TempDir()
+	profile := coresandbox.WorkspaceWritePermissionProfile()
+	permissions, err := ResolvePermissions(&profile, []string{workspace})
+	if err != nil {
+		t.Fatalf("ResolvePermissions() error = %v", err)
+	}
+	base, err := GetCurrentTokenForRestriction()
+	if err != nil {
+		t.Fatalf("GetCurrentTokenForRestriction() error = %v", err)
+	}
+	defer CloseTokenHandle(base)
+	const capability = "S-1-5-21-10-20-30-40"
+	restricted, err := CreateWorkspaceWriteTokenWithCapsFrom(base, []string{capability})
+	if err != nil {
+		if errors.Is(err, ErrHostUnsupported) {
+			t.Skipf("restricted tokens unsupported on this host: %v", err)
+		}
+		t.Fatalf("CreateWorkspaceWriteTokenWithCapsFrom() error = %v", err)
+	}
+	defer CloseTokenHandle(restricted)
+	env := map[string]string{}
+	for _, entry := range os.Environ() {
+		key, value, ok := strings.Cut(entry, "=")
+		if ok && key != "" {
+			env[key] = value
+		}
+	}
+	security := &LegacySessionSecurity{
+		Token:         restricted,
+		WriteRootSIDs: []RootCapabilitySID{{Root: workspace, SID: capability}},
+	}
+	desktop, err := PrepareLegacyLaunchDesktop(security, permissions, workspace, env, nil, "")
+	if err != nil {
+		t.Fatalf("PrepareLegacyLaunchDesktop() error = %v", err)
+	}
+	defer desktop.Close()
+	handles, err := SpawnProcessWithPipesWithToken(PipeSpawnRequest{
+		Token:      restricted,
+		Command:    []string{whereExe, "cmd"},
+		CWD:        workspace,
+		Env:        env,
+		StdinMode:  StdinModeClosed,
+		StderrMode: StderrModeSeparate,
+		Desktop:    desktop,
+	})
+	if err != nil {
+		t.Fatalf("SpawnProcessWithPipesWithToken() error = %v", err)
+	}
+	defer handles.Close()
+	var stdout []byte
+	done, err := ReadHandleLoop(handles.StdoutRead, func(chunk []byte) {
+		stdout = append(stdout, chunk...)
+	})
+	if err != nil {
+		t.Fatalf("ReadHandleLoop() error = %v", err)
+	}
+	outcome, err := WaitCreatedProcess(handles.Process, nil, CancellationToken{})
+	if err != nil {
+		t.Fatalf("WaitCreatedProcess() error = %v", err)
+	}
+	if outcome != ProcessWaitExited {
+		t.Fatalf("WaitCreatedProcess() outcome = %v, want exited", outcome)
+	}
+	<-done
+	exitCode, err := CreatedProcessExitCode(handles.Process)
+	if err != nil {
+		t.Fatalf("CreatedProcessExitCode() error = %v", err)
+	}
+	if exitCode != 0 {
+		t.Fatalf("where.exe exit code = %d (0x%X), stdout=%q; want 0", exitCode, uint32(exitCode), string(stdout))
+	}
+	if !strings.Contains(strings.ToLower(string(stdout)), "cmd.exe") {
+		t.Fatalf("where.exe output = %q, want the cmd.exe path", string(stdout))
+	}
+}
+
 // TestElevatedDesktopPolicySeparatesEffectivePermissionsLikeRust covers Rust
 // #40672's reuse key: root order, duplicates and `..` spellings normalize,
 // while every effective permission change selects a separate desktop.
