@@ -19,10 +19,9 @@ const (
 	maxPackageFamilyUnits      uint32 = 256
 )
 
-// currentPackageFamily ports Rust process_package_family: absence is not
-// authorization and the OS-assigned family is validated before routing.
-func currentPackageFamily() (string, bool, error) {
-	process := windows.CurrentProcess()
+// ProcessPackageFamily ports Rust process_package_family: absence is not
+// authorization and the OS-assigned family is validated before it is compared.
+func ProcessPackageFamily(process windows.Handle) (string, bool, error) {
 	var length uint32
 	status, _, _ := procGetPackageFamilyName.Call(uintptr(process), uintptr(unsafe.Pointer(&length)), 0)
 	switch uint32(status) {
@@ -56,6 +55,11 @@ func currentPackageFamily() (string, bool, error) {
 		return "", false, errors.New("the process package family is malformed")
 	}
 	return string(utf16.Decode(units)), true, nil
+}
+
+// currentPackageFamily is ProcessPackageFamily against the service itself.
+func currentPackageFamily() (string, bool, error) {
+	return ProcessPackageFamily(windows.CurrentProcess())
 }
 
 func validPackageFamilyUnits(units []uint16) bool {
