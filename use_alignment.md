@@ -2557,8 +2557,67 @@ shipped as data - the approach the repo already takes for
   `TestGenerateCompletionServesReferenceScript` (assets served, no CRLF, `tcsh`
   uncovered, `gcode` falls back).
 
+### 80. `execpolicy check` renders starlark's diagnostics, not a Go one-liner
+
+`execpolicy check` answered every bad rules file with one Go sentence
+(`unsupported decision "maybe"`, `expected 2 arguments`, ...). 0.166 parses the
+same file inside `starlark` and prints the runtime's own report: an anyhow
+chain (`failed to parse policy at <p>` / `Caused by:` / `starlark error: ...`),
+then, when the failure came from evaluation, a
+`Traceback (most recent call last):` frame with the failing source line, then
+ariadne's code frame (`--> p:l:c`, `N | <line>`, `^^^^` under the span, and the
+multi-line `1 | / ...` / `| |_^` form for a call that spans lines). Go also
+silently accepted files with trailing junk - `prefix_rule(...)` followed by a
+stray `)` was treated as valid.
+
+- **Front end.** `execpolicy/policy_diagnostics.go` adds `lexPolicySource`
+  (identifier / string / number / punct / newline / EOF) and
+  `parsePolicyProgram`, which splits statements, recognises `X = expr` and
+  `name(...)` calls, balances brackets and rejects a leftover token with
+  starlark's `Parse error: unexpected symbol 'X', expected new line`. Every
+  call argument keeps its name, value text and source span so the renderer can
+  point at the exact bytes Rust underlines.
+- **Renderer.** `policyDiagnostic.Error()` emits the three shapes 0.166
+  produces: analysis/parse errors get the single-line frame, evaluation errors
+  get the traceback prefix plus the frame of the whole call span, and a span
+  covering several lines switches to ariadne's multi-line gutter. An empty span
+  (end of file) renders as `--> p:1:1` followed by two empty gutter lines.
+- **Binder.** `execpolicy/policy_builtin_signatures.go` holds the
+  `prefix_rule` / `network_rule` / `host_executable` signatures and the
+  compile- and run-time checks starlark makes: `repeated named argument`,
+  `positional argument after non positional`, `Missing parameter <name> for
+  call to <fn>`, `Found N extra positional argument(s) for call to <fn>`,
+  `Found <a> <b> extra named parameter(s) for call to <fn>`, `Argument <name>
+  occurs more than once`, and the type mismatch `Type of parameter <name>
+  doesn't match, expected <type>, actual <type (repr: value)>` (for
+  `decision=1`: `expected str, actual int (repr: 1)`).
+- **Scope check.** The same file resolves identifiers before evaluation:
+  `Variable <name> not found, did you mean <suggestion>?` uses starlark's own
+  spelling suggestion (distance 1 for names of two characters or less, 2
+  otherwise, candidates = globals + locals + builtins, lowest distance wins
+  after sorting), and a name assigned later in the file reports
+  `Local variable <NAME> referenced before assignment` instead of evaluating
+  to an empty string.
+- **Wording.** `execpolicy/execpolicy.go` now matches the rule builder's
+  messages: `invalid decision: <v>`, `invalid pattern element: ...`,
+  `invalid example: ...`, `invalid rule: ...`, `host_executable paths must be
+  strings (got <type>)`, and the non-type-matched field errors carry
+  `policyTypeError` so the binder can name the starlark type.
+- Evidence: `out/r73-execpolicy.txt` (33 cases, 33 identical to 0.166),
+  `out/r73-suggest.txt` (36 suggestion shapes, 0 diffs), `out/r73-edge.txt`
+  (11 edge cases, 0 diffs) and `out/r73-rust-expectations.json` (the captured
+  stderr the regression table was generated from). `go test -count=1 -vet=off
+  ./execpolicy` passes, including `TestPolicyDiagnosticsMatchRust166`.
+
 ## Verification
 
+- Round 67 gives `execpolicy check` starlark's diagnostic model (entry 80):
+  `out/r73-execpolicy.txt` reports 33/33 identical against 0.166,
+  `out/r73-suggest.txt` covers 36 did-you-mean shapes with 0 diffs and
+  `out/r73-edge.txt` 11 edge cases with 0 diffs; `go test -count=1 -vet=off
+  ./execpolicy ./config ./cli ./plugin` passes, and `./appserver` keeps only
+  the two pre-existing `TestSkillMCPDependency*` failures that also fail at
+  `0ea60afa`.
 - Round 66 makes `completion <shell>` return clap_complete's own five scripts
   (entry 79): `out/r70-completion.txt` shows byte-identical bash/zsh/fish/
   powershell/elvish against 0.166, and `out/r70-p67-sweep.txt` drops the sweep
@@ -3132,10 +3191,6 @@ shipped as data - the approach the repo already takes for
   (`login/src/auth/storage_commit.rs`) and Go follows that; the pinned 0.166
   binary predates the sidecar and only uses `auth.lock`, so the extra file is a
   version delta rather than a missing cleanup.
-- `execpolicy check` still answers a syntactically invalid rules file with
-  Go's parser text where Rust prints `failed to parse policy at <p>` chained to
-  `starlark error: error: Parse error: ...` with a source snippet and caret;
-  reproducing the full Starlark diagnostic model is not done yet.
 - `go test ./parity` fails six registry/surface comparisons because the local
   Rust checkout (`b0f977c3a9`) predates upstream changes the Go tree already
   carries: `suppress_model_change_announcements` (#58405) is implemented in Go
