@@ -703,7 +703,7 @@ func Parse(args []string) (*Parsed, error) {
 			return nil, fmt.Errorf("`--strict-config` is not supported for `codex %s`", cmd)
 		}
 		if _, err := parseSubcommand(p, rest[1:]); err != nil {
-			return nil, err
+			return nil, decorateSubcommandClapUsage(err, rest[1:])
 		}
 		if err := p.validateExecAutoReview(); err != nil {
 			return nil, err
@@ -794,6 +794,11 @@ func strictConfigUnsupportedBeforeSubcommandParse(command Command) bool {
 }
 
 func parseSubcommand(p *Parsed, args []string) (*Parsed, error) {
+	remaining, err := p.splitSubcommandFeatureFlags(args)
+	if err != nil {
+		return nil, err
+	}
+	args = remaining
 	switch p.Command {
 	case CommandExec:
 		return p, parseExec(args, &p.Exec)
@@ -4046,6 +4051,58 @@ func parseDebug(args []string, debug *DebugOptions) error {
 	return nil
 }
 
+// splitSubcommandFeatureFlags mirrors clap's flattened `--enable`/`--disable`
+// arguments: Rust declares them on every subcommand, so `codex login --enable
+// foo` parses exactly like `codex --enable foo login`. The values land in
+// RootOptions, which is where the shared startup path validates and applies
+// them, so both spellings behave identically. `sandbox setup` is the one
+// subcommand Rust parses with its own clap definition and therefore rejects the
+// shared flags.
+func (p *Parsed) splitSubcommandFeatureFlags(args []string) ([]string, error) {
+	if p.Command == CommandSandbox && len(args) > 0 && args[0] == "setup" {
+		return args, nil
+	}
+	remaining := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			remaining = append(remaining, args[i:]...)
+			break
+		}
+		name, value, hasInlineValue := strings.Cut(arg, "=")
+		if name != "--enable" && name != "--disable" {
+			remaining = append(remaining, arg)
+			continue
+		}
+		if hasInlineValue {
+			p.appendFeatureFlag(name, value)
+			continue
+		}
+		// clap refuses to take a leading-dash token as an option value and
+		// reports the pending value instead.
+		if i+1 >= len(args) || clapLooksLikeOption(args[i+1]) {
+			return nil, valueRequiredError(name)
+		}
+		p.appendFeatureFlag(name, args[i+1])
+		i++
+	}
+	return remaining, nil
+}
+
+func (p *Parsed) appendFeatureFlag(name, value string) {
+	if name == "--enable" {
+		p.Root.EnableFeatures = append(p.Root.EnableFeatures, value)
+		return
+	}
+	p.Root.DisableFeatures = append(p.Root.DisableFeatures, value)
+}
+
+// clapLooksLikeOption reports whether clap would treat the token as an option
+// instead of an option value. A single "-" is a value (stdin).
+func clapLooksLikeOption(token string) bool {
+	return len(token) > 1 && strings.HasPrefix(token, "-")
+}
+
 func parseSharedOption(args []string, i *int, shared *SharedOptions) (bool, error) {
 	return parseSharedOptionWithImages(args, i, shared, false)
 }
@@ -4296,7 +4353,10 @@ func setExecCyberAccessProgram(exec *ExecOptions, value string) error {
 }
 
 func requireValue(args []string, i int, flag string) (string, int, error) {
-	if i+1 >= len(args) {
+	// clap never accepts a leading-dash token as an option value unless the
+	// argument declares allow_hyphen_values, so `-c --json` reports the pending
+	// value instead of eating the next flag.
+	if i+1 >= len(args) || clapLooksLikeOption(args[i+1]) {
 		return "", i, valueRequiredError(flag)
 	}
 	return args[i+1], i + 1, nil

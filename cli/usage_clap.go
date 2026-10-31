@@ -106,6 +106,9 @@ var subcommandValuePlaceholders = map[string]string{
 	"--ws-shared-secret-file":     "<PATH>",
 	"--ws-token-file":             "<PATH>",
 	"--ws-token-sha256":           "<HEX>",
+	"--proxy-url":                 "<PROXY_URL>",
+	"--proxy-origins-file":        "<PROXY_ORIGINS_FILE>",
+	"--target":                    "<TARGET>",
 }
 
 // valueRequiredError mirrors clap's missing-value diagnostic for a known flag
@@ -243,7 +246,7 @@ func unexpectedSubcommandArgumentError(command, arg string) error {
 	if spec.hasPositional {
 		message += "\n\n  tip: to pass '" + name + "' as a value, use '-- " + name + "'"
 	}
-	return &UsageError{Message: message, Usage: spec.usage}
+	return &UsageError{Message: message, Usage: spec.usage, SmartUsage: true}
 }
 
 // unexpectedArgumentWithoutTip is clap's diagnostic for commands that declare no
@@ -261,6 +264,10 @@ type UsageError struct {
 	// Usage is the "Usage: ..." block; it is empty for diagnostics clap
 	// prints without one (invalid and missing values).
 	Usage string
+	// SmartUsage marks usage blocks built from the table snapshots, where clap
+	// echoes the options it already consumed. The exec family renders its own
+	// usage lines and leaves this false.
+	SmartUsage bool
 }
 
 func (e *UsageError) Error() string { return e.Message }
@@ -397,6 +404,127 @@ func requiredArgumentsMessage(missing ...string) string {
 	return message
 }
 
+// decorateSubcommandClapUsage reproduces clap's smart usage for diagnostics a
+// subcommand parser raised: once clap has consumed an option it drops the
+// [OPTIONS] placeholder from the usage block and echoes the options it saw, in
+// the order they appeared. Errors clap raises before it parsed any option (an
+// unknown token first in argv) keep the plain table usage.
+func decorateSubcommandClapUsage(err error, args []string) error {
+	usageErr, ok := err.(*UsageError)
+	if !ok || usageErr.Usage == "" || !usageErr.SmartUsage {
+		return err
+	}
+	stopAt := ""
+	switch {
+	case strings.HasPrefix(usageErr.Message, "unexpected argument '"):
+		stopAt, _, _ = strings.Cut(strings.TrimPrefix(usageErr.Message, "unexpected argument '"), "'")
+	case strings.HasPrefix(usageErr.Message, "the following required arguments were not provided:"):
+		// Every option in argv was accepted, so echo all of them.
+	default:
+		return err
+	}
+	// clap cannot drop the optional block when the remaining requirement is an
+	// argument group (`mcp add` requires either --url or a COMMAND).
+	if usageErr.Usage == subcommandUsageTexts["mcp add"].usage {
+		return err
+	}
+	used := clapUsageOptionTokens(args, stopAt)
+	if len(used) == 0 {
+		return err
+	}
+	usageErr.Usage = usageWithUsedOptions(usageErr.Usage, used)
+	return err
+}
+
+// clapUsageOptionTokens renders the options clap accepted, stopping in front of
+// the token that produced the diagnostic. Option values are folded into the
+// flag token so `--enable x` renders as `--enable <FEATURE>`.
+func clapUsageOptionTokens(args []string, stopAt string) []string {
+	used := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			break
+		}
+		if !clapLooksLikeOption(arg) {
+			continue
+		}
+		if stopAt != "" && flagNameOnly(arg) == stopAt {
+			break
+		}
+		token, consumedValue := clapUsageOptionToken(arg)
+		used = append(used, token)
+		if consumedValue {
+			i++
+		}
+	}
+	return used
+}
+
+// clapUsageOptionToken renders one option the way clap's usage block does and
+// reports whether the following argv token was its value.
+func clapUsageOptionToken(arg string) (string, bool) {
+	name, hasInlineValue := arg, false
+	if trimmed, _, ok := strings.Cut(arg, "="); ok {
+		name, hasInlineValue = trimmed, true
+	}
+	if spec, known := valueOptionSpecs[name]; known {
+		return spec.long + " " + spec.placeholder, !hasInlineValue
+	}
+	if placeholder, known := subcommandValuePlaceholders[name]; known {
+		return name + " " + placeholder, !hasInlineValue
+	}
+	return name, false
+}
+
+// usageWithUsedOptions inserts clap's echoed options into a usage block: the
+// [OPTIONS] placeholder is replaced when present, otherwise the options go in
+// front of the first positional (or at the end for option-only commands).
+func usageWithUsedOptions(usage string, used []string) string {
+	echoed := make([]string, 0, len(used))
+	for _, token := range used {
+		// clap only prints options the static usage does not already list;
+		// required options are part of the block either way.
+		if strings.Contains(usage, token) {
+			continue
+		}
+		echoed = append(echoed, token)
+	}
+	if len(echoed) == 0 {
+		return usage
+	}
+	joined := strings.Join(echoed, " ")
+	if strings.Contains(usage, "[OPTIONS]") {
+		return strings.Replace(usage, "[OPTIONS]", joined, 1)
+	}
+	fields := strings.Fields(usage)
+	for idx, field := range fields {
+		if !strings.HasPrefix(field, "<") && !strings.HasPrefix(field, "[") {
+			continue
+		}
+		// A placeholder that renders an option's value (`--thread <THREAD>`) is
+		// part of the option, not a positional, so keep looking.
+		if idx > 0 && clapOptionPlaceholder(fields[idx-1]) == field {
+			continue
+		}
+		expanded := make([]string, 0, len(fields)+1)
+		expanded = append(expanded, fields[:idx]...)
+		expanded = append(expanded, joined)
+		expanded = append(expanded, fields[idx:]...)
+		return strings.Join(expanded, " ")
+	}
+	return usage + " " + joined
+}
+
+// clapOptionPlaceholder returns the value placeholder clap renders for an
+// option, or "" when the option takes no value.
+func clapOptionPlaceholder(option string) string {
+	if spec, known := valueOptionSpecs[option]; known {
+		return spec.placeholder
+	}
+	return subcommandValuePlaceholders[option]
+}
+
 // missingRequiredArgumentsError mirrors clap's diagnostic for absent required
 // arguments. The usage block is clap's smart usage: supplied flags are echoed by
 // the caller and [OPTIONS] disappears unless the requirement is an argument
@@ -410,7 +538,7 @@ func missingRequiredArgumentsError(command string, missing ...string) error {
 	if !clapRequiredKeepsOptions[command] {
 		usage = strings.Replace(usage, "[OPTIONS] ", "", 1)
 	}
-	return &UsageError{Message: requiredArgumentsMessage(missing...), Usage: usage}
+	return &UsageError{Message: requiredArgumentsMessage(missing...), Usage: usage, SmartUsage: true}
 }
 
 // clapErrorText renders a complete clap error the way clap's Display does: the

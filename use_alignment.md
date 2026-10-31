@@ -751,6 +751,45 @@ one-off captures.
     expectations in `cli/cli_test.go`, `cli/exec_server_auth_test.go` and
     `cmd/codex-exec-server/main_test.go` moved to the clap text.
 
+37. **Shared `--enable`/`--disable` inside every subcommand, plus clap's
+    used-option usage rendering** - Rust flattens `CliConfigOverrides` and the
+    feature toggles into each subcommand, so `codex login --enable foo`,
+    `codex mcp list --disable f` and `codex features list --enable=f` parse
+    exactly like their root-scope spellings; Go answered `unexpected argument
+    '--enable' found` because the flags only existed on the root parser. Go now
+    pre-scans every subcommand's argv for `--enable`/`--disable` (both
+    `--flag value` and `--flag=value`, repeatable, stopping at `--`) and records
+    the values in `RootOptions`, so the shared startup path validates them the
+    same way for both spellings: an unknown name still exits 1 with
+    `Error: Unknown feature flag: <name>` and an empty value still reaches the
+    runtime instead of failing in the parser. `codex sandbox setup` is the one
+    exception - Rust parses it with its own clap definition - so it keeps
+    rejecting the flags with its nested-parser diagnostic. A pending value
+    (`login --enable`, `login --enable --config a=b`, `mcp list --enable
+    --json`) prints clap's `a value is required for '--enable <FEATURE>' but
+    none was supplied` without a usage block (`--disable <FEATURE>` likewise).
+    The same round tightened `requireValue` to clap's value rule: a
+    leading-dash token is never taken as an option value, so `codex mcp get -c
+    --json` now reports the pending `--config <key=value>` instead of eating
+    `--json`.
+    Because the flags now reach parsers that can fail after consuming options,
+    Go also renders clap's smart usage for the table-driven diagnostics: once an
+    option was consumed the `[OPTIONS]` placeholder is replaced by the options
+    clap saw, in argv order and in front of the positionals
+    (`Usage: codex mcp get --enable <FEATURE> --json <NAME>`,
+    `Usage: codex delete --force --enable <FEATURE> <SESSION>`,
+    `Usage: codex features list --enable <FEATURE>`,
+    `Usage: codex queue --thread <THREAD> --message <TEXT> --enable <FEATURE>`).
+    Options already listed by the static block are not repeated, `mcp add` keeps
+    `[OPTIONS]` because its remaining requirement is an argument group, and the
+    hand-written `exec` family usage lines are untouched. Evidence: 144 live
+    comparisons against 0.166 (36 subcommand surfaces x `--enable zzz`,
+    `--disable zzz`, `--enable`, `--enable=zzz`) plus 18 targeted cases; the only
+    remaining differences are the three commands listed under Still open.
+    Regressions: `cli/subcommand_shared_feature_flags_like_rust_test.go` (8
+    accepted-spelling, 5 pending-value, the `sandbox setup` exception, the `--`
+    rule and 11 smart-usage cases).
+
 ## Verification
 
 - `go test ./config/`, `go test ./tui/onboarding/`, `go test ./tui/...` pass;
@@ -947,6 +986,17 @@ one-off captures.
   broke `go build ./cmd/codex` mid-round and are not part of this change), and 158
   live comparisons against Rust 0.166 are byte-identical.
 
+- subcommand shared-flag round: `go build -o bin\codex.exe .\cmd\codex` succeeds,
+  `go test ./cli ./applypatch ./prompt ./review ./cmd/...` pass and
+  `go test -vet=off ./exec ./app` keeps exactly the pre-existing failures (9 and
+  2). 144 live comparisons against 0.166 (accepted values, missing values and
+  `=` forms across 36 subcommand surfaces) plus 18 targeted cases agree on
+  stdout, stderr and exit status apart from `execpolicy`, `stdio-to-uds` and
+  `tcp-tunnel`, whose Go parsers still answer with their own missing-argument
+  wording. The previous rounds' probe sets stay clean: 80 unknown-flag, 56
+  missing/misplaced argument, 17 missing-value and 8 `sandbox setup` comparisons
+  report 0 diffs.
+
 ## Still open
 
 - `codex resume -i a.png b.png` (TUI picker path) also uses Rust's variadic
@@ -963,10 +1013,27 @@ one-off captures.
     (`Usage: codex delete --enable <FEATURE> <SESSION>`); Go prints the plain
     `--` tip. Aligning needs the per-command long-flag table and clap's used-flag
     usage rendering.
-  - shared options supplied inside a subcommand (`codex login --disable f`,
-    `codex review --config a=b`, `codex features list --enable f`) are accepted by
-    Rust's flattened `CliConfigOverrides` but rejected by Go's per-subcommand
-    parsers with `unexpected argument`.
+  - shared options inside a subcommand (entry 37): `--enable`/`--disable` are
+    accepted everywhere and rendered in the usage block, but the hand-written
+    `exec` family usage lines (`exec resume --last --enable f --bogus`,
+    `exec fork --enable f`) do not echo them yet - Rust prints
+    `--last --enable <FEATURE>` / `--enable <FEATURE> <SESSION_ID>`. A pending
+    value followed by an *unknown* flag (`codex mcp get -c -x1`) also still
+    reports the pending value, where clap reports `unexpected argument '-x'
+    found` first, because Go has no per-command flag table to test the token
+    against. `codex review --config a=b` keeps working through the subcommand
+    parser's own `-c` handling, which mirrors Rust's merged override order.
+  - three subcommands still answer missing-required arguments in Go
+    wording instead of clap's block, and exit 1 rather than 2: `execpolicy`
+    (`Error: execpolicy requires a subcommand`, Rust prints clap's
+    `requires a subcommand but one was not provided` with `[subcommands: check,
+    help]`), `execpolicy check` (`requires --rules PATH` vs clap's
+    `--rules <PATH>` + `<COMMAND>...`), `stdio-to-uds` (`requires exactly one
+    SOCKET_PATH`, and on Windows it validates the path before clap would reject
+    an unknown flag) and `tcp-tunnel` (`requires a value`-style errors plus a
+    single missing option instead of `--proxy-url`/`--proxy-origins-file`/
+    `--target`). Those parsers live outside `cli.Parse`'s table-driven surface,
+    so they need their own usage snapshots before they can print clap blocks.
   - group help pages: `codex mcp`, `codex features`, `codex plugin marketplace`,
     `codex debug` print clap's subcommand help on bare invocation, and
     `codex mcp --help` prints the same page; Go answers
