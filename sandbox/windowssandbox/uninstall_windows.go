@@ -99,6 +99,13 @@ func cleanUpPackagedWindowsSandbox(codexHome string, report func(string), cleanU
 // Nothing has been torn down yet, so a preparation failure restores the
 // original account flags and keeps the setup lock released.
 func prepareSandboxCleanupForRemoval() (*disabledSandboxUsers, error) {
+	return prepareSandboxCleanupForRemovalWithRetained(nil)
+}
+
+// prepareSandboxCleanupForRemovalWithRetained also pins the trusted finalizer's
+// private logins, which are the only logon sessions cleanup may leave open
+// (Rust prepare_packaged_windows_sandbox_cleanup_with_retained_tokens).
+func prepareSandboxCleanupForRemovalWithRetained(retainedTokens []windows.Token) (*disabledSandboxUsers, error) {
 	users := &disabledSandboxUsers{}
 	if err := users.disable(); err != nil {
 		var failures []string
@@ -108,9 +115,19 @@ func prepareSandboxCleanupForRemoval() (*disabledSandboxUsers, error) {
 		}
 		return nil, errors.New(strings.Join(failures, "; "))
 	}
+	retained, err := captureRetainedLogons(retainedTokens, users)
+	if err != nil {
+		failures := []string{err.Error()}
+		if restoreErr := users.restore(); restoreErr != nil {
+			failures = append(failures, restoreErr.Error())
+		}
+		return nil, errors.New(strings.Join(failures, "; "))
+	}
+	users.retained = retained
 	if err := stopSandboxCleanupProcesses(users); err != nil {
-		var failures []string
-		failures = append(failures, err.Error())
+		retained.close()
+		users.retained = nil
+		failures := []string{err.Error()}
 		if restoreErr := users.restore(); restoreErr != nil {
 			failures = append(failures, restoreErr.Error())
 		}

@@ -27,7 +27,17 @@ type SandboxCleanupFinisher interface {
 	Finish(codexHome *string, report func(string), cleanUpDesktop func() error) error
 }
 
-var _ SandboxCleanupFinisher = (*windowssandbox.PreparedSandboxCleanup)(nil)
+// SandboxCleanupGuard is a prepared native cleanup that also owns the setup
+// lock until Release (Rust PreparedWindowsSandboxCleanup plus Drop).
+type SandboxCleanupGuard interface {
+	SandboxCleanupFinisher
+	Release()
+}
+
+var (
+	_ SandboxCleanupFinisher = (*windowssandbox.PreparedSandboxCleanup)(nil)
+	_ SandboxCleanupGuard    = (*windowssandbox.PreparedSandboxCleanup)(nil)
+)
 
 // The seams keep the destructive orchestration testable without sandbox
 // accounts, elevated privileges or an authenticated owner token.

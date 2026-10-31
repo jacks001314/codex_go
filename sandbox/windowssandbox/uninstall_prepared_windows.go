@@ -2,7 +2,11 @@
 
 package windowssandbox
 
-import "errors"
+import (
+	"errors"
+
+	"golang.org/x/sys/windows"
+)
 
 // PreparedSandboxCleanup holds the machine-wide setup lock after the sandbox
 // accounts were disabled and their processes and logon tokens exited, while
@@ -23,11 +27,26 @@ type PreparedSandboxCleanup struct {
 // failure restores the original account flags before the setup lock is
 // released.
 func PrepareSandboxCleanup() (*PreparedSandboxCleanup, error) {
+	return prepareSandboxCleanupGuard(nil)
+}
+
+// PrepareSandboxCleanupWithRetainedTokens retains only the trusted runtime
+// finalizer's private logins while stopping sandbox work. The tokens must be
+// fresh, private logins for distinct managed sandbox accounts; ordinary
+// processes are still stopped (Rust
+// prepare_packaged_windows_sandbox_cleanup_with_retained_tokens).
+func PrepareSandboxCleanupWithRetainedTokens(tokens []windows.Token) (*PreparedSandboxCleanup, error) {
+	return prepareSandboxCleanupGuard(tokens)
+}
+
+// prepareSandboxCleanupGuard serializes with setup and disables the accounts
+// before any protection is removed.
+func prepareSandboxCleanupGuard(retainedTokens []windows.Token) (*PreparedSandboxCleanup, error) {
 	lock, err := AcquireSandboxSetupLock(5000)
 	if err != nil {
 		return nil, err
 	}
-	users, err := prepareSandboxCleanupForRemoval()
+	users, err := prepareSandboxCleanupForRemovalWithRetained(retainedTokens)
 	if err != nil {
 		lock.Release()
 		return nil, err
@@ -57,6 +76,9 @@ func (prepared *PreparedSandboxCleanup) Finish(codexHome *string, report func(st
 func (prepared *PreparedSandboxCleanup) Release() {
 	if prepared == nil || prepared.lock == nil {
 		return
+	}
+	if prepared.users != nil {
+		prepared.users.retained.close()
 	}
 	prepared.lock.Release()
 	prepared.lock = nil

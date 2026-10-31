@@ -2,12 +2,20 @@
 
 package windowssandbox
 
+import "golang.org/x/sys/windows"
+
 // PreparedSandboxCleanup is unavailable off Windows.
 type PreparedSandboxCleanup struct{}
 
 // PrepareSandboxCleanup reports that native sandbox cleanup is Windows-only.
 func PrepareSandboxCleanup() (*PreparedSandboxCleanup, error) {
 	return nil, unsupported("uninstall.prepare_packaged_windows_sandbox_cleanup")
+}
+
+// PrepareSandboxCleanupWithRetainedTokens reports that native sandbox cleanup
+// is Windows-only.
+func PrepareSandboxCleanupWithRetainedTokens([]windows.Token) (*PreparedSandboxCleanup, error) {
+	return nil, unsupported("uninstall.prepare_packaged_windows_sandbox_cleanup_with_retained_tokens")
 }
 
 // Finish reports that native sandbox cleanup is Windows-only.

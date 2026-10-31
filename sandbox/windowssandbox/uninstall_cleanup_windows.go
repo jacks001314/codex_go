@@ -67,7 +67,142 @@ type disabledSandboxUser struct {
 }
 
 type disabledSandboxUsers struct {
-	users []disabledSandboxUser
+	users    []disabledSandboxUser
+	retained *retainedLogons
+}
+
+// retainedLogons pins the trusted runtime finalizer's private logins so they
+// neither block cleanup nor let their AuthenticationId be recycled (Rust
+// RetainedLogons).
+type retainedLogons struct {
+	tokens []windows.Token
+	ids    []windows.LUID
+	sids   []string
+}
+
+// cleanupTokenStatistics is the TOKEN_STATISTICS layout x/sys keeps
+// unexported.
+type cleanupTokenStatistics struct {
+	TokenID            windows.LUID
+	AuthenticationID   windows.LUID
+	ExpirationTime     int64
+	TokenType          int32
+	ImpersonationLevel int32
+	DynamicCharged     uint32
+	DynamicAvailable   uint32
+	GroupCount         uint32
+	PrivilegeCount     uint32
+	ModifiedID         windows.LUID
+}
+
+// close releases every duplicated token; the caller keeps its originals.
+func (retained *retainedLogons) close() {
+	if retained == nil {
+		return
+	}
+	for _, token := range retained.tokens {
+		_ = token.Close()
+	}
+	retained.tokens = nil
+}
+
+// contains reports whether id is one of the pinned cleanup logins.
+func (retained *retainedLogons) contains(id windows.LUID) bool {
+	if retained == nil {
+		return false
+	}
+	for _, held := range retained.ids {
+		if held.LowPart == id.LowPart && held.HighPart == id.HighPart {
+			return true
+		}
+	}
+	return false
+}
+
+// captureRetainedLogons duplicates each trusted cleanup token and verifies it
+// identifies a distinct managed sandbox account (Rust RetainedLogons::capture).
+func captureRetainedLogons(tokens []windows.Token, users *disabledSandboxUsers) (*retainedLogons, error) {
+	if len(tokens) > 2 {
+		return nil, errors.New("too many retained cleanup tokens")
+	}
+	retained := &retainedLogons{}
+	success := false
+	defer func() {
+		if !success {
+			retained.close()
+		}
+	}()
+	for _, token := range tokens {
+		user, err := token.GetTokenUser()
+		if err != nil {
+			return nil, fmt.Errorf("identify retained cleanup login: %w", err)
+		}
+		sid := user.User.Sid.String()
+		if !containsCleanupSID(users.sids(), sid) || containsCleanupSID(retained.sids, sid) {
+			return nil, errors.New("cleanup token does not identify a distinct managed sandbox account")
+		}
+		stats, err := retainedTokenStatistics(token)
+		if err != nil {
+			return nil, err
+		}
+		duplicate, err := duplicateCleanupToken(token)
+		if err != nil {
+			return nil, err
+		}
+		retained.tokens = append(retained.tokens, duplicate)
+		retained.ids = append(retained.ids, stats.AuthenticationID)
+		retained.sids = append(retained.sids, sid)
+	}
+	success = true
+	return retained, nil
+}
+
+// retainedTokenStatistics reads the logon session the token belongs to.
+func retainedTokenStatistics(token windows.Token) (*cleanupTokenStatistics, error) {
+	var stats cleanupTokenStatistics
+	var returned uint32
+	if err := windows.GetTokenInformation(
+		token,
+		windows.TokenStatistics,
+		(*byte)(unsafe.Pointer(&stats)),
+		uint32(unsafe.Sizeof(stats)),
+		&returned,
+	); err != nil {
+		return nil, fmt.Errorf("identify retained cleanup login: %w", err)
+	}
+	if returned != uint32(unsafe.Sizeof(stats)) {
+		return nil, errors.New("unexpected cleanup token statistics length")
+	}
+	return &stats, nil
+}
+
+// duplicateCleanupToken keeps the login session alive for the duration of
+// cleanup while the caller retains its own handle.
+func duplicateCleanupToken(token windows.Token) (windows.Token, error) {
+	process := windows.CurrentProcess()
+	var duplicate windows.Handle
+	if err := windows.DuplicateHandle(
+		process,
+		windows.Handle(token),
+		process,
+		&duplicate,
+		0,
+		false,
+		windows.DUPLICATE_SAME_ACCESS,
+	); err != nil {
+		return 0, fmt.Errorf("retain cleanup logon: %w", err)
+	}
+	return windows.Token(duplicate), nil
+}
+
+// containsString reports whether values contains value.
+func containsCleanupSID(values []string, value string) bool {
+	for _, candidate := range values {
+		if candidate == value {
+			return true
+		}
+	}
+	return false
 }
 
 func (u *disabledSandboxUsers) disable() error {
@@ -366,7 +501,7 @@ func sandboxLogonSessionRemains(users *disabledSandboxUsers) (bool, error) {
 		if data == nil {
 			return true, nil
 		}
-		if isSandboxUserSID(users, data.SID) {
+		if isSandboxUserSID(users, data.SID) && !users.retained.contains(*logon) {
 			procLsaFreeBuffer.Call(uintptr(unsafe.Pointer(data)))
 			return true, nil
 		}
