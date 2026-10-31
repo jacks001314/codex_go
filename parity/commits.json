@@ -26080,7 +26080,8 @@
    "status": "complete",
    "evidence": [
     "Round 115 (lead): verified complete - app/app.go dispatches `codex sandbox uninstall` before configuration is loaded, prints the clap-compatible help, rejects non-Windows hosts, and runs sandbox/windowssandbox/uninstall.go CleanUpLegacyWindowsSandbox (reporting each cleanup step); app/sandbox_uninstall_test.go covers help and invalid arguments preserving user data. go test ./app -run TestSandboxUninstallHelpAndInvalidArgumentsPreserveUserData green.",
-    "Partial symbol coverage 2/3; needs review: SandboxUninstallCommand"
+    "Partial symbol coverage 2/3; needs review: SandboxUninstallCommand",
+    "Round 1177: TestSandboxUninstallHelpAndInvalidArgumentsPreserveUserData now asserts Rust #50437's clap contract (an *ExitError with exit status 2 plus 'error: unexpected argument 'unexpected' found' on stderr) instead of looking for the diagnostic in err.Error(), which only carries the exit status. go test ./app -count=1 is green."
    ]
   },
   {

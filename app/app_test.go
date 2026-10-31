@@ -872,12 +872,27 @@ func TestDebugUnknownSubcommandDoesNotExposeGoPortMessage(t *testing.T) {
 	}
 }
 
+// appWebsocketUpgrade reports whether an httptest request is a Responses
+// websocket handshake.
+func appWebsocketUpgrade(r *http.Request) bool {
+	return strings.EqualFold(strings.TrimSpace(r.Header.Get("Upgrade")), "websocket")
+}
+
 func TestExecJSONEndToEnd(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)
 	t.Setenv("OPENAI_API_KEY", "sk-test")
 	seenPath := make(chan string, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The built-in OpenAI provider advertises supports_websockets, so a
+		// plain-HTTP SSE fixture must answer the Responses websocket handshake
+		// with 426 UPGRADE_REQUIRED: that is the only handshake status both
+		// Rust and Go treat as "this endpoint speaks HTTP only" and fall back
+		// on (exec/exec_test.go uses the same fixture shape).
+		if appWebsocketUpgrade(r) {
+			w.WriteHeader(http.StatusUpgradeRequired)
+			return
+		}
 		seenPath <- r.URL.Path
 		w.Header().Set("Content-Type", "text/event-stream")
 		writeAppResponseSSE(w, `{"type":"response.created","response":{"id":"resp-cli"}}`)

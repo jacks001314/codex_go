@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,9 +33,14 @@ func TestSandboxUninstallHelpAndInvalidArgumentsPreserveUserData(t *testing.T) {
 		t.Fatalf("help output = %q", stdout.String())
 	}
 
-	err := Run(context.Background(), []string{"sandbox", "uninstall", "unexpected"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
-	if err == nil || !strings.Contains(err.Error(), "unexpected argument") {
-		t.Fatalf("sandbox uninstall unexpected error = %v", err)
+	var stderr bytes.Buffer
+	err := Run(context.Background(), []string{"sandbox", "uninstall", "unexpected"}, strings.NewReader(""), &bytes.Buffer{}, &stderr)
+	var exitErr *ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 2 {
+		t.Fatalf("sandbox uninstall unexpected error = %v, want clap diagnostic with exit status 2", err)
+	}
+	if !strings.Contains(stderr.String(), "unexpected argument 'unexpected'") {
+		t.Fatalf("sandbox uninstall unexpected stderr = %q", stderr.String())
 	}
 
 	assertFileContents(t, configPath, "invalid config [")
