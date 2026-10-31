@@ -344,7 +344,16 @@ func queryServiceStatus() (windows.SERVICE_STATUS_PROCESS, error) {
 		return windows.SERVICE_STATUS_PROCESS{}, fmt.Errorf("open sandbox provisioning service: %w", err)
 	}
 	defer windows.CloseServiceHandle(service)
-	return queryServiceStatusFor(service)
+	status, err := queryServiceStatusFor(service)
+	if err != nil {
+		return windows.SERVICE_STATUS_PROCESS{}, err
+	}
+	if status.CurrentState == windows.SERVICE_STOPPED {
+		RecordServiceStopped(status, func() (windows.SERVICE_STATUS_PROCESS, error) {
+			return queryServiceStatusFor(service)
+		})
+	}
+	return status, nil
 }
 
 func queryServiceStatusFor(service windows.Handle) (windows.SERVICE_STATUS_PROCESS, error) {

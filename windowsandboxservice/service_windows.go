@@ -93,7 +93,13 @@ func serviceMainProcedure(_ uintptr, _ uintptr) uintptr {
 	if state == nil {
 		return 0
 	}
+	provisionservice.ServiceStopReasonStarting.Record(0)
 	if err := runServiceMain(state); err != nil {
+		reason := provisionservice.ServiceStopReasonBrokerFailed
+		if state.CurrentStatus() == ServiceStartPending {
+			reason = provisionservice.ServiceStopReasonStartupFailed
+		}
+		reason.Record(FatalErrorHResult(err))
 		LogError(EventServiceFailed, "The Codex sandbox service encountered a fatal error: "+FatalErrorMessage(err))
 		_, _ = fmt.Fprintf(os.Stderr, "%s failed: %v\n", state.serviceName, err)
 		if state.statusHandle != 0 {
@@ -124,6 +130,11 @@ func runServiceMain(state *ServiceState) error {
 	if err := broker(state); err != nil {
 		return err
 	}
+	stopped := provisionservice.ServiceStopReasonShutdown
+	if state.StopRequested() {
+		stopped = provisionservice.ServiceStopReasonStopRequested
+	}
+	stopped.Record(0)
 	LogInformation(EventServiceStopped, "The Codex sandbox service has stopped.")
 	return state.ReportStatus(ServiceStopped, NoError)
 }
