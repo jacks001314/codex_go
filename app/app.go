@@ -444,6 +444,9 @@ func runWindowsSandboxPlan(ctx context.Context, plan *sandbox.CommandRunPlan, en
 		PermissionProfile:   plan.PermissionProfile,
 		WindowsSandboxLevel: windowssandbox.WindowsSandboxLevelElevated,
 		CodexHome:           codexHome,
+		// Rust #44658: the long-lived caller owns the private desktop cache and
+		// passes its name to the wrapper.
+		PreparePrivateDesktop: true,
 	})
 	if err != nil {
 		return err

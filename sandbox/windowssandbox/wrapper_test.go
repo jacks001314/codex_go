@@ -28,6 +28,7 @@ func TestCreateWindowsSandboxCommandArgsForPermissionProfile(t *testing.T) {
 		DenyReadPathsOverride:            []string{`C:\repo\.env`},
 		DenyWritePathsOverride:           []string{`C:\repo\readonly`},
 		CodexHome:                        `C:\Users\codex\.gcode`,
+		PrivateDesktopName:               testPrivateDesktopName,
 	})
 	if err != nil {
 		t.Fatalf("CreateWindowsSandboxCommandArgsForPermissionProfile() error = %v", err)
@@ -86,6 +87,7 @@ func TestCreateWindowsSandboxCommandArgsResolvesDenyReadPathsFromProfileLikeRust
 		PermissionProfile:   &profile,
 		WindowsSandboxLevel: WindowsSandboxLevelElevated,
 		CodexHome:           `C:\Users\codex\.gcode`,
+		PrivateDesktopName:  testPrivateDesktopName,
 	})
 	if err != nil {
 		t.Fatalf("CreateWindowsSandboxCommandArgsForPermissionProfile() error = %v", err)
@@ -129,6 +131,7 @@ func TestParseWindowsSandboxWrapperArgsRejectsRelativeCodexHome(t *testing.T) {
 		PermissionProfile:   &profile,
 		WindowsSandboxLevel: WindowsSandboxLevelRestrictedToken,
 		CodexHome:           `C:\Users\codex\.gcode`,
+		PrivateDesktopName:  testPrivateDesktopName,
 	})
 	if err != nil {
 		t.Fatalf("CreateWindowsSandboxCommandArgsForPermissionProfile() error = %v", err)

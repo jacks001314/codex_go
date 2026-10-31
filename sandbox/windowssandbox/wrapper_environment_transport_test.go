@@ -18,6 +18,7 @@ func TestWindowsSandboxWrapperUsesEnvironmentForLargePayloadLikeRust(t *testing.
 		PermissionProfile:   &profile,
 		WindowsSandboxLevel: WindowsSandboxLevelRestrictedToken,
 		CodexHome:           `C:\codex`,
+		PrivateDesktopName:  testPrivateDesktopName,
 	}
 	args, err := CreateWindowsSandboxCommandArgsForPermissionProfile(req)
 	if err != nil {

@@ -11872,13 +11872,15 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
     "sandbox/windowssandbox/desktop_windows.go SharedLegacyPrivateDesktopName caches the restricted token desktop in the calling process (Rust LaunchDesktop::shared_legacy_name); the 0xC0000142 USER32 failure is covered by TestLegacyDesktopLaunchesUser32ProcessesLikeRust.",
     "sandbox/windowssandbox/wrapper.go adds --windows-sandbox-private-desktop-name, requires a well-formed name when it is present, and wrapperCaptureRequest forwards it; sandbox/windowssandbox/lib.go and elevated_impl.go open the parent-owned desktop instead of creating one when the name is supplied.",
     "sandbox/windowssandbox/wrapper_desktop_windows.go PrepareWindowsSandboxPrivateDesktopName ports the caller-side selection for both the restricted-token (capability roots) and elevated (require_sandbox_account + capability SIDs, no ACL refresh) levels; execserver/fs_helper.go sets PreparePrivateDesktop so filesystem helpers stop owning short-lived desktops.",
-    "Deviation kept on purpose: Go also reuses RunWindowsSandboxWrapperRequest for the in-process `codex sandbox` launch, where the desktop cache already lives in the long-lived CLI, so a missing name falls back to local selection instead of failing the launch (no strict parse error as in Rust #44658).",
-    "Tests: TestWindowsSandboxWrapperCarriesPrivateDesktopNameLikeRust, TestWindowsSandboxWrapperRejectsInvalidPrivateDesktopNameLikeRust, TestPrivateDesktopOutlivesWrapperProcessLikeRust, TestWrapperRunsWithCallerOwnedDesktopLikeRust (go test ./sandbox/windowssandbox -count=1)."
+    "Round 1205 closes the deliberate deviation: ParseWindowsSandboxWrapperArgs now rejects a non-disabled wrapper command line without --windows-sandbox-private-desktop-name (Rust parse_windows_sandbox_wrapper_args requires it), and app.runWindowsSandboxPlan (codex sandbox) sets PreparePrivateDesktop so the long-lived CLI selects the caller-owned desktop and passes its name; execserver/fs_helper.go already opted in. The disabled level stays exempt because it runs the command directly without a desktop. Builder errors from desktop preparation still propagate to the launch path.",
+    "Round 1205 coverage: TestWindowsSandboxWrapperRequiresPrivateDesktopNameLikeRust (name-less sandboxed command line rejected, disabled level exempt); wrapper_test.go, wrapper_environment_transport_test.go and smoke_windows_test.go fixtures now carry a name or opt into selection.",
+    "Tests: TestWindowsSandboxWrapperCarriesPrivateDesktopNameLikeRust, TestWindowsSandboxWrapperRejectsInvalidPrivateDesktopNameLikeRust, TestPrivateDesktopOutlivesWrapperProcessLikeRust, TestWrapperRunsWithCallerOwnedDesktopLikeRust (go test ./sandbox/windowssandbox -count=1).",
+    "Round 1205 verified with go build ./..., go test ./sandbox/... -count=1, go test ./execserver -count=1 and go test ./parity -count=1. The app test binary currently fails to compile because of a parallel agent in-flight config.OrderedTable change (unrelated); go build ./... covers app production code."
    ]
   },
   {

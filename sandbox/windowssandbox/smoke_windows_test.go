@@ -81,13 +81,14 @@ func TestWindowsSandboxElevatedSmoke(t *testing.T) {
 	}
 	profile := coresandbox.WorkspaceWritePermissionProfile()
 	args, err := CreateWindowsSandboxCommandArgsForPermissionProfile(WindowsSandboxCommandArgsRequest{
-		PermissionProfile:   &profile,
-		WorkspaceRoots:      []string{cwd},
-		CodexHome:           codexHome,
-		CommandCWD:          cwd,
-		Env:                 windowsSandboxSmokeEnv(tmp),
-		Command:             windowsSandboxSmokeCommand("elevated-ok"),
-		WindowsSandboxLevel: WindowsSandboxLevelElevated,
+		PermissionProfile:     &profile,
+		WorkspaceRoots:        []string{cwd},
+		CodexHome:             codexHome,
+		CommandCWD:            cwd,
+		Env:                   windowsSandboxSmokeEnv(tmp),
+		Command:               windowsSandboxSmokeCommand("elevated-ok"),
+		WindowsSandboxLevel:   WindowsSandboxLevelElevated,
+		PreparePrivateDesktop: true,
 	})
 	if err != nil {
 		t.Fatalf("CreateWindowsSandboxCommandArgsForPermissionProfile() error = %v", err)

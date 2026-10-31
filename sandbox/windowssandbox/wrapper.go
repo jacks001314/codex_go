@@ -294,6 +294,13 @@ func ParseWindowsSandboxWrapperArgs(args []string) (*WindowsSandboxWrapperReques
 	if err := req.validateParsed(); err != nil {
 		return nil, err
 	}
+	// Rust #44658 parse_windows_sandbox_wrapper_args requires the caller-owned
+	// desktop name; a short-lived wrapper must never create its own desktop.
+	// Go keeps one carve-out: a disabled sandbox runs the command directly and
+	// never touches a desktop, so it needs no name.
+	if req.WindowsSandboxLevel != WindowsSandboxLevelDisabled && strings.TrimSpace(req.PrivateDesktopName) == "" {
+		return nil, fmt.Errorf("missing required %s", privateDesktopNameFlag)
+	}
 	return &WindowsSandboxWrapperRequest{WindowsSandboxCommandArgsRequest: req}, nil
 }
 
