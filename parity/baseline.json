@@ -1,13 +1,13 @@
 {
   "schemaVersion": 1,
   "frozenAt": "2026-10-31",
-  "plan": "update/plan_2026_10_31_round1193.md",
+  "plan": "update/plan_2026_10_31_round1194.md",
   "verified": {
-    "rustCommit": "cbe16d525c2d7362fc3d4726143288e932905daa",
+    "rustCommit": "67f0994b532b8740f14b5b738af7b7b2a915b1d6",
     "parityManifest": "parity.json"
   },
   "target": {
-    "rustCommit": "cbe16d525c2d7362fc3d4726143288e932905daa",
+    "rustCommit": "67f0994b532b8740f14b5b738af7b7b2a915b1d6",
     "rustBranch": "main",
     "goStartCommit": "5e25b91daebea89b54db643b2d70ee4c930f9cd7"
   },
@@ -37,7 +37,7 @@
     ]
   },
   "certificationBlockers": [
-    "Per-commit certification of the 3287 upstream commits in bd19459358f534ed1cae464ec13d56600aeb45f2..cbe16d525c2d7362fc3d4726143288e932905daa is in progress; parity/commits.json records every commit with its audit status (2655 complete, 574 not applicable, 42 audit_pending, 0 regression_pending, 9 partial, 7 blocked_precondition)",
+    "Per-commit certification of the 3309 upstream commits in bd19459358f534ed1cae464ec13d56600aeb45f2..67f0994b532b8740f14b5b738af7b7b2a915b1d6 is in progress; parity/commits.json records every commit with its audit status (2655 complete, 574 not applicable, 64 audit_pending, 0 regression_pending, 9 partial, 7 blocked_precondition)",
     "8 commits are blocked on architecture (local unified-exec routing for in-memory shell snapshots, Unix PTY shutdown, closed-agent navigation, diagnostic-report upload transport and slow-network resilience, TUI Super key, Windows MXC, native cloud conversation TUI, macOS Secure Enclave user verification)"
   ],
   "certificationReady": false
