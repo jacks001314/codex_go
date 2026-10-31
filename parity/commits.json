@@ -9876,9 +9876,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 4/14; needs review: SnapshotCredentialBrokerState, is_brokered_for, prepare_brokered_shell_snapshot_env, restore_and_disable_brokered_credentials, restore_and_disable_child_credentials"
+    "Protected capture runs inside tool/shell_snapshot_builder.go's brokeredSnapshotCaptureEnv: the child env keeps only broker-virtualized credential keys and drops unvirtualized provider keys plus every CODEX_NETWORK_PROXY_* broker marker, so a snapshot captured under credential brokerage never contains real secrets.",
+    "Brokered launches receive brokeredSnapshotLaunchEnv (dummy ..._BROKERED_VALUE_* copies, markers unset, original BASH_ENV/ENV/ZDOTDIR preserved) and ShellSnapshotFile.BrokeredEnv replays it; appserver/shell_snapshot.go only captures when the thread's prepared proxy is Ready, and the Ready-less prewarm path returns no snapshot like Rust.",
+    "tool/shell_executor.go rejects broker + shell_zsh_fork, restores the pre-virtualization environment for local PowerShell/Cmd launches via ManagedNetworkResolution.RestoreUnbrokeredEnvironment, and rejects a brokered POSIX launch that produced no protected snapshot (\"credential brokerage could not create a protected shell snapshot\").",
+    "Tests: go test ./tool -count=1; go test ./appserver -run 'TestShellSnapshot' -count=1. Residual: Rust's span-accurate text substitution is replaced by regex masking through network.MaskSnapshotText, and SnapshotCredentialBrokerState/CredentialBrokerEnvironment metadata is not modelled because Go has no equivalent state type."
    ]
   },
   {
@@ -10119,9 +10122,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 2/5; needs review: ShellSnapshotCache, config_revision, credential_broker_config_revision"
+    "Protected snapshots are cached per command shape: ShellSnapshotCacheKey appends a \"protected\" suffix from brokeredSnapshotKey (prepared broker keys plus login mode/permission profile/sandbox), so a protected capture is never served for an unprotected launch and vice versa.",
+    "The capture path builds a per-request temp snapshot and deletes it on every exit, and the validation run receives a read-only grant for that temp path through sandbox.PermissionProfileWithAdditionalPermissionsForConvention, mirroring Rust's snapshot_read_permissions instead of widening the caller's profile.",
+    "Tests: go test ./tool -run 'ShellSnapshot' -count=1; go test ./appserver -run 'TestShellSnapshot' -count=1. Residual: Rust's ShellSnapshotCache config_revision/credential_broker_config_revision are folded into the protected key suffix rather than a separate revision type."
    ]
   },
   {
@@ -10275,9 +10280,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 2/11; needs review: CapturedArray, ExportValue, brokered_credential_marker_env_keys, brokered_credential_value_env_keys, literal_word_bytes"
+    "network/snapshot_credentials.go adds CredentialMaskPair.Key, SnapshotCredentialEnvKeys, and SnapshotTextContainsCredential, which checks rendered capture text against real credential values and configured token patterns while holding the broker lock.",
+    "tool/shell_snapshot_builder.go masks rendered output with network.MaskSnapshotText and discards a protected capture when SnapshotCaptureRequest.CredentialTextUnsafe reports a residual credential, so replay never ships a snapshot that still contains a secret.",
+    "Tests: go test ./tool -run 'ShellSnapshot' -count=1 (protected capture masks real credentials and returns prepared keys; an unvirtualized credential is rejected). Residual: Rust's literal_word_bytes/CapturedArray/ExportValue span rewriting is emulated with regexp masking rather than AST-level substitution."
    ]
   },
   {
@@ -10431,9 +10438,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/3; needs review: prepare_child_environment, restore_fail_open_aliases"
+    "Credential pairs come from the configured provider list and are applied to both the capture environment (brokeredSnapshotCaptureEnv) and the prepared launch environment (brokeredSnapshotLaunchEnv), so providers configured beyond the default are virtualized in snapshots.",
+    "Fail-open aliases and unbrokered local shells are handled: ManagedNetworkResolution.RestoreUnbrokeredEnvironment restores real credentials and clears broker markers for PowerShell/Cmd, and tool/shell_executor.go refuses broker + shell_zsh_fork instead of silently capturing unvirtualized credentials.",
+    "Tests: go test ./tool -count=1 (broker+zsh_fork rejection, PowerShell unbrokered restore, brokered POSIX missing-snapshot rejection); go test ./network -count=1; go test ./appserver -run 'TestShellSnapshot' -count=1."
    ]
   },
   {
