@@ -33229,7 +33229,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_20.md:72: - `#55327`: superseded by `#55331`; Go already uses the invoking turn's"
+    "Round 1247: #55327 added the default-off subagent_thread_environments flag plus separate configured environment bindings; #55331 removed both inside the same Rust window, and the 67f0994b anchor only keeps the orphaned feature key in codex-rs/features/src/lib.rs:1618 without reading it. Go now implements the surviving #55331 semantics (inheriting the invoking step's environment snapshot, see inheritableEnvironmentSelections in appserver/environment_inheritance.go), so the superseded configured-binding layer has no carrier to port."
    ]
   },
   {
@@ -33251,10 +33251,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "plan_2026_10_20.md:72: - `#55327`: superseded by `#55331`; Go already uses the invoking turn's",
-    "plan_2026_10_20.md:77: - `#55331`: confirmed Go's spawn/resume path already inherits step environment"
+    "Round 1247: appserver/environment_inheritance.go inheritableEnvironmentSelections now always inherits the invoking step's ready, still-starting and thread-derived attachments and only drops a failed one; the configured-only mode that #55327 introduced is gone from the helper, from runtimeAgentController and from spawn (appserver/agent_controller.go). A spawned agent therefore inherits the invoking step's environment snapshot exactly as Rust #55331 specifies, and the leftover subagent_thread_environments key no longer narrows inheritance. Tests: appserver/environment_inheritance_test.go TestInheritableEnvironmentSelectionsLikeRust (temporary attachment inherited), TestRuntimeAgentControllerIgnoresRemovedEnvironmentInheritanceFeatureLikeRust (feature enabled in config.toml still inherits the step snapshot), TestRuntimeAgentControllerChildInheritsInheritableEnvironmentSelectionsLikeRust (child and grandchild keep the pending attachment), plus propagation and configuration-ownership tests in the same file. go test ./appserver -run 'AgentController|Spawn|Environment|Subagent'."
    ]
   },
   {
@@ -33414,7 +33413,8 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_20.md:135: - `#55375`: added the disabled-by-default `subagent_thread_environments`"
+    "plan_2026_10_20.md:135: - `#55375`: added the disabled-by-default `subagent_thread_environments`",
+    "Round 1247: superseded by #55331. The configured-only inheritance gate (and its read of the subagent_thread_environments feature in appserver/agent_controller.go) was removed so Go inherits the invoking step's environment snapshot unconditionally; the ledger keeps this commit complete for its own window, but its narrowed mode is no longer present at the anchor."
    ]
   },
   {
