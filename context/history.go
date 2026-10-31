@@ -41,6 +41,15 @@ type HistoryManager struct {
 	// otherwise valid review across them.
 	userMessageRevision uint64
 	tokenInfo           *TokenUsageInfo
+	// lastServerReportedUsageItemCount is the history boundary covered by the
+	// last usable usage report: items at or after it are estimated on top of the
+	// saved token count (Rust ContextManager last_server_reported_usage_item_count,
+	// #58404). Failed responses and spending-only updates leave it unchanged.
+	lastServerReportedUsageItemCount int
+	// lastModelOutputItemCount is the index just after the latest model output,
+	// including failed responses. Restored or rewritten history uses it as the
+	// approximate boundary.
+	lastModelOutputItemCount int
 	// referenceContextItem mirrors Rust's `ContextManager::reference_context_item`
 	// baseline: the persisted per-turn `TurnContextItem` (a JSON object) that the
 	// next real turn diffs against. Go has no typed `TurnContextItem` at this
@@ -79,6 +88,9 @@ func (m *HistoryManager) RecordItems(items ...HistoryItem) {
 			continue
 		}
 		m.items = append(m.items, cloneItem(item))
+		if IsModelGeneratedHistoryItem(&item) {
+			m.lastModelOutputItemCount = len(m.items)
+		}
 		if IsUserAuthorizationMessage(&item) {
 			m.userMessageRevision++
 		}
@@ -98,6 +110,7 @@ func (m *HistoryManager) Replace(items []HistoryItem) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.items = cloneItems(items)
+	m.resetUsageBoundaryLocked()
 	m.historyVersion++
 	m.userMessageRevision++
 }
@@ -110,6 +123,7 @@ func (m *HistoryManager) ReplaceCompacted(items []HistoryItem) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.items = cloneItems(items)
+	m.resetUsageBoundaryLocked()
 	m.historyVersion++
 }
 
@@ -136,6 +150,7 @@ func (m *HistoryManager) RemoveFirstItem() {
 	removed := m.items[0]
 	m.items = m.items[1:]
 	removeCorrespondingFor(&m.items, &removed)
+	m.resetUsageBoundaryLocked()
 	m.historyVersion++
 }
 
@@ -330,6 +345,122 @@ func (m *HistoryManager) TokenInfo() *TokenUsageInfo {
 		cloned.ModelContextWindow = &value
 	}
 	return &cloned
+}
+
+// UpdateTokenInfoWithBoundary records a sampling usage report together with the
+// history it covered (Rust ContextManager::update_token_info input_item_count,
+// #58404). Coverage is max(last model output, inputItemCount), so a response
+// with usable usage covers the request input even when it returns no output
+// items; anything at or after that index is estimated on top of this count.
+func (m *HistoryManager) UpdateTokenInfoWithBoundary(usage TokenUsage, contextWindow *int64, inputItemCount int) {
+	m.UpdateTokenInfo(usage, contextWindow)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	covered := clampUsageBoundary(inputItemCount, len(m.items))
+	if m.lastModelOutputItemCount > covered {
+		covered = clampUsageBoundary(m.lastModelOutputItemCount, len(m.items))
+	}
+	m.lastServerReportedUsageItemCount = covered
+}
+
+// SetUsageBoundary records a recomputed context count that covers coveredItemCount
+// items (Rust ContextManager::set_token_info_with_boundary). Local
+// re-estimation already charges every retained reasoning item, so callers pass
+// the current history length.
+func (m *HistoryManager) SetUsageBoundary(coveredItemCount int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.lastServerReportedUsageItemCount = clampUsageBoundary(coveredItemCount, len(m.items))
+}
+
+// ResetUsageBoundary re-derives the boundary after history was restored or
+// rewritten (Rust ContextManager::reset_last_usage_boundary): the latest model
+// output is the approximation, or the whole history when there is none.
+func (m *HistoryManager) ResetUsageBoundary() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.resetUsageBoundaryLocked()
+}
+
+// UsageBoundary returns the number of history items covered by the last usable
+// usage report.
+func (m *HistoryManager) UsageBoundary() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return clampUsageBoundary(m.lastServerReportedUsageItemCount, len(m.items))
+}
+
+// ItemsSinceLastUsage returns the items at or after the last usage boundary.
+// These are not reflected in the saved token count and must be estimated.
+func (m *HistoryManager) ItemsSinceLastUsage() []HistoryItem {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	boundary := clampUsageBoundary(m.lastServerReportedUsageItemCount, len(m.items))
+	if boundary >= len(m.items) {
+		return nil
+	}
+	return cloneItems(m.items[boundary:])
+}
+
+// EstimatedTokensSinceLastUsage sums token estimates for the items the last
+// usable usage report did not cover.
+func (m *HistoryManager) EstimatedTokensSinceLastUsage() int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	boundary := clampUsageBoundary(m.lastServerReportedUsageItemCount, len(m.items))
+	var total int64
+	for i := boundary; i < len(m.items); i++ {
+		total += EstimateItemTokens(&m.items[i])
+	}
+	return total
+}
+
+func (m *HistoryManager) resetUsageBoundaryLocked() {
+	m.lastModelOutputItemCount = 0
+	for i := range m.items {
+		if IsModelGeneratedHistoryItem(&m.items[i]) {
+			m.lastModelOutputItemCount = i + 1
+		}
+	}
+	if m.lastModelOutputItemCount > 0 {
+		m.lastServerReportedUsageItemCount = m.lastModelOutputItemCount
+		return
+	}
+	m.lastServerReportedUsageItemCount = len(m.items)
+}
+
+func clampUsageBoundary(boundary int, length int) int {
+	if boundary < 0 {
+		return 0
+	}
+	if boundary > length {
+		return length
+	}
+	return boundary
+}
+
+// IsModelGeneratedHistoryItem mirrors Rust is_model_generated_item for the
+// history view: assistant messages and model-produced call/reasoning items.
+func IsModelGeneratedHistoryItem(item *HistoryItem) bool {
+	if item == nil {
+		return false
+	}
+	switch item.Kind {
+	case eventmap.ResponseReasoning, eventmap.ResponseWebSearchCall, eventmap.ResponseImageGeneration:
+		return true
+	case eventmap.ResponseMessage:
+		return strings.EqualFold(strings.TrimSpace(item.Role), "assistant")
+	case eventmap.ResponseOther:
+		// The lossy history view keeps model-emitted call items as Other with the
+		// raw type in WebSearchAction. Rust's ResponseItem::Other is local, so
+		// unknown Other items stay non-generated (is_model_generated_item).
+		switch item.WebSearchAction {
+		case "function_call", "custom_tool_call", "tool_search_call", "local_shell_call",
+			"compaction", "context_compaction":
+			return true
+		}
+	}
+	return false
 }
 
 func IsAPIMessage(item *HistoryItem) bool {

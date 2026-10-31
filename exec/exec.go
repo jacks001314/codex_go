@@ -5808,8 +5808,12 @@ func execCompactStatus(record *session.Record, modelID string, cfg *config.Confi
 		if value, ok := execStoredReasoningIncluded(record.Metadata.Extra); ok {
 			serverReasoningIncluded = value
 		}
-		active = int64(compact.EstimateActiveContextTokensWithServerReasoning(
-			execCompactItemsFromSession(record.Items), int(active), serverReasoningIncluded))
+		// Persisted history does not save the live usage boundary (Rust #58404),
+		// so pass -1 to use reset_last_usage_boundary: everything after the
+		// latest model-generated item is estimated. Failed or usage-less output
+		// therefore stays in the estimate instead of silently disappearing.
+		active = int64(compact.EstimateActiveContextTokensWithUsageBoundary(
+			execCompactItemsFromSession(record.Items), int(active), serverReasoningIncluded, -1))
 	}
 	status := compact.Evaluate(policy, int(active))
 	if execStoredContextWindowRequired(record.Metadata.Extra) {

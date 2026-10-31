@@ -1463,12 +1463,38 @@ func EstimateActiveContextTokens(items []Item, lastTotalTokens int) int {
 // the server already accounted for reasoning, its total includes every retained
 // reasoning item and re-estimating them would double count (Rust #55991).
 func EstimateActiveContextTokensWithServerReasoning(items []Item, lastTotalTokens int, serverReasoningIncluded bool) int {
+	return EstimateActiveContextTokensWithUsageBoundary(items, lastTotalTokens, serverReasoningIncluded, -1)
+}
+
+// ItemsSinceLastUsage mirrors Rust history::items_since_last_usage: history at
+// or after the boundary covered by the last usable usage report. A negative
+// boundary means persisted history carried no boundary, so the restored-history
+// approximation (Rust reset_last_usage_boundary) is used instead: everything
+// after the latest model-generated item, or nothing when the model never
+// produced an item.
+func ItemsSinceLastUsage(items []Item, boundary int) []Item {
+	if boundary < 0 {
+		return ItemsAfterLastModelGeneratedItem(items)
+	}
+	if boundary >= len(items) {
+		return nil
+	}
+	return append([]Item(nil), items[boundary:]...)
+}
+
+// EstimateActiveContextTokensWithUsageBoundary mirrors Rust
+// Session::get_total_token_usage after #58404: only items recorded after the
+// last usable usage report are estimated, and reasoning before that boundary
+// was already covered. Failed or usage-less responses keep their retained
+// output in the estimate until a later usable report covers it. Pass a
+// negative boundary for persisted history that did not save one.
+func EstimateActiveContextTokensWithUsageBoundary(items []Item, lastTotalTokens int, serverReasoningIncluded bool, boundary int) int {
 	if lastTotalTokens < 0 {
 		lastTotalTokens = 0
 	}
-	total := lastTotalTokens + EstimateTokens(ItemsAfterLastModelGeneratedItem(items))
+	total := lastTotalTokens + EstimateTokens(ItemsSinceLastUsage(items, boundary))
 	if !serverReasoningIncluded {
-		total += EstimateNonLastReasoningTokens(items)
+		total += EstimateNonLastReasoningTokensSinceUsage(items, boundary)
 	}
 	return total
 }
@@ -1478,6 +1504,15 @@ func EstimateActiveContextTokensWithServerReasoning(items []Item, lastTotalToken
 // the most recent user-turn boundary are not reflected in the last
 // server-reported total unless the server says it includes reasoning.
 func EstimateNonLastReasoningTokens(items []Item) int {
+	return EstimateNonLastReasoningTokensSinceUsage(items, -1)
+}
+
+// EstimateNonLastReasoningTokensSinceUsage mirrors Rust
+// History::get_non_last_reasoning_items_tokens after #58404: reasoning at or
+// after the usage boundary is charged by the trailing-item estimate, so it is
+// excluded here to avoid double counting. A negative boundary falls back to the
+// whole pre-turn range (restored-history approximation).
+func EstimateNonLastReasoningTokensSinceUsage(items []Item, boundary int) int {
 	lastBoundary := -1
 	for i := range items {
 		if compactItemIsUserTurnBoundary(&items[i]) {
@@ -1486,6 +1521,9 @@ func EstimateNonLastReasoningTokens(items []Item) int {
 	}
 	if lastBoundary <= 0 {
 		return 0
+	}
+	if boundary >= 0 && boundary < lastBoundary {
+		lastBoundary = boundary
 	}
 	total := 0
 	for i := 0; i < lastBoundary; i++ {
