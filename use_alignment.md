@@ -1273,18 +1273,29 @@ one-off captures.
      and a boolean long flag no longer eats the following token while that
      block is built (`exec review --uncommitted -m x --bogus` echoes
      `--uncommitted --model <MODEL>`).
+   - `reorderUsageOptionRun` rebuilds the option run clap already listed in argv
+     order, so the exec family echoes the collected global `--enable`/`--disable`
+     where the user typed them: `exec resume --enable f --last --bogus` prints
+     `--enable <FEATURE> --last [SESSION_ID] [PROMPT]` and the reverse order
+     keeps `--last --enable <FEATURE>`. A block whose required options argv never
+     repeated (`exec-server forward`) still appends at the end.
    Evidence: the whole 0.166 option surface - 68 command paths x every declared
    flag with a bad value plus a trailing `--bogus` (`out/r34-flag-surface.txt`,
    497/497 byte-identical) - and the 78 cases this round fixed
    (`out/round34-fixed.txt`, 78/78), plus 400+ round 29-33 regression cases at
-   0 diffs. `go test ./cli ./sandbox ./applypatch ./prompt ./review ./cmd/...
-   ./tcptunnel` passes, with `TestGlobalOptionSurfaceLikeRust` (17
-   Rust-captured diagnostics) and `TestExecReviewAcceptsGlobalOptionsLikeRust`
-   pinning the new surface; `go test -vet=off ./app` keeps only the known
-   baselines.
+   0 diffs and 16 live `--enable`/`--disable` ordering cases
+   (`out/round35-enable-order.txt`, 16/16). `go test ./cli ./sandbox
+   ./applypatch ./prompt ./review ./cmd/... ./tcptunnel` passes, with
+   `TestGlobalOptionSurfaceLikeRust` (20 Rust-captured diagnostics) and
+   `TestExecReviewAcceptsGlobalOptionsLikeRust` pinning the new surface;
+   `go test -vet=off ./app` keeps only the known baselines.
 
 ## Verification
 
+- The exec family echoes the global `--enable`/`--disable` in argv order:
+  `out/round35-enable-order.txt` covers 16 orderings (both directions, the
+  `--image` merge, `--disable`, `exec review`/`exec fork`, `--las` with a
+  suggestion and `exec-server forward`'s required options) against 0.166.
 - The global option surface matches Rust 0.166: `out/r34-flag-surface.txt`
   walks 68 command paths and probes every declared value flag with a bad value,
   a bare flag and a trailing `--bogus` (497 cases, 497 identical), and
@@ -1620,10 +1631,8 @@ one-off captures.
   - clap's flag did-you-mean now covers the whole command tree (entries 46 and
     47); see the dedicated Still open bullet for the two remaining details.
   - shared options inside a subcommand (entry 37): `--enable`/`--disable` are
-    accepted everywhere and rendered in the usage block; since entry 49 the
-    only ordering gap left is `exec resume --last --enable f --bogus`, where Go
-    prints `--last [SESSION_ID] --enable <FEATURE> [PROMPT]` and Rust keeps the
-    options together (`--last --enable <FEATURE> [SESSION_ID] [PROMPT]`). The
+    accepted everywhere and now echoed in argv order, including the exec family
+    (entry 49, `reorderUsageOptionRun`). The
     pending-value order is aligned since entry 48 (`codex mcp get -c -x1`
     reports `unexpected argument '-x' found`), and `codex review --config a=b`
     keeps working through the subcommand parser's own `-c` handling, which

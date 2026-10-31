@@ -654,6 +654,7 @@ func decorateSubcommandClapUsage(command Command, err error, args []string) erro
 	if usageErr.Suggested != "" {
 		used = append(used, usageErr.Suggested)
 	}
+	leaf := clapEffectiveCommand(string(command), args)
 	if strings.HasPrefix(usageErr.Usage, "Usage: codex queue ") {
 		if strings.HasPrefix(usageErr.Message, "unexpected argument '") && !clapLooksLikeOption(stopAt) {
 			// clap keeps the plain table block for a stray positional.
@@ -670,7 +671,7 @@ func decorateSubcommandClapUsage(command Command, err error, args []string) erro
 	if len(used) == 0 {
 		return err
 	}
-	usageErr.Usage = usageWithUsedOptions(usageErr.Usage, used)
+	usageErr.Usage = usageWithUsedOptions(usageErr.Usage, used, leaf)
 	return err
 }
 
@@ -864,10 +865,81 @@ func clapUsageOptionToken(command, arg string) (string, bool) {
 	return name, false
 }
 
+// reorderUsageOptionRun rebuilds the option run a usage block already lists so
+// the options keep clap's argv order: `exec resume --enable f --last --bogus`
+// prints `--enable <FEATURE> --last` even though the subcommand parser only saw
+// the slice left after clap's global --enable was collected. It only fires when
+// every option in the run is one of the used tokens, so a block that lists
+// required options argv never repeated stays untouched.
+func reorderUsageOptionRun(usage string, used, missing []string) (string, bool) {
+	fields := strings.Fields(usage)
+	start := -1
+	for i, field := range fields {
+		if strings.HasPrefix(field, "-") && field != "--" {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		return usage, false
+	}
+	usedSet := make(map[string]bool, len(used))
+	for _, token := range used {
+		usedSet[token] = true
+	}
+	runTokens := make([]string, 0, 4)
+	end := start
+	for end < len(fields) {
+		field := fields[end]
+		if !strings.HasPrefix(field, "-") || field == "--" {
+			break
+		}
+		token := field
+		end++
+		if end < len(fields) && strings.HasPrefix(fields[end], "<") {
+			token += " " + fields[end]
+			end++
+		}
+		if !usedSet[token] {
+			return usage, false
+		}
+		runTokens = append(runTokens, token)
+	}
+	if len(runTokens) == 0 {
+		return usage, false
+	}
+	keep := make(map[string]bool, len(runTokens)+len(missing))
+	for _, token := range runTokens {
+		keep[token] = true
+	}
+	for _, token := range missing {
+		keep[token] = true
+	}
+	rebuilt := make([]string, 0, len(used))
+	seen := make(map[string]bool, len(used))
+	for _, token := range used {
+		if !keep[token] || seen[token] {
+			continue
+		}
+		seen[token] = true
+		rebuilt = append(rebuilt, token)
+	}
+	for _, token := range runTokens {
+		if !seen[token] {
+			return usage, false
+		}
+	}
+	out := make([]string, 0, len(fields))
+	out = append(out, fields[:start]...)
+	out = append(out, rebuilt...)
+	out = append(out, fields[end:]...)
+	return strings.Join(out, " "), true
+}
+
 // usageWithUsedOptions inserts clap's echoed options into a usage block: the
 // [OPTIONS] placeholder is replaced when present, otherwise the options go in
 // front of the first positional (or at the end for option-only commands).
-func usageWithUsedOptions(usage string, used []string) string {
+func usageWithUsedOptions(usage string, used []string, command string) string {
 	// clap renders the optional subcommand placeholder only in the static page:
 	// its smart usage lists the used arguments and the required ones.
 	if fields := strings.Fields(usage); len(fields) > 0 {
@@ -879,6 +951,15 @@ func usageWithUsedOptions(usage string, used []string) string {
 			kept = append(kept, field)
 		}
 		usage = strings.Join(kept, " ")
+	}
+	missing := make([]string, 0, len(used))
+	for _, token := range used {
+		if !strings.Contains(usage, token) {
+			missing = append(missing, token)
+		}
+	}
+	if reordered, ok := reorderUsageOptionRun(usage, used, missing); ok {
+		usage = reordered
 	}
 	echoed := make([]string, 0, len(used))
 	for _, token := range used {

@@ -103,6 +103,24 @@ func TestGlobalOptionSurfaceLikeRust(t *testing.T) {
 			message: "invalid value 'dangr' for '--sandbox <SANDBOX_MODE>'\n  [possible values: read-only, workspace-write, danger-full-access]\n\n  tip: a similar value exists: 'danger-full-access'",
 		},
 		{
+			name:    "exec resume keeps argv order",
+			args:    []string{"exec", "resume", "--enable", "f", "--last", "--bogus"},
+			message: "unexpected argument '--bogus' found\n\n  tip: to pass '--bogus' as a value, use '-- --bogus'",
+			usage:   "Usage: codex exec resume --enable <FEATURE> --last [SESSION_ID] [PROMPT]",
+		},
+		{
+			name:    "exec resume echoes enable after last",
+			args:    []string{"exec", "resume", "--last", "--enable", "f", "--bogus"},
+			message: "unexpected argument '--bogus' found\n\n  tip: to pass '--bogus' as a value, use '-- --bogus'",
+			usage:   "Usage: codex exec resume --last --enable <FEATURE> [SESSION_ID] [PROMPT]",
+		},
+		{
+			name:    "exec resume merges image into the run",
+			args:    []string{"exec", "resume", "--last", "--enable", "f", "--image", "a.png", "--bogus"},
+			message: "unexpected argument '--bogus' found\n\n  tip: to pass '--bogus' as a value, use '-- --bogus'",
+			usage:   "Usage: codex exec resume --last --enable <FEATURE> --image <FILE> [SESSION_ID] [PROMPT]",
+		},
+		{
 			name:    "distant sandbox mode has no suggestion",
 			args:    []string{"--sandbox", "bogs"},
 			message: "invalid value 'bogs' for '--sandbox <SANDBOX_MODE>'\n  [possible values: read-only, workspace-write, danger-full-access]",
