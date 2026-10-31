@@ -50,6 +50,12 @@ func unexpectedArgumentError(arg, usage string) error {
 	}
 }
 
+// unexpectedPositionalError is clap's diagnostic when a second positional hits
+// an already-satisfied slot: unlike an unknown flag there is no `--` tip.
+func unexpectedPositionalError(arg, usage string) error {
+	return &UsageError{Message: "unexpected argument '" + arg + "' found", Usage: usage}
+}
+
 func unrecognizedSubcommandError(name, usage string) error {
 	return &UsageError{Message: "unrecognized subcommand '" + name + "'", Usage: usage}
 }

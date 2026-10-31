@@ -2753,20 +2753,31 @@ func loadOutputSchema(path string) (any, error) {
 func ioErrorMessage(err error) error {
 	var pathErr *os.PathError
 	if errors.As(err, &pathErr) {
-		return pathErr.Err
+		err = pathErr.Err
+	}
+	// Rust prints io::Error, so the platform text carries the " (os error N)"
+	// suffix instead of Go's syscall wording.
+	if text, ok := rustOSErrorMessage(err); ok {
+		return errors.New(text)
 	}
 	return err
 }
 
-func baseInstructionsForConfig(cfg *config.Config) (string, error) {
+func baseInstructionsForConfig(cfg *config.Config, cwd string) (string, error) {
 	if path := stringConfigValue(cfg, "model_instructions_file"); path != "" {
-		data, err := os.ReadFile(path)
+		// Rust resolves the path against the effective cwd and prints the
+		// absolute path in both of its errors.
+		resolved := path
+		if !filepath.IsAbs(resolved) && strings.TrimSpace(cwd) != "" {
+			resolved = filepath.Clean(filepath.Join(cwd, resolved))
+		}
+		data, err := os.ReadFile(resolved)
 		if err != nil {
-			return "", fmt.Errorf("failed to read model instructions file %s: %w", path, err)
+			return "", fmt.Errorf("failed to read model instructions file %s: %w", resolved, ioErrorMessage(err))
 		}
 		text := strings.TrimSpace(string(data))
 		if text == "" {
-			return "", fmt.Errorf("model instructions file is empty: %s", path)
+			return "", fmt.Errorf("model instructions file is empty: %s", resolved)
 		}
 		return text, nil
 	}
@@ -2777,7 +2788,7 @@ func baseInstructionsForRequest(req *Request, cfg *config.Config) (string, error
 	if req != nil && req.Exec.Subcommand == "review" {
 		return review.ReviewPrompt, nil
 	}
-	return baseInstructionsForConfig(cfg)
+	return baseInstructionsForConfig(cfg, requestCWD(req))
 }
 
 // execPromptCacheKey applies the run's prompt-cache-key policy (#55587). An

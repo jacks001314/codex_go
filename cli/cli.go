@@ -939,7 +939,7 @@ func parseRoot(args []string, root *RootOptions) ([]string, error) {
 	var rest []string
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
-		if handled, err := parseSharedOption(args, &i, &root.Shared); err != nil {
+		if handled, err := parseSharedOptionVariadicImages(args, &i, &root.Shared); err != nil {
 			return nil, err
 		} else if handled {
 			continue
@@ -1021,19 +1021,28 @@ func parseRoot(args []string, root *RootOptions) ([]string, error) {
 func parseExec(args []string, exec *ExecOptions) error {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
-		if handled, err := parseSharedOption(args, &i, &exec.Shared); err != nil {
+		if handled, err := parseSharedOptionVariadicImages(args, &i, &exec.Shared); err != nil {
 			return err
 		} else if handled {
 			continue
 		}
 		if arg == "--" {
-			exec.SubArgs = append(exec.SubArgs, args[i+1:]...)
+			// clap still binds one PROMPT after `--` and rejects the rest.
+			for _, candidate := range args[i+1:] {
+				if exec.Prompt == "" {
+					exec.Prompt = candidate
+					continue
+				}
+				return unexpectedPositionalError(candidate, execUsageText)
+			}
 			return nil
 		}
 		switch {
 		case arg == "-":
+			if exec.Prompt != "" {
+				return unexpectedPositionalError(arg, execUsageText)
+			}
 			exec.Prompt = "-"
-			return nil
 		case arg == "--help":
 			exec.Help = &ExecHelpRequest{Kind: ExecHelpExec}
 			return nil
@@ -1043,7 +1052,7 @@ func parseExec(args []string, exec *ExecOptions) error {
 		case arg == "-V" || arg == "--version":
 			exec.Help = &ExecHelpRequest{Version: true}
 			return nil
-		case arg == "help":
+		case arg == "help" && exec.Prompt == "":
 			request := &ExecHelpRequest{Kind: ExecHelpExec}
 			if i+1 < len(args) {
 				kind, ok := ExecHelpKindForSubcommand(args[i+1])
@@ -1054,13 +1063,13 @@ func parseExec(args []string, exec *ExecOptions) error {
 			}
 			exec.Help = request
 			return nil
-		case arg == "resume":
+		case arg == "resume" && exec.Prompt == "":
 			exec.Subcommand = arg
 			return parseExecResume(args[i+1:], exec)
-		case arg == "fork":
+		case arg == "fork" && exec.Prompt == "":
 			exec.Subcommand = arg
 			return parseExecFork(args[i+1:], exec)
-		case arg == "review":
+		case arg == "review" && exec.Prompt == "":
 			exec.Subcommand = arg
 			return parseReview(args[i+1:], &exec.Review, exec)
 		case arg == "--strict-config":
@@ -1140,8 +1149,13 @@ func parseExec(args []string, exec *ExecOptions) error {
 		case strings.HasPrefix(arg, "-"):
 			return unexpectedArgumentError(arg, execUsageText)
 		default:
-			exec.Prompt = strings.Join(args[i:], " ")
-			return nil
+			// Rust declares a single PROMPT positional, so a second positional
+			// is a clap "unexpected argument" diagnostic instead of more prompt
+			// text. Flags may still follow the prompt.
+			if exec.Prompt != "" {
+				return unexpectedPositionalError(arg, execUsageText)
+			}
+			exec.Prompt = arg
 		}
 	}
 	return nil
@@ -3958,6 +3972,18 @@ func parseDebug(args []string, debug *DebugOptions) error {
 }
 
 func parseSharedOption(args []string, i *int, shared *SharedOptions) (bool, error) {
+	return parseSharedOptionWithImages(args, i, shared, false)
+}
+
+// parseSharedOptionVariadicImages mirrors Rust's root/exec `--image`, which
+// declares num_args = 1.. and therefore consumes every following non-flag
+// argument; `exec resume`/`exec fork` declare a single value and keep using
+// parseSharedOption.
+func parseSharedOptionVariadicImages(args []string, i *int, shared *SharedOptions) (bool, error) {
+	return parseSharedOptionWithImages(args, i, shared, true)
+}
+
+func parseSharedOptionWithImages(args []string, i *int, shared *SharedOptions, variadicImages bool) (bool, error) {
 	arg := args[*i]
 	switch {
 	case arg == "--worktree":
@@ -3967,6 +3993,19 @@ func parseSharedOption(args []string, i *int, shared *SharedOptions) (bool, erro
 		shared.Worktree = false
 		return true, nil
 	case arg == "--image" || arg == "-i":
+		if variadicImages {
+			values, next, err := requireVariadicValues(args, *i, arg)
+			if err != nil {
+				return false, err
+			}
+			for _, value := range values {
+				shared.Images = append(shared.Images, splitComma(value)...)
+			}
+			// The loop advances once more after a handled option, so point at the
+			// last consumed value rather than at the next flag.
+			*i = next - 1
+			return true, nil
+		}
 		value, next, err := requireValue(args, *i, arg)
 		if err != nil {
 			return false, err
@@ -3975,7 +4014,22 @@ func parseSharedOption(args []string, i *int, shared *SharedOptions) (bool, erro
 		*i = next
 		return true, nil
 	case strings.HasPrefix(arg, "--image="):
-		shared.Images = append(shared.Images, splitComma(strings.TrimPrefix(arg, "--image="))...)
+		value := strings.TrimPrefix(arg, "--image=")
+		images := splitComma(value)
+		if len(images) == 0 {
+			return false, missingImageValueError()
+		}
+		shared.Images = append(shared.Images, images...)
+		if variadicImages {
+			values, next, err := requireVariadicValuesFrom(args, *i+1, arg)
+			if err != nil {
+				return false, err
+			}
+			for _, extra := range values {
+				shared.Images = append(shared.Images, splitComma(extra)...)
+			}
+			*i = next - 1
+		}
 		return true, nil
 	case arg == "--model" || arg == "-m":
 		value, next, err := requireValue(args, *i, arg)
@@ -4171,6 +4225,36 @@ func requireValue(args []string, i int, flag string) (string, int, error) {
 		return "", i, fmt.Errorf("%s requires a value", flag)
 	}
 	return args[i+1], i + 1, nil
+}
+
+// missingImageValueError mirrors clap's diagnostic for `--image`, whose
+// num_args = 1.. renders the value name with a trailing ellipsis.
+func missingImageValueError() error {
+	return &UsageError{Message: "a value is required for '--image <FILE>...' but none was supplied"}
+}
+
+// requireVariadicValues consumes clap's num_args = 1.. values: every argument
+// after the flag that does not start a new option (and until `--`).
+func requireVariadicValues(args []string, i int, flag string) ([]string, int, error) {
+	values, next, err := requireVariadicValuesFrom(args, i+1, flag)
+	if err != nil || len(values) == 0 {
+		return nil, i, missingImageValueError()
+	}
+	return values, next, nil
+}
+
+func requireVariadicValuesFrom(args []string, start int, flag string) ([]string, int, error) {
+	var values []string
+	next := start
+	for next < len(args) {
+		candidate := args[next]
+		if candidate == "--" || (len(candidate) > 1 && strings.HasPrefix(candidate, "-")) {
+			break
+		}
+		values = append(values, candidate)
+		next++
+	}
+	return values, next, nil
 }
 
 func splitComma(value string) []string {

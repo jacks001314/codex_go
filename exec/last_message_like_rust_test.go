@@ -117,8 +117,9 @@ func TestWriteHumanFinalMessageTerminalPrintsUnrenderedReply(t *testing.T) {
 	}
 }
 
-// Rust's io::Error Display carries only the reason, so the shared path prefix
-// printed by the caller must not be duplicated.
+// Rust's io::Error Display carries only the reason plus " (os error N)", so the
+// shared path prefix printed by the caller must not be duplicated and the text
+// must not fall back to Go's syscall wording.
 func TestIOErrorMessageDropsPathFromPathError(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "missing.txt")
 	_, err := os.ReadFile(path)
@@ -129,8 +130,14 @@ func TestIOErrorMessageDropsPathFromPathError(t *testing.T) {
 	if strings.Contains(message, path) || strings.Contains(message, "missing.txt") {
 		t.Fatalf("ioErrorMessage = %q, want the path stripped", message)
 	}
+	if !strings.HasSuffix(message, " (os error 2)") {
+		t.Fatalf("ioErrorMessage = %q, want the os error suffix", message)
+	}
 	var pathErr *os.PathError
-	if !errors.As(err, &pathErr) || message != pathErr.Err.Error() {
-		t.Fatalf("ioErrorMessage = %q, want %q", message, pathErr.Err)
+	if !errors.As(err, &pathErr) {
+		t.Fatalf("expected a *os.PathError, got %v", err)
+	}
+	if text, ok := rustOSErrorMessage(pathErr.Err); !ok || message != text {
+		t.Fatalf("ioErrorMessage = %q, want %q", message, text)
 	}
 }
