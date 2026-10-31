@@ -7656,9 +7656,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "Partial symbol coverage 1/3; needs review: GuardianApprovalReviewer, requires_sync_for_compaction"
+    "Rust 3fde89f628 adds ext/guardian-v2/src/async_scorer/approval.rs and registers a dedicated GuardianApprovalReviewer contributor before the async-scorer contributor so approval routing keeps working when the async scorer fails to start; it reuses cached evidence (initial computer-use allowance, serving assessment), asks the user when automatic review does not apply, and otherwise falls back to a synchronous assessment with the review reason.",
+    "Go has no extension registry and no async scorer: appserver/guardian_reviewer.go is one synchronous reviewer whose fast paths (fullAccess, guardianInitialCUAExecution, servingAssessment with ServingAuthorization) return cached decisions without waiting for a fresh score, and approval routing is decided before review by RuntimeRouter.approvalsReviewerForTurn plus state.Reviewer.RoutesToGuardian (appserver/runtime_router.go:20174), so there is no scorer startup that can fail and no contributor ordering to preserve.",
+    "requires_sync_for_compaction only widened from private to pub(super) for the new sibling module; Go has no async sampling path that consults it, and no exported symbol was added."
    ]
   },
   {
@@ -10751,9 +10753,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 9/33; needs review: GuardianReviewForkSnapshot, GuardianReviewSession, GuardianReviewSessionHost, GuardianReviewSessionManager, GuardianReviewSessionReuseKey"
+    "Rust 2617ed2e1c moves the synchronous review loop, outcome mapping, deadline helpers and the reviewer session pool into codex-guardian-reviewer; the pool owns prewarming, session reuse, concurrent forks, invalidation and shutdown.",
+    "Go now mirrors the pool: modelGuardianReviewer keeps one guardianSessionRunner per thread (sessionFor in appserver/guardian_reviewer.go) instead of a single shared runner, so concurrently forked threads no longer continue each other's response chain. Startup prewarm lives on a trunk session that the first thread adopts (takePrewarm/adoptPrewarm) and later threads start fresh.",
+    "Invalidation still happens on a Node REPL policy change, parent compaction checkpoint reuse, context-window rollover (RolloverForContext) and destructive parent history reset (resetGuardianAfterParentHistoryReset now targets the thread's session). Go's reviewer lifetime is the appserver process, so there is no separate pool shutdown hook to port.",
+    "Verification: TestGuardianReviewerKeepsPerThreadSessionsLikeRust and TestGuardianReviewerPrewarmHandsOffToFirstThreadLikeRust (appserver/guardian_reviewer_pool_like_rust_test.go) plus go test ./appserver -run Guardian -count=1 and go test -race ./appserver -run GuardianReviewerKeepsPerThreadSessions|GuardianReviewerPrewarmHandsOff -count=1."
    ]
   },
   {

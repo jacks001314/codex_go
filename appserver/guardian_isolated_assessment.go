@@ -143,13 +143,15 @@ func (r *modelGuardianReviewer) AssessIsolated(ctx context.Context, input guardi
 		request.PermissionProfile = r.permissionProfile(threadID, turnID)
 	}
 	var response *model.AgentResponse
-	if isolated, ok := r.agent.(interface {
+	isolated, isolatedOK := r.agent.(interface {
 		RunIsolated(context.Context, *model.AgentRequest) (*model.AgentResponse, error)
-	}); ok {
-		response, err = isolated.RunIsolated(reviewCtx, request)
-	} else {
-		response, err = r.agent.Run(reviewCtx, request)
+	})
+	if !isolatedOK {
+		// A plain agent gets a throwaway runner so the isolated review neither
+		// reads nor replaces a reusable thread session (Rust #44252/#57522).
+		isolated = &guardianSessionRunner{agent: r.agent}
 	}
+	response, err = isolated.RunIsolated(reviewCtx, request)
 	// A cancelled or expired review is never reported as an assessment.
 	if waitErr := reviewCtx.Err(); waitErr != nil {
 		return nil, waitErr

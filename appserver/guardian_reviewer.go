@@ -156,7 +156,14 @@ func guardianReviewPlanWithOrigin(plan guardianReviewPlan, origin *guardianRevie
 }
 
 type modelGuardianReviewer struct {
-	agent         model.AgentRunner
+	agent model.AgentRunner
+	// sessionsMu guards sessions, the per-thread reviewer sessions. Rust
+	// #44252 moves review orchestration into a ReviewerPool whose reuse key
+	// keeps concurrently forked threads on separate response chains; Go keeps
+	// one reusable session per thread so a review from one thread never
+	// continues another thread's reviewer conversation.
+	sessionsMu    sync.Mutex
+	sessions      map[string]*guardianSessionRunner
 	store         *state.ReviewStore
 	breaker       *state.CircuitBreaker
 	scoreMu       sync.Mutex
@@ -761,6 +768,35 @@ func (r *guardianSessionRunner) Prewarm(ctx context.Context) error {
 	return err
 }
 
+// takePrewarm hands the prewarmed trunk response to the first thread-owned
+// reviewer session (Rust #44252 pool prewarm). The trunk keeps the response for
+// a review that uses the trunk key directly, but only one session reports it as
+// the after-prewarm continuation.
+func (r *guardianSessionRunner) takePrewarm() (string, bool) {
+	if r == nil {
+		return "", false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.previousFromPrewarm || strings.TrimSpace(r.previous) == "" {
+		return "", false
+	}
+	r.previousFromPrewarm = false
+	return r.previous, true
+}
+
+// adoptPrewarm starts a new thread-owned session from the prewarmed response so
+// its first review continues the trunk instead of opening an unrelated chain.
+func (r *guardianSessionRunner) adoptPrewarm(previous string) {
+	if r == nil || strings.TrimSpace(previous) == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.previous = strings.TrimSpace(previous)
+	r.previousFromPrewarm = true
+}
+
 func (r *guardianSessionRunner) Run(ctx context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
 	if r == nil || r.agent == nil {
 		return nil, errors.New("guardian session runner is unavailable")
@@ -928,18 +964,55 @@ func newModelGuardianReviewer(agent model.AgentRunner) GuardianReviewer {
 		return nil
 	}
 	return &modelGuardianReviewer{
-		agent: &guardianSessionRunner{agent: agent}, store: state.NewReviewStore(),
+		agent: agent, store: state.NewReviewStore(), sessions: map[string]*guardianSessionRunner{},
 		breaker: state.NewCircuitBreaker(), scoreProgress: map[string]*guardianScoreProgress{},
 		maxToolCallLag: defaultGuardianMaxToolCallLag, timeout: state.ReviewTimeout,
 	}
 }
 
 func (r *modelGuardianReviewer) Prewarm(ctx context.Context) error {
-	session, ok := r.agent.(*guardianSessionRunner)
-	if !ok {
+	if r == nil || r.agent == nil {
 		return nil
 	}
-	return session.Prewarm(ctx)
+	return r.sessionFor(guardianReviewerTrunkSession).Prewarm(ctx)
+}
+
+// guardianReviewerTrunkSession is the session that receives startup prewarming
+// (Rust #44252's prewarmed pool trunk). The first thread-owned review adopts it
+// and later threads start their own chains.
+const guardianReviewerTrunkSession = ""
+
+// sessionFor returns the reusable reviewer session for one thread. A reviewer
+// built around an explicit session runner keeps sharing it; a reviewer built
+// from a plain agent gives every thread its own session, so concurrently forked
+// threads cannot continue each other's response chain (Rust #44252
+// ReviewerPool).
+func (r *modelGuardianReviewer) sessionFor(threadID string) *guardianSessionRunner {
+	if r == nil || r.agent == nil {
+		return nil
+	}
+	if runner, ok := r.agent.(*guardianSessionRunner); ok {
+		return runner
+	}
+	key := strings.TrimSpace(threadID)
+	r.sessionsMu.Lock()
+	defer r.sessionsMu.Unlock()
+	if r.sessions == nil {
+		r.sessions = map[string]*guardianSessionRunner{}
+	}
+	if session := r.sessions[key]; session != nil {
+		return session
+	}
+	session := &guardianSessionRunner{agent: r.agent}
+	if key != guardianReviewerTrunkSession {
+		if trunk := r.sessions[guardianReviewerTrunkSession]; trunk != nil {
+			if previous, ok := trunk.takePrewarm(); ok {
+				session.adoptPrewarm(previous)
+			}
+		}
+	}
+	r.sessions[key] = session
+	return session
 }
 
 // Review reports the decision and rejection message of one approval review.
@@ -962,6 +1035,7 @@ func (r *modelGuardianReviewer) review(ctx context.Context, threadID, turnID, ta
 	if r == nil || r.agent == nil {
 		return state.DecisionAborted, nil, "", errors.New("guardian reviewer is unavailable")
 	}
+	session := r.sessionFor(threadID)
 	// Rust #51330 (f5fa209bb0, ext/guardian-reviewer/src/routing.rs): the total
 	// decision timer wraps the complete approval decision -- fast decisions,
 	// preparation failures and cancellation, not just the model review that
@@ -1183,12 +1257,12 @@ func (r *modelGuardianReviewer) review(ctx context.Context, threadID, turnID, ta
 		r.emitWarning(threadID, rationale)
 		return state.DecisionDenied, nil, message, nil
 	}
-	if runner, ok := r.agent.(*guardianSessionRunner); ok {
-		runner.EnsureReviewPolicy(plan.NodeReplPolicy)
+	if session != nil {
+		session.EnsureReviewPolicy(plan.NodeReplPolicy)
 		// Rust #43912 checks the reviewer session's own feature gate, which
 		// disables token-budget mode even when the parent turn enabled it.
 		if guardianReviewerTokenBudgetEnabled(plan.Prepared) && r.rolloverForTokenBudget != nil && r.rolloverForTokenBudget(threadID, turnID) {
-			runner.RolloverForContext()
+			session.RolloverForContext()
 			contextChanged = true
 		}
 	}
@@ -1201,8 +1275,8 @@ func (r *modelGuardianReviewer) review(ctx context.Context, threadID, turnID, ta
 	// the service backoff; parse failures keep Rust's exponential backoff.
 	finishTimedOut := func() (state.ReviewDecision, *state.Assessment, string, error) {
 		if historyCheckpointReady {
-			if runner, ok := r.agent.(*guardianSessionRunner); ok {
-				runner.rollbackReviewHistory(historyCheckpoint)
+			if session != nil {
+				session.rollbackReviewHistory(historyCheckpoint)
 			}
 		}
 		completed, finishErr := store.Timeout(event.ID)
@@ -1225,8 +1299,8 @@ func (r *modelGuardianReviewer) review(ctx context.Context, threadID, turnID, ta
 	}
 	finishAborted := func() (state.ReviewDecision, *state.Assessment, string, error) {
 		if historyCheckpointReady {
-			if runner, ok := r.agent.(*guardianSessionRunner); ok {
-				runner.rollbackReviewHistory(historyCheckpoint)
+			if session != nil {
+				session.rollbackReviewHistory(historyCheckpoint)
 			}
 		}
 		completed, finishErr := store.Abort(event.ID, "Guardian review was aborted.")
@@ -1409,8 +1483,8 @@ reviewAttempt:
 	budgetLimit := effectiveGuardianInputTokenLimit(contextWindow, windowKnown)
 	outputSchema := guardianAssessmentOutputSchema()
 	historyTokens := int64(0)
-	if runner, ok := r.agent.(*guardianSessionRunner); ok {
-		historyTokens = runner.lastUsageTokens()
+	if session != nil {
+		historyTokens = session.lastUsageTokens()
 	}
 	composeRequest := func() (string, []any, error) {
 		if buildErr := buildPrompt(); buildErr != nil {
@@ -1583,27 +1657,27 @@ reviewAttempt:
 		reviewRequest.PermissionProfile = r.permissionProfile(threadID, turnID)
 	}
 	feedbackCapture.history = guardianFeedbackHistoryInput(prompt, inputItems)
-	if runner, ok := r.agent.(*guardianSessionRunner); ok {
-		runner.SeedForReview(reviewRequest)
+	if session != nil {
+		session.SeedForReview(reviewRequest)
 	}
-	if runner, ok := r.agent.(*guardianSessionRunner); ok {
-		historyCheckpoint = runner.reviewHistoryCheckpoint()
+	if session != nil {
+		historyCheckpoint = session.reviewHistoryCheckpoint()
 		historyCheckpointReady = true
 	}
 	if history := r.guardianConversationHistoryValue(threadID, turnID); history != nil && len(history.Tools) > 0 {
-		response, err = runGuardianReviewWithHistory(reviewCtx, r.agent, reviewRequest, history)
+		response, err = runGuardianReviewWithHistory(reviewCtx, session, reviewRequest, history)
 	} else {
-		response, err = r.agent.Run(reviewCtx, reviewRequest)
+		response, err = session.Run(reviewCtx, reviewRequest)
 	}
 	if err == nil {
 		// The review request reached the session, so the retained-section
 		// omission state is delivered; a later composition may suppress it.
 		r.markRetainedOmissionsDelivered(threadID, pendingOmissions)
 	}
-	if runner, ok := r.agent.(*guardianSessionRunner); ok {
+	if session != nil {
 		// Rust records the reviewed-transcript cursor once a review ran in the
 		// guardian session.
-		runner.markPriorReview()
+		session.markPriorReview()
 	}
 	var staleAuthorization bool
 	if err == nil && r.guardianReviewContextChanged(threadID, turnID, transcript, budgetCompareEntries, transcriptOmissionNote, rootAuthorization, omittedCallID) {
@@ -1621,8 +1695,8 @@ reviewAttempt:
 					err = waitErr
 				} else {
 					r.emitGuardianReviewRetryMetrics("stale_authorization", time.Now(), nil)
-					if runner, ok := r.agent.(*guardianSessionRunner); ok {
-						runner.rollbackReviewHistory(historyCheckpoint)
+					if session != nil {
+						session.rollbackReviewHistory(historyCheckpoint)
 					}
 					goto reviewAttempt
 				}
@@ -1630,8 +1704,8 @@ reviewAttempt:
 		}
 	}
 	if err == nil && staleAuthorization && attempts >= guardianMaxReviewAttempts {
-		if runner, ok := r.agent.(*guardianSessionRunner); ok {
-			runner.rollbackReviewHistory(historyCheckpoint)
+		if session != nil {
+			session.rollbackReviewHistory(historyCheckpoint)
 		}
 		// Rust #47819: exhausting the retry budget on changed authorization is a
 		// failed-closed denial, never a stale approval.
@@ -1651,8 +1725,8 @@ reviewAttempt:
 		// Rust #41215 rolls the reviewer over before the next review. Go has no
 		// reviewer-session compaction carrier, so start a fresh response chain;
 		// the next attempt replays the complete transcript and evidence.
-		if runner, ok := r.agent.(*guardianSessionRunner); ok {
-			runner.RolloverForContext()
+		if session != nil {
+			session.RolloverForContext()
 			contextChanged = true
 			runtime.Gosched()
 			waitStarted := time.Now()
@@ -1773,11 +1847,11 @@ reviewAttempt:
 		r.logAssessment(threadID, completed)
 	}
 	emit(threadID, completed)
-	if runner, ok := r.agent.(*guardianSessionRunner); ok {
+	if session != nil {
 		// Rust complete_review: a completed assessment advances the transcript
 		// cursor and the completed-review count, unlike a failed-but-admitted
 		// attempt which only admits its input (#54264).
-		runner.completeReview()
+		session.completeReview()
 	}
 	decision := state.DecisionFromEvent(completed)
 	r.recordDecision(threadID, turnID, decision, assessment.Rationale)
@@ -3157,8 +3231,8 @@ func (r *RuntimeRouter) resetGuardianAfterParentCompaction(threadID string, comp
 	if !ok {
 		return
 	}
-	sessionRunner, ok := runner.agent.(*guardianSessionRunner)
-	if !ok {
+	sessionRunner := runner.sessionFor(threadID)
+	if sessionRunner == nil {
 		return
 	}
 	responseID := ""
@@ -3208,8 +3282,8 @@ func (r *RuntimeRouter) resetGuardianAfterParentHistoryReset(threadID string) {
 	if !ok {
 		return
 	}
-	sessionRunner, ok := runner.agent.(*guardianSessionRunner)
-	if !ok {
+	sessionRunner := runner.sessionFor(threadID)
+	if sessionRunner == nil {
 		return
 	}
 	sessionRunner.ResetForParentHistoryReset()
