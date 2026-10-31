@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"codex_go/agent"
 	"codex_go/config"
@@ -56,6 +57,63 @@ func (r *RuntimeRouter) ToolInvocation(threadID string, turnID string, callID st
 		return nil, agent.ErrToolCallNotActive
 	}
 	return registry.LookupToolInvocation(threadID, strings.TrimSpace(turnID), callID)
+}
+
+// WaitForInputActivity mirrors Rust CodexThread::wait_for_input_activity
+// (#58411): host-owned tools observe agent mail or steering input without
+// consuming it, following native wait_agent behavior. The named turn supplies
+// already-buffered input; later activity is observed thread-wide, so ending or
+// replacing that turn does not end the wait. Each call observes independently,
+// and cancelling ctx leaves the queued input intact.
+func (r *RuntimeRouter) WaitForInputActivity(ctx context.Context, threadID string, turnID string, timeout time.Duration) turn.InputWaitOutcome {
+	if r == nil {
+		return turn.InputWaitOutcomeTimedOut
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" || ctx.Err() != nil {
+		return turn.InputWaitOutcomeTimedOut
+	}
+	steer := r.requireSteerMailbox()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for {
+		// Subscribe to both sources before checking either, so input arriving
+		// between the check and the wait cannot be missed. Steering takes
+		// precedence when both are pending (Rust InputWaitOutcome).
+		var steerChanged <-chan struct{}
+		var steerPending turn.SteerMailboxActivity
+		if steer != nil {
+			steerChanged, steerPending = steer.SubscribeActivity(threadID, turnID)
+		}
+		agentChanged := r.subscribeAgentActivity(threadID)
+		agentPending := r.pendingAgentActivity(threadID)
+		switch steerPending {
+		case turn.SteerMailboxActivitySteer:
+			return turn.InputWaitOutcomeSteered
+		case turn.SteerMailboxActivityMailbox:
+			return turn.InputWaitOutcomeMailboxActivity
+		}
+		if agentPending {
+			return turn.InputWaitOutcomeMailboxActivity
+		}
+		select {
+		case <-ctx.Done():
+			return turn.InputWaitOutcomeTimedOut
+		case <-timer.C:
+			return turn.InputWaitOutcomeTimedOut
+		case <-agentChanged:
+		case <-steerChanged:
+			switch steer.LastActivityFor(threadID) {
+			case turn.SteerMailboxActivitySteer:
+				return turn.InputWaitOutcomeSteered
+			case turn.SteerMailboxActivityMailbox:
+				return turn.InputWaitOutcomeMailboxActivity
+			}
+		}
+	}
 }
 
 // CreateChild creates an idle V2 child here from a live invocation, using the

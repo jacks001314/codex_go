@@ -1666,7 +1666,7 @@ one-off captures.
   socket runtime text, boolean repeats stay 149/149
   (`out/round41-bool*.json`), single-value repeats 129/129, the 1,068-case
   inline sweep keeps its 35 baseline diffs with 0 new and 0 fixed
-  (`out/round42-inline.txt` vs `out/round40-inline.txt`), bad values 497/497
+  (`out/r35-inline.txt` vs `out/round40-inline.txt`), bad values 497/497
   (`out/round41-r34-flag-surface.txt`), and `go test -count=1 -vet=off ./cli
   ./config ./plugin` passes in a clean worktree of the commit. Three failures
   reproduce unchanged in that worktree and are outside this change:

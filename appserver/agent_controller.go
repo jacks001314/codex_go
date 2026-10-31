@@ -1058,6 +1058,7 @@ func (r *RuntimeRouter) enqueueRuntimeAgentMessage(threadID string, item any) {
 	r.agentMessagesMu.Lock()
 	r.agentMessages[threadID] = append(r.agentMessages[threadID], item)
 	r.agentMessagesMu.Unlock()
+	r.publishAgentActivity(threadID)
 	r.maybeWakeRootForPendingAgentMessages(threadID)
 }
 
@@ -1299,6 +1300,7 @@ func (r *RuntimeRouter) requeueRuntimeAgentMessages(threadID string, items []any
 	queued = append(queued, existing...)
 	r.agentMessages[threadID] = queued
 	r.agentMessagesMu.Unlock()
+	r.publishAgentActivity(threadID)
 }
 
 func (r *RuntimeRouter) discardRuntimeAgentMessages(threadID string) {
@@ -1493,6 +1495,64 @@ func runtimeAgentCommunicationInputItem(author string, recipient string, message
 	return map[string]any{"type": "agent_message", "author": author, "recipient": recipient, "content": content}
 }
 
+// publishAgentActivity wakes host input-activity waits without consuming the
+// queued notifications (Rust InputQueue::notify_mailbox /
+// enqueue_mailbox_communication publishing InputQueueActivity::Mailbox,
+// #58411).
+func (r *RuntimeRouter) publishAgentActivity(threadID string) {
+	if r == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return
+	}
+	r.agentActivityMu.Lock()
+	if r.agentActivitySignals == nil {
+		r.agentActivitySignals = map[string]chan struct{}{}
+	}
+	if changed := r.agentActivitySignals[threadID]; changed != nil {
+		close(changed)
+	}
+	r.agentActivitySignals[threadID] = make(chan struct{})
+	r.agentActivityMu.Unlock()
+}
+
+// subscribeAgentActivity returns the thread’s wake channel, creating it on
+// first use, so a wait subscribes before it checks for pending activity.
+func (r *RuntimeRouter) subscribeAgentActivity(threadID string) <-chan struct{} {
+	if r == nil {
+		return nil
+	}
+	r.agentActivityMu.Lock()
+	defer r.agentActivityMu.Unlock()
+	if r.agentActivitySignals == nil {
+		r.agentActivitySignals = map[string]chan struct{}{}
+	}
+	changed := r.agentActivitySignals[strings.TrimSpace(threadID)]
+	if changed == nil {
+		changed = make(chan struct{})
+		r.agentActivitySignals[strings.TrimSpace(threadID)] = changed
+	}
+	return changed
+}
+
+// pendingAgentActivity reports whether agent mail is observable without
+// consuming it: a queued agent message, or a notification a wait_agent call has
+// not taken yet (Rust InputQueue::has_pending_mailbox_items).
+func (r *RuntimeRouter) pendingAgentActivity(threadID string) bool {
+	if r == nil {
+		return false
+	}
+	threadID = strings.TrimSpace(threadID)
+	if mailbox := r.runtimeAgentActivityMailbox(threadID); len(mailbox) > 0 {
+		return true
+	}
+	r.agentMessagesMu.Lock()
+	defer r.agentMessagesMu.Unlock()
+	return len(r.agentMessages[threadID]) > 0
+}
+
 func (r *RuntimeRouter) runtimeAgentActivityMailbox(rootID string) chan string {
 	if r == nil {
 		return nil
@@ -1520,6 +1580,7 @@ func (r *RuntimeRouter) notifyRuntimeAgentActivity(rootID string, message string
 	case mailbox <- message:
 	default:
 	}
+	r.publishAgentActivity(rootID)
 }
 
 func lastAgentMessage(items []session.Item) string {

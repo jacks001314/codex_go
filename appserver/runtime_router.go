@@ -745,10 +745,14 @@ type RuntimeRouter struct {
 	preparedUserContent   map[string][]map[string]any
 	agentActivityMu       sync.Mutex
 	agentActivity         map[string]chan string
-	agentMessagesMu       sync.Mutex
-	agentMessages         map[string][]any
-	nodeReplEvidenceMu    sync.Mutex
-	nodeReplEvidence      map[string]*codexctx.NodeReplReviewEvidence
+	// agentActivitySignals wakes host input-activity waits without consuming the
+	// queued notifications (Rust InputQueue activity_tx, #58411). Each entry is
+	// closed and replaced when the thread publishes agent activity.
+	agentActivitySignals map[string]chan struct{}
+	agentMessagesMu      sync.Mutex
+	agentMessages        map[string][]any
+	nodeReplEvidenceMu   sync.Mutex
+	nodeReplEvidence     map[string]*codexctx.NodeReplReviewEvidence
 	// retainedContexts is the thread-owned retained evidence the Guardian review
 	// prompt renders (Rust's session-owned `RetainedContext`). It is seeded from
 	// the thread's newest compaction checkpoint and then kept current from the
@@ -1001,6 +1005,7 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 		agentRegistry:              agent.NewRegistry(),
 		agentRegistries:            map[string]*agent.Registry{},
 		agentActivity:              map[string]chan string{},
+		agentActivitySignals:       map[string]chan struct{}{},
 		agentMessages:              map[string][]any{},
 		networkPolicy:              embeddedEffectiveNetworkPolicy(services.EmbeddedNetworkPolicy),
 		localNetworkPolicy:         embeddedLocalNetworkPolicy(services.EmbeddedNetworkPolicy),
