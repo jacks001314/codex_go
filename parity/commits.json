@@ -17975,9 +17975,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1118 (audit): Rust #47083 only extracts per-thread enrichment into a dedicated async helper without changing protocol or behaviour; the Go appserver already builds thread enrichment inline in its handlers and has no corresponding Rust module boundary to refactor."
    ]
   },
   {
@@ -18095,9 +18095,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1118 (audit): Go already routes realtime WebSocket dials through the configured HTTP client. appserver/realtime_runtime.go passes policyHTTPClientForConfig into the realtime TransportBackendConfig, and realtime/wire.go dials with websocket.DialOptions.HTTPClient, so the handshake uses the same proxy policy as other outbound traffic: network.NewHTTPClient honors the system proxy when respect_system_proxy is enabled (including CONNECT proxy auth) and network.PolicyHTTPClient adds managed policy. Rust #47101 only needed to pass its HttpClientFactory into the websocket connector; Go never bypassed the client."
    ]
   },
   {
@@ -18627,9 +18627,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1118 (audit): Rust #47271 implements the internal AgentControl trait for LocalAgentControl and moves the trait into the agent control module. Go has no AgentControl trait; agent operations are already consolidated on the agent.ToolController interface implemented by runtimeAgentController, so this Rust-internal refactor has no Go carrier."
    ]
   },
   {
@@ -18723,9 +18723,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1118 (audit): state/migrations/state/0057_cleanup_guardian_thread_metadata.sql is byte-identical to Rust #47303: prompt-derived or blank Guardian titles become Guardian review, explicit names and distinct titles are preserved, preview becomes Approval review, and first_user_message is cleared only for the guardian subagent source. The state runtime applies it as migration 0057, and state/runtime_test.go covers the frozen migration inventory and Rust checksums."
    ]
   },
   {
