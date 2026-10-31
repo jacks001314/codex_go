@@ -2,6 +2,7 @@ package appserver
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 
 	"codex_go/turn"
@@ -12,6 +13,38 @@ import (
 // uploaded audio, so file-backed audio must be rejected explicitly instead of
 // being forwarded to the Responses API.
 const uploadedAudioDisabledMessage = "Uploaded audio file inputs are not enabled in this build."
+
+// errUploadedAudioDisabled mirrors Rust #58430 uploaded_audio_disabled_error
+// (CodexErr::UnsupportedOperation). The turn runner reports it after recording
+// the accompanying text, so the turn completes as failed instead of the RPC
+// being refused.
+var errUploadedAudioDisabled = errors.New(uploadedAudioDisabledMessage)
+
+// turnStartParamsWithoutUploadedAudio returns a copy of the turn parameters
+// whose input drops uploaded audio file references, mirroring Rust
+// run_hooks_and_record_inputs: the accompanying text and every other input are
+// still recorded before the turn fails. It reports whether any uploaded audio
+// was present.
+func turnStartParamsWithoutUploadedAudio(params *turn.TurnStartParams) (*turn.TurnStartParams, bool) {
+	if params == nil {
+		return nil, false
+	}
+	rejected := false
+	input := make([]turn.TurnUserInput, 0, len(params.Input))
+	for _, item := range params.Input {
+		if turnUserInputAudioFile(item) {
+			rejected = true
+			continue
+		}
+		input = append(input, item)
+	}
+	if !rejected {
+		return params, false
+	}
+	filtered := *params
+	filtered.Input = input
+	return &filtered, true
+}
 
 // uploadedAudioInjectionMessage mirrors Rust validate_injected_response_item
 // (CodexErr::InvalidRequest).
@@ -28,8 +61,9 @@ func turnUserInputAudioFile(input turn.TurnUserInput) bool {
 	return strings.TrimSpace(input.URL) == "" && strings.TrimSpace(input.FileID) != ""
 }
 
-// validateTurnUserInputAudioFiles rejects uploaded audio before a turn starts,
-// steers, or is queued (Rust #58430 keeps uploaded audio disabled at runtime).
+// validateTurnUserInputAudioFiles rejects uploaded audio before a steer is
+// queued. turn/start accepts it and lets the turn runner fail after recording
+// the accompanying text (Rust #58430 run_turn).
 func validateTurnUserInputAudioFiles(inputs []turn.TurnUserInput) error {
 	for i := range inputs {
 		if turnUserInputAudioFile(inputs[i]) {

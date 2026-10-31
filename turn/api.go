@@ -248,10 +248,14 @@ func (i *TurnUserInput) MarshalJSON() ([]byte, error) {
 			Path:   i.Path,
 		})
 	case "audio":
+		// Rust #58430: the untagged audio input keeps both arms on the wire -
+		// the inline payload and the uploaded file reference - so a client that
+		// round-trips the input does not lose the file id.
 		return json.Marshal(struct {
-			Type string `json:"type"`
-			URL  string `json:"url"`
-		}{Type: "audio", URL: i.URL})
+			Type   string `json:"type"`
+			URL    string `json:"url,omitempty"`
+			FileID string `json:"fileId,omitempty"`
+		}{Type: "audio", URL: i.URL, FileID: i.FileID})
 	case "localAudio":
 		return json.Marshal(struct {
 			Type string `json:"type"`

@@ -1779,6 +1779,19 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	// substituting `retry`.
 	rootTurnID := rootTurnIDForTurn(params, turnID)
 	_ = r.appendRuntimeTurnStartedWithAttribution(threadID, turnID, rootTurnID, turnAttributionForParams(params, turnID, rootTurnID), startedAt)
+	// Rust #58430: uploaded audio is rejected inside the turn runner. The turn is
+	// accepted, the accompanying text is recorded, and then the turn fails with
+	// the unsupported-operation error instead of the request being refused.
+	if filtered, rejected := turnStartParamsWithoutUploadedAudio(params); rejected {
+		r.persistRuntimeTurnPrompt(threadID, turnID, filtered, startedAt)
+		r.clearActiveRuntimeTurn(threadID, turnID)
+		r.finishTurnWithErrorAnalytics(threadID, turnID, startedAtMS, errUploadedAudioDisabled, &turnCompletionAnalyticsContext{
+			ConnectionID: connectionID,
+			Params:       params,
+			RunConfig:    runConfig,
+		})
+		return
+	}
 	// Rust first runs the previous-model inline compaction, then records a full
 	// context window and compacts before the next user turn.
 	// Do this before persisting/sending the new prompt so the prompt is retained
@@ -4972,6 +4985,10 @@ func turnAnalyticsErrorFieldsFromError(err error) turnAnalyticsErrorFields {
 		errors.Is(err, sandbox.ErrInvalidPermissionProfileRequest),
 		errors.Is(err, sandbox.ErrInvalidWindowsSandboxRequest):
 		return turnAnalyticsErrorFields{TurnError: "sandboxError", CodexErrorKind: stringPtrIfNotEmpty("sandbox")}
+	case errors.Is(err, errUploadedAudioDisabled):
+		// Rust #58430 maps CodexErr::UnsupportedOperation to
+		// CodexErrorInfo::BadRequest while the analytics kind keeps the detail name.
+		return turnAnalyticsErrorFields{TurnError: "badRequest", CodexErrorKind: stringPtrIfNotEmpty("unsupported_operation")}
 	case errors.Is(err, ErrSessionBudgetExceeded):
 		return turnAnalyticsErrorFields{TurnError: "sessionBudgetExceeded", CodexErrorKind: stringPtrIfNotEmpty("rollout_budget")}
 	default:
