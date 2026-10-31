@@ -8185,9 +8185,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 9/16; needs review: AudioTrack, CAPTURE_GAP_TOLERANCE, CaptureWorker, EncodedAudio, MAX_CALLBACK_FRAMES"
+    "Round 1154: Go's helper already connects processed capture to the outgoing RTP track, so this audit replaces the symbol-coverage heuristic with a behaviour mapping. Capture callbacks enter pcmPipeline.pushCapture (bounded 32-block queue, 20 ms audioCaptureGapTolerance at both buffering boundaries, pre-unmute buffers rejected by captureBoundary, blocks older than audioMaxCaptureAge=1s dropped), mediaSession.pumpCapture applies the audioProcessor (AEC/NS/AGC from dsp_aec, dsp_ns, dsp_agc, with the decoded playback as the render reference), packs 10 ms blocks into 20 ms mono frames, and voiceTrack.send emits Opus payload type 111 at 48 kHz with RTP timestamps that skip mute gaps without sequence gaps. Mute transitions drop the pending frame and reset processing history, and muted sessions send generated silence (voiceTrack.sendSilence). Bounds match Rust: audioProcessingDeadline=500ms, voiceSendTimeout=100ms, 64-packet inbound receive pass, 20 ms frame cadence. Device-rate conversion happens in the miniaudio backend because the helper always opens defaultSessionFormat=48 kHz mono S16LE, while dsp_resample covers non-48 kHz formats; Rust uses an in-process Rubato resampler, which is an equivalent design difference. Tests: audio_pipeline_test.go (gap tolerance, stale backlog, mute boundary, no playback replay, bounded queues), media_test.go (frame cadence, RTP payload type and packet grid, mute-gap timestamps, encoded silence reuse, processed capture and playback forwarding), dsp_aec_test.go (echo attenuation and near-end preservation), and the new capture_mute_boundary_like_rust_test.go (a pre-mute partial frame never reaches RTP). Verified with go test ./voicehost -count=1."
    ]
   },
   {
