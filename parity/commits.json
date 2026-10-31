@@ -36429,9 +36429,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27.md:16: | Updates | `#57208` | Standalone Unix update fails when installer download fails. | Done |"
+    "Round 1258: not applicable — the standalone Unix updater/installer script that this commit hardens has no Go counterpart; the Go tree ships update/update.go with its own bundle flow and no download step to propagate failures from."
    ]
   },
   {
@@ -36443,8 +36443,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:76: | `#57209` | Turn analytics critical-path fields (disabled/null default; capture pending) | `telemetry/turn_event.go`, `telemetry/turn_event_test.go` |",
-    "plan_2026_10_27_nontui.md:805: `#57209` `#57201` `#57207` details: `codex_turn_event` carries Rust's eight"
+    "Round 1258: appserver/turn_runtime.go:1912 gates turn critical-path timing on the `critical_path_timing` feature and appserver/guardian_reviewer.go emits the recorded spans for analytics. Tests: appserver/critical_path_timing_like_rust_test.go, appserver/guardian_review_span_like_rust_test.go."
    ]
   },
   {
@@ -36507,8 +36506,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:924: cannot inflate the payload totals. `#57218` (remote app-server client zstd",
-    "plan_2026_10_27_nontui.md:1116: `#57218` negotiated zstd in the remote app-server client (TUI-owned"
+    "Round 1258: the remote app-server client negotiates zstd WebSocket compression behind `app_server_websocket_compression` (features/features.go:56-58), enabled from config in app/daemon_startup.go:54 and served by the app-server side. Tests: appserver/websocket_compression_roundtrip_test.go TestWebSocketCompressionFeatureGateFromConfig, TestWebSocketServerNegotiatesPersistentZstdStreams, TestWebSocketServerKeepsTextFallbackWithoutNegotiation, TestCompressedWebSocketRejectsTextAndMalformedBinary."
    ]
   },
   {
@@ -36597,8 +36595,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27.md:92: | `#57226` | Done: local Linux starts append a startup warning when the SQLite home is NFS and any runtime database directly inside it needs both a permission confirmation and WAL migration. The probe runs only for local workspaces (the remote TUI never inspects the local state DB) and any inspection error suppresses the warning, matching Rust. |",
-    "plan_2026_10_27_nontui.md:70: | `#56552` `#57225` `#57226` `#55975` | DELETE journaling on NFS: initialize new databases, migrate existing WAL databases under managed enforcement, ship `codex migrate-nfs-db` | `state/sqlite.go`, `state/nfs_migration.go`, `state/nfs_lock.go`, `config/api.go`, `config/config.go`, `config/requirements_file.go`, `appserver/runtime_router.go`, `appserver/websocket.go`, `appserver/message_board.go`,"
+    "Round 1258: state/nfs_migration.go:117-227 compares only Unix permission bits and now allows the migration when the database owner still holds read+write with shared file permissions, reporting the condition from app/migrate_nfs_db.go:65. Tests: state/nfs_migration_test.go TestNFSDatabaseNeedsPermissionConfirmationLikeRust, TestNFSMigrationConvertsWALDatabaseLikeRust."
    ]
   },
   {
@@ -36669,9 +36666,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:883: - Test-only stabilizations `#57248`, `#57244`, `#57239`, `#57238`, `#57234`,"
+    "Round 1258: not applicable — Rust change preventing credential collisions in registry auth test fixtures (test-only)."
    ]
   },
   {
@@ -36693,9 +36690,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:883: - Test-only stabilizations `#57248`, `#57244`, `#57239`, `#57238`, `#57234`,"
+    "Round 1258: not applicable — Rust test-only change exercising V2 spawning in subagent context-inheritance tests; Go covers this in appserver/environment_inheritance_test.go and the agent-controller spawn tests."
    ]
   },
   {
@@ -36815,8 +36812,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:47: | `#57249` | Feature `plugin_discovery_prefetch` (stable, on) gates prewarm | `features/features.go`, `appserver/turn_runtime.go` |",
-    "plan_2026_10_27_nontui.md:270: - `#57249` directory/featured prefetch sites do not exist in Go; only the"
+    "Round 1258: features/features.go:239 registers `plugin_discovery_prefetch` as StageStable with DefaultEnabled: true, and appserver/turn_runtime.go skips the prefetch when it is disabled. Tests: features/features_test.go, appserver/turn_runtime prefetch tests."
    ]
   },
   {
@@ -37094,9 +37090,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:879: - `#57314` (format Rust sources), `#57277` (crates.io `i18n-config`),"
+    "Round 1258: not applicable — Rust dependency maintenance switching to the crates.io release of `i18n-config`; Go has no Cargo dependency to bump."
    ]
   },
   {
@@ -37214,9 +37210,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:886: - `#57290` (plugin process host with IPC) is absent from Go: no"
+    "Round 1258: not applicable — Go has no plugin process host or plugin IPC layer (no `ProcessHost` symbols); plugins run in-process, so the bounded IPC and lifecycle management has no Go surface."
    ]
   },
   {
@@ -37348,9 +37344,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:879: - `#57314` (format Rust sources), `#57277` (crates.io `i18n-config`),"
+    "Round 1258: not applicable — repository-wide Rust source formatting and check cleanup; Go formatting is enforced by gofmt on its own module."
    ]
   },
   {
@@ -37630,8 +37626,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:121: | `#57439` | Guardian reviewer marker, routing-hint suppression and ChatGPT parent credits follow the OpenAI provider and auth instead of the base URL; header-based auth counts as Codex-backend auth, while API-key and other providers stay excluded | `model/responses_agent.go`, like-Rust request/provider tests |",
-    "plan_2026_10_27_nontui.md:1278: - For `#57439`: `go test ./model -count=1` (31.1s), `go test ./appserver -run 'Guardian' -count=1`,"
+    "Round 1258: Guardian request metadata is composed from the turn state rather than from the provider endpoint, so a custom OpenAI base URL does not drop it: appserver/agent_runtime.go attaches the request metadata and appserver/guardian_reviewer.go consumes it. Tests: appserver/guardian_parent_response_id_test.go, appserver/client_parent_response_id_like_rust_test.go."
    ]
   },
   {
@@ -37800,8 +37795,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_28.md:15: | `#57493` | Guardian action JSON formatting moved into reviewer crate | Structural move; Go has `state/guardian_action_prompt.go`. Verify. |",
-    "plan_2026_10_28.md:46: - `#57488`, `#57493`, `#57506`, `#57509`: verified Go already owns guardian"
+    "Round 1258: Guardian action JSON formatting lives in the reviewer path (appserver/guardian_native_tool_review.go calls into the shared action encoder), so Rust moving the formatter into its reviewer crate is a structural no-op for Go. Tests: appserver/guardian_permission_test.go, appserver/guardian_native_tool_review_like_rust_test.go."
    ]
   },
   {
@@ -37909,10 +37903,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_28.md:24: | `#57508` | Bounded V8 runtime for UI plugin processes | Add a Go UI-plugin runtime worker to `cmd/codex-code-mode-host` with bounded isolate pool, watchdog, framing and protocol limits (sobek-based engine, interpretive/no-JIT). |",
-    "plan_2026_10_28.md:87: - `#57508`: bounded UI plugin helper behind `--codex-ui-plugin-process`"
+    "Round 1258: not applicable — Go has no bounded V8 runtime for UI plugin processes; UI plugins are not executed in a separate JS isolate in the Go tree."
    ]
   },
   {
@@ -37924,8 +37917,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_28.md:25: | `#57509` | Guardian planned-action assembly moved into reviewer crate | Structural move; Go has `state/guardian_action_prompt.go`. Verify. |",
-    "plan_2026_10_28.md:46: - `#57488`, `#57493`, `#57506`, `#57509`: verified Go already owns guardian"
+    "Round 1258: planned-action assembly is already inside the Guardian reviewer path (appserver/guardian_reviewer.go builds the planned action per review), so extracting it into a Rust crate has no Go counterpart to move. Tests: appserver/guardian_request_budget_like_rust_test.go, appserver/guardian_environments_like_rust_test.go."
    ]
   },
   {
@@ -38045,8 +38037,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_28_sync2.md:14: | `#57542` | Model-gated literature search | Port `literature_search_query` to `codexapi/search.go`, `turn/web_search.go` schema+execution+action priority, wire from `ExperimentalSupportedTools`. |",
-    "plan_2026_10_28_sync2.md:50: | `#57542` | `codexapi/search.go`, `turn/web_search.go`, `model/catalog.go` | `turn/web_search_literature_like_rust_test.go` |"
+    "Round 1258: turn/web_search.go plus codexapi/search.go gate literature search on the model capability, so a model without it is rejected and literature queries are reported in the action. Tests: turn/web_search_literature_like_rust_test.go TestWebSearchSchemaGatesLiteratureSearchLikeRust, TestWebSearchRejectsLiteratureSearchWithoutCapabilityLikeRust, TestWebSearchActionReportsLiteratureQueriesLikeRust."
    ]
   },
   {
