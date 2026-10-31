@@ -440,6 +440,10 @@ func serveWebSocketConnectionWithCompression(
 			setWriteErr(writeJSON(ErrorResponse(request.ID, -32600, "Not initialized", nil)))
 			continue
 		}
+		if admitErr := router.admitDispatchedRequest(request); admitErr != nil {
+			setWriteErr(writeJSON(turnAdmissionErrorResponse(request, admitErr)))
+			continue
+		}
 		if request.Method == MethodInitialize {
 			response := router.Handle(request)
 			if response != nil && response.Error == nil {
@@ -462,6 +466,7 @@ func serveWebSocketConnectionWithCompression(
 		requests.Add(1)
 		go func(request *Request) {
 			defer requests.Done()
+			defer request.releaseTurnAdmission()
 			response := router.Handle(request)
 			if response != nil {
 				setWriteErr(writeJSON(response))

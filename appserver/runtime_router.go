@@ -8272,7 +8272,7 @@ func (r *RuntimeRouter) handleTurnStart(request *Request) (*turn.TurnStartRespon
 	}
 	reservedRuntime := false
 	if r.hasRuntimeThreadStore() {
-		if err := r.reserveRuntimeThread(params.ThreadID); err != nil {
+		if err := r.reserveRuntimeThreadForRequest(request, params.ThreadID); err != nil {
 			if len(drainedAgentMessages) > 0 {
 				r.requeueRuntimeAgentMessages(params.ThreadID, drainedAgentMessages)
 			}

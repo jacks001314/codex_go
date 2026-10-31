@@ -474,6 +474,9 @@ type Request struct {
 	// requests whose JSON form cannot represent internal-only fields (for
 	// example TurnStartParams.ParentTurnID/RootTurnID/AdditionalInputItems).
 	InternalParams any `json:"-"`
+	// turnAdmission is the dispatch-time admission permit the transport took
+	// for this request (Rust TurnAdmission::admit). It never crosses the wire.
+	turnAdmission *TurnAdmissionPermit
 }
 
 // W3CTraceContext mirrors codex_protocol::protocol::W3cTraceContext: the W3C
@@ -487,6 +490,15 @@ func (r *Request) normalizedConnectionID() string {
 		return defaultRequestConnectionID
 	}
 	return normalizeConnectionID(r.ConnectionID)
+}
+
+// releaseTurnAdmission releases the dispatch-time permit a transport took
+// for this request once its handler returned.
+func (r *Request) releaseTurnAdmission() {
+	if r == nil {
+		return
+	}
+	r.turnAdmission.Release()
 }
 
 func normalizeConnectionID(connectionID string) string {

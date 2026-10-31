@@ -27,7 +27,15 @@ type ThreadManager struct {
 	// new turn starts (Rust #53736 thread extension data).
 	capabilityDiscoveryV2 map[string]*runtimeCapabilityDiscoveryV2Cache
 	asyncCompaction       map[string]*asyncCompactionState
-	closing               bool
+	// admittedTurns records reservations admitted by a request that already
+	// held a dispatch-time permit when the drain gate closed (Rust
+	// TurnAdmission permit retained by queued turn work).
+	admittedTurns map[string]*TurnAdmissionPermit
+	// admittedWork counts permits taken at dispatch that have not been released
+	// yet, so a workspace pause waits for requests that are still preparing a
+	// turn (Rust TurnAdmission's active watch).
+	admittedWork int
+	closing      bool
 	// paused closes turn admission while a runtime-wide change (a workspace
 	// switch) replaces credentials. Rust #57514 TurnAdmission.pause.
 	paused bool
@@ -477,13 +485,72 @@ func (t *managedLiveThread) Close() error {
 	return closeErr
 }
 
+// TurnAdmissionPermit proves that turn work was admitted before the server
+// began draining (Rust TurnAdmission::admit). A transport takes one when it
+// reads a mutating request, and the reservation it later makes keeps that
+// permit so a drain that starts while the request is preparing does not
+// cancel work the client already submitted. Releasing it (once the handler
+// returns) lets a workspace pause observe that no admitted work is left.
+type TurnAdmissionPermit struct {
+	manager *ThreadManager
+	once    sync.Once
+}
+
+// Release drops the permit. It is safe to call more than once and on a nil
+// permit.
+func (p *TurnAdmissionPermit) Release() {
+	if p == nil {
+		return
+	}
+	p.once.Do(func() {
+		if p.manager == nil {
+			return
+		}
+		p.manager.turnsMu.Lock()
+		if p.manager.admittedWork > 0 {
+			p.manager.admittedWork--
+		}
+		p.manager.turnsMu.Unlock()
+	})
+}
+
+// AdmitTurnWork takes an admission permit for a request the transport just
+// read. It rejects the request once the drain gate closed or admission paused,
+// matching Rust's dispatch-time TurnAdmission::admit.
+func (m *ThreadManager) AdmitTurnWork() (*TurnAdmissionPermit, error) {
+	if m == nil {
+		return nil, fmt.Errorf("%w: thread manager is nil", ErrInvalidRequest)
+	}
+	m.turnsMu.Lock()
+	defer m.turnsMu.Unlock()
+	if m.closing {
+		return nil, ErrServerDraining
+	}
+	if m.paused {
+		return nil, jsonRPCInvalidRequest("Workspace change in progress; retry when it completes")
+	}
+	m.admittedWork++
+	return &TurnAdmissionPermit{manager: m}, nil
+}
+
 func (m *ThreadManager) ReserveTurn(threadID string) error {
+	return m.reserveTurn(threadID, nil)
+}
+
+// ReserveTurnAdmitted reserves a turn for a request holding a dispatch-time
+// permit, so a drain that started while the request was preparing does not
+// reject it.
+func (m *ThreadManager) ReserveTurnAdmitted(threadID string, permit *TurnAdmissionPermit) error {
+	return m.reserveTurn(threadID, permit)
+}
+
+func (m *ThreadManager) reserveTurn(threadID string, permit *TurnAdmissionPermit) error {
 	if m == nil {
 		return fmt.Errorf("%w: thread manager is nil", ErrInvalidRequest)
 	}
 	m.turnsMu.Lock()
 	defer m.turnsMu.Unlock()
-	if m.closing {
+	if m.closing && permit == nil {
 		return ErrServerDraining
 	}
 	if m.paused {
@@ -494,6 +561,14 @@ func (m *ThreadManager) ReserveTurn(threadID string) error {
 	}
 	m.replaceCapabilityDiscoveryV2CacheLocked(threadID)
 	m.active[threadID] = &activeRuntimeTurn{ThreadID: threadID}
+	if permit != nil {
+		if m.admittedTurns == nil {
+			m.admittedTurns = make(map[string]*TurnAdmissionPermit)
+		}
+		m.admittedTurns[threadID] = permit
+	} else {
+		delete(m.admittedTurns, threadID)
+	}
 	return nil
 }
 
@@ -514,7 +589,10 @@ func (m *ThreadManager) registerTurn(threadID string, turnID string, cancel cont
 	}
 	m.turnsMu.Lock()
 	defer m.turnsMu.Unlock()
-	if m.closing {
+	// A reservation admitted before the drain gate closed keeps its permit, so
+	// the turn it prepared still registers; everything else observes the gate
+	// (Rust keeps the dispatch permit alive while queued turn work runs).
+	if m.closing && (m.active[threadID] == nil || m.admittedTurns[threadID] == nil) {
 		if cancel != nil {
 			cancel()
 		}
@@ -697,9 +775,9 @@ func (m *ThreadManager) PauseTurnAdmission(ctx context.Context) (*TurnAdmissionP
 	defer ticker.Stop()
 	for {
 		m.turnsMu.Lock()
-		active := len(m.active)
+		drained := len(m.active) == 0 && m.admittedWork == 0
 		m.turnsMu.Unlock()
-		if active == 0 {
+		if drained {
 			return pause, nil
 		}
 		select {

@@ -10150,7 +10150,11 @@
    ],
    "status": "complete",
    "evidence": [
-    "Partial symbol coverage 2/5; needs review: TurnPermit, begin_drain, subscribe_active"
+    "BeginDraining closes turn admission without cancelling active turns (appserver/thread_manager.go), and transports call it when the stdio/WebSocket connection stops reading (Rust #43959).",
+    "Dispatch-time permits mirror Rust's TurnAdmission::admit: appserver/turn_admission.go admits the same method families message_processor.rs gates, stdio.go/websocket.go take the permit when a request is read and release it when the handler returns, and a rejected dispatch gets the structured `serverShuttingDown` invalid-request error.",
+    "Requests admitted before the drain keep working: ReserveTurnAdmitted retains the permit on the reservation and registerTurn lets that turn register even though the gate closed while the request was preparing; work dispatched later (including automatic continuations, which carry no permit) is still rejected.",
+    "PauseTurnAdmission now waits for outstanding permits as well as registered turns, matching Rust's subscribe_active watch used by the workspace switch in #57514.",
+    "Tests: go test ./appserver -run 'TestStdioServerHandlesConcurrentTurnStarts|TestTurnAdmissionPermitKeepsAdmittedWorkAliveAfterDrainLikeRust|TestStdioDispatchedTurnWorkFinishesDuringDrainLikeRust|TestWorkspacePauseWaitsForAdmittedWorkLikeRust|TestServerDrainingAdmissionErrorExposesReasonLikeRust' -count=1. Residual: Rust re-checks admit() before queued turn work runs; Go runs each dispatched request in its own goroutine and has no per-thread queue to re-check."
    ]
   },
   {

@@ -214,12 +214,17 @@ readLoop:
 				continue
 			}
 			request.ConnectionID = connectionID
+			if admitErr := router.admitDispatchedRequest(request); admitErr != nil {
+				setWriteErr(writeJSONLine(turnAdmissionErrorResponse(request, admitErr)))
+				continue
+			}
 			waitForPrevious := started
 			started = make(chan struct{})
 			startedForRequest := started
 			requests.Add(1)
 			go func(request *Request) {
 				defer requests.Done()
+				defer request.releaseTurnAdmission()
 				<-waitForPrevious
 				if processID := commandExecProcessIDForStdioOrdering(request); processID != "" {
 					go func() {
