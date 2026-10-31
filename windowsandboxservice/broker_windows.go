@@ -106,6 +106,9 @@ func refreshProvisioningSession(stopped func() bool, onSessionChange func() erro
 // runtime.
 func NewProvisioningBroker(lifecycle *Lifecycle, setup SetupRunner) ServiceBroker {
 	return func(state *ServiceState) error {
+		// Release the retained pins and owner token when the service stops
+		// (Rust PackageLifecycle::drop).
+		defer lifecycle.Close()
 		handler := func(identity *ClientIdentity, request *ServiceRequest, sandboxSID []byte, stopped func() bool) (provisionservice.Response, error) {
 			return RunProvisioning(identity, request, sandboxSID, stopped, lifecycle.RegisterOwner, setup)
 		}

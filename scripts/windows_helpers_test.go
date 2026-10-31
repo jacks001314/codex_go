@@ -24,6 +24,7 @@ func TestWindowsBuildPipelinesPackageSandboxHelpers(t *testing.T) {
 				"codex-resources",
 				"./cmd/codex-command-runner",
 				"./cmd/codex-windows-sandbox-setup",
+				"./cmd/codex-windows-sandbox-service",
 			},
 		},
 		{
@@ -32,6 +33,7 @@ func TestWindowsBuildPipelinesPackageSandboxHelpers(t *testing.T) {
 				"codex-resources",
 				"codex-command-runner",
 				"codex-windows-sandbox-setup",
+				"codex-windows-sandbox-service",
 			},
 		},
 		{
@@ -41,6 +43,7 @@ func TestWindowsBuildPipelinesPackageSandboxHelpers(t *testing.T) {
 				"codex-package.json",
 				"codex-command-runner",
 				"codex-windows-sandbox-setup",
+				"codex-windows-sandbox-service",
 				"x86_64-pc-windows-msvc",
 			},
 		},

@@ -104,7 +104,7 @@ echo "==> Built $OUTPUT"
 if [ "$TARGET_GOOS" = windows ]; then
   RESOURCES_DIR=$(dirname -- "$OUTPUT")/codex-resources
   mkdir -p "$RESOURCES_DIR"
-  for HELPER in codex-command-runner codex-windows-sandbox-setup; do
+  for HELPER in codex-command-runner codex-windows-sandbox-setup codex-windows-sandbox-service; do
     set -- build -trimpath -buildvcs=false -ldflags "-s -w -X codex_go/doctor.buildVersion=$VERSION -X codex_go/appserver.buildVersion=$VERSION -X codex_go/mcp.buildVersion=$VERSION" -o "$RESOURCES_DIR/$HELPER.exe"
     [ "$RACE" -eq 1 ] && set -- "$@" -race
     [ "$REBUILD" -eq 1 ] && set -- "$@" -a

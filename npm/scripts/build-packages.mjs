@@ -88,7 +88,7 @@ for (const target of targets) {
   if (target.goos === "windows") {
     const resourcesDir = path.join(targetDir, "codex-resources");
     mkdirSync(resourcesDir, { recursive: true });
-    for (const helper of ["codex-command-runner", "codex-windows-sandbox-setup"]) {
+    for (const helper of ["codex-command-runner", "codex-windows-sandbox-setup", "codex-windows-sandbox-service"]) {
       run("go", ["build", "-trimpath", "-buildvcs=false", "-ldflags", ldflags, "-o", path.join(resourcesDir, `${helper}.exe`), `./cmd/${helper}`], { env });
     }
   }

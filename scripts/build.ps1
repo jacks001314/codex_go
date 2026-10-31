@@ -101,7 +101,8 @@ if ($GOOS -eq "windows") {
     New-Item -ItemType Directory -Force -Path $ResourcesDir | Out-Null
     $WindowsHelpers = @(
         @{ Name = "codex-command-runner.exe"; Package = "./cmd/codex-command-runner" },
-        @{ Name = "codex-windows-sandbox-setup.exe"; Package = "./cmd/codex-windows-sandbox-setup" }
+        @{ Name = "codex-windows-sandbox-setup.exe"; Package = "./cmd/codex-windows-sandbox-setup" },
+        @{ Name = "codex-windows-sandbox-service.exe"; Package = "./cmd/codex-windows-sandbox-service" }
     )
     foreach ($Helper in $WindowsHelpers) {
         $HelperOutput = Join-Path $ResourcesDir $Helper.Name
