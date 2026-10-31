@@ -67,7 +67,11 @@ func CanonicalizeRolloutWithStats(codexHome string, path string) (uint64, error)
 	}
 	sourceBytes := uint64(sourceInfo.Size())
 	if compressed {
-		sourceBytes += decompressedBytes
+		// Rust inflates a .jsonl.zst rollout twice before rewriting it: once
+		// to reach the header and once to stream the canonical result. The
+		// migration rate limiter charges the compressed file plus both
+		// decompressed passes.
+		sourceBytes += 2 * decompressedBytes
 	}
 
 	stagedPath, err := stagedRolloutPath(path)

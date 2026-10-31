@@ -118,12 +118,15 @@ func readCanonicalReplayLines(path string) ([][]byte, uint64, error) {
 			}
 			return nil, 0, fmt.Errorf("read legacy rollout: %w", readErr)
 		}
+		// Rust's migration rate limiter charges the decompressed stream exactly
+		// as it sits on disk, so count the bytes ReadLine consumed before
+		// trimming the delimiter: the trailing newline is part of the source.
+		decompressed += uint64(len(raw))
 		raw = bytes.TrimRight(raw, "\r\n")
 		if len(bytes.TrimSpace(raw)) == 0 {
 			continue
 		}
 		lines = append(lines, append([]byte(nil), raw...))
-		decompressed += uint64(len(raw)) + 1
 	}
 	return lines, decompressed, nil
 }
@@ -811,9 +814,184 @@ func (w *canonicalReplayWriter) replayEvent(entry canonicalReplayLine) error {
 		return w.writeReasoning(entry)
 	case "exec_command_end":
 		return w.writeCommandExecution(entry)
+	case "patch_apply_end":
+		return w.writePatchApplyEnd(entry)
+	case "item_completed":
+		if !canonicalTurnItemDecodes(entry.payload) {
+			return nil
+		}
+		return w.writeRecord(entry.timestamp, "event_msg", entry.payload)
 	default:
+		if !legacyEventPassthrough[entry.eventType] {
+			// Rust decodes every legacy record and then applies its paginated
+			// persistence policy, which drops transient and retired events
+			// (deltas, begin events, plan updates, errors, warnings, ...).
+			return nil
+		}
 		return w.writeRecord(entry.timestamp, "event_msg", entry.payload)
 	}
+}
+
+// legacyEventPassthrough lists the legacy event payloads the canonicalizer
+// still carries over verbatim: either the paginated policy keeps them as raw
+// events or they are converted to completed items by a step Go has not ported
+// yet. Everything else a legacy rollout can contain is dropped by Rust.
+var legacyEventPassthrough = map[string]bool{
+	"thread_goal_updated":        true,
+	"thread_rolled_back":         true,
+	"thread_settings_applied":    true,
+	"mcp_tool_call_end":          true,
+	"web_search_end":             true,
+	"image_generation_end":       true,
+	"context_compacted":          true,
+	"entered_review_mode":        true,
+	"exited_review_mode":         true,
+	"sub_agent_activity":         true,
+	"dynamic_tool_call_response": true,
+}
+
+// canonicalTurnItemRequiredFields lists the fields 0.166's TurnItem variants
+// cannot decode without. Rust parses every legacy record into the modern types
+// before migrating it and silently drops the whole line when that fails, so a
+// legacy item_completed carrying an older item shape never reaches the
+// paginated rollout.
+var canonicalTurnItemRequiredFields = map[string][]string{
+	"UserMessage":         {"id", "content"},
+	"FunctionCallOutput":  {"id", "name", "output"},
+	"HookPrompt":          {"id", "fragments"},
+	"AgentMessage":        {"id", "content"},
+	"Plan":                {"id", "text"},
+	"Reasoning":           {"id", "summary_text"},
+	"CommandExecution":    {"id", "command", "cwd", "parsed_cmd", "source", "status"},
+	"DynamicToolCall":     {"id", "tool", "arguments", "status"},
+	"CollabAgentToolCall": {"id", "tool", "status", "sender_thread_id"},
+	"SubAgentActivity":    {"model", "reasoning_effort", "id", "kind", "agent_thread_id", "agent_path"},
+	"WebSearch":           {"id", "query", "action"},
+	"ImageView":           {"id", "path"},
+	"ImageGeneration":     {"id", "status", "result"},
+	"EnteredReviewMode":   {"id", "target", "user_facing_hint"},
+	"ExitedReviewMode":    {"id", "review_output"},
+	"FileChange":          {"id", "changes"},
+	"McpToolCall":         {"id", "server", "tool", "arguments", "status"},
+	"ContextCompaction":   {"id"},
+}
+
+// canonicalTurnItemDecodes reports whether an item_completed payload would
+// deserialize into a modern TurnItem. Extension items keep their own schema, so
+// they are carried over unvalidated.
+func canonicalTurnItemDecodes(source json.RawMessage) bool {
+	fields, err := canonicalRawFields(source)
+	if err != nil {
+		return false
+	}
+	itemRaw, ok := fields["item"]
+	if !ok || canonicalRawIsNull(itemRaw) {
+		return false
+	}
+	item, err := canonicalRawFields(itemRaw)
+	if err != nil {
+		return false
+	}
+	itemType := canonicalRawString(itemRaw, "type")
+	if itemType == "Extension" {
+		return true
+	}
+	required, known := canonicalTurnItemRequiredFields[itemType]
+	if !known {
+		return false
+	}
+	for _, key := range required {
+		if _, ok := item[key]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// writePatchApplyEnd converts a legacy patch_apply_end event into the
+// FileChange completed item paginated rollouts persist.
+func (w *canonicalReplayWriter) writePatchApplyEnd(entry canonicalReplayLine) error {
+	fields, err := canonicalRawFields(entry.payload)
+	if err != nil {
+		return err
+	}
+	// Rust parses the record into the modern PatchApplyEndEvent first; a record
+	// missing a required field never reaches the canonicalizer and the whole
+	// line is discarded.
+	switch canonicalRawString(entry.payload, "status") {
+	case "completed", "failed", "declined":
+	default:
+		return nil
+	}
+	for _, key := range []string{"call_id", "stdout", "stderr", "success"} {
+		if _, ok := fields[key]; !ok {
+			return nil
+		}
+	}
+	turnID := canonicalRawString(entry.payload, "turn_id")
+	if turnID == "" || turnID == w.activeTurnID {
+		ensured, err := w.ensureTurn(entry.timestamp, entry.sourceIndex)
+		if err != nil {
+			return err
+		}
+		turnID = ensured
+	} else {
+		w.reasoning = nil
+	}
+	item, err := canonicalFileChangeItem(fields)
+	if err != nil {
+		return err
+	}
+	return w.writeItemCompleted(entry.timestamp, turnID, item)
+}
+
+// canonicalFileChangeItem builds TurnItem::FileChange from a legacy
+// patch_apply_end payload (legacy_event.rs completed_item).
+func canonicalFileChangeItem(fields map[string]json.RawMessage) ([]byte, error) {
+	callID := ""
+	if value, ok := fields["call_id"]; ok && !canonicalRawIsNull(value) {
+		if err := json.Unmarshal(value, &callID); err != nil {
+			return nil, err
+		}
+	}
+	status := ""
+	if value, ok := fields["status"]; ok && !canonicalRawIsNull(value) {
+		if err := json.Unmarshal(value, &status); err != nil {
+			return nil, err
+		}
+	}
+	out := newCanonicalJSONObject()
+	if err := out.field("type", "FileChange"); err != nil {
+		return nil, err
+	}
+	if err := out.field("id", callID); err != nil {
+		return nil, err
+	}
+	changes := []byte("{}")
+	if value, ok := fields["changes"]; ok && !canonicalRawIsNull(value) {
+		changes = value
+	}
+	if err := out.rawField("changes", changes); err != nil {
+		return nil, err
+	}
+	if err := out.field("status", status); err != nil {
+		return nil, err
+	}
+	for _, key := range []string{"stdout", "stderr"} {
+		text := ""
+		if value, ok := fields[key]; ok && !canonicalRawIsNull(value) {
+			if err := json.Unmarshal(value, &text); err != nil {
+				return nil, err
+			}
+		}
+		if text == "" {
+			continue
+		}
+		if err := out.field(key, text); err != nil {
+			return nil, err
+		}
+	}
+	return out.finish(), nil
 }
 
 func (w *canonicalReplayWriter) writeReasoning(entry canonicalReplayLine) error {

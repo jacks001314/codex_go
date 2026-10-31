@@ -2728,8 +2728,65 @@ order; timestamps lost their milliseconds; and `bytes_processed` was pinned to
   baselines and `./appserver` only the two pre-existing `TestSkillMCPDependency*`
   failures.
 
+### 83. `migrate-rollouts` accounts compressed sources and rewrites legacy event shapes
+
+Round 69 made the replay byte-identical for plain rollouts; three record-shape
+gaps remained, and all three came from mirroring the parts of 0.166's pipeline
+that run *before* the canonicalizer sees a record: `parse_legacy_rollout_line`
+decodes every legacy line into the modern `RolloutLine` and silently drops the
+line when that fails (`.unwrap_or(None)`), and `write_item` then applies
+`persisted_rollout_item` with `ThreadHistoryMode::Paginated`, which keeps a
+small allow-list of events and drops everything transient.
+
+- **Compressed byte accounting.** A `.jsonl.zst` source is charged as the
+  compressed length plus *two* decompressed passes (Rust inflates it once to
+  reach the header and once to stream the canonical rollout) before the same
+  `header + 2 * staged_bytes` tail. `readCanonicalReplayLines` now counts the
+  bytes `ReadLine` consumed before trimming the delimiter, so the total is the
+  decompressed size on disk even for a final line without a trailing newline,
+  and `CanonicalizeRolloutWithStats` doubles it for compressed sources.
+- **Dropped records.** `replayEvent` keeps only the events the paginated policy
+  persists or that Go already converts, so `exec_command_begin`,
+  `exec_command_output_delta`, `mcp_tool_call_begin`, `plan_update`,
+  `item_started`, `error`, `warning`, `turn_diff` and every other transient or
+  retired event disappear like they do in 0.166. An `item_completed` whose item
+  is missing a field 0.166's `TurnItem` cannot decode without (`id`, plus the
+  variant's required fields) is dropped instead of being carried over, so
+  legacy item shapes written by older builds no longer survive migration.
+- **`patch_apply_end`.** A record that decodes into the modern
+  `PatchApplyEndEvent` becomes a `FileChange` completed item
+  (`{"type":"FileChange","id":...,"changes":...,"status":...}` plus the
+  non-empty `stdout`/`stderr`), with the line timestamp as `completed_at_ms`;
+  a legacy record without `status` (or any other required field) is dropped,
+  exactly like Rust's failed decode.
+- Evidence: `out/r76-events.txt` compares five shapes (transient event mix,
+  valid patch, legacy patch, legacy item, modern item) against 0.166 at 5/5
+  byte-identical with identical `bytes_processed` (5,003 / 3,176 / 2,450 /
+  2,485 / 3,513); `out/r76-compressed-cases.txt` covers six `.jsonl.zst`
+  fixtures (three payload sizes at zstd levels 3 and 19, plus two with a
+  rollback marker) at 6/6 identical bytes and counters
+  (4,163 / 4,163 / 5,111 / 16,956 / 9,503 / 9,505);
+  `out/r76-zst-model.txt` is the model that predicted them
+  (`bp = C + 2D + 2O + header`), and `out/r76-migrate-compare.txt` keeps the
+  eight plain shapes green. `TestCanonicalizeRolloutDropsTransientAndRetiredLegacyEventsLikeRust`
+  and `TestCanonicalizeRolloutAccountsCompressedSourceBytesLikeRust` in
+  `rollout/canonical_migration_events_rust_shape_test.go` freeze the new bytes,
+  counters and the compressed accounting rule; `go test -count=1 ./rollout`
+  passes, `./app` keeps only its two known baselines and `./appserver` only the
+  two pre-existing `TestSkillMCPDependency*` failures (plus
+  `TestRuntimeRouterConfigServiceKeepsManagedConfigFreshLikeRust` under the full
+  parallel run, which passes when run alone).
+
 ## Verification
 
+- Round 70 closes the `migrate-rollouts` record-shape and compressed-source
+  gaps (entry 83): `out/r76-events.txt` reports 5/5 shapes byte-identical to
+  0.166 with identical `bytes_processed`, `out/r76-compressed-cases.txt` 6/6
+  `.jsonl.zst` fixtures byte-identical with identical counters
+  (`bp = C + 2D + 2O + header`, from `out/r76-zst-model.txt`), and
+  `out/r76-migrate-compare.txt` keeps the eight plain shapes green; new
+  regression tests in `rollout/canonical_migration_events_rust_shape_test.go`,
+  `go test -count=1 ./rollout` passes.
 - Round 69 makes `migrate-rollouts --apply` replay legacy records like Rust
   (entry 82): `out/r75-migrate-compare.txt` reports 8/8 legacy shapes
   byte-identical to 0.166 with identical `bytes_processed`,
@@ -3348,18 +3405,20 @@ order; timestamps lost their milliseconds; and `bytes_processed` was pinned to
   command is also Go's `sandbox requires COMMAND` where 0.166 runs the empty
   command and either reports `sandbox command must not be empty` (disabled or
   external profile) or the backend error.
-- `migrate-rollouts --apply` now replays legacy records and reports Rust's
-  `bytes_processed` for plain sources (entry 82, `out/r75-migrate-compare.txt`
-  8/8), so two deltas remain. A `.jsonl.zst` source reports 4,296 bytes in 0.166
-  and 3,808 in Go even though the migrated content is identical
-  (`out/r75-compressed.txt`): Rust accounts the compressed length plus the
-  decompressed prefix it stages, and its zstd encoder also emits a different
-  frame size than Go's (488 vs 490 bytes), so the compressed lane needs its own
-  accounting pass. 0.166 also drops legacy `patch_apply_end` and `item_completed`
-  events during replay while Go still passes unknown events through, and Go
-  re-serializes neither `turn_context` (Rust fills the sandbox policy defaults)
-  nor `compacted` (Rust appends null `compaction_response_id` /
-  `latest_token_usage_record`). The `Disk used for thread storage` line follows
+- `migrate-rollouts --apply` now matches 0.166 for plain and `.jsonl.zst`
+  sources, including the transient/retired records Rust drops and the
+  `patch_apply_end` -> `FileChange` conversion (entries 82 and 83,
+  `out/r76-events.txt` 5/5, `out/r76-compressed-cases.txt` 6/6). What is left is
+  the other half of the paginated event policy: legacy `mcp_tool_call_end`,
+  `web_search_end`, `image_generation_end`, `context_compacted`,
+  `entered_review_mode`, `exited_review_mode`, `sub_agent_activity` and
+  `dynamic_tool_call_response` are still carried over verbatim, where Rust
+  converts each into a completed `TurnItem`. Go also re-serializes neither
+  `turn_context` (Rust fills the sandbox policy defaults and reorders the
+  fields) nor `compacted` (Rust appends null `compaction_response_id` /
+  `latest_token_usage_record`), and an `item_completed` whose item decodes but
+  whose nested values Rust rejects (for example an unknown `phase`) still
+  survives Go's shallower check. The `Disk used for thread storage` line follows
   Rust's rule but not its numbers, because Rust leaves the thread-history WAL
   uncheckpointed while Go checkpoints it (290.2 KB vs 88.6 KB in the same
   probe).
