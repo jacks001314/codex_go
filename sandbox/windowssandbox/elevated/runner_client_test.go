@@ -15,6 +15,7 @@ func TestRefreshableSandboxCredsErrorRecognizesCredentialAndChildStartFailures(t
 	}{
 		{errorLogonFailure, true},
 		{errorNoSuchLogonSession, true},
+		{errorAccountDisabled, true},
 		{errorNotFound, false},
 	} {
 		err := &RunnerLogonError{Code: tc.code}
@@ -79,6 +80,27 @@ func TestRetryRunnerSpawnOnceRefreshesOnlyRefreshableErrors(t *testing.T) {
 	})
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("RetryRunnerSpawnOnce non-refreshable error = %v", err)
+	}
+}
+
+// TestRetryRunnerSpawnOnceRefreshesDisabledSandboxAccountLikeRust pins Rust
+// #42375: an uninstall or interrupted cleanup can disable the sandbox accounts,
+// and ERROR_ACCOUNT_DISABLED must refresh the credentials instead of failing.
+func TestRetryRunnerSpawnOnceRefreshesDisabledSandboxAccountLikeRust(t *testing.T) {
+	initial := SandboxCredentials{Username: "disabled"}
+	refreshed := SandboxCredentials{Username: "reprovisioned"}
+	attempts := 0
+	got, err := RetryRunnerSpawnOnce(initial, []string{"cmd.exe"}, func(creds SandboxCredentials) (string, error) {
+		attempts++
+		if creds.Username == initial.Username {
+			return "", &RunnerLogonError{Code: errorAccountDisabled}
+		}
+		return creds.Username, nil
+	}, func() (SandboxCredentials, error) {
+		return refreshed, nil
+	})
+	if err != nil || got != refreshed.Username || attempts != 2 {
+		t.Fatalf("RetryRunnerSpawnOnce(disabled) = (%q, %v, attempts %d), want (%q, nil, 2)", got, err, attempts, refreshed.Username)
 	}
 }
 
