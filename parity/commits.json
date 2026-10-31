@@ -20125,9 +20125,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified",
+    "exec-server half (#47672): Windows 10 rejected the Object Manager drive-letter link when a directory was opened with OBJ_DONT_REPARSE. Go never performs that strict NT open: execserver/no_follow.go walks every path component, execserver/no_follow_windows.go rejects components with FILE_ATTRIBUTE_REPARSE_POINT, and files are opened through Win32 CreateFile on the plain DOS path with FILE_FLAG_OPEN_REPARSE_POINT, so the \\??\\C: alias (and the Windows 10 rejection of it) never occurs. Subpath/device mapping validation has no Go counterpart for the same reason. TestDriveLetterPathsAreNotReparseRejectedAndJunctionsStayBlocked freezes the invariants: ordinary drive-letter paths and the drive root open normally, a junction is reported and never traversed, and creating through a junction fails. Verified with go test ./execserver -run TestDriveLetterPathsAreNotReparseRejectedAndJunctionsStayBlocked -count=1 on windows/amd64 (ok)."
    ]
   },
   {
