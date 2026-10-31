@@ -157,6 +157,39 @@ func TestBuildSeatbeltPolicyDeniesXPCLookupsLikeRust(t *testing.T) {
 	}
 }
 
+// TestBuildSeatbeltPolicyAllowsTLSTrustServiceLikeRust covers #48565: network
+// profiles must let system libcurl reach the trust-evaluation service, and the
+// grant has to follow the XPC deny so it wins. Profiles without networking keep
+// the service denied.
+func TestBuildSeatbeltPolicyAllowsTLSTrustServiceLikeRust(t *testing.T) {
+	networked := WorkspaceWritePermissionProfile()
+	networked.NetworkEnabled = true
+	policy, _, err := buildSeatbeltPolicy("/workspace", &networked, nil, "")
+	if err != nil {
+		t.Fatalf("buildSeatbeltPolicy: %v", err)
+	}
+	denyIndex := strings.Index(policy, `(deny mach-lookup (xpc-service-name-prefix ""))`)
+	allowIndex := strings.Index(policy, seatbeltTLSTrustService)
+	if denyIndex < 0 || allowIndex < 0 {
+		t.Fatalf("policy missing XPC deny or trust-service grant:\n%s", policy)
+	}
+	if allowIndex < denyIndex {
+		t.Fatalf("trust-service grant precedes the XPC deny and would be overridden:\n%s", policy)
+	}
+	if strings.Contains(policy, "(deny network*)") {
+		t.Fatalf("network profile unexpectedly denies all networking:\n%s", policy)
+	}
+
+	offline := WorkspaceWritePermissionProfile()
+	offlinePolicy, _, err := buildSeatbeltPolicy("/workspace", &offline, nil, "")
+	if err != nil {
+		t.Fatalf("buildSeatbeltPolicy: %v", err)
+	}
+	if strings.Contains(offlinePolicy, seatbeltTLSTrustService) {
+		t.Fatalf("network-disabled policy granted TLS trust access:\n%s", offlinePolicy)
+	}
+}
+
 // TestBuildSeatbeltPolicyDeniesMutatingFcntlsLikeRust covers #46500:
 // F_MAKECOMPRESSED (80) and F_TRANSFEREXTENTS (110) mutate files through
 // read-only descriptors, so every policy without full disk write access denies

@@ -18227,9 +18227,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Go has no host-native cwd conversion for turn environments: cwd values stay strings (turn/api.go only bounds their size), extension tools receive every environment, and image generation saves through AttachmentStore instead of an environment cwd"
    ]
   },
   {
@@ -20997,9 +20997,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "blocked_precondition",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Go macOS Seatbelt policy skips glob_pattern deny-read entries entirely (sandbox/seatbelt.go seatbeltDeniedReadPaths), so there is no unreadable-glob regex policy and no ancestor-unlink rule to exempt; the directory-move refinement needs that glob enforcement first"
    ]
   },
   {
@@ -21370,9 +21370,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "mcp/tool_executor.go reuses sharedMCPDefinitions entries across tool executors keyed by server, tool, schema budget and full metadata equality so equivalent bindings keep handler identity; catalog changes rebuild and collected entries are pruned (mcp/tool_definition_cache_like_rust_test.go)"
    ]
   },
   {
@@ -22259,9 +22259,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "sandbox/seatbelt.go grants mach-lookup for com.apple.TrustEvaluationAgent after the XPC deny whenever the profile allows networking; sandbox/seatbelt_test.go checks the ordering and that network-disabled profiles stay denied"
    ]
   },
   {
@@ -23023,9 +23023,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Go diff tracking never discovers Git roots for display: RuntimeRouter diffs use runtimeutil.NewDiffTracker with no display roots, so diff display cannot wait on remote Git discovery; Rust #49082 only exempts Guardian from that discovery"
    ]
   },
   {

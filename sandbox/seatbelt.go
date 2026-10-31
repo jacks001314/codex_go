@@ -13,6 +13,11 @@ import (
 
 const macOSSeatbeltExecutable = "/usr/bin/sandbox-exec"
 
+// seatbeltTLSTrustService is the platform service system libcurl consults for
+// TLS trust evaluation. The XPC deny below only covers `xpc-service-name-prefix`,
+// so network-enabled profiles must re-allow this Mach service (Rust #48565).
+const seatbeltTLSTrustService = `(allow mach-lookup (global-name "com.apple.TrustEvaluationAgent"))`
+
 type seatbeltParameter struct {
 	Name  string
 	Value string
@@ -172,6 +177,12 @@ func buildSeatbeltPolicyWithManagedNetwork(cwd string, profile *PermissionProfil
 
 	if !profile.AllowsNetwork() {
 		lines = append(lines, "(deny network*)", "(deny system-socket)")
+	}
+	// Rust #48565: system libcurl needs the trust-evaluation service for TLS.
+	// Keep it out of network-disabled and Unix-socket-only profiles, which never
+	// reach this branch.
+	if profile.AllowsNetwork() {
+		lines = append(lines, seatbeltTLSTrustService)
 	}
 	socketLines, socketParameters := seatbeltUnixSocketRules(allowUnixSockets, managedNetwork)
 	lines = append(lines, socketLines...)
