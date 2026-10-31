@@ -9463,9 +9463,6 @@ func (r *RuntimeRouter) handleTurnSteer(request *Request) (*turn.TurnSteerRespon
 	if err := validateTurnUserInputImageURLs(params.Input); err != nil {
 		return nil, err
 	}
-	if err := validateTurnUserInputAudioFiles(params.Input); err != nil {
-		return nil, err
-	}
 	response, err := r.requireTurns().Steer(&params)
 	if err != nil {
 		r.emitCodexTurnSteerAnalyticsEvent(context.Background(), connectionID, &params, nil, telemetry.TurnSteerResultRejected, turnSteerAnalyticsRejectionReason(err), createdAt)
@@ -9480,7 +9477,13 @@ func (r *RuntimeRouter) handleTurnSteer(request *Request) (*turn.TurnSteerRespon
 	// message is recorded.
 	r.sealRealtimeUserInput(params.ThreadID, params.Prompt)
 	if r.hasRuntimeThreadStore() {
-		if item, ok := sessionItemFromTurnSteer(&params); ok {
+		recordedParams := params
+		if filtered, rejected := turnUserInputsWithoutUploadedAudio(params.Input); rejected {
+			// Rust #58430: the rejected attachment never enters history, while the
+			// steered text stays recorded before the turn fails.
+			recordedParams.Input = filtered
+		}
+		if item, ok := sessionItemFromTurnSteer(&recordedParams); ok {
 			if _, err := r.runtimeAppendItem(session.ThreadID(params.ThreadID), item); err != nil {
 				return nil, err
 			}
