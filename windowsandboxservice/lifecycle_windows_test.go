@@ -177,7 +177,7 @@ func TestLifecycleServesRegistrationRequests(t *testing.T) {
 	}
 	response, err := lifecycle.ServeProvisioningRequest(identity, &ServiceRequest{
 		Register: &RegisterInstallationRequest{CodexHome: home},
-	}, nil, nil, nil)
+	}, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("ServeProvisioningRequest() error = %v", err)
 	}

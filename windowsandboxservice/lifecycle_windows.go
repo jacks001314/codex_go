@@ -111,8 +111,12 @@ func (lifecycle *Lifecycle) ServeProvisioningRequest(
 	request *ServiceRequest,
 	sandboxSID []byte,
 	stopped func() bool,
+	policy PolicyValidator,
 	setup SetupRunner,
 ) (provisionservice.Response, error) {
+	if err := validateProvisioningPolicy(identity, request, policy); err != nil {
+		return provisionservice.Response{}, err
+	}
 	return RunProvisioning(identity, request, sandboxSID, stopped, lifecycle.RegisterOwner, setup)
 }
 
