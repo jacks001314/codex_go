@@ -1715,8 +1715,23 @@ func parseLogin(args []string, login *LoginOptions) error {
 
 func parseReview(args []string, review *ReviewOptions, exec *ExecOptions, overrides *[]string) error {
 	var deferred error
+	// positions records where each review-scope argument first appears so
+	// clap's post-parse diagnostics can order conflicts by argv.
+	positions := map[string]int{}
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
+
+		// clap rejects a second occurrence of a boolean flag while it parses, so
+		// that diagnostic still beats an undeclared flag later in argv.
+		if token, ok := reviewBooleanUsageToken(reviewCommandName(exec), arg); ok {
+			if _, seen := positions[token]; seen {
+				return &UsageError{
+					Message: "the argument '" + token + "' cannot be used multiple times",
+					Usage:   clapCommandUsageText(reviewCommandName(exec)),
+				}
+			}
+			positions[token] = i
+		}
 		if value, next, handled, err := clapConfigOverrideArg(args, i); handled {
 			if err != nil {
 				return err
@@ -1757,14 +1772,10 @@ func parseReview(args []string, review *ReviewOptions, exec *ExecOptions, overri
 			// review` the exec Cli marks the same flag global.
 			review.StrictConfig = true
 		case arg == "--uncommitted":
-			if review.Base != "" || review.Commit != "" || review.Prompt != "" {
-				return errors.New("--uncommitted conflicts with --base, --commit, and PROMPT")
-			}
+			recordReviewPosition(positions, "uncommitted", i)
 			review.Uncommitted = true
 		case arg == "--base":
-			if review.Uncommitted || review.Commit != "" || review.Prompt != "" {
-				return errors.New("--base conflicts with --uncommitted, --commit, and PROMPT")
-			}
+			recordReviewPosition(positions, "base", i)
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
 				return err
@@ -1772,14 +1783,10 @@ func parseReview(args []string, review *ReviewOptions, exec *ExecOptions, overri
 			review.Base = value
 			i = next
 		case strings.HasPrefix(arg, "--base="):
-			if review.Uncommitted || review.Commit != "" || review.Prompt != "" {
-				return errors.New("--base conflicts with --uncommitted, --commit, and PROMPT")
-			}
+			recordReviewPosition(positions, "base", i)
 			review.Base = strings.TrimPrefix(arg, "--base=")
 		case arg == "--commit":
-			if review.Uncommitted || review.Base != "" || review.Prompt != "" {
-				return errors.New("--commit conflicts with --uncommitted, --base, and PROMPT")
-			}
+			recordReviewPosition(positions, "commit", i)
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
 				return err
@@ -1787,11 +1794,10 @@ func parseReview(args []string, review *ReviewOptions, exec *ExecOptions, overri
 			review.Commit = value
 			i = next
 		case strings.HasPrefix(arg, "--commit="):
-			if review.Uncommitted || review.Base != "" || review.Prompt != "" {
-				return errors.New("--commit conflicts with --uncommitted, --base, and PROMPT")
-			}
+			recordReviewPosition(positions, "commit", i)
 			review.Commit = strings.TrimPrefix(arg, "--commit=")
 		case arg == "--title":
+			recordReviewPosition(positions, "title", i)
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
 				return err
@@ -1799,39 +1805,69 @@ func parseReview(args []string, review *ReviewOptions, exec *ExecOptions, overri
 			review.CommitTitle = value
 			i = next
 		case strings.HasPrefix(arg, "--title="):
+			recordReviewPosition(positions, "title", i)
 			review.CommitTitle = strings.TrimPrefix(arg, "--title=")
 		case arg == "-":
-			if review.Uncommitted || review.Base != "" || review.Commit != "" {
-				return errors.New("PROMPT conflicts with --uncommitted, --base, and --commit")
-			}
+			recordReviewPosition(positions, "prompt", i)
 			review.Prompt = "-"
-			return nil
+			return reviewClapValidation(reviewCommandName(exec), args, positions)
 		case strings.HasPrefix(arg, "-"):
 			if exec != nil {
 				return clapUnexpectedLongFlagError("exec review", arg, args[:i])
 			}
 			return clapUnexpectedLongFlagError("review", arg, args[:i])
 		default:
-			if review.Uncommitted || review.Base != "" || review.Commit != "" {
-				return errors.New("PROMPT conflicts with --uncommitted, --base, and --commit")
-			}
 			// Rust's review takes a single PROMPT positional.
-			if review.Prompt != "" {
+			if _, bound := positions["prompt"]; bound {
 				if exec != nil {
 					return unexpectedPositionalError(arg, execReviewUsageText)
 				}
 				return fmt.Errorf("unexpected argument '%s' found", arg)
 			}
+			recordReviewPosition(positions, "prompt", i)
 			review.Prompt = arg
 		}
 	}
 	if deferred != nil {
 		return deferred
 	}
-	if review.CommitTitle != "" && review.Commit == "" {
-		return errors.New("--title requires --commit")
+	return reviewClapValidation(reviewCommandName(exec), args, positions)
+}
+
+// reviewBooleanUsageToken maps the boolean flags review accepts to the usage
+// token clap counts. clap's SetTrue actions reject a second occurrence during
+// parsing, unlike the value options it validates after the scan.
+func reviewBooleanUsageToken(command, arg string) (string, bool) {
+	switch arg {
+	case "--uncommitted":
+		return "--uncommitted", true
+	case "--strict-config":
+		return "--strict-config", true
 	}
-	return nil
+	if command != "exec review" {
+		return "", false
+	}
+	switch arg {
+	case "--skip-git-repo-check", "--ephemeral", "--ignore-user-config", "--ignore-rules",
+		"--worktree", "--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-hook-trust":
+		return arg, true
+	case "--json", "--experimental-json":
+		return "--json", true
+	}
+	return "", false
+}
+
+func recordReviewPosition(positions map[string]int, key string, index int) {
+	if _, ok := positions[key]; !ok {
+		positions[key] = index
+	}
+}
+
+func reviewCommandName(exec *ExecOptions) string {
+	if exec != nil {
+		return "exec review"
+	}
+	return "review"
 }
 
 // isExecGlobalSharedArg lists the exec `SharedCliOptions` entries Rust marks

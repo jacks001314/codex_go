@@ -1461,8 +1461,65 @@ one-off captures.
     `TestFormatMigrationElapsedMatchesRust` and
     `TestFormatMigrationBytesMatchesRust` pin the captured behavior.
 
+53. **`review` / `exec review`: clap's `conflicts_with_all`, the `--title`
+    requirement and the multiple-times check** - the scope flags were rejected
+    with Go's own wording as soon as they were seen (`--base conflicts with
+    ...`, `--title requires --commit`), so every diagnostic clap derives after
+    the scan (conflict ordering, the derived `--commit <SHA>` echo, the
+    `multiple times` rejection) was missing.
+    - `cli/cli.go` keeps the review scan but only records where each scope
+      argument first appears (`positions`). `--uncommitted`, `--base`,
+      `--commit`, `--title` and the `PROMPT` positional are no longer checked
+      inline; a repeated SetTrue flag (`--uncommitted`, `--strict-config`, and
+      under `exec review` also `--skip-git-repo-check`, `--ephemeral`,
+      `--ignore-user-config`, `--ignore-rules`, `--worktree`, both dangerous
+      bypasses and `--json`/`--experimental-json`) still fails during the scan,
+      because clap validates those while parsing: `the argument '<flag>' cannot
+      be used multiple times` beats a later undeclared flag.
+    - `cli/usage_clap.go` adds `reviewClapValidation`, which runs after the
+      loop like clap's post-parse validation: a second occurrence of a
+      single-value option (everything but `--config`, `--enable`, `--disable`)
+      reports the same `multiple times` line with the static usage page, then
+      the scope arguments are walked in argv order and the first one with a
+      conflict reports `the argument 'A' cannot be used with 'B'` (or, for
+      several, `cannot be used with:
+  B
+  C`), and `--title` without a
+      scope reports
+      `the following required arguments were not provided:
+  --commit <SHA>`.
+      The usage block follows clap's smart form: the derived `--commit <SHA>`
+      comes first, then the accepted options in argv order (conflicting ones
+      dropped), then `[PROMPT]`.
+    - Because a repeated single-value argument cannot be echoed, both the
+      unknown-argument path and the subcommand decorator fall back to the plain
+      usage page (`--title a --title b --bogus`, `--base x --base y --bogus`,
+      `exec review --title a --title b --bogus`), while a did-you-mean tip that
+      points at an option argv already carries no longer adds a second copy
+      (`review --title=a --stripe`).
+    Evidence: `out/p39t-rust.json` captures 38 diagnostics straight from 0.166
+    (6 requirement shapes, 15 conflict shapes including multi-conflict argv
+    ordering, 11 multiple-times shapes and 6 unknown-argument interactions);
+    `TestReviewScopeDiagnosticsLikeRust` replays all 38. The 33-case conflict
+    matrix `out/p39m-*` and the 4-case repeat/unknown matrix are byte-identical
+    except `review --title=t --commit abc`, where Rust blocks on auth/network
+    and the probe times out (Go reports the missing login immediately).
+
 ## Verification
 
+- `review`/`exec review` scope diagnostics match Rust 0.166: the 1,068-case
+  inline sweep ends at 1,033 identical with 0 new diffs and two fixes
+  (`codex review --title=`, `codex exec review --title=`,
+  `out/round39-inline.txt`), and the 497 bad-value cases
+  (`out/round39-r34-flag-surface.txt`), 78 round-34 fixes
+  (`out/round39-r34-fixed.log`), 16 ordering cases
+  (`out/round39-r35-order.log`) and 31 round 29-34 probes
+  (`out/round39-regress.txt`, `out/round39-regress2.txt`) stay at 0 diffs
+  (the two `<ACCEPTED>`/`--color` rows that occasionally appear there are the
+  6-second probe timeout catching Rust's auth/network stall; `probe_r34x`
+  alone reports 0 diffs twice in a row in `out/round39-r34x.log`).
+  `go test -count=1 -vet=off ./cli ./sandbox ./applypatch ./prompt ./review
+  ./cmd/... ./tcptunnel ./config ./rollout` and `go test -vet=off ./app` pass.
 - `migrate-rollouts` matches Rust 0.166 on the uuid `--thread` grammar and the
   human report: `out/p38g-uuid.txt` covers 26 accepted/rejected uuid shapes
   (26/26) and `out/p38k-migrate.txt` compares 8 scenarios at 7 byte-identical,
@@ -1832,6 +1889,16 @@ one-off captures.
 - `queue --thread "" --message hi` parses in both CLIs, but Rust fails later with
   `No active session found matching ''` while Go reports `Error: SESSION is
   required`.
+- clap's multiple-times check and value parsers are still review-only. Rust
+  rejects `doctor --summary --summary --bogus` at parse time
+  (`the argument '--summary' cannot be used multiple times`) while Go reports
+  the unexpected argument, `app-server --listen a --listen b --bogus` hits
+  `--listen`'s value parser first
+  (`invalid value 'a' for '--listen <URL>': unsupported --listen URL`), and
+  `queue --message a --message b --bogus` keeps the `[OPTIONS]` placeholder
+  (`Usage: codex queue [OPTIONS] --thread <THREAD> --message <TEXT>`) where Go
+  echoes the repeated option. Fixing these needs a per-command option-arity
+  table rather than the review-only one.
 
 - `codex resume`/`codex fork` without a TTY: Rust refuses to start the TUI
   (`ERROR: TERM is set to "dumb". Refusing to start the interactive TUI ...`)

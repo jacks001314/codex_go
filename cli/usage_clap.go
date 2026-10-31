@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -692,6 +693,11 @@ func decorateSubcommandClapUsage(command Command, err error, args []string) erro
 		return err
 	}
 	used := clapUsageOptionTokens(string(command), args, stopAt)
+	if clapUsageTokensRepeat(clapEffectiveCommand(string(command), args), used) {
+		// clap cannot echo a single-value argument the caller repeated, so the
+		// diagnostic keeps the plain usage block instead of the smart one.
+		return err
+	}
 	if usageErr.Suggested != "" {
 		used = append(used, usageErr.Suggested)
 	}
@@ -842,6 +848,183 @@ var queueEchoableUsageOptions = map[string]bool{
 	"--strict-config":         true,
 	"--cd":                    true,
 	"--resume":                true,
+}
+
+// reviewUsageConflicts mirrors the conflicts_with_all table Rust declares on
+// ReviewArgs (exec/src/cli.rs): the scope flags and PROMPT exclude each other.
+var reviewUsageConflicts = map[string][]string{
+	"--uncommitted":   {"--base <BRANCH>", "--commit <SHA>", "[PROMPT]"},
+	"--base <BRANCH>": {"--uncommitted", "--commit <SHA>", "[PROMPT]"},
+	"--commit <SHA>":  {"--uncommitted", "--base <BRANCH>", "[PROMPT]"},
+	"[PROMPT]":        {"--uncommitted", "--base <BRANCH>", "--commit <SHA>"},
+}
+
+// reviewUsageKeys lists the review-scope arguments in clap's declaration order
+// together with the usage token each one renders as.
+var reviewUsageKeys = []struct {
+	key   string
+	token string
+}{
+	{"uncommitted", "--uncommitted"},
+	{"base", "--base <BRANCH>"},
+	{"commit", "--commit <SHA>"},
+	{"prompt", "[PROMPT]"},
+}
+
+// reviewClapValidation mirrors clap's post-parse validation for `codex review`
+// and `codex exec review`: single-use arguments reject a second occurrence,
+// the scope flags conflict with each other and with PROMPT, and --title
+// requires --commit unless a conflicting argument was supplied.
+func reviewClapValidation(command string, args []string, positions map[string]int) error {
+	used := clapUsageOptionTokens(command, args, "")
+	counts := make(map[string]int, len(used))
+	for _, token := range used {
+		if reviewUsageTokenRepeatable(token) {
+			continue
+		}
+		counts[token]++
+		if counts[token] == 2 {
+			return &UsageError{
+				Message: "the argument '" + token + "' cannot be used multiple times",
+				Usage:   clapCommandUsageText(command),
+			}
+		}
+	}
+
+	present := make([]struct {
+		token string
+		index int
+	}, 0, len(reviewUsageKeys))
+	for _, spec := range reviewUsageKeys {
+		if index, ok := positions[spec.key]; ok {
+			present = append(present, struct {
+				token string
+				index int
+			}{spec.token, index})
+		}
+	}
+	sort.Slice(present, func(i, j int) bool { return present[i].index < present[j].index })
+
+	_, titlePresent := positions["title"]
+	for _, candidate := range present {
+		conflicting := make([]string, 0, 3)
+		excluded := make(map[string]bool, 3)
+		for _, other := range present {
+			if other.token == candidate.token {
+				continue
+			}
+			if !clapReviewConflicts(candidate.token, other.token) {
+				continue
+			}
+			conflicting = append(conflicting, other.token)
+			excluded[other.token] = true
+		}
+		if len(conflicting) == 0 {
+			continue
+		}
+		message := "the argument '" + candidate.token + "' cannot be used with '" + conflicting[0] + "'"
+		if len(conflicting) > 1 {
+			message = "the argument '" + candidate.token + "' cannot be used with:\n  " + strings.Join(conflicting, "\n  ")
+		}
+		return &UsageError{Message: message, Usage: reviewClapUsage(command, used, excluded, titlePresent)}
+	}
+
+	if titlePresent && !clapReviewRequirementBlocked(positions) {
+		return &UsageError{
+			Message: "the following required arguments were not provided:\n  --commit <SHA>",
+			Usage:   reviewClapUsage(command, used, nil, true),
+		}
+	}
+	return nil
+}
+
+func clapReviewConflicts(token, other string) bool {
+	for _, conflict := range reviewUsageConflicts[token] {
+		if conflict == other {
+			return true
+		}
+	}
+	return false
+}
+
+// clapReviewRequirementBlocked reports whether --commit conflicts with an
+// argument the user supplied. clap stops enforcing a requirement when the
+// required argument cannot be present.
+func clapReviewRequirementBlocked(positions map[string]int) bool {
+	for _, key := range []string{"uncommitted", "base", "commit", "prompt"} {
+		if _, ok := positions[key]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// reviewClapUsage renders clap's smart usage for a review diagnostic: derived
+// requirements first, then the arguments argv supplied in order, then PROMPT.
+func reviewClapUsage(command string, used []string, excluded map[string]bool, requireCommit bool) string {
+	fields := []string{"Usage: codex"}
+	if command == "exec review" {
+		fields = append(fields, "exec")
+	}
+	fields = append(fields, "review")
+	seen := make(map[string]bool, len(used)+1)
+	kept := make([]string, 0, len(used))
+	for _, token := range used {
+		if seen[token] {
+			continue
+		}
+		seen[token] = true
+		if excluded[token] {
+			continue
+		}
+		kept = append(kept, token)
+	}
+	if requireCommit && !seen["--commit <SHA>"] {
+		fields = append(fields, "--commit <SHA>")
+	}
+	fields = append(fields, kept...)
+	fields = append(fields, "[PROMPT]")
+	return strings.Join(fields, " ")
+}
+
+// reviewUsageTokenRepeatable reports the review arguments clap lets a caller
+// repeat; every other option rejects a second occurrence.
+func reviewUsageTokenRepeatable(token string) bool {
+	switch token {
+	case "--config <key=value>", "--enable <FEATURE>", "--disable <FEATURE>":
+		return true
+	}
+	return false
+}
+
+// clapUsageOptionUsed reports whether consumed already carries token.
+func clapUsageOptionUsed(command string, consumed []string, token string) bool {
+	for _, used := range clapUsageOptionTokens(command, consumed, "") {
+		if used == token {
+			return true
+		}
+	}
+	return false
+}
+
+// clapUsageTokensRepeat reports whether argv repeated one of the review
+// arguments clap only accepts once, in which case the diagnostic cannot echo
+// the options into its usage block.
+func clapUsageTokensRepeat(command string, used []string) bool {
+	if command != "review" && command != "exec review" {
+		return false
+	}
+	seen := make(map[string]bool, len(used))
+	for _, token := range used {
+		if reviewUsageTokenRepeatable(token) {
+			continue
+		}
+		if seen[token] {
+			return true
+		}
+		seen[token] = true
+	}
+	return false
 }
 
 // clapUsageOptionTokens renders the options clap accepted, stopping in front of
@@ -1635,12 +1818,18 @@ func clapUnexpectedLongFlagError(command, arg string, consumed []string) error {
 		// command captures trailing values; both tips stack on separate lines.
 		message += strings.TrimPrefix(trailingTip, "\n\n")
 	}
-	echoed := append(append([]string{}, consumed...), clapLongFlagUsageToken(command, suggestion.primary))
+	suggestedToken := clapLongFlagUsageToken(command, suggestion.primary)
+	echoed := append([]string{}, consumed...)
+	if !clapUsageOptionUsed(command, echoed, suggestedToken) {
+		// A tip that points at an option argv already carries must not add a
+		// second copy: clap echoes each consumed option once.
+		echoed = append(echoed, suggestedToken)
+	}
 	return &UsageError{
 		Message:    message + "\n\n  tip: a similar argument exists: '--" + suggestion.matched + "'",
 		Usage:      clapCommandUsageAfter(command, echoed),
 		SmartUsage: clapUsageIsSmart(command),
-		Suggested:  clapLongFlagUsageToken(command, suggestion.primary),
+		Suggested:  suggestedToken,
 	}
 }
 
@@ -1659,7 +1848,18 @@ func clapCommandUsageAfter(command string, consumed []string) string {
 	case "", "exec":
 		return clapCommandUsageText(command)
 	}
+	if clapReviewUsageRepeats(command, consumed) {
+		// clap cannot echo a single-value argument the caller repeated, so it
+		// falls back to the static usage page.
+		return clapCommandUsageText(command)
+	}
 	return clapSmartUsage(command, consumed)
+}
+
+// clapReviewUsageRepeats reports whether argv repeated one of the review
+// arguments clap only accepts once.
+func clapReviewUsageRepeats(command string, consumed []string) bool {
+	return clapUsageTokensRepeat(command, clapUsageOptionTokens(command, consumed, ""))
 }
 
 // clapCommandHasPositionals reports whether clap offers the `--` workaround tip
