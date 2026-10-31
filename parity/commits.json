@@ -6537,9 +6537,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "partial",
    "evidence": [
-    "Partial symbol coverage 16/31; needs review: AdditionalRateLimitWithNormalModel, AutomaticModelSwitchState, LUNA_MODEL, LUNA_RESERVE_RECOVERY_VIEW_ID, defer_pending_turn_for_luna_reserve"
+    "App-server/protocol half: chatgptapi/backend_models.go now decodes the extra normal_model_slug per additional rate limit (AdditionalRateLimitDetails.NormalModelSlug) and exposes it on chatgptapi.RateLimitSnapshot; appserver/runtime_router.go accountRateLimitFromBackend copies it into auth.RateLimitSnapshot, which serializes as normalModelSlug on getAccountRateLimits and account/rateLimits/updated, so clients can render the alias model display metadata without changing the request model.",
+    "model/usage_limit.go already keeps Rust protocol/src/error.rs copy: a gpt-reserve limit name does not suggest switching to another model.",
+    "Tests: TestRateLimitSnapshotsCarryNormalModelSlugFromUsagePayload (go test ./chatgptapi -count=1) and TestAccountRateLimitFromBackendCarriesNormalModelSlug (go test ./appserver -run TestAccountRateLimitFromBackendCarriesNormalModelSlug -count=1).",
+    "Residual: the TUI half (automatic switch to Luna Reserve after an exhausted ordinary usage read, per-task restore of model and reasoning effort, reasoning-level restriction while on Reserve, queued-turn pinning, composer and /status Reserve rendering, near-exhaustion polling) is not implemented; that surface lives in tui/** and belongs to the TUI stream."
    ]
   },
   {
@@ -18817,9 +18820,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 3/5; needs review: CompatibilityError, restart_with_features_locked"
+    "appserverdaemon/lifecycle.go StartWithFeatures merges the stored feature overrides with the launch request before starting, mirroring Rust start_with_features.",
+    "appserverdaemon/lifecycle.go RestartWithFeatures requires a running managed backend (Rust error text \"no running managed daemon; rerun the command to check the current server\"), merges the confirmed toggles, and starts with the previous settings instead of restarting when the merged overrides already match (Rust restart_with_features_locked).",
+    "appserverdaemon/lifecycle.go LifecycleRunner.restart persists changed launch settings only after the old process has stopped, so an interrupted drain cannot make an unapplied change look current (Rust Daemon::restart_with_settings).",
+    "app/daemon_recovery.go resolveDaemonCompatibility plus tui/onboarding/daemon_recovery.go port the recovery screen: run-without-daemon / restart / cancel, cancel preselected, restart only for a managed daemon with a feature mismatch and a single compatibility re-check; app/daemon_startup.go daemonFailureHint carries the --no-daemon guidance for noninteractive required-daemon failures while optional attachment keeps the embedded fallback.",
+    "Tests: TestLifecycleRunnerRestartWithFeaturesLikeRust, TestLifecycleRunnerRestartApplyingFeaturesLikeRust (go test ./appserverdaemon -run RestartWithFeatures|RestartApplyingFeatures -count=1), app/daemon_recovery_test.go and app/daemon_startup_test.go (go test ./app -run DaemonRecovery|DaemonCompat -count=1), tui/onboarding/daemon_recovery_test.go (go test ./tui/onboarding -run DaemonRecovery -count=1)."
    ]
   },
   {

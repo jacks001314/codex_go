@@ -14797,6 +14797,7 @@ func accountRateLimitFromBackend(snapshot *chatgptapi.RateLimitSnapshot) auth.Ra
 	return auth.RateLimitSnapshot{
 		LimitID:              cloneStringPtrAppserver(snapshot.LimitID),
 		LimitName:            cloneStringPtrAppserver(snapshot.LimitName),
+		NormalModelSlug:      cloneStringPtrAppserver(snapshot.NormalModelSlug),
 		Primary:              accountRateLimitWindowFromBackend(snapshot.Primary),
 		Secondary:            accountRateLimitWindowFromBackend(snapshot.Secondary),
 		Credits:              accountCreditsFromBackend(snapshot.Credits),

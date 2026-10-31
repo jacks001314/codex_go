@@ -146,3 +146,43 @@ func TestRateLimitSnapshotsFromPayload(t *testing.T) {
 		t.Fatalf("additional snapshot = %#v", snapshots[1])
 	}
 }
+
+// Mirrors Rust #42372: the usage endpoint carries normal_model_slug outside the
+// OpenAPI model, and only the additional (alias) snapshots publish it. The
+// primary "codex" snapshot stays nil.
+func TestRateLimitSnapshotsCarryNormalModelSlugFromUsagePayload(t *testing.T) {
+	raw := `{
+		"plan_type": "pro",
+		"rate_limit": {"allowed": true, "limit_reached": false},
+		"additional_rate_limits": [
+			{
+				"limit_name": "Luna Reserve",
+				"metered_feature": "codex_luna_reserve",
+				"normal_model_slug": "gpt-6-sol",
+				"rate_limit": {
+					"allowed": true,
+					"limit_reached": false,
+					"primary_window": {"used_percent": 37.4, "limit_window_seconds": 900}
+				}
+			}
+		]
+	}`
+	var payload RateLimitStatusPayload
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		t.Fatalf("unmarshal usage payload: %v", err)
+	}
+	snapshots := RateLimitSnapshotsFromPayload(&payload)
+	if len(snapshots) != 2 {
+		t.Fatalf("snapshots len = %d, want 2", len(snapshots))
+	}
+	if snapshots[0].NormalModelSlug != nil {
+		t.Fatalf("primary snapshot slug = %v, want nil", *snapshots[0].NormalModelSlug)
+	}
+	reserve := snapshots[1]
+	if reserve.LimitID == nil || *reserve.LimitID != "codex_luna_reserve" || reserve.LimitName == nil || *reserve.LimitName != "Luna Reserve" {
+		t.Fatalf("reserve snapshot = %#v", reserve)
+	}
+	if reserve.NormalModelSlug == nil || *reserve.NormalModelSlug != "gpt-6-sol" {
+		t.Fatalf("reserve slug = %v, want gpt-6-sol", reserve.NormalModelSlug)
+	}
+}

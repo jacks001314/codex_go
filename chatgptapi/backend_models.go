@@ -163,6 +163,10 @@ type AdditionalRateLimitDetails struct {
 	LimitName      string                  `json:"limit_name"`
 	MeteredFeature string                  `json:"metered_feature"`
 	RateLimit      *RateLimitStatusDetails `json:"rate_limit,omitempty"`
+	// NormalModelSlug is the normal model whose display name and reasoning
+	// options describe this quota alias (Rust #42372). The usage endpoint
+	// carries it as an extra field, outside the backend OpenAPI model.
+	NormalModelSlug *string `json:"normal_model_slug,omitempty"`
 }
 
 type SpendControlStatusDetails struct {
@@ -194,8 +198,12 @@ func NewCreditStatusDetails(hasCredits bool, unlimited bool) *CreditStatusDetail
 }
 
 type RateLimitSnapshot struct {
-	LimitID              *string
-	LimitName            *string
+	LimitID   *string
+	LimitName *string
+	// NormalModelSlug is set for additional (alias) quotas so the app-server
+	// snapshot can advertise the associated model without changing the request
+	// model (Rust v2 RateLimitSnapshot.normalModelSlug).
+	NormalModelSlug      *string
 	Primary              *RateLimitWindow
 	Secondary            *RateLimitWindow
 	Credits              *CreditsSnapshot
@@ -246,7 +254,7 @@ func RateLimitSnapshotsFromPayload(payload *RateLimitStatusPayload) []RateLimitS
 		if limitID == "" {
 			limitID = strings.TrimSpace(additional.LimitName)
 		}
-		snapshots = append(snapshots, makeRateLimitSnapshot(
+		snapshot := makeRateLimitSnapshot(
 			stringPtr(limitID),
 			stringPtr(additional.LimitName),
 			additional.RateLimit,
@@ -254,7 +262,9 @@ func RateLimitSnapshotsFromPayload(payload *RateLimitStatusPayload) []RateLimitS
 			nil,
 			planType,
 			nil,
-		))
+		)
+		snapshot.NormalModelSlug = cloneStringPointer(additional.NormalModelSlug)
+		snapshots = append(snapshots, snapshot)
 	}
 	return snapshots
 }
