@@ -4167,16 +4167,28 @@ func TestExecAgentControllerRunsPersistedSubagent(t *testing.T) {
 
 func TestToolRouterRegistersViewImageForImageCapableModel(t *testing.T) {
 	cwd := t.TempDir()
+	enabled := map[string]bool{"view_image": true}
 	info := &model.ModelInfo{
 		InputModalities:             []string{"text", "image"},
 		SupportsImageDetailOriginal: true,
 	}
-	viewImage := execViewImageOptions(cwd, info)
+	viewImage := execViewImageOptions(cwd, info, enabled)
 	if viewImage == nil || viewImage.CWD != cwd || !viewImage.CanRequestOriginalDetail {
 		t.Fatalf("execViewImageOptions() = %#v", viewImage)
 	}
-	if got := execViewImageOptions(cwd, &model.ModelInfo{InputModalities: []string{"text"}}); got != nil {
-		t.Fatalf("text-only execViewImageOptions() = %#v, want nil", got)
+	if got := execViewImageOptions(cwd, info, map[string]bool{"view_image": false}); got != nil {
+		t.Fatalf("execViewImageOptions() with the feature off = %#v, want nil", got)
+	}
+	// Rust registers view_image under the feature gate alone; a text-only model
+	// still sees the tool and gets the call-time rejection.
+	textOnly := execViewImageOptions(cwd, &model.ModelInfo{InputModalities: []string{"text"}}, enabled)
+	if textOnly == nil || textOnly.CanRequestOriginalDetail {
+		t.Fatalf("text-only execViewImageOptions() = %#v", textOnly)
+	}
+	if _, err := tool.NewViewImageHandler(*textOnly).Execute(context.Background(), &tool.Invocation{
+		Payload: tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"path":"missing.png"}`},
+	}); err == nil || !strings.Contains(err.Error(), "view_image is not allowed because you do not support image inputs") {
+		t.Fatalf("text-only view_image error = %v", err)
 	}
 
 	runner := NewLocalRunner(cwd)

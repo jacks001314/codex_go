@@ -643,7 +643,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		AppsConfigValues:                  cfg.Values,
 		WebSearch:                         webSearchOptions,
 		ImageGeneration:                   imageGenerationOptions,
-		ViewImage:                         execViewImageOptions(requestCWD(req), &modelInfo),
+		ViewImage:                         execViewImageOptions(requestCWD(req), &modelInfo, cfg.FeatureSettings()),
 		HostedTools:                       hostedTools,
 		DisableHostedImageGeneration:      req.Exec.Subcommand == "review",
 		ToolOutputTokenLimit:              cfg.ToolOutputTokenLimit(),
@@ -2012,13 +2012,27 @@ func modelInfoSupportsImageInputExec(info *model.ModelInfo) bool {
 	return false
 }
 
-func execViewImageOptions(cwd string, info *model.ModelInfo) *tool.ViewImageOptions {
-	if !modelInfoSupportsImageInputExec(info) {
+// execViewImageOptions mirrors Rust's view_image registration: the handler is
+// installed whenever `features.view_image` is on (spec_plan.rs
+// `if features.enabled(Feature::ViewImage)`), and the model's input modalities
+// decide at call time whether the tool can run (view_image.rs rejects a model
+// without image input). Hiding the tool for a text-only model would also hide
+// it after a #44242 step-model switch to an image-capable model.
+func execViewImageOptions(cwd string, info *model.ModelInfo, featureSettings map[string]bool) *tool.ViewImageOptions {
+	if !features.Enabled(featureSettings, "view_image") {
 		return nil
 	}
+	supportsImage := modelInfoSupportsImageInputExec(info)
+	canRequestOriginalDetail := supportsImage && info.SupportsImageDetailOriginal
 	return &tool.ViewImageOptions{
 		CWD:                      cwd,
-		CanRequestOriginalDetail: info.SupportsImageDetailOriginal,
+		CanRequestOriginalDetail: canRequestOriginalDetail,
+		StepSettings: func() (tool.ViewImageStepSettings, bool) {
+			return tool.ViewImageStepSettings{
+				SupportsImageInput:       supportsImage,
+				CanRequestOriginalDetail: canRequestOriginalDetail,
+			}, true
+		},
 	}
 }
 
