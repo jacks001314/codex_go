@@ -16646,6 +16646,51 @@ func (r *RuntimeRouter) multiAgentOverrideRefresher(params *turn.TurnStartParams
 	}
 }
 
+// stepToolSurfaceRefresher returns the per-step refresh that republishes the
+// model-dependent tool schemas for the sampling step's model. Rust builds every
+// step's tool plan from the captured model settings (#44242); Go finalizes the
+// registry once per turn, so the tools whose schema follows the model are
+// refreshed here before that step's tool list is built. view_image is
+// feature-gated rather than model-gated (Rust registers the handler whenever
+// `features.view_image` is on and rejects a call from a step without image
+// input), so only its `detail` argument follows the step's original-detail
+// support.
+func (r *RuntimeRouter) stepToolSurfaceRefresher(router *tool.Router, params *turn.TurnStartParams, turnID string, cwd string) func(string) {
+	if r == nil || router == nil || router.Registry() == nil || params == nil {
+		return nil
+	}
+	cfg, err := r.effectiveConfigForTurn(params)
+	if err != nil || (cfg != nil && !features.Enabled(cfg.FeatureSettings(), "view_image")) {
+		return nil
+	}
+	threadID := strings.TrimSpace(params.ThreadID)
+	turnID = strings.TrimSpace(turnID)
+	base := r.viewImageOptionsForTurn(cfg, params, cwd, threadID, turnID)
+	if base == nil {
+		return nil
+	}
+	lastModel := ""
+	return func(modelID string) {
+		modelID = strings.TrimSpace(modelID)
+		if modelID == "" || modelID == lastModel {
+			return
+		}
+		lastModel = modelID
+		info := r.modelInfoForRuntimeWithConfig(modelID, cfg)
+		options := *base
+		options.CanRequestOriginalDetail = info != nil && info.SupportsImageDetailOriginal
+		handler := tool.NewViewImageHandler(options)
+		registry := router.Registry()
+		if _, ok := registry.Lookup(tool.PlainName(tool.ViewImageToolName)); !ok {
+			_ = router.RegisterIfAbsent(handler)
+			return
+		}
+		// The registry stores a spec snapshot, so refresh it for the step even
+		// though the call-time capabilities already resolve from StepSettings.
+		registry.ReplaceSpec(handler.Spec())
+	}
+}
+
 // applyStepModelToolMessages refreshes the turn's multi-agent overrides and
 // channel-tool descriptions for one sampling step. A model that cannot be
 // resolved clears both stores so the bundled texts and schemas apply.
@@ -16774,6 +16819,7 @@ func (r *RuntimeRouter) buildTurnRuntimeContext(ctx context.Context, params *tur
 		DynamicTools:                dynamicTools,
 		DynamicToolStepRefresh:      r.services.AllowPersistentDynamicToolUpdates,
 		MultiAgentOverridesForModel: r.multiAgentOverrideRefresher(params, turnID, turnConfig),
+		StepToolSurface:             r.stepToolSurfaceRefresher(router, params, turnID, cwd),
 		InvocationRegistry:          invocationRegistry,
 	})
 	// A replacement accepted while this turn is running publishes onto this
@@ -18117,12 +18163,15 @@ func (r *RuntimeRouter) viewImageOptionsForTurn(cfg *config.Config, params *turn
 	}
 	modelID = firstNonEmpty(modelID, stringConfigValue(cfg, "model"), defaultModelForAppTurn())
 	info := r.modelInfoForRuntimeWithConfig(modelID, cfg)
-	if !appModelInfoSupportsImageInput(info) {
-		return nil
-	}
+	// Rust registers view_image under `features.view_image` alone (spec_plan.rs
+	// `if features.enabled(Feature::ViewImage)`); the model's input modalities
+	// only decide whether a call can run. A model that cannot accept images still
+	// sees the tool and gets the call-time rejection, which keeps the surface
+	// stable across the mid-turn model switches #44242 covers.
+	canRequestOriginalDetail := info != nil && info.SupportsImageDetailOriginal
 	return &tool.ViewImageOptions{
 		CWD:                      cwd,
-		CanRequestOriginalDetail: info.SupportsImageDetailOriginal,
+		CanRequestOriginalDetail: canRequestOriginalDetail,
 		IncludeEnvironmentID:     r.includeEnvironmentIDForTurn(cfg, params),
 		// Rust #20647: view_image reads the selected environment's filesystem.
 		EnvironmentFileSystems: tool.NewUnifiedExecEnvironmentFileSystems(r.unifiedExecEnvironmentsForTurn(params), cwd),
@@ -18138,7 +18187,10 @@ func (r *RuntimeRouter) viewImageOptionsForTurn(cfg *config.Config, params *turn
 			}
 			stepInfo := r.modelInfoForRuntimeWithConfig(stepModelID, cfg)
 			if stepInfo == nil {
-				return tool.ViewImageStepSettings{}, false
+				// Rust plans the step with the catalog's default ModelInfo, whose
+				// modalities are empty, so an unresolved step model must not be
+				// treated as image-capable.
+				return tool.ViewImageStepSettings{}, true
 			}
 			return tool.ViewImageStepSettings{
 				SupportsImageInput:       appModelInfoSupportsImageInput(stepInfo),

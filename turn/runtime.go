@@ -92,6 +92,12 @@ type RuntimeOptions struct {
 	// catalog overrides for the sampling step's model, so a mid-turn model
 	// change selects that model's tool schemas (Rust #46505).
 	MultiAgentOverridesForModel func(model string)
+	// StepToolSurface, when set, refreshes the model-dependent part of the
+	// turn's tool registry for the sampling step's model before that step's
+	// tool list is built. Rust plans every step's tools from the captured
+	// model settings (#44242), so a model the turn did not start on can add a
+	// tool or change a tool's schema for the following step.
+	StepToolSurface func(model string)
 	// InvocationRegistry opts this turn into live V2 tool-call lookup and unique
 	// active call IDs (Rust #57586 HostToolInvocationLookup). A nil registry
 	// leaves dispatch unchanged.
@@ -126,6 +132,7 @@ type Runtime struct {
 	dynamicToolNames             map[string]tool.ToolName
 	dynamicToolStepRefresh       bool
 	multiAgentOverridesForModel  func(model string)
+	stepToolSurface              func(model string)
 	invocationRegistry           *agent.InvocationRegistry
 }
 
@@ -180,6 +187,7 @@ func NewRuntime(options *RuntimeOptions) *Runtime {
 		dynamicToolNames:             dynamicTools,
 		dynamicToolStepRefresh:       options.DynamicToolStepRefresh,
 		multiAgentOverridesForModel:  options.MultiAgentOverridesForModel,
+		stepToolSurface:              options.StepToolSurface,
 		invocationRegistry:           options.InvocationRegistry,
 	}
 }
@@ -441,13 +449,16 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 		visibleSpecs = r.modelVisibleSpecsForRequest(effectiveToolMode)
 		loopRequest.Tools = model.ResponsesToolsFromSpecs(visibleSpecs)
 	}
-	if r.codeModeMessagesForModel != nil || r.dynamicToolStepRefresh || r.multiAgentOverridesForModel != nil {
+	if r.codeModeMessagesForModel != nil || r.dynamicToolStepRefresh || r.multiAgentOverridesForModel != nil || r.stepToolSurface != nil {
 		loopRequest.ToolsForStep = func(modelID string) []any {
 			if r.codeModeMessagesForModel != nil {
 				r.applyCodeModeMessagesForModel(modelID)
 			}
 			if r.multiAgentOverridesForModel != nil {
 				r.multiAgentOverridesForModel(strings.TrimSpace(modelID))
+			}
+			if r.stepToolSurface != nil {
+				r.stepToolSurface(strings.TrimSpace(modelID))
 			}
 			return buildTools()
 		}
