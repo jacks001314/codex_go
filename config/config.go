@@ -3126,7 +3126,9 @@ func ReadConfigDocumentValues(path string) (map[string]any, error) {
 }
 
 // ReadConfigDocumentFile decodes the config.toml at path and also returns the
-// text the parser saw, so diagnostics can quote a line and column.
+// text the parser saw, so diagnostics can quote a line and column. A syntax
+// failure is reported with the wording and span Rust prints for the same
+// document.
 func ReadConfigDocumentFile(path string) (map[string]any, string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -3135,7 +3137,7 @@ func ReadConfigDocumentFile(path string) (map[string]any, string, error) {
 	text := string(stripUTF8BOM(data))
 	values, err := ParseConfigDocumentValues([]byte(text))
 	if err != nil {
-		return nil, "", err
+		return nil, text, TOMLDiagnostic(path, text, err)
 	}
 	return values, text, nil
 }
@@ -3152,7 +3154,7 @@ func loadConfigFileIfExists(path string) (map[string]any, bool, error) {
 	if err := toml.Unmarshal(stripUTF8BOM(data), &values); err != nil {
 		// Rust #46962: keep the failure typed so diagnostics can report the
 		// location instead of echoing values that may be credentials.
-		return nil, false, newConfigLoadError(path, err)
+		return nil, false, newConfigLoadError(path, string(stripUTF8BOM(data)), err)
 	}
 	if values == nil {
 		values = map[string]any{}

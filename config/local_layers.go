@@ -314,7 +314,7 @@ func loadRawLocalToml(path string) (map[string]any, bool, error) {
 	}
 	var values map[string]any
 	if err := toml.Unmarshal(stripUTF8BOM(data), &values); err != nil {
-		return nil, false, newConfigLoadError(path, err)
+		return nil, false, newConfigLoadError(path, string(stripUTF8BOM(data)), err)
 	}
 	if values == nil {
 		values = map[string]any{}

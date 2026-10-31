@@ -23,16 +23,44 @@ type ConfigLoadError struct {
 	Column int
 
 	cause error
+	// text is the document the parser saw, so the reported message can use the
+	// wording and span the Rust build prints for the same syntax failure.
+	text string
 }
 
+// Error renders the failure the way Rust's ConfigLoadError Display does: the
+// file position followed by the parser's message. A failure that carries no TOML
+// position keeps the generic load wording.
 func (e *ConfigLoadError) Error() string {
 	if e == nil {
 		return ""
 	}
 	if e.cause != nil {
+		if line, column, message, ok := TOMLDiagnosticPosition(e.text, e.cause); ok {
+			return fmt.Sprintf("%s:%d:%d: %s", e.Path, line, column, message)
+		}
 		return fmt.Sprintf("failed to load configuration from %s: %v", e.Path, e.cause)
 	}
 	return fmt.Sprintf("failed to load configuration from %s", e.Path)
+}
+
+// TOMLSyntaxSnippet reports the excerpt Rust prints under
+// `Error loading config.toml:` when the load failed on a TOML syntax error.
+func (e *ConfigLoadError) TOMLSyntaxSnippet() (string, bool) {
+	if e == nil || e.cause == nil {
+		return "", false
+	}
+	return TOMLConfigSnippet(e.Path, e.text, e.cause)
+}
+
+// TOMLSyntaxSnippetOf reports the excerpt Rust prints under
+// `Error loading config.toml:` when a load failed on a TOML syntax error.
+func TOMLSyntaxSnippetOf(err error) (string, bool) {
+	var loadErr *ConfigLoadError
+	if !errors.As(err, &loadErr) {
+		return "", false
+	}
+	return loadErr.TOMLSyntaxSnippet()
 }
 
 func (e *ConfigLoadError) Unwrap() error {
@@ -53,11 +81,11 @@ func (e *ConfigLoadError) Location() (string, int, int, bool) {
 
 // newConfigLoadError wraps a TOML failure with the file it came from and the
 // position the parser reported (Rust ConfigLoadError keeps the same pair).
-func newConfigLoadError(path string, cause error) error {
+func newConfigLoadError(path, text string, cause error) error {
 	if cause == nil {
 		return nil
 	}
-	err := &ConfigLoadError{Path: path, cause: cause}
+	err := &ConfigLoadError{Path: path, cause: cause, text: text}
 	var decodeErr *toml.DecodeError
 	if errors.As(cause, &decodeErr) {
 		err.Line, err.Column = decodeErr.Position()

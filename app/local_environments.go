@@ -2,11 +2,13 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 
 	"codex_go/auth"
 	"codex_go/cli"
+	"codex_go/config"
 	codexexec "codex_go/exec"
 	"codex_go/execserver"
 	"codex_go/tool"
@@ -64,5 +66,13 @@ func runLocalRunnerRequest(ctx context.Context, parsed *cli.Parsed, stdin io.Rea
 		Root: parsed.Root,
 		Exec: parsed.Exec,
 	}, stdin, stdout, stderr)
+	// Rust's exec bootstrap prints the quoted config.toml line and exits without
+	// an `Error:` prefix when the document does not parse.
+	if snippet, ok := config.TOMLSyntaxSnippetOf(err); ok {
+		if stderr != nil {
+			fmt.Fprintf(stderr, "Error loading config.toml:\n%s\n", snippet)
+		}
+		return &ExitError{Code: 1, Silent: true}
+	}
 	return err
 }

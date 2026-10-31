@@ -2042,8 +2042,52 @@ document while it builds the config, after the semantic checks.
   `TestValidateLoadedConfigFilesKeepsSerdeOrder` and
   `TestResolveConfigFilePath` in `config`.
 
+### 66. TOML syntax errors: toml_edit's wording, column and caret
+
+A document that does not parse is rejected by the loader itself, so every
+surface follows the `toml` crate rather than `go-toml`.
+
+- **Messages.** `toml_edit` names the construct it wanted (`unclosed table,
+  expected `]``, `string values must be quoted, expected literal string`,
+  `invalid fraction, expected digits`, `duplicate key`, `unclosed array
+  table`, ...) where go-toml reports its own parser state (`expected ']' to
+  close table name`, `unexpected character U+000A at start of value`, ...).
+  `translateTOMLSyntaxMessage` maps the messages measured against 0.166 and
+  leaves anything unrecognised as it is.
+- **Columns and carets.** go-toml points at the token that stopped the parser;
+  toml_edit reports the span of the offending value. Failures that reject a
+  value widen the position to the start of the bare run (`a = true false`
+  reports 1:5 with ten carets, `a = 1.2.3` 1:8 with two), `]]`, multi-line
+  strings and `\q`-style escapes shift by one, a bad surrogate escape by two,
+  seconds are bounded by 60 not 59, an overflowing radix literal prints its
+  decimal value, and duplicate keys point at the last segment of the key
+  (`a.b = 1` twice reports 2:3; `b.c = 1` followed by `[a.b]` reports 3:4).
+- **Surfaces.** `codex mcp list|get|add|login` wrap the failure in `failed to
+  load bootstrap configuration` with two causes: the `path:line:column:
+  message` line, then `TOML parse error at line L, column C` with the quoted
+  source line, a caret and the message repeated. `codex mcp remove` uses
+  `failed to load MCP servers from <home>` with the same two causes.
+  `codex exec`/`codex review` print `Error loading config.toml:` and only the
+  quoted line (no trailing message) and exit 1; `codex login status` prints
+  the position line alone, which is `ConfigLoadError`'s own Display.
+- Evidence: the 111-document syntax corpus x `mcp list`, `mcp remove`,
+  `login status`, `exec` (444 runs) is byte-identical to 0.166, apart from
+  three valid documents where `exec` needs a live model (`out/r52-diff3.txt`).
+  The 437/172/81/47 corpora keep 0 diffs and the 22-document path corpus keeps
+  its four catalog JSON cases. Regressions:
+  `TestTOMLDiagnosticMatchesRustParseErrors`,
+  `TestConfigLoadErrorUsesRustMessageWording`,
+  `TestReadConfigDocumentFileReportsSyntaxDiagnostic` and
+  `TestTOMLDiagnosticIgnoresOtherErrors` in `config`.
+
 ## Verification
 
+- Round 52 adds the TOML syntax diagnostics (entry 66): the 111-document
+  syntax corpus is byte-identical to 0.166 for `mcp list`, `mcp remove`,
+  `login status` and `exec` (0 diffs; the three `exec` timeouts are valid
+  documents that need a live model), the 437/172/81/47 corpora still report 0
+  diffs, and the 22-document path corpus keeps its four catalog JSON cases
+  (`out/r52-diff3.txt`).
 - Round 51 adds the `Config::load` file reads (entry 65): 22 path-setting
   documents match 0.166 except four `model_catalog_json` JSON-parse cases
   (`out/r51-diff1.txt`), the 437-document top-level corpus drops from 3 diffs to
@@ -2598,10 +2642,6 @@ document while it builds the config, after the semantic checks.
   `{"models": [{}]}` and `{"models": [{"slug": "m"}]}` load in Go where Rust
   rejects them (`out/r51-diff1.txt`). The empty-catalog and bad-UTF-8 cases do
   match.
-- TOML syntax errors keep Go's `toml: ...` wording: Rust prints `0:
-  <path>:<line>:<column>: <message>` plus the annotated snippet (`1 | [broken`
-  with a caret) under both `failed to load bootstrap configuration` and
-  `failed to load MCP servers from <home>`.
 - `mcp_servers` spelled as an inline table (`mcp_servers = { alpha = { .. } }`)
   still goes through the whole-document renderer: toml_edit converts the value
   into a table and prints a `[mcp_servers ]` header (the space comes from the

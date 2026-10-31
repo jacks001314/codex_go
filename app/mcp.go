@@ -1081,9 +1081,13 @@ func (s *mcpCLIStore) validateUserConfigShape() error {
 	path := filepath.Join(s.codexHome, "config.toml")
 	values, document, err := config.ReadConfigDocumentFile(path)
 	if err != nil {
-		// Syntax failures keep the loader's own diagnostic, which carries the
-		// TOML position.
-		return nil
+		// An unreadable document falls through to the loader's own diagnostic; a
+		// syntax failure fails the bootstrap load with the position and the toml
+		// crate's snippet, which ReadConfigDocumentFile already renders.
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return mcpBootstrapConfigError(err)
 	}
 	if err := config.ValidateConfigDocumentValues(values, &config.ConfigDocumentLocator{Path: path, Text: document}); err != nil {
 		return mcpBootstrapConfigError(err)
@@ -1114,9 +1118,12 @@ func (s *mcpCLIStore) validateUserConfigSemantics() error {
 // Rust decodes only the server map there, so an unrelated top-level type error
 // does not stop a removal.
 func (s *mcpCLIStore) validateUserConfigServersShape() error {
-	values, err := config.ReadConfigDocumentValues(filepath.Join(s.codexHome, "config.toml"))
+	values, _, err := config.ReadConfigDocumentFile(filepath.Join(s.codexHome, "config.toml"))
 	if err != nil {
-		return nil
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("failed to load MCP servers from %s\n\nCaused by:\n%s", s.codexHome, mcpIndentedCauses(err))
 	}
 	if err := config.ValidateMCPServersValues(values); err != nil {
 		return fmt.Errorf("failed to load MCP servers from %s\n\nCaused by:\n%s", s.codexHome, mcpIndentedCauses(err))
