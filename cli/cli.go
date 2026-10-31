@@ -106,9 +106,13 @@ type SharedOptions struct {
 	NoDaemon                             bool
 	DangerouslyBypassApprovalsAndSandbox bool
 	DangerouslyBypassHookTrust           bool
-	CWD                                  string
-	AddDirs                              []string
-	Worktree                             bool
+	// ApproveForMe mirrors Rust SharedOptions::auto_review (#46271): the
+	// `--approve-for-me` / `--not-so-yolo` flag selects automatic approval
+	// review on top of the workspace-write sandbox.
+	ApproveForMe bool
+	CWD          string
+	AddDirs      []string
+	Worktree     bool
 }
 
 type RootOptions struct {
@@ -138,11 +142,24 @@ type ExecOptions struct {
 	LastMessageFile       string
 	Prompt                string
 	ConfigOverrides       []string
-	Subcommand            string
-	SubArgs               []string
-	Review                ReviewOptions
-	Resume                ExecResumeOptions
-	Fork                  ExecForkOptions
+	// Help records a `--help`/`-h`/`-V`/`--version` request; the CLI prints the
+	// page and exits before any configuration or model work (Rust clap action).
+	Help       *ExecHelpRequest
+	Subcommand string
+	SubArgs    []string
+	Review     ReviewOptions
+	Resume     ExecResumeOptions
+	Fork       ExecForkOptions
+}
+
+// ExecHelpRequest is the exec family's clap help/version action.
+type ExecHelpRequest struct {
+	// Kind selects the page: the exec root or one of its subcommands.
+	Kind ExecHelpKind
+	// Short selects clap's `-h` summary layout instead of `--help`.
+	Short bool
+	// Version prints `codex-cli-exec <version>` instead of a help page.
+	Version bool
 }
 
 type ExecResumeOptions struct {
@@ -671,11 +688,52 @@ func Parse(args []string) (*Parsed, error) {
 		if _, err := parseSubcommand(p, rest[1:]); err != nil {
 			return nil, err
 		}
+		if err := p.validateExecAutoReview(); err != nil {
+			return nil, err
+		}
+		p.applyExecAutoReviewOverrides()
 		p.mergeRootConfigOverrides()
 		return p, p.Validate()
 	}
 	p.Root.Prompt = strings.Join(rest, " ")
 	return p, p.Validate()
+}
+
+// validateExecAutoReview mirrors clap's conflicts_with_all on Rust's
+// `--approve-for-me`: it cannot be combined with an explicit sandbox mode or
+// with the approvals-and-sandbox bypass.
+func (p *Parsed) validateExecAutoReview() error {
+	if p == nil || p.Command != CommandExec || !p.Exec.Shared.ApproveForMe {
+		return nil
+	}
+	if p.Exec.Shared.Sandbox != "" {
+		return &UsageError{
+			Message: "the argument '--approve-for-me' cannot be used with '--sandbox <SANDBOX_MODE>'",
+			Usage:   execUsageText,
+		}
+	}
+	if p.Exec.Shared.DangerouslyBypassApprovalsAndSandbox {
+		return &UsageError{
+			Message: "the argument '--approve-for-me' cannot be used with '--dangerously-bypass-approvals-and-sandbox'",
+			Usage:   execUsageText,
+		}
+	}
+	return nil
+}
+
+// applyExecAutoReviewOverrides mirrors Rust's
+// SharedOptions::take_auto_review_config_overrides: the flag appends the
+// auto-review trio after the user's own overrides, so the flag wins exactly
+// like a later clap config override.
+func (p *Parsed) applyExecAutoReviewOverrides() {
+	if p == nil || p.Command != CommandExec || !p.Exec.Shared.ApproveForMe {
+		return
+	}
+	p.Exec.ConfigOverrides = append(p.Exec.ConfigOverrides,
+		`approvals_reviewer="auto_review"`,
+		`approval_policy="on-request"`,
+		`sandbox_mode="workspace-write"`,
+	)
 }
 
 // mergeRootConfigOverrides keeps `-c`/`--config` values from every command
@@ -964,6 +1022,26 @@ func parseExec(args []string, exec *ExecOptions) error {
 		case arg == "-":
 			exec.Prompt = "-"
 			return nil
+		case arg == "--help":
+			exec.Help = &ExecHelpRequest{Kind: ExecHelpExec}
+			return nil
+		case arg == "-h":
+			exec.Help = &ExecHelpRequest{Kind: ExecHelpExec, Short: true}
+			return nil
+		case arg == "-V" || arg == "--version":
+			exec.Help = &ExecHelpRequest{Version: true}
+			return nil
+		case arg == "help":
+			request := &ExecHelpRequest{Kind: ExecHelpExec}
+			if i+1 < len(args) {
+				kind, ok := ExecHelpKindForSubcommand(args[i+1])
+				if !ok {
+					return unrecognizedSubcommandError(args[i+1], execUsageText)
+				}
+				request.Kind = kind
+			}
+			exec.Help = request
+			return nil
 		case arg == "resume":
 			exec.Subcommand = arg
 			return parseExecResume(args[i+1:], exec)
@@ -1015,7 +1093,7 @@ func parseExec(args []string, exec *ExecOptions) error {
 		case arg == "--color":
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
-				return err
+				return missingValueError("--color <COLOR>", colorValues)
 			}
 			if err := setExecColor(exec, value); err != nil {
 				return err
@@ -1048,7 +1126,7 @@ func parseExec(args []string, exec *ExecOptions) error {
 		case strings.HasPrefix(arg, "-c") && arg != "-C":
 			exec.ConfigOverrides = append(exec.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
 		case strings.HasPrefix(arg, "-"):
-			return fmt.Errorf("unknown exec option %s", arg)
+			return unexpectedArgumentError(arg, execUsageText)
 		default:
 			exec.Prompt = strings.Join(args[i:], " ")
 			return nil
@@ -1071,6 +1149,15 @@ func parseExecResume(args []string, exec *ExecOptions) error {
 			break
 		}
 		switch {
+		case arg == "--help":
+			exec.Help = &ExecHelpRequest{Kind: ExecHelpResume}
+			return nil
+		case arg == "-h":
+			exec.Help = &ExecHelpRequest{Kind: ExecHelpResume, Short: true}
+			return nil
+		case arg == "-V" || arg == "--version":
+			exec.Help = &ExecHelpRequest{Version: true}
+			return nil
 		case arg == "--last":
 			exec.Resume.Last = true
 		case arg == "--all":
@@ -1121,7 +1208,7 @@ func parseExecResume(args []string, exec *ExecOptions) error {
 		case arg == "--color":
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
-				return err
+				return missingValueError("--color <COLOR>", colorValues)
 			}
 			if err := setExecColor(exec, value); err != nil {
 				return err
@@ -1143,7 +1230,7 @@ func parseExecResume(args []string, exec *ExecOptions) error {
 		case strings.HasPrefix(arg, "-c") && arg != "-C":
 			exec.ConfigOverrides = append(exec.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
 		case strings.HasPrefix(arg, "-"):
-			return fmt.Errorf("unknown exec resume option %s", arg)
+			return unexpectedArgumentError(arg, execResumeUsageTextFor(exec.Resume.Last, exec.Resume.All))
 		default:
 			positionals = append(positionals, arg)
 		}
@@ -1198,6 +1285,15 @@ func parseExecFork(args []string, exec *ExecOptions) error {
 		switch {
 		case arg == "-":
 			positionals = append(positionals, arg)
+		case arg == "--help":
+			exec.Help = &ExecHelpRequest{Kind: ExecHelpFork}
+			return nil
+		case arg == "-h":
+			exec.Help = &ExecHelpRequest{Kind: ExecHelpFork, Short: true}
+			return nil
+		case arg == "-V" || arg == "--version":
+			exec.Help = &ExecHelpRequest{Version: true}
+			return nil
 		case arg == "--strict-config":
 			exec.StrictConfig = true
 		case arg == "--cyber-access-program":
@@ -1245,7 +1341,7 @@ func parseExecFork(args []string, exec *ExecOptions) error {
 				var err error
 				value, next, err = requireValue(args, i, arg)
 				if err != nil {
-					return err
+					return missingValueError("--color <COLOR>", colorValues)
 				}
 				i = next
 			}
@@ -1264,7 +1360,7 @@ func parseExecFork(args []string, exec *ExecOptions) error {
 		case strings.HasPrefix(arg, "-c") && arg != "-C":
 			exec.ConfigOverrides = append(exec.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
 		case strings.HasPrefix(arg, "-"):
-			return fmt.Errorf("unknown exec fork option %s", arg)
+			return unexpectedArgumentError(arg, execForkUsageText)
 		default:
 			positionals = append(positionals, arg)
 		}
@@ -1345,6 +1441,14 @@ func parseReview(args []string, review *ReviewOptions, exec *ExecOptions) error 
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch {
+		case exec != nil && (arg == "--help" || arg == "-h"):
+			// `codex exec review --help` prints the exec review page; the
+			// top-level `codex review` command has its own surface.
+			exec.Help = &ExecHelpRequest{Kind: ExecHelpReview, Short: arg == "-h"}
+			return nil
+		case exec != nil && (arg == "-V" || arg == "--version"):
+			exec.Help = &ExecHelpRequest{Version: true}
+			return nil
 		case exec != nil && arg == "--cyber-access-program":
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
@@ -1409,6 +1513,9 @@ func parseReview(args []string, review *ReviewOptions, exec *ExecOptions) error 
 			review.Prompt = "-"
 			return nil
 		case strings.HasPrefix(arg, "-"):
+			if exec != nil {
+				return unexpectedArgumentError(arg, execReviewUsageText)
+			}
 			return fmt.Errorf("unknown review option %s", arg)
 		default:
 			if review.Uncommitted || review.Base != "" || review.Commit != "" {
@@ -3827,22 +3934,36 @@ func parseSharedOption(args []string, i *int, shared *SharedOptions) (bool, erro
 	case arg == "--sandbox" || arg == "-s":
 		value, next, err := requireValue(args, *i, arg)
 		if err != nil {
+			return false, missingValueError("--sandbox <SANDBOX_MODE>", sandboxModeValues)
+		}
+		if err := validateSandboxMode(value); err != nil {
 			return false, err
 		}
 		shared.Sandbox = value
 		*i = next
 		return true, nil
 	case strings.HasPrefix(arg, "--sandbox="):
-		shared.Sandbox = strings.TrimPrefix(arg, "--sandbox=")
+		value := strings.TrimPrefix(arg, "--sandbox=")
+		if err := validateSandboxMode(value); err != nil {
+			return false, err
+		}
+		shared.Sandbox = value
 		return true, nil
 	case strings.HasPrefix(arg, "-s") && arg != "-s":
-		shared.Sandbox = strings.TrimPrefix(arg, "-s")
+		value := strings.TrimPrefix(arg, "-s")
+		if err := validateSandboxMode(value); err != nil {
+			return false, err
+		}
+		shared.Sandbox = value
 		return true, nil
 	case arg == "--dangerously-bypass-approvals-and-sandbox" || arg == "--yolo":
 		shared.DangerouslyBypassApprovalsAndSandbox = true
 		return true, nil
 	case arg == "--dangerously-bypass-hook-trust":
 		shared.DangerouslyBypassHookTrust = true
+		return true, nil
+	case arg == "--approve-for-me" || arg == "--not-so-yolo":
+		shared.ApproveForMe = true
 		return true, nil
 	case arg == "--cd" || arg == "-C":
 		value, next, err := requireValue(args, *i, arg)
@@ -3920,13 +4041,16 @@ func setApprovalPolicy(shared *SharedOptions, value string) error {
 }
 
 func setExecColor(exec *ExecOptions, value string) error {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "always", "never", "auto":
-		exec.Color = strings.ToLower(strings.TrimSpace(value))
-		return nil
-	default:
-		return errors.New("--color must be one of always, never, auto")
+	if value == "" {
+		return missingValueError("--color <COLOR>", colorValues)
 	}
+	for _, allowed := range colorValues {
+		if value == allowed {
+			exec.Color = value
+			return nil
+		}
+	}
+	return invalidValueError(value, "--color <COLOR>", colorValues)
 }
 
 func setExecCyberAccessProgram(exec *ExecOptions, value string) error {

@@ -80,6 +80,10 @@ func RunWithOptions(ctx context.Context, args []string, stdin io.Reader, stdout,
 	}
 	parsed, err := cli.Parse(args)
 	if err != nil {
+		var usage *cli.UsageError
+		if errors.As(err, &usage) {
+			return writeClapDiagnostic(stderr, usage)
+		}
 		return err
 	}
 	if err := validateFeatureToggles(parsed.Root.EnableFeatures, parsed.Root.DisableFeatures); err != nil {
@@ -103,6 +107,9 @@ func RunWithOptions(ctx context.Context, args []string, stdin io.Reader, stdout,
 	case cli.CommandInteractive:
 		return runInteractiveEntry(ctx, &parsed.Root, stdin, stdout, stderr)
 	case cli.CommandExec:
+		if handled, err := runExecMeta(parsed, stdout); handled || err != nil {
+			return err
+		}
 		return runLocalRunnerRequest(ctx, parsed, stdin, stdout, stderr)
 	case cli.CommandReview:
 		return runLocalRunnerRequest(ctx, parsed, stdin, stdout, stderr)
@@ -195,6 +202,36 @@ func RunWithOptions(ctx context.Context, args []string, stdin io.Reader, stdout,
 	default:
 		return notImplemented(string(parsed.Command))
 	}
+}
+
+// runExecMeta mirrors clap's help/version actions for the exec command family.
+// Rust prints the page from the parsed command line and exits before any
+// configuration, auth or model work, so the Go CLI does the same.
+func runExecMeta(parsed *cli.Parsed, stdout io.Writer) (bool, error) {
+	if parsed == nil || parsed.Exec.Help == nil {
+		return false, nil
+	}
+	request := parsed.Exec.Help
+	if request.Version {
+		_, err := fmt.Fprintf(stdout, "codex-cli-exec %s\n", doctor.Version())
+		return true, err
+	}
+	_, err := fmt.Fprint(stdout, cli.ExecHelpText(request.Kind, request.Short))
+	return true, err
+}
+
+// writeClapDiagnostic renders clap's argument diagnostics (option conflicts,
+// unexpected arguments, unrecognized subcommands and invalid values) and exits
+// with status 2, matching the Rust CLI.
+func writeClapDiagnostic(stderr io.Writer, diagnostic *cli.UsageError) error {
+	if stderr != nil && diagnostic != nil {
+		if diagnostic.Usage != "" {
+			fmt.Fprintf(stderr, "error: %s\n\n%s\n\nFor more information, try '--help'.\n", diagnostic.Message, diagnostic.Usage)
+		} else {
+			fmt.Fprintf(stderr, "error: %s\n\nFor more information, try '--help'.\n", diagnostic.Message)
+		}
+	}
+	return &ExitError{Code: 2, Silent: true}
 }
 
 func runRootMeta(args []string, stdout io.Writer) (bool, error) {

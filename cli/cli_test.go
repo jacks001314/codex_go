@@ -535,7 +535,6 @@ func TestParseExecColorFlag(t *testing.T) {
 		{"always", "always"},
 		{"never", "never"},
 		{"auto", "auto"},
-		{"Always", "always"},
 	} {
 		parsed, err := Parse([]string{"exec", "--color", tc.value, "hello"})
 		if err != nil {
@@ -556,13 +555,13 @@ func TestParseExecColorFlag(t *testing.T) {
 
 	if _, err := Parse([]string{"exec", "--color", "rainbow", "hello"}); err == nil {
 		t.Fatal("Parse(--color rainbow) returned nil error, want validation failure")
-	} else if !strings.Contains(err.Error(), "--color must be one of always, never, auto") {
+	} else if !strings.Contains(err.Error(), "invalid value 'rainbow' for '--color <COLOR>'") {
 		t.Fatalf("Parse(--color rainbow) error = %q", err.Error())
 	}
 
 	if _, err := Parse([]string{"exec", "resume", "--last", "--color", "bogus", "hello"}); err == nil {
 		t.Fatal("Parse(resume --color bogus) returned nil error, want validation failure")
-	} else if !strings.Contains(err.Error(), "--color must be one of always, never, auto") {
+	} else if !strings.Contains(err.Error(), "invalid value 'bogus' for '--color <COLOR>'") {
 		t.Fatalf("Parse(resume --color bogus) error = %q", err.Error())
 	}
 }
