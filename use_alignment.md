@@ -2478,8 +2478,57 @@ the command now follows that path and the Go-only one is gone.
   `TestValidateArg0AliasHomeRefusesTempHomeLikeRust` in `cli`, and
   `TestDiscoverStreamableHTTPOAuthClassifiesProbeStatusLikeRust` in `mcp`.
 
+### 78. `login --with-access-token` decodes and verifies the agent identity JWT
+
+`codex login --with-access-token` stored whatever came from stdin: a
+non-JWT string, an unsigned JWT and a JWT signed by a foreign key all became
+`auth.json`. Rust classifies the token, decodes the payload, checks the
+workspace allowlist and then verifies the signature against the agent identity
+JWKS before saving, so the command now does the same.
+
+- **Claim decoding.** `agent.DecodeAgentIdentityJWT` now enforces codex's
+  `AgentIdentityJwtClaims`: `iss`, `aud`, `iat`, `exp`, `agent_runtime_id`,
+  `agent_private_key`, `account_id`, `chatgpt_user_id`, `plan_type` and
+  `chatgpt_account_is_fedramp` are all required, `iat`/`exp` must be
+  non-negative numbers and only `email` is optional. A missing or mistyped field
+  reports serde's `agent identity JWT payload is not valid JSON`, an undecodable
+  payload reports `agent identity JWT payload is not valid base64url`, and a
+  token without three non-empty segments reports `invalid agent identity JWT
+  format`. The decoding cause stays available through `errors.Is`/`As` while
+  `Error()` prints Rust's exact text.
+- **Signature verification.** After the workspace check, the login path
+  downloads the agent identity JWKS from `chatgpt_base_url` (or
+  `CODEX_AGENT_IDENTITY_JWKS_BASE_URL`) with the config's proxy/policy client
+  and re-decodes the token against it, mirroring
+  `verified_record_from_jwt`; a token whose `kid` is unknown now fails with
+  `agent identity JWT kid <kid> is not trusted` instead of being persisted.
+  JWKS failures print Rust's `failed to request agent identity JWKS` /
+  `agent identity JWKS endpoint returned an error` /
+  `failed to decode agent identity JWKS` without the wrapped Go detail.
+- **Retired `--api-key` flag.** Rust rejects the flag before any login flow
+  starts, so the per-flow file logger never runs. Go installed
+  `log/codex-login.log` first; the validation now precedes the install, which
+  leaves an empty home behind exactly like Rust.
+- Evidence: `out/r69-jwt.txt` compares four token shapes (full claims, missing
+  `iss`, string `iat`, null `email`) plus three malformed tokens against 0.166 -
+  rc, message and resulting home tree are identical; `out/r69-sweep.txt` covers
+  18 command surfaces (15 identical, the other three being the version stamp,
+  the upstream-only `auth.json.lock` sidecar and the completion scripts).
+  `go test -vet=off ./agent ./auth ./app` passes except for the two known
+  `./app` baselines.
+- Regressions: `TestDecodeJWTPayloadRequiresEveryClaimLikeRust` in `agent`,
+  `TestLoginWithAccessTokenRejectsMalformedJWTLikeRust` and
+  `TestLoginWithAccessTokenVerifiesSignatureLikeRust` in `app`.
+
 ## Verification
 
+- Round 65 makes `login --with-access-token` decode and verify the agent
+  identity JWT before storing it and stops the retired `--api-key` flag from
+  creating `codex-login.log` (entry 78): `out/r69-jwt.txt` shows identical rc,
+  message and home tree for seven token shapes, `out/r69-sweep.txt` covers 18
+  more command surfaces with 15 identical, and
+  `go test -vet=off ./agent ./auth ./app` keeps only the two known `./app`
+  baselines.
 - Round 64 replaces the Go-only stdin `apply` with Rust's task-diff flow and
   aligns the `features enable/disable` wording, `login status` logging, the arg0
   temp-home guard and the `mcp add --url` OAuth classification (entry 77):
@@ -3022,6 +3071,14 @@ the command now follows that path and the Go-only one is gone.
   ./cmd/... ./tcptunnel` passes.
 ## Still open
 
+- The five `completion <shell>` scripts are still hand-written Go rather than
+  clap_complete output: 0.166 emits 6968 bash, 4508 zsh, 1040 fish, 2194
+  powershell and 1914 elvish lines against Go's 170/7/164/172/3, so completing
+  parity there means porting clap_complete's generators plus a command tree that
+  includes every hidden subcommand - not started.
+- A source build reports `codex-cli 0.0.0` while 0.166 prints its release
+  version; the version string is injected by the release pipeline
+  (`-ldflags`), so a plain `go build` binary cannot match it.
 - `mcp add --url https://example.com/mcp` still differs in this sandbox: Rust's
   TLS stack rejects the intercepted certificate, so its discovery fails and the
   login hint prints, while Go's system store trusts the chain, reaches the CDN's
@@ -3033,6 +3090,11 @@ the command now follows that path and the Go-only one is gone.
   the Rust binary's dispatch layer and are created before the CLI parses
   arguments, so Go does not mirror them; Go's equivalents are only produced by
   its production entry point and refuse a temp-dir `CODEX_HOME` like Rust.
+- `logout` leaves an `auth.json.lock` sidecar that 0.166 never creates. Upstream
+  main serialises credential commits through `<auth file>.json.lock`
+  (`login/src/auth/storage_commit.rs`) and Go follows that; the pinned 0.166
+  binary predates the sidecar and only uses `auth.lock`, so the extra file is a
+  version delta rather than a missing cleanup.
 - `execpolicy check` still answers a syntactically invalid rules file with
   Go's parser text where Rust prints `failed to parse policy at <p>` chained to
   `starlark error: error: Parse error: ...` with a source snippet and caret;

@@ -123,6 +123,7 @@ func TestDecodeAgentIdentityJWTRejectsUntrustedKID(t *testing.T) {
 	payload, _ := json.Marshal(map[string]any{
 		"iss":                        JWTIssuer,
 		"aud":                        JWTAudience,
+		"iat":                        time.Now().Unix(),
 		"exp":                        time.Now().Add(time.Hour).Unix(),
 		"agent_runtime_id":           "agent-runtime-id",
 		"agent_private_key":          "private-key",
@@ -337,5 +338,58 @@ func writeJSONAgent(t *testing.T, w http.ResponseWriter, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(value); err != nil {
 		t.Fatalf("Encode() error = %v", err)
+	}
+}
+
+// TestDecodeJWTPayloadRequiresEveryClaimLikeRust pins serde's decoding rules
+// for AgentIdentityJwtClaims: every field except `email` is mandatory, so a
+// document that omits one fails with Rust's "payload is not valid JSON" text.
+func TestDecodeJWTPayloadRequiresEveryClaimLikeRust(t *testing.T) {
+	full := map[string]any{
+		"iss":                        JWTIssuer,
+		"aud":                        JWTAudience,
+		"iat":                        int64(1700000000),
+		"exp":                        int64(1900000000),
+		"agent_runtime_id":           "agent-runtime-id",
+		"agent_private_key":          "private-key",
+		"account_id":                 "account-id",
+		"chatgpt_user_id":            "user-id",
+		"plan_type":                  "pro",
+		"chatgpt_account_is_fedramp": false,
+	}
+	encode := func(claims map[string]any) string {
+		payload, err := json.Marshal(claims)
+		if err != nil {
+			t.Fatalf("Marshal() error = %v", err)
+		}
+		return "header." + base64.RawURLEncoding.EncodeToString(payload) + ".sig"
+	}
+	if _, err := DecodeJWTPayload(encode(full)); err != nil {
+		t.Fatalf("DecodeJWTPayload(full) error = %v", err)
+	}
+	for _, field := range []string{"iss", "aud", "iat", "exp", "agent_runtime_id", "agent_private_key", "account_id", "chatgpt_user_id", "plan_type", "chatgpt_account_is_fedramp"} {
+		trimmed := map[string]any{}
+		for key, value := range full {
+			if key != field {
+				trimmed[key] = value
+			}
+		}
+		if _, err := DecodeJWTPayload(encode(trimmed)); err == nil || err.Error() != "agent identity JWT payload is not valid JSON" {
+			t.Fatalf("missing %s: error = %v, want Rust's invalid-JSON message", field, err)
+		}
+	}
+	stringIssued := map[string]any{}
+	for key, value := range full {
+		stringIssued[key] = value
+	}
+	stringIssued["iat"] = "1700000000"
+	if _, err := DecodeJWTPayload(encode(stringIssued)); err == nil || err.Error() != "agent identity JWT payload is not valid JSON" {
+		t.Fatalf("string iat: error = %v", err)
+	}
+	if _, err := DecodeJWTPayload("a.b.c"); err == nil || err.Error() != "agent identity JWT payload is not valid base64url" {
+		t.Fatalf("garbage payload: error = %v", err)
+	}
+	if _, err := DecodeJWTPayload("not-a-jwt"); err == nil || err.Error() != "invalid agent identity JWT format" {
+		t.Fatalf("garbage token: error = %v", err)
 	}
 }

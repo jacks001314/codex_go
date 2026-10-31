@@ -198,6 +198,76 @@ func AuthorizationHeaderForAgentTask(key *IdentityKey, taskID string, now time.T
 	return "AgentAssertion " + base64.RawURLEncoding.EncodeToString(data), nil
 }
 
+// agentIdentityClaimsError renders Rust's anyhow context text verbatim (
+// `agent identity JWT payload is not valid JSON`) while keeping the decoding
+// cause reachable through errors.Is/As.
+type agentIdentityClaimsError struct {
+	message string
+	cause   error
+}
+
+func (e *agentIdentityClaimsError) Error() string { return e.message }
+
+func (e *agentIdentityClaimsError) Unwrap() error { return e.cause }
+
+// requiredAgentIdentityClaims mirrors codex's AgentIdentityJwtClaims: every
+// field except `email` is mandatory, and iat/exp are unsigned integers. serde
+// reports a missing or mistyped field as "payload is not valid JSON", so the
+// Go decoder has to reject the same documents.
+type requiredAgentIdentityClaims struct {
+	Issuer          *string `json:"iss"`
+	Audience        *string `json:"aud"`
+	IssuedAt        *int64  `json:"iat"`
+	ExpiresAt       *int64  `json:"exp"`
+	AgentRuntimeID  *string `json:"agent_runtime_id"`
+	AgentPrivateKey *string `json:"agent_private_key"`
+	AccountID       *string `json:"account_id"`
+	ChatGPTUserID   *string `json:"chatgpt_user_id"`
+	PlanType        *string `json:"plan_type"`
+	FedRAMP         *bool   `json:"chatgpt_account_is_fedramp"`
+}
+
+func validateAgentIdentityClaims(payload []byte) error {
+	var required requiredAgentIdentityClaims
+	if err := json.Unmarshal(payload, &required); err != nil {
+		return &agentIdentityClaimsError{message: "agent identity JWT payload is not valid JSON", cause: err}
+	}
+	missing := ""
+	switch {
+	case required.Issuer == nil:
+		missing = "iss"
+	case required.Audience == nil:
+		missing = "aud"
+	case required.IssuedAt == nil:
+		missing = "iat"
+	case required.ExpiresAt == nil:
+		missing = "exp"
+	case required.AgentRuntimeID == nil:
+		missing = "agent_runtime_id"
+	case required.AgentPrivateKey == nil:
+		missing = "agent_private_key"
+	case required.AccountID == nil:
+		missing = "account_id"
+	case required.ChatGPTUserID == nil:
+		missing = "chatgpt_user_id"
+	case required.PlanType == nil:
+		missing = "plan_type"
+	case required.FedRAMP == nil:
+		missing = "chatgpt_account_is_fedramp"
+	case *required.IssuedAt < 0:
+		missing = "iat"
+	case *required.ExpiresAt < 0:
+		missing = "exp"
+	}
+	if missing == "" {
+		return nil
+	}
+	return &agentIdentityClaimsError{
+		message: "agent identity JWT payload is not valid JSON",
+		cause:   fmt.Errorf("claim %q is missing or has the wrong type", missing),
+	}
+}
+
 func DecodeJWTPayload(jwt string) (*JWTClaims, error) {
 	return DecodeAgentIdentityJWT(jwt, nil)
 }
@@ -209,11 +279,14 @@ func DecodeAgentIdentityJWT(jwt string, jwks *JWKSet) (*JWTClaims, error) {
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		return nil, fmt.Errorf("agent identity JWT payload is not valid base64url: %w", err)
+		return nil, &agentIdentityClaimsError{message: "agent identity JWT payload is not valid base64url", cause: err}
 	}
 	var claims JWTClaims
 	if err := json.Unmarshal(payload, &claims); err != nil {
-		return nil, fmt.Errorf("agent identity JWT payload is not valid JSON: %w", err)
+		return nil, &agentIdentityClaimsError{message: "agent identity JWT payload is not valid JSON", cause: err}
+	}
+	if err := validateAgentIdentityClaims(payload); err != nil {
+		return nil, err
 	}
 	claims.PlanType = normalizePlanType(claims.PlanType)
 	if jwks == nil {
@@ -234,15 +307,18 @@ func FetchAgentIdentityJWKS(ctx context.Context, client *http.Client, baseURL st
 	}
 	response, err := httpClient(client).Do(request)
 	if err != nil {
-		return nil, fmt.Errorf("failed to request agent identity JWKS: %w", err)
+		return nil, &agentIdentityClaimsError{message: "failed to request agent identity JWKS", cause: err}
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, fmt.Errorf("agent identity JWKS endpoint returned an error: %s", response.Status)
+		return nil, &agentIdentityClaimsError{
+			message: "agent identity JWKS endpoint returned an error",
+			cause:   fmt.Errorf("HTTP %s", response.Status),
+		}
 	}
 	var jwks JWKSet
 	if err := json.NewDecoder(response.Body).Decode(&jwks); err != nil {
-		return nil, fmt.Errorf("failed to decode agent identity JWKS: %w", err)
+		return nil, &agentIdentityClaimsError{message: "failed to decode agent identity JWKS", cause: err}
 	}
 	return &jwks, nil
 }

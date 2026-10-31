@@ -21,6 +21,7 @@ import (
 
 	"codex_go/appserver"
 	"codex_go/appserverdaemon"
+	"codex_go/agent"
 	"codex_go/auth"
 	"codex_go/chatgptapi"
 	"codex_go/cli"
@@ -2417,6 +2418,16 @@ func runLogin(ctx context.Context, opts cli.LoginOptions, stdin io.Reader, stdou
 	if err != nil {
 		return exitMessagef("Error loading configuration: %v", err)
 	}
+	authStoreOptions := authStoreOptionsFromLoadedConfig(loadedConfig)
+	store := auth.NewStoreWithOptions(codexHome, authStoreOptions)
+	if opts.WithAPIKey && opts.WithAccessToken {
+		return exitMessagef(loginCredentialSourceConflict)
+	}
+	// Rust rejects the retired `--api-key` flag before any login flow starts, so
+	// the per-flow file logger never runs and no `codex-login.log` appears.
+	if opts.APIKey != nil {
+		return exitMessagef(apiKeyFlagUnsupportedMessage)
+	}
 	// Rust installs a small file-backed tracing layer for direct `codex login`
 	// flows so sanitized credential-storage fallback warnings stay visible
 	// (#49384). The handler is restored when the command returns.
@@ -2427,11 +2438,6 @@ func runLogin(ctx context.Context, opts cli.LoginOptions, stdin io.Reader, stdou
 		restoreLoginLogging = installLoginFileLogging(codexHome, loadedConfig)
 	}
 	defer restoreLoginLogging()
-	authStoreOptions := authStoreOptionsFromLoadedConfig(loadedConfig)
-	store := auth.NewStoreWithOptions(codexHome, authStoreOptions)
-	if opts.WithAPIKey && opts.WithAccessToken {
-		return exitMessagef(loginCredentialSourceConflict)
-	}
 	// Rust #57175: when local administration requires a customer-hosted
 	// configuration server, login signs in there instead of ChatGPT (browser and
 	// device-code flows) or signs in first and then stores the API key or access
@@ -2480,8 +2486,6 @@ func runLogin(ctx context.Context, opts cli.LoginOptions, stdin io.Reader, stdou
 			fmt.Fprintf(stderr, "Logged in using %s\n", (&current.Auth).Mode())
 		}
 		return nil
-	case opts.APIKey != nil:
-		return exitMessagef(apiKeyFlagUnsupportedMessage)
 	case opts.WithAPIKey:
 		// Rust 2994f545a7 (#37132): requirements.toml allowlists plus the
 		// forced login method jointly decide whether a login method is usable.
@@ -2590,11 +2594,45 @@ func authFromCodexAccessToken(ctx context.Context, accessToken string, cfg *conf
 		}
 		return auth.FromAccessToken(token), nil
 	}
-	snapshot := auth.FromCodexAccessToken(token)
-	if err := auth.EnsureWorkspaceAccountAllowed(cfg.ForcedChatGPTWorkspaceIDs(), auth.AccountIDFromAuthForRestrictions(&snapshot)); err != nil {
+	// Rust (login_with_access_token) classifies a non-PAT token as an agent
+	// identity JWT and decodes its payload before anything is stored, so a
+	// malformed token fails with `invalid agent identity JWT format` instead of
+	// writing a bogus credential.
+	claims, err := agent.DecodeJWTPayload(token)
+	if err != nil {
 		return auth.AuthDotJSON{}, err
 	}
-	return snapshot, nil
+	if err := auth.EnsureWorkspaceAccountAllowed(cfg.ForcedChatGPTWorkspaceIDs(), claims.AccountID); err != nil {
+		return auth.AuthDotJSON{}, err
+	}
+	// Rust (verified_record_from_jwt) downloads the agent identity JWKS and
+	// verifies the signature before anything is persisted, so an unsigned or
+	// foreign-signed token never becomes a credential.
+	if err := verifyAgentIdentityAccessToken(ctx, token, cfg); err != nil {
+		return auth.AuthDotJSON{}, err
+	}
+	return auth.FromAgentIdentityToken(token), nil
+}
+
+// agentIdentityJWKSBaseURLEnvVar lets operators point JWKS discovery at a
+// custom base (Rust's CODEX_AGENT_IDENTITY_JWKS_BASE_URL).
+const agentIdentityJWKSBaseURLEnvVar = "CODEX_AGENT_IDENTITY_JWKS_BASE_URL"
+
+func verifyAgentIdentityAccessToken(ctx context.Context, token string, cfg *config.Config) error {
+	if cfg == nil {
+		return fmt.Errorf("configuration is required to verify agent identity JWTs")
+	}
+	baseURL := strings.TrimSpace(os.Getenv(agentIdentityJWKSBaseURLEnvVar))
+	if baseURL == "" {
+		baseURL = strings.TrimSpace(cfg.ChatGPTBaseURL())
+	}
+	client := policyHTTPClient(cfg, codexnetwork.NewHTTPClient(cfg.RespectSystemProxyEnabled(), 30*time.Second))
+	jwks, err := agent.FetchAgentIdentityJWKS(ctx, client, baseURL)
+	if err != nil {
+		return err
+	}
+	_, err = agent.DecodeAgentIdentityJWT(token, jwks)
+	return err
 }
 
 func authStoreOptionsFromLoadedConfig(loaded *config.Config) *auth.StoreOptions {
