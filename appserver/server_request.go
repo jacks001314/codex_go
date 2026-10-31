@@ -374,6 +374,7 @@ func (p *MCPElicitationRequestParams) MarshalJSON() ([]byte, error) {
 			"turnId":      turnID,
 			"serverName":  serverName,
 			"mode":        mode,
+			"_meta":       p.Meta,
 			"title":       p.Title,
 			"description": p.Description,
 			"challenge":   p.Challenge,

@@ -10881,9 +10881,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1119 (audit): Go cannot deadlock on blocked hook stdin. appserver/hooks_runner.go sets cmd.Stdin from a strings.Reader while stdout/stderr are drained by os/exec copy goroutines concurrently, and the handler deadline is a context deadline on the whole command; on expiry the process tree is terminated and Wait reaps it. appserver/hooks_runner_test.go covers the large-stdin fast-exit case (TestHookRunnerFastExitPreservesOutputWithoutReadingLargeStdinLikeRust)."
    ]
   },
   {
@@ -17523,9 +17523,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1119 (parity): openai/userVerification elicitations now forward optional _meta. Go already validated non-object metadata as invalid params and parsed _meta into MCPElicitationRequest; this round strips the transport progressToken like Rust restore_context_meta and adds _meta to the user-verification branch of MCPElicitationRequestParams.MarshalJSON, which previously dropped it. appserverMCPElicitationParams already carried the object to mcpServer/elicitation/request. Tests: go test ./mcp ./appserver -run UserVerification."
    ]
   },
   {
@@ -18687,9 +18687,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1119 (audit): Rust #47292 consolidates agent operations inside the internal AgentControl implementation. Go has no AgentControl trait; agent operations are already centralized on agent.ToolController and runtimeAgentController, so there is no matching abstraction to consolidate."
    ]
   },
   {
@@ -19799,9 +19799,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1119 (audit): tool/user_messaging.go already recognizes both singular user_message connector spellings (namespaced and flat) beside user_messaging, so delivered assistant message evidence is captured for the singular connector. Added regression cases for both singular names and a negative case proving send_message_to_thread is not treated as delivered evidence. Tests: go test ./tool -run UserMessaging."
    ]
   },
   {

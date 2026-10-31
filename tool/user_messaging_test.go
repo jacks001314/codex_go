@@ -101,8 +101,11 @@ func TestUserMessagingDeliveryRequiresSuccessfulRecognizedSendLikeRust(t *testin
 	}{
 		{name: "confirmed send", hookName: "mcp__codex_apps__user_messaging__send_message", input: map[string]any{"text": "Staging only?"}, success: true, want: "Staging only?"},
 		{name: "legacy flat name", hookName: "mcp__codex_apps__user_messaging_send_message", input: map[string]any{"text": "Continue?"}, success: true, want: "Continue?"},
+		{name: "singular connector", hookName: "mcp__codex_apps__user_message__send_message", input: map[string]any{"text": "Singular?"}, success: true, want: "Singular?"},
+		{name: "singular flat name", hookName: "mcp__codex_apps__user_message_send_message", input: map[string]any{"text": "Singular flat?"}, success: true, want: "Singular flat?"},
 		{name: "failed send", hookName: "mcp__codex_apps__user_messaging__send_message", input: map[string]any{"text": "Staging only?"}, success: false},
 		{name: "other app", hookName: "mcp__codex_apps__slack__send_message", input: map[string]any{"text": "Staging only?"}, success: true},
+		{name: "thread message is not delivered evidence", hookName: "mcp__codex_apps__user_message__send_message_to_thread", input: map[string]any{"text": "Thread?"}, success: true},
 		{name: "empty text", hookName: "mcp__codex_apps__user_messaging__send_message", input: map[string]any{"text": " "}, success: true},
 		{name: "missing text", hookName: "mcp__codex_apps__user_messaging__send_message", input: map[string]any{}, success: true},
 	}

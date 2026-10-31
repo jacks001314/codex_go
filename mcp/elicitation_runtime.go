@@ -133,7 +133,27 @@ func parseMCPElicitationRequest(serverName string, method string, id json.RawMes
 	} else if value, ok := raw["meta"]; ok {
 		request.Meta = cloneJSONValue(value)
 	}
+	if IsUserVerificationElicitation(request) {
+		// Rust restore_context_meta (#46952) drops the transport progress token
+		// from user-verification metadata before forwarding it to clients.
+		request.Meta = userVerificationMetaWithoutProgressToken(request.Meta)
+	}
 	return request
+}
+
+func userVerificationMetaWithoutProgressToken(meta any) any {
+	object, ok := meta.(map[string]any)
+	if !ok {
+		return meta
+	}
+	stripped := make(map[string]any, len(object))
+	for key, value := range object {
+		if key == "progressToken" || key == "progress_token" {
+			continue
+		}
+		stripped[key] = value
+	}
+	return stripped
 }
 
 type mcpElicitationContextKey struct{}
