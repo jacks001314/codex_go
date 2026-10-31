@@ -269,6 +269,19 @@ func removeLegacySandboxUsers(report func(string)) error {
 	return nil
 }
 
+// ResolveAccountSID resolves one account name to its SID string (Rust
+// resolve_sid). An unresolvable name is an error instead of an empty SID.
+func ResolveAccountSID(name string) (string, error) {
+	sid, found, err := lookupLocalUserSID(name)
+	if err != nil {
+		return "", err
+	}
+	if !found {
+		return "", fmt.Errorf("resolve account %s: account not found", name)
+	}
+	return sid, nil
+}
+
 func lookupLocalUserSID(name string) (string, bool, error) {
 	namePtr, err := windows.UTF16PtrFromString(name)
 	if err != nil {

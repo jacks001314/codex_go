@@ -418,3 +418,34 @@ func removeSandboxDirectories(codexHome string, report func(string)) []string {
 	}
 	return failures
 }
+
+// validateCurrent requires every account captured by disable to still exist
+// with the same SID and the disabled flag (Rust
+// principals::DisabledSandboxUsers::validate_current).
+func (u *disabledSandboxUsers) validateCurrent() error {
+	for _, name := range []string{OfflineUsername, OnlineUsername} {
+		flags, found, err := readSandboxCleanupUserFlags(name)
+		if err != nil {
+			return err
+		}
+		if !found {
+			continue
+		}
+		captured := false
+		for _, user := range u.users {
+			if user.name != name {
+				continue
+			}
+			sid, exists, err := resolveSandboxCleanupUserSID(name)
+			if err != nil {
+				return err
+			}
+			captured = exists && sid == user.sid && flags&ufAccountDisable != 0
+			break
+		}
+		if !captured {
+			return fmt.Errorf("sandbox account changed after being disabled: %s", name)
+		}
+	}
+	return nil
+}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -21,6 +22,8 @@ import (
 type Lifecycle struct {
 	mu           sync.Mutex
 	installation *lifecycleInstallation
+	uninstalling atomic.Bool
+	preinstalled bool
 	loadRecord   func() (*windowssandbox.InstallationRecord, error)
 	saveRecord   func(*windowssandbox.InstallationRecord) (*windowssandbox.InstallationRecord, error)
 }
@@ -30,14 +33,25 @@ type lifecycleInstallation struct {
 	codexHome string
 	token     windows.Token
 	handles   []windows.Handle
+	guard     windows.Handle
 }
 
 // NewLifecycle returns a lifecycle bound to the real installation store.
 func NewLifecycle() *Lifecycle {
 	return &Lifecycle{
-		loadRecord: windowssandbox.LoadInstallation,
-		saveRecord: windowssandbox.SaveInstallationRecord,
+		preinstalled: lifecyclePreinstalled(),
+		loadRecord:   windowssandbox.LoadInstallation,
+		saveRecord:   windowssandbox.SaveInstallationRecord,
 	}
+}
+
+// Uninstalling exposes the pending-uninstall flag the package uninstall event
+// and the stop reason share (Rust PackageLifecycle::uninstalling).
+func (lifecycle *Lifecycle) Uninstalling() *atomic.Bool {
+	if lifecycle == nil {
+		return nil
+	}
+	return &lifecycle.uninstalling
 }
 
 // RegisterOwner ports PackageLifecycle::register_authenticated_user: previous
@@ -91,17 +105,18 @@ func (lifecycle *Lifecycle) RegisterOwner(record *windowssandbox.InstallationRec
 		return saved, nil
 	}
 
-	codexHome, handles, err := pinOwnerHome(record.CodexHome, token)
+	codexHome, handles, guard, err := pinOwnerHome(record.CodexHome, token)
 	if err != nil {
 		closeHandles(handles)
 		LogError(EventServiceFailed, "skipping sandbox file cleanup because the home could not be pinned: "+ErrorMessage(err))
-		codexHome, handles = "", nil
+		codexHome, handles, guard = "", nil, 0
 	}
 	lifecycle.installation = &lifecycleInstallation{
 		record:    saved,
 		codexHome: codexHome,
 		token:     token,
 		handles:   handles,
+		guard:     guard,
 	}
 	return saved, nil
 }
@@ -229,6 +244,27 @@ func (lifecycle *Lifecycle) RestoreRecordedOwner() error {
 	return recordedErr
 }
 
+// guardPresent reports whether the home's own directory guard is still
+// retained; only then may cleanup act on owner-scoped paths.
+func (installation *lifecycleInstallation) guardPresent() bool {
+	return installation != nil && installation.guard != 0
+}
+
+// releaseGuard drops the home's directory guard and its own pin while keeping
+// the ancestors pinned (Rust installation.directory_guard.take() followed by
+// directory_handles.pop()).
+func (installation *lifecycleInstallation) releaseGuard() {
+	if !installation.guardPresent() {
+		return
+	}
+	_ = windows.CloseHandle(installation.guard)
+	installation.guard = 0
+	if last := len(installation.handles) - 1; last >= 0 {
+		_ = windows.CloseHandle(installation.handles[last])
+		installation.handles = installation.handles[:last]
+	}
+}
+
 // CodexHome reports the home retained for uninstall cleanup, or "" when the
 // owner's home could not be pinned.
 func (lifecycle *Lifecycle) CodexHome() string {
@@ -254,6 +290,9 @@ func (lifecycle *Lifecycle) Close() {
 		return
 	}
 	closeHandles(lifecycle.installation.handles)
+	if lifecycle.installation.guard != 0 {
+		_ = windows.CloseHandle(lifecycle.installation.guard)
+	}
 	if lifecycle.installation.token != 0 {
 		_ = lifecycle.installation.token.Close()
 	}
@@ -263,8 +302,9 @@ func (lifecycle *Lifecycle) Close() {
 // pinOwnerHome pins every ancestor up to and including home as the owner, then
 // guards the home itself so it cannot be converted into a reparse point before
 // cleanup (Rust register_authenticated_user).
-func pinOwnerHome(home string, token windows.Token) (string, []windows.Handle, error) {
+func pinOwnerHome(home string, token windows.Token) (string, []windows.Handle, windows.Handle, error) {
 	var handles []windows.Handle
+	var guard windows.Handle
 	err := withOwnerImpersonation(token, func() error {
 		if err := pinExistingAncestors(home, &handles); err != nil {
 			return err
@@ -272,22 +312,22 @@ func pinOwnerHome(home string, token windows.Token) (string, []windows.Handle, e
 		if len(handles) == 0 {
 			return errors.New("pin the registered home: no directory was pinned")
 		}
-		guard, err := windowssandbox.CreateDirectoryGuard(handles[len(handles)-1])
+		created, err := windowssandbox.CreateDirectoryGuard(handles[len(handles)-1])
 		if err != nil {
 			return err
 		}
 		// Reject a conversion that happened before the handle-relative guard existed.
 		probe, err := pinDirectory(home, windows.FILE_READ_ATTRIBUTES, windowssandbox.DirectoryOpenExisting)
 		if err != nil {
-			_ = windows.CloseHandle(guard)
+			_ = windows.CloseHandle(created)
 			return err
 		}
 		_ = windows.CloseHandle(probe)
-		handles = append(handles, guard)
+		guard = created
 		return nil
 	})
 	if err != nil {
-		return "", handles, err
+		return "", handles, 0, err
 	}
-	return home, handles, nil
+	return home, handles, guard, nil
 }
