@@ -8294,6 +8294,9 @@ func (r *RuntimeRouter) handleTurnStart(request *Request) (*turn.TurnStartRespon
 	if err := validateTurnUserInputImageURLs(params.Input); err != nil {
 		return nil, err
 	}
+	if err := validateTurnUserInputAudioFiles(params.Input); err != nil {
+		return nil, err
+	}
 	r.inheritTurnEnvironmentSelections(params)
 	if err := r.validateTurnStartEnvironments(params); err != nil {
 		return nil, err
@@ -9435,6 +9438,9 @@ func (r *RuntimeRouter) handleTurnSteer(request *Request) (*turn.TurnSteerRespon
 	connectionID := request.normalizedConnectionID()
 	createdAt := runtimeRouterNow(r).UTC()
 	if err := validateTurnUserInputImageURLs(params.Input); err != nil {
+		return nil, err
+	}
+	if err := validateTurnUserInputAudioFiles(params.Input); err != nil {
 		return nil, err
 	}
 	response, err := r.requireTurns().Steer(&params)

@@ -5964,7 +5964,7 @@ func execCompactItemsFromSession(items []session.Item) []compact.Item {
 		}
 		compactItem := compact.Item{ID: item.ID, Type: item.Type, Role: item.Role, Name: item.Name, Namespace: item.Namespace, CallID: item.CallID, Text: item.Text, Kind: kind, Data: cloneExecAnyMap(item.Data), Raw: append(json.RawMessage(nil), item.Raw...), Created: item.CreatedAt}
 		for j := range item.Content {
-			compactItem.Content = append(compactItem.Content, compact.ContentPart{Type: item.Content[j].Type, Text: item.Content[j].Text, ImageURL: item.Content[j].ImageURL, AudioURL: item.Content[j].AudioURL, Detail: item.Content[j].Detail})
+			compactItem.Content = append(compactItem.Content, compact.ContentPart{Type: item.Content[j].Type, Text: item.Content[j].Text, ImageURL: item.Content[j].ImageURL, FileID: item.Content[j].FileID, AudioURL: item.Content[j].AudioURL, Detail: item.Content[j].Detail})
 		}
 		out = append(out, compactItem)
 	}
@@ -5981,7 +5981,7 @@ func execSessionItemsFromCompact(items []compact.Item, now time.Time) []session.
 		}
 		sessionItem := session.Item{ID: firstNonEmpty(item.ID, fmt.Sprintf("compact-%d", i)), Type: item.Type, Role: item.Role, Text: compact.ItemText(&item), CreatedAt: created, Data: cloneExecAnyMap(item.Data), Raw: append(json.RawMessage(nil), item.Raw...), Metadata: map[string]any{"compact": true, "kind": item.Kind}}
 		for j := range item.Content {
-			sessionItem.Content = append(sessionItem.Content, session.ContentPart{Type: item.Content[j].Type, Text: item.Content[j].Text, ImageURL: item.Content[j].ImageURL, Detail: item.Content[j].Detail})
+			sessionItem.Content = append(sessionItem.Content, session.ContentPart{Type: item.Content[j].Type, Text: item.Content[j].Text, ImageURL: item.Content[j].ImageURL, FileID: item.Content[j].FileID, AudioURL: item.Content[j].AudioURL, Detail: item.Content[j].Detail})
 		}
 		out = append(out, sessionItem)
 	}

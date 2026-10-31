@@ -4963,6 +4963,9 @@ func (r *Router) handleThreadInjectItems(request *Request) (*ThreadInjectItemsRe
 	if err := validateResponseItemImageURLs(params.Items); err != nil {
 		return nil, err
 	}
+	if err := validateResponseItemAudioFiles(params.Items); err != nil {
+		return nil, err
+	}
 	now := r.now().UTC()
 	if now.IsZero() {
 		now = time.Now().UTC()

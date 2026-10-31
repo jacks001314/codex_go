@@ -1146,6 +1146,11 @@ const compactResizedImageBytes = 7373
 // detail reference is charged the maximum patch count (#46072).
 const compactOriginalImageMaxPatches = 10_000
 
+// FileAudioTokensEstimate mirrors Rust FILE_AUDIO_TOKENS_ESTIMATE (#58430):
+// uploaded audio files expose no local duration, so budget the Responses
+// 20-minute maximum at the existing 10 audio tokens per second.
+const FileAudioTokensEstimate = 20 * 60 * 10
+
 // compactImageReferenceBytes mirrors Rust estimate_image_reference_bytes
 // (#46072): an inline image keeps the resized-image estimate, while a file
 // reference is charged the fixed resized cost or the maximum patch count when
@@ -1159,6 +1164,17 @@ func compactImageReferenceBytes(part ContentPart) int {
 		return compactOriginalImageMaxPatches * 4
 	}
 	return compactResizedImageBytes
+}
+
+// compactAudioReferenceBytes mirrors Rust estimate_audio_reference_bytes
+// (#58430): inline audio is charged from the decoded duration, while a
+// file-backed reference has no local duration and uses the conservative
+// maximum-duration budget.
+func compactAudioReferenceBytes(part ContentPart) int {
+	if strings.TrimSpace(part.AudioURL) == "" && strings.TrimSpace(part.FileID) != "" {
+		return FileAudioTokensEstimate * 4
+	}
+	return audioutil.EstimateAudioTokenCount(part.AudioURL) * 4
 }
 
 // compactTokensFromBytes mirrors Rust approx_tokens_from_byte_count_i64.
@@ -1202,9 +1218,7 @@ func compactItemContentBytes(item *Item) int {
 		case "input_image", "image":
 			bytes += compactImageReferenceBytes(part)
 		case "input_audio", "audio":
-			// Rust estimate_audio_bytes: approx_bytes_for_tokens over the
-			// duration-derived token count.
-			bytes += audioutil.EstimateAudioTokenCount(part.AudioURL) * 4
+			bytes += compactAudioReferenceBytes(part)
 		}
 	}
 	if bytes == 0 {

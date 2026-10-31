@@ -3245,6 +3245,9 @@ func (r *RuntimeRouter) handleThreadInjectItemsRuntime(request *Request) (*Threa
 	if err := validateResponseItemImageURLs(params.Items); err != nil {
 		return nil, err
 	}
+	if err := validateResponseItemAudioFiles(params.Items); err != nil {
+		return nil, err
+	}
 	// Ephemeral forks (used by TUI side conversations) live only in the
 	// runtime thread manager. They have no persisted store entry, so injected
 	// boundary items must be appended through the ephemeral runtime path.

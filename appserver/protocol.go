@@ -6898,7 +6898,14 @@ func sessionContentPartsFromResponseContent(value any, role string) []session.Co
 			detail := stringPtrIfNotEmpty(stringFromMap(part, "detail"))
 			parts = append(parts, session.ContentPart{Type: "local_image", ImageURL: stringFromMap(part, "path"), Detail: detail})
 		case "input_audio", "audio":
-			parts = append(parts, session.ContentPart{Type: "input_audio", AudioURL: firstNonEmpty(stringFromMap(part, "audio_url"), stringFromMap(part, "url"))})
+			// Rust #58430 keeps the AudioReference shape: inline audio carries
+			// audio_url, an uploaded file carries file_id, and the two forms
+			// share the content position so mixed ordering survives.
+			parts = append(parts, session.ContentPart{
+				Type:     "input_audio",
+				AudioURL: firstNonEmpty(stringFromMap(part, "audio_url"), stringFromMap(part, "url")),
+				FileID:   firstNonEmpty(stringFromMap(part, "file_id"), stringFromMap(part, "fileId")),
+			})
 		case "localAudio", "local_audio":
 			parts = append(parts, session.ContentPart{Type: "local_audio", AudioURL: stringFromMap(part, "path")})
 		default:
