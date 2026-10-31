@@ -35612,8 +35612,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:118: | `#56414` | External-agent memory imports populate the selected namespace and always v2, queueing consolidation per namespace | `config/external_memory_import.go`, `config/external_memory_import_test.go`, `config/api.go`, `appserver/external_memory_settings.go`, like-Rust tests |",
-    "plan_2026_10_27_nontui.md:480: `#56414`/`#56462` details: external-agent memory imports now mirror Rust's"
+    "Round 1252: config/external_memory_import.go:59,116-121 always targets memory v2 for external-agent imports (`externalMemoryVersions` keeps v1 read-side while every import writes v2) and populates the selected namespace, with appserver/external_memory_settings.go queueing consolidation per namespace. Tests: config/external_memory_import_test.go."
    ]
   },
   {
@@ -35637,8 +35636,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:67: | `#56445` | Treat `model_not_found` provider errors as terminal failures | `codexapi/error.go`, `codexapi/response_debug.go`, `model/responses_stream.go`, `model/responses_agent.go`, `rollout/codex_error_info.go`, `appserver/turn_runtime.go`, like-Rust tests |",
-    "plan_2026_10_27_nontui.md:691: `#56445` details: a provider error whose `code` is `model_not_found` is now a"
+    "Round 1252: codexapi/error.go classifies a provider error whose `code` is `model_not_found` as a terminal failure, and model/responses_stream.go plus model/responses_agent.go stop retrying it while rollout/codex_error_info.go and appserver/turn_runtime.go record it as terminal. Tests: codexapi/error_display_test.go, model/responses_http_classification_test.go, model/responses_stream_test.go."
    ]
   },
   {
@@ -35648,9 +35646,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:359: - `#56454`, `#56453`, `#56293`, `#56292`, `#56018`, `#56007`, `#56006`, and"
+    "Round 1252: not applicable — Rust test-only determinism change for the Realtime V2 background-agent steering test; Go has no counterpart test to stabilise."
    ]
   },
   {
@@ -35660,9 +35658,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:359: - `#56454`, `#56453`, `#56293`, `#56292`, `#56018`, `#56007`, `#56006`, and"
+    "Round 1252: not applicable — Rust test-only change making sandbox mount cleanup tests tolerate file-descriptor reuse."
    ]
   },
   {
@@ -35674,8 +35672,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:133: | `#56459` | Feature `guardianv3` (under development, off by default) accepts a boolean or a table with only `enabled`; strict config rejects unknown table fields | `features/features.go`, `config/config.go`, `features/features_test.go`, `config/config_test.go` |",
-    "plan_2026_10_27_nontui.md:1343: - For `#56459`/`#56460`: `go test ./config ./features ./agentboard -count=1` and"
+    "Round 1252: features/features.go:292 registers `guardianv3` as StageUnderDevelopment with DefaultEnabled: false, and config/config.go:1504-1509 accepts a boolean or a table with only `enabled`, rejecting unknown table fields with `unknown configuration field ...guardianv3.<key>`. Tests: features/features_test.go, config/config_test.go."
    ]
   },
   {
@@ -35687,8 +35684,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:134: | `#56460` | Guardian's durable evidence board helpers: shared `guardian` storage namespace and a read-only-capable board for the owning main thread | `agentboard/guardian.go`, `agentboard/guardian_test.go` |",
-    "plan_2026_10_27_nontui.md:1343: - For `#56459`/`#56460`: `go test ./config ./features ./agentboard -count=1` and"
+    "Round 1252: agentboard/guardian.go:5-12 defines GuardianBoardStorageNamespace \"guardian\" and the local-board options for Guardian's durable evidence board owned by the main thread. Tests: agentboard/guardian_test.go TestGuardianLocalBoardHelpersLikeRust."
    ]
   },
   {
@@ -35700,8 +35696,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:88: | `#56461` | Silent message-board `append` without subscriptions or notifications | `agentboard/api.go`, `agentboard/inmemory.go`, `agentboard/local.go`, `agentboard/remote.go`, `agentboard/tools.go`, like-Rust tests |",
-    "plan_2026_10_27_nontui.md:948: `#56461` details: `Board.Append` shares posting's write path but never"
+    "Round 1252: agentboard/local.go:494 LocalAgentMessageBoard.Append shares the posting write path but never publishes subscriptions or notifications, and agentboard/api.go/inmemory.go/remote.go/tools.go expose the same silent append to every board implementation. Tests: agentboard/append_test.go TestInMemoryBoardAppendIsSilentLikeRust."
    ]
   },
   {
@@ -35713,8 +35708,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:119: | `#56462` | Imports and consolidation share a cross-process workspace lock; a busy workspace rejects imports and skips consolidation | `memorylock/lock.go`, `memories/pipeline.go`, `config/external_memory_import.go`, app-server/busy-workspace tests |",
-    "plan_2026_10_27_nontui.md:480: `#56414`/`#56462` details: external-agent memory imports now mirror Rust's"
+    "Round 1252: memorylock/lock.go provides the cross-process workspace lock that config/external_memory_import.go and memories/pipeline.go share, so a busy workspace rejects imports and skips consolidation. Tests: memorylock/lock_test.go TestTryAcquireSerializesWorkspaceOwners, TestLockPathLivesBesideWorkspace."
    ]
   },
   {
@@ -35726,8 +35720,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:56: | `#56465` | `thread/memory/read` returns the selected version's memory summary | `appserver/protocol.go`, `appserver/thread_memory_read.go`, `appserver/schema.go`, `appserver/rust_protocol_surface_test.go`, like-Rust tests |",
-    "plan_2026_10_27_nontui.md:569: `#56465` details: `thread/memory/read` requires a loaded thread (Rust loads it"
+    "Round 1252: appserver/thread_memory_read.go implements `thread/memory/read`, returning the selected version's memory summary and requiring a loaded thread, with appserver/protocol.go and appserver/schema.go exposing it. Tests: appserver/thread_memory_read_like_rust_test.go TestThreadMemoryReadReturnsSelectedVersionSummaryLikeRust, TestThreadMemoryReadHonorsThreadVersionWithoutFallbackLikeRust, TestThreadMemoryReadGatesLikeRust."
    ]
   },
   {
@@ -35739,8 +35732,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:68: | `#56468` | Preserve `SystemRoot` for Windows filesystem sandbox helpers | `execserver/fs_helper.go`, helper environment test |",
-    "plan_2026_10_27_nontui.md:704: `#56468` details: the remote fs-helper environment filter now mirrors Rust's"
+    "Round 1252: execserver/fs_helper.go:515-526 keeps SystemRoot (alongside PATH, SystemDrive and LOCALAPPDATA) in the remote fs-helper environment because the Windows sandbox helper needs it to create the process. Tests: execserver/fs_helper_test.go TestFSHelperEnvironmentPreservesWindowsSystemRootLikeRust."
    ]
   },
   {
@@ -35752,7 +35744,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_28_sync4.md:120: | `7d592f6dd9` | #56477 | equivalent | `state/guardian_action_prompt.go` applies `guardianApprovalReasonTokens = 512` during context composition. |"
+    "Round 1252: state/guardian_action_prompt.go:12-14 applies `guardianApprovalReasonTokens = 512` (Rust MAX_APPROVAL_REASON_TOKENS) while composing the Guardian context instead of truncating at the call site."
    ]
   },
   {
@@ -35776,7 +35768,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_28_sync4.md:119: | `e52045f989` | #56493 | equivalent | `context/guardian_tool_descriptions.go` and `renderGuardianToolDescriptions` render structured descriptions with the 400-token cap. |"
+    "Round 1252: context/guardian_tool_descriptions.go:6-7 renders Guardian tool and connector descriptions during context composition with GuardianToolDescriptionTokens = 400."
    ]
   },
   {
@@ -35788,8 +35780,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:81: | `#56494` | Channel upserts on message boards (`upsert_channel`; `description` on `create_channel`) | `agentboard/api.go`, `agentboard/inmemory.go`, `agentboard/local.go`, `agentboard/remote.go`, `agentboard/tools.go`, `agentboard/upsert_channel_test.go`, `agentboard/tools_test.go` |",
-    "plan_2026_10_27_nontui.md:856: `#56494` details: `upsert_channel` creates a channel or replaces only its"
+    "Round 1252: `upsert_channel` exists on every board implementation (agentboard/api.go, inmemory.go, local.go), carries `description` on `create_channel`, and agentboard/tools.go exposes it. Tests: agentboard/upsert_channel_test.go TestInMemoryUpsertChannelPreservesEvidenceLikeRust, TestLocalBoardUpsertChannelPreservesEvidenceLikeRust, TestRemoteBoardRejectsUpsertChannelLikeRust."
    ]
   },
   {
@@ -35801,8 +35792,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:71: | `#56495` | Paginated subscribed-channel listing on the local message board | `agentboard/local.go`, `agentboard/local_test.go` |",
-    "plan_2026_10_27_nontui.md:752: `#56495` details: `LocalAgentMessageBoard.SubscribedChannels` lists the caller's"
+    "Round 1252: agentboard/local.go:832-836 LocalAgentMessageBoard.SubscribedChannels pages the caller's local-board channel subscriptions through PageRequest/Page[string]. Tests: agentboard/local_test.go."
    ]
   },
   {
@@ -35874,7 +35864,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:41: | `#56525` | Drop the 1 MiB explicit model-catalog response cap | `model/models_endpoint.go`, catalog URL test |"
+    "Round 1252: model/models_endpoint.go drops the 1 MiB cap for explicit model catalogs while the ordinary models endpoint stays unbounded too, so a large explicit catalog is returned intact. Tests: model/model_catalog_url_test.go TestModelsCatalogAllowsLargeExplicitResponseLikeRust."
    ]
   },
   {
