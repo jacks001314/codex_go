@@ -33338,7 +33338,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_20.md:107: - `#55357`: not applicable structurally. Go discovers skills while building"
+    "Round 1245: Rust #55357 adds ToolContributor::prepare_for_step and awaits contributors before building tools because skill tools used to fail with `skill catalog is not ready for this step` until World State rendering ran. Go has no per-step rendering gate or contributor hook: turn/skills_tools.go builds skills tools around orchestratorSkillCatalogCache and executorSkillCatalogCache (:182), which resolve the catalog from the turn's skill providers (turn/required_skills.go:50 RequiredSkillsCatalogFromProviders) and are independent of World State rendering, and the `catalog is not ready for this step` error does not exist anywhere in the Go tree. The behaviour the commit fixes therefore cannot occur."
    ]
   },
   {
