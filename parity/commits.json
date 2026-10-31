@@ -24440,9 +24440,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Orchestrator: setupElevationPayload carries user_profile; runElevatedSetup, runSetupRefresh, runSetupRefreshForRequest and the provisioning payload forward the trimmed USERPROFILE like the matching Rust payloads (setup_windows.go).",
+    "Helper: setupPayload accepts user_profile; runSetupFull grants the sandbox group non-inheriting FILE_READ_ATTRIBUTES on an absolute profile root that contains CommandCWD, logging grant failures and continuing setup (Rust #49690 run_setup_full).",
+    "ACL conflict check already expands GENERIC_* deny masks through mapFileGenericMask in daclHasDeniedMaskForSID/daclHasAnyDenyMask, so a generic deny blocks the new allow.",
+    "Tests: TestSetupPayloadCarriesUserProfileLikeRust, TestSetupPayloadFromEnvironmentTransportLikeRust (user_profile round trip), TestGrantUserProfileReadAttributesIsNonInheritingLikeRust (unprotected child SD unchanged), TestGrantUserProfileReadAttributesSkipsCommandOutsideProfile, TestDACLHasDeniedMaskExpandsGenericMaskLikeRust.",
+    "Verified with go build ./sandbox/windowssandbox/..., go test ./sandbox/windowssandbox/... -count=1 and go test ./parity -count=1. The opt-in elevated PowerShell smoke path was not run on this host."
    ]
   },
   {

@@ -45,6 +45,7 @@ type setupPayload struct {
 	AllowLocalBinding bool            `json:"allow_local_binding,omitempty"`
 	Otel              json.RawMessage `json:"otel,omitempty"`
 	RealUser          string          `json:"real_user"`
+	UserProfile       string          `json:"user_profile,omitempty"`
 	Mode              setupMode       `json:"mode,omitempty"`
 	RefreshOnly       bool            `json:"refresh_only,omitempty"`
 	Runtime           string          `json:"runtime,omitempty"`
@@ -303,6 +304,11 @@ func runSetupFull(payload *setupPayload, log io.Writer, sbxDir string) error {
 	if len(appliedDenyReadPaths) > 0 {
 		setupLogLine(log, fmt.Sprintf("applied %d deny-read ACLs", len(appliedDenyReadPaths)))
 	}
+
+	// Rust #49690: a sandboxed PowerShell needs FILE_READ_ATTRIBUTES on the
+	// user profile root to keep its working directory and resolve relative
+	// paths when the project lives beneath that profile.
+	grantUserProfileReadAttributes(payload, sandboxGroupSID, log)
 
 	if len(payload.ReadRoots) == 0 {
 		setupLogLine(log, "no read roots to grant; skipping read ACL helper")
@@ -618,6 +624,30 @@ func commitSetupMarker(codexHome string, offlineUsername string, onlineUsername 
 		ProxyPorts:        append([]uint16(nil), proxyPorts...),
 		AllowLocalBinding: allowLocalBinding,
 	})
+}
+
+// grantUserProfileReadAttributes mirrors Rust #49690's non-inheriting
+// FILE_READ_ATTRIBUTES grant. Failures are logged and ignored so a profile the
+// setup helper cannot open never blocks the rest of the sandbox setup.
+func grantUserProfileReadAttributes(payload *setupPayload, sandboxGroupSID string, log io.Writer) {
+	profile := strings.TrimSpace(payload.UserProfile)
+	if profile == "" || !filepath.IsAbs(profile) || sandboxGroupSID == "" {
+		return
+	}
+	if !windowssandbox.WorkspaceWriteRootContainsPath(profile, payload.CommandCWD) {
+		return
+	}
+	granted, err := windowssandbox.GrantAllowMaskACEsWithInheritance(windowssandbox.ACLRequest{
+		Path: profile,
+		SID:  sandboxGroupSID,
+		Mask: uint32(windows.FILE_READ_ATTRIBUTES),
+	}, 0)
+	switch {
+	case err != nil:
+		setupLogLine(log, fmt.Sprintf("failed to grant non-inheriting read-attributes ACE on user profile %s: %v; continuing setup", profile, err))
+	case granted:
+		setupLogLine(log, fmt.Sprintf("granted non-inheriting read-attributes ACE on user profile %s", profile))
+	}
 }
 
 func lockSandboxBinDir(payload *setupPayload, sandboxGroupSID []byte, log io.Writer) error {

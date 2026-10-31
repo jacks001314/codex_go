@@ -18,6 +18,7 @@ func TestSetupPayloadFromEnvironmentTransportLikeRust(t *testing.T) {
 		DenyReadPaths:   []string{`C:\workspace\nested\secret.env`},
 		OfflineUsername: "offline",
 		OnlineUsername:  "online",
+		UserProfile:     `C:\Users\example`,
 		Mode:            setupModeFull,
 	}
 	data, err := json.Marshal(payload)
@@ -36,7 +37,7 @@ func TestSetupPayloadFromEnvironmentTransportLikeRust(t *testing.T) {
 	if err != nil {
 		t.Fatalf("payloadFromArgs(environment) error = %v", err)
 	}
-	if parsed.CodexHome != payload.CodexHome || len(parsed.DenyReadPaths) != 1 || parsed.Mode != setupModeFull {
+	if parsed.CodexHome != payload.CodexHome || len(parsed.DenyReadPaths) != 1 || parsed.UserProfile != payload.UserProfile || parsed.Mode != setupModeFull {
 		t.Fatalf("parsed payload = %#v", parsed)
 	}
 }

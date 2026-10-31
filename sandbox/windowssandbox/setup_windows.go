@@ -48,9 +48,18 @@ type setupElevationPayload struct {
 	AllowLocalBinding bool     `json:"allow_local_binding,omitempty"`
 	Otel              any      `json:"otel,omitempty"`
 	RealUser          string   `json:"real_user"`
+	UserProfile       string   `json:"user_profile,omitempty"`
 	Mode              string   `json:"mode"`
 	RefreshOnly       bool     `json:"refresh_only,omitempty"`
 	Runtime           string   `json:"runtime,omitempty"`
+}
+
+// setupUserProfile forwards the invoking user's profile to the elevated helper.
+// The helper only uses it to keep PowerShell's working directory and relative
+// path resolution alive when the command runs beneath that profile
+// (Rust #49690).
+func setupUserProfile() string {
+	return strings.TrimSpace(os.Getenv("USERPROFILE"))
 }
 
 // setupPayloadRuntime serializes the selected setup runtime. Legacy stays
@@ -138,6 +147,7 @@ func runElevatedSetup(req *SandboxSetupRequest) error {
 		ProxyPorts:        offlineProxySettings.ProxyPorts,
 		AllowLocalBinding: offlineProxySettings.AllowLocalBinding,
 		RealUser:          setupRealUser(req.RealUser),
+		UserProfile:       setupUserProfile(),
 		Mode:              setupModeFull,
 		Runtime:           setupPayloadRuntime(),
 	}
@@ -187,6 +197,7 @@ func runElevatedProvisioningSetup(req *SandboxSetupRequest) error {
 		WriteRoots:      []string{},
 		ProxyPorts:      []uint16{},
 		RealUser:        setupRealUser(req.RealUser),
+		UserProfile:     setupUserProfile(),
 		Mode:            setupModeProvisionOnly,
 		Runtime:         setupPayloadRuntime(),
 	}
@@ -218,6 +229,7 @@ func runSetupRefresh(codexHome string) error {
 		ProxyPorts:        proxySettings.ProxyPorts,
 		AllowLocalBinding: proxySettings.AllowLocalBinding,
 		RealUser:          setupRealUser(""),
+		UserProfile:       setupUserProfile(),
 		Mode:              setupModeFull,
 		RefreshOnly:       true,
 		Runtime:           setupPayloadRuntime(),
@@ -255,6 +267,7 @@ func runSetupRefreshForRequest(req *SandboxSetupRequest) error {
 		ProxyPorts:        offlineProxySettings.ProxyPorts,
 		AllowLocalBinding: offlineProxySettings.AllowLocalBinding,
 		RealUser:          setupRealUser(req.RealUser),
+		UserProfile:       setupUserProfile(),
 		Mode:              setupModeFull,
 		RefreshOnly:       true,
 		Runtime:           setupPayloadRuntime(),

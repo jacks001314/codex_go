@@ -58,6 +58,45 @@ func TestEnsureAllowWriteACEsAddsAllowOnce(t *testing.T) {
 	assertDACLHasACE(t, path, testCapabilitySID, aclACEKindAllowWrite)
 }
 
+// TestDACLHasDeniedMaskExpandsGenericMaskLikeRust ports Rust #49690: a deny
+// ACE that carries GENERIC_READ must be detected for FILE_GENERIC_READ so a
+// conflicting allow is never introduced.
+func TestDACLHasDeniedMaskExpandsGenericMaskLikeRust(t *testing.T) {
+	path := t.TempDir()
+	sidBytes, err := SIDBytesFromString(testCapabilitySID)
+	if err != nil {
+		t.Fatalf("SIDBytesFromString() error = %v", err)
+	}
+	sid := sidPointerFromBytes(sidBytes)
+	entry := windows.EXPLICIT_ACCESS{
+		AccessPermissions: windows.GENERIC_READ,
+		AccessMode:        windows.DENY_ACCESS,
+		Inheritance:       windows.SUB_CONTAINERS_AND_OBJECTS_INHERIT,
+		Trustee: windows.TRUSTEE{
+			TrusteeForm:  windows.TRUSTEE_IS_SID,
+			TrusteeType:  windows.TRUSTEE_IS_UNKNOWN,
+			TrusteeValue: windows.TrusteeValueFromSID(sid),
+		},
+	}
+	dacl, err := windows.ACLFromEntries([]windows.EXPLICIT_ACCESS{entry}, nil)
+	if err != nil {
+		t.Fatalf("ACLFromEntries() error = %v", err)
+	}
+	if err := setDACL(path, dacl); err != nil {
+		t.Fatalf("setDACL() error = %v", err)
+	}
+	sd, stored, err := fileDACL(path)
+	if err != nil {
+		t.Fatalf("fileDACL() error = %v", err)
+	}
+	if !daclHasDeniedMaskForSID(stored, sid, windows.FILE_GENERIC_READ) {
+		t.Fatal("GENERIC_READ deny ACE was not expanded to FILE_GENERIC_READ")
+	}
+	runtime.KeepAlive(sidBytes)
+	runtime.KeepAlive(sd)
+	runtime.KeepAlive(entry)
+}
+
 func tempACLFile(t *testing.T) string {
 	t.Helper()
 	file, err := os.CreateTemp(t.TempDir(), "acl-*.txt")
