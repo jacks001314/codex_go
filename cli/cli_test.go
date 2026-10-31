@@ -1155,17 +1155,17 @@ func TestParseMCPAddTransportFlagValidation(t *testing.T) {
 		{
 			name: "bearer token requires url",
 			args: []string{"mcp", "add", "fs", "--bearer-token-env-var", "TOKEN", "--", "mcp-fs"},
-			want: "mcp add --bearer-token-env-var requires --url",
+			want: "the following required argument was not provided: url",
 		},
 		{
 			name: "oauth client requires url",
 			args: []string{"mcp", "add", "fs", "--oauth-client-id", "client-1", "--", "mcp-fs"},
-			want: "mcp add --oauth-client-id requires --url",
+			want: "the following required argument was not provided: url",
 		},
 		{
 			name: "oauth resource requires url",
 			args: []string{"mcp", "add", "fs", "--oauth-resource", "resource-1", "--", "mcp-fs"},
-			want: "mcp add --oauth-resource requires --url",
+			want: "the following required argument was not provided: url",
 		},
 		{
 			name: "env is stdio only",

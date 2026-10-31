@@ -402,6 +402,28 @@ func validateSandboxMode(value string) error {
 	return invalidValueError(value, "--sandbox <SANDBOX_MODE>", sandboxModeValues)
 }
 
+// mcpOAuthClientRegistrationValues are the values Rust's
+// McpOAuthClientRegistrationArg accepts; `--help` renders them as
+// <AUTO|CIMD|DCR> while clap's diagnostics list them lowercase.
+var mcpOAuthClientRegistrationValues = []string{"auto", "cimd", "dcr"}
+
+const mcpOAuthClientRegistrationFlag = "--oauth-client-registration <AUTO|CIMD|DCR>"
+
+// validateMCPOAuthClientRegistration applies clap's value parser for
+// `--oauth-client-registration`, which rejects an empty value and anything
+// outside the enum.
+func validateMCPOAuthClientRegistration(value string) error {
+	if value == "" {
+		return missingValueError(mcpOAuthClientRegistrationFlag, mcpOAuthClientRegistrationValues)
+	}
+	for _, allowed := range mcpOAuthClientRegistrationValues {
+		if value == allowed {
+			return nil
+		}
+	}
+	return invalidValueError(value, mcpOAuthClientRegistrationFlag, mcpOAuthClientRegistrationValues)
+}
+
 // clapRequiredKeepsOptions lists the commands whose missing-argument usage
 // keeps [OPTIONS]: clap cannot drop the optional block when the remaining
 // requirement comes from an argument group.

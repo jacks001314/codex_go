@@ -206,18 +206,19 @@ type FeatureOptions struct {
 }
 
 type MCPOptions struct {
-	Action            string
-	Name              string
-	JSON              bool
-	URL               string
-	BearerTokenEnvVar string
-	OAuthClientID     string
-	OAuthClientSecret string
-	OAuthResource     string
-	Env               map[string]string
-	Command           []string
-	Scopes            []string
-	ConfigOverrides   []string
+	Action                  string
+	Name                    string
+	JSON                    bool
+	URL                     string
+	BearerTokenEnvVar       string
+	OAuthClientID           string
+	OAuthClientSecret       string
+	OAuthResource           string
+	OAuthClientRegistration string
+	Env                     map[string]string
+	Command                 []string
+	Scopes                  []string
+	ConfigOverrides         []string
 	// NoBrowser prints the authorization URL and accepts a pasted callback
 	// instead of launching a browser (Rust #44629).
 	NoBrowser bool
@@ -1772,6 +1773,56 @@ func parseFeatures(args []string, features *FeatureOptions) error {
 	return nil
 }
 
+// mcpAddFlagSeen reports whether a value flag occurs before the `--`
+// terminator, mirroring clap's presence checks: `mcp add` treats an empty value
+// as present even though Go stores it as the zero value.
+func mcpAddFlagSeen(args []string, flag string) bool {
+	for _, arg := range args {
+		if arg == "--" {
+			return false
+		}
+		if arg == flag || strings.HasPrefix(arg, flag+"=") {
+			return true
+		}
+	}
+	return false
+}
+
+// mcpAddRequiresError reproduces clap's `requires` diagnostics for the
+// streamable HTTP options. A relation that leaves --url as the only missing
+// argument is reported against the root command with the bare argument id,
+// while `requires_all` violations keep the `mcp add` usage block.
+func mcpAddRequiresError(args []string, mcp *MCPOptions) error {
+	clientIDSeen := mcpAddFlagSeen(args, "--oauth-client-id")
+	secretSeen := mcpAddFlagSeen(args, "--oauth-client-secret")
+	urlMissing := mcp.URL == "" && (clientIDSeen || secretSeen ||
+		mcpAddFlagSeen(args, "--oauth-resource") ||
+		mcpAddFlagSeen(args, "--oauth-client-registration") ||
+		mcpAddFlagSeen(args, "--bearer-token-env-var"))
+	clientIDMissing := secretSeen && !clientIDSeen
+	switch {
+	case urlMissing && clientIDMissing:
+		return &UsageError{
+			Message: requiredArgumentsMessage("--url <URL>", "--oauth-client-id <CLIENT_ID>"),
+			Usage:   subcommandUsageTexts["mcp add"].usage,
+		}
+	case urlMissing:
+		return &UsageError{
+			Message: "the following required argument was not provided: url",
+			Usage:   rootUsageText,
+		}
+	case clientIDMissing:
+		return &UsageError{
+			Message: requiredArgumentsMessage("--oauth-client-id <CLIENT_ID>"),
+			Usage:   subcommandUsageTexts["mcp add"].usage,
+		}
+	}
+	if secretSeen && strings.TrimSpace(mcp.OAuthClientSecret) == "" {
+		return errors.New("--oauth-client-secret must not be empty")
+	}
+	return nil
+}
+
 func parseMCP(args []string, mcp *MCPOptions) error {
 	if len(args) == 0 {
 		return MissingSubcommandError(GroupHelpMCP)
@@ -1910,6 +1961,21 @@ func parseMCP(args []string, mcp *MCPOptions) error {
 				i = next
 			case strings.HasPrefix(arg, "--oauth-resource="):
 				mcp.OAuthResource = strings.TrimPrefix(arg, "--oauth-resource=")
+			case arg == "--oauth-client-registration":
+				if i+1 >= len(args) || clapLooksLikeOption(args[i+1]) {
+					return missingValueError(mcpOAuthClientRegistrationFlag, mcpOAuthClientRegistrationValues)
+				}
+				if err := validateMCPOAuthClientRegistration(args[i+1]); err != nil {
+					return err
+				}
+				mcp.OAuthClientRegistration = args[i+1]
+				i++
+			case strings.HasPrefix(arg, "--oauth-client-registration="):
+				value := strings.TrimPrefix(arg, "--oauth-client-registration=")
+				if err := validateMCPOAuthClientRegistration(value); err != nil {
+					return err
+				}
+				mcp.OAuthClientRegistration = value
 			case arg == "-c" || arg == "--config":
 				value, next, err := requireValue(args, i, arg)
 				if err != nil {
@@ -1942,26 +2008,14 @@ func parseMCP(args []string, mcp *MCPOptions) error {
 			}
 			return missingRequiredArgumentsError("mcp add", missing...)
 		}
+		if err := mcpAddRequiresError(args, mcp); err != nil {
+			return err
+		}
 		if mcp.URL != "" && len(mcp.Command) > 0 {
 			return errors.New("mcp add accepts either --url or COMMAND, not both")
 		}
 		if mcp.URL != "" && len(mcp.Env) > 0 {
 			return errors.New("mcp add --env is only valid with stdio COMMAND")
-		}
-		if mcp.URL == "" && mcp.BearerTokenEnvVar != "" {
-			return errors.New("mcp add --bearer-token-env-var requires --url")
-		}
-		if mcp.URL == "" && mcp.OAuthClientID != "" {
-			return errors.New("mcp add --oauth-client-id requires --url")
-		}
-		if mcp.URL == "" && mcp.OAuthClientSecret != "" {
-			return errors.New("mcp add --oauth-client-secret requires --url")
-		}
-		if mcp.OAuthClientSecret != "" && mcp.OAuthClientID == "" {
-			return errors.New("mcp add --oauth-client-secret requires --oauth-client-id")
-		}
-		if mcp.URL == "" && mcp.OAuthResource != "" {
-			return errors.New("mcp add --oauth-resource requires --url")
 		}
 	case "remove", "logout":
 		for i := 1; i < len(args); i++ {
@@ -2005,6 +2059,21 @@ func parseMCP(args []string, mcp *MCPOptions) error {
 				mcp.Scopes = append(mcp.Scopes, splitComma(strings.TrimPrefix(arg, "--scopes="))...)
 			case arg == "--no-browser":
 				mcp.NoBrowser = true
+			case arg == "--oauth-client-registration":
+				if i+1 >= len(args) || clapLooksLikeOption(args[i+1]) {
+					return missingValueError(mcpOAuthClientRegistrationFlag, mcpOAuthClientRegistrationValues)
+				}
+				if err := validateMCPOAuthClientRegistration(args[i+1]); err != nil {
+					return err
+				}
+				mcp.OAuthClientRegistration = args[i+1]
+				i++
+			case strings.HasPrefix(arg, "--oauth-client-registration="):
+				value := strings.TrimPrefix(arg, "--oauth-client-registration=")
+				if err := validateMCPOAuthClientRegistration(value); err != nil {
+					return err
+				}
+				mcp.OAuthClientRegistration = value
 			case arg == "-c" || arg == "--config":
 				value, next, err := requireValue(args, i, arg)
 				if err != nil {

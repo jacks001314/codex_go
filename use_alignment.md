@@ -907,6 +907,42 @@ one-off captures.
     `cli/hidden_command_diagnostics_like_rust_test.go` and
     `app/hidden_command_diagnostics_meta_like_rust_test.go`.
 
+41. **`mcp add` / `mcp login` OAuth client registration and clap `requires`
+    blocks** - Rust's streamable-HTTP options declare
+    `requires`/`requires_all` relations: `--oauth-client-id`,
+    `--oauth-resource`, `--oauth-client-registration` and
+    `--bearer-token-env-var` all require `--url`, next to
+    `--oauth-client-secret requires_all = ["url", "oauth_client_id"]`, and both
+    `AddMcpStreamableHttpArgs` and `LoginArgs` accept
+    `--oauth-client-registration <AUTO|CIMD|DCR>` through a case-sensitive
+    `value_enum`.
+    - `MCPOptions` now carries `OAuthClientRegistration`, parsed for `mcp add`
+      and `mcp login` in both `--flag value` and `--flag=value` spellings; empty
+      and out-of-enum values print clap's
+      `a value is required for '--oauth-client-registration <AUTO|CIMD|DCR>' but
+      none was supplied` / `invalid value ...` block plus
+      `[possible values: auto, cimd, dcr]`, exit 2, and no usage block.
+    - The four Go-worded `requires` errors are replaced by clap's blocks: a
+      relation that leaves `--url` as the only missing argument is reported
+      against the root command with the bare argument id
+      (`error: the following required argument was not provided: url`, root
+      usage), while `requires_all` violations keep the `mcp add` usage and list
+      `--url <URL>` / `--oauth-client-id <CLIENT_ID>` in clap's plural wording.
+      Presence is read from argv before the `--` terminator, so
+      `--oauth-client-id ""` still trips the requirement like clap's
+      `Option<String>`.
+    - `--oauth-client-secret ""` keeps Rust's run-time
+      `--oauth-client-secret must not be empty` (exit 1), and the parsed
+      strategy is threaded into both CLI login paths
+      (`performMCPCLIOAuthLogin*` -> `StartOAuthLoginServer.ClientRegistration`)
+      and the `mcp` service login fallback, defaulting to `auto` when absent.
+    Evidence: 23 live comparisons against 0.166
+    (`out/round26-mcp-oauth.txt`) are byte-identical on stdout, stderr and exit
+    status; `go test ./cli` passes with
+    `cli/mcp_oauth_registration_like_rust_test.go`, and
+    `go test -vet=off ./app -run 'MCP|OAuth'` passes with
+    `app/mcp_oauth_registration_meta_like_rust_test.go`.
+
 ## Verification
 
 - The missing-required surface matches Rust 0.166: `probe_missing_r25` and
@@ -1141,6 +1177,18 @@ one-off captures.
   56 missing/misplaced argument, 17 missing-value, 8 `sandbox setup`, 144 shared
   flag comparisons down to the three parsers listed under Still open).
 
+- `mcp` OAuth registration round: `go build -o bin\codex.exe .\cmd\codex`
+  succeeds, `gofmt -l` is clean for the touched files,
+  `go test ./cli ./applypatch ./prompt ./review ./cmd/... ./tcptunnel` pass and
+  `go test -vet=off ./app` keeps exactly the two pre-existing failures
+  (`TestExecJSONEndToEnd`, `TestLocalSessionForksRustRolloutWithoutGoSnapshot`).
+  23 live `mcp add`/`mcp login` comparisons against 0.166
+  (`out/round26-mcp-oauth.txt`) are byte-identical on stdout, stderr and exit
+  status: the four former Go-worded `requires` errors now print clap's
+  singular root-usage and plural `mcp add`-usage blocks, and
+  `--oauth-client-registration` accepts `auto|cimd|dcr` with clap's invalid and
+  missing-value diagnostics.
+
 ## Still open
 
 - `codex resume -i a.png b.png` (TUI picker path) also uses Rust's variadic
@@ -1184,9 +1232,8 @@ one-off captures.
     subcommand paths print clap's `-h`/`--help`/`help <topic>` pages plus the
     `--help=<value>` diagnostic, and `codex execpolicy check -hx` now reaches
     clap's missing-required block like Rust.
-  - `codex mcp add --oauth-client-registration <AUTO|CIMD|DCR>` is a Rust flag Go
-    does not parse yet, and clap treats `--user=` as a satisfied (empty) value for
-    the nested `setup` parser where Go reports the missing group.
+  - clap treats `--user=` as a satisfied (empty) value for the nested `setup`
+    parser where Go reports the missing group.
 - `apply_patch` on 2026-10-31: Rust 0.166 (`sandbox = "unelevated"`) refused to
   write under `%TEMP%` (`Access ... is denied`) while Go wrote the file; that
   sandbox-policy difference is still unaligned. Go also still appends

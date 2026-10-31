@@ -289,7 +289,7 @@ func runMCPAdd(ctx context.Context, store *mcpCLIStore, opts *cli.MCPOptions, st
 	case mcpOAuthLoginSupported:
 		fmt.Fprintln(stdout, "Detected OAuth support. Starting OAuth flow…")
 		resolvedScopes := resolveMCPOAuthScopes(nil, false, nil, false, support.Discovery.ScopesSupported)
-		if err := performMCPCLIOAuthLoginRetryWithoutScopes(ctx, store, opts.Name, server, support.Discovery, resolvedScopes, nil, stdout); err != nil {
+		if err := performMCPCLIOAuthLoginRetryWithoutScopes(ctx, store, opts.Name, server, support.Discovery, resolvedScopes, mcp.MCPServerOauthClientRegistration(opts.OAuthClientRegistration), nil, stdout); err != nil {
 			return err
 		}
 		fmt.Fprintln(stdout, "Successfully logged in.")
@@ -349,7 +349,7 @@ func runMCPLogin(ctx context.Context, store *mcpCLIStore, opts *cli.MCPOptions, 
 	}
 	resolvedScopes := resolveMCPOAuthScopes(explicitScopes, explicitScopesSet, server.Scopes, configuredScopesSet, discoveredScopes)
 	if support.Kind == mcpOAuthLoginSupported {
-		if err := performMCPCLIOAuthLoginRetryWithoutScopes(ctx, store, opts.Name, server, support.Discovery, resolvedScopes, loginCallbackInput(opts, stdin), stdout); err != nil {
+		if err := performMCPCLIOAuthLoginRetryWithoutScopes(ctx, store, opts.Name, server, support.Discovery, resolvedScopes, mcp.MCPServerOauthClientRegistration(opts.OAuthClientRegistration), loginCallbackInput(opts, stdin), stdout); err != nil {
 			return err
 		}
 		fmt.Fprintf(stdout, "Successfully logged in to MCP server '%s'.\n", opts.Name)
@@ -358,7 +358,12 @@ func runMCPLogin(ctx context.Context, store *mcpCLIStore, opts *cli.MCPOptions, 
 	service := mcp.NewMCPService(&mcp.RuntimeConfig{Servers: map[string]mcp.ServerRegistration{
 		opts.Name: {Config: mcpServerRuntimeConfig(opts.Name, server, store.codexHome)},
 	}, CodexHome: store.codexHome, HTTPClient: store.httpClient})
-	response, err := service.OauthLogin(&mcp.MCPServerOauthLoginParams{Name: opts.Name, Scopes: resolvedScopes.Scopes})
+	loginParams := &mcp.MCPServerOauthLoginParams{Name: opts.Name, Scopes: resolvedScopes.Scopes}
+	if opts.OAuthClientRegistration != "" {
+		registration := mcp.MCPServerOauthClientRegistration(opts.OAuthClientRegistration)
+		loginParams.ClientRegistration = &registration
+	}
+	response, err := service.OauthLogin(loginParams)
 	if err != nil {
 		return err
 	}
@@ -438,8 +443,8 @@ func loginCallbackInput(opts *cli.MCPOptions, stdin io.Reader) io.Reader {
 	return stdin
 }
 
-func performMCPCLIOAuthLoginRetryWithoutScopes(ctx context.Context, store *mcpCLIStore, name string, server *mcpCLIServer, discovery *mcp.StreamableHTTPOAuthDiscovery, resolvedScopes mcpResolvedOAuthScopes, callbackInput io.Reader, stdout io.Writer) error {
-	err := performMCPCLIOAuthLogin(ctx, store, name, server, discovery, resolvedScopes, callbackInput, stdout)
+func performMCPCLIOAuthLoginRetryWithoutScopes(ctx context.Context, store *mcpCLIStore, name string, server *mcpCLIServer, discovery *mcp.StreamableHTTPOAuthDiscovery, resolvedScopes mcpResolvedOAuthScopes, clientRegistration mcp.MCPServerOauthClientRegistration, callbackInput io.Reader, stdout io.Writer) error {
+	err := performMCPCLIOAuthLogin(ctx, store, name, server, discovery, resolvedScopes, clientRegistration, callbackInput, stdout)
 	if err == nil {
 		return nil
 	}
@@ -447,10 +452,10 @@ func performMCPCLIOAuthLoginRetryWithoutScopes(ctx context.Context, store *mcpCL
 		return err
 	}
 	fmt.Fprintln(stdout, "OAuth provider rejected discovered scopes. Retrying without scopes…")
-	return performMCPCLIOAuthLogin(ctx, store, name, server, discovery, mcpResolvedOAuthScopes{Source: mcpOAuthScopesEmpty}, callbackInput, stdout)
+	return performMCPCLIOAuthLogin(ctx, store, name, server, discovery, mcpResolvedOAuthScopes{Source: mcpOAuthScopesEmpty}, clientRegistration, callbackInput, stdout)
 }
 
-func performMCPCLIOAuthLogin(ctx context.Context, store *mcpCLIStore, name string, server *mcpCLIServer, discovery *mcp.StreamableHTTPOAuthDiscovery, resolvedScopes mcpResolvedOAuthScopes, callbackInput io.Reader, stdout io.Writer) error {
+func performMCPCLIOAuthLogin(ctx context.Context, store *mcpCLIStore, name string, server *mcpCLIServer, discovery *mcp.StreamableHTTPOAuthDiscovery, resolvedScopes mcpResolvedOAuthScopes, clientRegistration mcp.MCPServerOauthClientRegistration, callbackInput io.Reader, stdout io.Writer) error {
 	if store == nil || server == nil || discovery == nil {
 		return fmt.Errorf("OAuth login requires a discovered streamable HTTP server")
 	}
@@ -480,6 +485,7 @@ func performMCPCLIOAuthLogin(ctx context.Context, store *mcpCLIStore, name strin
 		Resource:                   firstNonEmptyLocal(server.OAuthResource, discovery.Resource),
 		Scopes:                     append([]string(nil), resolvedScopes.Scopes...),
 		CallbackMode:               discovery.CallbackMode,
+		ClientRegistration:         clientRegistration,
 		RedirectURL:                redirectURL,
 		Store:                      mcp.NewOAuthStore(store.codexHome),
 		HTTPClient:                 httpClient,

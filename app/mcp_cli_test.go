@@ -612,12 +612,16 @@ func TestMCPAddPersistsOAuthClientSecretWithoutPrintingItLikeRust(t *testing.T) 
 	}
 
 	missingID := bytes.Buffer{}
+	missingIDErr := bytes.Buffer{}
 	err = Run(context.Background(), []string{
 		"mcp", "add", "no-id", "--url", issuer.URL + "/mcp",
 		"--oauth-client-secret", "configured-secret",
-	}, strings.NewReader(""), &missingID, &bytes.Buffer{})
-	if err == nil || !strings.Contains(err.Error(), "requires --oauth-client-id") {
-		t.Fatalf("mcp add without client id error = %v", err)
+	}, strings.NewReader(""), &missingID, &missingIDErr)
+	if err == nil || ExitCode(err) != 2 {
+		t.Fatalf("mcp add without client id error = %v, want exit status 2", err)
+	}
+	if !strings.Contains(missingIDErr.String(), "--oauth-client-id <CLIENT_ID>") {
+		t.Fatalf("mcp add without client id stderr = %q", missingIDErr.String())
 	}
 }
 
