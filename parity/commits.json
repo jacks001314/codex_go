@@ -34541,7 +34541,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_28_sync4.md:135: | `a47d1338c1` | #55970 | equivalent | `agentboard` implements the message board and its tools. |"
+    "Round 1250: structurally equivalent — Go already ships the message board as its own `agentboard` package (agentboard/api.go, connection.go, configure_local_board.go, tools.go) that the app-server consumes, so Rust extracting `codex-message-board` out of the app-server crate has no Go work; agentboard/append_test.go and agentboard/configure_local_board_test.go cover the extracted surface."
    ]
   },
   {
@@ -34553,8 +34553,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:109: | `#55971` | Local message boards can select an isolated storage namespace | `agentboard/local_options.go`, `agentboard/local.go`, `agentboard/connection.go`, `agentboard/configure_local_board.go`, like-Rust test |",
-    "plan_2026_10_27_nontui.md:1066: `#55971` details: `LocalBoardOptions{StorageNamespace}` selects board storage"
+    "Round 1250: agentboard/local_options.go:6-7 LocalBoardOptions.StorageNamespace selects isolated board storage (DefaultBoardStorageNamespace keeps the historical database name), and agentboard/local.go/connection.go/configure_local_board.go thread the namespace into the board connection. Tests: agentboard/local_namespace_test.go TestLocalBoardStorageNamespacesLikeRust."
    ]
   },
   {
@@ -34566,8 +34565,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:87: | `#55973` | Let consumers select message-board tools | `agentboard/tools.go`, `agentboard/append_test.go` |",
-    "plan_2026_10_27_nontui.md:940: `#55973` details: `NewMessageBoardToolsWithSelection` builds only the"
+    "Round 1250: agentboard/tools.go:41,194 NewMessageBoardToolsWithSelection builds only the selected message-board tools for a caller instead of installing every tool. Tests: agentboard/append_test.go TestMessageBoardToolSelectionLikeRust."
    ]
   },
   {
@@ -34579,7 +34577,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:70: | `#56552` `#57225` `#57226` `#55975` | DELETE journaling on NFS: initialize new databases, migrate existing WAL databases under managed enforcement, ship `codex migrate-nfs-db` | `state/sqlite.go`, `state/nfs_migration.go`, `state/nfs_lock.go`, `config/api.go`, `config/config.go`, `config/requirements_file.go`, `appserver/runtime_router.go`, `appserver/websocket.go`, `appserver/message_board.go`,"
+    "Round 1250: state/nfs_migration.go inspects the SQLite header, requires permission confirmation and converts a WAL database to DELETE journaling, state/nfs_lock.go guards the migration, and app/migrate_nfs_db.go exposes `codex migrate-nfs-db`. Tests: state/nfs_migration_test.go TestNFSDatabaseNeedsMigrationInspectsHeaderLikeRust, TestNFSDatabaseNeedsPermissionConfirmationLikeRust, TestNFSMigrationConvertsWALDatabaseLikeRust."
    ]
   },
   {
@@ -34591,8 +34589,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:139: | `#55978` | `logs_2.sqlite` moves to an explicitly configured `log_dir` (user config or managed requirements) unless a managed `sqlite_home` requirement pins the database home; other databases stay in `sqlite_home` and an unset `log_dir` keeps the old location. The logs directory is created only when its database opens, so an unavailable `log_dir` never blocks login/config reads. Existing logs st",
-    "plan_2026_10_27_nontui.md:168: - `#55978` route the logs database through `SqliteConfig.LogsHome` and keep"
+    "Round 1250: an explicit `log_dir` (user config or managed requirements) moves `logs_2.sqlite` there unless a managed `sqlite_home` requirement pins the database home, other databases stay in `sqlite_home`, and the logs directory is created lazily when the database opens. Carriers: config/api.go, config/config.go, config/requirements_file.go, state/sqlite.go, state/logs.go. Tests: state/logs_home_test.go TestWithLocalLogsHomeRoutesOnlyLogsLikeRust, TestLocalLogsDirectoryIsCreatedLazilyLikeRust, TestLegacyFeedbackLogsFallbackLikeRust."
    ]
   },
   {
@@ -34604,8 +34601,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:120: | `#55987` | Registry requests refresh rejected remote exec-server credentials and replay once; executor credentials retry only after the parent rotates them | `execserver/remote_auth.go`, `execserver/remote.go`, `execserver/remote_harness.go`, `execserver/remote_relay.go`, `execserver/executor_credential.go`, `app/exec_server_auth.go`, `app/app.go`, like-Rust tests |",
-    "plan_2026_10_27_nontui.md:498: `#55987` details: remote exec-server registry traffic now goes through one"
+    "Round 1250: execserver/remote_auth.go:32-74 replays a registry request once after a 401 answered by RefreshAfterUnauthorized, keeps the rejected response when refresh is absent or fails, and leaves executor credentials to be rotated by the parent (execserver/executor_credential.go, execserver/remote*.go). Tests: execserver/remote_auth_test.go TestRegistryOperationsReplayOnceWithReplacementCredentialsLikeRust, TestRegistryUnauthorizedReplayOnlyOn401AndOnlyOnceLikeRust, TestRegistryUnauthorizedWithoutReplacementIsNotReplayedLikeRust, TestRegistryConnectDeadlineCoversAuthRefreshAndReplayLikeRust, TestExecutorCredentialRefreshAfterUnauthorizedLikeRust."
    ]
   },
   {
@@ -34627,9 +34623,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:293: `#56342`, `#56312`, `#55725`, `#55710`, `#57194`, `#56011`, `#55993`. Go has"
+    "Round 1250: not applicable — Go has no rollout-trace recorder and no code-mode stdio trace-context plumbing; the codemode package has no tracer, so the per-execution trace context this commit threads through Rust stdio callbacks has no Go surface."
    ]
   },
   {
@@ -34670,8 +34666,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:26: | `#56001` | Confidential OAuth clients for enterprise-managed MCP auth: the trusted IdP registration and an EMA server's `oauth` block accept `client_secret` and `token_endpoint_auth_method` (`client_secret_basic`/`client_secret_post`, defaulting to Basic). The registration method is validated against published token-endpoint metadata and used for enterprise login, the IdP ID-JAG exchange, and th",
-    "plan_2026_10_27_nontui.md:1505: - For `#56001`: `go build ./...`, `go vet ./config ./mcp`,"
+    "Round 1250: mcp/config.go and mcp/ema_auth_policy.go accept `client_secret` plus `token_endpoint_auth_method` (client_secret_basic default, client_secret_post) for the trusted IdP registration and an EMA server oauth block, validate the method against published token-endpoint metadata and use it for enterprise login and the IdJAG exchange. Tests: mcp/oauth_client_secret_config_test.go TestOAuthClientSecretRequiresClientIDLikeRust / TestOAuthClientSecretRoundTripsInServerConfigLikeRust, mcp/enterprise_oauth_login_test.go TestStartEnterpriseOAuthLoginConfidentialClientLikeRust, mcp/ema_exchange_test.go TestMCPEMAExchangeConfidentialClientAuthenticationLikeRust."
    ]
   },
   {
@@ -34683,7 +34678,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:28: | `#56003` | Scope MITM credential substitution to trusted origins and placeholders: hooks accept `schemes` and `ports` constraints matched against the authenticated tunnel destination, and an injected header may bind an exact whole-header `placeholder`. Substitution requires HTTPS on port 443 with exactly one matching value; missing, duplicated, or mismatched placeholders are denied. Ambiguous qu"
+    "Round 1250: network/proxy_mitm_hook.go scopes credential substitution to the authenticated tunnel destination: hooks accept `schemes`/`ports` constraints and an injected header may bind an exact whole-header `placeholder`, with substitution requiring HTTPS on 443 and exactly one matching value. Tests: network/proxy_mitm_hook_scoped_test.go TestScopedHookMatchesOnlyItsOrigin, TestInvalidHookOriginConstraintsAreRejected, TestCredentialHooksRejectAmbiguousQueryAndHeaderValues, TestInjectedSecretHeadersRejectUnsafeNamesLikeRust."
    ]
   },
   {
@@ -34693,9 +34688,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:359: - `#56454`, `#56453`, `#56293`, `#56292`, `#56018`, `#56007`, `#56006`, and"
+    "Round 1250: not applicable — Rust test-only change that asserts shell-tool overlap directly in the parallelism test; Go has no counterpart test harness to restructure."
    ]
   },
   {
@@ -34705,9 +34700,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:359: - `#56454`, `#56453`, `#56293`, `#56292`, `#56018`, `#56007`, `#56006`, and"
+    "Round 1250: not applicable — Rust test-only change (pausing Tokio time in the reused Guardian session test); Go tests use an injected clock rather than Tokio's paused time."
    ]
   },
   {
@@ -34719,7 +34714,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_28_sync4.md:132: | `082900149c` | #56008 | equivalent | `tooltiming/tool_timing.go` plus the appserver code-mode host timing path. |"
+    "Round 1250: tooltiming/tool_timing.go records critical-path timing for direct tool calls (parallel winners, duplicate call IDs, late reviews, cancellation) and the appserver code-mode host feeds invocations into it. Tests: tooltiming/tool_timing_test.go TestParallelWinnerRetainsItsReviewAndSharedInitialPath, TestDuplicateIDsAndLateReviewDropDoNotCompleteAnotherInvocation, TestLateReviewStartDoesNotAttachToReusedCallID, TestCancellationCompletesOnceAndReviewCanOutliveCall."
    ]
   },
   {
@@ -34729,9 +34724,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:293: `#56342`, `#56312`, `#55725`, `#55710`, `#57194`, `#56011`, `#55993`. Go has"
+    "Round 1250: not applicable — Go has no rollout-trace terminal-session model (no terminal spans keyed by process id in a trace recorder); rollout/trace_reduce.go only summarises an existing `trace.jsonl`."
    ]
   },
   {
@@ -34741,9 +34736,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:359: - `#56454`, `#56453`, `#56293`, `#56292`, `#56018`, `#56007`, `#56006`, and"
+    "Round 1250: not applicable — Rust test-only change that avoids nested CLI startup in the MCP OAuth persistence test; Go exercises OAuth persistence in-process."
    ]
   },
   {
@@ -34755,7 +34750,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:48: | `#56020` `#56031` `#56364` | Thread sample protocol fields and latest-turn semantics | `appserver/thread_sample.go`, `thread_sample_protocol.go`, `thread_sample_like_rust_test.go` |"
+    "Round 1250: appserver/thread_sample.go:305-307 treats completed, failed and interrupted as finished turns, so a thread can be sampled after a failed or interrupted turn. Tests: appserver/thread_sample_like_rust_test.go TestThreadSampleAcceptsFinishedTurnStatusesLikeRust."
    ]
   },
   {
