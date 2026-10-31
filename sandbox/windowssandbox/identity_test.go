@@ -115,10 +115,12 @@ func TestRequireLogonSandboxCredsRunsSetupAndRefreshWithOverrides(t *testing.T) 
 	oldSetup := runElevatedSetupForCredentials
 	oldRefresh := runSetupRefreshForCredentials
 	oldSelect := selectSandboxCredentialsForCredentials
+	oldFlags := sandboxAccountFlagsForCredentials
 	defer func() {
 		runElevatedSetupForCredentials = oldSetup
 		runSetupRefreshForCredentials = oldRefresh
 		selectSandboxCredentialsForCredentials = oldSelect
+		sandboxAccountFlagsForCredentials = oldFlags
 	}()
 
 	var setupReq *SandboxSetupRequest
@@ -138,6 +140,9 @@ func TestRequireLogonSandboxCredsRunsSetupAndRefreshWithOverrides(t *testing.T) 
 			t.Fatalf("identity = %s, want offline", identity)
 		}
 		return &SandboxCredentials{Username: OfflineUsername, Password: "pw", Domain: "."}, nil
+	}
+	sandboxAccountFlagsForCredentials = func(string) (uint32, bool, error) {
+		return 0x0200, true, nil
 	}
 
 	home := t.TempDir()
@@ -307,5 +312,145 @@ func TestRequireLogonSandboxCredsRepairsRejectedPasswordLikeRust(t *testing.T) {
 	}
 	if probeCalls != 1 || setupCalls != 1 || refreshCalls != 1 {
 		t.Fatalf("probe/setup/refresh calls = %d/%d/%d, want 1/1/1", probeCalls, setupCalls, refreshCalls)
+	}
+}
+
+func TestSandboxAccountNeedsRepairLikeRust(t *testing.T) {
+	const (
+		accountDisable  = 0x0002
+		passwordExpired = 0x800000
+	)
+	cases := []struct {
+		name  string
+		flags uint32
+		found bool
+		want  bool
+	}{
+		{"healthy account", 0x0200, true, false},
+		{"missing account", 0, false, true},
+		{"disabled account", accountDisable, true, true},
+		{"expired password", passwordExpired, true, true},
+		{"disabled and expired", accountDisable | passwordExpired, true, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := sandboxAccountNeedsRepair(tc.flags, tc.found); got != tc.want {
+				t.Fatalf("sandboxAccountNeedsRepair(%#x, %t) = %t, want %t", tc.flags, tc.found, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRequireLogonSandboxCredsRemovesStaleCredentialsBeforeRepairLikeRust(t *testing.T) {
+	cases := []struct {
+		name  string
+		flags func(name string) (uint32, bool, error)
+	}{
+		{
+			name: "disabled account",
+			flags: func(name string) (uint32, bool, error) {
+				if name == OfflineUsername {
+					return 0x0002, true, nil
+				}
+				return 0x0200, true, nil
+			},
+		},
+		{
+			name: "missing account",
+			flags: func(name string) (uint32, bool, error) {
+				if name == OnlineUsername {
+					return 0, false, nil
+				}
+				return 0x0200, true, nil
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			oldSetup := runElevatedSetupForCredentials
+			oldRefresh := runSetupRefreshForCredentials
+			oldSelect := selectSandboxCredentialsForCredentials
+			oldFlags := sandboxAccountFlagsForCredentials
+			oldRepairCheck := storedCredentialsNeedRepairForCredentials
+			defer func() {
+				runElevatedSetupForCredentials = oldSetup
+				runSetupRefreshForCredentials = oldRefresh
+				selectSandboxCredentialsForCredentials = oldSelect
+				sandboxAccountFlagsForCredentials = oldFlags
+				storedCredentialsNeedRepairForCredentials = oldRepairCheck
+			}()
+
+			setupCalls := 0
+			refreshCalls := 0
+			selectCalls := 0
+			runElevatedSetupForCredentials = func(*SandboxSetupRequest) error {
+				setupCalls++
+				return nil
+			}
+			runSetupRefreshForCredentials = func(*SandboxSetupRequest) error {
+				refreshCalls++
+				return nil
+			}
+			selectSandboxCredentialsForCredentials = func(string, SandboxNetworkIdentity) (*SandboxCredentials, error) {
+				selectCalls++
+				return &SandboxCredentials{Username: OfflineUsername, Password: "pw", Domain: "."}, nil
+			}
+			storedCredentialsNeedRepairForCredentials = func(string) (bool, error) {
+				return false, nil
+			}
+			sandboxAccountFlagsForCredentials = tc.flags
+
+			home := t.TempDir()
+			if err := WriteSetupMarker(home, &SetupMarker{
+				Version:         SetupVersion,
+				OfflineUsername: OfflineUsername,
+				OnlineUsername:  OnlineUsername,
+			}); err != nil {
+				t.Fatalf("WriteSetupMarker() error = %v", err)
+			}
+			if err := WriteSandboxUsersFile(home, &SandboxUsersFile{
+				Version: SetupVersion,
+				Offline: SandboxUserRecord{Username: OfflineUsername, Password: "b2ZmbGluZQ==", SID: "S-1-5-21-offline"},
+				Online:  SandboxUserRecord{Username: OnlineUsername, Password: "b25saW5l", SID: "S-1-5-21-online"},
+			}); err != nil {
+				t.Fatalf("WriteSandboxUsersFile() error = %v", err)
+			}
+			profile := coresandbox.ReadOnlyPermissionProfile()
+			permissions, err := ResolvePermissions(&profile, []string{"C:\\repo"})
+			if err != nil {
+				t.Fatalf("ResolvePermissions() error = %v", err)
+			}
+			_, err = RequireLogonSandboxCredsForPermissions(
+				permissions,
+				"C:\\repo",
+				map[string]string{},
+				home,
+				nil,
+				false,
+				false,
+				nil,
+				false,
+				nil,
+				nil,
+				false,
+				ProxySettingsPreserve,
+			)
+			if err != nil {
+				t.Fatalf("RequireLogonSandboxCredsForPermissions() error = %v", err)
+			}
+			if setupCalls != 1 || refreshCalls != 1 {
+				t.Fatalf("setup/refresh calls = %d/%d, want 1/1", setupCalls, refreshCalls)
+			}
+			if selectCalls != 2 {
+				t.Fatalf("select calls = %d, want 2 (initial selection then post-setup)", selectCalls)
+			}
+			users, err := ReadSandboxUsersFile(home)
+			if err != nil {
+				t.Fatalf("ReadSandboxUsersFile() error = %v", err)
+			}
+			if users != nil {
+				t.Fatalf("stale sandbox credentials were not removed: %#v", users)
+			}
+		})
 	}
 }

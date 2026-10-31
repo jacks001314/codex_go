@@ -18,6 +18,7 @@ var (
 	runElevatedSetupForCredentials         = RunElevatedSetup
 	runSetupRefreshForCredentials          = RunSetupRefreshForRequest
 	selectSandboxCredentialsForCredentials = SelectSandboxCredentials
+	sandboxAccountFlagsForCredentials      = readSandboxAccountFlags
 )
 
 func RequireLogonSandboxCreds(codexHome string) (*SandboxCredentials, error) {
@@ -122,6 +123,29 @@ func requireLogonSandboxCredsForPermissions(
 		}
 	} else {
 		setupReason = "sandbox setup marker missing or incompatible"
+	}
+
+	if identity != nil {
+		// Cleanup may also have removed the group, so repair missing or disabled
+		// accounts before the ACL refresh can fail. Expired passwords also need a
+		// full setup because a refresh cannot rotate them or update the stored
+		// credentials (Rust #46239).
+		for _, username := range []string{OfflineUsername, OnlineUsername} {
+			flags, found, err := sandboxAccountFlagsForCredentials(username)
+			if err != nil {
+				continue
+			}
+			if !sandboxAccountNeedsRepair(flags, found) {
+				continue
+			}
+			const reason = "sandbox account is missing, disabled, or password expired"
+			if err := removeStaleSandboxUsersFile(codexHome, reason); err != nil {
+				return nil, err
+			}
+			setupReason = reason
+			identity = nil
+			break
+		}
 	}
 
 	request := &SandboxSetupRequest{
@@ -281,6 +305,33 @@ func DecodeSandboxUserPassword(record SandboxUserRecord) (string, error) {
 		return "", err
 	}
 	return string(decrypted), nil
+}
+
+// sandboxAccountNeedsRepair reports whether a managed account must be repaired
+// before setup can be considered complete (Rust #46239 read_local_user_flags
+// gate). A missing account and a disabled or password-expired account all
+// require full setup.
+func sandboxAccountNeedsRepair(flags uint32, found bool) bool {
+	if !found {
+		return true
+	}
+	const (
+		userFlagAccountDisable  = 0x0002
+		userFlagPasswordExpired = 0x800000
+	)
+	return flags&(userFlagAccountDisable|userFlagPasswordExpired) != 0
+}
+
+// removeStaleSandboxUsersFile drops credentials that an older setup (or
+// service) could mistake for proof of completed setup once an account needs
+// repair (Rust #46239 remove_sandbox_users_file).
+func removeStaleSandboxUsersFile(codexHome string, reason string) error {
+	path := SandboxUsersPath(codexHome)
+	_ = LogNoteInDir(SandboxDir(codexHome), reason+"; deleting "+path)
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("delete %s: %w", path, err)
+	}
+	return nil
 }
 
 func SandboxSetupIsComplete(codexHome string) (bool, error) {

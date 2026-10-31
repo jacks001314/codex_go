@@ -15395,9 +15395,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "partial",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Round 1189: Rust #46239 makes automatic Windows sandbox setup prefer the installed provisioning service (falling back to the elevated helper only on Unavailable), filter proxy listener ports against the effective/saved proxy settings, route workload-identity environments to the helper, and delete stale sandbox_users.json before repairing a missing, disabled, or password-expired account. Go implements the account-repair half in sandbox/windowssandbox/identity.go: after selecting an identity, requireLogonSandboxCredsForPermissions probes USER_INFO_1 flags for OfflineUsername and OnlineUsername through the new seam sandboxAccountFlagsForCredentials (backed by readCleanupLocalUserFlags in sandbox_account_flags_windows.go, healthy stub in sandbox_account_flags_stub.go), treats a missing account or ACCOUNTDISABLE (0x0002) / PASSWORD_EXPIRED (0x800000) as needing repair, removes the stale credentials file with removeStaleSandboxUsersFile (tolerates NotExist, logs via LogNoteInDir) so an older setup or service cannot mistake it for completed setup, clears the identity, and forces a full setup with reason \"sandbox account is missing, disabled, or password expired\". Residual, deliberately not faked: run_automatic_setup (service-first with Unavailable falling back to the elevated helper), the workload-identity short-circuit in provision_windows_sandbox_via_service, and proxy-listener filtering by saved proxy ports all live in the Windows sandbox provisioning client; Go has no windows-sandbox-service carrier (crate absent, see #42334/#42337/#42341), so automatic setup runs only the elevated helper and the helper-fallback half of that routing is inherently satisfied. Tests: identity_test.go adds the seam save/restore plus TestSandboxAccountNeedsRepairLikeRust (missing/disabled/password-expired/healthy matrix) and TestRequireLogonSandboxCredsRemovesStaleCredentialsBeforeRepairLikeRust (disabled and missing accounts: one setup, one refresh, two credential selections, users file removed). Verified with go build ./sandbox/... and go test ./sandbox/windowssandbox/... -count=1."
    ]
   },
   {
