@@ -68,6 +68,10 @@ type MCPCallOutcome struct {
 	ApprovalSource string
 }
 
+// MCPCallModelTag is the metric tag carrying the model captured by the step
+// that issued an MCP call (Rust's SessionTelemetry metadata `model` tag).
+const MCPCallModelTag = "model"
+
 // MCPCallOutcomeApprovalCancelled builds Rust's
 // `McpCallMetricOutcome::approval_cancelled` (#54046): a cancelled MCP approval
 // reported as `error_type=approval`, `error_code=cancelled` plus the reviewer
@@ -224,10 +228,16 @@ func MCPCallMetricTags(outcome MCPCallOutcome, server string, toolName string, c
 // EmitMCPCallMetrics records Rust's MCP call metric triple: the count and
 // duration for every call, and the error count with Rust's extra error tags.
 func EmitMCPCallMetrics(sink TurnMetricSink, outcome MCPCallOutcome, server string, toolName string, connectorID string, connectorName string, duration time.Duration) {
+	emitMCPCallMetricsWithTags(sink, outcome, MCPCallMetricTags(outcome, server, toolName, connectorID, connectorName), duration)
+}
+
+// emitMCPCallMetricsWithTags records Rust's MCP metric triple with the supplied
+// tag set, so a caller that knows the issuing step can add its attribution the
+// way Rust's step-scoped SessionTelemetry does (#44242).
+func emitMCPCallMetricsWithTags(sink TurnMetricSink, outcome MCPCallOutcome, tags map[string]string, duration time.Duration) {
 	if sink == nil {
 		return
 	}
-	tags := MCPCallMetricTags(outcome, server, toolName, connectorID, connectorName)
 	sink.Counter(MCPCallCountMetric, 1, tags)
 	if duration < 0 {
 		duration = 0
@@ -403,6 +413,12 @@ func EmitMCPCallMetricsForExecution(sink TurnMetricSink, execution *turn.ToolExe
 	if execution != nil {
 		duration = execution.FinishedAt.Sub(execution.StartedAt)
 	}
-	EmitMCPCallMetrics(sink, outcome, server, toolName, connectorID, connectorName, duration)
+	tags := MCPCallMetricTags(outcome, server, toolName, connectorID, connectorName)
+	// Rust #44242 attributes the call to the model captured by the issuing
+	// step (step-scoped SessionTelemetry metadata tags), not the turn's model.
+	if modelID := strings.TrimSpace(execution.TelemetryTags[MCPCallModelTag]); modelID != "" {
+		tags[MCPCallModelTag] = SanitizeMetricTagValue(modelID)
+	}
+	emitMCPCallMetricsWithTags(sink, outcome, tags, duration)
 	return true
 }

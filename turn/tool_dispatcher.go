@@ -538,6 +538,33 @@ func (d *ToolDispatcher) SetStepSettings(modelID string, reasoningEffort string,
 	d.stepAttribution = attribution
 }
 
+// stepTelemetryTags reports the executor tags for an invocation and adds the
+// model captured by the sampling step that issued it. Rust #44242 attributes
+// tool telemetry to the issuing step's model, so a mid-turn model change tags
+// the call's metrics with the step model instead of the turn's first model.
+func (d *ToolDispatcher) stepTelemetryTags(invocation *tool.Invocation) map[string]string {
+	if d == nil || d.router == nil {
+		return nil
+	}
+	tags := d.router.TelemetryTags(invocation)
+	modelID := ""
+	if invocation != nil && invocation.StepAttribution != nil {
+		modelID = strings.TrimSpace(invocation.StepAttribution.Model)
+	}
+	if modelID == "" {
+		return tags
+	}
+	if _, exists := tags["model"]; exists {
+		return tags
+	}
+	attributed := make(map[string]string, len(tags)+1)
+	for key, value := range tags {
+		attributed[key] = value
+	}
+	attributed["model"] = modelID
+	return attributed
+}
+
 // SetStepModel applies the producing model's output-truncation policy to the
 // tools of the current sampling step (Rust #44243). The agent loop drains each
 // step's tools before asking for the next step's settings, so the policy is
@@ -1069,7 +1096,7 @@ func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *
 						nestedOutput.Body, nestedOutput.Error = nestedErr.Error(), nestedErr.Error()
 					}
 				}
-				d.onToolCompleted(nestedCtx, &ToolExecutionResult{Invocation: nested, Output: nestedOutput, Response: ToolResponseFromOutput(nested, nestedOutput), TelemetryTags: d.router.TelemetryTags(nested), StartedAt: nestedStartedAt, FinishedAt: nestedFinishedAt, HandlerExecuted: nestedErr != nil})
+				d.onToolCompleted(nestedCtx, &ToolExecutionResult{Invocation: nested, Output: nestedOutput, Response: ToolResponseFromOutput(nested, nestedOutput), TelemetryTags: d.stepTelemetryTags(nested), StartedAt: nestedStartedAt, FinishedAt: nestedFinishedAt, HandlerExecuted: nestedErr != nil})
 			})
 		}
 	}
@@ -1122,7 +1149,7 @@ func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *
 			d.onToolStarted(toolCtx, updated, startedAt)
 		}
 	}
-	telemetryTags := d.router.TelemetryTags(invocation)
+	telemetryTags := d.stepTelemetryTags(invocation)
 	output, dispatchErr := d.router.DispatchWithHooksAfterPreHooks(dispatchCtx, invocation, d.hooks, startedAfterPreHooks)
 	// Rust revokes host access once the handler returns, before the finish
 	// notification, so a completed call is never observable as live (#57586).
