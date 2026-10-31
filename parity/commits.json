@@ -7706,9 +7706,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust 87628df77a builds bounded root review evidence from retained context (source order, verified-answer scope, user instructions prioritized over optional assistant context), recovers retained instructions after parent compaction with incomplete markers, versions root authorization so an allow is cancelled when its evidence changes, and strips parent-only Guardian approvals from forked worker history.",
+    "Go implements each part: guardianRootConversationWithHandoff and prepareGuardianRootContext (appserver/agent_runtime.go:480 and :513) project bounded role-preserving evidence and emit RetainedContextScope/IncompleteRootInstructions/IncompleteVerifiedAnswers notices (state/guardian_root_messages.go, state/guardian_retained_context.go); guardianReviewContextChanged re-reads the root authorization and forces the stale-authorization retry or failed-closed denial (appserver/guardian_reviewer.go:3421); markInheritedUserMessages plus inherited-approval filtering keep copied parent approvals out of worker reviews.",
+    "Authorization versioning rides on state.ServingAuthorization (RetainedContextComplete, UserMessageRevision, PolicyFingerprint), so a cached low-risk assessment cannot skip review after root authorization changes.",
+    "Verification: go test ./appserver -run GuardianRoot|GuardianCachedApprovalAllowsIncompleteRootContext|GuardianReviewStale|Inherited -count=1 (covers bounded evidence, compaction restore, incomplete markers, stale-authorization retry/denial and inherited approvals)."
    ]
   },
   {
