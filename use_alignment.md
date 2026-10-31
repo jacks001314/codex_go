@@ -1607,8 +1607,76 @@ one-off captures.
   `TestStartupClientInfoSerdeDiagnosticsLikeRust` (39 captures) plus
   `TestValueDiagnosticOrderLikeRust` (19 captures).
 
+### 56. app-server startup gate: clap's conditional requires, conflict wording and `=value` diagnostics
+
+- **Conditional `requires`.** `--startup-sign-out` and `--startup-client-info`
+  declare `requires("print-startup-config")`, but clap drops a requirement when
+  the argument it demands conflicts with an argument it already accepted
+  (`validator.rs::is_missing_required_ok` consults `conflicts.gather_conflicts`).
+  `--print-startup-config` conflicts with `--stdio`, `--listen <URL>` and the
+  hidden `--remote-control`, so `app-server --startup-sign-out --stdio` starts
+  the server instead of failing, while `app-server --startup-sign-out` alone
+  prints `the following required arguments were not provided:
+  --print-startup-config` with
+  `Usage: codex app-server --print-startup-config --startup-sign-out`.
+  `cli/appserver_startup_gate.go` carries clap's option table (20 entries in
+  declaration order, `remote-control` hidden), the
+  `<--startup-sign-out|--print-startup-config|--startup-client-info
+  <STARTUP_CLIENT_INFO>>` group, the `--ws-*` group, the code-mode host group,
+  the conflict map and the conditional requirements; `Parse` runs
+  `validateAppServerStartupGate` after the subcommand parse (conflicts first,
+  then requirements) and the three old `parseAppServer` strings are gone.
+- **Conflict diagnostics.** `app-server --print-startup-config --stdio` reports
+  `error: the argument '--print-startup-config' cannot be used with '--stdio'`
+  with exit 2. The offender is the earliest accepted argument that has
+  conflicts, and when it has several the message switches to
+  `cannot be used with:` plus one `  <flag>` line per conflict in argv order
+  (`--stdio --listen stdio:// --print-startup-config` names `--stdio` as the
+  offender and lists `--listen <URL>` and `--print-startup-config`). The usage
+  line echoes the requirement the gate adds plus the accepted tokens minus the
+  conflicting one (`--stdio --print-startup-config=x` renders
+  `Usage: codex app-server --stdio --print-startup-config`) and never the
+  hidden `--remote-control`.
+- **`=value` diagnostics.** `--print-startup-config=x`, `=true` and `=--stdio`
+  now report `unexpected value 'x' for '--print-startup-config' found; no more
+  were expected` (exit 2) instead of the unknown-argument suggestion;
+  `appServerAttachedValueDiagnostic` rewinds one token so the pending-value
+  spelling `--print-startup-config --stdio=x` reports `--stdio` and keeps the
+  consumed `--print-startup-config` in the usage.
+- **Runtime handoff.** `app-server --print-startup-config daemon` still reaches
+  the daemon `arg_required_else_help` page (group help now skips the parent's
+  options before the subcommand), `--print-startup-config <subcommand>` exits 1
+  with `Error: --print-startup-config cannot run a subcommand`, and
+  `--print-startup-config` skips the WebSocket auth validation because Rust
+  prints the report before it opens a listener.
+- Evidence: `TestAppServerStartupGateDiagnosticsLikeRust` (116 exact stderr
+  captures), `...AcceptsRustCombinations` (28), `...GroupHelpLikeRust` (3) and
+  `TestAppServerPrintStartupConfigSkipsTransportValidationLikeRust`, all
+  generated from the 0.166 binary through `p42cmp.py`.
+
 ## Verification
 
+- The app-server startup gate matches Rust 0.166 on every case of the 159-entry
+  matrix (`out/round42-compare.txt` via `p42cmp.py`, exit code plus full stderr
+  and stdout) and the 28 accepted combinations start the server without a
+  diagnostic. Re-run alone: the nine `app-server` cases that serve until EOF
+  time out for Rust under parallel load, so the matrix must not share the
+  machine with a package test (`out/round42-compare-quiet.txt` is the clean
+  pass). The subcommand matrix is 8/10 with the two diffs being the pre-existing
+  socket runtime text, boolean repeats stay 149/149
+  (`out/round41-bool*.json`), single-value repeats 129/129, the 1,068-case
+  inline sweep keeps its 35 baseline diffs with 0 new and 0 fixed
+  (`out/round42-inline.txt` vs `out/round40-inline.txt`), bad values 497/497
+  (`out/round41-r34-flag-surface.txt`), and `go test -count=1 -vet=off ./cli
+  ./config ./plugin` passes in a clean worktree of the commit. Three failures
+  reproduce unchanged in that worktree and are outside this change:
+  `TestInteractiveSlashCommandsUpdateTUIState` and
+  `TestInteractiveSlashCommandRejectsGoOnlyApproval` also fail at the parent
+  commit `ef41744a`, and
+  `TestPrecomputedExportArtifactsMatchTargetRustCommit` (schema artifact hash)
+  fails there too; `TestServerRequestBrokerRejectsOnlyOriginatingConnectionLikeRust`
+  passes at the parent but is red with another agent's in-flight
+  `appserver/turn_runtime.go` edit in the shared tree.
 - clap's value diagnostics, usage blocks and the ClientInfo schema match Rust
   0.166: `out/round41-order-rust.txt` and `out/round41-positional-echo.txt`
   pin the ordering/usage rules, `out/round41-startup-compare2.txt` the 33
@@ -2017,26 +2085,13 @@ one-off captures.
 - `queue --thread "" --message hi` parses in both CLIs, but Rust fails later with
   `No active session found matching ''` while Go reports `Error: SESSION is
   required`.
-- `app-server`'s startup-mode requirement graph is still Go-shaped:
-  `--startup-client-info <valid>` alone and `--startup-sign-out` alone print
-  clap's `the following required arguments were not provided:
-  --print-startup-config` with `Usage: codex app-server --print-startup-config
-  --startup-client-info <STARTUP_CLIENT_INFO>`, yet `--startup-client-info ...
-  --stdio` is accepted, so the requirement is conditional in a way the Go
-  parser does not model (it accepts the flag pair outright).
-- `--print-startup-config` conflicts are runtime errors in Go: `--stdio`,
-  `--remote-control` and `--listen <URL>` print clap's
-  `the argument '--print-startup-config' cannot be used with '<flag>'` (exit 2,
-  usage echoing the consumed options) where Go prints
-  `Error: --print-startup-config conflicts with server startup options` (exit
-  1); `--stdio --listen` likewise stays
-  `Error: --stdio conflicts with --listen`.
-- `--print-startup-config=x` reports clap's
-  `unexpected value 'x' for '--print-startup-config' found; no more were
-  expected`; Go falls back to the unknown-argument suggestion path.
 - `app-server --print-startup-config` writes
-  `"appServerVersion":"0.0.0"` where Rust reports its own `0.166.0`, so the
-  printed startup config still differs outside the ClientInfo schema.
+  `"appServerVersion":"0.0.0"` where Rust reports its own `0.166.0`. This is
+  build-time injection, not a hard-coded value: `doctor.Version()` reads
+  `CODEX_GO_VERSION` and `go build -ldflags "-X
+  codex_go/doctor.buildVersion=0.166.0"` prints `"0.166.0"`
+  (`out/round42-version-*.txt`), so a release build that stamps the version
+  matches Rust without a code change.
 
 - `codex resume`/`codex fork` without a TTY: Rust refuses to start the TUI
   (`ERROR: TERM is set to "dumb". Refusing to start the interactive TUI ...`)

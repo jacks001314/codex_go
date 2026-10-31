@@ -832,7 +832,15 @@ func decorateSubcommandClapUsage(command Command, err error, args []string) erro
 	if usageErr.Usage == subcommandUsageTexts["mcp add"].usage {
 		return err
 	}
-	tokens := clapUsageOptionTokens(string(command), args, stopAt)
+	echoArgs := args
+	if string(command) == "app-server" {
+		// clap hands the tokens from the subcommand name on to the subcommand's
+		// own parser, so the parent's options never reach its usage echo.
+		if at := appServerSubcommandIndex(args); at > 0 {
+			echoArgs = args[at:]
+		}
+	}
+	tokens := clapUsageOptionTokens(string(command), echoArgs, stopAt)
 	if clapUsageTokensRepeat(clapEffectiveCommand(string(command), args), tokens) {
 		// clap cannot echo a single-value argument the caller repeated, so the
 		// diagnostic keeps the plain usage block instead of the smart one.
@@ -842,6 +850,7 @@ func decorateSubcommandClapUsage(command Command, err error, args []string) erro
 	if usageErr.Suggested != "" {
 		used = append(used, usageErr.Suggested)
 	}
+	used = clapRemoveHiddenUsageTokens(string(command), used)
 	leaf := clapEffectiveCommand(string(command), args)
 	if leaf == "agents" {
 		// Rust leaves --no-daemon out of the smart usage: the overview pulls it
@@ -866,6 +875,30 @@ func decorateSubcommandClapUsage(command Command, err error, args []string) erro
 	}
 	usageErr.Usage = usageWithUsedOptions(usageErr.Usage, used, leaf)
 	return err
+}
+
+// clapHiddenUsageTokens lists the arguments clap declares with hide(true) next
+// to a visible declaration: clap filters them out of every usage echo, so
+// `codex app-server --remote-control --bogus` keeps its static page.
+var clapHiddenUsageTokens = map[string]map[string]bool{
+	"app-server": {"--remote-control": true},
+}
+
+// clapRemoveHiddenUsageTokens drops the hidden arguments from an echoed usage
+// list.
+func clapRemoveHiddenUsageTokens(command string, tokens []string) []string {
+	hidden, ok := clapHiddenUsageTokens[command]
+	if !ok {
+		return tokens
+	}
+	kept := tokens[:0]
+	for _, token := range tokens {
+		if hidden[token] {
+			continue
+		}
+		kept = append(kept, token)
+	}
+	return kept
 }
 
 // clapRemoveUsageToken drops every occurrence of token from the echoed usage
@@ -1535,7 +1568,7 @@ var clapCommandLongFlags = map[string][]string{
 		"startup-client-info", "cloud-skills-snapshot", "code-mode-host", "strict-config",
 		"listen", "stdio", "analytics-default-enabled", "ws-auth", "ws-token-file",
 		"ws-token-sha256", "ws-shared-secret-file", "ws-issuer", "ws-audience",
-		"ws-max-clock-skew-seconds", "help",
+		"ws-max-clock-skew-seconds", "remote-control", "help",
 	},
 	"app-server daemon": {
 		"config", "enable", "disable", "help",

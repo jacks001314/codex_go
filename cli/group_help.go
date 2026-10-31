@@ -500,8 +500,11 @@ func GroupHelpKindForPath(command Command, args []string) (GroupHelpKind, int, b
 	case CommandExecpolicy:
 		return GroupHelpExecpolicy, 0, true
 	case CommandAppServer:
-		if len(args) > 0 && args[0] == "daemon" {
-			return GroupHelpAppServerDaemon, 1, true
+		// clap hands the tokens after the parent's options to the subcommand,
+		// so `app-server --print-startup-config daemon` still reaches the
+		// daemon page that declares arg_required_else_help.
+		if at := appServerSubcommandIndex(args); at >= 0 && args[at] == "daemon" {
+			return GroupHelpAppServerDaemon, at + 1, true
 		}
 		return "", 0, false
 	default:

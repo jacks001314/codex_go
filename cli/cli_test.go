@@ -1691,12 +1691,12 @@ func TestParseAppServerListenValidation(t *testing.T) {
 	}
 
 	_, err = Parse([]string{"app-server", "--stdio", "--listen", "stdio://"})
-	if err == nil || !strings.Contains(err.Error(), "--stdio conflicts with --listen") {
+	if err == nil || err.Error() != "the argument '--stdio' cannot be used with '--listen <URL>'" {
 		t.Fatalf("Parse stdio/listen conflict error = %v", err)
 	}
 
 	_, err = Parse([]string{"app-server", "--stdio", "--listen", "stdio://", "proxy"})
-	if err == nil || !strings.Contains(err.Error(), "--stdio conflicts with --listen") {
+	if err == nil || err.Error() != "the argument '--stdio' cannot be used with '--listen <URL>'" {
 		t.Fatalf("Parse stdio/listen conflict with subcommand error = %v", err)
 	}
 

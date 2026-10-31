@@ -825,6 +825,11 @@ func Parse(args []string) (*Parsed, error) {
 			return nil, err
 		}
 		if _, err := parseSubcommand(p, rest[1:]); err != nil {
+			if p.Command == CommandAppServer {
+				if replaced, ok := appServerAttachedValueDiagnostic(rest[1:], err); ok {
+					return nil, replaced
+				}
+			}
 			if promoted, ok := clapPromoteDeferredValueError(p, rest[1:], err); ok {
 				return nil, decorateSubcommandClapUsage(p.Command, promoted, rest[1:])
 			}
@@ -837,6 +842,18 @@ func Parse(args []string) (*Parsed, error) {
 		}
 		if err := clapRepeatedValueOptionError(leaf, rest[1:]); err != nil {
 			return nil, err
+		}
+		if p.Command == CommandAppServer && p.SubcommandHelp == nil {
+			if err := validateAppServerStartupGate(rest[1:], &p.AppServer); err != nil {
+				return nil, err
+			}
+			if !p.AppServer.PrintStartupConfig {
+				// Rust validates the WebSocket transport flags only when it is
+				// about to serve; the startup report never opens a listener.
+				if err := p.AppServer.ValidateWebsocketAuthFlags(); err != nil {
+					return nil, err
+				}
+			}
 		}
 		if err := p.validateExecAutoReview(); err != nil {
 			return nil, err
@@ -4081,22 +4098,13 @@ func parseAppServer(args []string, appServer *AppServerOptions) error {
 	if deferred != nil {
 		return deferred
 	}
-	if appServer.Stdio && listenSet {
-		return errors.New("--stdio conflicts with --listen")
-	}
-	if appServer.StartupSignOut && !appServer.PrintStartupConfig {
-		return errors.New("--startup-sign-out requires --print-startup-config")
-	}
-	if appServer.PrintStartupConfig && (appServer.Stdio || listenSet || appServer.RemoteControl || len(appServer.Subcommand) > 0) {
-		return errors.New("--print-startup-config conflicts with server startup options")
-	}
+	// clap checks the conflicts and requirements of the startup gate once the
+	// whole argument list is parsed; validateAppServerStartupGate replays that
+	// pass from Parse so the diagnostic renders clap's usage block.
 	if listenSet {
 		if err := validateAppServerListen(appServer.Listen); err != nil {
 			return err
 		}
-	}
-	if err := appServer.ValidateWebsocketAuthFlags(); err != nil {
-		return err
 	}
 	return nil
 }

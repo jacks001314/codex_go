@@ -1552,6 +1552,11 @@ func printMigrateRolloutsOutcome(outcome rollout.MigrationOutcome, stdout io.Wri
 
 func runAppServer(ctx context.Context, opts cli.AppServerOptions, root *cli.RootOptions, stdout io.Writer, stderr io.Writer, stdin io.Reader) error {
 	if opts.PrintStartupConfig {
+		if len(opts.Subcommand) > 0 {
+			// clap parses the subcommand, so the flag reaches Rust's runtime
+			// check instead of an argument diagnostic.
+			return errors.New("--print-startup-config cannot run a subcommand")
+		}
 		return printAppServerStartupConfig(opts, root, stdout)
 	}
 	if len(opts.Subcommand) > 0 {
