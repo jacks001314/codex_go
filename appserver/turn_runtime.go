@@ -1996,6 +1996,9 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		},
 		SamplingFollowUp:   samplingFollowUp,
 		SamplingCompaction: samplingCompaction,
+		// Rust #58430: a steer that carries uploaded audio fails the running turn
+		// after the accompanying text is recorded.
+		ValidateSteerInput: validateSteerInputAudioLikeRust,
 		OnTokenUsage: func(usage model.AgentUsage) {
 			r.recordGoalTokenUsageWithDescendants(threadID, turnID, usage)
 		},
@@ -13626,8 +13629,13 @@ func prepareUserMessageContentImages(content []map[string]any) ([]map[string]any
 		return content, nil
 	}
 	items := make([]eventmap.ImagePrepContentItem, len(content))
+	// Rust #58430 prepare_message_content only rewrites ContentItem::InputImage
+	// and leaves every other content item in place, so blocks image preparation
+	// does not model (input_audio, output_text) are copied through untouched.
+	passthrough := make([]bool, len(content))
 	for i, block := range content {
-		if blockType, _ := block["type"].(string); blockType == "input_image" {
+		switch blockType, _ := block["type"].(string); blockType {
+		case "input_image":
 			fileID := firstNonEmpty(stringFromAny(block["file_id"]), stringFromAny(block["fileId"]))
 			items[i] = eventmap.ImagePrepContentItem{
 				Kind:     eventmap.ImagePrepContentImage,
@@ -13635,11 +13643,14 @@ func prepareUserMessageContentImages(content []map[string]any) ([]map[string]any
 				FileID:   fileID,
 				Detail:   eventmap.ImagePrepDetail(stringFromAny(block["detail"])),
 			}
-		} else {
+		case "input_text":
 			items[i] = eventmap.ImagePrepContentItem{
 				Kind: eventmap.ImagePrepContentText,
 				Text: stringFromAny(block["text"]),
 			}
+		default:
+			passthrough[i] = true
+			items[i] = eventmap.ImagePrepContentItem{Kind: eventmap.ImagePrepContentText}
 		}
 	}
 	prepared, resized, err := eventmap.PrepareImagePrepContentWithNotices(items)
@@ -13648,6 +13659,10 @@ func prepareUserMessageContentImages(content []map[string]any) ([]map[string]any
 	}
 	out := make([]map[string]any, len(prepared))
 	for i, item := range prepared {
+		if passthrough[i] {
+			out[i] = cloneAnyMap(content[i])
+			continue
+		}
 		switch item.Kind {
 		case eventmap.ImagePrepContentImage:
 			out[i] = map[string]any{
@@ -13706,6 +13721,12 @@ func inputContentFromTurnUserInputs(prompt string, inputs []turn.TurnUserInput) 
 		if path := strings.TrimSpace(input.Path); path != "" && (inputType == "" || strings.EqualFold(inputType, "localImage")) {
 			imageIndex++
 			content = append(content, localImageInputContentBlocks(path, inputDetail(input), imageIndex)...)
+			continue
+		}
+		if fileID := strings.TrimSpace(input.FileID); fileID != "" && strings.EqualFold(inputType, "audio") {
+			// Rust #58430 AudioReference::File: keep the uploaded file reference
+			// so the turn runner can reject it after recording the steer text.
+			content = append(content, audioFileInputContentBlock(fileID))
 			continue
 		}
 		if audioURL := strings.TrimSpace(input.URL); audioURL != "" && strings.EqualFold(inputType, "audio") {

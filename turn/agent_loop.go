@@ -240,6 +240,10 @@ type AgentLoopRequest struct {
 	StreamHandler                   model.ResponsesStreamHandler
 	ExecutedToolCallMetadataEnabled bool
 	OnSteerCommitted                func(count int)
+	// ValidateSteerInput vets the items a steer delivered before they join the
+	// conversation. Returning an error fails the turn, mirroring Rust
+	// run_hooks_and_record_inputs(...)? on steered input (#58430).
+	ValidateSteerInput func(items []any) error
 	// InstructionsProvider, when set, supplies the instructions for each model
 	// request so a long turn can refresh them between steps. An empty result
 	// means the instructions were cleared (Rust #44675).
@@ -421,7 +425,11 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 				}
 			}
 		}
-		if steer := drainSteer(l.steerMailbox, request); steer != nil {
+		steer, steerErr := drainSteerChecked(l.steerMailbox, request)
+		if steerErr != nil {
+			return nil, steerErr
+		}
+		if steer != nil {
 			if len(steer.InputItems) > 0 {
 				result.InputItems = append(result.InputItems, steer.InputItems...)
 				result.SteerInputItems = append(result.SteerInputItems, steer.InputItems...)
@@ -851,7 +859,12 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			// message reopens the phase (SteerMailbox::Enqueue), so explicit
 			// same-turn work still continues the turn here.
 			if l.steerMailbox.AcceptsMailboxDeliveryForCurrentTurn(request.ThreadID, request.TurnID) {
-				if steer := drainSteer(l.steerMailbox, request); steer != nil && (len(steer.InputItems) > 0 || len(steer.ClientMetadata) > 0) {
+				steer, steerErr := drainSteerChecked(l.steerMailbox, request)
+				if steerErr != nil {
+					endSamplingRequestSpan()
+					return nil, steerErr
+				}
+				if steer != nil && (len(steer.InputItems) > 0 || len(steer.ClientMetadata) > 0) {
 					result.InputItems = append(result.InputItems, steer.InputItems...)
 					result.SteerInputItems = append(result.SteerInputItems, steer.InputItems...)
 					if len(steer.ClientMetadata) > 0 {
@@ -1169,6 +1182,20 @@ func agentItemRecordsTTFT(item *model.AgentItem) bool {
 	default:
 		return false
 	}
+}
+
+// drainSteerChecked drains the mailbox and lets the host reject the delivered
+// input before it joins the conversation (Rust #58430: uploaded audio is
+// rejected inside the turn runner). A rejection fails the turn.
+func drainSteerChecked(mailbox *SteerMailbox, request *AgentLoopRequest) (*SteerDrainResult, error) {
+	steer := drainSteer(mailbox, request)
+	if steer == nil || request == nil || request.ValidateSteerInput == nil || len(steer.InputItems) == 0 {
+		return steer, nil
+	}
+	if err := request.ValidateSteerInput(steer.InputItems); err != nil {
+		return nil, err
+	}
+	return steer, nil
 }
 
 func drainSteer(mailbox *SteerMailbox, request *AgentLoopRequest) *SteerDrainResult {

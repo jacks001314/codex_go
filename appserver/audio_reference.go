@@ -29,21 +29,44 @@ func turnStartParamsWithoutUploadedAudio(params *turn.TurnStartParams) (*turn.Tu
 	if params == nil {
 		return nil, false
 	}
-	rejected := false
-	input := make([]turn.TurnUserInput, 0, len(params.Input))
-	for _, item := range params.Input {
-		if turnUserInputAudioFile(item) {
-			rejected = true
-			continue
-		}
-		input = append(input, item)
-	}
+	input, rejected := turnUserInputsWithoutUploadedAudio(params.Input)
 	if !rejected {
 		return params, false
 	}
 	filtered := *params
 	filtered.Input = input
 	return &filtered, true
+}
+
+// turnUserInputsWithoutUploadedAudio drops uploaded audio file references and
+// reports whether any were present. Rust #58430 keeps the remaining content so
+// the accompanying text is still recorded before the turn fails.
+func turnUserInputsWithoutUploadedAudio(inputs []turn.TurnUserInput) ([]turn.TurnUserInput, bool) {
+	filtered := make([]turn.TurnUserInput, 0, len(inputs))
+	rejected := false
+	for i := range inputs {
+		if turnUserInputAudioFile(inputs[i]) {
+			rejected = true
+			continue
+		}
+		filtered = append(filtered, inputs[i])
+	}
+	if !rejected {
+		return inputs, false
+	}
+	return filtered, true
+}
+
+// validateSteerInputAudioLikeRust mirrors Rust #58430 run_turn: steered input
+// carrying an uploaded audio file is rejected after it is recorded, so the
+// running turn fails instead of the steer request being refused.
+func validateSteerInputAudioLikeRust(items []any) error {
+	for _, item := range items {
+		if valueContainsUploadedAudioFile(item) {
+			return errUploadedAudioDisabled
+		}
+	}
+	return nil
 }
 
 // uploadedAudioInjectionMessage mirrors Rust validate_injected_response_item
@@ -61,17 +84,6 @@ func turnUserInputAudioFile(input turn.TurnUserInput) bool {
 	return strings.TrimSpace(input.URL) == "" && strings.TrimSpace(input.FileID) != ""
 }
 
-// validateTurnUserInputAudioFiles rejects uploaded audio before a steer is
-// queued. turn/start accepts it and lets the turn runner fail after recording
-// the accompanying text (Rust #58430 run_turn).
-func validateTurnUserInputAudioFiles(inputs []turn.TurnUserInput) error {
-	for i := range inputs {
-		if turnUserInputAudioFile(inputs[i]) {
-			return jsonRPCInvalidRequest(uploadedAudioDisabledMessage)
-		}
-	}
-	return nil
-}
 
 // validateResponseItemAudioFiles rejects raw history injection that contains an
 // uploaded audio reference, mirroring Rust validate_injected_response_item: the
@@ -109,6 +121,14 @@ func valueContainsUploadedAudioFile(value any) bool {
 			}
 		}
 	case []any:
+		for _, nested := range typed {
+			if valueContainsUploadedAudioFile(nested) {
+				return true
+			}
+		}
+	case []map[string]any:
+		// Message content keeps its typed shape ([]map[string]any) after image
+		// preparation, so the steer validator has to descend into it too.
 		for _, nested := range typed {
 			if valueContainsUploadedAudioFile(nested) {
 				return true

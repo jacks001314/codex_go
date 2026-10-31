@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"codex_go/session"
-	"codex_go/turn"
 )
 
 // Mirrors Rust #58430: the app-server wire form keeps the existing inline audio
@@ -34,24 +33,6 @@ type turnUserInputAlias struct {
 	FileID string `json:"fileId"`
 }
 
-// Mirrors Rust #58430: uploaded audio is rejected explicitly while inline audio
-// keeps working.
-func TestValidateTurnUserInputAudioFilesLikeRust(t *testing.T) {
-	if err := validateTurnUserInputAudioFiles([]turn.TurnUserInput{
-		{Type: "text", Text: "hello"},
-		{Type: "audio", URL: "data:audio/wav;base64,AAA"},
-		{Type: "audio", URL: "data:audio/wav;base64,AAA", FileID: "ignored_by_inline_arm"},
-	}); err != nil {
-		t.Fatalf("inline audio rejected: %v", err)
-	}
-	err := validateTurnUserInputAudioFiles([]turn.TurnUserInput{
-		{Type: "text", Text: "keep me"},
-		{Type: "audio", FileID: "file_audio"},
-	})
-	if err == nil || !strings.Contains(err.Error(), uploadedAudioDisabledMessage) {
-		t.Fatalf("uploaded audio error = %v, want %q", err, uploadedAudioDisabledMessage)
-	}
-}
 
 // Mirrors Rust validate_injected_response_item: raw injection cannot smuggle an
 // uploaded audio reference into history.
