@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
@@ -241,6 +242,63 @@ func TestPrepareProvisioningSetupMarkerRetainsProtectedHandle(t *testing.T) {
 	}
 	if control&windows.SE_DACL_PROTECTED == 0 {
 		t.Fatal("marker DACL is not protected")
+	}
+}
+
+// TestProvisioningSetupMarkerDACLMatchesRustSDDL pins the creation-time marker
+// security descriptor to Rust's "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;<user>)"
+// SDDL: a protected DACL with exactly SYSTEM, Administrators and the real user.
+func TestProvisioningSetupMarkerDACLMatchesRustSDDL(t *testing.T) {
+	home := t.TempDir()
+	realUser := setupTestRealUser(t)
+	file, err := PrepareProvisioningSetupMarker(home, realUser)
+	if err != nil {
+		t.Fatalf("PrepareProvisioningSetupMarker() error = %v", err)
+	}
+	defer file.Close()
+	descriptor, err := windows.GetNamedSecurityInfo(SetupMarkerPath(home), windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		t.Fatalf("GetNamedSecurityInfo() error = %v", err)
+	}
+	control, _, err := descriptor.Control()
+	if err != nil {
+		t.Fatalf("security descriptor Control() error = %v", err)
+	}
+	if control&windows.SE_DACL_PROTECTED == 0 {
+		t.Fatal("marker DACL is not protected")
+	}
+	dacl, _, err := descriptor.DACL()
+	if err != nil {
+		t.Fatalf("security descriptor DACL() error = %v", err)
+	}
+	if dacl == nil {
+		t.Fatal("marker DACL is nil")
+	}
+	if got := int(dacl.AceCount); got != 3 {
+		t.Fatalf("marker ACE count = %d, want 3", got)
+	}
+	realUserSID, found, err := lookupLocalUserSID(realUser)
+	if err != nil || !found {
+		t.Fatalf("lookupLocalUserSID(%q) = %q, %v, %v", realUser, realUserSID, found, err)
+	}
+	wantSIDs := []string{"S-1-5-18", "S-1-5-32-544", realUserSID}
+	for index := uint32(0); index < uint32(dacl.AceCount); index++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(dacl, index, &ace); err != nil {
+			t.Fatalf("GetAce(%d) error = %v", index, err)
+		}
+		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE {
+			t.Fatalf("ACE %d type = %d, want access allowed", index, ace.Header.AceType)
+		}
+		// SDDL "GA" is stored as the file-specific FILE_ALL_ACCESS mask.
+		const fileAllAccess = 0x1F01FF
+		if ace.Mask != fileAllAccess {
+			t.Fatalf("ACE %d mask = %#x, want FILE_ALL_ACCESS", index, ace.Mask)
+		}
+		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+		if got := sid.String(); got != wantSIDs[index] {
+			t.Fatalf("ACE %d SID = %q, want %q", index, got, wantSIDs[index])
+		}
 	}
 }
 

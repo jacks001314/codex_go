@@ -138,6 +138,13 @@ func ntPathUTF16(path string) ([]uint16, error) {
 }
 
 func openNoReparse(root windows.Handle, name []uint16, desiredAccess uint32, shareAccess uint32, disposition uint32, options uint32) (windows.Handle, error) {
+	return openNoReparseWithSecurityDescriptor(root, name, desiredAccess, shareAccess, disposition, options, nil)
+}
+
+// openNoReparseWithSecurityDescriptor creates the entry with a creation-time
+// security descriptor so a fresh file never exists with inheritable default
+// permissions (Rust #42342 prepare_setup_marker SDDL).
+func openNoReparseWithSecurityDescriptor(root windows.Handle, name []uint16, desiredAccess uint32, shareAccess uint32, disposition uint32, options uint32, sd *windows.SECURITY_DESCRIPTOR) (windows.Handle, error) {
 	if len(name) == 0 || name[len(name)-1] != 0 {
 		return windows.InvalidHandle, errors.New("no-reparse path must be NUL terminated")
 	}
@@ -151,10 +158,11 @@ func openNoReparse(root windows.Handle, name []uint16, desiredAccess uint32, sha
 		Buffer:        &name[0],
 	}
 	attributes := windows.OBJECT_ATTRIBUTES{
-		Length:        uint32(unsafe.Sizeof(windows.OBJECT_ATTRIBUTES{})),
-		RootDirectory: root,
-		ObjectName:    &objectName,
-		Attributes:    windows.OBJ_CASE_INSENSITIVE | windows.OBJ_DONT_REPARSE,
+		Length:             uint32(unsafe.Sizeof(windows.OBJECT_ATTRIBUTES{})),
+		RootDirectory:      root,
+		ObjectName:         &objectName,
+		Attributes:         windows.OBJ_CASE_INSENSITIVE | windows.OBJ_DONT_REPARSE,
+		SecurityDescriptor: sd,
 	}
 	var ioStatus windows.IO_STATUS_BLOCK
 	var handle windows.Handle

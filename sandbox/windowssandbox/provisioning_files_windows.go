@@ -29,8 +29,8 @@ func OpenProvisioningSetupLog(baseDir string) (*os.File, error) {
 }
 
 // PrepareProvisioningSetupMarker creates the setup marker relative to a pinned,
-// reparse-free sandbox directory, installs its protected DACL on the handle, and
-// retains the exclusive handle for the whole provisioning run
+// reparse-free sandbox directory with its protected DACL installed at creation
+// time, and retains the exclusive handle for the whole provisioning run
 // (Rust #42342 PreparedSetupMarker::Retained).
 func PrepareProvisioningSetupMarker(codexHome string, realUser string) (*os.File, error) {
 	dir := SandboxDir(codexHome)
@@ -55,21 +55,22 @@ func PrepareProvisioningSetupMarker(codexHome string, realUser string) (*os.File
 	if err != nil {
 		return nil, err
 	}
-	handle, err := openNoReparse(
+	securityDescriptor, err := markerSecurityDescriptor(realUser)
+	if err != nil {
+		return nil, fmt.Errorf("protect setup marker file %s: %w", markerPath, err)
+	}
+	handle, err := openNoReparseWithSecurityDescriptor(
 		directory,
 		nameUTF16,
-		windows.FILE_READ_DATA|windows.FILE_WRITE_DATA|windows.READ_CONTROL|windows.WRITE_DAC|windows.DELETE|windows.SYNCHRONIZE,
+		windows.FILE_READ_DATA|windows.FILE_WRITE_DATA|windows.READ_CONTROL|windows.DELETE|windows.SYNCHRONIZE,
 		0,
 		windows.FILE_CREATE,
 		windows.FILE_NON_DIRECTORY_FILE|windows.FILE_SYNCHRONOUS_IO_NONALERT,
+		securityDescriptor,
 	)
+	runtime.KeepAlive(securityDescriptor)
 	if err != nil {
 		return nil, fmt.Errorf("create protected setup marker file %s: %w", markerPath, err)
-	}
-	if err := applyProtectedMarkerDACL(handle, realUser); err != nil {
-		_ = os.Remove(markerPath)
-		windows.CloseHandle(handle)
-		return nil, fmt.Errorf("protect setup marker file %s: %w", markerPath, err)
 	}
 	return os.NewFile(uintptr(handle), markerPath), nil
 }
@@ -88,60 +89,22 @@ func WriteProvisioningSetupMarker(file *os.File, marker *SetupMarker) error {
 	return err
 }
 
-func applyProtectedMarkerDACL(handle windows.Handle, realUser string) error {
+// markerSecurityDescriptor builds the protected marker DACL Rust installs at
+// creation time: full access for SYSTEM, Administrators and the real user, with
+// inheritance blocked (SDDL "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;<user>)",
+// Rust #42342 prepare_setup_marker).
+func markerSecurityDescriptor(realUser string) (*windows.SECURITY_DESCRIPTOR, error) {
 	realUserSID, found, err := lookupLocalUserSID(realUser)
 	if err != nil {
-		return fmt.Errorf("resolve real user SID: %w", err)
+		return nil, fmt.Errorf("resolve real user SID: %w", err)
 	}
 	if !found || realUserSID == "" {
-		return fmt.Errorf("resolve real user SID: account %q not found", realUser)
+		return nil, fmt.Errorf("resolve real user SID: account %q not found", realUser)
 	}
-	entries, sids, err := markerDACLEntries(realUserSID)
+	sddl := "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;" + realUserSID + ")"
+	securityDescriptor, err := windows.SecurityDescriptorFromString(sddl)
 	if err != nil {
-		return err
+		return nil, fmt.Errorf("build marker security descriptor: %w", err)
 	}
-	dacl, err := windows.ACLFromEntries(entries, nil)
-	if err != nil {
-		return err
-	}
-	err = windows.SetSecurityInfo(
-		handle,
-		windows.SE_FILE_OBJECT,
-		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION,
-		nil,
-		nil,
-		dacl,
-		nil,
-	)
-	runtime.KeepAlive(entries)
-	runtime.KeepAlive(sids)
-	runtime.KeepAlive(dacl)
-	if err != nil {
-		return fmt.Errorf("set marker DACL: %w", err)
-	}
-	return nil
-}
-
-func markerDACLEntries(realUserSID string) ([]windows.EXPLICIT_ACCESS, []*windows.SID, error) {
-	sidStrings := []string{"S-1-5-18", "S-1-5-32-544", realUserSID}
-	entries := make([]windows.EXPLICIT_ACCESS, 0, len(sidStrings))
-	sids := make([]*windows.SID, 0, len(sidStrings))
-	for _, value := range sidStrings {
-		sid, err := windows.StringToSid(value)
-		if err != nil {
-			return nil, nil, err
-		}
-		sids = append(sids, sid)
-		entries = append(entries, windows.EXPLICIT_ACCESS{
-			AccessPermissions: windows.GENERIC_ALL,
-			AccessMode:        windows.GRANT_ACCESS,
-			Inheritance:       windows.NO_INHERITANCE,
-			Trustee: windows.TRUSTEE{
-				TrusteeForm:  windows.TRUSTEE_IS_SID,
-				TrusteeType:  windows.TRUSTEE_IS_UNKNOWN,
-				TrusteeValue: windows.TrusteeValueFromSID(sid),
-			},
-		})
-	}
-	return entries, sids, nil
+	return securityDescriptor, nil
 }
