@@ -348,15 +348,15 @@ func stopSandboxProcesses(users *disabledSandboxUsers) error {
 		for _, handle := range handles {
 			_ = windows.CloseHandle(handle)
 		}
-		remaining, err := sandboxLogonSessionRemains(users)
+		blocker, err := sandboxLogonBlocker(users)
 		if err != nil {
 			return err
 		}
-		if !remaining {
+		if blocker == "" {
 			return nil
 		}
 		if time.Now().After(deadline) {
-			return errors.New("sandbox processes or logon tokens remain after the uninstall deadline")
+			return cleanupBlockedError(blocker)
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -466,7 +466,18 @@ type securityLogonSessionData struct {
 	PasswordMustChange    int64
 }
 
-func sandboxLogonSessionRemains(users *disabledSandboxUsers) (bool, error) {
+// cleanupBlockedError reports which logon outlived the uninstall deadline, so
+// an operator can see what still holds the sandbox open (Rust
+// uninstall_windows::processes::stop).
+func cleanupBlockedError(blocker string) error {
+	return fmt.Errorf("sandbox cleanup blocked after the uninstall deadline: %s", blocker)
+}
+
+// sandboxLogonBlocker names the first logon that keeps sandbox protections in
+// place, or returns "" when no sandbox session remains (Rust
+// uninstall_windows::processes::blocking_logon_session). A session LSA cannot
+// describe is blocking on purpose: the caller keeps protections in place.
+func sandboxLogonBlocker(users *disabledSandboxUsers) (string, error) {
 	var count uint32
 	var logons *windows.LUID
 	status, _, _ := procLsaEnumerateLogons.Call(
@@ -474,10 +485,10 @@ func sandboxLogonSessionRemains(users *disabledSandboxUsers) (bool, error) {
 		uintptr(unsafe.Pointer(&logons)),
 	)
 	if uint32(status) != 0 {
-		return false, fmt.Errorf("enumerate sandbox logon sessions for uninstall: 0x%x", uint32(status))
+		return "", fmt.Errorf("enumerate sandbox logon sessions for uninstall: 0x%x", uint32(status))
 	}
 	if logons == nil || count == 0 {
-		return false, nil
+		return "", nil
 	}
 	defer procLsaFreeBuffer.Call(uintptr(unsafe.Pointer(logons)))
 	sessions := unsafe.Slice(logons, count)
@@ -496,18 +507,19 @@ func sandboxLogonSessionRemains(users *disabledSandboxUsers) (bool, error) {
 			if uint32(code) == uint32(windows.ERROR_NO_SUCH_LOGON_SESSION) {
 				continue
 			}
-			return false, fmt.Errorf("read sandbox logon session for uninstall: 0x%x", uint32(status))
+			return "", fmt.Errorf("read sandbox logon session for uninstall: 0x%x", uint32(status))
 		}
 		if data == nil {
-			return true, nil
+			return fmt.Sprintf("LSA returned no data for logon %08x:%08x", logon.HighPart, logon.LowPart), nil
 		}
 		if isSandboxUserSID(users, data.SID) && !users.retained.contains(*logon) {
 			procLsaFreeBuffer.Call(uintptr(unsafe.Pointer(data)))
-			return true, nil
+			return fmt.Sprintf("sandbox logon %08x:%08x remains (logon type %d, session %d)",
+				logon.HighPart, logon.LowPart, data.LogonType, data.Session), nil
 		}
 		procLsaFreeBuffer.Call(uintptr(unsafe.Pointer(data)))
 	}
-	return false, nil
+	return "", nil
 }
 
 func isSandboxUserSID(users *disabledSandboxUsers, sid *windows.SID) bool {

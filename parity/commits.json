@@ -12826,9 +12826,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "N/A by architecture: Rust moves sandbox setup/installation-record code into the windows-sandbox library. Go already exposes setup and installation-record helpers from sandbox/windowssandbox and appserverdaemon as library code."
+    "Round 1235 (audit): the N/A predates the Go port. The setup helper implementation and its tests live in sandbox/windowssandbox/bin/setup_main/win (run_windows.go, firewall_windows.go, sandbox_users_windows.go, read_acl_mutex_windows.go, setup_runtime_bin.go) behind a thin binary; the installation-record types, registry keys, size limit and serialized form are shared from sandbox/windowssandbox/installation_record.go; and service provisioning is separated from IPC in windowsandboxservice/provisioning_windows.go, which HandleRequest dispatches to after authentication and policy. Tests: go test ./sandbox/windowssandbox/... ./windowsandboxservice -count=1."
    ]
   },
   {
@@ -13138,9 +13138,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "N/A by architecture: the upstream commit extracts Rust helper-copy, token-user, provisioning-pipe, and service-runtime modules. Go already keeps helper materialization in sandbox/windowssandbox/helper_materialization.go, token-user queries in token_windows.go, and service/provisioning logic in dedicated files."
+    "Round 1235 (audit): the N/A predates the Go port. The extracted helpers all have carriers: sandbox/windowssandbox/helper_materialization.go (copy plus freshness), token_windows.go getUserSIDBytes and winutil_windows.go copySIDBytes, windowsandboxservice/pipe_windows.go with ipc_windows.go (provisioning pipe ownership), runtime_lifecycle_windows.go (service runtime lifecycle), service_windows.go with service_status.go and runmode.go (the service.rs split), and provisionservice/client.go with transport_windows.go (request exchange and response handling). Tests: go test ./sandbox/windowssandbox/... ./windowsandboxservice ./sandbox/windowssandbox/provisionservice -count=1."
    ]
   },
   {
@@ -13713,9 +13713,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "Rust #45559 resumes a service-owned Windows sandbox registration refresh after the provisioning service restarts: provisioning_client/refresh_retry.rs retries only response-pipe disconnects (up to two restarts within the original deadline, requiring a new service PID authenticated against the running service), RuntimeRegistration::can_resume_registration lets a refresh resume without ready_package while runtime execution still requires it, and provisioning/registered.rs wires the new gate. Go's Windows sandbox has no provisioning service, service-owned InstallationRecord, RuntimeRegistration record, named-pipe provisioning client, SCM service-PID check, or background registration refresh: registered mode is validated locally from the app-contained runner plus OS package identity (see #45550's partial evidence and identity.go registeredSetupIsReady). With no client to retry and no service record to resume, there is no Go surface for this change. The local behavior Go does own - rejecting helper-owned provisioning for registered Core - is already covered by sandbox/windowssandbox/bin/setup_main/win/setup_runtime_like_rust_windows_test.go. Verified with go test ./sandbox/windowssandbox ./sandbox/windowssandbox/bin/setup_main/win -count=1."
+    "Round 1235 (audit): the N/A predates the Go port. provisionservice/client.go sendWithRestartRetry allows MaxServiceRestarts (2) restarts inside the original deadline; takeRestart consumes only reply-side disconnects (isResponseDisconnect: EOF, ErrUnexpectedEOF, EPIPE, ERROR_BROKEN_PIPE, ERROR_NO_DATA, ERROR_PIPE_NOT_CONNECTED) and leaves authentication failures, failed writes, explicit replies and protocol errors outside the retry path; transport_windows.go ConnectAfterRestart requires a different ServerPID and a service that is no longer SERVICE_START_PENDING; and RuntimeRegistration.CanResumeRegistration lets a refresh resume without ready_package while ReadyForPackage still gates runtime execution. Tests: go test ./sandbox/windowssandbox/provisionservice ./sandbox/windowssandbox -run 'Restart|Refresh|Resume|Registration' -count=1."
    ]
   },
   {
@@ -14063,7 +14063,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "Rust #45757 tracks the Windows sandbox implementation (SandboxType) separately from the legacy setup level, feeds managed_proxy_routing_for_windows_sandbox(windows_sandbox_type) into NetworkProxySpec::start_proxy so a WindowsMxc selection gets dedicated proxy listeners in sessions, app-server command execution and the sandbox CLI, retains the network policy decider across proxy rebuilds, and adds a sandbox CLI execution path through the MXC transform. Go's half already exists where it can: sandbox.Plan carries SandboxTypeWindowsMxc versus SandboxTypeWindowsRestrictedToken (sandbox/run.go) derived from WindowsSandboxLevel Mxc (sandbox/tags.go), pinned by sandbox/sandbox_state_wire_test.go; the legacy setup mode stays separate (windowsSandboxModeFromConfigValues returns nothing for mxc). The routing half has no Go counterpart: a repository-wide search finds no ManagedProxyRouting, dedicated-listener or managed_proxy_routing symbol in the network package or anywhere else, Go's network proxy starts from its own supervisor without routing modes, the Go CLI has no debug-sandbox subcommand, and the MXC launcher never runs (sandbox/mxc always fails closed with native MXC unavailable), so no MXC proxy route is ever created to need dedicated listeners. Verified with go test ./sandbox -run 'SandboxState|Windows|Mxc' -count=1, go test ./config -run 'Windows' -count=1 and go test ./appserver -run 'WindowsSandbox|SandboxState|WindowsMxc' -count=1, all passing."
+    "Round 1235 (re-audit): still N/A. The commit selects dedicated proxy listeners and a sandbox-CLI path for the WindowsMxc implementation; MXC depends on the native launcher (#42841) and the mxc-sdk migration (#55378), both blocked_precondition in this ledger. Go ships the elevated implementation only, so there is no MXC selection to route."
    ]
   },
   {
@@ -14497,7 +14497,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "Go has no shutdown_signal() future or SIGHUP graceful-restart select loop: installStdioShutdownSignals registers SIGTERM once per connection with a persistent channel and goroutine, so no listener is cancelled or recreated between iterations"
+    "Round 1235 (re-audit): still N/A. Rust pins a shutdown_signal() future across tokio::select! iterations so another event cannot cancel and recreate the listener. Go installs the signal once (signal.NotifyContext in app/remote_control.go for the CLI and a single signal.Notify channel plus goroutine in appserver/stdio_shutdown_unix.go for the app server) and selects on it, so no listener is cancelled or recreated between iterations."
    ]
   },
   {
@@ -15846,9 +15846,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "N/A - Go's legacy Windows uninstall disables, waits for, and removes local sandbox accounts directly. It has no service-owned InstallationRecord, cleanup_logon_pending receipt, SID-validated owner restoration, IPC admission/readiness fence, retained-logon registry, or retirement transaction in which a pending cleanup logon could block provisioning."
+    "Round 1235 (audit + fix): the N/A predates the Go port. CleanupLogonPending is persisted before an account is enabled and cleared only after it is disabled again (windowsandboxservice/registered_removal_windows.go), RestoreDisabledRuntimeAccounts runs before owner restoration and IPC admission (runtime_admission_windows.go admissionRestoreDisabled), CanResumeRegistration/AdmitOwner/ReadyForPackage block readiness and provisioning while recovery is pending, and logCleanupError suppresses repeated identical events. This round closed the remaining gap: uninstall_cleanup_windows.go now reports the blocking logon (sandboxLogonBlocker: 'sandbox logon %08x:%08x remains (logon type %d, session %d)' or 'LSA returned no data for logon %08x:%08x') through cleanupBlockedError ('sandbox cleanup blocked after the uninstall deadline: <blocker>'), matching Rust uninstall_windows::processes::stop. Tests: go test ./sandbox/windowssandbox -run 'CleanupBlocked|SandboxLogonBlocker' -count=1; go test ./windowsandboxservice -run 'RestoreDisabled|Admission|Registered' -count=1."
    ]
   },
   {
@@ -24010,7 +24010,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "Rust-only test infrastructure: codex-rs/.config/nextest.toml plus Cargo test-harness settings serialize tests that share Windows sandbox accounts. Go runs go test, which does not use nextest configuration, and the shared-account tests already serialize through their own helpers."
+    "Round 1235 (re-audit): still N/A. The commit serializes Rust integration tests that share the machine-wide sandbox accounts. Go's tests drive disabledSandboxUsers through seams (readSandboxCleanupUserFlags, writeSandboxCleanupUserFlags, resolveSandboxCleanupUserSID) and fixtures, run without t.Parallel in package windowssandbox, and only read the current account in one read-only case, so no cross-test mutation of the shared accounts exists to serialize."
    ]
   },
   {
@@ -25569,7 +25569,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "Rust dependency bump (workspace `windows-sys` 0.61.2) plus an OwnedHandle/BorrowedHandle ownership refactor. Go has no windows-sys crate, handle-owner types, or cargo dependency graph; Windows process and socket handling use Go syscalls and os/exec."
+    "Round 1235 (re-audit): still N/A. The commit upgrades Rust's generated windows-sys bindings to 0.61.2. Go binds Windows through golang.org/x/sys/windows (pinned in go.mod) plus hand-written procs only for APIs x/sys does not expose, so a Cargo binding bump has no Go counterpart."
    ]
   },
   {
@@ -28332,7 +28332,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "N/A by architecture: the commit only moves codex-rs/core/tests/suite/windows_sandbox.rs into its own nextest integration binary and edits codex-rs/.config/nextest.toml plus the suite module list. Go has no nextest configuration or cargo integration-test binaries; Windows sandbox coverage lives in Go test packages (sandbox/windowssandbox, sandbox/windowssandbox/bin/setup_main/win) that already run as their own build-tagged binaries."
+    "Round 1235 (re-audit): still N/A. Rust moved tests that share machine state into a separate integration binary. Go keeps them as ordinary package tests that build temporary Codex homes, use the seams above instead of real accounts, and never register t.Parallel, so package windowssandbox already runs them one at a time and needs no second binary."
    ]
   },
   {

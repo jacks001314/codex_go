@@ -31,13 +31,27 @@ func TestReadCleanupLocalUserFlagsForCurrentUser(t *testing.T) {
 	_ = flags
 }
 
-func TestSandboxLogonSessionRemainsIgnoresNonSandboxUsers(t *testing.T) {
-	remains, err := sandboxLogonSessionRemains(&disabledSandboxUsers{})
+func TestSandboxLogonBlockerIgnoresNonSandboxUsers(t *testing.T) {
+	blocker, err := sandboxLogonBlocker(&disabledSandboxUsers{})
 	if err != nil {
 		t.Skipf("host cannot enumerate logon sessions: %v", err)
 	}
-	if remains {
-		t.Fatal("a session without a sandbox SID was treated as a sandbox token")
+	if blocker != "" {
+		t.Fatalf("a session without a sandbox SID was treated as a sandbox token: %q", blocker)
+	}
+}
+
+// TestCleanupBlockedErrorNamesTheRemainingLogonLikeRust checks Rust #46333: the
+// uninstall deadline reports which logon kept the sandbox open.
+func TestCleanupBlockedErrorNamesTheRemainingLogonLikeRust(t *testing.T) {
+	err := cleanupBlockedError("sandbox logon 00000000:00001234 remains (logon type 2, session 1)")
+	want := "sandbox cleanup blocked after the uninstall deadline: sandbox logon 00000000:00001234 remains (logon type 2, session 1)"
+	if err == nil || err.Error() != want {
+		t.Fatalf("cleanupBlockedError() = %v, want %q", err, want)
+	}
+	noData := cleanupBlockedError("LSA returned no data for logon 00000000:00001234")
+	if !strings.Contains(noData.Error(), "LSA returned no data for logon 00000000:00001234") {
+		t.Fatalf("cleanupBlockedError() dropped the logon: %v", noData)
 	}
 }
 
