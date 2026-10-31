@@ -8804,9 +8804,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "ComputerUseReviewRequired now drives review-plan and compaction/web-search metadata; turn_runtime.go turn metadata still reads the legacy bit pending parallel-agent work"
+    "ComputerUseReviewRequired now drives review-plan and compaction/web-search metadata; turn_runtime.go turn metadata still reads the legacy bit pending parallel-agent work",
+    "Round 1169: turn metadata now resolves the computer-use review requirement through appserver.nodeReplAutoReviewRequiredForModel, so a model-owned Guardian computer-use policy (disabled or adaptive) wins over the legacy node_repl_auto_review_required bit in x-codex-turn-metadata exactly as it already did for review evidence and compaction/web-search metadata (Rust ModelInfo::computer_use_review_required). appTurnConfigWithOptions previously assigned modelInfo.NodeReplAutoReviewRequired directly. Test: TestTurnMetadataUsesComputerUsePolicyOverLegacyFlagLikeRust (policy disabled beats the legacy flag, adaptive requires review without the flag, the legacy flag still applies when the model has no policy). Verified with go build ./appserver and go test ./appserver -run 'ComputerUsePolicy|Guardian|NodeRepl|TurnMetadata|StepToolSettings|Compaction' -count=1."
    ]
   },
   {
