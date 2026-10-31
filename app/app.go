@@ -86,6 +86,9 @@ func RunWithOptions(ctx context.Context, args []string, stdin io.Reader, stdout,
 		}
 		return err
 	}
+	if parsed.GroupHelp != nil {
+		return runGroupHelp(parsed.GroupHelp, stdout, stderr)
+	}
 	if err := validateFeatureToggles(parsed.Root.EnableFeatures, parsed.Root.DisableFeatures); err != nil {
 		return err
 	}
@@ -218,6 +221,27 @@ func runExecMeta(parsed *cli.Parsed, stdout io.Writer) (bool, error) {
 	}
 	_, err := fmt.Fprint(stdout, cli.ExecHelpText(request.Kind, request.Short))
 	return true, err
+}
+
+// runGroupHelp mirrors clap's help action for the group commands Rust declares
+// with `arg_required_else_help`: a bare invocation writes the short page to
+// stderr and exits 2, while `-h` writes the short page and `--help` / `help`
+// write the long page to stdout. Like the exec family, Rust answers before any
+// configuration, auth or model work.
+func runGroupHelp(request *cli.GroupHelpRequest, stdout, stderr io.Writer) error {
+	if request == nil {
+		return nil
+	}
+	if request.Required {
+		if stderr != nil {
+			fmt.Fprint(stderr, cli.GroupHelpText(request.Kind, true))
+		}
+		return &ExitError{Code: 2, Silent: true}
+	}
+	if stdout != nil {
+		fmt.Fprint(stdout, cli.GroupHelpText(request.Kind, request.Short))
+	}
+	return nil
 }
 
 // writeClapDiagnostic renders clap's argument diagnostics (option conflicts,

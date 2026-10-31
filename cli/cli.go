@@ -162,6 +162,20 @@ type ExecHelpRequest struct {
 	Version bool
 }
 
+// GroupHelpRequest mirrors clap's help action for a group command. Rust
+// declares these commands with `arg_required_else_help`, so a bare invocation
+// writes the short page to stderr and exits 2, `-h` writes the short page and
+// `--help` / `help` write the long page to stdout.
+type GroupHelpRequest struct {
+	// Kind selects the page of the group command.
+	Kind GroupHelpKind
+	// Short selects clap's `-h` summary layout instead of `--help`.
+	Short bool
+	// Required marks the bare invocation that clap answers with help on
+	// stderr and exit status 2.
+	Required bool
+}
+
 type ExecResumeOptions struct {
 	SessionID string
 	Last      bool
@@ -666,6 +680,7 @@ type Parsed struct {
 	Agents            AgentsOptions
 	Debug             DebugOptions
 	TcpTunnel         TcpTunnelOptions
+	GroupHelp         *GroupHelpRequest
 	RawSubcommand     []string
 }
 
@@ -794,11 +809,19 @@ func strictConfigUnsupportedBeforeSubcommandParse(command Command) bool {
 }
 
 func parseSubcommand(p *Parsed, args []string) (*Parsed, error) {
+	if request := groupHelpRequestFor(p.Command, args); request != nil {
+		p.GroupHelp = request
+		return p, nil
+	}
 	remaining, err := p.splitSubcommandFeatureFlags(args)
 	if err != nil {
 		return nil, err
 	}
 	args = remaining
+	args, err = p.splitGroupConfigOverrides(args)
+	if err != nil {
+		return nil, err
+	}
 	switch p.Command {
 	case CommandExec:
 		return p, parseExec(args, &p.Exec)
@@ -1616,7 +1639,7 @@ func parseLogout(args []string, login *LoginOptions) error {
 
 func parseFeatures(args []string, features *FeatureOptions) error {
 	if len(args) == 0 {
-		return errors.New("features requires a subcommand")
+		return MissingSubcommandError(GroupHelpFeatures)
 	}
 	features.Action = args[0]
 	switch features.Action {
@@ -1643,7 +1666,7 @@ func parseFeatures(args []string, features *FeatureOptions) error {
 
 func parseMCP(args []string, mcp *MCPOptions) error {
 	if len(args) == 0 {
-		return errors.New("mcp requires a subcommand")
+		return MissingSubcommandError(GroupHelpMCP)
 	}
 	mcp.Action = args[0]
 	if mcp.Env == nil {
@@ -1905,7 +1928,7 @@ func parseMCP(args []string, mcp *MCPOptions) error {
 
 func parsePlugin(args []string, plugin *PluginOptions) error {
 	if len(args) == 0 {
-		return errors.New("plugin requires a subcommand")
+		return MissingSubcommandError(GroupHelpPlugin)
 	}
 	plugin.Action = args[0]
 	switch plugin.Action {
@@ -1998,7 +2021,7 @@ func parsePlugin(args []string, plugin *PluginOptions) error {
 
 func parsePluginMarketplace(args []string, marketplace *PluginMarketplaceOptions) error {
 	if len(args) == 0 {
-		return errors.New("plugin marketplace requires a subcommand")
+		return MissingSubcommandError(GroupHelpPluginMarketplace)
 	}
 	marketplace.Action = args[0]
 	switch marketplace.Action {
@@ -2397,7 +2420,7 @@ func validateSandboxSetupParseDependencies(sandbox *SandboxOptions) error {
 
 func parseExecpolicy(args []string, execpolicy *ExecpolicyOptions) error {
 	if len(args) == 0 {
-		return errors.New("execpolicy requires a subcommand")
+		return MissingSubcommandError(GroupHelpExecpolicy)
 	}
 	execpolicy.Action = args[0]
 	switch execpolicy.Action {
@@ -3220,7 +3243,7 @@ func validateWebsocketAuthSHA256(flagName string, value string) (string, error) 
 
 func parseAppServerDaemon(args []string, daemon *AppServerDaemonOptions) error {
 	if len(args) == 0 {
-		return errors.New("app-server daemon requires a subcommand")
+		return MissingSubcommandError(GroupHelpAppServerDaemon)
 	}
 	daemon.Action = args[0]
 	for _, arg := range args[1:] {
@@ -3960,7 +3983,7 @@ func isUUIDLike(value string) bool {
 
 func parseDebug(args []string, debug *DebugOptions) error {
 	if len(args) == 0 {
-		return errors.New("debug requires a subcommand")
+		return MissingSubcommandError(GroupHelpDebug)
 	}
 	debug.Subcommand = args[0]
 	switch debug.Subcommand {
@@ -3978,7 +4001,7 @@ func parseDebug(args []string, debug *DebugOptions) error {
 		}
 	case "app-server":
 		if len(args) < 2 {
-			return errors.New("debug app-server requires a subcommand")
+			return MissingSubcommandError(GroupHelpDebugAppServer)
 		}
 		debug.AppServerAction = args[1]
 		switch debug.AppServerAction {
@@ -4049,6 +4072,75 @@ func parseDebug(args []string, debug *DebugOptions) error {
 		return unrecognizedSubcommandForGroup("debug", debug.Subcommand)
 	}
 	return nil
+}
+
+// splitGroupConfigOverrides mirrors clap's flattened `-c`/`--config` on a group
+// command: options written in front of the subcommand name belong to the same
+// override list as the ones the subcommand parser collects, so they land in
+// RootOptions and mergeRootConfigOverrides prepends them. Leaf-level `-c` stays
+// with the subcommand parser, which keeps its existing precedence.
+func (p *Parsed) splitGroupConfigOverrides(args []string) ([]string, error) {
+	_, consumed, ok := GroupHelpKindForPath(p.Command, args)
+	if !ok {
+		return args, nil
+	}
+	remaining, err := consumeConfigOverrides(args[consumed:], &p.Root.ConfigOverrides)
+	if err != nil || len(remaining) == len(args)-consumed {
+		return args, err
+	}
+	merged := make([]string, 0, consumed+len(remaining))
+	merged = append(merged, args[:consumed]...)
+	merged = append(merged, remaining...)
+	return merged, nil
+}
+
+// consumeConfigOverrides collects a leading run of clap's `-c`/`--config`
+// values and returns the remaining arguments.
+func consumeConfigOverrides(args []string, overrides *[]string) ([]string, error) {
+	for len(args) > 0 {
+		switch {
+		case args[0] == "-c" || args[0] == "--config":
+			if len(args) < 2 || clapLooksLikeOption(args[1]) {
+				return nil, valueRequiredError("--config")
+			}
+			*overrides = append(*overrides, args[1])
+			args = args[2:]
+		case strings.HasPrefix(args[0], "--config="):
+			*overrides = append(*overrides, strings.TrimPrefix(args[0], "--config="))
+			args = args[1:]
+		case strings.HasPrefix(args[0], "-c"):
+			*overrides = append(*overrides, strings.TrimPrefix(args[0], "-c"))
+			args = args[1:]
+		default:
+			return args, nil
+		}
+	}
+	return args, nil
+}
+
+// groupHelpRequestFor resolves clap's help action for a group command. The
+// dispatch happens before the group's own parser because each of those parsers
+// rejects `-h`/`--help` as an unknown argument.
+func groupHelpRequestFor(command Command, args []string) *GroupHelpRequest {
+	kind, consumed, ok := GroupHelpKindForPath(command, args)
+	if !ok {
+		return nil
+	}
+	rest := args[consumed:]
+	switch {
+	case len(rest) == 0:
+		return &GroupHelpRequest{Kind: kind, Short: true, Required: true}
+	case rest[0] == "-h":
+		// clap's help action fires as soon as the flag is parsed, so any
+		// trailing tokens are ignored.
+		return &GroupHelpRequest{Kind: kind, Short: true}
+	case rest[0] == "--help":
+		return &GroupHelpRequest{Kind: kind}
+	case rest[0] == "help" && len(rest) == 1:
+		return &GroupHelpRequest{Kind: kind}
+	default:
+		return nil
+	}
 }
 
 // splitSubcommandFeatureFlags mirrors clap's flattened `--enable`/`--disable`

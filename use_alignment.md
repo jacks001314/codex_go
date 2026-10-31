@@ -790,6 +790,41 @@ one-off captures.
     accepted-spelling, 5 pending-value, the `sandbox setup` exception, the `--`
     rule and 11 smart-usage cases).
 
+38. **Group help pages, `arg_required_else_help` and group-level `-c`** - Rust
+    gives every group command a clap page and, for the eight groups that require
+    a subcommand, declares `arg_required_else_help`; Go answered
+    `Error: mcp requires a subcommand` (exit 1), `unknown mcp subcommand
+    --help`, or `unexpected argument '--help' found`. Go now carries the pages
+    captured verbatim from 0.166 in `cli/group_help.go` for `mcp`, `features`,
+    `plugin`, `plugin marketplace`, `debug`, `debug app-server`, `execpolicy`
+    and `app-server daemon`, both layers of clap's rendering (the `-h` summary
+    and the `--help`/`help` long page), and routes them before the group parser:
+    - `codex mcp` (bare) writes the short page to **stderr** and exits 2,
+      because clap answers `arg_required_else_help` with the summary page, not
+      with an error block.
+    - `codex mcp -h` writes the short page and `codex mcp --help` /
+      `codex mcp help` the long page to stdout with exit 0. The help action
+      fires as soon as clap parses the flag, so `codex plugin --help --bogus`
+      prints the page instead of reporting the trailing token.
+    - a group invoked with options but without its subcommand now prints
+      clap's `'codex mcp' requires a subcommand but one was not provided` with
+      the `[subcommands: ...]` list and the group usage, instead of the old
+      one-line Go error at exit 1.
+    The same round let `-c`/`--config` through at group level, where Rust's
+    `CliConfigOverrides` are flattened too: `codex mcp -c a=b list`,
+    `codex plugin marketplace --config=a=b list`, `codex debug -c` (pending
+    value, no usage block) now behave like Rust. The values land in
+    `RootOptions`, so `mergeRootConfigOverrides` keeps the root-first order the
+    subcommand parsers already produced for leaf-level `-c`. Evidence: 56 live
+    comparisons against 0.166 (8 groups x {bare, `-h`, `--help`, `help`,
+    `--enable zzz`, `--bogus`, `--help --bogus`}) and 32 group-level `-c` cases
+    (`-c a=b`, `--config=a=b`, `-c`, repeated `-c`) are byte-identical on
+    stdout, stderr and exit status. Regressions:
+    `cli/group_help_like_rust_test.go` (routing for the 8 groups, page shape,
+    4 missing-subcommand diagnostics, group-level overrides) and
+    `app/group_help_meta_like_rust_test.go` (11 long/short/help cases plus the
+    eight bare-invocation stderr/exit-2 cases).
+
 ## Verification
 
 - `go test ./config/`, `go test ./tui/onboarding/`, `go test ./tui/...` pass;
@@ -997,6 +1032,14 @@ one-off captures.
   missing/misplaced argument, 17 missing-value and 8 `sandbox setup` comparisons
   report 0 diffs.
 
+- group help round: `go build -o bin\codex.exe .\cmd\codex` succeeds,
+  `go test ./cli ./applypatch ./prompt ./review ./cmd/...` pass and
+  `go test -vet=off ./exec ./app` keeps exactly the pre-existing failures (9 and
+  2). 56 live group-page comparisons and 32 group-level `-c` comparisons against
+  0.166 are byte-identical; the earlier probe sets stay clean (80 unknown-flag,
+  56 missing/misplaced argument, 17 missing-value, 8 `sandbox setup`, 144 shared
+  flag comparisons down to the three parsers listed under Still open).
+
 ## Still open
 
 - `codex resume -i a.png b.png` (TUI picker path) also uses Rust's variadic
@@ -1034,10 +1077,16 @@ one-off captures.
     single missing option instead of `--proxy-url`/`--proxy-origins-file`/
     `--target`). Those parsers live outside `cli.Parse`'s table-driven surface,
     so they need their own usage snapshots before they can print clap blocks.
-  - group help pages: `codex mcp`, `codex features`, `codex plugin marketplace`,
-    `codex debug` print clap's subcommand help on bare invocation, and
-    `codex mcp --help` prints the same page; Go answers
-    `Error: mcp requires a subcommand` (exit 1) or `unknown mcp subcommand --help`.
+  - the eight group pages are aligned (entry 38); every *other* command still
+    rejects `-h`/`--help` with `unexpected argument '--help' found`. That covers
+    the leaf commands (`codex mcp get --help`, `codex features list --help`,
+    `codex cloud exec --help`, ...), the non-group top-level commands
+    (`codex cloud`, `codex app-server`, `codex sandbox`, `codex agents`,
+    `codex resume`, `codex update`, ...) and `codex <group> help <topic>`
+    (`codex mcp help get`), which Rust answers with that leaf's long page.
+    `cli/group_help.go` shows the capture-and-embed pattern; the remaining work
+    is generating the same short/long pairs for those commands and routing them
+    in their parsers.
   - `codex mcp add --oauth-client-registration <AUTO|CIMD|DCR>` is a Rust flag Go
     does not parse yet, and clap treats `--user=` as a satisfied (empty) value for
     the nested `setup` parser where Go reports the missing group.
