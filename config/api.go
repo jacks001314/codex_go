@@ -1916,11 +1916,17 @@ type ConfigService struct {
 	loginPolicyRequirements *ConfigRequirements
 	warnings                []ConfigWarningNotification
 	managedLayers           []Layer
-	featureDefaults         map[string]bool
-	importHistory           []ExternalAgentConfigImportHistory
-	nextImportID            int
-	externalAgentHome       string
-	now                     func() time.Time
+	// managedLayersOverride records a host-installed managed layer stack; a
+	// file refresh must not replace it (Rust #57175).
+	managedLayersOverride bool
+	// cloudConfigLoader supplies the latest config-server bundle on each read
+	// (Rust ConfigManager::current_managed_config_loader).
+	cloudConfigLoader *CloudConfigLoader
+	featureDefaults   map[string]bool
+	importHistory     []ExternalAgentConfigImportHistory
+	nextImportID      int
+	externalAgentHome string
+	now               func() time.Time
 	// memoryImportMu guards the host-supplied external-memory pipeline settings
 	// (Rust #56414/#56462); they are read while the import mutex is held.
 	memoryImportMu sync.RWMutex
@@ -2067,15 +2073,19 @@ func (s *ConfigService) loadRequirementsFromHome() {
 	requirements, err := LoadRequirementsFile(path)
 	if err != nil {
 		details := err.Error()
+		s.mu.Lock()
 		s.warnings = append(s.warnings, ConfigWarningNotification{
 			Summary: "Invalid managed requirements; ignoring.",
 			Details: &details,
 			Path:    &path,
 		})
+		s.mu.Unlock()
 		return
 	}
+	s.mu.Lock()
 	s.requirements = requirements
 	s.localRequirements = cloneRequirements(requirements)
+	s.mu.Unlock()
 }
 
 func (s *ConfigService) loadManagedConfigLayerFromEnv() {
@@ -2094,11 +2104,13 @@ func (s *ConfigService) loadManagedConfigLayerFromEnv() {
 					"Ignoring deprecated managed config file at %s; CODEX_HOME/managed_config.toml is no longer supported on Windows. Use %%ProgramData%%\\OpenAI\\Codex\\requirements.toml for enforced settings or config.toml for defaults.",
 					deprecated,
 				)
+				s.mu.Lock()
 				s.warnings = append(s.warnings, ConfigWarningNotification{
 					Summary: "Ignoring deprecated managed config file.",
 					Details: &details,
 					Path:    &deprecated,
 				})
+				s.mu.Unlock()
 			}
 		}
 		return
@@ -2107,16 +2119,20 @@ func (s *ConfigService) loadManagedConfigLayerFromEnv() {
 	values, exists, err := loadConfigFileIfExists(path)
 	if err != nil {
 		details := err.Error()
+		s.mu.Lock()
 		s.warnings = append(s.warnings, ConfigWarningNotification{
 			Summary: "Invalid managed configuration; ignoring.",
 			Details: &details,
 			Path:    &path,
 		})
+		s.mu.Unlock()
 		return
 	}
 	if !exists {
 		return
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.managedLayers = append(s.managedLayers, Layer{
 		Name:    LayerSource{Type: LayerSourceLegacyManagedConfigFromFile, File: path},
 		Version: configVersion(values),
@@ -2143,6 +2159,100 @@ func (s *ConfigService) SetManagedLayers(layers []Layer) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.managedLayers = cloneLayers(layers)
+	s.managedLayersOverride = true
+}
+
+// SetCloudConfigLoader installs the managed-configuration loader whose latest
+// config-server bundle joins every read. Rust #57175 keeps the config server's
+// loader and its refresh worker for the app-server's lifetime, so protocol
+// clients observe refreshed managed values instead of the startup snapshot.
+func (s *ConfigService) SetCloudConfigLoader(loader *CloudConfigLoader) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cloudConfigLoader = loader
+}
+
+// refreshManagedConfigFromFiles re-reads requirements.toml and the app-server
+// managed configuration path before a read (Rust
+// ConfigManager::load_latest_config). Host-installed overrides win.
+func (s *ConfigService) refreshManagedConfigFromFiles() {
+	if s == nil {
+		return
+	}
+	if err := s.ReloadRequirementsFromHome(); err != nil {
+		details := err.Error()
+		path := filepath.Join(s.CodexHome(), "requirements.toml")
+		s.appendConfigWarningOnce(ConfigWarningNotification{
+			Summary: "Invalid managed requirements; ignoring.",
+			Details: &details,
+			Path:    &path,
+		})
+	}
+	s.mu.Lock()
+	managedLayersOverride := s.managedLayersOverride
+	s.mu.Unlock()
+	if managedLayersOverride {
+		return
+	}
+	s.mu.Lock()
+	s.managedLayers = nil
+	s.mu.Unlock()
+	s.loadManagedConfigLayerFromEnv()
+}
+
+// applyCloudConfigBundle merges the loader's latest enterprise-managed values
+// and requirements into one read, mirroring the managed-configuration stage of
+// LoadWithOptions. The base requirements are the freshly reloaded file ones, so
+// repeated reads never compound the fetched policy.
+func (s *ConfigService) applyCloudConfigBundle(values map[string]any) error {
+	if s == nil || values == nil {
+		return nil
+	}
+	s.mu.Lock()
+	loader := s.cloudConfigLoader
+	requirements := cloneRequirements(s.requirements)
+	codexHome := s.codexHome
+	s.mu.Unlock()
+	if loader == nil {
+		return nil
+	}
+	snapshot := loader.GetSnapshot()
+	if snapshot.Err != nil {
+		return snapshot.Err
+	}
+	// Rust #56055 runtime_refresh: a refreshed bundle must still come from the
+	// configuration server the local requirements select, so a swapped
+	// endpoint cannot silently take over the managed policy.
+	var requiredServer *ConfigServer
+	if requirements != nil {
+		requiredServer = requirements.ConfigServer
+	}
+	if err := ValidateAppliedConfigServer(snapshot.ConfigServer, requiredServer); err != nil {
+		return err
+	}
+	bundle := snapshot.Bundle
+	if bundle == nil || bundle.IsEmpty() {
+		return nil
+	}
+	merged, _, err := applyCloudConfigBundleWithFilesystemSource(values, requirements, *bundle, codexHome)
+	if err != nil {
+		return err
+	}
+	applyManagedApprovalsReviewerGuardianV2Override(values, merged)
+	applyManagedAuthBackendOverride(values, merged)
+	applyManagedModelProviderOverride(values, merged)
+	applyManagedExactOverrides(values, merged)
+	applyManagedOtelOverrides(values, merged)
+	if err := applyManagedConstrainedOverrides(values, merged); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.requirements = cloneRequirements(merged)
+	s.mu.Unlock()
+	return nil
 }
 
 // SetPackagedDefaultsLayer installs an optional package-supplied configuration
@@ -2191,6 +2301,7 @@ func (s *ConfigService) Read(params *ConfigReadParams) (*ConfigReadResponse, err
 	if params == nil {
 		params = &ConfigReadParams{}
 	}
+	s.refreshManagedConfigFromFiles()
 	profile := s.currentProfile()
 	if cwd := configReadCWD(params); cwd != "" {
 		layers, err := s.readLayersForCWD(cwd, profile)
@@ -2226,6 +2337,7 @@ func (s *ConfigService) Read(params *ConfigReadParams) (*ConfigReadResponse, err
 // packaged defaults and enterprise-managed layers stay active. Rust selects
 // this loader when the initial app-server config load is invalid (#42149).
 func (s *ConfigService) ReadDefaults(cwd string) (*ConfigReadResponse, error) {
+	s.refreshManagedConfigFromFiles()
 	cwd = strings.TrimSpace(cwd)
 	if cwd == "" {
 		cwd = strings.TrimSpace(s.codexHome)
@@ -2239,6 +2351,9 @@ func (s *ConfigService) ReadDefaults(cwd string) (*ConfigReadResponse, error) {
 
 func (s *ConfigService) readResponseForLayers(layers []Layer, params *ConfigReadParams) (*ConfigReadResponse, error) {
 	values, origins := mergeConfigLayers(layers)
+	if err := s.applyCloudConfigBundle(values); err != nil {
+		return nil, err
+	}
 	s.applyFeatureEnablementDefaults(values, origins)
 	applySupportedFeatureEnablement(values)
 	if err := s.validateMCPEMAAuthConfig(layers, values); err != nil {
