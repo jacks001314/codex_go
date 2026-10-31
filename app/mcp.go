@@ -925,10 +925,18 @@ func newMCPCLIStore(codexHome string) *mcpCLIStore {
 }
 
 func (s *mcpCLIStore) Load(overrides []string) (*mcpCLIConfig, error) {
+	if err := s.validateUserConfigShape(); err != nil {
+		s.policy.Unavailable()
+		return nil, err
+	}
+	if err := s.validateUserConfigSemantics(); err != nil {
+		s.policy.Unavailable()
+		return nil, err
+	}
 	loaded, err := config.LoadEffective(s.codexHome, overrides, nil, nil)
 	if err != nil {
 		s.policy.Unavailable()
-		return nil, err
+		return nil, mcpLoadConfigurationError(err)
 	}
 	// The host publishes its application network policy for the config and every
 	// client it builds from that config binds it.
@@ -938,10 +946,18 @@ func (s *mcpCLIStore) Load(overrides []string) (*mcpCLIConfig, error) {
 }
 
 func (s *mcpCLIStore) LoadManaged(ctx context.Context, overrides []string) (*mcpCLIConfig, error) {
+	if err := s.validateUserConfigShape(); err != nil {
+		s.policy.Unavailable()
+		return nil, err
+	}
+	if err := s.validateUserConfigSemantics(); err != nil {
+		s.policy.Unavailable()
+		return nil, err
+	}
 	bootstrap, err := config.LoadEffective(s.codexHome, overrides, nil, nil)
 	if err != nil {
 		s.policy.Unavailable()
-		return nil, err
+		return nil, mcpLoadConfigurationError(err)
 	}
 	publishHostApplicationNetworkPolicy(s.policy, bootstrap)
 	s.httpClient = policyHTTPClient(bootstrap, codexnetwork.NewHTTPClient(bootstrap.RespectSystemProxyEnabled(), 0))
@@ -1026,7 +1042,7 @@ func (s *mcpCLIStore) Upsert(overrides []string, server *mcpCLIServer) error {
 }
 
 func (s *mcpCLIStore) Remove(overrides []string, name string) (bool, error) {
-	cfg, err := s.Load(overrides)
+	cfg, err := s.loadServersForRemoval(overrides)
 	if err != nil {
 		return false, err
 	}
@@ -1038,6 +1054,85 @@ func (s *mcpCLIStore) Remove(overrides []string, name string) (bool, error) {
 	}
 	delete(cfg.Servers, name)
 	return true, s.write(cfg)
+}
+
+// loadServersForRemoval reads the configured servers the way Rust's remove
+// does: the raw document is decoded into the server map only, so unrelated
+// top-level type errors do not stop a removal, while a malformed server table
+// reports `failed to load MCP servers from <codex home>`.
+func (s *mcpCLIStore) loadServersForRemoval(overrides []string) (*mcpCLIConfig, error) {
+	if err := s.validateUserConfigServersShape(); err != nil {
+		return nil, err
+	}
+	// Rust decodes only the mcp_servers table here, so the layer merge must not
+	// run the semantic checks `Config::load` performs on unrelated fields.
+	loaded, err := config.Load(s.codexHome)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load MCP servers from %s\n\nCaused by:\n%s", s.codexHome, mcpIndentedCauses(err))
+	}
+	return mcpCLIConfigFromValues(loaded.Values), nil
+}
+
+// validateUserConfigShape replays serde's pass over the user config before the
+// loader's own semantic checks run: Rust deserializes ConfigToml first, so a
+// type or variant mismatch reports `failed to load bootstrap configuration`
+// even when the same field also has a Go-side check with different wording.
+func (s *mcpCLIStore) validateUserConfigShape() error {
+	path := filepath.Join(s.codexHome, "config.toml")
+	values, document, err := config.ReadConfigDocumentFile(path)
+	if err != nil {
+		// Syntax failures keep the loader's own diagnostic, which carries the
+		// TOML position.
+		return nil
+	}
+	if err := config.ValidateConfigDocumentValues(values, &config.ConfigDocumentLocator{Path: path, Text: document}); err != nil {
+		return mcpBootstrapConfigError(err)
+	}
+	return nil
+}
+
+// validateUserConfigSemantics replays Config::load's post-merge rejections, so
+// a document the full Rust loader refuses also fails `codex mcp list` instead of
+// being reported as an empty server list.
+func (s *mcpCLIStore) validateUserConfigSemantics() error {
+	loaded, err := config.Load(s.codexHome)
+	if err != nil {
+		return nil
+	}
+	if err := config.ValidateLoadedConfigSemantics(loaded.Values); err != nil {
+		return mcpLoadConfigurationError(err)
+	}
+	return nil
+}
+
+// validateUserConfigServersShape is the narrower check `codex mcp remove` needs:
+// Rust decodes only the server map there, so an unrelated top-level type error
+// does not stop a removal.
+func (s *mcpCLIStore) validateUserConfigServersShape() error {
+	values, err := config.ReadConfigDocumentValues(filepath.Join(s.codexHome, "config.toml"))
+	if err != nil {
+		return nil
+	}
+	if err := config.ValidateMCPServersValues(values); err != nil {
+		return fmt.Errorf("failed to load MCP servers from %s\n\nCaused by:\n%s", s.codexHome, mcpIndentedCauses(err))
+	}
+	return nil
+}
+
+// mcpBootstrapConfigError reports a config rejection the way Rust's bootstrap
+// load does: the context line, then anyhow's indented `Caused by:` block.
+// mcpLoadConfigurationError wraps a semantic load failure the way Rust's
+// mcp_cmd does with anyhow's `failed to load configuration` context.
+func mcpLoadConfigurationError(err error) error {
+	return fmt.Errorf("failed to load configuration\n\nCaused by:\n%s", mcpIndentedCauses(err))
+}
+
+func mcpBootstrapConfigError(err error) error {
+	return fmt.Errorf("failed to load bootstrap configuration\n\nCaused by:\n%s", mcpIndentedCauses(err))
+}
+
+func mcpIndentedCauses(err error) string {
+	return "    " + strings.ReplaceAll(err.Error(), "\n", "\n    ")
 }
 
 func (s *mcpCLIStore) write(cfg *mcpCLIConfig) error {

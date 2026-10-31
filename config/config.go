@@ -3102,6 +3102,44 @@ func embeddedDefaultsValues() (map[string]any, error) {
 	return values, nil
 }
 
+// ParseConfigDocumentValues decodes one config.toml document the way the
+// loader does, so a caller can replay serde's shape checks before the loader
+// applies its own semantic validation.
+func ParseConfigDocumentValues(data []byte) (map[string]any, error) {
+	var values map[string]any
+	if err := toml.Unmarshal(stripUTF8BOM(data), &values); err != nil {
+		return nil, err
+	}
+	if values == nil {
+		values = map[string]any{}
+	}
+	return values, nil
+}
+
+// ReadConfigDocumentValues decodes the config.toml at path.
+func ReadConfigDocumentValues(path string) (map[string]any, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return ParseConfigDocumentValues(data)
+}
+
+// ReadConfigDocumentFile decodes the config.toml at path and also returns the
+// text the parser saw, so diagnostics can quote a line and column.
+func ReadConfigDocumentFile(path string) (map[string]any, string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, "", err
+	}
+	text := string(stripUTF8BOM(data))
+	values, err := ParseConfigDocumentValues([]byte(text))
+	if err != nil {
+		return nil, "", err
+	}
+	return values, text, nil
+}
+
 func loadConfigFileIfExists(path string) (map[string]any, bool, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {

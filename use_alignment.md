@@ -1829,7 +1829,67 @@ from its parsed map, which dropped comments and reflowed multi-line values.
   `TestMCPAddKeepsDocumentTriviaLikeTomlEdit`,
   `TestMCPRemoveMissingServerLeavesConfigUntouchedLikeRust` in `app`.
 
+### 61. Config load: serde's typed pass, position-carrying errors and three mcp wrappers
+
+Rust deserializes `ConfigToml` (and every `RawMcpServerConfig`) before a
+command runs, so a type or variant mismatch fails the load with a serde
+message. Go parsed the same document into `map[string]any`, so every `mcp`
+command accepted it, wrote files and exited 0.
+
+- **Shape pass.** `config.ValidateConfigValues` replays `ConfigToml`'s 104
+  top-level fields (`config/config_toml_schema.go`): scalar kinds, `features`
+  as a boolean-only sub-table, the `mcp_servers` map and each entry as
+  `RawMcpServerConfig`. Enum fields list their variants the way serde does
+  (`expected `a` or `b``, `expected one of `a`, `b`, `c``); an enum value must
+  be a string (`invalid type: unit variant, expected string only`) unless it is
+  a table, whose single key is taken as the variant name.
+  `forced_chatgpt_workspace_id` is an untagged `Repr` and rejects anything that
+  is neither a string nor an array of strings.
+- **stdio transport rules.** With `command` present, `url`,
+  `bearer_token_env_var`, `http_headers`, `env_http_headers`,
+  `http_headers_helper`, `auth` and `oauth_resource` report `<field> is not
+  supported for stdio` at the server path; a server with neither `command` nor
+  `url` reports `invalid transport`; a non-table entry reports `invalid type ...
+  expected struct RawMcpServerConfig`.
+- **Unknown fields stay allowed.** `foo = 1` and `[features] x = true` load in
+  Rust, so the pass deliberately does not use `deny_unknown_fields`.
+- **Position-carrying errors.** `projects` and `project_root_markers` produce
+  errors that quote `<path>:<line>:<column>`. `config.ConfigDocumentLocator`
+  recomputes that position from the document text: `projects` keeps the inner
+  serde error as anyhow's second cause (the `in `projects`` line indents under
+  it), `project_root_markers` prints only the located line, and `[[projects]]`
+  reports the column of its `[`.
+- **Three wrappers.** `codex mcp list/get/add/login/logout` wrap a load failure
+  as `failed to load bootstrap configuration` (the typed pass) or `failed to
+  load configuration` (Config::load semantics such as
+  `experimental_thread_store_endpoint`, the legacy `profile` selector,
+  `default_permissions` without a `[permissions]` table, and an unknown
+  `model_provider`). `codex mcp remove` decodes only the server map, so
+  unrelated top-level type errors and those semantic errors do not stop it,
+  while a malformed server table reports `failed to load MCP servers from
+  <home>` with `x.command` paths (no `mcp_servers.` prefix).
+- Evidence: the 437-document corpus (`p47diff.py`, `out/r47-diff7.txt`) went
+  from 57 diffs to 3. The leftovers are `model_instructions_file`,
+  `model_catalog_json` and `experimental_compact_prompt_file` pointing at a
+  missing file: Rust reads them during load and prints the Windows-localized
+  `(os error 2)` text, which Go does not reproduce. Regressions:
+  `TestValidateConfigValuesReportsSerdeShapeErrors`,
+  `TestValidateConfigDocumentValuesReportsPositions`,
+  `TestValidateMCPServersValuesUsesServerRelativePaths` and
+  `TestValidateLoadedConfigSemantics` in `config`.
+
 ## Verification
+
+- Round 47 adds serde's typed pass to the `mcp` commands (entry 61). A 437
+  document corpus x `mcp list|get|add|remove|login|logout` is 434/437
+  byte-identical (`out/r47-diff7.txt`); the three leftovers are the missing
+  `model_instructions_file` / `model_catalog_json` /
+  `experimental_compact_prompt_file` reads, where Rust reports the localized
+  Windows io text. A focused 56-case semantic sweep (`p47sem6.py`,
+  `out/r47-sem6.txt`) is 54/56, the two leftovers being TOML syntax errors that
+  Rust reports with a position. `go test -count=1 -vet=off ./config ./cli
+  ./mcp` passes in a clean worktree and `./app` keeps only the two known
+  baselines.
 
 - Round 46 makes the `mcp add`/`mcp remove` writer edit the document in place
   (entry 60). Ten seed documents x four command sets are 33/40 byte-identical
@@ -2331,14 +2391,20 @@ from its parsed map, which dropped comments and reflowed multi-line values.
     subcommand paths print clap's `-h`/`--help`/`help <topic>` pages plus the
     `--help=<value>` diagnostic, and `codex execpolicy check -hx` now reaches
     clap's missing-required block like Rust.
-- The config loader is a plain map, so a document Rust rejects at bootstrap is
-  accepted and the command runs anyway: an inline array of tables
-  (`[[profiles]]`) reports `failed to load bootstrap configuration` with
-  `invalid type: sequence, expected a map` in `profiles`, and an unknown
-  `[features.x]` table is rejected as well, while Go writes the file and exits
-  0. Aligning needs the Rust config schema (field types plus
-  `deny_unknown_fields`) in the Go loader. The writer itself is in place since
-  entry 60.
+- The load pass covers the 104 top-level field types, enums, the `features`
+  sub-table and the `mcp_servers` entries (entry 61), but not the nested
+  schemas: `[profiles.x] model = 1` still loads in Go where Rust reports
+  `invalid type: integer `1`, expected a string` in `profiles.x.model`, and the
+  same gap applies to the other nested tables (`shell_environment_policy`,
+  `history`, `tui`, ...). The three path-valued fields
+  (`model_instructions_file`, `model_catalog_json`,
+  `experimental_compact_prompt_file`) are not read during load either, so a
+  missing file is accepted instead of failing with Rust's `failed to read ...
+  <path>: <os error>`, whose text is Windows-localized.
+- TOML syntax errors keep Go's `toml: ...` wording: Rust prints `0:
+  <path>:<line>:<column>: <message>` plus the annotated snippet (`1 | [broken`
+  with a caret) under both `failed to load bootstrap configuration` and
+  `failed to load MCP servers from <home>`.
 - `mcp_servers` spelled as an inline table (`mcp_servers = { alpha = { .. } }`)
   still goes through the whole-document renderer: toml_edit converts the value
   into a table and prints a `[mcp_servers ]` header (the space comes from the

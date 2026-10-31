@@ -1,0 +1,418 @@
+package config
+
+import (
+	"fmt"
+	"sort"
+	"strconv"
+	"strings"
+)
+
+// ConfigValueError is the serde rejection Rust raises while it deserializes
+// ConfigToml or the mcp server table: the message, then the dotted config path
+// on the following line, which anyhow indents under its `Caused by:` block.
+type ConfigValueError struct {
+	message string
+	path    string
+}
+
+func (e *ConfigValueError) Error() string {
+	if e.path == "" {
+		return e.message
+	}
+	return e.message + "\nin `" + e.path + "`"
+}
+
+// ConfigDocumentLocator carries the layer text being validated, so the two
+// fields whose serde errors quote a TOML position can name the file, line and
+// column the way Rust does.
+type ConfigDocumentLocator struct {
+	Path string
+	Text string
+}
+
+// ValidateConfigValues reports the first field serde would reject, mirroring
+// ConfigToml's deserializer so a document the Rust CLI refuses at bootstrap is
+// refused here too instead of being silently accepted by the untyped loader.
+func ValidateConfigValues(values map[string]any) error {
+	return ValidateConfigDocumentValues(values, nil)
+}
+
+// ValidateConfigDocumentValues is ValidateConfigValues with the source document
+// available for the position-reporting fields.
+func ValidateConfigDocumentValues(values map[string]any, document *ConfigDocumentLocator) error {
+	for _, field := range sortedConfigKeys(values) {
+		kind, ok := configTomlFields[field]
+		if !ok {
+			continue
+		}
+		if err := validateConfigFieldValue(kind, values[field], field); err != nil {
+			if contextErr, ok := err.(*ConfigValueError); ok && kind.positional && document != nil {
+				if positioned := document.positionalConfigError(contextErr, field, kind.dualPositional); positioned != nil {
+					return positioned
+				}
+			}
+			return err
+		}
+	}
+	if features, ok := values["features"]; ok {
+		// FeaturesToml is a map of booleans and serde reports the child failure
+		// against the table itself, not against `features.<name>`.
+		if table, ok := features.(map[string]any); ok {
+			for _, name := range sortedConfigKeys(table) {
+				if _, ok := table[name].(bool); !ok {
+					return configInvalidType(table[name], "a boolean", "features")
+				}
+			}
+		}
+	}
+	if servers, ok := values["mcp_servers"]; ok {
+		return validateMCPServersTable(servers, "mcp_servers")
+	}
+	return nil
+}
+
+// ValidateMCPServersValues validates only the mcp server table, the narrower
+// load `codex mcp remove` performs. Rust reads the raw TOML into the server map
+// there and ignores unrelated top-level fields.
+func ValidateMCPServersValues(values map[string]any) error {
+	servers, ok := values["mcp_servers"]
+	if !ok {
+		return nil
+	}
+	return validateMCPServersTable(servers, "")
+}
+
+// mcpServerFieldKinds lists the McpServerConfig fields in the order serde
+// walks them: the flattened transport first, then the struct itself.
+var mcpServerFieldKinds = []struct {
+	name string
+	kind configFieldKind
+}{
+	{"command", configFieldKind{kind: configKindString}},
+	{"args", configFieldKind{kind: configKindSequence}},
+	{"env", configFieldKind{kind: configKindMap}},
+	{"env_vars", configFieldKind{kind: configKindSequence}},
+	{"cwd", configFieldKind{kind: configKindString}},
+	{"url", configFieldKind{kind: configKindString}},
+	{"bearer_token_env_var", configFieldKind{kind: configKindString}},
+	{"http_headers", configFieldKind{kind: configKindMap}},
+	{"env_http_headers", configFieldKind{kind: configKindMap}},
+	{"http_headers_helper", configFieldKind{kind: configKindString}},
+	{"auth", configFieldKind{kind: configKindEnum, variants: []string{"oauth", "chatgpt", "ema_auth"}}},
+	{"environment_id", configFieldKind{kind: configKindString}},
+	{"enabled", configFieldKind{kind: configKindBool}},
+	{"required", configFieldKind{kind: configKindBool}},
+	{"startup_readiness", configFieldKind{kind: configKindEnum, variants: []string{"connection", "catalog"}}},
+	{"supports_parallel_tool_calls", configFieldKind{kind: configKindBool}},
+	{"tool_input_schema_max_bytes", configFieldKind{kind: configKindInteger, expected: "a nonzero usize"}},
+	{"omit_tools_from", configFieldKind{kind: configKindSequence}},
+	{"startup_timeout_sec", configFieldKind{kind: configKindFloat, expected: "f64"}},
+	{"tool_timeout_sec", configFieldKind{kind: configKindFloat, expected: "f64"}},
+	{"default_tools_approval_mode", configFieldKind{kind: configKindEnum, variants: []string{"auto", "prompt", "writes", "approve"}}},
+	{"enabled_tools", configFieldKind{kind: configKindSequence}},
+	{"disabled_tools", configFieldKind{kind: configKindSequence}},
+	{"scopes", configFieldKind{kind: configKindSequence}},
+	{"oauth", configFieldKind{kind: configKindStruct, expected: "McpServerOAuthConfig"}},
+	{"oauth_resource", configFieldKind{kind: configKindString}},
+	{"tools", configFieldKind{kind: configKindMap}},
+}
+
+// validateMCPServersTable walks the server map. base is the path prefix the
+// caller's deserializer reports: `mcp_servers` for the bootstrap load and an
+// empty string for `codex mcp remove`, which decodes the bare server map.
+func validateMCPServersTable(value any, base string) error {
+	servers, ok := value.(map[string]any)
+	if !ok {
+		return configInvalidType(value, "a map", joinConfigPath(base, "mcp_servers"))
+	}
+	for _, name := range sortedConfigKeys(servers) {
+		path := joinConfigPath(base, "mcp_servers."+name)
+		table, ok := servers[name].(map[string]any)
+		if !ok {
+			return configInvalidType(servers[name], "struct RawMcpServerConfig", path)
+		}
+		if err := validateMCPServerValue(table, path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func joinConfigPath(base string, path string) string {
+	if base == "" {
+		return strings.TrimPrefix(path, "mcp_servers.")
+	}
+	return path
+}
+
+func validateMCPServerValue(table map[string]any, path string) error {
+	for _, field := range mcpServerFieldKinds {
+		value, ok := table[field.name]
+		if !ok {
+			continue
+		}
+		if err := validateConfigFieldValue(field.kind, value, path+"."+field.name); err != nil {
+			return err
+		}
+	}
+	for _, name := range []string{"env", "env_vars", "http_headers", "env_http_headers"} {
+		children, ok := table[name].(map[string]any)
+		if !ok {
+			continue
+		}
+		for _, key := range sortedConfigKeys(children) {
+			if _, ok := children[key].(string); !ok {
+				return configInvalidType(children[key], "a string", path+"."+name+"."+key)
+			}
+		}
+	}
+	_, hasCommand := table["command"]
+	_, hasURL := table["url"]
+	if hasCommand {
+		// The flattened transport is stdio as soon as `command` is set, so every
+		// HTTP-only field is rejected against the server table itself.
+		for _, field := range []string{"url", "bearer_token_env_var", "http_headers", "env_http_headers", "http_headers_helper", "auth", "oauth_resource"} {
+			if _, ok := table[field]; ok {
+				return &ConfigValueError{message: field + " is not supported for stdio", path: path}
+			}
+		}
+		return nil
+	}
+	if hasURL {
+		return nil
+	}
+	return &ConfigValueError{message: "invalid transport", path: path}
+}
+
+func validateConfigFieldValue(kind configFieldKind, value any, path string) error {
+	switch kind.kind {
+	case configKindString:
+		if _, ok := value.(string); !ok {
+			return configInvalidType(value, "a string", path)
+		}
+	case configKindPathString:
+		if _, ok := value.(string); !ok {
+			return configInvalidType(value, "path string", path)
+		}
+	case configKindBool:
+		if _, ok := value.(bool); !ok {
+			return configInvalidType(value, "a boolean", path)
+		}
+	case configKindInteger:
+		if !isConfigInteger(value) {
+			return configInvalidType(value, kind.expected, path)
+		}
+	case configKindFloat:
+		switch value.(type) {
+		case float64, int64, int:
+			// Duration seconds accept an integer literal as f64.
+		default:
+			return configInvalidType(value, kind.expected, path)
+		}
+	case configKindSequence:
+		if _, ok := value.([]any); !ok {
+			return configInvalidType(value, "a sequence", path)
+		}
+	case configKindMap:
+		if _, ok := value.(map[string]any); !ok {
+			return configInvalidType(value, "a map", path)
+		}
+	case configKindStruct:
+		if _, ok := value.(map[string]any); !ok {
+			return configInvalidType(value, "struct "+kind.expected, path)
+		}
+	case configKindTaggedEnum:
+		if _, ok := value.(map[string]any); !ok {
+			return configInvalidType(value, "internally tagged enum "+kind.expected, path)
+		}
+	case configKindEnum:
+		return validateConfigEnumValue(kind, value, path)
+	case configKindUntaggedEnum:
+		return validateConfigUntaggedEnumValue(value, path)
+	}
+	return nil
+}
+
+// validateConfigUntaggedEnumValue mirrors serde's error for an untagged repr
+// (`forced_chatgpt_workspace_id`), which reports one "did not match any
+// variant" message instead of a type mismatch.
+func validateConfigUntaggedEnumValue(value any, path string) error {
+	if _, ok := value.(string); ok {
+		return nil
+	}
+	if items, ok := value.([]any); ok {
+		allStrings := true
+		for _, item := range items {
+			if _, ok := item.(string); !ok {
+				allStrings = false
+				break
+			}
+		}
+		if allStrings {
+			return nil
+		}
+	}
+	return &ConfigValueError{message: "data did not match any variant of untagged enum Repr", path: path}
+}
+
+func validateConfigEnumValue(kind configFieldKind, value any, path string) error {
+	name, ok := value.(string)
+	if !ok {
+		// serde reads a non-string value as an externally tagged variant, so an
+		// inline table names a variant while every other type is a unit variant.
+		table, isTable := value.(map[string]any)
+		if !isTable {
+			return &ConfigValueError{message: "invalid type: unit variant, expected string only", path: path}
+		}
+		keys := sortedConfigKeys(table)
+		if len(keys) == 0 {
+			return &ConfigValueError{message: "invalid type: unit variant, expected string only", path: path}
+		}
+		name = keys[0]
+	}
+	for _, variant := range kind.variants {
+		if name == variant {
+			return nil
+		}
+	}
+	return &ConfigValueError{message: "unknown variant `" + name + "`, " + describeConfigVariants(kind.variants), path: path}
+}
+
+// describeConfigVariants renders serde's expected-variant list: a two-variant
+// enum reads `expected \`a\` or \`b\“ and longer ones read
+// `expected one of \`a\`, \`b\`, \`c\“.
+func describeConfigVariants(variants []string) string {
+	if len(variants) == 2 {
+		return "expected `" + variants[0] + "` or `" + variants[1] + "`"
+	}
+	quoted := make([]string, len(variants))
+	for index, variant := range variants {
+		quoted[index] = "`" + variant + "`"
+	}
+	return "expected one of " + strings.Join(quoted, ", ")
+}
+
+func configInvalidType(value any, expected, path string) *ConfigValueError {
+	return &ConfigValueError{message: "invalid type: " + describeConfigValue(value) + ", expected " + expected, path: path}
+}
+
+// describeConfigValue renders serde's `Unexpected` spelling for a decoded TOML
+// value.
+func describeConfigValue(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return fmt.Sprintf("string %q", typed)
+	case bool:
+		return fmt.Sprintf("boolean `%t`", typed)
+	case int64:
+		return fmt.Sprintf("integer `%d`", typed)
+	case int:
+		return fmt.Sprintf("integer `%d`", typed)
+	case float64:
+		return "floating point `" + describeConfigFloat(typed) + "`"
+	case []any:
+		return "sequence"
+	case map[string]any:
+		return "map"
+	case nil:
+		return "unit"
+	}
+	return fmt.Sprintf("%T", value)
+}
+
+func describeConfigFloat(value float64) string {
+	text := strconv.FormatFloat(value, 'g', -1, 64)
+	if !strings.ContainsAny(text, ".eE") {
+		text += ".0"
+	}
+	return text
+}
+
+func isConfigInteger(value any) bool {
+	switch value.(type) {
+	case int64, int:
+		return true
+	}
+	return false
+}
+
+func sortedConfigKeys(values map[string]any) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// positionalConfigError renders serde's position-carrying form for `projects`
+// and `project_root_markers`. The dual form keeps the inner serde error as a
+// second anyhow cause, which is why the path line sits under it.
+func (d *ConfigDocumentLocator) positionalConfigError(base *ConfigValueError, field string, dual bool) error {
+	line, column, ok := tomlFieldValuePosition(d.Text, field)
+	if !ok {
+		return nil
+	}
+	location := fmt.Sprintf("%s:%d:%d: %s", d.Path, line, column, base.message)
+	if !dual {
+		return &ConfigValueError{message: location, path: ""}
+	}
+	// anyhow aligns the continuation of a numbered cause under its text, so the
+	// path line of the inner serde error carries three extra spaces.
+	return &ConfigValueError{message: "0: " + location + "\n1: " + base.message + "\n   in `" + field + "`"}
+}
+
+// tomlFieldValuePosition reports where a top-level `field = value` puts its
+// value, as a 1-based line and column.
+func tomlFieldValuePosition(text string, field string) (int, int, bool) {
+	offset := 0
+	inTable := false
+	for _, raw := range strings.SplitAfter(text, "\n") {
+		trimmed := strings.TrimLeft(raw, " \t")
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			offset += len(raw)
+			continue
+		}
+		if strings.HasPrefix(trimmed, "[[") {
+			// An array-of-tables header puts the value at the `[` of its line,
+			// which is how serde reports `[[projects]]`.
+			if end := strings.Index(trimmed, "]]"); end > 0 && strings.TrimSpace(trimmed[2:end]) == field {
+				return lineColumnAt(text, offset+len(raw)-len(trimmed))
+			}
+			inTable = true
+			offset += len(raw)
+			continue
+		}
+		if strings.HasPrefix(trimmed, "[") {
+			inTable = true
+			offset += len(raw)
+			continue
+		}
+		if inTable || !strings.HasPrefix(trimmed, field) {
+			offset += len(raw)
+			continue
+		}
+		rest := trimmed[len(field):]
+		rest = strings.TrimLeft(rest, " \t")
+		if !strings.HasPrefix(rest, "=") {
+			offset += len(raw)
+			continue
+		}
+		rest = rest[1:]
+		valueStart := len(raw) - len(rest)
+		for valueStart < len(raw) && (raw[valueStart] == ' ' || raw[valueStart] == '\t') {
+			valueStart++
+		}
+		return lineColumnAt(text, offset+valueStart)
+	}
+	return 0, 0, false
+}
+
+func lineColumnAt(text string, offset int) (int, int, bool) {
+	if offset < 0 || offset > len(text) {
+		return 0, 0, false
+	}
+	line := 1 + strings.Count(text[:offset], "\n")
+	lineStart := strings.LastIndexByte(text[:offset], '\n') + 1
+	return line, offset - lineStart + 1, true
+}
