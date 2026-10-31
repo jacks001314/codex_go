@@ -278,13 +278,29 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	if req.Exec.Shared.Worktree {
 		// Rust #54175: `--worktree` no longer requires the retired `worktrees`
 		// feature flag; only the local workspace and trust checks remain.
+		sourceCWD := requestCWD(req)
+		// Rust #43069 resolves a forked session before the checkout exists, so
+		// `codex exec fork --worktree` branches from the source conversation's
+		// latest turn cwd. An explicit --cd keeps its value.
+		forkCWD, err := r.execForkSourceCWD(req)
+		if err != nil {
+			return nil, err
+		}
+		if forkCWD != "" && strings.TrimSpace(req.Exec.Shared.CWD) == "" && strings.TrimSpace(req.Root.Shared.CWD) == "" {
+			sourceCWD = forkCWD
+		}
+		// Rust #43069 never upgrades source distrust: the source policy is
+		// checked before anything is allocated from it.
+		if err := execWorktreeSourceTrusted(cfg, sourceCWD); err != nil {
+			return nil, err
+		}
 		desktop, _ := cfg.Values["desktop"].(map[string]any)
 		settings, err := worktree.FromDesktopConfig(r.CodexHome, desktop)
 		if err != nil {
 			return nil, err
 		}
 		managedWorktreeManager = worktree.NewWorktreeManager(settings)
-		created, err := managedWorktreeManager.Create(requestCWD(req), "")
+		created, err := managedWorktreeManager.Create(sourceCWD, "")
 		if err != nil {
 			return nil, err
 		}

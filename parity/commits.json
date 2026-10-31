@@ -8125,9 +8125,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "partial",
    "evidence": [
-    "Partial symbol coverage 2/6; needs review: ManagedTuiWorktree, check_source_policy, fork_source, report_startup_failure"
+    "exec half (#43069): `codex exec fork --worktree` resolves the fork target through the session lookup before allocating anything, reads the source thread's rollout for the newest `turn_context.cwd` (legacy sibling key accepted, malformed lines skipped), and falls back to the thread record's cwd. An explicit --cd still wins. The resolved source cwd is what WorktreeManager.Create branches from, so the checkout preserves the source repository-relative directory.",
+    "Source policy: an explicitly untrusted source (saved projects trust_level) is refused before any checkout is created with Rust's `--worktree requires a source that is not explicitly untrusted`, for plain --worktree and for forks (ProjectTrustLevelForTarget on the resolved source cwd).",
+    "Tests: TestLatestRolloutTurnContextCWDLikeRust, TestLatestThreadCWDFallsBackToThreadCWDLikeRust, TestExecWorktreeRejectsExplicitlyUntrustedSourceLikeRust, TestExecForkWorktreeUsesForkSourceCWDLikeRust, TestExecForkWorktreeKeepsExplicitCWDLikeRust. Verified with go test ./exec -count=1 (package green).",
+    "Residual: the interactive startup half (tui/src/worktree_startup.rs ManagedTuiWorktree::prepare, destination-auth check_source_policy re-check that keeps an unused checkout, StartupRecovery message) is still unimplemented; `codex --worktree` and interactive `codex fork --worktree` allocate no checkout at launch. That half belongs to the TUI/startup stream."
    ]
   },
   {
