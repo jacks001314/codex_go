@@ -68,32 +68,43 @@ func TestRustSubcommandSurfaceParity(t *testing.T) {
 	}
 }
 
-func TestParseAgentsAcceptsSessionConfigurationLikeRust(t *testing.T) {
+func TestParseAgentsDeclaredFlagsLikeRust(t *testing.T) {
 	agents := &AgentsOptions{}
-	if err := parseAgents([]string{"--model", "gpt-5", "--sandbox", "read-only", "--search", "--cd", "."}, agents); err != nil {
-		t.Fatalf("parseAgents accepted session flags returned error: %v", err)
+	if err := parseAgents([]string{"--config", "a=b", "-C", ".", "--no-alt-screen", "--remote", "ws://127.0.0.1:1"}, agents); err != nil {
+		t.Fatalf("parseAgents accepted declared flags returned error: %v", err)
 	}
-	if agents.Shared.Model != "gpt-5" {
-		t.Fatalf("Shared.Model = %q, want gpt-5", agents.Shared.Model)
+	if agents.Cwd != "." {
+		t.Fatalf("Cwd = %q, want .", agents.Cwd)
 	}
-	if agents.Shared.Sandbox != "read-only" {
-		t.Fatalf("Shared.Sandbox = %q, want read-only", agents.Shared.Sandbox)
+	if !agents.NoAltScreen {
+		t.Fatal("NoAltScreen should be set")
 	}
-	if !agents.Shared.Search {
-		t.Fatal("Shared.Search should be set")
-	}
-	if agents.Cwd == "" {
-		t.Fatal("Cwd should be set from --cd")
+	if len(agents.ConfigOverrides) != 1 || agents.ConfigOverrides[0] != "a=b" {
+		t.Fatalf("ConfigOverrides = %#v", agents.ConfigOverrides)
 	}
 
-	for _, args := range [][]string{
-		{"--image", "x.png"},
-		{"--oss"},
-		{"--local-provider", "localhost:11434"},
-		{"--add-dir", "."},
-	} {
-		if err := parseAgents(args, &AgentsOptions{}); err == nil {
-			t.Fatalf("parseAgents(%v) should be rejected", args)
+	// Rust's AgentsCommand declares only the shared config overrides and the
+	// remote/no-alt-screen switches, so every other session setting is clap's
+	// undeclared-argument diagnostic.
+	for _, flag := range []string{"--model", "--sandbox", "--search", "--image", "--oss", "--local-provider", "--add-dir", "--profile"} {
+		args := []string{flag}
+		switch flag {
+		case "--image", "--local-provider", "--add-dir", "--profile":
+			args = append(args, "x")
+		case "--sandbox":
+			args = append(args, "read-only")
+		}
+		err := parseAgents(args, &AgentsOptions{})
+		usageErr, ok := err.(*UsageError)
+		if !ok {
+			t.Fatalf("parseAgents(%v) error = %v, want a *UsageError", args, err)
+		}
+		want := "unexpected argument '" + flag + "' found"
+		if usageErr.Message != want {
+			t.Fatalf("parseAgents(%v) message = %q, want %q", args, usageErr.Message, want)
+		}
+		if usageErr.Usage != "Usage: codex agents [OPTIONS]" {
+			t.Fatalf("parseAgents(%v) usage = %q", args, usageErr.Usage)
 		}
 	}
 }

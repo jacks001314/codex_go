@@ -788,6 +788,9 @@ func Parse(args []string) (*Parsed, error) {
 		},
 	}
 
+	if err := clapRepeatedOptionError("", args, true); err != nil {
+		return nil, err
+	}
 	rest, promptOnly, err := parseRoot(args, &p.Root)
 	if signal, ok := err.(*rootMetaSignal); ok {
 		if signal.kind == rootMetaVersion {
@@ -801,6 +804,9 @@ func Parse(args []string) (*Parsed, error) {
 		return nil, decorateRootPendingValueError(err, args)
 	}
 	if len(rest) == 0 {
+		if err := clapRepeatedValueOptionError("", args); err != nil {
+			return nil, err
+		}
 		return p, p.Validate()
 	}
 	if cmd, ok := knownCommands[rest[0]]; ok && !promptOnly {
@@ -809,8 +815,25 @@ func Parse(args []string) (*Parsed, error) {
 		// Rust parses the subcommand first (so clap's own diagnostics win) and
 		// only then runs the post-parse gates; Parsed.Validate applies the
 		// --strict-config and --worktree rejections in that order.
+		leaf := clapEffectiveCommand(string(p.Command), rest[1:])
+		// Root options are consumed by the root parser before the subcommand
+		// starts, so its occurrences never reach the child parser. Rust's root
+		// declares no global args; each subcommand re-declares the options it
+		// owns (for example root --profile and sandbox --profile are distinct
+		// clap arguments), and passing both must not count as a duplicate.
+		if err := clapRepeatedOptionError(leaf, rest[1:], false); err != nil {
+			return nil, err
+		}
 		if _, err := parseSubcommand(p, rest[1:]); err != nil {
+			if clapPostParseValidationError(err) {
+				if repeatErr := clapRepeatedValueOptionError(leaf, rest[1:]); repeatErr != nil {
+					return nil, repeatErr
+				}
+			}
 			return nil, decorateSubcommandClapUsage(p.Command, err, rest[1:])
+		}
+		if err := clapRepeatedValueOptionError(leaf, rest[1:]); err != nil {
+			return nil, err
 		}
 		if err := p.validateExecAutoReview(); err != nil {
 			return nil, err
@@ -887,6 +910,35 @@ func prependConfigOverrides(parent, child []string) []string {
 	merged = append(merged, parent...)
 	merged = append(merged, child...)
 	return merged
+}
+
+// clapPostParseValidationError reports whether the diagnostic is one clap's
+// validator or a later runtime gate raises after the whole argv parsed
+// (occurrence counts, conflicts, requirements, session lookups). Those lose to a
+// repeated single-value option, while parse-time diagnostics (unknown or
+// invalid values, missing values, unrecognized subcommands) win.
+func clapPostParseValidationError(err error) bool {
+	usageErr, ok := err.(*UsageError)
+	if !ok {
+		return true
+	}
+	if usageErr.Raw {
+		// clap::Error::raw carriers are value-parser errors raised while argv
+		// is matched.
+		return false
+	}
+	for _, prefix := range []string{
+		"unexpected argument ",
+		"invalid value ",
+		"a value is required for ",
+		"unexpected value ",
+		"unrecognized subcommand ",
+	} {
+		if strings.HasPrefix(usageErr.Message, prefix) {
+			return false
+		}
+	}
+	return true
 }
 
 func parseSubcommand(p *Parsed, args []string) (*Parsed, error) {
@@ -1367,7 +1419,7 @@ func parseExec(args []string, exec *ExecOptions) error {
 				return err
 			}
 			exec.ThreadSource = value
-			return parseExec(args[next:], exec)
+			i = next
 		case strings.HasPrefix(arg, "--thread-source="):
 			exec.ThreadSource = strings.TrimPrefix(arg, "--thread-source=")
 		case arg == "--cyber-access-program":
@@ -4459,20 +4511,24 @@ func parseAgents(args []string, agents *AgentsOptions) error {
 			agents.NoDaemon = true
 			continue
 		}
+		optionIndex := i
+		// clap rejects an undeclared flag before it reads any value, so the
+		// declaration check precedes the shared parser.
+		if strings.HasPrefix(arg, "--") && !clapCommandDeclaresLongFlag("agents", arg) {
+			return clapUnexpectedLongFlagError("agents", arg, args[:i])
+		}
+		if clapLooksLikeShortFlag(arg) && !clapCommandDeclaresShortFlag("agents", arg) {
+			return clapUnexpectedShortFlagError("agents", arg)
+		}
 		if matched, err := parseSharedOption(args, &i, &agents.Shared); err != nil {
 			return err
 		} else if matched {
-			// Rust #39870: codex agents may accept model / approval / sandbox /
-			// configuration session settings, but never initial images, local
-			// providers, or additional directories.
-			if len(agents.Shared.Images) > 0 {
-				return fmt.Errorf("`codex agents` does not accept initial images")
-			}
-			if agents.Shared.OSS || strings.TrimSpace(agents.Shared.OSSProvider) != "" {
-				return fmt.Errorf("`codex agents` does not accept a local provider")
-			}
-			if len(agents.Shared.AddDirs) > 0 {
-				return fmt.Errorf("`codex agents` does not accept additional directories")
+			// The agents command only declares the shared config overrides and
+			// the remote/no-alt-screen switches: every other session setting is
+			// clap's undeclared-argument diagnostic, whose usage page cannot echo
+			// the flag it rejected.
+			if !clapCommandDeclaresLongFlag("agents", arg) {
+				return clapUnexpectedLongFlagError("agents", arg, args[:optionIndex])
 			}
 			continue
 		}
@@ -5793,7 +5849,10 @@ func parseKeyValueFlag(value string, flag string) (string, string, error) {
 	key, parsed, ok := strings.Cut(value, "=")
 	key = strings.TrimSpace(key)
 	if !ok || key == "" {
-		return "", "", fmt.Errorf("%s requires KEY=VALUE", flag)
+		// clap's MCP env value parser rejects the entry while it matches argv.
+		return "", "", &UsageError{
+			Message: "invalid value '" + value + "' for '" + flag + " <KEY=VALUE>': environment entries must be in KEY=VALUE form",
+		}
 	}
 	return key, parsed, nil
 }

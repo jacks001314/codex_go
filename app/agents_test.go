@@ -101,15 +101,16 @@ func TestParseAgentsCommandAcceptsDashboardFlagsLikeRust(t *testing.T) {
 		t.Fatalf("Agents options = %#v", parsed.Agents)
 	}
 
-	// Rust #39870: codex agents accepts invocation-specific session config
-	// (model / approval / sandbox / search / cwd) but not prompt, images, or
-	// local provider / add-dir (remote).
-	parsed, err = cli.Parse([]string{"agents", "--model", "gpt-5.6-sol", "--search"})
-	if err != nil {
-		t.Fatalf("Parse(agents --model --search) error = %v", err)
-	}
-	if parsed.Agents.Shared.Model != "gpt-5.6-sol" || !parsed.Agents.Shared.Search {
-		t.Fatalf("Agents shared options = %#v", parsed.Agents.Shared)
+	// Rust 0.166's AgentsCommand declares only the shared overrides and the
+	// remote/no-alt-screen switches: session settings such as model or search are
+	// clap's undeclared-argument diagnostic.
+	for _, args := range [][]string{
+		{"agents", "--model", "gpt-5.6-sol"},
+		{"agents", "--search"},
+	} {
+		if _, err := cli.Parse(args); err == nil {
+			t.Fatalf("Parse(%v) succeeded, want an unexpected-argument error", args)
+		}
 	}
 }
 

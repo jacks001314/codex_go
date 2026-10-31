@@ -1505,8 +1505,69 @@ one-off captures.
     except `review --title=t --commit abc`, where Rust blocks on auth/network
     and the probe times out (Go reports the missing login immediately).
 
+54. **clap's `multiple times` check across the whole command tree** - every
+    command except `review` accepted a repeated flag (or answered it with Go's
+    runtime wording), so `doctor --summary --summary`, `queue --thread t
+    --thread u`, `exec --model a --model b` and 130 more spellings drifted from
+    clap's diagnostics.
+    - `cli/usage_clap.go` adds `clapRepeatedOptionError`, a left-to-right replay
+      of clap's parse-time occurrence check: a SetTrue flag fails on its second
+      occurrence (beating a later undeclared flag, losing to an earlier one),
+      help/version stop the scan, and an undeclared option hands the argv back to
+      the command parser. Value options are skipped here because clap only
+      rejects them in its post-parse validator.
+    - `clapRepeatedValueOptionError` replays that post-parse check. `Parse` runs
+      it once the command parser returned nil, or - when the parser already
+      failed - only if `clapPostParseValidationError` says the failure came from
+      the validator or a later runtime gate. Parse-time diagnostics (unknown
+      arguments, invalid or missing values, unrecognized subcommands and the
+      `clap::Error::raw` value parsers) keep winning, which is why
+      `app-server --listen a --listen b` still reports the URL parser first.
+    - Repeatable actions stay accepted: the shared `--config`/`--enable`/
+      `--disable`/`--add-dir`/`--image` renderings plus the per-command
+      `mcp add --env`, `mcp login --scopes` and `plugin marketplace add --sparse`
+      lists. `clapUsageTokensRepeat` now covers every command, so an unknown
+      argument behind a repeated single-value option keeps clap's plain page
+      (`queue --message a --message b --bogus`), and `clapDedupeUsageTokens`
+      stops a repeatable option from being echoed twice in the required-argument
+      block.
+    - `login --api-key` is declared again (optional value, `[<API_KEY>]`), so
+      `login --api-key a --api-key b` reports `cannot be used multiple times`
+      instead of Go's deprecation notice, and `mcp add --env` rejects a value
+      without `=` with clap's
+      `invalid value 'e' for '--env <KEY=VALUE>': environment entries must be in
+      KEY=VALUE form`.
+    - `codex exec --thread-source` consumes its value (`i = next`) instead of
+      recursing past it, which used to turn `exec --thread-source x y` into
+      `unexpected argument 'y'`.
+    - `codex agents` now declares only what 0.166's help page lists (config,
+      enable/disable, remote, remote-auth-token-env, cd, no-alt-screen,
+      no-daemon): `--model`, `--sandbox`, `--search`, `--image`,
+      `--local-provider`, `--add-dir` and `--profile` report clap's
+      `unexpected argument` instead of the removed runtime rejection.
+    Evidence: `out/round40-bool.json` replays 149 boolean repeats (one per
+    declared flag of all 71 command paths, followed by `--bogus`) at 149/149
+    byte-identical, `out/round40-value-invalid.json` covers 129 single-value
+    repeats with an invalid value at 129/129, and `out/round40-value.json` the
+    same 129 with valid values at 128/129 (only `--startup-client-info`, which
+    still lacks Go's serde schema, is listed under Still open).
+    `TestRepeatedOptionDiagnosticsLikeRust` pins 27 of them,
+    `TestRepeatableOptionsStayAcceptedLikeRust` the repeatable accepted set and
+    `TestExecThreadSourceConsumesItsValueLikeRust` the arity fix.
+
 ## Verification
 
+- clap's occurrence diagnostics match Rust 0.166 across the command tree:
+  `out/round40-bool.json` (149/149), `out/round40-value-invalid.json`
+  (129/129) and `out/round40-value.json` (128/129), with the one miss recorded
+  under Still open. The 1,068-case inline sweep stays at 35 diffs with 0 new and
+  0 fixed (`out/round40-inline.txt`); the 497 bad-value cases
+  (`out/round40-r34-flag-surface.txt`), 78 round-34 fixes
+  (`out/round40-r34-fixed.log`), 16 ordering cases
+  (`out/round40-r35-order.log`) and 31 round 29-34 probes
+  (`out/round40-regress.txt`, `out/round40-regress2.txt`) stay at 0 diffs.
+  `go test -count=1 -vet=off ./cli ./sandbox ./applypatch ./prompt ./review
+  ./cmd/... ./tcptunnel ./config ./rollout ./app` passes.
 - `review`/`exec review` scope diagnostics match Rust 0.166: the 1,068-case
   inline sweep ends at 1,033 identical with 0 new diffs and two fixes
   (`codex review --title=`, `codex exec review --title=`,
@@ -1889,16 +1950,22 @@ one-off captures.
 - `queue --thread "" --message hi` parses in both CLIs, but Rust fails later with
   `No active session found matching ''` while Go reports `Error: SESSION is
   required`.
-- clap's multiple-times check and value parsers are still review-only. Rust
-  rejects `doctor --summary --summary --bogus` at parse time
-  (`the argument '--summary' cannot be used multiple times`) while Go reports
-  the unexpected argument, `app-server --listen a --listen b --bogus` hits
-  `--listen`'s value parser first
-  (`invalid value 'a' for '--listen <URL>': unsupported --listen URL`), and
-  `queue --message a --message b --bogus` keeps the `[OPTIONS]` placeholder
-  (`Usage: codex queue [OPTIONS] --thread <THREAD> --message <TEXT>`) where Go
-  echoes the repeated option. Fixing these needs a per-command option-arity
-  table rather than the review-only one.
+- `--startup-client-info` still skips Rust's serde schema: 0.166 rejects `{}`
+  with ``invalid value '{}' ... missing field `name` at line 1 column 2`` and
+  `{"name":"x"}` with ``missing field `version```, while Go accepts any valid
+  JSON object.
+- clap resolves a pending space-form value before it continues past a *known*
+  option: `exec --color bogus --json --bogus` and
+  `app-server --listen a --strict-config --bogus` report the invalid value,
+  while Go still lets the later unknown flag win (`deferClapValueError` only
+  knows the argv, not the command's declaration table).
+- `codex agents --no-daemon` prints 0.166's raw
+  `ERROR: --no-daemon cannot be used with codex agents. ...` line; Go opens the
+  command center against an embedded app server (nothing rejects the flag in
+  `app/agents.go`).
+- `codex plugin marketplace add` still prefixes its runtime failure with
+  `invalid plugin request: `, where 0.166 prints the bare
+  `invalid marketplace source format; ...` message.
 
 - `codex resume`/`codex fork` without a TTY: Rust refuses to start the TUI
   (`ERROR: TERM is set to "dumb". Refusing to start the interactive TUI ...`)

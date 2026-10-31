@@ -72,6 +72,7 @@ var subcommandValuePlaceholders = map[string]string{
 	"--limit":                       "<N>",
 	"--linux-sandbox-pid-namespace": "<MODE>",
 	"--listen":                      "<URL>",
+	"--oauth-client-registration":   "<AUTO|CIMD|DCR>",
 	"--marketplace":                 "<MARKETPLACE>",
 	"--max-mib-per-second":          "<MIB>",
 	"--message":                     "<TEXT>",
@@ -120,6 +121,7 @@ var subcommandValuePlaceholders = map[string]string{
 	"--cyber-access-program":        "<PROGRAM>",
 	"--output-schema":               "<FILE>",
 	"--output-last-message":         "<FILE>",
+	"--api-key":                     "[<API_KEY>]",
 	"--color":                       "<COLOR>",
 }
 
@@ -247,6 +249,138 @@ func flagNameOnly(arg string) string {
 // clap diagnoses against the command's static usage page.
 func clapLooksLikeShortFlag(arg string) bool {
 	return len(arg) > 1 && arg[0] == '-' && arg[1] != '-'
+}
+
+// clapRepeatedOptionError replays clap's parse-time occurrence check: a flag
+// declared with ArgAction::SetTrue fails on its second occurrence while clap
+// parses, so that diagnostic beats a later undeclared flag but loses to an
+// earlier one. Value options are only checked by the post-parse validator and
+// go through clapRepeatedValueOptionError instead.
+func clapRepeatedOptionError(command string, argv []string, stopAtPositional bool) error {
+	seen := make(map[string]bool, len(argv))
+	for i := 0; i < len(argv); i++ {
+		arg := argv[i]
+		if arg == "--" {
+			break
+		}
+		if !clapLooksLikeOption(arg) {
+			if stopAtPositional {
+				// The root parser only owns the tokens before its prompt or the
+				// subcommand name; everything after belongs to the child command.
+				return nil
+			}
+			continue
+		}
+		if clapIsHelpOrVersionToken(arg) {
+			// clap prints the help/version page as soon as it reaches the flag.
+			return nil
+		}
+		if !clapCommandDeclaresOption(command, arg) {
+			// The command parser reports this token with its own diagnostic;
+			// every occurrence check clap runs after it is unreachable.
+			return nil
+		}
+		token, consumesValue := clapUsageOptionToken(command, arg)
+		if consumesValue {
+			if i+1 >= len(argv) || clapLooksLikeOption(argv[i+1]) {
+				// Missing or hyphen-prefixed values are parse-time errors that
+				// beat the post-parse occurrence check.
+				return nil
+			}
+			i++
+			continue
+		}
+		if clapRepeatableUsageToken(command, token) {
+			continue
+		}
+		if seen[token] {
+			return clapRepeatedOptionUsageError(command, token)
+		}
+		seen[token] = true
+	}
+	return nil
+}
+
+// clapRepeatedValueOptionError replays clap's post-parse occurrence check for
+// single-value options. The caller runs it after the command parser finished
+// (or failed a validation check), so a parse-time diagnostic such as an invalid
+// value still wins, exactly as in clap.
+func clapRepeatedValueOptionError(command string, argv []string) error {
+	seen := make(map[string]bool, len(argv))
+	for i := 0; i < len(argv); i++ {
+		arg := argv[i]
+		if arg == "--" {
+			break
+		}
+		if !clapLooksLikeOption(arg) {
+			continue
+		}
+		if clapIsHelpOrVersionToken(arg) || !clapCommandDeclaresOption(command, arg) {
+			return nil
+		}
+		token, consumesValue := clapUsageOptionToken(command, arg)
+		if !consumesValue {
+			continue
+		}
+		if i+1 >= len(argv) || clapLooksLikeOption(argv[i+1]) {
+			return nil
+		}
+		i++
+		if clapRepeatableUsageToken(command, token) {
+			continue
+		}
+		if seen[token] {
+			return clapRepeatedOptionUsageError(command, token)
+		}
+		seen[token] = true
+	}
+	return nil
+}
+
+func clapRepeatedOptionUsageError(command, token string) error {
+	return &UsageError{
+		Message: "the argument '" + token + "' cannot be used multiple times",
+		Usage:   clapCommandUsageText(command),
+	}
+}
+
+// clapRepeatableUsageToken reports the rendered tokens clap declares with a
+// repeatable action: the shared overrides, the variadic value options and the
+// per-command lists Apache-style appends (`--env`, `--scopes`, `--sparse`).
+func clapRepeatableUsageToken(command, token string) bool {
+	for _, prefix := range []string{"--config ", "--enable ", "--disable ", "--add-dir ", "--image "} {
+		if strings.HasPrefix(token, prefix) {
+			return true
+		}
+	}
+	return clapRepeatableCommandTokens[command][token]
+}
+
+// clapRepeatableCommandTokens lists the repeatable options whose arity depends
+// on the command that declares them.
+var clapRepeatableCommandTokens = map[string]map[string]bool{
+	"mcp add":                {"--env <KEY=VALUE>": true},
+	"mcp login":              {"--scopes <SCOPE,SCOPE>": true},
+	"plugin marketplace add": {"--sparse <PATH>": true},
+}
+
+// clapIsHelpOrVersionToken reports the flags clap resolves into a help or
+// version page instead of a parsed argument.
+func clapIsHelpOrVersionToken(arg string) bool {
+	switch arg {
+	case "--help", "-h", "--version", "-V":
+		return true
+	}
+	return false
+}
+
+// clapCommandDeclaresOption reports whether the command declares the option
+// spelling, long or short.
+func clapCommandDeclaresOption(command, arg string) bool {
+	if clapLooksLikeShortFlag(arg) {
+		return clapCommandDeclaresShortFlag(command, arg)
+	}
+	return clapCommandDeclaresLongFlag(command, arg)
 }
 
 // clapCommandDeclaresLongFlag reports whether the command declares the long flag
@@ -692,12 +826,13 @@ func decorateSubcommandClapUsage(command Command, err error, args []string) erro
 	if usageErr.Usage == subcommandUsageTexts["mcp add"].usage {
 		return err
 	}
-	used := clapUsageOptionTokens(string(command), args, stopAt)
-	if clapUsageTokensRepeat(clapEffectiveCommand(string(command), args), used) {
+	tokens := clapUsageOptionTokens(string(command), args, stopAt)
+	if clapUsageTokensRepeat(clapEffectiveCommand(string(command), args), tokens) {
 		// clap cannot echo a single-value argument the caller repeated, so the
 		// diagnostic keeps the plain usage block instead of the smart one.
 		return err
 	}
+	used := clapDedupeUsageTokens(tokens)
 	if usageErr.Suggested != "" {
 		used = append(used, usageErr.Suggested)
 	}
@@ -1011,12 +1146,9 @@ func clapUsageOptionUsed(command string, consumed []string, token string) bool {
 // arguments clap only accepts once, in which case the diagnostic cannot echo
 // the options into its usage block.
 func clapUsageTokensRepeat(command string, used []string) bool {
-	if command != "review" && command != "exec review" {
-		return false
-	}
 	seen := make(map[string]bool, len(used))
 	for _, token := range used {
-		if reviewUsageTokenRepeatable(token) {
+		if clapRepeatableUsageToken(command, token) {
 			continue
 		}
 		if seen[token] {
@@ -1025,6 +1157,22 @@ func clapUsageTokensRepeat(command string, used []string) bool {
 		seen[token] = true
 	}
 	return false
+}
+
+// clapDedupeUsageTokens keeps the first occurrence of every rendered option:
+// clap echoes each argument id once in its usage block, even for the actions it
+// accepts more than once.
+func clapDedupeUsageTokens(tokens []string) []string {
+	seen := make(map[string]bool, len(tokens))
+	kept := tokens[:0]
+	for _, token := range tokens {
+		if seen[token] {
+			continue
+		}
+		seen[token] = true
+		kept = append(kept, token)
+	}
+	return kept
 }
 
 // clapUsageOptionTokens renders the options clap accepted, stopping in front of
@@ -1354,7 +1502,7 @@ var clapCommandLongFlags = map[string][]string{
 	"review":    {"strict-config", "uncommitted", "base", "commit", "title", "help"},
 	"agents": {
 		"config", "enable", "remote", "disable", "remote-auth-token-env", "cd",
-		"no-alt-screen", "help",
+		"no-alt-screen", "no-daemon", "help",
 	},
 	"app": {
 		"config", "download-url", "enable", "disable", "help",
@@ -1474,8 +1622,8 @@ var clapCommandLongFlags = map[string][]string{
 		"config", "enable", "disable", "help",
 	},
 	"login": {
-		"config", "with-api-key", "enable", "with-access-token", "disable", "device-auth",
-		"help",
+		"config", "with-api-key", "api-key", "enable", "with-access-token", "disable",
+		"device-auth", "help",
 	},
 	"login status": {
 		"config", "enable", "disable", "help",
@@ -1856,8 +2004,8 @@ func clapCommandUsageAfter(command string, consumed []string) string {
 	return clapSmartUsage(command, consumed)
 }
 
-// clapReviewUsageRepeats reports whether argv repeated one of the review
-// arguments clap only accepts once.
+// clapReviewUsageRepeats reports whether argv repeated an argument clap only
+// accepts once for this command.
 func clapReviewUsageRepeats(command string, consumed []string) bool {
 	return clapUsageTokensRepeat(command, clapUsageOptionTokens(command, consumed, ""))
 }
