@@ -8155,6 +8155,7 @@ func (r *RuntimeRouter) handleInitialize(request *Request) (*InitializeResponse,
 	if codexHome == "" {
 		codexHome = r.services.DefaultCWD
 	}
+	r.registerDesktopUninstallOwnership(params.ClientInfo)
 	userAgent := InitializeUserAgent(params.ClientInfo)
 	response := NewInitializeResponse(codexHome, userAgent)
 	warnings := r.configWarningsForInitialize()

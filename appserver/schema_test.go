@@ -171,8 +171,11 @@ func TestPrecomputedExportArtifactsMatchTargetRustCommit(t *testing.T) {
 		// copied byte-for-byte from the pinned tree's app-server-protocol schema
 		// precomputed directory (#58380); the hashes below are computed from those
 		// exact vendored bytes.
-		{"stable", stablePrecomputedExports, "13c9fd8bb0fe664cd6e31294020ceee1dd17fae4d1a1f18d22de0e60c94a82eb"},
-		{"experimental", experimentalPrecomputedExports, "bd7961920d994b6addfe6e7d4ee6d99c84db10d09bc629a3d6a28073998a5886"},
+		// Re-anchored to upstream 67f0994b (round 1195): both vendored artifacts are
+		// byte-identical to app-server-protocol/schema/precomputed/ at the current
+		// pin, so the pins below are recomputed from those exact bytes.
+		{"stable", stablePrecomputedExports, "5a93be76c2f389899b3a201bb470d69e48ac01ddc5233a431613bbff5a634a7f"},
+		{"experimental", experimentalPrecomputedExports, "72216e6360b4aadb896c46fe3608f43c2f1f1e46ff894da0f82539703faa5667"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

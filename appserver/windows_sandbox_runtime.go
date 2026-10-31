@@ -376,6 +376,36 @@ var windowsSandboxRegisteredCoreNeedsRefresh = windowssandbox.RegisteredCoreNeed
 // the installed service (Rust refresh_registered_core_via_service).
 var refreshWindowsSandboxRegisteredCore = refreshRegisteredCoreViaService
 
+// registerDesktopWindowsUninstallOwnership records desktop uninstall ownership
+// without creating or enabling a sandbox (Rust register_desktop_installation).
+var registerDesktopWindowsUninstallOwnership = func(codexHome string) error {
+	client := provisionservice.NewClient()
+	return client.RegisterDesktopInstallation(codexHome)
+}
+
+// registerDesktopUninstallOwnership keeps uninstall ownership independent of
+// sign-in and sandbox setup for the local Codex Desktop stdio host. Rust awaits
+// the bounded attempt before answering initialize because background
+// registration can race uninstall.
+func (r *RuntimeRouter) registerDesktopUninstallOwnership(info ClientInfo) {
+	if runtime.GOOS != "windows" || r == nil {
+		return
+	}
+	if strings.ToLower(strings.TrimSpace(r.requestTransport)) != "stdio" || info.Name != "Codex Desktop" {
+		return
+	}
+	codexHome := ""
+	if r.services.Config != nil {
+		codexHome = r.services.Config.CodexHome()
+	}
+	if codexHome == "" {
+		return
+	}
+	if err := registerDesktopWindowsUninstallOwnership(codexHome); err != nil {
+		slog.Warn("could not register desktop uninstall ownership", "error", err)
+	}
+}
+
 func refreshRegisteredCoreViaService(codexHome string, settings provisionservice.Settings, listeners provisionservice.Listeners) error {
 	client := provisionservice.NewClient()
 	client.RegisteredCore = windowssandbox.RegisteredCoreRequested
