@@ -144,6 +144,105 @@ func TestApplyPatchExecutorUsesGrantedPermissionsLikeRust(t *testing.T) {
 	assertApplyPatchFile(t, outside, "granted\n")
 }
 
+func TestApplyPatchExecutorApprovesOutsideWorkspaceWithParentGrantLikeRust(t *testing.T) {
+	cwd := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "approved.txt")
+	policy := sandbox.NewWorkspaceWritePolicy()
+	policy.ExcludeTmpdirEnvVar = true
+	policy.ExcludeSlashTmp = true
+	approvals := 0
+	executor := NewApplyPatchExecutor(&ApplyPatchExecutorOptions{
+		CWD:           cwd,
+		SandboxPolicy: policy,
+		Approval: func(_ context.Context, request *ApplyPatchApprovalRequest) (ApplyPatchApprovalDecision, error) {
+			approvals++
+			if request == nil || request.CWD != cwd {
+				t.Fatalf("approval request = %#v, want cwd %q", request, cwd)
+			}
+			return ApplyPatchApprovalDecision{Approved: true}, nil
+		},
+	})
+	patch := "*** Begin Patch\n*** Add File: " + filepath.ToSlash(outside) + "\n+approved\n*** End Patch"
+	output, err := executor.Execute(context.Background(), &Invocation{
+		CallID:   "outside-approved",
+		ToolName: PlainName(DefaultApplyPatchToolName),
+		Payload:  Payload{Kind: PayloadCustom, Input: patch},
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if output == nil || !output.Success {
+		t.Fatalf("approved outside patch = %#v, want success", output)
+	}
+	if approvals != 1 {
+		t.Fatalf("approvals = %d, want one", approvals)
+	}
+	assertApplyPatchFile(t, outside, "approved\n")
+}
+
+func TestApplyPatchExecutorApprovesReadOnlyWorkspaceWriteLikeRust(t *testing.T) {
+	cwd := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "read-only-approved.txt")
+	profile := sandbox.ReadOnlyPermissionProfile()
+	approvals := 0
+	executor := NewApplyPatchExecutor(&ApplyPatchExecutorOptions{
+		CWD:               cwd,
+		PermissionProfile: &profile,
+		Approval: func(context.Context, *ApplyPatchApprovalRequest) (ApplyPatchApprovalDecision, error) {
+			approvals++
+			return ApplyPatchApprovalDecision{Approved: true}, nil
+		},
+	})
+	patch := "*** Begin Patch\n*** Add File: " + filepath.ToSlash(outside) + "\n+approved\n*** End Patch"
+	output, err := executor.Execute(context.Background(), &Invocation{
+		CallID:   "read-only-approved",
+		ToolName: PlainName(DefaultApplyPatchToolName),
+		Payload:  Payload{Kind: PayloadCustom, Input: patch},
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if output == nil || !output.Success {
+		t.Fatalf("approved read-only patch = %#v, want success", output)
+	}
+	if approvals != 1 {
+		t.Fatalf("approvals = %d, want one", approvals)
+	}
+	assertApplyPatchFile(t, outside, "approved\n")
+}
+
+func TestApplyPatchExecutorAutoApprovesFullAccessLikeRust(t *testing.T) {
+	cwd := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "full-access.txt")
+	profile := sandbox.FullAccessPermissionProfile()
+	sink := &recordingDecisionSink{}
+	executor := NewApplyPatchExecutor(&ApplyPatchExecutorOptions{
+		CWD:               cwd,
+		PermissionProfile: &profile,
+		DecisionSink:      sink,
+		Approval: func(context.Context, *ApplyPatchApprovalRequest) (ApplyPatchApprovalDecision, error) {
+			t.Fatal("a full-access profile should not request approval for a constrained patch")
+			return ApplyPatchApprovalDecision{}, nil
+		},
+	})
+	patch := "*** Begin Patch\n*** Add File: " + filepath.ToSlash(outside) + "\n+full\n*** End Patch"
+	output, err := executor.Execute(context.Background(), &Invocation{
+		CallID:   "full-access-auto-approved",
+		ToolName: PlainName(DefaultApplyPatchToolName),
+		Payload:  Payload{Kind: PayloadCustom, Input: patch},
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if output == nil || !output.Success {
+		t.Fatalf("full-access patch = %#v, want success", output)
+	}
+	if len(sink.autoApproved) != 1 || sink.autoApproved[0].callID != "full-access-auto-approved" {
+		t.Fatalf("auto-approved decisions = %#v", sink.autoApproved)
+	}
+	assertApplyPatchFile(t, outside, "full\n")
+}
+
 func TestApplyPatchExecutorCanonicalProfileWinsOverLegacyPolicyLikeRust(t *testing.T) {
 	cwd := t.TempDir()
 	outside := filepath.Join(t.TempDir(), "outside.txt")

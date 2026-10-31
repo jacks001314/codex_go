@@ -6691,9 +6691,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "Context-aware apply_patch authorization implemented for Windows and POSIX executors addressed from a foreign host convention (safety.FileSystemPolicyContext, applyPatchDeniedPathForConvention); residuals: executor-managed write_permissions_for_paths requests, PatchSandboxRoute auto-approval routing, restricted entry-list special-path narrowing"
+    "Out-of-root patches now request approval before refusal and grant executor-convention parent write roots (applyPatchWritePermissionsForPaths, applyPatchFileSystemPolicyContext, applyPatchWithWritePermissions); executor-managed constrained and Disabled/External profiles auto-approve (applyPatchRunsWithoutOuterSandbox, DecisionSink.AutoApproved). Tests: TestApplyPatchExecutorApprovesOutsideWorkspaceWithParentGrantLikeRust, TestApplyPatchApprovesOutsideExecutorWithParentGrantLikeRust, TestApplyPatchExecutorApprovesReadOnlyWorkspaceWriteLikeRust, TestApplyPatchExecutorAutoApprovesFullAccessLikeRust, TestApplyPatchAutoApprovesConstrainedExecutorManagedLikeRust. Residual: local workspace-write still prompts because Go has no in-process apply_patch sandbox; full per-entry constraint and Reject/AskUser narrowing are not modeled."
    ]
   },
   {

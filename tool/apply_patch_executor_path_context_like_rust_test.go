@@ -169,3 +169,105 @@ func TestApplyPatchAuthorizesPosixExecutorFromWindowsHostLikeRust(t *testing.T) 
 		t.Fatalf("environment writes = %v, want only the inside patch to write", remote.writes)
 	}
 }
+
+// TestApplyPatchApprovesOutsideExecutorWithParentGrantLikeRust mirrors Rust
+// #42391's write_permissions_for_paths: an approved out-of-root target asks for
+// the target's parent under the executor convention, and the patch then runs
+// instead of being refused before the approval decision.
+func TestApplyPatchApprovesOutsideExecutorWithParentGrantLikeRust(t *testing.T) {
+	remote := newFakeEnvironmentFileSystem("file:///C:/workspace")
+	policy := sandbox.NewWorkspaceWritePolicy()
+	policy.ExcludeTmpdirEnvVar = true
+	policy.ExcludeSlashTmp = true
+	approvals := 0
+	executor := NewApplyPatchExecutor(&ApplyPatchExecutorOptions{
+		CWD:                  t.TempDir(),
+		IncludeEnvironmentID: true,
+		SandboxPolicy:        policy,
+		EnvironmentCheck: &UnifiedExecEnvironmentCheck{
+			SelectedEnvironmentIDs: []string{"remote-x"},
+			ReadyEnvironmentCount:  1,
+			StableEnvironmentTools: true,
+		},
+		EnvironmentFileSystems: fakeEnvironmentFileSystemProvider{fileSystem: remote},
+		Approval: func(_ context.Context, request *ApplyPatchApprovalRequest) (ApplyPatchApprovalDecision, error) {
+			approvals++
+			if request == nil || request.CWD != "file:///C:/workspace" {
+				t.Fatalf("approval request = %#v, want the executor cwd", request)
+			}
+			return ApplyPatchApprovalDecision{Approved: true}, nil
+		},
+	})
+	patch := "*** Begin Patch\n" +
+		"*** Environment ID: remote-x\n" +
+		"*** Add File: C:\\outside\\notes.txt\n" +
+		"+approved\n" +
+		"*** End Patch\n"
+	output, err := executor.Execute(context.Background(), &Invocation{
+		CallID:   "executor-context-approved-outside",
+		ToolName: PlainName(DefaultApplyPatchToolName),
+		Payload:  Payload{Kind: PayloadCustom, Input: patch},
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if output == nil || !output.Success {
+		t.Fatalf("approved outside patch = %#v, want success", output)
+	}
+	if approvals != 1 {
+		t.Fatalf("approvals = %d, want one", approvals)
+	}
+	if len(remote.writes) != 1 {
+		t.Fatalf("environment writes = %v, want the approved write", remote.writes)
+	}
+}
+
+// TestApplyPatchAutoApprovesConstrainedExecutorManagedLikeRust covers Rust
+// #42391's PatchSandboxRoute::ExecutorManaged branch: an executor-managed
+// sandbox is always available, so a patch constrained to writable paths skips
+// the user approval and reports the config-approved decision instead.
+func TestApplyPatchAutoApprovesConstrainedExecutorManagedLikeRust(t *testing.T) {
+	remote := newFakeEnvironmentFileSystem("file:///C:/workspace")
+	policy := sandbox.NewWorkspaceWritePolicy()
+	policy.ExcludeTmpdirEnvVar = true
+	policy.ExcludeSlashTmp = true
+	sink := &recordingDecisionSink{}
+	executor := NewApplyPatchExecutor(&ApplyPatchExecutorOptions{
+		CWD:                  t.TempDir(),
+		IncludeEnvironmentID: true,
+		SandboxPolicy:        policy,
+		DecisionSink:         sink,
+		EnvironmentCheck: &UnifiedExecEnvironmentCheck{
+			SelectedEnvironmentIDs: []string{"remote-x"},
+			ReadyEnvironmentCount:  1,
+			StableEnvironmentTools: true,
+		},
+		EnvironmentFileSystems: fakeEnvironmentFileSystemProvider{fileSystem: remote},
+		Approval: func(context.Context, *ApplyPatchApprovalRequest) (ApplyPatchApprovalDecision, error) {
+			t.Fatal("constrained executor-managed patch should not request approval")
+			return ApplyPatchApprovalDecision{}, nil
+		},
+	})
+	patch := "*** Begin Patch\n" +
+		"*** Environment ID: remote-x\n" +
+		"*** Add File: C:\\workspace\\auto.txt\n" +
+		"+auto\n" +
+		"*** End Patch\n"
+	output, err := executor.Execute(context.Background(), &Invocation{
+		CallID:   "executor-managed-auto-approved",
+		ToolName: PlainName(DefaultApplyPatchToolName),
+		Payload:  Payload{Kind: PayloadCustom, Input: patch},
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if output == nil || !output.Success {
+		t.Fatalf("constrained executor-managed patch = %#v, want success", output)
+	}
+	if len(sink.autoApproved) != 1 || sink.autoApproved[0].callID != "executor-managed-auto-approved" {
+		t.Fatalf("auto-approved decisions = %#v", sink.autoApproved)
+	}
+	if len(remote.writes) != 1 {
+		t.Fatalf("environment writes = %v, want one write", remote.writes)
+	}
+}

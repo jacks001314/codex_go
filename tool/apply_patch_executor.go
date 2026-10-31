@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"codex_go/applypatch"
@@ -191,18 +193,53 @@ func (e *ApplyPatchExecutor) Execute(ctx context.Context, invocation *Invocation
 	// symlink traversal so a verified path cannot be swapped for a link to a
 	// different file.
 	applyOptions.NoFollowSymlinks = applyPatchSandboxBypassed(permissionProfile, sandboxPolicy)
-	if deniedPath := applyPatchDeniedPath(action, cwd, permissionProfile, sandboxPolicy); deniedPath != "" {
+	if err := action.FillDeleteContent(applyOptions); err != nil {
+		return nil, RespondToModel("apply_patch verification failed: " + applypatch.FormatError(err))
+	}
+	if err := action.Verify(applyOptions); err != nil {
+		return nil, RespondToModel("apply_patch verification failed: " + applypatch.FormatError(err))
+	}
+	changes := applyPatchFileChanges(action, cwd)
+	deniedOutput := func(deniedPath string) *Output {
 		body := fmt.Sprintf("apply_patch verification failed: path %s is outside of the project workspace roots", deniedPath)
 		sandbox.RecordFileSystemPolicyViolation(sandbox.PlatformSandboxType(), deniedPath, body)
 		return &Output{
 			Success:    false,
 			Body:       body,
 			Error:      body,
-			Data:       applyPatchApprovalData("failed", applyPatchFileChanges(action, cwd)),
+			Data:       applyPatchApprovalData("failed", changes),
 			LogPreview: shellLogPreview(body),
-		}, nil
+		}
 	}
-	if _, local := fileSystem.(localEnvironmentFileSystem); local {
+	approvalRequest := &ApplyPatchApprovalRequest{
+		Action:        action,
+		Changes:       changes,
+		CWD:           cwd,
+		EnvironmentID: firstNonEmptyString(resolvedEnvironmentID, execserver.LocalEnvironmentID),
+		Patch:         patch,
+		Invocation:    invocation,
+	}
+	approved := false
+	deniedPath := applyPatchDeniedPath(action, cwd, permissionProfile, sandboxPolicy)
+	if deniedPath != "" {
+		// Rust #42391: an out-of-root patch is a user decision unless approval
+		// settings reject sandbox approval. Go has no per-patch sandbox here, so
+		// the approval must happen before the write grant is derived.
+		if e == nil || e.approval == nil {
+			return deniedOutput(deniedPath), nil
+		}
+		if output, ok := e.requestPatchApproval(ctx, approvalRequest, changes); !ok {
+			return output, nil
+		}
+		approved = true
+		granted := applyPatchWritePermissionsForPaths(action, cwd, permissionProfile, sandboxPolicy)
+		permissionProfile, sandboxPolicy = applyPatchWithWritePermissions(permissionProfile, sandboxPolicy, granted)
+		if deniedPath = applyPatchDeniedPath(action, cwd, permissionProfile, sandboxPolicy); deniedPath != "" {
+			return deniedOutput(deniedPath), nil
+		}
+	}
+	_, localFileSystem := fileSystem.(localEnvironmentFileSystem)
+	if localFileSystem {
 		policy := sandboxPolicy
 		if permissionProfile != nil {
 			policy = permissionProfile.LegacySandboxPolicy()
@@ -218,46 +255,17 @@ func (e *ApplyPatchExecutor) Execute(ctx context.Context, invocation *Invocation
 			}, nil
 		}
 	}
-	if err := action.FillDeleteContent(applyOptions); err != nil {
-		return nil, RespondToModel("apply_patch verification failed: " + applypatch.FormatError(err))
-	}
-	if err := action.Verify(applyOptions); err != nil {
-		return nil, RespondToModel("apply_patch verification failed: " + applypatch.FormatError(err))
-	}
-	changes := applyPatchFileChanges(action, cwd)
-	if e.approval != nil {
-		decision, approvalErr := e.approval(ctx, &ApplyPatchApprovalRequest{
-			Action:        action,
-			Changes:       changes,
-			CWD:           cwd,
-			EnvironmentID: firstNonEmptyString(resolvedEnvironmentID, execserver.LocalEnvironmentID),
-			Patch:         patch,
-			Invocation:    invocation,
-		})
-		if approvalErr != nil {
-			body := "Patch approval request failed: " + approvalErr.Error()
-			return &Output{
-				Success:    false,
-				Body:       body,
-				Error:      body,
-				Data:       applyPatchApprovalData("failed", changes),
-				LogPreview: shellLogPreview(body),
-			}, nil
+	// Rust #42391: an executor-managed sandbox is always available, so a patch
+	// constrained to its writable paths needs no user approval. Disabled and
+	// external profiles intentionally run without an outer sandbox and also
+	// auto-approve; other local patches stay on the conservative prompt path
+	// because Go has no in-process sandbox around apply_patch.
+	skipApproval := !approved && deniedPath == "" && (!localFileSystem || applyPatchRunsWithoutOuterSandbox(permissionProfile))
+	if e.approval != nil && !approved && !skipApproval {
+		if output, ok := e.requestPatchApproval(ctx, approvalRequest, changes); !ok {
+			return output, nil
 		}
-		if !decision.Approved {
-			body := "Patch approval denied before applying changes."
-			if reason := strings.TrimSpace(decision.DenyReason); reason != "" {
-				body = reason
-			}
-			return &Output{
-				Success:    false,
-				Body:       body,
-				Error:      body,
-				Data:       applyPatchApprovalData("declined", changes),
-				LogPreview: shellLogPreview(body),
-			}, nil
-		}
-	} else if e.decisionSink != nil {
+	} else if e.decisionSink != nil && !approved {
 		// Rust's orchestrator reports the config-approved decision for a tool whose
 		// approval requirement is skipped (no approval was needed at all).
 		toolName := e.toolName
@@ -291,6 +299,53 @@ func (e *ApplyPatchExecutor) Execute(ctx context.Context, invocation *Invocation
 		Data:       applyPatchResultData(result, action, cwd),
 		LogPreview: shellLogPreview(body),
 	}, nil
+}
+
+// applyPatchRunsWithoutOuterSandbox reports the profiles Rust auto-approves
+// without consulting platform sandbox availability.
+func applyPatchRunsWithoutOuterSandbox(profile *sandbox.PermissionProfile) bool {
+	if profile == nil {
+		return false
+	}
+	if profile.Disabled {
+		return true
+	}
+	policy := profile.LegacySandboxPolicy()
+	return policy != nil && policy.Kind == "external-sandbox"
+}
+
+// requestPatchApproval runs the configured approval callback and turns a
+// callback error or denial into the failed/declined tool output. ok reports
+// whether the patch may proceed.
+func (e *ApplyPatchExecutor) requestPatchApproval(ctx context.Context, request *ApplyPatchApprovalRequest, changes []map[string]any) (*Output, bool) {
+	if e == nil || e.approval == nil {
+		return nil, true
+	}
+	decision, err := e.approval(ctx, request)
+	if err != nil {
+		body := "Patch approval request failed: " + err.Error()
+		return &Output{
+			Success:    false,
+			Body:       body,
+			Error:      body,
+			Data:       applyPatchApprovalData("failed", changes),
+			LogPreview: shellLogPreview(body),
+		}, false
+	}
+	if decision.Approved {
+		return nil, true
+	}
+	body := "Patch approval denied before applying changes."
+	if reason := strings.TrimSpace(decision.DenyReason); reason != "" {
+		body = reason
+	}
+	return &Output{
+		Success:    false,
+		Body:       body,
+		Error:      body,
+		Data:       applyPatchApprovalData("declined", changes),
+		LogPreview: shellLogPreview(body),
+	}, false
 }
 
 func applyPatchDeniedPath(action *applypatch.Action, cwd string, profile *sandbox.PermissionProfile, legacyPolicy *sandbox.SandboxPolicy) string {
@@ -384,6 +439,111 @@ func applyPatchDeniedPathForConvention(action *applypatch.Action, cwd string, po
 		}
 	}
 	return ""
+}
+
+// applyPatchWritePermissionsForPaths mirrors Rust #42391's
+// write_permissions_for_paths for the targets Go can authorize per patch. A
+// target already inside a writable root needs no grant; otherwise the patch
+// asks for its parent directory, resolved with the executor's path convention,
+// so a foreign-convention parent is never reinterpreted by the host.
+func applyPatchWritePermissionsForPaths(action *applypatch.Action, cwd string, profile *sandbox.PermissionProfile, legacyPolicy *sandbox.SandboxPolicy) *sandbox.AdditionalPermissionProfile {
+	policy := legacyPolicy
+	if profile != nil {
+		policy = profile.LegacySandboxPolicy()
+	}
+	if action == nil || policy == nil || policy.HasFullDiskWriteAccess() {
+		return nil
+	}
+	context, filePolicy, ok := applyPatchFileSystemPolicyContext(cwd, policy)
+	if !ok {
+		return nil
+	}
+	var writeRoots []string
+	seen := map[string]bool{}
+	for _, path := range action.FilePaths() {
+		target, ok := context.ResolvePath(path)
+		if !ok || target == nil || context.CanWritePath(&filePolicy, target) {
+			continue
+		}
+		parent, ok := target.Parent()
+		if !ok || parent == nil {
+			parent = target
+		}
+		if context.CanWritePath(&filePolicy, parent) {
+			continue
+		}
+		native := parent.NativePathString()
+		if native == "" || seen[native] {
+			continue
+		}
+		seen[native] = true
+		writeRoots = append(writeRoots, native)
+	}
+	sort.Strings(writeRoots)
+	if len(writeRoots) == 0 {
+		return nil
+	}
+	return &sandbox.AdditionalPermissionProfile{FileSystem: writeRoots}
+}
+
+// applyPatchFileSystemPolicyContext builds the executor-convention policy view
+// used to derive per-patch write grants.
+func applyPatchFileSystemPolicyContext(cwd string, policy *sandbox.SandboxPolicy) (safety.FileSystemPolicyContext, safety.FileSystemPolicy, bool) {
+	if policy == nil || (policy.Kind != sandbox.SandboxWorkspaceWrite && policy.Kind != sandbox.SandboxReadOnly) {
+		return safety.FileSystemPolicyContext{}, safety.FileSystemPolicy{}, false
+	}
+	cwdURI, ok := utils.InferredPathURI(cwd)
+	if !ok || cwdURI == nil {
+		return safety.FileSystemPolicyContext{}, safety.FileSystemPolicy{}, false
+	}
+	context := safety.FileSystemPolicyContext{
+		CWD:                    cwdURI,
+		ProtectedMetadataNames: sandboxpath.DefaultProtectedMetadataNames(),
+	}
+	if policy.Kind == sandbox.SandboxWorkspaceWrite {
+		context.ExtraWritableRoots = []*utils.PathURI{cwdURI}
+		convention, hasConvention := cwdURI.InferConvention()
+		if hasConvention && convention == utils.ConventionPosix && !policy.ExcludeSlashTmp {
+			if tmpURI, err := utils.FromAbsoluteNativePath("/tmp", convention); err == nil {
+				context.ExtraWritableRoots = append(context.ExtraWritableRoots, tmpURI)
+			}
+		}
+		if !policy.ExcludeTmpdirEnvVar && hasConvention && convention == utils.NativePathConvention() {
+			if tmpdirURI, ok := utils.InferredPathURI(os.TempDir()); ok && tmpdirURI != nil {
+				context.ExtraWritableRoots = append(context.ExtraWritableRoots, tmpdirURI)
+			}
+		}
+	}
+	return context, safety.FileSystemPolicy{WritableRoots: policy.WritableRoots}, true
+}
+
+// applyPatchWithWritePermissions adds the approved patch-parent grants to the
+// policy used for this patch. The copy keeps a session's configured policy
+// unchanged after the call.
+func applyPatchWithWritePermissions(profile *sandbox.PermissionProfile, legacyPolicy *sandbox.SandboxPolicy, permissions *sandbox.AdditionalPermissionProfile) (*sandbox.PermissionProfile, *sandbox.SandboxPolicy) {
+	if permissions == nil || len(permissions.FileSystem) == 0 {
+		return profile, legacyPolicy
+	}
+	policy := legacyPolicy
+	if profile != nil {
+		policy = profile.LegacySandboxPolicy()
+	}
+	if policy == nil {
+		return profile, legacyPolicy
+	}
+	merged := *policy
+	merged.WritableRoots = append(append([]string(nil), policy.WritableRoots...), permissions.FileSystem...)
+	if merged.Kind == sandbox.SandboxReadOnly {
+		merged.Kind = sandbox.SandboxWorkspaceWrite
+		merged.ExcludeTmpdirEnvVar = true
+		merged.ExcludeSlashTmp = true
+	}
+	if profile != nil {
+		profileCopy := *profile
+		profileCopy.SandboxPolicy = &merged
+		return &profileCopy, &merged
+	}
+	return profile, &merged
 }
 
 // applyPatchSandboxBypassed reports whether the patch runs without a
