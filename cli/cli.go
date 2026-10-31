@@ -1351,7 +1351,7 @@ func parseExec(args []string, exec *ExecOptions) error {
 		case strings.HasPrefix(arg, "-c") && arg != "-C":
 			exec.ConfigOverrides = append(exec.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
 		case strings.HasPrefix(arg, "-"):
-			return unexpectedArgumentError(arg, execUsageText)
+			return clapUnexpectedLongFlagError("exec", arg, args[:i])
 		default:
 			// Rust declares a single PROMPT positional, so a second positional
 			// is a clap "unexpected argument" diagnostic instead of more prompt
@@ -1469,7 +1469,7 @@ func parseExecResume(args []string, exec *ExecOptions) error {
 		case strings.HasPrefix(arg, "-c") && arg != "-C":
 			exec.ConfigOverrides = append(exec.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
 		case strings.HasPrefix(arg, "-"):
-			return unexpectedArgumentError(arg, execResumeFlagUsageText(exec.Resume.Last, exec.Resume.All, len(positionals)))
+			return clapUnexpectedLongFlagError("exec resume", arg, args[:i])
 		default:
 			positionals = append(positionals, arg)
 		}
@@ -1602,7 +1602,7 @@ func parseExecFork(args []string, exec *ExecOptions) error {
 		case strings.HasPrefix(arg, "-c") && arg != "-C":
 			exec.ConfigOverrides = append(exec.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
 		case strings.HasPrefix(arg, "-"):
-			return unexpectedArgumentError(arg, execForkUsageText)
+			return clapUnexpectedLongFlagError("exec fork", arg, args[:i])
 		default:
 			positionals = append(positionals, arg)
 		}
@@ -1721,7 +1721,7 @@ func parseReview(args []string, review *ReviewOptions, exec *ExecOptions) error 
 				return err
 			}
 			if !handled {
-				return unexpectedArgumentError(arg, execReviewUsageText)
+				return clapUnexpectedLongFlagError("exec review", arg, args[:i])
 			}
 		case arg == "--uncommitted":
 			if review.Base != "" || review.Commit != "" || review.Prompt != "" {
@@ -1775,9 +1775,9 @@ func parseReview(args []string, review *ReviewOptions, exec *ExecOptions) error 
 			return nil
 		case strings.HasPrefix(arg, "-"):
 			if exec != nil {
-				return unexpectedArgumentError(arg, execReviewUsageText)
+				return clapUnexpectedLongFlagError("exec review", arg, args[:i])
 			}
-			return unexpectedSubcommandArgumentError("review", arg)
+			return clapUnexpectedLongFlagError("review", arg, args[:i])
 		default:
 			if review.Uncommitted || review.Base != "" || review.Commit != "" {
 				return errors.New("PROMPT conflicts with --uncommitted, --base, and --commit")
@@ -4237,7 +4237,7 @@ func parseSessionSelection(args []string, session *SessionOptions, includeNonInt
 	}
 	var positionals []string
 	bindPositional := func(value string) error {
-		if len(positionals) == len(sessionPositionalSlots[command]) {
+		if len(positionals) == len(clapCommandPositionalSlots[command]) {
 			return unexpectedPositionalError(value, subcommandUsageTexts[command].usage)
 		}
 		positionals = append(positionals, value)

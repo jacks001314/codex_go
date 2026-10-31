@@ -109,6 +109,11 @@ var subcommandValuePlaceholders = map[string]string{
 	"--proxy-url":                 "<PROXY_URL>",
 	"--proxy-origins-file":        "<PROXY_ORIGINS_FILE>",
 	"--target":                    "<TARGET>",
+	"--thread-source":             "<SOURCE>",
+	"--cyber-access-program":      "<PROGRAM>",
+	"--output-schema":             "<FILE>",
+	"--output-last-message":       "<FILE>",
+	"--color":                     "<COLOR>",
 }
 
 // valueRequiredError mirrors clap's missing-value diagnostic for a known flag
@@ -140,32 +145,41 @@ func flagNameOnly(arg string) string {
 	return arg
 }
 
-// subcommandOnlyLongFlags are root-unknown long flags whose owning subcommand
-// clap names in its suggestion.
-var subcommandOnlyLongFlags = map[string]string{
-	"--json":                "exec",
-	"--skip-git-repo-check": "exec",
-	"--output-schema":       "exec",
-	"--output-last-message": "exec",
-}
-
 // unexpectedRootArgumentError mirrors clap's root diagnostic, including the
-// `'exec --json' exists` tip for flags that only a later subcommand accepts.
+// did-you-mean tip and the `'exec --json' exists` tip for flags that only a
+// later subcommand accepts.
 func unexpectedRootArgumentError(arg string, remaining []string) error {
 	name := flagNameOnly(arg)
-	tip := "  tip: to pass '" + name + "' as a value, use '-- " + name + "'"
-	if owner, ok := subcommandOnlyLongFlags[name]; ok {
-		for _, candidate := range remaining {
-			if candidate == owner {
-				tip = "  tip: '" + owner + " " + name + "' exists"
-				break
-			}
+	if suggestion, ok := clapSuggestLongFlag("", name); ok {
+		return &UsageError{
+			Message: "unexpected argument '" + name + "' found\n\n  tip: a similar argument exists: '--" + suggestion.matched + "'",
+			Usage:   rootUsageText,
 		}
+	}
+	tip := "  tip: to pass '" + name + "' as a value, use '-- " + name + "'"
+	if owner, flag, ok := clapSubcommandLongFlagSuggestion(name, remaining); ok {
+		tip = "  tip: '" + owner + " --" + flag + "' exists"
 	}
 	return &UsageError{
 		Message: "unexpected argument '" + name + "' found\n\n" + tip,
 		Usage:   rootUsageText,
 	}
+}
+
+// clapSubcommandLongFlagSuggestion mirrors clap's second did-you-mean pass: when
+// the root command has no similar flag, clap scores the unknown spelling against
+// the long flags of every top-level subcommand and names the one whose name
+// appears earliest in the remaining arguments.
+func clapSubcommandLongFlagSuggestion(flag string, remaining []string) (string, string, bool) {
+	for _, token := range remaining {
+		if _, ok := clapCommandLongFlags[token]; !ok || token == "" {
+			continue
+		}
+		if suggestion, ok := clapSuggestLongFlag(token, flag); ok {
+			return token, suggestion.matched, true
+		}
+	}
+	return "", "", false
 }
 
 // subcommandUsageText describes a subcommand's clap usage block and whether it
@@ -316,32 +330,6 @@ func execResumeUsageTextFor(last, all bool) string {
 	default:
 		return execResumeUsageText
 	}
-}
-
-// execResumeFlagUsageText renders clap's resume usage for an unexpected flag:
-// supplied positionals are shown with angle brackets, the `[OPTIONS]`
-// placeholder disappears, and --last/--all are echoed.
-func execResumeFlagUsageText(last, all bool, supplied int) string {
-	if !last && !all && supplied == 0 {
-		return execResumeUsageText
-	}
-	var builder strings.Builder
-	builder.WriteString("Usage: codex exec resume ")
-	switch {
-	case last:
-		builder.WriteString("--last ")
-	case all:
-		builder.WriteString("--all ")
-	}
-	switch supplied {
-	case 0:
-		builder.WriteString("[SESSION_ID] [PROMPT]")
-	case 1:
-		builder.WriteString("<SESSION_ID> [PROMPT]")
-	default:
-		builder.WriteString("<SESSION_ID> <PROMPT>")
-	}
-	return builder.String()
 }
 
 func unexpectedArgumentError(arg, usage string) error {
@@ -614,15 +602,211 @@ type sessionPositionalSlot struct {
 	required bool
 }
 
-// sessionPositionalSlots lists the positional slots clap binds for the session
-// subcommands (`codex resume`, `codex fork`, `codex archive`, `codex unarchive`
-// and `codex delete`), in declaration order.
-var sessionPositionalSlots = map[string][]sessionPositionalSlot{
-	"resume":    {{name: "SESSION_ID"}, {name: "PROMPT"}},
-	"fork":      {{name: "SESSION_ID"}, {name: "PROMPT"}},
-	"archive":   {{name: "SESSION", required: true}},
-	"unarchive": {{name: "SESSION", required: true}},
-	"delete":    {{name: "SESSION", required: true}},
+// clapCommandPositionalSlots lists the positional slots clap binds for the
+// session subcommands (`codex resume`, `codex fork`, `codex archive`,
+// `codex unarchive`, `codex delete`) and the exec family, in declaration order:
+// clap renders bound positionals with angle brackets in every smart usage block.
+var clapCommandPositionalSlots = map[string][]sessionPositionalSlot{
+	"resume":      {{name: "SESSION_ID"}, {name: "PROMPT"}},
+	"fork":        {{name: "SESSION_ID"}, {name: "PROMPT"}},
+	"archive":     {{name: "SESSION", required: true}},
+	"unarchive":   {{name: "SESSION", required: true}},
+	"delete":      {{name: "SESSION", required: true}},
+	"review":      {{name: "PROMPT"}},
+	"exec resume": {{name: "SESSION_ID"}, {name: "PROMPT"}},
+	"exec fork":   {{name: "SESSION_ID", required: true}, {name: "PROMPT"}},
+	"exec review": {{name: "PROMPT"}},
+}
+
+// clapCommandLongFlags lists the long options each command declares, in
+// declaration order, taken from `codex <command> --help`. Aliases sit next to
+// the argument they alias and are resolved through clapLongFlagAliases.
+var clapCommandLongFlags = map[string][]string{
+	"": {
+		"config", "enable", "disable", "remote", "remote-auth-token-env", "strict-config",
+		"image", "model", "oss", "local-provider", "profile", "sandbox",
+		"approve-for-me", "not-so-yolo", "dangerously-bypass-approvals-and-sandbox", "yolo",
+		"dangerously-bypass-hook-trust", "cd", "worktree", "add-dir", "ask-for-approval",
+		"search", "no-alt-screen", "no-daemon", "help", "version",
+	},
+	"exec": {
+		"config", "enable", "disable", "strict-config", "image", "model", "oss",
+		"local-provider", "profile", "sandbox", "approve-for-me", "not-so-yolo",
+		"dangerously-bypass-approvals-and-sandbox", "yolo", "dangerously-bypass-hook-trust",
+		"cd", "worktree", "add-dir", "thread-source", "cyber-access-program",
+		"skip-git-repo-check", "ephemeral", "ignore-user-config", "ignore-rules",
+		"output-schema", "color", "json", "experimental-json", "output-last-message",
+		"help", "version",
+	},
+	"exec resume": {
+		"config", "last", "all", "enable", "disable", "image", "strict-config", "model",
+		"dangerously-bypass-approvals-and-sandbox", "yolo", "dangerously-bypass-hook-trust",
+		"worktree", "thread-source", "cyber-access-program", "skip-git-repo-check",
+		"ephemeral", "ignore-user-config", "ignore-rules", "output-schema", "json",
+		"experimental-json", "output-last-message", "help",
+	},
+	"exec fork": {
+		"config", "image", "enable", "disable", "strict-config", "model",
+		"dangerously-bypass-approvals-and-sandbox", "yolo", "dangerously-bypass-hook-trust",
+		"worktree", "thread-source", "cyber-access-program", "skip-git-repo-check",
+		"ephemeral", "ignore-user-config", "ignore-rules", "output-schema", "json",
+		"experimental-json", "output-last-message", "help",
+	},
+	"exec review": {
+		"config", "uncommitted", "base", "enable", "commit", "disable", "strict-config",
+		"title", "model", "dangerously-bypass-approvals-and-sandbox", "yolo",
+		"dangerously-bypass-hook-trust", "worktree", "thread-source",
+		"cyber-access-program", "skip-git-repo-check", "ephemeral", "ignore-user-config",
+		"ignore-rules", "output-schema", "json", "experimental-json",
+		"output-last-message", "help",
+	},
+	"resume": {
+		"config", "last", "all", "enable", "disable", "include-non-interactive", "remote",
+		"remote-auth-token-env", "strict-config", "image", "model", "oss",
+		"local-provider", "profile", "sandbox", "approve-for-me", "not-so-yolo",
+		"dangerously-bypass-approvals-and-sandbox", "yolo", "dangerously-bypass-hook-trust",
+		"cd", "worktree", "add-dir", "ask-for-approval", "search", "no-alt-screen",
+		"no-daemon", "help", "version",
+	},
+	"fork": {
+		"config", "last", "all", "enable", "disable", "remote", "remote-auth-token-env",
+		"strict-config", "image", "model", "oss", "local-provider", "profile", "sandbox",
+		"approve-for-me", "not-so-yolo", "dangerously-bypass-approvals-and-sandbox", "yolo",
+		"dangerously-bypass-hook-trust", "cd", "worktree", "add-dir", "ask-for-approval",
+		"search", "no-alt-screen", "no-daemon", "help", "version",
+	},
+	"archive":   clapSessionMutationLongFlags,
+	"unarchive": clapSessionMutationLongFlags,
+	"delete":    append(append([]string{}, clapSessionMutationLongFlags...), "force"),
+	"review":    {"strict-config", "uncommitted", "base", "commit", "title", "help"},
+}
+
+// clapSessionMutationLongFlags are the shared options `codex archive`,
+// `unarchive` and `delete` flatten; `delete` adds --force.
+var clapSessionMutationLongFlags = []string{
+	"remote", "enable", "remote-auth-token-env", "disable", "image", "model", "oss",
+	"local-provider", "profile", "sandbox", "approve-for-me", "not-so-yolo",
+	"dangerously-bypass-approvals-and-sandbox", "yolo", "dangerously-bypass-hook-trust",
+	"cd", "worktree", "add-dir", "strict-config", "config", "help",
+}
+
+// clapLongFlagAliases maps an alias clap declares to the long name it echoes in
+// a smart usage block; the tip itself keeps the alias spelling.
+var clapLongFlagAliases = map[string]string{
+	"experimental-json": "json",
+	"not-so-yolo":       "approve-for-me",
+	"yolo":              "dangerously-bypass-approvals-and-sandbox",
+}
+
+// clapLongFlagPlaceholderOverrides holds the placeholders that depend on the
+// command: `--image` is num_args = 1.. at the root and on the session commands
+// but takes a single value inside `codex exec resume`/`fork`.
+var clapLongFlagPlaceholderOverrides = map[string]map[string]string{
+	"exec resume": {"image": "<FILE>"},
+	"exec fork":   {"image": "<FILE>"},
+}
+
+// clapLongFlagSuggestion is one did-you-mean hit: matched is the spelling clap
+// names in the tip, primary the long name it echoes in the usage block.
+type clapLongFlagSuggestion struct {
+	matched string
+	primary string
+}
+
+// clapSuggestLongFlag mirrors clap's did_you_mean over a command's long flags:
+// strsim's Jaro score above 0.7, highest wins, and a tie keeps the candidate
+// declared last because clap pops the tail of its ascending list.
+func clapSuggestLongFlag(command, flag string) (clapLongFlagSuggestion, bool) {
+	name := strings.TrimPrefix(flag, "--")
+	best := ""
+	bestScore := 0.0
+	for _, candidate := range clapCommandLongFlags[command] {
+		score := jaroSimilarity(name, candidate)
+		if score <= 0.7 || (best != "" && score < bestScore) {
+			continue
+		}
+		best, bestScore = candidate, score
+	}
+	if best == "" {
+		return clapLongFlagSuggestion{}, false
+	}
+	primary := best
+	if alias, ok := clapLongFlagAliases[best]; ok {
+		primary = alias
+	}
+	return clapLongFlagSuggestion{matched: best, primary: primary}, true
+}
+
+// clapLongFlagUsageToken renders one long flag the way clap's usage block does.
+func clapLongFlagUsageToken(command, name string) string {
+	primary := name
+	if alias, ok := clapLongFlagAliases[name]; ok {
+		primary = alias
+	}
+	placeholder := clapLongFlagPlaceholder(command, primary)
+	if placeholder == "" {
+		return "--" + primary
+	}
+	return "--" + primary + " " + placeholder
+}
+
+func clapLongFlagPlaceholder(command, name string) string {
+	if overrides, ok := clapLongFlagPlaceholderOverrides[command]; ok {
+		if placeholder, ok := overrides[name]; ok {
+			return placeholder
+		}
+	}
+	if spec, ok := valueOptionSpecs["--"+name]; ok {
+		return spec.placeholder
+	}
+	return subcommandValuePlaceholders["--"+name]
+}
+
+// clapUnexpectedLongFlagError renders clap's unknown-long-flag diagnostic: the
+// `--` workaround tip, or the did-you-mean tip plus the suggested flag folded
+// into the smart usage block when clap scores one above its cutoff.
+func clapUnexpectedLongFlagError(command, arg string, consumed []string) error {
+	name := flagNameOnly(arg)
+	message := "unexpected argument '" + name + "' found"
+	suggestion, ok := clapSuggestLongFlag(command, name)
+	if !ok {
+		return &UsageError{
+			Message: message + "\n\n  tip: to pass '" + name + "' as a value, use '-- " + name + "'",
+			Usage:   clapCommandUsageAfter(command, consumed),
+		}
+	}
+	echoed := append(append([]string{}, consumed...), clapLongFlagUsageToken(command, suggestion.primary))
+	return &UsageError{
+		Message: message + "\n\n  tip: a similar argument exists: '--" + suggestion.matched + "'",
+		Usage:   clapCommandUsageAfter(command, echoed),
+	}
+}
+
+// clapCommandUsageAfter returns the usage block for an unknown-argument
+// diagnostic: the static page for the root command and `codex exec` (clap does
+// not echo arguments there), the smart usage everywhere else.
+func clapCommandUsageAfter(command string, consumed []string) string {
+	switch command {
+	case "", "exec":
+		return clapCommandUsageText(command)
+	}
+	return clapSmartUsage(command, consumed)
+}
+
+func clapCommandUsageText(command string) string {
+	switch command {
+	case "":
+		return rootUsageText
+	case "exec":
+		return execUsageText
+	case "exec resume":
+		return execResumeUsageText
+	case "exec fork":
+		return execForkUsageText
+	case "exec review":
+		return execReviewUsageText
+	}
+	return subcommandUsageTexts[command].usage
 }
 
 // sessionUnexpectedArgumentError mirrors clap's diagnostic for an unknown token
@@ -630,25 +814,19 @@ var sessionPositionalSlots = map[string][]sessionPositionalSlot{
 // smart usage block, and the positional slots reflect what the parser bound.
 func sessionUnexpectedArgumentError(command string, consumed []string, arg string) error {
 	name := flagNameOnly(arg)
-	if similar, ok := sessionSimilarArgumentTips[name]; ok {
+	if suggestion, ok := clapSuggestLongFlag(command, name); ok {
 		// clap scores the unknown flag against the declared ones and folds the
 		// suggested argument into the smart usage block as well.
 		return &UsageError{
-			Message: "unexpected argument '" + name + "' found\n\n  tip: a similar argument exists: '" + similar + "'",
-			Usage:   sessionClapUsage(command, append(append([]string{}, consumed...), similar)),
+			Message: "unexpected argument '" + name + "' found\n\n  tip: a similar argument exists: '--" + suggestion.matched + "'",
+			Usage: sessionClapUsage(command, append(append([]string{}, consumed...),
+				clapLongFlagUsageToken(command, suggestion.primary))),
 		}
 	}
 	return &UsageError{
 		Message: "unexpected argument '" + name + "' found\n\n  tip: to pass '" + name + "' as a value, use '-- " + name + "'",
 		Usage:   sessionClapUsage(command, consumed),
 	}
-}
-
-// sessionSimilarArgumentTips mirrors clap's "a similar argument exists" tip for
-// removed spawn-history flags whose spelling is closest to `--last`.
-var sessionSimilarArgumentTips = map[string]string{
-	"--last-n":       "--last",
-	"--last-turn-id": "--last",
 }
 
 // sessionLastPromptConflictError renders clap's conflict diagnostic for
@@ -666,19 +844,24 @@ func sessionLastPromptConflictError(command string) error {
 // slot shows whether the parser already bound it. clap prints the plain table
 // block while nothing has been consumed yet.
 func sessionClapUsage(command string, consumed []string) string {
-	spec, ok := subcommandUsageTexts[command]
-	if !ok {
-		return ""
-	}
-	slots, hasSlots := sessionPositionalSlots[command]
+	return clapSmartUsage(command, consumed)
+}
+
+// clapSmartUsage renders clap's smart usage block: the options clap already
+// accepted in argv order, then the positional slots, with every bound slot (and
+// every required one) in angle brackets. The static page is returned while
+// nothing was consumed.
+func clapSmartUsage(command string, consumed []string) string {
+	base := clapCommandUsageText(command)
+	slots, hasSlots := clapCommandPositionalSlots[command]
 	if !hasSlots {
-		return spec.usage
+		return base
 	}
-	used, bound := clapSessionUsageState(consumed)
+	used, bound := clapUsageState(command, consumed)
 	if len(used) == 0 && bound == 0 {
-		return spec.usage
+		return base
 	}
-	fields := make([]string, 0, len(used)+len(slots)+1)
+	fields := make([]string, 0, len(used)+len(slots)+2)
 	fields = append(fields, "Usage: codex "+command)
 	fields = append(fields, used...)
 	for idx, slot := range slots {
@@ -691,11 +874,12 @@ func sessionClapUsage(command string, consumed []string) string {
 	return strings.Join(fields, " ")
 }
 
-// clapSessionUsageState replays the tokens clap already accepted and returns the
+// clapUsageState replays the tokens clap already accepted and returns the
 // option tokens clap echoes in its smart usage block plus the number of bound
-// positionals. The session subcommands declare `--image` as num_args = 1.., so
-// every following non-flag token is one of its values, not a positional.
-func clapSessionUsageState(consumed []string) ([]string, int) {
+// positionals. The root and session commands declare `--image` as num_args =
+// 1.., so every following non-flag token is one of its values, not a positional;
+// `codex exec resume`/`fork` take a single value instead.
+func clapUsageState(command string, consumed []string) ([]string, int) {
 	used := make([]string, 0, len(consumed))
 	seen := make(map[string]bool, len(consumed))
 	bound := 0
@@ -710,11 +894,14 @@ func clapSessionUsageState(consumed []string) ([]string, int) {
 			continue
 		}
 		token, consumesValue := clapUsageOptionToken(arg)
+		if clapImageIsSingleValue(command) {
+			token = strings.Replace(token, "--image <FILE>...", "--image <FILE>", 1)
+		}
 		if !seen[token] {
 			seen[token] = true
 			used = append(used, token)
 		}
-		if isSessionVariadicImageFlag(arg) {
+		if isSessionVariadicImageFlag(arg) && !clapImageIsSingleValue(command) {
 			for i+1 < len(consumed) && consumed[i+1] != "--" && !clapLooksLikeOption(consumed[i+1]) {
 				i++
 			}
@@ -726,6 +913,12 @@ func clapSessionUsageState(consumed []string) ([]string, int) {
 		i++
 	}
 	return used, bound
+}
+
+// clapImageIsSingleValue reports whether the command declares `--image` with a
+// single value; `codex exec resume` and `codex exec fork` do.
+func clapImageIsSingleValue(command string) bool {
+	return command == "exec resume" || command == "exec fork"
 }
 
 // isSessionVariadicImageFlag reports whether arg is the `--image` spelling of a

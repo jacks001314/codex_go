@@ -1080,6 +1080,43 @@ one-off captures.
     `TestExecReviewAcceptsExecGlobalOptionsLikeRust` and
     `TestMcpListRejectsWorktreeLikeRust`.
 
+46. **Long-flag did-you-mean and clap's smart usage** - clap scores an unknown
+    long flag against the command's declared long options with strsim's Jaro
+    metric (`clap_builder/src/parser/features/suggestions.rs`), keeps every
+    candidate above 0.7, names the highest scoring one in the tip and marks it
+    present so the smart usage block echoes it. Go only modelled a handful of
+    hand-picked spellings, so every misspelled flag printed the plain
+    `--` workaround tip.
+    - `clapCommandLongFlags` records the long options each command declares, in
+      declaration order, for the root command, the `exec` family, the session
+      commands and `codex review`; `clapSuggestLongFlag` ports the Jaro scoring
+      and clap's tie-break (equal scores keep the candidate declared last, which
+      is what `did_you_mean(...).pop()` returns).
+    - Hidden aliases stay in the tables: `--experimental-json`, `--yolo` and
+      `--not-so-yolo` are scored and named in the tip, while the usage block
+      echoes the primary long (`--experimental-jso` suggests
+      `--experimental-json` but prints `--json`).
+    - `clapSmartUsage` renders clap's usage block for every command with
+      positionals: the options accepted before the unknown flag in argv order,
+      then the slots with bound ones in angle brackets.
+      `codex exec resume -m x --bogus` now prints
+      `Usage: codex exec resume --model <MODEL> [SESSION_ID] [PROMPT]` instead of
+      the `[OPTIONS]` page, and `exec fork --image a.png --bogus` keeps clap's
+      single-value `<FILE>` placeholder.
+    - The root command keeps its static page and falls back to clap's second
+      pass: when no root flag is similar, the flags of the subcommand named later
+      in argv are scored, so `codex --skp-git-repo-check exec` reports
+      `tip: 'exec --skip-git-repo-check' exists`.
+    Evidence: live comparisons against 0.166 - `out/round31-flag-suggestions.txt`
+    (20/20), `out/round31-smart-usage.txt` (13/13) and
+    `out/round31-flag-boundaries.txt` (26/26), plus the round 29/30 regressions
+    (14/14, 30/30, 10/10, 15/15). `go test ./cli` passes with
+    `TestLongFlagDidYouMeanLikeRust`,
+    `TestLongFlagSmartUsageEchoesConsumedOptionsLikeRust`,
+    `TestRootUnknownFlagSubcommandFallbackLikeRust` and
+    `TestUnknownLongFlagWithoutSuggestionLikeRust`, and the round 44 session
+    suggestion tests keep passing through the new table lookup.
+
 ## Verification
 
 - Session subcommand parsing matches Rust 0.166: the 14 subcommand-diagnostic
@@ -1362,27 +1399,28 @@ one-off captures.
   `go test ./cli ./sandbox ./applypatch ./prompt ./review ./cmd/...
   ./tcptunnel`; `go test -vet=off ./app` keeps only the two known baselines.
 
+- Long-flag diagnostics match Rust 0.166 for the root command, the `exec`
+  family, the session commands and `codex review`: 20 did-you-mean cases
+  (`out/round31-flag-suggestions.txt`), 13 consumed-option smart usage cases
+  (`out/round31-smart-usage.txt`) and 26 boundary cases
+  (`out/round31-flag-boundaries.txt` - unknown shorts, `=value` spellings,
+  hidden aliases, bound positionals and the root subcommand fallback) are
+  byte-identical. `go test ./cli ./sandbox ./applypatch ./prompt ./review
+  ./cmd/... ./tcptunnel` passes.
 ## Still open
 
-- clap's "similar argument exists" suggestion is still missing on the exec
-  family: `codex exec review --no-worktree` should print
-  `tip: a similar argument exists: '--worktree'` with the smart usage
-  `Usage: codex exec review --worktree [PROMPT]`, and
-  `codex exec review --bypass-hook-trust` should suggest
-  `--dangerously-bypass-hook-trust`; Go still prints the plain `--` tip and the
-  `[OPTIONS]` usage.
 - `codex resume`/`codex fork` without a TTY: Rust refuses to start the TUI
   (`ERROR: TERM is set to "dumb". Refusing to start the interactive TUI ...`)
   before it resolves the session, while Go runs headless and reports
   `No sessions found to resume.`, `Session not found: <id>` or
   `Error: thread not found`. The argument surface itself now matches, so the
   remaining gap is the TUI start gate in the non-interactive path.
-- clap's flag did-you-mean is only modelled for the keys measured this round
-  (`--last-n`/`--last-turn-id` -> `--last`, `--no-worktree` -> `--worktree`,
-  `--model-reasoning-effort` -> `--model`). Other commands still get the plain
-  `--` tip where clap suggests a flag: `codex delete --name x --force` prints
-  `tip: a similar argument exists: '--enable'` and echoes that flag in the usage
-  (`Usage: codex delete --enable <FEATURE> <SESSION>`).
+- Long-flag did-you-mean and the smart usage block are modelled for the root
+  command, the `exec` family, the session commands and `codex review` (entry
+  46). Groups whose flags are still missing from `clapCommandLongFlags` keep the
+  plain `--` tip where clap suggests a flag: `codex mcp list --trnsport`,
+  `codex plugin list --markeplace`, `codex app-server --lsiten` and the `debug` /
+  `features` / `cloud` groups.
 - OS-level error text is now Rust-shaped on the exec surfaces; other commands
   that print `%v` of a `*os.PathError` (for example some `apply_patch` paths)
   still show Go's `open <path>: <English text>` wording.
@@ -1390,9 +1428,9 @@ one-off captures.
   family and the subcommand surface (unexpected arguments, missing required
   arguments, unrecognized subcommands with did-you-mean, missing values, and the
   nested `sandbox setup` parser). What is still Go-shaped:
-  - clap's flag did-you-mean is partly modelled (entry 44) but still needs a
-    per-command long-flag table for full coverage; see the dedicated Still open
-    bullet.
+  - clap's flag did-you-mean is modelled for the root, `exec`, session and
+    `review` commands (entry 46); the remaining groups still need their
+    long-flag tables; see the dedicated Still open bullet.
   - shared options inside a subcommand (entry 37): `--enable`/`--disable` are
     accepted everywhere and rendered in the usage block, but the hand-written
     `exec` family usage lines (`exec resume --last --enable f --bogus`,
