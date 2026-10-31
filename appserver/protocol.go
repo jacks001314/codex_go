@@ -14,6 +14,7 @@ import (
 	"codex_go/gitutil"
 	"codex_go/mcp"
 	"codex_go/protocol"
+	"codex_go/realtime"
 	"codex_go/rollout"
 	"codex_go/sandbox"
 	"codex_go/session"
@@ -3428,6 +3429,101 @@ type ThreadItemEntry struct {
 	// them unknown, so the keys are always present and serialize as null.
 	StartedAtMS   *int64 `json:"startedAtMs"`
 	CompletedAtMS *int64 `json:"completedAtMs"`
+}
+
+// ThreadTimelineListParams mirrors Rust's experimental thread/timeline/list
+// params (#40508): page the canonical rollout timeline of a paginated thread.
+type ThreadTimelineListParams struct {
+	ThreadID string  `json:"threadId"`
+	Cursor   *string `json:"cursor,omitempty"`
+	Limit    *int    `json:"limit,omitempty"`
+}
+
+func (p *ThreadTimelineListParams) Validate() error {
+	if p == nil || strings.TrimSpace(p.ThreadID) == "" {
+		return jsonRPCInvalidRequest("thread/timeline/list params require a thread id")
+	}
+	return nil
+}
+
+// ThreadTimelineListResponse is one bounded, oldest-first timeline page with
+// the realtime session that was open immediately before it.
+type ThreadTimelineListResponse struct {
+	Data                             []ThreadTimelineEntry `json:"data"`
+	NextCursor                       *string               `json:"nextCursor"`
+	ActiveRealtimeSessionAtPageStart *string               `json:"activeRealtimeSessionAtPageStart"`
+}
+
+// ThreadTimelineEntry is one ordinary item, realtime item, or turn boundary in
+// canonical rollout order (Rust ThreadTimelineEntry).
+type ThreadTimelineEntry struct {
+	Type        string
+	Position    uint64
+	TurnID      string
+	Item        *ThreadItem
+	Realtime    *realtime.RealtimeItem
+	Status      TurnStatus
+	Error       json.RawMessage
+	StartedAt   *int64
+	CompletedAt *int64
+	DurationMS  *int64
+}
+
+const (
+	ThreadTimelineEntryItem          = "item"
+	ThreadTimelineEntryRealtime      = "realtime"
+	ThreadTimelineEntryTurnStarted   = "turnStarted"
+	ThreadTimelineEntryTurnCompleted = "turnCompleted"
+)
+
+// MarshalJSON emits the tagged timeline entry with the fields of exactly one
+// variant, matching Rust's internally tagged enum.
+func (e ThreadTimelineEntry) MarshalJSON() ([]byte, error) {
+	switch e.Type {
+	case ThreadTimelineEntryItem:
+		if e.Item == nil {
+			return nil, fmt.Errorf("thread timeline item is missing its payload")
+		}
+		return json.Marshal(struct {
+			Type     string     `json:"type"`
+			Position uint64     `json:"position"`
+			TurnID   string     `json:"turnId"`
+			Item     ThreadItem `json:"item"`
+		}{Type: e.Type, Position: e.Position, TurnID: e.TurnID, Item: *e.Item})
+	case ThreadTimelineEntryRealtime:
+		if e.Realtime == nil {
+			return nil, fmt.Errorf("thread timeline realtime item is missing its payload")
+		}
+		return json.Marshal(struct {
+			Type     string                `json:"type"`
+			Position uint64                `json:"position"`
+			Item     realtime.RealtimeItem `json:"item"`
+		}{Type: e.Type, Position: e.Position, Item: *e.Realtime})
+	case ThreadTimelineEntryTurnStarted:
+		return json.Marshal(struct {
+			Type      string `json:"type"`
+			Position  uint64 `json:"position"`
+			TurnID    string `json:"turnId"`
+			StartedAt *int64 `json:"startedAt"`
+		}{Type: e.Type, Position: e.Position, TurnID: e.TurnID, StartedAt: e.StartedAt})
+	case ThreadTimelineEntryTurnCompleted:
+		errorJSON := e.Error
+		if len(errorJSON) == 0 {
+			errorJSON = json.RawMessage("null")
+		}
+		return json.Marshal(struct {
+			Type        string          `json:"type"`
+			Position    uint64          `json:"position"`
+			TurnID      string          `json:"turnId"`
+			Status      TurnStatus      `json:"status"`
+			Error       json.RawMessage `json:"error"`
+			StartedAt   *int64          `json:"startedAt"`
+			CompletedAt *int64          `json:"completedAt"`
+			DurationMS  *int64          `json:"durationMs"`
+		}{Type: e.Type, Position: e.Position, TurnID: e.TurnID, Status: e.Status, Error: errorJSON, StartedAt: e.StartedAt, CompletedAt: e.CompletedAt, DurationMS: e.DurationMS})
+	default:
+		return nil, fmt.Errorf("unknown thread timeline entry type %q", e.Type)
+	}
 }
 
 // ThreadItemsReadParams mirrors Rust's experimental ThreadItemsReadParams

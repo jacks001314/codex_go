@@ -345,7 +345,8 @@ func projectionLine(data []byte, raw map[string]json.RawMessage) (*Line, bool) {
 func knownProjectionLineType(kind string) bool {
 	switch kind {
 	case "session_meta", "response_item", "item", "event_msg", "inter_agent_communication",
-		"inter_agent_communication_metadata", "compacted", "turn_context", "world_state", "security_risk_score":
+		"inter_agent_communication_metadata", "compacted", "turn_context", "world_state",
+		"security_risk_score", "realtime_item":
 		return true
 	default:
 		return false

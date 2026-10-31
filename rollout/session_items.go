@@ -2911,3 +2911,30 @@ func validateThreadHistoryMode(mode string) error {
 		return fmt.Errorf("invalid session metadata history_mode %q: expected `legacy` or `paginated`", mode)
 	}
 }
+
+// AppendRealtimeItems persists canonical realtime timeline items as
+// `realtime_item` rollout records, preserving the caller's event order
+// (Rust RolloutItem::RealtimeItem, #41924).
+func AppendRealtimeItems(recorder *Recorder, items []json.RawMessage, now time.Time) error {
+	if recorder == nil {
+		return nil
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	timestamp := now.UTC().Format(time.RFC3339Nano)
+	for i, payload := range items {
+		if len(payload) == 0 {
+			continue
+		}
+		line := Line{
+			Type:      "realtime_item",
+			Timestamp: timestamp,
+			Payload:   append(json.RawMessage(nil), payload...),
+		}
+		if err := recorder.AppendLine(line); err != nil {
+			return fmt.Errorf("append realtime item %d: %w", i, err)
+		}
+	}
+	return nil
+}

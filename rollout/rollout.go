@@ -267,7 +267,11 @@ type Line struct {
 	// of a `retained_context` line (Rust RolloutItem::RetainedContext). The wire
 	// form is Rust's `payload` key, so this field is only populated by the reader.
 	RetainedContext json.RawMessage `json:"-"`
-	Data            map[string]any  `json:"data,omitempty"`
+	// RealtimeItem carries the canonical timeline item of a `realtime_item`
+	// line (Rust RolloutItem::RealtimeItem). The wire form is Rust's `payload`
+	// key, so this field is only populated by the reader.
+	RealtimeItem json.RawMessage `json:"-"`
+	Data         map[string]any  `json:"data,omitempty"`
 }
 
 type RollbackEvent struct {
@@ -2189,6 +2193,8 @@ func unmarshalLine(data []byte, line *Line) error {
 				line.SecurityRiskScore = append(json.RawMessage(nil), payload...)
 			case "retained_context":
 				line.RetainedContext = append(json.RawMessage(nil), payload...)
+			case "realtime_item":
+				line.RealtimeItem = append(json.RawMessage(nil), payload...)
 			}
 		}
 		if line.ThreadRolledBack == nil {
@@ -2214,6 +2220,11 @@ func unmarshalLine(data []byte, line *Line) error {
 		if len(line.RetainedContext) == 0 {
 			if payload, ok := raw["retained_context"]; ok {
 				line.RetainedContext = append(json.RawMessage(nil), payload...)
+			}
+		}
+		if len(line.RealtimeItem) == 0 {
+			if payload, ok := raw["realtime_item"]; ok {
+				line.RealtimeItem = append(json.RawMessage(nil), payload...)
 			}
 		}
 	}

@@ -22,6 +22,7 @@ import (
 	"codex_go/mcp"
 	"codex_go/memories"
 	"codex_go/model"
+	"codex_go/realtime"
 	"codex_go/rollout"
 	"codex_go/sandbox"
 	"codex_go/session"
@@ -1384,6 +1385,8 @@ func (r *Router) dispatch(request *Request) (any, error) {
 		return r.handleThreadLoadedList(request)
 	case MethodThreadItemsList:
 		return r.handleThreadItemsList(request)
+	case MethodThreadTimelineList:
+		return r.handleThreadTimelineList(request)
 	case MethodThreadItemsRead:
 		return r.handleThreadItemsRead(request)
 	case MethodThreadTurnsList:
@@ -4337,6 +4340,120 @@ func (r *Router) buildPaginatedThreadItemsResponse(params *ThreadItemsListParams
 		})
 	}
 	return &ThreadItemsListResponse{Data: data, NextCursor: page.NextCursor, BackwardsCursor: page.BackwardsCursor}, nil
+}
+
+// handleThreadTimelineList ports Rust's experimental thread/timeline/list
+// (#40508): ordinary items, realtime items, and turn boundaries interleaved in
+// canonical rollout order.
+func (r *Router) handleThreadTimelineList(request *Request) (*ThreadTimelineListResponse, error) {
+	var params ThreadTimelineListParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if err := params.Validate(); err != nil {
+		return nil, err
+	}
+	if r.state == nil {
+		return nil, methodNotFound("thread/timeline/list is not supported yet")
+	}
+	limit := threadItemsDefaultLimit
+	if params.Limit != nil {
+		limit = *params.Limit
+	}
+	if limit < 1 {
+		limit = 1
+	}
+	if limit > threadItemsMaxLimit {
+		limit = threadItemsMaxLimit
+	}
+	page, err := r.state.ListThreadTimeline(context.Background(), state.ThreadTimelineListParams{
+		ThreadID: params.ThreadID,
+		Cursor:   params.Cursor,
+		PageSize: limit,
+	})
+	if err != nil {
+		return nil, paginatedTimelineHistoryError(err)
+	}
+	return buildThreadTimelineResponse(page)
+}
+
+// buildThreadTimelineResponse converts a stored timeline page into the v2
+// app-server response.
+func buildThreadTimelineResponse(page *state.ThreadTimelinePage) (*ThreadTimelineListResponse, error) {
+	response := &ThreadTimelineListResponse{
+		Data:                             make([]ThreadTimelineEntry, 0, len(page.Entries)),
+		NextCursor:                       page.NextCursor,
+		ActiveRealtimeSessionAtPageStart: page.ActiveRealtimeSessionAtPageStart,
+	}
+	for _, stored := range page.Entries {
+		switch stored.Kind {
+		case state.ThreadTimelineItem:
+			item, err := deserializeStateThreadItem(state.ThreadHistoryItem{
+				TurnID:        stored.TurnID,
+				ItemID:        stored.ID,
+				ItemJSON:      stored.ItemJSON,
+				StartedAtMS:   stored.StartedAtMS,
+				CompletedAtMS: stored.CompletedAtMS,
+			})
+			if err != nil {
+				return nil, err
+			}
+			response.Data = append(response.Data, ThreadTimelineEntry{
+				Type:     ThreadTimelineEntryItem,
+				Position: stored.Position,
+				TurnID:   stored.TurnID,
+				Item:     &item,
+			})
+		case state.ThreadTimelineRealtimeItem:
+			var item realtime.RealtimeItem
+			if err := item.UnmarshalRolloutJSON(stored.RealtimeItemJSON); err != nil {
+				return nil, fmt.Errorf("failed to deserialize realtime timeline item %s: %w", stored.ID, err)
+			}
+			response.Data = append(response.Data, ThreadTimelineEntry{
+				Type:     ThreadTimelineEntryRealtime,
+				Position: stored.Position,
+				Realtime: &item,
+			})
+		case state.ThreadTimelineTurnStarted:
+			response.Data = append(response.Data, ThreadTimelineEntry{
+				Type:      ThreadTimelineEntryTurnStarted,
+				Position:  stored.Position,
+				TurnID:    stored.TurnID,
+				StartedAt: stored.StartedAt,
+			})
+		case state.ThreadTimelineTurnCompleted:
+			response.Data = append(response.Data, ThreadTimelineEntry{
+				Type:        ThreadTimelineEntryTurnCompleted,
+				Position:    stored.Position,
+				TurnID:      stored.TurnID,
+				Status:      TurnStatus(stored.Status),
+				Error:       stored.ErrorJSON,
+				StartedAt:   stored.StartedAt,
+				CompletedAt: stored.CompletedAt,
+				DurationMS:  stored.DurationMS,
+			})
+		default:
+			return nil, fmt.Errorf("unknown stored thread timeline entry kind %d", stored.Kind)
+		}
+	}
+	return response, nil
+}
+
+// paginatedTimelineHistoryError maps thread-store failures for
+// thread/timeline/list.
+func paginatedTimelineHistoryError(err error) error {
+	var historyErr *state.ThreadHistoryError
+	if errors.As(err, &historyErr) {
+		switch historyErr.Kind {
+		case state.ThreadHistoryInvalidRequest:
+			return jsonRPCInvalidRequest(historyErr.Error())
+		case state.ThreadHistoryUnsupported:
+			return methodNotFound("thread/timeline/list is not supported yet")
+		case state.ThreadHistoryNotFound:
+			return jsonRPCInvalidRequest("no rollout found for thread id " + historyErr.ThreadID)
+		}
+	}
+	return fmt.Errorf("failed to list thread timeline: %w", err)
 }
 
 func (r *Router) buildPaginatedThreadTurnsResponse(params *ThreadTurnsListParams, options *turnsResponseOptions) (*TurnsPage, error) {

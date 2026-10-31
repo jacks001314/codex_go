@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"codex_go/realtime"
 	"codex_go/rollout"
 )
 
@@ -39,9 +40,19 @@ type threadHistoryItemChange struct {
 	CompletedAtMS *int64
 }
 
+// threadHistoryRealtimeChange is one canonical realtime timeline item
+// projected into thread_realtime_items (Rust RolloutItem::RealtimeItem).
+type threadHistoryRealtimeChange struct {
+	ItemID      string
+	ItemType    string
+	ItemJSON    json.RawMessage
+	CreatedAtMS int64
+}
+
 type threadHistoryChanges struct {
-	Turns []threadHistoryTurnChange
-	Items []threadHistoryItemChange
+	Turns    []threadHistoryTurnChange
+	Items    []threadHistoryItemChange
+	Realtime []threadHistoryRealtimeChange
 }
 
 type threadHistoryEvent struct {
@@ -228,6 +239,9 @@ ON CONFLICT(thread_id) DO UPDATE SET
 
 func projectThreadHistoryLine(line *rollout.Line) (threadHistoryChanges, error) {
 	changes := threadHistoryChanges{}
+	if line != nil && line.Type == "realtime_item" {
+		return projectThreadHistoryRealtimeLine(line)
+	}
 	if line == nil || line.Type != "event_msg" || len(line.Payload) == 0 {
 		return changes, nil
 	}
@@ -288,6 +302,44 @@ func projectThreadHistoryLine(line *rollout.Line) (threadHistoryChanges, error) 
 	return changes, nil
 }
 
+// projectThreadHistoryRealtimeLine validates and canonicalizes one
+// `realtime_item` rollout record.
+func projectThreadHistoryRealtimeLine(line *rollout.Line) (threadHistoryChanges, error) {
+	changes := threadHistoryChanges{}
+	payload := line.RealtimeItem
+	if len(payload) == 0 {
+		payload = line.Payload
+	}
+	if len(payload) == 0 {
+		return changes, errors.New("realtime_item record is missing its payload")
+	}
+	var item realtime.RealtimeItem
+	if err := item.UnmarshalRolloutJSON(payload); err != nil {
+		return changes, fmt.Errorf("decode realtime_item record: %w", err)
+	}
+	normalized, err := item.MarshalRolloutJSON()
+	if err != nil {
+		return changes, fmt.Errorf("encode realtime_item record %s: %w", item.ID, err)
+	}
+	createdAt, err := time.Parse(time.RFC3339Nano, line.Timestamp)
+	if err != nil {
+		return changes, fmt.Errorf("realtime_item record %s has an invalid timestamp: %w", item.ID, err)
+	}
+	var tagged struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(normalized, &tagged); err != nil {
+		return changes, fmt.Errorf("read realtime_item record %s type: %w", item.ID, err)
+	}
+	changes.Realtime = append(changes.Realtime, threadHistoryRealtimeChange{
+		ItemID:      item.ID,
+		ItemType:    tagged.Type,
+		ItemJSON:    normalized,
+		CreatedAtMS: createdAt.UnixMilli(),
+	})
+	return changes, nil
+}
+
 func applyThreadHistoryChanges(ctx context.Context, conn *sql.Conn, threadID string, step rollout.ProjectionStep, changes threadHistoryChanges) error {
 	ordinal, startOffset, endOffset := sqliteInt(step.Ordinal), sqliteInt(step.StartByteOffset), sqliteInt(step.EndByteOffset)
 	for _, turn := range changes.Turns {
@@ -310,7 +362,7 @@ ON CONFLICT(thread_id, turn_id) DO UPDATE SET
     rollout_end_byte_offset = excluded.rollout_end_byte_offset,
     status = excluded.status,
     error_json = excluded.error_json,
-    started_at = excluded.started_at,
+    started_at = COALESCE(excluded.started_at, thread_turns.started_at),
     completed_at = excluded.completed_at,
     duration_ms = excluded.duration_ms
 WHERE thread_turns.rollout_end_ordinal IS NULL
@@ -356,6 +408,18 @@ WHERE thread_id = ? AND turn_id = ? AND rollout_end_ordinal IS NULL AND status =
 					return fmt.Errorf("update final agent item: %w", err)
 				}
 			}
+		}
+	}
+	for _, item := range changes.Realtime {
+		if strings.TrimSpace(item.ItemID) == "" || strings.TrimSpace(item.ItemType) == "" {
+			return fmt.Errorf("thread history projection for %s has an incomplete realtime item", threadID)
+		}
+		if _, err := conn.ExecContext(ctx, `
+INSERT INTO thread_realtime_items (
+    thread_id, item_id, rollout_ordinal, created_at_ms, item_type, item_json
+) VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT(thread_id, item_id) DO NOTHING`, threadID, item.ItemID, ordinal, item.CreatedAtMS, item.ItemType, string(item.ItemJSON)); err != nil {
+			return fmt.Errorf("project thread realtime item: %w", err)
 		}
 	}
 	return nil

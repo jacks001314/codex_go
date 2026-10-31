@@ -1740,6 +1740,9 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	appTurn.ItemsView = TurnItemsNotLoaded
 	r.beginStateThreadGoalTurn(threadID, turnID, startedAtMS, turnStartPlanMode(params), connectionID)
 	promptPersisted := false
+	// Rust #41924: seal live realtime transcript segments before the typed user
+	// message enters the canonical timeline.
+	r.sealRealtimeUserInput(threadID, params.Prompt)
 
 	runConfig, err := r.appTurnConfig(ctx, threadID, turnID, connectionID, params, startedAtMS, runtime)
 	if err != nil {

@@ -17,6 +17,7 @@ import (
 	"codex_go/model"
 	"codex_go/prompt"
 	"codex_go/realtime"
+	"codex_go/rollout"
 	"codex_go/session"
 	"codex_go/turn"
 )
@@ -880,6 +881,41 @@ func (r *RuntimeRouter) realtimeTimelineActive(threadID string) bool {
 		return false
 	}
 	return r.services.Realtime.ActiveRealtimeSessionID(threadID) != ""
+}
+
+// persistRealtimeHistoryItems appends the canonical realtime items to the
+// thread rollout in event order (Rust RolloutItem::RealtimeItem, #41924).
+// Ephemeral threads have no rollout, so the recorder path is a no-op for them.
+func (r *RuntimeRouter) persistRealtimeHistoryItems(threadID string, items []realtime.RealtimeItem) {
+	if r == nil || len(items) == 0 || !r.hasRuntimeThreadStore() {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return
+	}
+	payloads := make([]json.RawMessage, 0, len(items))
+	for _, item := range items {
+		encoded, err := item.MarshalRolloutJSON()
+		if err != nil {
+			return
+		}
+		payloads = append(payloads, encoded)
+	}
+	now := runtimeRouterNow(r).UTC()
+	_ = r.withRuntimeRollout(threadID, func(recorder *rollout.Recorder) error {
+		return rollout.AppendRealtimeItems(recorder, payloads, now)
+	})
+}
+
+// sealRealtimeUserInput seals live transcript segments before a typed user
+// turn enters the canonical timeline. Realtime handoff delegations are
+// excluded by the reducer.
+func (r *RuntimeRouter) sealRealtimeUserInput(threadID, prompt string) {
+	if r == nil || r.services.Realtime == nil || !r.realtimeTimelineActive(threadID) {
+		return
+	}
+	r.notifyRealtime(r.requireRealtime().SealRealtimeUserInputForPrompt(threadID, prompt))
 }
 
 // bindRealtimeTurn records which realtime session produced a backing turn, so

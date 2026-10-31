@@ -5098,9 +5098,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "Round 1031 audit: Go canonical realtime reducer already lives in the shared realtime package (history.go) and app-server notifications derive from the same effects (history_wiring.go), so segmentation, promotions, and session boundaries match Rust for every Manager host. Completed transcript chunks and tails are persisted into the thread store (appserver/realtime_runtime.go recordRealtimeTranscriptMessage, #58221/#50531), including ephemeral and repeated sessions. Missing from #41924: canonical RealtimeItem rollout entries are not stored, so promotions and session boundaries are notification-only and a resumed paginated thread replays flattened transcript messages instead of the canonical item timeline. The Go session model has no realtime rollout item variant; completing this needs a dedicated storage round. go test ./realtime passes."
+    "Round 1151: canonical realtime history now persists as `realtime_item` rollout records (realtime.MarshalRolloutJSON snake_case wire, rollout.AppendRealtimeItems, projection into thread_realtime_items), the shared reducer publishes through one persist-then-notify path (Manager.publishHistoryEffects with host HistoryItemSink/HistoryEnabled), ephemeral threads emit no history, typed turn starts and accepted steers seal live segments while realtime delegations are excluded, and the experimental thread/timeline/list API pages ordinary items, realtime items, and turn boundaries in rollout order with activeRealtimeSessionAtPageStart. Tests: go test ./realtime ./rollout ./state, go test ./appserver -run 'Realtime|Timeline'."
    ]
   },
   {
@@ -8462,11 +8462,11 @@
    "domains": [
     "codex_go"
    ],
-  "status": "complete",
+   "status": "complete",
    "evidence": [
-   "`remoteAgentsDashboardSource.StartSession` reads `config/read` (and `configRequirements/read`) for the destination CWD before `thread/start`, then applies the server's effective launch defaults and the managed new-thread defaults, leaving explicit launch settings intact (app/agents_dashboard.go).",
-   "Servers without `config/read` keep the previous fallback: the start proceeds with just the destination CWD.",
-   "Tests: TestDashboardNewSessionUsesServerDefaultsLikeRust covers managed destination defaults and the older-server fallback, asserting the config/read CWD and the thread/start model/effort."
+    "`remoteAgentsDashboardSource.StartSession` reads `config/read` (and `configRequirements/read`) for the destination CWD before `thread/start`, then applies the server's effective launch defaults and the managed new-thread defaults, leaving explicit launch settings intact (app/agents_dashboard.go).",
+    "Servers without `config/read` keep the previous fallback: the start proceeds with just the destination CWD.",
+    "Tests: TestDashboardNewSessionUsesServerDefaultsLikeRust covers managed destination defaults and the older-server fallback, asserting the config/read CWD and the thread/start model/effort."
    ]
   },
   {
@@ -8584,10 +8584,10 @@
    "domains": [
     "codex_go"
    ],
-  "status": "complete",
+   "status": "complete",
    "evidence": [
-   "Label resolution collects every match and rejects duplicates with a UUID-disambiguation error instead of picking the most recent entry, across local SQLite names plus the rollout scan and across the active/archived collections for remote delete (app/session.go).",
-   "Tests: TestSessionResumeAmbiguousNameRejectedLikeRust, TestSessionResumeChecksLabelsBeyondPickerPageLikeRust, TestSessionArchiveAmbiguousNameRejectedLikeRust, TestSessionIDByUniqueActiveNameLikeRust and TestSessionIDByUniqueActiveNameRejectsDuplicateLabelsLikeRust pass."
+    "Label resolution collects every match and rejects duplicates with a UUID-disambiguation error instead of picking the most recent entry, across local SQLite names plus the rollout scan and across the active/archived collections for remote delete (app/session.go).",
+    "Tests: TestSessionResumeAmbiguousNameRejectedLikeRust, TestSessionResumeChecksLabelsBeyondPickerPageLikeRust, TestSessionArchiveAmbiguousNameRejectedLikeRust, TestSessionIDByUniqueActiveNameLikeRust and TestSessionIDByUniqueActiveNameRejectsDuplicateLabelsLikeRust pass."
    ]
   },
   {
@@ -9371,11 +9371,11 @@
    "domains": [
     "codex_go"
    ],
-  "status": "complete",
+   "status": "complete",
    "evidence": [
-   "Go commit 9f2c1d6c+: tui/tea/voice_transcript.go wires chatwidget.SplitFlapTranscriptCell into the live caption path: refreshVoiceTranscript rebuilds the board per delta with the previous cell so settled tiles survive an append, animates at SplitFlapFrameInterval until SplitFlapAnimationDuration, and drops the live cell when the caption is sealed so the completed transcript stays an ordinary spoken history cell.",
-   "Reduced motion matches Rust: animations=false renders the assistant caption statically and suppresses the streamed user caption; the cell runs with animated=false and requests no frames.",
-   "Tests: TestLiveVoiceTranscriptAnimatesAndStopsFramesLikeRust, TestLiveVoiceTranscriptKeepsSettledTilesOnAppendLikeRust, TestLiveVoiceTranscriptSealsIntoHistoryCellLikeRust, TestLiveVoiceTranscriptRespectsReducedMotionLikeRust in tui/tea/voice_transcript_like_rust_test.go."
+    "Go commit 9f2c1d6c+: tui/tea/voice_transcript.go wires chatwidget.SplitFlapTranscriptCell into the live caption path: refreshVoiceTranscript rebuilds the board per delta with the previous cell so settled tiles survive an append, animates at SplitFlapFrameInterval until SplitFlapAnimationDuration, and drops the live cell when the caption is sealed so the completed transcript stays an ordinary spoken history cell.",
+    "Reduced motion matches Rust: animations=false renders the assistant caption statically and suppresses the streamed user caption; the cell runs with animated=false and requests no frames.",
+    "Tests: TestLiveVoiceTranscriptAnimatesAndStopsFramesLikeRust, TestLiveVoiceTranscriptKeepsSettledTilesOnAppendLikeRust, TestLiveVoiceTranscriptSealsIntoHistoryCellLikeRust, TestLiveVoiceTranscriptRespectsReducedMotionLikeRust in tui/tea/voice_transcript_like_rust_test.go."
    ]
   },
   {
@@ -10641,7 +10641,7 @@
    ],
    "status": "complete",
    "evidence": [
-     "Rust #44202 passes the sampling step's captured ModelInfo (and step telemetry) to world-state contributors so skill catalogs, context windows and metric attribution follow a mid-turn model switch instead of a thread-scoped ModelInfo. Go has no extension contributor registry or thread-scoped ModelInfo store, so that plumbing is N/A, but every native consumer reads the captured step model: turnStepInstructionsProvider rebuilds the skill catalog per step from the active turn's model (appserver/global_instructions.go) and skillContextWindowForTurn resolves that model through modelInfoForRuntimeWithConfig plus the new model.ModelInfo.ResolvedContextWindow (context_window, else max_context_window, model/catalog.go), so a step declaring only max_context_window keeps its 2%-of-window budget; includeSkillsUsageInstructionsForTurn follows the same step model while skillMetadataBudgetForConfig still lets [skills].max_context_tokens win. Test: TestStepSkillCatalogUsesCapturedModelSettingsLikeRust (step A max-only window 400000 without usage guidance, then a turn/settings/update to step B with 200000 plus include_skills_usage_instructions). Residual: Go's metric sinks do not implement Rust's metadata-tagged metrics (the model tag on catalog metrics), a pipeline-wide gap rather than per-catalog code. Verified with go test ./appserver -run 'Skill|Step' -count=1, go test ./model -count=1, and go build ./..."
+    "Rust #44202 passes the sampling step's captured ModelInfo (and step telemetry) to world-state contributors so skill catalogs, context windows and metric attribution follow a mid-turn model switch instead of a thread-scoped ModelInfo. Go has no extension contributor registry or thread-scoped ModelInfo store, so that plumbing is N/A, but every native consumer reads the captured step model: turnStepInstructionsProvider rebuilds the skill catalog per step from the active turn's model (appserver/global_instructions.go) and skillContextWindowForTurn resolves that model through modelInfoForRuntimeWithConfig plus the new model.ModelInfo.ResolvedContextWindow (context_window, else max_context_window, model/catalog.go), so a step declaring only max_context_window keeps its 2%-of-window budget; includeSkillsUsageInstructionsForTurn follows the same step model while skillMetadataBudgetForConfig still lets [skills].max_context_tokens win. Test: TestStepSkillCatalogUsesCapturedModelSettingsLikeRust (step A max-only window 400000 without usage guidance, then a turn/settings/update to step B with 200000 plus include_skills_usage_instructions). Residual: Go's metric sinks do not implement Rust's metadata-tagged metrics (the model tag on catalog metrics), a pipeline-wide gap rather than per-catalog code. Verified with go test ./appserver -run 'Skill|Step' -count=1, go test ./model -count=1, and go build ./..."
    ]
   },
   {
@@ -10713,7 +10713,7 @@
    ],
    "status": "partial",
    "evidence": [
-     "Rust #44242 builds each step's tool plan from its captured model settings: image support and detail, command and MCP output truncation, extension metadata, tool telemetry, and delayed command completion events. Go already applies the step model to output truncation (ToolDispatcher.SetStepModel feeds invocation.Truncation for exec_command, write_stdin and MCP output, #44243) and captures the issuing model for delayed unified-exec completion events (rememberToolItemModelContext at UnifiedExecEventBegin). This round added the missing call-time and metadata pieces: tool.ViewImageOptions.StepSettings resolves the active step's model at Execute, rejecting a text-only step with Rust's 'view_image is not allowed because you do not support image inputs' message and downgrading detail=original when that step model cannot request it; appserver.viewImageOptionsForTurn installs the resolver from the active turn's Params.Model; stepTurnClientMetadata and activeTurnClientMetadata rewrite node_repl_disabled and node_repl_auto_review_required from the step model and prefer the captured RunConfig.Model, so MCP/extension turn metadata describes the issuing step. Tests: TestStepViewImageCapabilitiesFollowCapturedModelLikeRust, TestStepMCPMetadataCarriesCapturedModelNodeReplFlagsLikeRust. Residual: the model-visible tool list is still built once at turn start (Go has no per-step registry rebuild), so a mid-turn switch to a text-only model still advertises view_image and depends on the new call-time rejection; Rust's metadata-tag metric attribution (model tag on tool telemetry) is unimplemented across Go's metric sinks. Verified with go test ./tool -run ViewImage -count=1, go test ./appserver -run 'ViewImage|Step|Skill|MCPMetadata|TurnMetadata' -count=1, go build ./..."
+    "Rust #44242 builds each step's tool plan from its captured model settings: image support and detail, command and MCP output truncation, extension metadata, tool telemetry, and delayed command completion events. Go already applies the step model to output truncation (ToolDispatcher.SetStepModel feeds invocation.Truncation for exec_command, write_stdin and MCP output, #44243) and captures the issuing model for delayed unified-exec completion events (rememberToolItemModelContext at UnifiedExecEventBegin). This round added the missing call-time and metadata pieces: tool.ViewImageOptions.StepSettings resolves the active step's model at Execute, rejecting a text-only step with Rust's 'view_image is not allowed because you do not support image inputs' message and downgrading detail=original when that step model cannot request it; appserver.viewImageOptionsForTurn installs the resolver from the active turn's Params.Model; stepTurnClientMetadata and activeTurnClientMetadata rewrite node_repl_disabled and node_repl_auto_review_required from the step model and prefer the captured RunConfig.Model, so MCP/extension turn metadata describes the issuing step. Tests: TestStepViewImageCapabilitiesFollowCapturedModelLikeRust, TestStepMCPMetadataCarriesCapturedModelNodeReplFlagsLikeRust. Residual: the model-visible tool list is still built once at turn start (Go has no per-step registry rebuild), so a mid-turn switch to a text-only model still advertises view_image and depends on the new call-time rejection; Rust's metadata-tag metric attribution (model tag on tool telemetry) is unimplemented across Go's metric sinks. Verified with go test ./tool -run ViewImage -count=1, go test ./appserver -run 'ViewImage|Step|Skill|MCPMetadata|TurnMetadata' -count=1, go build ./..."
    ]
   },
   {
@@ -11696,11 +11696,11 @@
    "domains": [
     "codex_go"
    ],
-  "status": "complete",
+   "status": "complete",
    "evidence": [
-   "Go's command center has no inline composer (Rust removed it in #45255, already complete), so reopening the overview always lands on the task list: tui/tea/agents_overview.go documents that the list owns focus, and arrow/Vim navigation acts on the list immediately.",
-   "Unsent drafts are per-thread composer drafts captured by captureAgentsOverviewDraft when leaving a session, so a populated refresh cannot drop them; the empty-list composer fallback no longer exists upstream.",
-   "Tests: `go test ./tui/tea -run 'AgentsOverview|CommandCenter' -count=1` passes."
+    "Go's command center has no inline composer (Rust removed it in #45255, already complete), so reopening the overview always lands on the task list: tui/tea/agents_overview.go documents that the list owns focus, and arrow/Vim navigation acts on the list immediately.",
+    "Unsent drafts are per-thread composer drafts captured by captureAgentsOverviewDraft when leaving a session, so a populated refresh cannot drop them; the empty-list composer fallback no longer exists upstream.",
+    "Tests: `go test ./tui/tea -run 'AgentsOverview|CommandCenter' -count=1` passes."
    ]
   },
   {
@@ -11930,10 +11930,10 @@
    "domains": [
     "codex_go"
    ],
-  "status": "complete",
+   "status": "complete",
    "evidence": [
-   "The TUI layers managed `models.newThread` defaults only where no higher-precedence selection exists: generic -c overrides and enabled user-profile layers keep their model/effort/service tier, while project layers shadow the profile so managed defaults apply (app/remote_tui_managed_defaults.go).",
-   "Tests: TestRemoteStartThreadAppliesManagedNewThreadDefaultsLikeRust covers the managed, generic override, profiled, project-shadowed, explicit service-tier and server-owned cases."
+    "The TUI layers managed `models.newThread` defaults only where no higher-precedence selection exists: generic -c overrides and enabled user-profile layers keep their model/effort/service tier, while project layers shadow the profile so managed defaults apply (app/remote_tui_managed_defaults.go).",
+    "Tests: TestRemoteStartThreadAppliesManagedNewThreadDefaultsLikeRust covers the managed, generic override, profiled, project-shadowed, explicit service-tier and server-owned cases."
    ]
   },
   {
@@ -18141,7 +18141,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-     "Rust #47106 fixes a case where a delayed Code Mode skill call resolved the active turn at completion, losing the originating turn's metrics and metadata; it retains the originating SkillTurnMetrics and carries its turn metadata into the analytics TrackEventsContext. Go never resolves the active turn in that path: the skill analytics closure is built for one turn and carries turnID/modelID explicitly (implicitSkillInvocationEventProvider and explicitSkillInputItemsForTurnWithProvider), trackSkillInvocationEvent uses those captured values for the OTEL skill_invocation log and the analytics event's turn_id/thread_id/model_slug, plugin usage is recorded by the captured (threadID, turnID) key (recordSkillTurnPluginUsage/skillTurnReasoningEffort), and turn metadata for the event is the event params themselves rather than a live lookup. Tests: go test ./appserver -run 'Skill' -count=1 (existing skill telemetry and shadow-selection tests cover the captured attribution)."
+    "Rust #47106 fixes a case where a delayed Code Mode skill call resolved the active turn at completion, losing the originating turn's metrics and metadata; it retains the originating SkillTurnMetrics and carries its turn metadata into the analytics TrackEventsContext. Go never resolves the active turn in that path: the skill analytics closure is built for one turn and carries turnID/modelID explicitly (implicitSkillInvocationEventProvider and explicitSkillInputItemsForTurnWithProvider), trackSkillInvocationEvent uses those captured values for the OTEL skill_invocation log and the analytics event's turn_id/thread_id/model_slug, plugin usage is recorded by the captured (threadID, turnID) key (recordSkillTurnPluginUsage/skillTurnReasoningEffort), and turn metadata for the event is the event params themselves rather than a live lookup. Tests: go test ./appserver -run 'Skill' -count=1 (existing skill telemetry and shadow-selection tests cover the captured attribution)."
    ]
   },
   {
@@ -18583,11 +18583,11 @@
    "domains": [
     "codex_go"
    ],
-  "status": "complete",
+   "status": "complete",
    "evidence": [
-   "Go commit 37377500+: `runtimeAgentController.CloseAgent` resolves the target through the live registry and then the persisted agent graph (`closeAgentTarget`/`persistedAgentRecord`), so a known agent whose runtime was unloaded still closes and records its spawn edge as closed; unexpected lookup errors now propagate before shutdown instead of being reported as a successful NotFound close.",
-   "The pre-close snapshot travels back as `previous_status`, and the collab completion item fills `agentsStates[target]` from it and marks the item failed when that snapshot was NotFound/Errored, matching Rust `collab_tool_call_status`.",
-   "Tests: TestRuntimeAgentControllerClosesKnownUnloadedAgentLikeRust, TestCloseAgentCompletionItemUsesSnapshotLikeRust, and the updated TestRuntimeAgentControllerReportsNotFound in appserver."
+    "Go commit 37377500+: `runtimeAgentController.CloseAgent` resolves the target through the live registry and then the persisted agent graph (`closeAgentTarget`/`persistedAgentRecord`), so a known agent whose runtime was unloaded still closes and records its spawn edge as closed; unexpected lookup errors now propagate before shutdown instead of being reported as a successful NotFound close.",
+    "The pre-close snapshot travels back as `previous_status`, and the collab completion item fills `agentsStates[target]` from it and marks the item failed when that snapshot was NotFound/Errored, matching Rust `collab_tool_call_status`.",
+    "Tests: TestRuntimeAgentControllerClosesKnownUnloadedAgentLikeRust, TestCloseAgentCompletionItemUsesSnapshotLikeRust, and the updated TestRuntimeAgentControllerReportsNotFound in appserver."
    ]
   },
   {
@@ -18645,11 +18645,11 @@
    "domains": [
     "codex_go"
    ],
-  "status": "complete",
+   "status": "complete",
    "evidence": [
-   "Rust-only API reshape: Go has no watch channel or `StatusSubscription`; `runtimeAgentController.WaitAgent` reads snapshots from the live router/thread store, so the observable contract is preserved rather than the stream type.",
-   "`WaitAgent` collects each target's initial snapshot before waiting (missing threads become final NotFound), coalesces updates by polling at most every 200ms, returns the latest status when the wait ends, and propagates context cancellation like Rust's subscription error path.",
-   "Tests: TestRuntimeAgentControllerWaitAgentUsesInitialSnapshotsLikeRust plus the existing pending/live injection wait tests; focused `go test ./appserver -run 'AgentController|Collab|CloseAgent|WaitAgent|Subagent'` passes."
+    "Rust-only API reshape: Go has no watch channel or `StatusSubscription`; `runtimeAgentController.WaitAgent` reads snapshots from the live router/thread store, so the observable contract is preserved rather than the stream type.",
+    "`WaitAgent` collects each target's initial snapshot before waiting (missing threads become final NotFound), coalesces updates by polling at most every 200ms, returns the latest status when the wait ends, and propagates context cancellation like Rust's subscription error path.",
+    "Tests: TestRuntimeAgentControllerWaitAgentUsesInitialSnapshotsLikeRust plus the existing pending/live injection wait tests; focused `go test ./appserver -run 'AgentController|Collab|CloseAgent|WaitAgent|Subagent'` passes."
    ]
   },
   {
@@ -18998,7 +18998,7 @@
    ],
    "status": "complete",
    "evidence": [
-     "Rust #47349 emits <recommended_plugins> with the developer role and appends it to the developer context after the other sections, while legacy user-role recommendations in existing rollouts stay recognized. Go now renders the fragment with RoleDeveloper (context/fragments.go) and emits it through buildRenderedMessage, so the recommendation is a developer-role message instead of a fixed user message (appserver/turn_runtime.go recommendedPluginInputItems); the turn-start assembly collects it before the other context items and appends it last, after the deferred-tools, explicit-app and current-time sections, matching Rust's position at the end of developer_sections. The eventmap marker list still matches the tag so legacy user-role rollout items continue to parse. Tests: TestRecommendedPluginsEmitDeveloperRoleMessageLikeRust and the updated TestRecommendedPluginsInstructions; existing plugin/recommended-plugin router tests still pass. Verified with go test ./context -count=1, go test ./appserver -run 'Plugin|TurnStart|Instruction|Permissions' -count=1 (only the known unrelated TestStdioServerHandlesConcurrentTurnStarts fails), and go test ./eventmap -count=1."
+    "Rust #47349 emits <recommended_plugins> with the developer role and appends it to the developer context after the other sections, while legacy user-role recommendations in existing rollouts stay recognized. Go now renders the fragment with RoleDeveloper (context/fragments.go) and emits it through buildRenderedMessage, so the recommendation is a developer-role message instead of a fixed user message (appserver/turn_runtime.go recommendedPluginInputItems); the turn-start assembly collects it before the other context items and appends it last, after the deferred-tools, explicit-app and current-time sections, matching Rust's position at the end of developer_sections. The eventmap marker list still matches the tag so legacy user-role rollout items continue to parse. Tests: TestRecommendedPluginsEmitDeveloperRoleMessageLikeRust and the updated TestRecommendedPluginsInstructions; existing plugin/recommended-plugin router tests still pass. Verified with go test ./context -count=1, go test ./appserver -run 'Plugin|TurnStart|Instruction|Permissions' -count=1 (only the known unrelated TestStdioServerHandlesConcurrentTurnStarts fails), and go test ./eventmap -count=1."
    ]
   },
   {
@@ -19701,12 +19701,12 @@
    "domains": [
     "codex_go"
    ],
-  "status": "complete",
+   "status": "complete",
    "evidence": [
-   "Round 1096: Rust #47605 routes the pty pipe adapter through ChildCommand so every piped child gets ProcessMode::NewSession, DescriptorPolicy::Explicit, preserved inherited fds, Linux PR_SET_PDEATHSIG and ReapOnly while Windows children stay job-contained. Go has no pty crate; processgroup now owns the shared equivalents. PrepareChildSession applies Setsid plus syscall.SIGTERM Pdeathsig on Linux (preserving existing SysProcAttr), TerminateProcessTree/InterruptProcessTree signal the child's own process group only when the child leads one and otherwise fall back to the direct child, and Interrupt mirrors Rust's SIGINT group helper. Wired into every Go pipe carrier: tool/unified_exec_process_unix.go non-TTY unified exec, appserver.prepareCommandExecProcess (command/exec and process/exec, replacing the previous Setpgid), and the execserver process/start non-TTY spawn.",
-   "Descriptor policy: Go os/exec closes every descriptor outside stdio before exec, and none of these carriers passes an inherited-fd list (Rust's unified exec and app-server pass empty lists), so DescriptorPolicy::Explicit is already Go's behavior. ReapOnly matches Go, which never kills a child because a Cmd handle was dropped; the pipe carriers install no kill-on-drop. Linux parent death is now explicit on every carrier; Rust has no macOS parent-death equivalent. Windows job-object containment of piped children predates this commit in Rust and is not added to Go's tool/appserver pipe spawn here.",
-   "NUL inputs: Rust re-validates original program/args/cwd/arg0/env values after std replaces them. Go's os/exec rejects embedded NUL in argv, cwd and environment before exec (Start returns invalid argument and the target never runs), so no extra validation layer is needed; a regression test re-executes a marker-writing target and proves no side effect.",
-   "Tests: processgroup/prepare_child_session_unix_test.go, prepare_child_session_linux_test.go and process_tree_unix_test.go (a real background descendant dies with the group; a non-leader fallback never signals the server's group); tool/unified_exec_pipe_launch_unix_test.go (re-executed child proves session/group leadership, cwd, explicit environment and closed non-CLOEXEC duplicate fd); tool/unified_exec_nul_like_rust_test.go; appserver/command_exec_process_unix_test.go and command_exec_process_linux_test.go; execserver/session_unix_test.go (real process/start child leads its session). Verified: go build ./..., go test ./processgroup, go test ./tool -run UnifiedExec, go test ./appserver -run 'TestPrepareCommandExecProcess|TestCommandExec|TestProcessSpawn|TestProcessService', go test ./execserver -run TestProcess, plus GOOS=linux and GOOS=darwin go vet and GOOS=linux go test -c for processgroup/tool/appserver/execserver."
+    "Round 1096: Rust #47605 routes the pty pipe adapter through ChildCommand so every piped child gets ProcessMode::NewSession, DescriptorPolicy::Explicit, preserved inherited fds, Linux PR_SET_PDEATHSIG and ReapOnly while Windows children stay job-contained. Go has no pty crate; processgroup now owns the shared equivalents. PrepareChildSession applies Setsid plus syscall.SIGTERM Pdeathsig on Linux (preserving existing SysProcAttr), TerminateProcessTree/InterruptProcessTree signal the child's own process group only when the child leads one and otherwise fall back to the direct child, and Interrupt mirrors Rust's SIGINT group helper. Wired into every Go pipe carrier: tool/unified_exec_process_unix.go non-TTY unified exec, appserver.prepareCommandExecProcess (command/exec and process/exec, replacing the previous Setpgid), and the execserver process/start non-TTY spawn.",
+    "Descriptor policy: Go os/exec closes every descriptor outside stdio before exec, and none of these carriers passes an inherited-fd list (Rust's unified exec and app-server pass empty lists), so DescriptorPolicy::Explicit is already Go's behavior. ReapOnly matches Go, which never kills a child because a Cmd handle was dropped; the pipe carriers install no kill-on-drop. Linux parent death is now explicit on every carrier; Rust has no macOS parent-death equivalent. Windows job-object containment of piped children predates this commit in Rust and is not added to Go's tool/appserver pipe spawn here.",
+    "NUL inputs: Rust re-validates original program/args/cwd/arg0/env values after std replaces them. Go's os/exec rejects embedded NUL in argv, cwd and environment before exec (Start returns invalid argument and the target never runs), so no extra validation layer is needed; a regression test re-executes a marker-writing target and proves no side effect.",
+    "Tests: processgroup/prepare_child_session_unix_test.go, prepare_child_session_linux_test.go and process_tree_unix_test.go (a real background descendant dies with the group; a non-leader fallback never signals the server's group); tool/unified_exec_pipe_launch_unix_test.go (re-executed child proves session/group leadership, cwd, explicit environment and closed non-CLOEXEC duplicate fd); tool/unified_exec_nul_like_rust_test.go; appserver/command_exec_process_unix_test.go and command_exec_process_linux_test.go; execserver/session_unix_test.go (real process/start child leads its session). Verified: go build ./..., go test ./processgroup, go test ./tool -run UnifiedExec, go test ./appserver -run 'TestPrepareCommandExecProcess|TestCommandExec|TestProcessSpawn|TestProcessService', go test ./execserver -run TestProcess, plus GOOS=linux and GOOS=darwin go vet and GOOS=linux go test -c for processgroup/tool/appserver/execserver."
    ]
   },
   {
@@ -20344,9 +20344,9 @@
    "domains": [
     "codex_go"
    ],
-  "status": "not_applicable",
+   "status": "not_applicable",
    "evidence": [
-   "Rust-only crate dependency refactor: moves Provider/RetryConfig into codex-client, moves feature-state metrics into codex-core, and adjusts tonic/reqwest/png cargo features. Go has no codex-api/codex-client/codex-features crate split or cargo feature graph; provider and retry configuration already live in the model/config packages."
+    "Rust-only crate dependency refactor: moves Provider/RetryConfig into codex-client, moves feature-state metrics into codex-core, and adjusts tonic/reqwest/png cargo features. Go has no codex-api/codex-client/codex-features crate split or cargo feature graph; provider and retry configuration already live in the model/config packages."
    ]
   },
   {
@@ -20680,10 +20680,10 @@
    "domains": [
     "codex_go"
    ],
-  "status": "complete",
+   "status": "complete",
    "evidence": [
-   "Go's audio token estimate cache never computes under the cache mutex: `estimateAudioTokenCount` reads with `get` (lock held only for the lookup), decodes and estimates unlocked, then stores with `put` (audioutil/audio.go). Image byte estimates are not cached in Go, so initialization cannot block unrelated keys.",
-   "Tests: `go test ./audioutil -count=1` passes."
+    "Go's audio token estimate cache never computes under the cache mutex: `estimateAudioTokenCount` reads with `get` (lock held only for the lookup), decodes and estimates unlocked, then stores with `put` (audioutil/audio.go). Image byte estimates are not cached in Go, so initialization cannot block unrelated keys.",
+    "Tests: `go test ./audioutil -count=1` passes."
    ]
   },
   {
@@ -21914,11 +21914,11 @@
    "domains": [
     "codex_go"
    ],
-  "status": "complete",
+   "status": "complete",
    "evidence": [
-   "Go already keeps the shared conversion in model/responses_headers.go (`jsonHeadersToHTTPHeaders`): string, number and boolean values convert, invalid header names and unsupported values are skipped, and sorted keys preserve Rust's last-wins behaviour for case variants (#51440).",
-   "`safetyBufferingTreatmentFromJSONHeaders` consumes it for WebSocket event headers, the same call site Rust moved to responses_headers.",
-   "Tests: `go test ./model -run 'ResponseHeader|JSONHeader|SafetyBuffering' -count=1` passes."
+    "Go already keeps the shared conversion in model/responses_headers.go (`jsonHeadersToHTTPHeaders`): string, number and boolean values convert, invalid header names and unsupported values are skipped, and sorted keys preserve Rust's last-wins behaviour for case variants (#51440).",
+    "`safetyBufferingTreatmentFromJSONHeaders` consumes it for WebSocket event headers, the same call site Rust moved to responses_headers.",
+    "Tests: `go test ./model -run 'ResponseHeader|JSONHeader|SafetyBuffering' -count=1` passes."
    ]
   },
   {
@@ -25223,11 +25223,11 @@
    "domains": [
     "codex_go"
    ],
-  "status": "complete",
+   "status": "complete",
    "evidence": [
-   "`state/guardian_sender_messages.go` renders each sender exchange with its preceding assistant message as untrusted context, shares the 900-byte budget with user evidence priority, and emits the unavailable-context notice; the renderer is reviewer-only and never enters the worker prompt.",
-   "`appserver/retained_context.go` captures assistant adjacency at delivery, recognizes `cloud_threads.send_message`, and accepts compact and indented `<codex_delegation>` envelopes.",
-   "Tests: `go test ./state -run GuardianSender` and `go test ./appserver -run 'RetainedSender|Guardian'` pass (TestGuardianSenderMessagesRenderAssistantContextLikeRust, TestRuntimeRouterCapturesSenderUserMessagesLikeRust)."
+    "`state/guardian_sender_messages.go` renders each sender exchange with its preceding assistant message as untrusted context, shares the 900-byte budget with user evidence priority, and emits the unavailable-context notice; the renderer is reviewer-only and never enters the worker prompt.",
+    "`appserver/retained_context.go` captures assistant adjacency at delivery, recognizes `cloud_threads.send_message`, and accepts compact and indented `<codex_delegation>` envelopes.",
+    "Tests: `go test ./state -run GuardianSender` and `go test ./appserver -run 'RetainedSender|Guardian'` pass (TestGuardianSenderMessagesRenderAssistantContextLikeRust, TestRuntimeRouterCapturesSenderUserMessagesLikeRust)."
    ]
   },
   {
@@ -25429,9 +25429,9 @@
    "domains": [
     "codex_go"
    ],
-  "status": "not_applicable",
+   "status": "not_applicable",
    "evidence": [
-   "Rust dependency bump (workspace `windows-sys` 0.61.2) plus an OwnedHandle/BorrowedHandle ownership refactor. Go has no windows-sys crate, handle-owner types, or cargo dependency graph; Windows process and socket handling use Go syscalls and os/exec."
+    "Rust dependency bump (workspace `windows-sys` 0.61.2) plus an OwnedHandle/BorrowedHandle ownership refactor. Go has no windows-sys crate, handle-owner types, or cargo dependency graph; Windows process and socket handling use Go syscalls and os/exec."
    ]
   },
   {
@@ -25465,11 +25465,11 @@
    "domains": [
     "codex_go"
    ],
-  "status": "complete",
+   "status": "complete",
    "evidence": [
-   "`features/features.go` registers the disabled-by-default `multi_agent_v2_dynamic_tools` flag, and `runtimeAgentController.SpawnAgent` copies the parent record's dynamic tools into a fresh V2 child's metadata when `forkTurns == none` and the flag is on (appserver/agent_controller.go multiAgentV2DynamicToolsEnabled).",
-   "Inherited definitions reach the child's turn because the router loads `record.Metadata.DynamicTools` into thread/turn params (appserver/router.go).",
-   "Tests: TestRuntimeAgentControllerSpawnInheritsDynamicToolsLikeRust covers V1-disabled, V2-disabled and V2-enabled inheritance; `go test ./appserver -run ...DynamicTools...` and `go test ./features` pass."
+    "`features/features.go` registers the disabled-by-default `multi_agent_v2_dynamic_tools` flag, and `runtimeAgentController.SpawnAgent` copies the parent record's dynamic tools into a fresh V2 child's metadata when `forkTurns == none` and the flag is on (appserver/agent_controller.go multiAgentV2DynamicToolsEnabled).",
+    "Inherited definitions reach the child's turn because the router loads `record.Metadata.DynamicTools` into thread/turn params (appserver/router.go).",
+    "Tests: TestRuntimeAgentControllerSpawnInheritsDynamicToolsLikeRust covers V1-disabled, V2-disabled and V2-enabled inheritance; `go test ./appserver -run ...DynamicTools...` and `go test ./features` pass."
    ]
   },
   {
@@ -26362,11 +26362,11 @@
    "domains": [
     "codex_go"
    ],
-  "status": "complete",
+   "status": "complete",
    "evidence": [
-   "`appserver/realtime_runtime.go` records `transcript_tail.flush` straight into thread history (`recordRealtimeTranscriptTail`) without starting or steering a turn, applying the active-transcript budget and holding the realtime event lock.",
-   "An idle thread records the tail as its own completed history turn; a running turn absorbs the items without a second turn/start.",
-   "Tests: TestRealtimeTranscriptTailFlushRecordsHistoryWithoutInferenceLikeRust and TestRealtimeTranscriptTailFlushJoinsActiveTurnWithoutSteeringLikeRust pass."
+    "`appserver/realtime_runtime.go` records `transcript_tail.flush` straight into thread history (`recordRealtimeTranscriptTail`) without starting or steering a turn, applying the active-transcript budget and holding the realtime event lock.",
+    "An idle thread records the tail as its own completed history turn; a running turn absorbs the items without a second turn/start.",
+    "Tests: TestRealtimeTranscriptTailFlushRecordsHistoryWithoutInferenceLikeRust and TestRealtimeTranscriptTailFlushJoinsActiveTurnWithoutSteeringLikeRust pass."
    ]
   },
   {

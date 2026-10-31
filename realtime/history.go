@@ -151,6 +151,198 @@ func jsonString(value string) string {
 	return string(encoded)
 }
 
+// MarshalRolloutJSON emits the canonical snake_case wire shape persisted in a
+// `realtime_item` rollout record (Rust RolloutItem::RealtimeItem).
+func (i RealtimeItem) MarshalRolloutJSON() ([]byte, error) {
+	content, err := i.Content.marshalRolloutJSON()
+	if err != nil {
+		return nil, err
+	}
+	var builder strings.Builder
+	builder.WriteString(`{"id":`)
+	builder.WriteString(jsonString(i.ID))
+	builder.WriteString(`,"realtime_session_id":`)
+	builder.WriteString(jsonString(i.RealtimeSessionID))
+	if body := content[1:]; len(body) > 1 {
+		builder.WriteByte(',')
+		builder.Write(body)
+	}
+	return []byte(builder.String()), nil
+}
+
+// marshalRolloutJSON emits the canonical tagged content object.
+func (c RealtimeItemContent) marshalRolloutJSON() ([]byte, error) {
+	switch c.Kind {
+	case RealtimeItemKindSessionStarted:
+		return []byte(`{"type":"realtime_session_started"}`), nil
+	case RealtimeItemKindTranscriptSegment:
+		if !validTranscriptRole(c.Role) {
+			return nil, fmt.Errorf("invalid realtime transcript role %q", c.Role)
+		}
+		return []byte(`{"type":"transcript_segment","role":` + jsonString(string(c.Role)) +
+			`,"text":` + jsonString(c.Text) + `}`), nil
+	case RealtimeItemKindBemItemPromoted:
+		presentation, err := c.Presentation.marshalRolloutJSON()
+		if err != nil {
+			return nil, err
+		}
+		return []byte(`{"type":"bem_item_promoted","turn_id":` + jsonString(c.TurnID) +
+			`,"item_id":` + jsonString(c.ItemID) +
+			`,"presentation":` + string(presentation) + `}`), nil
+	case RealtimeItemKindSessionClosed:
+		if !validSessionOutcome(c.Outcome) {
+			return nil, fmt.Errorf("invalid realtime session outcome %q", c.Outcome)
+		}
+		return []byte(`{"type":"realtime_session_closed","outcome":` + jsonString(string(c.Outcome)) + `}`), nil
+	default:
+		return nil, fmt.Errorf("invalid realtime item kind %q", c.Kind)
+	}
+}
+
+// marshalRolloutJSON emits the canonical tagged presentation object.
+func (p BemItemPresentation) marshalRolloutJSON() ([]byte, error) {
+	switch p.Kind {
+	case BemPresentationWholeItem:
+		return []byte(`{"type":"whole_item"}`), nil
+	case BemPresentationInlineMarkdown:
+		return []byte(`{"type":"inline_markdown"}`), nil
+	case BemPresentationInlineVisualization:
+		return []byte(`{"type":"inline_visualization","index":` + fmt.Sprintf("%d", p.Index) + `}`), nil
+	default:
+		return nil, fmt.Errorf("invalid bem item presentation %q", p.Kind)
+	}
+}
+
+// UnmarshalRolloutJSON decodes the canonical snake_case wire shape written by
+// RolloutItem::RealtimeItem.
+func (i *RealtimeItem) UnmarshalRolloutJSON(data []byte) error {
+	if i == nil {
+		return fmt.Errorf("realtime item is required")
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	if fields == nil {
+		return fmt.Errorf("realtime item is required")
+	}
+	id, err := requiredRealtimeString(fields, "id")
+	if err != nil {
+		return err
+	}
+	sessionID, err := requiredRealtimeString(fields, "realtime_session_id")
+	if err != nil {
+		return err
+	}
+	content, err := decodeRealtimeRolloutContent(fields)
+	if err != nil {
+		return err
+	}
+	*i = RealtimeItem{ID: id, RealtimeSessionID: sessionID, Content: content}
+	return nil
+}
+
+// decodeRealtimeRolloutContent reads the canonical tagged content variant from
+// the flattened item fields.
+func decodeRealtimeRolloutContent(fields map[string]json.RawMessage) (RealtimeItemContent, error) {
+	kind, err := requiredRealtimeString(fields, "type")
+	if err != nil {
+		return RealtimeItemContent{}, err
+	}
+	switch kind {
+	case "realtime_session_started":
+		return RealtimeItemContent{Kind: RealtimeItemKindSessionStarted}, nil
+	case "transcript_segment":
+		role, err := requiredRealtimeString(fields, "role")
+		if err != nil {
+			return RealtimeItemContent{}, err
+		}
+		if !validTranscriptRole(RealtimeTranscriptRole(role)) {
+			return RealtimeItemContent{}, fmt.Errorf("unknown realtime transcript role %q", role)
+		}
+		text, err := requiredRealtimeString(fields, "text")
+		if err != nil {
+			return RealtimeItemContent{}, err
+		}
+		return RealtimeItemContent{
+			Kind: RealtimeItemKindTranscriptSegment,
+			Role: RealtimeTranscriptRole(role),
+			Text: text,
+		}, nil
+	case "bem_item_promoted":
+		turnID, err := requiredRealtimeString(fields, "turn_id")
+		if err != nil {
+			return RealtimeItemContent{}, err
+		}
+		itemID, err := requiredRealtimeString(fields, "item_id")
+		if err != nil {
+			return RealtimeItemContent{}, err
+		}
+		raw, ok := fields["presentation"]
+		if !ok {
+			return RealtimeItemContent{}, fmt.Errorf("missing field presentation")
+		}
+		presentation, err := decodeRolloutBemPresentation(raw)
+		if err != nil {
+			return RealtimeItemContent{}, err
+		}
+		return RealtimeItemContent{
+			Kind:         RealtimeItemKindBemItemPromoted,
+			TurnID:       turnID,
+			ItemID:       itemID,
+			Presentation: presentation,
+		}, nil
+	case "realtime_session_closed":
+		outcome, err := requiredRealtimeString(fields, "outcome")
+		if err != nil {
+			return RealtimeItemContent{}, err
+		}
+		if !validSessionOutcome(RealtimeSessionOutcome(outcome)) {
+			return RealtimeItemContent{}, fmt.Errorf("unknown realtime session outcome %q", outcome)
+		}
+		return RealtimeItemContent{
+			Kind:    RealtimeItemKindSessionClosed,
+			Outcome: RealtimeSessionOutcome(outcome),
+		}, nil
+	default:
+		return RealtimeItemContent{}, fmt.Errorf("unknown realtime item kind %q", kind)
+	}
+}
+
+// decodeRolloutBemPresentation decodes the canonical presentation object.
+func decodeRolloutBemPresentation(data []byte) (BemItemPresentation, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return BemItemPresentation{}, err
+	}
+	if fields == nil {
+		return BemItemPresentation{}, fmt.Errorf("bem item presentation is required")
+	}
+	kind, err := requiredRealtimeString(fields, "type")
+	if err != nil {
+		return BemItemPresentation{}, err
+	}
+	switch kind {
+	case "whole_item":
+		return BemItemPresentation{Kind: BemPresentationWholeItem}, nil
+	case "inline_markdown":
+		return BemItemPresentation{Kind: BemPresentationInlineMarkdown}, nil
+	case "inline_visualization":
+		raw, ok := fields["index"]
+		if !ok {
+			return BemItemPresentation{}, fmt.Errorf("missing field index")
+		}
+		var presentation BemItemPresentation
+		presentation.Kind = BemPresentationInlineVisualization
+		if err := json.Unmarshal(raw, &presentation.Index); err != nil {
+			return BemItemPresentation{}, fmt.Errorf("field index must be an unsigned integer: %w", err)
+		}
+		return presentation, nil
+	default:
+		return BemItemPresentation{}, fmt.Errorf("unknown bem item presentation %q", kind)
+	}
+}
+
 // UnmarshalJSON decodes the flattened item and rejects unknown or missing
 // fields, so a malformed timeline item fails closed.
 func (i *RealtimeItem) UnmarshalJSON(data []byte) error {
@@ -611,6 +803,22 @@ func (s *RealtimeHistoryState) PromoteAgentItem(turnID, itemID string, presentat
 // timeline.
 func (s *RealtimeHistoryState) SealUserInput() RealtimeEventEffects {
 	if s == nil || !s.shouldSealUserInput() {
+		return RealtimeEventEffects{}
+	}
+	var items []RealtimeItem
+	s.sealSegments(&items, true)
+	return RealtimeEventEffects{Order: RealtimeOrderBeforeEvent, Items: items}
+}
+
+// SealUserInputForPrompt seals the live segments before a typed user turn
+// enters the timeline, skipping realtime handoff delegations the way Rust's
+// `should_seal_user_input` does.
+func (s *RealtimeHistoryState) SealUserInputForPrompt(prompt string) RealtimeEventEffects {
+	if s == nil || !s.shouldSealUserInput() {
+		return RealtimeEventEffects{}
+	}
+	trimmed := strings.TrimSpace(prompt)
+	if strings.HasPrefix(trimmed, "<realtime_delegation>") && strings.HasSuffix(trimmed, "</realtime_delegation>") {
 		return RealtimeEventEffects{}
 	}
 	var items []RealtimeItem

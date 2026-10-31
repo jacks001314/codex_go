@@ -1057,6 +1057,11 @@ func (r *RuntimeRouter) SetNotificationSink(sink NotificationSink) {
 		r.notifyRealtime([]realtime.Notification{notification})
 	})
 	r.requireRealtime().SetEventSink(r.handleRealtimeEvent)
+	r.requireRealtime().SetHistoryItemSink(r.persistRealtimeHistoryItems)
+	r.requireRealtime().SetHistoryEnabled(func(threadID string) bool {
+		_, ephemeral := r.ephemeralThreadRecord(session.ThreadID(threadID), false)
+		return !ephemeral
+	})
 }
 
 func (r *RuntimeRouter) SetServerRequestSink(sink ServerRequestSink) {
@@ -3652,6 +3657,9 @@ func (r *RuntimeRouter) dispatch(request *Request) (result any, err error) {
 		if request.Method == MethodThreadItemsList {
 			return r.handleThreadItemsListRuntime(request)
 		}
+		if request.Method == MethodThreadTimelineList {
+			return r.handleThreadTimelineListRuntime(request)
+		}
 		if request.Method == MethodThreadItemsRead {
 			return r.handleThreadItemsReadRuntime(request)
 		}
@@ -4258,6 +4266,27 @@ func (r *RuntimeRouter) handleThreadItemsListRuntime(request *Request) (*ThreadI
 		return nil, jsonRPCInvalidRequest(fmt.Sprintf("thread %s is not materialized yet; thread/items/list is unavailable before first user message", record.ID))
 	}
 	return BuildItemsResponse(record, &params)
+}
+
+// handleThreadTimelineListRuntime mirrors handleThreadItemsListRuntime for the
+// experimental canonical timeline (#40508): experimental-gated dispatch,
+// ephemeral threads rejected, and state-backed history delegated to the thread
+// router.
+func (r *RuntimeRouter) handleThreadTimelineListRuntime(request *Request) (*ThreadTimelineListResponse, error) {
+	var params ThreadTimelineListParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if err := params.Validate(); err != nil {
+		return nil, err
+	}
+	if _, ok := r.ephemeralThreadRecord(session.ThreadID(params.ThreadID), false); ok {
+		return nil, jsonRPCInvalidRequest("ephemeral threads do not support thread/timeline/list")
+	}
+	if r.services.ThreadRouter != nil && r.services.StateRuntime != nil {
+		return r.services.ThreadRouter.handleThreadTimelineList(request)
+	}
+	return nil, methodNotFound("thread/timeline/list is not supported yet")
 }
 
 // handleThreadItemsReadRuntime mirrors handleThreadItemsListRuntime for the
@@ -9345,6 +9374,9 @@ func (r *RuntimeRouter) handleTurnSteer(request *Request) (*turn.TurnSteerRespon
 	// (SessionTelemetry::user_prompt).
 	r.emitUserPromptRecords(context.Background(), params.ThreadID, params.Prompt, params.Input)
 	r.updateActiveTurnApprovalsReviewer(&params)
+	// Rust #41924: an accepted steer seals the live transcript before its user
+	// message is recorded.
+	r.sealRealtimeUserInput(params.ThreadID, params.Prompt)
 	if r.hasRuntimeThreadStore() {
 		if item, ok := sessionItemFromTurnSteer(&params); ok {
 			if _, err := r.runtimeAppendItem(session.ThreadID(params.ThreadID), item); err != nil {
@@ -20593,6 +20625,7 @@ func isThreadMethod(method Method) bool {
 		MethodThreadAttachmentAdd, MethodThreadAttachmentList, MethodThreadAttachmentRemove,
 		MethodThreadAttachmentOwnerList,
 		MethodThreadSearch, MethodThreadLoadedList, MethodThreadItemsList,
+		MethodThreadItemsRead, MethodThreadTimelineList,
 		MethodThreadTurnsList, MethodThreadRevert,
 		MethodThreadSample,
 		MethodThreadGuardianReview,

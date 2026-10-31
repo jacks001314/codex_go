@@ -1031,6 +1031,8 @@ type Manager struct {
 	transport          *TransportBackendConfig
 	notificationSink   func(Notification)
 	eventSink          func(string, Event)
+	historyItemSink    func(string, []RealtimeItem)
+	historyEnabled     func(string) bool
 	now                func() time.Time
 	shutdown           bool
 	backgroundTaskWait sync.WaitGroup
@@ -1682,7 +1684,7 @@ func (m *Manager) StartWithOptions(params *StartParams, options *StartOptions) (
 	// The canonical timeline records the session boundary after the transport
 	// notifications, matching the reducer's after-event ordering.
 	if effects := m.historyFor(config.ThreadID).StartSession(config.RealtimeSessionID); !effects.Empty() {
-		notifications = append(notifications, historyItemNotifications(config.ThreadID, effects)...)
+		notifications = append(notifications, m.publishHistoryEffects(config.ThreadID, effects)...)
 	}
 	return stateSnapshot, notifications, nil
 }
@@ -1824,7 +1826,7 @@ func (m *Manager) takeSessionClosedNotifications(threadID string) []Notification
 	if m == nil {
 		return nil
 	}
-	return historyItemNotifications(threadID, m.historyFor(threadID).SessionClosed())
+	return m.publishHistoryEffects(threadID, m.historyFor(threadID).SessionClosed())
 }
 
 func (m *Manager) State(threadID string) (*SessionState, bool) {
