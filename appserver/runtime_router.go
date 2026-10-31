@@ -16916,7 +16916,7 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	if err != nil {
 		return nil, err
 	}
-	viewImageOptions := r.viewImageOptionsForTurn(cfg, params, cwd)
+	viewImageOptions := r.viewImageOptionsForTurn(cfg, params, cwd, threadID, strings.TrimSpace(turnID))
 	requestUserInputModes := requestUserInputAvailableModesForTurn(cfg)
 	requestUserInputDefaultMode := requestUserInputDefaultModeEnabled(cfg)
 	waitForEnvironmentEnabled := cfg != nil && features.Enabled(cfg.FeatureSettings(), "deferred_executor")
@@ -17978,7 +17978,7 @@ func (r *RuntimeRouter) includeEnvironmentIDForTurn(cfg *config.Config, params *
 	return usable > 1
 }
 
-func (r *RuntimeRouter) viewImageOptionsForTurn(cfg *config.Config, params *turn.TurnStartParams, cwd string) *tool.ViewImageOptions {
+func (r *RuntimeRouter) viewImageOptionsForTurn(cfg *config.Config, params *turn.TurnStartParams, cwd string, threadID string, turnID string) *tool.ViewImageOptions {
 	if cfg != nil && !features.Enabled(cfg.FeatureSettings(), "view_image") {
 		return nil
 	}
@@ -17997,6 +17997,25 @@ func (r *RuntimeRouter) viewImageOptionsForTurn(cfg *config.Config, params *turn
 		IncludeEnvironmentID:     r.includeEnvironmentIDForTurn(cfg, params),
 		// Rust #20647: view_image reads the selected environment's filesystem.
 		EnvironmentFileSystems: tool.NewUnifiedExecEnvironmentFileSystems(r.unifiedExecEnvironmentsForTurn(params), cwd),
+		// Rust #44242: the call-time image capabilities follow the model captured
+		// for the sampling step, so a mid-turn switch to a text-only model is
+		// rejected instead of serving the turn's initial model capabilities.
+		StepSettings: func() (tool.ViewImageStepSettings, bool) {
+			stepModelID := modelID
+			if active := r.activeRuntimeTurnStateSnapshot(strings.TrimSpace(threadID), strings.TrimSpace(turnID)); active != nil && active.Params != nil {
+				if model := strings.TrimSpace(active.Params.Model); model != "" {
+					stepModelID = model
+				}
+			}
+			stepInfo := r.modelInfoForRuntimeWithConfig(stepModelID, cfg)
+			if stepInfo == nil {
+				return tool.ViewImageStepSettings{}, false
+			}
+			return tool.ViewImageStepSettings{
+				SupportsImageInput:       appModelInfoSupportsImageInput(stepInfo),
+				CanRequestOriginalDetail: stepInfo.SupportsImageDetailOriginal,
+			}, true
+		},
 	}
 }
 

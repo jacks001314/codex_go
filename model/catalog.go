@@ -706,6 +706,13 @@ func (m *ModelInfo) UsableContextWindow() (int64, bool) {
 	return m.usableContextWindow()
 }
 
+// ResolvedContextWindow is the exported form of resolvedContextWindow for
+// callers outside the catalog (Rust ModelInfo::resolved_context_window, the
+// skill catalog budget's window in #44202).
+func (m *ModelInfo) ResolvedContextWindow() (int64, bool) {
+	return m.resolvedContextWindow()
+}
+
 type TruncationPolicy struct {
 	Mode  string `json:"mode"`
 	Limit int64  `json:"limit"`

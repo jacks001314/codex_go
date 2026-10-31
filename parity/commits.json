@@ -10624,9 +10624,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+     "Rust #44202 passes the sampling step's captured ModelInfo (and step telemetry) to world-state contributors so skill catalogs, context windows and metric attribution follow a mid-turn model switch instead of a thread-scoped ModelInfo. Go has no extension contributor registry or thread-scoped ModelInfo store, so that plumbing is N/A, but every native consumer reads the captured step model: turnStepInstructionsProvider rebuilds the skill catalog per step from the active turn's model (appserver/global_instructions.go) and skillContextWindowForTurn resolves that model through modelInfoForRuntimeWithConfig plus the new model.ModelInfo.ResolvedContextWindow (context_window, else max_context_window, model/catalog.go), so a step declaring only max_context_window keeps its 2%-of-window budget; includeSkillsUsageInstructionsForTurn follows the same step model while skillMetadataBudgetForConfig still lets [skills].max_context_tokens win. Test: TestStepSkillCatalogUsesCapturedModelSettingsLikeRust (step A max-only window 400000 without usage guidance, then a turn/settings/update to step B with 200000 plus include_skills_usage_instructions). Residual: Go's metric sinks do not implement Rust's metadata-tagged metrics (the model tag on catalog metrics), a pipeline-wide gap rather than per-catalog code. Verified with go test ./appserver -run 'Skill|Step' -count=1, go test ./model -count=1, and go build ./..."
    ]
   },
   {
@@ -10696,9 +10696,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "partial",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+     "Rust #44242 builds each step's tool plan from its captured model settings: image support and detail, command and MCP output truncation, extension metadata, tool telemetry, and delayed command completion events. Go already applies the step model to output truncation (ToolDispatcher.SetStepModel feeds invocation.Truncation for exec_command, write_stdin and MCP output, #44243) and captures the issuing model for delayed unified-exec completion events (rememberToolItemModelContext at UnifiedExecEventBegin). This round added the missing call-time and metadata pieces: tool.ViewImageOptions.StepSettings resolves the active step's model at Execute, rejecting a text-only step with Rust's 'view_image is not allowed because you do not support image inputs' message and downgrading detail=original when that step model cannot request it; appserver.viewImageOptionsForTurn installs the resolver from the active turn's Params.Model; stepTurnClientMetadata and activeTurnClientMetadata rewrite node_repl_disabled and node_repl_auto_review_required from the step model and prefer the captured RunConfig.Model, so MCP/extension turn metadata describes the issuing step. Tests: TestStepViewImageCapabilitiesFollowCapturedModelLikeRust, TestStepMCPMetadataCarriesCapturedModelNodeReplFlagsLikeRust. Residual: the model-visible tool list is still built once at turn start (Go has no per-step registry rebuild), so a mid-turn switch to a text-only model still advertises view_image and depends on the new call-time rejection; Rust's metadata-tag metric attribution (model tag on tool telemetry) is unimplemented across Go's metric sinks. Verified with go test ./tool -run ViewImage -count=1, go test ./appserver -run 'ViewImage|Step|Skill|MCPMetadata|TurnMetadata' -count=1, go build ./..."
    ]
   },
   {

@@ -261,7 +261,8 @@ func (r *RuntimeRouter) mcpTurnMetadataProvider(threadID string, turnID string) 
 		// refreshes the captured model and reasoning effort first (Rust
 		// ExecutionMetadata::from_settings).
 		metadata := active.RunConfig.ClientMetadata
-		if refreshed := stepTurnClientMetadata(metadata, active.RunConfig.Model, active.RunConfig.ReasoningEffort); len(refreshed) > 0 {
+		stepInfo := r.modelInfoForRuntime(active.RunConfig.Model)
+		if refreshed := stepTurnClientMetadata(metadata, stepInfo, active.RunConfig.Model, active.RunConfig.ReasoningEffort); len(refreshed) > 0 {
 			metadata = refreshed
 		}
 		return turn.MCPTurnMetadataFromResponsesMetadata(
@@ -9500,13 +9501,23 @@ func (r *RuntimeRouter) activeTurnClientMetadata(threadID string, turnID string,
 		}
 	}
 	modelID := ""
-	if cfg != nil {
+	// Rust ExecutionMetadata::from_settings describes the issuing step, so the
+	// captured model (a mid-turn settings update) wins over the configured
+	// default, including the model-owned node-REPL flags (#44242).
+	if active.RunConfig != nil {
+		modelID = strings.TrimSpace(active.RunConfig.Model)
+	}
+	if modelID == "" && cfg != nil {
 		modelID = stringConfigValue(cfg, "model")
 	}
 	nodeReplAutoReviewRequired := false
 	nodeReplDisabled := false
-	if cfg != nil && modelID != "" {
-		if info := r.modelInfoForRuntimeWithConfig(modelID, cfg); info != nil {
+	if modelID != "" {
+		info := r.modelInfoForRuntime(modelID)
+		if cfg != nil {
+			info = r.modelInfoForRuntimeWithConfig(modelID, cfg)
+		}
+		if info != nil {
 			nodeReplAutoReviewRequired = info.NodeReplAutoReviewRequired
 			nodeReplDisabled = info.NodeReplDisabled
 		}
@@ -9581,7 +9592,7 @@ func (r *RuntimeRouter) turnStepSettingsProvider(threadID string, turnID string)
 			settings.ReasoningEffort = strings.TrimSpace(active.RunConfig.ReasoningEffort)
 			settings.ReasoningSummary = strings.TrimSpace(active.RunConfig.ReasoningSummary)
 			settings.ServiceTier = strings.TrimSpace(active.RunConfig.ServiceTier)
-			settings.ClientMetadata = stepTurnClientMetadata(active.RunConfig.ClientMetadata, settings.Model, settings.ReasoningEffort)
+			settings.ClientMetadata = stepTurnClientMetadata(active.RunConfig.ClientMetadata, r.modelInfoForRuntime(settings.Model), settings.Model, settings.ReasoningEffort)
 		}
 		if settings.Model == "" && active.Params != nil {
 			settings.Model = strings.TrimSpace(active.Params.Model)
@@ -9747,10 +9758,11 @@ func (r *RuntimeRouter) currentTurnModel(threadID string, expectedTurnID string)
 	return ""
 }
 
-// stepTurnClientMetadata refreshes the captured model and reasoning effort inside
-// a turn's request metadata document while preserving every other entry
-// (Rust ExecutionMetadata::apply_to writes both into the metadata extra).
-func stepTurnClientMetadata(metadata map[string]string, modelID string, reasoningEffort string) map[string]string {
+// stepTurnClientMetadata refreshes the captured model, reasoning effort and
+// model-owned node-REPL flags inside a turn's request metadata document while
+// preserving every other entry (Rust ExecutionMetadata::apply_to writes them
+// into the metadata extra, and #44242 makes the flags follow the step model).
+func stepTurnClientMetadata(metadata map[string]string, info *model.ModelInfo, modelID string, reasoningEffort string) map[string]string {
 	if len(metadata) == 0 {
 		return nil
 	}
@@ -9769,6 +9781,10 @@ func stepTurnClientMetadata(metadata map[string]string, modelID string, reasonin
 		document[codexapi.ReasoningEffortKey] = trimmed
 	} else {
 		delete(document, codexapi.ReasoningEffortKey)
+	}
+	if info != nil {
+		document[codexapi.NodeReplAutoReviewRequiredKey] = info.NodeReplAutoReviewRequired
+		document[codexapi.NodeReplDisabledKey] = info.NodeReplDisabled
 	}
 	encoded, err := json.Marshal(document)
 	if err != nil {
@@ -12770,11 +12786,18 @@ func (r *RuntimeRouter) skillContextWindowForTurn(cfg *config.Config, params *tu
 	if strings.TrimSpace(modelID) == "" {
 		return 0
 	}
-	contextWindow := r.modelContextWindowForModel(modelID)
-	if contextWindow == nil {
+	// Rust #44202: the skill catalog budget reads the captured step model's
+	// resolved context window (context_window, else max_context_window) before
+	// the configured override, so a mid-turn model switch re-budgets the catalog.
+	info := r.modelInfoForRuntimeWithConfig(modelID, cfg)
+	if info == nil {
 		return 0
 	}
-	return *contextWindow
+	contextWindow, ok := info.ResolvedContextWindow()
+	if !ok {
+		return 0
+	}
+	return contextWindow
 }
 
 func (r *RuntimeRouter) includeSkillsUsageInstructionsForTurn(cfg *config.Config, params *turn.TurnStartParams) bool {
@@ -13124,18 +13147,6 @@ func (r *RuntimeRouter) historyIngestRequestedForTurn(cfg *config.Config, params
 func (r *RuntimeRouter) modelUsesResponsesLite(modelID string) bool {
 	info := r.modelInfoForRuntime(modelID)
 	return info != nil && info.UseResponsesLite
-}
-
-func (r *RuntimeRouter) modelContextWindowForModel(modelID string) *int64 {
-	if strings.TrimSpace(modelID) == "" {
-		return nil
-	}
-	info := r.requireModels().Info(&model.ModelInfoReadParams{Model: modelID})
-	if info == nil || info.ContextWindow <= 0 {
-		return nil
-	}
-	value := info.ContextWindow
-	return &value
 }
 
 // userInputResponseItemID mirrors Rust #57538's admitted user input identity: a

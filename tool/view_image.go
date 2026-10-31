@@ -23,10 +23,26 @@ const viewImageInvalidMessage = "unable to process image: invalid or unsupported
 // Rust #50962: the legacy message for view_image when no environment can be used.
 const viewImageUnavailableMessage = "view_image is unavailable in this session"
 
+// viewImageUnsupportedMessage mirrors Rust's VIEW_IMAGE_UNSUPPORTED_MESSAGE:
+// the model captured for the sampling step that issued the call cannot take
+// image input (#44242).
+const viewImageUnsupportedMessage = "view_image is not allowed because you do not support image inputs"
+
+// ViewImageStepSettings carries the image capabilities of the model captured for
+// the sampling step that issued the call (Rust #44242 reads the step's
+// model_info.input_modalities and original-detail support at call time).
+type ViewImageStepSettings struct {
+	SupportsImageInput       bool
+	CanRequestOriginalDetail bool
+}
+
 type ViewImageOptions struct {
 	CWD                      string
 	CanRequestOriginalDetail bool
 	IncludeEnvironmentID     bool
+	// StepSettings, when set, resolves the issuing step's model capabilities so a
+	// mid-turn model switch is honored instead of the turn's initial model.
+	StepSettings func() (ViewImageStepSettings, bool)
 	// EnvironmentCheck carries the turn readiness facts (Rust #50962) so an
 	// explicit environment_id is resolved before the path is read.
 	EnvironmentCheck *UnifiedExecEnvironmentCheck
@@ -53,6 +69,21 @@ type ViewImageResult struct {
 
 func NewViewImageHandler(options ViewImageOptions) *ViewImageHandler {
 	return &ViewImageHandler{options: options}
+}
+
+// capabilities resolves the issuing step's image capabilities, falling back to
+// the turn-start options when no step resolver is installed or no active step is
+// available.
+func (h *ViewImageHandler) capabilities() (bool, bool) {
+	if h == nil {
+		return true, false
+	}
+	if h.options.StepSettings != nil {
+		if settings, ok := h.options.StepSettings(); ok {
+			return settings.SupportsImageInput, settings.CanRequestOriginalDetail
+		}
+	}
+	return true, h.options.CanRequestOriginalDetail
 }
 
 func (h *ViewImageHandler) Spec() Spec {
@@ -92,6 +123,13 @@ func (h *ViewImageHandler) Execute(ctx context.Context, invocation *Invocation) 
 	if invocation.Payload.Kind != PayloadFunction {
 		return nil, RespondToModel("view_image handler received unsupported payload")
 	}
+	// Rust #44242 checks the captured step model before touching the arguments,
+	// so a model without image input is rejected rather than served stale
+	// turn-start capabilities.
+	supportsImageInput, canRequestOriginalDetail := h.capabilities()
+	if !supportsImageInput {
+		return nil, RespondToModel(viewImageUnsupportedMessage)
+	}
 	var args ViewImageArgs
 	if err := invocation.DecodeArguments(&args); err != nil {
 		return nil, err
@@ -103,7 +141,7 @@ func (h *ViewImageHandler) Execute(ctx context.Context, invocation *Invocation) 
 	if detail != "high" && detail != "original" {
 		return nil, RespondToModel(fmt.Sprintf("view_image.detail only supports `high` or `original`; omit `detail` for default high resized behavior, got `%s`", detail))
 	}
-	if detail == "original" && (h == nil || !h.options.CanRequestOriginalDetail) {
+	if detail == "original" && !canRequestOriginalDetail {
 		detail = "high"
 	}
 	var environmentCheck *UnifiedExecEnvironmentCheck

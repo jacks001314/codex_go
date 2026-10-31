@@ -9403,7 +9403,7 @@ func TestRuntimeRouterRegistersViewImageForImageCapableModel(t *testing.T) {
 		Model:    defaultModelForAppTurn(),
 	}
 
-	options := router.viewImageOptionsForTurn(nil, params, cwd)
+	options := router.viewImageOptionsForTurn(nil, params, cwd, params.ThreadID, "turn-view-image")
 	if options == nil || options.CWD != cwd {
 		t.Fatalf("viewImageOptionsForTurn() = %#v", options)
 	}
@@ -9433,7 +9433,7 @@ func TestRuntimeRouterViewImageDisabledFeatureRemovesToolLikeRust(t *testing.T) 
 	if err != nil || cfg == nil {
 		t.Fatalf("effectiveConfigForTurn() = %v, err %v", cfg, err)
 	}
-	if options := router.viewImageOptionsForTurn(cfg, params, cwd); options != nil {
+	if options := router.viewImageOptionsForTurn(cfg, params, cwd, params.ThreadID, "turn-view-image-disabled"); options != nil {
 		t.Fatalf("viewImageOptionsForTurn() = %#v, want nil with features.view_image=false", options)
 	}
 	toolRouter, err := router.toolRouterForTurn(cwd, params, "turn-view-image-disabled")
