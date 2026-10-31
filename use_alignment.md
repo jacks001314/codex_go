@@ -967,6 +967,29 @@ one-off captures.
     `TestSandboxSetupClapDiagnosticsLikeRust`,
     `TestSandboxSetupUserPresenceLikeRust` and `TestValidateUserPresence`.
 
+43. **`mcp add` transport group selection** - Rust's `AddMcpTransportArgs`
+    flattens an optional stdio struct (`command`, `env`) and an optional
+    streamable-HTTP struct, so clap's `transport` group makes `--url` and a
+    `COMMAND` conflict, while `--env` alone selects the stdio transport even
+    when `--url` is present and then leaves the command empty.
+    - `mcp add --url <URL> -- <COMMAND>...` now prints clap's conflict block
+      (`the argument '--url <URL>' cannot be used with '[COMMAND]...'`) with the
+      `mcp add` usage and exit 2 instead of the Go-only
+      `mcp add accepts either --url or COMMAND, not both`.
+    - `mcp add --url <URL> --env K=V` now reports Rust's run-time
+      `command is required` (exit 1) instead of
+      `mcp add --env is only valid with stdio COMMAND`.
+    - `--env K=V` with no transport keeps clap's required-group block
+      (`<COMMAND|--url <URL>>`), and the `requires = "url"` relations still fire
+      first (`--bearer-token-env-var` + `--env` + command).
+    Evidence: 11 live comparisons against 0.166
+    (`out/round28-mcp-add-groups.txt`) differ only in the config.toml shape
+    recorded under Still open; `go test ./cli` passes with
+    `TestMCPAddTransportGroupLikeRust`, and
+    `go test -vet=off ./app -run 'MCP|OAuth'` passes with
+    `TestMCPAddTransportGroupMetaLikeRust` and
+    `TestMCPAddEnvWithoutCommandLikeRust`.
+
 ## Verification
 
 - The missing-required surface matches Rust 0.166: `probe_missing_r25` and
@@ -1223,6 +1246,15 @@ one-off captures.
   report clap's missing-value block, and the usage blocks echo consumed options
   in argv order.
 
+- `mcp add` transport group round: `go build -o bin\codex.exe .\cmd\codex`
+  succeeds, `gofmt -l` is clean for the touched files,
+  `go test ./cli ./sandbox ./applypatch ./prompt ./review ./cmd/... ./tcptunnel`
+  pass and `go test -vet=off ./app` keeps the two known failures plus the flaky
+  auth-concurrency case, which passes standalone. 11 live comparisons against
+  0.166 (`out/round28-mcp-add-groups.txt`) match on stdout, stderr and exit
+  status; the only difference is the config.toml serialization shape listed
+  under Still open.
+
 ## Still open
 
 - `codex resume -i a.png b.png` (TUI picker path) also uses Rust's variadic
@@ -1266,6 +1298,12 @@ one-off captures.
     subcommand paths print clap's `-h`/`--help`/`help <topic>` pages plus the
     `--help=<value>` diagnostic, and `codex execpolicy check -hx` now reaches
     clap's missing-required block like Rust.
+- `codex mcp add` writes the same values but a different config.toml shape:
+  Rust inserts `mcp_servers` as an implicit table and writes each server's
+  fields in declaration order (`command`, `args`, `env`), while Go emits an
+  empty `[mcp_servers]` header and sorts keys alphabetically. Both parse back
+  identically; aligning needs implicit-table support and stable field order in
+  the config writer.
 - `apply_patch` on 2026-10-31: Rust 0.166 (`sandbox = "unelevated"`) refused to
   write under `%TEMP%` (`Access ... is denied`) while Go wrote the file; that
   sandbox-policy difference is still unaligned. Go also still appends

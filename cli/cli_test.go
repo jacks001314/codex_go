@@ -1168,9 +1168,9 @@ func TestParseMCPAddTransportFlagValidation(t *testing.T) {
 			want: "the following required argument was not provided: url",
 		},
 		{
-			name: "env is stdio only",
+			name: "env selects stdio and requires a command",
 			args: []string{"mcp", "add", "docs", "--url", "https://mcp.example.test", "--env", "TOKEN=secret"},
-			want: "mcp add --env is only valid with stdio COMMAND",
+			want: "command is required",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

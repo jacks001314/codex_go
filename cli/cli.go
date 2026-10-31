@@ -2027,10 +2027,15 @@ func parseMCP(args []string, mcp *MCPOptions) error {
 			return err
 		}
 		if mcp.URL != "" && len(mcp.Command) > 0 {
-			return errors.New("mcp add accepts either --url or COMMAND, not both")
+			return &UsageError{
+				Message: "the argument '--url <URL>' cannot be used with '[COMMAND]...'",
+				Usage:   subcommandUsageTexts["mcp add"].usage,
+			}
 		}
+		// `--env` belongs to the stdio argument group, so clap selects that
+		// transport even when --url is present and then finds no command.
 		if mcp.URL != "" && len(mcp.Env) > 0 {
-			return errors.New("mcp add --env is only valid with stdio COMMAND")
+			return errors.New("command is required")
 		}
 	case "remove", "logout":
 		for i := 1; i < len(args); i++ {
