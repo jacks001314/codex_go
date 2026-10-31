@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os"
+	"sort"
 
 	"codex_go/sandbox/windowssandbox/provisionservice"
 
@@ -396,6 +397,27 @@ func SandboxSetupIsComplete(codexHome string) (bool, error) {
 		}
 	}
 	return true, nil
+}
+
+// SandboxSetupIsCompleteWithSettings reports whether the recorded setup matches
+// the requested offline proxy settings (Rust
+// sandbox_setup_is_complete_with_settings): a version-matching marker whose
+// sorted proxy ports and local-binding mode match, plus a version-matching
+// credentials file.
+func SandboxSetupIsCompleteWithSettings(codexHome string, settings OfflineProxySettings) bool {
+	marker, err := ReadSetupMarker(codexHome)
+	if err != nil || !marker.VersionMatches() {
+		return false
+	}
+	recorded := append([]uint16(nil), marker.ProxyPorts...)
+	sort.Slice(recorded, func(left, right int) bool { return recorded[left] < recorded[right] })
+	desired := append([]uint16(nil), settings.ProxyPorts...)
+	sort.Slice(desired, func(left, right int) bool { return desired[left] < desired[right] })
+	if !equalUint16s(recorded, desired) || marker.AllowLocalBinding != settings.AllowLocalBinding {
+		return false
+	}
+	users, err := ReadSandboxUsersFile(codexHome)
+	return err == nil && users.VersionMatches()
 }
 
 // registeredSetupIsReady checks the service receipt for an opt-in registered
