@@ -153,6 +153,10 @@ func cloneToken(token windows.Token) (windows.Token, error) {
 	return windows.Token(duplicate), nil
 }
 
+// errOwnerImpersonation marks a failure to act as the provisioning client, so a
+// caller can tell it from a failure inside the impersonated operation.
+var errOwnerImpersonation = errors.New("impersonate the sandbox owner")
+
 // withOwnerImpersonation runs operation as the authenticated owner. A failed
 // revert must not continue as the user, so the process exits instead
 // (Rust package_lifecycle::with_owner_impersonation).
@@ -161,7 +165,7 @@ func withOwnerImpersonation(token windows.Token, operation func() error) error {
 	defer runtime.UnlockOSThread()
 	impersonated, _, callErr := procImpersonateLoggedOnUser.Call(uintptr(token))
 	if impersonated == 0 {
-		return fmt.Errorf("impersonate the sandbox owner: %w", callErr)
+		return fmt.Errorf("%w: %w", errOwnerImpersonation, callErr)
 	}
 	defer func() {
 		if err := windows.RevertToSelf(); err != nil {

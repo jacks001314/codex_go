@@ -50,7 +50,13 @@ func ValidateProvisioningRequest(
 		return nil
 	})
 	if err != nil {
-		return fmt.Errorf("configuration runtime worker failed to impersonate the provisioning client: %w", err)
+		if errors.Is(err, errOwnerImpersonation) {
+			// Rust reports the worker failure as that message alone: the io cause is
+			// printed by the worker, not carried into the request error, so a policy
+			// event keeps cause=unavailable.
+			return errors.New("configuration runtime worker failed to impersonate the provisioning client")
+		}
+		return err
 	}
 	if err := ValidateProvisioningRequirements(request.Settings, request.Listeners, requirements); err != nil {
 		return fmt.Errorf("enforce managed provisioning requirements: %w", err)

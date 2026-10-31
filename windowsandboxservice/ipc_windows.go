@@ -141,7 +141,7 @@ func HandleRequest(
 	}
 	defer identity.Close()
 	if err := validateProvisioningPolicy(identity, request, policy); err != nil {
-		return failureResponse(err), nil
+		return policyViolationResponse(err), nil
 	}
 	if handler == nil {
 		return failureResponse(errors.New("the provisioning service has no request handler")), nil

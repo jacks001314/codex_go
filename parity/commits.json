@@ -6384,9 +6384,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "Round 1190 (audit): N/A by architecture - creates the codex-rs/windows-sandbox-service crate (ipc.rs, service.rs with SCM service lifecycle, main.rs, main_tests.rs, BUILD.bazel/Cargo.toml entries). Go has no machine-wide Windows sandbox service binary, service control manager integration, or service-hosted IPC; parity/rust_inventory_test.go and rust_snapshot_test.go only name the crate. Go setup remains the per-user elevated helper."
+    "Round 1234 (audit): the N/A predates the Go port. The service now exists: cmd/codex-windows-sandbox-service/main.go parses the arguments through windowsandboxservice.ParseRunMode (runmode.go), service_windows.go registers serviceMainProcedure and runServiceMain with the SCM, service_status.go derives NewReportedServiceStatus and the EVENT_* identifiers, and the event-log helpers live next to them. Rust's foreground mode exists only in debug builds and ParseRunMode rejects it on purpose. Tests: go test ./windowsandboxservice -run 'ParseRunMode' -count=1; go test ./windowsandboxservice -count=1."
    ]
   },
   {
@@ -6433,9 +6433,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "Round 493 (audit): N/A by architecture - Go has no windows-sandbox-service process, provisioning client, or machine-policy validator (the same absence recorded for #49067/#48829/#50480). Go uses the direct elevated setup helper instead, so there is no provisioning-client policy or cache-bypass path to validate."
+    "Round 1234 (audit): the N/A predates the Go port. machine_policy.go carries ValidateProvisioningRequirements (elevated sandbox, local binding, HTTP/SOCKS ports, unclassified ports, fail-closed on a prohibited implementation) and LoadManagedRequirements (bootstrap, cloud authentication, managed bundle); machine_policy_windows.go adds ValidateProvisioningRequest and MachinePolicyValidator, which load the requirements while impersonating the owner. machine_policy_like_rust_test.go covers every branch. Tests: go test ./windowsandboxservice -run 'Policy|ProvisioningRequest' -count=1."
    ]
   },
   {
@@ -6445,9 +6445,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "Round 493 (audit): N/A by architecture - Go has no Windows sandbox service IPC client, service-side authenticated process identity, or AuthorizedClientProcess/ClientIdentity carrier. The direct setup helper is not a registered service client."
+    "Round 1234 (audit): the N/A predates the Go port. identity_windows.go implements AuthorizeClientProcess (pipe server process, package identity, image), AuthorizeClient (impersonated user equals the process user), AuthorizeSetupRuntime and accountNameFromSIDBytes; ipc_windows.go implements AuthenticateClient; pipe_windows.go owns the pipe; identity_policy.go adds RequireRuntimePackageFamily and isInstalledServiceImage. identity_windows_test.go and identity_policy_test.go cover the refusals. Tests: go test ./windowsandboxservice -run 'Identity|Policy|Authenticate' -count=1."
    ]
   },
   {
@@ -6457,9 +6457,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "Round 493 (audit): N/A by architecture - authenticated provisioning belongs to the absent windows-sandbox-service IPC host. Go's RunElevatedProvisioningSetup uses the direct setup path, so there is no service request authentication or retained-handle provisioning protocol to enable."
+    "Round 1234 (audit): the N/A predates the Go port. ipc_windows.go HandleRequest performs the same ordered steps as Rust ipc::handle_request (read one frame, ValidateRequest, AuthenticateClient, policy check, dispatch) and only ErrRuntimeSetupInterrupted escapes without an answer; request.go holds ValidateRequest; provisioning_windows.go holds the authenticated provisioning handler; home_windows.go holds ServiceUnavailable. Tests: go test ./windowsandboxservice -count=1."
    ]
   },
   {
@@ -6469,9 +6469,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "Round 493 (audit): N/A by architecture - Go has no experimental Windows sandbox service provisioning path, service-hosted proxy listeners, or UnsupportedHomeDrive service error. The direct elevated setup helper and existing sandbox proxy code retain their current behavior."
+    "Round 1234 (audit): the N/A predates the Go port. The experimental service provisioning path is carried by HandleRequest plus provisioning_windows.go (proxy listeners, settings, retained handles) and request.go, and a path the service cannot serve answers ServiceUnavailable so the client falls back to the interactive helper (home_windows.go). Tests: go test ./windowsandboxservice -count=1."
    ]
   },
   {
@@ -12850,9 +12850,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "N/A by architecture: the commit splits Rust's packaged Windows sandbox cleanup (prepare_packaged_windows_sandbox_cleanup, PreparedWindowsSandboxCleanup, and the service package_lifecycle/cleanup.rs module) into prepare/finish phases. Go ships no windows-sandbox-service or packaged-install cleanup path: sandbox/windowssandbox/uninstall.go exposes only CleanUpLegacyWindowsSandbox, uninstall_windows.go documents that the setup mutex, installation record, and account disable/wait primitives have no Go carrier, and rg for package_lifecycle/PreparedWindowsSandboxCleanup/prepare_packaged finds nothing."
+    "Round 1234 (audit): the N/A predates the Go port. sandbox/windowssandbox/uninstall_prepared_windows.go owns the prepared cleanup and windowsandboxservice/cleanup_windows.go splits it into the prepare/finish phases (CleanUpResources, cleanUpInstallation, Release) with the setup lock held across both. Tests: go test ./sandbox/windowssandbox ./windowsandboxservice -count=1."
    ]
   },
   {
@@ -13534,9 +13534,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "Upstream hardening targets hand-written unsafe Windows FFI and the Windows sandbox provisioning service. Go has no counterpart for most of it, and the invariants are already guaranteed elsewhere: (1) `process_package_family`/`GetCurrentPackageFamilyName` feed `windows-sandbox-service` client-vs-service identity checks, and Go ships no provisioning service (it has no package-family comparison at all); Go's package query is `windowssandbox.QueryPackageName` (`GetPackageFullName`), which already bounds the allocation (`packageNameMaxLength`), requires a terminating NUL, rejects embedded NULs, and validates UTF-16. (2) `token_user.rs` now bounds the TokenUser query and validates SID pointer/revision/length before copying; Go's `getUserSIDBytes` uses x/sys `Token.GetTokenUser`, rejects nil/invalid SIDs, and `copySIDBytes` copies into owned storage, with `SID.IsValid` bounding revision and subauthority count (length <= 68). (3) `account_name_from_sid` (SidTypeUser + non-empty domain) belongs to the provisioning service; Go's `LookupAccountNameForSID` only resolves the built-in Users alias for group membership. (4) The firewall COM drop guard is already Go's shape: `withFirewallRules` pins the OS thread, `defer`s `ole.CoUninitialize()` immediately after a successful `CoInitializeEx`, and defers every release. (5) The package-lifecycle directory guard is service-only; Go has no package lifecycle. Verified with `go test ./sandbox/windowssandbox/... -count=1`."
+    "Round 1234 (audit): the N/A predates the Go port and every hardened helper now has a carrier. (1) The process package family is read by provisionservice/package_family_windows.go (GetPackageFamilyName, APPMODEL_ERROR_NO_PACKAGE, bounded length) and registered_removal_windows.go runtimeProcessPackageFamily. (2) token_windows.go getUserSIDBytes and winutil_windows.go copySIDBytes bound the query and validate/copy the SID into owned storage. (3) accountNameFromSIDBytes in identity_windows.go keeps LookupAccountSid plus SidTypeUser and a non-empty domain. (4) The firewall COM drop guard is withFirewallRules (setup_main/win/firewall_windows.go) and uninstall_firewall_windows.go, which defer ole.CoUninitialize right after CoInitializeEx succeeds. (5) The package lifecycle directory guard is separate from the pinned ancestor/home handles in windowsandboxservice/cleanup_windows.go and lifecycle_windows.go. Tests: go test ./sandbox/windowssandbox/... ./windowsandboxservice -count=1."
    ]
   },
   {
@@ -13582,9 +13582,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "N/A - Go uses the direct setup helper and has no Windows sandbox service IPC, package identity/installation registry, runtime ownership transaction, package-scoped service names, retained logon management, or package cleanup finalizer. The matched symbols are Rust service/package infrastructure without a Go carrier."
+    "Round 1234 (audit): the N/A predates the Go port. registered_runtime_windows.go ProvisionRegisteredRuntime performs the service-managed package registration transaction, registered_removal_windows.go retires it, registered_packages_register_windows.go runs the MSIX AddPackageAsync/registration result, and the package-scoped service name plus the installation record live beside them. Tests: go test ./windowsandboxservice -run 'Registered|Registration' -count=1."
    ]
   },
   {
@@ -22328,9 +22328,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "Round 1190 (audit): N/A by architecture - adds anyhow::Context labels around managed runtime package registration inside codex-rs/windows-sandbox-service/src/registered_runtime.rs (start, finish, verify registration, grant metadata permissions, persist completed registration). Go has no service-side runtime registration, MSIX runtime package deployment, or installation record, so no analogous error path exists to annotate."
+    "Round 1234 (audit): the N/A predates the Go port. The context labels Rust adds are present: registered_runtime_windows.go wraps 'persist managed runtime account registration', 'start managed runtime package registration', 'verify managed runtime package registration', 'grant managed runtime metadata permissions' and 'persist completed managed runtime registration', and registered_packages_register_windows.go wraps 'finish managed runtime package registration'. Tests: go test ./windowsandboxservice -run 'Registered|Credentials' -count=1."
    ]
   },
   {
@@ -23105,9 +23105,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "Round 1190 (audit): N/A by architecture - replaces free-form parser text in the service policy-rejection event with fixed stage labels and typed cloud/HTTP/io/win32 codes (policy_rejection_diagnostic in codex-rs/windows-sandbox-service/src/ipc.rs). Go runs no codex-windows-sandbox-service policy events and has no machine-policy validator in the setup path, so there is no persistent event text to sanitize."
+    "Round 1234 (fix + audit): the N/A predates the Go port and hid a real gap. The new windowsandboxservice/policy_rejection_windows.go ports ipc::policy_rejection_diagnostic (stage runtime/bootstrap/resolve_auth/initialize_auth/managed/enforce/unknown, detail cloud=<Code> http=<Some(n)|None>, io=<Kind> win32=<Some(n)|None>, io=InvalidData win32=None, cause=unavailable) with no parser text, ipc::is_config_parse_error (a TOML failure answers Unavailable), and the EVENT_REQUEST_REJECTED log followed by the 'requested sandbox settings violate administrator-controlled machine policy' Error. HandleRequest routes policy failures through policyViolationResponse; ValidateProvisioningRequest returns Rust's bare impersonation message through the errOwnerImpersonation sentinel while keeping loader causes. Tests: go test ./windowsandboxservice -run 'PolicyRejection|PolicyViolation|ConfigParse' -count=1."
    ]
   },
   {
@@ -26390,9 +26390,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "Round 308 (audit): N/A - Go has no Windows sandbox service IPC or machine-policy loader. The direct setup helper receives refresh_only in its setup payload and already skips provisioning/marker writes; there is no managed-configuration fetch in this path that a registered refresh could bypass."
+    "Round 1234 (audit): the N/A predates the Go port. validateProvisioningPolicy in ipc_windows.go and ValidateProvisioningRequest in machine_policy_windows.go both return before starting the configuration runtime when the request is a registered-Core refresh, and only that combination skips it. machine_policy_like_rust_test.go TestOnlyRegisteredRefreshSkipsConfigurationLoading covers all four flag combinations and asserts the loader never runs. Tests: go test ./windowsandboxservice -run 'RegisteredRefresh|OnlyRegisteredRefresh' -count=1."
    ]
   },
   {
@@ -27394,9 +27394,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "Round 308 (audit): N/A - Go's registered Core setup invokes the local setup helper directly and has no Windows sandbox service, SCM client, or stopped-service availability state to start before provisioning. Existing missing-helper/elevation handling remains the applicable failure path."
+    "Round 1234 (audit): the N/A predates the Go port. provisionservice/transport_windows.go StartServiceForSetup starts the service before provisioning and tolerates ERROR_SERVICE_ALREADY_RUNNING, appserver/windows_sandbox_runtime.go calls it during registered Core setup, and elevated/runner_client.go retries once on the same code. Tests: go test ./sandbox/windowssandbox/provisionservice ./sandbox/windowssandbox/elevated ./appserver -run 'Service|Registered' -count=1."
    ]
   },
   {
@@ -33873,9 +33873,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:275: - `#55593` is N/A: the Go build ships no `windows-sandbox-service` binary or"
+    "Round 1234 (audit): the N/A predates the Go port. identity_policy.go RequireRuntimePackageFamily admits only a client in the service's own installed package family and has no unpackaged exemption; authorizeRuntimeClientProcess (identity_windows.go) calls it before the image check, and identity_policy_test.go covers an unpackaged client, an unpackaged service and both unpackaged. Rust's remaining exemption is debug-only foreground mode, which Go does not offer: ParseRunMode rejects it. Tests: go test ./windowsandboxservice -run 'RuntimePackageFamily|InstalledServiceImage|Identity' -count=1."
    ]
   },
   {
