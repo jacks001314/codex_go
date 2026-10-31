@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"codex_go/codexapi"
 	"codex_go/config"
 	"codex_go/features"
 	"codex_go/model"
@@ -110,6 +111,30 @@ func (r *RuntimeRouter) scheduleStartupPrewarm(response *ThreadStartResponse) {
 	if cfg, cfgErr := r.effectiveConfigForTurn(params); cfgErr == nil && cfg != nil {
 		effort = r.reasoningEffortForPrewarm(cfg, params, modelID, providerID)
 	}
+	// Rust #47709: the warmup handshake carries the startup turn's executed
+	// settings and window/fork metadata (the request kind is `prewarm`), so the
+	// prepared connection matches the window the first turn will use.
+	lineage := r.responsesMetadataLineage(threadID)
+	prewarmMetadata := turn.BuildResponsesClientMetadata(&turn.ResponsesClientMetadataOptions{
+		InstallationID:             r.guardianInstallationID(),
+		SessionID:                  firstNonEmpty(lineage.SessionID, threadID),
+		ThreadID:                   threadID,
+		WindowID:                   r.windowIDForThread(threadID),
+		ContextWindowID:            r.contextWindowIDForThread(threadID),
+		WindowNumber:               uint64PtrAppserver(r.windowNumberForThread(threadID)),
+		RequestKind:                codexapi.ClientRequestPrewarm,
+		ForkedFromThreadID:         lineage.ForkedFromThreadID,
+		ForkedFromOrdinalExclusive: lineage.ForkedFromOrdinalExclusive,
+		ParentThreadID:             lineage.ParentThreadID,
+		RootTurnID:                 effectiveRootTurnID("", "", "", lineage.SubagentHeader),
+		SubagentHeader:             lineage.SubagentHeader,
+		SubagentKind:               lineage.SubagentKind,
+		ThreadSource:               lineage.ThreadSource,
+		CodexVersion:               appServerVersion(),
+		Model:                      modelID,
+		ReasoningEffort:            effort,
+		UseResponsesLite:           r.modelUsesResponsesLite(modelID),
+	})
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), startupPrewarmTimeout)
 		defer cancel()
@@ -127,6 +152,7 @@ func (r *RuntimeRouter) scheduleStartupPrewarm(response *ThreadStartResponse) {
 			AttestationProvider: r.appServerAttestationProvider(),
 			PrewarmTools:        r.startupPrewarmToolProvider(params),
 			Originator:          "session_startup",
+			ClientMetadata:      prewarmMetadata,
 		})
 		if err == nil {
 			status = "ready"
