@@ -16977,7 +16977,9 @@ func TestRuntimeRouterSkillsIncludeInstructionsFalseHidesCatalogButAllowsExplici
 		t.Fatalf("turn start error: %+v", turnStart.Error)
 	}
 	request := waitForRuntimeAgentRequest(t, agent)
-	if strings.Contains(request.Instructions, "## Skills") || strings.Contains(request.Instructions, "Hidden executor catalog entry.") || strings.Contains(request.Instructions, locator) {
+	// The bundled catalog's base instructions describe the Skills section, so
+	// the hidden catalog is detected by its own entry text and locator.
+	if strings.Contains(request.Instructions, "Hidden executor catalog entry.") || strings.Contains(request.Instructions, locator) {
 		t.Fatalf("skills catalog was visible while include_instructions=false:\n%s", request.Instructions)
 	}
 	for _, want := range []string{"<name>deploy</name>", locator, "EXPLICIT_EXECUTOR_SKILL_BODY"} {

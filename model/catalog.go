@@ -23,6 +23,13 @@ import (
 //go:embed prompt.md
 var BaseInstructions string
 
+// bundledModelsCatalogJSON is the catalog the binary ships: the bundled
+// models-manager/models.json catalog in the serde shape Rust's ModelInfo
+// prints, so `debug models` renders it without a second source of truth.
+//
+//go:embed bundled_models_catalog.json
+var bundledModelsCatalogJSON []byte
+
 const (
 	TruncationModeBytes  = "bytes"
 	TruncationModeTokens = "tokens"
@@ -1311,7 +1318,25 @@ func BundledModelsResponse() ModelsResponse {
 	if catalog, err := loadBundledModelsResponse(); err == nil && len(catalog.Models) > 0 {
 		return catalog
 	}
+	if catalog, err := loadEmbeddedModelsResponse(); err == nil && len(catalog.Models) > 0 {
+		return catalog
+	}
 	return fallbackBundledModelsResponse()
+}
+
+// BundledModelsCatalogJSON returns the raw bundled catalog, the bytes Rust's
+// `debug models` prints for `bundled_models_response()`.
+func BundledModelsCatalogJSON() []byte {
+	return bundledModelsCatalogJSON
+}
+
+// loadEmbeddedModelsResponse parses the catalog compiled into the binary.
+func loadEmbeddedModelsResponse() (ModelsResponse, error) {
+	var catalog ModelsResponse
+	if err := json.Unmarshal(bundledModelsCatalogJSON, &catalog); err != nil {
+		return ModelsResponse{}, err
+	}
+	return catalog, nil
 }
 
 // LoadModelsResponseFromFile mirrors Rust's load_catalog_json for the

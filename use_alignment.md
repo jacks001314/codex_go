@@ -2300,8 +2300,44 @@ now derives the widths from `features.Sorted()` the same way.
   present in `codex-rs/features/src/lib.rs` at `b0f977c3a9`.
 - Regressions: `TestCompletionShellDiagnosticsLikeRust` in `cli` and
   `TestFeaturesListUsesDynamicColumnWidthsLikeRust` in `app`.
+### 74. `debug models` prints the bundled catalog and the offline fallback serves it
+
+Rust's `debug models` serialises `bundled_models_response()` - the embedded
+`models-manager/models.json` catalog - so the output is the release's own
+catalog in serde order (745,260 bytes for 0.166). Go marshalled a hand-written
+10-model literal through its internal `ModelInfo`, which dropped
+`gpt-daybreak-blue-latest` and `gpt-daybreak-red-latest`, flattened
+`supported_reasoning_levels` to strings, added Go-only fields
+(`base_instructions`, `supports_parallel_tool_calls`) and left absent Rust
+fields such as `shell_type` in the wrong place.
+
+- **Snapshot.** `model/bundled_models_catalog.json` holds the 0.166 output
+  byte for byte; `.gitattributes` marks it `-text` so checkout does not
+  rewrite its single trailing LF.
+- **Print path.** `model.BundledModelsCatalogJSON()` exposes the snapshot and
+  `runDebug` writes it to stdout unchanged, which is exactly what Rust's
+  `serde_json::to_writer` produces.
+- **Runtime fallback.** `BundledModelsResponse()` now parses the embedded
+  catalog before the hand-written literal, so a build without a
+  `models-manager/models.json` still reports all 12 models, their reasoning
+  level ordering, service tier definitions and base instructions.
+- Evidence: `out/r64-models.txt` - byte-identical to 0.166 from three
+  different working directories (the verification worktree, the shared
+  checkout and a scratch directory). `go test ./model` passes; `./appserver`
+  keeps only the two pre-existing MCP-dependency failures and `./app` the two
+  known baselines.
+- Regressions: `TestBundledModelsCatalogMatchesRustSnapshot` in `model` and
+  `TestDebugModelsPrintsBundledCatalogLikeRust` in `app`;
+  `TestRuntimeRouterSkillsIncludeInstructionsFalseHidesCatalogButAllowsExplicitExecutorSkillLikeRust`
+  now keys off the catalog entry text and locator instead of the `## Skills`
+  heading, which the bundled base instructions legitimately carry.
 ## Verification
 
+- Round 61 makes `debug models` print the bundled catalog (entry 74): the
+  745,260-byte snapshot is byte-identical to 0.166 from three working
+  directories (`out/r64-models.txt`), the offline fallback serves the same 12
+  models, `go test ./model` passes, and `./appserver`/`./app` keep only their
+  pre-existing failures.
 - Round 60 sweeps 20 uncovered command surfaces (`completion --help`,
   `features --help|list --help|enable --help|disable|enable <unknown>`,
   `debug models --help`, `execpolicy` and `execpolicy check` help,
@@ -2936,14 +2972,11 @@ now derives the widths from `features.Sorted()` the same way.
   plus the whole clap command tree with help texts and value hints; the
   functional coverage (every subcommand and flag) is already present, only
   the generated layout differs.
-- `debug models` still serialises Go's own catalog struct: 10 models where
-  0.166 prints 12, `supported_reasoning_levels` as a string array instead of
-  `{"effort","description"}` objects, and a different field selection and
-  order (`default_service_tier`, `model_specialty`,
-  `supports_parallel_tool_calls`, `auto_compact_token_limit` and
-  `auto_review_model_override` are Go-side extras). Upstream's
-  `models-manager` ModelInfo owns that JSON, so aligning means generating the
-  Go catalog from the same data assets.
+- `debug models` accepts `--bundled` but ignores it: the flag defaults to
+  false, where Rust refreshes the catalog online (or from its cache) and only
+  falls back to the bundled copy, while the Go CLI has no online
+  models-manager client wired into `runDebug`. The bundled path is now
+  byte-identical to 0.166 and the offline fallback serves the same catalog.
 - `codex debug config` is a hidden Go-only subcommand that dumps the
   effective config with origins and layers; 0.166 answers `error:
   unrecognized subcommand 'config'`. Neither help page lists it, so the help

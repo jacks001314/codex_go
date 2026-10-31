@@ -2134,6 +2134,12 @@ func runDebug(opts cli.DebugOptions, root *cli.RootOptions, stdout io.Writer) er
 	switch opts.Subcommand {
 	case "models":
 		_ = opts.BundledModels
+		// Rust prints `bundled_models_response()` straight to stdout, so the
+		// bundled catalog snapshot goes out byte for byte.
+		if raw := model.BundledModelsCatalogJSON(); len(raw) > 0 {
+			_, err := stdout.Write(raw)
+			return err
+		}
 		encoder := json.NewEncoder(stdout)
 		return encoder.Encode(model.BundledModelsResponse())
 	case "app-server":
