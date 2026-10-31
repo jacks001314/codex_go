@@ -18263,10 +18263,12 @@ func (r *RuntimeRouter) writeStdinApproval(ctx context.Context, request *tool.Wr
 		if outcome.Approved {
 			return nil
 		}
-		if reason := strings.TrimSpace(outcome.DenyReason); reason != "" {
-			return fmt.Errorf("%s", reason)
+		if !outcome.AskUser {
+			if reason := strings.TrimSpace(outcome.DenyReason); reason != "" {
+				return fmt.Errorf("%s", reason)
+			}
+			return errors.New("writing input to this terminal was denied by automatic review")
 		}
-		return errors.New("writing input to this terminal was denied by automatic review")
 	}
 	// Rust #57207: a stdin review is a child approval of the existing command
 	// item, so the launch call owns the wait when it is known.
@@ -18318,9 +18320,8 @@ const (
 )
 
 // guardStdinReviewSize mirrors Rust's unified-exec stdin approval size gate: the
-// serialized action plus its review reason must fit maxStdinApprovalBytes, and
-// a truncated action is never reviewed or executed. A formatter failure (the
-// general Guardian action limit) is unreviewable as well.
+// fully rendered action plus its review reason must fit maxStdinApprovalBytes,
+// and an action that cannot be rendered is never reviewed or executed.
 func guardStdinReviewSize(action state.Action, reason string) error {
 	text, truncated, err := state.FormatGuardianActionPretty(action)
 	if err != nil {
@@ -18923,9 +18924,11 @@ func (r *RuntimeRouter) shellApprovalForTurn(threadID string, turnID string, ign
 					telemetry.ToolDecisionApproved, telemetry.ToolDecisionSourceAutomatedReviewer)
 				return tool.ShellApprovalDecision{Approved: true}, nil
 			}
-			r.emitToolDecisionRecords(ctx, threadID, shellApprovalToolName(invocation), itemID,
-				telemetry.ToolDecisionDenied, telemetry.ToolDecisionSourceAutomatedReviewer)
-			return tool.ShellApprovalDecision{DenyReason: outcome.DenyReason}, nil
+			if !outcome.AskUser {
+				r.emitToolDecisionRecords(ctx, threadID, shellApprovalToolName(invocation), itemID,
+					telemetry.ToolDecisionDenied, telemetry.ToolDecisionSourceAutomatedReviewer)
+				return tool.ShellApprovalDecision{DenyReason: outcome.DenyReason}, nil
+			}
 		}
 		if humanOnce {
 			// Rust #58045: a managed checkpoint uses a unique approval id, keeps
@@ -19093,9 +19096,11 @@ func (r *RuntimeRouter) applyPatchApprovalForTurn(threadID string, turnID string
 					telemetry.ToolDecisionApproved, telemetry.ToolDecisionSourceAutomatedReviewer)
 				return tool.ApplyPatchApprovalDecision{Approved: true}, nil
 			}
-			r.emitToolDecisionRecords(ctx, threadID, applyPatchApprovalToolName(request.Invocation), itemID,
-				telemetry.ToolDecisionDenied, telemetry.ToolDecisionSourceAutomatedReviewer)
-			return tool.ApplyPatchApprovalDecision{DenyReason: outcome.DenyReason}, nil
+			if !outcome.AskUser {
+				r.emitToolDecisionRecords(ctx, threadID, applyPatchApprovalToolName(request.Invocation), itemID,
+					telemetry.ToolDecisionDenied, telemetry.ToolDecisionSourceAutomatedReviewer)
+				return tool.ApplyPatchApprovalDecision{DenyReason: outcome.DenyReason}, nil
+			}
 		}
 		userWaitOwner := r.userWaitTimingOwner(threadID, turnID, itemID)
 		params := &FileChangeRequestApprovalParams{
@@ -20191,7 +20196,11 @@ func (r *RuntimeRouter) approvalsReviewerForTurn(threadID string, turnID string)
 // guardianApprovalOutcome is the Guardian review's verdict for one approval
 // (Rust request_reviewer_approval's ReviewDecision handling).
 type guardianApprovalOutcome struct {
-	Approved   bool
+	Approved bool
+	// AskUser defers an optional review that could not be completed locally
+	// (Rust #44569): the caller must fall back to the user approval request
+	// instead of denying the action.
+	AskUser    bool
 	DenyReason string
 	Abort      bool
 }
@@ -20225,6 +20234,8 @@ func (r *RuntimeRouter) reviewApprovalWithGuardian(ctx context.Context, threadID
 	switch decision {
 	case state.DecisionApproved:
 		return guardianApprovalOutcome{Approved: true}
+	case state.DecisionAskUser:
+		return guardianApprovalOutcome{AskUser: true, DenyReason: reason}
 	case state.DecisionAborted:
 		abortReason := reason
 		if abortReason == "" {

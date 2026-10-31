@@ -1116,11 +1116,16 @@ func (r *modelGuardianReviewer) review(ctx context.Context, threadID, turnID, ta
 		}
 	}
 	requiredReview := r.requiredReview != nil && r.requiredReview(threadID, turnID)
+	// Rust #44569: a cached low-risk assessment must not cover an action the
+	// reviewer could never admit, including expanded approval arguments. An
+	// oversized action always runs the full review (which defers to the user or
+	// fails closed), while later small actions keep reusing their score.
+	oversizedAction := r.guardianActionExceedsReviewBudget(threadID, turnID, action, session)
 	// Rust #58075: a final serving assessment may replace the synchronous
 	// review for a low-risk action. An explicit fresh-review requirement, an
 	// elevated-risk value, or a stale/incomplete authorization still runs the
 	// full review below.
-	if r.servingAssessment != nil && !requiredReview {
+	if r.servingAssessment != nil && !requiredReview && !oversizedAction {
 		if assessment := r.servingAssessment(threadID, turnID, targetItemID); assessment != nil {
 			current := state.ServingAuthorization{}
 			if r.servingAuthorization != nil {
@@ -1603,8 +1608,28 @@ reviewAttempt:
 			continue
 		}
 		// Required evidence remains and cannot fit the reviewer's
-		// complete-request budget, so the review fails closed without
-		// sampling. Rust reports the same rejection to the parent.
+		// complete-request budget. Rust #44569 defers an optional review to the
+		// user so the approval can still be answered, while a review the policy
+		// requires fails closed because the model must see the complete action.
+		if !requiredReview {
+			rationale := guardianReviewFailureRationale(guardianInputBudgetMessage)
+			// Rust #44569 completes an exhausted optional review as aborted with
+			// no ReviewDecision, which is what makes the approval fall back to the
+			// user instead of being denied.
+			completed, abortErr := store.Abort(event.ID, rationale)
+			if abortErr == nil {
+				emit(threadID, completed)
+			}
+			r.recordNonDenial(threadID, turnID)
+			attribution.Decision = state.DecisionAborted
+			attribution.TerminalStatus = "aborted"
+			attribution.FailureReason = "input_budget"
+			emitReviewMetrics()
+			r.emitWarning(threadID, rationale)
+			return state.DecisionAskUser, nil, guardianInputBudgetMessage, nil
+		}
+		// A required review fails closed without sampling. Rust reports the same
+		// rejection to the parent.
 		rationale := guardianReviewFailureRationale(guardianInputBudgetMessage)
 		completed, _ := store.FailClosed(event.ID, rationale)
 		emit(threadID, completed)
@@ -2050,6 +2075,35 @@ func (r *modelGuardianReviewer) planForTurn(ctx context.Context, threadID, turnI
 // modelForTurn keeps the model-only view used by review metrics and telemetry.
 func (r *modelGuardianReviewer) modelForTurn(threadID, turnID string) string {
 	return strings.TrimSpace(r.planForTurn(context.Background(), threadID, turnID).Selection.Model)
+}
+
+// guardianActionExceedsReviewBudget reports whether one action alone cannot fit
+// the reviewer's complete-request budget. Rust #44569 stops cached asynchronous
+// scores from covering oversized actions (including expanded approval
+// arguments) and routes them to synchronous review; Go has no async scorer, so
+// the same guard keeps the serving-assessment fast path from approving an
+// action the synchronous review could never admit.
+func (r *modelGuardianReviewer) guardianActionExceedsReviewBudget(threadID, turnID string, action state.Action, session *guardianSessionRunner) bool {
+	if r == nil {
+		return false
+	}
+	contextWindow, windowKnown := int64(0), false
+	if r.syncImageContextWindow != nil {
+		contextWindow, windowKnown = r.syncImageContextWindow(threadID, r.modelForTurn(threadID, turnID))
+	}
+	budget := effectiveGuardianInputTokenLimit(contextWindow, windowKnown)
+	if budget <= 0 {
+		return true
+	}
+	text, _, err := state.FormatGuardianActionPretty(action)
+	if err != nil {
+		return true
+	}
+	tokens := int64(utils.ApproxTokenCount(text))
+	if session != nil {
+		tokens += session.lastUsageTokens()
+	}
+	return tokens > budget
 }
 
 func (r *modelGuardianReviewer) emit(threadID string, event *state.Event) {

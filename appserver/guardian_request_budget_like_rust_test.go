@@ -329,6 +329,9 @@ func TestGuardianReviewRejectsRequiredEvidenceOverBudgetLikeRust(t *testing.T) {
 		transcriptSelection: func(string) guardianTranscriptSelection {
 			return guardianTranscriptSelection{Entries: guardianBudgetTestEntries("")}
 		},
+		// Rust #44569: a review the policy requires stays closed to approval when
+		// the required evidence cannot fit; only an optional review defers.
+		requiredReview: func(string, string) bool { return true },
 	}
 	reviewer.syncImageContextWindow = func(_, _ string) (int64, bool) { return 1, true }
 	decision, reason, err := reviewer.Review(context.Background(), "thread-budget-reject", "turn-1", "call-1", state.Action{

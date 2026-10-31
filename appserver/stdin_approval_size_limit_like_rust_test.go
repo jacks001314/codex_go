@@ -60,32 +60,29 @@ func TestGuardianStdinReviewSizeLimitLikeRust(t *testing.T) {
 		t.Fatalf("oversized stdin review error = %v, want %q", err, unreviewable)
 	}
 
-	// A string beyond the per-string token budget is truncated by the shared
-	// formatter, and a truncated terminal action is never reviewed.
-	truncated := state.Action{Type: "write_stdin", SessionID: intPtr(1), Chars: strings.Repeat("y", 100_000)}
-	if err := guardStdinReviewSize(truncated, ""); err == nil || err.Error() != unreviewable {
-		t.Fatalf("truncated stdin review error = %v, want %q", err, unreviewable)
+	// Rust #44569 removed the general formatter truncation and byte limit, so a
+	// very long terminal input is measured by this stdin gate alone.
+	large := state.Action{Type: "write_stdin", SessionID: intPtr(1), Chars: strings.Repeat("y", 100_000)}
+	if err := guardStdinReviewSize(large, ""); err == nil || err.Error() != unreviewable {
+		t.Fatalf("large stdin review error = %v, want %q", err, unreviewable)
 	}
 
-	// An aggregate action beyond the general Guardian limit fails before the
-	// size-check metric, matching Rust's `?` on the formatter result.
+	// An aggregate action beyond the general Guardian limit is still measured
+	// here; the formatter now renders it completely.
 	files := make([]string, 20_000)
 	for index := range files {
 		files[index] = "/tmp/file"
 	}
-	before := len(recorder.samples)
 	if err := guardStdinReviewSize(state.Action{Type: "apply_patch", CWD: "/tmp", Files: files}, ""); err == nil || err.Error() != unreviewable {
 		t.Fatalf("aggregate stdin review error = %v, want %q", err, unreviewable)
-	}
-	if len(recorder.samples) != before {
-		t.Fatalf("formatter failure recorded %d size-check samples, want none", len(recorder.samples)-before)
 	}
 
 	want := []stdinReviewMetricSample{
 		{result: "within_limit", inputKind: "text"},
 		{result: "within_limit", inputKind: "control"},
 		{result: "over_limit", inputKind: "text"},
-		{result: "formatter_truncated", inputKind: "text"},
+		{result: "over_limit", inputKind: "text"},
+		{result: "over_limit", inputKind: "control"},
 	}
 	if len(recorder.samples) != len(want) {
 		t.Fatalf("size-check samples = %#v, want %#v", recorder.samples, want)

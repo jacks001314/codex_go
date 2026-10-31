@@ -365,6 +365,10 @@ const (
 	DecisionDenied   ReviewDecision = "denied"
 	DecisionTimedOut ReviewDecision = "timed_out"
 	DecisionAborted  ReviewDecision = "aborted"
+	// DecisionAskUser defers an optional automatic review that cannot be
+	// completed locally (Rust #44569 ExhaustedReviewBudget): the approval falls
+	// back to the user instead of being denied.
+	DecisionAskUser ReviewDecision = "ask_user"
 )
 
 func DecisionFromEvent(event *Event) ReviewDecision {
