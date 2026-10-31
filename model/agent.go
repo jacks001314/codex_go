@@ -32,8 +32,13 @@ type AgentRequest struct {
 	// input so they follow the user message in the request.
 	PostPromptInputItems []any
 	Tools                []any
-	Model                string
-	ProviderID           string
+	// PrewarmTools mirrors Rust #47635: the startup prewarm captures the turn's
+	// step tools (including MCP discovery) concurrently with the websocket
+	// handshake and sends the generate=false warmup with those tools. Prewarm
+	// calls it at most once, after dialing a fresh socket.
+	PrewarmTools func(ctx context.Context) []any
+	Model        string
+	ProviderID   string
 	// Endpoint selects the Responses-compatible backend route. The zero value
 	// is the standard /responses route; Guardian callers may opt into /guardian.
 	Endpoint ResponsesEndpoint

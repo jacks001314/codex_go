@@ -125,6 +125,7 @@ func (r *RuntimeRouter) scheduleStartupPrewarm(response *ThreadStartResponse) {
 			// app-server attestation provider.
 			ThreadID:            threadID,
 			AttestationProvider: r.appServerAttestationProvider(),
+			PrewarmTools:        r.startupPrewarmToolProvider(params),
 			Originator:          "session_startup",
 		})
 		if err == nil {
@@ -425,4 +426,40 @@ func (r *RuntimeRouter) startupPrewarmsSnapshot() map[string]*startupPrewarmStat
 		out[threadID] = &clone
 	}
 	return out
+}
+
+// startupPrewarmToolProvider mirrors Rust #47635: the startup prewarm captures
+// its own step tools (including MCP discovery) so the generate=false warmup
+// carries the same inventory as the first turn's request. The capture runs
+// concurrently with the websocket handshake; a failure leaves the warmup
+// tool-less instead of blocking the connection.
+func (r *RuntimeRouter) startupPrewarmToolProvider(params *turn.TurnStartParams) func(context.Context) []any {
+	if r == nil || params == nil {
+		return nil
+	}
+	return func(ctx context.Context) []any {
+		runtime, err := r.buildTurnRuntimeContext(ctx, params, "")
+		if err != nil || runtime == nil {
+			return nil
+		}
+		cfg, cfgErr := r.effectiveConfigForTurn(params)
+		if cfgErr != nil {
+			cfg = nil
+		}
+		modelID := strings.TrimSpace(params.Model)
+		if modelID == "" && cfg != nil {
+			modelID = strings.TrimSpace(stringFromAny(cfg.Values["model"]))
+		}
+		toolMode := ""
+		if info := r.modelInfoForRuntimeWithConfig(modelID, cfg); info != nil {
+			toolMode = info.ToolMode
+		}
+		disableFallback := false
+		if cfg != nil {
+			toolMode = model.ResolveToolMode(toolMode, cfg.FeatureSettings())
+			disableFallback = cfg.DisableCodeModeInProcessFallback()
+		}
+		prepared, _ := runtime.PrepareToolMode(toolMode, disableFallback)
+		return runtime.ModelVisibleToolDefinitions(prepared, disableFallback)
+	}
 }

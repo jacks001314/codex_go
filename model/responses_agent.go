@@ -1016,6 +1016,17 @@ func (r *ResponsesAgentRunner) Prewarm(ctx context.Context, request *AgentReques
 	// turn's websocket connect. The recovery plan cursor bounds the retries.
 	recovery := &authRecoveryState{}
 	recoveryMode, recoveryPhase := "", ""
+	// Rust #47635: tool capture runs concurrently with the handshake so a slow MCP
+	// startup cannot delay the connection; the discovered tools join the
+	// generate=false warmup once the socket is up.
+	var pendingPrewarmTools <-chan []any
+	if request.PrewarmTools != nil {
+		tools := make(chan []any, 1)
+		pendingPrewarmTools = tools
+		go func() {
+			tools <- request.PrewarmTools(ctx)
+		}()
+	}
 	var conn *websocket.Conn
 	for {
 		dialStartedAt := time.Now()
@@ -1068,6 +1079,24 @@ func (r *ResponsesAgentRunner) Prewarm(ctx context.Context, request *AgentReques
 	session.conn = conn
 	session.connClosed.Store(false)
 	session.requestSent = false
+	// Rust #47635: attach the captured step tools to the warmup payload.
+	if pendingPrewarmTools != nil {
+		var tools []any
+		select {
+		case tools = <-pendingPrewarmTools:
+		case <-ctx.Done():
+			closeResponsesWebsocketSession(session, "prewarm tool capture canceled")
+			return nil, ctx.Err()
+		}
+		if len(tools) > 0 {
+			finalized := *request
+			finalized.Tools = tools
+			if apiRequest, err = r.buildResponsesAgentRequest(&finalized, true); err != nil {
+				closeResponsesWebsocketSession(session, "prewarm tool capture failed")
+				return nil, err
+			}
+		}
+	}
 	payload := map[string]any{
 		"type": "response.create", "model": apiRequest.Model, "input": apiRequest.Input, "tool_choice": apiRequest.ToolChoice,
 		"parallel_tool_calls": apiRequest.ParallelToolCalls, "store": apiRequest.Store, "stream": true, "include": []string{}, "generate": false,
