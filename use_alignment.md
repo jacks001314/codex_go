@@ -1795,8 +1795,50 @@ clap diagnostic path where Rust reaches its runtime.
   `TestQueueEmptyMessageIsClapEmptyValueLikeRust` and
   `TestMCPOAuthCallbackIDMatchesRustURLSerialization`.
 
+### 60. `codex mcp add`/`remove` edit the config document in place
+
+`replace_mcp_servers` (core/src/config/edit.rs) edits the parsed document, so
+every byte outside `mcp_servers` survives: comments, multi-line strings,
+multi-line arrays, blank lines and key order. Go re-serialized the whole file
+from its parsed map, which dropped comments and reflowed multi-line values.
+
+- **Document splice.** `config.spliceMCPTablesIntoDocument`
+  (config/toml_document_splice.go) scans the document into top-level constructs
+  (root key/values that may span lines, and table headers with their bodies) and
+  rewrites only the `mcp_servers` region; everything else is copied verbatim.
+- **Decor rules.** A removed or replaced table takes the blank and comment lines
+  that decorate it (toml_edit attaches them as the item's prefix), the
+  replacement region is rendered with toml_edit's default one-blank-line decor,
+  a document whose first construct is that table gets no leading blank line
+  (`DEFAULT_TABLE_DECOR` is skipped for the first table of a document), trailing
+  blank and comment lines stay at the end of the file (`DocumentMut` prints them
+  after every table), an explicit `[mcp_servers]` header is kept, a missing
+  final newline is added, and CRLF is re-emitted as LF.
+- **BatchWrite.** `editsReplaceOnlyMCPTables` routes a replace of exactly
+  `mcp_servers` through the splice; every other write still renders the whole
+  document.
+- **Removal of a missing server.** `codex mcp remove <unknown>` no longer writes
+  the file, because Rust only edits the document when the server was configured.
+- Evidence: the 40-case order corpus is 33/40 byte-identical and the 7 remaining
+  diffs are the `[[profiles]]` load rejection listed under Still open; a second
+  33-case corpus (explicit header, CRLF, missing final newline, comments inside
+  kept tables, multi-line values, nested tables) is 31/33, the two diffs being
+  the `[features.x]` load rejection. Regressions:
+  `TestSpliceMCPTablesKeepsDocumentTriviaLikeTomlEdit`,
+  `TestSpliceMCPTablesRefusesInlineTablesLikeTomlEdit` in `config`, and
+  `TestMCPAddKeepsDocumentTriviaLikeTomlEdit`,
+  `TestMCPRemoveMissingServerLeavesConfigUntouchedLikeRust` in `app`.
+
 ## Verification
 
+- Round 46 makes the `mcp add`/`mcp remove` writer edit the document in place
+  (entry 60). Ten seed documents x four command sets are 33/40 byte-identical
+  (`p46order.py`); the 7 leftovers are all the `[[profiles]]` load rejection, and
+  a second 33-case corpus covering comments, multi-line strings and arrays, CRLF,
+  missing final newlines, explicit `[mcp_servers]` headers and nested tables is
+  31/33 with the two leftovers being the unknown `[features.x]` rejection.
+  `go test -count=1 -vet=off ./config ./cli` passes and `./app` keeps only the
+  two known baselines.
 - Round 45 covers the empty-value and session-lookup family. The 164-case
   empty/extra-positional sweep (`out/r45-empty.txt`) has no deterministic diff
   once the three Rust probe timeouts are rerun (`p45slow.py`), the 14 session
@@ -2289,12 +2331,19 @@ clap diagnostic path where Rust reaches its runtime.
     subcommand paths print clap's `-h`/`--help`/`help <topic>` pages plus the
     `--help=<value>` diagnostic, and `codex execpolicy check -hx` now reaches
     clap's missing-required block like Rust.
-- The config writer still normalizes the document instead of editing it in
-  place (entry 58 aligned the `mcp_servers` shape, not the whole document):
-  comments are dropped, and multi-line values are reflowed onto one line, so
-  `instructions = """ ... """` becomes `instructions = "line one\n..."` and
-  `notify = [\n  "one",\n]` becomes `notify = ["one"]`. Rust keeps the original
-  text for every key it did not change.
+- The config loader is a plain map, so a document Rust rejects at bootstrap is
+  accepted and the command runs anyway: an inline array of tables
+  (`[[profiles]]`) reports `failed to load bootstrap configuration` with
+  `invalid type: sequence, expected a map` in `profiles`, and an unknown
+  `[features.x]` table is rejected as well, while Go writes the file and exits
+  0. Aligning needs the Rust config schema (field types plus
+  `deny_unknown_fields`) in the Go loader. The writer itself is in place since
+  entry 60.
+- `mcp_servers` spelled as an inline table (`mcp_servers = { alpha = { .. } }`)
+  still goes through the whole-document renderer: toml_edit converts the value
+  into a table and prints a `[mcp_servers ]` header (the space comes from the
+  key's decor) with the servers that stay inline untouched, which the document
+  splice deliberately leaves to the old writer.
 - `codex mcp add --url` still decides its may-or-may-not-require-login hint
   from a live OAuth discovery. Go caps that probe at two seconds while Rust
   uses its requested timeout, so the same URL can print the hint in Go and

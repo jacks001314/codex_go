@@ -2605,7 +2605,8 @@ func (s *ConfigService) BatchWrite(params *ConfigBatchWriteParams) (*ConfigWrite
 		return nil, err
 	}
 	values = cloneMap(values)
-	previousOrder := tomlDocumentTopLevelOrder(readConfigDocumentText(path))
+	documentText := readConfigDocumentText(path)
+	previousOrder := tomlDocumentTopLevelOrder(documentText)
 	currentVersion := configVersion(values)
 	if params.ExpectedVersion != nil && *params.ExpectedVersion != currentVersion {
 		return nil, configWriteErrorf(ConfigWriteVersionConflict, "Configuration was modified since last read. Fetch latest version and retry.")
@@ -2628,7 +2629,17 @@ func (s *ConfigService) BatchWrite(params *ConfigBatchWriteParams) (*ConfigWrite
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(path, []byte(renderTOML(orderedConfigValues(values, previousOrder))), 0o600); err != nil {
+	rendered := renderTOML(orderedConfigValues(values, previousOrder))
+	if editsReplaceOnlyMCPTables(params.Edits) {
+		// Rust edits the document in place (core/src/config/edit.rs
+		// replace_mcp_servers), so comments, multi-line strings and unrelated
+		// sections keep their exact bytes instead of being re-serialized.
+		servers, _ := values["mcp_servers"].(*OrderedTable)
+		if spliced, ok := spliceMCPTablesIntoDocument(documentText, servers); ok {
+			rendered = spliced
+		}
+	}
+	if err := os.WriteFile(path, []byte(rendered), 0o600); err != nil {
 		return nil, err
 	}
 	response := &ConfigWriteResponse{
@@ -2641,6 +2652,21 @@ func (s *ConfigService) BatchWrite(params *ConfigBatchWriteParams) (*ConfigWrite
 		response.OverriddenMetadata = overridden
 	}
 	return response, nil
+}
+
+// editsReplaceOnlyMCPTables reports whether a batch only rewrites the
+// mcp_servers table with a replace merge, the edit shape `codex mcp add` and
+// `codex mcp remove` issue.
+func editsReplaceOnlyMCPTables(edits []ConfigEdit) bool {
+	if len(edits) == 0 {
+		return false
+	}
+	for _, edit := range edits {
+		if strings.TrimSpace(edit.KeyPath) != "mcp_servers" || edit.MergeStrategy != MergeReplace {
+			return false
+		}
+	}
+	return true
 }
 
 // rejectManagedAuthWrite mirrors Rust config_processor write rejection for

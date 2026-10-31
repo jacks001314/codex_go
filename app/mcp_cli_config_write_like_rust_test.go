@@ -146,3 +146,50 @@ func TestMCPRemoveLastServerKeepsOtherSectionsLikeTomlEdit(t *testing.T) {
 		t.Fatalf("config.toml = %q, want %q", got, want)
 	}
 }
+
+// TestMCPAddKeepsDocumentTriviaLikeTomlEdit feeds a seed whose unrelated
+// sections carry comments, a multi-line string and a multi-line array: Rust
+// edits the document in place, so all of that survives while the mcp table that
+// is replaced (with its own comments) is rewritten from scratch.
+func TestMCPAddKeepsDocumentTriviaLikeTomlEdit(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	seed := "# leading file comment\n\n# comment above model\nmodel = \"o3\"\n\n" +
+		"# comment above other\n[other]\n# comment inside other\nkey = 1\n\n" +
+		"notes = \"\"\"\nline one\n[not-a-table]\n\"\"\"\nnotify = [\n  \"one\",\n  \"two\",\n]\n"
+	writeMCPConfigSeed(t, home, seed)
+
+	if err := Run(context.Background(), []string{
+		"mcp", "add", "alpha", "--", "npx",
+	}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("mcp add returned error: %v", err)
+	}
+
+	want := seed + "\n[mcp_servers.alpha]\ncommand = \"npx\"\n"
+	if got := readMCPConfig(t, home); got != want {
+		t.Fatalf("config.toml = %q, want %q", got, want)
+	}
+}
+
+// TestMCPRemoveMissingServerLeavesConfigUntouchedLikeRust: Rust only edits the
+// document when the server is configured, so the miss leaves every byte alone.
+func TestMCPRemoveMissingServerLeavesConfigUntouchedLikeRust(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	seed := "[alpha]\nx = 1\n[mcp_servers.alpha]\ncommand = \"a\"\n"
+	writeMCPConfigSeed(t, home, seed)
+
+	stdout := &bytes.Buffer{}
+	if err := Run(context.Background(), []string{
+		"mcp", "remove", "docs",
+	}, strings.NewReader(""), stdout, &bytes.Buffer{}); err != nil {
+		t.Fatalf("mcp remove returned error: %v", err)
+	}
+
+	if !strings.Contains(stdout.String(), "No MCP server named 'docs' found.") {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+	if got := readMCPConfig(t, home); got != seed {
+		t.Fatalf("config.toml = %q, want untouched %q", got, seed)
+	}
+}

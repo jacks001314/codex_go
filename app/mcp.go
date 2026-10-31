@@ -1031,10 +1031,13 @@ func (s *mcpCLIStore) Remove(overrides []string, name string) (bool, error) {
 		return false, err
 	}
 	_, existed := cfg.Servers[name]
-	if existed {
-		delete(cfg.Servers, name)
+	if !existed {
+		// Rust only edits the document when the server was configured, so a
+		// missing name leaves config.toml byte-for-byte untouched.
+		return false, nil
 	}
-	return existed, s.write(cfg)
+	delete(cfg.Servers, name)
+	return true, s.write(cfg)
 }
 
 func (s *mcpCLIStore) write(cfg *mcpCLIConfig) error {
