@@ -954,10 +954,12 @@ func applyAdd(fs FileSystem, cwd string, change *Change) (*AppliedFile, error) {
 		return nil, err
 	}
 	if err := fs.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("Failed to create parent directories for %s", path)
 	}
+	// anyhow's context hides the write cause, and the CLI prints only that
+	// context line.
 	if err := fs.WriteFile(path, []byte(change.Content), 0o600); err != nil {
-		return nil, fmt.Errorf("Failed to write file %s: %s", path, rustIOMessage(err))
+		return nil, fmt.Errorf("Failed to write file %s", path)
 	}
 	return &AppliedFile{
 		Kind: ChangeAdd,
@@ -975,10 +977,10 @@ func applyDelete(fs FileSystem, cwd string, change *Change) (*AppliedFile, error
 	if err != nil {
 		return nil, err
 	}
-	if info, err := fs.Stat(path); err != nil {
+	// ensure_not_directory reports a directory as an io error that anyhow's
+	// context hides, so the CLI keeps only the context line either way.
+	if info, err := fs.Stat(path); err != nil || !info.Mode().IsRegular() {
 		return nil, fmt.Errorf("Failed to delete file %s", path)
-	} else if !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("Failed to delete file %s: not a regular file", path)
 	}
 	data, _ := fs.ReadFile(path)
 	if err := fs.Remove(path); err != nil {
@@ -1000,6 +1002,11 @@ func applyUpdate(fs FileSystem, cwd string, change *Change) (*AppliedFile, error
 	if err != nil {
 		return nil, err
 	}
+	if info, statErr := fs.Stat(path); statErr == nil && info.IsDir() {
+		// Rust reads through CreateFileW, which fails on a directory where
+		// Go's os.File opens it and only fails on the first read.
+		return nil, fmt.Errorf("Failed to read file to update %s: %s", path, rustIOMessage(rustDirectoryReadError()))
+	}
 	data, err := fs.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("Failed to read file to update %s: %s", path, rustIOMessage(err))
@@ -1018,14 +1025,14 @@ func applyUpdate(fs FileSystem, cwd string, change *Change) (*AppliedFile, error
 		outDisplayPath = change.MovePath
 	}
 	if err := fs.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("Failed to create parent directories for %s", outPath)
 	}
 	if err := fs.WriteFile(outPath, []byte(updated), 0o600); err != nil {
-		return nil, fmt.Errorf("Failed to write file %s: %s", outPath, rustIOMessage(err))
+		return nil, fmt.Errorf("Failed to write file %s", outPath)
 	}
 	if change.MovePath != "" && outPath != path {
 		if err := fs.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("failed to remove original file %s: %w", path, err)
+			return nil, fmt.Errorf("Failed to remove original %s", path)
 		}
 	}
 	return &AppliedFile{

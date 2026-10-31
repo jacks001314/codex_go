@@ -8,6 +8,12 @@ import (
 	"syscall"
 )
 
+// rustDirectoryReadError is the io error Rust's std::fs::read reports for a
+// directory on Unix: EISDIR.
+func rustDirectoryReadError() error {
+	return syscall.EISDIR
+}
+
 // rustIOMessage renders an error the way Rust's std::io::Error Display does:
 // the platform message followed by " (os error N)".
 func rustIOMessage(err error) string {

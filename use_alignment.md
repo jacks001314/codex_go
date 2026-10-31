@@ -2220,8 +2220,43 @@ Go and stayed silent in Rust.
   `TestMCPAddSlowOAuthProbeKeepsWaitingLikeRust` and
   `TestMCPAddUnknownOAuthPrintsLoginHint` in `app`.
 
+### 71. `apply_patch` failure text: anyhow's context hides the write cause
+
+0.166 reports delete, write and move failures through anyhow contexts
+(`Failed to delete file {}`, `Failed to write file {}`,
+`Failed to create parent directories for {}`, `Failed to remove original {}`)
+and the patch CLI prints only the context line, while an update read is an
+`ApplyPatchError::IoError` whose Display keeps `: <io error>` inline. Go
+appended `: <cause>` to the delete and write contexts, returned the raw
+`mkdir` error for an add, and let `os.ReadFile` open a directory (Go reports
+`(os error 1)`, Rust's `CreateFileW` reports `(os error 5)`).
+
+- **Delete.** A directory target and a failed stat both print
+  `Failed to delete file <path>` with no suffix.
+- **Write.** `Failed to write file <path>` and
+  `Failed to create parent directories for <path>` carry no cause text.
+- **Update.** A directory target prints
+  `Failed to read file to update <path>: <io error>` with Rust's io error:
+  `ERROR_ACCESS_DENIED` (5) on Windows through the new
+  `rustDirectoryReadError` helper, `EISDIR` (21) elsewhere.
+- **Move.** A failed remove keeps the capitalised context
+  `Failed to remove original <path>`.
+- Evidence: ten `--codex-run-as-apply-patch` documents (delete a directory,
+  delete a directory holding files, delete a missing path, delete a file,
+  update a directory, update a missing path, add over a directory, add under a
+  file, nested add, in-place update) are byte-identical to 0.166 in exit code,
+  stdout, stderr and the resulting tree (`out/r58-patch.txt`,
+  `out/r58-patch-extra.txt`). Regressions:
+  `TestApplyDeleteDirectoryPrintsOnlyRustContextLine`,
+  `TestApplyWriteFailuresPrintOnlyRustContextLine` and
+  `TestApplyUpdateDirectoryReportsRustReadError` in `applypatch`.
+
 ## Verification
 
+- Round 57 aligns the `apply_patch` failure text (entry 71): ten
+  `--codex-run-as-apply-patch` documents match 0.166 byte for byte
+  (`out/r58-patch.txt`, `out/r58-patch-extra.txt`), and
+  `go test -count=1 -vet=off ./applypatch ./tool ./app` passes.
 - Round 56 aligns the `mcp add --url` login hint probe (entry 70): the delayed,
   immediate-404, unreachable and unresolvable probes are byte-identical to
   0.166 (`out/r57-slow-probe.txt`, `out/r57-probe.txt`).
@@ -2798,10 +2833,7 @@ Go and stayed silent in Rust.
   models and a malformed model entry fail the way 0.166 does.
 - `apply_patch` on 2026-10-31: Rust 0.166 (`sandbox = "unelevated"`) refused to
   write under `%TEMP%` (`Access ... is denied`) while Go wrote the file; that
-  sandbox-policy difference is still unaligned. Go also still appends
-  `: not a regular file` to `Failed to delete file <path>` for non-regular
-  targets, where Rust prints only the context line.
-
+  sandbox-policy difference is still unaligned.
 - `/keymap` Debug: Insert and Ctrl+Space reach the Go TUI as the same
   `KeyRunes{0}` event because bubbletea v1.3.10's Windows console reader never
   maps `VK_INSERT` (v1.3.10 is the newest v1 tag; v2 restructures the API). Go

@@ -11,6 +11,12 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+// rustDirectoryReadError is the io error Rust's std::fs::read reports for a
+// directory: CreateFileW fails with ERROR_ACCESS_DENIED.
+func rustDirectoryReadError() error {
+	return syscall.ERROR_ACCESS_DENIED
+}
+
 // rustIOMessage renders an error the way Rust's std::io::Error Display does on
 // Windows: the localized system message without its trailing CRLF followed by
 // " (os error N)".
