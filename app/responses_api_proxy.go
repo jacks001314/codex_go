@@ -262,20 +262,29 @@ func (s *responsesAPIProxyServer) forward(w http.ResponseWriter, r *http.Request
 		return err
 	}
 	copyForwardHeaders(upstreamReq.Header, r.Header)
-	authHeader := ""
+	lease := responsesProxyAuthLease{}
 	if s.auth != nil {
-		authHeader, err = s.auth.Header(r.Context())
+		if renewable, ok := s.auth.(responsesProxyAuthLeaseProvider); ok {
+			lease, err = renewable.Lease(r.Context())
+		} else {
+			lease.value, err = s.auth.Header(r.Context())
+		}
 		if err != nil {
 			return err
 		}
 	}
-	upstreamReq.Header.Set("Authorization", authHeader)
+	upstreamReq.Header.Set("Authorization", lease.value)
 	upstreamReq.Host = s.upstreamURL.Host
 	response, err := s.httpClient.Do(upstreamReq)
 	if err != nil {
 		return err
 	}
 	defer response.Body.Close()
+	if response.StatusCode == http.StatusUnauthorized {
+		// Forward the 401 without replaying the Responses POST. The next request
+		// exchanges a fresh credential; a late 401 only invalidates this lease.
+		lease.Invalidate()
+	}
 	copyResponseHeaders(w.Header(), response.Header)
 	if response.ContentLength >= 0 {
 		w.Header().Set("Content-Length", strconv.FormatInt(response.ContentLength, 10))

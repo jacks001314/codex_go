@@ -1,7 +1,7 @@
 package app
 
 // Responses API proxy authentication (Rust responses-api-proxy auth.rs,
-// #55297/#55298): a locked API key or renewable federated OpenAI credentials
+// #55297/#55298/#55299): a locked API key or renewable federated OpenAI credentials
 // obtained by exchanging a fresh identity-provider subject token. Token
 // requests never follow redirects and never put credentials, request URLs, or
 // response bodies into diagnostics.
@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	codexnetwork "codex_go/network"
@@ -37,6 +38,8 @@ const (
 	responsesProxyExchangeGrantType       = "urn:ietf:params:oauth:grant-type:token-exchange"
 	responsesProxyJWTTokenType            = "urn:ietf:params:oauth:token-type:jwt"
 	responsesProxyAccessTokenType         = "urn:ietf:params:oauth:token-type:access_token"
+	responsesProxyInitialRenewalBackoff   = time.Second
+	responsesProxyMaxRenewalBackoff       = 30 * time.Second
 )
 
 // responsesProxyAuth supplies the Authorization header for one upstream
@@ -50,6 +53,26 @@ type responsesProxyAuth interface {
 // responsesProxyAPIKeyAuth is the locked, static API key path.
 type responsesProxyAPIKeyAuth struct {
 	header string
+}
+
+// responsesProxyAuthLease is one request's authorization value. A federated
+// lease remembers its token issuance so a late 401 can only invalidate that
+// issuance, never a newer credential renewed while the request was in flight.
+type responsesProxyAuthLease struct {
+	value    string
+	rejected *atomic.Bool
+}
+
+func (l responsesProxyAuthLease) Invalidate() {
+	if l.rejected != nil {
+		l.rejected.Store(true)
+	}
+}
+
+// responsesProxyAuthLeaseProvider is implemented by renewable authentication.
+// Static authentication keeps the simpler responsesProxyAuth interface.
+type responsesProxyAuthLeaseProvider interface {
+	Lease(context.Context) (responsesProxyAuthLease, error)
 }
 
 func (a responsesProxyAPIKeyAuth) Header(context.Context) (string, error) {
@@ -100,12 +123,20 @@ type responsesProxyFederatedAuth struct {
 	provider       string
 	serviceAccount string
 	cached         *responsesProxyCachedToken
+	renewalFailure *responsesProxyRenewalFailure
+	now            func() time.Time
 }
 
 type responsesProxyCachedToken struct {
 	header    string
 	renewAt   time.Time
 	expiresAt time.Time
+	rejected  *atomic.Bool
+}
+
+type responsesProxyRenewalFailure struct {
+	retryAt time.Time
+	delay   time.Duration
 }
 
 func newResponsesProxyFederatedAuth(source responsesProxySubjectTokenSource, provider, serviceAccount string) (*responsesProxyFederatedAuth, error) {
@@ -132,6 +163,7 @@ func newResponsesProxyFederatedAuthWith(source responsesProxySubjectTokenSource,
 		source:         source,
 		provider:       provider,
 		serviceAccount: serviceAccount,
+		now:            time.Now,
 	}, nil
 }
 
@@ -140,24 +172,54 @@ func (*responsesProxyFederatedAuth) FollowsRedirects() bool {
 }
 
 func (a *responsesProxyFederatedAuth) Header(ctx context.Context) (string, error) {
-	if a == nil {
-		return "", errors.New("workload identity credential cache unavailable")
-	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	now := time.Now()
-	if cached := a.cached; cached != nil && now.Before(cached.renewAt) && now.Before(cached.expiresAt) {
-		return cached.header, nil
-	}
-	// Discard the old credential before a fallible exchange; never reuse it when
-	// acquisition fails.
-	a.cached = nil
-	cached, err := a.exchange(ctx)
+	lease, err := a.Lease(ctx)
 	if err != nil {
 		return "", err
 	}
+	return lease.value, nil
+}
+
+// Lease returns the cached federated credential or performs one serialized
+// exchange. A credential rejected by an upstream 401 is never reused, and a
+// failed exchange fails closed with a bounded exponential retry delay.
+func (a *responsesProxyFederatedAuth) Lease(ctx context.Context) (responsesProxyAuthLease, error) {
+	if a == nil {
+		return responsesProxyAuthLease{}, errors.New("workload identity credential cache unavailable")
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	now := a.currentTime()
+	if cached := a.cached; cached != nil &&
+		now.Before(cached.renewAt) &&
+		time.Now().Before(cached.expiresAt) &&
+		(cached.rejected == nil || !cached.rejected.Load()) {
+		return responsesProxyAuthLease{value: cached.header, rejected: cached.rejected}, nil
+	}
+	if failure := a.renewalFailure; failure != nil && now.Before(failure.retryAt) {
+		return responsesProxyAuthLease{}, errors.New("workload identity renewal temporarily unavailable; retry later")
+	}
+	// One exchange at a time (under mu), including after a rejected token. On
+	// failure keep neither the old credential nor an error carrying source data.
+	a.cached = nil
+	cached, err := a.exchange(ctx)
+	if err != nil {
+		delay := responsesProxyInitialRenewalBackoff
+		if a.renewalFailure != nil {
+			delay = min(a.renewalFailure.delay*2, responsesProxyMaxRenewalBackoff)
+		}
+		a.renewalFailure = &responsesProxyRenewalFailure{retryAt: a.currentTime().Add(delay), delay: delay}
+		return responsesProxyAuthLease{}, err
+	}
 	a.cached = cached
-	return cached.header, nil
+	a.renewalFailure = nil
+	return responsesProxyAuthLease{value: cached.header, rejected: cached.rejected}, nil
+}
+
+func (a *responsesProxyFederatedAuth) currentTime() time.Time {
+	if a != nil && a.now != nil {
+		return a.now()
+	}
+	return time.Now()
 }
 
 type responsesProxyExchangeRequest struct {
@@ -258,6 +320,7 @@ func (a *responsesProxyFederatedAuth) exchange(ctx context.Context) (*responsesP
 		header:    header,
 		renewAt:   time.Now().Add(remaining - skew),
 		expiresAt: expiresAt,
+		rejected:  &atomic.Bool{},
 	}, nil
 }
 
