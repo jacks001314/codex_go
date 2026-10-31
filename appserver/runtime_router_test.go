@@ -19770,9 +19770,16 @@ workspace_kind = "projectless"
 	}
 }
 
+// applyPatchAnalyticsModel is a bundled catalog slug that declares a freeform
+// apply_patch tool (codex-rs/models-manager/models.json). Rust registers
+// ApplyPatchHandler only when model_info.apply_patch_tool_type is set, and the
+// unknown-slug fallback (model_info_from_slug) leaves it null, so an unbundled
+// slug such as gpt-5 never offers apply_patch to the model.
+const applyPatchAnalyticsModel = "gpt-5.5"
+
 func TestRuntimeRouterTurnCompletedEmitsAcceptedLineFingerprintsLikeRust(t *testing.T) {
 	home := t.TempDir()
-	if err := os.WriteFile(config.ConfigPath(home), []byte(`model = "gpt-5"`), 0o600); err != nil {
+	if err := os.WriteFile(config.ConfigPath(home), []byte(`model = "`+applyPatchAnalyticsModel+`"`), 0o600); err != nil {
 		t.Fatalf("write config error = %v", err)
 	}
 	store := session.NewStore(filepath.Join(home, "sessions"))
@@ -19844,7 +19851,7 @@ func TestRuntimeRouterTurnCompletedEmitsAcceptedLineFingerprintsLikeRust(t *test
 	if params.ProductSurface == nil || *params.ProductSurface != "codex" {
 		t.Fatalf("product_surface = %#v", params.ProductSurface)
 	}
-	if params.ModelSlug == nil || *params.ModelSlug != "gpt-5" {
+	if params.ModelSlug == nil || *params.ModelSlug != applyPatchAnalyticsModel {
 		t.Fatalf("model_slug = %#v", params.ModelSlug)
 	}
 	if params.AcceptedAddedLines != 2 || params.AcceptedDeletedLines != 0 {
@@ -19964,7 +19971,7 @@ func TestRuntimeRouterCommandExecutionEmitsAnalyticsLikeRust(t *testing.T) {
 
 func TestRuntimeRouterFileChangeEmitsAnalyticsLikeRust(t *testing.T) {
 	home := t.TempDir()
-	if err := os.WriteFile(config.ConfigPath(home), []byte(`model = "gpt-5"`), 0o600); err != nil {
+	if err := os.WriteFile(config.ConfigPath(home), []byte(`model = "`+applyPatchAnalyticsModel+`"`), 0o600); err != nil {
 		t.Fatalf("write config error = %v", err)
 	}
 	store := session.NewStore(filepath.Join(home, "sessions"))
@@ -20517,7 +20524,7 @@ func TestRuntimeRouterGuardianReviewCompletedEmitsReviewAnalyticsLikeRust(t *tes
 
 func TestRuntimeRouterFileChangeAnalyticsIncludesUserReviewSummaryLikeRust(t *testing.T) {
 	home := t.TempDir()
-	if err := os.WriteFile(config.ConfigPath(home), []byte(`model = "gpt-5"`), 0o600); err != nil {
+	if err := os.WriteFile(config.ConfigPath(home), []byte(`model = "`+applyPatchAnalyticsModel+`"`), 0o600); err != nil {
 		t.Fatalf("write config error = %v", err)
 	}
 	store := session.NewStore(filepath.Join(home, "sessions"))

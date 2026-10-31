@@ -12797,7 +12797,10 @@ func (r *RuntimeRouter) skillContextWindowForTurn(cfg *config.Config, params *tu
 	// Rust #44202: the skill catalog budget reads the captured step model's
 	// resolved context window (context_window, else max_context_window) before
 	// the configured override, so a mid-turn model switch re-budgets the catalog.
-	info := r.modelInfoForRuntimeWithConfig(modelID, cfg)
+	// The override in question is the session's: the thread captures the model
+	// info overrides when it is created, so a turn-local
+	// `model_context_window` never re-budgets the catalog by itself.
+	info := r.modelInfoForRuntimeWithConfig(modelID, r.skillCatalogSessionConfigForTurn(cfg, params))
 	if info == nil {
 		return 0
 	}
