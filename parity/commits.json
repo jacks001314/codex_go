@@ -744,7 +744,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "N/A by architecture (Round 722 audit): Rust's preapproval branch requires per-environment active permission-grant bookkeeping and compares retained filesystem grants (including order) before routing write_stdin to review. Go's app-server does not retain an active granted-permissions set for terminals; terminalWriteReviewRequirement routes retained additional permissions to review without a grant-expiry preapproval match, and NUL/oversized input is rejected before writing. There is no grant state to compare, so the Rust preapproval optimization has no Go carrier."
+    "Round 1241 (re-audit; the previous Round 722 text described the write_stdin preapproval branch and did not match this subject): Rust #40179 archives the parent by preparing every loaded thread in the spawn subtree, because collaboration can resume an archived descendant without unarchiving its rollout. Go cannot reach that state: every session resume path rejects an archived thread through threadResumeArchivedError, and runtimeAgentController.ResumeAgent (appserver/agent_controller.go) unarchives an archived agent thread before registering it. Archiving still walks the whole subtree (store.SubtreeThreadIDs plus spawn-graph descendants) and releases every thread whose store row or rollout was archived, so a loaded descendant would be shut down either way. Tests: appserver/archive_thread_rollouts_like_rust_test.go TestRouterArchiveMovesEveryOwnedActiveRolloutLikeRust, appserver/router_test.go honest archived-resume rejections."
    ]
   },
   {
