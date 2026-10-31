@@ -26453,9 +26453,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "N/A by architecture: the commit adds service_diagnostics.rs and stop-path logging inside codex-rs/windows-sandbox-service, the Rust Windows helper service (symbols ServiceStopReason/record_stopped). Go has no Windows sandbox service binary (no windows/svc usage; windowssandbox runs setup_main plus command_runner helpers), so no service stop path exists to instrument."
+    "N/A by architecture: the commit adds service_diagnostics.rs and stop-path logging inside codex-rs/windows-sandbox-service, the Rust Windows helper service (symbols ServiceStopReason/record_stopped). Go has no Windows sandbox service binary (no windows/svc usage; windowssandbox runs setup_main plus command_runner helpers), so no service stop path exists to instrument.",
+    "Round 1233 reclassifies this commit from not applicable: the Go tree now carries the Windows sandbox service, so every part of the commit has a carrier. provisionservice/service_diagnostics_windows.go stores (reason<<32)|hresult as CodexLastStop in the existing SCM service key without recreating it, RecordServiceStopped emits codex.windows_sandbox.service_stopped only when the re-queried state, both exit codes and the registry record still match, and serviceStopReasonLabel maps all seven reasons. windowsandboxservice records ServiceStopReasonStarting before the broker, the fatal reason in serviceMainProcedure and the final reason in runServiceMain (owner removed, stop requested, shutdown), while ReportStatus stores the cached status only after SetServiceStatus succeeds. Round 1233 also closed the last gap in that mapping: fatalStopReason reports ServiceStopReasonRegistrationInterrupted for ErrRuntimeSetupInterrupted, which was previously reported as a startup or broker failure; service_fatal_reason_like_rust_test.go covers all four branches, and service_diagnostics_like_rust_test.go covers the record value, the metric labels and the inconsistent-observation skip."
    ]
   },
   {
@@ -30408,9 +30409,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "N/A by architecture (Round 716 audit): this changes codex-rs/windows-sandbox-service, a managed MSIX runtime package registration service that has no Go port. Go's Windows sandbox setup uses the standalone elevated helper/firewall/token paths, not Windows.Management.Deployment registration results, so RegistrationResult, AsyncStatus, and deployment activity-id diagnostics have no carrier."
+    "N/A by architecture (Round 716 audit): this changes codex-rs/windows-sandbox-service, a managed MSIX runtime package registration service that has no Go port. Go's Windows sandbox setup uses the standalone elevated helper/firewall/token paths, not Windows.Management.Deployment registration results, so RegistrationResult, AsyncStatus, and deployment activity-id diagnostics have no carrier.",
+    "Round 1233 reclassifies this commit from not applicable: windowssandboxservice/registered_packages_register_windows.go ports registration_result.rs as readRegistrationResult plus registrationResult.check, keeping the async status and ErrorCode separate from the GetResults failure, reading IDeploymentResult's ExtendedErrorCode and ActivityId into their own error slots, and formatting the same phase-tagged summary (status, async_error, get_results, activity_id, phase=ExtendedErrorCode, phase=deployment) without free-form Windows ErrorText; ProvisionRegisteredRuntime reports the outcome through that check. Tests: registered_credentials_like_rust_test.go."
    ]
   },
   {

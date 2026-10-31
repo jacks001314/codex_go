@@ -100,11 +100,7 @@ func serviceMainProcedure(_ uintptr, _ uintptr) uintptr {
 	}
 	provisionservice.ServiceStopReasonStarting.Record(0)
 	if err := runServiceMain(state); err != nil {
-		reason := provisionservice.ServiceStopReasonBrokerFailed
-		if state.CurrentStatus() == ServiceStartPending {
-			reason = provisionservice.ServiceStopReasonStartupFailed
-		}
-		reason.Record(FatalErrorHResult(err))
+		fatalStopReason(state, err).Record(FatalErrorHResult(err))
 		LogError(EventServiceFailed, "The Codex sandbox service encountered a fatal error: "+FatalErrorMessage(err))
 		_, _ = fmt.Fprintf(os.Stderr, "%s failed: %v\n", state.serviceName, err)
 		if state.statusHandle != 0 {
@@ -112,6 +108,20 @@ func serviceMainProcedure(_ uintptr, _ uintptr) uintptr {
 		}
 	}
 	return 0
+}
+
+// fatalStopReason separates an interrupted registration from a startup and a
+// broker failure (Rust service::service_main's fatal reason selection). The
+// interruption is a retained registration rather than a fault, so it must not
+// be reported as an SCM startup failure.
+func fatalStopReason(state *ServiceState, err error) provisionservice.ServiceStopReason {
+	if errors.Is(err, ErrRuntimeSetupInterrupted) {
+		return provisionservice.ServiceStopReasonRegistrationInterrupted
+	}
+	if state.CurrentStatus() == ServiceStartPending {
+		return provisionservice.ServiceStopReasonStartupFailed
+	}
+	return provisionservice.ServiceStopReasonBrokerFailed
 }
 
 func runServiceMain(state *ServiceState) error {
