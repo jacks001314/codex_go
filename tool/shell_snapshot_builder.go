@@ -145,7 +145,8 @@ type SnapshotProviderResult struct {
 	// Path is the snapshot to replay in front of the launch's command, or "".
 	Path string
 	// Remote asks the selected executor to capture and replay its own shell
-	// snapshot. Path is used for local environments.
+	// snapshot (Rust #39957's executor request). The shell_snapshot_v2 gate is
+	// the only producer; the session file snapshot stays local-only.
 	Remote *execserverclient.ShellSnapshotRequest
 	// Local asks the in-process executor to capture and replay its own shell
 	// snapshot for a local launch (Rust #39957).

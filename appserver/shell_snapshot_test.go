@@ -162,12 +162,13 @@ func TestShellSnapshotProviderFollowsTheFeatureAndLaunchShapeLikeRust(t *testing
 		CWD:             cwd,
 		AllowLoginShell: true,
 	}
+	// Rust's file snapshot is local-only; a remote environment gets its
+	// executor-owned snapshot from the shell_snapshot_v2 request instead.
 	remoteRequest := base
 	remoteRequest.Remote = true
 	remoteSnapshot := enabled(context.Background(), remoteRequest)
-	if remoteSnapshot.Remote == nil || remoteSnapshot.Remote.ScopeID != threadID ||
-		remoteSnapshot.Remote.Shell.Path != "/bin/bash" || remoteSnapshot.Path != "" {
-		t.Fatalf("remote snapshot request = %#v", remoteSnapshot)
+	if remoteSnapshot.Path != "" || remoteSnapshot.Remote != nil || len(remoteSnapshot.Env) != 0 {
+		t.Fatalf("remote snapshot request = %#v, want no file snapshot", remoteSnapshot)
 	}
 	cases := []struct {
 		name    string

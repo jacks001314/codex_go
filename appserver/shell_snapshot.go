@@ -117,16 +117,12 @@ func (r *RuntimeRouter) shellSnapshotV1ProviderForTurn(threadID string, cfg *con
 		if !shellSnapshotLaunchEligible(request) {
 			return tool.SnapshotProviderResult{}
 		}
+		// Rust's session file snapshot is local-only
+		// (runtimes/unified_exec.rs skips it for `environment_is_remote`); a
+		// remote environment only replays the executor-owned snapshot, which the
+		// `shell_snapshot_v2` gate requests after checking the capability.
 		if request.Remote {
-			return tool.SnapshotProviderResult{
-				Remote: &execserverclient.ShellSnapshotRequest{
-					ScopeID: strings.TrimSpace(threadID),
-					Shell: execserverclient.ShellInfo{
-						Name: string(request.ShellType),
-						Path: strings.TrimSpace(request.ShellPath),
-					},
-				},
-			}
+			return tool.SnapshotProviderResult{}
 		}
 		if protected && (!request.Protected || request.PermissionProfile == nil) {
 			// Rust only creates a protected snapshot once the credential broker
