@@ -53,9 +53,10 @@ func TestKeymapSchemaMatchesCatalogLikeRust(t *testing.T) {
 	}
 }
 
-// Every accepted upstream rename must be in the schema's alias table (the
-// strict-config validator reads it) and every alias must name a real catalog
-// entry, so an alias can never point at behavior that does not exist.
+// Every schema alias must name a real catalog entry and every source must stay
+// out of the catalog, so an alias can never point at behavior that does not
+// exist or shadow a canonical action. The Vim actions now use upstream's
+// spellings, so the table holds only Go's superseded names.
 func TestKeymapSchemaAliasesMatchCatalogLikeRust(t *testing.T) {
 	catalog := map[string]bool{}
 	for _, action := range keymapActionCatalog {
@@ -73,7 +74,26 @@ func TestKeymapSchemaAliasesMatchCatalogLikeRust(t *testing.T) {
 			t.Fatalf("alias %s is not accepted by the schema", source)
 		}
 	}
-	if len(keymapschema.ActionAliases) != len(acceptedKeymapRenames) {
-		t.Fatalf("schema aliases = %d, accepted renames = %d", len(keymapschema.ActionAliases), len(acceptedKeymapRenames))
+	// The Vim actions carry upstream's spellings now, so the alias table only
+	// keeps Go's superseded names valid. Pin the exact set so a rename cannot
+	// silently drop a config spelling an older Go build wrote.
+	wantLegacy := []string{
+		"vim_normal.replace_mode",
+		"vim_normal.find_char_forward",
+		"vim_normal.find_char_backward",
+		"vim_normal.till_char_forward",
+		"vim_normal.till_char_backward",
+		"vim_normal.search_forward",
+		"vim_normal.search_backward",
+		"vim_normal.search_next",
+		"vim_normal.search_prev",
+	}
+	for _, source := range wantLegacy {
+		if _, ok := keymapschema.ActionAliases[source]; !ok {
+			t.Fatalf("legacy alias %s is missing from keymapschema.ActionAliases", source)
+		}
+	}
+	if len(keymapschema.ActionAliases) != len(wantLegacy) {
+		t.Fatalf("schema aliases = %d, want %d", len(keymapschema.ActionAliases), len(wantLegacy))
 	}
 }

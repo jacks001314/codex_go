@@ -501,10 +501,21 @@ func TestModelKeymapCommandOpensGuidedPickerAndCapturesKey(t *testing.T) {
 
 	typeText(t, model, "/keymap")
 	model.Update(key(bubbletea.KeyEnter))
-	if model.modal == nil || model.modal.id != chatwidget.KeymapPickerViewID {
+	if model.modal == nil || model.modal.id != chatwidget.KeymapPickerViewID || model.modal.keymapPanel == nil {
 		t.Fatalf("/keymap modal = %#v", model.modal)
 	}
-	model.modal.selected = modalOptionIndexByID(t, model.modal.options, "global:open_transcript")
+	rows := codextui.KeymapPageRows(model.keymapPageFilter(), model.keymapConfig)
+	selected := -1
+	for index, row := range rows {
+		if row.Context == "global" && row.Action == "open_transcript" {
+			selected = index
+			break
+		}
+	}
+	if selected < 0 {
+		t.Fatalf("global.open_transcript missing from the keymap page")
+	}
+	model.modal.keymapPanel.selected = selected
 	model.Update(key(bubbletea.KeyEnter))
 	if model.modal == nil || model.modal.id != chatwidget.KeymapActionMenuViewID {
 		t.Fatalf("action modal = %#v", model.modal)

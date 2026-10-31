@@ -320,20 +320,20 @@ func (m *Model) applyVimModeKey(msg bubbletea.KeyMsg, keySpec string) bool {
 				// range (Rust operator motion_jump_bottom).
 				m.jumpToVimBufferLine(true)
 				return true
-			case m.keyMatches("vim_normal", "search_forward", keySpec):
+			case m.keyMatches("vim_search", "forward", keySpec):
 				// d/ y/ c/ start a search with the pending operator attached
 				// (Rust #41586 vim_search.rs operator transaction).
 				m.startVimSearch(true, m.vimPendingOp)
 				return true
-			case m.keyMatches("vim_normal", "search_backward", keySpec):
+			case m.keyMatches("vim_search", "backward", keySpec):
 				m.startVimSearch(false, m.vimPendingOp)
 				return true
-			case m.keyMatches("vim_normal", "search_next", keySpec):
+			case m.keyMatches("vim_search", "next", keySpec):
 				// d n / y n / c n apply the operator to the next match of the
 				// last query (Rust SearchCommand::Next with VimPending::Operator).
 				m.jumpVimSearchMatch(true)
 				return true
-			case m.keyMatches("vim_normal", "search_prev", keySpec):
+			case m.keyMatches("vim_search", "previous", keySpec):
 				m.jumpVimSearchMatch(false)
 				return true
 			case m.vimOperatorMotion(keySpec):
@@ -402,7 +402,7 @@ func (m *Model) applyVimModeKey(msg bubbletea.KeyMsg, keySpec string) bool {
 		m.applyVimDotRepeat()
 	case m.keyMatches("vim_normal", "replace_char", keySpec):
 		m.vimPendingReplace = true
-	case m.keyMatches("vim_normal", "replace_mode", keySpec):
+	case m.keyMatches("vim_normal", "enter_replace_mode", keySpec):
 		m.vimBeginEdit()
 		m.vimReplaceMode = true
 		m.clearVimReplaceRecovery()
@@ -426,7 +426,7 @@ func (m *Model) applyVimModeKey(msg bubbletea.KeyMsg, keySpec string) bool {
 		m.composer.CursorStart()
 	case m.keyMatches("vim_normal", "move_line_end", keySpec):
 		m.composer.CursorEnd()
-	case m.keyMatches("vim_normal", "search_forward", keySpec):
+	case m.keyMatches("vim_search", "forward", keySpec):
 		// Rust #50788: a standalone `/` on an empty draft leaves Vim search and
 		// opens slash-command completion instead, so switch to Insert and let the
 		// key insert `/` through the normal composer path below.
@@ -436,19 +436,19 @@ func (m *Model) applyVimModeKey(msg bubbletea.KeyMsg, keySpec string) bool {
 			return false
 		}
 		m.startVimSearch(true, "")
-	case m.keyMatches("vim_normal", "search_backward", keySpec):
+	case m.keyMatches("vim_search", "backward", keySpec):
 		m.startVimSearch(false, "")
-	case m.keyMatches("vim_normal", "search_next", keySpec):
+	case m.keyMatches("vim_search", "next", keySpec):
 		m.jumpVimSearchMatch(true)
-	case m.keyMatches("vim_normal", "search_prev", keySpec):
+	case m.keyMatches("vim_search", "previous", keySpec):
 		m.jumpVimSearchMatch(false)
-	case m.keyMatches("vim_normal", "find_char_forward", keySpec):
+	case m.keyMatches("vim_normal", "find_forward", keySpec):
 		m.startVimFind(0, true, "")
-	case m.keyMatches("vim_normal", "find_char_backward", keySpec):
+	case m.keyMatches("vim_normal", "find_backward", keySpec):
 		m.startVimFind(0, false, "")
-	case m.keyMatches("vim_normal", "till_char_forward", keySpec):
+	case m.keyMatches("vim_normal", "till_forward", keySpec):
 		m.startVimFind(1, true, "")
-	case m.keyMatches("vim_normal", "till_char_backward", keySpec):
+	case m.keyMatches("vim_normal", "till_backward", keySpec):
 		m.startVimFind(1, false, "")
 	case m.keyMatches("vim_normal", "yank_line", keySpec):
 		m.yankVimLine()

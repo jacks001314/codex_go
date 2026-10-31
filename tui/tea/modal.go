@@ -2,6 +2,7 @@ package tea
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	bubbletea "github.com/charmbracelet/bubbletea"
@@ -166,6 +167,19 @@ type modalState struct {
 	footerNote        string
 	footerHint        string
 	reopenOnCancel    bool
+	// selectionView marks modals built from chatwidget.SelectionView (Rust's
+	// bottom-pane ListSelectionView). They render the title and subtitle as a
+	// single header paragraph followed by the picker's blank scroll rows, while
+	// centered confirmation overlays keep the plain dialog spacing.
+	selectionView bool
+	// confirmationView marks Rust's `SelectionViewParams::confirmation()` dialogs
+	// (centered over the retained composer). They keep the picker layout but
+	// wrap their header paragraph to the dialog rect instead of the terminal.
+	confirmationView bool
+	// inlinePicker marks a Rust `SelectionViewParams::picker()` view that must
+	// stay in the bottom pane even though its kind normally floats as a centered
+	// dialog (the `/daemon` menu).
+	inlinePicker      bool
 	columnWidth       bottompane.ColumnWidthConfig
 	descriptionLayout bottompane.SelectionDescriptionLayout
 	keymapCapture     *keymapCaptureState
@@ -217,6 +231,8 @@ type modalState struct {
 	memories               *memoriesModalState
 	feedback               *feedbackModalState
 	configPanel            *configPanelState
+	keymapPanel            *keymapPanelState
+	keymapInspector        *keymapInspectorState
 	manageSkills           *manageSkillsModalState
 	externalAgentMigration *externalAgentMigrationModalState
 	hooksBrowser           *hooksBrowserModalState
@@ -427,6 +443,12 @@ func (m *Model) updateModal(message bubbletea.KeyMsg) bubbletea.Cmd {
 	}
 	if m.modal.configPanel != nil {
 		return m.updateConfigPanelKey(message)
+	}
+	if m.modal.keymapPanel != nil {
+		return m.updateKeymapPanelKey(message)
+	}
+	if m.modal.keymapInspector != nil {
+		return m.updateKeymapInspector(message)
 	}
 	if m.modal.themePicker != nil {
 		return m.updateThemePickerModal(message)
@@ -1901,6 +1923,12 @@ func (m *Model) renderModal() string {
 	if m.modal.configPanel != nil {
 		return m.renderConfigPanel()
 	}
+	if m.modal.keymapPanel != nil {
+		return m.renderKeymapPanel()
+	}
+	if m.modal.keymapInspector != nil {
+		return m.renderKeymapInspector()
+	}
 	if m.modal.kind == ModalKindWindowsSandbox {
 		return m.renderWindowsSandboxModal()
 	}
@@ -1970,22 +1998,47 @@ func (m *Model) renderModal() string {
 			BreakWords: true,
 		}), "\n")
 	}
+	if m.modal.confirmationView {
+		// Rust renders the confirmation header paragraph inside the dialog rect
+		// and wraps it there (Wrap { trim: false }).
+		title = strings.Join(codextui.WrapLines([]string{title}, codextui.WrapOptions{
+			Width:      max(m.width-2, 8),
+			BreakWords: true,
+		}), "\n")
+		body = strings.Join(codextui.WrapLines(strings.Split(body, "\n"), codextui.WrapOptions{
+			Width:      max(m.width-4, 8),
+			BreakWords: true,
+		}), "\n")
+	}
+	// listLayout covers every view Rust builds through ListSelectionView: inline
+	// pickers, centered confirmations, and pickers whose kind usually floats.
+	listLayout := m.modal.selectionView || m.modal.confirmationView || m.modal.inlinePicker
 	builder.WriteString("  ")
 	builder.WriteString(title)
 	builder.WriteString("\n")
-	if body != "" || len(m.modal.options) > 0 {
-		// Rust's pickers keep a one-row header gap between the title and the
-		// result list (selection_picker_layout header_gap).
-		builder.WriteString("\n")
-	}
 	if m.modal.kind == ModalKindMisalignment {
 		body = m.renderMisalignmentBody()
 	}
-	if body != "" {
-		builder.WriteString(indentLines(body, "  "))
-		builder.WriteString("\n")
-		if m.modalOptionIndent() != "" {
+	if listLayout {
+		// Rust builds the picker header as one paragraph (bold title over the
+		// dim subtitle) and leaves the spacing below it to the list's header
+		// gap and blank scroll-indicator rows.
+		if body != "" {
+			builder.WriteString(indentLines(body, "  "))
 			builder.WriteString("\n")
+		}
+	} else {
+		if body != "" || len(m.modal.options) > 0 {
+			// Rust's pickers keep a one-row header gap between the title and the
+			// result list (selection_picker_layout header_gap).
+			builder.WriteString("\n")
+		}
+		if body != "" {
+			builder.WriteString(indentLines(body, "  "))
+			builder.WriteString("\n")
+			if m.modalOptionIndent() != "" {
+				builder.WriteString("\n")
+			}
 		}
 	}
 	footerDefault := "Esc cancel | Enter choose"
@@ -2048,14 +2101,39 @@ func (m *Model) renderModal() string {
 		} else {
 			builder.WriteString("\n")
 		}
+	} else if listLayout {
+		// Header gap + the list's blank "above" indicator row.
+		builder.WriteString("\n\n")
 	}
 	// Rust's list rows pair the numbered label with a description column
 	// (selection_row_layout): the name column is padded, there is no dash, and
 	// the selected row fills the pane width. Approval rows keep their key hint.
+	enabledOrdinal := make([]int, len(m.modal.options))
+	enabledTotal := 0
+	for index, option := range m.modal.options {
+		if option.Disabled {
+			continue
+		}
+		enabledTotal++
+		enabledOrdinal[index] = enabledTotal
+	}
+	numberWidth := len(strconv.Itoa(max(enabledTotal, 1)))
+	selectionLabel := func(option ModalOption) string {
+		if !listLayout {
+			return m.modalOptionLabel(option)
+		}
+		// Rust's build_name_spans appends the dim disabled marker only when the
+		// row carries a reason; a plain disabled row keeps its bare label.
+		label := option.Label
+		if strings.TrimSpace(option.DisabledReason) != "" {
+			label += " (disabled)"
+		}
+		return label
+	}
 	nameWidth := 0
 	for i := start; i < start+visible && i < len(m.modal.options); i++ {
 		option := m.modal.options[i]
-		label := m.modalOptionLabel(option)
+		label := selectionLabel(option)
 		if width := codextui.DisplayWidth(label); width > nameWidth {
 			nameWidth = width
 		}
@@ -2064,6 +2142,15 @@ func (m *Model) renderModal() string {
 		option := m.modal.options[i]
 		selected := i == m.modal.selected
 		prefix := codextui.NumberedSelectionPrefix(i, selected)
+		if listLayout {
+			// Rust numbers only enabled rows and leaves the gutter blank for a
+			// disabled one (selection_row_layout auto_number_shortcuts).
+			if ordinal := enabledOrdinal[i]; ordinal > 0 {
+				prefix = codextui.SelectionPrefix(selected) + strconv.Itoa(ordinal) + ". "
+			} else {
+				prefix = codextui.SelectionPrefix(selected) + strings.Repeat(" ", numberWidth+2)
+			}
+		}
 		check := ""
 		if m.modal.statusLineSetup != nil || m.modal.terminalTitleSetup != nil {
 			check = "[ ] "
@@ -2071,21 +2158,52 @@ func (m *Model) renderModal() string {
 				check = "[x] "
 			}
 		}
-		label := m.modalOptionLabel(option)
+		label := selectionLabel(option)
 		line := m.modalOptionIndent() + prefix + check + label
 		description := option.Description
 		if option.DisabledReason != "" {
-			if description != "" {
-				description += "\n"
+			if listLayout {
+				reason := strings.TrimSpace(option.DisabledReason)
+				if description != "" {
+					description += " (disabled: " + reason + ")"
+				} else {
+					description = "disabled: " + reason
+				}
+			} else {
+				if description != "" {
+					description += "\n"
+				}
+				description += option.DisabledReason
 			}
-			description += option.DisabledReason
 		}
 		if description != "" {
 			pad := nameWidth - codextui.DisplayWidth(label)
 			if pad < 0 {
 				pad = 0
 			}
-			line += strings.Repeat(" ", pad+2) + description
+			gap := strings.Repeat(" ", pad+2)
+			if listLayout && !strings.Contains(description, "\n") {
+				// Rust's list rows wrap the description column at the pane edge
+				// and align the continuation lines under it.
+				descStart := codextui.DisplayWidth(line + gap)
+				wrapped := codextui.WrapLines([]string{description}, codextui.WrapOptions{
+					Width:      max(m.width-descStart, 8),
+					BreakWords: true,
+				})
+				for index, part := range wrapped {
+					row := line + gap + part
+					if index > 0 {
+						row = strings.Repeat(" ", descStart) + part
+					}
+					if selected {
+						row = codextui.RenderSelectedRowFilled(row, max(m.width, 1))
+					}
+					builder.WriteString(row)
+					builder.WriteString("\n")
+				}
+				continue
+			}
+			line += gap + description
 		}
 		if selected {
 			line = codextui.RenderSelectedRowFilled(line, max(m.width, 1))
@@ -2096,6 +2214,10 @@ func (m *Model) renderModal() string {
 	if overflow && below {
 		builder.WriteString("\u2193\n")
 	} else if overflow {
+		builder.WriteString("\n")
+	} else if listLayout {
+		// Rust keeps one blank "below" indicator row between the results and the
+		// footer hint.
 		builder.WriteString("\n")
 	}
 	if footerNote != "" {

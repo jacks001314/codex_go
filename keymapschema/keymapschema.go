@@ -73,6 +73,7 @@ var ContextActions = map[string]map[string]struct{}{
 		"insert_line_start":     {},
 		"open_line_below":       {},
 		"open_line_above":       {},
+		"enter_replace_mode":    {},
 		"move_left":             {},
 		"move_right":            {},
 		"move_up":               {},
@@ -80,33 +81,34 @@ var ContextActions = map[string]map[string]struct{}{
 		"move_word_forward":     {},
 		"move_word_backward":    {},
 		"move_word_end":         {},
-		"undo":                  {},
-		"redo":                  {},
 		"move_line_start":       {},
 		"move_line_end":         {},
-		"search_forward":        {},
-		"search_backward":       {},
-		"search_next":           {},
-		"search_prev":           {},
+		"find_forward":          {},
+		"find_backward":         {},
+		"till_forward":          {},
+		"till_backward":         {},
 		"jump_top":              {},
 		"jump_bottom":           {},
-		"find_char_forward":     {},
-		"find_char_backward":    {},
-		"till_char_forward":     {},
-		"till_char_backward":    {},
 		"delete_char":           {},
 		"replace_char":          {},
-		"replace_mode":          {},
+		"repeat_last_change":    {},
 		"substitute_char":       {},
 		"delete_to_line_end":    {},
 		"change_to_line_end":    {},
 		"yank_line":             {},
 		"paste_after":           {},
-		"repeat_last_change":    {},
 		"start_delete_operator": {},
 		"start_yank_operator":   {},
 		"start_change_operator": {},
+		"undo":                  {},
+		"redo":                  {},
 		"cancel_operator":       {},
+	},
+	"vim_search": {
+		"forward":  {},
+		"backward": {},
+		"next":     {},
+		"previous": {},
 	},
 	"vim_operator": {
 		"delete_line":               {},
@@ -192,23 +194,25 @@ var ContextActions = map[string]map[string]struct{}{
 	},
 }
 
-// ActionAliases maps an upstream keymap action name to the Go catalog entry
-// that implements the same behavior. Upstream (`config/src/tui_keymap.rs`)
-// keeps these names, so a Rust-authored config must stay valid here even
-// though Go implements the behavior under a different action (and, for vim
-// search, a different context). The TUI loader applies the alias, and the
-// shared strict-config policy accepts the upstream spelling instead of
-// reporting it as an unknown field (Rust #54766).
+// ActionAliases maps a superseded Go keymap action name to the catalog entry
+// that now carries upstream's name. The Vim actions use upstream spellings
+// (`enter_replace_mode`, `find_forward`, and a separate `vim_search` context),
+// so a config written against an older Go build keeps binding the same
+// behavior. The TUI loader applies the alias, and the shared strict-config
+// policy accepts the legacy spelling instead of reporting it as an unknown
+// field (Rust #54766).
 var ActionAliases = map[string]string{
-	"vim_normal.enter_replace_mode": "vim_normal.replace_mode",
-	"vim_normal.find_forward":       "vim_normal.find_char_forward",
-	"vim_normal.find_backward":      "vim_normal.find_char_backward",
-	"vim_normal.till_forward":       "vim_normal.till_char_forward",
-	"vim_normal.till_backward":      "vim_normal.till_char_backward",
-	"vim_search.forward":            "vim_normal.search_forward",
-	"vim_search.backward":           "vim_normal.search_backward",
-	"vim_search.next":               "vim_normal.search_next",
-	"vim_search.previous":           "vim_normal.search_prev",
+	// Go's original spellings for the Vim actions above stay valid so a
+	// config written for an older Go build keeps binding the same behavior.
+	"vim_normal.replace_mode":       "vim_normal.enter_replace_mode",
+	"vim_normal.find_char_forward":  "vim_normal.find_forward",
+	"vim_normal.find_char_backward": "vim_normal.find_backward",
+	"vim_normal.till_char_forward":  "vim_normal.till_forward",
+	"vim_normal.till_char_backward": "vim_normal.till_backward",
+	"vim_normal.search_forward":     "vim_search.forward",
+	"vim_normal.search_backward":    "vim_search.backward",
+	"vim_normal.search_next":        "vim_search.next",
+	"vim_normal.search_prev":        "vim_search.previous",
 }
 
 // KnownContext reports whether the keymap context is part of the schema.

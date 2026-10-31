@@ -74,30 +74,6 @@ func (m *Model) applyKeymapEdit(edit codextui.KeymapEdit) (*codextui.KeymapConfi
 	return next, "", nil
 }
 
-func (m *Model) openKeymapPicker(selectedContext string, selectedAction string) {
-	if m == nil {
-		return
-	}
-	descriptors := codextui.KeymapActions(codextui.KeymapActionFilter{FastModeEnabled: m.featureSettings["fast_mode"]})
-	items := make([]chatwidget.KeymapActionItem, 0, len(descriptors))
-	for _, descriptor := range descriptors {
-		bindings, _, _ := codextui.ResolvedKeymapBindings(m.keymapConfig, descriptor.Context, descriptor.Action)
-		items = append(items, chatwidget.KeymapActionItem{
-			Context:     descriptor.Context,
-			Action:      descriptor.Action,
-			Description: descriptor.Description,
-			Bindings:    codextui.KeymapDisplayBindings(m.keymapConfig, bindings),
-		})
-	}
-	m.openSelectionViewModal(ModalKindGeneric, chatwidget.NewKeymapPickerView(chatwidget.KeymapPickerConfig{
-		Items:           items,
-		SelectedContext: selectedContext,
-		SelectedAction:  selectedAction,
-		FastModeEnabled: m.featureSettings["fast_mode"],
-	}))
-	m.notice = "Keymap"
-}
-
 func (m *Model) openKeymapActionMenu(context string, action string) {
 	if m == nil {
 		return

@@ -56,25 +56,14 @@ var goOnlyKeymapActions = map[string]string{
 	"global.open_warnings": "Go-only warnings viewer shortcut (f2)",
 }
 
-// acceptedKeymapRenames records the upstream actions whose behavior already
-// exists in Go under a different action name (and, for vim search, a different
-// context). T-b13 accepted them as known naming differences: renaming would have
-// to move the catalog and the tui/tea consumers together, and the lane's
-// bandwidth goes to the actions whose behavior is genuinely missing. The Rust
-// name therefore stays out of the catalog while the Go name must keep working.
+// acceptedKeymapRenames records upstream actions that only exist in Go under a
+// different action name. T-b13 accepted nine Vim renames here; the catalog now
+// carries upstream's own spellings (`enter_replace_mode`, `find_forward`,
+// `till_backward`, and the separate `vim_search` context), so the ledger is
+// empty and keymapschema.ActionAliases keeps the old Go names working instead.
 //
 // Value format: "<go context>.<go action>|<file:line> · <sha> (#PR) <reason>".
-var acceptedKeymapRenames = map[string]string{
-	"vim_normal.enter_replace_mode": "vim_normal.replace_mode|tui/tea/vim_mode.go:346 · 5a0419edb5 (#42194) actions.rs:175",
-	"vim_normal.find_forward":       "vim_normal.find_char_forward|tui/tea/vim_mode.go:385 · 98ee29c7cd (#40785) actions.rs:185",
-	"vim_normal.find_backward":      "vim_normal.find_char_backward|tui/tea/vim_mode.go:387 · 98ee29c7cd (#40785) actions.rs:186",
-	"vim_normal.till_forward":       "vim_normal.till_char_forward|tui/tea/vim_mode.go:389 · 98ee29c7cd (#40785) actions.rs:187",
-	"vim_normal.till_backward":      "vim_normal.till_char_backward|tui/tea/vim_mode.go:391 · 98ee29c7cd (#40785) actions.rs:188",
-	"vim_search.forward":            "vim_normal.search_forward|tui/tea/vim_mode.go:264/369 · 63d213884d (#41586) actions.rs:207",
-	"vim_search.backward":           "vim_normal.search_backward|tui/tea/vim_mode.go:269/379 · 63d213884d (#41586) actions.rs:208",
-	"vim_search.next":               "vim_normal.search_next|tui/tea/vim_mode.go:272/381 · 63d213884d (#41586) actions.rs:209",
-	"vim_search.previous":           "vim_normal.search_prev|tui/tea/vim_mode.go:277/383 · 63d213884d (#41586) actions.rs:210",
-}
+var acceptedKeymapRenames = map[string]string{}
 
 // composerFallbackKeymapTargets are the three composer actions the loader also
 // accepts under the `global` context (Rust's composer -> global submit/queue

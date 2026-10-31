@@ -22,8 +22,8 @@ func TestTranscriptPagerFindCatalogLikeRust(t *testing.T) {
 		t.Fatalf("pager.find descriptor = %#v", descriptor)
 	}
 	bindings, source, custom := codextui.ResolvedKeymapBindings(nil, "pager", PagerFind)
-	if custom || source != "default" || strings.Join(bindings, ",") != "/,f3" {
-		t.Fatalf("pager.find default = %#v source=%q custom=%v, want /,f3", bindings, source, custom)
+	if custom || source != "default" || strings.Join(bindings, ",") != "f3,/" {
+		t.Fatalf("pager.find default = %#v source=%q custom=%v, want f3,/", bindings, source, custom)
 	}
 	config := codextui.NewKeymapConfig()
 	if err := config.Set("pager", PagerFind, []string{"f4"}); err != nil {

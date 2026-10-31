@@ -3540,6 +3540,16 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		return m, nil
 	}
 	m.syncPatchApprovalFollow()
+	// Rust's keypress inspector asks for raw key capture: it must see every
+	// key (Esc included) before any global shortcut handler.
+	if m.modal != nil && m.modal.keymapInspector != nil {
+		switch msg := message.(type) {
+		case bubbletea.KeyMsg:
+			return m, m.updateKeymapInspector(msg)
+		case keymapInspectorTickMsg:
+			return m, nil
+		}
+	}
 	if _, key := message.(bubbletea.KeyMsg); key {
 		// Rust #47847: a text read is bound to its UI owner; new input makes a
 		// late PRIMARY result stale.
@@ -4296,7 +4306,7 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		}
 		switch msg.Type {
 		case bubbletea.KeyCtrlC:
-			if m.modal != nil && (m.modal.customPrompt != nil || m.modal.manageSkills != nil || m.modal.externalAgentMigration != nil || m.modal.hooksBrowser != nil || m.modal.pluginBrowser != nil) {
+			if m.modal != nil && (m.modal.customPrompt != nil || m.modal.manageSkills != nil || m.modal.externalAgentMigration != nil || m.modal.hooksBrowser != nil || m.modal.pluginBrowser != nil || m.modal.keymapInspector != nil) {
 				return m, m.updateModal(msg)
 			}
 			if m.modal != nil && m.modal.sessionPicker != nil {
@@ -4315,7 +4325,7 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 			m.closeClipboardWorker()
 			return m, bubbletea.Quit
 		case bubbletea.KeyCtrlD:
-			if m.modal != nil && (m.modal.externalAgentMigration != nil || m.modal.hooksBrowser != nil || m.modal.pluginBrowser != nil) {
+			if m.modal != nil && (m.modal.externalAgentMigration != nil || m.modal.hooksBrowser != nil || m.modal.pluginBrowser != nil || m.modal.keymapInspector != nil) {
 				return m, m.updateModal(msg)
 			}
 			m.closeClipboardWorker()
@@ -4696,7 +4706,7 @@ func (m *Model) View() string {
 	// Rust centers only confirmation views (SelectionViewParams::confirmation):
 	// the dialog floats over the retained composer while ordinary pickers stay
 	// inline in the bottom pane.
-	if m.modal != nil && modalCenteredOverlayKind(m.modal.kind) {
+	if m.modal != nil && !m.modal.inlinePicker && (modalCenteredOverlayKind(m.modal.kind) || m.modal.confirmationView) {
 		return m.renderCenteredModalOverlay()
 	}
 	m.refreshTranscript()
