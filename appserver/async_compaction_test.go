@@ -65,15 +65,17 @@ func TestCaptureBackgroundCompactionInputKeepsOriginalPrefixLikeRust(t *testing.
 		{ID: "one", Type: "message", Role: "user", Text: "first"},
 		{ID: "two", Type: "message", Role: "assistant", Text: "second"},
 	}
-	input := captureBackgroundCompactionInput(history, 2, "turn-state", compactionResponseWindow{WindowNumber: 3}, "instructions", "gpt-test", "hash", 7, 100_000)
+	input := captureBackgroundCompactionInput(history, 2, "turn-state", compactionResponseWindow{WindowNumber: 3}, "instructions", "gpt-test", "hash", 7, 100_000, false)
 	if input.Prefix.Len != 2 || input.Prefix.AuthOwnerGeneration == nil || *input.Prefix.AuthOwnerGeneration != 7 {
 		t.Fatalf("captured prefix = %#v", input.Prefix)
 	}
 	if input.Window.WindowNumber != 3 || input.TurnState != "turn-state" || input.AuthOwnerGeneration != 7 {
 		t.Fatalf("captured routing state = %#v", input)
 	}
-	trimmed := captureBackgroundCompactionInput(history, 2, "", compactionResponseWindow{}, "instructions", "gpt-test", "hash", 7, 1)
-	if trimmed.Prefix.Len != 2 || len(trimmed.History) >= len(history) {
+	// Rust #44255 rewrites only tool outputs; conversation messages survive even
+	// when the captured window cannot fit them.
+	trimmed := captureBackgroundCompactionInput(history, 2, "", compactionResponseWindow{}, "instructions", "gpt-test", "hash", 7, 1, false)
+	if trimmed.Prefix.Len != 2 || len(trimmed.History) != len(history) {
 		t.Fatalf("trimmed capture = prefix %#v history %#v", trimmed.Prefix, trimmed.History)
 	}
 }
@@ -263,7 +265,7 @@ func TestAsyncCompactionTakeReadyValidatesCapturedAttemptLikeRust(t *testing.T) 
 		{ID: "one", Type: "message", Role: "user", Text: "first"},
 		{ID: "two", Type: "message", Role: "assistant", Text: "second"},
 	}
-	input := captureBackgroundCompactionInput(history, 1, "", compactionResponseWindow{}, "instructions", "gpt-test", "hash", 3, 1000)
+	input := captureBackgroundCompactionInput(history, 1, "", compactionResponseWindow{}, "instructions", "gpt-test", "hash", 3, 1000, false)
 	done := make(chan struct{})
 	if !state.MaybeStart(context.Background(), input, func() uint64 { return 3 }, func(context.Context, backgroundCompactionInput) (*backgroundCompactionCandidate, error) {
 		close(done)
@@ -304,7 +306,7 @@ func TestAsyncCompactionTakeReadyValidatesCapturedAttemptLikeRust(t *testing.T) 
 func TestAsyncCompactionWaitForPendingSharesOneResultLikeRust(t *testing.T) {
 	state := newAsyncCompactionState()
 	history := []compact.Item{{ID: "one", Type: "message", Role: "user", Text: "first"}}
-	input := captureBackgroundCompactionInput(history, 1, "", compactionResponseWindow{}, "", "gpt-test", "hash", 1, 1000)
+	input := captureBackgroundCompactionInput(history, 1, "", compactionResponseWindow{}, "", "gpt-test", "hash", 1, 1000, false)
 	release := make(chan struct{})
 	if !state.MaybeStart(context.Background(), input, func() uint64 { return 1 }, func(context.Context, backgroundCompactionInput) (*backgroundCompactionCandidate, error) {
 		<-release

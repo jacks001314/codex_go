@@ -81,17 +81,19 @@ func TestRealUserOrAgentMessageExcludesFinalAnswersAndSummariesLikeRust(t *testi
 	}
 }
 
-func TestTrimHistoryToContextWindowUsesCapturedWindowLikeRust(t *testing.T) {
+func TestTrimFunctionCallHistoryToFitContextWindowKeepsMessagesLikeRust(t *testing.T) {
 	history := []Item{
 		{ID: "one", Type: "message", Role: "user", Text: strings.Repeat("alpha ", 500)},
 		{ID: "two", Type: "message", Role: "assistant", Text: strings.Repeat("beta ", 500)},
 	}
-	if got := TrimHistoryToContextWindow(history, 100_000, "instructions"); len(got) != 2 {
+	if got, rewritten := TrimFunctionCallHistoryToFitContextWindow(history, 100_000, "instructions", false); len(got) != 2 || rewritten != 0 {
 		t.Fatalf("under-window history = %#v", got)
 	}
-	trimmed := TrimHistoryToContextWindow(history, 100, "instructions")
-	if len(trimmed) >= len(history) || trimmed[len(trimmed)-1].ID != "two" {
-		t.Fatalf("trimmed history = %#v, want the newest item retained", trimmed)
+	// Rust's streamed compaction boundary only rewrites tool outputs, so a
+	// message-only history stays complete even when it exceeds the window.
+	trimmed, rewritten := TrimFunctionCallHistoryToFitContextWindow(history, 100, "instructions", false)
+	if len(trimmed) != len(history) || rewritten != 0 {
+		t.Fatalf("trimmed history = %#v (rewritten %d), want both messages retained", trimmed, rewritten)
 	}
 	if version := HistoryVersion(history); version == 0 || version != HistoryVersion(append([]Item(nil), history...)) {
 		t.Fatalf("history version = %d, want stable non-zero fingerprint", version)

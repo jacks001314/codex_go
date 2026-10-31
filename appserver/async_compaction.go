@@ -83,10 +83,10 @@ type backgroundCompactionCandidate struct {
 // captureBackgroundCompactionInput snapshots the history a speculative request
 // will summarize. Later history items remain in place when the candidate is
 // installed.
-func captureBackgroundCompactionInput(history []compact.Item, prefixLen int, turnState string, window compactionResponseWindow, baseInstructions string, modelSlug string, compactionHash string, authOwnerGeneration uint64, usableWindow int64) backgroundCompactionInput {
+func captureBackgroundCompactionInput(history []compact.Item, prefixLen int, turnState string, window compactionResponseWindow, baseInstructions string, modelSlug string, compactionHash string, authOwnerGeneration uint64, usableWindow int64, retainClientToolOutputs bool) backgroundCompactionInput {
 	generation := compact.HistoryVersion(history)
 	prefixLen = max(0, min(prefixLen, len(history)))
-	history = compact.TrimHistoryToContextWindow(history, int(usableWindow), baseInstructions)
+	history, _ = compact.TrimFunctionCallHistoryToFitContextWindow(history, int(usableWindow), baseInstructions, retainClientToolOutputs)
 	authOwner := authOwnerGeneration
 	return backgroundCompactionInput{
 		Prefix: compact.CompactionPrefix{
@@ -300,6 +300,7 @@ func (r *RuntimeRouter) maybeStartBackgroundCompaction(ctx context.Context, thre
 		r.modelCompHash(runConfig.Model),
 		authOwner,
 		usableWindow,
+		features.Enabled(runConfig.Config.FeatureSettings(), compact.RetainClientToolOutputsKey),
 	)
 	state := r.threads.asyncCompactionState(threadID)
 	return state.MaybeStart(ctx, input, func() uint64 { return r.authOwnerRevisionSnapshot() }, func(runCtx context.Context, captured backgroundCompactionInput) (*backgroundCompactionCandidate, error) {

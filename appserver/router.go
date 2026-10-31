@@ -1039,6 +1039,10 @@ func sessionItemsFromCompactItems(items []compact.Item, now time.Time) []session
 			Type:      item.Type,
 			Role:      item.Role,
 			Text:      compact.ItemText(&item),
+			Name:      item.Name,
+			Namespace: item.Namespace,
+			CallID:    item.CallID,
+			Status:    stringValueFromMap(item.Data, "status"),
 			CreatedAt: item.Created,
 			Metadata: map[string]any{
 				"compact": true,

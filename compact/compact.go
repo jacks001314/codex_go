@@ -563,21 +563,80 @@ func historyContainsRealUserOrAgentMessage(items []Item) bool {
 	return false
 }
 
-// TrimHistoryToContextWindow applies an explicit context window rather than
-// reading configuration at request time, so speculative requests keep the
-// window captured by their model step.
-func TrimHistoryToContextWindow(items []Item, contextWindow int, baseInstructions string) []Item {
+// ContextWindowTruncatedOutputMessage is the placeholder Rust writes into a
+// tool output that is rewritten to fit the streaming compaction window.
+const ContextWindowTruncatedOutputMessage = "Output exceeded the available model context and was truncated"
+
+// TrimFunctionCallHistoryToFitContextWindow mirrors Rust's
+// `trim_function_call_history_to_fit_context_window` (#44255). The streamed
+// remote compaction boundary never drops conversation items: while the history
+// plus the session base instructions exceed the captured window it rewrites the
+// newest tool outputs in place, and it stops at the first item that cannot be
+// rewritten so older history stays intact. It returns the history and the number
+// of rewritten outputs.
+func TrimFunctionCallHistoryToFitContextWindow(items []Item, contextWindow int, baseInstructions string, retainClientToolOutputs bool) ([]Item, int) {
+	trimmed := cloneItems(items)
 	if contextWindow <= 0 {
-		return cloneItems(items)
+		return trimmed, 0
 	}
-	used := EstimateTextTokens(baseInstructions)
-	for i := range items {
-		used += max(1, EstimateItemTokens(&items[i]))
+	estimated := EstimateTextTokens(baseInstructions)
+	for i := range trimmed {
+		estimated += EstimateItemTokens(&trimmed[i])
 	}
-	if used <= contextWindow {
-		return cloneItems(items)
+	if estimated <= contextWindow {
+		return trimmed, 0
 	}
-	return TrimHistoryToTokenBudget(items, max(0, contextWindow-EstimateTextTokens(baseInstructions)))
+	rewritten := 0
+	for i := len(trimmed) - 1; i >= 0 && estimated > contextWindow; i-- {
+		// Rust turns feature-enabled retained client outputs into the same
+		// boundary as user/developer messages: they are never rewritten.
+		if retainClientToolOutputs && IsRetainedToolOutput(trimmed[i]) {
+			break
+		}
+		replacement, ok := rewrittenOutputForContextWindow(&trimmed[i])
+		if !ok {
+			break
+		}
+		estimated -= EstimateItemTokens(&trimmed[i])
+		estimated += EstimateItemTokens(&replacement)
+		trimmed[i] = replacement
+		rewritten++
+	}
+	return trimmed, rewritten
+}
+
+// rewrittenOutputForContextWindow rewrites tool outputs only: function and
+// custom tool outputs become the truncation placeholder, and a tool-search
+// output keeps its identity but reports an empty discovered-tools array.
+func rewrittenOutputForContextWindow(item *Item) (Item, bool) {
+	switch strings.ToLower(strings.TrimSpace(item.Type)) {
+	case "function_call_output", "custom_tool_call_output":
+		replacement := *item
+		replacement.Content = nil
+		replacement.Raw = nil
+		replacement.Text = ContextWindowTruncatedOutputMessage
+		data := cloneItemData(item.Data)
+		if data == nil {
+			data = map[string]any{}
+		}
+		delete(data, "content_items")
+		data["output"] = ContextWindowTruncatedOutputMessage
+		replacement.Data = data
+		return replacement, true
+	case "tool_search_output":
+		replacement := *item
+		replacement.Content = nil
+		replacement.Raw = nil
+		replacement.Text = ""
+		data := cloneItemData(item.Data)
+		if data == nil {
+			data = map[string]any{}
+		}
+		data["tools"] = []any{}
+		replacement.Data = data
+		return replacement, true
+	}
+	return Item{}, false
 }
 
 // HistoryVersion returns a stable fingerprint used to deduplicate speculative
@@ -973,6 +1032,18 @@ func EstimateItemTokens(item *Item) int {
 		return compactTokensFromBytes(functionCallModelVisibleBytes(item))
 	case "function_call_output", "custom_tool_call_output", "tool_output":
 		return compactTokensFromBytes(functionCallOutputModelVisibleBytes(item))
+	case "tool_search_call":
+		// Rust #44255 charges the JSON arguments, not the transport envelope.
+		if arguments, ok := item.Data["arguments"]; ok && arguments != nil {
+			if encoded, err := json.Marshal(arguments); err == nil {
+				return compactTokensFromBytes(len(encoded))
+			}
+		}
+		return compactTokensFromBytes(len(strings.TrimSpace(ItemText(item))))
+	case "tool_search_output":
+		if tokens, ok := estimateToolSearchOutputTokens(item); ok {
+			return tokens
+		}
 	case "reasoning":
 		// Rust charges an encrypted reasoning item through the length of its
 		// opaque payload. The summary text is not model-visible history, so
@@ -1001,6 +1072,20 @@ func EstimateItemTokens(item *Item) int {
 		return compactTokensFromBytes(len(item.Raw))
 	}
 	return 0
+}
+
+// estimateToolSearchOutputTokens mirrors Rust's `json_content_bytes(tools)`:
+// a discovered tool catalog is itself JSON, so its syntax is charged.
+func estimateToolSearchOutputTokens(item *Item) (int, bool) {
+	tools, ok := item.Data["tools"]
+	if !ok {
+		return 0, false
+	}
+	encoded, err := json.Marshal(tools)
+	if err != nil {
+		return 0, false
+	}
+	return compactTokensFromBytes(len(encoded)), true
 }
 
 // EstimateCompactionContentLength mirrors Rust #53691's replay-cache-aware

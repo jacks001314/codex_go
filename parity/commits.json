@@ -10786,9 +10786,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "Round 1121: the remote_compaction_v2 toggle is already retired from the feature registry while the model-client beta header still advertises it, and compaction uses the streamed Responses v2 path. The upstream tool_search_output trimming and base-instruction token estimate at the streamed compaction boundary are not implemented in the Go compact request builder."
+    "Round 1144: the streamed remote compaction boundary now mirrors Rust trim_function_call_history_to_fit_context_window (#44255). compact.TrimFunctionCallHistoryToFitContextWindow rewrites the newest function/custom outputs to the truncation placeholder and tool_search_output to an empty tools array while keeping every conversation item and stopping at the first non-rewritable item (plus feature-enabled retained client outputs); base instructions are charged to the window. EstimateItemTokens now charges tool_search_call arguments JSON and tool_search_output tools JSON. captureBackgroundCompactionInput passes the retain_client_tool_outputs feature flag, and sessionItemsFromCompactItems preserves name/namespace/call_id/status so trimmed tool-search outputs keep identity through the session bridge. Tests: compact/compact_remote_trim_like_rust_test.go, appserver/compaction_remote_trim_like_rust_test.go."
    ]
   },
   {
