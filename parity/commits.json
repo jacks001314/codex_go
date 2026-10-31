@@ -21232,9 +21232,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust #47943 deleted windows-sandbox-rs/src/audit.rs and the SetNoticeHideWorldWritableWarning config edit as unused; Go had the same dead code: ApplyWorldWritableScanAndDenies, AuditEveryoneWritable, WorldWritableAuditRequest/Result and recordWorldWritableScanResult were only reachable from their own tests.",
+    "Removed sandbox/windowssandbox/audit.go, audit_stub.go, audit_windows.go, world_writable_metrics.go and their tests; platform_stub_test.go no longer asserts the deleted stubs.",
+    "Kept the pieces Rust still ships: the notice.hide_world_writable_warning config key (config/src/types.rs) and the windows/worldWritableWarning app-server notification (app-server-protocol v2/windows_sandbox.rs).",
+    "Verified with go build ./... and go test ./sandbox/windowssandbox/... -count=1."
    ]
   },
   {

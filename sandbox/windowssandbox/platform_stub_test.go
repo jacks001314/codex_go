@@ -26,12 +26,6 @@ func TestPlatformStubsAreExplicitUnsupported(t *testing.T) {
 	if _, err := PrepareLaunchDesktop(true); !IsUnsupported(err) {
 		t.Fatalf("PrepareLaunchDesktop(true) error = %v, want unsupported", err)
 	}
-	if _, err := AuditEveryoneWritable("/tmp", nil, ""); !IsUnsupported(err) {
-		t.Fatalf("AuditEveryoneWritable() error = %v, want unsupported", err)
-	}
-	if _, err := ApplyWorldWritableScanAndDenies(&WorldWritableAuditRequest{CWD: "/tmp"}); !IsUnsupported(err) {
-		t.Fatalf("ApplyWorldWritableScanAndDenies() error = %v, want unsupported", err)
-	}
 	if _, err := NewProcThreadAttributeList(); !IsUnsupported(err) {
 		t.Fatalf("NewProcThreadAttributeList() error = %v, want unsupported", err)
 	}
