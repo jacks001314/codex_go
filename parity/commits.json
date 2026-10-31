@@ -38798,7 +38798,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:168: #57819 完成 — 核心对齐待实现"
+    "plugin/concurrent_loads.go:8 defines maxConcurrentPluginLoads = 8 and plugin/marketplace_loader.go:118 loads independent entries concurrently while preserving order; plugin/concurrent_plugin_loads_like_rust_test.go:13 and :47 cover the bound and ordering."
    ]
   },
   {
@@ -38870,7 +38870,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:174: #57835 完成 — image availability 检查并发上限 8，新增并发上界回归测试"
+    "model/responses_agent.go:3291 defines maxConcurrentImageAvailabilityChecks = 8 and :3315 applies it with a semaphore; model/unavailable_images_like_rust_test.go:209 covers the concurrency bound."
    ]
   },
   {
@@ -38882,7 +38882,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:175: #57836 完成 — imagegen code-mode 返回 `{image_url, output_hint?}`；新增 CodeModeOutputSchema，直接 API payload 不变"
+    "tool/registry.go:99 defines CodeModeOutputSchema without serializing it into the direct tool payload; turn/image_generation.go:160 installs the image-generation result schema and tool/code_mode_exec.go:2441 accepts generatedImage({image_url, output_hint}); turn/image_generation_test.go:44 covers the code-mode result declaration."
    ]
   },
   {
@@ -38906,7 +38906,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:177: #57839 完成 — resume/fork 时保留 reasoning token 记账"
+    "appserver/turn_runtime.go:6496 documents and :6503 reads token_usage_info.last_usage_includes_reasoning on resume/fork; appserver/reasoning_token_accounting_like_rust_test.go:16, :85 and :134 cover resume, fork and persisted compaction status."
    ]
   },
   {
@@ -38918,7 +38918,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:178: #57840 完成 — resume/input 前校验 thread provider"
+    "appserver/model_provider_requirements.go:396 validates a resumed thread provider and appserver/router.go:1630 installs the check into resume and input admission; appserver/thread_resume_provider_error_like_rust_test.go:32, :69 and :86 cover policy conflict, not-configured and mismatch recovery."
    ]
   },
   {
@@ -39038,7 +39038,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:188: #57866 完成 — 下一轮重试瞬时 environment 启动失败"
+    "appserver/environment.go:450 distinguishes a retryable startup failure from a cached terminal result; appserver/environment_startup_retry_like_rust_test.go:19 proves the next turn retries a transient HTTP 500 startup."
    ]
   },
   {
@@ -39050,7 +39050,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:189: #57870 完成 — server 模式在上游截断：`session/open` 固定 runtime 模式，`session/wait` 传递 wire 上的 `maxOutputTokens`，`session/terminate` 使用请求预算；错误诊断进入同一预算并另给 64KiB `TruncateMiddleWithMarker` 日志副本；`audioutil.EstimateAudioTokenCoun"
+    "codemode/session_runtime.go:205 applies MaxOutputTokens only to server-truncation sessions; codemode/protocol_host.go:638 forwards the wait budget and codemode/remote_provider.go:379 carries it on wait; codemode/session_output_truncation_like_rust_test.go:52 and :150 cover observation and host budgets."
    ]
   },
   {
@@ -39110,7 +39110,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:194: #57978 完成 — `mcp/connection_pool.go`：协商 `codex/connection-lease` 后为每个 chat 生成 host-owned lease id 并惰性 `codex/connection/open`（5s 上限，失败移出池）；释放时先按 lease 取消该 chat 的 pending 请求（本地立即失败 + `notifications/cancelled`）再写 `"
+    "mcp/connection_pool.go:12 negotiates codex/connection-lease, :49 models a per-chat lease and :96 acquires it lazily; mcp/connection_lease_like_rust_test.go:25 covers per-chat open/release and cancellation."
    ]
   },
   {
@@ -39290,7 +39290,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:209: #58121 完成 — 核心对齐待实现"
+    "model/provider_preparation.go:26 centralizes prepare-time auth checks in PrepareProviderRequest; model/provider_preparation_like_rust_test.go:13 covers the check ordering."
    ]
   },
   {
@@ -39302,7 +39302,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:210: #58122 完成 — 新增 incremental_exec_tools 功能位（under development，默认关闭）"
+    "features/features.go:214 registers incremental_exec_tools under development and disabled by default; features/features_test.go:117 pins the stage and default."
    ]
   },
   {
@@ -39350,7 +39350,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:214: #58129 完成 — spawn edge 先于子线程存储持久化，失败即 fatal"
+    "appserver/agent_controller.go:218 publishes the spawn edge before child storage is created; appserver/agent_spawn_edge_order_like_rust_test.go:33 proves a failed edge write leaves no child storage."
    ]
   },
   {
@@ -39398,7 +39398,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:218: #58144 完成 — 核心对齐待实现"
+    "appserver/additional_context.go:190 records counts, before/after byte histograms and truncation tags; appserver/additional_context_metrics_like_rust_test.go:60 covers the metric payloads."
    ]
   },
   {
@@ -39422,7 +39422,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:220: #58157 完成 — respect_system_proxy 升为 Experimental 菜单项（System proxy）"
+    "features/features.go:139 registers respect_system_proxy as an experimental System proxy setting; features/features_test.go:132 pins the experimental menu metadata and default."
    ]
   },
   {
@@ -39446,7 +39446,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:222: #58161 完成 — MCP 审批 elicitation meta 携带 tool_annotations（含 idempotentHint）"
+    "appserver/mcp_tool_approval.go:421 attaches registered tool annotations to approval metadata and :488 maps the hint fields; appserver/mcp_tool_approval_test.go:26 covers tool_annotations in elicitation metadata."
    ]
   },
   {
@@ -39554,7 +39554,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:231: #58195 完成 — 核心对齐待实现"
+    "execserver/remote_read_sandbox.go:24 validates remote MXC and :39 omits the sandbox context for unrestricted reads so older executors stay compatible; execserver/remote_read_sandbox_like_rust_test.go:15 and :53 cover both paths."
    ]
   },
   {
@@ -39602,7 +39602,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:235: #58219 完成 — 核心对齐待实现"
+    "auth/gateway_storage.go:71 selects the file-backed OAuth credentials store and :79 writes CODEX_HOME/secrets/gateway_oauth.json with 0600 permissions; auth/gateway_file_storage_like_rust_test.go:14 and model/gateway_credentials_store_config_like_rust_test.go:10 cover storage and config parsing."
    ]
   },
   {
