@@ -9018,9 +9018,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 4/6; needs review: ContextSection, PlannedActionSection"
+    "guardiancontext/context.go models ordered ContextSection values with scopes, state/guardian.go composes named sections in Rust registry order with per-section costs, and state/guardian_action_prompt.go holds the shared PlannedAction renderer used by review prompts"
    ]
   },
   {
@@ -9138,9 +9138,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "Partial symbol coverage 4/12; needs review: GuardianExtension, GuardianReviewSessionManager, ManagedReviewerThreads, forward_session_io, guardian_review_session"
+    "Go Guardian is an inline single-request reviewer over the turn agent with per-thread state in RuntimeRouter (store, history, session runner); it has no reviewer thread lifecycle for the thread manager to own"
    ]
   },
   {
@@ -9236,9 +9236,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 2/4; needs review: TranscriptImageInput, TranscriptImagesSection"
+    "context/guardian_admitted_images.go keeps the admitted-history ledger so only admitted images prove delivery, and the candidates it returns feed the synchronous and asynchronous review context sections in state/guardian.go"
    ]
   },
   {
@@ -9248,9 +9248,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 2/8; needs review: NodeReplContext, NodeReplEvidenceSection, NodeReplResponse, NodeReplReviewEvidenceSnapshot, RenderedNodeReplEvidence"
+    "context/node_repl_review_evidence.go renders bounded node_repl evidence fragments (full, delta and retention modes), and state/guardian.go adds it as the node_repl_evidence section with elastic budget accounting"
    ]
   },
   {
@@ -9587,9 +9587,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 3/12; needs review: CollectedContext, ContextPresentation, RenderedContext, RenderedTranscript, SectionDelivery"
+    "state/guardian.go BuildPromptWithSectionCosts centralizes Guardian prompt composition for both review profiles, ordering stable evidence before the planned action and exposing section cost measurements"
    ]
   },
   {
@@ -10653,9 +10653,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "Partial symbol coverage 14/22; needs review: GuardianRejectionCircuitBreaker, GuardianRejectionCircuitBreakerAction, GuardianReviewOutcome, GuardianReviewSessionLimits, GuardianReviewSessionOutcome"
+    "crate extraction only: Go already keeps Guardian review policy in state/guardian.go and the shared renderers in guardiancontext/"
    ]
   },
   {
