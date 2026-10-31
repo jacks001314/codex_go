@@ -32852,7 +32852,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_20.md:42: - `#55149` Go installer builds locally (no standalone release pruning)."
+    "N/A by installer carrier: Rust #55149 adds release-pruning and selected-release history to scripts/install/install.sh after it installs a managed standalone release. Go's scripts/install.sh is a source-build installer: it runs scripts/build.sh for the current checkout and atomically installs one binary into --install-dir, while install/update.go delegates standalone updates to the upstream install scripts (UpdateActionStandaloneUnix/StandaloneWin). install/context.go only classifies or discovers packages/standalone/releases; no Go installer code owns a set of managed release directories to prune or must preserve installer selection history."
    ]
   },
   {
@@ -32888,7 +32888,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_20.md:43: - `#55234`/`#55237` Go has no async Guardian scorer/connection-pool transport."
+    "N/A by async-scorer carrier: Rust #55234 adds sampling retry/attempt/outcome counters and retained-score telemetry inside ext/guardian-v2/src/async_scorer/sampler*. Go has no asynchronous Guardian sampler, pending-score queue, or retained-score telemetry: the reviewer is the synchronous `modelGuardianReviewer` path in appserver/guardian_reviewer.go, with `guardian_review_metrics.go` recording routing/latency for that one review. There is no `SamplingTelemetry` or superseded queued score to instrument."
    ]
   },
   {
@@ -32900,7 +32900,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_20.md:43: - `#55234`/`#55237` Go has no async Guardian scorer/connection-pool transport."
+    "N/A by async-scorer carrier: Rust #55237 records adaptive-review/async_fallback/required_sync routing and cached-score readiness/age in the guardian-v2 async approval adapter. Go has no cached-score provider: `RuntimeRouter.approvalsReviewerForTurn` plus `state.Reviewer.RoutesToGuardian` choose the reviewer before review, and appserver/guardian_review_metrics.go measures synchronous review duration/outcome. The synchronous-only path has no cached score whose age or readiness could be emitted."
    ]
   },
   {
@@ -32912,7 +32912,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_20.md:44: - `#55244` Go history materialization uses a different store pipeline."
+    "Round 1242: Go's state.MaterializeThreadHistory (state/thread_history_projection.go:101) already commits each projected record with its checkpoint (NextRolloutByteOffset/NextRolloutOrdinal) in a single transaction, so it never buffers a whole rollout prefix before applying it; the Rust commit bounds an in-memory projection queue that has no Go counterpart. Resume and cancellation semantics are pinned by state/thread_history_projection_test.go and state/thread_history_projection_cancellation_test.go."
    ]
   },
   {
@@ -32949,7 +32949,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_20.md:45: - `#55261`/`#55265`/`#55283` Rust allocation/clone optimizations."
+    "Round 1242: Rust #55261 shares Arc<[DynamicToolSpec]> between session configuration and turn snapshots to avoid a per-clone copy. Go has no refcounted container for this; dynamic tool specs live on the session configuration value fixed at thread start and are read by value, so the change is a Rust allocation optimisation with no Go analogue."
    ]
   },
   {
@@ -32985,7 +32985,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_20.md:45: - `#55261`/`#55265`/`#55283` Rust allocation/clone optimizations."
+    "Round 1242: Rust #55265 stops cloning the whole model catalog before selecting one model's metadata. Go's RemoteModelsManager.GetCatalogModel (model/models_endpoint.go:595) selects from the live catalog held by the manager and returns a single CatalogModel, so the clone-then-select pattern does not exist."
    ]
   },
   {
@@ -33009,7 +33009,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_20.md:46: - `#55274` test stabilization only."
+    "N/A by test carrier: Rust #55274 changes only codex-rs/cli/tests/daemon_startup.rs and scripts/codex_package/smoke_tests/fixtures.py, waiting for a reconnect transcript clear and warming Rosetta package entrypoints. Go has neither that Rust integration test nor the extracted macOS package smoke fixture; its daemon startup and reconnect behavior is covered by app/daemon_startup_test.go and app/remote_tui_reconnect_like_rust_test.go. The commit changes test timing, not production daemon/Rosetta behavior, so there is no Go source carrier."
    ]
   },
   {
@@ -33021,7 +33021,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_20.md:47: - `#55278` Go uses os/exec (no macOS posix_spawn file-action failure)."
+    "Round 1242: Rust #55278 falls back on macOS when posix_spawn_file_actions_adddup2 rejects high stdio descriptors. Go spawns children through os/exec (fork/exec with cmd.ExtraFiles), which has no posix_spawn file-action step, so neither the EBADF failure mode nor the SpawnFallback distinction exists."
    ]
   },
   {
@@ -33033,7 +33033,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_20.md:45: - `#55261`/`#55265`/`#55283` Rust allocation/clone optimizations."
+    "Round 1242: Rust #55283 records ShutdownComplete before moving an event into apply_bespoke_event_handling so the event need not be cloned. Go's thread listener passes event values without a Clone bound, so there is no clone to short-circuit and the shutdown drain notification is observed directly."
    ]
   },
   {
@@ -33079,9 +33079,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "plan_2026_10_20.md:48: - `#55296`-`#55299` Go has no responses-api-proxy crate/component."
+    "Round 1242: the Responses API proxy credential surface is encapsulated in app/responses_api_proxy_auth.go behind the responsesProxyAuth interface, mirroring Rust #55296's ProxyAuth type: Header()/Lease() replace the former free readAPIKey/token helpers, which are now unexported to the type, and app/responses_api_proxy.go depends only on that interface. Tests: app/responses_api_proxy_auth_like_rust_test.go (caching, renewal, invalid response handling, redirect refusal, GitHub OIDC, short reads)."
    ]
   },
   {
@@ -33117,9 +33117,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "plan_2026_10_20.md:48: - `#55296`-`#55299` Go has no responses-api-proxy crate/component."
+    "Round 1242: app/responses_api_proxy_auth.go mirrors Rust #55299 WorkloadIdentityAuth. responsesProxyAuthLease carries an atomic rejected flag; Lease() reuses a cached token only while it is not rejected, Invalidate() marks the current issuance dead so the next request re-exchanges, and a rejected token is never silently reused. Failed renewals back off exponentially from responsesProxyInitialRenewalBackoff (1s) to responsesProxyMaxRenewalBackoff (30s) and report \"workload identity renewal temporarily unavailable; retry later\" until retryAt, with the backoff cleared after a successful exchange. app/responses_api_proxy.go forwards with Lease() when the auth implements responsesProxyAuthLeaseProvider and, on upstream 401 only, calls lease.Invalidate() without replaying the request; 403 keeps the credential. Tests: app/responses_api_proxy_auth_like_rust_test.go TestResponsesProxyFederatedAuthRejectsOldIssuanceOnlyLikeRust, TestResponsesProxyFederatedAuthBacksOffRenewalFailuresLikeRust, TestResponsesProxyForwards401WithoutReplayAndRefreshesCredentialLikeRust, TestResponsesProxyKeepsCredentialOn403LikeRust, plus the updated TestResponsesProxyFederatedAuthDropsCredentialOnFailedRenewalLikeRust (injected clock). go test ./app -run ResponsesProxy -count=1."
    ]
   },
   {
@@ -33156,7 +33156,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_20.md:51: - `#55302` Go gitutil has no closest-remote-SHA enrichment."
+    "Round 1242: Rust #55302 stops git-utils' closest-remote-SHA search at zero distance. Go resolves the review comparison point with git merge-base HEAD <base> (review/review.go:116, review/prompt.go:59) and never runs a remote-commit distance scan, so the boundary condition has no Go carrier."
    ]
   },
   {
@@ -33288,9 +33288,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "plan_2026_10_20.md:87: - `#55342`: documentation script consolidation; no runtime carrier."
+    "Round 1242: systemskills/assets/samples/openai-docs/scripts/fetch-codex-manual.mjs is byte-identical to Rust codex-rs/skills/src/assets/samples/openai-docs/scripts/fetch-codex-manual.mjs at the 67f0994b anchor, SHA-256 6172BD2CAA95593B735C3E60C0BD5D7AE49CA0A345440F2D2A36E0DFC556801A on both sides, so the consolidated cached/fetched manual handling is carried verbatim."
    ]
   },
   {
@@ -33314,7 +33314,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_20.md:89: - `#55351`: not applicable; the Go index already stores relative paths and a"
+    "Round 1242: Rust #55351 compacts stored paths in the persistent file-search index. Go's filesearch package (filesearch/filesearch.go) walks the tree on demand and keeps no index or snapshot structure, so there is no stored-path representation to shrink."
    ]
   },
   {
@@ -33350,7 +33350,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_20.md:111: - `#55358`: not applicable structurally. Go has no `LocalLogsDir` or Unix"
+    "Round 1242: Rust #55358 adds a shared cleanup lock guard for local log directories in the file-system crate. Go has no local-log directory pruning path; config.LogDir is only a configured output location (config/config.go:174), so there is no concurrent cleanup to serialize."
    ]
   },
   {
@@ -33717,7 +33717,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:305: - `#55456` is N/A: Go has no system config layer or system `requirements.toml`"
+    "Round 1242: Go has no system or registry requirements layer. Managed requirements come only from <codexHome>/requirements.toml (config/managed_requirements.go requirementsPathForHome), and config/local_layers.go:58 records that Go has no system config layer, so the HKLM SOFTWARE\\Policies\\OpenAI\\Codex\\RequirementsPath override has no carrier."
    ]
   },
   {
@@ -33767,7 +33767,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_28_sync4.md:149: | `464add4958` | #55533 | N/A | No Guardian `Reservation::prepare` / prepared-conversation split. |"
+    "N/A by async-scorer carrier: Rust #55533 splits retained conversation scoring into `Reservation::prepare` and `PreparedConversation::run`, with capacity permits and stale-authorization rechecks. Go has no guardian-v2 async conversation reservation or background model execution; appserver/guardian_reviewer.go performs one synchronous review for the caller and owns its reusable `guardianSessionRunner` directly, so there is no prepared-conversation/drop lifecycle to port."
    ]
   },
   {
@@ -33940,7 +33940,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_28_sync4.md:146: | `aa081afb1b` | #55623 | N/A | Guardian V2 snapshot comparison refactor. |"
+    "N/A by Decisions carrier: Rust #55623 renames/refactors the async Decisions snapshot comparison entry point and its request spawning. Go has no guardian-v2 Decisions adapter, snapshot comparator, or comparison feature execution: the sync reviewer returns the structured assessment itself. features/features.go records the inherited `guardianv2_decisions_comparison` flag for configuration parity, but no Go component consumes it for snapshot requests."
    ]
   },
   {
@@ -33952,7 +33952,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:241: - `#55627` is N/A: Go has no sibling-rollout prefetch cache"
+    "N/A by rollout-prefetch carrier: Rust #55627 reserves one sibling-rollout candidate slot for the first ancestor in rollout/src/list_files.rs prefetching. codex_go has no sibling-rollout prefetch cache or 64-candidate collection window; rollout lookup walks the active tree and archive through FindThreadPath/FindThreadPathByRolloutID. There is no candidate set whose last slot could exclude the ancestor."
    ]
   },
   {
@@ -33989,7 +33989,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_28_sync4.md:145: | `a13ab7e4ed` | #55635 | N/A | Guardian V2 Decisions comparison mode is absent. |"
+    "N/A by Decisions carrier: Rust #55635 enables optional Decisions comparisons from prepared Guardian V2 conversation input and records mismatches/failures. Go has no async conversation mode, classifier rubric, or Decisions comparison request; appserver/guardian_reviewer.go's synchronous reviewer already supplies its full assessment and there is no second comparison backend to enable."
    ]
   },
   {
@@ -34001,7 +34001,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_28_sync4.md:144: | `cb00a67569` | #55636 | N/A | No runtime assertion authentication (`dual_header`/`assertion_only`) or `runtime_agent_instances` feature. |"
+    "Round 1242: Go has no runtime-agent-instance authentication: no runtime-agent-instance provider, RuntimeAuthManager, ActorInfo, dual_header or assertion_only mode, and no runtime_agent_instances configuration key. model.AgentAssertion is the agent-identity assertion (model/auth_test.go), which is a different mechanism."
    ]
   },
   {
@@ -34025,7 +34025,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:894: - `#55645` (in-process app-server shutdown with full queues) is N/A: Go has no"
+    "Round 1242: Rust #55645 fixes shutdown of the in-process app-server transport when its bounded queues are full. Go's router hands notifications straight to the connection writer without a bounded intermediate queue, so shutdown cannot block on a full queue and there is no in-process queue pair to drain."
    ]
   },
   {
@@ -34050,7 +34050,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:302: - `#55652` is N/A: Go has no rollout-file search module"
+    "N/A by performance-only carrier: Rust #55652 batches compressed rollout scanning with up to four concurrent jobs while preserving snippets, path keys, and per-file errors. Go's ListThreads search walks collected rollout paths and lowercases Preview/FirstUserMessage sequentially (rollout/rollout.go); the commit changes only throughput, not the search result contract, and Go has no compiled-pattern batch or zstd scan pool to parallelize. No observable parity behavior is missing."
    ]
   },
   {
@@ -34074,7 +34074,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_28_sync4.md:142: | `66d0de9983` | #55657 | N/A | Go has no message-lifecycle contributor extension API. |"
+    "Round 1242: Rust #55657 adds lifecycle hooks for inter-agent messages (agent/api.rs, control/mailbox.rs). Go's hook runner only recognises session, subagent, prompt, tool, permission and model events (appserver/hooks_runner.go event switches); agent messages are delivered through the agent controller without a hook event, so no inter-agent lifecycle hook exists to extend."
    ]
   },
   {
@@ -34086,7 +34086,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_28_sync4.md:141: | `2f5e242d9f` | #55666 | N/A | Go has no Decisions snapshot comparison mode. |"
+    "N/A by Decisions carrier: Rust #55666 filters reasoning/compaction/context-compaction from async Decisions snapshot requests and distinguishes setup failures from unsupported input. Go has no async Decisions request builder; the synchronous reviewer's transcript selection drops compaction summaries in appserver/guardian_reviewer.go and `state.ContextProfile`, so there is no Decisions input validator or skipped-comparison metric to change."
    ]
   },
   {
@@ -34110,8 +34110,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27.md:100: | `#55733` `#55677` `#56247` | N/A: Rust refactors (boxing, toolchain, test-module split). |",
-    "plan_2026_10_27_nontui.md:357: - `#55677` and `#56439` are N/A: a Rust toolchain/CI pin and a Cargo dependency"
+    "N/A by toolchain: Rust #55677 moves Cargo/Bazel/CI pins from Rust 1.95.0 to 1.99.1 and adapts Rust APIs and lint output. codex_go is built by the Go toolchain pinned in go.mod (go 1.26.2) and has no rust-toolchain.toml, Cargo.lock, MODULE.bazel or Rust workflows; its equivalent compiler/API compatibility surface is the Go version and go.mod/go.sum. The webpki-root-certs lockfile bump and halfwidth snapshot are likewise Rust dependency/test assets with no Go copy."
    ]
   },
   {
@@ -34301,7 +34300,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:233: - `#55723` is N/A: it only avoids one clone per recipient in Rust's"
+    "Round 1242: Rust #55723 removes redundant clones when encoding app-server notifications. Go encodes each notification payload once and writes those bytes to the connection, so there is no per-send clone to eliminate and no wire-format change."
    ]
   },
   {
@@ -34337,7 +34336,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27.md:100: | `#55733` `#55677` `#56247` | N/A: Rust refactors (boxing, toolchain, test-module split). |"
+    "Round 1242: Rust #55733 boxes session-metadata and compaction payloads inside RolloutItem to shrink the enum. Go models rollout payloads as a struct with optional pointer fields, so the enum-size optimisation has no counterpart and the serialized history is unchanged."
    ]
   },
   {
@@ -34439,7 +34438,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_28_sync4.md:138: | `a6839a4812` | #55913 | N/A | Guardian V2 async scoring supersession is absent. |"
+    "N/A by async-scorer carrier: Rust #55913 makes delayed conversation classifications return Superseded when both a newer score and newer retained history have advanced. Go has no queued asynchronous classification or score/history publication race; each `modelGuardianReviewer.Review` call runs synchronously and updates its own reusable session, so no classification can start behind a newer asynchronous score."
    ]
   },
   {
@@ -34476,7 +34475,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:891: - `#55946` (bounded remote installed-plugin inventory pagination) is N/A: the Go"
+    "Round 1242: Go's remote installed-plugin sync is an explicit stub: plugin.SyncRemoteInstalledPlugins documents that the full implementation is not done (plugin/remote_sync.go), and there is no remote installed inventory or display-asset enrichment to extend."
    ]
   },
   {
@@ -34526,7 +34525,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27.md:99: | `#56037` `#55965` | N/A: cloud app-server transport / workspace storage; TUI diff is transport plumbing and tests. |"
+    "Round 1242: Rust #55965 adds ApplicationStorageRequirements for a managed Desktop workspace storage location. Go's config requirements surface (config/requirements_file.go) has no application-storage or workspace-storage fields, so the managed key cannot be represented."
    ]
   },
   {
@@ -34887,7 +34886,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27.md:99: | `#56037` `#55965` | N/A: cloud app-server transport / workspace storage; TUI diff is transport plumbing and tests. |"
+    "Round 1242: Rust #56037 adds a channel-backed cloud client for the app-server. Go has no cloud app-server backend: appserver.Router serves a local process and filesystem, and chatgptapi.CloudClient (chatgptapi/cloud_tasks.go:130-136) is the cloud-task API client, not an app-server transport."
    ]
   },
   {
@@ -35122,7 +35121,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27.md:43: | Platform | `#56214` | Rust `fstatfs` cast cleanup; Go already uses the platform type directly. | N/A |"
+    "Round 1242: Rust #56214 only drops a redundant u64 cast in WSL DrvFS detection (tui/src/daemon_startup.rs). Go's equivalent detection, daemonWSLDrvfsDetector in app/daemon_startup.go:378, already reports the same DrvFS exclusion reason; there is no cast and no behaviour delta to port."
    ]
   },
   {
@@ -35184,7 +35183,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:265: - `#56234` (prompt telemetry ordering) is structurally N/A: Go never wires"
+    "Round 1242: Rust #56234 moves prompt telemetry to hook acceptance so prompts blocked by UserPromptSubmit never reach the logs. In Go, prompt telemetry is emitted only after a turn or steer is accepted (appserver/turn_runtime.go:1733 in runTurnRuntime, appserver/runtime_router.go:9460 after Steer succeeds), and the UserPromptSubmit hook has no production dispatch site at submission (only HookRunner.RunUserPromptSubmit and tests), so there is no emit-before-acceptance path to reorder."
    ]
   },
   {
@@ -35221,8 +35220,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27.md:100: | `#55733` `#55677` `#56247` | N/A: Rust refactors (boxing, toolchain, test-module split). |",
-    "plan_2026_10_27_nontui.md:257: - Rust-test-only commits in this window are N/A: `#56247` (Rust test-module"
+    "Round 1242: Rust #56247 consolidates unit tests under dedicated test modules. Go's test files are already per-package _test.go files, so there is no Rust module layout to mirror and no production behaviour involved."
    ]
   },
   {
@@ -35271,9 +35269,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:272: - `#56263` is N/A: Go has no marketplace allowed-source/host-pattern policy"
+    "Round 1242: plugin/marketplace_policy.go:692 rejects an HTTP(S) marketplace URL whose userinfo carries a backslash (gitMarketplaceHostname returns false when authority[:at] contains a backslash), mirroring Rust #56263's authority check; the marketplace policy suite plugin/marketplace_policy_like_rust_test.go exercises the same parser that hosts this guard."
    ]
   },
   {
@@ -35323,7 +35321,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:259: `#56274` (Rust test stabilization/configuration)."
+    "Round 1242: Rust #56274 makes cloud-config loader lifetime tests wait for refresh cancellation. It is a Rust test-only determinism change; Go's cloud config loader tests (config/cloud_config_test.go) use synchronous loaders without a background refresh task to cancel."
    ]
   },
   {
@@ -35473,7 +35471,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:360: `#56301` are N/A: Rust test-only stabilization, fixture, or `#[cfg(test)]`"
+    "Round 1242: Rust #56301 adds TLS forwarding tests for MITM SigV4 requests in network-proxy (certificates plus mitm module). Go's network package configures an upstream HTTP proxy (network/proxy_upstream.go) and performs no TLS interception, so there is no MITM certificate authority or SigV4 forwarding path to test."
    ]
   },
   {
@@ -35660,7 +35658,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:357: - `#55677` and `#56439` are N/A: a Rust toolchain/CI pin and a Cargo dependency"
+    "N/A by dependency carrier: Rust #56439 only bumps ctutils 0.4.2 to 0.4.5 in codex-rs/Cargo.lock and MODULE.bazel.lock. codex_go has no ctutils dependency and builds from go.mod/go.sum; there is no Cargo/Bazel lock entry or Rust call site to update."
    ]
   },
   {
@@ -35799,7 +35797,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:244: - `#56483` is N/A: Go fetches one installed-plugin snapshot per reconciliation"
+    "Round 1242: for the same reason as #55946, Go has no paginated remote installed-plugin inventory (plugin/remote_sync.go is a documented stub) and no includeDisplayAssets request, so Rust #56483's paging and display enrichment have no carrier."
    ]
   },
   {
@@ -35849,7 +35847,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:390: - `#56505`, `#56533`, and `#56555` are N/A: Rust defers synchronous tool-call,"
+    "N/A by preparation carrier: Rust #56505 preserves full tool-call text during guardian-context collection and applies the profile tool-token limit only in transcript preparation. Go has a single in-process transcript path: appserver/guardian_reviewer.go collects entries and `state.ContextProfile` applies `EntryLimits.ToolTokens` while selecting/rendering them, so collection and preparation are not separate stages to defer between. The observable 1,000-token truncation and whole-record omission are pinned by appserver/guardian_transcript_profile_like_rust_test.go and guardian_native_multi_agent_history_like_rust_test.go."
    ]
   },
   {
@@ -35859,9 +35857,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:236: - `#56514` is N/A: Rust instruments the spawned tool-dispatch task and its"
+    "Round 1242: turn/tool_dispatcher.go opens the handler span on toolCtx and hands dispatchCtx (carrying that span) to DispatchWithHooksAfterPreHooks, so pre/post tool hooks and the executor all run inside the tool span. turn/telemetry_span_test.go TestAgentLoopKeepsSamplingSpanOpenThroughToolDispatchLikeRust and TestAgentLoopPropagatesSpanTraceContextLikeRust pin the parent chain, matching Rust #56514."
    ]
   },
   {
@@ -35871,9 +35869,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:292: - The `rollout-trace` family is N/A: `#57311`, `#57280`, `#56524`, `#56515`,"
+    "Round 1242: Go already instruments turn startup and response streaming: turn/telemetry_span.go opens the sampling-request and turn-phase spans, model/responses_stream.go:527 and :674 open StreamRequestSpanName and ReceivingStreamSpanName per response stream, and appserver/turn_input_span.go opens the turn-input and compaction spans. Tests: turn/telemetry_span_test.go TestAgentLoopOpensSamplingRequestSpanLikeRust, TestAgentLoopOpensTurnPhaseSpansLikeRust, TestAgentLoopOpensCompactionPhaseSpanLikeRust."
    ]
   },
   {
@@ -35895,9 +35893,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:292: - The `rollout-trace` family is N/A: `#57311`, `#57280`, `#56524`, `#56515`,"
+    "Round 1242: turn/tool_dispatcher.go stamps handler spans with conversation.id, call_id, turn_id, cell.id and outcome; trace fields carry tool_name/tool_namespace (:451-452); step attribution (StepAttribution: model, reasoning effort, permission mode) is captured per sampling step and attached to each invocation; telemetry/skill_invocation_event.go records skill_name. Together they carry the turn/tool/skill attribution Rust #56524 adds to spans. Tests: turn/tool_trace_like_rust_test.go, turn/telemetry_span_test.go."
    ]
   },
   {
@@ -35933,7 +35931,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:390: - `#56505`, `#56533`, and `#56555` are N/A: Rust defers synchronous tool-call,"
+    "N/A by preparation carrier: Rust #56533 preserves synchronous tool outputs during collection and applies the profile tool limit during guardian-context preparation. Go's `guardianReviewTranscriptSelectionWithProfile` hands collected entries to `state.ContextProfile`, which applies `EntryLimits.ToolTokens` before rendering; there is no earlier collection stage that truncates ordinary outputs. appserver/guardian_transcript_profile_like_rust_test.go pins the 1,000-token cap, while guardian_node_repl_output_limit_like_rust_test.go pins the unchanged Node REPL exception."
    ]
   },
   {
@@ -35945,7 +35943,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:300: - `#56535` is N/A: the commit extracts Rust's head-tail buffer into a utility"
+    "Round 1242: Rust #56535 extracts the head-tail buffer into a shared utility crate. Go already has its own bounded head/tail buffer in codemode/output_collection.go (headTailOutput, headTailFromOpen) for code-mode output capture; the Rust commit is a crate move with no behaviour change."
    ]
   },
   {
@@ -36008,7 +36006,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:390: - `#56505`, `#56533`, and `#56555` are N/A: Rust defers synchronous tool-call,"
+    "N/A by preparation carrier: Rust #56555 defers assistant/reasoning message truncation to `ContextProfile::prepare_transcript` and replaces oversized encrypted messages with an omission notice at the same position. Go's `state.ContextProfile` is that single preparation/selection layer and already applies `MaxMessageEntryTokens`, emits `GuardianTranscriptOmissionNotice`, and preserves positions; appserver/guardian_native_agent_message_like_rust_test.go and guardian_transcript_profile_like_rust_test.go cover the synchronous and asynchronous caps. There is no separate first-pass collector whose limits would need removing."
    ]
   },
   {
@@ -36020,7 +36018,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_28_sync4.md:118: | `4b1cf9a4c9` | #56556 | N/A | Same missing Guardian V2 async classification subsystem. |"
+    "N/A by async-classifier carrier: Rust #56556 makes retained conversations the only async backend, accepts-and-ignores legacy async_classifier_mode, and warns when configured. Go never exposed an async_classifier_mode or async classification backend: features/features.go only tracks Guardian V2 enablement and related flags, and appserver/guardian_reviewer.go is synchronous. There is no legacy mode to reinterpret, model-switch compatibility check to relax, or missing conversation backend to fail closed on."
    ]
   },
   {
@@ -36044,7 +36042,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_28_sync4.md:117: | `7848e3393c` | #56559 | N/A | Go has no Guardian V2 async snapshot scorer or snapshot-specific context helpers. |"
+    "N/A by async-scorer carrier: Rust #56559 removes snapshot instruction deduplication, separate retained-assistant framing, and a test-only Decisions snapshot adapter. Go has no guardian-v2 snapshot path or Decisions adapter; its shared `state.ContextProfile`/retainedctx path retains instructions and renders assistant context directly. No Go helper or test depends on those snapshot-only semantics."
    ]
   },
   {
@@ -36108,7 +36106,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:900: - `#57167` (CUA tool-call lifecycle starts) is N/A: Go exposes no CUA/computer-use"
+    "Round 1242: Rust #57167 tracks CUA tool-call starts inside the analytics crate reducer. Go has no analytics crate or event reducer; tool usage is emitted by telemetry recorders (telemetry/tool_result.go, telemetry/mcp_call_metrics.go, telemetry/skill_invocation_event.go), which count completed calls and have no CUA lifecycle dedup stage."
    ]
   },
   {
@@ -36133,8 +36131,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27.md:98: | `#57175` `#57169` | N/A for TUI until core adds the managed `config_server` requirement and config-server sign-in: the Rust TUI calls `ensure_config_server_login` before raw mode, while Go models only ChatGPT cloud bundles. `#57169` is an API refactor with no behavior change. |",
-    "plan_2026_10_27.md:98: | `#57175` `#57169` | N/A for TUI until core adds the managed `config_server` requirement and config-server sign-in: the Rust TUI calls `ensure_config_server_login` before raw mode, while Go models only ChatGPT cloud bundles. `#57169` is an API refactor with no behavior change. |"
+    "Round 1242: Rust #57169 renames the ChatGPT bundle loaders to chatgpt_config_bundle_loader* and shares interactive login setup between browser and device-code flows. Go's counterparts already exist as separate units (auth/login_flow.go for login, app/config_server_bundle.go for the managed bundle loader), so the rename/refactor has no behavioural carrier."
    ]
   },
   {
@@ -36159,7 +36156,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_28_sync4.md:116: | `cf29971d93` | #57171 | N/A | No `ModelClient::with_runtime_auth` or runtime authentication manager in Go. |"
+    "Round 1242: for the same reason as #55636, Go has no runtime auth manager to accept a runtime-agent-instance credential, so Rust #57171's runtime auth handling has no Go carrier."
    ]
   },
   {
@@ -36348,8 +36345,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:280: - `#57193` is N/A: Go has no rollout-trace/replay-bundle package.",
-    "plan_2026_10_27_nontui.md:897: - `#57193` (replay failed `write_stdin` rollout traces) and `#57199` (UTF-8-safe"
+    "N/A by trace-reducer carrier: Rust #57193 changes rollout-trace's typed terminal reducer so malformed/missing session_id in a dispatched write_stdin call is retained as a failed generic tool call instead of aborting replay. Go's ReplayTraceBundle (rollout/trace_reduce.go) is an event/payload validation reducer: it records raw events and referenced payloads but has no terminal-operation/session reconstruction step that parses write_stdin arguments. rollout/trace_replay_validation_like_rust_test.go covers the Go reducer's actual completion/payload contract."
    ]
   },
   {
@@ -36411,8 +36407,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:282: - `#57199` is N/A: the 240-byte JSON summary truncation lives in Rust's",
-    "plan_2026_10_27_nontui.md:897: - `#57193` (replay failed `write_stdin` rollout traces) and `#57199` (UTF-8-safe"
+    "N/A by trace-reducer carrier: Rust #57199 fixes a 240-byte JSON summary truncation in rollout-trace's conversation normalizer. Go's rollout/trace_reduce.go does not synthesize those per-tool JSON summaries and has no 240-byte truncation site; the standard rollout path uses rollout/truncation.go and persist_policy.go for its own limits. There is therefore no byte-boundary panic in the Go trace reducer to fix."
    ]
   },
   {
@@ -36728,7 +36723,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:277: - `#57233` is N/A: Go has no codex-home `.env`/dotenv loader to deduplicate."
+    "Round 1242: Rust #57233 stops dotenv loading in the arg0 re-exec wrapper after persistent I/O errors. Go never re-execs to load .env: cli.FilterDotenv (cli/dispatch.go:230) filters dotenv-derived values once into the process environment, so there is no retry loop and no persistent-error path to stop."
    ]
   },
   {
@@ -36826,7 +36821,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27.md:42: | Tests only | `#57243` | Rust Tokio-time test stabilization; no Go runtime carrier. | N/A |"
+    "Round 1242: Rust #57243 pauses Tokio time in the startup-draft handoff tests. It is a Rust-only test determinism change; Go has no Tokio virtual clock and the equivalent handoff is exercised through direct synchronous state transitions."
    ]
   },
   {
@@ -36850,7 +36845,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:281: - `#57245` is N/A: Rust test-only queue stabilization."
+    "Round 1242: Rust #57245 stabilises the rejected-message test of the ext/queue service by removing a timing assumption. Go has no ext/queue service (agent mail is handled by the appserver agent controller), so the Rust test fixture has no Go counterpart."
    ]
   },
   {
@@ -36862,7 +36857,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:278: - `#57247` is N/A: release rollout maintenance uses `gofrs/flock` with explicit"
+    "N/A by lock-lifecycle carrier: Rust #57247 explicitly unlocks in RolloutMaintenanceGuard::drop so a duplicated/inherited file handle cannot keep the lock held. Go's guard wraps github.com/gofrs/flock and exposes explicit Release (rollout/maintenance_lock.go); Go has no Drop destructor, and callers/tests release the guard deterministically (maintenance_lock_test.go). There is no duplicated-handle Drop path in the Go API to mirror."
    ]
   },
   {
@@ -36985,7 +36980,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:371: - `#57260` is N/A: introduces Rust's `PreparedPermissionRequest` to share"
+    "Round 1242: Rust #57260 centralises permission-request preparation and approval actions in core/session. Go already keeps those pieces apart: approval/elicitation handling lives in appserver/runtime_router.go and the elicitation holders, while tool handlers delegate through tool.Router; the commit is a Rust-internal refactor with unchanged observable approvals."
    ]
   },
   {
@@ -36997,7 +36992,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:362: - `#57261` is N/A: behavior-preserving refactor of Rust's apply_patch"
+    "Round 1242: Rust #57261 separates apply_patch request preparation from execution. Go already has that split: tool/apply_patch.go parses and prepares the patch request while tool/apply_patch_executor.go performs the writes, with approval decided by the runtime router, so there is no behaviour change to port."
    ]
   },
   {
@@ -37185,7 +37180,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:386: - `#57278` is N/A: extracts Rust agent spawn/startup/communication helpers with"
+    "Round 1242: Rust #57278 splits agent spawn/startup/communication helpers into control/spawn.rs and history.rs. Go's agent controller is already modular in that shape: appserver/agent_controller.go (spawn and startup), agent_spawn_failure.go (failure classification) and the agent message files (communication). Rust-internal refactor only."
    ]
   },
   {
@@ -37209,7 +37204,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:292: - The `rollout-trace` family is N/A: `#57311`, `#57280`, `#56524`, `#56515`,"
+    "N/A by trace-record/reducer carrier: Rust #57280 records full MCP runtime results before UI/content filtering and treats them as opaque reducer payloads. codex_go has no Rust rollout-trace writer or typed agent-interaction reducer; ReplayTraceBundle only validates trace.jsonl/payload files, while ordinary rollout persistence deliberately uses rollout/persist_policy.go's 64 KiB MCP-result cap. There is no trace runtime-result callback ordering or protocol-event duplication to change."
    ]
   },
   {
@@ -37343,7 +37338,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:383: - `#57294` is N/A: moves Rust plugin-manager error types into a new module and"
+    "Round 1242: Rust #57294 extracts plugin manager errors into manager_errors.rs and boxes realtime handoff routing. Go's plugin manager already returns typed errors from its own package (plugin/*.go) and the realtime handoff uses pointer-typed routing structs, so the Rust module split and boxing have no functional counterpart."
    ]
   },
   {
@@ -37355,7 +37350,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:399: - `#57295` is N/A: Rust now collects retained instructions, assistant context,"
+    "N/A by preparation carrier: Rust #57295 moves retained instruction/assistant/verified-answer size checks into guardian-context preparation and carries original record sizes for whole-record omission notices. Go has one preparation/composition path: `state.GuardianElasticBudget` and state/guardian_elastic_preparation.go enforce section limits, while retained sources are assembled by retainedctx and appserver/guardian_root_context.go. guardian_retained_omissions_like_rust_test.go, guardian_root_elastic_like_rust_test.go, and state/guardian_elastic_allocation_like_rust_test.go pin whole-record omission, ordering, and source framing; there is no guardian-context crate split to mirror."
    ]
   },
   {
@@ -37393,7 +37388,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:292: - The `rollout-trace` family is N/A: `#57311`, `#57280`, `#56524`, `#56515`,"
+    "N/A by trace-reducer carrier: Rust #57311 changes rollout-trace's tool/code-cell reducers to preserve multiple output versions and history ordering. Go's rollout/trace_reduce.go does not build conversation/tool/code-cell entities; it exposes events in file order and validates payloads. Standard rollout order/version handling lives in rollout/session_items.go and is unrelated to Rust's trace reducer, so no Go trace version/order conflict exists."
    ]
   },
   {
@@ -37592,8 +37587,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27.md:93: | `#57373` | N/A: Rust pins its toolchain to 1.95.0; Go's TUI behavior and build inputs are unaffected. |",
-    "plan_2026_10_27_nontui.md:1040: Go counterpart; `#57373` is a Rust toolchain pin with no Go analogue."
+    "N/A by toolchain: Rust #57373 repins the Rust toolchain to 1.95.0 across Cargo, Bazel, release workflows and Windows setup and adjusts Rust borrowing/lint workarounds, including boxing an MCP dispatch future to reduce async layout compilation. Go uses go.mod's Go 1.26.2 toolchain and Go interfaces/function values; it has no rust-toolchain.toml, Cargo/Bazel pins, or monomorphized async future whose layout needs the Rust boxing workaround."
    ]
   },
   {
@@ -37843,8 +37837,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:7: `#57452`, `#57462`, `#57458`, `#57468`, `#57474`, `#57476`, `#57478`, and",
-    "plan_2026_10_27_nontui.md:132: | `#57476` | Guardian reviewer session helpers: basic-source detection (Go's existing `guardianTurnStart`) and a parent-thread-scoped Responses prompt cache key `guardian:{threadID}` on review requests, matching Rust's `prompt_cache_key_override_for_review_session` (guardian source only, parent required, overrides the fork cache key) | `appserver/guardian_session.go`, `appserver/guardian_reviewer."
+    "N/A by crate boundary: Rust #57476 moves Guardian session-source detection, the reviewer name, and parent-scoped prompt-cache key into codex-guardian-reviewer while preserving behavior. Go has no reviewer crate split, but the same behavior lives at the existing boundary: appserver/guardian_session.go defines `guardianReviewerName` and `guardianPromptCacheKeyOverride`, and appserver/guardian_reviewer.go applies the override to the parent thread. appserver/guardian_session_like_rust_test.go covers parent scoping and invalid inputs."
    ]
   },
   {
@@ -37956,8 +37949,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_28.md:20: | `#57503` | macOS `install.sh` release pruning | N/A: Go `scripts/install.sh` is a local build installer with no `lsof`/standalone-release pruning. |",
-    "plan_2026_10_28.md:98: `#57503` is N/A: Go's `scripts/install.sh` is a local build installer and has no"
+    "Round 1242: Rust #57503 fixes macOS standalone release pruning in scripts/install/install.sh. Go ships its installer/updater as Go code under install/ and has no shell installer that prunes macOS standalone archives, so both the bug and its Python test are Rust-only."
    ]
   },
   {
@@ -37994,8 +37986,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_28.md:23: | `#57507` | Resolve Guardian command path conventions inside `ReviewAction` | Behavior preserved by moving path-convention selection next to action construction. Port into `appserver/guardian_reviewer.go` if selection still lives in the approval caller. |",
-    "plan_2026_10_28.md:64: - `#57507`: no behavior delta; Go builds approval actions with the host's"
+    "N/A by path representation: Rust #57507 moves executor-OS/path-convention selection into `ReviewAction::from_approval_action` because Rust renders a parsed PathUri into the legacy app path string at that boundary. Go's `state.Action.CWD` is already the rendered string supplied by tool.ShellRequest, while `tool.ShellValidationOptions.PathConvention` remains on the execution path (tool/shell.go, tool/shell_executor.go); appserver/runtime_router.go's `commandApprovalAction` therefore has no PathUri conversion to perform. Remote unified exec selects `PathConventionForPath(environmentCwd)` in shell_executor.go, so #57507 is a Rust relocation with no Go carrier."
    ]
   },
   {
@@ -38373,7 +38364,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_28_sync2.md:25: | `#57575`/`#57593` | HTTP client refactor + empty file removal | Verify: no behavior delta in Go. |"
+    "N/A by file carrier: Rust #57593 deletes two one-line codex-rs/http-client/local_staging_routing*.rs placeholder files. codex_go has no codex-rs/http-client crate or local_staging_routing module; its HTTP clients live under model/ and network/, and there is no Go placeholder file or routing symbol to remove."
    ]
   },
   {
@@ -38435,8 +38426,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_28_sync3.md:15: | `#57607` `9cce575134` | Share runtime authentication with model providers and catalogs | N/A: Go has no `runtime-agent-instance` subsystem (`RuntimeAuthManager`, `ActorInfo`, `PlatformResourceSelection`, `RuntimeAuthMode`); the change only re-plumbs that subsystem through `ProviderAuthContext` and adds helpers (`classify_openai_api_url`, `NetworkPolicy::with_account_binding`, sensitive-header re",
-    "plan_2026_10_28_sync3.md:21: - `#57607`: `rg -n \"ActorInfo|PlatformResourceSelection|RuntimeAuthManager|UsesCredentials\" --glob '*.go'` returns nothing. `network.NetworkPolicy` has no account binding/endpoint restriction fields, Go's `net/http` client already strips `Authorization`/`Cookie`/`WWW-Authenticate` across origin redirects and has no `HeaderValue::is_sensitive` equivalent, and `classify_openai_api_url` would be dead"
+    "Round 1242: Go has no runtime-agent-instance auth plumbing (no RuntimeAuthManager/ActorInfo/dual_header), so Rust #57607's runtime auth path has nothing to extend."
    ]
   },
   {
@@ -38533,7 +38523,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "update/plan_2026_10_30.md:137: #57644 N/A — Rust Bazel/V8 绑定生成"
+    "N/A by JavaScript runtime: Rust #57644 generates Rusty V8 bindings from Bazel-built V8 archives and updates V8/CppGC ABI smoke coverage. codex_go embeds the pure-Go github.com/grafana/sobek engine (go.mod) and has no Rusty V8, C++ V8 archive, Bazel action, or CppGC binding layer."
    ]
   },
   {
@@ -38605,7 +38595,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "update/plan_2026_10_30.md:143: #57692 N/A — Rust trace 测试等待"
+    "Round 1242: Rust #57692 makes trace tests wait for turn profiles before asserting sampling counts. It is a Rust test-only determinism change; Go's turn trace tests (turn/telemetry_span_test.go) drive spans synchronously and assert directly."
    ]
   },
   {
@@ -38617,7 +38607,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "update/plan_2026_10_30.md:144: #57697 N/A — Guardian crate 文件搬迁"
+    "N/A by crate boundary: Rust #57697 moves Guardian review state, fork history, checkpoint recovery, and Node REPL evidence admission into codex-guardian-reviewer. Go already keeps these in the in-process `guardianSessionRunner` and `modelGuardianReviewer` fields (appserver/guardian_reviewer.go), with Node REPL evidence in appserver/node_repl_evidence.go; there is no host/reviewer crate split to refactor. Existing guardian_reviewer_test.go and guardian_node_repl_*-like_rust_test.go pin the behavior."
    ]
   },
   {
@@ -38629,7 +38619,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "update/plan_2026_10_30.md:145: #57698 N/A — Guardian crate 文件搬迁"
+    "N/A by crate boundary: Rust #57698 moves GuardianContextMode, parent-compaction checkpoint policy, and reviewer instruction assembly into the reviewer extension. Go has no extension crate: `state.GuardianContextMode` and `state.ContextProfile` carry the mode/policy, and appserver/guardian_reviewer.go assembles the reviewer instructions. guardian_conversation_history_like_rust_test.go and guardian_compaction_history_like_rust_test.go pin the visible selection/prompt behavior."
    ]
   },
   {
@@ -38641,7 +38631,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "update/plan_2026_10_30.md:146: #57702 N/A — Guardian crate 文件搬迁"
+    "N/A by crate boundary: Rust #57702 moves review evidence storage, authorization snapshots, sender exchange selection, and bounded Node REPL evidence into codex-guardian-reviewer. Go already operates on these through one in-process evidence path (`appserver/guardian_reviewer.go`, `retainedctx`, `appserver/node_repl_evidence.go`) with host-specific rendering kept in appserver. guardian_native_tool_review_like_rust_test.go, guardian_retained_omissions_like_rust_test.go, and the Node REPL evidence tests pin the observable behavior; there is no second crate API to introduce."
    ]
   },
   {
@@ -38665,7 +38655,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "update/plan_2026_10_30.md:148: #57720 N/A — Guardian crate 文件搬迁"
+    "N/A by crate boundary: Rust #57720 exports ReviewAction and its GuardianApprovalRequest conversion from codex-guardian-reviewer while keeping host approval preparation in core. Go represents the same split as internal `state.Action` plus the wire projection `state.GuardianApprovalReviewAction` (state/guardian.go), with construction in appserver/runtime_router.go and appserver/guardian_reviewer.go. There is no crate export or conversion module to move; write_stdin_approval_wire_like_rust_test.go and guardian_native_tool_review_like_rust_test.go pin serialization/provenance."
    ]
   },
   {
@@ -38677,7 +38667,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "update/plan_2026_10_30.md:149: #57723 N/A — Bazel 生成器优化"
+    "N/A by build system: Rust #57723 changes only codex-rs/app-server-protocol/BUILD.bazel, compiling the on-demand schema generator with -Copt-level=0 and debug assertions off. codex_go has no Bazel BUILD target or Rust schema-generator test harness; protocol schemas are Go types and go test builds the package directly, so there is no comparable Bazel optimization flag."
    ]
   },
   {
@@ -38689,7 +38679,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "update/plan_2026_10_30.md:150: #57729 N/A — Rust 测试配置清理"
+    "N/A by test carrier: Rust #57729 only removes redundant `[features.guardianv2].free_guardian` setup and opt-in cases from codex-rs/core/tests/suite/guardian_review.rs, retaining the feature itself. codex_go's Guardian tests do not share that Rust suite; config/config_test.go still intentionally covers free_guardian parsing/defaults, and appserver/guardian_endpoint_test.go pins endpoint selection when it is enabled. No production Go behavior or equivalent test fixture changed."
    ]
   },
   {
@@ -38701,7 +38691,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "update/plan_2026_10_30.md:151: #57741 N/A — Bazel 测试源拆分"
+    "N/A by build system: Rust #57741 adds a Bazel unit_test_srcs option so test-only Rust modules stay out of library/binary inputs while remaining available to unit tests. Go's package build already excludes _test.go files from non-test builds and includes them only for go test, and codex_go has no Bazel codex_rust_crate rule. There is no separate Go manifest to split."
    ]
   },
   {
@@ -38713,7 +38703,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "update/plan_2026_10_30.md:152: #57742 N/A — Bazel 增量编译"
+    "N/A by build system: Rust #57742 narrows Bazel integration-test compile_data so runtime fixtures do not invalidate test compilation. Go test data and fixtures are not compiled inputs and codex_go has no Bazel integration-test rule or integration_compile_data_extra attribute; scripts/release.sh and go test provide the corresponding build/test path."
    ]
   },
   {
@@ -38725,7 +38715,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "update/plan_2026_10_30.md:153: #57743 N/A — Guardian MCP helper 搬迁"
+    "N/A by crate boundary: Rust #57743 extracts MCP approval elicitation parsing and review-decision conversion from session/mcp.rs into codex-guardian-reviewer. Go has no guardian-reviewer crate; MCP elicitation types/helpers live in mcp/elicitation.go, while appserver keeps session lookup, provenance checks, and approval enforcement (for example appserver/mcp_elicitation_root_thread_test.go). The helpers are already shared within the Go process, so there is no cross-crate move."
    ]
   },
   {
@@ -38857,7 +38847,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "update/plan_2026_10_30.md:164: #57796 N/A — .github release 重试"
+    "Round 1242: Rust #57796 extends GitHub release-read retries and adds jitter in .github/scripts/contract_releases.py, a CI-only contract script. Go's release metadata reading lives in install/update.go and is not driven by that script, so there is no runtime carrier."
    ]
   },
   {
@@ -38869,7 +38859,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "update/plan_2026_10_30.md:165: #57800 N/A — 核对为 N/A：Go exec 直接使用 agent-loop 结果 items，不经 app-server 分页通知回填"
+    "N/A by exec architecture: Rust #57800 makes codex exec recover dropped completion items by paging thread/items/list for paginated threads. Go's exec Runner consumes the model/tool stream directly and persists its own completion items (exec/exec.go); it does not attach to an app-server turn-notification stream nor call thread/items/list to backfill. The paginated history mode it records is persistence metadata, not a recovery transport, so there is no page-merge/cursor-repetition path to implement."
    ]
   },
   {
@@ -38941,7 +38931,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "update/plan_2026_10_30.md:171: #57825 N/A — .github CI dotslash"
+    "N/A by CI carrier: Rust #57825 switches one Rust CI setup action to meta/install-dotslash. codex_go's .github/workflows use actions/setup-go with go-version-file: go.mod and do not install or invoke DotSlash, so there is no Go workflow step to replace."
    ]
   },
   {
@@ -38953,7 +38943,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "update/plan_2026_10_30.md:172: #57832 N/A — Bazel V8 构建"
+    "N/A by JavaScript runtime/build system: Rust #57832 makes Bazel always select source-built V8 archives/bindings and adjusts V8 ABI checks and platform selectors. codex_go uses the pure-Go github.com/grafana/sobek engine and has no Bazel, rusty_v8, V8 archive, bindgen target, or CppGC ABI surface."
    ]
   },
   {
@@ -39241,7 +39231,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "update/plan_2026_10_30.md:196: #58013 N/A — Rust clippy 分支改名"
+    "N/A by lint tooling: Rust #58013 works around Dylint 6.1.0 checking out rust-clippy's removed master branch and wraps cargo test in the Rust CI workflows. codex_go has no Dylint, rust-clippy checkout, argument-comment-lint tool, or Cargo test workflow; Go lint/vet commands do not use that Git branch alias."
    ]
   },
   {
@@ -39313,7 +39303,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "update/plan_2026_10_30.md:202: #58057 N/A — Rust 测试 fixture 初始化"
+    "N/A by test fixture: Rust #58057 initializes native_call to None in two codex-core agent-host test fixtures. codex_go has no shared Rust ToolCall/ToolInvocation fixture constructor; tool.Invocation.NativeCall is a json.RawMessage whose zero value is already nil, and each Go test constructs the fields it needs explicitly. The commit changes test setup only, with no runtime behavior or Go fixture counterpart."
    ]
   },
   {
@@ -39349,7 +39339,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "update/plan_2026_10_30.md:205: #58083 N/A — Bazel schema 生成二进制"
+    "N/A by build system: Rust #58083 builds a dedicated Bazel schema-exporter binary and shares its schema writer with an ignored Rust test. codex_go has no Bazel schema_bundle target or Rust schema_generator harness; its schema-facing code is hand-written Go (jsonschema/, protocol/), so there is no exporter on the Go build critical path to split from test registration."
    ]
   },
   {
@@ -39373,7 +39363,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "update/plan_2026_10_30.md:207: #58110 N/A — Rust RUSTSEC 忽略"
+    "N/A by dependency audit: Rust #58110 adds RUSTSEC-2026-0418 to codex-rs/.cargo/audit.toml and codex-rs/deny.toml for the Windows-only libz-sys pulled through curl-sys. codex_go does not use Cargo, cargo-audit, cargo-deny, curl-sys, or libz-sys; its module graph is go.mod/go.sum, so there is no Rust advisory ignore to mirror."
    ]
   },
   {
@@ -39577,7 +39567,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "update/plan_2026_10_30.md:224: #58166 N/A — 核对为 N/A：Go 仅实现 trace bundle 的 replay/reduce（app/app.go），没有 CODEX_ROLLOUT_TRACE_ROOT 写入器可失败"
+    "N/A by trace-writer/reducer carrier: Rust #58166 makes rollout-trace recording failures explicit, flushes the buffered writer, and tracks completion across child handles. codex_go only implements trace bundle replay/validation (rollout/trace_reduce.go plus trace_replay_validation_like_rust_test.go); it has no Rust rollout-trace writer/thread handle model. The conventional rollout.Recorder has its own Flush/Close contract (rollout/rollout.go) and is not this trace subsystem."
    ]
   },
   {
@@ -39601,7 +39591,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "update/plan_2026_10_30.md:226: #58171 N/A — trace/cancel 测试稳定化"
+    "N/A by test carrier: Rust #58171 pauses Tokio time in a SIGTERM cleanup test and fixes tracing-subscriber lifetimes in Rust session/tool tests. codex_go has no Tokio clock, tracing subscriber, or the affected codex-core test files; the Go cancellation and tracing tests use context and its own tracehook/OTel packages. The commit changes test synchronization only, not production behavior."
    ]
   },
   {
@@ -39673,7 +39663,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "update/plan_2026_10_30.md:232: #58196 N/A — .github release 制品"
+    "N/A by release pipeline: Rust #58196 makes Bazel release jobs mandatory and publishes Cargo/Bazel DotSlash manifests, including provisioned macOS variants. codex_go's .github/workflows/release.yml builds native Go archives with scripts/release.sh, publishes npm packages, and has no Bazel artifacts, signing/symbol Bazel variants, DotSlash config, or provisioned-package matrix to make mandatory."
    ]
   },
   {
@@ -39685,7 +39675,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "update/plan_2026_10_30.md:233: #58198 N/A — Rust TOML 反序列化集中（无行为变化）"
+    "Round 1242: Rust #58198 centralises TOML deserialisation behind TryFrom<toml::Value>. Go decodes TOML with pelletier/go-toml/v2 into typed structs plus an explicit schema table (config/config_toml_schema*.go) and funnels managed files through config/requirements_file.go; there is no serde/TryFrom layer to centralise."
    ]
   },
   {
@@ -39781,7 +39771,7 @@
    ],
    "status": "not_applicable",
    "evidence": [
-    "update/plan_2026_10_30_round1014.md item 5: Cargo.lock-only dependency bump"
+    "N/A by dependency carrier: Rust #58241 bumps mio 1.2.0 to 1.2.4 in Cargo.lock and MODULE.bazel.lock. codex_go does not depend on mio and has no Cargo/Bazel lockfile; its networking uses Go's net package plus the modules recorded in go.mod/go.sum."
    ]
   },
   {

@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -180,17 +181,20 @@ func TestResponsesProxyFederatedAuthDropsCredentialOnFailedRenewalLikeRust(t *te
 	if err != nil {
 		t.Fatalf("constructor error: %v", err)
 	}
+	clockNow := time.Now()
+	auth.now = func() time.Time { return clockNow }
 	if _, err := auth.Header(context.Background()); err != nil {
 		t.Fatalf("initial Header returned error: %v", err)
 	}
 	fail.Store(true)
-	auth.cached.renewAt = time.Now().Add(-time.Second)
+	auth.cached.renewAt = clockNow.Add(-time.Second)
 	if _, err := auth.Header(context.Background()); err == nil {
 		t.Fatal("failed renewal must surface an error")
 	}
 	if auth.cached != nil {
 		t.Fatal("failed renewal must discard the cached credential")
 	}
+	clockNow = clockNow.Add(responsesProxyInitialRenewalBackoff)
 	fail.Store(false)
 	if header, err := auth.Header(context.Background()); err != nil || header != "Bearer at-1" {
 		t.Fatalf("recovered header = %q, %v", header, err)
@@ -363,5 +367,163 @@ func TestReadResponsesAPIProxyAuthHeaderShortReadsLikeRust(t *testing.T) {
 		if _, err := validateResponsesProxyBearerToken([]byte(token)); err != nil {
 			t.Fatalf("bearer token %q rejected: %v", token, err)
 		}
+	}
+}
+
+func TestResponsesProxyFederatedAuthRejectsOldIssuanceOnlyLikeRust(t *testing.T) {
+	now := time.Now().Unix()
+	exchangeServer := newTokenExchangeTestServer(t,
+		tokenExchangeResponse("at-1", 3600, now+3600),
+		tokenExchangeResponse("at-2", 3600, now+3600),
+	)
+	source := &stubResponsesProxySubjectSource{subjects: []string{"subject-1", "subject-2"}}
+	auth, err := newResponsesProxyFederatedAuthWith(source, "idp-1", "sa-1", exchangeServer.server.URL, newResponsesProxyTokenClient())
+	if err != nil {
+		t.Fatalf("newResponsesProxyFederatedAuthWith returned error: %v", err)
+	}
+	first, err := auth.Lease(context.Background())
+	if err != nil || first.value != "Bearer at-1" {
+		t.Fatalf("first lease = %q, %v", first.value, err)
+	}
+	first.Invalidate()
+	second, err := auth.Lease(context.Background())
+	if err != nil || second.value != "Bearer at-2" {
+		t.Fatalf("second lease = %q, %v", second.value, err)
+	}
+	// A late 401 from the first request must not evict the replacement token.
+	first.Invalidate()
+	third, err := auth.Lease(context.Background())
+	if err != nil || third.value != "Bearer at-2" {
+		t.Fatalf("third lease = %q, %v", third.value, err)
+	}
+	if exchangeServer.calls.Load() != 2 || source.callCount() != 2 {
+		t.Fatalf("exchanges = %d, subjects = %d, want 2", exchangeServer.calls.Load(), source.callCount())
+	}
+}
+
+func TestResponsesProxyFederatedAuthBacksOffRenewalFailuresLikeRust(t *testing.T) {
+	now := time.Now()
+	var fail atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if fail.Load() {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(tokenExchangeResponse("at-1", 3600, now.Unix()+3600))
+	}))
+	defer server.Close()
+	source := &stubResponsesProxySubjectSource{subjects: []string{"subject-1"}}
+	auth, err := newResponsesProxyFederatedAuthWith(source, "idp-1", "sa-1", server.URL, newResponsesProxyTokenClient())
+	if err != nil {
+		t.Fatalf("newResponsesProxyFederatedAuthWith returned error: %v", err)
+	}
+	clockNow := now
+	auth.now = func() time.Time { return clockNow }
+	fail.Store(true)
+	if _, err := auth.Lease(context.Background()); err == nil {
+		t.Fatal("first failed exchange must surface its error")
+	}
+	if auth.renewalFailure == nil || auth.renewalFailure.delay != responsesProxyInitialRenewalBackoff {
+		t.Fatalf("renewal failure = %+v, want %s", auth.renewalFailure, responsesProxyInitialRenewalBackoff)
+	}
+	calls := source.callCount()
+	clockNow = clockNow.Add(500 * time.Millisecond)
+	if _, err := auth.Lease(context.Background()); err == nil || !strings.Contains(err.Error(), "temporarily unavailable") {
+		t.Fatalf("backoff error = %v", err)
+	}
+	if source.callCount() != calls {
+		t.Fatal("backoff attempt called the subject source")
+	}
+	clockNow = clockNow.Add(time.Second)
+	if _, err := auth.Lease(context.Background()); err == nil {
+		t.Fatal("second failed exchange must surface its error")
+	}
+	if auth.renewalFailure == nil || auth.renewalFailure.delay != 2*responsesProxyInitialRenewalBackoff {
+		t.Fatalf("second renewal failure = %+v", auth.renewalFailure)
+	}
+	clockNow = clockNow.Add(2 * time.Second)
+	fail.Store(false)
+	lease, err := auth.Lease(context.Background())
+	if err != nil || lease.value != "Bearer at-1" {
+		t.Fatalf("recovered lease = %q, %v", lease.value, err)
+	}
+	if auth.renewalFailure != nil {
+		t.Fatalf("successful renewal kept failure state: %+v", auth.renewalFailure)
+	}
+}
+
+type rotatingResponsesProxyAuth struct {
+	mu            sync.Mutex
+	issued        int
+	lastRejected  *atomic.Bool
+	lastValue     string
+	invalidations int
+}
+
+func (a *rotatingResponsesProxyAuth) Header(context.Context) (string, error) {
+	lease, err := a.Lease(context.Background())
+	return lease.value, err
+}
+
+func (*rotatingResponsesProxyAuth) FollowsRedirects() bool { return true }
+
+func (a *rotatingResponsesProxyAuth) Lease(context.Context) (responsesProxyAuthLease, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.lastRejected == nil || a.lastRejected.Load() {
+		a.issued++
+		a.lastValue = fmt.Sprintf("Bearer token-%d", a.issued)
+		a.lastRejected = &atomic.Bool{}
+	}
+	return responsesProxyAuthLease{value: a.lastValue, rejected: a.lastRejected}, nil
+}
+
+func TestResponsesProxyForwards401WithoutReplayAndRefreshesCredentialLikeRust(t *testing.T) {
+	var authHeaders []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authHeaders = append(authHeaders, r.Header.Get("Authorization"))
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer upstream.Close()
+	upstreamURL, _ := url.Parse(upstream.URL + "/v1/responses")
+	auth := &rotatingResponsesProxyAuth{}
+	proxy := &responsesAPIProxyServer{auth: auth, upstreamURL: upstreamURL, httpClient: &http.Client{}}
+	for turn := 0; turn < 2; turn++ {
+		recorder := httptest.NewRecorder()
+		proxy.handle(recorder, httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader("{\"input\":\"hi\"}")))
+		if recorder.Code != http.StatusUnauthorized {
+			t.Fatalf("turn %d status = %d", turn, recorder.Code)
+		}
+	}
+	if len(authHeaders) != 2 || authHeaders[0] != "Bearer token-1" || authHeaders[1] != "Bearer token-2" {
+		t.Fatalf("upstream authorizations = %#v", authHeaders)
+	}
+	if auth.issued != 2 {
+		t.Fatalf("issued credentials = %d, want 2", auth.issued)
+	}
+}
+
+func TestResponsesProxyKeepsCredentialOn403LikeRust(t *testing.T) {
+	var authHeaders []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authHeaders = append(authHeaders, r.Header.Get("Authorization"))
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer upstream.Close()
+	upstreamURL, _ := url.Parse(upstream.URL + "/v1/responses")
+	auth := &rotatingResponsesProxyAuth{}
+	proxy := &responsesAPIProxyServer{auth: auth, upstreamURL: upstreamURL, httpClient: &http.Client{}}
+	for turn := 0; turn < 2; turn++ {
+		recorder := httptest.NewRecorder()
+		proxy.handle(recorder, httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader("{\"input\":\"hi\"}")))
+		if recorder.Code != http.StatusForbidden {
+			t.Fatalf("turn %d status = %d", turn, recorder.Code)
+		}
+	}
+	if len(authHeaders) != 2 || authHeaders[0] != "Bearer token-1" || authHeaders[1] != "Bearer token-1" {
+		t.Fatalf("upstream authorizations = %#v", authHeaders)
+	}
+	if auth.issued != 1 {
+		t.Fatalf("issued credentials = %d, want 1", auth.issued)
 	}
 }
