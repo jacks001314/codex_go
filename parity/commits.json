@@ -34177,8 +34177,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:23: | `#55691` | Enterprise MCP auth error precision and policy-bound request authority: token-source failures are classified by credential kind (account versus keyring) and exchange stage, so guidance distinguishes a Codex sign-in, an enterprise sign-in, and an administrator action without exposing provider text. `unauthorized_client`/`invalid_client` at the IdP stage is an identity-client rejection ",
-    "plan_2026_10_27_nontui.md:1557: - For `#55691`: `go build ./...`, `go vet ./mcp`, `go test ./mcp -count=1`, `go test ./config -count=1`, and `go test ./appserver -run 'MCP|Enterprise|EMA|Auth|Login' -count=1`"
+    "Round 1250: mcp/ema_auth_policy.go classifies enterprise MCP token-source failures by credential kind and exchange stage, so `unauthorized_client`/`invalid_client` at the IdP stage become identity-client rejections with sign-in-versus-administrator guidance instead of provider text, and mcp/api.go enforces the policy-bound request authority checks. Tests: mcp/ema_auth_lifecycle_like_rust_test.go TestEMATokenSourceErrorClassificationLikeRust, TestMCPEMAExchangeClassifiesAuthFailuresByStageLikeRust."
    ]
   },
   {
@@ -34215,8 +34214,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:22: | `#55696` | Enterprise MCP authority across runtime refreshes: the bound policy revision is re-checked at the retained connection's HTTP dispatch boundary and before every discovery, IdP, and resource-exchange request, so a revision delivered mid-exchange aborts with `request not sent` instead of finishing credential work for a policy that no longer authorizes it. A replacement runtime (for examp",
-    "plan_2026_10_27_nontui.md:1541: - For `#55696`: `go build ./...`, `go vet ./mcp`, `go test ./mcp -count=1`,"
+    "Round 1250: mcp/ema_auth_policy.go re-checks the bound policy revision at the retained connection's HTTP dispatch boundary and before each discovery, IdP and resource-exchange request, so a revision delivered mid-exchange aborts with \"request not sent\". Tests: mcp/ema_auth_lifecycle_like_rust_test.go TestEMAAuthManagerHoldsRequestsWhilePolicyStaleLikeRust, TestEMAAuthManagerPolicyCheckedHTTPClientHoldsExchangesLikeRust, TestEMAScopeCheckingDoerChecksPolicyLikeRust, TestEMAAuthManagerPrefersPolicyChangeOverRenewalFailureLikeRust."
    ]
   },
   {
@@ -34228,8 +34226,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:21: | `#55698` | Enterprise MCP account-grant reuse: when no dedicated enterprise sign-in is stored, the manager borrows the Codex account OAuth grant if its trusted provenance names the configured issuer, its ID-token account claim matches the record, and its issuer/audience bindings are usable. The connection pins one credential source and OAuth client, re-validates the grant before each exchange, h",
-    "plan_2026_10_27_nontui.md:1533: - For `#55698`: `go build ./...`, `go vet ./mcp ./auth`, `go test ./mcp -count=1`,"
+    "Round 1250: mcp/ema_account.go borrows the Codex account OAuth grant when its trusted provenance names the configured issuer, its ID-token account claim matches the record and its issuer/audience bindings are usable; mcp/ema_runtime.go pins one credential source and OAuth client per connection and re-validates the grant before every exchange. Tests: mcp/ema_account_like_rust_test.go TestMCPEMAAccountGrantUsabilityLikeRust, TestEMAAuthManagerBorrowsAccountGrantLikeRust, TestEMAAuthManagerRejectsStaleAccountGrantLikeRust."
    ]
   },
   {
@@ -34241,8 +34238,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:103: | `#55701` | MCP OAuth refresh coordination is stable and enabled by default | `features/features.go`, `features/features_test.go` |",
-    "plan_2026_10_27_nontui.md:1234: - For `#56033`/`#55701`/`#56163`: `go test ./features ./config ./app -count=1`, `go test ./exec -run 'ReasoningEffort' -count=1`, `go test ./appserver -run 'ReasoningEffort|OAuth|MCP' -count=1`, and `go build ./...` pass."
+    "Round 1250: features/features.go:190-193 registers `mcp_oauth_refresh_coordination` as StageStable with DefaultEnabled: true. Tests: features/features_test.go."
    ]
   },
   {
@@ -34264,9 +34260,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:293: `#56342`, `#56312`, `#55725`, `#55710`, `#57194`, `#56011`, `#55993`. Go has"
+    "Round 1250: not applicable — Go has no rollout-trace recorder or event model (no thread trace events, per-turn/code-cell/terminal spans). rollout/trace_reduce.go (ReduceTraceBundle) only summarises an existing `trace.jsonl`, the codemode package has no tracer, and the MCP backend identity this commit derives from runtime events has no Go surface."
    ]
   },
   {
@@ -34278,7 +34274,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:249: - `#55719` needs no code change: Go never rejected commands when a protected"
+    "Round 1250: tool/unified_exec.go:772-773 falls back to unmasked execution when an executor cannot resolve configured provider rules, and :963-968 emit \"Credential masking is unavailable ...\" warnings for unsupported exec-servers, network-proxy configurations and shells instead of rejecting the command. Tests: tool/credential_masking_warning_test.go TestRemoteCredentialMaskingWarningsLikeRust, TestRemoteCredentialMaskingConfigurationWarningLikeRust."
    ]
   },
   {
@@ -34312,9 +34308,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:293: `#56342`, `#56312`, `#55725`, `#55710`, `#57194`, `#56011`, `#55993`. Go has"
+    "Round 1250: not applicable — Go has no rollout-trace code-cell spans or response-metadata capture; rollout/trace_reduce.go only summarises an existing `trace.jsonl` and no Go code records `codex.tool_result_ready`-style trace events."
    ]
   },
   {
@@ -34338,7 +34334,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_28_sync4.md:112: | `af91f6ef2c` | #55804 | equivalent | `criticalpath/critical_path.go` tracks shared dependency paths, parallel joins, clipping, and exclusive attribution. |"
+    "Round 1250: criticalpath/critical_path.go attributes exclusive durations across shared dependency paths, parallel joins, equal finish times and clipping, and marks the result unknown instead of zero when path retention is exhausted. Tests: criticalpath/critical_path_test.go TestJoinReplacesOverlappingWorkWithTheFullWinningBranch, TestNestedSerialDependenciesPreserveExclusiveCategories, TestEqualFinishTimesSelectOnePathWithoutDoubleCounting, TestOverlappingWorkOnlyAttributesTimeAfterTheExistingPath, TestPathRetentionExhaustionMarksUnknownInsteadOfClaimingZero."
    ]
   },
   {
@@ -34350,8 +34346,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:83: | `#55846` | Measure Guardian review latency once on the monotonic clock | `appserver/guardian_reviewer.go`, `appserver/guardian_review_metrics.go`, like-Rust test |",
-    "plan_2026_10_27_nontui.md:910: `#55846` details: the review metric used to subtract two wall-clock"
+    "Round 1250: appserver/guardian_reviewer.go:1247 measures the Guardian review latency once, from prompt preparation, on the monotonic clock, and appserver/guardian_review_metrics.go records that single duration. Tests: appserver/guardian_review_elapsed_like_rust_test.go TestGuardianReviewElapsedMSUsesMonotonicClockLikeRust."
    ]
   },
   {
@@ -34375,9 +34370,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "not_applicable",
    "evidence": [
-    "plan_2026_10_27_nontui.md:884: `#56557`, `#55848`, `#55524`, and `#55620` change Rust test harnesses; Go has"
+    "Round 1250: not applicable — Rust-only test-harness change (pausing relay test time while inspecting handshake diagnostics); Go relay/transport tests have no Tokio-style paused clock to advance."
    ]
   },
   {
@@ -34389,8 +34384,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:140: | `#55856` | Managed app-server and updater stderr logs go through one bounded, nonblocking worker (64 queued records, 16 KiB per record, lossy); a live log above 1 MiB keeps its latest 256 KiB in `.log.previous` and is truncated in place with append-only handles, and updater handoff pauses predecessor pruning until ownership is restored | `appserverdaemon/stderr_log.go`, `appserverdaemon/stderr_a",
-    "plan_2026_10_27_nontui.md:179: - `#55856`'s bounded stderr worker has no Rust `WorkerGuard`: Go keeps the"
+    "Round 1250: appserverdaemon/stderr_log.go runs one bounded, nonblocking worker (stderrLogQueuedRecords 64, maxStderrLogRecordBytes 16 KiB, lossy), keeps the latest 256 KiB of an oversized log in `.log.previous`, truncates in place through append-only handles (stderr_append_unix.go / stderr_append_windows.go) and pauses predecessor pruning during updater handoff. Tests: appserverdaemon/stderr_log_test.go TestManagedStderrLogDropsOversizedAndQueuedRecordsLikeRust, TestPreserveStderrLogKeepsBoundedTailLikeRust, TestPruneCurrentStderrLogKeepsBoundedTailLikeRust, TestStderrPruningPausesDuringUpdaterHandoffLikeRust."
    ]
   },
   {
@@ -34402,8 +34396,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:20: | `#55859` | Enterprise MCP credential selection and reauthentication: an eligible Codex account grant wins over a saved enterprise sign-in, and the initial connection falls back to the saved sign-in when the account grant is rejected, while a connection that already holds a token never changes source. Rejections are remembered per registration as a refresh-grant revision digest that ignores acces",
-    "plan_2026_10_27_nontui.md:1525: - For `#55859`: `go build ./...`, `go vet ./mcp ./auth`, `go test ./mcp -count=1`,"
+    "Round 1250: mcp/ema_account.go makes an eligible Codex account grant win over a saved enterprise sign-in and falls back to the saved sign-in when the initial connection is rejected, while a connection that already holds a token never changes source; rejections are remembered per registration as a refresh-grant revision digest that ignores access-token churn. Tests: mcp/ema_account_like_rust_test.go TestEMAAuthManagerPrefersAccountGrantLikeRust, TestEMAAuthManagerFallsBackToEnterpriseSignInLikeRust, TestEMAAuthManagerRemembersStepUpRejectionLikeRust."
    ]
   },
   {
@@ -34415,8 +34408,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:19: | `#55883` | Enterprise MCP authorization lifecycle coverage: regression tests pin account credential reuse, an IdP step-up rejection remembered for that grant revision without another IdP request, and retry exhaustion when a grant keeps rotating under the exchange, alongside the existing selection, fallback, and stale-grant cases | `mcp/ema_account_like_rust_test.go`, like-Rust tests |",
-    "plan_2026_10_27_nontui.md:1521: - For `#55883`: `go test ./mcp -count=1` and `go test ./appserver -run 'MCP|Enterprise|EMA|Auth|Login' -count=1`"
+    "Round 1250: mcp/ema_auth_lifecycle_like_rust_test.go and mcp/ema_account_like_rust_test.go pin the enterprise MCP authorisation lifecycle: account credential reuse, an IdP step-up rejection remembered for that grant revision without another IdP request, and retry exhaustion when the grant keeps rotating. Tests: TestEMAAuthManagerRemembersStepUpRejectionLikeRust, TestEMAAuthManagerStopsAfterRepeatedRotationLikeRust, TestEMAAuthManagerInvalidatesOnlyRejectedEnterpriseGrantsLikeRust."
    ]
   },
   {
@@ -34452,8 +34444,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:57: | `#55940` | `feedback/save` writes a local diagnostic ZIP instead of uploading | `appserver/protocol.go`, `appserver/feedback.go`, `appserver/feedback_archive.go`, `appserver/feedback_thread_index.go`, `appserver/runtime_router.go`, `appserver/schema.go`, like-Rust tests |",
-    "plan_2026_10_27_nontui.md:577: `#55940` details: `feedback/save` validates the same upload payload plus an"
+    "Round 1250: `feedback/save` writes a local diagnostic ZIP: appserver/feedback.go validates the upload payload, appserver/feedback_archive.go builds the archive atomically with duplicate-name handling and size bounds, appserver/feedback_thread_index.go attaches the thread index, and appserver/protocol.go plus appserver/schema.go expose the params. Tests: appserver/feedback_save_like_rust_test.go TestFeedbackSaveParamsJSONMatchesRustSchema, TestFeedbackSaveArchiveKeepsDuplicateNamesAndManifestLikeRust, TestFeedbackSaveArchiveBoundsAndCleansUpLikeRust, TestFeedbackSaveArchivePublishesAtomicallyLikeRust, TestFeedbackSaveAttachesStrictSelectedPathsLikeRust."
    ]
   },
   {
@@ -34502,8 +34493,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:85: | `#55958` | Preserve provider catalogs across failed refreshes | `model/models_endpoint.go`, `model/gateway_auth.go`, `auth/gateway_login.go`, `auth/gateway_manager.go`, like-Rust tests |",
-    "plan_2026_10_27_nontui.md:928: `#55958` details: a failed refresh of an explicit provider catalog no longer"
+    "Round 1250: model/models_endpoint.go:60 keeps the prior successful explicit provider catalog when a refresh fails: a transient failure preserves it, an access rejection invalidates it and an empty explicit catalog persists. Tests: model/models_catalog_preservation_like_rust_test.go TestRemoteModelsManagerPreservesExplicitCatalogOnTransientFailureLikeRust, TestRemoteModelsManagerInvalidatesExplicitCatalogOnAccessRejectionLikeRust, TestRemoteModelsManagerPersistsEmptyExplicitCatalogLikeRust."
    ]
   },
   {
