@@ -4,7 +4,9 @@ package windowsandboxservice
 
 import (
 	"errors"
+	"fmt"
 	"sync"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 
@@ -118,6 +120,113 @@ func (lifecycle *Lifecycle) ServeProvisioningRequest(
 		return provisionservice.Response{}, err
 	}
 	return RunProvisioning(identity, request, sandboxSID, stopped, lifecycle.RegisterOwner, setup)
+}
+
+// querySessionUserToken opens the logged-in user token of one session
+// (Rust WTSQueryUserToken).
+var querySessionUserToken = func(sessionID uint32) (windows.Token, error) {
+	var token windows.Token
+	if err := windows.WTSQueryUserToken(sessionID, &token); err != nil {
+		return 0, err
+	}
+	return token, nil
+}
+
+// listWindowsSessions enumerates current sessions so an owner whose session ID
+// changed while the service was stopped can still be restored (Rust
+// WTSEnumerateSessionsW).
+var listWindowsSessions = func() ([]uint32, error) {
+	var sessions *windows.WTS_SESSION_INFO
+	var count uint32
+	if err := windows.WTSEnumerateSessions(0, 0, 1, &sessions, &count); err != nil {
+		return nil, err
+	}
+	defer windows.WTSFreeMemory(uintptr(unsafe.Pointer(sessions)))
+	entries := unsafe.Slice(sessions, int(count))
+	sessionIDs := make([]uint32, 0, len(entries))
+	for _, entry := range entries {
+		sessionIDs = append(sessionIDs, entry.SessionID)
+	}
+	return sessionIDs, nil
+}
+
+// RestoreAuthenticatedUser ports PackageLifecycle::restore_authenticated_user:
+// a retained installation needs no work, a record owned by another package
+// family is skipped, and the session user must be the recorded owner before its
+// token is registered and its home pinned.
+func (lifecycle *Lifecycle) RestoreAuthenticatedUser(sessionID uint32) error {
+	if lifecycle == nil {
+		return errors.New("missing sandbox lifecycle")
+	}
+	lifecycle.mu.Lock()
+	retained := lifecycle.installation != nil
+	lifecycle.mu.Unlock()
+	if retained {
+		return nil
+	}
+	record, err := lifecycle.loadRecord()
+	if err != nil || record == nil {
+		return err
+	}
+	if record.Runtime != nil {
+		current, err := windowssandbox.InstallationIsCurrentPackage(record)
+		if err != nil {
+			return err
+		}
+		if !current {
+			return nil
+		}
+	}
+	token, err := querySessionUserToken(sessionID)
+	if err != nil {
+		return fmt.Errorf("open the logged-in user token: %w", err)
+	}
+	userSID, err := tokenUserSIDBytes(token)
+	if err != nil {
+		_ = token.Close()
+		return err
+	}
+	if windowssandbox.StringFromSIDBytes(userSID) != record.UserSID {
+		_ = token.Close()
+		return errors.New("logged-in user does not match the recorded sandbox owner")
+	}
+	restored := *record
+	restored.SessionID = sessionID
+	if _, err := lifecycle.RegisterOwner(&restored, token, windowssandbox.SetupRuntimeLegacy); err != nil {
+		_ = token.Close()
+		return err
+	}
+	return nil
+}
+
+// RestoreRecordedOwner ports PackageLifecycle::restore_logged_in_owner: retry
+// the recorded session, then any other session whose user matches the recorded
+// owner SID, because session IDs can change while the service is stopped.
+func (lifecycle *Lifecycle) RestoreRecordedOwner() error {
+	if lifecycle == nil {
+		return errors.New("missing sandbox lifecycle")
+	}
+	record, err := lifecycle.loadRecord()
+	if err != nil || record == nil {
+		return err
+	}
+	recordedErr := lifecycle.RestoreAuthenticatedUser(record.SessionID)
+	if recordedErr == nil {
+		return nil
+	}
+	sessionIDs, err := listWindowsSessions()
+	if err != nil {
+		return fmt.Errorf("list current Windows sessions: %w", err)
+	}
+	for _, sessionID := range sessionIDs {
+		if sessionID == record.SessionID {
+			continue
+		}
+		if lifecycle.RestoreAuthenticatedUser(sessionID) == nil {
+			return nil
+		}
+	}
+	return recordedErr
 }
 
 // CodexHome reports the home retained for uninstall cleanup, or "" when the

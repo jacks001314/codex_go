@@ -102,7 +102,8 @@ func refreshProvisioningSession(stopped func() bool, onSessionChange func() erro
 // provisioning pipe, enforces managed policy and registers uninstall owners
 // through the lifecycle (Rust service::service_main_inner and
 // runtime_lifecycle::run). Owner-aware uninstall cleanup is not wired yet, so a
-// session change keeps the current owner.
+// session change restores the recorded owner without checking a removed
+// runtime.
 func NewProvisioningBroker(lifecycle *Lifecycle, setup SetupRunner) ServiceBroker {
 	return func(state *ServiceState) error {
 		handler := func(identity *ClientIdentity, request *ServiceRequest, sandboxSID []byte, stopped func() bool) (provisionservice.Response, error) {
@@ -116,7 +117,17 @@ func NewProvisioningBroker(lifecycle *Lifecycle, setup SetupRunner) ServiceBroke
 				LogInformation(EventServiceStarted, "The Codex sandbox service is running.")
 				return nil
 			},
-			OnSessionChange: func() error { return nil },
+			OnSessionChange: func() error { return restoreOwnerForBroker(lifecycle) },
 		}, handler, MachinePolicyValidator)
 	}
+}
+
+// restoreOwnerForBroker restores the recorded owner between admissions. A
+// failure is logged and does not stop the listener, so other clients can still
+// use elevated setup (Rust runtime_lifecycle::run restore_owner).
+func restoreOwnerForBroker(lifecycle *Lifecycle) error {
+	if err := lifecycle.RestoreRecordedOwner(); err != nil {
+		LogError(EventServiceFailed, "unable to restore package uninstall listener: "+ErrorMessage(err))
+	}
+	return nil
 }
