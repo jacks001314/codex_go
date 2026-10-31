@@ -20,6 +20,23 @@ func RunCLI(args []string, stdin io.Reader, stdout, stderr io.Writer, cwd string
 		fmt.Fprintln(stderr, "Error: apply_patch requires a PATCH argument or stdin input.")
 		return 1
 	}
+	return runPatch(patch, stdout, stderr, cwd)
+}
+
+// RunCoreFlagCLI mirrors Rust's `codex --codex-run-as-apply-patch <PATCH>`
+// dispatch: the first argument is the patch, stdin is never read, extra
+// arguments are ignored, and a missing argument is an anyhow error.
+func RunCoreFlagCLI(args []string, stdout, stderr io.Writer, cwd string) int {
+	if len(args) == 0 {
+		if stderr != nil {
+			fmt.Fprintln(stderr, "Error: --codex-run-as-apply-patch requires a UTF-8 PATCH argument.")
+		}
+		return 1
+	}
+	return runPatch(args[0], stdout, stderr, cwd)
+}
+
+func runPatch(patch string, stdout, stderr io.Writer, cwd string) int {
 	if strings.TrimSpace(cwd) == "" {
 		cwd = "."
 	}

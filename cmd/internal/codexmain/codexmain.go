@@ -104,7 +104,7 @@ func dispatchInternalHelper(argv0, argv1 string, args []string, stdin io.Reader,
 		return applypatch.RunCLI(args, stdin, stdout, stderr, cwd), true
 	case "apply_patch_core":
 		cwd, _ := os.Getwd()
-		return applypatch.RunCLI(args[1:], stdin, stdout, stderr, cwd), true
+		return applypatch.RunCoreFlagCLI(args[1:], stdout, stderr, cwd), true
 	case "linux_sandbox":
 		return sandbox.RunLinuxSandboxHelper(args, stdout, stderr), true
 	case "execve_wrapper":

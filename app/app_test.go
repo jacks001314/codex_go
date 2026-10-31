@@ -910,7 +910,9 @@ func TestInteractivePromptUsesExecRunner(t *testing.T) {
 	t.Setenv("CODEX_HOME", t.TempDir())
 	t.Setenv("OPENAI_API_KEY", "sk-test")
 	var stdout, stderr bytes.Buffer
-	if err := Run(context.Background(), []string{"hello", "from", "interactive"}, strings.NewReader(""), &stdout, &stderr); err != nil {
+	// Rust declares a single [PROMPT] positional, so multi-word prompts arrive
+	// as one shell-quoted argument.
+	if err := Run(context.Background(), []string{"hello from interactive"}, strings.NewReader(""), &stdout, &stderr); err != nil {
 		t.Fatalf("interactive prompt returned error: %v", err)
 	}
 	if !strings.Contains(stdout.String(), "hello from interactive") {

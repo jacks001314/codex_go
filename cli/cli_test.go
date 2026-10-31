@@ -621,15 +621,20 @@ func TestParseFeaturesEnable(t *testing.T) {
 }
 
 func TestParseInteractivePrompt(t *testing.T) {
-	parsed, err := Parse([]string{"fix", "tests"})
+	parsed, err := Parse([]string{"fix"})
 	if err != nil {
 		t.Fatalf("Parse returned error: %v", err)
 	}
 	if parsed.Command != CommandInteractive {
 		t.Fatalf("Command = %q, want interactive", parsed.Command)
 	}
-	if parsed.Root.Prompt != "fix tests" {
+	if parsed.Root.Prompt != "fix" {
 		t.Fatalf("Prompt = %q", parsed.Root.Prompt)
+	}
+	// Rust's root parser declares a single [PROMPT] positional, so clap rejects
+	// a second one instead of joining the words.
+	if _, err := Parse([]string{"fix", "tests"}); err == nil || err.Error() != "unexpected argument 'tests' found" {
+		t.Fatalf("Parse(fix tests) error = %v, want clap positional diagnostic", err)
 	}
 }
 

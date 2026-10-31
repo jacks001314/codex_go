@@ -684,14 +684,14 @@ func Parse(args []string) (*Parsed, error) {
 		},
 	}
 
-	rest, err := parseRoot(args, &p.Root)
+	rest, promptOnly, err := parseRoot(args, &p.Root)
 	if err != nil {
 		return nil, err
 	}
 	if len(rest) == 0 {
 		return p, p.Validate()
 	}
-	if cmd, ok := knownCommands[rest[0]]; ok {
+	if cmd, ok := knownCommands[rest[0]]; ok && !promptOnly {
 		p.Command = cmd
 		p.RawSubcommand = append([]string(nil), rest...)
 		if p.Root.StrictConfig && strictConfigUnsupportedBeforeSubcommandParse(cmd) {
@@ -935,34 +935,47 @@ func (p *Parsed) remoteUnsupportedSubcommandName() string {
 	}
 }
 
-func parseRoot(args []string, root *RootOptions) ([]string, error) {
+func parseRoot(args []string, root *RootOptions) ([]string, bool, error) {
 	var rest []string
+	promptSet := false
+	appendPrompt := func(value string) error {
+		if promptSet {
+			return unexpectedPositionalError(value, rootUsageText)
+		}
+		promptSet = true
+		rest = append(rest, value)
+		return nil
+	}
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if handled, err := parseSharedOptionVariadicImages(args, &i, &root.Shared); err != nil {
-			return nil, err
+			return nil, false, err
 		} else if handled {
 			continue
 		}
 		if handled, err := parseTUIOnlyOption(args, &i, &root.Shared); err != nil {
-			return nil, err
+			return nil, false, err
 		} else if handled {
 			continue
 		}
 		if arg == "--" {
-			rest = append(rest, args[i+1:]...)
-			break
+			for _, value := range args[i+1:] {
+				if err := appendPrompt(value); err != nil {
+					return nil, false, err
+				}
+			}
+			return rest, true, nil
 		}
-		if cmd, ok := knownCommands[arg]; ok {
-			_ = cmd
-			rest = append(rest, args[i:]...)
-			break
+		if !promptSet {
+			if _, ok := knownCommands[arg]; ok {
+				return append(rest, args[i:]...), false, nil
+			}
 		}
 		switch {
 		case arg == "-c" || arg == "--config":
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
 			root.ConfigOverrides = append(root.ConfigOverrides, value)
 			i = next
@@ -973,7 +986,7 @@ func parseRoot(args []string, root *RootOptions) ([]string, error) {
 		case arg == "--enable":
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
 			root.EnableFeatures = append(root.EnableFeatures, value)
 			i = next
@@ -982,7 +995,7 @@ func parseRoot(args []string, root *RootOptions) ([]string, error) {
 		case arg == "--disable":
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
 			root.DisableFeatures = append(root.DisableFeatures, value)
 			i = next
@@ -991,7 +1004,7 @@ func parseRoot(args []string, root *RootOptions) ([]string, error) {
 		case arg == "--remote":
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
 			root.Remote = value
 			i = next
@@ -1000,7 +1013,7 @@ func parseRoot(args []string, root *RootOptions) ([]string, error) {
 		case arg == "--remote-auth-token-env":
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
 			root.RemoteAuthEnv = value
 			i = next
@@ -1009,13 +1022,14 @@ func parseRoot(args []string, root *RootOptions) ([]string, error) {
 		case arg == "--strict-config":
 			root.StrictConfig = true
 		case strings.HasPrefix(arg, "-"):
-			return nil, fmt.Errorf("unknown root option %s", arg)
+			return nil, false, unexpectedRootArgumentError(arg, args[i+1:])
 		default:
-			rest = append(rest, args[i:]...)
-			i = len(args)
+			if err := appendPrompt(arg); err != nil {
+				return nil, false, err
+			}
 		}
 	}
-	return rest, nil
+	return rest, false, nil
 }
 
 func parseExec(args []string, exec *ExecOptions) error {
@@ -3588,9 +3602,9 @@ func parseDoctor(args []string, doctor *DoctorOptions) error {
 		case strings.HasPrefix(arg, "--probe-filesystem-path="):
 			doctor.ProbeFilesystemPath = strings.TrimPrefix(arg, "--probe-filesystem-path=")
 		case strings.HasPrefix(arg, "-"):
-			return fmt.Errorf("unknown doctor option %s", arg)
+			return unexpectedArgumentWithoutTip(arg, doctorUsageText)
 		default:
-			return fmt.Errorf("doctor does not accept argument %s", arg)
+			return unexpectedArgumentWithoutTip(arg, doctorUsageText)
 		}
 	}
 	return nil
@@ -4229,7 +4243,7 @@ func setExecCyberAccessProgram(exec *ExecOptions, value string) error {
 
 func requireValue(args []string, i int, flag string) (string, int, error) {
 	if i+1 >= len(args) {
-		return "", i, fmt.Errorf("%s requires a value", flag)
+		return "", i, valueRequiredError(flag)
 	}
 	return args[i+1], i + 1, nil
 }
