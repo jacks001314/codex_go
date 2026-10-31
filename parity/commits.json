@@ -36606,8 +36606,8 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:52: | `#57227` | Restore acknowledged permissions on resume/fork | `rollout/rollout.go`, `rollout/session_items.go`, `appserver/persisted_resume_settings.go`, `appserver/router.go`, `appserver/runtime_router.go`, like-Rust tests |",
-    "plan_2026_10_27_nontui.md:534: `#57227` details: settings snapshots now persist `approvals_reviewer` and both"
+    "rollout/rollout.go:765 persists ThreadSettingsApplied snapshots with approvals_reviewer and permission profiles; appserver/persisted_resume_settings.go:136 and :155 restore the newest owned snapshot for cold resume and fork rather than a stale turn context.",
+    "appserver/persisted_resume_settings_like_rust_test.go:77 TestColdResumeRestoresOwnedSettingsOverStaleTurnContextLikeRust, :108 TestColdResumeExplicitSettingsBeatOwnedSnapshotLikeRust, and :144 TestColdForkRestoresOwnedSettingsOverStaleTurnContextLikeRust pin the acknowledged settings precedence."
    ]
   },
   {
@@ -37769,8 +37769,8 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_27_nontui.md:8: `#57483`).",
-    "plan_2026_10_27_nontui.md:136: | `#57483` | Selected-thread rollout migration reads the state index first and skips rollout headers whose indexed owner and canonical filename agree that they belong to an unselected thread; selected, misnamed, conflicting and unindexed paths still get a header inspection, and a missing/busy database falls back to inspecting everything | `state/rollout_migration.go`, `rollout/rollout.go`, `rollou"
+    "rollout/migrate.go:259 prunes indexed rollout paths that provably belong to unselected threads while preserving selected, renamed, conflicting, and unindexed paths; state/rollout_migration.go:44 reads the state index without creating a database.",
+    "rollout/migrate_test.go:417 TestMigrateRolloutsSelectedThreadsSkipUnrelatedIndexedHeadersLikeRust covers the unselected-header skip and the fallback inspection paths."
    ]
   },
   {
@@ -37879,8 +37879,8 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_28.md:22: | `#57506` | Guardian request mappings moved into reviewer crate | Structural move; verify Go mapping coverage. |",
-    "plan_2026_10_28.md:46: - `#57488`, `#57493`, `#57506`, `#57509`: verified Go already owns guardian"
+    "The Rust commit is a reviewer-crate structural move. Go already centralizes Guardian action JSON and request mapping in state/guardian.go:124 and state/guardian_action_prompt.go:82; there is no separate reviewer crate boundary in Go.",
+    "state/guardian_test.go:509 TestGuardianActionJSONMatchesRust pins the behavior that moved."
    ]
   },
   {
@@ -38218,8 +38218,8 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_28_sync2.md:29: | `#57586` | Host-reserved V2 child creation APIs | Port host-reserved spawn surface into agent runtime. |",
-    "plan_2026_10_28_sync2.md:60: | `#57586` | `agent/invocation.go`, `turn/tool_dispatcher.go`, `turn/runtime.go`, `appserver/agent_controller.go`, `appserver/host_invocation.go`, `appserver/runtime_router.go` | `agent/invocation_like_rust_test.go`, `turn/host_invocation_like_rust_test.go`, `appserver/host_child_like_rust_test.go` |"
+    "agent/invocation.go:185 defines HostThreadSpawnReservation, turn/tool_dispatcher.go reserves live call IDs before admission, and appserver/host_invocation.go:125 and :312 implement CreateChild and reserved-child startup under the host ID.",
+    "agent/invocation_like_rust_test.go:11, turn/host_invocation_like_rust_test.go:18, and appserver/host_child_like_rust_test.go:68 TestCreateChildUsesHostReservedIDLikeRust cover the reservation lifecycle."
    ]
   },
   {
@@ -38231,8 +38231,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_28_sync2.md:30: | `#57589`/`#57590` | Standalone `codex-exec-server` binary + packaging | Port standalone binary entrypoint and installer/package references. |",
-    "plan_2026_10_28_sync2.md:61: | `#57589`/`#57590` | `cmd/internal/codexmain`, `cmd/codex-exec-server`, `npm/scripts/build-packages.mjs`, `scripts/build.*`, `appserverdaemon/prepare_install.go`, `install/context.go` | `cmd/codex-exec-server/main_test.go`, `appserverdaemon/exec_server_package_like_rust_test.go`, `install/exec_server_manifest_like_rust_test.go` |"
+    "cmd/codex-exec-server/main.go:13 provides the standalone executable and cmd/codex-exec-server/main_test.go:9-44 pins its version, help, option validation, and subcommand-free argument parsing."
    ]
   },
   {
@@ -38244,8 +38243,8 @@
    ],
    "status": "complete",
    "evidence": [
-    "plan_2026_10_28_sync2.md:30: | `#57589`/`#57590` | Standalone `codex-exec-server` binary + packaging | Port standalone binary entrypoint and installer/package references. |",
-    "plan_2026_10_28_sync2.md:61: | `#57589`/`#57590` | `cmd/internal/codexmain`, `cmd/codex-exec-server`, `npm/scripts/build-packages.mjs`, `scripts/build.*`, `appserverdaemon/prepare_install.go`, `install/context.go` | `cmd/codex-exec-server/main_test.go`, `appserverdaemon/exec_server_package_like_rust_test.go`, `install/exec_server_manifest_like_rust_test.go` |"
+    "scripts/build.sh:126, scripts/build.ps1:128, and npm/scripts/build-packages.mjs:85 build and name codex-exec-server beside the CLI; appserverdaemon/prepare_install.go:483 and install/context.go:71 carry the advertised artifact.",
+    "scripts/exec_server_package_like_rust_test.go:12 TestPackagingShipsStandaloneExecutorLikeRust, appserverdaemon/exec_server_package_like_rust_test.go:11, and install/exec_server_manifest_like_rust_test.go:11 verify packaging and installation resolution."
    ]
   },
   {
@@ -38279,10 +38278,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "partial",
    "evidence": [
-    "plan_2026_10_28_sync2.md:32: | `#57598` | `fs_watch_missing` empty skill cache | Port protocol capability, watch registration and cache invalidation. |",
-    "plan_2026_10_28_sync2.md:62: | `#57598` (executor half) | `execserver/server.go`, `missing_watch*.go`, `execserver/client.go` | `execserver/missing_watch_like_rust_test.go`, `execserver/missing_watch_linux_test.go` |"
+    "Round 1262: partial — the exec-server half is present: execserver/server.go:565 advertises fsWatchMissing, execserver/missing_watch.go:35 implements the Linux watch, and execserver/missing_watch_like_rust_test.go:13 plus missing_watch_linux_test.go:17 cover it.",
+    "Residual: appserver/turn_runtime.go:11354 caches remote executor skill discovery in a sync.Once entry and never calls execserver Client.WatchMissing, so an initially empty remote skills root remains cached after files appear. Rust #57598's EmptyRemoteRootsCache invalidation has no Go caller yet."
    ]
   },
   {
@@ -38478,7 +38477,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:142: #57667 完成 — 核心对齐待实现"
+    "appserver/review_inline_only_like_rust_test.go:14 TestRuntimeRouterReviewStartIsInlineOnlyLikeRust rejects delivery=detached with invalid params and no deprecation notice while nil/inline delivery stays inline."
    ]
   },
   {
@@ -38538,7 +38537,8 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:147: #57710 完成 — `network.RoutingAffinity`（捕获 `__oailb`/`__cflb`，保留 scope/expiry，合并时替换 routing cookie）、WS 握手捕获与 `response.created` 透传、review 期间快照（含重试）且仅随匹配的 `parent_response_id` 下发，pin 变更重连 reviewer socket。`go test ./"
+    "network/chatgpt_routing_affinity.go:20 captures __oailb/__cflb, model/responses_agent.go:1321 pins the parent affinity for Guardian reviews, and appserver/guardian_reviewer.go:1760 forwards it with the matching parent response.",
+    "network/chatgpt_routing_affinity_like_rust_test.go:13, model/guardian_routing_affinity_like_rust_test.go:19, appserver/guardian_routing_affinity_like_rust_test.go:31, and :94 cover capture, response.created propagation, retry retention, and parent matching."
    ]
   },
   {
@@ -38622,7 +38622,8 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:154: #57757 完成 — 核心对齐待实现"
+    "model/responses_stream.go:2065 emits ResponsesStreamEventGuardianAssessment from response metadata, and :2131 parses action-bound assessments with response and item identity.",
+    "model/guardian_assessment_stream_like_rust_test.go:11 TestGuardianAssessmentFromResponseMetadataLikeRust and :37 TestResponsesStreamEmitsGuardianAssessmentLikeRust cover the stream event."
    ]
   },
   {
@@ -38634,7 +38635,8 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:155: #57758 完成 — 核心对齐待实现"
+    "state/guardian.go:144 carries the terminal launch command and state/guardian_action_prompt.go:167 serializes it as original_command in Guardian stdin reviews.",
+    "state/guardian_stdin_original_command_like_rust_test.go:11 TestGuardianWriteStdinReviewIncludesOriginalCommandLikeRust covers the review payload."
    ]
   },
   {
@@ -38646,7 +38648,8 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:156: #57770 完成 — 新增 `ModelOrigin`（bundled/provider/explicit_config）与 `ModelsManager.ModelCatalogWithOrigins`，origin 跨合并/缓存重载/空响应保持；Guardian 选择 reviewer 时排除 bundled（有 `auto_review_model_override` 时放行）；static manager 记录"
+    "model/catalog.go:1188 defines ModelOrigin, model/models_endpoint.go:541 exposes ModelCatalogWithOrigins, and appserver/guardian_review_catalog_refresh.go:106 excludes bundled entries unless auto_review_model_override explicitly permits them.",
+    "model/catalog_origins_like_rust_test.go:9 TestModelCatalogOriginsSurviveMergeLikeRust and appserver/guardian_reviewer_catalog_origins_like_rust_test.go:14 TestGuardianReviewerRespectsCatalogOriginsLikeRust cover provider, explicit-config, and bundled origins."
    ]
   },
   {
@@ -38670,7 +38673,8 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:158: #57782 完成 — 核心对齐待实现"
+    "codemode/remote_provider.go:546 admits the session once and reuses the live host channel; only session admission asks the provider for a replacement host.",
+    "codemode/output_truncation_negotiation_like_rust_test.go:238 TestRemoteSessionReusesLiveHostChannelLikeRust covers the no-replacement path."
    ]
   },
   {
@@ -38694,7 +38698,8 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:160: #57787 完成 — 修复 app-server thread listener 启停竞态"
+    "appserver/thread_idle_lifecycle.go:352 acquires a thread residency pin that waits out an in-flight idle eviction and re-checks listener installation under the same lock.",
+    "appserver/thread_listener_startup_race_like_rust_test.go:14 TestThreadResumeWaitsForPendingUnloadLikeRust, :59 TestThreadResidencyPinBlocksIdleUnloadLikeRust, and :89 TestInstallThreadSubscriptionRejectsEvictedRuntimeLikeRust cover the startup/shutdown race."
    ]
   },
   {
@@ -38706,7 +38711,8 @@
    ],
    "status": "complete",
    "evidence": [
-    "update/plan_2026_10_30.md:161: #57788 完成 — shutdown 后释放 app-server thread runtime"
+    "appserver/runtime_router.go:5110 removes the connection before checking notLoaded and only clears terminal subscriptions after the last subscriber is gone.",
+    "appserver/thread_unsubscribe_not_loaded_like_rust_test.go:13 TestThreadUnsubscribeNotLoadedKeepsOtherSubscribersLikeRust covers the not-loaded unsubscribe path."
    ]
   },
   {
