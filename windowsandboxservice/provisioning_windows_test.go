@@ -112,3 +112,22 @@ func TestRunProvisioningLaunchesTheInjectedSetup(t *testing.T) {
 		t.Fatalf("RunProvisioning() = %+v, launched %d times", response, launched)
 	}
 }
+
+func TestRunPackagedSetupRequiresThePackagedHelper(t *testing.T) {
+	err := RunPackagedSetup(
+		&ClientIdentity{CodexHome: t.TempDir(), Account: `DOMAIN\owner`, Token: openTestToken(t)},
+		&ProvisioningRequest{},
+	)
+	if err == nil || !strings.Contains(err.Error(), "packaged setup helper") {
+		t.Fatalf("RunPackagedSetup() error = %v", err)
+	}
+}
+
+func TestRunPackagedSetupRequiresAnAuthenticatedRequest(t *testing.T) {
+	if err := RunPackagedSetup(nil, &ProvisioningRequest{}); err == nil {
+		t.Fatal("RunPackagedSetup() accepted a missing identity")
+	}
+	if err := RunPackagedSetup(&ClientIdentity{}, nil); err == nil {
+		t.Fatal("RunPackagedSetup() accepted a missing request")
+	}
+}

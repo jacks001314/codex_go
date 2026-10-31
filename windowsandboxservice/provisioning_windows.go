@@ -111,6 +111,29 @@ func registerAuthenticatedOwner(identity *ClientIdentity, registerOwner OwnerReg
 	return nil
 }
 
+// RunPackagedSetup launches the packaged setup helper for one authenticated
+// legacy provisioning request, keeping the client directory pins open until the
+// helper exits (Rust provisioning::run legacy arm).
+func RunPackagedSetup(identity *ClientIdentity, request *ProvisioningRequest) error {
+	if identity == nil || request == nil {
+		return errors.New("missing authenticated provisioning request")
+	}
+	if _, err := packagedSetupHelper(); err != nil {
+		return err
+	}
+	settings := windowssandbox.OfflineProxySettings{
+		ProxyPorts:        append([]uint16(nil), request.Settings.ProxyPorts...),
+		AllowLocalBinding: request.Settings.AllowLocalBinding,
+	}
+	return windowssandbox.RunElevatedProvisioningSetupWithRetainedHandles(
+		identity.CodexHome,
+		identity.Account,
+		settings,
+		identity.Runtime,
+		identity.DirectoryHandles,
+	)
+}
+
 func setupIsCompleteAsOwner(identity *ClientIdentity, settings windowssandbox.OfflineProxySettings) (bool, error) {
 	complete := false
 	err := withOwnerImpersonation(identity.Token, func() error {

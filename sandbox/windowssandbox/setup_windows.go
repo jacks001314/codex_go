@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"unsafe"
@@ -68,7 +69,12 @@ func setupUserProfile() string {
 // setupPayloadRuntime serializes the selected setup runtime. Legacy stays
 // omitted so payloads remain wire-compatible (Rust skips serializing Legacy).
 func setupPayloadRuntime() string {
-	if CurrentSetupRuntime().IsLegacy() {
+	return setupRuntimeValue(CurrentSetupRuntime())
+}
+
+// setupRuntimeValue serializes the selected setup runtime for a payload.
+func setupRuntimeValue(runtime SetupRuntime) string {
+	if runtime.IsLegacy() {
 		return ""
 	}
 	return string(SetupRuntimeRegistered)
@@ -139,7 +145,7 @@ func runElevatedSetup(req *SandboxSetupRequest) error {
 	if err != nil {
 		return setupFailuref(SetupErrorOrchestratorElevationCheckFailed, "failed to determine elevation state: %v", err)
 	}
-	return runSetupExe(payload, !elevated, req.CodexHome, true)
+	return runSetupExe(payload, !elevated, req.CodexHome, true, nil)
 }
 
 // elevatedProvisioningPayload keeps privileged interactive setup limited to
@@ -211,7 +217,64 @@ func runElevatedProvisioningSetup(req *SandboxSetupRequest) error {
 		Mode:            setupModeProvisionOnly,
 		Runtime:         setupPayloadRuntime(),
 	}
-	return runSetupExe(payload, false, req.CodexHome, true)
+	return runSetupExe(payload, false, req.CodexHome, true, nil)
+}
+
+// RunElevatedProvisioningSetupWithRetainedHandles ports the service-side
+// provisioning launch (Rust run_elevated_provisioning_setup_with_retained_handles):
+// the service is already elevated, so the helper starts without elevation while
+// every retained home/ancestor handle is duplicated into it for the duration of
+// the run.
+func RunElevatedProvisioningSetupWithRetainedHandles(codexHome, realUser string, settings OfflineProxySettings, runtime SetupRuntime, retained []windows.Handle) error {
+	if !isLocalDiskPath(codexHome) {
+		return setupFailuref(
+			SetupErrorOrchestratorSandboxDirCreateFailed,
+			"sandbox provisioning CODEX_HOME must be an absolute local disk path: %s", codexHome,
+		)
+	}
+	sbxDir := SandboxDir(codexHome)
+	if err := os.MkdirAll(sbxDir, 0o700); err != nil {
+		return setupFailuref(
+			SetupErrorOrchestratorSandboxDirCreateFailed,
+			"failed to create sandbox dir %s: %v", sbxDir, err,
+		)
+	}
+	elevated, err := isElevated()
+	if err != nil {
+		return setupFailuref(SetupErrorOrchestratorElevationCheckFailed, "failed to determine elevation state: %v", err)
+	}
+	if !elevated {
+		return setupFailuref(
+			SetupErrorOrchestratorElevationRequired,
+			"sandbox provisioning setup must be run from an elevated process",
+		)
+	}
+	payload := &setupElevationPayload{
+		Version:           SetupVersion,
+		OfflineUsername:   OfflineUsername,
+		OnlineUsername:    OnlineUsername,
+		CodexHome:         codexHome,
+		CommandCWD:        codexHome,
+		ReadRoots:         []string{},
+		WriteRoots:        []string{},
+		ProxyPorts:        append([]uint16(nil), settings.ProxyPorts...),
+		AllowLocalBinding: settings.AllowLocalBinding,
+		RealUser:          setupRealUser(realUser),
+		UserProfile:       setupUserProfile(),
+		Mode:              setupModeProvisionOnly,
+		Runtime:           setupRuntimeValue(runtime),
+	}
+	return runSetupExe(payload, false, codexHome, true, retained)
+}
+
+// isLocalDiskPath mirrors Rust's absolute local disk prefix check: no UNC or
+// device paths, only a drive-letter root.
+func isLocalDiskPath(path string) bool {
+	if !filepath.IsAbs(path) {
+		return false
+	}
+	volume := strings.TrimPrefix(filepath.VolumeName(path), `\\?\`)
+	return len(volume) == 2 && volume[1] == ':'
 }
 
 func runSetupRefresh(codexHome string) error {
@@ -244,7 +307,7 @@ func runSetupRefresh(codexHome string) error {
 		RefreshOnly:       true,
 		Runtime:           setupPayloadRuntime(),
 	}
-	return runSetupExe(payload, false, codexHome, true)
+	return runSetupExe(payload, false, codexHome, true, nil)
 }
 
 func runSetupRefreshForRequest(req *SandboxSetupRequest) error {
@@ -282,10 +345,10 @@ func runSetupRefreshForRequest(req *SandboxSetupRequest) error {
 		RefreshOnly:       true,
 		Runtime:           setupPayloadRuntime(),
 	}
-	return runSetupExe(payload, false, req.CodexHome, true)
+	return runSetupExe(payload, false, req.CodexHome, true, nil)
 }
 
-func runSetupExe(payload *setupElevationPayload, needsElevation bool, codexHome string, verifyComplete bool) error {
+func runSetupExe(payload *setupElevationPayload, needsElevation bool, codexHome string, verifyComplete bool, retained []windows.Handle) error {
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
 		return setupFailuref(SetupErrorOrchestratorPayloadSerializeFailed, "failed to serialize elevation payload: %v", err)
@@ -316,7 +379,7 @@ func runSetupExe(payload *setupElevationPayload, needsElevation bool, codexHome 
 		useDispatchFlag = false
 	}
 	if !needsElevation {
-		status, err := runSetupExeNonElevated(exe, payloadB64, useDispatchFlag, launchEnv)
+		status, err := runSetupExeNonElevated(exe, payloadB64, useDispatchFlag, launchEnv, retained)
 		if err != nil {
 			return setupFailuref(SetupErrorOrchestratorHelperLaunchFailed, "failed to launch setup helper (non-elevated): %v", err)
 		}
@@ -351,7 +414,7 @@ func runSetupExe(payload *setupElevationPayload, needsElevation bool, codexHome 
 	return nil
 }
 
-func runSetupExeNonElevated(exe string, payloadB64 string, useDispatchFlag bool, launchEnv map[string]string) (*os.ProcessState, error) {
+func runSetupExeNonElevated(exe string, payloadB64 string, useDispatchFlag bool, launchEnv map[string]string, retained []windows.Handle) (*os.ProcessState, error) {
 	args := setupExecutableArgs(payloadB64, useDispatchFlag)
 	if launchEnv != nil {
 		args = []string{launchPayloadEnvFlag}
@@ -364,6 +427,13 @@ func runSetupExeNonElevated(exe string, payloadB64 string, useDispatchFlag bool,
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: createNoWindow}
+	if len(retained) > 0 {
+		// The helper keeps the pinned directories open until it exits.
+		if err := StartWithRetainedHandles(cmd, retained); err != nil {
+			return nil, err
+		}
+		return cmd.Process.Wait()
+	}
 	return nilIfNoState(cmd)
 }
 
