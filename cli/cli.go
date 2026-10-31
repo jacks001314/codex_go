@@ -1241,7 +1241,7 @@ func parseRoot(args []string, root *RootOptions) ([]string, bool, error) {
 			root.ConfigOverrides = append(root.ConfigOverrides, value)
 			i = next
 		case strings.HasPrefix(arg, "-c") && arg != "-C" && arg != "--config":
-			root.ConfigOverrides = append(root.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
+			root.ConfigOverrides = append(root.ConfigOverrides, shortAttachedValue(arg, "-c"))
 		case strings.HasPrefix(arg, "--config="):
 			root.ConfigOverrides = append(root.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
 		case arg == "--enable":
@@ -1450,7 +1450,7 @@ func parseExec(args []string, exec *ExecOptions) error {
 		case strings.HasPrefix(arg, "--config="):
 			exec.ConfigOverrides = append(exec.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
 		case strings.HasPrefix(arg, "-c") && arg != "-C":
-			exec.ConfigOverrides = append(exec.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
+			exec.ConfigOverrides = append(exec.ConfigOverrides, shortAttachedValue(arg, "-c"))
 		case strings.HasPrefix(arg, "-"):
 			return clapUnexpectedLongFlagError("exec", arg, args[:i])
 		default:
@@ -1695,7 +1695,7 @@ func parseLogin(args []string, login *LoginOptions) error {
 		case strings.HasPrefix(arg, "--config="):
 			login.ConfigOverrides = append(login.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
 		case strings.HasPrefix(arg, "-c"):
-			login.ConfigOverrides = append(login.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
+			login.ConfigOverrides = append(login.ConfigOverrides, shortAttachedValue(arg, "-c"))
 		case arg == "status":
 			login.Action = "status"
 		case strings.HasPrefix(arg, "-"):
@@ -1983,7 +1983,7 @@ func parseLogout(args []string, login *LoginOptions) error {
 		case strings.HasPrefix(arg, "--config="):
 			login.ConfigOverrides = append(login.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
 		case strings.HasPrefix(arg, "-c"):
-			login.ConfigOverrides = append(login.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
+			login.ConfigOverrides = append(login.ConfigOverrides, shortAttachedValue(arg, "-c"))
 		default:
 			return unexpectedSubcommandArgumentError("logout", arg)
 		}
@@ -2011,7 +2011,7 @@ func parseFeatures(args []string, features *FeatureOptions) error {
 			case strings.HasPrefix(arg, "--config="):
 				features.ConfigOverrides = append(features.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
 			case strings.HasPrefix(arg, "-c"):
-				features.ConfigOverrides = append(features.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
+				features.ConfigOverrides = append(features.ConfigOverrides, shortAttachedValue(arg, "-c"))
 			default:
 				return unexpectedSubcommandArgumentError("features list", arg)
 			}
@@ -2129,7 +2129,7 @@ func parseMCP(args []string, mcp *MCPOptions) error {
 			case strings.HasPrefix(arg, "--config="):
 				mcp.ConfigOverrides = append(mcp.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
 			case strings.HasPrefix(arg, "-c"):
-				mcp.ConfigOverrides = append(mcp.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
+				mcp.ConfigOverrides = append(mcp.ConfigOverrides, shortAttachedValue(arg, "-c"))
 			case strings.HasPrefix(arg, "-"):
 				return unexpectedSubcommandArgumentError("mcp list", arg)
 			default:
@@ -2157,7 +2157,7 @@ func parseMCP(args []string, mcp *MCPOptions) error {
 			case !afterSeparator && strings.HasPrefix(arg, "--config="):
 				mcp.ConfigOverrides = append(mcp.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
 			case !afterSeparator && strings.HasPrefix(arg, "-c"):
-				mcp.ConfigOverrides = append(mcp.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
+				mcp.ConfigOverrides = append(mcp.ConfigOverrides, shortAttachedValue(arg, "-c"))
 			case !afterSeparator && strings.HasPrefix(arg, "-"):
 				return unexpectedSubcommandArgumentError("mcp get", arg)
 			default:
@@ -2272,7 +2272,7 @@ func parseMCP(args []string, mcp *MCPOptions) error {
 			case strings.HasPrefix(arg, "--config="):
 				mcp.ConfigOverrides = append(mcp.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
 			case strings.HasPrefix(arg, "-c"):
-				mcp.ConfigOverrides = append(mcp.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
+				mcp.ConfigOverrides = append(mcp.ConfigOverrides, shortAttachedValue(arg, "-c"))
 			case strings.HasPrefix(arg, "-") && arg != "-":
 				return unexpectedSubcommandArgumentError("mcp add", arg)
 			default:
@@ -2322,7 +2322,7 @@ func parseMCP(args []string, mcp *MCPOptions) error {
 			case strings.HasPrefix(arg, "--config="):
 				mcp.ConfigOverrides = append(mcp.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
 			case strings.HasPrefix(arg, "-c"):
-				mcp.ConfigOverrides = append(mcp.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
+				mcp.ConfigOverrides = append(mcp.ConfigOverrides, shortAttachedValue(arg, "-c"))
 			case strings.HasPrefix(arg, "-"):
 				return unexpectedSubcommandArgumentError("mcp "+mcp.Action, arg)
 			default:
@@ -2375,7 +2375,7 @@ func parseMCP(args []string, mcp *MCPOptions) error {
 			case strings.HasPrefix(arg, "--config="):
 				mcp.ConfigOverrides = append(mcp.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
 			case strings.HasPrefix(arg, "-c"):
-				mcp.ConfigOverrides = append(mcp.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
+				mcp.ConfigOverrides = append(mcp.ConfigOverrides, shortAttachedValue(arg, "-c"))
 			case strings.HasPrefix(arg, "-"):
 				return unexpectedSubcommandArgumentError("mcp login", arg)
 			default:
@@ -2427,7 +2427,7 @@ func parsePlugin(args []string, plugin *PluginOptions) error {
 			case strings.HasPrefix(arg, "--config="):
 				plugin.ConfigOverrides = append(plugin.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
 			case strings.HasPrefix(arg, "-c"):
-				plugin.ConfigOverrides = append(plugin.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
+				plugin.ConfigOverrides = append(plugin.ConfigOverrides, shortAttachedValue(arg, "-c"))
 			case strings.HasPrefix(arg, "-"):
 				return clapUnexpectedLongFlagError("plugin "+plugin.Action, arg, args[1:i])
 			default:
@@ -2469,7 +2469,7 @@ func parsePlugin(args []string, plugin *PluginOptions) error {
 			case strings.HasPrefix(arg, "--config="):
 				plugin.ConfigOverrides = append(plugin.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
 			case strings.HasPrefix(arg, "-c"):
-				plugin.ConfigOverrides = append(plugin.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
+				plugin.ConfigOverrides = append(plugin.ConfigOverrides, shortAttachedValue(arg, "-c"))
 			case strings.HasPrefix(arg, "-"):
 				return unexpectedSubcommandArgumentError("plugin list", arg)
 			default:
@@ -2527,7 +2527,7 @@ func parsePluginMarketplace(args []string, marketplace *PluginMarketplaceOptions
 			case strings.HasPrefix(arg, "--config="):
 				marketplace.ConfigOverrides = append(marketplace.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
 			case strings.HasPrefix(arg, "-c"):
-				marketplace.ConfigOverrides = append(marketplace.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
+				marketplace.ConfigOverrides = append(marketplace.ConfigOverrides, shortAttachedValue(arg, "-c"))
 			case strings.HasPrefix(arg, "-"):
 				return unexpectedSubcommandArgumentError("plugin marketplace add", arg)
 			default:
@@ -2556,7 +2556,7 @@ func parsePluginMarketplace(args []string, marketplace *PluginMarketplaceOptions
 			case strings.HasPrefix(arg, "--config="):
 				marketplace.ConfigOverrides = append(marketplace.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
 			case strings.HasPrefix(arg, "-c"):
-				marketplace.ConfigOverrides = append(marketplace.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
+				marketplace.ConfigOverrides = append(marketplace.ConfigOverrides, shortAttachedValue(arg, "-c"))
 			case strings.HasPrefix(arg, "-"):
 				return unexpectedSubcommandArgumentError("plugin marketplace list", arg)
 			default:
@@ -2579,7 +2579,7 @@ func parsePluginMarketplace(args []string, marketplace *PluginMarketplaceOptions
 			case strings.HasPrefix(arg, "--config="):
 				marketplace.ConfigOverrides = append(marketplace.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
 			case strings.HasPrefix(arg, "-c"):
-				marketplace.ConfigOverrides = append(marketplace.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
+				marketplace.ConfigOverrides = append(marketplace.ConfigOverrides, shortAttachedValue(arg, "-c"))
 			case strings.HasPrefix(arg, "-"):
 				return unexpectedSubcommandArgumentError("plugin marketplace upgrade", arg)
 			default:
@@ -2605,7 +2605,7 @@ func parsePluginMarketplace(args []string, marketplace *PluginMarketplaceOptions
 			case strings.HasPrefix(arg, "--config="):
 				marketplace.ConfigOverrides = append(marketplace.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
 			case strings.HasPrefix(arg, "-c"):
-				marketplace.ConfigOverrides = append(marketplace.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
+				marketplace.ConfigOverrides = append(marketplace.ConfigOverrides, shortAttachedValue(arg, "-c"))
 			case strings.HasPrefix(arg, "-"):
 				return unexpectedSubcommandArgumentError("plugin marketplace remove", arg)
 			default:
@@ -2844,7 +2844,7 @@ func parseSandbox(args []string, sandbox *SandboxOptions) error {
 		case strings.HasPrefix(arg, "--config="):
 			sandbox.ConfigOverrides = append(sandbox.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
 		case strings.HasPrefix(arg, "-c"):
-			sandbox.ConfigOverrides = append(sandbox.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
+			sandbox.ConfigOverrides = append(sandbox.ConfigOverrides, shortAttachedValue(arg, "-c"))
 		case strings.HasPrefix(arg, "-"):
 			return unexpectedSubcommandArgumentError("sandbox", arg)
 		default:
@@ -3077,7 +3077,7 @@ func parseCloud(args []string, cloud *CloudOptions) error {
 			case strings.HasPrefix(arg, "--config="):
 				cloud.ConfigOverrides = append(cloud.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
 			case strings.HasPrefix(arg, "-c"):
-				cloud.ConfigOverrides = append(cloud.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
+				cloud.ConfigOverrides = append(cloud.ConfigOverrides, shortAttachedValue(arg, "-c"))
 			case strings.HasPrefix(arg, "-"):
 				return clapUnexpectedLongFlagError("cloud exec", arg, args[:i])
 			default:
@@ -3173,7 +3173,7 @@ func parseCloud(args []string, cloud *CloudOptions) error {
 			case strings.HasPrefix(arg, "--config="):
 				cloud.ConfigOverrides = append(cloud.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
 			case strings.HasPrefix(arg, "-c"):
-				cloud.ConfigOverrides = append(cloud.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
+				cloud.ConfigOverrides = append(cloud.ConfigOverrides, shortAttachedValue(arg, "-c"))
 			case strings.HasPrefix(arg, "-"):
 				return unexpectedSubcommandArgumentError("cloud list", arg)
 			default:
@@ -4281,7 +4281,7 @@ func parseQueue(args []string, queue *QueueOptions) error {
 		case strings.HasPrefix(arg, "--config="):
 			queue.ConfigOverrides = append(queue.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
 		case strings.HasPrefix(arg, "-c") && arg != "-C":
-			queue.ConfigOverrides = append(queue.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
+			queue.ConfigOverrides = append(queue.ConfigOverrides, shortAttachedValue(arg, "-c"))
 		case strings.HasPrefix(arg, "-"):
 			return unexpectedSubcommandArgumentError("queue", arg)
 		default:
@@ -4477,7 +4477,7 @@ func parseAgents(args []string, agents *AgentsOptions) error {
 		case strings.HasPrefix(arg, "--config="):
 			agents.ConfigOverrides = append(agents.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
 		case strings.HasPrefix(arg, "-c") && arg != "-C":
-			agents.ConfigOverrides = append(agents.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
+			agents.ConfigOverrides = append(agents.ConfigOverrides, shortAttachedValue(arg, "-c"))
 		default:
 			if strings.HasPrefix(arg, "-") {
 				return unexpectedSubcommandArgumentError("agents", arg)
@@ -4639,7 +4639,7 @@ func parseUpdate(args []string, update *UpdateOptions) error {
 		case strings.HasPrefix(arg, "--config="):
 			update.ConfigOverrides = append(update.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
 		case strings.HasPrefix(arg, "-c"):
-			update.ConfigOverrides = append(update.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
+			update.ConfigOverrides = append(update.ConfigOverrides, shortAttachedValue(arg, "-c"))
 		default:
 			return unexpectedSubcommandArgumentError("update", arg)
 		}
@@ -4663,7 +4663,7 @@ func parseCompletion(args []string, completion *CompletionOptions) error {
 		case strings.HasPrefix(arg, "--config="):
 			completion.ConfigOverrides = append(completion.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
 		case strings.HasPrefix(arg, "-c"):
-			completion.ConfigOverrides = append(completion.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
+			completion.ConfigOverrides = append(completion.ConfigOverrides, shortAttachedValue(arg, "-c"))
 		case strings.HasPrefix(arg, "-") && arg != "-":
 			return unexpectedSubcommandArgumentError("completion", arg)
 		default:
@@ -4714,7 +4714,7 @@ func parseDoctor(args []string, doctor *DoctorOptions) error {
 		case strings.HasPrefix(arg, "--config="):
 			doctor.ConfigOverrides = append(doctor.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
 		case strings.HasPrefix(arg, "-c"):
-			doctor.ConfigOverrides = append(doctor.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
+			doctor.ConfigOverrides = append(doctor.ConfigOverrides, shortAttachedValue(arg, "-c"))
 		case strings.HasPrefix(arg, "-"):
 			return clapUnexpectedLongFlagError("doctor", arg, args[:i])
 		default:
@@ -4848,7 +4848,7 @@ func parseApply(args []string, apply *ApplyOptions) error {
 		case strings.HasPrefix(arg, "--config="):
 			apply.ConfigOverrides = append(apply.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
 		case strings.HasPrefix(arg, "-c"):
-			apply.ConfigOverrides = append(apply.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
+			apply.ConfigOverrides = append(apply.ConfigOverrides, shortAttachedValue(arg, "-c"))
 		case strings.HasPrefix(arg, "-"):
 			return unexpectedSubcommandArgumentError("apply", arg)
 		default:
@@ -4984,7 +4984,7 @@ func parseSessionSelection(args []string, session *SessionOptions, includeNonInt
 		case strings.HasPrefix(arg, "--config="):
 			session.ConfigOverrides = append(session.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
 		case strings.HasPrefix(arg, "-c") && arg != "-C":
-			session.ConfigOverrides = append(session.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
+			session.ConfigOverrides = append(session.ConfigOverrides, shortAttachedValue(arg, "-c"))
 		case strings.HasPrefix(arg, "-"):
 			return sessionUnexpectedArgumentError(command, args[:i], arg)
 		default:
@@ -5075,7 +5075,7 @@ func parseSessionMutation(args []string, session *SessionOptions, command string
 		case strings.HasPrefix(arg, "--config="):
 			session.ConfigOverrides = append(session.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
 		case strings.HasPrefix(arg, "-c") && arg != "-C":
-			session.ConfigOverrides = append(session.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
+			session.ConfigOverrides = append(session.ConfigOverrides, shortAttachedValue(arg, "-c"))
 		case strings.HasPrefix(arg, "-"):
 			return sessionUnexpectedArgumentError(command, args[:i], arg)
 		default:
@@ -5140,7 +5140,7 @@ func parseDebug(args []string, debug *DebugOptions) error {
 			case strings.HasPrefix(arg, "--config="):
 				debug.ConfigOverrides = append(debug.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
 			case strings.HasPrefix(arg, "-c"):
-				debug.ConfigOverrides = append(debug.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
+				debug.ConfigOverrides = append(debug.ConfigOverrides, shortAttachedValue(arg, "-c"))
 			default:
 				return unexpectedSubcommandArgumentError("debug models", arg)
 			}
@@ -5204,7 +5204,7 @@ func parseDebug(args []string, debug *DebugOptions) error {
 			case strings.HasPrefix(arg, "--config="):
 				debug.ConfigOverrides = append(debug.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
 			case strings.HasPrefix(arg, "-c"):
-				debug.ConfigOverrides = append(debug.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
+				debug.ConfigOverrides = append(debug.ConfigOverrides, shortAttachedValue(arg, "-c"))
 			case arg == "--image" || arg == "-i":
 				value, next, err := requireValue(args, i, arg)
 				if err != nil {
@@ -5250,7 +5250,7 @@ func parseDebug(args []string, debug *DebugOptions) error {
 			case strings.HasPrefix(arg, "--config="):
 				debug.ConfigOverrides = append(debug.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
 			case strings.HasPrefix(arg, "-c"):
-				debug.ConfigOverrides = append(debug.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
+				debug.ConfigOverrides = append(debug.ConfigOverrides, shortAttachedValue(arg, "-c"))
 			case strings.HasPrefix(arg, "-"):
 				return unexpectedSubcommandArgumentError("debug trace-reduce", arg)
 			default:
@@ -5277,7 +5277,7 @@ func parseDebug(args []string, debug *DebugOptions) error {
 			case strings.HasPrefix(arg, "--config="):
 				debug.ConfigOverrides = append(debug.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
 			case strings.HasPrefix(arg, "-c"):
-				debug.ConfigOverrides = append(debug.ConfigOverrides, strings.TrimPrefix(arg, "-c"))
+				debug.ConfigOverrides = append(debug.ConfigOverrides, shortAttachedValue(arg, "-c"))
 			default:
 				return unexpectedSubcommandArgumentError("debug clear-memories", arg)
 			}

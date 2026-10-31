@@ -11,17 +11,41 @@ type Override struct {
 	Value any
 }
 
+// OverrideError reports a `-c`/`--config` value that Rust's
+// CliConfigOverrides::parse_overrides rejects. The message text is Rust's
+// verbatim wording so command wrappers only need to add their own context.
+type OverrideError struct {
+	Message string
+}
+
+func (e *OverrideError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return e.Message
+}
+
+// ValidateOverrides reports the first malformed `-c`/`--config` value without
+// applying any of them.
+func ValidateOverrides(raw []string) error {
+	if len(raw) == 0 {
+		return nil
+	}
+	_, err := ParseOverrides(raw)
+	return err
+}
+
 func ParseOverrides(raw []string) ([]Override, error) {
 	out := make([]Override, 0, len(raw))
 	for _, item := range raw {
 		key, value, ok := strings.Cut(item, "=")
 		if !ok {
-			return nil, fmt.Errorf("invalid override (missing '='): %s", item)
+			return nil, &OverrideError{Message: fmt.Sprintf("Invalid override (missing '='): %s", item)}
 		}
 		key = strings.TrimSpace(key)
 		value = strings.TrimSpace(value)
 		if key == "" {
-			return nil, fmt.Errorf("empty key in override: %s", item)
+			return nil, &OverrideError{Message: fmt.Sprintf("Empty key in override: %s", item)}
 		}
 		out = append(out, Override{
 			Path:  CanonicalizeKey(key),

@@ -416,8 +416,10 @@ func TestLogoutConfigErrorUsesRustExitMessage(t *testing.T) {
 
 	err := Run(context.Background(), []string{"logout", "-c", "bad"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
 	assertPrintableExitOne(t, err)
-	if !strings.Contains(err.Error(), "Error loading configuration:") {
-		t.Fatalf("logout error = %v, want Rust config prefix", err)
+	// Rust parses `-c`/`--config` before loading configuration and renders the
+	// failure with its own context, without the runtime `Error: ` head.
+	if got, want := err.Error(), "Error parsing -c overrides: Invalid override (missing '='): bad"; got != want {
+		t.Fatalf("logout error = %q, want %q", got, want)
 	}
 }
 

@@ -104,6 +104,9 @@ func RunWithOptions(ctx context.Context, args []string, stdin io.Reader, stdout,
 	if err := validateFeatureToggles(parsed.Root.EnableFeatures, parsed.Root.DisableFeatures); err != nil {
 		return err
 	}
+	if err := validateCommandOverrides(parsed); err != nil {
+		return err
+	}
 	switch parsed.Command {
 	case cli.CommandLogin:
 		login := parsed.Login
@@ -179,7 +182,7 @@ func RunWithOptions(ctx context.Context, args []string, stdin io.Reader, stdout,
 	case cli.CommandApp:
 		return runDesktopApp(&parsed.App, stdout)
 	case cli.CommandCloud:
-		return runCloud(ctx, &parsed.Cloud, stdin, stdout)
+		return runCloud(ctx, &parsed.Cloud, stdin, stdout, stderr)
 	case cli.CommandResponsesAPIProxy:
 		return runResponsesAPIProxy(ctx, &parsed.ResponsesAPIProxy, stdin, stdout, stderr)
 	case cli.CommandStdioToUDS:
@@ -1522,6 +1525,9 @@ func runAppServer(ctx context.Context, opts cli.AppServerOptions, root *cli.Root
 			return fmt.Errorf("unknown app-server subcommand %s", opts.Subcommand[0])
 		}
 	}
+	if err := validateAppServerOverrides(opts, root); err != nil {
+		return err
+	}
 	serverCtx, cancelServer := context.WithCancel(ctx)
 	defer cancelServer()
 	codexHome := auth.DefaultCodexHome()
@@ -1645,6 +1651,7 @@ func runAppServer(ctx context.Context, opts cli.AppServerOptions, root *cli.Root
 func loadAppServerConfig(codexHome string, opts cli.AppServerOptions, root *cli.RootOptions) (*config.Config, error) {
 	strictConfig := opts.StrictConfig
 	loadOpts := &config.EffectiveOptions{StrictConfig: strictConfig}
+	loadOpts.RawOverrides = append(loadOpts.RawOverrides, opts.ConfigOverrides...)
 	if root != nil {
 		loadOpts.RawOverrides = append(loadOpts.RawOverrides, root.ConfigOverrides...)
 		loadOpts.EnableFeatures = append(loadOpts.EnableFeatures, root.EnableFeatures...)
@@ -1897,6 +1904,9 @@ func runAppServerDaemon(ctx context.Context, opts cli.AppServerDaemonOptions, an
 		_, err := fmt.Fprint(stdout, appServerDaemonHelpText())
 		return err
 	}
+	if err := validateAppServerDaemonOverrides(opts, root); err != nil {
+		return err
+	}
 	runner := appserverdaemon.NewLifecycleRunnerForCodexHome(auth.DefaultCodexHome(), "")
 	var output any
 	var err error
@@ -2027,6 +2037,7 @@ func runDebug(opts cli.DebugOptions, root *cli.RootOptions, stdout io.Writer) er
 		cwd := ""
 		var rawOverrides, enableFeatures, disableFeatures []string
 		images := append([]string(nil), opts.Images...)
+		rawOverrides = append(rawOverrides, opts.ConfigOverrides...)
 		if root != nil {
 			cwd = strings.TrimSpace(root.Shared.CWD)
 			rawOverrides = append(rawOverrides, root.ConfigOverrides...)
@@ -2422,7 +2433,7 @@ func runFeatures(opts cli.FeatureOptions, root cli.RootOptions, stdout io.Writer
 		// feature requirements are reflected in the reported state without
 		// rewriting the user's config.toml.
 		effective, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), &config.EffectiveOptions{
-			RawOverrides:         root.ConfigOverrides,
+			RawOverrides:         joinOverrideScopes(root.ConfigOverrides, opts.ConfigOverrides),
 			EnableFeatures:       root.EnableFeatures,
 			DisableFeatures:      root.DisableFeatures,
 			IncludeManagedConfig: true,

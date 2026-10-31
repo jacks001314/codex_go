@@ -21,7 +21,17 @@ import (
 	"codex_go/model"
 )
 
-func runCloud(ctx context.Context, opts *cli.CloudOptions, stdin io.Reader, stdout io.Writer) error {
+// cloudSignInRequiredMessage is Rust's cloud sign-in hint. The credential is
+// resolved before `-c` overrides are parsed, so a signed-out host reports the
+// hint instead of an override diagnostic.
+const cloudSignInRequiredMessage = "Not signed in. Please run 'codex login' to sign in with ChatGPT, then re-run 'codex cloud'."
+
+func runCloud(ctx context.Context, opts *cli.CloudOptions, stdin io.Reader, stdout, stderr io.Writer) error {
+	resolved, err := auth.NewStore(auth.DefaultCodexHome()).Resolve()
+	if err != nil || resolved == nil {
+		fmt.Fprintln(stderr, cloudSignInRequiredMessage)
+		return &ExitError{Code: 1, Silent: true}
+	}
 	switch opts.Action {
 	case "tui":
 		client, err := newCloudTaskClient(opts)

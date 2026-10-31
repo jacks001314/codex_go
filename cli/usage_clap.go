@@ -210,9 +210,16 @@ func clapConfigOverrideArg(args []string, i int) (string, int, bool, error) {
 	case strings.HasPrefix(arg, "--config="):
 		return strings.TrimPrefix(arg, "--config="), i, true, nil
 	case strings.HasPrefix(arg, "-c") && arg != "-C":
-		return strings.TrimPrefix(arg, "-c"), i, true, nil
+		return shortAttachedValue(arg, "-c"), i, true, nil
 	}
 	return "", i, false, nil
+}
+
+// shortAttachedValue returns a short option's attached value. clap drops a
+// single "=" between a short flag and its value, so `-c=key=value` parses as
+// `key=value` and `-c=` as an empty value.
+func shortAttachedValue(arg, flag string) string {
+	return strings.TrimPrefix(strings.TrimPrefix(arg, flag), "=")
 }
 
 // flagNameOnly is clap's rendering of an unexpected flag: the `=value` part of a

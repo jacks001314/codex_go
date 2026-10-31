@@ -1353,8 +1353,68 @@ one-off captures.
    `TestParseAppServerListenValidation` and `TestParseQueueCommandRejectsInvalidLikeRust`
    were re-captured from 0.166.
 
+51. **Empty `-c`/`--config=` overrides: one parser error, per-command
+   contexts** - the inline sweep's `--config=` column had 20 divergences (plus
+   the two `cloud list` flag probes that hung on the missing sign-in gate):
+   most commands dropped the empty override and kept running (`features list`,
+   `plugin list`, `debug models`, `migrate-rollouts`, `sandbox`, `app-server`),
+   the exec family printed Go's own `Error: invalid override (missing '='):`,
+   and `login`/`logout` reported `Error loading configuration: ...`.
+   - `config.ParseOverrides` returns a `config.OverrideError` carrying Rust's
+     `parse_overrides` wording: `Invalid override (missing '='): <raw value>`
+     and `Empty key in override: <raw value>`. Both echo the value untrimmed,
+     so `-c "  =x"` keeps its spaces. `config.ValidateOverrides` exposes the
+     check without applying the values.
+   - `shortAttachedValue` (`cli/usage_clap.go`) drops the single `=` clap
+     accepts between a short flag and its attached value, so `-c=key=value`
+     parses as `key=value` and `-c=` as an empty value (Rust lands on
+     `Invalid override (missing '='): `), while `-c==x` still reports
+     `Empty key in override: =x`.
+   - `app/override_diagnostics.go` maps each command to the scopes Rust parses
+     (root scope first, then the command's own `-c`) and to the context Rust
+     prints:
+     - `exec`, `exec resume`, `exec review`, `review`, `login`, `login status`
+       and `logout` print `Error parsing -c overrides: <inner>` as a
+       pre-rendered message, without the runtime `Error: ` head.
+     - `app-server` prints `Error: error parsing -c overrides: <inner>`, and
+       its own `-c` values now reach `loadAppServerConfig`, which used to read
+       only the root scope.
+     - `app-server daemon restart`/`update` print `Error: <inner>`;
+       `start`/`stop`/`version` never load configuration and stay untouched.
+     - `features list`, `plugin list`, `plugin marketplace list`/`upgrade`,
+       `debug models`, `debug prompt-input`, `migrate-rollouts` and `sandbox`
+       print `Error: <inner>` before their own required-argument checks, which
+       is the order Rust reports (`sandbox --config=` no longer answers
+       `sandbox requires COMMAND`). `sandbox uninstall` keeps running before
+       configuration like Rust.
+     - `features list` and `debug prompt-input` also apply the command-scope
+       overrides they used to drop.
+   - `codex cloud` resolves the credential before configuration, like Rust: a
+     signed-out host prints `Not signed in. Please run 'codex login' to sign in
+     with ChatGPT, then re-run 'codex cloud'.` (Go used to hang on a network
+     call with no credentials), so `cloud --config=`, `cloud list --config=`
+     and the `--cursor=`/`--env=` probes match instead of reporting an
+     override or timing out.
+   Evidence: `out/round37-inline.txt` (1,068 probes, 1,030 byte-identical, 38
+   left - all TERM/Desktop TUI, daemon-version, socket or install-detection
+   chatter, with no `--config=` case left beyond those), the 497-case
+   bad-value sweep (`out/round37-r34-flag-surface.txt`, 497/497), the 78
+   round-34 fixes (`out/round37-r34-fixed.log`, 78/78), the 16 ordering cases
+   (`out/round37-r35-order.log`, 16/16) and 31 round 29-34 probes
+   (`out/round37-regress.txt`, `out/round37-regress2.txt`) at 0 diffs.
+   `TestConfigOverrideDiagnosticsMatchRust`,
+   `TestCloudSignInHintPrecedesOverrideDiagnostics` and
+   `TestShortConfigOverrideDropsAttachedEquals` pin 22 captured cases.
+
 ## Verification
 
+- Empty `-c`/`--config=` overrides match Rust 0.166: `out/round37-inline.txt`
+  repeats the 1,068-case inline sweep and ends at 38 diffs, none of them a
+  `--config=` case beyond environment noise (22 fixed). The bad-value sweep
+  `out/round37-r34-flag-surface.txt` stays 497/497, the 78 round-34 fixes
+  (`out/round37-r34-fixed.log`) and the 16 ordering cases
+  (`out/round37-r35-order.log`) stay at 0, and the 31 round 29-34 probes in
+  `out/round37-regress.txt` / `out/round37-regress2.txt` stay at 0 diffs.
 - Inline `--flag=` and empty-value diagnostics match Rust 0.166:
   `out/round36-inline.txt` walks 68 command paths x every value flag in three
   shapes (1,068 probes) and ends at 60 diffs, all of them TERM TUI, daemon
@@ -1679,14 +1739,15 @@ one-off captures.
   ./cmd/... ./tcptunnel` passes.
 ## Still open
 
-- Empty `-c`/`--config=` overrides: clap accepts the empty value and the config
-  layer rejects it later (`Error: Invalid override (missing '='):` /
-  `Error parsing -c overrides: Invalid override (missing '='):` for the
-  exec/review/login family, `Error: error parsing -c overrides: ...` for
-  `app-server`), while Go either drops the override (`features list`,
-  `plugin list`, `debug models`, `migrate-rollouts`, `sandbox`) or prints its
-  own lowercase wording. Aligning needs the per-command prefix threaded through
-  `config.LoadEffective`.
+- Override diagnostics the 0.166 binary still answers from its own runtime:
+  `remote-control --config=` reports the daemon version mismatch instead of
+  Rust's `foreground app-server exited before remote control became ready`
+  chain, `update --config=` prints Go's install-detection wording, and
+  `fork`/`resume`/`agents` report the override before Rust's TERM gate.
+  `sandbox --config= --sandbox-state-json=` also reports the override where
+  Rust parses the state JSON first, because Go's `--sandbox-state-json` text is
+  still `invalid sandbox run request: ...` rather than serde's
+  `invalid --sandbox-state-json value: ...` wording.
 - `migrate-rollouts --thread=bogusval` only matches the empty arm of Rust's uuid
   parser; a non-hex character needs the whole uuid grammar message
   (`invalid character: expected an optional prefix of `urn:uuid:` followed by
