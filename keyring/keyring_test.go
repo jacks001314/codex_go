@@ -2,6 +2,7 @@ package keyring
 
 import (
 	"errors"
+	"os"
 	"strconv"
 	"testing"
 	"time"
@@ -37,7 +38,10 @@ func TestOSKeyringRoundTrip(t *testing.T) {
 	}
 	store := New()
 	const service = "codex_go_keyring_roundtrip_test"
-	account := "test-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	// The nanosecond wall clock is not unique across processes: concurrent
+	// test binaries observe the same Windows clock tick, so two runs can pick
+	// the same target name and delete each other's credential mid-round-trip.
+	account := "test-" + strconv.Itoa(os.Getpid()) + "-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	if _, err := store.Load(service, account); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("initial Load error = %v, want ErrNotFound", err)
 	}
