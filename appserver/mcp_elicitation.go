@@ -146,6 +146,12 @@ func (h *appserverMCPElicitationHandler) HandleMCPElicitation(ctx context.Contex
 				reviewCtx = withGuardianTimingCallID(ctx, originatingCallID)
 			}
 			decision, reason, err := h.reviewer.Review(reviewCtx, request.ThreadID, request.TurnID, reviewID, action)
+			if err == nil && decision == state.DecisionAskUser && !strict {
+				// Rust #44569: an optional review that exhausts its local input
+				// budget produces no Guardian response, so the elicitation falls
+				// back to the user. A strict auto review still declines.
+				return h.requestMCPElicitation(ctx, request)
+			}
 			if err == nil {
 				// Rust #40031: strict MCP auto-review propagates canonical
 				// approved / denied / timed-out / aborted outcomes instead of

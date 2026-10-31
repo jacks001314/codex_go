@@ -44,6 +44,9 @@ func TestGuardianOptionalReviewBudgetExhaustionDefersToUserLikeRust(t *testing.T
 			if decision != testCase.want {
 				t.Fatalf("decision = %q, want %q", decision, testCase.want)
 			}
+			if reviewer.existingSessionFor("thread-budget") != nil {
+				t.Fatal("an exhausted reviewer session must be discarded")
+			}
 		})
 	}
 }

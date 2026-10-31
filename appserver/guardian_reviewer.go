@@ -1058,6 +1058,17 @@ type guardianThreadReviewerSession interface {
 	DropThreadSession(threadID string)
 }
 
+// discardExhaustedReviewerSession mirrors Rust #44569's ExhaustedReviewBudget
+// handling: a reviewer session that exhausted the complete-request budget is
+// discarded, so the next review rebuilds its context instead of inheriting the
+// truncated attempt.
+func (r *modelGuardianReviewer) discardExhaustedReviewerSession(threadID string, session *guardianSessionRunner) {
+	if session != nil {
+		session.ResetForParentHistoryReset()
+	}
+	r.DropThreadSession(threadID)
+}
+
 // forgetGuardianReviewerSession drops a closed thread's reusable reviewer with
 // the rest of its runtime state (Rust #45672 moves reviewer lifetime ownership
 // into the thread lifecycle).
@@ -1677,6 +1688,7 @@ reviewAttempt:
 			if abortErr == nil {
 				emit(threadID, completed)
 			}
+			r.discardExhaustedReviewerSession(threadID, session)
 			r.recordNonDenial(threadID, turnID)
 			attribution.Decision = state.DecisionAborted
 			attribution.TerminalStatus = "aborted"
@@ -1690,6 +1702,7 @@ reviewAttempt:
 		rationale := guardianReviewFailureRationale(guardianInputBudgetMessage)
 		completed, _ := store.FailClosed(event.ID, rationale)
 		emit(threadID, completed)
+		r.discardExhaustedReviewerSession(threadID, session)
 		r.recordNonDenial(threadID, turnID)
 		attribution.Decision = state.DecisionDenied
 		attribution.TerminalStatus = "failed_closed"

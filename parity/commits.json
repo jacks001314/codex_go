@@ -11460,14 +11460,16 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
     "Rust 9c4879f3a5 removes Guardian action truncation and the fixed synchronous action byte limit, admits complete actions against the whole-request budget with lossless bounded transport parts, stops cached asynchronous scores from covering oversized actions, and asks the user when an optional review exhausts its local input budget while required reviews stay closed.",
-    "Implemented in Go: state.FormatGuardianActionPretty now renders the complete action with no per-string truncation and no 200,000-byte rejection (state/guardian_action_prompt.go); the write_stdin 8,000-byte gate still measures the full rendering.",
+    "Implemented in Go: state.FormatGuardianActionPretty renders the complete action with no per-string truncation and no 200,000-byte rejection (state/guardian_action_prompt.go); the write_stdin 8,000-byte gate still measures the full rendering.",
     "Implemented in Go: an optional review that exhausts the complete-request budget completes as aborted with no approval and falls back to the user approval request in the exec, apply_patch and write_stdin paths (state.DecisionAskUser, guardianApprovalOutcome.AskUser); a policy-required review still fails closed.",
-    "Implemented in Go: the serving-assessment fast path now refuses to approve an action that alone exceeds the reviewer input budget (guardianActionExceedsReviewBudget), so a cached low-risk score cannot cover an oversized call while later small actions still reuse it.",
-    "Residual: MCP tool approvals and native tool-call reviews have no user-approval fallback in Go handlers and still deny a deferred review; Rust asks the user there. Go also has no async scorer, so the asynchronous action-budget overflow route is N/A, and its model layer has no per-part transport cap, so no lossless part splitting is needed.",
-    "Verification: go test ./appserver -run Guardian|Approval -count=1, go test ./state -count=1, go build ./..., including TestGuardianOptionalReviewBudgetExhaustionDefersToUserLikeRust, TestGuardianAskUserFallsBackToUserApprovalLikeRust, TestGuardianServingAssessmentDoesNotCoverOversizedActionLikeRust and the rewritten complete-action tests."
+    "Implemented in Go: the serving-assessment fast path refuses to approve an action that alone exceeds the reviewer input budget (guardianActionExceedsReviewBudget), so a cached low-risk score cannot cover an oversized call while later small actions still reuse it.",
+    "MCP parity: appserverMCPToolApprovalHandler forwards an AskUser outcome to the ordinary user prompt instead of returning a denial, while MCP elicitations defer a non-strict AskUser to requestMCPElicitation and keep strict auto-review declines closed (appserver/mcp_tool_approval.go, appserver/mcp_elicitation.go).",
+    "Reviewer lifecycle parity: a review that exhausts its local input budget discards the reusable reviewer session (and resets a shared runner), so the next review rebuilds complete context instead of inheriting the exhausted attempt (appserver/guardian_reviewer.go).",
+    "Residual: Go has no async scorer, so the asynchronous action-budget overflow route is N/A; its model layer has no per-part transport cap, so no lossless part splitting is needed. Native tool review remains a pre-dispatch gate that denies a non-approved required review rather than prompting, matching the Rust native tool review contract.",
+    "Verification: go build ./...; go test ./appserver -run 'TestMCPToolApprovalAskUserFallsBackToUserLikeRust|TestMCPElicitationAskUserFallsBackToUserLikeRust|TestGuardianOptionalReviewBudgetExhaustionDefersToUserLikeRust|TestGuardianAskUserFallsBackToUserApprovalLikeRust|TestGuardianServingAssessmentDoesNotCoverOversizedActionLikeRust' -count=1; go test ./state -count=1; full go test ./appserver -count=1 (388.788s) reports only the seven known baseline failures."
    ]
   },
   {

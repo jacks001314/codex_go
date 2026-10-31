@@ -139,8 +139,13 @@ func (h *appserverMCPToolApprovalHandler) approveMCPToolCall(ctx context.Context
 	}
 	if h.router != nil {
 		if reviewer := h.mcpToolApprovalReviewer(request); reviewer.RoutesToGuardian() {
-			decision, err := h.reviewViaGuardian(ctx, request)
-			return mcp.MCPToolApprovalOutcome{Decision: decision}, err
+			decision, askUser, err := h.reviewViaGuardian(ctx, request)
+			if !askUser {
+				return mcp.MCPToolApprovalOutcome{Decision: decision}, err
+			}
+			// Rust #44569: an optional review that exhausts its local input
+			// budget produces no Guardian decision, so the call falls through to
+			// the ordinary user approval prompt below.
 		}
 	}
 	if h.responder == nil {
@@ -307,9 +312,9 @@ func mcpToolCallHookToolInput(arguments any) map[string]any {
 
 // reviewViaGuardian routes an MCP tool call through the turn's automatic
 // approval review (Rust request_reviewer_approval -> ApprovalAction::McpToolCall).
-func (h *appserverMCPToolApprovalHandler) reviewViaGuardian(ctx context.Context, request *mcp.MCPToolApprovalRequest) (mcp.MCPToolApprovalDecision, error) {
+func (h *appserverMCPToolApprovalHandler) reviewViaGuardian(ctx context.Context, request *mcp.MCPToolApprovalRequest) (mcp.MCPToolApprovalDecision, bool, error) {
 	if h == nil || h.router == nil || request == nil {
-		return mcp.MCPToolApprovalDeny, nil
+		return mcp.MCPToolApprovalDeny, false, nil
 	}
 	action := state.Action{
 		Type:          "mcp_tool_call",
@@ -348,11 +353,15 @@ func (h *appserverMCPToolApprovalHandler) reviewViaGuardian(ctx context.Context,
 	outcome := h.router.reviewApprovalWithGuardian(ctx, h.threadID, h.turnID, strings.TrimSpace(request.CallID), action)
 	switch {
 	case outcome.Abort:
-		return mcp.MCPToolApprovalDeny, fmt.Errorf("%s", outcome.DenyReason)
+		return mcp.MCPToolApprovalDeny, false, fmt.Errorf("%s", outcome.DenyReason)
 	case outcome.Approved:
-		return mcp.MCPToolApprovalApprove, nil
+		return mcp.MCPToolApprovalApprove, false, nil
+	case outcome.AskUser:
+		// Rust #44569 defers an optional review that could not be completed
+		// locally to the user approval prompt.
+		return mcp.MCPToolApprovalDeny, true, nil
 	default:
-		return mcp.MCPToolApprovalDeny, fmt.Errorf("%s", outcome.DenyReason)
+		return mcp.MCPToolApprovalDeny, false, fmt.Errorf("%s", outcome.DenyReason)
 	}
 }
 
