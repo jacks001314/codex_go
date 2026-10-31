@@ -20215,9 +20215,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Go materializes the rollout on the turn-start path: appendRuntimeTurnStartedWithAttribution -> withRuntimeRollout -> openRuntimeRollout -> createThreadRollout, before the first sampling request, so a turn whose only input is an inter-agent communication still gets a durable rollout (Rust ensure_rollout_materialized).",
+    "appserver/inter_agent_message_rollout_47691_like_rust_test.go starts a root turn from an agent SendMessage, waits for the first model request, and verifies the rollout exists with session_meta plus the task_started event for that turn, with the accepted agent_message (author/recipient) in the sampling input."
    ]
   },
   {
