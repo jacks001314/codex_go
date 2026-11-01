@@ -27545,7 +27545,8 @@
    ],
    "status": "complete",
    "evidence": [
-    "Round 555: file-replay shell snapshots admit up to 4 MiB of rendered state and 8 MiB of raw capture output, while the captured environment stays capped at 512 KiB with distinct state/environment error messages. Tests: go test ./execserver -run ShellSnapshot -count=1"
+    "Round 555: file-replay shell snapshots admit up to 4 MiB of rendered state and 8 MiB of raw capture output, while the captured environment stays capped at 512 KiB with distinct state/environment error messages. Tests: go test ./execserver -run ShellSnapshot -count=1",
+    "Round 1308 (re-audit): the executor captured no environment record, so Rust's 512 KiB environment cap and the shared in-memory budget never applied. captureSnapshot now records `env -0` (Environment: true), counts it through capturedSnapshotEnvironmentBytes, rejects an environment over the cap, and only uses environment replay when state plus environment fit the budget; larger states materialize a file (TestShellSnapshotEnvironmentSharesReplayBudgetLikeRust). Snapshot: dafab0e3."
    ]
   },
   {
