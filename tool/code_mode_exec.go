@@ -21,6 +21,10 @@ import (
 
 const CodeModeExecToolName = "exec"
 
+// CodeModeResponseHeaderDataKey carries the rendered code-mode response header so
+// a content-item body can prepend it the way Rust's CodeModeToolOutput does.
+const CodeModeResponseHeaderDataKey = "code_mode_header"
+
 // codeModeMinYieldTimeForGraceMS and codeModeYieldGracePeriod mirror Rust's
 // MIN_YIELD_TIME_FOR_GRACE and YIELD_GRACE_PERIOD
 // (code-mode-runtime/src/service.rs).
@@ -805,83 +809,43 @@ func (e *codeModeExecExecutor) nestedGuardianReview() GuardianReviewFunc {
 }
 
 func (e *codeModeExecExecutor) Spec() Spec {
-	registry, nestedCommandTool := e.binding()
+	registry, _ := e.binding()
 	return Spec{
 		Name:        PlainName(CodeModeExecToolName),
-		Description: codeModeExecDescription(registry, nestedCommandTool, e.defaultExecYieldTimeMS(), e.codeModeMessages()),
+		Description: codeModeExecDescription(registry, e.defaultExecYieldTimeMS(), e.codeModeMessages()),
 		Freeform:    &FreeformSpec{Syntax: "lark", Definition: codeModeExecGrammar},
 	}
 }
 
-func codeModeExecDescription(registry *Registry, preferredCommandTool ToolName, defaultYieldTimeMS int, messages *CodeModeToolMessages) string {
-	template := `Run JavaScript code to orchestrate/compose tool calls
-- Evaluates the provided JavaScript code in a fresh isolate as an async module.
-- All nested tools are available on the global tools object. Tool names are exposed as normalized JavaScript identifiers.
-- Nested tool methods take either a string or an object as their input argument.
-- Nested tools return either an object or a string, based on the description.
-- Runs raw JavaScript -- no Node, no file system, no network access, no console.
-- Accepts raw JavaScript source text, not JSON, quoted strings, or markdown code fences.
-- You may optionally start the tool input with a first-line pragma like // @exec: {"yield_time_ms": 10000, "max_output_tokens": 1000}.
-- yield_time_ms asks exec to yield early if the script is still running. Defaults to 10000 ms.
-- max_output_tokens sets the token budget for direct exec results. Defaults to 10000 tokens.
-- When the JavaScript code is fully evaluated, the isolate's lifetime ends and unawaited promises are discarded.
-- Do not use fetch, XMLHttpRequest, require, process, or console; they are unavailable.
-- There is no nested tools.exec method. To run commands, call the enabled nested command tool and await its result.
-
-Global helpers:
-- exit(): Immediately ends the current script successfully.
-- text(value): Appends text to the exec result. Use text(result.output) to forward command output.
-- image(value), audio(value), generatedImage(value): Append supported media results.
-- store(key, value) and load(key): Persist serializable values within the code-mode session.
-- notify(value): Immediately injects an extra custom_tool_call_output.
-- setTimeout(callback, delayMs) and clearTimeout(id): Schedule or cancel timers.
-- ALL_TOOLS: Metadata for enabled nested tools as { name, description } entries.
-- yield_control(): Yields accumulated output while the script keeps running.`
+func codeModeExecDescription(registry *Registry, defaultYieldTimeMS int, messages *CodeModeToolMessages) string {
+	// Rust's EXEC_DESCRIPTION_TEMPLATE is model-visible whenever the catalog
+	// carries no override, so the bundled text stays byte-identical to
+	// codex-rs/code-mode-protocol/src/description.rs.
+	template := CodeModeExecDescriptionTemplate
 	if messages != nil && messages.Exec != nil && messages.Exec.Description != nil {
 		template = *messages.Exec.Description
 	}
 	template = strings.ReplaceAll(template, "{{ default_exec_yield_time_ms }}", strconv.Itoa(defaultYieldTimeMS))
-	template = strings.ReplaceAll(template, "{{ image_helper }}", "image(value), audio(value), generatedImage(value): Append supported media results.")
+	template = strings.ReplaceAll(template, "{{ image_helper }}", CodeModeLegacyImageHelperDescription)
 	description := template
-	description = strings.Replace(description, "Defaults to 10000 ms.", fmt.Sprintf("Defaults to %d ms.", defaultYieldTimeMS), 1)
 	// Rust #50562: emit the discovery guidance unconditionally so the exec
 	// description does not change as the deferred-tool catalog changes.
-	if messages == nil || messages.DeferredNestedToolsGuidance == nil {
-		description += "\n\n" + codeModeDeferredNestedToolsGuidance
-	} else if *messages.DeferredNestedToolsGuidance != "" {
-		description += "\n\n" + *messages.DeferredNestedToolsGuidance
+	guidance := codeModeDeferredNestedToolsGuidance
+	if messages != nil && messages.DeferredNestedToolsGuidance != nil {
+		guidance = *messages.DeferredNestedToolsGuidance
 	}
-
-	if registry == nil {
-		return description
-	}
-	commandToolName := preferredCommandTool.Key()
-	var execSpec Spec
-	var ok bool
-	if commandToolName != "" {
-		execSpec, ok = registry.Spec(preferredCommandTool)
-	} else {
-		commandToolName = DefaultExecCommandToolName
-		execSpec, ok = registry.Spec(PlainName(commandToolName))
-		if !ok || execSpec.Exposure == ExposureHidden {
-			commandToolName = DefaultShellCommandToolName
-			execSpec, ok = registry.Spec(PlainName(commandToolName))
+	// Rust's DeferredToolDiscovery::RankedSearch appends the search guidance
+	// outside code_mode_only, where the enabled search tool's own description is
+	// not rendered.
+	if registry != nil && guidance != "" {
+		if _, ok := registry.Spec(PlainName(ToolSearchName)); ok {
+			guidance += "\n\n" + CodeModeToolSearchGuidance
 		}
 	}
-	if !ok {
-		return description
+	if guidance != "" {
+		description += "\n\n" + guidance
 	}
-	schema, err := json.Marshal(execSpec.InputSchema)
-	if err != nil {
-		return description
-	}
-	argumentName := "cmd"
-	if commandToolName == DefaultShellCommandToolName {
-		argumentName = "command"
-	}
-	return description + "\n\nEnabled nested command tool:\n## tools." + commandToolName + "\n" + strings.TrimSpace(execSpec.Description) +
-		"\nInput schema: " + string(schema) +
-		"\nExample: const r = await tools." + commandToolName + "({\"" + argumentName + "\":\"Write-Output hello\",\"timeout_ms\":10000}); text(r.output);"
+	return description
 }
 
 func (e *codeModeExecExecutor) Execute(ctx context.Context, invocation *Invocation) (*Output, error) {
@@ -2227,7 +2191,13 @@ func applyCodeModeHeader(output *Output, status string, wallTime time.Duration, 
 	if output == nil {
 		return nil
 	}
-	output.Body = codeModeResponseHeader(status, wallTime, hostDuration, showOverhead) + output.Body
+	header := codeModeResponseHeader(status, wallTime, hostDuration, showOverhead)
+	output.Body = header + output.Body
+	if output.Data != nil {
+		// Rust's CodeModeToolOutput keeps the header as its own body item, so a
+		// response whose body is content items still leads with the status line.
+		output.Data[CodeModeResponseHeaderDataKey] = header
+	}
 	return output
 }
 
@@ -2372,8 +2342,15 @@ func (e *codeModeExecExecutor) cellContentDelta(cell *codeModeCell) []map[string
 type codeModeWaitExecutor struct{ exec *codeModeExecExecutor }
 
 func (e *codeModeWaitExecutor) Spec() Spec {
-	description := "Waits on a yielded exec cell and returns new output or completion."
-	schema := map[string]any{"type": "object", "required": []string{"cell_id"}, "properties": map[string]any{"cell_id": map[string]any{"type": "string"}, "yield_time_ms": map[string]any{"type": "integer"}, "max_tokens": map[string]any{"type": "integer"}, "terminate": map[string]any{"type": "boolean"}}}
+	// Rust's create_wait_tool renders the headline plus WAIT_DESCRIPTION_TEMPLATE
+	// and documents every parameter on the schema.
+	description := "Waits on a yielded `" + CodeModeExecToolName + "` cell and returns new output or completion.\n" + CodeModeWaitDescriptionTemplate
+	schema := map[string]any{"type": "object", "required": []string{"cell_id"}, "properties": map[string]any{
+		"cell_id":       map[string]any{"type": "string", "description": "Identifier of the running exec cell."},
+		"yield_time_ms": map[string]any{"type": "number", "description": "Wait before yielding more output. Defaults to 10000 ms."},
+		"max_tokens":    map[string]any{"type": "number", "description": "Output token budget for this wait call. Defaults to 10000 tokens."},
+		"terminate":     map[string]any{"type": "boolean", "description": "True stops the running exec cell; false or omitted waits for output."},
+	}}
 	if messages := e.exec.codeModeMessages(); messages != nil && messages.Wait != nil {
 		if messages.Wait.Description != nil {
 			description = *messages.Wait.Description

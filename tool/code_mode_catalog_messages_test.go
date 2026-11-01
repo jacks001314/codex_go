@@ -13,8 +13,8 @@ func TestCodeModeExecAndWaitCatalogMessagesLikeRust(t *testing.T) {
 		Exec: &CodeModeToolMessage{Description: &execText},
 		Wait: &CodeModeToolMessage{Description: &waitText, Parameters: &waitParameters},
 	}
-	description := codeModeExecDescription(nil, ToolName{}, 4321, messages)
-	if !strings.HasPrefix(description, "Custom exec 4321 / image(value), audio(value), generatedImage(value)") {
+	description := codeModeExecDescription(nil, 4321, messages)
+	if !strings.HasPrefix(description, "Custom exec 4321 / "+CodeModeLegacyImageHelperDescription) {
 		t.Fatalf("exec description = %q", description)
 	}
 	wait := (&codeModeWaitExecutor{exec: &codeModeExecExecutor{messages: messages}}).Spec()

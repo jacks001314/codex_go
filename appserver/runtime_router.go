@@ -16836,6 +16836,8 @@ func (r *RuntimeRouter) buildTurnRuntimeContext(ctx context.Context, params *tur
 	var codeModeMessages *model.CodeModeToolMessages
 	codeModeYieldTime := tool.CodeModeDefaultExecYieldTime
 	resolveCodeModeMessages := func(string) *model.CodeModeToolMessages { return nil }
+	codeModeImageDetailHidden := false
+	resolveCodeModeImageDetailHidden := func(string) bool { return false }
 	if turnConfig != nil {
 		modelID := ""
 		originator := ""
@@ -16854,6 +16856,18 @@ func (r *RuntimeRouter) buildTurnRuntimeContext(ctx context.Context, params *tur
 		}
 		codeModeMessages = resolveCodeModeMessages(modelID)
 		codeModeYieldTime = turnConfig.CodeModeDefaultExecYieldTime()
+		// Rust's unified_image_budget_enabled: the unified budget hides image
+		// detail values for lite models and models that can request `original`.
+		unifiedImageBudget := features.Enabled(turnConfig.FeatureSettings(), "unified_image_budget")
+		resolveCodeModeImageDetailHidden = func(requestedModel string) bool {
+			if !unifiedImageBudget {
+				return false
+			}
+			requestedModel = firstNonEmpty(strings.TrimSpace(requestedModel), modelID)
+			info := r.modelInfoForRuntimeWithConfigAndOriginator(requestedModel, turnConfig, originator)
+			return info != nil && (info.UseResponsesLite || info.SupportsImageDetailOriginal)
+		}
+		codeModeImageDetailHidden = resolveCodeModeImageDetailHidden(modelID)
 	}
 	allowedTools := r.threadAllowedToolsForThread(params.ThreadID)
 	// Rust #57586 installs HostToolInvocationLookup on V2 threads so a host can
@@ -16868,18 +16882,20 @@ func (r *RuntimeRouter) buildTurnRuntimeContext(ctx context.Context, params *tur
 		dynamicTools = params.CloneDynamicTools()
 	}
 	turnRuntime := turn.NewRuntime(&turn.RuntimeOptions{
-		Agent:                        agent,
-		Router:                       router,
-		ToolRegistrationMetrics:      r.services.TurnMetrics,
-		ToolMetadataMetrics:          r.services.TurnMetrics,
-		CodeModeMessages:             codeModeMessages,
-		AllowedTools:                 allowedTools,
-		CodeModeMessagesForModel:     resolveCodeModeMessages,
-		CodeModeDefaultExecYieldTime: codeModeYieldTime,
-		Hooks:                        hooks,
-		SteerMailbox:                 r.requireSteerMailbox(),
-		ExecutedToolCalls:            r.executedToolCallRecorder(params.ThreadID),
-		TurnMetadataIncludesToolInfo: includeToolInfo,
+		Agent:                             agent,
+		Router:                            router,
+		ToolRegistrationMetrics:           r.services.TurnMetrics,
+		ToolMetadataMetrics:               r.services.TurnMetrics,
+		CodeModeMessages:                  codeModeMessages,
+		CodeModeImageDetailHidden:         codeModeImageDetailHidden,
+		AllowedTools:                      allowedTools,
+		CodeModeMessagesForModel:          resolveCodeModeMessages,
+		CodeModeImageDetailHiddenForModel: resolveCodeModeImageDetailHidden,
+		CodeModeDefaultExecYieldTime:      codeModeYieldTime,
+		Hooks:                             hooks,
+		SteerMailbox:                      r.requireSteerMailbox(),
+		ExecutedToolCalls:                 r.executedToolCallRecorder(params.ThreadID),
+		TurnMetadataIncludesToolInfo:      includeToolInfo,
 		// Rust threads the effective model's truncation policy onto every tool
 		// call so a tool can bound its response budget.
 		TruncationPolicyForModel: func(modelID string) *utils.TruncationPolicy {

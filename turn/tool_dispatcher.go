@@ -1578,6 +1578,13 @@ func outputBody(output *tool.Output) any {
 	}
 	if output.Data != nil {
 		if value, ok := output.Data["content_items"]; ok {
+			// Rust's CodeModeToolOutput inserts its status header as the body's
+			// first item, so a content-item body leads with it.
+			if header, _ := output.Data[tool.CodeModeResponseHeaderDataKey].(string); header != "" {
+				if body, ok := codeModeBodyWithHeader(value, header); ok {
+					return body
+				}
+			}
 			return value
 		}
 	}
@@ -1597,6 +1604,30 @@ func outputBody(output *tool.Output) any {
 		return fmt.Sprintf("success=%v", output.Success)
 	}
 	return string(data)
+}
+
+// codeModeBodyWithHeader prepends the rendered code-mode header to a body that
+// is a list of content items (Rust's FunctionToolOutput::from_content).
+func codeModeBodyWithHeader(value any, header string) (any, bool) {
+	headerItem := map[string]any{"type": "input_text", "text": header}
+	switch items := value.(type) {
+	case []map[string]any:
+		body := make([]any, 0, len(items)+1)
+		body = append(body, headerItem)
+		for _, item := range items {
+			body = append(body, item)
+		}
+		return body, true
+	case []any:
+		body := make([]any, 0, len(items)+1)
+		body = append(body, headerItem)
+		return append(body, items...), true
+	case []FunctionCallOutputContentItem:
+		body := make([]FunctionCallOutputContentItem, 0, len(items)+1)
+		body = append(body, FunctionCallOutputContentItem{Type: "input_text", Text: header})
+		return append(body, items...), true
+	}
+	return nil, false
 }
 
 func outputTools(output *tool.Output) []any {

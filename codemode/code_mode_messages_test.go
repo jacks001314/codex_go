@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"codex_go/model"
+	"codex_go/tool"
 )
 
 func TestExecDescriptionCatalogOverridesLikeRust(t *testing.T) {
@@ -38,5 +39,24 @@ func TestWaitToolOverridesLikeRust(t *testing.T) {
 	}
 	if wait.Parameters["type"] != "object" || wait.Parameters["required"] == nil {
 		t.Fatalf("wait parameters = %#v", wait.Parameters)
+	}
+}
+
+func TestExecDescriptionUnifiedImageBudgetHidesImageDetailLikeRust(t *testing.T) {
+	const legacyDetail = `detail?: "auto" | "low" | "high" | "original" | null`
+	const unifiedHelper = "`image(imageUrlOrItem: string | { image_url: string } | ImageContent)`"
+	visible := BuildExecToolDescriptionWithVisibility(nil, nil, nil, false, true, nil, 10000, false)
+	hidden := BuildExecToolDescriptionWithVisibility(nil, nil, nil, false, true, nil, 10000, true)
+	if !strings.Contains(visible, legacyDetail) || !strings.Contains(visible, tool.CodeModeLegacyImageHelperDescription) {
+		t.Fatalf("visible description lost the legacy image helper:\n%s", visible)
+	}
+	if strings.Contains(hidden, legacyDetail) || strings.Contains(hidden, "codex/imageDetail") {
+		t.Fatalf("hidden description still documents image detail:\n%s", hidden)
+	}
+	if !strings.Contains(hidden, unifiedHelper) || strings.Contains(visible, unifiedHelper) {
+		t.Fatalf("unified image helper not selected for the hidden budget:\n%s", hidden)
+	}
+	if want := strings.Replace(visible, tool.CodeModeLegacyImageHelperDescription, tool.CodeModeUnifiedImageHelperDescription, 1); want != hidden {
+		t.Fatalf("hidden description differs beyond the image helper:\n%s", hidden)
 	}
 }

@@ -121,27 +121,9 @@ type CallToolResult<TStructured = { [key: string]: unknown }> = {
   [key: string]: unknown;
 };`
 
-const execDescriptionTemplate = `Run JavaScript code to orchestrate/compose tool calls
-- Evaluates the provided JavaScript code in a fresh V8 isolate as an async module.
-- All nested tools are available on the global tools object. Tool names are exposed as normalized JavaScript identifiers.
-- Nested tool methods take either a string or an object as their input argument.
-- Nested tools return either an object or a string, based on the description.
-- Runs raw JavaScript -- no Node, no file system, no network access, no console.
-- Accepts raw JavaScript source text, not JSON, quoted strings, or markdown code fences.
-- You may optionally start the tool input with a first-line pragma like // @exec: {"yield_time_ms": 10000, "max_output_tokens": 1000}.
-- yield_time_ms asks exec to yield early if the script is still running. Defaults to 10000 ms.
-- max_output_tokens sets the token budget for direct exec results. Defaults to 10000 tokens.
-- When the JS code is fully evaluated, the isolate's lifetime ends and unawaited promises are silently discarded.
-
-Global helpers:
-- exit(): Immediately ends the current script successfully.
-- text(value): Appends a text item. Non-string values are stringified when possible.
-- image(value), audio(value), generatedImage(value): Append supported media results.
-- store(key, value) and load(key): Persist serializable values within the code-mode session.
-- notify(value): Immediately injects an extra custom_tool_call_output.
-- setTimeout(callback, delayMs) and clearTimeout(id): Schedule or cancel timers.
-- ALL_TOOLS: Metadata for enabled nested tools as { name, description } entries.
-- yield_control(): Yields accumulated output while the script keeps running.`
+// execDescriptionTemplate is Rust's EXEC_DESCRIPTION_TEMPLATE verbatim; the
+// bundled text is model-visible whenever the catalog carries no override.
+const execDescriptionTemplate = tool.CodeModeExecDescriptionTemplate
 
 var (
 	ErrCellNotFound = errors.New("code mode cell not found")
@@ -245,24 +227,10 @@ func BuildWaitTool() WaitSpec {
 // BuildWaitToolWithMessages applies the catalog's wait description and
 // parameter schema. Invalid or unsupported schemas retain the bundled shape.
 func BuildWaitToolWithMessages(messages *model.CodeModeToolMessages) WaitSpec {
-	parameters := map[string]any{
-		"required": []string{"cell_id"},
-		"properties": map[string]any{
-			"cell_id":       "Identifier of the running exec cell.",
-			"yield_time_ms": "Wait before yielding more output. Defaults to 10000 ms.",
-			"max_tokens":    "Output token budget for this wait call. Defaults to 10000 tokens.",
-			"terminate":     "True stops the running exec cell; false or omitted waits for output.",
-		},
-	}
-	if messages != nil && messages.Wait != nil && messages.Wait.Parameters != nil {
-		if parsed, err := tool.ParseCatalogParameters(*messages.Wait.Parameters); err == nil {
-			parameters = parsed
-		}
-	}
 	return WaitSpec{
 		Name:        WaitToolName,
 		Description: WaitToolDescription(messages),
-		Parameters:  parameters,
+		Parameters:  WaitToolInputSchema(messages),
 	}
 }
 
@@ -322,6 +290,12 @@ func BuildExecToolDescriptionWithOptions(definitions []ToolDefinition, deferredD
 	if messages != nil && messages.DeferredNestedToolsGuidance != nil {
 		guidance = *messages.DeferredNestedToolsGuidance
 	}
+	// Rust's DeferredToolDiscovery::RankedSearch appends the tool-search guidance
+	// outside code_mode_only, where the enabled search tool's own description is
+	// not rendered below.
+	if !codeModeOnly && containsToolSearchDefinition(definitions) {
+		guidance += "\n\n" + tool.CodeModeToolSearchGuidance
+	}
 	sections := make([]string, 0, 4)
 	if template != "" {
 		sections = append(sections, template)
@@ -376,8 +350,28 @@ func BuildExecToolDescriptionWithOptions(definitions []ToolDefinition, deferredD
 	return strings.Join(sections, "\n\n")
 }
 
+// BuildExecToolDescriptionWithVisibility renders the bundled description with
+// Rust's image-helper variant: image detail values stay documented unless the
+// unified image budget hides them (codex-rs ImageDetailVisibility).
+func BuildExecToolDescriptionWithVisibility(definitions []ToolDefinition, deferredDefinitions []ToolDefinition, namespaces map[string]NamespaceDescription, codeModeOnly bool, deferredToolsAvailable bool, messages *model.CodeModeToolMessages, defaultExecYieldTimeMS int, imageDetailHidden bool) string {
+	imageHelper := tool.CodeModeLegacyImageHelperDescription
+	if imageDetailHidden {
+		imageHelper = tool.CodeModeUnifiedImageHelperDescription
+	}
+	return BuildExecToolDescriptionWithOptions(definitions, deferredDefinitions, namespaces, codeModeOnly, deferredToolsAvailable, messages, defaultExecYieldTimeMS, imageHelper)
+}
+
+func containsToolSearchDefinition(definitions []ToolDefinition) bool {
+	for _, definition := range definitions {
+		if definition.Name == tool.ToolSearchName {
+			return true
+		}
+	}
+	return false
+}
+
 func BuildWaitToolDescription() string {
-	return "Use it after an exec call yields a cell id. Set terminate to stop a still-running cell."
+	return tool.CodeModeWaitDescriptionTemplate
 }
 
 // BuildWaitToolDescriptionWithMessages applies the model catalog's wait
@@ -396,10 +390,10 @@ func WaitToolInputSchema(messages *model.CodeModeToolMessages) map[string]any {
 		"type":     "object",
 		"required": []string{"cell_id"},
 		"properties": map[string]any{
-			"cell_id":       map[string]any{"type": "string"},
-			"yield_time_ms": map[string]any{"type": "integer"},
-			"max_tokens":    map[string]any{"type": "integer"},
-			"terminate":     map[string]any{"type": "boolean"},
+			"cell_id":       map[string]any{"type": "string", "description": "Identifier of the running exec cell."},
+			"yield_time_ms": map[string]any{"type": "number", "description": "Wait before yielding more output. Defaults to 10000 ms."},
+			"max_tokens":    map[string]any{"type": "number", "description": "Output token budget for this wait call. Defaults to 10000 tokens."},
+			"terminate":     map[string]any{"type": "boolean", "description": "True stops the running exec cell; false or omitted waits for output."},
 		},
 	}
 	if messages != nil && messages.Wait != nil && messages.Wait.Parameters != nil {

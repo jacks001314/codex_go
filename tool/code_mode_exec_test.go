@@ -188,13 +188,13 @@ func TestCodeModeExecRunsLegacyShellCommandLikeRustWhenUnifiedExecDisabled(t *te
 	}
 	executor := NewCodeModeExecExecutor(registry)
 	description := executor.Spec().Description
-	for _, phrase := range []string{"tools.shell_command", `"required":["command"]`, `"command":"Write-Output hello"`} {
-		if !strings.Contains(description, phrase) {
-			t.Fatalf("description missing %q: %s", phrase, description)
-		}
+	// Rust's exec description is the same template whatever the nested command
+	// tool is; Go must not add a command-tool section of its own.
+	if strings.Contains(description, "Enabled nested command tool") || strings.Contains(description, "tools.shell_command") {
+		t.Fatalf("legacy description carries a Go-only command-tool section: %s", description)
 	}
-	if strings.Contains(description, "tools.exec_command") {
-		t.Fatalf("legacy description advertises exec_command: %s", description)
+	if !strings.HasPrefix(description, "Run JavaScript code to orchestrate/compose tool calls\n") {
+		t.Fatalf("legacy description is not the Rust template: %s", description)
 	}
 	output, err := executor.Execute(context.Background(), &Invocation{
 		CallID:  "weather-legacy",
@@ -223,7 +223,9 @@ func TestCodeModeExecDescriptionWarnsConsoleIsUnavailableLikeRust(t *testing.T) 
 			t.Fatalf("description missing %q: %s", phrase, description)
 		}
 	}
-	for _, phrase := range []string{"tools.exec_command", "There is no nested tools.exec method", "Do not use fetch", `"required":["cmd"]`, "text(r.output)"} {
+	// Rust's bundled EXEC_DESCRIPTION_TEMPLATE is model-visible, so the text
+	// carries its examples and helper signatures verbatim.
+	for _, phrase := range []string{"fresh V8 isolate", "await tools.exec_command(...)", "`ALL_TOOLS`", "`yield_control()`", "silently discarded"} {
 		if !strings.Contains(description, phrase) {
 			t.Fatalf("description missing %q: %s", phrase, description)
 		}

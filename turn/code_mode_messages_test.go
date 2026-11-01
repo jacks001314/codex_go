@@ -23,7 +23,7 @@ func TestCodeModeOnlyExecPromptUsesCatalogMessagesLikeRust(t *testing.T) {
 		Description: "bundled",
 		Freeform:    &tool.FreeformSpec{Syntax: "lark", Definition: "grammar"},
 	}
-	got := codeModeOnlyExecPromptSpecsWithOptions([]tool.Spec{execSpec}, nil, nil, messages, 5*time.Second)
+	got := codeModeOnlyExecPromptSpecsWithOptions([]tool.Spec{execSpec}, nil, nil, messages, 5*time.Second, false)
 	if len(got) != 1 {
 		t.Fatalf("specs = %#v", got)
 	}

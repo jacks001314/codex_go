@@ -1230,7 +1230,9 @@ func TestBuildToolRegistryUnifiedExecFeatureGatesWriteStdinLikeRust(t *testing.T
 		t.Fatalf("shell_command required = %#v", shellSpec.InputSchema["required"])
 	}
 	codeModeSpec, ok := registry.Spec(tool.PlainName(tool.CodeModeExecToolName))
-	if !ok || !strings.Contains(codeModeSpec.Description, "tools.shell_command") {
+	// Rust describes nested tools generically; shell_command is exposed as its
+	// own tool rather than a Go-only section inside the exec description.
+	if !ok || !strings.Contains(codeModeSpec.Description, "All nested tools are available on the global `tools` object") || strings.Contains(codeModeSpec.Description, "Enabled nested command tool") {
 		t.Fatalf("code-mode spec = %#v", codeModeSpec)
 	}
 

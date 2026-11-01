@@ -36,6 +36,13 @@ type RuntimeOptions struct {
 	// CodeModeMessagesForModel resolves the catalog overrides for a model so a
 	// mid-turn model change can refresh exec/wait descriptions (Rust #47118).
 	CodeModeMessagesForModel func(model string) *model.CodeModeToolMessages
+	// CodeModeImageDetailHidden selects the exec description's image helper text
+	// the way Rust's ImageDetailVisibility does: the unified image budget hides
+	// detail values for lite models and models that can request `original`.
+	CodeModeImageDetailHidden bool
+	// CodeModeImageDetailHiddenForModel refreshes the visibility above when a
+	// step switches models.
+	CodeModeImageDetailHiddenForModel func(model string) bool
 	// CodeModeDefaultExecYieldTime substitutes
 	// {{ default_exec_yield_time_ms }} in catalog exec text.
 	CodeModeDefaultExecYieldTime time.Duration
@@ -140,6 +147,8 @@ type Runtime struct {
 	allowedTools                 *[]string
 	codeModeMessagesForModel     func(model string) *model.CodeModeToolMessages
 	codeModeDefaultExecYieldTime time.Duration
+	codeModeImageDetailHidden    bool
+	codeModeImageDetailHiddenFor func(model string) bool
 	dynamicToolMu                sync.Mutex
 	dynamicToolCaller            DynamicToolCaller
 	dynamicToolThreadID          string
@@ -199,6 +208,8 @@ func NewRuntime(options *RuntimeOptions) *Runtime {
 		allowedTools:                 options.AllowedTools,
 		codeModeMessagesForModel:     options.CodeModeMessagesForModel,
 		codeModeDefaultExecYieldTime: options.CodeModeDefaultExecYieldTime,
+		codeModeImageDetailHidden:    options.CodeModeImageDetailHidden,
+		codeModeImageDetailHiddenFor: options.CodeModeImageDetailHiddenForModel,
 		dynamicToolCaller:            options.DynamicToolCaller,
 		dynamicToolThreadID:          strings.TrimSpace(options.DynamicToolThreadID),
 		dynamicToolTurnID:            strings.TrimSpace(options.DynamicToolTurnID),
@@ -513,9 +524,9 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 	// asks the host to plan when the model actually changed (Rust `built_tools`
 	// runs per step, but rebuilding an identical plan is pure overhead here).
 	r.stepToolPlanModel = strings.TrimSpace(loopRequest.Model)
-	if r.codeModeMessagesForModel != nil || r.dynamicToolStepRefresh || r.multiAgentOverridesForModel != nil || r.stepToolSurface != nil || r.stepToolPlan != nil {
+	if r.codeModeMessagesForModel != nil || r.codeModeImageDetailHiddenFor != nil || r.dynamicToolStepRefresh || r.multiAgentOverridesForModel != nil || r.stepToolSurface != nil || r.stepToolPlan != nil {
 		loopRequest.ToolsForStep = func(modelID string) []any {
-			if r.codeModeMessagesForModel != nil {
+			if r.codeModeMessagesForModel != nil || r.codeModeImageDetailHiddenFor != nil {
 				r.applyCodeModeMessagesForModel(modelID)
 			}
 			if r.multiAgentOverridesForModel != nil {
@@ -663,7 +674,7 @@ func (r *Runtime) modelVisibleSpecsForRequest(effectiveToolMode string) []tool.S
 		visibleSpecs = directModeVisibleSpecs(visibleSpecs, r.router.CodeModeToolSpecs())
 	} else if effectiveToolMode == model.ToolModeCodeModeOnly && codemode.HasExecTool(visibleSpecs) {
 		visibleSpecs = codeModeOnlyVisibleSpecs(visibleSpecs)
-		visibleSpecs = codeModeOnlyExecPromptSpecsWithOptions(visibleSpecs, r.router.CodeModeToolSpecs(), r.indirectDescriptionPrefixes, r.codeModeMessages, r.codeModeDefaultExecYieldTime)
+		visibleSpecs = codeModeOnlyExecPromptSpecsWithOptions(visibleSpecs, r.router.CodeModeToolSpecs(), r.indirectDescriptionPrefixes, r.codeModeMessages, r.codeModeDefaultExecYieldTime, r.codeModeImageDetailHidden)
 	}
 	if codemode.HasExecTool(visibleSpecs) {
 		visibleSpecs = augmentCodeModeWinnerSpecs(visibleSpecs, r.router.CodeModeToolSpecs())
@@ -672,13 +683,18 @@ func (r *Runtime) modelVisibleSpecsForRequest(effectiveToolMode string) []tool.S
 }
 
 func (r *Runtime) applyCodeModeMessagesForModel(modelID string) {
-	if r == nil || r.codeModeMessagesForModel == nil {
+	if r == nil {
 		return
 	}
-	messages := r.codeModeMessagesForModel(modelID)
-	r.codeModeMessages = messages
-	if r.router != nil {
-		r.router.SetCodeModeMessages(messages)
+	if r.codeModeImageDetailHiddenFor != nil {
+		r.codeModeImageDetailHidden = r.codeModeImageDetailHiddenFor(modelID)
+	}
+	if r.codeModeMessagesForModel != nil {
+		messages := r.codeModeMessagesForModel(modelID)
+		r.codeModeMessages = messages
+		if r.router != nil {
+			r.router.SetCodeModeMessages(messages)
+		}
 	}
 }
 
@@ -804,10 +820,10 @@ func codeModeOnlyVisibleSpecs(specs []tool.Spec) []tool.Spec {
 }
 
 func codeModeOnlyExecPromptSpecs(visibleSpecs []tool.Spec, nestedSpecs []tool.Spec, indirectPrefixes *tool.IndirectNamespacePrefixes) []tool.Spec {
-	return codeModeOnlyExecPromptSpecsWithOptions(visibleSpecs, nestedSpecs, indirectPrefixes, nil, 0)
+	return codeModeOnlyExecPromptSpecsWithOptions(visibleSpecs, nestedSpecs, indirectPrefixes, nil, 0, false)
 }
 
-func codeModeOnlyExecPromptSpecsWithOptions(visibleSpecs []tool.Spec, nestedSpecs []tool.Spec, indirectPrefixes *tool.IndirectNamespacePrefixes, messages *model.CodeModeToolMessages, defaultYieldTime time.Duration) []tool.Spec {
+func codeModeOnlyExecPromptSpecsWithOptions(visibleSpecs []tool.Spec, nestedSpecs []tool.Spec, indirectPrefixes *tool.IndirectNamespacePrefixes, messages *model.CodeModeToolMessages, defaultYieldTime time.Duration, imageDetailHidden bool) []tool.Spec {
 	enabledSpecs := make([]tool.Spec, 0, len(nestedSpecs))
 	deferredSpecs := make([]tool.Spec, 0)
 	namespaces := map[string]codemode.NamespaceDescription{}
@@ -836,7 +852,7 @@ func codeModeOnlyExecPromptSpecsWithOptions(visibleSpecs []tool.Spec, nestedSpec
 	if defaultYieldMS <= 0 {
 		defaultYieldMS = 10000
 	}
-	description := codemode.BuildExecToolDescriptionWithOptions(
+	description := codemode.BuildExecToolDescriptionWithVisibility(
 		codemode.CollectPromptDefinitions(enabledSpecs),
 		codemode.CollectPromptDefinitions(deferredSpecs),
 		namespaces,
@@ -844,7 +860,7 @@ func codeModeOnlyExecPromptSpecsWithOptions(visibleSpecs []tool.Spec, nestedSpec
 		len(deferredSpecs) > 0,
 		messages,
 		defaultYieldMS,
-		"image(value), audio(value), generatedImage(value): Append supported media results.",
+		imageDetailHidden,
 	)
 	out := append([]tool.Spec(nil), visibleSpecs...)
 	for index := range out {
