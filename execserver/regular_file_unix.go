@@ -3,6 +3,8 @@
 package execserver
 
 import (
+	"errors"
+	"fmt"
 	"os"
 
 	"golang.org/x/sys/unix"
@@ -13,6 +15,12 @@ func openRegularFileForRead(path string) (*os.File, error) {
 	// from redirecting sensitive reads.
 	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
+		// Rust's regular_file::read_sensitive_file_to_string opens with
+		// O_NOFOLLOW and reports the refusal as InvalidInput, so the reader sees
+		// the same "not a regular file" rejection instead of a raw ELOOP.
+		if errors.Is(err, unix.ELOOP) {
+			return nil, &invalidFileInputError{message: fmt.Sprintf("path `%s` is not a regular file", path)}
+		}
 		return nil, err
 	}
 	file := os.NewFile(uintptr(fd), path)

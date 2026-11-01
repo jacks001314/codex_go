@@ -72,7 +72,7 @@ func (a environmentApplyPatchFileSystem) metadata(path string) (os.FileInfo, err
 		// A remote miss arrives as the exec server's NotFound code, so map both
 		// the in-process os.ErrNotExist and the wire form onto os.ErrNotExist
 		// for applypatch's existence check.
-		if execserver.IsFSNotExistError(err) {
+		if execserver.IsFSNotExistError(err) || isNotDirectoryError(err) {
 			return nil, &fs.PathError{Op: "stat", Path: path, Err: os.ErrNotExist}
 		}
 		return nil, err

@@ -92,9 +92,6 @@ type Action struct {
 	CWD           string
 	Hunks         []Change
 	Changes       map[string]Change
-	// NoFollowSymlinks is set by the runtime when an unsandboxed patch must
-	// not follow symlinks (Rust #39659).
-	NoFollowSymlinks bool
 }
 
 type ApplyOptions struct {
@@ -617,23 +614,20 @@ func (a *Action) Verify(options *ApplyOptions) error {
 	if a == nil || len(a.Hunks) == 0 {
 		return fmt.Errorf("%w: patch contains no hunks", ErrInvalidPatch)
 	}
-	if a != nil && options != nil && options.NoFollowSymlinks {
-		a.NoFollowSymlinks = true
-	}
 	cwd := "."
 	if options != nil && strings.TrimSpace(options.CWD) != "" {
 		cwd = options.CWD
 	}
-	return a.preflight(applyOptionsFileSystem(options), cwd)
+	// The walk is a per-call option: a verification that asked for the
+	// no-follow check must not make a later apply of the same patch follow
+	// its paths through symlinks (Rust #39659).
+	return a.preflight(applyOptionsFileSystem(options), cwd, options != nil && options.NoFollowSymlinks)
 }
 
 // ApplyVerified commits an action after Verify has succeeded.
 func (a *Action) ApplyVerified(options *ApplyOptions) (*ApplyResult, error) {
 	if a == nil || len(a.Hunks) == 0 {
 		return nil, fmt.Errorf("%w: patch contains no hunks", ErrInvalidPatch)
-	}
-	if a != nil && options != nil && options.NoFollowSymlinks {
-		a.NoFollowSymlinks = true
 	}
 	cwd := "."
 	if options != nil && strings.TrimSpace(options.CWD) != "" {
@@ -658,12 +652,12 @@ func (a *Action) applyCommitted(fs FileSystem, cwd string) (*ApplyResult, error)
 	return result, nil
 }
 
-func (a *Action) preflight(fs FileSystem, cwd string) error {
+func (a *Action) preflight(fs FileSystem, cwd string, noFollowSymlinks bool) error {
 	// The symlink walk stays on the host process filesystem: it is a Go
 	// host-path safety check (Rust #39659) for the unsandboxed local case, and
 	// no wire primitive models "is this component a symlink" over the exec
 	// server. Patch targets themselves are read through fs below.
-	if a != nil && a.NoFollowSymlinks {
+	if a != nil && noFollowSymlinks {
 		for _, name := range a.FilePaths() {
 			resolved, err := resolveWorkspacePath(cwd, name)
 			if err != nil {
@@ -818,7 +812,9 @@ func noFollowSymlinkPath(path string) (string, error) {
 		current = filepath.Join(current, part)
 		info, err := os.Lstat(current)
 		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
+			// A component that cannot be inspected because an ancestor is a
+			// regular file is simply absent, the same shape Windows reports.
+			if errors.Is(err, os.ErrNotExist) || isNotDirectory(err) {
 				continue
 			}
 			return "", err

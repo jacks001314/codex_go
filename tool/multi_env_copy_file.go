@@ -208,6 +208,11 @@ func fileSystemErrorKind(err error) string {
 			return "permission denied"
 		}
 	}
+	if isSymlinkLoop(err) {
+		// A symlink at the final path component is refused by O_NOFOLLOW; Rust's
+		// regular-file check reports that refusal as InvalidInput.
+		return "invalid input parameter"
+	}
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		return "entity not found"
