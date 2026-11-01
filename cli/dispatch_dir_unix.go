@@ -5,6 +5,8 @@ package cli
 import (
 	"os"
 	"path/filepath"
+
+	"golang.org/x/sys/unix"
 )
 
 // removeArg0DirLocked retires an arg0 session directory while its lock is
@@ -16,7 +18,10 @@ func removeArg0DirLocked(dir string, release func() error) error {
 	if err != nil {
 		return err
 	}
-	if err := os.Rename(dir, retiredDir); err != nil {
+	// Go's os.Rename rejects an existing target directory with EEXIST to keep
+	// platforms interchangeable, while Rust calls rename(2) directly and
+	// atomically replaces the empty reservation directory.
+	if err := unix.Rename(dir, retiredDir); err != nil {
 		_ = os.RemoveAll(retiredDir)
 		return err
 	}
