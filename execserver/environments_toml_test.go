@@ -474,6 +474,34 @@ func TestEnvironmentProviderFromCodexHomeLikeRust(t *testing.T) {
 	}
 }
 
+// Rust parity: environment_bootstrap.rs default_environment_is_remote reports
+// true only when the selected default names a configured environment. The
+// implicit local environment is not listed, and a disabled provider is local.
+func TestDefaultEnvironmentIsRemoteLikeRust(t *testing.T) {
+	local := EnvironmentProviderSnapshot{
+		Environments: []NamedEnvironment{{ID: "remote", Transport: EnvironmentTransport{Kind: EnvironmentTransportWebSocket}}},
+		Default:      EnvironmentDefault{Kind: EnvironmentDefaultID, ID: LocalEnvironmentID},
+	}
+	if local.DefaultEnvironmentIsRemote() {
+		t.Fatal("local default reported remote")
+	}
+	remote := EnvironmentProviderSnapshot{
+		Environments: []NamedEnvironment{{ID: "remote", Transport: EnvironmentTransport{Kind: EnvironmentTransportWebSocket}}},
+		Default:      EnvironmentDefault{Kind: EnvironmentDefaultID, ID: "remote"},
+	}
+	if !remote.DefaultEnvironmentIsRemote() {
+		t.Fatal("configured default reported local")
+	}
+	disabled := EnvironmentProviderSnapshot{Default: EnvironmentDefault{Kind: EnvironmentDefaultDisabled}}
+	if disabled.DefaultEnvironmentIsRemote() {
+		t.Fatal("disabled default reported remote")
+	}
+	snapshot := DefaultEnvironmentProviderSnapshot("ws://127.0.0.1:4512")
+	if !snapshot.DefaultEnvironmentIsRemote() {
+		t.Fatal("CODEX_EXEC_SERVER_URL default reported local")
+	}
+}
+
 func environmentsTestFileName(index int) string {
 	return "environments-" + string(rune('0'+index)) + ".toml"
 }

@@ -130,6 +130,24 @@ func (s EnvironmentProviderSnapshot) EnvironmentID() (string, bool) {
 	return s.Default.ID, true
 }
 
+// DefaultEnvironmentIsRemote mirrors Rust's
+// PreparedEnvironmentManager::default_environment_is_remote: true when the
+// selected default names one of the configured environments. The implicit local
+// environment is never part of the snapshot's environment list, so a local
+// default reports false.
+func (s EnvironmentProviderSnapshot) DefaultEnvironmentIsRemote() bool {
+	id, ok := s.EnvironmentID()
+	if !ok {
+		return false
+	}
+	for _, environment := range s.Environments {
+		if environment.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
 // EnvironmentsTOML is the parsed `environments.toml` document.
 type EnvironmentsTOML struct {
 	Default      *string

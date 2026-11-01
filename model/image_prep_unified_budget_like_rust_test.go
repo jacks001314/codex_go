@@ -1,6 +1,7 @@
 package model
 
 import (
+	"strings"
 	"testing"
 
 	"codex_go/eventmap"
@@ -23,6 +24,36 @@ func TestRequestImagePrepUsesUnifiedBudgetModeLikeRust(t *testing.T) {
 	}
 	if got := responsesImagePrepMode(&AgentRequest{}); got != eventmap.ImagePrepModeDetailBased {
 		t.Fatalf("responsesImagePrepMode(default) = %v", got)
+	}
+}
+
+// Rust strips the unified-budget compatibility hint before a Responses Lite
+// request (client_common.rs normalize_image_detail: lite clears every image
+// detail). The prepared request copy keeps the hint for accounting, so the
+// stored items are unchanged.
+func TestResponsesLiteStripsUnifiedImageBudgetDetailHintLikeRust(t *testing.T) {
+	prepared := prepareResponseInputImagesWithStoreMode(attachmentStoreTestItems(), nil, eventmap.ImagePrepOrigin{}, eventmap.ImagePrepModeUnifiedBudget)
+	if detail := imagePrepTestBlockDetail(t, prepared); detail != "original" {
+		t.Fatalf("prepared image detail = %q, want original", detail)
+	}
+	lite := responsesLiteDeclaredInputItems(prepared)
+	if len(lite) != 1 {
+		t.Fatalf("lite items = %#v", lite)
+	}
+	message, _ := lite[0].(map[string]any)
+	content, _ := message["content"].([]any)
+	if len(content) != 1 {
+		t.Fatalf("lite content = %#v", message)
+	}
+	block, _ := content[0].(map[string]any)
+	if _, ok := block["detail"]; ok {
+		t.Fatalf("lite image still carries detail: %#v", block)
+	}
+	if url, _ := block["image_url"].(string); !strings.HasPrefix(url, "data:image/") {
+		t.Fatalf("lite image url = %q, want data URL", url)
+	}
+	if detail := imagePrepTestBlockDetail(t, prepared); detail != "original" {
+		t.Fatalf("responses lite mutated the prepared items: %q", detail)
 	}
 }
 

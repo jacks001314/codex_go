@@ -33,6 +33,7 @@ import (
 	contextfrag "codex_go/context"
 	"codex_go/doctor"
 	"codex_go/eventmap"
+	"codex_go/execserver"
 	"codex_go/features"
 	"codex_go/install"
 	"codex_go/mcp"
@@ -241,6 +242,9 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		return nil, err
 	}
 	if err := validateExecWorktreeRequest(req); err != nil {
+		return nil, err
+	}
+	if err := r.rejectRemoteWorktreeDefault(req); err != nil {
 		return nil, err
 	}
 	// Rust #42993 re-targeted the strict-config coverage to `codex exec`, which
@@ -863,6 +867,24 @@ func execHasStandardProgram(programs []string) bool {
 		}
 	}
 	return false
+}
+
+// rejectRemoteWorktreeDefault mirrors Rust's exec bootstrap: when
+// CODEX_HOME/environments.toml (or the CODEX_EXEC_SERVER_URL fallback) selects a
+// remote default environment, --worktree fails before any checkout is
+// allocated (#42652).
+func (r *Runner) rejectRemoteWorktreeDefault(req *Request) error {
+	if r == nil || req == nil || !req.Exec.Shared.Worktree {
+		return nil
+	}
+	snapshot, err := execserver.EnvironmentProviderFromCodexHome(r.CodexHome)
+	if err != nil {
+		return err
+	}
+	if snapshot.DefaultEnvironmentIsRemote() {
+		return errors.New("--worktree requires local execution")
+	}
+	return nil
 }
 
 // validateExecWorktreeRequest enforces the CLI restrictions for the
