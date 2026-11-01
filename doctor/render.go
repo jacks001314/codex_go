@@ -11,8 +11,9 @@ var humanGroups = []struct {
 	title      string
 	categories []string
 }{
-	{title: "Environment", categories: []string{"system", "runtime", "install", "search", "git", "terminal", "title", "state", "threads"}},
+	{title: "Environment", categories: []string{"system", "disk", "security", "runtime", "install", "search", "git", "terminal", "title", "state", "threads"}},
 	{title: "Configuration", categories: []string{"config", "auth", "mcp", "sandbox"}},
+	{title: "Desktop App", categories: []string{"desktop"}},
 	{title: "Updates", categories: []string{"updates"}},
 	{title: "Connectivity", categories: []string{"network", "websocket", "reachability"}},
 	{title: "Background Server", categories: []string{"app-server"}},
@@ -44,18 +45,10 @@ func RenderHuman(report *Report, opts *Options) string {
 		}
 		out.WriteByte('\n')
 	}
-	unknownChecks := checksForUnknownGroup(report)
-	if len(unknownChecks) > 0 {
-		out.WriteString("Other\n")
-		for _, check := range unknownChecks {
-			writeCheck(&out, check, opts)
-		}
-		out.WriteByte('\n')
-	}
 	out.WriteString(separator(opts))
 	out.WriteByte('\n')
 	out.WriteString(summaryLine(report, opts))
-	out.WriteByte('\n')
+	out.WriteString("\n\n")
 	if opts.Summary {
 		out.WriteString("Run codex doctor without --summary for detailed diagnostics.\n")
 		fmt.Fprintf(&out, "%-34s %s\n", "--all expand truncated lists", "--json redacted report")
@@ -73,7 +66,7 @@ func headerSuffix(report *Report) string {
 	}
 	runtimeCheck := findCheckByCategory(report, "runtime")
 	if platform, ok := doctorDetailValue(runtimeCheck, "platform"); ok {
-		return version + " | " + platform
+		return version + " \u00b7 " + platform
 	}
 	return version
 }
@@ -95,37 +88,18 @@ type doctorNote struct {
 	summary string
 }
 
+// checksForGroup follows Rust doctor checks_for_group: the group's category
+// order decides the row order, and report order decides ties inside a category.
 func checksForGroup(report *Report, categories []string) []*DoctorCheck {
 	if report == nil {
 		return nil
 	}
-	allowed := map[string]bool{}
-	for _, category := range categories {
-		allowed[category] = true
-	}
 	out := make([]*DoctorCheck, 0, len(report.Checks))
-	for _, check := range report.Checks {
-		if check != nil && allowed[check.Category] {
-			out = append(out, check)
-		}
-	}
-	return out
-}
-
-func checksForUnknownGroup(report *Report) []*DoctorCheck {
-	if report == nil {
-		return nil
-	}
-	known := map[string]bool{}
-	for _, group := range humanGroups {
-		for _, category := range group.categories {
-			known[category] = true
-		}
-	}
-	out := make([]*DoctorCheck, 0)
-	for _, check := range report.Checks {
-		if check != nil && !known[check.Category] {
-			out = append(out, check)
+	for _, category := range categories {
+		for _, check := range report.Checks {
+			if check != nil && check.Category == category {
+				out = append(out, check)
+			}
 		}
 	}
 	return out
@@ -133,7 +107,7 @@ func checksForUnknownGroup(report *Report) []*DoctorCheck {
 
 func writeCheck(out *strings.Builder, check *DoctorCheck, opts *Options) {
 	status := displayStatusForCheck(check)
-	fmt.Fprintf(out, "  %s %-12s %s\n", statusMarker(status, opts), check.Category, highlightActions(rowSummary(check), status, opts))
+	fmt.Fprintf(out, "  %s %-12s %s\n", statusMarker(status, opts), check.Category, highlightActions(rowSummary(check, opts), status, opts))
 	if opts.Summary {
 		return
 	}
@@ -164,11 +138,15 @@ func writeCheck(out *strings.Builder, check *DoctorCheck, opts *Options) {
 			continue
 		case label == "enabled feature flags" || label == "feature flag overrides":
 			continue
+		case check.Category == "system" && (label == "os type" || label == "os version"):
+			// Rust doctor system_details consumes these labels without rendering
+			// them, so only `os` and `OS language` reach the human report.
+			continue
 		}
 		writeDetail(out, check, detail, opts)
 	}
 	for _, remedy := range issueRemedies(check) {
-		fmt.Fprintf(out, "    -> %s\n", highlightActions(redactDoctorDetail(remedy), status, opts))
+		fmt.Fprintf(out, "    %s %s\n", remedyMarker(opts), highlightActions(redactDoctorDetail(remedy), status, opts))
 	}
 }
 
@@ -361,7 +339,7 @@ func writeDetail(out *strings.Builder, check *DoctorCheck, detail string, opts *
 	}
 	if issue != nil && issue.Expected != nil {
 		value = styleDetailText(value, displayStatusForCheck(check), opts) + " (expected " + redactDoctorDetail(*issue.Expected) + ")"
-		fmt.Fprintf(out, "    > %-24s %s\n", label, value)
+		fmt.Fprintf(out, "    %s %-24s %s\n", detailMarker(opts), label, value)
 		return
 	}
 	fmt.Fprintf(out, "      %-24s %s\n", label, styleDetailText(value, displayStatusForCheck(check), opts))
@@ -375,6 +353,8 @@ func doctorDisplayLabel(label string) string {
 		return "optional reachability"
 	case "check for update on startup":
 		return "startup update check"
+	case "os language":
+		return "OS language"
 	default:
 		return label
 	}
@@ -485,7 +465,7 @@ func writeNote(out *strings.Builder, note *doctorNote, opts *Options) {
 	fmt.Fprintf(out, "   %s %-12s %s\n", statusMarker(note.status, opts), note.name, redactDoctorDetail(note.summary))
 }
 
-func rowSummary(check *DoctorCheck) string {
+func rowSummary(check *DoctorCheck, opts *Options) string {
 	if check == nil {
 		return ""
 	}
@@ -495,10 +475,10 @@ func rowSummary(check *DoctorCheck) string {
 	if check.Status != CheckStatusOK && check.Remediation != nil {
 		return check.Summary + " - " + redactDoctorDetail(*check.Remediation)
 	}
-	return displaySummary(check)
+	return displaySummary(check, opts)
 }
 
-func displaySummary(check *DoctorCheck) string {
+func displaySummary(check *DoctorCheck, opts *Options) string {
 	if check == nil {
 		return ""
 	}
@@ -527,19 +507,12 @@ func displaySummary(check *DoctorCheck) string {
 				return readiness + " (" + provider + ", `" + command + "`)"
 			}
 		}
-	case "git":
-		if value, ok := doctorDetailValue(check, "git version"); ok {
-			return value
-		}
-		if value, ok := doctorDetailValue(check, "selected git"); ok {
-			return value
-		}
 	case "terminal":
 		if summary := terminalDisplaySummary(check); summary != "" {
 			return summary
 		}
 	case "title":
-		if summary := titleDisplaySummary(check); summary != "" {
+		if summary := titleDisplaySummary(check, opts); summary != "" {
 			return summary
 		}
 	case "state":
@@ -592,15 +565,19 @@ func terminalDisplaySummary(check *DoctorCheck) string {
 	if term, ok := doctorDetailValue(check, "TERM"); ok {
 		parts = append(parts, "TERM="+term)
 	}
-	return strings.Join(parts, " | ")
+	return strings.Join(parts, " \u00b7 ")
 }
 
-func titleDisplaySummary(check *DoctorCheck) string {
+func titleDisplaySummary(check *DoctorCheck, opts *Options) string {
 	source, sourceOK := doctorDetailValue(check, "terminal title source")
 	project, projectOK := doctorDetailValue(check, "terminal title project value")
+	separator := " \u00b7 "
+	if opts != nil && opts.ASCII {
+		separator = " | "
+	}
 	switch {
 	case sourceOK && projectOK:
-		return source + " | project " + project
+		return source + separator + "project " + project
 	case sourceOK:
 		return source
 	default:
@@ -696,17 +673,17 @@ func statusMarker(status doctorDisplayStatus, opts *Options) string {
 	}
 	switch status {
 	case doctorDisplayStatusOK:
-		return "OK "
+		return "✓"
 	case doctorDisplayStatusUpdate:
-		return "UP "
+		return "↑"
 	case doctorDisplayStatusNote, doctorDisplayStatusWarning:
-		return "!! "
+		return "⚠"
 	case doctorDisplayStatusFail:
-		return "XX "
+		return "✗"
 	case doctorDisplayStatusIdle:
-		return "-- "
+		return "○"
 	default:
-		return "?? "
+		return "?"
 	}
 }
 
@@ -731,11 +708,32 @@ func displayStatusForCheck(check *DoctorCheck) doctorDisplayStatus {
 	}
 }
 
+// doctorSeparatorWidth is Rust doctor SEPARATOR_WIDTH.
+const doctorSeparatorWidth = 61
+
 func separator(opts *Options) string {
 	if opts != nil && opts.ASCII {
-		return strings.Repeat("-", 60)
+		return strings.Repeat("-", doctorSeparatorWidth)
 	}
-	return strings.Repeat("-", 60)
+	return strings.Repeat("─", doctorSeparatorWidth)
+}
+
+// remedyMarker matches Rust's remedy arrow: an ASCII "->" under --ascii and a
+// unicode arrow otherwise.
+func remedyMarker(opts *Options) string {
+	if opts != nil && opts.ASCII {
+		return "->"
+	}
+	return "→"
+}
+
+// detailMarker matches Rust detail_marker: issue rows get an arrow, plain rows a
+// blank so every value stays aligned.
+func detailMarker(opts *Options) string {
+	if opts != nil && opts.ASCII {
+		return ">"
+	}
+	return "▸"
 }
 
 func summaryLine(report *Report, opts *Options) string {
@@ -761,6 +759,9 @@ func summaryLine(report *Report, opts *Options) string {
 		}
 	}
 	sep := " | "
+	if opts == nil || !opts.ASCII {
+		sep = " \u00b7 "
+	}
 	parts := []string{fmt.Sprintf("%d ok", okCount)}
 	if idleCount > 0 {
 		parts = append(parts, fmt.Sprintf("%d idle", idleCount))

@@ -240,7 +240,9 @@ func (b *Builder) Build(opts *Options) *Report {
 	}
 	checks = append(checks, desktopChecks()...)
 	if runtime.GOOS == "windows" {
-		checks = append(checks, b.timed(func() *DoctorCheck { return windowsDevDriveCheck(cwd) }))
+		// Rust pushes the "dev drive" check right after disk, so its category
+		// (git) renders before the git executable check.
+		checks = insertDoctorCheckBeforeCategory(checks, b.timed(func() *DoctorCheck { return windowsDevDriveCheck(cwd) }), "git")
 	}
 	return b.newReport(checks)
 }
@@ -266,6 +268,22 @@ func (b *Builder) networkOnlyReport(codexHome string, opts *Options) *Report {
 		b.timed(func() *DoctorCheck { return b.providerReachabilityCheck(codexHome, opts) }),
 	}
 	return b.newReport(checks)
+}
+
+// insertDoctorCheckBeforeCategory mirrors Rust doctor's push order for checks
+// that share a category with an earlier check.
+func insertDoctorCheckBeforeCategory(checks []*DoctorCheck, check *DoctorCheck, category string) []*DoctorCheck {
+	for index, existing := range checks {
+		if existing == nil || existing.Category != category {
+			continue
+		}
+		out := make([]*DoctorCheck, 0, len(checks)+1)
+		out = append(out, checks[:index]...)
+		out = append(out, check)
+		out = append(out, checks[index:]...)
+		return out
+	}
+	return append(checks, check)
 }
 
 func (b *Builder) newReport(checks []*DoctorCheck) *Report {
@@ -647,36 +665,88 @@ func redactDoctorURLPath(path string) string {
 	return "/" + nonEmpty[0] + "/<redacted>"
 }
 
-func systemCheck() *DoctorCheck {
-	osLanguage := osLanguageForDoctor(currentEnvMap())
-	details := []string{
-		"os: " + runtime.GOOS,
-		"os type: " + runtime.GOOS,
-		"os version: unknown",
-		"os language: " + firstNonEmptyDoctor(osLanguage, "unavailable"),
-		"arch: " + runtime.GOARCH,
-		"go: " + runtime.Version(),
+type systemCheckInputs struct {
+	os         string
+	osType     string
+	osVersion  string
+	osLanguage string
+	localeEnv  map[string]string
+	editorEnv  map[string]string
+	pagerEnv   map[string]string
+}
+
+// Rust doctor/system.rs LOCALE_ENV_VARS, EDITOR_ENV_VARS and PAGER_ENV_VARS.
+var (
+	doctorLocaleEnvVars = []string{"LC_ALL", "LC_CTYPE", "LANG"}
+	doctorEditorEnvVars = []string{"VISUAL", "EDITOR"}
+	doctorPagerEnvVars  = []string{"PAGER", "GIT_PAGER", "GH_PAGER", "LESS"}
+)
+
+func detectSystemCheckInputs() systemCheckInputs {
+	env := currentEnvMap()
+	osDisplay, osType, osVersion := doctorOSIdentity()
+	return systemCheckInputs{
+		os:         osDisplay,
+		osType:     osType,
+		osVersion:  osVersion,
+		osLanguage: osLanguageForDoctor(env),
+		localeEnv:  pickDoctorEnvValues(env, doctorLocaleEnvVars),
+		editorEnv:  pickDoctorEditorEnvValues(env),
+		pagerEnv:   pickDoctorEnvValues(env, doctorPagerEnvVars),
 	}
-	for _, key := range []string{"LANG", "LC_ALL", "LC_CTYPE", "TERM", "SHELL", "ComSpec", "WT_SESSION"} {
-		if value := os.Getenv(key); strings.TrimSpace(value) != "" {
-			details = append(details, key+": "+redactEnvValue(key, value))
+}
+
+func pickDoctorEnvValues(env map[string]string, names []string) map[string]string {
+	out := make(map[string]string, len(names))
+	for _, name := range names {
+		if value, ok := env[name]; ok {
+			out[name] = value
 		}
 	}
-	for _, key := range []string{"VISUAL", "EDITOR"} {
-		value := strings.TrimSpace(os.Getenv(key))
+	return out
+}
+
+func pickDoctorEditorEnvValues(env map[string]string) map[string]string {
+	out := make(map[string]string, len(doctorEditorEnvVars))
+	for _, name := range doctorEditorEnvVars {
+		value := strings.TrimSpace(env[name])
 		if value == "" {
 			value = "not set"
 		}
-		details = append(details, key+": "+redactEnvValue(key, value))
+		out[name] = value
 	}
-	for _, key := range []string{"PAGER", "GIT_PAGER", "GH_PAGER", "LESS"} {
-		if value := os.Getenv(key); strings.TrimSpace(value) != "" {
-			details = append(details, key+": "+redactEnvValue(key, value))
+	return out
+}
+
+func systemCheck() *DoctorCheck {
+	return systemCheckFromInputs(detectSystemCheckInputs())
+}
+
+func systemCheckFromInputs(inputs systemCheckInputs) *DoctorCheck {
+	details := []string{
+		"os: " + inputs.os,
+		"os type: " + inputs.osType,
+		"os version: " + inputs.osVersion,
+		"os language: " + firstNonEmptyDoctor(inputs.osLanguage, "unavailable"),
+	}
+	for _, name := range doctorLocaleEnvVars {
+		if value, ok := inputs.localeEnv[name]; ok {
+			details = append(details, name+": "+value)
+		}
+	}
+	for _, name := range doctorEditorEnvVars {
+		if value, ok := inputs.editorEnv[name]; ok {
+			details = append(details, name+": "+value)
+		}
+	}
+	for _, name := range doctorPagerEnvVars {
+		if value, ok := inputs.pagerEnv[name]; ok {
+			details = append(details, name+": "+value)
 		}
 	}
 	summary := "OS language unavailable"
-	if osLanguage != "" {
-		summary = "OS language " + osLanguage
+	if strings.TrimSpace(inputs.osLanguage) != "" {
+		summary = "OS language " + inputs.osLanguage
 	}
 	return NewCheck(
 		"system.environment",
@@ -862,6 +932,12 @@ func searchCommandPathReadiness(command string) (string, error) {
 }
 
 func osLanguageForDoctor(env map[string]string) string {
+	// Rust doctor uses sys_locale::get_locale(), which asks the OS for the
+	// preferred UI language first and only falls back to POSIX locale env vars on
+	// unix hosts.
+	if locale := doctorPreferredLocale(); locale != "" {
+		return locale
+	}
 	for _, key := range []string{"LC_ALL", "LC_CTYPE", "LANG"} {
 		value := strings.TrimSpace(env[key])
 		if value == "" || strings.EqualFold(value, "C") || strings.EqualFold(value, "POSIX") {

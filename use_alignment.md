@@ -3127,7 +3127,56 @@ and decodable items kept Go's original spelling. The record is now decoded into
   `TestAWSAuthSDKErrorMessageLikeRust` and
   `TestLoadAWSAuthContext*LikeRust`.
 
+### 92. `doctor` reports the Rust Environment identity, chrome and group order
+
+- **OS identity and language.** Rust's `system_check` renders `os_info::get()`
+  plus `sys_locale::get_locale()`, so 0.166 prints
+  `os: Windows 10.0.26200 (Windows 11 CoreCountrySpecific) [64-bit]`,
+  `os version: 10.0.26200` and `os language: zh-CN`, while Go printed
+  `os: windows`, `os version: unknown` and derived the language from
+  `LC_ALL`/`LC_CTYPE`/`LANG` (so `LANG=C.UTF-8` became `C`).
+  `doctorOSIdentity` reads `RtlGetVersion` and the CurrentVersion
+  `EditionID`/`ProductName` value (with os_info's `Windows 11` prefix at build
+  22000+, the workstation edition fallback and the pointer-width bitness), and
+  `doctorPreferredLocale` asks `GetUserPreferredUILanguages(MUI_LANGUAGE_NAME)`
+  before falling back to the POSIX variables.
+- **Detail set and rows.** `systemCheckFromInputs` emits Rust's `os`, `os type`,
+  `os version`, `os language`, `LC_ALL`/`LC_CTYPE`/`LANG`,
+  `VISUAL`/`EDITOR` (always present, `not set` when empty) and
+  `PAGER`/`GIT_PAGER`/`GH_PAGER`/`LESS` in that order; the Go-only `arch`, `go`,
+  `TERM`, `SHELL`, `ComSpec` and `WT_SESSION` rows are gone. The human renderer
+  consumes `os type`/`os version` without printing them and relabels
+  `os language` as `OS language`, matching `output/detail.rs::system_details`.
+- **Groups and chrome.** `humanGroups` mirrors Rust `GROUPS`: Environment starts
+  `system, disk, security, runtime, install, ...`, the new Desktop App group owns
+  `desktop`, rows follow the group's category order and categories missing from
+  every group are hidden instead of landing in a Go-only `Other` group. Status
+  chrome matches 0.166 as well: `✓ ↑ ⚠ ✗ ○` (ASCII `[ok] [up] [!!] [XX] [--]`),
+  `▸` detail and `→` remedy markers, a 61-character `─` separator, `·` in the
+  header, terminal title and summary line, a blank line before the footer hints,
+  `terminal_summary` joining with `·` even under `--ascii`, and git rows falling
+  back to `check.summary` because Rust's `display_summary` has no git arm.
+- **Report order.** Rust pushes the Windows dev-drive check before the git
+  executable check; `insertDoctorCheckBeforeCategory` puts it in that slot so the
+  two `git` rows render in 0.166's order.
+- Evidence: `out/r1296-doctor-diff.txt` (normalized Environment diff against the
+  0.166 binary), `out/r99-doctor-rust.txt` and `out/r99-doctor-go.txt` (full
+  reports), `out/r99-env-rust.txt`/`out/r99-env-go.txt`,
+  `TestSystemCheckDetailsMatchRustLikeRust`,
+  `TestSystemCheckOmitsUnsetLocaleAndPagerEntriesLikeRust`,
+  `TestRenderHumanSystemRowsMatchRustLikeRust`,
+  `TestRenderHumanGroupsFollowRustGroupOrderLikeRust` and
+  `TestRenderHumanUnicodeMarkersMatchRustLikeRust`.
+
 ## Verification
+
+- Round 80 renders the Rust 0.166 `doctor` Environment (entry 92): the
+  normalized Environment diff in `out/r1296-doctor-diff.txt` is reduced to the
+  `GCODE_HOME` label, the runtime/install detail formatting, the search provider
+  and the extra state database rows, `out/r99-doctor-rust.txt` and
+  `out/r99-doctor-go.txt` agree on the `os`/`OS language`/locale/editor/pager
+  rows, the `✓ ⚠ ✗ ○` markers, the `─` separator, the `·` summary line and the
+  git row order, and `go test -count=1 ./doctor ./cli` passes.
 
 - Round 79 aligns the `--aws-sigv4` region and credential errors with the pinned
   0.166 SDK (entry 91): `out/r97aws-probe-after.txt` and
@@ -3935,3 +3984,10 @@ and decodable items kept Go's original spelling. The record is now decoded into
   namespace with `exec` and its JSON schema, then the developer/user items).
   Aligning means serialising the tool definitions and the prompt-assembly
   order the core session builder produces.
+- `doctor` still differs from 0.166 outside the Environment identity work in
+  entry 92: the disk and state rows keep Go's `GCODE_HOME` label, the runtime and
+  install checks print separate `managed by`/`install context` rows instead of
+  Rust's single `npm: no · bun: no · ...` line, `search` prefers the system
+  ripgrep over the bundled one, the terminal check reports `TERM` as an issue and
+  calls stdin a terminal, and the state check does not list the `memories v2`,
+  `queue` and `thread history` databases.

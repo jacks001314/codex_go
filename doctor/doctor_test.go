@@ -58,6 +58,8 @@ func TestReportBuildsLocalChecks(t *testing.T) {
 	if !hasCheckID(report, "installation") || hasCheckID(report, "install.identity") {
 		t.Fatalf("installation check id mismatch: %+v", report.Checks)
 	}
+	// Rust pushes the dev-drive check before the git executable check, so the
+	// shared "git" category keeps that report order.
 	wantChecks := []struct {
 		id       string
 		category string
@@ -78,6 +80,7 @@ func TestReportBuildsLocalChecks(t *testing.T) {
 		{"sandbox.helpers", "sandbox"},
 		{"sandbox.filesystem_paths", "sandbox"},
 		{"terminal.env", "terminal"},
+		{"git.worktree.dev_drive", "git"},
 		{"git.environment", "git"},
 		{"terminal.title", "title"},
 		{"state.paths", "state"},
@@ -87,7 +90,6 @@ func TestReportBuildsLocalChecks(t *testing.T) {
 		{"desktop.app.version", "desktop"},
 		{"desktop.security", "desktop"},
 		{"desktop.updates", "desktop"},
-		{"git.worktree.dev_drive", "git"},
 	}
 	if len(report.Checks) != len(wantChecks) {
 		t.Fatalf("check IDs = %v, want %d checks", checkIDs(report), len(wantChecks))
@@ -101,18 +103,19 @@ func TestReportBuildsLocalChecks(t *testing.T) {
 }
 
 func TestSystemCheckReportsLocaleEditorAndPagerDetails(t *testing.T) {
-	t.Setenv("LC_ALL", "")
-	t.Setenv("LC_CTYPE", "")
-	t.Setenv("LANG", "en_US.UTF-8")
-	t.Setenv("EDITOR", "vim")
-	t.Setenv("VISUAL", "")
-	t.Setenv("PAGER", "less -R")
-
-	check := systemCheck()
+	check := systemCheckFromInputs(systemCheckInputs{
+		os:         "macOS 15.0 [64-bit]",
+		osType:     "macos",
+		osVersion:  "15.0",
+		osLanguage: "en-US",
+		localeEnv:  map[string]string{"LANG": "en_US.UTF-8"},
+		editorEnv:  map[string]string{"VISUAL": "not set", "EDITOR": "vim"},
+		pagerEnv:   map[string]string{"PAGER": "less -R"},
+	})
 	if check.Status != CheckStatusOK || check.Summary != "OS language en-US" {
 		t.Fatalf("check = %+v", check)
 	}
-	for _, want := range []string{"os type: " + runtime.GOOS, "os language: en-US", "VISUAL: not set", "EDITOR: vim", "PAGER: less -R"} {
+	for _, want := range []string{"os type: macos", "os language: en-US", "VISUAL: not set", "EDITOR: vim", "PAGER: less -R"} {
 		if !containsDetail(check, want) {
 			t.Fatalf("missing detail %q in %#v", want, check.Details)
 		}
@@ -2596,7 +2599,7 @@ func TestRenderHumanHeaderIncludesPlatformLikeRust(t *testing.T) {
 		},
 	}
 	rendered := RenderHuman(report, &Options{Summary: true, ASCII: true})
-	if !strings.HasPrefix(rendered, "Codex Doctor vtest | windows-x86_64\n\n") {
+	if !strings.HasPrefix(rendered, "Codex Doctor vtest \u00b7 windows-x86_64\n\n") {
 		t.Fatalf("header mismatch:\n%s", rendered)
 	}
 }
@@ -2722,8 +2725,10 @@ func TestRenderHumanRowDescriptionsMatchRustSummaries(t *testing.T) {
 		"[ok] runtime      local debug build",
 		"[ok] install      consistent",
 		"[ok] search       rg 14.1.0 (ripgrep, `rg`)",
-		"[ok] git          git version 2.45.0",
-		"[ok] terminal     Ghostty 1.3.1 | tmux | TERM=xterm-256color",
+		// Rust display_summary has no git arm, so the check summary is reported.
+		"[ok] git          git ok",
+		// Rust terminal_summary always joins with a middle dot, even under --ascii.
+		"[ok] terminal     Ghostty 1.3.1 \u00b7 tmux \u00b7 TERM=xterm-256color",
 		"[ok] title        config | project repo",
 		"[ok] state        databases healthy",
 		"[ok] config       loaded",
@@ -2945,7 +2950,7 @@ func TestRenderHumanUsesRustDoctorGroups(t *testing.T) {
 	assertBefore(t, rendered, "Background Server\n", "[ok] app-server")
 }
 
-func TestRenderHumanShowsUnknownCategories(t *testing.T) {
+func TestRenderHumanHidesUnknownCategoriesLikeRust(t *testing.T) {
 	report := &Report{
 		SchemaVersion: 1,
 		CodexVersion:  "test",
@@ -2956,11 +2961,17 @@ func TestRenderHumanShowsUnknownCategories(t *testing.T) {
 		},
 	}
 	rendered := RenderHuman(report, &Options{Summary: true, ASCII: true})
-	if !strings.Contains(rendered, "Other\n") || !strings.Contains(rendered, "[!!] future") {
-		t.Fatalf("unknown category was not rendered:\n%s", rendered)
+	if !strings.Contains(rendered, "[ok] system") {
+		t.Fatalf("known category was not rendered:\n%s", rendered)
 	}
-	if !strings.Contains(rendered, "Other\n  [!!] future") {
-		t.Fatalf("unknown category row was not rendered in Other:\n%s", rendered)
+	// Rust doctor GROUPS owns the human layout; a category that is missing from
+	// every group is skipped by the group loop (it can still surface as a note,
+	// because non_ok_notes iterates every warning check).
+	if strings.Contains(rendered, "Other") {
+		t.Fatalf("unknown categories must not get an Other group:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "[!!] future       future warning") {
+		t.Fatalf("warning checks still become notes:\n%s", rendered)
 	}
 }
 
