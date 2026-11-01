@@ -770,6 +770,18 @@ func TestUnifiedExecRemoteNetworkProxyLaunchWireShapeLikeRust(t *testing.T) {
 	}
 }
 
+// finalPollQuietStreamReads is the `process/read` Go's quiet-stream reconcile
+// issues while the output-open-at-final-poll scenario is still collecting. The
+// reconcile fires after a second of silence, so it only happens when the
+// initial collection stays open longer than that: the Windows initial-yield
+// floor, not the 250ms floor Unix uses.
+func finalPollQuietStreamReads() int {
+	if runtime.GOOS == "windows" {
+		return 1
+	}
+	return 0
+}
+
 func TestUnifiedExecConsumesPushedRemoteEventsAndRecoversReplayLikeRust(t *testing.T) {
 	type scenario struct {
 		name      string
@@ -791,10 +803,12 @@ func TestUnifiedExecConsumesPushedRemoteEventsAndRecoversReplayLikeRust(t *testi
 		// output plus the exit code, emit the command completion event and
 		// remove the background session. Rust also asserts
 		// `process_read_requests == 0`; Go additionally reconciles a quiet
-		// event stream with one `process/read` per second
-		// (unified_exec.go:1518-1532), which is the single read this scenario
-		// records: the fixture answers it with the live state, never an exit.
-		{name: "output-open-at-final-poll", finalPoll: true, wantReads: 1, wantBytes: len("pushed remote output\n")},
+		// event stream with one `process/read` per second. That reconcile can
+		// only fire while the first collection is still open, and Unix stops
+		// collecting at the 250ms yield floor, so only the Windows floor of ten
+		// seconds leaves the window open: the fixture answers the read with the
+		// live state, never an exit.
+		{name: "output-open-at-final-poll", finalPoll: true, wantReads: finalPollQuietStreamReads(), wantBytes: len("pushed remote output\n")},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			readCount := make(chan int, 1)
@@ -969,11 +983,12 @@ func TestUnifiedExecConsumesPushedRemoteEventsAndRecoversReplayLikeRust(t *testi
 				// Rust's initial exec_command asks for `yield_time_ms: 1_000`
 				// (unified_exec_process_events.rs:859) and keeps the executor's
 				// output stream open past that deadline. The fixture asks for the
-				// smallest initial yield, which Go raises to the Windows floor
-				// (unified_exec.go:1414-1417, matching Rust's documented
-				// "Effective range on Windows is 10000-30000 ms"), so the stage-one
-				// window outlasts pollRemote's one-second reconcile and exactly one
-				// compatibility read happens before the exit is pushed.
+				// smallest initial yield, which Go raises to its floor
+				// (clampUnifiedExecInitialYield): ten seconds on Windows, matching
+				// Rust's documented "Effective range on Windows is 10000-30000 ms",
+				// and 250ms elsewhere. Only the longer window outlasts pollRemote's
+				// one-second reconcile, so only Windows sees that read before the
+				// exit is pushed.
 				initialYield = unifiedExecMinYieldMS
 			}
 			result, err := manager.Exec(context.Background(), &ShellRequest{
