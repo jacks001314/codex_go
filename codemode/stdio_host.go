@@ -388,7 +388,8 @@ func (s *stdioHostSession) execute(ctx context.Context, cellID CellID, request *
 			tool.CodeModeEnabledToolsContextKey: allowed,
 			// #48123: the request's preempt signal lets an `operation/yield`
 			// frame end this observation while the cell keeps running.
-			tool.CodeModePreemptContextKey: yield,
+			tool.CodeModePreemptContextKey:         yield,
+			tool.CodeModeHostObservationContextKey: true,
 		},
 	}
 	invocation.Context["code_mode_notify"] = tool.CodeModeNotifyFunc(func(callID, text string) {
@@ -413,7 +414,7 @@ func (s *stdioHostSession) wait(ctx context.Context, request *WaitRequest, termi
 	output, err := s.waitExecutor.Execute(ctx, &tool.Invocation{
 		CallID:  "wait-" + request.CellID.String(),
 		Payload: tool.Payload{Kind: tool.PayloadFunction, Arguments: string(arguments)},
-		Context: map[string]any{tool.CodeModePreemptContextKey: yield},
+		Context: map[string]any{tool.CodeModePreemptContextKey: yield, tool.CodeModeHostObservationContextKey: true},
 	})
 	if err != nil && strings.Contains(err.Error(), "not found") {
 		message := err.Error()
@@ -550,6 +551,15 @@ func (s *stdioHostSession) observeResponse(cellID CellID, output *tool.Output, e
 	return response
 }
 
+// withoutTrailingFailureItem removes the executor's own `Script error:` block so
+// the observation carries the diagnostic exactly once.
+func withoutTrailingFailureItem(items []ContentItem, diagnostic string) []ContentItem {
+	if n := len(items); n > 0 && items[n-1].Type == "input_text" && items[n-1].Text == scriptErrorLabel+diagnostic {
+		return items[:n-1]
+	}
+	return items
+}
+
 func hostRuntimeResponse(cellID CellID, output *tool.Output, err error) RuntimeResponse {
 	items := hostContentItems(output)
 	if err != nil {
@@ -562,6 +572,17 @@ func hostRuntimeResponse(cellID CellID, output *tool.Output, err error) RuntimeR
 		}
 		if terminated, _ := output.Data["terminated"].(bool); terminated {
 			return Terminated(cellID, items)
+		}
+		// A failed script is a completed Result that carries its diagnostic, not
+		// a successful observation with an unlabeled error block (Rust's
+		// RuntimeResponse::Result { error_text }). The in-process executor already
+		// appended the labeled block, so drop that copy and let the observation
+		// policy re-add it: client mode hands the error to the caller, server mode
+		// charges the labeled item against the observation budget.
+		if !output.Success {
+			if diagnostic, ok := output.Data["error_text"].(string); ok && diagnostic != "" {
+				return Result(cellID, withoutTrailingFailureItem(items, diagnostic), &diagnostic)
+			}
 		}
 	}
 	response := Result(cellID, items, nil)

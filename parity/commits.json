@@ -1,6 +1,6 @@
 {
  "schemaVersion": 1,
- "rustFromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
+ "rustFro Round 1280: the in-process stdio host now reports a failed script as `Result{content_items, error_text}` (it previously returned a successful observation with `error_text: null`), keeps the trailing `Script error:` item that the cell delta used to drop (`tool/code_mode_exec.go` `consumeCell`), and skips execution-layer budgeting for host-served invocations (`CodeModeHostObservationContextKey`) so a server-truncated observation is budgeted once; `codemode/stdio_host_failure_like_rust_test.go` drives both truncation modes over the wire protocol.mExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
  "rustToInclusive": "67f0994b532b8740f14b5b738af7b7b2a915b1d6",
  "commits": [
   {
@@ -39066,7 +39066,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "codemode/session_runtime.go:205 applies MaxOutputTokens only to server-truncation sessions; codemode/protocol_host.go:638 forwards the wait budget and codemode/remote_provider.go:379 carries it on wait; codemode/session_output_truncation_like_rust_test.go:52 and :150 cover observation and host budgets Round 1278: `codemode/script_error_output_like_rust_test.go` verifies the host labels a completed error inside the bounded observation (byte-identical to `service_tests.rs::server_output_budgets_follow_exec_wait_and_terminate_over_grpc`), bounds the diagnostic at 64 KiB, and shares one renderer with the stdio host; `codemode/sobek_engine.go` reports the exception text itself."
+    "codemode/session_runtime.go:205 applies MaxOutputTokens only to server-truncation sessions; codemode/protocol_host.go:638 forwards the wait budget and codemode/remote_provider.go:379 carries it on wait; codemode/session_output_truncation_like_rust_test.go:52 and :150 cover observation and host budgets Round 1278: `codemode/script_error_output_like_rust_test.go` verifies the host labels a completed error inside the bounded observation (byte-identical to `service_tests.rs::server_output_budgets_follow_exec_wait_and_terminate_over_grpc`), bounds the diagnostic at 64 KiB, and shares one renderer with the stdio host; `codemode/sobek_engine.go` reports the exception text itself. Round 1280: the in-process stdio host now reports a failed script as `Result{content_items, error_text}` (it previously returned a successful observation with `error_text: null`), keeps the trailing `Script error:` item that the cell delta used to drop (`tool/code_mode_exec.go` `consumeCell`), and skips execution-layer budgeting for host-served invocations (`CodeModeHostObservationContextKey`) so a server-truncated observation is budgeted once; `codemode/stdio_host_failure_like_rust_test.go` drives both truncation modes over the wire protocol."
    ]
   },
   {

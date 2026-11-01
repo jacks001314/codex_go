@@ -922,7 +922,9 @@ func (e *codeModeExecExecutor) execute(ctx context.Context, invocation *Invocati
 		invocationCopy.Payload.Input = source
 		started := time.Now()
 		output, runErr := e.executeScript(ctx, &invocationCopy, nil, nil)
-		output = truncateCodeModeOutput(output, codeModeTokenLimit(options.MaxOutputTokens))
+		if !codeModeHostObservation(invocation) {
+			output = truncateCodeModeOutput(output, codeModeTokenLimit(options.MaxOutputTokens))
+		}
 		// Rust's exec handler wraps every response in the code-mode header,
 		// after truncating the script content.
 		return applyCodeModeHeader(output, codeModeStatusForOutput(output), time.Since(started), nil, e.cellOverheadEnabled()), runErr
@@ -976,7 +978,9 @@ func (e *codeModeExecExecutor) execute(ctx context.Context, invocation *Invocati
 	select {
 	case <-cell.done:
 		output, runErr := e.consumeCell(cellID, cell)
-		output = truncateCodeModeOutput(output, codeModeTokenLimit(options.MaxOutputTokens))
+		if !codeModeHostObservation(invocation) {
+			output = truncateCodeModeOutput(output, codeModeTokenLimit(options.MaxOutputTokens))
+		}
 		return applyCodeModeHeader(output, codeModeCellStatus(cell), time.Since(cell.startedAt), nil, e.cellOverheadEnabled()), runErr
 	case <-yield:
 	case <-timer.C:
@@ -1914,6 +1918,20 @@ func parseCodeModeSource(input string) (string, codeModeExecOptions, error) {
 	return lines[1], options, nil
 }
 
+// CodeModeHostObservationContextKey marks an invocation a code-mode host is
+// serving. The host applies the observation policy itself, so the execution
+// layer returns raw output: Rust budgets server-truncated observations in the
+// runtime and lets the client budget the rest, never both.
+const CodeModeHostObservationContextKey = "code_mode_host_observation"
+
+func codeModeHostObservation(invocation *Invocation) bool {
+	if invocation == nil || invocation.Context == nil {
+		return false
+	}
+	flag, _ := invocation.Context[CodeModeHostObservationContextKey].(bool)
+	return flag
+}
+
 func codeModeTokenLimit(value *int) int {
 	if value == nil {
 		return 10000
@@ -2066,8 +2084,22 @@ func (e *codeModeExecExecutor) consumeCell(cellID string, cell *codeModeCell) (*
 	})
 	if output != nil {
 		output.Data["cell_id"] = cellID
-		output.Body = e.cellDelta(cell)
-		output.Data["content_items"] = e.cellContentDelta(cell)
+		body := e.cellDelta(cell)
+		items := e.cellContentDelta(cell)
+		// A failed script's own output carries the trailing `Script error:`
+		// block; the cell delta only holds what the script wrote, so keep the
+		// failure item instead of dropping it from the observation.
+		if failure := codeModeFailureItem(output); failure != nil {
+			items = append(items, failure)
+			if text := strings.TrimSpace(fmt.Sprint(failure["text"])); text != "" {
+				if body != "" {
+					body += "\n"
+				}
+				body += fmt.Sprint(failure["text"])
+			}
+		}
+		output.Body = body
+		output.Data["content_items"] = items
 		if !cell.completedAt.IsZero() {
 			// Rust #55653: a Result retrieved after completion reports how long
 			// it was buffered; the Terminated variant never carries it.
@@ -2178,7 +2210,7 @@ func codeModeScriptFailureOutput(callID string, errorText string, contentItems [
 			texts = append(texts, text)
 		}
 	}
-	data := map[string]any{"content_items": items}
+	data := map[string]any{"content_items": items, "error_text": errorText}
 	if commands != nil {
 		data["nested_commands"] = commands
 	}
@@ -2195,6 +2227,23 @@ func codeModeScriptFailureOutput(callID string, errorText string, contentItems [
 		Body:     strings.Join(texts, "\n"),
 		Data:     data,
 	}
+}
+
+// codeModeFailureItem returns the trailing `Script error:` item an unsuccessful
+// response carries, so a cell observation can keep it alongside its delta.
+func codeModeFailureItem(output *Output) map[string]any {
+	if output == nil || output.Success || output.Data == nil {
+		return nil
+	}
+	items, _ := output.Data["content_items"].([]map[string]any)
+	if len(items) == 0 {
+		return nil
+	}
+	last := items[len(items)-1]
+	if text, _ := last["text"].(string); !strings.HasPrefix(text, "Script error:") {
+		return nil
+	}
+	return last
 }
 
 // codeModeStatusForOutput reports Rust's status line for a settled response.
@@ -2333,7 +2382,9 @@ func (e *codeModeWaitExecutor) execute(ctx context.Context, invocation *Invocati
 	runningOutput := func() (*Output, error) {
 		status := "Script running with cell ID " + params.CellID
 		output := &Output{CallID: invocation.CallID, ToolName: PlainName("wait"), Success: true, Body: e.exec.cellDelta(cell), Data: map[string]any{"cell_id": params.CellID, "running": true}}
-		output = truncateCodeModeOutput(output, codeModeWaitTokenLimit(params.MaxTokens))
+		if !codeModeHostObservation(invocation) {
+			output = truncateCodeModeOutput(output, codeModeWaitTokenLimit(params.MaxTokens))
+		}
 		return applyCodeModeHeader(output, status, time.Since(cell.startedAt), nil, e.exec.cellOverheadEnabled()), nil
 	}
 	select {
@@ -2350,7 +2401,9 @@ func (e *codeModeWaitExecutor) execute(ctx context.Context, invocation *Invocati
 			}
 			output.Data["terminated"] = true
 		}
-		output = truncateCodeModeOutput(output, codeModeWaitTokenLimit(params.MaxTokens))
+		if !codeModeHostObservation(invocation) {
+			output = truncateCodeModeOutput(output, codeModeWaitTokenLimit(params.MaxTokens))
+		}
 		return applyCodeModeHeader(output, codeModeCellStatus(cell), time.Since(cell.startedAt), nil, e.exec.cellOverheadEnabled()), runErr
 	case <-timer.C:
 		return runningOutput()

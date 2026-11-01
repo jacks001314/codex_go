@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -67,5 +68,40 @@ func TestClientTruncatedRemoteFailureLabelsAndBudgetsOnceLikeRust(t *testing.T) 
 	}
 	if !strings.Contains(budgeted.Body, "tokens truncated") {
 		t.Fatalf("client did not budget the failure: %q", budgeted.Body)
+	}
+}
+
+// The trailing failure item must survive the cell delta that a yielded cell
+// reports on completion, so the host can describe the failure at all.
+func TestCellFailureKeepsTheScriptErrorItemLikeRust(t *testing.T) {
+	exec, _ := NewCodeModeExecutors(NewRegistry())
+	preempt := NewYieldSignal()
+	output, err := exec.Execute(context.Background(), &Invocation{
+		CallID:  "call-cell-failure",
+		Payload: Payload{Kind: PayloadCustom, Input: "text('partial'); throw new Error('boom');"},
+		Context: map[string]any{CodeModePreemptContextKey: preempt},
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if output.Success {
+		t.Fatalf("failed script reported success")
+	}
+	if output.Data["error_text"] != "Error: boom" {
+		t.Fatalf("error_text = %#v", output.Data["error_text"])
+	}
+	items, _ := output.Data["content_items"].([]map[string]any)
+	if len(items) == 0 {
+		t.Fatalf("content_items = %#v", output.Data["content_items"])
+	}
+	last, _ := items[len(items)-1]["text"].(string)
+	if last != "Script error:\nError: boom" {
+		t.Fatalf("last item = %q, want the labeled failure", last)
+	}
+	if !strings.Contains(output.Body, last) {
+		t.Fatalf("body = %q, want the failure block", output.Body)
+	}
+	if output.Data["running"] == true {
+		t.Fatalf("failure was reported as a running cell")
 	}
 }
