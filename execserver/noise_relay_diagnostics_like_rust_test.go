@@ -120,7 +120,7 @@ func TestHandshakeDiagnosticsAreCappedPerWindowLikeRust(t *testing.T) {
 	if got := handshakeDiagnosticSlot(&windowStart, &count, start); got != maxHandshakeDiagnosticsPerMinute+1 {
 		t.Fatalf("suppressed slot = %d, want %d", got, maxHandshakeDiagnosticsPerMinute+1)
 	}
-	next := start.Add(handshakeDiagnosticWindow)
+	next := start.Add(handshakeDiagnosticWindow.Load())
 	for slot := 0; slot < maxHandshakeDiagnosticsPerMinute; slot++ {
 		if got := handshakeDiagnosticSlot(&windowStart, &count, next); got != slot {
 			t.Fatalf("next window slot %d = %d, want %d", slot, got, slot)
@@ -159,9 +159,9 @@ func TestHandshakeDiagnosticNormalizesStreamIDsLikeRust(t *testing.T) {
 
 func TestHandshakeDiagnosticsRateLimitMarkerLikeRust(t *testing.T) {
 	logs := installCapturedLogs(t)
-	previousWindow := handshakeDiagnosticWindow
-	handshakeDiagnosticWindow = time.Hour
-	t.Cleanup(func() { handshakeDiagnosticWindow = previousWindow })
+	previousWindow := handshakeDiagnosticWindow.Load()
+	handshakeDiagnosticWindow.Store(time.Hour)
+	t.Cleanup(func() { handshakeDiagnosticWindow.Store(previousWindow) })
 
 	diagnostics := newHandshakeDiagnostics("environment-1", "registration-1")
 	for range maxHandshakeDiagnosticsPerMinute + 5 {
@@ -188,7 +188,7 @@ func TestHandshakeDiagnosticsRateLimitMarkerLikeRust(t *testing.T) {
 	}
 
 	// A fresh window resumes diagnostics.
-	diagnostics.windowStart = time.Now().Add(-2 * handshakeDiagnosticWindow)
+	diagnostics.windowStart = time.Now().Add(-2 * handshakeDiagnosticWindow.Load())
 	diagnostics.record(uuid.NewString(), "handshake_request", nil)
 	if got := len(logs.snapshot()); got != len(records)+1 {
 		t.Fatalf("records after window reset = %d, want %d", got, len(records)+1)

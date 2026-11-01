@@ -391,10 +391,10 @@ func TestOversizedHarnessAuthorizationRejectedBeforeValidationLikeRust(t *testin
 // authenticated streams stay connected. Failures during the cooldown do not
 // extend it, and the failure budget resets when admission resumes.
 func TestRepeatedHandshakeFailuresPauseAdmissionWithoutDisconnectingLikeRust(t *testing.T) {
-	restoreCooldown := noiseHandshakeFailureCooldown
-	noiseHandshakeFailureCooldown = 200 * time.Millisecond
+	restoreCooldown := noiseHandshakeFailureCooldown.Load()
+	noiseHandshakeFailureCooldown.Store(200 * time.Millisecond)
 	// Restore after the rig cleanup stops the relay handler that reads it.
-	t.Cleanup(func() { noiseHandshakeFailureCooldown = restoreCooldown })
+	t.Cleanup(func() { noiseHandshakeFailureCooldown.Store(restoreCooldown) })
 
 	var validations int32
 	rig := newRemoteRelayTestRig(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -424,7 +424,7 @@ func TestRepeatedHandshakeFailuresPauseAdmissionWithoutDisconnectingLikeRust(t *
 	}
 
 	// Once the cooldown expires the failure budget resets and admission resumes.
-	time.Sleep(2 * noiseHandshakeFailureCooldown)
+	time.Sleep(2 * noiseHandshakeFailureCooldown.Load())
 	afterID := "after-cooldown"
 	afterRequest := rig.handshakeRequest(t, afterID, []byte("authorization"))
 	writeRemoteRelayTestFrame(t, rig.conn, newRelayHandshakeFrame(afterID, afterRequest))
@@ -438,10 +438,10 @@ func TestRepeatedHandshakeFailuresPauseAdmissionWithoutDisconnectingLikeRust(t *
 // Mirrors Rust #46031: repeated malformed handshakes pause admission but keep the
 // physical relay (and therefore every established stream) alive.
 func TestMalformedHandshakesPreservePhysicalRelayLikeRust(t *testing.T) {
-	restoreCooldown := noiseHandshakeFailureCooldown
+	restoreCooldown := noiseHandshakeFailureCooldown.Load()
 	// Long enough that the during-cooldown probe below cannot race the expiry.
-	noiseHandshakeFailureCooldown = 2 * time.Second
-	t.Cleanup(func() { noiseHandshakeFailureCooldown = restoreCooldown })
+	noiseHandshakeFailureCooldown.Store(2 * time.Second)
+	t.Cleanup(func() { noiseHandshakeFailureCooldown.Store(restoreCooldown) })
 
 	rig := newRemoteRelayTestRig(t, nil)
 	for attempt := 0; attempt < maxFailedNoiseHandshakes; attempt++ {
@@ -462,9 +462,9 @@ func TestMalformedHandshakesPreservePhysicalRelayLikeRust(t *testing.T) {
 
 // Mirrors Rust #46031 for early data during a pending validation.
 func TestRepeatedEarlyDataDuringValidationPausesAdmissionLikeRust(t *testing.T) {
-	restoreCooldown := noiseHandshakeFailureCooldown
-	noiseHandshakeFailureCooldown = 200 * time.Millisecond
-	t.Cleanup(func() { noiseHandshakeFailureCooldown = restoreCooldown })
+	restoreCooldown := noiseHandshakeFailureCooldown.Load()
+	noiseHandshakeFailureCooldown.Store(200 * time.Millisecond)
+	t.Cleanup(func() { noiseHandshakeFailureCooldown.Store(restoreCooldown) })
 
 	calls := make(chan struct{}, maxFailedNoiseHandshakes)
 	release := make(chan struct{})

@@ -15,6 +15,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -44,16 +45,37 @@ const (
 	maxHandshakeDiagnosticsPerMinute = 100
 )
 
+// atomicDuration is a duration that relay goroutines read while tests shorten
+// it; the Rust build keeps these as constants, the Go tests need settable ones.
+type atomicDuration struct{ nanos atomic.Int64 }
+
+func newAtomicDuration(value time.Duration) *atomicDuration {
+	duration := &atomicDuration{}
+	duration.Store(value)
+	return duration
+}
+
+func (d *atomicDuration) Load() time.Duration {
+	if d == nil {
+		return 0
+	}
+	return time.Duration(d.nanos.Load())
+}
+
+func (d *atomicDuration) Store(value time.Duration) {
+	d.nanos.Store(int64(value))
+}
+
 // noiseHandshakeFailureCooldown mirrors Rust's
 // NOISE_HANDSHAKE_FAILURE_COOLDOWN (#46031): once the handshake failure budget is
 // exhausted the relay pauses new handshake admission for this window instead of
 // closing, so authenticated streams stay connected. It is a variable so tests
 // can shorten the window instead of waiting it out.
-var noiseHandshakeFailureCooldown = 10 * time.Second
+var noiseHandshakeFailureCooldown = newAtomicDuration(10 * time.Second)
 
 // handshakeDiagnosticWindow mirrors Rust's HANDSHAKE_DIAGNOSTIC_WINDOW. It is a
 // variable so tests can advance the window without waiting a minute.
-var handshakeDiagnosticWindow = 60 * time.Second
+var handshakeDiagnosticWindow = newAtomicDuration(60 * time.Second)
 
 // recordFailedHandshake mirrors Rust's `record_failed_handshake`: exhausting the
 // failure budget starts the cooldown, and failures recorded during the cooldown
@@ -64,7 +86,7 @@ func recordFailedHandshake(failedHandshakes *int, cooldownUntil *time.Time) {
 	}
 	*failedHandshakes++
 	if *failedHandshakes >= maxFailedNoiseHandshakes {
-		*cooldownUntil = time.Now().Add(noiseHandshakeFailureCooldown)
+		*cooldownUntil = time.Now().Add(noiseHandshakeFailureCooldown.Load())
 		slog.Warn("pausing Noise relay handshakes after repeated failures")
 	}
 }
@@ -76,7 +98,7 @@ func handshakeDiagnosticSlot(windowStart *time.Time, count *int, now time.Time) 
 	if windowStart == nil || count == nil {
 		return maxHandshakeDiagnosticsPerMinute + 1
 	}
-	if now.Sub(*windowStart) >= handshakeDiagnosticWindow {
+	if now.Sub(*windowStart) >= handshakeDiagnosticWindow.Load() {
 		*windowStart = now
 		*count = 0
 	}
