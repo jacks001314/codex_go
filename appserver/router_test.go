@@ -4512,7 +4512,7 @@ func TestRouterPaginatedWriterOwnershipBlocksCompetingResumeArchiveAndDelete(t *
 	t.Cleanup(func() { _ = owner.Close() })
 
 	start := owner.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
-		CWD:         "D:/repo",
+		CWD:         t.TempDir(),
 		HistoryMode: ThreadHistoryPaginated,
 		Prompt:      "owned",
 	}))

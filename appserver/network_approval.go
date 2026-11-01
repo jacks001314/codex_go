@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"codex_go/auth"
@@ -85,17 +86,30 @@ type activeNetworkApprovalCall struct {
 	trigger       *guardianNetworkAccessTrigger
 	cancel        context.CancelCauseFunc
 	outcome       string
-	persistent    bool
+	persistent    atomic.Bool
 	// executionCtx is canceled when this execution ends. It is independent of
 	// the tool-call context so a background process keeps reviewing after its
 	// launching call and turn complete.
 	executionCtx    context.Context
 	executionCancel context.CancelCauseFunc
+	// toolCtx is the invocation context the execution watches; persistent is
+	// switched before that context can cancel the token.
+	toolCtx context.Context
 	origin          *guardianReviewOrigin
 }
 
 func (c *activeNetworkApprovalCall) isCancelled() bool {
-	return c != nil && c.executionCtx != nil && c.executionCtx.Err() != nil
+	if c == nil {
+		return false
+	}
+	if c.executionCtx != nil && c.executionCtx.Err() != nil {
+		return true
+	}
+	// The tool-call context cancels the execution from a context.AfterFunc
+	// goroutine, so a late proxy callback can decide before that goroutine runs.
+	// Rust #44575 denies the ended execution itself, not only after its cleanup
+	// task ran, so the call is ended as soon as the context it watches is.
+	return c.toolCtx != nil && c.toolCtx.Err() != nil && !c.persistent.Load()
 }
 
 type guardianNetworkAccessTrigger struct {
@@ -225,7 +239,7 @@ func (s *networkApprovalService) decide(ctx context.Context, threadID string, re
 		connectionID: active.connectionID,
 		cancel:       approvalCancel,
 		startedAt:    time.Now(),
-		persistent:   ownerCall != nil && ownerCall.persistent,
+		persistent:   ownerCall != nil && ownerCall.persistent.Load(),
 	}
 	s.pending[pendingKey] = pending
 	s.mu.Unlock()
@@ -686,6 +700,7 @@ func (s *networkApprovalService) registerActiveCallWithContext(ctx context.Conte
 		cancel:          invocation.Cancel,
 		executionCtx:    executionCtx,
 		executionCancel: executionCancel,
+		toolCtx:         ctx,
 		origin:          s.guardianReviewOriginForInvocation(threadID, turnID, environmentID, trigger),
 	}
 	if ctx != nil {
@@ -744,7 +759,7 @@ func (s *networkApprovalService) markExecutionPersistent(threadID string, turnID
 		s.callsMu.Unlock()
 		return
 	}
-	call.persistent = true
+	call.persistent.Store(true)
 	// Detach unconditionally: a tool-context cancellation racing with this
 	// transition must not cancel the process-owned token.
 	call.executionCtx, call.executionCancel = context.WithCancelCause(context.Background())
@@ -790,7 +805,7 @@ func (s *networkApprovalService) cancelExecutionIfNotPersistent(call *activeNetw
 		return
 	}
 	s.callsMu.Lock()
-	persistent := call.persistent
+	persistent := call.persistent.Load()
 	cancel := call.executionCancel
 	s.callsMu.Unlock()
 	if persistent {
@@ -942,8 +957,8 @@ func (s *networkApprovalService) finishActiveCall(threadID string, turnID string
 	s.callsMu.Lock()
 	call := s.calls[key]
 	delete(s.calls, key)
-	cancelExecution := call != nil && !call.persistent
-	if call != nil && !call.persistent {
+	cancelExecution := call != nil && !call.persistent.Load()
+	if call != nil && !call.persistent.Load() {
 		delete(s.executions, networkApprovalExecutionKey(threadID, callID))
 	}
 	s.callsMu.Unlock()
@@ -968,7 +983,7 @@ func (s *networkApprovalService) clearActiveCallsForTurn(threadID string, turnID
 			delete(s.calls, key)
 			// Persistent executions belong to their process, not the turn;
 			// they stay registered until the process exits (Rust #44575).
-			if !call.persistent && call.executionCancel != nil {
+			if !call.persistent.Load() && call.executionCancel != nil {
 				cancels = append(cancels, call.executionCancel)
 			}
 		}
