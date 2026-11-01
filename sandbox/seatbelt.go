@@ -59,7 +59,9 @@ func createSeatbeltCommandArgsWithManagedNetwork(command []string, cwd string, p
 	}
 	args := []string{macOSSeatbeltExecutable}
 	for _, parameter := range parameters {
-		args = append(args, "-D", parameter.Name+"="+parameter.Value)
+		// Rust sandboxing/src/seatbelt.rs emits one `-DNAME=VALUE` element, so the
+		// launch argv stays identical to the Rust sandbox wrapper.
+		args = append(args, "-D"+parameter.Name+"="+parameter.Value)
 	}
 	args = append(args, "-p", policy, "/usr/bin/env", "CODEX_SANDBOX=seatbelt")
 	return append(args, command...), nil
