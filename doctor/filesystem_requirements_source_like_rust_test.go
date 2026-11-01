@@ -24,7 +24,7 @@ func TestDoctorReportsFilesystemRequirementSourceAndScopeLikeRust(t *testing.T) 
 	if err != nil {
 		t.Fatalf("config.Load: %v", err)
 	}
-	check := applyWindowsSandboxDoctorDiagnostics(nil, cfg, home, home)
+	check := sandboxCheckFromConfig(cfg, nil, home)
 	if !containsDetail(check, "managed filesystem source: system") {
 		t.Fatalf("managed filesystem source detail missing: %#v", check.Details)
 	}

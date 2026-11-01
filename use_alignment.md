@@ -3287,7 +3287,41 @@ and decodable items kept Go's original spelling. The record is now decoded into
   `TestRowSummaryUsesEmDashForRemediationLikeRust` and
   `TestDoctorDisplayLabelAuthFileMatchesRust`.
 
+### 97. `doctor` renders the sandbox rows in Rust's order and names the backend
+
+- **Row order and set.** Rust's `sandbox_check` pushes the approval policy, the
+  filesystem sandbox, `denied-read rules`, `denied-read glob rules`,
+  `glob scan max depth`, `managed filesystem source`, `network sandbox` and the
+  Linux helper, then the Windows-only `sandbox backend` and `denied-read
+  restrictions`. Go now builds that list in one place, so the denied-read
+  counters are always present (Rust prints `0`, never omits them) and the
+  Go-only `execve wrapper helper` and `windows sandbox level` rows are gone.
+- **Backend naming.** `windowsSandboxBackendForDoctor` resolves the effective
+  Windows sandbox mode through `config.ResolveWindowsSandboxMode`, so the nested
+  `[windows] sandbox` table and the legacy feature flags are honoured, and
+  prints Rust's names: `mxc`, `elevated`, `restricted-token`, `disabled`.
+- **Denied-read restrictions.** The row prints Rust's boolean
+  (`!has_full_disk_read_access()`), `false` for a profile without deny entries,
+  instead of Go's `active`/`inactive` wording.
+- Evidence: `out/r1304-doctor-full-diff.txt` (the whole-report diff no longer
+  contains a sandbox row), `out/r1308-backend.txt` and
+  `out/r1309-backend-keys.txt` (nested/feature configs print the same
+  `sandbox backend`), `TestSandboxCheckDetailOrderMatchesRust`,
+  `TestSandboxCheckOmitsExecveWrapperRowLikeRust`,
+  `TestWindowsSandboxBackendRowMatchesRust` and
+  `TestSandboxCheckAppendsWindowsRowsAfterHelperLikeRust`.
+
 ## Verification
+
+- Round 85 renders the `doctor` sandbox rows in Rust's order (entry 97): the
+  denied-read counters and glob depth precede `managed filesystem source`,
+  `network sandbox` follows it, `execve wrapper helper` and
+  `windows sandbox level` are gone, `sandbox backend` resolves the nested
+  `[windows] sandbox` table and the feature flags, and `denied-read
+  restrictions` prints Rust's boolean. `out/r1304-doctor-full-diff.txt` no
+  longer carries a sandbox row, `out/r1309-backend-keys.txt` matches the backend
+  names, `go test -count=1 ./doctor ./state ./cli` and `go vet ./doctor` pass,
+  and `./doctor` cross-compiles for `GOOS=linux` and `GOOS=darwin`.
 
 - Round 84 prints Rust's sandbox kind and separators in `doctor` (entry 96):
   `filesystem sandbox` reports `restricted`/`unrestricted`/`external-sandbox`,
@@ -4145,9 +4179,4 @@ and decodable items kept Go's original spelling. The record is now decoded into
   `search` prefers the system ripgrep over the packaged one, the Desktop App
   group still reports Go's own installation shape instead of 0.166's
   `version`/`running`/`log directory` rows plus its security and update
-  summaries, and the sandbox block keeps Go's extra rows (`network sandbox`
-  ahead of `glob scan max depth`, `execve wrapper helper`, `windows sandbox
-  level`) plus `denied-read restrictions inactive` where 0.166 reports
-  `denied-read rules 0`, `denied-read glob rules 0`, `sandbox backend disabled`
-  and `denied-read restrictions false` (see
-  `out/r1304-doctor-full-diff.txt`).
+  summaries (see `out/r1304-doctor-full-diff.txt`).

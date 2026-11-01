@@ -1890,16 +1890,19 @@ func TestSandboxCheckReportsConfigAndHelpers(t *testing.T) {
 	check := sandboxCheckFromConfig(cfg, &cli.DispatchPaths{
 		CodexLinuxSandboxExe: linuxHelper,
 		MainExecveWrapperExe: execveWrapper,
-	})
+	}, "")
 	if check.Status != CheckStatusOK {
 		t.Fatalf("check = %+v", check)
 	}
 	for _, want := range []string{
 		"approval policy: Never",
 		"filesystem sandbox: restricted",
+		"denied-read rules: 0",
+		"denied-read glob rules: 0",
+		"glob scan max depth: unbounded",
+		"managed filesystem source: none",
 		"network sandbox: enabled",
 		"codex-linux-sandbox helper: " + linuxHelper,
-		"execve wrapper helper: " + execveWrapper,
 	} {
 		if !containsDetail(check, want) {
 			t.Fatalf("missing detail %q in %#v", want, check.Details)
@@ -1912,23 +1915,26 @@ func TestSandboxCheckReportsConfigAndHelpers(t *testing.T) {
 	}
 }
 
-func TestSandboxCheckDoesNotWarnForMissingExecveWrapperLikeRust(t *testing.T) {
+func TestSandboxCheckOmitsExecveWrapperRowLikeRust(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, cli.DispatchLinuxSandboxArg0)
 	if err := os.WriteFile(path, []byte(""), 0o700); err != nil {
 		t.Fatalf("write helper: %v", err)
 	}
 	cfg := &config.Config{Values: map[string]any{"sandbox_mode": "read-only"}}
-	check := sandboxCheckFromConfig(cfg, &cli.DispatchPaths{CodexLinuxSandboxExe: path})
-	if check.Status != CheckStatusOK || !containsDetail(check, "execve wrapper helper: none") {
+	check := sandboxCheckFromConfig(cfg, &cli.DispatchPaths{CodexLinuxSandboxExe: path, MainExecveWrapperExe: path}, "")
+	if check.Status != CheckStatusOK {
 		t.Fatalf("check = %+v", check)
+	}
+	if containsDetail(check, "execve wrapper helper: ") {
+		t.Fatalf("the sandbox check has no execve wrapper row: %#v", check.Details)
 	}
 }
 
 func TestSandboxCheckWarnsForMissingLinuxHelper(t *testing.T) {
 	cfg := &config.Config{Values: map[string]any{"sandbox_mode": "read-only"}}
 	missing := filepath.Join(t.TempDir(), cli.DispatchLinuxSandboxArg0)
-	check := sandboxCheckFromConfig(cfg, &cli.DispatchPaths{CodexLinuxSandboxExe: missing})
+	check := sandboxCheckFromConfig(cfg, &cli.DispatchPaths{CodexLinuxSandboxExe: missing}, "")
 	if check.Status != CheckStatusWarning || !containsDetail(check, "codex-linux-sandbox helper: "+missing) {
 		t.Fatalf("check = %+v", check)
 	}
@@ -1943,12 +1949,35 @@ func TestSandboxCheckUsesDispatchPathsInsteadOfPATHLikeRust(t *testing.T) {
 	t.Setenv("PATH", dir)
 	cfg := &config.Config{Values: map[string]any{"sandbox_mode": "read-only"}}
 	missing := filepath.Join(t.TempDir(), cli.DispatchLinuxSandboxArg0)
-	check := sandboxCheckFromConfig(cfg, &cli.DispatchPaths{CodexLinuxSandboxExe: missing})
+	check := sandboxCheckFromConfig(cfg, &cli.DispatchPaths{CodexLinuxSandboxExe: missing}, "")
 	if check.Status != CheckStatusWarning || !containsDetail(check, "codex-linux-sandbox helper: "+missing) {
 		t.Fatalf("check = %+v", check)
 	}
 	if containsDetail(check, "codex-linux-sandbox helper: "+pathHelper) {
 		t.Fatalf("sandbox helper should come from dispatch paths, not PATH: %#v", check.Details)
+	}
+}
+
+func TestSandboxCheckDetailOrderMatchesRust(t *testing.T) {
+	cfg := &config.Config{Values: map[string]any{"sandbox_mode": "read-only"}}
+	check := sandboxCheckFromConfig(cfg, &cli.DispatchPaths{CodexLinuxSandboxExe: filepath.Join(t.TempDir(), cli.DispatchLinuxSandboxArg0)}, "")
+	want := []string{
+		"approval policy: OnRequest",
+		"filesystem sandbox: restricted",
+		"denied-read rules: 0",
+		"denied-read glob rules: 0",
+		"glob scan max depth: unbounded",
+		"managed filesystem source: none",
+		"network sandbox: restricted",
+		"codex-linux-sandbox helper: ",
+	}
+	if len(check.Details) != len(want) {
+		t.Fatalf("details = %#v", check.Details)
+	}
+	for i, prefix := range want {
+		if !strings.HasPrefix(check.Details[i], prefix) {
+			t.Fatalf("detail %d = %q, want prefix %q", i, check.Details[i], prefix)
+		}
 	}
 }
 

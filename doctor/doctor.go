@@ -3038,50 +3038,23 @@ func sandboxCheck(codexHome string, opts *Options) *DoctorCheck {
 		return NewCheck("sandbox.helpers", "sandbox", CheckStatusWarning, "sandbox config could not be loaded").
 			Detail("sandbox config error: " + err.Error())
 	}
-	check := sandboxCheckFromConfig(cfg, doctorDispatchPaths(opts))
+	check := sandboxCheckFromConfig(cfg, doctorDispatchPaths(opts), doctorCWD(opts))
 	check = applyWindowsSandboxDoctorDiagnostics(check, cfg, codexHome, doctorCWD(opts))
 	return check
 }
 
-// applyWindowsSandboxDoctorDiagnostics reports the configured Windows sandbox
-// backend, whether denied-read restrictions are active, and any recorded
-// elevated-sandbox setup failure (Rust #39290).
+// applyWindowsSandboxDoctorDiagnostics appends the Windows-only sandbox rows
+// Rust reports, the effective backend and whether denied-read restrictions are
+// active, and surfaces any recorded elevated-sandbox setup failure (Rust #39290).
 func applyWindowsSandboxDoctorDiagnostics(check *DoctorCheck, cfg *config.Config, codexHome string, cwd string) *DoctorCheck {
 	if check == nil {
 		check = NewCheck("sandbox.helpers", "sandbox", CheckStatusOK, "sandbox configuration is readable")
 	}
-	values := configValuesForDoctor(cfg)
-	level := strings.TrimSpace(stringConfigValueFromAny(values["windows_sandbox"]))
-	if level == "" {
-		level = "default"
+	check = check.Detail("sandbox backend: " + windowsSandboxBackendForDoctor(cfg))
+	restrictions := "false"
+	if deniedReads, _, _ := sandboxDeniedReadRulesForDoctor(cfg, cwd); deniedReads > 0 {
+		restrictions = "true"
 	}
-	check = check.Detail("windows sandbox level: " + level)
-	restrictions := "inactive"
-	globDepth := "unbounded"
-	if resolution, resolveErr := cfg.ResolveSandboxPermissionProfile("", cwd); resolveErr == nil && resolution != nil && resolution.Profile != nil {
-		deniedReads := len(resolution.Profile.DeniedReadEntries)
-		if deniedReads > 0 {
-			restrictions = "active"
-			globRules := 0
-			for _, entry := range resolution.Profile.DeniedReadEntries {
-				if entry.Path.Type == "glob_pattern" {
-					globRules++
-				}
-			}
-			check = check.
-				Detail(fmt.Sprintf("denied-read rules: %d", deniedReads)).
-				Detail(fmt.Sprintf("denied-read glob rules: %d", globRules))
-		}
-		if resolution.GlobScanMaxDepth != nil {
-			globDepth = strconv.Itoa(*resolution.GlobScanMaxDepth)
-		}
-	}
-	check = check.Detail("glob scan max depth: " + globDepth)
-	managedSource := "none"
-	if cfg != nil {
-		managedSource = cfg.FilesystemRequirementsSource()
-	}
-	check = check.Detail("managed filesystem source: " + managedSource)
 	check = check.Detail("denied-read restrictions: " + restrictions)
 	if report, readErr := windowssandbox.ReadSetupErrorReport(codexHome); readErr == nil && report != nil {
 		message := strings.TrimSpace(report.Message)
@@ -3097,23 +3070,88 @@ func applyWindowsSandboxDoctorDiagnostics(check *DoctorCheck, cfg *config.Config
 	return check
 }
 
-func sandboxCheckFromConfig(cfg *config.Config, dispatchPaths *cli.DispatchPaths) *DoctorCheck {
+// windowsSandboxBackendForDoctor mirrors Rust's `sandbox backend` row: an MXC
+// launch reports `mxc`, the elevated level reports `elevated` and every other
+// level reports its own name (`disabled`, `restricted-token`).
+func windowsSandboxBackendForDoctor(cfg *config.Config) string {
+	var requirements *config.ConfigRequirements
+	if cfg != nil {
+		requirements = cfg.Requirements
+	}
+	mode, _, ok := config.ResolveWindowsSandboxMode(configValuesForDoctor(cfg), requirements)
+	if !ok {
+		return "disabled"
+	}
+	switch mode {
+	case config.WindowsSandboxModeMxc:
+		return "mxc"
+	case config.WindowsSandboxModeElevated:
+		return "elevated"
+	case config.WindowsSandboxModeUnelevated:
+		return "restricted-token"
+	default:
+		return "disabled"
+	}
+}
+
+// sandboxDeniedReadRulesForDoctor counts the resolved profile's denied reads the
+// way Rust's sandbox check does: every deny entry and the glob-pattern subset,
+// plus the configured glob depth.
+func sandboxDeniedReadRulesForDoctor(cfg *config.Config, cwd string) (denied int, globs int, maxDepth string) {
+	maxDepth = "unbounded"
+	if cfg == nil {
+		return 0, 0, maxDepth
+	}
+	resolution, err := cfg.ResolveSandboxPermissionProfile("", cwd)
+	if err != nil || resolution == nil || resolution.Profile == nil {
+		return 0, 0, maxDepth
+	}
+	denied = len(resolution.Profile.DeniedReadEntries)
+	for _, entry := range resolution.Profile.DeniedReadEntries {
+		if entry.Path.Type == "glob_pattern" {
+			globs++
+		}
+	}
+	if resolution.GlobScanMaxDepth != nil {
+		maxDepth = strconv.Itoa(*resolution.GlobScanMaxDepth)
+	}
+	return denied, globs, maxDepth
+}
+
+// managedFilesystemSourceForDoctor reports where managed filesystem requirements
+// came from, defaulting to `none` like Rust.
+func managedFilesystemSourceForDoctor(cfg *config.Config) string {
+	if cfg == nil {
+		return "none"
+	}
+	if source := cfg.FilesystemRequirementsSource(); source != "" {
+		return source
+	}
+	return "none"
+}
+
+// sandboxCheckFromConfig renders the sandbox rows in Rust's order: the approval
+// and filesystem policy, the denied-read counters, the glob depth, the managed
+// source, the network policy and the Linux helper.
+func sandboxCheckFromConfig(cfg *config.Config, dispatchPaths *cli.DispatchPaths, cwd string) *DoctorCheck {
 	policy := sandboxPolicyFromConfig(cfg)
+	deniedReads, globRules, globDepth := sandboxDeniedReadRulesForDoctor(cfg, cwd)
 	details := []string{
 		"approval policy: " + approvalPolicyFromConfig(cfg),
 		"filesystem sandbox: " + filesystemSandboxKindForDoctor(policy),
+		fmt.Sprintf("denied-read rules: %d", deniedReads),
+		fmt.Sprintf("denied-read glob rules: %d", globRules),
+		"glob scan max depth: " + globDepth,
+		"managed filesystem source: " + managedFilesystemSourceForDoctor(cfg),
 		"network sandbox: " + networkSandboxPolicyFromConfig(policy),
 	}
 	status := CheckStatusOK
 	summary := "sandbox configuration is readable"
 	linuxHelper := ""
-	execveWrapper := ""
 	if dispatchPaths != nil {
 		linuxHelper = dispatchPaths.CodexLinuxSandboxExe
-		execveWrapper = dispatchPaths.MainExecveWrapperExe
 	}
 	pushSandboxHelperDetail(&details, "codex-linux-sandbox helper", linuxHelper)
-	pushSandboxHelperDetail(&details, "execve wrapper helper", execveWrapper)
 	if strings.TrimSpace(linuxHelper) != "" && !doctorPathExists(linuxHelper) {
 		status = CheckStatusWarning
 		summary = "Linux sandbox helper path does not exist"
