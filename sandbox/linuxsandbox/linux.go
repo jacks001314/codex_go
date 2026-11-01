@@ -15,6 +15,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/bmatcuk/doublestar/v4"
 	seccomp "github.com/elastic/go-seccomp-bpf"
@@ -1481,7 +1483,6 @@ func proxySocketParentDir() string {
 func spawnProxyBridgeProcess(mode string, firstArg string, secondArg string) error {
 	bridgePath := os.Args[0]
 	cmd := exec.Command(bridgePath, mode, firstArg, secondArg)
-	cmd.SysProcAttr = &unix.SysProcAttr{Pdeathsig: unix.SIGTERM}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return err
@@ -1505,7 +1506,6 @@ func spawnProxyBridgeProcess(mode string, firstArg string, secondArg string) err
 func spawnProxyLocalBridge(udsPath string) (uint16, error) {
 	bridgePath := os.Args[0]
 	cmd := exec.Command(bridgePath, "--proxy-local-bridge", udsPath)
-	cmd.SysProcAttr = &unix.SysProcAttr{Pdeathsig: unix.SIGTERM}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return 0, err
@@ -1527,10 +1527,30 @@ func spawnProxyLocalBridge(udsPath string) (uint16, error) {
 	return uint16(port64), nil
 }
 
+// watchBridgeParent exits a proxy bridge once its parent process goes away.
+//
+// The spawn sites used SysProcAttr.Pdeathsig, but Linux delivers that signal
+// when the forking *thread* dies: the Go runtime retires threads freely, and
+// the sandbox helper later execs into the sandboxed command, which can kill the
+// bridge mid-request (observed as ECONNRESET through the managed-proxy chain).
+// Polling the parent pid tracks the parent *process* instead.
+func watchBridgeParent() {
+	parent := os.Getppid()
+	go func() {
+		for {
+			time.Sleep(250 * time.Millisecond)
+			if os.Getppid() != parent {
+				os.Exit(0)
+			}
+		}
+	}()
+}
+
 func runProxyHostBridgeHelper(args []string, stdout io.Writer) error {
 	if len(args) != 2 {
 		return errors.New("host bridge requires ENDPOINT and UDS_PATH")
 	}
+	watchBridgeParent()
 	endpoint := args[0]
 	udsPath := args[1]
 	_ = os.Remove(udsPath)
@@ -1551,6 +1571,7 @@ func runProxyHostBridgeHelper(args []string, stdout io.Writer) error {
 			defer unixConn.Close()
 			tcpConn, err := net.Dial("tcp", endpoint)
 			if err != nil {
+				fmt.Fprintf(os.Stderr, "codex-linux-sandbox host proxy bridge: dial %s: %v\n", endpoint, err)
 				return
 			}
 			defer tcpConn.Close()
@@ -1563,6 +1584,7 @@ func runProxyLocalBridgeHelper(args []string, stdout io.Writer) error {
 	if len(args) != 1 {
 		return errors.New("local bridge requires UDS_PATH")
 	}
+	watchBridgeParent()
 	udsPath := args[0]
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
@@ -1582,6 +1604,7 @@ func runProxyLocalBridgeHelper(args []string, stdout io.Writer) error {
 			defer tcpConn.Close()
 			unixConn, err := net.Dial("unix", udsPath)
 			if err != nil {
+				fmt.Fprintf(os.Stderr, "codex-linux-sandbox local proxy bridge: dial %s: %v\n", udsPath, err)
 				return
 			}
 			defer unixConn.Close()
@@ -1591,16 +1614,27 @@ func runProxyLocalBridgeHelper(args []string, stdout io.Writer) error {
 }
 
 func proxyBidirectional(left net.Conn, right net.Conn) {
-	done := make(chan struct{}, 2)
+	// Mirror tokio's copy_bidirectional: relay until *both* directions reach
+	// EOF. Returning after the first one lets the caller close a connection the
+	// other direction is still writing to, which resets the peer and drops the
+	// last response (seen as ECONNRESET through the managed-proxy chain).
+	var wg sync.WaitGroup
+	wg.Add(2)
 	go func() {
+		defer wg.Done()
 		_, _ = io.Copy(left, right)
-		done <- struct{}{}
+		if closer, ok := left.(interface{ CloseWrite() error }); ok {
+			_ = closer.CloseWrite()
+		}
 	}()
 	go func() {
+		defer wg.Done()
 		_, _ = io.Copy(right, left)
-		done <- struct{}{}
+		if closer, ok := right.(interface{ CloseWrite() error }); ok {
+			_ = closer.CloseWrite()
+		}
 	}()
-	<-done
+	wg.Wait()
 }
 
 func cloneIntPtr(value *int) *int {
