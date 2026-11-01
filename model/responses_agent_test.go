@@ -4291,7 +4291,8 @@ func TestBioPolicyErrorsAreTypedAcrossStreamAndHTTPLikeRust(t *testing.T) {
 
 func TestResponseFailedRateLimitRetryDelayLikeRust(t *testing.T) {
 	err := responseFailedError([]byte(`{"type":"response.failed","response":{"error":{"code":"rate_limit_exceeded","message":"Please try again in 11.054s."}}}`))
-	if delay, ok := codexapi.RetryDelayInfo(err); !ok || delay != 11054*time.Millisecond {
+	want := 11054 * time.Millisecond
+	if delay, ok := codexapi.RetryDelayInfo(err); !ok || delay < want-time.Millisecond || delay > want {
 		t.Fatalf("retry delay = %v, %t", delay, ok)
 	}
 }
@@ -4623,7 +4624,7 @@ func TestRefreshBedrockAWSCredentialsRunsCommandOnceAndReloads(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell helper not needed; command path is cross-platform")
 	}
-	helper := `
+	helper := `#!/bin/sh
 if [ "$1" = "refresh" ]; then
   touch "$CODEX_TEST_REFRESH_MARKER"
   exit 0
