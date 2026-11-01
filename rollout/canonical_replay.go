@@ -8,6 +8,8 @@ import (
 	"io"
 	"math"
 	"os"
+	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -1178,6 +1180,8 @@ func (w *canonicalReplayWriter) replayEvent(entry canonicalReplayLine) error {
 		return w.writeSubAgentActivity(entry)
 	case "dynamic_tool_call_response":
 		return w.writeDynamicToolCall(entry)
+	case "image_generation_end":
+		return w.writeImageGeneration(entry)
 	case "item_completed":
 		if !canonicalTurnItemDecodes(entry.payload) {
 			return nil
@@ -1202,9 +1206,6 @@ var legacyEventPassthrough = map[string]bool{
 	"thread_goal_updated":     true,
 	"thread_rolled_back":      true,
 	"thread_settings_applied": true,
-	// The image-generation event flattens its image reference into the event,
-	// which Go does not rebuild field by field yet.
-	"image_generation_end": true,
 }
 
 // legacyEventTurnID picks the turn a converted legacy event belongs to,
@@ -2041,6 +2042,184 @@ func (w *canonicalReplayWriter) writeDynamicToolCall(entry canonicalReplayLine) 
 	if err != nil {
 		return err
 	}
+	return w.writeItemCompleted(entry.timestamp, turnID, out.finish())
+}
+
+// canonicalAbsolutePath replays AbsolutePathBuf: the value must already be
+// absolute, and serialization writes the lexically cleaned path (Windows
+// separators on this platform).
+func canonicalAbsolutePath(value json.RawMessage) (string, bool) {
+	text, ok := canonicalStrictString(value)
+	if !ok {
+		return "", false
+	}
+	if runtime.GOOS != "windows" {
+		if !strings.HasPrefix(text, "/") {
+			return "", false
+		}
+		return filepath.Clean(text), true
+	}
+	cleaned := filepath.Clean(strings.ReplaceAll(text, "/", `\`))
+	if len(cleaned) < 3 {
+		return "", false
+	}
+	drive := (cleaned[0] >= 'A' && cleaned[0] <= 'Z') || (cleaned[0] >= 'a' && cleaned[0] <= 'z')
+	if !(drive && cleaned[1] == ':' && cleaned[2] == '\\') && !strings.HasPrefix(cleaned, `\\`) {
+		return "", false
+	}
+	return cleaned, true
+}
+
+// canonicalImageGenerationFailure replays the tagged ImageGenerationFailure
+// enum.
+func canonicalImageGenerationFailure(value json.RawMessage) ([]byte, bool) {
+	fields, err := canonicalRawFields(value)
+	if err != nil {
+		return nil, false
+	}
+	kind, ok := canonicalStrictString(fields["type"])
+	if !ok || kind != "usageLimitExceeded" {
+		return nil, false
+	}
+	limitID, ok := canonicalStrictString(fields["limitId"])
+	if !ok {
+		return nil, false
+	}
+	out := newCanonicalJSONObject()
+	_ = out.field("type", kind)
+	_ = out.field("limitId", limitID)
+	if raw, present := fields["resetsAt"]; present && !canonicalRawIsNull(raw) {
+		resetsAt, ok := canonicalStrictInt(raw)
+		if !ok {
+			return nil, false
+		}
+		_ = out.field("resetsAt", resetsAt)
+	} else {
+		_ = out.rawField("resetsAt", []byte("null"))
+	}
+	return out.finish(), true
+}
+
+// canonicalImageGenerationInputImages replays the camelCase input image list.
+func canonicalImageGenerationInputImages(value json.RawMessage) ([]byte, bool) {
+	var entries []json.RawMessage
+	if err := json.Unmarshal(value, &entries); err != nil {
+		return nil, false
+	}
+	converted := make([][]byte, 0, len(entries))
+	for _, raw := range entries {
+		fields, err := canonicalRawFields(raw)
+		if err != nil {
+			return nil, false
+		}
+		path, ok := canonicalAbsolutePath(fields["path"])
+		if !ok {
+			return nil, false
+		}
+		sha, ok := canonicalStrictString(fields["sha256"])
+		if !ok {
+			return nil, false
+		}
+		entry := newCanonicalJSONObject()
+		_ = entry.field("path", path)
+		_ = entry.field("sha256", sha)
+		converted = append(converted, entry.finish())
+	}
+	return canonicalContentArray(converted), true
+}
+
+// writeImageGeneration converts a legacy image_generation_end event into the
+// Extension(image_gen.generation) completed item.
+func (w *canonicalReplayWriter) writeImageGeneration(entry canonicalReplayLine) error {
+	fields, err := canonicalRawFields(entry.payload)
+	if err != nil {
+		return err
+	}
+	callID, ok := canonicalStrictString(fields["call_id"])
+	if !ok {
+		return nil
+	}
+	status, ok := canonicalStrictString(fields["status"])
+	if !ok {
+		return nil
+	}
+	out := newCanonicalJSONObject()
+	_ = out.field("type", "Extension")
+	_ = out.field("kind", "image_gen.generation")
+	_ = out.field("id", callID)
+	_ = out.field("status", status)
+	if raw, present := fields["revised_prompt"]; present && !canonicalRawIsNull(raw) {
+		text, ok := canonicalRawJSONStringValue(raw)
+		if !ok {
+			return nil
+		}
+		_ = out.field("revisedPrompt", text)
+	} else {
+		_ = out.rawField("revisedPrompt", []byte("null"))
+	}
+	if raw, present := fields["fileId"]; present && !canonicalRawIsNull(raw) {
+		text, ok := canonicalRawJSONStringValue(raw)
+		if !ok {
+			return nil
+		}
+		_ = out.field("fileId", text)
+	} else if raw, present := fields["result"]; present && !canonicalRawIsNull(raw) {
+		text, ok := canonicalRawJSONStringValue(raw)
+		if !ok {
+			return nil
+		}
+		_ = out.field("result", text)
+	} else {
+		return nil
+	}
+	transparent := []byte("null")
+	if raw, present := fields["transparent_background"]; present && !canonicalRawIsNull(raw) {
+		flag, ok := canonicalRawJSONBool(raw)
+		if !ok {
+			return nil
+		}
+		transparent = []byte(strconv.FormatBool(flag))
+	}
+	_ = out.rawField("transparentBackground", transparent)
+	if raw, present := fields["failure"]; present && !canonicalRawIsNull(raw) {
+		converted, ok := canonicalImageGenerationFailure(raw)
+		if !ok {
+			return nil
+		}
+		_ = out.rawField("failure", converted)
+	} else {
+		_ = out.rawField("failure", []byte("null"))
+	}
+	if raw, present := fields["saved_path"]; present && !canonicalRawIsNull(raw) {
+		path, ok := canonicalAbsolutePath(raw)
+		if !ok {
+			return nil
+		}
+		_ = out.field("savedPath", path)
+	}
+	if raw, present := fields["input_images"]; present && !canonicalRawIsNull(raw) {
+		images, ok := canonicalImageGenerationInputImages(raw)
+		if !ok {
+			return nil
+		}
+		if string(images) != "[]" {
+			_ = out.rawField("inputImages", images)
+		}
+	}
+	if raw, present := fields["generation_id"]; present && !canonicalRawIsNull(raw) {
+		text, ok := canonicalRawJSONStringValue(raw)
+		if !ok {
+			return nil
+		}
+		_ = out.field("generationId", text)
+	} else {
+		_ = out.rawField("generationId", []byte("null"))
+	}
+	turnID, err := w.ensureTurn(entry.timestamp, entry.sourceIndex)
+	if err != nil {
+		return err
+	}
+	w.reasoning = nil
 	return w.writeItemCompleted(entry.timestamp, turnID, out.finish())
 }
 

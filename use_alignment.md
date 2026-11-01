@@ -2879,8 +2879,54 @@ records instead of carrying them through verbatim. Go's replay now mirrors
   the Rust bytes and counters in
   `rollout/canonical_migration_legacy_event_items_rust_shape_test.go`.
 
+### 86. `migrate-rollouts` converts legacy image-generation events like Rust
+
+`image_generation_end` was the last legacy completion event still carried over
+verbatim; it also flattens its image reference into the event payload, so the
+record has to be rebuilt field by field. Go now mirrors
+`legacy_event.rs::completed_item` for it:
+
+- **Envelope.** The item is `TurnItem::Extension(ExtensionItem::ImageGeneration)`,
+  which serde serializes as `{"type":"Extension","kind":"image_gen.generation",
+  ...}` with the item fields flattened after the tag.
+- **Fields.** `ImageGenerationItem` order and nullability are reproduced:
+  `id`, `status`, `revisedPrompt` (always present, `null` when unset),
+  the flattened `GeneratedImageRef` (`fileId` wins over `result`, matching the
+  untagged enum's `File`-first order), `transparentBackground` and `failure`
+  (always present, `null` when unset), `savedPath` and `inputImages` only when
+  set (`inputImages` also skipped when empty), and `generationId` (always
+  present, `null` when unset). `failure` follows the tagged
+  `usageLimitExceeded` shape with `limitId` required and `resetsAt` always
+  written; `inputImages` entries keep only `path` and `sha256`.
+- **Paths.** `saved_path` and `input_images[].path` are `AbsolutePathBuf`
+  values, so they are validated as absolute and re-serialized lexically cleaned
+  the way `std::path::absolute` cleans them on this platform (`C:/tmp/./a.png`
+  and `C:/tmp/b/../a.png` both become `C:\tmp\a.png`, a trailing separator is
+  dropped), and a root-relative or drive-relative path fails the decode.
+- **Turn selection.** `completed_item` returns no turn id for this event, so the
+  item always lands in the implicit `rollout-{line}` turn even when the payload
+  carries a `turn_id`.
+- **Dropped records.** A record without `status`, without either `fileId` or
+  `result`, with an unknown failure tag or a non-absolute path is dropped like
+  Rust's failed parse.
+- Evidence: `out/r79-imagegen.txt` compares 19 payloads against 0.166 at 19/19
+  byte-identical with identical `bytes_processed` (`out/r79-imagegen-rust.txt`
+  and `out/r79-paths.txt` keep the shape and path-normalization probes), the
+  `out/r75*`-`out/r78*` regressions still report `FAILURES 0`, and
+  `TestCanonicalizeRolloutConvertsImageGenerationLikeRust` (12 subtests) freezes
+  the Rust bytes and counters in
+  `rollout/canonical_migration_image_generation_rust_shape_test.go`.
+
 ## Verification
 
+- Round 73 converts the last legacy `migrate-rollouts` completion event,
+  `image_generation_end`, into the `Extension(image_gen.generation)` item like
+  0.166 (entry 86): `out/r79-imagegen.txt` reports 19/19 payloads
+  byte-identical with identical `bytes_processed`, including the
+  `AbsolutePathBuf` path cleaning, and `out/r75*`-`out/r78*` still report
+  `FAILURES 0`; the new
+  `TestCanonicalizeRolloutConvertsImageGenerationLikeRust` subtests freeze them
+  (`go test -count=1 ./rollout` passes).
 - Round 72 converts the remaining legacy `migrate-rollouts` completion events
   (`mcp_tool_call_end`, `web_search_end`, `context_compacted`, both review-mode
   events, `sub_agent_activity`, `dynamic_tool_call_response`) into completed
@@ -3526,15 +3572,12 @@ records instead of carrying them through verbatim. Go's replay now mirrors
   `patch_apply_end` -> `FileChange` conversion (entries 82 and 83,
   `out/r76-events.txt` 5/5, `out/r76-compressed-cases.txt` 6/6) and
   `turn_context` / `compacted` are re-serialized like 0.166 (entry 84,
-  `out/r77-turn-context-compacted.txt` 20/20), and the legacy completion events
-  are converted into completed `TurnItem` records like Rust (entry 85,
-  `out/r78-convert.txt` 44/44). What is left of the paginated event policy is
-  only `image_generation_end`, which is still carried over verbatim because its
-  `image` reference flattens into the event payload, so Go would have to rebuild
-  `GeneratedImageRef` field by field. An `item_completed` whose item decodes but
-  whose nested values
-  Rust rejects (for example an unknown `phase`) still survives Go's shallower
-  check, and a `turn_context` carrying `permission_profile` /
+  `out/r77-turn-context-compacted.txt` 20/20), every legacy completion event is
+  converted into its `TurnItem` the way Rust does (entries 85 and 86,
+  `out/r78-convert.txt` 44/44 and `out/r79-imagegen.txt` 19/19). What is left on
+  this surface is narrower: an `item_completed` whose item decodes but whose
+  nested values Rust rejects (for example an unknown `phase`) still survives
+  Go's shallower check, and a `turn_context` carrying `permission_profile` /
   `file_system_sandbox_policy` passes those nested payloads through instead of
   re-serializing them. The `Disk used for thread storage` line follows Rust's
   rule but not its numbers, because Rust leaves the thread-history WAL
