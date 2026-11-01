@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"syscall"
 
@@ -91,17 +90,4 @@ func shellSnapshotCarrierClose(shellType shell.ShellType) (string, bool) {
 	default:
 		return "", false
 	}
-}
-
-// shellSnapshotDescriptorReplay reports whether the launch shell can source an
-// inherited descriptor, mirroring Rust's probe inside the capture sandbox. The
-// exec server's own capture is not sandboxed, so the probe only has to
-// establish that this shell resolves /dev/fd/N here.
-func shellSnapshotDescriptorReplay(shellPath string, reader *os.File) bool {
-	if reader == nil || shellPath == "" {
-		return false
-	}
-	probe := exec.Command(shellPath, "-c", "case '' in '') ;; esac 2>/dev/null </dev/fd/3")
-	probe.ExtraFiles = []*os.File{reader}
-	return probe.Run() == nil
 }

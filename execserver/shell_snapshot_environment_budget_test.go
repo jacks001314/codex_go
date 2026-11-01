@@ -37,7 +37,7 @@ func TestShellSnapshotEnvironmentSharesReplayBudgetLikeRust(t *testing.T) {
 	stream := []byte("# Snapshot file\n" + state + "\x00\x00\x00" + environment)
 	manager := newShellSnapshotManager()
 	manager.capture = func(context.Context, []string, string, map[string]string) ([]byte, error) {
-		return stream, nil
+		return shellSnapshotTestCaptureSource(string(stream), true), nil
 	}
 	entry, err := manager.snapshotEntry(context.Background(), params, shell.ShellBash, params.Env, nil, nil)
 	if err != nil {
@@ -53,7 +53,7 @@ func TestShellSnapshotEnvironmentSharesReplayBudgetLikeRust(t *testing.T) {
 
 	oversized := newShellSnapshotManager()
 	oversized.capture = func(context.Context, []string, string, map[string]string) ([]byte, error) {
-		return []byte("# Snapshot file\n\x00\x00\x00HUGE=" + strings.Repeat("x", 520*1024) + "\x00"), nil
+		return shellSnapshotTestCaptureSource("# Snapshot file\n\x00\x00\x00HUGE="+strings.Repeat("x", 520*1024)+"\x00", false), nil
 	}
 	overParams := *params
 	overParams.ShellSnapshot = &ShellSnapshotRequest{ScopeID: "attachment-env-oversized", Shell: ShellInfo{Name: "bash", Path: "/bin/bash"}}

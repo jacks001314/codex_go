@@ -37,7 +37,7 @@ func TestExecServerLaunchesWithDescriptorSnapshotLikeRust(t *testing.T) {
 			t.Cleanup(func() { server.shellSnapshots.close() })
 			payload := strings.Repeat("x", testCase.payload)
 			server.shellSnapshots.capture = func(context.Context, []string, string, map[string]string) ([]byte, error) {
-				return []byte("# Snapshot file\nexport BIG=\"" + payload + "\"\nexport SMALL=restored\n\x00\x00\x00"), nil
+				return shellSnapshotTestCaptureSource("# Snapshot file\nexport BIG=\""+payload+"\"\nexport SMALL=restored\n\x00\x00\x00", true), nil
 			}
 			cwd, err := utils.FromHostNativePath(t.TempDir())
 			if err != nil {

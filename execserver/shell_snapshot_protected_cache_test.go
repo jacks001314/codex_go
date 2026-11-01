@@ -23,7 +23,7 @@ func TestShellSnapshotProtectedCaptureIsNotReusedLikeRust(t *testing.T) {
 	manager := newShellSnapshotManager()
 	manager.capture = func(context.Context, []string, string, map[string]string) ([]byte, error) {
 		calls.Add(1)
-		return []byte("# Snapshot file\nexport TOKEN='sk-real-secret'\n\x00\x00\x00"), nil
+		return shellSnapshotTestCaptureSource("# Snapshot file\nexport TOKEN='sk-real-secret'\n\x00\x00\x00", false), nil
 	}
 	params := protectedSnapshotParams(t)
 
@@ -73,7 +73,7 @@ func TestShellSnapshotProtectedFailureDoesNotPoisonCacheLikeRust(t *testing.T) {
 		if calls.Add(1) == 1 {
 			return nil, errors.New("capture failed")
 		}
-		return []byte("# Snapshot file\nexport TOKEN='sk-real-secret'\n\x00\x00\x00"), nil
+		return shellSnapshotTestCaptureSource("# Snapshot file\nexport TOKEN='sk-real-secret'\n\x00\x00\x00", false), nil
 	}
 	params := protectedSnapshotParams(t)
 	fallback, _, err := manager.rewrite(context.Background(), params, params.Env, []network.CredentialMaskPair{{Real: "sk-real-secret", Dummy: "dummy-one"}}, nil, nil)

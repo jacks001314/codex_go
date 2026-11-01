@@ -22,7 +22,7 @@ func TestShellSnapshotPrewarmFailureDoesNotBackOffNextLaunchLikeRust(t *testing.
 		if calls.Add(1) == 1 {
 			return nil, errors.New("prewarm failed")
 		}
-		return []byte("# Snapshot file\nexport KEPT='kept'\n\x00\x00\x00"), nil
+		return shellSnapshotTestCaptureSource("# Snapshot file\nexport KEPT='kept'\n\x00\x00\x00", false), nil
 	}
 	params := protectedSnapshotParams(t)
 	if _, err := manager.prewarmSnapshotEntry(context.Background(), params, shell.ShellBash, params.Env, nil, nil); err == nil {

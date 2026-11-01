@@ -15,6 +15,16 @@ import (
 	"codex_go/utils"
 )
 
+func shellSnapshotTestCaptureSource(state string, descriptor bool) []byte {
+	flag := byte('0')
+	if descriptor {
+		flag = '1'
+	}
+	marker := append([]byte{0}, shellSnapshotSourceMarker...)
+	marker = append(marker, 0, flag, 0)
+	return append(marker, state...)
+}
+
 func TestShellSnapshotRequestRoundTripAndCapability(t *testing.T) {
 	params := ExecParams{
 		ProcessID: "snapshot-process",
@@ -53,7 +63,7 @@ func TestShellSnapshotManagerRewritesAndCachesLikeRust(t *testing.T) {
 	manager := newShellSnapshotManager()
 	manager.capture = func(context.Context, []string, string, map[string]string) ([]byte, error) {
 		calls.Add(1)
-		return []byte("# Snapshot file\nexport TOKEN=\"sk-real-secret\"\n\x00\x00\x00"), nil
+		return shellSnapshotTestCaptureSource("# Snapshot file\nexport TOKEN=\"sk-real-secret\"\n\x00\x00\x00", false), nil
 	}
 	cwd, err := utils.FromHostNativePath(t.TempDir())
 	if err != nil {
@@ -162,7 +172,7 @@ func TestShellSnapshotCacheIsBoundedLikeRust(t *testing.T) {
 	// is replayed through an unnamed file rather than the environment.
 	output := []byte("# Snapshot file\n" + strings.Repeat("export BIG=\"value\"\n", 48*1024) + "\x00\x00\x00")
 	manager.capture = func(context.Context, []string, string, map[string]string) ([]byte, error) {
-		return output, nil
+		return shellSnapshotTestCaptureSource(string(output), true), nil
 	}
 	cwd, err := utils.FromHostNativePath(t.TempDir())
 	if err != nil {
@@ -202,6 +212,30 @@ func TestShellSnapshotCacheIsBoundedLikeRust(t *testing.T) {
 	}
 }
 
+func TestShellSnapshotCaptureProbeScriptAndMarkerLikeRust(t *testing.T) {
+	script := shellSnapshotCaptureProbeScript("printf capture", true)
+	if !strings.Contains(script, "</dev/fd/3") || !strings.Contains(script, shellSnapshotSourceMarker) {
+		t.Fatalf("probe script = %q", script)
+	}
+	if !strings.HasSuffix(script, "\nprintf capture") {
+		t.Fatalf("probe must run before the capture script: %q", script)
+	}
+	fileSource, captured, err := parseShellSnapshotCaptureSource(shellSnapshotTestCaptureSource("# Snapshot file\n", true))
+	if err != nil || !fileSource || string(captured) != "# Snapshot file\n" {
+		t.Fatalf("descriptor marker = (%v, %q, %v)", fileSource, captured, err)
+	}
+	fileSource, captured, err = parseShellSnapshotCaptureSource(shellSnapshotTestCaptureSource("# Snapshot file\n", false))
+	if err != nil || fileSource || string(captured) != "# Snapshot file\n" {
+		t.Fatalf("environment marker = (%v, %q, %v)", fileSource, captured, err)
+	}
+	if _, _, err := parseShellSnapshotCaptureSource([]byte("# Snapshot file\n")); err == nil {
+		t.Fatal("a capture without the source probe was accepted")
+	}
+	if _, _, err := parseShellSnapshotCaptureSource([]byte{0, 'C', 'O', 'D', 'E', 'X', '_', 'S', 'N', 'A', 'P', 'S', 'H', 'O', 'T', '_', 'S', 'O', 'U', 'R', 'C', 'E', 0}); err == nil {
+		t.Fatal("an incomplete source probe was accepted")
+	}
+}
+
 // TestShellSnapshotBashReplayUsesPrivilegedFlagLikeRust covers Rust's bash
 // startup suppression: the restored snapshot launches with -pc and clears the
 // privileged mode so automatic startup files do not re-run (#39957).
@@ -211,7 +245,7 @@ func TestShellSnapshotBashReplayUsesPrivilegedFlagLikeRust(t *testing.T) {
 	t.Cleanup(func() { shellSnapshotPlatformSupported = previous })
 	manager := newShellSnapshotManager()
 	manager.capture = func(context.Context, []string, string, map[string]string) ([]byte, error) {
-		return []byte("# Snapshot file\nexport TOKEN=\"value\"\n\x00\x00\x00"), nil
+		return shellSnapshotTestCaptureSource("# Snapshot file\nexport TOKEN=\"value\"\n\x00\x00\x00", false), nil
 	}
 	cwd, err := utils.FromHostNativePath(t.TempDir())
 	if err != nil {
@@ -280,7 +314,7 @@ func TestShellSnapshotReassembledCredentialFallsBackLikeRust(t *testing.T) {
 	manager := newShellSnapshotManager()
 	t.Cleanup(manager.close)
 	manager.capture = func(context.Context, []string, string, map[string]string) ([]byte, error) {
-		return []byte("# Snapshot file\nexport TOKEN=\"sk-re\"\"al-secret\"\n\x00\x00\x00"), nil
+		return shellSnapshotTestCaptureSource("# Snapshot file\nexport TOKEN=\"sk-re\"\"al-secret\"\n\x00\x00\x00", false), nil
 	}
 	params := &ExecParams{
 		ProcessID: "reassembled-process",
@@ -322,7 +356,7 @@ func TestShellSnapshotBrokerTextCheckFallsBackLikeRust(t *testing.T) {
 	manager := newShellSnapshotManager()
 	t.Cleanup(manager.close)
 	manager.capture = func(context.Context, []string, string, map[string]string) ([]byte, error) {
-		return []byte("# Snapshot file\nexport DROP=\"ghp_patterncredential\"\n\x00\x00\x00"), nil
+		return shellSnapshotTestCaptureSource("# Snapshot file\nexport DROP=\"ghp_patterncredential\"\n\x00\x00\x00", false), nil
 	}
 	params := &ExecParams{
 		ProcessID: "pattern-process",

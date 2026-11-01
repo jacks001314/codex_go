@@ -19,7 +19,7 @@ func TestShellSnapshotRenderPolicyNarrowsCapturedExportsLikeRust(t *testing.T) {
 	t.Cleanup(func() { shellSnapshotPlatformSupported = previous })
 	manager := newShellSnapshotManager()
 	manager.capture = func(context.Context, []string, string, map[string]string) ([]byte, error) {
-		return []byte(strings.Join([]string{
+		return shellSnapshotTestCaptureSource(strings.Join([]string{
 			"# Snapshot file\n",
 			"",
 			"KEPT", "declare -x KEPT='kept-sentinel'\n",
@@ -27,7 +27,7 @@ func TestShellSnapshotRenderPolicyNarrowsCapturedExportsLikeRust(t *testing.T) {
 			"SECRET_SET", "declare -x SECRET_SET='original-sentinel'\n",
 			"OTHER", "declare -x OTHER='other-sentinel'\n",
 			"", "",
-		}, "\x00")), nil
+		}, "\x00"), false), nil
 	}
 	cwd, err := utils.FromHostNativePath(t.TempDir())
 	if err != nil {

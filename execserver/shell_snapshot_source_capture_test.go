@@ -31,7 +31,7 @@ func TestShellSnapshotCaptureUsesSourceScriptLikeRust(t *testing.T) {
 			manager := newShellSnapshotManager()
 			manager.capture = func(_ context.Context, command []string, _ string, _ map[string]string) ([]byte, error) {
 				script = command[2]
-				return []byte("# Snapshot file\n\x00\x00\x00"), nil
+				return shellSnapshotTestCaptureSource("# Snapshot file\n\x00\x00\x00", false), nil
 			}
 			cwd, err := utils.FromHostNativePath(t.TempDir())
 			if err != nil {

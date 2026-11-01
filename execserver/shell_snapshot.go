@@ -1,6 +1,7 @@
 package execserver
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -30,12 +31,13 @@ const (
 	maxShellSnapshotEnvValueBytes = 60 * 1024
 	// Rust #51350: file replay admits 4 MiB of shell state and 8 MiB of raw
 	// capture output while the captured environment stays capped at 512 KiB.
-	maxFileShellSnapshotBytes        = 4 * 1024 * 1024
-	maxFileShellSnapshotCaptureBytes = 8 * 1024 * 1024
-	maxShellSnapshotEnvironmentBytes = 512 * 1024
-	shellSnapshotCaptureTimeout      = 10 * time.Second
-	shellSnapshotRetryBackoff        = time.Second
-	maxShellSnapshotAttempts         = 3
+	maxFileShellSnapshotBytes          = 4 * 1024 * 1024
+	maxFileShellSnapshotCaptureBytes   = 8 * 1024 * 1024
+	maxShellSnapshotEnvironmentBytes   = 512 * 1024
+	maxEnvironmentSnapshotCaptureBytes = 8 * maxShellSnapshotEnvironmentBytes
+	shellSnapshotCaptureTimeout        = 10 * time.Second
+	shellSnapshotRetryBackoff          = time.Second
+	maxShellSnapshotAttempts           = 3
 	// shellSnapshotCarrierFd is the descriptor the child receives for the replay
 	// file: os/exec assigns inherited files above the three standard streams.
 	shellSnapshotCarrierFd = 3
@@ -50,20 +52,21 @@ type shellSnapshotManager struct {
 	failures map[string]shellSnapshotFailure
 	inflight map[string]*shellSnapshotFlight
 	capture  func(context.Context, []string, string, map[string]string) ([]byte, error)
-	// probes caches whether a shell can source an inherited descriptor; the
-	// answer depends only on the shell and the host (Rust #48078).
-	probes map[string]bool
-	now    func() time.Time
+	// captureCommand applies the launch sandbox to the capture command. The
+	// capture must run under the same filesystem policy as the launch so the
+	// in-process descriptor probe reflects the sandbox Rust probes (#48078).
+	captureCommand func(*ExecParams, []string) ([]string, string, error)
+	now            func() time.Time
 }
 
 func newShellSnapshotManager() *shellSnapshotManager {
 	return &shellSnapshotManager{
-		cache:    map[string]*shellSnapshotEntry{},
-		failures: map[string]shellSnapshotFailure{},
-		inflight: map[string]*shellSnapshotFlight{},
-		probes:   map[string]bool{},
-		capture:  runShellSnapshotCapture,
-		now:      time.Now,
+		cache:          map[string]*shellSnapshotEntry{},
+		failures:       map[string]shellSnapshotFailure{},
+		inflight:       map[string]*shellSnapshotFlight{},
+		capture:        runShellSnapshotCapture,
+		captureCommand: defaultShellSnapshotCaptureCommand,
+		now:            time.Now,
 	}
 }
 
@@ -329,29 +332,6 @@ func (m *shellSnapshotManager) snapshotEntryMode(ctx context.Context, params *Ex
 	}
 }
 
-// descriptorReplay reports whether this shell can source an inherited
-// descriptor. Rust probes inside the capture sandbox; the exec server's capture
-// is not sandboxed, so the probe establishes that the shell resolves /dev/fd/N
-// on this host, and the answer is cached per shell (#48078).
-func (m *shellSnapshotManager) descriptorReplay(shellType shell.ShellType, shellPath string) bool {
-	key := string(shellType) + "\x00" + shellPath
-	m.mu.Lock()
-	cached, ok := m.probes[key]
-	m.mu.Unlock()
-	if ok {
-		return cached
-	}
-	reader, err := materializeShellSnapshotTransport(shellType, "")
-	available := err == nil && shellSnapshotDescriptorReplay(shellPath, reader)
-	if err == nil {
-		_ = reader.Close()
-	}
-	m.mu.Lock()
-	m.probes[key] = available
-	m.mu.Unlock()
-	return available
-}
-
 // storeEntryLocked caches one capture and evicts the oldest entry past the
 // bounded cache size. An entry only holds bytes; replay files live per launch.
 func (m *shellSnapshotManager) storeEntryLocked(key string, entry *shellSnapshotEntry) {
@@ -464,18 +444,44 @@ func (m *shellSnapshotManager) captureSnapshot(ctx context.Context, params *Exec
 	if !ok {
 		return nil, errors.New("unsupported snapshot shell")
 	}
-	cwd := shellSnapshotNativeCWD(params.CWD)
 	env := shellSnapshotEnvironment(captureEnv)
-	captureCtx, cancel := context.WithTimeout(ctx, shellSnapshotCaptureTimeout)
-	defer cancel()
-	output, err := m.capture(captureCtx, []string{params.ShellSnapshot.Shell.Path, "-lc", captureScript}, cwd, env)
+	var probe *os.File
+	if shellType != shell.ShellSh {
+		if materialized, materializeErr := materializeShellSnapshotTransport(shellType, ""); materializeErr == nil {
+			probe = materialized
+			defer func() { _ = probe.Close() }()
+		}
+	}
+	captureLimit := maxEnvironmentSnapshotCaptureBytes
+	if probe != nil {
+		captureLimit = maxFileShellSnapshotCaptureBytes
+	}
+	captureScript = shellSnapshotCaptureProbeScript(captureScript, probe != nil)
+	captureParams := *params
+	captureParams.Argv = []string{params.ShellSnapshot.Shell.Path, "-lc", captureScript}
+	captureParams.Env = env
+	captureParams.TTY = false
+	command, captureCWD, err := m.captureCommand(&captureParams, captureParams.Argv)
 	if err != nil {
 		return nil, err
 	}
-	if len(output) > maxFileShellSnapshotCaptureBytes {
-		return nil, fmt.Errorf("shell snapshot capture exceeds %d bytes", maxFileShellSnapshotCaptureBytes)
+	captureCtx, cancel := context.WithTimeout(ctx, shellSnapshotCaptureTimeout)
+	defer cancel()
+	if probe != nil {
+		captureCtx = context.WithValue(captureCtx, shellSnapshotProbeKey{}, probe)
 	}
-	captured := shell.ParseCapturedSnapshot(shellType, output)
+	output, err := m.capture(captureCtx, command, captureCWD, env)
+	if err != nil {
+		return nil, err
+	}
+	if len(output) > captureLimit {
+		return nil, fmt.Errorf("shell snapshot capture exceeds %d bytes", captureLimit)
+	}
+	fileSource, capturedOutput, err := parseShellSnapshotCaptureSource(output)
+	if err != nil {
+		return nil, err
+	}
+	captured := shell.ParseCapturedSnapshot(shellType, capturedOutput)
 	if captured == nil {
 		return nil, errors.New("invalid captured shell state")
 	}
@@ -483,15 +489,13 @@ func (m *shellSnapshotManager) captureSnapshot(ctx context.Context, params *Exec
 	if err := validateMaskedShellSnapshot(rendered, shellType, credentialPairs, credentialTextUnsafe); err != nil {
 		return nil, err
 	}
-	if err := validateShellSnapshotSizes(captured, rendered); err != nil {
+	if err := validateShellSnapshotSizes(captured, rendered, fileSource); err != nil {
 		return nil, err
 	}
 	// Rust #39957 keeps the state in executor memory; #48078 materializes an
-	// unnamed file per launch instead of caching a named one. Bash and zsh source
-	// the descriptor whenever the capture sandbox allows it, and only `sh` or a
-	// host without /dev/fd falls back to environment replay.
-	descriptor := m.descriptorReplay(shellType, params.ShellSnapshot.Shell.Path)
-	return &shellSnapshotEntry{state: rendered, fileSource: descriptor}, nil
+	// unnamed file per launch instead of caching a named one. The capture
+	// sandbox's own probe decides between descriptor and environment replay.
+	return &shellSnapshotEntry{state: rendered, fileSource: fileSource}, nil
 }
 
 // capturedSnapshotEnvironmentBytes is the captured environment's replay cost:
@@ -509,7 +513,7 @@ func capturedSnapshotEnvironmentBytes(captured *shell.CapturedSnapshot) int {
 
 // validateShellSnapshotSizes mirrors Rust #51350's replay limits: the captured
 // environment is capped independently from the 4 MiB file-replay state budget.
-func validateShellSnapshotSizes(captured *shell.CapturedSnapshot, renderedState string) error {
+func validateShellSnapshotSizes(captured *shell.CapturedSnapshot, renderedState string, fileSource bool) error {
 	if captured == nil {
 		return errors.New("invalid captured shell state")
 	}
@@ -517,8 +521,12 @@ func validateShellSnapshotSizes(captured *shell.CapturedSnapshot, renderedState 
 	if environmentBytes > maxShellSnapshotEnvironmentBytes {
 		return fmt.Errorf("shell snapshot environment exceeds %d bytes", maxShellSnapshotEnvironmentBytes)
 	}
-	if len(renderedState) > maxFileShellSnapshotBytes {
-		return fmt.Errorf("shell snapshot state exceeds %d bytes", maxFileShellSnapshotBytes)
+	stateLimit := maxShellSnapshotEnvironmentBytes - environmentBytes
+	if fileSource {
+		stateLimit = maxFileShellSnapshotBytes
+	}
+	if len(renderedState) > stateLimit {
+		return fmt.Errorf("shell snapshot state exceeds %d bytes", stateLimit)
 	}
 	return nil
 }
@@ -647,9 +655,67 @@ func runShellSnapshotCapture(ctx context.Context, command []string, cwd string, 
 	process := exec.CommandContext(ctx, command[0], command[1:]...)
 	process.Dir = cwd
 	process.Env = envPairs(env)
+	if probe, ok := ctx.Value(shellSnapshotProbeKey{}).(*os.File); ok && probe != nil {
+		process.ExtraFiles = []*os.File{probe}
+	}
 	return process.Output()
 }
 
 func shellSingleQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
+}
+
+const shellSnapshotSourceMarker = "CODEX_SNAPSHOT_SOURCE"
+
+type shellSnapshotProbeKey struct{}
+
+// shellSnapshotCaptureProbeScript prepends Rust's source probe to the capture
+// script. The probe runs before the snapshot records are emitted and therefore
+// sees the same process, sandbox, /proc fallback, and read policy as the shell
+// that renders the state (#48078).
+func shellSnapshotCaptureProbeScript(script string, descriptor bool) string {
+	printProbe := func(value string) string {
+		return fmt.Sprintf("printf '\\0%s\\0%%s\\0' '%s'", shellSnapshotSourceMarker, value)
+	}
+	if !descriptor {
+		return printProbe("0") + "\n" + script
+	}
+	return fmt.Sprintf(
+		"if case '' in '') ;; esac 2>/dev/null </dev/fd/%d; then %s; else %s; fi\n%s",
+		shellSnapshotCarrierFd,
+		printProbe("1"),
+		printProbe("0"),
+		script,
+	)
+}
+
+// parseShellSnapshotCaptureSource removes the probe record and reports whether
+// the capture sandbox allowed the shell to open an inherited descriptor.
+func parseShellSnapshotCaptureSource(output []byte) (bool, []byte, error) {
+	marker := append([]byte{0}, shellSnapshotSourceMarker...)
+	marker = append(marker, 0)
+	index := bytes.Index(output, marker)
+	if index < 0 {
+		return false, nil, errors.New("missing shell snapshot source probe")
+	}
+	rest := output[index+len(marker):]
+	if len(rest) < 2 || rest[1] != 0 || (rest[0] != '0' && rest[0] != '1') {
+		return false, nil, errors.New("incomplete shell snapshot source probe")
+	}
+	return rest[0] == '1', rest[2:], nil
+}
+
+func defaultShellSnapshotCaptureCommand(params *ExecParams, command []string) ([]string, string, error) {
+	if params == nil || !hasJSONValue(params.Sandbox) {
+		cwd := ""
+		if params != nil {
+			cwd = shellSnapshotNativeCWD(params.CWD)
+		}
+		return append([]string(nil), command...), cwd, nil
+	}
+	captureParams := *params
+	captureParams.Argv = append([]string(nil), command...)
+	captureParams.TTY = false
+	prepared, cwd, _, err := prepareExecProcess(&captureParams, "")
+	return prepared, cwd, err
 }

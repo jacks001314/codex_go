@@ -15,7 +15,3 @@ import (
 func materializeShellSnapshotTransport(shell.ShellType, string) (*os.File, error) {
 	return nil, errors.New("shell snapshot descriptor replay is unavailable on this platform")
 }
-
-func shellSnapshotDescriptorReplay(string, *os.File) bool {
-	return false
-}

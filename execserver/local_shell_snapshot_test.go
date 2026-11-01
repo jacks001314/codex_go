@@ -3,6 +3,7 @@ package execserver
 import (
 	"context"
 	"encoding/json"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -20,7 +21,7 @@ func TestLocalShellSnapshotExecutorPrewarmsAndPreparesLikeRust(t *testing.T) {
 	var calls atomic.Int64
 	executor.snapshots.capture = func(context.Context, []string, string, map[string]string) ([]byte, error) {
 		calls.Add(1)
-		return []byte("# Snapshot file\nexport FOO=bar\n\x00\x00\x00"), nil
+		return shellSnapshotTestCaptureSource("# Snapshot file\nexport FOO=bar\n\x00\x00\x00", false), nil
 	}
 	snapshot := &ShellSnapshotRequest{ScopeID: "thread-1:local", Shell: ShellInfo{Name: "bash", Path: "/bin/bash"}}
 	launch := func(callID string) *ExecParams {
@@ -65,13 +66,16 @@ func TestLocalShellSnapshotExecutorPrewarmsAndPreparesLikeRust(t *testing.T) {
 	}
 
 	// The sandbox is part of the cache identity; a different sandbox captures.
-	sandboxed := launch("call-2")
-	sandboxed.Sandbox = json.RawMessage(`{"cwd":"file:///repo"}`)
-	if _, _, err := executor.Prepare(context.Background(), sandboxed, map[string]string{"PATH": "/bin"}); err != nil {
-		t.Fatalf("Prepare() with sandbox error = %v", err)
-	}
-	if calls.Load() != 2 {
-		t.Fatalf("captures after a different sandbox = %d, want 2", calls.Load())
+	// Windows has no supported sandboxed exec-server launch to exercise here.
+	if runtime.GOOS != "windows" {
+		sandboxed := launch("call-2")
+		sandboxed.Sandbox = json.RawMessage(`{"permissions":{"type":"managed","file_system":{"type":"restricted","entries":[]},"network":"restricted"},"cwd":"file:///repo"}`)
+		if _, _, err := executor.Prepare(context.Background(), sandboxed, map[string]string{"PATH": "/bin"}); err != nil {
+			t.Fatalf("Prepare() with sandbox error = %v", err)
+		}
+		if calls.Load() != 2 {
+			t.Fatalf("captures after a different sandbox = %d, want 2", calls.Load())
+		}
 	}
 
 	invalid := launch("call-3")

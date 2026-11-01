@@ -1099,7 +1099,7 @@ func NewServerWithHTTPClient(httpClient *http.Client) *Server {
 	if httpClient == nil {
 		httpClient = &http.Client{}
 	}
-	return &Server{
+	server := &Server{
 		processes:          map[string]*processState{},
 		handles:            map[string]*fileHandleEntry{},
 		fileSlots:          make(chan struct{}, maxOpenFiles),
@@ -1109,6 +1109,8 @@ func NewServerWithHTTPClient(httpClient *http.Client) *Server {
 		v2Discovery:        newV2DiscoveryManager(),
 		shellSnapshots:     newShellSnapshotManager(),
 	}
+	server.shellSnapshots.captureCommand = server.prepareShellSnapshotCaptureCommand
+	return server
 }
 
 func newSessionServer(httpClient *http.Client) *Server {
@@ -1136,7 +1138,23 @@ func newSessionServerWithRuntimeOptions(httpClient *http.Client, parent *Server)
 			server.SetExecutorRegistrationIdentity(identity.environmentID, identity.registrationID)
 		}
 	}
+	server.shellSnapshots.captureCommand = server.prepareShellSnapshotCaptureCommand
 	return server
+}
+
+func (s *Server) prepareShellSnapshotCaptureCommand(params *ExecParams, command []string) ([]string, string, error) {
+	if params == nil || !hasJSONValue(params.Sandbox) {
+		cwd := ""
+		if params != nil {
+			cwd = shellSnapshotNativeCWD(params.CWD)
+		}
+		return append([]string(nil), command...), cwd, nil
+	}
+	captureParams := *params
+	captureParams.Argv = append([]string(nil), command...)
+	captureParams.TTY = false
+	prepared, cwd, _, err := prepareExecProcess(&captureParams, s.allowedSymlinkedCodexHomeValue())
+	return prepared, cwd, err
 }
 
 // localEnvironmentInfoForConnection reports the local environment with the

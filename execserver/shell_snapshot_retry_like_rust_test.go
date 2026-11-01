@@ -35,7 +35,7 @@ func snapshotRetryCapture(calls *atomic.Int64, failFirst int64) func(context.Con
 		if calls.Add(1) <= failFirst {
 			return nil, errors.New("transient profile failure")
 		}
-		return []byte("# Snapshot file\nexport TOKEN=\"value\"\n\x00\x00\x00"), nil
+		return shellSnapshotTestCaptureSource("# Snapshot file\nexport TOKEN=\"value\"\n\x00\x00\x00", false), nil
 	}
 }
 
@@ -120,7 +120,7 @@ func TestShellSnapshotConcurrentRequestsShareAttemptLikeRust(t *testing.T) {
 		calls.Add(1)
 		entered <- struct{}{}
 		<-release
-		return []byte("# Snapshot file\nexport TOKEN=\"value\"\n\x00\x00\x00"), nil
+		return shellSnapshotTestCaptureSource("# Snapshot file\nexport TOKEN=\"value\"\n\x00\x00\x00", false), nil
 	}
 	t.Cleanup(manager.close)
 	params := snapshotRetryParams(t, "single-flight")
