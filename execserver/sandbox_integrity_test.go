@@ -2,6 +2,8 @@ package execserver
 
 import (
 	"runtime"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -10,21 +12,36 @@ import (
 )
 
 type integrityMetricCapture struct {
+	mu         sync.Mutex
 	counters   []string
 	durations  []string
 	histograms []string
 }
 
-func (c *integrityMetricCapture) Counter(name string, inc int, tags map[string]string) {
+func (c *integrityMetricCapture) Counter(name string, _ int, _ map[string]string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.counters = append(c.counters, name)
 }
 
-func (c *integrityMetricCapture) RecordDuration(name string, duration time.Duration, tags map[string]string) {
+func (c *integrityMetricCapture) RecordDuration(name string, _ time.Duration, _ map[string]string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.durations = append(c.durations, name)
 }
 
-func (c *integrityMetricCapture) Histogram(name string, value int, tags map[string]string) {
+func (c *integrityMetricCapture) Histogram(name string, _ int, _ map[string]string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.histograms = append(c.histograms, name)
+}
+
+// snapshot copies the recorded names: requests running in other tests keep
+// reporting metrics through the globally installed capture.
+func (c *integrityMetricCapture) snapshot() (counters, durations []string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Clone(c.counters), slices.Clone(c.durations)
 }
 
 // Mirrors Rust #51843: exec-server preparation observes sandbox integrity for
@@ -43,8 +60,9 @@ func TestRunSandboxIntegrityChecksObservesPreparationLikeRust(t *testing.T) {
 		Command:           []string{"echo", "integrity-ok"},
 	}
 	runSandboxIntegrityChecks(plan, "", cwd, plan.Command, nil)
-	if len(capture.durations) == 0 && len(capture.counters) == 0 {
-		t.Fatalf("integrity runner emitted no metrics; counters=%v durations=%v", capture.counters, capture.durations)
+	counters, durations := capture.snapshot()
+	if len(durations) == 0 && len(counters) == 0 {
+		t.Fatalf("integrity runner emitted no metrics; counters=%v durations=%v", counters, durations)
 	}
 }
 
@@ -62,8 +80,9 @@ func TestRunSandboxIntegrityChecksSkipsFullAccessLikeRust(t *testing.T) {
 		Command:           []string{"echo", "integrity-ok"},
 	}
 	runSandboxIntegrityChecks(plan, "", cwd, plan.Command, nil)
-	if len(capture.durations) != 0 || len(capture.counters) != 0 {
-		t.Fatalf("full-access request emitted metrics: %#v", capture)
+	counters, durations := capture.snapshot()
+	if len(durations) != 0 || len(counters) != 0 {
+		t.Fatalf("full-access request emitted metrics; counters=%v durations=%v", counters, durations)
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/coder/websocket"
@@ -68,8 +69,11 @@ func relayReadExitReason(err error) string {
 }
 
 // relayTransportDiagnostics keeps bounded, trace-safe progress counters for one
-// relay websocket. Writer and reader goroutines update it concurrently.
+// relay websocket. The writer, the reader and the handler that logs the closure
+// all touch it, so every field is guarded by mu.
 type relayTransportDiagnostics struct {
+	mu sync.Mutex
+
 	connectedAt time.Time
 	lastReadAt  time.Time
 	lastWriteAt time.Time
@@ -103,26 +107,47 @@ func (d *relayTransportDiagnostics) setExitReason(reason relayTransportExitReaso
 	if d == nil || reason == "" {
 		return
 	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	d.exitReason = reason
 }
 
-func (d *relayTransportDiagnostics) recordMessageDequeued() {
-	if d != nil {
-		d.messagesDequeued++
+// exitReasonValue reports the recorded reason without exposing the guarded
+// field to the handler that classifies a writer failure.
+func (d *relayTransportDiagnostics) exitReasonValue() relayTransportExitReason {
+	if d == nil {
+		return ""
 	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.exitReason
+}
+
+func (d *relayTransportDiagnostics) recordMessageDequeued() {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.messagesDequeued++
 }
 
 func (d *relayTransportDiagnostics) recordWriteStart(kind string) {
-	if d != nil {
-		d.writeStartedAt = time.Now()
-		d.writeKind = kind
+	if d == nil {
+		return
 	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.writeStartedAt = time.Now()
+	d.writeKind = kind
 }
 
 func (d *relayTransportDiagnostics) recordWriteComplete(kind string, records int) {
 	if d == nil {
 		return
 	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	d.writeStartedAt = time.Time{}
 	d.writeKind = ""
 	d.lastWriteAt = time.Now()
@@ -131,21 +156,27 @@ func (d *relayTransportDiagnostics) recordWriteComplete(kind string, records int
 	if kind == "keepalive" {
 		d.pingsWritten++
 		d.lastPingAt = time.Now()
-		d.logHeartbeat("ping_written")
+		d.logHeartbeatLocked("ping_written")
 	}
 }
 
 func (d *relayTransportDiagnostics) recordPongReceived() {
-	if d == nil || d.lastPingAt.IsZero() {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.lastPingAt.IsZero() {
 		// Unsolicited pongs must not create unbounded telemetry volume.
 		return
 	}
 	d.pongsReceived++
-	d.logHeartbeat("pong_received")
+	d.logHeartbeatLocked("pong_received")
 	d.lastPingAt = time.Time{}
 }
 
-func (d *relayTransportDiagnostics) logHeartbeat(phase string) {
+// logHeartbeatLocked emits one heartbeat event; the caller holds mu.
+func (d *relayTransportDiagnostics) logHeartbeatLocked(phase string) {
 	slog.Info("Noise relay heartbeat",
 		"noise_event", "heartbeat",
 		"noise_side", "harness",
@@ -157,16 +188,22 @@ func (d *relayTransportDiagnostics) logHeartbeat(phase string) {
 }
 
 func (d *relayTransportDiagnostics) recordFrameRead() {
-	if d != nil {
-		d.framesRead++
-		d.lastReadAt = time.Now()
+	if d == nil {
+		return
 	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.framesRead++
+	d.lastReadAt = time.Now()
 }
 
 func (d *relayTransportDiagnostics) recordReadError(err error) {
-	if d != nil {
-		d.readReason = relayReadExitReason(err)
+	if d == nil {
+		return
 	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.readReason = relayReadExitReason(err)
 }
 
 func elapsedMillis(start time.Time) uint64 {
@@ -186,43 +223,59 @@ func (d *relayTransportDiagnostics) logClosure() {
 	if d == nil {
 		return
 	}
+	d.mu.Lock()
 	reason := d.exitReason
+	readReason := d.readReason
+	writePending := !d.writeStartedAt.IsZero()
+	writeKind := "none"
+	if writePending {
+		writeKind = d.writeKind
+	}
+	writeWait := elapsedMillis(d.writeStartedAt)
+	messagesDequeued := d.messagesDequeued
+	messagesWritten := d.messagesWritten
+	pingsWritten := d.pingsWritten
+	pongsReceived := d.pongsReceived
+	framesRead := d.framesRead
+	recordsWritten := d.recordsWritten
+	connectedAt := d.connectedAt
+	lastReadAt := d.lastReadAt
+	lastWriteAt := d.lastWriteAt
+	outgoingQueue := d.outgoingQueue
+	incomingQueue := d.incomingQueue
+	d.mu.Unlock()
+
 	if reason == "" {
 		reason = relayExitOutgoingClosed
 	}
-	readReason := d.readReason
 	if readReason == "" {
 		readReason = "none"
 	}
-	writeKind := "none"
-	if !d.writeStartedAt.IsZero() {
-		writeKind = d.writeKind
-	}
 	outgoingDepth := 0
-	if d.outgoingQueue != nil {
-		outgoingDepth = len(d.outgoingQueue)
+	if outgoingQueue != nil {
+		outgoingDepth = len(outgoingQueue)
 	}
 	incomingDepth, incomingCapacity := 0, 0
-	if d.incomingQueue != nil {
-		incomingDepth, incomingCapacity = len(d.incomingQueue), cap(d.incomingQueue)
+	if incomingQueue != nil {
+		incomingDepth, incomingCapacity = len(incomingQueue), cap(incomingQueue)
 	}
 	slog.Info("Noise relay transport closed",
 		"noise_event", "transport_closed",
 		"noise_side", "harness",
 		"noise_reason", string(reason),
 		"read_reason", readReason,
-		"messages_dequeued", d.messagesDequeued,
-		"messages_written", d.messagesWritten,
-		"pings_written", d.pingsWritten,
-		"pongs_received", d.pongsReceived,
-		"connection_age_ms", elapsedMillis(d.connectedAt),
-		"last_read_age_ms", elapsedMillis(d.lastReadAt),
-		"last_write_age_ms", elapsedMillis(d.lastWriteAt),
-		"write_pending", !d.writeStartedAt.IsZero(),
+		"messages_dequeued", messagesDequeued,
+		"messages_written", messagesWritten,
+		"pings_written", pingsWritten,
+		"pongs_received", pongsReceived,
+		"connection_age_ms", elapsedMillis(connectedAt),
+		"last_read_age_ms", elapsedMillis(lastReadAt),
+		"last_write_age_ms", elapsedMillis(lastWriteAt),
+		"write_pending", writePending,
 		"write_kind", writeKind,
-		"write_wait_ms", elapsedMillis(d.writeStartedAt),
-		"frames_read", d.framesRead,
-		"records_written", d.recordsWritten,
+		"write_wait_ms", writeWait,
+		"frames_read", framesRead,
+		"records_written", recordsWritten,
 		"outgoing_queue_depth", outgoingDepth,
 		"incoming_queue_depth", incomingDepth,
 		"incoming_queue_capacity", incomingCapacity,

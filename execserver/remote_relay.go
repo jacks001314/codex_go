@@ -275,7 +275,7 @@ func (s *Server) serveNoiseRelayConnection(
 			if err == nil || ctx.Err() != nil {
 				return nil
 			}
-			if transportDiag.exitReason == "" {
+			if transportDiag.exitReasonValue() == "" {
 				transportDiag.setExitReason(relayExitWebsocketWrite)
 			}
 			return err

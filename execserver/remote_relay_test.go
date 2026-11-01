@@ -393,7 +393,8 @@ func TestOversizedHarnessAuthorizationRejectedBeforeValidationLikeRust(t *testin
 func TestRepeatedHandshakeFailuresPauseAdmissionWithoutDisconnectingLikeRust(t *testing.T) {
 	restoreCooldown := noiseHandshakeFailureCooldown
 	noiseHandshakeFailureCooldown = 200 * time.Millisecond
-	defer func() { noiseHandshakeFailureCooldown = restoreCooldown }()
+	// Restore after the rig cleanup stops the relay handler that reads it.
+	t.Cleanup(func() { noiseHandshakeFailureCooldown = restoreCooldown })
 
 	var validations int32
 	rig := newRemoteRelayTestRig(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -440,7 +441,7 @@ func TestMalformedHandshakesPreservePhysicalRelayLikeRust(t *testing.T) {
 	restoreCooldown := noiseHandshakeFailureCooldown
 	// Long enough that the during-cooldown probe below cannot race the expiry.
 	noiseHandshakeFailureCooldown = 2 * time.Second
-	defer func() { noiseHandshakeFailureCooldown = restoreCooldown }()
+	t.Cleanup(func() { noiseHandshakeFailureCooldown = restoreCooldown })
 
 	rig := newRemoteRelayTestRig(t, nil)
 	for attempt := 0; attempt < maxFailedNoiseHandshakes; attempt++ {
@@ -463,7 +464,7 @@ func TestMalformedHandshakesPreservePhysicalRelayLikeRust(t *testing.T) {
 func TestRepeatedEarlyDataDuringValidationPausesAdmissionLikeRust(t *testing.T) {
 	restoreCooldown := noiseHandshakeFailureCooldown
 	noiseHandshakeFailureCooldown = 200 * time.Millisecond
-	defer func() { noiseHandshakeFailureCooldown = restoreCooldown }()
+	t.Cleanup(func() { noiseHandshakeFailureCooldown = restoreCooldown })
 
 	calls := make(chan struct{}, maxFailedNoiseHandshakes)
 	release := make(chan struct{})
