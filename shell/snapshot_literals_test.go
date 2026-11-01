@@ -1,7 +1,6 @@
 package shell
 
 import (
-	"os"
 	"os/exec"
 	"slices"
 	"strconv"
@@ -150,7 +149,10 @@ func TestSnapshotLiteralWordsBoundsNestedSubstitutionsLikeRust(t *testing.T) {
 // quotes the alias value, the literal scanner decodes it, and the decoded word
 // must reproduce the original value exactly.
 func TestSnapshotLiteralWordsMatchRealBashAliasOutputLikeRust(t *testing.T) {
-	bashPath := snapshotDifferentialBash(t)
+	bashPath := snapshotTestBashPath(t)
+	if bashPath == "" {
+		t.Skip("no bash available for the snapshot literal differential")
+	}
 	for _, value := range []string{
 		"token_ab'cdefghijklmnop",
 		"plain value",
@@ -174,28 +176,4 @@ func TestSnapshotLiteralWordsMatchRealBashAliasOutputLikeRust(t *testing.T) {
 			}
 		})
 	}
-}
-
-// snapshotDifferentialBash finds a POSIX bash for the differential test. The
-// WSL launcher that PATH may expose first is not usable without a distro, so
-// installed Git/MSYS bash comes first on Windows.
-func snapshotDifferentialBash(t *testing.T) string {
-	t.Helper()
-	if configured := os.Getenv("CODEX_SNAPSHOT_BASH"); configured != "" {
-		return configured
-	}
-	for _, candidate := range []string{
-		`C:\Program Files\Git\bin\bash.exe`,
-		`C:\Program Files\Git\usr\bin\bash.exe`,
-		`C:\msys64\usr\bin\bash.exe`,
-	} {
-		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-			return candidate
-		}
-	}
-	if path, err := exec.LookPath("bash"); err == nil {
-		return path
-	}
-	t.Skip("no bash available for the snapshot literal differential")
-	return ""
 }
