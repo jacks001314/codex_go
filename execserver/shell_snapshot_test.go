@@ -99,8 +99,10 @@ func TestShellSnapshotManagerRewritesAndCachesLikeRust(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if calls.Load() != 1 || again.Argv[2] != script {
-		t.Fatalf("snapshot cache calls=%d script=%q", calls.Load(), again.Argv[2])
+	// A protected capture belongs to one launch (Rust never caches it), so the
+	// repeat capture yields the same replay text instead of a cache hit.
+	if calls.Load() != 2 || again.Argv[2] != script {
+		t.Fatalf("protected snapshot calls=%d script=%q", calls.Load(), again.Argv[2])
 	}
 	if again.Env["__CODEX_SHELL_SNAPSHOT_STATE_0"] != state {
 		t.Fatalf("cached snapshot state = %q, want %q", again.Env["__CODEX_SHELL_SNAPSHOT_STATE_0"], state)

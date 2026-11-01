@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -47,7 +48,10 @@ type shellSnapshotManager struct {
 	failures map[string]shellSnapshotFailure
 	inflight map[string]*shellSnapshotFlight
 	capture  func(context.Context, []string, string, map[string]string) ([]byte, error)
-	now      func() time.Time
+	// protectedSeq names each uncached protected capture so its replay file is
+	// unique per launch.
+	protectedSeq atomic.Uint64
+	now          func() time.Time
 }
 
 func newShellSnapshotManager() *shellSnapshotManager {
@@ -235,6 +239,21 @@ func (m *shellSnapshotManager) snapshotEntry(ctx context.Context, params *ExecPa
 	key, err := shellSnapshotKey(params, shellType)
 	if err != nil {
 		return nil, err
+	}
+	if len(credentialPairs) > 0 {
+		// Rust prepares protected captures once per launch and never caches
+		// them: the replay carries this launch's broker dummies, so reusing it
+		// under a later broker state would restore stale placeholders. The
+		// per-capture key still lets the bounded cache track a materialized
+		// replay file so eviction and close remove it.
+		captureKey := fmt.Sprintf("%s\x00protected\x00%d", key, m.protectedSeq.Add(1))
+		entry, captureErr := m.captureSnapshot(ctx, params, shellType, captureEnv, credentialPairs, credentialTextUnsafe, captureKey)
+		if captureErr == nil && entry != nil && entry.fileSource {
+			m.mu.Lock()
+			m.storeEntryLocked(captureKey, entry)
+			m.mu.Unlock()
+		}
+		return entry, captureErr
 	}
 	attempts := 1
 	for {
