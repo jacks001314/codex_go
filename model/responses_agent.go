@@ -3286,13 +3286,14 @@ func prepareResponseInputImageBlock(block map[string]any, store attachmentstore.
 	}
 	if prepared.FileID != "" {
 		// The store kept the prepared bytes as a file reference, mirroring
-		// Rust's `ImageReference::File { file_id }`.
-		delete(block, "detail")
+		// Rust's `ImageReference::File { file_id }`. Rust's prepare_image only
+		// replaces the reference; the item's detail hint survives next to the
+		// file id exactly as it did for an inline image.
 		delete(block, "image_url")
 		block["file_id"] = prepared.FileID
-		return
+	} else {
+		block["image_url"] = prepared.URL
 	}
-	block["image_url"] = prepared.URL
 	if mode == eventmap.ImagePrepModeUnifiedBudget {
 		// Rust keeps an original-detail compatibility hint while the unified
 		// budget is active; Responses Lite strips it before sending.

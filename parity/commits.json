@@ -15143,7 +15143,8 @@
    ],
    "status": "complete",
    "evidence": [
-    "Prepared response images run through attachmentstore with usage/origin tags and persistence intent. Durable requests upload file attachments, ephemeral requests keep inline data, and file references replace inline URLs after preparation. Tests: go test ./model -run 'PrepareResponseInputImages|EphemeralReachesUploads' -count=1"
+    "Prepared response images run through attachmentstore with usage/origin tags and persistence intent. Durable requests upload file attachments, ephemeral requests keep inline data, and file references replace inline URLs after preparation. Tests: go test ./model -run 'PrepareResponseInputImages|EphemeralReachesUploads' -count=1",
+    "Round 1299: the attachment-store branch keeps the item's detail hint. Rust's prepare_image only replaces the ImageReference with `File { file_id }`; `detail` is untouched (`resize_image` writes the original-detail compatibility hint only under the unified budget), so the request item serializes `file_id` together with the captured `high`/`auto` hint or, under `ImagePrepModeUnifiedBudget`, `original`. Go previously deleted `detail` whenever the store returned a file reference. Tests: go test ./model -run 'PrepareResponseInputImagesFileReference' -count=1"
    ]
   },
   {
