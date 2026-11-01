@@ -26,11 +26,17 @@ func SnapshotLiteralWords(shellType ShellType, script string) []string {
 		return nil
 	}
 	var words []string
-	scanSnapshotLiteralWords(shellType, script, &words)
+	scanSnapshotLiteralWords(shellType, script, 0, &words)
 	return words
 }
 
-func scanSnapshotLiteralWords(shellType ShellType, script string, words *[]string) {
+// maxSnapshotLiteralNesting bounds how far nested command substitutions are
+// parsed. A real snapshot nests a handful of levels; the bound only keeps a
+// pathological script from exhausting the stack, and text beyond it is still
+// checked by the raw snapshot scan.
+const maxSnapshotLiteralNesting = 32
+
+func scanSnapshotLiteralWords(shellType ShellType, script string, depth int, words *[]string) {
 	var word strings.Builder
 	inWord := false
 	flush := func() {
@@ -73,13 +79,13 @@ func scanSnapshotLiteralWords(shellType ShellType, script string, words *[]strin
 			appendText(text)
 			for _, body := range nested {
 				flush()
-				scanSnapshotLiteralWords(shellType, body, words)
+				scanSnapshotLiteralBody(shellType, body, depth, words)
 			}
 			index = next
 		case '`':
 			body, next := decodeSnapshotBacktick(script, index+1)
 			flush()
-			scanSnapshotLiteralWords(shellType, body, words)
+			scanSnapshotLiteralBody(shellType, body, depth, words)
 			index = next
 		case '$':
 			switch {
@@ -90,7 +96,7 @@ func scanSnapshotLiteralWords(shellType ShellType, script string, words *[]strin
 			case strings.HasPrefix(script[index:], "$("):
 				body, next := decodeSnapshotCommandSubstitution(script, index+2)
 				flush()
-				scanSnapshotLiteralWords(shellType, body, words)
+				scanSnapshotLiteralBody(shellType, body, depth, words)
 				index = next
 			default:
 				appendText("$")
@@ -116,6 +122,15 @@ func scanSnapshotLiteralWords(shellType ShellType, script string, words *[]strin
 		}
 	}
 	flush()
+}
+
+// scanSnapshotLiteralBody parses a nested script unless the nesting bound is
+// already reached.
+func scanSnapshotLiteralBody(shellType ShellType, body string, depth int, words *[]string) {
+	if depth >= maxSnapshotLiteralNesting {
+		return
+	}
+	scanSnapshotLiteralWords(shellType, body, depth+1, words)
 }
 
 // decodeSnapshotDoubleQuote decodes one double-quoted region and returns the

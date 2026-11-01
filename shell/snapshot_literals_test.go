@@ -127,3 +127,16 @@ func TestSnapshotLiteralWordsDecodeShellQuotingLikeRust(t *testing.T) {
 		})
 	}
 }
+// TestSnapshotLiteralWordsBoundsNestedSubstitutionsLikeRust keeps a
+// pathological snapshot from exhausting the stack: nesting beyond the bound is
+// left to the raw text check instead of being parsed recursively.
+func TestSnapshotLiteralWordsBoundsNestedSubstitutionsLikeRust(t *testing.T) {
+	shallow := "$($('sk-abc'))\n"
+	if words := SnapshotLiteralWords(ShellBash, shallow); !slices.Contains(words, "sk-abc") {
+		t.Fatalf("shallow substitution words = %#v", words)
+	}
+	deep := strings.Repeat("$(", maxSnapshotLiteralNesting+8) + "'sk-abc'" + strings.Repeat(")", maxSnapshotLiteralNesting+8)
+	if words := SnapshotLiteralWords(ShellBash, deep); slices.Contains(words, "sk-abc") {
+		t.Fatalf("deep substitution was parsed past the bound: %#v", words)
+	}
+}
