@@ -324,6 +324,25 @@ func (m *shellSnapshotManager) forgetOrderLocked(key string) {
 	}
 }
 
+// validateMaskedShellSnapshot rejects a capture that still carries a real
+// broker credential, either verbatim or reassembled by shell quoting. Rust
+// #54432 refuses such a replay script; the caller then restores the launch
+// environment and warns that credential masking is unavailable.
+func validateMaskedShellSnapshot(text string, shellType shell.ShellType, credentialPairs []network.CredentialMaskPair) error {
+	if len(credentialPairs) == 0 {
+		return nil
+	}
+	if network.SnapshotTextContainsUnmaskedCredential(text, credentialPairs) {
+		return errors.New("shell snapshot capture retains a real credential")
+	}
+	for _, word := range shell.SnapshotLiteralWords(shellType, text) {
+		if network.SnapshotTextContainsUnmaskedCredential(word, credentialPairs) {
+			return errors.New("shell snapshot capture reassembles a real credential")
+		}
+	}
+	return nil
+}
+
 func (m *shellSnapshotManager) captureSnapshot(ctx context.Context, params *ExecParams, shellType shell.ShellType, captureEnv map[string]string, credentialPairs []network.CredentialMaskPair, key string) (*shellSnapshotEntry, error) {
 
 	ctx, captureSpan := startExecServerSpan(
@@ -356,6 +375,9 @@ func (m *shellSnapshotManager) captureSnapshot(ctx context.Context, params *Exec
 		return nil, errors.New("invalid captured shell state")
 	}
 	rendered := network.MaskSnapshotText(captured.RenderScript(nil), credentialPairs)
+	if err := validateMaskedShellSnapshot(rendered, shellType, credentialPairs); err != nil {
+		return nil, err
+	}
 	if err := validateShellSnapshotSizes(captured, rendered); err != nil {
 		return nil, err
 	}

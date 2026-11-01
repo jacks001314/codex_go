@@ -434,7 +434,7 @@ func (b *SnapshotBuilder) writeSnapshot(
 	var brokeredEnv map[string]string
 	if request.Protected {
 		rendered = network.MaskSnapshotText(rendered, request.CredentialPairs)
-		if request.CredentialTextUnsafe != nil && request.CredentialTextUnsafe(rendered) {
+		if request.CredentialTextUnsafe != nil && snapshotTextUnsafe(request.CredentialTextUnsafe, snapshotShellType(request), rendered) {
 			_ = os.Remove(tempPath)
 			return nil, SnapshotReasonWriteFailed
 		}
@@ -466,6 +466,24 @@ func (b *SnapshotBuilder) writeSnapshot(
 		return nil, SnapshotReasonWriteFailed
 	}
 	return &ShellSnapshotFile{path: path, brokeredEnv: brokeredEnv}, ""
+}
+
+// snapshotTextUnsafe reports whether the replay text, or any literal word the
+// shell rebuilds from it, still carries a credential the broker could not
+// virtualize. Masking the raw text cannot see a secret that an alias or
+// function body reassembles from quoted fragments, so the decoded words are
+// checked as well (Rust's literal_words re-check in
+// shell_snapshot_credentials::prepare_snapshot_credentials).
+func snapshotTextUnsafe(unsafe func(string) bool, shellType shell.ShellType, text string) bool {
+	if unsafe(text) {
+		return true
+	}
+	for _, word := range shell.SnapshotLiteralWords(shellType, text) {
+		if unsafe(word) {
+			return true
+		}
+	}
+	return false
 }
 
 // snapshotShellType resolves the capture dialect for a launch. Go's tool-level

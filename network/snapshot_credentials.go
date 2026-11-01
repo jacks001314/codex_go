@@ -65,6 +65,22 @@ func MaskSnapshotText(text string, pairs []CredentialMaskPair) string {
 	return text
 }
 
+// SnapshotTextContainsUnmaskedCredential reports whether text still carries a
+// real credential after MaskSnapshotText ran. A protected capture that keeps a
+// real value must not be persisted, and the caller falls back to an explicit
+// unmasked-credentials warning (Rust #54432).
+func SnapshotTextContainsUnmaskedCredential(text string, pairs []CredentialMaskPair) bool {
+	if text == "" {
+		return false
+	}
+	for _, pair := range pairs {
+		if pair.Real != "" && strings.Contains(text, pair.Real) {
+			return true
+		}
+	}
+	return false
+}
+
 // SnapshotCredentialEnvKeys returns every environment key this broker may
 // virtualize, including declarative providers. Protected snapshots use it to
 // mark credentials the child environment no longer carries.

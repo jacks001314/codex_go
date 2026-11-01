@@ -234,3 +234,65 @@ func TestShellSnapshotBashReplayUsesPrivilegedFlagLikeRust(t *testing.T) {
 		t.Fatalf("bash snapshot script = %q", rewritten.Argv[2])
 	}
 }
+
+// TestValidateMaskedShellSnapshotLikeRust covers Rust #54432's credential
+// re-check for executor-owned snapshots: masking must leave no real broker
+// value in the replay script, even one an alias rebuilds from quoted
+// fragments.
+func TestValidateMaskedShellSnapshotLikeRust(t *testing.T) {
+	pairs := []network.CredentialMaskPair{{Real: "sk-real-secret", Dummy: "sk-dummy-value"}}
+	if err := validateMaskedShellSnapshot("export TOKEN='sk-dummy-value'\n", shell.ShellBash, pairs); err != nil {
+		t.Fatalf("masked snapshot rejected: %v", err)
+	}
+	if err := validateMaskedShellSnapshot("export TOKEN='sk-real-secret'\n", shell.ShellBash, pairs); err == nil {
+		t.Fatal("verbatim credential accepted")
+	}
+	if err := validateMaskedShellSnapshot("export TOKEN='sk-re''al-secret'\n", shell.ShellBash, pairs); err == nil {
+		t.Fatal("reassembled credential accepted")
+	}
+	if err := validateMaskedShellSnapshot("export TOKEN='sk-re''al-secret'\n", shell.ShellBash, nil); err != nil {
+		t.Fatalf("unprotected snapshot checked for credentials: %v", err)
+	}
+}
+
+// TestShellSnapshotReassembledCredentialFallsBackLikeRust pulls the check
+// through the manager: a capture whose replay text still reconstructs the real
+// credential is discarded, and the launch keeps the unmasked environment with
+// the explicit warning instead of replaying a leaky snapshot.
+func TestShellSnapshotReassembledCredentialFallsBackLikeRust(t *testing.T) {
+	previous := shellSnapshotPlatformSupported
+	shellSnapshotPlatformSupported = true
+	t.Cleanup(func() { shellSnapshotPlatformSupported = previous })
+	manager := newShellSnapshotManager()
+	t.Cleanup(manager.close)
+	manager.capture = func(context.Context, []string, string, map[string]string) ([]byte, error) {
+		return []byte("# Snapshot file\nexport TOKEN=\"sk-re\"\"al-secret\"\n\x00\x00\x00"), nil
+	}
+	params := &ExecParams{
+		ProcessID: "reassembled-process",
+		Argv:      []string{"/bin/bash", "-lc", "echo ok"},
+		CWD:       "file:///repo",
+		ShellSnapshot: &ShellSnapshotRequest{
+			ScopeID: "attachment-1",
+			Shell:   ShellInfo{Name: "bash", Path: "/bin/bash"},
+		},
+		Env: map[string]string{"TOKEN": "sk-dummy-value"},
+	}
+	pairs := []network.CredentialMaskPair{{Real: "sk-real-secret", Dummy: "sk-dummy-value"}}
+	rewritten, err := manager.rewrite(context.Background(), params, params.Env, pairs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rewritten.Env["TOKEN"] != "sk-real-secret" {
+		t.Fatalf("fallback env = %#v", rewritten.Env)
+	}
+	if !strings.Contains(rewritten.Argv[2], "Credential masking is unavailable") {
+		t.Fatalf("fallback script = %q", rewritten.Argv[2])
+	}
+	manager.mu.Lock()
+	cached := len(manager.cache)
+	manager.mu.Unlock()
+	if cached != 0 {
+		t.Fatalf("rejected capture was cached: %d entries", cached)
+	}
+}

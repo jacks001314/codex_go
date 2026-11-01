@@ -595,3 +595,50 @@ func TestSnapshotBuilderRejectsUnvirtualizedCredentialLikeRust(t *testing.T) {
 		t.Fatalf("Snapshot() = %v/%q, want a write failure", snapshot, reason)
 	}
 }
+
+// TestSnapshotBuilderRejectsCredentialReassembledByShellQuotingLikeRust covers
+// Rust's literal_words re-check in prepare_snapshot_credentials (#54432): a
+// protected capture may hide a real credential from plain text masking by
+// splitting it across quoted fragments, so the decoded literal words are
+// checked as well and the snapshot is discarded.
+func TestSnapshotBuilderRejectsCredentialReassembledByShellQuotingLikeRust(t *testing.T) {
+	runner := &snapshotBuilderRunner{capture: snapshotCaptureStreamWith(
+		[2]string{"UNKNOWN_TOKEN", `export UNKNOWN_TOKEN='ghp_''unvirtualized'`},
+	)}
+	builder := NewSnapshotBuilder(SnapshotBuilderOptions{CodexHome: t.TempDir(), SessionID: "session-1", Runner: runner.run})
+	t.Cleanup(builder.Close)
+	snapshot, reason := builder.Snapshot(context.Background(), SnapshotCaptureRequest{
+		ShellType: ShellBash, ShellPath: "/bin/bash", CWD: "/repo", AllowLoginShell: true,
+		Protected: true,
+		Env:       map[string]string{"PATH": "/usr/bin"},
+		SourceEnv: map[string]string{"PATH": "/usr/bin"},
+		CredentialTextUnsafe: func(text string) bool {
+			return strings.Contains(text, "ghp_unvirtualized")
+		},
+	})
+	if snapshot != nil || reason != SnapshotReasonWriteFailed {
+		t.Fatalf("Snapshot() = %v/%q, want a write failure", snapshot, reason)
+	}
+}
+
+// TestSnapshotBuilderKeepsOrdinaryQuotedSnapshotLikeRust keeps the literal
+// re-check from rejecting captures whose decoded words carry no credential.
+func TestSnapshotBuilderKeepsOrdinaryQuotedSnapshotLikeRust(t *testing.T) {
+	runner := &snapshotBuilderRunner{capture: snapshotCaptureStreamWith(
+		[2]string{"GREETING", `export GREETING='hello '\''world'`},
+	)}
+	builder := NewSnapshotBuilder(SnapshotBuilderOptions{CodexHome: t.TempDir(), SessionID: "session-1", Runner: runner.run})
+	t.Cleanup(builder.Close)
+	snapshot, reason := builder.Snapshot(context.Background(), SnapshotCaptureRequest{
+		ShellType: ShellBash, ShellPath: "/bin/bash", CWD: "/repo", AllowLoginShell: true,
+		Protected: true,
+		Env:       map[string]string{"PATH": "/usr/bin"},
+		SourceEnv: map[string]string{"PATH": "/usr/bin"},
+		CredentialTextUnsafe: func(text string) bool {
+			return strings.Contains(text, "ghp_unvirtualized")
+		},
+	})
+	if snapshot == nil || reason != "" {
+		t.Fatalf("Snapshot() = %v/%q, want a snapshot", snapshot, reason)
+	}
+}
