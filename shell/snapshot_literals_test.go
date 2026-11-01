@@ -236,3 +236,71 @@ func snapshotTestZshPath() string {
 	}
 	return ""
 }
+
+// TestSnapshotLiteralWordsDecodeHeredocsLikeRust pins Rust's heredoc handling:
+// the body is decoded as heredoc text instead of being parsed as script, so an
+// unbalanced quote inside it cannot swallow the rest of the snapshot, and an
+// unquoted delimiter removes one escape layer.
+func TestSnapshotLiteralWordsDecodeHeredocsLikeRust(t *testing.T) {
+	for _, testCase := range []struct {
+		name    string
+		shell   ShellType
+		script  string
+		contain []string
+		absent  []string
+	}{
+		{
+			name:    "quoted heredoc keeps an unbalanced quote from leaking",
+			shell:   ShellBash,
+			script:  "cat <<'EOF'\nit's a quote\nEOF\nexport TOKEN='sk-abc'\n",
+			contain: []string{"it's a quote", "TOKEN=sk-abc"},
+		},
+		{
+			name:    "quoted heredoc keeps backslashes",
+			shell:   ShellBash,
+			script:  "cat <<'EOF'\nsk-re\\al\nEOF\n",
+			contain: []string{"sk-re\\al"},
+		},
+		{
+			name:    "unquoted heredoc removes one escape layer",
+			shell:   ShellBash,
+			script:  "cat <<EOF\nsk-re\\\nalsecret\nEOF\n",
+			contain: []string{"sk-realsecret"},
+		},
+		{
+			name:    "strip-tabs heredoc finds its terminator",
+			shell:   ShellBash,
+			script:  "cat <<-EOF\n\tsk-abc\n\tEOF\nexport TOKEN='after'\n",
+			contain: []string{"sk-abc", "TOKEN=after"},
+		},
+		{
+			name:    "double quoted delimiter counts as quoted",
+			shell:   ShellZsh,
+			script:  "cat <<\"EOF\"\nsk-re\\al\nEOF\n",
+			contain: []string{"sk-re\\al"},
+			absent:  []string{"sk-realsecret"},
+		},
+		{
+			name:    "unterminated heredoc consumes the rest",
+			shell:   ShellBash,
+			script:  "cat <<EOF\nsk-abc\n",
+			contain: []string{"sk-abc"},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			words := SnapshotLiteralWords(testCase.shell, testCase.script)
+			for _, want := range testCase.contain {
+				if !slices.Contains(words, want) {
+					t.Fatalf("SnapshotLiteralWords(%q) = %#v, want %q", testCase.script, words, want)
+				}
+			}
+			for _, unwanted := range testCase.absent {
+				for _, word := range words {
+					if strings.Contains(word, unwanted) {
+						t.Fatalf("SnapshotLiteralWords(%q) = %#v, did not want %q", testCase.script, words, unwanted)
+					}
+				}
+			}
+		})
+	}
+}

@@ -11,8 +11,8 @@ import "strings"
 // (shell-command/src/shell_snapshot_literals.rs). This scan is lexical: it
 // decodes single quotes, double-quote escapes, backslash escapes, ANSI-C
 // $'...' quoting, and fragments concatenated without separation, and it scans
-// backtick and $(...) bodies as scripts of their own. Constructs it cannot
-// decode (heredoc bodies, parameter-expansion operators) stay opaque, so the
+// backtick and $(...) bodies as scripts of their own, and heredoc bodies with
+// their own quoting rules. Parameter-expansion operators stay opaque, so the
 // scan can under-report what a shell will execute but never invents a word
 // from unrelated pieces of the script.
 func SnapshotLiteralWords(shellType ShellType, script string) []string {
@@ -39,6 +39,7 @@ const maxSnapshotLiteralNesting = 32
 func scanSnapshotLiteralWords(shellType ShellType, script string, depth int, words *[]string) {
 	var word strings.Builder
 	inWord := false
+	var pending []snapshotHeredoc
 	flush := func() {
 		if !inWord {
 			return
@@ -113,7 +114,24 @@ func scanSnapshotLiteralWords(shellType ShellType, script string, depth int, wor
 			} else {
 				index = len(script)
 			}
-		case ' ', '\t', '\r', '\n', ';', '|', '&', '<', '>', '(', ')':
+		case '\n':
+			flush()
+			index++
+			if len(pending) > 0 {
+				index = scanSnapshotHeredocBodies(script, index, pending, words)
+				pending = nil
+			}
+		case '<':
+			if index+1 < len(script) && script[index+1] == '<' {
+				var heredoc snapshotHeredoc
+				heredoc, index = decodeSnapshotHeredocStart(script, index+2)
+				flush()
+				pending = append(pending, heredoc)
+				continue
+			}
+			flush()
+			index++
+		case ' ', '\t', '\r', ';', '|', '&', '>', '(', ')':
 			flush()
 			index++
 		default:
@@ -122,6 +140,135 @@ func scanSnapshotLiteralWords(shellType ShellType, script string, depth int, wor
 		}
 	}
 	flush()
+}
+
+// snapshotHeredoc is one "<<" redirection whose body starts on the next line.
+// The body is never parsed as shell source: an unbalanced quote inside it must
+// not swallow the rest of the script, so it is decoded as heredoc text the way
+// Rust's shell_snapshot_literals.rs does.
+type snapshotHeredoc struct {
+	delimiter string
+	stripTabs bool
+	quoted    bool
+}
+
+// decodeSnapshotHeredocStart reads the delimiter word after "<<" or "<<-".
+func decodeSnapshotHeredocStart(script string, index int) (snapshotHeredoc, int) {
+	var heredoc snapshotHeredoc
+	if index < len(script) && script[index] == '-' {
+		heredoc.stripTabs = true
+		index++
+	}
+	for index < len(script) && (script[index] == ' ' || script[index] == '\t') {
+		index++
+	}
+	var delimiter strings.Builder
+	for index < len(script) {
+		switch character := script[index]; character {
+		case ' ', '\t', '\r', '\n', ';', '&', '|', '<', '>', '(', ')':
+			heredoc.delimiter = delimiter.String()
+			return heredoc, index
+		case '\'':
+			end := strings.IndexByte(script[index+1:], '\'')
+			if end < 0 {
+				delimiter.WriteString(script[index+1:])
+				heredoc.quoted = true
+				heredoc.delimiter = delimiter.String()
+				return heredoc, len(script)
+			}
+			delimiter.WriteString(script[index+1 : index+1+end])
+			heredoc.quoted = true
+			index += end + 2
+		case '"':
+			text, _, next := decodeSnapshotDoubleQuote(script, index+1)
+			delimiter.WriteString(text)
+			heredoc.quoted = true
+			index = next
+		case '\\':
+			heredoc.quoted = true
+			if index+1 < len(script) {
+				delimiter.WriteByte(script[index+1])
+				index += 2
+				continue
+			}
+			index++
+		default:
+			delimiter.WriteByte(character)
+			index++
+		}
+	}
+	heredoc.delimiter = delimiter.String()
+	return heredoc, index
+}
+
+// scanSnapshotHeredocBodies consumes the heredoc bodies that start at index and
+// returns the index just past the last terminator. An unterminated heredoc
+// consumes the rest of the script, which the raw text check still covers.
+func scanSnapshotHeredocBodies(script string, index int, pending []snapshotHeredoc, words *[]string) int {
+	for _, heredoc := range pending {
+		var body strings.Builder
+		for {
+			if index >= len(script) {
+				break
+			}
+			line := script[index:]
+			next := len(script)
+			hasNewline := false
+			if end := strings.IndexByte(line, '\n'); end >= 0 {
+				line = line[:end]
+				next = index + end + 1
+				hasNewline = true
+			}
+			comparison := line
+			if heredoc.stripTabs {
+				comparison = strings.TrimLeft(comparison, "\t")
+			}
+			if comparison == heredoc.delimiter {
+				index = next
+				break
+			}
+			if heredoc.stripTabs {
+				line = strings.TrimLeft(line, "\t")
+			}
+			if body.Len() > 0 {
+				body.WriteByte('\n')
+			}
+			body.WriteString(line)
+			index = next
+			if !hasNewline {
+				break
+			}
+		}
+		if text := decodeSnapshotHeredocText(body.String(), heredoc.quoted); text != "" {
+			*words = append(*words, text)
+		}
+	}
+	return index
+}
+
+// decodeSnapshotHeredocText applies the one escape layer an unquoted heredoc
+// removes; a quoted delimiter keeps every byte.
+func decodeSnapshotHeredocText(text string, quoted bool) string {
+	if quoted {
+		return text
+	}
+	var decoded strings.Builder
+	for index := 0; index < len(text); index++ {
+		if text[index] != '\\' || index+1 >= len(text) {
+			decoded.WriteByte(text[index])
+			continue
+		}
+		switch text[index+1] {
+		case '\n':
+			index++
+		case '$', '`', '\\':
+			decoded.WriteByte(text[index+1])
+			index++
+		default:
+			decoded.WriteByte('\\')
+		}
+	}
+	return decoded.String()
 }
 
 // scanSnapshotLiteralBody parses a nested script unless the nesting bound is
