@@ -190,7 +190,10 @@ func (*GrpcProcessProvider) sessionAdmissionRetries() int {
 }
 
 func spawnGrpcStdioProcess(program string) (io.WriteCloser, io.ReadCloser, *exec.Cmd, error) {
-	cmd := exec.Command(program)
+	// Rust's HostConnection::spawn always asks the host for the gRPC stdio
+	// transport (`--listen grpc+stdio://`); the host's default listens for the
+	// framed JSON protocol instead.
+	cmd := exec.Command(program, "--listen", "grpc+stdio://")
 	// Rust c4513cb982: remote helper processes must not inherit Codex launch
 	// context.
 	envutil.ScrubCommandEnv(cmd)

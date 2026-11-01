@@ -97,8 +97,7 @@ func RunGrpcStdioHost(ctx context.Context, stdin io.Reader, stdout io.Writer) er
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	ensureGrpcZstdRegistered()
-	listener := &singleConnListener{done: make(chan struct{})}
+	server, listener := newGrpcHostServer(ctx)
 	// Rust #52723: the host exits when its stdio connection closes. Closing the
 	// accepted conn unblocks Accept so Serve returns instead of waiting forever
 	// for a replacement connection.
@@ -108,14 +107,6 @@ func RunGrpcStdioHost(ctx context.Context, stdin io.Reader, stdout io.Writer) er
 			_ = listener.Close()
 		},
 	}
-	server := grpc.NewServer(
-		grpc.MaxRecvMsgSize(ProtocolMaxFrameBytes),
-		grpc.MaxSendMsgSize(ProtocolMaxFrameBytes),
-	)
-	codemodev1.RegisterCodeModeHostServer(server, &grpcStdioHostServer{
-		ctx:     ctx,
-		metrics: newProcessMetricsSampler(defaultProcessMetricsCollector),
-	})
 	go func() {
 		<-ctx.Done()
 		server.Stop()
@@ -130,6 +121,51 @@ func RunGrpcStdioHost(ctx context.Context, stdin io.Reader, stdout io.Writer) er
 	default:
 	}
 	return err
+}
+
+// RunGrpcTCPHost serves the same gRPC Transport on a TCP listener, matching
+// Rust's `--listen grpc://IP:PORT` transport.
+func RunGrpcTCPHost(ctx context.Context, address string) error {
+	listener, err := net.Listen("tcp", address)
+	if err != nil {
+		return err
+	}
+	return ServeGrpcTCPHost(ctx, listener)
+}
+
+// ServeGrpcTCPHost serves the gRPC host on an existing listener until the
+// context is cancelled or the server fails.
+func ServeGrpcTCPHost(ctx context.Context, listener net.Listener) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	server, _ := newGrpcHostServer(ctx)
+	served := make(chan error, 1)
+	go func() { served <- server.Serve(listener) }()
+	var err error
+	select {
+	case err = <-served:
+	case <-ctx.Done():
+		server.Stop()
+		err = <-served
+	}
+	if errors.Is(err, grpc.ErrServerStopped) || errors.Is(err, net.ErrClosed) {
+		return nil
+	}
+	return err
+}
+
+func newGrpcHostServer(ctx context.Context) (*grpc.Server, *singleConnListener) {
+	ensureGrpcZstdRegistered()
+	server := grpc.NewServer(
+		grpc.MaxRecvMsgSize(ProtocolMaxFrameBytes),
+		grpc.MaxSendMsgSize(ProtocolMaxFrameBytes),
+	)
+	codemodev1.RegisterCodeModeHostServer(server, &grpcStdioHostServer{
+		ctx:     ctx,
+		metrics: newProcessMetricsSampler(defaultProcessMetricsCollector),
+	})
+	return server, &singleConnListener{done: make(chan struct{})}
 }
 
 // connectionCloseNotifier closes the single-connection listener when gRPC

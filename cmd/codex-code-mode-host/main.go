@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"strings"
 
@@ -51,11 +52,53 @@ func runCLI(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		}
 		return 0
 	}
-	if err := codemode.RunStdioHost(context.Background(), stdin, stdout); err != nil {
+	transport, address, err := selectListenTransport(options.listen)
+	if err != nil {
+		fmt.Fprintf(stderr, "error: %v\n", err)
+		return 2
+	}
+	switch transport {
+	case listenGrpcStdio:
+		err = codemode.RunGrpcStdioHost(context.Background(), stdin, stdout)
+	case listenGrpc:
+		err = codemode.RunGrpcTCPHost(context.Background(), address)
+	default:
+		err = codemode.RunStdioHost(context.Background(), stdin, stdout)
+	}
+	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
 	return 0
+}
+
+type listenTransport int
+
+const (
+	listenStdio listenTransport = iota
+	listenGrpcStdio
+	listenGrpc
+)
+
+// selectListenTransport mirrors Rust's parse_listen_url
+// (code-mode-host/src/transport.rs): `stdio`/`stdio://` keeps the framed JSON
+// host, `grpc+stdio://` serves gRPC over stdio, and `grpc://IP:PORT` serves the
+// same gRPC host on TCP.
+func selectListenTransport(listenURL string) (listenTransport, string, error) {
+	if listenURL == "grpc+stdio://" {
+		return listenGrpcStdio, "", nil
+	}
+	if listenURL == "stdio" || listenURL == "stdio://" {
+		return listenStdio, "", nil
+	}
+	if address, ok := strings.CutPrefix(listenURL, "grpc://"); ok {
+		host, port, err := net.SplitHostPort(address)
+		if err == nil && net.ParseIP(host) != nil && port != "" {
+			return listenGrpc, address, nil
+		}
+		return 0, "", fmt.Errorf("invalid gRPC --listen URL `%s`; expected `grpc://IP:PORT`", listenURL)
+	}
+	return 0, "", fmt.Errorf("unsupported --listen URL `%s`; expected `grpc://IP:PORT`, `grpc+stdio://`, `stdio`, or `stdio://`", listenURL)
 }
 
 func parseCLI(args []string) (cliOptions, error) {

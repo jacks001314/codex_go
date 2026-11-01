@@ -25,6 +25,8 @@ const processHostHelperEnv = "CODEX_GO_PROCESS_HOST_TEST_HELPER"
 func init() {
 	var err error
 	switch os.Getenv(processHostHelperEnv) {
+	case "cli":
+		err = runProcessHostTestCLI(os.Args[1:])
 	case "1":
 		err = RunStdioHost(context.Background(), os.Stdin, os.Stdout)
 	case "grpc":
@@ -37,6 +39,30 @@ func init() {
 		os.Exit(1)
 	}
 	os.Exit(0)
+}
+
+// runProcessHostTestCLI mirrors cmd/codex-code-mode-host's transport dispatch so
+// the provider tests exercise the real spawn contract, including the
+// `--listen grpc+stdio://` argument Rust passes to its host
+// (HostConnection::spawn).
+func runProcessHostTestCLI(args []string) error {
+	listen := "stdio"
+	for index := 0; index < len(args); index++ {
+		switch {
+		case args[index] == "--listen" && index+1 < len(args):
+			listen = args[index+1]
+			index++
+		case strings.HasPrefix(args[index], "--listen="):
+			listen = strings.TrimPrefix(args[index], "--listen=")
+		}
+	}
+	switch listen {
+	case "grpc+stdio://":
+		return RunGrpcStdioHost(context.Background(), os.Stdin, os.Stdout)
+	case "stdio", "stdio://":
+		return RunStdioHost(context.Background(), os.Stdin, os.Stdout)
+	}
+	return fmt.Errorf("unsupported --listen URL `%s`; expected `grpc://IP:PORT`, `grpc+stdio://`, `stdio`, or `stdio://`", listen)
 }
 
 // codeModeBodyAfterHeader strips Rust's code-mode response header (status line,
@@ -52,7 +78,7 @@ func codeModeBodyAfterHeader(t *testing.T, body string) string {
 
 func TestProcessProviderExecutesNestedToolsOutsideClientProcess(t *testing.T) {
 	hostProgram := copyProcessHostTestBinary(t)
-	t.Setenv(processHostHelperEnv, "1")
+	t.Setenv(processHostHelperEnv, "cli")
 	provider := NewProcessProvider(hostProgram)
 	if err := provider.Availability(); err != nil {
 		t.Fatalf("Availability() error = %v", err)
@@ -97,7 +123,7 @@ func TestProcessProviderExecutesNestedToolsOutsideClientProcess(t *testing.T) {
 // gRPC Transport stream on the child's stdio, with nested tool calls intact.
 func TestGrpcProcessProviderExecutesNestedToolsOverStdio(t *testing.T) {
 	hostProgram := copyProcessHostTestBinary(t)
-	t.Setenv(processHostHelperEnv, "grpc")
+	t.Setenv(processHostHelperEnv, "cli")
 	provider := NewGrpcProcessProvider(hostProgram)
 	if err := provider.Availability(); err != nil {
 		t.Fatalf("Availability() error = %v", err)
@@ -142,7 +168,7 @@ func TestGrpcProcessProviderExecutesNestedToolsOverStdio(t *testing.T) {
 // while keeping their code-mode state isolated.
 func TestGrpcProcessProviderKeepsSessionsIsolated(t *testing.T) {
 	hostProgram := copyProcessHostTestBinary(t)
-	t.Setenv(processHostHelperEnv, "grpc")
+	t.Setenv(processHostHelperEnv, "cli")
 	provider := NewGrpcProcessProvider(hostProgram)
 	defer provider.Close()
 	runtimeA := tool.NewCodeModeRuntime(provider, false)
@@ -178,7 +204,7 @@ func TestGrpcProcessProviderKeepsSessionsIsolated(t *testing.T) {
 // connection attempt.
 func TestGrpcProcessProviderRecoversAfterHostDeath(t *testing.T) {
 	hostProgram := copyProcessHostTestBinary(t)
-	t.Setenv(processHostHelperEnv, "grpc")
+	t.Setenv(processHostHelperEnv, "cli")
 	provider := NewGrpcProcessProvider(hostProgram)
 	defer provider.Close()
 	runtime := tool.NewCodeModeRuntime(provider, false)
@@ -218,7 +244,7 @@ func TestGrpcProcessProviderRecoversAfterHostDeath(t *testing.T) {
 
 func TestProcessProviderRuntimePersistsStateAndCellsAcrossRegistryRebinds(t *testing.T) {
 	hostProgram := copyProcessHostTestBinary(t)
-	t.Setenv(processHostHelperEnv, "1")
+	t.Setenv(processHostHelperEnv, "cli")
 	provider := NewProcessProvider(hostProgram)
 	defer provider.Close()
 	runtime := tool.NewCodeModeRuntime(provider, true)
