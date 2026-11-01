@@ -3205,7 +3205,52 @@ and decodable items kept Go's original spelling. The record is now decoded into
   `TestRenderHumanDetailsAttachIssueMetadataLikeRust` and
   `TestTerminalCheckDumbDetails`.
 
+### 94. `doctor` probes every runtime database, the PATH helpers and the doctor title defaults
+
+- **Runtime database rows.** Rust `runtime_db_paths` returns all seven `RUNTIME_DBS`
+  entries, so `codex doctor` also lists `memories v2 DB`, `queue DB` and `thread
+  history DB`. `runtimeDBPathsForDoctor` probes them from the `state` filename
+  constants and `state.RuntimeDBPaths()` reports the same seven in declaration
+  order.
+- **State row order.** Rust `state_details` re-emits `CODEX_HOME`, `log dir` and
+  `sqlite home`, folds integrity into the four managed database rows, prints the
+  rollout rows next and only then drains the remaining details. `writeStateDetails`
+  reproduces that order, so the lazily-created databases and their
+  `... integrity skipped (missing)` rows render after `active rollouts`/
+  `archived rollouts` instead of before them.
+- **Logs database location.** Rust moves `logs_2.sqlite` into an explicitly
+  configured `log_dir` unless a managed `sqlite_home` requirement wins (Rust
+  #55978), matching `Config::sqlite_config`. The state check probes that path, so
+  both binaries report `log DB <log_dir>/logs_2.sqlite`.
+- **PATH helpers.** Rust's in-process `which::which_all` builds Windows
+  candidates from `PATHEXT` only, lists every matching extension in PATHEXT order
+  and canonicalizes the match to its on-disk casing. Go also tried the
+  extensionless name and reported the PATHEXT spelling, so an npm prefix printed
+  `PATH entries (2)` with `codex` and `codex.CMD`; it now prints
+  `PATH entries (1) ...\codex.cmd` and keeps the extensionless script
+  unreported, like 0.166.
+- **Doctor title defaults.** Rust doctor's `title.rs`
+  `DEFAULT_TERMINAL_TITLE_ITEMS` is `activity, project-name` even though the TUI
+  defaults to three items; the doctor title check reports the same two.
+- Evidence: `out/r1301-doctor-diff.txt` (Environment diff after the changes),
+  `out/r1302-pathext.txt` (six PATHEXT layouts, both binaries),
+  `out/r1303-logdir.txt`/`out/r1303-doctor-rust.txt`/`out/r1303-doctor-go.txt`
+  (configured `log_dir`), `TestCodexPathCandidatesFollowWhichAllLikeRust`,
+  `TestStateCheckRoutesLogsDatabaseToConfiguredLogDirLikeRust`,
+  `TestStateCheckReportsRustPathDBAndRolloutDetails` and
+  `TestTerminalTitleReportsDefaultItemsAndGitProjectName`.
+
 ## Verification
+
+- Round 82 removes the state-database and PATH-helper rows from the `doctor`
+  Environment diff (entry 94): `out/r1301-doctor-diff.txt` now differs only on the
+  `GCODE_HOME` label, the source-build packaging/`0.0.0` version, the
+  bundled-vs-system `rg` and the configuration check's `log directory`;
+  `out/r1302-pathext.txt` shows identical `PATH entries` for six PATHEXT layouts
+  (including a lowercase `codex.cmd` next to an extensionless `codex`),
+  `out/r1303-logdir.txt` reports `log DB` in the configured `log_dir` for both
+  binaries, `go test -count=1 ./doctor ./state ./cli` passes, and `./doctor` still
+  cross-compiles for `GOOS=linux` and `GOOS=darwin`.
 
 - Round 81 finishes the `doctor` Environment rows (entry 93): the install
   flags collapse into one `managed by` row, the git PATH block moves after the
@@ -4033,6 +4078,6 @@ and decodable items kept Go's original spelling. The record is now decoded into
 - `doctor` still differs from 0.166 outside the Environment work in entries
   92-93: the disk and state rows keep Go's `GCODE_HOME` label, a source build
   reports `other` instead of Rust's package layout and `v0.0.0` for the version,
-  `search` prefers the system ripgrep over the packaged one, the default title
-  items include `thread-name`, and the state check does not list the `memories
-  v2`, `queue` and `thread history` databases.
+  `search` prefers the system ripgrep over the packaged one, and the
+  configuration check prints the configured `log_dir` where 0.166 prints the
+  default `log directory`.

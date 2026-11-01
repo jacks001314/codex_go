@@ -187,6 +187,54 @@ func TestInstallCheckDeduplicatesPathEntriesLikeRust(t *testing.T) {
 	}
 }
 
+// TestCodexPathCandidatesFollowWhichAllLikeRust covers Rust #42324: the
+// in-process which::which_all builds Windows candidates from PATHEXT only, so
+// an extensionless `codex` script is skipped, every matching extension is
+// reported in PATHEXT order and the match keeps its on-disk casing.
+func TestCodexPathCandidatesFollowWhichAllLikeRust(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("PATHEXT is a Windows-only contract")
+	}
+	for _, tc := range []struct {
+		name    string
+		pathext string
+		files   []string
+		want    []string
+	}{
+		{
+			name:    "extensionless script is ignored",
+			pathext: ".CMD",
+			files:   []string{"codex", "codex.cmd", "codex.ps1"},
+			want:    []string{"codex.cmd"},
+		},
+		{
+			name:    "pathext order and on-disk casing",
+			pathext: ".CMD;.EXE",
+			files:   []string{"codex.EXE", "codex.cmd"},
+			want:    []string{"codex.cmd", "codex.EXE"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			for _, name := range tc.files {
+				if err := os.WriteFile(filepath.Join(dir, name), []byte("@echo off\r\n"), 0o600); err != nil {
+					t.Fatalf("write %s: %v", name, err)
+				}
+			}
+			t.Setenv("PATHEXT", tc.pathext)
+			t.Setenv("PATH", dir)
+			got := defaultCodexPathCandidatesForDoctor()
+			want := make([]string, 0, len(tc.want))
+			for _, name := range tc.want {
+				want = append(want, filepath.Join(dir, name))
+			}
+			if strings.Join(got, "|") != strings.Join(want, "|") {
+				t.Fatalf("candidates = %#v, want %#v", got, want)
+			}
+		})
+	}
+}
+
 func TestInstallCheckReportsMissingNPMPackageRootLikeRust(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("CODEX_MANAGED_BY_NPM", "1")
@@ -1071,7 +1119,7 @@ func TestTerminalTitleReportsDefaultItemsAndGitProjectName(t *testing.T) {
 		t.Fatalf("check = %+v", check)
 	}
 	for _, want := range []string{
-		"terminal title items: activity, thread-name, project-name",
+		"terminal title items: activity, project-name",
 		"terminal title project source: git repo root",
 		"terminal title project value: repo",
 	} {
@@ -2082,12 +2130,46 @@ func TestStateCheckReportsRustPathDBAndRolloutDetails(t *testing.T) {
 		"state DB: " + filepath.Join(sqliteHome, "state_5.sqlite") + " (file)",
 		"state DB integrity: ok",
 		"log DB integrity: skipped (missing)",
+		"memories v2 DB: " + filepath.Join(sqliteHome, "memories_v2_1.sqlite") + " (missing)",
+		"memories v2 DB integrity: skipped (missing)",
+		"queue DB: " + filepath.Join(sqliteHome, "queue_1.sqlite") + " (missing)",
+		"queue DB integrity: skipped (missing)",
+		"thread history DB: " + filepath.Join(sqliteHome, "thread_history_1.sqlite") + " (missing)",
+		"thread history DB integrity: skipped (missing)",
 		"active rollout files: 1 files, 3 total bytes, 3 average bytes",
 		"archived rollout files: 0 files, 0 total bytes, 0 average bytes",
 	} {
 		if !containsDetail(check, want) {
 			t.Fatalf("missing detail %q in %#v", want, check.Details)
 		}
+	}
+}
+
+// TestStateCheckRoutesLogsDatabaseToConfiguredLogDirLikeRust covers Rust #55978:
+// `Config::sqlite_config` moves logs_2.sqlite into an explicitly configured
+// log_dir, so the state check must probe the database there.
+func TestStateCheckRoutesLogsDatabaseToConfiguredLogDirLikeRust(t *testing.T) {
+	home := t.TempDir()
+	logsDir := filepath.Join(home, "custom-log")
+	if err := os.MkdirAll(logsDir, 0o700); err != nil {
+		t.Fatalf("mkdir logs: %v", err)
+	}
+	configTOML := "log_dir = \"" + strings.ReplaceAll(logsDir, "\\", "\\\\") + "\"\r\n"
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(configTOML), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	check := stateCheck(home, &Options{})
+	for _, want := range []string{
+		"log dir: " + logsDir + " (dir)",
+		"log DB: " + filepath.Join(logsDir, "logs_2.sqlite") + " (missing)",
+		"log DB integrity: skipped (missing)",
+	} {
+		if !containsDetail(check, want) {
+			t.Fatalf("missing detail %q in %#v", want, check.Details)
+		}
+	}
+	if containsDetail(check, "log DB: "+filepath.Join(home, "logs_2.sqlite")) {
+		t.Fatalf("log DB stayed in the SQLite home: %#v", check.Details)
 	}
 }
 

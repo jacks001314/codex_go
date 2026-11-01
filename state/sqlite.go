@@ -28,6 +28,7 @@ const (
 	// MemoriesV2SQLiteFilename is the lazily-created isolated v2 memories DB
 	// (Rust #43797 MEMORIES_V2_DB); the thread catalog stays in the state DB.
 	MemoriesV2SQLiteFilename    = "memories_v2_1.sqlite"
+	QueueSQLiteFilename         = "queue_1.sqlite"
 	ThreadHistorySQLiteFilename = "thread_history_1.sqlite"
 	SQLiteMaxOpenConnections    = 5
 
@@ -303,8 +304,13 @@ func (c SqliteConfig) ThreadHistoryDBPath() string {
 	return filepath.Join(c.sqliteHome, ThreadHistorySQLiteFilename)
 }
 
+// QueueDBPath is the durable agent queue database path (Rust `QUEUE_DB`).
+func (c SqliteConfig) QueueDBPath() string {
+	return filepath.Join(c.sqliteHome, QueueSQLiteFilename)
+}
+
 func (c SqliteConfig) RuntimeDBPaths() []RuntimeDBPath {
-	paths := make([]RuntimeDBPath, 0, len(runtimeDBSpecs)+1)
+	paths := make([]RuntimeDBPath, 0, len(runtimeDBSpecs)+3)
 	for _, spec := range runtimeDBSpecs {
 		paths = append(paths, RuntimeDBPath{
 			Label:                 spec.label,
@@ -312,8 +318,13 @@ func (c SqliteConfig) RuntimeDBPaths() []RuntimeDBPath {
 			BackgroundReclamation: spec.backgroundReclamation,
 		})
 	}
-	// Thread history is opened lazily and never opts into reclamation.
-	paths = append(paths, RuntimeDBPath{Label: "thread history DB", Path: c.ThreadHistoryDBPath()})
+	// The v2 memories, queue and thread-history databases are created lazily
+	// and never opt into reclamation (Rust `RUNTIME_DBS` order).
+	paths = append(paths,
+		RuntimeDBPath{Label: "memories v2 DB", Path: c.MemoriesV2DBPath()},
+		RuntimeDBPath{Label: "queue DB", Path: c.QueueDBPath()},
+		RuntimeDBPath{Label: "thread history DB", Path: c.ThreadHistoryDBPath()},
+	)
 	return paths
 }
 

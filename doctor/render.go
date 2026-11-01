@@ -116,6 +116,8 @@ func writeCheck(out *strings.Builder, check *DoctorCheck, opts *Options) {
 		writeGitDetails(out, check, opts)
 	case "install":
 		writeInstallDetails(out, check, opts)
+	case "state":
+		writeStateDetails(out, check, opts)
 	default:
 		writeGenericDetails(out, check, opts)
 	}
@@ -160,6 +162,59 @@ func writeGenericDetails(out *strings.Builder, check *DoctorCheck, opts *Options
 			continue
 		case check.Category == "runtime" && label == "platform":
 			// runtime_details consumes "platform"; the header prints it instead.
+			continue
+		}
+		writeDetail(out, check, detail, opts)
+	}
+}
+
+// writeStateDetails mirrors Rust doctor/detail.rs state_details: the four
+// managed databases render first with their integrity folded into the row, the
+// rollout rows follow, and every remaining detail (the lazily-created v2
+// memories, queue and thread-history databases, plus their integrity rows)
+// renders in the order the state check recorded it.
+func writeStateDetails(out *strings.Builder, check *DoctorCheck, opts *Options) {
+	// Rust state_details re-emits the three path rows it read first, before the
+	// managed databases, instead of leaving them to the trailing pass.
+	for _, label := range []string{"GCODE_HOME", "CODEX_HOME", "log dir", "sqlite home"} {
+		value, ok := doctorDetailValue(check, label)
+		if !ok {
+			continue
+		}
+		value = humanizeDoctorDetailValue(redactDoctorDetail(value))
+		fmt.Fprintf(out, "      %-24s %s\n", label, styleDetailText(value, displayStatusForCheck(check), opts))
+	}
+	for _, label := range []string{"state DB", "log DB", "goals DB", "memories DB"} {
+		writeDatabaseDetail(out, check, label, opts)
+	}
+	for _, detail := range check.Details {
+		label, _ := splitDetail(detail)
+		switch label {
+		case "active rollout files":
+			writeRolloutDetail(out, "active rollouts", detail)
+		case "archived rollout files":
+			writeRolloutDetail(out, "archived rollouts", detail)
+		}
+	}
+	consumed := []string{
+		"GCODE_HOME",
+		"CODEX_HOME",
+		"log dir",
+		"sqlite home",
+		"state DB",
+		"log DB",
+		"goals DB",
+		"memories DB",
+		"state DB integrity",
+		"log DB integrity",
+		"goals DB integrity",
+		"memories DB integrity",
+		"active rollout files",
+		"archived rollout files",
+	}
+	for _, detail := range check.Details {
+		label, _ := splitDetail(detail)
+		if doctorDetailConsumed(label, consumed, nil) {
 			continue
 		}
 		writeDetail(out, check, detail, opts)

@@ -38,6 +38,7 @@ import (
 	"codex_go/sandbox/windowssandbox"
 	"codex_go/session"
 	"codex_go/shell"
+	"codex_go/state"
 	"codex_go/voicehost"
 
 	"github.com/coder/websocket"
@@ -2342,32 +2343,56 @@ func codexPathEntriesForDoctor() []string {
 }
 
 // defaultCodexPathCandidatesForDoctor lists every `codex` executable on PATH
-// without running a PATH-selected `which`/`where` helper (Rust #42324 uses the
-// in-process which::which_all). Windows honors PATHEXT, and Unix entries must be
-// executable files.
+// without running a PATH-selected `which`/`where` helper. Rust #42324 uses the
+// in-process which::which_all, which on Windows builds candidates from PATHEXT
+// alone (an extensionless `codex` script is ignored), reports every matching
+// extension in PATHEXT order and canonicalizes the match to its on-disk casing;
+// Unix entries must be executable files.
 func defaultCodexPathCandidatesForDoctor() []string {
 	pathEnv := os.Getenv("PATH")
 	if strings.TrimSpace(pathEnv) == "" {
 		return nil
-	}
-	extensions := []string{""}
-	if runtime.GOOS == "windows" {
-		extensions = append(extensions, windowsPathExts()...)
 	}
 	var candidates []string
 	for _, dir := range filepath.SplitList(pathEnv) {
 		if dir == "" {
 			continue
 		}
-		for _, extension := range extensions {
-			candidate := filepath.Join(dir, "codex"+extension)
+		if runtime.GOOS != "windows" {
+			candidate := filepath.Join(dir, "codex")
 			if executablePathExists(candidate) != nil {
+				continue
+			}
+			candidates = append(candidates, candidate)
+			continue
+		}
+		for _, extension := range windowsPathExts() {
+			candidate, err := onDiskPath(filepath.Join(dir, "codex"+extension))
+			if err != nil {
 				continue
 			}
 			candidates = append(candidates, candidate)
 		}
 	}
 	return candidates
+}
+
+// onDiskPath returns the directory entry matching path case-insensitively,
+// mirroring the canonicalization `which` applies, so PATH reports keep the
+// on-disk casing instead of the PATHEXT spelling.
+func onDiskPath(path string) (string, error) {
+	entries, err := os.ReadDir(filepath.Dir(path))
+	if err != nil {
+		return "", err
+	}
+	name := filepath.Base(path)
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.EqualFold(entry.Name(), name) {
+			continue
+		}
+		return filepath.Join(filepath.Dir(path), entry.Name()), nil
+	}
+	return "", os.ErrNotExist
 }
 
 func pushEnvPathDetailForDoctor(details *[]string, label string, name string) {
@@ -4254,7 +4279,10 @@ func gitEntrySummary(repoRoot string) string {
 	}
 }
 
-var defaultTerminalTitleItems = []string{"activity", "thread-name", "project-name"}
+// defaultTerminalTitleItems mirrors Rust doctor `title.rs`
+// DEFAULT_TERMINAL_TITLE_ITEMS. The TUI itself defaults to `activity`,
+// `thread-name`, `project-name`, but the doctor check reports its own list.
+var defaultTerminalTitleItems = []string{"activity", "project-name"}
 
 const projectTitleMaxChars = 24
 
@@ -4559,7 +4587,7 @@ func stateCheck(codexHome string, opts *Options) *DoctorCheck {
 	status := CheckStatusOK
 	feedback := opts != nil && opts.Feedback
 	failedDatabases := []string{}
-	for _, dbPath := range runtimeDBPathsForDoctor(sqliteHome) {
+	for _, dbPath := range runtimeDBPathsForDoctor(sqliteHome, configuredLogsHomeForDoctor(cfg)) {
 		pushPathReadinessDetail(&details, dbPath.Label, dbPath.Path)
 		var deadline time.Time
 		if feedback {
@@ -4621,12 +4649,36 @@ type runtimeDBPathForDoctor struct {
 	Path  string
 }
 
-func runtimeDBPathsForDoctor(sqliteHome string) []runtimeDBPathForDoctor {
+// configuredLogsHomeForDoctor mirrors Rust `Config::sqlite_config`: an
+// explicitly configured log_dir moves logs_2.sqlite unless a managed
+// sqlite_home requirement wins (Rust #55978).
+func configuredLogsHomeForDoctor(cfg *config.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	logDir, configured := cfg.ConfiguredLogDir()
+	if !configured || cfg.HasManagedSQLiteHomeRequirement() {
+		return ""
+	}
+	return logDir
+}
+
+func runtimeDBPathsForDoctor(sqliteHome string, logsHome string) []runtimeDBPathForDoctor {
+	logsDir := sqliteHome
+	if strings.TrimSpace(logsHome) != "" {
+		logsDir = logsHome
+	}
+	// Rust `runtime_db_paths` returns every `RUNTIME_DBS` entry in declaration
+	// order, so the lazily-created v2 memories, queue and thread-history
+	// databases are probed as well.
 	return []runtimeDBPathForDoctor{
-		{Label: "state DB", Path: filepath.Join(sqliteHome, "state_5.sqlite")},
-		{Label: "log DB", Path: filepath.Join(sqliteHome, "logs_2.sqlite")},
-		{Label: "goals DB", Path: filepath.Join(sqliteHome, "goals_1.sqlite")},
-		{Label: "memories DB", Path: filepath.Join(sqliteHome, "memories_1.sqlite")},
+		{Label: "state DB", Path: filepath.Join(sqliteHome, state.StateSQLiteFilename)},
+		{Label: "log DB", Path: filepath.Join(logsDir, state.LogsSQLiteFilename)},
+		{Label: "goals DB", Path: filepath.Join(sqliteHome, state.GoalsSQLiteFilename)},
+		{Label: "memories DB", Path: filepath.Join(sqliteHome, state.MemoriesSQLiteFilename)},
+		{Label: "memories v2 DB", Path: filepath.Join(sqliteHome, state.MemoriesV2SQLiteFilename)},
+		{Label: "queue DB", Path: filepath.Join(sqliteHome, state.QueueSQLiteFilename)},
+		{Label: "thread history DB", Path: filepath.Join(sqliteHome, state.ThreadHistorySQLiteFilename)},
 	}
 }
 
