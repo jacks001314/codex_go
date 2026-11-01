@@ -3823,14 +3823,6 @@ func terminalCheckFromInputs(inputs *terminalCheckInputs) *DoctorCheck {
 	return check
 }
 
-func fileIsTerminal(file *os.File) bool {
-	if file == nil {
-		return false
-	}
-	info, err := file.Stat()
-	return err == nil && info.Mode()&os.ModeCharDevice != 0
-}
-
 func terminalSizeDetailForDoctor(size terminalSizeProbe) string {
 	if size.Err != "" {
 		return "terminal size: unavailable (" + size.Err + ")"

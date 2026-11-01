@@ -7,17 +7,60 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+// fileIsTerminal mirrors std::io::IsTerminal: a character device such as the
+// NUL device is not a terminal, so the console mode probe decides instead of
+// the file mode.
+func fileIsTerminal(file *os.File) bool {
+	if file == nil {
+		return false
+	}
+	var mode uint32
+	return windows.GetConsoleMode(windows.Handle(file.Fd()), &mode) == nil
+}
+
+// detectTerminalSizeForDoctor mirrors crossterm::terminal::size(), which opens
+// the process console buffer (CONOUT$) instead of the possibly redirected
+// stdout handle.
 func detectTerminalSizeForDoctor(file *os.File, isTerminal bool) terminalSizeProbe {
-	if !isTerminal || file == nil {
+	if file != nil {
+		if size, ok := consoleSizeForDoctor(windows.Handle(file.Fd())); ok {
+			return size
+		}
+	}
+	name, err := windows.UTF16PtrFromString("CONOUT$")
+	if err != nil {
 		return terminalSizeProbe{Err: "not detected"}
 	}
-	var info windows.ConsoleScreenBufferInfo
-	if err := windows.GetConsoleScreenBufferInfo(windows.Handle(file.Fd()), &info); err != nil {
-		return terminalSizeProbe{Err: err.Error()}
+	console, err := windows.CreateFile(
+		name,
+		windows.GENERIC_READ|windows.GENERIC_WRITE,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE,
+		nil,
+		windows.OPEN_EXISTING,
+		0,
+		0,
+	)
+	if err != nil {
+		return terminalSizeProbe{Err: "not detected"}
 	}
-	columns := int(info.Window.Right - info.Window.Left + 1)
-	rows := int(info.Window.Bottom - info.Window.Top + 1)
-	return terminalSizeProbe{Columns: columns, Rows: rows}
+	defer windows.CloseHandle(console)
+	if size, ok := consoleSizeForDoctor(console); ok {
+		return size
+	}
+	return terminalSizeProbe{Err: "not detected"}
+}
+
+func consoleSizeForDoctor(handle windows.Handle) (terminalSizeProbe, bool) {
+	if handle == 0 || handle == windows.InvalidHandle {
+		return terminalSizeProbe{}, false
+	}
+	var info windows.ConsoleScreenBufferInfo
+	if err := windows.GetConsoleScreenBufferInfo(handle, &info); err != nil {
+		return terminalSizeProbe{}, false
+	}
+	columns := int(info.Window.Right-info.Window.Left) + 1
+	rows := int(info.Window.Bottom-info.Window.Top) + 1
+	return terminalSizeProbe{Columns: columns, Rows: rows}, true
 }
 
 func windowsConsoleDetailsForDoctor() []string {

@@ -852,8 +852,12 @@ func TestMissingEnvDiagnosticsInJSON(t *testing.T) {
 
 func TestTerminalCheckDumbDetails(t *testing.T) {
 	check := terminalCheck(map[string]string{"TERM": "dumb"}, &Options{})
+	// The size probe mirrors crossterm and may reach the inherited console, so
+	// only the prefix is asserted here.
+	if !detailHasPrefix(check, "terminal size: ") {
+		t.Fatalf("missing terminal size detail in %#v", check.Details)
+	}
 	for _, want := range []string{
-		"terminal size: unavailable (not detected)",
 		"color output: disabled (TERM=dumb)",
 	} {
 		if !containsDetail(check, want) {
@@ -2652,7 +2656,7 @@ func TestRenderHumanPromotesNotesAndIdleLikeRust(t *testing.T) {
 		"[up] updates",
 		"0.130.0 available (current 0.0.0, dismissed 0.128.0)",
 		"[!!] rollouts",
-		"1,515 active files | 2.52 GB on disk",
+		"1,515 active files · 2.52 GB on disk",
 		"[!!] sandbox",
 		"[!!] mcp",
 		"[!!] auth",
@@ -2768,7 +2772,7 @@ func TestRenderHumanDetailsAttachIssueMetadataLikeRust(t *testing.T) {
 
 	rendered := RenderHuman(report, &Options{ASCII: true})
 	for _, want := range []string{
-		"> COLUMNS                  60 columns (expected >= 80 columns)",
+		"> COLUMNS                  60 (expected >= 80 columns)",
 		"> effective locale         C (expected UTF-8 locale, for example en_US.UTF-8)",
 		"-> resize the window to at least 80 columns",
 	} {
@@ -2909,10 +2913,10 @@ func TestRenderHumanStateDetailsMatchRustSummaries(t *testing.T) {
 
 	rendered := RenderHuman(report, &Options{ASCII: true})
 	for _, want := range []string{
-		"state DB                 /tmp/state.sqlite | integrity ok",
-		"log DB                   /tmp/log.sqlite | integrity ok",
-		"active rollouts          1,515 files | 2.52 GB (avg 1.70 MB)",
-		"archived rollouts        2 files | 2.00 KB (avg 1.00 KB)",
+		"state DB                 /tmp/state.sqlite · integrity ok",
+		"log DB                   /tmp/log.sqlite · integrity ok",
+		"active rollouts          1,515 files · 2.52 GB (avg 1.70 MB)",
+		"archived rollouts        2 files · 2.00 KB (avg 1.00 KB)",
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("missing %q in:\n%s", want, rendered)

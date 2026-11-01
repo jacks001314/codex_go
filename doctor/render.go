@@ -111,6 +111,22 @@ func writeCheck(out *strings.Builder, check *DoctorCheck, opts *Options) {
 	if opts.Summary {
 		return
 	}
+	switch check.Category {
+	case "git":
+		writeGitDetails(out, check, opts)
+	case "install":
+		writeInstallDetails(out, check, opts)
+	default:
+		writeGenericDetails(out, check, opts)
+	}
+	for _, remedy := range issueRemedies(check) {
+		fmt.Fprintf(out, "    %s %s\n", remedyMarker(opts), highlightActions(redactDoctorDetail(remedy), status, opts))
+	}
+}
+
+// writeGenericDetails renders the details of every category that does not need
+// Rust doctor/detail.rs style regrouping.
+func writeGenericDetails(out *strings.Builder, check *DoctorCheck, opts *Options) {
 	for _, detail := range check.Details {
 		label, _ := splitDetail(detail)
 		switch {
@@ -142,12 +158,131 @@ func writeCheck(out *strings.Builder, check *DoctorCheck, opts *Options) {
 			// Rust doctor system_details consumes these labels without rendering
 			// them, so only `os` and `OS language` reach the human report.
 			continue
+		case check.Category == "runtime" && label == "platform":
+			// runtime_details consumes "platform"; the header prints it instead.
+			continue
 		}
 		writeDetail(out, check, detail, opts)
 	}
-	for _, remedy := range issueRemedies(check) {
-		fmt.Fprintf(out, "    %s %s\n", remedyMarker(opts), highlightActions(redactDoctorDetail(remedy), status, opts))
+}
+
+// writeInstallDetails mirrors Rust doctor/detail.rs install_details: the
+// package-manager flags collapse into one "managed by" row and the install
+// context row is labelled "context".
+func writeInstallDetails(out *strings.Builder, check *DoctorCheck, opts *Options) {
+	if value, ok := doctorDetailValue(check, "install context"); ok {
+		writeDetail(out, check, "context: "+value, opts)
 	}
+	writeManagedByRow(out, check, opts)
+	writePathEntries(out, check, "PATH codex #", opts)
+	consumed := []string{
+		"current executable",
+		"install context",
+		"managed by npm",
+		"managed by bun",
+		"managed by pnpm",
+		"managed by Vite+",
+		"managed package root",
+		"PATH codex entries",
+	}
+	for _, detail := range check.Details {
+		label, _ := splitDetail(detail)
+		if doctorDetailConsumed(label, consumed, []string{"PATH codex #"}) {
+			continue
+		}
+		writeDetail(out, check, detail, opts)
+	}
+}
+
+// writeManagedByRow reproduces Rust's single "managed by" row with Rust's
+// yes/no wording and the em dash placeholder for an unset package root.
+func writeManagedByRow(out *strings.Builder, check *DoctorCheck, opts *Options) {
+	yesNo := func(label string) string {
+		if value, ok := doctorDetailValue(check, label); ok && strings.EqualFold(strings.TrimSpace(value), "true") {
+			return "yes"
+		}
+		return "no"
+	}
+	packageRoot := "—"
+	if value, ok := doctorDetailValue(check, "managed package root"); ok && !doctorFalsyDetail(value) {
+		packageRoot = value
+	}
+	value := fmt.Sprintf(
+		"npm: %s · bun: %s · pnpm: %s · Vite+: %s · package root %s",
+		yesNo("managed by npm"),
+		yesNo("managed by bun"),
+		yesNo("managed by pnpm"),
+		yesNo("managed by Vite+"),
+		packageRoot,
+	)
+	writeDetail(out, check, "managed by: "+value, opts)
+}
+
+// writeGitDetails mirrors Rust doctor/detail.rs git_details, which prints the
+// PATH block after the repository rows instead of next to the PATH summary.
+func writeGitDetails(out *strings.Builder, check *DoctorCheck, opts *Options) {
+	for _, row := range []doctorDetailRow{
+		{label: "selected git", display: "selected git"},
+		{label: "git version", display: "version"},
+		{label: "git exec path", display: "exec path"},
+		{label: "repo detected", display: "repo detected"},
+		{label: "repo root", display: "repo root"},
+		{label: ".git entry", display: ".git entry"},
+		{label: "git branch", display: "branch"},
+		{label: "core.fsmonitor", display: "core.fsmonitor"},
+	} {
+		if value, ok := doctorDetailValue(check, row.label); ok {
+			writeDetail(out, check, row.display+": "+value, opts)
+		}
+	}
+	writePathEntries(out, check, "PATH git #", opts)
+	consumed := []string{
+		"selected git",
+		"git version",
+		"git exec path",
+		"repo detected",
+		"repo root",
+		".git entry",
+		"git branch",
+		"core.fsmonitor",
+		"PATH git entries",
+	}
+	for _, detail := range check.Details {
+		label, _ := splitDetail(detail)
+		if doctorDetailConsumed(label, consumed, []string{"PATH git #"}) {
+			continue
+		}
+		writeDetail(out, check, detail, opts)
+	}
+}
+
+// doctorDetailRow pairs a stored detail label with the label Rust renders.
+type doctorDetailRow struct {
+	label   string
+	display string
+}
+
+func doctorDetailConsumed(label string, consumed []string, prefixes []string) bool {
+	for _, name := range consumed {
+		if label == name {
+			return true
+		}
+	}
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(label, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// doctorFalsyDetail mirrors Rust doctor detail::is_falsy.
+func doctorFalsyDetail(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "false", "none", "not set", "unknown", "missing", "absent", "no", "—", "-":
+		return true
+	}
+	return false
 }
 
 func writePathEntries(out *strings.Builder, check *DoctorCheck, prefix string, opts *Options) {
@@ -280,7 +415,7 @@ func writeDatabaseDetail(out *strings.Builder, check *DoctorCheck, label string,
 	}
 	value = humanizeDoctorDetailValue(redactDoctorDetail(value))
 	if integrity, integrityOK := doctorDetailValue(check, label+" integrity"); integrityOK {
-		value += " | integrity " + integrity
+		value += " · integrity " + integrity
 	}
 	fmt.Fprintf(out, "      %-24s %s\n", label, styleDetailText(value, displayStatusForCheck(check), opts))
 }
@@ -298,7 +433,7 @@ func rolloutSummary(value string) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	return formatDoctorCount(files) + " files | " + formatDoctorBytes(totalBytes) + " (avg " + formatDoctorBytes(averageBytes) + ")", true
+	return formatDoctorCount(files) + " files · " + formatDoctorBytes(totalBytes) + " (avg " + formatDoctorBytes(averageBytes) + ")", true
 }
 
 func rolloutFilesBytesAndAverage(value string) (uint64, uint64, uint64, bool) {
@@ -333,10 +468,9 @@ func writeDetail(out *strings.Builder, check *DoctorCheck, detail string, opts *
 	label, value := splitDetail(redactDoctorDetail(detail))
 	label = doctorDisplayLabel(label)
 	value = humanizeDoctorDetailValue(value)
+	// Rust doctor detail.rs attach_issue_metadata only attaches the expected
+	// value; the stored detail value is never replaced by the issue measurement.
 	issue := issueForDetailLabel(check, label)
-	if issue != nil && issue.Measured != nil {
-		value = humanizeDoctorDetailValue(redactDoctorDetail(*issue.Measured))
-	}
 	if issue != nil && issue.Expected != nil {
 		value = styleDetailText(value, displayStatusForCheck(check), opts) + " (expected " + redactDoctorDetail(*issue.Expected) + ")"
 		fmt.Fprintf(out, "    %s %-24s %s\n", detailMarker(opts), label, value)
@@ -355,6 +489,18 @@ func doctorDisplayLabel(label string) string {
 		return "startup update check"
 	case "os language":
 		return "OS language"
+	case "current executable":
+		return "executable"
+	case "terminal title source":
+		return "title source"
+	case "terminal title items":
+		return "title items"
+	case "terminal title activity":
+		return "activity item"
+	case "terminal title project source":
+		return "project source"
+	case "terminal title project value":
+		return "project value"
 	default:
 		return label
 	}
@@ -875,7 +1021,7 @@ func rolloutNote(check *DoctorCheck) *doctorNote {
 	return &doctorNote{
 		status:  doctorDisplayStatusWarning,
 		name:    "rollouts",
-		summary: formatDoctorCount(files) + " active files | " + formatDoctorBytes(bytes) + " on disk",
+		summary: formatDoctorCount(files) + " active files · " + formatDoctorBytes(bytes) + " on disk",
 	}
 }
 

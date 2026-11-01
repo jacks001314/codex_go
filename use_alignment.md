@@ -3168,7 +3168,53 @@ and decodable items kept Go's original spelling. The record is now decoded into
   `TestRenderHumanGroupsFollowRustGroupOrderLikeRust` and
   `TestRenderHumanUnicodeMarkersMatchRustLikeRust`.
 
+### 93. `doctor` groups install, git, runtime and terminal rows like 0.166
+
+- **install_details.** Rust collapses the package-manager flags into a single
+  `managed by npm: no · bun: no · pnpm: no · Vite+: no · package root —` row,
+  labels the context row `context`, hides `current executable` (the runtime row
+  owns it) and prints `PATH entries` right after. `writeInstallDetails` and
+  `writeManagedByRow` reproduce that, including Rust's `is_falsy` em dash and
+  `yes`/`no` wording.
+- **git_details.** Rust orders `selected git`, `version`, `exec path`,
+  `repo detected`, `repo root`, `.git entry`, `branch`, `core.fsmonitor` and
+  only then the `PATH entries` block. `writeGitDetails` does the same, so a git
+  check no longer prints its PATH list next to the PATH summary.
+- **runtime and title labels.** `runtime_details` consumes `platform` (the
+  header prints it) and displays `current executable` as `executable`;
+  `title_details` displays `title source`, `title items`, `activity item`,
+  `project source` and `project value`. Both now match 0.166.
+- **Detail values keep their middle dots.** Database rows
+  (`state DB ... · integrity ok`), rollout rows (`1,515 files · 2.52 GB
+  (avg 1.70 MB)`) and the rollouts note (`active files · on disk`) now carry
+  Rust's `·` in the value instead of Go's `|`.
+- **Issue metadata.** Rust's `attach_issue_metadata` only attaches the expected
+  value; Go replaced the row value with the issue measurement, so a `TERM: dumb`
+  detail rendered as `TERM: TERM=dumb`. Issue rows now print
+  `dumb (expected TERM=xterm-256color ...)` like 0.166.
+- **Terminal detection.** `std::io::IsTerminal` asks `GetConsoleMode`, while Go
+  used `os.ModeCharDevice`, so a NUL stdin counted as a terminal, escalated the
+  `TERM=dumb` warning to a failure and printed the interactive wording. The size
+  probe now opens `CONOUT$` the way `crossterm::terminal::size` does, so a
+  redirected stdout still reports `terminal size: 120x30`, `stdin is terminal:
+  false` and the `... in this non-interactive run` summary.
+- Evidence: `out/r1297-doctor-diff.txt` (Environment diff against the 0.166
+  binary: only the `GCODE_HOME` label, the package layout/version, the search
+  provider, the default title items and the extra state databases remain),
+  `out/r99-doctor-rust.txt`/`out/r99-doctor-go.txt`,
+  `TestRenderHumanDetailsAttachIssueMetadataLikeRust` and
+  `TestTerminalCheckDumbDetails`.
+
 ## Verification
+
+- Round 81 finishes the `doctor` Environment rows (entry 93): the install
+  flags collapse into one `managed by` row, the git PATH block moves after the
+  repository rows, runtime/title labels follow `detail.rs`, database and rollout
+  values keep their `·`, issue rows stop replacing the measured value, and the
+  terminal check reports `stdin is terminal: false`, `terminal size: 120x30` and
+  the non-interactive `TERM=dumb` warning. `out/r1297-doctor-diff.txt` shrinks to
+  the `GCODE_HOME` label, packaging/version, search provider, default title items
+  and the missing state databases, and `go test -count=1 ./doctor ./cli` passes.
 
 - Round 80 renders the Rust 0.166 `doctor` Environment (entry 92): the
   normalized Environment diff in `out/r1296-doctor-diff.txt` is reduced to the
@@ -3984,10 +4030,9 @@ and decodable items kept Go's original spelling. The record is now decoded into
   namespace with `exec` and its JSON schema, then the developer/user items).
   Aligning means serialising the tool definitions and the prompt-assembly
   order the core session builder produces.
-- `doctor` still differs from 0.166 outside the Environment identity work in
-  entry 92: the disk and state rows keep Go's `GCODE_HOME` label, the runtime and
-  install checks print separate `managed by`/`install context` rows instead of
-  Rust's single `npm: no · bun: no · ...` line, `search` prefers the system
-  ripgrep over the bundled one, the terminal check reports `TERM` as an issue and
-  calls stdin a terminal, and the state check does not list the `memories v2`,
-  `queue` and `thread history` databases.
+- `doctor` still differs from 0.166 outside the Environment work in entries
+  92-93: the disk and state rows keep Go's `GCODE_HOME` label, a source build
+  reports `other` instead of Rust's package layout and `v0.0.0` for the version,
+  `search` prefers the system ripgrep over the packaged one, the default title
+  items include `thread-name`, and the state check does not list the `memories
+  v2`, `queue` and `thread history` databases.
