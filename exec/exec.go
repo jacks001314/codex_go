@@ -2024,13 +2024,20 @@ func execViewImageOptions(cwd string, info *model.ModelInfo, featureSettings map
 	}
 	supportsImage := modelInfoSupportsImageInputExec(info)
 	canRequestOriginalDetail := supportsImage && info.SupportsImageDetailOriginal
+	// Rust's image_preparation::unified_image_budget_enabled hides image detail
+	// values when the feature is on and the model is Responses Lite or accepts
+	// original detail.
+	unifiedImageBudget := features.Enabled(featureSettings, "unified_image_budget") &&
+		info != nil && (info.UseResponsesLite || info.SupportsImageDetailOriginal)
 	return &tool.ViewImageOptions{
 		CWD:                      cwd,
 		CanRequestOriginalDetail: canRequestOriginalDetail,
+		UnifiedImageBudget:       unifiedImageBudget,
 		StepSettings: func() (tool.ViewImageStepSettings, bool) {
 			return tool.ViewImageStepSettings{
 				SupportsImageInput:       supportsImage,
 				CanRequestOriginalDetail: canRequestOriginalDetail,
+				UnifiedImageBudget:       unifiedImageBudget,
 			}, true
 		},
 	}

@@ -124,7 +124,9 @@ func TestRuntimeRouterPostTurnCompactLikeRust(t *testing.T) {
 		t.Fatalf("turn start error: %+v", zeroTurn.Error)
 	}
 	waitForTurnCompletedStatus(t, zeroSink, zeroTurn.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
-	if zeroRunner.request != nil {
-		t.Fatalf("zero percent compacted: %#v", zeroRunner.request)
+	// Rust gates only post-turn compaction on the threshold; the larger bundled
+	// tool surface can still trigger a pre-turn context-window compaction.
+	if zeroRunner.request != nil && zeroRunner.request.Phase == compact.PhasePostTurn {
+		t.Fatalf("zero percent compacted post-turn: %#v", zeroRunner.request)
 	}
 }

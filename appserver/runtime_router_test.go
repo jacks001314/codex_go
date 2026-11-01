@@ -10053,8 +10053,18 @@ func TestRuntimeRouterUnifiedExecUsesSelectedRemoteEnvironmentLikeRust(t *testin
 			break
 		}
 	}
-	if codeModeSpec == nil || !strings.Contains(codeModeSpec.Description, "tools.exec_command") || !strings.Contains(codeModeSpec.Description, `"environment_id"`) {
+	if codeModeSpec == nil || !strings.Contains(codeModeSpec.Description, "tools.exec_command") {
 		t.Fatalf("code-mode exec spec = %#v", codeModeSpec)
+	}
+	// Rust renders nested tool schemas in the exec description only in
+	// code_mode_only, so the shell selector lives on the registered nested spec.
+	nestedSpec, ok := toolRouter.Registry().Spec(tool.PlainName(tool.DefaultExecCommandToolName))
+	if !ok {
+		t.Fatalf("nested %s spec is missing", tool.DefaultExecCommandToolName)
+	}
+	nestedProperties, _ := nestedSpec.InputSchema["properties"].(map[string]any)
+	if _, ok := nestedProperties["environment_id"]; !ok {
+		t.Fatalf("nested %s spec = %#v, missing environment_id", tool.DefaultExecCommandToolName, nestedSpec)
 	}
 	for i := range visibleSpecs {
 		if visibleSpecs[i].Name.Key() == tool.DefaultExecCommandToolName || visibleSpecs[i].Name.Key() == tool.DefaultShellCommandToolName {

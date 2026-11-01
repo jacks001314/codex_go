@@ -34,12 +34,18 @@ const viewImageUnsupportedMessage = "view_image is not allowed because you do no
 type ViewImageStepSettings struct {
 	SupportsImageInput       bool
 	CanRequestOriginalDetail bool
+	// UnifiedImageBudget mirrors Rust's `unified_image_budget_enabled`: the step's
+	// image detail values are hidden and the image always keeps original detail.
+	UnifiedImageBudget bool
 }
 
 type ViewImageOptions struct {
 	CWD                      string
 	CanRequestOriginalDetail bool
-	IncludeEnvironmentID     bool
+	// UnifiedImageBudget hides the `detail` argument and output hint like Rust's
+	// ViewImageToolOptions::unified_image_budget (view_image_spec.rs).
+	UnifiedImageBudget   bool
+	IncludeEnvironmentID bool
 	// StepSettings, when set, resolves the issuing step's model capabilities so a
 	// mid-turn model switch is honored instead of the turn's initial model.
 	StepSettings func() (ViewImageStepSettings, bool)
@@ -64,7 +70,9 @@ type ViewImageArgs struct {
 
 type ViewImageResult struct {
 	ImageURL string `json:"image_url"`
-	Detail   string `json:"detail"`
+	// Detail is omitted when the unified image budget hides detail values
+	// (Rust's ViewImageOutput::code_mode_result).
+	Detail string `json:"detail,omitempty"`
 }
 
 func NewViewImageHandler(options ViewImageOptions) *ViewImageHandler {
@@ -74,23 +82,23 @@ func NewViewImageHandler(options ViewImageOptions) *ViewImageHandler {
 // capabilities resolves the issuing step's image capabilities, falling back to
 // the turn-start options when no step resolver is installed or no active step is
 // available.
-func (h *ViewImageHandler) capabilities() (bool, bool) {
+func (h *ViewImageHandler) capabilities() (supportsImageInput bool, canRequestOriginalDetail bool, unifiedImageBudget bool) {
 	if h == nil {
-		return true, false
+		return true, false, false
 	}
 	if h.options.StepSettings != nil {
 		if settings, ok := h.options.StepSettings(); ok {
-			return settings.SupportsImageInput, settings.CanRequestOriginalDetail
+			return settings.SupportsImageInput, settings.CanRequestOriginalDetail, settings.UnifiedImageBudget
 		}
 	}
-	return true, h.options.CanRequestOriginalDetail
+	return true, h.options.CanRequestOriginalDetail, h.options.UnifiedImageBudget
 }
 
 func (h *ViewImageHandler) Spec() Spec {
 	properties := map[string]any{
 		"path": map[string]any{"type": "string", "description": "Local filesystem path to an image file."},
 	}
-	if h != nil && h.options.CanRequestOriginalDetail {
+	if h != nil && h.options.CanRequestOriginalDetail && !h.options.UnifiedImageBudget {
 		properties["detail"] = map[string]any{
 			"type": "string", "enum": []string{"high", "original"},
 			"description": "Image detail level. Defaults to `high`; use `original` to preserve exact resolution.",
@@ -101,17 +109,22 @@ func (h *ViewImageHandler) Spec() Spec {
 			"type": "string", "description": "Environment id from <environment_context>. Omit to use the primary environment.",
 		}
 	}
+	outputProperties := map[string]any{
+		"image_url": map[string]any{"type": "string", "description": "Data URL for the loaded image."},
+	}
+	outputRequired := []string{"image_url"}
+	if h == nil || !h.options.UnifiedImageBudget {
+		outputProperties["detail"] = map[string]any{"type": "string", "enum": []string{"high", "original"}, "description": "Image detail hint returned by view_image. Returns `high` for default resized behavior or `original` when original resolution is preserved."}
+		outputRequired = []string{"image_url", "detail"}
+	}
 	return Spec{
 		Name:        PlainName(ViewImageToolName),
 		Description: "View a local image file from the filesystem when visual inspection is needed. Use this for images already available on disk.",
 		InputSchema: map[string]any{"type": "object", "properties": properties, "required": []string{"path"}, "additionalProperties": false},
 		OutputSchema: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"image_url": map[string]any{"type": "string", "description": "Data URL for the loaded image."},
-				"detail":    map[string]any{"type": "string", "enum": []string{"high", "original"}, "description": "Image detail hint returned by view_image. Returns `high` for default resized behavior or `original` when original resolution is preserved."},
-			},
-			"required": []string{"image_url", "detail"}, "additionalProperties": false,
+			"type":       "object",
+			"properties": outputProperties,
+			"required":   outputRequired, "additionalProperties": false,
 		},
 	}
 }
@@ -126,7 +139,7 @@ func (h *ViewImageHandler) Execute(ctx context.Context, invocation *Invocation) 
 	// Rust #44242 checks the captured step model before touching the arguments,
 	// so a model without image input is rejected rather than served stale
 	// turn-start capabilities.
-	supportsImageInput, canRequestOriginalDetail := h.capabilities()
+	supportsImageInput, canRequestOriginalDetail, unifiedImageBudget := h.capabilities()
 	if !supportsImageInput {
 		return nil, RespondToModel(viewImageUnsupportedMessage)
 	}
@@ -141,8 +154,11 @@ func (h *ViewImageHandler) Execute(ctx context.Context, invocation *Invocation) 
 	if detail != "high" && detail != "original" {
 		return nil, RespondToModel(fmt.Sprintf("view_image.detail only supports `high` or `original`; omit `detail` for default high resized behavior, got `%s`", detail))
 	}
-	if detail == "original" && !canRequestOriginalDetail {
-		detail = "high"
+	// Rust's view_image keeps original detail whenever the unified image budget is
+	// active, whatever hint the call carried.
+	imageDetail := "high"
+	if unifiedImageBudget || (canRequestOriginalDetail && detail == "original") {
+		imageDetail = "original"
 	}
 	var environmentCheck *UnifiedExecEnvironmentCheck
 	var environmentFileSystems EnvironmentFileSystemProvider
@@ -187,7 +203,11 @@ func (h *ViewImageHandler) Execute(ctx context.Context, invocation *Invocation) 
 		return nil, RespondToModel(viewImageInvalidMessage)
 	}
 	// The history insertion path owns image preparation and resizing.
-	result := ViewImageResult{ImageURL: utils.DataURLFromBytes("application/octet-stream", data), Detail: detail}
+	result := ViewImageResult{ImageURL: utils.DataURLFromBytes("application/octet-stream", data), Detail: imageDetail}
+	if unifiedImageBudget {
+		// Rust's ViewImageOutput::code_mode_result returns only the image URL.
+		result.Detail = ""
+	}
 	body, err := json.Marshal(result)
 	if err != nil {
 		return nil, err
@@ -195,16 +215,21 @@ func (h *ViewImageHandler) Execute(ctx context.Context, invocation *Invocation) 
 	contentItems := []map[string]any{{
 		"type":      "input_image",
 		"image_url": result.ImageURL,
-		"detail":    result.Detail,
+		"detail":    imageDetail,
 	}}
+	resultData := map[string]any{
+		"image_url":     result.ImageURL,
+		"content_items": contentItems,
+	}
+	if !unifiedImageBudget {
+		// Rust's ViewImageOutput::code_mode_result reports the detail hint only
+		// while the budget exposes it.
+		resultData["detail"] = imageDetail
+	}
 	return &Output{
-		Success: true,
-		Body:    string(body),
-		Data: map[string]any{
-			"image_url":     result.ImageURL,
-			"detail":        result.Detail,
-			"content_items": contentItems,
-		},
+		Success:    true,
+		Body:       string(body),
+		Data:       resultData,
 		LogPreview: fmt.Sprintf("<image data URL omitted: %d bytes>", len(result.ImageURL)),
 	}, nil
 }

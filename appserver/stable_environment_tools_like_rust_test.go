@@ -58,12 +58,13 @@ func TestRuntimeRouterStableEnvironmentToolsSelectorLikeRust(t *testing.T) {
 			}
 			specs := toolRouter.ModelVisibleSpecs()
 
-			// The app server exposes the code-mode surface by default, so the shell
-			// family's selector shows up in the nested `exec_command` schema that
-			// `exec` embeds in its description; view_image and apply_patch stay top
-			// level (JSON schema and freeform grammar). All three follow the same
-			// readiness decision: two selections with one usable environment expose
-			// the selector only while the feature is on.
+			// The app server exposes the code-mode surface by default. Rust renders
+			// nested tool schemas in the exec description only in code_mode_only, so
+			// the shell family's selector is observed on the registered nested
+			// `exec_command` spec; view_image and apply_patch stay top level (JSON
+			// schema and freeform grammar). All three follow the same readiness
+			// decision: two selections with one usable environment expose the
+			// selector only while the feature is on.
 			assertSelector := func(surface string, hasSelector bool) {
 				t.Helper()
 				if hasSelector != stable {
@@ -71,11 +72,16 @@ func TestRuntimeRouterStableEnvironmentToolsSelectorLikeRust(t *testing.T) {
 				}
 			}
 
-			exec, ok := modelVisibleSpecForTest(specs, "exec")
-			if !ok {
+			if _, ok := modelVisibleSpecForTest(specs, "exec"); !ok {
 				t.Fatalf("exec spec missing with stable_environment_tools=%t", stable)
 			}
-			assertSelector("exec_command", strings.Contains(exec.Description, `"environment_id"`))
+			nested, ok := toolRouter.Registry().Spec(tool.PlainName(tool.DefaultExecCommandToolName))
+			if !ok {
+				t.Fatalf("nested %s spec missing with stable_environment_tools=%t", tool.DefaultExecCommandToolName, stable)
+			}
+			nestedProperties, _ := nested.InputSchema["properties"].(map[string]any)
+			_, hasNestedSelector := nestedProperties["environment_id"]
+			assertSelector(tool.DefaultExecCommandToolName, hasNestedSelector)
 
 			viewImage, ok := modelVisibleSpecForTest(specs, tool.ViewImageToolName)
 			if !ok {

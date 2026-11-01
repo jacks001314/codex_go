@@ -16777,6 +16777,7 @@ func (r *RuntimeRouter) stepToolSurfaceRefresher(router *tool.Router, params *tu
 		info := r.modelInfoForRuntimeWithConfig(modelID, cfg)
 		options := *base
 		options.CanRequestOriginalDetail = info != nil && info.SupportsImageDetailOriginal
+		options.UnifiedImageBudget = unifiedImageBudgetEnabled(cfg, info)
 		handler := tool.NewViewImageHandler(options)
 		registry := router.Registry()
 		if _, ok := registry.Lookup(tool.PlainName(tool.ViewImageToolName)); !ok {
@@ -18293,6 +18294,7 @@ func (r *RuntimeRouter) viewImageOptionsForTurn(cfg *config.Config, params *turn
 	return &tool.ViewImageOptions{
 		CWD:                      cwd,
 		CanRequestOriginalDetail: canRequestOriginalDetail,
+		UnifiedImageBudget:       unifiedImageBudgetEnabled(cfg, info),
 		IncludeEnvironmentID:     r.includeEnvironmentIDForTurn(cfg, params),
 		// Rust #20647: view_image reads the selected environment's filesystem.
 		EnvironmentFileSystems: tool.NewUnifiedExecEnvironmentFileSystems(r.unifiedExecEnvironmentsForTurn(params), cwd),
@@ -18316,9 +18318,21 @@ func (r *RuntimeRouter) viewImageOptionsForTurn(cfg *config.Config, params *turn
 			return tool.ViewImageStepSettings{
 				SupportsImageInput:       appModelInfoSupportsImageInput(stepInfo),
 				CanRequestOriginalDetail: stepInfo.SupportsImageDetailOriginal,
+				UnifiedImageBudget:       unifiedImageBudgetEnabled(cfg, stepInfo),
 			}, true
 		},
 	}
+}
+
+// unifiedImageBudgetEnabled mirrors Rust's image_preparation::unified_image_budget_enabled:
+// the feature must be on and the model must either use Responses Lite or accept
+// original image detail; only then do image tools hide detail values.
+func unifiedImageBudgetEnabled(cfg *config.Config, info *model.ModelInfo) bool {
+	if cfg == nil || info == nil {
+		return false
+	}
+	return features.Enabled(cfg.FeatureSettings(), "unified_image_budget") &&
+		(info.UseResponsesLite || info.SupportsImageDetailOriginal)
 }
 
 func (r *RuntimeRouter) configBaseDirForAgents() string {
