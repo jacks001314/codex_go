@@ -1940,7 +1940,11 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 				"snapshot_requested": strconv.FormatBool(params.ShellSnapshot != nil),
 			}),
 		)
-		rewritten, rewriteErr := s.shellSnapshots.rewrite(snapshotCtx, params, captureEnv, credentialPairs)
+		var credentialTextUnsafe func(string) bool
+		if preparedProxy != nil {
+			credentialTextUnsafe = preparedProxy.SnapshotTextContainsCredential
+		}
+		rewritten, rewriteErr := s.shellSnapshots.rewrite(snapshotCtx, params, captureEnv, credentialPairs, credentialTextUnsafe)
 		if snapshotSpan != nil {
 			snapshotSpan.End()
 		}

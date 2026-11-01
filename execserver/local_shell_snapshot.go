@@ -67,7 +67,7 @@ func (e *LocalShellSnapshotExecutor) Prepare(ctx context.Context, params *ExecPa
 	if err != nil {
 		return nil, err
 	}
-	return manager.rewrite(ctx, params, captureEnv, nil)
+	return manager.rewrite(ctx, params, captureEnv, nil, nil)
 }
 
 // Prewarm captures the scope's snapshot without starting the command, mirroring
@@ -96,7 +96,7 @@ func (e *LocalShellSnapshotExecutor) Prewarm(ctx context.Context, params *ExecPa
 	if shellSnapshotScriptIndex(params.Argv, request.Shell) < 0 {
 		return requestError(-32602, "shell snapshot requires a shell -c or -lc invocation")
 	}
-	_, err = manager.snapshotEntry(ctx, params, shellType, captureEnv, nil)
+	_, err = manager.snapshotEntry(ctx, params, shellType, captureEnv, nil, nil)
 	return err
 }
 

@@ -75,7 +75,7 @@ func TestShellSnapshotManagerRewritesAndCachesLikeRust(t *testing.T) {
 		},
 	}
 	pairs := []network.CredentialMaskPair{{Real: "sk-real-secret", Dummy: "sk-dummy-value"}}
-	rewritten, err := manager.rewrite(context.Background(), params, params.Env, pairs)
+	rewritten, err := manager.rewrite(context.Background(), params, params.Env, pairs, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestShellSnapshotManagerRewritesAndCachesLikeRust(t *testing.T) {
 		!strings.Contains(script, "\\builtin export TOKEN='sk-dummy-value'") {
 		t.Fatalf("launch environment was not restored after snapshot: %q", script)
 	}
-	again, err := manager.rewrite(context.Background(), params, params.Env, pairs)
+	again, err := manager.rewrite(context.Background(), params, params.Env, pairs, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +133,7 @@ func TestShellSnapshotCaptureFailureRestoresCredentialsLikeRust(t *testing.T) {
 		Env: map[string]string{"TOKEN": "sk-dummy-value"},
 	}
 	pairs := []network.CredentialMaskPair{{Real: "sk-real-secret", Dummy: "sk-dummy-value"}}
-	rewritten, err := manager.rewrite(context.Background(), params, params.Env, pairs)
+	rewritten, err := manager.rewrite(context.Background(), params, params.Env, pairs, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +176,7 @@ func TestShellSnapshotCacheIsBoundedLikeRust(t *testing.T) {
 			},
 			Env: map[string]string{"PATH": "/bin"},
 		}
-		entry, err := manager.snapshotEntry(context.Background(), params, shell.ShellBash, params.Env, nil)
+		entry, err := manager.snapshotEntry(context.Background(), params, shell.ShellBash, params.Env, nil, nil)
 		if err != nil {
 			t.Fatalf("capture %d: %v", index, err)
 		}
@@ -223,7 +223,7 @@ func TestShellSnapshotBashReplayUsesPrivilegedFlagLikeRust(t *testing.T) {
 		},
 		Env: map[string]string{"PATH": "/bin"},
 	}
-	rewritten, err := manager.rewrite(context.Background(), params, params.Env, nil)
+	rewritten, err := manager.rewrite(context.Background(), params, params.Env, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,17 +241,27 @@ func TestShellSnapshotBashReplayUsesPrivilegedFlagLikeRust(t *testing.T) {
 // fragments.
 func TestValidateMaskedShellSnapshotLikeRust(t *testing.T) {
 	pairs := []network.CredentialMaskPair{{Real: "sk-real-secret", Dummy: "sk-dummy-value"}}
-	if err := validateMaskedShellSnapshot("export TOKEN='sk-dummy-value'\n", shell.ShellBash, pairs); err != nil {
+	unsafe := func(text string) bool { return strings.Contains(text, "sk-real-secret") }
+	if err := validateMaskedShellSnapshot("export TOKEN='sk-dummy-value'\n", shell.ShellBash, pairs, nil); err != nil {
 		t.Fatalf("masked snapshot rejected: %v", err)
 	}
-	if err := validateMaskedShellSnapshot("export TOKEN='sk-real-secret'\n", shell.ShellBash, pairs); err == nil {
+	if err := validateMaskedShellSnapshot("export TOKEN='sk-real-secret'\n", shell.ShellBash, pairs, nil); err == nil {
 		t.Fatal("verbatim credential accepted")
 	}
-	if err := validateMaskedShellSnapshot("export TOKEN='sk-re''al-secret'\n", shell.ShellBash, pairs); err == nil {
+	if err := validateMaskedShellSnapshot("export TOKEN='sk-re''al-secret'\n", shell.ShellBash, pairs, nil); err == nil {
 		t.Fatal("reassembled credential accepted")
 	}
-	if err := validateMaskedShellSnapshot("export TOKEN='sk-re''al-secret'\n", shell.ShellBash, nil); err != nil {
+	if err := validateMaskedShellSnapshot("export TOKEN='sk-re''al-secret'\n", shell.ShellBash, nil, nil); err != nil {
 		t.Fatalf("unprotected snapshot checked for credentials: %v", err)
+	}
+	if err := validateMaskedShellSnapshot("export DROP='sk-real-secret'\n", shell.ShellBash, nil, unsafe); err == nil {
+		t.Fatal("broker text check was not consulted")
+	}
+	if err := validateMaskedShellSnapshot("export DROP='sk-re''al-secret'\n", shell.ShellBash, nil, unsafe); err == nil {
+		t.Fatal("broker text check missed a reassembled credential")
+	}
+	if err := validateMaskedShellSnapshot("export DROP='sk-dummy-value'\n", shell.ShellBash, nil, unsafe); err != nil {
+		t.Fatalf("clean snapshot rejected by the broker check: %v", err)
 	}
 }
 
@@ -279,7 +289,7 @@ func TestShellSnapshotReassembledCredentialFallsBackLikeRust(t *testing.T) {
 		Env: map[string]string{"TOKEN": "sk-dummy-value"},
 	}
 	pairs := []network.CredentialMaskPair{{Real: "sk-real-secret", Dummy: "sk-dummy-value"}}
-	rewritten, err := manager.rewrite(context.Background(), params, params.Env, pairs)
+	rewritten, err := manager.rewrite(context.Background(), params, params.Env, pairs, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,5 +304,38 @@ func TestShellSnapshotReassembledCredentialFallsBackLikeRust(t *testing.T) {
 	manager.mu.Unlock()
 	if cached != 0 {
 		t.Fatalf("rejected capture was cached: %d entries", cached)
+	}
+}
+
+// TestShellSnapshotBrokerTextCheckFallsBackLikeRust covers the executor's use
+// of the broker's own text check (Rust's proxy.virtualize_brokered_text): a
+// credential the broker recognizes by pattern, but which is not in the mask
+// pairs, still disqualifies the capture.
+func TestShellSnapshotBrokerTextCheckFallsBackLikeRust(t *testing.T) {
+	previous := shellSnapshotPlatformSupported
+	shellSnapshotPlatformSupported = true
+	t.Cleanup(func() { shellSnapshotPlatformSupported = previous })
+	manager := newShellSnapshotManager()
+	t.Cleanup(manager.close)
+	manager.capture = func(context.Context, []string, string, map[string]string) ([]byte, error) {
+		return []byte("# Snapshot file\nexport DROP=\"ghp_patterncredential\"\n\x00\x00\x00"), nil
+	}
+	params := &ExecParams{
+		ProcessID: "pattern-process",
+		Argv:      []string{"/bin/bash", "-lc", "echo ok"},
+		CWD:       "file:///repo",
+		ShellSnapshot: &ShellSnapshotRequest{
+			ScopeID: "attachment-1",
+			Shell:   ShellInfo{Name: "bash", Path: "/bin/bash"},
+		},
+		Env: map[string]string{"TOKEN": "sk-dummy-value"},
+	}
+	unsafe := func(text string) bool { return strings.Contains(text, "ghp_patterncredential") }
+	rewritten, err := manager.rewrite(context.Background(), params, params.Env, nil, unsafe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(rewritten.Argv[2], "Credential masking is unavailable") {
+		t.Fatalf("fallback script = %q", rewritten.Argv[2])
 	}
 }

@@ -78,7 +78,7 @@ type shellSnapshotFlight struct {
 	done chan struct{}
 }
 
-func (m *shellSnapshotManager) rewrite(ctx context.Context, params *ExecParams, captureEnv map[string]string, credentialPairs []network.CredentialMaskPair) (*ExecParams, error) {
+func (m *shellSnapshotManager) rewrite(ctx context.Context, params *ExecParams, captureEnv map[string]string, credentialPairs []network.CredentialMaskPair, credentialTextUnsafe func(string) bool) (*ExecParams, error) {
 	if m == nil || params == nil || params.ShellSnapshot == nil {
 		return params, nil
 	}
@@ -98,7 +98,7 @@ func (m *shellSnapshotManager) rewrite(ctx context.Context, params *ExecParams, 
 	if scriptIndex < 0 {
 		return nil, requestError(-32602, "shell snapshot requires a shell -c or -lc invocation")
 	}
-	entry, err := m.snapshotEntry(ctx, params, shellType, captureEnv, credentialPairs)
+	entry, err := m.snapshotEntry(ctx, params, shellType, captureEnv, credentialPairs, credentialTextUnsafe)
 	if err != nil {
 		rewritten := *params
 		rewritten.Argv = append([]string(nil), params.Argv...)
@@ -230,7 +230,7 @@ func shellSnapshotLaunchEnvExports(env map[string]string) string {
 	return exports.String()
 }
 
-func (m *shellSnapshotManager) snapshotEntry(ctx context.Context, params *ExecParams, shellType shell.ShellType, captureEnv map[string]string, credentialPairs []network.CredentialMaskPair) (*shellSnapshotEntry, error) {
+func (m *shellSnapshotManager) snapshotEntry(ctx context.Context, params *ExecParams, shellType shell.ShellType, captureEnv map[string]string, credentialPairs []network.CredentialMaskPair, credentialTextUnsafe func(string) bool) (*shellSnapshotEntry, error) {
 	key, err := shellSnapshotKey(params, shellType)
 	if err != nil {
 		return nil, err
@@ -272,7 +272,7 @@ func (m *shellSnapshotManager) snapshotEntry(ctx context.Context, params *ExecPa
 		m.inflight[key] = flight
 		m.mu.Unlock()
 
-		entry, captureErr := m.captureSnapshot(ctx, params, shellType, captureEnv, credentialPairs, key)
+		entry, captureErr := m.captureSnapshot(ctx, params, shellType, captureEnv, credentialPairs, credentialTextUnsafe, key)
 		m.mu.Lock()
 		delete(m.inflight, key)
 		close(flight.done)
@@ -328,22 +328,26 @@ func (m *shellSnapshotManager) forgetOrderLocked(key string) {
 // broker credential, either verbatim or reassembled by shell quoting. Rust
 // #54432 refuses such a replay script; the caller then restores the launch
 // environment and warns that credential masking is unavailable.
-func validateMaskedShellSnapshot(text string, shellType shell.ShellType, credentialPairs []network.CredentialMaskPair) error {
-	if len(credentialPairs) == 0 {
+func validateMaskedShellSnapshot(text string, shellType shell.ShellType, credentialPairs []network.CredentialMaskPair, credentialTextUnsafe func(string) bool) error {
+	if len(credentialPairs) == 0 && credentialTextUnsafe == nil {
 		return nil
 	}
-	if network.SnapshotTextContainsUnmaskedCredential(text, credentialPairs) {
+	containsCredential := func(value string) bool {
+		return network.SnapshotTextContainsUnmaskedCredential(value, credentialPairs) ||
+			(credentialTextUnsafe != nil && credentialTextUnsafe(value))
+	}
+	if containsCredential(text) {
 		return errors.New("shell snapshot capture retains a real credential")
 	}
 	for _, word := range shell.SnapshotLiteralWords(shellType, text) {
-		if network.SnapshotTextContainsUnmaskedCredential(word, credentialPairs) {
+		if containsCredential(word) {
 			return errors.New("shell snapshot capture reassembles a real credential")
 		}
 	}
 	return nil
 }
 
-func (m *shellSnapshotManager) captureSnapshot(ctx context.Context, params *ExecParams, shellType shell.ShellType, captureEnv map[string]string, credentialPairs []network.CredentialMaskPair, key string) (*shellSnapshotEntry, error) {
+func (m *shellSnapshotManager) captureSnapshot(ctx context.Context, params *ExecParams, shellType shell.ShellType, captureEnv map[string]string, credentialPairs []network.CredentialMaskPair, credentialTextUnsafe func(string) bool, key string) (*shellSnapshotEntry, error) {
 
 	ctx, captureSpan := startExecServerSpan(
 		ctx,
@@ -375,7 +379,7 @@ func (m *shellSnapshotManager) captureSnapshot(ctx context.Context, params *Exec
 		return nil, errors.New("invalid captured shell state")
 	}
 	rendered := network.MaskSnapshotText(captured.RenderScript(nil), credentialPairs)
-	if err := validateMaskedShellSnapshot(rendered, shellType, credentialPairs); err != nil {
+	if err := validateMaskedShellSnapshot(rendered, shellType, credentialPairs, credentialTextUnsafe); err != nil {
 		return nil, err
 	}
 	if err := validateShellSnapshotSizes(captured, rendered); err != nil {
