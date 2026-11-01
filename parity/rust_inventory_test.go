@@ -264,6 +264,7 @@ func goTopLevelDirectoriesSnapshot() []string {
 		"processhardening",
 		"prompt",
 		"protocol",
+		"ptyio",
 		"realtime",
 		"reasoningoverride",
 		"recordreplay",

@@ -19,7 +19,7 @@ const goldenPath = "testdata/oss-story-digest.json"
 func TestParseRustStoryRecording(t *testing.T) {
 	path, err := DefaultStoryRecordingPath()
 	if err != nil {
-		t.Fatalf("resolve Rust recording: %v", err)
+		t.Skipf("Rust story recording unavailable: %v", err)
 	}
 	events, err := Parse(path)
 	if err != nil {
@@ -253,7 +253,7 @@ func storyRecordingEvents(t *testing.T) ([]Event, error) {
 	t.Helper()
 	path, err := DefaultStoryRecordingPath()
 	if err != nil {
-		return nil, err
+		t.Skipf("Rust story recording unavailable: %v", err)
 	}
 	return Parse(path)
 }

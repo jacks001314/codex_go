@@ -8,6 +8,14 @@ import (
 	"time"
 )
 
+// retryDelayWithin accepts the elapsed time between capturing a deadline and
+// reading it back. Rust's RetryAfter stores an Instant and reports the remaining
+// delay, so an exact equality only holds on clocks with coarse resolution.
+func retryDelayWithin(got, want time.Duration) bool {
+	const slack = 100 * time.Millisecond
+	return got <= want && got >= want-slack
+}
+
 func TestAPIErrorSeparatesDetailsFromRetryDelay(t *testing.T) {
 	err := NewAPIErrorWithDetails(APIErrorDetails{
 		Kind:    ErrorStream,
@@ -18,7 +26,7 @@ func TestAPIErrorSeparatesDetailsFromRetryDelay(t *testing.T) {
 	if details := err.Details(); details.Kind != ErrorStream || details.Status != 503 || details.Message != "disconnected" {
 		t.Fatalf("Details() = %#v", details)
 	}
-	if got, ok := err.RequestedRetryDelay(); !ok || got != 17*time.Second {
+	if got, ok := err.RequestedRetryDelay(); !ok || !retryDelayWithin(got, 17*time.Second) {
 		t.Fatalf("RequestedRetryDelay() = %v, %t", got, ok)
 	}
 }
@@ -38,7 +46,7 @@ func TestRetryDelayTraversesWrappedErrorsAndSupportsAnyDetails(t *testing.T) {
 		Message: "busy",
 	}).WithRetryDelay(3 * time.Second)
 
-	if got := RetryDelay(fmt.Errorf("request failed: %w", err)); got != 3*time.Second {
+	if got := RetryDelay(fmt.Errorf("request failed: %w", err)); !retryDelayWithin(got, 3*time.Second) {
 		t.Fatalf("RetryDelay() = %v", got)
 	}
 }
@@ -53,7 +61,7 @@ func TestLegacyAPIErrorFieldsRemainCompatible(t *testing.T) {
 	if details := err.Details(); details.Kind != ErrorRetryable || details.Status != 429 || details.Message != "retry later" {
 		t.Fatalf("legacy Details() = %#v", details)
 	}
-	if got := RetryDelay(err); got != 2*time.Second {
+	if got := RetryDelay(err); !retryDelayWithin(got, 2*time.Second) {
 		t.Fatalf("legacy RetryDelay() = %v", got)
 	}
 }

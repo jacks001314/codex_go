@@ -14,7 +14,7 @@ import (
 // diagnostics briefly and then close the pipe instead of waiting for EOF, so the
 // shutdown succeeds and descriptors are released.
 func TestWaitMCPStdioCommandDrainsStderrWhenDescendantKeepsPipeOpen(t *testing.T) {
-	cmd := exec.Command("sh", "-c", "sh -c 'sleep 5' & echo queued-diagnostic; exit 0")
+	cmd := exec.Command("sh", "-c", "sh -c 'sleep 5' & echo queued-diagnostic >&2; exit 0")
 	buffer := &stdioOutputBuffer{}
 	cmd.Stderr = buffer
 	cmd.WaitDelay = mcpStdioStderrDrainGrace
