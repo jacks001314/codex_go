@@ -1466,6 +1466,30 @@ func TestBackgroundServerCheckReportsPersistentSettings(t *testing.T) {
 	}
 }
 
+func TestBackgroundServerCheckListsLegacyAndDedicatedPIDFilesLikeRust(t *testing.T) {
+	home := t.TempDir()
+	check := backgroundServerCheck(home)
+	stateDir := filepath.Join(home, appserverdaemon.StateDirName)
+	want := []string{
+		"settings: " + filepath.Join(stateDir, "settings.json") + " (missing)",
+		"pid file: " + filepath.Join(stateDir, "app-server.pid") + " (missing)",
+		"update-loop pid file: " + filepath.Join(stateDir, "app-server-updater.pid") + " (missing)",
+		"dedicated pid file: " + filepath.Join(stateDir, "daemon.pid") + " (missing)",
+		"dedicated update-loop pid file: " + filepath.Join(stateDir, "daemon-updater.pid") + " (missing)",
+	}
+	if check.Details[0] != "daemon state dir: "+stateDir {
+		t.Fatalf("detail 0 = %q, want the state dir", check.Details[0])
+	}
+	if len(check.Details) < len(want)+1 {
+		t.Fatalf("details = %#v", check.Details)
+	}
+	for index, expected := range want {
+		if check.Details[index+1] != expected {
+			t.Fatalf("detail %d = %q, want %q", index+1, check.Details[index+1], expected)
+		}
+	}
+}
+
 func TestBackgroundServerCheckReportsRunningVersion(t *testing.T) {
 	home := t.TempDir()
 	paths := appserverDaemonPathsForTest(home)

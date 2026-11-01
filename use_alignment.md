@@ -3340,7 +3340,31 @@ and decodable items kept Go's original spelling. The record is now decoded into
   `TestDesktopSecurityEvidenceIsBoundedClassifiedAndRedacted` and
   `TestDesktopSecuritySummariesMatchRust` cover the shape.
 
+### 99. `doctor` lists the legacy and dedicated app-server pid files
+
+- **Row set and order.** Rust's `background_server_check` prints the daemon
+  state dir, `settings`, the legacy `pid file` (`app-server.pid`), the legacy
+  `update-loop pid file` (`app-server-updater.pid`), the `dedicated pid file`
+  (`daemon.pid`), the `dedicated update-loop pid file`
+  (`daemon-updater.pid`), the configured updater, the control socket, `status`
+  and `mode`. Go printed only the two dedicated files and called them
+  `pid file`/`update-loop pid file`, so `codex app-server daemon`'s legacy
+  records never showed up in the report.
+- Evidence: the Background Server blocks of `out/r99-doctor-rust.txt` and
+  `out/r99-doctor-go.txt` are identical for the ephemeral case,
+  `out/r1304-doctor-full-diff.txt` no longer carries a pid-file row, and
+  `TestBackgroundServerCheckListsLegacyAndDedicatedPIDFilesLikeRust` pins the
+  five-file order.
+
 ## Verification
+
+- Round 87 lists the app-server pid files the way `background_server_check`
+  does (entry 99): the legacy `app-server.pid`/`app-server-updater.pid` rows
+  come before the `dedicated pid file`/`dedicated update-loop pid file` rows and
+  the Background Server blocks of `out/r99-doctor-rust.txt` and
+  `out/r99-doctor-go.txt` are identical; `go test -count=1 ./doctor
+  ./state ./cli` and `go vet ./doctor` pass and `./doctor` cross-compiles for
+  `GOOS=linux` and `GOOS=darwin`.
 
 - Round 86 renders the `doctor` Desktop App group from Rust's MSIX probe
   (entry 98): the packaged `OpenAI.Codex` version, the running state derived

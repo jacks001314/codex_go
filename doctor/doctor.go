@@ -3269,8 +3269,10 @@ func backgroundServerCheck(codexHome string) *DoctorCheck {
 	stateDir := filepath.Join(codexHome, appserverdaemon.StateDirName)
 	details := []string{"daemon state dir: " + stateDir}
 	pushDoctorFileDetail(&details, "settings", paths.SettingsFile)
-	pushDoctorFileDetail(&details, "pid file", paths.PIDFile)
-	pushDoctorFileDetail(&details, "update-loop pid file", paths.UpdatePIDFile)
+	pushDoctorFileDetail(&details, "pid file", filepath.Join(stateDir, appserverdaemon.LegacyPIDFileName))
+	pushDoctorFileDetail(&details, "update-loop pid file", filepath.Join(stateDir, appserverdaemon.LegacyUpdatePIDFileName))
+	pushDoctorFileDetail(&details, "dedicated pid file", filepath.Join(stateDir, appserverdaemon.PIDFileName))
+	pushDoctorFileDetail(&details, "dedicated update-loop pid file", filepath.Join(stateDir, appserverdaemon.UpdatePIDFileName))
 	pushConfiguredUpdaterDetails(&details, paths.SettingsFile)
 	details = append(details, "control socket: "+paths.SocketPath)
 	status := backgroundSocketStatusForPath(paths.SocketPath)
