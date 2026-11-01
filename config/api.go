@@ -1936,7 +1936,7 @@ type ConfigService struct {
 func NewConfigService(codexHome string) *ConfigService {
 	service := &ConfigService{codexHome: codexHome, externalAgentHome: defaultExternalAgentHome(), now: time.Now}
 	service.loadRequirementsFromHome()
-	service.loadManagedConfigLayerFromEnv()
+	service.loadManagedConfigLayerFromEnv(true)
 	service.captureLoginPolicyRequirements()
 	return service
 }
@@ -2099,10 +2099,29 @@ func (s *ConfigService) loadRequirementsFromHome() {
 	s.mu.Unlock()
 }
 
-func (s *ConfigService) loadManagedConfigLayerFromEnv() {
+func (s *ConfigService) loadManagedConfigLayerFromEnv(reset bool) {
 	if s == nil || strings.TrimSpace(s.codexHome) == "" {
 		return
 	}
+	layer, warning := s.managedConfigLayerFromEnv()
+	// Drop and rebuild under one lock: a concurrent read must never observe the
+	// window where the previous layer is gone and the new one is not added yet.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if reset {
+		s.managedLayers = nil
+	}
+	if warning != nil {
+		s.warnings = append(s.warnings, *warning)
+	}
+	if layer != nil {
+		s.managedLayers = append(s.managedLayers, *layer)
+	}
+}
+
+// managedConfigLayerFromEnv reads the app-server managed configuration without
+// touching service state, so callers can swap the layer in atomically.
+func (s *ConfigService) managedConfigLayerFromEnv() (*Layer, *ConfigWarningNotification) {
 	override, ok := os.LookupEnv(appServerManagedConfigPathEnv)
 	if !ok || strings.TrimSpace(override) == "" {
 		// Rust #38947: on Windows the default CODEX_HOME/managed_config.toml is
@@ -2115,42 +2134,34 @@ func (s *ConfigService) loadManagedConfigLayerFromEnv() {
 					"Ignoring deprecated managed config file at %s; CODEX_HOME/managed_config.toml is no longer supported on Windows. Use %%ProgramData%%\\OpenAI\\Codex\\requirements.toml for enforced settings or config.toml for defaults.",
 					deprecated,
 				)
-				s.mu.Lock()
-				s.warnings = append(s.warnings, ConfigWarningNotification{
+				return nil, &ConfigWarningNotification{
 					Summary: "Ignoring deprecated managed config file.",
 					Details: &details,
 					Path:    &deprecated,
-				})
-				s.mu.Unlock()
+				}
 			}
 		}
-		return
+		return nil, nil
 	}
 	path := managedConfigPath(s.codexHome, override)
 	values, exists, err := loadConfigFileIfExists(path)
 	if err != nil {
 		details := err.Error()
-		s.mu.Lock()
-		s.warnings = append(s.warnings, ConfigWarningNotification{
+		return nil, &ConfigWarningNotification{
 			Summary: "Invalid managed configuration; ignoring.",
 			Details: &details,
 			Path:    &path,
-		})
-		s.mu.Unlock()
-		return
+		}
 	}
 	if !exists {
-		return
+		return nil, nil
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.managedLayers = append(s.managedLayers, Layer{
+	return &Layer{
 		Name:    LayerSource{Type: LayerSourceLegacyManagedConfigFromFile, File: path},
 		Version: configVersion(values),
 		Config:  cloneMap(values),
-	})
+	}, nil
 }
-
 func (s *ConfigService) SetWarnings(warnings []ConfigWarningNotification) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2208,10 +2219,7 @@ func (s *ConfigService) refreshManagedConfigFromFiles() {
 	if managedLayersOverride {
 		return
 	}
-	s.mu.Lock()
-	s.managedLayers = nil
-	s.mu.Unlock()
-	s.loadManagedConfigLayerFromEnv()
+	s.loadManagedConfigLayerFromEnv(true)
 }
 
 // applyCloudConfigBundle merges the loader's latest enterprise-managed values
