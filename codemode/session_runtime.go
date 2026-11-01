@@ -172,10 +172,10 @@ func (r *SessionRuntime) Wait(ctx context.Context, request *WaitRequest, preempt
 	if strings.TrimSpace(cellID) == "" {
 		return nil, fmt.Errorf("cell_id is required")
 	}
+	// WaitRequest.yield_time_ms carries no default (Rust's protocol type is a
+	// plain u64), so an explicit zero observes the cell immediately; only the
+	// tool argument layer supplies the 10 000 ms default.
 	deadline := time.Duration(request.YieldTimeMS) * time.Millisecond
-	if request.YieldTimeMS == 0 {
-		deadline = time.Duration(ProtocolDefaultWaitYieldTimeMS) * time.Millisecond
-	}
 	if cell, ok := r.cells.Get(cellID); ok && cell.Status != CellRunning {
 		outcome := LiveCell(withHostDuration(r.responseForCell(cell, r.cells.Now(), request.MaxOutputTokens), startedAt))
 		return &outcome, nil

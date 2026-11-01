@@ -382,8 +382,11 @@ type codeModeExecOptions struct {
 }
 
 type codeModeWaitParams struct {
-	CellID      string `json:"cell_id"`
-	YieldTimeMS int    `json:"yield_time_ms,omitempty"`
+	CellID string `json:"cell_id"`
+	// YieldTimeMS is optional so an explicit zero stays distinct from an
+	// omitted one (Rust's ExecWaitArgs.yield_time_ms applies its 10 000 ms
+	// default only through serde's `default`).
+	YieldTimeMS *int `json:"yield_time_ms,omitempty"`
 	// MaxTokens is optional so an explicit zero budget stays distinct from an
 	// omitted one (Rust's ExecWaitArgs.max_tokens: Option<usize>).
 	MaxTokens *int `json:"max_tokens,omitempty"`
@@ -1937,6 +1940,16 @@ func codeModeHostObservation(invocation *Invocation) bool {
 	return flag
 }
 
+// codeModeWaitYield applies Rust's ExecWaitArgs default: the 10 000 ms wait
+// only applies when the field is absent, so an explicit zero polls the cell
+// without blocking.
+func codeModeWaitYield(value *int) int {
+	if value == nil {
+		return 10000
+	}
+	return *value
+}
+
 func codeModeTokenLimit(value *int) int {
 	if value == nil {
 		return 10000
@@ -2336,6 +2349,9 @@ func (e *codeModeWaitExecutor) execute(ctx context.Context, invocation *Invocati
 	if params.MaxTokens != nil && *params.MaxTokens < 0 {
 		return nil, RespondToModel("max_tokens must be non-negative")
 	}
+	if params.YieldTimeMS != nil && *params.YieldTimeMS < 0 {
+		return nil, RespondToModel("yield_time_ms must be non-negative")
+	}
 	if e.exec.remote != nil {
 		var response CodeModeRemoteResponse
 		var remoteErr error
@@ -2344,11 +2360,7 @@ func (e *codeModeWaitExecutor) execute(ctx context.Context, invocation *Invocati
 		if params.Terminate {
 			response, remoteErr = e.exec.remote.Terminate(ctx, params.CellID, budget)
 		} else {
-			waitMS := params.YieldTimeMS
-			if waitMS <= 0 {
-				waitMS = 10000
-			}
-			response, remoteErr = e.exec.remote.Wait(ctx, params.CellID, uint64(waitMS), budget, YieldSignalFromInvocation(invocation))
+			response, remoteErr = e.exec.remote.Wait(ctx, params.CellID, uint64(codeModeWaitYield(params.YieldTimeMS)), budget, YieldSignalFromInvocation(invocation))
 		}
 		if remoteErr == nil {
 			if response.State != "yielded" {
@@ -2382,11 +2394,7 @@ func (e *codeModeWaitExecutor) execute(ctx context.Context, invocation *Invocati
 		e.exec.cellsMu.Unlock()
 		cell.cancel()
 	}
-	waitMS := params.YieldTimeMS
-	if waitMS <= 0 {
-		waitMS = 10000
-	}
-	timer := time.NewTimer(time.Duration(waitMS) * time.Millisecond)
+	timer := time.NewTimer(time.Duration(codeModeWaitYield(params.YieldTimeMS)) * time.Millisecond)
 	defer timer.Stop()
 	preempt := YieldSignalFromInvocation(invocation)
 	runningOutput := func() (*Output, error) {
