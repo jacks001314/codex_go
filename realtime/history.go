@@ -639,11 +639,14 @@ func (s *RealtimeHistoryState) ActiveSessionID() string {
 
 // StartSession opens a new canonical session, sealing any previous segments.
 func (s *RealtimeHistoryState) StartSession(sessionID string) RealtimeEventEffects {
-	if s == nil || sessionID == "" || s.activeSessionID == sessionID {
+	if s == nil || sessionID == "" {
 		return RealtimeEventEffects{}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.activeSessionID == sessionID {
+		return RealtimeEventEffects{}
+	}
 	var items []RealtimeItem
 	s.sealSegments(&items, false)
 	s.activeSessionID = sessionID
@@ -707,11 +710,14 @@ func (s *RealtimeHistoryState) ClearActiveTurn(turnID string) {
 
 // NoteHandoffRequested queues the active session for the next turn.
 func (s *RealtimeHistoryState) NoteHandoffRequested() {
-	if s == nil || s.activeSessionID == "" {
+	if s == nil {
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.activeSessionID == "" {
+		return
+	}
 	s.pendingHandoffs = append(s.pendingHandoffs, s.activeSessionID)
 }
 
@@ -750,11 +756,14 @@ func (s *RealtimeHistoryState) TranscriptDone(role RealtimeTranscriptRole, text 
 
 // SessionClosed seals the session and appends the closing item.
 func (s *RealtimeHistoryState) SessionClosed() RealtimeEventEffects {
-	if s == nil || s.activeSessionID == "" {
+	if s == nil {
 		return RealtimeEventEffects{}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.activeSessionID == "" {
+		return RealtimeEventEffects{}
+	}
 	sessionID := s.activeSessionID
 	s.activeSessionID = ""
 	var items []RealtimeItem
@@ -808,11 +817,14 @@ func (s *RealtimeHistoryState) StreamAgentMessageDelta(turnID, itemID, delta str
 // FinishStreamingAgentMessage clears the streaming buffer when its item
 // completes.
 func (s *RealtimeHistoryState) FinishStreamingAgentMessage(itemID string) {
-	if s == nil || s.streamingAgent == nil {
+	if s == nil {
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.streamingAgent == nil {
+		return
+	}
 	if s.streamingAgent.itemID == itemID {
 		s.streamingAgent = nil
 	}
@@ -835,11 +847,14 @@ func (s *RealtimeHistoryState) PromoteAgentItem(turnID, itemID string, presentat
 // SealUserInput seals the live segments before a new user message enters the
 // timeline.
 func (s *RealtimeHistoryState) SealUserInput() RealtimeEventEffects {
-	if s == nil || !s.shouldSealUserInput() {
+	if s == nil {
 		return RealtimeEventEffects{}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !s.shouldSealUserInputLocked() {
+		return RealtimeEventEffects{}
+	}
 	var items []RealtimeItem
 	s.sealSegments(&items, true)
 	return RealtimeEventEffects{Order: RealtimeOrderBeforeEvent, Items: items}
@@ -849,11 +864,14 @@ func (s *RealtimeHistoryState) SealUserInput() RealtimeEventEffects {
 // enters the timeline, skipping realtime handoff delegations the way Rust's
 // `should_seal_user_input` does.
 func (s *RealtimeHistoryState) SealUserInputForPrompt(prompt string) RealtimeEventEffects {
-	if s == nil || !s.shouldSealUserInput() {
+	if s == nil {
 		return RealtimeEventEffects{}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !s.shouldSealUserInputLocked() {
+		return RealtimeEventEffects{}
+	}
 	trimmed := strings.TrimSpace(prompt)
 	if strings.HasPrefix(trimmed, "<realtime_delegation>") && strings.HasSuffix(trimmed, "</realtime_delegation>") {
 		return RealtimeEventEffects{}
@@ -863,7 +881,9 @@ func (s *RealtimeHistoryState) SealUserInputForPrompt(prompt string) RealtimeEve
 	return RealtimeEventEffects{Order: RealtimeOrderBeforeEvent, Items: items}
 }
 
-func (s *RealtimeHistoryState) shouldSealUserInput() bool {
+// shouldSealUserInputLocked reports whether live segments need sealing. Callers
+// must hold s.mu.
+func (s *RealtimeHistoryState) shouldSealUserInputLocked() bool {
 	if s.activeSessionID == "" {
 		return false
 	}

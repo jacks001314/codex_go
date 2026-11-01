@@ -15389,12 +15389,32 @@ func (r *RuntimeRouter) handleCommandExecResize(request *Request) (*CommandExecR
 	return r.requireCommandExec().ResizeWithConnection(request.normalizedConnectionID(), &params)
 }
 
-func (r *RuntimeRouter) requireFS() *FSService {
-	if r.services.FS == nil {
-		r.services.FS = NewFSService()
+// requireServiceSlot publishes the singleton service kept in slot. Several
+// request paths lazily create the same runtime service; Rust builds these once
+// per session, so the Go fallback has to hand every caller the same instance
+// without letting a first-use write race a concurrent read. The slot is read and
+// published under servicesMu while construction itself runs unlocked, because
+// builders may touch other runtime services.
+func requireServiceSlot[T any](r *RuntimeRouter, slot **T, build func() *T) *T {
+	r.servicesMu.Lock()
+	existing := *slot
+	r.servicesMu.Unlock()
+	if existing != nil {
+		return existing
 	}
+	built := build()
+	r.servicesMu.Lock()
+	defer r.servicesMu.Unlock()
+	if *slot == nil {
+		*slot = built
+	}
+	return *slot
+}
+
+func (r *RuntimeRouter) requireFS() *FSService {
+	service := requireServiceSlot(r, &r.services.FS, func() *FSService { return NewFSService() })
 	r.configureFSChangedCallback()
-	return r.services.FS
+	return service
 }
 
 func (r *RuntimeRouter) localFS() (*FSService, error) {
@@ -15451,17 +15471,11 @@ func (r *RuntimeRouter) requireThreadExtras() *ThreadExtraService {
 }
 
 func (r *RuntimeRouter) requireRealtime() *realtime.Manager {
-	if r.services.Realtime == nil {
-		r.services.Realtime = realtime.NewManager()
-	}
-	return r.services.Realtime
+	return requireServiceSlot(r, &r.services.Realtime, func() *realtime.Manager { return realtime.NewManager() })
 }
 
 func (r *RuntimeRouter) requireRemote() *remotecontrol.Manager {
-	if r.services.Remote == nil {
-		r.services.Remote = remotecontrol.NewManager("codex", "")
-	}
-	return r.services.Remote
+	return requireServiceSlot(r, &r.services.Remote, func() *remotecontrol.Manager { return remotecontrol.NewManager("codex", "") })
 }
 
 // remoteControlContext returns the operation context shared by remote-control
@@ -15484,17 +15498,15 @@ func (r *RuntimeRouter) CancelRemoteControlOperations() {
 }
 
 func (r *RuntimeRouter) requireEnvironment() *EnvironmentManager {
-	if r.services.Environment == nil {
-		r.services.Environment = NewEnvironmentManager(EnvironmentShellInfo{Name: "sh", Path: "sh"}, "")
-	}
-	return r.services.Environment
+	return requireServiceSlot(r, &r.services.Environment, func() *EnvironmentManager {
+		return NewEnvironmentManager(EnvironmentShellInfo{Name: "sh", Path: "sh"}, "")
+	})
 }
 
 func (r *RuntimeRouter) requireWindows() *sandbox.WindowsManager {
-	if r.services.Windows == nil {
-		r.services.Windows = sandbox.NewWindowsManager(sandbox.WindowsReadinessNotConfigured)
-	}
-	return r.services.Windows
+	return requireServiceSlot(r, &r.services.Windows, func() *sandbox.WindowsManager {
+		return sandbox.NewWindowsManager(sandbox.WindowsReadinessNotConfigured)
+	})
 }
 
 func (r *RuntimeRouter) requireConfig() *config.ConfigService {
@@ -15505,17 +15517,11 @@ func (r *RuntimeRouter) requireConfig() *config.ConfigService {
 }
 
 func (r *RuntimeRouter) requireAccount() *auth.AccountManager {
-	if r.services.Account == nil {
-		r.services.Account = auth.NewAccountManager()
-	}
-	return r.services.Account
+	return requireServiceSlot(r, &r.services.Account, func() *auth.AccountManager { return auth.NewAccountManager() })
 }
 
 func (r *RuntimeRouter) requireHooks() *HookRegistry {
-	if r.services.Hooks == nil {
-		r.services.Hooks = NewHookRegistry()
-	}
-	return r.services.Hooks
+	return requireServiceSlot(r, &r.services.Hooks, func() *HookRegistry { return NewHookRegistry() })
 }
 
 func (r *RuntimeRouter) requireHooksDiscovery() *HookDiscoveryService {
@@ -15663,28 +15669,27 @@ func (r *RuntimeRouter) requireHookRunner() *HookRunner {
 }
 
 func (r *RuntimeRouter) requireSkills() *SkillsService {
-	if r.services.Skills == nil {
+	return requireServiceSlot(r, &r.services.Skills, func() *SkillsService {
 		options := &SkillsServiceOptions{}
 		if r.services.Config != nil {
 			options.Config = r.services.Config
 			options.CodexHome = r.services.Config.CodexHome()
 			options.IncludeDefaultRoots = strings.TrimSpace(options.CodexHome) != ""
 		}
-		r.services.Skills = NewSkillsServiceWithOptions(options)
-	}
-	return r.services.Skills
+		return NewSkillsServiceWithOptions(options)
+	})
 }
 
 func (r *RuntimeRouter) requirePlugins() *plugin.PluginService {
-	if r.services.Plugins == nil {
+	service := requireServiceSlot(r, &r.services.Plugins, func() *plugin.PluginService {
 		service := plugin.NewPluginService()
 		if r.services.Config != nil {
 			service.SetCodexHome(r.services.Config.CodexHome())
 		}
-		r.services.Plugins = service
-	}
+		return service
+	})
 	r.configurePluginMarketplacePolicy()
-	return r.services.Plugins
+	return service
 }
 
 // applyPluginMarketplacePolicy snapshots managed marketplace requirements and
@@ -15714,32 +15719,25 @@ func (r *RuntimeRouter) configurePluginMarketplacePolicy() {
 }
 
 func (r *RuntimeRouter) requireModels() *model.ModelService {
-	if r.services.Models == nil {
-		r.services.Models = model.NewModelService(nil)
-	}
-	return r.services.Models
+	return requireServiceSlot(r, &r.services.Models, func() *model.ModelService { return model.NewModelService(nil) })
 }
 
 func (r *RuntimeRouter) requirePermissions() *sandbox.PermissionProfileService {
-	if r.services.Permissions == nil {
-		r.services.Permissions = sandbox.NewPermissionProfileService(nil)
-	}
-	return r.services.Permissions
+	return requireServiceSlot(r, &r.services.Permissions, func() *sandbox.PermissionProfileService {
+		return sandbox.NewPermissionProfileService(nil)
+	})
 }
 
 func (r *RuntimeRouter) requireCollaboration() *CollaborationModeService {
-	if r.services.Collaboration == nil {
-		r.services.Collaboration = NewCollaborationModeService(nil)
-	}
-	return r.services.Collaboration
+	return requireServiceSlot(r, &r.services.Collaboration, func() *CollaborationModeService {
+		return NewCollaborationModeService(nil)
+	})
 }
 
 func (r *RuntimeRouter) requireMCP() *mcp.MCPService {
-	if r.services.MCP == nil {
-		r.services.MCP = mcp.NewMCPService(nil)
-	}
-	r.configureMCPService(r.services.MCP)
-	return r.services.MCP
+	service := requireServiceSlot(r, &r.services.MCP, func() *mcp.MCPService { return mcp.NewMCPService(nil) })
+	r.configureMCPService(service)
+	return service
 }
 
 func (r *RuntimeRouter) configureMCPService(service *mcp.MCPService) {
@@ -16631,24 +16629,17 @@ func normalizedMCPRootPaths(r *RuntimeRouter, values []string) []string {
 }
 
 func (r *RuntimeRouter) requireFeatures() *features.FeatureService {
-	if r.services.Features == nil {
-		r.services.Features = features.NewFeatureService(nil)
-	}
-	return r.services.Features
+	return requireServiceSlot(r, &r.services.Features, func() *features.FeatureService {
+		return features.NewFeatureService(nil)
+	})
 }
 
 func (r *RuntimeRouter) requireApps() *apps.AppService {
-	if r.services.Apps == nil {
-		r.services.Apps = apps.NewAppService(nil)
-	}
-	return r.services.Apps
+	return requireServiceSlot(r, &r.services.Apps, func() *apps.AppService { return apps.NewAppService(nil) })
 }
 
 func (r *RuntimeRouter) requireTurns() *turn.TurnService {
-	if r.services.Turns == nil {
-		r.services.Turns = turn.NewTurnService()
-	}
-	return r.services.Turns
+	return requireServiceSlot(r, &r.services.Turns, func() *turn.TurnService { return turn.NewTurnService() })
 }
 
 func (r *RuntimeRouter) requireSteerMailbox() *turn.SteerMailbox {
@@ -20853,49 +20844,36 @@ func (r *RuntimeRouter) requireThreadStatus() *ThreadStatusManager {
 }
 
 func (r *RuntimeRouter) requireReviews() *review.Service {
-	if r.services.Reviews == nil {
-		r.services.Reviews = review.NewService()
-	}
-	return r.services.Reviews
+	return requireServiceSlot(r, &r.services.Reviews, func() *review.Service { return review.NewService() })
 }
 
 func (r *RuntimeRouter) requireMisc() *MiscService {
-	if r.services.Misc == nil {
-		r.services.Misc = NewMiscService()
-	}
-	return r.services.Misc
+	return requireServiceSlot(r, &r.services.Misc, func() *MiscService { return NewMiscService() })
 }
 
 func (r *RuntimeRouter) requireCommandExec() *CommandExecService {
-	if r.services.CommandExec == nil {
-		r.services.CommandExec = NewCommandExecService()
-	}
-	return r.services.CommandExec
+	return requireServiceSlot(r, &r.services.CommandExec, func() *CommandExecService { return NewCommandExecService() })
 }
 
 func (r *RuntimeRouter) requireProcesses() *ProcessService {
-	if r.services.Processes == nil {
-		r.services.Processes = NewProcessService()
-	}
-	return r.services.Processes
+	return requireServiceSlot(r, &r.services.Processes, func() *ProcessService { return NewProcessService() })
 }
 
 func (r *RuntimeRouter) requireServerRequests() *ServerRequestBroker {
-	if r.services.ServerRequests == nil {
-		r.services.ServerRequests = NewServerRequestBroker()
-		r.services.ServerRequests.SetSink(r.requests)
-		r.services.ServerRequests.SetResolvedCallback(r.notifyServerRequestResolved)
-		r.services.ServerRequests.SetResolvedResponseCallback(r.handleServerRequestResolvedResponse)
-		r.services.ServerRequests.SetVerificationAuth(r.verificationAuthRevisionSnapshot)
-	}
-	return r.services.ServerRequests
+	service := requireServiceSlot(r, &r.services.ServerRequests, func() *ServerRequestBroker {
+		return NewServerRequestBroker()
+	})
+	service.SetSink(r.requests)
+	service.SetResolvedCallback(r.notifyServerRequestResolved)
+	service.SetResolvedResponseCallback(r.handleServerRequestResolvedResponse)
+	service.SetVerificationAuth(r.verificationAuthRevisionSnapshot)
+	return service
 }
 
 func (r *RuntimeRouter) requireFeedback() *FeedbackSnapshot {
-	if r.services.Feedback == nil {
-		r.services.Feedback = &FeedbackSnapshot{Diagnostics: NewFeedbackDiagnostics(nil)}
-	}
-	return r.services.Feedback
+	return requireServiceSlot(r, &r.services.Feedback, func() *FeedbackSnapshot {
+		return &FeedbackSnapshot{Diagnostics: NewFeedbackDiagnostics(nil)}
+	})
 }
 
 // feedbackSnapshotForRequest clones the host snapshot so concurrent uploads and
