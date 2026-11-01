@@ -2,9 +2,11 @@ package parity
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -40,6 +42,7 @@ func rustTopLevelDirectories(t *testing.T, root string) []string {
 func goTopLevelDirectories(t *testing.T, root string) []string {
 	t.Helper()
 	dirs := collectTopLevelDirectories(t, root)
+	tracked := gitTrackedTopLevelNames(t, root)
 	ignored := map[string]bool{
 		"bin":          true,
 		"cmd":          true,
@@ -58,9 +61,37 @@ func goTopLevelDirectories(t *testing.T, root string) []string {
 		if dir[0] == '.' || ignored[dir] {
 			continue
 		}
+		// Untracked scratch directories (local dumps, attachment stores) are
+		// not part of the module layout the snapshot pins, so a dirty working
+		// tree must not look like layout drift.
+		if tracked != nil && !tracked[dir] {
+			continue
+		}
 		packages = append(packages, dir)
 	}
 	return packages
+}
+
+// gitTrackedTopLevelNames returns the top-level path components git tracks
+// under root, or nil when git is unavailable or root is not a repository.
+func gitTrackedTopLevelNames(t *testing.T, root string) map[string]bool {
+	t.Helper()
+	out, err := exec.Command("git", "-C", root, "ls-files", "-z").Output()
+	if err != nil {
+		return nil
+	}
+	names := make(map[string]bool)
+	for _, path := range strings.Split(string(out), "\x00") {
+		if path == "" {
+			continue
+		}
+		if idx := strings.IndexByte(path, '/'); idx > 0 {
+			names[path[:idx]] = true
+			continue
+		}
+		names[path] = true
+	}
+	return names
 }
 
 func collectTopLevelDirectories(t *testing.T, root string) []string {
