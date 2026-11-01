@@ -1919,6 +1919,11 @@ type ConfigService struct {
 	// managedLayersOverride records a host-installed managed layer stack; a
 	// file refresh must not replace it (Rust #57175).
 	managedLayersOverride bool
+	// managedReloadMu serializes managed-file reloads. A reload reads the file
+	// outside s.mu to keep IO off the read path, so without this lock two
+	// reloads could publish out of order and a slower reload could replace a
+	// newer file state with an older one.
+	managedReloadMu sync.Mutex
 	// cloudConfigLoader supplies the latest config-server bundle on each read
 	// (Rust ConfigManager::current_managed_config_loader).
 	cloudConfigLoader *CloudConfigLoader
@@ -2204,6 +2209,8 @@ func (s *ConfigService) refreshManagedConfigFromFiles() {
 	if s == nil {
 		return
 	}
+	s.managedReloadMu.Lock()
+	defer s.managedReloadMu.Unlock()
 	if err := s.ReloadRequirementsFromHome(); err != nil {
 		details := err.Error()
 		path := filepath.Join(s.CodexHome(), "requirements.toml")
