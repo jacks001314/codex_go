@@ -100,10 +100,12 @@ func (s *realtimeTransportSession) closeNow() {
 	if s == nil {
 		return
 	}
-	s.cancel()
-	if s.conn != nil {
-		s.conn.CloseNow()
-	}
+	s.closeOnce.Do(func() {
+		s.cancel()
+		if s.conn != nil {
+			s.conn.CloseNow()
+		}
+	})
 }
 
 // realtimeTransportCloseTimeout bounds how long a detached observer may spend
@@ -118,13 +120,16 @@ func (s *realtimeTransportSession) closeTransport() {
 	if s == nil {
 		return
 	}
-	if s.conn != nil {
-		// coder/websocket bounds the close handshake internally; the timeout
-		// above documents the budget Rust applies around the same call.
-		_ = s.conn.Close(websocket.StatusNormalClosure, "")
-		s.conn = nil
-	}
-	s.cancel()
+	s.closeOnce.Do(func() {
+		if s.conn != nil {
+			// coder/websocket bounds the close handshake internally; the timeout
+			// above documents the budget Rust applies around the same call. The
+			// connection stays readable for the transport reader, so closing
+			// never clears it while another goroutine may read it.
+			_ = s.conn.Close(websocket.StatusNormalClosure, "")
+		}
+		s.cancel()
+	})
 }
 
 func (m *Manager) SetTransportBackend(config *TransportBackendConfig) {

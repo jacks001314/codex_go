@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"unicode"
 
 	"github.com/google/uuid"
@@ -579,6 +580,8 @@ type streamingAgentMessage struct {
 // RealtimeHistoryState retains only live session state. Durable history is
 // served by the rollout index.
 type RealtimeHistoryState struct {
+	mu sync.Mutex
+
 	activeSessionID string
 	segments        activeTranscriptSegments
 	streamingAgent  *streamingAgentMessage
@@ -595,6 +598,8 @@ func (s *RealtimeHistoryState) SetIDGenerator(generator func() string) {
 	if s == nil {
 		return
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.newID = generator
 }
 
@@ -627,6 +632,8 @@ func (s *RealtimeHistoryState) ActiveSessionID() string {
 	if s == nil {
 		return ""
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.activeSessionID
 }
 
@@ -635,6 +642,8 @@ func (s *RealtimeHistoryState) StartSession(sessionID string) RealtimeEventEffec
 	if s == nil || sessionID == "" || s.activeSessionID == sessionID {
 		return RealtimeEventEffects{}
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	var items []RealtimeItem
 	s.sealSegments(&items, false)
 	s.activeSessionID = sessionID
@@ -656,6 +665,8 @@ func (s *RealtimeHistoryState) BindTurnSession(turnID string) {
 	if s == nil || turnID == "" {
 		return
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	sessionID := ""
 	if len(s.pendingHandoffs) > 0 {
 		sessionID = s.pendingHandoffs[0]
@@ -677,6 +688,8 @@ func (s *RealtimeHistoryState) SetActiveTurn(turnID string) {
 	if s == nil {
 		return
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.activeTurnID = turnID
 }
 
@@ -685,6 +698,8 @@ func (s *RealtimeHistoryState) ClearActiveTurn(turnID string) {
 	if s == nil {
 		return
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if turnID == "" || s.activeTurnID == turnID {
 		s.activeTurnID = ""
 	}
@@ -695,6 +710,8 @@ func (s *RealtimeHistoryState) NoteHandoffRequested() {
 	if s == nil || s.activeSessionID == "" {
 		return
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.pendingHandoffs = append(s.pendingHandoffs, s.activeSessionID)
 }
 
@@ -704,6 +721,8 @@ func (s *RealtimeHistoryState) MarkFailed() {
 	if s == nil {
 		return
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.failed = true
 }
 
@@ -712,6 +731,8 @@ func (s *RealtimeHistoryState) TranscriptDelta(role RealtimeTranscriptRole, delt
 	if s == nil {
 		return RealtimeEventEffects{}
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return RealtimeEventEffects{TranscriptStream: s.addDelta(role, delta)}
 }
 
@@ -720,6 +741,8 @@ func (s *RealtimeHistoryState) TranscriptDone(role RealtimeTranscriptRole, text 
 	if s == nil {
 		return RealtimeEventEffects{}
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	var items []RealtimeItem
 	stream := s.finishSegment(&items, role, text)
 	return RealtimeEventEffects{Items: items, TranscriptStream: stream}
@@ -730,6 +753,8 @@ func (s *RealtimeHistoryState) SessionClosed() RealtimeEventEffects {
 	if s == nil || s.activeSessionID == "" {
 		return RealtimeEventEffects{}
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	sessionID := s.activeSessionID
 	s.activeSessionID = ""
 	var items []RealtimeItem
@@ -753,6 +778,8 @@ func (s *RealtimeHistoryState) ObserveAgentItem(turnID, itemID, text string, com
 	if s == nil {
 		return RealtimeEventEffects{}
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if !completed {
 		s.streamingAgent = &streamingAgentMessage{itemID: itemID, text: text}
 	}
@@ -767,6 +794,8 @@ func (s *RealtimeHistoryState) StreamAgentMessageDelta(turnID, itemID, delta str
 	if s == nil {
 		return RealtimeEventEffects{}
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.streamingAgent == nil || s.streamingAgent.itemID != itemID {
 		s.streamingAgent = &streamingAgentMessage{itemID: itemID}
 	}
@@ -782,6 +811,8 @@ func (s *RealtimeHistoryState) FinishStreamingAgentMessage(itemID string) {
 	if s == nil || s.streamingAgent == nil {
 		return
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.streamingAgent.itemID == itemID {
 		s.streamingAgent = nil
 	}
@@ -794,6 +825,8 @@ func (s *RealtimeHistoryState) PromoteAgentItem(turnID, itemID string, presentat
 	if s == nil {
 		return RealtimeEventEffects{}
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	var items []RealtimeItem
 	s.addPromotion(&items, turnID, itemID, presentation)
 	return RealtimeEventEffects{Items: items}
@@ -805,6 +838,8 @@ func (s *RealtimeHistoryState) SealUserInput() RealtimeEventEffects {
 	if s == nil || !s.shouldSealUserInput() {
 		return RealtimeEventEffects{}
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	var items []RealtimeItem
 	s.sealSegments(&items, true)
 	return RealtimeEventEffects{Order: RealtimeOrderBeforeEvent, Items: items}
@@ -817,6 +852,8 @@ func (s *RealtimeHistoryState) SealUserInputForPrompt(prompt string) RealtimeEve
 	if s == nil || !s.shouldSealUserInput() {
 		return RealtimeEventEffects{}
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	trimmed := strings.TrimSpace(prompt)
 	if strings.HasPrefix(trimmed, "<realtime_delegation>") && strings.HasSuffix(trimmed, "</realtime_delegation>") {
 		return RealtimeEventEffects{}

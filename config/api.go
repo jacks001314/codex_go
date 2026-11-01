@@ -2792,6 +2792,7 @@ func orderedMCPTable(value any) *OrderedTable {
 		return nil
 	}
 }
+
 // editsReplaceOnlyMCPTables reports whether a batch only rewrites the
 // mcp_servers table with a replace merge, the edit shape `codex mcp add` and
 // `codex mcp remove` issue.
@@ -3026,7 +3027,7 @@ func credentialProviderSourceOverride(read *ConfigReadResponse, keyPath string, 
 }
 
 func (s *ConfigService) readLayers(userLayer Layer) []Layer {
-	managed := cloneLayers(s.managedLayers)
+	managed := s.managedLayersForRead()
 	packagedDefaults := s.packagedDefaultsLayerForRead()
 	layers := make([]Layer, 0, 1+len(managed))
 	if packagedDefaults != nil {
