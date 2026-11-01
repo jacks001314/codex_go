@@ -2957,7 +2957,7 @@ func TestRenderHumanFeatureFlagsRespectAllLikeRust(t *testing.T) {
 
 	compact := RenderHuman(report, &Options{ASCII: true})
 	for _, want := range []string{
-		"feature flags            9 enabled | 2 overridden (full list with --all)",
+		"feature flags            9 enabled \u00b7 2 overridden (full list with --all)",
 		"overrides                beta, gamma",
 	} {
 		if !strings.Contains(compact, want) {
@@ -2974,6 +2974,59 @@ func TestRenderHumanFeatureFlagsRespectAllLikeRust(t *testing.T) {
 	}
 	if !strings.Contains(expanded, "enabled flags") || !strings.Contains(expanded, "alpha, beta, gamma, delta, epsilon, zeta, eta, theta, iota") {
 		t.Fatalf("--all output missing enabled flags list:\n%s", expanded)
+	}
+}
+
+// TestRenderHumanConfigDetailsMatchRustLikeRust covers Rust doctor/detail.rs
+// config_details: the model row joins its provider, the config.toml and MCP
+// rows precede the feature flags, and the path rows Rust only parses stay
+// hidden.
+func TestRenderHumanConfigDetailsMatchRustLikeRust(t *testing.T) {
+	report := &Report{
+		SchemaVersion: 1,
+		CodexVersion:  "test",
+		OverallStatus: CheckStatusOK,
+		Checks: []*DoctorCheck{
+			NewCheck("config.load", "config", CheckStatusOK, "config loaded").
+				Detail("configuration scope: invocation config, including cloud-managed policy").
+				Detail("active thread overrides: not inspected").
+				Detail("GCODE_HOME: /home/u").
+				Detail("cwd: /repo").
+				Detail("model: gpt-6.1-sol").
+				Detail("model provider: openai").
+				Detail("configured TUI mode: fullscreen").
+				Detail("log dir: /home/u/log").
+				Detail("sqlite home: /home/u").
+				Detail("mcp servers: 2").
+				Detail("feature flags enabled: 3").
+				Detail("enabled feature flags: alpha, beta, gamma").
+				Detail("feature flag overrides: none").
+				Detail("config.toml: /home/u/config.toml").
+				Detail("config.toml parse: ok").
+				Detail("configuration load ms: 6"),
+		},
+	}
+
+	rendered := RenderHuman(report, &Options{ASCII: true})
+	for _, want := range []string{
+		"      model                    gpt-6.1-sol \u00b7 openai",
+		"      MCP servers              2",
+		"feature flags            3 enabled \u00b7 0 overridden (full list with --all)",
+		"      configuration load ms    6",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("missing %q in:\n%s", want, rendered)
+		}
+	}
+	assertBefore(t, rendered, "model                    gpt-6.1-sol", "cwd                      /repo")
+	assertBefore(t, rendered, "cwd                      /repo", "config.toml              /home/u/config.toml")
+	assertBefore(t, rendered, "config.toml parse        ok", "MCP servers              2")
+	assertBefore(t, rendered, "MCP servers              2", "feature flags            3 enabled")
+	assertBefore(t, rendered, "feature flags            3 enabled", "configuration scope      invocation config")
+	for _, hidden := range []string{"GCODE_HOME", "model provider", "log dir", "sqlite home", "mcp servers"} {
+		if strings.Contains(rendered, hidden) {
+			t.Fatalf("config details still render %q:\n%s", hidden, rendered)
+		}
 	}
 }
 

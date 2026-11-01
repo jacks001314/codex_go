@@ -118,6 +118,8 @@ func writeCheck(out *strings.Builder, check *DoctorCheck, opts *Options) {
 		writeInstallDetails(out, check, opts)
 	case "state":
 		writeStateDetails(out, check, opts)
+	case "config":
+		writeConfigDetails(out, check, opts)
 	default:
 		writeGenericDetails(out, check, opts)
 	}
@@ -168,6 +170,65 @@ func writeGenericDetails(out *strings.Builder, check *DoctorCheck, opts *Options
 	}
 }
 
+// writeConfigDetails mirrors Rust doctor/detail.rs config_details: the model
+// row joins the provider, the config.toml and MCP rows precede the feature
+// flags, and the path rows Rust only parses (CODEX_HOME, log dir, sqlite home)
+// stay hidden.
+func writeConfigDetails(out *strings.Builder, check *DoctorCheck, opts *Options) {
+	if model, ok := doctorDetailValue(check, "model"); ok {
+		value := model
+		if provider, providerOK := doctorDetailValue(check, "model provider"); providerOK {
+			value += " \u00b7 " + provider
+		}
+		writePlainRow(out, check, "model", value, opts)
+	}
+	for _, row := range [][2]string{
+		{"cwd", "cwd"},
+		{"config.toml", "config.toml"},
+		{"config.toml parse", "config.toml parse"},
+		{"config.toml read", "config.toml read"},
+		{"mcp servers", "MCP servers"},
+	} {
+		value, ok := doctorDetailValue(check, row[0])
+		if !ok {
+			continue
+		}
+		writePlainRow(out, check, row[1], value, opts)
+	}
+	writeFeatureFlags(out, check, opts)
+	consumed := []string{
+		"GCODE_HOME",
+		"CODEX_HOME",
+		"cwd",
+		"model",
+		"model provider",
+		"log dir",
+		"sqlite home",
+		"mcp servers",
+		"feature flags enabled",
+		"enabled feature flags",
+		"feature flag overrides",
+		"legacy feature flag",
+		"config.toml",
+		"config.toml parse",
+		"config.toml read",
+	}
+	for _, detail := range check.Details {
+		label, _ := splitDetail(detail)
+		if doctorDetailConsumed(label, consumed, nil) {
+			continue
+		}
+		writeDetail(out, check, detail, opts)
+	}
+}
+
+// writePlainRow renders a detail row without issue metadata, the way Rust's
+// `push_row_if_present` does.
+func writePlainRow(out *strings.Builder, check *DoctorCheck, label string, value string, opts *Options) {
+	value = humanizeDoctorDetailValue(redactDoctorDetail(value))
+	fmt.Fprintf(out, "      %-24s %s\n", label, styleDetailText(value, displayStatusForCheck(check), opts))
+}
+
 // writeStateDetails mirrors Rust doctor/detail.rs state_details: the four
 // managed databases render first with their integrity folded into the row, the
 // rollout rows follow, and every remaining detail (the lazily-created v2
@@ -181,8 +242,7 @@ func writeStateDetails(out *strings.Builder, check *DoctorCheck, opts *Options) 
 		if !ok {
 			continue
 		}
-		value = humanizeDoctorDetailValue(redactDoctorDetail(value))
-		fmt.Fprintf(out, "      %-24s %s\n", label, styleDetailText(value, displayStatusForCheck(check), opts))
+		writePlainRow(out, check, label, value, opts)
 	}
 	for _, label := range []string{"state DB", "log DB", "goals DB", "memories DB"} {
 		writeDatabaseDetail(out, check, label, opts)
@@ -390,7 +450,7 @@ func writeFeatureFlags(out *strings.Builder, check *DoctorCheck, opts *Options) 
 	if (opts == nil || !opts.All) && !doctorDetailIsFalsy(enabledCount) && enabledCount != "0" {
 		hint = " (full list with --all)"
 	}
-	fmt.Fprintf(out, "      %-24s %s\n", "feature flags", fmt.Sprintf("%s enabled | %d overridden%s", enabledCount, len(overrides), hint))
+	fmt.Fprintf(out, "      %-24s %s\n", "feature flags", fmt.Sprintf("%s enabled \u00b7 %d overridden%s", enabledCount, len(overrides), hint))
 	if len(overrides) > 0 {
 		writeListRow(out, "overrides", doctorOverrideNames(overrides), opts)
 	}

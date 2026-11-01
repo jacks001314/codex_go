@@ -3240,7 +3240,36 @@ and decodable items kept Go's original spelling. The record is now decoded into
   `TestStateCheckReportsRustPathDBAndRolloutDetails` and
   `TestTerminalTitleReportsDefaultItemsAndGitProjectName`.
 
+### 95. `doctor` renders the Configuration rows like `config_details`
+
+- **Row order and labels.** Rust `config_details` prints `model` with its
+  provider joined by `·`, then `cwd`, `config.toml`, `config.toml parse`,
+  `config.toml read`, `MCP servers` and the feature flags, and finally drains
+  every remaining detail in the order the config check recorded it.
+  `writeConfigDetails` reproduces that, so `configuration scope`,
+  `active thread overrides`, `configured TUI mode` and `configuration load ms`
+  follow the flags instead of leading the block.
+- **Hidden path rows.** Rust parses `CODEX_HOME`, `log dir` and `sqlite home` for
+  the Configuration check and never prints them; Go printed all three (plus a
+  separate `model provider` row and a lowercase `mcp servers` label). All are
+  now consumed by the renderer, matching 0.166.
+- **Feature flag separator.** Rust joins the counters with `·`
+  (`3 enabled · 1 overridden (full list with --all)`) even under `--ascii`, so
+  the Go row no longer uses `|`.
+- Evidence: `out/r1304-doctor-full-diff.txt` (normalized diff of the whole
+  report against the 0.166 binary: the Configuration block is identical apart
+  from the feature-flag count and the load timing),
+  `TestRenderHumanConfigDetailsMatchRustLikeRust` and
+  `TestRenderHumanFeatureFlagsRespectAllLikeRust`.
+
 ## Verification
+
+- Round 83 aligns the `doctor` Configuration block (entry 95): `model` joins its
+  provider, the `config.toml`/`MCP servers` rows precede the feature flags, the
+  `CODEX_HOME`/`log dir`/`sqlite home` rows Rust only parses stay hidden and the
+  feature-flag counters use `·`. `out/r1304-doctor-full-diff.txt` shows the
+  Configuration block matching 0.166 apart from the feature-flag count and load
+  timing, and `go test -count=1 ./doctor ./cli` passes.
 
 - Round 82 removes the state-database and PATH-helper rows from the `doctor`
   Environment diff (entry 94): `out/r1301-doctor-diff.txt` now differs only on the
@@ -4078,6 +4107,11 @@ and decodable items kept Go's original spelling. The record is now decoded into
 - `doctor` still differs from 0.166 outside the Environment work in entries
   92-93: the disk and state rows keep Go's `GCODE_HOME` label, a source build
   reports `other` instead of Rust's package layout and `v0.0.0` for the version,
-  `search` prefers the system ripgrep over the packaged one, and the
-  configuration check prints the configured `log_dir` where 0.166 prints the
-  default `log directory`.
+  `search` prefers the system ripgrep over the packaged one, the Desktop App
+  group still reports Go's own installation shape instead of 0.166's
+  `version`/`running`/`log directory` rows plus its security and update
+  summaries, the sandbox block keeps Go's row set and `read-only fs`
+  wording, the auth check prints `auth file` instead of `auth.json path (file
+  backend/fallback)`, and notes join their remedy with ` - ` where 0.166
+  uses an em dash in a Unicode report (see
+  `out/r1304-doctor-full-diff.txt`).
