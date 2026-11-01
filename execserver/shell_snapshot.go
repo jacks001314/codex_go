@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"codex_go/execpolicy"
 	"codex_go/network"
 	"codex_go/shell"
 	"codex_go/utils"
@@ -324,6 +325,49 @@ func (m *shellSnapshotManager) forgetOrderLocked(key string) {
 	}
 }
 
+// shellSnapshotRenderPolicy converts the launch's wire environment policy into
+// the filter the replay render applies. Rust's parse_snapshot renders the
+// executor-owned snapshot under params.env_policy, so a variable the launch
+// excludes is never re-exported from the captured startup state. The capture
+// already holds exactly what the shell exported, so Rust forces inherit=all and
+// treats the launch policy as a narrowing filter over the captured names.
+func shellSnapshotRenderPolicy(params *ExecParams) *execpolicy.EnvPolicy {
+	if params == nil || params.EnvPolicy == nil {
+		return nil
+	}
+	table := map[string]any{
+		"inherit":                 "all",
+		"ignore_default_excludes": params.EnvPolicy.IgnoreDefaultExcludes,
+	}
+	if patterns := snapshotPolicyPatterns(params.EnvPolicy.Exclude); len(patterns) > 0 {
+		table["exclude"] = patterns
+	}
+	if patterns := snapshotPolicyPatterns(params.EnvPolicy.IncludeOnly); len(patterns) > 0 {
+		table["include_only"] = patterns
+	}
+	if len(params.EnvPolicy.Set) > 0 {
+		set := make(map[string]any, len(params.EnvPolicy.Set))
+		for name, value := range params.EnvPolicy.Set {
+			set[name] = value
+		}
+		table["set"] = set
+	}
+	return execpolicy.EnvPolicyFromShellEnvironmentPolicy(table, "")
+}
+
+// snapshotPolicyPatterns re-types the wire pattern list for the config-table
+// parser, which reads untyped JSON slices.
+func snapshotPolicyPatterns(values []string) []any {
+	if len(values) == 0 {
+		return nil
+	}
+	patterns := make([]any, 0, len(values))
+	for _, value := range values {
+		patterns = append(patterns, value)
+	}
+	return patterns
+}
+
 // validateMaskedShellSnapshot rejects a capture that still carries a real
 // broker credential, either verbatim or reassembled by shell quoting. Rust
 // #54432 refuses such a replay script; the caller then restores the launch
@@ -378,7 +422,7 @@ func (m *shellSnapshotManager) captureSnapshot(ctx context.Context, params *Exec
 	if captured == nil {
 		return nil, errors.New("invalid captured shell state")
 	}
-	rendered := network.MaskSnapshotText(captured.RenderScript(nil), credentialPairs)
+	rendered := network.MaskSnapshotText(captured.RenderScript(shellSnapshotRenderPolicy(params)), credentialPairs)
 	if err := validateMaskedShellSnapshot(rendered, shellType, credentialPairs, credentialTextUnsafe); err != nil {
 		return nil, err
 	}
