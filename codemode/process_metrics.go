@@ -108,7 +108,9 @@ func sampleProcessMetrics(ctx context.Context, conn *grpc.ClientConn) (ProcessMe
 		if status.Code(err) == codes.Unimplemented {
 			return ProcessMetricsSample{Kind: tool.CodeModeProcessMetricsUnsupported}, nil
 		}
-		if errors.Is(callCtx.Err(), context.DeadlineExceeded) {
+		// The transport can surface its cancellation status just before the
+		// context flips to Done, so check the gRPC code as well as the context.
+		if errors.Is(callCtx.Err(), context.DeadlineExceeded) || status.Code(err) == codes.DeadlineExceeded {
 			return ProcessMetricsSample{}, fmt.Errorf("code-mode process metrics timed out: %w", err)
 		}
 		return ProcessMetricsSample{}, fmt.Errorf("code-mode process metrics failed: %w", err)
