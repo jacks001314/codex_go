@@ -206,6 +206,15 @@ func TestStdioInitializeAndEnvironmentInfo(t *testing.T) {
 }
 
 func TestLocalEnvironmentInfoReportsTemporaryDirectoriesAndCapability(t *testing.T) {
+	// Rust 92fb33b758 maps TMPDIR on Unix and TEMP/TMP on Windows, so the test
+	// sets the variable it is about instead of assuming the host exports one.
+	tempDir := t.TempDir()
+	if runtime.GOOS == "windows" {
+		t.Setenv("TEMP", tempDir)
+		t.Setenv("TMP", tempDir)
+	} else {
+		t.Setenv("TMPDIR", tempDir)
+	}
 	info := localEnvironmentInfo()
 	if info == nil {
 		t.Fatal("localEnvironmentInfo() = nil")
@@ -221,24 +230,36 @@ func TestLocalEnvironmentInfoReportsTemporaryDirectoriesAndCapability(t *testing
 	if !info.Capabilities.FileWriteStreaming {
 		t.Fatalf("FileWriteStreaming = false, want true (Rust #50177)")
 	}
-	if len(info.TemporaryDirectories) == 0 {
-		t.Fatalf("TemporaryDirectories empty, want TEMP/TMP (Rust 92fb33b758)")
+	wantURI, uriErr := utils.FromHostNativePath(tempDir)
+	if uriErr != nil {
+		t.Fatalf("FromHostNativePath(%q) error = %v", tempDir, uriErr)
 	}
-	seen := map[string]bool{}
-	for _, dir := range info.TemporaryDirectories {
-		if seen[dir] {
-			t.Fatalf("duplicate temporary directory %q", dir)
-		}
-		seen[dir] = true
-		if !strings.HasPrefix(dir, "file://") {
-			t.Fatalf("temporary directory %q is not a file URI", dir)
-		}
+	if len(info.TemporaryDirectories) != 1 || info.TemporaryDirectories[0] != wantURI.String() {
+		t.Fatalf("TemporaryDirectories = %#v, want [%s]", info.TemporaryDirectories, wantURI.String())
 	}
 	// Rust #41204: the local executor reports its user home directory.
 	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
 		if strings.TrimSpace(info.UserHomeDir) == "" {
 			t.Fatalf("UserHomeDir empty, want %q (Rust #41204)", home)
 		}
+	}
+}
+
+// Rust 92fb33b758 compares the raw environment value, so a temporary
+// directory that ends in whitespace must survive into the reported URI.
+func TestLocalTemporaryDirectoriesKeepsTrailingWhitespaceLikeRust(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows strips trailing whitespace from paths")
+	}
+	tempDir := t.TempDir() + " "
+	t.Setenv("TMPDIR", tempDir)
+	wantURI, uriErr := utils.FromHostNativePath(tempDir)
+	if uriErr != nil {
+		t.Fatalf("FromHostNativePath(%q) error = %v", tempDir, uriErr)
+	}
+	got := localTemporaryDirectories("")
+	if len(got) != 1 || got[0] != wantURI.String() {
+		t.Fatalf("localTemporaryDirectories() = %#v, want [%s]", got, wantURI.String())
 	}
 }
 

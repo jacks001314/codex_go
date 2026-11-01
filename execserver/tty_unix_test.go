@@ -4,7 +4,6 @@ package execserver
 
 import (
 	"context"
-	"encoding/base64"
 	"strings"
 	"testing"
 	"time"
@@ -32,12 +31,9 @@ func TestExecServerTTYUsesRealTerminalAndPTYStreamLikeRust(t *testing.T) {
 		if chunk.Stream != "pty" {
 			t.Fatalf("TTY chunk stream = %q", chunk.Stream)
 		}
-		// outputChunk.Chunk holds the raw bytes; the wire form is base64.
-		data, decodeErr := base64.StdEncoding.DecodeString(string(chunk.Chunk))
-		if decodeErr != nil {
-			t.Fatalf("DecodeString() error = %v", decodeErr)
-		}
-		output.Write(data)
+		// outputChunk.Chunk holds the raw output bytes; only the JSON wire form
+		// is base64, so the in-process read hands back the bytes themselves.
+		output.Write(chunk.Chunk)
 	}
 	if !strings.Contains(output.String(), "tty") {
 		t.Fatalf("TTY output = %q", output.String())

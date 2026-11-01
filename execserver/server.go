@@ -4206,7 +4206,7 @@ func localTemporaryDirectories(cwd string) []string {
 	seen := map[string]bool{}
 	var out []string
 	for _, name := range names {
-		value := strings.TrimSpace(os.Getenv(name))
+		value := os.Getenv(name)
 		if value == "" {
 			continue
 		}

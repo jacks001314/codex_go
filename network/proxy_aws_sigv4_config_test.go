@@ -1,6 +1,7 @@
 package network
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -70,6 +71,9 @@ func TestProxyConfigParsesAWSSigV4Action(t *testing.T) {
 }
 
 func TestProxyConfigParsesInlineAWSSigV4Action(t *testing.T) {
+	// Rust accepts any absolute secret_file path; the fixture must be absolute
+	// on the host running the test, not only on Windows.
+	secretFile := filepath.Join(t.TempDir(), "aws")
 	hook, err := proxyMITMHookConfigFromTable(map[string]any{
 		"host":  "bucket.s3.amazonaws.com",
 		"match": map[string]any{"methods": []any{"PUT"}, "path_prefixes": []any{"/"}},
@@ -78,7 +82,7 @@ func TestProxyConfigParsesInlineAWSSigV4Action(t *testing.T) {
 			"region":                    "us-east-1",
 			"service":                   "s3",
 			"access_key_id":             map[string]any{"env_var": "ACCESS_KEY"},
-			"secret_access_key":         map[string]any{"file": `C:\run\secrets\aws`},
+			"secret_access_key":         map[string]any{"file": secretFile},
 			"session_token":             map[string]any{"env_var": "SESSION_TOKEN"},
 			"port":                      int64(8443),
 			"max_body_bytes":            int64(1024),
@@ -94,7 +98,7 @@ func TestProxyConfigParsesInlineAWSSigV4Action(t *testing.T) {
 	if action.Port != 8443 || action.MaxBodyBytes != 1024 {
 		t.Fatalf("unexpected numeric settings %#v", action)
 	}
-	if action.SecretAccessKey != (ProxySecretSource{Kind: "file", Name: `C:\run\secrets\aws`}) {
+	if action.SecretAccessKey != (ProxySecretSource{Kind: "file", Name: secretFile}) {
 		t.Fatalf("unexpected secret source %#v", action.SecretAccessKey)
 	}
 	if action.SessionToken == nil || action.SessionToken.Kind != "env_var" {
