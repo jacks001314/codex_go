@@ -55,6 +55,17 @@ func (p *LocalServerOutputProvider) TakeUnavailableWarning(effectiveToolMode str
 	return ""
 }
 
+// SampleProcessMetrics forwards the host-level observation to the wrapped
+// provider (Rust's LocalServerOutputProvider::sample_process_metrics). Without
+// it, enabling server-side truncation would also switch the metrics surface
+// from a real snapshot to Unsupported.
+func (p *LocalServerOutputProvider) SampleProcessMetrics(ctx context.Context) (tool.CodeModeProcessMetricsSample, error) {
+	if sampler, ok := p.Inner.(tool.CodeModeProcessMetricsSampler); ok {
+		return sampler.SampleProcessMetrics(ctx)
+	}
+	return tool.CodeModeProcessMetricsSample{Kind: tool.CodeModeProcessMetricsUnsupported}, nil
+}
+
 func (p *LocalServerOutputProvider) Prewarm(ctx context.Context) error {
 	if provider, ok := p.Inner.(tool.CodeModeRemotePrewarmer); ok {
 		return provider.Prewarm(ctx)

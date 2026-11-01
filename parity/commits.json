@@ -38945,7 +38945,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "codemode/process_metrics.go:17 models host process observations independently of sessions and :38 validates snapshots; codemode/process_metrics_like_rust_test.go:36 covers cumulative snapshots, UNIMPLEMENTED hosts and failed samples."
+    "codemode/process_metrics.go:17 models host process observations independently of sessions and :38 validates snapshots; codemode/process_metrics_like_rust_test.go:36 covers cumulative snapshots, UNIMPLEMENTED hosts and failed samples. Round 1282: `codemode.LocalServerOutputProvider` (the #58159 wrapper) now forwards `SampleProcessMetrics` to the wrapped provider, so enabling `code_mode_host_output_truncation` no longer downgrades the router's host observation to Unsupported (Rust `code_mode_host.rs` forwards `sample_process_metrics`); `codemode/local_server_output_metrics_like_rust_test.go` covers the forwarding and the Unsupported default for providers without a sampler."
    ]
   },
   {
@@ -39462,7 +39462,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "features/features.go:446: code_mode_host_output_truncation is an under-development flag defaulting off.",
+    "features/features.go:446: code_mode_host_output_truncation is an under-development flag defaulting off. The wrapper lives in `codemode/local_server_output.go`: it forces server truncation only for default sessions, passes explicit options through, and forwards availability, prewarm, process metrics and close to the built-in provider.",
     "appserver/runtime_router.go:2010: the flag enablement selects CodeMode host-side output truncation.",
     "codemode/local_server_output.go:32: the local provider requests server-side truncation from Core.",
     "exec/exec.go:1554: host-side truncation runs only when the feature is enabled.",
