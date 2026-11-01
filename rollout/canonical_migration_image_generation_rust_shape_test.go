@@ -2,6 +2,7 @@ package rollout
 
 import (
 	"os"
+	"runtime"
 	"testing"
 )
 
@@ -11,6 +12,60 @@ import (
 // GeneratedImageRef, always-present nullable trailers, Windows-cleaned
 // AbsolutePathBuf values, and records the modern types cannot decode dropped
 // (see .tmp-usealign/out/r79-imagegen.txt).
+
+// imageGenerationSessionMetaMigrated is the first migrated line of every case:
+// the legacy session_meta rewritten with the modern defaults.
+const imageGenerationSessionMetaMigrated = `{"timestamp":"2025-01-02T03:04:05.000Z","ordinal":0,"type":"session_meta","payload":{"session_id":"0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b","id":"0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b","timestamp":"2025-01-02T03:04:05.000Z","cwd":"C:/work","originator":"codex_cli_rs","cli_version":"0.9.0","source":"cli","model_provider":null,"base_instructions":null,"history_mode":"paginated"}}`
+
+// imageGenerationOptionalFieldsMigrated is the Windows expectation captured from
+// the Rust migration: the recorded C:/ paths are absolute there, so the item
+// keeps its normalized savedPath and inputImages.
+const imageGenerationOptionalFieldsMigrated = `{"timestamp":"2025-01-02T03:04:05.000Z","ordinal":0,"type":"session_meta","payload":{"session_id":"0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b","id":"0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b","timestamp":"2025-01-02T03:04:05.000Z","cwd":"C:/work","originator":"codex_cli_rs","cli_version":"0.9.0","source":"cli","model_provider":null,"base_instructions":null,"history_mode":"paginated"}}
+{"timestamp":"2025-01-02T03:04:06.000Z","ordinal":1,"type":"event_msg","payload":{"type":"task_started","turn_id":"rollout-1","started_at":1735787046,"model_context_window":null,"collaboration_mode_kind":"default"}}
+{"timestamp":"2025-01-02T03:04:06.000Z","ordinal":2,"type":"event_msg","payload":{"type":"item_completed","thread_id":"0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b","turn_id":"rollout-1","item":{"type":"Extension","kind":"image_gen.generation","id":"i5","status":"completed","revisedPrompt":null,"result":"r","transparentBackground":true,"failure":null,"savedPath":"C:\\tmp\\image.png","inputImages":[{"path":"C:\\tmp\\a.png","sha256":"abc"},{"path":"C:\\tmp\\b.png","sha256":"def"}],"generationId":"gen-1"},"completed_at_ms":1735787046000}}
+{"timestamp":"2025-01-02T03:04:06.000Z","ordinal":3,"type":"event_msg","payload":{"type":"task_complete","turn_id":"rollout-1","last_agent_message":null,"completed_at":1735787046}}
+`
+
+// imageGenerationOptionalFieldsWant keeps that vector honest on POSIX hosts.
+// The rollout records C:/ paths, which the host path cleaner (canonicalAbsolutePath,
+// Rust AbsolutePathBuf decoding) rejects as relative, so the whole item is
+// dropped and only the session_meta line is migrated.
+func imageGenerationOptionalFieldsWant() string {
+	if runtime.GOOS != "windows" {
+		return imageGenerationSessionMetaMigrated + "\n"
+	}
+	return imageGenerationOptionalFieldsMigrated
+}
+
+// imageGenerationRelativePathWant keeps the dropped-path case honest per host:
+// /tmp/root.png is relative on Windows, where the migration drops the record,
+// and absolute on POSIX hosts, where it is kept.
+func imageGenerationRelativePathWant() string {
+	if runtime.GOOS == "windows" {
+		return imageGenerationSessionMetaMigrated + "\n"
+	}
+	return imageGenerationSessionMetaMigrated + "\n" + `{"timestamp":"2025-01-02T03:04:06.000Z","ordinal":1,"type":"event_msg","payload":{"type":"task_started","turn_id":"rollout-1","started_at":1735787046,"model_context_window":null,"collaboration_mode_kind":"default"}}
+{"timestamp":"2025-01-02T03:04:06.000Z","ordinal":2,"type":"event_msg","payload":{"type":"item_completed","thread_id":"0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b","turn_id":"rollout-1","item":{"type":"Extension","kind":"image_gen.generation","id":"i11","status":"completed","revisedPrompt":null,"result":"r","transparentBackground":null,"failure":null,"savedPath":"/tmp/root.png","generationId":null},"completed_at_ms":1735787046000}}
+{"timestamp":"2025-01-02T03:04:06.000Z","ordinal":3,"type":"event_msg","payload":{"type":"task_complete","turn_id":"rollout-1","last_agent_message":null,"completed_at":1735787046}}
+`
+}
+
+// imageGenerationBytesProcessed reports the migration charge for a case. Only
+// the two path cases differ across hosts: a dropped image record processes
+// fewer bytes than one kept on a POSIX host, where the recorded path counts as
+// absolute.
+func imageGenerationBytesProcessed(name string, windowsValue uint64) uint64 {
+	if runtime.GOOS == "windows" {
+		return windowsValue
+	}
+	switch name {
+	case "image_generation_optional_fields":
+		return 1583
+	case "image_generation_relative_path_dropped":
+		return 3065
+	}
+	return windowsValue
+}
 
 func TestCanonicalizeRolloutConvertsImageGenerationLikeRust(t *testing.T) {
 	cases := []struct {
@@ -72,12 +127,8 @@ func TestCanonicalizeRolloutConvertsImageGenerationLikeRust(t *testing.T) {
 			source: `{"timestamp":"2025-01-02T03:04:05.000Z","type":"session_meta","payload":{"id":"0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b","timestamp":"2025-01-02T03:04:05.000Z","cwd":"C:/work","originator":"codex_cli_rs","cli_version":"0.9.0","source":"cli"}}
 {"timestamp":"2025-01-02T03:04:06.000Z","type":"event_msg","payload":{"type":"image_generation_end","call_id":"i5","status":"completed","result":"r","saved_path":"C:/tmp/image.png","input_images":[{"path":"C:/tmp/./a.png","sha256":"abc"},{"path":"C:/tmp/b/../b.png","sha256":"def"}],"transparent_background":true,"generation_id":"gen-1","unknown":5}}
 `,
-			want: `{"timestamp":"2025-01-02T03:04:05.000Z","ordinal":0,"type":"session_meta","payload":{"session_id":"0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b","id":"0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b","timestamp":"2025-01-02T03:04:05.000Z","cwd":"C:/work","originator":"codex_cli_rs","cli_version":"0.9.0","source":"cli","model_provider":null,"base_instructions":null,"history_mode":"paginated"}}
-{"timestamp":"2025-01-02T03:04:06.000Z","ordinal":1,"type":"event_msg","payload":{"type":"task_started","turn_id":"rollout-1","started_at":1735787046,"model_context_window":null,"collaboration_mode_kind":"default"}}
-{"timestamp":"2025-01-02T03:04:06.000Z","ordinal":2,"type":"event_msg","payload":{"type":"item_completed","thread_id":"0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b","turn_id":"rollout-1","item":{"type":"Extension","kind":"image_gen.generation","id":"i5","status":"completed","revisedPrompt":null,"result":"r","transparentBackground":true,"failure":null,"savedPath":"C:\\tmp\\image.png","inputImages":[{"path":"C:\\tmp\\a.png","sha256":"abc"},{"path":"C:\\tmp\\b.png","sha256":"def"}],"generationId":"gen-1"},"completed_at_ms":1735787046000}}
-{"timestamp":"2025-01-02T03:04:06.000Z","ordinal":3,"type":"event_msg","payload":{"type":"task_complete","turn_id":"rollout-1","last_agent_message":null,"completed_at":1735787046}}
-`,
-			bytesProcessed: 3445,
+			want:           imageGenerationOptionalFieldsWant(),
+			bytesProcessed: imageGenerationBytesProcessed("image_generation_optional_fields", 3445),
 		},
 		{
 			name: "image_generation_nulls",
@@ -135,9 +186,8 @@ func TestCanonicalizeRolloutConvertsImageGenerationLikeRust(t *testing.T) {
 			source: `{"timestamp":"2025-01-02T03:04:05.000Z","type":"session_meta","payload":{"id":"0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b","timestamp":"2025-01-02T03:04:05.000Z","cwd":"C:/work","originator":"codex_cli_rs","cli_version":"0.9.0","source":"cli"}}
 {"timestamp":"2025-01-02T03:04:06.000Z","type":"event_msg","payload":{"type":"image_generation_end","call_id":"i11","status":"completed","result":"r","saved_path":"/tmp/root.png"}}
 `,
-			want: `{"timestamp":"2025-01-02T03:04:05.000Z","ordinal":0,"type":"session_meta","payload":{"session_id":"0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b","id":"0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b","timestamp":"2025-01-02T03:04:05.000Z","cwd":"C:/work","originator":"codex_cli_rs","cli_version":"0.9.0","source":"cli","model_provider":null,"base_instructions":null,"history_mode":"paginated"}}
-`,
-			bytesProcessed: 1413,
+			want:           imageGenerationRelativePathWant(),
+			bytesProcessed: imageGenerationBytesProcessed("image_generation_relative_path_dropped", 1413),
 		},
 		{
 			name: "image_generation_input_image_missing_sha_dropped",
