@@ -27,7 +27,7 @@ func TestShellSnapshotProtectedCaptureIsNotReusedLikeRust(t *testing.T) {
 	}
 	params := protectedSnapshotParams(t)
 
-	first, err := manager.rewrite(context.Background(), params, params.Env, []network.CredentialMaskPair{{Real: "sk-real-secret", Dummy: "dummy-one"}}, nil)
+	first, err := manager.rewrite(context.Background(), params, params.Env, []network.CredentialMaskPair{{Real: "sk-real-secret", Dummy: "dummy-one"}}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +35,7 @@ func TestShellSnapshotProtectedCaptureIsNotReusedLikeRust(t *testing.T) {
 	if !strings.Contains(firstState, "dummy-one") || strings.Contains(firstState, "sk-real-secret") {
 		t.Fatalf("first replay state = %q", firstState)
 	}
-	second, err := manager.rewrite(context.Background(), params, params.Env, []network.CredentialMaskPair{{Real: "sk-real-secret", Dummy: "dummy-two"}}, nil)
+	second, err := manager.rewrite(context.Background(), params, params.Env, []network.CredentialMaskPair{{Real: "sk-real-secret", Dummy: "dummy-two"}}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,10 +48,10 @@ func TestShellSnapshotProtectedCaptureIsNotReusedLikeRust(t *testing.T) {
 	}
 
 	// Unprotected captures keep the shared cache.
-	if _, err := manager.rewrite(context.Background(), params, params.Env, nil, nil); err != nil {
+	if _, err := manager.rewrite(context.Background(), params, params.Env, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := manager.rewrite(context.Background(), params, params.Env, nil, nil); err != nil {
+	if _, err := manager.rewrite(context.Background(), params, params.Env, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if calls.Load() != 3 {
@@ -76,14 +76,14 @@ func TestShellSnapshotProtectedFailureDoesNotPoisonCacheLikeRust(t *testing.T) {
 		return []byte("# Snapshot file\nexport TOKEN='sk-real-secret'\n\x00\x00\x00"), nil
 	}
 	params := protectedSnapshotParams(t)
-	fallback, err := manager.rewrite(context.Background(), params, params.Env, []network.CredentialMaskPair{{Real: "sk-real-secret", Dummy: "dummy-one"}}, nil)
+	fallback, err := manager.rewrite(context.Background(), params, params.Env, []network.CredentialMaskPair{{Real: "sk-real-secret", Dummy: "dummy-one"}}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(fallback.Argv[2], "Credential masking is unavailable") {
 		t.Fatalf("fallback script = %q", fallback.Argv[2])
 	}
-	rewritten, err := manager.rewrite(context.Background(), params, params.Env, nil, nil)
+	rewritten, err := manager.rewrite(context.Background(), params, params.Env, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("the unprotected launch inherited a cached protected failure: %v", err)
 	}
@@ -111,5 +111,63 @@ func protectedSnapshotParams(t *testing.T) *ExecParams {
 			Shell:   ShellInfo{Name: "bash", Path: "/bin/bash"},
 		},
 		Env: map[string]string{"PATH": "/bin"},
+	}
+}
+
+// Rust restores credentials through credentials::restore_fallback, which
+// restores every brokered placeholder the proxy knows about and disables
+// brokering for that child only. A child whose protected capture fails must not
+// keep the dummies minted for an earlier launch (#54432).
+func TestShellSnapshotFallbackRestoresAllBrokeredCredentialsLikeRust(t *testing.T) {
+	previous := shellSnapshotPlatformSupported
+	shellSnapshotPlatformSupported = true
+	t.Cleanup(func() { shellSnapshotPlatformSupported = previous })
+	manager := newShellSnapshotManager()
+	defer manager.close()
+	manager.capture = func(context.Context, []string, string, map[string]string) ([]byte, error) {
+		return nil, errors.New("capture failed")
+	}
+	params := protectedSnapshotParams(t)
+	params.Env = map[string]string{
+		"PATH":                               "/bin",
+		"TOKEN_A":                            "dummy-alpha",
+		"TOKEN_B":                            "prefix-dummy-beta-suffix",
+		network.CredentialBrokerActiveEnvKey: "1",
+		network.BrokeredCredentialsEnvKey:    "dummy-alpha,dummy-beta",
+	}
+	maskedPairs := []network.CredentialMaskPair{{Real: "stale-alpha", Dummy: "dummy-alpha"}}
+
+	var restoreCalls atomic.Int64
+	restoreFallback := func(env map[string]string) {
+		restoreCalls.Add(1)
+		network.RestoreSnapshotCredentials(env, []network.CredentialMaskPair{
+			{Real: "real-alpha", Dummy: "dummy-alpha"},
+			{Real: "real-beta", Dummy: "dummy-beta"},
+		})
+	}
+
+	rewritten, err := manager.rewrite(context.Background(), params, params.Env, maskedPairs, nil, restoreFallback)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restoreCalls.Load() != 1 {
+		t.Fatalf("restore fallback calls = %d, want 1", restoreCalls.Load())
+	}
+	if !strings.Contains(rewritten.Argv[2], "Credential masking is unavailable") {
+		t.Fatalf("fallback script = %q", rewritten.Argv[2])
+	}
+	if got := rewritten.Env["TOKEN_A"]; got != "real-alpha" {
+		t.Fatalf("TOKEN_A = %q, want the proxy fallback to win over the masked pairs", got)
+	}
+	if got := rewritten.Env["TOKEN_B"]; got != "prefix-real-beta-suffix" {
+		t.Fatalf("TOKEN_B = %q, want every brokered placeholder restored, not only masked pairs", got)
+	}
+	for _, key := range []string{network.CredentialBrokerActiveEnvKey, network.BrokeredCredentialsEnvKey} {
+		if _, ok := rewritten.Env[key]; ok {
+			t.Fatalf("%s survived the fallback: %#v", key, rewritten.Env)
+		}
+	}
+	if params.Env["TOKEN_B"] != "prefix-dummy-beta-suffix" || params.Env[network.BrokeredCredentialsEnvKey] == "" {
+		t.Fatalf("the fallback mutated the caller's environment: %#v", params.Env)
 	}
 }

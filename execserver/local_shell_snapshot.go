@@ -67,7 +67,7 @@ func (e *LocalShellSnapshotExecutor) Prepare(ctx context.Context, params *ExecPa
 	if err != nil {
 		return nil, err
 	}
-	return manager.rewrite(ctx, params, captureEnv, nil, nil)
+	return manager.rewrite(ctx, params, captureEnv, nil, nil, nil)
 }
 
 // Prewarm captures the scope's snapshot without starting the command, mirroring

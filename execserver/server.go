@@ -1944,7 +1944,11 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 		if preparedProxy != nil {
 			credentialTextUnsafe = preparedProxy.SnapshotTextContainsCredential
 		}
-		rewritten, rewriteErr := s.shellSnapshots.rewrite(snapshotCtx, params, captureEnv, credentialPairs, credentialTextUnsafe)
+		var restoreFallback func(map[string]string)
+		if preparedProxy != nil {
+			restoreFallback = preparedProxy.RestoreUnbrokeredEnvironment
+		}
+		rewritten, rewriteErr := s.shellSnapshots.rewrite(snapshotCtx, params, captureEnv, credentialPairs, credentialTextUnsafe, restoreFallback)
 		if snapshotSpan != nil {
 			snapshotSpan.End()
 		}

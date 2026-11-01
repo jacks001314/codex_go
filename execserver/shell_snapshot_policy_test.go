@@ -48,7 +48,7 @@ func TestShellSnapshotRenderPolicyNarrowsCapturedExportsLikeRust(t *testing.T) {
 			Set:     map[string]string{"SECRET_SET": "configured-value"},
 		},
 	}
-	rewritten, err := manager.rewrite(context.Background(), params, params.Env, nil, nil)
+	rewritten, err := manager.rewrite(context.Background(), params, params.Env, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

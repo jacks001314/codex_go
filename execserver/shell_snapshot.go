@@ -83,7 +83,7 @@ type shellSnapshotFlight struct {
 	done chan struct{}
 }
 
-func (m *shellSnapshotManager) rewrite(ctx context.Context, params *ExecParams, captureEnv map[string]string, credentialPairs []network.CredentialMaskPair, credentialTextUnsafe func(string) bool) (*ExecParams, error) {
+func (m *shellSnapshotManager) rewrite(ctx context.Context, params *ExecParams, captureEnv map[string]string, credentialPairs []network.CredentialMaskPair, credentialTextUnsafe func(string) bool, restoreFallback func(map[string]string)) (*ExecParams, error) {
 	if m == nil || params == nil || params.ShellSnapshot == nil {
 		return params, nil
 	}
@@ -108,7 +108,14 @@ func (m *shellSnapshotManager) rewrite(ctx context.Context, params *ExecParams, 
 		rewritten := *params
 		rewritten.Argv = append([]string(nil), params.Argv...)
 		rewritten.Env = cloneShellSnapshotEnv(params.Env)
-		network.RestoreSnapshotCredentials(rewritten.Env, credentialPairs)
+		if restoreFallback != nil {
+			// Rust's credentials::restore_fallback restores every brokered
+			// placeholder the proxy knows about and disables brokering for this
+			// child, not only the pairs this capture masked.
+			restoreFallback(rewritten.Env)
+		} else {
+			network.RestoreSnapshotCredentials(rewritten.Env, credentialPairs)
+		}
 		warning := "Credential masking is unavailable for this shell snapshot; running with unmasked credentials."
 		rewritten.Argv[scriptIndex] = "\\builtin printf '%s\\n' " + shellSingleQuote(warning) + " >&2\n" + params.Argv[scriptIndex]
 		return &rewritten, nil

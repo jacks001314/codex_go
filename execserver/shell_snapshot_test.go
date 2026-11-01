@@ -75,7 +75,7 @@ func TestShellSnapshotManagerRewritesAndCachesLikeRust(t *testing.T) {
 		},
 	}
 	pairs := []network.CredentialMaskPair{{Real: "sk-real-secret", Dummy: "sk-dummy-value"}}
-	rewritten, err := manager.rewrite(context.Background(), params, params.Env, pairs, nil)
+	rewritten, err := manager.rewrite(context.Background(), params, params.Env, pairs, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestShellSnapshotManagerRewritesAndCachesLikeRust(t *testing.T) {
 		!strings.Contains(script, "\\builtin export TOKEN='sk-dummy-value'") {
 		t.Fatalf("launch environment was not restored after snapshot: %q", script)
 	}
-	again, err := manager.rewrite(context.Background(), params, params.Env, pairs, nil)
+	again, err := manager.rewrite(context.Background(), params, params.Env, pairs, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestShellSnapshotCaptureFailureRestoresCredentialsLikeRust(t *testing.T) {
 		Env: map[string]string{"TOKEN": "sk-dummy-value"},
 	}
 	pairs := []network.CredentialMaskPair{{Real: "sk-real-secret", Dummy: "sk-dummy-value"}}
-	rewritten, err := manager.rewrite(context.Background(), params, params.Env, pairs, nil)
+	rewritten, err := manager.rewrite(context.Background(), params, params.Env, pairs, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,7 +225,7 @@ func TestShellSnapshotBashReplayUsesPrivilegedFlagLikeRust(t *testing.T) {
 		},
 		Env: map[string]string{"PATH": "/bin"},
 	}
-	rewritten, err := manager.rewrite(context.Background(), params, params.Env, nil, nil)
+	rewritten, err := manager.rewrite(context.Background(), params, params.Env, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,7 +291,7 @@ func TestShellSnapshotReassembledCredentialFallsBackLikeRust(t *testing.T) {
 		Env: map[string]string{"TOKEN": "sk-dummy-value"},
 	}
 	pairs := []network.CredentialMaskPair{{Real: "sk-real-secret", Dummy: "sk-dummy-value"}}
-	rewritten, err := manager.rewrite(context.Background(), params, params.Env, pairs, nil)
+	rewritten, err := manager.rewrite(context.Background(), params, params.Env, pairs, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -333,7 +333,7 @@ func TestShellSnapshotBrokerTextCheckFallsBackLikeRust(t *testing.T) {
 		Env: map[string]string{"TOKEN": "sk-dummy-value"},
 	}
 	unsafe := func(text string) bool { return strings.Contains(text, "ghp_patterncredential") }
-	rewritten, err := manager.rewrite(context.Background(), params, params.Env, nil, unsafe)
+	rewritten, err := manager.rewrite(context.Background(), params, params.Env, nil, unsafe, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

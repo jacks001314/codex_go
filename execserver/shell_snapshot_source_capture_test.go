@@ -47,7 +47,7 @@ func TestShellSnapshotCaptureUsesSourceScriptLikeRust(t *testing.T) {
 				},
 				Env: map[string]string{"PATH": "/bin"},
 			}
-			if _, err := manager.rewrite(context.Background(), params, params.Env, nil, nil); err != nil {
+			if _, err := manager.rewrite(context.Background(), params, params.Env, nil, nil, nil); err != nil {
 				t.Fatal(err)
 			}
 			if grouped := strings.Contains(script, "case '' in '') ;; esac"); grouped != testCase.grouped {
@@ -100,7 +100,7 @@ func TestShellSnapshotSourceCaptureReplaysRealShellLikeRust(t *testing.T) {
 				},
 				Env: map[string]string{"PATH": os.Getenv("PATH")},
 			}
-			rewritten, err := manager.rewrite(context.Background(), params, params.Env, nil, nil)
+			rewritten, err := manager.rewrite(context.Background(), params, params.Env, nil, nil, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
