@@ -21685,10 +21685,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "complete",
+   "status": "partial",
    "evidence": [
     "Exec-server shell snapshots replay through unnamed files (#48078): shell/snapshot_capture.go captures the shell state in a script that feeds unnamed (process-substitution style) files instead of writing temporary paths, and the incremental variant groups options and aliases so replay stays side-effect free.",
-    "Regression coverage: shell/snapshot_capture_test.go (named/unnamed capture and incremental grouping). Verified with `go test ./shell -count=1`."
+    "Regression coverage: shell/snapshot_capture_test.go (named/unnamed capture and incremental grouping). Verified with `go test ./shell -count=1`.",
+    "Round 1308 (re-audit): the grouping half is now aligned for the executor too. execserver captures with shell.SnapshotSourceCaptureScript, so options and aliases are emitted inside one brace group, and a real bash and zsh capture -> parse -> render -> replay was verified end to end (TestShellSnapshotCaptureUsesSourceScriptLikeRust, TestShellSnapshotSourceCaptureReplaysRealShellLikeRust). The unnamed-file half is still missing: Rust shell_snapshot_file::materialize creates a per-launch tempfile under the sandbox-hidden daemon socket root, opens an independent reader, unlinks the path (nlink==0), passes the reader as an inherited fd, replays with `. /dev/fd/N`, closes the carrier fd before restoring functions, and probes descriptor-path access inside the exact capture sandbox (keeping environment replay for sh or when /dev/fd is unavailable). Go materializes a persistent named file at os.TempDir()/codex-exec-server-shell-snapshots/<hash>.<shell>, sources it by path, runs capture outside the launch sandbox, and never probes descriptor paths. Precondition: sandboxed capture run plus inherited-fd replay on Unix. Snapshot: 147a0d99."
    ]
   },
   {
