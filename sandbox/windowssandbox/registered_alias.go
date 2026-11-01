@@ -67,10 +67,21 @@ func RunnerAliasForAccount(registration *RuntimeRegistration, account SandboxRun
 		return "", errors.New("registered Core alias is not ready; retry setup")
 	}
 	alias := *entry.AliasPath
-	if !filepath.IsAbs(alias) || filepath.Base(alias) != AppCoreRunnerAlias {
+	// Runtime receipts store Windows paths even when the service state is read
+	// from another host, so validate the alias without host path semantics.
+	if !isWindowsSandboxAbs(alias) || windowsBase(alias) != AppCoreRunnerAlias {
 		return "", errors.New("registered Core setup contains an invalid alias")
 	}
 	return alias, nil
+}
+
+// windowsBase reports the final element of a Windows path.
+func windowsBase(path string) string {
+	path = strings.TrimRight(path, `\/`)
+	if index := strings.LastIndexAny(path, `\/`); index >= 0 {
+		return path[index+1:]
+	}
+	return path
 }
 
 // installationHomeMatches accepts the exact home the client recorded or its

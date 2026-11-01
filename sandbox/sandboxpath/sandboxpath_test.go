@@ -177,8 +177,10 @@ func TestFindExecutableInPathKeepsReadOnlyCarveoutWithReplaceableParentLikeRust(
 // every writable root and the current user cannot modify its ancestors.
 func TestFindExecutableInPathPreservesProtectedInstallationLikeRust(t *testing.T) {
 	systemBinary := canonical(t, "/bin/true")
+	systemProgram := filepath.Base(systemBinary)
+	systemSearchPath := filepath.Dir(systemBinary)
 	protectedRoot := ""
-	for path := filepath.Dir(systemBinary); ; path = filepath.Dir(path) {
+	for path := systemSearchPath; ; path = filepath.Dir(path) {
 		if filepath.Dir(path) == "/" {
 			protectedRoot = path
 			break
@@ -186,12 +188,6 @@ func TestFindExecutableInPathPreservesProtectedInstallationLikeRust(t *testing.T
 		if path == "/" {
 			t.Fatalf("system binary %q is not below a top-level directory", systemBinary)
 		}
-	}
-
-	tempDir := t.TempDir()
-	link := filepath.Join(tempDir, "bwrap")
-	if err := os.Symlink(systemBinary, link); err != nil {
-		t.Fatalf("Symlink error = %v", err)
 	}
 	// Root write narrowed by a read-only carveout over the protected directory.
 	policy := FilesystemPolicy{WritableRoots: []WritableRoot{{
@@ -209,7 +205,7 @@ func TestFindExecutableInPathPreservesProtectedInstallationLikeRust(t *testing.T
 		if candidate.FullDiskWriteAccess && os.Geteuid() == 0 {
 			want = ""
 		}
-		if got := FindExecutableInPath("bwrap", tempDir, "/", candidate); got != want {
+		if got := FindExecutableInPath(systemProgram, systemSearchPath, "/", candidate); got != want {
 			t.Fatalf("FindExecutableInPath(protected installation, fullDisk=%v) = %q, want %q", candidate.FullDiskWriteAccess, got, want)
 		}
 	}

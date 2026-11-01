@@ -50,8 +50,10 @@ func NewFileContentsChecker(entries []sandbox.FileSystemSandboxEntry, cwd string
 			return nil, err
 		}
 		if !info.IsDir() {
-			// A root that is not a directory has no metadata names to protect.
+			// Rust's default_read_only_subpaths_for_writable_root only adds metadata
+			// carveouts that exist, so a file root has neither names nor subpaths.
 			root.ProtectedMetadataNames = nil
+			root.ReadOnlySubpaths = nil
 		}
 		// Resolve existing carveouts and protected metadata aliases while
 		// retaining missing paths unchanged.
@@ -99,7 +101,7 @@ func (c *FileContentsChecker) Check(target string) (*Finding, error) {
 	if err != nil {
 		return nil, err
 	}
-	if c.policy.GlobDenials.IsLocalPathReadDeniedWithCanonical(target, resolvedTarget) {
+	if c.policy.GlobDenials.IsLocalPathReadDenied(resolvedTarget) {
 		return nil, nil
 	}
 	writeRoots := make([]string, 0, len(c.policy.Roots))

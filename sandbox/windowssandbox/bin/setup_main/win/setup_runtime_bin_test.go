@@ -35,10 +35,13 @@ func TestEnsureCodexAppRuntimePathsReadableSkipsMissingDirs(t *testing.T) {
 }
 
 func TestRuntimePathsIncludeAppRootAndPrimaryRuntimeRoot(t *testing.T) {
-	got := runtimePaths(`C:\Users\user\AppData\Local`, `C:\Users\user`)
+	localAppData := `C:\Users\user\AppData\Local`
+	userProfile := `C:\Users\user`
+	got := runtimePaths(localAppData, userProfile)
+	// Rust joins with PathBuf, so the expectation follows the host separator.
 	want := []string{
-		`C:\Users\user\AppData\Local\OpenAI\Codex`,
-		`C:\Users\user\.cache\codex-runtimes`,
+		filepath.Join(localAppData, "OpenAI", "Codex"),
+		filepath.Join(userProfile, ".cache", "codex-runtimes"),
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("runtimePaths() = %#v, want %#v", got, want)
