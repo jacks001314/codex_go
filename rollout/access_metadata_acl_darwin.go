@@ -5,6 +5,9 @@ package rollout
 /*
 #include <errno.h>
 #include <sys/acl.h>
+
+// errno is a macro on Darwin, so cgo cannot read it directly.
+static int codex_current_errno(void) { return errno; }
 */
 import "C"
 
@@ -54,8 +57,8 @@ func copyPlatformRolloutACL(sourcePath, destinationPath string) error {
 
 	entryID := C.int(0)
 	for {
-		var entry unsafe.Pointer
-		if C.acl_get_entry(acl, entryID, (*unsafe.Pointer)(unsafe.Pointer(&entry))) != 0 {
+		var entry C.acl_entry_t
+		if C.acl_get_entry(acl, entryID, &entry) != 0 {
 			err := currentErrno()
 			// macOS reports EINVAL after the final ACL entry.
 			if err == syscall.EINVAL {
@@ -88,5 +91,5 @@ func copyPlatformRolloutACL(sourcePath, destinationPath string) error {
 }
 
 func currentErrno() error {
-	return syscall.Errno(C.errno)
+	return syscall.Errno(C.codex_current_errno())
 }
