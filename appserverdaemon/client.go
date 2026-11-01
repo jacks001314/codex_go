@@ -445,7 +445,12 @@ func connectUnixSocketWithRetry(socketPath string, connectTimeout time.Duration,
 			}
 			return nil, fmt.Errorf("app server did not become ready on %s", socketPath)
 		}
-		conn, err := dialUnixSocketWebSocket(dialPath, minDuration(connectRetryDelay, remaining))
+		// The retry delay paces the polling loop; it must not bound the
+		// handshake. A loaded machine needs longer than a few milliseconds to run
+		// the server's HTTP handler, and aborting mid-handshake leaves the server
+		// with a connection that reads EOF. Each attempt gets the remaining
+		// budget, like the Rust startup poll, which is bounded overall.
+		conn, err := dialUnixSocketWebSocket(dialPath, remaining)
 		if err == nil {
 			return conn, nil
 		}
