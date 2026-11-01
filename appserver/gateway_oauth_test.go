@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"codex_go/config"
+	"codex_go/keyring"
 )
 
 // newGatewayOAuthRouter builds a router whose effective provider configures
@@ -50,6 +51,7 @@ func newGatewayOAuthRouter(t *testing.T) (*RuntimeRouter, string, *httptest.Serv
 		`token_url = "` + issuer.URL + `/token"`,
 		`client_id = "client-1"`,
 		`delivery = { kind = "header", name = "x-gateway-token" }`,
+		gatewayOAuthCredentialsStoreLine(),
 		``,
 	}, "\n")
 	if err := os.WriteFile(config.ConfigPath(home), []byte(configBody), 0o600); err != nil {
@@ -58,6 +60,27 @@ func newGatewayOAuthRouter(t *testing.T) (*RuntimeRouter, string, *httptest.Serv
 	router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(home)})
 	t.Cleanup(func() { _ = router.Close() })
 	return router, home, issuer
+}
+
+// gatewayOAuthCredentialsStoreLine selects the grant store the way Rust's
+// OAuthCredentialsStore does. Keyring is the default, but this build only links
+// an OS keyring on Windows; hosts without one must configure the file store or
+// every sign-in would fail to persist (Rust requires a working keyring in the
+// default mode).
+func gatewayOAuthCredentialsStoreLine() string {
+	if keyring.Available() {
+		return ""
+	}
+	return `credentials_store = "file"`
+}
+
+// gatewayOAuthCredentialPath is the file the grant store writes: the encrypted
+// keyring namespace, or the JSON store when file credentials are selected.
+func gatewayOAuthCredentialPath(home string) string {
+	if keyring.Available() {
+		return filepath.Join(home, "secrets", "gateway_oauth.age")
+	}
+	return filepath.Join(home, "secrets", "gateway_oauth.json")
 }
 
 // initializeGatewayOAuthConnection registers the connection the way the
@@ -166,7 +189,7 @@ func TestGatewayOAuthLoginForwardsAuthURLAndSucceedsLikeRust(t *testing.T) {
 	}
 
 	// The credential lands in the shared gateway store, not in the response.
-	if _, err := os.Stat(filepath.Join(home, "secrets", "gateway_oauth.age")); err != nil {
+	if _, err := os.Stat(gatewayOAuthCredentialPath(home)); err != nil {
 		t.Fatalf("gateway credential file: %v", err)
 	}
 	if strings.Contains(authURL, "gateway-token") {
