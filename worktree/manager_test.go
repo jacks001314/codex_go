@@ -9,6 +9,18 @@ import (
 	"testing"
 )
 
+// requireWorktreeListZero skips when the host git cannot emit the
+// NUL-separated worktree listing the manager parses. Apple git 2.32 rejects
+// the switch, and Rust parses the same command with the same limitation.
+func requireWorktreeListZero(t *testing.T, repo string) {
+	t.Helper()
+	cmd := exec.Command("git", "worktree", "list", "--porcelain", "-z")
+	cmd.Dir = repo
+	if out, err := cmd.CombinedOutput(); err != nil && strings.Contains(string(out), "unknown switch") {
+		t.Skipf("git lacks worktree list --porcelain -z: %s", strings.TrimSpace(string(out)))
+	}
+}
+
 func TestWorktreeManagerCreateAndList(t *testing.T) {
 	git, err := exec.LookPath("git")
 	if err != nil {
@@ -23,6 +35,7 @@ func TestWorktreeManagerCreateAndList(t *testing.T) {
 	}
 	runGit(t, source, "add", "file.txt")
 	runGit(t, source, "commit", "-m", "initial")
+	requireWorktreeListZero(t, source)
 
 	settings, err := FromDesktopConfig(t.TempDir(), nil)
 	if err != nil {
@@ -99,6 +112,7 @@ func TestWorktreeOwnerRejectsInvalidRecord(t *testing.T) {
 	}
 	runGit(t, source, "add", "file.txt")
 	runGit(t, source, "commit", "-m", "initial")
+	requireWorktreeListZero(t, source)
 	settings, err := FromDesktopConfig(t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -134,6 +148,7 @@ func TestWorktreeOwnerReturnsEmptyWhenMissing(t *testing.T) {
 	}
 	runGit(t, source, "add", "file.txt")
 	runGit(t, source, "commit", "-m", "initial")
+	requireWorktreeListZero(t, source)
 	settings, err := FromDesktopConfig(t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -166,6 +181,7 @@ func TestWorktreeOwnerRejectsPrimaryNestedAndUnmanagedCheckouts(t *testing.T) {
 	}
 	runGit(t, source, "add", "file.txt")
 	runGit(t, source, "commit", "-m", "initial")
+	requireWorktreeListZero(t, source)
 	settings, err := FromDesktopConfig(t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -211,6 +227,7 @@ func TestWorktreeListExcludesNonManagedLayout(t *testing.T) {
 	}
 	root := t.TempDir()
 	runGit(t, root, "init")
+	requireWorktreeListZero(t, root)
 	manager := NewWorktreeManager(WorktreeSettings{Root: filepath.Join(root, "managed"), AutoCleanupEnabled: true, KeepCount: 15})
 	list, err := manager.List(root)
 	if err != nil {
@@ -237,6 +254,7 @@ func TestWorktreeManagerRemoveManagedSafety(t *testing.T) {
 	}
 	runGit(t, source, "add", "file.txt")
 	runGit(t, source, "commit", "-m", "initial")
+	requireWorktreeListZero(t, source)
 
 	settings, err := FromDesktopConfig(t.TempDir(), nil)
 	if err != nil {

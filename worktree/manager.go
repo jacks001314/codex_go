@@ -73,7 +73,7 @@ func (m *WorktreeManager) Create(sourceCWD string, base string) (ManagedWorktree
 	if err != nil {
 		return ManagedWorktree{}, err
 	}
-	relativeCWD, err := filepath.Rel(sourceRoot, sourceCWD)
+	relativeCWD, err := filepath.Rel(sourceRoot, resolveWorktreeSourceCWD(sourceCWD))
 	if err != nil || relativeCWD == ".." || strings.HasPrefix(relativeCWD, ".."+string(filepath.Separator)) {
 		return ManagedWorktree{}, fmt.Errorf("working directory is outside the repository root")
 	}
@@ -90,7 +90,14 @@ func (m *WorktreeManager) Create(sourceCWD string, base string) (ManagedWorktree
 	if err != nil {
 		return ManagedWorktree{}, err
 	}
-	root := filepath.Join(m.settings.Root, bucket, repoName)
+	// git records a worktree under the canonical root, so the checkout has to be
+	// created there too; otherwise `git worktree remove` cannot find it on hosts
+	// that reach the managed root through a symlink (macOS /var).
+	managedRoot := m.settings.Root
+	if resolved, resolveErr := filepath.EvalSymlinks(managedRoot); resolveErr == nil {
+		managedRoot = resolved
+	}
+	root := filepath.Join(managedRoot, bucket, repoName)
 	if _, err := gitOutput(sourceRoot, "worktree", "add", "--detach", "--no-checkout", root, headSHA); err != nil {
 		_ = removeEmptyBucket(root)
 		return ManagedWorktree{}, err
@@ -129,7 +136,7 @@ func (m *WorktreeManager) List(sourceCWD string) ([]ManagedWorktree, error) {
 	if err != nil {
 		return nil, err
 	}
-	relativeCWD, err := filepath.Rel(sourceRoot, sourceCWD)
+	relativeCWD, err := filepath.Rel(sourceRoot, resolveWorktreeSourceCWD(sourceCWD))
 	if err != nil || relativeCWD == ".." || strings.HasPrefix(relativeCWD, ".."+string(filepath.Separator)) {
 		return nil, fmt.Errorf("working directory is outside the repository root")
 	}
@@ -453,6 +460,17 @@ func worktreeMetadataPath(checkout string) (string, error) {
 		return relative, nil
 	}
 	return filepath.Join(checkout, relative), nil
+}
+
+// resolveWorktreeSourceCWD makes the working directory comparable with the root
+// git reports. repositoryRoot resolves symlinks, and hosts such as macOS reach
+// their temporary directories through /var, so an unresolved working directory
+// would look like it sits outside the repository.
+func resolveWorktreeSourceCWD(cwd string) string {
+	if resolved, err := filepath.EvalSymlinks(cwd); err == nil {
+		return resolved
+	}
+	return cwd
 }
 
 func repositoryRoot(cwd string) (string, error) {

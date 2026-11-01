@@ -1,27 +1,36 @@
 package worktree
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+)
 
+// The Rust fixtures derive both the home and the configured root from a real
+// temporary directory, so the defaults follow the host's path separator.
 func TestFromDesktopConfigDefaultsMatchRust(t *testing.T) {
-	settings, err := FromDesktopConfig("C:\\home", nil)
+	home := t.TempDir()
+	settings, err := FromDesktopConfig(home, nil)
 	if err != nil {
 		t.Fatalf("FromDesktopConfig() error = %v", err)
 	}
-	if settings.Root != "C:\\home\\worktrees" || !settings.AutoCleanupEnabled || settings.KeepCount != 15 {
-		t.Fatalf("defaults = %#v, want root=C:\\home\\worktrees cleanup=true keep=15", settings)
+	wantRoot := filepath.Join(home, "worktrees")
+	if settings.Root != wantRoot || !settings.AutoCleanupEnabled || settings.KeepCount != 15 {
+		t.Fatalf("defaults = %#v, want root=%s cleanup=true keep=15", settings, wantRoot)
 	}
 }
 
 func TestFromDesktopConfigHonorsConfiguredValues(t *testing.T) {
-	settings, err := FromDesktopConfig("C:\\home", map[string]any{
-		"git-worktree-root":             `D:\\repo\\worktrees`,
+	home := t.TempDir()
+	customRoot := filepath.Join(home, "custom-managed-worktrees")
+	settings, err := FromDesktopConfig(home, map[string]any{
+		"git-worktree-root":             customRoot,
 		"worktree-auto-cleanup-enabled": false,
 		"worktree-keep-count":           float64(7),
 	})
 	if err != nil {
 		t.Fatalf("FromDesktopConfig() error = %v", err)
 	}
-	if settings.Root != `D:\repo\worktrees` || settings.AutoCleanupEnabled || settings.KeepCount != 7 {
+	if settings.Root != customRoot || settings.AutoCleanupEnabled || settings.KeepCount != 7 {
 		t.Fatalf("configured = %#v", settings)
 	}
 }
