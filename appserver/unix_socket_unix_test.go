@@ -15,7 +15,7 @@ import (
 func TestServeUnixSocketServesJSONRPCOverWebSocket(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	socketPath := filepath.Join(t.TempDir(), "codex.sock")
+	socketPath := filepath.Join(privateTempDir(t), "codex.sock")
 	done := make(chan error, 1)
 	go func() {
 		done <- ServeUnixSocket(ctx, &UnixSocketOptions{
@@ -54,7 +54,7 @@ func TestServeUnixSocketServesJSONRPCOverWebSocket(t *testing.T) {
 func TestServeUnixSocketNegotiatesZstdCompression(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	socketPath := filepath.Join(t.TempDir(), "codex.sock")
+	socketPath := filepath.Join(privateTempDir(t), "codex.sock")
 	done := make(chan error, 1)
 	compressionEnabled := true
 	go func() {
@@ -121,7 +121,7 @@ func TestServeUnixSocketNegotiatesZstdCompression(t *testing.T) {
 func TestServeUnixSocketCompressionFeatureGate(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	socketPath := filepath.Join(t.TempDir(), "codex.sock")
+	socketPath := filepath.Join(privateTempDir(t), "codex.sock")
 	done := make(chan error, 1)
 	compressionEnabled := false
 	go func() {

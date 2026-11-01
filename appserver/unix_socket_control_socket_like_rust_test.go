@@ -20,7 +20,7 @@ import (
 // in its control socket tests.
 func serveControlSocketForTest(t *testing.T, access DaemonShutdownAccess, shutdown func()) string {
 	t.Helper()
-	socketPath := filepath.Join(t.TempDir(), "control.sock")
+	socketPath := filepath.Join(shortTempDir(t), "control.sock")
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
 		t.Fatalf("Listen(unix) error = %v", err)

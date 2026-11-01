@@ -2497,7 +2497,7 @@ func TestRouterLifecycleNullServiceTierUsesDefault(t *testing.T) {
 	router.SetClock(func() time.Time { return fixedTime() })
 
 	startResponse := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, map[string]any{
-		"cwd":         "D:/repo",
+		"cwd":         t.TempDir(),
 		"prompt":      "hello",
 		"serviceTier": nil,
 	}))

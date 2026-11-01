@@ -12,7 +12,7 @@ import (
 )
 
 func TestProtectedUnixSocketPathIsDeterministic(t *testing.T) {
-	rendezvous := filepath.Join(t.TempDir(), "codex.sock")
+	rendezvous := filepath.Join(privateTempDir(t), "codex.sock")
 	first, err := protectedUnixSocketPath(rendezvous)
 	if err != nil {
 		t.Fatalf("protectedUnixSocketPath() error = %v", err)
@@ -34,7 +34,7 @@ func TestProtectedUnixSocketPathIsDeterministic(t *testing.T) {
 }
 
 func TestPrepareUnixSocketRendezvousRemovesOwnedAlias(t *testing.T) {
-	rendezvous := filepath.Join(t.TempDir(), "codex.sock")
+	rendezvous := filepath.Join(privateTempDir(t), "codex.sock")
 	physical, err := protectedUnixSocketPath(rendezvous)
 	if err != nil {
 		t.Fatalf("protectedUnixSocketPath() error = %v", err)
@@ -57,12 +57,12 @@ func TestPrepareUnixSocketRendezvousRemovesOwnedAlias(t *testing.T) {
 }
 
 func TestPrepareUnixSocketRendezvousRejectsForeignSymlink(t *testing.T) {
-	rendezvous := filepath.Join(t.TempDir(), "codex.sock")
+	rendezvous := filepath.Join(privateTempDir(t), "codex.sock")
 	physical, err := protectedUnixSocketPath(rendezvous)
 	if err != nil {
 		t.Fatalf("protectedUnixSocketPath() error = %v", err)
 	}
-	if err := os.Symlink(filepath.Join(t.TempDir(), "foreign.sock"), rendezvous); err != nil {
+	if err := os.Symlink(filepath.Join(privateTempDir(t), "foreign.sock"), rendezvous); err != nil {
 		t.Fatalf("Symlink() error = %v", err)
 	}
 	if err := prepareUnixSocketRendezvous(rendezvous, physical); err == nil {
@@ -74,7 +74,7 @@ func TestPrepareUnixSocketRendezvousRejectsForeignSymlink(t *testing.T) {
 }
 
 func TestVerifiedLocalDaemonSocketRequiresProtectedAlias(t *testing.T) {
-	rendezvous := filepath.Join(t.TempDir(), "codex.sock")
+	rendezvous := filepath.Join(privateTempDir(t), "codex.sock")
 	physical, err := protectedUnixSocketPath(rendezvous)
 	if err != nil {
 		t.Fatalf("protectedUnixSocketPath() error = %v", err)

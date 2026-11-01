@@ -1955,8 +1955,10 @@ func TestGetMetadataIncludesCreatedAtOnWindows(t *testing.T) {
 func TestNoFollowSymlinkComponentRejectsLinkedPaths(t *testing.T) {
 	// Rust #39659/#39666: no-follow operations reject links in any path
 	// component.
-	dir := t.TempDir()
-	outside := t.TempDir()
+	// Rust resolves the fixture root before no-follow operations; a temp path
+	// under a symlinked ancestor such as macOS /var would otherwise be rejected.
+	dir := canonicalTempDir(t)
+	outside := canonicalTempDir(t)
 	if err := os.WriteFile(filepath.Join(outside, "target.txt"), []byte("target"), 0o600); err != nil {
 		t.Fatal(err)
 	}

@@ -16,7 +16,7 @@ import (
 // regular-file validation stay unchanged (local_file_system_read_tests.rs).
 func TestReadFileContextReadsFourMiBLikeRust(t *testing.T) {
 	payload := bytes.Repeat([]byte("x"), 4*1024*1024)
-	path := filepath.Join(t.TempDir(), "payload.bin")
+	path := filepath.Join(canonicalTempDir(t), "payload.bin")
 	if err := os.WriteFile(path, payload, 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}

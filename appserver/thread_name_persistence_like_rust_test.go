@@ -21,7 +21,7 @@ func TestRouterThreadSetNameMaterializesEmptyPaginatedThreadLikeRust(t *testing.
 	router.SetClock(func() time.Time { return fixedTime() })
 
 	start := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
-		CWD:         "D:/repo",
+		CWD:         t.TempDir(),
 		HistoryMode: ThreadHistoryPaginated,
 	}))
 	if start.Error != nil {
