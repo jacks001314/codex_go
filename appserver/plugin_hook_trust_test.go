@@ -11,13 +11,24 @@ import (
 )
 
 // pluginBundleFingerprintVector is the bundle fingerprint of
-// pluginBundleFixture computed by an independent implementation of the Rust
-// recipe (hooks/src/engine/plugin_fingerprint.rs, codex-rs #54619): sha256 over
+// pluginBundleFixture computed by the Rust implementation of
+// hooks/src/engine/plugin_fingerprint.rs (codex-rs #54619): sha256 over
 // b"codex-plugin-bundle-v1", per-entry length-prefixed relative paths, a
 // directory/file discriminator, little-endian lengths and file contents, with
 // __pycache__/.venv/*.pyc/*.egg-info skipped and entries visited in ascending
 // name order with a LIFO stack.
-const pluginBundleFingerprintVector = "sha256:1b30ece2fc8dd5840ddd43127d3e0931034d3e3679e06fe398bbe82769d2c44b"
+//
+// The relative paths are hashed as the platform encodes them, so Rust's own
+// fingerprint differs between "/" and "\" hosts and the vector must follow.
+const pluginBundleFingerprintVector = "sha256:ffb9a8b9cd4906e02e5a1641c5d1736ce99c9f88abf96cb1ddd378f2948f08b0"
+const pluginBundleFingerprintVectorWindows = "sha256:1b30ece2fc8dd5840ddd43127d3e0931034d3e3679e06fe398bbe82769d2c44b"
+
+func pluginBundleFingerprintWant() string {
+	if runtime.GOOS == "windows" {
+		return pluginBundleFingerprintVectorWindows
+	}
+	return pluginBundleFingerprintVector
+}
 
 const pluginBundleHookJSON = `{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"python3 ${PLUGIN_ROOT}/hooks/log_version.py"}]}]}}`
 
@@ -55,8 +66,8 @@ func TestPluginContentHashMatchesRustBundleFingerprintLikeRust(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pluginContentHash() error = %v", err)
 	}
-	if got != pluginBundleFingerprintVector {
-		t.Fatalf("pluginContentHash() = %q, want %q", got, pluginBundleFingerprintVector)
+	if want := pluginBundleFingerprintWant(); got != want {
+		t.Fatalf("pluginContentHash() = %q, want %q", got, want)
 	}
 	again, err := pluginContentHash(root)
 	if err != nil || again != got {
