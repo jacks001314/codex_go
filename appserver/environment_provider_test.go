@@ -48,6 +48,13 @@ func TestEnvironmentManagerAppliesProviderSnapshotLikeRust(t *testing.T) {
 					Command: &execserverclient.StdioExecServerCommand{Program: "ssh", Args: []string{"dev"}},
 				},
 			},
+			{
+				ID: "registry",
+				Transport: execserverclient.EnvironmentTransport{
+					Kind:          execserverclient.EnvironmentTransportNoise,
+					NoiseProvider: nonzeroNoiseProvider(),
+				},
+			},
 		},
 	}
 	manager := NewEnvironmentManager(EnvironmentShellInfo{Name: "sh", Path: "/bin/sh"}, "/workspace")
@@ -71,6 +78,13 @@ func TestEnvironmentManagerAppliesProviderSnapshotLikeRust(t *testing.T) {
 	}
 	if ssh.ExecServerURL != "" {
 		t.Fatalf("ssh-dev URL = %q, want the stdio transport only", ssh.ExecServerURL)
+	}
+	registry, ok := manager.Record("registry")
+	if !ok || registry == nil || registry.NoiseProvider == nil {
+		t.Fatalf("registry record = %#v, want the Noise connect provider", registry)
+	}
+	if registry.ExecServerURL != "" || registry.StdioCommand != nil {
+		t.Fatalf("registry record = %#v, want only the Noise transport", registry)
 	}
 	// The local environment stays implicit and is never a record.
 	if _, ok := manager.Record(execserverclient.LocalEnvironmentID); ok {
@@ -117,4 +131,12 @@ func TestEnvironmentInfoServesStdioEnvironmentLikeRust(t *testing.T) {
 	if status.Status != EnvironmentStatusReady {
 		t.Fatalf("status = %q, want ready", status.Status)
 	}
+}
+
+// nonzeroNoiseProvider is a connect provider that is never dialed by the
+// provider-snapshot tests.
+func nonzeroNoiseProvider() execserverclient.NoiseRendezvousConnectProvider {
+	return execserverclient.NoiseRendezvousConnectProviderFunc(func(context.Context, execserverclient.RemotePublicKey) (*execserverclient.NoiseRendezvousConnectBundle, error) {
+		return nil, nil
+	})
 }

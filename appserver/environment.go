@@ -188,8 +188,8 @@ func (m *EnvironmentManager) SetHTTPClient(httpClient *http.Client) {
 
 // ApplyProviderSnapshot pre-registers the environments an environment provider
 // offers (Rust EnvironmentManager::from_codex_home + insert_environment). The
-// local environment stays implicit, so only configured remote and stdio
-// environments become records.
+// local environment stays implicit, so only configured WebSocket, stdio and
+// Noise rendezvous environments become records.
 func (m *EnvironmentManager) ApplyProviderSnapshot(snapshot execserverclient.EnvironmentProviderSnapshot) error {
 	if m == nil {
 		return nil
@@ -222,6 +222,14 @@ func (m *EnvironmentManager) ApplyProviderSnapshot(snapshot execserverclient.Env
 				return fmt.Errorf("%w: environment `%s` is missing its stdio command", ErrInvalidEnvironmentRequest, id)
 			}
 			record.StdioCommand = environment.Transport.Command
+		case execserverclient.EnvironmentTransportNoise:
+			// Rust's from_noise_environment_config registers the registry-backed
+			// executor with its NoiseRendezvous transport; the connect provider
+			// replaces a WebSocket URL.
+			if environment.Transport.NoiseProvider == nil {
+				return fmt.Errorf("%w: environment `%s` is missing its registry provider", ErrInvalidEnvironmentRequest, id)
+			}
+			record.NoiseProvider = environment.Transport.NoiseProvider
 		default:
 			record.ExecServerURL = strings.TrimSpace(environment.Transport.WebSocketURL)
 			record.ExecServerHeaders = environment.Transport.HTTPHeaders.Clone()
