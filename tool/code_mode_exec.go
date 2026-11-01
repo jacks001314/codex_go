@@ -993,7 +993,7 @@ func (e *codeModeExecExecutor) execute(ctx context.Context, invocation *Invocati
 	defer timer.Stop()
 	select {
 	case <-cell.done:
-		output, runErr := e.consumeCell(cellID, cell)
+		output, runErr := e.consumeCell(cellID, cell, cell.startedAt)
 		if !codeModeHostObservation(invocation) {
 			output = truncateCodeModeOutput(output, codeModeTokenLimit(options.MaxOutputTokens))
 		}
@@ -2166,7 +2166,7 @@ func codeModeContentItemsText(items []utils.FunctionCallOutputContentItem) strin
 	return strings.Join(segments, "\n")
 }
 
-func (e *codeModeExecExecutor) consumeCell(cellID string, cell *codeModeCell) (*Output, error) {
+func (e *codeModeExecExecutor) consumeCell(cellID string, cell *codeModeCell, observedAt time.Time) (*Output, error) {
 	e.cellsMu.Lock()
 	delete(e.cells, cellID)
 	output, err := cell.output, cell.err
@@ -2194,11 +2194,15 @@ func (e *codeModeExecExecutor) consumeCell(cellID string, cell *codeModeCell) (*
 		}
 		output.Body = body
 		output.Data["content_items"] = items
-		if !cell.completedAt.IsZero() {
-			// Rust #55653: a Result retrieved after completion reports how long
-			// it was buffered; the Terminated variant never carries it.
-			output.Data["result_buffered_for_ns"] = uint64(time.Since(cell.completedAt).Nanoseconds())
+		// Rust #55653: only a Result that was already buffered when this
+		// observation arrived reports how long it waited; a completion the
+		// observation witnessed itself reports zero, and the Terminated variant
+		// never carries the field (cell_actor/types.rs buffered_completion).
+		var buffered time.Duration
+		if !cell.completedAt.IsZero() && !cell.completedAt.After(observedAt) {
+			buffered = observedAt.Sub(cell.completedAt)
 		}
+		output.Data["result_buffered_for_ns"] = uint64(buffered.Nanoseconds())
 	}
 	return output, err
 }
@@ -2470,6 +2474,7 @@ func (e *codeModeWaitExecutor) execute(ctx context.Context, invocation *Invocati
 		e.exec.cellsMu.Unlock()
 		cell.cancel()
 	}
+	observedAt := time.Now()
 	timer := time.NewTimer(codeModeYieldTimeout(codeModeWaitYield(params.YieldTimeMS)))
 	defer timer.Stop()
 	preempt := YieldSignalFromInvocation(invocation)
@@ -2485,7 +2490,7 @@ func (e *codeModeWaitExecutor) execute(ctx context.Context, invocation *Invocati
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	case <-cell.done:
-		output, runErr := e.exec.consumeCell(params.CellID, cell)
+		output, runErr := e.exec.consumeCell(params.CellID, cell, observedAt)
 		// A termination that only claimed an already-completed result keeps the
 		// completed observation (Rust #55653).
 		if params.Terminate && cell.terminated && output != nil {

@@ -203,7 +203,7 @@ func (r *SessionRuntime) Wait(ctx context.Context, request *WaitRequest, preempt
 	// tool argument layer supplies the 10 000 ms default.
 	deadline := r.yieldTimeout(request.YieldTimeMS)
 	if cell, ok := r.cells.Get(cellID); ok && cell.Status != CellRunning {
-		outcome := LiveCell(withHostDuration(r.responseForCell(cell, r.cells.Now(), request.MaxOutputTokens), startedAt))
+		outcome := LiveCell(withHostDuration(r.responseForCell(cell, r.cells.Now(), startedAt, request.MaxOutputTokens), startedAt))
 		return &outcome, nil
 	}
 	wakeup := r.wakeup(cellID)
@@ -223,7 +223,7 @@ func (r *SessionRuntime) Wait(ctx context.Context, request *WaitRequest, preempt
 		outcome := MissingCell(response)
 		return &outcome, nil
 	}
-	outcome := LiveCell(withHostDuration(r.responseForCell(cell, r.cells.Now(), request.MaxOutputTokens), startedAt))
+	outcome := LiveCell(withHostDuration(r.responseForCell(cell, r.cells.Now(), startedAt, request.MaxOutputTokens), startedAt))
 	return &outcome, nil
 }
 
@@ -258,7 +258,7 @@ func (r *SessionRuntime) Terminate(request TerminateRequest) (*WaitOutcome, erro
 	}
 	r.releaseEngine(cellID.String())
 	r.signal(cellID.String())
-	outcome := LiveCell(withHostDuration(r.responseForCell(cell, r.cells.Now(), request.MaxOutputTokens), startedAt))
+	outcome := LiveCell(withHostDuration(r.responseForCell(cell, r.cells.Now(), startedAt, request.MaxOutputTokens), startedAt))
 	return &outcome, nil
 }
 
@@ -469,7 +469,7 @@ func (r *SessionRuntime) completeCellFromEngine(cellID CellID, outcome engineOut
 	}
 	r.signal(cellID.String())
 	if !completed {
-		return withHostDuration(r.responseForCell(cell, r.cells.Now(), maxOutputTokens), startedAt), nil
+		return withHostDuration(r.responseForCell(cell, r.cells.Now(), startedAt, maxOutputTokens), startedAt), nil
 	}
 	rendered, boundedErr := r.renderObservation(items, maxOutputTokens, errorText(execErr))
 	return withHostDuration(Result(cellID, rendered, boundedErr), startedAt), nil
@@ -501,7 +501,7 @@ func (r *SessionRuntime) signal(cellID string) {
 // responseForCell builds the observation for a wait, terminate, or late
 // completion. Each observation renders with its own token budget when the
 // session uses server output truncation (Rust #57850/#57870).
-func (r *SessionRuntime) responseForCell(cell *Cell, now time.Time, maxOutputTokens *int) RuntimeResponse {
+func (r *SessionRuntime) responseForCell(cell *Cell, now, observedAt time.Time, maxOutputTokens *int) RuntimeResponse {
 	if cell == nil {
 		return Result("", nil, stringPtrLocal("exec cell not found"))
 	}
@@ -521,9 +521,10 @@ func (r *SessionRuntime) responseForCell(cell *Cell, now time.Time, maxOutputTok
 	}
 	rendered, boundedErr := r.renderObservation(items, maxOutputTokens, errorText)
 	response := Result(cellID, rendered, boundedErr)
-	// Rust #55653: a Result retrieved after completion reports how long it was
-	// buffered; immediate delivery keeps the zero default.
-	if buffered, ok := cell.ResultBufferedFor(now); ok {
+	// Rust #55653: only a Result that was already buffered when this observation
+	// arrived reports how long it waited; a completion observed live reports
+	// zero (cell_actor/types.rs buffered_completion).
+	if buffered, ok := cell.ResultBufferedFor(now); ok && !cell.CompletedAt.After(observedAt) {
 		response.ResultBufferedForNS = uint64(buffered.Nanoseconds())
 	}
 	return response

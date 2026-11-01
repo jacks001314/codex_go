@@ -34059,7 +34059,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "Round 1248: codemode/codemode.go:1278 Cell.ResultBufferedFor and the Now clock stamp how long a completed cell result waited before delivery, exposed as ResultBufferedForNS in codemode/protocol_types.go:218 and measured around the termination/completion race. Tests: codemode/result_buffered_like_rust_test.go."
+    "Round 1248: codemode/codemode.go:1278 Cell.ResultBufferedFor and the Now clock stamp how long a completed cell result waited before delivery, exposed as ResultBufferedForNS in codemode/protocol_types.go:218 and measured around the termination/completion race. Tests: codemode/result_buffered_like_rust_test.go. Round 1287: the buffer is only measured when the result was already buffered before the observation arrived; a completion the observation witnessed itself reports zero, matching Rust `buffered_completion` (`codemode/session_runtime.go` `responseForCell`, `tool/code_mode_exec.go` `consumeCell`), with `codemode/session_live_completion_buffer_like_rust_test.go` and `tool/code_mode_live_completion_buffer_like_rust_test.go` covering both engines."
    ]
   },
   {
