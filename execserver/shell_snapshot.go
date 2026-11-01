@@ -132,7 +132,7 @@ func (m *shellSnapshotManager) rewrite(ctx context.Context, params *ExecParams, 
 	// Rust #48078 materializes the replay file per launch and hands the reader to
 	// the child; a transport that cannot be prepared falls back to normal startup.
 	var reader *os.File
-	if entry.fileSource {
+	if entry.fileSource && entry.state != "" {
 		materialized, materializeErr := materializeShellSnapshotTransport(shellType, entry.state)
 		if materializeErr != nil {
 			return params, nil, nil
