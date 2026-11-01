@@ -2052,6 +2052,17 @@ func (s *ConfigService) ReloadRequirementsFromHome() error {
 	return nil
 }
 
+// requirementsSnapshot copies the effective requirements for loaders that run
+// outside the lock, so a concurrent reload cannot race the merge.
+func (s *ConfigService) requirementsSnapshot() *ConfigRequirements {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return cloneRequirements(s.requirements)
+}
+
 // LocalRequirements returns the requirements the home's file supplied, without
 // any effective override a host installed afterwards, or nil when the load
 // failed. Rust's local application load reads the same pre-cloud sources, so the
@@ -2813,7 +2824,8 @@ func editsReplaceOnlyMCPTables(edits []ConfigEdit) bool {
 // chatgpt_base_url become read-only through config write APIs when a managed
 // requirement pins them.
 func (s *ConfigService) rejectManagedAuthWrite(keyPath string) error {
-	if s == nil || s.requirements == nil {
+	requirements := s.requirementsSnapshot()
+	if requirements == nil {
 		return nil
 	}
 	parts := splitKeyPath(keyPath)
@@ -2823,15 +2835,15 @@ func (s *ConfigService) rejectManagedAuthWrite(keyPath string) error {
 	// Managed OTEL requirements pin exact fields, including individual
 	// span-attribute and tracestate entries, while unmanaged siblings stay
 	// writable (Rust #57658).
-	if field := otelRequirementForConfigPath(s.requirements.Otel, parts); field != "" {
+	if field := otelRequirementForConfigPath(requirements.Otel, parts); field != "" {
 		return configWriteErrorf(ConfigWriteRequirementReadonly, "`%s` is managed by requirements and cannot be changed", field)
 	}
 	if len(parts) != 1 {
 		// Provider IDs may contain dots, so compare the remaining path against
 		// the managed provider IDs (Rust #44650).
-		if len(parts) > 1 && parts[0] == "model_providers" && len(s.requirements.ModelProviders) > 0 {
+		if len(parts) > 1 && parts[0] == "model_providers" && len(requirements.ModelProviders) > 0 {
 			rest := strings.Join(parts[1:], ".")
-			for id := range s.requirements.ModelProviders {
+			for id := range requirements.ModelProviders {
 				if rest == id || strings.HasPrefix(rest, id+".") {
 					return configWriteErrorf(ConfigWriteValidation, "model_providers.%s is managed by requirements and cannot be written", id)
 				}
@@ -2841,19 +2853,19 @@ func (s *ConfigService) rejectManagedAuthWrite(keyPath string) error {
 	}
 	switch parts[0] {
 	case "cli_auth_credentials_store":
-		if s.requirements.CliAuthCredentialsStore != nil {
+		if requirements.CliAuthCredentialsStore != nil {
 			return configWriteErrorf(ConfigWriteValidation, "cli_auth_credentials_store is managed by requirements and cannot be written")
 		}
 	case "chatgpt_base_url":
-		if s.requirements.ChatgptBaseURL != nil {
+		if requirements.ChatgptBaseURL != nil {
 			return configWriteErrorf(ConfigWriteValidation, "chatgpt_base_url is managed by requirements and cannot be written")
 		}
 	case "model_provider":
-		if s.requirements.ModelProvider != nil {
+		if requirements.ModelProvider != nil {
 			return configWriteErrorf(ConfigWriteValidation, "model_provider is managed by requirements and cannot be written")
 		}
 	case "model_providers":
-		if len(s.requirements.ModelProviders) > 0 {
+		if len(requirements.ModelProviders) > 0 {
 			return configWriteErrorf(ConfigWriteValidation, "model_providers is managed by requirements and cannot be written")
 		}
 	}
@@ -3089,7 +3101,7 @@ func (s *ConfigService) readLayersForCWDOptions(cwd string, profile string, igno
 	// #52302: the broker state also honours the managed credential-masking
 	// requirement, so the project sanitizer protects shell settings exactly
 	// like the loader does (Rust config/src/loader/mod.rs:995-1031).
-	brokerState := CredentialBrokerProjectStateForValuesWithRequirements(trustedBrokerValues, s.requirements)
+	brokerState := CredentialBrokerProjectStateForValuesWithRequirements(trustedBrokerValues, s.requirementsSnapshot())
 	trustedProviderEnvKeys := CredentialBrokerProviderEnvKeys(trustedBrokerValues)
 	if !ignoreProjectConfig && ProjectConfigEnabled(userValues, cwd) {
 		for _, dotCodexFolder := range ProjectDotCodexFolders(cwd) {
