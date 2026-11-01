@@ -76,11 +76,14 @@ func writeTestPackage(t *testing.T, root string, version string, complete bool) 
 		t.Fatalf("WriteFile(manifest) error = %v", err)
 	}
 	if complete {
-		writeTestFile(t, filepath.Join(binDir, codeModeHostExecutableName()))
-		writeTestFile(t, filepath.Join(root, "codex-path", defaultRGCommandName()))
+		writeTestExecutable(t, filepath.Join(binDir, codeModeHostExecutableName()))
+		writeTestExecutable(t, filepath.Join(root, "codex-path", defaultRGCommandName()))
 		if runtime.GOOS == "windows" {
-			writeTestFile(t, filepath.Join(root, "codex-resources", "codex-command-runner.exe"))
-			writeTestFile(t, filepath.Join(root, "codex-resources", "codex-windows-sandbox-setup.exe"))
+			writeTestExecutable(t, filepath.Join(root, "codex-resources", "codex-command-runner.exe"))
+			writeTestExecutable(t, filepath.Join(root, "codex-resources", "codex-windows-sandbox-setup.exe"))
+		}
+		if runtime.GOOS == "linux" {
+			writeTestExecutable(t, filepath.Join(root, "codex-resources", "bwrap"))
 		}
 	}
 	return entrypoint

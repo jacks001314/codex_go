@@ -9,10 +9,20 @@ import (
 
 func writeTestFile(t *testing.T, path string) {
 	t.Helper()
+	writeTestFileMode(t, path, 0o600)
+}
+
+func writeTestExecutable(t *testing.T, path string) {
+	t.Helper()
+	writeTestFileMode(t, path, 0o700)
+}
+
+func writeTestFileMode(t *testing.T, path string, mode os.FileMode) {
+	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("MkdirAll(%s) error = %v", filepath.Dir(path), err)
 	}
-	if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("x"), mode); err != nil {
 		t.Fatalf("WriteFile(%s) error = %v", path, err)
 	}
 }
