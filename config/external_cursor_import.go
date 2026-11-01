@@ -215,6 +215,9 @@ func (s *ConfigService) importExternalCursorMCP(scope externalMigrationScope, re
 }
 
 func writeExternalTOML(target string, values map[string]any) error {
+	if err := rejectRedirectedExternalTarget(target); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 		return err
 	}
