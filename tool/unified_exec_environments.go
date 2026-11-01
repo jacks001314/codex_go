@@ -52,6 +52,11 @@ func UnifiedExecEnvironmentsForProviderIDs(snapshot execserver.EnvironmentProvid
 				continue
 			}
 			environment.ExecServerStdioCommand = transport.Command
+		case execserver.EnvironmentTransportNoise:
+			if transport.NoiseProvider == nil {
+				continue
+			}
+			environment.NoiseProvider = transport.NoiseProvider
 		default:
 			environment.ExecServerURL = strings.TrimSpace(transport.WebSocketURL)
 			if len(transport.HTTPHeaders) > 0 {

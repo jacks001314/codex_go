@@ -20,18 +20,18 @@ import (
 	"strings"
 	"time"
 
+	"codex_go/agent"
 	"codex_go/appserver"
 	"codex_go/appserverdaemon"
-	"codex_go/agent"
 	"codex_go/auth"
 	"codex_go/chatgptapi"
 	"codex_go/cli"
+	"codex_go/codexapi"
 	"codex_go/config"
 	"codex_go/doctor"
 	"codex_go/envutil"
 	codexexec "codex_go/exec"
 	"codex_go/execpolicy"
-	"codex_go/codexapi"
 	"codex_go/execserver"
 	"codex_go/execserver/hostconfig"
 	"codex_go/features"
@@ -1119,7 +1119,7 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 		return runExecServerRemoteWithParentLifetime(ctx, stdin, opts.ExitOnStdinClose, execserver.RemoteEnvironmentConfig{
 			BaseURL:                    baseURL,
 			EnvironmentID:              environmentID,
-			ForwardURL: execServerForwardURL(opts),
+			ForwardURL:                 execServerForwardURL(opts),
 			Name:                       strings.TrimSpace(opts.Name),
 			AuthHeaders:                headers,
 			HTTPClient:                 policyHTTPClient(loadedConfig, codexnetwork.NewHTTPClient(loadedConfig.RespectSystemProxyEnabled(), 0)),
@@ -1175,7 +1175,7 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 	return runExecServerRemoteWithParentLifetime(ctx, stdin, opts.ExitOnStdinClose, execserver.RemoteEnvironmentConfig{
 		BaseURL:                    baseURL,
 		EnvironmentID:              environmentID,
-		ForwardURL: execServerForwardURL(opts),
+		ForwardURL:                 execServerForwardURL(opts),
 		Name:                       strings.TrimSpace(opts.Name),
 		AuthHeaders:                headers,
 		ResolveAuthHeaders:         resolveHeaders,
@@ -1208,7 +1208,7 @@ func runExecServerRemoteWithDirectTransport(
 	return runExecServerRemoteWithParentLifetime(ctx, stdin, opts.ExitOnStdinClose, execserver.RemoteEnvironmentConfig{
 		BaseURL:                    baseURL,
 		EnvironmentID:              environmentID,
-		ForwardURL: execServerForwardURL(opts),
+		ForwardURL:                 execServerForwardURL(opts),
 		Name:                       strings.TrimSpace(opts.Name),
 		Transport:                  execserver.RemoteTransportDirect,
 		DirectSigner:               signer,
@@ -1292,7 +1292,7 @@ func runExecServerRemoteWithExecutorCredential(
 	cfg := execserver.RemoteEnvironmentConfig{
 		BaseURL:                  baseURL,
 		EnvironmentID:            environmentID,
-		ForwardURL: execServerForwardURL(opts),
+		ForwardURL:               execServerForwardURL(opts),
 		Name:                     strings.TrimSpace(opts.Name),
 		ResolveAuthHeaders:       pipe.ResolveAuthHeaders,
 		RefreshAfterUnauthorized: pipe.RefreshAfterUnauthorized,
@@ -1818,7 +1818,7 @@ func runAppServer(ctx context.Context, opts cli.AppServerOptions, root *cli.Root
 	// Rust #47620/#47648 host wiring: environments.toml (or the
 	// CODEX_EXEC_SERVER_URL fallback) pre-registers the configured executors and
 	// a malformed file fails app-server startup.
-	environmentProvider, err := execserver.EnvironmentProviderFromCodexHome(codexHome)
+	environmentProvider, err := execserver.PrepareEnvironmentProviderFromCodexHome(codexHome)
 	if err != nil {
 		return err
 	}

@@ -502,6 +502,54 @@ func TestDefaultEnvironmentIsRemoteLikeRust(t *testing.T) {
 	}
 }
 
+// Rust parity: PreparedEnvironmentManager::prepare_from_codex_home prefers the
+// CODEX_EXEC_SERVER_NOISE_* registry configuration over environments.toml and
+// makes the registry executor the single default environment (no local entry).
+// A partial configuration is an error, exactly like noise_environment_config_from_values.
+func TestPrepareEnvironmentProviderFromCodexHomePrefersNoiseLikeRust(t *testing.T) {
+	codexHome := t.TempDir()
+	body := "default = \"ssh-dev\"\n\n[[environments]]\nid = \"ssh-dev\"\nprogram = \"codex-exec-server\"\n"
+	if err := os.WriteFile(filepath.Join(codexHome, EnvironmentsTOMLFile), []byte(body), 0o600); err != nil {
+		t.Fatalf("write environments.toml: %v", err)
+	}
+	t.Setenv(CodexExecServerNoiseRegistryURLEnvVar, "https://registry.example/")
+	t.Setenv(CodexExecServerNoiseEnvironmentIDEnvVar, "environment-1")
+	t.Setenv(CodexExecServerNoiseAuthTokenEnvVar, "registry-token")
+
+	snapshot, err := PrepareEnvironmentProviderFromCodexHome(codexHome)
+	if err != nil {
+		t.Fatalf("PrepareEnvironmentProviderFromCodexHome() error = %v", err)
+	}
+	if snapshot.IncludeLocal || len(snapshot.Environments) != 1 {
+		t.Fatalf("noise snapshot = %#v", snapshot)
+	}
+	environment := snapshot.Environments[0]
+	if environment.ID != RemoteEnvironmentID || environment.Transport.Kind != EnvironmentTransportNoise || environment.Transport.NoiseProvider == nil {
+		t.Fatalf("noise environment = %#v", environment)
+	}
+	if !snapshot.DefaultEnvironmentIsRemote() {
+		t.Fatal("noise default reported local")
+	}
+
+	// A partial configuration fails instead of silently falling back to the file.
+	t.Setenv(CodexExecServerNoiseEnvironmentIDEnvVar, "")
+	_, err = PrepareEnvironmentProviderFromCodexHome(codexHome)
+	if err == nil || !strings.Contains(err.Error(), "Noise environment requires") {
+		t.Fatalf("partial noise error = %v", err)
+	}
+
+	// Without the registry configuration the file wins again.
+	t.Setenv(CodexExecServerNoiseRegistryURLEnvVar, "")
+	t.Setenv(CodexExecServerNoiseAuthTokenEnvVar, "")
+	snapshot, err = PrepareEnvironmentProviderFromCodexHome(codexHome)
+	if err != nil {
+		t.Fatalf("PrepareEnvironmentProviderFromCodexHome(file) error = %v", err)
+	}
+	if len(snapshot.Environments) != 1 || snapshot.Environments[0].ID != "ssh-dev" {
+		t.Fatalf("file snapshot = %#v", snapshot)
+	}
+}
+
 func environmentsTestFileName(index int) string {
 	return "environments-" + string(rune('0'+index)) + ".toml"
 }

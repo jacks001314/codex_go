@@ -1,6 +1,8 @@
 package tool
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"testing"
 
@@ -22,6 +24,27 @@ func webSocketEnvironment(id string, url string, headers http.Header) execserver
 	return execserver.NamedEnvironment{
 		ID:        id,
 		Transport: execserver.EnvironmentTransport{Kind: execserver.EnvironmentTransportWebSocket, WebSocketURL: url, HTTPHeaders: headers},
+	}
+}
+
+// Rust parity: a registry-backed (Noise rendezvous) environment keeps its
+// connect provider when the host installs the default executor, so unified exec
+// dials the registry instead of a WebSocket URL.
+func TestUnifiedExecEnvironmentsPreserveNoiseProviderLikeRust(t *testing.T) {
+	provider := execserver.NoiseRendezvousConnectProviderFunc(func(context.Context, execserver.RemotePublicKey) (*execserver.NoiseRendezvousConnectBundle, error) {
+		return nil, errors.New("not dialed")
+	})
+	snapshot := execserver.NoiseEnvironmentProviderSnapshot(provider)
+	environments := UnifiedExecEnvironmentsForProviderDefault(snapshot)
+	if len(environments) != 1 {
+		t.Fatalf("noise environments = %#v", environments)
+	}
+	environment := environments[0]
+	if environment.ID != execserver.RemoteEnvironmentID || environment.NoiseProvider == nil || environment.ExecServerURL != "" {
+		t.Fatalf("noise environment = %#v", environment)
+	}
+	if environment.ExecServerInitializeTimeout != execserver.DefaultRemoteExecServerInitializeTimeout {
+		t.Fatalf("initialize timeout = %v", environment.ExecServerInitializeTimeout)
 	}
 }
 

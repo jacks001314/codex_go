@@ -877,7 +877,7 @@ func (r *Runner) rejectRemoteWorktreeDefault(req *Request) error {
 	if r == nil || req == nil || !req.Exec.Shared.Worktree {
 		return nil
 	}
-	snapshot, err := execserver.EnvironmentProviderFromCodexHome(r.CodexHome)
+	snapshot, err := execserver.PrepareEnvironmentProviderFromCodexHome(r.CodexHome)
 	if err != nil {
 		return err
 	}

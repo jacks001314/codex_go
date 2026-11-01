@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 
 	"codex_go/auth"
 	"codex_go/cli"
@@ -26,16 +25,22 @@ import (
 // provider without a selected default leaves tools on the implicit local
 // environment. `ignoreUserConfig` (Rust's `ignore_user_config`) skips the user's
 // file and keeps only the CODEX_EXEC_SERVER_URL fallback, matching Rust's
-// `EnvironmentManager::from_env` branch.
+// `EnvironmentManager::from_env` branch. Both branches prefer the
+// CODEX_EXEC_SERVER_NOISE_* registry configuration, exactly like Rust's
+// `PreparedEnvironmentManager` bootstrap.
 func configureLocalRunnerEnvironments(runner *codexexec.Runner, codexHome string, ignoreUserConfig bool) error {
 	if runner == nil {
 		return nil
 	}
 	var snapshot execserver.EnvironmentProviderSnapshot
 	if ignoreUserConfig {
-		snapshot = execserver.DefaultEnvironmentProviderSnapshot(os.Getenv(execserver.CodexExecServerURLEnvVarName))
+		loaded, err := execserver.PrepareEnvironmentProviderFromEnv()
+		if err != nil {
+			return err
+		}
+		snapshot = loaded
 	} else {
-		loaded, err := execserver.EnvironmentProviderFromCodexHome(codexHome)
+		loaded, err := execserver.PrepareEnvironmentProviderFromCodexHome(codexHome)
 		if err != nil {
 			return err
 		}

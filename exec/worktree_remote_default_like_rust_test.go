@@ -16,7 +16,7 @@ import (
 // either CODEX_EXEC_SERVER_URL or environments.toml fails the run before a
 // managed checkout is created.
 func TestRunWorktreeRejectsRemoteDefaultBeforeAllocationLikeRust(t *testing.T) {
-	for _, route := range []string{"environment", "file"} {
+	for _, route := range []string{"environment", "file", "noise"} {
 		t.Run(route, func(t *testing.T) {
 			home := t.TempDir()
 			switch route {
@@ -27,6 +27,10 @@ func TestRunWorktreeRejectsRemoteDefaultBeforeAllocationLikeRust(t *testing.T) {
 				if err := os.WriteFile(filepath.Join(home, execserver.EnvironmentsTOMLFile), []byte(contents), 0o600); err != nil {
 					t.Fatalf("write environments.toml: %v", err)
 				}
+			case "noise":
+				t.Setenv(execserver.CodexExecServerNoiseRegistryURLEnvVar, "https://registry.example/")
+				t.Setenv(execserver.CodexExecServerNoiseEnvironmentIDEnvVar, "environment-1")
+				t.Setenv(execserver.CodexExecServerNoiseAuthTokenEnvVar, "registry-token")
 			}
 			var stdout, stderr bytes.Buffer
 			_, err := NewLocalRunner(home).Run(Request{

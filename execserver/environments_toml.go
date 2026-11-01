@@ -59,13 +59,15 @@ func protocolErrorf(format string, args ...any) error {
 	return &ProtocolError{Message: fmt.Sprintf(format, args...)}
 }
 
-// EnvironmentTransportKind distinguishes a remote WebSocket environment from a
-// stdio program environment.
+// EnvironmentTransportKind distinguishes a remote WebSocket environment, a
+// stdio program environment and a Noise rendezvous environment served by the
+// environment registry.
 type EnvironmentTransportKind string
 
 const (
 	EnvironmentTransportWebSocket EnvironmentTransportKind = "websocket"
 	EnvironmentTransportStdio     EnvironmentTransportKind = "stdio"
+	EnvironmentTransportNoise     EnvironmentTransportKind = "noise"
 )
 
 // StdioExecServerCommand is the program an stdio environment speaks JSON-RPC to.
@@ -84,6 +86,9 @@ type EnvironmentTransport struct {
 	ConnectTimeout    time.Duration
 	InitializeTimeout time.Duration
 	Command           *StdioExecServerCommand
+	// NoiseProvider dials the environment registry, mirroring Rust's
+	// ExecServerTransportParams::NoiseRendezvous.
+	NoiseProvider NoiseRendezvousConnectProvider
 }
 
 // NamedEnvironment pairs an environment id with its transport.
@@ -534,6 +539,59 @@ func DefaultEnvironmentProviderSnapshot(execServerURL string) EnvironmentProvide
 		snapshot.Default = EnvironmentDefault{Kind: EnvironmentDefaultID, ID: LocalEnvironmentID}
 	}
 	return snapshot
+}
+
+// NoiseEnvironmentProviderSnapshot mirrors Rust's
+// EnvironmentManager::from_noise_environment_config: the registry-backed
+// executor is the single configured environment and the default, and the
+// provider offers no local environment.
+func NoiseEnvironmentProviderSnapshot(provider NoiseRendezvousConnectProvider) EnvironmentProviderSnapshot {
+	snapshot := EnvironmentProviderSnapshot{
+		Default: EnvironmentDefault{Kind: EnvironmentDefaultID, ID: RemoteEnvironmentID},
+	}
+	if provider == nil {
+		return snapshot
+	}
+	snapshot.Environments = append(snapshot.Environments, NamedEnvironment{
+		ID: RemoteEnvironmentID,
+		Transport: EnvironmentTransport{
+			Kind:              EnvironmentTransportNoise,
+			NoiseProvider:     provider,
+			ConnectTimeout:    DefaultRemoteExecServerConnectTimeout,
+			InitializeTimeout: DefaultRemoteExecServerInitializeTimeout,
+		},
+	})
+	return snapshot
+}
+
+// PrepareEnvironmentProviderFromCodexHome mirrors Rust's
+// PreparedEnvironmentManager::prepare_from_codex_home: the
+// CODEX_EXEC_SERVER_NOISE_* registry configuration wins, otherwise
+// `CODEX_HOME/environments.toml` (or the CODEX_EXEC_SERVER_URL fallback)
+// defines the environments. No connection is opened.
+func PrepareEnvironmentProviderFromCodexHome(codexHome string) (EnvironmentProviderSnapshot, error) {
+	if snapshot, configured, err := noiseEnvironmentProviderSnapshotFromEnv(); err != nil || configured {
+		return snapshot, err
+	}
+	return EnvironmentProviderFromCodexHome(codexHome)
+}
+
+// PrepareEnvironmentProviderFromEnv mirrors Rust's
+// EnvironmentManager::prepare_from_env: the noise registry configuration wins,
+// otherwise only CODEX_EXEC_SERVER_URL is considered.
+func PrepareEnvironmentProviderFromEnv() (EnvironmentProviderSnapshot, error) {
+	if snapshot, configured, err := noiseEnvironmentProviderSnapshotFromEnv(); err != nil || configured {
+		return snapshot, err
+	}
+	return DefaultEnvironmentProviderSnapshot(os.Getenv(CodexExecServerURLEnvVarName)), nil
+}
+
+func noiseEnvironmentProviderSnapshotFromEnv() (EnvironmentProviderSnapshot, bool, error) {
+	provider, configured, err := RegistryNoiseRendezvousConnectProviderFromEnv()
+	if err != nil || !configured {
+		return EnvironmentProviderSnapshot{}, false, err
+	}
+	return NoiseEnvironmentProviderSnapshot(provider), true, nil
 }
 
 // normalizeExecServerURL mirrors Rust's normalize_exec_server_url: a blank or

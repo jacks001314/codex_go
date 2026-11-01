@@ -78,6 +78,34 @@ func TestConfigureLocalRunnerEnvironmentsHonorsExecServerURLFallback(t *testing.
 	}
 }
 
+// Rust's noise bootstrap: the CODEX_EXEC_SERVER_NOISE_* registry configuration
+// wins in both host branches, including a run that ignores user config, and the
+// runner installs it as the default executor.
+func TestConfigureLocalRunnerEnvironmentsPrefersNoiseLikeRust(t *testing.T) {
+	codexHome := t.TempDir()
+	body := "default = \"ssh-dev\"\n\n[[environments]]\nid = \"ssh-dev\"\nprogram = \"codex-exec-server\"\n"
+	if err := os.WriteFile(filepath.Join(codexHome, execserver.EnvironmentsTOMLFile), []byte(body), 0o600); err != nil {
+		t.Fatalf("write environments.toml: %v", err)
+	}
+	t.Setenv(execserver.CodexExecServerNoiseRegistryURLEnvVar, "https://registry.example/")
+	t.Setenv(execserver.CodexExecServerNoiseEnvironmentIDEnvVar, "environment-1")
+	t.Setenv(execserver.CodexExecServerNoiseAuthTokenEnvVar, "registry-token")
+
+	for _, ignoreUserConfig := range []bool{false, true} {
+		runner := codexexec.NewLocalRunner(codexHome)
+		if err := configureLocalRunnerEnvironments(runner, codexHome, ignoreUserConfig); err != nil {
+			t.Fatalf("configureLocalRunnerEnvironments(ignore=%v) error = %v", ignoreUserConfig, err)
+		}
+		if len(runner.UnifiedExecEnvironments) != 1 {
+			t.Fatalf("runner environments = %#v", runner.UnifiedExecEnvironments)
+		}
+		environment := runner.UnifiedExecEnvironments[0]
+		if environment.ID != execserver.RemoteEnvironmentID || environment.NoiseProvider == nil {
+			t.Fatalf("noise environment = %#v", environment)
+		}
+	}
+}
+
 // Rust ignore_user_config: the user's environments.toml is skipped and only the
 // CODEX_EXEC_SERVER_URL fallback applies.
 func TestConfigureLocalRunnerEnvironmentsSkipsUserConfigWhenIgnored(t *testing.T) {
