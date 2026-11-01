@@ -11,11 +11,13 @@ import (
 	"codex_go/processgroup"
 )
 
-// ownSnapshotCaptureProcessGroup gives the capture its own process group and
-// routes cancellation to the group kill (Rust's Command::process_group(0) plus
-// the cleanup SnapshotCapture arms while the leader stays unreaped). Os/exec's
-// own cancellation kills only the capture process, which is how the startup
-// files' children survived a failed capture.
+// ownSnapshotCaptureProcessGroup gives the capture its own process group
+// (Rust's Command::process_group(0)) so the cleanup SnapshotCapture arms can
+// reach the startup files' children while the leader stays unreaped. Os/exec's
+// own cancellation kills only the capture process, which is how those children
+// survived a failed capture. Cancellation is wired in runSnapshotCaptureProcess
+// rather than through Cmd.Cancel, because os/exec rejects a Cancel on a command
+// that was not built by CommandContext.
 func ownSnapshotCaptureProcessGroup(process *osexec.Cmd) {
 	if process == nil {
 		return
@@ -26,9 +28,6 @@ func ownSnapshotCaptureProcessGroup(process *osexec.Cmd) {
 	}
 	attr.Setpgid = true
 	process.SysProcAttr = attr
-	process.Cancel = func() error {
-		return killSnapshotCaptureProcessGroup(process)
-	}
 }
 
 // killSnapshotCaptureProcessGroup signals every process the capture started.

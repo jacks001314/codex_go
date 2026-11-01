@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"context"
 	"fmt"
 	osexec "os/exec"
 	"runtime"
@@ -29,7 +30,7 @@ func TestSnapshotCaptureCleansUpFailedCaptureProcessGroupLikeRust(t *testing.T) 
 	}
 
 	process := snapshotCaptureExitCommand(7)
-	if err := runSnapshotCaptureProcess(process); err == nil {
+	if err := runSnapshotCaptureProcess(context.Background(), process); err == nil {
 		t.Fatal("capture of a failing profile reported success")
 	}
 	if cleanups == 0 {
@@ -50,7 +51,7 @@ func TestSnapshotCapturePreservesSuccessfulStartupHelpersLikeRust(t *testing.T) 
 	}
 
 	process := snapshotCaptureExitCommand(0)
-	if err := runSnapshotCaptureProcess(process); err != nil {
+	if err := runSnapshotCaptureProcess(context.Background(), process); err != nil {
 		t.Fatalf("capture error = %v", err)
 	}
 	if cleanups != 0 {
