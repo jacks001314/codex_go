@@ -36,13 +36,15 @@ type RuntimeOptions struct {
 	// CodeModeMessagesForModel resolves the catalog overrides for a model so a
 	// mid-turn model change can refresh exec/wait descriptions (Rust #47118).
 	CodeModeMessagesForModel func(model string) *model.CodeModeToolMessages
-	// CodeModeImageDetailHidden selects the exec description's image helper text
+	// UnifiedImageBudget mirrors unified_image_budget_enabled: the Code Mode
+	// description hides image detail and request image preparation uses the
+	// original-detail budget. Stored here as the code-mode helper selector
 	// the way Rust's ImageDetailVisibility does: the unified image budget hides
 	// detail values for lite models and models that can request `original`.
-	CodeModeImageDetailHidden bool
-	// CodeModeImageDetailHiddenForModel refreshes the visibility above when a
+	UnifiedImageBudget bool
+	// UnifiedImageBudgetForModel refreshes the mode above when a
 	// step switches models.
-	CodeModeImageDetailHiddenForModel func(model string) bool
+	UnifiedImageBudgetForModel func(model string) bool
 	// CodeModeDefaultExecYieldTime substitutes
 	// {{ default_exec_yield_time_ms }} in catalog exec text.
 	CodeModeDefaultExecYieldTime time.Duration
@@ -147,8 +149,8 @@ type Runtime struct {
 	allowedTools                 *[]string
 	codeModeMessagesForModel     func(model string) *model.CodeModeToolMessages
 	codeModeDefaultExecYieldTime time.Duration
-	codeModeImageDetailHidden    bool
-	codeModeImageDetailHiddenFor func(model string) bool
+	unifiedImageBudget           bool
+	unifiedImageBudgetFor        func(model string) bool
 	dynamicToolMu                sync.Mutex
 	dynamicToolCaller            DynamicToolCaller
 	dynamicToolThreadID          string
@@ -208,8 +210,8 @@ func NewRuntime(options *RuntimeOptions) *Runtime {
 		allowedTools:                 options.AllowedTools,
 		codeModeMessagesForModel:     options.CodeModeMessagesForModel,
 		codeModeDefaultExecYieldTime: options.CodeModeDefaultExecYieldTime,
-		codeModeImageDetailHidden:    options.CodeModeImageDetailHidden,
-		codeModeImageDetailHiddenFor: options.CodeModeImageDetailHiddenForModel,
+		unifiedImageBudget:           options.UnifiedImageBudget,
+		unifiedImageBudgetFor:        options.UnifiedImageBudgetForModel,
 		dynamicToolCaller:            options.DynamicToolCaller,
 		dynamicToolThreadID:          strings.TrimSpace(options.DynamicToolThreadID),
 		dynamicToolTurnID:            strings.TrimSpace(options.DynamicToolTurnID),
@@ -449,6 +451,7 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 			ParallelToolCalls:            request.ParallelToolCalls,
 			ReasoningEffort:              request.ReasoningEffort,
 			ReasoningSummary:             request.ReasoningSummary,
+			UnifiedImageBudget:           r.unifiedImageBudget,
 			DropReasoningEffortUpdates:   request.DropReasoningEffortUpdates,
 			ConcurrentReasoningSummaries: request.ConcurrentReasoningSummaries,
 			ModelVerbosity:               request.ModelVerbosity,
@@ -524,9 +527,11 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 	// asks the host to plan when the model actually changed (Rust `built_tools`
 	// runs per step, but rebuilding an identical plan is pure overhead here).
 	r.stepToolPlanModel = strings.TrimSpace(loopRequest.Model)
-	if r.codeModeMessagesForModel != nil || r.codeModeImageDetailHiddenFor != nil || r.dynamicToolStepRefresh || r.multiAgentOverridesForModel != nil || r.stepToolSurface != nil || r.stepToolPlan != nil {
+	if r.codeModeMessagesForModel != nil || r.unifiedImageBudgetFor != nil || r.dynamicToolStepRefresh || r.multiAgentOverridesForModel != nil || r.stepToolSurface != nil || r.stepToolPlan != nil {
+		loopRequest.UnifiedImageBudget = r.unifiedImageBudget
+		loopRequest.UnifiedImageBudgetForModel = r.unifiedImageBudgetFor
 		loopRequest.ToolsForStep = func(modelID string) []any {
-			if r.codeModeMessagesForModel != nil || r.codeModeImageDetailHiddenFor != nil {
+			if r.codeModeMessagesForModel != nil || r.unifiedImageBudgetFor != nil {
 				r.applyCodeModeMessagesForModel(modelID)
 			}
 			if r.multiAgentOverridesForModel != nil {
@@ -674,7 +679,7 @@ func (r *Runtime) modelVisibleSpecsForRequest(effectiveToolMode string) []tool.S
 		visibleSpecs = directModeVisibleSpecs(visibleSpecs, r.router.CodeModeToolSpecs())
 	} else if effectiveToolMode == model.ToolModeCodeModeOnly && codemode.HasExecTool(visibleSpecs) {
 		visibleSpecs = codeModeOnlyVisibleSpecs(visibleSpecs)
-		visibleSpecs = codeModeOnlyExecPromptSpecsWithOptions(visibleSpecs, r.router.CodeModeToolSpecs(), r.indirectDescriptionPrefixes, r.codeModeMessages, r.codeModeDefaultExecYieldTime, r.codeModeImageDetailHidden)
+		visibleSpecs = codeModeOnlyExecPromptSpecsWithOptions(visibleSpecs, r.router.CodeModeToolSpecs(), r.indirectDescriptionPrefixes, r.codeModeMessages, r.codeModeDefaultExecYieldTime, r.unifiedImageBudget)
 	}
 	if codemode.HasExecTool(visibleSpecs) {
 		visibleSpecs = augmentCodeModeWinnerSpecs(visibleSpecs, r.router.CodeModeToolSpecs())
@@ -686,8 +691,8 @@ func (r *Runtime) applyCodeModeMessagesForModel(modelID string) {
 	if r == nil {
 		return
 	}
-	if r.codeModeImageDetailHiddenFor != nil {
-		r.codeModeImageDetailHidden = r.codeModeImageDetailHiddenFor(modelID)
+	if r.unifiedImageBudgetFor != nil {
+		r.unifiedImageBudget = r.unifiedImageBudgetFor(modelID)
 	}
 	if r.codeModeMessagesForModel != nil {
 		messages := r.codeModeMessagesForModel(modelID)

@@ -38,7 +38,11 @@ type AgentRequest struct {
 	// calls it at most once, after dialing a fresh socket.
 	PrewarmTools func(ctx context.Context) []any
 	Model        string
-	ProviderID   string
+	// UnifiedImageBudget mirrors Rust's unified_image_budget_enabled: request
+	// image preparation ignores each image detail hint and applies the
+	// original-detail budget instead.
+	UnifiedImageBudget bool
+	ProviderID         string
 	// Endpoint selects the Responses-compatible backend route. The zero value
 	// is the standard /responses route; Guardian callers may opt into /guardian.
 	Endpoint ResponsesEndpoint

@@ -205,6 +205,16 @@ type ImagePrepContentItem struct {
 	Detail ImagePrepDetail
 }
 
+// ImagePrepMode mirrors Rust's ImagePreparationMode:
+// DetailBased honours each image's detail hint, UnifiedBudget ignores it and
+// applies the original-detail budget instead.
+type ImagePrepMode int
+
+const (
+	ImagePrepModeDetailBased ImagePrepMode = iota
+	ImagePrepModeUnifiedBudget
+)
+
 type ImagePrepResponseItemKind string
 
 const (
@@ -357,7 +367,13 @@ func PrepareImagePrepImageWithStore(store attachmentstore.Store, origin ImagePre
 // PrepareImagePrepImageWithStoreResult is PrepareImagePrepImageWithStore
 // returning the full preparation record (reference plus resize metadata).
 func PrepareImagePrepImageWithStoreResult(store attachmentstore.Store, origin ImagePrepOrigin, imageURL string, detail ImagePrepDetail) (*ImagePrepResult, error) {
-	prepared, err := PrepareImagePrepImageWithResult(imageURL, detail)
+	return PrepareImagePrepImageWithStoreResultMode(store, origin, imageURL, detail, ImagePrepModeDetailBased)
+}
+
+// PrepareImagePrepImageWithStoreResultMode is
+// PrepareImagePrepImageWithStoreResult for an explicit Rust ImagePreparationMode.
+func PrepareImagePrepImageWithStoreResultMode(store attachmentstore.Store, origin ImagePrepOrigin, imageURL string, detail ImagePrepDetail, mode ImagePrepMode) (*ImagePrepResult, error) {
+	prepared, err := PrepareImagePrepImageWithResultMode(imageURL, detail, mode)
 	if err != nil {
 		return nil, err
 	}
@@ -409,17 +425,29 @@ func imagePrepDataURL(mime string, payload []byte) string {
 // PreparedImageResize); callers use it to emit the feature-gated
 // ImageResizeNotice fragment.
 func PrepareImagePrepImageWithResult(imageURL string, detail ImagePrepDetail) (*ImagePrepResult, error) {
+	return PrepareImagePrepImageWithResultMode(imageURL, detail, ImagePrepModeDetailBased)
+}
+
+// PrepareImagePrepImageWithResultMode prepares one inline image with an explicit
+// Rust ImagePreparationMode. UnifiedBudget always uses the original-detail
+// budget and never rejects `low`, because the mode overrides the hint
+// (image_preparation.rs resize_image).
+func PrepareImagePrepImageWithResultMode(imageURL string, detail ImagePrepDetail, mode ImagePrepMode) (*ImagePrepResult, error) {
 	if IsImagePrepRemoteURL(imageURL) {
 		return nil, ErrImagePrepRemoteURLUnsupported
 	}
 	if !IsImagePrepDataURL(imageURL) {
 		return nil, nil
 	}
-	if detail == "" || detail == ImagePrepDetailAuto {
-		detail = ImagePrepDetailHigh
-	}
-	if detail == ImagePrepDetailLow {
-		return nil, ErrImagePrepUnsupportedLowDetail
+	if mode == ImagePrepModeUnifiedBudget {
+		detail = ImagePrepDetailOriginal
+	} else {
+		if detail == "" || detail == ImagePrepDetailAuto {
+			detail = ImagePrepDetailHigh
+		}
+		if detail == ImagePrepDetailLow {
+			return nil, ErrImagePrepUnsupportedLowDetail
+		}
 	}
 	_, payload, err := splitImagePrepDataURL(imageURL)
 	if err != nil {

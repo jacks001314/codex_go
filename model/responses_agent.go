@@ -3120,7 +3120,7 @@ func responsesInputItemsWithStore(request *AgentRequest, store attachmentstore.S
 	if !request.Store && !request.ItemIDsEnabled {
 		items = stripResponseInputItemIDs(items)
 	}
-	items = prepareResponseInputImagesWithStore(items, store, responsesImagePrepOrigin(request))
+	items = prepareResponseInputImagesWithStoreMode(items, store, responsesImagePrepOrigin(request), responsesImagePrepMode(request))
 	items = replaceUnresolvableImageFiles(items, store)
 	return items
 }
@@ -3174,6 +3174,20 @@ func prepareResponseInputImages(items []any) []any {
 // prepareResponseInputImages, mirroring Rust `prepare_response_items` which
 // takes the thread origin and the session image store.
 func prepareResponseInputImagesWithStore(items []any, store attachmentstore.Store, origin eventmap.ImagePrepOrigin) []any {
+	return prepareResponseInputImagesWithStoreMode(items, store, origin, eventmap.ImagePrepModeDetailBased)
+}
+
+// responsesImagePrepMode mirrors Rust's ImagePreparationMode selection from
+// unified_image_budget_enabled: the unified budget ignores each image hint and
+// applies the original-detail budget.
+func responsesImagePrepMode(request *AgentRequest) eventmap.ImagePrepMode {
+	if request != nil && request.UnifiedImageBudget {
+		return eventmap.ImagePrepModeUnifiedBudget
+	}
+	return eventmap.ImagePrepModeDetailBased
+}
+
+func prepareResponseInputImagesWithStoreMode(items []any, store attachmentstore.Store, origin eventmap.ImagePrepOrigin, mode eventmap.ImagePrepMode) []any {
 	if len(items) == 0 {
 		return items
 	}
@@ -3190,28 +3204,28 @@ func prepareResponseInputImagesWithStore(items []any, store attachmentstore.Stor
 	if err := decoder.Decode(&normalized); err != nil {
 		return items
 	}
-	prepareResponseInputImageBlocks(normalized, store, origin)
+	prepareResponseInputImageBlocks(normalized, store, origin, mode)
 	return normalized
 }
 
-func prepareResponseInputImageBlocks(value any, store attachmentstore.Store, origin eventmap.ImagePrepOrigin) {
+func prepareResponseInputImageBlocks(value any, store attachmentstore.Store, origin eventmap.ImagePrepOrigin, mode eventmap.ImagePrepMode) {
 	switch typed := value.(type) {
 	case map[string]any:
-		prepareResponseInputImageBlock(typed, store, origin)
+		prepareResponseInputImageBlock(typed, store, origin, mode)
 		md, _ := typed["internal_chat_message_metadata_passthrough"].(map[string]any)
 		kinds, _ := md["content_item_kinds"].([]any)
 		for _, key := range []string{"content", "output", "content_items"} {
 			if child, ok := typed[key]; ok {
 				if key == "content" && kinds != nil {
-					prepareResponseInputImageContentWithKinds(child, kinds, store, origin)
+					prepareResponseInputImageContentWithKinds(child, kinds, store, origin, mode)
 				} else {
-					prepareResponseInputImageBlocks(child, store, origin)
+					prepareResponseInputImageBlocks(child, store, origin, mode)
 				}
 			}
 		}
 	case []any:
 		for _, child := range typed {
-			prepareResponseInputImageBlocks(child, store, origin)
+			prepareResponseInputImageBlocks(child, store, origin, mode)
 		}
 	}
 }
@@ -3220,14 +3234,14 @@ func prepareResponseInputImageBlocks(value any, store attachmentstore.Store, ori
 // while updating content_item_kinds for image-preparation failures, mirroring
 // Rust image_preparation.rs which tags failed images as images.preparation_error
 // (#40281).
-func prepareResponseInputImageContentWithKinds(value any, kinds []any, store attachmentstore.Store, origin eventmap.ImagePrepOrigin) {
+func prepareResponseInputImageContentWithKinds(value any, kinds []any, store attachmentstore.Store, origin eventmap.ImagePrepOrigin, mode eventmap.ImagePrepMode) {
 	content, ok := value.([]any)
 	if !ok {
-		prepareResponseInputImageBlocks(value, store, origin)
+		prepareResponseInputImageBlocks(value, store, origin, mode)
 		return
 	}
 	for i, block := range content {
-		prepareResponseInputImageBlock(block.(map[string]any), store, origin)
+		prepareResponseInputImageBlock(block.(map[string]any), store, origin, mode)
 		if i < len(kinds) && kinds[i] == "user.image" {
 			if m, ok := block.(map[string]any); ok && m["type"] == "input_text" && blockWasPreparationError(m) {
 				kinds[i] = "images.preparation_error"
@@ -3245,7 +3259,7 @@ func blockWasPreparationError(block map[string]any) bool {
 	return strings.HasPrefix(strings.TrimSpace(text), imagePrepErrorPrefix)
 }
 
-func prepareResponseInputImageBlock(block map[string]any, store attachmentstore.Store, origin eventmap.ImagePrepOrigin) {
+func prepareResponseInputImageBlock(block map[string]any, store attachmentstore.Store, origin eventmap.ImagePrepOrigin, mode eventmap.ImagePrepMode) {
 	itemType, _ := block["type"].(string)
 	if itemType != "input_image" && itemType != "image" {
 		return
@@ -3257,7 +3271,7 @@ func prepareResponseInputImageBlock(block map[string]any, store attachmentstore.
 		return
 	}
 	detail := eventmap.ImagePrepDetail(responseToolString(block["detail"]))
-	prepared, err := eventmap.PrepareImagePrepImageWithStoreResult(store, origin, imageURL, detail)
+	prepared, err := eventmap.PrepareImagePrepImageWithStoreResultMode(store, origin, imageURL, detail, mode)
 	if err != nil {
 		// Replace an image that cannot be processed with a placeholder text
 		// block, matching Rust image_preparation.rs.
@@ -3279,6 +3293,11 @@ func prepareResponseInputImageBlock(block map[string]any, store attachmentstore.
 		return
 	}
 	block["image_url"] = prepared.URL
+	if mode == eventmap.ImagePrepModeUnifiedBudget {
+		// Rust keeps an original-detail compatibility hint while the unified
+		// budget is active; Responses Lite strips it before sending.
+		block["detail"] = string(eventmap.ImagePrepDetailOriginal)
+	}
 }
 
 // UnavailableImagePlaceholder replaces a file image the attachment store

@@ -164,10 +164,16 @@ type AgentLoopRequest struct {
 	// ToolsForStep rebuilds the tool list when a later sampling step selects a
 	// different model. It lets model-catalog Code Mode messages follow mid-turn
 	// model changes (Rust #47118).
-	ToolsForStep       func(model string) []any
-	HostedTools        []any
-	Store              bool
-	PreviousResponseID string
+	ToolsForStep func(model string) []any
+	// UnifiedImageBudget is the turn-start unified_image_budget_enabled value;
+	// UnifiedImageBudgetForModel refreshes it per sampling step.
+	UnifiedImageBudget bool
+	// UnifiedImageBudgetForModel reports unified_image_budget_enabled for the
+	// model of the sampling step, so request image preparation follows it.
+	UnifiedImageBudgetForModel func(model string) bool
+	HostedTools                []any
+	Store                      bool
+	PreviousResponseID         string
 	// PreviousResponseFromPrewarm marks PreviousResponseID as the response a
 	// prewarm prepared, so only the first sampling request is tagged
 	// after_prewarm (Rust #48812).
@@ -566,6 +572,10 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 				Phase: "pre", Model: stepModel, ThreadID: request.ThreadID, TurnID: request.TurnID, CWD: request.CWD,
 			})
 		}
+		unifiedImageBudget := request.UnifiedImageBudget
+		if request.UnifiedImageBudgetForModel != nil {
+			unifiedImageBudget = request.UnifiedImageBudgetForModel(stepModel)
+		}
 		response, err := l.agent.Run(stepCtx, &model.AgentRequest{
 			Prompt:                       prompt,
 			Instructions:                 instructions,
@@ -573,6 +583,7 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			PostPromptInputItems:         postPromptInputItemsForIteration(postPromptItems, iteration),
 			Tools:                        append([]any(nil), stepTools...),
 			Model:                        stepModel,
+			UnifiedImageBudget:           unifiedImageBudget,
 			ProviderID:                   request.ProviderID,
 			TaskKind:                     request.TaskKind,
 			ThreadID:                     request.ThreadID,
