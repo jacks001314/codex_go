@@ -30,6 +30,9 @@ type SessionRuntime struct {
 	// outputTruncation selects who applies each observation's output budget.
 	// It is fixed when the session opens (Rust #57272/#57870).
 	outputTruncation OutputTruncation
+	// cellExecutionLimits caps each observation's yield time; it is captured
+	// when the session opens (Rust #37114).
+	cellExecutionLimits *CellExecutionLimits
 }
 
 func NewSessionRuntime() *SessionRuntime {
@@ -55,6 +58,28 @@ func (r *SessionRuntime) SetOutputTruncation(mode OutputTruncation) {
 		mode = OutputTruncationClient
 	}
 	r.outputTruncation = mode
+}
+
+// SetCellExecutionLimits captures the session's cell execution limits. Rust's
+// session applies them when it resolves each observation timeout, after the
+// one-second grace, so a limit below the grace ceiling still binds.
+func (r *SessionRuntime) SetCellExecutionLimits(limits *CellExecutionLimits) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.cellExecutionLimits = limits
+}
+
+// yieldTimeout resolves one observation's timeout the way Rust's
+// InProcessCodeModeSession does: the yield time plus its grace, capped by the
+// session's max_yield_time_ms.
+func (r *SessionRuntime) yieldTimeout(yieldMS uint64) time.Duration {
+	r.mu.Lock()
+	limits := r.cellExecutionLimits
+	r.mu.Unlock()
+	return limits.YieldTimeout(yieldMS)
 }
 
 // OutputTruncation reports the pinned output policy.
@@ -123,8 +148,8 @@ func (r *SessionRuntime) Execute(ctx context.Context, request *ExecuteRequest, p
 	if request.YieldTimeMS != nil {
 		yieldMS = *request.YieldTimeMS
 	}
-	var timer <-chan time.Time
-	if yieldMS == 0 {
+	timeout := r.yieldTimeout(yieldMS)
+	if timeout == 0 {
 		// Rust's YieldAfter(0) yields before the script produces anything.
 		go r.finishCellFromEngine(cellID, engineState.wake, wakeup)
 		return &StartedCell{
@@ -132,7 +157,8 @@ func (r *SessionRuntime) Execute(ctx context.Context, request *ExecuteRequest, p
 			InitialResponse: withHostDuration(Yielded(cellID, nil), startedAt),
 		}, nil
 	}
-	deadline := time.NewTimer(time.Duration(yieldMS) * time.Millisecond)
+	var timer <-chan time.Time
+	deadline := time.NewTimer(timeout)
 	defer deadline.Stop()
 	timer = deadline.C
 	select {
@@ -175,7 +201,7 @@ func (r *SessionRuntime) Wait(ctx context.Context, request *WaitRequest, preempt
 	// WaitRequest.yield_time_ms carries no default (Rust's protocol type is a
 	// plain u64), so an explicit zero observes the cell immediately; only the
 	// tool argument layer supplies the 10 000 ms default.
-	deadline := time.Duration(request.YieldTimeMS) * time.Millisecond
+	deadline := r.yieldTimeout(request.YieldTimeMS)
 	if cell, ok := r.cells.Get(cellID); ok && cell.Status != CellRunning {
 		outcome := LiveCell(withHostDuration(r.responseForCell(cell, r.cells.Now(), request.MaxOutputTokens), startedAt))
 		return &outcome, nil

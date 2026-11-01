@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestInputAudioJSONShape(t *testing.T) {
@@ -251,21 +252,28 @@ func TestCellExecutionLimitsClampAndWireLikeRust(t *testing.T) {
 	if (&CellExecutionLimits{}).IsZero() == false {
 		t.Fatal("empty limits must be zero")
 	}
+	// Mirrors Rust resolve_yield_timeout: the one-second grace applies to yield
+	// times of ten seconds or more, and max_yield_time_ms caps the graced value.
+	roomyYield := uint64(10500)
 	for _, tc := range []struct {
 		name   string
 		yield  uint64
-		want   uint64
+		want   time.Duration
 		limits *CellExecutionLimits
 	}{
-		{name: "nil limits pass through", yield: 10000, want: 10000, limits: nil},
-		{name: "above limit clamps", yield: 30000, want: 2500, limits: limits},
-		{name: "below limit passes", yield: 1000, want: 1000, limits: limits},
-		{name: "equal limit passes", yield: 2500, want: 2500, limits: limits},
-		{name: "zero stays zero", yield: 0, want: 0, limits: limits},
-		{name: "empty limits pass through", yield: 5000, want: 5000, limits: &CellExecutionLimits{}},
+		{name: "nil limits keep the grace", yield: 10000, want: 11 * time.Second, limits: nil},
+		{name: "below the grace threshold", yield: 9999, want: 9999 * time.Millisecond, limits: nil},
+		{name: "zero stays immediate", yield: 0, want: 0, limits: limits},
+		{name: "above limit clamps", yield: 30000, want: 2500 * time.Millisecond, limits: limits},
+		{name: "below limit passes", yield: 1000, want: time.Second, limits: limits},
+		{name: "equal limit passes", yield: 2500, want: 2500 * time.Millisecond, limits: limits},
+		{name: "empty limits pass through", yield: 5000, want: 5 * time.Second, limits: &CellExecutionLimits{}},
+		// The grace is applied before the cap, so a limit above the requested
+		// yield still absorbs the extra second (Rust #57272 ordering).
+		{name: "limit above the graced yield", yield: 10000, want: 10500 * time.Millisecond, limits: &CellExecutionLimits{MaxYieldTimeMS: &roomyYield}},
 	} {
-		if got := tc.limits.ClampYieldTimeMS(tc.yield); got != tc.want {
-			t.Fatalf("%s: ClampYieldTimeMS(%d) = %d, want %d", tc.name, tc.yield, got, tc.want)
+		if got := tc.limits.YieldTimeout(tc.yield); got != tc.want {
+			t.Fatalf("%s: YieldTimeout(%d) = %v, want %v", tc.name, tc.yield, got, tc.want)
 		}
 	}
 

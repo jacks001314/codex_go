@@ -46,6 +46,9 @@ func (h *SessionHost) Handle(ctx context.Context, request *HostRequest, yield *t
 		// captured at open and applied to every later execute/wait yield time
 		// without terminating the running cell.
 		h.cellExecutionLimits = request.CellExecutionLimits
+		// The runtime resolves each observation timeout from these limits
+		// (Rust applies max_yield_time_ms after the yield grace).
+		h.runtime.SetCellExecutionLimits(request.CellExecutionLimits)
 		h.outputTruncation = OutputTruncationClient
 		if request.OutputTruncation != nil {
 			h.outputTruncation = *request.OutputTruncation
@@ -57,10 +60,6 @@ func (h *SessionHost) Handle(ctx context.Context, request *HostRequest, yield *t
 			return nil, nil, fmt.Errorf("session/execute request is required")
 		}
 		clamped := *request.Request
-		if request.Request.YieldTimeMS != nil {
-			value := h.cellExecutionLimits.ClampYieldTimeMS(*request.Request.YieldTimeMS)
-			clamped.YieldTimeMS = &value
-		}
 		started, err := h.runtime.Execute(ctx, &clamped, yield)
 		if err != nil {
 			return nil, nil, err
@@ -72,7 +71,6 @@ func (h *SessionHost) Handle(ctx context.Context, request *HostRequest, yield *t
 			return nil, nil, fmt.Errorf("session/wait request is required")
 		}
 		clamped := *request.Wait
-		clamped.YieldTimeMS = h.cellExecutionLimits.ClampYieldTimeMS(request.Wait.YieldTimeMS)
 		// The wire carries the budget on the enclosing host request (Rust #57870).
 		if request.MaxOutputTokens != nil {
 			clamped.MaxOutputTokens = request.MaxOutputTokens

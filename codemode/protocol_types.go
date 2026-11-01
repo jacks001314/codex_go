@@ -3,6 +3,7 @@ package codemode
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -192,18 +193,31 @@ func (l *CellExecutionLimits) IsZero() bool {
 	return l == nil || (l.MaxYieldTimeMS == nil && l.MaxHeapSizeBytes == nil)
 }
 
-// ClampYieldTimeMS applies the session's max_yield_time_ms to an execute or
-// wait yield time without terminating the running cell. A zero yield time
-// keeps its zero-timeout (fire-and-forget) semantics and is never raised by
-// the limit, mirroring Rust resolve_yield_timeout.
-func (l *CellExecutionLimits) ClampYieldTimeMS(yieldMS uint64) uint64 {
-	if l == nil || l.MaxYieldTimeMS == nil || yieldMS == 0 {
-		return yieldMS
+// maxYieldTimeMS bounds a yield time so the converted Duration cannot
+// overflow.
+const maxYieldTimeMS = uint64(math.MaxInt64 / int64(time.Millisecond))
+
+// YieldTimeout mirrors Rust's InProcessCodeModeSession::resolve_yield_timeout
+// (code-mode-runtime/src/service.rs): a yield time at or above
+// MIN_YIELD_TIME_FOR_GRACE gets a one-second grace so output published just
+// after the deadline still lands in this observation, and the session's
+// max_yield_time_ms then caps the result. A zero yield stays immediate and is
+// never raised by the limit.
+func (l *CellExecutionLimits) YieldTimeout(yieldMS uint64) time.Duration {
+	if yieldMS > maxYieldTimeMS {
+		yieldMS = maxYieldTimeMS
 	}
-	if yieldMS > *l.MaxYieldTimeMS {
-		return *l.MaxYieldTimeMS
+	timeout := time.Duration(yieldMS) * time.Millisecond
+	if yieldMS >= ProtocolMinYieldTimeForGrace {
+		timeout += time.Duration(ProtocolYieldGracePeriodMS) * time.Millisecond
 	}
-	return yieldMS
+	if l == nil || l.MaxYieldTimeMS == nil {
+		return timeout
+	}
+	if limit := time.Duration(*l.MaxYieldTimeMS) * time.Millisecond; timeout > limit {
+		return limit
+	}
+	return timeout
 }
 
 type WaitToPendingRequest struct {

@@ -21,6 +21,14 @@ import (
 
 const CodeModeExecToolName = "exec"
 
+// codeModeMinYieldTimeForGraceMS and codeModeYieldGracePeriod mirror Rust's
+// MIN_YIELD_TIME_FOR_GRACE and YIELD_GRACE_PERIOD
+// (code-mode-runtime/src/service.rs).
+const (
+	codeModeMinYieldTimeForGraceMS = 10000
+	codeModeYieldGracePeriod       = time.Second
+)
+
 // codeModePragmaPrefix mirrors Rust CODE_MODE_PRAGMA_PREFIX.
 const codeModePragmaPrefix = "// @exec:"
 
@@ -981,7 +989,7 @@ func (e *codeModeExecExecutor) execute(ctx context.Context, invocation *Invocati
 		close(cell.done)
 		e.cellsMu.Unlock()
 	}()
-	timer := time.NewTimer(time.Duration(yieldTimeMS) * time.Millisecond)
+	timer := time.NewTimer(codeModeYieldTimeout(yieldTimeMS))
 	defer timer.Stop()
 	select {
 	case <-cell.done:
@@ -1995,6 +2003,19 @@ func codeModeHostObservation(invocation *Invocation) bool {
 	return flag
 }
 
+// codeModeYieldTimeout mirrors Rust's one-second yield grace
+// (code-mode-runtime/src/service.rs: MIN_YIELD_TIME_FOR_GRACE and
+// YIELD_GRACE_PERIOD). An observation whose yield time is at least ten seconds
+// waits one extra second so output published just past the deadline still
+// lands in this observation instead of the next call.
+func codeModeYieldTimeout(yieldTimeMS int) time.Duration {
+	timeout := time.Duration(yieldTimeMS) * time.Millisecond
+	if yieldTimeMS >= codeModeMinYieldTimeForGraceMS {
+		timeout += codeModeYieldGracePeriod
+	}
+	return timeout
+}
+
 // codeModeWaitYield applies Rust's ExecWaitArgs default: the 10 000 ms wait
 // only applies when the field is absent, so an explicit zero polls the cell
 // without blocking.
@@ -2449,7 +2470,7 @@ func (e *codeModeWaitExecutor) execute(ctx context.Context, invocation *Invocati
 		e.exec.cellsMu.Unlock()
 		cell.cancel()
 	}
-	timer := time.NewTimer(time.Duration(codeModeWaitYield(params.YieldTimeMS)) * time.Millisecond)
+	timer := time.NewTimer(codeModeYieldTimeout(codeModeWaitYield(params.YieldTimeMS)))
 	defer timer.Stop()
 	preempt := YieldSignalFromInvocation(invocation)
 	runningOutput := func() (*Output, error) {

@@ -89,7 +89,7 @@ func TestLocalWaitPollsImmediatelyForAnExplicitZeroYieldLikeRust(t *testing.T) {
 	exec, wait := NewCodeModeExecutors(NewRegistry())
 	output, err := exec.Execute(context.Background(), &Invocation{
 		CallID:  "cell-zero-yield",
-		Payload: Payload{Kind: PayloadCustom, Input: "// @exec: {\"yield_time_ms\": 0}\ntext('abcdefgh'); await new Promise(() => {});"},
+		Payload: Payload{Kind: PayloadCustom, Input: "// @exec: {\"yield_time_ms\": 0}\ntext('abcdefgh'); await new Promise(resolve => setTimeout(resolve, 400));"},
 	})
 	if err != nil {
 		t.Fatalf("exec: %v", err)
@@ -113,10 +113,15 @@ func TestLocalWaitPollsImmediatelyForAnExplicitZeroYieldLikeRust(t *testing.T) {
 	if running, _ := outcome.Data["running"].(bool); !running {
 		t.Fatalf("zero-yield wait did not report the running cell: %#v", outcome.Data)
 	}
-	if _, err := wait.Execute(context.Background(), &Invocation{
-		CallID:  "cell-zero-yield-terminate",
-		Payload: Payload{Kind: PayloadFunction, Arguments: `{"cell_id":"` + cellID + `","terminate":true}`},
-	}); err != nil {
-		t.Fatalf("terminate: %v", err)
+	// The cell keeps running on its own and completes on a later wait.
+	completed, err := wait.Execute(context.Background(), &Invocation{
+		CallID:  "cell-zero-yield-wait-again",
+		Payload: Payload{Kind: PayloadFunction, Arguments: `{"cell_id":"` + cellID + `","yield_time_ms":2000}`},
+	})
+	if err != nil {
+		t.Fatalf("wait after settle: %v", err)
+	}
+	if completed.Data["running"] == true {
+		t.Fatalf("cell still running after its timer fired: %#v", completed.Data)
 	}
 }
