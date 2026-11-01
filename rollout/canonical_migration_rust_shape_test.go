@@ -196,3 +196,63 @@ func TestCanonicalizeRolloutCountsRollbackConversionPassesLikeRust(t *testing.T)
 		t.Fatalf("bytes_processed = %d, want 8183", bytesProcessed)
 	}
 }
+
+// TestCanonicalizeRolloutDatesTaskCompleteFromLastWrittenRecordLikeRust pins the
+// rule Rust's read_rollout_record implements: an undecodable line or a record
+// the paginated policy drops leaves last_timestamp untouched, so the
+// synthesized task_complete keeps the time of the last record actually written.
+func TestCanonicalizeRolloutDatesTaskCompleteFromLastWrittenRecordLikeRust(t *testing.T) {
+	lines := []string{
+		canonicalMigrationLines["meta"][0],
+		canonicalMigrationLine(6, "event_msg", `{"type":"user_message","message":"hello 0","kind":"plain"}`),
+		canonicalMigrationLine(7, "response_item", `{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hi 0"}]}`),
+		canonicalMigrationLine(10, "event_msg", `{"type":"totally_unknown_event_xyz","foo":1}`),
+	}
+	home, path := writeCanonicalMigrationRollout(t, lines)
+	if _, err := CanonicalizeRolloutWithStats(home, path); err != nil {
+		t.Fatalf("CanonicalizeRolloutWithStats: %v", err)
+	}
+	want := canonicalMigrationHead + "\n" +
+		`{"timestamp":"2025-01-02T03:04:06.000Z","ordinal":1,"type":"event_msg","payload":{"type":"task_started","turn_id":"rollout-1","started_at":1735787046,"model_context_window":null,"collaboration_mode_kind":"default"}}` + "\n" +
+		`{"timestamp":"2025-01-02T03:04:06.000Z","ordinal":2,"type":"event_msg","payload":{"type":"item_completed","thread_id":"0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b","turn_id":"rollout-1","item":{"type":"UserMessage","id":"item-1","content":[{"type":"text","text":"hello 0","text_elements":[]}]},"completed_at_ms":1735787046000}}` + "\n" +
+		`{"timestamp":"2025-01-02T03:04:07.000Z","ordinal":3,"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hi 0"}]}}` + "\n" +
+		`{"timestamp":"2025-01-02T03:04:07.000Z","ordinal":4,"type":"event_msg","payload":{"type":"task_complete","turn_id":"rollout-1","last_agent_message":null,"completed_at":1735787047}}` + "\n"
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(got) != want {
+		t.Fatalf("migrated rollout mismatch\n got: %s\nwant: %s", got, want)
+	}
+}
+
+// TestCanonicalizeRolloutDropsUndecodableExecRecordsLikeRust covers the legacy
+// exec_command_end decode: a drive-letter cwd is normalized through
+// LegacyAppPathString into a file: URI, while a record whose cwd cannot be
+// represented is dropped without dating the synthesized task_complete.
+func TestCanonicalizeRolloutDropsUndecodableExecRecordsLikeRust(t *testing.T) {
+	lines := []string{
+		canonicalMigrationLines["meta"][0],
+		canonicalMigrationLine(6, "event_msg", `{"type":"user_message","message":"hello 0","kind":"plain"}`),
+		canonicalMigrationLine(7, "response_item", `{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hi 0"}]}`),
+		canonicalMigrationLine(8, "event_msg", `{"type":"exec_command_end","call_id":"c1","turn_id":"t1","command":["bash","-lc","ls"],"cwd":"C:/work","parsed_cmd":[],"source":"agent","stdout":"out","stderr":"","aggregated_output":"out","exit_code":0,"duration":{"secs":1,"nanos":0},"status":"completed"}`),
+		canonicalMigrationLine(9, "event_msg", `{"type":"exec_command_end","call_id":"c2","turn_id":"t1","command":["ls"],"cwd":"work","parsed_cmd":[],"source":"agent","exit_code":0,"duration":{"secs":0,"nanos":0},"status":"completed"}`),
+	}
+	home, path := writeCanonicalMigrationRollout(t, lines)
+	if _, err := CanonicalizeRolloutWithStats(home, path); err != nil {
+		t.Fatalf("CanonicalizeRolloutWithStats: %v", err)
+	}
+	want := canonicalMigrationHead + "\n" +
+		`{"timestamp":"2025-01-02T03:04:06.000Z","ordinal":1,"type":"event_msg","payload":{"type":"task_started","turn_id":"rollout-1","started_at":1735787046,"model_context_window":null,"collaboration_mode_kind":"default"}}` + "\n" +
+		`{"timestamp":"2025-01-02T03:04:06.000Z","ordinal":2,"type":"event_msg","payload":{"type":"item_completed","thread_id":"0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b","turn_id":"rollout-1","item":{"type":"UserMessage","id":"item-1","content":[{"type":"text","text":"hello 0","text_elements":[]}]},"completed_at_ms":1735787046000}}` + "\n" +
+		`{"timestamp":"2025-01-02T03:04:07.000Z","ordinal":3,"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hi 0"}]}}` + "\n" +
+		`{"timestamp":"2025-01-02T03:04:08.000Z","ordinal":4,"type":"event_msg","payload":{"type":"item_completed","thread_id":"0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b","turn_id":"t1","item":{"type":"CommandExecution","id":"c1","command":["bash","-lc","ls"],"cwd":"file:///C:/work","parsed_cmd":[],"source":"agent","status":"completed","aggregated_output":"out","exit_code":0,"duration":{"secs":1,"nanos":0}},"completed_at_ms":1735787048000}}` + "\n" +
+		`{"timestamp":"2025-01-02T03:04:08.000Z","ordinal":5,"type":"event_msg","payload":{"type":"task_complete","turn_id":"rollout-1","last_agent_message":null,"completed_at":1735787048}}` + "\n"
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(got) != want {
+		t.Fatalf("migrated rollout mismatch\n got: %s\nwant: %s", got, want)
+	}
+}

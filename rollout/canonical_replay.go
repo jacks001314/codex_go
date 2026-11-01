@@ -2625,11 +2625,13 @@ func (w *canonicalReplayWriter) writeReasoning(entry canonicalReplayLine) error 
 }
 
 func (w *canonicalReplayWriter) writeCommandExecution(entry canonicalReplayLine) error {
-	turnID, err := w.legacyEventTurnID(entry)
-	if err != nil {
+	// The legacy event decodes before any turn work, so a record the modern
+	// type cannot decode leaves no trace: no implicit turn is started for it.
+	item, ok, err := canonicalCommandExecutionItem(entry.payload)
+	if err != nil || !ok {
 		return err
 	}
-	item, err := canonicalCommandExecutionItem(entry.payload)
+	turnID, err := w.legacyEventTurnID(entry)
 	if err != nil {
 		return err
 	}
@@ -2876,96 +2878,110 @@ func canonicalReasoningItem(state *canonicalReasoningState) ([]byte, error) {
 	return out.finish(), nil
 }
 
-// canonicalCommandExecutionItem builds TurnItem::CommandExecution from a legacy
-// exec_command_end event, normalizing the command cwd to a PathUri like Rust's
-// LegacyAppPathString conversion.
-func canonicalCommandExecutionItem(source json.RawMessage) ([]byte, error) {
+// canonicalCommandExecutionItem decodes a legacy exec_command_end event into
+// TurnItem::CommandExecution the way 0.166's frozen migration adapter does. The
+// event type requires call_id, turn_id, command, cwd, parsed_cmd, exit_code,
+// duration and status, so a record missing any of them never reaches the
+// migration and the whole line is dropped; the item itself always drops
+// interaction_input and the analytics-only model_context/sandbox_type fields,
+// normalizes cwd to a PathUri, and keeps aggregated_output only when non-empty.
+func canonicalCommandExecutionItem(source json.RawMessage) ([]byte, bool, error) {
 	fields, err := canonicalRawFields(source)
 	if err != nil {
-		return nil, err
+		return nil, false, err
+	}
+	callID, ok := canonicalStrictString(fields["call_id"])
+	if !ok {
+		return nil, false, nil
+	}
+	if _, ok := canonicalStrictString(fields["turn_id"]); !ok {
+		return nil, false, nil
+	}
+	command, ok := canonicalStringList(fields["command"])
+	if !ok {
+		return nil, false, nil
+	}
+	cwd, ok := canonicalStrictString(fields["cwd"])
+	if !ok {
+		return nil, false, nil
+	}
+	cwdURI, ok := canonicalCommandCwdURI(cwd)
+	if !ok {
+		return nil, false, nil
+	}
+	parsed, ok := canonicalItemList(fields["parsed_cmd"], canonicalParsedCommand)
+	if !ok {
+		return nil, false, nil
+	}
+	exitCode, ok := canonicalStrictInt(fields["exit_code"])
+	if !ok {
+		return nil, false, nil
+	}
+	duration, ok := canonicalDuration(fields["duration"])
+	if !ok {
+		return nil, false, nil
+	}
+	status, ok := canonicalStrictString(fields["status"])
+	if !ok || !canonicalItemEnumAllowed(status, []string{"completed", "failed", "declined"}) {
+		return nil, false, nil
+	}
+	sourceKind := "agent"
+	if raw, present := fields["source"]; present && !canonicalRawIsNull(raw) {
+		sourceKind, ok = canonicalStrictString(raw)
+		if !ok || !canonicalItemEnumAllowed(sourceKind, []string{"agent", "user_shell", "unified_exec_startup", "unified_exec_interaction"}) {
+			return nil, false, nil
+		}
+	}
+	aggregated := ""
+	if raw, present := fields["aggregated_output"]; present && !canonicalRawIsNull(raw) {
+		aggregated, ok = canonicalStrictString(raw)
+		if !ok {
+			return nil, false, nil
+		}
 	}
 	out := newCanonicalJSONObject()
-	if err := out.field("type", "CommandExecution"); err != nil {
-		return nil, err
-	}
-	for _, key := range []string{"model_context", "sandbox_type"} {
-		if value, ok := fields[key]; ok && !canonicalRawIsNull(value) {
-			if err := out.rawField(key, value); err != nil {
-				return nil, err
-			}
-		}
-	}
-	if err := out.field("id", canonicalRawString(source, "call_id")); err != nil {
-		return nil, err
-	}
+	_ = out.field("type", "CommandExecution")
+	_ = out.rawField("id", canonicalSerdeString(callID))
 	for _, key := range []string{"plugin_id", "script_path", "process_id"} {
-		if value, ok := fields[key]; ok && !canonicalRawIsNull(value) {
-			if err := out.rawField(key, value); err != nil {
-				return nil, err
-			}
+		value, present, ok := canonicalItemStringField(fields, key)
+		if !ok {
+			return nil, false, nil
+		}
+		if present {
+			_ = out.rawField(key, canonicalSerdeString(value))
 		}
 	}
-	if value, ok := fields["command"]; ok && !canonicalRawIsNull(value) {
-		if err := out.rawField("command", value); err != nil {
-			return nil, err
+	_ = out.rawField("command", command)
+	_ = out.rawField("cwd", canonicalSerdeString(cwdURI))
+	_ = out.rawField("parsed_cmd", parsed)
+	_ = out.rawField("source", canonicalSerdeString(sourceKind))
+	_ = out.rawField("status", canonicalSerdeString(status))
+	if aggregated != "" {
+		_ = out.rawField("aggregated_output", canonicalSerdeString(aggregated))
+	}
+	_ = out.field("exit_code", exitCode)
+	_ = out.rawField("duration", duration)
+	return out.finish(), true, nil
+}
+
+// canonicalCommandCwdURI replays line_parser::normalize_legacy_command_cwd:
+// a cwd that already looks like a file: URI is parsed as one, and any other
+// value is turned into a file: URI through LegacyAppPathString. A cwd that
+// cannot be represented makes the whole record undecodable, so the line is
+// dropped instead of being converted.
+func canonicalCommandCwdURI(cwd string) (string, bool) {
+	if strings.HasPrefix(cwd, "file:") {
+		parsed, err := utils.Parse(cwd)
+		if err != nil || parsed == nil {
+			return "", false
 		}
-	} else if err := out.rawField("command", []byte("[]")); err != nil {
-		return nil, err
+		return parsed.String(), true
 	}
-	cwd := canonicalRawString(source, "cwd")
-	if cwd != "" {
-		if uri, uriErr := canonicalPathURI(cwd); uriErr == nil {
-			cwd = uri
-		}
-		if err := out.field("cwd", cwd); err != nil {
-			return nil, err
-		}
+	uriText, err := canonicalPathURI(cwd)
+	if err != nil {
+		return "", false
 	}
-	if value, ok := fields["parsed_cmd"]; ok && !canonicalRawIsNull(value) {
-		if err := out.rawField("parsed_cmd", value); err != nil {
-			return nil, err
-		}
-	} else if err := out.rawField("parsed_cmd", []byte("[]")); err != nil {
-		return nil, err
-	}
-	sourceKind := canonicalRawString(source, "source")
-	if sourceKind == "" {
-		sourceKind = "agent"
-	}
-	if err := out.field("source", sourceKind); err != nil {
-		return nil, err
-	}
-	if value, ok := fields["interaction_input"]; ok && !canonicalRawIsNull(value) {
-		if err := out.rawField("interaction_input", value); err != nil {
-			return nil, err
-		}
-	}
-	status := canonicalRawString(source, "status")
-	if status == "" {
-		status = "completed"
-		if value, ok := fields["success"]; ok {
-			var success bool
-			if json.Unmarshal(value, &success) == nil && !success {
-				status = "failed"
-			}
-		}
-	}
-	if err := out.field("status", status); err != nil {
-		return nil, err
-	}
-	if output := canonicalRawString(source, "aggregated_output"); output != "" {
-		if err := out.field("aggregated_output", output); err != nil {
-			return nil, err
-		}
-	}
-	for _, key := range []string{"exit_code", "duration"} {
-		if value, ok := fields[key]; ok && !canonicalRawIsNull(value) {
-			if err := out.rawField(key, value); err != nil {
-				return nil, err
-			}
-		}
-	}
-	return out.finish(), nil
+	return uriText, true
 }
 
 func canonicalPathURI(path string) (string, error) {
@@ -3017,13 +3033,20 @@ func writeCanonicalReplay(file *os.File, meta *SessionMeta, headerTimestamp stri
 		}
 		rollbackExtra = canonicalSourceBytesThrough(rawLines, planned[firstMarker].sourceIndex) + aborted + sourceBytes
 	}
+	// Rust advances the fallback timestamp only for records it actually emits:
+	// a line that fails to decode or is dropped by the replay policy leaves
+	// last_timestamp untouched, so a synthesized task_complete inherits the last
+	// written record's time instead of the dropped line's.
 	lastTimestamp := headerTimestamp
 	for i := range entries {
-		if strings.TrimSpace(entries[i].timestamp) != "" {
-			lastTimestamp = entries[i].timestamp
-		}
+		before := writer.bytesWritten
 		if err := writer.replay(entries[i]); err != nil {
 			return 0, 0, err
+		}
+		if writer.bytesWritten != before {
+			if strings.TrimSpace(entries[i].timestamp) != "" {
+				lastTimestamp = entries[i].timestamp
+			}
 		}
 	}
 	if err := writer.finishImplicitTurn(lastTimestamp); err != nil {

@@ -3,6 +3,7 @@ package app
 import (
 	"bufio"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -485,13 +486,52 @@ func initializeMigrateRolloutsState(codexHome string) error {
 	return state.WaitForRolloutBackfill(context.Background(), runtime, codexHome, state.RolloutBackfillOptions{})
 }
 
-func projectMigratedRollouts(codexHome string, report *rollout.MigrationReport) error {
+// openMigratedRolloutProjection opens the thread-history database used for the
+// paginated projection, or returns nil when no outcome needs projecting. The
+// caller owns the handle: Rust's thread store keeps its connection, and with it
+// the uncheckpointed write-ahead log, alive until the command finishes, so the
+// human report's storage measurement has to run before this handle is closed.
+func openMigratedRolloutProjection(codexHome string, report *rollout.MigrationReport) (*sql.DB, error) {
 	if report == nil {
-		return nil
+		return nil, nil
+	}
+	needsProjection := false
+	for _, outcome := range report.Outcomes {
+		if outcome.Status == rollout.MigrationStatusMigrated {
+			needsProjection = true
+			break
+		}
+	}
+	if !needsProjection {
+		return nil, nil
 	}
 	config, err := state.SqliteConfigForCodexHome(codexHome)
 	if err != nil {
+		return nil, err
+	}
+	db, err := config.OpenThreadHistoryDB(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("open thread history database: %w", err)
+	}
+	return db, nil
+}
+
+// projectMigratedRollouts opens the projection database for one run and closes
+// it when the run finishes.
+func projectMigratedRollouts(codexHome string, report *rollout.MigrationReport) error {
+	db, err := openMigratedRolloutProjection(codexHome, report)
+	if err != nil || db == nil {
 		return err
+	}
+	defer func() {
+		_ = db.Close()
+	}()
+	return projectMigratedRolloutsIn(db, report)
+}
+
+func projectMigratedRolloutsIn(db *sql.DB, report *rollout.MigrationReport) error {
+	if report == nil || db == nil {
+		return nil
 	}
 	for _, outcome := range report.Outcomes {
 		if outcome.Status != rollout.MigrationStatusMigrated {
@@ -506,12 +546,7 @@ func projectMigratedRollouts(codexHome string, report *rollout.MigrationReport) 
 		if threadID == "" {
 			continue
 		}
-		db, err := config.OpenThreadHistoryDB(context.Background())
-		if err != nil {
-			return fmt.Errorf("open thread history database: %w", err)
-		}
 		err = state.MaterializeThreadHistory(context.Background(), db, threadID, outcome.RolloutPath, 0, meta.SubagentHistoryStartOrdinal)
-		db.Close()
 		if err != nil {
 			return fmt.Errorf("project thread history for %s: %w", threadID, err)
 		}
@@ -1548,13 +1583,23 @@ func runMigrateRollouts(opts cli.MigrateRolloutsOptions, root cli.RootOptions, s
 	if err != nil {
 		return err
 	}
+	var projectionDB *sql.DB
 	if opts.Apply {
 		// Mirrors Rust migrate_one_rollout: after publishing the paginated
 		// rollout, materialize its SQLite thread-history projection so the
 		// app-server reads it from the durable projection rather than
 		// re-projecting on demand. The rollout package stays storage-only;
-		// the projection lives here to avoid an import cycle.
-		if err := projectMigratedRollouts(codexHome, report); err != nil {
+		// the projection lives here to avoid an import cycle. The handle stays
+		// open across the storage measurement below, like Rust's thread store,
+		// so an uncheckpointed write-ahead log still counts toward the report.
+		projectionDB, err = openMigratedRolloutProjection(codexHome, report)
+		if err != nil {
+			return err
+		}
+		if err := projectMigratedRolloutsIn(projectionDB, report); err != nil {
+			if projectionDB != nil {
+				_ = projectionDB.Close()
+			}
 			return err
 		}
 	}
@@ -1563,6 +1608,9 @@ func runMigrateRollouts(opts cli.MigrateRolloutsOptions, root cli.RootOptions, s
 		if after, bytesErr := migrationThreadStorageBytes(codexHome, threadHistoryDBPath); bytesErr == nil {
 			threadStorage = &[2]uint64{*threadStorageBefore, after}
 		}
+	}
+	if projectionDB != nil {
+		_ = projectionDB.Close()
 	}
 	if opts.JSON {
 		data, marshalErr := rollout.RenderJSONReport(report)

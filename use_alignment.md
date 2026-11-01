@@ -3011,7 +3011,55 @@ and decodable items kept Go's original spelling. The record is now decoded into
   (15 subtests) freezes the Rust bytes and counters in
   `rollout/canonical_migration_item_completed_rust_shape_test.go`.
 
+### 89. `migrate-rollouts` keeps the thread WAL open, decodes legacy exec records strictly and dates `task_complete` from the last written record
+
+- **WAL lifetime.** Rust opens the thread-history database once per
+  `migrate-rollouts` run and keeps it open until the command ends, so SQLite
+  never checkpoints the WAL and the `Disk used for thread storage` delta
+  includes it. Go opened and closed a connection per migrated rollout, and the
+  close checkpoints the WAL, so it reported 89.4 KB where Rust reported
+  335.1 KB. `app/app.go` now opens the projection connection once
+  (`openMigratedRolloutProjection`), projects every migrated rollout through it
+  (`projectMigratedRolloutsIn`), measures storage while it is still open and
+  only then closes it. A run with nothing to migrate never opens the
+  connection at all.
+- **Strict legacy `exec_command_end`.** The record must decode as 0.166's
+  `ExecCommandEndEvent` before it can become a `CommandExecution` item:
+  required `call_id`/`turn_id`/`command`/`cwd`/`parsed_cmd`/`exit_code`/
+  `duration`/`status`, the `source` and `status` enums, serde's `{secs, nanos}`
+  duration visitor and the string-typed `plugin_id`/`script_path`/`process_id`
+  options. A record that fails any of them is dropped whole, and the decode now
+  runs before `legacyEventTurnID`, so a dropped record starts no implicit turn.
+- **Legacy `cwd` normalization.** `line_parser::normalize_legacy_command_cwd`
+  rewrites a `cwd` that does not already start with `file:` through
+  `LegacyAppPathString` into a `file:` URI, and leaves a `file:` value for the
+  `PathUri` decoder. `canonicalCommandCwdURI` replays both branches;
+  `utils.Parse` alone rejected `C:\work` as an unknown URI scheme and dropped
+  records Rust converts.
+- **`task_complete` timestamp.** Rust advances the fallback `last_timestamp`
+  only for records it actually writes, so a line that fails to decode, or a
+  record the paginated policy drops, does not date the synthesized
+  `task_complete`. `writeCanonicalReplay` compares `writer.bytesWritten` around
+  each `replay` call and only then records the entry's timestamp.
+- Evidence: `out/r87-wal.txt` (both report `482 B -> 335.1 KB`),
+  `out/r89-storage-slope.txt` (0 B delta for 1/1, 1/5, 1/20, 2/1 and 4/1
+  sessions), `out/r88-storage-report.txt` (1/3/6 sessions, `FAILURES 0`),
+  `out/r90-storage-fixture.txt` (one rollout, 5 identical lines),
+  `out/r91b-task-complete-ts.txt` (a delta tail, an exec record without
+  `parsed_cmd` and an unknown event type all date `task_complete` the same),
+  `out/r92-cwd.txt` (`file:` URI, drive path, relative path and POSIX path,
+  `FAILURES 0`) and `out/r92-p75diff.txt`-`out/r92-p85diff.txt` (`FAILURES 0`).
+
 ## Verification
+
+- Round 76 keeps the thread-history WAL open, decodes legacy `exec_command_end`
+  strictly and dates `task_complete` from the last written record (entry 89):
+  `out/r87-wal.txt` reports `482 B -> 335.1 KB` for both implementations,
+  `out/r89-storage-slope.txt` reports a 0 B delta at every session count,
+  `out/r90-storage-fixture.txt` is line-identical for a single rollout,
+  `out/r91b-task-complete-ts.txt` and `out/r92-cwd.txt` match in every probe,
+  and `out/r92-p75diff.txt`-`out/r92-p85diff.txt` plus
+  `go test -count=1 ./rollout` report no failures.
 
 - Round 75 decodes every `item_completed` item into 0.166's
   `TurnItem` and writes it back (entry 88): `out/r85-itemcompleted.txt` reports
@@ -3692,9 +3740,6 @@ and decodable items kept Go's original spelling. The record is now decoded into
   `item_completed` surface now decodes and re-serializes every nested
   `TurnItem` like Rust (entry 88, `out/r85-itemcompleted.txt` 69/69), so a bad
   enum value or a wrong JSON type drops the line instead of surviving.
-  The `Disk used for thread storage` line follows Rust's rule but not its
-  numbers, because Rust leaves the thread-history WAL uncheckpointed while Go
-  checkpoints it (290.2 KB vs 88.6 KB in the same probe).
 - `exec-server forward` still rejects `--remote` outright (pinned by
   `TestExecServerRejectsMissingOrConflictingRemoteOptionsLikeRust`), where Rust
   allows the direct-transport combination; the Go forward runtime has no
