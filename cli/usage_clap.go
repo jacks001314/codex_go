@@ -312,6 +312,13 @@ func clapRepeatedValueOptionError(command string, argv []string) error {
 		if arg == "--" {
 			break
 		}
+		if strings.HasPrefix(command, "exec-server") && arg == "forward" {
+			// clap hands the tokens after `forward` to the subcommand's own
+			// matcher, so the same single-value option may appear once on each
+			// side of that token.
+			seen = make(map[string]bool, len(argv))
+			continue
+		}
 		if !clapLooksLikeOption(arg) {
 			continue
 		}

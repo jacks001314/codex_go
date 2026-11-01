@@ -1025,6 +1025,21 @@ func runExecServer(ctx context.Context, opts *cli.ExecServerOptions, root *cli.R
 	return server.ServeTransport(ctx, listenURL, stdin, stdout)
 }
 
+// execServerForwardURL reports the `exec-server forward --connect` destination.
+// Rust's forward mode requires --remote, so the destination rides on the remote
+// environment config: every accepted Noise relay stream is bridged to that
+// exec-server WebSocket instead of executing locally.
+func execServerForwardURL(opts *cli.ExecServerOptions) string {
+	if opts == nil || !opts.ForwardBound {
+		return ""
+	}
+	value := strings.TrimSpace(opts.Forward)
+	if value == "" || value == "forward" {
+		return ""
+	}
+	return value
+}
+
 func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootConfigOverrides []string, strictConfig bool, preferMXC *bool, environmentConfigReader execserver.EnvironmentConfigReader, stdin io.Reader) error {
 	baseURL := strings.TrimRight(strings.TrimSpace(opts.Remote), "/")
 	if baseURL == "" {
@@ -1078,6 +1093,10 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 	}
 	publishApplicationNetworkPolicy(loadedConfig)
 	if strings.EqualFold(strings.TrimSpace(opts.RemoteTransport), "direct") {
+		if opts.ForwardBound {
+			// Rust rejects forwarding on the Direct transport before startup.
+			return errors.New("direct exec-server transport does not support forwarding")
+		}
 		// Rust #42781: the direct transport registers `direct_jsonrpc_v1` and
 		// signs both the registry request and the WebSocket handshake instead of
 		// using the registry's account credential.
@@ -1099,6 +1118,7 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 		return runExecServerRemoteWithParentLifetime(ctx, stdin, opts.ExitOnStdinClose, execserver.RemoteEnvironmentConfig{
 			BaseURL:                    baseURL,
 			EnvironmentID:              environmentID,
+			ForwardURL: execServerForwardURL(opts),
 			Name:                       strings.TrimSpace(opts.Name),
 			AuthHeaders:                headers,
 			HTTPClient:                 policyHTTPClient(loadedConfig, codexnetwork.NewHTTPClient(loadedConfig.RespectSystemProxyEnabled(), 0)),
@@ -1154,6 +1174,7 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 	return runExecServerRemoteWithParentLifetime(ctx, stdin, opts.ExitOnStdinClose, execserver.RemoteEnvironmentConfig{
 		BaseURL:                    baseURL,
 		EnvironmentID:              environmentID,
+		ForwardURL: execServerForwardURL(opts),
 		Name:                       strings.TrimSpace(opts.Name),
 		AuthHeaders:                headers,
 		ResolveAuthHeaders:         resolveHeaders,
@@ -1186,6 +1207,7 @@ func runExecServerRemoteWithDirectTransport(
 	return runExecServerRemoteWithParentLifetime(ctx, stdin, opts.ExitOnStdinClose, execserver.RemoteEnvironmentConfig{
 		BaseURL:                    baseURL,
 		EnvironmentID:              environmentID,
+		ForwardURL: execServerForwardURL(opts),
 		Name:                       strings.TrimSpace(opts.Name),
 		Transport:                  execserver.RemoteTransportDirect,
 		DirectSigner:               signer,
@@ -1269,6 +1291,7 @@ func runExecServerRemoteWithExecutorCredential(
 	cfg := execserver.RemoteEnvironmentConfig{
 		BaseURL:                  baseURL,
 		EnvironmentID:            environmentID,
+		ForwardURL: execServerForwardURL(opts),
 		Name:                     strings.TrimSpace(opts.Name),
 		ResolveAuthHeaders:       pipe.ResolveAuthHeaders,
 		RefreshAfterUnauthorized: pipe.RefreshAfterUnauthorized,

@@ -1596,19 +1596,19 @@ func TestParseExecServerAndStdioToUDS(t *testing.T) {
 	}
 
 	_, err = Parse([]string{"exec-server", "--remote", "ws://127.0.0.1:7777"})
-	if err == nil || err.Error() != "--environment-id is required when --remote is set" {
+	if err == nil || err.Error() != "the following required arguments were not provided:\n  --environment-id <ID>" {
 		t.Fatalf("exec-server missing environment error = %v", err)
 	}
 	_, err = Parse([]string{"exec-server", "--listen", "stdio", "--remote", "ws://127.0.0.1:7777", "--environment-id", "env-1"})
-	if err == nil || err.Error() != "--listen conflicts with --remote" {
+	if err == nil || err.Error() != "the argument '--listen <URL>' cannot be used with '--remote <URL>'" {
 		t.Fatalf("exec-server listen conflict error = %v", err)
 	}
 	_, err = Parse([]string{"exec-server", "--use-agent-identity-auth"})
-	if err == nil || err.Error() != "--use-agent-identity-auth requires --remote" {
+	if err == nil || err.Error() != "the following required arguments were not provided:\n  --environment-id <ID>\n  --remote <URL>" {
 		t.Fatalf("exec-server agent identity requires remote error = %v", err)
 	}
 	_, err = Parse([]string{"exec-server", "--exit-on-stdin-close"})
-	if err == nil || err.Error() != "--exit-on-stdin-close requires --remote" {
+	if err == nil || err.Error() != "the following required arguments were not provided:\n  --environment-id <ID>\n  --remote <URL>" {
 		t.Fatalf("exec-server parent lifetime requires remote error = %v", err)
 	}
 }
@@ -1626,22 +1626,15 @@ func TestParseExecServerForwardModeLikeRust(t *testing.T) {
 	if _, err := Parse([]string{"exec-server", "forward"}); err == nil || !strings.Contains(err.Error(), "--connect") {
 		t.Fatalf("forward without --connect error = %v", err)
 	}
-	// Forward conflicts with --remote.
-	if _, err := Parse([]string{"exec-server", "--connect", "ws://127.0.0.1:7777", "--remote", "ws://registry:9000"}); err == nil || !strings.Contains(err.Error(), "cannot be combined") {
-		t.Fatalf("forward + remote error = %v", err)
+	// --connect belongs to the forward subcommand, so the root command reports
+	// it as unexpected; 0.166 dropped the legacy root spelling.
+	if _, err := Parse([]string{"exec-server", "--connect", "ws://127.0.0.1:7777"}); err == nil || !strings.Contains(err.Error(), "unexpected argument '--connect' found") {
+		t.Fatalf("root --connect error = %v", err)
 	}
-	// The legacy `--connect` spelling without the forward token still binds the
-	// forwarding URL.
-	parsed, err := Parse([]string{"exec-server", "--connect", "ws://127.0.0.1:7777", "--name", "worker-a"})
-	if err != nil {
-		t.Fatalf("Parse exec-server --connect returned error: %v", err)
-	}
-	if parsed.Command != CommandExecServer || parsed.ExecServer.Forward != "ws://127.0.0.1:7777" {
-		t.Fatalf("exec-server connect = %#v", parsed.ExecServer)
-	}
-	// Non-WebSocket connect URL is rejected.
-	if _, err := Parse([]string{"exec-server", "--connect", "tcp://bad"}); err == nil || !strings.Contains(err.Error(), "ws://") {
-		t.Fatalf("bad connect URL error = %v", err)
+	// clap accepts any --connect value; the forwarder's dial reports the real
+	// failure once registration succeeds.
+	if _, err := Parse([]string{"exec-server", "forward", "--remote", "https://registry.test", "--environment-id", "env-1", "--connect", "tcp://bad"}); err != nil {
+		t.Fatalf("forward with non-WebSocket connect error = %v", err)
 	}
 }
 

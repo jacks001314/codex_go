@@ -669,12 +669,19 @@ func newRemoteNoiseVirtualStream(
 		streamID: streamID, instanceID: instanceID, transport: transport,
 		conn: clientConn, incoming: make(chan []byte, remoteRelayChannelCapacity), cancel: cancel,
 	}
+	forwarding := server != nil && server.forwardDestinationURL() != ""
 	go func() {
 		defer serverConn.Close()
-		// Rust #39235: when the JSON-RPC processor exits before the writer
-		// task, the physical relay still resets the corresponding harness
-		// stream so the peer does not wait on a dead connection.
-		_ = server.serveConnectionStream(streamCtx, serverConn, serverConn)
+		if forwarding {
+			// Rust's Forwarder bridges each accepted stream to the configured
+			// exec-server WebSocket instead of serving it here.
+			_ = server.serveForwardedStream(streamCtx, serverConn)
+		} else {
+			// Rust #39235: when the JSON-RPC processor exits before the writer
+			// task, the physical relay still resets the corresponding harness
+			// stream so the peer does not wait on a dead connection.
+			_ = server.serveConnectionStream(streamCtx, serverConn, serverConn)
+		}
 		queueRelayReset(outgoing, streamID)
 	}()
 	go stream.runInboundWriter(streamCtx)

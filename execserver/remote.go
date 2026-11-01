@@ -71,6 +71,11 @@ type RemoteEnvironmentConfig struct {
 	// AllowedSymlinkedCodexHome is the execution host's macOS Seatbelt opt-out
 	// (Rust #42716), applied to this remote executor's sandbox preparation.
 	AllowedSymlinkedCodexHome string
+	// ForwardURL is Rust's exec-server forwarding destination
+	// (`exec-server forward --connect`): when set, the registered environment
+	// bridges every accepted Noise relay stream to that exec-server WebSocket
+	// instead of executing locally.
+	ForwardURL string
 	// DirectHTTPClient is Rust's `http_direct` registry pool: the client a
 	// scoped executor credential must use when the registry is plain-HTTP
 	// loopback, so a system proxy can never receive the credential in plaintext
@@ -258,6 +263,14 @@ func RunRemoteEnvironment(ctx context.Context, cfg RemoteEnvironmentConfig) erro
 	server.SetEnvironmentConfigReader(cfg.EnvironmentConfigReader)
 	server.SetAllowedSymlinkedCodexHome(cfg.AllowedSymlinkedCodexHome)
 	defer server.shutdownSessions()
+	if forwardURL := strings.TrimSpace(cfg.ForwardURL); forwardURL != "" {
+		if cfg.Transport == RemoteTransportDirect {
+			// Rust's run_remote_environment_forward_until_shutdown rejects the
+			// Direct transport because its bridge is Noise-specific.
+			return errors.New("direct exec-server transport does not support forwarding")
+		}
+		server.SetForwardDestination(forwardURL)
+	}
 	if cfg.Transport == RemoteTransportDirect {
 		return runDirectEnvironment(ctx, cfg, server)
 	}

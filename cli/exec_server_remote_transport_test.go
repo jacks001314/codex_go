@@ -70,21 +70,21 @@ func TestExecServerRejectsMissingOrConflictingRemoteOptionsLikeRust(t *testing.T
 	}{
 		{append(append([]string{}, base...), "--aws-sigv4"), "--remote-transport direct"},
 		{append(append([]string{}, base...), "--remote-transport", "direct"), "--aws-sigv4"},
-		{append(append([]string{}, base...), "--remote-transport", "direct", "--aws-sigv4", "--use-agent-identity-auth"), "conflicts with --use-agent-identity-auth"},
-		{append(append([]string{}, base...), "--remote-transport", "direct", "--aws-sigv4", "--executor-credential-stdin"), "conflicts with --executor-credential-stdin"},
+		{append(append([]string{}, base...), "--remote-transport", "direct", "--aws-sigv4", "--use-agent-identity-auth"), "cannot be used with '--use-agent-identity-auth'"},
+		{append(append([]string{}, base...), "--remote-transport", "direct", "--aws-sigv4", "--executor-credential-stdin"), "cannot be used with '--executor-credential-stdin'"},
 	} {
 		_, err := Parse(testCase.args)
 		if err == nil || !strings.Contains(err.Error(), testCase.want) {
 			t.Fatalf("%v: error = %v, want %q", testCase.args, err, testCase.want)
 		}
 	}
-	// Go rejects the forward/--remote combination outright, which subsumes
-	// Rust's direct-transport forwarding check.
+	// Rust validates the transport pair after clap accepted the arguments, then
+	// rejects forwarding over the direct transport.
 	if _, err := Parse([]string{
 		"exec-server", "forward", "--connect", "ws://127.0.0.1:7777",
 		"--remote", "https://registry.example.com", "--environment-id", "env-1",
 		"--remote-transport", "direct", "--aws-sigv4",
-	}); err == nil || !strings.Contains(err.Error(), "cannot be combined with --remote") {
+	}); err == nil || !strings.Contains(err.Error(), "direct exec-server transport does not support forwarding") {
 		t.Fatalf("direct forward error = %v", err)
 	}
 	if _, err := Parse([]string{"exec-server", "--remote", "https://registry.example.com", "--environment-id", "env-1", "--remote-transport", "noise"}); err != nil {

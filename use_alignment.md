@@ -3050,7 +3050,53 @@ and decodable items kept Go's original spelling. The record is now decoded into
   `out/r92-cwd.txt` (`file:` URI, drive path, relative path and POSIX path,
   `FAILURES 0`) and `out/r92-p75diff.txt`-`out/r92-p85diff.txt` (`FAILURES 0`).
 
+### 90. `exec-server forward` registers a remote environment and bridges Noise relay streams
+
+- **Scope-local `requires`.** Rust's exec-server parser declares `--remote` and
+  `--environment-id` as globals, but clap validates a subcommand's `requires`
+  against that subcommand's own matches. `--remote X forward --connect Y`
+  therefore reports both `--remote <URL>` and `--environment-id <ID>` missing,
+  while `--environment-id E forward --remote X --connect Y` reports only
+  `--environment-id <ID>`. The forward usage block is
+  `--remote <URL> --environment-id <ID> --connect <URL>`, followed by
+  `--aws-sigv4` when the AWS family or `--remote-transport direct` asks for it
+  and then the options argv actually carried. `validateExecServerClapScopes`
+  replays the duplicate, conflict and requirement passes per scope, deepest
+  first, so forward diagnostics win over root ones and
+  `--remote ... forward --remote ...` is not a duplicate.
+- **Conflicts and duplicates are per scope.** `--listen` conflicts with
+  `--remote` only inside the same scope (so `--listen stdio forward --remote
+  ...` registers like Rust), `--use-agent-identity-auth` and
+  `--executor-credential-stdin` conflict with `--aws-sigv4`, and a single-value
+  option may appear once before and once after `forward`;
+  `clapRepeatedValueOptionError` resets at the subcommand token. `--connect`
+  belongs to `forward`, so the root command reports it as unexpected, and
+  `--listen`/`--concurrent-requests` after `forward` are unexpected arguments.
+- **Forwarding bridge.** `RemoteEnvironmentConfig.ForwardURL` carries the
+  `--connect` destination into `RunRemoteEnvironment`, which rejects the Direct
+  transport (`direct exec-server transport does not support forwarding`) and
+  then bridges every accepted Noise relay stream through
+  `serveForwardedStream`: one WebSocket dial per stream, relay JSON lines sent
+  as binary frames, and every text/binary frame framed back to the relay
+  unchanged, matching `codex-rs/exec-server/src/forward.rs`.
+- **Removed Go-only rejections:** `exec-server forward cannot be combined with
+  --remote`, `--listen conflicts with exec-server forward`, the bespoke
+  `--environment-id is required when --remote is set`,
+  `--remote-transport requires --remote` and `--aws-sigv4 requires --remote`
+  messages, and the `--connect ws://` scheme check clap never performs.
+- Evidence: `out/r96j-diff.txt` (`TOTAL 75 FAILURES 0`), `out/r96b-rust.txt`
+  and `out/r96c-diff.txt` (probes recorded against 0.166 first),
+  `TestExecServerForwardScopeDiagnosticsLikeRust` (31 pinned diagnostics) and
+  `TestServeForwardedStreamBridgesPayloadsLikeRust`.
+
 ## Verification
+
+- Round 77 implements `exec-server forward --remote` with clap's scope-local
+  requirement checks and the Noise-relay bridge (entry 90): `out/r96j-diff.txt`
+  covers 75 argument combinations at `FAILURES 0`, `go test -count=1 ./cli
+  ./execserver` passes, and `./app` still fails only the two pre-existing
+  interactive-TUI tests (`TestInteractiveSlashCommandsUpdateTUIState`,
+  `TestInteractiveSlashCommandRejectsGoOnlyApproval`).
 
 - Round 76 keeps the thread-history WAL open, decodes legacy `exec_command_end`
   strictly and dates `task_complete` from the last written record (entry 89):
@@ -3740,10 +3786,6 @@ and decodable items kept Go's original spelling. The record is now decoded into
   `item_completed` surface now decodes and re-serializes every nested
   `TurnItem` like Rust (entry 88, `out/r85-itemcompleted.txt` 69/69), so a bad
   enum value or a wrong JSON type drops the line instead of surviving.
-- `exec-server forward` still rejects `--remote` outright (pinned by
-  `TestExecServerRejectsMissingOrConflictingRemoteOptionsLikeRust`), where Rust
-  allows the direct-transport combination; the Go forward runtime has no
-  remote-registration path.
 - `app-server --print-startup-config` writes
   `"appServerVersion":"0.0.0"` where Rust reports its own `0.166.0`. This is
   build-time injection, not a hard-coded value: `doctor.Version()` reads

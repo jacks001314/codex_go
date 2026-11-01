@@ -14,8 +14,7 @@ import (
 // and codex-rs/cli/src/exec_server_args_tests.rs: the flag defaults to off,
 // `--remote <registry> --environment-id <id>` may combine it with
 // `--exit-on-stdin-close`, a bare flag is rejected for the missing registry, and
-// it conflicts with the account-style provider. The Go port has no
-// `--aws-sigv4` flag, so only the Agent Identity conflict can be exercised.
+// it conflicts with the account-style provider and the SigV4 signer.
 func TestExecServerExecutorCredentialStdinFlagLikeRust(t *testing.T) {
 	// exec_server_defaults_preserve_local_and_noise_modes: off by default.
 	parsed, err := Parse([]string{"exec-server", "--listen", "stdio"})
@@ -48,15 +47,16 @@ func TestExecServerExecutorCredentialStdinFlagLikeRust(t *testing.T) {
 
 	// exec_server_transport_and_aws_options_require_registration_arguments: the
 	// scoped credential needs the registry endpoint.
+	// clap reports the missing registry arguments rather than a bespoke error.
 	if _, err := Parse([]string{"exec-server", "--executor-credential-stdin"}); err == nil ||
-		err.Error() != "--executor-credential-stdin requires --remote" {
+		err.Error() != "the following required arguments were not provided:\n  --environment-id <ID>\n  --remote <URL>" {
 		t.Fatalf("bare --executor-credential-stdin error = %v", err)
 	}
 
 	// exec_server_rejects_missing_or_conflicting_remote_options: scoped
 	// credentials conflict with the account identity provider.
 	_, err = Parse(append(append([]string{}, registry...), "--executor-credential-stdin", "--use-agent-identity-auth"))
-	if err == nil || err.Error() != "--executor-credential-stdin conflicts with --use-agent-identity-auth" {
+	if err == nil || err.Error() != "the argument '--executor-credential-stdin' cannot be used with '--use-agent-identity-auth'" {
 		t.Fatalf("scoped + --use-agent-identity-auth error = %v", err)
 	}
 }

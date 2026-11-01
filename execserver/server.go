@@ -232,6 +232,11 @@ type Server struct {
 	sessions           map[string]*serverSessionEntry
 	detachedSessionTTL time.Duration
 
+	// forwardDestination mirrors Rust's exec-server Forwarder destination: when
+	// set, every accepted Noise relay stream is bridged to that WebSocket
+	// instead of being served by this executor (codex-rs/exec-server/src/forward.rs).
+	forwardDestination string
+
 	// preferMXC mirrors Rust ExecServerRuntimeOptions::prefer_mxc: only the
 	// sandbox preference from startup `features.prefer_mxc` flags, never other
 	// startup configuration or secrets. It is surfaced to
@@ -266,6 +271,28 @@ type Server struct {
 // SetPreferMXC records the startup CLI sandbox preference
 // (`-c features.prefer_mxc=<bool>`), mirroring Rust
 // exec_server_command.rs: only this value is retained from startup overrides.
+// SetForwardDestination mirrors Rust exec-server forwarding: a non-empty URL
+// bridges every Noise relay stream to that exec-server WebSocket instead of
+// serving it locally.
+func (s *Server) SetForwardDestination(url string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.forwardDestination = strings.TrimSpace(url)
+}
+
+// forwardDestinationURL reports the configured forwarding destination.
+func (s *Server) forwardDestinationURL() string {
+	if s == nil {
+		return ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.forwardDestination
+}
+
 func (s *Server) SetPreferMXC(value *bool) {
 	if s == nil {
 		return

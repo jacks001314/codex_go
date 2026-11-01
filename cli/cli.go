@@ -358,6 +358,12 @@ type ExecServerOptions struct {
 	RemoteSet        bool
 	EnvironmentIDSet bool
 	ConnectSet       bool
+	// clap validates a subcommand's `requires` against that subcommand's own
+	// matches, so --remote/--environment-id/--remote-transport only satisfy the
+	// forward requirements when they appear after `forward`.
+	RemoteSetAfterForward          bool
+	EnvironmentIDSetAfterForward   bool
+	RemoteTransportSetAfterForward bool
 	// AWSFlagSet records any of the --aws-profile/region/service options: clap
 	// then requires --aws-sigv4 as well.
 	AWSFlagSet           bool
@@ -3661,6 +3667,7 @@ func setExecServerRemoteTransport(execServer *ExecServerOptions, value string) e
 	case "noise", "direct":
 		execServer.RemoteTransport = value
 		execServer.RemoteTransportSet = true
+		execServer.RemoteTransportSetAfterForward = execServer.ForwardBound
 		return nil
 	}
 	return invalidValueError(value, "--remote-transport <REMOTE_TRANSPORT>", execServerRemoteTransports)
@@ -3709,6 +3716,9 @@ func parseExecServer(args []string, execServer *ExecServerOptions) error {
 		case arg == "--strict-config":
 			execServer.StrictConfig = true
 		case arg == "--listen":
+			if execServer.ForwardBound {
+				return clapUnexpectedLongFlagError("exec-server forward", arg, args[:i])
+			}
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
 				return err
@@ -3717,6 +3727,9 @@ func parseExecServer(args []string, execServer *ExecServerOptions) error {
 			execServer.ListenSet = true
 			i = next
 		case strings.HasPrefix(arg, "--listen="):
+			if execServer.ForwardBound {
+				return clapUnexpectedLongFlagError("exec-server forward", arg, args[:i])
+			}
 			execServer.Listen = strings.TrimPrefix(arg, "--listen=")
 			execServer.ListenSet = true
 		case arg == "--remote":
@@ -3726,11 +3739,16 @@ func parseExecServer(args []string, execServer *ExecServerOptions) error {
 			}
 			execServer.Remote = value
 			execServer.RemoteSet = true
+			execServer.RemoteSetAfterForward = execServer.ForwardBound
 			i = next
 		case strings.HasPrefix(arg, "--remote="):
 			execServer.Remote = strings.TrimPrefix(arg, "--remote=")
 			execServer.RemoteSet = true
+			execServer.RemoteSetAfterForward = execServer.ForwardBound
 		case arg == "--connect":
+			if !execServer.ForwardBound {
+				return clapUnexpectedLongFlagError("exec-server", arg, args[:i])
+			}
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
 				return pendingValueRequiredPlaceholderError("--connect", "<URL>", args, i)
@@ -3739,6 +3757,9 @@ func parseExecServer(args []string, execServer *ExecServerOptions) error {
 			execServer.ConnectSet = true
 			i = next
 		case strings.HasPrefix(arg, "--connect="):
+			if !execServer.ForwardBound {
+				return clapUnexpectedLongFlagError("exec-server", arg, args[:i])
+			}
 			execServer.Forward = strings.TrimPrefix(arg, "--connect=")
 			execServer.ConnectSet = true
 		case arg == "--environment-id":
@@ -3748,10 +3769,12 @@ func parseExecServer(args []string, execServer *ExecServerOptions) error {
 			}
 			execServer.EnvironmentID = value
 			execServer.EnvironmentIDSet = true
+			execServer.EnvironmentIDSetAfterForward = execServer.ForwardBound
 			i = next
 		case strings.HasPrefix(arg, "--environment-id="):
 			execServer.EnvironmentID = strings.TrimPrefix(arg, "--environment-id=")
 			execServer.EnvironmentIDSet = true
+			execServer.EnvironmentIDSetAfterForward = execServer.ForwardBound
 		case arg == "--name":
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
@@ -3794,6 +3817,9 @@ func parseExecServer(args []string, execServer *ExecServerOptions) error {
 				execServer.LinuxSandboxPIDNamespace = value
 			}
 		case arg == "--concurrent-requests":
+			if execServer.ForwardBound {
+				return clapUnexpectedLongFlagError("exec-server forward", arg, args[:i])
+			}
 			value, next, err := requireValue(args, i, arg)
 			if err != nil {
 				return err
@@ -3807,6 +3833,9 @@ func parseExecServer(args []string, execServer *ExecServerOptions) error {
 			}
 			i = next
 		case strings.HasPrefix(arg, "--concurrent-requests="):
+			if execServer.ForwardBound {
+				return clapUnexpectedLongFlagError("exec-server forward", arg, args[:i])
+			}
 			value := strings.TrimPrefix(arg, "--concurrent-requests=")
 			if parsed, err := parseConcurrentRequestsValue(value); err != nil {
 				if !deferClapValueError(args, &i, &deferred, err) {
@@ -3903,98 +3932,9 @@ func parseExecServer(args []string, execServer *ExecServerOptions) error {
 			execServer.ProxyPrivateIPsViaUpstream = enabled
 		}
 	}
-	forward := strings.TrimSpace(execServer.Forward)
-	if forward != "" && forward != "forward" && execServer.Remote != "" {
-		return errors.New("exec-server forward cannot be combined with --remote")
+	if err := validateExecServerClapScopes(args, execServer); err != nil {
+		return err
 	}
-	if !execServer.ForwardBound && execServer.AWSSigV4 && (!execServer.RemoteSet || !execServer.EnvironmentIDSet) {
-		// clap renders the SigV4 requirement group with --environment-id first.
-		var missing []string
-		if !execServer.EnvironmentIDSet {
-			missing = append(missing, "--environment-id <ID>")
-		}
-		if !execServer.RemoteSet {
-			missing = append(missing, "--remote <URL>")
-		}
-		return &UsageError{
-			Message:    requiredArgumentsMessage(missing...),
-			Usage:      "Usage: codex exec-server --environment-id <ID> --remote <URL> --aws-sigv4",
-			SmartUsage: true,
-		}
-	}
-	if !execServer.ForwardBound && execServer.AWSFlagSet {
-		// Any --aws-profile/--aws-region/--aws-service pulls in --aws-sigv4,
-		// which in turn requires the remote registration options.
-		var missing []string
-		if !execServer.RemoteSet {
-			missing = append(missing, "--remote <URL>")
-		}
-		if !execServer.EnvironmentIDSet {
-			missing = append(missing, "--environment-id <ID>")
-		}
-		if !execServer.AWSSigV4 {
-			missing = append(missing, "--aws-sigv4")
-		}
-		if len(missing) > 0 {
-			return &UsageError{
-				Message:    requiredArgumentsMessage(missing...),
-				Usage:      "Usage: codex exec-server --remote <URL> --environment-id <ID> --aws-sigv4",
-				SmartUsage: true,
-			}
-		}
-	}
-	if execServer.Remote != "" && execServer.EnvironmentID == "" {
-		return errors.New("--environment-id is required when --remote is set")
-	}
-	if execServer.ForwardBound {
-		var missing []string
-		if !execServer.RemoteSet {
-			missing = append(missing, "--remote <URL>")
-		}
-		if !execServer.EnvironmentIDSet {
-			missing = append(missing, "--environment-id <ID>")
-		}
-		if !execServer.ConnectSet {
-			missing = append(missing, "--connect <URL>")
-		}
-		awsRequired := execServer.AWSFlagSet
-		if awsRequired {
-			missing = append(missing, "--aws-sigv4")
-		}
-		if len(missing) > 0 {
-			usage := "Usage: codex exec-server forward --remote <URL> --environment-id <ID> --connect <URL>"
-			if awsRequired {
-				usage += " --aws-sigv4"
-			}
-			return &UsageError{Message: requiredArgumentsMessage(missing...), Usage: usage, SmartUsage: true}
-		}
-	}
-	if forward != "" && forward != "forward" && !strings.HasPrefix(forward, "ws://") && !strings.HasPrefix(forward, "wss://") {
-		return fmt.Errorf("exec-server forward requires --connect ws://HOST:PORT, got %q", forward)
-	}
-	if forward != "" && forward != "forward" && execServer.ListenSet {
-		return errors.New("--listen conflicts with exec-server forward")
-	}
-	if execServer.Remote != "" && execServer.ListenSet {
-		return errors.New("--listen conflicts with --remote")
-	}
-	if execServer.UseAgentIdentityAuth && execServer.Remote == "" && forward == "" {
-		return errors.New("--use-agent-identity-auth requires --remote")
-	}
-	if execServer.ExitOnStdinClose && execServer.Remote == "" && forward == "" {
-		return errors.New("--exit-on-stdin-close requires --remote")
-	}
-	// Rust #54434: `requires = "exec_server_remote"` plus
-	// `conflicts_with_all = ["use_agent_identity_auth", "aws_sigv4"]`. The Go port
-	// has no --aws-sigv4 flag, so only the Agent Identity conflict applies.
-	if execServer.ExecutorCredentialStdin && execServer.Remote == "" && forward == "" {
-		return errors.New("--executor-credential-stdin requires --remote")
-	}
-	if execServer.ExecutorCredentialStdin && execServer.UseAgentIdentityAuth {
-		return errors.New("--executor-credential-stdin conflicts with --use-agent-identity-auth")
-	}
-	// Rust #42781: `--remote-transport` and the `--aws-*` family require the
-	// remote registration arguments, and the direct transport requires SigV4.
 	transport := strings.ToLower(strings.TrimSpace(execServer.RemoteTransport))
 	switch transport {
 	case "":
@@ -4007,34 +3947,15 @@ func parseExecServer(args []string, execServer *ExecServerOptions) error {
 	if strings.TrimSpace(execServer.AWSService) == "" {
 		execServer.AWSService = "execute-api"
 	}
-	if execServer.RemoteTransportSet && execServer.Remote == "" {
-		return errors.New("--remote-transport requires --remote")
-	}
-	if execServer.AWSSigV4 && execServer.Remote == "" && forward == "" {
-		return errors.New("--aws-sigv4 requires --remote")
-	}
-	if execServer.AWSProfile != "" && !execServer.AWSSigV4 {
-		return errors.New("--aws-profile requires --aws-sigv4")
-	}
-	if execServer.AWSRegion != "" && !execServer.AWSSigV4 {
-		return errors.New("--aws-region requires --aws-sigv4")
-	}
-	if execServer.AWSServiceSet && !execServer.AWSSigV4 {
-		return errors.New("--aws-service requires --aws-sigv4")
-	}
+	// Rust runs validate_remote_transport() once clap accepted the arguments.
 	if execServer.AWSSigV4 && transport != "direct" {
 		return errors.New("--aws-sigv4 requires --remote-transport direct")
 	}
 	if transport == "direct" && !execServer.AWSSigV4 {
 		return errors.New("--remote-transport direct requires --aws-sigv4")
 	}
-	if execServer.AWSSigV4 && execServer.UseAgentIdentityAuth {
-		return errors.New("--aws-sigv4 conflicts with --use-agent-identity-auth")
-	}
-	if execServer.AWSSigV4 && execServer.ExecutorCredentialStdin {
-		return errors.New("--aws-sigv4 conflicts with --executor-credential-stdin")
-	}
-	if transport == "direct" && forward == "forward" {
+	// Rust keys this off the matched `forward` subcommand, not the --connect value.
+	if transport == "direct" && execServer.ForwardBound {
 		return errors.New("direct exec-server transport does not support forwarding")
 	}
 	return execServer.ValidateWebsocketAuthFlags()
