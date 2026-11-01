@@ -658,8 +658,13 @@ func (a *Action) preflight(fs FileSystem, cwd string, noFollowSymlinks bool) err
 	// no wire primitive models "is this component a symlink" over the exec
 	// server. Patch targets themselves are read through fs below.
 	if a != nil && noFollowSymlinks {
+		// The workspace root itself is trusted: hosts such as macOS reach their
+		// temporary directories through a system symlink (/var -> /private/var),
+		// so the walk starts at the resolved root and still rejects every link
+		// inside the workspace. Absolute patch targets keep the strict walk.
+		root := noFollowWorkspaceRoot(cwd)
 		for _, name := range a.FilePaths() {
-			resolved, err := resolveWorkspacePath(cwd, name)
+			resolved, err := resolveWorkspacePath(root, name)
 			if err != nil {
 				return err
 			}
@@ -670,7 +675,7 @@ func (a *Action) preflight(fs FileSystem, cwd string, noFollowSymlinks bool) err
 			}
 			if strings.TrimSpace(name) != "" {
 				if movePath, ok := a.movePathFor(name); ok {
-					moveResolved, moveErr := resolveWorkspacePath(cwd, movePath)
+					moveResolved, moveErr := resolveWorkspacePath(root, movePath)
 					if moveErr != nil {
 						return moveErr
 					}
@@ -790,6 +795,18 @@ func (a *Action) movePathFor(path string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// noFollowWorkspaceRoot resolves the workspace root once for the no-follow
+// walk. A host may expose the workspace through a system symlink (macOS
+// /var -> /private/var); resolving the root keeps those patches usable while
+// links below the root are still rejected.
+func noFollowWorkspaceRoot(cwd string) string {
+	resolved, err := filepath.EvalSymlinks(cwd)
+	if err != nil || strings.TrimSpace(resolved) == "" {
+		return cwd
+	}
+	return resolved
 }
 
 // noFollowSymlinkPath walks every component of path and returns the first

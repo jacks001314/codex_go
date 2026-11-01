@@ -521,3 +521,39 @@ func TestNoFollowSymlinksRejectsLinkedPathComponents(t *testing.T) {
 		t.Fatalf("Verify(follow) error = %v", err)
 	}
 }
+
+func TestNoFollowSymlinksTrustsResolvedWorkspaceRoot(t *testing.T) {
+	// macOS exposes its temporary directories through /var -> /private/var, so
+	// the no-follow walk starts at the resolved workspace root instead of
+	// rejecting the host's own system links. Rust's fixtures canonicalize for
+	// the same reason.
+	base := t.TempDir()
+	realRoot := filepath.Join(base, "private", "host")
+	workspace := filepath.Join(realRoot, "work")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(base, "var")
+	if err := os.Symlink(filepath.Join(base, "private"), alias); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	linkedCWD := filepath.Join(alias, "host", "work")
+	action, err := Parse("*** Begin Patch\n*** Add File: nested/file.txt\n+ok\n*** End Patch")
+	if err != nil {
+		t.Fatalf("Parse error = %v", err)
+	}
+	if err := action.Verify(&ApplyOptions{CWD: linkedCWD, NoFollowSymlinks: true}); err != nil {
+		t.Fatalf("Verify(no-follow) error = %v, want the resolved workspace root accepted", err)
+	}
+	// A link inside the workspace is still rejected.
+	if err := os.Symlink(workspace, filepath.Join(workspace, "inner")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	inner, err := Parse("*** Begin Patch\n*** Add File: inner/file.txt\n+ok\n*** End Patch")
+	if err != nil {
+		t.Fatalf("Parse error = %v", err)
+	}
+	if err := inner.Verify(&ApplyOptions{CWD: linkedCWD, NoFollowSymlinks: true}); err == nil || !strings.Contains(err.Error(), "traverses symlink") {
+		t.Fatalf("Verify(inner link) error = %v, want symlink rejection", err)
+	}
+}
