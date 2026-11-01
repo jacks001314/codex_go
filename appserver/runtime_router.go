@@ -20860,14 +20860,17 @@ func (r *RuntimeRouter) requireProcesses() *ProcessService {
 }
 
 func (r *RuntimeRouter) requireServerRequests() *ServerRequestBroker {
-	service := requireServiceSlot(r, &r.services.ServerRequests, func() *ServerRequestBroker {
-		return NewServerRequestBroker()
+	// The wiring belongs to the broker this router creates: callers may inject
+	// their own broker through RuntimeServices, and re-applying the router's
+	// sink on every call would silently replace it.
+	return requireServiceSlot(r, &r.services.ServerRequests, func() *ServerRequestBroker {
+		service := NewServerRequestBroker()
+		service.SetSink(r.requests)
+		service.SetResolvedCallback(r.notifyServerRequestResolved)
+		service.SetResolvedResponseCallback(r.handleServerRequestResolvedResponse)
+		service.SetVerificationAuth(r.verificationAuthRevisionSnapshot)
+		return service
 	})
-	service.SetSink(r.requests)
-	service.SetResolvedCallback(r.notifyServerRequestResolved)
-	service.SetResolvedResponseCallback(r.handleServerRequestResolvedResponse)
-	service.SetVerificationAuth(r.verificationAuthRevisionSnapshot)
-	return service
 }
 
 func (r *RuntimeRouter) requireFeedback() *FeedbackSnapshot {
