@@ -47,20 +47,36 @@ func startUnifiedExecCommand(cmd *osexec.Cmd, tty bool) (*startedUnifiedExecComm
 	// Rust #47605: piped unified-exec children go through the shared child
 	// launcher with ProcessMode::NewSession and Linux parent-death termination.
 	processgroup.PrepareChildSession(cmd)
-	stdout, err := cmd.StdoutPipe()
+	// Own the output pipes instead of using cmd.StdoutPipe: os/exec's Wait
+	// closes the pipes it created as soon as the child exits, so a process that
+	// writes and exits quickly can lose its buffered output before the reader
+	// goroutines drain it.
+	stdout, stdoutWriter, err := os.Pipe()
 	if err != nil {
 		return nil, err
 	}
-	stderr, err := cmd.StderrPipe()
+	stderr, stderrWriter, err := os.Pipe()
 	if err != nil {
+		_ = stdout.Close()
+		_ = stdoutWriter.Close()
 		return nil, err
 	}
+	cmd.Stdout = stdoutWriter
+	cmd.Stderr = stderrWriter
 	restoreDescriptors := processgroup.HideInheritedDescriptors()
 	startErr := cmd.Start()
 	restoreDescriptors()
 	if startErr != nil {
+		_ = stdout.Close()
+		_ = stdoutWriter.Close()
+		_ = stderr.Close()
+		_ = stderrWriter.Close()
 		return nil, startErr
 	}
+	// The child owns its duplicated ends now; the parent's copies must close or
+	// the readers never see EOF.
+	_ = stdoutWriter.Close()
+	_ = stderrWriter.Close()
 	return &startedUnifiedExecCommand{readers: []io.ReadCloser{stdout, stderr}}, nil
 }
 
