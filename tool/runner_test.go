@@ -366,6 +366,11 @@ func TestWindowsShellSandboxUsesElevatedLikeRust(t *testing.T) {
 }
 
 func TestManagedNetworkingRejectedWithRestrictedTokenSandbox(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		// Managed networking is enforced by the Windows restricted-token
+		// sandbox; other platforms never reach that launch path.
+		t.Skip("managed networking is a Windows sandbox concern")
+	}
 	cwd := t.TempDir()
 	codexHome := t.TempDir()
 	oldCapture := runWindowsShellSandboxCapture
