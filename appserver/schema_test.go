@@ -16,6 +16,7 @@ import (
 	"codex_go/apps"
 	authpkg "codex_go/auth"
 	configpkg "codex_go/config"
+	"codex_go/internal/rustsrc"
 	"codex_go/mcp"
 	sandboxpkg "codex_go/sandbox"
 	"github.com/klauspost/compress/zstd"
@@ -797,7 +798,7 @@ func rustAppServerProtocolSchemaRoot(t *testing.T) string {
 	}
 	// Prefer the frozen Rust worktrees: a plain sibling checkout can lag the
 	// commit the ledger targets, which would compare Go against older fixtures.
-	for _, root := range rustCodexAnchorRoots() {
+	for _, root := range rustsrc.AnchorRoots() {
 		candidates = append(candidates, filepath.Join(root, "app-server-protocol", "schema", "json"))
 	}
 	candidates = append(candidates,
@@ -843,7 +844,7 @@ func rustAppServerProtocolRustRoot(t *testing.T) string {
 	if env := os.Getenv("CODEX_RUST_ROOT"); env != "" {
 		candidates = append(candidates, env)
 	}
-	candidates = append(candidates, rustCodexAnchorRoots()...)
+	candidates = append(candidates, rustsrc.AnchorRoots()...)
 	candidates = append(candidates,
 		filepath.Join("..", "..", "git", "codex", "codex-rs"),
 		filepath.Join("..", "..", "codex-main", "codex-rs"),
@@ -860,37 +861,6 @@ func rustAppServerProtocolRustRoot(t *testing.T) string {
 	}
 	t.Skip("Rust root not found; set CODEX_RUST_ROOT")
 	return ""
-}
-
-// rustCodexAnchorRoots lists the frozen Rust worktrees (`git/codex-anchor-<sha>`)
-// this checkout can reach, newest first, so the protocol fixtures come from the
-// commit the parity ledger targets rather than from a stale sibling checkout.
-func rustCodexAnchorRoots() []string {
-	roots := []string{}
-	for _, base := range []string{
-		filepath.Join("..", "..", "git"),
-		filepath.Join("..", "..", "..", "git"),
-	} {
-		abs, err := filepath.Abs(base)
-		if err != nil {
-			continue
-		}
-		entries, err := os.ReadDir(abs)
-		if err != nil {
-			continue
-		}
-		names := make([]string, 0, len(entries))
-		for _, entry := range entries {
-			if entry.IsDir() && strings.HasPrefix(entry.Name(), "codex-anchor-") {
-				names = append(names, entry.Name())
-			}
-		}
-		sort.Sort(sort.Reverse(sort.StringSlice(names)))
-		for _, name := range names {
-			roots = append(roots, filepath.Join(abs, name, "codex-rs"))
-		}
-	}
-	return roots
 }
 
 // rustMethodsFromCommon extracts every method literal declared in the Rust

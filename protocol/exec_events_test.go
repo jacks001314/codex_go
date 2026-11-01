@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"codex_go/internal/rustsrc"
 )
 
 func TestThreadStartedJSONShape(t *testing.T) {
@@ -398,6 +400,9 @@ func rustExecEventsSourcePath(t *testing.T) string {
 	candidates := []string{}
 	if env := os.Getenv("CODEX_RUST_ROOT"); env != "" {
 		candidates = append(candidates, filepath.Join(env, "exec", "src", "exec_events.rs"))
+	}
+	for _, root := range rustsrc.AnchorRoots() {
+		candidates = append(candidates, filepath.Join(root, "exec", "src", "exec_events.rs"))
 	}
 	candidates = append(candidates,
 		filepath.Join("..", "..", "git", "codex", "codex-rs", "exec", "src", "exec_events.rs"),

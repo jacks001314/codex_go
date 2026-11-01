@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"codex_go/config"
+	"codex_go/internal/rustsrc"
 )
 
 // Mirrors the Rust memory_read v2 suite: the selected memory version contributes
@@ -168,10 +169,7 @@ func TestValidateConsolidationArtifactsForVersion(t *testing.T) {
 // may be CRLF-converted by git on Windows; the canonical content is LF.
 func TestMemoryV2TemplateMatchesRust(t *testing.T) {
 	root := ""
-	for _, candidate := range []string{
-		filepath.Join("..", "..", "git", "codex", "codex-rs"),
-		filepath.Join("..", "..", "..", "git", "codex", "codex-rs"),
-	} {
+	for _, candidate := range rustsrc.Candidates() {
 		if _, err := os.Stat(filepath.Join(candidate, "Cargo.toml")); err == nil {
 			root = candidate
 			break

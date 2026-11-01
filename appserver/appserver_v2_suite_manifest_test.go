@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"codex_go/internal/rustsrc"
 )
 
 type rustAppServerV2SuiteCase struct {
@@ -256,6 +258,9 @@ func rustAppServerV2SuiteRoot(t *testing.T) string {
 	candidates := []string{}
 	if env := os.Getenv("CODEX_RUST_APP_SERVER_SUITE_V2"); env != "" {
 		candidates = append(candidates, env)
+	}
+	for _, root := range rustsrc.AnchorRoots() {
+		candidates = append(candidates, filepath.Join(root, "app-server", "tests", "suite", "v2"))
 	}
 	candidates = append(candidates,
 		filepath.Join("..", "..", "git", "codex", "codex-rs", "app-server", "tests", "suite", "v2"),

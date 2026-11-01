@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"codex_go/internal/rustsrc"
 )
 
 // rustPermissionTemplatesRoot locates the Rust checkout's permissions templates
@@ -14,6 +16,9 @@ func rustPermissionTemplatesRoot(t *testing.T) string {
 	candidates := []string{}
 	if env := os.Getenv("CODEX_RUST_ROOT"); env != "" {
 		candidates = append(candidates, filepath.Join(env, "prompts", "templates", "permissions"))
+	}
+	for _, root := range rustsrc.AnchorRoots() {
+		candidates = append(candidates, filepath.Join(root, "prompts", "templates", "permissions"))
 	}
 	candidates = append(candidates,
 		filepath.Join("..", "..", "git", "codex", "codex-rs", "prompts", "templates", "permissions"),

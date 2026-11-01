@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"codex_go/internal/rustsrc"
 )
 
 func TestRustProtocolMethodSurfaceAgainstGoConstants(t *testing.T) {
@@ -339,12 +341,7 @@ func readRustProtocolSource(t *testing.T, path string) string {
 
 func rustAppserverRustRoot(t *testing.T) string {
 	t.Helper()
-	candidates := []string{
-		filepath.Join("..", "..", "git", "codex", "codex-rs"),
-		filepath.Join("..", "..", "..", "git", "codex", "codex-rs"),
-		filepath.Join("..", "..", "codex-main", "codex-rs"),
-		filepath.Join("..", "..", "..", "codex-main", "codex-rs"),
-	}
+	candidates := rustsrc.Candidates()
 	if env := os.Getenv("CODEX_RUST_ROOT"); env != "" {
 		candidates = append([]string{env}, candidates...)
 	}

@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"codex_go/internal/rustsrc"
 )
 
 func TestRustSubcommandSurfaceParity(t *testing.T) {
@@ -268,11 +270,7 @@ func rustCLIWorkspaceRoot(t *testing.T) string {
 	if env := os.Getenv("CODEX_RUST_ROOT"); env != "" {
 		candidates = append(candidates, env)
 	}
-	candidates = append(candidates,
-		filepath.Join("..", "..", "git", "codex", "codex-rs"),
-		filepath.Join("..", "..", "..", "codex-main", "codex-rs"),
-		filepath.Join("..", "..", "codex-main", "codex-rs"),
-	)
+	candidates = append(candidates, rustsrc.Candidates()...)
 	for _, candidate := range candidates {
 		abs, err := filepath.Abs(candidate)
 		if err != nil {

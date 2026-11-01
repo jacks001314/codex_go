@@ -4,13 +4,14 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
 	"testing"
+
+	"codex_go/internal/rustsrc"
 )
 
 func TestRustWorkspaceMembersSnapshot(t *testing.T) {
@@ -77,7 +78,7 @@ func rustSnapshotRoot(t *testing.T) string {
 	if env := os.Getenv("CODEX_RUST_ROOT"); env != "" {
 		candidates = append(candidates, env)
 	}
-	candidates = append(candidates, rustAnchorRoots()...)
+	candidates = append(candidates, rustsrc.AnchorRoots()...)
 	candidates = append(candidates,
 		filepath.Join("..", "..", "git", "codex", "codex-rs"),
 		filepath.Join("..", "..", "..", "git", "codex", "codex-rs"),
@@ -98,38 +99,6 @@ func rustSnapshotRoot(t *testing.T) string {
 	return ""
 }
 
-// rustAnchorRoots lists sibling worktrees pinned to the frozen Rust commit.
-// A plain checkout of the upstream repository can lag behind the freeze point,
-// and comparing snapshots against a stale revision reports drift that does not
-// exist.
-func rustAnchorRoots() []string {
-	data, err := os.ReadFile("commits.json")
-	if err != nil {
-		return nil
-	}
-	var manifest struct {
-		RustToInclusive string `json:"rustToInclusive"`
-	}
-	if err := json.Unmarshal(data, &manifest); err != nil {
-		return nil
-	}
-	frozen := strings.TrimSpace(manifest.RustToInclusive)
-	if frozen == "" {
-		return nil
-	}
-	roots := []string{}
-	for _, width := range []int{12, 8} {
-		if len(frozen) < width {
-			continue
-		}
-		dir := "codex-anchor-" + frozen[:width]
-		roots = append(roots,
-			filepath.Join("..", "..", "git", dir, "codex-rs"),
-			filepath.Join("..", "..", "..", "git", dir, "codex-rs"),
-		)
-	}
-	return roots
-}
 func rustWorkspaceMembers(t *testing.T, path string) []string {
 	t.Helper()
 	data, err := os.ReadFile(path)
