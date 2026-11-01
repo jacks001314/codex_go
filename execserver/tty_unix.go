@@ -7,6 +7,8 @@ import (
 	"os/exec"
 
 	"github.com/creack/pty"
+
+	"codex_go/ptyio"
 )
 
 type startedExecServerTTY struct {
@@ -23,9 +25,17 @@ func startExecServerTTY(cmd *exec.Cmd) (*startedExecServerTTY, bool, error) {
 	if err != nil {
 		return nil, true, err
 	}
+	// Rust bf3eb2ec91 (#40460): the master is driven by readiness, so closing the
+	// terminal wakes the capture reader instead of leaving it parked when a
+	// detached child keeps the slave open.
+	master, masterErr := ptyio.New(terminal)
+	if masterErr != nil {
+		_ = terminal.Close()
+		return nil, true, masterErr
+	}
 	return &startedExecServerTTY{
-		stdin:  terminal,
-		reader: terminal,
+		stdin:  master,
+		reader: master,
 		wait: func() (int, error) {
 			err := cmd.Wait()
 			code := -1
@@ -40,6 +50,7 @@ func startExecServerTTY(cmd *exec.Cmd) (*startedExecServerTTY, bool, error) {
 			}
 			return cmd.Process.Kill()
 		},
-		cleanup: terminal.Close,
+		closePTY: master.Close,
+		cleanup:  master.Close,
 	}, true, nil
 }

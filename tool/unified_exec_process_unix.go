@@ -12,6 +12,7 @@ import (
 	"github.com/creack/pty"
 
 	"codex_go/processgroup"
+	"codex_go/ptyio"
 )
 
 func startUnifiedExecWindowsSandboxCommand(req *ShellRequest) (*startedUnifiedExecSandboxCommand, error) {
@@ -34,7 +35,14 @@ func startUnifiedExecCommand(cmd *osexec.Cmd, tty bool) (*startedUnifiedExecComm
 		if err != nil {
 			return nil, err
 		}
-		return &startedUnifiedExecCommand{stdin: terminal, readers: []io.ReadCloser{terminal}}, nil
+		// Rust bf3eb2ec91 (#40460): the master is driven by readiness, so a read
+		// parked on a detached child can be woken instead of outliving the session.
+		master, masterErr := ptyio.New(terminal)
+		if masterErr != nil {
+			_ = terminal.Close()
+			return nil, masterErr
+		}
+		return &startedUnifiedExecCommand{stdin: master, readers: []io.ReadCloser{master}}, nil
 	}
 	// Rust #47605: piped unified-exec children go through the shared child
 	// launcher with ProcessMode::NewSession and Linux parent-death termination.

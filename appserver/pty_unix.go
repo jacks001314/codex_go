@@ -7,6 +7,8 @@ import (
 	osexec "os/exec"
 
 	"github.com/creack/pty"
+
+	"codex_go/ptyio"
 )
 
 func startPTYCommand(ctx context.Context, cmd *osexec.Cmd, size *TerminalSize) (*ptyProcess, *ptyHandle, error) {
@@ -17,6 +19,14 @@ func startPTYCommand(ctx context.Context, cmd *osexec.Cmd, size *TerminalSize) (
 	})
 	if err != nil {
 		return nil, nil, err
+	}
+	// Rust bf3eb2ec91 (#40460): the master is duplicated, marked O_NONBLOCK and
+	// driven by readiness, so a detached child that keeps the terminal open can
+	// never leave the reader parked.
+	master, masterErr := ptyio.New(file)
+	if masterErr != nil {
+		_ = file.Close()
+		return nil, nil, masterErr
 	}
 	done := make(chan struct{})
 	process := &ptyProcess{
@@ -32,18 +42,23 @@ func startPTYCommand(ctx context.Context, cmd *osexec.Cmd, size *TerminalSize) (
 		},
 	}
 	handle := &ptyHandle{
-		reader: file,
-		writer: file,
+		reader: master,
+		writer: master,
 		closeInput: func() error {
-			_, err := file.Write([]byte{4})
-			return err
+			return master.SendEOF()
 		},
 		closePTY: func() error {
-			return file.Close()
+			return master.Close()
+		},
+		closeReader: func() error {
+			return master.InterruptRead()
+		},
+		cleanup: func() error {
+			return master.Close()
 		},
 		resize: func(size *TerminalSize) error {
 			terminalSize := terminalSizeOrDefault(size)
-			return pty.Setsize(file, &pty.Winsize{Rows: terminalSize.Rows, Cols: terminalSize.Cols})
+			return master.SetSize(terminalSize.Rows, terminalSize.Cols)
 		},
 	}
 	go monitorPTYContext(ctx.Done(), done, process)

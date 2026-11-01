@@ -58,6 +58,8 @@ type ptyHandle struct {
 
 	closeInputOnce  sync.Once
 	closeInputErr   error
+	inputClosed     bool
+	inputMu         sync.Mutex
 	closePTYOnce    sync.Once
 	closePTYErr     error
 	closeReaderOnce sync.Once
@@ -68,6 +70,14 @@ type ptyHandle struct {
 
 func (h *ptyHandle) Write(p []byte) (int, error) {
 	if h == nil || h.writer == nil {
+		return 0, io.ErrClosedPipe
+	}
+	// Closing stdin ends the terminal input; portable-pty does not reopen it,
+	// so a later write is a closed pipe rather than more input.
+	h.inputMu.Lock()
+	closed := h.inputClosed
+	h.inputMu.Unlock()
+	if closed {
 		return 0, io.ErrClosedPipe
 	}
 	originalLen := len(p)
@@ -92,6 +102,9 @@ func (h *ptyHandle) Close() error {
 		return nil
 	}
 	h.closeInputOnce.Do(func() {
+		h.inputMu.Lock()
+		h.inputClosed = true
+		h.inputMu.Unlock()
 		if h.closeInput != nil {
 			h.closeInputErr = h.closeInput()
 			return
