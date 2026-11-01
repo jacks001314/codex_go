@@ -438,7 +438,7 @@ func (m *shellSnapshotManager) captureSnapshot(ctx context.Context, params *Exec
 	// let an alias or quoting option reinterpret the records that follow it
 	// (snapshot_source_capture_script, #48078).
 	captureScript, ok := shell.SnapshotSourceCaptureScript(shellType, shell.SnapshotCaptureOptions{
-		Startup: shell.SnapshotStartupInteractive, Declarations: true,
+		Startup: shell.SnapshotStartupInteractive, Declarations: true, Environment: true,
 	})
 	if !ok {
 		return nil, errors.New("unsupported snapshot shell")
@@ -467,7 +467,9 @@ func (m *shellSnapshotManager) captureSnapshot(ctx context.Context, params *Exec
 	}
 	// Rust #39957 keeps a snapshot that fits the environment replay budget
 	// entirely in executor memory; only larger states materialize a replay file.
-	if len(rendered) <= maxShellSnapshotEnvironmentBytes {
+	// The captured environment shares that budget, so a state is replayed through
+	// environment chunks only when state plus environment stay under it.
+	if len(rendered) <= maxShellSnapshotEnvironmentBytes-capturedSnapshotEnvironmentBytes(captured) {
 		return &shellSnapshotEntry{state: rendered}, nil
 	}
 	dir := filepath.Join(os.TempDir(), "codex-exec-server-shell-snapshots")
@@ -498,16 +500,26 @@ func (m *shellSnapshotManager) captureSnapshot(ctx context.Context, params *Exec
 	return &shellSnapshotEntry{state: rendered, path: path, fileSource: true}, nil
 }
 
+// capturedSnapshotEnvironmentBytes is the captured environment's replay cost:
+// Rust adds it to the in-memory state budget and caps it on its own.
+func capturedSnapshotEnvironmentBytes(captured *shell.CapturedSnapshot) int {
+	if captured == nil {
+		return 0
+	}
+	environmentBytes := len(captured.Environment)
+	if captured.StartupEnvironment != nil && len(captured.StartupEnvironment.Environment) > environmentBytes {
+		environmentBytes = len(captured.StartupEnvironment.Environment)
+	}
+	return environmentBytes
+}
+
 // validateShellSnapshotSizes mirrors Rust #51350's replay limits: the captured
 // environment is capped independently from the 4 MiB file-replay state budget.
 func validateShellSnapshotSizes(captured *shell.CapturedSnapshot, renderedState string) error {
 	if captured == nil {
 		return errors.New("invalid captured shell state")
 	}
-	environmentBytes := len(captured.Environment)
-	if captured.StartupEnvironment != nil && len(captured.StartupEnvironment.Environment) > environmentBytes {
-		environmentBytes = len(captured.StartupEnvironment.Environment)
-	}
+	environmentBytes := capturedSnapshotEnvironmentBytes(captured)
 	if environmentBytes > maxShellSnapshotEnvironmentBytes {
 		return fmt.Errorf("shell snapshot environment exceeds %d bytes", maxShellSnapshotEnvironmentBytes)
 	}
