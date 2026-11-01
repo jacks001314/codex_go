@@ -142,7 +142,10 @@ func installBlockingInterruptHook(t *testing.T, router *RuntimeRouter, cwd strin
 	startedPath := cwd + string(os.PathSeparator) + "interrupt-started"
 	releasePath := cwd + string(os.PathSeparator) + "interrupt-release"
 	hook := hookRunnerMetadata("abort-lifecycle", HookEventInterrupt, "", 0)
-	hook.TimeoutSec = 3
+	// The hook blocks until the test writes the release file, so the timeout is
+	// only a deadlock guard. Keep it well above process startup: a full-tree
+	// `go test -race` run can take seconds to launch PowerShell.
+	hook.TimeoutSec = 30
 	command := blockingInterruptHookCommand(startedPath, releasePath)
 	hook.Command = &command
 	if err := router.requireHooks().Add(cwd, hook); err != nil {

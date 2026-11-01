@@ -78,10 +78,14 @@ func TestMCPStdioLaunchedServerHasNoConsoleWindow(t *testing.T) {
 			for {
 				data, readErr := os.ReadFile(stateFile)
 				if readErr == nil {
-					if state := strings.TrimSpace(string(data)); state != "false" {
-						t.Fatalf("console state = %q, want no console window", state)
+					// The helper creates the file before writing it, so an empty
+					// read means the write has not landed yet.
+					if state := strings.TrimSpace(string(data)); state != "" {
+						if state != "false" {
+							t.Fatalf("console state = %q, want no console window", state)
+						}
+						return
 					}
-					return
 				}
 				if time.Now().After(deadline) {
 					t.Fatalf("the server did not report its console state: %v", readErr)
