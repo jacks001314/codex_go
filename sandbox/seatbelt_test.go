@@ -275,10 +275,10 @@ func TestBuildSeatbeltPolicyAllowsTrustedCodexHomeSymlinksLikeRust(t *testing.T)
 	if err != nil {
 		t.Fatalf("buildSeatbeltPolicy(allowed home) error = %v", err)
 	}
-	if !seatbeltParametersContain(parameters, target) {
+	if !seatbeltWritableRootParametersContain(parameters, target) {
 		t.Fatalf("writable root parameter = %#v, want resolved target %q", parameters, target)
 	}
-	if seatbeltParametersContain(parameters, link) {
+	if seatbeltWritableRootParametersContain(parameters, link) {
 		t.Fatalf("policy retained the unresolved symlink root %q: %#v", link, parameters)
 	}
 
@@ -420,6 +420,16 @@ func seatbeltParametersContain(parameters []seatbeltParameter, value string) boo
 	value = cleanSeatbeltPath(value)
 	for _, parameter := range parameters {
 		if cleanSeatbeltPath(parameter.Value) == value {
+			return true
+		}
+	}
+	return false
+}
+
+func seatbeltWritableRootParametersContain(parameters []seatbeltParameter, value string) bool {
+	value = cleanSeatbeltPath(value)
+	for _, parameter := range parameters {
+		if strings.HasPrefix(parameter.Name, "WRITABLE_ROOT_") && cleanSeatbeltPath(parameter.Value) == value {
 			return true
 		}
 	}
