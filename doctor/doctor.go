@@ -1692,21 +1692,21 @@ func providerReachabilityPlanFromParts(mode providerAuthReachabilityMode, provid
 		}
 		endpoints = append(endpoints, &reachabilityEndpoint{
 			Label:         providerID + " API",
-			URL:           baseURL,
+			URL:           providerURLForPath(baseURL, "responses", queryParams),
 			Required:      true,
 			RouteProbeURL: routeProbeURL,
 		})
 	case providerAuthReachabilityChatGPT:
 		endpoints = append(endpoints, &reachabilityEndpoint{
 			Label:    "ChatGPT",
-			URL:      chatGPTBaseURL,
+			URL:      providerURLForPath(chatGPTBaseURL, "codex/responses", queryParams),
 			Required: true,
 		})
 	case providerAuthReachabilityNotRequired:
 		if strings.TrimSpace(providerBaseURL) != "" {
 			endpoints = append(endpoints, &reachabilityEndpoint{
 				Label:         providerID + " API",
-				URL:           providerBaseURL,
+				URL:           providerURLForPath(providerBaseURL, "responses", queryParams),
 				Required:      true,
 				RouteProbeURL: routeProbeURL,
 			})
@@ -1787,10 +1787,10 @@ func (b *Builder) runProviderReachabilityCheck(plan *reachabilityPlan) *DoctorCh
 			} else {
 				warnings++
 			}
-			details = append(details, fmt.Sprintf("%s base URL: %s %s (%s)", endpoint.Label, endpoint.URL, err.Error(), requirement))
+			details = append(details, fmt.Sprintf("%s inference URL: %s %s (%s)", endpoint.Label, endpoint.URL, err.Error(), requirement))
 			continue
 		}
-		details = append(details, fmt.Sprintf("%s base URL: %s reachable (%s)", endpoint.Label, endpoint.URL, status))
+		details = append(details, fmt.Sprintf("%s inference URL: %s reachable (%s)", endpoint.Label, endpoint.URL, status))
 		if endpoint.RouteProbeURL == nil {
 			continue
 		}

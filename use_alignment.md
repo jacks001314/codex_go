@@ -3420,8 +3420,36 @@ and decodable items kept Go's original spelling. The record is now decoded into
   `TestUpdatesCheckReportsFailedProbeLikeRust` and
   `TestLatestVersionStatusTextMatchesRustNonNewerCopy` pin the rows, the
   `HTTP 403 Forbidden` copy and the non-newer status text.
+### 103. `doctor` probes Rust's inference URLs and labels them that way
+
+- **Endpoint paths.** Rust's `provider_reachability_plan_from_parts` probes
+  `provider_url_for_path(base, "responses", query_params)` for a configured
+  provider and `provider_url_for_path(chatgpt_base_url, "codex/responses",
+  query_params)` in ChatGPT mode, so the HEAD request lands on the endpoint the
+  session actually uses. Go probed the bare base URL, which answers differently
+  and hides a wrong API prefix.
+- **Row label.** Rust renders `<label> inference URL: <url> reachable
+  (HTTP <status>)` / `<label> inference URL: <url> <error> (<requirement>)`;
+  Go printed `<label> base URL: ...`, which no 0.166 report contains.
+- Evidence: the reachability block of `out/r99-doctor-rust.txt` and
+  `out/r99-doctor-go.txt` is now identical, including the redacted
+  `ChatGPT inference URL    https://chatgpt.com/backend-api/<redacted>
+  request timed out (required)` row, `out/r1310-doctor-full-diff.txt` is down to
+  69 normalized lines with no reachability hunk, and
+  `TestChatGPTReachabilityTargetsCodexResponsesLikeRust` /
+  `TestProviderReachabilityRendersInferenceURLLikeRust` pin the paths and copy.
 
 ## Verification
+
+- Round 91 probes the inference URLs `0.166` uses and labels the rows the same
+  way (entry 103): ChatGPT mode targets `codex/responses`, configured providers
+  target `responses`, query parameters are appended the way
+  `provider_url_for_path` does, and the row reads
+  `<label> inference URL: ...`. The reachability blocks of
+  `out/r99-doctor-rust.txt` and `out/r99-doctor-go.txt` are identical and
+  `out/r1310-doctor-full-diff.txt` carries no reachability hunk;
+  `go test -count=1 ./doctor ./state ./cli` and `go vet ./doctor` pass and
+  `./doctor` cross-compiles for `GOOS=linux` and `GOOS=darwin`.
 
 - Round 90 matches the `doctor` release probe to `updates_check` (entry 102):
   the probe sends `codex-doctor/<version>`, a failed lookup renders the single

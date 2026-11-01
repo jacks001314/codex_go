@@ -2576,7 +2576,7 @@ region = "us-west-2"
 	if len(plan.Endpoints) != 1 {
 		t.Fatalf("endpoints = %#v", plan.Endpoints)
 	}
-	want := "https://bedrock-mantle.us-west-2.api.aws/openai/v1"
+	want := "https://bedrock-mantle.us-west-2.api.aws/openai/v1/responses"
 	if plan.Endpoints[0].URL != want {
 		t.Fatalf("URL = %q, want %q", plan.Endpoints[0].URL, want)
 	}
@@ -2619,7 +2619,7 @@ func TestProviderReachabilityAPIKeyUsesOpenAIEndpoint(t *testing.T) {
 		t.Fatalf("endpoints = %#v", plan.Endpoints)
 	}
 	endpoint := plan.Endpoints[0]
-	if endpoint.URL != "https://api.openai.com/v1" || endpoint.RouteProbeURL == nil || *endpoint.RouteProbeURL != "https://api.openai.com/v1/models" {
+	if endpoint.URL != "https://api.openai.com/v1/responses" || endpoint.RouteProbeURL == nil || *endpoint.RouteProbeURL != "https://api.openai.com/v1/models" {
 		t.Fatalf("endpoint = %#v", endpoint)
 	}
 }
