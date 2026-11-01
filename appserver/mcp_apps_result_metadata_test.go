@@ -63,7 +63,7 @@ func waitForMCPResultMetadataRequest(t *testing.T, agent *mcpAppsResultMetadataA
 	select {
 	case request := <-agent.requests:
 		return request
-	case <-time.After(3 * time.Second):
+	case <-time.After(asyncTestWaitTimeout):
 		t.Fatal("timed out waiting for the MCP result-metadata runtime request")
 		return model.AgentRequest{}
 	}

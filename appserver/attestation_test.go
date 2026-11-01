@@ -168,7 +168,7 @@ func TestRuntimeRouterTurnStartSendsAppServerAttestationHeader(t *testing.T) {
 		if got != `{"v":1,"s":0,"t":"v1.client"}` {
 			t.Fatalf("attestation header = %q", got)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(asyncTestWaitTimeout):
 		t.Fatal("timed out waiting for responses request")
 	}
 	waitForNotificationMethod(t, sink, NotificationTurnCompleted)

@@ -25331,7 +25331,7 @@ func waitForItemCompleted(t *testing.T, sink *NotificationBuffer, itemID string)
 
 func waitForItemCompletedType(t *testing.T, sink *NotificationBuffer, itemID string, itemType string) *ItemCompletedNotification {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(asyncTestWaitTimeout)
 	var last []*Notification
 	for time.Now().Before(deadline) {
 		last = sink.List()
