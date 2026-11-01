@@ -25,8 +25,13 @@ func TestStoppingUpdaterSignalsItsInstallerProcessGroup(t *testing.T) {
 		t.Fatalf("start updater shim: %v", err)
 	}
 	pid := uint32(command.Process.Pid)
-	// The shim exits once the group is signalled; reap it during cleanup.
-	t.Cleanup(func() { _ = command.Wait() })
+	// The shim exits once the group is signalled; a failure that leaves it
+	// running must not turn into a ten-minute suite timeout, so the cleanup kills
+	// the whole session first and only then reaps the shim.
+	t.Cleanup(func() {
+		_ = syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
+		_ = command.Wait()
+	})
 	waitForFile(t, ready, "installer did not start")
 	startTime, err := readPIDProcessStartTime(pid)
 	if err != nil {
@@ -36,7 +41,7 @@ func TestStoppingUpdaterSignalsItsInstallerProcessGroup(t *testing.T) {
 	if err := WritePIDRecord(pidFile, &PIDRecord{PID: pid, ProcessStartTime: startTime}); err != nil {
 		t.Fatalf("WritePIDRecord: %v", err)
 	}
-	backend := NewPIDUpdateLoopBackend(BackendPaths{PIDFile: pidFile})
+	backend := NewPIDUpdateLoopBackend(BackendPaths{UpdatePIDFile: pidFile})
 	if err := backend.Stop(); err != nil {
 		t.Fatalf("stop updater: %v", err)
 	}
