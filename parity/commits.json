@@ -19848,7 +19848,8 @@
     "Round 1096: Rust #47605 routes the pty pipe adapter through ChildCommand so every piped child gets ProcessMode::NewSession, DescriptorPolicy::Explicit, preserved inherited fds, Linux PR_SET_PDEATHSIG and ReapOnly while Windows children stay job-contained. Go has no pty crate; processgroup now owns the shared equivalents. PrepareChildSession applies Setsid plus syscall.SIGTERM Pdeathsig on Linux (preserving existing SysProcAttr), TerminateProcessTree/InterruptProcessTree signal the child's own process group only when the child leads one and otherwise fall back to the direct child, and Interrupt mirrors Rust's SIGINT group helper. Wired into every Go pipe carrier: tool/unified_exec_process_unix.go non-TTY unified exec, appserver.prepareCommandExecProcess (command/exec and process/exec, replacing the previous Setpgid), and the execserver process/start non-TTY spawn.",
     "Descriptor policy: Go os/exec closes every descriptor outside stdio before exec, and none of these carriers passes an inherited-fd list (Rust's unified exec and app-server pass empty lists), so DescriptorPolicy::Explicit is already Go's behavior. ReapOnly matches Go, which never kills a child because a Cmd handle was dropped; the pipe carriers install no kill-on-drop. Linux parent death is now explicit on every carrier; Rust has no macOS parent-death equivalent. Windows job-object containment of piped children predates this commit in Rust and is not added to Go's tool/appserver pipe spawn here.",
     "NUL inputs: Rust re-validates original program/args/cwd/arg0/env values after std replaces them. Go's os/exec rejects embedded NUL in argv, cwd and environment before exec (Start returns invalid argument and the target never runs), so no extra validation layer is needed; a regression test re-executes a marker-writing target and proves no side effect.",
-    "Tests: processgroup/prepare_child_session_unix_test.go, prepare_child_session_linux_test.go and process_tree_unix_test.go (a real background descendant dies with the group; a non-leader fallback never signals the server's group); tool/unified_exec_pipe_launch_unix_test.go (re-executed child proves session/group leadership, cwd, explicit environment and closed non-CLOEXEC duplicate fd); tool/unified_exec_nul_like_rust_test.go; appserver/command_exec_process_unix_test.go and command_exec_process_linux_test.go; execserver/session_unix_test.go (real process/start child leads its session). Verified: go build ./..., go test ./processgroup, go test ./tool -run UnifiedExec, go test ./appserver -run 'TestPrepareCommandExecProcess|TestCommandExec|TestProcessSpawn|TestProcessService', go test ./execserver -run TestProcess, plus GOOS=linux and GOOS=darwin go vet and GOOS=linux go test -c for processgroup/tool/appserver/execserver."
+    "Tests: processgroup/prepare_child_session_unix_test.go, prepare_child_session_linux_test.go and process_tree_unix_test.go (a real background descendant dies with the group; a non-leader fallback never signals the server's group); tool/unified_exec_pipe_launch_unix_test.go (re-executed child proves session/group leadership, cwd, explicit environment and closed non-CLOEXEC duplicate fd); tool/unified_exec_nul_like_rust_test.go; appserver/command_exec_process_unix_test.go and command_exec_process_linux_test.go; execserver/session_unix_test.go (real process/start child leads its session). Verified: go build ./..., go test ./processgroup, go test ./tool -run UnifiedExec, go test ./appserver -run 'TestPrepareCommandExecProcess|TestCommandExec|TestProcessSpawn|TestProcessService', go test ./execserver -run TestProcess, plus GOOS=linux and GOOS=darwin go vet and GOOS=linux go test -c for processgroup/tool/appserver/execserver.",
+    "Round 1312: the explicit descriptor policy now has a Go carrier, which corrects the Round 1096 note that os/exec already closes everything outside stdio. processgroup.HideInheritedDescriptors marks every non-CLOEXEC descriptor above stderr close-on-exec for the duration of one unified-exec launch (PTY and pipe) and restores the flags right after the fork. Test: tool/unified_exec_pipe_launch_unix_test.go duplicates stdout without CLOEXEC, hands the number to the child and requires fd-leaked|false. Verified on Windows and on a native Linux host (Ubuntu 24.04)."
    ]
   },
   {
@@ -20143,9 +20144,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "not_applicable",
+   "status": "complete",
    "evidence": [
-    "Round 115 (lead): N/A (verified spawn-carrier difference) - #47654 rewrites Rust's post-fork descriptor cleanup in the custom PTY/stdio launcher: CLOSE_RANGE_CLOEXEC, a stack-backed getdents64 fallback, and preserved spawn-error descriptors. Go launches these processes through os/exec, which creates its own child setup and honors CLOEXEC; it has no allocating fork pre-exec callback, DescriptorPolicy Explicit cleanup helper, or close_inherited_fds_except carrier. The existing Go paths already open descriptors CLOEXEC and use ExtraFiles explicitly where needed. No source change needed."
+    "Round 1312 (supersedes the Round 115 not_applicable call): Go does not close arbitrary inherited descriptors before exec, it relies on CLOEXEC, so a descriptor the daemon holds without CLOEXEC reached every child. processgroup.HideInheritedDescriptors is the parent-side form of close_inherited_fds_except: it lists /proc/self/fd, marks each entry above stderr FD_CLOEXEC, and restores the previous flags immediately after Start, by which point the child owns a private copy of the table. Marking is best-effort like Rust's: a failed scan or fcntl never blocks a launch. Wired into both unified-exec launch paths (PTY and pipe) in tool/unified_exec_process_unix.go."
    ]
   },
   {
@@ -24736,7 +24737,8 @@
    ],
    "status": "complete",
    "evidence": [
-    "Round 620 (parity backfill): each snapshot capture owns its process group; failure, timeout, or cancellation terminates the group while successful captures preserve startup helpers. Tests: go test ./tool -run 'SnapshotCapture' -count=1"
+    "Round 620 (parity backfill): each snapshot capture owns its process group; failure, timeout, or cancellation terminates the group while successful captures preserve startup helpers. Tests: go test ./tool -run 'SnapshotCapture' -count=1",
+    "Round 1312: the group-owned cancellation never worked on Unix. ownSnapshotCaptureProcessGroup installed Cmd.Cancel on a command built by exec.Command, and os/exec rejects that at Run time with \"exec: command with a non-nil Cancel was not created with CommandContext\", so every Linux shell snapshot capture failed; on Windows the field was silently inert. Cancellation now reaches the group from runSnapshotCaptureProcess: a goroutine waits on ctx.Done() and kills the group through a sync.Once while the leader is still unreaped, and the same kill runs after a failed Run. Test: tool/shell_snapshot_process_unix_test.go starts a capture that leaves a `sleep 300` startup helper and asserts the helper is gone after cancelling the context. Verified on Windows and on a native Linux host (Ubuntu 24.04, kernel 6.8)."
    ]
   },
   {
@@ -30309,7 +30311,8 @@
    ],
    "status": "complete",
    "evidence": [
-    "sync691 (lane A G-2): tool/unified_exec_test.go 场景表新增 output-open-at-final-poll + RC-A/RC-B（产品行为变异，只让新场景红）原文见 update/r90a_2026_10_16.md §9；Go 无 process/exited 退出认定 + 50ms cap（探针 PROBE-1）已挂账待裁决"
+    "sync691 (lane A G-2): tool/unified_exec_test.go 场景表新增 output-open-at-final-poll + RC-A/RC-B（产品行为变异，只让新场景红）原文见 update/r90a_2026_10_16.md §9；Go 无 process/exited 退出认定 + 50ms cap（探针 PROBE-1）已挂账待裁决",
+    "Round 1312: the scenario also asserted exactly one process/read, the reconcile Go issues when the pushed event stream stays quiet for a second. That read is only reachable while the initial collection is still open, which Unix closes at the 250ms yield floor and Windows keeps open for ten seconds, so the expectation is now platform-specific (finalPollQuietStreamReads) while the output, exit-code, completion-event and session-cleanup assertions stay identical. Verified: go test ./tool -run TestUnifiedExecConsumesPushedRemoteEventsAndRecoversReplayLikeRust -count=3 on a native Linux host."
    ]
   },
   {
