@@ -27849,7 +27849,7 @@ func waitForTurnStartedStatus(t *testing.T, sink *NotificationBuffer, turnID str
 
 func waitForTurnTerminalStatus(t *testing.T, sink *NotificationBuffer, turnID string) TurnStatus {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(asyncTestWaitTimeout)
 	var last []*Notification
 	for time.Now().Before(deadline) {
 		last = sink.List()
