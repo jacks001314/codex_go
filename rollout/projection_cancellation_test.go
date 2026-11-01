@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"github.com/klauspost/compress/zstd"
@@ -12,10 +13,9 @@ import (
 // countingCancellation mirrors the Rust fixture's `Cell` counter: the predicate
 // reports a cancelled caller from the Nth check on.
 func countingCancellation(limit int) func() bool {
-	checks := 0
+	var checks atomic.Int64
 	return func() bool {
-		checks++
-		return checks >= limit
+		return checks.Add(1) >= int64(limit)
 	}
 }
 

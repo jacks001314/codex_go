@@ -20,14 +20,19 @@ var screenReaderDetectionTimeout = 450 * time.Millisecond
 var screenReaderProbeFunc = screenReaderProbe
 
 func detectScreenReaderWithTimeout() bool {
+	// Snapshot the injected probe and timeout before spawning the worker: the
+	// probe keeps running after a timeout, and the settings that own these
+	// package values can change while it does.
+	probe := screenReaderProbeFunc
+	timeout := screenReaderDetectionTimeout
 	result := make(chan bool, 1)
 	go func() {
-		result <- screenReaderProbeFunc()
+		result <- probe()
 	}()
 	select {
 	case detected := <-result:
 		return detected
-	case <-time.After(screenReaderDetectionTimeout):
+	case <-time.After(timeout):
 		return false
 	}
 }

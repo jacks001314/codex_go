@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -137,11 +138,11 @@ func TestRunPIDUpdateLoopServesManualRequestsLikeRust(t *testing.T) {
 	if err := WritePIDRecord(daemon.Paths.UpdatePIDFile, &PIDRecord{PID: uint32(os.Getpid()), ProcessStartTime: startTime}); err != nil {
 		t.Fatalf("WritePIDRecord(updater) error = %v", err)
 	}
-	installRuns := 0
+	var installRuns atomic.Int64
 	options := &UpdateLoopOptions{
 		InitialDelay: time.Hour,
 		Install: func(context.Context, installerMode, string) error {
-			installRuns++
+			installRuns.Add(1)
 			return nil
 		},
 		CurrentExe:    func() (string, error) { return daemon.Paths.ManagedCodexBin, nil },
@@ -181,8 +182,8 @@ func TestRunPIDUpdateLoopServesManualRequestsLikeRust(t *testing.T) {
 	if output.Message != ManualUpdateRestartedMessage {
 		t.Fatalf("message = %q", output.Message)
 	}
-	if installRuns != 1 {
-		t.Fatalf("install runs = %d, want 1", installRuns)
+	if runs := installRuns.Load(); runs != 1 {
+		t.Fatalf("install runs = %d, want 1", runs)
 	}
 	cancel()
 	select {
