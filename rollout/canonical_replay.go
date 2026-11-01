@@ -760,10 +760,29 @@ func canonicalTurnContextPayload(source json.RawMessage) ([]byte, bool, error) {
 		if !present || canonicalRawIsNull(value) {
 			continue
 		}
-		if key == "collaboration_mode" {
+		switch key {
+		case "collaboration_mode":
 			normalized, ok, err := canonicalCollaborationMode(value)
 			if err != nil || !ok {
 				return nil, false, err
+			}
+			value = normalized
+		case "permission_profile":
+			normalized, ok := canonicalPermissionProfile(value)
+			if !ok {
+				return nil, false, nil
+			}
+			value = normalized
+		case "active_permission_profile":
+			normalized, ok := canonicalActivePermissionProfile(value)
+			if !ok {
+				return nil, false, nil
+			}
+			value = normalized
+		case "file_system_sandbox_policy":
+			normalized, ok := canonicalFileSystemSandboxPolicy(value)
+			if !ok {
+				return nil, false, nil
 			}
 			value = normalized
 		}
@@ -772,6 +791,284 @@ func canonicalTurnContextPayload(source json.RawMessage) ([]byte, bool, error) {
 		}
 	}
 	return out.finish(), true, nil
+}
+
+// canonicalNetworkSandboxPolicy replays the kebab-case network policy enum.
+func canonicalNetworkSandboxPolicy(value json.RawMessage) ([]byte, bool) {
+	text, ok := canonicalStrictString(value)
+	if !ok || (text != "restricted" && text != "enabled") {
+		return nil, false
+	}
+	return []byte(marshalCanonicalString(text)), true
+}
+
+// canonicalFileSystemSpecialPath replays the tagged FileSystemSpecialPath
+// enum, including its legacy current_working_directory alias.
+func canonicalFileSystemSpecialPath(value json.RawMessage) ([]byte, bool) {
+	fields, err := canonicalRawFields(value)
+	if err != nil {
+		return nil, false
+	}
+	kind, ok := canonicalStrictString(fields["kind"])
+	if !ok {
+		return nil, false
+	}
+	if kind == "current_working_directory" {
+		kind = "project_roots"
+	}
+	out := newCanonicalJSONObject()
+	_ = out.field("kind", kind)
+	switch kind {
+	case "root", "minimal", "tmpdir", "slash_tmp":
+	case "project_roots":
+		if raw, present := fields["subpath"]; present && !canonicalRawIsNull(raw) {
+			text, ok := canonicalStrictString(raw)
+			if !ok {
+				return nil, false
+			}
+			_ = out.field("subpath", text)
+		}
+	case "unknown":
+		path, ok := canonicalStrictString(fields["path"])
+		if !ok {
+			return nil, false
+		}
+		_ = out.field("path", path)
+		if raw, present := fields["subpath"]; present && !canonicalRawIsNull(raw) {
+			text, ok := canonicalStrictString(raw)
+			if !ok {
+				return nil, false
+			}
+			_ = out.field("subpath", text)
+		}
+	default:
+		return nil, false
+	}
+	return out.finish(), true
+}
+
+// canonicalFileSystemPath replays RawFileSystemPath, whose literal path stays
+// the raw legacy string.
+func canonicalFileSystemPath(value json.RawMessage) ([]byte, bool) {
+	fields, err := canonicalRawFields(value)
+	if err != nil {
+		return nil, false
+	}
+	kind, ok := canonicalStrictString(fields["type"])
+	if !ok {
+		return nil, false
+	}
+	out := newCanonicalJSONObject()
+	_ = out.field("type", kind)
+	switch kind {
+	case "path":
+		text, ok := canonicalStrictString(fields["path"])
+		if !ok {
+			return nil, false
+		}
+		_ = out.field("path", text)
+	case "glob_pattern":
+		text, ok := canonicalStrictString(fields["pattern"])
+		if !ok {
+			return nil, false
+		}
+		_ = out.field("pattern", text)
+	case "special":
+		converted, ok := canonicalFileSystemSpecialPath(fields["value"])
+		if !ok {
+			return nil, false
+		}
+		_ = out.rawField("value", converted)
+	default:
+		return nil, false
+	}
+	return out.finish(), true
+}
+
+// canonicalFileSystemEntry replays RawFileSystemSandboxEntry, including the
+// legacy "none" access alias.
+func canonicalFileSystemEntry(value json.RawMessage) ([]byte, bool) {
+	fields, err := canonicalRawFields(value)
+	if err != nil {
+		return nil, false
+	}
+	path, ok := canonicalFileSystemPath(fields["path"])
+	if !ok {
+		return nil, false
+	}
+	access, ok := canonicalStrictString(fields["access"])
+	if !ok {
+		return nil, false
+	}
+	switch access {
+	case "read", "write", "deny":
+	case "none":
+		access = "deny"
+	default:
+		return nil, false
+	}
+	out := newCanonicalJSONObject()
+	_ = out.rawField("path", path)
+	_ = out.field("access", access)
+	if raw, present := fields["missing_path_behavior"]; present && !canonicalRawIsNull(raw) {
+		text, ok := canonicalStrictString(raw)
+		if !ok || text != "skip" {
+			return nil, false
+		}
+		_ = out.field("missing_path_behavior", text)
+	}
+	return out.finish(), true
+}
+
+// canonicalFileSystemEntries replays a filesystem entry list.
+func canonicalFileSystemEntries(value json.RawMessage) ([]byte, bool) {
+	var entries []json.RawMessage
+	if err := json.Unmarshal(value, &entries); err != nil {
+		return nil, false
+	}
+	converted := make([][]byte, 0, len(entries))
+	for _, raw := range entries {
+		entry, ok := canonicalFileSystemEntry(raw)
+		if !ok {
+			return nil, false
+		}
+		converted = append(converted, entry)
+	}
+	return canonicalContentArray(converted), true
+}
+
+// canonicalFileSystemSandboxPolicy replays RawFileSystemSandboxPolicy's field
+// order.
+func canonicalFileSystemSandboxPolicy(value json.RawMessage) ([]byte, bool) {
+	fields, err := canonicalRawFields(value)
+	if err != nil {
+		return nil, false
+	}
+	kind, ok := canonicalStrictString(fields["kind"])
+	if !ok {
+		return nil, false
+	}
+	switch kind {
+	case "restricted", "unrestricted", "external-sandbox":
+	default:
+		return nil, false
+	}
+	out := newCanonicalJSONObject()
+	_ = out.field("kind", kind)
+	if raw, present := fields["glob_scan_max_depth"]; present && !canonicalRawIsNull(raw) {
+		depth, ok := canonicalStrictInt(raw)
+		if !ok || depth < 0 {
+			return nil, false
+		}
+		_ = out.field("glob_scan_max_depth", depth)
+	}
+	if raw, present := fields["entries"]; present && !canonicalRawIsNull(raw) {
+		entries, ok := canonicalFileSystemEntries(raw)
+		if !ok {
+			return nil, false
+		}
+		if string(entries) != "[]" {
+			_ = out.rawField("entries", entries)
+		}
+	}
+	return out.finish(), true
+}
+
+// canonicalManagedFileSystemPermissions replays the custom-serialized managed
+// filesystem permissions enum.
+func canonicalManagedFileSystemPermissions(value json.RawMessage) ([]byte, bool) {
+	fields, err := canonicalRawFields(value)
+	if err != nil {
+		return nil, false
+	}
+	kind, ok := canonicalStrictString(fields["type"])
+	if !ok {
+		return nil, false
+	}
+	out := newCanonicalJSONObject()
+	_ = out.field("type", kind)
+	switch kind {
+	case "unrestricted":
+	case "restricted":
+		rawEntries, present := fields["entries"]
+		if !present || canonicalRawIsNull(rawEntries) {
+			return nil, false
+		}
+		entries, ok := canonicalFileSystemEntries(rawEntries)
+		if !ok {
+			return nil, false
+		}
+		_ = out.rawField("entries", entries)
+		if raw, present := fields["glob_scan_max_depth"]; present && !canonicalRawIsNull(raw) {
+			depth, ok := canonicalStrictInt(raw)
+			if !ok || depth <= 0 {
+				return nil, false
+			}
+			_ = out.field("glob_scan_max_depth", depth)
+		}
+	default:
+		return nil, false
+	}
+	return out.finish(), true
+}
+
+// canonicalPermissionProfile replays the tagged PermissionProfile enum.
+func canonicalPermissionProfile(value json.RawMessage) ([]byte, bool) {
+	fields, err := canonicalRawFields(value)
+	if err != nil {
+		return nil, false
+	}
+	kind, ok := canonicalStrictString(fields["type"])
+	if !ok {
+		return nil, false
+	}
+	out := newCanonicalJSONObject()
+	_ = out.field("type", kind)
+	switch kind {
+	case "disabled":
+	case "managed":
+		fileSystem, ok := canonicalManagedFileSystemPermissions(fields["file_system"])
+		if !ok {
+			return nil, false
+		}
+		network, ok := canonicalNetworkSandboxPolicy(fields["network"])
+		if !ok {
+			return nil, false
+		}
+		_ = out.rawField("file_system", fileSystem)
+		_ = out.rawField("network", network)
+	case "external":
+		network, ok := canonicalNetworkSandboxPolicy(fields["network"])
+		if !ok {
+			return nil, false
+		}
+		_ = out.rawField("network", network)
+	default:
+		return nil, false
+	}
+	return out.finish(), true
+}
+
+// canonicalActivePermissionProfile replays ActivePermissionProfile.
+func canonicalActivePermissionProfile(value json.RawMessage) ([]byte, bool) {
+	fields, err := canonicalRawFields(value)
+	if err != nil {
+		return nil, false
+	}
+	id, ok := canonicalStrictString(fields["id"])
+	if !ok {
+		return nil, false
+	}
+	out := newCanonicalJSONObject()
+	_ = out.field("id", id)
+	if raw, present := fields["extends"]; present && !canonicalRawIsNull(raw) {
+		text, ok := canonicalStrictString(raw)
+		if !ok {
+			return nil, false
+		}
+		_ = out.field("extends", text)
+	}
+	return out.finish(), true
 }
 
 // canonicalRawJSONString returns the raw JSON for a string field.

@@ -2917,8 +2917,53 @@ record has to be rebuilt field by field. Go now mirrors
   the Rust bytes and counters in
   `rollout/canonical_migration_image_generation_rust_shape_test.go`.
 
+### 87. `migrate-rollouts` re-serializes the nested permission policies like Rust
+
+`turn_context` carried `permission_profile`, `active_permission_profile` and
+`file_system_sandbox_policy` through verbatim, so a record with legacy aliases
+or unknown keys came out different from 0.166, which decodes those fields into
+their protocol types and writes them back. Go now rebuilds them:
+
+- **`permission_profile`.** Tagged `PermissionProfile` (`managed` / `disabled` /
+  `external`). `managed` writes `file_system` then `network`; `file_system`
+  follows the custom-serialized managed-permissions enum (`restricted` requires
+  `entries` and writes them before an optional non-zero `glob_scan_max_depth`,
+  `unrestricted` is a bare tag); `network` only accepts `restricted` /
+  `enabled`; `external` writes `network`.
+- **`active_permission_profile`.** `{id, extends?}` with the optional trailer
+  skipped when unset.
+- **`file_system_sandbox_policy`.** `RawFileSystemSandboxPolicy` order
+  (`kind`, optional `glob_scan_max_depth`, `entries` only when non-empty) with
+  the kebab-case `restricted` / `unrestricted` / `external-sandbox` kinds.
+- **Entries.** `{path, access, missing_path_behavior?}` where `path` is the
+  tagged `RawFileSystemPath` (`path` keeps the raw legacy string, `glob_pattern`
+  keeps the pattern, `special` holds a `FileSystemSpecialPath` whose `kind` is
+  `root` / `minimal` / `project_roots` / `tmpdir` / `slash_tmp` / `unknown` and
+  whose legacy `current_working_directory` alias is rewritten to
+  `project_roots`), and `access` rewrites the legacy `none` alias to `deny`.
+- **Dropped records.** Unknown enum tags, an unknown access mode, a
+  `restricted` managed filesystem without `entries`, a zero managed
+  `glob_scan_max_depth`, an `active_permission_profile` without `id`, and an
+  unknown `kind` on the filesystem policy drop the whole `turn_context`, the way
+  Rust's failed decode does.
+- Evidence: `out/r80-perms.txt` compares 22 payloads against 0.166 at 22/22
+  byte-identical with identical `bytes_processed` (`out/r80-perms-rust.txt`
+  keeps the shape probe), the `out/r75*`-`out/r79*` regressions still report
+  `FAILURES 0` (including the earlier `turn_context` matrix in
+  `out/r77-turn-context-compacted.txt`), and
+  `TestCanonicalizeRolloutReserializesPermissionPoliciesLikeRust` (16 subtests)
+  freezes the Rust bytes and counters in
+  `rollout/canonical_migration_permission_policy_rust_shape_test.go`.
+
 ## Verification
 
+- Round 74 re-serializes the nested `turn_context` permission policies like
+  0.166 (entry 87): `out/r80-perms.txt` reports 22/22 payloads byte-identical
+  with identical `bytes_processed` for `permission_profile`,
+  `active_permission_profile` and `file_system_sandbox_policy`, `out/r75*` to
+  `out/r79*` still report `FAILURES 0`, and the new
+  `TestCanonicalizeRolloutReserializesPermissionPoliciesLikeRust` subtests freeze
+  them (`go test -count=1 ./rollout` passes).
 - Round 73 converts the last legacy `migrate-rollouts` completion event,
   `image_generation_end`, into the `Extension(image_gen.generation)` item like
   0.166 (entry 86): `out/r79-imagegen.txt` reports 19/19 payloads
@@ -3575,14 +3620,13 @@ record has to be rebuilt field by field. Go now mirrors
   `out/r77-turn-context-compacted.txt` 20/20), every legacy completion event is
   converted into its `TurnItem` the way Rust does (entries 85 and 86,
   `out/r78-convert.txt` 44/44 and `out/r79-imagegen.txt` 19/19). What is left on
-  this surface is narrower: an `item_completed` whose item decodes but whose
-  nested values Rust rejects (for example an unknown `phase`) still survives
-  Go's shallower check, and a `turn_context` carrying `permission_profile` /
-  `file_system_sandbox_policy` passes those nested payloads through instead of
-  re-serializing them. The `Disk used for thread storage` line follows Rust's
-  rule but not its numbers, because Rust leaves the thread-history WAL
-  uncheckpointed while Go checkpoints it (290.2 KB vs 88.6 KB in the same
-  probe).
+  this surface is narrower: the nested `turn_context` permission policies are
+  now re-serialized like Rust (entry 87, `out/r80-perms.txt` 22/22), so what is
+  left is an `item_completed` whose item decodes but whose nested values Rust
+  rejects (for example an unknown `phase`) still surviving Go's shallower check.
+  The `Disk used for thread storage` line follows Rust's rule but not its
+  numbers, because Rust leaves the thread-history WAL uncheckpointed while Go
+  checkpoints it (290.2 KB vs 88.6 KB in the same probe).
 - `exec-server forward` still rejects `--remote` outright (pinned by
   `TestExecServerRejectsMissingOrConflictingRemoteOptionsLikeRust`), where Rust
   allows the direct-transport combination; the Go forward runtime has no
