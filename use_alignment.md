@@ -3412,8 +3412,8 @@ and decodable items kept Go's original spelling. The record is now decoded into
 - **Copy and attribution.** Rust's `http_get_json` turns a non-2xx response
   into `HTTP <status>` and sends `codex-doctor/<version>` as the User-Agent.
   Go forwarded the raw `GET <url> failed: 403 Forbidden` text and sent Go's
-  default agent, which is why the GitHub release lookup 403'd where the Rust
-  binary succeeded during the same run.
+  default agent, so a probe GitHub answered with 403 rendered differently in
+  the two reports (the 403 itself is IP rate limiting, not a Go defect).
 - Evidence: the Units block of `out/r99-doctor-rust.txt` and
   `out/r99-doctor-go.txt` now carries the same row set and
   `TestUpdatesCheckRendersRustProbeRowsAndUserAgent`,
