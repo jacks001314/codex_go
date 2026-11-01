@@ -20,7 +20,7 @@ func TestExecServerTTYOutputReachesEOFWithoutClosingThePTY(t *testing.T) {
 	if strings.TrimSpace(command) == "" {
 		command = "cmd.exe"
 	}
-	started, supported, err := startExecServerTTY(exec.Command(command, "/d", "/c", "exit 0"))
+	started, supported, err := startExecServerTTY(exec.Command(command, "/d", "/c", "exit 0"), nil)
 	if err != nil {
 		t.Skipf("host ConPTY probe failed: %v", err)
 	}

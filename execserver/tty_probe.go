@@ -25,7 +25,7 @@ func TTYOutputAvailable(ctx context.Context) (bool, error) {
 	} else {
 		command = exec.CommandContext(ctx, "sh", "-c", "printf "+marker)
 	}
-	started, supported, err := startExecServerTTY(command)
+	started, supported, err := startExecServerTTY(command, nil)
 	if err != nil || !supported {
 		return false, err
 	}

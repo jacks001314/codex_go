@@ -2114,7 +2114,18 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 			execServerProcessSpawnSpan,
 			execServerProcessSpanAttributes(params.ProcessID, nil),
 		)
-		startedTTY, supported, startErr := startExecServerTTY(cmd)
+		var queryReader *terminalQueryReader
+		var captureDone chan struct{}
+		startCapture := func(master io.ReadWriteCloser) {
+			queryReader = newTerminalQueryReader(master, master)
+			captureDone = make(chan struct{})
+			go func() {
+				defer close(captureDone)
+				state.capture("pty", queryReader)
+				_ = queryReader.Close()
+			}()
+		}
+		startedTTY, supported, startErr := startExecServerTTY(cmd, startCapture)
 		if ttySpawnSpan != nil {
 			ttySpawnSpan.End()
 		}
@@ -2125,8 +2136,18 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 		}
 		if supported {
 			// Rust #41436: answer blocking terminal queries from the PTY and
-			// remove them from the output the client sees.
-			queryReader := newTerminalQueryReader(startedTTY.reader, startedTTY.stdin)
+			// remove them from the output the client sees. Unix parks the
+			// reader on the master before the child can start; platforms that
+			// only expose a reader after the spawn attach it here.
+			if queryReader == nil {
+				queryReader = newTerminalQueryReader(startedTTY.reader, startedTTY.stdin)
+				captureDone = make(chan struct{})
+				go func() {
+					defer close(captureDone)
+					state.capture("pty", queryReader)
+					_ = queryReader.Close()
+				}()
+			}
 			state.mu.Lock()
 			state.sandboxType = sandboxType
 			state.mu.Unlock()
@@ -2147,6 +2168,9 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 					_ = startedTTY.closePTY()
 				}
 				_ = queryReader.Close()
+				if captureDone != nil {
+					<-captureDone
+				}
 				if startedTTY.cleanup != nil {
 					_ = startedTTY.cleanup()
 				}
@@ -2160,22 +2184,19 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 			}
 			state.mu.Unlock()
 			state.telemetry.start(sandboxType)
-			captureDone := make(chan struct{})
-			go func() {
-				defer close(captureDone)
-				state.capture("pty", queryReader)
-				_ = queryReader.Close()
-			}()
 			go func() {
 				code, waitErr := startedTTY.wait()
-				if startedTTY.closePTY != nil {
-					_ = startedTTY.closePTY()
-				}
 				select {
 				case <-captureDone:
 				case <-time.After(2 * time.Second):
+					if startedTTY.closePTY != nil {
+						_ = startedTTY.closePTY()
+					}
 					_ = queryReader.Close()
 					<-captureDone
+				}
+				if startedTTY.closePTY != nil {
+					_ = startedTTY.closePTY()
 				}
 				if startedTTY.cleanup != nil {
 					_ = startedTTY.cleanup()

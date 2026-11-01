@@ -13,7 +13,7 @@ import (
 // cursor-position report receives the bounded response and exits.
 func TestTTYRespondsToCursorPositionQueryLikeRust(t *testing.T) {
 	script := "stty -echo -icanon; printf 'alpha\\033[6n'; dd bs=1 count=6 2>/dev/null; printf '\\nok'"
-	started, supported, err := startExecServerTTY(exec.Command("/bin/sh", "-c", script))
+	started, supported, err := startExecServerTTY(exec.Command("/bin/sh", "-c", script), nil)
 	if err != nil || !supported {
 		t.Skipf("PTY unavailable: supported=%v err=%v", supported, err)
 	}

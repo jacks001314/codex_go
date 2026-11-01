@@ -26,7 +26,7 @@ type startedExecServerTTY struct {
 	cleanup  func() error
 }
 
-func startExecServerTTY(cmd *exec.Cmd) (*startedExecServerTTY, bool, error) {
+func startExecServerTTY(cmd *exec.Cmd, _ func(io.ReadWriteCloser)) (*startedExecServerTTY, bool, error) {
 	if cmd == nil || len(cmd.Args) == 0 {
 		return nil, true, windowssandbox.ErrInvalidRequest
 	}

@@ -17,7 +17,7 @@ func requireExecServerTTYOutput(t *testing.T) {
 	if strings.TrimSpace(command) == "" {
 		command = "cmd.exe"
 	}
-	started, supported, err := startExecServerTTY(exec.Command(command, "/d", "/c", "echo CODEX_EXEC_SERVER_PTY_PROBE"))
+	started, supported, err := startExecServerTTY(exec.Command(command, "/d", "/c", "echo CODEX_EXEC_SERVER_PTY_PROBE"), nil)
 	if err != nil {
 		t.Skipf("host ConPTY probe failed: %v", err)
 	}
