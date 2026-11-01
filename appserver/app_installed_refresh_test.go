@@ -2,6 +2,8 @@ package appserver
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -48,8 +50,16 @@ func TestAppInstalledForceRefreshReplacesThreadToolsLikeRust(t *testing.T) {
 			ID     int64  `json:"id"`
 			Method string `json:"method"`
 		}
+		// The handler runs outside the test goroutine, and the shared client may
+		// still be finishing a retried catalog request when the test ends and
+		// closes the server. An aborted body is not a catalog result, so the
+		// assertions below do not depend on it.
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-			t.Fatalf("Decode MCP request error = %v", err)
+			if errors.Is(err, io.EOF) || r.Context().Err() != nil {
+				return
+			}
+			t.Errorf("Decode MCP request error = %v", err)
+			return
 		}
 		switch request.Method {
 		case "initialize":
