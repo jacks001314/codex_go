@@ -115,7 +115,7 @@ func (m *Master) SendEOF() error {
 	if m == nil || m.file == nil {
 		return os.ErrClosed
 	}
-	termios, err := unix.IoctlGetTermios(m.fd, unix.TCGETS)
+	termios, err := terminalTermios(m.fd)
 	if err != nil {
 		return err
 	}
