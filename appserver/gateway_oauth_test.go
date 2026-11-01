@@ -96,12 +96,26 @@ func initializeGatewayOAuthConnection(t *testing.T, router *RuntimeRouter, conne
 	}
 }
 
-func gatewayOAuthNotifications(t *testing.T, router *RuntimeRouter) *[]*GatewayOAuthChangedNotification {
+type gatewayOAuthLog struct {
+	mu            sync.Mutex
+	notifications []*GatewayOAuthChangedNotification
+}
+
+func (l *gatewayOAuthLog) record(notification *GatewayOAuthChangedNotification) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.notifications = append(l.notifications, notification)
+}
+
+func (l *gatewayOAuthLog) snapshot() []*GatewayOAuthChangedNotification {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]*GatewayOAuthChangedNotification(nil), l.notifications...)
+}
+
+func gatewayOAuthNotifications(t *testing.T, router *RuntimeRouter) *gatewayOAuthLog {
 	t.Helper()
-	var (
-		mu            sync.Mutex
-		notifications []*GatewayOAuthChangedNotification
-	)
+	log := &gatewayOAuthLog{}
 	router.SetNotificationSink(NotificationSinkFunc(func(notification *Notification) {
 		if notification.Method != NotificationGatewayOAuthChanged {
 			return
@@ -110,11 +124,9 @@ func gatewayOAuthNotifications(t *testing.T, router *RuntimeRouter) *[]*GatewayO
 		if !ok {
 			return
 		}
-		mu.Lock()
-		defer mu.Unlock()
-		notifications = append(notifications, changed)
+		log.record(changed)
 	}))
-	return &notifications
+	return log
 }
 
 // TestGatewayOAuthReadReportsProviderPolicyLikeRust pins the read RPC: it
@@ -246,7 +258,7 @@ func TestGatewayOAuthCancelIsConnectionBoundLikeRust(t *testing.T) {
 	}
 }
 
-func waitForGatewayAuthURL(t *testing.T, notifications *[]*GatewayOAuthChangedNotification, loginDone <-chan *Response) string {
+func waitForGatewayAuthURL(t *testing.T, notifications *gatewayOAuthLog, loginDone <-chan *Response) string {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
@@ -255,14 +267,14 @@ func waitForGatewayAuthURL(t *testing.T, notifications *[]*GatewayOAuthChangedNo
 			t.Fatalf("gateway sign-in returned before the URL handoff: %+v (%s)", response, response.Error.Message)
 		default:
 		}
-		for _, notification := range *notifications {
+		for _, notification := range notifications.snapshot() {
 			if notification.Status == GatewayOAuthStatusStarted && notification.AuthURL != nil {
 				return *notification.AuthURL
 			}
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	for _, notification := range *notifications {
+	for _, notification := range notifications.snapshot() {
 		message := ""
 		if notification.Error != nil {
 			message = *notification.Error

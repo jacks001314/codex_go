@@ -1,6 +1,7 @@
 package appserver
 
 import (
+	"sync"
 	"testing"
 	"time"
 
@@ -10,7 +11,14 @@ import (
 )
 
 type executorDiscoveryMetricRecorder struct {
+	mu       sync.Mutex
 	counters []executorDiscoveryMetricSample
+}
+
+func (r *executorDiscoveryMetricRecorder) snapshot() []executorDiscoveryMetricSample {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]executorDiscoveryMetricSample(nil), r.counters...)
 }
 
 type executorDiscoveryMetricSample struct {
@@ -23,6 +31,8 @@ func (r *executorDiscoveryMetricRecorder) Counter(name string, inc int, tags map
 	for key, value := range tags {
 		copied[key] = value
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.counters = append(r.counters, executorDiscoveryMetricSample{name: name, tags: copied})
 }
 
@@ -82,7 +92,7 @@ enabled = false
 	}
 
 	var discovery, found, unavailable bool
-	for _, sample := range metrics.counters {
+	for _, sample := range metrics.snapshot() {
 		switch sample.name {
 		case executorMCPDiscoveryMetric:
 			discovery = discovery || sample.tags["outcome"] == "success"
@@ -96,6 +106,6 @@ enabled = false
 		}
 	}
 	if !discovery || !found || !unavailable {
-		t.Fatalf("discovery metrics = %#v, want attempt success plus found/unavailable servers", metrics.counters)
+		t.Fatalf("discovery metrics = %#v, want attempt success plus found/unavailable servers", metrics.snapshot())
 	}
 }

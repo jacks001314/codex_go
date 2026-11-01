@@ -316,7 +316,10 @@ type RuntimeRouterOptions struct {
 }
 
 type RuntimeRouter struct {
-	services              RuntimeServices
+	services RuntimeServices
+	// feedbackMu guards the host-provided feedback snapshot that every request
+	// clones, mirroring Rust's per-request FeedbackSnapshot.
+	feedbackMu            sync.Mutex
 	metrics               *state.TaskMetrics
 	config                *config.ConfigService
 	stateDBRecoveryNotice *config.ConfigWarningNotification
@@ -13507,8 +13510,8 @@ func (r *RuntimeRouter) handleFeedbackUpload(request *Request) (*FeedbackUploadR
 	if err != nil {
 		return nil, err
 	}
-	snapshot := r.requireFeedback()
-	snapshot.ThreadID = threadID
+	snapshot := r.feedbackSnapshotForRequest(threadID)
+	defer r.publishFeedbackPrepared(snapshot)
 	r.refreshFeedbackSnapshotLogs(snapshot)
 	if err := snapshot.UploadFeedback(context.Background(), options, r.feedbackTransport()); err != nil {
 		return nil, fmt.Errorf("failed to upload feedback: %w", err)
@@ -13593,8 +13596,8 @@ func (r *RuntimeRouter) handleFeedbackSave(request *Request) (*FeedbackSaveRespo
 	if err != nil {
 		return nil, err
 	}
-	snapshot := r.requireFeedback()
-	snapshot.ThreadID = threadID
+	snapshot := r.feedbackSnapshotForRequest(threadID)
+	defer r.publishFeedbackPrepared(snapshot)
 	r.refreshFeedbackSnapshotLogs(snapshot)
 	if err := snapshot.SaveFeedback(options, params.SavePath); err != nil {
 		return nil, fmt.Errorf("failed to save feedback: %w", err)
@@ -20895,6 +20898,28 @@ func (r *RuntimeRouter) requireFeedback() *FeedbackSnapshot {
 	return r.services.Feedback
 }
 
+// feedbackSnapshotForRequest clones the host snapshot so concurrent uploads and
+// saves never mutate shared state, matching Rust's per-request snapshot.
+func (r *RuntimeRouter) feedbackSnapshotForRequest(threadID string) *FeedbackSnapshot {
+	r.feedbackMu.Lock()
+	snapshot := r.requireFeedback().Clone()
+	r.feedbackMu.Unlock()
+	snapshot.ThreadID = threadID
+	return snapshot
+}
+
+// publishFeedbackPrepared keeps the latest prepared payload visible on the
+// shared snapshot without exposing the rest of the request's copy.
+func (r *RuntimeRouter) publishFeedbackPrepared(snapshot *FeedbackSnapshot) {
+	if snapshot == nil || snapshot.LastPrepared == nil {
+		return
+	}
+	r.feedbackMu.Lock()
+	shared := r.requireFeedback()
+	shared.ThreadID = snapshot.ThreadID
+	shared.LastPrepared = snapshot.LastPrepared.Clone()
+	r.feedbackMu.Unlock()
+}
 func isThreadMethod(method Method) bool {
 	switch method {
 	case MethodThreadStart, MethodThreadResume, MethodThreadFork, MethodThreadArchive,

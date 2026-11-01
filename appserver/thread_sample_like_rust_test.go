@@ -22,12 +22,12 @@ type threadSampleRecordingAgent struct {
 
 type threadSampleBlockingAgent struct {
 	started chan struct{}
+	once    sync.Once
 }
 
 func (a *threadSampleBlockingAgent) Run(ctx context.Context, _ *model.AgentRequest) (*model.AgentResponse, error) {
 	if a.started != nil {
-		close(a.started)
-		a.started = nil
+		a.once.Do(func() { close(a.started) })
 	}
 	<-ctx.Done()
 	return nil, ctx.Err()

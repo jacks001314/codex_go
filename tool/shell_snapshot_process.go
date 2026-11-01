@@ -39,8 +39,17 @@ func runSnapshotCaptureProcess(ctx context.Context, process *osexec.Cmd) error {
 		once.Do(func() { _ = snapshotCaptureGroupKiller(process) })
 	}
 	done := make(chan struct{})
+	// started orders the cancellation path after exec has published the
+	// process handle: reading Cmd.Process before Start returns is a data race
+	// with os/exec's own assignment.
+	started := make(chan struct{})
 	if ctx != nil {
 		go func() {
+			select {
+			case <-started:
+			case <-done:
+				return
+			}
 			select {
 			case <-ctx.Done():
 				killGroup()
@@ -48,7 +57,11 @@ func runSnapshotCaptureProcess(ctx context.Context, process *osexec.Cmd) error {
 			}
 		}()
 	}
-	err := process.Run()
+	err := process.Start()
+	close(started)
+	if err == nil {
+		err = process.Wait()
+	}
 	close(done)
 	if err != nil {
 		// Only a failed capture cleans up: a successful capture keeps the

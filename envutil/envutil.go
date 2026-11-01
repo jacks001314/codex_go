@@ -74,7 +74,9 @@ func ScrubSlice(values []string) []string {
 	if len(values) == 0 {
 		return values
 	}
-	out := values[:0]
+	// Copy instead of compacting in place: one captured environment can be
+	// scrubbed by several concurrent hook commands.
+	out := make([]string, 0, len(values))
 	for _, pair := range values {
 		name := pair
 		if idx := strings.IndexByte(pair, '='); idx >= 0 {

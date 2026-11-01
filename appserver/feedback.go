@@ -291,6 +291,24 @@ type FeedbackSnapshot struct {
 	LastPrepared *PreparedFeedbackUpload
 }
 
+// Clone returns a request-private copy. Rust's feedback processor takes
+// `self.feedback.snapshot(conversation_id)` for every upload, so concurrent
+// requests never share one mutable snapshot.
+func (s *FeedbackSnapshot) Clone() *FeedbackSnapshot {
+	if s == nil {
+		return nil
+	}
+	clone := &FeedbackSnapshot{
+		Logs:     append([]byte(nil), s.Logs...),
+		Tags:     cloneStringMap(s.Tags),
+		ThreadID: s.ThreadID,
+	}
+	if s.Diagnostics != nil {
+		clone.Diagnostics = NewFeedbackDiagnostics(s.Diagnostics.diagnostics)
+	}
+	return clone
+}
+
 type FeedbackAttachment struct {
 	Filename    string
 	ContentType string
