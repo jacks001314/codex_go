@@ -365,3 +365,44 @@ func TestSnapshotLiteralWordsFollowRcQuotesLikeRust(t *testing.T) {
 		})
 	}
 }
+
+// TestSnapshotLiteralWordsReparseAssignmentBodiesLikeRust covers Rust's
+// deferred parse of alias and assignment bodies: a credential written inside an
+// alias value with its own ANSI-C quoting is decoded again after quote removal,
+// so the check still sees it.
+func TestSnapshotLiteralWordsReparseAssignmentBodiesLikeRust(t *testing.T) {
+	for _, testCase := range []struct {
+		name    string
+		shell   ShellType
+		script  string
+		contain []string
+	}{
+		{
+			name:    "bash alias body keeps its ansi c quoting",
+			shell:   ShellBash,
+			script:  "alias helper='printf %s $'\\''\\x73k-real'\\'''\n",
+			contain: []string{"sk-real"},
+		},
+		{
+			name:    "zsh alias body keeps its ansi c quoting",
+			shell:   ShellZsh,
+			script:  "alias helper='print -r -- $'\\''\\x73k-real'\\'''\n",
+			contain: []string{"sk-real"},
+		},
+		{
+			name:    "plain assignment is not reparsed as code",
+			shell:   ShellBash,
+			script:  "export PATH='/usr/bin:/bin'\nexport TOKEN=plain\n",
+			contain: []string{"TOKEN=plain"},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			words := SnapshotLiteralWords(testCase.shell, testCase.script)
+			for _, want := range testCase.contain {
+				if !slices.Contains(words, want) {
+					t.Fatalf("SnapshotLiteralWords(%q) = %#v, want %q", testCase.script, words, want)
+				}
+			}
+		})
+	}
+}

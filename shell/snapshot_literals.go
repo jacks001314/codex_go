@@ -46,9 +46,16 @@ func scanSnapshotLiteralWords(shellType ShellType, script string, depth int, wor
 		if !inWord {
 			return
 		}
-		*words = append(*words, word.String())
+		text := word.String()
+		*words = append(*words, text)
 		word.Reset()
 		inWord = false
+		// An assignment value can itself be shell code: Rust re-parses alias
+		// and assignment bodies as deferred scripts so a credential written
+		// with nested quoting stays visible.
+		if value, ok := snapshotAssignmentValue(text); ok && strings.ContainsAny(value, "'\"\\$`") {
+			scanSnapshotLiteralBody(shellType, value, depth, words)
+		}
 	}
 	appendText := func(text string) {
 		word.WriteString(text)
@@ -159,6 +166,27 @@ func scanSnapshotLiteralWords(shellType ShellType, script string, depth int, wor
 		}
 	}
 	flush()
+}
+
+// snapshotAssignmentValue returns the value of a NAME=value word, which the
+// shell parses again for an assignment or an alias body.
+func snapshotAssignmentValue(word string) (string, bool) {
+	equal := strings.IndexByte(word, '=')
+	if equal <= 0 {
+		return "", false
+	}
+	for index := 0; index < equal; index++ {
+		character := word[index]
+		switch {
+		case character == '_':
+		case character >= 'a' && character <= 'z':
+		case character >= 'A' && character <= 'Z':
+		case character >= '0' && character <= '9' && index > 0:
+		default:
+			return "", false
+		}
+	}
+	return word[equal+1:], true
 }
 
 // snapshotHeredoc is one "<<" redirection whose body starts on the next line.
