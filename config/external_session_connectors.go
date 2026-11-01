@@ -269,7 +269,9 @@ func externalCursorMCPServerNamesFromFile(versionRoot string, relativePath strin
 }
 
 func safeExternalCursorRelativePath(path string) bool {
-	if path == "" || filepath.IsAbs(path) || filepath.VolumeName(path) != "" || strings.HasPrefix(path, "/") || strings.HasPrefix(path, `\`) {
+	if path == "" || filepath.IsAbs(path) || filepath.VolumeName(path) != "" ||
+		(len(path) >= 2 && isASCIIAlpha(path[0]) && path[1] == ':') ||
+		strings.HasPrefix(path, "/") || strings.HasPrefix(path, `\`) {
 		return false
 	}
 	for _, component := range strings.FieldsFunc(path, func(r rune) bool { return r == '/' || r == '\\' }) {
