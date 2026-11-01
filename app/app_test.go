@@ -282,10 +282,16 @@ func TestLoginFileLogRecordsSanitizedStorageFallbackLikeRust(t *testing.T) {
 		t.Fatalf("read codex-login.log: %v", err)
 	}
 	text := string(logs)
+	// The selected store names the platform keyring backend (Rust
+	// keyring_store): Linux and macOS use the direct keyring, Windows secrets.
+	selectedStore := "direct_keyring"
+	if runtime.GOOS == "windows" {
+		selectedStore = "secrets"
+	}
 	for _, want := range []string{
 		"credential storage file fallback completed",
 		"store_mode=auto",
-		"selected_store=secrets",
+		"selected_store=" + selectedStore,
 		"actual_store=file",
 		"operation=save",
 		"secure_outcome=error",

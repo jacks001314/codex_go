@@ -1538,7 +1538,7 @@ func TestSkillsListEntryMarshalOmitsInternalPluginIDLikeRust(t *testing.T) {
 }
 
 func TestSkillsListSymlinkedSkillPreservesDiscoveryPathLikeRust(t *testing.T) {
-	base := t.TempDir()
+	base := canonicalTempDir(t)
 	realRoot := filepath.Join(base, "real-skills")
 	realSkill := filepath.Join(realRoot, "demo")
 	if err := os.MkdirAll(realSkill, 0o755); err != nil {

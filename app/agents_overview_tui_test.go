@@ -75,6 +75,7 @@ func TestRetainedWorktreeSessionErrorLikeRust(t *testing.T) {
 		}
 	}
 
+	requireGitWorktreeListZero(t, repo)
 	clean, err := manager.Create(repo, "")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)

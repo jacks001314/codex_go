@@ -283,6 +283,11 @@ func TestPluginMarketplaceLifecycle(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)
 	marketplaceRoot := writePluginCLITestMarketplace(t, t.TempDir(), "debug", "sample")
+	if resolved, err := filepath.EvalSymlinks(marketplaceRoot); err == nil {
+		// The marketplace root is published canonically, like every other
+		// discovered path (macOS reaches its temp dirs through /var).
+		marketplaceRoot = resolved
+	}
 	var stdout bytes.Buffer
 	if err := Run(context.Background(), []string{"plugin", "marketplace", "add", marketplaceRoot}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
 		t.Fatalf("marketplace add returned error: %v", err)

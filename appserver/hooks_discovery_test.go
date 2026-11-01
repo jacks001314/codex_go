@@ -516,9 +516,9 @@ func TestHookDiscoveryUsesTrustedProjectDotCodexWithoutConfigToml(t *testing.T) 
 }
 
 func TestHookDiscoveryLinkedWorktreeUsesRootCheckoutHooks(t *testing.T) {
-	home := t.TempDir()
-	root := filepath.Join(t.TempDir(), "repo")
-	worktree := filepath.Join(t.TempDir(), "worktree")
+	home := canonicalTempDir(t)
+	root := filepath.Join(canonicalTempDir(t), "repo")
+	worktree := filepath.Join(canonicalTempDir(t), "worktree")
 	if err := os.MkdirAll(filepath.Join(root, ".git", "worktrees", "feature"), 0o755); err != nil {
 		t.Fatalf("MkdirAll root gitdir error = %v", err)
 	}

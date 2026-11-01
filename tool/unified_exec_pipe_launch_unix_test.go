@@ -54,7 +54,7 @@ func TestUnifiedExecPipeLaunchHelperProcess(t *testing.T) {
 // keeps the requested cwd, receives only the explicit environment, and does not
 // inherit unrelated descriptors.
 func TestUnifiedExecPipeLaunchUsesNewSessionLikeRust(t *testing.T) {
-	cwd := t.TempDir()
+	cwd := canonicalTempDir(t)
 	duplicate, err := syscall.Dup(int(os.Stdout.Fd()))
 	if err != nil {
 		t.Fatalf("Dup(stdout) error = %v", err)

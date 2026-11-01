@@ -91,9 +91,7 @@ func TestInteractiveRemoteEndpointIsLocalRequiresVerifiedDefaultDaemonSocket(t *
 		t.Fatal("the default socket needs a private directory before it is local")
 	}
 	prepareTestPrivateSocketDir(t, filepath.Dir(defaultSocket))
-	if _, verified := appserver.VerifiedLocalDaemonSocket(defaultSocket); !verified {
-		t.Fatalf("VerifiedLocalDaemonSocket(%q) is unverified after preparing the socket directory", defaultSocket)
-	}
+	assertVerifiedDefaultSocket(t, defaultSocket)
 	if !interactiveRemoteEndpointIsLocal(appserverdaemon.NewUnixSocketEndpoint(defaultSocket)) {
 		t.Fatal("the verified default daemon socket must classify as local")
 	}
@@ -158,7 +156,13 @@ func TestInteractiveExplicitDefaultDaemonSocketRequiresPresenceLikeRust(t *testi
 // run against a directory the daemon itself would create.
 func privateTempHome(t *testing.T) string {
 	t.Helper()
-	root, err := os.MkdirTemp("", "r90a-home")
+	// A Unix socket path must fit sun_path (104 bytes on Darwin) and macOS
+	// reports os.TempDir under /var/folders, so keep the fixture short.
+	base := ""
+	if runtime.GOOS == "darwin" {
+		base = "/tmp"
+	}
+	root, err := os.MkdirTemp(base, "r90ahome")
 	if err != nil {
 		t.Fatalf("MkdirTemp error = %v", err)
 	}

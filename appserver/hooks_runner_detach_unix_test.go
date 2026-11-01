@@ -13,7 +13,9 @@ import (
 func TestHookCommandDetachesFromControllingTerminalLikeRust(t *testing.T) {
 	runner := NewHookRunner()
 	hook := hookRunnerMetadata("detach", HookEventUserPromptSubmit, "", 0)
-	command := `[ "$(ps -o sid= -p $$ | tr -d ' ')" = "$$" ] && printf detached || printf same-session`
+	// macOS ps has no "sid" keyword, so assert the portable half of the
+	// contract: a session leader is also a process-group leader.
+	command := `set -- $(ps -o pid= -o pgid= -p $$); [ "$1" = "$$" ] && [ "$2" = "$$" ] && printf detached || printf same-session`
 	hook.Command = &command
 
 	result, err := runner.RunUserPromptSubmit(context.Background(), &HookUserPromptSubmitRequest{

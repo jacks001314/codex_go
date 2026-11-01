@@ -12,6 +12,19 @@ import (
 	"codex_go/sandbox"
 )
 
+// canonicalTempDir resolves every symlinked ancestor of a temporary directory.
+// No-follow patches (Rust #39659) reject any symlinked component, and macOS
+// reports its temporary directory through the /var symlink, so Rust's fixtures
+// canonicalize for the same reason.
+func canonicalTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("EvalSymlinks() error = %v", err)
+	}
+	return dir
+}
+
 func TestApplyPatchExecutorRunsPatchAndFormatsOutput(t *testing.T) {
 	dir := t.TempDir()
 	executor := NewApplyPatchExecutor(&ApplyPatchExecutorOptions{CWD: dir})
@@ -212,8 +225,8 @@ func TestApplyPatchExecutorApprovesReadOnlyWorkspaceWriteLikeRust(t *testing.T) 
 }
 
 func TestApplyPatchExecutorAutoApprovesFullAccessLikeRust(t *testing.T) {
-	cwd := t.TempDir()
-	outside := filepath.Join(t.TempDir(), "full-access.txt")
+	cwd := canonicalTempDir(t)
+	outside := filepath.Join(canonicalTempDir(t), "full-access.txt")
 	profile := sandbox.FullAccessPermissionProfile()
 	sink := &recordingDecisionSink{}
 	executor := NewApplyPatchExecutor(&ApplyPatchExecutorOptions{

@@ -14,6 +14,19 @@ import (
 	"codex_go/worktree"
 )
 
+// requireGitWorktreeListZero skips when the host git cannot emit the
+// NUL-separated listing the managed worktree manager parses. Apple git 2.32
+// rejects the switch, so the listing path is not testable there (Rust parses
+// the same command and hits the same limitation).
+func requireGitWorktreeListZero(t *testing.T, repo string) {
+	t.Helper()
+	command := exec.Command("git", "worktree", "list", "--porcelain", "-z")
+	command.Dir = repo
+	if output, err := command.CombinedOutput(); err != nil && strings.Contains(string(output), "unknown switch") {
+		t.Skipf("git lacks worktree list --porcelain -z: %s", strings.TrimSpace(string(output)))
+	}
+}
+
 func runAppGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	command := exec.Command("git", args...)
@@ -70,6 +83,7 @@ func TestInteractiveStartManagedWorktreeForkBindsAndInheritsHistory(t *testing.T
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)
 	source := initAppGitRepo(t)
+	requireGitWorktreeListZero(t, source)
 
 	settings, err := worktree.FromDesktopConfig(home, nil)
 	if err != nil {
@@ -100,6 +114,9 @@ func TestInteractiveStartManagedWorktreeForkBindsAndInheritsHistory(t *testing.T
 		t.Fatalf("forked record title = %q, want the requested name", record.Title)
 	}
 	worktreeRoot := filepath.Clean(settings.Root)
+	if resolved, err := filepath.EvalSymlinks(worktreeRoot); err == nil {
+		worktreeRoot = resolved
+	}
 	if !strings.HasPrefix(filepath.Clean(record.Metadata.CWD), worktreeRoot) {
 		t.Fatalf("forked cwd = %q, want inside %q", record.Metadata.CWD, worktreeRoot)
 	}
@@ -152,7 +169,11 @@ func TestInteractiveStartManagedWorktreeNewCreatesFreshThread(t *testing.T) {
 	if err != nil || record == nil {
 		t.Fatalf("read created record: %v", err)
 	}
-	if !strings.HasPrefix(filepath.Clean(record.Metadata.CWD), filepath.Clean(settings.Root)) {
+	worktreeRoot := filepath.Clean(settings.Root)
+	if resolved, err := filepath.EvalSymlinks(worktreeRoot); err == nil {
+		worktreeRoot = resolved
+	}
+	if !strings.HasPrefix(filepath.Clean(record.Metadata.CWD), worktreeRoot) {
 		t.Fatalf("created cwd = %q", record.Metadata.CWD)
 	}
 }

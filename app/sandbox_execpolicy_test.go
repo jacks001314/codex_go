@@ -521,9 +521,11 @@ func TestSandboxWorkspaceProfileRequiresPlatformBackend(t *testing.T) {
 		return
 	}
 	err := Run(context.Background(), []string{"sandbox", "-P", ":workspace", "--", "go", "version"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
-	if runtime.GOOS == "linux" {
-		if err != nil && !strings.Contains(err.Error(), "executable file not found") && !strings.Contains(err.Error(), "bubblewrap is unavailable") {
-			t.Fatalf("sandbox workspace linux error = %v", err)
+	if runtime.GOOS == "linux" || runtime.GOOS == "darwin" {
+		// Linux runs the bubblewrap backend and macOS the Seatbelt one, so the
+		// command starts or the host lacks the helper binary.
+		if err != nil && strings.Contains(err.Error(), "requires platform sandbox support") {
+			t.Fatalf("sandbox workspace %s error = %v, want a platform backend", runtime.GOOS, err)
 		}
 		return
 	}

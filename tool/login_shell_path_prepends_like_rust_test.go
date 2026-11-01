@@ -260,8 +260,15 @@ func TestDeriveExecArgsWithPathPrependsRestoresPATHLikeRust(t *testing.T) {
 		t.Fatal("DeriveExecArgsWithPathPrepends() ok = false for a single directory")
 	}
 	stdout, _, _ = runLoginShellArgv(t, argv, "PATH="+first+":/usr/bin:/bin")
-	if got := strings.Split(stdout, ":"); len(got) == 0 || got[0] != first || strings.Count(stdout, first) != 1 {
+	if strings.Count(stdout, first) != 1 {
 		t.Fatalf("PATH = %q, want the existing %q entry kept once", stdout, first)
+	}
+	// Login startup can rewrite PATH before the setup runs (macOS path_helper
+	// reorders system directories ahead of inherited entries), so only demand the
+	// leading position that the host itself preserved.
+	control, _, _ := runLoginShellArgv(t, shell.DeriveExecArgs(command, true), "PATH="+first+":/usr/bin:/bin")
+	if strings.HasPrefix(control, first+":") && !strings.HasPrefix(stdout, first+":") {
+		t.Fatalf("PATH = %q, want the existing %q entry kept at the front like %q", stdout, first, control)
 	}
 
 	// Diagnostics and line numbers still refer to the original script.

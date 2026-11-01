@@ -94,7 +94,7 @@ func TestRuntimeRouterRefreshesGlobalInstructionsAtTurnBoundary(t *testing.T) {
 // Rust #44675 repository half: moving the thread to a different working
 // directory re-discovers the repository instruction snapshot.
 func TestRuntimeRouterReDiscoversProjectInstructionsWhenCWDChanges(t *testing.T) {
-	codexHome := t.TempDir()
+	codexHome := canonicalTempDir(t)
 	store := session.NewStore(filepath.Join(codexHome, "sessions"))
 	router := NewRuntimeRouter(RuntimeServices{
 		ThreadRouter: NewRouter(store),
@@ -106,8 +106,8 @@ func TestRuntimeRouterReDiscoversProjectInstructionsWhenCWDChanges(t *testing.T)
 	if err := os.WriteFile(filepath.Join(codexHome, config.DefaultAgentsMDFilename), []byte("global"), 0o600); err != nil {
 		t.Fatalf("write AGENTS.md: %v", err)
 	}
-	firstCWD := filepath.Join(t.TempDir(), "first")
-	secondCWD := filepath.Join(t.TempDir(), "second")
+	firstCWD := filepath.Join(canonicalTempDir(t), "first")
+	secondCWD := filepath.Join(canonicalTempDir(t), "second")
 	if err := os.MkdirAll(firstCWD, 0o700); err != nil {
 		t.Fatalf("mkdir first cwd: %v", err)
 	}

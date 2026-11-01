@@ -755,11 +755,11 @@ func TestRuntimeRouterThreadLifecycleRejectsPermissionsWithSandboxBeforeStarting
 }
 
 func TestRuntimeRouterThreadStartInstructionSourcesFeedTurns(t *testing.T) {
-	home := t.TempDir()
+	home := canonicalTempDir(t)
 	if err := os.WriteFile(filepath.Join(home, "AGENTS.md"), []byte("global instructions"), 0o600); err != nil {
 		t.Fatalf("write global AGENTS.md: %v", err)
 	}
-	workspace := t.TempDir()
+	workspace := canonicalTempDir(t)
 	projectAgents := filepath.Join(workspace, "AGENTS.md")
 	if err := os.WriteFile(projectAgents, []byte("project instructions"), 0o600); err != nil {
 		t.Fatalf("write project AGENTS.md: %v", err)
@@ -825,7 +825,7 @@ func TestRuntimeRouterThreadStartInstructionSourcesFeedTurns(t *testing.T) {
 		t.Fatalf("empty environment instruction sources = %#v", startNoEnvironmentResult.InstructionSources)
 	}
 
-	emptyWorkspace := t.TempDir()
+	emptyWorkspace := canonicalTempDir(t)
 	emptyProjectAgents := filepath.Join(emptyWorkspace, "AGENTS.md")
 	if err := os.WriteFile(emptyProjectAgents, []byte(""), 0o600); err != nil {
 		t.Fatalf("write empty project AGENTS.md: %v", err)
@@ -6358,8 +6358,8 @@ func TestRuntimeRouterSkillsListDefaultsCWDAndIncludesConfiguredPluginSkillsLike
 }
 
 func TestRuntimeRouterSkillsListRefreshesRemoteInstalledPluginCacheAfterPluginListLikeRust(t *testing.T) {
-	home := t.TempDir()
-	cwd := t.TempDir()
+	home := canonicalTempDir(t)
+	cwd := canonicalTempDir(t)
 	pluginRoot := filepath.Join(home, "plugins", "cache", remoteInstalledGlobalMarketplace, "linear", "local")
 	if err := os.MkdirAll(filepath.Join(pluginRoot, ".codex-plugin"), 0o755); err != nil {
 		t.Fatalf("MkdirAll(plugin manifest) error = %v", err)
@@ -6470,8 +6470,8 @@ func TestRuntimeRouterSkillsListRefreshesRemoteInstalledPluginCacheAfterPluginLi
 
 func TestRuntimeRouterPluginListDownloadsVersionedRemoteInstalledPluginBundleLikeRust(t *testing.T) {
 	t.Setenv("CODEX_TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS", "1")
-	home := t.TempDir()
-	cwd := t.TempDir()
+	home := canonicalTempDir(t)
+	cwd := canonicalTempDir(t)
 	staleRoot := filepath.Join(home, "plugins", "cache", remoteInstalledGlobalMarketplace, "stale", "local")
 	if err := os.MkdirAll(staleRoot, 0o755); err != nil {
 		t.Fatalf("MkdirAll(stale cache) error = %v", err)
@@ -15833,7 +15833,7 @@ func TestRuntimeRouterImplicitSkillInvocationFromShellCommand(t *testing.T) {
 }
 
 func TestImplicitSkillInvocationTracksHiddenEnabledSkillLikeRust(t *testing.T) {
-	skillDir := t.TempDir()
+	skillDir := canonicalTempDir(t)
 	disabled := false
 	analytics := newRecordingTurnEventSink()
 	router := &RuntimeRouter{services: RuntimeServices{Analytics: analytics}}
@@ -16765,7 +16765,7 @@ func TestRuntimeRouterMCPRootsIncludeLocalSelectedCapabilityRoots(t *testing.T) 
 }
 
 func TestRuntimeRouterSelectedRootIDDistinguishesIdenticalLocalExecutorPathsLikeRust(t *testing.T) {
-	capabilityRoot := t.TempDir()
+	capabilityRoot := canonicalTempDir(t)
 	skillDir := filepath.Join(capabilityRoot, "lint-fix")
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(skill) error = %v", err)
@@ -16777,7 +16777,7 @@ func TestRuntimeRouterSelectedRootIDDistinguishesIdenticalLocalExecutorPathsLike
 	normalizedSkillPath := strings.TrimLeft(strings.ReplaceAll(skillPath, "\\", "/"), "/")
 	rootALocator := "skill://root-a/" + normalizedSkillPath
 	rootBLocator := "skill://root-b/" + normalizedSkillPath
-	store := session.NewStore(t.TempDir())
+	store := session.NewStore(canonicalTempDir(t))
 	sink := NewNotificationBuffer()
 	agent := newRecordingRuntimeAgent("ok")
 	router := NewRuntimeRouter(RuntimeServices{
@@ -16790,7 +16790,7 @@ func TestRuntimeRouterSelectedRootIDDistinguishesIdenticalLocalExecutorPathsLike
 	router.SetNotificationSink(sink)
 
 	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
-		CWD: t.TempDir(),
+		CWD: canonicalTempDir(t),
 		SelectedCapabilityRoots: []SelectedCapabilityRoot{
 			{ID: "root-a", Location: CapabilityRootLocation{Type: CapabilityRootLocationEnvironment, EnvironmentID: "local", Path: capabilityRoot}},
 			{ID: "root-b", Location: CapabilityRootLocation{Type: CapabilityRootLocationEnvironment, EnvironmentID: "local", Path: capabilityRoot}},
@@ -16941,11 +16941,11 @@ func TestRuntimeRouterExecutorCatalogUsesExtensionByteBudgetWithoutCoreWarningLi
 }
 
 func TestRuntimeRouterSkillsIncludeInstructionsFalseHidesCatalogButAllowsExplicitExecutorSkillLikeRust(t *testing.T) {
-	home := t.TempDir()
+	home := canonicalTempDir(t)
 	if err := os.WriteFile(config.ConfigPath(home), []byte("[skills]\ninclude_instructions = false\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile(config) error = %v", err)
 	}
-	capabilityRoot := t.TempDir()
+	capabilityRoot := canonicalTempDir(t)
 	skillDir := filepath.Join(capabilityRoot, "deploy")
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(skill) error = %v", err)
@@ -16955,7 +16955,7 @@ func TestRuntimeRouterSkillsIncludeInstructionsFalseHidesCatalogButAllowsExplici
 		t.Fatalf("WriteFile(skill) error = %v", err)
 	}
 	locator := "skill://deploy-root/" + strings.TrimLeft(strings.ReplaceAll(skillPath, "\\", "/"), "/")
-	store := session.NewStore(t.TempDir())
+	store := session.NewStore(canonicalTempDir(t))
 	sink := NewNotificationBuffer()
 	agent := newRecordingRuntimeAgent("ok")
 	configService := config.NewConfigService(home)
@@ -16969,7 +16969,7 @@ func TestRuntimeRouterSkillsIncludeInstructionsFalseHidesCatalogButAllowsExplici
 	})
 	router.SetNotificationSink(sink)
 	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
-		CWD: t.TempDir(),
+		CWD: canonicalTempDir(t),
 		SelectedCapabilityRoots: []SelectedCapabilityRoot{{
 			ID:       "deploy-root",
 			Location: CapabilityRootLocation{Type: CapabilityRootLocationEnvironment, EnvironmentID: "local", Path: capabilityRoot},
@@ -17001,11 +17001,11 @@ func TestRuntimeRouterSkillsIncludeInstructionsFalseHidesCatalogButAllowsExplici
 }
 
 func TestRuntimeRouterExecutorSkillProviderCatalogReadAndResourceAccessLikeRust(t *testing.T) {
-	home := t.TempDir()
+	home := canonicalTempDir(t)
 	if err := os.WriteFile(config.ConfigPath(home), []byte("[skills]\ninclude_instructions = true\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile(config) error = %v", err)
 	}
-	capabilityRoot := t.TempDir()
+	capabilityRoot := canonicalTempDir(t)
 	skillDir := filepath.Join(capabilityRoot, "plugin", "skills", "deploy")
 	if err := os.MkdirAll(filepath.Join(skillDir, "references"), 0o755); err != nil {
 		t.Fatalf("MkdirAll(skill) error = %v", err)
@@ -17022,7 +17022,7 @@ func TestRuntimeRouterExecutorSkillProviderCatalogReadAndResourceAccessLikeRust(
 	if err := os.WriteFile(filepath.Join(skillDir, "references", "details.md"), []byte("EXECUTOR_REFERENCE_MARKER\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile(reference) error = %v", err)
 	}
-	store := session.NewStore(t.TempDir())
+	store := session.NewStore(canonicalTempDir(t))
 	sink := NewNotificationBuffer()
 	agent := newRecordingRuntimeAgent("ok")
 	configService := config.NewConfigService(home)
@@ -17034,7 +17034,7 @@ func TestRuntimeRouterExecutorSkillProviderCatalogReadAndResourceAccessLikeRust(
 	router.SetNotificationSink(sink)
 	authorityID := "demo-plugin@1"
 	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
-		CWD:                     t.TempDir(),
+		CWD:                     canonicalTempDir(t),
 		SelectedCapabilityRoots: []SelectedCapabilityRoot{{ID: authorityID, Location: CapabilityRootLocation{Type: CapabilityRootLocationEnvironment, EnvironmentID: "local", Path: capabilityRoot}}},
 	}))
 	if threadStart.Error != nil {
@@ -17054,7 +17054,7 @@ func TestRuntimeRouterExecutorSkillProviderCatalogReadAndResourceAccessLikeRust(
 			t.Fatalf("explicit executor fragment missing %q: %#v", want, request.InputItems)
 		}
 	}
-	options := turn.DefaultToolRegistryOptions(t.TempDir())
+	options := turn.DefaultToolRegistryOptions(canonicalTempDir(t))
 	options.EnableCore = false
 	options.EnableShell = false
 	options.EnableApplyPatch = false
@@ -19988,14 +19988,14 @@ func TestRuntimeRouterCommandExecutionEmitsAnalyticsLikeRust(t *testing.T) {
 }
 
 func TestRuntimeRouterFileChangeEmitsAnalyticsLikeRust(t *testing.T) {
-	home := t.TempDir()
+	home := canonicalTempDir(t)
 	if err := os.WriteFile(config.ConfigPath(home), []byte(`model = "`+applyPatchAnalyticsModel+`"`), 0o600); err != nil {
 		t.Fatalf("write config error = %v", err)
 	}
 	store := session.NewStore(filepath.Join(home, "sessions"))
 	sink := NewNotificationBuffer()
 	analyticsSink := newRecordingTurnEventSink()
-	cwd := t.TempDir()
+	cwd := canonicalTempDir(t)
 	router := NewRuntimeRouter(RuntimeServices{
 		ThreadRouter:          NewRouter(store),
 		Config:                config.NewConfigService(home),
@@ -24851,12 +24851,12 @@ func TestRuntimeRouterBuildsResponsesAgentFromConfig(t *testing.T) {
 }
 
 func TestRuntimeRouterChatGPTTurnIncludesStandaloneImageGenerationByDefaultLikeRust(t *testing.T) {
-	store := session.NewStore(t.TempDir())
-	home := t.TempDir()
+	store := session.NewStore(canonicalTempDir(t))
+	home := canonicalTempDir(t)
 	if err := auth.NewStore(home).Save(auth.FromChatGPTAuthTokens("chatgpt-token", "account-1", nil)); err != nil {
 		t.Fatalf("Save auth error = %v", err)
 	}
-	skillsRoot := t.TempDir()
+	skillsRoot := canonicalTempDir(t)
 	skillDir := filepath.Join(skillsRoot, "imagegen")
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(skill) error = %v", err)
@@ -24895,7 +24895,7 @@ func TestRuntimeRouterChatGPTTurnIncludesStandaloneImageGenerationByDefaultLikeR
 	router.SetNotificationSink(sink)
 
 	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
-		CWD: t.TempDir(),
+		CWD: canonicalTempDir(t),
 	}))
 	if threadStart.Error != nil {
 		t.Fatalf("thread start error: %+v", threadStart.Error)

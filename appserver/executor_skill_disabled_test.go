@@ -16,11 +16,11 @@ import (
 // Mirrors Rust #46015: callers may disable specific executor skills per
 // environment, and only that environment's catalog drops them.
 func TestRuntimeRouterDisabledExecutorSkillPathsLikeRust(t *testing.T) {
-	home := t.TempDir()
+	home := canonicalTempDir(t)
 	if err := os.WriteFile(config.ConfigPath(home), []byte("[skills]\ninclude_instructions = true\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile(config) error = %v", err)
 	}
-	capabilityRoot := t.TempDir()
+	capabilityRoot := canonicalTempDir(t)
 	skillDir := filepath.Join(capabilityRoot, "plugin", "skills", "deploy")
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(skill) error = %v", err)
@@ -29,7 +29,7 @@ func TestRuntimeRouterDisabledExecutorSkillPathsLikeRust(t *testing.T) {
 	if err := os.WriteFile(skillPath, []byte("---\nname: deploy\ndescription: Deploy through the executor.\n---\n\nEXECUTOR_MAIN_MARKER\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile(skill) error = %v", err)
 	}
-	store := session.NewStore(t.TempDir())
+	store := session.NewStore(canonicalTempDir(t))
 	configService := config.NewConfigService(home)
 	router := NewRuntimeRouter(RuntimeServices{
 		ThreadRouter: NewRouter(store),
@@ -39,7 +39,7 @@ func TestRuntimeRouterDisabledExecutorSkillPathsLikeRust(t *testing.T) {
 		ThreadStatus: NewThreadStatusManager(),
 	})
 	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
-		CWD:                     t.TempDir(),
+		CWD:                     canonicalTempDir(t),
 		SelectedCapabilityRoots: []SelectedCapabilityRoot{{ID: "demo-plugin@1", Location: CapabilityRootLocation{Type: CapabilityRootLocationEnvironment, EnvironmentID: "local", Path: capabilityRoot}}},
 	}))
 	if threadStart.Error != nil {
