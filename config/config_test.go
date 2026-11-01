@@ -62,10 +62,11 @@ func TestManagedProjectRootMarkersGovernDiscoveryLikeRust(t *testing.T) {
 	if err := os.WriteFile(ConfigPath(home), []byte("model = \"gpt-user\"\n"+trusted), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(managedConfigPath(home, ""), []byte("project_root_markers = [\"MARKER\"]\n"), 0o600); err != nil {
+	managed := filepath.Join(home, "managed_config.toml")
+	if err := os.WriteFile(managed, []byte("project_root_markers = [\"MARKER\"]\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := LoadWithOptions(home, &LoadOptions{CWD: repo, IncludeManagedConfig: true})
+	cfg, err := LoadWithOptions(home, &LoadOptions{CWD: repo, IncludeManagedConfig: true, ManagedConfigPath: managed})
 	if err != nil {
 		t.Fatalf("LoadWithOptions() error = %v", err)
 	}
@@ -2711,6 +2712,9 @@ func TestWindowsIgnoresLegacyManagedConfigLikeRust(t *testing.T) {
 // legacy managed_config.toml alone must not count as local managed
 // configuration.
 func TestHasLocalManagedConfigurationWindowsExcludesLegacyFile(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("default CODEX_HOME/managed_config.toml is Windows-specific")
+	}
 	home := t.TempDir()
 	if err := os.WriteFile(filepath.Join(home, "managed_config.toml"), []byte("model = \"gpt-4.1\"\n"), 0o600); err != nil {
 		t.Fatal(err)

@@ -122,7 +122,11 @@ func TestResolveConfigFilePath(t *testing.T) {
 	if got, want := ResolveConfigFilePath("x.md", home), filepath.Join(home, "x.md"); got != want {
 		t.Fatalf("relative path = %q, want %q", got, want)
 	}
-	if got, want := ResolveConfigFilePath("C:\\abs\\x.md", home), filepath.Clean(`C:\abs\x.md`); got != want {
+	absolute := "/abs/x.md"
+	if runtime.GOOS == "windows" {
+		absolute = `C:\abs\x.md`
+	}
+	if got, want := ResolveConfigFilePath(absolute, home), filepath.Clean(absolute); got != want {
 		t.Fatalf("absolute path = %q, want %q", got, want)
 	}
 	if got := ResolveConfigFilePath("~/x.md", home); !filepath.IsAbs(got) || strings.HasPrefix(got, home) {
