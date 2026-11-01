@@ -101,8 +101,12 @@ func TestInjectSessionID(t *testing.T) {
 	if env[SessionIDEnvVar] != "session-1" {
 		t.Fatalf("CODEX_SESSION_ID = %q", env[SessionIDEnvVar])
 	}
-	if _, ok := env["codex_session_id"]; ok {
-		t.Fatalf("stale case-variant CODEX_SESSION_ID was not removed: %#v", env)
+	if runtime.GOOS == "windows" {
+		if _, ok := env["codex_session_id"]; ok {
+			t.Fatalf("stale case-variant CODEX_SESSION_ID was not removed: %#v", env)
+		}
+	} else if env["codex_session_id"] != "stale" {
+		t.Fatalf("Unix environment names are case-sensitive: %#v", env)
 	}
 	InjectSessionID(env, nil)
 	if _, ok := env[SessionIDEnvVar]; ok {
