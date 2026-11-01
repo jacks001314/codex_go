@@ -1021,7 +1021,7 @@
    ],
    "phase": "P2",
    "status": "complete",
-   "verifier": "TestDesktopChecksReportInstallationLikeRust;TestDesktopChecksReportNoInstallationLikeRust;TestDesktopChecksRegisteredInBuilder"
+   "verifier": "TestDesktopChecksReportInstalledAppLikeRust;TestDesktopChecksReportNothingWithoutInstallationLikeRust;TestDesktopChecksWarnWhenInstallationProbeFailsLikeRust"
   },
   {
    "id": "exec-server-trace-context",
