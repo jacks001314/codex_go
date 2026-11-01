@@ -40,6 +40,8 @@ func scanSnapshotLiteralWords(shellType ShellType, script string, depth int, wor
 	var word strings.Builder
 	inWord := false
 	var pending []snapshotHeredoc
+	rcQuotes := false
+	statementStart := true
 	flush := func() {
 		if !inWord {
 			return
@@ -53,6 +55,12 @@ func scanSnapshotLiteralWords(shellType ShellType, script string, depth int, wor
 		inWord = true
 	}
 	for index := 0; index < len(script); {
+		if statementStart {
+			statementStart = false
+			if enable, matched := snapshotRcQuotesDirective(shellType, script, index); matched {
+				rcQuotes = enable
+			}
+		}
 		switch character := script[index]; character {
 		case '\\':
 			if index+1 >= len(script) {
@@ -67,6 +75,12 @@ func scanSnapshotLiteralWords(shellType ShellType, script string, depth int, wor
 			appendText(script[index+1 : index+2])
 			index += 2
 		case '\'':
+			if rcQuotes {
+				text, next := decodeSnapshotRcQuoted(script, index+1)
+				appendText(text)
+				index = next
+				continue
+			}
 			end := strings.IndexByte(script[index+1:], '\'')
 			if end < 0 {
 				appendText(script[index+1:])
@@ -117,6 +131,7 @@ func scanSnapshotLiteralWords(shellType ShellType, script string, depth int, wor
 		case '\n':
 			flush()
 			index++
+			statementStart = true
 			if len(pending) > 0 {
 				index = scanSnapshotHeredocBodies(script, index, pending, words)
 				pending = nil
@@ -131,7 +146,11 @@ func scanSnapshotLiteralWords(shellType ShellType, script string, depth int, wor
 			}
 			flush()
 			index++
-		case ' ', '\t', '\r', ';', '|', '&', '>', '(', ')':
+		case ';', '|', '&', '(':
+			flush()
+			statementStart = true
+			index++
+		case ' ', '\t', '\r', '>', ')':
 			flush()
 			index++
 		default:
@@ -150,6 +169,58 @@ type snapshotHeredoc struct {
 	delimiter string
 	stripTabs bool
 	quoted    bool
+}
+
+// snapshotRcQuotesDirective recognizes a top-level "setopt rcquotes" or
+// "unsetopt rcquotes" command. With rcquotes a doubled single quote stands for
+// one literal quote, so the scanner follows the option the way Rust's
+// Quoting::ZshRcQuotes does.
+func snapshotRcQuotesDirective(shellType ShellType, script string, index int) (bool, bool) {
+	if shellType != ShellZsh {
+		return false, false
+	}
+	for index < len(script) && (script[index] == ' ' || script[index] == '\t') {
+		index++
+	}
+	enable := false
+	switch {
+	case strings.HasPrefix(script[index:], "setopt rcquotes"):
+		enable = true
+		index += len("setopt rcquotes")
+	case strings.HasPrefix(script[index:], "unsetopt rcquotes"):
+		enable = false
+		index += len("unsetopt rcquotes")
+	default:
+		return false, false
+	}
+	if index < len(script) {
+		switch script[index] {
+		case ' ', '\t', '\r', '\n', ';', '&', '|', ')':
+		default:
+			return false, false
+		}
+	}
+	return enable, true
+}
+
+// decodeSnapshotRcQuoted decodes a single-quoted region under rcquotes, where a
+// doubled quote stands for one literal quote.
+func decodeSnapshotRcQuoted(script string, index int) (string, int) {
+	var text strings.Builder
+	for index < len(script) {
+		if script[index] != '\'' {
+			text.WriteByte(script[index])
+			index++
+			continue
+		}
+		if index+1 < len(script) && script[index+1] == '\'' {
+			text.WriteByte('\'')
+			index += 2
+			continue
+		}
+		return text.String(), index + 1
+	}
+	return text.String(), index
 }
 
 // decodeSnapshotHeredocStart reads the delimiter word after "<<" or "<<-".

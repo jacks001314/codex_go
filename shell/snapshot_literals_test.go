@@ -304,3 +304,64 @@ func TestSnapshotLiteralWordsDecodeHeredocsLikeRust(t *testing.T) {
 		})
 	}
 }
+
+// TestSnapshotLiteralWordsFollowRcQuotesLikeRust covers zsh rcquotes: after
+// "setopt rcquotes" a doubled single quote is one literal quote, so an alias
+// value that contains a quote decodes with it instead of losing it.
+func TestSnapshotLiteralWordsFollowRcQuotesLikeRust(t *testing.T) {
+	for _, testCase := range []struct {
+		name    string
+		shell   ShellType
+		script  string
+		contain []string
+		absent  []string
+	}{
+		{
+			name:    "rcquotes keeps the doubled quote",
+			shell:   ShellZsh,
+			script:  "setopt rcquotes\nalias helper='a''b'\n",
+			contain: []string{"helper=a'b"},
+			absent:  []string{"helper=ab"},
+		},
+		{
+			name:    "rcquotes reassembles a quoted credential",
+			shell:   ShellZsh,
+			script:  "setopt rcquotes\nalias helper='sk-real''secret'\n",
+			contain: []string{"helper=sk-real'secret"},
+		},
+		{
+			name:    "default zsh concatenates the empty string",
+			shell:   ShellZsh,
+			script:  "alias helper='a''b'\n",
+			contain: []string{"helper=ab"},
+		},
+		{
+			name:    "unsetopt restores the old quoting",
+			shell:   ShellZsh,
+			script:  "setopt rcquotes\nunsetopt rcquotes\nalias helper='a''b'\n",
+			contain: []string{"helper=ab"},
+		},
+		{
+			name:    "bash ignores the zsh option",
+			shell:   ShellBash,
+			script:  "setopt rcquotes\nalias helper='a''b'\n",
+			contain: []string{"helper=ab"},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			words := SnapshotLiteralWords(testCase.shell, testCase.script)
+			for _, want := range testCase.contain {
+				if !slices.Contains(words, want) {
+					t.Fatalf("SnapshotLiteralWords(%q) = %#v, want %q", testCase.script, words, want)
+				}
+			}
+			for _, unwanted := range testCase.absent {
+				for _, word := range words {
+					if strings.Contains(word, unwanted) {
+						t.Fatalf("SnapshotLiteralWords(%q) = %#v, did not want %q", testCase.script, words, unwanted)
+					}
+				}
+			}
+		})
+	}
+}
