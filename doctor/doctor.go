@@ -3101,7 +3101,7 @@ func sandboxCheckFromConfig(cfg *config.Config, dispatchPaths *cli.DispatchPaths
 	policy := sandboxPolicyFromConfig(cfg)
 	details := []string{
 		"approval policy: " + approvalPolicyFromConfig(cfg),
-		"filesystem sandbox: " + string(policy.Kind),
+		"filesystem sandbox: " + filesystemSandboxKindForDoctor(policy),
 		"network sandbox: " + networkSandboxPolicyFromConfig(policy),
 	}
 	status := CheckStatusOK
@@ -3170,6 +3170,24 @@ func approvalPolicyFromConfig(cfg *config.Config) string {
 		return "Granular"
 	default:
 		return value
+	}
+}
+
+// filesystemSandboxKindForDoctor maps Go's sandbox profile onto the
+// `FileSystemSandboxKind` display values Rust prints: both restricted profiles
+// (read-only, workspace-write) report `restricted`, full access reports
+// `unrestricted`, and an executor-managed sandbox reports `external-sandbox`.
+func filesystemSandboxKindForDoctor(policy *sandbox.SandboxPolicy) string {
+	if policy == nil {
+		return string(sandbox.SandboxReadOnly)
+	}
+	switch policy.Kind {
+	case sandbox.SandboxDangerFullAccess:
+		return "unrestricted"
+	case sandbox.SandboxModeExternalSandbox:
+		return "external-sandbox"
+	default:
+		return "restricted"
 	}
 }
 

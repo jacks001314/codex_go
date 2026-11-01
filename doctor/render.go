@@ -596,6 +596,8 @@ func writeDetail(out *strings.Builder, check *DoctorCheck, detail string, opts *
 
 func doctorDisplayLabel(label string) string {
 	switch label {
+	case "auth file":
+		return "auth.json path (file backend/fallback)"
 	case "codex-linux-sandbox helper":
 		return "linux helper"
 	case "optional reachability failed":
@@ -734,7 +736,11 @@ func rowSummary(check *DoctorCheck, opts *Options) string {
 		return redactDoctorDetail(check.Issues[0].Cause)
 	}
 	if check.Status != CheckStatusOK && check.Remediation != nil {
-		return check.Summary + " - " + redactDoctorDetail(*check.Remediation)
+		dash := " \u2014 "
+		if opts != nil && opts.ASCII {
+			dash = " - "
+		}
+		return check.Summary + dash + redactDoctorDetail(*check.Remediation)
 	}
 	return displaySummary(check, opts)
 }
@@ -875,9 +881,9 @@ func mcpDisplaySummary(check *DoctorCheck) string {
 		transports = append(transports, value+" "+transport)
 	}
 	if len(transports) == 0 {
-		return count + " servers | " + disabled + " disabled"
+		return count + " servers \u00b7 " + disabled + " disabled"
 	}
-	return count + " server (" + strings.Join(transports, ", ") + ") | " + disabled + " disabled"
+	return count + " server (" + strings.Join(transports, ", ") + ") \u00b7 " + disabled + " disabled"
 }
 
 func sandboxDisplaySummary(check *DoctorCheck) string {
@@ -887,7 +893,7 @@ func sandboxDisplaySummary(check *DoctorCheck) string {
 	if !approvalOK || !filesystemOK || !networkOK {
 		return ""
 	}
-	return filesystem + " fs + " + sandboxNetworkNoteValue(network) + " network | approval " + approval
+	return filesystem + " fs + " + sandboxNetworkNoteValue(network) + " network \u00b7 approval " + approval
 }
 
 func websocketDisplaySummary(check *DoctorCheck) string {
@@ -901,7 +907,7 @@ func websocketDisplaySummary(check *DoctorCheck) string {
 	}
 	timeout = strings.ReplaceAll(timeout, "000 ms", "s")
 	timeout = strings.ReplaceAll(timeout, " ms", "ms")
-	return "connected (" + status + ") | " + timeout + " timeout"
+	return "connected (" + status + ") \u00b7 " + timeout + " timeout"
 }
 
 func appServerDisplaySummary(check *DoctorCheck) string {
@@ -1156,7 +1162,7 @@ func sandboxNote(check *DoctorCheck) *doctorNote {
 	return &doctorNote{
 		status:  doctorDisplayStatusWarning,
 		name:    "sandbox",
-		summary: "filesystem " + filesystem + " | network " + normalizedNetwork,
+		summary: "filesystem " + filesystem + " \u00b7 network " + normalizedNetwork,
 	}
 }
 

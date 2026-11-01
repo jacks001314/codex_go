@@ -3262,7 +3262,42 @@ and decodable items kept Go's original spelling. The record is now decoded into
   `TestRenderHumanConfigDetailsMatchRustLikeRust` and
   `TestRenderHumanFeatureFlagsRespectAllLikeRust`.
 
+### 96. `doctor` prints Rust's sandbox kind, summary separators and note dashes
+
+- **Sandbox kind values.** Rust's `filesystem sandbox` row renders
+  `FileSystemSandboxKind`, so `read-only` and `workspace-write` both print
+  `restricted`, full access prints `unrestricted` and an executor-managed
+  profile prints `external-sandbox`. `filesystemSandboxKindForDoctor` maps Go's
+  sandbox policy onto those strings, which also fixes the row summary
+  (`restricted fs + restricted network · approval OnRequest`).
+- **Summary separators.** The sandbox, mcp and websocket row summaries join
+  their halves with `·` like Rust's `row_description`, in the Unicode report
+  and under `--ascii` (Rust keeps `·` there too).
+- **Note dashes.** A non-OK row with a remediation joins the summary and the
+  remedy with an em dash (` — `) in the Unicode report and ` - ` under
+  `--ascii`, matching `actionable_note_summary`.
+- **Auth label.** `doctorDisplayLabel` prints `auth.json path (file
+  backend/fallback)` for the `auth file` detail row (`detail.rs`).
+- Evidence: `out/r1306-sandbox-modes.txt` (read-only, workspace-write and
+  danger-full-access: the summary and `filesystem sandbox` rows agree),
+  `out/r1307-summaries.txt` (`title`, `mcp` and `sandbox` rows are byte-identical
+  and the websocket note uses the em dash), `out/r1304-doctor-full-diff.txt`
+  (the whole-report diff no longer carries the sandbox kind, the mcp/sandbox
+  separator or the note dash), `TestFilesystemSandboxKindForDoctorMatchesRust`,
+  `TestRowSummaryUsesEmDashForRemediationLikeRust` and
+  `TestDoctorDisplayLabelAuthFileMatchesRust`.
+
 ## Verification
+
+- Round 84 prints Rust's sandbox kind and separators in `doctor` (entry 96):
+  `filesystem sandbox` reports `restricted`/`unrestricted`/`external-sandbox`,
+  the sandbox, mcp and websocket summaries join with `·`, a note's remedy is
+  joined with an em dash in the Unicode report, and the auth detail row is
+  labelled `auth.json path (file backend/fallback)`.
+  `out/r1306-sandbox-modes.txt` and `out/r1307-summaries.txt` show the rows
+  matching 0.166, `go test -count=1 ./doctor ./state ./cli` and
+  `go vet ./doctor` pass, and `./doctor` still cross-compiles for `GOOS=linux`
+  and `GOOS=darwin`.
 
 - Round 83 aligns the `doctor` Configuration block (entry 95): `model` joins its
   provider, the `config.toml`/`MCP servers` rows precede the feature flags, the
@@ -4110,8 +4145,9 @@ and decodable items kept Go's original spelling. The record is now decoded into
   `search` prefers the system ripgrep over the packaged one, the Desktop App
   group still reports Go's own installation shape instead of 0.166's
   `version`/`running`/`log directory` rows plus its security and update
-  summaries, the sandbox block keeps Go's row set and `read-only fs`
-  wording, the auth check prints `auth file` instead of `auth.json path (file
-  backend/fallback)`, and notes join their remedy with ` - ` where 0.166
-  uses an em dash in a Unicode report (see
+  summaries, and the sandbox block keeps Go's extra rows (`network sandbox`
+  ahead of `glob scan max depth`, `execve wrapper helper`, `windows sandbox
+  level`) plus `denied-read restrictions inactive` where 0.166 reports
+  `denied-read rules 0`, `denied-read glob rules 0`, `sandbox backend disabled`
+  and `denied-read restrictions false` (see
   `out/r1304-doctor-full-diff.txt`).

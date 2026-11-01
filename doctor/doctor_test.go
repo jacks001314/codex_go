@@ -32,6 +32,7 @@ import (
 	"codex_go/mcp"
 	"codex_go/model"
 	"codex_go/rollout"
+	"codex_go/sandbox"
 	"codex_go/shell"
 
 	"github.com/coder/websocket"
@@ -1895,7 +1896,7 @@ func TestSandboxCheckReportsConfigAndHelpers(t *testing.T) {
 	}
 	for _, want := range []string{
 		"approval policy: Never",
-		"filesystem sandbox: workspace-write",
+		"filesystem sandbox: restricted",
 		"network sandbox: enabled",
 		"codex-linux-sandbox helper: " + linuxHelper,
 		"execve wrapper helper: " + execveWrapper,
@@ -2818,10 +2819,10 @@ func TestRenderHumanRowDescriptionsMatchRustSummaries(t *testing.T) {
 		"[ok] title        config | project repo",
 		"[ok] state        databases healthy",
 		"[ok] config       loaded",
-		"[ok] mcp          2 server (1 stdio, 1 http) | 1 disabled",
-		"[ok] sandbox      restricted fs + restricted network | approval on-request",
+		"[ok] mcp          2 server (1 stdio, 1 http) \u00b7 1 disabled",
+		"[ok] sandbox      restricted fs + restricted network \u00b7 approval on-request",
 		"[ok] network      no proxy env vars",
-		"[ok] websocket    connected (101 Switching Protocols) | 5s timeout",
+		"[ok] websocket    connected (101 Switching Protocols) \u00b7 5s timeout",
 		"[ok] app-server   running (daemon mode)",
 	} {
 		if !strings.Contains(rendered, want) {
@@ -3345,5 +3346,50 @@ func TestWorseCheckStatus(t *testing.T) {
 		if got := worseCheckStatus(tc.a, tc.b); got != tc.want {
 			t.Fatalf("worseCheckStatus(%q, %q) = %q, want %q", tc.a, tc.b, got, tc.want)
 		}
+	}
+}
+
+func TestFilesystemSandboxKindForDoctorMatchesRust(t *testing.T) {
+	cases := []struct {
+		name string
+		kind sandbox.SandboxMode
+		want string
+	}{
+		{"read-only", sandbox.SandboxReadOnly, "restricted"},
+		{"workspace-write", sandbox.SandboxWorkspaceWrite, "restricted"},
+		{"danger-full-access", sandbox.SandboxDangerFullAccess, "unrestricted"},
+		{"external-sandbox", sandbox.SandboxModeExternalSandbox, "external-sandbox"},
+	}
+	for _, tc := range cases {
+		policy := &sandbox.SandboxPolicy{Kind: tc.kind}
+		if got := filesystemSandboxKindForDoctor(policy); got != tc.want {
+			t.Fatalf("%s: filesystemSandboxKindForDoctor() = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+	if got := filesystemSandboxKindForDoctor(nil); got != string(sandbox.SandboxReadOnly) {
+		t.Fatalf("nil policy = %q, want %q", got, string(sandbox.SandboxReadOnly))
+	}
+}
+
+func TestRowSummaryUsesEmDashForRemediationLikeRust(t *testing.T) {
+	remediation := "Check websocket connectivity"
+	check := &DoctorCheck{
+		ID:          "websocket.reachability",
+		Category:    "websocket",
+		Status:      CheckStatusWarning,
+		Summary:     "websocket provider probe timed out",
+		Remediation: &remediation,
+	}
+	if got, want := rowSummary(check, &Options{}), "websocket provider probe timed out — Check websocket connectivity"; got != want {
+		t.Fatalf("rowSummary() = %q, want %q", got, want)
+	}
+	if got, want := rowSummary(check, &Options{ASCII: true}), "websocket provider probe timed out - Check websocket connectivity"; got != want {
+		t.Fatalf("rowSummary(--ascii) = %q, want %q", got, want)
+	}
+}
+
+func TestDoctorDisplayLabelAuthFileMatchesRust(t *testing.T) {
+	if got, want := doctorDisplayLabel("auth file"), "auth.json path (file backend/fallback)"; got != want {
+		t.Fatalf("doctorDisplayLabel(auth file) = %q, want %q", got, want)
 	}
 }
