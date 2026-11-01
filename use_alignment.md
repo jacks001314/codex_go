@@ -3311,7 +3311,45 @@ and decodable items kept Go's original spelling. The record is now decoded into
   `TestWindowsSandboxBackendRowMatchesRust` and
   `TestSandboxCheckAppendsWindowsRowsAfterHelperLikeRust`.
 
+### 98. `doctor` renders the desktop application rows Rust's MSIX probe produces
+
+- **Discovery.** Rust asks MSIX for the `OpenAI.Codex_2p2nqsd0c76g0` package
+  family (`FindPackagesByPackageFamily`) and takes the version from the package
+  full name; the Uninstall registry Go read before never contains a packaged
+  app. `desktop_windows.go` calls the same API and parses the same version
+  segment, and a host without the package reports no desktop rows at all, the
+  way Rust's `collect()` returns `None` and the group disappears.
+- **Session rows.** The application row prints `version`, `running` and the
+  redacted `log directory` (`$HOME\AppData\Local\Codex/Logs`). `running` comes
+  from matching today's `codex-desktop-<session>-<pid>-t*.log` files against a
+  process that still carries the package family, and the second row reports
+  `the desktop application is not running` or the newest
+  `initialize_handshake_result` of that session (local-WebSocket contexts only).
+- **Security row.** `desktop_security_windows.go` ports `windows_security.rs`:
+  five `wevtutil` channels queried for the last week, the Codex target-name
+  mapping (trusted `ChatGPT.exe`/`electron.exe`/`rg.exe` only inside a Codex
+  package or directory), Defender action classification, the 16-detail cap and
+  the five summaries Rust can print.
+- Evidence: the Desktop App blocks of `out/r99-doctor-rust.txt` and
+  `out/r99-doctor-go.txt` are identical (`version 26.1021.3705.0`,
+  `running false`, the redacted log directory, the not-running row and
+  `no locally visible recent Codex security enforcement was found`),
+  `out/r1304-doctor-full-diff.txt` no longer carries a desktop row, and
+  `TestDesktopChecksReportInstalledAppLikeRust`,
+  `TestInspectDesktopSessionSelectsNewestHandshakeLikeRust`,
+  `TestDesktopSecurityEvidenceIsBoundedClassifiedAndRedacted` and
+  `TestDesktopSecuritySummariesMatchRust` cover the shape.
+
 ## Verification
+
+- Round 86 renders the `doctor` Desktop App group from Rust's MSIX probe
+  (entry 98): the packaged `OpenAI.Codex` version, the running state derived
+  from today's desktop session logs, the redacted log directory, the
+  not-running/handshake row and the `wevtutil` security enforcement scan. The
+  Desktop App blocks of `out/r99-doctor-rust.txt` and `out/r99-doctor-go.txt`
+  are identical and `out/r1304-doctor-full-diff.txt` no longer carries a desktop
+  row; `go test -count=1 ./doctor ./state ./cli` and `go vet ./doctor` pass and
+  `./doctor` cross-compiles for `GOOS=linux` and `GOOS=darwin`.
 
 - Round 85 renders the `doctor` sandbox rows in Rust's order (entry 97): the
   denied-read counters and glob depth precede `managed filesystem source`,
@@ -4013,6 +4051,10 @@ and decodable items kept Go's original spelling. The record is now decoded into
   ./cmd/... ./tcptunnel` passes.
 ## Still open
 
+- The macOS desktop probes are only partly ported: `desktop_darwin.go` finds
+  the `com.openai.codex` bundle and its version like Rust, but the running
+  check needs `proc_pidpath` and the `macos_security.rs` row has no Go
+  implementation yet, so macOS omits the security row 0.166 prints.
 - A source build reports `codex-cli 0.0.0` while 0.166 prints its release
   version; the version string is injected by the release pipeline
   (`-ldflags`), so a plain `go build` binary cannot match it.
@@ -4176,7 +4218,7 @@ and decodable items kept Go's original spelling. The record is now decoded into
 - `doctor` still differs from 0.166 outside the Environment work in entries
   92-93: the disk and state rows keep Go's `GCODE_HOME` label, a source build
   reports `other` instead of Rust's package layout and `v0.0.0` for the version,
-  `search` prefers the system ripgrep over the packaged one, the Desktop App
-  group still reports Go's own installation shape instead of 0.166's
-  `version`/`running`/`log directory` rows plus its security and update
-  summaries (see `out/r1304-doctor-full-diff.txt`).
+  `search` prefers the system ripgrep over the packaged one, and the desktop
+  update channel is still Go's own probe instead of 0.166's
+  `desktop update status`/`desktop latest build` rows (see
+  `out/r1304-doctor-full-diff.txt`).

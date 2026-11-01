@@ -2,8 +2,12 @@
 
 package doctor
 
-// desktopAppInstallations reports no desktop application installation on
-// unsupported platforms (Rust desktop.rs, #39060).
-func desktopAppInstallations() []desktopAppInstallation {
-	return nil
+// desktopInstalledApp reports no desktop application on platforms Rust's
+// platform::installed_app does not probe.
+func desktopInstalledApp() (*desktopApp, error) {
+	return nil, nil
+}
+
+func desktopApplicationRunning(_ *desktopApp, _ int) bool {
+	return false
 }

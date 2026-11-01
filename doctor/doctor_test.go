@@ -39,6 +39,9 @@ import (
 )
 
 func TestReportBuildsLocalChecks(t *testing.T) {
+	restoreDesktop := stubDesktopProbes(t)
+	defer restoreDesktop()
+	desktopAppProbe = func() (*desktopApp, error) { return nil, nil }
 	builder := NewBuilder()
 	builder.httpClient = localOnlyHTTPClient(t)
 	report := builder.Build(&Options{
@@ -88,9 +91,6 @@ func TestReportBuildsLocalChecks(t *testing.T) {
 		{"state.rollout_db_parity", "threads"},
 		{"app_server.status", "app-server"},
 		{"network.provider_reachability", "reachability"},
-		{"desktop.app.version", "desktop"},
-		{"desktop.security", "desktop"},
-		{"desktop.updates", "desktop"},
 	}
 	if len(report.Checks) != len(wantChecks) {
 		t.Fatalf("check IDs = %v, want %d checks", checkIDs(report), len(wantChecks))
