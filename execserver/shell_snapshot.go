@@ -236,6 +236,17 @@ func shellSnapshotLaunchEnvExports(env map[string]string) string {
 }
 
 func (m *shellSnapshotManager) snapshotEntry(ctx context.Context, params *ExecParams, shellType shell.ShellType, captureEnv map[string]string, credentialPairs []network.CredentialMaskPair, credentialTextUnsafe func(string) bool) (*shellSnapshotEntry, error) {
+	return m.snapshotEntryMode(ctx, params, shellType, captureEnv, credentialPairs, credentialTextUnsafe, true)
+}
+
+// prewarmSnapshotEntry captures speculatively. Rust's CapturePurpose::Prewarm
+// leaves the cache cell uninitialized on failure, so a failed prewarm must not
+// make the next real launch wait for the retry backoff or spend its attempts.
+func (m *shellSnapshotManager) prewarmSnapshotEntry(ctx context.Context, params *ExecParams, shellType shell.ShellType, captureEnv map[string]string, credentialPairs []network.CredentialMaskPair, credentialTextUnsafe func(string) bool) (*shellSnapshotEntry, error) {
+	return m.snapshotEntryMode(ctx, params, shellType, captureEnv, credentialPairs, credentialTextUnsafe, false)
+}
+
+func (m *shellSnapshotManager) snapshotEntryMode(ctx context.Context, params *ExecParams, shellType shell.ShellType, captureEnv map[string]string, credentialPairs []network.CredentialMaskPair, credentialTextUnsafe func(string) bool, recordFailures bool) (*shellSnapshotEntry, error) {
 	key, err := shellSnapshotKey(params, shellType)
 	if err != nil {
 		return nil, err
@@ -297,10 +308,12 @@ func (m *shellSnapshotManager) snapshotEntry(ctx context.Context, params *ExecPa
 		delete(m.inflight, key)
 		close(flight.done)
 		if captureErr != nil {
-			m.failures[key] = shellSnapshotFailure{
-				attempts: attempts,
-				retryAt:  m.now().Add(shellSnapshotRetryBackoff),
-				err:      captureErr,
+			if recordFailures {
+				m.failures[key] = shellSnapshotFailure{
+					attempts: attempts,
+					retryAt:  m.now().Add(shellSnapshotRetryBackoff),
+					err:      captureErr,
+				}
 			}
 		} else {
 			m.storeEntryLocked(key, entry)

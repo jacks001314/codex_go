@@ -96,7 +96,7 @@ func (e *LocalShellSnapshotExecutor) Prewarm(ctx context.Context, params *ExecPa
 	if shellSnapshotScriptIndex(params.Argv, request.Shell) < 0 {
 		return requestError(-32602, "shell snapshot requires a shell -c or -lc invocation")
 	}
-	_, err = manager.snapshotEntry(ctx, params, shellType, captureEnv, nil, nil)
+	_, err = manager.prewarmSnapshotEntry(ctx, params, shellType, captureEnv, nil, nil)
 	return err
 }
 
