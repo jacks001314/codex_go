@@ -3355,8 +3355,47 @@ and decodable items kept Go's original spelling. The record is now decoded into
   `out/r1304-doctor-full-diff.txt` no longer carries a pid-file row, and
   `TestBackgroundServerCheckListsLegacyAndDedicatedPIDFilesLikeRust` pins the
   five-file order.
+### 100. `doctor` reports the Windows desktop update from the Store manifest
+
+- **Update channel.** Rust's `append_desktop_update` fetches
+  `https://persistent.oaistatic.com/codex-app-prod/windows-store-update.json`
+  on Windows (macOS reads the appcast feeds instead), records the CDN outcome
+  on `network.provider_reachability` and, when the manifest names a newer
+  build, appends `desktop update status: available`,
+  `desktop latest build: <version>` and `desktop application: OpenAI.Codex` to
+  `updates.status`. Go had no desktop update probe, so the reachability row and
+  the `desktop` note were missing from every report.
+- **Manifest rules.** `schemaVersion` must be non-zero,
+  `storeProductId`/`packageIdentity` must be `9PLM9XGG6VKS`/`OpenAI.Codex`,
+  all four build components are compared numerically, a 404 over HTTPS renders
+  `reachable (HTTP 404; no update available)` without update rows, and a
+  non-HTTPS redirect, 407 or any other non-2xx status degrades the reachability
+  check to a warning with a single `desktop assets CDN` issue. The note renders
+  `build <version> available` (or `ready to install` for the macOS staged
+  build).
+- Evidence: `out/r99-doctor-go.txt` now opens with the same
+  `desktop      build 26.1027.6604.0 available` note as the Rust report, the
+  Updates block carries the three `desktop` rows and the reachability block
+  carries `desktop assets CDN: ... reachable (HTTP 200)`;
+  `out/r1304-doctor-full-diff.txt` no longer carries a desktop update row, and
+  `TestDesktopUpdateAppendsRowsAndCDNDetailLikeRust`,
+  `TestDesktopUpdateReportsMissingManifestWithoutRowsLikeRust`,
+  `TestDesktopUpdateWarnsWhenCDNIsUnreachableLikeRust`,
+  `TestDesktopUpdateRejectsNonHTTPSManifestRedirectLikeRust` and
+  `TestWindowsStoreUpdateComparesAllFourBuildComponentsLikeRust` pin the shape.
 
 ## Verification
+
+- Round 88 reports the Windows desktop update channel `0.166` uses (entry 100):
+  `doctor` fetches `windows-store-update.json`, prints
+  `desktop assets CDN: ... reachable (HTTP 200)` on the reachability check and
+  appends `desktop update status: available`,
+  `desktop latest build: 26.1027.6604.0` and
+  `desktop application: OpenAI.Codex` to `updates.status`, so the `desktop`
+  note (`build 26.1027.6604.0 available`) matches Rust's.
+  `out/r1304-doctor-full-diff.txt` no longer carries a desktop update row;
+  `go test -count=1 ./doctor ./state ./cli` and `go vet ./doctor` pass and
+  `./doctor` cross-compiles for `GOOS=linux` and `GOOS=darwin`.
 
 - Round 87 lists the app-server pid files the way `background_server_check`
   does (entry 99): the legacy `app-server.pid`/`app-server-updater.pid` rows
@@ -4242,7 +4281,7 @@ and decodable items kept Go's original spelling. The record is now decoded into
 - `doctor` still differs from 0.166 outside the Environment work in entries
   92-93: the disk and state rows keep Go's `GCODE_HOME` label, a source build
   reports `other` instead of Rust's package layout and `v0.0.0` for the version,
-  `search` prefers the system ripgrep over the packaged one, and the desktop
-  update channel is still Go's own probe instead of 0.166's
-  `desktop update status`/`desktop latest build` rows (see
+  `search` prefers the system ripgrep over the packaged one. The Windows
+  desktop update rows now match 0.166 (entry 100); the macOS appcast feed and
+  the Sparkle staged-build scan remain unported (see
   `out/r1304-doctor-full-diff.txt`).

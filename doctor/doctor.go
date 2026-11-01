@@ -240,6 +240,11 @@ func (b *Builder) Build(opts *Options) *Report {
 		b.timed(func() *DoctorCheck { return b.providerReachabilityCheck(codexHome, opts) }),
 	}
 	checks = append(checks, desktopChecks()...)
+	if desktopUpdatesSupported() {
+		if client := b.desktopUpdateHTTPClient(codexHome, opts); client != nil {
+			applyDesktopUpdateDetails(checks, client)
+		}
+	}
 	if runtime.GOOS == "windows" {
 		// Rust pushes the "dev drive" check right after disk, so its category
 		// (git) renders before the git executable check.
@@ -1574,6 +1579,20 @@ func (m providerAuthReachabilityMode) description() string {
 	default:
 		return "provider auth"
 	}
+}
+
+// desktopUpdateHTTPClient uses the probe client tests inject, otherwise the
+// route-aware client the provider probes use, so the appcast fetch follows the
+// same proxy and CA policy as the rest of the network checks.
+func (b *Builder) desktopUpdateHTTPClient(codexHome string, opts *Options) *http.Client {
+	if b.httpClient != nil {
+		return b.httpClient
+	}
+	cfg, err := loadEffectiveConfigForDoctor(codexHome, opts)
+	if err != nil {
+		return nil
+	}
+	return routeAwareProbeHTTPClient(cfg)
 }
 
 func (b *Builder) providerReachabilityCheck(codexHome string, opts *Options) *DoctorCheck {

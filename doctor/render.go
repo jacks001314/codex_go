@@ -1069,6 +1069,9 @@ func notesForReport(report *Report) []*doctorNote {
 	if note := updateNote(findCheckByCategory(report, "updates"), report); note != nil {
 		notes = append(notes, note)
 	}
+	if note := desktopUpdateNote(findCheckByCategory(report, "updates")); note != nil {
+		notes = append(notes, note)
+	}
 	if note := rolloutNote(findCheckByCategory(report, "state")); note != nil {
 		notes = append(notes, note)
 	}
@@ -1125,6 +1128,32 @@ func updateNote(check *DoctorCheck, report *Report) *doctorNote {
 		name:    "updates",
 		summary: latest + " available (" + parenthetical + ")",
 	}
+}
+
+// desktopUpdateNote promotes the desktop update rows to the `desktop` note the
+// way Rust's desktop_update_note does.
+func desktopUpdateNote(check *DoctorCheck) *doctorNote {
+	if check == nil {
+		return nil
+	}
+	status, ok := doctorDetailValue(check, "desktop update status")
+	if !ok {
+		return nil
+	}
+	build, ok := doctorDetailValue(check, "desktop latest build")
+	if !ok {
+		return nil
+	}
+	var summary string
+	switch status {
+	case "ready to install":
+		summary = "build " + build + " available (ready to install)"
+	case "available":
+		summary = "build " + build + " available"
+	default:
+		return nil
+	}
+	return &doctorNote{status: doctorDisplayStatusUpdate, name: "desktop", summary: summary}
 }
 
 func rolloutNote(check *DoctorCheck) *doctorNote {
