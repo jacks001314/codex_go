@@ -249,11 +249,15 @@ func TestShellSnapshotCommandMetricsReportProtectedAndUnavailableLikeRust(t *tes
 	t.Run("protected", func(t *testing.T) {
 		stubShellSnapshotRunner(t)
 		// [features.network_proxy] credential_broker makes the session's
-		// snapshots protected (Rust `should_rebuild_inherited`).
+		// snapshots protected (Rust `should_rebuild_inherited`). The launch
+		// itself carries no broker environment, so no protected snapshot can be
+		// replayed: Rust still counts it in the command denominator
+		// (snapshot_metrics.rs starts before provisioning) and reports the
+		// fallback outcome.
 		router, threadID, cwd, exporter := newShellSnapshotCommandRouter(t,
 			"sandbox_mode = \"workspace-write\"\n[features.network_proxy]\nenabled = true\ncredential_broker = true\n")
 		runSnapshotCommandLaunch(t, router, threadID, cwd, tool.UnifiedExecShellModeDirect)
-		assertSnapshotCommandObservation(t, exporter, 0, "protected", "used")
+		assertSnapshotCommandObservation(t, exporter, 0, "protected", "fallback")
 	})
 
 	t.Run("unavailable", func(t *testing.T) {

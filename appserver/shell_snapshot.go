@@ -127,8 +127,11 @@ func (r *RuntimeRouter) shellSnapshotV1ProviderForTurn(threadID string, cfg *con
 		if protected && (!request.Protected || request.PermissionProfile == nil) {
 			// Rust only creates a protected snapshot once the credential broker
 			// is Ready and the launch has a sandbox to capture under. Starting or
-			// unavailable broker state leaves the launch without a snapshot.
-			return tool.SnapshotProviderResult{}
+			// unavailable broker state leaves the launch without a snapshot, but
+			// the launch still belongs to the command metric denominator
+			// (snapshot_metrics.rs observes before provisioning), so it reports a
+			// protected fallback rather than no observation.
+			return protectedSnapshotFallback(r, request)
 		}
 		// Rust only replays the session's snapshot for the session's own
 		// directory; another directory has no captured state to restore. A
@@ -151,7 +154,7 @@ func (r *RuntimeRouter) shellSnapshotV1ProviderForTurn(threadID string, cfg *con
 		if protected {
 			brokerCapture := r.shellSnapshotBrokerCaptureForThread(threadID, request.EnvironmentID)
 			if brokerCapture == nil {
-				return tool.SnapshotProviderResult{}
+				return protectedSnapshotFallback(r, request)
 			}
 			// Rust captures a protected snapshot per command shape: its shell,
 			// working directory, login mode, sandbox and environment policy.
@@ -189,6 +192,20 @@ func (r *RuntimeRouter) shellSnapshotV1ProviderForTurn(threadID string, cfg *con
 			},
 		}
 	}
+}
+
+// protectedSnapshotFallback reports a brokered launch that cannot be given a
+// protected snapshot. Rust starts the command observation before it provisions
+// the snapshot, so a broker that is not ready, or a launch without the sandbox
+// the capture needs, still records `state=protected` with a fallback outcome
+// instead of dropping out of the metric.
+func protectedSnapshotFallback(r *RuntimeRouter, request tool.SnapshotProviderRequest) tool.SnapshotProviderResult {
+	if r.shellSnapshotCommandState(request, true, nil, tool.SnapshotCaptureRequest{}) == "" {
+		return tool.SnapshotProviderResult{}
+	}
+	return tool.SnapshotProviderResult{ObserveCommandOutcome: func(used bool) {
+		r.recordShellSnapshotCommand(0, "protected", used)
+	}}
 }
 
 // localShellSnapshotV2Supported reports the local executor's shell snapshot v2
