@@ -2194,18 +2194,31 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 	// NewSession mode (with Linux parent-death termination) rather than
 	// inheriting the exec server's session.
 	processgroup.PrepareChildSession(cmd)
-	stdoutPipe, err := cmd.StdoutPipe()
+	// Own the output pipes instead of using cmd.StdoutPipe: os/exec's Wait
+	// closes the pipes it created, so a child that writes and exits quickly
+	// could lose its buffered output before the capture goroutines drained it
+	// (Rust reports every chunk before process/exited). With parent-owned ends,
+	// EOF means the child closed them, which is independent of Wait.
+	stdoutReader, stdoutWriter, err := os.Pipe()
 	if err != nil {
 		return nil, err
 	}
-	stderrPipe, err := cmd.StderrPipe()
+	stderrReader, stderrWriter, err := os.Pipe()
 	if err != nil {
+		_ = stdoutReader.Close()
+		_ = stdoutWriter.Close()
 		return nil, err
 	}
+	cmd.Stdout = stdoutWriter
+	cmd.Stderr = stderrWriter
 	var stdin io.WriteCloser
 	if params.PipeStdin || params.TTY {
 		stdin, err = cmd.StdinPipe()
 		if err != nil {
+			_ = stdoutReader.Close()
+			_ = stdoutWriter.Close()
+			_ = stderrReader.Close()
+			_ = stderrWriter.Close()
 			return nil, err
 		}
 	}
@@ -2214,6 +2227,10 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 		if stdin != nil {
 			_ = stdin.Close()
 		}
+		_ = stdoutReader.Close()
+		_ = stdoutWriter.Close()
+		_ = stderrReader.Close()
+		_ = stderrWriter.Close()
 		return nil, err
 	}
 	state.networkProxy = preparedProxy
@@ -2225,8 +2242,10 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 		if stdin != nil {
 			_ = stdin.Close()
 		}
-		_ = stdoutPipe.Close()
-		_ = stderrPipe.Close()
+		_ = stdoutReader.Close()
+		_ = stdoutWriter.Close()
+		_ = stderrReader.Close()
+		_ = stderrWriter.Close()
 		return nil, requestError(-32600, fmt.Sprintf("process %s start was cancelled", params.ProcessID))
 	}
 	_, spawnSpan := startExecServerSpan(
@@ -2244,8 +2263,16 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 		if stdin != nil {
 			_ = stdin.Close()
 		}
+		_ = stdoutReader.Close()
+		_ = stdoutWriter.Close()
+		_ = stderrReader.Close()
+		_ = stderrWriter.Close()
 		return nil, err
 	}
+	// The child owns its duplicated ends now; the parent's copies must close or
+	// the capture goroutines never see EOF.
+	_ = stdoutWriter.Close()
+	_ = stderrWriter.Close()
 	if ctx.Err() != nil {
 		s.releaseStartingProcess(params.ProcessID, state)
 	}
@@ -2253,8 +2280,8 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 		if stdin != nil {
 			_ = stdin.Close()
 		}
-		_ = stdoutPipe.Close()
-		_ = stderrPipe.Close()
+		_ = stdoutReader.Close()
+		_ = stderrReader.Close()
 		_ = processgroup.TerminateProcessTree(cmd.Process)
 		_ = cmd.Wait()
 		return nil, requestError(-32600, fmt.Sprintf("process %s start was cancelled", params.ProcessID))
@@ -2266,8 +2293,14 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 		stdoutStream = "pty"
 		stderrStream = "pty"
 	}
-	go state.capture(stdoutStream, stdoutPipe)
-	go state.capture(stderrStream, stderrPipe)
+	go func() {
+		state.capture(stdoutStream, stdoutReader)
+		_ = stdoutReader.Close()
+	}()
+	go func() {
+		state.capture(stderrStream, stderrReader)
+		_ = stderrReader.Close()
+	}()
 	go func() {
 		err := cmd.Wait()
 		state.finish(err)
