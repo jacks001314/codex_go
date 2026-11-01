@@ -417,6 +417,7 @@ type processState struct {
 	openStreams          int
 	seenWriteIDs         map[string]bool
 	seenWriteOrder       []string
+	notifyMu             sync.Mutex
 	notify               processNotifier
 	onClosed             func()
 	retention            time.Duration
@@ -3708,6 +3709,7 @@ func (p *processState) capture(stream string, reader io.Reader) {
 		n, err := reader.Read(buffer)
 		if n > 0 {
 			data := append([]byte(nil), buffer[:n]...)
+			p.notifyMu.Lock()
 			p.mu.Lock()
 			chunk := p.appendLocked(stream, data)
 			notify := p.notify
@@ -3715,6 +3717,7 @@ func (p *processState) capture(stream string, reader io.Reader) {
 			if notify != nil {
 				notify(MethodProcessOutput, ProcessOutputNotification{ProcessID: p.id, Seq: chunk.Seq, Stream: chunk.Stream, Chunk: base64.StdEncoding.EncodeToString(chunk.Chunk)})
 			}
+			p.notifyMu.Unlock()
 		}
 		if err != nil {
 			p.finishStream()
@@ -3728,6 +3731,7 @@ func (p *processState) finish(waitErr error) {
 }
 
 func (p *processState) finishWithCode(waitErr error, explicitCode *int) {
+	p.notifyMu.Lock()
 	p.mu.Lock()
 	alreadyExited := p.exited
 	var exitErr *exec.ExitError
@@ -3778,12 +3782,6 @@ func (p *processState) finishWithCode(waitErr error, explicitCode *int) {
 	p.cond.Broadcast()
 	notify := p.notify
 	p.mu.Unlock()
-	if !alreadyExited {
-		if sandboxDenied {
-			telemetry.sandboxDenied(sandboxType)
-		}
-		telemetry.exit(sandboxType, exitCodeValue, terminationRequested)
-	}
 	if notify != nil {
 		if exited != nil {
 			notify(MethodProcessExited, *exited)
@@ -3792,6 +3790,13 @@ func (p *processState) finishWithCode(waitErr error, explicitCode *int) {
 			notify(MethodProcessClosed, *closed)
 		}
 	}
+	p.notifyMu.Unlock()
+	if !alreadyExited {
+		if sandboxDenied {
+			telemetry.sandboxDenied(sandboxType)
+		}
+		telemetry.exit(sandboxType, exitCodeValue, terminationRequested)
+	}
 	if closed != nil {
 		p.closeNetworkResources()
 		p.scheduleRetention()
@@ -3799,6 +3804,7 @@ func (p *processState) finishWithCode(waitErr error, explicitCode *int) {
 }
 
 func (p *processState) finishStream() {
+	p.notifyMu.Lock()
 	p.mu.Lock()
 	if p.openStreams > 0 {
 		p.openStreams--
@@ -3819,6 +3825,7 @@ func (p *processState) finishStream() {
 	if notify != nil && closed != nil {
 		notify(MethodProcessClosed, *closed)
 	}
+	p.notifyMu.Unlock()
 	if closed != nil {
 		p.closeNetworkResources()
 		p.scheduleRetention()
