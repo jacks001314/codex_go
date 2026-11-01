@@ -1374,7 +1374,7 @@ func TestConfigCheckReportsRustFeatureDetailLabels(t *testing.T) {
 		t.Fatalf("check = %+v", check)
 	}
 	for _, want := range []string{
-		"GCODE_HOME: " + home,
+		"CODEX_HOME: " + home,
 		"model: <default>",
 		"model provider: openai",
 		"mcp servers: 0",
@@ -2178,7 +2178,7 @@ func TestStateCheckReportsRustPathDBAndRolloutDetails(t *testing.T) {
 		t.Fatalf("check = %+v", check)
 	}
 	for _, want := range []string{
-		"GCODE_HOME: " + home + " (dir)",
+		"CODEX_HOME: " + home + " (dir)",
 		"log dir: " + filepath.Join(home, "log") + " (dir)",
 		"sqlite home: " + sqliteHome + " (dir)",
 		"state DB: " + filepath.Join(sqliteHome, "state_5.sqlite") + " (file)",
@@ -3044,7 +3044,7 @@ func TestRenderHumanConfigDetailsMatchRustLikeRust(t *testing.T) {
 			NewCheck("config.load", "config", CheckStatusOK, "config loaded").
 				Detail("configuration scope: invocation config, including cloud-managed policy").
 				Detail("active thread overrides: not inspected").
-				Detail("GCODE_HOME: /home/u").
+				Detail("CODEX_HOME: /home/u").
 				Detail("cwd: /repo").
 				Detail("model: gpt-6.1-sol").
 				Detail("model provider: openai").
@@ -3077,7 +3077,7 @@ func TestRenderHumanConfigDetailsMatchRustLikeRust(t *testing.T) {
 	assertBefore(t, rendered, "config.toml parse        ok", "MCP servers              2")
 	assertBefore(t, rendered, "MCP servers              2", "feature flags            3 enabled")
 	assertBefore(t, rendered, "feature flags            3 enabled", "configuration scope      invocation config")
-	for _, hidden := range []string{"GCODE_HOME", "model provider", "log dir", "sqlite home", "mcp servers"} {
+	for _, hidden := range []string{"CODEX_HOME", "model provider", "log dir", "sqlite home", "mcp servers"} {
 		if strings.Contains(rendered, hidden) {
 			t.Fatalf("config details still render %q:\n%s", hidden, rendered)
 		}

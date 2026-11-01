@@ -7,17 +7,17 @@ import (
 	"strings"
 )
 
-// Rust 6efcdad4c3 (#38795): storage diagnostics. GCODE_HOME and the active
+// Rust 6efcdad4c3 (#38795): storage diagnostics. CODEX_HOME and the active
 // worktree free space is reported with a warning below 5 GiB and a failure
 // below 1 GiB.
 const (
-	diskGiB             = uint64(1024 * 1024 * 1024)
-	diskFailThreshold   = diskGiB
-	diskWarningLimit    = 5 * diskGiB
-	diskMiB             = uint64(1024 * 1024)
+	diskGiB           = uint64(1024 * 1024 * 1024)
+	diskFailThreshold = diskGiB
+	diskWarningLimit  = 5 * diskGiB
+	diskMiB           = uint64(1024 * 1024)
 )
 
-// diskCheck reports available space for GCODE_HOME and the active worktree.
+// diskCheck reports available space for CODEX_HOME and the active worktree.
 func diskCheck(codexHome string, cwd string) *DoctorCheck {
 	return diskCheckWithMeasure(codexHome, cwd, availableDiskSpace)
 }
@@ -31,7 +31,7 @@ func diskCheckWithMeasure(codexHome string, cwd string, measure func(string) (ui
 		label string
 		path  string
 	}{
-		{"GCODE_HOME", codexHome},
+		{"CODEX_HOME", codexHome},
 		{"worktree", cwd},
 	}
 	for _, entry := range paths {

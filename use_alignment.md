@@ -3383,8 +3383,34 @@ and decodable items kept Go's original spelling. The record is now decoded into
   `TestDesktopUpdateWarnsWhenCDNIsUnreachableLikeRust`,
   `TestDesktopUpdateRejectsNonHTTPSManifestRedirectLikeRust` and
   `TestWindowsStoreUpdateComparesAllFourBuildComponentsLikeRust` pin the shape.
+### 101. `doctor` labels the home rows `CODEX_HOME` like Rust
+
+- **Labels.** Rust's `disk_check`, `config_details`, `state_details` and
+  `thread_inventory` all spell the Codex home directory `CODEX_HOME`
+  (`CODEX_HOME available`, `CODEX_HOME: <path>`, `under CODEX_HOME sessions`).
+  Go emitted `GCODE_HOME` in those four places, so the disk row, the state row
+  and the session remedy never matched the Rust report even though they carry
+  the same path.
+- **Scope.** Only the rendered labels change; `GCODE_HOME` stays the
+  environment variable Go uses to resolve the home directory, so no lookup
+  behaviour moves.
+- Evidence: `out/r1304-doctor-full-diff.txt` no longer carries a home-label
+  row and the disk/state blocks of `out/r99-doctor-rust.txt` and
+  `out/r99-doctor-go.txt` agree, while
+  `TestConfigCheckReportsRustFeatureDetailLabels`,
+  `TestStateCheckReportsRustPathDBAndRolloutDetails`,
+  `TestRenderHumanConfigDetailsMatchRustLikeRust` and
+  `TestRenderHumanStateDetailsMatchRustSummaries` assert the Rust label.
 
 ## Verification
+
+- Round 89 prints Rust's `CODEX_HOME` label in the `doctor` disk, config and
+  state rows and in the thread-inventory remedy (entry 101); the rendered
+  `CODEX_HOME available`/`CODEX_HOME: <path>` rows now match
+  `out/r99-doctor-rust.txt`, `out/r1304-doctor-full-diff.txt` no longer carries
+  a home-label row, `go test -count=1 ./doctor ./state ./cli` and
+  `go vet ./doctor` pass and `./doctor` cross-compiles for `GOOS=linux` and
+  `GOOS=darwin`.
 
 - Round 88 reports the Windows desktop update channel `0.166` uses (entry 100):
   `doctor` fetches `windows-store-update.json`, prints
@@ -4279,9 +4305,9 @@ and decodable items kept Go's original spelling. The record is now decoded into
   Aligning means serialising the tool definitions and the prompt-assembly
   order the core session builder produces.
 - `doctor` still differs from 0.166 outside the Environment work in entries
-  92-93: the disk and state rows keep Go's `GCODE_HOME` label, a source build
+  92-93: a source build
   reports `other` instead of Rust's package layout and `v0.0.0` for the version,
-  `search` prefers the system ripgrep over the packaged one. The Windows
-  desktop update rows now match 0.166 (entry 100); the macOS appcast feed and
-  the Sparkle staged-build scan remain unported (see
-  `out/r1304-doctor-full-diff.txt`).
+  `search` prefers the system ripgrep over the packaged one. The home rows now
+  print Rust's `CODEX_HOME` label (entry 101) and the Windows desktop update
+  rows match 0.166 (entry 100); the macOS appcast feed and the Sparkle
+  staged-build scan remain unported (see `out/r1304-doctor-full-diff.txt`).

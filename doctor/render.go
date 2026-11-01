@@ -197,7 +197,6 @@ func writeConfigDetails(out *strings.Builder, check *DoctorCheck, opts *Options)
 	}
 	writeFeatureFlags(out, check, opts)
 	consumed := []string{
-		"GCODE_HOME",
 		"CODEX_HOME",
 		"cwd",
 		"model",
@@ -237,7 +236,7 @@ func writePlainRow(out *strings.Builder, check *DoctorCheck, label string, value
 func writeStateDetails(out *strings.Builder, check *DoctorCheck, opts *Options) {
 	// Rust state_details re-emits the three path rows it read first, before the
 	// managed databases, instead of leaving them to the trailing pass.
-	for _, label := range []string{"GCODE_HOME", "CODEX_HOME", "log dir", "sqlite home"} {
+	for _, label := range []string{"CODEX_HOME", "log dir", "sqlite home"} {
 		value, ok := doctorDetailValue(check, label)
 		if !ok {
 			continue
@@ -257,7 +256,6 @@ func writeStateDetails(out *strings.Builder, check *DoctorCheck, opts *Options) 
 		}
 	}
 	consumed := []string{
-		"GCODE_HOME",
 		"CODEX_HOME",
 		"log dir",
 		"sqlite home",

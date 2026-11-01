@@ -1143,7 +1143,7 @@ func configCheck(codexHome string, opts *Options) *DoctorCheck {
 		// implying it saw live thread overrides.
 		"configuration scope: invocation config, including cloud-managed policy",
 		"active thread overrides: not inspected",
-		"GCODE_HOME: " + codexHome,
+		"CODEX_HOME: " + codexHome,
 		"cwd: " + doctorCWD(opts),
 		"model: " + modelName,
 		"model provider: " + effectiveProviderIDForDoctor(opts, cfg),
@@ -4657,7 +4657,7 @@ func stateCheck(codexHome string, opts *Options) *DoctorCheck {
 	logDir := logDirForDoctor(codexHome, cfg)
 	sqliteHome := sqliteHomeForDoctor(codexHome, opts)
 	details := []string{}
-	pushPathReadinessDetail(&details, "GCODE_HOME", codexHome)
+	pushPathReadinessDetail(&details, "CODEX_HOME", codexHome)
 	pushPathReadinessDetail(&details, "log dir", logDir)
 	pushPathReadinessDetail(&details, "sqlite home", sqliteHome)
 
