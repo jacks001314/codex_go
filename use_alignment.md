@@ -2955,7 +2955,74 @@ their protocol types and writes them back. Go now rebuilds them:
   freezes the Rust bytes and counters in
   `rollout/canonical_migration_permission_policy_rust_shape_test.go`.
 
+### 88. `migrate-rollouts` decodes and re-serializes every `item_completed` item like Rust
+
+Go only checked that the nested item carried its required keys and then copied
+the payload through, so items whose values 0.166 rejects survived the migration
+and decodable items kept Go's original spelling. The record is now decoded into
+`ItemCompletedEvent`/`TurnItem` and written back:
+
+- **Envelope.** `thread_id` must parse as a UUID and is rewritten to the
+  rollout's own thread id, so a payload carrying another thread id still lands
+  on this thread; `turn_id` is required, `started_at_ms` is written between the
+  item and `completed_at_ms` only when present, `completed_at_ms` defaults to
+  `0`, and unknown payload fields are dropped.
+- **AgentMessage.** `AgentMessageContent` keeps the Rust variant tag, so
+  `{"type":"Text"}` is the only accepted spelling (a legacy `"text"` tag drops
+  the line). `phase` accepts `commentary` / `partial_answer` / `final_answer`,
+  `delivery` accepts `async`, `memory_citation` passes through, and `questions`
+  entries are limited to `{title, options}` (unknown fields drop the line) with
+  `options` always written; the declaration order (`phase`, `memory_citation`,
+  `delivery`, `questions`) is preserved.
+- **UserMessage.** `client_id` keeps its snake_case name (the camelCase
+  spelling is not a serde alias and disappears), `content` entries keep
+  `UserInput`'s snake_case tags including the untagged `image` inline/file
+  forms, a `text` entry always writes `text_elements`, and every `TextElement`
+  writes `byte_range` followed by `placeholder` (`null` when unset).
+- **CommandExecution.** The analytics-only `sandbox_type` and `model_context`
+  never serialize even when the record carries them, `cwd` must be a `file:`
+  URI and is rewritten in canonical URL form (a native path drops the line),
+  `parsed_cmd` entries follow their tagged shapes (`read` / `list_files` /
+  `search` / `unknown`, with the optional trailers always written), `source` and
+  `status` are validated against their enums, and `duration` keeps serde's
+  strict `{secs, nanos}` visitor.
+- **Remaining variants.** `FunctionCallOutput` (untagged text-or-content body),
+  `HookPrompt`, `Plan`, `Reasoning` (default `raw_content`), `DynamicToolCall`
+  (camelCase `inputText` content items), `CollabAgentToolCall` (UUID receivers,
+  `agents_states` values including the externally tagged `completed` /
+  `errored` forms), `SubAgentActivity` (always-written `model` /
+  `reasoning_effort`, validated `agent_path`), `WebSearch` (unknown action tags
+  collapse to `other`), `ImageView` (PathUri), the three `Extension` kinds
+  (`image_gen.generation`, `clock.sleep`, `web.search`), `ImageGeneration`,
+  `EnteredReviewMode` (all four `ReviewTarget` tags), `ExitedReviewMode`
+  (always-written `review_output`), `FileChange`, `McpToolCall` (camelCase, with
+  the existing `CallToolResult` / `McpAppUi` replays) and `ContextCompaction`.
+- **Serialization details.** Strings are re-encoded the way `serde_json` writes
+  them, so `a<b>&c` stays literal instead of Go's `\u003c` escaping.
+- **Dropped records.** An unknown `type`, a non-UUID `thread_id`, a missing
+  `turn_id` / `item`, an undecodable nested item (unknown tag or enum value,
+  wrong JSON type, `file:` violation) and a non-integer timestamp all drop the
+  whole line, the way Rust's failed decode does.
+- Evidence: `out/r85-itemcompleted.txt` compares 69 payloads against 0.166 at
+  69/69 byte-identical with identical `bytes_processed`
+  (`out/r83-itemcompleted-rust.txt` and `out/r84-itemcompleted-rust2.txt` keep
+  the shape probes), the `out/r75*`-`out/r80*` regressions still report
+  `FAILURES 0`, and `TestCanonicalizeRolloutReplaysItemCompletedLikeRust`
+  (15 subtests) freezes the Rust bytes and counters in
+  `rollout/canonical_migration_item_completed_rust_shape_test.go`.
+
 ## Verification
+
+- Round 75 decodes every `item_completed` item into 0.166's
+  `TurnItem` and writes it back (entry 88): `out/r85-itemcompleted.txt` reports
+  69/69 payloads byte-identical with identical `bytes_processed`, covering the
+  previously-surviving bad shapes (an unknown `phase`, the legacy `text`
+  `AgentMessageContent` tag, a native `cwd`) and the re-serialized ones
+  (`text_elements` defaults, camelCase `McpToolCall`, `completed_at_ms`
+  default, rewritten `thread_id`); `out/r75*`-`out/r80*` still report
+  `FAILURES 0`, and the new
+  `TestCanonicalizeRolloutReplaysItemCompletedLikeRust` subtests freeze them
+  (`go test -count=1 ./rollout` passes).
 
 - Round 74 re-serializes the nested `turn_context` permission policies like
   0.166 (entry 87): `out/r80-perms.txt` reports 22/22 payloads byte-identical
@@ -3621,9 +3688,10 @@ their protocol types and writes them back. Go now rebuilds them:
   converted into its `TurnItem` the way Rust does (entries 85 and 86,
   `out/r78-convert.txt` 44/44 and `out/r79-imagegen.txt` 19/19). What is left on
   this surface is narrower: the nested `turn_context` permission policies are
-  now re-serialized like Rust (entry 87, `out/r80-perms.txt` 22/22), so what is
-  left is an `item_completed` whose item decodes but whose nested values Rust
-  rejects (for example an unknown `phase`) still surviving Go's shallower check.
+  now re-serialized like Rust (entry 87, `out/r80-perms.txt` 22/22), and the
+  `item_completed` surface now decodes and re-serializes every nested
+  `TurnItem` like Rust (entry 88, `out/r85-itemcompleted.txt` 69/69), so a bad
+  enum value or a wrong JSON type drops the line instead of surviving.
   The `Disk used for thread storage` line follows Rust's rule but not its
   numbers, because Rust leaves the thread-history WAL uncheckpointed while Go
   checkpoints it (290.2 KB vs 88.6 KB in the same probe).

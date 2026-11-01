@@ -1480,10 +1480,7 @@ func (w *canonicalReplayWriter) replayEvent(entry canonicalReplayLine) error {
 	case "image_generation_end":
 		return w.writeImageGeneration(entry)
 	case "item_completed":
-		if !canonicalTurnItemDecodes(entry.payload) {
-			return nil
-		}
-		return w.writeRecord(entry.timestamp, "event_msg", entry.payload)
+		return w.writeItemCompletedRecord(entry)
 	default:
 		if !legacyEventPassthrough[entry.eventType] {
 			// Rust decodes every legacy record and then applies its paginated
@@ -2520,63 +2517,6 @@ func (w *canonicalReplayWriter) writeImageGeneration(entry canonicalReplayLine) 
 	return w.writeItemCompleted(entry.timestamp, turnID, out.finish())
 }
 
-// canonicalTurnItemRequiredFields lists the fields 0.166's TurnItem variants
-// cannot decode without. Rust parses every legacy record into the modern types
-// before migrating it and silently drops the whole line when that fails, so a
-// legacy item_completed carrying an older item shape never reaches the
-// paginated rollout.
-var canonicalTurnItemRequiredFields = map[string][]string{
-	"UserMessage":         {"id", "content"},
-	"FunctionCallOutput":  {"id", "name", "output"},
-	"HookPrompt":          {"id", "fragments"},
-	"AgentMessage":        {"id", "content"},
-	"Plan":                {"id", "text"},
-	"Reasoning":           {"id", "summary_text"},
-	"CommandExecution":    {"id", "command", "cwd", "parsed_cmd", "source", "status"},
-	"DynamicToolCall":     {"id", "tool", "arguments", "status"},
-	"CollabAgentToolCall": {"id", "tool", "status", "sender_thread_id"},
-	"SubAgentActivity":    {"model", "reasoning_effort", "id", "kind", "agent_thread_id", "agent_path"},
-	"WebSearch":           {"id", "query", "action"},
-	"ImageView":           {"id", "path"},
-	"ImageGeneration":     {"id", "status", "result"},
-	"EnteredReviewMode":   {"id", "target", "user_facing_hint"},
-	"ExitedReviewMode":    {"id", "review_output"},
-	"FileChange":          {"id", "changes"},
-	"McpToolCall":         {"id", "server", "tool", "arguments", "status"},
-	"ContextCompaction":   {"id"},
-}
-
-// canonicalTurnItemDecodes reports whether an item_completed payload would
-// deserialize into a modern TurnItem. Extension items keep their own schema, so
-// they are carried over unvalidated.
-func canonicalTurnItemDecodes(source json.RawMessage) bool {
-	fields, err := canonicalRawFields(source)
-	if err != nil {
-		return false
-	}
-	itemRaw, ok := fields["item"]
-	if !ok || canonicalRawIsNull(itemRaw) {
-		return false
-	}
-	item, err := canonicalRawFields(itemRaw)
-	if err != nil {
-		return false
-	}
-	itemType := canonicalRawString(itemRaw, "type")
-	if itemType == "Extension" {
-		return true
-	}
-	required, known := canonicalTurnItemRequiredFields[itemType]
-	if !known {
-		return false
-	}
-	for _, key := range required {
-		if _, ok := item[key]; !ok {
-			return false
-		}
-	}
-	return true
-}
 
 // writePatchApplyEnd converts a legacy patch_apply_end event into the
 // FileChange completed item paginated rollouts persist.
