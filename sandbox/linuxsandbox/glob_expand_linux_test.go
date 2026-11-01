@@ -23,7 +23,9 @@ func TestExpandUnreadableGlobsUsesExplicitEnvironmentLikeRust(t *testing.T) {
 	}
 	marker := filepath.Join(root, "marker")
 	envMarker := filepath.Join(root, "env-marker")
-	script := "#!/bin/sh\npwd > \"" + marker + "\"\nenv > \"" + envMarker + "\"\nprintf '%s\\0' 'secret.key'\n"
+	// The scanner runs with the explicit environment only, so PATH cannot reach
+	// coreutils; use the absolute binary to dump the environment.
+	script := "#!/bin/sh\npwd > \"" + marker + "\"\n/usr/bin/env > \"" + envMarker + "\"\nprintf '%s\\0' 'secret.key'\n"
 	if err := os.WriteFile(filepath.Join(bin, GlobScanProgram), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}

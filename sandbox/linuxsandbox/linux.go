@@ -784,15 +784,13 @@ func pathComponentDepth(path string) int {
 }
 
 func ensureLegacyLandlockSupportsPolicy(cmd *linuxSandboxCommand) error {
-	return ensureLegacyLandlockSupportsPolicyWithInterop(cmd, wslInteropDir)
-}
-
-func ensureLegacyLandlockSupportsPolicyWithInterop(cmd *linuxSandboxCommand, interopDir string) error {
 	if !cmd.UseLegacyLandlock || cmd.PermissionProfile == nil || cmd.PermissionProfile.Filesystem == nil {
 		return nil
 	}
-	fs := cmd.PermissionProfile.Filesystem
-	if !fs.hasFullDiskWriteAccess() {
+	// Rust #45984 requires bubblewrap for filesystem-restricted execution, so
+	// legacy Landlock may only run the full-disk policy; masking WSL interop is
+	// bubblewrap's job (mask_wsl_n in bwrap.rs).
+	if !cmd.PermissionProfile.Filesystem.hasFullDiskWriteAccess() {
 		return errors.New("filesystem-restricted execution requires bubblewrap to isolate app-server sockets; disable features.use_legacy_landlock")
 	}
 	return nil
