@@ -578,7 +578,14 @@ func rolloutFilesBytesAndAverage(value string) (uint64, uint64, uint64, bool) {
 }
 
 func writeDetail(out *strings.Builder, check *DoctorCheck, detail string, opts *Options) {
-	label, value := splitDetail(redactDoctorDetail(detail))
+	redacted := redactDoctorDetail(detail)
+	if !strings.Contains(redacted, ":") {
+		// Rust doctor generic_details renders a label-less detail as a bullet
+		// (very_dim("\u00b7") or "-" in ASCII mode) instead of a labeled row.
+		fmt.Fprintf(out, "    %s %s\n", bulletMarker(opts), styleDetailText(strings.TrimSpace(redacted), displayStatusForCheck(check), opts))
+		return
+	}
+	label, value := splitDetail(redacted)
 	label = doctorDisplayLabel(label)
 	value = humanizeDoctorDetailValue(value)
 	// Rust doctor detail.rs attach_issue_metadata only attaches the expected
@@ -990,6 +997,14 @@ func remedyMarker(opts *Options) string {
 		return "->"
 	}
 	return "→"
+}
+
+// bulletMarker matches Rust's label-less detail prefix.
+func bulletMarker(opts *Options) string {
+	if opts != nil && opts.ASCII {
+		return "-"
+	}
+	return "\u00b7"
 }
 
 // detailMarker matches Rust detail_marker: issue rows get an arrow, plain rows a

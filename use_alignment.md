@@ -3438,8 +3438,35 @@ and decodable items kept Go's original spelling. The record is now decoded into
   69 normalized lines with no reachability hunk, and
   `TestChatGPTReachabilityTargetsCodexResponsesLikeRust` /
   `TestProviderReachabilityRendersInferenceURLLikeRust` pin the paths and copy.
+### 104. `doctor` probes the WebSocket endpoint signed out, and bullets raw details
+
+- **Signed-out probe.** Rust's `websocket_reachability_check` pushes `auth mode`
+  before `api_provider_and_auth`, and that call only adapts the provider
+  configuration, so a signed-out install still reports `auth mode: none`,
+  `endpoint: wss://.../responses`, the `DNS` family row and finally
+  `handshake timed out`. Go's request-time guard rejected the empty credential
+  snapshot, so the check stopped at `provider setup failed: transient auth
+  error: managed authentication is unavailable` and never showed the endpoint.
+- **Label-less details.** Rust's `generic_details` renders a detail without a
+  colon as a bullet (`    · <text>`, `-` with `--ascii`). Go printed it as a
+  label with an empty value, so `handshake timed out` never matched.
+- Evidence: the Connectivity blocks of `out/r99-doctor-rust.txt` and
+  `out/r99-doctor-go.txt` are now identical including
+  `· handshake timed out`, `out/r1304-doctor-full-diff.txt` is down to 51
+  normalized lines with no websocket hunk, and
+  `TestWebsocketProbePrintsAuthEndpointAndDNSWithoutCredentialsLikeRust` /
+  `TestRenderHumanRendersLabelLessDetailAsBulletLikeRust` pin both halves.
 
 ## Verification
+
+- Round 92 keeps the `doctor` WebSocket probe running when no credentials are
+  stored and renders label-less details as bullets (entry 104): the signed-out
+  check prints `auth mode: none`, `endpoint`, the `DNS` row and
+  `· handshake timed out` instead of stopping at `provider setup failed`. The
+  Connectivity blocks of `out/r99-doctor-rust.txt` and `out/r99-doctor-go.txt`
+  are identical and `out/r1304-doctor-full-diff.txt` carries no websocket hunk;
+  `go test -count=1 ./doctor ./state ./cli` and `go vet ./doctor` pass and
+  `./doctor` cross-compiles for `GOOS=linux` and `GOOS=darwin`.
 
 - Round 91 probes the inference URLs `0.166` uses and labels the rows the same
   way (entry 103): ChatGPT mode targets `codex/responses`, configured providers

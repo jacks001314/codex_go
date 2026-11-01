@@ -3573,15 +3573,26 @@ func websocketReachabilityCheckFromProvider(providerID string, provider *model.P
 	}
 	details = append(details, fmt.Sprintf("connect timeout: %d ms", provider.EffectiveWebsocketConnectTimeout().Milliseconds()))
 	runtimeProvider := model.CreateRuntimeProviderForID(providerID, *provider, snapshot)
-	apiProvider, apiAuth, err := runtimeProvider.APIProviderAndAuth()
-	if err != nil {
-		return websocketProbeWarning("Responses WebSocket provider setup failed", details, "provider setup failed: "+err.Error())
-	}
 	authMode := "none"
 	if snapshot != nil {
 		authMode = snapshot.Mode()
 	}
 	details = append(details, "auth mode: "+authMode)
+	apiProvider, apiAuth, err := runtimeProvider.APIProviderAndAuth()
+	if err != nil {
+		// Rust's api_provider_and_auth only adapts the provider configuration, so
+		// a signed-out install still reaches the endpoint and DNS rows before the
+		// handshake fails. Go's request-time guard rejects the empty snapshot, so
+		// the probe falls back to the unauthenticated provider shape here.
+		if snapshot == nil {
+			if provider, providerErr := runtimeProvider.APIProvider(); providerErr == nil {
+				apiProvider, apiAuth, err = provider, model.AuthHeaders{}, nil
+			}
+		}
+		if err != nil {
+			return websocketProbeWarning("Responses WebSocket provider setup failed", details, "provider setup failed: "+err.Error())
+		}
+	}
 	codexProvider := codexapi.Provider{
 		Name:        apiProvider.Name,
 		BaseURL:     apiProvider.BaseURL,
