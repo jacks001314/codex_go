@@ -11,7 +11,6 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -37,6 +36,9 @@ const (
 	shellSnapshotCaptureTimeout      = 10 * time.Second
 	shellSnapshotRetryBackoff        = time.Second
 	maxShellSnapshotAttempts         = 3
+	// shellSnapshotCarrierFd is the descriptor the child receives for the replay
+	// file: os/exec assigns inherited files above the three standard streams.
+	shellSnapshotCarrierFd = 3
 )
 
 var shellSnapshotPlatformSupported = runtime.GOOS != "windows"
@@ -48,10 +50,10 @@ type shellSnapshotManager struct {
 	failures map[string]shellSnapshotFailure
 	inflight map[string]*shellSnapshotFlight
 	capture  func(context.Context, []string, string, map[string]string) ([]byte, error)
-	// protectedSeq names each uncached protected capture so its replay file is
-	// unique per launch.
-	protectedSeq atomic.Uint64
-	now          func() time.Time
+	// probes caches whether a shell can source an inherited descriptor; the
+	// answer depends only on the shell and the host (Rust #48078).
+	probes map[string]bool
+	now    func() time.Time
 }
 
 func newShellSnapshotManager() *shellSnapshotManager {
@@ -59,17 +61,18 @@ func newShellSnapshotManager() *shellSnapshotManager {
 		cache:    map[string]*shellSnapshotEntry{},
 		failures: map[string]shellSnapshotFailure{},
 		inflight: map[string]*shellSnapshotFlight{},
+		probes:   map[string]bool{},
 		capture:  runShellSnapshotCapture,
 		now:      time.Now,
 	}
 }
 
 // shellSnapshotEntry is one cached capture. Rust keeps the captured state in
-// executor memory and only materializes a replay file for states that exceed
-// the environment replay budget (#39957).
+// executor memory and materializes an unnamed replay file per launch when the
+// shell can source an inherited descriptor (#39957, #48078).
 type shellSnapshotEntry struct {
-	state      string
-	path       string
+	state string
+	// fileSource selects descriptor replay instead of environment replay.
 	fileSource bool
 }
 
@@ -83,25 +86,25 @@ type shellSnapshotFlight struct {
 	done chan struct{}
 }
 
-func (m *shellSnapshotManager) rewrite(ctx context.Context, params *ExecParams, captureEnv map[string]string, credentialPairs []network.CredentialMaskPair, credentialTextUnsafe func(string) bool, restoreFallback func(map[string]string)) (*ExecParams, error) {
+func (m *shellSnapshotManager) rewrite(ctx context.Context, params *ExecParams, captureEnv map[string]string, credentialPairs []network.CredentialMaskPair, credentialTextUnsafe func(string) bool, restoreFallback func(map[string]string)) (*ExecParams, *os.File, error) {
 	if m == nil || params == nil || params.ShellSnapshot == nil {
-		return params, nil
+		return params, nil, nil
 	}
 	if !shellSnapshotPlatformSupported {
-		return nil, requestError(-32602, "shell snapshots are unsupported on this platform")
+		return nil, nil, requestError(-32602, "shell snapshots are unsupported on this platform")
 	}
 	request := params.ShellSnapshot
 	scope := strings.TrimSpace(request.ScopeID)
 	if scope == "" || len(scope) > maxShellSnapshotScopeBytes {
-		return nil, requestError(-32602, fmt.Sprintf("shell snapshot scope must be non-empty and at most %d bytes", maxShellSnapshotScopeBytes))
+		return nil, nil, requestError(-32602, fmt.Sprintf("shell snapshot scope must be non-empty and at most %d bytes", maxShellSnapshotScopeBytes))
 	}
 	shellType, ok := shellSnapshotType(request.Shell)
 	if !ok {
-		return nil, requestError(-32602, fmt.Sprintf("shell snapshots are unsupported for shell `%s`", request.Shell.Name))
+		return nil, nil, requestError(-32602, fmt.Sprintf("shell snapshots are unsupported for shell `%s`", request.Shell.Name))
 	}
 	scriptIndex := shellSnapshotScriptIndex(params.Argv, request.Shell)
 	if scriptIndex < 0 {
-		return nil, requestError(-32602, "shell snapshot requires a shell -c or -lc invocation")
+		return nil, nil, requestError(-32602, "shell snapshot requires a shell -c or -lc invocation")
 	}
 	entry, err := m.snapshotEntry(ctx, params, shellType, captureEnv, credentialPairs, credentialTextUnsafe)
 	if err != nil {
@@ -118,7 +121,7 @@ func (m *shellSnapshotManager) rewrite(ctx context.Context, params *ExecParams, 
 		}
 		warning := "Credential masking is unavailable for this shell snapshot; running with unmasked credentials."
 		rewritten.Argv[scriptIndex] = "\\builtin printf '%s\\n' " + shellSingleQuote(warning) + " >&2\n" + params.Argv[scriptIndex]
-		return &rewritten, nil
+		return &rewritten, nil, nil
 	}
 	rewritten := *params
 	rewritten.Argv = append([]string(nil), params.Argv...)
@@ -126,8 +129,18 @@ func (m *shellSnapshotManager) rewrite(ctx context.Context, params *ExecParams, 
 	if rewritten.Env == nil {
 		rewritten.Env = map[string]string{}
 	}
+	// Rust #48078 materializes the replay file per launch and hands the reader to
+	// the child; a transport that cannot be prepared falls back to normal startup.
+	var reader *os.File
+	if entry.fileSource {
+		materialized, materializeErr := materializeShellSnapshotTransport(shellType, entry.state)
+		if materializeErr != nil {
+			return params, nil, nil
+		}
+		reader = materialized
+	}
 	protected := len(credentialPairs) > 0
-	restore := shellSnapshotReplayScript(&rewritten, entry, protected)
+	restore := shellSnapshotReplayScript(&rewritten, entry, protected, reader != nil)
 	flag, startup := shellSnapshotStartupScript(shellType)
 	rewritten.Argv[scriptIndex-1] = flag
 	restoreGate := "if ! " + restore + " >/dev/null; then printf 'failed to restore shell snapshot\\n' >&2; fi"
@@ -137,7 +150,7 @@ func (m *shellSnapshotManager) rewrite(ctx context.Context, params *ExecParams, 
 	rewritten.Argv[scriptIndex] = startup + restoreGate + "\n" +
 		shellSnapshotLaunchEnvExports(params.Env) +
 		params.Argv[scriptIndex]
-	return &rewritten, nil
+	return &rewritten, reader, nil
 }
 
 // shellSnapshotStartupScript returns the launch flag and the startup line that
@@ -158,12 +171,14 @@ func shellSnapshotStartupScript(shellType shell.ShellType) (string, string) {
 // states stay entirely in executor memory and are replayed through chunked
 // __CODEX_SHELL_SNAPSHOT_STATE_* environment variables, while large states use
 // the materialized replay file (Rust #39957).
-func shellSnapshotReplayScript(params *ExecParams, entry *shellSnapshotEntry, protected bool) string {
+func shellSnapshotReplayScript(params *ExecParams, entry *shellSnapshotEntry, protected bool, descriptor bool) string {
 	if entry == nil || entry.state == "" {
 		return ":"
 	}
-	if entry.fileSource {
-		return ". " + shellSingleQuote(entry.path)
+	if descriptor {
+		// Rust #48078 sources the inherited descriptor; the replay file closes
+		// the carrier before it restores the user's functions.
+		return fmt.Sprintf(". /dev/fd/%d", shellSnapshotCarrierFd)
 	}
 	names := make([]string, 0, 8)
 	state := entry.state
@@ -261,32 +276,15 @@ func (m *shellSnapshotManager) snapshotEntryMode(ctx context.Context, params *Ex
 	if len(credentialPairs) > 0 {
 		// Rust prepares protected captures once per launch and never caches
 		// them: the replay carries this launch's broker dummies, so reusing it
-		// under a later broker state would restore stale placeholders. The
-		// per-capture key still lets the bounded cache track a materialized
-		// replay file so eviction and close remove it.
-		captureKey := fmt.Sprintf("%s\x00protected\x00%d", key, m.protectedSeq.Add(1))
-		entry, captureErr := m.captureSnapshot(ctx, params, shellType, captureEnv, credentialPairs, credentialTextUnsafe, captureKey)
-		if captureErr == nil && entry != nil && entry.fileSource {
-			m.mu.Lock()
-			m.storeEntryLocked(captureKey, entry)
-			m.mu.Unlock()
-		}
-		return entry, captureErr
+		// under a later broker state would restore stale placeholders.
+		return m.captureSnapshot(ctx, params, shellType, captureEnv, credentialPairs, credentialTextUnsafe, key)
 	}
 	attempts := 1
 	for {
 		m.mu.Lock()
 		if entry := m.cache[key]; entry != nil {
-			if !entry.fileSource {
-				m.mu.Unlock()
-				return entry, nil
-			}
-			if _, statErr := os.Stat(entry.path); statErr == nil {
-				m.mu.Unlock()
-				return entry, nil
-			}
-			delete(m.cache, key)
-			m.forgetOrderLocked(key)
+			m.mu.Unlock()
+			return entry, nil
 		}
 		if failure, ok := m.failures[key]; ok {
 			if failure.attempts >= maxShellSnapshotAttempts || m.now().Before(failure.retryAt) {
@@ -331,8 +329,31 @@ func (m *shellSnapshotManager) snapshotEntryMode(ctx context.Context, params *Ex
 	}
 }
 
+// descriptorReplay reports whether this shell can source an inherited
+// descriptor. Rust probes inside the capture sandbox; the exec server's capture
+// is not sandboxed, so the probe establishes that the shell resolves /dev/fd/N
+// on this host, and the answer is cached per shell (#48078).
+func (m *shellSnapshotManager) descriptorReplay(shellType shell.ShellType, shellPath string) bool {
+	key := string(shellType) + "\x00" + shellPath
+	m.mu.Lock()
+	cached, ok := m.probes[key]
+	m.mu.Unlock()
+	if ok {
+		return cached
+	}
+	reader, err := materializeShellSnapshotTransport(shellType, "")
+	available := err == nil && shellSnapshotDescriptorReplay(shellPath, reader)
+	if err == nil {
+		_ = reader.Close()
+	}
+	m.mu.Lock()
+	m.probes[key] = available
+	m.mu.Unlock()
+	return available
+}
+
 // storeEntryLocked caches one capture and evicts the oldest entry past the
-// bounded cache size, removing the file a file-backed entry materialized.
+// bounded cache size. An entry only holds bytes; replay files live per launch.
 func (m *shellSnapshotManager) storeEntryLocked(key string, entry *shellSnapshotEntry) {
 	if entry == nil {
 		return
@@ -343,14 +364,7 @@ func (m *shellSnapshotManager) storeEntryLocked(key string, entry *shellSnapshot
 	for len(m.order) > maxCachedShellSnapshots {
 		oldest := m.order[0]
 		m.order = m.order[1:]
-		evicted := m.cache[oldest]
-		if evicted == nil {
-			continue
-		}
 		delete(m.cache, oldest)
-		if evicted.fileSource && evicted.path != "" {
-			_ = os.Remove(evicted.path)
-		}
 	}
 }
 
@@ -472,39 +486,12 @@ func (m *shellSnapshotManager) captureSnapshot(ctx context.Context, params *Exec
 	if err := validateShellSnapshotSizes(captured, rendered); err != nil {
 		return nil, err
 	}
-	// Rust #39957 keeps a snapshot that fits the environment replay budget
-	// entirely in executor memory; only larger states materialize a replay file.
-	// The captured environment shares that budget, so a state is replayed through
-	// environment chunks only when state plus environment stay under it.
-	if len(rendered) <= maxShellSnapshotEnvironmentBytes-capturedSnapshotEnvironmentBytes(captured) {
-		return &shellSnapshotEntry{state: rendered}, nil
-	}
-	dir := filepath.Join(os.TempDir(), "codex-exec-server-shell-snapshots")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, err
-	}
-	path := filepath.Join(dir, safeSnapshotFile(key)+"."+string(shellType))
-	temp, err := os.CreateTemp(dir, ".snapshot-*")
-	if err != nil {
-		return nil, err
-	}
-	tempPath := temp.Name()
-	defer os.Remove(tempPath)
-	if err := temp.Chmod(0o600); err != nil {
-		_ = temp.Close()
-		return nil, err
-	}
-	if _, err := temp.WriteString(rendered); err != nil {
-		_ = temp.Close()
-		return nil, err
-	}
-	if err := temp.Close(); err != nil {
-		return nil, err
-	}
-	if err := os.Rename(tempPath, path); err != nil {
-		return nil, err
-	}
-	return &shellSnapshotEntry{state: rendered, path: path, fileSource: true}, nil
+	// Rust #39957 keeps the state in executor memory; #48078 materializes an
+	// unnamed file per launch instead of caching a named one. Bash and zsh source
+	// the descriptor whenever the capture sandbox allows it, and only `sh` or a
+	// host without /dev/fd falls back to environment replay.
+	descriptor := m.descriptorReplay(shellType, params.ShellSnapshot.Shell.Path)
+	return &shellSnapshotEntry{state: rendered, fileSource: descriptor}, nil
 }
 
 // capturedSnapshotEnvironmentBytes is the captured environment's replay cost:
@@ -541,20 +528,11 @@ func (m *shellSnapshotManager) close() {
 		return
 	}
 	m.mu.Lock()
-	paths := make([]string, 0, len(m.cache))
-	for _, entry := range m.cache {
-		if entry != nil && entry.fileSource && entry.path != "" {
-			paths = append(paths, entry.path)
-		}
-	}
 	m.cache = map[string]*shellSnapshotEntry{}
 	m.order = nil
 	m.failures = map[string]shellSnapshotFailure{}
 	m.inflight = map[string]*shellSnapshotFlight{}
 	m.mu.Unlock()
-	for _, path := range paths {
-		_ = os.Remove(path)
-	}
 }
 
 func shellSnapshotType(info ShellInfo) (shell.ShellType, bool) {
@@ -670,21 +648,6 @@ func runShellSnapshotCapture(ctx context.Context, command []string, cwd string, 
 	process.Dir = cwd
 	process.Env = envPairs(env)
 	return process.Output()
-}
-
-func safeSnapshotFile(value string) string {
-	const alphabet = "0123456789abcdef"
-	var builder strings.Builder
-	builder.Grow(32)
-	var sum uint64 = 1469598103934665603
-	for index := 0; index < len(value); index++ {
-		sum ^= uint64(value[index])
-		sum *= 1099511628211
-	}
-	for index := 0; index < 16; index++ {
-		builder.WriteByte(alphabet[(sum>>(index*4))&0xf])
-	}
-	return builder.String()
 }
 
 func shellSingleQuote(value string) string {

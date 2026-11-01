@@ -27,19 +27,19 @@ func TestShellSnapshotProtectedCaptureIsNotReusedLikeRust(t *testing.T) {
 	}
 	params := protectedSnapshotParams(t)
 
-	first, err := manager.rewrite(context.Background(), params, params.Env, []network.CredentialMaskPair{{Real: "sk-real-secret", Dummy: "dummy-one"}}, nil, nil)
+	first, firstReader, err := manager.rewrite(context.Background(), params, params.Env, []network.CredentialMaskPair{{Real: "sk-real-secret", Dummy: "dummy-one"}}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	firstState := first.Env["__CODEX_SHELL_SNAPSHOT_STATE_0"]
+	firstState := shellSnapshotReplayState(t, first, firstReader)
 	if !strings.Contains(firstState, "dummy-one") || strings.Contains(firstState, "sk-real-secret") {
 		t.Fatalf("first replay state = %q", firstState)
 	}
-	second, err := manager.rewrite(context.Background(), params, params.Env, []network.CredentialMaskPair{{Real: "sk-real-secret", Dummy: "dummy-two"}}, nil, nil)
+	second, secondReader, err := manager.rewrite(context.Background(), params, params.Env, []network.CredentialMaskPair{{Real: "sk-real-secret", Dummy: "dummy-two"}}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondState := second.Env["__CODEX_SHELL_SNAPSHOT_STATE_0"]
+	secondState := shellSnapshotReplayState(t, second, secondReader)
 	if !strings.Contains(secondState, "dummy-two") || strings.Contains(secondState, "dummy-one") {
 		t.Fatalf("second replay state reused the earlier broker dummy: %q", secondState)
 	}
@@ -48,10 +48,10 @@ func TestShellSnapshotProtectedCaptureIsNotReusedLikeRust(t *testing.T) {
 	}
 
 	// Unprotected captures keep the shared cache.
-	if _, err := manager.rewrite(context.Background(), params, params.Env, nil, nil, nil); err != nil {
+	if _, _, err := manager.rewrite(context.Background(), params, params.Env, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := manager.rewrite(context.Background(), params, params.Env, nil, nil, nil); err != nil {
+	if _, _, err := manager.rewrite(context.Background(), params, params.Env, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if calls.Load() != 3 {
@@ -76,19 +76,19 @@ func TestShellSnapshotProtectedFailureDoesNotPoisonCacheLikeRust(t *testing.T) {
 		return []byte("# Snapshot file\nexport TOKEN='sk-real-secret'\n\x00\x00\x00"), nil
 	}
 	params := protectedSnapshotParams(t)
-	fallback, err := manager.rewrite(context.Background(), params, params.Env, []network.CredentialMaskPair{{Real: "sk-real-secret", Dummy: "dummy-one"}}, nil, nil)
+	fallback, _, err := manager.rewrite(context.Background(), params, params.Env, []network.CredentialMaskPair{{Real: "sk-real-secret", Dummy: "dummy-one"}}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(fallback.Argv[2], "Credential masking is unavailable") {
 		t.Fatalf("fallback script = %q", fallback.Argv[2])
 	}
-	rewritten, err := manager.rewrite(context.Background(), params, params.Env, nil, nil, nil)
+	rewritten, reader, err := manager.rewrite(context.Background(), params, params.Env, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("the unprotected launch inherited a cached protected failure: %v", err)
 	}
-	if _, ok := rewritten.Env["__CODEX_SHELL_SNAPSHOT_STATE_0"]; !ok {
-		t.Fatalf("unprotected launch did not capture a snapshot: %#v", rewritten.Env)
+	if state := shellSnapshotReplayState(t, rewritten, reader); !strings.Contains(state, "TOKEN") {
+		t.Fatalf("unprotected launch did not capture a snapshot: %q", state)
 	}
 	if calls.Load() != 2 {
 		t.Fatalf("captures = %d, want the failure retried without backoff", calls.Load())
@@ -146,7 +146,7 @@ func TestShellSnapshotFallbackRestoresAllBrokeredCredentialsLikeRust(t *testing.
 		})
 	}
 
-	rewritten, err := manager.rewrite(context.Background(), params, params.Env, maskedPairs, nil, restoreFallback)
+	rewritten, _, err := manager.rewrite(context.Background(), params, params.Env, maskedPairs, nil, restoreFallback)
 	if err != nil {
 		t.Fatal(err)
 	}

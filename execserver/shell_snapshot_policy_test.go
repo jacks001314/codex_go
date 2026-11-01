@@ -48,11 +48,11 @@ func TestShellSnapshotRenderPolicyNarrowsCapturedExportsLikeRust(t *testing.T) {
 			Set:     map[string]string{"SECRET_SET": "configured-value"},
 		},
 	}
-	rewritten, err := manager.rewrite(context.Background(), params, params.Env, nil, nil, nil)
+	rewritten, reader, err := manager.rewrite(context.Background(), params, params.Env, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	state := rewritten.Env["__CODEX_SHELL_SNAPSHOT_STATE_0"]
+	state := shellSnapshotReplayState(t, rewritten, reader)
 	if !strings.Contains(state, "kept-sentinel") || !strings.Contains(state, "other-sentinel") {
 		t.Fatalf("the launch policy dropped a captured export it does not exclude: %q", state)
 	}

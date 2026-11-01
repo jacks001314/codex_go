@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"runtime"
 	"strings"
 	"sync/atomic"
@@ -75,7 +74,7 @@ func TestShellSnapshotManagerRewritesAndCachesLikeRust(t *testing.T) {
 		},
 	}
 	pairs := []network.CredentialMaskPair{{Real: "sk-real-secret", Dummy: "sk-dummy-value"}}
-	rewritten, err := manager.rewrite(context.Background(), params, params.Env, pairs, nil, nil)
+	rewritten, reader, err := manager.rewrite(context.Background(), params, params.Env, pairs, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,11 +82,14 @@ func TestShellSnapshotManagerRewritesAndCachesLikeRust(t *testing.T) {
 	if rewritten.Argv[1] != "-fc" {
 		t.Fatalf("zsh snapshot launch flag = %q, want -fc", rewritten.Argv[1])
 	}
-	if !strings.HasPrefix(script, "setopt RCS\nif ! eval \"unset __CODEX_SHELL_SNAPSHOT_STATE_0") || !strings.HasSuffix(script, "echo ok") {
+	if !strings.HasPrefix(script, "setopt RCS\nif ! ") || !strings.HasSuffix(script, "echo ok") {
 		t.Fatalf("rewritten script = %q", script)
 	}
-	state, ok := rewritten.Env["__CODEX_SHELL_SNAPSHOT_STATE_0"]
-	if !ok || !strings.Contains(state, "sk-dummy-value") || strings.Contains(state, "sk-real-secret") {
+	if reader == nil && !shellSnapshotReplaysThroughState(script) {
+		t.Fatalf("rewritten script = %q, want a snapshot replay", script)
+	}
+	state := shellSnapshotReplayState(t, rewritten, reader)
+	if !strings.Contains(state, "sk-dummy-value") || strings.Contains(state, "sk-real-secret") {
 		t.Fatalf("in-memory snapshot state = %q", state)
 	}
 	if !strings.Contains(script, "\\builtin export HTTP_PROXY='http://127.0.0.1:8080'") ||
@@ -95,7 +97,7 @@ func TestShellSnapshotManagerRewritesAndCachesLikeRust(t *testing.T) {
 		!strings.Contains(script, "\\builtin export TOKEN='sk-dummy-value'") {
 		t.Fatalf("launch environment was not restored after snapshot: %q", script)
 	}
-	again, err := manager.rewrite(context.Background(), params, params.Env, pairs, nil, nil)
+	again, againReader, err := manager.rewrite(context.Background(), params, params.Env, pairs, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,8 +106,8 @@ func TestShellSnapshotManagerRewritesAndCachesLikeRust(t *testing.T) {
 	if calls.Load() != 2 || again.Argv[2] != script {
 		t.Fatalf("protected snapshot calls=%d script=%q", calls.Load(), again.Argv[2])
 	}
-	if again.Env["__CODEX_SHELL_SNAPSHOT_STATE_0"] != state {
-		t.Fatalf("cached snapshot state = %q, want %q", again.Env["__CODEX_SHELL_SNAPSHOT_STATE_0"], state)
+	if againState := shellSnapshotReplayState(t, again, againReader); againState != state {
+		t.Fatalf("cached snapshot state = %q, want %q", againState, state)
 	}
 	manager.close()
 	manager.mu.Lock()
@@ -135,7 +137,7 @@ func TestShellSnapshotCaptureFailureRestoresCredentialsLikeRust(t *testing.T) {
 		Env: map[string]string{"TOKEN": "sk-dummy-value"},
 	}
 	pairs := []network.CredentialMaskPair{{Real: "sk-real-secret", Dummy: "sk-dummy-value"}}
-	rewritten, err := manager.rewrite(context.Background(), params, params.Env, pairs, nil, nil)
+	rewritten, _, err := manager.rewrite(context.Background(), params, params.Env, pairs, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +159,7 @@ func TestShellSnapshotCacheIsBoundedLikeRust(t *testing.T) {
 	manager := newShellSnapshotManager()
 	t.Cleanup(manager.close)
 	// The state exceeds the 512 KiB environment replay budget, so every capture
-	// materializes a replay file.
+	// is replayed through an unnamed file rather than the environment.
 	output := []byte("# Snapshot file\n" + strings.Repeat("export BIG=\"value\"\n", 48*1024) + "\x00\x00\x00")
 	manager.capture = func(context.Context, []string, string, map[string]string) ([]byte, error) {
 		return output, nil
@@ -166,7 +168,7 @@ func TestShellSnapshotCacheIsBoundedLikeRust(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var oldestPath string
+	var oldestState string
 	for index := 0; index < maxCachedShellSnapshots+1; index++ {
 		params := &ExecParams{
 			ProcessID: "bounded-snapshot",
@@ -182,11 +184,11 @@ func TestShellSnapshotCacheIsBoundedLikeRust(t *testing.T) {
 		if err != nil {
 			t.Fatalf("capture %d: %v", index, err)
 		}
-		if entry == nil || !entry.fileSource || entry.path == "" {
-			t.Fatalf("capture %d did not materialize a replay file: %#v", index, entry)
+		if entry == nil || len(entry.state) == 0 {
+			t.Fatalf("capture %d did not keep the captured state: %#v", index, entry)
 		}
 		if index == 0 {
-			oldestPath = entry.path
+			oldestState = entry.state
 		}
 	}
 	manager.mu.Lock()
@@ -195,8 +197,8 @@ func TestShellSnapshotCacheIsBoundedLikeRust(t *testing.T) {
 	if cached != maxCachedShellSnapshots {
 		t.Fatalf("cached snapshots = %d, want %d", cached, maxCachedShellSnapshots)
 	}
-	if _, err := os.Stat(oldestPath); !os.IsNotExist(err) {
-		t.Fatalf("evicted snapshot file survived: %v", err)
+	if oldestState == "" {
+		t.Fatal("the oldest capture did not carry state")
 	}
 }
 
@@ -225,14 +227,14 @@ func TestShellSnapshotBashReplayUsesPrivilegedFlagLikeRust(t *testing.T) {
 		},
 		Env: map[string]string{"PATH": "/bin"},
 	}
-	rewritten, err := manager.rewrite(context.Background(), params, params.Env, nil, nil, nil)
+	rewritten, _, err := manager.rewrite(context.Background(), params, params.Env, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if rewritten.Argv[1] != "-pc" {
 		t.Fatalf("bash snapshot launch flag = %q, want -pc", rewritten.Argv[1])
 	}
-	if !strings.HasPrefix(rewritten.Argv[2], "set +o privileged\nif ! eval \"unset __CODEX_SHELL_SNAPSHOT_STATE_0") {
+	if !strings.HasPrefix(rewritten.Argv[2], "set +o privileged\nif ! ") {
 		t.Fatalf("bash snapshot script = %q", rewritten.Argv[2])
 	}
 }
@@ -291,7 +293,7 @@ func TestShellSnapshotReassembledCredentialFallsBackLikeRust(t *testing.T) {
 		Env: map[string]string{"TOKEN": "sk-dummy-value"},
 	}
 	pairs := []network.CredentialMaskPair{{Real: "sk-real-secret", Dummy: "sk-dummy-value"}}
-	rewritten, err := manager.rewrite(context.Background(), params, params.Env, pairs, nil, nil)
+	rewritten, _, err := manager.rewrite(context.Background(), params, params.Env, pairs, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -333,7 +335,7 @@ func TestShellSnapshotBrokerTextCheckFallsBackLikeRust(t *testing.T) {
 		Env: map[string]string{"TOKEN": "sk-dummy-value"},
 	}
 	unsafe := func(text string) bool { return strings.Contains(text, "ghp_patterncredential") }
-	rewritten, err := manager.rewrite(context.Background(), params, params.Env, nil, unsafe, nil)
+	rewritten, _, err := manager.rewrite(context.Background(), params, params.Env, nil, unsafe, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

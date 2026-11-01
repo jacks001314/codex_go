@@ -1912,6 +1912,9 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 		}
 	}
 	originalEnv := cloneShellSnapshotEnv(params.Env)
+	// snapshotReader carries the unnamed shell snapshot file whenever the
+	// executor prepared descriptor replay (Rust #48078).
+	var snapshotReader *os.File
 	preparedParams, preparedProxy, policyCancel, err := s.prepareExecutorNetworkProxy(ctx, params)
 	if err != nil {
 		return nil, err
@@ -1948,7 +1951,7 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 		if preparedProxy != nil {
 			restoreFallback = preparedProxy.RestoreUnbrokeredEnvironment
 		}
-		rewritten, rewriteErr := s.shellSnapshots.rewrite(snapshotCtx, params, captureEnv, credentialPairs, credentialTextUnsafe, restoreFallback)
+		rewritten, reader, rewriteErr := s.shellSnapshots.rewrite(snapshotCtx, params, captureEnv, credentialPairs, credentialTextUnsafe, restoreFallback)
 		if snapshotSpan != nil {
 			snapshotSpan.End()
 		}
@@ -1962,6 +1965,7 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 			return nil, rewriteErr
 		}
 		params = rewritten
+		snapshotReader = reader
 	}
 	preparedNetworkOwned := false
 	defer func() {
@@ -2075,6 +2079,12 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 	}
 	cmd.Dir = cwd
 	cmd.Env = envPairs(childEnv(params))
+	// Rust #48078: the shell snapshot reader rides along as an inherited
+	// descriptor and is closed here once the child owns its own copy.
+	if snapshotReader != nil {
+		cmd.ExtraFiles = append(cmd.ExtraFiles, snapshotReader)
+		defer func() { _ = snapshotReader.Close() }()
+	}
 	if params.TTY {
 		state, err := s.reserveProcessState(ctx, params)
 		if err != nil {

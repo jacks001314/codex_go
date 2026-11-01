@@ -3,6 +3,7 @@ package execserver
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 )
@@ -59,13 +60,13 @@ func (e *LocalShellSnapshotExecutor) manager() (*shellSnapshotManager, error) {
 // snapshot, applying the same process/start rewrite the exec server performs
 // (execserver/shell_snapshot.go `rewrite`). The returned params carry the
 // rewritten argv and the environment with any in-memory replay chunks.
-func (e *LocalShellSnapshotExecutor) Prepare(ctx context.Context, params *ExecParams, captureEnv map[string]string) (*ExecParams, error) {
+func (e *LocalShellSnapshotExecutor) Prepare(ctx context.Context, params *ExecParams, captureEnv map[string]string) (*ExecParams, *os.File, error) {
 	if params == nil {
-		return nil, requestError(-32602, "process/start params are required")
+		return nil, nil, requestError(-32602, "process/start params are required")
 	}
 	manager, err := e.manager()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	return manager.rewrite(ctx, params, captureEnv, nil, nil, nil)
 }

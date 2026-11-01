@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"errors"
+	"os"
 	"runtime"
 	"strings"
 	"testing"
@@ -28,7 +29,7 @@ func TestUnifiedExecLocalLaunchUsesExecutorShellSnapshotLikeRust(t *testing.T) {
 	snapshot := &execserver.ShellSnapshotRequest{ScopeID: "thread-1:local", Shell: execserver.ShellInfo{Name: "bash", Path: "/bin/bash"}}
 	original := localSnapshotEchoCommand("original")
 	var received *execserver.ExecParams
-	prepareLocalShellSnapshot = func(_ context.Context, params *execserver.ExecParams, captureEnv map[string]string) (*execserver.ExecParams, error) {
+	prepareLocalShellSnapshot = func(_ context.Context, params *execserver.ExecParams, captureEnv map[string]string) (*execserver.ExecParams, *os.File, error) {
 		received = params
 		rewritten := *params
 		rewritten.Argv = localSnapshotEchoCommand("snapshot-warmed")
@@ -38,7 +39,7 @@ func TestUnifiedExecLocalLaunchUsesExecutorShellSnapshotLikeRust(t *testing.T) {
 		}
 		env["CODEX_SHELL_SNAPSHOT_MARKER"] = "1"
 		rewritten.Env = env
-		return &rewritten, nil
+		return &rewritten, nil, nil
 	}
 
 	manager := NewUnifiedExecManager()
@@ -76,8 +77,8 @@ func TestUnifiedExecLocalLaunchFailsWhenSnapshotPreparationFails(t *testing.T) {
 	t.Cleanup(func() { prepareLocalShellSnapshot = previous })
 
 	boom := errors.New("snapshot prepare failed")
-	prepareLocalShellSnapshot = func(context.Context, *execserver.ExecParams, map[string]string) (*execserver.ExecParams, error) {
-		return nil, boom
+	prepareLocalShellSnapshot = func(context.Context, *execserver.ExecParams, map[string]string) (*execserver.ExecParams, *os.File, error) {
+		return nil, nil, boom
 	}
 	manager := NewUnifiedExecManager()
 	_, err := manager.Exec(context.Background(), &ShellRequest{

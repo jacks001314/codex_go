@@ -448,8 +448,9 @@ func (m *UnifiedExecManager) Exec(ctx context.Context, req *ShellRequest, callID
 	}
 	command := req.Command
 	launchEnv := shellRequestEnv(req)
+	var snapshotReader *os.File
 	if req.LocalShellSnapshot != nil {
-		prepared, prepareErr := prepareLocalShellSnapshot(ctx, &execserver.ExecParams{
+		prepared, reader, prepareErr := prepareLocalShellSnapshot(ctx, &execserver.ExecParams{
 			ProcessID:     fmt.Sprintf("unified-exec-%d", processID),
 			Argv:          append([]string(nil), req.Command...),
 			CWD:           req.CWD,
@@ -465,10 +466,17 @@ func (m *UnifiedExecManager) Exec(ctx context.Context, req *ShellRequest, callID
 			command = prepared.Argv
 			launchEnv = prepared.Env
 		}
+		snapshotReader = reader
 	}
 	cmd := osexec.Command(command[0], command[1:]...)
 	cmd.Dir = req.CWD
 	cmd.Env = envSlice(launchEnv)
+	// Rust #48078: source the snapshot through an inherited descriptor and
+	// release this process's copy once the child owns one.
+	if snapshotReader != nil {
+		cmd.ExtraFiles = append(cmd.ExtraFiles, snapshotReader)
+		defer func() { _ = snapshotReader.Close() }()
+	}
 	openSession := startUnifiedExecSessionTrace(m, req.UnifiedExecThreadID, req.UnifiedExecTurnID, callID)
 	started, err := startUnifiedExecCommand(cmd, req.TTY)
 	openSession.finish(err, ctx)
@@ -675,7 +683,7 @@ var localLaunchPrependPathDirs = execserver.LocalPrependPathDirs
 // prepareLocalShellSnapshot applies the local executor's shell snapshot to a
 // launch the tool runs in this process (Rust #39957). It is a variable so a
 // test can stand in for the executor's capture.
-var prepareLocalShellSnapshot = func(ctx context.Context, params *execserver.ExecParams, captureEnv map[string]string) (*execserver.ExecParams, error) {
+var prepareLocalShellSnapshot = func(ctx context.Context, params *execserver.ExecParams, captureEnv map[string]string) (*execserver.ExecParams, *os.File, error) {
 	return execserver.LocalShellSnapshots().Prepare(ctx, params, captureEnv)
 }
 

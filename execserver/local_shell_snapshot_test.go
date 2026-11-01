@@ -44,7 +44,7 @@ func TestLocalShellSnapshotExecutorPrewarmsAndPreparesLikeRust(t *testing.T) {
 		t.Fatalf("captures after prewarm = %d, want 1", calls.Load())
 	}
 
-	rewritten, err := executor.Prepare(context.Background(), launch("call-1"), map[string]string{"PATH": "/bin"})
+	rewritten, reader, err := executor.Prepare(context.Background(), launch("call-1"), map[string]string{"PATH": "/bin"})
 	if err != nil {
 		t.Fatalf("Prepare() error = %v", err)
 	}
@@ -57,8 +57,8 @@ func TestLocalShellSnapshotExecutorPrewarmsAndPreparesLikeRust(t *testing.T) {
 	if !strings.Contains(rewritten.Argv[2], "set +o privileged") || !strings.Contains(rewritten.Argv[2], "echo hi") {
 		t.Fatalf("rewritten script = %q", rewritten.Argv[2])
 	}
-	if rewritten.Env["__CODEX_SHELL_SNAPSHOT_STATE_0"] == "" {
-		t.Fatalf("rewritten env = %#v, want an in-memory replay chunk", rewritten.Env)
+	if state := shellSnapshotReplayState(t, rewritten, reader); !strings.Contains(state, "FOO=bar") {
+		t.Fatalf("replayed snapshot state = %q, want the captured export", state)
 	}
 	if rewritten.Env["CODEX_TOOL_CALL_ID"] != "call-1" {
 		t.Fatalf("rewritten env lost the launch metadata: %#v", rewritten.Env)
@@ -67,7 +67,7 @@ func TestLocalShellSnapshotExecutorPrewarmsAndPreparesLikeRust(t *testing.T) {
 	// The sandbox is part of the cache identity; a different sandbox captures.
 	sandboxed := launch("call-2")
 	sandboxed.Sandbox = json.RawMessage(`{"cwd":"file:///repo"}`)
-	if _, err := executor.Prepare(context.Background(), sandboxed, map[string]string{"PATH": "/bin"}); err != nil {
+	if _, _, err := executor.Prepare(context.Background(), sandboxed, map[string]string{"PATH": "/bin"}); err != nil {
 		t.Fatalf("Prepare() with sandbox error = %v", err)
 	}
 	if calls.Load() != 2 {
@@ -86,7 +86,7 @@ func TestLocalShellSnapshotExecutorPrewarmsAndPreparesLikeRust(t *testing.T) {
 	}
 
 	executor.Close()
-	if _, err := executor.Prepare(context.Background(), launch("call-5"), nil); err == nil {
+	if _, _, err := executor.Prepare(context.Background(), launch("call-5"), nil); err == nil {
 		t.Fatal("Prepare() on a closed executor succeeded")
 	}
 }

@@ -2,6 +2,7 @@ package execserver
 
 import (
 	"context"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -42,8 +43,11 @@ func TestShellSnapshotEnvironmentSharesReplayBudgetLikeRust(t *testing.T) {
 	if err != nil {
 		t.Fatalf("capture: %v", err)
 	}
-	if entry == nil || !entry.fileSource {
-		t.Fatalf("state plus environment over the replay budget did not materialize a file: %#v", entry)
+	if entry == nil || entry.state == "" {
+		t.Fatalf("state plus environment over the replay budget dropped the captured state: %#v", entry)
+	}
+	if runtime.GOOS != "windows" && !entry.fileSource {
+		t.Fatalf("state plus environment over the replay budget did not select descriptor replay: %#v", entry.fileSource)
 	}
 	manager.close()
 
