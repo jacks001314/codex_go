@@ -2406,6 +2406,7 @@ func (e *codeModeWaitExecutor) Execute(ctx context.Context, invocation *Invocati
 }
 
 func (e *codeModeWaitExecutor) execute(ctx context.Context, invocation *Invocation) (*Output, error) {
+	startedAt := time.Now()
 	var params codeModeWaitParams
 	if err := invocation.DecodeArguments(&params); err != nil {
 		return nil, RespondToModel(err.Error())
@@ -2447,7 +2448,17 @@ func (e *codeModeWaitExecutor) execute(ctx context.Context, invocation *Invocati
 	cell := e.exec.cells[params.CellID]
 	e.exec.cellsMu.Unlock()
 	if cell == nil {
-		return nil, RespondToModel(fmt.Sprintf("exec cell %s not found", params.CellID))
+		// Rust's missing-cell wait/terminate is a normal failed observation, not a
+		// tool error: `missing_cell_response` returns a Result carrying
+		// `exec cell <id> not found` as its error text, and the handler renders
+		// that as a `Script error:` block under the "Script failed" status.
+		errorText := fmt.Sprintf("exec cell %s not found", params.CellID)
+		output := codeModeScriptFailureOutput(invocation.CallID, errorText, nil, nil, nil, nil)
+		output.Data["cell_id"] = params.CellID
+		if !codeModeHostObservation(invocation) {
+			output = truncateCodeModeOutput(output, codeModeTokenLimit(params.MaxTokens))
+		}
+		return applyCodeModeHeader(output, "Script failed", time.Since(startedAt), nil, e.exec.cellOverheadEnabled()), nil
 	}
 	if params.Terminate {
 		e.exec.cellsMu.Lock()

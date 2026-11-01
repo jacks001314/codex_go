@@ -641,8 +641,14 @@ func TestCodeModeExecCellCompletionCancelsPendingTimers(t *testing.T) {
 	}
 	// The cell is consumed once it completes, so a late timer has nowhere to
 	// report; the important contract is that completion is not held open.
-	if _, err := wait.Execute(context.Background(), &Invocation{CallID: "timer-finish-late", Payload: Payload{Kind: PayloadFunction, Arguments: `{"cell_id":"` + cellID + `"}`}}); err == nil || !strings.Contains(err.Error(), "not found") {
-		t.Fatalf("wait after completion error = %v", err)
+	missing, err := wait.Execute(context.Background(), &Invocation{CallID: "timer-finish-late", Payload: Payload{Kind: PayloadFunction, Arguments: `{"cell_id":"` + cellID + `"}`}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Rust's missing-cell wait is a failed observation carrying a `Script
+	// error:` block, not a tool error (`missing_cell_response`).
+	if missing.Success || !strings.Contains(missing.Body, "Script failed") || !strings.Contains(missing.Body, "Script error:\nexec cell "+cellID+" not found") {
+		t.Fatalf("wait after completion = %#v", missing)
 	}
 }
 
@@ -695,8 +701,12 @@ func TestCodeModeTerminatePreservesOutputAndClosesCell(t *testing.T) {
 	if err != nil || terminated == nil || !terminated.Success {
 		t.Fatalf("terminate = %#v, %v", terminated, err)
 	}
-	if _, err := wait.Execute(context.Background(), &Invocation{CallID: "wait-after-terminate", Payload: Payload{Kind: PayloadFunction, Arguments: `{"cell_id":"` + cellID + `"}`}}); err == nil || !strings.Contains(err.Error(), "not found") {
-		t.Fatalf("wait after terminate error = %v", err)
+	missing, err := wait.Execute(context.Background(), &Invocation{CallID: "wait-after-terminate", Payload: Payload{Kind: PayloadFunction, Arguments: `{"cell_id":"` + cellID + `"}`}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if missing.Success || !strings.Contains(missing.Body, "Script error:\nexec cell "+cellID+" not found") {
+		t.Fatalf("wait after terminate = %#v", missing)
 	}
 }
 
