@@ -71,7 +71,7 @@ require (
 require (
 	filippo.io/hpke v0.4.0 // indirect
 	github.com/andybalholm/brotli v1.2.1 // indirect
-	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.29 // indirect
+	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.29
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.29 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.29 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/v4a v1.4.30 // indirect

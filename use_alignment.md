@@ -3089,8 +3089,53 @@ and decodable items kept Go's original spelling. The record is now decoded into
   `TestExecServerForwardScopeDiagnosticsLikeRust` (31 pinned diagnostics) and
   `TestServeForwardedStreamBridgesPayloadsLikeRust`.
 
+### 91. `--aws-sigv4` reports the Rust SDK's region and credential-provider errors
+
+- **Error order and wording.** Rust's `load_sdk_config` only rejects an empty
+  service; `AwsAuthContext::load` then resolves the region and only afterwards
+  takes the credentials provider, so a machine with neither reports
+  `AWS SDK config did not resolve a region`. `auth.ErrAWSAuthMissingRegion` and
+  the new `ErrAWSAuthMissingCredentialsProvider` now carry Rust's exact text.
+- **No eager fetch and no IMDS.** The pinned Rust aws-config build never enables
+  the EC2 instance metadata provider, so a context without credentials loads and
+  only signing fails with `failed to load AWS credentials: the credential provider
+  was not enabled`; Go used to probe IMDS during the load and answer
+  `AWS credentials are required: failed to refresh cached credentials, no EC2 IMDS
+  role found ...`. `loadAWSSDKConfig` disables IMDS,
+  `defaultCredentialsProvider` substitutes the aws-config identity when no
+  environment, container, web-identity or profile source is configured, and
+  `SignAt` wraps fetch failures with the new `ErrAWSAuthCredentials`.
+- **`--aws-profile` is profile-only and tolerates unknown names.** Rust routes an
+  explicit profile through `load_profile` -> `ProfileFileCredentialsProvider`: the
+  profile supplies region and credentials, environment keys are ignored, and an
+  unknown profile leaves the environment region in place and fails only at
+  signing. `profileCredentialsProvider` reproduces that (static keys and
+  `credential_process` resolve locally, role/SSO/web identity keep the SDK chain).
+- **Build versus transient.** `app.execServerSigV4Signer` now wraps every
+  non-retryable signing failure as `codexapi.ErrAuthBuild`, so the CLI prints
+  `environment registry authentication error: failed to resolve environment
+  registry authentication: request auth build error: failed to load AWS
+  credentials: the credential provider was not enabled`; `auth.IsAWSAuthRetryable`
+  keeps only provider timeouts transient.
+- Evidence: `out/r97aws-probe-after.txt` (eight region/credential/IMDS/environment
+  combinations, byte-identical to 0.166) and `out/r97aws-probe2-after.txt`
+  (profile plus environment keys, unknown profile), `out/r97aws-sig.txt` and
+  `out/r97aws-sig-region.txt` (real SigV4 requests against a loopback registry:
+  the profile key beats environment keys and the `us-east-1`/`eu-west-1`/
+  `ap-south-1` credential scopes match), `out/r97aws-diff.txt` (`TOTAL 9
+  FAILURES 0`, exit code and output byte-identical for those cases),
+  `TestAWSAuthSDKErrorMessageLikeRust` and
+  `TestLoadAWSAuthContext*LikeRust`.
+
 ## Verification
 
+- Round 79 aligns the `--aws-sigv4` region and credential errors with the pinned
+  0.166 SDK (entry 91): `out/r97aws-probe-after.txt` and
+  `out/r97aws-probe2-after.txt` are byte-identical across the probed
+  combinations (`out/r97aws-diff.txt` reports `TOTAL 9 FAILURES 0`),
+  `out/r97aws-sig.txt`/`out/r97aws-sig-region.txt` compare the
+  signed credential and region scope from real loopback registry requests, and
+  `go test -count=1 ./auth ./model ./cli ./execserver` passes.
 - Round 77 implements `exec-server forward --remote` with clap's scope-local
   requirement checks and the Noise-relay bridge (entry 90): `out/r96j-diff.txt`
   covers 75 argument combinations at `FAILURES 0`, `go test -count=1 ./cli

@@ -1,9 +1,9 @@
 package model
 
 import (
+	"errors"
 	"net/http"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"codex_go/auth"
@@ -31,8 +31,8 @@ func TestAWSHTTPClientRoundTripLikeRust(t *testing.T) {
 	}
 }
 
-// A restricted application policy denies AWS credential discovery before the
-// request leaves the process, through the options the model layer builds.
+// A restricted application policy denies signing before the request leaves the
+// process, through the options the model layer builds.
 func TestAWSHTTPClientEnforcesPolicyThroughModelOptionsLikeRust(t *testing.T) {
 	for _, key := range []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_PROFILE", "AWS_DEFAULT_PROFILE"} {
 		t.Setenv(key, "")
@@ -45,14 +45,14 @@ func TestAWSHTTPClientEnforcesPolicyThroughModelOptionsLikeRust(t *testing.T) {
 	controller := network.NewNetworkPolicyController()
 	policy := controller.Policy()
 	controller.Publish(policy.Revision(), network.RestrictedDestinationPolicy([]string{"allowed.example"}))
-	SetAWSHTTPClient(network.PolicyHTTPClient(policy, network.NewHTTPClient(false, 0)))
-	defer SetAWSHTTPClient(nil)
+	SetAWSApplicationClient(network.PolicyHTTPClient(policy, network.NewHTTPClient(false, 0)), policy)
+	defer SetAWSApplicationClient(nil, network.UnmanagedNetworkPolicy())
 
-	_, err := auth.LoadAWSAuthContextWithOptions(&auth.AWSAuthConfig{Region: "us-east-1", Service: "bedrock"}, awsAuthLoadOptions())
-	if err == nil {
-		t.Fatal("a restricted application network policy still resolved AWS credentials")
+	context, err := auth.LoadAWSAuthContextWithOptions(&auth.AWSAuthConfig{Region: "us-east-1", Service: "bedrock"}, awsAuthLoadOptions())
+	if err != nil {
+		t.Fatalf("LoadAWSAuthContextWithOptions() error = %v, want a resolved context", err)
 	}
-	if !strings.Contains(err.Error(), network.ErrNetworkPolicyDestination.Error()) {
-		t.Fatalf("AWS credential load error = %v, want the application network policy denial", err)
+	if _, err := context.Sign(&auth.AWSAuthRequestToSign{Method: http.MethodPost, URL: "https://denied.example/v1/responses"}); !errors.Is(err, auth.ErrAWSAuthPolicy) {
+		t.Fatalf("signing a denied destination error = %v, want the application network policy denial", err)
 	}
 }

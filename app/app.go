@@ -31,6 +31,7 @@ import (
 	"codex_go/envutil"
 	codexexec "codex_go/exec"
 	"codex_go/execpolicy"
+	"codex_go/codexapi"
 	"codex_go/execserver"
 	"codex_go/execserver/hostconfig"
 	"codex_go/features"
@@ -1253,12 +1254,12 @@ func (s *execServerSigV4Signer) SignRequest(ctx context.Context, method string, 
 		Body:    body,
 	})
 	if err != nil {
-		// Rust maps retryable credential failures to AuthError::Transient and
-		// everything else to AuthError::Build.
-		if errors.Is(err, auth.ErrAWSAuthMissingCredentials) {
+		// Rust maps retryable credential provider failures to
+		// AuthError::Transient and everything else to AuthError::Build.
+		if auth.IsAWSAuthRetryable(err) {
 			return "", nil, fmt.Errorf("%w: %v", execserver.ErrDirectSigningTransient, err)
 		}
-		return "", nil, err
+		return "", nil, fmt.Errorf("%w: %v", codexapi.ErrAuthBuild, err)
 	}
 	return signed.URL, signed.Headers, nil
 }

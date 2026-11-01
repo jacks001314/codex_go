@@ -100,9 +100,12 @@ func TestAWSAuthCredentialExporterRequiresUnrestrictedPolicyLikeRust(t *testing.
 	}
 }
 
-// Rust parity (#47408): the AWS SDK's credential and region requests are routed
-// through the host's application client, so a managed restriction denies them
-// before they leave the process.
+// Rust parity (#47408, aws-auth/src/network_policy_tests.rs): signing checks the
+// destination against the application network policy before credentials are
+// loaded, so a managed restriction denies the request before it leaves the
+// process. The pinned Rust SDK never probes the EC2 instance metadata service,
+// so a machine without credentials still loads and only reports the missing
+// credential provider when signing an allowed destination.
 func TestAWSAuthLoadOptionsEnforceApplicationNetworkPolicyLikeRust(t *testing.T) {
 	for _, key := range []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_PROFILE", "AWS_DEFAULT_PROFILE"} {
 		t.Setenv(key, "")
@@ -117,14 +120,15 @@ func TestAWSAuthLoadOptionsEnforceApplicationNetworkPolicyLikeRust(t *testing.T)
 	controller.Publish(policy.Revision(), network.RestrictedDestinationPolicy([]string{"allowed.example"}))
 	client := network.PolicyHTTPClient(policy, network.NewHTTPClient(false, 0))
 
-	// A region is required for the load to reach credential discovery, which is
-	// the request the policy must deny.
-	_, err := LoadAWSAuthContextWithOptions(&AWSAuthConfig{Region: "us-east-1", Service: "bedrock"}, &AWSAuthLoadOptions{HTTPClient: client})
-	if err == nil {
-		t.Fatal("a restricted application network policy still resolved AWS credentials")
+	context, err := LoadAWSAuthContextWithOptions(&AWSAuthConfig{Region: "us-east-1", Service: "bedrock"}, &AWSAuthLoadOptions{HTTPClient: client, Policy: policy})
+	if err != nil {
+		t.Fatalf("LoadAWSAuthContextWithOptions() error = %v, want a resolved context", err)
 	}
-	if !strings.Contains(err.Error(), network.ErrNetworkPolicyDestination.Error()) {
-		t.Fatalf("AWS credential load error = %v, want the application network policy denial", err)
+	if _, err := context.Sign(&AWSAuthRequestToSign{Method: http.MethodPost, URL: "https://denied.example/v1/responses"}); !errors.Is(err, ErrAWSAuthPolicy) {
+		t.Fatalf("signing a denied destination error = %v, want the application network policy denial", err)
+	}
+	if _, err := context.Sign(&AWSAuthRequestToSign{Method: http.MethodPost, URL: "https://allowed.example/v1/responses"}); !errors.Is(err, ErrAWSAuthCredentials) || !strings.Contains(err.Error(), "the credential provider was not enabled") {
+		t.Fatalf("signing an allowed destination error = %v, want the disabled credential provider", err)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -22,8 +23,12 @@ import (
 )
 
 var (
-	ErrAWSAuthEmptyService       = errors.New("AWS service name must not be empty")
-	ErrAWSAuthMissingRegion      = errors.New("AWS region must not be empty")
+	ErrAWSAuthEmptyService               = errors.New("AWS service name must not be empty")
+	ErrAWSAuthMissingRegion              = errors.New("AWS SDK config did not resolve a region")
+	ErrAWSAuthMissingCredentialsProvider = errors.New("AWS SDK config did not resolve a credentials provider")
+	// ErrAWSAuthCredentials reports AWS credentials the SDK could not load
+	// (Rust AwsAuthError::Credentials).
+	ErrAWSAuthCredentials        = errors.New("failed to load AWS credentials")
 	ErrAWSAuthMissingCredentials = errors.New("AWS credentials are required")
 	// ErrAWSAuthPolicy reports an application network policy denial during AWS
 	// authentication (Rust AwsAuthError::Policy); it is never retryable.
@@ -169,21 +174,16 @@ func LoadAWSAuthContext(config *AWSAuthConfig) (*AWSAuthContext, error) {
 
 // LoadAWSAuthContextWithOptions mirrors `AwsAuthContext::load` with the host's
 // application client, so the SDK's credential discovery honors the application
-// network policy (Rust #47408).
+// network policy (Rust #47408). Like the Rust loader it resolves the region and
+// the credential provider but does not fetch credentials; signing reports
+// `failed to load AWS credentials: ...` instead.
 func LoadAWSAuthContextWithOptions(config *AWSAuthConfig, options *AWSAuthLoadOptions) (*AWSAuthContext, error) {
 	normalized, err := normalizeAWSAuthConfig(config)
 	if err != nil {
 		return nil, err
 	}
 	ctx := context.Background()
-	loadOptions := options.awsConfigOptions()
-	if normalized.Profile != "" {
-		loadOptions = append(loadOptions, awsconfig.WithSharedConfigProfile(normalized.Profile))
-	}
-	if normalized.Region != "" {
-		loadOptions = append(loadOptions, awsconfig.WithRegion(normalized.Region))
-	}
-	loaded, err := awsconfig.LoadDefaultConfig(ctx, loadOptions...)
+	loaded, profileConfig, profileFound, err := loadAWSSDKConfig(ctx, normalized, options)
 	if err != nil {
 		return nil, err
 	}
@@ -192,14 +192,15 @@ func LoadAWSAuthContextWithOptions(config *AWSAuthConfig, options *AWSAuthLoadOp
 		return nil, ErrAWSAuthMissingRegion
 	}
 	if loaded.Credentials == nil {
-		return nil, ErrAWSAuthMissingCredentials
+		return nil, ErrAWSAuthMissingCredentialsProvider
 	}
-	if _, err := loaded.Credentials.Retrieve(ctx); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrAWSAuthMissingCredentials, err)
+	provider := defaultCredentialsProvider(ctx, loaded.Credentials)
+	if normalized.Profile != "" {
+		provider = profileCredentialsProvider(normalized.Profile, profileConfig, profileFound, loaded.Credentials)
 	}
 	return &AWSAuthContext{
 		config:      loaded,
-		credentials: loaded.Credentials,
+		credentials: provider,
 		region:      region,
 		service:     normalized.Service,
 		policy:      options.networkPolicy(),
@@ -227,14 +228,7 @@ func LoadAWSAuthContextWithProviderAndOptions(config *AWSAuthConfig, provider AW
 		return LoadAWSAuthContextWithOptions(config, options)
 	}
 	ctx := context.Background()
-	loadOptions := options.awsConfigOptions()
-	if normalized.Profile != "" {
-		loadOptions = append(loadOptions, awsconfig.WithSharedConfigProfile(normalized.Profile))
-	}
-	if normalized.Region != "" {
-		loadOptions = append(loadOptions, awsconfig.WithRegion(normalized.Region))
-	}
-	loaded, err := awsconfig.LoadDefaultConfig(ctx, loadOptions...)
+	loaded, _, _, err := loadAWSSDKConfig(ctx, normalized, options)
 	if err != nil {
 		return nil, err
 	}
@@ -380,7 +374,7 @@ func (c *AWSAuthContext) SignAt(request *AWSAuthRequestToSign, at time.Time) (*A
 		return nil, ErrAWSAuthMissingRegion
 	}
 	if c.credentials == nil {
-		return nil, ErrAWSAuthMissingCredentials
+		return nil, ErrAWSAuthMissingCredentialsProvider
 	}
 	// Rust #47408: check the signing destination before loading credentials, then
 	// load them under the permit so a revocation cancels the fetch.
@@ -399,13 +393,13 @@ func (c *AWSAuthContext) SignAt(request *AWSAuthRequestToSign, at time.Time) (*A
 		if policyErr := awsPolicyError(err); errors.Is(policyErr, ErrAWSAuthPolicy) {
 			return nil, policyErr
 		}
-		return nil, fmt.Errorf("%w: %v", ErrAWSAuthMissingCredentials, err)
+		return nil, fmt.Errorf("%w: %v", ErrAWSAuthCredentials, err)
 	}
 	if credentialErr != nil {
 		if policyErr := awsPolicyError(credentialErr); errors.Is(policyErr, ErrAWSAuthPolicy) {
 			return nil, policyErr
 		}
-		return nil, fmt.Errorf("%w: %v", ErrAWSAuthMissingCredentials, credentialErr)
+		return nil, fmt.Errorf("%w: %v", ErrAWSAuthCredentials, credentialErr)
 	}
 	return SignAWSRequestWithCredentials(&credentials, c.region, c.service, request, at)
 }
@@ -558,4 +552,15 @@ func firstNonEmptyAWS(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// IsAWSAuthRetryable mirrors AwsAuthError::is_retryable: only credential
+// provider timeouts and provider errors can be retried. Configuration problems
+// (a missing region, a disabled credential provider, network policy denials,
+// invalid URLs, signing failures) never are.
+func IsAWSAuthRetryable(err error) bool {
+	if !errors.Is(err, ErrAWSAuthCredentials) {
+		return false
+	}
+	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded)
 }
