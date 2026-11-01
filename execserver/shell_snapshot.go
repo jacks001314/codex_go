@@ -420,7 +420,11 @@ func (m *shellSnapshotManager) captureSnapshot(ctx context.Context, params *Exec
 	if captureSpan != nil {
 		defer captureSpan.End()
 	}
-	captureScript, ok := shell.SnapshotCaptureScript(shellType, shell.SnapshotCaptureOptions{
+	// Rust's exec-server captures with the source-capture variant: options and
+	// aliases are emitted inside one brace group, so replaying the state cannot
+	// let an alias or quoting option reinterpret the records that follow it
+	// (snapshot_source_capture_script, #48078).
+	captureScript, ok := shell.SnapshotSourceCaptureScript(shellType, shell.SnapshotCaptureOptions{
 		Startup: shell.SnapshotStartupInteractive, Declarations: true,
 	})
 	if !ok {
