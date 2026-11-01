@@ -279,9 +279,6 @@ func resolvePermissionPathForConvention(path FileSystemPath, cwd string, convent
 		case "tmpdir":
 			if convention == utils.ConventionPosix {
 				tmpdir := strings.TrimSpace(os.Getenv("TMPDIR"))
-				if tmpdir == "" && utils.NativePathConvention() == utils.ConventionPosix {
-					tmpdir = os.TempDir()
-				}
 				return resolvePermissionPathForConvention(FileSystemPath{Type: "path", Path: tmpdir}, cwd, convention)
 			}
 			if utils.NativePathConvention() == utils.ConventionWindows {
