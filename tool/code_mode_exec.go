@@ -384,8 +384,10 @@ type codeModeExecOptions struct {
 type codeModeWaitParams struct {
 	CellID      string `json:"cell_id"`
 	YieldTimeMS int    `json:"yield_time_ms,omitempty"`
-	MaxTokens   int    `json:"max_tokens,omitempty"`
-	Terminate   bool   `json:"terminate,omitempty"`
+	// MaxTokens is optional so an explicit zero budget stays distinct from an
+	// omitted one (Rust's ExecWaitArgs.max_tokens: Option<usize>).
+	MaxTokens *int `json:"max_tokens,omitempty"`
+	Terminate bool `json:"terminate,omitempty"`
 }
 
 type codeModeToolCompletion struct {
@@ -2329,11 +2331,16 @@ func (e *codeModeWaitExecutor) execute(ctx context.Context, invocation *Invocati
 	if strings.TrimSpace(params.CellID) == "" {
 		return nil, RespondToModel("cell_id is required")
 	}
+	// Rust deserializes max_tokens into Option<usize>, so a negative value is
+	// rejected before it can reach the host.
+	if params.MaxTokens != nil && *params.MaxTokens < 0 {
+		return nil, RespondToModel("max_tokens must be non-negative")
+	}
 	if e.exec.remote != nil {
 		var response CodeModeRemoteResponse
 		var remoteErr error
 		startedAt := time.Now()
-		budget := codeModeWaitRemoteBudget(params.MaxTokens)
+		budget := params.MaxTokens
 		if params.Terminate {
 			response, remoteErr = e.exec.remote.Terminate(ctx, params.CellID, budget)
 		} else {
@@ -2347,7 +2354,7 @@ func (e *codeModeWaitExecutor) execute(ctx context.Context, invocation *Invocati
 			if response.State != "yielded" {
 				e.exec.forgetRemoteCell(params.CellID)
 			}
-			return remoteResponseOutput(invocation.CallID, response, codeModeWaitTokenLimit(params.MaxTokens), e.exec.remoteOutputTruncation(), time.Since(startedAt), e.exec.cellOverheadEnabled())
+			return remoteResponseOutput(invocation.CallID, response, codeModeTokenLimit(params.MaxTokens), e.exec.remoteOutputTruncation(), time.Since(startedAt), e.exec.cellOverheadEnabled())
 		}
 		var callErr *FunctionCallError
 		if AsFunctionCallError(remoteErr, &callErr) {
@@ -2386,7 +2393,7 @@ func (e *codeModeWaitExecutor) execute(ctx context.Context, invocation *Invocati
 		status := "Script running with cell ID " + params.CellID
 		output := &Output{CallID: invocation.CallID, ToolName: PlainName("wait"), Success: true, Body: e.exec.cellDelta(cell), Data: map[string]any{"cell_id": params.CellID, "running": true, "content_items": e.exec.cellContentDelta(cell)}}
 		if !codeModeHostObservation(invocation) {
-			output = truncateCodeModeOutput(output, codeModeWaitTokenLimit(params.MaxTokens))
+			output = truncateCodeModeOutput(output, codeModeTokenLimit(params.MaxTokens))
 		}
 		return applyCodeModeHeader(output, status, time.Since(cell.startedAt), nil, e.exec.cellOverheadEnabled()), nil
 	}
@@ -2405,7 +2412,7 @@ func (e *codeModeWaitExecutor) execute(ctx context.Context, invocation *Invocati
 			output.Data["terminated"] = true
 		}
 		if !codeModeHostObservation(invocation) {
-			output = truncateCodeModeOutput(output, codeModeWaitTokenLimit(params.MaxTokens))
+			output = truncateCodeModeOutput(output, codeModeTokenLimit(params.MaxTokens))
 		}
 		return applyCodeModeHeader(output, codeModeCellStatus(cell), time.Since(cell.startedAt), nil, e.exec.cellOverheadEnabled()), runErr
 	case <-timer.C:
@@ -2414,22 +2421,6 @@ func (e *codeModeWaitExecutor) execute(ctx context.Context, invocation *Invocati
 		// #48123: the caller yielded the observation; the cell keeps running.
 		return runningOutput()
 	}
-}
-
-// codeModeWaitRemoteBudget forwards an explicit wait budget to the host; a
-// zero value keeps the host's default observation budget (Rust #58125).
-func codeModeWaitRemoteBudget(value int) *int {
-	if value <= 0 {
-		return nil
-	}
-	return &value
-}
-
-func codeModeWaitTokenLimit(value int) int {
-	if value == 0 {
-		return 10000
-	}
-	return value
 }
 
 type codeModeExit struct{}
