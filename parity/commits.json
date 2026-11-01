@@ -21823,7 +21823,7 @@
    ],
    "status": "complete",
    "evidence": [
-    "Equivalent implementation: Code Mode execute and wait accept a YieldSignal that ends only the observation while the cell stays running; exec/wait return yielded cell IDs for later waits. The in-process/remote runtime paths, yield_control, step preemption, and instant-interrupt tests cover early execute and wait yielding followed by completion."
+    "Equivalent implementation: Code Mode execute and wait accept a YieldSignal that ends only the observation while the cell stays running; exec/wait return yielded cell IDs for later waits. The in-process/remote runtime paths, yield_control, step preemption, and instant-interrupt tests cover early execute and wait yielding followed by completion. Round 1288: the synchronous no-cell exec fast path was removed, so an exec that omits yield_time_ms still starts an observable cell, yields at its timeout, and leaves a never-settling promise running for `wait`/terminate instead of failing with the Go-only JavaScript execution did not settle error; the cell view now also carries image()/audio()/generatedImage() items (tool/code_mode_exec.go installContentHelpers), covered by the existing media content tests."
    ]
   },
   {

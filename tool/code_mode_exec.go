@@ -931,20 +931,9 @@ func (e *codeModeExecExecutor) execute(ctx context.Context, invocation *Invocati
 		return nil, RespondToModel("yield_time_ms must be non-negative")
 	}
 	preempt := YieldSignalFromInvocation(invocation)
-	// A host request carrying a preempt signal must run as an observable cell so
-	// an `operation/yield` frame can end the observation early (#48123).
-	if options.YieldTimeMS == nil && !strings.Contains(source, "yield_control") && preempt == nil {
-		invocationCopy := *invocation
-		invocationCopy.Payload.Input = source
-		started := time.Now()
-		output, runErr := e.executeScript(ctx, &invocationCopy, nil, nil)
-		if !codeModeHostObservation(invocation) {
-			output = truncateCodeModeOutput(output, codeModeTokenLimit(options.MaxOutputTokens))
-		}
-		// Rust's exec handler wraps every response in the code-mode header,
-		// after truncating the script content.
-		return applyCodeModeHeader(output, codeModeStatusForOutput(output), time.Since(started), nil, e.cellOverheadEnabled()), runErr
-	}
+	// Every exec runs as an observable cell, like Rust's session-backed exec: a
+	// script that outlives its yield time (or whose promise never settles) keeps
+	// running and is observed, not failed.
 	cellID := ""
 	if invocation.Context != nil {
 		cellID, _ = invocation.Context[CodeModeCellIDContextKey].(string)
@@ -1627,7 +1616,7 @@ func (e *codeModeExecExecutor) executeScript(ctx context.Context, invocation *In
 	}); err != nil {
 		return nil, err
 	}
-	if err := e.installContentHelpers(runtime, &contentItems); err != nil {
+	if err := e.installContentHelpers(runtime, &contentItems, cell); err != nil {
 		return nil, err
 	}
 	if err := runtime.Set("notify", func(call sobek.FunctionCall) sobek.Value {
@@ -2516,7 +2505,16 @@ type codeModeExit struct{}
 
 func (codeModeExit) Error() string { return "code mode exit" }
 
-func (e *codeModeExecExecutor) installContentHelpers(runtime *sobek.Runtime, items *[]map[string]any) error {
+func (e *codeModeExecExecutor) installContentHelpers(runtime *sobek.Runtime, items *[]map[string]any, cell *codeModeCell) error {
+	record := func(item map[string]any) {
+		*items = append(*items, item)
+		if cell == nil {
+			return
+		}
+		cell.mu.Lock()
+		cell.items = append(cell.items, item)
+		cell.mu.Unlock()
+	}
 	if err := runtime.Set("image", func(call sobek.FunctionCall) sobek.Value {
 		value := call.Argument(0)
 		url := value.String()
@@ -2548,7 +2546,7 @@ func (e *codeModeExecExecutor) installContentHelpers(runtime *sobek.Runtime, ite
 		if strings.HasPrefix(url, "http://") || strings.HasPrefix(url, "https://") {
 			panic(runtime.ToValue("remote image URLs are not supported"))
 		}
-		*items = append(*items, map[string]any{"type": "input_image", "image_url": url, "detail": detail})
+		record(map[string]any{"type": "input_image", "image_url": url, "detail": detail})
 		return sobek.Undefined()
 	}); err != nil {
 		return err
@@ -2567,7 +2565,7 @@ func (e *codeModeExecExecutor) installContentHelpers(runtime *sobek.Runtime, ite
 				url = "data:" + mimeType + ";base64," + data.String()
 			}
 		}
-		*items = append(*items, map[string]any{"type": "input_audio", "audio_url": url})
+		record(map[string]any{"type": "input_audio", "audio_url": url})
 		return sobek.Undefined()
 	}); err != nil {
 		return err
@@ -2578,9 +2576,9 @@ func (e *codeModeExecExecutor) installContentHelpers(runtime *sobek.Runtime, ite
 		if strings.HasPrefix(url, "http://") || strings.HasPrefix(url, "https://") {
 			panic(runtime.ToValue("remote image URLs are not supported"))
 		}
-		*items = append(*items, map[string]any{"type": "input_image", "image_url": url, "detail": "high"})
+		record(map[string]any{"type": "input_image", "image_url": url, "detail": "high"})
 		if hint := object.Get("output_hint"); hint != nil && !sobek.IsUndefined(hint) {
-			*items = append(*items, map[string]any{"type": "input_text", "text": hint.String()})
+			record(map[string]any{"type": "input_text", "text": hint.String()})
 		}
 		return sobek.Undefined()
 	})
