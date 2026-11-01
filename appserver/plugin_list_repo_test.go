@@ -35,7 +35,9 @@ func TestPluginListHonorsPerRepositoryConfigLikeRust(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dotCodex, "config.toml"), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	canonical := strings.ToLower(filepath.Clean(workspace))
+	// The trust lookup lowercases only on Windows (Rust normalize_for_path_comparison),
+	// so a lowercased key would never match this workspace on a case-sensitive host.
+	canonical := filepath.Clean(workspace)
 	projectTrust := strings.ReplaceAll(canonical, `\`, `\\`)
 	if err := os.WriteFile(config.ConfigPath(home), []byte("[projects.\""+projectTrust+"\"]\ntrust_level = \"trusted\"\n"), 0o600); err != nil {
 		t.Fatal(err)
