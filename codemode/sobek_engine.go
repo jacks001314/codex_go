@@ -153,7 +153,7 @@ func (e *SobekEngine) Execute(ctx context.Context, request EngineRequest) (*Engi
 			if cause := state.cause(); cause != nil {
 				return nil, cause
 			}
-			return nil, fmt.Errorf("javascript execution failed: %s", text)
+			return nil, errors.New(text)
 		case sobek.PromiseStatePending:
 			return nil, fmt.Errorf("javascript execution did not settle")
 		}
@@ -208,7 +208,10 @@ func formatSobekExecutionError(err error, state *sobekExecutionState) (formatted
 			panic(recovered)
 		}
 	}()
-	return fmt.Errorf("javascript execution failed: %w", err)
+	// Rust's V8 runtime reports a script failure as the exception's own text:
+	// a thrown string verbatim, an Error as `Name: message`. Wrapping it would
+	// add a Go-only prefix the client renders after `Script error:\n`.
+	return err
 }
 
 func formatSobekValue(value sobek.Value, state *sobekExecutionState) (text string) {

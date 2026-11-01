@@ -11,7 +11,6 @@ import (
 	"sync/atomic"
 
 	"codex_go/tool"
-	"codex_go/utils"
 )
 
 type stdioHostServer struct {
@@ -359,8 +358,8 @@ type stdioHostSession struct {
 	definitions  map[string]struct{}
 	nextCell     atomic.Uint64
 	// outputTruncation records the session-level setting requested at
-	// session/open. Server-side truncation is not implemented yet, so the
-	// setting is captured without changing observation output (Rust #57272).
+	// session/open. Server mode bounds every observation with its own budget;
+	// client mode returns raw output for the caller to truncate (Rust #57272).
 	outputTruncation OutputTruncation
 }
 
@@ -541,20 +540,13 @@ func hostSourceWithOptions(source string, yieldTimeMS *uint64, maxOutputTokens *
 // sends an independently bounded diagnostic (Rust #57870).
 func (s *stdioHostSession) observeResponse(cellID CellID, output *tool.Output, err error, maxOutputTokens *int) RuntimeResponse {
 	response := hostRuntimeResponse(cellID, output, err)
-	if s == nil || s.outputTruncation != OutputTruncationServer {
+	if s == nil {
 		return response
 	}
-	collector := newOutputCollector(OutputTruncationServer)
-	for _, item := range response.ContentItems {
-		collector.push(item)
-	}
-	response.ContentItems = renderOutput(collector.intoCollectedOutput(), maxOutputTokens)
-	// The diagnostic is already part of the observation, so only bound the
-	// logging copy here instead of appending it again.
-	if response.ErrorText != nil && len(*response.ErrorText) > maxServerDiagnosticBytes {
-		bounded := utils.TruncateMiddleWithMarker(*response.ErrorText, maxServerDiagnosticBytes, "…")
-		response.ErrorText = &bounded
-	}
+	// Server truncation bounds the typed items with the observation's own
+	// budget, labels a completed error inside those items, and sends an
+	// independently bounded diagnostic (Rust #57272/#57870).
+	response.ContentItems, response.ErrorText = renderSessionObservation(s.outputTruncation, response.ContentItems, maxOutputTokens, response.ErrorText)
 	return response
 }
 

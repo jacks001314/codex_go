@@ -23,6 +23,29 @@ const maxPositionedNotices = 4
 // describes the retained text alone. The shared formatter moves collector
 // boundaries along with their source content. If losses are too scattered for
 // individual notices, they are reported as one observation-wide total.
+// renderSessionObservation applies a session's output policy to one
+// observation. Server truncation charges the diagnostic against the same
+// budget and returns an independently bounded copy for logging; client
+// truncation returns the raw items so the caller can budget them.
+func renderSessionObservation(mode OutputTruncation, items []ContentItem, maxOutputTokens *int, errorText *string) ([]ContentItem, *string) {
+	if mode != OutputTruncationServer {
+		if items == nil {
+			return []ContentItem{}, errorText
+		}
+		return items, errorText
+	}
+	collector := newOutputCollector(OutputTruncationServer)
+	for _, item := range items {
+		collector.push(item)
+	}
+	var boundedErr *string
+	if errorText != nil {
+		bounded := collector.collectError(*errorText)
+		boundedErr = &bounded
+	}
+	return renderOutput(collector.intoCollectedOutput(), maxOutputTokens), boundedErr
+}
+
 func renderOutput(collected CollectedOutput, maxOutputTokens *int) []ContentItem {
 	content := make([]utils.FunctionCallOutputContentItem, 0, len(collected.Items))
 	boundaries := make([]utils.OutputBoundary, 0, len(collected.Gaps))

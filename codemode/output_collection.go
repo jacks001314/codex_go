@@ -253,6 +253,32 @@ func (b *boundedOutput) push(item ContentItem) {
 	b.pushRetained(contentRetained(item))
 }
 
+// scriptErrorLabel prefixes a completed script error inside the observation.
+const scriptErrorLabel = "Script error:\n"
+
+// pushError retains a completed script error as one logical text item,
+// including its label, without first formatting an arbitrarily large copy.
+// Rust `BoundedOutput::push_error` (code-mode-runtime output_collection.rs)
+// keeps only the head and tail spans that an observation could select and
+// charges the skipped middle to the same gap an ordinary write would report.
+func (b *boundedOutput) pushError(errorText string) {
+	headRoom := BoundedOutputMaxBytes - len(scriptErrorLabel)
+	headEnd := ceilCharBoundary(errorText, minInt(len(errorText), headRoom))
+	tailStart := floorCharBoundary(errorText, maxInt(len(errorText)-BoundedOutputMaxBytes, headEnd))
+	b.push(InputText(scriptErrorLabel + errorText[:headEnd] + errorText[tailStart:]))
+	skipped := tailStart - headEnd
+	if skipped <= 0 {
+		return
+	}
+	// The error alone exceeds the content budget, so its newest retained suffix
+	// is the partial tail item and owns the omitted middle of that item.
+	if b.split != nil && len(b.split.tail) > 0 {
+		if slot := &b.split.tail[len(b.split.tail)-1]; slot.kind == retainedPartial {
+			slot.partial.omitted += uint64(skipped)
+		}
+	}
+}
+
 func (b *boundedOutput) pushRetained(item retainedItem) {
 	bytes := item.contentBytes()
 	var tail *[]retainedItem
@@ -531,7 +557,7 @@ func (c *outputCollector) collectError(errorText string) string {
 	if c.server == nil {
 		return errorText
 	}
-	c.server.push(InputText(errorText))
+	c.server.pushError(errorText)
 	if len(errorText) <= maxServerDiagnosticBytes {
 		return errorText
 	}
@@ -573,6 +599,13 @@ const maxServerDiagnosticBytes = 64 * 1024
 
 func minInt(a, b int) int {
 	if a < b {
+		return a
+	}
+	return b
+}
+
+func maxInt(a, b int) int {
+	if a > b {
 		return a
 	}
 	return b

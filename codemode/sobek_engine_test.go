@@ -70,7 +70,7 @@ func TestSobekEngineExitStopsWholeCell(t *testing.T) {
 func TestSobekEngineErrors(t *testing.T) {
 	for _, source := range []string{`const =`, `throw new Error("boom")`} {
 		_, err := NewSobekEngine().Execute(context.Background(), EngineRequest{Source: source})
-		if err == nil || !strings.Contains(err.Error(), "javascript execution failed") {
+		if err == nil || !strings.Contains(err.Error(), "Error: ") && !strings.Contains(err.Error(), "SyntaxError") {
 			t.Fatalf("source %q error = %v", source, err)
 		}
 	}
