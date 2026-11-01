@@ -2242,9 +2242,14 @@ func (b *Builder) updatesCheck(codexHome string, opts *Options) *DoctorCheck {
 	result, err := install.CheckForUpdate(ctx, &install.UpdateCheckOptions{
 		Context:        installContext,
 		CurrentVersion: Version(),
-		HTTPClient:     b.providerHTTPClient(),
+		HTTPClient:     b.updateProbeHTTPClient(),
 	})
-	if result != nil {
+	if err != nil {
+		// Rust's updates_check only pushes the probe row when the lookup fails;
+		// it never reports a "latest version status" for an unknown version.
+		status = maxCheckStatus(status, CheckStatusWarning)
+		details = append(details, "latest version probe: "+latestVersionProbeErrorText(err))
+	} else if result != nil {
 		if result.LatestVersion != "" {
 			details = append(details, "latest version: "+result.LatestVersion)
 		}
@@ -2252,11 +2257,55 @@ func (b *Builder) updatesCheck(codexHome string, opts *Options) *DoctorCheck {
 			details = append(details, "latest version status: "+latestVersionStatusText(result.Status))
 		}
 	}
-	if err != nil {
-		status = maxCheckStatus(status, CheckStatusWarning)
-		details = append(details, "latest version probe: "+err.Error())
-	}
 	return NewCheck("updates.status", "updates", status, summary).DetailsList(details)
+}
+
+// updateProbeHTTPClient clones the probe client and stamps the
+// `codex-doctor/<version>` User-Agent Rust's http_get_json sends, so the
+// release lookup is attributed the same way.
+func (b *Builder) updateProbeHTTPClient() *http.Client {
+	base := b.providerHTTPClient()
+	if base == nil {
+		return nil
+	}
+	clone := *base
+	clone.Transport = &userAgentRoundTripper{base: base.Transport, userAgent: "codex-doctor/" + Version()}
+	return &clone
+}
+
+type userAgentRoundTripper struct {
+	base      http.RoundTripper
+	userAgent string
+}
+
+func (r *userAgentRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	clone := request.Clone(request.Context())
+	clone.Header.Set("User-Agent", r.userAgent)
+	base := r.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	return base.RoundTrip(clone)
+}
+
+// latestVersionProbeErrorText renders a failed release lookup the way Rust's
+// http_get_json does: a non-2xx response becomes "HTTP <status>" and anything
+// else keeps the transport message.
+func latestVersionProbeErrorText(err error) string {
+	if err == nil {
+		return ""
+	}
+	text := err.Error()
+	if strings.HasPrefix(text, "GET ") {
+		if index := strings.LastIndex(text, " failed: "); index >= 0 {
+			status := text[index+len(" failed: "):]
+			if len(status) > 4 && status[3] == ' ' && status[0] >= '0' && status[0] <= '9' &&
+				status[1] >= '0' && status[1] <= '9' && status[2] >= '0' && status[2] <= '9' {
+				return "HTTP " + status
+			}
+		}
+	}
+	return text
 }
 
 func contextWithTimeoutForDoctor(timeout time.Duration) (context.Context, context.CancelFunc) {
@@ -2313,10 +2362,10 @@ func latestVersionStatusText(status install.UpdateStatus) string {
 	switch status {
 	case install.UpdateStatusUpdateAvailable:
 		return "newer version is available"
-	case install.UpdateStatusUpToDate, install.UpdateStatusUpdated:
+	case install.UpdateStatusUpToDate, install.UpdateStatusUpdated, install.UpdateStatusUnknown:
+		// Rust renders every non-newer outcome as "current version is not
+		// older", including versions is_newer cannot parse.
 		return "current version is not older"
-	case install.UpdateStatusUnknown:
-		return "unknown"
 	default:
 		return string(status)
 	}

@@ -3401,8 +3401,37 @@ and decodable items kept Go's original spelling. The record is now decoded into
   `TestStateCheckReportsRustPathDBAndRolloutDetails`,
   `TestRenderHumanConfigDetailsMatchRustLikeRust` and
   `TestRenderHumanStateDetailsMatchRustSummaries` assert the Rust label.
+### 102. `doctor` renders the release probe rows `updates_check` prints
+
+- **Rows.** Rust's `updates_check` pushes `latest version` and
+  `latest version status` only when the lookup succeeds, and a bare
+  `latest version probe: <error>` row (check degraded to a warning) when it
+  fails. Go always rendered a `latest version status` row from
+  `UpdateResult.Status`, so a failed lookup printed both
+  `latest version status: unknown` and the probe error.
+- **Copy and attribution.** Rust's `http_get_json` turns a non-2xx response
+  into `HTTP <status>` and sends `codex-doctor/<version>` as the User-Agent.
+  Go forwarded the raw `GET <url> failed: 403 Forbidden` text and sent Go's
+  default agent, which is why the GitHub release lookup 403'd where the Rust
+  binary succeeded during the same run.
+- Evidence: the Units block of `out/r99-doctor-rust.txt` and
+  `out/r99-doctor-go.txt` now carries the same row set and
+  `TestUpdatesCheckRendersRustProbeRowsAndUserAgent`,
+  `TestUpdatesCheckReportsFailedProbeLikeRust` and
+  `TestLatestVersionStatusTextMatchesRustNonNewerCopy` pin the rows, the
+  `HTTP 403 Forbidden` copy and the non-newer status text.
 
 ## Verification
+
+- Round 90 matches the `doctor` release probe to `updates_check` (entry 102):
+  the probe sends `codex-doctor/<version>`, a failed lookup renders the single
+  `latest version probe: HTTP <status>` row instead of an extra
+  `latest version status: unknown`, and non-newer versions now read
+  `current version is not older`. The Updates block of
+  `out/r99-doctor-rust.txt` and `out/r99-doctor-go.txt` carries the same rows
+  (only the repository and build version differ), `go test -count=1 ./doctor
+  ./state ./cli` and `go vet ./doctor` pass and `./doctor` cross-compiles for
+  `GOOS=linux` and `GOOS=darwin`.
 
 - Round 89 prints Rust's `CODEX_HOME` label in the `doctor` disk, config and
   state rows and in the thread-inventory remedy (entry 101); the rendered
@@ -4311,3 +4340,8 @@ and decodable items kept Go's original spelling. The record is now decoded into
   print Rust's `CODEX_HOME` label (entry 101) and the Windows desktop update
   rows match 0.166 (entry 100); the macOS appcast feed and the Sparkle
   staged-build scan remain unported (see `out/r1304-doctor-full-diff.txt`).
+- `doctor` counts 67 enabled feature flags where the pinned 0.166 binary counts
+  66 even though both registries agree: Go follows `origin/main`, which enabled
+  `deferred_tool_world_state` by default in #58410 (2026-10-30), while the
+  0.166 release predates that commit. Forcing `secret_auth_storage = false`
+  drops the Rust binary to 65, so the platform default itself matches.
