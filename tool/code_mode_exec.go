@@ -991,7 +991,10 @@ func (e *codeModeExecExecutor) execute(ctx context.Context, invocation *Invocati
 		return nil, ctx.Err()
 	}
 	status := "Script running with cell ID " + cellID
-	output := &Output{CallID: invocation.CallID, ToolName: PlainName(CodeModeExecToolName), Success: true, Body: e.cellDelta(cell), Data: map[string]any{"cell_id": cellID, "running": true}}
+	// A yielded observation consumes both views of the cell's output so the
+	// next observation only carries what the script produced afterwards
+	// (Rust's collector is taken at every observation).
+	output := &Output{CallID: invocation.CallID, ToolName: PlainName(CodeModeExecToolName), Success: true, Body: e.cellDelta(cell), Data: map[string]any{"cell_id": cellID, "running": true, "content_items": e.cellContentDelta(cell)}}
 	return applyCodeModeHeader(output, status, time.Since(cell.startedAt), nil, e.cellOverheadEnabled()), nil
 }
 
@@ -2381,7 +2384,7 @@ func (e *codeModeWaitExecutor) execute(ctx context.Context, invocation *Invocati
 	preempt := YieldSignalFromInvocation(invocation)
 	runningOutput := func() (*Output, error) {
 		status := "Script running with cell ID " + params.CellID
-		output := &Output{CallID: invocation.CallID, ToolName: PlainName("wait"), Success: true, Body: e.exec.cellDelta(cell), Data: map[string]any{"cell_id": params.CellID, "running": true}}
+		output := &Output{CallID: invocation.CallID, ToolName: PlainName("wait"), Success: true, Body: e.exec.cellDelta(cell), Data: map[string]any{"cell_id": params.CellID, "running": true, "content_items": e.exec.cellContentDelta(cell)}}
 		if !codeModeHostObservation(invocation) {
 			output = truncateCodeModeOutput(output, codeModeWaitTokenLimit(params.MaxTokens))
 		}
