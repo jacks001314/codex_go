@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"golang.org/x/sys/unix"
 )
@@ -27,7 +28,9 @@ func daemonSocketIdentity(directory string) (string, string, daemonSocketFilesys
 	if err != nil {
 		return "", "", daemonSocketFilesystemOther, err
 	}
-	system, ok := info.Sys().(*unix.Stat_t)
+	// os.File.Stat reports the runtime *syscall.Stat_t; x/sys v0.47 made
+	// unix.Stat_t a distinct struct, so asserting it rejected every host.
+	system, ok := info.Sys().(*syscall.Stat_t)
 	if !ok {
 		return "", "", daemonSocketFilesystemOther, errDaemonSocketIsolation
 	}

@@ -3,6 +3,7 @@
 package linuxsandbox
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -88,5 +89,27 @@ func TestValidateDaemonSocketMountIsolationNamespaceMountKeepsAliasChecksLikeRus
 	}
 	if !strings.Contains(err.Error(), "unsupported host mount") {
 		t.Fatalf("alias error = %v, want the unsupported-mount reason", err)
+	}
+}
+
+// TestDaemonSocketIdentityReadsTheOpenedDirectory exercises the descriptor
+// identity against a real directory, the way linux.go does before masking the
+// rendezvous directory. os.File.Stat reports the runtime type, so asserting an
+// x/sys type here silently rejected every host.
+func TestDaemonSocketIdentityReadsTheOpenedDirectory(t *testing.T) {
+	directory := t.TempDir()
+	device, mountID, _, err := daemonSocketIdentity(directory)
+	if err != nil {
+		t.Fatalf("daemonSocketIdentity(%q) error = %v", directory, err)
+	}
+	if !strings.Contains(device, ":") {
+		t.Fatalf("device = %q, want major:minor", device)
+	}
+	mountinfo, err := os.ReadFile("/proc/self/mountinfo")
+	if err != nil {
+		t.Fatalf("read mountinfo error = %v", err)
+	}
+	if mountID != "" && !strings.Contains(string(mountinfo), "\n"+mountID+" ") && !strings.HasPrefix(string(mountinfo), mountID+" ") {
+		t.Fatalf("mount ID %q is not in mountinfo", mountID)
 	}
 }
