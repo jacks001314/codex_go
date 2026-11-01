@@ -1,6 +1,7 @@
 package shell
 
 import (
+	"os"
 	"os/exec"
 	"slices"
 	"strconv"
@@ -176,4 +177,62 @@ func TestSnapshotLiteralWordsMatchRealBashAliasOutputLikeRust(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestSnapshotLiteralWordsMatchRealZshAliasOutputLikeRust is the zsh half of
+// Rust's alias differential. zsh may print an alias value differently from the
+// value it replays (RCS quoting, $'...' escapes), so the expected value comes
+// from replaying the captured alias line in zsh itself. The test skips when no
+// zsh is installed, and then runs wherever a POSIX zsh is available.
+func TestSnapshotLiteralWordsMatchRealZshAliasOutputLikeRust(t *testing.T) {
+	zshPath := snapshotTestZshPath()
+	if zshPath == "" {
+		t.Skip("no zsh available for the snapshot literal differential")
+	}
+	for _, value := range []string{
+		"token_ab'cdefghijklmnop",
+		"plain value",
+		"line1\nline2",
+		"tab\there",
+		"back\\slash and $dollar",
+		"quote\"inside",
+	} {
+		t.Run(strconv.Quote(value), func(t *testing.T) {
+			capture := exec.Command(zshPath, "-fc", `alias helper="$ALIAS_VALUE"; alias -L`)
+			capture.Env = []string{"ALIAS_VALUE=" + value}
+			output, err := capture.Output()
+			if err != nil {
+				t.Fatalf("zsh alias probe failed: %v", err)
+			}
+			text := "# aliases\n" + string(output) + "\n# exports 0\n"
+			replay := exec.Command(zshPath, "-fc", text+"print -rn -- $aliases[helper]")
+			replay.Env = []string{}
+			expected, err := replay.Output()
+			if err != nil {
+				t.Fatalf("zsh alias replay failed: %v\n%s", err, text)
+			}
+			if words := SnapshotLiteralWords(ShellZsh, text); !slices.Contains(words, "helper="+string(expected)) {
+				t.Fatalf("SnapshotLiteralWords(%q) = %#v, want the alias value %q", text, words, string(expected))
+			}
+		})
+	}
+}
+
+// snapshotTestZshPath finds a POSIX zsh for the differential; the test skips
+// without one.
+func snapshotTestZshPath() string {
+	for _, candidate := range []string{
+		`C:\msys64\usr\bin\zsh.exe`,
+		`C:\Program Files\Git\usr\bin\zsh.exe`,
+		"/bin/zsh",
+		"/usr/bin/zsh",
+	} {
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate
+		}
+	}
+	if path, err := exec.LookPath("zsh"); err == nil {
+		return path
+	}
+	return ""
 }
