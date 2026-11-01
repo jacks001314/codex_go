@@ -7,6 +7,12 @@ import (
 	"github.com/rivo/uniseg"
 )
 
+// renderWidth keeps Mermaid width independent of the host locale.
+// go-runewidth's package-level helpers consult EastAsianWidth, which is derived
+// from locale environment variables at init. Rust's unicode-width has no such
+// mode, so an ambiguous character such as U+2014 is always one cell.
+var renderWidth = &runewidth.Condition{}
+
 // charWidth mirrors `UnicodeWidthChar::width`: a scalar's display width, or zero
 // when it has none. Rust's `unicode-width` reports zero for combining and format
 // characters; go-runewidth misses a few of them (for example the variation
@@ -15,7 +21,7 @@ func charWidth(r rune) int {
 	if unicode.IsControl(r) || unicode.In(r, unicode.Mn, unicode.Me, unicode.Cf) {
 		return 0
 	}
-	return runewidth.RuneWidth(r)
+	return renderWidth.RuneWidth(r)
 }
 
 // textWidth mirrors `UnicodeWidthStr::width`.
