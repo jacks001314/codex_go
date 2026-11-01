@@ -26,7 +26,11 @@ type startedUnifiedExecCommand struct {
 
 func startUnifiedExecCommand(cmd *osexec.Cmd, tty bool) (*startedUnifiedExecCommand, error) {
 	if tty {
+		// Rust #47605: the launch carries an explicit descriptor policy, so the
+		// terminal child starts without the daemon's unrelated descriptors.
+		restoreDescriptors := processgroup.HideInheritedDescriptors()
 		terminal, err := pty.Start(cmd)
+		restoreDescriptors()
 		if err != nil {
 			return nil, err
 		}
@@ -43,8 +47,11 @@ func startUnifiedExecCommand(cmd *osexec.Cmd, tty bool) (*startedUnifiedExecComm
 	if err != nil {
 		return nil, err
 	}
-	if err := cmd.Start(); err != nil {
-		return nil, err
+	restoreDescriptors := processgroup.HideInheritedDescriptors()
+	startErr := cmd.Start()
+	restoreDescriptors()
+	if startErr != nil {
+		return nil, startErr
 	}
 	return &startedUnifiedExecCommand{readers: []io.ReadCloser{stdout, stderr}}, nil
 }
