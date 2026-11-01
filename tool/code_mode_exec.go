@@ -21,6 +21,9 @@ import (
 
 const CodeModeExecToolName = "exec"
 
+// codeModePragmaPrefix mirrors Rust CODE_MODE_PRAGMA_PREFIX.
+const codeModePragmaPrefix = "// @exec:"
+
 // CodeModeWaitToolName names the wait tool Rust's code-mode analytics report for a
 // resumed cell.
 const CodeModeWaitToolName = "wait"
@@ -893,7 +896,7 @@ func (e *codeModeExecExecutor) execute(ctx context.Context, invocation *Invocati
 	}
 	source, options, err := parseCodeModeSource(invocation.Payload.Input)
 	if err != nil {
-		return nil, RespondToModel(fmt.Sprintf("invalid exec pragma: %v", err))
+		return nil, RespondToModel(err.Error())
 	}
 	if len(invocation.Payload.Input) > codeModeMaxFrameBytes {
 		return nil, RespondToModel(fmt.Sprintf("code-mode IPC frame length %d exceeds %d bytes", len(invocation.Payload.Input), codeModeMaxFrameBytes))
@@ -1886,44 +1889,96 @@ func cloneInvocationContext(source map[string]any) map[string]any {
 	return cloned
 }
 
+// parseCodeModeSource mirrors codex_code_mode::parse_exec_source
+// (code-mode-protocol/src/description.rs): the first line may carry an
+// `// @exec:` pragma, and every rejection uses Rust's model-facing message
+// verbatim.
 func parseCodeModeSource(input string) (string, codeModeExecOptions, error) {
 	input = strings.TrimPrefix(input, "\ufeff")
 	if strings.TrimSpace(input) == "" {
-		return "", codeModeExecOptions{}, fmt.Errorf("exec expects raw JavaScript source text (non-empty)")
+		return "", codeModeExecOptions{}, errors.New("exec expects raw JavaScript source text (non-empty). Provide JS only, optionally with first-line `// @exec: {\"yield_time_ms\": 10000, \"max_output_tokens\": 1000}`.")
 	}
-	lines := strings.SplitN(input, "\n", 2)
-	if len(lines) != 2 || !strings.HasPrefix(strings.TrimSpace(lines[0]), "// @exec:") {
-		return input, codeModeExecOptions{}, nil
+	var options codeModeExecOptions
+	firstLine, rest, hasRest := strings.Cut(input, "\n")
+	directiveText, isPragma := strings.CutPrefix(strings.TrimLeft(firstLine, " \t\r\f\v"), codeModePragmaPrefix)
+	if !isPragma {
+		return input, options, nil
 	}
-	raw := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(lines[0]), "// @exec:"))
-	options := codeModeExecOptions{}
-	if raw != "" {
-		var fields map[string]json.RawMessage
-		if err := json.Unmarshal([]byte(raw), &fields); err != nil {
-			return "", options, err
+	const malformed = "exec pragma must be a JSON object with supported fields `yield_time_ms` and `max_output_tokens`"
+	if !hasRest || strings.TrimSpace(rest) == "" {
+		return "", options, errors.New("exec pragma must be followed by JavaScript source on subsequent lines")
+	}
+	directive := strings.TrimSpace(directiveText)
+	if directive == "" {
+		return "", options, errors.New(malformed)
+	}
+	var value any
+	decoder := json.NewDecoder(strings.NewReader(directive))
+	decoder.UseNumber()
+	if err := decoder.Decode(&value); err != nil {
+		return "", options, fmt.Errorf("exec pragma must be valid JSON with supported fields `yield_time_ms` and `max_output_tokens`: %v", err)
+	}
+	fields, ok := value.(map[string]any)
+	if !ok {
+		return "", options, errors.New(malformed)
+	}
+	for key := range fields {
+		if key != "yield_time_ms" && key != "max_output_tokens" {
+			return "", options, fmt.Errorf("exec pragma only supports `yield_time_ms` and `max_output_tokens`; got `%s`", key)
 		}
-		for key := range fields {
-			if key != "yield_time_ms" && key != "max_output_tokens" {
-				return "", options, fmt.Errorf("exec pragma only supports yield_time_ms and max_output_tokens; got %q", key)
-			}
+	}
+	readField := func(key, expected string) (*int, error) {
+		raw, present := fields[key]
+		if !present || raw == nil {
+			return nil, nil
 		}
-		if err := json.Unmarshal([]byte(raw), &options); err != nil {
-			return "", options, err
+		number, ok := raw.(json.Number)
+		if !ok {
+			return nil, fmt.Errorf("invalid type: %s, expected %s", codeModeJSONTypeName(raw), expected)
 		}
+		parsed, err := strconv.ParseInt(number.String(), 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid value: integer `%s`, expected %s", number.String(), expected)
+		}
+		if parsed < 0 {
+			return nil, fmt.Errorf("invalid value: integer `%s`, expected %s", number.String(), expected)
+		}
+		value := int(parsed)
+		return &value, nil
 	}
-	if options.YieldTimeMS != nil && *options.YieldTimeMS < 0 {
-		return "", options, fmt.Errorf("yield_time_ms must be non-negative")
+	yieldTimeMS, err := readField("yield_time_ms", "u64")
+	if err != nil {
+		return "", options, fmt.Errorf("exec pragma fields `yield_time_ms` and `max_output_tokens` must be non-negative safe integers: %v", err)
 	}
-	if options.MaxOutputTokens != nil && *options.MaxOutputTokens < 0 {
-		return "", options, fmt.Errorf("max_output_tokens must be non-negative")
+	maxOutputTokens, err := readField("max_output_tokens", "usize")
+	if err != nil {
+		return "", options, fmt.Errorf("exec pragma fields `yield_time_ms` and `max_output_tokens` must be non-negative safe integers: %v", err)
 	}
-	if options.YieldTimeMS != nil && *options.YieldTimeMS > codeModeMaxSafeInteger {
-		return "", options, fmt.Errorf("yield_time_ms must be a non-negative safe integer")
+	if yieldTimeMS != nil && *yieldTimeMS > codeModeMaxSafeInteger {
+		return "", options, errors.New("exec pragma field `yield_time_ms` must be a non-negative safe integer")
 	}
-	if options.MaxOutputTokens != nil && *options.MaxOutputTokens > codeModeMaxSafeInteger {
-		return "", options, fmt.Errorf("max_output_tokens must be a non-negative safe integer")
+	if maxOutputTokens != nil && *maxOutputTokens > codeModeMaxSafeInteger {
+		return "", options, errors.New("exec pragma field `max_output_tokens` must be a non-negative safe integer")
 	}
-	return lines[1], options, nil
+	options.YieldTimeMS = yieldTimeMS
+	options.MaxOutputTokens = maxOutputTokens
+	return rest, options, nil
+}
+
+// codeModeJSONTypeName names a decoded pragma value the way serde reports it.
+func codeModeJSONTypeName(value any) string {
+	switch value.(type) {
+	case string:
+		return "string"
+	case bool:
+		return "boolean"
+	case []any:
+		return "sequence"
+	case map[string]any:
+		return "map"
+	default:
+		return "value"
+	}
 }
 
 // CodeModeHostObservationContextKey marks an invocation a code-mode host is
