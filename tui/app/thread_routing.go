@@ -30,6 +30,11 @@ type ThreadEventStore struct {
 	Buffer                   []ThreadBufferedEvent
 	Capacity                 int
 	PendingInteractiveReplay *PendingInteractiveReplayState
+	// DelegatedTurns is the append-only set of turns opened by a realtime
+	// voice handoff. A marker survives TurnCompleted so a thread rebuild can
+	// keep suppressing that turn's private content (Rust
+	// ThreadEventStore::delegated_turns).
+	DelegatedTurns []string
 }
 
 func NewThreadEventStore(capacity int) *ThreadEventStore {
@@ -207,10 +212,14 @@ func (s *ThreadEventStore) EnqueueNotification(notification ServerEvent) {
 	s.ensure()
 	s.PendingInteractiveReplay.NoteServerNotification(notification)
 	s.updateActiveTurnFromNotification(notification)
+	// Rust push_notification_inner records the turn of a realtime delegation
+	// user message before the notification is buffered.
+	s.noteDelegatedTurnFromNotification(notification)
 	s.appendEvent(ThreadBufferedEvent{
 		Type:         ThreadBufferedEventNotification,
 		Notification: cloneServerEventForRouting(&notification),
 	})
+	s.trimDelegatedTurns()
 }
 
 func (s *ThreadEventStore) EnqueueRequest(request ServerRequest) {
@@ -238,8 +247,9 @@ func (s *ThreadEventStore) Snapshot() ThreadEventSnapshot {
 		events = append(events, cloneThreadBufferedEventForRouting(event))
 	}
 	snapshot := ThreadEventSnapshot{
-		Turns:  append([]appserver.Turn(nil), s.Turns...),
-		Events: events,
+		Turns:          cloneTurnsForReplay(s.Turns),
+		Events:         events,
+		DelegatedTurns: s.DelegatedTurnIDs(),
 	}
 	if s.Session != nil {
 		cloned := s.Session.Clone()
@@ -249,6 +259,9 @@ func (s *ThreadEventStore) Snapshot() ThreadEventSnapshot {
 		cloned := *s.InputState
 		snapshot.InputState = &cloned
 	}
+	// Rust ThreadEventStore::snapshot hides private voice-handoff content
+	// before a rebuilt widget replays the thread.
+	applyRealtimeDelegationPrivacy(&snapshot)
 	return snapshot
 }
 

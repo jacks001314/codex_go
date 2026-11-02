@@ -374,6 +374,86 @@ func mergeAssistantPhaseToMessages(messages []codextui.Message, text string, pha
 // applyBufferedThreadEventToMessages replays one buffered background-thread
 // event onto a message snapshot. It mirrors the subset of live transcript
 // rendering that matters when switching to a running agent (Rust parity).
+// bufferedReplayPrivacy carries the per-turn voice-handoff state across one
+// thread's buffered replay. Rust ThreadEventStore::snapshot applies the same
+// filter before the rebuilt widget replays the thread.
+type bufferedReplayPrivacy struct {
+	delegated map[string]bool
+	typed     map[string]bool
+}
+
+// applyBufferedThreadReplay replays a background thread's buffered events with
+// the voice-handoff privacy filter applied: the spoken prompt is shown without
+// its <realtime_delegation> envelope, and a delegated turn keeps only its
+// public output (Rust hide_private_items_after_voice_handoff).
+func applyBufferedThreadReplay(messages []codextui.Message, events []protocol.ThreadEvent) []codextui.Message {
+	state := bufferedReplayPrivacy{delegated: map[string]bool{}, typed: map[string]bool{}}
+	for _, event := range events {
+		messages = state.apply(messages, event)
+	}
+	return messages
+}
+
+func (s *bufferedReplayPrivacy) apply(messages []codextui.Message, event protocol.ThreadEvent) []codextui.Message {
+	turnID := strings.TrimSpace(event.TurnID)
+	if event.Item != nil && (event.Type == "item.started" || event.Type == "item.completed") {
+		if realtimeItemIsDelegationUserMessage(event.Item) {
+			if turnID != "" {
+				s.delegated[turnID] = true
+			}
+			if event.Type != "item.completed" {
+				return messages
+			}
+			// Rust on_committed_user_message(from_replay=true) renders the spoken
+			// input instead of the delegation envelope.
+			projected := *event.Item
+			if inner, ok := chatwidget.RealtimeDelegationInput(firstNonEmpty(projected.Text, projected.Message)); ok {
+				projected.Text = chatwidget.RealtimeDelegationDisplayText(inner)
+				projected.Message = ""
+				if projected.Content != nil {
+					projected.Content = nil
+				}
+			}
+			return applyBufferedThreadItemToMessages(messages, &projected)
+		}
+		switch chatwidget.NormalizeItemKind(event.Item.Type) {
+		case "reasoning", "agentmessage", "assistantmessage":
+			if !s.delegated[turnID] {
+				s.typed[realtimeItemKey(turnID, event.Item.ID)] = true
+			}
+		}
+	}
+	if s.suppressed(event) {
+		return messages
+	}
+	return applyBufferedThreadEventToMessages(messages, event)
+}
+
+func (s *bufferedReplayPrivacy) suppressed(event protocol.ThreadEvent) bool {
+	turnID := strings.TrimSpace(event.TurnID)
+	if !s.delegated[turnID] {
+		return false
+	}
+	switch event.Type {
+	case "item.delta":
+		if event.Delta == nil || strings.TrimSpace(event.Delta.Text) == "" {
+			return false
+		}
+		return !s.typed[realtimeItemKey(turnID, event.Delta.ItemID)]
+	case "item.reasoning.delta":
+		return event.Delta == nil || !s.typed[realtimeItemKey(turnID, event.Delta.ItemID)]
+	case "item.completed":
+		if event.Item == nil {
+			return false
+		}
+		if !chatwidget.IsPrivateRealtimeAgentItem(event.Item.Type, event.Item.Phase, firstNonEmpty(event.Item.Text, event.Item.Message)) {
+			return false
+		}
+		return !s.typed[realtimeItemKey(turnID, event.Item.ID)]
+	}
+	return false
+}
+
 func applyBufferedThreadEventToMessages(messages []codextui.Message, event protocol.ThreadEvent) []codextui.Message {
 	switch event.Type {
 	case "item.delta":
