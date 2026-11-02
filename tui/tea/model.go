@@ -2203,6 +2203,15 @@ type Model struct {
 	misalignmentReview        *misalignmentReview
 	misalignmentReviewSerial  uint64
 	currentTurnID             string
+	// delegatedTurns is the append-only set of turns opened by a realtime voice
+	// handoff. Rust keeps the marker past TurnCompleted (ThreadEventStore::
+	// delegated_turns); the thread-scoped reset clears it on a thread switch.
+	delegatedTurns     map[string]struct{}
+	delegatedTurnOrder []string
+	// typedRealtimeItems records reasoning/agent items that started before a
+	// voice handoff steered their turn. Rust keeps those visible
+	// (RealtimeAgentItemOrigin::Typed).
+	typedRealtimeItems map[string]struct{}
 	// pendingSafetyRecourse carries the active turn's moderation block notice
 	// and its validated explanation/rewrites (Rust #57363 safety_recourse).
 	pendingSafetyRecourse        *chatwidget.PendingSafetyRecourse
@@ -5446,6 +5455,10 @@ func (m *Model) applyReasoningSummaryDelta(delta *protocol.Delta) {
 	if m == nil || delta == nil {
 		return
 	}
+	// Rust gates reasoning deltas on is_realtime_delegated_reasoning_item.
+	if m.suppressRealtimeDelta(delta.ItemID) {
+		return
+	}
 	itemID := strings.TrimSpace(delta.ItemID)
 	if itemID == "" {
 		return
@@ -7482,8 +7495,16 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 		}
 		cmd = m.applyItemCompleted(event.Item)
 	case "item.delta":
+		// Rust drops the streamed agent text of a delegated turn's private
+		// items; the spoken answer arrives through the voice caption instead.
+		if event.Delta != nil && event.Delta.Text != "" && m.suppressRealtimeDelta(event.Delta.ItemID) {
+			break
+		}
 		m.applyDelta(event.Delta)
 	case "item.reasoning.delta":
+		if event.Delta != nil && m.suppressRealtimeDelta(event.Delta.ItemID) {
+			break
+		}
 		m.applyReasoningSummaryDelta(event.Delta)
 	case "item.plan.delta":
 		m.applyProposedPlanDelta(event.Delta)
@@ -7629,6 +7650,13 @@ func (m *Model) applyItemStarted(item *protocol.ThreadItem, startedAtMS int64) {
 	if item == nil {
 		return
 	}
+	// Rust realtime.rs handle_item_started_notification: a delegation prompt
+	// opens the turn, and a delegated turn never starts a live reasoning
+	// heading for its private items.
+	m.observeRealtimeItem(item)
+	if m.suppressPrivateRealtimeItem(item) {
+		return
+	}
 	// Rust #43576: any item other than a CUA call ends the computer-activity
 	// group. Intervening transcript-only reasoning shares the cell (Rust #46565).
 	if !isComputerActivityItem(item) && !isTranscriptOnlyReasoningItem(item) {
@@ -7697,6 +7725,13 @@ const (
 
 func (m *Model) applyItemCompleted(item *protocol.ThreadItem) bubbletea.Cmd {
 	if item == nil {
+		return nil
+	}
+	// Rust handle_item_completed_notification drops a delegated turn's private
+	// reasoning/commentary unless the item started as typed work. The marker
+	// itself is recorded first so the delegation prompt takes effect.
+	m.observeRealtimeItem(item)
+	if m.suppressPrivateRealtimeItem(item) {
 		return nil
 	}
 	var countdownCmd bubbletea.Cmd

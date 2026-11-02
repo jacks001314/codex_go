@@ -20,6 +20,11 @@ func (m *Model) resetThreadScopedState() {
 	// listener, snapshots, and pending state so /side can reopen it later.
 	m.deactivateSideConversation()
 	m.currentTurnID = ""
+	// Rust swaps in a freshly built widget per thread; delegated-turn markers
+	// are thread-scoped, so the next thread must not inherit them.
+	m.delegatedTurns = map[string]struct{}{}
+	m.delegatedTurnOrder = nil
+	m.typedRealtimeItems = map[string]struct{}{}
 	m.clearThreadUsage()
 	// Rust ChatWidget::set_current_cwd/session_flow clear the cached project
 	// root whenever the transcript switches threads.
