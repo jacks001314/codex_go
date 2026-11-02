@@ -5282,11 +5282,40 @@ func (m *Model) voiceStripActivityLabel() string {
 		return "connecting"
 	case m.VoiceConversation.MicrophoneMuted:
 		return "muted"
+	// Rust #43651: an interrupted assistant turn is acknowledged before the
+	// speaker meters take over again.
+	case m.VoiceConversation.VoiceInterruptionAcknowledged(m.currentTime()):
+		return "heard"
 	case m.VoiceConversation.SpeakerPeak > 0 || m.currentTime().Before(m.speakerActiveUntil):
 		return "speaking"
 	default:
 		return "listening"
 	}
+}
+
+// noteVoiceUserCaption mirrors Rust #43651: a spoken user caption interrupts
+// the assistant, so the speaker samples and their activity hold are cleared
+// before the caption renders.
+func (m *Model) noteVoiceUserCaption() {
+	if m == nil {
+		return
+	}
+	if m.VoiceConversation.AcknowledgeVoiceInterruption(m.currentTime()) != chatwidget.VoiceSpeakerMute {
+		return
+	}
+	m.speakerActiveUntil = time.Time{}
+	m.clearSpeakerMeterSample()
+}
+
+// clearSpeakerMeterSample zeroes the newest rendered speaker sample so the
+// meter drops to silence immediately, matching Rust's speaker_level = 0.
+func (m *Model) clearSpeakerMeterSample() {
+	if m == nil || len(m.audioMeterHistory) == 0 {
+		return
+	}
+	last := m.audioMeterHistory[len(m.audioMeterHistory)-1]
+	last.speaker = 0
+	m.audioMeterHistory[len(m.audioMeterHistory)-1] = last
 }
 
 // voiceMuteHint renders the configured mute binding, when one exists.
@@ -10815,6 +10844,9 @@ func (m *Model) refreshVoiceTranscript() bubbletea.Cmd {
 			continue
 		}
 		m.renderedVoiceTranscripts[record] = true
+		if record.Role == chatwidget.VoiceTranscriptUser {
+			m.noteVoiceUserCaption()
+		}
 		position := len(m.State.Messages)
 		m.applyHistoryCell(m.voiceTranscriptCell(record.Role, record.Text))
 		m.retainVoiceCaption(record, position)
