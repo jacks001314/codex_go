@@ -407,6 +407,36 @@ func (t *remoteJSONLineTransport) close() {
 	}
 }
 
+// remoteTUITaskToolsHostForSession mirrors Rust
+// AppServerSession::start_dynamic_tool_mcp (app_server_session.rs:557-565): a
+// server-owned conversation never hosts the client's local task-tools MCP
+// server or worktree tools. A non-local workspace also keeps the app-server
+// dynamic-tools callback transport instead of a hosted MCP server.
+func remoteTUITaskToolsHostForSession(mode ThreadParamsMode, endpoint *appserverdaemon.RemoteAppServerEndpoint, root *cli.RootOptions, state *codextui.State, newHost func() *taskToolsMCPHost) *taskToolsMCPHost {
+	if mode.SettingsOwner() == ThreadSettingsOwnerServer {
+		return nil
+	}
+	if !interactiveRemoteEndpointIsLocal(endpoint) {
+		return nil
+	}
+	loaded, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), interactiveKeymapLoadOptions(root))
+	if err != nil || remoteTUIToolsNamespaceConflict(loaded.Values, DynamicToolNamespace) {
+		// Rust #50148: a configured MCP server that owns the TUI tools namespace
+		// blocks hosting; the thread then keeps the dynamic-tools callback
+		// transport instead.
+		return nil
+	}
+	if newHost == nil {
+		return nil
+	}
+	host := newHost()
+	if host == nil {
+		return nil
+	}
+	host.worktrees = interactiveManagedWorktreeToolsForRemoteSession(endpoint, root, state)
+	return host
+}
+
 func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoint *appserverdaemon.RemoteAppServerEndpoint, stdin io.Reader, stdout io.Writer, stderr io.Writer) error {
 	state := interactiveUIState(root)
 	settings := interactiveTUISettings(root)
@@ -447,20 +477,10 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 	backendID := codextui.NewBackendID()
 	brokers := newRemoteTUIBrokers()
 	interrupts := newRemoteTUIInterruptController(ctx, endpoint)
-	// A local-daemon TUI hosts its codex_tui task tools as a local MCP server
-	// (Rust AppServerSession::start_dynamic_tool_mcp); a remote workspace keeps
-	// the app-server dynamic-tools callback transport.
-	taskToolsHost := &taskToolsMCPHost{}
-	if !interactiveRemoteEndpointIsLocal(endpoint) {
-		taskToolsHost = nil
-	} else if loaded, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), interactiveKeymapLoadOptions(root)); err != nil || remoteTUIToolsNamespaceConflict(loaded.Values, DynamicToolNamespace) {
-		// Rust #50148: a configured MCP server that owns the TUI tools namespace
-		// blocks hosting; the thread then keeps the dynamic-tools callback
-		// transport instead.
-		taskToolsHost = nil
-	} else {
-		taskToolsHost.worktrees = interactiveManagedWorktreeToolsForRemoteSession(endpoint, root, state)
-	}
+	paramsMode := threadParamsModeForLaunch(root)
+	taskToolsHost := remoteTUITaskToolsHostForSession(paramsMode, endpoint, root, state, func() *taskToolsMCPHost {
+		return &taskToolsMCPHost{}
+	})
 	defer taskToolsHost.close()
 	// The TUI owns the voice helper and relays its handshake through the
 	// app-server on a dedicated connection, so a media session never competes
@@ -570,8 +590,8 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		OnContinueSafetyRecourse:    interactiveRemoteContinueSafetyRecourse(ctx, endpoint, root, state, backendID),
 		OnPromptEdit:                interactiveRemotePromptEditHandler(ctx, endpoint, root, state, taskToolsHost),
 		OnExportTranscript:          interactiveRemoteTranscriptExportHandler(ctx, endpoint, showRawReasoning),
-		OnGenerateRecap:             recapGenerateFuncForMode(threadParamsModeForLaunch(root), interactiveRemoteRecapGenerateHandler(ctx, endpoint)),
-		OnSuggestThreadName:         recapGenerateFuncForMode(threadParamsModeForLaunch(root), interactiveRemoteRecapGenerateHandler(ctx, endpoint)),
+		OnGenerateRecap:             recapGenerateFuncForMode(paramsMode, interactiveRemoteRecapGenerateHandler(ctx, endpoint)),
+		OnSuggestThreadName:         recapGenerateFuncForMode(paramsMode, interactiveRemoteRecapGenerateHandler(ctx, endpoint)),
 		OnLoadTranscriptPreview:     interactiveRemoteTranscriptPreviewHandler(ctx, endpoint),
 		OnReadSessionTranscript:     interactiveRemoteSessionTranscriptHandler(ctx, endpoint, showRawReasoning),
 		OnAcknowledgeSessionRead:    interactiveRemoteSessionReadAcknowledgeHandler(ctx, endpoint),
@@ -648,7 +668,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		},
 		OnModalResponse: func(response codextea.ModalResponse) bubbletea.Cmd {
 			brokers.respond(response)
-			return interactiveRemoteModelSelectionCommandForMode(threadParamsModeForLaunch(root), ctx, endpoint, state, response.Picker)
+			return interactiveRemoteModelSelectionCommandForMode(paramsMode, ctx, endpoint, state, response.Picker)
 		},
 		OnAppLinkAction: interactiveAppLinkActionHandler(),
 		OnReadTokenActivity: func(view chatwidget.TokenActivityView) (chatwidget.TokenActivityResponse, error) {
