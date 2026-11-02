@@ -106,6 +106,11 @@ type remoteAppServerTUIClient struct {
 	// answered from their own goroutine so an approval waiting on an inactive
 	// thread cannot stall the notification stream (Rust #58720).
 	writeMu sync.Mutex
+	// threadParamsMode mirrors Rust AppServerSession::thread_params_mode: the
+	// transport, not the CLI flags, decides whether the client or the server
+	// owns the conversation's execution settings (Rust #57267). The zero value
+	// keeps the client-owned behavior every existing transport uses.
+	threadParamsMode ThreadParamsMode
 }
 
 type remoteWebSocketTransport struct {
@@ -1349,7 +1354,7 @@ func interactiveRemoteStartSide(ctx context.Context, root *cli.RootOptions, endp
 	if parentThreadID == "" {
 		return codextea.SideStartResponse{}, errors.New("remote thread/fork requires a parent thread id")
 	}
-	forkParams, err := remoteSideThreadForkParams(root, state, parentThreadID, params.RuntimeWorkspaceRoots)
+	forkParams, err := remoteSideThreadForkParamsForMode(threadParamsModeForLaunch(root), root, state, parentThreadID, params.RuntimeWorkspaceRoots)
 	if err != nil {
 		return codextea.SideStartResponse{}, err
 	}
@@ -1735,6 +1740,13 @@ func interactiveRemoteSessionActionHandler(ctx context.Context, endpoint *appser
 		if selection.Kind == codextui.SessionSelectionFork &&
 			interactiveRemoteEndpointIsExplicitRemote(root) && hasExplicitRemotePermissionOverride(root) {
 			return nil, errors.New(remoteForkPermissionOverrideMessage)
+		}
+		// Rust #57267: a native hosted conversation refuses forks in the TUI
+		// (app_server_session.rs:1195).
+		if selection.Kind == codextui.SessionSelectionFork {
+			if err := cloudThreadForkError(threadParamsModeForLaunch(root)); err != nil {
+				return nil, err
+			}
 		}
 		client, err := openRemoteSessionClient(ctx, endpoint)
 		if err != nil {
@@ -3220,12 +3232,13 @@ func interactiveRemoteEnsureThreadCommand(ctx context.Context, root *cli.RootOpt
 		go func() {
 			defer close(messages)
 			client := &remoteAppServerTUIClient{
-				endpoint: endpoint,
-				root:     root,
-				state:    state,
-				messages: messages,
-				brokers:  brokers,
-				dial:     websocket.Dial,
+				endpoint:         endpoint,
+				root:             root,
+				state:            state,
+				threadParamsMode: threadParamsModeForLaunch(root),
+				messages:         messages,
+				brokers:          brokers,
+				dial:             websocket.Dial,
 			}
 			if taskTools != nil {
 				client.taskTools = taskTools
@@ -3242,8 +3255,8 @@ func interactiveRemoteEnsureThreadCommand(ctx context.Context, root *cli.RootOpt
 			// The session's task-tools MCP server hosts the dynamic-tools
 			// namespace for every thread of this connection, exactly as the
 			// per-turn client does (Rust DynamicToolMcpServer::attach).
-			if client.taskTools != nil {
-				if template, err := remoteThreadStartParams(root, state); err == nil {
+			if client.taskTools != nil && client.threadParamsMode.SettingsOwner() == ThreadSettingsOwnerClient {
+				if template, err := client.remoteThreadStartParamsTemplate(); err == nil {
 					client.taskTools.attach(client, template, client.registerDynamicToolThread)
 					defer client.taskTools.suspend()
 				}
@@ -3413,12 +3426,13 @@ func runInteractiveRemoteTurn(ctx context.Context, root *cli.RootOptions, endpoi
 		ctx = context.Background()
 	}
 	client := &remoteAppServerTUIClient{
-		endpoint: endpoint,
-		root:     root,
-		state:    state,
-		messages: messages,
-		brokers:  brokers,
-		dial:     websocket.Dial,
+		endpoint:         endpoint,
+		root:             root,
+		state:            state,
+		threadParamsMode: threadParamsModeForLaunch(root),
+		messages:         messages,
+		brokers:          brokers,
+		dial:             websocket.Dial,
 	}
 	if len(hosts) > 0 {
 		client.taskTools = hosts[0]
@@ -3435,8 +3449,8 @@ func runInteractiveRemoteTurn(ctx context.Context, root *cli.RootOptions, endpoi
 	// The session's task-tools MCP server outlives this per-turn client; the
 	// client becomes its live connection for the duration of the turn
 	// (Rust DynamicToolMcpServer::reconnect/suspend).
-	if client.taskTools != nil {
-		if template, err := remoteThreadStartParams(root, state); err == nil {
+	if client.taskTools != nil && client.threadParamsMode.SettingsOwner() == ThreadSettingsOwnerClient {
+		if template, err := client.remoteThreadStartParamsTemplate(); err == nil {
 			client.taskTools.attach(client, template, client.registerDynamicToolThread)
 			defer client.taskTools.suspend()
 		}
@@ -3613,8 +3627,14 @@ func (c *remoteAppServerTUIClient) startThread(ctx context.Context, root *cli.Ro
 	if err != nil {
 		return "", err
 	}
-	c.applyTaskToolTransport(&params)
-	taskToolsAvailable := len(params.DynamicTools) > 0 || c.hasTaskToolsMCP()
+	// Rust #57267: a cloud thread skips start_dynamic_tool_mcp entirely
+	// (app_server_session.rs:563), so a server-owned conversation never
+	// advertises the client's dynamic tool namespace or hosted MCP server.
+	taskToolsAvailable := false
+	if c.threadParamsMode.SettingsOwner() == ThreadSettingsOwnerClient {
+		c.applyTaskToolTransport(&params)
+		taskToolsAvailable = len(params.DynamicTools) > 0 || c.hasTaskToolsMCP()
+	}
 	var response appserver.ThreadStartResponse
 	for attempt := 0; ; attempt++ {
 		id, err := c.sendRequest(ctx, appserver.MethodThreadStart, params)
@@ -3918,7 +3938,7 @@ func (c *remoteAppServerTUIClient) remoteServerRequestResult(ctx context.Context
 		}
 		// Rust dynamic_tools::execute: the TUI serves its task-management
 		// namespace for the app server that issued the call.
-		template, err := remoteThreadStartParams(c.root, c.state)
+		template, err := c.remoteThreadStartParamsTemplate()
 		if err != nil {
 			return nil, -32000, err
 		}
@@ -5561,6 +5581,27 @@ func (c *remoteAppServerTUIClient) resetReasoningStatus(threadID string) {
 	c.send(codextea.WorkingStatusHeaderMsg{ThreadID: strings.TrimSpace(threadID)})
 }
 
+// remoteThreadStartParamsForMode mirrors Rust thread_start_params_with_reviewer
+// (app_server_session.rs:2348-2358): a server-owned conversation sends
+// ThreadStartParams::default() and lets the server keep its model, effort,
+// workspace, sandbox, config and tool transport. Client-owned modes keep the
+// existing request shape.
+func remoteThreadStartParamsForMode(mode ThreadParamsMode, root *cli.RootOptions, state *codextui.State) (appserver.ThreadStartParams, error) {
+	if mode.SettingsOwner() == ThreadSettingsOwnerServer {
+		return appserver.ThreadStartParams{}, nil
+	}
+	return remoteThreadStartParams(root, state)
+}
+
+// remoteThreadStartParamsTemplate returns this client's transport-appropriate
+// thread/start template (Rust AppServerSession::thread_start_params).
+func (c *remoteAppServerTUIClient) remoteThreadStartParamsTemplate() (appserver.ThreadStartParams, error) {
+	if c == nil {
+		return remoteThreadStartParams(nil, nil)
+	}
+	return remoteThreadStartParamsForMode(c.threadParamsMode, c.root, c.state)
+}
+
 func remoteThreadStartParams(root *cli.RootOptions, state *codextui.State) (appserver.ThreadStartParams, error) {
 	shared := remoteSharedOptions(root, state)
 	configValues, err := remoteConfigValues(root, shared)
@@ -5594,6 +5635,16 @@ func remoteThreadStartParams(root *cli.RootOptions, state *codextui.State) (apps
 }
 
 func remoteSideThreadForkParams(root *cli.RootOptions, state *codextui.State, parentThreadID string, runtimeWorkspaceRoots []string) (appserver.ThreadForkParams, error) {
+	return remoteSideThreadForkParamsForMode(threadParamsModeForLaunch(root), root, state, parentThreadID, runtimeWorkspaceRoots)
+}
+
+// remoteSideThreadForkParamsForMode mirrors the cloud fork guard at
+// app_server_session.rs:1195-1197: a server-owned conversation cannot be forked
+// from the TUI yet, including the side-conversation path.
+func remoteSideThreadForkParamsForMode(mode ThreadParamsMode, root *cli.RootOptions, state *codextui.State, parentThreadID string, runtimeWorkspaceRoots []string) (appserver.ThreadForkParams, error) {
+	if err := cloudThreadForkError(mode); err != nil {
+		return appserver.ThreadForkParams{}, err
+	}
 	parentThreadID = strings.TrimSpace(parentThreadID)
 	if parentThreadID == "" {
 		return appserver.ThreadForkParams{}, errors.New("remote thread/fork requires a parent thread id")

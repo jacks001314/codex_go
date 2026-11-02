@@ -676,7 +676,10 @@ func runRemoteSessionFork(ctx context.Context, endpoint *appserverdaemon.RemoteA
 }
 
 func openRemoteSessionClient(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) (*remoteAppServerTUIClient, error) {
-	client := &remoteAppServerTUIClient{endpoint: endpoint}
+	client := &remoteAppServerTUIClient{
+		endpoint:         endpoint,
+		threadParamsMode: threadParamsModeForEndpoint(endpoint),
+	}
 	if err := client.connect(ctx); err != nil {
 		return nil, err
 	}
