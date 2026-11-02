@@ -1589,7 +1589,11 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		WorktreeSettings:           worktreeSettings,
 		OnWorktreeOwnerLookup:      interactiveWorktreeOwnerLookup,
 		OnStartManagedWorktree:     interactiveStartManagedWorktreeHandler(worktreeSettings),
-		SessionPickerItems:         interactiveSessionPickerItems(root),
+		// Every session selection is stamped with the backend this process
+		// talks to; the model needs the same identity or the first `/fork` of a
+		// fresh session is rejected as belonging to another backend (#54681).
+		BackendID:          codextui.ProcessBackendID(),
+		SessionPickerItems: interactiveSessionPickerItems(root),
 		OnListSessionPickerItems: func() ([]codextui.SessionSummary, string, error) {
 			return interactiveSessionPickerItems(root), "", nil
 		},

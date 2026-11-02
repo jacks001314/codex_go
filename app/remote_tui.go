@@ -576,7 +576,12 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		// Rust #43340: the connected server owns named permission profiles.
 		OnListPermissionProfiles:  interactiveRemoteListPermissionProfiles(ctx, endpoint),
 		OnUpdateThreadPermissions: interactiveRemoteUpdateThreadPermissions(ctx, endpoint),
-		SessionPickerItems:        sessionPickerItems,
+		// The model compares a selection's owner against the backend it displays
+		// (Rust #54681). Without this the remote TUI starts with a zero backend
+		// id, so the first `/fork` or command-center fork of a fresh session was
+		// rejected with "This session belongs to a different backend".
+		BackendID:          backendID,
+		SessionPickerItems: sessionPickerItems,
 		OnListSessionPickerItems: func() ([]codextui.SessionSummary, string, error) {
 			items, notice := interactiveRemoteSessionPickerItems(ctx, root, endpoint, backendID)
 			return items, notice, nil
