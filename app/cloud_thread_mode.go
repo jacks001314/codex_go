@@ -3,6 +3,7 @@ package app
 import (
 	"errors"
 
+	"codex_go/appserver"
 	"codex_go/appserverdaemon"
 	"codex_go/cli"
 )
@@ -78,6 +79,22 @@ func cloudThreadForkError(mode ThreadParamsMode) error {
 		return errors.New(cloudThreadForkUnsupportedMessage)
 	}
 	return nil
+}
+
+// cloudConfigRequirementsUnsupported mirrors the bootstrap tolerance at
+// codex-rs/tui/src/app_server_session.rs:824-833: a native hosted transport may
+// answer configRequirements/read with "method not found", and that absence is
+// distinct from an authoritative response without requirements. Every other
+// mode and every other error stays fatal.
+func cloudConfigRequirementsUnsupported(mode ThreadParamsMode, err error) bool {
+	if mode != ThreadParamsModeCloud || err == nil {
+		return false
+	}
+	var rpcErr *remoteRPCError
+	if !errors.As(err, &rpcErr) {
+		return false
+	}
+	return rpcErr.Code == appserver.JSONRPCMethodNotFoundErrorCode
 }
 
 // appServerTransportKind names the app-server connection backing a TUI session.

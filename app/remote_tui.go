@@ -1203,7 +1203,15 @@ func interactiveRemoteReadSettings(ctx context.Context, client *remoteAppServerT
 	}
 	result := interactiveSettingsFromConfig(&config.Config{Values: response.Config})
 	var requirements config.ConfigRequirementsReadResponse
-	if err := remoteSessionRequest(ctx, client, appserver.MethodConfigRequirementsRead, map[string]any{}, &requirements); err == nil {
+	if err := remoteSessionRequest(ctx, client, appserver.MethodConfigRequirementsRead, map[string]any{}, &requirements); err != nil {
+		// Rust #57267: only a cloud transport may omit the conventional
+		// requirements catalog (app_server_session.rs:824-833); every other
+		// mode and error still fails the bootstrap instead of silently
+		// dropping the server's requirements.
+		if !cloudConfigRequirementsUnsupported(client.threadParamsMode, err) {
+			return codextea.SettingsWriteResult{}, err
+		}
+	} else {
 		result.PermissionRequirements = interactivePermissionRequirementsFromConfigRequirements(requirements.Requirements)
 		// Rust #51253: the same configRequirements/read response the settings load
 		// already performs also carries the server's speed policies, which the TUI
