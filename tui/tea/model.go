@@ -5330,6 +5330,19 @@ func (m *Model) voiceMuteHint() string {
 	return bindings[0]
 }
 
+// voiceMicrophoneListening mirrors Rust's realtime_microphone_is_listening: the
+// active conversation owns the current thread and capture is not muted.
+func (m *Model) voiceMicrophoneListening() bool {
+	if m == nil || m.State == nil {
+		return false
+	}
+	if m.VoiceConversation.Phase != chatwidget.VoicePhaseActive || m.VoiceConversation.MicrophoneMuted {
+		return false
+	}
+	threadID := strings.TrimSpace(m.VoiceConversation.ThreadID)
+	return threadID != "" && threadID == m.State.ThreadID
+}
+
 func (m *Model) regionChromeEnabled() bool {
 	return m != nil && m.width >= regionChromeMinWidth && m.height >= 16
 }
