@@ -921,6 +921,29 @@ func (s *VoiceConversationState) InvalidateVoiceInputForTyping() VoiceSpeakerAct
 	return s.suppressVoiceSpeaker()
 }
 
+// AcknowledgeVoiceInterruption records that user speech interrupted the
+// assistant. Rust #43651 (suppress_realtime_speaker plus the interruption
+// acknowledgement) clears the speaker level and its activity hold and shows
+// "heard" briefly, so the strip cannot keep reporting audio that is no longer
+// playing.
+func (s *VoiceConversationState) AcknowledgeVoiceInterruption(now time.Time) VoiceSpeakerAction {
+	if s == nil || !s.Running() {
+		return VoiceSpeakerNone
+	}
+	active := s.SpeakerPeak > 0 || s.SpeakerLevel > 0 || now.Before(s.SpeakerActiveUntil)
+	if active {
+		s.InterruptionAcknowledgedUntil = now.Add(VoiceInterruptionAcknowledgment)
+	}
+	s.SpeakerPeak = 0
+	action := s.suppressActiveVoiceSpeaker(now)
+	if active && action == VoiceSpeakerNone {
+		// The helper's peak alone was the activity, and clearing it just made
+		// the generation check look quiet; suppress explicitly.
+		action = s.suppressVoiceSpeaker()
+	}
+	return action
+}
+
 // suppressVoiceSpeaker records the suppressed generation.
 func (s *VoiceConversationState) suppressVoiceSpeaker() VoiceSpeakerAction {
 	generation := s.InputGeneration
@@ -939,6 +962,7 @@ func (s *VoiceConversationState) suppressActiveVoiceSpeaker(now time.Time) Voice
 	}
 	active := s.AssistantTranscriptGeneration != nil ||
 		len(s.PendingSpeech) > 0 ||
+		s.SpeakerPeak > 0 ||
 		s.SpeakerLevel > 0 ||
 		now.Before(s.SpeakerActiveUntil) ||
 		s.SpeakerSuppressionGeneration != nil

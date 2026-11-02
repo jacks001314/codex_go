@@ -90,6 +90,9 @@ type remoteAppServerTUIClient struct {
 	// obsolete identity can never replace a newer one (Rust #50199).
 	accountEmailMu        sync.Mutex
 	accountEmailRequestID string
+	// userVerification tracks the pending user-verification requests so a late
+	// or duplicate result cannot answer a prompt that is gone (Rust #43708).
+	userVerification UserVerificationRequests
 	// reasoningBuffers accumulates streaming reasoning summaries per
 	// turn+item so the status row can show the latest usable line
 	// (Rust #43921).
@@ -4215,6 +4218,15 @@ func (c *remoteAppServerTUIClient) mcpElicitation(ctx context.Context, params *a
 	if !c.brokers.elicitation.markPublished(id, entry) {
 		return nil, ErrInteractiveElicitationAbandoned
 	}
+	if remoteMCPElicitationUserVerification(params) {
+		// Rust #43708: keep the approved parameters apart from the view so the
+		// resolution path never signs a redrawn prompt.
+		c.userVerification.NoteRequest(serverName, requestID, UserVerificationParams{
+			Title:       strings.TrimSpace(params.Title),
+			Description: strings.TrimSpace(params.Description),
+			Challenge:   strings.TrimSpace(params.Challenge),
+		})
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -4222,8 +4234,18 @@ func (c *remoteAppServerTUIClient) mcpElicitation(ctx context.Context, params *a
 	case response := <-responses:
 		if remoteMCPElicitationUserVerification(params) && response.Elicitation != nil &&
 			remoteMCPAction(response.Elicitation.Action) == appserver.MCPElicitationActionAccept {
+			attempt, started := c.userVerification.Begin(serverName, requestID)
+			if !started {
+				// A request may only ever run one verification. Rust #43708
+				// refuses the duplicate instead of signing twice.
+				return &appserver.MCPElicitationRequestResponse{
+					Action: appserver.MCPElicitationActionCancel,
+					Meta:   mcp.UserVerificationReasonMeta(mcp.UserVerificationReasonInterrupted),
+				}, nil
+			}
 			proof, err := c.verifyUserVerification(ctx, params)
 			if err != nil {
+				c.userVerification.Remove(serverName, requestID)
 				reason := mcp.UserVerificationReasonServiceError
 				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 					reason = mcp.UserVerificationReasonInterrupted
@@ -4235,6 +4257,15 @@ func (c *remoteAppServerTUIClient) mcpElicitation(ctx context.Context, params *a
 					Meta:   mcp.UserVerificationReasonMeta(reason),
 				}, nil
 			}
+			if !c.userVerification.IsPending(serverName, requestID, attempt.ID) {
+				// The prompt was resolved, cancelled, or dropped while the
+				// verifier ran, so its proof is stale (Rust #43708).
+				return &appserver.MCPElicitationRequestResponse{
+					Action: appserver.MCPElicitationActionCancel,
+					Meta:   mcp.UserVerificationReasonMeta(mcp.UserVerificationReasonInterrupted),
+				}, nil
+			}
+			c.userVerification.Remove(serverName, requestID)
 			return &appserver.MCPElicitationRequestResponse{
 				Action: appserver.MCPElicitationActionAccept,
 				Content: map[string]any{
@@ -4243,14 +4274,17 @@ func (c *remoteAppServerTUIClient) mcpElicitation(ctx context.Context, params *a
 				},
 			}, nil
 		}
+		c.userVerification.Remove(serverName, requestID)
 		return remoteMCPElicitationResponse(response, mcpElicitationToolApproval(params.Meta), remoteMCPElicitationUserVerification(params)), nil
 	case <-entry.abandoned:
+		c.userVerification.Remove(serverName, requestID)
 		return nil, ErrInteractiveElicitationAbandoned
 	case <-ctx.Done():
 		// The waiter is dropped: abandon the published prompt exactly once so
 		// the TUI stops offering an answer that can no longer be delivered
 		// (Rust #51611).
 		c.brokers.elicitation.abandon(id)
+		c.userVerification.Remove(serverName, requestID)
 		return nil, ctx.Err()
 	}
 }

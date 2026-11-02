@@ -729,6 +729,23 @@ func TerminalTitleText(items []TerminalTitleItem, data StatusSurfacePreviewData,
 	return title, title != ""
 }
 
+// TerminalTitleRecordingMarker is the activity dot Rust #43651 prepends to the
+// terminal title while the realtime microphone is listening.
+const TerminalTitleRecordingMarker = "\u25cf"
+
+// RecordingTerminalTitle marks a written title as recording. Rust prefixes the
+// ordinary title with "● " and collapses to a bare marker when the title has no
+// other activity text (status_surfaces.rs terminal_title_text).
+func RecordingTerminalTitle(title string, recording bool) string {
+	if !recording {
+		return title
+	}
+	if strings.TrimSpace(title) == "" {
+		return TerminalTitleRecordingMarker
+	}
+	return TerminalTitleRecordingMarker + " " + title
+}
+
 func PreviewLineForTitleItems(items []TerminalTitleItem, data StatusSurfacePreviewData) (string, bool) {
 	if containsTerminalTitleItem(items, TerminalTitleSpinner) {
 		return BuildActionRequiredTitleText(TerminalTitleActionRequiredPrefix, items, nil, data), true
