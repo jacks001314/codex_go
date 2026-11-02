@@ -158,7 +158,7 @@ func (m *Model) applyPlanCommand(args string) bubbletea.Cmd {
 		m.notice = ""
 		return nil
 	}
-	if _, ok := chatwidget.PlanCollaborationMask(nil); !ok {
+	if !m.planModeAvailable() {
 		m.applyHistoryCell(historycell.NewInfoEvent("Plan mode unavailable right now.", ""))
 		m.notice = ""
 		return nil
@@ -198,6 +198,12 @@ func (m *Model) effectiveSubmissionCollaborationMode() *chatwidget.Collaboration
 		m.State.EffectiveReasoningEffort(),
 		chatwidget.CollaborationModeInstructions(kind),
 	)
+	if mask, ok := m.collaborationMaskForKind(kind); ok {
+		// Rust #42401: the discovered catalog decides the mode's model and
+		// reasoning effort, and the cleared developer-instruction override lets
+		// the server supply the mode's instructions when it is selected.
+		mode = mode.WithUpdates(mask.Model, mask.ReasoningEffort, mask.DeveloperInstructions)
+	}
 	return &mode
 }
 
