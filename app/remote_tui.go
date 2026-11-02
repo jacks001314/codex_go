@@ -5035,6 +5035,21 @@ func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMes
 		}
 		c.send(codextea.ThreadEventMsg{Event: protocol.TurnCompletedWithStatus(
 			protocol.Usage{}, payload.Turn.ID, payload.Turn.Status == appserver.TurnStatusFailed)})
+	// Rust #47065 (chatwidget/protocol.rs ServerNotification::DeprecationNotice):
+	// the app-server's deprecationNotice notification enters the transcript
+	// through the deduplicating notice cell. The notification is connection
+	// scoped rather than thread scoped, so a background or freshly switched
+	// thread still delivers it.
+	case appserver.NotificationDeprecationNotice:
+		var payload appserver.DeprecationNoticeNotification
+		if err := json.Unmarshal(message.Params, &payload); err != nil {
+			return err
+		}
+		summary := strings.TrimSpace(firstNonEmptyLocal(payload.Summary, payload.Message))
+		if summary == "" {
+			return nil
+		}
+		c.send(codextea.ThreadEventMsg{Event: protocol.DeprecationNotice(summary, strings.TrimSpace(stringPtrValue(payload.Details)))})
 	// Rust chatwidget ServerNotification::ConfigWarning: startup config
 	// warnings coalesce into the startup warnings entry until the first turn.
 	case appserver.NotificationConfigWarning:

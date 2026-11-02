@@ -139,6 +139,60 @@ func interactiveStartupConfigWarningsWithNFS(codexHome string, cwd string, theme
 	return warnings
 }
 
+// interactiveStartupDeprecationMessages resolves the deprecated configuration
+// features the local session uses and yields one TUI deprecation-notice event
+// per usage (Rust #47065: core SessionConfiguration emits
+// EventMsg::DeprecationNotice for config.features.legacy_feature_usages(), the
+// app-server relays it as a deprecationNotice notification, and the TUI inserts
+// it through the deduplicating history path).
+func interactiveStartupDeprecationMessages(root *cli.RootOptions, codexHome string, cwd string) []bubbletea.Msg {
+	loaded, err := config.LoadEffectiveWithOptions(codexHome, interactiveKeymapLoadOptions(root))
+	if err != nil || loaded == nil {
+		return nil
+	}
+	usages := loaded.LegacyFeatureUsages()
+	messages := make([]bubbletea.Msg, 0, len(usages))
+	for _, usage := range usages {
+		notice := features.NoticeForLegacyFeatureUsage(usage)
+		messages = append(messages, codextea.ThreadEventMsg{Event: protocol.DeprecationNotice(notice.Summary, notice.Details)})
+	}
+	return messages
+}
+
+// interactiveStartupMessages prepends the startup deprecation notices to the
+// MCP startup stream so the TUI consumes both through the same message channel
+// as the server-delivered events.
+func interactiveStartupMessages(ctx context.Context, stream <-chan bubbletea.Msg, prefix []bubbletea.Msg) <-chan bubbletea.Msg {
+	if len(prefix) == 0 {
+		return stream
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	messages := make(chan bubbletea.Msg, len(prefix)+2)
+	go func() {
+		defer close(messages)
+		for _, message := range prefix {
+			select {
+			case messages <- message:
+			case <-ctx.Done():
+				return
+			}
+		}
+		if stream == nil {
+			return
+		}
+		for message := range stream {
+			select {
+			case messages <- message:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return messages
+}
+
 func interactiveWorktreeSettings(root *cli.RootOptions) (worktree.WorktreeSettings, bool) {
 	loaded, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), interactiveKeymapLoadOptions(root))
 	if err != nil {
@@ -1337,6 +1391,10 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		startupCtx, cancelMCPStartup = context.WithCancel(startupCtx)
 		initialMessages = interactiveMCPStartupMessages(startupCtx, mcpService, runner, mcpExpectedServers)
 	}
+	// Rust #47065: the local session resolves deprecated configuration features
+	// during startup, so the embedded TUI delivers the same deprecation notices
+	// the app-server would notify the remote client about.
+	initialMessages = interactiveStartupMessages(ctx, initialMessages, interactiveStartupDeprecationMessages(root, auth.DefaultCodexHome(), strings.TrimSpace(state.CWD)))
 	approvalBroker := newInteractiveApprovalBroker()
 	elicitationBroker := newInteractiveElicitationBroker()
 	// Rust #51611 closes the elicitation router during MCP runtime shutdown:
