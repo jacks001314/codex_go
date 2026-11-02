@@ -5845,7 +5845,21 @@ func remoteTurnStartParamsForMode(mode ThreadParamsMode, root *cli.RootOptions, 
 	params.CWD = strings.TrimSpace(shared.CWD)
 	params.Model = turnModel
 	params.ApprovalPolicy = remoteStringAny(shared.ApprovalPolicy)
-	params.SandboxPolicy = remoteStringAny(shared.Sandbox)
+	// Rust app_server_session.rs:1621-1628 via app/thread_routing.rs:938-941: a
+	// thread with a named permission profile sends that profile id as
+	// `permissions`; `sandboxPolicy` and `permissions` are mutually exclusive, so
+	// the legacy policy is only sent when no named profile is active. Sending the
+	// profile id as a sandbox policy (the old behaviour) produced an unknown
+	// sandbox mode on the server.
+	activeProfile := ""
+	if state != nil {
+		activeProfile = strings.TrimSpace(state.ActivePermissionProfile)
+	}
+	if profile := activeProfile; profile != "" {
+		params.Permissions = &profile
+	} else {
+		params.SandboxPolicy = remoteStringAny(shared.Sandbox)
+	}
 	params.Config = configValues
 	params.CollaborationMode = interactiveCollaborationModePayload(request.CollaborationMode)
 	if effort := strings.TrimSpace(shared.ModelReasoningEffort); effort != "" {
