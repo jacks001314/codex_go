@@ -1,12 +1,15 @@
 package tea
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
 	bubbletea "github.com/charmbracelet/bubbletea"
 
 	codextui "codex_go/tui"
+	bottompane "codex_go/tui/bottom_pane"
+	"codex_go/utils"
 )
 
 // Mirrors Rust's external_writer_fork_tests: f/F (plain or shifted) forks the
@@ -85,5 +88,107 @@ func TestReadOnlyViewForkShortcutYieldsToOpenViews(t *testing.T) {
 	model.Update(keyRunes('f'))
 	if forks != 0 {
 		t.Fatalf("a blocking modal must own the fork key: forks = %d", forks)
+	}
+}
+
+// Rust #47185 restores the locked thread's whole ThreadInputState onto the fork
+// (external_writer_fork_tests.rs:156-182, chatwidget/input_restore.rs:607-654),
+// so the queued prompt, the draft and the composer's image, and a steer that
+// had not committed yet all continue in the editable fork.
+func TestLockedForkRetainsQueuedPromptDraftImageAndSteersLikeRust(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-source")
+	model := NewModel(state, Options{
+		Width:  120,
+		Height: 40,
+		OnSessionAction: func(codextui.SessionSelection) (*codextui.SessionSummary, error) {
+			return &codextui.SessionSummary{ThreadID: "thread-forked"}, nil
+		},
+		OnModalResponse: func(ModalResponse) bubbletea.Cmd { return nil },
+	})
+	// The draft, its image and the queue exist before the conversation locks,
+	// mirroring Rust's suppressed-autosend setup.
+	model.composer.SetValue("Retained draft")
+	model.attachments = []bottompane.ComposerAttachment{{Kind: bottompane.AttachmentImage, Path: `C:\shots\retained.png`}}
+	model.queued = []queuedSubmission{{Request: SubmitRequest{Prompt: "Retained queued prompt"}}}
+	model.applyResumeResponse("thread-source", SessionResumeResponse{
+		Summary:  &codextui.SessionSummary{ThreadID: "thread-source"},
+		ReadOnly: true,
+	})
+	if !model.externalWriterView() {
+		t.Fatal("the resume response did not enter the external-writer view")
+	}
+	model.pendingSteers = []pendingSteerSubmission{{ID: "client-steer", Request: SubmitRequest{Prompt: "Retained steer"}}}
+
+	model.Update(keyRunes('f'))
+
+	if state.ThreadID != "thread-forked" {
+		t.Fatalf("thread after the locked-view fork = %q, want the fork", state.ThreadID)
+	}
+	if model.readOnlyThread {
+		t.Fatal("the fork is editable, so the locked view must be gone")
+	}
+	if got := model.composerBody(); got != "Retained draft" {
+		t.Fatalf("draft after fork = %q, want it retained", got)
+	}
+	if len(model.attachments) != 1 || model.attachments[0].Path != `C:\shots\retained.png` {
+		t.Fatalf("draft image after fork = %#v, want it retained", model.attachments)
+	}
+	if len(model.queued) != 1 || model.queued[0].Request.Prompt != "Retained queued prompt" {
+		t.Fatalf("queued prompts after fork = %#v, want them retained", model.queued)
+	}
+	if len(model.pendingSteers) != 1 || model.pendingSteers[0].ID != "client-steer" {
+		t.Fatalf("pending steers after fork = %#v, want the uncommitted steer on the fork", model.pendingSteers)
+	}
+	if model.pendingSteersThreadID != "thread-forked" {
+		t.Fatalf("pending steer owner = %q, want the fork", model.pendingSteersThreadID)
+	}
+	if _, parked := model.threadPendingSteers["thread-source"]; parked {
+		t.Fatal("the source thread kept a copy of the steer and would send it twice")
+	}
+
+	view := model.View()
+	for _, want := range []string{"Retained draft", "Retained queued prompt", "Fork created. You can continue here."} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("fork view missing %q:\n%s", want, view)
+		}
+	}
+	if !strings.Contains(utils.StripANSI(view), "retained.png") {
+		t.Fatalf("fork view lost the draft image:\n%s", view)
+	}
+}
+
+// A failed fork leaves the locked view, the draft and its image untouched
+// (external_writer_fork_tests.rs:232-277).
+func TestLockedForkFailureKeepsDraftImageLikeRust(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetThreadID("thread-source")
+	model := NewModel(state, Options{
+		Width:  120,
+		Height: 40,
+		OnSessionAction: func(codextui.SessionSelection) (*codextui.SessionSummary, error) {
+			return nil, errors.New("thread is still locked")
+		},
+		OnModalResponse: func(ModalResponse) bubbletea.Cmd { return nil },
+	})
+	model.composer.SetValue("Retained draft")
+	model.attachments = []bottompane.ComposerAttachment{{Kind: bottompane.AttachmentImage, Path: `C:\shots\retained.png`}}
+	model.applyResumeResponse("thread-source", SessionResumeResponse{
+		Summary:  &codextui.SessionSummary{ThreadID: "thread-source"},
+		ReadOnly: true,
+	})
+	model.Update(keyRunes('f'))
+	if state.ThreadID != "thread-source" || !model.externalWriterView() {
+		t.Fatalf("failed fork changed the view: thread=%q readOnly=%v", state.ThreadID, model.readOnlyThread)
+	}
+	if model.forkInProgress {
+		t.Fatal("the fork guard must clear after a rejected fork")
+	}
+	model.setReadOnlyThread(false)
+	if got := model.composerBody(); got != "Retained draft" {
+		t.Fatalf("draft after a failed fork = %q", got)
+	}
+	if len(model.attachments) != 1 || model.attachments[0].Path != `C:\shots\retained.png` {
+		t.Fatalf("draft image after a failed fork = %#v", model.attachments)
 	}
 }

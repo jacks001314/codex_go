@@ -162,6 +162,12 @@ type activeSideConversation struct {
 	SideStatus        string
 	SidePlaceholder   string
 	ShowingSide       bool
+	// Voice-handoff markers are per thread. The parent snapshot and the side
+	// snapshot stand in for the two ThreadEventStores Rust keeps
+	// (thread_events.rs:69-86), so each carries its own set and a retained
+	// conversation cannot lend its markers to another thread.
+	ParentVoice sideVoicePrivacy
+	SideVoice   sideVoicePrivacy
 }
 
 func (m *Model) retainSideConversation(side *activeSideConversation) {
@@ -218,10 +224,12 @@ func (m *Model) captureActiveSideConversationState() {
 		side.ParentMessages = cloneSideMessages(m.State.Messages)
 		side.ParentStatus = strings.TrimSpace(m.State.Status)
 		side.ParentPlaceholder = m.composer.Placeholder
+		side.ParentVoice.syncFromModel(m)
 	case strings.TrimSpace(side.SideThreadID):
 		side.SideMessages = cloneSideMessages(m.State.Messages)
 		side.SideStatus = strings.TrimSpace(m.State.Status)
 		side.SidePlaceholder = m.composer.Placeholder
+		side.SideVoice.syncFromModel(m)
 	}
 	m.retainSideConversation(side)
 }
@@ -445,6 +453,10 @@ func (m *Model) applySideStartResult(msg SideStartResultMsg) bubbletea.Cmd {
 		SidePlaceholder:   "Ask Codex in side conversation",
 		ShowingSide:       true,
 	}
+	// The parent is the thread on screen, so the model's live markers describe
+	// it: seed the snapshot or a handoff that already happened would render its
+	// private output as soon as the parent runs in the background.
+	m.activeSide.ParentVoice.syncFromModel(m)
 	m.retainSideConversation(m.activeSide)
 	m.switchThreadID(sideThreadID)
 	m.State.Messages = nil
@@ -643,15 +655,17 @@ func (m *Model) applyThreadScopedEvent(msg ThreadScopedEventMsg) bubbletea.Cmd {
 			if threadID == strings.TrimSpace(side.ParentThreadID) {
 				side.ParentMessages = cloneSideMessages(m.State.Messages)
 				side.ParentStatus = strings.TrimSpace(m.State.Status)
+				side.ParentVoice.syncFromModel(m)
 			} else if threadID == strings.TrimSpace(side.SideThreadID) {
 				side.SideMessages = cloneSideMessages(m.State.Messages)
 				side.SideStatus = strings.TrimSpace(m.State.Status)
+				side.SideVoice.syncFromModel(m)
 			}
 		}
 		return cmd
 	}
 	if side != nil && threadID == strings.TrimSpace(side.ParentThreadID) {
-		side.ParentMessages = applyThreadEventToSideSnapshot(side.ParentMessages, msg.Event)
+		side.ParentMessages = applySideSnapshotEvent(&side.ParentVoice, side.ParentMessages, msg.Event)
 		switch msg.Event.Type {
 		case "turn.started":
 			side.ParentStatus = "running"
@@ -666,7 +680,7 @@ func (m *Model) applyThreadScopedEvent(msg ThreadScopedEventMsg) bubbletea.Cmd {
 		return nil
 	}
 	if side != nil && threadID == strings.TrimSpace(side.SideThreadID) {
-		side.SideMessages = applyThreadEventToSideSnapshot(side.SideMessages, msg.Event)
+		side.SideMessages = applySideSnapshotEvent(&side.SideVoice, side.SideMessages, msg.Event)
 		switch msg.Event.Type {
 		case "turn.started":
 			side.SideStatus = "running"

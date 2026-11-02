@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	codextui "codex_go/tui"
+	bottompane "codex_go/tui/bottom_pane"
 )
 
 // Rust parity: codex-rs/tui/src/chatwidget/rendering.rs ExternalWriterNotice
@@ -58,24 +59,34 @@ func (m *Model) externalWriterView() bool {
 }
 
 // composerInputState is the retained input of a locked conversation (Rust
-// capture_thread_input_state). Go's locked view has no queued prompts or image
-// submissions to carry, so the draft body and its prompt marker are the whole
-// retained state.
+// capture_thread_input_state, chatwidget/input_restore.rs:607-654). Rust keeps
+// the whole ThreadComposerState, so the draft's images, mentions and text
+// elements survive the lock as well; Go's queued prompts live on the model
+// instead of the composer, so only the composer-owned state is captured here.
 type composerInputState struct {
-	threadID string
-	text     string
-	prefix   composerPrefix
+	threadID        string
+	text            string
+	prefix          composerPrefix
+	attachments     []bottompane.ComposerAttachment
+	mentionBindings []string
+	textElements    []ComposerTextElement
 }
 
 // captureComposerInputState snapshots a non-empty draft for its thread.
 func (m *Model) captureComposerInputState() *composerInputState {
-	if m == nil || m.composerIsEmpty() {
+	if m == nil {
+		return nil
+	}
+	if m.composerIsEmpty() && len(m.attachments) == 0 && len(m.composerMentionBindings) == 0 {
 		return nil
 	}
 	return &composerInputState{
-		threadID: strings.TrimSpace(m.currentThreadID()),
-		text:     m.composerBody(),
-		prefix:   m.composerPrefix,
+		threadID:        strings.TrimSpace(m.currentThreadID()),
+		text:            m.composerBody(),
+		prefix:          m.composerPrefix,
+		attachments:     cloneComposerAttachments(m.attachments),
+		mentionBindings: append([]string(nil), m.composerMentionBindings...),
+		textElements:    cloneComposerTextElements(m.composerElements),
 	}
 }
 
@@ -86,7 +97,7 @@ func (m *Model) restoreComposerInputState(state *composerInputState, force bool)
 	if m == nil || state == nil {
 		return false
 	}
-	if state.text == "" && state.prefix == composerPrefixNone {
+	if state.text == "" && state.prefix == composerPrefixNone && len(state.attachments) == 0 {
 		return false
 	}
 	if !force && strings.TrimSpace(m.currentThreadID()) != state.threadID {
@@ -96,8 +107,10 @@ func (m *Model) restoreComposerInputState(state *composerInputState, force bool)
 		return false
 	}
 	m.composerPrefix = state.prefix
-	m.composerElements = nil
+	m.composerElements = cloneComposerTextElements(state.textElements)
 	m.composer.SetValue(state.text)
+	m.attachments = cloneComposerAttachments(state.attachments)
+	m.composerMentionBindings = append([]string(nil), state.mentionBindings...)
 	m.refreshComposerPrompt()
 	return true
 }
