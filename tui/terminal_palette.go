@@ -4,6 +4,7 @@ import (
 	"math"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -59,7 +60,7 @@ func SetStdoutColorLevelForTest(level StdoutColorLevel) func() {
 // Rust parity: codex-rs/tui/src/terminal_palette.rs stdout_color_level plus the
 // Windows Terminal truecolor promotion. Windows Terminal fully supports 24-bit
 // color but often advertises only ANSI-16 (no COLORTERM), so WT_SESSION is
-// promoted to truecolor unless FORCE_COLOR is set.
+// promoted to truecolor unless FORCE_COLOR is present.
 func DetectStdoutColorLevel() StdoutColorLevel {
 	if level := colorLevelOverride.Load(); level != nil {
 		return *level
@@ -70,55 +71,152 @@ func DetectStdoutColorLevel() StdoutColorLevel {
 	return detectedColorLevel
 }
 
+// envLookup reads an environment variable and reports whether it is present.
+// Rust's supports-color distinguishes "absent" from "present but empty":
+// NO_COLOR="" disables colour while NO_COLOR="0" does not. os.LookupEnv keeps
+// that distinction observable, os.Getenv does not.
+type envLookup func(key string) (string, bool)
+
+func osEnvLookup(key string) (string, bool) { return os.LookupEnv(key) }
+
 func detectStdoutColorLevel() StdoutColorLevel {
-	// Rust #46897: effective_stdout_color_level goes through supports-color, so a
-	// forced level wins and NO_COLOR turns color off entirely. termenv's
-	// ColorProfile only reads TERM/COLORTERM, so honour both variables here
-	// before probing.
-	if level, ok := forcedColorLevel(os.Getenv("FORCE_COLOR")); ok {
-		return level
-	}
-	if os.Getenv("NO_COLOR") != "" {
-		return ColorUnknown
-	}
-	if runtime.GOOS == "windows" {
-		// Windows Terminal advertises only ANSI-16 to some probes even though it
-		// renders truecolor correctly; promote by WT_SESSION or TERM_PROGRAM
-		// unless the user forced a color level (Rust: effective_stdout_color_level).
-		hasWindowsTerminal := os.Getenv("WT_SESSION") != "" ||
-			strings.EqualFold(os.Getenv("TERM_PROGRAM"), "Windows_Terminal")
-		if hasWindowsTerminal && os.Getenv("FORCE_COLOR") == "" {
-			return ColorTrue
-		}
-	}
-	switch termenv.ColorProfile() {
-	case termenv.TrueColor:
-		return ColorTrue
-	case termenv.ANSI256:
-		return ColorANSI256
-	case termenv.ANSI:
-		return ColorANSI16
-	default:
-		return ColorUnknown
-	}
+	return detectStdoutColorLevelFor(osEnvLookup, stdoutIsTerminal())
 }
 
-// forcedColorLevel maps FORCE_COLOR onto a color depth (supports-color
-// semantics: 0 disables color, 1/2/3 select ANSI-16/256/truecolor).
-func forcedColorLevel(value string) (StdoutColorLevel, bool) {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "":
+// detectStdoutColorLevelFor is detectStdoutColorLevel with the environment and
+// the tty probe injected, so colour detection can be exercised without touching
+// (or depending on) the host environment.
+func detectStdoutColorLevelFor(lookup envLookup, stdoutIsTTY bool) StdoutColorLevel {
+	stdoutLevel := supportsColorLevel(lookup, stdoutIsTTY)
+	_, hasWTSession := lookup("WT_SESSION")
+	// Rust gates the promotion on FORCE_COLOR being *present*, not on it holding
+	// a particular value: FORCE_COLOR="" is an override too.
+	_, hasForceColorOverride := lookup("FORCE_COLOR")
+	if hasWTSession && !hasForceColorOverride {
+		return ColorTrue
+	}
+	if stdoutLevel == ColorANSI16 && isWindowsTerminal(lookup) && !hasForceColorOverride {
+		return ColorTrue
+	}
+	return stdoutLevel
+}
+
+// isWindowsTerminal approximates codex_terminal_detection's WindowsTerminal
+// name. TERM_PROGRAM is the only signal available without probing the console.
+func isWindowsTerminal(lookup envLookup) bool {
+	termProgram, ok := lookup("TERM_PROGRAM")
+	return ok && strings.EqualFold(termProgram, "Windows_Terminal")
+}
+
+// supportsColorLevel ports supports-color 3.0.2 `supports_color()`, the crate
+// Rust's stdout_color_level() delegates to (codex-rs/Cargo.toml pins 3.0.2).
+func supportsColorLevel(lookup envLookup, stdoutIsTTY bool) StdoutColorLevel {
+	if level, ok := forcedColorLevel(lookup); ok {
+		return level
+	}
+	// FORCE_COLOR=0 / CLICOLOR_FORCE=0 fall through to here: they clear the
+	// forced level without being a "no colour" request.
+	if noColorRequested(lookup) || isDumbTerminal(lookup) ||
+		!(stdoutIsTTY || ignoreIsTerminal(lookup)) {
+		return ColorUnknown
+	}
+	if value, ok := lookup("COLORTERM"); ok && (value == "truecolor" || value == "24bit") {
+		return ColorTrue
+	}
+	if value, ok := lookup("TERM"); ok &&
+		(strings.HasSuffix(value, "direct") || strings.HasSuffix(value, "truecolor")) {
+		return ColorTrue
+	}
+	if termProgram, ok := lookup("TERM_PROGRAM"); ok && termProgram == "iTerm.app" {
+		return ColorTrue
+	}
+	if termProgram, ok := lookup("TERM_PROGRAM"); ok && termProgram == "Apple_Terminal" {
+		return ColorANSI256
+	}
+	if value, ok := lookup("TERM"); ok &&
+		(strings.HasSuffix(value, "256") || strings.HasSuffix(value, "256color")) {
+		return ColorANSI256
+	}
+	if _, ok := lookup("COLORTERM"); ok {
+		return ColorANSI16
+	}
+	if ansiColorForTerm(lookup) {
+		return ColorANSI16
+	}
+	if value, ok := lookup("CLICOLOR"); ok && value != "0" {
+		return ColorANSI16
+	}
+	// Known delta: supports-color also consults the is-ci crate at this point.
+	// Go has no equivalent dependency and the branch is unreachable without a
+	// tty, so it is omitted rather than guessed (see hermetic_alignment.md).
+	return ColorUnknown
+}
+
+// noColorRequested ports supports-color `env_no_color()`: NO_COLOR disables
+// colour whenever it is present, with the literal "0" as the sole exception.
+func noColorRequested(lookup envLookup) bool {
+	value, ok := lookup("NO_COLOR")
+	return ok && value != "0"
+}
+
+func isDumbTerminal(lookup envLookup) bool {
+	term, ok := lookup("TERM")
+	return ok && term == "dumb"
+}
+
+func ignoreIsTerminal(lookup envLookup) bool {
+	value, ok := lookup("IGNORE_IS_TERMINAL")
+	return ok && value != "0"
+}
+
+// ansiColorForTerm ports supports-color `check_ansi_color()`, which differs by
+// platform: Windows assumes ANSI support when TERM is absent.
+func ansiColorForTerm(lookup envLookup) bool {
+	term, ok := lookup("TERM")
+	if runtime.GOOS == "windows" {
+		if !ok {
+			return true
+		}
+		return term != "dumb" && term != "cygwin"
+	}
+	if !ok {
+		return false
+	}
+	return term != "dumb"
+}
+
+// forcedColorLevel ports supports-color `env_force_color()`. Anything that is
+// not "true"/"false"/a number forces ANSI-16, and levels are capped at 3.
+func forcedColorLevel(lookup envLookup) (StdoutColorLevel, bool) {
+	level := 0
+	if value, ok := lookup("FORCE_COLOR"); ok {
+		switch value {
+		case "true", "":
+			level = 1
+		case "false":
+			level = 0
+		default:
+			parsed, err := strconv.ParseUint(value, 10, 8)
+			if err != nil {
+				parsed = 1
+			}
+			if parsed > 3 {
+				parsed = 3
+			}
+			level = int(parsed)
+		}
+	} else if value, ok := lookup("CLICOLOR_FORCE"); ok && value != "0" {
+		level = 1
+	}
+	switch level {
+	case 0:
 		return ColorUnknown, false
-	case "0", "false":
-		return ColorUnknown, true
-	case "1":
+	case 1:
 		return ColorANSI16, true
-	case "2":
+	case 2:
 		return ColorANSI256, true
-	case "3", "true":
-		return ColorTrue, true
 	default:
-		return ColorUnknown, false
+		return ColorTrue, true
 	}
 }
 
