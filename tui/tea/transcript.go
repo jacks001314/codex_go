@@ -380,6 +380,29 @@ func mergeAssistantPhaseToMessages(messages []codextui.Message, text string, pha
 type bufferedReplayPrivacy struct {
 	delegated map[string]bool
 	typed     map[string]bool
+	// currentTurn is the turn opened by the last turn.started event. The
+	// app/remote_tui.go bridge builds item notifications with
+	// protocol.AgentMessageDelta / protocol.ItemCompleted, which carry no
+	// TurnID, so the replay reducer has to attribute those items to the turn
+	// opened by the preceding turn.started. Without it a delegated voice turn
+	// replays with turnID "", the marker is never recorded and its private
+	// reasoning/commentary leaks back into the transcript.
+	currentTurn string
+}
+
+// turnID reports the turn an event belongs to: the event's own identity when
+// the producer supplied one, otherwise the turn opened by the last
+// turn.started (Rust replays every buffered event inside its turn, and
+// tui/tea/side_voice_privacy.go resolves side-conversation events the same
+// way).
+func (s *bufferedReplayPrivacy) turnID(event protocol.ThreadEvent) string {
+	if id := strings.TrimSpace(firstNonEmpty(event.TurnID, event.InternalTurnID)); id != "" {
+		return id
+	}
+	if s == nil {
+		return ""
+	}
+	return s.currentTurn
 }
 
 // applyBufferedThreadReplay replays a background thread's buffered events with
@@ -395,7 +418,12 @@ func applyBufferedThreadReplay(messages []codextui.Message, events []protocol.Th
 }
 
 func (s *bufferedReplayPrivacy) apply(messages []codextui.Message, event protocol.ThreadEvent) []codextui.Message {
-	turnID := strings.TrimSpace(event.TurnID)
+	if event.Type == "turn.started" {
+		if id := strings.TrimSpace(firstNonEmpty(event.TurnID, event.InternalTurnID)); id != "" {
+			s.currentTurn = id
+		}
+	}
+	turnID := s.turnID(event)
 	if event.Item != nil && (event.Type == "item.started" || event.Type == "item.completed") {
 		if realtimeItemIsDelegationUserMessage(event.Item) {
 			if turnID != "" {
@@ -430,7 +458,7 @@ func (s *bufferedReplayPrivacy) apply(messages []codextui.Message, event protoco
 }
 
 func (s *bufferedReplayPrivacy) suppressed(event protocol.ThreadEvent) bool {
-	turnID := strings.TrimSpace(event.TurnID)
+	turnID := s.turnID(event)
 	if !s.delegated[turnID] {
 		return false
 	}
