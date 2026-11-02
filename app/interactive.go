@@ -293,10 +293,11 @@ type interactiveTurnRunner interface {
 }
 
 type interactiveApprovalBroker struct {
-	mu           sync.Mutex
-	next         int
-	pending      map[string]chan codextea.ModalResponse
-	allowSession bool
+	mu               sync.Mutex
+	next             int
+	pending          map[string]chan codextea.ModalResponse
+	approvedCommands map[string]struct{}
+	approvedPrefixes [][]string
 }
 
 // interactiveElicitationBroker owns the in-process MCP elicitation publish/wait
@@ -354,7 +355,10 @@ type interactiveInterruptController struct {
 }
 
 func newInteractiveApprovalBroker() *interactiveApprovalBroker {
-	return &interactiveApprovalBroker{pending: map[string]chan codextea.ModalResponse{}}
+	return &interactiveApprovalBroker{
+		pending:          map[string]chan codextea.ModalResponse{},
+		approvedCommands: map[string]struct{}{},
+	}
 }
 
 func newInteractiveElicitationBroker() *interactiveElicitationBroker {
@@ -538,7 +542,7 @@ func (b *interactiveApprovalBroker) shellApprovalFunc(send func(bubbletea.Msg)) 
 		if b == nil {
 			return tool.ShellApprovalDecision{}, nil
 		}
-		if b.sessionApproved() {
+		if b.sessionApproved(request.Request) {
 			return tool.ShellApprovalDecision{Approved: true, AllowSession: true}, nil
 		}
 		if send == nil {
@@ -550,10 +554,11 @@ func (b *interactiveApprovalBroker) shellApprovalFunc(send func(bubbletea.Msg)) 
 			Title:   "Run command?",
 			Body:    interactiveShellApprovalBody(request),
 			Command: interactiveShellApprovalCommand(request),
+			Options: interactiveShellApprovalOptions(request),
 		})
 		select {
 		case response := <-responses:
-			return b.approvalDecision(response), nil
+			return b.approvalDecision(response, request.Request), nil
 		case <-ctx.Done():
 			b.forgetRequest(id)
 			return tool.ShellApprovalDecision{}, ctx.Err()
@@ -591,13 +596,27 @@ func (b *interactiveApprovalBroker) forgetRequest(id string) {
 	delete(b.pending, id)
 }
 
-func (b *interactiveApprovalBroker) sessionApproved() bool {
+func (b *interactiveApprovalBroker) sessionApproved(request *tool.ShellRequest) bool {
+	if b == nil || request == nil {
+		return false
+	}
+	key := tool.ShellApprovalKey(request)
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.allowSession
+	if key != "" {
+		if _, ok := b.approvedCommands[key]; ok {
+			return true
+		}
+	}
+	for _, prefix := range b.approvedPrefixes {
+		if tool.ShellApprovalMatchesPrefix(request, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
-func (b *interactiveApprovalBroker) approvalDecision(response codextea.ModalResponse) tool.ShellApprovalDecision {
+func (b *interactiveApprovalBroker) approvalDecision(response codextea.ModalResponse, request *tool.ShellRequest) tool.ShellApprovalDecision {
 	if response.Cancelled {
 		return tool.ShellApprovalDecision{}
 	}
@@ -605,10 +624,21 @@ func (b *interactiveApprovalBroker) approvalDecision(response codextea.ModalResp
 	case "allow_once":
 		return tool.ShellApprovalDecision{Approved: true}
 	case "allow_session":
+		key := tool.ShellApprovalKey(request)
 		b.mu.Lock()
-		b.allowSession = true
+		if key != "" {
+			b.approvedCommands[key] = struct{}{}
+		}
 		b.mu.Unlock()
 		return tool.ShellApprovalDecision{Approved: true, AllowSession: true}
+	case "allow_prefix":
+		if request == nil || len(request.PrefixRule) == 0 {
+			return tool.ShellApprovalDecision{}
+		}
+		b.mu.Lock()
+		b.approvedPrefixes = append(b.approvedPrefixes, append([]string(nil), request.PrefixRule...))
+		b.mu.Unlock()
+		return tool.ShellApprovalDecision{Approved: true}
 	default:
 		return tool.ShellApprovalDecision{}
 	}
@@ -1043,6 +1073,39 @@ func interactiveShellApprovalCommand(request *tool.ShellApprovalRequest) string 
 		return strings.TrimSpace(req.HookCommand)
 	}
 	return strings.Join(req.Command, " ")
+}
+
+func interactiveShellApprovalOptions(request *tool.ShellApprovalRequest) []codextea.ModalOption {
+	if request == nil || request.Request == nil {
+		return nil
+	}
+	options := []codextea.ModalOption{
+		{ID: "allow_once", Label: "Yes, proceed", Shortcut: "y"},
+	}
+	prefix := request.Request.PrefixRule
+	if len(prefix) > 0 {
+		options = append(options, codextea.ModalOption{
+			ID:       "allow_prefix",
+			Label:    commandApprovalPrefixLabel(prefix),
+			Shortcut: "p",
+		})
+	} else {
+		options = append(options, codextea.ModalOption{
+			ID:       "allow_session",
+			Label:    "Yes, and don't ask again for this command in this session",
+			Shortcut: "a",
+		})
+	}
+	return append(options, codextea.ModalOption{
+		ID:              "deny",
+		Label:           "No, and tell Codex what to do differently",
+		Shortcut:        "d",
+		DisplayShortcut: "esc",
+	})
+}
+
+func commandApprovalPrefixLabel(prefix []string) string {
+	return "Yes, and don't ask again for commands that start with `" + strings.Join(prefix, " ") + "`"
 }
 
 func runInteractive(ctx context.Context, root *cli.RootOptions, stdin io.Reader, stdout, stderr io.Writer) error {

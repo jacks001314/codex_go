@@ -21,6 +21,9 @@ func (m *Model) resetThreadScopedState() {
 	m.deactivateSideConversation()
 	m.currentTurnID = ""
 	m.clearThreadUsage()
+	// Rust ChatWidget::set_current_cwd/session_flow clear the cached project
+	// root whenever the transcript switches threads.
+	m.invalidateStatusProjectRootCache()
 	// The fresh-task starfield belongs to the previous thread/task.
 	m.sparkle = composerSparkleState{}
 	// A fresh thread re-arms the Rust empty-state animation.

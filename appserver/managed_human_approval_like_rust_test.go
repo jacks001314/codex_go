@@ -142,7 +142,7 @@ func TestManagedCheckpointIgnoresSessionApprovalLikeRust(t *testing.T) {
 		send:         func(request *ServerRequest) { requests <- request },
 	})
 	router.requireServerRequests().EnableHumanApprovalConnection("conn-human")
-	router.rememberCommandApprovalForSession("thread-1")
+	router.rememberCommandApprovalForSession("thread-1", managedCheckpointShellRequest(t).Request)
 
 	go func() {
 		_, _ = router.shellApprovalForTurn("thread-1", "turn-1", false)(context.Background(), managedCheckpointShellRequest(t))

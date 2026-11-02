@@ -694,6 +694,49 @@ func (m *Model) syncStatusControlsRuntime() {
 	m.statusControls.Runtime = m.statusControlsRuntime()
 }
 
+// cachedStatusProjectRoot mirrors Rust ChatWidget::status_line_project_root_name_cache.
+// Rust renders the status line from a value cached for the active cwd and clears
+// the cache when the cwd or the thread changes, so the ancestor probe never runs
+// on the draw path.
+type cachedStatusProjectRoot struct {
+	cwd  string
+	root string
+	name string
+}
+
+func (m *Model) statusProjectRoot(cwd string) (string, string) {
+	cwd = strings.TrimSpace(cwd)
+	if cwd == "" {
+		return "", ""
+	}
+	if m == nil {
+		return statusProjectRootForCWD(cwd)
+	}
+	if cache := m.statusProjectRootCache; cache != nil && cache.cwd == cwd {
+		return cache.root, cache.name
+	}
+	root, name := statusProjectRootForCWD(cwd)
+	m.statusProjectRootCache = &cachedStatusProjectRoot{cwd: cwd, root: root, name: name}
+	return root, name
+}
+
+func statusProjectRootForCWD(cwd string) (string, string) {
+	root := strings.TrimSpace(config.ActiveProjectRoot(cwd))
+	if root == "" {
+		root = cwd
+	}
+	return root, filepath.Base(root)
+}
+
+// invalidateStatusProjectRootCache drops the cached repository root. Rust clears
+// the same cache when a session/cwd switch changes the project context.
+func (m *Model) invalidateStatusProjectRootCache() {
+	if m == nil {
+		return
+	}
+	m.statusProjectRootCache = nil
+}
+
 func (m *Model) statusControlsRuntime() chatwidget.StatusControlsRuntime {
 	cwd := ""
 	if m != nil {
@@ -711,12 +754,9 @@ func (m *Model) statusControlsRuntime() chatwidget.StatusControlsRuntime {
 	if cwd != "" {
 		// Rust's status-line and terminal-title project name is the repository
 		// root, not the basename of a nested working directory. Fall back to the
-		// cwd when no project root marker is present.
-		projectRoot = strings.TrimSpace(config.ActiveProjectRoot(cwd))
-		if projectRoot == "" {
-			projectRoot = cwd
-		}
-		projectName = filepath.Base(projectRoot)
+		// cwd when no project root marker is present. The lookup is cached per
+		// cwd because the status line renders on every frame.
+		projectRoot, projectName = m.statusProjectRoot(cwd)
 	}
 	if m == nil || m.State == nil {
 		return chatwidget.StatusControlsRuntime{CWD: cwd, ProjectName: projectName, ProjectRoot: projectRoot}

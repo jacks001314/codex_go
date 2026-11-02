@@ -1910,6 +1910,106 @@ func TestInteractiveApprovalBrokerApprovesAndCachesSession(t *testing.T) {
 	}
 }
 
+func TestInteractiveApprovalBrokerSessionApprovalIsPerCommand(t *testing.T) {
+	broker := newInteractiveApprovalBroker()
+	sent := make(chan bubbletea.Msg, 1)
+	callback := broker.shellApprovalFunc(func(message bubbletea.Msg) {
+		sent <- message
+	})
+	first := &tool.ShellApprovalRequest{Request: &tool.ShellRequest{
+		Command:            []string{"git", "status"},
+		HookCommand:        "git status",
+		CWD:                `D:\repo`,
+		SandboxPermissions: sandbox.SandboxPermissionsRequireEscalated,
+	}}
+	firstResult := make(chan tool.ShellApprovalDecision, 1)
+	go func() {
+		decision, _ := callback(context.Background(), first)
+		firstResult <- decision
+	}()
+	firstMessage := (<-sent).(codextea.ApprovalRequestMsg)
+	broker.respond(codextea.ModalResponse{ID: firstMessage.ID, Kind: codextea.ModalKindApproval, OptionID: "allow_session"})
+	if decision := <-firstResult; !decision.Approved {
+		t.Fatalf("first decision = %#v", decision)
+	}
+
+	second := &tool.ShellApprovalRequest{Request: &tool.ShellRequest{
+		Command:            []string{"git", "push"},
+		HookCommand:        "git push",
+		CWD:                `D:\repo`,
+		SandboxPermissions: sandbox.SandboxPermissionsRequireEscalated,
+	}}
+	secondResult := make(chan tool.ShellApprovalDecision, 1)
+	go func() {
+		decision, _ := callback(context.Background(), second)
+		secondResult <- decision
+	}()
+	select {
+	case message := <-sent:
+		approval, ok := message.(codextea.ApprovalRequestMsg)
+		if !ok {
+			t.Fatalf("second message = %T, want ApprovalRequestMsg", message)
+		}
+		broker.respond(codextea.ModalResponse{ID: approval.ID, Kind: codextea.ModalKindApproval, OptionID: "allow_once"})
+	case <-time.After(2 * time.Second):
+		t.Fatal("a different command did not request approval after a session approval")
+	}
+	if decision := <-secondResult; !decision.Approved {
+		t.Fatalf("second decision = %#v", decision)
+	}
+}
+
+func TestInteractiveApprovalBrokerOffersAndCachesCommandPrefix(t *testing.T) {
+	broker := newInteractiveApprovalBroker()
+	sent := make(chan bubbletea.Msg, 1)
+	callback := broker.shellApprovalFunc(func(message bubbletea.Msg) {
+		sent <- message
+	})
+	request := &tool.ShellApprovalRequest{Request: &tool.ShellRequest{
+		Command:            []string{"git", "fetch", "origin", "main"},
+		HookCommand:        "git fetch origin main",
+		CWD:                `D:\repo`,
+		SandboxPermissions: sandbox.SandboxPermissionsRequireEscalated,
+		PrefixRule:         []string{"git", "fetch", "origin", "main"},
+	}}
+	result := make(chan tool.ShellApprovalDecision, 1)
+	go func() {
+		decision, _ := callback(context.Background(), request)
+		result <- decision
+	}()
+	message := (<-sent).(codextea.ApprovalRequestMsg)
+	options := map[string]codextea.ModalOption{}
+	for _, option := range message.Options {
+		options[option.ID] = option
+	}
+	if option, ok := options["allow_prefix"]; !ok || option.Shortcut != "p" {
+		t.Fatalf("prefix approval option = %#v, options=%#v", option, message.Options)
+	}
+	if _, ok := options["allow_session"]; ok {
+		t.Fatalf("prefix approval should not offer a session-wide option: %#v", message.Options)
+	}
+	broker.respond(codextea.ModalResponse{ID: message.ID, Kind: codextea.ModalKindApproval, OptionID: "allow_prefix"})
+	if decision := <-result; !decision.Approved {
+		t.Fatalf("prefix decision = %#v", decision)
+	}
+
+	matching := &tool.ShellApprovalRequest{Request: &tool.ShellRequest{
+		Command:            []string{"git", "fetch", "origin", "main", "--tags"},
+		HookCommand:        "git fetch origin main --tags",
+		CWD:                `D:\repo`,
+		SandboxPermissions: sandbox.SandboxPermissionsRequireEscalated,
+	}}
+	decision, err := callback(context.Background(), matching)
+	if err != nil || !decision.Approved {
+		t.Fatalf("matching prefix decision = %#v err=%v", decision, err)
+	}
+	select {
+	case message := <-sent:
+		t.Fatalf("matching prefix unexpectedly requested approval: %#v", message)
+	default:
+	}
+}
+
 func TestInteractiveElicitationBrokerReturnsMCPResponse(t *testing.T) {
 	broker := newInteractiveElicitationBroker()
 	sent := make(chan bubbletea.Msg, 1)

@@ -183,6 +183,78 @@ type ShellRequest struct {
 	WarningSink func(string)
 }
 
+// ShellApprovalKey returns the session-approval identity for one shell launch.
+// It mirrors Rust's UnifiedExecApprovalKey: a session approval is reused only
+// for an equivalent command in the same environment, not for every later
+// command in the thread.
+func ShellApprovalKey(request *ShellRequest) string {
+	if request == nil {
+		return ""
+	}
+	environmentID := strings.TrimSpace(request.UnifiedExecEnvironmentID)
+	if environmentID == "" {
+		environmentID = execserver.LocalEnvironmentID
+	}
+	executable := ""
+	if len(request.Command) > 0 {
+		executable = strings.TrimSpace(request.Command[0])
+	}
+	key := struct {
+		EnvironmentID         string                               `json:"environment_id"`
+		Executable            string                               `json:"executable,omitempty"`
+		Command               []string                             `json:"command"`
+		HookCommand           string                               `json:"hook_command,omitempty"`
+		CWD                   string                               `json:"cwd"`
+		TTY                   bool                                 `json:"tty"`
+		SandboxPermissions    sandbox.SandboxPermissions           `json:"sandbox_permissions"`
+		AdditionalPermissions *sandbox.AdditionalPermissionProfile `json:"additional_permissions,omitempty"`
+	}{
+		EnvironmentID:         environmentID,
+		Executable:            executable,
+		Command:               cloneStrings(request.Command),
+		HookCommand:           request.HookCommand,
+		CWD:                   strings.TrimSpace(request.CWD),
+		TTY:                   request.TTY,
+		SandboxPermissions:    request.SandboxPermissions,
+		AdditionalPermissions: request.AdditionalPermissions,
+	}
+	encoded, err := json.Marshal(key)
+	if err != nil {
+		return ""
+	}
+	return string(encoded)
+}
+
+// ShellApprovalMatchesPrefix reports whether the command starts with every
+// token of a saved allow-prefix. Prefix approvals are session-scoped in Go's
+// TUI hosts, matching the command-prefix option Rust offers in its approval
+// overlay.
+func ShellApprovalMatchesPrefix(request *ShellRequest, prefix []string) bool {
+	if request == nil || len(prefix) == 0 {
+		return false
+	}
+	tokens := shellutil.SplitCommandLine(request.HookCommand)
+	if len(tokens) < len(prefix) {
+		return false
+	}
+	for index, token := range prefix {
+		if tokens[index] != token {
+			return false
+		}
+	}
+	// A prefix approval covers one parsed command, not a shell pipeline or
+	// chain: never reuse it when the request continues with a control
+	// operator, or a chained command would inherit its leading segment's
+	// approval. The exact command key handles identical commands separately.
+	for _, token := range tokens {
+		switch token {
+		case "&&", "||", "|", ";", "&":
+			return false
+		}
+	}
+	return true
+}
+
 type UnifiedExecEnvironment struct {
 	ID         string
 	CWD        string

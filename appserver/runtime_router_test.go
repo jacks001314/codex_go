@@ -11724,8 +11724,8 @@ func TestRuntimeRouterTurnStartExecApprovalAcceptForSessionPersistsLikeRust(t *t
 		ThreadRouter: NewRouter(store),
 		Turns:        turn.NewTurnService(),
 		Agent: &shellCommandRuntimeAgent{
-			callIDs:  []string{"call-command-session-1", "call-command-session-2"},
-			commands: []string{"echo command-session-one", "echo command-session-two"},
+			callIDs:  []string{"call-command-session-1", "call-command-session-2", "call-command-session-3"},
+			commands: []string{"echo command-session-one", "echo command-session-one", "echo command-session-two"},
 		},
 		ThreadStatus:   NewThreadStatusManager(),
 		ServerRequests: broker,
@@ -11777,9 +11777,125 @@ func TestRuntimeRouterTurnStartExecApprovalAcceptForSessionPersistsLikeRust(t *t
 	waitForTurnCompletedStatus(t, sink, secondTurnID, TurnStatusCompleted)
 	select {
 	case unexpected := <-requests:
-		t.Fatalf("unexpected command approval request after acceptForSession: %+v", unexpected)
+		t.Fatalf("unexpected command approval request for the same command: %+v", unexpected)
 	default:
 	}
+
+	thirdTurnStart := router.Handle(requestWithParams(t, IntID(4), MethodTurnStart, turn.TurnStartParams{
+		ThreadID:       threadID,
+		Prompt:         "run a different command",
+		CWD:            workspace,
+		ApprovalPolicy: string(sandbox.ApprovalUnlessTrusted),
+	}))
+	if thirdTurnStart.Error != nil {
+		t.Fatalf("third turn start error: %+v", thirdTurnStart.Error)
+	}
+	thirdTurnID := thirdTurnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	thirdRequest := waitForServerRequestFromChannel(t, requests, ServerRequestCommandExecutionApproval)
+	thirdParams, ok := thirdRequest.Params.(*CommandExecutionRequestApprovalParams)
+	if !ok || thirdParams.ItemID != "call-command-session-3" {
+		t.Fatalf("third approval params = %#v", thirdRequest.Params)
+	}
+	if ok, err := broker.Resolve(OK(thirdRequest.ID, &CommandExecutionRequestApprovalResponse{Decision: CommandExecutionApprovalDecline})); err != nil || !ok {
+		t.Fatalf("resolve third approval ok=%v err=%v", ok, err)
+	}
+	waitForTurnCompletedStatus(t, sink, thirdTurnID, TurnStatusCompleted)
+}
+
+// TestRuntimeRouterEscalatedCommandStillPromptsAfterSessionApprovalLikeRust
+// reproduces the reported regression: under approval_policy=on-request a model
+// that asks for require_escalated must still receive an approval request for a
+// different command after the user approved an earlier command for the session.
+// Rust caches a session approval against UnifiedExecApprovalKey (environment,
+// executable, command, cwd, tty, sandbox permissions), never the whole thread.
+func TestRuntimeRouterEscalatedCommandStillPromptsAfterSessionApprovalLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sink := NewNotificationBuffer()
+	broker := NewServerRequestBroker()
+	requests := make(chan *ServerRequest, 4)
+	workspace := t.TempDir()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent: &shellCommandRuntimeAgent{
+			callIDs:            []string{"call-escalated-1", "call-escalated-2", "call-escalated-3"},
+			commands:           []string{"echo escalated-one", "echo escalated-one", "echo escalated-two"},
+			sandboxPermissions: []string{string(sandbox.SandboxPermissionsRequireEscalated), string(sandbox.SandboxPermissionsRequireEscalated), string(sandbox.SandboxPermissionsRequireEscalated)},
+			justifications:     []string{"needs to write .git", "needs to write .git", "needs to write .git"},
+		},
+		ThreadStatus:   NewThreadStatusManager(),
+		ServerRequests: broker,
+	})
+	router.SetNotificationSink(sink)
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		requests <- request
+	}))
+
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    workspace,
+		Prompt: "escalated approval session",
+	}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+
+	firstTurnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
+		ThreadID:       threadID,
+		Prompt:         "run escalated command one",
+		CWD:            workspace,
+		ApprovalPolicy: string(sandbox.ApprovalOnRequest),
+	}))
+	if firstTurnStart.Error != nil {
+		t.Fatalf("first turn start error: %+v", firstTurnStart.Error)
+	}
+	firstTurnID := firstTurnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	firstRequest := waitForServerRequestFromChannel(t, requests, ServerRequestCommandExecutionApproval)
+	firstParams, ok := firstRequest.Params.(*CommandExecutionRequestApprovalParams)
+	if !ok || firstParams.ItemID != "call-escalated-1" {
+		t.Fatalf("first escalation approval params = %#v", firstRequest.Params)
+	}
+	if ok, err := broker.Resolve(OK(firstRequest.ID, &CommandExecutionRequestApprovalResponse{Decision: CommandExecutionApprovalAcceptForSession})); err != nil || !ok {
+		t.Fatalf("resolve acceptForSession ok=%v err=%v", ok, err)
+	}
+	waitForTurnCompletedStatus(t, sink, firstTurnID, TurnStatusCompleted)
+
+	secondTurnStart := router.Handle(requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{
+		ThreadID:       threadID,
+		Prompt:         "run escalated command one again",
+		CWD:            workspace,
+		ApprovalPolicy: string(sandbox.ApprovalOnRequest),
+	}))
+	if secondTurnStart.Error != nil {
+		t.Fatalf("second turn start error: %+v", secondTurnStart.Error)
+	}
+	secondTurnID := secondTurnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	waitForTurnCompletedStatus(t, sink, secondTurnID, TurnStatusCompleted)
+	select {
+	case unexpected := <-requests:
+		t.Fatalf("unexpected approval for the same escalated command: %+v", unexpected)
+	default:
+	}
+
+	thirdTurnStart := router.Handle(requestWithParams(t, IntID(4), MethodTurnStart, turn.TurnStartParams{
+		ThreadID:       threadID,
+		Prompt:         "run a different escalated command",
+		CWD:            workspace,
+		ApprovalPolicy: string(sandbox.ApprovalOnRequest),
+	}))
+	if thirdTurnStart.Error != nil {
+		t.Fatalf("third turn start error: %+v", thirdTurnStart.Error)
+	}
+	thirdTurnID := thirdTurnStart.Result.(*turn.TurnStartResponse).Turn.ID
+	thirdRequest := waitForServerRequestFromChannel(t, requests, ServerRequestCommandExecutionApproval)
+	thirdParams, ok := thirdRequest.Params.(*CommandExecutionRequestApprovalParams)
+	if !ok || thirdParams.ItemID != "call-escalated-3" {
+		t.Fatalf("third escalation approval params = %#v", thirdRequest.Params)
+	}
+	if ok, err := broker.Resolve(OK(thirdRequest.ID, &CommandExecutionRequestApprovalResponse{Decision: CommandExecutionApprovalDecline})); err != nil || !ok {
+		t.Fatalf("resolve third approval ok=%v err=%v", ok, err)
+	}
+	waitForTurnCompletedStatus(t, sink, thirdTurnID, TurnStatusCompleted)
 }
 
 func TestRuntimeRouterTurnStartFileChangeApprovalLikeRust(t *testing.T) {
@@ -25838,12 +25954,14 @@ func (a *approvalRequestRuntimeAgent) Run(ctx context.Context, request *model.Ag
 }
 
 type shellCommandRuntimeAgent struct {
-	mu          sync.Mutex
-	calls       int
-	callIDs     []string
-	command     string
-	commands    []string
-	prefixRules [][]string
+	mu                 sync.Mutex
+	calls              int
+	callIDs            []string
+	command            string
+	commands           []string
+	prefixRules        [][]string
+	sandboxPermissions []string
+	justifications     []string
 }
 
 func (a *shellCommandRuntimeAgent) Run(ctx context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
@@ -25870,6 +25988,12 @@ func (a *shellCommandRuntimeAgent) Run(ctx context.Context, request *model.Agent
 		args := map[string]any{"command": command}
 		if index >= 0 && index < len(a.prefixRules) && len(a.prefixRules[index]) > 0 {
 			args["prefix_rule"] = append([]string(nil), a.prefixRules[index]...)
+		}
+		if index >= 0 && index < len(a.sandboxPermissions) && strings.TrimSpace(a.sandboxPermissions[index]) != "" {
+			args["sandbox_permissions"] = strings.TrimSpace(a.sandboxPermissions[index])
+		}
+		if index >= 0 && index < len(a.justifications) && strings.TrimSpace(a.justifications[index]) != "" {
+			args["justification"] = strings.TrimSpace(a.justifications[index])
 		}
 		arguments, err := json.Marshal(args)
 		if err != nil {

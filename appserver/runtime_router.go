@@ -530,7 +530,7 @@ type RuntimeRouter struct {
 	loginRuntimeCancels    map[string]context.CancelFunc
 	loginRuntimePauses     map[string]*TurnAdmissionPause
 	approvalSessionsMu     sync.RWMutex
-	commandApprovals       map[string]struct{}
+	commandApprovals       map[string]map[string]struct{}
 	fileApprovals          map[string]struct{}
 	// permissionGrants holds request_permissions responses by thread,
 	// environment, and turn/session scope. Later shell and file operations merge
@@ -985,7 +985,7 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 		authChanged:                make(chan struct{}),
 		authChangeTracker:          auth.NewAuthChangeTracker(nil),
 		mcpEventStreams:            newMCPEventStreamManager(),
-		commandApprovals:           map[string]struct{}{},
+		commandApprovals:           map[string]map[string]struct{}{},
 		fileApprovals:              map[string]struct{}{},
 		serverRequestGuards:        map[string]*ThreadStatusActiveGuard{},
 		executedToolCalls:          map[string]*turn.ExecutedToolCallRecorder{},
@@ -17515,9 +17515,6 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 		options.Shell.GrantedPermissions = func(callTurnID, callEnvironmentID string) *sandbox.AdditionalPermissionProfile {
 			return r.grantedPermissionsForEnvironment(threadID, firstNonEmpty(callTurnID, turnID), callEnvironmentID)
 		}
-		if r.commandApprovalForSession(threadID) {
-			options.Shell.Validation.PermissionsPreapproved = true
-		}
 		if r.serverRequestSinkConfigured() {
 			modelID := strings.TrimSpace(params.Model)
 			if modelID == "" {
@@ -18509,8 +18506,29 @@ func (r *RuntimeRouter) serverRequestSinkConfigured() bool {
 	return r.requests != nil
 }
 
-func (r *RuntimeRouter) commandApprovalForSession(threadID string) bool {
-	return r.approvalForSession(r.commandApprovals, threadID)
+func (r *RuntimeRouter) commandApprovalForSession(threadID string, request *tool.ShellRequest) bool {
+	if r == nil || request == nil {
+		return false
+	}
+	threadID = strings.TrimSpace(threadID)
+	key := tool.ShellApprovalKey(request)
+	if threadID != "" && key != "" {
+		r.approvalSessionsMu.RLock()
+		_, approved := r.commandApprovals[threadID][key]
+		r.approvalSessionsMu.RUnlock()
+		if approved {
+			return true
+		}
+	}
+	if r.execPolicySaved == nil {
+		return false
+	}
+	for _, prefix := range r.execPolicySaved.approvedPrefixes(threadID) {
+		if tool.ShellApprovalMatchesPrefix(request, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // writeStdinApproval mirrors Rust's terminal-input review (Rust #40978/#41328,
@@ -19064,8 +19082,21 @@ func (r *RuntimeRouter) approvalForSession(cache map[string]struct{}, threadID s
 	return ok
 }
 
-func (r *RuntimeRouter) rememberCommandApprovalForSession(threadID string) {
-	r.rememberApprovalForSession(r.commandApprovals, threadID)
+func (r *RuntimeRouter) rememberCommandApprovalForSession(threadID string, request *tool.ShellRequest) {
+	if r == nil || request == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	key := tool.ShellApprovalKey(request)
+	if threadID == "" || key == "" {
+		return
+	}
+	r.approvalSessionsMu.Lock()
+	defer r.approvalSessionsMu.Unlock()
+	if r.commandApprovals[threadID] == nil {
+		r.commandApprovals[threadID] = map[string]struct{}{}
+	}
+	r.commandApprovals[threadID][key] = struct{}{}
 }
 
 func (r *RuntimeRouter) rememberFileChangeApprovalForSession(threadID string) {
@@ -19193,7 +19224,7 @@ func (r *RuntimeRouter) shellApprovalForTurn(threadID string, turnID string, ign
 					telemetry.ToolDecisionDenied, telemetry.ToolDecisionSourceUser)
 				return tool.ShellApprovalDecision{DenyReason: reason}, nil
 			}
-		} else if r.commandApprovalForSession(threadID) {
+		} else if r.commandApprovalForSession(threadID, request.Request) {
 			return tool.ShellApprovalDecision{Approved: true, AllowSession: true}, nil
 		}
 		userWaitOwner := r.userWaitTimingOwner(threadID, turnID, itemID)
@@ -19313,7 +19344,7 @@ func (r *RuntimeRouter) shellApprovalForTurn(threadID string, turnID string, ign
 		case string(CommandExecutionApprovalAccept):
 			return tool.ShellApprovalDecision{Approved: true}, nil
 		case string(CommandExecutionApprovalAcceptForSession):
-			r.rememberCommandApprovalForSession(threadID)
+			r.rememberCommandApprovalForSession(threadID, request.Request)
 			return tool.ShellApprovalDecision{Approved: true, AllowSession: true}, nil
 		case string(CommandExecutionApprovalAcceptWithExecpolicyAmendment):
 			// Rust 1bbfb5cfad: report the newly saved command prefix to the

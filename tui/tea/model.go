@@ -1760,6 +1760,13 @@ type Model struct {
 
 	// Animation
 	animEngine *anim.Engine
+	// statusProjectRootCache mirrors Rust ChatWidget::status_line_project_root_name_cache:
+	// the status line renders on every frame, so the repository root is resolved
+	// once per working directory instead of probing ancestor directories per draw.
+	statusProjectRootCache *cachedStatusProjectRoot
+	// statusRowTickPending marks an in-flight status-row frame. The tick chain is
+	// only re-armed while the row is visible (Rust StatusIndicator::render).
+	statusRowTickPending bool
 
 	// Overlay stack (new architecture)
 	overlays *overlay.Overlay

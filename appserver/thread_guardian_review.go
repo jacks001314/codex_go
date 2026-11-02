@@ -103,7 +103,7 @@ func (r *RuntimeRouter) handleThreadGuardianReviewRuntime(request *Request) (*Th
 		return nil, err
 	}
 	response := &ThreadGuardianReviewResponse{CallID: call.CallID}
-	if !prepared.Request.ApprovalRequired {
+	if !prepared.Request.ApprovalRequired || r.commandApprovalForSession(threadID, prepared.Request) {
 		// Exec policy explicitly allows the command: nothing to assess, and
 		// nothing is executed.
 		return response, nil
@@ -352,9 +352,6 @@ func (r *RuntimeRouter) prepareRecordedExecCommand(ctx context.Context, threadID
 	if resolution != nil && resolution.Profile != nil {
 		validation.PermissionProfileID = strings.TrimSpace(resolution.ID)
 		validation.PermissionProfile = resolution.Profile
-	}
-	if r.commandApprovalForSession(threadID) {
-		validation.PermissionsPreapproved = true
 	}
 	invocation := &tool.Invocation{
 		CallID:   call.CallID,

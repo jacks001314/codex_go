@@ -4017,12 +4017,13 @@ func (c *remoteAppServerTUIClient) commandExecutionApproval(ctx context.Context,
 		Title:           "Run command?",
 		Body:            remoteCommandExecutionApprovalBody(params),
 		Command:         remoteCommandExecutionApprovalCommand(params),
+		Options:         remoteCommandExecutionApprovalOptions(params),
 		ServerRequestID: requestID,
 	}, requestID)
 	if err != nil {
 		return nil, err
 	}
-	return &appserver.CommandExecutionRequestApprovalResponse{Decision: remoteCommandExecutionDecision(response)}, nil
+	return &appserver.CommandExecutionRequestApprovalResponse{Decision: remoteCommandExecutionDecision(response, params)}, nil
 }
 
 func (c *remoteAppServerTUIClient) fileChangeApproval(ctx context.Context, params *appserver.FileChangeRequestApprovalParams, requestID string) (*appserver.FileChangeRequestApprovalResponse, error) {
@@ -4268,6 +4269,39 @@ func remoteCommandExecutionApprovalCommand(params *appserver.CommandExecutionReq
 	return remoteJSON(params.Action)
 }
 
+func remoteCommandExecutionApprovalOptions(params *appserver.CommandExecutionRequestApprovalParams) []codextea.ModalOption {
+	options := []codextea.ModalOption{
+		{ID: "allow_once", Label: "Yes, proceed", Shortcut: "y"},
+	}
+	prefix := remoteCommandExecutionApprovalPrefix(params)
+	if len(prefix) > 0 {
+		options = append(options, codextea.ModalOption{
+			ID:       "allow_prefix",
+			Label:    commandApprovalPrefixLabel(prefix),
+			Shortcut: "p",
+		})
+	} else {
+		options = append(options, codextea.ModalOption{
+			ID:       "allow_session",
+			Label:    "Yes, and don't ask again for this command in this session",
+			Shortcut: "a",
+		})
+	}
+	return append(options, codextea.ModalOption{
+		ID:              "deny",
+		Label:           "No, and tell Codex what to do differently",
+		Shortcut:        "d",
+		DisplayShortcut: "esc",
+	})
+}
+
+func remoteCommandExecutionApprovalPrefix(params *appserver.CommandExecutionRequestApprovalParams) []string {
+	if params == nil {
+		return nil
+	}
+	return stringSliceFromAny(params.ProposedExecPolicyAmendment)
+}
+
 func remoteFileChangeApprovalBody(params *appserver.FileChangeRequestApprovalParams) string {
 	if params == nil {
 		return "File changes requested approval."
@@ -4353,7 +4387,7 @@ func remoteJSON(value any) string {
 	return strings.TrimSpace(string(data))
 }
 
-func remoteCommandExecutionDecision(response codextea.ModalResponse) appserver.CommandExecutionApprovalDecision {
+func remoteCommandExecutionDecision(response codextea.ModalResponse, params *appserver.CommandExecutionRequestApprovalParams) any {
 	if response.Cancelled {
 		return appserver.CommandExecutionApprovalCancel
 	}
@@ -4362,6 +4396,16 @@ func remoteCommandExecutionDecision(response codextea.ModalResponse) appserver.C
 		return appserver.CommandExecutionApprovalAccept
 	case "allow_session":
 		return appserver.CommandExecutionApprovalAcceptForSession
+	case "allow_prefix":
+		prefix := remoteCommandExecutionApprovalPrefix(params)
+		if len(prefix) == 0 {
+			return appserver.CommandExecutionApprovalDecline
+		}
+		return map[string]any{
+			string(appserver.CommandExecutionApprovalAcceptWithExecpolicyAmendment): map[string]any{
+				"execpolicy_amendment": prefix,
+			},
+		}
 	default:
 		return appserver.CommandExecutionApprovalDecline
 	}
