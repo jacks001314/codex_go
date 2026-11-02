@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -61,23 +62,56 @@ func clipboardReaderTestPayloads() []string {
 	}
 }
 
-func newTestClipboardCommandReader(t *testing.T, extraEnv ...string) *clipboardCommandReader {
+// clipboardReaderTestReadDeadline is the test-side budget for one framed read.
+//
+// The product deadline is tuiapp.RightClickPasteReadTimeout (5s), which mirrors
+// Rust's clipboard_copy::worker SETUP_TIMEOUT (worker.rs:22) and is measured
+// from the request, so it deliberately also covers process setup. This test
+// checks framing and process reuse, not the deadline, so it must not inherit a
+// budget that a loaded machine can spend on spawning a re-exec of the test
+// binary. TestClipboardCommandReaderTimesOutLikeRust is what pins the timeout.
+const clipboardReaderTestReadDeadline = 30 * time.Second
+
+// newTestClipboardCommandReader starts a reader backed by this test binary. The
+// returned channel closes once the helper process has actually started, which is
+// the event callers must wait for instead of guessing a warmup delay.
+func newTestClipboardCommandReader(t *testing.T, extraEnv ...string) (*clipboardCommandReader, <-chan struct{}) {
 	t.Helper()
+	started := make(chan struct{})
+	var startOnce sync.Once
 	start := func() (*clipboardProcess, error) {
 		command := exec.Command(os.Args[0], "-test.run=^TestClipboardReaderHelperProcess$")
 		command.Env = append(os.Environ(), append([]string{clipboardReaderHelperEnv + "=1"}, extraEnv...)...)
-		return startClipboardProcess(command)
+		process, err := startClipboardProcess(command)
+		if err == nil {
+			startOnce.Do(func() { close(started) })
+		}
+		return process, err
 	}
-	return newClipboardCommandReader(start)
+	return newClipboardCommandReader(start), started
+}
+
+// waitForClipboardReaderStart blocks until the helper has started. The generous
+// bound only exists so a genuinely broken start fails instead of hanging.
+func waitForClipboardReaderStart(t *testing.T, started <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-started:
+	case <-time.After(clipboardReaderTestReadDeadline):
+		t.Fatal("clipboard helper process did not start")
+	}
 }
 
 func TestClipboardCommandReaderReusesProcessLikeRust(t *testing.T) {
-	reader := newTestClipboardCommandReader(t)
+	reader, started := newTestClipboardCommandReader(t)
 	defer reader.Close()
 	reader.Warm()
-	time.Sleep(50 * time.Millisecond)
+	// Wait for the spawn instead of sleeping: the old 50ms guess both raced the
+	// warm request (a full request channel reports errClipboardReaderBusy) and
+	// let process setup eat into the first read's deadline on a busy machine.
+	waitForClipboardReaderStart(t, started)
 	for _, want := range clipboardReaderTestPayloads() {
-		got, err := reader.readUntil(time.Now().Add(5 * time.Second))
+		got, err := reader.readUntil(time.Now().Add(clipboardReaderTestReadDeadline))
 		if err != nil {
 			t.Fatalf("read error: %v", err)
 		}
@@ -88,15 +122,19 @@ func TestClipboardCommandReaderReusesProcessLikeRust(t *testing.T) {
 }
 
 func TestClipboardCommandReaderTimesOutLikeRust(t *testing.T) {
-	reader := newTestClipboardCommandReader(t, clipboardReaderTimeoutEnv+"=1")
+	reader, started := newTestClipboardCommandReader(t, clipboardReaderTimeoutEnv+"=1")
 	defer reader.Close()
+	// Start the helper first so the 50ms deadline measures the sleeping read
+	// rather than a slow process spawn.
+	reader.Warm()
+	waitForClipboardReaderStart(t, started)
 	if text, err := reader.readUntil(time.Now().Add(50 * time.Millisecond)); err != tuiapp.ErrRightClickPasteReadTimeout || text != "" {
 		t.Fatalf("timeout read = %q/%v, want timeout", text, err)
 	}
 }
 
 func TestClipboardCommandReaderRestartsAfterErrorLikeRust(t *testing.T) {
-	reader := newTestClipboardCommandReader(t, clipboardReaderFailFileEnv+"="+filepath.Join(t.TempDir(), "failed"))
+	reader, _ := newTestClipboardCommandReader(t, clipboardReaderFailFileEnv+"="+filepath.Join(t.TempDir(), "failed"))
 	defer reader.Close()
 	if _, err := reader.readUntil(time.Now().Add(5 * time.Second)); err == nil {
 		t.Fatal("failed reader did not report an error")
