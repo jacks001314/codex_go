@@ -7384,6 +7384,10 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 		}
 	case "turn.reconnected":
 		m.clearRetryActivity()
+	case "deprecation.notice":
+		// Rust #47065: a deprecation notice delivery enters history through the
+		// deduplicating insertion path.
+		m.insertDeprecationNotice(event.Summary, event.Details)
 	case "turn.compacting":
 		message := "Compacting context..."
 		if event.Item != nil && strings.TrimSpace(event.Item.Message) != "" {
@@ -9779,6 +9783,14 @@ func historyMessageFromCell(cell historycell.HistoryCell, width int) codextui.Me
 	}
 	if recapCell, ok := cell.(historycell.RecapCell); ok && recapCell.IsRecap() {
 		message.Recap = true
+	}
+	switch notice := cell.(type) {
+	case historycell.DeprecationNoticeCell:
+		message.DeprecationNotice = &codextui.DeprecationNoticeContent{Summary: notice.Summary, Details: notice.Details}
+	case *historycell.DeprecationNoticeCell:
+		if notice != nil {
+			message.DeprecationNotice = &codextui.DeprecationNoticeContent{Summary: notice.Summary, Details: notice.Details}
+		}
 	}
 	if _, ok := cell.(historycell.ActivityDisclosureCell); ok {
 		disclosure := historycell.ActivityDisclosureFor(cell, width)
