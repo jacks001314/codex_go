@@ -408,6 +408,36 @@ func (t *remoteJSONLineTransport) close() {
 	}
 }
 
+// remoteTUITaskToolsHostForSession mirrors Rust
+// AppServerSession::start_dynamic_tool_mcp (app_server_session.rs:557-565): a
+// server-owned conversation never hosts the client's local task-tools MCP
+// server or worktree tools. A non-local workspace also keeps the app-server
+// dynamic-tools callback transport instead of a hosted MCP server.
+func remoteTUITaskToolsHostForSession(mode ThreadParamsMode, endpoint *appserverdaemon.RemoteAppServerEndpoint, root *cli.RootOptions, state *codextui.State, newHost func() *taskToolsMCPHost) *taskToolsMCPHost {
+	if mode.SettingsOwner() == ThreadSettingsOwnerServer {
+		return nil
+	}
+	if !interactiveRemoteEndpointIsLocal(endpoint) {
+		return nil
+	}
+	loaded, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), interactiveKeymapLoadOptions(root))
+	if err != nil || remoteTUIToolsNamespaceConflict(loaded.Values, DynamicToolNamespace) {
+		// Rust #50148: a configured MCP server that owns the TUI tools namespace
+		// blocks hosting; the thread then keeps the dynamic-tools callback
+		// transport instead.
+		return nil
+	}
+	if newHost == nil {
+		return nil
+	}
+	host := newHost()
+	if host == nil {
+		return nil
+	}
+	host.worktrees = interactiveManagedWorktreeToolsForRemoteSession(endpoint, root, state)
+	return host
+}
+
 func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoint *appserverdaemon.RemoteAppServerEndpoint, stdin io.Reader, stdout io.Writer, stderr io.Writer) error {
 	state := interactiveUIState(root)
 	settings := interactiveTUISettings(root)
@@ -448,20 +478,10 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 	backendID := codextui.NewBackendID()
 	brokers := newRemoteTUIBrokers()
 	interrupts := newRemoteTUIInterruptController(ctx, endpoint)
-	// A local-daemon TUI hosts its codex_tui task tools as a local MCP server
-	// (Rust AppServerSession::start_dynamic_tool_mcp); a remote workspace keeps
-	// the app-server dynamic-tools callback transport.
-	taskToolsHost := &taskToolsMCPHost{}
-	if !interactiveRemoteEndpointIsLocal(endpoint) {
-		taskToolsHost = nil
-	} else if loaded, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), interactiveKeymapLoadOptions(root)); err != nil || remoteTUIToolsNamespaceConflict(loaded.Values, DynamicToolNamespace) {
-		// Rust #50148: a configured MCP server that owns the TUI tools namespace
-		// blocks hosting; the thread then keeps the dynamic-tools callback
-		// transport instead.
-		taskToolsHost = nil
-	} else {
-		taskToolsHost.worktrees = interactiveManagedWorktreeToolsForRemoteSession(endpoint, root, state)
-	}
+	paramsMode := threadParamsModeForLaunch(root)
+	taskToolsHost := remoteTUITaskToolsHostForSession(paramsMode, endpoint, root, state, func() *taskToolsMCPHost {
+		return &taskToolsMCPHost{}
+	})
 	defer taskToolsHost.close()
 	// The TUI owns the voice helper and relays its handshake through the
 	// app-server on a dedicated connection, so a media session never competes
@@ -571,8 +591,8 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		OnContinueSafetyRecourse:    interactiveRemoteContinueSafetyRecourse(ctx, endpoint, root, state, backendID),
 		OnPromptEdit:                interactiveRemotePromptEditHandler(ctx, endpoint, root, state, taskToolsHost),
 		OnExportTranscript:          interactiveRemoteTranscriptExportHandler(ctx, endpoint, showRawReasoning),
-		OnGenerateRecap:             interactiveRemoteRecapGenerateHandler(ctx, endpoint),
-		OnSuggestThreadName:         interactiveRemoteRecapGenerateHandler(ctx, endpoint),
+		OnGenerateRecap:             recapGenerateFuncForMode(paramsMode, interactiveRemoteRecapGenerateHandler(ctx, endpoint)),
+		OnSuggestThreadName:         recapGenerateFuncForMode(paramsMode, interactiveRemoteRecapGenerateHandler(ctx, endpoint)),
 		OnLoadTranscriptPreview:     interactiveRemoteTranscriptPreviewHandler(ctx, endpoint),
 		OnReadSessionTranscript:     interactiveRemoteSessionTranscriptHandler(ctx, endpoint, showRawReasoning),
 		OnAcknowledgeSessionRead:    interactiveRemoteSessionReadAcknowledgeHandler(ctx, endpoint),
@@ -649,7 +669,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		},
 		OnModalResponse: func(response codextea.ModalResponse) bubbletea.Cmd {
 			brokers.respond(response)
-			return interactiveRemoteModelSelectionCommand(ctx, endpoint, state, response.Picker)
+			return interactiveRemoteModelSelectionCommandForMode(paramsMode, ctx, endpoint, state, response.Picker)
 		},
 		OnAppLinkAction: interactiveAppLinkActionHandler(),
 		OnReadTokenActivity: func(view chatwidget.TokenActivityView) (chatwidget.TokenActivityResponse, error) {
@@ -1204,7 +1224,15 @@ func interactiveRemoteReadSettings(ctx context.Context, client *remoteAppServerT
 	}
 	result := interactiveSettingsFromConfig(&config.Config{Values: response.Config})
 	var requirements config.ConfigRequirementsReadResponse
-	if err := remoteSessionRequest(ctx, client, appserver.MethodConfigRequirementsRead, map[string]any{}, &requirements); err == nil {
+	if err := remoteSessionRequest(ctx, client, appserver.MethodConfigRequirementsRead, map[string]any{}, &requirements); err != nil {
+		// Rust #57267: only a cloud transport may omit the conventional
+		// requirements catalog (app_server_session.rs:824-833); every other
+		// mode and error still fails the bootstrap instead of silently
+		// dropping the server's requirements.
+		if !cloudConfigRequirementsUnsupported(client.threadParamsMode, err) {
+			return codextea.SettingsWriteResult{}, err
+		}
+	} else {
 		result.PermissionRequirements = interactivePermissionRequirementsFromConfigRequirements(requirements.Requirements)
 		// Rust #51253: the same configRequirements/read response the settings load
 		// already performs also carries the server's speed policies, which the TUI
@@ -3740,7 +3768,7 @@ func remoteDynamicToolsUnsupportedError(err error) bool {
 }
 
 func (c *remoteAppServerTUIClient) startTurn(ctx context.Context, root *cli.RootOptions, state *codextui.State, threadID string, request codextea.SubmitRequest) (string, error) {
-	params, err := remoteTurnStartParams(root, state, threadID, request)
+	params, err := remoteTurnStartParamsForMode(c.threadParamsMode, root, state, threadID, request)
 	if err != nil {
 		return "", err
 	}
@@ -5742,6 +5770,16 @@ func remoteSideThreadForkParamsForMode(mode ThreadParamsMode, root *cli.RootOpti
 }
 
 func remoteTurnStartParams(root *cli.RootOptions, state *codextui.State, threadID string, request codextea.SubmitRequest) (turn.TurnStartParams, error) {
+	return remoteTurnStartParamsForMode(ThreadParamsModeEmbedded, root, state, threadID, request)
+}
+
+// remoteTurnStartParamsForMode mirrors Rust AppServerSession::turn_start
+// (codex-rs/tui/src/app_server_session.rs:1611-1634): the turn identity, inputs,
+// trigger, additional context and cyber program always travel, while cwd,
+// workspace roots, permission settings, model, effort, summary, service tier and
+// collaboration mode are client overrides that only travel when the client owns
+// the conversation settings.
+func remoteTurnStartParamsForMode(mode ThreadParamsMode, root *cli.RootOptions, state *codextui.State, threadID string, request codextea.SubmitRequest) (turn.TurnStartParams, error) {
 	threadID = strings.TrimSpace(threadID)
 	if threadID == "" {
 		return turn.TurnStartParams{}, errors.New("remote turn/start requires a thread id")
@@ -5770,6 +5808,28 @@ func remoteTurnStartParams(root *cli.RootOptions, state *codextui.State, threadI
 	if len(inputs) == 0 && len(additionalContext) == 0 {
 		return turn.TurnStartParams{}, errors.New("remote turn/start requires user input")
 	}
+	// Rust #42451 passes the TUI submission id through turn/start so the
+	// committed user message echoes it for pending-steer acknowledgement.
+	params := turn.TurnStartParams{
+		ThreadID:              threadID,
+		ClientUserMessageID:   strings.TrimSpace(request.ClientID),
+		Input:                 inputs,
+		ExperimentalRawEvents: true,
+		// Rust's TUI marks user-submitted turns with the "user" trigger (#46569)
+		// and attributes an automatic goal continuation with "goal".
+		TurnTrigger:       interactiveTurnTrigger(request),
+		AdditionalContext: additionalContext,
+	}
+	if program := strings.TrimSpace(request.CyberAccessProgram); program != "" {
+		value := turn.CyberAccessProgram(program)
+		params.CyberAccessProgram = &value
+	}
+	if mode.SettingsOwner() == ThreadSettingsOwnerServer {
+		// Rust #57267 (app_server_session.rs:1620-1634): a native hosted
+		// conversation keeps cwd, workspace roots, permissions, model, effort,
+		// summary, service tier and collaboration mode on the server.
+		return params, nil
+	}
 	if request.CollaborationMode == nil {
 		request.CollaborationMode = interactiveCollaborationModeFromState(state)
 	}
@@ -5782,28 +5842,12 @@ func remoteTurnStartParams(root *cli.RootOptions, state *codextui.State, threadI
 	if requestModel := strings.TrimSpace(request.Model); requestModel != "" {
 		turnModel = requestModel
 	}
-	// Rust #42451 passes the TUI submission id through turn/start so the
-	// committed user message echoes it for pending-steer acknowledgement.
-	params := turn.TurnStartParams{
-		ThreadID:              threadID,
-		ClientUserMessageID:   strings.TrimSpace(request.ClientID),
-		Input:                 inputs,
-		CWD:                   strings.TrimSpace(shared.CWD),
-		Model:                 turnModel,
-		ApprovalPolicy:        remoteStringAny(shared.ApprovalPolicy),
-		SandboxPolicy:         remoteStringAny(shared.Sandbox),
-		Config:                configValues,
-		ExperimentalRawEvents: true,
-		// Rust's TUI marks user-submitted turns with the "user" trigger (#46569)
-		// and attributes an automatic goal continuation with "goal".
-		TurnTrigger:       interactiveTurnTrigger(request),
-		AdditionalContext: additionalContext,
-	}
+	params.CWD = strings.TrimSpace(shared.CWD)
+	params.Model = turnModel
+	params.ApprovalPolicy = remoteStringAny(shared.ApprovalPolicy)
+	params.SandboxPolicy = remoteStringAny(shared.Sandbox)
+	params.Config = configValues
 	params.CollaborationMode = interactiveCollaborationModePayload(request.CollaborationMode)
-	if program := strings.TrimSpace(request.CyberAccessProgram); program != "" {
-		value := turn.CyberAccessProgram(program)
-		params.CyberAccessProgram = &value
-	}
 	if effort := strings.TrimSpace(shared.ModelReasoningEffort); effort != "" {
 		params.Effort = &effort
 	}
