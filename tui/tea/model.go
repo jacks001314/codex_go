@@ -10703,10 +10703,33 @@ func (m *Model) refreshVoiceTranscript() bubbletea.Cmd {
 		}
 		m.renderedVoiceTranscripts[record] = true
 		position := len(m.State.Messages)
-		m.applyHistoryCell(historycell.NewSpokenHistoryCell(string(record.Role), record.Text))
+		m.applyHistoryCell(m.voiceTranscriptCell(record.Role, record.Text))
 		m.retainVoiceCaption(record, position)
 	}
 	return m.syncLiveVoiceTranscript()
+}
+
+// voiceTranscriptCell builds the history cell for one real voice caption.
+// Spoken user prompts render with the bold red chevron and assistant captions
+// link workspace artifacts (Rust #43676 realtime_transcript_history_cell).
+func (m *Model) voiceTranscriptCell(role chatwidget.VoiceTranscriptRole, text string) historycell.HistoryCell {
+	if role == chatwidget.VoiceTranscriptUser {
+		return historycell.NewSpokenUserPrompt(text)
+	}
+	return historycell.NewSpokenAssistantCell(text, m.voiceArtifactWorkspace())
+}
+
+// voiceArtifactWorkspace reports the local workspace that spoken artifact
+// links may use. Rust TrustedWorkspaceFile only links files inside the local
+// session workspace, so an SSH session never offers local file links.
+func (m *Model) voiceArtifactWorkspace() string {
+	if m == nil {
+		return ""
+	}
+	if m.clipboardEnvironmentValue().SSHSession {
+		return ""
+	}
+	return strings.TrimSpace(m.sessionCWD)
 }
 
 type retainedVoiceCaption struct {
@@ -10756,9 +10779,17 @@ func (m *Model) restoreRetainedVoiceCaptions(threadID string, messages []codextu
 		if position > len(messages) {
 			position = len(messages)
 		}
+		// Restore the caption through the same spoken cells the live path uses,
+		// so a thread switch keeps the red chevron and artifact links.
+		cell := m.voiceTranscriptCell(caption.record.Role, caption.record.Text)
+		width := max(m.width, 20)
 		messages = append(messages, codextui.Message{})
 		copy(messages[position+1:], messages[position:])
-		messages[position] = codextui.Message{Role: codextui.RoleHistory, Text: text, RawText: text}
+		messages[position] = codextui.Message{
+			Role:    codextui.RoleHistory,
+			Text:    strings.Join(cell.DisplayLines(width), "\n"),
+			RawText: strings.Join(cell.RawLines(), "\n"),
+		}
 		inserted++
 	}
 	return messages
@@ -10766,7 +10797,12 @@ func (m *Model) restoreRetainedVoiceCaptions(threadID string, messages []codextu
 
 func messagesContainVoiceCaption(messages []codextui.Message, text string) bool {
 	for _, message := range messages {
-		if message.Role == codextui.RoleHistory && strings.TrimSpace(message.Text) == text {
+		if message.Role != codextui.RoleHistory {
+			continue
+		}
+		// Spoken captions carry the marker and, for the assistant, artifact
+		// links, so compare the raw transcript and the visible text.
+		if strings.TrimSpace(message.RawText) == text || strings.TrimSpace(utils.StripANSI(message.Text)) == text {
 			return true
 		}
 	}

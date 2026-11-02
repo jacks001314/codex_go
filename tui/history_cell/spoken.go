@@ -16,10 +16,22 @@ const (
 	SpokenCaptionPrefix   = "   "
 )
 
-// SpokenHistoryCell renders one completed voice caption.
+// SpokenHistoryCell renders one completed voice caption. User prompts use
+// NewSpokenUserPrompt instead (Rust new_spoken_user_prompt), so this cell is
+// the assistant transcript. When Workspace is set, file references in the
+// caption are linked inside that workspace (Rust spoken_artifacts).
 type SpokenHistoryCell struct {
 	Role string
 	Text string
+	// Workspace is the local session workspace used to validate artifact
+	// links. Empty disables linking (no local workspace, or an SSH session).
+	Workspace string
+}
+
+// SpokenPromptMarkerCell is implemented by cells that render a spoken user
+// prompt, whose red chevron the split-flap board must keep coloured.
+type SpokenPromptMarkerCell interface {
+	SpokenPromptMarker() bool
 }
 
 // NewSpokenHistoryCell returns a cell for a completed voice caption. An empty
@@ -28,10 +40,21 @@ func NewSpokenHistoryCell(role string, text string) SpokenHistoryCell {
 	return SpokenHistoryCell{Role: strings.TrimSpace(role), Text: text}
 }
 
-// DisplayLines renders the caption with its speaker label.
+// NewSpokenAssistantCell returns the assistant caption cell for a voice
+// conversation whose workspace can trust local artifact links.
+func NewSpokenAssistantCell(text string, workspace string) SpokenHistoryCell {
+	return SpokenHistoryCell{Role: "assistant", Text: text, Workspace: strings.TrimSpace(workspace)}
+}
+
+// DisplayLines renders the caption with its speaker label, linking workspace
+// artifacts in assistant captions.
 func (c SpokenHistoryCell) DisplayLines(width int) []string {
 	_ = width
-	return c.lines()
+	lines := c.lines()
+	if c.Workspace == "" || strings.EqualFold(c.Role, "user") {
+		return lines
+	}
+	return AnnotateSpokenArtifacts(lines, c.Workspace)
 }
 
 // RawLines renders the caption for copy-friendly scrollback.

@@ -12,7 +12,6 @@ import (
 	bubbletea "github.com/charmbracelet/bubbletea"
 
 	"codex_go/tui/chatwidget"
-	historycell "codex_go/tui/history_cell"
 )
 
 // voiceTranscriptFrameMsg advances the live caption animation.
@@ -50,7 +49,7 @@ func (m *Model) syncLiveVoiceTranscript() bubbletea.Cmd {
 		return nil
 	}
 	previous := m.liveVoiceTranscript.cell
-	inner := historycell.NewSpokenHistoryCell(string(live.Role), live.Text)
+	inner := m.voiceTranscriptCell(live.Role, live.Text)
 	cell := chatwidget.NewSplitFlapTranscriptCell(inner, string(live.Role), previous, 0, m.animationsEnabled, m.currentTime())
 	cell.Now = m.currentTime
 	m.liveVoiceTranscript = liveVoiceTranscriptState{
