@@ -5097,7 +5097,10 @@ func (m *Model) voiceStripState() (bottompane.VoiceStripState, bool) {
 		Activity:        m.voiceStripActivityLabel(),
 		MuteHint:        m.voiceMuteHint(),
 		StartedAt:       m.voiceStripStartedAt,
-		Animations:      true,
+		// Rust #46835: reduced motion hides the meter histories and stops
+		// meter-driven redraws, so the strip must follow `tui.animations`
+		// instead of assuming the animated layout.
+		Animations: m.animationsEnabled,
 	}
 	for _, sample := range m.audioMeterHistory {
 		state.MicrophoneHistory = append(state.MicrophoneHistory, sample.microphone)
@@ -10497,7 +10500,9 @@ type voiceMeterSample struct {
 // pushVoiceMeterSample records one intensity pair for the voice strip. Quiet
 // samples scroll into the history like any other frame, so earlier activity
 // stays visible until it ages out (Rust #44928) instead of being cleared by the
-// first silent frame on that channel.
+// first silent frame on that channel. Reduced motion keeps the history empty
+// because the strip cannot render it and a meter-only sample must not repaint
+// the footer (Rust #46835).
 func (m *Model) pushVoiceMeterSample(microphonePeak uint16, speakerPeak uint16) {
 	if m == nil {
 		return
@@ -10507,13 +10512,21 @@ func (m *Model) pushVoiceMeterSample(microphonePeak uint16, speakerPeak uint16) 
 	}
 	microphone := chatwidget.VoiceMeterIntensity(microphonePeak)
 	speaker := chatwidget.VoiceMeterIntensity(speakerPeak)
+	if speaker > 0 {
+		m.speakerActiveUntil = m.currentTime().Add(chatwidget.VoiceSpeakerActivityHold)
+	}
+	// Rust #46835 skips footer updates caused solely by audio-meter changes
+	// while animations are disabled. The Go strip derives its meter row from
+	// this history, so a reduced-motion sample has no rendered effect: keep
+	// the peaks and the speaker hold current and stop mutating render state
+	// on every tick.
+	if !m.animationsEnabled {
+		return
+	}
 	if len(m.audioMeterHistory) >= chatwidget.VoiceMeterHistoryCapacity {
 		m.audioMeterHistory = m.audioMeterHistory[1:]
 	}
 	m.audioMeterHistory = append(m.audioMeterHistory, voiceMeterSample{microphone: microphone, speaker: speaker})
-	if speaker > 0 {
-		m.speakerActiveUntil = m.currentTime().Add(chatwidget.VoiceSpeakerActivityHold)
-	}
 }
 
 // stopVoiceConversation ends a running conversation on the user's request and

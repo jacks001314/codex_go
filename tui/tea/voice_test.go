@@ -196,6 +196,55 @@ func TestModelVoiceSessionPreservesTypedFailureCauseLikeRust(t *testing.T) {
 	}
 }
 
+// Rust #46835: reduced motion collapses the voice strip to its control row and
+// a meter tick changes nothing visible, so the footer is not rebuilt for audio
+// levels alone. Speaker activity transitions still update the label.
+func TestModelVoiceStripRespectsReducedMotionLikeRust(t *testing.T) {
+	model, _, _ := newVoiceTestModel(t)
+	model.animationsEnabled = false
+	model.realtimeHelperAttached = true
+	model.VoiceConversation.MarkVoiceBackendStarted()
+	model.VoiceConversation.MarkVoiceWebRTCConnected()
+	model.onVoicePeaks = func() (uint16, uint16) { return chatwidget.VoiceMeterFullScale, 0 }
+
+	before := model.View()
+	for frame := 0; frame < chatwidget.VoiceMeterHistoryCapacity; frame++ {
+		model.sampleVoicePeaks()
+	}
+	if len(model.audioMeterHistory) != 0 {
+		t.Fatalf("reduced motion recorded meter frames: %#v", model.audioMeterHistory)
+	}
+	if after := model.View(); after != before {
+		t.Fatalf("a meter-only sample repainted the frame under reduced motion:\n%s", after)
+	}
+	lines := model.voiceStripLines(80)
+	if len(lines) != 1 {
+		t.Fatalf("reduced-motion strip = %#v", lines)
+	}
+	if strings.Contains(lines[0], "mic ") || strings.Contains(lines[0], "codex ") {
+		t.Fatalf("reduced motion rendered a meter row: %q", lines[0])
+	}
+	if !strings.Contains(lines[0], "listening") {
+		t.Fatalf("reduced motion dropped the activity: %q", lines[0])
+	}
+
+	// Speaker activity still surfaces as a label change.
+	model.onVoicePeaks = func() (uint16, uint16) { return 0, chatwidget.VoiceMeterFullScale }
+	model.sampleVoicePeaks()
+	if lines := model.voiceStripLines(80); !strings.Contains(lines[0], "speaking") {
+		t.Fatalf("speaker activity was lost under reduced motion: %#v", lines)
+	}
+
+	// With animations enabled the same sampling fills the history row again.
+	model.animationsEnabled = true
+	model.onVoicePeaks = func() (uint16, uint16) { return chatwidget.VoiceMeterFullScale, 0 }
+	model.sampleVoicePeaks()
+	animated := model.voiceStripLines(80)
+	if len(animated) != 2 || !strings.Contains(animated[1], "█") {
+		t.Fatalf("animated strip lost the meter row: %#v", animated)
+	}
+}
+
 func TestModelVoiceStripRendersPhaseActivityAndMeters(t *testing.T) {
 	model, _, _ := newVoiceTestModel(t)
 	// Starting without a helper reports connecting and no live capture.

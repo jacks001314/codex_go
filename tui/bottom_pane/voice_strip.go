@@ -61,12 +61,16 @@ type VoiceStripState struct {
 }
 
 // VoiceStripHeight reports the strip's rendered line count. A zero-width strip
-// renders nothing.
-func VoiceStripHeight(width int) int {
+// renders nothing, and reduced motion hides the sample-history row so the
+// composer only reserves the voice controls (Rust #46835 desired_height).
+func VoiceStripHeight(width int, animations bool) int {
 	if width <= 0 {
 		return 0
 	}
-	return 2
+	if animations {
+		return 2
+	}
+	return 1
 }
 
 // VoiceLoadingGlyph returns the spinner frame for the elapsed time. The frames
@@ -133,6 +137,11 @@ func VoiceStripLines(width int, state VoiceStripState) []string {
 		padding = 0
 	}
 	statusLine := status + strings.Repeat(" ", padding) + controls
+	// Reduced motion keeps the controls and drops the microphone/speaker
+	// history row (Rust #46835: `if !self.state.animations || area.height < 2`).
+	if !state.Animations {
+		return []string{statusLine}
+	}
 
 	meterWidth := (available - 14) / 2
 	if meterWidth > 6 {
