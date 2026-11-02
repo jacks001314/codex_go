@@ -1,7 +1,6 @@
 ﻿package tui
 
 import (
-	"runtime"
 	"strings"
 	"testing"
 
@@ -74,19 +73,24 @@ func TestDiffSignSGRUsesForegroundOnlyForAnsi16(t *testing.T) {
 	}
 }
 
-func TestDetectStdoutColorLevelPromotesWindowsTerminal(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		t.Skip("Windows Terminal promotion only applies on Windows")
+func TestDetectStdoutColorLevelPromotesWindowsTerminalLikeRust(t *testing.T) {
+	// Rust parity: stdout_color_level_for_terminal promotes ANSI-16 to truecolor
+	// for Windows Terminal. The Go probe only has TERM_PROGRAM to recognise it.
+	ansi16 := map[string]string{"TERM": "xterm", "TERM_PROGRAM": "Windows_Terminal"}
+	if got := detectStdoutColorLevelFor(envFromMap(ansi16), true); got != ColorTrue {
+		t.Fatalf("Windows Terminal promotion = %v, want ColorTrue", got)
 	}
-	t.Setenv("WT_SESSION", "1")
-	t.Setenv("TERM_PROGRAM", "")
-	t.Setenv("FORCE_COLOR", "")
-	if got := detectStdoutColorLevel(); got != ColorTrue {
+	if got := detectStdoutColorLevelFor(envFromMap(ansi16), false); got != ColorUnknown {
+		t.Fatalf("Windows Terminal promotion without a tty = %v, want ColorUnknown", got)
+	}
+	// FORCE_COLOR *presence* is the override, so even an empty value blocks the
+	// promotion (and forces ANSI-16 itself).
+	override := map[string]string{"TERM": "xterm", "TERM_PROGRAM": "Windows_Terminal", "FORCE_COLOR": ""}
+	if got := detectStdoutColorLevelFor(envFromMap(override), true); got != ColorANSI16 {
+		t.Fatalf("promotion with FORCE_COLOR present = %v, want ColorANSI16", got)
+	}
+	// WT_SESSION promotes on its own, without a tty or a recognised TERM.
+	if got := detectStdoutColorLevelFor(envFromMap(map[string]string{"WT_SESSION": "1"}), false); got != ColorTrue {
 		t.Fatalf("WT_SESSION promotion = %v, want ColorTrue", got)
-	}
-	t.Setenv("WT_SESSION", "")
-	t.Setenv("TERM_PROGRAM", "Windows_Terminal")
-	if got := detectStdoutColorLevel(); got != ColorTrue {
-		t.Fatalf("TERM_PROGRAM promotion = %v, want ColorTrue", got)
 	}
 }
