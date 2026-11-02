@@ -71,6 +71,16 @@ func DetectStdoutColorLevel() StdoutColorLevel {
 }
 
 func detectStdoutColorLevel() StdoutColorLevel {
+	// Rust #46897: effective_stdout_color_level goes through supports-color, so a
+	// forced level wins and NO_COLOR turns color off entirely. termenv's
+	// ColorProfile only reads TERM/COLORTERM, so honour both variables here
+	// before probing.
+	if level, ok := forcedColorLevel(os.Getenv("FORCE_COLOR")); ok {
+		return level
+	}
+	if os.Getenv("NO_COLOR") != "" {
+		return ColorUnknown
+	}
 	if runtime.GOOS == "windows" {
 		// Windows Terminal advertises only ANSI-16 to some probes even though it
 		// renders truecolor correctly; promote by WT_SESSION or TERM_PROGRAM
@@ -90,6 +100,25 @@ func detectStdoutColorLevel() StdoutColorLevel {
 		return ColorANSI16
 	default:
 		return ColorUnknown
+	}
+}
+
+// forcedColorLevel maps FORCE_COLOR onto a color depth (supports-color
+// semantics: 0 disables color, 1/2/3 select ANSI-16/256/truecolor).
+func forcedColorLevel(value string) (StdoutColorLevel, bool) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "":
+		return ColorUnknown, false
+	case "0", "false":
+		return ColorUnknown, true
+	case "1":
+		return ColorANSI16, true
+	case "2":
+		return ColorANSI256, true
+	case "3", "true":
+		return ColorTrue, true
+	default:
+		return ColorUnknown, false
 	}
 }
 
