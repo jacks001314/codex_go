@@ -14,6 +14,7 @@ import (
 	"time"
 
 	historycell "codex_go/tui/history_cell"
+	"codex_go/utils"
 )
 
 // SplitFlapTranscriptCell animates one transcript cell.
@@ -30,7 +31,10 @@ func (c SplitFlapTranscriptCell) DisplayStyledLines(width int) []historycell.Sty
 	if c.Inner == nil {
 		return nil
 	}
-	lines := c.Inner.DisplayLines(width)
+	// History cells may carry SGR (a spoken user prompt paints its surface and
+	// chevron). The board measures glyphs, so it animates the visible text and
+	// re-applies the marker colour itself.
+	lines := plainSplitFlapLines(c.Inner.DisplayLines(width))
 	if c.Board == nil {
 		return historycell.StyledLinesFromPlain(lines)
 	}
@@ -44,10 +48,14 @@ func NewSplitFlapTranscriptCell(inner historycell.HistoryCell, role string, prev
 	if previous != nil {
 		previousBoard = previous.Board
 	}
-	return SplitFlapTranscriptCell{
+	cell := SplitFlapTranscriptCell{
 		Inner: inner,
 		Board: NewSplitFlapBoard(role, splitFlapCellTarget(inner), previousBoard, discardedPrefixBytes, animated, now),
 	}
+	if marker, ok := inner.(historycell.SpokenPromptMarkerCell); ok && marker.SpokenPromptMarker() && cell.Board != nil {
+		cell.Board.MarkerSGR = historycell.SpokenPromptMarkerSGR
+	}
+	return cell
 }
 
 // DisplayLines renders the animated caption.
@@ -55,7 +63,7 @@ func (c SplitFlapTranscriptCell) DisplayLines(width int) []string {
 	if c.Inner == nil {
 		return nil
 	}
-	lines := c.Inner.DisplayLines(width)
+	lines := plainSplitFlapLines(c.Inner.DisplayLines(width))
 	if c.Board == nil {
 		return lines
 	}
@@ -93,5 +101,24 @@ func splitFlapCellTarget(inner historycell.HistoryCell) string {
 	if inner == nil {
 		return ""
 	}
-	return strings.Join(inner.DisplayLines(1<<20), "\n")
+	// Cells that paint a surface pad their rows to the render width; the board
+	// target keeps the visible text so an appended caption still extends the
+	// previous target (and therefore reuses its settled tiles).
+	lines := plainSplitFlapLines(inner.DisplayLines(1 << 20))
+	for index := range lines {
+		lines[index] = strings.TrimRight(lines[index], " ")
+	}
+	// Trailing padding rows would otherwise break the retained-prefix check
+	// when a caption grows.
+	return strings.TrimRight(strings.Join(lines, "\n"), "\n")
+}
+
+// plainSplitFlapLines drops SGR sequences so glyph positions, tile arrivals,
+// and padding all measure visible text.
+func plainSplitFlapLines(lines []string) []string {
+	out := make([]string, len(lines))
+	for index, line := range lines {
+		out[index] = utils.StripANSI(line)
+	}
+	return out
 }

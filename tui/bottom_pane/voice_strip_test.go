@@ -9,14 +9,55 @@ import (
 )
 
 func TestVoiceStripHeight(t *testing.T) {
-	if got := VoiceStripHeight(0); got != 0 {
-		t.Fatalf("height = %d", got)
+	if got := VoiceStripHeight(0, true); got != 0 {
+		t.Fatalf("animated zero-width height = %d", got)
 	}
-	if got := VoiceStripHeight(40); got != 2 {
-		t.Fatalf("height = %d", got)
+	if got := VoiceStripHeight(0, false); got != 0 {
+		t.Fatalf("reduced-motion zero-width height = %d", got)
+	}
+	if got := VoiceStripHeight(40, true); got != 2 {
+		t.Fatalf("animated height = %d", got)
+	}
+	if got := VoiceStripHeight(40, false); got != 1 {
+		t.Fatalf("reduced-motion height = %d", got)
 	}
 	if lines := VoiceStripLines(0, VoiceStripState{}); lines != nil {
 		t.Fatalf("zero width rendered %#v", lines)
+	}
+}
+
+// Rust #46835: reduced motion hides the microphone and speaker histories and
+// sizes the strip to the remaining controls. The control row itself keeps its
+// layout so mute and stop do not move when the preference flips.
+func TestVoiceStripReducedMotionHidesMeterHistoriesLikeRust(t *testing.T) {
+	state := VoiceStripState{
+		Phase:             VoiceStripActive,
+		MicrophoneLive:    true,
+		MicrophoneHistory: []uint8{255, 255, 128},
+		SpeakerHistory:    []uint8{255, 0, 255},
+		Activity:          "listening",
+	}
+	reduced := VoiceStripLines(80, state)
+	if len(reduced) != VoiceStripHeight(80, false) || len(reduced) != 1 {
+		t.Fatalf("reduced-motion strip = %#v", reduced)
+	}
+	if strings.Contains(reduced[0], voiceMicLabel) || strings.Contains(reduced[0], voiceCodexLabel) {
+		t.Fatalf("reduced motion kept a meter row: %q", reduced[0])
+	}
+	if !strings.HasSuffix(reduced[0], voiceStopControl) || !strings.Contains(reduced[0], voiceMuteFallback) {
+		t.Fatalf("reduced motion dropped the controls: %q", reduced[0])
+	}
+
+	state.Animations = true
+	animated := VoiceStripLines(80, state)
+	if len(animated) != VoiceStripHeight(80, true) || len(animated) != 2 {
+		t.Fatalf("animated strip = %#v", animated)
+	}
+	if animated[0] != reduced[0] {
+		t.Fatalf("control row moved between modes:\n animated: %q\n reduced: %q", animated[0], reduced[0])
+	}
+	if !strings.HasPrefix(animated[1], voiceMicLabel) || !strings.Contains(animated[1], voiceCodexLabel) {
+		t.Fatalf("animated meter row = %q", animated[1])
 	}
 }
 
@@ -49,6 +90,7 @@ func TestVoiceStripRendersActiveControls(t *testing.T) {
 		Phase:          VoiceStripActive,
 		MicrophoneLive: true,
 		Activity:       "listening",
+		Animations:     true,
 	}
 	lines := VoiceStripLines(80, state)
 	if len(lines) != 2 {
@@ -186,6 +228,7 @@ func TestVoiceStripMeterWidthIsBounded(t *testing.T) {
 		MicrophoneLive:    true,
 		MicrophoneHistory: []uint8{255, 255, 255, 255, 255, 255, 255, 255},
 		SpeakerHistory:    []uint8{255, 255, 255, 255, 255, 255, 255, 255},
+		Animations:        true,
 	}
 	lines := VoiceStripLines(120, state)
 	meter := strings.TrimPrefix(lines[1], voiceMicLabel)
