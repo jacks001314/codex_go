@@ -162,6 +162,9 @@ func pathWithin(path string, root string) bool {
 }
 
 func inlineVisualizationViewerDocument(fragment string, title string) string {
-	frame := `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' blob: data: https:; style-src 'unsafe-inline' blob: data: https:; img-src blob: data: https:; font-src blob: data: https:; connect-src blob: data:; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"><title>` + html.EscapeString(title) + `</title></head><body>` + fragment + `</body></html>`
+	// Rust #58436 (0ffae14a43): the viewer ships tab switching, the
+	// `.viz-carousel` variant picker, and touch tooltips. Go generates its own
+	// document, so the equivalent runtime and styles are embedded per document.
+	frame := `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' blob: data: https:; style-src 'unsafe-inline' blob: data: https:; img-src blob: data: https:; font-src blob: data: https:; connect-src blob: data:; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"><title>` + html.EscapeString(title) + `</title><style>` + inlineVisualizationControlsCSS + `</style></head><body>` + fragment + `<script id="codex-visualization-tabs">` + inlineVisualizationControlsJS + `</script></body></html>`
 	return `<!doctype html><html><head><meta charset="utf-8"><meta name="referrer" content="no-referrer"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; frame-src 'self'"><title>` + html.EscapeString(title) + `</title><style>html,body{margin:0}iframe{width:100%;height:100vh;border:0}</style></head><body><iframe sandbox="allow-scripts" referrerpolicy="no-referrer" srcdoc="` + html.EscapeString(frame) + `"></iframe></body></html>`
 }
