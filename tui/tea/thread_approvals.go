@@ -23,10 +23,22 @@ func (m *Model) routeApprovalRequest(message ApprovalRequestMsg) bubbletea.Cmd {
 	if m == nil {
 		return nil
 	}
+	threadID := strings.TrimSpace(message.ThreadID)
+	// Rust never rebuilds a prompt for a closed thread: its per-thread store is
+	// retired with the thread. A replay that arrives after a local archive is
+	// dropped here for the same reason.
+	if threadID != "" && m.agentThreadArchived(threadID) {
+		return nil
+	}
+	// The server replays the requests it still holds when a thread is resumed
+	// after a reconnect. Keying by the server request id keeps a replay from
+	// opening a second popup for the request that is already queued or visible.
+	if m.approvalRequestAlreadyKnown(message) {
+		return nil
+	}
 	if owner, ok := m.requestBackendOwner(message.BackendID, message.ThreadID); ok && m.deferBackendRequest(owner, &message, nil) {
 		return nil
 	}
-	threadID := strings.TrimSpace(message.ThreadID)
 	if (threadID != "" && threadID != m.currentThreadID()) || (m.modal != nil && m.modal.kind == ModalKindApproval) {
 		m.pendingApprovals = append(m.pendingApprovals, message)
 		m.refreshThreadApprovalViews()
@@ -188,6 +200,34 @@ func (m *Model) openPendingApprovalForThread(threadID string) bubbletea.Cmd {
 	return m.openApprovalModal(request)
 }
 
+// OpenPendingApprovalForThread replays the queued request for threadID, the
+// same entry point a host uses when it selects an agent from the picker
+// (Rust's switch-time replay).
+func (m *Model) OpenPendingApprovalForThread(threadID string) bubbletea.Cmd {
+	return m.openPendingApprovalForThread(threadID)
+}
+
+// PendingApprovals returns a copy of the queued (background) approvals.
+func (m *Model) PendingApprovals() []ApprovalRequestMsg {
+	if m == nil || len(m.pendingApprovals) == 0 {
+		return nil
+	}
+	return append([]ApprovalRequestMsg(nil), m.pendingApprovals...)
+}
+
+// PendingApprovalThreadLabels reports the bottom-pane approval notice rows.
+func (m *Model) PendingApprovalThreadLabels() []string {
+	return m.pendingThreadApprovalLabels()
+}
+
+// ApprovalModalOpenFor reports whether the approval popup belongs to threadID.
+func (m *Model) ApprovalModalOpenFor(threadID string) bool {
+	if m == nil || m.modal == nil || m.modal.kind != ModalKindApproval {
+		return false
+	}
+	return strings.TrimSpace(m.modal.threadID) == strings.TrimSpace(threadID)
+}
+
 // openNextThreadApproval surfaces the oldest request that belongs to the active
 // thread once a modal has been answered.
 func (m *Model) openNextThreadApproval() bubbletea.Cmd {
@@ -248,14 +288,3 @@ func (m *Model) refreshThreadApprovalViews() {
 	m.rebuildAgentPicker()
 }
 
-// dropStaleThreadApprovals forgets queued requests after the app-server
-// connection goes away: their brokers belong to the retired client, so no
-// answer could be delivered. Rust re-derives the pending set from the
-// per-thread stores when it reconnects (#58720).
-func (m *Model) dropStaleThreadApprovals() {
-	if m == nil || len(m.pendingApprovals) == 0 {
-		return
-	}
-	m.pendingApprovals = nil
-	m.refreshThreadApprovalViews()
-}

@@ -278,6 +278,13 @@ type AgentThreadReaderFunc func(currentThreadID string) ([]codextui.AgentThreadE
 
 type AgentThreadSwitchFunc func(threadID string) (AgentThreadSwitchResponse, error)
 
+// ThreadApprovalReconnectFunc reattaches the threads that had an approval
+// outstanding when the app-server connection went away. The host resumes each
+// thread on a fresh connection; the server replays the requests it still holds
+// and they reach the TUI through the normal approval path (Rust #58720
+// refresh_pending_thread_approvals after reconnect).
+type ThreadApprovalReconnectFunc func(threadIDs []string) bubbletea.Cmd
+
 type AgentThreadSwitchResponse struct {
 	Entry    codextui.AgentThreadEntry
 	Messages []codextui.Message
@@ -1290,13 +1297,16 @@ type Options struct {
 	// OnPromptEdit branches before a transcript prompt selected via backtrack
 	// ("Esc Esc to edit previous message") and returns the branched session.
 	// A nil hook leaves prompt editing unavailable for this runtime.
-	OnPromptEdit            PromptEditFunc
-	OnRenameThread          ThreadRenameFunc
-	OnLogout                LogoutFunc
-	OnReadAgents            AgentThreadReaderFunc
-	OnSwitchAgent           AgentThreadSwitchFunc
-	AgentsOverviewEmbedded  bool
-	OnAgentsOverviewRefresh AgentsOverviewRefreshFunc
+	OnPromptEdit   PromptEditFunc
+	OnRenameThread ThreadRenameFunc
+	OnLogout       LogoutFunc
+	OnReadAgents   AgentThreadReaderFunc
+	OnSwitchAgent  AgentThreadSwitchFunc
+	// OnReconnectThreadApprovals rebuilds the background approval queue after a
+	// transport failure. Nil leaves disconnected approvals dropped.
+	OnReconnectThreadApprovals ThreadApprovalReconnectFunc
+	AgentsOverviewEmbedded     bool
+	OnAgentsOverviewRefresh    AgentsOverviewRefreshFunc
 	// OnAcknowledgeThreadRead marks a focused conversation's observed receipt
 	// read. Nil disables automatic read acknowledgement (Rust #58263).
 	OnAcknowledgeThreadRead ThreadReadAcknowledgeFunc
@@ -1957,6 +1967,11 @@ type Model struct {
 	// dashboard opens (Rust #50786 AgentsOverviewState::grouping).
 	agentsOverviewGrouping agentsoverview.Grouping
 	agentsOverviewDrafts   map[string]string
+	// agentsOverviewDraftPastes keeps the pending large pastes of a saved draft
+	// so returning to that thread restores its placeholders too (Rust
+	// ThreadComposerState::pending_pastes).
+	agentsOverviewDraftPastes        map[string][]composerPendingPaste
+	agentsOverviewPendingDraftPastes []composerPendingPaste
 	// agentsOverviewCursorBar tracks the DECSCUSR steady-bar cursor used by the
 	// Vim-insert rename editor (Rust #50216 cursor_style).
 	agentsOverviewCursorBar bool
@@ -2198,7 +2213,12 @@ type Model struct {
 	// composerElements tracks the composer's structured text elements (byte
 	// ranges plus placeholders) so mentions reach the turn input as
 	// text_elements (Rust textarea::text_elements).
-	composerElements          []ComposerTextElement
+	composerElements []ComposerTextElement
+	// pendingPastes mirrors Rust ChatComposer::pending_pastes: a large paste is
+	// replaced by a "[Pasted Content N chars]" placeholder in the composer and
+	// the original text is spliced back in on submit (chat_composer.rs:471,
+	// user_messages.rs:331-354).
+	pendingPastes             []composerPendingPaste
 	misalignmentPolicyStopped bool
 	misalignmentReview        *misalignmentReview
 	misalignmentReviewSerial  uint64
@@ -2536,6 +2556,7 @@ type Model struct {
 	onLogout                        LogoutFunc
 	onReadAgents                    AgentThreadReaderFunc
 	onSwitchAgent                   AgentThreadSwitchFunc
+	onReconnectThreadApprovals      ThreadApprovalReconnectFunc
 	// statusCopyTargets holds the most recent /status output for /copy
 	// (Rust #43055); cleared by any other command, user message, or response.
 	statusCopyTargets *statusCopyTargets
@@ -3221,6 +3242,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onLogout:                         options.OnLogout,
 		onReadAgents:                     options.OnReadAgents,
 		onSwitchAgent:                    options.OnSwitchAgent,
+		onReconnectThreadApprovals:       options.OnReconnectThreadApprovals,
 		backgroundThreadEvents:           map[string][]protocol.ThreadEvent{},
 		sideConversations:                map[string]*activeSideConversation{},
 		clipboardWrite:                   clipboardWrite,
@@ -3875,10 +3897,10 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		}
 		return m, bubbletea.Batch(cmd, m.refreshStatusControlsCmd(), m.submitNextQueued(), m.noteRecapTurnFinished(recapStatus))
 	case AppServerDisconnectMsg:
-		m.dropStaleThreadApprovals()
+		reconnectThreads := m.retireThreadApprovalsForReconnect()
 		m.dropStaleBackendRequests()
 		m.handleAppServerDisconnect()
-		return m, m.refreshStatusControlsCmd()
+		return m, bubbletea.Batch(m.refreshStatusControlsCmd(), m.reconnectThreadApprovalsCmd(reconnectThreads))
 	case TurnInterruptedMsg:
 		if m.applyInactiveThreadTurnInterrupted(msg) {
 			return m, m.refreshStatusControlsCmd()
@@ -6106,6 +6128,9 @@ func (m *Model) submitComposer() bubbletea.Cmd {
 		return nil
 	}
 	textElements := m.composerTextElementsForPromptValue(m.composer.Value(), input)
+	// Rust submits the expanded paste text, not the placeholder: pending_pastes
+	// are spliced back in and the surviving element ranges move with them.
+	input, textElements = m.expandPendingPastesForSubmission(input, textElements)
 	m.resetComposer()
 	m.composerElements = nil
 	m.resetVimEditHistory()
@@ -6340,6 +6365,9 @@ func (m *Model) queueComposer(parseCommand bool) bubbletea.Cmd {
 	input := strings.TrimSpace(m.composerText())
 	shellMode := m.composerPrefix == composerPrefixShell
 	textElements := m.composerTextElementsForPromptValue(m.composer.Value(), input)
+	// Rust submits the expanded paste text, not the placeholder: pending_pastes
+	// are spliced back in and the surviving element ranges move with them.
+	input, textElements = m.expandPendingPastesForSubmission(input, textElements)
 	m.resetComposer()
 	m.composerElements = nil
 	m.resetVimEditHistory()
@@ -6384,6 +6412,9 @@ func (m *Model) steerComposer() bubbletea.Cmd {
 	input := strings.TrimSpace(m.composerText())
 	shellMode := m.composerPrefix == composerPrefixShell
 	textElements := m.composerTextElementsForPromptValue(m.composer.Value(), input)
+	// Rust submits the expanded paste text, not the placeholder: pending_pastes
+	// are spliced back in and the surviving element ranges move with them.
+	input, textElements = m.expandPendingPastesForSubmission(input, textElements)
 	m.resetComposer()
 	m.composerElements = nil
 	m.resetVimEditHistory()

@@ -125,6 +125,8 @@ func (m *Model) resetComposer() {
 	}
 	m.endHistorySearch()
 	m.composerPrefix = composerPrefixNone
+	// Rust drops pending_pastes with the draft they belong to.
+	m.pendingPastes = nil
 	m.composer.Reset()
 	m.refreshComposerPrompt()
 }
