@@ -373,6 +373,12 @@ func (m *Model) applySettingsWriteResult(msg SettingsWriteResultMsg) {
 		// Rust #51510: a failed configuration reload preserves the live TUI
 		// settings, so msg.Result is never applied on this path; only the
 		// failure notice below is reported.
+		if msg.Kind == settingsWriteKindFeatureEnable {
+			// Rust #43113: a failed opt-in write reports the backend's cause and
+			// leaves both the current thread and the saved config untouched.
+			m.applyFeatureEnableWriteResult(msg.Result, msg.Err)
+			return
+		}
 		if msg.Kind == settingsWriteKindExperimental {
 			// Rust keeps the popup open with the failure as its status and retains
 			// the unconfirmed selections for an explicit retry.
@@ -429,6 +435,13 @@ func (m *Model) applySettingsWriteResult(msg SettingsWriteResultMsg) {
 	}
 	if msg.Kind == settingsWriteKindTUIMode {
 		m.applyTUIModeWriteResult(true, "")
+		return
+	}
+	if msg.Kind == settingsWriteKindFeatureEnable {
+		// Rust #43113: report success, an override, or a failure after the write
+		// completes. The reloaded config is deliberately not staged: the opt-in
+		// applies to new threads and the running thread keeps its features.
+		m.applyFeatureEnableWriteResult(msg.Result, nil)
 		return
 	}
 	// Rust #51510: only a reload that actually succeeded may stage its result
