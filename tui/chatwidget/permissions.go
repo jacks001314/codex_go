@@ -54,19 +54,23 @@ type PermissionRequirements struct {
 
 type PermissionMenuConfig struct {
 	ExplicitPermissionProfileMode bool
-	GuardianApprovalEnabled       bool
-	IncludeReadOnly               bool
-	WindowsDegradedSandbox        bool
-	HideFullAccessWarning         bool
-	Requirements                  PermissionRequirements
-	CurrentApprovalPolicy         ApprovalPolicy
-	CurrentReviewer               ApprovalsReviewer
-	CurrentProfileID              string
-	CustomProfiles                []CustomPermissionProfile
+	// ProfilesEmpty mirrors Rust's PermissionDiscovery::profiles.is_empty():
+	// the server returned no permission profiles at all.
+	ProfilesEmpty           bool
+	GuardianApprovalEnabled bool
+	IncludeReadOnly         bool
+	WindowsDegradedSandbox  bool
+	HideFullAccessWarning   bool
+	Requirements            PermissionRequirements
+	CurrentApprovalPolicy   ApprovalPolicy
+	CurrentReviewer         ApprovalsReviewer
+	CurrentProfileID        string
+	CustomProfiles          []CustomPermissionProfile
 }
 
 type PermissionMenuView struct {
 	Title       string
+	Subtitle    string
 	HeaderLines []string
 	FooterHint  string
 	FooterNote  string
@@ -198,6 +202,11 @@ func NewPermissionProfilesPopupView(config PermissionMenuConfig) PermissionMenuV
 		items = append(items, builtinPermissionModeSelectionItem(config, preset, ReadOnlyProfile, preset.Label, PermissionPresetDescription(preset), preset.Approval, ApprovalsReviewerUser))
 	}
 	for _, profile := range config.CustomProfiles {
+		// Rust open_permission_profiles_popup only lists named profiles in the
+		// custom rows; the built-in `:` profiles are already offered above.
+		if strings.HasPrefix(profile.ID, ":") {
+			continue
+		}
 		// Rust PermissionDiscovery::disabled_reason: a named profile is disabled
 		// by the server's allowed flag or by the requirements' allowed profiles,
 		// approval policies, and reviewers.
@@ -215,11 +224,44 @@ func NewPermissionProfilesPopupView(config PermissionMenuConfig) PermissionMenuV
 			ProfileID:       profile.ID,
 		})
 	}
+	subtitle := ""
+	if config.ProfilesEmpty {
+		// Rust clears every row when the server reports no permission profiles
+		// and explains why the picker is empty.
+		items = nil
+		subtitle = "No permission profiles returned by the server."
+	} else if config.CurrentProfileID != "" && !permissionProfileListed(config, config.CurrentProfileID) {
+		current := false
+		for _, item := range items {
+			current = current || item.Current
+		}
+		if !current {
+			items = append(items, PermissionMenuItem{
+				ID:             config.CurrentProfileID,
+				Name:           config.CurrentProfileID,
+				Description:    "Current permission profile",
+				Current:        true,
+				DisabledReason: "Not available on this server",
+			})
+		}
+	}
 	return PermissionMenuView{
 		Title:      "Update Model Permissions",
+		Subtitle:   subtitle,
 		FooterHint: standardPopupHintLine,
 		Items:      items,
 	}
+}
+
+// permissionProfileListed reports whether the server catalog mentions the
+// profile id.
+func permissionProfileListed(config PermissionMenuConfig, id string) bool {
+	for _, profile := range config.CustomProfiles {
+		if profile.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func PermissionModeActionDecisionForPreset(context PermissionModeActionContext) PermissionModeActionDecision {

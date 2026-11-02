@@ -248,7 +248,7 @@ func TestParseCommand(t *testing.T) {
 		ok      bool
 	}{
 		{input: "hello", ok: false},
-		{input: "/help", command: CommandHelp, ok: true},
+		{input: "/help", command: CommandUnknown, ok: true},
 		{input: "/keymap", command: CommandKeymap, ok: true},
 		{input: "/usage weekly", command: CommandUsage, args: "weekly", ok: true},
 		{input: "/goal set ship tui parity", command: CommandGoal, args: "set ship tui parity", ok: true},
@@ -294,8 +294,17 @@ func TestParseCommand(t *testing.T) {
 		{input: "/debug-m-drop", command: CommandMemoryDrop, ok: true},
 		{input: "/debug-m-update", command: CommandMemoryUpdate, ok: true},
 		{input: "/model gpt-5", command: CommandModel, args: "gpt-5", ok: true},
-		{input: "/approval on-request", command: CommandApproval, args: "on-request", ok: true},
-		{input: "/editor", command: CommandEditor, ok: true},
+		// Rust 0.166 has no slash surface for these Go-only commands; the real
+		// TUI answers "Unrecognized command" (verified against the 0.166
+		// binary), so they must parse as unknown rather than dispatch.
+		{input: "/approval on-request", command: CommandUnknown, args: "on-request", ok: true},
+		{input: "/sandbox :workspace", command: CommandUnknown, args: ":workspace", ok: true},
+		{input: "/editor", command: CommandUnknown, ok: true},
+		{input: "/attach notes.md", command: CommandUnknown, args: "notes.md", ok: true},
+		{input: "/image diagram.png", command: CommandUnknown, args: "diagram.png", ok: true},
+		{input: "/url-image https://example.test/a.png", command: CommandUnknown, args: "https://example.test/a.png", ok: true},
+		{input: "/clear-attachments", command: CommandUnknown, ok: true},
+		{input: "/unarchive", command: CommandUnknown, ok: true},
 		{input: "/logout", command: CommandLogout, ok: true},
 		{input: "quit", command: CommandExit, ok: true},
 		{input: "/wat", command: CommandUnknown, ok: true},

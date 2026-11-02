@@ -9,15 +9,18 @@ import (
 )
 
 func TestSkillsMenuViewUsesRustCopyAndShortcut(t *testing.T) {
-	view := NewSkillsMenuView(false)
+	view := NewSkillsMenuView()
 	if view.Title != "Skills" || view.Subtitle != "Choose an action" || len(view.Items) != 2 {
 		t.Fatalf("view = %+v", view)
 	}
-	if view.Items[0].Name != "List skills" || view.Items[0].Description != "Tip: press $ to open this list directly." {
+	if view.Items[0].Name != "List skills" || view.Items[0].Description != "Tip: press $ to open this list directly" {
 		t.Fatalf("list item = %+v", view.Items[0])
 	}
-	if got := NewSkillsMenuView(true).Items[0].Description; got != "Tip: press @ to open this list directly." {
-		t.Fatalf("mentions v2 shortcut = %q", got)
+	if view.Items[1].Name != "Enable/Disable Skills" || view.Items[1].Description != "Enable or disable skills" {
+		t.Fatalf("manage item = %+v", view.Items[1])
+	}
+	if got := OpenSkillsListInsert(); got != "$" {
+		t.Fatalf("skills list insert = %q", got)
 	}
 }
 

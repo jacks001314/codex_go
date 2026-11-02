@@ -16,6 +16,11 @@ import (
 // user kept them. This owns the navigation/dismissal state; key mapping and
 // rendering live with the callers.
 
+// daemonRestartHint mirrors Rust's managed-daemon warning hint (#53173): the
+// first retained startup configuration warning points at /daemon when the
+// settings may predate the background server.
+const daemonRestartHint = "These warnings may reflect settings from when the background server started. If you\u2019ve already fixed them, use /daemon to restart it."
+
 // WarningsView is the warnings panel's navigation and dismissal state.
 type WarningsView struct {
 	entries   []historycell.WarningEntry
@@ -25,6 +30,9 @@ type WarningsView struct {
 	offset    int
 	pageSize  int
 	maxOffset int
+	// daemonRestartHintAt is the page that carries the managed-daemon restart
+	// hint, or -1 (Rust WarningsView::daemon_restart_hint_at, #53173).
+	daemonRestartHintAt int
 	// bodyRows freezes the painted warning rows so the host can register the
 	// viewport for source-backed text selection (Rust #57271).
 	bodyRows []string
@@ -35,10 +43,23 @@ type WarningsView struct {
 // page starts unvisited and unkept.
 func NewWarningsView(entries []historycell.WarningEntry) *WarningsView {
 	return &WarningsView{
-		entries: append([]historycell.WarningEntry(nil), entries...),
-		visited: make([]bool, len(entries)),
-		kept:    map[int]bool{},
+		entries:             append([]historycell.WarningEntry(nil), entries...),
+		visited:             make([]bool, len(entries)),
+		kept:                map[int]bool{},
+		daemonRestartHintAt: -1,
 	}
+}
+
+// SetDaemonRestartHintAt points the managed-daemon restart hint at one page
+// (Rust's ChatWidget::open_warnings daemon_restart_hint_at).
+func (v *WarningsView) SetDaemonRestartHintAt(index int) {
+	if v == nil {
+		return
+	}
+	if index >= len(v.entries) {
+		index = -1
+	}
+	v.daemonRestartHintAt = index
 }
 
 // Entries returns the frozen diagnostics.
@@ -314,6 +335,9 @@ func (v *WarningsView) RenderLines(width int, height int, hints WarningsHints) [
 	if entry, ok := v.CurrentEntry(); ok {
 		title = fmt.Sprintf("Warnings \u00b7 %d of %d \u00b7 %s", v.current+1, len(v.entries), entry.Source)
 		details = entry.Details
+		if v.daemonRestartHintAt == v.current {
+			details += "\n\n" + daemonRestartHint
+		}
 	}
 	bodyHeight := height - 5
 	if bodyHeight < 1 {

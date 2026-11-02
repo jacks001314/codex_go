@@ -2,6 +2,8 @@ package tea
 
 import (
 	"reflect"
+	"runtime"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -10,6 +12,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	codextui "codex_go/tui"
+	tuiapp "codex_go/tui/app"
 	bottompane "codex_go/tui/bottom_pane"
 )
 
@@ -68,138 +71,147 @@ type configPanelRow struct {
 	action      configPanelAction
 }
 
+// configPanelRows mirrors Rust config_panel::mod::settings(): the label,
+// description and search keywords are the user-visible contract shared by the
+// group tabs and the global search results.
 var configPanelRows = []configPanelRow{
 	{
 		section:     configSectionAppearance,
 		label:       "Theme",
-		description: "Choose the syntax highlighting theme",
-		keywords:    "appearance color syntax theme",
+		description: "Choose a syntax color palette with a live preview",
+		keywords:    "colors dark light palette",
 		action:      configActionTheme,
 	},
 	{
 		section:     configSectionAppearance,
 		label:       "Effects",
-		description: "Animate the welcome screen, working indicator, and transitions",
-		keywords:    "appearance animation effects motion",
+		description: "Configure animations and composer effects",
+		keywords:    "animations motion accessibility spinner starfield stars composer stars",
 		action:      configActionEffects,
 	},
 	{
 		section:     configSectionAppearance,
 		label:       "Tips",
 		description: "Show helpful shortcuts and suggestions",
-		keywords:    "appearance welcome hints tooltips",
+		keywords:    "welcome hints tooltips",
 		action:      configActionTips,
 	},
 	{
 		section:     configSectionAppearance,
 		label:       "Status line colors",
-		description: "Use theme colors for model, branch, and other status details",
-		keywords:    "appearance statusline footer colour",
+		description: "Use theme colors for the model, branch, and other status line details",
+		keywords:    "statusline footer colour",
 		action:      configActionStatusLineColors,
 	},
 	{
 		section:     configSectionAppearance,
-		label:       "Status line",
-		description: "Choose which items appear in the status line",
-		keywords:    "appearance status line items",
+		label:       "Status line display",
+		description: "Choose and reorder the information below the composer",
+		keywords:    "statusline footer model branch context",
 		action:      configActionStatusLine,
 	},
 	{
 		section:     configSectionAppearance,
-		label:       "Terminal title",
-		description: "Choose which items appear in the terminal title",
-		keywords:    "appearance terminal title items",
+		label:       "Terminal title display",
+		description: "Choose and reorder the information in your terminal tab or window title",
+		keywords:    "title tab window name",
 		action:      configActionTerminalTitle,
 	},
 	{
 		section:     configSectionNotifications,
 		label:       "Notifications",
-		description: "Let the terminal notify you when a turn finishes or approval is needed",
-		keywords:    "notifications alerts bell completion approval",
+		description: "Let your terminal notify you when a turn finishes or approval is needed",
+		keywords:    "alerts bell completion approval",
 		action:      configActionNotifications,
 	},
 	{
 		section:     configSectionNotifications,
 		label:       "Notify when",
-		description: "Notify only while away or while this terminal is focused too",
-		keywords:    "notifications notify unfocused always focus",
+		description: "Notify only while you are away or while this terminal is focused too",
+		keywords:    "focus alerts background always unfocused",
 		action:      configActionNotifyCondition,
 	},
 	{
 		section:     configSectionNotifications,
 		label:       "Test notification",
-		description: "Send in 5 seconds so you can switch apps before it appears",
-		keywords:    "notifications alerts bell sound test",
+		description: "Send in 5 seconds so you can switch apps before the notification appears",
+		keywords:    "alerts bell sound test",
 		action:      configActionNotificationTest,
 	},
 	{
 		section:     configSectionInput,
-		label:       "Keyboard",
-		description: "Remap TUI shortcuts",
-		keywords:    "input keyboard keymap shortcuts",
+		label:       "Keyboard shortcuts",
+		description: "Browse actions and remap their keys",
+		keywords:    "keymap bindings hotkeys",
 		action:      configActionKeyboard,
 	},
 	{
 		section:     configSectionInput,
 		label:       "Start in Vim mode",
-		description: "Start new composers in Vim mode; use /vim for the current composer",
-		keywords:    "input editor modal normal vim",
+		description: "Start new composers in Vim mode and use /vim for the current composer",
+		keywords:    "editor modal normal",
 		action:      configActionStartInVimMode,
 	},
 	{
 		section:     configSectionInput,
 		label:       "Paste detection",
 		description: "Recognize pasted-text bursts and keep multiline input together",
-		keywords:    "input burst clipboard multiline paste",
+		keywords:    "burst clipboard multiline",
 		action:      configActionPasteDetection,
 	},
 	{
 		section:     configSectionSessions,
 		label:       "Automatic recaps",
 		description: "Prepare recaps while the terminal is unfocused",
-		keywords:    "sessions summary background recap",
+		keywords:    "summary background",
 		action:      configActionAutomaticRecaps,
 	},
 	{
 		section:     configSectionSessions,
 		label:       "Session picker layout",
-		description: "Choose the session picker row density",
-		keywords:    "sessions resume picker comfortable dense layout",
+		description: "Choose tighter rows or a roomier list when resuming and forking conversations",
+		keywords:    "dense comfortable spacing resume fork",
 		action:      configActionSessionPicker,
 	},
 	{
 		section:     configSectionSessions,
 		label:       "Resume directory",
-		description: "Choose the working directory when the current and saved session differ",
-		keywords:    "sessions cwd folder path resume ask current",
+		description: "Choose which working directory to use when the current directory and saved session differ",
+		keywords:    "cwd folder path fork ask",
 		action:      configActionResumeCWD,
 	},
 	{
 		section:     configSectionTextSelection,
 		label:       "Copy on select",
-		description: "Copy transcript, footer, and composer selections on release",
-		keywords:    "text selection copy select clipboard auto always never",
+		description: "Copy transcript, footer, and composer selections on release; Auto follows terminal defaults",
+		keywords:    "clipboard mouse selection automatic drag",
 		action:      configActionCopyOnSelect,
 	},
 	{
 		section:     configSectionTextSelection,
 		label:       "Deselect after copy",
-		description: "Clear transcript and footer highlights after automatic copy",
-		keywords:    "text selection copy clear highlight deselect",
+		description: "Remove read-only transcript and footer highlights after automatic copy succeeds",
+		keywords:    "clipboard deselect clear highlight automatic mouse selection",
 		action:      configActionCopyOnSelectClear,
 	},
 	{
 		section:     configSectionTextSelection,
 		label:       "Right-click paste",
-		description: "Paste when nothing is selected; Auto follows platform defaults",
-		keywords:    "text selection mouse right click paste",
+		description: "Paste when nothing is selected, with Auto following platform defaults and On also enabling macOS",
+		keywords:    "clipboard mouse paste automatic",
 		action:      configActionRightClickPaste,
 	},
 }
 
 type configPanelState struct {
-	section     configPanelSection
-	query       string
+	section configPanelSection
+	query   string
+	// search mirrors Rust's SearchMode::OnDemand search: the search field only
+	// appears after the user presses "/" inside the panel.
+	search bool
+	// choice is the child picker an editor row opens (Rust pushes a
+	// SelectionViewParams::picker() view onto the view stack).
+	choice      *configPanelChoice
 	selected    int
 	scrollTop   int
 	visibleRows int
@@ -208,6 +220,22 @@ type configPanelState struct {
 	// carries save failures and the "Saved · ..." variants without replacing
 	// the panel contents.
 	notice string
+}
+
+// configPanelChoice mirrors Rust's `SelectionViewParams::picker()` child view.
+type configPanelChoice struct {
+	action   configPanelAction
+	title    string
+	subtitle string
+	selected int
+	items    []configPanelChoiceItem
+}
+
+type configPanelChoiceItem struct {
+	label          string
+	value          string
+	current        bool
+	disabledReason string
 }
 
 type configPanelPendingSave struct {
@@ -261,7 +289,7 @@ func (m *Model) configPanelFilteredRows() []configPanelRow {
 		}
 		// Rust #53429: search spans every group, and each result keeps its
 		// group tag so a match outside the active tab is still identifiable.
-		haystack := strings.ToLower(row.label + " " + row.description + " " + row.keywords + " " + configPanelSectionTitles[row.section])
+		haystack := strings.ToLower(configPanelSectionTitles[row.section] + " " + row.label + " " + m.configPanelValue(row) + " " + row.keywords + " " + row.description)
 		if strings.Contains(haystack, query) {
 			rows = append(rows, row)
 		}
@@ -269,114 +297,166 @@ func (m *Model) configPanelFilteredRows() []configPanelRow {
 	return rows
 }
 
+// configPanelToggleValue mirrors Rust's ConfigSettingValue::Toggle label.
+func configPanelToggleValue(on bool) string {
+	if on {
+		return "[x] On"
+	}
+	return "[ ] Off"
+}
+
+// rightClickPastePlatformDefault mirrors Rust PasteEnvironment::detect's
+// PlatformDefault reading used by the Auto right-click-paste label.
+func rightClickPastePlatformDefault() bool {
+	return runtime.GOOS == "windows" || runtime.GOOS == "linux"
+}
+
 func (m *Model) configPanelValue(row configPanelRow) string {
 	if m == nil {
 		return ""
 	}
+	// The Effects child picker renders the same rows as toggles.
+	if m.modal != nil && m.modal.configPanel != nil && m.modal.configPanel.effects {
+		switch row.action {
+		case configActionEffects:
+			return configPanelToggleValue(m.animationsEnabled)
+		case configActionComposerStars:
+			if !m.animationsEnabled {
+				return "Unavailable"
+			}
+			return configPanelToggleValue(m.effects.Starfield)
+		}
+	}
 	switch row.action {
 	case configActionTheme:
-		return firstNonEmpty(strings.TrimSpace(m.tuiTheme), "Automatic")
-	case configActionEffects:
-		if m.animationsEnabled {
-			return "On"
-		}
-		return "Off"
+		return firstNonEmpty(strings.TrimSpace(m.tuiTheme), "Automatic") + " \u203a"
+	case configActionEffects, configActionStatusLine, configActionTerminalTitle, configActionKeyboard:
+		return "Configure \u203a"
+	case configActionTips:
+		return configPanelToggleValue(m.showTooltips)
+	case configActionStatusLineColors:
+		return configPanelToggleValue(m.statusLineUseColors)
 	case configActionComposerStars:
 		if !m.animationsEnabled {
 			return "Unavailable"
 		}
-		if m.effects.Starfield {
-			return "On"
-		}
-		return "Off"
-	case configActionTips:
-		if m.showTooltips {
-			return "On"
-		}
-		return "Off"
-	case configActionStatusLineColors:
-		if m.statusLineUseColors {
-			return "On"
-		}
-		return "Off"
+		return configPanelToggleValue(m.effects.Starfield)
 	case configActionNotifications:
 		if m.notificationSettings.CustomSet {
 			return "Unavailable"
 		}
-		if m.notificationSettings.Enabled {
-			return "On"
+		return configPanelToggleValue(m.notificationSettings.Enabled)
+	case configActionNotifyCondition:
+		if !m.notificationSettings.Enabled {
+			return "Unavailable"
 		}
-		return "Off"
+		if m.notificationCondition == codextui.NotificationConditionAlways {
+			return "Always \u203a"
+		}
+		return "Unfocused \u203a"
 	case configActionNotificationTest:
 		return "Send in 5s"
-	case configActionNotifyCondition:
-		switch m.notificationCondition {
-		case codextui.NotificationConditionAlways:
-			return "Always"
-		default:
-			return "Unfocused"
-		}
-	case configActionRightClickPaste:
-		switch strings.ToLower(strings.TrimSpace(string(m.rightClickPasteMode))) {
-		case "on":
-			return "On"
-		case "off":
-			return "Off"
-		default:
-			return "Auto"
-		}
-	case configActionPasteDetection:
-		if m.disablePasteBurst {
-			return "Off"
-		}
-		return "On"
 	case configActionStartInVimMode:
-		if m.vimModeDefault {
-			return "On"
-		}
-		return "Off"
+		return configPanelToggleValue(m.vimModeDefault)
+	case configActionPasteDetection:
+		return configPanelToggleValue(!m.disablePasteBurst)
 	case configActionAutomaticRecaps:
-		if m.disableAutoRecap {
-			return "Off"
-		}
-		return "On"
+		return configPanelToggleValue(!m.disableAutoRecap)
 	case configActionSessionPicker:
 		if m.sessionPickerDensity == codextui.SessionDensityComfortable {
-			return "Comfortable"
+			return "Comfortable \u203a"
 		}
-		return "Dense"
+		return "Dense \u203a"
 	case configActionResumeCWD:
 		switch normalizeResumeCWD(m.resumeCWD) {
 		case "current":
-			if m.resumeCWDCurrentUnavailable() {
-				return "Current directory · Requires --cd for remote sessions"
-			}
-			return "Current directory"
+			return "Current directory \u203a"
 		case "session":
-			return "Session directory"
+			return "Session directory \u203a"
 		default:
-			return "Ask"
+			return "Ask \u203a"
 		}
 	case configActionCopyOnSelect:
 		switch normalizeCopyOnSelectMode(m.copyOnSelectMode) {
 		case "always":
-			return "On"
+			return "On \u203a"
 		case "never":
-			return "Off"
+			return "Off \u203a"
 		default:
-			return "Auto"
+			return "Auto \u00b7 " + configPanelOnOff(m.copyOnSelectEnabled()) + " \u203a"
 		}
 	case configActionCopyOnSelectClear:
-		if normalizeCopyOnSelectMode(m.copyOnSelectMode) == "never" {
+		if !m.copyOnSelectEnabled() {
 			return "Unavailable"
 		}
-		if m.copyOnSelectClear {
-			return "On"
+		return configPanelToggleValue(m.copyOnSelectClear)
+	case configActionRightClickPaste:
+		switch tuiapp.ParseRightClickPasteMode(string(m.rightClickPasteMode)) {
+		case tuiapp.RightClickPasteOn:
+			return "On \u203a"
+		case tuiapp.RightClickPasteOff:
+			return "Off \u203a"
+		default:
+			return "Auto \u00b7 " + configPanelOnOff(rightClickPastePlatformDefault()) + " \u203a"
 		}
-		return "Off"
 	default:
-		return "Configure"
+		return "Configure \u203a"
 	}
+}
+
+func configPanelOnOff(on bool) string {
+	if on {
+		return "On"
+	}
+	return "Off"
+}
+
+// configPanelRowDisabledReason mirrors Rust's ConfigSettingValue::Unavailable and
+// DependentToggle{dependency_met: false} rows: the reason replaces the
+// description and the row cannot be activated.
+func (m *Model) configPanelRowDisabledReason(row configPanelRow) string {
+	if m == nil {
+		return ""
+	}
+	switch row.action {
+	case configActionNotifications:
+		if m.notificationSettings.CustomSet {
+			return "Event-specific notifications are configured in config.toml"
+		}
+	case configActionNotifyCondition:
+		if !m.notificationSettings.Enabled {
+			return "Turn on notifications to choose when they appear"
+		}
+	case configActionCopyOnSelectClear:
+		if !m.copyOnSelectEnabled() {
+			return "Turn on Copy on select to deselect after copying"
+		}
+	}
+	return ""
+}
+
+// configPanelOptionDisabledReason resolves the disabled reason for the current
+// picker surface (the main catalog or the Effects child picker).
+func (m *Model) configPanelOptionDisabledReason(row configPanelRow) string {
+	if reason := m.configPanelRowDisabledReason(row); reason != "" {
+		return reason
+	}
+	if m != nil && m.modal != nil && m.modal.configPanel != nil && m.modal.configPanel.effects {
+		return m.configEffectsRowDisabledReason(row)
+	}
+	return ""
+}
+
+// configEffectsRowDisabledReason mirrors the Effects picker's disabled row for
+// Composer stars while animations are off.
+func (m *Model) configEffectsRowDisabledReason(row configPanelRow) string {
+	if m == nil {
+		return ""
+	}
+	if row.action == configActionComposerStars && !m.animationsEnabled {
+		return "Turn on Animations to show Astra task stars"
+	}
+	return ""
 }
 
 func (m *Model) updateConfigPanelKey(message bubbletea.KeyMsg) bubbletea.Cmd {
@@ -384,6 +464,9 @@ func (m *Model) updateConfigPanelKey(message bubbletea.KeyMsg) bubbletea.Cmd {
 		return nil
 	}
 	panel := m.modal.configPanel
+	if panel.choice != nil {
+		return m.updateConfigPanelChoiceKey(message)
+	}
 	rows := m.configPanelFilteredRows()
 	switch message.Type {
 	case bubbletea.KeyEsc:
@@ -393,8 +476,10 @@ func (m *Model) updateConfigPanelKey(message bubbletea.KeyMsg) bubbletea.Cmd {
 			panel.scrollTop = 0
 			return nil
 		}
-		// Rust #53429: Esc clears an active search before it closes the panel.
-		if strings.TrimSpace(panel.query) != "" {
+		// Rust SearchMode::OnDemand: Esc leaves the "/" search and restores the
+		// active tab before it closes the panel.
+		if panel.search {
+			panel.search = false
 			panel.query = ""
 			m.resetConfigPanelSelection()
 			return nil
@@ -407,22 +492,24 @@ func (m *Model) updateConfigPanelKey(message bubbletea.KeyMsg) bubbletea.Cmd {
 		m.refreshTranscript()
 		return nil
 	case bubbletea.KeyLeft:
+		// Rust switches the underlying tab during a "/" search but keeps the
+		// query and its results visible until Esc.
 		panel.section = (panel.section + configSectionCount - 1) % configSectionCount
-		m.resetConfigPanelSelection()
+		if !panel.search {
+			m.resetConfigPanelSelection()
+		}
 		return nil
 	case bubbletea.KeyRight:
 		panel.section = (panel.section + 1) % configSectionCount
-		m.resetConfigPanelSelection()
+		if !panel.search {
+			m.resetConfigPanelSelection()
+		}
 		return nil
 	case bubbletea.KeyUp:
-		if panel.selected > 0 {
-			panel.selected--
-		}
+		m.configPanelMoveSelection(-1)
 		return nil
 	case bubbletea.KeyDown:
-		if panel.selected+1 < len(rows) {
-			panel.selected++
-		}
+		m.configPanelMoveSelection(1)
 		return nil
 	case bubbletea.KeyPgUp:
 		panel.selected = max(panel.selected-max(panel.visibleRows, 1), 0)
@@ -437,15 +524,17 @@ func (m *Model) updateConfigPanelKey(message bubbletea.KeyMsg) bubbletea.Cmd {
 		panel.selected = max(len(rows)-1, 0)
 		return nil
 	case bubbletea.KeyBackspace:
-		if panel.query != "" {
+		if panel.search && panel.query != "" {
 			_, size := utf8.DecodeLastRuneInString(panel.query)
 			panel.query = panel.query[:len(panel.query)-size]
 			m.resetConfigPanelSelection()
 		}
 		return nil
 	case bubbletea.KeyCtrlU:
-		panel.query = ""
-		m.resetConfigPanelSelection()
+		if panel.search {
+			panel.query = ""
+			m.resetConfigPanelSelection()
+		}
 		return nil
 	case bubbletea.KeyEnter:
 		if panel.selected >= 0 && panel.selected < len(rows) {
@@ -470,18 +559,150 @@ func (m *Model) updateConfigPanelKey(message bubbletea.KeyMsg) bubbletea.Cmd {
 			}
 			return nil
 		}
-		panel.query += " "
-		m.resetConfigPanelSelection()
+		if panel.search {
+			panel.query += " "
+			m.resetConfigPanelSelection()
+		}
 		return nil
 	case bubbletea.KeyRunes:
-		if len(message.Runes) > 0 {
+		if len(message.Runes) == 0 {
+			return nil
+		}
+		// An active search reserves printable keys for the query (Rust #53429
+		// list_selection_view::handle_key_event).
+		if panel.search {
 			panel.query += string(message.Runes)
+			m.resetConfigPanelSelection()
+			return nil
+		}
+		if m.applyConfigPanelListAction(message) {
+			return nil
+		}
+		// Rust's config picker uses SearchMode::OnDemand("/"): typing does not
+		// start a search, and plain letters stay out of the query until the
+		// search field is open. The hint only exists while "/" is unbound on the
+		// list surface.
+		if len(message.Runes) == 1 && message.Runes[0] == '/' && m.configPanelSearchKeyAvailable() {
+			panel.search = true
+			panel.query = ""
 			m.resetConfigPanelSelection()
 		}
 		return nil
 	default:
 		return nil
 	}
+}
+
+// configPanelListActionForSpec resolves the list-surface action bound to a key
+// spec, mirroring Rust's ListKeymap lookups inside the config picker.
+func (m *Model) configPanelListActionForSpec(keySpec string) string {
+	for _, action := range []string{
+		"move_left", "move_right", "move_up", "move_down",
+		"page_up", "page_down", "jump_top", "jump_bottom", "cancel",
+	} {
+		if m.keyMatches("list", action, keySpec) {
+			return action
+		}
+	}
+	return ""
+}
+
+// configPanelSearchKeyAvailable mirrors Rust's search_hint gate: "/" opens the
+// search only when no list binding claims it.
+func (m *Model) configPanelSearchKeyAvailable() bool {
+	for _, action := range []string{
+		"move_left", "move_right", "move_up", "move_down",
+		"page_up", "page_down", "jump_top", "jump_bottom", "accept", "cancel",
+	} {
+		if m.keyMatches("list", action, "/") {
+			return false
+		}
+	}
+	return true
+}
+
+// applyConfigPanelListAction runs the list binding a printable key resolves to
+// and reports whether it was consumed.
+func (m *Model) applyConfigPanelListAction(message bubbletea.KeyMsg) bool {
+	if m == nil || m.modal == nil || m.modal.configPanel == nil {
+		return false
+	}
+	panel := m.modal.configPanel
+	switch m.configPanelListActionForSpec(keySpecFromKeyMsg(message)) {
+	case "move_up":
+		m.configPanelMoveSelection(-1)
+	case "move_down":
+		m.configPanelMoveSelection(1)
+	case "move_left":
+		if panel.effects {
+			return false
+		}
+		panel.section = (panel.section + configSectionCount - 1) % configSectionCount
+		m.resetConfigPanelSelection()
+	case "move_right":
+		if panel.effects {
+			return false
+		}
+		panel.section = (panel.section + 1) % configSectionCount
+		m.resetConfigPanelSelection()
+	case "page_up":
+		rows := m.configPanelFilteredRows()
+		panel.selected = max(panel.selected-max(panel.visibleRows, 1), 0)
+		if len(rows) == 0 {
+			panel.selected = 0
+		}
+	case "page_down":
+		rows := m.configPanelFilteredRows()
+		panel.selected = min(panel.selected+max(panel.visibleRows, 1), max(len(rows)-1, 0))
+	case "jump_top":
+		panel.selected = 0
+		panel.scrollTop = 0
+	case "jump_bottom":
+		panel.selected = max(len(m.configPanelFilteredRows())-1, 0)
+	case "cancel":
+		m.modal = nil
+		m.refreshTranscript()
+	default:
+		return false
+	}
+	return true
+}
+
+// configPanelFirstEnabledRow mirrors Rust's first_enabled_visible_idx fallback.
+func (m *Model) configPanelFirstEnabledRow(rows []configPanelRow) int {
+	for index, row := range rows {
+		if m.configPanelOptionDisabledReason(row) == "" {
+			return index
+		}
+	}
+	return 0
+}
+
+// configPanelMoveSelection mirrors Rust's wrapping move_up/move_down, which skip
+// disabled rows.
+func (m *Model) configPanelMoveSelection(delta int) {
+	if m == nil || m.modal == nil || m.modal.configPanel == nil {
+		return
+	}
+	panel := m.modal.configPanel
+	rows := m.configPanelFilteredRows()
+	if len(rows) == 0 {
+		panel.selected = 0
+		return
+	}
+	index := clampModalInt(panel.selected, 0, len(rows)-1)
+	for step := 0; step < len(rows); step++ {
+		index += delta
+		if index < 0 {
+			index = len(rows) - 1
+		} else if index >= len(rows) {
+			index = 0
+		}
+		if m.configPanelOptionDisabledReason(rows[index]) == "" {
+			break
+		}
+	}
+	panel.selected = index
 }
 
 // configuredListActionForKey reports the configured list action bound to key.
@@ -573,56 +794,14 @@ func (m *Model) activateConfigRow(row configPanelRow) bubbletea.Cmd {
 	case configActionAutomaticRecaps:
 		m.disableAutoRecap = !m.disableAutoRecap
 		return m.saveConfigPanelPreference("tui.auto_recap", !m.disableAutoRecap)
-	case configActionNotifyCondition:
-		next := codextui.NotificationConditionUnfocused
-		if m.notificationCondition != codextui.NotificationConditionAlways {
-			next = codextui.NotificationConditionAlways
-		}
-		m.notificationCondition = next
-		return m.saveConfigPanelPreference("tui.notification_condition", string(next))
-	case configActionRightClickPaste:
-		next := "auto"
-		switch strings.ToLower(strings.TrimSpace(string(m.rightClickPasteMode))) {
-		case "auto", "":
-			next = "on"
-		case "on":
-			next = "off"
-		}
-		m.setRightClickPasteMode(next)
-		return m.saveConfigPanelPreference("tui.right_click_paste", next)
-	case configActionSessionPicker:
-		m.sessionPickerDensity = m.sessionPickerDensity.Toggle()
-		value := "dense"
-		if m.sessionPickerDensity == codextui.SessionDensityComfortable {
-			value = "comfortable"
-		}
-		return m.saveConfigPanelPreference("tui.session_picker_view", value)
-	case configActionResumeCWD:
-		next := "current"
-		switch normalizeResumeCWD(m.resumeCWD) {
-		case "ask":
-			if m.resumeCWDCurrentUnavailable() {
-				next = "session"
-			}
-		case "current":
-			next = "session"
-		default:
-			next = "ask"
-		}
-		m.resumeCWD = next
-		return m.saveConfigPanelPreference("tui.resume_cwd", next)
-	case configActionCopyOnSelect:
-		next := "always"
-		switch normalizeCopyOnSelectMode(m.copyOnSelectMode) {
-		case "auto":
-			next = "always"
-		case "always":
-			next = "never"
-		default:
-			next = "auto"
-		}
-		m.copyOnSelectMode = next
-		return m.saveConfigPanelPreference("tui.copy_on_select", next)
+	case configActionNotifyCondition, configActionRightClickPaste, configActionSessionPicker,
+		configActionResumeCWD, configActionCopyOnSelect:
+		// Rust opens a child picker for these editors instead of cycling the
+		// value in place (config_panel/render.rs::notification_condition,
+		// right_click_paste, session_picker_layout, resume_directory,
+		// copy_on_select).
+		m.openConfigPanelChoice(row)
+		return nil
 	case configActionCopyOnSelectClear:
 		if normalizeCopyOnSelectMode(m.copyOnSelectMode) == "never" {
 			m.notice = "Turn on Copy on select to deselect after copying"
@@ -633,6 +812,248 @@ func (m *Model) activateConfigRow(row configPanelRow) bubbletea.Cmd {
 	default:
 		return nil
 	}
+}
+
+// openConfigPanelChoice opens the child picker Rust pushes for an editor row.
+func (m *Model) openConfigPanelChoice(row configPanelRow) {
+	if m == nil || m.modal == nil || m.modal.configPanel == nil {
+		return
+	}
+	choice := &configPanelChoice{action: row.action, title: row.label, subtitle: row.description}
+	add := func(label, value string, current bool) int {
+		choice.items = append(choice.items, configPanelChoiceItem{label: label, value: value, current: current})
+		if current {
+			choice.selected = len(choice.items) - 1
+		}
+		return len(choice.items) - 1
+	}
+	switch row.action {
+	case configActionNotifyCondition:
+		current := m.notificationCondition
+		add("Unfocused", string(codextui.NotificationConditionUnfocused), current != codextui.NotificationConditionAlways)
+		add("Always", string(codextui.NotificationConditionAlways), current == codextui.NotificationConditionAlways)
+	case configActionSessionPicker:
+		comfortable := m.sessionPickerDensity == codextui.SessionDensityComfortable
+		add("Dense", "dense", !comfortable)
+		add("Comfortable", "comfortable", comfortable)
+	case configActionResumeCWD:
+		choice.subtitle = "Choose the working directory when resuming, with --cd taking precedence for this session"
+		current := normalizeResumeCWD(m.resumeCWD)
+		add("Ask", "ask", current == "ask")
+		currentIndex := add("Current directory", "current", current == "current")
+		if m.resumeCWDCurrentUnavailable() {
+			choice.items[currentIndex].disabledReason = "Requires --cd for remote sessions"
+		}
+		add("Session directory", "session", current == "session")
+	case configActionCopyOnSelect:
+		current := normalizeCopyOnSelectMode(m.copyOnSelectMode)
+		add("Auto (default)", "auto", current == "auto")
+		add("On", "always", current == "always")
+		add("Off", "never", current == "never")
+	case configActionRightClickPaste:
+		current := string(tuiapp.ParseRightClickPasteMode(string(m.rightClickPasteMode)))
+		add("Auto (default)", "auto", current == "auto")
+		add("On", "on", current == "on")
+		add("Off", "off", current == "off")
+	default:
+		return
+	}
+	// Rust's SelectionViewParams::picker() starts on initial_selected_idx (the
+	// current value) and only falls back to the first enabled row when that
+	// row is disabled.
+	if choice.selected >= 0 && choice.selected < len(choice.items) && choice.items[choice.selected].disabledReason != "" {
+		for index, item := range choice.items {
+			if item.disabledReason == "" {
+				choice.selected = index
+				break
+			}
+		}
+	}
+	m.modal.configPanel.choice = choice
+}
+
+// applyConfigPanelChoiceItem saves the value picked in a child picker.
+func (m *Model) applyConfigPanelChoiceItem(action configPanelAction, item configPanelChoiceItem) bubbletea.Cmd {
+	switch action {
+	case configActionNotifyCondition:
+		m.notificationCondition = codextui.NotificationCondition(item.value)
+		return m.saveConfigPanelPreference("tui.notification_condition", item.value)
+	case configActionSessionPicker:
+		if item.value == "comfortable" {
+			m.sessionPickerDensity = codextui.SessionDensityComfortable
+		} else {
+			m.sessionPickerDensity = codextui.SessionDensityDense
+		}
+		return m.saveConfigPanelPreference("tui.session_picker_view", item.value)
+	case configActionResumeCWD:
+		m.resumeCWD = item.value
+		return m.saveConfigPanelPreference("tui.resume_cwd", item.value)
+	case configActionCopyOnSelect:
+		m.copyOnSelectMode = item.value
+		return m.saveConfigPanelPreference("tui.copy_on_select", item.value)
+	case configActionRightClickPaste:
+		m.setRightClickPasteMode(item.value)
+		return m.saveConfigPanelPreference("tui.right_click_paste", item.value)
+	}
+	return nil
+}
+
+func (m *Model) moveConfigPanelChoice(delta int) {
+	if m == nil || m.modal == nil || m.modal.configPanel == nil || m.modal.configPanel.choice == nil {
+		return
+	}
+	choice := m.modal.configPanel.choice
+	total := len(choice.items)
+	if total == 0 {
+		return
+	}
+	index := clampModalInt(choice.selected, 0, total-1)
+	for step := 0; step < total; step++ {
+		index += delta
+		if index < 0 {
+			index = total - 1
+		} else if index >= total {
+			index = 0
+		}
+		if choice.items[index].disabledReason == "" {
+			break
+		}
+	}
+	choice.selected = index
+}
+
+func (m *Model) jumpConfigPanelChoice(number int) {
+	if m == nil || m.modal == nil || m.modal.configPanel == nil || m.modal.configPanel.choice == nil {
+		return
+	}
+	choice := m.modal.configPanel.choice
+	count := 0
+	for index, item := range choice.items {
+		if item.disabledReason != "" {
+			continue
+		}
+		count++
+		if count == number {
+			choice.selected = index
+			return
+		}
+	}
+}
+
+func (m *Model) updateConfigPanelChoiceKey(message bubbletea.KeyMsg) bubbletea.Cmd {
+	panel := m.modal.configPanel
+	choice := panel.choice
+	switch message.Type {
+	case bubbletea.KeyEsc:
+		panel.choice = nil
+		return nil
+	case bubbletea.KeyCtrlC:
+		m.modal = nil
+		m.refreshTranscript()
+		return nil
+	case bubbletea.KeyUp:
+		m.moveConfigPanelChoice(-1)
+		return nil
+	case bubbletea.KeyDown:
+		m.moveConfigPanelChoice(1)
+		return nil
+	case bubbletea.KeyHome:
+		choice.selected = 0
+		return nil
+	case bubbletea.KeyEnd:
+		choice.selected = max(len(choice.items)-1, 0)
+		return nil
+	case bubbletea.KeyEnter:
+		if choice.selected < 0 || choice.selected >= len(choice.items) {
+			return nil
+		}
+		item := choice.items[choice.selected]
+		if item.disabledReason != "" {
+			return nil
+		}
+		panel.choice = nil
+		return m.applyConfigPanelChoiceItem(choice.action, item)
+	case bubbletea.KeyRunes:
+		if len(message.Runes) == 1 && message.Runes[0] >= '1' && message.Runes[0] <= '9' {
+			m.jumpConfigPanelChoice(int(message.Runes[0] - '0'))
+			return nil
+		}
+		switch m.configPanelListActionForSpec(keySpecFromKeyMsg(message)) {
+		case "move_up":
+			m.moveConfigPanelChoice(-1)
+		case "move_down":
+			m.moveConfigPanelChoice(1)
+		case "cancel":
+			panel.choice = nil
+		}
+		return nil
+	default:
+		return nil
+	}
+}
+
+// renderConfigPanelChoice mirrors Rust's SelectionViewParams::picker() child
+// view: title, subtitle, the numbered rows with their (current)/(disabled)
+// markers and the picker footer.
+func (m *Model) renderConfigPanelChoice(choice *configPanelChoice, rowWidth int) string {
+	contentWidth := max(rowWidth-2, 1)
+	lines := []string{
+		"  " + choice.title,
+		"  " + codextui.TruncateWithEllipsis(choice.subtitle, contentWidth),
+		"",
+		"",
+	}
+	enabled := 0
+	for _, item := range choice.items {
+		if item.disabledReason == "" {
+			enabled++
+		}
+	}
+	numberWidth := max(len(strconv.Itoa(max(enabled, 1))), 1)
+	prefixes := make([]string, len(choice.items))
+	names := make([]string, len(choice.items))
+	maxNameWidth := 0
+	number := 0
+	for index, item := range choice.items {
+		marker := "  "
+		if index == choice.selected {
+			marker = "\u203a "
+		}
+		gutter := strings.Repeat(" ", numberWidth+2)
+		if item.disabledReason == "" {
+			number++
+			gutter = strconv.Itoa(number) + ". "
+			if pad := numberWidth + 2 - codextui.DisplayWidth(gutter); pad > 0 {
+				gutter += strings.Repeat(" ", pad)
+			}
+		}
+		prefixes[index] = marker + gutter
+		names[index] = item.label
+		if item.current {
+			names[index] += " (current)"
+		}
+		if item.disabledReason != "" {
+			names[index] += " (disabled)"
+		}
+		maxNameWidth = max(maxNameWidth, codextui.DisplayWidth(prefixes[index]+names[index]))
+	}
+	descCol := configPanelClampDescCol(maxNameWidth+2, rowWidth)
+	for index, item := range choice.items {
+		line := prefixes[index] + names[index]
+		if gap := descCol - codextui.DisplayWidth(line); gap > 0 && item.disabledReason != "" {
+			line += strings.Repeat(" ", gap)
+		}
+		if item.disabledReason != "" {
+			line += item.disabledReason
+		}
+		line = codextui.TruncateWithEllipsis(line, rowWidth)
+		if index == choice.selected {
+			line = codextui.RenderSelectedRowFilled(line, rowWidth)
+		}
+		lines = append(lines, line)
+	}
+	lines = append(lines, "", "  enter select \u00b7 esc back")
+	return strings.Join(lines, "\n")
 }
 
 type configNotificationTestMsg struct{}
@@ -785,17 +1206,98 @@ func configPanelEffectiveValue(result SettingsWriteResult, keyPath string) (any,
 	return nil, false
 }
 
+// configPanelMaxSectionRows mirrors Rust's max_visible_rows: the largest group
+// height, which also reserves the search result viewport.
+func configPanelMaxSectionRows() int {
+	counts := make([]int, configSectionCount)
+	for _, row := range configPanelRows {
+		counts[row.section]++
+	}
+	largest := 0
+	for _, count := range counts {
+		largest = max(largest, count)
+	}
+	return largest
+}
+
+// configPanelDescriptionColumn mirrors Rust's compute_desc_col for the config
+// picker: the name column is the widest label (AutoAllRows) narrowed by the
+// explicit name_column_width, plus the selection prefix and a two-cell gap.
+func configPanelDescriptionColumn(rows []configPanelRow, width int) int {
+	if width <= 1 {
+		return 0
+	}
+	nameColumnWidth := 0
+	for _, row := range configPanelRows {
+		nameColumnWidth = max(nameColumnWidth, codextui.DisplayWidth(row.label))
+	}
+	maxNameWidth := 0
+	for _, row := range rows {
+		maxNameWidth = max(maxNameWidth, 2+codextui.DisplayWidth(row.label))
+	}
+	return configPanelClampDescCol(max(nameColumnWidth, maxNameWidth)+2, width)
+}
+
+func configPanelClampDescCol(descCol, width int) int {
+	maxDescCol := width - 1
+	if autoCap := max(width*70/100, 1); maxDescCol > autoCap {
+		maxDescCol = autoCap
+	}
+	if descCol > maxDescCol {
+		descCol = maxDescCol
+	}
+	if descCol < 0 {
+		descCol = 0
+	}
+	return descCol
+}
+
+// configPanelRowLine builds Rust's build_full_line output: selection prefix,
+// name padded to desc_col, the 20-cell category tag, then the description.
+func configPanelRowLine(label, value, description string, descCol int, selected, narrow bool) string {
+	name := label
+	if nameLimit := descCol - 4; nameLimit > 0 && codextui.DisplayWidth(name) > nameLimit {
+		name = codextui.TruncateWithEllipsis(name, nameLimit)
+	}
+	var builder strings.Builder
+	if selected {
+		builder.WriteString("\u203a ")
+	} else {
+		builder.WriteString("  ")
+	}
+	builder.WriteString(name)
+	if gap := descCol - 2 - codextui.DisplayWidth(name); gap > 0 {
+		builder.WriteString(strings.Repeat(" ", gap))
+	}
+	tag := value
+	if tagWidth := codextui.DisplayWidth(tag); tagWidth < 20 {
+		tag += strings.Repeat(" ", 20-tagWidth)
+	}
+	builder.WriteString(tag)
+	if description != "" && !narrow {
+		builder.WriteString(" ")
+		builder.WriteString(description)
+	}
+	return builder.String()
+}
+
 func (m *Model) renderConfigPanel() string {
 	if m == nil || m.modal == nil || m.modal.configPanel == nil {
 		return ""
 	}
 	panel := m.modal.configPanel
-	width := max(m.width-4, 1)
+	rowWidth := max(m.width, 1)
+	if panel.choice != nil {
+		return m.renderConfigPanelChoice(panel.choice, rowWidth)
+	}
 	rows := m.configPanelFilteredRows()
 	if len(rows) == 0 {
 		panel.selected = 0
 	} else {
 		panel.selected = clampModalInt(panel.selected, 0, len(rows)-1)
+		if m.configPanelOptionDisabledReason(rows[panel.selected]) != "" {
+			panel.selected = m.configPanelFirstEnabledRow(rows)
+		}
 	}
 	activeStyle := func(text string) string {
 		return lipgloss.NewStyle().Bold(true).Reverse(true).Render(text)
@@ -803,102 +1305,212 @@ func (m *Model) renderConfigPanel() string {
 	inactiveStyle := func(text string) string {
 		return lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(text)
 	}
-	maxRows := max(m.height-6, 8)
-	optionBudget := max(maxRows-6, 1)
+	if panel.effects {
+		return m.renderConfigEffectsPanel(rows, rowWidth, inactiveStyle)
+	}
+	searching := panel.search
+	// Rust renders the active tab's own items while the search query is empty;
+	// only actual query results carry their group tag.
+	tagging := searching && strings.TrimSpace(panel.query) != ""
+	resultRows := max(configPanelMaxSectionRows(), 1)
+	optionBudget := min(max(m.height-12, 1), resultRows)
 	title := m.modal.title
-	var header []string
-	searching := strings.TrimSpace(panel.query) != ""
-	acceptLabel := "open"
-	if panel.selected >= 0 && panel.selected < len(rows) {
+	subtitle := strings.TrimSpace(panel.notice)
+	if subtitle == "" {
+		subtitle = "Changes save automatically"
+	}
+	contentWidth := max(rowWidth-2, 1)
+	tabs := bottompane.FilledTabBarStyledText(configPanelSectionTitles, int(panel.section), contentWidth, activeStyle, inactiveStyle)
+	header := []string{
+		"",
+		"  " + title,
+		"  " + codextui.TruncateWithEllipsis(subtitle, contentWidth),
+		"",
+		"  " + tabs,
+		"",
+	}
+	if searching {
+		query := panel.query
+		if query == "" {
+			query = inactiveStyle("Type to search settings")
+		}
+		header = append(header, "  Search \u203a "+query, "")
+	}
+	acceptLabel := ""
+	if panel.selected >= 0 && panel.selected < len(rows) && m.configPanelRowDisabledReason(rows[panel.selected]) == "" {
 		acceptLabel = configPanelAcceptLabel(rows[panel.selected])
 	}
-	closeLabel := "close"
+	var footer string
 	if searching {
-		closeLabel = "clear search"
-	}
-	footer := "type to search \u00b7 \u2190/\u2192 tabs \u00b7 enter " + acceptLabel + " \u00b7 esc " + closeLabel
-	if panel.effects {
-		title = "Effects"
-		header = []string{title, "Configure visual effects", ""}
-		optionBudget = max(maxRows-4, 1)
-		footer = "enter toggle \u00b7 esc back"
+		footer = "esc clear search"
+		if acceptLabel != "" {
+			footer = "enter " + acceptLabel + " \u00b7 " + footer
+		}
 	} else {
-		tabs := bottompane.FilledTabBarStyledText(configPanelSectionTitles, int(panel.section), width, activeStyle, inactiveStyle)
-		subtitle := strings.TrimSpace(panel.notice)
-		if subtitle == "" {
-			subtitle = "Changes save automatically"
+		footer = "left/right group \u00b7 / search"
+		if acceptLabel != "" {
+			footer += " \u00b7 enter " + acceptLabel
 		}
-		subtitle = codextui.TruncateWithEllipsis(subtitle, width)
-		query := strings.TrimSpace(panel.query)
-		searchLine := "Search: " + query
-		if query == "" {
-			searchLine = "Type to search"
-		}
-		searchLine = codextui.TruncateWithEllipsis(searchLine, width)
-		header = []string{title, inactiveStyle(subtitle), tabs, searchLine, ""}
+		footer += " \u00b7 esc clear search/close"
 	}
-	footer = codextui.TruncateWithEllipsis(footer, width)
+	descCol := configPanelDescriptionColumn(rows, rowWidth)
+	narrow := rowWidth-descCol < configPanelInlineDescriptionMinWidth
 	start, visible, above, below := modalOptionWindow(len(rows), panel.selected, panel.scrollTop, optionBudget)
 	panel.scrollTop = start
 	panel.visibleRows = visible
-
-	labelWidth := 0
-	for _, row := range rows {
-		labelWidth = max(labelWidth, codextui.DisplayWidth(row.label))
-	}
-	labelWidth = min(labelWidth, 24)
 	lines := append([]string(nil), header...)
 	if above {
 		lines = append(lines, "\u2191")
 	}
+	rendered := 0
 	for index := start; index < start+visible && index < len(rows); index++ {
 		row := rows[index]
-		line := "  " + row.label
-		if padding := labelWidth - codextui.DisplayWidth(row.label) + 2; padding > 0 {
-			line += strings.Repeat(" ", padding)
-		}
-		line += m.configPanelValue(row)
-		description := configPanelRowDescription(row, searching)
-		descriptionWidth := width - (2 + labelWidth + 2 + codextui.DisplayWidth(m.configPanelValue(row))) - 2
-		if description != "" && descriptionWidth >= configPanelInlineDescriptionMinWidth {
-			line += "  \u2014 " + description
-		}
-		line = codextui.TruncateWithEllipsis(line, width)
+		line := configPanelRowLine(row.label, m.configPanelValue(row), m.configPanelRowDescription(row, tagging), descCol, index == panel.selected, narrow)
+		line = codextui.TruncateWithEllipsis(line, rowWidth)
 		if index == panel.selected {
-			line = codextui.RenderSelectedRowFilled("\u203a "+strings.TrimPrefix(line, "  "), width)
+			line = codextui.RenderSelectedRowFilled(line, rowWidth)
 		}
 		lines = append(lines, line)
+		rendered++
 	}
 	if len(rows) == 0 {
-		lines = append(lines, "No matching settings")
+		lines = append(lines, "  No matching settings")
+		rendered++
 	}
-	lines = append(lines, m.configPanelDescriptionSlot(rows, labelWidth, width, searching)...)
+	for rendered < resultRows {
+		lines = append(lines, "")
+		rendered++
+	}
+	if narrow {
+		lines = append(lines, m.configPanelDescriptionSlot(rows, rowWidth, tagging)...)
+	}
+	spacer := ""
 	if below {
-		lines = append(lines, "\u2193")
+		spacer = "\u2193"
 	}
-	lines = append(lines, "", inactiveStyle(footer))
+	lines = append(lines, spacer, codextui.TruncateWithEllipsis("  "+footer, rowWidth))
 	return strings.Join(lines, "\n")
 }
 
-// configPanelRowDescription returns the description shown for a row. Search
-// results carry their group tag so a match outside the active tab stays
-// identifiable (Rust #53429 searches every group).
-func configPanelRowDescription(row configPanelRow, searching bool) string {
-	if !searching || row.description == "" {
-		return row.description
+// configEffectsTogglePrefix mirrors Rust's toggle checkbox prefix, including the
+// "[-]" placeholder for rows whose dependency is unmet.
+func (m *Model) configEffectsTogglePrefix(row configPanelRow) string {
+	if m.configEffectsRowDisabledReason(row) != "" {
+		return "[-] "
 	}
-	section := int(row.section)
-	if section < 0 || section >= len(configPanelSectionTitles) {
-		return row.description
+	on := false
+	switch row.action {
+	case configActionEffects:
+		on = m.animationsEnabled
+	case configActionComposerStars:
+		on = m.effects.Starfield
 	}
-	return configPanelSectionTitles[section] + " \u00b7 " + row.description
+	if on {
+		return "[x] "
+	}
+	return "[ ] "
 }
 
-// configPanelAcceptLabel mirrors Rust #53429's per-row footer hint: toggles
-// say toggle, notification tests say test, and editors say open.
+func (m *Model) configEffectsDescriptionColumn(rows []configPanelRow, prefixes, toggles []string, width int) int {
+	maxNameWidth := 0
+	for index, row := range rows {
+		name := row.label
+		if m.configEffectsRowDisabledReason(row) != "" {
+			name += " (disabled)"
+		}
+		maxNameWidth = max(maxNameWidth, codextui.DisplayWidth(prefixes[index]+toggles[index]+name))
+	}
+	return configPanelClampDescCol(maxNameWidth+2, width)
+}
+
+// renderConfigEffectsPanel mirrors Rust's Effects child picker: numbered rows,
+// toggle checkboxes and the reason row for Composer stars.
+func (m *Model) renderConfigEffectsPanel(rows []configPanelRow, rowWidth int, _ func(string) string) string {
+	panel := m.modal.configPanel
+	if len(rows) == 0 {
+		panel.selected = 0
+	} else {
+		panel.selected = clampModalInt(panel.selected, 0, len(rows)-1)
+	}
+	prefixes := make([]string, len(rows))
+	toggles := make([]string, len(rows))
+	number := 0
+	for index, row := range rows {
+		marker := "  "
+		if index == panel.selected {
+			marker = "\u203a "
+		}
+		if m.configEffectsRowDisabledReason(row) != "" {
+			prefixes[index] = marker + "   "
+		} else {
+			number++
+			prefixes[index] = marker + strconv.Itoa(number) + ". "
+		}
+		toggles[index] = m.configEffectsTogglePrefix(row)
+	}
+	descCol := m.configEffectsDescriptionColumn(rows, prefixes, toggles, rowWidth)
+	lines := []string{
+		"  Effects",
+		"  Configure visual effects",
+		"",
+		"",
+	}
+	for index, row := range rows {
+		name := row.label
+		description := row.description
+		if reason := m.configEffectsRowDisabledReason(row); reason != "" {
+			name += " (disabled)"
+			description = reason
+		}
+		var builder strings.Builder
+		builder.WriteString(prefixes[index])
+		builder.WriteString(toggles[index])
+		builder.WriteString(name)
+		if gap := descCol - codextui.DisplayWidth(prefixes[index]+toggles[index]+name); gap > 0 {
+			builder.WriteString(strings.Repeat(" ", gap))
+		}
+		builder.WriteString(description)
+		line := codextui.TruncateWithEllipsis(builder.String(), rowWidth)
+		if index == panel.selected {
+			line = codextui.RenderSelectedRowFilled(line, rowWidth)
+		}
+		lines = append(lines, line)
+	}
+	lines = append(lines, "", codextui.TruncateWithEllipsis("  enter toggle \u00b7 esc back", rowWidth))
+	return strings.Join(lines, "\n")
+}
+
+// configPanelRowDescription returns the description shown for a row. Disabled
+// rows show the unavailable reason; search results carry their group tag so a
+// match outside the active tab stays identifiable (Rust #53429 searches every
+// group).
+func (m *Model) configPanelRowDescription(row configPanelRow, searching bool) string {
+	text := row.description
+	if reason := m.configPanelRowDisabledReason(row); reason != "" {
+		text = reason
+	}
+	if !searching || text == "" {
+		return text
+	}
+	section := configPanelSectionTitle(row.section)
+	if section == "" {
+		return text
+	}
+	return section + " \u00b7 " + text
+}
+
+func configPanelSectionTitle(section configPanelSection) string {
+	if section < 0 || int(section) >= len(configPanelSectionTitles) {
+		return ""
+	}
+	return configPanelSectionTitles[section]
+}
+
+// configPanelAcceptLabel mirrors Rust's per-row footer hint: toggles say
+// toggle, notification tests say test, and editors say open.
 func configPanelAcceptLabel(row configPanelRow) string {
 	switch row.action {
-	case configActionTips, configActionStatusLineColors, configActionNotifications,
+	case configActionTips, configActionStatusLineColors, configActionComposerStars, configActionNotifications,
 		configActionStartInVimMode, configActionPasteDetection, configActionAutomaticRecaps,
 		configActionCopyOnSelectClear:
 		return "toggle"
@@ -911,32 +1523,16 @@ func configPanelAcceptLabel(row configPanelRow) string {
 
 // configPanelDescriptionSlot mirrors Rust #53429's SelectedBelowWhenNarrow
 // layout: when the value column leaves fewer than 45 columns for the
-// description, the selected row's description moves below the list. The slot
-// reserves the tallest wrapped description so the panel height stays stable
-// while moving the selection.
-func (m *Model) configPanelDescriptionSlot(rows []configPanelRow, labelWidth, width int, searching bool) []string {
+// description, the selected row's description moves below the list.
+func (m *Model) configPanelDescriptionSlot(rows []configPanelRow, width int, searching bool) []string {
 	if m == nil || m.modal == nil || m.modal.configPanel == nil {
-		return []string{""}
-	}
-	narrow := false
-	for _, row := range rows {
-		if configPanelRowDescription(row, searching) == "" {
-			continue
-		}
-		valueWidth := codextui.DisplayWidth(m.configPanelValue(row))
-		if width-(2+labelWidth+2+valueWidth)-2 < configPanelInlineDescriptionMinWidth {
-			narrow = true
-			break
-		}
-	}
-	if !narrow {
-		return []string{""}
+		return nil
 	}
 	const maxDescriptionSlotLines = 3
 	wrapped := make([][]string, len(rows))
 	reserved := 1
 	for index, row := range rows {
-		text := configPanelRowDescription(row, searching)
+		text := m.configPanelRowDescription(row, searching)
 		if text == "" {
 			continue
 		}

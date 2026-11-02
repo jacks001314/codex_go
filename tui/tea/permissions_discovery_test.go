@@ -33,12 +33,20 @@ func TestPermissionsMenuShowsLoadingView(t *testing.T) {
 	}
 }
 
-// TestPermissionsMenuFallsBackToLegacyPresets covers the server reporting no
-// explicit profiles (Rust open_legacy_permissions_popup), after which the picker
-// does not re-run discovery.
-func TestPermissionsMenuFallsBackToLegacyPresets(t *testing.T) {
+// TestPermissionsMenuReusesDiscoveredCatalog covers Rust 0.166
+// on_permission_profiles_loaded: the picker always shows the built-in profile
+// rows plus the server catalog, and re-opening it reuses the cached discovery
+// instead of fetching again.
+func TestPermissionsMenuReusesDiscoveredCatalog(t *testing.T) {
 	explicit := false
-	recorder := &permissionProfileRecorder{explicit: &explicit}
+	recorder := &permissionProfileRecorder{
+		explicit: &explicit,
+		profiles: []chatwidget.CustomPermissionProfile{
+			{ID: ":read-only", Allowed: true},
+			{ID: ":workspace", Allowed: true},
+			{ID: ":danger-full-access", Allowed: true},
+		},
+	}
 	model := recorder.model(false)
 	command := model.openPermissionsMenu()
 	if command == nil {
@@ -52,8 +60,13 @@ func TestPermissionsMenuFallsBackToLegacyPresets(t *testing.T) {
 	if recorder.lists != 1 {
 		t.Fatalf("discovery calls = %d", recorder.lists)
 	}
+	if !containsString(permissionsMenuItemIDs(model), "auto:user") ||
+		!containsString(permissionsMenuItemIDs(model), "full-access:user") ||
+		!containsString(permissionsMenuItemIDs(model), "read-only:user") {
+		t.Fatalf("picker items = %#v, want the built-in profile rows", permissionsMenuItemIDs(model))
+	}
 	if command := model.openPermissionsMenu(); command != nil {
-		t.Fatal("legacy mode must not re-run discovery")
+		t.Fatal("the cached catalog must not re-run discovery")
 	}
 	if recorder.lists != 1 {
 		t.Fatalf("discovery calls after reopen = %d", recorder.lists)

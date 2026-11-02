@@ -24,6 +24,11 @@ func (m *Model) openDaemonMenu() {
 		HasPackage:    m.daemonCLIPackage,
 		ManagedDaemon: m.daemonManaged,
 	}))
+	if m.modal != nil {
+		// Rust opens this menu with SelectionViewParams::picker(), so it stays in
+		// the bottom pane instead of floating as a centered dialog.
+		m.modal.inlinePicker = true
+	}
 }
 
 // confirmDaemonRestart shows the managed-server restart confirmation.
@@ -32,6 +37,11 @@ func (m *Model) confirmDaemonRestart() bubbletea.Cmd {
 		return nil
 	}
 	m.openSelectionViewModal(ModalKindGeneric, chatwidget.DaemonRestartConfirmView())
+	if m.modal != nil {
+		// Rust builds this view with SelectionViewParams::confirmation(): a
+		// centered floating dialog rather than an inline picker.
+		m.modal.confirmationView = true
+	}
 	return nil
 }
 
@@ -57,6 +67,9 @@ func (m *Model) confirmDaemonUpdate(source codextui.DaemonUpdateSource) bubblete
 	}
 	m.daemonConfirmSource = source
 	m.openSelectionViewModal(ModalKindGeneric, chatwidget.DaemonConfirmView(source, m.daemonCLIVersion, m.daemonCLIExecutable))
+	if m.modal != nil {
+		m.modal.confirmationView = true
+	}
 	return nil
 }
 

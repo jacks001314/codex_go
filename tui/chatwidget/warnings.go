@@ -84,6 +84,17 @@ func (s *WarningDisplayState) WarningCount() int {
 	return s.count
 }
 
+// IsStartupConfigWarning reports whether an identity is one of the retained
+// startup configuration warnings, mirroring Rust's
+// `WarningDisplayState::startup_config_warnings` membership test that the
+// managed-daemon restart hint consults (#53173).
+func (s *WarningDisplayState) IsStartupConfigWarning(id historycell.WarningId) bool {
+	if s == nil || id.Kind != historycell.WarningIdMessage {
+		return false
+	}
+	return s.startupConfigWarnings[id.Value]
+}
+
 // ResetForTranscript clears warning decisions tied to the previous transcript.
 // The next transcript may deliver the same diagnostic identity and must show it
 // again (Rust history_ui::reset_transcript_state_after_clear).

@@ -70,7 +70,18 @@ func GetShell(shellType ShellType) *DetectedShell {
 	}
 	switch shellType {
 	case ShellPowerShell:
-		if path := firstExecutable("pwsh", "powershell"); path != "" {
+		// Rust shell_detect::get_powershell_shell: prefer pwsh on PATH, then the
+		// pwsh installer location, then legacy powershell and its system path.
+		if path := firstExecutable("pwsh"); path != "" {
+			return &DetectedShell{ShellType: ShellPowerShell, ShellPath: path}
+		}
+		if path := existingFilePath(powerShellFallbackPath("pwsh")); path != "" {
+			return &DetectedShell{ShellType: ShellPowerShell, ShellPath: path}
+		}
+		if path := firstExecutable("powershell"); path != "" {
+			return &DetectedShell{ShellType: ShellPowerShell, ShellPath: path}
+		}
+		if path := existingFilePath(powerShellFallbackPath("powershell")); path != "" {
 			return &DetectedShell{ShellType: ShellPowerShell, ShellPath: path}
 		}
 	case ShellCmd:
@@ -107,6 +118,23 @@ func GetShell(shellType ShellType) *DetectedShell {
 // GetShellByModelProvidedPath uses the model-provided path only to select a
 // shell type, then discovers the local executable (Rust #39607). The provided
 // path never determines which executable Codex runs.
+func powerShellFallbackPath(name string) string {
+	switch name {
+	case "pwsh":
+		if runtime.GOOS == "windows" {
+			return `C:\Program Files\PowerShell\7\pwsh.exe`
+		}
+		return "/usr/local/bin/pwsh"
+	case "powershell":
+		if runtime.GOOS == "windows" {
+			return `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`
+		}
+		return ""
+	default:
+		return ""
+	}
+}
+
 func GetShellByModelProvidedPath(shellPath string) *DetectedShell {
 	shellType, ok := DetectShellType(shellPath)
 	if !ok {

@@ -277,10 +277,16 @@ func boundedConfigLabel(value string) string {
 func configLayerSourceLabel(source LayerSource) string {
 	switch source.Type {
 	case LayerSourcePackagedDefaults:
+		if file := strings.TrimSpace(source.File); file != "" {
+			return "packaged defaults (" + file + ")"
+		}
 		return "packaged defaults"
 	case LayerSourceMDM:
 		return "managed configuration (MDM)"
 	case LayerSourceSystem:
+		if file := strings.TrimSpace(source.File); file != "" {
+			return "system (" + file + ")"
+		}
 		return "system"
 	case LayerSourceEnterpriseManaged:
 		if name := strings.TrimSpace(source.Name); name != "" {
@@ -288,8 +294,17 @@ func configLayerSourceLabel(source LayerSource) string {
 		}
 		return "enterprise managed"
 	case LayerSourceUser:
+		if file := strings.TrimSpace(source.File); file != "" {
+			return "user (" + file + ")"
+		}
 		return "user"
 	case LayerSourceProject:
+		if folder := strings.TrimSpace(source.DotCodexFolder); folder != "" {
+			return "project (" + folder + "/config.toml)"
+		}
+		if file := strings.TrimSpace(source.File); file != "" {
+			return "project (" + file + ")"
+		}
 		return "project"
 	case LayerSourceSessionFlags:
 		return "session flags"

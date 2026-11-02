@@ -420,32 +420,29 @@ func TestModelCtrlGExternalEditorAppliesEditedDraft(t *testing.T) {
 	}
 }
 
-func TestModelSlashEditorOpensExternalEditor(t *testing.T) {
+// Rust 0.166 has no /editor command (SlashCommand has no Editor variant); the
+// real binary answers "Unrecognized command '/editor'." The Ctrl+G shortcut
+// above keeps carrying the external editor.
+func TestModelSlashEditorIsUnrecognizedLikeRust(t *testing.T) {
 	var seeds []string
 	model := NewModel(nil, Options{
 		OnExternalEditor: func(seed string) bubbletea.Cmd {
 			seeds = append(seeds, seed)
-			return func() bubbletea.Msg {
-				return ExternalEditorFinishedMsg{Text: "from slash"}
-			}
+			return nil
 		},
 	})
 
 	typeText(t, model, "/editor")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
-	if cmd == nil {
-		t.Fatal("/editor returned nil command")
-	}
-	if got := seeds; len(got) != 1 || got[0] != "" {
-		t.Fatalf("/editor seeds = %#v, want one empty seed", got)
-	}
-
-	model.Update(cmd())
-	if got := model.ComposerValue(); got != "from slash" {
-		t.Fatalf("ComposerValue after /editor = %q, want from slash", got)
+	model.Update(key(bubbletea.KeyEnter))
+	if len(seeds) != 0 {
+		t.Fatalf("/editor must not open the external editor: seeds = %#v", seeds)
 	}
 	if len(model.SubmittedPrompts()) != 0 {
 		t.Fatalf("/editor should not submit prompts: %#v", model.SubmittedPrompts())
+	}
+	want := codextui.UnrecognizedSlashCommandMessage("/editor")
+	if !strings.Contains(modelMessageText(model), want) {
+		t.Fatalf("/editor transcript missing %q: %q", want, modelMessageText(model))
 	}
 }
 
@@ -2261,10 +2258,14 @@ func TestModelMCPStartupFailureWarningsMatchRust(t *testing.T) {
 	if strings.Contains(view, "MCP startup incomplete (failed: alpha)") {
 		t.Fatalf("final MCP startup warning should wait for lag:\n%s", view)
 	}
-	for _, want := range []string{"\u26a0 1 MCP startup issue", "Starting MCP servers"} {
-		if !strings.Contains(view, want) {
-			t.Fatalf("MCP startup warning missing %q:\n%s", want, view)
-		}
+	if !strings.Contains(view, "Starting MCP servers") {
+		t.Fatalf("MCP startup status missing:\n%s", view)
+	}
+	if strings.Contains(view, "startup issue") {
+		t.Fatalf("retained MCP diagnostic rendered inline:\n%s", view)
+	}
+	if got := model.warningDisplay.WarningCount(); got != 1 {
+		t.Fatalf("footer warning count = %d, want 1", got)
 	}
 	// Rust keeps the individual diagnostics in the transcript, not in the
 	// summary line (StartupWarningsCell::display_lines vs transcript_lines).
@@ -2279,17 +2280,20 @@ func TestModelMCPStartupFailureWarningsMatchRust(t *testing.T) {
 	}
 	model.Update(mcpStartupFinishAfterLagMsg{Generation: model.mcpStartupGeneration})
 	view = utils.StripANSI(model.View())
-	if !strings.Contains(view, "\u26a0 1 MCP startup issue") {
-		t.Fatalf("final MCP startup warning missing after lag:\n%s", view)
+	if strings.Contains(view, "startup issue") {
+		t.Fatalf("final MCP startup warning rendered inline after lag:\n%s", view)
+	}
+	if got := model.warningDisplay.WarningCount(); got != 1 {
+		t.Fatalf("footer warning count after lag = %d, want 1", got)
 	}
 	if raw := model.State.Messages[model.startupWarningsIndex].RawText; !strings.Contains(raw, "MCP startup incomplete (failed: alpha)") {
 		t.Fatalf("transcript details after lag = %q", raw)
 	}
 }
 
-// Mirrors Rust's startup_warnings_wait_for_splash_and_coalesce_with_full_details:
-// the entry stays hidden until the session splash exists, then renders the
-// coalesced summary with the individual diagnostics kept in the transcript.
+// Mirrors Rust's startup_warnings_wait_for_splash_and_coalesce_with_full_details
+// after #46751: the retained entry never renders a live row, and the individual
+// diagnostics stay in the transcript.
 func TestModelStartupWarningsWaitForSplashLikeRust(t *testing.T) {
 	state := codextui.NewState(nil)
 	model := NewModel(state, Options{Width: 80, Height: 18})
@@ -2298,13 +2302,16 @@ func TestModelStartupWarningsWaitForSplashLikeRust(t *testing.T) {
 		[]string{"alpha"},
 		"",
 	))
-	if len(model.State.Messages) != 0 {
-		t.Fatalf("startup warnings before the splash = %#v, want none", model.State.Messages)
+	if view := utils.StripANSI(model.View()); strings.Contains(view, "startup issue") || strings.Contains(view, "MCP alpha failed to start.") {
+		t.Fatalf("startup warnings before the splash rendered:\n%s", view)
 	}
 	model.addStartupSessionHeader("0.1.0")
 	view := utils.StripANSI(model.View())
-	if !strings.Contains(view, "\u26a0 1 MCP startup issue") {
-		t.Fatalf("startup warnings after the splash missing:\n%s", view)
+	if strings.Contains(view, "startup issue") || strings.Contains(view, "MCP alpha failed to start.") {
+		t.Fatalf("startup warnings after the splash rendered inline:\n%s", view)
+	}
+	if got := model.warningDisplay.WarningCount(); got != 1 {
+		t.Fatalf("footer warning count = %d, want 1", got)
 	}
 	if raw := model.State.Messages[model.startupWarningsIndex].RawText; !strings.Contains(raw, "MCP alpha failed to start.") {
 		t.Fatalf("transcript details = %q", raw)
@@ -2331,10 +2338,11 @@ func TestModelStartupWarningsSignInSubsetAndHintLikeRust(t *testing.T) {
 	// A repeated diagnostic must not change the summary.
 	model.mergeStartupWarnings(historycell.NewStartupWarnings([]string{"Skill manifest is invalid."}))
 	view := utils.StripANSI(model.View())
-	// Rust renders the configured binding with its compact label (#46680).
-	want := "\u26a0 4 startup issues (3 MCP; 2 need sign-in) \u00b7 ctrl+t for details"
-	if !strings.Contains(view, want) {
-		t.Fatalf("startup summary missing %q:\n%s", want, view)
+	if strings.Contains(view, "startup issue") {
+		t.Fatalf("retained startup diagnostics rendered inline:\n%s", view)
+	}
+	if got := model.warningDisplay.WarningCount(); got != 4 {
+		t.Fatalf("footer warning count = %d, want 4", got)
 	}
 	raw := model.State.Messages[model.startupWarningsIndex].RawText
 	for _, detail := range []string{"Skill manifest is invalid.", "MCP alpha: connection unavailable", "MCP gamma: connection unavailable"} {
@@ -2355,8 +2363,11 @@ func TestModelLateMCPDiagnosticsRetainStartupWarningsLikeRust(t *testing.T) {
 	}
 	model.Update(MCPStartupUpdateMsg{Name: "alpha", Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupFailed, Error: "alpha handshake failed"}})
 	view := utils.StripANSI(model.View())
-	if !strings.Contains(view, "\u26a0 1 MCP startup issue") {
-		t.Fatalf("late MCP diagnostic should join the retained startup summary:\n%s", view)
+	if strings.Contains(view, "startup issue") {
+		t.Fatalf("late MCP diagnostic rendered inline:\n%s", view)
+	}
+	if got := model.warningDisplay.WarningCount(); got != 1 {
+		t.Fatalf("late MCP footer warning count = %d, want 1", got)
 	}
 	if strings.Contains(view, "alpha handshake failed") {
 		t.Fatalf("late MCP diagnostic should not add a warning row:\n%s", view)
@@ -2415,8 +2426,11 @@ func TestModelStartupSkillLoadWarningsLikeRust(t *testing.T) {
 	}
 	model.Update(StartupSkillsListMsg{CWD: cwd, Response: response})
 	view := utils.StripANSI(model.View())
-	if !strings.Contains(view, "\u26a0 1 startup issue") {
-		t.Fatalf("startup skill warning missing from the summary:\n%s", view)
+	if strings.Contains(view, "startup issue") {
+		t.Fatalf("startup skill warning rendered inline:\n%s", view)
+	}
+	if got := model.warningDisplay.WarningCount(); got != 1 {
+		t.Fatalf("footer warning count = %d, want 1", got)
 	}
 	if strings.Contains(view, "Skipped loading") {
 		t.Fatalf("the summary line should be dropped for skill diagnostics:\n%s", view)
@@ -2431,8 +2445,8 @@ func TestModelStartupSkillLoadWarningsLikeRust(t *testing.T) {
 	// A repeated active error stays suppressed.
 	model.Update(StartupSkillsListMsg{CWD: cwd, Response: response})
 	view = utils.StripANSI(model.View())
-	if !strings.Contains(view, "\u26a0 1 startup issue") {
-		t.Fatalf("repeated active error changed the summary:\n%s", view)
+	if got := model.warningDisplay.WarningCount(); got != 1 {
+		t.Fatalf("repeated active error changed the count: %d", got)
 	}
 	// A runtime refresh with a new error uses the ordinary warning path
 	// (Rust's runtime refresh).
@@ -4135,8 +4149,9 @@ func TestModelSkillsListMenuOpensSkillPopup(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("/skills list did not request skills inventory")
 	}
-	if got := model.ComposerValue(); got != "@" {
-		t.Fatalf("composer = %q, want @", got)
+	// Rust ChatWidget::open_skills_list always inserts the `$` skill sigil.
+	if got := model.ComposerValue(); got != "$" {
+		t.Fatalf("composer = %q, want $", got)
 	}
 	runTeaCmd(t, model, cmd)
 	view := model.View()
@@ -4469,8 +4484,11 @@ func TestModelSlashCommands(t *testing.T) {
 
 	typeText(t, model, "/approval always")
 	model.Update(key(bubbletea.KeyEnter))
-	if !strings.Contains(model.View(), "Approval must be one of") {
-		t.Fatalf("View() missing approval validation:\n%s", model.View())
+	if len(model.SubmittedPrompts()) != 0 {
+		t.Fatalf("/approval must not reach the model: %#v", model.SubmittedPrompts())
+	}
+	if want := codextui.UnrecognizedSlashCommandMessage("/approval"); !strings.Contains(modelMessageText(model), want) {
+		t.Fatalf("/approval transcript missing %q: %q", want, modelMessageText(model))
 	}
 
 	typeText(t, model, "/clear")
@@ -4815,19 +4833,12 @@ func TestModelSlashCommandPopupFiltersCompletesAndDispatches(t *testing.T) {
 }
 
 func TestModelSlashInlineArgumentDispatchMatchesRust(t *testing.T) {
-	goCompatibilityArgs := map[codextui.Command]bool{
-		codextui.CommandApproval: true,
-		codextui.CommandSandbox:  true,
-		codextui.CommandAttach:   true,
-		codextui.CommandImage:    true,
-		codextui.CommandURLImage: true,
-	}
 	for _, frame := range codextui.SlashCommandFrames() {
 		invocation, ok := codextui.ParseCommand("/" + frame.Name + " argument")
 		if !ok {
 			t.Fatalf("ParseCommand(/%s argument) failed", frame.Name)
 		}
-		want := chatwidget.CommandSupportsInlineArgs(invocation.Command) || goCompatibilityArgs[invocation.Command]
+		want := chatwidget.CommandSupportsInlineArgs(invocation.Command)
 		if got := slashInvocationDispatchable(invocation); got != want {
 			t.Fatalf("/%s inline dispatchable = %v, want %v", frame.Name, got, want)
 		}
@@ -4862,10 +4873,16 @@ func TestModelSlashInlineArgumentDispatchMatchesRust(t *testing.T) {
 		t.Fatal("supported /raw on did not dispatch")
 	}
 
+	// Rust has no /approval command; an unknown name with arguments is answered
+	// with an info line (chatwidget/slash_dispatch.rs find_slash_command) and
+	// must never be turned into a prompt.
 	typeText(t, model, "/approval never")
 	model.Update(key(bubbletea.KeyEnter))
-	if state.ApprovalPolicy != "never" {
-		t.Fatalf("Go compatibility /approval args did not dispatch: %q", state.ApprovalPolicy)
+	if state.ApprovalPolicy == "never" {
+		t.Fatal("/approval must not change the approval policy")
+	}
+	if want := codextui.UnrecognizedSlashCommandMessage("/approval"); !strings.Contains(modelMessageText(model), want) {
+		t.Fatalf("/approval transcript missing %q: %q", want, modelMessageText(model))
 	}
 }
 
@@ -6065,8 +6082,8 @@ func TestModelRustSlashLongTailCommandSurfaces(t *testing.T) {
 		t.Fatalf("skills modal missing:\n%s", view)
 	}
 	model.Update(key(bubbletea.KeyEnter))
-	if model.ComposerValue() != "@" {
-		t.Fatalf("skills list should insert @ when mentions_v2 is enabled, got %q", model.ComposerValue())
+	if model.ComposerValue() != "$" {
+		t.Fatalf("skills list should insert $ like Rust, got %q", model.ComposerValue())
 	}
 	model.composer.Reset()
 
@@ -8379,12 +8396,14 @@ func TestModelAttachmentCommandsRenderAndSubmit(t *testing.T) {
 		},
 	})
 
-	typeText(t, model, `/attach D:\repo\notes.md`)
-	model.Update(key(bubbletea.KeyEnter))
-	typeText(t, model, `/image D:\repo\diagram.png`)
-	model.Update(key(bubbletea.KeyEnter))
-	typeText(t, model, `/url-image https://example.test/preview.png`)
-	model.Update(key(bubbletea.KeyEnter))
+	// Attachments reach the composer through paste/drop, not through slash
+	// commands: Rust 0.166 has no /attach, /image, or /url-image.
+	model.attachments = []bottompane.ComposerAttachment{
+		{Kind: bottompane.AttachmentFile, Path: `D:\repo\notes.md`},
+		{Kind: bottompane.AttachmentImage, Path: `D:\repo\diagram.png`},
+		{Kind: bottompane.AttachmentRemoteImage, URL: "https://example.test/preview.png"},
+	}
+	model.refreshTranscript()
 	view := model.View()
 	for _, want := range []string{"Attachments:", "file: notes.md", "image: diagram.png", "remote image: https://example.test/preview.png"} {
 		if !strings.Contains(view, want) {
@@ -8426,17 +8445,12 @@ func TestModelAttachmentCommandsRenderAndSubmit(t *testing.T) {
 	}
 }
 
-func TestModelClearAttachmentsCommand(t *testing.T) {
+func TestModelClearAttachmentsCommandIsUnrecognizedLikeRust(t *testing.T) {
 	model := NewModel(nil, Options{})
-	typeText(t, model, `/attach D:\repo\notes.md`)
-	model.Update(key(bubbletea.KeyEnter))
 	typeText(t, model, "/clear-attachments")
 	model.Update(key(bubbletea.KeyEnter))
-	if got := model.ComposerAttachments(); len(got) != 0 {
-		t.Fatalf("attachments after clear = %#v", got)
-	}
-	if !strings.Contains(model.View(), "Cleared 1 attachment.") {
-		t.Fatalf("clear notice missing:\n%s", model.View())
+	if want := codextui.UnrecognizedSlashCommandMessage("/clear-attachments"); !strings.Contains(modelMessageText(model), want) {
+		t.Fatalf("/clear-attachments transcript missing %q: %q", want, modelMessageText(model))
 	}
 }
 
@@ -8958,8 +8972,17 @@ func TestModelStartupConfigWarningsLikeRust(t *testing.T) {
 		},
 	})
 	view := utils.StripANSI(model.View())
-	if !strings.Contains(view, "\u26a0 1 startup issue") {
-		t.Fatalf("initial config warning missing from the startup summary:\n%s", view)
+	// Rust #46751 keeps startup diagnostics out of the live transcript; the
+	// footer count and the Ctrl+T transcript carry them instead.
+	if strings.Contains(view, "startup issue") {
+		t.Fatalf("startup warning rendered inline:\n%s", view)
+	}
+	if got := model.warningDisplay.WarningCount(); got != 1 {
+		t.Fatalf("footer warning count = %d, want 1", got)
+	}
+	transcript := model.State.Messages[model.startupWarningsIndex].TranscriptText
+	if !strings.Contains(transcript, "Configured value for `approval_policy`") {
+		t.Fatalf("transcript details = %q", transcript)
 	}
 	// A later duplicate is suppressed (Rust startup_config_warnings).
 	model.Update(StartupConfigWarningMsg{Message: "Configured value for `approval_policy` is disallowed by requirements."})
@@ -8967,14 +8990,14 @@ func TestModelStartupConfigWarningsLikeRust(t *testing.T) {
 	if strings.Count(view, "Configured value for `approval_policy`") != 0 {
 		t.Fatalf("duplicate config warning rendered:\n%s", view)
 	}
-	if !strings.Contains(view, "\u26a0 1 startup issue") {
-		t.Fatalf("duplicate config warning changed the summary:\n%s", view)
+	if got := model.warningDisplay.WarningCount(); got != 1 {
+		t.Fatalf("duplicate config warning changed the count: %d", got)
 	}
 	// A distinct warning still merges.
 	model.Update(StartupConfigWarningMsg{Message: "Ignored unsupported project-local config keys in /repo/.gcode/config.toml."})
 	view = utils.StripANSI(model.View())
-	if !strings.Contains(view, "\u26a0 2 startup issues") {
-		t.Fatalf("second config warning missing from the summary:\n%s", view)
+	if got := model.warningDisplay.WarningCount(); got != 2 {
+		t.Fatalf("footer warning count = %d, want 2", got)
 	}
 	raw := model.State.Messages[model.startupWarningsIndex].RawText
 	if !strings.Contains(raw, "Ignored unsupported project-local config keys") {
@@ -8989,8 +9012,9 @@ func TestModelStartupConfigWarningsLikeRust(t *testing.T) {
 	}
 }
 
-// Rust #53173: a managed local daemon adds a restart hint to the first startup
-// configuration warning while the diagnostic itself remains copyable in raw.
+// Rust #46751 + #53173: startup diagnostics stay out of the live transcript, and
+// a managed local daemon adds its restart hint to the first startup
+// configuration warning inside the warnings viewer.
 func TestManagedDaemonStartupWarningRestartHintLikeRust(t *testing.T) {
 	model := NewModel(codextui.NewState(nil), Options{
 		Width:              100,
@@ -9003,11 +9027,16 @@ func TestManagedDaemonStartupWarningRestartHintLikeRust(t *testing.T) {
 		},
 	})
 	view := utils.StripANSI(model.View())
-	if !strings.Contains(view, "restart with /daemon") {
-		t.Fatalf("managed startup warning missing restart hint:\n%s", view)
+	if strings.Contains(view, "startup issue") || strings.Contains(view, "/daemon") {
+		t.Fatalf("startup warning rendered inline:\n%s", view)
 	}
-	if raw := model.State.Messages[model.startupWarningsIndex].RawText; strings.Contains(raw, "restart with /daemon") {
+	raw := model.State.Messages[model.startupWarningsIndex].RawText
+	if strings.Contains(raw, "/daemon") {
 		t.Fatalf("restart hint leaked into raw details: %q", raw)
+	}
+	model.openWarningsView()
+	if lines := model.warningsView.RenderLines(120, 20, bottompane.WarningsHints{}); !strings.Contains(strings.Join(lines, "\n"), "These warnings may reflect settings") {
+		t.Fatalf("managed startup warning missing restart hint in the viewer:\n%s", strings.Join(lines, "\n"))
 	}
 
 	unmanaged := NewModel(codextui.NewState(nil), Options{
@@ -9017,14 +9046,50 @@ func TestManagedDaemonStartupWarningRestartHintLikeRust(t *testing.T) {
 		LocalDaemonSession:    true,
 		StartupConfigWarnings: []string{"Configured value is disallowed."},
 	})
-	if view := utils.StripANSI(unmanaged.View()); strings.Contains(view, "restart with /daemon") {
-		t.Fatalf("unmanaged daemon warning carried restart hint:\n%s", view)
+	if view := utils.StripANSI(unmanaged.View()); strings.Contains(view, "startup issue") || strings.Contains(view, "/daemon") {
+		t.Fatalf("unmanaged startup warning rendered inline:\n%s", view)
+	}
+	unmanaged.openWarningsView()
+	if lines := unmanaged.warningsView.RenderLines(120, 20, bottompane.WarningsHints{}); strings.Contains(strings.Join(lines, "\n"), "These warnings may reflect settings") {
+		t.Fatalf("unmanaged daemon warning carried restart hint:\n%s", strings.Join(lines, "\n"))
 	}
 }
 
 // Mirrors Rust #46503: the TUI's display surfaces use the catalog display name
 // for the current model, while the model id keeps driving selection and
 // persistence. Models the catalog does not list fall back to their id.
+// Rust #48205/#48206: the passive footer row right-aligns the full warning
+// notice inside the two-column footer indent instead of clipping it.
+func TestPassiveFooterWarningNoticeFitsIndentLikeRust(t *testing.T) {
+	model := NewModel(codextui.NewState(nil), Options{
+		Width:             120,
+		Height:            24,
+		ShowSessionHeader: true,
+		StartupConfigWarnings: []string{
+			"Configured value for `approval_policy` is disallowed by requirements.",
+		},
+	})
+	view := utils.StripANSI(model.View())
+	if !strings.Contains(view, "\u26a0 1 warning \u00b7 f2 to view") {
+		t.Fatalf("footer notice clipped:\n%s", view)
+	}
+	// Rust warning_notice_layout keeps one clear cell at the terminal's right
+	// edge, so the footer row ends at width-1.
+	var footerRow string
+	for _, line := range strings.Split(view, "\n") {
+		if len([]rune(line)) > 120 {
+			t.Fatalf("line exceeds the terminal width: %q", line)
+		}
+		if strings.Contains(line, "warning") {
+			footerRow = line
+		}
+	}
+	// The styled row may carry a trailing pad cell; compare the painted text.
+	if got := len([]rune(strings.TrimRight(footerRow, " "))); got != 119 {
+		t.Fatalf("footer row width = %d, want 119 (one clear cell at the right edge)", got)
+	}
+}
+
 func TestModelDisplayNameSurfacesLikeRust(t *testing.T) {
 	state := codextui.NewState(nil)
 	state.Model = "gpt-5.6-terra"

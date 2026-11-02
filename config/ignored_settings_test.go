@@ -23,8 +23,8 @@ func TestIgnoredConfigWarningCollectsUnknownSettings(t *testing.T) {
 		"`network_proxy` is ignored.",
 		"`allowed_permissions` is ignored.",
 		"`project_setting` is ignored.",
-		"user:",
-		"project:",
+		"user (config.toml):",
+		"project (.gcode/config.toml):",
 	} {
 		if !strings.Contains(warning, want) {
 			t.Fatalf("warning missing %q:\n%s", want, warning)

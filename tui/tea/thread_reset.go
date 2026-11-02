@@ -23,6 +23,8 @@ func (m *Model) resetThreadScopedState() {
 	m.clearThreadUsage()
 	// The fresh-task starfield belongs to the previous thread/task.
 	m.sparkle = composerSparkleState{}
+	// A fresh thread re-arms the Rust empty-state animation.
+	m.welcomeBlossom = newWelcomeBlossomState()
 	m.misalignmentPolicyStopped = false
 	m.misalignmentReview = nil
 	m.clearModalStack()

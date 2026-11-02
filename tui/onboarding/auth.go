@@ -37,7 +37,7 @@ func DefaultAuthOptions(apiKeyDisabled bool) []AuthOption {
 	return []AuthOption{
 		{Choice: AuthChoiceChatGPT, Label: "Sign in with ChatGPT", Description: "Usage included with Plus, Pro, Business, and Enterprise plans"},
 		{Choice: AuthChoiceDeviceCode, Label: "Sign in with Device Code", Description: "Sign in from another device with a one-time code"},
-		{Choice: AuthChoiceAPIKey, Label: "Provide your own API key", Description: "Pay for what you use", Disabled: apiKeyDisabled},
+		{Choice: AuthChoiceAPIKey, Label: "Use an OpenAI API key", Description: "Pay for what you use", Disabled: apiKeyDisabled},
 	}
 }
 
@@ -69,8 +69,8 @@ func AuthOptionsForPolicyWithProviders(chatGPTAllowed bool, apiKeyAllowed bool, 
 	if apiKeyAllowed && bedrockAllowed {
 		options = append(options, AuthOption{
 			Choice:      AuthChoiceBedrock,
-			Label:       "Set up Amazon Bedrock",
-			Description: "Use an AWS profile, access keys, environment credentials, or a Bedrock API key",
+			Label:       "Use Amazon Bedrock",
+			Description: "Connect using your AWS credentials",
 		})
 	}
 	if apiKeyAllowed && gcpAllowed {

@@ -5,12 +5,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"os"
+	"sort"
 	"strings"
 	"time"
 
 	"codex_go/appserver"
 	"codex_go/appserverdaemon"
+	"codex_go/cli"
 	"codex_go/config"
+	codexexec "codex_go/exec"
 	"codex_go/sandbox"
 	codextea "codex_go/tui/tea"
 	"codex_go/turn"
@@ -46,6 +51,120 @@ func interactiveRemoteRecapGenerateHandler(ctx context.Context, endpoint *appser
 		defer unsubscribeRemoteTemporaryThread(client, temporaryThreadID)
 		return runRemoteTemporaryStructuredTurn(runCtx, client, temporaryThreadID, prompt, schema, options.Effort)
 	}
+}
+
+// interactiveLocalStructuredGenerator runs the temporary structured recap and
+// thread-title turn in-process. The embedded TUI drives turns through
+// codexexec instead of the app server, so this mirrors Rust's
+// temporary_structured_request path locally: an ephemeral read-only turn with
+// every tool and extension disabled, a schema-constrained prompt, and only the
+// final agent message collected.
+func interactiveLocalStructuredGenerator(root *cli.RootOptions, runner *codexexec.Runner) codextea.RecapGenerateFunc {
+	return func(_ string, options codextea.RecapThreadOptions, prompt string, schema map[string]any) (string, error) {
+		if runner == nil {
+			return "", errors.New("interactive runner is nil")
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), temporaryStructuredTurnTimeout)
+		defer cancel()
+		turnRoot := cli.RootOptions{}
+		if root != nil {
+			turnRoot = *root
+			turnRoot.ConfigOverrides = append([]string(nil), root.ConfigOverrides...)
+		}
+		turnRoot.ConfigOverrides = append(turnRoot.ConfigOverrides, temporaryStructuredLocalOverrides()...)
+		if cwd := strings.TrimSpace(options.CWD); cwd != "" {
+			turnRoot.Shared.CWD = cwd
+		}
+		if model := strings.TrimSpace(options.Model); model != "" {
+			turnRoot.Shared.Model = model
+		}
+		if effort := strings.TrimSpace(options.Effort); effort != "" {
+			turnRoot.Shared.ModelReasoningEffort = effort
+		}
+		turnRoot.Shared.Sandbox = "read-only"
+		turnRoot.Shared.ApprovalPolicy = "never"
+		schemaPath, cleanup, err := temporaryStructuredSchemaFile(schema)
+		if err != nil {
+			return "", err
+		}
+		defer cleanup()
+		threadSource := strings.TrimSpace(options.ThreadSource)
+		if threadSource == "" {
+			threadSource = "thread_title"
+		}
+		result, err := runner.RunContext(ctx, &codexexec.Request{
+			Root: turnRoot,
+			Exec: cli.ExecOptions{
+				Prompt:           prompt,
+				Shared:           turnRoot.Shared,
+				ThreadSource:     threadSource,
+				SkipGitRepoCheck: true,
+				Ephemeral:        true,
+				OutputSchema:     schemaPath,
+				Color:            "never",
+			},
+			TurnTrigger: threadSource,
+			Originator:  tuiClientName,
+		}, strings.NewReader(""), io.Discard, io.Discard)
+		if err != nil {
+			return "", err
+		}
+		if result == nil {
+			return "", errors.New("temporary structured turn returned no result")
+		}
+		response := strings.TrimSpace(result.LastMessage)
+		if response == "" {
+			return "", errors.New("temporary structured turn completed without a response")
+		}
+		if len(response) > temporaryStructuredMaxBytes {
+			return "", fmt.Errorf("temporary structured response exceeds %d bytes", temporaryStructuredMaxBytes)
+		}
+		return response, nil
+	}
+}
+
+// temporaryStructuredLocalOverrides carries temporaryStructuredConfigOverrides
+// as exec config overrides, plus the read-only permission profile Rust forces
+// for the temporary thread unless a custom profile was selected.
+func temporaryStructuredLocalOverrides() []string {
+	overrides := []string{
+		`web_search="disabled"`,
+		`default_permissions=":read-only"`,
+	}
+	keys := append([]string(nil), temporaryStructuredDisabledFeatures...)
+	sort.Strings(keys)
+	for _, key := range keys {
+		overrides = append(overrides, key+"=false")
+	}
+	return overrides
+}
+
+// temporaryStructuredSchemaFile materializes the structured-output schema for
+// exec's --output-schema, which reads a file rather than an in-memory value.
+func temporaryStructuredSchemaFile(schema map[string]any) (string, func(), error) {
+	if len(schema) == 0 {
+		return "", func() {}, nil
+	}
+	data, err := json.Marshal(schema)
+	if err != nil {
+		return "", func() {}, err
+	}
+	file, err := os.CreateTemp("", "codex-structured-*.json")
+	if err != nil {
+		return "", func() {}, err
+	}
+	path := file.Name()
+	cleanup := func() { _ = os.Remove(path) }
+	if _, err := file.Write(data); err != nil {
+		_ = file.Close()
+		cleanup()
+		return "", func() {}, err
+	}
+	if err := file.Close(); err != nil {
+		cleanup()
+		return "", func() {}, err
+	}
+	return path, cleanup, nil
 }
 
 // startRemoteTemporaryStructuredThread reads the effective configuration and

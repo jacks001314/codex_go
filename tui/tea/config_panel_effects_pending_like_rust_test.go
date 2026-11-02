@@ -1,7 +1,6 @@
 package tea
 
 import (
-	"strings"
 	"testing"
 
 	bubbletea "github.com/charmbracelet/bubbletea"
@@ -95,8 +94,8 @@ func TestEffectsRapidTogglesIgnoreStaleSaveResultLikeRust(t *testing.T) {
 	if !model.animationsEnabled {
 		t.Fatal("stale save result turned Animations off")
 	}
-	if value := model.configPanelValue(model.configPanelFilteredRows()[0]); value != "On" {
-		t.Fatalf("Effects row after stale result = %q, want On", value)
+	if value := model.configPanelValue(model.configPanelFilteredRows()[0]); value != "[x] On" {
+		t.Fatalf("Effects row after stale result = %q, want [x] On", value)
 	}
 
 	model.Update(second())
@@ -122,22 +121,20 @@ func TestEffectsComposerStarsPendingValueSurvivesDisabledRowLikeRust(t *testing.
 	if value := model.configPanelValue(rows[1]); value != "Unavailable" {
 		t.Fatalf("disabled Composer stars value = %q", value)
 	}
+	// Rust skips disabled rows, so Down wraps back to Animations.
 	model.Update(key(bubbletea.KeyDown))
-	model.Update(key(bubbletea.KeySpace))
-	if !model.effects.Starfield {
-		t.Fatal("disabled Composer stars row changed the preserved value")
+	if model.modal.configPanel.selected != 0 {
+		t.Fatalf("selection landed on the disabled row: %#v", model.modal.configPanel)
 	}
-	if !strings.Contains(model.notice, "Turn on Animations") {
-		t.Fatalf("disabled Composer stars notice = %q", model.notice)
-	}
-
-	model.Update(key(bubbletea.KeyUp))
 	model.Update(key(bubbletea.KeySpace))
 	if !model.animationsEnabled {
 		t.Fatal("Animations did not turn back on")
 	}
-	if value := model.configPanelValue(model.configPanelFilteredRows()[1]); value != "On" {
-		t.Fatalf("Composer stars after re-enabling animations = %q, want On", value)
+	if !model.effects.Starfield {
+		t.Fatal("disabled Composer stars row changed the preserved value")
+	}
+	if value := model.configPanelValue(model.configPanelFilteredRows()[1]); value != "[x] On" {
+		t.Fatalf("Composer stars after re-enabling animations = %q, want [x] On", value)
 	}
 	model.Update(key(bubbletea.KeyDown))
 	model.Update(key(bubbletea.KeySpace))

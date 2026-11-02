@@ -68,7 +68,9 @@ func DaemonMenuView(config DaemonMenuConfig) SelectionView {
 			status = "Running daemon: " + version
 		}
 	}
-	header := []string{"Daemon", status}
+	// Rust's DaemonMenuHeader carries the status (and any guidance) only; the
+	// picker title supplies the bold "Daemon" line.
+	header := []string{status}
 	unavailable := ""
 	switch {
 	case config.Remote:
@@ -84,12 +86,9 @@ func DaemonMenuView(config DaemonMenuConfig) SelectionView {
 		thisCliReason = daemonMenuDisabledNoPackage
 	}
 	restartReason := ""
-	switch {
-	case unavailable != "":
-		restartReason = daemonMenuRestartUnavailable
-	case !config.LocalDaemon:
-		restartReason = daemonMenuRestartUnavailable
-	case !config.ManagedDaemon:
+	// Rust only explains a restart it cannot verify; a disconnected or remote
+	// session still disables the row but shows no reason.
+	if unavailable == "" && config.LocalDaemon && !config.ManagedDaemon {
 		restartReason = daemonMenuRestartUnverified
 	}
 	return SelectionView{
@@ -114,7 +113,7 @@ func DaemonMenuView(config DaemonMenuConfig) SelectionView {
 			{
 				ID:              DaemonMenuItemRestart,
 				Name:            "Restart background server",
-				Disabled:        restartReason != "",
+				Disabled:        unavailable != "" || !config.ManagedDaemon,
 				DisabledReason:  restartReason,
 				DismissOnSelect: true,
 			},
@@ -159,14 +158,15 @@ func DaemonRestartConfirmView() SelectionView {
 	return SelectionView{
 		ViewID:      DaemonRestartConfirmViewID,
 		Title:       "Restart background server?",
-		Subtitle:    "Active or queued work in other chats may be interrupted.\nCodex will reconnect automatically when the server is ready.",
+		Subtitle:    "Active or queued work in other chats may be interrupted.\nCodex will reconnect automatically.",
 		AllowCancel: true,
 		Items: []SelectionItem{
 			{ID: DaemonMenuItemCancel, Name: "Cancel", DismissOnSelect: true},
 			{
-				ID:              DaemonMenuItemRestartAndReconnect,
-				Name:            "Restart and reconnect",
-				DismissOnSelect: true,
+				ID:                          DaemonMenuItemRestartAndReconnect,
+				Name:                        "Restart",
+				RequireExplicitConfirmation: true,
+				DismissOnSelect:             true,
 			},
 		},
 	}

@@ -2,7 +2,6 @@ package tea
 
 import (
 	"fmt"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,7 +12,6 @@ import (
 	"codex_go/appserver"
 	"codex_go/envutil"
 	pluginapi "codex_go/plugin"
-	codextui "codex_go/tui"
 	bottompane "codex_go/tui/bottom_pane"
 	chatwidget "codex_go/tui/chatwidget"
 	idecontext "codex_go/tui/ide_context"
@@ -38,48 +36,6 @@ func pasteImageFromClipboard() (string, error) {
 		return "", fmt.Errorf("%v: %s", runErr, strings.TrimSpace(string(output)))
 	}
 	return path, nil
-}
-
-func (m *Model) applyAttachmentCommand(args string, kind bottompane.AttachmentKind) {
-	if m == nil {
-		return
-	}
-	value := strings.TrimSpace(args)
-	if value == "" {
-		m.notice = "Usage: " + attachmentUsage(kind)
-		return
-	}
-	attachment := bottompane.ComposerAttachment{Kind: kind}
-	switch kind {
-	case bottompane.AttachmentRemoteImage:
-		if parsed, err := url.Parse(value); err != nil || parsed.Scheme == "" || parsed.Host == "" {
-			m.notice = "Remote image attachment must be a URL."
-			return
-		}
-		attachment.URL = value
-	default:
-		path, ok := codextui.NormalizePastedPath(value)
-		if !ok {
-			m.notice = "Attachment path is invalid."
-			return
-		}
-		attachment.Path = path
-	}
-	m.attachments = append(m.attachments, attachment)
-	m.notice = fmt.Sprintf("Attached %s %s", attachmentKindLabel(kind), attachment.Label())
-}
-
-func (m *Model) clearAttachments() {
-	if m == nil {
-		return
-	}
-	count := len(m.attachments)
-	m.attachments = nil
-	if count == 0 {
-		m.notice = "No attachments to clear."
-		return
-	}
-	m.notice = fmt.Sprintf("Cleared %d attachment%s.", count, pluralS(count))
 }
 
 func (m *Model) ComposerAttachments() []bottompane.ComposerAttachment {
@@ -153,17 +109,6 @@ func (m *Model) renderAttachmentLine() string {
 		labels = append(labels, attachmentKindLabel(attachment.Kind)+": "+attachment.Label())
 	}
 	return "Attachments: " + strings.Join(labels, " | ")
-}
-
-func attachmentUsage(kind bottompane.AttachmentKind) string {
-	switch kind {
-	case bottompane.AttachmentImage:
-		return "/image PATH"
-	case bottompane.AttachmentRemoteImage:
-		return "/url-image URL"
-	default:
-		return "/attach PATH"
-	}
 }
 
 func attachmentKindLabel(kind bottompane.AttachmentKind) string {

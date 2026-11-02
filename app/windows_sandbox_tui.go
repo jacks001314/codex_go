@@ -38,6 +38,21 @@ func interactiveWindowsSandboxStartupPrompt(root *cli.RootOptions, requirements 
 	return interactiveWindowsSandboxPromptFromValues(root, loaded.Values, requirements, requirementsSourcePresent, setupComplete)
 }
 
+// interactiveWindowsSandboxLevelForTUI resolves the configured Windows sandbox
+// level for the TUI model. Rust builds its /setup-default-sandbox availability
+// from the same startup config, so the Go popup must not wait for the first
+// app-server state refresh.
+func interactiveWindowsSandboxLevelForTUI(root *cli.RootOptions) chatwidget.WindowsSandboxLevel {
+	if runtime.GOOS != "windows" {
+		return chatwidget.WindowsSandboxLevelDisabled
+	}
+	loaded, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), interactiveKeymapLoadOptions(root))
+	if err != nil || loaded == nil {
+		return chatwidget.WindowsSandboxLevelDisabled
+	}
+	return interactiveWindowsSandboxLevel(loaded.Values)
+}
+
 // interactiveWindowsSandboxPromptFromValues derives the startup prompt from the
 // authoritative configuration values and requirements. For a connected app
 // server those values come from config/read and configRequirements/read.

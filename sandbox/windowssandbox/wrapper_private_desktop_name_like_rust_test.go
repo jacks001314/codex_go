@@ -57,4 +57,3 @@ func TestWindowsSandboxWrapperRejectsInvalidPrivateDesktopNameLikeRust(t *testin
 		t.Fatalf("error = %v, want invalid private desktop name", err)
 	}
 }
-

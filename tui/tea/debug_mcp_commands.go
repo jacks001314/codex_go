@@ -16,7 +16,6 @@ func (m *Model) applyDebugConfigCommand() bubbletea.Cmd {
 		m.applyDebugConfigLines(m.defaultDebugConfigLines())
 		return nil
 	}
-	m.notice = "Reading debug config..."
 	m.refreshTranscript()
 	return func() bubbletea.Msg {
 		lines, err := m.onReadDebugConfig()
@@ -51,7 +50,7 @@ func (m *Model) applyDebugConfigLines(lines []string) {
 		clean = m.defaultDebugConfigLines()
 	}
 	m.State.AddHistoryLines(clean, clean)
-	m.notice = "Debug config"
+	m.dismissWelcomeBlossom()
 	m.refreshTranscript()
 }
 
@@ -133,7 +132,6 @@ func (m *Model) applyMCPCommand(args string) bubbletea.Cmd {
 		m.pendingMCPInventoryMessageIndex = len(m.State.Messages)
 		m.pendingMCPInventoryDetail = detail
 		m.applyHistoryCell(historycell.NewMcpInventoryLoading())
-		m.notice = "Loading MCP inventory..."
 		return func() bubbletea.Msg {
 			servers, err := m.onReadMCPInventory(detail)
 			return MCPInventoryResultMsg{RequestID: requestID, Servers: servers, Err: err}
@@ -141,11 +139,9 @@ func (m *Model) applyMCPCommand(args string) bubbletea.Cmd {
 	}
 	if len(m.mcpServers) == 0 {
 		m.applyHistoryCell(historycell.EmptyMCPOutput())
-		m.notice = "MCP"
 		return nil
 	}
 	m.applyHistoryCell(historycell.NewMCPToolsOutputFromStatuses(m.mcpServers, detail))
-	m.notice = "MCP"
 	return nil
 }
 
@@ -167,7 +163,6 @@ func (m *Model) applyMCPInventoryResult(msg MCPInventoryResultMsg) {
 	} else {
 		m.applyHistoryCell(historycell.NewMCPToolsOutputFromStatuses(m.mcpServers, detail))
 	}
-	m.notice = "MCP"
 }
 
 func (m *Model) clearPendingMCPInventoryLoading() {

@@ -38,15 +38,10 @@ func TestCommandSupportsInlineArgsMatchesRustSlashCommandList(t *testing.T) {
 	}
 }
 
-// The Go-only direct-argument commands stay outside Rust's list, so the shared
-// list must not swallow them.
+// The remaining Go-only commands stay outside Rust's list, so the shared list
+// must not swallow them.
 func TestCommandSupportsInlineArgsExcludesGoOnlyCommands(t *testing.T) {
 	for _, command := range []Command{
-		CommandApproval,
-		CommandSandbox,
-		CommandAttach,
-		CommandImage,
-		CommandURLImage,
 		CommandWorktree,
 		CommandCompact,
 		CommandRecap,

@@ -364,7 +364,7 @@ func (s *State) RenderWelcome() string {
 		builder.WriteString(cwd)
 		builder.WriteString("\n")
 	}
-	builder.WriteString("Type /help for commands or /exit to quit.\n")
+	builder.WriteString("Type / for commands or /exit to quit.\n")
 	return builder.String()
 }
 
@@ -1163,8 +1163,6 @@ func ParseCommand(input string) (*CommandInvocation, bool) {
 		args = strings.TrimSpace(strings.TrimPrefix(trimmed, fields[0]))
 	}
 	switch name {
-	case "/help", "/?":
-		return &CommandInvocation{Command: CommandHelp, Args: args, Name: name}, true
 	case "/keymap", "/keys":
 		return &CommandInvocation{Command: CommandKeymap, Args: args, Name: name}, true
 	case "/status":
@@ -1229,10 +1227,6 @@ func ParseCommand(input string) (*CommandInvocation, bool) {
 		return &CommandInvocation{Command: CommandSide, Args: args, Name: name}, true
 	case "/permissions":
 		return &CommandInvocation{Command: CommandPermissions, Args: args, Name: name}, true
-	case "/approval":
-		return &CommandInvocation{Command: CommandApproval, Args: args, Name: name}, true
-	case "/sandbox":
-		return &CommandInvocation{Command: CommandSandbox, Args: args, Name: name}, true
 	case "/experimental":
 		return &CommandInvocation{Command: CommandExperimental, Args: args, Name: name}, true
 	case "/review":
@@ -1291,20 +1285,8 @@ func ParseCommand(input string) (*CommandInvocation, bool) {
 		return &CommandInvocation{Command: CommandPwd, Args: args, Name: name}, true
 	case "/archive":
 		return &CommandInvocation{Command: CommandArchive, Args: args, Name: name}, true
-	case "/unarchive":
-		return &CommandInvocation{Command: CommandUnarchive, Args: args, Name: name}, true
 	case "/delete":
 		return &CommandInvocation{Command: CommandDelete, Args: args, Name: name}, true
-	case "/attach":
-		return &CommandInvocation{Command: CommandAttach, Args: args, Name: name}, true
-	case "/image":
-		return &CommandInvocation{Command: CommandImage, Args: args, Name: name}, true
-	case "/url-image":
-		return &CommandInvocation{Command: CommandURLImage, Args: args, Name: name}, true
-	case "/clear-attachments":
-		return &CommandInvocation{Command: CommandClearAttachments, Args: args, Name: name}, true
-	case "/editor":
-		return &CommandInvocation{Command: CommandEditor, Args: args, Name: name}, true
 	case "/logout":
 		return &CommandInvocation{Command: CommandLogout, Args: args, Name: name}, true
 	case "/exit", "/quit":
@@ -1312,6 +1294,14 @@ func ParseCommand(input string) (*CommandInvocation, bool) {
 	default:
 		return &CommandInvocation{Command: CommandUnknown, Args: args, Name: name}, true
 	}
+}
+
+// UnrecognizedSlashCommandMessage mirrors Rust's slash dispatch notice
+// (`chatwidget::slash_dispatch`): an unknown slash input is answered with an
+// info line rather than a command list.
+func UnrecognizedSlashCommandMessage(name string) string {
+	name = strings.TrimPrefix(strings.TrimSpace(name), "/")
+	return "Unrecognized command '/" + name + "'. Type \"/\" for a list of supported commands."
 }
 
 func ValidApprovalPolicy(value string) bool {

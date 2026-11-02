@@ -53,7 +53,23 @@ func (m *Model) openWarningsView() {
 	}
 	entries := m.warningDisplay.VisibleEntries(m.retainedWarningCells())
 	m.warningsView = bottompane.NewWarningsView(entries)
+	m.warningsView.SetDaemonRestartHintAt(m.daemonRestartHintEntry(entries))
 	m.warningsFlash = ""
+}
+
+// daemonRestartHintEntry mirrors ChatWidget::open_warnings's
+// `daemon_restart_hint_at`: a managed local daemon points the restart hint at
+// the first retained startup configuration warning (#53173).
+func (m *Model) daemonRestartHintEntry(entries []historycell.WarningEntry) int {
+	if m == nil || !m.daemonManaged || !m.localDaemonSession {
+		return -1
+	}
+	for index, entry := range entries {
+		if m.warningDisplay.IsStartupConfigWarning(entry.ID) {
+			return index
+		}
+	}
+	return -1
 }
 
 // closeWarningsView applies the viewer's decisions and hides it (the
@@ -78,8 +94,10 @@ func (m *Model) retainedWarningCells() []historycell.WarningCell {
 		return nil
 	}
 	cells := make([]historycell.WarningCell, 0, len(m.warningCells)+1)
-	cells = append(cells, m.warningCells...)
+	// Rust walks the transcript in order, so the startup cell (which sits above
+	// the conversation) contributes its entries before later runtime warnings.
 	cells = append(cells, m.startupWarnings)
+	cells = append(cells, m.warningCells...)
 	return cells
 }
 

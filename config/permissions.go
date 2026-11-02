@@ -565,6 +565,9 @@ func (c *Config) resolveLegacySandboxPermissionProfile(cwd string) (*SandboxPerm
 func (c *Config) resolveLegacySandboxPermissionProfileWithWorkspaceRoots(cwd string, workspaceRoots []string) (*SandboxPermissionProfileResolution, error) {
 	modeText := stringFromConfigValue(c.Values["sandbox_mode"])
 	if modeText == "" {
+		modeText = c.trustedProjectDefaultSandboxMode(cwd)
+	}
+	if modeText == "" {
 		return nil, nil
 	}
 	mode, err := sandbox.ParseSandboxMode(modeText)
@@ -588,6 +591,40 @@ func (c *Config) resolveLegacySandboxPermissionProfileWithWorkspaceRoots(cwd str
 		return nil, err
 	}
 	return &SandboxPermissionProfileResolution{ID: string(mode), Profile: &profile, ProfileJSON: raw}, nil
+}
+
+// trustedProjectDefaultSandboxMode mirrors Rust's
+// ConfigToml::derive_permission_profile: when neither `sandbox_mode` nor a
+// permission profile is configured, a directory with a saved project trust
+// decision resolves to workspace-write instead of the read-only platform
+// default. Untrusted decisions take the same branch in Rust
+// (`project.is_trusted() || project.is_untrusted()`).
+func (c *Config) trustedProjectDefaultSandboxMode(cwd string) string {
+	if c == nil || c.Values == nil {
+		return ""
+	}
+	if strings.TrimSpace(stringFromConfigValue(c.Values["default_permissions"])) != "" {
+		return ""
+	}
+	projects, ok := c.Values["projects"].(map[string]any)
+	if !ok || len(projects) == 0 {
+		return ""
+	}
+	root := ""
+	if discovered, found := DiscoverProjectRoot(cwd, c.ProjectRootMarkers()); found {
+		root = discovered
+	}
+	project, ok := ProjectTrustLookupForTarget(cwd, root).ActiveProject(projects)
+	if !ok {
+		return ""
+	}
+	level, _ := project["trust_level"].(string)
+	switch strings.TrimSpace(level) {
+	case "trusted", "untrusted":
+	default:
+		return ""
+	}
+	return string(sandbox.SandboxWorkspaceWrite)
 }
 
 func applyLegacyWorkspaceWriteConfig(profile *sandbox.PermissionProfile, raw any, cwd string) {

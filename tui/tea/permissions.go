@@ -176,6 +176,7 @@ const permissionsRetryOptionID = "permissions-retry"
 func (m *Model) permissionMenuConfig(explicit bool) chatwidget.PermissionMenuConfig {
 	config := chatwidget.PermissionMenuConfig{
 		IncludeReadOnly:       true,
+		ProfilesEmpty:         m.permissionProfilesDiscovered && len(m.permissionProfiles) == 0,
 		HideFullAccessWarning: m.hideFullAccessWarning,
 		CurrentApprovalPolicy: currentPermissionApprovalPolicy(m),
 		CurrentReviewer:       currentApprovalsReviewer(m),
@@ -336,9 +337,10 @@ func (m *Model) openPermissionsMenu() bubbletea.Cmd {
 		m.showPermissionsMenu(false)
 		return nil
 	}
-	if !m.permissionProfilesExplicit && len(m.permissionProfiles) == 0 &&
-		!m.remoteNamedPermissionProfileActive() && m.permissionProfilesDiscovered {
-		m.showPermissionsMenu(false)
+	// Rust request_permission_profiles reuses the cached discovery and only
+	// fetches when the catalog is unknown.
+	if m.permissionProfilesDiscovered {
+		m.showPermissionsMenu(true)
 		return nil
 	}
 	m.showPermissionsLoadingView()
@@ -364,9 +366,16 @@ func (m *Model) showPermissionsMenu(explicit bool) {
 		ID:      "permissions",
 		Kind:    ModalKindPermissions,
 		Title:   view.Title,
-		Body:    strings.TrimSpace(view.FooterNote),
+		Body:    strings.TrimSpace(view.Subtitle),
 		Options: permissionModalOptions(view.Items),
+		// Rust builds this picker with SelectionViewParams::picker(), so the
+		// footer carries the compact picker hint and the rows follow the
+		// bottom-pane list layout.
+		FooterHint: chatwidget.PickerPopupHintLine,
 	})
+	if m.modal != nil {
+		m.modal.selectionView = true
+	}
 }
 
 // showPermissionsLoadingView shows Rust's discovery loading view.
@@ -429,7 +438,10 @@ func (m *Model) applyPermissionProfilesLoaded(msg permissionProfilesLoadedMsg) b
 	if m.modal == nil || m.modal.kind != ModalKindPermissions {
 		return nil
 	}
-	m.showPermissionsMenu(msg.explicitProfileMode)
+	// Rust on_permission_profiles_loaded always opens the profile picker, which
+	// offers the built-in ask/approve-for-me/full-access/read-only rows plus any
+	// named profiles the server returned.
+	m.showPermissionsMenu(true)
 	return nil
 }
 
@@ -472,13 +484,13 @@ func (m *Model) openPermissionDiscoveryRetryView(message string) {
 func permissionModalOptions(items []chatwidget.PermissionMenuItem) []ModalOption {
 	options := make([]ModalOption, 0, len(items))
 	for _, item := range items {
-		description := strings.TrimSpace(item.Description)
+		// Rust appends the marker to the row name (`name_with_marker`), not to
+		// the description column.
+		label := item.Name
 		if item.Current {
-			if description != "" {
-				description += " "
-			}
-			description += "(current)"
+			label += " (current)"
 		}
+		description := strings.TrimSpace(item.Description)
 		if strings.TrimSpace(item.DisabledReason) != "" {
 			if description != "" {
 				description += " "
@@ -487,7 +499,7 @@ func permissionModalOptions(items []chatwidget.PermissionMenuItem) []ModalOption
 		}
 		options = append(options, ModalOption{
 			ID:          item.ID,
-			Label:       item.Name,
+			Label:       label,
 			Description: description,
 			Disabled:    strings.TrimSpace(item.DisabledReason) != "",
 		})
@@ -537,12 +549,18 @@ func (m *Model) openFullAccessConfirmation() {
 		})
 	}
 	m.openModal(ModalRequestMsg{
-		ID:      "permissions-full-access",
-		Kind:    ModalKindPermissions,
-		Title:   "Enable full access?",
-		Body:    "When Codex runs with full access, it can edit any file on your computer and run commands with network, without your approval. Exercise caution when enabling full access. This significantly increases the risk of data loss, leaks, or unexpected behavior.",
-		Options: options,
+		ID: "permissions-full-access",
+		// Rust shows this through SelectionViewParams::confirmation(), a centered
+		// dialog over the retained composer with the compact picker hint.
+		Kind:       ModalKindPermissions,
+		Title:      "Enable full access?",
+		Body:       "When Codex runs with full access, it can edit any file on your computer and run commands with network, without your approval. Exercise caution when enabling full access. This significantly increases the risk of data loss, leaks, or unexpected behavior.",
+		Options:    options,
+		FooterHint: chatwidget.PickerPopupHintLine,
 	})
+	if m.modal != nil {
+		m.modal.confirmationView = true
+	}
 }
 
 func (m *Model) applyFullAccessConfirmation(optionID string) bubbletea.Cmd {

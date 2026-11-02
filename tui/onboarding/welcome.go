@@ -3,6 +3,8 @@ package onboarding
 const (
 	MinWelcomeAnimationHeight = 37
 	MinWelcomeAnimationWidth  = 60
+
+	welcomeHeaderLine = "  Welcome to Codex, OpenAI's command-line coding agent"
 )
 
 func WelcomeTitle() string {
@@ -22,7 +24,7 @@ func WelcomeLines(showAnimation bool, frame []string) []string {
 		lines = append(lines, frame...)
 		lines = append(lines, "")
 	}
-	lines = append(lines, "  Welcome to Codex, OpenAI's command-line coding agent")
+	lines = append(lines, welcomeHeaderLine)
 	return lines
 }
 

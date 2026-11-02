@@ -105,6 +105,11 @@ func TestManagedDaemonRestartConfirmationLikeRust(t *testing.T) {
 		t.Fatalf("restart confirmation missing reconnect copy:\n%s", view)
 	}
 	model.modal.selected = 1
+	// Rust marks "Restart" with require_explicit_confirmation, so the first
+	// enter only arms the option.
+	if _, cmd := model.Update(key(bubbletea.KeyEnter)); cmd != nil {
+		t.Fatal("restart confirmation exited before the explicit confirmation")
+	}
 	if _, cmd := model.Update(key(bubbletea.KeyEnter)); cmd == nil {
 		t.Fatal("restart confirmation did not exit")
 	}

@@ -405,3 +405,29 @@ func TestResolvePermissionProfileSelectionRejectsUndefinedAllowlistedProfileLike
 func stringPtrConfig(value string) *string {
 	return &value
 }
+
+// Rust parity (ConfigToml::derive_permission_profile): with no sandbox_mode and
+// no permission profile configured, a directory that carries a saved project
+// trust decision resolves to workspace-write instead of the read-only default.
+func TestResolveSandboxPermissionProfileDefaultsWorkspaceWriteForTrustedProject(t *testing.T) {
+	cwd := t.TempDir()
+	cfg := &Config{Values: map[string]any{
+		"projects": trustProjects(map[string]any{cwd: "trusted"}),
+	}}
+	resolution, err := cfg.ResolveSandboxPermissionProfile("", cwd)
+	if err != nil {
+		t.Fatalf("ResolveSandboxPermissionProfile() error = %v", err)
+	}
+	if resolution == nil || resolution.ID != string(sandbox.SandboxWorkspaceWrite) {
+		t.Fatalf("resolution = %+v, want workspace-write default", resolution)
+	}
+
+	plain := &Config{Values: map[string]any{}}
+	untrusted, err := plain.ResolveSandboxPermissionProfile("", cwd)
+	if err != nil {
+		t.Fatalf("ResolveSandboxPermissionProfile() error = %v", err)
+	}
+	if untrusted != nil {
+		t.Fatalf("resolution = %+v, want nil without a trust decision", untrusted)
+	}
+}

@@ -26,10 +26,11 @@ type slashCommandPopupItem struct {
 }
 
 type slashCommandPopup struct {
-	Active   bool
-	Query    string
-	Items    []slashCommandPopupItem
-	Selected int
+	Active    bool
+	Query     string
+	Items     []slashCommandPopupItem
+	Selected  int
+	ScrollTop int
 }
 
 func (m *Model) refreshSlashPopup() {
@@ -47,6 +48,10 @@ func (m *Model) refreshSlashPopup() {
 	}
 	previousQuery := m.slashPopup.Query
 	previous := m.selectedSlashPopupName()
+	scrollTop := 0
+	if previousQuery == query {
+		scrollTop = m.slashPopup.ScrollTop
+	}
 	items := filterSlashPopupItems(m.slashPopupCatalog(), query)
 	// Rust #50756: default to the first selectable (non-disabled) row.
 	selected := firstSelectableSlashPopupIndex(items)
@@ -59,10 +64,11 @@ func (m *Model) refreshSlashPopup() {
 		}
 	}
 	m.slashPopup = slashCommandPopup{
-		Active:   true,
-		Query:    query,
-		Items:    items,
-		Selected: selected,
+		Active:    true,
+		Query:     query,
+		Items:     items,
+		Selected:  selected,
+		ScrollTop: scrollTop,
 	}
 }
 
@@ -169,7 +175,8 @@ func (m *Model) slashPopupCatalog() []slashCommandPopupItem {
 		// restricted-token sandbox is active and elevation is available
 		// (chatwidget/slash_dispatch.rs builtin_command_flags).
 		AllowElevateSandbox: m.windowsSandboxSetup != nil &&
-			m.windowsSandboxLevel == chatwidget.WindowsSandboxLevelUnelevated,
+			m.windowsSandboxLevel == chatwidget.WindowsSandboxLevelUnelevated &&
+			chatwidget.WindowsSandboxModeAllowed(m.permissionRequirements, chatwidget.WindowsSandboxModeElevated),
 		// Rust #50756: build the unfiltered catalog so side-unavailable commands
 		// can be carried as disabled rows instead of being dropped, and mark
 		// them here.
@@ -271,6 +278,7 @@ func (m *Model) moveSlashPopupSelection(delta int) {
 		}
 		if !items[index].Unavailable {
 			m.slashPopup.Selected = index
+			m.slashPopup.ScrollTop = popupVisibleRange(len(items), index, m.slashPopup.ScrollTop, slashPopupMaxRows).start
 			return
 		}
 	}
@@ -349,8 +357,11 @@ func (m *Model) renderSlashPopup() string {
 	if len(m.slashPopup.Items) == 0 {
 		return lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("  no matches")
 	}
-	visible := slashPopupVisibleRange(len(m.slashPopup.Items), m.slashPopup.Selected, slashPopupMaxRows)
-	nameWidth := slashPopupNameWidth(m.slashPopup.Items[visible.start:visible.end])
+	visible := popupVisibleRange(len(m.slashPopup.Items), m.slashPopup.Selected, m.slashPopup.ScrollTop, slashPopupMaxRows)
+	// Rust renders the popup with ColumnWidthMode::AutoAllRows so scrolling does
+	// not shift the description column (bottom_pane/command_popup.rs:27-31 and
+	// selection_popup_common.rs:155-170).
+	nameWidth := slashPopupNameWidth(m.slashPopup.Items, width)
 
 	lines := []string{}
 	for idx := visible.start; idx < visible.end; idx++ {
@@ -367,38 +378,63 @@ type slashPopupRange struct {
 	end   int
 }
 
-func slashPopupVisibleRange(length int, selected int, maxRows int) slashPopupRange {
-	if length <= maxRows {
-		return slashPopupRange{start: 0, end: length}
+// popupVisibleRange mirrors Rust's ScrollState + render_rows window arithmetic
+// (bottom_pane/scroll_state.rs and selection_popup_common.rs:572-586): the
+// viewport keeps its scroll_top until the selection leaves the window, so
+// scrolling back from the end of a long list does not drag the window along.
+func popupVisibleRange(length int, selected int, scrollTop int, maxRows int) slashPopupRange {
+	if length == 0 || maxRows <= 0 {
+		return slashPopupRange{}
 	}
-	if selected < 0 {
-		selected = 0
+	visible := min(maxRows, length)
+	start := scrollTop
+	if limit := length - visible; start > limit {
+		start = limit
 	}
-	start := 0
-	if selected >= maxRows {
-		start = selected - maxRows + 1
+	if start < 0 {
+		start = 0
 	}
-	end := start + maxRows
-	if end > length {
-		end = length
-		start = end - maxRows
+	if selected >= 0 {
+		switch {
+		case selected < start:
+			start = selected
+		case selected > start+visible-1:
+			start = selected + 1 - visible
+		}
 	}
-	return slashPopupRange{start: start, end: end}
+	return slashPopupRange{start: start, end: start + visible}
 }
 
 // slashPopupDisabledReason is the row reason Rust #50756 shows for a side
 // conversation command that is known but cannot run here.
 const slashPopupDisabledReason = "not available in a side conversation"
 
-func slashPopupNameWidth(items []slashCommandPopupItem) int {
-	width := codextui.DisplayWidth("/experimental")
+// slashPopupNameWidth mirrors Rust's compute_desc_col with
+// ColumnWidthMode::AutoAllRows (selection_popup_common.rs:150-170): the column
+// is sized from every row of the filtered list, so scrolling never shifts it,
+// and the description column is clamped to min(content_width-1, 70% of
+// content_width).
+func slashPopupNameWidth(items []slashCommandPopupItem, contentWidth int) int {
+	width := 0
 	for _, item := range items {
 		if n := codextui.DisplayWidth(slashPopupDisplayName(item)); n > width {
 			width = n
 		}
 	}
-	if width > 28 {
-		return 28
+	if contentWidth <= 0 {
+		return width
+	}
+	maxDescCol := contentWidth - 1
+	if auto := contentWidth * 70 / 100; auto > 1 && auto < maxDescCol {
+		maxDescCol = auto
+	}
+	// The row prefix (2 columns) and the 2-column gap sit between the name and
+	// the description column.
+	if limit := maxDescCol - 4; width > limit {
+		width = limit
+	}
+	if width < 0 {
+		return 0
 	}
 	return width
 }

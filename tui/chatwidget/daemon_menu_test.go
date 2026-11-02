@@ -21,7 +21,10 @@ func TestDaemonMenuViewLikeRust(t *testing.T) {
 		t.Fatalf("view = %#v", view)
 	}
 	header := strings.Join(view.HeaderLines, "\n")
-	if !strings.Contains(header, "Daemon") || !strings.Contains(header, "Running daemon: 1.2.3") {
+	// Rust puts the bold "Daemon" title and the dim status into one header
+	// paragraph; the title lives in Title, so the extra header lines are the
+	// status and any guidance only.
+	if header != "Running daemon: 1.2.3" {
 		t.Fatalf("header = %q", header)
 	}
 	if len(view.Items) != 3 ||
@@ -50,7 +53,7 @@ func TestDaemonMenuViewLikeRust(t *testing.T) {
 
 	// Without a local daemon the status falls back to the disconnected text.
 	disconnected := DaemonMenuView(DaemonMenuConfig{CLIExecutable: "/usr/local/bin/codex"})
-	if got := disconnected.HeaderLines[1]; got != daemonMenuStatusDisconnected {
+	if got := disconnected.HeaderLines[0]; got != daemonMenuStatusDisconnected {
 		t.Fatalf("status = %q", got)
 	}
 

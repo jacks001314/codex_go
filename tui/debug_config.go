@@ -35,6 +35,9 @@ func DebugConfigSection(section string, lines []string) []DebugConfigLine {
 
 func NewDebugConfigOutput(read *config.ConfigReadResponse, requirements *config.ConfigRequirements, proxy *DebugConfigSessionNetworkProxy) []string {
 	lines := RenderDebugConfigLines(read, requirements, nil)
+	if read != nil {
+		lines = append(lines, RenderAgentsConfigLines(AgentsDebugConfigFromValues(read.Config))...)
+	}
 	if proxy != nil {
 		lines = append(lines,
 			"",

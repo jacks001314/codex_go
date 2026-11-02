@@ -28,12 +28,13 @@ type skillPopupItem struct {
 }
 
 type skillPopupState struct {
-	Active   bool
-	Query    string
-	Items    []skillPopupItem
-	Selected int
-	Loading  bool
-	Err      string
+	Active    bool
+	Query     string
+	Items     []skillPopupItem
+	Selected  int
+	ScrollTop int
+	Loading   bool
+	Err       string
 }
 
 func (m *Model) refreshSkillPopup() bubbletea.Cmd {
@@ -89,13 +90,24 @@ func (m *Model) refreshSkillPopup() bubbletea.Cmd {
 		}
 	}
 	m.skillPopup = skillPopupState{
-		Active:   true,
-		Query:    query,
-		Items:    items,
-		Selected: selected,
-		Err:      m.skillsInventoryErr,
+		Active:    true,
+		Query:     query,
+		Items:     items,
+		Selected:  selected,
+		ScrollTop: skillPopupScrollTop(m.skillPopup, query),
+		Err:       m.skillsInventoryErr,
 	}
 	return nil
+}
+
+// skillPopupScrollTop keeps the popup window in place while the list is
+// refreshed for the same query, mirroring Rust's persistent ScrollState. A new
+// filter starts from the top.
+func skillPopupScrollTop(previous skillPopupState, query string) int {
+	if !previous.Active || previous.Query != query {
+		return 0
+	}
+	return previous.ScrollTop
 }
 
 func (m *Model) refreshMentionPopup() bubbletea.Cmd {
@@ -495,6 +507,7 @@ func (m *Model) moveSkillPopupSelection(delta int) {
 		next = 0
 	}
 	m.skillPopup.Selected = next
+	m.skillPopup.ScrollTop = popupVisibleRange(len(m.skillPopup.Items), next, m.skillPopup.ScrollTop, skillPopupMaxRows).start
 }
 
 func (m *Model) insertSelectedSkillPopupItem() bool {
@@ -569,7 +582,19 @@ func (m *Model) skillPopupRows() int {
 	if len(m.skillPopup.Items) == 0 {
 		return 1
 	}
-	return min(len(m.skillPopup.Items), skillPopupMaxRows)
+	visible := popupVisibleRange(len(m.skillPopup.Items), m.skillPopup.Selected, m.skillPopup.ScrollTop, skillPopupMaxRows)
+	rows := visible.end - visible.start
+	// Rust draws the shared picker frame around the rows: an overflow indicator
+	// row at each side that is scrolled away from, plus the key hint below
+	// (bottom_pane/picker_rows.rs render_rows_single_line and
+	// bottom_pane/skill_popup.rs).
+	if visible.start > 0 {
+		rows++
+	}
+	if visible.end < len(m.skillPopup.Items) {
+		rows++
+	}
+	return rows + 1
 }
 
 func (m *Model) renderSkillPopup() string {
@@ -594,15 +619,33 @@ func (m *Model) renderSkillPopup() string {
 	if len(m.skillPopup.Items) == 0 {
 		return lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("  no matches")
 	}
-	visible := slashPopupVisibleRange(len(m.skillPopup.Items), m.skillPopup.Selected, skillPopupMaxRows)
-	nameWidth := skillPopupNameWidth(m.skillPopup.Items[visible.start:visible.end])
+	visible := popupVisibleRange(len(m.skillPopup.Items), m.skillPopup.Selected, m.skillPopup.ScrollTop, skillPopupMaxRows)
+	nameWidth := skillPopupNameWidth(m.skillPopup.Items, width)
 	lines := []string{}
+	if visible.start > 0 {
+		lines = append(lines, skillPopupOverflowHint("↑"))
+	}
 	for idx := visible.start; idx < visible.end; idx++ {
 		item := m.skillPopup.Items[idx]
 		selected := idx == m.skillPopup.Selected
 		lines = append(lines, skillPopupRenderLine(item, selected, nameWidth, width))
 	}
+	if visible.end < len(m.skillPopup.Items) {
+		lines = append(lines, skillPopupOverflowHint("↓"))
+	}
+	lines = append(lines, skillPopupHintLine(width))
 	return lipgloss.JoinVertical(lipgloss.Left, lines...)
+}
+
+func skillPopupOverflowHint(symbol string) string {
+	return lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Render(symbol)
+}
+
+// skillPopupHintLine mirrors Rust's skill_popup_hint_line: the shared footer is
+// inset by two columns and reads "enter insert · esc close".
+func skillPopupHintLine(width int) string {
+	hint := "  enter insert · esc close"
+	return lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(codextui.TruncateWithEllipsis(hint, width))
 }
 
 func skillPopupQuery(text string) (string, bool) {
@@ -752,60 +795,96 @@ func sortSkillPopupItems(items []skillPopupItem, query string, frequencies map[s
 	})
 }
 
-func skillPopupNameWidth(items []skillPopupItem) int {
+// skillPopupNameWidth mirrors Rust's picker row columns
+// (bottom_pane/picker_rows.rs COLUMNS): the column is sized from every row of
+// the filtered list so scrolling never shifts it, and the description column is
+// clamped to min(content_width-1, 70% of content_width).
+func skillPopupNameWidth(items []skillPopupItem, contentWidth int) int {
 	width := 0
 	for _, item := range items {
 		if n := codextui.DisplayWidth(item.DisplayName); n > width {
 			width = n
 		}
 	}
-	switch {
-	case width > 28:
-		return 28
-	case width < 10:
-		return 10
-	default:
+	if contentWidth <= 0 {
 		return width
 	}
+	maxDescCol := contentWidth - 1
+	if auto := contentWidth * 70 / 100; auto > 1 && auto < maxDescCol {
+		maxDescCol = auto
+	}
+	if limit := maxDescCol - 4; width > limit {
+		width = limit
+	}
+	if width < 0 {
+		return 0
+	}
+	return width
 }
 
 func skillPopupRenderLine(item skillPopupItem, selected bool, nameWidth int, width int) string {
 	prefix := codextui.SelectionPrefix(selected)
-	name := codextui.TruncateWithEllipsis(item.DisplayName, nameWidth)
-	rawName := padRightDisplay(name, nameWidth)
+	prefixWidth := codextui.DisplayWidth(prefix)
 	tag := strings.TrimSpace(item.CategoryTag)
 	tagWidth := codextui.DisplayWidth(tag)
-	descriptionWidth := width - codextui.DisplayWidth(prefix) - nameWidth - 2
-	if tagWidth > 0 {
-		descriptionWidth -= tagWidth + 1
+	// Rust selection_row_layout.rs puts the category tag in the description
+	// column (max name width + 2, capped at 70% of the popup) and keeps the
+	// description to its right; it never right-aligns the tag.
+	descCol := prefixWidth + nameWidth + 2
+	if limit := width * 70 / 100; descCol > limit {
+		descCol = limit
 	}
+	if descCol > width-1 {
+		descCol = width - 1
+	}
+	if tagWidth > 0 && descCol > width-tagWidth {
+		descCol = width - tagWidth
+	}
+	if descCol < prefixWidth {
+		descCol = prefixWidth
+	}
+	nameLimit := descCol - 2 - prefixWidth
+	if nameLimit < 1 {
+		nameLimit = 1
+	}
+	name := codextui.TruncateWithEllipsis(item.DisplayName, nameLimit)
+	rawName := padRightDisplay(name, nameLimit)
+	descriptionStart := descCol
+	if tagWidth > 0 {
+		descriptionStart += tagWidth + 1
+	}
+	descriptionWidth := width - descriptionStart
 	description := ""
 	if descriptionWidth >= 24 {
 		description = codextui.TruncateWithEllipsis(strings.TrimSpace(item.Description), descriptionWidth)
 	}
 	plain := prefix + rawName
-	if description != "" {
-		plain += " " + description
+	if pad := descCol - codextui.DisplayWidth(plain); pad > 0 {
+		plain += strings.Repeat(" ", pad)
 	}
-	tagPadding := 0
 	if tag != "" {
-		tagPadding = max(width-tagWidth-codextui.DisplayWidth(plain), 0)
-		plain += strings.Repeat(" ", tagPadding)
 		plain += tag
+		if description != "" {
+			plain += " "
+		}
 	}
+	plain += description
 	if selected {
 		return codextui.RenderSelectedRowFilled(plain, width)
 	}
 	nameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("15"))
 	descriptionStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	line := prefix + nameStyle.Render(rawName)
-	if description != "" {
-		line += " " + descriptionStyle.Render(description)
+	if pad := descCol - codextui.DisplayWidth(prefix+rawName); pad > 0 {
+		line += strings.Repeat(" ", pad)
 	}
 	if tag != "" {
-		line += strings.Repeat(" ", tagPadding)
 		line += descriptionStyle.Render(tag)
+		if description != "" {
+			line += " "
+		}
 	}
+	line += descriptionStyle.Render(description)
 	return line
 }
 

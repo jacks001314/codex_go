@@ -27,13 +27,38 @@ func TestAuthFlowRendersRustLoginChoices(t *testing.T) {
 		"Usage included with Plus, Pro, Business, and Enterprise plans",
 		"2. Sign in with Device Code",
 		"Sign in from another device with a one-time code",
-		"3. Provide your own API key",
+		"3. Use an OpenAI API key",
 		"Pay for what you use",
 		"Press enter to continue",
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("auth view missing %q:\n%s", want, view)
 		}
+	}
+}
+
+func TestAuthFlowProviderSetupUsesNeutralHeader(t *testing.T) {
+	t.Setenv(auth.OpenAIAPIKeyEnv, "")
+	model := newAuthFlowModel(context.Background(), AuthFlowOptions{
+		CodexHome:      t.TempDir(),
+		ChatGPTAllowed: true,
+		APIKeyAllowed:  true,
+		BedrockAllowed: true,
+	})
+	view := model.View()
+	for _, want := range []string{
+		"Welcome to Codex, OpenAI's command-line coding agent",
+		"Choose how you want to use Codex.",
+		"3. Use an OpenAI API key",
+		"4. Use Amazon Bedrock",
+		"Connect using your AWS credentials",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("auth view missing %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "or connect an API key for usage-based billing") {
+		t.Fatalf("provider setup picker kept the paid-plan header:\n%s", view)
 	}
 }
 

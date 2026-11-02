@@ -369,7 +369,16 @@ type CommandResolutionOptions struct {
 
 func NewDefaultShell() *Shell {
 	if runtime.GOOS == "windows" {
-		return &Shell{Type: ShellPowerShell, Path: "powershell"}
+		// Rust default_user_shell: the Windows default is the discovered
+		// PowerShell (pwsh preferred over legacy powershell.exe, with the
+		// installer fallback paths), and only a machine without any PowerShell
+		// falls back to cmd.exe. Launching the bare `powershell` name picked
+		// Windows PowerShell 5.1, which cannot initialize inside the restricted
+		// sandbox token (STATUS_DLL_INIT_FAILED) where pwsh works.
+		if detected := shellutil.GetShell(shellutil.ShellPowerShell); detected != nil {
+			return &Shell{Type: ShellPowerShell, Path: detected.ShellPath}
+		}
+		return &Shell{Type: ShellCmd, Path: "cmd.exe"}
 	}
 	if shell := strings.TrimSpace(os.Getenv("SHELL")); shell != "" {
 		return &Shell{Type: DetectShellType(shell), Path: shell}

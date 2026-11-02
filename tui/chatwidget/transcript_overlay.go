@@ -58,6 +58,10 @@ type TranscriptOverlay struct {
 	mouseScroll codextui.MouseScrollAccumulator
 	// find is the Ctrl+T pager's find bar (Rust transcript_view::search).
 	find transcriptFind
+	// staticPager marks Rust's StaticOverlay (Overlay::new_static_with_lines):
+	// the /diff-style pager with a "/ TITLE" header, "~" filler, a rule that
+	// carries the percentage and a two-row hint block, anchored at the top.
+	staticPager bool
 	// plainLines caches the ANSI-stripped content rows used by keyboard and
 	// mouse selection (#57221-#57224).
 	plainLines []string
@@ -94,6 +98,23 @@ func NewTranscriptOverlayWithTitle(width int, height int, content string, title 
 	return overlay
 }
 
+// NewStaticPagerOverlay builds Rust's StaticOverlay for `/diff` and the other
+// full-screen static pagers: the content starts at the top and the hint block
+// only advertises the close key.
+func NewStaticPagerOverlay(width int, height int, content string, title string) *TranscriptOverlay {
+	overlay := &TranscriptOverlay{
+		title:          strings.TrimSpace(title),
+		navigationHint: "↑/↓ to scroll · pgup/pgdn to page · home/end to jump",
+		actionsHint:    "q close",
+		staticPager:    true,
+		mouseScroll:    codextui.NewMouseScrollAccumulator(nil),
+	}
+	overlay.Resize(width, height)
+	overlay.SetContent(content)
+	overlay.viewport.SetYOffset(0)
+	return overlay
+}
+
 func (o *TranscriptOverlay) Resize(width int, height int) {
 	if o == nil {
 		return
@@ -107,6 +128,10 @@ func (o *TranscriptOverlay) Resize(width int, height int) {
 		return
 	}
 	bodyHeight := height - 3
+	if o.staticPager {
+		// header + separator + two hint rows + one blank row.
+		bodyHeight = height - 5
+	}
 	if bodyHeight < minOverlayBodyHeight {
 		bodyHeight = minOverlayBodyHeight
 	}
@@ -147,7 +172,7 @@ func (o *TranscriptOverlay) SetContent(content string) {
 		return
 	}
 	content = strings.TrimRight(content, "\r\n")
-	if strings.TrimSpace(content) == "" {
+	if strings.TrimSpace(content) == "" && !o.staticPager {
 		content = "No messages yet."
 	}
 	follow := o.content == "" || o.viewport.AtBottom()
@@ -155,6 +180,10 @@ func (o *TranscriptOverlay) SetContent(content string) {
 	o.content = content
 	o.refreshPlainLines()
 	o.viewport.SetContent(o.viewContent())
+	if o.staticPager {
+		o.viewport.SetYOffset(offset)
+		return
+	}
 	if follow {
 		o.viewport.GotoBottom()
 		if o.find.active() {
@@ -622,6 +651,9 @@ func (o *TranscriptOverlay) View() string {
 		return ""
 	}
 	width := firstPositive(o.width, defaultOverlayWidth)
+	if o.staticPager {
+		return o.staticPagerView(width)
+	}
 	header := overlayHeader(width, o.scrollPercent(), o.title)
 	help := fitLine(o.navigationHint, width)
 	actions := fitLine(o.actionsHint, width)
@@ -629,6 +661,21 @@ func (o *TranscriptOverlay) View() string {
 		actions = fitLine(o.FindBarLine(), width)
 	}
 	return strings.Join([]string{header, o.viewport.View(), help, actions}, "\n")
+}
+
+// staticPagerView renders Rust PagerView's chrome: header, scrolled content
+// with "~" filler, the percentage rule, then the navigation and close hints and
+// one blank row (StaticOverlay::HINTS_HEIGHT).
+func (o *TranscriptOverlay) staticPagerView(width int) string {
+	height := firstPositive(o.height, defaultOverlayHeight)
+	bodyHeight := max(1, height-5)
+	rows := make([]string, 0, height)
+	rows = append(rows, staticPagerHeader(width, o.title))
+	rows = append(rows, o.staticPagerBody(width, bodyHeight)...)
+	rows = append(rows, staticPagerSeparator(width, o.scrollPercent()))
+	rows = append(rows, fitLine(o.navigationHint, width), fitLine(o.actionsHint, width))
+	rows = append(rows, "")
+	return strings.Join(rows, "\n")
 }
 
 func (o *TranscriptOverlay) scrollPercent() int {

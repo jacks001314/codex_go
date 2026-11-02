@@ -167,7 +167,7 @@ trust_level = "trusted"
 		t.Fatalf("open config panel: %v output=%q", err, utils.StripANSI(stop()))
 	}
 	wait("Configuration")
-	wait("type to search · ←/→ tabs · enter open · esc close")
+	wait("left/right group · / search · enter open · esc clear search/close")
 	if _, err := terminal.Write([]byte("\x1b")); err != nil {
 		t.Fatalf("close config panel: %v", err)
 	}

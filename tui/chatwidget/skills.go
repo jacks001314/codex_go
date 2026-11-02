@@ -116,15 +116,13 @@ type ToolMentions struct {
 	LinkedPaths map[string]string
 }
 
-func OpenSkillsListInsert(mentionsV2 bool) string {
-	if mentionsV2 {
-		return "@"
-	}
+// OpenSkillsListInsert mirrors Rust's ChatWidget::open_skills_list, which always
+// inserts the `$` skill sigil regardless of the mentions feature flag.
+func OpenSkillsListInsert() string {
 	return "$"
 }
 
-func NewSkillsMenuView(mentionsV2 bool) SelectionView {
-	listShortcut := OpenSkillsListInsert(mentionsV2)
+func NewSkillsMenuView() SelectionView {
 	return SelectionView{
 		ViewID:      SkillsMenuViewID,
 		Title:       "Skills",
@@ -134,13 +132,13 @@ func NewSkillsMenuView(mentionsV2 bool) SelectionView {
 		Items: []SelectionItem{
 			{
 				Name:            "List skills",
-				Description:     "Tip: press " + listShortcut + " to open this list directly.",
+				Description:     "Tip: press $ to open this list directly",
 				Action:          SkillsMenuActionList,
 				DismissOnSelect: true,
 			},
 			{
 				Name:            "Enable/Disable Skills",
-				Description:     "Enable or disable skills.",
+				Description:     "Enable or disable skills",
 				Action:          SkillsMenuActionManage,
 				DismissOnSelect: true,
 			},

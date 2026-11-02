@@ -641,6 +641,20 @@ func (m *authFlowModel) displayedOptions() []AuthOption {
 	return AuthOptionsForPolicyWithProviders(m.options.ChatGPTAllowed, m.options.APIKeyAllowed, m.options.BedrockAllowed, m.options.GcpAllowed)
 }
 
+// authOptionsOfferProviderSetup reports whether the picker exposes the Bedrock
+// or Vertex AI setup wizards. Rust swaps the paid-plan call to action for the
+// neutral "Choose how you want to use Codex." header in that case
+// (onboarding/auth.rs render_pick_mode).
+func authOptionsOfferProviderSetup(options []AuthOption) bool {
+	for _, option := range options {
+		switch option.Choice {
+		case AuthChoiceBedrock, AuthChoiceGCP:
+			return true
+		}
+	}
+	return false
+}
+
 func (m *authFlowModel) selectableChoices() []AuthChoice {
 	options := m.displayedOptions()
 	choices := make([]AuthChoice, 0, len(options))
@@ -680,12 +694,17 @@ func (m *authFlowModel) moveHighlight(delta int) {
 }
 
 func (m *authFlowModel) renderPickMode() string {
+	options := m.displayedOptions()
 	lines := []string{
+		welcomeHeaderLine,
 		"  Sign in with ChatGPT to use Codex as part of your paid plan",
 		"  or connect an API key for usage-based billing",
 		"",
 	}
-	for index, option := range m.displayedOptions() {
+	if authOptionsOfferProviderSetup(options) {
+		lines = []string{welcomeHeaderLine, "  Choose how you want to use Codex.", ""}
+	}
+	for index, option := range options {
 		selected := option.Choice == m.highlighted && !option.Disabled
 		prefix := "  "
 		if selected {

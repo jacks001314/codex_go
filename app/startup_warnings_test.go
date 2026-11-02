@@ -56,8 +56,9 @@ func TestInteractiveStartupConfigWarningsLikeRust(t *testing.T) {
 		ShowSessionHeader:     true,
 		StartupConfigWarnings: warnings,
 	})
-	if view := utils.StripANSI(model.View()); !strings.Contains(view, "\u26a0 3 startup issues") {
-		t.Fatalf("startup warnings not rendered:\n%s", view)
+	// Rust #46751 keeps the diagnostics out of the live transcript.
+	if view := utils.StripANSI(model.View()); strings.Contains(view, "startup issue") {
+		t.Fatalf("startup warnings rendered inline:\n%s", view)
 	}
 }
 
@@ -104,7 +105,7 @@ func TestRemoteConfigWarningFeedsStartupWarningsLikeRust(t *testing.T) {
 	}
 	model := codextea.NewModel(state, codextea.Options{Width: 100, Height: 24, ShowSessionHeader: true})
 	model.Update(message)
-	if view := utils.StripANSI(model.View()); !strings.Contains(view, "\u26a0 1 startup issue") {
-		t.Fatalf("config warning not rendered in the startup entry:\n%s", view)
+	if view := utils.StripANSI(model.View()); strings.Contains(view, "startup issue") {
+		t.Fatalf("config warning rendered inline:\n%s", view)
 	}
 }

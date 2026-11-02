@@ -4,7 +4,10 @@ import (
 	"strings"
 	"testing"
 
+	bubbletea "github.com/charmbracelet/bubbletea"
+
 	codextui "codex_go/tui"
+	"codex_go/utils"
 )
 
 func resumeCWDFixture(t *testing.T, mode string) *Model {
@@ -154,7 +157,7 @@ func TestResumeCWDCurrentUnavailableForRemoteLikeRust(t *testing.T) {
 	}
 }
 
-func TestConfigPanelResumeDirectoryCyclesLikeRust(t *testing.T) {
+func TestConfigPanelResumeDirectoryPickerLikeRust(t *testing.T) {
 	var edits []SettingsEdit
 	model := NewModel(codextui.NewState(nil), Options{
 		Width:  100,
@@ -176,12 +179,71 @@ func TestConfigPanelResumeDirectoryCyclesLikeRust(t *testing.T) {
 	if resumeRow.action != configActionResumeCWD {
 		t.Fatalf("resume row = %#v", resumeRow)
 	}
-	runTeaCmd(t, model, model.activateConfigRow(resumeRow))
+	// Rust pushes a child picker (config_panel/render.rs::resume_directory)
+	// instead of cycling the value in place.
+	model.activateConfigRow(resumeRow)
+	choice := model.modal.configPanel.choice
+	if choice == nil || choice.title != "Resume directory" || len(choice.items) != 3 {
+		t.Fatalf("resume choice = %#v", choice)
+	}
+	if choice.selected != 0 || !choice.items[0].current || choice.items[0].label != "Ask" ||
+		choice.items[1].label != "Current directory" || choice.items[2].label != "Session directory" {
+		t.Fatalf("resume choice rows = %#v selected=%d", choice.items, choice.selected)
+	}
+	if len(edits) != 0 {
+		t.Fatalf("opening the picker saved %#v", edits)
+	}
+	model.jumpConfigPanelChoice(2)
+	runTeaCmd(t, model, model.updateConfigPanelChoiceKey(key(bubbletea.KeyEnter)))
+	if model.modal.configPanel.choice != nil {
+		t.Fatal("selecting a resume option kept the child picker open")
+	}
 	if len(edits) != 1 || edits[0].KeyPath != "tui.resume_cwd" || edits[0].Value != "current" {
 		t.Fatalf("resume write = %#v", edits)
 	}
-	if !strings.Contains(model.configPanelValue(resumeRow), "Current") {
-		t.Fatalf("resume value = %q", model.configPanelValue(resumeRow))
+	if value := model.configPanelValue(resumeRow); !strings.Contains(value, "Current") {
+		t.Fatalf("resume value = %q", value)
+	}
+}
+
+// TestConfigPanelResumeDirectoryRemoteRenderLikeRust locks Rust's
+// config_resume_directory_remote snapshot: the disabled Current directory row
+// keeps an empty number gutter and carries the --cd reason in its description
+// column.
+func TestConfigPanelResumeDirectoryRemoteRenderLikeRust(t *testing.T) {
+	model := NewModel(codextui.NewState(nil), Options{
+		Width:           100,
+		Height:          30,
+		ResumeCWD:       "ask",
+		RemoteAppServer: true,
+	})
+	model.openConfigPanel()
+	model.modal.configPanel.section = configSectionSessions
+	var resumeRow configPanelRow
+	for _, row := range model.configPanelFilteredRows() {
+		if row.action == configActionResumeCWD {
+			resumeRow = row
+		}
+	}
+	model.activateConfigRow(resumeRow)
+	rendered := model.renderConfigPanelChoice(model.modal.configPanel.choice, 100)
+	want := []string{
+		"  Resume directory",
+		"  Choose the working directory when resuming, with --cd taking precedence for this session",
+		"",
+		"",
+		"\u203a 1. Ask (current)",
+		"     Current directory (disabled)  Requires --cd for remote sessions",
+		"  2. Session directory",
+		"",
+		"  enter select \u00b7 esc back",
+	}
+	var got []string
+	for _, line := range strings.Split(rendered, "\n") {
+		got = append(got, strings.TrimRight(utils.StripANSI(line), " "))
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("resume render =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }
 
@@ -201,17 +263,46 @@ func TestConfigPanelResumeDirectoryRemoteAvailabilityLikeRust(t *testing.T) {
 		}
 	}
 	model.activateConfigRow(resumeRow)
-	if model.resumeCWD != "session" {
-		t.Fatalf("remote Ask cycle chose %q, want Session", model.resumeCWD)
+	choice := model.modal.configPanel.choice
+	if choice == nil || len(choice.items) != 3 {
+		t.Fatalf("remote resume choice = %#v", choice)
 	}
+	wantDisabled := "Requires --cd for remote sessions"
+	if choice.items[1].label != "Current directory" || choice.items[1].disabledReason != wantDisabled {
+		t.Fatalf("remote current row = %#v", choice.items[1])
+	}
+	// Rust's picker never starts on a disabled row, so Ask stays selected.
+	if choice.selected != 0 {
+		t.Fatalf("remote picker selected %d, want Ask", choice.selected)
+	}
+	// Numeric shortcuts count enabled rows only, so "2" lands on Session
+	// directory while Current directory stays disabled.
+	model.jumpConfigPanelChoice(2)
+	if choice.selected != 2 {
+		t.Fatalf("remote jump(2) selected %d, want 2", choice.selected)
+	}
+	model.updateConfigPanelChoiceKey(key(bubbletea.KeyEnter))
+	if model.resumeCWD != "session" {
+		t.Fatalf("remote pick chose %q, want session", model.resumeCWD)
+	}
+
 	model.resumeCWD = "current"
-	if value := model.configPanelValue(resumeRow); !strings.Contains(value, "Requires --cd for remote sessions") {
+	// Rust keeps the parent row label plain; the --cd constraint is only
+	// surfaced inside the Resume directory picker.
+	if value := model.configPanelValue(resumeRow); value != "Current directory \u203a" {
 		t.Fatalf("remote Current value = %q", value)
 	}
+
 	model.remoteCWDOverride = "/remote/worktree"
 	model.resumeCWD = "ask"
 	model.activateConfigRow(resumeRow)
+	choice = model.modal.configPanel.choice
+	if choice == nil || choice.items[1].disabledReason != "" {
+		t.Fatalf("remote picker with --cd = %#v", choice)
+	}
+	model.jumpConfigPanelChoice(2)
+	model.updateConfigPanelChoiceKey(key(bubbletea.KeyEnter))
 	if model.resumeCWD != "current" {
-		t.Fatalf("remote Ask with --cd chose %q, want Current", model.resumeCWD)
+		t.Fatalf("remote pick with --cd chose %q, want current", model.resumeCWD)
 	}
 }

@@ -224,7 +224,7 @@ func EmptyMCPOutput() PlainHistoryCell {
 		"\U0001f50c  MCP Tools",
 		"",
 		"  \u2022 No MCP servers configured.",
-		"    See the MCP docs to configure them: https://developers.openai.com/codex/mcp",
+		"    See the " + tui.OSC8Hyperlink("https://developers.openai.com/codex/mcp", "MCP docs") + " to configure them.",
 	})
 }
 

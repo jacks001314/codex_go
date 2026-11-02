@@ -7,8 +7,10 @@ import (
 )
 
 // Mirrors Rust's startup_warnings_wait_for_splash_and_coalesce_with_full_details
-// and mcp_startup_summary_counts_servers_and_sign_in_subset.
-func TestStartupWarningsSummaryLikeRust(t *testing.T) {
+// and mcp_startup_summary_counts_servers_and_sign_in_subset after #46751: the
+// retained diagnostics render no live rows, the footer and the f2 viewer own the
+// count, and the transcript keeps every diagnostic.
+func TestStartupWarningsRetainedWithoutLiveRowsLikeRust(t *testing.T) {
 	// A pending header renders nothing, exactly like Rust before the splash.
 	pending := NewStartupWarnings([]string{"Skill manifest is invalid."})
 	pending.PendingHeader = true
@@ -24,26 +26,25 @@ func TestStartupWarningsSummaryLikeRust(t *testing.T) {
 		),
 	)
 	mixed = mixed.Merge(NewMCPStartupWarnings(nil, []string{"alpha", "beta"}, MCPStartupFailureReauthenticationRequired))
-	mixed.TranscriptHint = "ctrl+t"
-	display := mixed.DisplayLines(100)
-	if len(display) != 1 || display[0] != "\u26a0 4 startup issues (3 MCP; 2 need sign-in) \u00b7 ctrl+t for details" {
-		t.Fatalf("DisplayLines() = %#v", display)
+	if display := mixed.DisplayLines(100); len(display) != 0 {
+		t.Fatalf("DisplayLines() = %#v, want none", display)
 	}
 
-	// A single warning uses the singular wording.
+	// A single warning stays out of the live transcript too.
 	single := NewStartupWarnings([]string{"One"})
-	if got := single.DisplayLines(100); len(got) != 1 || got[0] != "\u26a0 1 startup issue" {
-		t.Fatalf("DisplayLines() = %#v", got)
+	if got := single.DisplayLines(100); len(got) != 0 {
+		t.Fatalf("DisplayLines() = %#v, want none", got)
 	}
-	// Both with two sources (one MCP, one other) keeps the breakdown.
+	// Both with two sources (one MCP, one other) keeps both identities for the
+	// warnings viewer.
 	two := NewStartupWarnings([]string{"other"}).Merge(NewMCPStartupWarnings([]string{"mcp"}, []string{"alpha"}, ""))
-	if got := two.DisplayLines(100); len(got) != 1 || got[0] != "\u26a0 2 startup issues (1 MCP)" {
-		t.Fatalf("DisplayLines() = %#v", got)
+	if got := len(two.WarningKeys()); got != 2 {
+		t.Fatalf("WarningKeys() = %d, want 2", got)
 	}
-	// All-MCP sources take the MCP prefix.
+	// All-MCP sources keep one identity per failed server.
 	mcpOnly := NewMCPStartupWarnings([]string{"mcp"}, []string{"alpha", "beta"}, "")
-	if got := mcpOnly.DisplayLines(100); len(got) != 1 || got[0] != "\u26a0 2 MCP startup issues" {
-		t.Fatalf("DisplayLines() = %#v", got)
+	if got := len(mcpOnly.WarningKeys()); got != 2 {
+		t.Fatalf("WarningKeys() = %d, want 2", got)
 	}
 	// The transcript keeps the individual diagnostics with their prefix.
 	transcript := strings.Join(mixed.TranscriptLines(80), "\n")
@@ -69,7 +70,7 @@ func TestStartupWarningsMergeDeduplicatesLikeRust(t *testing.T) {
 	if len(cell.OtherSources) != 2 {
 		t.Fatalf("OtherSources = %#v", cell.OtherSources)
 	}
-	if got := cell.DisplayLines(100); len(got) != 1 || got[0] != "\u26a0 2 startup issues" {
-		t.Fatalf("DisplayLines() = %#v", got)
+	if got := cell.DisplayLines(100); len(got) != 0 {
+		t.Fatalf("DisplayLines() = %#v, want none", got)
 	}
 }

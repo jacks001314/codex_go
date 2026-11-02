@@ -474,7 +474,7 @@ var rustSlashCommandDescriptions = map[string]string{
 	"diff":                  "show git diff (including untracked files)",
 	"mention":               "mention a file",
 	"status":                "show current session configuration and token usage",
-	"config":                "open the settings panel",
+	"config":                "configure Codex preferences",
 	"warnings":              "view retained warnings and diagnostic details",
 	"usage":                 "view account usage or use a usage limit reset",
 	"debug-config":          "show config layers and requirement sources for debugging",

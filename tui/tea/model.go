@@ -786,6 +786,15 @@ type ThreadScopedEventMsg struct {
 	Event    protocol.ThreadEvent
 }
 
+// WarningEventMsg carries one runtime warning to the warning display state so
+// the footer badge and the warnings viewer count it, mirroring Rust's
+// EventMsg::Warning handling. The embedded TUI receives warnings from the exec
+// stream as `warning-*` error items; ThreadID scopes a side-thread warning.
+type WarningEventMsg struct {
+	ThreadID string
+	Message  string
+}
+
 // TerminalInteractionMsg carries one unified-exec terminal interaction from the
 // app server (Rust #43921): an empty Stdin polls a background terminal and owns
 // the status row until the streak is flushed.
@@ -1535,6 +1544,10 @@ type Options struct {
 	OnReadIDEContext           IDEContextReaderFunc
 	OnApproveAutoReviewDenial  AutoReviewDenialApproveFunc
 	OnStartWindowsSandboxSetup WindowsSandboxSetupFunc
+	// WindowsSandboxLevel is the startup sandbox level resolved from the
+	// effective config, so the slash popup can advertise
+	// /setup-default-sandbox before the first app-server state refresh.
+	WindowsSandboxLevel chatwidget.WindowsSandboxLevel
 	// OnReadWindowsSandboxState refreshes the app-server-owned Windows sandbox
 	// level and requirements for a working directory (Rust #45821).
 	OnReadWindowsSandboxState   WindowsSandboxStateReaderFunc
@@ -1790,6 +1803,9 @@ type Model struct {
 	sparkleObservedModel string
 	// welcomeBlossom is the settled fullscreen welcome animation (Rust #48513).
 	welcomeBlossom welcomeBlossomState
+	// suppressWelcomeBlossom hides the empty-state animation while a centered
+	// dialog renders its retained backdrop.
+	suppressWelcomeBlossom bool
 	// renderedSelection owns mouse selection over painted status/footer rows
 	// (Rust #52270); transcript selection stays terminal-owned.
 	renderedSelection renderedSelectionState
@@ -3168,6 +3184,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		generateMemories:                 boolPtrValueTeaDefault(options.GenerateMemories, true),
 		feedbackEnabled:                  boolPtrValueTeaDefault(options.FeedbackEnabled, true),
 		windowsSandboxSetup:              options.OnStartWindowsSandboxSetup,
+		windowsSandboxLevel:              options.WindowsSandboxLevel,
 		onReadWindowsSandboxState:        options.OnReadWindowsSandboxState,
 		onOpenDesktopThread:              options.OnOpenDesktopThread,
 		onDetectExternalAgent:            options.OnDetectExternalAgent,
@@ -3808,6 +3825,22 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 			cmd = bubbletea.Batch(cmd, m.refreshAgentsOverviewCmd())
 		}
 		return m, bubbletea.Batch(cmd, m.refreshStatusControlsCmd())
+	case WarningEventMsg:
+		if threadID := strings.TrimSpace(msg.ThreadID); threadID != "" && (m.State == nil || threadID != strings.TrimSpace(m.State.ThreadID)) {
+			return m, nil
+		}
+		// Rust's ServerNotification::Warning arm coalesces initialization
+		// diagnostics: before the startup window closes an ordinary warning joins
+		// the retained StartupWarningsCell (source "Startup"); only later warnings
+		// become their own "Warning" history cell.
+		if message := strings.TrimSpace(msg.Message); !m.startupWarningsComplete {
+			if message != "" && m.warningDisplay.ShouldDisplay(message) {
+				m.mergeStartupWarnings(historycell.NewStartupWarnings([]string{message}))
+			}
+			return m, m.refreshStatusControlsCmd()
+		}
+		m.applyWarningMessage(msg.Message)
+		return m, m.refreshStatusControlsCmd()
 	case TerminalInteractionMsg:
 		return m, m.applyTerminalInteraction(msg)
 	case ThreadScopedSettingsUpdatedMsg:
@@ -4941,7 +4974,11 @@ func (m *Model) footerHelpLine() (string, bool) {
 			// warning count (with its open-warnings shortcut) when it fits.
 			m.warningDisplay.SyncWarnings(m.retainedWarningCells())
 			if m.passiveWarningNoticeApplies() {
-				footerLine = bottompane.WarningNoticeLine(m.width, footerLine, m.warningDisplay.WarningCount(), m.warningsShortcutLabel())
+				// The footer row is drawn after a two-column indent
+				// (renderFooterHelpSection) and keeps one clear cell at the
+				// terminal's right edge (Rust warning_notice_layout), so the
+				// notice budget excludes both.
+				footerLine = bottompane.WarningNoticeLine(max(m.width-3, 1), footerLine, m.warningDisplay.WarningCount(), m.warningsShortcutLabel())
 			}
 		}
 	}
@@ -6035,23 +6072,22 @@ func (m *Model) submitRequest(request SubmitRequest, parseCommand bool) bubblete
 }
 
 func slashInvocationDispatchable(invocation *codextui.CommandInvocation) bool {
-	if invocation == nil || strings.TrimSpace(invocation.Args) == "" {
-		return invocation != nil
-	}
-	if chatwidget.CommandSupportsInlineArgs(invocation.Command) {
-		return true
-	}
-	// Go-only compatibility commands keep their established direct-argument form.
-	switch invocation.Command {
-	case codextui.CommandApproval,
-		codextui.CommandSandbox,
-		codextui.CommandAttach,
-		codextui.CommandImage,
-		codextui.CommandURLImage:
-		return true
-	default:
+	if invocation == nil {
 		return false
 	}
+	// Rust answers an unknown slash name with an info line even when it carries
+	// arguments (chatwidget/slash_dispatch.rs: find_slash_command fails before
+	// the inline-argument check). Names that are empty or contain '/' are not
+	// slash names at all (bottom_pane/prompt_args.rs parse_slash_name) and are
+	// submitted as ordinary prompts instead.
+	if invocation.Command == codextui.CommandUnknown {
+		name := strings.TrimPrefix(strings.TrimSpace(invocation.Name), "/")
+		return name != "" && !strings.Contains(name, "/")
+	}
+	if strings.TrimSpace(invocation.Args) == "" {
+		return true
+	}
+	return chatwidget.CommandSupportsInlineArgs(invocation.Command)
 }
 
 func (m *Model) queueComposer(parseCommand bool) bubbletea.Cmd {
@@ -6506,9 +6542,6 @@ func (m *Model) applyStartupConfigWarning(message string) {
 		return
 	}
 	m.warningDisplay.MarkStartupConfigWarning(message)
-	if m.daemonManaged && m.localDaemonSession && m.startupWarnings.RestartHint == "" {
-		m.startupWarnings.RestartHint = "restart with /daemon"
-	}
 	m.mergeStartupWarnings(historycell.NewStartupWarnings([]string{message}))
 }
 
@@ -6861,6 +6894,7 @@ func (m *Model) addErrorHistoryMessage(message string) {
 	if m == nil || m.State == nil {
 		return
 	}
+	m.dismissWelcomeBlossom()
 	m.Transcript.addErrorHistoryMessage(m.State, message, m.width)
 }
 
@@ -6891,6 +6925,13 @@ func (m *Model) applyAuthRecoveryMessage(msg AuthRecoveryMsg) {
 
 func (m *Model) addHistoryCell(cell historycell.HistoryCell) {
 	if m == nil || m.State == nil {
+		return
+	}
+	// Rust keeps startup diagnostics in one retained cell that only the footer,
+	// the warnings viewer, and Ctrl+T surface, so merge them instead of adding a
+	// live history row (Rust #46751).
+	if startup, ok := cell.(historycell.StartupWarningsCell); ok {
+		m.mergeStartupWarnings(startup)
 		return
 	}
 	if warning, ok := cell.(historycell.WarningCell); ok {
@@ -8755,9 +8796,8 @@ func normalizeActivityIDs(ids []string) []string {
 }
 
 // mergeStartupWarnings mirrors Rust's App::merge_startup_warnings: the incoming
-// diagnostics are coalesced into the single startup-warnings entry directly
-// below the session splash, messages are deduplicated, and the summary picks up
-// the configured Ctrl+T binding as its transcript hint.
+// diagnostics are coalesced into the single retained startup-warnings entry,
+// and repeated messages are not double-counted.
 func (m *Model) mergeStartupWarnings(incoming historycell.StartupWarningsCell) {
 	if m == nil || m.State == nil {
 		return
@@ -8766,7 +8806,6 @@ func (m *Model) mergeStartupWarnings(incoming historycell.StartupWarningsCell) {
 	if len(merged.Messages) == 0 {
 		return
 	}
-	merged.TranscriptHint = m.startupWarningsHint()
 	m.startupWarnings = merged
 	m.renderStartupWarnings()
 }
@@ -8785,47 +8824,30 @@ func (m *Model) openTranscriptHint() string {
 	return displayKeyBinding(bindings[0])
 }
 
-// startupWarningsHint mirrors Rust's primary_binding(open_transcript) lookup:
-// the first configured binding, rendered the way the footer renders it.
-func (m *Model) startupWarningsHint() string {
-	if m == nil || m.keymapConfig == nil {
-		return ""
-	}
-	bindings, _, _ := codextui.ResolvedKeymapBindings(m.keymapConfig, "global", "open_transcript")
-	if len(bindings) == 0 {
-		return ""
-	}
-	return displayKeyBinding(bindings[0])
-}
-
-// startupWarningsPending mirrors Rust's pending_header: the entry stays hidden
-// until the session splash exists or the thread id is known.
-func (m *Model) startupWarningsPending() bool {
-	if m == nil || m.State == nil {
-		return true
-	}
-	return !m.sessionHeaderShown && strings.TrimSpace(m.State.ThreadID) == ""
-}
-
-// renderStartupWarnings re-renders the coalesced entry, replacing it in place
-// once it exists and otherwise inserting it directly below the session splash.
+// renderStartupWarnings keeps the retained diagnostics in the transcript without
+// a live row (Rust #46751: StartupWarningsCell::display_lines is empty). The
+// footer counts them, f2 opens the viewer, and Ctrl+T renders transcript_lines,
+// so the entry carries only transcript and raw text.
 func (m *Model) renderStartupWarnings() {
 	if m == nil || m.State == nil || len(m.startupWarnings.Messages) == 0 {
 		return
 	}
-	cell := m.startupWarnings
-	cell.PendingHeader = m.startupWarningsPending()
 	width := m.width
 	if width < 20 {
 		width = 20
 	}
-	display := cell.DisplayLines(width)
-	if len(display) == 0 {
+	transcript := strings.TrimRight(strings.Join(m.startupWarnings.TranscriptLines(width), "\n"), "\r\n")
+	if strings.TrimSpace(transcript) == "" {
 		return
 	}
-	raw := cell.RawLines()
+	message := codextui.Message{
+		Role:           codextui.RoleHistory,
+		TranscriptText: transcript,
+		RawText:        strings.TrimRight(strings.Join(m.startupWarnings.RawLines(), "\n"), "\r\n"),
+	}
 	if m.startupWarningsIndex >= 0 && m.startupWarningsIndex < len(m.State.Messages) {
-		m.startupWarningsIndex = m.upsertHistoryMessage(m.startupWarningsIndex, display, raw)
+		m.State.Messages[m.startupWarningsIndex] = message
+		m.State.BumpMessagesRevision()
 		m.refreshTranscript()
 		return
 	}
@@ -8833,29 +8855,41 @@ func (m *Model) renderStartupWarnings() {
 	if m.sessionHeaderShown && len(m.State.Messages) > 0 {
 		index = 1
 	}
-	m.startupWarningsIndex = m.insertHistoryMessageAt(index, display, raw)
+	m.startupWarningsIndex = m.insertHistoryEntryAt(index, message)
 	m.refreshTranscript()
 }
 
-// insertHistoryMessageAt splices a history entry at index so the startup
-// warnings can sit directly below the session splash, keeping the tracked retry
-// activity index valid.
+// insertHistoryMessageAt splices a rendered history entry at index so the
+// startup notices can sit directly below the session splash, keeping the tracked
+// retry activity index valid.
 func (m *Model) insertHistoryMessageAt(index int, displayLines []string, rawLines []string) int {
-	if m == nil || m.State == nil {
-		return -1
-	}
 	display := strings.TrimRight(strings.Join(displayLines, "\n"), "\r\n")
 	if strings.TrimSpace(display) == "" {
 		return -1
 	}
 	raw := strings.TrimRight(strings.Join(rawLines, "\n"), "\r\n")
+	return m.insertHistoryEntryAt(index, codextui.Message{Role: codextui.RoleHistory, Text: display, RawText: raw})
+}
+
+// insertHistoryEntryAt splices a prepared history entry at index. An entry with
+// no display text stays out of the live transcript while Ctrl+T still renders
+// its TranscriptText (Rust's transcript-only history cells).
+func (m *Model) insertHistoryEntryAt(index int, message codextui.Message) int {
+	if m == nil || m.State == nil {
+		return -1
+	}
 	if index < 0 {
 		index = 0
 	}
 	if index > len(m.State.Messages) {
 		index = len(m.State.Messages)
 	}
-	message := codextui.Message{Role: codextui.RoleHistory, Text: display, RawText: raw}
+	if message.Role == "" {
+		message.Role = codextui.RoleHistory
+	}
+	message.Text = strings.TrimRight(message.Text, "\r\n")
+	message.RawText = strings.TrimRight(message.RawText, "\r\n")
+	message.TranscriptText = strings.TrimRight(message.TranscriptText, "\r\n")
 	m.State.Messages = append(m.State.Messages, codextui.Message{})
 	copy(m.State.Messages[index+1:], m.State.Messages[index:])
 	m.State.Messages[index] = message
@@ -9521,6 +9555,9 @@ func (m *Model) applyHistoryCell(cell historycell.HistoryCell) {
 	if m == nil || cell == nil {
 		return
 	}
+	if !historycell.IsStartupCell(cell) {
+		m.dismissWelcomeBlossom()
+	}
 	width := m.width
 	if width < 20 {
 		width = 20
@@ -9933,9 +9970,6 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 	case codextui.CommandExit:
 		m.closeClipboardWorker()
 		return bubbletea.Quit
-	case codextui.CommandHelp:
-		m.State.AddMessage(codextui.RoleSystem, strings.TrimSpace(m.State.RenderHelp()))
-		m.notice = ""
 	case codextui.CommandKeymap:
 		m.applyKeymapCommand(invocation.Args)
 	case codextui.CommandStatus:
@@ -10025,28 +10059,12 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 		m.applyWorkingDirectoryDisplayCommand()
 	case codextui.CommandArchive:
 		m.openCurrentSessionActionConfirmation(codextui.SessionSelectionArchive)
-	case codextui.CommandUnarchive:
-		return m.openSessionPicker(codextui.SessionPickerUnarchive)
 	case codextui.CommandDelete:
 		m.openCurrentSessionActionConfirmation(codextui.SessionSelectionDelete)
-	case codextui.CommandAttach:
-		m.applyAttachmentCommand(invocation.Args, bottompane.AttachmentFile)
-	case codextui.CommandImage:
-		m.applyAttachmentCommand(invocation.Args, bottompane.AttachmentImage)
-	case codextui.CommandURLImage:
-		m.applyAttachmentCommand(invocation.Args, bottompane.AttachmentRemoteImage)
-	case codextui.CommandClearAttachments:
-		m.clearAttachments()
-	case codextui.CommandEditor:
-		return m.openExternalEditor()
 	case codextui.CommandPermissions:
 		// Rust #54383: `/permissions [profile-id] [--approval-policy=…]
 		// [--reviewer=…]` selects a profile inline.
 		return m.applyPermissionsCommand(invocation.Args)
-	case codextui.CommandApproval:
-		m.applyApprovalSetting(invocation.Args)
-	case codextui.CommandSandbox:
-		m.applySandboxSetting(invocation.Args)
 	case codextui.CommandExperimental:
 		return m.applyExperimentalCommand(invocation.Args)
 	case codextui.CommandReview:
@@ -10140,7 +10158,10 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 	case codextui.CommandLogout:
 		return m.applyLogoutCommand()
 	default:
-		m.notice = "Unknown command " + invocation.Name + ". Type /help for commands."
+		// Rust answers an unknown slash input with an info line in the
+		// transcript instead of a footer notice.
+		m.addInfoHistoryMessage(codextui.UnrecognizedSlashCommandMessage(invocation.Name))
+		m.notice = ""
 	}
 	m.refreshTranscript()
 	return nil
@@ -10654,26 +10675,6 @@ func (m *Model) applyModelSetting(args string) bubbletea.Cmd {
 		return m.applyModelCommandArgs(value)
 	}
 	return m.openModelPicker()
-}
-
-func (m *Model) applyApprovalSetting(args string) {
-	value := strings.TrimSpace(args)
-	if value != "" {
-		if !codextui.ValidApprovalPolicy(value) {
-			m.notice = "Approval must be one of untrusted, on-request, never."
-			return
-		}
-		m.State.ApprovalPolicy = value
-	}
-	m.notice = strings.TrimSpace(m.State.RenderSetting("Approval", m.State.ApprovalPolicy))
-}
-
-func (m *Model) applySandboxSetting(args string) {
-	value := strings.TrimSpace(args)
-	if value != "" {
-		m.State.Sandbox = value
-	}
-	m.notice = strings.TrimSpace(m.State.RenderSetting("Sandbox", m.State.Sandbox))
 }
 
 func (m *Model) ensureSize() {
@@ -11568,9 +11569,10 @@ func (m *Model) applyDiffResult(msg DiffResultMsg) bubbletea.Cmd {
 	case strings.TrimSpace(text) == "":
 		text = "No changes detected."
 	}
-	m.notice = "Diff"
 	m.ensureSize()
-	m.overlay = chatwidget.NewTranscriptOverlayWithTitle(m.width, m.height, text, "D I F F")
+	// Rust opens `/diff` through Overlay::new_static_with_lines: a static pager
+	// anchored at the top with the "/ D I F F" header and the close-only hint.
+	m.overlay = chatwidget.NewStaticPagerOverlay(m.width, m.height, text, "D I F F")
 	m.seedOverlayMouseScrollSpeed()
 	m.overlayTranscript = false
 	m.overlayMouseCapture = mouseCaptureDisabled

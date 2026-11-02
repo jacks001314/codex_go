@@ -38,6 +38,9 @@ func (m *Model) applyStatusCommand() bubbletea.Cmd {
 	messageIndex := len(m.State.Messages)
 	history := statusHistoryText(card)
 	m.State.AddHistoryLines(strings.Split(history, "\n"), strings.Split(history, "\n"))
+	// Rust's status card is a history cell, so it dismisses the empty-state
+	// animation for the rest of the thread.
+	m.dismissWelcomeBlossom()
 	// Rust #43055: retain the status output so /copy can offer it (and its
 	// fields) until another command or turn supersedes it.
 	m.statusCopyTargets = newStatusCopyTargets(snapshot, cardWidth)
@@ -415,7 +418,7 @@ func (m *Model) openSkillsMenu() {
 	if m == nil {
 		return
 	}
-	m.openSelectionViewModal(ModalKindSkills, chatwidget.NewSkillsMenuView(features.Enabled(m.featureSettings, "mentions_v2")))
+	m.openSelectionViewModal(ModalKindSkills, chatwidget.NewSkillsMenuView())
 }
 
 func (m *Model) applySkillsModalOption(optionID string) bubbletea.Cmd {
@@ -424,8 +427,7 @@ func (m *Model) applySkillsModalOption(optionID string) bubbletea.Cmd {
 	}
 	switch chatwidget.UsageMenuAction(optionID) {
 	case chatwidget.SkillsMenuActionList:
-		m.composer.InsertString(chatwidget.OpenSkillsListInsert(features.Enabled(m.featureSettings, "mentions_v2")))
-		m.notice = "Skills list shortcut inserted."
+		m.composer.InsertString(chatwidget.OpenSkillsListInsert())
 		cmd := m.refreshSkillPopup()
 		m.refreshTranscript()
 		return cmd
@@ -739,6 +741,9 @@ func (m *Model) openSelectionViewModal(kind ModalKind, view chatwidget.Selection
 		ColumnWidth:       view.ColumnWidth,
 		DescriptionLayout: view.DescriptionLayout,
 	})
+	if m.modal != nil && !modalCenteredOverlayKind(kind) {
+		m.modal.selectionView = true
+	}
 	if m.modal != nil && view.InitialSelectedIndex >= 0 && view.InitialSelectedIndex < len(m.modal.options) {
 		m.modal.selected = view.InitialSelectedIndex
 		if m.modal.options[m.modal.selected].Disabled {

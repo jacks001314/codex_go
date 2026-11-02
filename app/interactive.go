@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1194,12 +1195,23 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 	if err != nil {
 		return err
 	}
+	// Recap and automatic thread titles need an isolated structured turn. A
+	// dedicated runner keeps that request off the session runner while it is
+	// streaming a user turn (Rust runs the same work on a temporary thread).
+	structuredRunner, err := newLocalRunnerWithEnvironments(auth.DefaultCodexHome(), false)
+	if err != nil {
+		return err
+	}
 	if runner != nil {
 		runner.NetworkPolicy = hostNetworkPolicy
 	}
 	if sideRunner != nil {
 		sideRunner.NetworkPolicy = hostNetworkPolicy
 	}
+	if structuredRunner != nil {
+		structuredRunner.NetworkPolicy = hostNetworkPolicy
+	}
+	localStructuredGenerate := interactiveLocalStructuredGenerator(root, structuredRunner)
 	sideCoordinator := newInteractiveLocalSideCoordinator(store)
 	defer sideCoordinator.CloseAll()
 	pluginService := interactivePluginService()
@@ -1299,7 +1311,9 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		FullscreenTranscript:        settings.FullscreenTranscript,
 		SessionHeaderVersion:        doctor.Version(),
 		WindowsSandboxStartupPrompt: interactiveWindowsSandboxStartupPrompt(root, settings.PermissionRequirements),
+		WindowsSandboxLevel:         interactiveWindowsSandboxLevelForTUI(root),
 		OnSessionAction:             interactiveSessionActionHandler(root),
+		OnListPermissionProfiles:    interactiveLocalListPermissionProfiles(root),
 		OnWorkingDirectoryChange:    interactiveWorkingDirectoryChangeHandler(root),
 		OnResumeSession:             interactiveResumeSessionHandler(root),
 		OnContinueSafetyRecourse:    interactiveContinueSafetyRecourse(root),
@@ -1309,6 +1323,8 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		OnReadSessionTranscript:     interactiveSessionTranscriptHandler(interactiveShowRawAgentReasoning(root)),
 		OnAcknowledgeSessionRead:    interactiveSessionReadAcknowledgeHandler(store),
 		OnRenameThread:              interactiveRenameThreadHandler(),
+		OnGenerateRecap:             localStructuredGenerate,
+		OnSuggestThreadName:         localStructuredGenerate,
 		OnUpdateDaybreak:            interactiveDaybreakUpdateHandler(),
 		OnLogout:                    interactiveLogoutHandler(ctx, root),
 		OnOpenDesktopThread:         interactiveOpenDesktopThread,
@@ -4558,6 +4574,21 @@ func runInteractiveTurn(ctx context.Context, root *cli.RootOptions, runner inter
 			}
 		}
 	}
+	// Rust records an admitted user input as a turn item before sampling
+	// (session/mod.rs record_user_message -> ItemStarted + ItemCompleted). The
+	// TUI relies on that receipt to acknowledge the prompt and to start the
+	// automatic thread title; the embedded Go TUI drives codexexec directly, so
+	// it mirrors the same receipt here. Internal-only inputs stay invisible.
+	if userText := strings.TrimSpace(request.Prompt); userText != "" || len(inputs) > 0 {
+		clientID := strings.TrimSpace(request.ClientID)
+		itemID := clientID
+		if itemID == "" {
+			itemID = "user-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+		}
+		userItem := protocol.ThreadItem{ID: itemID, Type: "user_message", Text: userText, ClientID: clientID}
+		streamWriter.HandleEvent(protocol.ItemStarted(userItem))
+		streamWriter.HandleEvent(protocol.ItemCompleted(userItem))
+	}
 	result, err := runner.RunContext(ctx, execRequest, strings.NewReader(""), streamOutput, io.Discard)
 	streamWriter.Flush()
 	if err != nil {
@@ -4881,7 +4912,32 @@ func (w *interactiveStreamEventWriter) handleEventLocked(event protocol.ThreadEv
 	if event.Type == "thread.token_usage.updated" && event.TokenUsage != nil {
 		w.sawTokenUsage = true
 	}
+	// Rust renders every EventMsg::Warning through the warning display state
+	// (footer badge plus f2 viewer). The embedded exec stream carries warnings as
+	// `warning-*` error items, so route them there instead of the transcript.
+	if message, ok := interactiveWarningMessageFromItem(event); ok {
+		w.send(codextea.WarningEventMsg{ThreadID: strings.TrimSpace(w.threadID), Message: message})
+		return
+	}
 	w.sendEvent(event)
+}
+
+// interactiveWarningMessageFromItem reports the warning carried by an exec
+// stream error item. Rust's exec client emits each session warning as a
+// `warning-<n>` item, which the TUI must count instead of rendering as an error.
+func interactiveWarningMessageFromItem(event protocol.ThreadEvent) (string, bool) {
+	if event.Type != "item.completed" || event.Item == nil {
+		return "", false
+	}
+	item := event.Item
+	if item.Type != "error" || !strings.HasPrefix(strings.TrimSpace(item.ID), "warning-") {
+		return "", false
+	}
+	message := strings.TrimSpace(item.Message)
+	if message == "" {
+		return "", false
+	}
+	return message, true
 }
 
 func (w *interactiveStreamEventWriter) handlePlanModeEventLocked(event protocol.ThreadEvent) bool {
@@ -5070,6 +5126,7 @@ func interactiveUIState(root *cli.RootOptions) *codextui.State {
 		options.Search = root.Shared.Search
 		options.NoAltScreen = root.Shared.NoAltScreen
 	}
+	options.CWD = interactiveSessionPickerCWD(root)
 	if loaded, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), interactiveKeymapLoadOptions(root)); err == nil && loaded != nil {
 		values := loaded.Values
 		options.Model = firstNonEmptyLocal(options.Model, interactiveStringFromConfig(values, "model"))
@@ -5078,10 +5135,21 @@ func interactiveUIState(root *cli.RootOptions) *codextui.State {
 		options.ApprovalPolicy = firstNonEmptyLocal(options.ApprovalPolicy, interactiveStringFromConfig(values, "approval_policy"))
 		options.Sandbox = firstNonEmptyLocal(options.Sandbox, interactiveStringFromConfig(values, "sandbox_mode"))
 		options.ServiceTier = firstNonEmptyLocal(options.ServiceTier, interactiveStringFromConfig(values, "service_tier"))
+		if strings.TrimSpace(options.Sandbox) == "" {
+			// Rust derives the default permission profile from the active
+			// project's trust decision (ConfigToml::derive_permission_profile),
+			// so a trusted project runs workspace-write instead of the
+			// read-only platform default. Surface the same mode in the TUI
+			// state and thread start.
+			if resolution, resolveErr := loaded.ResolveSandboxPermissionProfile("", options.CWD); resolveErr == nil && resolution != nil && resolution.Profile != nil {
+				if policy := resolution.Profile.LegacySandboxPolicy(); policy != nil {
+					options.Sandbox = string(policy.Kind)
+				}
+			}
+		}
 	}
 	options.Model = firstNonEmptyLocal(options.Model, interactiveDefaultModel())
 	options.ReasoningEffort = firstNonEmptyLocal(options.ReasoningEffort, interactiveDefaultReasoningEffort(options.Model))
-	options.CWD = interactiveSessionPickerCWD(root)
 	return codextui.NewState(options)
 }
 
@@ -5444,8 +5512,6 @@ func (s *interactiveSession) HandleCommand(input string) (handled bool, exit boo
 	switch invocation.Command {
 	case codextui.CommandExit:
 		return true, true, nil
-	case codextui.CommandHelp:
-		_, err = fmt.Fprint(s.Stdout, s.UI.RenderHelp())
 	case codextui.CommandKeymap:
 		err = s.handleKeymapCommand(invocation.Args)
 	case codextui.CommandStatus:
@@ -5460,16 +5526,12 @@ func (s *interactiveSession) HandleCommand(input string) (handled bool, exit boo
 		_, err = fmt.Fprintln(s.Stdout, "Started a fresh session.")
 	case codextui.CommandModel:
 		err = s.handleModelCommand(invocation.Args)
-	case codextui.CommandApproval:
-		err = s.handleApprovalCommand(invocation.Args)
-	case codextui.CommandSandbox:
-		err = s.handleSandboxCommand(invocation.Args)
 	case codextui.CommandPermissions:
 		err = s.handlePermissionsCommand(invocation.Args)
 	case codextui.CommandExperimental:
 		err = s.handleExperimentalCommand(invocation.Args)
 	default:
-		_, err = fmt.Fprintf(s.Stdout, "Unknown command %s. Type /help for commands.\n", invocation.Name)
+		_, err = fmt.Fprintln(s.Stdout, codextui.UnrecognizedSlashCommandMessage(invocation.Name))
 	}
 	return true, false, err
 }
@@ -5498,30 +5560,6 @@ func (s *interactiveSession) handleModelCommand(args string) error {
 		s.UI.Model = value
 	}
 	_, err := fmt.Fprint(s.Stdout, s.UI.RenderSetting("Model", s.UI.Model))
-	return err
-}
-
-func (s *interactiveSession) handleApprovalCommand(args string) error {
-	if strings.TrimSpace(args) != "" {
-		value := strings.TrimSpace(args)
-		if !codextui.ValidApprovalPolicy(value) {
-			_, err := fmt.Fprintln(s.Stdout, "Approval must be one of untrusted, on-request, never.")
-			return err
-		}
-		s.Root.Shared.ApprovalPolicy = value
-		s.UI.ApprovalPolicy = value
-	}
-	_, err := fmt.Fprint(s.Stdout, s.UI.RenderSetting("Approval", s.UI.ApprovalPolicy))
-	return err
-}
-
-func (s *interactiveSession) handleSandboxCommand(args string) error {
-	if strings.TrimSpace(args) != "" {
-		value := strings.TrimSpace(args)
-		s.Root.Shared.Sandbox = value
-		s.UI.Sandbox = value
-	}
-	_, err := fmt.Fprint(s.Stdout, s.UI.RenderSetting("Sandbox", s.UI.Sandbox))
 	return err
 }
 

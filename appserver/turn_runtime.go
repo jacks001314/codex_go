@@ -1760,6 +1760,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		return
 	}
 	r.startSkillTurnMetrics(threadID, turnID, runConfig.Model, runConfig.ReasoningEffort, startedAt)
+	r.maybeEmitModelMetadataWarning(threadID, runConfig)
 	preparedToolMode, warning := runtime.PrepareToolMode(runConfig.ToolMode, runConfig.DisableCodeModeFallback)
 	runConfig.ToolMode = preparedToolMode
 	if warning != "" {
@@ -13233,6 +13234,33 @@ func catalogModelOrigin(catalog *model.CatalogModel) model.ModelOrigin {
 		return ""
 	}
 	return catalog.Origin
+}
+
+// maybeEmitModelMetadataWarning mirrors Rust's
+// Session::maybe_emit_model_warnings_for_turn: a model whose metadata was
+// synthesized because no catalog entry matched emits one warning per turn, and
+// the TUI hides repeats for the same slug (WarningDisplayState::should_display).
+func (r *RuntimeRouter) maybeEmitModelMetadataWarning(threadID string, runConfig *appTurnRunConfig) {
+	if r == nil || runConfig == nil || runConfig.ModelInfo == nil {
+		return
+	}
+	if runConfig.ModelOrigin != model.ModelOriginSynthetic && !runConfig.ModelInfo.UsedFallbackModelMetadata {
+		return
+	}
+	slug := strings.TrimSpace(runConfig.ModelInfo.Slug)
+	if slug == "" {
+		slug = strings.TrimSpace(runConfig.Model)
+	}
+	if slug == "" {
+		return
+	}
+	r.notify(NotificationWarning, &WarningNotification{
+		ThreadID: stringPtrIfNotEmpty(threadID),
+		Message: fmt.Sprintf(
+			"Model metadata for `%s` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.",
+			slug,
+		),
+	})
 }
 
 // modelInfoForAppTurn resolves a model with the turn's personality selection

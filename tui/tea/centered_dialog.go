@@ -60,7 +60,10 @@ func (m *Model) renderCenteredModalOverlay() string {
 	} else {
 		m.modal = nil
 	}
+	savedSuppress := m.suppressWelcomeBlossom
+	m.suppressWelcomeBlossom = true
 	base := m.View()
+	m.suppressWelcomeBlossom = savedSuppress
 	m.modal = savedModal
 	m.modalParents = parents
 	return overlayCenteredDialog(base, dialog, m.width, m.height)

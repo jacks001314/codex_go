@@ -38,10 +38,22 @@ type welcomeBlossomState struct {
 	renderer        *welcome.Renderer
 	replayStartedAt time.Time
 	rect            welcomeBlossomRect
+	// dismissed mirrors Rust's EmptyStateAnimation dismissal: once the thread
+	// holds a non-startup cell the blossom stays hidden until a fresh thread.
+	dismissed bool
 }
 
 func newWelcomeBlossomState() welcomeBlossomState {
 	return welcomeBlossomState{renderer: welcome.NewRenderer()}
+}
+
+// dismissWelcomeBlossom latches the empty-state animation off for this thread
+// (Rust EmptyStateAnimation::dismiss).
+func (m *Model) dismissWelcomeBlossom() {
+	if m != nil {
+		m.welcomeBlossom.dismissed = true
+		m.welcomeBlossom.rect = welcomeBlossomRect{}
+	}
 }
 
 func (m *Model) welcomeBlossomEligible() bool {
@@ -51,7 +63,16 @@ func (m *Model) welcomeBlossomEligible() bool {
 	if !m.fullscreenTranscript || !m.animationsEnabled || !m.effects.Welcome {
 		return false
 	}
+	if m.welcomeBlossom.dismissed {
+		return false
+	}
 	if !m.composerIsEmpty() || m.hasConversationMessages() {
+		return false
+	}
+	// Rust keeps the settled blossom out of a retained backdrop: the empty-state
+	// animation is suppressed while any view is open, including the backdrop the
+	// centered dialog paints over.
+	if m.suppressWelcomeBlossom {
 		return false
 	}
 	if m.modal != nil || m.overlay != nil || m.warningsView != nil || m.readOnlyThread ||

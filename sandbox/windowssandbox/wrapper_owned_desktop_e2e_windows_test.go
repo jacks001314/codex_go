@@ -24,13 +24,13 @@ func TestWrapperRunsWithCallerOwnedDesktopLikeRust(t *testing.T) {
 	codexHome := t.TempDir()
 	profile := coresandbox.ReadOnlyPermissionProfile()
 	args, err := CreateWindowsSandboxCommandArgsForPermissionProfile(WindowsSandboxCommandArgsRequest{
-		Command:             []string{"where.exe", "cmd"},
-		CommandCWD:          workspace,
-		WorkspaceRoots:      []string{workspace},
-		Env:                 map[string]string{"SystemRoot": os.Getenv("SystemRoot"), "TEMP": os.Getenv("TEMP")},
-		PermissionProfile:   &profile,
-		WindowsSandboxLevel: WindowsSandboxLevelRestrictedToken,
-		CodexHome:           codexHome,
+		Command:               []string{"where.exe", "cmd"},
+		CommandCWD:            workspace,
+		WorkspaceRoots:        []string{workspace},
+		Env:                   map[string]string{"SystemRoot": os.Getenv("SystemRoot"), "TEMP": os.Getenv("TEMP")},
+		PermissionProfile:     &profile,
+		WindowsSandboxLevel:   WindowsSandboxLevelRestrictedToken,
+		CodexHome:             codexHome,
 		PreparePrivateDesktop: true,
 	})
 	if err != nil {
