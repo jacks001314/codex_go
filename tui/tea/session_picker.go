@@ -354,6 +354,28 @@ func (m *Model) sharedServerCommandCenterAvailable() bool {
 	return m != nil && m.commandCenterAvailable()
 }
 
+// movePendingSteersToFork carries uncommitted steers from a locked thread onto
+// its fork (Rust #47185 restores pending_steers with the rest of the thread
+// input state). switchThreadID parks them under the source thread; a copy there
+// would steer the source conversation if the user navigated back, so the parked
+// entry is dropped.
+func (m *Model) movePendingSteersToFork(sourceThreadID string, forkThreadID string, steers []pendingSteerSubmission) {
+	if m == nil || len(steers) == 0 {
+		return
+	}
+	sourceThreadID = strings.TrimSpace(sourceThreadID)
+	forkThreadID = strings.TrimSpace(firstNonEmpty(forkThreadID, m.currentThreadID()))
+	if sourceThreadID == "" || forkThreadID == "" || sourceThreadID == forkThreadID {
+		return
+	}
+	delete(m.threadPendingSteers, sourceThreadID)
+	if strings.TrimSpace(m.currentThreadID()) != forkThreadID {
+		return
+	}
+	m.pendingSteers = append(m.pendingSteers, steers...)
+	m.pendingSteersThreadID = forkThreadID
+}
+
 func (m *Model) applyForkCurrentSession(name string) bubbletea.Cmd {
 	if m == nil || m.State == nil {
 		return nil
@@ -373,12 +395,19 @@ func (m *Model) applyForkCurrentSession(name string) bubbletea.Cmd {
 	// and never takes the source lease.
 	fromLocked := m.externalWriterView()
 	retained := (*composerInputState)(nil)
+	// Rust #47185 restores the locked thread's whole ThreadInputState, which
+	// carries steer submissions that had not committed yet
+	// (chatwidget/user_messages.rs:157 pending_steers). Go parks those under the
+	// source thread when the fork switches threads, so they are captured here and
+	// moved onto the fork afterwards.
+	retainedSteers := []pendingSteerSubmission(nil)
 	if fromLocked {
 		retained = m.readOnlyDraft
 		if retained == nil {
 			retained = m.captureComposerInputState()
 		}
 		m.readOnlyDraft = nil
+		retainedSteers = append(retainedSteers, m.pendingSteers...)
 		m.forkInProgress = true
 		defer func() { m.forkInProgress = false }()
 	}
@@ -406,6 +435,7 @@ func (m *Model) applyForkCurrentSession(name string) bubbletea.Cmd {
 		// the local draft continues in the new conversation.
 		m.setReadOnlyThread(false)
 		m.restoreComposerInputState(retained, true)
+		m.movePendingSteersToFork(selection.Target.ThreadID, decision.Value, retainedSteers)
 		m.notice = "Fork created. You can continue here."
 	}
 	m.refreshTranscript()
