@@ -41,6 +41,7 @@ import (
 	"codex_go/sandbox"
 	"codex_go/session"
 	codextui "codex_go/tui"
+	tuiapp "codex_go/tui/app"
 	chatwidget "codex_go/tui/chatwidget"
 	historycell "codex_go/tui/history_cell"
 	idecontext "codex_go/tui/ide_context"
@@ -2747,7 +2748,12 @@ func remoteTUIThreadMessagesFromThread(thread *appserver.Thread, projection reas
 	messages := []codextui.Message{}
 	inReviewMode := false
 	for _, turn := range thread.Turns {
-		for _, item := range turn.Items {
+		// Rust ThreadEventStore::snapshot hides a delegated voice turn's private
+		// reasoning/commentary before the widget replays it; a resumed thread
+		// loads its persisted items through the same path.
+		items := tuiapp.HidePrivateRealtimeItemsAfterVoiceHandoff(turn.Items, remoteTUITurnHasRealtimeDelegation(turn))
+		for _, item := range items {
+			item = projectRealtimeDelegationUserItem(item)
 			itemType := remoteTUINormalizedThreadItemType(item.Type)
 			switch itemType {
 			case "enteredreviewmode":
@@ -2800,6 +2806,11 @@ func remoteTUIThreadActiveReasoning(thread *appserver.Thread) (turnID string, it
 	}
 	turn := thread.Turns[len(thread.Turns)-1]
 	if turn.Status != appserver.TurnStatusInProgress || len(turn.Items) == 0 {
+		return "", "", "", false
+	}
+	// A delegated voice turn never restores a live reasoning heading: Rust
+	// gates the heading on is_realtime_delegated_reasoning_item.
+	if remoteTUITurnHasRealtimeDelegation(turn) {
 		return "", "", "", false
 	}
 	item := turn.Items[len(turn.Items)-1]
@@ -2980,6 +2991,35 @@ func remoteTUIMessageFromThreadItem(item appserver.ThreadItem, projection reason
 		}
 		return codextui.Message{Role: codextui.RoleHistory, Text: text, RawText: text}, true
 	}
+}
+
+// remoteTUITurnHasRealtimeDelegation reports whether the turn was opened by a
+// realtime voice handoff (Rust ThreadEventStore::delegated_turns, recovered
+// here from the persisted user item).
+func remoteTUITurnHasRealtimeDelegation(turn appserver.Turn) bool {
+	for i := range turn.Items {
+		if tuiapp.IsRealtimeDelegationUserMessage(&turn.Items[i]) {
+			return true
+		}
+	}
+	return false
+}
+
+// projectRealtimeDelegationUserItem replaces a replayed delegation envelope with
+// the spoken input (Rust realtime_delegation_display_text on from_replay).
+func projectRealtimeDelegationUserItem(item appserver.ThreadItem) appserver.ThreadItem {
+	if inner, ok := chatwidget.RealtimeDelegationInput(item.Text); ok {
+		item.Text = chatwidget.RealtimeDelegationDisplayText(inner)
+		return item
+	}
+	for i := range item.Content {
+		if inner, ok := chatwidget.RealtimeDelegationInput(item.Content[i].Text); ok {
+			item.Content = append([]appserver.ThreadItemContent(nil), item.Content...)
+			item.Content[i].Text = chatwidget.RealtimeDelegationDisplayText(inner)
+			return item
+		}
+	}
+	return item
 }
 
 func remoteTUINormalizedThreadItemType(value string) string {

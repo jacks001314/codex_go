@@ -112,13 +112,13 @@ func (s *ThreadEventStore) noteDelegatedTurnFromNotification(notification Server
 	if notification.Name != ServerNotificationItemStarted && notification.Name != ServerNotificationItemCompleted {
 		return false
 	}
-	if !isRealtimeDelegationUserMessage(notification.Item) {
+	if !IsRealtimeDelegationUserMessage(notification.Item) {
 		return false
 	}
 	return s.NoteDelegatedTurn(realtimeDelegationTurnID(notification))
 }
 
-func isRealtimeDelegationUserMessage(item *appserver.ThreadItem) bool {
+func IsRealtimeDelegationUserMessage(item *appserver.ThreadItem) bool {
 	if item == nil {
 		return false
 	}
@@ -195,13 +195,13 @@ func isPrivateRealtimeThreadItem(item *appserver.ThreadItem) bool {
 	return chatwidget.IsPrivateRealtimeAgentItem(item.Type, threadItemPhase(item), text)
 }
 
-// hidePrivateItemsAfterVoiceHandoff mirrors Rust
+// HidePrivateRealtimeItemsAfterVoiceHandoff mirrors Rust
 // hide_private_items_after_voice_handoff: a present marker lets earlier typed
 // output survive, while an evicted marker hides private items conservatively.
-func hidePrivateItemsAfterVoiceHandoff(items []appserver.ThreadItem, delegated bool) []appserver.ThreadItem {
+func HidePrivateRealtimeItemsAfterVoiceHandoff(items []appserver.ThreadItem, delegated bool) []appserver.ThreadItem {
 	hasMarker := false
 	for i := range items {
-		if isRealtimeDelegationUserMessage(&items[i]) {
+		if IsRealtimeDelegationUserMessage(&items[i]) {
 			hasMarker = true
 			break
 		}
@@ -210,7 +210,7 @@ func hidePrivateItemsAfterVoiceHandoff(items []appserver.ThreadItem, delegated b
 	out := make([]appserver.ThreadItem, 0, len(items))
 	for i := range items {
 		item := &items[i]
-		if isRealtimeDelegationUserMessage(item) {
+		if IsRealtimeDelegationUserMessage(item) {
 			voiceStarted = true
 		}
 		if voiceStarted && isPrivateRealtimeThreadItem(item) {
@@ -255,7 +255,7 @@ func applyRealtimeDelegationPrivacy(snapshot *ThreadEventSnapshot) {
 	for i := range snapshot.Turns {
 		turn := &snapshot.Turns[i]
 		for j := range turn.Items {
-			if isRealtimeDelegationUserMessage(&turn.Items[j]) {
+			if IsRealtimeDelegationUserMessage(&turn.Items[j]) {
 				delegated[turn.ID] = true
 				break
 			}
@@ -263,7 +263,7 @@ func applyRealtimeDelegationPrivacy(snapshot *ThreadEventSnapshot) {
 	}
 	for i := range snapshot.Turns {
 		turn := &snapshot.Turns[i]
-		turn.Items = hidePrivateItemsAfterVoiceHandoff(turn.Items, delegated[turn.ID])
+		turn.Items = HidePrivateRealtimeItemsAfterVoiceHandoff(turn.Items, delegated[turn.ID])
 	}
 
 	bufferedMarkers := make(map[string]bool)
@@ -275,7 +275,7 @@ func applyRealtimeDelegationPrivacy(snapshot *ThreadEventSnapshot) {
 		if notification.Name != ServerNotificationItemStarted && notification.Name != ServerNotificationItemCompleted {
 			continue
 		}
-		if isRealtimeDelegationUserMessage(notification.Item) {
+		if IsRealtimeDelegationUserMessage(notification.Item) {
 			bufferedMarkers[realtimeDelegationTurnID(*notification)] = true
 		}
 	}
@@ -297,7 +297,7 @@ func applyRealtimeDelegationPrivacy(snapshot *ThreadEventSnapshot) {
 		key := turnID + "\x00" + realtimeDelegationItemID(*notification)
 		switch notification.Name {
 		case ServerNotificationItemStarted:
-			if isRealtimeDelegationUserMessage(notification.Item) {
+			if IsRealtimeDelegationUserMessage(notification.Item) {
 				voiceStarted[turnID] = true
 			} else if kind := chatwidget.NormalizeItemKind(threadItemKind(notification.Item)); kind == "agentmessage" || kind == "reasoning" {
 				if voiceStarted[turnID] {
@@ -307,7 +307,7 @@ func applyRealtimeDelegationPrivacy(snapshot *ThreadEventSnapshot) {
 				}
 			}
 		case ServerNotificationItemCompleted:
-			if isRealtimeDelegationUserMessage(notification.Item) {
+			if IsRealtimeDelegationUserMessage(notification.Item) {
 				voiceStarted[turnID] = true
 				break
 			}
@@ -323,7 +323,7 @@ func applyRealtimeDelegationPrivacy(snapshot *ThreadEventSnapshot) {
 			}
 		case ServerNotificationTurnCompleted:
 			if notification.Turn != nil && delegated[notification.Turn.ID] {
-				notification.Turn.Items = hidePrivateItemsAfterVoiceHandoff(notification.Turn.Items, true)
+				notification.Turn.Items = HidePrivateRealtimeItemsAfterVoiceHandoff(notification.Turn.Items, true)
 			}
 		}
 		out = append(out, event)
