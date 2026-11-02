@@ -224,7 +224,19 @@ func (m *Model) updateUnarchivePromptModal(message bubbletea.KeyMsg) bubbletea.C
 		return nil
 	}
 	// Rust retries the start by id after unarchiving, never by the moved rollout
-	// path.
+	// path. A fork retry runs off the update loop like the original request.
+	if retry.Kind == codextui.SessionSelectionFork {
+		m.forkInProgress = true
+		m.notice = forkInProgressNotice
+		m.refreshTranscript()
+		return m.closeSessionPickerTerminalMode(m.beginForkCommand(forkCurrentSessionMsg{
+			selection:        *retry,
+			sourceThreadID:   strings.TrimSpace(retry.Target.ThreadID),
+			origin:           forkOriginUnarchive,
+			responseID:       "unarchive-prompt",
+			responseOptionID: threadID,
+		}))
+	}
 	decision, notice, _ := m.applySessionSelection(*retry)
 	if decision == nil {
 		if strings.TrimSpace(notice) != "" {

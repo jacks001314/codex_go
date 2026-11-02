@@ -44,7 +44,23 @@ func TestAgentsOverviewForkShortcutLikeRust(t *testing.T) {
 		t.Fatalf("initial selection = %q, want root-1", got)
 	}
 
-	model.Update(agentsKeyEvent('f'))
+	updated, cmd := model.Update(agentsKeyEvent('f'))
+	model = updated.(*Model)
+	// The fork must not run inside the key handler: the dashboard paints its
+	// progress notice, keeps its rows, and only then does the request leave.
+	if len(actions) != 0 {
+		t.Fatalf("thread/fork ran inside the key handler: %#v", actions)
+	}
+	if !model.forkInProgress {
+		t.Fatal("f did not mark the fork as pending")
+	}
+	if got := model.agentsOverviewNotice; got != forkInProgressNotice {
+		t.Fatalf("progress notice = %q, want %q", got, forkInProgressNotice)
+	}
+	if model.agentsOverview == nil {
+		t.Fatal("command center closed before the fork finished")
+	}
+	model = runForkCmd(t, model, cmd)
 	if model.agentsOverview != nil {
 		t.Fatal("f forked but left the command center open")
 	}

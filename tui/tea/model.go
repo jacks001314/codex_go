@@ -4324,7 +4324,12 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		// the keyboard until it completes, so a repeated shortcut cannot act on
 		// the resulting view.
 		if m.forkInProgress {
-			return m, nil
+			// An explicit exit is never swallowed: a backend that never answers
+			// must not trap the process in the pending fork. Everything else
+			// belongs to the fork until it completes.
+			if msg.Type != bubbletea.KeyCtrlC && msg.Type != bubbletea.KeyCtrlD {
+				return m, nil
+			}
 		}
 		if m.promptSuggestionTabAccepted {
 			if msg.Type == bubbletea.KeyTab {

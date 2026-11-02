@@ -822,25 +822,19 @@ func (m *Model) forkAgentsOverviewSelection() bubbletea.Cmd {
 		Kind:   codextui.SessionSelectionFork,
 		Target: codextui.SessionTarget{BackendID: m.backendID, ThreadID: threadID},
 	}
-	decision, notice, _ := m.applySessionSelection(selection)
-	if decision == nil {
-		if text := strings.TrimSpace(notice); text != "" {
-			m.agentsOverviewNotice = text
-		}
-		return nil
-	}
-	m.closeAgentsOverview()
-	if text := strings.TrimSpace(notice); text != "" {
-		m.notice = text
-	}
-	if m.onModalResponse == nil {
-		return nil
-	}
-	return m.onModalResponse(ModalResponse{
-		ID:       "fork-agents-overview",
-		Kind:     ModalKindPicker,
-		OptionID: threadID,
-		Picker:   decision,
+	// The fork runs off the update loop: the dashboard paints the progress
+	// notice first, keeps its rows visible, and hands the new session back to
+	// the shell when forkCurrentSessionMsg arrives (Rust repaints while the
+	// fork is pending instead of blocking the key handler).
+	m.forkInProgress = true
+	m.agentsOverviewBusy = true
+	m.agentsOverviewNotice = forkInProgressNotice
+	return m.beginForkCommand(forkCurrentSessionMsg{
+		selection:        selection,
+		sourceThreadID:   threadID,
+		origin:           forkOriginAgentsOverview,
+		responseID:       "fork-agents-overview",
+		responseOptionID: threadID,
 	})
 }
 

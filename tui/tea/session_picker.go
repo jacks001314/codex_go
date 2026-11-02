@@ -376,19 +376,71 @@ func (m *Model) movePendingSteersToFork(sourceThreadID string, forkThreadID stri
 	m.pendingSteersThreadID = forkThreadID
 }
 
-// forkCurrentSessionMsg carries the result of a locked-view fork that ran off
-// the update loop (Rust #47185 spawns the fork and repaints
-// "Forking conversation…" while it is pending).
+// forkInProgressNotice is the progress line every fork surface shows while the
+// thread/fork request is in flight (Rust #47185 paints it before sending).
+const forkInProgressNotice = "Forking conversation\u2026"
+
+// forkOrigin records which surface started a fork. The shared completion path
+// restores that surface (locked view, session picker, command center, checkout
+// picker) once the RPC returns, instead of every caller blocking on it.
+type forkOrigin int
+
+const (
+	// forkOriginLocked is the read-only/external-writer conversation view.
+	forkOriginLocked forkOrigin = iota
+	// forkOriginWorktree is `/fork`, the /worktree checkout picker and the
+	// side-conversation-free "current checkout" choice.
+	forkOriginWorktree
+	// forkOriginPicker is a fork row chosen inside the session picker.
+	forkOriginPicker
+	// forkOriginAgentsOverview is the f action in the command center.
+	forkOriginAgentsOverview
+	// forkOriginUnarchive retries a fork after the archived-session prompt.
+	forkOriginUnarchive
+)
+
+// forkCurrentSessionMsg carries the result of a fork that ran off the update
+// loop (Rust #47185 spawns the fork and repaints "Forking conversation…" while
+// it is pending). Every interactive fork path uses this message so no surface
+// runs thread/fork inside a key handler.
 type forkCurrentSessionMsg struct {
-	selection      codextui.SessionSelection
-	sourceThreadID string
-	retained       *composerInputState
-	retainedSteers []pendingSteerSubmission
-	fromLocked     bool
-	summary        *codextui.SessionSummary
-	err            error
+	selection        codextui.SessionSelection
+	sourceThreadID   string
+	retained         *composerInputState
+	retainedSteers   []pendingSteerSubmission
+	origin           forkOrigin
+	responseID       string
+	responseOptionID string
+	summary          *codextui.SessionSummary
+	err              error
 }
 
+// beginForkCommand runs the captured thread/fork request on its own goroutine
+// and returns the Cmd that delivers the result back to the update loop. The
+// caller must already have painted its progress state and set forkInProgress;
+// the pending fork owns the keyboard (Update drops KeyMsg while it is set), so
+// a repeated shortcut cannot issue a second thread/fork.
+func (m *Model) beginForkCommand(msg forkCurrentSessionMsg) bubbletea.Cmd {
+	if m == nil {
+		return nil
+	}
+	action := m.onSessionAction
+	return func() bubbletea.Msg {
+		// The Cmd runs on its own goroutine and only reads captured values; it
+		// never touches m, so quitting or switching threads mid-flight cannot
+		// race with (or mutate) a torn-down model.
+		if action == nil {
+			return msg
+		}
+		msg.summary, msg.err = action(msg.selection)
+		return msg
+	}
+}
+
+// applyForkCurrentSession forks the active conversation. Both the locked view
+// (f/F) and the interactive `/fork`/worktree paths funnel through here so the
+// RPC always runs off the update loop: the progress line is painted first and
+// the result arrives as forkCurrentSessionMsg.
 func (m *Model) applyForkCurrentSession(name string) bubbletea.Cmd {
 	if m == nil || m.State == nil {
 		return nil
@@ -430,73 +482,68 @@ func (m *Model) applyForkCurrentSession(name string) bubbletea.Cmd {
 		},
 		Name: strings.TrimSpace(name),
 	}
+	msg := forkCurrentSessionMsg{
+		selection:        selection,
+		sourceThreadID:   selection.Target.ThreadID,
+		retained:         retained,
+		retainedSteers:   retainedSteers,
+		origin:           forkOriginWorktree,
+		responseID:       "fork-current-session",
+		responseOptionID: selection.Target.ThreadID,
+	}
 	if fromLocked {
-		// Rust #47185: the locked view owns the keyboard for the duration of the
-		// fork and paints "Forking conversation…" before the request is sent, so
-		// the RPC must not run inside the key handler (that froze the whole UI
-		// for as long as the backend took, and the progress line never appeared).
-		m.forkInProgress = true
-		m.refreshTranscript()
-		action := m.onSessionAction
-		msg := forkCurrentSessionMsg{
-			selection:      selection,
-			sourceThreadID: selection.Target.ThreadID,
-			retained:       retained,
-			retainedSteers: retainedSteers,
-			fromLocked:     true,
-		}
-		return func() bubbletea.Msg {
-			// The Cmd runs on its own goroutine and only reads captured values;
-			// it never touches m, so quitting or switching threads mid-flight
-			// cannot race with (or mutate) a torn-down model.
-			if action == nil {
-				return msg
-			}
-			msg.summary, msg.err = action(selection)
-			return msg
-		}
+		msg.origin = forkOriginLocked
 	}
-	decision, notice, _ := m.applySessionSelection(selection)
-	if strings.TrimSpace(notice) != "" {
-		m.notice = strings.TrimSpace(notice)
-	}
-	if decision == nil {
-		m.addErrorHistoryMessage(m.notice)
-		m.refreshTranscript()
-		return nil
+	// Render the progress state before the request leaves: the locked view
+	// replaces its notice card, every other surface shows the footer notice, so
+	// the key press is acknowledged within one frame instead of after the RPC.
+	m.forkInProgress = true
+	if !fromLocked {
+		m.notice = forkInProgressNotice
 	}
 	m.refreshTranscript()
-	if m.onModalResponse != nil {
-		return m.onModalResponse(ModalResponse{
-			ID:       "fork-current-session",
-			Kind:     ModalKindPicker,
-			OptionID: selection.Target.ThreadID,
-			Picker:   decision,
-		})
-	}
-	return nil
+	return m.beginForkCommand(msg)
 }
 
-// applyForkCurrentSessionResult finishes a locked-view fork that ran off the
-// update loop: success clears the locked view and moves the draft (plus any
-// pending steers) onto the fork, failure restores the draft and keeps the lock.
+// applyForkCurrentSessionResult finishes a fork that ran off the update loop.
+// The locked view moves its draft (plus pending steers) onto the fork and stays
+// locked on failure; the other surfaces drop their progress state and report
+// the outcome through the same notice/modal-response path as before.
 func (m *Model) applyForkCurrentSessionResult(msg forkCurrentSessionMsg) bubbletea.Cmd {
-	if m == nil || !msg.fromLocked {
+	if m == nil {
 		return nil
 	}
 	m.forkInProgress = false
+	locked := msg.origin == forkOriginLocked
+	if msg.origin == forkOriginAgentsOverview {
+		m.agentsOverviewBusy = false
+	}
+	restoreFailure := func() {
+		if locked {
+			// Rust #47185: a failed fork keeps the locked view and its draft.
+			m.readOnlyDraft = msg.retained
+		}
+		m.refreshTranscript()
+	}
 	if msg.err != nil {
+		text := strings.TrimSpace(msg.err.Error())
 		// Rust session_start.rs: forking an archived conversation prompts too.
 		if _, ok := archivedSessionGuidanceForThread(msg.err, msg.sourceThreadID); ok &&
 			m.openUnarchivePrompt(msg.sourceThreadID, "fork", msg.selection) {
-			m.readOnlyDraft = msg.retained
+			if locked {
+				m.readOnlyDraft = msg.retained
+			}
 			m.refreshTranscript()
 			return nil
 		}
-		m.readOnlyDraft = msg.retained
-		m.notice = strings.TrimSpace(msg.err.Error())
-		m.addErrorHistoryMessage(m.notice)
-		m.refreshTranscript()
+		if msg.origin == forkOriginAgentsOverview {
+			m.agentsOverviewNotice = text
+			restoreFailure()
+			return nil
+		}
+		m.notice = text
+		m.addErrorHistoryMessage(text)
+		restoreFailure()
 		return nil
 	}
 	decision, notice, _ := m.applyForkSummary(msg.selection, msg.summary)
@@ -504,28 +551,40 @@ func (m *Model) applyForkCurrentSessionResult(msg forkCurrentSessionMsg) bubblet
 		m.notice = strings.TrimSpace(notice)
 	}
 	if decision == nil {
-		// Rust #47185: a failed fork keeps the locked view and its draft intact.
-		m.readOnlyDraft = msg.retained
-		m.addErrorHistoryMessage(m.notice)
-		m.refreshTranscript()
+		if msg.origin == forkOriginAgentsOverview {
+			m.agentsOverviewNotice = strings.TrimSpace(m.notice)
+		} else {
+			m.addErrorHistoryMessage(m.notice)
+		}
+		restoreFailure()
 		return nil
 	}
-	// Rust #47185: the fork is editable, so the locked notice goes away and the
-	// local draft continues in the new conversation.
-	m.setReadOnlyThread(false)
-	m.restoreComposerInputState(msg.retained, true)
-	m.movePendingSteersToFork(msg.sourceThreadID, decision.Value, msg.retainedSteers)
-	m.notice = "Fork created. You can continue here."
-	m.refreshTranscript()
-	if m.onModalResponse != nil {
-		return m.onModalResponse(ModalResponse{
-			ID:       "fork-current-session",
-			Kind:     ModalKindPicker,
-			OptionID: msg.selection.Target.ThreadID,
-			Picker:   decision,
-		})
+	switch msg.origin {
+	case forkOriginLocked:
+		// Rust #47185: the fork is editable, so the locked notice goes away and
+		// the local draft continues in the new conversation.
+		m.setReadOnlyThread(false)
+		m.restoreComposerInputState(msg.retained, true)
+		m.movePendingSteersToFork(msg.sourceThreadID, decision.Value, msg.retainedSteers)
+		m.notice = "Fork created. You can continue here."
+	case forkOriginAgentsOverview:
+		// The command center hands the new session back to the shell.
+		m.closeAgentsOverview()
 	}
-	return nil
+	m.refreshTranscript()
+	if m.onModalResponse == nil || strings.TrimSpace(msg.responseID) == "" {
+		return nil
+	}
+	optionID := msg.responseOptionID
+	if msg.origin == forkOriginUnarchive {
+		optionID = decision.Value
+	}
+	return m.onModalResponse(ModalResponse{
+		ID:       msg.responseID,
+		Kind:     ModalKindPicker,
+		OptionID: optionID,
+		Picker:   decision,
+	})
 }
 
 // applyForkSummary applies a completed thread/fork response: naming, picker
