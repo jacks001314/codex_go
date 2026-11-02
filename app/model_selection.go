@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	bubbletea "github.com/charmbracelet/bubbletea"
@@ -71,6 +72,25 @@ func interactiveLocalModelSelectionCommand(root *cli.RootOptions, decision *code
 	}
 }
 
+// remoteThreadSettingsUpdate is the thread/settings/update seam. Tests replace
+// it to simulate an app server that rejects the method outright.
+var remoteThreadSettingsUpdate = remoteTUIUpdateThreadSettings
+
+// modelSelectionThreadSettingsNotice mirrors Rust app/model_defaults.rs:124-133:
+// when the settings update is not accepted and the server owns the conversation
+// settings, the TUI shows the cloud-specific notice instead of a generic
+// transport failure. Client-owned conversations keep the generic message.
+func modelSelectionThreadSettingsNotice(mode ThreadParamsMode, err error) string {
+	if err == nil || mode.SettingsOwner() != ThreadSettingsOwnerServer {
+		return ""
+	}
+	var rpcErr *remoteRPCError
+	if errors.As(err, &rpcErr) && rpcErr.Code == appserver.JSONRPCMethodNotFoundErrorCode {
+		return codextea.CloudModelSelectionUnsupportedMessage
+	}
+	return ""
+}
+
 // interactiveRemoteModelSelectionCommand syncs a completed picker decision to
 // the remote app server's thread and persists the user-level defaults.
 func interactiveRemoteModelSelectionCommand(
@@ -107,7 +127,12 @@ func interactiveRemoteModelSelectionCommandForMode(
 	return func() bubbletea.Msg {
 		result := codextea.ModelSelectionSyncMsg{}
 		if plan.ThreadModel != nil || plan.ThreadEffort != nil {
-			result.ThreadSettingsErr = interactiveRemoteApplyModelSelection(ctx, endpoint, state, threadID, plan)
+			updateErr := interactiveRemoteApplyModelSelection(ctx, endpoint, state, threadID, plan)
+			if notice := modelSelectionThreadSettingsNotice(mode, updateErr); notice != "" {
+				result.ThreadSettingsNotice = notice
+			} else {
+				result.ThreadSettingsErr = updateErr
+			}
 		}
 		if mode.SettingsOwner() == ThreadSettingsOwnerClient {
 			for _, persist := range plan.Persist {
@@ -151,7 +176,7 @@ func interactiveRemoteApplyModelSelection(
 	if mode := interactiveCollaborationModeFromState(state); mode != nil {
 		params.CollaborationMode = interactiveCollaborationModePayload(mode)
 	}
-	return remoteTUIUpdateThreadSettings(reqCtx, client, params)
+	return remoteThreadSettingsUpdate(reqCtx, client, params)
 }
 
 // interactiveRemoteModelSelectionWriter writes the model-selection config edits
