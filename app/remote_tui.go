@@ -2849,6 +2849,13 @@ func remoteTUIThreadItemIsReviewUserMessage(item appserver.ThreadItem) bool {
 	return strings.TrimSpace(remoteTUIAnyString(item.Data["kind"])) == "review_rollout_user"
 }
 
+// remoteTUIImageLinksOverSSH reports whether this terminal runs over SSH, where
+// an OSC-8 file link cannot open a local file (Rust clipboard_copy::is_ssh_session).
+func remoteTUIImageLinksOverSSH() bool {
+	environment := codextui.ClipboardEnvironmentFromMap(environmentMapFromEnviron(os.Environ()), codextui.IsProbablyWSL())
+	return environment.SSHSession
+}
+
 func remoteTUIMessageFromThreadItem(item appserver.ThreadItem, projection reasoningProjection, showRawReasoning bool) (codextui.Message, bool) {
 	itemType := remoteTUINormalizedThreadItemType(item.Type)
 	role := remoteTUINormalizedThreadItemRole(item.Role)
@@ -2897,6 +2904,12 @@ func remoteTUIMessageFromThreadItem(item appserver.ThreadItem, projection reason
 			return codextui.Message{}, false
 		}
 		cell := historycell.NewViewImageToolCallWithID(item.ID, path, "")
+		// Rust #58446 link_viewed_image: loaded history keeps the link, but a
+		// remote workspace path does not resolve on this host (the destination
+		// check refuses it) and an SSH session cannot open a local file.
+		if !remoteTUIImageLinksOverSSH() {
+			cell = cell.LinkLocalImage()
+		}
 		text := strings.Join(cell.DisplayLines(0), "\n")
 		return codextui.Message{
 			Role:        codextui.RoleHistory,

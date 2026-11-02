@@ -2783,6 +2783,12 @@ type Model struct {
 	inputHistoryDraft                string
 	inputHistoryDraftElements        []ComposerTextElement
 	inputHistoryActive               bool
+	// inputHistoryBash records, per history entry, whether it was submitted from
+	// shell mode (Rust #58412 keeps is_bash_mode with the draft) so recall restores
+	// a literal leading `!` for ordinary messages.
+	inputHistoryBash []bool
+	// inputHistoryDraftBash is the shell mode of the draft saved when recall began.
+	inputHistoryDraftBash bool
 	historySearch                    *composerhistory.HistorySearchSession
 	historySearchElements            []ComposerTextElement
 	historySearchPreviewText         string
@@ -4728,14 +4734,14 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 	}
 	if key, ok := message.(bubbletea.KeyMsg); ok {
 		if handled, selectionCmd := m.applyComposerSelectionKey(key); handled {
-			m.syncComposerPrefixFromText()
+			m.syncComposerPrefixAfterEdit(composerBefore)
 			m.syncComposerElements(composerBefore)
 			m.refreshSlashPopup()
 			return m, bubbletea.Batch(cmd, selectionCmd)
 		}
 	}
 	m.composer, composerCmd = m.composer.Update(message)
-	m.syncComposerPrefixFromText()
+	m.syncComposerPrefixAfterEdit(composerBefore)
 	m.syncComposerElements(composerBefore)
 	m.refreshSlashPopup()
 	skillPopupCmd := m.refreshSkillPopup()
@@ -5916,6 +5922,9 @@ func (m *Model) submitComposer() bubbletea.Cmd {
 	}
 	m.clearPromptSuggestion()
 	input := strings.TrimSpace(m.composerText())
+	// Rust #58412: capture the draft's shell mode before the composer resets so a
+	// leading `!` that a deletion exposed stays literal.
+	shellMode := m.composerPrefix == composerPrefixShell
 	if m.threadUnavailable && !unavailableThreadCommand(input) {
 		m.notice = "This conversation is unavailable. Use /new, /resume, /clear, /status, /warnings, /config, /copy, or /quit."
 		m.refreshTranscript()
@@ -5952,6 +5961,7 @@ func (m *Model) submitComposer() bubbletea.Cmd {
 		MentionCatalog:  m.submissionMentionCatalog(),
 		TextElements:    textElements,
 	}
+	request.LiteralInput = literalBangInput(input, shellMode)
 	m.attachments = nil
 	m.composerMentionBindings = nil
 	// Rust #44328: a new prompt clears the previous prompt's pending questions.
@@ -6067,7 +6077,7 @@ func (m *Model) submitRequest(request SubmitRequest, parseCommand bool) bubblete
 	// Rust holds a user turn while the session waits for the Reserve switch, so
 	// the queued prompt is not sent on the blocked model.
 	if m.rateLimitRecoveryPending {
-		m.queued = append(m.queued, queuedSubmission{Request: cloneSubmitRequest(request), ParseCommand: parseCommand})
+		m.queued = append(m.queued, queuedSubmission{Request: cloneSubmitRequest(request), ParseCommand: parseCommand, Literal: request.LiteralInput})
 		m.notice = "Waiting for the usage-limit model switch\u2026"
 		m.refreshTranscript()
 		return nil
@@ -6075,7 +6085,7 @@ func (m *Model) submitRequest(request SubmitRequest, parseCommand bool) bubblete
 	// Rust #57363 queues submitted input while a safety explanation is pending,
 	// so the blocked turn is never extended with a new prompt.
 	if m.pendingSafetyRecourse != nil {
-		m.queued = append(m.queued, queuedSubmission{Request: cloneSubmitRequest(request), ParseCommand: parseCommand})
+		m.queued = append(m.queued, queuedSubmission{Request: cloneSubmitRequest(request), ParseCommand: parseCommand, Literal: request.LiteralInput})
 		m.refreshTranscript()
 		return nil
 	}
@@ -6112,6 +6122,7 @@ func (m *Model) submitRequest(request SubmitRequest, parseCommand bool) bubblete
 	if strings.TrimSpace(request.Prompt) != "" {
 		m.inputHistory = append(m.inputHistory, request.Prompt)
 		m.inputHistoryElements = append(m.inputHistoryElements, cloneComposerTextElements(request.TextElements))
+		m.inputHistoryBash = append(m.inputHistoryBash, strings.HasPrefix(strings.TrimSpace(request.Prompt), "!") && !request.LiteralInput)
 	}
 	m.resetInputHistoryNavigation()
 	m.submitRequests = append(m.submitRequests, cloneSubmitRequest(request))
@@ -6152,6 +6163,7 @@ func (m *Model) queueComposer(parseCommand bool) bubbletea.Cmd {
 		return nil
 	}
 	input := strings.TrimSpace(m.composerText())
+	shellMode := m.composerPrefix == composerPrefixShell
 	textElements := m.composerTextElementsForPromptValue(m.composer.Value(), input)
 	m.resetComposer()
 	m.composerElements = nil
@@ -6170,6 +6182,7 @@ func (m *Model) queueComposer(parseCommand bool) bubbletea.Cmd {
 		TextElements:    textElements,
 	}
 	request.ClientID = uuid.NewString()
+	request.LiteralInput = literalBangInput(input, shellMode)
 	m.attachments = nil
 	m.composerMentionBindings = nil
 	// Rust #44328: queueing a new prompt clears the previous prompt's pending
@@ -6194,6 +6207,7 @@ func (m *Model) steerComposer() bubbletea.Cmd {
 		return nil
 	}
 	input := strings.TrimSpace(m.composerText())
+	shellMode := m.composerPrefix == composerPrefixShell
 	textElements := m.composerTextElementsForPromptValue(m.composer.Value(), input)
 	m.resetComposer()
 	m.composerElements = nil
@@ -6211,6 +6225,7 @@ func (m *Model) steerComposer() bubbletea.Cmd {
 		MentionCatalog:  m.submissionMentionCatalog(),
 		TextElements:    textElements,
 	}
+	request.LiteralInput = literalBangInput(input, shellMode)
 	m.attachments = nil
 	m.composerMentionBindings = nil
 	m.captureIDEContext(&request)
@@ -6221,6 +6236,7 @@ func (m *Model) steerComposer() bubbletea.Cmd {
 	if strings.TrimSpace(request.Prompt) != "" {
 		m.inputHistory = append(m.inputHistory, request.Prompt)
 		m.inputHistoryElements = append(m.inputHistoryElements, cloneComposerTextElements(request.TextElements))
+		m.inputHistoryBash = append(m.inputHistoryBash, strings.HasPrefix(strings.TrimSpace(request.Prompt), "!") && !request.LiteralInput)
 	}
 	m.resetInputHistoryNavigation()
 	m.notice = ""
@@ -7011,7 +7027,9 @@ func (m *Model) shouldSubmitOnTab() bool {
 	if input == "" && len(m.attachments) == 0 {
 		return false
 	}
-	return !strings.HasPrefix(input, "!")
+	// Rust #58412 gates Tab submission on shell mode, not on the visible text, so
+	// an ordinary message starting with an exposed `!` still submits.
+	return !m.isBangShellCommand()
 }
 
 // captureTurnElapsed records the pause-aware turn clock before the completion
@@ -7813,7 +7831,24 @@ func (m *Model) applyImageViewItem(item *protocol.ThreadItem) {
 		strings.TrimSpace(item.Text),
 		metadataString(item.Metadata, "path"),
 	)
-	m.applyHistoryCell(historycell.NewViewImageToolCallWithID(item.ID, path, m.sessionCWD))
+	cell := historycell.NewViewImageToolCallWithID(item.ID, path, m.sessionCWD)
+	if m.viewedImageLinksEnabled() {
+		cell = cell.LinkLocalImage()
+	}
+	m.applyHistoryCell(cell)
+}
+
+// viewedImageLinksEnabled mirrors Rust link_viewed_image (#58446): an OSC-8 file
+// link is useful only when this terminal can open the local path, so a remote
+// workspace or an SSH session keeps the viewed-image row as plain text.
+func (m *Model) viewedImageLinksEnabled() bool {
+	if m == nil {
+		return false
+	}
+	if m.remoteAppServer && !m.localDaemonSession {
+		return false
+	}
+	return !m.clipboardEnvironmentValue().SSHSession
 }
 
 // isViewImageThreadItem recognizes the built-in view_image tool call that Rust
@@ -11813,13 +11848,14 @@ func (m *Model) applyInputHistoryKey(msg bubbletea.KeyMsg) bool {
 		if !m.inputHistoryActive {
 			m.inputHistoryDraft = m.composerText()
 			m.inputHistoryDraftElements = m.currentComposerTextElements()
+			m.inputHistoryDraftBash = m.composerPrefix == composerPrefixShell
 			m.inputHistoryIndex = len(m.inputHistory)
 			m.inputHistoryActive = true
 		}
 		if m.inputHistoryIndex > 0 {
 			m.inputHistoryIndex--
 		}
-		m.setComposerPrompt(m.inputHistory[m.inputHistoryIndex])
+		m.setComposerPromptWithMode(m.inputHistory[m.inputHistoryIndex], m.inputHistoryBashAt(m.inputHistoryIndex))
 		m.restoreComposerTextElements(m.inputHistory[m.inputHistoryIndex], m.inputHistoryElementsAt(m.inputHistoryIndex))
 		m.composer.SetCursor(len(m.composer.Value()))
 		return true
@@ -11829,10 +11865,10 @@ func (m *Model) applyInputHistoryKey(msg bubbletea.KeyMsg) bool {
 		}
 		if m.inputHistoryIndex < len(m.inputHistory)-1 {
 			m.inputHistoryIndex++
-			m.setComposerPrompt(m.inputHistory[m.inputHistoryIndex])
+			m.setComposerPromptWithMode(m.inputHistory[m.inputHistoryIndex], m.inputHistoryBashAt(m.inputHistoryIndex))
 			m.restoreComposerTextElements(m.inputHistory[m.inputHistoryIndex], m.inputHistoryElementsAt(m.inputHistoryIndex))
 		} else {
-			m.setComposerPrompt(m.inputHistoryDraft)
+			m.setComposerPromptWithMode(m.inputHistoryDraft, m.inputHistoryDraftBash)
 			m.restoreComposerTextElements(m.inputHistoryDraft, m.inputHistoryDraftElements)
 			m.resetInputHistoryNavigation()
 		}
@@ -11872,7 +11908,8 @@ func (m *Model) applyEditQueuedMessageKey(msg bubbletea.KeyMsg, keySpec string) 
 	}
 	last := m.queued[len(m.queued)-1]
 	m.queued = m.queued[:len(m.queued)-1]
-	m.setComposerPrompt(last.Request.Prompt)
+	// Rust #58412: a queued literal bang keeps its literal text when edited.
+	m.setComposerPromptWithMode(last.Request.Prompt, strings.HasPrefix(strings.TrimSpace(last.Request.Prompt), "!") && !last.Request.LiteralInput)
 	m.restoreComposerTextElements(last.Request.Prompt, last.Request.TextElements)
 	m.composer.SetCursor(len(m.composer.Value()))
 	m.attachments = cloneComposerAttachments(last.Request.Attachments)
@@ -11891,6 +11928,7 @@ func (m *Model) resetInputHistoryNavigation() {
 	m.inputHistoryIndex = len(m.inputHistory)
 	m.inputHistoryDraft = ""
 	m.inputHistoryDraftElements = nil
+	m.inputHistoryDraftBash = false
 }
 
 func (m *Model) inputHistoryElementsAt(index int) []ComposerTextElement {
@@ -11898,6 +11936,15 @@ func (m *Model) inputHistoryElementsAt(index int) []ComposerTextElement {
 		return nil
 	}
 	return m.inputHistoryElements[index]
+}
+
+// inputHistoryBashAt reports whether a recalled prompt was submitted from shell
+// mode (Rust #58412 keeps is_bash_mode with the draft).
+func (m *Model) inputHistoryBashAt(index int) bool {
+	if m == nil || index < 0 || index >= len(m.inputHistoryBash) {
+		return false
+	}
+	return m.inputHistoryBash[index]
 }
 
 func (m *Model) appendAssistantDelta(itemID string, delta string) {

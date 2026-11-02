@@ -33,7 +33,8 @@ func TestComposerBlockquotePasteContinuesCurrentLinePrefixLikeRust(t *testing.T)
 		{"> quote\nplain ", "first\nsecond", "> quote\nplain first\nsecond"},
 		{"> ", "single", "> single"},
 		{"!> ", "out\npwd", "!> out\npwd"},
-		{" !echo hi\n> ", "out\npwd", " !echo hi\n> out\npwd"},
+		// Rust #58412: a space before the bang keeps the draft in normal text mode.
+		{" !echo hi\n> ", "out\npwd", " !echo hi\n> out\n> pwd\n\n"},
 	} {
 		state := codextui.NewState(nil)
 		model := NewModel(state, Options{Width: 80, Height: 24})
