@@ -2474,6 +2474,10 @@ type Model struct {
 	// from the command center until its first turn materializes a rollout
 	// (Rust #45255 agents_overview.blank_sessions).
 	agentsOverviewBlankSessions map[string]AgentThreadSwitchResponse
+	// agentsOverviewPendingDispatch carries a task prompt composed in the
+	// command center across the session start so it is submitted once the new
+	// session attaches (Rust #42428 DispatchAgentsOverviewTask).
+	agentsOverviewPendingDispatch string
 	// agentsOverviewLifecycleProgress is non-empty while an archive/delete RPC
 	// runs; navigation and task switching are blocked during that window
 	// (Rust #44433).
@@ -7295,6 +7299,11 @@ func (m *Model) interruptRunningTask() bubbletea.Cmd {
 func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 	var cmd bubbletea.Cmd
 	var questionDrafts []string
+	// Rust #42455: delivered events feed the command center's bounded live
+	// previews while the dashboard is open.
+	if m != nil && m.agentsOverview != nil {
+		m.trackAgentsOverviewActivity(event)
+	}
 	switch event.Type {
 	case "thread.started":
 		if current := strings.TrimSpace(m.State.ThreadID); current != "" && current != strings.TrimSpace(event.ThreadID) {

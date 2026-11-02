@@ -18,6 +18,7 @@ import (
 	"github.com/rivo/uniseg"
 
 	"codex_go/gitutil"
+	bottompane "codex_go/tui/bottom_pane"
 )
 
 // Group classifies a root thread for the dashboard's status grouping.
@@ -295,6 +296,11 @@ type Row struct {
 	StatusType   string
 	IsCurrent    bool
 	StatusActive bool // an active turn is running (enables ctrl+x stop)
+	// WaitingOnApproval and WaitingOnUserInput carry the active flags behind a
+	// needs-attention task so the details pane can explain the pending request
+	// (Rust #42455).
+	WaitingOnApproval  bool
+	WaitingOnUserInput bool
 	// IsSubagent marks an orphan subagent row. Failed subagents are finished,
 	// not "Needs input" (Rust #57315).
 	IsSubagent bool
@@ -372,6 +378,10 @@ const (
 	// section (Rust #51500 agents.toggle_pin). The shared-section request and
 	// the follow-up refresh live in the host.
 	ActionTogglePin
+	// ActionShowMore publishes the next page of history when the keyboard
+	// selected "Show more" row is activated (Rust #49106
+	// AppEvent::ShowMoreAgentsOverview).
+	ActionShowMore
 	// ActionExit closes the dashboard (exit_on_cancel standalone mode).
 	ActionExit
 )
@@ -476,6 +486,28 @@ type View struct {
 	// usageLines holds the pre-rendered token/usage-estimate lines for a task,
 	// shown in the details pane (Rust #44970 agents_overview.usage).
 	usageLines map[string][]string
+
+	// composer is the retained shared bottom-pane composer for new tasks
+	// (Rust #42428 agents_overview_composer). Focus, draft and Vim state survive
+	// refreshes and reconnects because the view object outlives them.
+	composer           *bottompane.ChatComposerState
+	focus              AgentsOverviewFocus
+	composerVimEnabled bool
+	composerVimInsert  bool
+
+	// activity carries bounded live detail previews per task (Rust #42455
+	// agents_overview.activity): reasoning headings, last messages and pending
+	// attention requests.
+	activity map[string]*AgentsOverviewActivity
+
+	// History pagination (Rust #49106): paged enables the seeded window and the
+	// "Show more" row, historyLimit is how many task rows are published, and
+	// hasMore reports that older tasks remain retained or undiscovered.
+	paged            bool
+	historyLimit     int
+	hasMore          bool
+	showMoreLoading  bool
+	showMoreFailed   bool
 }
 
 // KeyChordHint is one pending multi-stroke binding shown in the dashboard
@@ -794,7 +826,7 @@ func (v *View) Counts() (needsYou, working, ready int) {
 // the grouping preference. It mirrors Rust AgentsOverviewView::visible_indices
 // including its #51500 pinning partition: pinned tasks keep the shared-section
 // order and the remaining rows keep the active grouping order.
-func (v *View) VisibleIndices() []int {
+func (v *View) visibleIndicesUnbounded() []int {
 	if v == nil {
 		return nil
 	}
@@ -857,6 +889,19 @@ func (v *View) VisibleIndices() []int {
 		})
 	}
 	return append(pinned, visible...)
+}
+
+// VisibleIndices caps the unbounded task order at the published history window
+// when paging is enabled (Rust #49106 publishes ten tasks per page).
+func (v *View) VisibleIndices() []int {
+	indices := v.visibleIndicesUnbounded()
+	if v == nil || !v.paged || v.historyLimit <= 0 {
+		return indices
+	}
+	if len(indices) > v.historyLimit {
+		indices = indices[:v.historyLimit]
+	}
+	return indices
 }
 
 // statusFilterGroup resolves the active tab. The bool is false for All.
@@ -1101,6 +1146,10 @@ func (v *View) fitSelection() {
 	if v == nil {
 		return
 	}
+	// Rust #49106: the "Show more" row is a valid selection target.
+	if v.hasMore && v.Selected == ShowMoreIndex {
+		return
+	}
 	visible := v.VisibleIndices()
 	if len(visible) == 0 {
 		return
@@ -1118,24 +1167,24 @@ func (v *View) MoveSelection(forward bool) {
 	if v == nil || v.State.Renaming {
 		return
 	}
-	visible := v.VisibleIndices()
-	if len(visible) == 0 {
+	selectable := v.SelectableIndices()
+	if len(selectable) == 0 {
 		return
 	}
 	current := 0
-	for i, index := range visible {
+	for i, index := range selectable {
 		if index == v.Selected {
 			current = i
 			break
 		}
 	}
 	if forward {
-		v.Selected = visible[(current+1)%len(visible)]
+		v.Selected = selectable[(current+1)%len(selectable)]
 	} else {
 		if current == 0 {
-			v.Selected = visible[len(visible)-1]
+			v.Selected = selectable[len(selectable)-1]
 		} else {
-			v.Selected = visible[current-1]
+			v.Selected = selectable[current-1]
 		}
 	}
 }
@@ -1156,11 +1205,11 @@ func (v *View) JumpBottom() {
 	if v == nil || v.State.Renaming {
 		return
 	}
-	visible := v.VisibleIndices()
-	if len(visible) == 0 {
+	selectable := v.SelectableIndices()
+	if len(selectable) == 0 {
 		return
 	}
-	v.Selected = visible[len(visible)-1]
+	v.Selected = selectable[len(selectable)-1]
 }
 
 // PageDown / PageUp move by the visible viewport and stop at either end
@@ -1177,12 +1226,12 @@ func (v *View) pageSelection(forward bool) {
 	if v == nil || v.State.Renaming {
 		return
 	}
-	visible := v.VisibleIndices()
-	if len(visible) == 0 {
+	selectable := v.SelectableIndices()
+	if len(selectable) == 0 {
 		return
 	}
 	current := 0
-	for index, row := range visible {
+	for index, row := range selectable {
 		if row == v.Selected {
 			current = index
 			break
@@ -1193,11 +1242,11 @@ func (v *View) pageSelection(forward bool) {
 		step = 1
 	}
 	if forward {
-		current = min(len(visible)-1, current+step)
+		current = min(len(selectable)-1, current+step)
 	} else {
 		current = max(0, current-step)
 	}
-	v.Selected = visible[current]
+	v.Selected = selectable[current]
 }
 
 // ToggleGrouping cycles project -> directory -> status -> model grouping
@@ -1390,6 +1439,14 @@ func (v *View) CanOpenWithRight() bool {
 // thread (clearing an active search).
 func (v *View) Activate() Action {
 	if v == nil {
+		return ActionNone
+	}
+	// Rust #49106: the "Show more" row requests the next page instead of
+	// opening a task, even while a search is active.
+	if v.hasMore && v.Selected == ShowMoreIndex {
+		if action, ok := v.ShowMoreAgentsOverview(); ok {
+			return action
+		}
 		return ActionNone
 	}
 	trimmed := strings.TrimSpace(v.State.Input)
@@ -1770,12 +1827,29 @@ func (v *View) ApplyRefresh(rows []Row, selectedThreadID string) {
 	view.State = v.State
 	view.worktreesEnabled = v.worktreesEnabled
 	view.usageLines = v.usageLines
+	// Rust #42428: the shared composer, its focus and its Vim state are
+	// retained across refreshes and reconnects instead of being rebuilt.
+	view.composer = v.composer
+	view.focus = v.focus
+	view.composerVimEnabled = v.composerVimEnabled
+	view.composerVimInsert = v.composerVimInsert
+	// Rust #42455: retained previews follow the task list; previews for tasks
+	// that disappeared are dropped.
+	view.activity = v.activity
+	view.pruneActivityRows()
+	// Rust #49106: the published history window and the "Show more" state
+	// survive refreshes; only the availability of another page is recomputed.
+	view.paged = v.paged
+	view.historyLimit = v.historyLimit
+	view.showMoreLoading = v.showMoreLoading
+	view.showMoreFailed = v.showMoreFailed
 	// Rust #51500: a refresh keeps the pinned-section order and any in-flight
 	// pin request.
 	view.pinRanks = v.pinRanks
 	view.pinPending = v.pinPending
 	view.recomputeProjectGroups()
 	view.pruneUsageLines()
+	view.refreshHistoryPaging()
 	// Hidden roots stay hidden across refreshes; if the restored selection
 	// points at one, move it to a visible row.
 	view.fitSelection()

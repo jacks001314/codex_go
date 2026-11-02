@@ -1,9 +1,10 @@
-package tui
+package tui_test
 
 import (
 	"strings"
 	"testing"
 
+	tui "codex_go/tui"
 	agentsoverview "codex_go/tui/agents_overview"
 )
 
@@ -18,11 +19,11 @@ func TestAgentsArchiveDeleteDefaultsLikeRust(t *testing.T) {
 		{action: agentsoverview.ShortcutHintArchive, want: "a", label: "Archive"},
 		{action: agentsoverview.ShortcutHintDelete, want: "backspace", label: "Delete"},
 	} {
-		bindings, source, custom := ResolvedKeymapBindings(nil, "agents", tc.action)
+		bindings, source, custom := tui.ResolvedKeymapBindings(nil, "agents", tc.action)
 		if custom || source != "default" || strings.Join(bindings, ",") != tc.want {
 			t.Fatalf("agents.%s = %#v source=%q custom=%v, want default %q", tc.action, bindings, source, custom, tc.want)
 		}
-		if descriptor, ok := FindKeymapAction("agents", tc.action); !ok || descriptor.Label != tc.label {
+		if descriptor, ok := tui.FindKeymapAction("agents", tc.action); !ok || descriptor.Label != tc.label {
 			t.Fatalf("agents.%s descriptor = %#v ok=%v", tc.action, descriptor, ok)
 		}
 	}
@@ -46,7 +47,7 @@ func TestAgentsArchiveDeleteDefaultsYieldToExistingBindingsLikeRust(t *testing.T
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			config := NewKeymapConfig()
+			config := tui.NewKeymapConfig()
 			context := tc.context
 			action := tc.action
 			if context == "list" && action == "delete_selected" {
@@ -55,7 +56,7 @@ func TestAgentsArchiveDeleteDefaultsYieldToExistingBindingsLikeRust(t *testing.T
 			if err := config.Set(context, action, []string{tc.binding}); err != nil {
 				t.Fatalf("Set %s.%s = %v", context, action, err)
 			}
-			if bindings, _, custom := ResolvedKeymapBindings(config, "agents", tc.targetAction); custom || len(bindings) != 0 {
+			if bindings, _, custom := tui.ResolvedKeymapBindings(config, "agents", tc.targetAction); custom || len(bindings) != 0 {
 				t.Fatalf("agents.%s = %#v custom=%v, want cleared default", tc.targetAction, bindings, custom)
 			}
 			if err := config.Validate(); err != nil {
@@ -65,14 +66,14 @@ func TestAgentsArchiveDeleteDefaultsYieldToExistingBindingsLikeRust(t *testing.T
 	}
 
 	// An explicit binding wins over the yield rule.
-	explicit := NewKeymapConfig()
+	explicit := tui.NewKeymapConfig()
 	if err := explicit.Set("agents", "search", []string{"a"}); err != nil {
 		t.Fatalf("Set agents.search = %v", err)
 	}
 	if err := explicit.Set("agents", "archive", []string{"f7"}); err != nil {
 		t.Fatalf("Set agents.archive = %v", err)
 	}
-	if bindings, source, custom := ResolvedKeymapBindings(explicit, "agents", agentsoverview.ShortcutHintArchive); !custom || source != "custom" || strings.Join(bindings, ",") != "f7" {
+	if bindings, source, custom := tui.ResolvedKeymapBindings(explicit, "agents", agentsoverview.ShortcutHintArchive); !custom || source != "custom" || strings.Join(bindings, ",") != "f7" {
 		t.Fatalf("explicit agents.archive = %#v source=%q custom=%v, want custom f7", bindings, source, custom)
 	}
 }
