@@ -4289,6 +4289,8 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		return m, m.openRequestUserInputModal(msg)
 	case requestUserInputTimeoutMsg:
 		return m, m.applyRequestUserInputTimeout(msg)
+	case forkCurrentSessionMsg:
+		return m, m.applyForkCurrentSessionResult(msg)
 	case streamEnvelopeMsg:
 		if msg.Done {
 			return m, nil

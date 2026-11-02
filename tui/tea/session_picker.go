@@ -376,6 +376,19 @@ func (m *Model) movePendingSteersToFork(sourceThreadID string, forkThreadID stri
 	m.pendingSteersThreadID = forkThreadID
 }
 
+// forkCurrentSessionMsg carries the result of a locked-view fork that ran off
+// the update loop (Rust #47185 spawns the fork and repaints
+// "Forking conversation…" while it is pending).
+type forkCurrentSessionMsg struct {
+	selection      codextui.SessionSelection
+	sourceThreadID string
+	retained       *composerInputState
+	retainedSteers []pendingSteerSubmission
+	fromLocked     bool
+	summary        *codextui.SessionSummary
+	err            error
+}
+
 func (m *Model) applyForkCurrentSession(name string) bubbletea.Cmd {
 	if m == nil || m.State == nil {
 		return nil
@@ -408,8 +421,6 @@ func (m *Model) applyForkCurrentSession(name string) bubbletea.Cmd {
 		}
 		m.readOnlyDraft = nil
 		retainedSteers = append(retainedSteers, m.pendingSteers...)
-		m.forkInProgress = true
-		defer func() { m.forkInProgress = false }()
 	}
 	selection := codextui.SessionSelection{
 		Kind: codextui.SessionSelectionFork,
@@ -419,24 +430,40 @@ func (m *Model) applyForkCurrentSession(name string) bubbletea.Cmd {
 		},
 		Name: strings.TrimSpace(name),
 	}
+	if fromLocked {
+		// Rust #47185: the locked view owns the keyboard for the duration of the
+		// fork and paints "Forking conversation…" before the request is sent, so
+		// the RPC must not run inside the key handler (that froze the whole UI
+		// for as long as the backend took, and the progress line never appeared).
+		m.forkInProgress = true
+		m.refreshTranscript()
+		action := m.onSessionAction
+		msg := forkCurrentSessionMsg{
+			selection:      selection,
+			sourceThreadID: selection.Target.ThreadID,
+			retained:       retained,
+			retainedSteers: retainedSteers,
+			fromLocked:     true,
+		}
+		return func() bubbletea.Msg {
+			// The Cmd runs on its own goroutine and only reads captured values;
+			// it never touches m, so quitting or switching threads mid-flight
+			// cannot race with (or mutate) a torn-down model.
+			if action == nil {
+				return msg
+			}
+			msg.summary, msg.err = action(selection)
+			return msg
+		}
+	}
 	decision, notice, _ := m.applySessionSelection(selection)
 	if strings.TrimSpace(notice) != "" {
 		m.notice = strings.TrimSpace(notice)
 	}
 	if decision == nil {
-		// Rust #47185: a failed fork keeps the locked view and its draft intact.
-		m.readOnlyDraft = retained
 		m.addErrorHistoryMessage(m.notice)
 		m.refreshTranscript()
 		return nil
-	}
-	if fromLocked {
-		// Rust #47185: the fork is editable, so the locked notice goes away and
-		// the local draft continues in the new conversation.
-		m.setReadOnlyThread(false)
-		m.restoreComposerInputState(retained, true)
-		m.movePendingSteersToFork(selection.Target.ThreadID, decision.Value, retainedSteers)
-		m.notice = "Fork created. You can continue here."
 	}
 	m.refreshTranscript()
 	if m.onModalResponse != nil {
@@ -448,6 +475,84 @@ func (m *Model) applyForkCurrentSession(name string) bubbletea.Cmd {
 		})
 	}
 	return nil
+}
+
+// applyForkCurrentSessionResult finishes a locked-view fork that ran off the
+// update loop: success clears the locked view and moves the draft (plus any
+// pending steers) onto the fork, failure restores the draft and keeps the lock.
+func (m *Model) applyForkCurrentSessionResult(msg forkCurrentSessionMsg) bubbletea.Cmd {
+	if m == nil || !msg.fromLocked {
+		return nil
+	}
+	m.forkInProgress = false
+	if msg.err != nil {
+		// Rust session_start.rs: forking an archived conversation prompts too.
+		if _, ok := archivedSessionGuidanceForThread(msg.err, msg.sourceThreadID); ok &&
+			m.openUnarchivePrompt(msg.sourceThreadID, "fork", msg.selection) {
+			m.readOnlyDraft = msg.retained
+			m.refreshTranscript()
+			return nil
+		}
+		m.readOnlyDraft = msg.retained
+		m.notice = strings.TrimSpace(msg.err.Error())
+		m.addErrorHistoryMessage(m.notice)
+		m.refreshTranscript()
+		return nil
+	}
+	decision, notice, _ := m.applyForkSummary(msg.selection, msg.summary)
+	if strings.TrimSpace(notice) != "" {
+		m.notice = strings.TrimSpace(notice)
+	}
+	if decision == nil {
+		// Rust #47185: a failed fork keeps the locked view and its draft intact.
+		m.readOnlyDraft = msg.retained
+		m.addErrorHistoryMessage(m.notice)
+		m.refreshTranscript()
+		return nil
+	}
+	// Rust #47185: the fork is editable, so the locked notice goes away and the
+	// local draft continues in the new conversation.
+	m.setReadOnlyThread(false)
+	m.restoreComposerInputState(msg.retained, true)
+	m.movePendingSteersToFork(msg.sourceThreadID, decision.Value, msg.retainedSteers)
+	m.notice = "Fork created. You can continue here."
+	m.refreshTranscript()
+	if m.onModalResponse != nil {
+		return m.onModalResponse(ModalResponse{
+			ID:       "fork-current-session",
+			Kind:     ModalKindPicker,
+			OptionID: msg.selection.Target.ThreadID,
+			Picker:   decision,
+		})
+	}
+	return nil
+}
+
+// applyForkSummary applies a completed thread/fork response: naming, picker
+// bookkeeping, the thread switch and the task-tool capability inheritance
+// shared by the synchronous (unlocked) and asynchronous (locked) fork paths.
+func (m *Model) applyForkSummary(selection codextui.SessionSelection, summary *codextui.SessionSummary) (*PickerDecision, string, bool) {
+	threadID := strings.TrimSpace(selection.Target.ThreadID)
+	decision := &PickerDecision{Kind: string(selection.Kind), Value: threadID}
+	if summary != nil && strings.TrimSpace(summary.ThreadID) != "" {
+		m.invalidateAppsScope()
+		if name := strings.TrimSpace(selection.Name); name != "" {
+			if m.onRenameThread == nil {
+				m.addErrorHistoryMessage("Failed to name the forked session: rename runtime is unavailable")
+			} else if err := m.onRenameThread(summary.ThreadID, name); err != nil {
+				m.addErrorHistoryMessage("Failed to name the forked session: " + strings.TrimSpace(err.Error()))
+			} else {
+				summary.Title = name
+			}
+		}
+		m.upsertSessionItem(*summary)
+		m.deactivateSideConversation()
+		m.switchThreadID(summary.ThreadID)
+		m.inheritTaskToolCapability(threadID, summary.ThreadID)
+		decision.Value = summary.ThreadID
+		return decision, "Forked session " + summary.ThreadID, true
+	}
+	return decision, "Fork selected: " + selection.Target.DisplayLabel(), true
 }
 
 func (m *Model) applySessionSelection(selection codextui.SessionSelection) (*PickerDecision, string, bool) {
@@ -537,25 +642,7 @@ func (m *Model) applySessionSelection(selection codextui.SessionSelection) (*Pic
 			}
 			return nil, err.Error(), true
 		}
-		if summary != nil && strings.TrimSpace(summary.ThreadID) != "" {
-			m.invalidateAppsScope()
-			if name := strings.TrimSpace(selection.Name); name != "" {
-				if m.onRenameThread == nil {
-					m.addErrorHistoryMessage("Failed to name the forked session: rename runtime is unavailable")
-				} else if err := m.onRenameThread(summary.ThreadID, name); err != nil {
-					m.addErrorHistoryMessage("Failed to name the forked session: " + strings.TrimSpace(err.Error()))
-				} else {
-					summary.Title = name
-				}
-			}
-			m.upsertSessionItem(*summary)
-			m.deactivateSideConversation()
-			m.switchThreadID(summary.ThreadID)
-			m.inheritTaskToolCapability(threadID, summary.ThreadID)
-			decision.Value = summary.ThreadID
-			return decision, "Forked session " + summary.ThreadID, true
-		}
-		return decision, "Fork selected: " + selection.Target.DisplayLabel(), true
+		return m.applyForkSummary(selection, summary)
 	case codextui.SessionSelectionArchive:
 		if _, err := m.runSessionAction(selection); err != nil {
 			return nil, err.Error(), true

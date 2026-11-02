@@ -55,7 +55,13 @@ func TestReadOnlyViewForkShortcutMatchesRust(t *testing.T) {
 		// Rust #47185: a successful fork leaves the locked view for the new
 		// editable conversation, so each shortcut case starts locked again.
 		model.setReadOnlyThread(true)
-		model.Update(testCase.message)
+		updated, cmd := model.Update(testCase.message)
+		model = updated.(*Model)
+		// The locked-view fork defers the RPC to a command; without draining it
+		// no request is issued at all.
+		if testCase.want {
+			model = runLockedForkCmd(t, model, cmd)
+		}
 		forked := len(actions) == 1 && actions[0].Kind == codextui.SessionSelectionFork && actions[0].Target.ThreadID == "thread-source"
 		if forked != testCase.want {
 			t.Fatalf("%s: fork selections = %#v, want forked=%v", testCase.name, actions, testCase.want)
@@ -120,7 +126,12 @@ func TestLockedForkRetainsQueuedPromptDraftImageAndSteersLikeRust(t *testing.T) 
 	}
 	model.pendingSteers = []pendingSteerSubmission{{ID: "client-steer", Request: SubmitRequest{Prompt: "Retained steer"}}}
 
-	model.Update(keyRunes('f'))
+	updated, cmd := model.Update(keyRunes('f'))
+	model = updated.(*Model)
+	if !model.forkInProgress {
+		t.Fatal("the locked fork did not paint its progress state")
+	}
+	model = runLockedForkCmd(t, model, cmd)
 
 	if state.ThreadID != "thread-forked" {
 		t.Fatalf("thread after the locked-view fork = %q, want the fork", state.ThreadID)
@@ -177,7 +188,9 @@ func TestLockedForkFailureKeepsDraftImageLikeRust(t *testing.T) {
 		Summary:  &codextui.SessionSummary{ThreadID: "thread-source"},
 		ReadOnly: true,
 	})
-	model.Update(keyRunes('f'))
+	updated, cmd := model.Update(keyRunes('f'))
+	model = updated.(*Model)
+	model = runLockedForkCmd(t, model, cmd)
 	if state.ThreadID != "thread-source" || !model.externalWriterView() {
 		t.Fatalf("failed fork changed the view: thread=%q readOnly=%v", state.ThreadID, model.readOnlyThread)
 	}
