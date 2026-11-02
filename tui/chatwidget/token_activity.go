@@ -302,6 +302,14 @@ func TokenActivityCalendarLines(view TokenActivityView, buckets []TokenActivityD
 	return tokenActivityChartBody(view, buckets, today, width)
 }
 
+// TokenActivityCalendarLinesPalette renders the calendar with the terminal
+// palette, so the analytics dashboard honors the effective color level like the
+// /usage chart (Rust #46897 analytics/activity_chart.rs TokenActivityPalette::
+// current).
+func TokenActivityCalendarLinesPalette(view TokenActivityView, buckets []TokenActivityDailyBucket, today time.Time, width int, palette TokenActivityPalette) []string {
+	return tokenActivityChartBodyWithPalette(view, buckets, today, width, palette)
+}
+
 func tokenActivityChartBody(view TokenActivityView, buckets []TokenActivityDailyBucket, today time.Time, width int) []string {
 	return tokenActivityChartBodyWithPalette(view, buckets, today, width, TokenActivityPalette{})
 }

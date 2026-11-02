@@ -139,6 +139,60 @@ func interactiveStartupConfigWarningsWithNFS(codexHome string, cwd string, theme
 	return warnings
 }
 
+// interactiveStartupDeprecationMessages resolves the deprecated configuration
+// features the local session uses and yields one TUI deprecation-notice event
+// per usage (Rust #47065: core SessionConfiguration emits
+// EventMsg::DeprecationNotice for config.features.legacy_feature_usages(), the
+// app-server relays it as a deprecationNotice notification, and the TUI inserts
+// it through the deduplicating history path).
+func interactiveStartupDeprecationMessages(root *cli.RootOptions, codexHome string, cwd string) []bubbletea.Msg {
+	loaded, err := config.LoadEffectiveWithOptions(codexHome, interactiveKeymapLoadOptions(root))
+	if err != nil || loaded == nil {
+		return nil
+	}
+	usages := loaded.LegacyFeatureUsages()
+	messages := make([]bubbletea.Msg, 0, len(usages))
+	for _, usage := range usages {
+		notice := features.NoticeForLegacyFeatureUsage(usage)
+		messages = append(messages, codextea.ThreadEventMsg{Event: protocol.DeprecationNotice(notice.Summary, notice.Details)})
+	}
+	return messages
+}
+
+// interactiveStartupMessages prepends the startup deprecation notices to the
+// MCP startup stream so the TUI consumes both through the same message channel
+// as the server-delivered events.
+func interactiveStartupMessages(ctx context.Context, stream <-chan bubbletea.Msg, prefix []bubbletea.Msg) <-chan bubbletea.Msg {
+	if len(prefix) == 0 {
+		return stream
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	messages := make(chan bubbletea.Msg, len(prefix)+2)
+	go func() {
+		defer close(messages)
+		for _, message := range prefix {
+			select {
+			case messages <- message:
+			case <-ctx.Done():
+				return
+			}
+		}
+		if stream == nil {
+			return
+		}
+		for message := range stream {
+			select {
+			case messages <- message:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return messages
+}
+
 func interactiveWorktreeSettings(root *cli.RootOptions) (worktree.WorktreeSettings, bool) {
 	loaded, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), interactiveKeymapLoadOptions(root))
 	if err != nil {
@@ -345,6 +399,14 @@ type interactiveElicitationBroker struct {
 	next    int
 	closed  bool
 	pending map[string]*pendingInteractiveElicitation
+	// userVerification is the #43708 attempt ledger for published
+	// user-verification elicitations. It keeps the approved parameters apart
+	// from the view and rejects duplicate or stale attempts.
+	userVerification *UserVerificationRequests
+	// userVerificationProvider signs an accepted challenge. A nil provider (a
+	// build without a native backend) keeps reporting providerUnavailable
+	// without publishing a prompt that could never be answered.
+	userVerificationProvider interactiveUserVerificationProvider
 }
 
 // pendingInteractiveElicitation is one published, unanswered MCP elicitation.
@@ -396,7 +458,31 @@ func newInteractiveApprovalBroker() *interactiveApprovalBroker {
 }
 
 func newInteractiveElicitationBroker() *interactiveElicitationBroker {
-	return &interactiveElicitationBroker{pending: map[string]*pendingInteractiveElicitation{}}
+	return &interactiveElicitationBroker{
+		pending:          map[string]*pendingInteractiveElicitation{},
+		userVerification: &UserVerificationRequests{},
+	}
+}
+
+// setUserVerificationProvider installs the local signer. The embedded TUI wires
+// the in-process app-server provider; tests install a stub.
+func (b *interactiveElicitationBroker) setUserVerificationProvider(provider interactiveUserVerificationProvider) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	b.userVerificationProvider = provider
+	b.mu.Unlock()
+}
+
+func (b *interactiveElicitationBroker) userVerificationAvailable() bool {
+	if b == nil {
+		return false
+	}
+	b.mu.Lock()
+	provider := b.userVerificationProvider
+	b.mu.Unlock()
+	return provider != nil && provider.Available()
 }
 
 func newInteractiveUserInputBroker() *interactiveUserInputBroker {
@@ -691,7 +777,10 @@ func (b *interactiveElicitationBroker) mcpElicitationFunc(send func(bubbletea.Ms
 		if b == nil || request == nil {
 			return &mcp.MCPElicitationResponse{Action: mcp.MCPElicitationActionCancel}, nil
 		}
-		if mcp.IsUserVerificationElicitation(request) {
+		// Rust #43708: a local build without a native backend still reports
+		// providerUnavailable, but a build that can sign publishes the prompt
+		// and resolves it through the same attempt ledger as the remote TUI.
+		if mcp.IsUserVerificationElicitation(request) && !b.userVerificationAvailable() {
 			return &mcp.MCPElicitationResponse{
 				Action: mcp.MCPElicitationActionCancel,
 				Meta:   mcp.UserVerificationReasonMeta(mcp.UserVerificationReasonProviderUnavailable),
@@ -724,21 +813,92 @@ func (b *interactiveElicitationBroker) mcpElicitationFunc(send func(bubbletea.Ms
 		if !b.markPublished(id, entry) {
 			return nil, ErrInteractiveElicitationAbandoned
 		}
+		userVerification := mcp.IsUserVerificationElicitation(request)
+		if userVerification {
+			// Rust #43708: keep the approved parameters apart from the view so
+			// the resolution path never signs a redrawn prompt.
+			b.userVerification.NoteRequest(serverName, requestID, UserVerificationParams{
+				Title:       strings.TrimSpace(request.Title),
+				Description: strings.TrimSpace(request.Description),
+				Challenge:   strings.TrimSpace(request.Challenge),
+			})
+		}
 		if ctx == nil {
 			ctx = context.Background()
 		}
 		select {
 		case response := <-responses:
-			return b.elicitationResponse(response, mcpElicitationToolApproval(request.Meta), mcp.IsUserVerificationElicitation(request)), nil
+			if userVerification {
+				if !response.Cancelled && response.Elicitation != nil &&
+					mcpElicitationAction(response.Elicitation.Action) == mcp.MCPElicitationActionAccept {
+					return b.userVerificationAccept(ctx, request, serverName, requestID), nil
+				}
+				b.userVerification.Remove(serverName, requestID)
+			}
+			return b.elicitationResponse(response, mcpElicitationToolApproval(request.Meta), userVerification), nil
 		case <-entry.abandoned:
+			if userVerification {
+				b.userVerification.Remove(serverName, requestID)
+			}
 			return nil, ErrInteractiveElicitationAbandoned
 		case <-ctx.Done():
 			// The waiter is dropped: signal the abandonment so the TUI drops a
 			// prompt that can no longer be answered, then report the
 			// cancellation to the caller (Rust #51611).
 			b.abandon(id)
+			if userVerification {
+				b.userVerification.Remove(serverName, requestID)
+			}
 			return nil, ctx.Err()
 		}
+	}
+}
+
+// userVerificationAccept runs the one verification attempt a request may have
+// (Rust `UserVerificationRequests::begin` + the remote TUI's proof path). A
+// duplicate accept never signs twice, and a proof that finishes after the
+// request was resolved or dropped is discarded.
+func (b *interactiveElicitationBroker) userVerificationAccept(ctx context.Context, request *mcp.MCPElicitationRequest, serverName, requestID string) *mcp.MCPElicitationResponse {
+	attempt, started := b.userVerification.Begin(serverName, requestID)
+	if !started {
+		return &mcp.MCPElicitationResponse{
+			Action: mcp.MCPElicitationActionCancel,
+			Meta:   mcp.UserVerificationReasonMeta(mcp.UserVerificationReasonInterrupted),
+		}
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	proof, err := b.userVerificationProvider.Verify(ctx, request)
+	if err != nil {
+		b.userVerification.Remove(serverName, requestID)
+		reason := mcp.UserVerificationReasonServiceError
+		switch {
+		case errors.Is(err, errUserVerificationProviderUnavailable):
+			reason = mcp.UserVerificationReasonProviderUnavailable
+		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+			reason = mcp.UserVerificationReasonInterrupted
+		}
+		return &mcp.MCPElicitationResponse{
+			Action: mcp.MCPElicitationActionCancel,
+			Meta:   mcp.UserVerificationReasonMeta(reason),
+		}
+	}
+	if !b.userVerification.IsPending(serverName, requestID, attempt.ID) {
+		// The prompt was resolved or dropped while the verifier ran, so its
+		// proof is stale (Rust #43708).
+		return &mcp.MCPElicitationResponse{
+			Action: mcp.MCPElicitationActionCancel,
+			Meta:   mcp.UserVerificationReasonMeta(mcp.UserVerificationReasonInterrupted),
+		}
+	}
+	b.userVerification.Remove(serverName, requestID)
+	return &mcp.MCPElicitationResponse{
+		Action: mcp.MCPElicitationActionAccept,
+		Content: map[string]any{
+			"credentialId": proof.CredentialID,
+			"signature":    proof.Signature,
+		},
 	}
 }
 
@@ -860,6 +1020,9 @@ func (b *interactiveElicitationBroker) close() {
 	for id, entry := range released {
 		b.release(id, entry)
 	}
+	// A dropped router must not let an in-flight verification answer a prompt
+	// the TUI can no longer show (Rust #43708: Drop for PendingVerification).
+	b.userVerification.Clear()
 }
 
 // elicitationResponse converts a TUI modal answer into the MCP elicitation
@@ -1337,8 +1500,16 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		startupCtx, cancelMCPStartup = context.WithCancel(startupCtx)
 		initialMessages = interactiveMCPStartupMessages(startupCtx, mcpService, runner, mcpExpectedServers)
 	}
+	// Rust #47065: the local session resolves deprecated configuration features
+	// during startup, so the embedded TUI delivers the same deprecation notices
+	// the app-server would notify the remote client about.
+	initialMessages = interactiveStartupMessages(ctx, initialMessages, interactiveStartupDeprecationMessages(root, auth.DefaultCodexHome(), strings.TrimSpace(state.CWD)))
 	approvalBroker := newInteractiveApprovalBroker()
 	elicitationBroker := newInteractiveElicitationBroker()
+	// Rust #43708: the embedded TUI signs user-verification challenges through
+	// its in-process app-server, under the same attempt ledger the remote client
+	// uses. Builds without a native provider keep reporting providerUnavailable.
+	elicitationBroker.setUserVerificationProvider(interactiveLocalUserVerificationProvider(auth.DefaultCodexHome()))
 	// Rust #51611 closes the elicitation router during MCP runtime shutdown:
 	// pending prompts are abandoned so their waiters never hang, and later
 	// requests are rejected.
