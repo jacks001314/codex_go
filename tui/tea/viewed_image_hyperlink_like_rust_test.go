@@ -14,9 +14,19 @@ import (
 
 func viewedImageLinkModel(t *testing.T, options Options) (*Model, string, string) {
 	t.Helper()
+	return viewedImageLinkModelWithEnvironment(t, options, codextui.ClipboardEnvironment{})
+}
+
+// viewedImageLinkModelWithEnvironment pins the clipboard environment. The
+// production probe reads the host's SSH_*/TMUX/STY variables, so without the pin
+// these rows render one way locally and another way for anyone running the
+// tests over SSH.
+func viewedImageLinkModelWithEnvironment(t *testing.T, options Options, environment codextui.ClipboardEnvironment) (*Model, string, string) {
+	t.Helper()
 	path := writeTranscriptTestPNG(t, 8, 8)
 	options.Width = 100
 	options.Height = 30
+	options.ClipboardEnvironment = &environment
 	model := NewModel(codextui.NewState(nil), options)
 	model.applyImageViewItem(&protocol.ThreadItem{ID: "view-1", Type: "imageView", Path: path})
 	destination, ok := codextui.ViewedImageDestination(path)
@@ -60,8 +70,7 @@ func TestViewedImageRowStaysPlainForRemoteWorkspaceLikeRust(t *testing.T) {
 }
 
 func TestViewedImageRowStaysPlainOverSSHLikeRust(t *testing.T) {
-	t.Setenv("SSH_CONNECTION", "10.0.0.1 51234 10.0.0.2 22")
-	model, _, _ := viewedImageLinkModel(t, Options{})
+	model, _, _ := viewedImageLinkModelWithEnvironment(t, Options{}, codextui.ClipboardEnvironment{SSHSession: true})
 	if text := viewedImageRowText(t, model); strings.Contains(text, "\x1b]8;;") {
 		t.Fatalf("SSH row = %q, want plain text", text)
 	}
