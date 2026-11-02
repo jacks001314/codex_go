@@ -723,6 +723,32 @@ func (v *View) renderDetails(width, height int, styled bool) []string {
 		{text: " ", style: spanPlain},
 		{text: row.Group.StatusLabelForRow(row), style: spanPlain},
 	})
+	activity := v.AgentsOverviewActivityFor(row.ThreadID)
+	// Rust #42455: an attention request leads the details and explains what the
+	// task is waiting for.
+	if row.Group == GroupNeedsYou {
+		lines = append(lines, nil)
+		lines = append(lines, []span{{text: "Needs attention", style: spanRed}})
+		if activity.RequestPreview != "" {
+			lines = append(lines, []span{{text: activity.RequestPreview, style: spanPlain}})
+		}
+		lines = append(lines, []span{{text: "Open task to review.", style: spanDim}})
+		if row.WaitingOnApproval {
+			lines = append(lines, []span{{text: "Waiting for approval.", style: spanPlain}})
+		}
+		if row.WaitingOnUserInput {
+			lines = append(lines, []span{{text: "Waiting for your response.", style: spanPlain}})
+		}
+		if row.StatusType == "systemError" || row.StatusType == "system_error" || row.StatusType == "error" {
+			lines = append(lines, []span{{text: "Task encountered an error.", style: spanPlain}})
+		}
+	}
+	// Rust #42455: a running task shows its live reasoning heading.
+	if row.StatusActive && activity.ReasoningHeading != "" {
+		lines = append(lines, nil)
+		lines = append(lines, []span{{text: "Latest activity", style: spanDim}})
+		lines = append(lines, []span{{text: activity.ReasoningHeading, style: spanPlain}})
+	}
 	lines = append(lines, nil)
 	// Rust #50727: the model and reasoning effort sit at the top of the task
 	// details, and long values are ellipsis-truncated to keep one line.
@@ -749,7 +775,13 @@ func (v *View) renderDetails(width, height int, styled bool) []string {
 	}
 	// Rust #44752: the details pane also shows the task's last delivered agent
 	// message, rendered from markdown with the task's working directory.
-	if message := strings.TrimSpace(row.LastMessage); message != "" {
+	// Rust #42455: a live message observed for a tracked task wins over the
+	// historical one read with the task list.
+	message := strings.TrimSpace(activity.LastMessage)
+	if message == "" {
+		message = strings.TrimSpace(row.LastMessage)
+	}
+	if message != "" {
 		lines = append(lines, nil)
 		lines = append(lines, []span{{text: "Last message", style: spanDim}})
 		messageLines, rendered := v.renderDetailsMarkdown(message, width, row.CWD)

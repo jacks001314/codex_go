@@ -296,6 +296,11 @@ type Row struct {
 	StatusType   string
 	IsCurrent    bool
 	StatusActive bool // an active turn is running (enables ctrl+x stop)
+	// WaitingOnApproval and WaitingOnUserInput carry the active flags behind a
+	// needs-attention task so the details pane can explain the pending request
+	// (Rust #42455).
+	WaitingOnApproval  bool
+	WaitingOnUserInput bool
 	// IsSubagent marks an orphan subagent row. Failed subagents are finished,
 	// not "Needs input" (Rust #57315).
 	IsSubagent bool
@@ -485,6 +490,11 @@ type View struct {
 	focus              AgentsOverviewFocus
 	composerVimEnabled bool
 	composerVimInsert  bool
+
+	// activity carries bounded live detail previews per task (Rust #42455
+	// agents_overview.activity): reasoning headings, last messages and pending
+	// attention requests.
+	activity map[string]*AgentsOverviewActivity
 }
 
 // KeyChordHint is one pending multi-stroke binding shown in the dashboard
@@ -1785,6 +1795,10 @@ func (v *View) ApplyRefresh(rows []Row, selectedThreadID string) {
 	view.focus = v.focus
 	view.composerVimEnabled = v.composerVimEnabled
 	view.composerVimInsert = v.composerVimInsert
+	// Rust #42455: retained previews follow the task list; previews for tasks
+	// that disappeared are dropped.
+	view.activity = v.activity
+	view.pruneActivityRows()
 	// Rust #51500: a refresh keeps the pinned-section order and any in-flight
 	// pin request.
 	view.pinRanks = v.pinRanks

@@ -139,6 +139,10 @@ func agentsOverviewRowsFromThreadsWithReadReceipts(threads []*appserver.Thread, 
 		row.Group = agentsoverview.GroupForThread(thread.Status.Type, waitingApproval, waitingUserInput, row.IsSubagent)
 		row.StatusType = strings.TrimSpace(thread.Status.Type)
 		row.StatusActive = strings.EqualFold(strings.TrimSpace(thread.Status.Type), "active")
+		// Rust #42455: the details pane explains which attention request the
+		// active flags describe.
+		row.WaitingOnApproval = waitingApproval
+		row.WaitingOnUserInput = waitingUserInput
 		row.IsCurrent = strings.EqualFold(row.ThreadID, currentThreadID)
 		if receipt, ok := receipts[row.ThreadID]; ok {
 			row.Unread = receipt.Unread

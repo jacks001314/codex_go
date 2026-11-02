@@ -7281,6 +7281,11 @@ func (m *Model) interruptRunningTask() bubbletea.Cmd {
 func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 	var cmd bubbletea.Cmd
 	var questionDrafts []string
+	// Rust #42455: delivered events feed the command center's bounded live
+	// previews while the dashboard is open.
+	if m != nil && m.agentsOverview != nil {
+		m.trackAgentsOverviewActivity(event)
+	}
 	switch event.Type {
 	case "thread.started":
 		if current := strings.TrimSpace(m.State.ThreadID); current != "" && current != strings.TrimSpace(event.ThreadID) {
