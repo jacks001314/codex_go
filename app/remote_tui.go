@@ -410,6 +410,9 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 	}
 	tuiTelemetry := startInteractiveTUITelemetry(root, interactiveDaemonSelectionReason(root, endpoint, interactiveRemoteEndpointIsExplicitRemote(root)), appServerMode, nil)
 	defer tuiTelemetry.close()
+	// Rust #47889: keep a bounded tail of this TUI process's diagnostics so a
+	// feedback upload can stage it as client-logs.txt on the app-server host.
+	defer InstallTUIClientLogCapture()()
 	// Rust #39082/#44746: query remote project config layers before starting a
 	// thread and persist accepted trust through config/batchWrite on the remote
 	// server. Consent runs before server settings are read so a newly saved
@@ -1153,6 +1156,12 @@ func interactiveRemoteFeedbackSubmitHandler(ctx context.Context, endpoint *appse
 			return appserver.FeedbackUploadResponse{}, err
 		}
 		defer client.close()
+		// Rust #47889: attach this TUI's own diagnostics by staging them on the
+		// app-server host, which is where feedback/upload resolves extraLogFiles.
+		cleanup := stageRemoteFeedbackClientLogs(remoteGoalFS(reqCtx, client), client.codexHome, TUIClientLogTail(), &params)
+		if cleanup != nil {
+			defer cleanup()
+		}
 		var response appserver.FeedbackUploadResponse
 		if err := remoteSessionRequest(reqCtx, client, appserver.MethodFeedbackUpload, params, &response); err != nil {
 			return appserver.FeedbackUploadResponse{}, err

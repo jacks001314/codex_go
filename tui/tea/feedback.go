@@ -114,6 +114,8 @@ func (m *Model) openFeedbackConsent(state *feedbackModalState) {
 	m.modal.body = strings.Join([]string{
 		"The following files will be sent:",
 		"  - codex-logs.log",
+		// Rust #47889: the TUI's own client log is staged for remote uploads.
+		"  - client-logs.txt (if available)",
 		"  - codex-doctor-report.json",
 		"  - codex-apps-tools-cache.json (if available)",
 		"  - codex-app-directory-cache.json (if available)",

@@ -14,9 +14,12 @@ import (
 // Rust parity subset: codex-rs/tui/src/bottom_pane/feedback_view.rs.
 
 const (
-	FeedbackBaseCLIBugIssueURL              = "https://github.com/openai/codex/issues/new?template=3-cli.yml"
-	FeedbackInternalURL                     = "http://go/codex-feedback-internal"
-	FeedbackLogsAttachmentFilename          = "codex-logs.log"
+	FeedbackBaseCLIBugIssueURL     = "https://github.com/openai/codex/issues/new?template=3-cli.yml"
+	FeedbackInternalURL            = "http://go/codex-feedback-internal"
+	FeedbackLogsAttachmentFilename = "codex-logs.log"
+	// FeedbackClientLogsAttachmentFilename is the staged TUI client log that a
+	// remote feedback upload attaches when it could be staged (Rust #47889).
+	FeedbackClientLogsAttachmentFilename    = "client-logs.txt"
 	FeedbackDoctorReportAttachmentFilename  = "codex-doctor-report.json"
 	FeedbackDiagnosticsAttachmentFilename   = "codex-connectivity-diagnostics.txt"
 	FeedbackWindowsSandboxLogFilename       = "windows-sandbox.log"
@@ -438,6 +441,8 @@ func FeedbackUploadConsentHeaderRows(options FeedbackUploadConsentOptions) []str
 		"",
 		feedbackUploadLogsDescription,
 		"  " + feedbackBullet + " " + FeedbackLogsAttachmentFilename,
+		// Rust #47889 lists the staged TUI client log next to codex-logs.log.
+		"  " + feedbackBullet + " " + FeedbackClientLogsAttachmentFilename,
 		"  " + feedbackBullet + " " + FeedbackDoctorReportAttachmentFilename,
 	}
 	if options.IncludeWindowsSandboxLog {
