@@ -71,6 +71,9 @@ type AnalyticsSummaryOptions struct {
 	View    int
 	EndDate time.Time
 	Width   int
+	// Theme names the active syntax theme, which supplies the activity
+	// accent the token calendar palette blends (Rust #46897).
+	Theme string
 }
 
 // AnalyticsSummaryLines renders the profile identity, token totals, activity
@@ -165,7 +168,9 @@ func AnalyticsSummaryLines(opts AnalyticsSummaryOptions) []string {
 		for _, bucket := range *tokens.DailyUsageBuckets {
 			buckets = append(buckets, chatwidget.TokenActivityDailyBucket{StartDate: bucket.StartDate, Tokens: bucket.Tokens})
 		}
-		lines = append(lines, chatwidget.TokenActivityCalendarLines(AnalyticsSummaryViews[selected], buckets, opts.EndDate, innerWidth)...)
+		lines = append(lines, chatwidget.TokenActivityCalendarLinesPalette(
+			AnalyticsSummaryViews[selected], buckets, opts.EndDate, innerWidth,
+			chatwidget.CurrentTokenActivityPalette(opts.Theme))...)
 	} else {
 		lines = append(lines, "Token activity history unavailable")
 	}
