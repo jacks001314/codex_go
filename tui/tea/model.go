@@ -1536,6 +1536,12 @@ type Options struct {
 	// configured permission profiles, so the picker falls back to its local
 	// built-in presets. Nil keeps the picker on local presets only.
 	OnListPermissionProfiles func() ([]chatwidget.CustomPermissionProfile, bool, error)
+	// OnListCollaborationModes discovers the connected app server's
+	// collaborationMode/list catalog at startup and reconnect (Rust #42401,
+	// ModelCatalog::with_collaboration_modes). Nil keeps the builtin presets; a
+	// failing or unsupported discovery installs an empty catalog, exactly like an
+	// app server without collaboration-mode support.
+	OnListCollaborationModes CollaborationModeLister
 	// OnUpdateThreadPermissions asks the connected app server to adopt a
 	// permission selection for the thread (Rust #43340/#46008;
 	// thread/settings/update). Built-in presets are routed through the server
@@ -2454,9 +2460,22 @@ type Model struct {
 	// permissionPopupPending is true between a `/permissions` request and the
 	// app opening its view (Rust #55682 ChatWidget::permission_popup_pending).
 	permissionPopupPending bool
+	// permissionDiscoveryGeneration drops server responses that a thread,
+	// account, or modal change has made stale (Rust #42453
+	// permission_popup_request_is_current).
+	permissionDiscoveryGeneration uint64
+	// onListCollaborationModes and collaborationModes are Rust's ModelCatalog
+	// collaboration inventory (#42401): the server catalog replaces the builtin
+	// presets once discovery has run.
+	onListCollaborationModes     CollaborationModeLister
+	collaborationModes           []chatwidget.CollaborationModeMask
+	collaborationModesDiscovered bool
 	// queueAutoSendSuppressed holds queued prompts while a permission selection
 	// is outstanding (Rust input_queue.suppress_queue_autosend).
 	queueAutoSendSuppressed       bool
+	// pendingFeatureEnableLabel names the feature whose opt-in write is in
+	// flight, so its notice uses the same label Rust reports (#43113).
+	pendingFeatureEnableLabel string
 	agentsOverviewEmbedded        bool
 	onAgentsOverviewRefresh       AgentsOverviewRefreshFunc
 	onAcknowledgeThreadRead       ThreadReadAcknowledgeFunc
@@ -3148,6 +3167,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onStartManagedWorktree:           options.OnStartManagedWorktree,
 		onManagedWorktreeChanged:         options.OnManagedWorktreeChanged,
 		onListPermissionProfiles:         options.OnListPermissionProfiles,
+		onListCollaborationModes:         options.OnListCollaborationModes,
 		onUpdateThreadPermissions:        options.OnUpdateThreadPermissions,
 		terminalSize:                     options.TerminalSize,
 		sizeMonitorEnabled:               terminalSizeMonitorNeeded(runtime.GOOS, os.Getenv),
@@ -3608,6 +3628,12 @@ func (m *Model) Init() bubbletea.Cmd {
 	if m.onFetchStartupAnnouncement != nil {
 		commands = append(commands, m.startupAnnouncementCmd())
 	}
+	if m.onListCollaborationModes != nil && !m.collaborationModesDiscovered {
+		// Rust #42401: optional discovery runs beside the other startup requests
+		// with a two-second bound, so an unavailable server never blocks the
+		// first frame.
+		commands = append(commands, m.discoverCollaborationModes())
+	}
 	if m.initialMessages != nil {
 		commands = append(commands, waitForStream(m.initialMessages))
 	}
@@ -3743,6 +3769,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 	case ModelCatalogResultMsg:
 		m.applyModelCatalogResult(msg)
 		return m, m.applyBackendBannerFallbackCmd()
+	case CollaborationModesResultMsg:
+		m.applyCollaborationModesResult(msg)
+		return m, nil
 	case terminalSizeSettleMsg:
 		return m, m.applyTerminalSizeSettle(msg.generation)
 	case bubbletea.WindowSizeMsg:

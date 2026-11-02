@@ -37,6 +37,44 @@ type ExperimentalFeaturesResultMsg struct {
 	Err        error
 }
 
+// FeatureWriteResult mirrors Rust experimental_features::FeatureWriteResult
+// (#42674): the configured feature rows after a write, plus the override
+// warning the popup shows when the saved values differ from the selections. It
+// is deliberately separate from the running task's feature state.
+type FeatureWriteResult struct {
+	Features []ExperimentalFeatureEntry
+	Warning  string
+}
+
+// experimentalFeatureWriteResult builds the Rust readback result from the popup
+// rows and the refreshed configured settings. The unmigrated controls keep their
+// selection, and an overridden write carries the popup's warning text.
+func (m *Model) experimentalFeatureWriteResult(overridden bool) FeatureWriteResult {
+	result := FeatureWriteResult{}
+	if m == nil {
+		return result
+	}
+	result.Features = make([]ExperimentalFeatureEntry, 0, len(m.experimentalItems))
+	for _, item := range m.experimentalItems {
+		key := strings.TrimSpace(item.Key)
+		enabled := item.Enabled
+		if key != "" && key != experimentalFeaturePreventIdleSleepKey && key != experimentalFeatureGuardianApprovalKey {
+			enabled = features.Enabled(m.featureSettings, key)
+		}
+		result.Features = append(result.Features, ExperimentalFeatureEntry{
+			Name:           key,
+			DisplayName:    item.Name,
+			Description:    item.Description,
+			Enabled:        enabled,
+			DefaultEnabled: item.DefaultEnabled,
+		})
+	}
+	if overridden {
+		result.Warning = experimentalFeaturesOverriddenStatus
+	}
+	return result
+}
+
 // Rust ExperimentalFeatureStage wire value for the only stage the popup lists.
 const experimentalFeatureStageBeta = "beta"
 
@@ -221,6 +259,7 @@ func (m *Model) applyExperimentalWriteReadback(overridden bool) {
 	if m == nil {
 		return
 	}
+	result := m.experimentalFeatureWriteResult(overridden)
 	m.experimentalFeaturesSaving = false
 	m.experimentalFeatureUnconfirmed = nil
 	if m.experimentalFeatureBaseline == nil {
@@ -236,8 +275,8 @@ func (m *Model) applyExperimentalWriteReadback(overridden bool) {
 		m.experimentalItems[index] = item
 		m.experimentalFeatureBaseline[key] = item.Enabled
 	}
-	if overridden {
-		m.experimentalFeaturesStatus = experimentalFeaturesOverriddenStatus
+	if result.Warning != "" {
+		m.experimentalFeaturesStatus = result.Warning
 		m.refreshExperimentalModal()
 		return
 	}
