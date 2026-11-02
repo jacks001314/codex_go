@@ -19,6 +19,14 @@ const (
 	RoleHistory   MessageRole = "history"
 )
 
+// DeprecationNoticeContent is the summary/details pair of a deprecation notice
+// retained in the transcript (Rust history_cell::DeprecationNoticeCell, whose
+// derived equality drives #47065 deduplication).
+type DeprecationNoticeContent struct {
+	Summary string
+	Details string
+}
+
 type Message struct {
 	Role    MessageRole
 	Text    string
@@ -59,6 +67,10 @@ type Message struct {
 	// Recap marks a generated conversation recap. The owned transcript
 	// reserves a layout-only row below a trailing recap (Rust #47355).
 	Recap bool
+	// DeprecationNotice identifies a retained deprecation notice so a repeated
+	// delivery can be compared against retained history (Rust #47065 scopes
+	// DeprecationNoticeCell deduplication to transcript cells).
+	DeprecationNotice *DeprecationNoticeContent
 	// ItemID carries the thread item a transcript-only entry belongs to, so the
 	// live reasoning lifecycle can replace the restored snapshot in place
 	// (Rust ReasoningReplay restores the active item instead of committing it).

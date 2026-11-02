@@ -36,6 +36,10 @@ type ThreadEvent struct {
 	// JSON stream reports failures as `error`/`turn.failed` events instead, so
 	// this flag never leaves the TUI.
 	TurnFailed bool `json:"-"`
+	// Summary and Details carry an app-server deprecation notice
+	// (Rust #47065 deprecationNotice notification).
+	Summary string `json:"summary,omitempty"`
+	Details string `json:"details,omitempty"`
 }
 
 type ThreadTokenUsage struct {
@@ -72,6 +76,12 @@ func Compacting() ThreadEvent {
 
 func Compacted() ThreadEvent {
 	return ThreadEvent{Type: "turn.compacted", Item: &ThreadItem{Type: "compaction"}}
+}
+
+// DeprecationNotice carries an app-server deprecation notice into the
+// transcript (Rust #47065 TUI deprecationNotice notification).
+func DeprecationNotice(summary, details string) ThreadEvent {
+	return ThreadEvent{Type: "deprecation.notice", Summary: summary, Details: details}
 }
 
 type RateLimitSnapshot struct {

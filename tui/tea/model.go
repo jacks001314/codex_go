@@ -1975,6 +1975,14 @@ type Model struct {
 	// readOnlyThread marks a conversation opened read-only because another app
 	// owns it (Rust #43253).
 	readOnlyThread bool
+	// readOnlyDraft retains the composer draft while the external-writer view
+	// hides it, so a retry or a fork can continue with the same input
+	// (Rust #43253/#47185 capture_thread_input_state).
+	readOnlyDraft *composerInputState
+	// forkInProgress marks a fork started from the locked conversation view. The
+	// pending fork owns the keyboard and replaces the notice with its progress
+	// line (Rust #47185 fork_in_progress).
+	forkInProgress bool
 	// providerError carries the provider admission failure that kept the chat
 	// readable but read-only (Rust #58202), and providerErrorRolloutPath is the
 	// frozen conversation's saved history path used by the continuation draft.
@@ -4279,6 +4287,12 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		cmd := m.applyStreamMessage(msg.Message)
 		return m, bubbletea.Batch(cmd, waitForStream(msg.Messages))
 	case bubbletea.KeyMsg:
+		// Rust #47185 (app/input.rs): a fork started from the locked view owns
+		// the keyboard until it completes, so a repeated shortcut cannot act on
+		// the resulting view.
+		if m.forkInProgress {
+			return m, nil
+		}
 		if m.promptSuggestionTabAccepted {
 			if msg.Type == bubbletea.KeyTab {
 				return m, nil
@@ -7399,6 +7413,10 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 		}
 	case "turn.reconnected":
 		m.clearRetryActivity()
+	case "deprecation.notice":
+		// Rust #47065: a deprecation notice delivery enters history through the
+		// deduplicating insertion path.
+		m.insertDeprecationNotice(event.Summary, event.Details)
 	case "turn.compacting":
 		message := "Compacting context..."
 		if event.Item != nil && strings.TrimSpace(event.Item.Message) != "" {
@@ -9795,6 +9813,14 @@ func historyMessageFromCell(cell historycell.HistoryCell, width int) codextui.Me
 	if recapCell, ok := cell.(historycell.RecapCell); ok && recapCell.IsRecap() {
 		message.Recap = true
 	}
+	switch notice := cell.(type) {
+	case historycell.DeprecationNoticeCell:
+		message.DeprecationNotice = &codextui.DeprecationNoticeContent{Summary: notice.Summary, Details: notice.Details}
+	case *historycell.DeprecationNoticeCell:
+		if notice != nil {
+			message.DeprecationNotice = &codextui.DeprecationNoticeContent{Summary: notice.Summary, Details: notice.Details}
+		}
+	}
 	if _, ok := cell.(historycell.ActivityDisclosureCell); ok {
 		disclosure := historycell.ActivityDisclosureFor(cell, width)
 		message.ActivityHiddenLines = disclosure.HiddenLines
@@ -11469,6 +11495,12 @@ func (m *Model) updateTranscriptOverlayKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 		return m.updatePagerOverlayKey(msg)
 	}
 	if msg.Type == bubbletea.KeyEsc {
+		// Rust #47320 (app_backtrack/legacy_input.rs): a conversation locked by
+		// another app closes the transcript overlay instead of starting a
+		// backtrack preview, and the retained draft stays untouched.
+		if m.externalWriterView() {
+			return m.closeTranscriptOverlay()
+		}
 		if m.backtrack.OverlayPreviewActive {
 			m.stepBacktrackAndHighlight(false)
 		} else {
