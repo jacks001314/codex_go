@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +23,9 @@ import (
 // Rust #45821: the startup prompt derives its level and allowed setup choices
 // from config/read and configRequirements/read instead of the local files.
 func TestInteractiveRemoteWindowsSandboxPromptUsesAppServerStateLikeRust(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Rust gates the Windows sandbox startup NUX with cfg(target_os = \"windows\")")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	serverErrs := make(chan error, 1)
@@ -92,6 +96,9 @@ func TestInteractiveRemoteWindowsSandboxPromptUsesAppServerStateLikeRust(t *test
 // TestInteractiveRemoteWindowsSandboxStateReadFailure covers the fail-closed
 // behavior: a server that cannot report config yields no prompt decision.
 func TestInteractiveRemoteWindowsSandboxStateReadFailure(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Rust gates the Windows sandbox startup NUX with cfg(target_os = \"windows\")")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	serverErrs := make(chan error, 1)
