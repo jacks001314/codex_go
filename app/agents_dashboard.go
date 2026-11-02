@@ -943,6 +943,9 @@ func newAgentsDashboardModel(ctx context.Context, source agentsDashboardSource, 
 	if len(worktreesEnabled) > 0 && worktreesEnabled[0] {
 		model.view.SetWorktreesEnabled(true)
 	}
+	// Rust #49106: the standalone command center pages history the same way the
+	// in-session dashboard does.
+	model.view.SetHistoryPaging(true)
 	return model
 }
 
@@ -1093,6 +1096,10 @@ func (m *agentsDashboardModel) handleKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 			m.done = true
 			m.result = &agentsDashboardResult{OpenedThreadID: m.view.SelectedThreadID()}
 			return bubbletea.Quit
+		case agentsoverview.ActionShowMore:
+			// Rust #49106: the row publishes the next retained page.
+			m.view.NextBatch()
+			return nil
 		}
 	case "esc":
 		switch action := m.view.Cancel(); action {

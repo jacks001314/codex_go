@@ -543,16 +543,25 @@ func (v *View) renderRows(height, listWidth int, styled bool) []string {
 	}
 	grouping := v.State.Grouping
 	selPos := 0
-	for i, index := range visible {
-		if index == v.Selected {
-			selPos = i
-			break
+	if v.hasMore && v.Selected == ShowMoreIndex {
+		// Rust #49106: the "Show more" row sits after the published list.
+		selPos = len(visible)
+	} else {
+		for i, index := range visible {
+			if index == v.Selected {
+				selPos = i
+				break
+			}
 		}
 	}
 
 	// Walk back from the selection while the accumulated height fits.
 	first := selPos
 	accumulated := 1
+	if selPos >= len(visible) {
+		first = len(visible) - 1
+		accumulated = 2 // gap + "Show more" row
+	}
 	for first > 0 {
 		groupChanged := !v.sameGroup(grouping, visible[first-1], visible[first])
 		added := 1
@@ -600,7 +609,29 @@ func (v *View) renderRows(height, listWidth int, styled bool) []string {
 		}
 		lines = append(lines, renderLine("", v.renderRowSpans(index, grouping != GroupingStatus, listWidth), listWidth, styled))
 	}
+	// Rust #49106: a selectable "Show more" row closes the list while another
+	// page exists, including during search and after a failed request.
+	if v.hasMore && len(lines) < height {
+		if previousGroup != nil && len(lines)+1 < height {
+			lines = append(lines, "")
+		}
+		lines = append(lines, v.renderShowMoreRow(listWidth, styled))
+	}
 	return lines
+}
+
+// renderShowMoreRow renders the "Show more" / "Loading more…" / retry row with
+// the list's selection marker (Rust #49106).
+func (v *View) renderShowMoreRow(width int, styled bool) string {
+	marker := " "
+	labelStyle := spanPlain
+	if v.Selected == ShowMoreIndex {
+		marker = "\u203a"
+		labelStyle = spanCyanBold
+	}
+	return renderLine("", []span{
+		{text: marker + "   " + v.ShowMoreLabel(), style: labelStyle},
+	}, width, styled)
 }
 
 func (v *View) renderRowSpans(index int, projectGrouping bool, width int) []span {

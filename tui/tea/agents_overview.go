@@ -135,6 +135,9 @@ func (m *Model) applyAgentsCommand() bubbletea.Cmd {
 	}
 	m.agentsOverviewPendingDraft = nil
 	m.agentsOverview = agentsoverview.New(nil, "", false)
+	// Rust #49106: the command center publishes a recent window and offers a
+	// "Show more" row for older history.
+	m.agentsOverview.SetHistoryPaging(true)
 	m.agentsOverview.State.VimEnabled = m.composerIsVimEnabled()
 	// Rust #42428: the command center composes in the shared chat composer, so
 	// the live Vim preference is synced onto the retained composer.
@@ -300,6 +303,8 @@ func (m *Model) applyAgentsOverviewList(message agentsOverviewListMsg) bubbletea
 	}
 	m.agentsOverviewInflight = false
 	if message.err != nil {
+		// Rust #49106: a failed page request keeps the row as a retry target.
+		m.agentsOverview.SetShowMoreFailed(true)
 		m.agentsOverviewNotice = "Failed to load shared agents: " + strings.TrimSpace(message.err.Error())
 		if m.agentsOverviewPending {
 			m.agentsOverviewPending = false
@@ -308,6 +313,8 @@ func (m *Model) applyAgentsOverviewList(message agentsOverviewListMsg) bubbletea
 		return nil
 	}
 	m.agentsOverviewNotice = ""
+	m.agentsOverview.SetShowMoreLoading(false)
+	m.agentsOverview.SetShowMoreFailed(false)
 	if len(m.agentsOverviewRemoved) > 0 {
 		rows := make([]agentsoverview.Row, 0, len(message.rows))
 		for _, row := range message.rows {
@@ -471,7 +478,7 @@ func (m *Model) updateAgentsOverviewKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 	// draft text. Keys already bound to a list or agents action keep their
 	// shortcut so the dashboard stays navigable from the list.
 	if msg.Type == bubbletea.KeyRunes && !msg.Alt && !m.agentsOverview.State.Searching &&
-		!m.agentsOverview.State.Renaming && !m.agentsOverview.State.Help {
+		!m.agentsOverview.State.Renaming && !m.agentsOverview.State.Help && msg.String() != "?" {
 		if msg.Paste {
 			m.handleAgentsOverviewComposerPaste(string(msg.Runes))
 			return nil
@@ -507,6 +514,8 @@ func (m *Model) updateAgentsOverviewKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 			return m.renameAgentsOverviewCmd(name)
 		case agentsoverview.ActionOpenThread:
 			return m.openAgentsOverviewThread(m.agentsOverview.SelectedThreadID())
+		case agentsoverview.ActionShowMore:
+			return m.showMoreAgentsOverviewCmd()
 		}
 	case "esc":
 		m.agentsOverview.Cancel()
