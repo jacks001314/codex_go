@@ -49,6 +49,9 @@ func TestReadOnlyViewForkShortcutMatchesRust(t *testing.T) {
 	} {
 		actions = nil
 		state.SetThreadID("thread-source")
+		// Rust #47185: a successful fork leaves the locked view for the new
+		// editable conversation, so each shortcut case starts locked again.
+		model.setReadOnlyThread(true)
 		model.Update(testCase.message)
 		forked := len(actions) == 1 && actions[0].Kind == codextui.SessionSelectionFork && actions[0].Target.ThreadID == "thread-source"
 		if forked != testCase.want {

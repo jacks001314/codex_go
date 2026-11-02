@@ -256,6 +256,11 @@ func (m *Model) renderReadOnlyThreadNotice() string {
 	if m == nil {
 		return ""
 	}
+	// Rust #47185: a pending fork replaces the locked notice with a progress
+	// line inset by one row and two columns, and the keys stay blocked.
+	if m.forkInProgress {
+		return lipgloss.NewStyle().Padding(1, 2).Render(m.readOnlyDimText("Forking conversation\u2026"))
+	}
 	width := max(m.width, 20)
 	contentWidth := max(width-4, 10)
 	title := "\U0001f512  This conversation is open in another app"

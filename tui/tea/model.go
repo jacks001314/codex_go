@@ -1973,6 +1973,10 @@ type Model struct {
 	// hides it, so a retry or a fork can continue with the same input
 	// (Rust #43253/#47185 capture_thread_input_state).
 	readOnlyDraft *composerInputState
+	// forkInProgress marks a fork started from the locked conversation view. The
+	// pending fork owns the keyboard and replaces the notice with its progress
+	// line (Rust #47185 fork_in_progress).
+	forkInProgress bool
 	// providerError carries the provider admission failure that kept the chat
 	// readable but read-only (Rust #58202), and providerErrorRolloutPath is the
 	// frozen conversation's saved history path used by the continuation draft.
@@ -4254,6 +4258,12 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		cmd := m.applyStreamMessage(msg.Message)
 		return m, bubbletea.Batch(cmd, waitForStream(msg.Messages))
 	case bubbletea.KeyMsg:
+		// Rust #47185 (app/input.rs): a fork started from the locked view owns
+		// the keyboard until it completes, so a repeated shortcut cannot act on
+		// the resulting view.
+		if m.forkInProgress {
+			return m, nil
+		}
 		if m.promptSuggestionTabAccepted {
 			if msg.Type == bubbletea.KeyTab {
 				return m, nil

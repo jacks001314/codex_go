@@ -358,12 +358,29 @@ func (m *Model) applyForkCurrentSession(name string) bubbletea.Cmd {
 	if m == nil || m.State == nil {
 		return nil
 	}
+	// Rust #47185: a pending fork blocks another fork request.
+	if m.forkInProgress {
+		return nil
+	}
 	// Rust #43340: a pending named-profile selection blocks forking so the new
 	// thread cannot be created with the previous permissions.
 	if strings.TrimSpace(m.pendingServerProfile) != "" {
 		m.addErrorHistoryMessage("Wait for permissions to update before forking.")
 		m.refreshTranscript()
 		return nil
+	}
+	// Rust #47185: forking from the locked conversation keeps its local draft
+	// and never takes the source lease.
+	fromLocked := m.externalWriterView()
+	retained := (*composerInputState)(nil)
+	if fromLocked {
+		retained = m.readOnlyDraft
+		if retained == nil {
+			retained = m.captureComposerInputState()
+		}
+		m.readOnlyDraft = nil
+		m.forkInProgress = true
+		defer func() { m.forkInProgress = false }()
 	}
 	selection := codextui.SessionSelection{
 		Kind: codextui.SessionSelectionFork,
@@ -378,9 +395,18 @@ func (m *Model) applyForkCurrentSession(name string) bubbletea.Cmd {
 		m.notice = strings.TrimSpace(notice)
 	}
 	if decision == nil {
+		// Rust #47185: a failed fork keeps the locked view and its draft intact.
+		m.readOnlyDraft = retained
 		m.addErrorHistoryMessage(m.notice)
 		m.refreshTranscript()
 		return nil
+	}
+	if fromLocked {
+		// Rust #47185: the fork is editable, so the locked notice goes away and
+		// the local draft continues in the new conversation.
+		m.setReadOnlyThread(false)
+		m.restoreComposerInputState(retained, true)
+		m.notice = "Fork created. You can continue here."
 	}
 	m.refreshTranscript()
 	if m.onModalResponse != nil {
