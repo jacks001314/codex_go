@@ -28,6 +28,10 @@ const (
 	ReplayCommandExecApproval               ReplayCommandKind = "exec_approval"
 	ReplayCommandPatchApproval              ReplayCommandKind = "patch_approval"
 	ReplayCommandResolveElicitation         ReplayCommandKind = "resolve_elicitation"
+	// ReplayCommandResolveUserVerification is Rust #43708's dedicated op: the
+	// resolution travels through the same elicitation response, so the pending
+	// prompt is dropped from replay exactly like a plain resolution.
+	ReplayCommandResolveUserVerification    ReplayCommandKind = "resolve_user_verification"
 	ReplayCommandRequestPermissionsResponse ReplayCommandKind = "request_permissions_response"
 	ReplayCommandUserInputAnswer            ReplayCommandKind = "user_input_answer"
 	ReplayCommandShutdown                   ReplayCommandKind = "shutdown"
@@ -93,6 +97,7 @@ func ReplayCommandCanChangeState(op ReplayCommand) bool {
 	case ReplayCommandExecApproval,
 		ReplayCommandPatchApproval,
 		ReplayCommandResolveElicitation,
+		ReplayCommandResolveUserVerification,
 		ReplayCommandRequestPermissionsResponse,
 		ReplayCommandUserInputAnswer,
 		ReplayCommandShutdown:
@@ -123,6 +128,12 @@ func (s *PendingInteractiveReplayState) NoteOutboundOp(op ReplayCommand) {
 			return !(p.Kind == pendingPatchApproval && p.ItemID == op.ID)
 		})
 	case ReplayCommandResolveElicitation:
+		key := ElicitationRequestKey{ServerName: op.ServerName, RequestID: op.RequestID}
+		delete(s.ElicitationRequests, key)
+		s.retainPendingRequests(func(p pendingInteractiveRequest) bool {
+			return !(p.Kind == pendingElicitation && p.Key == key)
+		})
+	case ReplayCommandResolveUserVerification:
 		key := ElicitationRequestKey{ServerName: op.ServerName, RequestID: op.RequestID}
 		delete(s.ElicitationRequests, key)
 		s.retainPendingRequests(func(p pendingInteractiveRequest) bool {
