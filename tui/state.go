@@ -157,6 +157,13 @@ type State struct {
 	Provider                string
 	ApprovalPolicy          string
 	Sandbox                 string
+	// ActivePermissionProfile is the named (or built-in) permission profile id
+	// the server reported for this thread, e.g. "trusted" or ":workspace".
+	// Rust keeps it separate from the legacy sandbox mode: a turn/start for such
+	// a thread sends `permissions` and must not also send a legacy
+	// `sandboxPolicy` (app_server_session.rs:1621-1628,
+	// app/thread_routing.rs:938-941).
+	ActivePermissionProfile string
 	ServiceTier             string
 	CWD                     string
 	Search                  bool
