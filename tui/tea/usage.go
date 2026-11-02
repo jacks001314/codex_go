@@ -167,6 +167,14 @@ func (m *Model) usageHintLine(acceptLabel string) string {
 	return strings.Join(parts, " \u00b7 ")
 }
 
+// tokenActivityLines renders the /usage activity chart with the palette for the
+// terminal's effective color level and the active theme (Rust #46897). The
+// chart is written straight into retained history, so the SGR prefixes stay in
+// place and the transcript strips them when it measures width.
+func (m *Model) tokenActivityLines(view chatwidget.TokenActivityView, state chatwidget.TokenActivityState, width int) []string {
+	return chatwidget.TokenActivityLinesPalette(view, state, width, chatwidget.CurrentTokenActivityPalette(m.activeTUITheme()))
+}
+
 func (m *Model) openTokenActivity(view chatwidget.TokenActivityView) bubbletea.Cmd {
 	if m == nil {
 		return nil
@@ -183,7 +191,7 @@ func (m *Model) openTokenActivity(view chatwidget.TokenActivityView) bubbletea.C
 		m.refreshTranscript()
 		return nil
 	}
-	lines = append(lines, chatwidget.TokenActivityLines(view, chatwidget.NewTokenActivityLoadingState(), width)...)
+	lines = append(lines, m.tokenActivityLines(view, chatwidget.NewTokenActivityLoadingState(), width)...)
 	m.State.AddHistoryLines(lines, lines)
 	m.notice = "Usage"
 	m.refreshTranscript()
@@ -208,7 +216,7 @@ func (m *Model) applyTokenActivityResult(msg TokenActivityResultMsg) {
 	if msg.Err != nil {
 		state = chatwidget.NewTokenActivityErrorState()
 	}
-	lines := chatwidget.TokenActivityLines(msg.View, state, width)
+	lines := m.tokenActivityLines(msg.View, state, width)
 	m.State.AddHistoryLines(lines, lines)
 	m.notice = "Usage"
 	m.refreshTranscript()
