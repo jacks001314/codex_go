@@ -1637,6 +1637,9 @@ func (m *Model) resolveModelPickerModal(modal *modalState, optionID string, canc
 			m.openSessionActionConfirmation(selection)
 			return nil, "", false
 		default:
+			if selection.Kind == codextui.SessionSelectionResume {
+				return m.applyResumePickerSelection(selection)
+			}
 			decision, notice, complete := m.applySessionSelection(selection)
 			return decision, notice, complete
 		}

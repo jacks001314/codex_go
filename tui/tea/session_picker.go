@@ -9,6 +9,7 @@ import (
 	bubbletea "github.com/charmbracelet/bubbletea"
 
 	codextui "codex_go/tui"
+	agentsoverview "codex_go/tui/agents_overview"
 	historycell "codex_go/tui/history_cell"
 )
 
@@ -136,6 +137,12 @@ func (m *Model) openSessionPicker(action codextui.SessionPickerAction) bubbletea
 		codextui.SessionPickerWorktreeCWDs(m.sessionCWD, m.worktreesEnabled)...,
 	)
 	if picker == nil {
+		// Rust #42419: a picker that cannot open reports its failure inside the
+		// command center instead of silently staying on the task list.
+		if m.agentsOverview != nil {
+			m.addSessionPickerError("Failed to open session picker: no saved sessions are available.")
+			return nil
+		}
 		m.notice = "No sessions available."
 		return nil
 	}
@@ -187,6 +194,89 @@ func (m *Model) openSessionPicker(action codextui.SessionPickerAction) bubbletea
 	m.sessionPickerAltScreen = true
 	cmds = append(cmds, bubbletea.EnterAltScreen)
 	return bubbletea.Batch(cmds...)
+}
+
+// addSessionPickerError mirrors Rust App::add_session_picker_error (#42419):
+// while the command center is open the failure shows a dismissal view titled
+// "Unable to resume session", and the message is also recorded as an error so
+// the reason survives leaving the command center.
+func (m *Model) addSessionPickerError(message string) {
+	if m == nil {
+		return
+	}
+	message = strings.TrimSpace(message)
+	if message == "" {
+		message = "unknown error"
+	}
+	if m.agentsOverview != nil {
+		m.openModal(ModalRequestMsg{
+			ID:    "session-picker-error",
+			Kind:  ModalKindPicker,
+			Title: "Unable to resume session",
+			Body:  message,
+			Options: []ModalOption{{
+				ID:    "return",
+				Label: "Return to command center",
+			}},
+		})
+	}
+	m.addErrorHistoryMessage(message)
+	m.refreshTranscript()
+}
+
+// applyResumePickerSelection mirrors Rust App::apply_resume_picker_selection
+// (#42419). Switching tasks keeps the current composer draft in the per-thread
+// input state, restores the resumed task's draft, and returns to the
+// conversation when the resumed task already has a turn in flight. A cancelled
+// picker never reaches this path, so the command center keeps its state.
+func (m *Model) applyResumePickerSelection(selection codextui.SessionSelection) (*PickerDecision, string, bool) {
+	if m == nil {
+		return nil, "", true
+	}
+	if selection.Kind != codextui.SessionSelectionResume {
+		// Rust refreshes in-memory configuration for the non-resume selections
+		// and ignores Fork; the shared selection path already does that.
+		return m.applySessionSelection(selection)
+	}
+	target := strings.TrimSpace(selection.Target.ThreadID)
+	current := ""
+	if m.State != nil {
+		current = strings.TrimSpace(m.State.ThreadID)
+	}
+	switching := target != "" && target != current
+	if switching {
+		// Rust stores the current widget's input state before the switch so a
+		// later return to this task restores what was being composed.
+		m.captureAgentsOverviewDraft(current)
+	}
+	decision, notice, complete := m.applySessionSelection(selection)
+	if !complete || decision == nil {
+		// Resume failures stay inside the command-center flow: the caller shows
+		// the notice and the task list is untouched.
+		return decision, notice, complete
+	}
+	attached := ""
+	if m.State != nil {
+		attached = strings.TrimSpace(m.State.ThreadID)
+	}
+	if switching && attached != "" && attached == target {
+		if draft, ok := m.agentsOverviewDrafts[target]; ok {
+			m.setComposerPrompt(draft)
+			delete(m.agentsOverviewDrafts, target)
+		} else {
+			// Rust builds a fresh chat widget when the task has no saved input
+			// state, so the composer starts empty instead of carrying the
+			// previous task's draft.
+			m.resetComposer()
+		}
+	}
+	if m.agentsOverview != nil && attached != "" && attached == target && m.isTaskRunning() {
+		// Rust sets ViewCompletion::Accepted and redraws when the resumed task
+		// has a turn in flight; an idle task keeps the command center open.
+		m.agentsOverview.Completion = agentsoverview.CompletionAccepted
+		m.closeAgentsOverview()
+	}
+	return decision, notice, complete
 }
 
 func (m *Model) openSessionActionConfirmation(selection codextui.SessionSelection) {
