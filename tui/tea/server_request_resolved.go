@@ -28,6 +28,9 @@ func (m *Model) applyServerRequestResolved(message ServerRequestResolvedMsg) bub
 	if requestID == "" {
 		return nil
 	}
+	// Rust #58457: a resolved request leaves a background backend's parked
+	// queue, so it cannot replay after a switch.
+	m.dropBackendRequest(requestID)
 	if m.removeQueuedApproval(requestID) {
 		m.refreshThreadApprovalViews()
 		return nil
@@ -45,6 +48,8 @@ func (m *Model) applyServerRequestResolved(message ServerRequestResolvedMsg) bub
 	}
 	m.modal = nil
 	m.refreshThreadApprovalViews()
+	// The cover is gone: parked requests for the displayed backend may surface.
+	m.flushBackendRequests()
 	settle := m.settlePermissionPopup()
 	next := m.openNextThreadApproval()
 	if settle != nil && next != nil {

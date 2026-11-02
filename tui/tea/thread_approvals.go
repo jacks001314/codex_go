@@ -23,6 +23,9 @@ func (m *Model) routeApprovalRequest(message ApprovalRequestMsg) bubbletea.Cmd {
 	if m == nil {
 		return nil
 	}
+	if owner, ok := m.requestBackendOwner(message.BackendID, message.ThreadID); ok && m.deferBackendRequest(owner, &message, nil) {
+		return nil
+	}
 	threadID := strings.TrimSpace(message.ThreadID)
 	if (threadID != "" && threadID != m.currentThreadID()) || (m.modal != nil && m.modal.kind == ModalKindApproval) {
 		m.pendingApprovals = append(m.pendingApprovals, message)

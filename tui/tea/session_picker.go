@@ -319,6 +319,17 @@ func (m *Model) applySessionSelection(selection codextui.SessionSelection) (*Pic
 		if threadID == "" {
 			return decision, "Resume failed: missing thread id", true
 		}
+		// Rust #58457: a selection owned by another backend is resumed through
+		// that owner; only a same-backend selection takes the local path.
+		owner := m.selectionBackend(selection.Target)
+		if !owner.IsZero() && owner != m.backendID {
+			return m.applyBackendSwitchSelection(selection, owner, decision)
+		}
+		if !owner.IsZero() {
+			// Recorded ownership is authoritative over a stale listing stamp, so
+			// the resume handler accepts the thread it already serves.
+			selection.Target.BackendID = owner
+		}
 		if m.onResumeSession != nil {
 			resolved, needsPrompt, resolveNotice := m.resolveResumeSelectionCWD(selection)
 			if strings.TrimSpace(resolveNotice) != "" {

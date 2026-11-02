@@ -1387,6 +1387,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		OnListPermissionProfiles:    interactiveLocalListPermissionProfiles(root),
 		OnWorkingDirectoryChange:    interactiveWorkingDirectoryChangeHandler(root),
 		OnResumeSession:             interactiveResumeSessionHandler(root),
+		OnSwitchBackendSession:      interactiveBackendSwitchHandler(interactiveResumeSessionHandler(root), codextui.ProcessBackendID()),
 		OnContinueSafetyRecourse:    interactiveContinueSafetyRecourse(root),
 		OnPromptEdit:                interactivePromptEditHandler(root),
 		OnExportTranscript:          interactiveTranscriptExportHandler(interactiveShowRawAgentReasoning(root)),

@@ -85,6 +85,10 @@ type ModalRequestMsg struct {
 	// collects. It is distinct from the local view ID used by request brokers,
 	// so serverRequest/resolved can dismiss the correct modal (Rust #55682).
 	ServerRequestID   string
+	// BackendID identifies the backend that sent the request when the host
+	// multiplexes several connections (Rust #58457 pending_requests). Zero
+	// means the displayed backend.
+	BackendID         codextui.BackendID
 	Kind              ModalKind
 	Title             string
 	Body              string
@@ -99,6 +103,10 @@ type ModalRequestMsg struct {
 type ApprovalRequestMsg struct {
 	ID              string
 	ServerRequestID string
+	// BackendID identifies the backend that sent the request when the host
+	// multiplexes several connections (Rust #58457 pending_requests). Zero
+	// means the displayed backend, or the backend recorded for ThreadID.
+	BackendID codextui.BackendID
 	// ThreadID names the thread whose turn asked for approval. A request from a
 	// background thread waits in the queue instead of covering the active
 	// conversation (Rust #58720).

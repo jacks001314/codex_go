@@ -203,6 +203,12 @@ type WorkingDirectoryChangeFunc func(threadID string, cwd string) (*codextui.Ses
 
 type SessionResumeFunc func(selection codextui.SessionSelection) (SessionResumeResponse, error)
 
+// BackendSwitchFunc prepares a conversation owned by another backend before the
+// displayed session is replaced (Rust #58457 resume_backend_session). The host
+// resolves the owning backend through the connection it can reach; a nil
+// implementation reports cross-backend selections as unavailable.
+type BackendSwitchFunc func(request BackendSwitchRequest) (BackendSwitchResult, error)
+
 // SafetyRecourseContinueFunc forks the blocked turn's chat before that turn and
 // prepares the selected rewrite there (Rust #57365 continue_with_rewrite).
 type SafetyRecourseContinueFunc func(threadID, turnID, prompt string) bubbletea.Cmd
@@ -1273,6 +1279,10 @@ type Options struct {
 	OnSessionAction          SessionActionFunc
 	OnWorkingDirectoryChange WorkingDirectoryChangeFunc
 	OnResumeSession          SessionResumeFunc
+	// OnSwitchBackendSession prepares a picker selection owned by another
+	// backend (Rust #58457). Nil keeps such selections unavailable without
+	// touching the displayed conversation.
+	OnSwitchBackendSession BackendSwitchFunc
 	// OnContinueSafetyRecourse forks the blocked turn's chat and prepares the
 	// selected safer rewrite there (Rust #57365 AppEvent::ContinueSafetyRecourse).
 	// Nil keeps the rewrite in the composer when the host cannot fork.
@@ -1670,6 +1680,17 @@ type Model struct {
 	// with (Rust #54681). It survives connection replacement: picker targets
 	// from another backend are rejected before resume/fork/unarchive.
 	backendID codextui.BackendID
+	// threadBackend records which backend serves each thread this model has
+	// displayed (Rust #58457 thread ownership tracking). Recorded ownership wins
+	// over a picker row's stale listing stamp, so an adopted session does not
+	// switch again on the next selection.
+	threadBackend map[string]codextui.BackendID
+	// pendingBackendRequests parks server requests that belong to a backend
+	// other than the displayed one (Rust #58457 pending_requests). They replay
+	// once that backend is displayed and are dropped when resolved or when the
+	// connection goes away. Notifications, including realtime voice events, are
+	// never parked.
+	pendingBackendRequests []pendingBackendRequest
 
 	// Terminal-size observations (Rust #53859): the launch context captured at
 	// startup, the eligibility inputs, and the resize settle state.
@@ -2464,6 +2485,7 @@ type Model struct {
 	onSessionAction                 SessionActionFunc
 	onWorkingDirectoryChange        WorkingDirectoryChangeFunc
 	onResumeSession                 SessionResumeFunc
+	onSwitchBackendSession          BackendSwitchFunc
 	onPromptEdit                    PromptEditFunc
 	onRenameThread                  ThreadRenameFunc
 	onLogout                        LogoutFunc
@@ -3132,6 +3154,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onSessionAction:                  options.OnSessionAction,
 		onWorkingDirectoryChange:         options.OnWorkingDirectoryChange,
 		onResumeSession:                  options.OnResumeSession,
+		onSwitchBackendSession:           options.OnSwitchBackendSession,
 		onContinueSafetyRecourse:         options.OnContinueSafetyRecourse,
 		onPromptEdit:                     options.OnPromptEdit,
 		backtrack:                        tuiapp.BacktrackState{NthUserMessage: tuiapp.BacktrackNoSelection},
@@ -3785,6 +3808,7 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		return m, bubbletea.Batch(cmd, m.refreshStatusControlsCmd(), m.submitNextQueued(), m.noteRecapTurnFinished(recapStatus))
 	case AppServerDisconnectMsg:
 		m.dropStaleThreadApprovals()
+		m.dropStaleBackendRequests()
 		m.handleAppServerDisconnect()
 		return m, m.refreshStatusControlsCmd()
 	case TurnInterruptedMsg:
@@ -4180,6 +4204,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 	case StreamStartedMsg:
 		return m, waitForStream(msg.Messages)
 	case ModalRequestMsg:
+		if owner, ok := m.requestBackendOwner(msg.BackendID, ""); ok && m.deferBackendRequest(owner, nil, &msg) {
+			return m, nil
+		}
 		m.openModal(msg)
 		return m, nil
 	case ApprovalRequestMsg:
@@ -6268,6 +6295,7 @@ func (m *Model) switchThreadID(threadID string) {
 	threadID = strings.TrimSpace(threadID)
 	m.State.SetThreadID(threadID)
 	m.setPendingSteerThread(threadID)
+	m.noteThreadBackend(threadID, m.backendID)
 	// Rust #58720: selecting a waiting thread replays the approval request that
 	// arrived while it was inactive.
 	m.openPendingApprovalForThread(threadID)
