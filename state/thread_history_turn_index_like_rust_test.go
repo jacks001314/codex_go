@@ -50,12 +50,21 @@ func TestThreadHistoryTurnScopedItemPageUsesTurnIndexLikeRust(t *testing.T) {
 	}
 
 	// The statement the runtime executes: only a turn-scoped page carries the hint.
-	turnScopedStatement := threadHistoryItemsPageQuery(true)
+	turnScopedStatement := threadHistoryItemsPageQuery(true, false)
 	if !strings.Contains(turnScopedStatement, " INDEXED BY idx_thread_items_by_turn_page") {
 		t.Fatalf("turn-scoped item page statement carries no turn index hint:\n%s", turnScopedStatement)
 	}
-	if wideStatement := threadHistoryItemsPageQuery(false); strings.Contains(wideStatement, "INDEXED BY") {
+	if wideStatement := threadHistoryItemsPageQuery(false, false); strings.Contains(wideStatement, "INDEXED BY") {
 		t.Fatalf("thread-wide item page statement must keep the planner free:\n%s", wideStatement)
+	}
+	// Rust #58751: item-id reads seek through the primary-key autoindex, even
+	// when the page is also turn-scoped.
+	itemIDStatement := threadHistoryItemsPageQuery(true, true)
+	if !strings.Contains(itemIDStatement, " INDEXED BY sqlite_autoindex_thread_items_1") {
+		t.Fatalf("item-id page statement carries no primary-key index hint:\n%s", itemIDStatement)
+	}
+	if strings.Contains(itemIDStatement, "idx_thread_items_by_turn_page") {
+		t.Fatalf("item-id page statement kept the turn index hint:\n%s", itemIDStatement)
 	}
 
 	// Behavioural half: the hinted statement runs through the runtime and still
@@ -72,6 +81,17 @@ func TestThreadHistoryTurnScopedItemPageUsesTurnIndexLikeRust(t *testing.T) {
 	}
 	if page.NextCursor != nil {
 		t.Fatalf("turn-scoped page cursor = %v, want none on a complete page", *page.NextCursor)
+	}
+	// Rust #58751 reads by item ID through the primary-key autoindex.
+	itemPage, err := runtime.ListThreadHistoryItems(ctx, ThreadHistoryListItemsParams{
+		ThreadID: "thread-index", PageSize: 10, SortDirection: ThreadHistorySortAsc,
+		ItemIDs: []string{"agent-2", "user-1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := historyItemIDs(itemPage.Items); !equalStrings(got, []string{"user-1", "agent-2"}) {
+		t.Fatalf("item-id page = %v, want [user-1 agent-2]", got)
 	}
 
 	// Mechanism half: SQLite resolves both forms onto the turn index, so the guard
@@ -92,7 +112,7 @@ func TestThreadHistoryTurnScopedItemPageUsesTurnIndexLikeRust(t *testing.T) {
 	plans := map[planKey]string{}
 	for _, turnScoped := range []bool{false, true} {
 		for _, direction := range []ThreadHistorySortDirection{ThreadHistorySortAsc, ThreadHistorySortDesc} {
-			statement := threadHistoryItemsPageQuery(turnScoped)
+			statement := threadHistoryItemsPageQuery(turnScoped, false)
 			args := []any{"thread-index", 0}
 			if turnScoped {
 				statement += " AND turn_id = ?"
@@ -116,6 +136,15 @@ func TestThreadHistoryTurnScopedItemPageUsesTurnIndexLikeRust(t *testing.T) {
 		if wide := plans[planKey{turnScoped: false, direction: direction}]; !strings.Contains(wide, "idx_thread_items_page") {
 			t.Fatalf("thread-wide %s item page plan does not use the thread page index:\n%s", direction, wide)
 		}
+	}
+	itemIDPlan, planErr := explainThreadHistoryQueryPlan(ctx, db,
+		threadHistoryItemsPageQuery(true, true)+" AND turn_id = ? AND item_id IN (?, ?) ORDER BY rollout_ordinal ASC LIMIT ?",
+		"thread-index", 0, turnID, "user-1", "agent-2", 10)
+	if planErr != nil {
+		t.Fatalf("explain item-id page error = %v", planErr)
+	}
+	if !strings.Contains(itemIDPlan, "sqlite_autoindex_thread_items_1") {
+		t.Fatalf("item-id page plan does not use the primary-key autoindex:\n%s", itemIDPlan)
 	}
 }
 

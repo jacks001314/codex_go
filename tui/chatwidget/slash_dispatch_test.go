@@ -106,7 +106,9 @@ func TestSlashCommandGuardsMatchRust(t *testing.T) {
 		CommandName:            "review",
 		ActiveSideConversation: true,
 	})
-	if sideBlocked.Allowed || sideBlocked.ErrorMessage != "'/review' is unavailable in side conversations. "+SideSlashCommandUnavailableHint || !sideBlocked.DrainPendingSubmission || sideBlocked.RequestRedraw {
+	// Rust #58767: validation commands keep the draft when the side-conversation
+	// guard rejects them.
+	if sideBlocked.Allowed || sideBlocked.ErrorMessage != "'/review' is unavailable in side conversations. "+SideSlashCommandUnavailableHint || sideBlocked.DrainPendingSubmission || sideBlocked.RequestRedraw {
 		t.Fatalf("side blocked = %#v", sideBlocked)
 	}
 

@@ -8786,6 +8786,13 @@ func (r *RuntimeRouter) paginatedRunningResumeInitialTurnsPage(threadID string, 
 	if sortDirection == "" {
 		sortDirection = SortDesc
 	}
+	// Rust #58751: only load and merge the active turn when it belongs in the
+	// requested initial page. An ascending page that is already full points at
+	// older turns, so prepending the live turn would push one out of the page.
+	if !resumeActiveTurnBelongsInInitialPage(page, sortDirection, pageSize, activeTurn.ID) {
+		normalizeThreadTurnsStatus(page.Data, loadedStatus, true)
+		return page, nil
+	}
 	activeInPage := turnsPageHasTurn(page, activeTurn.ID)
 	if sortDirection == SortDesc && !activeInPage {
 		if pageSize == 1 {
@@ -8807,11 +8814,28 @@ func (r *RuntimeRouter) paginatedRunningResumeInitialTurnsPage(threadID string, 
 	page.Data = removeTurnByID(page.Data, active.ID)
 	if sortDirection == SortDesc {
 		page.Data = append([]Turn{active}, page.Data...)
-	} else if activeInPage || (len(page.Data) < pageSize && page.NextCursor == nil) {
+	} else {
 		page.Data = append(page.Data, active)
 	}
 	normalizeThreadTurnsStatus(page.Data, loadedStatus, true)
 	return page, nil
+}
+
+// resumeActiveTurnBelongsInInitialPage mirrors Rust #58751's active-page gate:
+// descending pages always lead with the live turn, while an ascending page only
+// carries it when the prepared page already contains it or the page is the
+// final, underfilled one.
+func resumeActiveTurnBelongsInInitialPage(page *TurnsPage, sortDirection SortDirection, pageSize int, activeTurnID string) bool {
+	if sortDirection != SortAsc {
+		return true
+	}
+	if page == nil {
+		return true
+	}
+	if page.NextCursor == nil && len(page.Data) < pageSize {
+		return true
+	}
+	return turnsPageHasTurn(page, activeTurnID)
 }
 
 func turnsPageHasTurn(page *TurnsPage, turnID string) bool {

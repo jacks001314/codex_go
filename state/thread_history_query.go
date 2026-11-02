@@ -184,13 +184,18 @@ func (r *StateRuntime) ThreadHistoryMode(ctx context.Context, threadID string) (
 // `idx_thread_items_page` can scan earlier turns when a turn's final page is
 // underfilled, because the turn filter is only a post-filter on that index. The
 // hint applies exactly where Rust applies it - a turn-scoped page that carries
-// no item-id or updated-at anchor.
-func threadHistoryItemsPageQuery(turnScoped bool) string {
+// no item-id or updated-at anchor. Rust #58751 seeks each requested item ID
+// through the primary-key autoindex instead of scanning the turn in rollout
+// order, so item-id reads take precedence over the turn hint.
+func threadHistoryItemsPageQuery(turnScoped bool, itemIDs bool) string {
 	query := `
 SELECT turn_id, item_id, rollout_ordinal, updated_at_ordinal, created_at_ms,
        started_at_ms, completed_at_ms, item_json
 FROM thread_items`
-	if turnScoped {
+	switch {
+	case itemIDs:
+		query += " INDEXED BY sqlite_autoindex_thread_items_1"
+	case turnScoped:
 		query += " INDEXED BY idx_thread_items_by_turn_page"
 	}
 	return query + `
@@ -223,7 +228,7 @@ func (r *StateRuntime) ListThreadHistoryItems(ctx context.Context, params Thread
 		if remaining <= 0 {
 			break
 		}
-		query := threadHistoryItemsPageQuery(params.TurnID != nil)
+		query := threadHistoryItemsPageQuery(params.TurnID != nil, len(params.ItemIDs) > 0)
 		args := []any{segment.segment.ThreadID, sqliteInt(segment.segment.Start)}
 		if segment.segment.End != nil {
 			query += ` AND rollout_ordinal < ?`

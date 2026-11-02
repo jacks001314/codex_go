@@ -5936,10 +5936,13 @@ func (m *Model) submitRunningSlashCommand() (bubbletea.Cmd, bool) {
 	if !ok || !slashInvocationDispatchable(invocation) {
 		return nil, false
 	}
-	if invocation.Command == codextui.CommandReview && m.reviewBlockedDuringForegroundWork() {
+	// Rust #58767: /fork and /review validate the thread state before the
+	// composer draft is consumed, so a rejection keeps the draft and its
+	// attachments.
+	if invocation.Command.RequiresDispatchValidation() && m.slashDispatchValidationBlocked(invocation.Command) {
 		m.slashPopup = slashCommandPopup{}
 		m.skillPopup = skillPopupState{}
-		m.showReviewBusyError()
+		m.showSlashCommandBusyError(invocation.Name)
 		return nil, true
 	}
 	if len(m.attachments) > 0 {
@@ -11428,7 +11431,7 @@ func (m *Model) clipboardEnvironmentValue() codextui.ClipboardEnvironment {
 	if m != nil && m.clipboardEnvironment != nil {
 		return *m.clipboardEnvironment
 	}
-	keys := []string{"HERDR_ENV", "SSH_TTY", "SSH_CONNECTION", "TMUX", "TMUX_PANE"}
+	keys := []string{"HERDR_ENV", "SSH_TTY", "SSH_CONNECTION", "TMUX", "TMUX_PANE", "STY"}
 	env := make(map[string]string, len(keys))
 	for _, key := range keys {
 		env[key] = os.Getenv(key)
@@ -11438,7 +11441,12 @@ func (m *Model) clipboardEnvironmentValue() codextui.ClipboardEnvironment {
 
 func forwardClipboardToTerminal(forward func(text string, tmux bool) error, text string, environment codextui.ClipboardEnvironment) error {
 	if forward == nil {
-		forward = codextui.WriteTerminalClipboard
+		forward = func(value string, tmux bool) error {
+			if tmux {
+				return codextui.WriteTerminalClipboard(value, true)
+			}
+			return codextui.WriteTerminalClipboardForEnvironment(value, environment)
+		}
 	}
 	tmuxCopy := func(value string) error { return forward(value, true) }
 	osc52Copy := func(value string) error { return forward(value, false) }

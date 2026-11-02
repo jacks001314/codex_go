@@ -73,6 +73,14 @@ func (t interactiveTUITelemetry) close() {
 	}
 }
 
+// recordInteractiveUpdateHandoffTelemetry mirrors Rust #58766's Launch record
+// for the update prompt: the TUI exits before connecting, so the single launch
+// observation carries app_server_mode=update_requested.
+func recordInteractiveUpdateHandoffTelemetry(root *cli.RootOptions) {
+	telemetry := startInteractiveTUITelemetry(root, interactiveDaemonSelectionReason(root, nil, false), "update_requested", nil)
+	telemetry.close()
+}
+
 // startInteractiveTUITelemetry mirrors Rust's startup orchestration: build the
 // TUI's OTEL provider, record `codex.tui.start`, and return the launch context
 // without the terminal size buckets.

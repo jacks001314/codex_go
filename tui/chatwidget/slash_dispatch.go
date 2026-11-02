@@ -166,14 +166,25 @@ func GuardSlashCommandDispatch(context SlashCommandGuardContext) SlashCommandGua
 	if context.ActiveSideConversation && !CommandAvailableInSideConversation(context.Command) {
 		return SlashCommandGuardDecision{
 			ErrorMessage:           "'/" + commandName + "' is unavailable in side conversations. " + SideSlashCommandUnavailableHint,
-			DrainPendingSubmission: true,
+			DrainPendingSubmission: !CommandRequiresDispatchValidation(context.Command),
 		}
 	}
 	if context.ReviewMode && isSideConversationCommandName(context.Command, commandName) {
 		return SlashCommandGuardDecision{
 			ErrorMessage:           "'/" + commandName + "' is unavailable while code review is running.",
-			DrainPendingSubmission: true,
+			DrainPendingSubmission: !CommandRequiresDispatchValidation(context.Command),
 		}
+	}
+	// Rust #58767: /fork and /review validate the thread state before the draft
+	// is consumed; only pending or running foreground work rejects them.
+	if CommandRequiresDispatchValidation(context.Command) {
+		if context.ResumePendingStart || context.AgentTurnRunning {
+			return SlashCommandGuardDecision{
+				ErrorMessage:  "'/" + commandName + "' is disabled while a task is in progress.",
+				RequestRedraw: true,
+			}
+		}
+		return SlashCommandGuardDecision{Allowed: true}
 	}
 	if SlashCommandBlockedByActiveTask(context) {
 		return SlashCommandGuardDecision{
@@ -418,6 +429,13 @@ func CommandAvailableInSideConversation(command codextui.Command) bool {
 // SlashCommand::available_during_task (codex-rs/tui/src/slash_command.rs:249-313).
 func CommandAvailableDuringTask(command codextui.Command) bool {
 	return command.AvailableDuringTask()
+}
+
+// CommandRequiresDispatchValidation mirrors SlashCommand::requires_dispatch_validation
+// (Rust #58767): these commands defer consuming the composer draft until thread
+// state proves they may run, and a rejection keeps the draft and attachments.
+func CommandRequiresDispatchValidation(command codextui.Command) bool {
+	return command.RequiresDispatchValidation()
 }
 
 // QueuedCommandDrainFacts carries the runtime predicates that Rust reads off

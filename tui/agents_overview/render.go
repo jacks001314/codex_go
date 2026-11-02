@@ -607,6 +607,11 @@ func (v *View) renderRowSpans(index int, projectGrouping bool, width int) []span
 		marker = span{text: "›", style: spanCyanBold}
 	}
 	title := row.Title()
+	// Rust #58714: under status grouping a pinned task stays in its status
+	// group and advertises the pin in its title.
+	if v.State.Grouping == GroupingStatus && v.IsPinned(row.ThreadID) {
+		title = "📌 " + title
+	}
 	// On narrow rows the result dot shares the only slot for the working or
 	// alert icon, so an unread status moves into the title.
 	statusInTitle := width < 56 && row.Unread && !idle

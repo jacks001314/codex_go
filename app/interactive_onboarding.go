@@ -50,6 +50,10 @@ func runInteractiveEntry(ctx context.Context, root *cli.RootOptions, stdin io.Re
 		return err
 	}
 	if updated {
+		// Rust #58766: an accepted startup update hands off before any
+		// app-server connection, so the launch observation must say so instead
+		// of being omitted or reported unconfirmed.
+		recordInteractiveUpdateHandoffTelemetry(root)
 		return nil
 	}
 	return runInteractive(ctx, root, stdin, stdout, stderr)

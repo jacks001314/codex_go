@@ -10,11 +10,10 @@ func statusRow(threadID string, group Group) Row {
 	return Row{ThreadID: threadID, Name: threadID, Group: group}
 }
 
-// Mirrors Rust #52946 live_center_keeps_status_order_across_progress_refreshes
-// and the row_order sort in AgentsOverviewView::new: a progress refresh
-// re-supplies the same tasks in a new recency order, and every task keeps its
-// relative position while it stays in the same status group.
-func TestStatusOrderRetainedAcrossProgressRefreshesLikeRust(t *testing.T) {
+// Mirrors Rust #58714 live_center_keeps_status_order_across_progress_refreshes:
+// the caller supplies rows in descending update order, so a progress refresh
+// reorders tasks inside their status group.
+func TestStatusOrderTracksRecencyAcrossProgressRefreshesLikeRust(t *testing.T) {
 	view := New(nil, "", false)
 	view.State.Grouping = GroupingStatus
 
@@ -25,43 +24,28 @@ func TestStatusOrderRetainedAcrossProgressRefreshesLikeRust(t *testing.T) {
 		statusRow("ready", GroupReady),
 		statusRow("needs", GroupNeedsYou),
 	}, "bravo")
-	want := "needs,alpha,bravo,charlie,ready"
-	if got := strings.Join(visibleThreadIDs(view), ","); got != want {
-		t.Fatalf("initial status order = %s, want %s", got, want)
+	if got := strings.Join(visibleThreadIDs(view), ","); got != "needs,alpha,bravo,charlie,ready" {
+		t.Fatalf("initial status order = %s", got)
 	}
 
-	// Progress updates change the host's recency order; the displayed order and
-	// the selection must not move with it.
-	for step, rows := range [][]Row{
-		{
-			statusRow("charlie", GroupWorking),
-			statusRow("ready", GroupReady),
-			statusRow("needs", GroupNeedsYou),
-			statusRow("bravo", GroupWorking),
-			statusRow("alpha", GroupWorking),
-		},
-		{
-			statusRow("bravo", GroupWorking),
-			statusRow("alpha", GroupWorking),
-			statusRow("charlie", GroupWorking),
-			statusRow("needs", GroupNeedsYou),
-			statusRow("ready", GroupReady),
-		},
-	} {
-		view.ApplyRefresh(rows, view.SelectedThreadID())
-		if got := strings.Join(visibleThreadIDs(view), ","); got != want {
-			t.Fatalf("refresh %d status order = %s, want %s", step, got, want)
-		}
-		if selected := view.SelectedThreadID(); selected != "bravo" {
-			t.Fatalf("refresh %d selected = %q, want bravo", step, selected)
-		}
+	// Update timestamps changed, so the host re-supplies rows in a new order.
+	view.ApplyRefresh([]Row{
+		statusRow("charlie", GroupWorking),
+		statusRow("ready", GroupReady),
+		statusRow("needs", GroupNeedsYou),
+		statusRow("bravo", GroupWorking),
+		statusRow("alpha", GroupWorking),
+	}, "bravo")
+	if got := strings.Join(visibleThreadIDs(view), ","); got != "needs,charlie,bravo,alpha,ready" {
+		t.Fatalf("refresh status order = %s, want needs,charlie,bravo,alpha,ready", got)
+	}
+	if selected := view.SelectedThreadID(); selected != "bravo" {
+		t.Fatalf("selected = %q, want bravo", selected)
 	}
 }
 
-// Mirrors Rust #52946 live_center_appends_arrivals_and_status_transitions: a new
-// task and a task that changed status group are appended after the rows already
-// in their destination group, in the order the host supplied.
-func TestStatusOrderAppendsArrivalsAndTransitionsLikeRust(t *testing.T) {
+// Mirrors Rust #58714 live_center_sorts_arrivals_and_status_transitions_by_update_time.
+func TestStatusOrderSortsArrivalsAndTransitionsByRecencyLikeRust(t *testing.T) {
 	view := New(nil, "", false)
 	view.State.Grouping = GroupingStatus
 	view.ApplyRefresh([]Row{
@@ -74,7 +58,8 @@ func TestStatusOrderAppendsArrivalsAndTransitionsLikeRust(t *testing.T) {
 		t.Fatalf("initial status order = %s", got)
 	}
 
-	// delta is a new arrival in Working; charlie moves from Working to Ready.
+	// delta is a new working arrival and charlie moved to Ready; both carry
+	// their new update times.
 	view.ApplyRefresh([]Row{
 		statusRow("delta", GroupWorking),
 		statusRow("charlie", GroupReady),
@@ -82,15 +67,15 @@ func TestStatusOrderAppendsArrivalsAndTransitionsLikeRust(t *testing.T) {
 		statusRow("bravo", GroupWorking),
 		statusRow("ready", GroupReady),
 	}, "")
-	want := "alpha,bravo,delta,ready,charlie"
+	want := "delta,alpha,bravo,charlie,ready"
 	if got := strings.Join(visibleThreadIDs(view), ","); got != want {
 		t.Fatalf("arrivals and transitions order = %s, want %s", got, want)
 	}
 }
 
-// Mirrors Rust #52946 "forget the order of removed tasks so rediscovered tasks
-// behave like new arrivals".
-func TestStatusOrderForgetsRemovedRowsLikeRust(t *testing.T) {
+// Mirrors Rust #58714: a rediscovered task returns to its position by update
+// time instead of being appended as a new arrival.
+func TestStatusOrderRestoresRediscoveredRowsByRecencyLikeRust(t *testing.T) {
 	view := New(nil, "", false)
 	view.State.Grouping = GroupingStatus
 	view.ApplyRefresh([]Row{
@@ -107,16 +92,15 @@ func TestStatusOrderForgetsRemovedRowsLikeRust(t *testing.T) {
 		statusRow("alpha", GroupWorking),
 		statusRow("charlie", GroupWorking),
 	}, "")
-	// bravo is rediscovered, so it is appended instead of returning to its old
-	// position behind alpha.
-	if got := strings.Join(visibleThreadIDs(view), ","); got != "alpha,charlie,bravo" {
-		t.Fatalf("rediscovered order = %s, want alpha,charlie,bravo", got)
+	if got := strings.Join(visibleThreadIDs(view), ","); got != "bravo,alpha,charlie" {
+		t.Fatalf("rediscovered order = %s, want bravo,alpha,charlie", got)
 	}
 }
 
-// Mirrors Rust #52946 "search and status filters preserve the retained order,
-// and pinned tasks continue to use their explicit ordering".
-func TestStatusOrderPreservesFiltersAndPinsLikeRust(t *testing.T) {
+// Mirrors Rust #58714 live_center_status_order_tracks_updates_while_filtered_and_pinned:
+// filters do not freeze hidden timestamps, and pins lead their status group in
+// pin order without creating a separate Pinned group.
+func TestStatusOrderTracksFiltersAndPinsLikeRust(t *testing.T) {
 	view := New(nil, "", false)
 	view.State.Grouping = GroupingStatus
 	view.ApplyRefresh([]Row{
@@ -125,25 +109,48 @@ func TestStatusOrderPreservesFiltersAndPinsLikeRust(t *testing.T) {
 		{ThreadID: "charlie", Name: "Charlie", Group: GroupWorking, Source: "cli"},
 	}, "")
 
-	// The search filter hides bravo; the survivors keep the retained order.
 	view.State.Search = "l"
 	if got := strings.Join(visibleThreadIDs(view), ","); got != "alpha,charlie" {
 		t.Fatalf("filtered order = %s, want alpha,charlie", got)
 	}
 	view.State.Search = ""
 
-	// Pinned tasks keep their shared-section order ahead of the retained rows.
-	view.SetPinnedThreads([]string{"charlie"})
-	if got := strings.Join(visibleThreadIDs(view), ","); got != "charlie,alpha,bravo" {
-		t.Fatalf("pinned order = %s, want charlie,alpha,bravo", got)
-	}
-	view.ClearPinnedThreads()
 	view.ApplyRefresh([]Row{
-		statusRow("charlie", GroupWorking),
-		statusRow("bravo", GroupWorking),
-		statusRow("alpha", GroupWorking),
+		{ThreadID: "charlie", Name: "Charlie", Group: GroupWorking, Source: "cli"},
+		{ThreadID: "bravo", Name: "Bravo", Group: GroupWorking, Source: "cli"},
+		{ThreadID: "alpha", Name: "Alpha", Group: GroupWorking, Source: "cli"},
 	}, "")
-	if got := strings.Join(visibleThreadIDs(view), ","); got != "alpha,bravo,charlie" {
-		t.Fatalf("post-unpin order = %s, want alpha,bravo,charlie", got)
+	if got := strings.Join(visibleThreadIDs(view), ","); got != "charlie,bravo,alpha" {
+		t.Fatalf("post-filter order = %s, want charlie,bravo,alpha", got)
+	}
+
+	view.SetPinnedThreads([]string{"alpha", "charlie"})
+	if got := strings.Join(visibleThreadIDs(view), ","); got != "alpha,charlie,bravo" {
+		t.Fatalf("pinned order = %s, want alpha,charlie,bravo", got)
+	}
+	pinnedIndex := -1
+	for index := range view.Rows {
+		if view.Rows[index].ThreadID == "alpha" {
+			pinnedIndex = index
+			break
+		}
+	}
+	if pinnedIndex < 0 {
+		t.Fatal("alpha row missing")
+	}
+	if heading := view.groupHeading(GroupingStatus, pinnedIndex); heading != GroupWorking.Label() {
+		t.Fatalf("pinned heading = %q, want %q", heading, GroupWorking.Label())
+	}
+	var rendered strings.Builder
+	for _, item := range view.renderRowSpans(pinnedIndex, false, 80) {
+		rendered.WriteString(item.text)
+	}
+	if !strings.Contains(rendered.String(), "📌 Alpha") {
+		t.Fatalf("pinned row = %q, want the 📌 title marker", rendered.String())
+	}
+
+	view.ClearPinnedThreads()
+	if got := strings.Join(visibleThreadIDs(view), ","); got != "charlie,bravo,alpha" {
+		t.Fatalf("post-unpin order = %s, want charlie,bravo,alpha", got)
 	}
 }

@@ -448,8 +448,8 @@ func (m *Model) recallQuickDial(slot byte) bubbletea.Cmd {
 	}
 	input := preset.Input
 	if invocation, ok := codextui.ParseCommand(input); ok && slashInvocationDispatchable(invocation) {
-		if invocation.Command == codextui.CommandReview && m.reviewBlockedDuringForegroundWork() {
-			m.showReviewBusyError()
+		if invocation.Command.RequiresDispatchValidation() && m.slashDispatchValidationBlocked(invocation.Command) {
+			m.showSlashCommandBusyError(invocation.Name)
 			return nil
 		}
 		if m.isTaskRunning() && !commandAvailableDuringTask(invocation.Command) {

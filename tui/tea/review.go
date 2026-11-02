@@ -6,6 +6,7 @@ import (
 	bubbletea "github.com/charmbracelet/bubbletea"
 
 	"codex_go/review"
+	codextui "codex_go/tui"
 	chatwidget "codex_go/tui/chatwidget"
 	historycell "codex_go/tui/history_cell"
 )
@@ -14,6 +15,31 @@ const reviewBusyMessage = "'/review' is disabled while a task is in progress."
 
 func (m *Model) reviewBlockedDuringForegroundWork() bool {
 	return m != nil && (m.isUserTurnPendingOrRunning() || len(m.queued) > 0 || len(m.pendingSteers) > 0)
+}
+
+// slashDispatchValidationBlocked mirrors Rust's dispatch-validation gate for
+// /fork and /review (codex-rs/tui/src/chatwidget/slash_dispatch.rs:139-145):
+// pending or running user work rejects the command before the draft is
+// consumed. /review also yields to queued follow-up messages.
+func (m *Model) slashDispatchValidationBlocked(command codextui.Command) bool {
+	if m == nil {
+		return false
+	}
+	if command == codextui.CommandReview {
+		return m.reviewBlockedDuringForegroundWork()
+	}
+	return m.isUserTurnPendingOrRunning()
+}
+
+// showSlashCommandBusyError reports a command rejected by the active-task gate.
+func (m *Model) showSlashCommandBusyError(name string) {
+	if m == nil || m.State == nil {
+		return
+	}
+	message := "'" + strings.TrimSpace(name) + "' is disabled while a task is in progress."
+	m.State.AddHistoryLines([]string{message}, []string{message})
+	m.notice = message
+	m.refreshTranscript()
 }
 
 func (m *Model) showReviewBusyError() {

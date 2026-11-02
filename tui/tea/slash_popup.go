@@ -321,6 +321,15 @@ func (m *Model) dispatchSelectedSlashCommand() (bubbletea.Cmd, bool) {
 	if !ok {
 		return nil, false
 	}
+	invocation, parsed := codextui.ParseCommand("/" + item.Name)
+	// Rust #58767: the composer keeps the draft for commands that validate the
+	// thread state first, so a busy rejection leaves /fork's text and
+	// attachments intact.
+	if parsed && invocation.Command.RequiresDispatchValidation() && m.slashDispatchValidationBlocked(invocation.Command) {
+		m.slashPopup = slashCommandPopup{}
+		m.showSlashCommandBusyError(invocation.Name)
+		return nil, true
+	}
 	m.resetComposer()
 	// Rust #41921: slash-command dispatch returns the composer to Vim Insert.
 	m.enterVimInsertAfterSubmission()
@@ -330,8 +339,7 @@ func (m *Model) dispatchSelectedSlashCommand() (bubbletea.Cmd, bool) {
 	if tier, ok := m.serviceTierCommandForInput("/" + item.Name); ok {
 		return m.applyServiceTierCommand(*tier), true
 	}
-	invocation, ok := codextui.ParseCommand("/" + item.Name)
-	if !ok {
+	if !parsed {
 		return nil, true
 	}
 	return m.applyCommand(invocation), true

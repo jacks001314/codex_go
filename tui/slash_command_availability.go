@@ -48,6 +48,20 @@ func (c Command) AvailableDuringTask() bool {
 	}
 }
 
+// RequiresDispatchValidation reports whether dispatch must prove the thread
+// state allows this command before the composer consumes its draft; mirrors
+// SlashCommand::requires_dispatch_validation (Rust #58767). /fork and /review
+// can be rejected for pending foreground work, and a rejection must keep the
+// draft and its image attachments.
+func (c Command) RequiresDispatchValidation() bool {
+	switch c {
+	case CommandFork, CommandReview:
+		return true
+	default:
+		return false
+	}
+}
+
 // AvailableInSideConversation reports whether the command stays available inside
 // an active side conversation; mirrors SlashCommand::available_in_side_conversation
 // (codex-rs/tui/src/slash_command.rs:203-219).

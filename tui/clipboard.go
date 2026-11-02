@@ -34,6 +34,9 @@ type ClipboardEnvironment struct {
 	ForwardedX11 bool
 	WSLSession   bool
 	TmuxSession  bool
+	// ScreenSession marks GNU screen detected through STY while tmux is absent
+	// (Rust #58716). Screen needs its own DCS passthrough chunking.
+	ScreenSession bool
 }
 
 func ClipboardCopyOrder(environment ClipboardEnvironment) []ClipboardBackend {
@@ -57,13 +60,17 @@ type ClipboardCopyFunc func(string) error
 
 func ClipboardEnvironmentFromMap(env map[string]string, wslSession bool) ClipboardEnvironment {
 	sshSession := envValueSet(env, "SSH_TTY") || envValueSet(env, "SSH_CONNECTION")
+	tmuxSession := envValueSet(env, "TMUX") || envValueSet(env, "TMUX_PANE")
 	return ClipboardEnvironment{
 		HerdrSession: env["HERDR_ENV"] == "1",
 		SSHSession:   sshSession,
 		// Rust #57504: a nonempty DISPLAY in an SSH session is X11 forwarding.
 		ForwardedX11: sshSession && env["DISPLAY"] != "",
 		WSLSession:   wslSession,
-		TmuxSession:  envValueSet(env, "TMUX") || envValueSet(env, "TMUX_PANE"),
+		TmuxSession:  tmuxSession,
+		// Rust #58716: GNU screen advertises itself through STY; tmux keeps
+		// precedence when both are set.
+		ScreenSession: !tmuxSession && envValueSet(env, "STY"),
 	}
 }
 
@@ -152,11 +159,20 @@ func WriteTerminalClipboard(text string, tmux bool) error {
 	if tmux {
 		return TmuxClipboardCopy(text)
 	}
-	return writeOSC52ToTerminal(text, os.Getenv("TMUX") != "")
+	return writeOSC52ToTerminal(text, OSC52TargetForEnvironment(os.Getenv("TMUX") != "", os.Getenv("STY") != ""))
 }
 
-func writeOSC52ToTerminal(text string, tmux bool) error {
-	sequence, err := OSC52Sequence(text, tmux)
+// WriteTerminalClipboardForEnvironment forwards to the terminal using an
+// already-resolved clipboard environment (Rust #58716).
+func WriteTerminalClipboardForEnvironment(text string, environment ClipboardEnvironment) error {
+	if environment.TmuxSession {
+		return TmuxClipboardCopy(text)
+	}
+	return writeOSC52ToTerminal(text, OSC52TargetForEnvironment(environment.TmuxSession, environment.ScreenSession))
+}
+
+func writeOSC52ToTerminal(text string, target OSC52Target) error {
+	sequence, err := OSC52SequenceForTarget(text, target)
 	if err != nil {
 		return err
 	}
@@ -207,15 +223,60 @@ func WriteOSC52ToWriter(writer io.Writer, sequence string) error {
 }
 
 func OSC52Sequence(text string, tmux bool) (string, error) {
+	return OSC52SequenceForTarget(text, OSC52TargetForEnvironment(tmux, false))
+}
+
+// OSC52Target selects how an OSC 52 clipboard sequence reaches the outer
+// terminal (Rust #58716).
+type OSC52Target string
+
+const (
+	OSC52TargetDirect OSC52Target = "direct"
+	OSC52TargetTmux   OSC52Target = "tmux"
+	OSC52TargetScreen OSC52Target = "screen"
+)
+
+// OSC52ScreenChunkSize keeps every screen DCS below its older 256-byte string
+// limit.
+const OSC52ScreenChunkSize = 252
+
+// OSC52TargetForEnvironment mirrors Rust's target selection: tmux wins over
+// GNU screen, and screen is only used when tmux is absent.
+func OSC52TargetForEnvironment(tmux, screen bool) OSC52Target {
+	switch {
+	case tmux:
+		return OSC52TargetTmux
+	case screen:
+		return OSC52TargetScreen
+	default:
+		return OSC52TargetDirect
+	}
+}
+
+func OSC52SequenceForTarget(text string, target OSC52Target) (string, error) {
 	rawBytes := len(text)
 	if rawBytes > OSC52MaxRawBytes {
 		return "", ClipboardError(fmt.Sprintf("OSC 52 payload too large (%d bytes; max %d)", rawBytes, OSC52MaxRawBytes))
 	}
 	encoded := base64.StdEncoding.EncodeToString([]byte(text))
-	if tmux {
-		return "\x1bPtmux;\x1b\x1b]52;c;" + encoded + "\x07\x1b\\", nil
+	sequence := "\x1b]52;c;" + encoded + "\x07"
+	switch target {
+	case OSC52TargetTmux:
+		return "\x1bPtmux;\x1b" + sequence + "\x1b\\", nil
+	case OSC52TargetScreen:
+		// Screen buffers each DCS separately but forwards one continuous OSC 52
+		// to the outer terminal.
+		var wrapped strings.Builder
+		for start := 0; start < len(sequence); start += OSC52ScreenChunkSize {
+			end := min(start+OSC52ScreenChunkSize, len(sequence))
+			wrapped.WriteString("\x1bP")
+			wrapped.WriteString(sequence[start:end])
+			wrapped.WriteString("\x1b\\")
+		}
+		return wrapped.String(), nil
+	default:
+		return sequence, nil
 	}
-	return "\x1b]52;c;" + encoded + "\x07", nil
 }
 
 type ClipboardError string
