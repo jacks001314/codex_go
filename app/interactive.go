@@ -1410,6 +1410,12 @@ func shouldRunInteractiveTUI(stdin io.Reader, stdout io.Writer) bool {
 }
 
 func isRealTerminal(value any) bool {
+	// Rust checks stdin.is_terminal() before it installs the replayed startup
+	// buffer, so a probe wrapper must not turn a real terminal into "not a
+	// terminal" here (it would silently drop the TUI or reject --remote).
+	if reader, ok := value.(io.Reader); ok {
+		value = codextea.UnderlyingInput(reader)
+	}
 	file, ok := value.(*os.File)
 	if !ok {
 		return false
