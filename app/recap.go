@@ -53,6 +53,22 @@ func interactiveRemoteRecapGenerateHandler(ctx context.Context, endpoint *appser
 	}
 }
 
+// cloudRecapUnavailableMessage mirrors Rust CLOUD_RECAP_UNAVAILABLE_MESSAGE
+// (codex-rs/tui/src/app/recap.rs:43-44).
+const cloudRecapUnavailableMessage = "Conversation recaps are not available for cloud conversations."
+
+// recapGenerateFuncForMode mirrors Rust app/recap.rs:190-195 and
+// app/thread_title.rs:71-77: a server-owned conversation never starts the local
+// recap or title-generation thread, because the server owns summarization.
+func recapGenerateFuncForMode(mode ThreadParamsMode, generate codextea.RecapGenerateFunc) codextea.RecapGenerateFunc {
+	if mode.SettingsOwner() != ThreadSettingsOwnerServer {
+		return generate
+	}
+	return func(string, codextea.RecapThreadOptions, string, map[string]any) (string, error) {
+		return "", errors.New(cloudRecapUnavailableMessage)
+	}
+}
+
 // interactiveLocalStructuredGenerator runs the temporary structured recap and
 // thread-title turn in-process. The embedded TUI drives turns through
 // codexexec instead of the app server, so this mirrors Rust's

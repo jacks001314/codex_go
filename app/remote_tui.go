@@ -570,8 +570,8 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		OnContinueSafetyRecourse:    interactiveRemoteContinueSafetyRecourse(ctx, endpoint, root, state, backendID),
 		OnPromptEdit:                interactiveRemotePromptEditHandler(ctx, endpoint, root, state, taskToolsHost),
 		OnExportTranscript:          interactiveRemoteTranscriptExportHandler(ctx, endpoint, showRawReasoning),
-		OnGenerateRecap:             interactiveRemoteRecapGenerateHandler(ctx, endpoint),
-		OnSuggestThreadName:         interactiveRemoteRecapGenerateHandler(ctx, endpoint),
+		OnGenerateRecap:             recapGenerateFuncForMode(threadParamsModeForLaunch(root), interactiveRemoteRecapGenerateHandler(ctx, endpoint)),
+		OnSuggestThreadName:         recapGenerateFuncForMode(threadParamsModeForLaunch(root), interactiveRemoteRecapGenerateHandler(ctx, endpoint)),
 		OnLoadTranscriptPreview:     interactiveRemoteTranscriptPreviewHandler(ctx, endpoint),
 		OnReadSessionTranscript:     interactiveRemoteSessionTranscriptHandler(ctx, endpoint, showRawReasoning),
 		OnAcknowledgeSessionRead:    interactiveRemoteSessionReadAcknowledgeHandler(ctx, endpoint),
@@ -648,7 +648,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		},
 		OnModalResponse: func(response codextea.ModalResponse) bubbletea.Cmd {
 			brokers.respond(response)
-			return interactiveRemoteModelSelectionCommand(ctx, endpoint, state, response.Picker)
+			return interactiveRemoteModelSelectionCommandForMode(threadParamsModeForLaunch(root), ctx, endpoint, state, response.Picker)
 		},
 		OnAppLinkAction: interactiveAppLinkActionHandler(),
 		OnReadTokenActivity: func(view chatwidget.TokenActivityView) (chatwidget.TokenActivityResponse, error) {

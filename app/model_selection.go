@@ -79,6 +79,20 @@ func interactiveRemoteModelSelectionCommand(
 	state *codextui.State,
 	decision *codextea.PickerDecision,
 ) bubbletea.Cmd {
+	return interactiveRemoteModelSelectionCommandForMode(threadParamsModeForEndpoint(endpoint), ctx, endpoint, state, decision)
+}
+
+// interactiveRemoteModelSelectionCommandForMode syncs a completed picker
+// decision to the remote app server. Rust app/model_defaults.rs:124-133 only
+// falls back to client config persistence when the client owns the conversation
+// settings; a server-owned conversation keeps its model on the server.
+func interactiveRemoteModelSelectionCommandForMode(
+	mode ThreadParamsMode,
+	ctx context.Context,
+	endpoint *appserverdaemon.RemoteAppServerEndpoint,
+	state *codextui.State,
+	decision *codextea.PickerDecision,
+) bubbletea.Cmd {
 	plan, ok := codextea.ResolveModelSelection(decision)
 	if !ok {
 		return nil
@@ -95,15 +109,17 @@ func interactiveRemoteModelSelectionCommand(
 		if plan.ThreadModel != nil || plan.ThreadEffort != nil {
 			result.ThreadSettingsErr = interactiveRemoteApplyModelSelection(ctx, endpoint, state, threadID, plan)
 		}
-		for _, persist := range plan.Persist {
-			result.PersistLabel = persist.Label
-			overridden, err := interactiveRemoteModelSelectionWriter(ctx, endpoint)(persist.Edits)
-			if err != nil {
-				result.PersistErr = err
-				return result
-			}
-			if overridden {
-				result.PersistOverridden = true
+		if mode.SettingsOwner() == ThreadSettingsOwnerClient {
+			for _, persist := range plan.Persist {
+				result.PersistLabel = persist.Label
+				overridden, err := interactiveRemoteModelSelectionWriter(ctx, endpoint)(persist.Edits)
+				if err != nil {
+					result.PersistErr = err
+					return result
+				}
+				if overridden {
+					result.PersistOverridden = true
+				}
 			}
 		}
 		return result
