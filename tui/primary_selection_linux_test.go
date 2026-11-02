@@ -17,6 +17,20 @@ func writePrimaryHelper(t *testing.T, dir, name, body string) {
 	}
 }
 
+// prependPrimaryHelperPath puts the fixture directory in front of the inherited
+// PATH instead of replacing it. exec resolves the fake helpers first, which is
+// what the tests assert, while the fixture scripts still have coreutils such as
+// cat available for reading stdin. The "unavailable" test deliberately keeps an
+// isolated PATH, so it does not use this helper.
+func prependPrimaryHelperPath(t *testing.T, dir string) {
+	t.Helper()
+	if existing := os.Getenv("PATH"); existing != "" {
+		t.Setenv("PATH", dir+string(os.PathListSeparator)+existing)
+		return
+	}
+	t.Setenv("PATH", dir)
+}
+
 // TestPrimarySelectionUsesAvailableHelpersLikeRust covers real helper
 // availability, fallback, stdin delivery, and ownership release (#49112/#53753).
 func TestPrimarySelectionUsesAvailableHelpersLikeRust(t *testing.T) {
@@ -28,7 +42,7 @@ if [ "$3" = "-in" ]; then cat > "`+logPath+`"; printf 'xclip-in\n' >> "`+logPath
 exit 1`)
 	writePrimaryHelper(t, dir, "wl-copy", `if [ "$1" = "--clear" ]; then printf 'clear\n' >> "`+logPath+`"; exit 0; fi
 cat > "`+logPath+`"; printf 'wl-copy\n' >> "`+logPath+`"`)
-	t.Setenv("PATH", dir)
+	prependPrimaryHelperPath(t, dir)
 
 	read, err := ReadPrimarySelection()
 	if err != nil || read != "wayland-primary" {
@@ -67,7 +81,7 @@ if [ "$3" = "-in" ]; then cat > "`+logPath+`"; exit 0; fi
 exit 1`)
 	writePrimaryHelper(t, dir, "wl-copy", `exit 1`)
 	writePrimaryHelper(t, dir, "xsel", `exit 1`)
-	t.Setenv("PATH", dir)
+	prependPrimaryHelperPath(t, dir)
 
 	read, err := ReadPrimarySelection()
 	if err != nil || read != "xclip-primary" {
