@@ -3700,7 +3700,7 @@ func remoteDynamicToolsUnsupportedError(err error) bool {
 }
 
 func (c *remoteAppServerTUIClient) startTurn(ctx context.Context, root *cli.RootOptions, state *codextui.State, threadID string, request codextea.SubmitRequest) (string, error) {
-	params, err := remoteTurnStartParams(root, state, threadID, request)
+	params, err := remoteTurnStartParamsForMode(c.threadParamsMode, root, state, threadID, request)
 	if err != nil {
 		return "", err
 	}
@@ -5702,6 +5702,16 @@ func remoteSideThreadForkParamsForMode(mode ThreadParamsMode, root *cli.RootOpti
 }
 
 func remoteTurnStartParams(root *cli.RootOptions, state *codextui.State, threadID string, request codextea.SubmitRequest) (turn.TurnStartParams, error) {
+	return remoteTurnStartParamsForMode(ThreadParamsModeEmbedded, root, state, threadID, request)
+}
+
+// remoteTurnStartParamsForMode mirrors Rust AppServerSession::turn_start
+// (codex-rs/tui/src/app_server_session.rs:1611-1634): the turn identity, inputs,
+// trigger, additional context and cyber program always travel, while cwd,
+// workspace roots, permission settings, model, effort, summary, service tier and
+// collaboration mode are client overrides that only travel when the client owns
+// the conversation settings.
+func remoteTurnStartParamsForMode(mode ThreadParamsMode, root *cli.RootOptions, state *codextui.State, threadID string, request codextea.SubmitRequest) (turn.TurnStartParams, error) {
 	threadID = strings.TrimSpace(threadID)
 	if threadID == "" {
 		return turn.TurnStartParams{}, errors.New("remote turn/start requires a thread id")
@@ -5730,6 +5740,28 @@ func remoteTurnStartParams(root *cli.RootOptions, state *codextui.State, threadI
 	if len(inputs) == 0 && len(additionalContext) == 0 {
 		return turn.TurnStartParams{}, errors.New("remote turn/start requires user input")
 	}
+	// Rust #42451 passes the TUI submission id through turn/start so the
+	// committed user message echoes it for pending-steer acknowledgement.
+	params := turn.TurnStartParams{
+		ThreadID:              threadID,
+		ClientUserMessageID:   strings.TrimSpace(request.ClientID),
+		Input:                 inputs,
+		ExperimentalRawEvents: true,
+		// Rust's TUI marks user-submitted turns with the "user" trigger (#46569)
+		// and attributes an automatic goal continuation with "goal".
+		TurnTrigger:       interactiveTurnTrigger(request),
+		AdditionalContext: additionalContext,
+	}
+	if program := strings.TrimSpace(request.CyberAccessProgram); program != "" {
+		value := turn.CyberAccessProgram(program)
+		params.CyberAccessProgram = &value
+	}
+	if mode.SettingsOwner() == ThreadSettingsOwnerServer {
+		// Rust #57267 (app_server_session.rs:1620-1634): a native hosted
+		// conversation keeps cwd, workspace roots, permissions, model, effort,
+		// summary, service tier and collaboration mode on the server.
+		return params, nil
+	}
 	if request.CollaborationMode == nil {
 		request.CollaborationMode = interactiveCollaborationModeFromState(state)
 	}
@@ -5742,28 +5774,12 @@ func remoteTurnStartParams(root *cli.RootOptions, state *codextui.State, threadI
 	if requestModel := strings.TrimSpace(request.Model); requestModel != "" {
 		turnModel = requestModel
 	}
-	// Rust #42451 passes the TUI submission id through turn/start so the
-	// committed user message echoes it for pending-steer acknowledgement.
-	params := turn.TurnStartParams{
-		ThreadID:              threadID,
-		ClientUserMessageID:   strings.TrimSpace(request.ClientID),
-		Input:                 inputs,
-		CWD:                   strings.TrimSpace(shared.CWD),
-		Model:                 turnModel,
-		ApprovalPolicy:        remoteStringAny(shared.ApprovalPolicy),
-		SandboxPolicy:         remoteStringAny(shared.Sandbox),
-		Config:                configValues,
-		ExperimentalRawEvents: true,
-		// Rust's TUI marks user-submitted turns with the "user" trigger (#46569)
-		// and attributes an automatic goal continuation with "goal".
-		TurnTrigger:       interactiveTurnTrigger(request),
-		AdditionalContext: additionalContext,
-	}
+	params.CWD = strings.TrimSpace(shared.CWD)
+	params.Model = turnModel
+	params.ApprovalPolicy = remoteStringAny(shared.ApprovalPolicy)
+	params.SandboxPolicy = remoteStringAny(shared.Sandbox)
+	params.Config = configValues
 	params.CollaborationMode = interactiveCollaborationModePayload(request.CollaborationMode)
-	if program := strings.TrimSpace(request.CyberAccessProgram); program != "" {
-		value := turn.CyberAccessProgram(program)
-		params.CyberAccessProgram = &value
-	}
 	if effort := strings.TrimSpace(shared.ModelReasoningEffort); effort != "" {
 		params.Effort = &effort
 	}
