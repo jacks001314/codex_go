@@ -7033,3 +7033,22 @@ func TestSettingsCarryDaybreakDefaultLikeRust(t *testing.T) {
 		t.Fatal("settings DaybreakDefault = false, want true")
 	}
 }
+
+// Rust #46905: /status shows a sanitized server address and a version with the
+// v prefix; websocket URLs lose credentials and query parameters.
+func TestInteractiveAppServerDisplayStatusLikeRust(t *testing.T) {
+	remote := appserverdaemon.NewWebSocketEndpoint("ws://user:secret@127.0.0.1:4500/rpc?token=secret#frag", nil)
+	if got := interactiveAppServerDisplayAddress(remote); got != "ws://127.0.0.1:4500/rpc" {
+		t.Fatalf("websocket display address = %q", got)
+	}
+	local := appserverdaemon.NewUnixSocketEndpoint("/tmp/codex/control.sock")
+	if got := interactiveAppServerDisplayAddress(local); got != "unix:///tmp/codex/control.sock" {
+		t.Fatalf("unix display address = %q", got)
+	}
+	if got := interactiveAppServerDisplayVersion("0.153.0"); got != "v0.153.0" {
+		t.Fatalf("version display = %q", got)
+	}
+	if got := interactiveAppServerDisplayVersion(""); got != "unknown" {
+		t.Fatalf("unknown version display = %q", got)
+	}
+}

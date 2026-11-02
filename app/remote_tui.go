@@ -496,6 +496,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 	// keeps native scrollback for Apple Terminal over SSH.
 	stdin = codextea.PrepareTerminal(stdin, stdout)
 	terminalAppOverSSH := codextui.TerminalAppOverSSH()
+	daemonVersion := interactiveDaemonVersionForEndpoint(endpoint)
 	options := codextea.Options{
 		Profile:                      interactiveStringFromSharedProfile(root),
 		NoAltScreen:                  interactiveNoAltScreen(root, settings, terminalAppOverSSH),
@@ -509,7 +510,9 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		DaemonCLIExecutable:          daemonCLIExecutable,
 		DaemonCLIVersion:             daemonCLIVersion,
 		DaemonCLIPackage:             daemonCLIPackage,
-		DaemonVersion:                interactiveDaemonVersionForEndpoint(endpoint),
+		DaemonVersion:                daemonVersion,
+		ServerAddress:                interactiveAppServerDisplayAddress(endpoint),
+		ServerVersion:                interactiveAppServerDisplayVersion(daemonVersion),
 		DaemonManaged:                interactiveManagedDaemonForEndpoint(endpoint),
 		RemoteAppServer:              interactiveRemoteEndpointIsExplicitRemote(root),
 		AnimationsEnabled:            settings.AnimationsEnabled,

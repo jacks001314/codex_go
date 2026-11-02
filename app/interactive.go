@@ -250,6 +250,40 @@ func createManagedWorktreeSession(store *session.Store, cwd string, name string)
 	return record, nil
 }
 
+// interactiveAppServerDisplayAddress renders the /status Server row address
+// (Rust #46905). Unix sockets keep the unix:// scheme; WebSocket URLs lose
+// credentials, query parameters, and fragments before display.
+func interactiveAppServerDisplayAddress(endpoint *appserverdaemon.RemoteAppServerEndpoint) string {
+	if endpoint == nil {
+		return ""
+	}
+	switch endpoint.Kind {
+	case appserverdaemon.RemoteEndpointUnixSocket:
+		if path := strings.TrimSpace(endpoint.SocketPath); path != "" {
+			return "unix://" + path
+		}
+	case appserverdaemon.RemoteEndpointWebSocket:
+		if address, ok := tuistatus.SanitizedWebSocketDisplayAddress(endpoint.WebSocketURL); ok {
+			return address
+		}
+		return strings.TrimSpace(endpoint.WebSocketURL)
+	}
+	return strings.TrimSpace(endpoint.String())
+}
+
+// interactiveAppServerDisplayVersion formats the server version exactly as the
+// /status card expects.
+func interactiveAppServerDisplayVersion(version string) string {
+	version = strings.TrimSpace(version)
+	if version == "" {
+		return "unknown"
+	}
+	if strings.HasPrefix(version, "v") {
+		return version
+	}
+	return "v" + version
+}
+
 func interactiveWorkingDirectoryChangeHandler(root *cli.RootOptions) codextea.WorkingDirectoryChangeFunc {
 	return func(threadID string, cwd string) (*codextui.SessionSummary, error) {
 		store := newSessionStore()

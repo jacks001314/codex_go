@@ -90,3 +90,20 @@ func TestClipboardEnvironmentDetectsScreenLikeRust(t *testing.T) {
 		t.Fatalf("plain environment = %+v", plain)
 	}
 }
+
+// Rust #58716 uses var_os("TMUX") / var_os("STY") for target selection, so an
+// environment entry that is present but empty still identifies the multiplexer.
+func TestClipboardEnvironmentTreatsEmptyMultiplexerVariablesAsPresentLikeRust(t *testing.T) {
+	screen := ClipboardEnvironmentFromMap(map[string]string{"STY": ""}, false)
+	if !screen.ScreenSession || screen.TmuxSession {
+		t.Fatalf("empty STY environment = %+v, want screen", screen)
+	}
+	tmux := ClipboardEnvironmentFromMap(map[string]string{"TMUX": "", "STY": ""}, false)
+	if !tmux.TmuxSession || tmux.ScreenSession {
+		t.Fatalf("empty TMUX+STY environment = %+v, want tmux precedence", tmux)
+	}
+	pane := ClipboardEnvironmentFromMap(map[string]string{"TMUX_PANE": ""}, false)
+	if !pane.TmuxSession || pane.ScreenSession {
+		t.Fatalf("empty TMUX_PANE environment = %+v, want tmux", pane)
+	}
+}

@@ -1484,6 +1484,11 @@ type Options struct {
 	DaemonManaged bool
 	// DaemonVersion is the running local daemon's app-server version, when known.
 	DaemonVersion string
+	// ServerAddress and ServerVersion feed the /status "Server" row
+	// (Rust #46905). ServerAddress is already sanitized for display; for a
+	// local daemon the row says "Local background server" instead.
+	ServerAddress string
+	ServerVersion string
 	// RemoteAppServer reports an explicit remote app server, whose daemon cannot
 	// be managed from this host.
 	RemoteAppServer bool
@@ -2973,6 +2978,13 @@ func NewModel(state *codextui.State, options Options) *Model {
 	// settings; the app attaches that connection kind to the tea options
 	// (app/remote_tui.go sets LocalDaemonSession / RemoteAppServer).
 	state.RemoteConnection = options.LocalDaemonSession || options.RemoteAppServer
+	if state.RemoteConnection {
+		state.ServerConnection = &codextui.ServerConnectionStatus{
+			Address:     strings.TrimSpace(options.ServerAddress),
+			Version:     strings.TrimSpace(options.ServerVersion),
+			LocalDaemon: options.LocalDaemonSession,
+		}
+	}
 	// Rust #51500: the pinned-section discovery and the pin/unpin request are the
 	// TUI's own flow, driven by one injected app-server request function. Hosts
 	// that implement either callback directly keep it.
@@ -11496,7 +11508,11 @@ func (m *Model) clipboardEnvironmentValue() codextui.ClipboardEnvironment {
 	keys := []string{"HERDR_ENV", "SSH_TTY", "SSH_CONNECTION", "TMUX", "TMUX_PANE", "STY"}
 	env := make(map[string]string, len(keys))
 	for _, key := range keys {
-		env[key] = os.Getenv(key)
+		// Preserve presence separately from value: Rust's var_os checks
+		// treat an empty TMUX/STY as a detected multiplexer.
+		if value, ok := os.LookupEnv(key); ok {
+			env[key] = value
+		}
 	}
 	return codextui.ClipboardEnvironmentFromMap(env, codextui.IsProbablyWSL())
 }

@@ -183,6 +183,18 @@ type State struct {
 	// connection as a bool; the tea model seeds it from its LocalDaemonSession /
 	// RemoteAppServer options.
 	RemoteConnection bool
+	// ServerConnection describes the app server that owns this TUI session.
+	// Rust #46905 renders a local background daemon as "Local background
+	// server" and keeps the sanitized address plus version for remote servers.
+	ServerConnection *ServerConnectionStatus
+}
+
+// ServerConnectionStatus is the /status "Server" row. Version is already
+// display-formatted (for example "v0.153.0", or "unknown").
+type ServerConnectionStatus struct {
+	Address     string
+	Version     string
+	LocalDaemon bool
 }
 
 type RateLimitStatus struct {
@@ -427,8 +439,18 @@ func (s *State) RenderStatusCardWidth(width int) string {
 		details          string
 		window           bool
 		separator        bool
+		blankAfter       bool
 	}
-	fields := []statusFieldData{{label: "Model", value: model}}
+	fields := make([]statusFieldData, 0, 12)
+	if server := s.ServerConnection; server != nil {
+		serverValue := "Local background server"
+		if !server.LocalDaemon {
+			version := displayValue(server.Version, "unknown")
+			serverValue = displayValue(server.Address, "-") + " (" + version + ")"
+		}
+		fields = append(fields, statusFieldData{label: "Server", value: serverValue, blankAfter: true})
+	}
+	fields = append(fields, statusFieldData{label: "Model", value: model})
 	if provider != "" {
 		fields = append(fields, statusFieldData{label: "Model provider", value: provider})
 	}
@@ -560,6 +582,9 @@ func (s *State) RenderStatusCardWidth(width int) string {
 	}
 	for _, item := range fields {
 		rows = append(rows, statusCardRow{text: renderStatusField(item.label, item.value, labelWidth), continuation: continuation})
+		if item.blankAfter {
+			rows = append(rows, statusCardRow{})
+		}
 	}
 	rows = append(rows, statusCardRow{})
 	for _, item := range usageFields {
