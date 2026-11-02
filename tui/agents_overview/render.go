@@ -79,7 +79,19 @@ func (v *View) renderLines(termWidth, termHeight int, styled bool) []string {
 	// metadata editor (search or rename) above the task list; browsing shows
 	// the search hint in the same row (Rust #46838).
 	label, input, placeholder := v.Prompt()
-	if label != "" || input != "" || placeholder != "" {
+	if v.Composing() {
+		// Rust #42428: the shared composer owns the input row while it has
+		// focus; the extra wrapped lines shrink the task list instead of
+		// pushing the footer off screen.
+		composerLines := v.composerRenderLines(bodyWidth, styled)
+		lines = append(lines, composerLines...)
+		if extra := len(composerLines) - 1; extra > 0 {
+			bodyHeight -= extra
+			if bodyHeight < 3 {
+				bodyHeight = 3
+			}
+		}
+	} else if label != "" || input != "" || placeholder != "" {
 		if v.State.Renaming && input != "" {
 			if available := bodyWidth - runewidth.StringWidth(label); available > 0 {
 				input = v.singleLineViewport(available)
@@ -817,6 +829,20 @@ func (v *View) renderDetailsMarkdown(text string, width int, cwd string) ([]stri
 func (v *View) CursorColumn(termWidth int) int {
 	if v == nil {
 		return 0
+	}
+	if v.Composing() {
+		text := v.ComposerText()
+		if cursor := v.ComposerCursor(); cursor > 0 && cursor <= len(text) {
+			text = text[:cursor]
+		}
+		if index := strings.LastIndexByte(text, '\n'); index >= 0 {
+			text = text[index+1:]
+		}
+		column := 2 + displayWidth("\u203a ") + displayWidth(text)
+		if column > termWidth-3 {
+			column = termWidth - 3
+		}
+		return column
 	}
 	label, input, _ := v.Prompt()
 	column := 2 + displayWidth(label) + displayWidth(input)

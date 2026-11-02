@@ -2474,6 +2474,10 @@ type Model struct {
 	// from the command center until its first turn materializes a rollout
 	// (Rust #45255 agents_overview.blank_sessions).
 	agentsOverviewBlankSessions map[string]AgentThreadSwitchResponse
+	// agentsOverviewPendingDispatch carries a task prompt composed in the
+	// command center across the session start so it is submitted once the new
+	// session attaches (Rust #42428 DispatchAgentsOverviewTask).
+	agentsOverviewPendingDispatch string
 	// agentsOverviewLifecycleProgress is non-empty while an archive/delete RPC
 	// runs; navigation and task switching are blocked during that window
 	// (Rust #44433).

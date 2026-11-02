@@ -18,6 +18,7 @@ import (
 	"github.com/rivo/uniseg"
 
 	"codex_go/gitutil"
+	bottompane "codex_go/tui/bottom_pane"
 )
 
 // Group classifies a root thread for the dashboard's status grouping.
@@ -476,6 +477,14 @@ type View struct {
 	// usageLines holds the pre-rendered token/usage-estimate lines for a task,
 	// shown in the details pane (Rust #44970 agents_overview.usage).
 	usageLines map[string][]string
+
+	// composer is the retained shared bottom-pane composer for new tasks
+	// (Rust #42428 agents_overview_composer). Focus, draft and Vim state survive
+	// refreshes and reconnects because the view object outlives them.
+	composer           *bottompane.ChatComposerState
+	focus              AgentsOverviewFocus
+	composerVimEnabled bool
+	composerVimInsert  bool
 }
 
 // KeyChordHint is one pending multi-stroke binding shown in the dashboard
@@ -1770,6 +1779,12 @@ func (v *View) ApplyRefresh(rows []Row, selectedThreadID string) {
 	view.State = v.State
 	view.worktreesEnabled = v.worktreesEnabled
 	view.usageLines = v.usageLines
+	// Rust #42428: the shared composer, its focus and its Vim state are
+	// retained across refreshes and reconnects instead of being rebuilt.
+	view.composer = v.composer
+	view.focus = v.focus
+	view.composerVimEnabled = v.composerVimEnabled
+	view.composerVimInsert = v.composerVimInsert
 	// Rust #51500: a refresh keeps the pinned-section order and any in-flight
 	// pin request.
 	view.pinRanks = v.pinRanks
