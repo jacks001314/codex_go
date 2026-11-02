@@ -19,6 +19,11 @@ func (m *Model) setReadOnlyThread(readOnly bool) {
 	if m == nil {
 		return
 	}
+	if readOnly && !m.readOnlyThread {
+		// Rust #43253/#47320: the locked view hides the composer but keeps the
+		// draft, so a successful retry or a fork (#47185) can continue with it.
+		m.readOnlyDraft = m.captureComposerInputState()
+	}
 	m.readOnlyThread = readOnly
 	if readOnly {
 		m.threadUnavailable = false
@@ -28,6 +33,10 @@ func (m *Model) setReadOnlyThread(readOnly bool) {
 	}
 	if !readOnly {
 		m.frozenReadReceipt = nil
+		if draft := m.readOnlyDraft; draft != nil {
+			m.readOnlyDraft = nil
+			m.restoreComposerInputState(draft, false)
+		}
 		return
 	}
 	// Block input while preserving the transcript; drafts and queued messages
@@ -37,6 +46,60 @@ func (m *Model) setReadOnlyThread(readOnly bool) {
 	m.composerMentionBindings = nil
 	m.composerPasteEnterUntil = nil
 	m.notice = ""
+}
+
+// externalWriterView mirrors Rust ChatWidget::is_external_writer_view: the
+// conversation is locked because another app owns it. A provider-error lock
+// (#58202) keeps the chat readable for a different reason and is not an
+// external-writer view, so Escape navigation must not treat it as locked
+// (#47320).
+func (m *Model) externalWriterView() bool {
+	return m != nil && m.readOnlyThread && m.providerError == nil
+}
+
+// composerInputState is the retained input of a locked conversation (Rust
+// capture_thread_input_state). Go's locked view has no queued prompts or image
+// submissions to carry, so the draft body and its prompt marker are the whole
+// retained state.
+type composerInputState struct {
+	threadID string
+	text     string
+	prefix   composerPrefix
+}
+
+// captureComposerInputState snapshots a non-empty draft for its thread.
+func (m *Model) captureComposerInputState() *composerInputState {
+	if m == nil || m.composerIsEmpty() {
+		return nil
+	}
+	return &composerInputState{
+		threadID: strings.TrimSpace(m.currentThreadID()),
+		text:     m.composerBody(),
+		prefix:   m.composerPrefix,
+	}
+}
+
+// restoreComposerInputState puts a retained draft back once the composer is
+// free. Without force the conversation must still be the one that retained it,
+// so a retry of the same thread restores and a navigation elsewhere does not.
+func (m *Model) restoreComposerInputState(state *composerInputState, force bool) bool {
+	if m == nil || state == nil {
+		return false
+	}
+	if state.text == "" && state.prefix == composerPrefixNone {
+		return false
+	}
+	if !force && strings.TrimSpace(m.currentThreadID()) != state.threadID {
+		return false
+	}
+	if !m.composerIsEmpty() {
+		return false
+	}
+	m.composerPrefix = state.prefix
+	m.composerElements = nil
+	m.composer.SetValue(state.text)
+	m.refreshComposerPrompt()
+	return true
 }
 
 // commandCenterAvailable mirrors Rust's AppServerTarget::supports_command_center

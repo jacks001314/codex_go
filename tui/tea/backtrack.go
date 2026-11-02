@@ -56,6 +56,11 @@ func (m *Model) shouldHandleBacktrackEsc() bool {
 	if m == nil {
 		return false
 	}
+	// Rust #47320 (app/input.rs): an external-writer view never enters prompt
+	// backtracking; Escape belongs to session navigation instead.
+	if m.externalWriterView() {
+		return false
+	}
 	return tuiapp.ShouldHandleBacktrackEsc(m.inSideConversation(), m.normalBacktrackMode(), m.backtrackComposerEmpty(), m.shouldHandleVimInsertEscape())
 }
 

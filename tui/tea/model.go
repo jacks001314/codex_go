@@ -1969,6 +1969,10 @@ type Model struct {
 	// readOnlyThread marks a conversation opened read-only because another app
 	// owns it (Rust #43253).
 	readOnlyThread bool
+	// readOnlyDraft retains the composer draft while the external-writer view
+	// hides it, so a retry or a fork can continue with the same input
+	// (Rust #43253/#47185 capture_thread_input_state).
+	readOnlyDraft *composerInputState
 	// providerError carries the provider admission failure that kept the chat
 	// readable but read-only (Rust #58202), and providerErrorRolloutPath is the
 	// frozen conversation's saved history path used by the continuation draft.
@@ -11440,6 +11444,12 @@ func (m *Model) updateTranscriptOverlayKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 		return m.updatePagerOverlayKey(msg)
 	}
 	if msg.Type == bubbletea.KeyEsc {
+		// Rust #47320 (app_backtrack/legacy_input.rs): a conversation locked by
+		// another app closes the transcript overlay instead of starting a
+		// backtrack preview, and the retained draft stays untouched.
+		if m.externalWriterView() {
+			return m.closeTranscriptOverlay()
+		}
 		if m.backtrack.OverlayPreviewActive {
 			m.stepBacktrackAndHighlight(false)
 		} else {
