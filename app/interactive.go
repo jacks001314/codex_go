@@ -538,6 +538,13 @@ func interactiveLocalSideClose(interrupts *interactiveInterruptController, coord
 }
 
 func (b *interactiveApprovalBroker) shellApprovalFunc(send func(bubbletea.Msg)) tool.ShellApprovalFunc {
+	return b.shellApprovalFuncForThread("", send)
+}
+
+// shellApprovalFuncForThread stamps the approval with the thread that asked
+// for it, so a request from an inactive thread waits for that thread instead
+// of covering the active conversation (Rust #58720).
+func (b *interactiveApprovalBroker) shellApprovalFuncForThread(threadID string, send func(bubbletea.Msg)) tool.ShellApprovalFunc {
 	return func(ctx context.Context, request *tool.ShellApprovalRequest) (tool.ShellApprovalDecision, error) {
 		if b == nil {
 			return tool.ShellApprovalDecision{}, nil
@@ -550,11 +557,12 @@ func (b *interactiveApprovalBroker) shellApprovalFunc(send func(bubbletea.Msg)) 
 		}
 		id, responses := b.registerRequest()
 		send(codextea.ApprovalRequestMsg{
-			ID:      id,
-			Title:   "Run command?",
-			Body:    interactiveShellApprovalBody(request),
-			Command: interactiveShellApprovalCommand(request),
-			Options: interactiveShellApprovalOptions(request),
+			ID:       id,
+			ThreadID: strings.TrimSpace(threadID),
+			Title:    "Run command?",
+			Body:     interactiveShellApprovalBody(request),
+			Command:  interactiveShellApprovalCommand(request),
+			Options:  interactiveShellApprovalOptions(request),
 		})
 		select {
 		case response := <-responses:
@@ -4513,7 +4521,7 @@ func runInteractiveTurn(ctx context.Context, root *cli.RootOptions, runner inter
 	}
 	if concrete, ok := runner.(*codexexec.Runner); ok && approvalBroker != nil {
 		previousApproval := concrete.ShellApproval
-		concrete.ShellApproval = approvalBroker.shellApprovalFunc(send)
+		concrete.ShellApproval = approvalBroker.shellApprovalFuncForThread(requestedThreadID, send)
 		defer func() {
 			concrete.ShellApproval = previousApproval
 		}()

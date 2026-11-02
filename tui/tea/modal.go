@@ -99,10 +99,14 @@ type ModalRequestMsg struct {
 type ApprovalRequestMsg struct {
 	ID              string
 	ServerRequestID string
-	Title           string
-	Body            string
-	Command         string
-	Options         []ModalOption
+	// ThreadID names the thread whose turn asked for approval. A request from a
+	// background thread waits in the queue instead of covering the active
+	// conversation (Rust #58720).
+	ThreadID string
+	Title    string
+	Body     string
+	Command  string
+	Options  []ModalOption
 }
 
 // AppLinkAction is one host-side effect of the app-link popup (Rust
@@ -154,12 +158,15 @@ type UserInputDecision struct {
 type modalState struct {
 	id              string
 	serverRequestID string
-	kind            ModalKind
-	title           string
-	body            string
-	bodyOffset      int
-	options         []ModalOption
-	selected        int
+	// threadID is the thread that asked for this approval; empty for requests
+	// that are not thread scoped (Rust #58720).
+	threadID   string
+	kind       ModalKind
+	title      string
+	body       string
+	bodyOffset int
+	options    []ModalOption
+	selected   int
 	// optionScrollTop/optionVisibleRows track the rendered result viewport so
 	// page navigation uses the rows that actually fit (Rust #46680).
 	optionScrollTop   int
@@ -331,6 +338,9 @@ func (m *Model) openApprovalModal(message ApprovalRequestMsg) bubbletea.Cmd {
 		Body:            body,
 		Options:         options,
 	})
+	if m.modal != nil && m.modal.kind == ModalKindApproval {
+		m.modal.threadID = strings.TrimSpace(message.ThreadID)
+	}
 	return m.queueNotification(chatwidget.ExecApprovalRequestedNotification(message.Command))
 }
 
@@ -1369,6 +1379,13 @@ func (m *Model) respondModal(cancelled bool) bubbletea.Cmd {
 	if m.onModalResponse != nil {
 		callback = m.onModalResponse(response)
 	}
+	var nextApprovalCmd bubbletea.Cmd
+	if modal.kind == ModalKindApproval {
+		// The answered thread may no longer be waiting; refresh the picker and
+		// notice before the next request for this thread surfaces (Rust #58720).
+		m.refreshThreadApprovalViews()
+		nextApprovalCmd = m.openNextThreadApproval()
+	}
 	if modal.exitAfterSessionAction && !cancelled && response.Picker != nil {
 		if modal.sessionAction != nil &&
 			modal.sessionAction.Kind == codextui.SessionSelectionDelete &&
@@ -1379,6 +1396,12 @@ func (m *Model) respondModal(cancelled bool) bubbletea.Cmd {
 	}
 	if modal.sessionPicker != nil {
 		return m.closeSessionPickerTerminalMode(callback)
+	}
+	if nextApprovalCmd != nil {
+		if callback == nil {
+			return nextApprovalCmd
+		}
+		return bubbletea.Batch(callback, nextApprovalCmd)
 	}
 	return callback
 }

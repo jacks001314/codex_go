@@ -21,11 +21,18 @@ type ServerRequestResolvedMsg struct {
 // the last visible modal can settle a permissions hold, so queued prompts
 // resume only after the covering request is gone.
 func (m *Model) applyServerRequestResolved(message ServerRequestResolvedMsg) bubbletea.Cmd {
-	if m == nil || m.modal == nil {
+	if m == nil {
 		return nil
 	}
 	requestID := strings.TrimSpace(message.RequestID)
 	if requestID == "" {
+		return nil
+	}
+	if m.removeQueuedApproval(requestID) {
+		m.refreshThreadApprovalViews()
+		return nil
+	}
+	if m.modal == nil {
 		return nil
 	}
 	if strings.TrimSpace(m.modal.serverRequestID) != requestID && strings.TrimSpace(m.modal.id) != requestID {
@@ -37,5 +44,14 @@ func (m *Model) applyServerRequestResolved(message ServerRequestResolvedMsg) bub
 		return nil
 	}
 	m.modal = nil
-	return m.settlePermissionPopup()
+	m.refreshThreadApprovalViews()
+	settle := m.settlePermissionPopup()
+	next := m.openNextThreadApproval()
+	if settle != nil && next != nil {
+		return bubbletea.Batch(settle, next)
+	}
+	if settle != nil {
+		return settle
+	}
+	return next
 }

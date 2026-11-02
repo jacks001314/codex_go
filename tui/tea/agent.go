@@ -156,20 +156,39 @@ func (m *Model) showAgentPicker(entries []codextui.AgentThreadEntry, currentThre
 	if m == nil || len(entries) == 0 {
 		return
 	}
-	options := make([]ModalOption, 0, len(entries))
-	selected := 0
-	for i, entry := range entries {
+	entries = m.withPendingAgentRows(entries)
+	// Rust #58720: threads waiting on an approval lead the list, and the first
+	// waiting thread is selected when the picker opens without a remembered row.
+	pending := m.pendingApprovalThreadSet()
+	ordered := agentPickerOrder(entries, pending)
+	options := make([]ModalOption, 0, len(ordered))
+	selected := -1
+	explicit := strings.TrimSpace(selectedThreadID)
+	if explicit != "" {
+		for i, entry := range ordered {
+			if strings.TrimSpace(entry.ThreadID) == explicit {
+				selected = i
+				break
+			}
+		}
+	}
+	for i, entry := range ordered {
 		threadID := strings.TrimSpace(entry.ThreadID)
-		if threadID == strings.TrimSpace(selectedThreadID) || (strings.TrimSpace(selectedThreadID) == "" && threadID == currentThreadID) {
+		// A remembered row wins; otherwise the first waiting (or current) row is
+		// selected, matching Rust's `is_pending || is_current` fallback.
+		if selected < 0 && (pending[threadID] || threadID == currentThreadID) {
 			selected = i
 		}
 		options = append(options, ModalOption{
 			ID:          threadID,
-			Label:       agentPickerLabel(entry),
+			Label:       agentPickerLabel(entry, pending[threadID]),
 			Description: agentPickerDescription(entry),
 			Shortcut:    modelPickerShortcut(i),
 			Disabled:    strings.TrimSpace(entry.ThreadID) == "",
 		})
+	}
+	if selected < 0 {
+		selected = 0
 	}
 	m.openModal(ModalRequestMsg{
 		ID:      "agent-picker",
@@ -590,22 +609,69 @@ func currentAgentThreadID(m *Model, fallback string) string {
 	return strings.TrimSpace(fallback)
 }
 
-func agentPickerLabel(entry codextui.AgentThreadEntry) string {
-	label := ""
-	if !entry.IsPrimary {
-		label = strings.TrimSpace(entry.AgentPath)
-	}
-	if label == "" {
-		label = strings.TrimSpace(entry.DisplayLabel())
-	}
-	if label == "" {
-		label = "Agent"
+// agentPickerLabel mirrors Rust's picker row name: the shared thread label plus
+// an approval marker for a thread that is waiting on one (Rust #58720).
+func agentPickerLabel(entry codextui.AgentThreadEntry, needsApproval bool) string {
+	label := agentEntryThreadLabel(entry)
+	if needsApproval {
+		label += " (needs approval)"
 	}
 	return "\u25cf " + label
 }
 
+// agentPickerOrder groups waiting threads first while keeping the caller's
+// first-seen order inside each group.
+func agentPickerOrder(entries []codextui.AgentThreadEntry, pending map[string]bool) []codextui.AgentThreadEntry {
+	if len(pending) == 0 {
+		return entries
+	}
+	ordered := make([]codextui.AgentThreadEntry, 0, len(entries))
+	for _, entry := range entries {
+		if pending[strings.TrimSpace(entry.ThreadID)] {
+			ordered = append(ordered, entry)
+		}
+	}
+	for _, entry := range entries {
+		if !pending[strings.TrimSpace(entry.ThreadID)] {
+			ordered = append(ordered, entry)
+		}
+	}
+	return ordered
+}
+
 func agentPickerDescription(entry codextui.AgentThreadEntry) string {
 	return strings.TrimSpace(entry.ThreadID)
+}
+
+// rebuildAgentPicker refreshes the open picker in place after the pending set
+// changed, keeping the cursor on the thread it was on.
+func (m *Model) rebuildAgentPicker() {
+	if m == nil || m.modal == nil || m.modal.id != "agent-picker" {
+		return
+	}
+	selectedID := m.agentPickerSelectedThreadID()
+	visible := m.visibleThreads()
+	if len(visible) == 0 {
+		return
+	}
+	m.showAgentPicker(visible, currentAgentThreadID(m, ""), selectedID)
+}
+
+// withPendingAgentRows adds a row for a thread whose approval arrived before
+// its metadata (Rust upserts the picker entry from the request).
+func (m *Model) withPendingAgentRows(entries []codextui.AgentThreadEntry) []codextui.AgentThreadEntry {
+	pending := m.pendingApprovalThreadIDs()
+	if len(pending) == 0 {
+		return entries
+	}
+	out := append([]codextui.AgentThreadEntry(nil), entries...)
+	for _, threadID := range pending {
+		if m.agentThreadArchived(threadID) || agentEntriesContainThread(out, threadID) {
+			continue
+		}
+		out = append(out, codextui.AgentThreadEntry{ThreadID: threadID})
+	}
+	return out
 }
 
 func agentPickerSubtitle() string {
@@ -850,10 +916,7 @@ func (m *Model) setActiveAgentLabel(entry codextui.AgentThreadEntry) {
 	if m == nil {
 		return
 	}
-	label := strings.TrimSpace(entry.DisplayLabel())
-	if !entry.IsPrimary && strings.TrimSpace(entry.AgentPath) != "" {
-		label = strings.TrimSpace(entry.AgentPath)
-	}
+	label := strings.TrimSpace(agentEntryThreadLabel(entry))
 	if len(m.agentItems) <= 1 {
 		label = ""
 	}

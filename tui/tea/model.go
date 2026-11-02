@@ -1202,6 +1202,10 @@ type Options struct {
 	OnTerminalSizeObservation func(context map[string]string, analyticsEnabled bool, reason string, width int, height int)
 	Width                     int
 	Height                    int
+	// ConversationInset renders the conversation into a sub-rectangle of the
+	// viewport, leaving the surrounding cells to the embedding host
+	// (Rust #58718). Nil keeps the full-screen layout.
+	ConversationInset *ConversationRect
 	// NoAltScreen is the launcher-resolved terminal ownership. True keeps the
 	// inline buffer and leaves the wheel to the terminal (Rust
 	// TranscriptMode::Terminal); the launcher derives it from
@@ -1994,6 +1998,14 @@ type Model struct {
 	width       int
 	height      int
 	noAltScreen bool
+	// conversationInset, when set, restricts the conversation pane to a
+	// sub-rectangle of the viewport (Rust #58718).
+	conversationInset *ConversationRect
+	// pendingApprovals mirrors Rust BottomPane::delayed_approval_requests:
+	// approval prompts arriving while another approval is visible wait in FIFO
+	// order instead of replacing the visible request. A request addressed to an
+	// inactive thread waits here too (Rust #58720).
+	pendingApprovals []ApprovalRequestMsg
 	// ownedScreen records whether this launch paints the alternate screen
 	// itself. Rust's owned transcript, including bounded composer scrolling,
 	// only applies there.
@@ -3079,6 +3091,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		remoteAppServer:                  options.RemoteAppServer,
 		localSession:                     options.LocalSession,
 		animationsEnabled:                options.AnimationsEnabled == nil || *options.AnimationsEnabled,
+		conversationInset:                options.ConversationInset,
 		effects:                          effectsSettingsOrDefault(options.Effects),
 		statusLineUseColors:              options.StatusLineUseColors == nil || *options.StatusLineUseColors,
 		questionEscBack:                  options.QuestionEscBack == nil || *options.QuestionEscBack,
@@ -3771,6 +3784,7 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		}
 		return m, bubbletea.Batch(cmd, m.refreshStatusControlsCmd(), m.submitNextQueued(), m.noteRecapTurnFinished(recapStatus))
 	case AppServerDisconnectMsg:
+		m.dropStaleThreadApprovals()
 		m.handleAppServerDisconnect()
 		return m, m.refreshStatusControlsCmd()
 	case TurnInterruptedMsg:
@@ -4169,7 +4183,7 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		m.openModal(msg)
 		return m, nil
 	case ApprovalRequestMsg:
-		return m, m.openApprovalModal(msg)
+		return m, m.routeApprovalRequest(msg)
 	case ElicitationRequestMsg:
 		return m, m.openElicitationModal(msg)
 	case ElicitationAbandonedMsg:
@@ -4705,6 +4719,9 @@ func (m *Model) View() string {
 	streamingpkg.SetStreamTheme(m.activeTUITheme())
 	if m == nil {
 		return ""
+	}
+	if inset := m.conversationInset; inset != nil && m.conversationInsetApplies() {
+		return m.renderConversationInset(*inset)
 	}
 	m.transcriptContentTopRow = -1
 	m.composerTopRow = -1
@@ -6251,6 +6268,9 @@ func (m *Model) switchThreadID(threadID string) {
 	threadID = strings.TrimSpace(threadID)
 	m.State.SetThreadID(threadID)
 	m.setPendingSteerThread(threadID)
+	// Rust #58720: selecting a waiting thread replays the approval request that
+	// arrived while it was inactive.
+	m.openPendingApprovalForThread(threadID)
 }
 
 // stashPendingSteers parks the materialized pending steers under the thread
@@ -10694,9 +10714,20 @@ func (m *Model) ensureSize() {
 }
 
 func (m *Model) resize(width int, height int) {
-	m.width = firstPositive(width, defaultWidth)
-	m.height = firstPositive(height, defaultHeight)
+	m.applyLayoutSize(firstPositive(width, defaultWidth), firstPositive(height, defaultHeight))
 	defer m.observeTerminalSizeForTelemetry()
+	// The startup warnings summary is width-sensitive (Rust reflows it on
+	// resize).
+	m.renderStartupWarnings()
+	m.refreshTranscript()
+}
+
+// applyLayoutSize reflows the console-sized widgets without recording a
+// terminal-size observation; an inset render resizes the conversation for one
+// frame and restores the host's size afterwards (Rust #58718).
+func (m *Model) applyLayoutSize(width int, height int) {
+	m.width = width
+	m.height = height
 	m.transcript.Width = m.width
 	m.transcript.Height = m.transcriptHeightForLayout()
 	// Rust sizes the textarea to the composer width minus the right margin; the
@@ -10704,10 +10735,6 @@ func (m *Model) resize(width int, height int) {
 	composerWidth := max(m.width-1, 1)
 	m.composer.SetWidth(composerWidth)
 	m.composer.SetHeight(m.composerTargetRows())
-	// The startup warnings summary is width-sensitive (Rust reflows it on
-	// resize).
-	m.renderStartupWarnings()
-	m.refreshTranscript()
 }
 
 // transcriptHeightForLayout returns the transcript viewport height for the
@@ -11898,6 +11925,16 @@ func (m *Model) renderBottomPane() string {
 	lines := []string{}
 	if len(m.attachments) > 0 {
 		lines = append(lines, m.renderAttachmentLine())
+	}
+	// Rust renders the inactive-thread approval notice directly above the
+	// pending-input preview (bottom_pane view stack, #58720).
+	if pending := m.pendingThreadApprovalLabels(); len(pending) > 0 {
+		notice := bottompane.NewPendingThreadApprovals()
+		notice.SetThreads(pending)
+		lines = append(lines, notice.Rows(max(m.width-2, 4))...)
+		if len(m.pendingSteers) > 0 || len(m.rejectedSteers) > 0 || len(m.queued) > 0 || m.asyncQuestionEditorActive() {
+			lines = append(lines, "")
+		}
 	}
 	hasAsyncQuestions := m.asyncQuestionEditorActive()
 	if len(m.pendingSteers) > 0 || len(m.rejectedSteers) > 0 || len(m.queued) > 0 || hasAsyncQuestions {

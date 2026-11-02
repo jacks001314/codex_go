@@ -99,6 +99,10 @@ type remoteAppServerTUIClient struct {
 	// `codex_tui` MCP server instead of the app-server dynamic-tools callback
 	// transport (Rust ThreadToolTransport::Mcp vs ::Dynamic).
 	taskTools *taskToolsMCPHost
+	// writeMu serializes JSON-RPC writes: interactive server requests are
+	// answered from their own goroutine so an approval waiting on an inactive
+	// thread cannot stall the notification stream (Rust #58720).
+	writeMu sync.Mutex
 }
 
 type remoteWebSocketTransport struct {
@@ -3695,6 +3699,8 @@ func (c *remoteAppServerTUIClient) sendRequest(ctx context.Context, method appse
 	if err != nil {
 		return 0, err
 	}
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
 	if err := c.transport.write(ctx, data); err != nil {
 		return 0, err
 	}
@@ -3748,7 +3754,13 @@ func (c *remoteAppServerTUIClient) waitResponse(ctx context.Context, id int64, t
 		}
 		if strings.TrimSpace(message.Method) != "" {
 			if len(message.ID) > 0 {
-				_ = c.respondServerRequest(ctx, message)
+				if remoteServerRequestWaitsForUser(message.Method) {
+					go func(message remoteAppServerMessage) {
+						_ = c.respondServerRequest(ctx, message)
+					}(message)
+				} else {
+					_ = c.respondServerRequest(ctx, message)
+				}
 				continue
 			}
 			if err := c.handleNotification(message); err != nil {
@@ -3770,9 +3782,35 @@ func (c *remoteAppServerTUIClient) readOne(ctx context.Context) error {
 		return nil
 	}
 	if len(message.ID) > 0 {
+		// A request waiting on a human must not stall the notification stream:
+		// an approval addressed to an inactive thread stays unanswered until
+		// that thread is selected (Rust #58720).
+		if remoteServerRequestWaitsForUser(message.Method) {
+			go func(message remoteAppServerMessage) {
+				_ = c.respondServerRequest(ctx, message)
+			}(message)
+			return nil
+		}
 		return c.respondServerRequest(ctx, message)
 	}
 	return c.handleNotification(message)
+}
+
+// remoteServerRequestWaitsForUser reports the app-server requests whose answer
+// comes from the operator rather than from the client itself.
+func remoteServerRequestWaitsForUser(method string) bool {
+	switch appserver.ServerRequestMethod(strings.TrimSpace(method)) {
+	case appserver.ServerRequestCommandExecutionApproval,
+		appserver.ServerRequestFileChangeApproval,
+		appserver.ServerRequestPermissionsApproval,
+		appserver.ServerRequestToolUserInput,
+		appserver.ServerRequestMCPElicitation,
+		appserver.ServerRequestApplyPatchApproval,
+		appserver.ServerRequestExecCommandApproval:
+		return true
+	default:
+		return false
+	}
 }
 
 func (c *remoteAppServerTUIClient) readRemoteMessage(ctx context.Context) (remoteAppServerMessage, error) {
@@ -4018,6 +4056,7 @@ func (c *remoteAppServerTUIClient) commandExecutionApproval(ctx context.Context,
 		Body:            remoteCommandExecutionApprovalBody(params),
 		Command:         remoteCommandExecutionApprovalCommand(params),
 		Options:         remoteCommandExecutionApprovalOptions(params),
+		ThreadID:        strings.TrimSpace(params.ThreadID),
 		ServerRequestID: requestID,
 	}, requestID)
 	if err != nil {
@@ -4030,6 +4069,7 @@ func (c *remoteAppServerTUIClient) fileChangeApproval(ctx context.Context, param
 	response, err := c.remoteApproval(ctx, codextea.ApprovalRequestMsg{
 		Title:           "Approve file changes?",
 		Body:            remoteFileChangeApprovalBody(params),
+		ThreadID:        strings.TrimSpace(params.ThreadID),
 		ServerRequestID: requestID,
 	}, requestID)
 	if err != nil {
@@ -4042,6 +4082,7 @@ func (c *remoteAppServerTUIClient) applyPatchApproval(ctx context.Context, param
 	response, err := c.remoteApproval(ctx, codextea.ApprovalRequestMsg{
 		Title:           "Apply patch?",
 		Body:            remoteApplyPatchApprovalBody(params),
+		ThreadID:        strings.TrimSpace(params.ConversationID),
 		ServerRequestID: requestID,
 	}, requestID)
 	if err != nil {
@@ -4055,6 +4096,7 @@ func (c *remoteAppServerTUIClient) execCommandApproval(ctx context.Context, para
 		Title:           "Run command?",
 		Body:            remoteExecCommandApprovalBody(params),
 		Command:         strings.Join(params.Command, " "),
+		ThreadID:        strings.TrimSpace(params.ConversationID),
 		ServerRequestID: requestID,
 	}, requestID)
 	if err != nil {
@@ -4067,6 +4109,7 @@ func (c *remoteAppServerTUIClient) permissionsApproval(ctx context.Context, para
 	response, err := c.remoteApproval(ctx, codextea.ApprovalRequestMsg{
 		Title:           "Grant permissions?",
 		Body:            remotePermissionsApprovalBody(params),
+		ThreadID:        strings.TrimSpace(params.ThreadID),
 		ServerRequestID: requestID,
 	}, requestID)
 	if err != nil {
@@ -4229,6 +4272,8 @@ func (c *remoteAppServerTUIClient) writeJSON(ctx context.Context, value any) err
 	if err != nil {
 		return err
 	}
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
 	return c.transport.write(ctx, data)
 }
 
