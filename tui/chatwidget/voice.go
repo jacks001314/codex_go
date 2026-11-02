@@ -237,6 +237,46 @@ func RealtimeDelegationInput(text string) (string, bool) {
 	return input, true
 }
 
+// RealtimeDelegationDisplayText renders a delegation prompt for history:
+// Rust realtime_delegation_display_text unescapes the XML entities the
+// transcript wraps around the spoken input.
+func RealtimeDelegationDisplayText(input string) string {
+	input = strings.ReplaceAll(input, "&lt;", "<")
+	input = strings.ReplaceAll(input, "&gt;", ">")
+	return strings.ReplaceAll(input, "&amp;", "&")
+}
+
+// IsPrivateRealtimeAgentItem reports whether an item of a delegated turn is
+// private to the voice handoff. Rust is_private_realtime_agent_item hides
+// reasoning, commentary agent messages, and non-final agent messages tagged
+// [ANALYSIS]/[COMMENTARY] in their opening text.
+func IsPrivateRealtimeAgentItem(kind string, phase string, text string) bool {
+	switch NormalizeItemKind(kind) {
+	case "reasoning":
+		return true
+	case "agentmessage", "assistantmessage":
+		if strings.EqualFold(strings.TrimSpace(phase), "commentary") {
+			return true
+		}
+		if strings.EqualFold(strings.TrimSpace(phase), "final_answer") {
+			return false
+		}
+		trimmed := strings.TrimLeft(text, " \t\r\n")
+		return strings.HasPrefix(trimmed, "[ANALYSIS]") || strings.HasPrefix(trimmed, "[COMMENTARY]")
+	default:
+		return false
+	}
+}
+
+// NormalizeItemKind lower-cases an item type and drops separators, so
+// agent_message / agentMessage / AgentMessage compare equal (Rust matches on
+// ThreadItemPayload variants instead).
+func NormalizeItemKind(kind string) string {
+	kind = strings.ReplaceAll(strings.TrimSpace(kind), "_", "")
+	kind = strings.ReplaceAll(kind, "-", "")
+	return strings.ToLower(kind)
+}
+
 // VoiceSpeakableFinalText reports whether a final answer fits the speakable
 // budget. The host approximates one token per four bytes, matching the shared
 // token estimate the rest of the port uses.
