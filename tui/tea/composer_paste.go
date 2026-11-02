@@ -24,6 +24,10 @@ func (m *Model) insertComposerPaste(pasted string) {
 	if m == nil || pasted == "" {
 		return
 	}
+	// Rust #58412 paste_input.rs: only a paste that inserts a `!` at the start of
+	// the body starts shell mode; a paste anywhere else leaves the draft literal.
+	composerBefore := m.composer.Value()
+	insertsShellPrefix := m.composerCursorByteOffset()-m.composerPrefix.len() == 0 && strings.HasPrefix(pasted, "!")
 	text, blockquote := composerBlockquotePaste(
 		composerCursorLinePrefix(&m.composer),
 		pasted,
@@ -34,6 +38,9 @@ func (m *Model) insertComposerPaste(pasted string) {
 		// The trailing newlines are deliberately unquoted: they leave the cursor
 		// in the next Markdown block instead of extending the quote.
 		m.composer.InsertString("\n\n")
+	}
+	if insertsShellPrefix {
+		m.syncComposerPrefixAfterEdit(composerBefore)
 	}
 }
 
@@ -87,13 +94,22 @@ func composerCursorLinePrefix(m *textarea.Model) string {
 	}
 }
 
-// isBangShellCommand mirrors Rust's `ChatComposer::is_bang_shell_command`: a
-// draft whose trimmed text starts with `!` is shell input, exactly like the
-// `shouldSubmitOnTab` gate. Rust additionally requires `shell_commands_enabled`;
-// the Go model has no shell-command toggle, so the prefix is the whole gate.
+// isBangShellCommand mirrors Rust's `ChatComposer::is_bang_shell_command`: the
+// composer's shell-mode state decides, not the visible text, so a `!` exposed by
+// deleting the start of an ordinary message stays literal (#58412). Rust
+// additionally requires `shell_commands_enabled`; the Go model has no
+// shell-command toggle, so the prefix state is the whole gate.
 func (m *Model) isBangShellCommand() bool {
 	if m == nil {
 		return false
 	}
-	return strings.HasPrefix(strings.TrimSpace(m.composerText()), "!")
+	return m.composerPrefix == composerPrefixShell
+}
+
+// literalBangInput reports whether a submitted draft is ordinary text that only
+// happens to start with `!` (Rust #58412: shell mode starts when an edit inserts
+// a leading `!`). It reuses the literal-input channel so a deleted prefix cannot
+// turn the message into a shell command.
+func literalBangInput(input string, shellMode bool) bool {
+	return !shellMode && strings.HasPrefix(input, "!")
 }
