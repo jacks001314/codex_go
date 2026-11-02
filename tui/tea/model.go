@@ -278,6 +278,13 @@ type AgentThreadReaderFunc func(currentThreadID string) ([]codextui.AgentThreadE
 
 type AgentThreadSwitchFunc func(threadID string) (AgentThreadSwitchResponse, error)
 
+// ThreadApprovalReconnectFunc reattaches the threads that had an approval
+// outstanding when the app-server connection went away. The host resumes each
+// thread on a fresh connection; the server replays the requests it still holds
+// and they reach the TUI through the normal approval path (Rust #58720
+// refresh_pending_thread_approvals after reconnect).
+type ThreadApprovalReconnectFunc func(threadIDs []string) bubbletea.Cmd
+
 type AgentThreadSwitchResponse struct {
 	Entry    codextui.AgentThreadEntry
 	Messages []codextui.Message
@@ -1290,13 +1297,16 @@ type Options struct {
 	// OnPromptEdit branches before a transcript prompt selected via backtrack
 	// ("Esc Esc to edit previous message") and returns the branched session.
 	// A nil hook leaves prompt editing unavailable for this runtime.
-	OnPromptEdit            PromptEditFunc
-	OnRenameThread          ThreadRenameFunc
-	OnLogout                LogoutFunc
-	OnReadAgents            AgentThreadReaderFunc
-	OnSwitchAgent           AgentThreadSwitchFunc
-	AgentsOverviewEmbedded  bool
-	OnAgentsOverviewRefresh AgentsOverviewRefreshFunc
+	OnPromptEdit   PromptEditFunc
+	OnRenameThread ThreadRenameFunc
+	OnLogout       LogoutFunc
+	OnReadAgents   AgentThreadReaderFunc
+	OnSwitchAgent  AgentThreadSwitchFunc
+	// OnReconnectThreadApprovals rebuilds the background approval queue after a
+	// transport failure. Nil leaves disconnected approvals dropped.
+	OnReconnectThreadApprovals ThreadApprovalReconnectFunc
+	AgentsOverviewEmbedded     bool
+	OnAgentsOverviewRefresh    AgentsOverviewRefreshFunc
 	// OnAcknowledgeThreadRead marks a focused conversation's observed receipt
 	// read. Nil disables automatic read acknowledgement (Rust #58263).
 	OnAcknowledgeThreadRead ThreadReadAcknowledgeFunc
@@ -2546,6 +2556,7 @@ type Model struct {
 	onLogout                        LogoutFunc
 	onReadAgents                    AgentThreadReaderFunc
 	onSwitchAgent                   AgentThreadSwitchFunc
+	onReconnectThreadApprovals      ThreadApprovalReconnectFunc
 	// statusCopyTargets holds the most recent /status output for /copy
 	// (Rust #43055); cleared by any other command, user message, or response.
 	statusCopyTargets *statusCopyTargets
@@ -3231,6 +3242,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onLogout:                         options.OnLogout,
 		onReadAgents:                     options.OnReadAgents,
 		onSwitchAgent:                    options.OnSwitchAgent,
+		onReconnectThreadApprovals:       options.OnReconnectThreadApprovals,
 		backgroundThreadEvents:           map[string][]protocol.ThreadEvent{},
 		sideConversations:                map[string]*activeSideConversation{},
 		clipboardWrite:                   clipboardWrite,
@@ -3885,10 +3897,10 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		}
 		return m, bubbletea.Batch(cmd, m.refreshStatusControlsCmd(), m.submitNextQueued(), m.noteRecapTurnFinished(recapStatus))
 	case AppServerDisconnectMsg:
-		m.dropStaleThreadApprovals()
+		reconnectThreads := m.retireThreadApprovalsForReconnect()
 		m.dropStaleBackendRequests()
 		m.handleAppServerDisconnect()
-		return m, m.refreshStatusControlsCmd()
+		return m, bubbletea.Batch(m.refreshStatusControlsCmd(), m.reconnectThreadApprovalsCmd(reconnectThreads))
 	case TurnInterruptedMsg:
 		if m.applyInactiveThreadTurnInterrupted(msg) {
 			return m, m.refreshStatusControlsCmd()

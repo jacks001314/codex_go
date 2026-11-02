@@ -107,6 +107,13 @@ type remoteAppServerTUIClient struct {
 	// answered from their own goroutine so an approval waiting on an inactive
 	// thread cannot stall the notification stream (Rust #58720).
 	writeMu sync.Mutex
+	// connectionDone is closed once this client's transport is gone. A prompt
+	// still waiting for the operator is abandoned at that moment: its answer
+	// could only travel back over the dead connection, so keeping it registered
+	// would leave a stale approval in the broker next to the one the reconnect
+	// replays (Rust #58720 drops the reply handle with the connection).
+	connectionDoneMu sync.Mutex
+	connectionDone   chan struct{}
 	// threadParamsMode mirrors Rust AppServerSession::thread_params_mode: the
 	// transport, not the CLI flags, decides whether the client or the server
 	// owns the conversation's execution settings (Rust #57267). The zero value
@@ -609,6 +616,12 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		},
 		OnSwitchAgent: func(threadID string) (codextea.AgentThreadSwitchResponse, error) {
 			return interactiveRemoteSwitchAgentThread(ctx, endpoint, root, threadID)
+		},
+		// Rust #58720: after a transport failure the server replays the
+		// approvals it still holds once the waiting threads are resumed, which
+		// rebuilds the TUI's background approval queue.
+		OnReconnectThreadApprovals: func(threadIDs []string) bubbletea.Cmd {
+			return interactiveRemoteReconnectThreadApprovalsCommand(ctx, root, endpoint, brokers, threadIDs)
 		},
 		AgentsOverviewEmbedded:  false,
 		OnAgentsOverviewRefresh: interactiveRemoteAgentsOverviewRefresh(ctx, endpoint),
@@ -3610,11 +3623,41 @@ func (c *remoteAppServerTUIClient) close() {
 	// prompt still waiting is abandoned so a dropped connection never leaves
 	// the TUI offering a request that can no longer be answered.
 	if c != nil {
+		c.markConnectionClosed()
 		c.brokers.elicitation.close()
 		c.setAccountEmailRequestID("")
 	}
 	if c != nil && c.transport != nil {
 		c.transport.close()
+	}
+}
+
+// done reports the channel closed when the transport goes away.
+func (c *remoteAppServerTUIClient) done() <-chan struct{} {
+	c.connectionDoneMu.Lock()
+	defer c.connectionDoneMu.Unlock()
+	if c.connectionDone == nil {
+		c.connectionDone = make(chan struct{})
+	}
+	return c.connectionDone
+}
+
+// markConnectionClosed abandons every prompt whose answer could only have been
+// written to this connection.
+func (c *remoteAppServerTUIClient) markConnectionClosed() {
+	if c == nil {
+		return
+	}
+	c.connectionDoneMu.Lock()
+	if c.connectionDone == nil {
+		c.connectionDone = make(chan struct{})
+	}
+	done := c.connectionDone
+	c.connectionDoneMu.Unlock()
+	select {
+	case <-done:
+	default:
+		close(done)
 	}
 }
 
@@ -3672,7 +3715,12 @@ func (c *remoteAppServerTUIClient) initialize(ctx context.Context) error {
 			Version: doctor.Version(),
 		},
 		Capabilities: &appserver.InitializeCapabilities{
-			ExperimentalAPI:                true,
+			ExperimentalAPI: true,
+			// Rust codex-rs/tui/src/app_server_connection.rs connects with
+			// required_human_approval = true: managed human-command approvals
+			// are only delivered (and replayed after a reconnect) to a
+			// connection that advertises it.
+			RequiredHumanApproval:          true,
 			MCPServerOpenAIFormElicitation: true,
 		},
 	}
@@ -4406,6 +4454,9 @@ func (c *remoteAppServerTUIClient) remoteApproval(ctx context.Context, message c
 	select {
 	case response := <-responses:
 		return response, nil
+	case <-c.done():
+		c.brokers.approval.forgetRequest(id)
+		return codextea.ModalResponse{}, errors.New("app-server connection closed before the approval was answered")
 	case <-ctx.Done():
 		c.brokers.approval.forgetRequest(id)
 		return codextea.ModalResponse{}, ctx.Err()

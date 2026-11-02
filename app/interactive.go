@@ -724,6 +724,16 @@ func (b *interactiveApprovalBroker) forgetRequest(id string) {
 	delete(b.pending, id)
 }
 
+// pendingCount reports the approvals still waiting for an answer.
+func (b *interactiveApprovalBroker) pendingCount() int {
+	if b == nil {
+		return 0
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.pending)
+}
+
 func (b *interactiveApprovalBroker) sessionApproved(request *tool.ShellRequest) bool {
 	if b == nil || request == nil {
 		return false
