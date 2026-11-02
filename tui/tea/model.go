@@ -4873,6 +4873,17 @@ func (m *Model) View() string {
 		} else {
 			m.composerImageTiles = nil
 		}
+		// Rust #43683 renders the voice controls inside the composer block,
+		// one row below its top padding, with a gap above the draft. Keeping
+		// them out of the passive footer also keeps the status line visible.
+		if voice, _, ok := m.voiceStripLayout(m.width); ok {
+			lines := make([]string, 0, 2)
+			for _, line := range bottompane.VoiceStripLines(m.width, voice) {
+				lines = append(lines, m.footerStyle.Render(fitTerminalLine(line, m.width)))
+			}
+			composer = strings.Join(lines, "\n") + "\n\n" + composer
+			composerStripRows += len(lines) + 1
+		}
 		composer = m.applyComposerSparkle(composer, m.currentTime())
 		composer = m.annotateInlineComposerHyperlinks(composer)
 		composer = m.renderComposerRegion(composer)
@@ -4901,9 +4912,6 @@ func (m *Model) View() string {
 	// picker) replaces it entirely.
 	if strings.TrimSpace(m.notice) != "" && m.modal == nil {
 		sections = append(sections, m.footerStyle.Render(m.notice))
-	}
-	for _, line := range m.voiceStripLines(m.width) {
-		sections = append(sections, m.footerStyle.Render(fitTerminalLine(line, m.width)))
 	}
 	if sideLabel := strings.TrimSpace(m.sideContextLabel()); sideLabel != "" && sideLabel != strings.TrimSpace(m.notice) {
 		sections = append(sections, m.footerStyle.Render(fitTerminalLine(sideLabel, m.width)))
@@ -5086,6 +5094,12 @@ func (m *Model) voiceStripState() (bottompane.VoiceStripState, bool) {
 	if phase != chatwidget.VoicePhaseStarting && phase != chatwidget.VoicePhaseActive {
 		return bottompane.VoiceStripState{}, false
 	}
+	// Rust #43683 renders the strip only for the conversation's own thread; a
+	// parked (background) session must not paint on another thread's composer.
+	threadID := strings.TrimSpace(m.VoiceConversation.ThreadID)
+	if threadID == "" || m.State == nil || threadID != strings.TrimSpace(m.State.ThreadID) {
+		return bottompane.VoiceStripState{}, false
+	}
 	stripPhase := bottompane.VoiceStripConnecting
 	if phase == chatwidget.VoicePhaseActive {
 		stripPhase = bottompane.VoiceStripActive
@@ -5109,13 +5123,55 @@ func (m *Model) voiceStripState() (bottompane.VoiceStripState, bool) {
 	return state, true
 }
 
-// voiceStripLines renders the composer strip, or nothing when inactive.
-func (m *Model) voiceStripLines(width int) []string {
+// voiceStripLayout resolves the strip state and its row count. It reports false
+// when the strip must not render: no session, another thread's session, a
+// surface that replaces the composer, or a composer too short to keep the draft
+// row visible (Rust #43683 hides the strip when vertical space is needed).
+func (m *Model) voiceStripLayout(width int) (bottompane.VoiceStripState, int, bool) {
 	state, ok := m.voiceStripState()
+	if !ok {
+		return bottompane.VoiceStripState{}, 0, false
+	}
+	height := bottompane.VoiceStripHeight(width, state.Animations)
+	if height <= 0 || m.composerSurfaceSuppressed() || !m.voiceStripFitsComposer(height) {
+		return bottompane.VoiceStripState{}, 0, false
+	}
+	return state, height, true
+}
+
+// voiceStripRows returns the rows the strip reserves above the draft: the strip
+// itself plus the gap row Rust paints between it and the textarea. Zero when
+// the strip does not render.
+func (m *Model) voiceStripRows(width int) int {
+	if _, height, ok := m.voiceStripLayout(width); ok {
+		return height + 1
+	}
+	return 0
+}
+
+// voiceStripLines renders the composer strip, or nothing when it does not fit.
+func (m *Model) voiceStripLines(width int) []string {
+	state, _, ok := m.voiceStripLayout(width)
 	if !ok {
 		return nil
 	}
 	return bottompane.VoiceStripLines(width, state)
+}
+
+// voiceStripFitsComposer mirrors Rust's clipped-composer rule: the strip only
+// renders while the composer block can still hold its two padding rows, the
+// strip, the gap below it, and one draft row.
+func (m *Model) voiceStripFitsComposer(stripHeight int) bool {
+	if m == nil || m.height <= 0 {
+		return true
+	}
+	return m.height >= stripHeight+4+m.nonComposerBottomRows()
+}
+
+// nonComposerBottomRows counts the bottom rows painted outside the composer
+// block, so the strip's fit check can measure against the real terminal.
+func (m *Model) nonComposerBottomRows() int {
+	return max(m.bottomReservedRowsExceptVoice()-m.composerSectionRowsExceptVoice(), 0)
 }
 
 // voiceMicrophoneIsListening mirrors the Rust check: capture counts as live
@@ -10774,6 +10830,12 @@ func (m *Model) transcriptHeightForLayout() int {
 // transcript. A modal replaces the composer, popups, and working indicator;
 // otherwise those sections are reserved together.
 func (m *Model) bottomReservedRows() int {
+	return m.bottomReservedRowsExceptVoice() + m.voiceStripRows(m.width)
+}
+
+// bottomReservedRowsExceptVoice is bottomReservedRows without the rows the
+// composer strip reserves, so the strip's fit check has a terminator.
+func (m *Model) bottomReservedRowsExceptVoice() int {
 	if m == nil {
 		return defaultComposerHeight
 	}
@@ -10808,19 +10870,24 @@ func (m *Model) bottomReservedRows() int {
 	if popupRows == 0 && overlay == "" {
 		rows++ // blank gap row above the composer
 	}
-	rows += m.composerSectionRows() // shaded block: content + two pad rows
-	rows++                          // status line
-	return rows + m.trailingBottomRows()
+	rows += m.composerSectionRowsExceptVoice() // shaded block: content + two pad rows
+	rows++                                     // status line
+	return rows + m.trailingBottomRowsExceptVoice()
 }
 
 // trailingBottomRows counts the optional rows View paints after the composer
 // (or after the surface that replaced it) plus the passive footer hint.
 func (m *Model) trailingBottomRows() int {
+	return m.trailingBottomRowsExceptVoice() + m.voiceStripRows(m.width)
+}
+
+// trailingBottomRowsExceptVoice is trailingBottomRows without the composer
+// strip, which now renders inside the composer block.
+func (m *Model) trailingBottomRowsExceptVoice() int {
 	rows := 0
 	if strings.TrimSpace(m.notice) != "" {
 		rows++
 	}
-	rows += len(m.voiceStripLines(m.width))
 	if sideLabel := strings.TrimSpace(m.sideContextLabel()); sideLabel != "" && sideLabel != strings.TrimSpace(m.notice) {
 		rows++
 	}
