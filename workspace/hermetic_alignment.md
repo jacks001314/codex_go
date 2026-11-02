@@ -203,6 +203,8 @@ not a regression. **New failures under the hostile environment: 0.**
 | `go test ./tui/... -count=1` | all packages ok except the two worktree-path snapshots in `./tui/tea` |
 | `go test ./tui/ -count=1` with `NO_COLOR=1` / unset / `WT_SESSION=x` / `TERM=dumb` / `FORCE_COLOR=0..3` | 8/8 green |
 | `scripts/test_hostile_env.ps1` | `./app/...` and `./appserver/...` green, `./tui/...` only the known snapshot |
+| `go test ./tui/tea/ -count=1` x5, 2 of them under concurrent load | clipboard test green in all 5; only the two known snapshots fail |
+| `go test ./tui/tea/ -count=1 -skip <the two snapshots>` x5, 2 under load | 5/5 exit 0 |
 
 ## 4. Remaining risk
 
@@ -223,6 +225,144 @@ not a regression. **New failures under the hostile environment: 0.**
 - `tui/tea` PTY tests read `APPDATA`, `ComSpec` and `CODEX_*_EXE` to locate real
   executables. They are os-path lookups rather than assertions, and they passed
   the hostile run, but they remain machine-shaped.
+- Timing fragility is a separate class from environment leakage. The bucket-C
+  settle waits and the 3 tight upper bounds in section 5 are recorded, not
+  fixed; they will flake under heavy load the same way the clipboard reader test
+  did until each one is converted to a marker wait.
+
+## 5. Timing fragility (the third class)
+
+Not every non-deterministic failure is an environment dependency or a real
+regression. `TestClipboardCommandReaderReusesProcessLikeRust` failed once in a
+full-package run on `main=1b100261` (7.09s), passed alone (0.05s), and passed on
+a verbose full re-run. That is timing, not environment.
+
+### Case study
+
+7.09s is the fingerprint of the bug: the first framed read burns its whole 5s
+deadline in `waitClipboardRead`, then `defer reader.Close()` spends its 2s grace
+waiting for `done`.
+
+Two races were hidden behind `time.Sleep(50 * time.Millisecond)`:
+
+1. `Warm()` is a **non-blocking** send into a **one-slot** channel. If the run
+   loop has not dequeued it yet, the following `readUntil` finds the channel full
+   and returns `errClipboardReaderBusy` immediately - a second, also
+   load-dependent failure mode.
+2. The helper is a re-exec of the test binary (`os.Args[0]` with
+   `-test.run=^TestClipboardReaderHelperProcess$`), and process start happens
+   inside the run loop *after* the caller has already fixed its absolute
+   deadline (`readUntil(time.Now().Add(...))`). On a loaded machine the 5s budget
+   is spent spawning instead of reading.
+
+Rust evidence that the product timeout is right and must **not** be widened:
+
+- `codex-rs/tui/src/clipboard_copy/worker.rs:22`:
+  `const SETUP_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 5);`
+- `read_text()` computes `let deadline = Instant::now() + SETUP_TIMEOUT;` at
+  *request* time, so process setup is deliberately inside the budget, and
+  `take_text_result()` reports `"clipboard read timed out"` when
+  `Instant::now() >= deadline`.
+- Go already matches: `RightClickPasteReadTimeout = 5 * time.Second`
+  (`tui/app/right_click_paste.go:215`).
+
+So the fix belongs in the test. `newTestClipboardCommandReader` now returns a
+`started` channel that the start function closes when `startClipboardProcess`
+returns; the test waits on that event instead of sleeping, which removes both
+races at once. The per-read budget became `clipboardReaderTestReadDeadline`
+(30s) with a comment stating it is a test budget and not the product deadline.
+`TestClipboardCommandReaderTimesOutLikeRust` keeps pinning the 5s behaviour, and
+now also waits for the start so the 50ms deadline measures the sleeping read
+rather than a slow spawn.
+
+### Sweep
+
+Repo-wide there are **334** `time.Sleep` calls in `*_test.go` across **176 files
+and 30 packages**, plus **66** `time.Since` timing assertions (22 upper bounds,
+7 `>=` timeout-not-honoured checks, 9 lower bounds). The distribution is skewed:
+`appserver` 139, `tui/tea` 47, `execserver` 27, `mcp` 19, `tool` 14.
+
+Buckets: **A 保持（已是事件轮询）**, **B 保持（夹具延迟/清理宽限）**,
+**C 可改成事件等待**, **D 需要放宽（紧上界断言）**.
+
+`tui/tea` + `tui` (the lane's own area, every site inspected):
+
+| site | wait | purpose | bucket |
+| --- | --- | --- | --- |
+| `tui/tea/analytics_dashboard_like_rust_test.go:310` | 2ms | deadline poll loop | A |
+| `tui/tea/clipboard_worker_like_rust_test.go:39` | 5ms | deadline poll loop | A |
+| `tui/tea/composer_selection_pty_windows_test.go:98` | 50ms | deadline poll loop | A |
+| `tui/tea/program_mouse_wheel_like_rust_test.go:47` | 10ms | `waitForProgramOutput` poll | A |
+| `tui/tea/side_navigation_pty_windows_test.go:368` | 100ms | deadline poll loop | A |
+| `tui/tea/terminal_restore_pty_windows_test.go:453` | 25ms | exit poll helper | A |
+| `tui/tea/*_pty_windows_test.go:39/40/89` | 500ms | `t.Cleanup` grace before TempDir removal | B |
+| `tui/tea/clipboard_reader_like_rust_test.go:41` | 2s | helper latency under test | B |
+| `tui/tea/collaboration_modes_discovery_like_rust_test.go:100` | 250ms | fake slow provider | B |
+| `tui/tea/analytics_*_like_rust_test.go:29/138` | 1-2ms | fake async loader | B |
+| `tui/get_git_diff_test.go:345`, `tui/transcript_reflow_test.go:17` | skew/1ms | fake loader ordering | B |
+| `tui/tea/clipboard_reader_like_rust_test.go:78` | 50ms | warmup guess | **C - fixed** |
+| `tui/tea/composer_selection_pty_windows_test.go:104/110/112/114/126` | 300/50/50/500/500ms | settle between injected mouse/typing events | C |
+| `tui/tea/rendered_selection_pty_windows_test.go:95/97/99` | 50/50/400ms | settle between mouse events | C |
+| `tui/tea/tui_mode_picker_pty_windows_test.go:146/156/165/174` | 100ms | settle after closing a picker | C |
+| `tui/tea/program_mouse_wheel_like_rust_test.go:129/134` | 100/200ms | "let the first frame lay out", then hit-test | C |
+| `tui/tea/pet_runtime_test.go:126/128/298/301` | 20/400/20/500ms | let the program loop process before Quit | C |
+| `tui/tea/composer_sparkle_pty_windows_test.go:97` | 1200ms | settle | C |
+| `tui/tea/welcome_blossom_pty_windows_test.go:97` | 700ms | settle | C |
+| `tui/tea/multi_agent_parity_pty_windows_test.go:151`, `weather_parity_pty_windows_test.go:143` | 1s | settle | C |
+| `tui/tea/side_shortcut_pty_windows_test.go:118/123/191` | 1s/3s/500ms | settle | C |
+| `tui/tea/slash_parity_pty_windows_test.go:141/146/148` | 3s/750ms/2s | settle between slash commands | C |
+| `tui/tea/side_navigation_pty_windows_test.go:262` | 750ms | settle after Ctrl+/ | C |
+| `tui/tea/terminal_restore_pty_unix_test.go:54` | 150ms | settle before asserting restore | C |
+| `tui/tea/tui_mode_picker_pty_windows_test.go:201` | 50ms | shutdown helper | C |
+| `tui/terminal_exit_drain_test.go:78/94` | >1s | drain bound | D |
+
+Conversion recipe for bucket C: these files already accumulate PTY output in a
+buffer and several already have a `wait(...)` / `waitForProgramOutput(...)` /
+`waitSince(...)` helper. Replace `time.Sleep(d); snapshot()` with
+`waitForX(output, marker, deadline)` for the *next* marker the app emits after
+the input, which removes the guess without weakening the assertion. Where no
+marker exists (`program_mouse_wheel_like_rust_test.go:129` wants "first frame
+laid out"), the render-complete signal has to be added to the program harness
+first.
+
+### Tight upper bounds (bucket D)
+
+| site | bound | what it means | recipe |
+| --- | --- | --- | --- |
+| `mcp/api_test.go:314` | 25ms | "second call did not restart the 50ms optional-startup grace" | raise `OptionalStartupGrace` to a few seconds and assert `< 1s`; a regression would then take the full grace and still be distinguishable |
+| `tool/unified_exec_output_drain_test.go:56` | 100ms | "closed reader does not consume the 1s drain grace" | assert `< 500ms` against the existing 1s grace |
+| `app/app_test.go:2156` | 500ms | "no startup probe before the TUI" | the blocked helper sleeps far longer than 1s; widen to `< 2s` |
+| other 19 `elapsed > N` sites | 1-5s | already generous upper bounds | keep |
+
+Lower bounds (`elapsed < X` / `elapsed >= X` verifying a timeout was honoured)
+are load-safe - load only makes an interval longer - so they stay.
+
+None of the bucket C/D items were rewritten this round: each lives in a package
+whose full suite would have to be re-run, and none of them is currently
+reproducing. They are recorded here so the next flake has a map instead of a
+guess.
+
+### Acceptance
+
+```
+5x go test ./tui/tea/ -count=1            (runs 2 and 4 under concurrent load)
+run 1: exit=1 52.6s  fails: TestModelTerminalSnapshots/main_view, TestModelVT100TerminalSnapshotMainView
+run 2: exit=1 61.0s  fails: same (load: go build ./...)           load exit=0
+run 3: exit=1 50.2s  fails: same
+run 4: exit=1 64.9s  fails: same (load: go test ./tool/)          load exit=0
+run 5: exit=1 52.4s  fails: same
+```
+
+The two failures are the known worktree-path golden snapshots (section 2); the
+clipboard test passed in all five. Same loop with those two fixtures skipped
+(`-skip "TestModelTerminalSnapshots|TestModelVT100TerminalSnapshotMainView"`):
+
+```
+run 1: exit=0 48.7s  run 2: exit=0 50.4s (load: go build ./...)  run 3: exit=0 51.5s
+run 4: exit=0 49.3s (load: go test ./appserver/ -run Schema)     run 5: exit=0 56.3s
+```
+
+5/5 green, 2/5 under concurrent load.
 
 ## Commits
 
@@ -230,3 +370,4 @@ not a regression. **New failures under the hostile environment: 0.**
 2. `cb7e6fcf` tests: pin the clipboard environment for viewed-image hyperlink rows
 3. `ec10a6e3` tests: stop the primary-selection fixtures from hiding coreutils
 4. `1acb884c` scripts: add a hostile-environment test runner
+5. `08c9bd41` tests: wait for the clipboard helper to start instead of sleeping 50ms
