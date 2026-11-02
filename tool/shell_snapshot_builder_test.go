@@ -260,6 +260,7 @@ func TestSnapshotBuilderCapturesWithTheHostShellLikeRust(t *testing.T) {
 	if bash == "" {
 		t.Skip("no bash on this host")
 	}
+	prepareSnapshotSandboxHelper(t)
 	t.Setenv("SNAPSHOT_PROBE_MARKER", "probe-value")
 	codexHome := t.TempDir()
 	profile := sandbox.WorkspaceWritePermissionProfile()

@@ -24,10 +24,6 @@ const (
 // #57211: two chats share one modern helper process, each prompt reaches its own
 // chat, and the helper shuts down only after the final release.
 func TestMCPConnectionSharingReusesNegotiatedStdioAcrossChatsLikeRust(t *testing.T) {
-	if os.Getenv(mcpSharingHelperEnv) == "1" {
-		runMCPSharingHelper(t)
-		return
-	}
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatalf("Executable() error = %v", err)
@@ -301,7 +297,7 @@ func newSharingService(executable string, env map[string]string) *MCPService {
 				Config: ServerConfig{
 					Enabled:        true,
 					Command:        executable,
-					Args:           []string{"-test.run=TestMCPConnectionSharing", "--"},
+					Args:           []string{"-test.run=^TestMCPConnectionSharingHelperProcess$", "--"},
 					StartupTimeout: 5 * time.Second,
 					Env:            env,
 				},
@@ -471,6 +467,18 @@ func runMCPSharingHelper(t *testing.T) {
 			t.Fatalf("unexpected method %q", message.Method)
 		}
 	}
+}
+
+// TestMCPConnectionSharingHelperProcess is the child-side MCP server. The spawn
+// pattern is anchored because an unanchored `TestMCPConnectionSharing` prefix
+// also matches every other sharing test: after the served connection closes,
+// the child would run those tests too, and each one logs another helper start
+// that the parent counts.
+func TestMCPConnectionSharingHelperProcess(t *testing.T) {
+	if os.Getenv(mcpSharingHelperEnv) != "1" {
+		t.Skip("helper process only")
+	}
+	runMCPSharingHelper(t)
 }
 
 func appendMCPSharingLog(t *testing.T, path string, line string) {

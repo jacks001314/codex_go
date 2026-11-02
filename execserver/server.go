@@ -2314,16 +2314,38 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 		stdoutStream = "pty"
 		stderrStream = "pty"
 	}
+	var capture sync.WaitGroup
+	capture.Add(2)
 	go func() {
+		defer capture.Done()
 		state.capture(stdoutStream, stdoutReader)
 		_ = stdoutReader.Close()
 	}()
 	go func() {
+		defer capture.Done()
 		state.capture(stderrStream, stderrReader)
 		_ = stderrReader.Close()
 	}()
 	go func() {
 		err := cmd.Wait()
+		// Rust keeps forwarding the child's final bytes after the wait
+		// completes, and only then lets the exit event out. Publishing exit
+		// first would let a `process/read` that starts from the previous
+		// sequence observe the exit record with the trailing chunks missing
+		// (the chunk lands right after it). Drain the captures first, with a
+		// bounded fallback for a detached child that keeps a pipe open.
+		drained := make(chan struct{})
+		go func() {
+			capture.Wait()
+			close(drained)
+		}()
+		select {
+		case <-drained:
+		case <-time.After(2 * time.Second):
+			_ = stdoutReader.Close()
+			_ = stderrReader.Close()
+			<-drained
+		}
 		state.finish(err)
 	}()
 	return newExecResponse(params.ProcessID, sandboxType), nil
