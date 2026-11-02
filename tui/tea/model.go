@@ -1957,6 +1957,11 @@ type Model struct {
 	// dashboard opens (Rust #50786 AgentsOverviewState::grouping).
 	agentsOverviewGrouping agentsoverview.Grouping
 	agentsOverviewDrafts   map[string]string
+	// agentsOverviewDraftPastes keeps the pending large pastes of a saved draft
+	// so returning to that thread restores its placeholders too (Rust
+	// ThreadComposerState::pending_pastes).
+	agentsOverviewDraftPastes        map[string][]composerPendingPaste
+	agentsOverviewPendingDraftPastes []composerPendingPaste
 	// agentsOverviewCursorBar tracks the DECSCUSR steady-bar cursor used by the
 	// Vim-insert rename editor (Rust #50216 cursor_style).
 	agentsOverviewCursorBar bool
@@ -2198,7 +2203,12 @@ type Model struct {
 	// composerElements tracks the composer's structured text elements (byte
 	// ranges plus placeholders) so mentions reach the turn input as
 	// text_elements (Rust textarea::text_elements).
-	composerElements          []ComposerTextElement
+	composerElements []ComposerTextElement
+	// pendingPastes mirrors Rust ChatComposer::pending_pastes: a large paste is
+	// replaced by a "[Pasted Content N chars]" placeholder in the composer and
+	// the original text is spliced back in on submit (chat_composer.rs:471,
+	// user_messages.rs:331-354).
+	pendingPastes             []composerPendingPaste
 	misalignmentPolicyStopped bool
 	misalignmentReview        *misalignmentReview
 	misalignmentReviewSerial  uint64
@@ -6104,6 +6114,9 @@ func (m *Model) submitComposer() bubbletea.Cmd {
 		return nil
 	}
 	textElements := m.composerTextElementsForPromptValue(m.composer.Value(), input)
+	// Rust submits the expanded paste text, not the placeholder: pending_pastes
+	// are spliced back in and the surviving element ranges move with them.
+	input, textElements = m.expandPendingPastesForSubmission(input, textElements)
 	m.resetComposer()
 	m.composerElements = nil
 	m.resetVimEditHistory()
@@ -6338,6 +6351,9 @@ func (m *Model) queueComposer(parseCommand bool) bubbletea.Cmd {
 	input := strings.TrimSpace(m.composerText())
 	shellMode := m.composerPrefix == composerPrefixShell
 	textElements := m.composerTextElementsForPromptValue(m.composer.Value(), input)
+	// Rust submits the expanded paste text, not the placeholder: pending_pastes
+	// are spliced back in and the surviving element ranges move with them.
+	input, textElements = m.expandPendingPastesForSubmission(input, textElements)
 	m.resetComposer()
 	m.composerElements = nil
 	m.resetVimEditHistory()
@@ -6382,6 +6398,9 @@ func (m *Model) steerComposer() bubbletea.Cmd {
 	input := strings.TrimSpace(m.composerText())
 	shellMode := m.composerPrefix == composerPrefixShell
 	textElements := m.composerTextElementsForPromptValue(m.composer.Value(), input)
+	// Rust submits the expanded paste text, not the placeholder: pending_pastes
+	// are spliced back in and the surviving element ranges move with them.
+	input, textElements = m.expandPendingPastesForSubmission(input, textElements)
 	m.resetComposer()
 	m.composerElements = nil
 	m.resetVimEditHistory()

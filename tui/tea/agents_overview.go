@@ -1024,6 +1024,7 @@ func (m *Model) applyAgentsOverviewNewSession(message agentsOverviewNewSessionMs
 		empty := ""
 		m.agentsOverviewPendingDraft = &empty
 	}
+	m.agentsOverviewPendingDraftPastes = nil
 	m.closeAgentsOverview()
 	m.applyAgentSwitchResult(AgentSwitchResultMsg{ThreadID: threadID, Response: message.response})
 	if prompt != "" {
@@ -1302,7 +1303,9 @@ func (m *Model) openAgentsOverviewThread(threadID string) bubbletea.Cmd {
 	if saved, ok := m.agentsOverviewDrafts[threadID]; ok {
 		draft := saved
 		m.agentsOverviewPendingDraft = &draft
+		m.agentsOverviewPendingDraftPastes = append([]composerPendingPaste(nil), m.agentsOverviewDraftPastes[threadID]...)
 		delete(m.agentsOverviewDrafts, threadID)
+		delete(m.agentsOverviewDraftPastes, threadID)
 	} else {
 		// Rust builds a fresh chat widget when attaching to a thread without
 		// a preserved input state, so the composer starts empty instead of
@@ -1336,11 +1339,20 @@ func (m *Model) captureAgentsOverviewDraft(threadID string) {
 		m.agentsOverviewDrafts = map[string]string{}
 	}
 	draft := m.composerText()
-	if strings.TrimSpace(draft) == "" {
+	if strings.TrimSpace(draft) == "" && len(m.pendingPastes) == 0 {
 		delete(m.agentsOverviewDrafts, threadID)
+		delete(m.agentsOverviewDraftPastes, threadID)
 		return
 	}
 	m.agentsOverviewDrafts[threadID] = draft
+	if len(m.pendingPastes) == 0 {
+		delete(m.agentsOverviewDraftPastes, threadID)
+		return
+	}
+	if m.agentsOverviewDraftPastes == nil {
+		m.agentsOverviewDraftPastes = map[string][]composerPendingPaste{}
+	}
+	m.agentsOverviewDraftPastes[threadID] = append([]composerPendingPaste(nil), m.pendingPastes...)
 }
 
 // restorePendingAgentsOverviewDraft applies the saved draft for the thread
@@ -1353,6 +1365,8 @@ func (m *Model) restorePendingAgentsOverviewDraft() {
 	draft := *m.agentsOverviewPendingDraft
 	m.agentsOverviewPendingDraft = nil
 	m.setComposerPrompt(draft)
+	m.restorePendingPastes(m.agentsOverviewPendingDraftPastes)
+	m.agentsOverviewPendingDraftPastes = nil
 }
 
 // discardPendingAgentsOverviewDraft drops a pending draft after a failed
