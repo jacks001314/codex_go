@@ -114,6 +114,15 @@ type authFlowModel struct {
 	gcp                 *gcpState
 	completed           bool
 	shouldExit          bool
+
+	// otherMethodsOpen switches the picker to the "Sign in another way"
+	// submenu (Rust #58427).
+	otherMethodsOpen bool
+	// activationGuard drops a key held across a picker transition, so one
+	// long Enter press cannot open the submenu and submit its first entry.
+	activationGuard *activationKeyGuard
+	// now is the clock the activation guard reads; tests swap it.
+	now func() time.Time
 }
 
 type browserStartedMsg struct {
@@ -277,6 +286,9 @@ func (m *authFlowModel) handleKey(message bubbletea.KeyMsg) (bubbletea.Model, bu
 		m.shouldExit = true
 		return m, bubbletea.Batch(m.cancelActiveAttempt(), bubbletea.Quit)
 	}
+	if m.activationGuard != nil && m.activationGuard.consume(message) {
+		return m, nil
+	}
 	if m.state == SignInBedrock {
 		return m.handleBedrockKey(message)
 	}
@@ -287,6 +299,12 @@ func (m *authFlowModel) handleKey(message bubbletea.KeyMsg) (bubbletea.Model, bu
 		return m.handleAPIKeyEntryKey(message)
 	}
 	if message.Type == bubbletea.KeyEsc {
+		// Esc backs out of the alternative methods submenu instead of
+		// cancelling onboarding (Rust #58427).
+		if m.state == SignInPickMode && m.otherMethodsOpen {
+			m.closeOtherMethods()
+			return m, nil
+		}
 		switch m.state {
 		case SignInChatGPTContinueInBrowser, SignInChatGPTDeviceCode:
 			m.state = SignInPickMode
@@ -318,7 +336,7 @@ func (m *authFlowModel) handleKey(message bubbletea.KeyMsg) (bubbletea.Model, bu
 		m.moveHighlight(1)
 		return m, nil
 	case bubbletea.KeyEnter:
-		return m.startChoice(m.highlighted)
+		return m.activateChoice(m.highlighted, message)
 	case bubbletea.KeyRunes:
 		if len(message.Runes) == 0 {
 			return m, nil
@@ -329,15 +347,15 @@ func (m *authFlowModel) handleKey(message bubbletea.KeyMsg) (bubbletea.Model, bu
 		case "j":
 			m.moveHighlight(1)
 		case "y":
-			return m.selectDisplayedOption(0)
+			return m.selectDisplayedOption(0, message)
 		case "n":
-			return m.selectDisplayedOption(1)
+			return m.selectDisplayedOption(1, message)
 		case "q":
 			m.shouldExit = true
 			return m, bubbletea.Quit
 		default:
 			if len(message.Runes) == 1 && message.Runes[0] >= '1' && message.Runes[0] <= '9' {
-				return m.selectDisplayedOption(int(message.Runes[0] - '1'))
+				return m.selectDisplayedOption(int(message.Runes[0]-'1'), message)
 			}
 		}
 	}
@@ -501,12 +519,49 @@ func (m *authFlowModel) startChoice(choice AuthChoice) (bubbletea.Model, bubblet
 	return m, nil
 }
 
-func (m *authFlowModel) selectDisplayedOption(index int) (bubbletea.Model, bubbletea.Cmd) {
+func (m *authFlowModel) selectDisplayedOption(index int, key bubbletea.KeyMsg) (bubbletea.Model, bubbletea.Cmd) {
 	options := m.displayedOptions()
 	if index < 0 || index >= len(options) {
 		return m, nil
 	}
-	return m.startChoice(options[index].Choice)
+	return m.activateChoice(options[index].Choice, key)
+}
+
+// activateChoice runs a picker selection, first arming the activation guard for
+// the entries that replace the picker with a submenu or a login step. Rust
+// #58427 arms the guard for "Sign in another way" and every alternative method.
+func (m *authFlowModel) activateChoice(choice AuthChoice, key bubbletea.KeyMsg) (bubbletea.Model, bubbletea.Cmd) {
+	if choice == AuthChoiceOtherMethods || isAlternativeAuthChoice(choice) {
+		m.activationGuard = newActivationKeyGuard(keyIdentity(key), m.now)
+	}
+	if choice == AuthChoiceOtherMethods {
+		m.openOtherMethods()
+		return m, nil
+	}
+	return m.startChoice(choice)
+}
+
+func isAlternativeAuthChoice(choice AuthChoice) bool {
+	switch choice {
+	case AuthChoiceAPIKey, AuthChoiceBedrock, AuthChoiceGCP:
+		return true
+	}
+	return false
+}
+
+func (m *authFlowModel) openOtherMethods() {
+	if !m.options.APIKeyAllowed {
+		return
+	}
+	m.otherMethodsOpen = true
+	m.highlighted = AuthChoiceAPIKey
+	m.errorMessage = ""
+}
+
+func (m *authFlowModel) closeOtherMethods() {
+	m.otherMethodsOpen = false
+	m.highlighted = AuthChoiceOtherMethods
+	m.errorMessage = ""
 }
 
 func (m *authFlowModel) handleBrowserStarted(message browserStartedMsg) (bubbletea.Model, bubbletea.Cmd) {
@@ -638,6 +693,9 @@ func (m *authFlowModel) oauthOptions(openBrowser bool) *auth.OAuthOptions {
 }
 
 func (m *authFlowModel) displayedOptions() []AuthOption {
+	if m.otherMethodsOpen {
+		return AlternativeAuthOptions(m.options.BedrockAllowed, m.options.GcpAllowed)
+	}
 	return AuthOptionsForPolicyWithProviders(m.options.ChatGPTAllowed, m.options.APIKeyAllowed, m.options.BedrockAllowed, m.options.GcpAllowed)
 }
 
@@ -701,7 +759,9 @@ func (m *authFlowModel) renderPickMode() string {
 		"  or connect an API key for usage-based billing",
 		"",
 	}
-	if authOptionsOfferProviderSetup(options) {
+	if m.otherMethodsOpen {
+		lines = []string{welcomeHeaderLine, "  Sign in another way", ""}
+	} else if m.options.BedrockAllowed || m.options.GcpAllowed {
 		lines = []string{welcomeHeaderLine, "  Choose how you want to use Codex.", ""}
 	}
 	for index, option := range options {
@@ -729,6 +789,9 @@ func (m *authFlowModel) renderPickMode() string {
 		)
 	}
 	lines = append(lines, authDimStyle.Render("  Press enter to continue"))
+	if m.otherMethodsOpen {
+		lines = append(lines, authDimStyle.Render("  Press esc to go back"))
+	}
 	if m.errorMessage != "" {
 		lines = append(lines, "", authErrorStyle.Render(m.errorMessage))
 	}

@@ -78,8 +78,12 @@ func TestBedrockMethodMenuGroupsAPIKeyLikeRust(t *testing.T) {
 
 func TestAuthOptionsIncludeBedrockOnlyWithAPIAndFeature(t *testing.T) {
 	options := AuthOptionsForPolicyWithBedrock(true, true, true)
-	if len(options) != 4 || options[3].Choice != AuthChoiceBedrock {
+	if len(options) != 3 || options[2].Choice != AuthChoiceOtherMethods {
 		t.Fatalf("bedrock options = %#v", options)
+	}
+	alternatives := AlternativeAuthOptions(true, false)
+	if len(alternatives) != 2 || alternatives[1].Choice != AuthChoiceBedrock {
+		t.Fatalf("bedrock submenu = %#v", alternatives)
 	}
 	if options := AuthOptionsForPolicyWithBedrock(true, false, true); len(options) != 2 {
 		t.Fatalf("bedrock must require API login: %#v", options)

@@ -5,9 +5,12 @@ type AuthChoice string
 const (
 	AuthChoiceChatGPT    AuthChoice = "chatgpt"
 	AuthChoiceDeviceCode AuthChoice = "device_code"
-	AuthChoiceAPIKey     AuthChoice = "api_key"
-	AuthChoiceBedrock    AuthChoice = "bedrock"
-	AuthChoiceGCP        AuthChoice = "gcp"
+	// AuthChoiceOtherMethods is the submenu entry that groups the API key,
+	// Amazon Bedrock and Google Cloud Vertex AI sign-in paths (Rust #58427).
+	AuthChoiceOtherMethods AuthChoice = "other_methods"
+	AuthChoiceAPIKey       AuthChoice = "api_key"
+	AuthChoiceBedrock      AuthChoice = "bedrock"
+	AuthChoiceGCP          AuthChoice = "gcp"
 )
 
 type SignInState string
@@ -49,9 +52,10 @@ func AuthOptionsForPolicyWithBedrock(chatGPTAllowed bool, apiKeyAllowed bool, be
 	return AuthOptionsForPolicyWithProviders(chatGPTAllowed, apiKeyAllowed, bedrockAllowed, false)
 }
 
-// AuthOptionsForPolicyWithProviders builds the provider sign-in menu, offering
-// the Amazon Bedrock and Google Cloud Vertex AI setup wizards only when API
-// login and the matching feature are allowed (Rust #57857).
+// AuthOptionsForPolicyWithProviders builds the provider sign-in menu. The API
+// key, Amazon Bedrock and Google Cloud Vertex AI paths live behind the
+// "Sign in another way" submenu, while ChatGPT and device code stay on the
+// main menu (Rust #58427, #57857).
 func AuthOptionsForPolicyWithProviders(chatGPTAllowed bool, apiKeyAllowed bool, bedrockAllowed bool, gcpAllowed bool) []AuthOption {
 	defaults := DefaultAuthOptions(!apiKeyAllowed)
 	options := []AuthOption{{
@@ -64,16 +68,29 @@ func AuthOptionsForPolicyWithProviders(chatGPTAllowed bool, apiKeyAllowed bool, 
 		options = append(options, defaults[1])
 	}
 	if apiKeyAllowed {
-		options = append(options, defaults[2])
+		options = append(options, AuthOption{
+			Choice:      AuthChoiceOtherMethods,
+			Label:       "Sign in another way",
+			Description: alternativeSignInDescription(bedrockAllowed, gcpAllowed),
+		})
 	}
-	if apiKeyAllowed && bedrockAllowed {
+	return options
+}
+
+// AlternativeAuthOptions lists the methods grouped behind "Sign in another
+// way": the OpenAI API key, then the provider setup wizards the workspace
+// exposes (Rust #58427 displayed_sign_in_options).
+func AlternativeAuthOptions(bedrockAllowed bool, gcpAllowed bool) []AuthOption {
+	defaults := DefaultAuthOptions(false)
+	options := []AuthOption{defaults[2]}
+	if bedrockAllowed {
 		options = append(options, AuthOption{
 			Choice:      AuthChoiceBedrock,
 			Label:       "Use Amazon Bedrock",
 			Description: "Connect using your AWS credentials",
 		})
 	}
-	if apiKeyAllowed && gcpAllowed {
+	if gcpAllowed {
 		options = append(options, AuthOption{
 			Choice:      AuthChoiceGCP,
 			Label:       "Use Google Cloud Vertex AI",
@@ -81,6 +98,13 @@ func AuthOptionsForPolicyWithProviders(chatGPTAllowed bool, apiKeyAllowed bool, 
 		})
 	}
 	return options
+}
+
+func alternativeSignInDescription(bedrockAllowed bool, gcpAllowed bool) string {
+	if bedrockAllowed || gcpAllowed {
+		return "Use an API key or another provider"
+	}
+	return "Use an OpenAI API key"
 }
 
 func AuthStepState(state SignInState) StepState {

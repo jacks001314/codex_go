@@ -16,8 +16,13 @@ import (
 // allowed, and it follows the Bedrock entry.
 func TestAuthOptionsIncludeGcpOnlyWithAPIAndFeature(t *testing.T) {
 	options := AuthOptionsForPolicyWithProviders(true, true, true, true)
-	if len(options) != 5 || options[3].Choice != AuthChoiceBedrock || options[4].Choice != AuthChoiceGCP {
-		t.Fatalf("provider options = %#v", options)
+	if len(options) != 3 || options[2].Choice != AuthChoiceOtherMethods {
+		t.Fatalf("provider menu = %#v", options)
+	}
+	alternatives := AlternativeAuthOptions(true, true)
+	if len(alternatives) != 3 || alternatives[0].Choice != AuthChoiceAPIKey ||
+		alternatives[1].Choice != AuthChoiceBedrock || alternatives[2].Choice != AuthChoiceGCP {
+		t.Fatalf("alternative options = %#v", alternatives)
 	}
 	if options := AuthOptionsForPolicyWithProviders(true, false, true, true); len(options) != 2 {
 		t.Fatalf("gcp must require API login: %#v", options)
@@ -26,7 +31,7 @@ func TestAuthOptionsIncludeGcpOnlyWithAPIAndFeature(t *testing.T) {
 		t.Fatalf("disabled gcp leaked into options: %#v", options)
 	}
 	// The Bedrock-only constructor must not offer GCP.
-	if options := AuthOptionsForPolicyWithBedrock(true, true, true); len(options) != 4 {
+	if options := AuthOptionsForPolicyWithBedrock(true, true, true); len(options) != 3 {
 		t.Fatalf("bedrock-only options leaked gcp: %#v", options)
 	}
 }
