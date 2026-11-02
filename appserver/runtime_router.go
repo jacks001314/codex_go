@@ -705,6 +705,11 @@ type RuntimeRouter struct {
 	// failure metric (Rust #52756), so the terminal duration outcome can carry
 	// `failure` and repeated errors do not double-count.
 	voiceFailureThreads map[string]bool
+	// voiceRetiredHandoffs marks threads whose current voice session had a
+	// misalignment policy violation. Handoffs still arriving from that session
+	// must not start a turn (Rust #43581); a new session clears the gate so it
+	// starts fresh.
+	voiceRetiredHandoffs map[string]bool
 	// voiceSessionWindows retains the active and recent closed realtime sessions
 	// per thread so delayed compaction analytics can resolve their start time.
 	voiceSessionWindows map[string][]voiceSessionWindow

@@ -34,6 +34,9 @@ func (r *RuntimeRouter) startRealtimeConversationAsync(params realtime.StartPara
 			err = startErr
 			if err == nil {
 				r.clearVoiceSessionFailure(params.ThreadID)
+				// A new session starts with a fresh handoff gate even if the
+				// previous one was retired by a misalignment violation.
+				r.clearVoiceHandoffsRetired(params.ThreadID)
 				r.recordVoiceMetric(voiceSessionStartMetric, 1)
 				r.notifyRealtime(notifications)
 				return
@@ -130,6 +133,46 @@ func (r *RuntimeRouter) clearVoiceSessionFailure(threadID string) {
 	}
 	r.realtimeEventMu.Lock()
 	delete(r.voiceFailureThreads, strings.TrimSpace(threadID))
+	r.realtimeEventMu.Unlock()
+}
+
+// retireVoiceHandoffsForMisalignment blocks handoffs still arriving from the
+// voice session that produced a misalignment policy violation, so a queued
+// handoff cannot start another turn (Rust #43581).
+func (r *RuntimeRouter) retireVoiceHandoffsForMisalignment(threadID string) {
+	if r == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return
+	}
+	r.realtimeEventMu.Lock()
+	if r.voiceRetiredHandoffs == nil {
+		r.voiceRetiredHandoffs = map[string]bool{}
+	}
+	r.voiceRetiredHandoffs[threadID] = true
+	r.realtimeEventMu.Unlock()
+}
+
+// voiceHandoffsRetired reports whether the thread's current voice session may
+// no longer hand off into a turn.
+func (r *RuntimeRouter) voiceHandoffsRetired(threadID string) bool {
+	if r == nil {
+		return false
+	}
+	r.realtimeEventMu.Lock()
+	defer r.realtimeEventMu.Unlock()
+	return r.voiceRetiredHandoffs[strings.TrimSpace(threadID)]
+}
+
+// clearVoiceHandoffsRetired lets a newly started session hand off again.
+func (r *RuntimeRouter) clearVoiceHandoffsRetired(threadID string) {
+	if r == nil {
+		return
+	}
+	r.realtimeEventMu.Lock()
+	delete(r.voiceRetiredHandoffs, strings.TrimSpace(threadID))
 	r.realtimeEventMu.Unlock()
 }
 
@@ -708,6 +751,11 @@ func (r *RuntimeRouter) handleRealtimeEvent(threadID string, event realtime.Even
 		return
 	}
 	if event.Type != "handoff.requested" {
+		return
+	}
+	// Rust #43581: a misalignment failure retires the session's queued
+	// handoffs; one that was already parsed must not start a new turn.
+	if r.voiceHandoffsRetired(threadID) {
 		return
 	}
 	// Rust #58221 removed the active-transcript byte budget; V3 handoffs carry

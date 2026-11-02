@@ -7661,6 +7661,13 @@ func (m *Model) applyMisalignmentPolicyViolation(message string) bubbletea.Cmd {
 		return nil
 	}
 	m.onMisalignmentError(message)
+	// Rust #43581: a misalignment failure stops the voice session before the
+	// chat is cleared, so no microphone audio keeps feeding a stopped turn.
+	// Retiring the helper also restores answers that never reached the
+	// conversation.
+	if m.VoiceConversation.Running() {
+		m.stopVoiceConversation()
+	}
 	notice := "Chat stopped as a precaution"
 	m.clearCurrentThreadAfterFailure(notice)
 	m.Transcript.clearCurrentThreadAfterFailure(m.State, notice)

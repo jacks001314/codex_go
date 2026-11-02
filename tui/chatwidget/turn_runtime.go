@@ -624,6 +624,9 @@ func (s *TurnRuntimeState) AcceptsMisalignmentPolicyOp(op string) bool {
 	}
 	switch op {
 	case "interrupt",
+		// Rust #43581: stopping voice must still work on a chat stopped for a
+		// misalignment violation, otherwise the microphone keeps running.
+		"realtime_conversation_stop",
 		"clean_background_terminals",
 		"override_turn_context",
 		"reload_user_config",
