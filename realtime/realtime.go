@@ -1538,6 +1538,32 @@ func (m *Manager) Start(params *StartParams) (*SessionState, []Notification, err
 }
 
 func (m *Manager) StartWithOptions(params *StartParams, options *StartOptions) (*SessionState, []Notification, error) {
+	return m.startWithOptions(params, options, nil)
+}
+
+// SidebandTransport carries caller-owned bounded JSON channels for an existing
+// realtime call. Core reads one complete JSON message per inbound item and
+// writes one per outbound item; it never opens or reconnects a socket
+// (Rust #58953).
+type SidebandTransport struct {
+	Incoming <-chan string
+	Outgoing chan<- string
+}
+
+// AttachStream attaches Core to an existing call through caller-owned channels.
+// Closing Incoming ends the attachment after accepted input drains; queued
+// outbound writes are never replayed.
+func (m *Manager) AttachStream(params *StartParams, options *StartOptions, transport SidebandTransport) (*SessionState, []Notification, error) {
+	if transport.Incoming == nil {
+		return nil, nil, fmt.Errorf("%w: realtime sideband requires an input channel", ErrInvalidRealtimeRequest)
+	}
+	if transport.Outgoing == nil {
+		return nil, nil, fmt.Errorf("%w: realtime sideband requires an output channel", ErrInvalidRealtimeRequest)
+	}
+	return m.startWithOptions(params, options, &transport)
+}
+
+func (m *Manager) startWithOptions(params *StartParams, options *StartOptions, attach *SidebandTransport) (*SessionState, []Notification, error) {
 	startContext := context.Background()
 	defaultModel := ""
 	defaultVersion := VersionV2
@@ -1568,6 +1594,15 @@ func (m *Manager) StartWithOptions(params *StartParams, options *StartOptions) (
 	}
 	if config.Transport.Type == "webrtc" && config.SessionMode != SessionModeConversational {
 		return nil, nil, fmt.Errorf("%w: AVAS realtime calls require conversational realtime", ErrInvalidRealtimeRequest)
+	}
+	if attach != nil {
+		// Caller-owned sidebands only join calls the frontend already
+		// negotiated, whose protocol is v1 or v3. v2 would need Core to issue
+		// response-control writes (Rust #58953).
+		if config.Version != VersionV1 && config.Version != VersionV3 {
+			return nil, nil, fmt.Errorf("%w: caller-owned realtime sidebands support v1 and v3 only", ErrInvalidRealtimeRequest)
+		}
+		config.Transport = StartTransport{Type: "sidebandStream"}
 	}
 	if m == nil {
 		return nil, nil, fmt.Errorf("%w: manager is nil", ErrInvalidRealtimeRequest)
@@ -1621,6 +1656,17 @@ func (m *Manager) StartWithOptions(params *StartParams, options *StartOptions) (
 	sdpAnswer := ""
 	var sideband *realtimeSideband
 	var connection *realtimeTransportSession
+	if attach != nil {
+		connectionCtx, cancel := context.WithCancel(startContext)
+		connection = &realtimeTransportSession{
+			threadID:    config.ThreadID,
+			config:      *config,
+			conn:        newSidebandStreamConn(attach.Incoming, attach.Outgoing),
+			callerOwned: true,
+			ctx:         connectionCtx,
+			cancel:      cancel,
+		}
+	}
 	if config.Transport.Type == "websocket" && backend != nil && backend.WebsocketBaseURL != "" {
 		connection, err = dialRealtimeTransport(startContext, config.ThreadID, backend, config, "", realtimeInitializeNewSession)
 		if err != nil {
@@ -1804,7 +1850,7 @@ func (m *Manager) Stop(params *StopParams, reason string) (*SessionState, []Noti
 	snapshot := cloneState(state)
 	m.mu.Unlock()
 	if connection != nil {
-		if snapshot != nil && snapshot.Config.Transport.Type == "existingCall" {
+		if connection.callerOwned || (snapshot != nil && snapshot.Config.Transport.Type == "existingCall") {
 			// Rust #57817: the call belongs to the frontend, so detaching the
 			// observer closes only its transport and never sends session.close.
 			connection.closeTransport()

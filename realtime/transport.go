@@ -70,9 +70,12 @@ type realtimeSideband struct {
 }
 
 type realtimeTransportSession struct {
-	threadID              string
-	config                SessionConfig
-	conn                  *websocket.Conn
+	threadID string
+	config   SessionConfig
+	conn     realtimeWireConn
+	// callerOwned marks a transport whose peer owns the call and its channels
+	// (Rust #58953); detaching never sends session.close.
+	callerOwned           bool
 	ctx                   context.Context
 	cancel                context.CancelFunc
 	pendingEvents         []Event
@@ -619,6 +622,12 @@ func (m *Manager) runRealtimeConnection(connection *realtimeTransportSession) {
 		if err != nil {
 			if connection.ctx.Err() == nil {
 				m.flushRealtimeTranscriptTail(connection)
+				// A caller-owned input half closing ends the attachment normally
+				// after accepted input drains (Rust #58953).
+				if errors.Is(err, ErrRealtimeSidebandInputClosed) {
+					m.finishRealtimeTransport(connection, "transport_closed", nil)
+					return
+				}
 				status := websocket.CloseStatus(err)
 				if status != websocket.StatusNormalClosure && status != websocket.StatusGoingAway {
 					m.finishRealtimeTransport(connection, "error", fmt.Errorf("read realtime transport: %w", err))

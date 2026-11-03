@@ -70,7 +70,7 @@ func dialRealtimeTransport(ctx context.Context, threadID string, backend *Transp
 		return nil, wrapped
 	}
 	connectionCtx, cancel := context.WithCancel(ctx)
-	connection := &realtimeTransportSession{threadID: threadID, config: *config, conn: conn, ctx: connectionCtx, cancel: cancel}
+	connection := &realtimeTransportSession{threadID: threadID, config: *config, conn: &websocketWireConn{conn: conn}, ctx: connectionCtx, cancel: cancel}
 	// An existing call keeps its own negotiated configuration, so Core only
 	// joins the control socket.
 	initializeSession := initialization == realtimeInitializeNewSession ||
@@ -219,7 +219,7 @@ func (s *realtimeTransportSession) close() error {
 	var closeErr error
 	s.closeOnce.Do(func() {
 		s.writeMu.Lock()
-		if s.config.Version == VersionV3 {
+		if s.config.Version == VersionV3 && !s.callerOwned {
 			_ = s.conn.Write(s.ctx, websocket.MessageText, []byte(`{"type":"session.close"}`))
 		}
 		closeErr = s.conn.Close(websocket.StatusNormalClosure, "")
