@@ -3993,6 +3993,8 @@ func (r *RuntimeRouter) dispatch(request *Request) (result any, err error) {
 		return r.handlePluginUninstall(request)
 	case MethodModelList:
 		return r.handleModelList(request)
+	case MethodModelProviderList:
+		return r.handleModelProviderList(request)
 	case MethodModelProviderCapabilitiesRead:
 		return r.handleModelProviderCapabilitiesRead(request)
 	case MethodPermissionProfileList:

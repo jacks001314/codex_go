@@ -212,6 +212,100 @@ type ProviderCapabilitiesReadResponse struct {
 	WebSearch       bool `json:"webSearch"`
 }
 
+// ProviderListParams is the empty request body for modelProvider/list.
+type ProviderListParams struct{}
+
+// ProviderListResponse mirrors Rust's app-server ModelProviderListResponse.
+type ProviderListResponse struct {
+	Data              []ProviderSummary `json:"data"`
+	DefaultProviderID string            `json:"defaultProviderId"`
+	CanChangeDefault  bool              `json:"canChangeDefault"`
+}
+
+// ProviderSummary describes one configured or built-in model provider without
+// exposing credentials.
+type ProviderSummary struct {
+	ID       string           `json:"id"`
+	Name     string           `json:"name"`
+	CanEdit  bool             `json:"canEdit"`
+	BaseURL  *string          `json:"baseUrl"`
+	Settings ProviderSettings `json:"settings"`
+}
+
+// ProviderSettings is the provider-specific configuration visible to clients.
+// Type selects which fields are serialized, matching Rust's tagged enum.
+type ProviderSettings struct {
+	Type           string
+	Auth           *GatewayAuth
+	Profile        *string
+	Region         *string
+	ProjectID      *string
+	Location       *string
+	CredentialFile *string
+}
+
+// GatewayAuth describes how a custom gateway obtains credentials. EnvKey is
+// omitted for `none` and explicitly null for externallyConfigured without a
+// named variable.
+type GatewayAuth struct {
+	Mode   string
+	EnvKey *string
+}
+
+func (s ProviderSettings) MarshalJSON() ([]byte, error) {
+	switch s.Type {
+	case "openai":
+		return json.Marshal(struct {
+			Type string `json:"type"`
+		}{Type: s.Type})
+	case "customGateway":
+		return json.Marshal(struct {
+			Type string       `json:"type"`
+			Auth *GatewayAuth `json:"auth"`
+		}{Type: s.Type, Auth: s.Auth})
+	case "bedrock":
+		return json.Marshal(struct {
+			Type    string  `json:"type"`
+			Profile *string `json:"profile"`
+			Region  *string `json:"region"`
+		}{Type: s.Type, Profile: s.Profile, Region: s.Region})
+	case "gcp":
+		return json.Marshal(struct {
+			Type           string  `json:"type"`
+			ProjectID      *string `json:"projectId"`
+			Location       *string `json:"location"`
+			CredentialFile *string `json:"credentialFile"`
+		}{Type: s.Type, ProjectID: s.ProjectID, Location: s.Location, CredentialFile: s.CredentialFile})
+	default:
+		return json.Marshal(struct {
+			Type string `json:"type"`
+		}{Type: s.Type})
+	}
+}
+
+func (a GatewayAuth) MarshalJSON() ([]byte, error) {
+	switch a.Mode {
+	case "environmentVariable":
+		envKey := ""
+		if a.EnvKey != nil {
+			envKey = *a.EnvKey
+		}
+		return json.Marshal(struct {
+			Mode   string `json:"mode"`
+			EnvKey string `json:"envKey"`
+		}{Mode: a.Mode, EnvKey: envKey})
+	case "externallyConfigured":
+		return json.Marshal(struct {
+			Mode   string  `json:"mode"`
+			EnvKey *string `json:"envKey"`
+		}{Mode: a.Mode, EnvKey: a.EnvKey})
+	default:
+		return json.Marshal(struct {
+			Mode string `json:"mode"`
+		}{Mode: a.Mode})
+	}
+}
+
 type ModelInfoReadParams struct {
 	Model           string
 	Config          *ModelsManagerConfig

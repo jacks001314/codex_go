@@ -272,6 +272,14 @@ func TestBuildProtocolSchemaIndexesRPCSurface(t *testing.T) {
 	requireProtocolMethod(t, internal.ClientRequests, string(MethodAccountSessionsList), false)
 }
 
+// forwardPortedStableMethods lists request methods Go ports ahead of the frozen
+// parity baseline (parity/commits.json rustToInclusive). The stable fixture
+// guards treat them as expected additions until the next re-anchor, and fail
+// once the pinned Rust tree contains them so the entry can be dropped.
+var forwardPortedStableMethods = map[string]string{
+	string(MethodModelProviderList): "3026a8e54e (#58845) ported after the 67f0994b parity baseline",
+}
+
 func TestBuildProtocolSchemaMatchesRustStableFixtures(t *testing.T) {
 	root := rustAppServerProtocolSchemaRoot(t)
 	stable := BuildProtocolSchema(false, false)
@@ -1174,7 +1182,15 @@ func requireProtocolMethodSetMatchesRustFixture(t *testing.T, path string, actua
 	}
 	for method := range actualByMethod {
 		if _, ok := expected[method]; !ok {
+			if _, forwardPorted := forwardPortedStableMethods[method]; forwardPorted {
+				continue
+			}
 			diffs = append(diffs, "extra method "+method)
+		}
+	}
+	for method := range forwardPortedStableMethods {
+		if _, ok := expected[method]; ok {
+			diffs = append(diffs, "forward-ported method "+method+" is now in the Rust fixture; drop it from forwardPortedStableMethods")
 		}
 	}
 	if len(diffs) > 0 {
@@ -1212,7 +1228,15 @@ func requireTypeScriptMethodSetMatchesRustFixture(t *testing.T, path string, act
 	}
 	for method := range actualByMethod {
 		if _, ok := expected[method]; !ok {
+			if _, forwardPorted := forwardPortedStableMethods[method]; forwardPorted {
+				continue
+			}
 			diffs = append(diffs, "extra method "+method)
+		}
+	}
+	for method := range forwardPortedStableMethods {
+		if _, ok := expected[method]; ok {
+			diffs = append(diffs, "forward-ported method "+method+" is now in the Rust fixture; drop it from forwardPortedStableMethods")
 		}
 	}
 	if len(diffs) > 0 {
@@ -1238,6 +1262,11 @@ func requireProtocolSchemaTypesHaveRustFixtures(t *testing.T, root string, metho
 	t.Helper()
 	var missing []string
 	for _, method := range methods {
+		// Forward-ported methods are newer than the frozen fixture tree, so
+		// their types cannot exist there yet.
+		if _, forwardPorted := forwardPortedStableMethods[method.Method]; forwardPorted {
+			continue
+		}
 		for _, typeName := range []string{method.Params, method.Result} {
 			if typeName == "" || rustSchemaFixtureExists(root, typeName) {
 				continue

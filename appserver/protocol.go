@@ -134,6 +134,7 @@ const (
 	MethodPluginInstall                          Method = "plugin/install"
 	MethodPluginUninstall                        Method = "plugin/uninstall"
 	MethodModelList                              Method = "model/list"
+	MethodModelProviderList                      Method = "modelProvider/list"
 	MethodModelProviderCapabilitiesRead          Method = "modelProvider/capabilities/read"
 	MethodPermissionProfileList                  Method = "permissionProfile/list"
 	MethodCollaborationModeList                  Method = "collaborationMode/list"
