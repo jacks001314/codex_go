@@ -178,6 +178,35 @@ func (m *SteerMailbox) IsTurnFinishing(threadID string, turnID string) bool {
 	return m.finishing[steerMailboxKey(threadID, turnID)] != nil
 }
 
+// FinishTurnOrTakePending mirrors Rust #58877's atomic finish check: the final
+// pending-input check and closing steer admission happen under one lock. When
+// input was accepted before admission closed it is returned, admission stays
+// open, and the caller must keep sampling in the same turn. Otherwise the turn
+// is marked finishing and the caller records its final batch.
+func (m *SteerMailbox) FinishTurnOrTakePending(threadID string, turnID string) (*SteerDrainResult, bool) {
+	if m == nil || strings.TrimSpace(threadID) == "" || strings.TrimSpace(turnID) == "" {
+		return nil, false
+	}
+	key := steerMailboxKey(threadID, turnID)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.acceptsMailboxDeliveryLocked(key) && (len(m.items[key]) > 0 || len(m.metadata[key]) > 0) {
+		items := append([]any(nil), m.items[key]...)
+		metadata := cloneStringMap(m.metadata[key])
+		delete(m.items, key)
+		delete(m.metadata, key)
+		delete(m.pendingInjections, key)
+		return &SteerDrainResult{InputItems: items, ClientMetadata: metadata}, true
+	}
+	if m.finishing == nil {
+		m.finishing = map[string]chan struct{}{}
+	}
+	if m.finishing[key] == nil {
+		m.finishing[key] = make(chan struct{})
+	}
+	return nil, false
+}
+
 // WaitForTurnFinish blocks until the turn's final batch is recorded (Rust #53452:
 // a late client response or notification waits for `finishing.cancelled()` before
 // it is appended to history, so it is recorded after the final batch instead of

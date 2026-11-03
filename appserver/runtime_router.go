@@ -333,6 +333,10 @@ type RuntimeRouter struct {
 	threadUnloadDelayMu sync.Mutex
 	threadUnloadDelays  map[string]time.Duration
 	servicesMu          sync.Mutex
+	// turnFinishHook observes the window between a finished sampling step and
+	// closing steer admission (Rust #58877). Tests use it to submit a steer that
+	// races turn completion; production leaves it nil.
+	turnFinishHook func(threadID string, turnID string)
 	// feedbackUploads bounds concurrent feedback uploads to Rust #42096's three
 	// permits. A permit stays held until the upload itself finishes, not until the
 	// RPC waiter is cancelled.

@@ -269,9 +269,13 @@ func TestRuntimeRunCallSitesWireRequiredSkillsValidationLikeRust(t *testing.T) {
 		}
 	}
 	text := string(source)
-	const callSite = "runtime.Run(ctx, &turn.AgentLoopRequest{"
+	const callSite = "runtime.Run(ctx,"
+	// The regular turn's resample after a steer races its answer reuses the
+	// request that already carries the gate (Rust #58877), so it is not a
+	// separate turn path.
+	const resampleSite = "runtime.Run(ctx, &nextRequest)"
 	const wiring = "r.requiredSkillsPreSamplingValidation("
-	callSites := strings.Count(text, callSite)
+	callSites := strings.Count(text, callSite) - strings.Count(text, resampleSite)
 	if callSites == 0 {
 		t.Fatalf("no runtime.Run call sites found")
 	}

@@ -1941,7 +1941,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	if criticalPathTiming {
 		timingState.EnableCriticalPath()
 	}
-	result, err := runtime.Run(ctx, &turn.AgentLoopRequest{
+	agentRequest := &turn.AgentLoopRequest{
 		Prompt:                       agentPrompt,
 		Timing:                       timingState,
 		CriticalPathTiming:           criticalPathTiming,
@@ -2012,12 +2012,50 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 			r.recordIncompleteResponseUsage(threadID, turnID, runConfig.Model, params, usage)
 		},
 		ExecutedToolCallMetadataEnabled: runConfig.ExecutedToolCallMetadataEnabled,
-	})
+	}
+	result, err := runtime.Run(ctx, agentRequest)
+	// Rust #58877: the final pending-input check and closing steer admission form
+	// one atomic step. Input accepted before admission closed resumes sampling in
+	// the same turn with the transcript this turn already produced, instead of
+	// being dropped when the turn completes.
+	var finishTurn func()
+	for err == nil && ctx.Err() == nil {
+		if hook := r.turnFinishHook; hook != nil {
+			hook(threadID, turnID)
+		}
+		pending, release := r.finishRuntimeTurnOrTakePending(threadID, turnID)
+		finishTurn = release
+		if pending == nil || (len(pending.InputItems) == 0 && len(pending.ClientMetadata) == 0) {
+			break
+		}
+		if validateErr := validateSteerInputAudioLikeRust(pending.InputItems); validateErr != nil {
+			err = validateErr
+			break
+		}
+		nextRequest := *agentRequest
+		nextRequest.Prompt = ""
+		nextRequest.PostPromptInputItems = nil
+		nextRequest.InputItems = append(append([]any(nil), result.InputItems...), pending.InputItems...)
+		if result.Response != nil {
+			if responseID := strings.TrimSpace(result.Response.ResponseID); responseID != "" {
+				nextRequest.PreviousResponseID = responseID
+			}
+		}
+		nextRequest.PreviousResponseFromPrewarm = false
+		next, nextErr := runtime.Run(ctx, &nextRequest)
+		if nextErr != nil {
+			err = nextErr
+			break
+		}
+		result = mergeAgentLoopAttempts(result, next)
+	}
+	if finishTurn == nil {
+		finishTurn = r.beginRuntimeTurnFinish(threadID, turnID)
+	}
 	// Rust #53452: the turn's task has finished, so its input admission closes
 	// while the final batch below is recorded. The deferred release keeps the
 	// window closed on every return path (it never opens earlier than upstream,
 	// which drops its guard directly after the final items are recorded).
-	finishTurn := r.beginRuntimeTurnFinish(threadID, turnID)
 	defer finishTurn()
 	executorStepCapabilities := r.activeStepCapabilitySnapshot(threadID)
 	if err != nil {
@@ -4250,6 +4288,61 @@ func (r *RuntimeRouter) beginRuntimeTurnFinish(threadID string, turnID string) f
 		return func() {}
 	}
 	return mailbox.BeginTurnFinish(threadID, turnID)
+}
+
+// finishRuntimeTurnOrTakePending mirrors Rust #58877's atomic finish step: it
+// closes steer admission and, when input was accepted before admission closed,
+// returns that input so the turn keeps sampling. The returned release is
+// non-nil only when admission closed.
+func (r *RuntimeRouter) finishRuntimeTurnOrTakePending(threadID string, turnID string) (*turn.SteerDrainResult, func()) {
+	if r == nil {
+		return nil, func() {}
+	}
+	mailbox := r.requireSteerMailbox()
+	if mailbox == nil {
+		return nil, func() {}
+	}
+	pending, taken := mailbox.FinishTurnOrTakePending(threadID, turnID)
+	if taken {
+		return pending, nil
+	}
+	return nil, mailbox.BeginTurnFinish(threadID, turnID)
+}
+
+// mergeAgentLoopAttempts joins the sampling attempts of one turn after a steer
+// resumed it (Rust #58877). The second attempt was seeded with the first
+// attempt's input items, so only the responses, usage, and counters accumulate.
+func mergeAgentLoopAttempts(first *turn.AgentLoopResult, second *turn.AgentLoopResult) *turn.AgentLoopResult {
+	if first == nil {
+		return second
+	}
+	if second == nil {
+		return first
+	}
+	merged := *second
+	responses := append([]*model.AgentResponse(nil), first.ModelResponses()...)
+	merged.Responses = append(responses, second.ModelResponses()...)
+	merged.Usage = addAgentLoopUsage(first.Usage, second.Usage)
+	merged.SteerInputItems = append(append([]any(nil), first.SteerInputItems...), second.SteerInputItems...)
+	merged.Compactions += first.Compactions
+	merged.SamplingFollowUps += first.SamplingFollowUps
+	merged.Iterations += first.Iterations
+	merged.InitialInputCount = first.InitialInputCount
+	if merged.Response == nil {
+		merged.Response = first.Response
+	}
+	return &merged
+}
+
+func addAgentLoopUsage(left model.AgentUsage, right model.AgentUsage) model.AgentUsage {
+	combined := left
+	combined.InputTokens += right.InputTokens
+	combined.CachedInputTokens += right.CachedInputTokens
+	combined.CacheWriteInputTokens += right.CacheWriteInputTokens
+	combined.OutputTokens += right.OutputTokens
+	combined.ReasoningOutputTokens += right.ReasoningOutputTokens
+	combined.TotalTokens = model.AgentUsageTotalTokens(left) + model.AgentUsageTotalTokens(right)
+	return combined
 }
 
 func (r *RuntimeRouter) clearActiveRuntimeTurn(threadID string, turnID string) {
