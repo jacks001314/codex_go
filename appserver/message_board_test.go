@@ -600,21 +600,32 @@ func TestRemoteMessageBoardCredentialResolutionLikeRust(t *testing.T) {
 	defer router.Close()
 	host := &messageBoardHost{router: router, tree: "thread-1", caller: "thread-1"}
 	const token = "research-board-credential-for-runtime-test"
+	openRemote := func(remote *config.RemoteMessageBoardConfig) (agentboard.Board, error) {
+		return agentboard.OpenBoardBackend(context.Background(), agentboard.BoardBackend{
+			Kind: agentboard.BoardBackendRemote,
+			Remote: &agentboard.RemoteBoardBackend{
+				Endpoint:          remote.URL,
+				BearerToken:       remote.BearerToken,
+				BearerTokenEnvVar: remote.BearerTokenEnvVar,
+				HTTP:              http.DefaultClient,
+			},
+		}, "thread-1", host)
+	}
 
-	if _, err := router.openRemoteMessageBoard(context.Background(), nil, host, "thread-1", &config.RemoteMessageBoardConfig{URL: "https://board.example"}); err == nil ||
+	if _, err := openRemote(&config.RemoteMessageBoardConfig{URL: "https://board.example"}); err == nil ||
 		!strings.Contains(err.Error(), "remote message board requires a credential") {
 		t.Fatalf("credentialless remote board error = %v", err)
 	}
 	missingEnvVar := "CODEX_BOARD_TOKEN_MISSING_" + strconv.FormatInt(time.Now().UnixNano(), 10)
 	_ = os.Unsetenv(missingEnvVar)
-	if _, err := router.openRemoteMessageBoard(context.Background(), nil, host, "thread-1", &config.RemoteMessageBoardConfig{
+	if _, err := openRemote(&config.RemoteMessageBoardConfig{
 		URL: "https://board.example", BearerTokenEnvVar: &missingEnvVar,
 	}); err == nil || !strings.Contains(err.Error(), "message-board credential environment variable is missing or invalid") {
 		t.Fatalf("missing environment error = %v", err)
 	}
 	envVar := "CODEX_BOARD_TOKEN_" + strconv.FormatInt(time.Now().UnixNano(), 10)
 	t.Setenv(envVar, token)
-	board, err := router.openRemoteMessageBoard(context.Background(), nil, host, "thread-1", &config.RemoteMessageBoardConfig{
+	board, err := openRemote(&config.RemoteMessageBoardConfig{
 		URL: "https://board.example", BearerTokenEnvVar: &envVar,
 	})
 	if err != nil {
@@ -627,12 +638,12 @@ func TestRemoteMessageBoardCredentialResolutionLikeRust(t *testing.T) {
 	// The environment wins over a directly supplied credential, and a
 	// credential Rust's AccessToken rejects is rejected here too.
 	t.Setenv(envVar, "short")
-	if _, err := router.openRemoteMessageBoard(context.Background(), nil, host, "thread-1", &config.RemoteMessageBoardConfig{
+	if _, err := openRemote(&config.RemoteMessageBoardConfig{
 		URL: "https://board.example", BearerToken: ptrTo(token), BearerTokenEnvVar: &envVar,
 	}); err == nil || !strings.Contains(err.Error(), "credentials must contain") {
 		t.Fatalf("invalid environment credential error = %v", err)
 	}
-	if _, err := router.openRemoteMessageBoard(context.Background(), nil, host, "thread-1", &config.RemoteMessageBoardConfig{
+	if _, err := openRemote(&config.RemoteMessageBoardConfig{
 		URL: "https://board.example", BearerToken: ptrTo("short"),
 	}); err == nil || !strings.Contains(err.Error(), "credentials must contain") {
 		t.Fatalf("invalid direct credential error = %v", err)
