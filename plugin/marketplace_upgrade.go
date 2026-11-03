@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -73,6 +74,7 @@ func (s *PluginService) upgradeConfiguredMarketplaces(values map[string]any, mar
 	resolver := s.marketplaceRevision
 	now := s.now
 	marketplacePolicy := s.marketplacePolicy
+	codexHome := strings.TrimSpace(s.codexHome)
 	s.mu.Unlock()
 	if automatic {
 		if gitMaterializer, ok := materializer.(*GitMarketplaceMaterializer); ok {
@@ -149,7 +151,21 @@ func (s *PluginService) upgradeConfiguredMarketplaces(values map[string]any, mar
 		if revision != "" && installedMarketplaceRevision(destination) == revision {
 			continue
 		}
+		inputs := newMarketplaceCheckoutInputs(name, source.URL, source.RefName, marketplace.SparsePaths, revision)
+		if automatic {
+			if found, ok := loadMarketplaceNameMismatch(codexHome, inputs); ok {
+				upgradeErrors = append(upgradeErrors, MarketplaceUpgradeErrorInfo{
+					MarketplaceName: name,
+					Message:         (&marketplaceNameMismatchError{ConfiguredName: name, FoundName: found}).Error(),
+				})
+				continue
+			}
+		}
 		if err := upgradeConfiguredGitMarketplace(installRoot, destination, materializer, source, marketplace.SparsePaths, revision, reload, marketplace, automatic); err != nil {
+			var mismatch *marketplaceNameMismatchError
+			if automatic && errors.As(err, &mismatch) && mismatch.Cacheable {
+				storeMarketplaceNameMismatch(codexHome, inputs, mismatch.FoundName)
+			}
 			upgradeErrors = append(upgradeErrors, MarketplaceUpgradeErrorInfo{MarketplaceName: name, Message: err.Error()})
 			continue
 		}
@@ -229,6 +245,13 @@ func upgradeConfiguredGitMarketplace(
 		if err := cloneGitMarketplaceSource(source.URL, source.RefName, sparsePaths, staged.Path(), automatic); err != nil {
 			return err
 		}
+	}
+	stagedName, err := marketplaceManifestName(staged.Path())
+	if err != nil {
+		return fmt.Errorf("failed to validate upgraded marketplace root: %w", err)
+	}
+	if stagedName != expected.Name {
+		return &marketplaceNameMismatchError{ConfiguredName: expected.Name, FoundName: stagedName, Cacheable: !marketplaceManifestHasSymlink(staged.Path())}
 	}
 	if err := writeMarketplaceInstallState(staged.Path(), revision); err != nil {
 		return err

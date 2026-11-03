@@ -29,7 +29,10 @@ func TestUpgradeConfiguredMarketplacesUsesMergedConfigLikeRust(t *testing.T) {
 	service := NewPluginService()
 	service.SetCodexHome(home)
 	materializer := &recordingMarketplaceMaterializer{write: func(destination string) error {
-		if err := os.MkdirAll(destination, 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Join(destination, ".agents", "plugins"), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(destination, ".agents", "plugins", "marketplace.json"), []byte(`{"name":"system-market"}`), 0o600); err != nil {
 			return err
 		}
 		return os.WriteFile(filepath.Join(destination, "marker.txt"), []byte("merged"), 0o600)
@@ -86,7 +89,10 @@ func TestUpgradeConfiguredMarketplacesRollsBackOnConfigChangeLikeRust(t *testing
 	service := NewPluginService()
 	service.SetCodexHome(home)
 	service.SetMarketplaceMaterializer(&recordingMarketplaceMaterializer{write: func(destination string) error {
-		if err := os.MkdirAll(destination, 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Join(destination, ".agents", "plugins"), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(destination, ".agents", "plugins", "marketplace.json"), []byte(`{"name":"system-market"}`), 0o600); err != nil {
 			return err
 		}
 		return os.WriteFile(filepath.Join(destination, "marker.txt"), []byte("new"), 0o600)
