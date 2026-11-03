@@ -453,26 +453,9 @@ func (r *StateRuntime) resolveThreadHistoryLineage(ctx context.Context, requeste
 			return nil, invalidPaginatedLineage(requestedThreadID, "cycle detected")
 		}
 		seen[threadID] = true
-		path, found, err := r.FindRolloutPathByID(ctx, threadID, nil)
+		existing, meta, err := r.resolveLineageRolloutCopy(ctx, threadID, requestedThreadID)
 		if err != nil {
 			return nil, err
-		}
-		if !found {
-			return nil, invalidPaginatedLineage(threadID, "missing source rollout")
-		}
-		existing, ok := rollout.ExistingRolloutPath(path)
-		if !ok {
-			return nil, invalidPaginatedLineage(threadID, "missing source rollout")
-		}
-		meta, err := rollout.FirstSessionMeta(existing)
-		if err != nil {
-			return nil, fmt.Errorf("read lineage metadata %s: %w", existing, err)
-		}
-		if meta.ID != threadID {
-			return nil, invalidPaginatedLineage(requestedThreadID, "source rollout belongs to another thread")
-		}
-		if !strings.EqualFold(strings.TrimSpace(meta.HistoryMode), "paginated") {
-			return nil, invalidPaginatedLineage(requestedThreadID, "source rollout is not paginated")
 		}
 		// History pages read projected rows and only need the ancestor's
 		// metadata for lineage bounds, so an incomplete ancestor tail does not
@@ -519,6 +502,76 @@ func (r *StateRuntime) resolveThreadHistoryLineage(ctx context.Context, requeste
 		segments[left], segments[right] = segments[right], segments[left]
 	}
 	return segments, nil
+}
+
+// resolveLineageRolloutCopy picks the rollout copy one lineage segment reads.
+// The indexed copy is preferred; when it is missing, unreadable, belongs to
+// another thread or is not paginated, another managed copy of the same thread
+// is retried (Rust #58959/#58960, the same recovery rule as
+// rollout.ResolveHistoryPrefix). The preferred copy's error is returned when no
+// copy can serve the segment.
+func (r *StateRuntime) resolveLineageRolloutCopy(ctx context.Context, threadID string, requestedThreadID string) (string, *rollout.SessionMeta, error) {
+	indexed, found, err := r.FindRolloutPathByID(ctx, threadID, nil)
+	if err != nil {
+		return "", nil, err
+	}
+	var firstErr error
+	if found {
+		if existing, ok := rollout.ExistingRolloutPath(indexed); ok {
+			meta, metaErr := lineageRolloutCopyMeta(existing, threadID, requestedThreadID)
+			if metaErr == nil {
+				return existing, meta, nil
+			}
+			firstErr = metaErr
+		} else if meta, metaErr := lineageRolloutCopyMeta(indexed, threadID, requestedThreadID); metaErr == nil {
+			return indexed, meta, nil
+		} else {
+			firstErr = metaErr
+		}
+	}
+	// Only scan managed storage when the indexed copy cannot serve the
+	// segment.
+	copies, copyErr := rollout.FindThreadRolloutCopies(r.sqlite.Home(), threadID)
+	if copyErr != nil && firstErr == nil {
+		return "", nil, copyErr
+	}
+	if len(copies) == 0 {
+		if firstErr != nil {
+			return "", nil, firstErr
+		}
+		return "", nil, invalidPaginatedLineage(threadID, "missing source rollout")
+	}
+	for _, path := range copies {
+		if found {
+			if existing, ok := rollout.ExistingRolloutPath(indexed); ok && existing == path {
+				continue
+			}
+		}
+		meta, metaErr := lineageRolloutCopyMeta(path, threadID, requestedThreadID)
+		if metaErr == nil {
+			return path, meta, nil
+		}
+	}
+	if firstErr == nil {
+		firstErr = invalidPaginatedLineage(threadID, "missing source rollout")
+	}
+	return "", nil, firstErr
+}
+
+// lineageRolloutCopyMeta validates that one rollout copy can serve a lineage
+// segment.
+func lineageRolloutCopyMeta(path string, threadID string, requestedThreadID string) (*rollout.SessionMeta, error) {
+	meta, err := rollout.FirstSessionMeta(path)
+	if err != nil {
+		return nil, fmt.Errorf("read lineage metadata %s: %w", path, err)
+	}
+	if meta.ID != threadID {
+		return nil, invalidPaginatedLineage(requestedThreadID, "source rollout belongs to another thread")
+	}
+	if !strings.EqualFold(strings.TrimSpace(meta.HistoryMode), "paginated") {
+		return nil, invalidPaginatedLineage(requestedThreadID, "source rollout is not paginated")
+	}
+	return meta, nil
 }
 
 type selectedHistorySegment struct {
