@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"time"
 
 	"codex_go/state"
 )
@@ -36,11 +37,7 @@ func updateRustStateThreadMemoryMode(codexHome string, threadID string, mode Thr
 		return err
 	}
 	defer db.Close()
-	_, err = db.Exec(`UPDATE threads SET memory_mode = ? WHERE id = ?`, string(mode), threadID)
-	if isSQLiteMissingSchemaError(err) {
-		return nil
-	}
-	return err
+	return updateRustStateThreadRow(db, threadID, []string{"memory_mode = ?"}, []any{string(mode)})
 }
 
 func updateRustStateThreadName(codexHome string, threadID string, name string) error {
@@ -61,11 +58,7 @@ func updateRustStateThreadName(codexHome string, threadID string, name string) e
 		return err
 	}
 	defer db.Close()
-	_, err = db.Exec(`UPDATE threads SET name = ? WHERE id = ?`, sqliteNullableString(name), threadID)
-	if isSQLiteMissingSchemaError(err) {
-		return nil
-	}
-	return err
+	return updateRustStateThreadRow(db, threadID, []string{"name = ?"}, []any{sqliteNullableString(name)})
 }
 
 func updateRustStateThreadGitInfo(codexHome string, threadID string, git map[string]string) error {
@@ -86,17 +79,65 @@ func updateRustStateThreadGitInfo(codexHome string, threadID string, git map[str
 		return err
 	}
 	defer db.Close()
-	_, err = db.Exec(
-		`UPDATE threads SET git_sha = ?, git_branch = ?, git_origin_url = ? WHERE id = ?`,
-		sqliteNullableString(git["sha"]),
-		sqliteNullableString(git["branch"]),
-		sqliteNullableString(firstNonEmpty(git["origin_url"], git["originUrl"])),
+	return updateRustStateThreadRow(
+		db,
 		threadID,
+		[]string{"git_sha = ?", "git_branch = ?", "git_origin_url = ?"},
+		[]any{
+			sqliteNullableString(git["sha"]),
+			sqliteNullableString(git["branch"]),
+			sqliteNullableString(firstNonEmpty(git["origin_url"], git["originUrl"])),
+		},
 	)
+}
+
+// updateRustStateThreadRow applies one metadata patch. On the full schema the
+// same statement advances recency, so a rename or memory/Git update refreshes
+// recency-ordered listings atomically (Rust #59016). Minimal legacy schemas
+// without recency columns keep the old statement.
+func updateRustStateThreadRow(db *sql.DB, threadID string, assignments []string, args []any) error {
+	if db == nil {
+		return nil
+	}
+	if sqliteThreadsHaveRecencyColumns(db) {
+		now := time.Now().UTC()
+		assignments = append(assignments,
+			"recency_at_ms = MAX(COALESCE(recency_at_ms, 0) + 1, ?)",
+			"recency_at = MAX(COALESCE(recency_at, 0) + 1, ?)",
+		)
+		args = append(args, now.UnixMilli(), now.Unix())
+	}
+	args = append(args, threadID)
+	_, err := db.Exec("UPDATE threads SET "+strings.Join(assignments, ", ")+" WHERE id = ?", args...)
 	if isSQLiteMissingSchemaError(err) {
 		return nil
 	}
 	return err
+}
+
+func sqliteThreadsHaveRecencyColumns(db *sql.DB) bool {
+	rows, err := db.Query(`PRAGMA table_info(threads)`)
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+	hasAt, hasMS := false, false
+	for rows.Next() {
+		var cid int
+		var name, typeName string
+		var notNull, pk int
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &typeName, &notNull, &defaultValue, &pk); err != nil {
+			return false
+		}
+		switch name {
+		case "recency_at":
+			hasAt = true
+		case "recency_at_ms":
+			hasMS = true
+		}
+	}
+	return hasAt && hasMS
 }
 
 func clearRustMemoriesSQLiteData(codexHome string) error {
