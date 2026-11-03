@@ -83,6 +83,21 @@ type ViewImageHistoryCell struct {
 	Path       string
 	Label      string
 	CWD        string
+	// LinkDestination is the OSC-8 file destination of the displayed image path
+	// (Rust ViewImageHistoryCell::link, #58446). Empty means the row is plain
+	// text: the workspace is remote, the session is remote, or the path is not a
+	// local regular image file.
+	LinkDestination string
+}
+
+// LinkLocalImage attaches the file hyperlink for a locally viewed image when the
+// path resolves to a regular image file (Rust link_local_image). The caller
+// decides whether the workspace is local and the session is not an SSH one.
+func (c ViewImageHistoryCell) LinkLocalImage() ViewImageHistoryCell {
+	if destination, ok := tui.ViewedImageDestination(c.Path); ok {
+		c.LinkDestination = destination
+	}
+	return c
 }
 
 // NewViewImageToolCall creates a viewed-image cell for callers without an item
@@ -104,7 +119,9 @@ func NewViewImageToolCallWithID(id string, path string, cwd string) ViewImageHis
 	}
 }
 
-func (c ViewImageHistoryCell) DisplayLines(width int) []string {
+// displayFilename is the compact row's file name: the path relative to the
+// session cwd when it stays inside it, otherwise the label as given.
+func (c ViewImageHistoryCell) displayFilename() string {
 	displayPath := strings.TrimSpace(c.Label)
 	if displayPath != "" && c.CWD != "" {
 		if abs, err := filepath.Abs(c.Path); err == nil {
@@ -123,12 +140,22 @@ func (c ViewImageHistoryCell) DisplayLines(width int) []string {
 	if filename == "" {
 		filename = displayPath
 	}
-	filename = strings.NewReplacer("\n", " ", "\r", " ", "\t", " ").Replace(filename)
-	line := "\u2022 Viewed image " + filename
+	return strings.NewReplacer("\n", " ", "\r", " ", "\t", " ").Replace(filename)
+}
+
+// DisplayHyperlinkLines renders the compact row and keeps the image path linked
+// through truncation (Rust display_hyperlink_lines, #58446).
+func (c ViewImageHistoryCell) DisplayHyperlinkLines(width int) []HyperlinkLine {
+	line := HyperlinkLine{Text: "\u2022 Viewed image " + c.displayFilename()}
+	line.Links = c.linkWithin(line.Text, tui.DisplayWidth("\u2022 Viewed image "))
 	if width > 0 {
-		line = tui.TruncateWithEllipsis(line, width)
+		line = ClipHyperlinkLine(line, width)
 	}
-	return []string{line}
+	return []HyperlinkLine{line}
+}
+
+func (c ViewImageHistoryCell) DisplayLines(width int) []string {
+	return RenderHyperlinkLines(c.DisplayHyperlinkLines(width))
 }
 
 func (c ViewImageHistoryCell) RawLines() []string {
@@ -139,18 +166,46 @@ func (c ViewImageHistoryCell) RawLines() []string {
 	return []string{"Viewed image " + path}
 }
 
-// TranscriptLines retains the complete image path in the expanded transcript
-// (Rust #46116 transcript_lines).
-func (c ViewImageHistoryCell) TranscriptLines(width int) []string {
+// transcriptPath is the complete image path shown in the expanded transcript.
+func (c ViewImageHistoryCell) transcriptPath() string {
 	path := strings.TrimSpace(c.Label)
 	if path == "" {
 		path = c.Path
 	}
-	line := "\u2022 Viewed image " + path
-	if width > 0 {
-		line = tui.TruncateWithEllipsis(line, width)
+	return path
+}
+
+// linkWithin returns the image link over the path portion of a rendered row.
+func (c ViewImageHistoryCell) linkWithin(text string, start int) []tui.TerminalHyperlink {
+	if strings.TrimSpace(c.LinkDestination) == "" {
+		return nil
 	}
-	return []string{line}
+	if end := tui.DisplayWidth(text); end > start {
+		return []tui.TerminalHyperlink{{Start: start, End: end, Destination: c.LinkDestination}}
+	}
+	return nil
+}
+
+// TranscriptHyperlinkLines keeps the complete image path linked while the
+// transcript wraps it (Rust transcript_hyperlink_lines, #58446).
+func (c ViewImageHistoryCell) TranscriptHyperlinkLines(width int) []HyperlinkLine {
+	line := HyperlinkLine{Text: "Viewed image " + c.transcriptPath()}
+	line.Links = c.linkWithin(line.Text, tui.DisplayWidth("Viewed image "))
+	if width <= 0 {
+		return []HyperlinkLine{line}
+	}
+	return AdaptiveWrapHyperlinkLines([]HyperlinkLine{line}, tui.WrapOptions{
+		Width:            width,
+		InitialIndent:    "\u2022 ",
+		SubsequentIndent: "  ",
+		BreakWords:       true,
+	})
+}
+
+// TranscriptLines retains the complete image path in the expanded transcript
+// (Rust #46116 transcript_lines).
+func (c ViewImageHistoryCell) TranscriptLines(width int) []string {
+	return RenderHyperlinkLines(c.TranscriptHyperlinkLines(width))
 }
 
 // ActivityIDs returns the stable disclosure identity for the viewed image.

@@ -14,10 +14,14 @@ type ThreadBufferedEvent struct {
 }
 
 type ThreadEventSnapshot struct {
-	Session    *ThreadSessionState
-	Turns      []appserver.Turn
-	Events     []ThreadBufferedEvent
-	InputState *ThreadInputState
+	Session *ThreadSessionState
+	// DelegatedTurns lists the turns opened by a realtime voice handoff so a
+	// rebuilt thread keeps their private reasoning/commentary hidden (Rust
+	// ThreadEventSnapshot::delegated_turns).
+	DelegatedTurns []string
+	Turns          []appserver.Turn
+	Events         []ThreadBufferedEvent
+	InputState     *ThreadInputState
 }
 
 func ShouldReplay(kind string) bool {

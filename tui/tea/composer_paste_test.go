@@ -1,6 +1,7 @@
 package tea
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -33,7 +34,8 @@ func TestComposerBlockquotePasteContinuesCurrentLinePrefixLikeRust(t *testing.T)
 		{"> quote\nplain ", "first\nsecond", "> quote\nplain first\nsecond"},
 		{"> ", "single", "> single"},
 		{"!> ", "out\npwd", "!> out\npwd"},
-		{" !echo hi\n> ", "out\npwd", " !echo hi\n> out\npwd"},
+		// Rust #58412: a space before the bang keeps the draft in normal text mode.
+		{" !echo hi\n> ", "out\npwd", " !echo hi\n> out\n> pwd\n\n"},
 	} {
 		state := codextui.NewState(nil)
 		model := NewModel(state, Options{Width: 80, Height: 24})
@@ -105,22 +107,31 @@ func TestComposerBlockquotePasteEmbeddedAnswerStartsNextBlockLikeRust(t *testing
 	}
 }
 
-// Rust test `blockquote_paste_large_expands_quoted_text_on_submit`: Rust stores
-// the quoted text behind a `[Pasted Content N chars]` element and expands it on
-// submit. The Go composer inserts pastes directly (no element/placeholder path),
-// so the quoted text stays inline; the continuation itself is identical.
-func TestComposerBlockquotePasteLargePasteStaysInlineLikeRust(t *testing.T) {
+// Rust test `blockquote_paste_large_expands_quoted_text_on_submit`: the quoted
+// text is stored behind a `[Pasted Content N chars]` element and expanded on
+// submit (chat_composer.rs LARGE_PASTE_CHAR_THRESHOLD, blockquote_paste_tests.rs:56).
+func TestComposerBlockquotePasteLargeExpandsQuotedTextOnSubmitLikeRust(t *testing.T) {
 	state := codextui.NewState(nil)
 	model := NewModel(state, Options{Width: 80, Height: 24})
-	first := strings.Repeat("x", 1200)
+	first := strings.Repeat("x", 1000)
 	model.composer.SetValue("> ")
 	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune(first + "\nsecond"), Paste: true})
-	want := "> " + first + "\n> second\n\n"
-	if got := model.composer.Value(); got != want {
-		t.Fatalf("large blockquote paste = %q, want the quoted text inline", truncateForFailure(got))
+	quoted := first + "\n> second"
+	placeholder := fmt.Sprintf("[Pasted Content %d chars]", len([]rune(quoted)))
+	if got, want := model.composer.Value(), "> "+placeholder+"\n\n"; got != want {
+		t.Fatalf("large blockquote paste = %q, want %q", truncateForFailure(got), truncateForFailure(want))
 	}
-	if got := model.composer.Value(); strings.Contains(got, "[Pasted Content") {
-		t.Fatalf("Go composer has no large-paste placeholder path, got %q", truncateForFailure(got))
+	if len(model.pendingPastes) != 1 || model.pendingPastes[0].Content != quoted {
+		t.Fatalf("pending pastes = %#v, want the quoted text", model.pendingPastes)
+	}
+	model.composer.InsertString("Next block")
+	model.clearComposerPasteWindow()
+	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	if len(model.submitRequests) != 1 {
+		t.Fatalf("submissions = %d, want 1", len(model.submitRequests))
+	}
+	if got, want := model.submitRequests[0].Prompt, "> "+quoted+"\n\nNext block"; got != want {
+		t.Fatalf("submitted = %q, want %q", truncateForFailure(got), truncateForFailure(want))
 	}
 }
 

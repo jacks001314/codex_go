@@ -202,6 +202,12 @@ type WorkingDirectoryChangeFunc func(threadID string, cwd string) (*codextui.Ses
 
 type SessionResumeFunc func(selection codextui.SessionSelection) (SessionResumeResponse, error)
 
+// BackendSwitchFunc prepares a conversation owned by another backend before the
+// displayed session is replaced (Rust #58457 resume_backend_session). The host
+// resolves the owning backend through the connection it can reach; a nil
+// implementation reports cross-backend selections as unavailable.
+type BackendSwitchFunc func(request BackendSwitchRequest) (BackendSwitchResult, error)
+
 // SafetyRecourseContinueFunc forks the blocked turn's chat before that turn and
 // prepares the selected rewrite there (Rust #57365 continue_with_rewrite).
 type SafetyRecourseContinueFunc func(threadID, turnID, prompt string) bubbletea.Cmd
@@ -270,6 +276,13 @@ type SessionResumeResponse struct {
 type AgentThreadReaderFunc func(currentThreadID string) ([]codextui.AgentThreadEntry, error)
 
 type AgentThreadSwitchFunc func(threadID string) (AgentThreadSwitchResponse, error)
+
+// ThreadApprovalReconnectFunc reattaches the threads that had an approval
+// outstanding when the app-server connection went away. The host resumes each
+// thread on a fresh connection; the server replays the requests it still holds
+// and they reach the TUI through the normal approval path (Rust #58720
+// refresh_pending_thread_approvals after reconnect).
+type ThreadApprovalReconnectFunc func(threadIDs []string) bubbletea.Cmd
 
 type AgentThreadSwitchResponse struct {
 	Entry    codextui.AgentThreadEntry
@@ -1272,6 +1285,10 @@ type Options struct {
 	OnSessionAction          SessionActionFunc
 	OnWorkingDirectoryChange WorkingDirectoryChangeFunc
 	OnResumeSession          SessionResumeFunc
+	// OnSwitchBackendSession prepares a picker selection owned by another
+	// backend (Rust #58457). Nil keeps such selections unavailable without
+	// touching the displayed conversation.
+	OnSwitchBackendSession BackendSwitchFunc
 	// OnContinueSafetyRecourse forks the blocked turn's chat and prepares the
 	// selected safer rewrite there (Rust #57365 AppEvent::ContinueSafetyRecourse).
 	// Nil keeps the rewrite in the composer when the host cannot fork.
@@ -1279,13 +1296,16 @@ type Options struct {
 	// OnPromptEdit branches before a transcript prompt selected via backtrack
 	// ("Esc Esc to edit previous message") and returns the branched session.
 	// A nil hook leaves prompt editing unavailable for this runtime.
-	OnPromptEdit            PromptEditFunc
-	OnRenameThread          ThreadRenameFunc
-	OnLogout                LogoutFunc
-	OnReadAgents            AgentThreadReaderFunc
-	OnSwitchAgent           AgentThreadSwitchFunc
-	AgentsOverviewEmbedded  bool
-	OnAgentsOverviewRefresh AgentsOverviewRefreshFunc
+	OnPromptEdit   PromptEditFunc
+	OnRenameThread ThreadRenameFunc
+	OnLogout       LogoutFunc
+	OnReadAgents   AgentThreadReaderFunc
+	OnSwitchAgent  AgentThreadSwitchFunc
+	// OnReconnectThreadApprovals rebuilds the background approval queue after a
+	// transport failure. Nil leaves disconnected approvals dropped.
+	OnReconnectThreadApprovals ThreadApprovalReconnectFunc
+	AgentsOverviewEmbedded     bool
+	OnAgentsOverviewRefresh    AgentsOverviewRefreshFunc
 	// OnAcknowledgeThreadRead marks a focused conversation's observed receipt
 	// read. Nil disables automatic read acknowledgement (Rust #58263).
 	OnAcknowledgeThreadRead ThreadReadAcknowledgeFunc
@@ -1473,6 +1493,11 @@ type Options struct {
 	DaemonManaged bool
 	// DaemonVersion is the running local daemon's app-server version, when known.
 	DaemonVersion string
+	// ServerAddress and ServerVersion feed the /status "Server" row
+	// (Rust #46905). ServerAddress is already sanitized for display; for a
+	// local daemon the row says "Local background server" instead.
+	ServerAddress string
+	ServerVersion string
 	// RemoteAppServer reports an explicit remote app server, whose daemon cannot
 	// be managed from this host.
 	RemoteAppServer bool
@@ -1520,6 +1545,12 @@ type Options struct {
 	// configured permission profiles, so the picker falls back to its local
 	// built-in presets. Nil keeps the picker on local presets only.
 	OnListPermissionProfiles func() ([]chatwidget.CustomPermissionProfile, bool, error)
+	// OnListCollaborationModes discovers the connected app server's
+	// collaborationMode/list catalog at startup and reconnect (Rust #42401,
+	// ModelCatalog::with_collaboration_modes). Nil keeps the builtin presets; a
+	// failing or unsupported discovery installs an empty catalog, exactly like an
+	// app server without collaboration-mode support.
+	OnListCollaborationModes CollaborationModeLister
 	// OnUpdateThreadPermissions asks the connected app server to adopt a
 	// permission selection for the thread (Rust #43340/#46008;
 	// thread/settings/update). Built-in presets are routed through the server
@@ -1669,6 +1700,17 @@ type Model struct {
 	// with (Rust #54681). It survives connection replacement: picker targets
 	// from another backend are rejected before resume/fork/unarchive.
 	backendID codextui.BackendID
+	// threadBackend records which backend serves each thread this model has
+	// displayed (Rust #58457 thread ownership tracking). Recorded ownership wins
+	// over a picker row's stale listing stamp, so an adopted session does not
+	// switch again on the next selection.
+	threadBackend map[string]codextui.BackendID
+	// pendingBackendRequests parks server requests that belong to a backend
+	// other than the displayed one (Rust #58457 pending_requests). They replay
+	// once that backend is displayed and are dropped when resolved or when the
+	// connection goes away. Notifications, including realtime voice events, are
+	// never parked.
+	pendingBackendRequests []pendingBackendRequest
 
 	// Terminal-size observations (Rust #53859): the launch context captured at
 	// startup, the eligibility inputs, and the resize settle state.
@@ -1924,6 +1966,11 @@ type Model struct {
 	// dashboard opens (Rust #50786 AgentsOverviewState::grouping).
 	agentsOverviewGrouping agentsoverview.Grouping
 	agentsOverviewDrafts   map[string]string
+	// agentsOverviewDraftPastes keeps the pending large pastes of a saved draft
+	// so returning to that thread restores its placeholders too (Rust
+	// ThreadComposerState::pending_pastes).
+	agentsOverviewDraftPastes        map[string][]composerPendingPaste
+	agentsOverviewPendingDraftPastes []composerPendingPaste
 	// agentsOverviewCursorBar tracks the DECSCUSR steady-bar cursor used by the
 	// Vim-insert rename editor (Rust #50216 cursor_style).
 	agentsOverviewCursorBar bool
@@ -1942,6 +1989,14 @@ type Model struct {
 	// readOnlyThread marks a conversation opened read-only because another app
 	// owns it (Rust #43253).
 	readOnlyThread bool
+	// readOnlyDraft retains the composer draft while the external-writer view
+	// hides it, so a retry or a fork can continue with the same input
+	// (Rust #43253/#47185 capture_thread_input_state).
+	readOnlyDraft *composerInputState
+	// forkInProgress marks a fork started from the locked conversation view. The
+	// pending fork owns the keyboard and replaces the notice with its progress
+	// line (Rust #47185 fork_in_progress).
+	forkInProgress bool
 	// providerError carries the provider admission failure that kept the chat
 	// readable but read-only (Rust #58202), and providerErrorRolloutPath is the
 	// frozen conversation's saved history path used by the continuation draft.
@@ -2160,11 +2215,25 @@ type Model struct {
 	// composerElements tracks the composer's structured text elements (byte
 	// ranges plus placeholders) so mentions reach the turn input as
 	// text_elements (Rust textarea::text_elements).
-	composerElements          []ComposerTextElement
+	composerElements []ComposerTextElement
+	// pendingPastes mirrors Rust ChatComposer::pending_pastes: a large paste is
+	// replaced by a "[Pasted Content N chars]" placeholder in the composer and
+	// the original text is spliced back in on submit (chat_composer.rs:471,
+	// user_messages.rs:331-354).
+	pendingPastes             []composerPendingPaste
 	misalignmentPolicyStopped bool
 	misalignmentReview        *misalignmentReview
 	misalignmentReviewSerial  uint64
 	currentTurnID             string
+	// delegatedTurns is the append-only set of turns opened by a realtime voice
+	// handoff. Rust keeps the marker past TurnCompleted (ThreadEventStore::
+	// delegated_turns); the thread-scoped reset clears it on a thread switch.
+	delegatedTurns     map[string]struct{}
+	delegatedTurnOrder []string
+	// typedRealtimeItems records reasoning/agent items that started before a
+	// voice handoff steered their turn. Rust keeps those visible
+	// (RealtimeAgentItemOrigin::Typed).
+	typedRealtimeItems map[string]struct{}
 	// pendingSafetyRecourse carries the active turn's moderation block notice
 	// and its validated explanation/rewrites (Rust #57363 safety_recourse).
 	pendingSafetyRecourse        *chatwidget.PendingSafetyRecourse
@@ -2444,9 +2513,22 @@ type Model struct {
 	// permissionPopupPending is true between a `/permissions` request and the
 	// app opening its view (Rust #55682 ChatWidget::permission_popup_pending).
 	permissionPopupPending bool
+	// permissionDiscoveryGeneration drops server responses that a thread,
+	// account, or modal change has made stale (Rust #42453
+	// permission_popup_request_is_current).
+	permissionDiscoveryGeneration uint64
+	// onListCollaborationModes and collaborationModes are Rust's ModelCatalog
+	// collaboration inventory (#42401): the server catalog replaces the builtin
+	// presets once discovery has run.
+	onListCollaborationModes     CollaborationModeLister
+	collaborationModes           []chatwidget.CollaborationModeMask
+	collaborationModesDiscovered bool
 	// queueAutoSendSuppressed holds queued prompts while a permission selection
 	// is outstanding (Rust input_queue.suppress_queue_autosend).
 	queueAutoSendSuppressed       bool
+	// pendingFeatureEnableLabel names the feature whose opt-in write is in
+	// flight, so its notice uses the same label Rust reports (#43113).
+	pendingFeatureEnableLabel string
 	agentsOverviewEmbedded        bool
 	onAgentsOverviewRefresh       AgentsOverviewRefreshFunc
 	onAcknowledgeThreadRead       ThreadReadAcknowledgeFunc
@@ -2464,6 +2546,10 @@ type Model struct {
 	// from the command center until its first turn materializes a rollout
 	// (Rust #45255 agents_overview.blank_sessions).
 	agentsOverviewBlankSessions map[string]AgentThreadSwitchResponse
+	// agentsOverviewPendingDispatch carries a task prompt composed in the
+	// command center across the session start so it is submitted once the new
+	// session attaches (Rust #42428 DispatchAgentsOverviewTask).
+	agentsOverviewPendingDispatch string
 	// agentsOverviewLifecycleProgress is non-empty while an archive/delete RPC
 	// runs; navigation and task switching are blocked during that window
 	// (Rust #44433).
@@ -2480,11 +2566,13 @@ type Model struct {
 	onSessionAction                 SessionActionFunc
 	onWorkingDirectoryChange        WorkingDirectoryChangeFunc
 	onResumeSession                 SessionResumeFunc
+	onSwitchBackendSession          BackendSwitchFunc
 	onPromptEdit                    PromptEditFunc
 	onRenameThread                  ThreadRenameFunc
 	onLogout                        LogoutFunc
 	onReadAgents                    AgentThreadReaderFunc
 	onSwitchAgent                   AgentThreadSwitchFunc
+	onReconnectThreadApprovals      ThreadApprovalReconnectFunc
 	// statusCopyTargets holds the most recent /status output for /copy
 	// (Rust #43055); cleared by any other command, user message, or response.
 	statusCopyTargets *statusCopyTargets
@@ -2777,6 +2865,12 @@ type Model struct {
 	inputHistoryDraft                string
 	inputHistoryDraftElements        []ComposerTextElement
 	inputHistoryActive               bool
+	// inputHistoryBash records, per history entry, whether it was submitted from
+	// shell mode (Rust #58412 keeps is_bash_mode with the draft) so recall restores
+	// a literal leading `!` for ordinary messages.
+	inputHistoryBash []bool
+	// inputHistoryDraftBash is the shell mode of the draft saved when recall began.
+	inputHistoryDraftBash bool
 	historySearch                    *composerhistory.HistorySearchSession
 	historySearchElements            []ComposerTextElement
 	historySearchPreviewText         string
@@ -3017,6 +3111,13 @@ func NewModel(state *codextui.State, options Options) *Model {
 	// settings; the app attaches that connection kind to the tea options
 	// (app/remote_tui.go sets LocalDaemonSession / RemoteAppServer).
 	state.RemoteConnection = options.LocalDaemonSession || options.RemoteAppServer
+	if state.RemoteConnection {
+		state.ServerConnection = &codextui.ServerConnectionStatus{
+			Address:     strings.TrimSpace(options.ServerAddress),
+			Version:     strings.TrimSpace(options.ServerVersion),
+			LocalDaemon: options.LocalDaemonSession,
+		}
+	}
 	// Rust #51500: the pinned-section discovery and the pin/unpin request are the
 	// TUI's own flow, driven by one injected app-server request function. Hosts
 	// that implement either callback directly keep it.
@@ -3170,6 +3271,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onStartManagedWorktree:           options.OnStartManagedWorktree,
 		onManagedWorktreeChanged:         options.OnManagedWorktreeChanged,
 		onListPermissionProfiles:         options.OnListPermissionProfiles,
+		onListCollaborationModes:         options.OnListCollaborationModes,
 		onUpdateThreadPermissions:        options.OnUpdateThreadPermissions,
 		terminalSize:                     options.TerminalSize,
 		sizeMonitorEnabled:               terminalSizeMonitorNeeded(runtime.GOOS, os.Getenv),
@@ -3198,6 +3300,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onSessionAction:                  options.OnSessionAction,
 		onWorkingDirectoryChange:         options.OnWorkingDirectoryChange,
 		onResumeSession:                  options.OnResumeSession,
+		onSwitchBackendSession:           options.OnSwitchBackendSession,
 		onContinueSafetyRecourse:         options.OnContinueSafetyRecourse,
 		onPromptEdit:                     options.OnPromptEdit,
 		backtrack:                        tuiapp.BacktrackState{NthUserMessage: tuiapp.BacktrackNoSelection},
@@ -3205,6 +3308,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onLogout:                         options.OnLogout,
 		onReadAgents:                     options.OnReadAgents,
 		onSwitchAgent:                    options.OnSwitchAgent,
+		onReconnectThreadApprovals:       options.OnReconnectThreadApprovals,
 		backgroundThreadEvents:           map[string][]protocol.ThreadEvent{},
 		sideConversations:                map[string]*activeSideConversation{},
 		clipboardWrite:                   clipboardWrite,
@@ -3638,6 +3742,12 @@ func (m *Model) Init() bubbletea.Cmd {
 	if m.onFetchStartupAnnouncement != nil {
 		commands = append(commands, m.startupAnnouncementCmd())
 	}
+	if m.onListCollaborationModes != nil && !m.collaborationModesDiscovered {
+		// Rust #42401: optional discovery runs beside the other startup requests
+		// with a two-second bound, so an unavailable server never blocks the
+		// first frame.
+		commands = append(commands, m.discoverCollaborationModes())
+	}
 	if m.initialMessages != nil {
 		commands = append(commands, waitForStream(m.initialMessages))
 	}
@@ -3815,6 +3925,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 	case ModelCatalogResultMsg:
 		m.applyModelCatalogResult(msg)
 		return m, m.applyBackendBannerFallbackCmd()
+	case CollaborationModesResultMsg:
+		m.applyCollaborationModesResult(msg)
+		return m, nil
 	case terminalSizeSettleMsg:
 		return m, m.applyTerminalSizeSettle(msg.generation)
 	case bubbletea.WindowSizeMsg:
@@ -3901,9 +4014,10 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		}
 		return m, bubbletea.Batch(cmd, m.refreshStatusControlsCmd(), m.submitNextQueued(), m.noteRecapTurnFinished(recapStatus))
 	case AppServerDisconnectMsg:
-		m.dropStaleThreadApprovals()
+		reconnectThreads := m.retireThreadApprovalsForReconnect()
+		m.dropStaleBackendRequests()
 		m.handleAppServerDisconnect()
-		return m, m.refreshStatusControlsCmd()
+		return m, bubbletea.Batch(m.refreshStatusControlsCmd(), m.reconnectThreadApprovalsCmd(reconnectThreads))
 	case TurnInterruptedMsg:
 		if m.applyInactiveThreadTurnInterrupted(msg) {
 			return m, m.refreshStatusControlsCmd()
@@ -4297,6 +4411,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 	case StreamStartedMsg:
 		return m, waitForStream(msg.Messages)
 	case ModalRequestMsg:
+		if owner, ok := m.requestBackendOwner(msg.BackendID, ""); ok && m.deferBackendRequest(owner, nil, &msg) {
+			return m, nil
+		}
 		m.openModal(msg)
 		return m, nil
 	case approvalPromptDelayMsg:
@@ -4313,6 +4430,8 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		return m, m.openRequestUserInputModal(msg)
 	case requestUserInputTimeoutMsg:
 		return m, m.applyRequestUserInputTimeout(msg)
+	case forkCurrentSessionMsg:
+		return m, m.applyForkCurrentSessionResult(msg)
 	case streamEnvelopeMsg:
 		var cmds []bubbletea.Cmd
 		for _, streamMessage := range msg.Batch {
@@ -4325,6 +4444,17 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		}
 		return m, bubbletea.Batch(cmds...)
 	case bubbletea.KeyMsg:
+		// Rust #47185 (app/input.rs): a fork started from the locked view owns
+		// the keyboard until it completes, so a repeated shortcut cannot act on
+		// the resulting view.
+		if m.forkInProgress {
+			// An explicit exit is never swallowed: a backend that never answers
+			// must not trap the process in the pending fork. Everything else
+			// belongs to the fork until it completes.
+			if msg.Type != bubbletea.KeyCtrlC && msg.Type != bubbletea.KeyCtrlD {
+				return m, nil
+			}
+		}
 		if m.promptSuggestionTabAccepted {
 			if msg.Type == bubbletea.KeyTab {
 				return m, nil
@@ -4828,14 +4958,14 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 	}
 	if key, ok := message.(bubbletea.KeyMsg); ok {
 		if handled, selectionCmd := m.applyComposerSelectionKey(key); handled {
-			m.syncComposerPrefixFromText()
+			m.syncComposerPrefixAfterEdit(composerBefore)
 			m.syncComposerElements(composerBefore)
 			m.refreshSlashPopup()
 			return m, bubbletea.Batch(cmd, selectionCmd)
 		}
 	}
 	m.composer, composerCmd = m.composer.Update(message)
-	m.syncComposerPrefixFromText()
+	m.syncComposerPrefixAfterEdit(composerBefore)
 	m.syncComposerElements(composerBefore)
 	m.refreshSlashPopup()
 	skillPopupCmd := m.refreshSkillPopup()
@@ -5000,6 +5130,17 @@ func (m *Model) View() string {
 		} else {
 			m.composerImageTiles = nil
 		}
+		// Rust #43683 renders the voice controls inside the composer block,
+		// one row below its top padding, with a gap above the draft. Keeping
+		// them out of the passive footer also keeps the status line visible.
+		if voice, _, ok := m.voiceStripLayout(m.width); ok {
+			lines := make([]string, 0, 2)
+			for _, line := range bottompane.VoiceStripLines(m.width, voice) {
+				lines = append(lines, m.footerStyle.Render(fitTerminalLine(line, m.width)))
+			}
+			composer = strings.Join(lines, "\n") + "\n\n" + composer
+			composerStripRows += len(lines) + 1
+		}
 		composer = m.applyComposerSparkle(composer, m.currentTime())
 		composer = m.annotateInlineComposerHyperlinks(composer)
 		composer = m.renderComposerRegion(composer)
@@ -5028,9 +5169,6 @@ func (m *Model) View() string {
 	// picker) replaces it entirely.
 	if strings.TrimSpace(m.notice) != "" && m.modal == nil {
 		sections = append(sections, m.footerStyle.Render(m.notice))
-	}
-	for _, line := range m.voiceStripLines(m.width) {
-		sections = append(sections, m.footerStyle.Render(fitTerminalLine(line, m.width)))
 	}
 	if sideLabel := strings.TrimSpace(m.sideContextLabel()); sideLabel != "" && sideLabel != strings.TrimSpace(m.notice) {
 		sections = append(sections, m.footerStyle.Render(fitTerminalLine(sideLabel, m.width)))
@@ -5213,6 +5351,12 @@ func (m *Model) voiceStripState() (bottompane.VoiceStripState, bool) {
 	if phase != chatwidget.VoicePhaseStarting && phase != chatwidget.VoicePhaseActive {
 		return bottompane.VoiceStripState{}, false
 	}
+	// Rust #43683 renders the strip only for the conversation's own thread; a
+	// parked (background) session must not paint on another thread's composer.
+	threadID := strings.TrimSpace(m.VoiceConversation.ThreadID)
+	if threadID == "" || m.State == nil || threadID != strings.TrimSpace(m.State.ThreadID) {
+		return bottompane.VoiceStripState{}, false
+	}
 	stripPhase := bottompane.VoiceStripConnecting
 	if phase == chatwidget.VoicePhaseActive {
 		stripPhase = bottompane.VoiceStripActive
@@ -5224,7 +5368,10 @@ func (m *Model) voiceStripState() (bottompane.VoiceStripState, bool) {
 		Activity:        m.voiceStripActivityLabel(),
 		MuteHint:        m.voiceMuteHint(),
 		StartedAt:       m.voiceStripStartedAt,
-		Animations:      true,
+		// Rust #46835: reduced motion hides the meter histories and stops
+		// meter-driven redraws, so the strip must follow `tui.animations`
+		// instead of assuming the animated layout.
+		Animations: m.animationsEnabled,
 	}
 	for _, sample := range m.audioMeterHistory {
 		state.MicrophoneHistory = append(state.MicrophoneHistory, sample.microphone)
@@ -5233,13 +5380,55 @@ func (m *Model) voiceStripState() (bottompane.VoiceStripState, bool) {
 	return state, true
 }
 
-// voiceStripLines renders the composer strip, or nothing when inactive.
-func (m *Model) voiceStripLines(width int) []string {
+// voiceStripLayout resolves the strip state and its row count. It reports false
+// when the strip must not render: no session, another thread's session, a
+// surface that replaces the composer, or a composer too short to keep the draft
+// row visible (Rust #43683 hides the strip when vertical space is needed).
+func (m *Model) voiceStripLayout(width int) (bottompane.VoiceStripState, int, bool) {
 	state, ok := m.voiceStripState()
+	if !ok {
+		return bottompane.VoiceStripState{}, 0, false
+	}
+	height := bottompane.VoiceStripHeight(width, state.Animations)
+	if height <= 0 || m.composerSurfaceSuppressed() || !m.voiceStripFitsComposer(height) {
+		return bottompane.VoiceStripState{}, 0, false
+	}
+	return state, height, true
+}
+
+// voiceStripRows returns the rows the strip reserves above the draft: the strip
+// itself plus the gap row Rust paints between it and the textarea. Zero when
+// the strip does not render.
+func (m *Model) voiceStripRows(width int) int {
+	if _, height, ok := m.voiceStripLayout(width); ok {
+		return height + 1
+	}
+	return 0
+}
+
+// voiceStripLines renders the composer strip, or nothing when it does not fit.
+func (m *Model) voiceStripLines(width int) []string {
+	state, _, ok := m.voiceStripLayout(width)
 	if !ok {
 		return nil
 	}
 	return bottompane.VoiceStripLines(width, state)
+}
+
+// voiceStripFitsComposer mirrors Rust's clipped-composer rule: the strip only
+// renders while the composer block can still hold its two padding rows, the
+// strip, the gap below it, and one draft row.
+func (m *Model) voiceStripFitsComposer(stripHeight int) bool {
+	if m == nil || m.height <= 0 {
+		return true
+	}
+	return m.height >= stripHeight+4+m.nonComposerBottomRows()
+}
+
+// nonComposerBottomRows counts the bottom rows painted outside the composer
+// block, so the strip's fit check can measure against the real terminal.
+func (m *Model) nonComposerBottomRows() int {
+	return max(m.bottomReservedRowsExceptVoice()-m.composerSectionRowsExceptVoice(), 0)
 }
 
 // voiceMicrophoneIsListening mirrors the Rust check: capture counts as live
@@ -5272,11 +5461,40 @@ func (m *Model) voiceStripActivityLabel() string {
 		return "connecting"
 	case m.VoiceConversation.MicrophoneMuted:
 		return "muted"
+	// Rust #43651: an interrupted assistant turn is acknowledged before the
+	// speaker meters take over again.
+	case m.VoiceConversation.VoiceInterruptionAcknowledged(m.currentTime()):
+		return "heard"
 	case m.VoiceConversation.SpeakerPeak > 0 || m.currentTime().Before(m.speakerActiveUntil):
 		return "speaking"
 	default:
 		return "listening"
 	}
+}
+
+// noteVoiceUserCaption mirrors Rust #43651: a spoken user caption interrupts
+// the assistant, so the speaker samples and their activity hold are cleared
+// before the caption renders.
+func (m *Model) noteVoiceUserCaption() {
+	if m == nil {
+		return
+	}
+	if m.VoiceConversation.AcknowledgeVoiceInterruption(m.currentTime()) != chatwidget.VoiceSpeakerMute {
+		return
+	}
+	m.speakerActiveUntil = time.Time{}
+	m.clearSpeakerMeterSample()
+}
+
+// clearSpeakerMeterSample zeroes the newest rendered speaker sample so the
+// meter drops to silence immediately, matching Rust's speaker_level = 0.
+func (m *Model) clearSpeakerMeterSample() {
+	if m == nil || len(m.audioMeterHistory) == 0 {
+		return
+	}
+	last := m.audioMeterHistory[len(m.audioMeterHistory)-1]
+	last.speaker = 0
+	m.audioMeterHistory[len(m.audioMeterHistory)-1] = last
 }
 
 // voiceMuteHint renders the configured mute binding, when one exists.
@@ -5289,6 +5507,19 @@ func (m *Model) voiceMuteHint() string {
 		return ""
 	}
 	return bindings[0]
+}
+
+// voiceMicrophoneListening mirrors Rust's realtime_microphone_is_listening: the
+// active conversation owns the current thread and capture is not muted.
+func (m *Model) voiceMicrophoneListening() bool {
+	if m == nil || m.State == nil {
+		return false
+	}
+	if m.VoiceConversation.Phase != chatwidget.VoicePhaseActive || m.VoiceConversation.MicrophoneMuted {
+		return false
+	}
+	threadID := strings.TrimSpace(m.VoiceConversation.ThreadID)
+	return threadID != "" && threadID == m.State.ThreadID
 }
 
 func (m *Model) regionChromeEnabled() bool {
@@ -5378,6 +5609,10 @@ func (m *Model) setWorkingStatusHeader(text string) {
 // (Rust #43921).
 func (m *Model) applyReasoningSummaryDelta(delta *protocol.Delta) {
 	if m == nil || delta == nil {
+		return
+	}
+	// Rust gates reasoning deltas on is_realtime_delegated_reasoning_item.
+	if m.suppressRealtimeDelta(delta.ItemID) {
 		return
 	}
 	itemID := strings.TrimSpace(delta.ItemID)
@@ -6016,12 +6251,18 @@ func (m *Model) submitComposer() bubbletea.Cmd {
 	}
 	m.clearPromptSuggestion()
 	input := strings.TrimSpace(m.composerText())
+	// Rust #58412: capture the draft's shell mode before the composer resets so a
+	// leading `!` that a deletion exposed stays literal.
+	shellMode := m.composerPrefix == composerPrefixShell
 	if m.threadUnavailable && !unavailableThreadCommand(input) {
 		m.notice = "This conversation is unavailable. Use /new, /resume, /clear, /status, /warnings, /config, /copy, or /quit."
 		m.refreshTranscript()
 		return nil
 	}
 	textElements := m.composerTextElementsForPromptValue(m.composer.Value(), input)
+	// Rust submits the expanded paste text, not the placeholder: pending_pastes
+	// are spliced back in and the surviving element ranges move with them.
+	input, textElements = m.expandPendingPastesForSubmission(input, textElements)
 	m.resetComposer()
 	m.composerElements = nil
 	m.resetVimEditHistory()
@@ -6052,6 +6293,7 @@ func (m *Model) submitComposer() bubbletea.Cmd {
 		MentionCatalog:  m.submissionMentionCatalog(),
 		TextElements:    textElements,
 	}
+	request.LiteralInput = literalBangInput(input, shellMode)
 	m.attachments = nil
 	m.composerMentionBindings = nil
 	// Rust #44328: a new prompt clears the previous prompt's pending questions.
@@ -6167,7 +6409,7 @@ func (m *Model) submitRequest(request SubmitRequest, parseCommand bool) bubblete
 	// Rust holds a user turn while the session waits for the Reserve switch, so
 	// the queued prompt is not sent on the blocked model.
 	if m.rateLimitRecoveryPending {
-		m.queued = append(m.queued, queuedSubmission{Request: cloneSubmitRequest(request), ParseCommand: parseCommand})
+		m.queued = append(m.queued, queuedSubmission{Request: cloneSubmitRequest(request), ParseCommand: parseCommand, Literal: request.LiteralInput})
 		m.notice = "Waiting for the usage-limit model switch\u2026"
 		m.refreshTranscript()
 		return nil
@@ -6175,7 +6417,7 @@ func (m *Model) submitRequest(request SubmitRequest, parseCommand bool) bubblete
 	// Rust #57363 queues submitted input while a safety explanation is pending,
 	// so the blocked turn is never extended with a new prompt.
 	if m.pendingSafetyRecourse != nil {
-		m.queued = append(m.queued, queuedSubmission{Request: cloneSubmitRequest(request), ParseCommand: parseCommand})
+		m.queued = append(m.queued, queuedSubmission{Request: cloneSubmitRequest(request), ParseCommand: parseCommand, Literal: request.LiteralInput})
 		m.refreshTranscript()
 		return nil
 	}
@@ -6212,6 +6454,7 @@ func (m *Model) submitRequest(request SubmitRequest, parseCommand bool) bubblete
 	if strings.TrimSpace(request.Prompt) != "" {
 		m.inputHistory = append(m.inputHistory, request.Prompt)
 		m.inputHistoryElements = append(m.inputHistoryElements, cloneComposerTextElements(request.TextElements))
+		m.inputHistoryBash = append(m.inputHistoryBash, strings.HasPrefix(strings.TrimSpace(request.Prompt), "!") && !request.LiteralInput)
 	}
 	m.resetInputHistoryNavigation()
 	m.submitRequests = append(m.submitRequests, cloneSubmitRequest(request))
@@ -6252,7 +6495,11 @@ func (m *Model) queueComposer(parseCommand bool) bubbletea.Cmd {
 		return nil
 	}
 	input := strings.TrimSpace(m.composerText())
+	shellMode := m.composerPrefix == composerPrefixShell
 	textElements := m.composerTextElementsForPromptValue(m.composer.Value(), input)
+	// Rust submits the expanded paste text, not the placeholder: pending_pastes
+	// are spliced back in and the surviving element ranges move with them.
+	input, textElements = m.expandPendingPastesForSubmission(input, textElements)
 	m.resetComposer()
 	m.composerElements = nil
 	m.resetVimEditHistory()
@@ -6270,6 +6517,7 @@ func (m *Model) queueComposer(parseCommand bool) bubbletea.Cmd {
 		TextElements:    textElements,
 	}
 	request.ClientID = uuid.NewString()
+	request.LiteralInput = literalBangInput(input, shellMode)
 	m.attachments = nil
 	m.composerMentionBindings = nil
 	// Rust #44328: queueing a new prompt clears the previous prompt's pending
@@ -6294,7 +6542,11 @@ func (m *Model) steerComposer() bubbletea.Cmd {
 		return nil
 	}
 	input := strings.TrimSpace(m.composerText())
+	shellMode := m.composerPrefix == composerPrefixShell
 	textElements := m.composerTextElementsForPromptValue(m.composer.Value(), input)
+	// Rust submits the expanded paste text, not the placeholder: pending_pastes
+	// are spliced back in and the surviving element ranges move with them.
+	input, textElements = m.expandPendingPastesForSubmission(input, textElements)
 	m.resetComposer()
 	m.composerElements = nil
 	m.resetVimEditHistory()
@@ -6311,6 +6563,7 @@ func (m *Model) steerComposer() bubbletea.Cmd {
 		MentionCatalog:  m.submissionMentionCatalog(),
 		TextElements:    textElements,
 	}
+	request.LiteralInput = literalBangInput(input, shellMode)
 	m.attachments = nil
 	m.composerMentionBindings = nil
 	m.captureIDEContext(&request)
@@ -6321,6 +6574,7 @@ func (m *Model) steerComposer() bubbletea.Cmd {
 	if strings.TrimSpace(request.Prompt) != "" {
 		m.inputHistory = append(m.inputHistory, request.Prompt)
 		m.inputHistoryElements = append(m.inputHistoryElements, cloneComposerTextElements(request.TextElements))
+		m.inputHistoryBash = append(m.inputHistoryBash, strings.HasPrefix(strings.TrimSpace(request.Prompt), "!") && !request.LiteralInput)
 	}
 	m.resetInputHistoryNavigation()
 	m.notice = ""
@@ -6395,6 +6649,7 @@ func (m *Model) switchThreadID(threadID string) {
 	threadID = strings.TrimSpace(threadID)
 	m.State.SetThreadID(threadID)
 	m.setPendingSteerThread(threadID)
+	m.noteThreadBackend(threadID, m.backendID)
 	// Rust #58720: selecting a waiting thread replays the approval request that
 	// arrived while it was inactive.
 	m.openPendingApprovalForThread(threadID)
@@ -7110,7 +7365,9 @@ func (m *Model) shouldSubmitOnTab() bool {
 	if input == "" && len(m.attachments) == 0 {
 		return false
 	}
-	return !strings.HasPrefix(input, "!")
+	// Rust #58412 gates Tab submission on shell mode, not on the visible text, so
+	// an ordinary message starting with an exposed `!` still submits.
+	return !m.isBangShellCommand()
 }
 
 // captureTurnElapsed records the pause-aware turn clock before the completion
@@ -7305,6 +7562,11 @@ func (m *Model) interruptRunningTask() bubbletea.Cmd {
 func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 	var cmd bubbletea.Cmd
 	var questionDrafts []string
+	// Rust #42455: delivered events feed the command center's bounded live
+	// previews while the dashboard is open.
+	if m != nil && m.agentsOverview != nil {
+		m.trackAgentsOverviewActivity(event)
+	}
 	switch event.Type {
 	case "thread.started":
 		if current := strings.TrimSpace(m.State.ThreadID); current != "" && current != strings.TrimSpace(event.ThreadID) {
@@ -7371,6 +7633,10 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 		}
 	case "turn.reconnected":
 		m.clearRetryActivity()
+	case "deprecation.notice":
+		// Rust #47065: a deprecation notice delivery enters history through the
+		// deduplicating insertion path.
+		m.insertDeprecationNotice(event.Summary, event.Details)
 	case "turn.compacting":
 		message := "Compacting context..."
 		if event.Item != nil && strings.TrimSpace(event.Item.Message) != "" {
@@ -7394,8 +7660,16 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 		}
 		cmd = m.applyItemCompleted(event.Item)
 	case "item.delta":
+		// Rust drops the streamed agent text of a delegated turn's private
+		// items; the spoken answer arrives through the voice caption instead.
+		if event.Delta != nil && event.Delta.Text != "" && m.suppressRealtimeDelta(event.Delta.ItemID) {
+			break
+		}
 		m.applyDelta(event.Delta)
 	case "item.reasoning.delta":
+		if event.Delta != nil && m.suppressRealtimeDelta(event.Delta.ItemID) {
+			break
+		}
 		m.applyReasoningSummaryDelta(event.Delta)
 	case "item.plan.delta":
 		m.applyProposedPlanDelta(event.Delta)
@@ -7541,6 +7815,13 @@ func (m *Model) applyItemStarted(item *protocol.ThreadItem, startedAtMS int64) {
 	if item == nil {
 		return
 	}
+	// Rust realtime.rs handle_item_started_notification: a delegation prompt
+	// opens the turn, and a delegated turn never starts a live reasoning
+	// heading for its private items.
+	m.observeRealtimeItem(item)
+	if m.suppressPrivateRealtimeItem(item) {
+		return
+	}
 	// Rust #43576: any item other than a CUA call ends the computer-activity
 	// group. Intervening transcript-only reasoning shares the cell (Rust #46565).
 	if !isComputerActivityItem(item) && !isTranscriptOnlyReasoningItem(item) {
@@ -7609,6 +7890,13 @@ const (
 
 func (m *Model) applyItemCompleted(item *protocol.ThreadItem) bubbletea.Cmd {
 	if item == nil {
+		return nil
+	}
+	// Rust handle_item_completed_notification drops a delegated turn's private
+	// reasoning/commentary unless the item started as typed work. The marker
+	// itself is recorded first so the delegation prompt takes effect.
+	m.observeRealtimeItem(item)
+	if m.suppressPrivateRealtimeItem(item) {
 		return nil
 	}
 	var countdownCmd bubbletea.Cmd
@@ -7788,6 +8076,13 @@ func (m *Model) applyMisalignmentPolicyViolation(message string) bubbletea.Cmd {
 		return nil
 	}
 	m.onMisalignmentError(message)
+	// Rust #43581: a misalignment failure stops the voice session before the
+	// chat is cleared, so no microphone audio keeps feeding a stopped turn.
+	// Retiring the helper also restores answers that never reached the
+	// conversation.
+	if m.VoiceConversation.Running() {
+		m.stopVoiceConversation()
+	}
 	notice := "Chat stopped as a precaution"
 	m.clearCurrentThreadAfterFailure(notice)
 	m.Transcript.clearCurrentThreadAfterFailure(m.State, notice)
@@ -7905,7 +8200,24 @@ func (m *Model) applyImageViewItem(item *protocol.ThreadItem) {
 		strings.TrimSpace(item.Text),
 		metadataString(item.Metadata, "path"),
 	)
-	m.applyHistoryCell(historycell.NewViewImageToolCallWithID(item.ID, path, m.sessionCWD))
+	cell := historycell.NewViewImageToolCallWithID(item.ID, path, m.sessionCWD)
+	if m.viewedImageLinksEnabled() {
+		cell = cell.LinkLocalImage()
+	}
+	m.applyHistoryCell(cell)
+}
+
+// viewedImageLinksEnabled mirrors Rust link_viewed_image (#58446): an OSC-8 file
+// link is useful only when this terminal can open the local path, so a remote
+// workspace or an SSH session keeps the viewed-image row as plain text.
+func (m *Model) viewedImageLinksEnabled() bool {
+	if m == nil {
+		return false
+	}
+	if m.remoteAppServer && !m.localDaemonSession {
+		return false
+	}
+	return !m.clipboardEnvironmentValue().SSHSession
 }
 
 // isViewImageThreadItem recognizes the built-in view_image tool call that Rust
@@ -9743,6 +10055,14 @@ func historyMessageFromCell(cell historycell.HistoryCell, width int) codextui.Me
 	if recapCell, ok := cell.(historycell.RecapCell); ok && recapCell.IsRecap() {
 		message.Recap = true
 	}
+	switch notice := cell.(type) {
+	case historycell.DeprecationNoticeCell:
+		message.DeprecationNotice = &codextui.DeprecationNoticeContent{Summary: notice.Summary, Details: notice.Details}
+	case *historycell.DeprecationNoticeCell:
+		if notice != nil {
+			message.DeprecationNotice = &codextui.DeprecationNoticeContent{Summary: notice.Summary, Details: notice.Details}
+		}
+	}
 	if _, ok := cell.(historycell.ActivityDisclosureCell); ok {
 		disclosure := historycell.ActivityDisclosureFor(cell, width)
 		message.ActivityHiddenLines = disclosure.HiddenLines
@@ -10631,7 +10951,9 @@ type voiceMeterSample struct {
 // pushVoiceMeterSample records one intensity pair for the voice strip. Quiet
 // samples scroll into the history like any other frame, so earlier activity
 // stays visible until it ages out (Rust #44928) instead of being cleared by the
-// first silent frame on that channel.
+// first silent frame on that channel. Reduced motion keeps the history empty
+// because the strip cannot render it and a meter-only sample must not repaint
+// the footer (Rust #46835).
 func (m *Model) pushVoiceMeterSample(microphonePeak uint16, speakerPeak uint16) {
 	if m == nil {
 		return
@@ -10641,13 +10963,21 @@ func (m *Model) pushVoiceMeterSample(microphonePeak uint16, speakerPeak uint16) 
 	}
 	microphone := chatwidget.VoiceMeterIntensity(microphonePeak)
 	speaker := chatwidget.VoiceMeterIntensity(speakerPeak)
+	if speaker > 0 {
+		m.speakerActiveUntil = m.currentTime().Add(chatwidget.VoiceSpeakerActivityHold)
+	}
+	// Rust #46835 skips footer updates caused solely by audio-meter changes
+	// while animations are disabled. The Go strip derives its meter row from
+	// this history, so a reduced-motion sample has no rendered effect: keep
+	// the peaks and the speaker hold current and stop mutating render state
+	// on every tick.
+	if !m.animationsEnabled {
+		return
+	}
 	if len(m.audioMeterHistory) >= chatwidget.VoiceMeterHistoryCapacity {
 		m.audioMeterHistory = m.audioMeterHistory[1:]
 	}
 	m.audioMeterHistory = append(m.audioMeterHistory, voiceMeterSample{microphone: microphone, speaker: speaker})
-	if speaker > 0 {
-		m.speakerActiveUntil = m.currentTime().Add(chatwidget.VoiceSpeakerActivityHold)
-	}
 }
 
 // stopVoiceConversation ends a running conversation on the user's request and
@@ -10767,11 +11097,37 @@ func (m *Model) refreshVoiceTranscript() bubbletea.Cmd {
 			continue
 		}
 		m.renderedVoiceTranscripts[record] = true
+		if record.Role == chatwidget.VoiceTranscriptUser {
+			m.noteVoiceUserCaption()
+		}
 		position := len(m.State.Messages)
-		m.applyHistoryCell(historycell.NewSpokenHistoryCell(string(record.Role), record.Text))
+		m.applyHistoryCell(m.voiceTranscriptCell(record.Role, record.Text))
 		m.retainVoiceCaption(record, position)
 	}
 	return m.syncLiveVoiceTranscript()
+}
+
+// voiceTranscriptCell builds the history cell for one real voice caption.
+// Spoken user prompts render with the bold red chevron and assistant captions
+// link workspace artifacts (Rust #43676 realtime_transcript_history_cell).
+func (m *Model) voiceTranscriptCell(role chatwidget.VoiceTranscriptRole, text string) historycell.HistoryCell {
+	if role == chatwidget.VoiceTranscriptUser {
+		return historycell.NewSpokenUserPrompt(text)
+	}
+	return historycell.NewSpokenAssistantCell(text, m.voiceArtifactWorkspace())
+}
+
+// voiceArtifactWorkspace reports the local workspace that spoken artifact
+// links may use. Rust TrustedWorkspaceFile only links files inside the local
+// session workspace, so an SSH session never offers local file links.
+func (m *Model) voiceArtifactWorkspace() string {
+	if m == nil {
+		return ""
+	}
+	if m.clipboardEnvironmentValue().SSHSession {
+		return ""
+	}
+	return strings.TrimSpace(m.sessionCWD)
 }
 
 type retainedVoiceCaption struct {
@@ -10821,9 +11177,17 @@ func (m *Model) restoreRetainedVoiceCaptions(threadID string, messages []codextu
 		if position > len(messages) {
 			position = len(messages)
 		}
+		// Restore the caption through the same spoken cells the live path uses,
+		// so a thread switch keeps the red chevron and artifact links.
+		cell := m.voiceTranscriptCell(caption.record.Role, caption.record.Text)
+		width := max(m.width, 20)
 		messages = append(messages, codextui.Message{})
 		copy(messages[position+1:], messages[position:])
-		messages[position] = codextui.Message{Role: codextui.RoleHistory, Text: text, RawText: text}
+		messages[position] = codextui.Message{
+			Role:    codextui.RoleHistory,
+			Text:    strings.Join(cell.DisplayLines(width), "\n"),
+			RawText: strings.Join(cell.RawLines(), "\n"),
+		}
 		inserted++
 	}
 	return messages
@@ -10831,7 +11195,12 @@ func (m *Model) restoreRetainedVoiceCaptions(threadID string, messages []codextu
 
 func messagesContainVoiceCaption(messages []codextui.Message, text string) bool {
 	for _, message := range messages {
-		if message.Role == codextui.RoleHistory && strings.TrimSpace(message.Text) == text {
+		if message.Role != codextui.RoleHistory {
+			continue
+		}
+		// Spoken captions carry the marker and, for the assistant, artifact
+		// links, so compare the raw transcript and the visible text.
+		if strings.TrimSpace(message.RawText) == text || strings.TrimSpace(utils.StripANSI(message.Text)) == text {
 			return true
 		}
 	}
@@ -10895,6 +11264,12 @@ func (m *Model) transcriptHeightForLayout() int {
 // transcript. A modal replaces the composer, popups, and working indicator;
 // otherwise those sections are reserved together.
 func (m *Model) bottomReservedRows() int {
+	return m.bottomReservedRowsExceptVoice() + m.voiceStripRows(m.width)
+}
+
+// bottomReservedRowsExceptVoice is bottomReservedRows without the rows the
+// composer strip reserves, so the strip's fit check has a terminator.
+func (m *Model) bottomReservedRowsExceptVoice() int {
 	if m == nil {
 		return defaultComposerHeight
 	}
@@ -10929,19 +11304,24 @@ func (m *Model) bottomReservedRows() int {
 	if popupRows == 0 && overlay == "" {
 		rows++ // blank gap row above the composer
 	}
-	rows += m.composerSectionRows() // shaded block: content + two pad rows
-	rows++                          // status line
-	return rows + m.trailingBottomRows()
+	rows += m.composerSectionRowsExceptVoice() // shaded block: content + two pad rows
+	rows++                                     // status line
+	return rows + m.trailingBottomRowsExceptVoice()
 }
 
 // trailingBottomRows counts the optional rows View paints after the composer
 // (or after the surface that replaced it) plus the passive footer hint.
 func (m *Model) trailingBottomRows() int {
+	return m.trailingBottomRowsExceptVoice() + m.voiceStripRows(m.width)
+}
+
+// trailingBottomRowsExceptVoice is trailingBottomRows without the composer
+// strip, which now renders inside the composer block.
+func (m *Model) trailingBottomRowsExceptVoice() int {
 	rows := 0
 	if strings.TrimSpace(m.notice) != "" {
 		rows++
 	}
-	rows += len(m.voiceStripLines(m.width))
 	if sideLabel := strings.TrimSpace(m.sideContextLabel()); sideLabel != "" && sideLabel != strings.TrimSpace(m.notice) {
 		rows++
 	}
@@ -11438,6 +11818,12 @@ func (m *Model) updateTranscriptOverlayKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 		return m.updatePagerOverlayKey(msg)
 	}
 	if msg.Type == bubbletea.KeyEsc {
+		// Rust #47320 (app_backtrack/legacy_input.rs): a conversation locked by
+		// another app closes the transcript overlay instead of starting a
+		// backtrack preview, and the retained draft stays untouched.
+		if m.externalWriterView() {
+			return m.closeTranscriptOverlay()
+		}
 		if m.backtrack.OverlayPreviewActive {
 			m.stepBacktrackAndHighlight(false)
 		} else {
@@ -11666,7 +12052,11 @@ func (m *Model) clipboardEnvironmentValue() codextui.ClipboardEnvironment {
 	keys := []string{"HERDR_ENV", "SSH_TTY", "SSH_CONNECTION", "TMUX", "TMUX_PANE", "STY"}
 	env := make(map[string]string, len(keys))
 	for _, key := range keys {
-		env[key] = os.Getenv(key)
+		// Preserve presence separately from value: Rust's var_os checks
+		// treat an empty TMUX/STY as a detected multiplexer.
+		if value, ok := os.LookupEnv(key); ok {
+			env[key] = value
+		}
 	}
 	return codextui.ClipboardEnvironmentFromMap(env, codextui.IsProbablyWSL())
 }
@@ -11983,13 +12373,14 @@ func (m *Model) applyInputHistoryKey(msg bubbletea.KeyMsg) bool {
 		if !m.inputHistoryActive {
 			m.inputHistoryDraft = m.composerText()
 			m.inputHistoryDraftElements = m.currentComposerTextElements()
+			m.inputHistoryDraftBash = m.composerPrefix == composerPrefixShell
 			m.inputHistoryIndex = len(m.inputHistory)
 			m.inputHistoryActive = true
 		}
 		if m.inputHistoryIndex > 0 {
 			m.inputHistoryIndex--
 		}
-		m.setComposerPrompt(m.inputHistory[m.inputHistoryIndex])
+		m.setComposerPromptWithMode(m.inputHistory[m.inputHistoryIndex], m.inputHistoryBashAt(m.inputHistoryIndex))
 		m.restoreComposerTextElements(m.inputHistory[m.inputHistoryIndex], m.inputHistoryElementsAt(m.inputHistoryIndex))
 		m.composer.SetCursor(len(m.composer.Value()))
 		return true
@@ -11999,10 +12390,10 @@ func (m *Model) applyInputHistoryKey(msg bubbletea.KeyMsg) bool {
 		}
 		if m.inputHistoryIndex < len(m.inputHistory)-1 {
 			m.inputHistoryIndex++
-			m.setComposerPrompt(m.inputHistory[m.inputHistoryIndex])
+			m.setComposerPromptWithMode(m.inputHistory[m.inputHistoryIndex], m.inputHistoryBashAt(m.inputHistoryIndex))
 			m.restoreComposerTextElements(m.inputHistory[m.inputHistoryIndex], m.inputHistoryElementsAt(m.inputHistoryIndex))
 		} else {
-			m.setComposerPrompt(m.inputHistoryDraft)
+			m.setComposerPromptWithMode(m.inputHistoryDraft, m.inputHistoryDraftBash)
 			m.restoreComposerTextElements(m.inputHistoryDraft, m.inputHistoryDraftElements)
 			m.resetInputHistoryNavigation()
 		}
@@ -12042,7 +12433,8 @@ func (m *Model) applyEditQueuedMessageKey(msg bubbletea.KeyMsg, keySpec string) 
 	}
 	last := m.queued[len(m.queued)-1]
 	m.queued = m.queued[:len(m.queued)-1]
-	m.setComposerPrompt(last.Request.Prompt)
+	// Rust #58412: a queued literal bang keeps its literal text when edited.
+	m.setComposerPromptWithMode(last.Request.Prompt, strings.HasPrefix(strings.TrimSpace(last.Request.Prompt), "!") && !last.Request.LiteralInput)
 	m.restoreComposerTextElements(last.Request.Prompt, last.Request.TextElements)
 	m.composer.SetCursor(len(m.composer.Value()))
 	m.attachments = cloneComposerAttachments(last.Request.Attachments)
@@ -12061,6 +12453,7 @@ func (m *Model) resetInputHistoryNavigation() {
 	m.inputHistoryIndex = len(m.inputHistory)
 	m.inputHistoryDraft = ""
 	m.inputHistoryDraftElements = nil
+	m.inputHistoryDraftBash = false
 }
 
 func (m *Model) inputHistoryElementsAt(index int) []ComposerTextElement {
@@ -12068,6 +12461,15 @@ func (m *Model) inputHistoryElementsAt(index int) []ComposerTextElement {
 		return nil
 	}
 	return m.inputHistoryElements[index]
+}
+
+// inputHistoryBashAt reports whether a recalled prompt was submitted from shell
+// mode (Rust #58412 keeps is_bash_mode with the draft).
+func (m *Model) inputHistoryBashAt(index int) bool {
+	if m == nil || index < 0 || index >= len(m.inputHistoryBash) {
+		return false
+	}
+	return m.inputHistoryBash[index]
 }
 
 func (m *Model) appendAssistantDelta(itemID string, delta string) {

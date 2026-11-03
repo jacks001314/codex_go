@@ -20,7 +20,12 @@ func stubClipboardShortcut(t *testing.T, text string, readErr error) {
 	t.Helper()
 	previousText, previousImage := readClipboardTextForPaste, readClipboardImageForPaste
 	readClipboardTextForPaste = func() (string, error) { return text, readErr }
-	readClipboardImageForPaste = func() (string, error) { return "", errors.New("no image on the clipboard") }
+	// The platform clipboard reader reports "no image" with the typed error, so
+	// the Linux dispatch falls through to text exactly like Rust's
+	// PasteImageError::NoImage arm.
+	readClipboardImageForPaste = func() (string, error) {
+		return "", codextui.PasteImageError{Kind: codextui.PasteImageNoImage, Message: "no image on the clipboard"}
+	}
 	t.Cleanup(func() {
 		readClipboardTextForPaste, readClipboardImageForPaste = previousText, previousImage
 	})

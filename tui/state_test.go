@@ -430,3 +430,27 @@ func TestStateRenderStatusCardHidesReasoningSummariesForServerConnectionLikeRust
 		}
 	}
 }
+
+// Rust #46905: /status labels the connection "Server"; the local background
+// daemon is identified by name instead of exposing its socket and version.
+func TestStateRenderStatusCardIdentifiesServerLikeRust(t *testing.T) {
+	local := NewState(nil)
+	local.ServerConnection = &ServerConnectionStatus{LocalDaemon: true, Address: "unix:///tmp/control.sock", Version: "v1.2.3"}
+	card := local.RenderStatusCardWidth(80)
+	if !strings.Contains(card, "Server:") || !strings.Contains(card, "Local background server") {
+		t.Fatalf("local server card missing local label:\n%s", card)
+	}
+	if strings.Contains(card, "/tmp/control.sock") || strings.Contains(card, "v1.2.3") {
+		t.Fatalf("local server card exposed socket or version:\n%s", card)
+	}
+	if strings.Contains(card, "Remote:") {
+		t.Fatalf("legacy Remote label remained:\n%s", card)
+	}
+
+	remote := NewState(nil)
+	remote.ServerConnection = &ServerConnectionStatus{Address: "ws://127.0.0.1:4500/", Version: "v0.9.0"}
+	remoteCard := remote.RenderStatusCardWidth(80)
+	if !strings.Contains(remoteCard, "Server:") || !strings.Contains(remoteCard, "ws://127.0.0.1:4500/ (v0.9.0)") {
+		t.Fatalf("remote server card = %q", remoteCard)
+	}
+}

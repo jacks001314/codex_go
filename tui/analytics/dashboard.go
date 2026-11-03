@@ -3,6 +3,7 @@ package analytics
 import (
 	"strconv"
 	"strings"
+	"time"
 
 	"codex_go/auth"
 	"codex_go/chatgptapi"
@@ -97,7 +98,13 @@ type AnalyticsDashboardOptions struct {
 	ProfileMessage string
 	ProfileReady   bool
 	Plan           *auth.PlanType
-	History        func(section AnalyticsSection, width, height int) []string
+	// Theme supplies the activity accent for the Summary token calendar
+	// (Rust #46897).
+	Theme string
+	// EndDate anchors the Summary token calendar; an unset value would place
+	// every bucket in the future and render an empty grid.
+	EndDate time.Time
+	History func(section AnalyticsSection, width, height int) []string
 }
 
 // AnalyticsDashboardLines renders the bordered overview cards and returns the
@@ -201,7 +208,9 @@ func analyticsDashboardCard(
 			Plan:    opts.Plan,
 			Zoomed:  false,
 			View:    opts.Groups[section],
+			EndDate: opts.EndDate,
 			Width:   innerWidth,
+			Theme:   opts.Theme,
 		})
 	} else if section == AnalyticsSectionChats {
 		if opts.Business {

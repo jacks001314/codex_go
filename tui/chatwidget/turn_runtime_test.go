@@ -239,6 +239,11 @@ func TestTurnRuntimeMisalignmentPolicyViolationStopsChat(t *testing.T) {
 	if !state.AcceptsMisalignmentPolicyOp("interrupt") {
 		t.Fatal("interrupt should remain allowed")
 	}
+	// Rust #43581: the operator can still turn the microphone off while the
+	// chat is stopped for a misalignment violation.
+	if !state.AcceptsMisalignmentPolicyOp("realtime_conversation_stop") {
+		t.Fatal("stopping voice should remain allowed")
+	}
 	if state.AcceptsMisalignmentPolicyOp("fork") {
 		t.Fatal("fork should be rejected on a stopped chat")
 	}

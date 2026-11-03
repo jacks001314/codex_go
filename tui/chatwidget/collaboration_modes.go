@@ -208,6 +208,14 @@ func FilteredCollaborationModePresets(presets []CollaborationModeMask) []Collabo
 	if len(presets) == 0 {
 		presets = BuiltinCollaborationModePresets()
 	}
+	return VisibleCollaborationModePresets(presets)
+}
+
+// VisibleCollaborationModePresets keeps the TUI-visible masks of presets and
+// never substitutes the builtin catalog, mirroring Rust
+// collaboration_modes::filtered_presets. An empty catalog stays empty, so a
+// discovered server response is authoritative even when it lists no modes.
+func VisibleCollaborationModePresets(presets []CollaborationModeMask) []CollaborationModeMask {
 	out := make([]CollaborationModeMask, 0, len(presets))
 	for _, preset := range presets {
 		if preset.Mode == nil || !preset.Mode.IsTUIVisible() {
@@ -246,6 +254,22 @@ func CollaborationMaskForKind(presets []CollaborationModeMask, kind Collaboratio
 
 func DefaultModeCollaborationMask(presets []CollaborationModeMask) (CollaborationModeMask, bool) {
 	return CollaborationMaskForKind(presets, CollaborationModeKindDefault)
+}
+
+// CollaborationMaskForVisibleKind looks a mode up among already-filtered
+// presets: it applies the same kind normalization and visibility gate as
+// CollaborationMaskForKind but never falls back to the builtin catalog.
+func CollaborationMaskForVisibleKind(presets []CollaborationModeMask, kind CollaborationModeKind) (CollaborationModeMask, bool) {
+	kind = NormalizeCollaborationModeKind(string(kind))
+	if !kind.IsTUIVisible() {
+		return CollaborationModeMask{}, false
+	}
+	for _, preset := range VisibleCollaborationModePresets(presets) {
+		if preset.Mode != nil && *preset.Mode == kind {
+			return preset.Clone(), true
+		}
+	}
+	return CollaborationModeMask{}, false
 }
 
 func PlanCollaborationMask(presets []CollaborationModeMask) (CollaborationModeMask, bool) {

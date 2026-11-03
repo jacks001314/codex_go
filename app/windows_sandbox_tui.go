@@ -102,6 +102,14 @@ func interactiveWindowsSandboxPromptFromValues(
 }
 
 func interactiveRemoteWindowsSandboxStartupPrompt(ctx context.Context, root *cli.RootOptions, endpoint *appserverdaemon.RemoteAppServerEndpoint, requirements *chatwidget.PermissionRequirements) *codextea.WindowsSandboxStartupPrompt {
+	// Rust gates this NUX on Windows: tui/src/lib.rs sets
+	// should_prompt_windows_sandbox_nux_at_startup to false under
+	// #[cfg(not(target_os = "windows"))], and projectless.rs only sets
+	// prompt_windows_sandbox under #[cfg(target_os = "windows")]. A local app
+	// server on Linux therefore never offers Windows sandbox setup.
+	if runtime.GOOS != "windows" {
+		return nil
+	}
 	if !interactiveRemoteEndpointIsLocal(endpoint) {
 		return nil
 	}

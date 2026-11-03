@@ -44,9 +44,19 @@ func (m *Model) pasteClipboardShortcut() bubbletea.Cmd {
 	// clipboard read slower than the window cannot let auto-repeat presses
 	// through while the paste is still settling.
 	defer m.refreshImagePasteWindow()
-	if path, err := readClipboardImageForPaste(); err == nil {
+	path, imageErr := readClipboardImageForPaste()
+	if imageErr == nil {
 		m.attachments = append(m.attachments, bottompane.ComposerAttachment{Kind: bottompane.AttachmentImage, Path: path})
 		m.notice = "Attached image " + path
+		return nil
+	}
+	if !imagePasteFallsBackToText(imageErr) {
+		// Rust app/clipboard.rs: only PasteImageError::NoImage falls through to
+		// the text paste; every other failure surfaces as "Failed to paste
+		// image: <error>".
+		m.notice = "Failed to paste image: " + imageErr.Error()
+		m.addErrorHistoryMessage(m.notice)
+		m.refreshTranscript()
 		return nil
 	}
 	text, err := readClipboardTextForPaste()

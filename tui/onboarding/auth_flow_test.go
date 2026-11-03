@@ -27,8 +27,8 @@ func TestAuthFlowRendersRustLoginChoices(t *testing.T) {
 		"Usage included with Plus, Pro, Business, and Enterprise plans",
 		"2. Sign in with Device Code",
 		"Sign in from another device with a one-time code",
-		"3. Use an OpenAI API key",
-		"Pay for what you use",
+		"3. Sign in another way",
+		"Use an OpenAI API key",
 		"Press enter to continue",
 	} {
 		if !strings.Contains(view, want) {
@@ -49,13 +49,15 @@ func TestAuthFlowProviderSetupUsesNeutralHeader(t *testing.T) {
 	for _, want := range []string{
 		"Welcome to Codex, OpenAI's command-line coding agent",
 		"Choose how you want to use Codex.",
-		"3. Use an OpenAI API key",
-		"4. Use Amazon Bedrock",
-		"Connect using your AWS credentials",
+		"3. Sign in another way",
+		"Use an API key or another provider",
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("auth view missing %q:\n%s", want, view)
 		}
+	}
+	if strings.Contains(view, "Use an OpenAI API key") {
+		t.Fatalf("provider setup picker leaked the API key entry onto the main menu:\n%s", view)
 	}
 	if strings.Contains(view, "or connect an API key for usage-based billing") {
 		t.Fatalf("provider setup picker kept the paid-plan header:\n%s", view)
@@ -191,6 +193,7 @@ func TestAuthFlowAPIKeyPersistsAndCompletes(t *testing.T) {
 	})
 
 	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{'3'}})
+	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{'1'}})
 	if model.state != SignInAPIKeyEntry {
 		t.Fatalf("API key state=%s", model.state)
 	}
@@ -214,7 +217,7 @@ func TestAuthFlowAPIKeyPersistsAndCompletes(t *testing.T) {
 
 func TestAuthFlowPolicySkipsDisabledChoices(t *testing.T) {
 	options := AuthOptionsForPolicy(false, true)
-	if len(options) != 2 || options[0].Choice != AuthChoiceChatGPT || !options[0].Disabled || options[1].Choice != AuthChoiceAPIKey {
+	if len(options) != 2 || options[0].Choice != AuthChoiceChatGPT || !options[0].Disabled || options[1].Choice != AuthChoiceOtherMethods {
 		t.Fatalf("policy options=%#v", options)
 	}
 	model := newAuthFlowModel(context.Background(), AuthFlowOptions{
@@ -222,8 +225,8 @@ func TestAuthFlowPolicySkipsDisabledChoices(t *testing.T) {
 		ChatGPTAllowed: false,
 		APIKeyAllowed:  true,
 	})
-	if model.highlighted != AuthChoiceAPIKey {
-		t.Fatalf("highlighted=%s, want API key", model.highlighted)
+	if model.highlighted != AuthChoiceOtherMethods {
+		t.Fatalf("highlighted=%s, want the alternative methods entry", model.highlighted)
 	}
 }
 
@@ -375,6 +378,7 @@ func TestAPIKeyEntryStorageCopyLikeRust(t *testing.T) {
 		APIKeyAllowed:  true,
 	})
 	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{'3'}})
+	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{'1'}})
 	if model.state != SignInAPIKeyEntry {
 		t.Fatalf("API key state=%s", model.state)
 	}

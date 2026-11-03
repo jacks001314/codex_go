@@ -1,10 +1,12 @@
 package tea
 
 import (
+	"strings"
 	"testing"
 
 	codextui "codex_go/tui"
 	chatwidget "codex_go/tui/chatwidget"
+	"codex_go/utils"
 )
 
 // Rust #44749: a completed voice caption recorded before a later typed turn is
@@ -22,8 +24,17 @@ func TestRetainedVoiceCaptionsReplayBeforeLaterTurnsLikeRust(t *testing.T) {
 	restored := model.restoreRetainedVoiceCaptions("thread-a", []codextui.Message{
 		{Role: codextui.RoleUser, Text: "typed after"},
 	})
-	if len(restored) != 2 || restored[0].Text != "spoken prompt" || restored[1].Text != "typed after" {
+	// The restored caption keeps its spoken presentation, so compare the
+	// visible text rather than the styled cell output.
+	visible := ""
+	if len(restored) > 0 {
+		visible = strings.TrimSpace(utils.StripANSI(restored[0].Text))
+	}
+	if len(restored) != 2 || !strings.Contains(visible, "spoken prompt") || restored[1].Text != "typed after" {
 		t.Fatalf("restored messages = %#v, want caption before typed turn", restored)
+	}
+	if strings.Contains(visible, "User (voice)") {
+		t.Fatalf("restored caption used the emoji preview cell: %q", visible)
 	}
 
 	// Repeated switches must not duplicate the retained caption.

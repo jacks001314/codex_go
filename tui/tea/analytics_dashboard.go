@@ -60,6 +60,9 @@ type analyticsDashboard struct {
 	ranges          [3]int
 	endDate         time.Time
 	tokenModel      *string
+	// theme is the active syntax theme, captured each render so the Summary
+	// token calendar uses the terminal palette (Rust #46897).
+	theme string
 }
 
 func newAnalyticsDashboard() *analyticsDashboard {
@@ -936,6 +939,7 @@ func (d *analyticsDashboard) render(m *Model, width, height int) string {
 		bodyHeight = 0
 	}
 	d.viewportHeight = analyticsMax(bodyHeight, 1)
+	d.theme = m.activeTUITheme()
 	body, selectionStart, selectionEnd := d.bodyLines(innerWidth, bodyHeight)
 	if d.followSelection {
 		if selectionStart < d.scrollOffset {
@@ -1072,6 +1076,8 @@ func (d *analyticsDashboard) bodyLines(width, height int) ([]string, int, int) {
 		ProfileMessage:      profileMessage,
 		ProfileReady:        profileReady,
 		Plan:                planPtr,
+		Theme:               d.theme,
+		EndDate:             d.endDate,
 		History:             d.historyLines,
 	})
 	return lines, start, end
@@ -1122,6 +1128,7 @@ func (d *analyticsDashboard) panel(section analytics.AnalyticsSection, width, ch
 		ConsumerAttribution:  d.consumerAttribution(),
 		TokenModel:           d.tokenModel,
 		ModelName:            d.modelName,
+		Theme:                d.theme,
 	})
 }
 

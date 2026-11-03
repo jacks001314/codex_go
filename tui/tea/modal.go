@@ -84,7 +84,11 @@ type ModalRequestMsg struct {
 	// ServerRequestID identifies the app-server request whose answer this view
 	// collects. It is distinct from the local view ID used by request brokers,
 	// so serverRequest/resolved can dismiss the correct modal (Rust #55682).
-	ServerRequestID   string
+	ServerRequestID string
+	// BackendID identifies the backend that sent the request when the host
+	// multiplexes several connections (Rust #58457 pending_requests). Zero
+	// means the displayed backend.
+	BackendID         codextui.BackendID
 	Kind              ModalKind
 	Title             string
 	Body              string
@@ -99,6 +103,10 @@ type ModalRequestMsg struct {
 type ApprovalRequestMsg struct {
 	ID              string
 	ServerRequestID string
+	// BackendID identifies the backend that sent the request when the host
+	// multiplexes several connections (Rust #58457 pending_requests). Zero
+	// means the displayed backend, or the backend recorded for ThreadID.
+	BackendID codextui.BackendID
 	// ThreadID names the thread whose turn asked for approval. A request from a
 	// background thread waits in the queue instead of covering the active
 	// conversation (Rust #58720).
@@ -1090,6 +1098,25 @@ func (m *Model) respondModal(cancelled bool) bubbletea.Cmd {
 		}
 		response.Elicitation = decision
 	}
+	// A fork chosen in the session picker runs off the update loop like every
+	// other fork (Rust spawns the fork and repaints): close the picker, paint
+	// the progress notice, and let forkCurrentSessionMsg finish the switch.
+	if !cancelled && modal.kind == ModalKindPicker && modal.sessionPicker != nil {
+		if selection, ok := modal.sessionPicker.Selection(); ok &&
+			selection.Kind == codextui.SessionSelectionFork && !m.forkInProgress {
+			m.modal = nil
+			m.forkInProgress = true
+			m.notice = forkInProgressNotice
+			m.refreshTranscript()
+			return m.closeSessionPickerTerminalMode(m.beginForkCommand(forkCurrentSessionMsg{
+				selection:        selection,
+				sourceThreadID:   strings.TrimSpace(selection.Target.ThreadID),
+				origin:           forkOriginPicker,
+				responseID:       modal.id,
+				responseOptionID: response.OptionID,
+			}))
+		}
+	}
 	notice := ""
 	if modal.kind == ModalKindPicker && (modal.modelPicker != nil || modal.modelReasoning != nil || modal.planReasoningScope != nil || modal.sessionPicker != nil || modal.sessionAction != nil) {
 		decision, pickerNotice, complete := m.resolveModelPickerModal(modal, response.OptionID, cancelled)
@@ -1663,6 +1690,9 @@ func (m *Model) resolveModelPickerModal(modal *modalState, optionID string, canc
 			m.openSessionActionConfirmation(selection)
 			return nil, "", false
 		default:
+			if selection.Kind == codextui.SessionSelectionResume {
+				return m.applyResumePickerSelection(selection)
+			}
 			decision, notice, complete := m.applySessionSelection(selection)
 			return decision, notice, complete
 		}

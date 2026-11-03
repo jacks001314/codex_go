@@ -6393,17 +6393,25 @@ func TestModelMemoriesEnablePromptPersistsFeatureBeforeNotice(t *testing.T) {
 
 	typeText(t, model, "/memories")
 	model.Update(key(bubbletea.KeyEnter))
-	for _, want := range []string{"Enable memories?", "Memories are currently disabled", "Yes, enable", "Not now"} {
+	for _, want := range []string{"Enable memories?", "Memories are disabled in this TUI session.", "Yes, enable", "Not now"} {
 		if view := model.View(); !strings.Contains(view, want) {
 			t.Fatalf("enable prompt missing %q:\n%s", want, view)
 		}
 	}
 	_, cmd := model.Update(key(bubbletea.KeyEnter))
 	runTeaCmd(t, model, cmd)
-	if len(writes) != 1 || len(writes[0]) != 1 || writes[0][0].KeyPath != "features.memories" || writes[0][0].Value != true {
+	// Rust #43113: the opt-in is saved for new threads and also writes the
+	// legacy `features.memory_tool` key older app servers still read.
+	if len(writes) != 1 || len(writes[0]) != 2 {
 		t.Fatalf("memory enable writes = %#v", writes)
 	}
-	if !strings.Contains(model.View(), "Memories will be enabled in the next session.") {
+	if writes[0][0].KeyPath != "features.memories" || writes[0][0].Value != true {
+		t.Fatalf("memory enable edit = %#v", writes[0][0])
+	}
+	if writes[0][1].KeyPath != "features.memory_tool" || writes[0][1].Value != true {
+		t.Fatalf("legacy memory enable edit = %#v", writes[0][1])
+	}
+	if !strings.Contains(model.View(), "Memories setting saved on the server for new threads. This thread is unchanged.") {
 		t.Fatalf("memory enable notice missing:\n%s", model.View())
 	}
 }

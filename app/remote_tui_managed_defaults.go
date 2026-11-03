@@ -19,9 +19,16 @@ import (
 )
 
 func (c *remoteAppServerTUIClient) remoteManagedThreadStartParams(ctx context.Context, root *cli.RootOptions, state *codextui.State) (appserver.ThreadStartParams, error) {
-	params, err := remoteThreadStartParams(root, state)
+	params, err := remoteThreadStartParamsForMode(c.threadParamsMode, root, state)
 	if err != nil {
 		return params, err
+	}
+	// Rust #57267: a server-owned conversation keeps the server's managed
+	// new-thread defaults. The client never overlays its own launch choices or
+	// tool transport on top of ThreadStartParams::default()
+	// (app_server_session.rs:2001-2006, 2356-2358).
+	if c.threadParamsMode.SettingsOwner() == ThreadSettingsOwnerServer {
+		return params, nil
 	}
 	// Rust #56090/#56516: the first thread of this process sends only explicit
 	// launch choices for permissions, so the app server resolves any saved

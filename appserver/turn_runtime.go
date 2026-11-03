@@ -4770,6 +4770,11 @@ func (r *RuntimeRouter) finishTurnWithErrorAnalytics(threadID string, turnID str
 	completedAt := now.Unix()
 	durationMS := now.UnixMilli() - startedAtMS
 	errorFields := turnAnalyticsErrorFieldsFromError(err)
+	// Rust #43581: a misalignment failure also retires the voice handoffs still
+	// queued for this thread, so a late handoff cannot start another turn.
+	if isMisalignmentPolicyError(err) {
+		r.retireVoiceHandoffsForMisalignment(threadID)
+	}
 	appErr := &TurnError{Message: err.Error(), CodexErrorInfo: errorFields.TurnError, Misalignment: misalignmentDetailsFromError(err)}
 	if analytics != nil {
 		analytics.TurnError = errorFields.TurnError
@@ -4998,6 +5003,16 @@ func turnAnalyticsErrorFieldsFromError(err error) turnAnalyticsErrorFields {
 	default:
 		return turnAnalyticsErrorFields{}
 	}
+}
+
+// isMisalignmentPolicyError reports whether a turn failure is the provider's
+// misalignment policy rejection (Rust #43581 retires voice handoffs on it).
+func isMisalignmentPolicyError(err error) bool {
+	var apiErr *codexapi.APIError
+	if !errors.As(err, &apiErr) || apiErr == nil {
+		return false
+	}
+	return apiErr.Details().Kind == codexapi.ErrorMisalignmentPolicyViolation
 }
 
 // misalignmentDetailsFromError extracts the optional public misalignment

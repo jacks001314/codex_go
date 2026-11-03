@@ -123,4 +123,17 @@ func TestLiveVoiceTranscriptRespectsReducedMotionLikeRust(t *testing.T) {
 	if strings.Contains(model.transcriptContent(), "spoken prompt") {
 		t.Fatalf("streamed user caption leaked into the transcript: %q", model.transcriptContent())
 	}
+	// The hidden caption is still tracked, and the final event commits the
+	// ordinary history cell once (Rust b05b3e180b).
+	live := model.VoiceConversation.Live
+	if live == nil || live.Role != chatwidget.VoiceTranscriptUser || !strings.Contains(live.Text, "spoken prompt") {
+		t.Fatalf("hidden partial transcript was not tracked: %#v", live)
+	}
+	model.handleVoiceNotification(voiceDone(chatwidget.VoiceTranscriptUser, "spoken prompt"))
+	if model.liveVoiceTranscript.cell != nil {
+		t.Fatal("the finalized user caption kept a live board")
+	}
+	if !strings.Contains(model.transcriptContent(), "spoken prompt") {
+		t.Fatalf("finalized user caption missing from the transcript: %q", model.transcriptContent())
+	}
 }

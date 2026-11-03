@@ -3,11 +3,15 @@ package analytics
 import (
 	"strings"
 
-	"github.com/mattn/go-runewidth"
+	"github.com/charmbracelet/x/ansi"
 )
 
+// analyticsDisplayWidth measures the cells the terminal paints. Analytics rows
+// can carry SGR sequences (Rust #46897: the Summary token activity calendar is
+// rendered with the terminal palette), so escape sequences are ignored and
+// wide characters count as two cells.
 func analyticsDisplayWidth(text string) int {
-	return runewidth.StringWidth(text)
+	return ansi.StringWidth(text)
 }
 
 // analyticsColumns places left and right on one row with at least one column of
@@ -43,22 +47,13 @@ func analyticsJoinColumns(left, right []string, columnWidth int) []string {
 }
 
 // analyticsTruncateToWidth keeps the longest prefix that fits in width display
-// columns.
+// columns, preserving SGR sequences (charmbracelet/x/ansi re-emits the active
+// styles after the cut so a truncated styled row does not leak color).
 func analyticsTruncateToWidth(text string, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	var builder strings.Builder
-	used := 0
-	for _, char := range text {
-		charWidth := runewidth.RuneWidth(char)
-		if used+charWidth > width {
-			break
-		}
-		builder.WriteRune(char)
-		used += charWidth
-	}
-	return builder.String()
+	return ansi.Truncate(text, width, "")
 }
 
 // analyticsTruncate shortens text with an ellipsis instead of cutting a value
@@ -70,7 +65,7 @@ func analyticsTruncate(text string, width int) string {
 	if analyticsDisplayWidth(text) <= width {
 		return text
 	}
-	return analyticsTruncateToWidth(text, width-1) + "…"
+	return ansi.Truncate(text, width, "…")
 }
 
 // analyticsWrap wraps one row at word boundaries and hard-splits a word that is
@@ -81,6 +76,12 @@ func analyticsWrap(text string, width int) []string {
 	}
 	if analyticsDisplayWidth(text) <= width {
 		return []string{text}
+	}
+	if strings.ContainsRune(text, 0x1b) {
+		// Styled rows are already laid out for the target width; clipping an
+		// overflow keeps each SGR sequence on the line that opened it instead
+		// of stranding styles on the next wrapped row.
+		return []string{analyticsTruncate(text, width)}
 	}
 	indent := text[:len(text)-len(strings.TrimLeft(text, " "))]
 	var lines []string

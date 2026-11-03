@@ -237,6 +237,46 @@ func RealtimeDelegationInput(text string) (string, bool) {
 	return input, true
 }
 
+// RealtimeDelegationDisplayText renders a delegation prompt for history:
+// Rust realtime_delegation_display_text unescapes the XML entities the
+// transcript wraps around the spoken input.
+func RealtimeDelegationDisplayText(input string) string {
+	input = strings.ReplaceAll(input, "&lt;", "<")
+	input = strings.ReplaceAll(input, "&gt;", ">")
+	return strings.ReplaceAll(input, "&amp;", "&")
+}
+
+// IsPrivateRealtimeAgentItem reports whether an item of a delegated turn is
+// private to the voice handoff. Rust is_private_realtime_agent_item hides
+// reasoning, commentary agent messages, and non-final agent messages tagged
+// [ANALYSIS]/[COMMENTARY] in their opening text.
+func IsPrivateRealtimeAgentItem(kind string, phase string, text string) bool {
+	switch NormalizeItemKind(kind) {
+	case "reasoning":
+		return true
+	case "agentmessage", "assistantmessage":
+		if strings.EqualFold(strings.TrimSpace(phase), "commentary") {
+			return true
+		}
+		if strings.EqualFold(strings.TrimSpace(phase), "final_answer") {
+			return false
+		}
+		trimmed := strings.TrimLeft(text, " \t\r\n")
+		return strings.HasPrefix(trimmed, "[ANALYSIS]") || strings.HasPrefix(trimmed, "[COMMENTARY]")
+	default:
+		return false
+	}
+}
+
+// NormalizeItemKind lower-cases an item type and drops separators, so
+// agent_message / agentMessage / AgentMessage compare equal (Rust matches on
+// ThreadItemPayload variants instead).
+func NormalizeItemKind(kind string) string {
+	kind = strings.ReplaceAll(strings.TrimSpace(kind), "_", "")
+	kind = strings.ReplaceAll(kind, "-", "")
+	return strings.ToLower(kind)
+}
+
 // VoiceSpeakableFinalText reports whether a final answer fits the speakable
 // budget. The host approximates one token per four bytes, matching the shared
 // token estimate the rest of the port uses.
@@ -921,6 +961,29 @@ func (s *VoiceConversationState) InvalidateVoiceInputForTyping() VoiceSpeakerAct
 	return s.suppressVoiceSpeaker()
 }
 
+// AcknowledgeVoiceInterruption records that user speech interrupted the
+// assistant. Rust #43651 (suppress_realtime_speaker plus the interruption
+// acknowledgement) clears the speaker level and its activity hold and shows
+// "heard" briefly, so the strip cannot keep reporting audio that is no longer
+// playing.
+func (s *VoiceConversationState) AcknowledgeVoiceInterruption(now time.Time) VoiceSpeakerAction {
+	if s == nil || !s.Running() {
+		return VoiceSpeakerNone
+	}
+	active := s.SpeakerPeak > 0 || s.SpeakerLevel > 0 || now.Before(s.SpeakerActiveUntil)
+	if active {
+		s.InterruptionAcknowledgedUntil = now.Add(VoiceInterruptionAcknowledgment)
+	}
+	s.SpeakerPeak = 0
+	action := s.suppressActiveVoiceSpeaker(now)
+	if active && action == VoiceSpeakerNone {
+		// The helper's peak alone was the activity, and clearing it just made
+		// the generation check look quiet; suppress explicitly.
+		action = s.suppressVoiceSpeaker()
+	}
+	return action
+}
+
 // suppressVoiceSpeaker records the suppressed generation.
 func (s *VoiceConversationState) suppressVoiceSpeaker() VoiceSpeakerAction {
 	generation := s.InputGeneration
@@ -939,6 +1002,7 @@ func (s *VoiceConversationState) suppressActiveVoiceSpeaker(now time.Time) Voice
 	}
 	active := s.AssistantTranscriptGeneration != nil ||
 		len(s.PendingSpeech) > 0 ||
+		s.SpeakerPeak > 0 ||
 		s.SpeakerLevel > 0 ||
 		now.Before(s.SpeakerActiveUntil) ||
 		s.SpeakerSuppressionGeneration != nil

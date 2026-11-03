@@ -9802,6 +9802,15 @@ func TestRuntimeRouterCodeModeExecEndToEndEmitsOneNestedCommandLifecycleAndOneFi
 	})
 	defer router.Close()
 	router.SetNotificationSink(sink)
+	// On a host without a sandbox the exec-policy requirement asks the
+	// operator before running a restricted command, exactly like Rust. The
+	// test cares about the nested lifecycle, so approve the request and let
+	// the command run.
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		router.requireServerRequests().Resolve(OK(request.ID, &CommandExecutionRequestApprovalResponse{
+			Decision: CommandExecutionApprovalAccept,
+		}))
+	}))
 
 	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()}))
 	if threadStart.Error != nil {

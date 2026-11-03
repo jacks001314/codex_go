@@ -71,6 +71,13 @@ const composerChromeRows = 4
 // included) at two thirds of the screen with an eight-row floor, so the prompt
 // itself gets whatever is left (app/owned_transcript.rs::max_composer_height).
 func (m *Model) composerTargetRows() int {
+	return m.composerTargetRowsFor(m.voiceStripRows(m.width))
+}
+
+// composerTargetRowsFor is composerTargetRows with the voice strip rows
+// supplied by the caller. Splitting it keeps the strip's fit check (which needs
+// the draft height) from recursing into the strip measurement.
+func (m *Model) composerTargetRowsFor(voiceRows int) int {
 	if m == nil || !m.composerBounded() {
 		return 1
 	}
@@ -79,7 +86,7 @@ func (m *Model) composerTargetRows() int {
 	if maxRows > m.height {
 		maxRows = m.height
 	}
-	maxRows -= composerChromeRows
+	maxRows -= composerChromeRows + voiceRows
 	maxRows = max(maxRows, 1)
 	return min(content, maxRows)
 }
@@ -88,7 +95,13 @@ func (m *Model) composerTargetRows() int {
 // renderComposerRegion.
 func (m *Model) composerSectionRows() int {
 	// The shaded block carries one blank row above and below the prompt.
-	return m.composerTargetRows() + 2
+	return m.composerSectionRowsExceptVoice() + m.voiceStripRows(m.width)
+}
+
+// composerSectionRowsExceptVoice is the composer block without the rows the
+// voice strip reserves above the draft.
+func (m *Model) composerSectionRowsExceptVoice() int {
+	return m.composerTargetRowsFor(0) + 2
 }
 
 // resetComposerFollow resumes caret following after editor input. Manual wheel

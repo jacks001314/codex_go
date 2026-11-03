@@ -27,6 +27,28 @@ func newReplayInputReader(pending []byte, input io.Reader) io.Reader {
 	return &replayInputReader{pending: pending, input: input}
 }
 
+// StartupReplayInput wraps input so bytes consumed by the startup probe are
+// replayed first. Exported so launchers and tests can build the same reader the
+// probe produces.
+func StartupReplayInput(pending []byte, input io.Reader) io.Reader {
+	return newReplayInputReader(pending, input)
+}
+
+// UnderlyingInput returns the terminal handle a startup-probe replay wrapper
+// delegates to. Launch-time terminal checks must keep seeing the real handle:
+// Rust decides whether to start the TUI from the raw `stdin.is_terminal()`
+// before it installs the replayed input buffer, so a wrapper must not change
+// that verdict.
+func UnderlyingInput(input io.Reader) io.Reader {
+	for {
+		replayed, ok := input.(*replayInputReader)
+		if !ok {
+			return input
+		}
+		input = replayed.input
+	}
+}
+
 func (r *replayInputReader) Read(p []byte) (int, error) {
 	if len(r.pending) > 0 {
 		n := copy(p, r.pending)

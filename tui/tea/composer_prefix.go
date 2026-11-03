@@ -91,6 +91,33 @@ func (m *Model) setComposerPrompt(text string) {
 	m.refreshComposerPrompt()
 }
 
+// setComposerPromptLiteral replaces the draft with text that stays literal even
+// when it starts with `!` (Rust ShellPrefixHandling::Literal, #58412). Drafts
+// restored from history or a cancelled search keep the mode they were submitted
+// with, so an ordinary message that happens to start with `!` never turns into
+// shell input.
+func (m *Model) setComposerPromptLiteral(text string) {
+	if m == nil {
+		return
+	}
+	m.composerPrefix = composerPrefixNone
+	m.composerElements = nil
+	m.composer.SetValue(text)
+	m.refreshComposerPrompt()
+}
+
+// setComposerPromptWithMode restores canonical draft text with the shell mode it
+// was saved with (Rust #58412 restore_draft: ShellPrefixHandling::Interpret when
+// is_bash_mode, Literal otherwise). A leading `!` that a deletion exposed stays
+// ordinary text.
+func (m *Model) setComposerPromptWithMode(text string, bashMode bool) {
+	if bashMode {
+		m.setComposerPrompt(text)
+		return
+	}
+	m.setComposerPromptLiteral(text)
+}
+
 // resetComposer clears the draft and its prompt marker.
 func (m *Model) resetComposer() {
 	if m == nil {
@@ -98,6 +125,8 @@ func (m *Model) resetComposer() {
 	}
 	m.endHistorySearch()
 	m.composerPrefix = composerPrefixNone
+	// Rust drops pending_pastes with the draft they belong to.
+	m.pendingPastes = nil
 	m.composer.Reset()
 	m.refreshComposerPrompt()
 }
@@ -135,15 +164,27 @@ func splitComposerPrompt(text string) (composerPrefix, string) {
 	}
 }
 
-// syncComposerPrefixFromText absorbs a leading `!` that just landed in
-// the body, preserving the cursor offset (Rust sync_prompt_prefix_from_text).
-func (m *Model) syncComposerPrefixFromText() {
+// composerInsertedLeadingBang reports whether an edit inserted text at the start
+// of the body (Rust TextArea::prefix_insertion_revision, #58412). Only an
+// insertion may start shell mode: deleting `Yes` from `Yes! I agree.` exposes a
+// `!` that must stay part of the message.
+func composerInsertedLeadingBang(before string, after string) bool {
+	if after == "" || after[0] != '!' || len(after) <= len(before) {
+		return false
+	}
+	return strings.HasSuffix(after, before)
+}
+
+// syncComposerPrefixAfterEdit absorbs a leading `!` that an edit just inserted
+// at the start of the body, preserving the cursor offset (Rust
+// sync_prompt_prefix_from_text, gated on prefix_insertion_revision).
+func (m *Model) syncComposerPrefixAfterEdit(before string) {
 	if m == nil || m.composerPrefix != composerPrefixNone {
 		return
 	}
 	body := m.composer.Value()
 	prefix, rest := splitComposerPrompt(body)
-	if prefix == composerPrefixNone {
+	if prefix == composerPrefixNone || !composerInsertedLeadingBang(before, body) {
 		return
 	}
 	cursor := m.composerCursorOffset()

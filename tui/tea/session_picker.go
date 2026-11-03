@@ -9,6 +9,7 @@ import (
 	bubbletea "github.com/charmbracelet/bubbletea"
 
 	codextui "codex_go/tui"
+	agentsoverview "codex_go/tui/agents_overview"
 	historycell "codex_go/tui/history_cell"
 )
 
@@ -136,6 +137,12 @@ func (m *Model) openSessionPicker(action codextui.SessionPickerAction) bubbletea
 		codextui.SessionPickerWorktreeCWDs(m.sessionCWD, m.worktreesEnabled)...,
 	)
 	if picker == nil {
+		// Rust #42419: a picker that cannot open reports its failure inside the
+		// command center instead of silently staying on the task list.
+		if m.agentsOverview != nil {
+			m.addSessionPickerError("Failed to open session picker: no saved sessions are available.")
+			return nil
+		}
 		m.notice = "No sessions available."
 		return nil
 	}
@@ -187,6 +194,89 @@ func (m *Model) openSessionPicker(action codextui.SessionPickerAction) bubbletea
 	m.sessionPickerAltScreen = true
 	cmds = append(cmds, bubbletea.EnterAltScreen)
 	return bubbletea.Batch(cmds...)
+}
+
+// addSessionPickerError mirrors Rust App::add_session_picker_error (#42419):
+// while the command center is open the failure shows a dismissal view titled
+// "Unable to resume session", and the message is also recorded as an error so
+// the reason survives leaving the command center.
+func (m *Model) addSessionPickerError(message string) {
+	if m == nil {
+		return
+	}
+	message = strings.TrimSpace(message)
+	if message == "" {
+		message = "unknown error"
+	}
+	if m.agentsOverview != nil {
+		m.openModal(ModalRequestMsg{
+			ID:    "session-picker-error",
+			Kind:  ModalKindPicker,
+			Title: "Unable to resume session",
+			Body:  message,
+			Options: []ModalOption{{
+				ID:    "return",
+				Label: "Return to command center",
+			}},
+		})
+	}
+	m.addErrorHistoryMessage(message)
+	m.refreshTranscript()
+}
+
+// applyResumePickerSelection mirrors Rust App::apply_resume_picker_selection
+// (#42419). Switching tasks keeps the current composer draft in the per-thread
+// input state, restores the resumed task's draft, and returns to the
+// conversation when the resumed task already has a turn in flight. A cancelled
+// picker never reaches this path, so the command center keeps its state.
+func (m *Model) applyResumePickerSelection(selection codextui.SessionSelection) (*PickerDecision, string, bool) {
+	if m == nil {
+		return nil, "", true
+	}
+	if selection.Kind != codextui.SessionSelectionResume {
+		// Rust refreshes in-memory configuration for the non-resume selections
+		// and ignores Fork; the shared selection path already does that.
+		return m.applySessionSelection(selection)
+	}
+	target := strings.TrimSpace(selection.Target.ThreadID)
+	current := ""
+	if m.State != nil {
+		current = strings.TrimSpace(m.State.ThreadID)
+	}
+	switching := target != "" && target != current
+	if switching {
+		// Rust stores the current widget's input state before the switch so a
+		// later return to this task restores what was being composed.
+		m.captureAgentsOverviewDraft(current)
+	}
+	decision, notice, complete := m.applySessionSelection(selection)
+	if !complete || decision == nil {
+		// Resume failures stay inside the command-center flow: the caller shows
+		// the notice and the task list is untouched.
+		return decision, notice, complete
+	}
+	attached := ""
+	if m.State != nil {
+		attached = strings.TrimSpace(m.State.ThreadID)
+	}
+	if switching && attached != "" && attached == target {
+		if draft, ok := m.agentsOverviewDrafts[target]; ok {
+			m.setComposerPrompt(draft)
+			delete(m.agentsOverviewDrafts, target)
+		} else {
+			// Rust builds a fresh chat widget when the task has no saved input
+			// state, so the composer starts empty instead of carrying the
+			// previous task's draft.
+			m.resetComposer()
+		}
+	}
+	if m.agentsOverview != nil && attached != "" && attached == target && m.isTaskRunning() {
+		// Rust sets ViewCompletion::Accepted and redraws when the resumed task
+		// has a turn in flight; an idle task keeps the command center open.
+		m.agentsOverview.Completion = agentsoverview.CompletionAccepted
+		m.closeAgentsOverview()
+	}
+	return decision, notice, complete
 }
 
 func (m *Model) openSessionActionConfirmation(selection codextui.SessionSelection) {
@@ -264,8 +354,99 @@ func (m *Model) sharedServerCommandCenterAvailable() bool {
 	return m != nil && m.commandCenterAvailable()
 }
 
+// movePendingSteersToFork carries uncommitted steers from a locked thread onto
+// its fork (Rust #47185 restores pending_steers with the rest of the thread
+// input state). switchThreadID parks them under the source thread; a copy there
+// would steer the source conversation if the user navigated back, so the parked
+// entry is dropped.
+func (m *Model) movePendingSteersToFork(sourceThreadID string, forkThreadID string, steers []pendingSteerSubmission) {
+	if m == nil || len(steers) == 0 {
+		return
+	}
+	sourceThreadID = strings.TrimSpace(sourceThreadID)
+	forkThreadID = strings.TrimSpace(firstNonEmpty(forkThreadID, m.currentThreadID()))
+	if sourceThreadID == "" || forkThreadID == "" || sourceThreadID == forkThreadID {
+		return
+	}
+	delete(m.threadPendingSteers, sourceThreadID)
+	if strings.TrimSpace(m.currentThreadID()) != forkThreadID {
+		return
+	}
+	m.pendingSteers = append(m.pendingSteers, steers...)
+	m.pendingSteersThreadID = forkThreadID
+}
+
+// forkInProgressNotice is the progress line every fork surface shows while the
+// thread/fork request is in flight (Rust #47185 paints it before sending).
+const forkInProgressNotice = "Forking conversation\u2026"
+
+// forkOrigin records which surface started a fork. The shared completion path
+// restores that surface (locked view, session picker, command center, checkout
+// picker) once the RPC returns, instead of every caller blocking on it.
+type forkOrigin int
+
+const (
+	// forkOriginLocked is the read-only/external-writer conversation view.
+	forkOriginLocked forkOrigin = iota
+	// forkOriginWorktree is `/fork`, the /worktree checkout picker and the
+	// side-conversation-free "current checkout" choice.
+	forkOriginWorktree
+	// forkOriginPicker is a fork row chosen inside the session picker.
+	forkOriginPicker
+	// forkOriginAgentsOverview is the f action in the command center.
+	forkOriginAgentsOverview
+	// forkOriginUnarchive retries a fork after the archived-session prompt.
+	forkOriginUnarchive
+)
+
+// forkCurrentSessionMsg carries the result of a fork that ran off the update
+// loop (Rust #47185 spawns the fork and repaints "Forking conversation…" while
+// it is pending). Every interactive fork path uses this message so no surface
+// runs thread/fork inside a key handler.
+type forkCurrentSessionMsg struct {
+	selection        codextui.SessionSelection
+	sourceThreadID   string
+	retained         *composerInputState
+	retainedSteers   []pendingSteerSubmission
+	origin           forkOrigin
+	responseID       string
+	responseOptionID string
+	summary          *codextui.SessionSummary
+	err              error
+}
+
+// beginForkCommand runs the captured thread/fork request on its own goroutine
+// and returns the Cmd that delivers the result back to the update loop. The
+// caller must already have painted its progress state and set forkInProgress;
+// the pending fork owns the keyboard (Update drops KeyMsg while it is set), so
+// a repeated shortcut cannot issue a second thread/fork.
+func (m *Model) beginForkCommand(msg forkCurrentSessionMsg) bubbletea.Cmd {
+	if m == nil {
+		return nil
+	}
+	action := m.onSessionAction
+	return func() bubbletea.Msg {
+		// The Cmd runs on its own goroutine and only reads captured values; it
+		// never touches m, so quitting or switching threads mid-flight cannot
+		// race with (or mutate) a torn-down model.
+		if action == nil {
+			return msg
+		}
+		msg.summary, msg.err = action(msg.selection)
+		return msg
+	}
+}
+
+// applyForkCurrentSession forks the active conversation. Both the locked view
+// (f/F) and the interactive `/fork`/worktree paths funnel through here so the
+// RPC always runs off the update loop: the progress line is painted first and
+// the result arrives as forkCurrentSessionMsg.
 func (m *Model) applyForkCurrentSession(name string) bubbletea.Cmd {
 	if m == nil || m.State == nil {
+		return nil
+	}
+	// Rust #47185: a pending fork blocks another fork request.
+	if m.forkInProgress {
 		return nil
 	}
 	// Rust #43340: a pending named-profile selection blocks forking so the new
@@ -275,6 +456,24 @@ func (m *Model) applyForkCurrentSession(name string) bubbletea.Cmd {
 		m.refreshTranscript()
 		return nil
 	}
+	// Rust #47185: forking from the locked conversation keeps its local draft
+	// and never takes the source lease.
+	fromLocked := m.externalWriterView()
+	retained := (*composerInputState)(nil)
+	// Rust #47185 restores the locked thread's whole ThreadInputState, which
+	// carries steer submissions that had not committed yet
+	// (chatwidget/user_messages.rs:157 pending_steers). Go parks those under the
+	// source thread when the fork switches threads, so they are captured here and
+	// moved onto the fork afterwards.
+	retainedSteers := []pendingSteerSubmission(nil)
+	if fromLocked {
+		retained = m.readOnlyDraft
+		if retained == nil {
+			retained = m.captureComposerInputState()
+		}
+		m.readOnlyDraft = nil
+		retainedSteers = append(retainedSteers, m.pendingSteers...)
+	}
 	selection := codextui.SessionSelection{
 		Kind: codextui.SessionSelectionFork,
 		Target: codextui.SessionTarget{
@@ -283,25 +482,136 @@ func (m *Model) applyForkCurrentSession(name string) bubbletea.Cmd {
 		},
 		Name: strings.TrimSpace(name),
 	}
-	decision, notice, _ := m.applySessionSelection(selection)
+	msg := forkCurrentSessionMsg{
+		selection:        selection,
+		sourceThreadID:   selection.Target.ThreadID,
+		retained:         retained,
+		retainedSteers:   retainedSteers,
+		origin:           forkOriginWorktree,
+		responseID:       "fork-current-session",
+		responseOptionID: selection.Target.ThreadID,
+	}
+	if fromLocked {
+		msg.origin = forkOriginLocked
+	}
+	// Render the progress state before the request leaves: the locked view
+	// replaces its notice card, every other surface shows the footer notice, so
+	// the key press is acknowledged within one frame instead of after the RPC.
+	m.forkInProgress = true
+	if !fromLocked {
+		m.notice = forkInProgressNotice
+	}
+	m.refreshTranscript()
+	return m.beginForkCommand(msg)
+}
+
+// applyForkCurrentSessionResult finishes a fork that ran off the update loop.
+// The locked view moves its draft (plus pending steers) onto the fork and stays
+// locked on failure; the other surfaces drop their progress state and report
+// the outcome through the same notice/modal-response path as before.
+func (m *Model) applyForkCurrentSessionResult(msg forkCurrentSessionMsg) bubbletea.Cmd {
+	if m == nil {
+		return nil
+	}
+	m.forkInProgress = false
+	locked := msg.origin == forkOriginLocked
+	if msg.origin == forkOriginAgentsOverview {
+		m.agentsOverviewBusy = false
+	}
+	restoreFailure := func() {
+		if locked {
+			// Rust #47185: a failed fork keeps the locked view and its draft.
+			m.readOnlyDraft = msg.retained
+		}
+		m.refreshTranscript()
+	}
+	if msg.err != nil {
+		text := strings.TrimSpace(msg.err.Error())
+		// Rust session_start.rs: forking an archived conversation prompts too.
+		if _, ok := archivedSessionGuidanceForThread(msg.err, msg.sourceThreadID); ok &&
+			m.openUnarchivePrompt(msg.sourceThreadID, "fork", msg.selection) {
+			if locked {
+				m.readOnlyDraft = msg.retained
+			}
+			m.refreshTranscript()
+			return nil
+		}
+		if msg.origin == forkOriginAgentsOverview {
+			m.agentsOverviewNotice = text
+			restoreFailure()
+			return nil
+		}
+		m.notice = text
+		m.addErrorHistoryMessage(text)
+		restoreFailure()
+		return nil
+	}
+	decision, notice, _ := m.applyForkSummary(msg.selection, msg.summary)
 	if strings.TrimSpace(notice) != "" {
 		m.notice = strings.TrimSpace(notice)
 	}
 	if decision == nil {
-		m.addErrorHistoryMessage(m.notice)
-		m.refreshTranscript()
+		if msg.origin == forkOriginAgentsOverview {
+			m.agentsOverviewNotice = strings.TrimSpace(m.notice)
+		} else {
+			m.addErrorHistoryMessage(m.notice)
+		}
+		restoreFailure()
 		return nil
 	}
-	m.refreshTranscript()
-	if m.onModalResponse != nil {
-		return m.onModalResponse(ModalResponse{
-			ID:       "fork-current-session",
-			Kind:     ModalKindPicker,
-			OptionID: selection.Target.ThreadID,
-			Picker:   decision,
-		})
+	switch msg.origin {
+	case forkOriginLocked:
+		// Rust #47185: the fork is editable, so the locked notice goes away and
+		// the local draft continues in the new conversation.
+		m.setReadOnlyThread(false)
+		m.restoreComposerInputState(msg.retained, true)
+		m.movePendingSteersToFork(msg.sourceThreadID, decision.Value, msg.retainedSteers)
+		m.notice = "Fork created. You can continue here."
+	case forkOriginAgentsOverview:
+		// The command center hands the new session back to the shell.
+		m.closeAgentsOverview()
 	}
-	return nil
+	m.refreshTranscript()
+	if m.onModalResponse == nil || strings.TrimSpace(msg.responseID) == "" {
+		return nil
+	}
+	optionID := msg.responseOptionID
+	if msg.origin == forkOriginUnarchive {
+		optionID = decision.Value
+	}
+	return m.onModalResponse(ModalResponse{
+		ID:       msg.responseID,
+		Kind:     ModalKindPicker,
+		OptionID: optionID,
+		Picker:   decision,
+	})
+}
+
+// applyForkSummary applies a completed thread/fork response: naming, picker
+// bookkeeping, the thread switch and the task-tool capability inheritance
+// shared by the synchronous (unlocked) and asynchronous (locked) fork paths.
+func (m *Model) applyForkSummary(selection codextui.SessionSelection, summary *codextui.SessionSummary) (*PickerDecision, string, bool) {
+	threadID := strings.TrimSpace(selection.Target.ThreadID)
+	decision := &PickerDecision{Kind: string(selection.Kind), Value: threadID}
+	if summary != nil && strings.TrimSpace(summary.ThreadID) != "" {
+		m.invalidateAppsScope()
+		if name := strings.TrimSpace(selection.Name); name != "" {
+			if m.onRenameThread == nil {
+				m.addErrorHistoryMessage("Failed to name the forked session: rename runtime is unavailable")
+			} else if err := m.onRenameThread(summary.ThreadID, name); err != nil {
+				m.addErrorHistoryMessage("Failed to name the forked session: " + strings.TrimSpace(err.Error()))
+			} else {
+				summary.Title = name
+			}
+		}
+		m.upsertSessionItem(*summary)
+		m.deactivateSideConversation()
+		m.switchThreadID(summary.ThreadID)
+		m.inheritTaskToolCapability(threadID, summary.ThreadID)
+		decision.Value = summary.ThreadID
+		return decision, "Forked session " + summary.ThreadID, true
+	}
+	return decision, "Fork selected: " + selection.Target.DisplayLabel(), true
 }
 
 func (m *Model) applySessionSelection(selection codextui.SessionSelection) (*PickerDecision, string, bool) {
@@ -318,6 +628,17 @@ func (m *Model) applySessionSelection(selection codextui.SessionSelection) (*Pic
 	case codextui.SessionSelectionResume:
 		if threadID == "" {
 			return decision, "Resume failed: missing thread id", true
+		}
+		// Rust #58457: a selection owned by another backend is resumed through
+		// that owner; only a same-backend selection takes the local path.
+		owner := m.selectionBackend(selection.Target)
+		if !owner.IsZero() && owner != m.backendID {
+			return m.applyBackendSwitchSelection(selection, owner, decision)
+		}
+		if !owner.IsZero() {
+			// Recorded ownership is authoritative over a stale listing stamp, so
+			// the resume handler accepts the thread it already serves.
+			selection.Target.BackendID = owner
 		}
 		if m.onResumeSession != nil {
 			resolved, needsPrompt, resolveNotice := m.resolveResumeSelectionCWD(selection)
@@ -380,25 +701,7 @@ func (m *Model) applySessionSelection(selection codextui.SessionSelection) (*Pic
 			}
 			return nil, err.Error(), true
 		}
-		if summary != nil && strings.TrimSpace(summary.ThreadID) != "" {
-			m.invalidateAppsScope()
-			if name := strings.TrimSpace(selection.Name); name != "" {
-				if m.onRenameThread == nil {
-					m.addErrorHistoryMessage("Failed to name the forked session: rename runtime is unavailable")
-				} else if err := m.onRenameThread(summary.ThreadID, name); err != nil {
-					m.addErrorHistoryMessage("Failed to name the forked session: " + strings.TrimSpace(err.Error()))
-				} else {
-					summary.Title = name
-				}
-			}
-			m.upsertSessionItem(*summary)
-			m.deactivateSideConversation()
-			m.switchThreadID(summary.ThreadID)
-			m.inheritTaskToolCapability(threadID, summary.ThreadID)
-			decision.Value = summary.ThreadID
-			return decision, "Forked session " + summary.ThreadID, true
-		}
-		return decision, "Fork selected: " + selection.Target.DisplayLabel(), true
+		return m.applyForkSummary(selection, summary)
 	case codextui.SessionSelectionArchive:
 		if _, err := m.runSessionAction(selection); err != nil {
 			return nil, err.Error(), true

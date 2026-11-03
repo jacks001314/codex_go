@@ -9,6 +9,7 @@ import (
 	"time"
 	"unicode"
 
+	historycell "codex_go/tui/history_cell"
 	"github.com/mattn/go-runewidth"
 	"github.com/rivo/uniseg"
 )
@@ -53,6 +54,10 @@ type SplitFlapBoard struct {
 	StartedAt      time.Time
 	PhaseStartedAt time.Time
 	Animated       bool
+	// MarkerSGR, when set, is re-applied to the transcript marker the board
+	// draws, so a spoken user prompt keeps its bold red chevron while tiles
+	// flip (Rust #43676 keeps the span colour during the animation).
+	MarkerSGR string
 }
 
 // NewSplitFlapBoard builds the board for one transcript target. When previous
@@ -195,11 +200,27 @@ func (b *SplitFlapBoard) AnimateLines(lines []string, width int, elapsed time.Du
 			text += " " + string(runway)
 		}
 		if padding := width - runewidth.StringWidth(text); padding > 0 {
-			text += strings.Repeat(" ", padding)
+			text = b.decorateMarker(text) + strings.Repeat(" ", padding)
+		} else {
+			text = b.decorateMarker(text)
 		}
 		out[lineIndex] = text
 	}
 	return out
+}
+
+// decorateMarker re-applies the spoken-prompt marker colour to the chevron the
+// board just drew. Padding is computed before this call, so the escape
+// sequences never affect the row geometry.
+func (b *SplitFlapBoard) decorateMarker(text string) string {
+	if b == nil || b.MarkerSGR == "" {
+		return text
+	}
+	index := strings.Index(text, "\u203a")
+	if index < 0 {
+		return text
+	}
+	return text[:index] + b.MarkerSGR + "\u203a" + historycell.SpokenPromptMarkerEnd + text[index+len("\u203a"):]
 }
 
 func splitFlapFlippableGlyphs(target string) string {

@@ -59,8 +59,12 @@ type NativeClipboardCopyFunc func(string) (*ClipboardLease, error)
 type ClipboardCopyFunc func(string) error
 
 func ClipboardEnvironmentFromMap(env map[string]string, wslSession bool) ClipboardEnvironment {
-	sshSession := envValueSet(env, "SSH_TTY") || envValueSet(env, "SSH_CONNECTION")
-	tmuxSession := envValueSet(env, "TMUX") || envValueSet(env, "TMUX_PANE")
+	// Rust uses var_os(...).is_some(): a present-but-empty multiplexer
+	// variable still identifies the session. This matters for generated
+	// environments (and for STY/TMUX under wrappers) where the value may be
+	// empty even though the session is real.
+	sshSession := envValuePresent(env, "SSH_TTY") || envValuePresent(env, "SSH_CONNECTION")
+	tmuxSession := envValuePresent(env, "TMUX") || envValuePresent(env, "TMUX_PANE")
 	return ClipboardEnvironment{
 		HerdrSession: env["HERDR_ENV"] == "1",
 		SSHSession:   sshSession,
@@ -70,7 +74,7 @@ func ClipboardEnvironmentFromMap(env map[string]string, wslSession bool) Clipboa
 		TmuxSession:  tmuxSession,
 		// Rust #58716: GNU screen advertises itself through STY; tmux keeps
 		// precedence when both are set.
-		ScreenSession: !tmuxSession && envValueSet(env, "STY"),
+		ScreenSession: !tmuxSession && envValuePresent(env, "STY"),
 	}
 }
 
@@ -159,7 +163,9 @@ func WriteTerminalClipboard(text string, tmux bool) error {
 	if tmux {
 		return TmuxClipboardCopy(text)
 	}
-	return writeOSC52ToTerminal(text, OSC52TargetForEnvironment(os.Getenv("TMUX") != "", os.Getenv("STY") != ""))
+	_, tmuxSet := os.LookupEnv("TMUX")
+	_, screenSet := os.LookupEnv("STY")
+	return writeOSC52ToTerminal(text, OSC52TargetForEnvironment(tmuxSet, screenSet))
 }
 
 // WriteTerminalClipboardForEnvironment forwards to the terminal using an
@@ -285,8 +291,9 @@ func (e ClipboardError) Error() string {
 	return string(e)
 }
 
-func envValueSet(env map[string]string, key string) bool {
-	return strings.TrimSpace(env[key]) != ""
+func envValuePresent(env map[string]string, key string) bool {
+	_, ok := env[key]
+	return ok
 }
 
 type EncodedImageFormat int

@@ -178,3 +178,29 @@ func TestModelSelectionSyncSurfacesFailuresAndOverrides(t *testing.T) {
 		t.Fatalf("override warning missing:\n%s", got)
 	}
 }
+
+// Rust #57267 (codex-rs/tui/src/app/model_defaults.rs:130): the cloud notice
+// replaces the generic thread-settings failure text, and a client-owned failure
+// never shows it.
+func TestModelSelectionSyncShowsCloudNoticeLikeRust(t *testing.T) {
+	model := NewModel(codextui.NewState(nil), Options{Width: 100, Height: 40})
+	model.applyModelSelectionSync(ModelSelectionSyncMsg{
+		ThreadSettingsErr:    errors.New("method not found"),
+		ThreadSettingsNotice: CloudModelSelectionUnsupportedMessage,
+	})
+	model.refreshTranscript()
+	got := model.View()
+	if !strings.Contains(got, CloudModelSelectionUnsupportedMessage) {
+		t.Fatalf("cloud notice missing:\n%s", got)
+	}
+	if strings.Contains(got, "Failed to update thread settings") {
+		t.Fatalf("generic failure text leaked next to the cloud notice:\n%s", got)
+	}
+
+	model = NewModel(codextui.NewState(nil), Options{Width: 100, Height: 40})
+	model.applyModelSelectionSync(ModelSelectionSyncMsg{ThreadSettingsErr: errors.New("method not found")})
+	model.refreshTranscript()
+	if got := model.View(); strings.Contains(got, CloudModelSelectionUnsupportedMessage) {
+		t.Fatalf("client-owned failure showed the cloud notice:\n%s", got)
+	}
+}

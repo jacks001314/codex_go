@@ -21,6 +21,15 @@ const (
 	ansiUserMessageMention   = "\x1b[36m"
 )
 
+// SpokenPromptMarkerSGR and SpokenPromptMarkerEnd bracket the bold red chevron
+// a spoken user prompt paints before its text. The live split-flap board
+// re-applies them so the colour survives the animation (Rust #43676 keeps the
+// span colour while tiles flip).
+const (
+	SpokenPromptMarkerSGR = ansiUserMessageSpoken
+	SpokenPromptMarkerEnd = ansiUserMessageSpokenEnd
+)
+
 var userMessageMentionRE = regexp.MustCompile(`[$@][A-Za-z0-9][A-Za-z0-9_-]*`)
 
 // SanitizeUserText mirrors Rust `sanitize_user_text`: it removes CSI escape
@@ -98,6 +107,12 @@ const (
 // IsSpoken reports whether the cell renders a speech transcript.
 func (c UserHistoryCell) IsSpoken() bool {
 	return c.Presentation == UserMessagePresentationSpoken
+}
+
+// SpokenPromptMarker reports that this cell renders a spoken user prompt
+// whose chevron must keep its colour through the split-flap animation.
+func (c UserHistoryCell) SpokenPromptMarker() bool {
+	return c.IsSpoken()
 }
 
 func NewUserPrompt(message string, textElements []TextElement, localImagePaths []string, remoteImageURLs []string) UserHistoryCell {

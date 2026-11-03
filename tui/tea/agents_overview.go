@@ -135,7 +135,13 @@ func (m *Model) applyAgentsCommand() bubbletea.Cmd {
 	}
 	m.agentsOverviewPendingDraft = nil
 	m.agentsOverview = agentsoverview.New(nil, "", false)
+	// Rust #49106: the command center publishes a recent window and offers a
+	// "Show more" row for older history.
+	m.agentsOverview.SetHistoryPaging(true)
 	m.agentsOverview.State.VimEnabled = m.composerIsVimEnabled()
+	// Rust #42428: the command center composes in the shared chat composer, so
+	// the live Vim preference is synced onto the retained composer.
+	m.agentsOverview.SetComposerVimEnabled(m.composerIsVimEnabled())
 	// Rust #50786: a reopened Command Center restores the grouping remembered for
 	// this session (App::agents_overview holds the state across opens).
 	m.agentsOverview.State.Grouping = m.agentsOverviewGrouping
@@ -297,6 +303,8 @@ func (m *Model) applyAgentsOverviewList(message agentsOverviewListMsg) bubbletea
 	}
 	m.agentsOverviewInflight = false
 	if message.err != nil {
+		// Rust #49106: a failed page request keeps the row as a retry target.
+		m.agentsOverview.SetShowMoreFailed(true)
 		m.agentsOverviewNotice = "Failed to load shared agents: " + strings.TrimSpace(message.err.Error())
 		if m.agentsOverviewPending {
 			m.agentsOverviewPending = false
@@ -305,6 +313,8 @@ func (m *Model) applyAgentsOverviewList(message agentsOverviewListMsg) bubbletea
 		return nil
 	}
 	m.agentsOverviewNotice = ""
+	m.agentsOverview.SetShowMoreLoading(false)
+	m.agentsOverview.SetShowMoreFailed(false)
 	if len(m.agentsOverviewRemoved) > 0 {
 		rows := make([]agentsoverview.Row, 0, len(message.rows))
 		for _, row := range message.rows {
@@ -460,6 +470,24 @@ func (m *Model) updateAgentsOverviewKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 			return nil
 		}
 	}
+	// Rust #42428: the shared composer owns keys while it has focus.
+	if m.agentsOverview.Composing() {
+		return m.handleAgentsOverviewComposerKey(msg)
+	}
+	// Rust #42428: a plain character moves focus to the composer and becomes
+	// draft text. Keys already bound to a list or agents action keep their
+	// shortcut so the dashboard stays navigable from the list.
+	if msg.Type == bubbletea.KeyRunes && !msg.Alt && !m.agentsOverview.State.Searching &&
+		!m.agentsOverview.State.Renaming && !m.agentsOverview.State.Help && msg.String() != "?" {
+		if msg.Paste {
+			m.handleAgentsOverviewComposerPaste(string(msg.Runes))
+			return nil
+		}
+		if !m.agentsOverview.ComposerVimEnabled() && !m.agentsOverviewListKeyBound(keySpec) {
+			m.focusAgentsOverviewComposer()
+			return m.handleAgentsOverviewComposerKey(msg)
+		}
+	}
 	switch msg.String() {
 	case "up", "k":
 		m.agentsOverview.MoveSelection(false)
@@ -486,6 +514,8 @@ func (m *Model) updateAgentsOverviewKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 			return m.renameAgentsOverviewCmd(name)
 		case agentsoverview.ActionOpenThread:
 			return m.openAgentsOverviewThread(m.agentsOverview.SelectedThreadID())
+		case agentsoverview.ActionShowMore:
+			return m.showMoreAgentsOverviewCmd()
 		}
 	case "esc":
 		m.agentsOverview.Cancel()
@@ -792,25 +822,19 @@ func (m *Model) forkAgentsOverviewSelection() bubbletea.Cmd {
 		Kind:   codextui.SessionSelectionFork,
 		Target: codextui.SessionTarget{BackendID: m.backendID, ThreadID: threadID},
 	}
-	decision, notice, _ := m.applySessionSelection(selection)
-	if decision == nil {
-		if text := strings.TrimSpace(notice); text != "" {
-			m.agentsOverviewNotice = text
-		}
-		return nil
-	}
-	m.closeAgentsOverview()
-	if text := strings.TrimSpace(notice); text != "" {
-		m.notice = text
-	}
-	if m.onModalResponse == nil {
-		return nil
-	}
-	return m.onModalResponse(ModalResponse{
-		ID:       "fork-agents-overview",
-		Kind:     ModalKindPicker,
-		OptionID: threadID,
-		Picker:   decision,
+	// The fork runs off the update loop: the dashboard paints the progress
+	// notice first, keeps its rows visible, and hands the new session back to
+	// the shell when forkCurrentSessionMsg arrives (Rust repaints while the
+	// fork is pending instead of blocking the key handler).
+	m.forkInProgress = true
+	m.agentsOverviewBusy = true
+	m.agentsOverviewNotice = forkInProgressNotice
+	return m.beginForkCommand(forkCurrentSessionMsg{
+		selection:        selection,
+		sourceThreadID:   threadID,
+		origin:           forkOriginAgentsOverview,
+		responseID:       "fork-agents-overview",
+		responseOptionID: threadID,
 	})
 }
 
@@ -952,6 +976,10 @@ func (m *Model) applyAgentsOverviewNewSession(message agentsOverviewNewSessionMs
 		return nil
 	}
 	m.agentsOverviewBusy = false
+	// Rust #42428: a prompt composed in the command center is sent as the new
+	// session's first turn; a failed start puts it back in the composer.
+	prompt := m.agentsOverviewPendingDispatch
+	m.agentsOverviewPendingDispatch = ""
 	if message.err != nil {
 		text := strings.TrimSpace(message.err.Error())
 		if text == "" {
@@ -959,14 +987,17 @@ func (m *Model) applyAgentsOverviewNewSession(message agentsOverviewNewSessionMs
 		}
 		if notice, ok := m.agentsOverviewShutdownNotice(text); ok {
 			m.agentsOverviewNotice = notice
+			m.restoreAgentsOverviewPrompt(prompt)
 			return nil
 		}
 		m.agentsOverviewNotice = "Failed to start session: " + text
+		m.restoreAgentsOverviewPrompt(prompt)
 		return nil
 	}
 	threadID := strings.TrimSpace(message.response.Entry.ThreadID)
 	if threadID == "" {
 		m.agentsOverviewNotice = "Failed to start session: the server returned no thread id"
+		m.restoreAgentsOverviewPrompt(prompt)
 		return nil
 	}
 	m.setAgentsOverviewBlankSession(threadID, message.response)
@@ -979,11 +1010,20 @@ func (m *Model) applyAgentsOverviewNewSession(message agentsOverviewNewSessionMs
 		m.agentsOverviewAttachments = nil
 	}
 	// Rust attaches a new session with a fresh chat widget, so the composer
-	// starts empty.
-	empty := ""
-	m.agentsOverviewPendingDraft = &empty
+	// starts empty unless a command-center task is being dispatched.
+	if prompt != "" {
+		draft := prompt
+		m.agentsOverviewPendingDraft = &draft
+	} else {
+		empty := ""
+		m.agentsOverviewPendingDraft = &empty
+	}
+	m.agentsOverviewPendingDraftPastes = nil
 	m.closeAgentsOverview()
 	m.applyAgentSwitchResult(AgentSwitchResultMsg{ThreadID: threadID, Response: message.response})
+	if prompt != "" {
+		return bubbletea.Batch(m.refreshStatusControlsCmd(), m.submitComposer())
+	}
 	return m.refreshStatusControlsCmd()
 }
 
@@ -1257,7 +1297,9 @@ func (m *Model) openAgentsOverviewThread(threadID string) bubbletea.Cmd {
 	if saved, ok := m.agentsOverviewDrafts[threadID]; ok {
 		draft := saved
 		m.agentsOverviewPendingDraft = &draft
+		m.agentsOverviewPendingDraftPastes = append([]composerPendingPaste(nil), m.agentsOverviewDraftPastes[threadID]...)
 		delete(m.agentsOverviewDrafts, threadID)
+		delete(m.agentsOverviewDraftPastes, threadID)
 	} else {
 		// Rust builds a fresh chat widget when attaching to a thread without
 		// a preserved input state, so the composer starts empty instead of
@@ -1291,11 +1333,20 @@ func (m *Model) captureAgentsOverviewDraft(threadID string) {
 		m.agentsOverviewDrafts = map[string]string{}
 	}
 	draft := m.composerText()
-	if strings.TrimSpace(draft) == "" {
+	if strings.TrimSpace(draft) == "" && len(m.pendingPastes) == 0 {
 		delete(m.agentsOverviewDrafts, threadID)
+		delete(m.agentsOverviewDraftPastes, threadID)
 		return
 	}
 	m.agentsOverviewDrafts[threadID] = draft
+	if len(m.pendingPastes) == 0 {
+		delete(m.agentsOverviewDraftPastes, threadID)
+		return
+	}
+	if m.agentsOverviewDraftPastes == nil {
+		m.agentsOverviewDraftPastes = map[string][]composerPendingPaste{}
+	}
+	m.agentsOverviewDraftPastes[threadID] = append([]composerPendingPaste(nil), m.pendingPastes...)
 }
 
 // restorePendingAgentsOverviewDraft applies the saved draft for the thread
@@ -1308,6 +1359,8 @@ func (m *Model) restorePendingAgentsOverviewDraft() {
 	draft := *m.agentsOverviewPendingDraft
 	m.agentsOverviewPendingDraft = nil
 	m.setComposerPrompt(draft)
+	m.restorePendingPastes(m.agentsOverviewPendingDraftPastes)
+	m.agentsOverviewPendingDraftPastes = nil
 }
 
 // discardPendingAgentsOverviewDraft drops a pending draft after a failed
@@ -1392,18 +1445,7 @@ func (m *Model) renderAgentsOverview() string {
 // agentsOverviewFilterKeyAvailable reports whether key is free to drive the
 // status-tab cycle (Rust #46839 center_shortcut_keys precedence).
 func (m *Model) agentsOverviewFilterKeyAvailable(key string) bool {
-	if m == nil || key == "" {
-		return false
-	}
-	for _, action := range codextui.KeymapActions(codextui.KeymapActionFilter{}) {
-		if action.Context != "list" && action.Context != "agents" {
-			continue
-		}
-		if codextui.KeymapActionHasBinding(m.keymapConfig, action.Context, action.Action, key) {
-			return false
-		}
-	}
-	return true
+	return !m.agentsOverviewListKeyBound(key)
 }
 
 func (m *Model) agentsOverviewFilterHint() string {

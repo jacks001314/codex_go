@@ -140,6 +140,60 @@ func interactiveStartupConfigWarningsWithNFS(codexHome string, cwd string, theme
 	return warnings
 }
 
+// interactiveStartupDeprecationMessages resolves the deprecated configuration
+// features the local session uses and yields one TUI deprecation-notice event
+// per usage (Rust #47065: core SessionConfiguration emits
+// EventMsg::DeprecationNotice for config.features.legacy_feature_usages(), the
+// app-server relays it as a deprecationNotice notification, and the TUI inserts
+// it through the deduplicating history path).
+func interactiveStartupDeprecationMessages(root *cli.RootOptions, codexHome string, cwd string) []bubbletea.Msg {
+	loaded, err := config.LoadEffectiveWithOptions(codexHome, interactiveKeymapLoadOptions(root))
+	if err != nil || loaded == nil {
+		return nil
+	}
+	usages := loaded.LegacyFeatureUsages()
+	messages := make([]bubbletea.Msg, 0, len(usages))
+	for _, usage := range usages {
+		notice := features.NoticeForLegacyFeatureUsage(usage)
+		messages = append(messages, codextea.ThreadEventMsg{Event: protocol.DeprecationNotice(notice.Summary, notice.Details)})
+	}
+	return messages
+}
+
+// interactiveStartupMessages prepends the startup deprecation notices to the
+// MCP startup stream so the TUI consumes both through the same message channel
+// as the server-delivered events.
+func interactiveStartupMessages(ctx context.Context, stream <-chan bubbletea.Msg, prefix []bubbletea.Msg) <-chan bubbletea.Msg {
+	if len(prefix) == 0 {
+		return stream
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	messages := make(chan bubbletea.Msg, len(prefix)+2)
+	go func() {
+		defer close(messages)
+		for _, message := range prefix {
+			select {
+			case messages <- message:
+			case <-ctx.Done():
+				return
+			}
+		}
+		if stream == nil {
+			return
+		}
+		for message := range stream {
+			select {
+			case messages <- message:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return messages
+}
+
 func interactiveWorktreeSettings(root *cli.RootOptions) (worktree.WorktreeSettings, bool) {
 	loaded, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), interactiveKeymapLoadOptions(root))
 	if err != nil {
@@ -251,6 +305,40 @@ func createManagedWorktreeSession(store *session.Store, cwd string, name string)
 	return record, nil
 }
 
+// interactiveAppServerDisplayAddress renders the /status Server row address
+// (Rust #46905). Unix sockets keep the unix:// scheme; WebSocket URLs lose
+// credentials, query parameters, and fragments before display.
+func interactiveAppServerDisplayAddress(endpoint *appserverdaemon.RemoteAppServerEndpoint) string {
+	if endpoint == nil {
+		return ""
+	}
+	switch endpoint.Kind {
+	case appserverdaemon.RemoteEndpointUnixSocket:
+		if path := strings.TrimSpace(endpoint.SocketPath); path != "" {
+			return "unix://" + path
+		}
+	case appserverdaemon.RemoteEndpointWebSocket:
+		if address, ok := tuistatus.SanitizedWebSocketDisplayAddress(endpoint.WebSocketURL); ok {
+			return address
+		}
+		return strings.TrimSpace(endpoint.WebSocketURL)
+	}
+	return strings.TrimSpace(endpoint.String())
+}
+
+// interactiveAppServerDisplayVersion formats the server version exactly as the
+// /status card expects.
+func interactiveAppServerDisplayVersion(version string) string {
+	version = strings.TrimSpace(version)
+	if version == "" {
+		return "unknown"
+	}
+	if strings.HasPrefix(version, "v") {
+		return version
+	}
+	return "v" + version
+}
+
 func interactiveWorkingDirectoryChangeHandler(root *cli.RootOptions) codextea.WorkingDirectoryChangeFunc {
 	return func(threadID string, cwd string) (*codextui.SessionSummary, error) {
 		store := newSessionStore()
@@ -319,6 +407,14 @@ type interactiveElicitationBroker struct {
 	next    int
 	closed  bool
 	pending map[string]*pendingInteractiveElicitation
+	// userVerification is the #43708 attempt ledger for published
+	// user-verification elicitations. It keeps the approved parameters apart
+	// from the view and rejects duplicate or stale attempts.
+	userVerification *UserVerificationRequests
+	// userVerificationProvider signs an accepted challenge. A nil provider (a
+	// build without a native backend) keeps reporting providerUnavailable
+	// without publishing a prompt that could never be answered.
+	userVerificationProvider interactiveUserVerificationProvider
 }
 
 // pendingInteractiveElicitation is one published, unanswered MCP elicitation.
@@ -370,7 +466,31 @@ func newInteractiveApprovalBroker() *interactiveApprovalBroker {
 }
 
 func newInteractiveElicitationBroker() *interactiveElicitationBroker {
-	return &interactiveElicitationBroker{pending: map[string]*pendingInteractiveElicitation{}}
+	return &interactiveElicitationBroker{
+		pending:          map[string]*pendingInteractiveElicitation{},
+		userVerification: &UserVerificationRequests{},
+	}
+}
+
+// setUserVerificationProvider installs the local signer. The embedded TUI wires
+// the in-process app-server provider; tests install a stub.
+func (b *interactiveElicitationBroker) setUserVerificationProvider(provider interactiveUserVerificationProvider) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	b.userVerificationProvider = provider
+	b.mu.Unlock()
+}
+
+func (b *interactiveElicitationBroker) userVerificationAvailable() bool {
+	if b == nil {
+		return false
+	}
+	b.mu.Lock()
+	provider := b.userVerificationProvider
+	b.mu.Unlock()
+	return provider != nil && provider.Available()
 }
 
 func newInteractiveUserInputBroker() *interactiveUserInputBroker {
@@ -615,6 +735,16 @@ func (b *interactiveApprovalBroker) forgetRequest(id string) {
 	delete(b.pending, id)
 }
 
+// pendingCount reports the approvals still waiting for an answer.
+func (b *interactiveApprovalBroker) pendingCount() int {
+	if b == nil {
+		return 0
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.pending)
+}
+
 func (b *interactiveApprovalBroker) sessionApproved(request *tool.ShellRequest) bool {
 	if b == nil || request == nil {
 		return false
@@ -699,7 +829,10 @@ func (b *interactiveElicitationBroker) mcpElicitationFunc(send func(bubbletea.Ms
 		if b == nil || request == nil {
 			return &mcp.MCPElicitationResponse{Action: mcp.MCPElicitationActionCancel}, nil
 		}
-		if mcp.IsUserVerificationElicitation(request) {
+		// Rust #43708: a local build without a native backend still reports
+		// providerUnavailable, but a build that can sign publishes the prompt
+		// and resolves it through the same attempt ledger as the remote TUI.
+		if mcp.IsUserVerificationElicitation(request) && !b.userVerificationAvailable() {
 			return &mcp.MCPElicitationResponse{
 				Action: mcp.MCPElicitationActionCancel,
 				Meta:   mcp.UserVerificationReasonMeta(mcp.UserVerificationReasonProviderUnavailable),
@@ -732,21 +865,92 @@ func (b *interactiveElicitationBroker) mcpElicitationFunc(send func(bubbletea.Ms
 		if !b.markPublished(id, entry) {
 			return nil, ErrInteractiveElicitationAbandoned
 		}
+		userVerification := mcp.IsUserVerificationElicitation(request)
+		if userVerification {
+			// Rust #43708: keep the approved parameters apart from the view so
+			// the resolution path never signs a redrawn prompt.
+			b.userVerification.NoteRequest(serverName, requestID, UserVerificationParams{
+				Title:       strings.TrimSpace(request.Title),
+				Description: strings.TrimSpace(request.Description),
+				Challenge:   strings.TrimSpace(request.Challenge),
+			})
+		}
 		if ctx == nil {
 			ctx = context.Background()
 		}
 		select {
 		case response := <-responses:
-			return b.elicitationResponse(response, mcpElicitationToolApproval(request.Meta), mcp.IsUserVerificationElicitation(request)), nil
+			if userVerification {
+				if !response.Cancelled && response.Elicitation != nil &&
+					mcpElicitationAction(response.Elicitation.Action) == mcp.MCPElicitationActionAccept {
+					return b.userVerificationAccept(ctx, request, serverName, requestID), nil
+				}
+				b.userVerification.Remove(serverName, requestID)
+			}
+			return b.elicitationResponse(response, mcpElicitationToolApproval(request.Meta), userVerification), nil
 		case <-entry.abandoned:
+			if userVerification {
+				b.userVerification.Remove(serverName, requestID)
+			}
 			return nil, ErrInteractiveElicitationAbandoned
 		case <-ctx.Done():
 			// The waiter is dropped: signal the abandonment so the TUI drops a
 			// prompt that can no longer be answered, then report the
 			// cancellation to the caller (Rust #51611).
 			b.abandon(id)
+			if userVerification {
+				b.userVerification.Remove(serverName, requestID)
+			}
 			return nil, ctx.Err()
 		}
+	}
+}
+
+// userVerificationAccept runs the one verification attempt a request may have
+// (Rust `UserVerificationRequests::begin` + the remote TUI's proof path). A
+// duplicate accept never signs twice, and a proof that finishes after the
+// request was resolved or dropped is discarded.
+func (b *interactiveElicitationBroker) userVerificationAccept(ctx context.Context, request *mcp.MCPElicitationRequest, serverName, requestID string) *mcp.MCPElicitationResponse {
+	attempt, started := b.userVerification.Begin(serverName, requestID)
+	if !started {
+		return &mcp.MCPElicitationResponse{
+			Action: mcp.MCPElicitationActionCancel,
+			Meta:   mcp.UserVerificationReasonMeta(mcp.UserVerificationReasonInterrupted),
+		}
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	proof, err := b.userVerificationProvider.Verify(ctx, request)
+	if err != nil {
+		b.userVerification.Remove(serverName, requestID)
+		reason := mcp.UserVerificationReasonServiceError
+		switch {
+		case errors.Is(err, errUserVerificationProviderUnavailable):
+			reason = mcp.UserVerificationReasonProviderUnavailable
+		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+			reason = mcp.UserVerificationReasonInterrupted
+		}
+		return &mcp.MCPElicitationResponse{
+			Action: mcp.MCPElicitationActionCancel,
+			Meta:   mcp.UserVerificationReasonMeta(reason),
+		}
+	}
+	if !b.userVerification.IsPending(serverName, requestID, attempt.ID) {
+		// The prompt was resolved or dropped while the verifier ran, so its
+		// proof is stale (Rust #43708).
+		return &mcp.MCPElicitationResponse{
+			Action: mcp.MCPElicitationActionCancel,
+			Meta:   mcp.UserVerificationReasonMeta(mcp.UserVerificationReasonInterrupted),
+		}
+	}
+	b.userVerification.Remove(serverName, requestID)
+	return &mcp.MCPElicitationResponse{
+		Action: mcp.MCPElicitationActionAccept,
+		Content: map[string]any{
+			"credentialId": proof.CredentialID,
+			"signature":    proof.Signature,
+		},
 	}
 }
 
@@ -868,6 +1072,9 @@ func (b *interactiveElicitationBroker) close() {
 	for id, entry := range released {
 		b.release(id, entry)
 	}
+	// A dropped router must not let an in-flight verification answer a prompt
+	// the TUI can no longer show (Rust #43708: Drop for PendingVerification).
+	b.userVerification.Clear()
 }
 
 // elicitationResponse converts a TUI modal answer into the MCP elicitation
@@ -1261,6 +1468,12 @@ func shouldRunInteractiveTUI(stdin io.Reader, stdout io.Writer) bool {
 }
 
 func isRealTerminal(value any) bool {
+	// Rust checks stdin.is_terminal() before it installs the replayed startup
+	// buffer, so a probe wrapper must not turn a real terminal into "not a
+	// terminal" here (it would silently drop the TUI or reject --remote).
+	if reader, ok := value.(io.Reader); ok {
+		value = codextea.UnderlyingInput(reader)
+	}
 	file, ok := value.(*os.File)
 	if !ok {
 		return false
@@ -1351,6 +1564,10 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		startupCtx, cancelMCPStartup = context.WithCancel(startupCtx)
 		initialMessages = interactiveMCPStartupMessages(startupCtx, mcpService, runner, mcpExpectedServers)
 	}
+	// Rust #47065: the local session resolves deprecated configuration features
+	// during startup, so the embedded TUI delivers the same deprecation notices
+	// the app-server would notify the remote client about.
+	initialMessages = interactiveStartupMessages(ctx, initialMessages, interactiveStartupDeprecationMessages(root, auth.DefaultCodexHome(), strings.TrimSpace(state.CWD)))
 	approvalBroker := newInteractiveApprovalBroker()
 	// Rust persists "Yes, and don't ask again for commands that start with ..."
 	// into $CODEX_HOME/rules/default.rules so the prefix survives the session.
@@ -1362,6 +1579,10 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		return execpolicy.AppendAllowPrefixRule(execpolicy.DefaultPolicyPath(codexHome), prefix)
 	}
 	elicitationBroker := newInteractiveElicitationBroker()
+	// Rust #43708: the embedded TUI signs user-verification challenges through
+	// its in-process app-server, under the same attempt ledger the remote client
+	// uses. Builds without a native provider keep reporting providerUnavailable.
+	elicitationBroker.setUserVerificationProvider(interactiveLocalUserVerificationProvider(auth.DefaultCodexHome()))
 	// Rust #51611 closes the elicitation router during MCP runtime shutdown:
 	// pending prompts are abandoned so their waiters never hang, and later
 	// requests are rejected.
@@ -1428,7 +1649,11 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		WorktreeSettings:           worktreeSettings,
 		OnWorktreeOwnerLookup:      interactiveWorktreeOwnerLookup,
 		OnStartManagedWorktree:     interactiveStartManagedWorktreeHandler(worktreeSettings),
-		SessionPickerItems:         interactiveSessionPickerItems(root),
+		// Every session selection is stamped with the backend this process
+		// talks to; the model needs the same identity or the first `/fork` of a
+		// fresh session is rejected as belonging to another backend (#54681).
+		BackendID:          codextui.ProcessBackendID(),
+		SessionPickerItems: interactiveSessionPickerItems(root),
 		OnListSessionPickerItems: func() ([]codextui.SessionSummary, string, error) {
 			return interactiveSessionPickerItems(root), "", nil
 		},
@@ -1445,8 +1670,10 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		WindowsSandboxLevel:         interactiveWindowsSandboxLevelForTUI(root),
 		OnSessionAction:             interactiveSessionActionHandler(root),
 		OnListPermissionProfiles:    interactiveLocalListPermissionProfiles(root),
+		OnListCollaborationModes:    interactiveLocalListCollaborationModes(),
 		OnWorkingDirectoryChange:    interactiveWorkingDirectoryChangeHandler(root),
 		OnResumeSession:             interactiveResumeSessionHandler(root),
+		OnSwitchBackendSession:      interactiveBackendSwitchHandler(interactiveResumeSessionHandler(root), codextui.ProcessBackendID()),
 		OnContinueSafetyRecourse:    interactiveContinueSafetyRecourse(root),
 		OnPromptEdit:                interactivePromptEditHandler(root),
 		OnExportTranscript:          interactiveTranscriptExportHandler(interactiveShowRawAgentReasoning(root)),

@@ -100,6 +100,17 @@ func NewTokenActivityErrorState() TokenActivityState {
 }
 
 func TokenActivityLines(view TokenActivityView, state TokenActivityState, width int) []string {
+	return tokenActivityLines(view, state, width, TokenActivityPalette{})
+}
+
+// TokenActivityLinesPalette renders the token activity chart with a terminal
+// palette, so the chart honors the effective terminal color level (Rust #46897).
+// The zero palette keeps the monochrome glyph-only rendering.
+func TokenActivityLinesPalette(view TokenActivityView, state TokenActivityState, width int, palette TokenActivityPalette) []string {
+	return tokenActivityLines(view, state, width, palette)
+}
+
+func tokenActivityLines(view TokenActivityView, state TokenActivityState, width int, palette TokenActivityPalette) []string {
 	switch state.Kind {
 	case TokenActivityLoaded:
 		if state.Response == nil {
@@ -112,7 +123,7 @@ func TokenActivityLines(view TokenActivityView, state TokenActivityState, width 
 			lines = append(lines, "   Token activity history unavailable")
 			return lines
 		}
-		lines = append(lines, TokenActivityChartLines(view, *state.Response.DailyUsageBuckets, state.Today, width)...)
+		lines = append(lines, tokenActivityPaletteChartLines(view, *state.Response.DailyUsageBuckets, state.Today, width, palette)...)
 		return lines
 	case TokenActivityError:
 		return tokenActivityUnavailableLines()
@@ -278,6 +289,12 @@ func TokenActivityChartLines(view TokenActivityView, buckets []TokenActivityDail
 	return append(tokenActivityChartBody(view, buckets, today, width), tokenActivityViewFooter(view))
 }
 
+// tokenActivityPaletteChartLines renders the chart body and footer with a
+// palette (Rust #46897 activity_chart chart_lines).
+func tokenActivityPaletteChartLines(view TokenActivityView, buckets []TokenActivityDailyBucket, today time.Time, width int, palette TokenActivityPalette) []string {
+	return append(tokenActivityChartBodyWithPalette(view, buckets, today, width, palette), tokenActivityViewFooter(view))
+}
+
 // TokenActivityCalendarLines is the calendar/chart body without the view
 // switching footer, for hosts that render their own controls
 // (Rust analytics/activity_chart.rs chart_lines, #45769).
@@ -285,7 +302,19 @@ func TokenActivityCalendarLines(view TokenActivityView, buckets []TokenActivityD
 	return tokenActivityChartBody(view, buckets, today, width)
 }
 
+// TokenActivityCalendarLinesPalette renders the calendar with the terminal
+// palette, so the analytics dashboard honors the effective color level like the
+// /usage chart (Rust #46897 analytics/activity_chart.rs TokenActivityPalette::
+// current).
+func TokenActivityCalendarLinesPalette(view TokenActivityView, buckets []TokenActivityDailyBucket, today time.Time, width int, palette TokenActivityPalette) []string {
+	return tokenActivityChartBodyWithPalette(view, buckets, today, width, palette)
+}
+
 func tokenActivityChartBody(view TokenActivityView, buckets []TokenActivityDailyBucket, today time.Time, width int) []string {
+	return tokenActivityChartBodyWithPalette(view, buckets, today, width, TokenActivityPalette{})
+}
+
+func tokenActivityChartBodyWithPalette(view TokenActivityView, buckets []TokenActivityDailyBucket, today time.Time, width int, palette TokenActivityPalette) []string {
 	values := TokenActivityDailyValues(buckets, today)
 	shownColumns := shownTokenActivityColumns(width)
 	if shownColumns == 0 {
@@ -306,13 +335,17 @@ func tokenActivityChartBody(view TokenActivityView, buckets []TokenActivityDaily
 				builder.WriteByte(' ')
 				continue
 			}
-			builder.WriteString(tokenActivityGlyph(view, levels[index]))
+			style := palette.StyleForLevel(levels[index])
+			if view != TokenActivityDaily {
+				style = palette.StyleForBarLevel(levels[index])
+			}
+			writeTokenActivityCell(&builder, palette.Glyph(view, levels[index]), style)
 		}
 		lines = append(lines, builder.String())
 	}
 	lines = append(lines, "")
 	if view == TokenActivityDaily {
-		lines = append(lines, tokenActivityLegendLine())
+		lines = append(lines, tokenActivityLegendLinePalette(palette))
 	} else {
 		lines = append(lines, tokenActivityBarCaption(view, values))
 	}
@@ -502,11 +535,32 @@ func tokenActivityGlyph(view TokenActivityView, level int) string {
 }
 
 func tokenActivityLegendLine() string {
-	parts := []string{"   Less"}
+	return tokenActivityLegendLinePalette(TokenActivityPalette{})
+}
+
+// tokenActivityLegendLinePalette renders the "Less ... More" legend with the
+// palette glyphs and colors.
+func tokenActivityLegendLinePalette(palette TokenActivityPalette) string {
+	var builder strings.Builder
+	builder.WriteString("   Less")
 	for level := 0; level <= 4; level++ {
-		parts = append(parts, tokenActivityGlyph(TokenActivityDaily, level))
+		builder.WriteByte(' ')
+		writeTokenActivityCell(&builder, palette.Glyph(TokenActivityDaily, level), palette.StyleForLevel(level))
 	}
-	return strings.Join(parts, " ") + " More"
+	builder.WriteString(" More")
+	return builder.String()
+}
+
+// writeTokenActivityCell writes one glyph, wrapping it in the palette's color
+// when the style provides one. Blank bar cells stay unstyled.
+func writeTokenActivityCell(builder *strings.Builder, glyph string, style string) {
+	if style == "" || glyph == " " {
+		builder.WriteString(glyph)
+		return
+	}
+	builder.WriteString(style)
+	builder.WriteString(glyph)
+	builder.WriteString("\x1b[0m")
 }
 
 func tokenActivityBarCaption(view TokenActivityView, values []int64) string {

@@ -79,7 +79,19 @@ func (v *View) renderLines(termWidth, termHeight int, styled bool) []string {
 	// metadata editor (search or rename) above the task list; browsing shows
 	// the search hint in the same row (Rust #46838).
 	label, input, placeholder := v.Prompt()
-	if label != "" || input != "" || placeholder != "" {
+	if v.Composing() {
+		// Rust #42428: the shared composer owns the input row while it has
+		// focus; the extra wrapped lines shrink the task list instead of
+		// pushing the footer off screen.
+		composerLines := v.composerRenderLines(bodyWidth, styled)
+		lines = append(lines, composerLines...)
+		if extra := len(composerLines) - 1; extra > 0 {
+			bodyHeight -= extra
+			if bodyHeight < 3 {
+				bodyHeight = 3
+			}
+		}
+	} else if label != "" || input != "" || placeholder != "" {
 		if v.State.Renaming && input != "" {
 			if available := bodyWidth - runewidth.StringWidth(label); available > 0 {
 				input = v.singleLineViewport(available)
@@ -531,16 +543,25 @@ func (v *View) renderRows(height, listWidth int, styled bool) []string {
 	}
 	grouping := v.State.Grouping
 	selPos := 0
-	for i, index := range visible {
-		if index == v.Selected {
-			selPos = i
-			break
+	if v.hasMore && v.Selected == ShowMoreIndex {
+		// Rust #49106: the "Show more" row sits after the published list.
+		selPos = len(visible)
+	} else {
+		for i, index := range visible {
+			if index == v.Selected {
+				selPos = i
+				break
+			}
 		}
 	}
 
 	// Walk back from the selection while the accumulated height fits.
 	first := selPos
 	accumulated := 1
+	if selPos >= len(visible) {
+		first = len(visible) - 1
+		accumulated = 2 // gap + "Show more" row
+	}
 	for first > 0 {
 		groupChanged := !v.sameGroup(grouping, visible[first-1], visible[first])
 		added := 1
@@ -588,7 +609,29 @@ func (v *View) renderRows(height, listWidth int, styled bool) []string {
 		}
 		lines = append(lines, renderLine("", v.renderRowSpans(index, grouping != GroupingStatus, listWidth), listWidth, styled))
 	}
+	// Rust #49106: a selectable "Show more" row closes the list while another
+	// page exists, including during search and after a failed request.
+	if v.hasMore && len(lines) < height {
+		if previousGroup != nil && len(lines)+1 < height {
+			lines = append(lines, "")
+		}
+		lines = append(lines, v.renderShowMoreRow(listWidth, styled))
+	}
 	return lines
+}
+
+// renderShowMoreRow renders the "Show more" / "Loading more…" / retry row with
+// the list's selection marker (Rust #49106).
+func (v *View) renderShowMoreRow(width int, styled bool) string {
+	marker := " "
+	labelStyle := spanPlain
+	if v.Selected == ShowMoreIndex {
+		marker = "\u203a"
+		labelStyle = spanCyanBold
+	}
+	return renderLine("", []span{
+		{text: marker + "   " + v.ShowMoreLabel(), style: labelStyle},
+	}, width, styled)
 }
 
 func (v *View) renderRowSpans(index int, projectGrouping bool, width int) []span {
@@ -711,6 +754,32 @@ func (v *View) renderDetails(width, height int, styled bool) []string {
 		{text: " ", style: spanPlain},
 		{text: row.Group.StatusLabelForRow(row), style: spanPlain},
 	})
+	activity := v.AgentsOverviewActivityFor(row.ThreadID)
+	// Rust #42455: an attention request leads the details and explains what the
+	// task is waiting for.
+	if row.Group == GroupNeedsYou {
+		lines = append(lines, nil)
+		lines = append(lines, []span{{text: "Needs attention", style: spanRed}})
+		if activity.RequestPreview != "" {
+			lines = append(lines, []span{{text: activity.RequestPreview, style: spanPlain}})
+		}
+		lines = append(lines, []span{{text: "Open task to review.", style: spanDim}})
+		if row.WaitingOnApproval {
+			lines = append(lines, []span{{text: "Waiting for approval.", style: spanPlain}})
+		}
+		if row.WaitingOnUserInput {
+			lines = append(lines, []span{{text: "Waiting for your response.", style: spanPlain}})
+		}
+		if row.StatusType == "systemError" || row.StatusType == "system_error" || row.StatusType == "error" {
+			lines = append(lines, []span{{text: "Task encountered an error.", style: spanPlain}})
+		}
+	}
+	// Rust #42455: a running task shows its live reasoning heading.
+	if row.StatusActive && activity.ReasoningHeading != "" {
+		lines = append(lines, nil)
+		lines = append(lines, []span{{text: "Latest activity", style: spanDim}})
+		lines = append(lines, []span{{text: activity.ReasoningHeading, style: spanPlain}})
+	}
 	lines = append(lines, nil)
 	// Rust #50727: the model and reasoning effort sit at the top of the task
 	// details, and long values are ellipsis-truncated to keep one line.
@@ -737,7 +806,13 @@ func (v *View) renderDetails(width, height int, styled bool) []string {
 	}
 	// Rust #44752: the details pane also shows the task's last delivered agent
 	// message, rendered from markdown with the task's working directory.
-	if message := strings.TrimSpace(row.LastMessage); message != "" {
+	// Rust #42455: a live message observed for a tracked task wins over the
+	// historical one read with the task list.
+	message := strings.TrimSpace(activity.LastMessage)
+	if message == "" {
+		message = strings.TrimSpace(row.LastMessage)
+	}
+	if message != "" {
 		lines = append(lines, nil)
 		lines = append(lines, []span{{text: "Last message", style: spanDim}})
 		messageLines, rendered := v.renderDetailsMarkdown(message, width, row.CWD)
@@ -817,6 +892,20 @@ func (v *View) renderDetailsMarkdown(text string, width int, cwd string) ([]stri
 func (v *View) CursorColumn(termWidth int) int {
 	if v == nil {
 		return 0
+	}
+	if v.Composing() {
+		text := v.ComposerText()
+		if cursor := v.ComposerCursor(); cursor > 0 && cursor <= len(text) {
+			text = text[:cursor]
+		}
+		if index := strings.LastIndexByte(text, '\n'); index >= 0 {
+			text = text[index+1:]
+		}
+		column := 2 + displayWidth("\u203a ") + displayWidth(text)
+		if column > termWidth-3 {
+			column = termWidth - 3
+		}
+		return column
 	}
 	label, input, _ := v.Prompt()
 	column := 2 + displayWidth(label) + displayWidth(input)

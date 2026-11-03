@@ -26,6 +26,10 @@ type permissionProfilesLoadedMsg struct {
 	// PermissionDiscovery::explicit_profile_mode).
 	explicitProfileMode bool
 	err                 error
+	// generation identifies the request this response answers, so a reply made
+	// stale by a thread, account, or modal change is dropped (Rust #42453
+	// permission_popup_request_is_current).
+	generation uint64
 }
 
 // selectServerPermissionProfile asks the server to adopt a permission profile
@@ -266,9 +270,8 @@ func (m *Model) selectPermissionProfileInline(args string) bubbletea.Cmd {
 		// request while the catalog loads, then apply it
 		// (permission_discovery.rs:70-77).
 		m.pendingPermissionProfileArgs = args
-		m.permissionProfilesLoading = true
 		m.showPermissionsLoadingView()
-		return m.fetchPermissionProfilesCmd()
+		return m.requestPermissionProfiles()
 	}
 	m.pendingPermissionProfileArgs = ""
 	parsed, failure := parsePermissionProfileArgs(args)
@@ -344,11 +347,7 @@ func (m *Model) openPermissionsMenu() bubbletea.Cmd {
 		return nil
 	}
 	m.showPermissionsLoadingView()
-	if m.permissionProfilesLoading {
-		return nil
-	}
-	m.permissionProfilesLoading = true
-	return m.fetchPermissionProfilesCmd()
+	return m.requestPermissionProfiles()
 }
 
 // showPermissionsMenu renders the picker in named-profile (explicit) or legacy
@@ -397,15 +396,50 @@ func (m *Model) showPermissionsLoadingView() {
 	})
 }
 
+// requestPermissionProfiles starts one bounded discovery request and reuses an
+// outstanding fetch (Rust #42453 request_permission_profiles). Each request
+// bumps the generation so an older response cannot replace the catalog.
+func (m *Model) requestPermissionProfiles() bubbletea.Cmd {
+	if m == nil || m.onListPermissionProfiles == nil {
+		return nil
+	}
+	if m.permissionProfilesLoading {
+		return nil
+	}
+	m.permissionProfilesLoading = true
+	m.permissionDiscoveryGeneration++
+	return m.fetchPermissionProfilesCmd(m.permissionDiscoveryGeneration)
+}
+
+// permissionPopupRequestIsCurrent reports whether a discovery response still
+// belongs to the open permissions popup (Rust #42453).
+func (m *Model) permissionPopupRequestIsCurrent(message permissionProfilesLoadedMsg) bool {
+	if m == nil {
+		return false
+	}
+	if message.generation == 0 || message.generation != m.permissionDiscoveryGeneration {
+		return false
+	}
+	if !m.permissionProfilesLoading {
+		return false
+	}
+	return m.modal != nil && m.modal.kind == ModalKindPermissions
+}
+
 // fetchPermissionProfilesCmd loads the server's named permission profiles.
-func (m *Model) fetchPermissionProfilesCmd() bubbletea.Cmd {
+func (m *Model) fetchPermissionProfilesCmd(generation uint64) bubbletea.Cmd {
 	if m == nil || m.onListPermissionProfiles == nil {
 		return nil
 	}
 	loader := m.onListPermissionProfiles
 	return func() bubbletea.Msg {
 		profiles, explicitProfileMode, err := loader()
-		return permissionProfilesLoadedMsg{profiles: profiles, explicitProfileMode: explicitProfileMode, err: err}
+		return permissionProfilesLoadedMsg{
+			profiles:            profiles,
+			explicitProfileMode: explicitProfileMode,
+			err:                 err,
+			generation:          generation,
+		}
 	}
 }
 
@@ -415,6 +449,11 @@ func (m *Model) fetchPermissionProfilesCmd() bubbletea.Cmd {
 // otherwise (Rust on_permission_profiles_loaded).
 func (m *Model) applyPermissionProfilesLoaded(msg permissionProfilesLoadedMsg) bubbletea.Cmd {
 	if m == nil {
+		return nil
+	}
+	if !m.permissionPopupRequestIsCurrent(msg) {
+		// Rust #42453: a response made stale by an account, thread, or modal
+		// change never rewrites the popup.
 		return nil
 	}
 	m.permissionProfilesLoading = false
@@ -445,19 +484,26 @@ func (m *Model) applyPermissionProfilesLoaded(msg permissionProfilesLoadedMsg) b
 	return nil
 }
 
-// invalidatePermissionDiscoveryCache drops the cached server permission catalog
-// so the next picker or shortcut re-reads it (Rust #50140 clears the cache on
+// invalidatePermissionDiscovery drops the cached server permission catalog and
+// invalidates any in-flight request, so the next picker or shortcut re-reads it
+// (Rust #42453 invalidate_permission_discovery; #50140 clears the cache on
 // session, account, working-directory, and connection changes).
-func (m *Model) invalidatePermissionDiscoveryCache() {
+func (m *Model) invalidatePermissionDiscovery() {
 	if m == nil {
 		return
 	}
+	m.permissionDiscoveryGeneration++
 	m.permissionProfiles = nil
 	m.permissionProfilesDiscovered = false
 	m.permissionProfilesExplicit = false
 	m.permissionProfilesErr = ""
 	m.permissionProfilesLoading = false
 	m.pendingPermissionProfileArgs = ""
+}
+
+// invalidatePermissionDiscoveryCache keeps the older call-site name.
+func (m *Model) invalidatePermissionDiscoveryCache() {
+	m.invalidatePermissionDiscovery()
 }
 
 // openPermissionDiscoveryRetryView shows Rust's failed-discovery view: the raw
@@ -654,11 +700,7 @@ func (m *Model) applyPermissionShortcutKey(keySpec string) (bubbletea.Cmd, bool)
 		// reuse an outstanding discovery fetch rather than cycling presets the
 		// server may forbid.
 		m.showPermissionsLoadingView()
-		if m.permissionProfilesLoading {
-			return nil, true
-		}
-		m.permissionProfilesLoading = true
-		return m.fetchPermissionProfilesCmd(), true
+		return m.requestPermissionProfiles(), true
 	}
 	view := chatwidget.NewPermissionsPopupView(m.permissionMenuConfig(false))
 	available := make([]chatwidget.PermissionMenuItem, 0, len(view.Items))

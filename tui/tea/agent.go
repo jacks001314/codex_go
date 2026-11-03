@@ -335,9 +335,9 @@ func (m *Model) applyAgentSwitchResult(message AgentSwitchResultMsg) {
 		// owns the task.
 		if len(messages) == 0 && !message.Response.ReadOnly {
 			replayEvents := filterResolvedMisalignmentReplayEvents(buffered)
-			for _, event := range replayEvents {
-				messages = applyBufferedThreadEventToMessages(messages, event)
-			}
+			// Rust replays through ThreadEventStore::snapshot, which drops the
+			// private content of delegated voice turns.
+			messages = applyBufferedThreadReplay(messages, replayEvents)
 			// Rust #42903: buffered live notifications can introduce async
 			// questions; historical turn replay cannot.
 			m.appendBufferedAsyncQuestions(buffered)

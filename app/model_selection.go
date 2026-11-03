@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	bubbletea "github.com/charmbracelet/bubbletea"
@@ -71,9 +72,42 @@ func interactiveLocalModelSelectionCommand(root *cli.RootOptions, decision *code
 	}
 }
 
+// remoteThreadSettingsUpdate is the thread/settings/update seam. Tests replace
+// it to simulate an app server that rejects the method outright.
+var remoteThreadSettingsUpdate = remoteTUIUpdateThreadSettings
+
+// modelSelectionThreadSettingsNotice mirrors Rust app/model_defaults.rs:124-133:
+// when the settings update is not accepted and the server owns the conversation
+// settings, the TUI shows the cloud-specific notice instead of a generic
+// transport failure. Client-owned conversations keep the generic message.
+func modelSelectionThreadSettingsNotice(mode ThreadParamsMode, err error) string {
+	if err == nil || mode.SettingsOwner() != ThreadSettingsOwnerServer {
+		return ""
+	}
+	var rpcErr *remoteRPCError
+	if errors.As(err, &rpcErr) && rpcErr.Code == appserver.JSONRPCMethodNotFoundErrorCode {
+		return codextea.CloudModelSelectionUnsupportedMessage
+	}
+	return ""
+}
+
 // interactiveRemoteModelSelectionCommand syncs a completed picker decision to
 // the remote app server's thread and persists the user-level defaults.
 func interactiveRemoteModelSelectionCommand(
+	ctx context.Context,
+	endpoint *appserverdaemon.RemoteAppServerEndpoint,
+	state *codextui.State,
+	decision *codextea.PickerDecision,
+) bubbletea.Cmd {
+	return interactiveRemoteModelSelectionCommandForMode(threadParamsModeForEndpoint(endpoint), ctx, endpoint, state, decision)
+}
+
+// interactiveRemoteModelSelectionCommandForMode syncs a completed picker
+// decision to the remote app server. Rust app/model_defaults.rs:124-133 only
+// falls back to client config persistence when the client owns the conversation
+// settings; a server-owned conversation keeps its model on the server.
+func interactiveRemoteModelSelectionCommandForMode(
+	mode ThreadParamsMode,
 	ctx context.Context,
 	endpoint *appserverdaemon.RemoteAppServerEndpoint,
 	state *codextui.State,
@@ -93,17 +127,24 @@ func interactiveRemoteModelSelectionCommand(
 	return func() bubbletea.Msg {
 		result := codextea.ModelSelectionSyncMsg{}
 		if plan.ThreadModel != nil || plan.ThreadEffort != nil {
-			result.ThreadSettingsErr = interactiveRemoteApplyModelSelection(ctx, endpoint, state, threadID, plan)
-		}
-		for _, persist := range plan.Persist {
-			result.PersistLabel = persist.Label
-			overridden, err := interactiveRemoteModelSelectionWriter(ctx, endpoint)(persist.Edits)
-			if err != nil {
-				result.PersistErr = err
-				return result
+			updateErr := interactiveRemoteApplyModelSelection(ctx, endpoint, state, threadID, plan)
+			if notice := modelSelectionThreadSettingsNotice(mode, updateErr); notice != "" {
+				result.ThreadSettingsNotice = notice
+			} else {
+				result.ThreadSettingsErr = updateErr
 			}
-			if overridden {
-				result.PersistOverridden = true
+		}
+		if mode.SettingsOwner() == ThreadSettingsOwnerClient {
+			for _, persist := range plan.Persist {
+				result.PersistLabel = persist.Label
+				overridden, err := interactiveRemoteModelSelectionWriter(ctx, endpoint)(persist.Edits)
+				if err != nil {
+					result.PersistErr = err
+					return result
+				}
+				if overridden {
+					result.PersistOverridden = true
+				}
 			}
 		}
 		return result
@@ -135,7 +176,7 @@ func interactiveRemoteApplyModelSelection(
 	if mode := interactiveCollaborationModeFromState(state); mode != nil {
 		params.CollaborationMode = interactiveCollaborationModePayload(mode)
 	}
-	return remoteTUIUpdateThreadSettings(reqCtx, client, params)
+	return remoteThreadSettingsUpdate(reqCtx, client, params)
 }
 
 // interactiveRemoteModelSelectionWriter writes the model-selection config edits

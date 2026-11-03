@@ -127,9 +127,15 @@ func (m *Model) applyThreadSettingsValues(settings appserver.Settings) {
 	if settings.ActivePermissionProfile != nil {
 		if profile := strings.TrimSpace(*settings.ActivePermissionProfile); profile != "" {
 			m.State.Sandbox = profile
+			// Keep the named profile id separate from the legacy sandbox mode so
+			// request builders can send `permissions` instead of a bogus
+			// `sandboxPolicy` (Rust keeps ActivePermissionProfile and the
+			// sandbox mode in different slots).
+			m.State.ActivePermissionProfile = profile
 		}
 	} else if sandbox := strings.TrimSpace(settings.SandboxPolicy); sandbox != "" {
 		m.State.Sandbox = sandbox
+		m.State.ActivePermissionProfile = ""
 	}
 	// Rust #49876: thread settings notifications no longer apply personality;
 	// it travels only through explicit session configuration.

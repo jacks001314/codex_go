@@ -20,6 +20,9 @@ type memoriesModalState struct {
 	resetConfirmation bool
 	useMemories       bool
 	generateMemories  bool
+	// feature names the opt-in the enable prompt belongs to ("memories" or
+	// "multi_agent"); empty means Memories (Rust #43113 shares one prompt).
+	feature string
 }
 
 func (m *Model) openMemoriesSettings() {
@@ -27,15 +30,8 @@ func (m *Model) openMemoriesSettings() {
 		return
 	}
 	if !m.featureSettings["memories"] {
-		m.openModal(ModalRequestMsg{
-			ID:         "memories-enable",
-			Kind:       ModalKindMemories,
-			Title:      "Enable memories?",
-			Body:       "Memories are currently disabled in your config.",
-			Options:    memoriesEnableOptions(),
-			FooterNote: "Learn more: " + memoriesDocsURL,
-		})
-		m.modal.memories = &memoriesModalState{enablePrompt: true}
+		// Rust #43113: both opt-ins share the app-server write prompt.
+		m.openFeatureEnablePrompt("memories")
 		return
 	}
 
@@ -95,7 +91,11 @@ func (m *Model) updateMemoriesModal(message bubbletea.KeyMsg) bubbletea.Cmd {
 			enable := m.modal.selected == 0
 			m.modal = nil
 			if enable {
-				return m.writeSettings(settingsWriteKindMemoriesEnable, []SettingsEdit{{KeyPath: "features.memories", Value: true}})
+				feature := state.feature
+				if strings.TrimSpace(feature) == "" {
+					feature = "memories"
+				}
+				return m.enableFeatureForNewThreads(feature)
 			}
 		}
 		return nil

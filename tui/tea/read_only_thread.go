@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	codextui "codex_go/tui"
+	bottompane "codex_go/tui/bottom_pane"
 )
 
 // Rust parity: codex-rs/tui/src/chatwidget/rendering.rs ExternalWriterNotice
@@ -19,6 +20,11 @@ func (m *Model) setReadOnlyThread(readOnly bool) {
 	if m == nil {
 		return
 	}
+	if readOnly && !m.readOnlyThread {
+		// Rust #43253/#47320: the locked view hides the composer but keeps the
+		// draft, so a successful retry or a fork (#47185) can continue with it.
+		m.readOnlyDraft = m.captureComposerInputState()
+	}
 	m.readOnlyThread = readOnly
 	if readOnly {
 		m.threadUnavailable = false
@@ -28,6 +34,10 @@ func (m *Model) setReadOnlyThread(readOnly bool) {
 	}
 	if !readOnly {
 		m.frozenReadReceipt = nil
+		if draft := m.readOnlyDraft; draft != nil {
+			m.readOnlyDraft = nil
+			m.restoreComposerInputState(draft, false)
+		}
 		return
 	}
 	// Block input while preserving the transcript; drafts and queued messages
@@ -37,6 +47,72 @@ func (m *Model) setReadOnlyThread(readOnly bool) {
 	m.composerMentionBindings = nil
 	m.composerPasteEnterUntil = nil
 	m.notice = ""
+}
+
+// externalWriterView mirrors Rust ChatWidget::is_external_writer_view: the
+// conversation is locked because another app owns it. A provider-error lock
+// (#58202) keeps the chat readable for a different reason and is not an
+// external-writer view, so Escape navigation must not treat it as locked
+// (#47320).
+func (m *Model) externalWriterView() bool {
+	return m != nil && m.readOnlyThread && m.providerError == nil
+}
+
+// composerInputState is the retained input of a locked conversation (Rust
+// capture_thread_input_state, chatwidget/input_restore.rs:607-654). Rust keeps
+// the whole ThreadComposerState, so the draft's images, mentions and text
+// elements survive the lock as well; Go's queued prompts live on the model
+// instead of the composer, so only the composer-owned state is captured here.
+type composerInputState struct {
+	threadID        string
+	text            string
+	prefix          composerPrefix
+	attachments     []bottompane.ComposerAttachment
+	mentionBindings []string
+	textElements    []ComposerTextElement
+}
+
+// captureComposerInputState snapshots a non-empty draft for its thread.
+func (m *Model) captureComposerInputState() *composerInputState {
+	if m == nil {
+		return nil
+	}
+	if m.composerIsEmpty() && len(m.attachments) == 0 && len(m.composerMentionBindings) == 0 {
+		return nil
+	}
+	return &composerInputState{
+		threadID:        strings.TrimSpace(m.currentThreadID()),
+		text:            m.composerBody(),
+		prefix:          m.composerPrefix,
+		attachments:     cloneComposerAttachments(m.attachments),
+		mentionBindings: append([]string(nil), m.composerMentionBindings...),
+		textElements:    cloneComposerTextElements(m.composerElements),
+	}
+}
+
+// restoreComposerInputState puts a retained draft back once the composer is
+// free. Without force the conversation must still be the one that retained it,
+// so a retry of the same thread restores and a navigation elsewhere does not.
+func (m *Model) restoreComposerInputState(state *composerInputState, force bool) bool {
+	if m == nil || state == nil {
+		return false
+	}
+	if state.text == "" && state.prefix == composerPrefixNone && len(state.attachments) == 0 {
+		return false
+	}
+	if !force && strings.TrimSpace(m.currentThreadID()) != state.threadID {
+		return false
+	}
+	if !m.composerIsEmpty() {
+		return false
+	}
+	m.composerPrefix = state.prefix
+	m.composerElements = cloneComposerTextElements(state.textElements)
+	m.composer.SetValue(state.text)
+	m.attachments = cloneComposerAttachments(state.attachments)
+	m.composerMentionBindings = append([]string(nil), state.mentionBindings...)
+	m.refreshComposerPrompt()
+	return true
 }
 
 // commandCenterAvailable mirrors Rust's AppServerTarget::supports_command_center
@@ -192,6 +268,11 @@ func (m *Model) retryReadOnlyThread() bubbletea.Cmd {
 func (m *Model) renderReadOnlyThreadNotice() string {
 	if m == nil {
 		return ""
+	}
+	// Rust #47185: a pending fork replaces the locked notice with a progress
+	// line inset by one row and two columns, and the keys stay blocked.
+	if m.forkInProgress {
+		return lipgloss.NewStyle().Padding(1, 2).Render(m.readOnlyDimText("Forking conversation\u2026"))
 	}
 	width := max(m.width, 20)
 	contentWidth := max(width-4, 10)

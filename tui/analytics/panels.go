@@ -42,6 +42,9 @@ type AnalyticsPanelOptions struct {
 	ConsumerAttribution  bool
 	TokenModel           *string
 	ModelName            func(string) string
+	// Theme supplies the activity accent for the Summary token calendar
+	// (Rust #46897).
+	Theme string
 }
 
 // AnalyticsPanel is wrapped panel content plus the measured selection range and
@@ -92,6 +95,7 @@ func AnalyticsPanelLines(opts AnalyticsPanelOptions) AnalyticsPanel {
 			View:    opts.State.Group,
 			EndDate: opts.EndDate,
 			Width:   width,
+			Theme:   opts.Theme,
 		})...)
 	} else if opts.Section == AnalyticsSectionChats {
 		var panel AnalyticsChatPanel

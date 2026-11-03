@@ -121,7 +121,13 @@ func (m *Model) restoreHistorySearchDraft(draft composerhistory.DraftState, elem
 	if m == nil {
 		return
 	}
-	m.setComposerPrompt(draft.Text)
+	if draft.IsBashMode {
+		m.setComposerPrompt(draft.Text)
+	} else {
+		// Rust #58412: restoring an ordinary-message draft keeps a leading `!`
+		// literal instead of turning it into shell input.
+		m.setComposerPromptLiteral(draft.Text)
+	}
 	m.composerElements = cloneComposerTextElements(elements)
 	m.setCanonicalComposerCursor(draft.Cursor)
 }

@@ -20,6 +20,7 @@ const (
 	flapColorBlack    = "0"
 	flapColorGray     = "7"
 	flapColorDarkGray = "8"
+	flapColorRed      = "9"
 	flapColorMagenta  = "13"
 	flapColorCyan     = "14"
 )
@@ -94,7 +95,13 @@ func (b *SplitFlapBoard) AnimateStyledLines(lines []string, width int, elapsed t
 			style := board
 			switch grapheme {
 			case "\u203a":
+				// Rust #43676 keeps the spoken prompt's own colour on the
+				// marker instead of forcing cyan.
 				style.Foreground = flapColorCyan
+				if b.MarkerSGR != "" {
+					style.Foreground = flapColorRed
+					style.Bold = true
+				}
 			case "\u2022":
 				style.Foreground = flapColorMagenta
 			}

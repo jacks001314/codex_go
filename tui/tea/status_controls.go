@@ -1021,7 +1021,10 @@ func (m *Model) applyTerminalTitleResult(result chatwidget.StatusSurfaceRefreshR
 	}
 	sequence := ""
 	if result.TerminalTitleRendered {
-		if osc, ok := codextui.TerminalTitleOSC(result.TerminalTitleText); ok {
+		// Rust #43651: the title's activity indicator carries a recording dot
+		// while the microphone is listening, and drops it when capture stops.
+		text := chatwidget.RecordingTerminalTitle(result.TerminalTitleText, m.voiceMicrophoneListening())
+		if osc, ok := codextui.TerminalTitleOSC(text); ok {
 			sequence = osc
 		}
 	}

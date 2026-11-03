@@ -16,6 +16,11 @@ const (
 	planModeReasoningPersistLabel = "Plan mode reasoning effort"
 )
 
+// CloudModelSelectionUnsupportedMessage is the exact Rust notice for a
+// server-owned conversation whose app server does not accept
+// thread/settings/update (codex-rs/tui/src/app/model_defaults.rs:130).
+const CloudModelSelectionUnsupportedMessage = "This cloud conversation does not support changing its model from the TUI."
+
 // ModelSelectionPersist is one user-config write a model/effort selection maps
 // to (Rust config_update::build_model_selection_edits and the
 // PersistPlanModeReasoningEffort edit).
@@ -130,6 +135,10 @@ func nullableEffort(effort string) any {
 type ModelSelectionSyncMsg struct {
 	// ThreadSettingsErr is the thread/settings/update failure, if any.
 	ThreadSettingsErr error
+	// ThreadSettingsNotice replaces the generic thread-settings failure text.
+	// Rust #57267 shows a specific message when a server-owned conversation's
+	// app server cannot accept thread/settings/update at all.
+	ThreadSettingsNotice string
 	// PersistLabel names the setting for the save failure and override notices.
 	PersistLabel string
 	// PersistErr is the config write failure, if any.
@@ -149,7 +158,9 @@ func (m *Model) applyModelSelectionSync(msg ModelSelectionSyncMsg) {
 	// Rust #46910: selecting a model/settings surface resumes following so its
 	// confirmation or failure is visible.
 	m.activityFollow = true
-	if msg.ThreadSettingsErr != nil {
+	if msg.ThreadSettingsNotice != "" {
+		m.addErrorHistoryMessage(msg.ThreadSettingsNotice)
+	} else if msg.ThreadSettingsErr != nil {
 		m.addErrorHistoryMessage("Failed to update thread settings: " + strings.TrimSpace(msg.ThreadSettingsErr.Error()))
 	}
 	if msg.PersistErr != nil {
