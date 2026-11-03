@@ -207,11 +207,26 @@ func TestPluginStartupFallsBackToDefaultsAfterInvalidConfigLikeRust(t *testing.T
 
 type marketplaceUpgradeTestMaterializer struct {
 	write func(destination string) error
+	// name is the manifest name staged for the configured marketplace. Rust
+	// validates every staged marketplace root before activation, so the fixture
+	// has to materialize a manifest alongside its marker files.
+	name string
 }
 
 func (m *marketplaceUpgradeTestMaterializer) MaterializeMarketplace(_ *plugin.ParsedMarketplaceSource, _ []string, destination string) error {
 	if err := os.MkdirAll(destination, 0o755); err != nil {
 		return err
 	}
-	return m.write(destination)
+	if err := m.write(destination); err != nil {
+		return err
+	}
+	name := strings.TrimSpace(m.name)
+	if name == "" {
+		name = "system-market"
+	}
+	manifestDir := filepath.Join(destination, ".agents", "plugins")
+	if err := os.MkdirAll(manifestDir, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(manifestDir, "marketplace.json"), []byte(`{"name":"`+name+`","plugins":[]}`), 0o600)
 }
