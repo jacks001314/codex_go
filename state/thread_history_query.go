@@ -474,7 +474,11 @@ func (r *StateRuntime) resolveThreadHistoryLineage(ctx context.Context, requeste
 		if !strings.EqualFold(strings.TrimSpace(meta.HistoryMode), "paginated") {
 			return nil, invalidPaginatedLineage(requestedThreadID, "source rollout is not paginated")
 		}
-		if end != nil {
+		// History pages read projected rows and only need the ancestor's
+		// metadata for lineage bounds, so an incomplete ancestor tail does not
+		// invalidate the page (Rust #58960). Context loading and fork
+		// preparation still require the cutoff itself to be durable.
+		if end != nil && !historyPage {
 			if end.EndOrdinalExclusive == 0 {
 				return nil, invalidPaginatedLineage(requestedThreadID, "cutoff cannot include source session metadata")
 			}
