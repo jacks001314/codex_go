@@ -962,7 +962,18 @@ func senderDelegationSource(text string) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	rest, ok = strings.CutPrefix(strings.TrimSpace(rest), "<input>")
+	rest = strings.TrimSpace(rest)
+	// Cloud deliveries also carry an optional Dot orbit attribution between the
+	// source thread and input. It identifies transport provenance; sender
+	// authority still comes only from the source thread (Rust #58946).
+	if orbitRemainder, found := strings.CutPrefix(rest, "<source_orbit_id>"); found {
+		orbitID, afterOrbit, closed := strings.Cut(orbitRemainder, "</source_orbit_id>")
+		if !closed || strings.Contains(orbitID, "<") {
+			return "", false
+		}
+		rest = strings.TrimSpace(afterOrbit)
+	}
+	rest, ok = strings.CutPrefix(rest, "<input>")
 	if !ok {
 		return "", false
 	}
