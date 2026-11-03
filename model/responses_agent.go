@@ -3,7 +3,9 @@ package model
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -279,6 +281,11 @@ type responsesWebsocketSession struct {
 	// last request to reuse; a dialed socket that never sent one still needs a
 	// warmup (Rust #47745).
 	requestSent bool
+	// connectedAuthRevision remembers the credential used by the last successful
+	// handshake. authRevisionKnown distinguishes "no handshake yet" from a
+	// provider whose auth snapshot has no managed token (Rust #59018).
+	connectedAuthRevision *uint64
+	authRevisionKnown     bool
 	// connClosed records that the reader observed the connection ending. A
 	// completed warmup returns its client to the cache, and the next resume
 	// re-checks the socket because it may have closed since then (Rust #47709).
@@ -295,6 +302,51 @@ type responsesWebsocketSession struct {
 	// the connection (Rust #55969).
 	messages   chan responsesWebsocketReadResult
 	readerDone chan struct{}
+}
+
+func websocketAuthRevision(snapshot *auth.AuthDotJSON) (uint64, bool) {
+	if snapshot == nil {
+		return 0, false
+	}
+	token := stringFromAny(snapshot.Tokens, "access_token")
+	if strings.TrimSpace(token) == "" {
+		token = snapshot.OpenAIAPIKey
+	}
+	if strings.TrimSpace(token) == "" {
+		return 0, false
+	}
+	sum := sha256.Sum256([]byte(token))
+	return binary.BigEndian.Uint64(sum[:8]), true
+}
+
+// websocketReauth reports whether this handshake replaces the credential used
+// by the previous successful socket (Rust #59018).
+func (s *responsesWebsocketSession) websocketReauth(snapshot *auth.AuthDotJSON) bool {
+	if s == nil || !s.authRevisionKnown {
+		return false
+	}
+	revision, hasRevision := websocketAuthRevision(snapshot)
+	if !hasRevision {
+		return s.connectedAuthRevision != nil
+	}
+	if s.connectedAuthRevision == nil {
+		return true
+	}
+	return *s.connectedAuthRevision != revision
+}
+
+func (s *responsesWebsocketSession) markConnectedAuth(snapshot *auth.AuthDotJSON) {
+	if s == nil {
+		return
+	}
+	revision, hasRevision := websocketAuthRevision(snapshot)
+	s.authRevisionKnown = true
+	if !hasRevision {
+		s.connectedAuthRevision = nil
+		return
+	}
+	value := revision
+	s.connectedAuthRevision = &value
 }
 
 type responsesWebsocketReadResult struct {
@@ -1030,6 +1082,7 @@ func (r *ResponsesAgentRunner) Prewarm(ctx context.Context, request *AgentReques
 	var conn *websocket.Conn
 	for {
 		dialStartedAt := time.Now()
+		reauth := session.websocketReauth(r.AuthSnapshot)
 		// Rust #46506: a secure WebSocket handshake reuses the HTTP factory's
 		// ChatGPT cookie store, while an explicit Cookie header still wins.
 		headers := network.WebsocketHandshakeCookies(endpoint, httpRequest.Header)
@@ -1042,8 +1095,9 @@ func (r *ResponsesAgentRunner) Prewarm(ctx context.Context, request *AgentReques
 		}
 		// The prewarm handshake reports the same attempt telemetry, with a fresh
 		// connection and no transport retry.
-		r.recordWebsocketConnectRecord(ctx, request, apiRequest, httpRequest, response, err, time.Since(dialStartedAt), recoveryMode, recoveryPhase)
+		r.recordWebsocketConnectRecord(ctx, request, apiRequest, httpRequest, response, err, time.Since(dialStartedAt), recoveryMode, recoveryPhase, reauth)
 		if err == nil {
+			session.markConnectedAuth(r.AuthSnapshot)
 			break
 		}
 		if response != nil && response.StatusCode == http.StatusUpgradeRequired {
@@ -1350,6 +1404,7 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 				dialHeader.Set("Cookie", merged)
 			}
 		}
+		reauth := session.websocketReauth(r.AuthSnapshot)
 		dialOptions := &websocket.DialOptions{HTTPHeader: network.WebsocketHandshakeCookies(endpoint, dialHeader)}
 		if client := r.websocketHTTPClient(); client != nil {
 			dialOptions.HTTPClient = client
@@ -1360,7 +1415,10 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 		}
 		// Rust reports every handshake attempt with connection_reused false,
 		// because a dial always establishes a new connection.
-		r.recordWebsocketConnectRecord(ctx, request, apiRequest, httpRequest, response, err, time.Since(dialStartedAt), recoveryMode, recoveryPhase)
+		r.recordWebsocketConnectRecord(ctx, request, apiRequest, httpRequest, response, err, time.Since(dialStartedAt), recoveryMode, recoveryPhase, reauth)
+		if err == nil {
+			session.markConnectedAuth(r.AuthSnapshot)
+		}
 		if err != nil {
 			if response != nil && response.StatusCode == http.StatusUpgradeRequired {
 				r.disableWebsockets()

@@ -58,12 +58,15 @@ type WebsocketConnectRecord struct {
 	RecoveryMode           string
 	RecoveryPhase          string
 	ConnectionReused       bool
-	RequestID              string
-	CFRay                  string
-	AuthError              string
-	AuthErrorCode          string
-	AgentID                string
-	TaskID                 string
+	// Reauth reports that this handshake replaced the credential used by the
+	// previous successful socket (Rust #59018).
+	Reauth        bool
+	RequestID     string
+	CFRay         string
+	AuthError     string
+	AuthErrorCode string
+	AgentID       string
+	TaskID        string
 }
 
 // SSECompletedRecord carries the values of a completed model response for the
@@ -146,6 +149,8 @@ const (
 	sseEventDurationMetric           = "codex.sse_event.duration_ms"
 	websocketEventCountMetric        = "codex.websocket.event"
 	websocketEventDurationMetric     = "codex.websocket.event.duration_ms"
+	websocketConnectCountMetric      = "codex.websocket.connect"
+	websocketConnectDurationMetric   = "codex.websocket.connect.duration_ms"
 	websocketRequestCountMetric      = "codex.websocket.request"
 	websocketContinuationCountMetric = "codex.websocket.continuation"
 	// startupPrewarmWebsocketCheckMetric mirrors Rust #48812's
@@ -434,12 +439,13 @@ func websocketContinuationTags(previousResponseID string, connectionReused bool)
 // recordWebsocketConnectRecord mirrors the record half of
 // SessionTelemetry::record_websocket_connect, which Rust reports around the
 // handshake attempt (the connect telemetry always describes a fresh connection).
-func (r *ResponsesAgentRunner) recordWebsocketConnectRecord(ctx context.Context, request *AgentRequest, apiRequest *responsesAgentRequest, httpRequest *http.Request, handshakeResponse *http.Response, dialErr error, duration time.Duration, recoveryMode string, recoveryPhase string) {
+func (r *ResponsesAgentRunner) recordWebsocketConnectRecord(ctx context.Context, request *AgentRequest, apiRequest *responsesAgentRequest, httpRequest *http.Request, handshakeResponse *http.Response, dialErr error, duration time.Duration, recoveryMode string, recoveryPhase string, reauth bool) {
 	if r == nil || r.Telemetry == nil {
 		return
 	}
 	record := WebsocketConnectRecord{
 		Duration:               duration,
+		Reauth:                 reauth,
 		Endpoint:               ResponsesEndpointResponses.Path(),
 		RetryAfterUnauthorized: strings.TrimSpace(recoveryMode) != "" || strings.TrimSpace(recoveryPhase) != "",
 		RecoveryMode:           recoveryMode,
@@ -467,6 +473,18 @@ func (r *ResponsesAgentRunner) recordWebsocketConnectRecord(ctx context.Context,
 		record.TaskID = r.AgentIdentityTelemetry.TaskID
 	}
 	r.Telemetry.RecordWebsocketConnect(ctx, record)
+	if r.Metrics != nil {
+		success := record.ErrorMessage == ""
+		if record.Status != nil {
+			success = success && *record.Status >= 200 && *record.Status <= 299
+		}
+		tags := map[string]string{
+			"success": strconv.FormatBool(success),
+			"reauth":  strconv.FormatBool(reauth),
+		}
+		r.Metrics.Counter(websocketConnectCountMetric, 1, tags)
+		r.Metrics.RecordDuration(websocketConnectDurationMetric, duration, tags)
+	}
 }
 
 // apiRequestModel reports the model of a built request, or "" when absent.
