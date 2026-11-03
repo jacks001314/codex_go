@@ -77,6 +77,7 @@ const (
 	GuardianElasticLimitsZeroTokens           GuardianElasticLimitsError = "elastic section token limits must be greater than zero"
 	GuardianElasticLimitsEntryExceedsMinimum  GuardianElasticLimitsError = "min_total_section_tokens must be at least max_section_entry_tokens"
 	GuardianElasticLimitsEntryExceedsDelivery GuardianElasticLimitsError = "max_section_entry_tokens must not exceed the delivered text-part limit"
+	GuardianElasticLimitsMaximumBelowMinimum  GuardianElasticLimitsError = "max_total_section_tokens must be at least min_total_section_tokens"
 )
 
 // GuardianElasticSectionLimits is the demand-capped minimum allocation and
@@ -86,6 +87,9 @@ const (
 type GuardianElasticSectionLimits struct {
 	MinTotalSectionTokens int
 	MaxSectionEntryTokens int
+	// MaxTotalSectionTokens caps this section's allocation. Nil leaves the
+	// request budget as the upper bound (Rust #59011).
+	MaxTotalSectionTokens *int
 }
 
 // NewGuardianElasticSectionLimits validates one limits pair.
@@ -105,19 +109,31 @@ func NewGuardianElasticSectionLimits(minTotalSectionTokens int, maxSectionEntryT
 	}, nil
 }
 
+// WithMaxTotalSectionTokens sets the section allocation ceiling.
+func (l GuardianElasticSectionLimits) WithMaxTotalSectionTokens(maximum int) (GuardianElasticSectionLimits, error) {
+	if maximum < l.MinTotalSectionTokens {
+		return GuardianElasticSectionLimits{}, GuardianElasticLimitsMaximumBelowMinimum
+	}
+	value := maximum
+	l.MaxTotalSectionTokens = &value
+	return l, nil
+}
+
 // MarshalJSON emits the wire field names shared with Rust's config.
 func (l GuardianElasticSectionLimits) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
-		MinTotalSectionTokens int `json:"min_total_section_tokens"`
-		MaxSectionEntryTokens int `json:"max_section_entry_tokens"`
-	}{l.MinTotalSectionTokens, l.MaxSectionEntryTokens})
+		MinTotalSectionTokens int  `json:"min_total_section_tokens"`
+		MaxSectionEntryTokens int  `json:"max_section_entry_tokens"`
+		MaxTotalSectionTokens *int `json:"max_total_section_tokens,omitempty"`
+	}{l.MinTotalSectionTokens, l.MaxSectionEntryTokens, l.MaxTotalSectionTokens})
 }
 
 // UnmarshalJSON rejects unknown fields and out-of-range limits.
 func (l *GuardianElasticSectionLimits) UnmarshalJSON(data []byte) error {
 	var fields struct {
-		MinTotalSectionTokens int `json:"min_total_section_tokens"`
-		MaxSectionEntryTokens int `json:"max_section_entry_tokens"`
+		MinTotalSectionTokens int  `json:"min_total_section_tokens"`
+		MaxSectionEntryTokens int  `json:"max_section_entry_tokens"`
+		MaxTotalSectionTokens *int `json:"max_total_section_tokens"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
@@ -127,6 +143,12 @@ func (l *GuardianElasticSectionLimits) UnmarshalJSON(data []byte) error {
 	limits, err := NewGuardianElasticSectionLimits(fields.MinTotalSectionTokens, fields.MaxSectionEntryTokens)
 	if err != nil {
 		return err
+	}
+	if fields.MaxTotalSectionTokens != nil {
+		limits, err = limits.WithMaxTotalSectionTokens(*fields.MaxTotalSectionTokens)
+		if err != nil {
+			return err
+		}
 	}
 	*l = limits
 	return nil

@@ -362,10 +362,15 @@ func allocateGuardianElasticItems(demand *guardianElasticDemand, config Guardian
 	}
 	for {
 		active := 0
-		for _, entry := range groups {
-			if entry.totalCost > entry.quota {
-				active++
+		for group, entry := range groups {
+			limits := config.SectionLimits(group)
+			if entry.totalCost <= entry.quota {
+				continue
 			}
+			if limits.MaxTotalSectionTokens != nil && entry.quota >= *limits.MaxTotalSectionTokens {
+				continue
+			}
+			active++
 		}
 		if active == 0 || available/active == 0 {
 			break
@@ -373,9 +378,18 @@ func allocateGuardianElasticItems(demand *guardianElasticDemand, config Guardian
 		share := available / active
 		for _, group := range order {
 			entry := groups[group]
+			limits := config.SectionLimits(group)
+			if limits.MaxTotalSectionTokens != nil && entry.quota >= *limits.MaxTotalSectionTokens {
+				continue
+			}
 			granted := share
 			if remaining := entry.totalCost - entry.quota; remaining < granted {
 				granted = remaining
+			}
+			if limits.MaxTotalSectionTokens != nil {
+				if maximum := *limits.MaxTotalSectionTokens - entry.quota; maximum < granted {
+					granted = maximum
+				}
 			}
 			if granted < 0 {
 				granted = 0
