@@ -171,8 +171,43 @@ const (
 // `simplified_selection_hints`) the detailed capability list is replaced by a
 // concise pointer to the plugin's skills and tools (Rust #57317).
 func RenderExplicitPluginInstructions(plugin *CapabilitySummary, availableMCPServers []string, availableApps []string, simplified bool) (string, bool) {
+	return RenderExplicitPluginInstructionsWithMessages(plugin, availableMCPServers, availableApps, simplified, DefaultSelectedPluginMessages())
+}
+
+// SelectedPluginMessages is the model-catalog wording around an explicitly
+// selected plugin (Rust ResolvedSelectedPluginMessages, #58894). Templates keep
+// one placeholder for each harness-owned fact.
+type SelectedPluginMessages struct {
+	Intro          string
+	SearchTools    string
+	SkillNamespace string
+	Apps           string
+	MCPServers     string
+	Closing        string
+	Omitted        string
+}
+
+// DefaultSelectedPluginMessages returns the bundled wording.
+func DefaultSelectedPluginMessages() SelectedPluginMessages {
+	return SelectedPluginMessages{
+		Intro:          "Capabilities from the `{{ plugin_name }}` plugin:",
+		SearchTools:    "- For the user request that explicitly selected this plugin, and only for that request, if `tool_search` is available and an app from this plugin may help, search for its tools before falling back to unrelated or built-in tools.",
+		SkillNamespace: "- Skills from this plugin are prefixed with `{{ skill_namespace }}:`.",
+		Apps:           "- Apps from this plugin available in this session: {{ apps }}.",
+		MCPServers:     "- MCP servers from this plugin available in this session: {{ mcp_servers }}.",
+		Closing:        "Use these plugin-associated capabilities to help solve the task.",
+		Omitted:        truncatedPluginInstructionsSuffix,
+	}
+}
+
+// RenderExplicitPluginInstructionsWithMessages renders one selected plugin's
+// capability hint with caller-resolved catalog wording.
+func RenderExplicitPluginInstructionsWithMessages(plugin *CapabilitySummary, availableMCPServers []string, availableApps []string, simplified bool, messages SelectedPluginMessages) (string, bool) {
 	if plugin == nil {
 		return "", false
+	}
+	if strings.TrimSpace(messages.Intro) == "" {
+		messages = DefaultSelectedPluginMessages()
 	}
 	if simplified {
 		if !plugin.HasSkills && len(availableApps) == 0 && len(availableMCPServers) == 0 {
@@ -181,31 +216,25 @@ func RenderExplicitPluginInstructions(plugin *CapabilitySummary, availableMCPSer
 		hint := fmt.Sprintf("The user selected the `%s` plugin. Use its available skills and tools to complete this request.", plugin.DisplayName)
 		return boundExplicitPluginInstructions(hint, truncatedSelectionHintSuffix), true
 	}
-	lines := []string{fmt.Sprintf("Capabilities from the `%s` plugin:", plugin.DisplayName)}
+	lines := []string{strings.ReplaceAll(messages.Intro, "{{ plugin_name }}", plugin.DisplayName)}
 	if plugin.HasSkills {
-		lines = append(lines, fmt.Sprintf("- Skills from this plugin are prefixed with `%s:`.", plugin.DisplayName))
+		lines = append(lines, strings.ReplaceAll(messages.SkillNamespace, "{{ skill_namespace }}", plugin.DisplayName))
 	}
 	// Rust #38484: when an explicitly selected plugin has apps available,
 	// prefer tool_search discovery for this request before unrelated or
 	// built-in tools.
 	if len(availableApps) > 0 {
-		lines = append(lines, "- For the user request that explicitly selected this plugin, and only for that request, if `tool_search` is available and an app from this plugin may help, search for its tools before falling back to unrelated or built-in tools.")
-		lines = append(lines, fmt.Sprintf(
-			"- Apps from this plugin available in this session: %s.",
-			formatBacktickList(availableApps),
-		))
+		lines = append(lines, messages.SearchTools)
+		lines = append(lines, strings.ReplaceAll(messages.Apps, "{{ apps }}", formatBacktickList(availableApps)))
 	}
 	if len(availableMCPServers) > 0 {
-		lines = append(lines, fmt.Sprintf(
-			"- MCP servers from this plugin available in this session: %s.",
-			formatBacktickList(availableMCPServers),
-		))
+		lines = append(lines, strings.ReplaceAll(messages.MCPServers, "{{ mcp_servers }}", formatBacktickList(availableMCPServers)))
 	}
 	if len(lines) == 1 {
 		return "", false
 	}
-	lines = append(lines, "Use these plugin-associated capabilities to help solve the task.")
-	return boundExplicitPluginInstructions(strings.Join(lines, "\n"), truncatedPluginInstructionsSuffix), true
+	lines = append(lines, messages.Closing)
+	return boundExplicitPluginInstructions(strings.Join(lines, "\n"), messages.Omitted), true
 }
 
 // boundExplicitPluginInstructions bounds a rendered hint to four KiB and keeps
@@ -226,6 +255,12 @@ func boundExplicitPluginInstructions(rendered string, truncationSuffix string) s
 }
 
 func BuildPluginInjections(mentioned []CapabilitySummary, mcpTools []ToolInfo, apps []AppInfo, simplified bool) []string {
+	return BuildPluginInjectionsWithMessages(mentioned, mcpTools, apps, simplified, DefaultSelectedPluginMessages())
+}
+
+// BuildPluginInjectionsWithMessages renders the selected-plugin hints with
+// caller-resolved catalog wording.
+func BuildPluginInjectionsWithMessages(mentioned []CapabilitySummary, mcpTools []ToolInfo, apps []AppInfo, simplified bool, messages SelectedPluginMessages) []string {
 	if len(mentioned) == 0 {
 		return nil
 	}
@@ -246,7 +281,7 @@ func BuildPluginInjections(mentioned []CapabilitySummary, mcpTools []ToolInfo, a
 				appNames[connectorDisplayLabel(&app)] = true
 			}
 		}
-		rendered, ok := RenderExplicitPluginInstructions(&plugin, sortedKeys(servers), sortedKeys(appNames), simplified)
+		rendered, ok := RenderExplicitPluginInstructionsWithMessages(&plugin, sortedKeys(servers), sortedKeys(appNames), simplified, messages)
 		if ok {
 			out = append(out, rendered)
 		}

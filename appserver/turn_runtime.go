@@ -11003,11 +11003,12 @@ func (r *RuntimeRouter) instructionsWithPluginContext(threadID string, cfg *conf
 	if len(mentioned) > 0 {
 		mcpTools, _ := r.mcpRuntimeInputsForServiceWithRequirements(threadID, cfg, r.mcpServiceForThread(threadID, cfg), r.requiredMCPServersForTurn(threadID, cfg, params), r.requiredPluginsForTurn(threadID, cfg, params))
 		appsByID := r.appsForExplicitMentions(threadID, cfg)
-		for _, text := range plugin.BuildPluginInjections(
+		for _, text := range plugin.BuildPluginInjectionsWithMessages(
 			mentioned,
 			pluginToolInfosForRuntime(mcpTools, capabilities),
 			pluginAppInfosForRuntime(appsByID),
 			features.Enabled(cfg.FeatureSettings(), "simplified_selection_hints"),
+			selectedPluginMessagesForModel(modelInfo),
 		) {
 			rendered := contextfrag.Render(contextfrag.NewPluginInstructions(text))
 			if rendered != nil && strings.TrimSpace(rendered.Content) != "" {

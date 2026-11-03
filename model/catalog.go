@@ -147,6 +147,7 @@ type ModelMessages struct {
 // PluginMessages mirrors Rust protocol::openai_models::PluginMessages.
 type PluginMessages struct {
 	Generic         *GenericPluginMessages        `json:"generic,omitempty"`
+	Selected        *SelectedPluginMessages       `json:"selected,omitempty"`
 	Recommendations *PluginRecommendationMessages `json:"recommendations,omitempty"`
 }
 
@@ -154,6 +155,18 @@ type PluginMessages struct {
 type GenericPluginMessages struct {
 	Intro             *string `json:"intro,omitempty"`
 	UsageInstructions *string `json:"usage_instructions,omitempty"`
+}
+
+// SelectedPluginMessages overrides the wording around an explicitly selected
+// plugin. Templates keep their required placeholder.
+type SelectedPluginMessages struct {
+	Intro          *string `json:"intro,omitempty"`
+	SearchTools    *string `json:"search_tools,omitempty"`
+	SkillNamespace *string `json:"skill_namespace,omitempty"`
+	Apps           *string `json:"apps,omitempty"`
+	MCPServers     *string `json:"mcp_servers,omitempty"`
+	Closing        *string `json:"closing,omitempty"`
+	Omitted        *string `json:"omitted,omitempty"`
 }
 
 // PluginRecommendationMessages overrides the recommended-plugins introduction.
