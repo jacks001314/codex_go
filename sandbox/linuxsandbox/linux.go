@@ -26,6 +26,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"codex_go/codexuds"
+	"codex_go/sandbox/sandboxpath"
 )
 
 const (
@@ -510,41 +511,69 @@ func (p *linuxFilesystemPolicy) includePlatformDefaults() bool {
 	return false
 }
 
+// resolveForEnforcement projects this policy through the shared resolver
+// (Rust #59009). The Linux backend owns only the parts that are genuinely
+// Linux-specific: special paths, literal deny masks and glob expansion.
+func (p *linuxFilesystemPolicy) resolveForEnforcement(cwd string, expandGlobs bool) (sandboxpath.ResolvedFileSystemPermissions, error) {
+	if p == nil {
+		return sandboxpath.ResolvedFileSystemPermissions{}, nil
+	}
+	req := sandboxpath.EnforcementRequest{
+		CWD:                      cwd,
+		HasFullDiskReadAccess:    p.hasFullDiskReadAccess(),
+		HasFullDiskWriteAccess:   p.hasFullDiskWriteAccess(),
+		IncludePlatformDefaults:  p.includePlatformDefaults(),
+		PlatformDefaultReadRoots: linuxPlatformDefaultReadRoots,
+		Entries:                  p.enforcementEntries(cwd),
+		GlobScanMaxDepth:         p.GlobScanMaxDepth,
+		Projection:               sandboxpath.ProjectionLinuxMounts,
+		DecorateWritableRoots: func(roots []string) []sandboxpath.WritableRoot {
+			return sandboxpath.WritableRootsWithProtectedSubpaths(roots)
+		},
+	}
+	if expandGlobs {
+		req.ExpandGlob = func(pattern string, maxDepth *int) ([]string, error) {
+			return expandLinuxDenyGlob(pattern, cwd, maxDepth)
+		}
+	}
+	return sandboxpath.ResolveForEnforcement(req)
+}
+
+func (p *linuxFilesystemPolicy) enforcementEntries(cwd string) []sandboxpath.EnforcementEntry {
+	if p == nil {
+		return nil
+	}
+	var entries []sandboxpath.EnforcementEntry
+	for _, entry := range p.Entries {
+		if pattern := strings.TrimSpace(entry.Pattern); pattern != "" {
+			if entry.Access == "deny" {
+				entries = append(entries, sandboxpath.EnforcementEntry{Access: entry.Access, Pattern: pattern})
+			}
+			continue
+		}
+		for _, path := range entry.resolvedPaths(cwd) {
+			if path = cleanLinuxPath(path, cwd); path != "" {
+				entries = append(entries, sandboxpath.EnforcementEntry{Access: entry.Access, Path: path})
+			}
+		}
+	}
+	return entries
+}
+
 // readableRoots returns the roots a restricted-read policy may read, mirroring
 // Rust `get_readable_roots_with_cwd` (`permissions.rs:1455-1478`) plus the
-// platform-default and procfs augmentation `create_filesystem_args`
-// (`bwrap.rs:522-556`) applies before layering the scoped mounts. A policy with
-// unrestricted reads has no roots to layer: the caller binds `/` instead.
+// platform-default augmentation `create_filesystem_args` (`bwrap.rs:522-556`)
+// applies before layering the scoped mounts. A policy with unrestricted reads
+// has no roots to layer: the caller binds `/` instead.
 func (p *linuxFilesystemPolicy) readableRoots(cwd string) []string {
 	if p == nil || p.hasFullDiskReadAccess() {
 		return nil
 	}
-	seen := map[string]bool{}
-	roots := []string{}
-	add := func(path string) {
-		path = cleanLinuxPath(path, cwd)
-		if path == "" || seen[path] {
-			return
-		}
-		seen[path] = true
-		roots = append(roots, path)
+	resolved, err := p.resolveForEnforcement(cwd, false)
+	if err != nil {
+		return nil
 	}
-	for _, entry := range p.Entries {
-		if !entry.canRead() {
-			continue
-		}
-		for _, path := range entry.resolvedPaths(cwd) {
-			add(path)
-		}
-	}
-	if p.includePlatformDefaults() {
-		for _, path := range linuxPlatformDefaultReadRoots {
-			add(path)
-		}
-		// Rust also reuses the caller's procfs here, but only when the pid
-		// namespace is inherited; this CLI always unshares pid and mounts a
-		// fresh procfs after the filesystem arguments instead.
-	}
+	roots := append([]string(nil), resolved.ReadableRoots...)
 	sort.Strings(roots)
 	return roots
 }
@@ -570,22 +599,13 @@ func (p *linuxFilesystemPolicy) writableRoots(cwd string) []string {
 	if p == nil || p.hasFullDiskWriteAccess() {
 		return []string{"/"}
 	}
-	seen := map[string]bool{}
-	var roots []string
-	add := func(path string) {
-		path = cleanLinuxPath(path, cwd)
-		if path != "" && !seen[path] {
-			seen[path] = true
-			roots = append(roots, path)
-		}
+	resolved, err := p.resolveForEnforcement(cwd, false)
+	if err != nil {
+		return nil
 	}
-	for _, entry := range p.Entries {
-		if !entry.canWrite() {
-			continue
-		}
-		for _, path := range entry.resolvedPaths(cwd) {
-			add(path)
-		}
+	roots := make([]string, 0, len(resolved.WritableRoots))
+	for _, root := range resolved.WritableRoots {
+		roots = append(roots, root.Root)
 	}
 	return roots
 }
@@ -642,34 +662,11 @@ func (p *linuxFilesystemPolicy) unreadableRoots(cwd string) ([]string, error) {
 	if p == nil {
 		return nil, nil
 	}
-	seen := map[string]bool{}
-	var paths []string
-	add := func(path string) {
-		path = cleanLinuxPath(path, cwd)
-		if path != "" && !seen[path] {
-			seen[path] = true
-			paths = append(paths, path)
-		}
+	resolved, err := p.resolveForEnforcement(cwd, true)
+	if err != nil {
+		return nil, err
 	}
-	for _, entry := range p.Entries {
-		if entry.Access != "deny" {
-			continue
-		}
-		if strings.TrimSpace(entry.Pattern) != "" {
-			matches, err := expandLinuxDenyGlob(entry.Pattern, cwd, p.GlobScanMaxDepth)
-			if err != nil {
-				return nil, err
-			}
-			for _, match := range matches {
-				add(match)
-			}
-			continue
-		}
-		for _, path := range entry.resolvedPaths(cwd) {
-			add(path)
-		}
-	}
-	return paths, nil
+	return resolved.UnreadableRoots, nil
 }
 
 func (e *linuxFilesystemEntry) canRead() bool {

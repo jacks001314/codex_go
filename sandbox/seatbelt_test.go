@@ -356,7 +356,7 @@ func TestBuildSeatbeltPolicyProtectsResolvedSymlinkAncestorsLikeRust(t *testing.
 	policy.WritableRoots = []string{root}
 	profile.SandboxPolicy = policy
 
-	ancestors := seatbeltProtectedAncestors(policy, root)
+	ancestors := seatbeltProtectedAncestors(policy.GetWritableRootsWithCWD(root))
 	contains := func(want string) bool {
 		want = cleanSeatbeltPath(want)
 		for _, ancestor := range ancestors {
@@ -403,7 +403,7 @@ func TestSeatbeltProtectedAncestorsFollowResolvedTargetsLikeRust(t *testing.T) {
 	policy.WritableRoots = []string{root}
 	profile.SandboxPolicy = policy
 
-	ancestors := seatbeltProtectedAncestors(policy, root)
+	ancestors := seatbeltProtectedAncestors(policy.GetWritableRootsWithCWD(root))
 	want := cleanSeatbeltPath(filepath.Join(root, "real", "nested"))
 	found := false
 	for _, ancestor := range ancestors {

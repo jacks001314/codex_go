@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"codex_go/sandbox/sandboxpath"
 	"codex_go/utils"
 )
 
@@ -103,14 +104,19 @@ func buildSeatbeltPolicyWithManagedNetwork(cwd string, profile *PermissionProfil
 	if profile == nil || profile.Disabled {
 		return "(version 1)\n(allow default)\n", nil, nil
 	}
-	policy := profile.LegacySandboxPolicy()
 	lines := []string{"(version 1)", "(allow default)"}
 	var parameters []seatbeltParameter
-	unreadable := seatbeltDeniedReadPaths(profile.DeniedReadEntries)
+	// Rust #59009: grants, denials and glob masks come from the shared
+	// enforcement resolver instead of being re-derived here.
+	resolved, err := ResolveFileSystemPermissionsForEnforcement(profile, cwd, sandboxpath.ProjectionPreserveMutableRoots)
+	if err != nil {
+		return "", nil, err
+	}
+	unreadable := resolved.UnreadableRoots
 	// Rust #46571: the implicit scratch grants and the writable roots share the
 	// same exclusion set, so a protected path (a read-only subpath or protected
 	// project metadata) is never reopened by a broader allowance.
-	protectedPaths := seatbeltProtectedPaths(policy, cwd)
+	protectedPaths := seatbeltProtectedPaths(resolved.WritableRoots)
 	scratchRoots := cleanAbsoluteSeatbeltPaths([]string{"/tmp", "/var/tmp", "/private/tmp", "/private/var/tmp"})
 	var scratchExclusions []string
 	for _, scratchRoot := range scratchRoots {
@@ -121,7 +127,7 @@ func buildSeatbeltPolicyWithManagedNetwork(cwd string, profile *PermissionProfil
 		}
 	}
 
-	if !policy.HasFullDiskWriteAccess() {
+	if !resolved.HasFullDiskWriteAccess {
 		lines = append(lines, "(deny file-write*)", `(allow file-write-data (literal "/dev/null"))`)
 		// macOS #40961: ordinary sandboxed processes keep system scratch
 		// directories for compatibility, while denying them to filesystem
@@ -146,7 +152,7 @@ func buildSeatbeltPolicyWithManagedNetwork(cwd string, profile *PermissionProfil
 			return "", nil, err
 		}
 		allowedSymlinkedCodexHome = normalizedHome
-		for _, root := range policy.GetWritableRootsWithCWD(cwd) {
+		for _, root := range resolved.WritableRoots {
 			normalizedRoot, literal, err := normalizeSeatbeltWritableRoot(root.Root, allowedSymlinkedCodexHome)
 			if err != nil {
 				return "", nil, err
@@ -194,7 +200,7 @@ func buildSeatbeltPolicyWithManagedNetwork(cwd string, profile *PermissionProfil
 	// Rust #45984: network grants and Unix-socket allowlists must never reopen
 	// the privileged app-server control socket to filesystem-restricted
 	// commands. Keep this after the allowlist so the deny wins.
-	if !policy.HasFullDiskWriteAccess() {
+	if !resolved.HasFullDiskWriteAccess {
 		if directory, ok := sharedDaemonSocketDirectory(); ok {
 			name := fmt.Sprintf("DAEMON_SOCKET_%d", len(parameters))
 			parameters = append(parameters, seatbeltParameter{Name: name, Value: directory})
@@ -217,11 +223,11 @@ func buildSeatbeltPolicyWithManagedNetwork(cwd string, profile *PermissionProfil
 	// syntax directly, so every unreadable glob becomes anchored read/write
 	// denies after all allowances. Global literal basenames skip the ancestor
 	// unlink denies because moving an ancestor cannot expose them.
-	lines = append(lines, seatbeltUnreadableGlobPolicy(profile, cwd)...)
+	lines = append(lines, seatbeltUnreadableGlobPolicy(resolved.UnreadableGlobs)...)
 	// Rust #46571: renaming an allowed ancestor relocates its protected
 	// descendants past their pathname carveouts. Keep these unlink denies last so
 	// no broader allowance can reopen the rename operation.
-	for index, ancestor := range seatbeltProtectedAncestors(policy, cwd) {
+	for index, ancestor := range seatbeltProtectedAncestors(resolved.WritableRoots) {
 		name := fmt.Sprintf("PROTECTED_ANCESTOR_%d", index)
 		parameters = append(parameters, seatbeltParameter{Name: name, Value: ancestor})
 		lines = append(lines, fmt.Sprintf(`(deny file-write-unlink (require-all (vnode-type DIRECTORY) (literal (param "%s"))))`, name))
@@ -229,7 +235,7 @@ func buildSeatbeltPolicyWithManagedNetwork(cwd string, profile *PermissionProfil
 	// Rust #46500: these fcntls mutate files through read-only descriptors,
 	// bypassing file-write* and file-ioctl. Even a deny-default policy needs
 	// this explicit denial. F_MAKECOMPRESSED = 80, F_TRANSFEREXTENTS = 110.
-	if !policy.HasFullDiskWriteAccess() {
+	if !resolved.HasFullDiskWriteAccess {
 		lines = append(lines, `(deny system-fcntl (fcntl-command 80 110))`)
 	}
 	return strings.Join(lines, "\n") + "\n", parameters, nil
@@ -271,9 +277,9 @@ func seatbeltUnixSocketRules(extraAllowUnixSockets []string, managedNetwork *sea
 // seatbeltProtectedPaths returns the protected paths (a writable root's
 // read-only subpaths and protected project metadata paths) that a broader
 // allowance must not reopen.
-func seatbeltProtectedPaths(policy *SandboxPolicy, cwd string) []string {
+func seatbeltProtectedPaths(roots []sandboxpath.WritableRoot) []string {
 	paths := []string{}
-	for _, root := range policy.GetWritableRootsWithCWD(cwd) {
+	for _, root := range roots {
 		for _, protected := range root.ReadOnlySubpaths {
 			paths = appendUniqueSeatbeltPath(paths, cleanSeatbeltPath(protected))
 		}
@@ -288,10 +294,10 @@ func seatbeltProtectedPaths(policy *SandboxPolicy, cwd string) []string {
 // a protected path. Unlinking one of them would relocate the protected
 // descendants past their pathname carveouts (Rust #46571). A protected path that
 // is a symlink protects both its logical entry and its resolved target.
-func seatbeltProtectedAncestors(policy *SandboxPolicy, cwd string) []string {
+func seatbeltProtectedAncestors(roots []sandboxpath.WritableRoot) []string {
 	seen := map[string]bool{}
 	ancestors := []string{}
-	for _, root := range policy.GetWritableRootsWithCWD(cwd) {
+	for _, root := range roots {
 		rootPath := cleanSeatbeltPath(root.Root)
 		for _, protected := range root.ReadOnlySubpaths {
 			logical := cleanSeatbeltPath(protected)
@@ -592,41 +598,6 @@ func protectedMetadataPaths(root string, names []string) []string {
 	return out
 }
 
-func seatbeltDeniedReadPaths(entries []FileSystemSandboxEntry) []string {
-	var paths []string
-	for _, entry := range entries {
-		if entry.Access != FileSystemAccessDeny || entry.Path.Type == "glob_pattern" || entry.Path.Value != nil {
-			continue
-		}
-		if path := strings.TrimSpace(entry.Path.Path); isSeatbeltAbsolutePath(path) {
-			paths = append(paths, cleanSeatbeltPath(path))
-		}
-	}
-	return cleanAbsoluteSeatbeltPaths(paths)
-}
-
-// seatbeltUnreadableGlobPatterns mirrors Rust's `get_unreadable_globs_with_cwd`
-// for Seatbelt's POSIX path semantics: only a restricted profile contributes,
-// every deny glob is resolved against the cwd, and the patterns are sorted and
-// deduplicated.
-func seatbeltUnreadableGlobPatterns(profile *PermissionProfile, cwd string) []string {
-	wire := rustPermissionProfileWireFromPermissionProfile(profile)
-	if wire.Type != "managed" || wire.FileSys == nil || wire.FileSys.Type != "restricted" {
-		return nil
-	}
-	var patterns []string
-	for _, entry := range profile.DeniedReadEntries {
-		if entry.Access != FileSystemAccessDeny || entry.Path.Type != "glob_pattern" || entry.Path.Value != nil {
-			continue
-		}
-		if pattern := seatbeltResolveGlobAgainstCWD(entry.Path.Pattern, cwd); pattern != "" {
-			patterns = append(patterns, pattern)
-		}
-	}
-	sort.Strings(patterns)
-	return dedupeSortedStrings(patterns)
-}
-
 // seatbeltResolveGlobAgainstCWD mirrors `AbsolutePathBuf::resolve_path_against_base`
 // without touching the host filesystem: home-relative patterns expand, relative
 // patterns join the cwd, and Seatbelt's POSIX separators are preserved.
@@ -656,8 +627,7 @@ func seatbeltResolveGlobAgainstCWD(pattern string, cwd string) string {
 // `build_seatbelt_unreadable_glob_policy`: translate each unreadable glob into
 // anchored read and write denies, and deny renaming the directories that could
 // contain matches so protected files cannot be moved past the glob's scope.
-func seatbeltUnreadableGlobPolicy(profile *PermissionProfile, cwd string) []string {
-	unreadableGlobs := seatbeltUnreadableGlobPatterns(profile, cwd)
+func seatbeltUnreadableGlobPolicy(unreadableGlobs []string) []string {
 	if len(unreadableGlobs) == 0 {
 		return nil
 	}
