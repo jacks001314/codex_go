@@ -836,6 +836,7 @@ type MCPService struct {
 	// with this runtime (Rust #40728).
 	permissionProfile        *sandbox.PermissionProfile
 	serverPermissionProfiles map[string]*sandbox.PermissionProfile
+	serverPermissionSources  map[string]MCPServerPermissionSource
 	// codexSelfExe is the host-supplied re-exec binary advertised as a sandbox
 	// launcher after a capability probe (Rust McpConfig::codex_self_exe).
 	codexSelfExe string
@@ -1003,6 +1004,12 @@ func NewMCPService(runtime *RuntimeConfig) *MCPService {
 				service.serverPermissionProfiles[strings.TrimSpace(name)] = cloneMCPPermissionProfile(profile)
 			}
 		}
+		if runtime.ServerPermissionSources != nil {
+			service.serverPermissionSources = make(map[string]MCPServerPermissionSource, len(runtime.ServerPermissionSources))
+			for name, source := range runtime.ServerPermissionSources {
+				service.serverPermissionSources[strings.TrimSpace(name)] = cloneMCPServerPermissionSource(source)
+			}
+		}
 	}
 	return service
 }
@@ -1090,6 +1097,7 @@ func (s *MCPService) ApplyRuntimeConfig(runtime *RuntimeConfig) {
 	s.sharedHTTPClientKey = refreshed.sharedHTTPClientKey
 	s.permissionProfile = refreshed.permissionProfile
 	s.serverPermissionProfiles = refreshed.serverPermissionProfiles
+	s.serverPermissionSources = refreshed.serverPermissionSources
 	s.selectedEnvironments = refreshed.selectedEnvironments
 	s.discoverLocalStdio = refreshed.discoverLocalStdio
 	s.networkPolicyMetadata = refreshed.networkPolicyMetadata

@@ -109,6 +109,7 @@ func applyHostMCPRuntimePaths(runtime *mcp.RuntimeConfig, context hostMCPPathCon
 	if runtime == nil {
 		return
 	}
+	runtime.HostCWD = strings.TrimSpace(context.CWD)
 	if len(context.EnvironmentCWDs) > 0 {
 		runtime.EnvironmentCWDs = make(map[string]string, len(context.EnvironmentCWDs))
 		for key, value := range context.EnvironmentCWDs {

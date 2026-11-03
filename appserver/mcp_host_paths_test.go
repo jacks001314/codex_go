@@ -125,6 +125,9 @@ func TestHostMCPPathsKeepRemotePrimaryLocalLikeRust(t *testing.T) {
 		},
 	}}
 	applyHostMCPRuntimePaths(runtime, context)
+	if runtime.HostCWD != "/host/project" {
+		t.Fatalf("runtime host cwd = %q, want /host/project", runtime.HostCWD)
+	}
 	if runtime.Servers["relative"].Config.CWD != "/host/project" {
 		t.Fatalf("relative server cwd = %q", runtime.Servers["relative"].Config.CWD)
 	}

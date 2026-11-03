@@ -3,6 +3,8 @@ package mcp
 import (
 	"fmt"
 	"strings"
+
+	"codex_go/sandbox"
 )
 
 // Binding captures the MCP catalog revision that a model step observed.
@@ -23,6 +25,10 @@ type Binding struct {
 	// authority has no owner permissions and its calls are rejected.
 	authorityPublished bool
 	authority          map[string]bool
+	// permissionSources freezes each prepared server's policy and directory
+	// context. A runtime refresh may publish new permissions, but this model
+	// step must execute with the authority it observed (Rust #59020).
+	permissionSources map[string]MCPServerPermissionSource
 }
 
 // bindingCatalogRevision identifies one client's catalog at one revision. The
@@ -83,6 +89,12 @@ func (s *MCPService) CaptureBinding(statuses []MCPServerStatus) *Binding {
 			b.catalogs[server] = bindingCatalogRevision{catalog: catalog, revision: revision}
 		}
 		b.tools[server] = set
+		if source, ok := s.PermissionSourceForServer(server); ok {
+			if b.permissionSources == nil {
+				b.permissionSources = map[string]MCPServerPermissionSource{}
+			}
+			b.permissionSources[server] = cloneMCPServerPermissionSource(source)
+		}
 		if b.authorityPublished {
 			if _, ok := s.PermissionProfileForServer(server); ok {
 				b.authority[server] = true
@@ -128,6 +140,17 @@ func (b *Binding) CallTool(params *MCPToolCallParams) (*MCPToolCallResponse, err
 	if b.authorityPublished && !b.authority[server] {
 		return nil, fmt.Errorf("%w: MCP server %q has no published permission authority", ErrInvalidMCPRequest, server)
 	}
+	callParams := *params
+	if source, ok := b.permissionSources[server]; ok {
+		if strings.TrimSpace(callParams.PermissionProfile) == "" && source.Profile != nil {
+			if encoded, encodeErr := sandbox.RuntimePermissionProfileJSON(*source.Profile); encodeErr == nil {
+				callParams.PermissionProfile = strings.TrimSpace(encoded)
+			}
+		}
+		if strings.TrimSpace(callParams.SandboxCWD) == "" {
+			callParams.SandboxCWD = strings.TrimSpace(source.CWD)
+		}
+	}
 	var (
 		response *MCPToolCallResponse
 		err      error
@@ -137,7 +160,7 @@ func (b *Binding) CallTool(params *MCPToolCallParams) (*MCPToolCallResponse, err
 		// after calls prepared against the current revision finish (Rust #43031).
 		ran, runErr := ref.catalog.runWithRevision(ref.revision, func() error {
 			var callErr error
-			response, callErr = b.service.CallTool(params)
+			response, callErr = b.service.CallTool(&callParams)
 			return callErr
 		})
 		if !ran {
@@ -147,7 +170,7 @@ func (b *Binding) CallTool(params *MCPToolCallParams) (*MCPToolCallResponse, err
 			return nil, runErr
 		}
 	} else {
-		response, err = b.service.CallTool(params)
+		response, err = b.service.CallTool(&callParams)
 		if err != nil {
 			return nil, err
 		}

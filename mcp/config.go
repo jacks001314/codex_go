@@ -410,6 +410,10 @@ type RuntimeConfig struct {
 	// the server's environment; the default (local) environment falls back to
 	// the server's configured cwd.
 	EnvironmentCWDs map[string]string
+	// HostCWD is the directory used to interpret thread-owned permissions.
+	// Rust #59020 freezes it with each prepared MCP call so a later runtime
+	// refresh cannot reinterpret those permissions in another checkout.
+	HostCWD string
 	// EnvironmentUseMXC maps an environment id to its effective Windows sandbox
 	// backend (Rust McpConfig::environment_use_mxc, #49781). A missing entry
 	// reports false, so one environment's MXC preference never leaks into
@@ -423,6 +427,11 @@ type RuntimeConfig struct {
 	// A server absent from this map has no published authority, so its calls
 	// and elicitations are rejected (#40728).
 	ServerPermissionProfiles map[string]*sandbox.PermissionProfile
+	// ServerPermissionSources retains the directory context that accompanies
+	// each server's permissions (Rust #59020). It is populated by
+	// SetServerPermissionProfiles and is kept alongside the profile map for
+	// callers that need the complete source rather than only its policy.
+	ServerPermissionSources map[string]MCPServerPermissionSource
 	// OAuthCredentialsStoreMode is Rust's `mcp_oauth_credentials_store`
 	// (auto by default) applied to MCP OAuth credential storage.
 	OAuthCredentialsStoreMode OAuthCredentialsStoreMode
