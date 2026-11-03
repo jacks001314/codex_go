@@ -24,6 +24,10 @@ import (
 	"codex_go/turn"
 )
 
+// messageBoardMCPServerName is the MCP registration name of the temporary
+// in-memory message board (Rust #58973).
+const messageBoardMCPServerName = "codex_message_board"
+
 // messageBoardCleanup removes the discussion boards owned by permanently
 // deleted thread roots (Rust's local thread store `thread_data_cleanup`
 // callback). A child's ID does not match its parent's board, so deleting a
@@ -77,7 +81,22 @@ func messageBoardFeatureEnabled(cfg *config.Config) bool {
 		return false
 	}
 	settings := cfg.FeatureSettings()
+	// Rust #58973: the automatic MCP board takes precedence over the direct
+	// tool registration when both features are on.
+	if featureflags.Enabled(settings, "agent_message_board_mcp") {
+		return false
+	}
 	return featureflags.Enabled(settings, "agent_message_board") && featureflags.Enabled(settings, "multi_agent_v2")
+}
+
+// messageBoardMCPEnabled reports whether the automatic tree-scoped MCP board is
+// active for this configuration (Rust #58973).
+func messageBoardMCPEnabled(cfg *config.Config) bool {
+	if cfg == nil {
+		return false
+	}
+	settings := cfg.FeatureSettings()
+	return featureflags.Enabled(settings, "agent_message_board_mcp") && featureflags.Enabled(settings, "multi_agent_v2")
 }
 
 // messageBoardEnabledForTurn mirrors Rust's `install_agent_message_board` gate:
@@ -182,6 +201,11 @@ func (r *RuntimeRouter) closeMessageBoardHandle(threadID string) {
 	threadID = strings.TrimSpace(threadID)
 	if threadID == "" {
 		return
+	}
+	// Rust #58973: an unloaded thread stops keeping the tree's temporary MCP
+	// endpoint alive. Releasing an unregistered thread is a no-op.
+	if tree, _ := r.runtimeAgentIdentity(threadID); tree != "" {
+		r.messageBoardMCP.ReleaseThread(tree, threadID)
 	}
 	r.messageBoardHandlesMu.Lock()
 	handle, ok := r.messageBoardHandles[threadID]

@@ -758,6 +758,10 @@ type RuntimeRouter struct {
 	// of one agent tree (Rust `InMemoryMessageBoards`); SQLite boards share their
 	// pool through agentboard's own per-path registry.
 	messageBoards agentboard.InMemoryMessageBoards
+	// messageBoardMCP owns one temporary tree-scoped HTTP MCP endpoint per
+	// agent tree while the agent_message_board_mcp feature is enabled
+	// (Rust #58973).
+	messageBoardMCP agentboard.MessageBoardMCPDiscovery
 	// messageBoardHandles keeps one live caller-bound handle per thread, so a
 	// thread reuses its handle across turns and an unloaded thread releases the
 	// tree's board state (Rust opens a handle with the thread runtime and drops
@@ -2802,6 +2806,11 @@ func (r *RuntimeRouter) close() error {
 	// turn).
 	r.contributeDaemonRecoverySnapshot()
 	r.closeShellSnapshots()
+	{
+		messageBoardCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = r.messageBoardMCP.Close(messageBoardCtx)
+		cancel()
+	}
 	if r.codexHomeScanCancel != nil {
 		r.codexHomeScanCancel()
 	}
@@ -15904,7 +15913,8 @@ func (r *RuntimeRouter) managedMCPServiceForThread(threadID string, cfg *config.
 			}
 		}
 	}
-	if !r.mcpConfigManaged.Load() && !mcpConfigContainsThreadRuntime(cfg) && !hasExecutorMCPCandidate &&
+	messageBoardMCP := messageBoardMCPEnabled(cfg)
+	if !messageBoardMCP && !r.mcpConfigManaged.Load() && !mcpConfigContainsThreadRuntime(cfg) && !hasExecutorMCPCandidate &&
 		(r.services.Plugins == nil || len(r.services.Plugins.EnabledMCPServerContributions()) == 0) {
 		return nil, false
 	}
@@ -15921,6 +15931,37 @@ func (r *RuntimeRouter) managedMCPServiceForThread(threadID string, cfg *config.
 		codexHome := strings.TrimSpace(r.services.Config.CodexHome())
 		runtimeAuth := mcp.RuntimeAuthFromSnapshot(r.requireAccount().AuthSnapshot())
 		config := r.runtimeMCPConfigForThread(contributionContext, values, codexHome, runtimeAuth, cfg.Requirements)
+		if messageBoardMCP {
+			// Rust #58973: start the temporary tree-scoped HTTP MCP board on
+			// first use and expose it through the ordinary MCP configuration.
+			tree, _ := r.runtimeAgentIdentity(threadID)
+			if tree != "" {
+				endpoint, authorization, err := r.messageBoardMCP.AcquireThread(
+					context.Background(), tree, threadID,
+					&messageBoardHost{router: r, tree: tree, caller: tree},
+				)
+				if err != nil {
+					slog.Warn("failed to start message-board MCP endpoint", "thread_id", threadID, "error", err)
+				} else {
+					if config.Servers == nil {
+						config.Servers = map[string]mcp.ServerRegistration{}
+					}
+					approval := apps.AppToolApprovalApprove
+					config.Servers[messageBoardMCPServerName] = mcp.ServerRegistration{
+						Name: messageBoardMCPServerName,
+						Config: mcp.ServerConfig{
+							URL:                      endpoint,
+							HTTPHeaders:              map[string]string{"Authorization": authorization},
+							Enabled:                  true,
+							Required:                 true,
+							CodexHome:                codexHome,
+							DefaultToolsApprovalMode: &approval,
+						},
+						Source: "agent_message_board_mcp",
+					}
+				}
+			}
+		}
 		if !skipExecutorMCPServers && !mcpServersDisabled {
 			discoveryCache.applyExecutorMCPServers(r, config, selectedEnvironmentMaps, cfg.Requirements)
 		}

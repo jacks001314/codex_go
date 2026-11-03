@@ -168,6 +168,10 @@ var Registry = []Spec{
 	// Rust (codex-rs/features/src/lib.rs #47946): shared discussion tools for an
 	// agent tree (the in-memory agent message board).
 	{Key: "agent_message_board", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust (codex-rs/features/src/lib.rs #58973): automatically start a
+	// temporary tree-scoped HTTP MCP message board instead of requiring plugin
+	// or endpoint configuration. It takes precedence over agent_message_board.
+	{Key: "agent_message_board_mcp", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "enable_fanout", Stage: StageRemoved},
 	{Key: "apps", Stage: StageStable, DefaultEnabled: true},
 	{Key: "enable_mcp_apps", Stage: StageUnderDevelopment},
