@@ -6,7 +6,9 @@ import (
 	"errors"
 	"strings"
 
+	"codex_go/execserver"
 	"codex_go/features"
+	"codex_go/sandbox"
 	"codex_go/session"
 	"codex_go/state"
 	"codex_go/tool"
@@ -14,9 +16,9 @@ import (
 )
 
 // Direct Guardian review protocol types (Rust #58119). `thread/guardianReview`
-// reviews an idle thread's final injected exec_command without executing it and
-// returns Guardian's structured assessment, or a null assessment when exec
-// policy skips approval.
+// reviews an idle thread's final injected exec_command or apply_patch call
+// without running it and returns Guardian's structured assessment, or a null
+// assessment when the approval policy skips review.
 
 type ThreadGuardianReviewParams struct {
 	ThreadID string `json:"threadId"`
@@ -42,14 +44,30 @@ type ThreadGuardianAssessment struct {
 	Rationale         string                  `json:"rationale"`
 }
 
-// guardianRecordedExecCall is the recorded exec_command a direct review may
-// assess (Rust's RecordedExecCall::from_item).
-type guardianRecordedExecCall struct {
-	CallID    string
+type guardianRecordedCallKind string
+
+const (
+	guardianRecordedCallExecCommand        guardianRecordedCallKind = "exec_command"
+	guardianRecordedCallApplyPatch         guardianRecordedCallKind = "apply_patch"
+	guardianRecordedCallRequestPermissions guardianRecordedCallKind = "request_permissions"
+)
+
+// guardianRecordedToolCall is the recorded tool call a direct review may
+// assess (Rust's RecordedToolCall::from_item).
+type guardianRecordedToolCall struct {
+	CallID string
+	Kind   guardianRecordedCallKind
+	// Arguments carries exec_command's JSON arguments.
 	Arguments string
+	// Input carries apply_patch's freeform patch body.
+	Input string
+	// Reason, Permissions and EnvironmentID carry a request_permissions call.
+	Reason        string
+	Permissions   map[string]any
+	EnvironmentID string
 }
 
-const guardianRecordedExecCallRequirement = "expected a completed plaintext exec_command call with a nonempty call ID"
+const guardianRecordedToolCallRequirement = "expected a completed plaintext exec_command, apply_patch or request_permissions call with a nonempty call ID"
 
 func (r *RuntimeRouter) handleThreadGuardianReviewRuntime(request *Request) (*ThreadGuardianReviewResponse, error) {
 	if r == nil {
@@ -90,7 +108,7 @@ func (r *RuntimeRouter) handleThreadGuardianReviewRuntime(request *Request) (*Th
 	// The review subscribes the requesting connection to the thread; the
 	// subscription outlives the review (Rust #58119).
 	r.subscribeThreadConnection(threadID, request.ConnectionID)
-	call, err := guardianRecordedExecCallFromItems(record.Items)
+	call, err := guardianRecordedToolCallFromItems(record.Items)
 	if err != nil {
 		return nil, err
 	}
@@ -98,15 +116,60 @@ func (r *RuntimeRouter) handleThreadGuardianReviewRuntime(request *Request) (*Th
 		return nil, invalidParams("direct review does not support replaying request_permissions")
 	}
 	turnID := newMemoryTurnID()
-	prepared, err := r.prepareRecordedExecCommand(reviewCtx, threadID, turnID, record, call)
-	if err != nil {
-		return nil, err
-	}
 	response := &ThreadGuardianReviewResponse{CallID: call.CallID}
-	if !prepared.Request.ApprovalRequired || r.commandApprovalForSession(threadID, prepared.Request) {
-		// Exec policy explicitly allows the command: nothing to assess, and
-		// nothing is executed.
-		return response, nil
+	var action state.Action
+	switch call.Kind {
+	case guardianRecordedCallExecCommand:
+		prepared, err := r.prepareRecordedExecCommand(reviewCtx, threadID, turnID, record, call)
+		if err != nil {
+			return nil, err
+		}
+		if !prepared.Request.ApprovalRequired || r.commandApprovalForSession(threadID, prepared.Request) {
+			// Exec policy explicitly allows the command: nothing to assess, and
+			// nothing is executed.
+			return response, nil
+		}
+		action = commandApprovalAction(prepared.Request)
+	case guardianRecordedCallApplyPatch:
+		prepared, err := r.prepareRecordedApplyPatch(reviewCtx, threadID, turnID, record, call)
+		if err != nil {
+			return nil, err
+		}
+		if !prepared.ApprovalRequired || r.fileChangeApprovalForSession(threadID) {
+			// Writable files need no review, and preparing a patch never writes.
+			return response, nil
+		}
+		action = applyPatchApprovalAction(prepared.Request)
+	case guardianRecordedCallRequestPermissions:
+		params := r.guardianReviewTurnParams(threadID, record)
+		cfg, _ := r.effectiveConfigForTurn(params)
+		approvalPolicy := turnApprovalPolicyForTurn(cfg, params)
+		if approvalPolicy == sandbox.ApprovalNever {
+			return response, nil
+		}
+		if approvalPolicy == sandbox.ApprovalGranular {
+			granular := granularApprovalConfigForTurn(cfg, params)
+			if granular == nil || !granular.AllowsRequestPermissions() {
+				return response, nil
+			}
+		}
+		if _, err := additionalPermissionProfileFromJSONMap(call.Permissions); err != nil {
+			return nil, invalidParams(err.Error())
+		}
+		// Live review runs PermissionRequest hooks before Guardian; a hook
+		// decision replaces the assessment (Rust Session::request_approval).
+		if verdict, ok := r.permissionRequestHookVerdict(reviewCtx, threadID, turnID, call.CallID, "request_permissions", nil, requestPermissionsHookToolInput(call.Reason, call.Permissions), nil, firstNonEmpty(call.EnvironmentID, execserver.LocalEnvironmentID)); ok && verdict != nil {
+			return response, nil
+		}
+		action = state.Action{
+			Type:          "request_permissions",
+			EnvironmentID: call.EnvironmentID,
+			TurnID:        turnID,
+			Reason:        call.Reason,
+			Permissions:   call.Permissions,
+		}
+	default:
+		return nil, invalidParams(guardianRecordedToolCallRequirement)
 	}
 	reviewer := r.guardianReviewerForRequest()
 	if reviewer == nil {
@@ -116,7 +179,6 @@ func (r *RuntimeRouter) handleThreadGuardianReviewRuntime(request *Request) (*Th
 	if !ok {
 		return nil, errors.New("Guardian review failed: the reviewer cannot report an assessment")
 	}
-	action := commandApprovalAction(prepared.Request)
 	decision, assessment, reason, err := assessmentReviewer.ReviewAssessment(
 		withGuardianOmittedCall(reviewCtx, call.CallID), threadID, turnID, call.CallID, action)
 	if err != nil {
@@ -179,54 +241,81 @@ func threadGuardianAssessment(decision state.ReviewDecision, assessment *state.A
 	}
 }
 
-// guardianRecordedExecCallFromItems reads the recorded call from the thread's
-// final item (Rust's RecordedExecCall::from_item). A trailing tool output or any
-// other item invalidates the request.
-func guardianRecordedExecCallFromItems(items []session.Item) (*guardianRecordedExecCall, error) {
+// guardianRecordedToolCallFromItems reads the recorded call from the thread's
+// final item (Rust's RecordedToolCall::from_item). A trailing tool output or
+// any other item invalidates the request.
+func guardianRecordedToolCallFromItems(items []session.Item) (*guardianRecordedToolCall, error) {
 	if len(items) == 0 {
-		return nil, invalidParams(guardianRecordedExecCallRequirement)
+		return nil, invalidParams(guardianRecordedToolCallRequirement)
 	}
 	payload := guardianItemPayload(&items[len(items)-1])
 	if len(payload) == 0 {
-		return nil, invalidParams(guardianRecordedExecCallRequirement)
+		return nil, invalidParams(guardianRecordedToolCallRequirement)
 	}
-	if err := guardianRecordedExecCallFields(payload); err != nil {
-		return nil, err
-	}
-	return &guardianRecordedExecCall{
-		CallID:    strings.TrimSpace(stringFromAny(payload["call_id"])),
-		Arguments: strings.TrimSpace(stringFromAny(payload["arguments"])),
-	}, nil
+	return guardianRecordedToolCallFields(payload)
 }
 
-func guardianRecordedExecCallFields(payload map[string]any) error {
-	if strings.TrimSpace(stringFromAny(payload["type"])) != "function_call" ||
-		strings.TrimSpace(stringFromAny(payload["name"])) != "exec_command" {
-		return invalidParams(guardianRecordedExecCallRequirement)
-	}
+func guardianRecordedToolCallFields(payload map[string]any) (*guardianRecordedToolCall, error) {
 	if !guardianDefaultFunctionNamespace(stringFromAny(payload["namespace"])) {
-		return invalidParams(guardianRecordedExecCallRequirement)
+		return nil, invalidParams(guardianRecordedToolCallRequirement)
 	}
-	if guardianEncryptedArgsPresent(payload["encrypted_function_args"]) {
-		return invalidParams(guardianRecordedExecCallRequirement)
-	}
-	if strings.TrimSpace(stringFromAny(payload["call_id"])) == "" {
-		return invalidParams(guardianRecordedExecCallRequirement)
+	callID := strings.TrimSpace(stringFromAny(payload["call_id"]))
+	if callID == "" {
+		return nil, invalidParams(guardianRecordedToolCallRequirement)
 	}
 	switch status := strings.TrimSpace(stringFromAny(payload["status"])); status {
 	case "", "completed":
 	default:
-		return invalidParams(guardianRecordedExecCallRequirement)
+		return nil, invalidParams(guardianRecordedToolCallRequirement)
 	}
-	arguments := strings.TrimSpace(stringFromAny(payload["arguments"]))
-	if arguments == "" {
-		return invalidParams(guardianRecordedExecCallRequirement)
+	payloadType := strings.TrimSpace(stringFromAny(payload["type"]))
+	name := strings.TrimSpace(stringFromAny(payload["name"]))
+	switch {
+	case payloadType == "function_call" && name == "exec_command":
+		if guardianEncryptedArgsPresent(payload["encrypted_function_args"]) {
+			return nil, invalidParams(guardianRecordedToolCallRequirement)
+		}
+		arguments := strings.TrimSpace(stringFromAny(payload["arguments"]))
+		if arguments == "" {
+			return nil, invalidParams(guardianRecordedToolCallRequirement)
+		}
+		var decoded map[string]any
+		if err := json.Unmarshal([]byte(arguments), &decoded); err != nil {
+			return nil, invalidParams("exec_command arguments must be a JSON object")
+		}
+		return &guardianRecordedToolCall{CallID: callID, Kind: guardianRecordedCallExecCommand, Arguments: arguments}, nil
+	case payloadType == "custom_tool_call" && name == "apply_patch":
+		input := strings.TrimSpace(stringFromAny(payload["input"]))
+		if input == "" {
+			return nil, invalidParams(guardianRecordedToolCallRequirement)
+		}
+		return &guardianRecordedToolCall{CallID: callID, Kind: guardianRecordedCallApplyPatch, Input: input}, nil
+	case payloadType == "function_call" && name == "request_permissions":
+		if guardianEncryptedArgsPresent(payload["encrypted_function_args"]) {
+			return nil, invalidParams(guardianRecordedToolCallRequirement)
+		}
+		arguments := strings.TrimSpace(stringFromAny(payload["arguments"]))
+		if arguments == "" {
+			return nil, invalidParams(guardianRecordedToolCallRequirement)
+		}
+		var decoded map[string]any
+		if err := json.Unmarshal([]byte(arguments), &decoded); err != nil {
+			return nil, invalidParams("request_permissions arguments must be a JSON object")
+		}
+		permissions, _ := decoded["permissions"].(map[string]any)
+		if len(permissions) == 0 {
+			return nil, invalidParams("request_permissions requires a permissions object")
+		}
+		return &guardianRecordedToolCall{
+			CallID:        callID,
+			Kind:          guardianRecordedCallRequestPermissions,
+			Reason:        strings.TrimSpace(stringFromAny(decoded["reason"])),
+			Permissions:   permissions,
+			EnvironmentID: strings.TrimSpace(stringFromAny(decoded["environment_id"])),
+		}, nil
+	default:
+		return nil, invalidParams(guardianRecordedToolCallRequirement)
 	}
-	var decoded map[string]any
-	if err := json.Unmarshal([]byte(arguments), &decoded); err != nil {
-		return invalidParams("exec_command arguments must be a JSON object")
-	}
-	return nil
 }
 
 // guardianDefaultFunctionNamespace mirrors Rust's ToolName::is_default_namespace.
@@ -297,15 +386,19 @@ func guardianItemPayload(item *session.Item) map[string]any {
 		if arguments := strings.TrimSpace(stringFromAny(item.Data["arguments"])); arguments != "" {
 			payload["arguments"] = arguments
 		}
+		if input := strings.TrimSpace(stringFromAny(item.Data["input"])); input != "" {
+			payload["input"] = input
+		}
 	}
 	return payload
 }
 
-// guardianHistoryReplaysRequestPermissions reports whether the recorded history
-// contains a plaintext request_permissions call, which a direct review cannot
-// replay (Rust #58028).
+// guardianHistoryReplaysRequestPermissions reports whether history before the
+// reviewed call contains a plaintext request_permissions call. A direct review
+// may assess the final such call but never replays earlier grants (Rust
+// #58028/#58903).
 func guardianHistoryReplaysRequestPermissions(items []session.Item) bool {
-	for i := range items {
+	for i := 0; i < len(items)-1; i++ {
 		payload := guardianItemPayload(&items[i])
 		if len(payload) == 0 {
 			continue
@@ -328,7 +421,7 @@ func guardianHistoryReplaysRequestPermissions(items []session.Item) bool {
 // executing it (Rust's RecordedExecCall::prepare). PreToolUse hooks run before
 // the approval requirement is evaluated so a rewrite or denial cannot be
 // bypassed by policy (#58357/#58368 apply_pre_tool_use).
-func (r *RuntimeRouter) prepareRecordedExecCommand(ctx context.Context, threadID string, turnID string, record *session.Record, call *guardianRecordedExecCall) (*tool.ExecCommandPreparation, error) {
+func (r *RuntimeRouter) prepareRecordedExecCommand(ctx context.Context, threadID string, turnID string, record *session.Record, call *guardianRecordedToolCall) (*tool.ExecCommandPreparation, error) {
 	params := r.guardianReviewTurnParams(threadID, record)
 	cfg, err := r.effectiveConfigForTurn(params)
 	if err != nil {
@@ -363,7 +456,7 @@ func (r *RuntimeRouter) prepareRecordedExecCommand(ctx context.Context, threadID
 		Validation:              validation,
 		UnifiedExecEnvironments: r.unifiedExecEnvironmentsForTurn(params),
 	})
-	effective, err := r.applyRecordedExecPreToolUse(ctx, params, turnID, executor, invocation)
+	effective, err := r.applyRecordedPreToolUse(ctx, params, turnID, executor, invocation)
 	if err != nil {
 		return nil, err
 	}
@@ -374,10 +467,52 @@ func (r *RuntimeRouter) prepareRecordedExecCommand(ctx context.Context, threadID
 	return prepared, nil
 }
 
-// applyRecordedExecPreToolUse runs the shared PreToolUse hook handling for a
-// recorded exec_command and returns the possibly rewritten invocation. A hook
-// denial fails the review even when exec policy would otherwise skip it.
-func (r *RuntimeRouter) applyRecordedExecPreToolUse(ctx context.Context, params *turn.TurnStartParams, turnID string, executor *tool.ShellExecutor, invocation *tool.Invocation) (*tool.Invocation, error) {
+// prepareRecordedApplyPatch verifies a recorded apply_patch call through the
+// same hook, environment and permission resolution a live turn uses, without
+// applying it (Rust #58899).
+func (r *RuntimeRouter) prepareRecordedApplyPatch(ctx context.Context, threadID string, turnID string, record *session.Record, call *guardianRecordedToolCall) (*tool.ApplyPatchPreparation, error) {
+	params := r.guardianReviewTurnParams(threadID, record)
+	cwd := firstNonEmpty(strings.TrimSpace(params.CWD), strings.TrimSpace(record.Metadata.CWD), r.services.DefaultCWD)
+	router, err := r.toolRouterForTurn(cwd, params, turnID)
+	if err != nil {
+		return nil, invalidParams("apply_patch is unavailable on this thread")
+	}
+	executor, ok := router.Executor(tool.PlainName(tool.DefaultApplyPatchToolName))
+	if !ok {
+		return nil, invalidParams("apply_patch is unavailable on this thread")
+	}
+	patchExecutor, ok := executor.(*tool.ApplyPatchExecutor)
+	if !ok {
+		return nil, invalidParams("apply_patch is unavailable on this thread")
+	}
+	invocation := &tool.Invocation{
+		CallID:   call.CallID,
+		ToolName: tool.PlainName(tool.DefaultApplyPatchToolName),
+		Payload:  tool.Payload{Kind: tool.PayloadCustom, Input: call.Input},
+	}
+	effective, err := r.applyRecordedPreToolUse(ctx, params, turnID, patchExecutor, invocation)
+	if err != nil {
+		return nil, err
+	}
+	prepared, err := patchExecutor.PrepareApplyPatch(ctx, effective)
+	if err != nil {
+		return nil, invalidParams(err.Error())
+	}
+	return prepared, nil
+}
+
+// recordedPreToolUseExecutor is the payload surface a recorded tool call needs
+// for the shared PreToolUse handling.
+type recordedPreToolUseExecutor interface {
+	PreToolUsePayload(*tool.Invocation) (*tool.PreToolUsePayload, bool)
+	HookEnvironmentIDs(*tool.Invocation) []string
+	WithUpdatedHookInput(*tool.Invocation, any) (*tool.Invocation, error)
+}
+
+// applyRecordedPreToolUse runs the shared PreToolUse hook handling for a
+// recorded tool call and returns the possibly rewritten invocation. A hook
+// denial fails the review even when the approval policy would otherwise skip it.
+func (r *RuntimeRouter) applyRecordedPreToolUse(ctx context.Context, params *turn.TurnStartParams, turnID string, executor recordedPreToolUseExecutor, invocation *tool.Invocation) (*tool.Invocation, error) {
 	hooks := r.turnHookAdapter(params, turnID)
 	if hooks == nil || executor == nil || invocation == nil {
 		return invocation, nil
@@ -394,7 +529,7 @@ func (r *RuntimeRouter) applyRecordedExecPreToolUse(ctx context.Context, params 
 		if ctx != nil && ctx.Err() != nil {
 			return nil, errors.New("Guardian review failed: the review was cancelled")
 		}
-		return nil, invalidParams("exec_command hook failed: " + err.Error())
+		return nil, invalidParams("direct review hook failed: " + err.Error())
 	}
 	if outcome == nil {
 		return invocation, nil

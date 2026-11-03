@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -133,18 +134,59 @@ func (e *ApplyPatchExecutor) Spec() Spec {
 	}
 }
 
-func (e *ApplyPatchExecutor) Execute(ctx context.Context, invocation *Invocation) (*Output, error) {
-	_ = ctx
+// preparedApplyPatch is the verified patch request a live execution and a
+// direct Guardian review share (Rust prepare_patch_request, #58899). Preparing
+// resolves the environment and verifies every hunk without writing.
+type preparedApplyPatch struct {
+	action            *applypatch.Action
+	request           *ApplyPatchApprovalRequest
+	changes           []map[string]any
+	cwd               string
+	applyOptions      *applypatch.ApplyOptions
+	permissionProfile *sandbox.PermissionProfile
+	sandboxPolicy     *sandbox.SandboxPolicy
+	localFileSystem   bool
+	deniedPath        string
+}
+
+// ApplyPatchPreparation is the verified patch request shared by live execution
+// and direct Guardian review. ApprovalRequired reports whether the executor
+// would ask for approval before applying the patch.
+type ApplyPatchPreparation struct {
+	Action           *applypatch.Action
+	Request          *ApplyPatchApprovalRequest
+	ApprovalRequired bool
+}
+
+// PrepareApplyPatch verifies a patch exactly as Execute does, but never writes
+// it (Rust #58899/#58931 direct review preparation).
+func (e *ApplyPatchExecutor) PrepareApplyPatch(ctx context.Context, invocation *Invocation) (*ApplyPatchPreparation, error) {
+	prepared, failure, err := e.prepareApplyPatch(ctx, invocation)
+	if err != nil {
+		return nil, err
+	}
+	if failure != nil {
+		message := firstNonEmptyString(failure.Error, failure.Body, "apply_patch verification failed")
+		return nil, errors.New(message)
+	}
+	return &ApplyPatchPreparation{
+		Action:           prepared.action,
+		Request:          prepared.request,
+		ApprovalRequired: prepared.deniedPath != "" || (prepared.localFileSystem && !applyPatchRunsWithoutOuterSandbox(prepared.permissionProfile)),
+	}, nil
+}
+
+func (e *ApplyPatchExecutor) prepareApplyPatch(ctx context.Context, invocation *Invocation) (*preparedApplyPatch, *Output, error) {
 	patch, ok := applyPatchPayloadCommand(invocation)
 	if !ok {
-		return nil, RespondToModel(applyPatchUnsupportedPayloadMessage(invocation))
+		return nil, nil, RespondToModel(applyPatchUnsupportedPayloadMessage(invocation))
 	}
 	if strings.TrimSpace(patch) == "" {
-		return nil, RespondToModel("apply_patch requires a patch body")
+		return nil, nil, RespondToModel("apply_patch requires a patch body")
 	}
 	action, err := applypatch.Parse(patch)
 	if err != nil {
-		return nil, RespondToModel("apply_patch verification failed: " + applypatch.FormatError(err))
+		return nil, nil, RespondToModel("apply_patch verification failed: " + applypatch.FormatError(err))
 	}
 	var environmentCheck *UnifiedExecEnvironmentCheck
 	var environmentFileSystems EnvironmentFileSystemProvider
@@ -157,11 +199,11 @@ func (e *ApplyPatchExecutor) Execute(ctx context.Context, invocation *Invocation
 	// files instead of the host process filesystem.
 	resolvedEnvironmentID, err := resolveToolEnvironmentID(environmentCheck, environmentFileSystems, action.EnvironmentID, applyPatchUnavailableMessage)
 	if err != nil {
-		return nil, RespondToModel(err.Error())
+		return nil, nil, RespondToModel(err.Error())
 	}
 	fileSystem, err := ResolveToolEnvironmentFileSystem(environmentCheck, environmentFileSystems, action.EnvironmentID, applyPatchUnavailableMessage, e.cwd())
 	if err != nil {
-		return nil, RespondToModel(err.Error())
+		return nil, nil, RespondToModel(err.Error())
 	}
 	// The patch's working directory is the selected environment's, so the
 	// resolved paths (and the environment-relative requests built from them)
@@ -182,7 +224,7 @@ func (e *ApplyPatchExecutor) Execute(ctx context.Context, invocation *Invocation
 				PathConventionForPath(cwd),
 			)
 			if mergeErr != nil {
-				return nil, RespondToModel("apply_patch verification failed: " + mergeErr.Error())
+				return nil, nil, RespondToModel("apply_patch verification failed: " + mergeErr.Error())
 			}
 			permissionProfile = merged
 			sandboxPolicy = merged.LegacySandboxPolicy()
@@ -194,12 +236,58 @@ func (e *ApplyPatchExecutor) Execute(ctx context.Context, invocation *Invocation
 	// different file.
 	applyOptions.NoFollowSymlinks = applyPatchSandboxBypassed(permissionProfile, sandboxPolicy)
 	if err := action.FillDeleteContent(applyOptions); err != nil {
-		return nil, RespondToModel("apply_patch verification failed: " + applypatch.FormatError(err))
+		return nil, nil, RespondToModel("apply_patch verification failed: " + applypatch.FormatError(err))
 	}
 	if err := action.Verify(applyOptions); err != nil {
-		return nil, RespondToModel("apply_patch verification failed: " + applypatch.FormatError(err))
+		return nil, nil, RespondToModel("apply_patch verification failed: " + applypatch.FormatError(err))
 	}
 	changes := applyPatchFileChanges(action, cwd)
+	approvalRequest := &ApplyPatchApprovalRequest{
+		Action:        action,
+		Changes:       changes,
+		CWD:           cwd,
+		EnvironmentID: firstNonEmptyString(resolvedEnvironmentID, execserver.LocalEnvironmentID),
+		Patch:         patch,
+		Invocation:    invocation,
+	}
+	deniedPath := applyPatchDeniedPath(action, cwd, permissionProfile, sandboxPolicy)
+	_, localFileSystem := fileSystem.(localEnvironmentFileSystem)
+	if localFileSystem {
+		policy := sandboxPolicy
+		if permissionProfile != nil {
+			policy = permissionProfile.LegacySandboxPolicy()
+		}
+		if err := sandbox.ValidateWritableRootsForPolicy(cwd, policy, e.allowedSymlinkedCodexHome); err != nil {
+			body := "apply_patch verification failed: " + err.Error()
+			return nil, &Output{
+				Success:    false,
+				Body:       body,
+				Error:      body,
+				Data:       applyPatchApprovalData("failed", applyPatchFileChanges(action, cwd)),
+				LogPreview: shellLogPreview(body),
+			}, nil
+		}
+	}
+	return &preparedApplyPatch{
+		action:            action,
+		request:           approvalRequest,
+		changes:           changes,
+		cwd:               cwd,
+		applyOptions:      applyOptions,
+		permissionProfile: permissionProfile,
+		sandboxPolicy:     sandboxPolicy,
+		localFileSystem:   localFileSystem,
+		deniedPath:        deniedPath,
+	}, nil, nil
+}
+
+func (e *ApplyPatchExecutor) Execute(ctx context.Context, invocation *Invocation) (*Output, error) {
+	prepared, failure, err := e.prepareApplyPatch(ctx, invocation)
+	if failure != nil || err != nil {
+		return failure, err
+	}
+	action := prepared.action
+	changes := prepared.changes
 	deniedOutput := func(deniedPath string) *Output {
 		body := fmt.Sprintf("apply_patch verification failed: path %s is outside of the project workspace roots", deniedPath)
 		sandbox.RecordFileSystemPolicyViolation(sandbox.PlatformSandboxType(), deniedPath, body)
@@ -211,16 +299,8 @@ func (e *ApplyPatchExecutor) Execute(ctx context.Context, invocation *Invocation
 			LogPreview: shellLogPreview(body),
 		}
 	}
-	approvalRequest := &ApplyPatchApprovalRequest{
-		Action:        action,
-		Changes:       changes,
-		CWD:           cwd,
-		EnvironmentID: firstNonEmptyString(resolvedEnvironmentID, execserver.LocalEnvironmentID),
-		Patch:         patch,
-		Invocation:    invocation,
-	}
 	approved := false
-	deniedPath := applyPatchDeniedPath(action, cwd, permissionProfile, sandboxPolicy)
+	deniedPath := prepared.deniedPath
 	if deniedPath != "" {
 		// Rust #42391: an out-of-root patch is a user decision unless approval
 		// settings reject sandbox approval. Go has no per-patch sandbox here, so
@@ -228,31 +308,14 @@ func (e *ApplyPatchExecutor) Execute(ctx context.Context, invocation *Invocation
 		if e == nil || e.approval == nil {
 			return deniedOutput(deniedPath), nil
 		}
-		if output, ok := e.requestPatchApproval(ctx, approvalRequest, changes); !ok {
+		if output, ok := e.requestPatchApproval(ctx, prepared.request, changes); !ok {
 			return output, nil
 		}
 		approved = true
-		granted := applyPatchWritePermissionsForPaths(action, cwd, permissionProfile, sandboxPolicy)
-		permissionProfile, sandboxPolicy = applyPatchWithWritePermissions(permissionProfile, sandboxPolicy, granted)
-		if deniedPath = applyPatchDeniedPath(action, cwd, permissionProfile, sandboxPolicy); deniedPath != "" {
+		granted := applyPatchWritePermissionsForPaths(action, prepared.cwd, prepared.permissionProfile, prepared.sandboxPolicy)
+		prepared.permissionProfile, prepared.sandboxPolicy = applyPatchWithWritePermissions(prepared.permissionProfile, prepared.sandboxPolicy, granted)
+		if deniedPath = applyPatchDeniedPath(action, prepared.cwd, prepared.permissionProfile, prepared.sandboxPolicy); deniedPath != "" {
 			return deniedOutput(deniedPath), nil
-		}
-	}
-	_, localFileSystem := fileSystem.(localEnvironmentFileSystem)
-	if localFileSystem {
-		policy := sandboxPolicy
-		if permissionProfile != nil {
-			policy = permissionProfile.LegacySandboxPolicy()
-		}
-		if err := sandbox.ValidateWritableRootsForPolicy(cwd, policy, e.allowedSymlinkedCodexHome); err != nil {
-			body := "apply_patch verification failed: " + err.Error()
-			return &Output{
-				Success:    false,
-				Body:       body,
-				Error:      body,
-				Data:       applyPatchApprovalData("failed", applyPatchFileChanges(action, cwd)),
-				LogPreview: shellLogPreview(body),
-			}, nil
 		}
 	}
 	// Rust #42391: an executor-managed sandbox is always available, so a patch
@@ -260,9 +323,9 @@ func (e *ApplyPatchExecutor) Execute(ctx context.Context, invocation *Invocation
 	// external profiles intentionally run without an outer sandbox and also
 	// auto-approve; other local patches stay on the conservative prompt path
 	// because Go has no in-process sandbox around apply_patch.
-	skipApproval := !approved && deniedPath == "" && (!localFileSystem || applyPatchRunsWithoutOuterSandbox(permissionProfile))
+	skipApproval := !approved && deniedPath == "" && (!prepared.localFileSystem || applyPatchRunsWithoutOuterSandbox(prepared.permissionProfile))
 	if e.approval != nil && !approved && !skipApproval {
-		if output, ok := e.requestPatchApproval(ctx, approvalRequest, changes); !ok {
+		if output, ok := e.requestPatchApproval(ctx, prepared.request, changes); !ok {
 			return output, nil
 		}
 	} else if e.decisionSink != nil && !approved {
@@ -278,7 +341,7 @@ func (e *ApplyPatchExecutor) Execute(ctx context.Context, invocation *Invocation
 		}
 		e.decisionSink.AutoApproved(toolName, callID)
 	}
-	result, err := action.ApplyVerified(applyOptions)
+	result, err := action.ApplyVerified(prepared.applyOptions)
 	// Rust #51652: record committed AGENTS.md / AGENTS.override.md edits,
 	// including the changes committed before a later patch failure.
 	recordAgentsMdEditMetrics(result)
@@ -296,7 +359,7 @@ func (e *ApplyPatchExecutor) Execute(ctx context.Context, invocation *Invocation
 	return &Output{
 		Success:    true,
 		Body:       body,
-		Data:       applyPatchResultData(result, action, cwd),
+		Data:       applyPatchResultData(result, action, prepared.cwd),
 		LogPreview: shellLogPreview(body),
 	}, nil
 }
