@@ -140,6 +140,25 @@ type ModelMessages struct {
 	// classifier fields belong to Rust's async scorer, which Go does not have.
 	GuardianV2 *GuardianV2ModelConfig `json:"guardian_v2,omitempty"`
 	Tools      *ToolMessages          `json:"tools,omitempty"`
+	// Plugins carries catalog overrides for plugin guidance (Rust #58894).
+	Plugins *PluginMessages `json:"plugins,omitempty"`
+}
+
+// PluginMessages mirrors Rust protocol::openai_models::PluginMessages.
+type PluginMessages struct {
+	Generic         *GenericPluginMessages        `json:"generic,omitempty"`
+	Recommendations *PluginRecommendationMessages `json:"recommendations,omitempty"`
+}
+
+// GenericPluginMessages overrides the bundled generic plugin guidance.
+type GenericPluginMessages struct {
+	Intro             *string `json:"intro,omitempty"`
+	UsageInstructions *string `json:"usage_instructions,omitempty"`
+}
+
+// PluginRecommendationMessages overrides the recommended-plugins introduction.
+type PluginRecommendationMessages struct {
+	Intro *string `json:"intro,omitempty"`
 }
 
 type CollaborationModeMessages struct {
@@ -645,6 +664,7 @@ func (m *ModelMessages) UnmarshalJSON(data []byte) error {
 		ConfirmationPolicies   *ConfirmationPolicies      `json:"confirmation_policies"`
 		GuardianV2             *GuardianV2ModelConfig     `json:"guardian_v2"`
 		Tools                  *ToolMessages              `json:"tools"`
+		Plugins                *PluginMessages            `json:"plugins"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
@@ -662,6 +682,7 @@ func (m *ModelMessages) UnmarshalJSON(data []byte) error {
 	m.ConfirmationPolicies = raw.ConfirmationPolicies
 	m.GuardianV2 = raw.GuardianV2
 	m.Tools = raw.Tools
+	m.Plugins = raw.Plugins
 	return nil
 }
 

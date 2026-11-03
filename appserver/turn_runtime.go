@@ -8728,7 +8728,7 @@ func (r *RuntimeRouter) appTurnConfigWithOptions(ctx context.Context, threadID s
 	} else if item != nil {
 		inputItems = append(inputItems, item)
 	}
-	recommendedPluginItems := r.recommendedPluginInputItems(threadID, cfg)
+	recommendedPluginItems := r.recommendedPluginInputItems(threadID, cfg, modelInfo)
 	inputItems = append(inputItems, r.explicitAppInputItems(threadID, params, cfg)...)
 	// Rust #45716: the explicitly named connectors join the thread's selection
 	// (which decides whether a later app call is explicit or implicit) and each
@@ -10327,7 +10327,7 @@ func (r *RuntimeRouter) instructionsAndInputItemsWithAdditionalContext(threadID 
 	return strings.TrimSpace(instructions), inputItems
 }
 
-func (r *RuntimeRouter) recommendedPluginInputItems(threadID string, cfg *config.Config) []any {
+func (r *RuntimeRouter) recommendedPluginInputItems(threadID string, cfg *config.Config, modelInfo *model.ModelInfo) []any {
 	candidates := pluginInstallRecommendationCandidates(r.pluginInstallCandidatesForTurn(threadID, cfg))
 	if len(candidates) == 0 {
 		return nil
@@ -10336,7 +10336,8 @@ func (r *RuntimeRouter) recommendedPluginInputItems(threadID string, cfg *config
 	for _, candidate := range candidates {
 		plugins = append(plugins, contextfrag.RecommendedPlugin{ID: candidate.ID, Name: candidate.Name})
 	}
-	rendered := contextfrag.Render(contextfrag.NewRecommendedPluginsInstructions(plugins))
+	_, _, recommendationsIntro := pluginGuidanceForModel(modelInfo)
+	rendered := contextfrag.Render(contextfrag.NewRecommendedPluginsInstructionsWithIntro(plugins, recommendationsIntro))
 	if rendered == nil || strings.TrimSpace(rendered.Content) == "" {
 		return nil
 	}
@@ -10992,7 +10993,8 @@ func (r *RuntimeRouter) instructionsWithPluginContext(threadID string, cfg *conf
 	// explicit-mention injections below, but not the blanket guidance.
 	modelInfo := r.modelInfoForRuntimeWithConfig(params.Model, cfg)
 	if modelInfo == nil || modelInfo.IncludePluginUsageInstructions {
-		available := contextfrag.Render(contextfrag.NewAvailablePluginsInstructions(contextPluginSummaries(capabilities)))
+		intro, usage, _ := pluginGuidanceForModel(modelInfo)
+		available := contextfrag.Render(contextfrag.NewAvailablePluginsInstructionsWithGuidance(contextPluginSummaries(capabilities), intro, usage))
 		if available != nil && strings.TrimSpace(available.Content) != "" {
 			sections = append(sections, available.Content)
 		}
