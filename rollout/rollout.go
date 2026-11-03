@@ -3010,6 +3010,55 @@ func FindThreadPath(codexHome string, threadID string, archived bool) (string, e
 	return "", fmt.Errorf("rollout thread not found: %s", threadID)
 }
 
+// FindThreadRolloutCopies returns every representation of one thread's
+// rollout in recovery order: unarchived copies newest first, then archived
+// copies newest first. A plain sibling hides its compressed partner, matching
+// FindThreadPath. Rust #58959/#58960 use this ordering to retry an ancestor
+// read against another copy when the preferred rollout is truncated.
+func FindThreadRolloutCopies(codexHome string, threadID string) ([]string, error) {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return nil, errors.New("rollout thread id is required")
+	}
+	var copies []string
+	seen := map[string]struct{}{}
+	for _, subdir := range []string{SessionsSubdir, ArchivedSessionsSubdir} {
+		paths, err := collectRolloutPaths(filepath.Join(codexHome, subdir))
+		if err != nil {
+			return nil, err
+		}
+		type rolloutCopy struct {
+			path   string
+			parsed RolloutFileName
+		}
+		found := make([]rolloutCopy, 0, 1)
+		for _, path := range paths {
+			parsed, ok := ParseRolloutFileName(filepath.Base(path))
+			if !ok || parsed.ThreadID != threadID {
+				continue
+			}
+			if existing, ok := ExistingRolloutPath(PlainRolloutPath(path)); ok {
+				path = existing
+			}
+			if _, ok := seen[path]; ok {
+				continue
+			}
+			seen[path] = struct{}{}
+			found = append(found, rolloutCopy{path: path, parsed: parsed})
+		}
+		sort.SliceStable(found, func(i, j int) bool {
+			if !found[i].parsed.Timestamp.Equal(found[j].parsed.Timestamp) {
+				return found[i].parsed.Timestamp.After(found[j].parsed.Timestamp)
+			}
+			return found[i].parsed.RolloutID > found[j].parsed.RolloutID
+		})
+		for _, copy := range found {
+			copies = append(copies, copy.path)
+		}
+	}
+	return copies, nil
+}
+
 // FindRolloutPathByRolloutID mirrors Rust `find_rollout_path_by_rollout_id`
 // (codex-rs/rollout/src/list.rs, Rust #47653): locate one immutable rollout file
 // by its rollout id across the unarchived and archived trees. Unlike

@@ -3,6 +3,7 @@ package rollout
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -55,13 +56,45 @@ func resolveHistoryPrefix(codexHome string, position HistoryPosition, visiting m
 	visiting[threadID] = struct{}{}
 	defer delete(visiting, threadID)
 
-	path, err := findThreadPathIncludingArchived(codexHome, threadID)
+	// Rust #58959/#58960: a fork's inherited history stays readable when the
+	// preferred ancestor copy is truncated or incomplete and another copy of
+	// the same rollout exists. Try every managed copy in order and keep the
+	// preferred copy's error when none of them can be read.
+	paths, err := FindThreadRolloutCopies(codexHome, threadID)
 	if err != nil {
 		return nil, nil, err
 	}
+	if len(paths) == 0 {
+		return nil, nil, fmt.Errorf("rollout thread not found: %s", threadID)
+	}
+	var firstErr error
+	for _, path := range paths {
+		if !managedRolloutLocation(codexHome, path) {
+			continue
+		}
+		items, turns, err := readHistoryPrefixFromRollout(codexHome, path, threadID, position, visiting)
+		if err == nil {
+			return items, turns, nil
+		}
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
+	if firstErr == nil {
+		firstErr = fmt.Errorf("rollout thread not found: %s", threadID)
+	}
+	return nil, nil, firstErr
+}
+
+// readHistoryPrefixFromRollout reads one ancestor copy after validating that
+// it belongs to the requested thread and lives in managed storage.
+func readHistoryPrefixFromRollout(codexHome string, path string, threadID string, position HistoryPosition, visiting map[string]struct{}) ([]session.Item, []session.TurnSnapshot, error) {
 	meta, err := FirstSessionMeta(path)
 	if err != nil {
 		return nil, nil, err
+	}
+	if strings.TrimSpace(meta.ID) != threadID {
+		return nil, nil, fmt.Errorf("rollout %s belongs to thread %s, not %s", path, meta.ID, threadID)
 	}
 	var items []session.Item
 	var turns []session.TurnSnapshot
@@ -83,6 +116,30 @@ func resolveHistoryPrefix(codexHome string, position HistoryPosition, visiting m
 	items = append(items, localItems...)
 	turns = append(turns, localTurns...)
 	return items, turns, nil
+}
+
+// managedRolloutLocation reports whether path resolves inside the Codex home's
+// session trees, mirroring Rust's managed_rollout_path validation.
+func managedRolloutLocation(codexHome string, path string) bool {
+	home, err := filepath.Abs(strings.TrimSpace(codexHome))
+	if err != nil || strings.TrimSpace(codexHome) == "" {
+		return false
+	}
+	target, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	for _, subdir := range []string{SessionsSubdir, ArchivedSessionsSubdir} {
+		root := filepath.Join(home, subdir)
+		relative, err := filepath.Rel(root, target)
+		if err != nil {
+			continue
+		}
+		if relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) && !filepath.IsAbs(relative) {
+			return true
+		}
+	}
+	return false
 }
 
 func readProjectionPrefixLines(path string, endByteOffset uint64, endOrdinalExclusive uint64) ([]Line, error) {
