@@ -2,6 +2,7 @@ package appserver
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
@@ -75,6 +76,15 @@ func (e *appServerHookEnvironmentExecutor) Execute(ctx context.Context, environm
 	useLoginShell := target.AllowLoginShell != nil && *target.AllowLoginShell
 	argv := target.Shell.DeriveExecArgs(script, useLoginShell)
 	processID := "hook-" + uuid.NewString()
+	// Subscribe before the launch so the ordered event stream carries every
+	// chunk. A finished hook can then deliver its decision while a read RPC is
+	// still queued (Rust #58996). Polling remains the fallback.
+	events, eventsErr := client.SubscribeProcessEvents(processID)
+	if eventsErr != nil {
+		events = nil
+	} else {
+		defer events.Close()
+	}
 	if _, err := client.Start(execCtx, &execserver.ExecParams{
 		ProcessID: processID,
 		Argv:      argv,
@@ -93,8 +103,10 @@ func (e *appServerHookEnvironmentExecutor) Execute(ctx context.Context, environm
 
 	written, err := client.Write(execCtx, &execserver.WriteParams{
 		ProcessID: processID,
-		Chunk:     inputJSON + "\n",
-		WriteID:   uuid.NewString(),
+		// The exec-server wire carries process input as base64 (Rust
+		// ExecProcess::write takes bytes; the Go wire field is encoded).
+		Chunk:   base64.StdEncoding.EncodeToString([]byte(inputJSON + "\n")),
+		WriteID: uuid.NewString(),
 	})
 	if err != nil {
 		terminateHookProcess(client, processID)
@@ -108,7 +120,7 @@ func (e *appServerHookEnvironmentExecutor) Execute(ctx context.Context, environm
 		return nil, fmt.Errorf("hook process did not accept its input: %s", written.Status)
 	}
 
-	output, err := readHookEnvironmentOutput(execCtx, client, processID)
+	output, err := readHookEnvironmentOutputRacing(execCtx, client, processID, events)
 	if err != nil {
 		terminateHookProcess(client, processID)
 		if execCtx.Err() != nil {
@@ -117,6 +129,97 @@ func (e *appServerHookEnvironmentExecutor) Execute(ctx context.Context, environm
 		return nil, err
 	}
 	return output, nil
+}
+
+// readHookEnvironmentOutputRacing mirrors Rust's pushed/poll race in
+// hook_environment_executor.rs (#58996). Pushed events win when they form a
+// complete ordered stream; otherwise the bounded read RPC supplies the output.
+func readHookEnvironmentOutputRacing(ctx context.Context, client *execserver.Client, processID string, events *execserver.ProcessEventSubscription) (*EnvironmentHookOutput, error) {
+	if events == nil {
+		return readHookEnvironmentOutput(ctx, client, processID)
+	}
+	type outcome struct {
+		output *EnvironmentHookOutput
+		err    error
+		ok     bool
+	}
+	pollCtx, cancelPoll := context.WithCancel(ctx)
+	defer cancelPoll()
+	pushed := make(chan outcome, 1)
+	go func() {
+		output, ok := pushedHookEnvironmentOutput(ctx, events, processID)
+		pushed <- outcome{output: output, ok: ok}
+	}()
+	polled := make(chan outcome, 1)
+	go func() {
+		output, err := readHookEnvironmentOutput(pollCtx, client, processID)
+		polled <- outcome{output: output, err: err, ok: err == nil}
+	}()
+	for {
+		select {
+		case result := <-pushed:
+			if result.ok {
+				return result.output, nil
+			}
+			// The event stream was incomplete, lagged or closed without an exit
+			// status: retain polling as the fallback.
+			fallback := <-polled
+			return fallback.output, fallback.err
+		case result := <-polled:
+			return result.output, result.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+}
+
+// pushedHookEnvironmentOutput mirrors Rust's pushed_hook_output: consume the
+// ordered events starting at sequence 1 and finish when the process closed
+// with an exit status. Gaps, lag notices and incomplete exits report ok=false
+// so the caller falls back to polling.
+func pushedHookEnvironmentOutput(ctx context.Context, events *execserver.ProcessEventSubscription, processID string) (*EnvironmentHookOutput, bool) {
+	stdout := make([]byte, 0, environmentHookReadMaxBytes)
+	stderr := make([]byte, 0, environmentHookReadMaxBytes)
+	nextSeq := uint64(1)
+	var exitCode *int
+	for {
+		event, err := events.Next(ctx)
+		if err != nil {
+			return nil, false
+		}
+		if event.ProcessID != processID || event.Seq != nextSeq {
+			return nil, false
+		}
+		switch event.Kind {
+		case execserver.ProcessEventOutput:
+			// Event chunks arrive base64-encoded on the wire (the read path
+			// decodes []byte through encoding/json).
+			chunk, decodeErr := base64.StdEncoding.DecodeString(event.Chunk)
+			if decodeErr != nil {
+				return nil, false
+			}
+			if event.Stream == "stderr" {
+				stderr = appendBoundedHookOutput(stderr, chunk)
+			} else {
+				stdout = appendBoundedHookOutput(stdout, chunk)
+			}
+		case execserver.ProcessEventExited:
+			code := event.ExitCode
+			exitCode = &code
+		case execserver.ProcessEventClosed:
+			if exitCode == nil {
+				return nil, false
+			}
+			return &EnvironmentHookOutput{
+				ExitCode: int32(*exitCode),
+				Stdout:   string(stdout),
+				Stderr:   string(stderr),
+			}, true
+		default:
+			return nil, false
+		}
+		nextSeq++
+	}
 }
 
 // environmentExecCWD renders the environment's working directory as a file URI
