@@ -5,6 +5,8 @@
 !/.github/
 !/.github/workflows/
 !/.github/workflows/macos-platform-gates.yml
+!agentboard/plugin/.codex-plugin/
+!agentboard/plugin/.codex-plugin/**
 fuck.*
 code.exe
 bin/
