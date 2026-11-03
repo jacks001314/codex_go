@@ -44,7 +44,8 @@ func (r *RuntimeRouter) messageBoardCleanup(threadIDs []session.ThreadID) error 
 	if len(roots) == 0 {
 		return nil
 	}
-	sqliteConfig, err := r.messageBoardSqliteConfig(r.effectiveConfigForSessionTelemetry())
+	cfg := r.effectiveConfigForSessionTelemetry()
+	sqliteConfig, err := r.messageBoardSqliteConfig(cfg)
 	if err != nil {
 		// No resolvable board storage means there is no durable board to drop;
 		// failing the whole delete here would strand the caller on a missing
@@ -53,6 +54,19 @@ func (r *RuntimeRouter) messageBoardCleanup(threadIDs []session.ThreadID) error 
 	}
 	if err := agentboard.DeleteLocalBoards(context.Background(), sqliteConfig, roots); err != nil {
 		return fmt.Errorf("failed to delete agent message boards: %w", err)
+	}
+	// Guardian evidence boards share the durable board backend but have their
+	// own namespace. Rust #58955 registers their cleanup only when Guardian V3
+	// is enabled, so disabling the feature leaves existing evidence untouched.
+	if featureflags.Enabled(cfg.FeatureSettings(), "guardianv3") {
+		if err := agentboard.DeleteLocalBoardsWithOptions(
+			context.Background(),
+			sqliteConfig,
+			agentboard.GuardianLocalBoardOptions(),
+			roots,
+		); err != nil {
+			return fmt.Errorf("failed to delete Guardian evidence boards: %w", err)
+		}
 	}
 	return nil
 }
