@@ -227,6 +227,10 @@ type Output struct {
 	// SandboxType is the observed process backend for a command execution
 	// (Rust #47568). It is analytics-only and never serialized or model-visible.
 	SandboxType *sandbox.SandboxType `json:"-"`
+	// SandboxDenied reports that the command was blocked by the sandbox. It is
+	// never serialized: the model sees the command output, while hosts use it to
+	// tell a policy denial apart from a command that simply failed.
+	SandboxDenied bool `json:"-"`
 	// ToolResultMetadata is the raw tool-result `_meta` a tool exposes for the
 	// internal executed-tool-call record (Rust `ToolOutput::tool_result_metadata`,
 	// #46010). It is never serialized: the model-visible data carries the

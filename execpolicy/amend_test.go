@@ -44,3 +44,38 @@ func TestAppendNetworkRuleWritesRustDenySpelling(t *testing.T) {
 		t.Fatalf("policy contents = %q, want %q", contents, want)
 	}
 }
+
+func TestAppendAllowPrefixRuleMatchesRustAndDeduplicates(t *testing.T) {
+	policyPath := DefaultPolicyPath(t.TempDir())
+	for range 2 {
+		if err := AppendAllowPrefixRule(policyPath, []string{"echo", "Hello, world!"}); err != nil {
+			t.Fatalf("AppendAllowPrefixRule() error = %v", err)
+		}
+	}
+	contents, err := os.ReadFile(policyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "prefix_rule(pattern=[\"echo\", \"Hello, world!\"], decision=\"allow\")\n"
+	if string(contents) != want {
+		t.Fatalf("policy contents = %q, want %q", contents, want)
+	}
+	policy, err := LoadPolicies([]string{policyPath})
+	if err != nil {
+		t.Fatalf("LoadPolicies() error = %v", err)
+	}
+	if len(policy.Rules) != 1 || policy.Rules[0].Decision != DecisionAllow {
+		t.Fatalf("prefix rules = %#v", policy.Rules)
+	}
+}
+
+func TestAppendAllowPrefixRuleRejectsEmptyPrefix(t *testing.T) {
+	policyPath := DefaultPolicyPath(t.TempDir())
+	err := AppendAllowPrefixRule(policyPath, nil)
+	if err == nil || err.Error() != "prefix rule requires at least one token" {
+		t.Fatalf("AppendAllowPrefixRule(nil) error = %v", err)
+	}
+	if _, statErr := os.Stat(policyPath); !os.IsNotExist(statErr) {
+		t.Fatalf("empty prefix wrote a policy file: %v", statErr)
+	}
+}

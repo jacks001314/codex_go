@@ -6,7 +6,6 @@ import (
 
 	codextui "codex_go/tui"
 
-	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
 	gmtext "github.com/yuin/goldmark/text"
 )
@@ -89,7 +88,7 @@ func fileCitationSpans(source string, cwd string) []fileCitationSpan {
 		return nil
 	}
 	data := []byte(source)
-	document := goldmark.DefaultParser().Parse(gmtext.NewReader(data))
+	document := defaultMarkdownParser.Parse(gmtext.NewReader(data))
 	return findFileCitationSpans(source, collectCitationLiteralRanges(document), cwd)
 }
 

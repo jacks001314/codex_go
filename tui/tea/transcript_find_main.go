@@ -188,7 +188,7 @@ func (m *Model) renderMainTranscriptFindContent() (string, int) {
 	}
 	match, ok := m.mainFind.selected()
 	if !ok {
-		content, _ := m.transcriptRenderCached(m.State, m.transcript.Width)
+		content, _, _ := m.transcriptRenderCached(m.State, m.transcript.Width)
 		return content, -1
 	}
 	width := firstPositive(m.transcript.Width, m.width)
@@ -197,7 +197,7 @@ func (m *Model) renderMainTranscriptFindContent() (string, int) {
 		expanded = map[int]bool{}
 	}
 	expanded[match.message] = true
-	content, ranges := m.renderTranscriptWithExpandedMessages(m.State, width, expanded, false)
+	content, ranges, _ := m.renderTranscriptWithExpandedMessages(m.State, width, expanded, false)
 	if match.message >= len(ranges) {
 		return content, -1
 	}
@@ -220,7 +220,7 @@ func (m *Model) scrollTranscriptToLine(line int) {
 	if offset < 0 {
 		offset = 0
 	}
-	maxOffset := len(strings.Split(m.lastTranscriptContent, "\n")) - m.transcript.Height
+	maxOffset := len(m.transcript.lines) - m.transcript.Height
 	if maxOffset < 0 {
 		maxOffset = 0
 	}

@@ -1769,6 +1769,15 @@ func (r *Runner) toolRouterForRequest(req *Request, run *agentRunConfig) (*tool.
 		options.Shell.Approval = r.ShellApproval
 		options.Shell.DecisionSink = r.sessionTelemetryForRun()
 		options.Shell.Validation.PathConvention = tool.PathConventionForPath(requestCWD(req))
+		if run != nil && run.Config != nil {
+			// Rust's ExecPolicyManager loads operator rules for every session,
+			// including the in-process exec/TUI lanes; the app-server builds the
+			// same merge per turn.
+			options.Shell.Validation.ExecPolicy = execPolicyForRun(r.CodexHome, run.Config)
+			// Cyber-specialized models and models listed in
+			// auto_review.ignore_rules never reuse allow prefix rules.
+			options.Shell.Validation.IgnorePrefixRules = execModelIgnoresAllowPrefixRules(run.Config, run.Model)
+		}
 		r.applyUnifiedExecEnvironments(options)
 		if run != nil {
 			options.Shell.MaxOutputTokens = run.ToolOutputTokenLimit

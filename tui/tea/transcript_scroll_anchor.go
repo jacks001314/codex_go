@@ -18,11 +18,17 @@ type transcriptScrollAnchor struct {
 }
 
 func captureTranscriptScrollAnchor(content string, yOffset, height int) transcriptScrollAnchor {
+	return captureTranscriptScrollAnchorRows(strings.Split(content, "\n"), yOffset, height)
+}
+
+// captureTranscriptScrollAnchorRows is the streaming path: the viewport already
+// owns the painted rows, so following a long transcript must not split it into
+// a fresh string slice on every frame.
+func captureTranscriptScrollAnchorRows(lines []string, yOffset, height int) transcriptScrollAnchor {
 	anchor := transcriptScrollAnchor{yOffset: max(yOffset, 0)}
-	if strings.TrimSpace(content) == "" {
+	if len(lines) == 0 {
 		return anchor
 	}
-	lines := strings.Split(content, "\n")
 	if yOffset < 0 || yOffset >= len(lines) {
 		return anchor
 	}
@@ -44,10 +50,13 @@ func captureTranscriptScrollAnchor(content string, yOffset, height int) transcri
 }
 
 func restoreTranscriptScrollAnchor(content string, anchor transcriptScrollAnchor, maxOffset int) int {
+	return restoreTranscriptScrollAnchorRows(strings.Split(content, "\n"), anchor, maxOffset)
+}
+
+func restoreTranscriptScrollAnchorRows(lines []string, anchor transcriptScrollAnchor, maxOffset int) int {
 	if !anchor.hasAnchor {
 		return clampTranscriptOffset(anchor.yOffset, maxOffset)
 	}
-	lines := strings.Split(content, "\n")
 	best := -1
 	for index, line := range lines {
 		if normalizeTranscriptAnchorLine(line) != anchor.line {

@@ -35,6 +35,9 @@ func (m *Model) insertComposerPaste(pasted string) {
 		// in the next Markdown block instead of extending the quote.
 		m.composer.InsertString("\n\n")
 	}
+	if m.modal == nil {
+		m.recordComposerActivityAt(m.currentTime())
+	}
 }
 
 // composerBlockquotePaste decides whether a paste continues the current

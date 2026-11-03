@@ -91,6 +91,7 @@ func (m *Model) replaceStartupTooltip(tip string) {
 	replacement := historyMessageFromCell(historycell.NewPlainHistoryCell(lines), width)
 	replacement.StartupTip = true
 	m.State.Messages[tipIndex] = replacement
+	m.State.BumpMessagesRevision()
 	m.refreshTranscript()
 }
 

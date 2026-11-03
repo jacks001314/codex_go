@@ -4,6 +4,8 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+
+	"codex_go/shellparse"
 )
 
 // isDangerousCommandWindows mirrors codex-shell-command's Windows dangerous
@@ -27,23 +29,65 @@ func isDangerousPowerShell(command []string) bool {
 	if !isPowerShellExecutable(command[0]) {
 		return false
 	}
-	tokens, ok := parsePowerShellInvocation(command[1:])
+	parsed, ok := parsePowerShellInvocation(command[1:])
 	if !ok {
 		return false
 	}
-	return isDangerousPowerShellWords(tokens)
+	// Rust prefers the strictly lowered literal commands when the script holds
+	// only independent command nodes, so an argument that merely spells a
+	// launcher verb is not mistaken for a command. Anything the literal parser
+	// does not see statically keeps the flat token scan.
+	if parsed.hasScript {
+		if commands, ok := shellparse.ParsePlainPowerShellCommands(parsed.script); ok &&
+			PowerShellCommandsAreIndependent(parsed.script, commands) {
+			for _, words := range commands {
+				if isDangerousPowerShellLiteralWords(words) {
+					return true
+				}
+			}
+			return false
+		}
+	}
+	return isDangerousPowerShellWords(parsed.tokens)
 }
 
 func isDangerousPowerShellWords(words []string) bool {
+	return classifyPowerShellWords(words, true)
+}
+
+// isDangerousPowerShellLiteralWords mirrors Rust's
+// is_dangerous_powershell_literal_words: a strictly lowered command from an
+// independent literal PowerShell script is classified without wrapper leniency.
+// Shell and terminal wrappers can interpret later words as commands, so a
+// wrapper's first word keeps the opaque rules.
+func isDangerousPowerShellLiteralWords(words []string) bool {
+	opaque := false
+	if len(words) > 0 {
+		first := words[0]
+		if isPowerShellExecutable(first) {
+			opaque = true
+		} else if base, ok := windowsExecutableBasename(first); ok {
+			switch base {
+			case "cmd", "cmd.exe", "wt", "wt.exe":
+				opaque = true
+			}
+		}
+	}
+	return classifyPowerShellWords(words, opaque)
+}
+
+// classifyPowerShellWords mirrors Rust's classify_powershell_words. Only the
+// opaque form may treat `start`-style verbs in any position as command entry
+// points; a lowered literal command only resolves them as its leading word.
+func classifyPowerShellWords(words []string, opaque bool) bool {
 	tokens := make([]string, 0, len(words))
 	for _, word := range words {
 		tokens = append(tokens, strings.ToLower(strings.Trim(strings.Trim(word, "'"), `"`)))
 	}
 	hasURL := argsHaveURL(words)
 
-	if hasURL && containsAnyToken(tokens, func(token string) bool {
-		switch token {
-		case "start-process", "start", "saps", "invoke-item", "ii":
+	if hasURL && containsAnyIndexedToken(tokens, func(index int, token string) bool {
+		if (index == 0 || opaque) && isShellExecuteVerb(token) {
 			return true
 		}
 		return strings.Contains(token, "start-process") || strings.Contains(token, "invoke-item")
@@ -79,6 +123,52 @@ func isDangerousPowerShellWords(words []string) bool {
 
 	// Check for force delete operations (e.g. Remove-Item -Force).
 	return hasForceDeleteCmdlet(tokens)
+}
+
+func isShellExecuteVerb(token string) bool {
+	switch token {
+	case "start-process", "start", "saps", "invoke-item", "ii":
+		return true
+	}
+	return false
+}
+
+func containsAnyIndexedToken(tokens []string, predicate func(int, string) bool) bool {
+	for index, token := range tokens {
+		if predicate(index, token) {
+			return true
+		}
+	}
+	return false
+}
+
+// PowerShellCommandsAreIndependent mirrors Rust's
+// powershell_commands_are_independent: strictly lowered commands can be
+// classified on their own only when no pipeline or aliasing/state-sharing form
+// appears in the script.
+func PowerShellCommandsAreIndependent(script string, commands [][]string) bool {
+	if strings.Contains(script, "|") {
+		return false
+	}
+	for _, words := range commands {
+		if len(words) > 0 {
+			if base, ok := windowsExecutableBasename(words[0]); ok {
+				switch base {
+				case "set-alias", "sal", "new-alias", "nal", "set-item", "si", "new-item", "ni":
+					return false
+				}
+			}
+		}
+		for _, word := range words[1:] {
+			lower := strings.ToLower(word)
+			for _, marker := range []string{"start-process", "invoke-item", "shellexecute", "shell.application"} {
+				if strings.Contains(lower, marker) {
+					return false
+				}
+			}
+		}
+	}
+	return true
 }
 
 func isDangerousCmd(command []string) bool {
@@ -384,12 +474,21 @@ func isBrowserExecutable(name string) bool {
 	return false
 }
 
+// parsedPowerShellInvocation mirrors Rust's ParsedPowershell: the flat token
+// list used by the dangerous-word scan plus the raw `-Command` body when the
+// invocation carries one.
+type parsedPowerShellInvocation struct {
+	tokens    []string
+	script    string
+	hasScript bool
+}
+
 // parsePowerShellInvocation parses a PowerShell invocation into a flat token
 // list for the dangerous-word scan. This is a best-effort shlex split of the
 // script text, not a full PowerShell parser.
-func parsePowerShellInvocation(args []string) ([]string, bool) {
+func parsePowerShellInvocation(args []string) (parsedPowerShellInvocation, bool) {
 	if len(args) == 0 {
-		return nil, false
+		return parsedPowerShellInvocation{}, false
 	}
 	index := 0
 	for index < len(args) {
@@ -398,30 +497,39 @@ func parsePowerShellInvocation(args []string) ([]string, bool) {
 		switch lower {
 		case "-command", "/command", "-c":
 			if index+1 >= len(args) || index+2 != len(args) {
-				return nil, false
+				return parsedPowerShellInvocation{}, false
 			}
-			return splitShellWordsStrict(args[index+1])
+			script := args[index+1]
+			tokens, ok := splitShellWordsStrict(script)
+			if !ok {
+				return parsedPowerShellInvocation{}, false
+			}
+			return parsedPowerShellInvocation{tokens: tokens, script: script, hasScript: true}, true
 		case "-nologo", "-noprofile", "-noninteractive", "-mta", "-sta":
 			index++
 			continue
 		}
 		if strings.HasPrefix(lower, "-command:") || strings.HasPrefix(lower, "/command:") {
 			if index+1 != len(args) {
-				return nil, false
+				return parsedPowerShellInvocation{}, false
 			}
 			_, script, found := strings.Cut(argument, ":")
 			if !found {
-				return nil, false
+				return parsedPowerShellInvocation{}, false
 			}
-			return splitShellWordsStrict(script)
+			tokens, ok := splitShellWordsStrict(script)
+			if !ok {
+				return parsedPowerShellInvocation{}, false
+			}
+			return parsedPowerShellInvocation{tokens: tokens, script: script, hasScript: true}, true
 		}
 		if strings.HasPrefix(lower, "-") {
 			index++
 			continue
 		}
-		return append([]string(nil), args[index:]...), true
+		return parsedPowerShellInvocation{tokens: append([]string(nil), args[index:]...)}, true
 	}
-	return nil, false
+	return parsedPowerShellInvocation{}, false
 }
 
 func containsAnyToken(tokens []string, predicate func(string) bool) bool {

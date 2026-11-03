@@ -95,7 +95,7 @@ type activeNetworkApprovalCall struct {
 	// toolCtx is the invocation context the execution watches; persistent is
 	// switched before that context can cancel the token.
 	toolCtx context.Context
-	origin          *guardianReviewOrigin
+	origin  *guardianReviewOrigin
 }
 
 func (c *activeNetworkApprovalCall) isCancelled() bool {
@@ -481,6 +481,7 @@ func (s *networkApprovalService) requestApproval(ctx context.Context, active *ne
 			{"host": request.Host, "action": string(NetworkPolicyRuleDeny)},
 		},
 	}
+	params.AvailableDecisions = commandExecutionAvailableDecisions(params)
 	userWait := s.router.startUserWaitTiming(active.threadID, active.turnID, userWaitOwner)
 	defer userWait.End()
 	var response CommandExecutionRequestApprovalResponse

@@ -99,12 +99,14 @@ func (r *LocalShellRunner) runWithPermissionProfile(ctx context.Context, req *Sh
 	}
 	if err == nil && result != nil {
 		result.SandboxType = cloneSandboxType(plan.SandboxType)
-		sandbox.RecordFileSystemSandboxViolation(plan.SandboxType, sandbox.SandboxExecOutput{
+		output := sandbox.SandboxExecOutput{
 			ExitCode:         result.ExitCode,
 			Stdout:           result.Stdout,
 			Stderr:           result.Stderr,
 			AggregatedOutput: shellOutputText(result),
-		})
+		}
+		result.SandboxDenied = sandbox.IsLikelySandboxDenied(plan.SandboxType, output)
+		sandbox.RecordFileSystemSandboxViolation(plan.SandboxType, output)
 	}
 	return result, err
 }

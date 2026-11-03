@@ -8,9 +8,7 @@ import (
 	codextui "codex_go/tui"
 	"codex_go/utils"
 
-	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
-	"github.com/yuin/goldmark/extension"
 	gmtext "github.com/yuin/goldmark/text"
 )
 
@@ -757,7 +755,7 @@ func stripInlineMarkdown(text string) string {
 	// example snake_case identifiers) are preserved. Naive string replacement
 	// of "*" and "_" would mangle snake_case cells into "snakecase".
 	data := []byte(text)
-	document := goldmark.New(goldmark.WithExtensions(extension.GFM)).Parser().Parse(gmtext.NewReader(data))
+	document := gfmMarkdownParser.Parse(gmtext.NewReader(data))
 	var sb strings.Builder
 	_ = ast.Walk(document, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
 		if !entering {

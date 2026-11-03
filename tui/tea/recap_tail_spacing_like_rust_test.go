@@ -28,7 +28,7 @@ func TestRecapTailSpacingLikeRust(t *testing.T) {
 		if !model.State.Messages[len(model.State.Messages)-1].Recap {
 			t.Fatal("recap metadata was not retained on the transcript message")
 		}
-		content := utils.StripANSI(model.lastTranscriptContent)
+		content := utils.StripANSI(model.transcriptContent())
 		if !strings.HasSuffix(content, "\n") {
 			t.Fatalf("recap tail has no reserved row:\n%s", content)
 		}
@@ -42,7 +42,7 @@ func TestRecapTailSpacingLikeRust(t *testing.T) {
 		model := recapTailTestModel(t, false)
 		model.State.AddMessage(codextui.RoleAssistant, "Follow-up response.")
 		model.refreshTranscript()
-		content := utils.StripANSI(model.lastTranscriptContent)
+		content := utils.StripANSI(model.transcriptContent())
 		if strings.HasSuffix(content, "\n") {
 			t.Fatalf("recap tail spacing survived a completed follow-up:\n%s", content)
 		}
@@ -55,21 +55,21 @@ func TestRecapTailSpacingLikeRust(t *testing.T) {
 		model := recapTailTestModel(t, false)
 		model.Transcript.activeAssistantDeltaItemID = "live-message"
 		model.refreshTranscript()
-		if content := utils.StripANSI(model.lastTranscriptContent); strings.HasSuffix(content, "\n") {
+		if content := utils.StripANSI(model.transcriptContent()); strings.HasSuffix(content, "\n") {
 			t.Fatalf("recap tail spacing survived a live follow-up:\n%s", content)
 		}
 	})
 
 	t.Run("inline transcript", func(t *testing.T) {
 		model := recapTailTestModel(t, true)
-		if content := utils.StripANSI(model.lastTranscriptContent); strings.HasSuffix(content, "\n") {
+		if content := utils.StripANSI(model.transcriptContent()); strings.HasSuffix(content, "\n") {
 			t.Fatalf("inline transcript reserved recap spacing:\n%s", content)
 		}
 	})
 
 	t.Run("single-row viewport", func(t *testing.T) {
 		model := recapTailTestModel(t, false)
-		content := model.lastTranscriptContent
+		content := model.transcriptContent()
 		model.transcript.Height = 1
 		if got := model.reserveRecapTailSpacing(content); got != content {
 			t.Fatalf("single-row viewport reserved recap spacing:\n%s", got)

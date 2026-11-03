@@ -152,12 +152,19 @@ type State struct {
 	Status                  string
 	Messages                []Message
 	MessagesRevision        uint64
-	TotalTokenUsage         TokenUsage
-	LastTokenUsage          TokenUsage
-	ModelContextWindow      *int64
-	RateLimits              []RateLimitStatus
-	RateLimitsLoaded        bool
-	RateLimitsRefreshing    bool
+	// MessagesChangedFrom narrows a message mutation to the earliest index that
+	// may have changed since a transcript layout last consumed the revision.
+	// Zero means unknown, so every message must be compared; after a build the
+	// renderer stores len(Messages), letting a streamed delta re-check only its
+	// own tail cell (Rust caches layouts per HistoryCell identity, so only the
+	// live cell re-renders).
+	MessagesChangedFrom  int
+	TotalTokenUsage      TokenUsage
+	LastTokenUsage       TokenUsage
+	ModelContextWindow   *int64
+	RateLimits           []RateLimitStatus
+	RateLimitsLoaded     bool
+	RateLimitsRefreshing bool
 	// StatusExtraFields carries preformatted /status rows owned by the caller
 	// (the thread-usage block is rendered with tui/status formatters).
 	StatusExtraFields []StatusExtraField
@@ -351,7 +358,25 @@ func (s *State) ResetThread() {
 func (s *State) BumpMessagesRevision() {
 	if s != nil {
 		s.MessagesRevision++
+		s.MessagesChangedFrom = 0
 	}
+}
+
+// BumpMessagesRevisionFrom marks index as the earliest message that changed.
+// Callers that know the mutated cell (the streaming tail) let the transcript
+// skip re-fingerprinting the whole thread before it rebuilds.
+func (s *State) BumpMessagesRevisionFrom(index int) {
+	if s == nil {
+		return
+	}
+	if index < 0 {
+		index = 0
+	}
+	// Zero already means "unknown", which is the conservative full scan.
+	if s.MessagesChangedFrom > index {
+		s.MessagesChangedFrom = index
+	}
+	s.MessagesRevision++
 }
 
 func (s *State) RenderWelcome() string {

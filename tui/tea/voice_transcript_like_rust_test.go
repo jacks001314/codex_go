@@ -39,7 +39,7 @@ func TestLiveVoiceTranscriptAnimatesAndStopsFramesLikeRust(t *testing.T) {
 	if model.liveVoiceTranscript.cell == nil {
 		t.Fatal("the streaming caption has no split-flap cell")
 	}
-	if strings.TrimSpace(model.lastTranscriptContent) == "" {
+	if strings.TrimSpace(model.transcriptContent()) == "" {
 		t.Fatal("live caption missing from transcript")
 	}
 
@@ -48,8 +48,8 @@ func TestLiveVoiceTranscriptAnimatesAndStopsFramesLikeRust(t *testing.T) {
 	if next := model.handleVoiceTranscriptFrame(voiceTranscriptFrameMsg{generation: generation}); next == nil {
 		t.Fatal("the frame chain stopped before the board settled")
 	}
-	if !strings.Contains(model.lastTranscriptContent, "Assistant (voice): GATE") {
-		t.Fatalf("animated caption never showed its glyphs: %q", model.lastTranscriptContent)
+	if !strings.Contains(model.transcriptContent(), "Assistant (voice): GATE") {
+		t.Fatalf("animated caption never showed its glyphs: %q", model.transcriptContent())
 	}
 
 	model.now = func() time.Time { return base.Add(chatwidget.SplitFlapAnimationDuration) }
@@ -109,8 +109,8 @@ func TestLiveVoiceTranscriptRespectsReducedMotionLikeRust(t *testing.T) {
 	if tick := model.handleVoiceNotification(voiceDelta(chatwidget.VoiceTranscriptAssistant, "GATE")); tick != nil {
 		t.Fatal("reduced motion scheduled animation frames")
 	}
-	if !strings.Contains(model.lastTranscriptContent, "GATE") {
-		t.Fatalf("static assistant caption missing: %q", model.lastTranscriptContent)
+	if !strings.Contains(model.transcriptContent(), "GATE") {
+		t.Fatalf("static assistant caption missing: %q", model.transcriptContent())
 	}
 	if _, animating := model.liveVoiceTranscript.cell.AnimationTick(); animating {
 		t.Fatal("reduced-motion caption still animates")
@@ -120,7 +120,7 @@ func TestLiveVoiceTranscriptRespectsReducedMotionLikeRust(t *testing.T) {
 	if model.liveVoiceTranscript.cell != nil {
 		t.Fatal("reduced motion rendered a streamed user caption")
 	}
-	if strings.Contains(model.lastTranscriptContent, "spoken prompt") {
-		t.Fatalf("streamed user caption leaked into the transcript: %q", model.lastTranscriptContent)
+	if strings.Contains(model.transcriptContent(), "spoken prompt") {
+		t.Fatalf("streamed user caption leaked into the transcript: %q", model.transcriptContent())
 	}
 }

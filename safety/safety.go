@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	shellutil "codex_go/shell"
 	"codex_go/utils"
 )
 
@@ -91,7 +92,7 @@ func PromptRejectedByPolicy(policy ApprovalPolicy, promptIsRule bool) (string, b
 func RequirementFromEvaluation(command []string, policy ApprovalPolicy, evaluation Evaluation, prefixRule []string, autoAmendmentAllowed bool) ExecRequirement {
 	switch evaluation.Decision {
 	case DecisionForbidden:
-		return ExecRequirement{Kind: ExecForbidden, Reason: reasonForDecision(command, &evaluation, "forbidden by policy")}
+		return ExecRequirement{Kind: ExecForbidden, Reason: forbiddenReason(command, &evaluation)}
 	case DecisionPrompt, DecisionPromptUser:
 		// Rust #58045 derives the rule-ness from the evaluation's own decision so
 		// a prompt-user checkpoint is treated as a policy rule.
@@ -115,25 +116,102 @@ func RequirementFromEvaluation(command []string, policy ApprovalPolicy, evaluati
 		}
 		return ExecRequirement{
 			Kind:      ExecNeedsApproval,
-			Reason:    reasonForDecision(command, &evaluation, "approval required by policy"),
+			Reason:    promptReason(command, &evaluation, DecisionPrompt, "approval"),
 			Amendment: requestedAmendment(prefixRule, autoAmendmentAllowed, evaluation.MatchedRules),
 		}
 	case DecisionAllow:
-		return ExecRequirement{Kind: ExecSkip, BypassSandbox: allMatchesArePolicyAllows(evaluation.MatchedRules)}
+		requirement := ExecRequirement{
+			Kind:          ExecSkip,
+			BypassSandbox: allMatchesArePolicyAllows(evaluation.MatchedRules),
+		}
+		if autoAmendmentAllowed {
+			// Rust keeps an amendment on the skip requirement for the case where
+			// the sandboxed attempt is denied and the user is asked to retry
+			// unsandboxed: it offers to remember this command then.
+			requirement.Amendment = allowAmendment(evaluation.MatchedRules)
+		}
+		return requirement
 	default:
 		return ExecRequirement{Kind: ExecForbidden, Reason: "unknown exec policy decision"}
 	}
 }
 
+// StrictestDecision returns the most restrictive decision among matches;
+// the zero value means no match. It mirrors Rust's
+// Evaluation::from_matches ordering (allow < prompt < prompt-user < forbidden).
+func StrictestDecision(matches []RuleMatch) Decision {
+	decision := Decision("")
+	for _, match := range matches {
+		if decisionRank(match.Decision) > decisionRank(decision) {
+			decision = match.Decision
+		}
+	}
+	return decision
+}
+
+func decisionRank(decision Decision) int {
+	switch decision {
+	case DecisionAllow:
+		return 1
+	case DecisionPrompt:
+		return 2
+	case DecisionPromptUser:
+		return 3
+	case DecisionForbidden:
+		return 4
+	default:
+		return 0
+	}
+}
+
+// allowAmendment mirrors Rust's
+// try_derive_execpolicy_amendment_for_allow_rules: a heuristically allowed
+// command proposes itself, and any policy match suppresses the proposal because
+// the policy already decides the sandbox behavior.
+func allowAmendment(matches []RuleMatch) *ExecPolicyAmendment {
+	for _, match := range matches {
+		if match.IsPolicy {
+			return nil
+		}
+	}
+	for _, match := range matches {
+		if match.Decision == DecisionAllow && len(match.Prefix) > 0 && !BannedPrefixSuggestion(match.Prefix) {
+			return &ExecPolicyAmendment{PrefixRule: append([]string(nil), match.Prefix...), Decision: DecisionAllow}
+		}
+	}
+	return nil
+}
+
+// requestedAmendment mirrors Rust's
+// try_derive_execpolicy_amendment_for_prompt_rules. A matching policy prompt
+// rule means the operator already expressed an intent for this command, so no
+// amendment is proposed; otherwise the heuristics prompt match's command (the
+// full token list) becomes the reusable prefix.
 func requestedAmendment(prefixRule []string, allowed bool, matches []RuleMatch) *ExecPolicyAmendment {
 	if !allowed {
 		return nil
 	}
-	if len(prefixRule) > 0 && !BannedPrefixSuggestion(prefixRule) {
+	if len(prefixRule) > 0 {
+		if BannedPrefixSuggestion(prefixRule) {
+			return nil
+		}
+		for _, match := range matches {
+			if match.IsPolicy {
+				return nil
+			}
+		}
 		return &ExecPolicyAmendment{PrefixRule: append([]string(nil), prefixRule...), Decision: DecisionAllow}
 	}
+	// Only a policy prompt rule expresses an equivalent reusable decision; an
+	// allow rule on a different segment must not suppress the prompt
+	// command's proposal.
 	for _, match := range matches {
-		if match.IsPolicy && match.Decision == DecisionPrompt && len(match.Prefix) > 0 && !BannedPrefixSuggestion(match.Prefix) {
+		if match.IsPolicy && match.Decision == DecisionPrompt {
+			return nil
+		}
+	}
+	for _, match := range matches {
+		if !match.IsPolicy && match.Decision == DecisionPrompt && len(match.Prefix) > 0 && !BannedPrefixSuggestion(match.Prefix) {
 			return &ExecPolicyAmendment{PrefixRule: append([]string(nil), match.Prefix...), Decision: DecisionAllow}
 		}
 	}
@@ -177,33 +255,72 @@ func bannedPrefixes() [][]string {
 
 // humanApprovalReason mirrors Rust derive_prompt_reason for a prompt-user
 // checkpoint: "`cmd` requires human approval: <justification>" or
-// "`cmd` requires human approval by policy".
+// "`cmd` requires human approval by policy", and no reason at all when no
+// policy rule drove the decision (the caller then keeps the justification).
 func humanApprovalReason(command []string, evaluation *Evaluation) string {
-	if evaluation != nil {
-		for _, match := range evaluation.MatchedRules {
-			if match.IsPolicy && match.Decision == DecisionPromptUser {
-				if strings.TrimSpace(match.Reason) != "" {
-					return "`" + strings.Join(command, " ") + "` requires human approval: " + strings.TrimSpace(match.Reason)
-				}
-			}
-		}
-	}
-	if len(command) == 0 {
-		return "human approval required by policy"
-	}
-	return "`" + strings.Join(command, " ") + "` requires human approval by policy"
+	return promptReason(command, evaluation, DecisionPromptUser, "human approval")
 }
 
-func reasonForDecision(command []string, evaluation *Evaluation, fallback string) string {
+// promptReason mirrors Rust derive_prompt_reason: only a policy rule with the
+// evaluation's decision produces a reason, and the most specific (longest)
+// matching prefix wins.
+func promptReason(command []string, evaluation *Evaluation, decision Decision, label string) string {
+	if evaluation == nil {
+		return ""
+	}
+	found := false
+	bestPrefixLen := -1
+	bestReason := ""
 	for _, match := range evaluation.MatchedRules {
-		if match.Reason != "" {
-			return match.Reason
+		if !match.IsPolicy || match.Decision != decision {
+			continue
+		}
+		if found && len(match.Prefix) <= bestPrefixLen {
+			continue
+		}
+		found = true
+		bestPrefixLen = len(match.Prefix)
+		bestReason = strings.TrimSpace(match.Reason)
+	}
+	if !found {
+		return ""
+	}
+	rendered := shellutil.ShlexJoin(command)
+	if bestReason != "" {
+		return "`" + rendered + "` requires " + label + ": " + bestReason
+	}
+	return "`" + rendered + "` requires " + label + " by policy"
+}
+
+// forbiddenReason mirrors Rust derive_forbidden_reason for the policy-rule
+// case; a command with no forbidden rule match reads as blocked by policy.
+func forbiddenReason(command []string, evaluation *Evaluation) string {
+	rendered := shellutil.ShlexJoin(command)
+	found := false
+	bestPrefixLen := -1
+	bestPrefix := []string(nil)
+	bestReason := ""
+	if evaluation != nil {
+		for _, match := range evaluation.MatchedRules {
+			if !match.IsPolicy || match.Decision != DecisionForbidden {
+				continue
+			}
+			if found && len(match.Prefix) <= bestPrefixLen {
+				continue
+			}
+			found = true
+			bestPrefixLen = len(match.Prefix)
+			bestPrefix = match.Prefix
+			bestReason = strings.TrimSpace(match.Reason)
 		}
 	}
-	if len(command) == 0 {
-		return fallback
+	if !found {
+		return "`" + rendered + "` rejected: blocked by policy"
 	}
-	return fallback + ": " + strings.Join(command, " ")
+	if bestReason != "" {
+		return "`" + rendered + "` rejected: " + bestReason
+	}
+	return "`" + rendered + "` rejected: policy forbids commands starting with `" + shellutil.ShlexJoin(bestPrefix) + "`"
 }
 
 func allMatchesArePolicyAllows(matches []RuleMatch) bool {

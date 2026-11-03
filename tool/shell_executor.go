@@ -19,6 +19,7 @@ import (
 	"codex_go/execserver"
 	"codex_go/network"
 	"codex_go/plugin"
+	"codex_go/safety"
 	"codex_go/sandbox"
 	"codex_go/utils"
 )
@@ -31,6 +32,9 @@ const (
 	// message (Rust #42113). The truncation marker sits outside the retained
 	// bytes, so the marker itself remains legible.
 	execCommandRejectionMaxBytes = 900
+	// sandboxDenialRetryReason is Rust's build_denial_reason_from_output: a
+	// short, stable sentence the approval overlay shows above the command.
+	sandboxDenialRetryReason = "command failed; retry without sandbox?"
 )
 
 // ToolDecisionSink reports the approval decisions a tool call received without
@@ -764,7 +768,14 @@ func (e *ShellExecutor) prepareExecCommand(invocation *Invocation) (*execCommand
 	if environment != nil {
 		commandPlatformOS = environment.PlatformOS
 	}
-	if err := applyDangerousCommandRequirement(req, validation.ApprovalPolicy, execpolicy.DangerousCommandPlatformForExecutorOS(commandPlatformOS), validation.PermissionsPreapproved); err != nil {
+	commandPlatform := execpolicy.DangerousCommandPlatformForExecutorOS(commandPlatformOS)
+	if err := applyDangerousCommandRequirement(req, validation.ApprovalPolicy, commandPlatform, validation.PermissionsPreapproved); err != nil {
+		return nil, RespondToModel(err.Error())
+	}
+	// Rust's orchestrator asks the exec policy for the approval requirement
+	// before the first attempt, including the amendment the approval menu can
+	// offer for a command that failed to run in the sandbox.
+	if err := applyExecPolicyRequirement(req, validation, commandPlatform); err != nil {
 		return nil, RespondToModel(err.Error())
 	}
 	// Rust's ExecCommand approval (and its PermissionRequest hook) names the
@@ -1053,12 +1064,26 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 		req.UnifiedExecEventSink = e.unifiedExecEvents
 		req.UnifiedExecThreadID = e.unifiedExecThreadID
 		req.UnifiedExecTurnID = e.unifiedExecTurnID
-		result, err = e.unifiedExec.Exec(ctx, req, invocation.CallID)
-	} else {
-		result, err = e.shellRunner().Run(ctx, req)
 	}
+	runAttempt := func(attempt *ShellRequest) (*ShellResult, error) {
+		if useUnifiedExec {
+			return e.unifiedExec.Exec(ctx, attempt, invocation.CallID)
+		}
+		return e.shellRunner().Run(ctx, attempt)
+	}
+	result, err = runAttempt(req)
 	if err != nil {
 		return nil, boundedExecCommandError(ctx, err)
+	}
+	// Rust's orchestrator (core/src/tools/orchestrator.rs) retries a command the
+	// sandbox denied: it rewrites the action to escalated permissions, asks for
+	// approval with the denial as the reason, and runs the command once without
+	// the sandbox. Without that retry the operator never sees an approval menu
+	// for a blocked command.
+	if retried, retryErr := e.retrySandboxDenied(ctx, invocation, req, validation, result, runAttempt); retryErr != nil {
+		return nil, boundedExecCommandError(ctx, retryErr)
+	} else if retried != nil {
+		result = retried
 	}
 	// Rust #41393: a one-shot (completion-only) command terminated on timeout or
 	// turn cancellation reports a timed-out command with exit code 124.
@@ -1099,12 +1124,82 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 	}
 	body := shellResultModelTextWithMetadata(result, result.MaxOutputTokensUsed, result.ChunkID)
 	return &Output{
-		Success:     true,
-		Body:        body,
-		Data:        shellResultData(result, result.MaxOutputTokensUsed, result.ChunkID),
-		LogPreview:  shellLogPreview(body),
-		SandboxType: cloneSandboxTypePtr(result.SandboxType),
+		Success:       true,
+		Body:          body,
+		Data:          shellResultData(result, result.MaxOutputTokensUsed, result.ChunkID),
+		LogPreview:    shellLogPreview(body),
+		SandboxType:   cloneSandboxTypePtr(result.SandboxType),
+		SandboxDenied: result.SandboxDenied,
 	}, nil
+}
+
+// retrySandboxDenied mirrors Rust's orchestrator retry for
+// `SandboxErr::Denied` (core/src/tools/orchestrator.rs): the action is
+// rewritten to escalated permissions with the agent's additional permissions
+// cleared, the operator is asked once, and an approved command runs without
+// the sandbox. Every other denial keeps Rust's behavior of reporting the
+// sandbox output to the model without a prompt.
+func (e *ShellExecutor) retrySandboxDenied(
+	ctx context.Context,
+	invocation *Invocation,
+	req *ShellRequest,
+	validation ShellValidationOptions,
+	result *ShellResult,
+	run func(*ShellRequest) (*ShellResult, error),
+) (*ShellResult, error) {
+	if e == nil || invocation == nil || req == nil || result == nil || run == nil {
+		return nil, nil
+	}
+	if !result.SandboxDenied || result.ProcessID != nil || result.TimedOut {
+		return nil, nil
+	}
+	// The attempt already ran unsandboxed, so a denial cannot be escaped further.
+	if req.SandboxPermissions == sandbox.SandboxPermissionsRequireEscalated {
+		return nil, nil
+	}
+	if e.approval == nil {
+		return nil, nil
+	}
+	// Managed networking owns its own approval path, and the sandboxed attempt
+	// may have installed a proxy this retry must not inherit.
+	if req.EnforceManagedNetwork || req.ManagedNetwork != nil || req.RemoteNetworkProxy != nil {
+		return nil, nil
+	}
+	if _, rejected := safety.PromptRejectedByPolicy(shellApprovalPolicy(&validation), false); rejected {
+		return nil, nil
+	}
+	retry := *req
+	retry.SandboxPermissions = sandbox.SandboxPermissionsRequireEscalated
+	retry.AdditionalPermissions = nil
+	retry.ApprovalRequired = true
+	retry.ApprovalReason = sandboxDenialRetryReason
+	retry.Justification = sandboxDenialRetryReason
+	decision, err := e.approval(ctx, &ShellApprovalRequest{Request: &retry, Invocation: invocation})
+	if err != nil || !decision.Approved {
+		return nil, nil
+	}
+	// The approval covers exactly this unsandboxed attempt: rebuild the launch
+	// the way BuildShellRequest does once permissions are preapproved.
+	profileID, profile, err := effectiveShellPermissionProfile(
+		"", nil, retry.SandboxPermissions, nil, true, retry.PathConvention,
+	)
+	if err != nil {
+		return nil, nil
+	}
+	// The approval consumer may retain the request it was handed, so the
+	// escalated launch is a separate value.
+	launch := retry
+	launch.PermissionProfileID = profileID
+	launch.PermissionProfile = profile
+	launch.PermissionProfileJSON = ""
+	launch.SandboxProfile = buildShellSandboxProfile(profile, nil, launch.CWD)
+	launch.ApprovalRequired = false
+	launch.ApprovalReason = ""
+	// The retried launch reports the backend it really runs under so a later
+	// permission-denied line is not classified against the sandbox it left.
+	noSandbox := sandbox.SandboxTypeNone
+	launch.ProcessSandboxType = &noSandbox
+	return run(&launch)
 }
 
 // resolveUnifiedExecEnvironment mirrors Rust's `resolve_tool_environment`

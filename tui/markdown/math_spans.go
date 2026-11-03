@@ -7,7 +7,6 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
 	gmtext "github.com/yuin/goldmark/text"
 )
@@ -63,7 +62,7 @@ func analyzeMathSpans(text string, width int) mathSpanScan {
 	if !strings.Contains(text, "$") && !strings.Contains(text, `\(`) && !strings.Contains(text, `\[`) {
 		return result
 	}
-	document := goldmark.DefaultParser().Parse(gmtext.NewReader([]byte(text)))
+	document := defaultMarkdownParser.Parse(gmtext.NewReader([]byte(text)))
 	math := &mathScanner{
 		text:       text,
 		width:      width,

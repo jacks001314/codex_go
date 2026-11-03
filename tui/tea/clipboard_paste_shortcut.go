@@ -74,6 +74,7 @@ func (m *Model) applyKeyboardPasteText(text string) {
 	if m.composerSelection.active {
 		if m.replaceComposerSelection(bottompane.NormalizePastedText(text)) {
 			m.extendComposerPasteWindow(m.currentTime())
+			m.recordComposerActivityAt(m.currentTime())
 			m.refreshSlashPopup()
 		}
 		return

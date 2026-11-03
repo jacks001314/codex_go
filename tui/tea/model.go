@@ -15,7 +15,6 @@ import (
 
 	sysclipboard "github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/textarea"
-	"github.com/charmbracelet/bubbles/viewport"
 	bubbletea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/term"
@@ -1174,7 +1173,7 @@ type SteerCommittedMsg struct {
 }
 
 type streamEnvelopeMsg struct {
-	Message  bubbletea.Msg
+	Batch    []bubbletea.Msg
 	Messages <-chan bubbletea.Msg
 	Done     bool
 }
@@ -1768,14 +1767,14 @@ type Model struct {
 	// the status line renders on every frame, so the repository root is resolved
 	// once per working directory instead of probing ancestor directories per draw.
 	statusProjectRootCache *cachedStatusProjectRoot
-	// statusRowTickPending marks an in-flight status-row frame. The tick chain is
-	// only re-armed while the row is visible (Rust StatusIndicator::render).
-	statusRowTickPending bool
+	// frames is the Rust FrameRequester equivalent. It coalesces animation frame
+	// requests and notifies the Program, so an idle UI draws nothing.
+	frames frameRequester
 
 	// Overlay stack (new architecture)
 	overlays *overlay.Overlay
 
-	transcript viewport.Model
+	transcript transcriptViewport
 	composer   textarea.Model
 	// composerScroll/composerManual track owned-screen wheel browsing without
 	// moving the caret (Rust #50109). composerTopRow is the zero-based screen
@@ -1993,7 +1992,15 @@ type Model struct {
 	// (Rust #58281 resume_after_approval).
 	resumeFollowAfterApproval string
 	lastTranscriptContent     string
-	lastTranscriptHeight      int
+	// lastTranscriptContentDirty defers joining the painted rows into one
+	// string. Streaming updates the rows every frame but rarely needs the whole
+	// transcript text (Rust keeps per-cell layouts and paints visible rows).
+	lastTranscriptContentDirty        bool
+	lastTranscriptLayoutGeneration    uint64
+	lastTranscriptLayoutGenerationSet bool
+	lastTranscriptExtraKey            string
+	lastTranscriptExtraKeySet         bool
+	lastTranscriptHeight              int
 
 	width       int
 	height      int
@@ -2001,11 +2008,6 @@ type Model struct {
 	// conversationInset, when set, restricts the conversation pane to a
 	// sub-rectangle of the viewport (Rust #58718).
 	conversationInset *ConversationRect
-	// pendingApprovals mirrors Rust BottomPane::delayed_approval_requests:
-	// approval prompts arriving while another approval is visible wait in FIFO
-	// order instead of replacing the visible request. A request addressed to an
-	// inactive thread waits here too (Rust #58720).
-	pendingApprovals []ApprovalRequestMsg
 	// ownedScreen records whether this launch paints the alternate screen
 	// itself. Rust's owned transcript, including bounded composer scrolling,
 	// only applies there.
@@ -2175,7 +2177,21 @@ type Model struct {
 	modal                        *modalState
 	// modalParents retains dialogs covered by a child dialog so cancel/submit
 	// restores the parent backdrop (Rust #50504 ViewStack).
-	modalParents                []*modalState
+	modalParents []*modalState
+	// pendingApprovals mirrors Rust BottomPane::delayed_approval_requests:
+	// approval prompts arriving while another approval is visible wait in FIFO
+	// order instead of replacing the visible request.
+	pendingApprovals []ApprovalRequestMsg
+	// approvalPromptDelay mirrors Rust's APPROVAL_PROMPT_TYPING_IDLE_DELAY:
+	// an approval that arrives while the composer is active waits until the
+	// composer has been idle for one second.
+	approvalPromptDelay approvalPromptDelayState
+	// approvalThreadID records the thread the approval queue was last
+	// reconciled against. Rust replays the primary-thread buffer once the
+	// primary thread becomes known (app/thread_routing.rs
+	// enqueue_primary_thread_request); Go watches the same transition through
+	// State.ThreadID.
+	approvalThreadID            string
 	skillPopup                  skillPopupState
 	mentionPopup                *mentionsv2.Popup
 	mentionDismissedToken       string
@@ -2857,6 +2873,38 @@ type transcriptMessageCacheEntry struct {
 	lines []string
 }
 
+// transcriptMessageRenderKey captures every message input that feeds the
+// cached display lines. The layout pass and the prefix-reuse check share it so
+// a cached entry can never be reused with inputs the renderer did not see.
+func transcriptMessageRenderKey(message *codextui.Message, width int, themeID string, raw bool, expanded bool, showRawReasoning bool) transcriptMessageKey {
+	return transcriptMessageKey{
+		role:           message.Role,
+		text:           message.Text,
+		rawText:        message.RawText,
+		transcriptText: message.TranscriptText,
+		width:          width,
+		themeID:        themeID,
+		raw:            raw,
+		expanded:       expanded,
+		transcriptOnly: message.TranscriptOnly,
+		rawReasoning:   showRawReasoning,
+		imagePath:      message.ImagePath,
+		hasActivities:  hasTranscriptActivityIDs(message.ActivityIDs),
+	}
+}
+
+// hasTranscriptActivityIDs mirrors normalizeActivityIDs(...) > 0 without
+// allocating: every per-frame key check would otherwise build a slice per
+// activity cell.
+func hasTranscriptActivityIDs(ids []string) bool {
+	for _, id := range ids {
+		if strings.TrimSpace(id) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // transcriptMessageCache stores per-message display lines indexed by message
 // position. It is invalidated lazily by comparing the message key: a message
 // whose content or render inputs changed is re-rendered, while unchanged
@@ -2865,11 +2913,20 @@ type transcriptMessageCacheEntry struct {
 // history (Rust parity: committed history cells cache their display lines).
 type transcriptMessageCache struct {
 	messages []transcriptMessageCacheEntry
-	// lastContentLen sizes the next frame's builder so re-rendering a long
-	// transcript does not repeatedly grow and copy the output buffer.
-	lastContentLen int
+	// messagesRevision is the State revision observed when the cache was last
+	// filled. Every transcript mutation bumps it, so an unchanged revision lets
+	// a frame skip the O(messages) key scan entirely (Rust's cell cache checks
+	// the cell revision rather than re-fingerprinting the whole transcript).
+	messagesRevision uint64
+	messagesState    *codextui.State
+	revisionValid    bool
+	imageFiles       []transcriptImageFileState
+	// layoutGeneration increments whenever a frame rebuilds the row layout.
+	// The idle path can then tell a cache hit from a rebuilt tail without
+	// materializing the transcript text.
+	layoutGeneration uint64
 	// layout memoizes the joined transcript, its message ranges, and its image
-	// placements. It is validated with the same per-message key scan as the
+	// placements. It is validated by the same revision/key fast path as the
 	// line cache, so it can only be reused when nothing that feeds the layout
 	// changed; the win is skipping the per-message join on a static frame.
 	layout transcriptLayoutCacheEntry
@@ -2892,9 +2949,18 @@ type transcriptLayoutCacheEntry struct {
 	rawReasoning       bool
 	disclosureControls bool
 	hideStartupTips    bool
+	generation         uint64
 	content            string
+	contentValid       bool
 	ranges             [][2]int
 	plans              []transcriptImagePlan
+	lines              []string
+	// rowStarts record where each message's painted rows begin so a rebuild can
+	// reuse the unchanged prefix and only re-lay out the changed cell.
+	rowStarts []int
+	// groupable[i] carries the user-prompt grouping context after message i so
+	// a resumed rebuild continues the same grouping decision.
+	groupable []bool
 }
 
 type rangesOnlyCacheEntry struct {
@@ -2973,7 +3039,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 	composer.SetHeight(defaultComposerHeight)
 	composer.SetWidth(defaultWidth)
 	composer.Focus()
-	transcript := viewport.New(defaultWidth, defaultHeight-defaultComposerHeight-2)
+	transcript := newTranscriptViewport(defaultWidth, defaultHeight-defaultComposerHeight-2)
 	// Rust #50209: the wheel moves one row per event, scaled by the configurable
 	// `tui.mouse_scroll_speed` with fractional accumulation, so the viewport's
 	// own fixed three-row wheel handling stays off.
@@ -3408,7 +3474,12 @@ func NewProgram(ctx context.Context, state *codextui.State, options Options, inp
 	// (TranscriptMode::resolve). An owned screen captures the mouse so the wheel
 	// scrolls the transcript instead of the terminal scrollback; inline mode
 	// leaves both gestures to the terminal.
-	return bubbletea.NewProgram(model, programOptions...)
+	program := bubbletea.NewProgram(model, programOptions...)
+	// Rust parity: FrameRequester notifies the TUI event loop. Bubble Tea's
+	// Program.Send is that notification channel, so animation frames are drawn
+	// only while a surface asks for them.
+	model.frames.attach(program.Send)
+	return program
 }
 
 // usesOwnedScreen reports whether this launch owns the full screen. Rust's
@@ -3536,12 +3607,16 @@ func (m *Model) Init() bubbletea.Cmd {
 		// Rust #43603: recover resize notifications tmux can drop.
 		commands = append(commands, m.sizeMonitorTickCmd())
 	}
-	if m.animEngine != nil {
+	// Rust parity: animation frames run only while a surface animates. Programs
+	// drive them through the FrameRequester; models built without a Program
+	// (tests, embedders) keep the command-driven tick chain.
+	if !m.frames.attached() && m.animEngine != nil {
 		commands = append(commands, m.animEngine.TickCmd())
 	}
 	// Rust StatusIndicatorWidget::render owns the live row's frame cadence
 	// (32 ms while progress/shimmer animate, one second otherwise).
 	commands = append(commands, m.statusRowTickCmd())
+	m.syncFrameDemand()
 	if m.statusControls != nil {
 		commands = append(commands, m.applyTerminalTitleResult(m.statusControls.RefreshTerminalTitle()))
 	}
@@ -3569,10 +3644,40 @@ func (m *Model) Init() bubbletea.Cmd {
 	return bubbletea.Batch(commands...)
 }
 
-// Update handles one message. Rust #54114: deliberate input acknowledges a
+// Update handles one message and reconciles the shared frame chains afterwards.
+// Rust's frame_requester schedules draws from widget state rather than from a
+// permanently running tick, so every state change re-derives what should be
+// ticking. See frame_demand.go.
+func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
+	model, cmd := m.update(message)
+	next, ok := model.(*Model)
+	if !ok || next == nil {
+		return model, cmd
+	}
+	// Frame requests are delivered through the Program (Rust FrameRequester),
+	// so this never rewrites the command the message handler returned.
+	next.syncFrameDemand()
+	if replayCmd := next.reconcileApprovalThread(); replayCmd != nil {
+		if cmd == nil {
+			cmd = replayCmd
+		} else {
+			cmd = bubbletea.Batch(cmd, replayCmd)
+		}
+	}
+	if delayCmd := next.syncApprovalPromptDelay(); delayCmd != nil {
+		if cmd == nil {
+			cmd = delayCmd
+		} else {
+			cmd = bubbletea.Batch(cmd, delayCmd)
+		}
+	}
+	return next, cmd
+}
+
+// update handles one message. Rust #54114: deliberate input acknowledges a
 // retained turn result first, and the message may change the lifecycle state
 // reported to the terminal.
-func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
+func (m *Model) update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 	if m == nil {
 		return m, nil
 	}
@@ -3685,6 +3790,18 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 			}
 			return m, cmd
 		}
+		return m, nil
+	case frameRequestMsg:
+		// Rust FrameRequester draw: advance the shared animation tick and ask
+		// for the next frame only while a surface still animates.
+		if m.animEngine == nil || !m.frameDemandActive() {
+			return m, nil
+		}
+		m.animEngine.Tick()
+		if m.retryActivityActive {
+			m.renderRetryActivity()
+		}
+		m.frames.requestAnim(m.animEngine.FrameDelay())
 		return m, nil
 	case petLoadMsg:
 		return m, m.applyPetLoad(msg)
@@ -4182,6 +4299,8 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 	case ModalRequestMsg:
 		m.openModal(msg)
 		return m, nil
+	case approvalPromptDelayMsg:
+		return m, m.applyApprovalPromptDelay(msg)
 	case ApprovalRequestMsg:
 		return m, m.routeApprovalRequest(msg)
 	case ElicitationRequestMsg:
@@ -4195,11 +4314,16 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 	case requestUserInputTimeoutMsg:
 		return m, m.applyRequestUserInputTimeout(msg)
 	case streamEnvelopeMsg:
-		if msg.Done {
-			return m, nil
+		var cmds []bubbletea.Cmd
+		for _, streamMessage := range msg.Batch {
+			if cmd := m.applyStreamMessage(streamMessage); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
 		}
-		cmd := m.applyStreamMessage(msg.Message)
-		return m, bubbletea.Batch(cmd, waitForStream(msg.Messages))
+		if !msg.Done {
+			cmds = append(cmds, waitForStream(msg.Messages))
+		}
+		return m, bubbletea.Batch(cmds...)
 	case bubbletea.KeyMsg:
 		if m.promptSuggestionTabAccepted {
 			if msg.Type == bubbletea.KeyTab {
@@ -4226,9 +4350,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		// Esc followed by that character. When Vim can consume the Esc and no
 		// active binding claims the Alt stroke, replay both halves in order.
 		if m.shouldRecoverVimInsertEscape(msg, m.legacyVimEscapeRecovery) {
-			_, escapeCmd := m.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEsc})
+			_, escapeCmd := m.update(bubbletea.KeyMsg{Type: bubbletea.KeyEsc})
 			msg.Alt = false
-			recoveredModel, characterCmd := m.Update(msg)
+			recoveredModel, characterCmd := m.update(msg)
 			return recoveredModel, bubbletea.Sequence(escapeCmd, characterCmd)
 		}
 		// The warnings viewer (#48205/#48206) owns the keyboard while it is open;
@@ -4690,6 +4814,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 	m.transcript, cmd = m.transcript.Update(message)
 	if _, mouse := message.(bubbletea.MouseMsg); mouse {
 		m.activityFollow = m.transcript.AtBottom()
+	}
+	if key, ok := message.(bubbletea.KeyMsg); ok && recordsComposerApprovalDelayActivity(key) {
+		m.recordComposerActivityAt(m.currentTime())
 	}
 	var composerCmd bubbletea.Cmd
 	composerBefore := m.composer.Value()
@@ -9973,7 +10100,21 @@ func (m *Model) applyStreamMessage(message bubbletea.Msg) bubbletea.Cmd {
 	if message == nil {
 		return nil
 	}
-	_, cmd := m.Update(message)
+	_, cmd := m.update(message)
+	if replayCmd := m.reconcileApprovalThread(); replayCmd != nil {
+		if cmd == nil {
+			cmd = replayCmd
+		} else {
+			cmd = bubbletea.Batch(cmd, replayCmd)
+		}
+	}
+	if delayCmd := m.syncApprovalPromptDelay(); delayCmd != nil {
+		if cmd == nil {
+			cmd = delayCmd
+		} else {
+			cmd = bubbletea.Batch(cmd, delayCmd)
+		}
+	}
 	return cmd
 }
 
@@ -10867,11 +11008,11 @@ func (m *Model) syncTranscriptHeight() {
 	m.transcript.Height = m.transcriptHeightForLayout()
 }
 
-func (m *Model) transcriptRenderCached(state *codextui.State, width int) (string, [][2]int) {
+func (m *Model) transcriptRenderCached(state *codextui.State, width int) (string, [][2]int, []string) {
 	if state == nil {
-		return "No messages yet.", nil
+		return "No messages yet.", nil, []string{"No messages yet."}
 	}
-	content, ranges, plans := renderTranscriptLayout(
+	content, ranges, plans, lines := renderTranscriptLayout(
 		&m.transcriptMessages,
 		state,
 		m.rawOutput,
@@ -10887,16 +11028,41 @@ func (m *Model) transcriptRenderCached(state *codextui.State, width int) (string
 		fmt.Sprintf("main|%s|%t", m.transcriptImageProtocol(), m.transcriptDisclosureLayoutEnabled()),
 	)
 	m.transcriptImagePlans = plans
-	return content, ranges
+	return content, ranges, lines
+}
+
+// transcriptRenderRowsCached is the per-frame streaming projection. It keeps
+// the authoritative rows and skips joining them into one transcript string.
+func (m *Model) transcriptRenderRowsCached(state *codextui.State, width int) ([][2]int, []string, uint64, bool) {
+	if state == nil {
+		return nil, []string{"No messages yet."}, 0, false
+	}
+	_, ranges, plans, lines, generation, reused := renderTranscriptLayoutRows(
+		&m.transcriptMessages,
+		state,
+		m.rawOutput,
+		width,
+		m.activeTUITheme(),
+		false,
+		nil,
+		m.sessionCWD,
+		m.showRawReasoning,
+		m.transcriptImageResolver(width, false),
+		m.transcriptDisclosureLayoutEnabled(),
+		m.ownedScreen && !m.rawOutput,
+		fmt.Sprintf("main|%s|%t", m.transcriptImageProtocol(), m.transcriptDisclosureLayoutEnabled()),
+	)
+	m.transcriptImagePlans = plans
+	return ranges, lines, generation, reused
 }
 
 // renderTranscriptWithExpandedMessages renders the main transcript with the
 // active disclosure expansion and publishes its image placements.
-func (m *Model) renderTranscriptWithExpandedMessages(state *codextui.State, width int, expanded map[int]bool, revealViewedImages bool) (string, [][2]int) {
+func (m *Model) renderTranscriptWithExpandedMessages(state *codextui.State, width int, expanded map[int]bool, revealViewedImages bool) (string, [][2]int, []string) {
 	if m == nil || state == nil {
-		return "No messages yet.", nil
+		return "No messages yet.", nil, []string{"No messages yet."}
 	}
-	content, ranges, plans := renderTranscriptLayout(
+	content, ranges, plans, lines := renderTranscriptLayout(
 		&m.transcriptMessages,
 		state,
 		m.rawOutput,
@@ -10912,7 +11078,7 @@ func (m *Model) renderTranscriptWithExpandedMessages(state *codextui.State, widt
 		fmt.Sprintf("expanded|%s|%t", m.transcriptImageProtocol(), revealViewedImages),
 	)
 	m.transcriptImagePlans = plans
-	return content, ranges
+	return content, ranges, lines
 }
 
 func (m *Model) refreshTranscript() {
@@ -10928,8 +11094,10 @@ func (m *Model) refreshTranscript() {
 		m.refreshMainTranscriptFindIfNeeded()
 		content, line := m.renderMainTranscriptFindContent()
 		m.lastTranscriptContent = content
+		m.lastTranscriptContentDirty = false
+		m.lastTranscriptLayoutGenerationSet = false
 		m.transcript.SetContent(content)
-		m.recordTranscriptDisclosureHits(m.State, content, nil)
+		m.recordTranscriptDisclosureHitsFromContent(m.State, content, nil)
 		if line >= 0 {
 			m.scrollTranscriptToLine(line)
 		}
@@ -10953,48 +11121,65 @@ func (m *Model) refreshTranscript() {
 		} else {
 			content, ranges, _ := m.renderTranscriptActivityContent()
 			m.lastTranscriptContent = content
+			m.lastTranscriptContentDirty = false
+			m.lastTranscriptLayoutGenerationSet = false
 			m.transcript.SetContent(content)
-			m.recordTranscriptDisclosureHits(m.State, content, ranges)
+			m.recordTranscriptDisclosureHitsFromContent(m.State, content, ranges)
 			m.lastTranscriptHeight = m.transcript.Height
 			return
 		}
 	}
-	content, ranges := m.transcriptRenderCached(m.State, m.transcript.Width)
+	// Capture the reader's anchor before rendering: streaming reuses the
+	// layout's row slices in place, so the painted rows may be rewritten.
+	wasAtBottom := m.activityFollow || m.transcript.AtBottom()
+	var anchor transcriptScrollAnchor
+	if !wasAtBottom {
+		anchor = captureTranscriptScrollAnchorRows(m.transcript.lines, m.transcript.YOffset, m.transcript.Height)
+	}
+	ranges, rows, generation, layoutReused := m.transcriptRenderRowsCached(m.State, m.transcript.Width)
+	extraKey := ""
 	if expanded := m.expandedTranscriptActivityMessages(); len(expanded) > 0 {
-		content, ranges = m.renderTranscriptWithExpandedMessages(m.State, m.transcript.Width, expanded, true)
+		_, ranges, rows = m.renderTranscriptWithExpandedMessages(m.State, m.transcript.Width, expanded, true)
+		generation = m.transcriptMessages.layoutGeneration
+		layoutReused = false
 	}
 	// Rust #48352: once a turn finished with a final answer and the cadence
 	// allows it, a completion tip renders in the transcript (four columns are
 	// reserved for its "  └ " prefix) until the next turn replaces it.
-	if m.completionTipAllowed() && strings.TrimSpace(content) != "" {
+	if m.completionTipAllowed() && len(rows) > 0 {
 		if tip, ok := m.turnTips.completionTip(m.transcript.Width-4, m.keymapConfig, m.activeTUITheme(), m.sessionCWD); ok {
 			// Trailing newlines can be reserved image rows; never trim them
 			// into the completion tip's row.
-			content += "\n  \u2514 " + tip
+			rows = append(rows, "  \u2514 "+tip)
+			extraKey += "completion:" + tip + "\x00"
 			m.turnTips.acknowledge(turnTipSurfaceCompletion)
 		}
 	}
 	// Rust #43656 keeps the streaming caption below the settled transcript and
 	// replaces it with an ordinary history cell once the caption is sealed.
 	if live := m.liveVoiceTranscriptLines(m.transcript.Width); len(live) > 0 {
-		liveContent := strings.Join(live, "\n")
 		if m.State == nil || len(m.State.Messages) == 0 {
-			content = liveContent
+			rows = append([]string(nil), live...)
 		} else {
-			content += "\n" + liveContent
+			rows = append(rows, live...)
 		}
-	} else {
-		content = m.reserveRecapTailSpacing(content)
+		extraKey += "live:" + strings.Join(live, "\n")
+	} else if m.recapTailSpacingNeeded() {
+		rows = append(rows, "")
+		extraKey += "recap"
 	}
-	m.recordTranscriptDisclosureHits(m.State, content, ranges)
-	if content == m.lastTranscriptContent {
+	layoutChanged := !layoutReused || !m.lastTranscriptLayoutGenerationSet || generation != m.lastTranscriptLayoutGeneration
+	extraChanged := !m.lastTranscriptExtraKeySet || extraKey != m.lastTranscriptExtraKey
+	if !layoutChanged && !extraChanged {
 		if m.activityFollow && m.transcript.Height != m.lastTranscriptHeight {
 			m.transcript.GotoBottom()
 		}
 		m.lastTranscriptHeight = m.transcript.Height
 		return
 	}
-	wasAtBottom := m.activityFollow || m.transcript.AtBottom()
+	// Rust keeps disclosure controls inside the cached TextLayout, so an
+	// unchanged transcript never re-scans its rows for hit regions.
+	m.recordTranscriptDisclosureHits(m.State, rows, ranges)
 	revision := uint64(0)
 	if m.State != nil {
 		revision = m.State.MessagesRevision
@@ -11004,20 +11189,33 @@ func (m *Model) refreshTranscript() {
 	}
 	m.transcriptSeenRevision = revision
 	m.transcriptSeenRevisionSet = true
-	yOffset := m.transcript.YOffset
-	var anchor transcriptScrollAnchor
-	if !wasAtBottom {
-		anchor = captureTranscriptScrollAnchor(m.lastTranscriptContent, yOffset, m.transcript.Height)
-	}
-	m.lastTranscriptContent = content
-	m.transcript.SetContent(content)
+	m.transcript.SetLines(rows)
+	m.lastTranscriptContentDirty = true
+	m.lastTranscriptLayoutGeneration = generation
+	m.lastTranscriptLayoutGenerationSet = true
+	m.lastTranscriptExtraKey = extraKey
+	m.lastTranscriptExtraKeySet = true
 	if wasAtBottom {
 		m.transcript.GotoBottom()
 	} else {
-		maxOffset := max(strings.Count(content, "\n")+1-m.transcript.Height, 0)
-		m.transcript.SetYOffset(restoreTranscriptScrollAnchor(content, anchor, maxOffset))
+		maxOffset := max(len(rows)-m.transcript.Height, 0)
+		m.transcript.SetYOffset(restoreTranscriptScrollAnchorRows(rows, anchor, maxOffset))
 	}
 	m.lastTranscriptHeight = m.transcript.Height
+}
+
+// transcriptContent materializes the painted rows only when a caller needs the
+// contiguous transcript text (find, export, tests). Streaming follow frames
+// deliberately leave it dirty instead of rebuilding megabytes per token.
+func (m *Model) transcriptContent() string {
+	if m == nil {
+		return ""
+	}
+	if m.lastTranscriptContentDirty {
+		m.lastTranscriptContent = strings.Join(m.transcript.lines, "\n")
+		m.lastTranscriptContentDirty = false
+	}
+	return m.lastTranscriptContent
 }
 
 // reserveRecapTailSpacing keeps one blank layout row below a trailing recap.
@@ -11026,17 +11224,24 @@ func (m *Model) refreshTranscript() {
 // Rust #47355 omits it for inline output, tiny viewports, or a following live
 // or completed message.
 func (m *Model) reserveRecapTailSpacing(content string) string {
-	if m == nil || m.State == nil || !m.ownedScreen || m.rawOutput || m.transcript.Height <= 1 || strings.TrimSpace(content) == "" {
-		return content
-	}
-	if m.Transcript.activeAssistantDeltaItemID != "" || strings.EqualFold(strings.TrimSpace(m.State.Status), "running") {
-		return content
-	}
-	index := m.lastVisibleTranscriptMessageIndex()
-	if index < 0 || !m.State.Messages[index].Recap {
+	if strings.TrimSpace(content) == "" || !m.recapTailSpacingNeeded() {
 		return content
 	}
 	return content + "\n"
+}
+
+func (m *Model) recapTailSpacingNeeded() bool {
+	if m == nil || m.State == nil || !m.ownedScreen || m.rawOutput || m.transcript.Height <= 1 {
+		return false
+	}
+	if m.Transcript.activeAssistantDeltaItemID != "" || strings.EqualFold(strings.TrimSpace(m.State.Status), "running") {
+		return false
+	}
+	index := m.lastVisibleTranscriptMessageIndex()
+	if index < 0 || !m.State.Messages[index].Recap {
+		return false
+	}
+	return true
 }
 
 // lastVisibleTranscriptMessageIndex skips entries the owned live transcript
@@ -11967,9 +12172,70 @@ func waitForStream(messages <-chan bubbletea.Msg) bubbletea.Cmd {
 		return nil
 	}
 	return func() bubbletea.Msg {
-		message, ok := <-messages
-		return streamEnvelopeMsg{Message: message, Messages: messages, Done: !ok}
+		first, ok := <-messages
+		if !ok {
+			return streamEnvelopeMsg{Messages: messages, Done: true}
+		}
+		batch := []bubbletea.Msg{first}
+		if !mergeableStreamDelta(first) {
+			return streamEnvelopeMsg{Batch: batch, Messages: messages}
+		}
+		for len(batch) < maxCoalescedStreamDeltas {
+			select {
+			case next, ok := <-messages:
+				if !ok {
+					return streamEnvelopeMsg{Batch: batch, Messages: messages, Done: true}
+				}
+				if merged, ok := coalesceStreamDelta(batch[len(batch)-1], next); ok {
+					batch[len(batch)-1] = merged
+					continue
+				}
+				batch = append(batch, next)
+				return streamEnvelopeMsg{Batch: batch, Messages: messages}
+			default:
+				return streamEnvelopeMsg{Batch: batch, Messages: messages}
+			}
+		}
+		return streamEnvelopeMsg{Batch: batch, Messages: messages}
 	}
+}
+
+const maxCoalescedStreamDeltas = 64
+
+// mergeableStreamDelta reports the narrow case where combining two channel
+// messages is semantically identical to applying them in order: assistant text
+// for the same item. Tool input and reasoning/plan deltas have their own state
+// transitions, so they stay one message per frame.
+func mergeableStreamDelta(message bubbletea.Msg) bool {
+	event, ok := message.(ThreadEventMsg)
+	if !ok || event.Event.Type != "item.delta" || event.Event.Delta == nil {
+		return false
+	}
+	delta := event.Event.Delta
+	return delta.ItemID != "" && delta.Text != "" && delta.Input == "" && delta.CallID == ""
+}
+
+func coalesceStreamDelta(previous bubbletea.Msg, next bubbletea.Msg) (bubbletea.Msg, bool) {
+	previousEvent, ok := previous.(ThreadEventMsg)
+	if !ok || !mergeableStreamDelta(previousEvent) {
+		return nil, false
+	}
+	nextEvent, ok := next.(ThreadEventMsg)
+	if !ok || !mergeableStreamDelta(nextEvent) {
+		return nil, false
+	}
+	previousDelta := previousEvent.Event.Delta
+	nextDelta := nextEvent.Event.Delta
+	if strings.TrimSpace(previousEvent.Event.ThreadID) != strings.TrimSpace(nextEvent.Event.ThreadID) ||
+		previousEvent.Event.TurnID != nextEvent.Event.TurnID ||
+		previousDelta.ItemID != nextDelta.ItemID {
+		return nil, false
+	}
+	mergedEvent := previousEvent.Event
+	mergedDelta := *previousDelta
+	mergedDelta.Text += nextDelta.Text
+	mergedEvent.Delta = &mergedDelta
+	return ThreadEventMsg{Event: mergedEvent}, true
 }
 
 func renderTranscript(state *codextui.State, raw bool, width int, themeID string) string {
@@ -12002,7 +12268,7 @@ func renderTranscriptMessagesWithRanges(cache *transcriptMessageCache, state *co
 		entry := cache.rangesOnly
 		if entry.valid && entry.width == width && entry.themeID == themeID && entry.raw == raw &&
 			entry.expandedHistory == expandedHistory && entry.cwd == cwd && entry.rawReasoning == showRawReasoning &&
-			transcriptCacheKeysMatch(cache, state, width, themeID, raw, expandedHistory, showRawReasoning) {
+			transcriptCacheRevisionCurrent(cache, state) {
 			return entry.content, entry.ranges
 		}
 	}
@@ -12023,46 +12289,27 @@ func renderTranscriptMessagesWithRanges(cache *transcriptMessageCache, state *co
 	return content, ranges
 }
 
-// transcriptCacheKeysMatch reports whether every message still maps to the
-// cached render inputs for the image-free projection.
-func transcriptCacheKeysMatch(cache *transcriptMessageCache, state *codextui.State, width int, themeID string, raw bool, expandedHistory bool, showRawReasoning bool) bool {
-	if cache == nil || len(cache.messages) != len(state.Messages) {
-		return false
-	}
-	for i, message := range state.Messages {
-		key := transcriptMessageKey{
-			role:           message.Role,
-			text:           message.Text,
-			rawText:        message.RawText,
-			transcriptText: message.TranscriptText,
-			width:          width,
-			themeID:        themeID,
-			raw:            raw,
-			expanded:       expandedHistory,
-			transcriptOnly: message.TranscriptOnly,
-			rawReasoning:   showRawReasoning,
-		}
-		entry := cache.messages[i]
-		if !entry.valid || entry.key != key {
-			return false
-		}
-	}
-	return true
+// transcriptCacheRevisionCurrent reports whether the cache was filled for this
+// exact state revision. Rust's layout cache trusts the cell revision instead of
+// re-fingerprinting every cell, so a streamed frame never scans the whole
+// thread just to prove the cache is current.
+func transcriptCacheRevisionCurrent(cache *transcriptMessageCache, state *codextui.State) bool {
+	return cache != nil && state != nil && cache.revisionValid && cache.messagesState == state && cache.messagesRevision == state.MessagesRevision
 }
 
 func renderTranscriptMessagesWithRangesAndExpansion(cache *transcriptMessageCache, state *codextui.State, raw bool, width int, themeID string, expandedHistory bool, expandedMessages map[int]bool, cwd string, showRawReasoning bool) (string, [][2]int) {
-	content, ranges, _ := renderTranscriptLayout(cache, state, raw, width, themeID, expandedHistory, expandedMessages, cwd, showRawReasoning, nil, false, false, "plain")
+	content, ranges, _, _ := renderTranscriptLayout(cache, state, raw, width, themeID, expandedHistory, expandedMessages, cwd, showRawReasoning, nil, false, false, "plain")
 	return content, ranges
 }
 
 // renderTranscriptLayout renders the transcript and, when resolveImage is set,
 // reserves layout-only rows below entries whose local artifact can be
 // previewed. Image rows join the message's range but carry no searchable text.
-// writeTranscriptLines appends lines joined by newline while trimming trailing
-// newlines exactly like strings.TrimRight(strings.Join(lines, "\n"), "\r\n").
-// It writes straight into the builder so a frame over a long transcript does
-// not allocate one intermediate string per message.
-func writeTranscriptLines(builder *strings.Builder, lines []string) {
+// appendTranscriptRows appends the painted rows while trimming trailing
+// newline-only rows exactly like strings.TrimRight(strings.Join(lines, "\n"),
+// "\r\n"). Rows are the authoritative layout; the full text is joined only by
+// callers that still need a contiguous string.
+func appendTranscriptRows(out *[]string, lines []string) {
 	end := len(lines)
 	for end > 0 && strings.TrimRight(lines[end-1], "\r\n") == "" {
 		end--
@@ -12070,11 +12317,9 @@ func writeTranscriptLines(builder *strings.Builder, lines []string) {
 	if end == 0 {
 		return
 	}
-	for index := 0; index < end-1; index++ {
-		builder.WriteString(lines[index])
-		builder.WriteByte('\n')
-	}
-	builder.WriteString(strings.TrimRight(lines[end-1], "\r\n"))
+	*out = append(*out, lines[:end-1]...)
+	last := strings.TrimRight(lines[end-1], "\r\n")
+	*out = append(*out, last)
 }
 
 // expandedMessagesKey fingerprints an expanded-message set so the layout cache
@@ -12099,12 +12344,105 @@ func expandedMessagesKey(expanded map[int]bool) string {
 	return strconv.FormatUint(fingerprint, 16) + "/" + strconv.Itoa(count)
 }
 
-func renderTranscriptLayout(cache *transcriptMessageCache, state *codextui.State, raw bool, width int, themeID string, expandedHistory bool, expandedMessages map[int]bool, cwd string, showRawReasoning bool, resolveImage func(codextui.Message, bool) *transcript_image.TranscriptImage, disclosureControls bool, hideStartupTips bool, cacheVariant string) (string, [][2]int, []transcriptImagePlan) {
+func renderTranscriptLayout(cache *transcriptMessageCache, state *codextui.State, raw bool, width int, themeID string, expandedHistory bool, expandedMessages map[int]bool, cwd string, showRawReasoning bool, resolveImage func(codextui.Message, bool) *transcript_image.TranscriptImage, disclosureControls bool, hideStartupTips bool, cacheVariant string) (string, [][2]int, []transcriptImagePlan, []string) {
+	content, ranges, plans, lines, _, _ := renderTranscriptLayoutInternal(
+		cache, state, raw, width, themeID, expandedHistory, expandedMessages, cwd, showRawReasoning,
+		resolveImage, disclosureControls, hideStartupTips, cacheVariant, true,
+	)
+	return content, ranges, plans, lines
+}
+
+// renderTranscriptLayoutRows is the streaming entry point. It reports the
+// layout generation and whether the cached rows were reused, but never joins
+// the full transcript into one string.
+func renderTranscriptLayoutRows(cache *transcriptMessageCache, state *codextui.State, raw bool, width int, themeID string, expandedHistory bool, expandedMessages map[int]bool, cwd string, showRawReasoning bool, resolveImage func(codextui.Message, bool) *transcript_image.TranscriptImage, disclosureControls bool, hideStartupTips bool, cacheVariant string) (string, [][2]int, []transcriptImagePlan, []string, uint64, bool) {
+	return renderTranscriptLayoutInternal(
+		cache, state, raw, width, themeID, expandedHistory, expandedMessages, cwd, showRawReasoning,
+		resolveImage, disclosureControls, hideStartupTips, cacheVariant, false,
+	)
+}
+
+// transcriptSimpleLayoutHit reports whether cache already holds the layout for
+// a transcript that has no per-message rows (empty list or raw output). Those
+// paths bypass the message cache, so the state revision is their only input.
+func transcriptSimpleLayoutHit(cache *transcriptMessageCache, variant string, width int, themeID string, raw bool, cwd string, showRawReasoning bool, state *codextui.State) (transcriptLayoutCacheEntry, bool) {
+	if cache == nil || state == nil || !cache.revisionValid || cache.messagesState != state || cache.messagesRevision != state.MessagesRevision {
+		return transcriptLayoutCacheEntry{}, false
+	}
+	entry := cache.layout
+	if !entry.valid || entry.variant != variant || entry.width != width || entry.themeID != themeID || entry.raw != raw || entry.cwd != cwd || entry.rawReasoning != showRawReasoning {
+		return transcriptLayoutCacheEntry{}, false
+	}
+	return entry, true
+}
+
+// storeTranscriptSimpleLayout memoizes a transcript that has no per-message
+// rows so repeat frames report a stable generation and keep the viewport
+// scroll position instead of rewriting identical rows.
+func storeTranscriptSimpleLayout(cache *transcriptMessageCache, variant string, width int, themeID string, raw bool, cwd string, showRawReasoning bool, state *codextui.State, lines []string, content string, materializeContent bool) uint64 {
+	cache.messages = cache.messages[:0]
+	cache.rangesOnly = rangesOnlyCacheEntry{}
+	cache.layoutGeneration++
+	generation := cache.layoutGeneration
+	cache.messagesRevision = state.MessagesRevision
+	cache.messagesState = state
+	cache.revisionValid = true
+	cache.layout = transcriptLayoutCacheEntry{
+		valid:        true,
+		variant:      variant,
+		width:        width,
+		themeID:      themeID,
+		raw:          raw,
+		cwd:          cwd,
+		rawReasoning: showRawReasoning,
+		generation:   generation,
+		content:      content,
+		contentValid: materializeContent,
+		lines:        lines,
+	}
+	return generation
+}
+
+func renderTranscriptLayoutInternal(cache *transcriptMessageCache, state *codextui.State, raw bool, width int, themeID string, expandedHistory bool, expandedMessages map[int]bool, cwd string, showRawReasoning bool, resolveImage func(codextui.Message, bool) *transcript_image.TranscriptImage, disclosureControls bool, hideStartupTips bool, cacheVariant string, materializeContent bool) (string, [][2]int, []transcriptImagePlan, []string, uint64, bool) {
 	if state == nil || len(state.Messages) == 0 {
-		return "No messages yet.", nil, nil
+		lines := []string{"No messages yet."}
+		if entry, ok := transcriptSimpleLayoutHit(cache, cacheVariant, width, themeID, raw, cwd, showRawReasoning, state); ok {
+			content := ""
+			if materializeContent {
+				content = strings.Join(entry.lines, "\n")
+			}
+			return content, entry.ranges, entry.plans, entry.lines, entry.generation, true
+		}
+		content := "No messages yet."
+		if !materializeContent {
+			content = ""
+		}
+		if cache == nil || state == nil {
+			return content, nil, nil, lines, 0, false
+		}
+		generation := storeTranscriptSimpleLayout(cache, cacheVariant, width, themeID, raw, cwd, showRawReasoning, state, lines, content, materializeContent)
+		return content, nil, nil, lines, generation, false
 	}
 	if raw {
-		return renderRawTranscript(state), nil, nil
+		content := renderRawTranscript(state)
+		lines := strings.Split(content, "\n")
+		if entry, ok := transcriptSimpleLayoutHit(cache, cacheVariant, width, themeID, true, cwd, showRawReasoning, state); ok {
+			if materializeContent {
+				if !entry.contentValid {
+					entry.content = strings.Join(entry.lines, "\n")
+				}
+				content = entry.content
+			} else {
+				content = ""
+			}
+			return content, entry.ranges, entry.plans, entry.lines, entry.generation, true
+		}
+		materialized := content
+		if !materializeContent {
+			content = ""
+		}
+		generation := storeTranscriptSimpleLayout(cache, cacheVariant, width, themeID, true, cwd, showRawReasoning, state, lines, materialized, materializeContent)
+		return content, nil, nil, lines, generation, false
 	}
 	if width < 20 {
 		width = 20
@@ -12118,36 +12456,107 @@ func renderTranscriptLayout(cache *transcriptMessageCache, state *codextui.State
 			entry.expandedHistory == expandedHistory && entry.expandedKey == expandedKey &&
 			entry.cwd == cwd && entry.rawReasoning == showRawReasoning &&
 			entry.disclosureControls == disclosureControls && entry.hideStartupTips == hideStartupTips &&
-			transcriptCacheKeysMatch(cache, state, width, themeID, raw, expandedHistory, showRawReasoning) {
-			return entry.content, entry.ranges, entry.plans
+			(resolveImage == nil || cache.transcriptImageFilesCurrent()) &&
+			transcriptCacheRevisionCurrent(cache, state) {
+			content := ""
+			if materializeContent {
+				if !entry.contentValid {
+					entry.content = strings.Join(entry.lines, "\n")
+					entry.contentValid = true
+					cache.layout.content = entry.content
+					cache.layout.contentValid = true
+				}
+				content = entry.content
+			}
+			return content, entry.ranges, entry.plans, entry.lines, entry.generation, true
 		}
 	}
-	var builder strings.Builder
-	if cache != nil && cache.lastContentLen > 0 {
-		builder.Grow(cache.lastContentLen)
+	// Streaming mutates only the tail of the conversation, so resume the join
+	// at the first message whose render inputs changed instead of rebuilding
+	// the whole history on every token.
+	reuseFrom := 0
+	if cache != nil && cache.layout.valid &&
+		len(cache.messages) == len(state.Messages) &&
+		len(cache.layout.rowStarts) == len(state.Messages) &&
+		len(cache.layout.groupable) == len(state.Messages) &&
+		cache.layout.variant == cacheVariant &&
+		cache.layout.width == width && cache.layout.themeID == themeID && cache.layout.raw == raw &&
+		cache.layout.expandedHistory == expandedHistory && cache.layout.expandedKey == expandedKey &&
+		cache.layout.cwd == cwd && cache.layout.rawReasoning == showRawReasoning &&
+		cache.layout.disclosureControls == disclosureControls && cache.layout.hideStartupTips == hideStartupTips {
+		// A streamed delta reports which cell it touched, so the prefix check
+		// starts there instead of fingerprinting every message in the thread.
+		scanFrom := 0
+		if changedFrom := state.MessagesChangedFrom; changedFrom > 0 && changedFrom < len(state.Messages) {
+			scanFrom = changedFrom
+		}
+		reuseFrom = len(state.Messages)
+		for index := scanFrom; index < len(state.Messages); index++ {
+			key := transcriptMessageRenderKey(&state.Messages[index], width, themeID, raw, expandedHistory || expandedMessages[index], showRawReasoning)
+			if !cache.messages[index].valid || cache.messages[index].key != key {
+				reuseFrom = index
+				break
+			}
+		}
+		if reuseFrom == len(state.Messages) {
+			// The early return above owns the fully-cached case; anything else
+			// means the cached layout metadata does not describe this render.
+			reuseFrom = 0
+		}
 	}
-	ranges := make([][2]int, len(state.Messages))
+	// Streaming only rebuilds the changed tail. Reuse the previous layout's
+	// backing slices so the unchanged prefix is neither copied nor re-zeroed:
+	// Rust keeps each cell's TextLayout and repaints only the visible rows.
+	var outRows []string
+	var ranges [][2]int
+	var rowStarts []int
+	var groupable []bool
 	var plans []transcriptImagePlan
 	line := 0
 	first := true
 	previousVisibleUserPrompt := false
-	for i, message := range state.Messages {
+	prefixRows := 0
+	if cache != nil {
+		entry := cache.layout
+		if len(entry.ranges) == len(state.Messages) && len(entry.rowStarts) == len(state.Messages) && len(entry.groupable) == len(state.Messages) {
+			ranges = entry.ranges
+			rowStarts = entry.rowStarts
+			groupable = entry.groupable
+		}
+		outRows = entry.lines[:0]
+	}
+	if ranges == nil {
+		ranges = make([][2]int, len(state.Messages))
+	}
+	if rowStarts == nil {
+		rowStarts = make([]int, len(state.Messages))
+	}
+	if groupable == nil {
+		groupable = make([]bool, len(state.Messages))
+	}
+	if reuseFrom > 0 && reuseFrom < len(state.Messages) && cache != nil &&
+		cache.layout.rowStarts[reuseFrom] <= len(cache.layout.lines) {
+		prefixRows = cache.layout.rowStarts[reuseFrom]
+		outRows = cache.layout.lines[:prefixRows]
+		for _, plan := range cache.layout.plans {
+			if plan.contentRow < prefixRows {
+				plans = append(plans, plan)
+			}
+		}
+		line = prefixRows
+		first = prefixRows == 0
+		previousVisibleUserPrompt = cache.layout.groupable[reuseFrom-1]
+	}
+	// Entries the loop skips (hidden startup tips, empty cells) must not keep
+	// ranges from an earlier layout.
+	clear(ranges[reuseFrom:])
+	for i := reuseFrom; i < len(state.Messages); i++ {
+		message := state.Messages[i]
+		rowStarts[i] = len(outRows)
+		groupable[i] = previousVisibleUserPrompt
 		hiddenTip := hideStartupTips && message.StartupTip && strings.TrimSpace(message.Text) != ""
 		expanded := expandedHistory || expandedMessages[i]
-		key := transcriptMessageKey{
-			role:           message.Role,
-			text:           message.Text,
-			rawText:        message.RawText,
-			transcriptText: message.TranscriptText,
-			width:          width,
-			themeID:        themeID,
-			raw:            raw,
-			expanded:       expanded,
-			transcriptOnly: message.TranscriptOnly,
-			rawReasoning:   showRawReasoning,
-			imagePath:      message.ImagePath,
-			hasActivities:  len(normalizeActivityIDs(message.ActivityIDs)) > 0,
-		}
+		key := transcriptMessageRenderKey(&state.Messages[i], width, themeID, raw, expanded, showRawReasoning)
 		var lines []string
 		if cache != nil && i < len(cache.messages) && cache.messages[i].valid && cache.messages[i].key == key {
 			lines = cache.messages[i].lines
@@ -12182,29 +12591,29 @@ func renderTranscriptLayout(cache *transcriptMessageCache, state *codextui.State
 			if grouped {
 				// Rust #56280: the previous prompt's trailing surface row is
 				// the only separator, so the background block stays contiguous.
-				builder.WriteString("\n")
 			} else {
-				builder.WriteString("\n\n")
 				line++
+				outRows = append(outRows, "")
 			}
 		}
-		writeTranscriptLines(&builder, writeLines)
+		appendTranscriptRows(&outRows, writeLines)
 		ranges[i] = [2]int{line, line + len(writeLines)}
 		line += len(writeLines)
 		previousVisibleUserPrompt = isGroupableUserPrompt(message)
+		groupable[i] = previousVisibleUserPrompt
 		if resolveImage != nil {
 			if preview := resolveImage(message, expanded); preview != nil && preview.Rows > 0 {
-				rows := int(preview.Rows)
-				for range rows {
-					builder.WriteString("\n")
+				imageRows := int(preview.Rows)
+				for range imageRows {
+					outRows = append(outRows, "")
 				}
 				plans = append(plans, transcriptImagePlan{
 					image:      preview,
 					contentRow: line,
 					columns:    int(preview.Columns),
-					rows:       rows,
+					rows:       imageRows,
 				})
-				line += rows
+				line += imageRows
 				ranges[i][1] = line
 			}
 		}
@@ -12213,12 +12622,30 @@ func renderTranscriptLayout(cache *transcriptMessageCache, state *codextui.State
 	if cache != nil && len(cache.messages) > len(state.Messages) {
 		cache.messages = cache.messages[:len(state.Messages)]
 	}
-	if builder.Len() == 0 {
-		return "No messages yet.", nil, nil
+	if len(outRows) == 0 {
+		if cache != nil {
+			cache.revisionValid = false
+			cache.layout = transcriptLayoutCacheEntry{}
+		}
+		state.MessagesChangedFrom = len(state.Messages)
+		content := "No messages yet."
+		if !materializeContent {
+			content = ""
+		}
+		return content, nil, nil, []string{"No messages yet."}, 0, false
 	}
-	content := builder.String()
+	content := ""
+	if materializeContent {
+		content = strings.Join(outRows, "\n")
+	}
+	generation := uint64(0)
 	if cache != nil {
-		cache.lastContentLen = len(content)
+		cache.layoutGeneration++
+		generation = cache.layoutGeneration
+		cache.messagesRevision = state.MessagesRevision
+		cache.messagesState = state
+		cache.revisionValid = true
+		cache.imageFiles = transcriptImageFilesForMessages(state.Messages)
 		cache.layout = transcriptLayoutCacheEntry{
 			valid:              true,
 			variant:            cacheVariant,
@@ -12231,12 +12658,20 @@ func renderTranscriptLayout(cache *transcriptMessageCache, state *codextui.State
 			rawReasoning:       showRawReasoning,
 			disclosureControls: disclosureControls,
 			hideStartupTips:    hideStartupTips,
+			generation:         generation,
 			content:            content,
+			contentValid:       materializeContent,
 			ranges:             ranges,
+			rowStarts:          rowStarts,
+			groupable:          groupable,
 			plans:              plans,
+			lines:              outRows,
 		}
+		// The layout now covers this revision; the next mutation may narrow the
+		// next prefix check again.
+		state.MessagesChangedFrom = len(state.Messages)
 	}
-	return content, ranges, plans
+	return content, ranges, plans, outRows, generation, false
 }
 
 // isGroupableUserPrompt reports whether a message is an ordinary visible user

@@ -49,7 +49,7 @@ func TestCompletedStreamKeepsReaderTopLineLikeRust(t *testing.T) {
 	model.View()
 	model.activityFollow = false
 
-	lines := strings.Split(model.lastTranscriptContent, "\n")
+	lines := strings.Split(model.transcriptContent(), "\n")
 	anchorLine := -1
 	for index, line := range lines {
 		if strings.Contains(line, "line 11") {
@@ -58,7 +58,7 @@ func TestCompletedStreamKeepsReaderTopLineLikeRust(t *testing.T) {
 		}
 	}
 	if anchorLine < 0 {
-		t.Fatalf("line 11 row missing from transcript:\n%s", model.lastTranscriptContent)
+		t.Fatalf("line 11 row missing from transcript:\n%s", model.transcriptContent())
 	}
 	model.transcript.SetYOffset(anchorLine)
 	before := firstVisibleTranscriptLine(model.transcript.View())

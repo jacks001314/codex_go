@@ -239,6 +239,31 @@ func LoadPolicies(paths []string) (*Policy, error) {
 	return policy, nil
 }
 
+// LoadPolicyDirectory loads every `*.rules` file in dir in lexical order,
+// mirroring Rust collect_policy_files: a missing directory is an empty policy
+// and only regular files with the `.rules` extension are read.
+func LoadPolicyDirectory(dir string) (*Policy, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return &Policy{HostExecutables: map[string][]string{}}, nil
+		}
+		return nil, err
+	}
+	paths := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".rules") {
+			continue
+		}
+		paths = append(paths, filepath.Join(dir, entry.Name()))
+	}
+	sort.Strings(paths)
+	if len(paths) == 0 {
+		return &Policy{HostExecutables: map[string][]string{}}, nil
+	}
+	return LoadPolicies(paths)
+}
+
 // policyContextError renders anyhow's context chain for a policy file: the
 // context line, a blank line, then the cause indented by four spaces.
 func policyContextError(context string, err error) error {

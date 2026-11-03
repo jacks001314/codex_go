@@ -30,8 +30,21 @@ func TestRequirementFromEvaluation(t *testing.T) {
 		nil,
 		true,
 	)
-	if req.Kind != ExecNeedsApproval || req.Amendment == nil {
+	if req.Kind != ExecNeedsApproval || req.Amendment != nil {
 		t.Fatalf("RequirementFromEvaluation(prompt) = %#v", req)
+	}
+	heuristic := RequirementFromEvaluation(
+		[]string{"rm", "-rf", "build"},
+		ApprovalPolicy{Mode: ApprovalOnRequest},
+		Evaluation{Decision: DecisionPrompt, MatchedRules: []RuleMatch{{Decision: DecisionPrompt, Prefix: []string{"rm", "-rf", "build"}}}},
+		nil,
+		true,
+	)
+	if heuristic.Kind != ExecNeedsApproval || heuristic.Amendment == nil {
+		t.Fatalf("RequirementFromEvaluation(heuristic prompt) = %#v", heuristic)
+	}
+	if !reflect.DeepEqual(heuristic.Amendment.PrefixRule, []string{"rm", "-rf", "build"}) {
+		t.Fatalf("heuristic amendment = %#v", heuristic.Amendment.PrefixRule)
 	}
 	forbidden := RequirementFromEvaluation(
 		[]string{"npm", "install"},
@@ -52,6 +65,73 @@ func TestRequirementFromEvaluation(t *testing.T) {
 	)
 	if skip.Kind != ExecSkip || !skip.BypassSandbox {
 		t.Fatalf("RequirementFromEvaluation(allow) = %#v", skip)
+	}
+	if skip.Amendment != nil {
+		t.Fatalf("policy allow amendment = %#v, want none", skip.Amendment)
+	}
+}
+
+// TestAllowRequirementCarriesHeuristicsAmendmentLikeRust pins Rust's
+// try_derive_execpolicy_amendment_for_allow_rules: a heuristically allowed
+// command keeps an amendment for a later sandbox-denial retry prompt, while a
+// policy allow rule suppresses it.
+func TestAllowRequirementCarriesHeuristicsAmendmentLikeRust(t *testing.T) {
+	heuristic := RequirementFromEvaluation(
+		[]string{"go", "test"},
+		ApprovalPolicy{Mode: ApprovalOnRequest},
+		Evaluation{Decision: DecisionAllow, MatchedRules: []RuleMatch{{Decision: DecisionAllow, Prefix: []string{"go", "test"}}}},
+		nil,
+		true,
+	)
+	if heuristic.Kind != ExecSkip || heuristic.Amendment == nil {
+		t.Fatalf("heuristics allow requirement = %#v", heuristic)
+	}
+	if want := []string{"go", "test"}; !reflect.DeepEqual(heuristic.Amendment.PrefixRule, want) {
+		t.Fatalf("heuristics allow amendment = %#v, want %#v", heuristic.Amendment.PrefixRule, want)
+	}
+
+	policyAllowed := RequirementFromEvaluation(
+		[]string{"go", "test"},
+		ApprovalPolicy{Mode: ApprovalOnRequest},
+		Evaluation{Decision: DecisionAllow, MatchedRules: []RuleMatch{{Decision: DecisionAllow, IsPolicy: true, Prefix: []string{"go"}}}},
+		nil,
+		true,
+	)
+	if policyAllowed.Amendment != nil {
+		t.Fatalf("policy allow amendment = %#v, want none", policyAllowed.Amendment)
+	}
+
+	ignored := RequirementFromEvaluation(
+		[]string{"go", "test"},
+		ApprovalPolicy{Mode: ApprovalOnRequest},
+		Evaluation{Decision: DecisionAllow, MatchedRules: []RuleMatch{{Decision: DecisionAllow, Prefix: []string{"go", "test"}}}},
+		nil,
+		false,
+	)
+	if ignored.Amendment != nil {
+		t.Fatalf("ignored prefix rules amendment = %#v, want none", ignored.Amendment)
+	}
+}
+
+// TestPromptAmendmentSurvivesPolicyAllowOnAnotherSegmentLikeRust pins Rust's
+// prompt-rule suppression: only a policy prompt rule suppresses the heuristics
+// amendment, so an allow rule on a different script segment must not.
+func TestPromptAmendmentSurvivesPolicyAllowOnAnotherSegmentLikeRust(t *testing.T) {
+	requirement := RequirementFromEvaluation(
+		[]string{"bash", "-lc", "git status && npm install"},
+		ApprovalPolicy{Mode: ApprovalUnlessTrusted},
+		Evaluation{Decision: DecisionPrompt, MatchedRules: []RuleMatch{
+			{Decision: DecisionAllow, IsPolicy: true, Prefix: []string{"git", "status"}},
+			{Decision: DecisionPrompt, Prefix: []string{"npm", "install"}},
+		}},
+		nil,
+		true,
+	)
+	if requirement.Amendment == nil {
+		t.Fatalf("requirement = %#v, want the prompt command amendment", requirement)
+	}
+	if want := []string{"npm", "install"}; !reflect.DeepEqual(requirement.Amendment.PrefixRule, want) {
+		t.Fatalf("amendment = %#v, want %#v", requirement.Amendment.PrefixRule, want)
 	}
 }
 

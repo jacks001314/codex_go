@@ -113,6 +113,7 @@ type CommandExecutionRequestApprovalParams struct {
 	CommandActions                  []map[string]any                     `json:"commandActions,omitempty"`
 	ProposedExecPolicyAmendment     any                                  `json:"proposedExecpolicyAmendment,omitempty"`
 	ProposedNetworkPolicyAmendments []map[string]any                     `json:"proposedNetworkPolicyAmendments,omitempty"`
+	AvailableDecisions              []any                                `json:"availableDecisions,omitempty"`
 	Action                          map[string]any                       `json:"action,omitempty"`
 	SuggestedProfile                *string                              `json:"suggestedProfile,omitempty"`
 	SandboxDenied                   bool                                 `json:"sandboxDenied,omitempty"`
@@ -136,6 +137,7 @@ func (p *CommandExecutionRequestApprovalParams) MarshalJSON() ([]byte, error) {
 		CommandActions                  []map[string]any `json:"commandActions,omitempty"`
 		ProposedExecPolicyAmendment     any              `json:"proposedExecpolicyAmendment,omitempty"`
 		ProposedNetworkPolicyAmendments []map[string]any `json:"proposedNetworkPolicyAmendments,omitempty"`
+		AvailableDecisions              []any            `json:"availableDecisions,omitempty"`
 	}{
 		Kind:                            p.Kind.orDefault(),
 		ThreadID:                        p.ThreadID,
@@ -151,6 +153,7 @@ func (p *CommandExecutionRequestApprovalParams) MarshalJSON() ([]byte, error) {
 		CommandActions:                  append([]map[string]any(nil), p.CommandActions...),
 		ProposedExecPolicyAmendment:     p.ProposedExecPolicyAmendment,
 		ProposedNetworkPolicyAmendments: append([]map[string]any(nil), p.ProposedNetworkPolicyAmendments...),
+		AvailableDecisions:              append([]any(nil), p.AvailableDecisions...),
 	})
 }
 

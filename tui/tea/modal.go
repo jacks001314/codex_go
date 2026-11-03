@@ -344,6 +344,40 @@ func (m *Model) openApprovalModal(message ApprovalRequestMsg) bubbletea.Cmd {
 	return m.queueNotification(chatwidget.ExecApprovalRequestedNotification(message.Command))
 }
 
+// openApprovalRequest preserves every concurrent approval. Rust's bottom pane
+// keeps delayed approval requests in FIFO order, so an approval that arrives
+// while another approval modal is visible must not overwrite the first one.
+func (m *Model) openApprovalRequest(message ApprovalRequestMsg) bubbletea.Cmd {
+	if m == nil {
+		return nil
+	}
+	if m.modal != nil && m.modal.kind == ModalKindApproval {
+		m.pendingApprovals = append(m.pendingApprovals, message)
+		return nil
+	}
+	return m.openApprovalModal(message)
+}
+
+func (m *Model) openNextPendingApproval() bubbletea.Cmd {
+	// Rust keeps a single delayed_approval_requests queue, so every path that
+	// advances it must use the same thread matcher.
+	return m.openNextThreadApproval()
+}
+
+func (m *Model) removePendingApproval(requestID string) bool {
+	if m == nil || requestID == "" {
+		return false
+	}
+	for index, pending := range m.pendingApprovals {
+		if strings.TrimSpace(pending.ServerRequestID) != requestID && strings.TrimSpace(pending.ID) != requestID {
+			continue
+		}
+		m.pendingApprovals = append(m.pendingApprovals[:index], m.pendingApprovals[index+1:]...)
+		return true
+	}
+	return false
+}
+
 func (m *Model) openModal(message ModalRequestMsg) {
 	if m != nil && m.modal == nil {
 		m.statusTimer.PauseAt(m.currentTime())
@@ -1382,7 +1416,7 @@ func (m *Model) respondModal(cancelled bool) bubbletea.Cmd {
 	var nextApprovalCmd bubbletea.Cmd
 	if modal.kind == ModalKindApproval {
 		// The answered thread may no longer be waiting; refresh the picker and
-		// notice before the next request for this thread surfaces (Rust #58720).
+		// notice before the next request surfaces (Rust #58720).
 		m.refreshThreadApprovalViews()
 		nextApprovalCmd = m.openNextThreadApproval()
 	}

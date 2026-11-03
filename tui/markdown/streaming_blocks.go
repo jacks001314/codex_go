@@ -1,7 +1,6 @@
 package markdown
 
 import (
-	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/parser"
 	gmtext "github.com/yuin/goldmark/text"
@@ -64,7 +63,7 @@ func HasReferenceLinkDefinition(source string) bool {
 
 func parseMarkdownDocument(data []byte) (ast.Node, parser.Context) {
 	context := parser.NewContext()
-	document := goldmark.DefaultParser().Parse(gmtext.NewReader(data), parser.WithContext(context))
+	document := defaultMarkdownParser.Parse(gmtext.NewReader(data), parser.WithContext(context))
 	return document, context
 }
 

@@ -25,14 +25,13 @@ import (
 // therefore reviewed on its own authority and, when denied, never reaches the
 // executor (`starts.len() == 1`).
 //
-// Go has no orchestrator-level retry loop: the prompt tells the model to rerun a
-// sandbox-denied command with `sandbox_permissions: "require_escalated"`
-// (sandbox/permission_prompt_templates.go), and that rerun is a new tool call
-// whose approval goes through the same reviewer. This test pins the property
-// both carriers must preserve — a command approved inside the sandbox does not
-// authorize the unsandboxed rerun, which needs its own verdict — at the Go
-// carrier: `RuntimeRouter.shellApprovalForTurn` plus the Guardian branch
-// (appserver/runtime_router.go shellApprovalForTurn).
+// Go's retry lives in `ShellExecutor.retrySandboxDenied` (tool/shell_executor.go)
+// and asks for the escalated attempt through the same approval callback, so the
+// rerun is reviewed on its own authority exactly like Rust's orchestrator. This
+// test pins the property both carriers must preserve — a command approved
+// inside the sandbox does not authorize the unsandboxed rerun, which needs its
+// own verdict — at the Go carrier: `RuntimeRouter.shellApprovalForTurn` plus
+// the Guardian branch (appserver/runtime_router.go shellApprovalForTurn).
 func TestGuardianSandboxRetryNeedsItsOwnAuthorizationLikeRust(t *testing.T) {
 	home := t.TempDir()
 	cwd := t.TempDir()

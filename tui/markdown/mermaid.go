@@ -5,7 +5,6 @@ import (
 
 	"codex_go/mermaid"
 	codextui "codex_go/tui"
-	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
 	gmtext "github.com/yuin/goldmark/text"
 )
@@ -232,7 +231,7 @@ func MermaidFenceTailStart(source string) (int, bool) {
 		return 0, false
 	}
 	data := []byte(source)
-	document := goldmark.DefaultParser().Parse(gmtext.NewReader(data))
+	document := defaultMarkdownParser.Parse(gmtext.NewReader(data))
 	last := document.LastChild()
 	if last == nil {
 		return 0, false

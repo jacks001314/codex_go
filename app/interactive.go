@@ -32,6 +32,7 @@ import (
 	"codex_go/envutil"
 	"codex_go/eventmap"
 	codexexec "codex_go/exec"
+	"codex_go/execpolicy"
 	"codex_go/features"
 	"codex_go/mcp"
 	modelpkg "codex_go/model"
@@ -298,6 +299,13 @@ type interactiveApprovalBroker struct {
 	pending          map[string]chan codextea.ModalResponse
 	approvedCommands map[string]struct{}
 	approvedPrefixes [][]string
+	// persistPrefixRule appends an approved command prefix to the exec policy,
+	// mirroring Rust's Session::persist_execpolicy_amendment. Nil keeps the
+	// approval in memory only (tests and hosts without a Codex home).
+	persistPrefixRule func([]string) error
+	// interruptTurn aborts the turn that owns a cancelled approval, mirroring
+	// Rust's ReviewDecision::Abort. Nil leaves the turn running.
+	interruptTurn func(string)
 }
 
 // interactiveElicitationBroker owns the in-process MCP elicitation publish/wait
@@ -566,7 +574,10 @@ func (b *interactiveApprovalBroker) shellApprovalFuncForThread(threadID string, 
 		})
 		select {
 		case response := <-responses:
-			return b.approvalDecision(response, request.Request), nil
+			if approvalResponseAborts(response) && b.interruptTurn != nil {
+				b.interruptTurn(strings.TrimSpace(threadID))
+			}
+			return b.approvalDecision(response, request.Request, send), nil
 		case <-ctx.Done():
 			b.forgetRequest(id)
 			return tool.ShellApprovalDecision{}, ctx.Err()
@@ -624,7 +635,7 @@ func (b *interactiveApprovalBroker) sessionApproved(request *tool.ShellRequest) 
 	return false
 }
 
-func (b *interactiveApprovalBroker) approvalDecision(response codextea.ModalResponse, request *tool.ShellRequest) tool.ShellApprovalDecision {
+func (b *interactiveApprovalBroker) approvalDecision(response codextea.ModalResponse, request *tool.ShellRequest, send func(bubbletea.Msg)) tool.ShellApprovalDecision {
 	if response.Cancelled {
 		return tool.ShellApprovalDecision{}
 	}
@@ -643,12 +654,43 @@ func (b *interactiveApprovalBroker) approvalDecision(response codextea.ModalResp
 		if request == nil || len(request.PrefixRule) == 0 {
 			return tool.ShellApprovalDecision{}
 		}
+		prefix := append([]string(nil), request.PrefixRule...)
+		if err := b.persistPrefix(prefix); err != nil {
+			// Rust resolve_exec_approval warns and still approves the call, and
+			// the failed amendment leaves the in-memory policy unchanged.
+			if send != nil {
+				send(codextea.WarningEventMsg{Message: "Failed to apply execpolicy amendment: " + err.Error()})
+			}
+			return tool.ShellApprovalDecision{Approved: true}
+		}
 		b.mu.Lock()
-		b.approvedPrefixes = append(b.approvedPrefixes, append([]string(nil), request.PrefixRule...))
+		b.approvedPrefixes = append(b.approvedPrefixes, prefix)
 		b.mu.Unlock()
 		return tool.ShellApprovalDecision{Approved: true}
 	default:
 		return tool.ShellApprovalDecision{}
+	}
+}
+
+func (b *interactiveApprovalBroker) persistPrefix(prefix []string) error {
+	if b == nil || b.persistPrefixRule == nil {
+		return nil
+	}
+	return b.persistPrefixRule(prefix)
+}
+
+// approvalResponseAborts reports the answers that map to Rust's
+// ReviewDecision::Abort: the menu's "No, and tell Codex what to do differently"
+// and a dismissed modal.
+func approvalResponseAborts(response codextea.ModalResponse) bool {
+	if response.Cancelled {
+		return true
+	}
+	switch response.OptionID {
+	case "deny", "cancel":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -1090,18 +1132,15 @@ func interactiveShellApprovalOptions(request *tool.ShellApprovalRequest) []codex
 	options := []codextea.ModalOption{
 		{ID: "allow_once", Label: "Yes, proceed", Shortcut: "y"},
 	}
-	prefix := request.Request.PrefixRule
-	if len(prefix) > 0 {
+	// Rust renders exactly the app-server's available_decisions
+	// (tui/src/bottom_pane/approval_overlay.rs exec_options): Accept, the
+	// exec-policy amendment when one was proposed, and Cancel. An amendment
+	// whose rendered prefix contains a newline is dropped instead of shown.
+	if prefix := request.Request.PrefixRule; len(prefix) > 0 && !commandApprovalPrefixHasLineBreak(prefix) {
 		options = append(options, codextea.ModalOption{
 			ID:       "allow_prefix",
 			Label:    commandApprovalPrefixLabel(prefix),
 			Shortcut: "p",
-		})
-	} else {
-		options = append(options, codextea.ModalOption{
-			ID:       "allow_session",
-			Label:    "Yes, and don't ask again for this command in this session",
-			Shortcut: "a",
 		})
 	}
 	return append(options, codextea.ModalOption{
@@ -1114,6 +1153,15 @@ func interactiveShellApprovalOptions(request *tool.ShellApprovalRequest) []codex
 
 func commandApprovalPrefixLabel(prefix []string) string {
 	return "Yes, and don't ask again for commands that start with `" + strings.Join(prefix, " ") + "`"
+}
+
+func commandApprovalPrefixHasLineBreak(prefix []string) bool {
+	for _, token := range prefix {
+		if strings.ContainsAny(token, "\r\n") {
+			return true
+		}
+	}
+	return false
 }
 
 func runInteractive(ctx context.Context, root *cli.RootOptions, stdin io.Reader, stdout, stderr io.Writer) error {
@@ -1304,6 +1352,15 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		initialMessages = interactiveMCPStartupMessages(startupCtx, mcpService, runner, mcpExpectedServers)
 	}
 	approvalBroker := newInteractiveApprovalBroker()
+	// Rust persists "Yes, and don't ask again for commands that start with ..."
+	// into $CODEX_HOME/rules/default.rules so the prefix survives the session.
+	approvalBroker.persistPrefixRule = func(prefix []string) error {
+		codexHome := strings.TrimSpace(auth.DefaultCodexHome())
+		if codexHome == "" {
+			return errors.New("codex home is not configured")
+		}
+		return execpolicy.AppendAllowPrefixRule(execpolicy.DefaultPolicyPath(codexHome), prefix)
+	}
 	elicitationBroker := newInteractiveElicitationBroker()
 	// Rust #51611 closes the elicitation router during MCP runtime shutdown:
 	// pending prompts are abandoned so their waiters never hang, and later
@@ -1311,6 +1368,9 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 	defer elicitationBroker.close()
 	userInputBroker := newInteractiveUserInputBroker()
 	interrupts := newInteractiveInterruptController()
+	// A cancelled approval is Rust's ReviewDecision::Abort: the turn that asked
+	// for it stops so the operator can give new instructions.
+	approvalBroker.interruptTurn = func(threadID string) { interrupts.interruptThread(threadID) }
 	readGoal, setGoal, clearGoal, editGoalText, materializeGoalDraft := interactiveLocalGoalCallbacks(nil)
 	readAgents, switchAgent := interactiveLocalAgentCallbacks(nil)
 	worktreeSettings, worktreeEnabled := interactiveWorktreeSettings(root)

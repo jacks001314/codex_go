@@ -74,7 +74,7 @@ func TestGeneratedImageReservesPreviewRowsLikeRust(t *testing.T) {
 	if plan.rows <= 0 || plan.columns <= 0 {
 		t.Fatalf("plan = %#v", plan)
 	}
-	lines := strings.Split(model.lastTranscriptContent, "\n")
+	lines := strings.Split(model.transcriptContent(), "\n")
 	if len(lines) != plan.contentRow+plan.rows {
 		t.Fatalf("lines = %d, want %d", len(lines), plan.contentRow+plan.rows)
 	}
@@ -147,8 +147,8 @@ func TestTranscriptImageFallbacksLikeRust(t *testing.T) {
 	if len(missing.transcriptImagePlans) != 0 {
 		t.Fatalf("missing artifact planned previews: %#v", missing.transcriptImagePlans)
 	}
-	if !strings.Contains(missing.lastTranscriptContent, "Saved to:") {
-		t.Fatalf("missing artifact lost its text entry:\n%s", missing.lastTranscriptContent)
+	if !strings.Contains(missing.transcriptContent(), "Saved to:") {
+		t.Fatalf("missing artifact lost its text entry:\n%s", missing.transcriptContent())
 	}
 }
 
@@ -224,7 +224,7 @@ func TestTranscriptImageKeepsCompletionTipBelowPreviewLikeRust(t *testing.T) {
 		t.Fatalf("image plans = %#v", model.transcriptImagePlans)
 	}
 	plan := model.transcriptImagePlans[0]
-	lines := strings.Split(utils.StripANSI(model.lastTranscriptContent), "\n")
+	lines := strings.Split(utils.StripANSI(model.transcriptContent()), "\n")
 	tipRow := -1
 	for index, line := range lines {
 		if strings.Contains(line, "Tip: ") {
@@ -273,8 +273,8 @@ func TestTranscriptImageCacheInvalidatesDeletedFileLikeRust(t *testing.T) {
 	if len(model.transcriptImagePlans) != 0 {
 		t.Fatalf("deleted image kept a preview: %#v", model.transcriptImagePlans)
 	}
-	if strings.HasSuffix(model.lastTranscriptContent, "\n") {
-		t.Fatalf("deleted image kept reserved rows:\n%q", model.lastTranscriptContent)
+	if strings.HasSuffix(model.transcriptContent(), "\n") {
+		t.Fatalf("deleted image kept reserved rows:\n%q", model.transcriptContent())
 	}
 	writeTranscriptTestPNGFile(t, path, 40, 32)
 	model.refreshTranscript()

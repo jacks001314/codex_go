@@ -31,6 +31,7 @@ import (
 	"codex_go/cli"
 	"codex_go/config"
 	codexexec "codex_go/exec"
+	"codex_go/execpolicy"
 	"codex_go/mcp"
 	"codex_go/plugin"
 	promptctx "codex_go/prompt"
@@ -2007,6 +2008,106 @@ func TestInteractiveApprovalBrokerOffersAndCachesCommandPrefix(t *testing.T) {
 	case message := <-sent:
 		t.Fatalf("matching prefix unexpectedly requested approval: %#v", message)
 	default:
+	}
+}
+
+// TestInteractiveApprovalBrokerPersistsCommandPrefixLikeRust pins Rust's
+// "Yes, and don't ask again for commands that start with `...`" behavior: the
+// approved prefix is appended to $CODEX_HOME/rules/default.rules, so it
+// outlives the session.
+func TestInteractiveApprovalBrokerPersistsCommandPrefixLikeRust(t *testing.T) {
+	home := t.TempDir()
+	broker := newInteractiveApprovalBroker()
+	broker.persistPrefixRule = func(prefix []string) error {
+		return execpolicy.AppendAllowPrefixRule(execpolicy.DefaultPolicyPath(home), prefix)
+	}
+	sent := make(chan bubbletea.Msg, 1)
+	callback := broker.shellApprovalFunc(func(message bubbletea.Msg) {
+		sent <- message
+	})
+	request := &tool.ShellApprovalRequest{Request: &tool.ShellRequest{
+		Command:     []string{"git", "fetch", "origin", "main"},
+		HookCommand: "git fetch origin main",
+		PrefixRule:  []string{"git", "fetch"},
+	}}
+	result := make(chan tool.ShellApprovalDecision, 1)
+	go func() {
+		decision, _ := callback(context.Background(), request)
+		result <- decision
+	}()
+	message := (<-sent).(codextea.ApprovalRequestMsg)
+	broker.respond(codextea.ModalResponse{ID: message.ID, Kind: codextea.ModalKindApproval, OptionID: "allow_prefix"})
+	if decision := <-result; !decision.Approved {
+		t.Fatalf("prefix decision = %#v", decision)
+	}
+	contents, err := os.ReadFile(execpolicy.DefaultPolicyPath(home))
+	if err != nil {
+		t.Fatalf("read default.rules: %v", err)
+	}
+	want := "prefix_rule(pattern=[\"git\", \"fetch\"], decision=\"allow\")\n"
+	if string(contents) != want {
+		t.Fatalf("default.rules = %q, want %q", contents, want)
+	}
+}
+
+// TestInteractiveApprovalBrokerWarnsWhenPrefixPersistFailsLikeRust pins Rust's
+// resolve_exec_approval failure path: the warning is surfaced, the command is
+// still approved, and no in-memory amendment is retained.
+func TestInteractiveApprovalBrokerWarnsWhenPrefixPersistFailsLikeRust(t *testing.T) {
+	broker := newInteractiveApprovalBroker()
+	broker.persistPrefixRule = func([]string) error { return errors.New("disk full") }
+	sent := make(chan bubbletea.Msg, 2)
+	callback := broker.shellApprovalFunc(func(message bubbletea.Msg) {
+		sent <- message
+	})
+	request := &tool.ShellApprovalRequest{Request: &tool.ShellRequest{
+		Command:    []string{"git", "fetch", "origin", "main"},
+		PrefixRule: []string{"git", "fetch"},
+	}}
+	result := make(chan tool.ShellApprovalDecision, 1)
+	go func() {
+		decision, _ := callback(context.Background(), request)
+		result <- decision
+	}()
+	message := (<-sent).(codextea.ApprovalRequestMsg)
+	broker.respond(codextea.ModalResponse{ID: message.ID, Kind: codextea.ModalKindApproval, OptionID: "allow_prefix"})
+	if decision := <-result; !decision.Approved {
+		t.Fatalf("prefix decision = %#v", decision)
+	}
+	warning, ok := (<-sent).(codextea.WarningEventMsg)
+	if !ok || !strings.Contains(warning.Message, "Failed to apply execpolicy amendment: disk full") {
+		t.Fatalf("warning = %#v", warning)
+	}
+	if prefixes := broker.approvedPrefixes; len(prefixes) != 0 {
+		t.Fatalf("failed persist cached prefixes: %#v", prefixes)
+	}
+}
+
+// TestInteractiveApprovalBrokerAbortsTurnOnCancelLikeRust pins Rust's
+// ReviewDecision::Abort: cancelling the approval menu stops the turn that asked
+// for it instead of only denying the command.
+func TestInteractiveApprovalBrokerAbortsTurnOnCancelLikeRust(t *testing.T) {
+	broker := newInteractiveApprovalBroker()
+	var interrupted []string
+	broker.interruptTurn = func(threadID string) { interrupted = append(interrupted, threadID) }
+	sent := make(chan bubbletea.Msg, 1)
+	callback := broker.shellApprovalFuncForThread("thread-1", func(message bubbletea.Msg) {
+		sent <- message
+	})
+	result := make(chan tool.ShellApprovalDecision, 1)
+	go func() {
+		decision, _ := callback(context.Background(), &tool.ShellApprovalRequest{Request: &tool.ShellRequest{
+			Command: []string{"git", "push"},
+		}})
+		result <- decision
+	}()
+	message := (<-sent).(codextea.ApprovalRequestMsg)
+	broker.respond(codextea.ModalResponse{ID: message.ID, Kind: codextea.ModalKindApproval, Cancelled: true})
+	if decision := <-result; decision.Approved {
+		t.Fatalf("cancel decision = %#v, want not approved", decision)
+	}
+	if !reflect.DeepEqual(interrupted, []string{"thread-1"}) {
+		t.Fatalf("interrupted = %#v, want the requesting thread", interrupted)
 	}
 }
 

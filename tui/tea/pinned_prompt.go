@@ -27,16 +27,11 @@ func (m *Model) pinnedPromptHeader() (string, int, bool) {
 		m.readOnlyThread || m.editorActive || m.windowsSandboxSetupActive || m.vimSearchMode {
 		return "", -1, false
 	}
-	_, ranges := renderTranscriptMessagesWithRanges(
-		&m.transcriptMessages,
-		m.State,
-		false,
-		m.transcript.Width,
-		m.activeTUITheme(),
-		false,
-		m.sessionCWD,
-		m.showRawReasoning,
-	)
+	// Rust's prompt header reads the transcript's already-laid-out cells
+	// (prompt_header.rs). Reusing the main layout's ranges keeps a streamed
+	// frame from re-rendering the whole history and matches the real viewport
+	// rows the click target scrolls to.
+	ranges := m.transcriptMessageRanges
 	if len(ranges) != len(m.State.Messages) {
 		return "", -1, false
 	}

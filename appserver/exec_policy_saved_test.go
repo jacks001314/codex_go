@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"codex_go/config"
+	"codex_go/execpolicy"
 	"codex_go/sandbox"
 	"codex_go/session"
 	"codex_go/tool"
@@ -147,6 +148,66 @@ func TestShellApprovalWithExecpolicyAmendmentRemembersPrefix(t *testing.T) {
 	prefixes := router.execPolicySaved.approvedPrefixes("thread-exec")
 	if len(prefixes) != 1 || !reflect.DeepEqual(prefixes[0], []string{"echo", "amendment-ok"}) {
 		t.Fatalf("saved prefixes = %#v", prefixes)
+	}
+	contents, readErr := os.ReadFile(execpolicy.DefaultPolicyPath(home))
+	if readErr != nil {
+		t.Fatalf("read default.rules: %v", readErr)
+	}
+	want := "prefix_rule(pattern=[\"echo\", \"amendment-ok\"], decision=\"allow\")\n"
+	if string(contents) != want {
+		t.Fatalf("default.rules = %q, want %q", contents, want)
+	}
+}
+
+// TestShellApprovalExecpolicyAmendmentWriteFailureWarnsLikeRust covers Rust's
+// resolve_exec_approval: a failed persist emits
+// "Failed to apply execpolicy amendment: ..." but the command still runs.
+func TestShellApprovalExecpolicyAmendmentWriteFailureWarnsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte("approval_policy = \"on_request\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A file named `rules` makes the policy directory creation fail.
+	if err := os.WriteFile(filepath.Join(home, "rules"), []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(home), DefaultCWD: home})
+	sink := NewNotificationBuffer()
+	router.SetNotificationSink(sink)
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		decision := map[string]any{
+			string(CommandExecutionApprovalAcceptWithExecpolicyAmendment): map[string]any{
+				"execpolicy_amendment": []string{"echo", "amendment-ok"},
+			},
+		}
+		response := OK(request.ID, &CommandExecutionRequestApprovalResponse{Decision: decision})
+		router.requireServerRequests().Resolve(response)
+	}))
+	decision, err := router.shellApprovalForTurn("thread-exec", "turn-exec", false)(context.Background(), &tool.ShellApprovalRequest{
+		Request: &tool.ShellRequest{
+			HookCommand:    "echo amendment-ok",
+			CWD:            home,
+			ApprovalReason: "requires approval",
+		},
+		Invocation: &tool.Invocation{CallID: "call-exec-amend"},
+	})
+	if err != nil || !decision.Approved {
+		t.Fatalf("approval decision = %#v err = %v", decision, err)
+	}
+	if prefixes := router.execPolicySaved.approvedPrefixes("thread-exec"); len(prefixes) != 0 {
+		t.Fatalf("failed persist reported saved prefixes: %#v", prefixes)
+	}
+	warned := false
+	for _, notification := range sink.List() {
+		if notification.Method != NotificationWarning {
+			continue
+		}
+		if warning, ok := notification.Params.(*WarningNotification); ok && strings.Contains(warning.Message, "Failed to apply execpolicy amendment:") {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Fatalf("missing execpolicy amendment warning: %#v", sink.List())
 	}
 }
 

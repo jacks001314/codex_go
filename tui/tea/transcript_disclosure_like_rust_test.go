@@ -98,7 +98,7 @@ func TestTranscriptActivityFocusStylesDisclosureLikeRust(t *testing.T) {
 	if !model.activityFocus.active {
 		t.Fatal("click did not focus the activity")
 	}
-	lines := strings.Split(model.lastTranscriptContent, "\n")
+	lines := strings.Split(model.transcriptContent(), "\n")
 	span := model.transcriptMessageRanges[0]
 	if span[1] <= span[0] || span[0] >= len(lines) {
 		t.Fatalf("invalid activity range %v for %d lines", span, len(lines))
@@ -113,7 +113,7 @@ func TestTranscriptActivityFocusStylesDisclosureLikeRust(t *testing.T) {
 		}
 	}
 	if control == "" {
-		t.Fatalf("focused activity painted no disclosure control:\n%s", utils.StripANSI(model.lastTranscriptContent))
+		t.Fatalf("focused activity painted no disclosure control:\n%s", utils.StripANSI(model.transcriptContent()))
 	}
 	if strings.Contains(control, "\x1b[2m") {
 		t.Fatalf("focused control kept the dim style: %q", control)

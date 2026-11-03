@@ -56,6 +56,13 @@ func (e *Engine) CurrentTick() int { return e.tick }
 // FPS returns the configured frames per second.
 func (e *Engine) FPS() int { return e.fps }
 
+// FrameDelay returns the interval between frames.
+func (e *Engine) FrameDelay() time.Duration { return time.Second / time.Duration(e.fps) }
+
+// Tick advances the frame counter without scheduling a follow-up command.
+// Program-driven frame requests use it; Advance keeps the command-driven path.
+func (e *Engine) Tick() { e.tick++ }
+
 // Pause stops the engine from scheduling new ticks.
 func (e *Engine) Pause() { e.paused = true }
 

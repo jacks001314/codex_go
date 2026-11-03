@@ -28,7 +28,7 @@ func (m *Model) applyServerRequestResolved(message ServerRequestResolvedMsg) bub
 	if requestID == "" {
 		return nil
 	}
-	if m.removeQueuedApproval(requestID) {
+	if m.removePendingApproval(requestID) {
 		m.refreshThreadApprovalViews()
 		return nil
 	}
@@ -46,7 +46,7 @@ func (m *Model) applyServerRequestResolved(message ServerRequestResolvedMsg) bub
 	m.modal = nil
 	m.refreshThreadApprovalViews()
 	settle := m.settlePermissionPopup()
-	next := m.openNextThreadApproval()
+	next := m.openNextPendingApproval()
 	if settle != nil && next != nil {
 		return bubbletea.Batch(settle, next)
 	}

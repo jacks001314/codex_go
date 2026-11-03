@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 
 	codextui "codex_go/tui"
 	"codex_go/utils"
@@ -11,7 +12,6 @@ import (
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/glamour/ansi"
 	"github.com/charmbracelet/glamour/styles"
-	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
 	gmtext "github.com/yuin/goldmark/text"
 )
@@ -46,7 +46,7 @@ func RenderWithTheme(text string, width int, themeID string) (string, error) {
 // label (Rust parity: markdown_render local file-link display). Passing an
 // empty cwd renders absolute paths unchanged.
 func RenderWithThemeCwd(text string, width int, themeID string, cwd string) (string, error) {
-	return renderWithStyleSpacing(text, width, themeID, cwd, codexMarkdownStyle(), false)
+	return renderWithStyleSpacing(text, width, themeID, cwd, markdownStyleTranscript, false)
 }
 
 // RenderUniformListsWithThemeCwd renders completed transcript markdown with
@@ -54,7 +54,7 @@ func RenderWithThemeCwd(text string, width int, themeID string, cwd string) (str
 // every sibling in that list is separated by one blank line. Streaming callers
 // use RenderWithThemeCwd so the live tail stays compact until completion.
 func RenderUniformListsWithThemeCwd(text string, width int, themeID string, cwd string) (string, error) {
-	return renderWithStyleSpacing(text, width, themeID, cwd, codexMarkdownStyle(), true)
+	return renderWithStyleSpacing(text, width, themeID, cwd, markdownStyleTranscript, true)
 }
 
 // RenderReasoningWithThemeCwd renders a completed reasoning block the way Rust's
@@ -63,7 +63,7 @@ func RenderUniformListsWithThemeCwd(text string, width int, themeID string, cwd 
 // glamour renders the italic through the style variant but never emits faint, so
 // the dim is re-asserted around the rendered spans.
 func RenderReasoningWithThemeCwd(text string, width int, themeID string, cwd string) (string, error) {
-	rendered, err := renderWithStyleSpacing(text, width, themeID, cwd, codexReasoningMarkdownStyle(), true)
+	rendered, err := renderWithStyleSpacing(text, width, themeID, cwd, markdownStyleReasoning, true)
 	if err != nil || strings.TrimSpace(rendered) == "" {
 		return rendered, err
 	}
@@ -218,11 +218,69 @@ func dimRenderedLines(rendered string) string {
 	return strings.Join(lines, "\n")
 }
 
-func renderWithStyle(text string, width int, themeID string, cwd string, style ansi.StyleConfig) (string, error) {
-	return renderWithStyleSpacing(text, width, themeID, cwd, style, false)
+// markdownStyleKind identifies which style a render uses. The renderer itself
+// depends on the style, width, theme, and colour level, so those form its cache
+// key; building glamour's parser/renderer per call costs tens of kilobytes on
+// every streamed frame (Rust keeps one Markdown renderer).
+type markdownStyleKind int
+
+const (
+	markdownStyleTranscript markdownStyleKind = iota + 1
+	markdownStyleReasoning
+)
+
+type markdownRendererKey struct {
+	kind       markdownStyleKind
+	width      int
+	themeID    string
+	colorLevel codextui.StdoutColorLevel
 }
 
-func renderWithStyleSpacing(text string, width int, themeID string, cwd string, style ansi.StyleConfig, uniformLists bool) (string, error) {
+const maxCachedMarkdownRenderers = 8
+
+var (
+	// markdownRenderMu guards the renderer cache and serializes Render calls:
+	// glamour's ANSIRenderer keeps a shared block stack, so one renderer cannot
+	// be used concurrently.
+	markdownRenderMu    sync.Mutex
+	markdownRenderCache = map[markdownRendererKey]*glamour.TermRenderer{}
+)
+
+func markdownStyleFor(kind markdownStyleKind) ansi.StyleConfig {
+	if kind == markdownStyleReasoning {
+		return codexReasoningMarkdownStyle()
+	}
+	return codexMarkdownStyle()
+}
+
+// renderMarkdown reuses the glamour renderer for repeated renders with the same
+// style inputs. Rust keeps its Markdown renderer alive across frames; building
+// one per delta allocates a goldmark parser, renderer, and margin writers.
+func renderMarkdown(kind markdownStyleKind, style ansi.StyleConfig, width int, themeID string, colorLevel codextui.StdoutColorLevel, text string) (string, error) {
+	key := markdownRendererKey{kind: kind, width: width, themeID: themeID, colorLevel: colorLevel}
+	markdownRenderMu.Lock()
+	defer markdownRenderMu.Unlock()
+	renderer := markdownRenderCache[key]
+	if renderer == nil {
+		created, err := glamour.NewTermRenderer(
+			glamour.WithStyles(style),
+			glamour.WithWordWrap(width),
+			glamour.WithColorProfile(codextui.TermenvProfileForLevel(colorLevel)),
+			glamour.WithChromaFormatter(codextui.ChromaFormatterForLevel(colorLevel)),
+		)
+		if err != nil {
+			return "", err
+		}
+		if len(markdownRenderCache) >= maxCachedMarkdownRenderers {
+			clear(markdownRenderCache)
+		}
+		markdownRenderCache[key] = created
+		renderer = created
+	}
+	return renderer.Render(text)
+}
+
+func renderWithStyleSpacing(text string, width int, themeID string, cwd string, kind markdownStyleKind, uniformLists bool) (string, error) {
 	text = codextui.FollowupLabels(text)
 	text = strings.TrimSpace(text)
 	if text == "" {
@@ -259,18 +317,9 @@ func renderWithStyleSpacing(text string, width int, themeID string, cwd string, 
 		renderText = insertListParagraphBreaks(renderText)
 	}
 	colorLevel := codextui.DetectStdoutColorLevel()
-	style = applyThemeMarkupColors(style, themeID, colorLevel)
+	style := applyThemeMarkupColors(markdownStyleFor(kind), themeID, colorLevel)
 	linkSGR := linkStyleSGR(style.Link, colorLevel)
-	renderer, err := glamour.NewTermRenderer(
-		glamour.WithStyles(style),
-		glamour.WithWordWrap(width),
-		glamour.WithColorProfile(codextui.TermenvProfileForLevel(colorLevel)),
-		glamour.WithChromaFormatter(codextui.ChromaFormatterForLevel(colorLevel)),
-	)
-	if err != nil {
-		return "", err
-	}
-	out, err := renderer.Render(renderText)
+	out, err := renderMarkdown(kind, style, width, themeID, colorLevel, renderText)
 	if err != nil {
 		return "", err
 	}
@@ -589,7 +638,7 @@ func protectLongBareURLs(text string, width int) (map[string]string, string) {
 		threshold = 10
 	}
 	data := []byte(text)
-	document := goldmark.DefaultParser().Parse(gmtext.NewReader(data))
+	document := defaultMarkdownParser.Parse(gmtext.NewReader(data))
 	codeRanges := collectCodeRanges(document)
 	matches := bareURLPattern.FindAllStringSubmatchIndex(text, -1)
 	if len(matches) == 0 {
@@ -692,7 +741,7 @@ func rewriteLinksWithInfo(source string, cwd string) (string, []localFileLink, [
 		return source, nil, nil
 	}
 	data := []byte(source)
-	document := goldmark.DefaultParser().Parse(gmtext.NewReader(data))
+	document := defaultMarkdownParser.Parse(gmtext.NewReader(data))
 	codeRanges := collectCodeRanges(document)
 	matches := markdownLinkRE.FindAllStringSubmatchIndex(source, -1)
 	if len(matches) == 0 {
@@ -923,7 +972,7 @@ func styleUint(value uint) *uint       { return &value }
 
 func collectSourceCodeBlocks(source string) []sourceCodeBlock {
 	data := []byte(source)
-	document := goldmark.DefaultParser().Parse(gmtext.NewReader(data))
+	document := defaultMarkdownParser.Parse(gmtext.NewReader(data))
 	blocks := []sourceCodeBlock{}
 	_ = ast.Walk(document, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
 		if !entering {

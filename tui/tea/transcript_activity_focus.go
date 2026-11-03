@@ -129,7 +129,7 @@ func (m *Model) nearestTranscriptActivityIndex() int {
 		return -1
 	}
 	width := firstPositive(m.transcript.Width, m.width)
-	_, ranges := m.renderTranscriptWithExpandedMessages(m.State, width, m.expandedTranscriptActivityMessages(), true)
+	_, ranges, _ := m.renderTranscriptWithExpandedMessages(m.State, width, m.expandedTranscriptActivityMessages(), true)
 	top := m.transcript.YOffset
 	bottom := top + m.transcript.Height
 	for index := len(indexes) - 1; index >= 0; index-- {
@@ -255,7 +255,7 @@ func (m *Model) renderTranscriptActivityContent() (string, [][2]int, int) {
 		return "No messages yet.", nil, -1
 	}
 	width := firstPositive(m.transcript.Width, m.width)
-	content, ranges := m.renderTranscriptWithExpandedMessages(m.State, width, m.expandedTranscriptActivityMessages(), true)
+	content, ranges, _ := m.renderTranscriptWithExpandedMessages(m.State, width, m.expandedTranscriptActivityMessages(), true)
 	index := m.focusedTranscriptActivityIndex()
 	if index < 0 || index >= len(ranges) {
 		return content, ranges, -1

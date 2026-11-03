@@ -141,9 +141,10 @@ func isTranscriptDisclosureControlLine(line string) bool {
 	return transcriptOutputMarkerPattern.MatchString(trimmed) && strings.HasPrefix(trimmed, "+")
 }
 
-// recordTranscriptDisclosureHits maps painted content rows to their activity
-// control. Ranges come from the same layout pass that produced content.
-func (m *Model) recordTranscriptDisclosureHits(state *codextui.State, content string, ranges [][2]int) {
+// recordTranscriptDisclosureHits maps painted rows to their activity control.
+// Rows and ranges come from the same layout pass, so a streaming frame never
+// re-splits the entire transcript just to discover clickable controls.
+func (m *Model) recordTranscriptDisclosureHits(state *codextui.State, rows []string, ranges [][2]int) {
 	if m == nil {
 		return
 	}
@@ -152,24 +153,28 @@ func (m *Model) recordTranscriptDisclosureHits(state *codextui.State, content st
 	if state == nil || !m.transcriptDisclosureControlsEnabled() || len(ranges) == 0 {
 		return
 	}
-	lines := strings.Split(content, "\n")
 	for index := range state.Messages {
 		if index >= len(ranges) {
 			break
 		}
+		// Only identified activity cells paint a control, so plain history rows
+		// skip the per-message copy and normalization entirely.
+		if len(state.Messages[index].ActivityIDs) == 0 {
+			continue
+		}
 		if _, ok := transcriptMessageDisclosureFor(state.Messages[index], m.transcriptActivityExpanded(index)); !ok {
 			continue
 		}
-		start, end := ranges[index][0], min(ranges[index][1], len(lines))
+		start, end := ranges[index][0], min(ranges[index][1], len(rows))
 		if start < 0 || start >= end {
 			continue
 		}
 		controlRow := -1
 		for row := end - 1; row >= start; row-- {
-			if strings.TrimSpace(utils.StripANSI(lines[row])) == "" {
+			if strings.TrimSpace(utils.StripANSI(rows[row])) == "" {
 				continue
 			}
-			if isTranscriptDisclosureControlLine(lines[row]) {
+			if isTranscriptDisclosureControlLine(rows[row]) {
 				controlRow = row
 			}
 			break
@@ -177,7 +182,7 @@ func (m *Model) recordTranscriptDisclosureHits(state *codextui.State, content st
 		if controlRow < 0 {
 			continue
 		}
-		plain := utils.StripANSI(lines[controlRow])
+		plain := utils.StripANSI(rows[controlRow])
 		first := len(plain) - len(strings.TrimLeft(plain, " "))
 		width := codextui.DisplayWidth(plain)
 		if width <= first {
@@ -192,6 +197,12 @@ func (m *Model) recordTranscriptDisclosureHits(state *codextui.State, content st
 			end:     width,
 		}
 	}
+}
+
+// recordTranscriptDisclosureHitsFromContent is the string-based entry point for
+// projections that do not retain their layout rows (find and activity focus).
+func (m *Model) recordTranscriptDisclosureHitsFromContent(state *codextui.State, content string, ranges [][2]int) {
+	m.recordTranscriptDisclosureHits(state, strings.Split(content, "\n"), ranges)
 }
 
 // transcriptDisclosureLayoutEnabled reports whether the transcript paints the

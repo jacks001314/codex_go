@@ -17,19 +17,57 @@ import (
 // counts as pending for the picker and for the bottom-pane notice.
 
 // routeApprovalRequest shows the request for the active thread and queues
-// everything else: requests addressed to a background thread (Rust #58720) and
-// requests that arrive while another approval modal is already visible.
+// everything else: requests addressed to a background thread (Rust #58720),
+// requests that arrive while another approval modal is already visible, and
+// requests that arrive while the composer is actively being used. Rust delays
+// the last group by APPROVAL_PROMPT_TYPING_IDLE_DELAY so the modal does not
+// swallow the user's current keystrokes.
 func (m *Model) routeApprovalRequest(message ApprovalRequestMsg) bubbletea.Cmd {
 	if m == nil {
 		return nil
 	}
 	threadID := strings.TrimSpace(message.ThreadID)
-	if (threadID != "" && threadID != m.currentThreadID()) || (m.modal != nil && m.modal.kind == ModalKindApproval) {
+	active := m.currentThreadID()
+	// Rust enqueue_primary_thread_request: until the primary thread is known the
+	// request belongs to the widget the user is looking at, so a non-empty
+	// thread id must not park it behind a thread id that will never match.
+	foreignThread := active != "" && threadID != "" && threadID != active
+	if foreignThread ||
+		(m.modal != nil && m.modal.kind == ModalKindApproval) ||
+		m.approvalPromptDelayRemaining(m.currentTime()) > 0 {
 		m.pendingApprovals = append(m.pendingApprovals, message)
 		m.refreshThreadApprovalViews()
 		return nil
 	}
 	return m.openApprovalModal(message)
+}
+
+// reconcileApprovalThread replays queued approvals when the active thread
+// becomes known. Rust buffers requests for a primary thread that has not
+// started yet (app/thread_routing.rs enqueue_primary_thread_request) and
+// flushes them once the thread exists; Go observes the same transition through
+// State.ThreadID, which can be filled in after the first approval arrives.
+func (m *Model) reconcileApprovalThread() bubbletea.Cmd {
+	if m == nil {
+		return nil
+	}
+	active := m.currentThreadID()
+	if active == m.approvalThreadID {
+		return nil
+	}
+	m.approvalThreadID = active
+	if active == "" || len(m.pendingApprovals) == 0 {
+		return nil
+	}
+	if m.modal != nil && m.modal.kind == ModalKindApproval {
+		return nil
+	}
+	// A request that arrived while the composer was active still honors the
+	// typing-idle delay; syncApprovalPromptDelay owns that timer.
+	if m.approvalPromptDelayRemaining(m.currentTime()) > 0 {
+		return nil
+	}
+	return m.openPendingApprovalForThread(active)
 }
 
 // pendingApprovalThreadIDs reports the threads with an approval outstanding, in
@@ -196,7 +234,9 @@ func (m *Model) openNextThreadApproval() bubbletea.Cmd {
 	}
 	active := m.currentThreadID()
 	request, ok := m.dequeueApproval(func(queued string) bool {
-		return queued == "" || queued == active
+		// An unknown primary thread owns the widget the user is looking at,
+		// so anything queued before the thread id arrived can be shown now.
+		return queued == "" || active == "" || queued == active
 	})
 	if !ok {
 		return nil

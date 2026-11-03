@@ -1416,6 +1416,7 @@ func TestModelTranscriptOverlayExpandsHistoryRawText(t *testing.T) {
 	}
 
 	state.Messages[0].RawText += "\nlate running detail"
+	state.BumpMessagesRevision()
 	_ = model.View()
 	if content := model.overlay.Content(); !strings.Contains(content, "late running detail") {
 		t.Fatalf("expanded transcript did not follow updated raw history:\n%s", content)
@@ -4210,11 +4211,7 @@ func TestModelConsumesStreamChannel(t *testing.T) {
 	}
 	_, cmd = model.Update(cmd())
 	if cmd == nil {
-		t.Fatal("first stream message returned nil command")
-	}
-	_, cmd = model.Update(cmd())
-	if cmd == nil {
-		t.Fatal("second stream message returned nil command")
+		t.Fatal("batched stream messages returned nil command")
 	}
 	_, cmd = model.Update(cmd())
 	if cmd != nil {

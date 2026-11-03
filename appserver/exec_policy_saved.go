@@ -10,7 +10,7 @@ package appserver
 // section snapshot.
 
 import (
-	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -86,8 +86,9 @@ func (r *RuntimeRouter) approvedCommandPrefixesForThread(threadID string) [][]st
 	return execpolicy.CanonicalCommandPrefixes(prefixes)
 }
 
-// loadedExecPolicy loads the on-disk exec policy, tolerating a missing file
-// (Rust's session policy starts empty when no rules file exists).
+// loadedExecPolicy loads every user rule file in `$CODEX_HOME/rules`, in
+// lexical order like Rust's collect_policy_files. A missing directory is an
+// empty policy (Rust's session policy starts empty when no rules exist).
 func (r *RuntimeRouter) loadedExecPolicy() *execpolicy.Policy {
 	if r == nil || r.services.Config == nil {
 		return nil
@@ -96,11 +97,7 @@ func (r *RuntimeRouter) loadedExecPolicy() *execpolicy.Policy {
 	if codexHome == "" {
 		return nil
 	}
-	path := execpolicy.DefaultPolicyPath(codexHome)
-	if _, err := os.Stat(path); err != nil {
-		return nil
-	}
-	policy, err := execpolicy.LoadPolicies([]string{path})
+	policy, err := execpolicy.LoadPolicyDirectory(filepath.Join(codexHome, "rules"))
 	if err != nil {
 		return nil
 	}

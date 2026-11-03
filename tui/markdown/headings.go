@@ -4,7 +4,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
 	gmtext "github.com/yuin/goldmark/text"
 )
@@ -23,7 +22,7 @@ func revealHeadingMarkers(source string) string {
 		return source
 	}
 	data := []byte(source)
-	document := goldmark.DefaultParser().Parse(gmtext.NewReader(data))
+	document := defaultMarkdownParser.Parse(gmtext.NewReader(data))
 	var edits []headingMarkerEdit
 	_ = ast.Walk(document, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
 		if !entering {

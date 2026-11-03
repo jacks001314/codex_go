@@ -1532,6 +1532,7 @@ func (m *UnifiedExecManager) collect(ctx context.Context, process *unifiedExecPr
 		Stdout:              output,
 		OmittedBytes:        omittedBytes,
 		SandboxType:         cloneSandboxTypePtr(process.sandboxType),
+		SandboxDenied:       process.wasSandboxDenied(),
 		Duration:            time.Since(started),
 		TimedOut:            timedOut,
 		ChunkID:             generateShellChunkID(),
@@ -2287,6 +2288,15 @@ func (p *unifiedExecProcess) markSandboxDenied() {
 	p.mu.Lock()
 	p.sandboxDenied = true
 	p.mu.Unlock()
+}
+
+func (p *unifiedExecProcess) wasSandboxDenied() bool {
+	if p == nil {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.sandboxDenied
 }
 
 func (p *unifiedExecProcess) snapshotAndDrain() (string, int, bool, int, error, bool) {

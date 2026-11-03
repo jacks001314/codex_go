@@ -41,8 +41,8 @@ func TestSettingsWriteResultResumesFollowingLikeRust(t *testing.T) {
 	if !model.activityFollow || !model.transcript.AtBottom() {
 		t.Fatalf("settings failure did not resume following: follow=%v offset=%d", model.activityFollow, model.transcript.YOffset)
 	}
-	if !strings.Contains(model.lastTranscriptContent, "Failed to save approvals reviewer") {
-		t.Fatalf("settings failure was not added to the transcript: %q", model.lastTranscriptContent)
+	if !strings.Contains(model.transcriptContent(), "Failed to save approvals reviewer") {
+		t.Fatalf("settings failure was not added to the transcript: %q", model.transcriptContent())
 	}
 }
 

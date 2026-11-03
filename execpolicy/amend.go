@@ -1,6 +1,7 @@
 package execpolicy
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -14,6 +15,38 @@ const defaultPolicyFile = "default.rules"
 
 func DefaultPolicyPath(codexHome string) string {
 	return filepath.Join(codexHome, "rules", defaultPolicyFile)
+}
+
+// AppendAllowPrefixRule writes the Rust
+// `blocking_append_allow_prefix_rule` line for an approved command prefix:
+// `prefix_rule(pattern=["a", "b"], decision="allow")`. Repeated approvals for
+// the same prefix are deduplicated by appendRuleLine.
+func AppendAllowPrefixRule(policyPath string, prefix []string) error {
+	if len(prefix) == 0 {
+		return fmt.Errorf("prefix rule requires at least one token")
+	}
+	tokens := make([]string, 0, len(prefix))
+	for _, token := range prefix {
+		encoded, err := marshalJSONString(token)
+		if err != nil {
+			return fmt.Errorf("failed to format prefix tokens: %w", err)
+		}
+		tokens = append(tokens, encoded)
+	}
+	line := "prefix_rule(pattern=[" + strings.Join(tokens, ", ") + `], decision="allow")`
+	return appendRuleLine(policyPath, line)
+}
+
+// marshalJSONString matches serde_json's string encoding: Go's json.Marshal
+// escapes `<`, `>` and `&`, which serde_json leaves untouched.
+func marshalJSONString(value string) (string, error) {
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(buf.String(), "\n"), nil
 }
 
 func AppendNetworkRule(policyPath string, host string, protocol string, decision Decision, justification string) error {

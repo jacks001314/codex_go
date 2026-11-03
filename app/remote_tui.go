@@ -4315,25 +4315,106 @@ func remoteCommandExecutionApprovalCommand(params *appserver.CommandExecutionReq
 }
 
 func remoteCommandExecutionApprovalOptions(params *appserver.CommandExecutionRequestApprovalParams) []codextea.ModalOption {
-	options := []codextea.ModalOption{
-		{ID: "allow_once", Label: "Yes, proceed", Shortcut: "y"},
+	if params == nil {
+		return nil
 	}
-	prefix := remoteCommandExecutionApprovalPrefix(params)
-	if len(prefix) > 0 {
-		options = append(options, codextea.ModalOption{
-			ID:       "allow_prefix",
-			Label:    commandApprovalPrefixLabel(prefix),
-			Shortcut: "p",
-		})
-	} else {
+	if decisions := params.AvailableDecisions; len(decisions) > 0 {
+		options := make([]codextea.ModalOption, 0, len(decisions))
+		for _, decision := range decisions {
+			if option, ok := remoteCommandExecutionApprovalOption(decision, params); ok {
+				options = append(options, option)
+			}
+		}
+		if len(options) > 0 {
+			return options
+		}
+	}
+	return remoteDefaultCommandExecutionApprovalOptions(params)
+}
+
+// remoteCommandExecutionApprovalOption maps one app-server decision onto the
+// bottom-pane row Rust's ApprovalOverlay would build for it.
+func remoteCommandExecutionApprovalOption(raw any, params *appserver.CommandExecutionRequestApprovalParams) (codextea.ModalOption, bool) {
+	decision, payload := remoteApprovalDecisionEntry(raw)
+	network := params != nil && params.NetworkApprovalContext != nil
+	switch decision {
+	case string(appserver.CommandExecutionApprovalAccept):
+		label := "Yes, proceed"
+		if network {
+			label = "Yes, just this once"
+		}
+		return codextea.ModalOption{ID: "allow_once", Label: label, Shortcut: "y"}, true
+	case string(appserver.CommandExecutionApprovalAcceptForSession):
+		label := "Yes, and don't ask again for this command in this session"
+		if network {
+			label = "Yes, and allow this host for this conversation"
+		} else if params != nil && params.AdditionalPermissions != nil {
+			label = "Yes, and allow these permissions for this session"
+		}
+		return codextea.ModalOption{ID: "allow_session", Label: label, Shortcut: "a"}, true
+	case string(appserver.CommandExecutionApprovalAcceptWithExecpolicyAmendment):
+		prefix := remoteExecPolicyAmendmentCommand(payload)
+		if len(prefix) == 0 {
+			prefix = remoteCommandExecutionApprovalPrefix(params)
+		}
+		if len(prefix) == 0 || strings.ContainsAny(strings.Join(prefix, " "), "\r\n") {
+			return codextea.ModalOption{}, false
+		}
+		return codextea.ModalOption{ID: "allow_prefix", Label: commandApprovalPrefixLabel(prefix), Shortcut: "p"}, true
+	case string(appserver.CommandExecutionApprovalApplyNetworkPolicyAmendment):
+		action := remoteNetworkPolicyAction(payload)
+		if action == string(appserver.NetworkPolicyRuleAllow) {
+			return codextea.ModalOption{ID: "allow_network", Label: "Yes, and allow this host in the future", Shortcut: "p"}, true
+		}
+		if action == string(appserver.NetworkPolicyRuleDeny) {
+			return codextea.ModalOption{ID: "deny_network", Label: "No, and block this host in the future", Shortcut: "d"}, true
+		}
+		return codextea.ModalOption{}, false
+	case string(appserver.CommandExecutionApprovalDecline):
+		return codextea.ModalOption{ID: "deny", Label: "No, continue without running it", Shortcut: "d", DisplayShortcut: "esc"}, true
+	case string(appserver.CommandExecutionApprovalCancel):
+		return codextea.ModalOption{ID: "cancel", Label: "No, and tell Codex what to do differently", Shortcut: "d", DisplayShortcut: "esc"}, true
+	default:
+		return codextea.ModalOption{}, false
+	}
+}
+
+// remoteDefaultCommandExecutionApprovalOptions is the legacy fallback when a
+// server omits availableDecisions. It mirrors Rust's
+// default_available_decisions: network approvals offer a host rule, additional
+// permissions stay one-time, and command approvals offer the prefix rule when
+// the server proposed one.
+func remoteDefaultCommandExecutionApprovalOptions(params *appserver.CommandExecutionRequestApprovalParams) []codextea.ModalOption {
+	network := params != nil && params.NetworkApprovalContext != nil
+	acceptLabel := "Yes, proceed"
+	if network {
+		acceptLabel = "Yes, just this once"
+	}
+	options := []codextea.ModalOption{{ID: "allow_once", Label: acceptLabel, Shortcut: "y"}}
+	if network {
 		options = append(options, codextea.ModalOption{
 			ID:       "allow_session",
-			Label:    "Yes, and don't ask again for this command in this session",
+			Label:    "Yes, and allow this host for this conversation",
 			Shortcut: "a",
 		})
+		if action := remoteNetworkPolicyAction(map[string]any{"network_policy_amendment": remoteFirstNetworkAmendment(params, string(appserver.NetworkPolicyRuleAllow))}); action != "" {
+			options = append(options, codextea.ModalOption{
+				ID:       "allow_network",
+				Label:    "Yes, and allow this host in the future",
+				Shortcut: "p",
+			})
+		}
+	} else if params != nil && params.AdditionalPermissions == nil {
+		if prefix := remoteCommandExecutionApprovalPrefix(params); len(prefix) > 0 && !strings.ContainsAny(strings.Join(prefix, " "), "\r\n") {
+			options = append(options, codextea.ModalOption{
+				ID:       "allow_prefix",
+				Label:    commandApprovalPrefixLabel(prefix),
+				Shortcut: "p",
+			})
+		}
 	}
 	return append(options, codextea.ModalOption{
-		ID:              "deny",
+		ID:              "cancel",
 		Label:           "No, and tell Codex what to do differently",
 		Shortcut:        "d",
 		DisplayShortcut: "esc",
@@ -4344,7 +4425,91 @@ func remoteCommandExecutionApprovalPrefix(params *appserver.CommandExecutionRequ
 	if params == nil {
 		return nil
 	}
-	return stringSliceFromAny(params.ProposedExecPolicyAmendment)
+	if prefix := remoteExecPolicyAmendmentCommand(params.ProposedExecPolicyAmendment); len(prefix) > 0 {
+		return prefix
+	}
+	for _, decision := range params.AvailableDecisions {
+		name, payload := remoteApprovalDecisionEntry(decision)
+		if name == string(appserver.CommandExecutionApprovalAcceptWithExecpolicyAmendment) {
+			if prefix := remoteExecPolicyAmendmentCommand(payload); len(prefix) > 0 {
+				return prefix
+			}
+		}
+	}
+	return nil
+}
+
+func remoteExecPolicyAmendmentCommand(value any) []string {
+	if value == nil {
+		return nil
+	}
+	if prefix := stringSliceFromAny(value); len(prefix) > 0 {
+		return prefix
+	}
+	object, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+	for _, key := range []string{"command", "execpolicy_amendment", "execpolicyAmendment", "prefix_rule", "prefixRule"} {
+		if nested, ok := object[key]; ok {
+			if prefix := remoteExecPolicyAmendmentCommand(nested); len(prefix) > 0 {
+				return prefix
+			}
+		}
+	}
+	return nil
+}
+
+func remoteApprovalDecisionEntry(value any) (string, any) {
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed), nil
+	case map[string]any:
+		if len(typed) == 1 {
+			for name, payload := range typed {
+				return strings.TrimSpace(name), payload
+			}
+		}
+		for _, key := range []string{"type", "decision"} {
+			if name, ok := typed[key].(string); ok {
+				return strings.TrimSpace(name), typed
+			}
+		}
+	}
+	return "", nil
+}
+
+func remoteNetworkPolicyAction(value any) string {
+	object, ok := value.(map[string]any)
+	if !ok {
+		return ""
+	}
+	amendment := object["network_policy_amendment"]
+	if amendment == nil {
+		amendment = object["networkPolicyAmendment"]
+	}
+	if amendmentMap, ok := amendment.(map[string]any); ok {
+		if action := strings.TrimSpace(stringFromAny(amendmentMap["action"])); action != "" {
+			return action
+		}
+	}
+	return strings.TrimSpace(stringFromAny(object["action"]))
+}
+
+func remoteFirstNetworkAmendment(params *appserver.CommandExecutionRequestApprovalParams, action string) map[string]any {
+	if params == nil {
+		return nil
+	}
+	for _, amendment := range params.ProposedNetworkPolicyAmendments {
+		if strings.TrimSpace(stringFromAny(amendment["action"])) == action {
+			cloned := make(map[string]any, len(amendment))
+			for key, value := range amendment {
+				cloned[key] = value
+			}
+			return cloned
+		}
+	}
+	return nil
 }
 
 func remoteFileChangeApprovalBody(params *appserver.FileChangeRequestApprovalParams) string {
@@ -4451,6 +4616,28 @@ func remoteCommandExecutionDecision(response codextea.ModalResponse, params *app
 				"execpolicy_amendment": prefix,
 			},
 		}
+	case "allow_network":
+		if amendment := remoteFirstNetworkAmendment(params, string(appserver.NetworkPolicyRuleAllow)); amendment != nil {
+			return map[string]any{
+				string(appserver.CommandExecutionApprovalApplyNetworkPolicyAmendment): map[string]any{
+					"network_policy_amendment": amendment,
+				},
+			}
+		}
+		return appserver.CommandExecutionApprovalDecline
+	case "deny_network":
+		if amendment := remoteFirstNetworkAmendment(params, string(appserver.NetworkPolicyRuleDeny)); amendment != nil {
+			return map[string]any{
+				string(appserver.CommandExecutionApprovalApplyNetworkPolicyAmendment): map[string]any{
+					"network_policy_amendment": amendment,
+				},
+			}
+		}
+		return appserver.CommandExecutionApprovalDecline
+	case "deny":
+		return appserver.CommandExecutionApprovalDecline
+	case "cancel":
+		return appserver.CommandExecutionApprovalCancel
 	default:
 		return appserver.CommandExecutionApprovalDecline
 	}

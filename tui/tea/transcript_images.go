@@ -45,6 +45,56 @@ type transcriptImageCacheEntry struct {
 	modTime time.Time
 }
 
+// transcriptImageFileState fingerprints one local preview file. The layout
+// cache is keyed by message revision, but deleting or replacing an image does
+// not mutate the message, so this small file list lets an idle frame notice
+// that its reserved image rows are stale without rescanning all messages.
+type transcriptImageFileState struct {
+	path    string
+	size    int64
+	modTime time.Time
+	exists  bool
+}
+
+func readTranscriptImageFileState(path string) transcriptImageFileState {
+	state := transcriptImageFileState{path: path}
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return state
+	}
+	state.size = info.Size()
+	state.modTime = info.ModTime()
+	state.exists = true
+	return state
+}
+
+func transcriptImageFilesForMessages(messages []codextui.Message) []transcriptImageFileState {
+	var files []transcriptImageFileState
+	seen := map[string]bool{}
+	for _, message := range messages {
+		path := strings.TrimSpace(message.ImagePath)
+		if path == "" || seen[path] {
+			continue
+		}
+		seen[path] = true
+		files = append(files, readTranscriptImageFileState(path))
+	}
+	return files
+}
+
+func (c *transcriptMessageCache) transcriptImageFilesCurrent() bool {
+	if c == nil {
+		return false
+	}
+	for _, cached := range c.imageFiles {
+		current := readTranscriptImageFileState(cached.path)
+		if current.exists != cached.exists || current.size != cached.size || !current.modTime.Equal(cached.modTime) {
+			return false
+		}
+	}
+	return true
+}
+
 func (c *transcriptImageCache) load(path string, width int, protocol pets.ImageProtocol, cell transcript_image.CellSize) *transcript_image.TranscriptImage {
 	if c == nil || strings.TrimSpace(path) == "" || width <= 0 || protocol == "" {
 		return nil

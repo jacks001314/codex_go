@@ -17539,12 +17539,18 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 		options.Shell.GrantedPermissions = func(callTurnID, callEnvironmentID string) *sandbox.AdditionalPermissionProfile {
 			return r.grantedPermissionsForEnvironment(threadID, firstNonEmpty(callTurnID, turnID), callEnvironmentID)
 		}
+		modelID := strings.TrimSpace(params.Model)
+		if modelID == "" {
+			modelID = stringConfigValue(cfg, "model")
+		}
+		// Rust evaluates every shell command against the session exec policy
+		// (user rules merged with the managed requirements) before the first
+		// attempt, so the approval request can carry the reusable amendment.
+		ignoreAllowPrefixRules := r.modelIgnoresAllowPrefixRules(cfg, modelID)
+		options.Shell.Validation.ExecPolicy = r.execPolicyForThread(threadID)
+		options.Shell.Validation.IgnorePrefixRules = ignoreAllowPrefixRules
 		if r.serverRequestSinkConfigured() {
-			modelID := strings.TrimSpace(params.Model)
-			if modelID == "" {
-				modelID = stringConfigValue(cfg, "model")
-			}
-			options.Shell.Approval = r.shellApprovalForTurn(threadID, strings.TrimSpace(turnID), r.modelIgnoresAllowPrefixRules(cfg, modelID))
+			options.Shell.Approval = r.shellApprovalForTurn(threadID, strings.TrimSpace(turnID), ignoreAllowPrefixRules)
 			// The shell executor reports the decisions it never had to ask for
 			// (Rust's tool_decision(Approved, Config) for a skipped requirement).
 			options.Shell.DecisionSink = r.sessionTelemetryForThread(threadID)
@@ -18666,6 +18672,7 @@ func (r *RuntimeRouter) writeStdinApproval(ctx context.Context, request *tool.Wr
 	if request.AdditionalPermissions != nil {
 		params.AdditionalPermissions = cloneAdditionalPermissionProfile(request.AdditionalPermissions)
 	}
+	params.AvailableDecisions = commandExecutionAvailableDecisions(params)
 	userWait := r.startUserWaitTiming(threadID, turnID, userWaitOwner)
 	defer userWait.End()
 	var response CommandExecutionRequestApprovalResponse
@@ -19337,6 +19344,7 @@ func (r *RuntimeRouter) shellApprovalForTurn(threadID string, turnID string, ign
 				}
 			}
 		}
+		params.AvailableDecisions = commandExecutionAvailableDecisions(params)
 		userWait := r.startUserWaitTiming(threadID, turnID, userWaitOwner)
 		defer userWait.End()
 		var response CommandExecutionRequestApprovalResponse
@@ -19371,11 +19379,21 @@ func (r *RuntimeRouter) shellApprovalForTurn(threadID string, turnID string, ign
 			r.rememberCommandApprovalForSession(threadID, request.Request)
 			return tool.ShellApprovalDecision{Approved: true, AllowSession: true}, nil
 		case string(CommandExecutionApprovalAcceptWithExecpolicyAmendment):
-			// Rust 1bbfb5cfad: report the newly saved command prefix to the
-			// model once after the tool completes instead of re-injecting the
-			// full permissions instructions.
+			// Rust Session::resolve_exec_approval persists the amendment before
+			// releasing the tool call; a failed write only warns and the
+			// command still runs.
 			if amendment := commandExecutionApprovalDecisionExecpolicyAmendment(response.Decision); len(amendment) > 0 {
-				r.rememberExecPolicyAmendmentSaved(threadID, turnID, amendment)
+				if err := r.persistExecPolicyAmendment(amendment); err != nil {
+					r.notify(NotificationWarning, &WarningNotification{
+						ThreadID: stringPtrIfNotEmpty(strings.TrimSpace(threadID)),
+						Message:  "Failed to apply execpolicy amendment: " + err.Error(),
+					})
+				} else {
+					// Rust 1bbfb5cfad: report the newly saved command prefix to
+					// the model once after the tool completes instead of
+					// re-injecting the full permissions instructions.
+					r.rememberExecPolicyAmendmentSaved(threadID, turnID, amendment)
+				}
 			}
 			return tool.ShellApprovalDecision{Approved: true}, nil
 		case string(CommandExecutionApprovalApplyNetworkPolicyAmendment):
@@ -19383,10 +19401,32 @@ func (r *RuntimeRouter) shellApprovalForTurn(threadID string, turnID string, ign
 				return tool.ShellApprovalDecision{Approved: true}, nil
 			}
 			return tool.ShellApprovalDecision{}, nil
+		case string(CommandExecutionApprovalCancel):
+			// Rust Session::resolve_exec_approval aborts the turn on
+			// ReviewDecision::Abort, which is what the menu's "No, and tell Codex
+			// what to do differently" sends.
+			if r.hasRuntimeThreadStore() {
+				_, _ = r.interruptRuntimeTurn(threadID, turnID, nil, turnAbortReasonInterrupted)
+			}
+			return tool.ShellApprovalDecision{}, nil
 		default:
 			return tool.ShellApprovalDecision{}, nil
 		}
 	}
+}
+
+// persistExecPolicyAmendment mirrors Rust's
+// Session::persist_execpolicy_amendment: the approved prefix is appended to
+// $CODEX_HOME/rules/default.rules so it outlives the turn and the session.
+func (r *RuntimeRouter) persistExecPolicyAmendment(prefix []string) error {
+	if r == nil || r.services.Config == nil {
+		return errors.New("codex home is not configured")
+	}
+	codexHome := strings.TrimSpace(r.services.Config.CodexHome())
+	if codexHome == "" {
+		return errors.New("codex home is not configured")
+	}
+	return execpolicy.AppendAllowPrefixRule(execpolicy.DefaultPolicyPath(codexHome), prefix)
 }
 
 // shellApprovalToolName reports the tool the approval belongs to: the
@@ -19627,6 +19667,9 @@ func commandExecutionApprovalDecisionExecpolicyAmendment(value any) []string {
 	amendment := firstNonNil(payloadMap["execpolicy_amendment"], payloadMap["execpolicyAmendment"])
 	if amendment == nil {
 		return nil
+	}
+	if amendmentMap, ok := commandExecutionApprovalDecisionObject(amendment); ok {
+		amendment = firstNonNil(amendmentMap["command"], amendmentMap["prefix_rule"], amendmentMap["prefixRule"])
 	}
 	if values, ok := amendment.([]string); ok {
 		return append([]string(nil), values...)

@@ -48,6 +48,16 @@ func MatchDangerousPowerShellWordsForPlatform(words []string, platform Dangerous
 	return "", false
 }
 
+// MatchDangerousPowerShellLiteralWords matches words lowered from an
+// independent literal PowerShell script (Rust `ExecPolicyCommandOrigin::
+// PowerShellLiteral`), which applies the stricter leading-word rules.
+func MatchDangerousPowerShellLiteralWords(words []string) (DangerousCommandMatch, bool) {
+	if isDangerousPowerShellLiteralWords(words) {
+		return DangerousCommandMatchOther, true
+	}
+	return "", false
+}
+
 // DangerousCommandRejectionReason is the model-facing reason for a matched
 // dangerous-command rule (Rust `dangerous_command_rejection_reason`).
 func DangerousCommandRejectionReason(match DangerousCommandMatch) string {

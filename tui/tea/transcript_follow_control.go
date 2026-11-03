@@ -56,7 +56,7 @@ func (m *Model) followControlLabel(width int) string {
 	if m == nil || width <= 0 || m.transcript.Height <= 0 || m.transcript.AtBottom() {
 		return ""
 	}
-	if !m.ownedScreen || m.rawOutput || strings.TrimSpace(m.lastTranscriptContent) == "" {
+	if !m.ownedScreen || m.rawOutput || len(m.transcript.lines) == 0 {
 		return ""
 	}
 	if m.modal != nil || m.overlay != nil || m.shortcutOverlay || m.warningsView != nil {

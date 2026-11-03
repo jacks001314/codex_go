@@ -365,7 +365,12 @@ type ShellResult struct {
 	// SandboxType is the backend the launched process actually ran under (Rust
 	// #47568). A nil pointer means no launch was observed or the executor
 	// predates sandbox reporting; SandboxTypeNone is explicit full access.
-	SandboxType         *sandbox.SandboxType
+	SandboxType *sandbox.SandboxType
+	// SandboxDenied reports that the finished attempt was blocked by the sandbox
+	// (Rust `SandboxErr::Denied`). The executor retries such a command once
+	// without the sandbox behind the escalation approval, as Rust's orchestrator
+	// does.
+	SandboxDenied       bool
 	Stdout              string
 	Stderr              string
 	Duration            time.Duration
@@ -384,6 +389,15 @@ type ShellResult struct {
 type ShellValidationOptions struct {
 	AdditionalPermissionsAllowed bool
 	ApprovalPolicy               sandbox.AskForApproval
+	// ExecPolicy is the session exec policy: the user's rules merged with the
+	// managed requirements and environment overlays. A command matched by a
+	// rule takes that rule's decision; unmatched commands follow the approval
+	// policy heuristics (Rust
+	// ExecPolicyManager::create_exec_approval_requirement_for_shell).
+	ExecPolicy *execpolicy.Policy
+	// IgnorePrefixRules mirrors Rust's AllowPrefixRules::IgnoreForCyberModel:
+	// allow rules are dropped and no reusable amendment is proposed.
+	IgnorePrefixRules bool
 	// GranularSandboxApproval / GranularRules mirror Rust's granular
 	// AskForApproval sub-config (#40024): sandbox escalation is rejected only
 	// when the shared policy check rejects prompting.

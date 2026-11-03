@@ -23,6 +23,7 @@ func TestRenderTranscriptCacheReusesUnchangedMessages(t *testing.T) {
 
 	// Mutate only the streaming tail. Earlier messages should reuse cached lines.
 	state.Messages[len(state.Messages)-1].Text += " +delta"
+	state.BumpMessagesRevision()
 	second := renderTranscriptWithCache(&cache, state, false, 80, "dark", false, "", false)
 	if !strings.Contains(second, "assistant 19 +delta") {
 		t.Fatalf("cache render missing streamed delta:\n%s", second)
@@ -38,7 +39,7 @@ func TestRenderTranscriptCacheReusesUnchangedMessages(t *testing.T) {
 	}
 }
 
-func TestRenderTranscriptCacheReflectsDirectMutation(t *testing.T) {
+func TestRenderTranscriptCacheReflectsBumpedMutation(t *testing.T) {
 	state := codextui.NewState(nil)
 	state.AddHistoryLines(
 		[]string{"collapsed"},
@@ -50,9 +51,10 @@ func TestRenderTranscriptCacheReflectsDirectMutation(t *testing.T) {
 		t.Fatalf("expanded render missing raw detail:\n%s", first)
 	}
 
-	// Mutate the message in place without bumping MessagesRevision; the cache
-	// must still notice the content change.
+	// Mutate the message in place and bump the revision; the cache must notice
+	// the content change without opening the per-frame key scan fast path.
 	state.Messages[0].RawText += "\nlate running detail"
+	state.BumpMessagesRevision()
 	second := renderTranscriptWithCache(&cache, state, false, 80, "dark", true, "", false)
 	if !strings.Contains(second, "late running detail") {
 		t.Fatalf("cache render did not reflect direct RawText mutation:\n%s", second)
