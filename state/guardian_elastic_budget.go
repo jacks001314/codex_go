@@ -41,21 +41,15 @@ const (
 	GuardianElasticSectionReplEvidence         = GuardianElasticSectionNodeReplEvidence
 )
 
-var guardianElasticSections = map[GuardianElasticSection]bool{
-	GuardianElasticSectionTranscriptMessages:       true,
-	GuardianElasticSectionTranscriptTools:          true,
-	GuardianElasticSectionRootConversationMessages: true,
-	GuardianElasticSectionRetainedUserInstructions: true,
-	GuardianElasticSectionTrustedUserAnswers:       true,
-	GuardianElasticSectionSenderUserMessages:       true,
-	GuardianElasticSectionPlannedAction:            true,
-	GuardianElasticSectionPreviousReviews:          true,
-	GuardianElasticSectionTrustedTools:             true,
-	GuardianElasticSectionTrustedSkills:            true,
-	GuardianElasticSectionTranscriptImages:         true,
-	GuardianElasticSectionNodeReplEvidence:         true,
-	GuardianElasticSectionPermissionContext:        true,
-}
+// guardianElasticSections is derived from guardianElasticSectionOrder so every
+// group is known exactly once, in Rust ElasticSection::ALL order.
+var guardianElasticSections = func() map[GuardianElasticSection]bool {
+	sections := make(map[GuardianElasticSection]bool, len(guardianElasticSectionOrder))
+	for _, section := range guardianElasticSectionOrder {
+		sections[section] = true
+	}
+	return sections
+}()
 
 var guardianElasticSectionAliases = map[string]GuardianElasticSection{
 	"root_messages":                    GuardianElasticSectionRootConversationMessages,
@@ -166,6 +160,44 @@ type GuardianElasticBudgetConfig struct {
 // the default reservation for every group that is not transcript messages or
 // tools.
 const GuardianElasticDefaultInstructionTokens = 900
+
+// GuardianElasticDefaultMaxInputTokens mirrors Rust's DEFAULT_MAX_INPUT_TOKENS
+// (guardian-context/src/budget.rs): the nominal Guardian input budget that the
+// section minimums must reserve exactly (Rust #58935).
+const GuardianElasticDefaultMaxInputTokens = 128_000
+
+// GuardianElasticSectionMinimumTotalMismatch reports that the section minimums,
+// including fallback policies for groups omitted from the map, do not add up to
+// GuardianElasticDefaultMaxInputTokens.
+type GuardianElasticSectionMinimumTotalMismatch struct{ Total int }
+
+func (e GuardianElasticSectionMinimumTotalMismatch) Error() string {
+	return fmt.Sprintf(
+		"elastic section minimums must sum to DEFAULT_MAX_INPUT_TOKENS (%d), got %d",
+		GuardianElasticDefaultMaxInputTokens, e.Total,
+	)
+}
+
+// TotalMinimumTokens sums the minimum reservation of every group, including
+// the fallback policies used for groups omitted from the configured map.
+func (c GuardianElasticBudgetConfig) TotalMinimumTokens() int {
+	total := 0
+	for _, section := range guardianElasticSectionOrder {
+		total += c.SectionLimits(section).MinTotalSectionTokens
+	}
+	return total
+}
+
+// Validate requires the effective section minimums to reserve exactly the
+// nominal Guardian input budget (Rust ElasticBudgetConfig::validate, #58935).
+// Unused required reservations fund optional evidence up to each section
+// maximum once the budget is complete.
+func (c GuardianElasticBudgetConfig) Validate() error {
+	if total := c.TotalMinimumTokens(); total != GuardianElasticDefaultMaxInputTokens {
+		return GuardianElasticSectionMinimumTotalMismatch{Total: total}
+	}
+	return nil
+}
 
 // SectionLimits returns the configured limits for one group, or the
 // synchronous entry caps when the group has no override (Rust
