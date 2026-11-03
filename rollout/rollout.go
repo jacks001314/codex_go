@@ -3014,7 +3014,8 @@ func FindThreadPath(codexHome string, threadID string, archived bool) (string, e
 // rollout in recovery order: unarchived copies newest first, then archived
 // copies newest first. A plain sibling hides its compressed partner, matching
 // FindThreadPath. Rust #58959/#58960 use this ordering to retry an ancestor
-// read against another copy when the preferred rollout is truncated.
+// read against another copy when the preferred rollout is truncated; the
+// caller still validates each copy's owner and exact history boundary.
 func FindThreadRolloutCopies(codexHome string, threadID string) ([]string, error) {
 	threadID = strings.TrimSpace(threadID)
 	if threadID == "" {
