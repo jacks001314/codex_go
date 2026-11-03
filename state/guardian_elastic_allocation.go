@@ -45,6 +45,10 @@ type GuardianElasticItem struct {
 	// Exact marks content delivered verbatim (the planned action JSON), which
 	// entry preparation never shortens (Rust #58444).
 	Exact bool
+	// Protected marks host framing, authorization warnings and section
+	// boundaries that stay intact when elastic entry caps shorten supporting
+	// evidence (Rust #59003).
+	Protected bool
 	// Incomplete marks an entry whose source was shortened during elastic
 	// preparation, so callers projecting it back to retained evidence do not
 	// treat it as a complete revision (Rust #58444).

@@ -36,7 +36,7 @@ func PrepareGuardianElasticEntries(context GuardianElasticContext, config Guardi
 				return GuardianElasticContext{}, err
 			}
 			maximum := config.SectionLimits(group).MaxSectionEntryTokens
-			if item.Exact || item.ImageURL != "" || item.Text == "" {
+			if item.Exact || item.Protected || item.ImageURL != "" || item.Text == "" {
 				continue
 			}
 			framing := guardianElasticContentFramingTokens(1)

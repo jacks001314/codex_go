@@ -253,9 +253,10 @@ func TestRuntimeRouterCapturesSenderUserMessagesLikeRust(t *testing.T) {
 			if context.SenderUserMessages().Text != snapshot.Text {
 				t.Fatalf("retained sender text =\n%s\nwant\n%s", context.SenderUserMessages().Text, snapshot.Text)
 			}
-			// The reviewer-only section contributes exactly the captured text.
-			if section := state.SenderUserMessagesSectionItems(context); len(section) != 1 || section[0] != snapshot.Text {
-				t.Fatalf("sender section = %#v, want the captured snapshot", section)
+			// The reviewer-only section frames the captured text with the
+			// partial-evidence warning (Rust #59003).
+			if section := state.SenderUserMessagesSectionItems(context); len(section) != 3 || section[1] != snapshot.Text {
+				t.Fatalf("sender section = %#v, want the framed captured snapshot", section)
 			}
 		})
 	}
@@ -666,7 +667,7 @@ func TestRuntimeRouterKeepsSenderSnapshotsOutOfTheWorkerPromptLikeRust(t *testin
 	router.retainedContextsMu.Lock()
 	context := router.retainedLiveContextLocked(string(receiver))
 	router.retainedContextsMu.Unlock()
-	if section := state.SenderUserMessagesSectionItems(context); len(section) != 1 || section[0] != snapshot.Text {
-		t.Fatalf("reviewer section = %#v, want the retained snapshot", section)
+	if section := state.SenderUserMessagesSectionItems(context); len(section) != 3 || section[1] != snapshot.Text {
+		t.Fatalf("reviewer section = %#v, want the framed retained snapshot", section)
 	}
 }

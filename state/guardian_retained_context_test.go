@@ -314,8 +314,9 @@ func TestSenderUserMessagesSectionMatchesRust(t *testing.T) {
 		t.Fatal("sender delivery must be retained")
 	}
 	items := SenderUserMessagesSectionItems(empty)
-	if len(items) != 1 || items[0] != "Sender context." {
-		t.Fatalf("sender section = %#v, want the host-rendered text", items)
+	if len(items) != 3 || items[1] != "Sender context." ||
+		items[0] != guardianSenderEvidenceContextStart || items[2] != guardianSenderEvidenceContextEnd {
+		t.Fatalf("sender section = %#v, want the framed host-rendered text", items)
 	}
 }
 
