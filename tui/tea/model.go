@@ -5039,6 +5039,11 @@ func (m *Model) View() string {
 	// of the viewport and the status line sits below the composer.
 	m.transcriptContentTopRow = 0
 	transcript := m.transcript.View()
+	// Rust #58992: with `tui_workspace`, the parent conversation stays visible
+	// beside its side conversation; only the focused composer accepts input.
+	if panes, ok := m.renderSideWorkspace(m.width, m.transcript.Height); ok {
+		transcript = panes
+	}
 	transcript = m.applyPinnedPromptHeader(transcript, 0)
 	sections := []string{}
 	transcriptIndex := -1
