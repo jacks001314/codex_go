@@ -40,6 +40,10 @@ type WorldState struct {
 	// `<current_date status="unavailable" />` (and the shell_version
 	// equivalent) when a value the model already saw disappears (#45825).
 	Environments json.RawMessage `json:"environments,omitempty"`
+	// PluginsInstructions carries the plugin guidance world-state snapshot
+	// (Rust section id `plugins_instructions`): the hash of the generic wording
+	// the model has seen and whether it came from the catalog (Rust #58894).
+	PluginsInstructions json.RawMessage `json:"pluginsInstructions,omitempty"`
 }
 
 func DecodeWorldState(raw json.RawMessage) (*WorldState, error) {

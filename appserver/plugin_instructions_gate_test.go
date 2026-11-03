@@ -46,7 +46,15 @@ func TestInstructionsWithPluginContextGatesGenericGuidanceByModelCapability(t *t
 		t.Fatalf("base instructions lost for gated model:\n%s", gated)
 	}
 	open := router.instructionsWithPluginContext("thread", nil, &turn.TurnStartParams{Model: "open-model"}, "BASE")
-	if !strings.Contains(open, "## Plugins") {
-		t.Fatalf("open model did not receive generic plugin guidance:\n%s", open)
+	if strings.Contains(open, "## Plugins") {
+		t.Fatalf("base instructions still repeat world-state plugin guidance:\n%s", open)
+	}
+	gatedGuidance, _ := router.pluginGenericGuidanceForThread("thread", &model.ModelInfo{Slug: "gated-model", IncludePluginUsageInstructions: false})
+	if gatedGuidance != "" {
+		t.Fatalf("gated model received generic plugin guidance:\n%s", gatedGuidance)
+	}
+	openGuidance, _ := router.pluginGenericGuidanceForThread("thread", &model.ModelInfo{Slug: "open-model", IncludePluginUsageInstructions: true})
+	if !strings.Contains(openGuidance, "## Plugins") {
+		t.Fatalf("open model did not receive generic plugin guidance:\n%s", openGuidance)
 	}
 }

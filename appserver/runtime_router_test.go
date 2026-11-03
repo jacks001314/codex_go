@@ -14990,6 +14990,10 @@ func TestRuntimeRouterTurnStartInjectsEnabledPluginInstructions(t *testing.T) {
 	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
 	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
 		ThreadID: threadID,
+		// The generic guidance only applies to models that opt in (Rust
+		// include_plugin_usage_instructions), and the default test model does
+		// not; pick one from the bundled catalog that does.
+		Model: "gpt-5.6-sol",
 		Input: []turn.TurnUserInput{{
 			Type: "mention",
 			Path: "plugin://docs@local",
@@ -15002,10 +15006,18 @@ func TestRuntimeRouterTurnStartInjectsEnabledPluginInstructions(t *testing.T) {
 		t.Fatalf("turn start error: %+v", turnStart.Error)
 	}
 	request := waitForRuntimeAgentRequest(t, agent)
-	for _, want := range []string{"## Plugins", "Capabilities from the `Docs` plugin:", "`docs-mcp`", "`docs-app`"} {
+	for _, want := range []string{"Capabilities from the `Docs` plugin:", "`docs-mcp`", "`docs-app`"} {
 		if !strings.Contains(request.Instructions, want) {
 			t.Fatalf("instructions missing %q:\n%s", want, request.Instructions)
 		}
+	}
+	// Rust #58894 keeps the generic guidance in world state, not instructions.
+	if strings.Contains(request.Instructions, "## Plugins") {
+		t.Fatalf("generic plugin guidance should be a world-state item:\n%s", request.Instructions)
+	}
+	firstInputText := inputItemText(request.InputItems)
+	if !strings.Contains(firstInputText, "<plugins_instructions>") || !strings.Contains(firstInputText, "## Plugins") {
+		t.Fatalf("plugin guidance world-state item missing: %s", firstInputText)
 	}
 	if strings.Contains(request.Instructions, "<plugin_instructions>") {
 		t.Fatalf("instructions should not contain plugin wrapper tag:\n%s", request.Instructions)
@@ -15022,6 +15034,7 @@ func TestRuntimeRouterTurnStartInjectsEnabledPluginInstructions(t *testing.T) {
 
 	appMentionTurn := router.Handle(requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{
 		ThreadID: threadID,
+		Model:    "gpt-5.6-sol",
 		Input: []turn.TurnUserInput{{
 			Type: "mention",
 			Path: "app://docs-app",
@@ -15034,8 +15047,11 @@ func TestRuntimeRouterTurnStartInjectsEnabledPluginInstructions(t *testing.T) {
 		t.Fatalf("app mention turn start error: %+v", appMentionTurn.Error)
 	}
 	appMentionRequest := waitForRuntimeAgentRequest(t, agent)
-	if !strings.Contains(appMentionRequest.Instructions, "## Plugins") {
-		t.Fatalf("available plugin instructions missing for app mention:\n%s", appMentionRequest.Instructions)
+	if strings.Contains(appMentionRequest.Instructions, "## Plugins") {
+		t.Fatalf("unchanged plugin guidance was repeated in instructions:\n%s", appMentionRequest.Instructions)
+	}
+	if strings.Contains(inputItemText(appMentionRequest.InputItems), "<plugins_instructions>") {
+		t.Fatalf("unchanged plugin guidance was re-emitted: %s", inputItemText(appMentionRequest.InputItems))
 	}
 	if strings.Contains(appMentionRequest.Instructions, "Capabilities from the `Docs` plugin:") {
 		t.Fatalf("app mention should not inject explicit plugin instructions like Rust:\n%s", appMentionRequest.Instructions)

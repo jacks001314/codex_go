@@ -8728,6 +8728,11 @@ func (r *RuntimeRouter) appTurnConfigWithOptions(ctx context.Context, threadID s
 	} else if item != nil {
 		inputItems = append(inputItems, item)
 	}
+	if item, err := r.pluginGuidanceWorldStateInputItem(threadID, modelInfo); err != nil {
+		return nil, err
+	} else if item != nil {
+		inputItems = append(inputItems, item)
+	}
 	recommendedPluginItems := r.recommendedPluginInputItems(threadID, cfg, modelInfo)
 	inputItems = append(inputItems, r.explicitAppInputItems(threadID, params, cfg)...)
 	// Rust #45716: the explicitly named connectors join the thread's selection
@@ -10988,17 +10993,10 @@ func (r *RuntimeRouter) instructionsWithPluginContext(threadID string, cfg *conf
 		return strings.TrimSpace(instructions)
 	}
 	sections := []string{}
-	// Generic plugin usage guidance is gated by the selected model's capability
-	// (Rust e4e0c7070e): codex-auto-review and other opted-out models still get
-	// explicit-mention injections below, but not the blanket guidance.
+	// Generic plugin usage guidance is a world-state section (Rust #58894), so
+	// it is not repeated in the base instructions. Explicit mentions still get
+	// per-turn injections below.
 	modelInfo := r.modelInfoForRuntimeWithConfig(params.Model, cfg)
-	if modelInfo == nil || modelInfo.IncludePluginUsageInstructions {
-		intro, usage, _ := pluginGuidanceForModel(modelInfo)
-		available := contextfrag.Render(contextfrag.NewAvailablePluginsInstructionsWithGuidance(contextPluginSummaries(capabilities), intro, usage))
-		if available != nil && strings.TrimSpace(available.Content) != "" {
-			sections = append(sections, available.Content)
-		}
-	}
 	mentioned := plugin.CollectExplicitPluginMentions(pluginUserInputFromTurn(params), capabilities)
 	if len(mentioned) > 0 {
 		mcpTools, _ := r.mcpRuntimeInputsForServiceWithRequirements(threadID, cfg, r.mcpServiceForThread(threadID, cfg), r.requiredMCPServersForTurn(threadID, cfg, params), r.requiredPluginsForTurn(threadID, cfg, params))
