@@ -187,7 +187,7 @@ func TestExperimentalFeatureEditMatchesRust(t *testing.T) {
 		{name: "enable generic", item: chatwidget.ExperimentalFeatureOption{Key: "beta", Enabled: true}, wantKeyPath: "features.beta", wantValue: true},
 		{name: "disable default-on generic", item: chatwidget.ExperimentalFeatureOption{Key: "beta", Enabled: false, DefaultEnabled: true}, wantKeyPath: "features.beta", wantValue: false},
 		{name: "disable default-off generic", item: chatwidget.ExperimentalFeatureOption{Key: "beta", Enabled: false}, wantKeyPath: "features.beta", wantValueNil: true},
-		{name: "disable daemon_auto_start stays explicit", item: chatwidget.ExperimentalFeatureOption{Key: "daemon_auto_start", Enabled: false}, wantKeyPath: "features.daemon_auto_start", wantValue: false},
+		{name: "disable retired daemon_auto_start clears override", item: chatwidget.ExperimentalFeatureOption{Key: "daemon_auto_start", Enabled: false}, wantKeyPath: "features.daemon_auto_start", wantValueNil: true},
 		{name: "enable idle sleep", item: chatwidget.ExperimentalFeatureOption{Key: "prevent_idle_sleep", Enabled: true}, wantKeyPath: "features.prevent_idle_sleep", wantValue: true},
 		{name: "disable idle sleep", item: chatwidget.ExperimentalFeatureOption{Key: "prevent_idle_sleep", Enabled: false}, wantKeyPath: "features.prevent_idle_sleep", wantValueNil: true},
 		{name: "disable guardian default-on", item: chatwidget.ExperimentalFeatureOption{Key: "guardian_approval", Enabled: false, DefaultEnabled: true}, wantKeyPath: "features.guardian_approval", wantValue: false},

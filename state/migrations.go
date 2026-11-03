@@ -115,6 +115,14 @@ func loadRuntimeMigrations(kind RuntimeDBKind) ([]sqliteMigration, error) {
 	return migrations, nil
 }
 
+// migrationDB is the statement surface shared by a plain connection and the
+// immediate transaction that now owns the whole schema check.
+type migrationDB interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
 func migrateRuntimeDB(ctx context.Context, db *sql.DB, kind RuntimeDBKind) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -123,23 +131,35 @@ func migrateRuntimeDB(ctx context.Context, db *sql.DB, kind RuntimeDBKind) error
 	if err != nil {
 		return err
 	}
-	conn, err := db.Conn(ctx)
+	// SQLx's SQLite migration lock is a no-op. Keep the version check and every
+	// migration in one immediate transaction, and retry the whole attempt from a
+	// fresh snapshot after a concurrent migration (Rust #59015,
+	// state/src/sqlite.rs). A current schema therefore needs only this writer's
+	// snapshot, and concurrent processes see either the old or the new schema.
+	_, err = retryOnSQLiteBusy(func() (struct{}, error) {
+		return struct{}{}, migrateRuntimeDBAtomic(ctx, db, kind, migrations)
+	})
+	return err
+}
+
+func migrateRuntimeDBAtomic(ctx context.Context, db *sql.DB, kind RuntimeDBKind, migrations []sqliteMigration) error {
+	tx, err := BeginImmediateTx(ctx, db)
 	if err != nil {
-		return fmt.Errorf("acquire %s migration connection: %w", kind, err)
+		return fmt.Errorf("begin %s migration transaction: %w", kind, err)
 	}
-	defer conn.Close()
+	defer func() { _ = tx.Rollback() }()
 
 	var legacyRemoteControl legacyRemoteControlAdoption
 	if kind == RuntimeDBState {
-		legacyRemoteControl, err = prepareLegacyRemoteControlAdoption(ctx, conn)
+		legacyRemoteControl, err = prepareLegacyRemoteControlAdoption(ctx, tx)
 		if err != nil {
 			return fmt.Errorf("prepare legacy Go remote control table: %w", err)
 		}
-		if err := repairLegacyRecencyMigrationVersion(ctx, conn, migrations); err != nil {
+		if err := repairLegacyRecencyMigrationVersion(ctx, tx, migrations); err != nil {
 			return fmt.Errorf("repair legacy state migration: %w", err)
 		}
 	}
-	if _, err := conn.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, `
 CREATE TABLE IF NOT EXISTS _sqlx_migrations (
     version BIGINT PRIMARY KEY,
     description TEXT NOT NULL,
@@ -152,7 +172,7 @@ CREATE TABLE IF NOT EXISTS _sqlx_migrations (
 	}
 
 	var dirtyVersion int64
-	err = conn.QueryRowContext(ctx, `SELECT version FROM _sqlx_migrations WHERE success = FALSE ORDER BY version LIMIT 1`).Scan(&dirtyVersion)
+	err = tx.QueryRowContext(ctx, `SELECT version FROM _sqlx_migrations WHERE success = FALSE ORDER BY version LIMIT 1`).Scan(&dirtyVersion)
 	if err == nil {
 		return fmt.Errorf("migration %d is partially applied", dirtyVersion)
 	}
@@ -165,7 +185,7 @@ CREATE TABLE IF NOT EXISTS _sqlx_migrations (
 		checksum    []byte
 	}
 	applied := map[int64]appliedMigration{}
-	rows, err := conn.QueryContext(ctx, `SELECT version, description, checksum FROM _sqlx_migrations ORDER BY version`)
+	rows, err := tx.QueryContext(ctx, `SELECT version, description, checksum FROM _sqlx_migrations ORDER BY version`)
 	if err != nil {
 		return fmt.Errorf("list applied migrations: %w", err)
 	}
@@ -197,38 +217,41 @@ CREATE TABLE IF NOT EXISTS _sqlx_migrations (
 			}
 			continue
 		}
-		if err := applyRuntimeMigration(ctx, conn, migration); err != nil {
+		if err := applyRuntimeMigration(ctx, tx, migration); err != nil {
 			return fmt.Errorf("apply %s migration %d: %w", kind, migration.version, err)
 		}
 	}
 	if legacyRemoteControl.pending {
-		if err := finishLegacyRemoteControlAdoption(ctx, conn, legacyRemoteControl.hasEnabled); err != nil {
+		if err := finishLegacyRemoteControlAdoption(ctx, tx, legacyRemoteControl.hasEnabled); err != nil {
 			return fmt.Errorf("finish legacy Go remote control table adoption: %w", err)
 		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit %s migrations: %w", kind, err)
 	}
 	return nil
 }
 
-func prepareLegacyRemoteControlAdoption(ctx context.Context, conn *sql.Conn) (legacyRemoteControlAdoption, error) {
-	legacyExists, err := sqliteTableExists(ctx, conn, legacyRemoteControlTable)
+func prepareLegacyRemoteControlAdoption(ctx context.Context, db migrationDB) (legacyRemoteControlAdoption, error) {
+	legacyExists, err := sqliteTableExists(ctx, db, legacyRemoteControlTable)
 	if err != nil {
 		return legacyRemoteControlAdoption{}, err
 	}
 	if legacyExists {
-		hasEnabled, err := validateLegacyRemoteControlSchema(ctx, conn, legacyRemoteControlTable)
+		hasEnabled, err := validateLegacyRemoteControlSchema(ctx, db, legacyRemoteControlTable)
 		return legacyRemoteControlAdoption{pending: true, hasEnabled: hasEnabled}, err
 	}
-	originalExists, err := sqliteTableExists(ctx, conn, "remote_control_enrollments")
+	originalExists, err := sqliteTableExists(ctx, db, "remote_control_enrollments")
 	if err != nil || !originalExists {
 		return legacyRemoteControlAdoption{}, err
 	}
-	migrationsTableExists, err := sqliteTableExists(ctx, conn, "_sqlx_migrations")
+	migrationsTableExists, err := sqliteTableExists(ctx, db, "_sqlx_migrations")
 	if err != nil {
 		return legacyRemoteControlAdoption{}, err
 	}
 	if migrationsTableExists {
 		var applied int
-		err := conn.QueryRowContext(ctx, `SELECT 1 FROM _sqlx_migrations WHERE version = 24`).Scan(&applied)
+		err := db.QueryRowContext(ctx, `SELECT 1 FROM _sqlx_migrations WHERE version = 24`).Scan(&applied)
 		if err == nil {
 			return legacyRemoteControlAdoption{}, nil
 		}
@@ -236,11 +259,11 @@ func prepareLegacyRemoteControlAdoption(ctx context.Context, conn *sql.Conn) (le
 			return legacyRemoteControlAdoption{}, err
 		}
 	}
-	hasEnabled, err := validateLegacyRemoteControlSchema(ctx, conn, "remote_control_enrollments")
+	hasEnabled, err := validateLegacyRemoteControlSchema(ctx, db, "remote_control_enrollments")
 	if err != nil {
 		return legacyRemoteControlAdoption{}, err
 	}
-	if _, err := conn.ExecContext(ctx, `ALTER TABLE remote_control_enrollments RENAME TO `+legacyRemoteControlTable); err != nil {
+	if _, err := db.ExecContext(ctx, `ALTER TABLE remote_control_enrollments RENAME TO `+legacyRemoteControlTable); err != nil {
 		return legacyRemoteControlAdoption{}, err
 	}
 	return legacyRemoteControlAdoption{pending: true, hasEnabled: hasEnabled}, nil
@@ -253,8 +276,8 @@ type sqliteColumn struct {
 	pk       int
 }
 
-func validateLegacyRemoteControlSchema(ctx context.Context, conn *sql.Conn, table string) (bool, error) {
-	rows, err := conn.QueryContext(ctx, `PRAGMA table_info("`+table+`")`)
+func validateLegacyRemoteControlSchema(ctx context.Context, db migrationDB, table string) (bool, error) {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info("`+table+`")`)
 	if err != nil {
 		return false, err
 	}
@@ -302,16 +325,12 @@ func validateLegacyRemoteControlSchema(ctx context.Context, conn *sql.Conn, tabl
 	return hasEnabled, nil
 }
 
-func finishLegacyRemoteControlAdoption(ctx context.Context, conn *sql.Conn, hasEnabled bool) error {
-	tx, err := conn.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
+func finishLegacyRemoteControlAdoption(ctx context.Context, db migrationDB, hasEnabled bool) error {
 	enabledExpression := "NULL"
 	if hasEnabled {
 		enabledExpression = "remote_control_enabled"
 	}
-	_, err = tx.ExecContext(ctx, `
+	if _, err := db.ExecContext(ctx, `
 INSERT INTO remote_control_enrollments (
     websocket_url, account_id, app_server_client_name, server_id,
     environment_id, server_name, updated_at, remote_control_enabled
@@ -325,64 +344,43 @@ ON CONFLICT(websocket_url, account_id, app_server_client_name) DO UPDATE SET
     environment_id = excluded.environment_id,
     server_name = excluded.server_name,
     updated_at = excluded.updated_at,
-    remote_control_enabled = excluded.remote_control_enabled`)
-	if err != nil {
-		_ = tx.Rollback()
+    remote_control_enabled = excluded.remote_control_enabled`); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `DROP TABLE `+legacyRemoteControlTable); err != nil {
-		_ = tx.Rollback()
-		return err
-	}
-	return tx.Commit()
+	_, err := db.ExecContext(ctx, `DROP TABLE `+legacyRemoteControlTable)
+	return err
 }
 
-func sqliteTableExists(ctx context.Context, conn *sql.Conn, table string) (bool, error) {
+func sqliteTableExists(ctx context.Context, db migrationDB, table string) (bool, error) {
 	var exists int
-	err := conn.QueryRowContext(ctx, `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&exists)
+	err := db.QueryRowContext(ctx, `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&exists)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}
 	return err == nil, err
 }
 
-func applyRuntimeMigration(ctx context.Context, conn *sql.Conn, migration sqliteMigration) error {
+func applyRuntimeMigration(ctx context.Context, db migrationDB, migration sqliteMigration) error {
+	// The caller owns one immediate transaction across the version check and
+	// every migration. The noTx marker is retained for source compatibility, but
+	// no shipped migration uses it; one that did would be applied here in the
+	// same snapshot as the rest of the schema.
 	started := time.Now()
-	if migration.noTx {
-		if _, err := conn.ExecContext(ctx, migration.sql); err != nil {
-			return err
-		}
-		if _, err := conn.ExecContext(ctx, `
-INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time)
-VALUES (?, ?, TRUE, ?, -1)`, migration.version, migration.description, migration.checksum[:]); err != nil {
-			return err
-		}
-	} else {
-		tx, err := conn.BeginTx(ctx, nil)
-		if err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, migration.sql); err != nil {
-			_ = tx.Rollback()
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, `
-INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time)
-VALUES (?, ?, TRUE, ?, -1)`, migration.version, migration.description, migration.checksum[:]); err != nil {
-			_ = tx.Rollback()
-			return err
-		}
-		if err := tx.Commit(); err != nil {
-			return err
-		}
+	if _, err := db.ExecContext(ctx, migration.sql); err != nil {
+		return err
 	}
-	_, err := conn.ExecContext(ctx, `UPDATE _sqlx_migrations SET execution_time = ? WHERE version = ?`, time.Since(started).Nanoseconds(), migration.version)
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time)
+VALUES (?, ?, TRUE, ?, -1)`, migration.version, migration.description, migration.checksum[:]); err != nil {
+		return err
+	}
+	_, err := db.ExecContext(ctx, `UPDATE _sqlx_migrations SET execution_time = ? WHERE version = ?`, time.Since(started).Nanoseconds(), migration.version)
 	return err
 }
 
-func repairLegacyRecencyMigrationVersion(ctx context.Context, conn *sql.Conn, migrations []sqliteMigration) error {
+func repairLegacyRecencyMigrationVersion(ctx context.Context, db migrationDB, migrations []sqliteMigration) error {
 	var tableExists int
-	err := conn.QueryRowContext(ctx, `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '_sqlx_migrations'`).Scan(&tableExists)
+	err := db.QueryRowContext(ctx, `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '_sqlx_migrations'`).Scan(&tableExists)
 	if err == sql.ErrNoRows {
 		return nil
 	}
@@ -399,7 +397,7 @@ func repairLegacyRecencyMigrationVersion(ctx context.Context, conn *sql.Conn, mi
 	if recency == nil {
 		return nil
 	}
-	_, err = ExecWrite(ctx, conn, `
+	_, err = ExecWrite(ctx, db, `
 UPDATE _sqlx_migrations
 SET version = ?, description = ?
 WHERE version = 38

@@ -53,6 +53,10 @@ func HistogramWithBounds(name string, value int, boundaries []float64, tags map[
 	recorder.Histogram(name, value, cloneTags(tags))
 }
 
+// ContextLogBuckets exposes the shared logarithmic bucket family to sibling
+// metric tables (Rust `context_log_buckets`).
+func ContextLogBuckets(maxExponent float64) []float64 { return contextLogBuckets(maxExponent) }
+
 // contextLogBuckets mirrors Rust's `context_log_buckets`: 511 boundaries that
 // keep zero in its own bucket and then grow logarithmically to `2^maxExponent`.
 //

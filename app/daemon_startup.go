@@ -11,7 +11,6 @@ import (
 	"codex_go/auth"
 	"codex_go/cli"
 	"codex_go/config"
-	"codex_go/features"
 )
 
 // Local daemon launch policy (Rust tui/src/daemon_startup.rs and
@@ -284,29 +283,14 @@ func defaultLocalDaemonSocketPath() string {
 	return appserver.AppServerControlSocketPath(auth.DefaultCodexHome())
 }
 
-// daemonAutoStartFeature reports whether the effective configuration opts into
-// automatic background-server startup (Rust Feature::DaemonAutoStart, #46117;
-// stable and enabled by default since #47179). The launch's own overrides take
-// part, so `-c features.daemon_auto_start=false` and `--disable
-// daemon_auto_start` turn it off exactly as they do in Rust, whose startup
-// orchestration reads the loaded config rather than the raw config files.
-var daemonAutoStartFeature = func(root *cli.RootOptions) bool {
-	opts := &config.EffectiveOptions{}
-	if root != nil {
-		opts.RawOverrides = daemonRawLaunchOverrides(root)
-		opts.EnableFeatures = root.EnableFeatures
-		opts.DisableFeatures = root.DisableFeatures
-	}
-	cfg, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), opts)
-	if err != nil || cfg == nil {
-		return false
-	}
-	return features.Enabled(cfg.FeatureSettings(), "daemon_auto_start")
-}
+// daemonAutoStartFeature reports whether automatic background-server startup
+// applies. Rust #58940 retired the feature flag: eligible launches always start
+// or reuse the daemon, and --no-daemon remains the only launch opt-out.
+var daemonAutoStartFeature = func(*cli.RootOptions) bool { return true }
 
 // daemonAutoStartRequested mirrors Rust's `auto_start_daemon` decision in
-// startup_orchestration.rs: automatic startup applies when the effective
-// configuration enables it and the launch does not opt out with --no-daemon.
+// startup_orchestration.rs: every eligible launch starts or reuses the shared
+// server unless it opts out with --no-daemon.
 // Rust #46529 resolved the worktree configuration before daemon selection and
 // allowed worktree sessions to auto-start the shared server, so --worktree is
 // no longer an exclusion here. The agents overview and remote-workspace inputs
@@ -353,9 +337,9 @@ func daemonAutoStartFeatures(*cli.RootOptions) map[string]bool {
 //   - an ineligible launch (--no-daemon, --oss, workload identity, executor
 //     selection, --profile, non-replayable overrides, strict config, bypass hook
 //     trust) stays embedded and never probes or starts the shared server;
-//   - with `features.daemon_auto_start` enabled, the shared server is started
-//     and its connection is required: a failure surfaces the `--no-daemon`
-//     guidance instead of silently falling back to embedded mode;
+//   - an eligible launch starts the shared server and requires its connection:
+//     a failure surfaces the `--no-daemon` guidance instead of silently falling
+//     back to embedded mode;
 //   - Rust #46529: a `--worktree` launch resolves its worktree configuration
 //     first and then takes the same automatic-start path as any other launch;
 //   - otherwise a reachable shared server is reused, with embedded fallback.

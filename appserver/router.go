@@ -48,6 +48,9 @@ type Router struct {
 	// provider a resume would use before any override rewrites the thread's
 	// settings (Rust #57840's ConfigManager::load_for_resume).
 	resumeModelProviderCheck func(record *session.Record, params *ThreadResumeParams) error
+	// resumeAccountCheck, when installed by the runtime, rejects a CLI resume of
+	// a thread attributed to another ChatGPT account or workspace (Rust #58890).
+	resumeAccountCheck func(record *session.Record, clientName string) error
 	// tracer, when set by the runtime that built the OTEL provider, instruments
 	// every request with Rust's `app_server.request` span.
 	tracer *telemetry.Tracer
@@ -1623,6 +1626,15 @@ func (r *Router) handleThreadResume(request *Request) (response *ThreadResumeRes
 			if record != nil && record.Archived {
 				return nil, threadResumeArchivedError(sourceID)
 			}
+		}
+	}
+	if r.resumeAccountCheck != nil {
+		clientName := ""
+		if params.ClientName != nil {
+			clientName = strings.TrimSpace(*params.ClientName)
+		}
+		if err := r.resumeAccountCheck(record, clientName); err != nil {
+			return nil, err
 		}
 	}
 	// Rust #57840: resume admits only the provider the current configuration
@@ -4010,19 +4022,21 @@ func (r *Router) listRecordsFromState(options session.ListOptions) (*session.Pag
 			UpdatedAt:              time.UnixMilli(row.UpdatedAtMS).UTC(),
 			RecencyAt:              time.UnixMilli(row.RecencyAtMS).UTC(),
 			Metadata: session.Metadata{
-				CWD:            nullString(row.CWD),
-				Model:          nullString(row.Model),
-				ModelProvider:  nullString(row.ModelProvider),
-				Source:         row.Source,
-				ThreadSource:   nullString(row.ThreadSource),
-				HistoryMode:    row.HistoryMode,
-				MemoryMode:     nullString(row.MemoryMode),
-				AgentNickname:  nullString(row.AgentNickname),
-				AgentRole:      nullString(row.AgentRole),
-				AgentPath:      nullString(row.AgentPath),
-				CLIVersion:     nullString(row.CLIVersion),
-				SandboxPolicy:  nullString(row.SandboxPolicy),
-				ApprovalPolicy: nullString(row.ApprovalMode),
+				CreatorUserID:    nullString(row.CreatorUserID),
+				CreatorAccountID: nullString(row.CreatorAccountID),
+				CWD:              nullString(row.CWD),
+				Model:            nullString(row.Model),
+				ModelProvider:    nullString(row.ModelProvider),
+				Source:           row.Source,
+				ThreadSource:     nullString(row.ThreadSource),
+				HistoryMode:      row.HistoryMode,
+				MemoryMode:       nullString(row.MemoryMode),
+				AgentNickname:    nullString(row.AgentNickname),
+				AgentRole:        nullString(row.AgentRole),
+				AgentPath:        nullString(row.AgentPath),
+				CLIVersion:       nullString(row.CLIVersion),
+				SandboxPolicy:    nullString(row.SandboxPolicy),
+				ApprovalPolicy:   nullString(row.ApprovalMode),
 				Extra: map[string]any{
 					"rollout_path":       path,
 					"rollout_title":      nullString(row.Title),
@@ -4643,13 +4657,15 @@ func (r *Router) handleThreadSearch(request *Request) (*ThreadSearchResponse, er
 	}
 	searchTerm := strings.TrimSpace(params.SearchTerm)
 	listParams := &ThreadListParams{
-		Cursor:        params.Cursor,
-		Limit:         params.Limit,
-		SortKey:       params.SortKey,
-		SortDirection: params.SortDirection,
-		SourceKinds:   append([]ThreadSourceKind(nil), params.SourceKinds...),
-		Archived:      params.Archived,
-		SearchTerm:    &searchTerm,
+		CurrentAccountOnly: params.CurrentAccountOnly,
+		HistoryAccount:     params.HistoryAccount,
+		Cursor:             params.Cursor,
+		Limit:              params.Limit,
+		SortKey:            params.SortKey,
+		SortDirection:      params.SortDirection,
+		SourceKinds:        append([]ThreadSourceKind(nil), params.SourceKinds...),
+		Archived:           params.Archived,
+		SearchTerm:         &searchTerm,
 	}
 	options, err := BuildListOptions(listParams)
 	if err != nil {

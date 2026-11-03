@@ -314,7 +314,7 @@ func experimentalFeatureEdit(item chatwidget.ExperimentalFeatureOption) Settings
 	// removing the key, so an explicit `false` is only persisted when the
 	// default would otherwise enable the feature. The daemon opt-out stays
 	// explicit even before rollout defaults enable it (#46117).
-	if !item.Enabled && !item.DefaultEnabled && key != "daemon_auto_start" {
+	if !item.Enabled && !item.DefaultEnabled {
 		value = nil
 	}
 	return SettingsEdit{KeyPath: "features." + key, Value: value}

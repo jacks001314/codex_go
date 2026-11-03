@@ -158,8 +158,12 @@ func startClientWebSocketKeepalive(conn *websocket.Conn) context.CancelFunc {
 }
 
 var (
-	clientRecoveryTimeout = 25 * time.Second
-	clientRecoveryRetry   = 100 * time.Millisecond
+	// sessionRecoveryTimeout is the whole recovery window. The attach phase stops
+	// five seconds earlier so process replay can still use the retained session
+	// (Rust #58983).
+	clientRecoveryTimeout       = 50 * time.Second
+	clientRecoveryReplayReserve = 5 * time.Second
+	clientRecoveryRetry         = 100 * time.Millisecond
 	// environmentInfoTimeout bounds the live metadata probe and covers sending
 	// as well as waiting: Rust #49407 notes a stuck transport can fill the
 	// outbound queue, so bounding only the response wait is not enough. It is a
@@ -2802,11 +2806,23 @@ func (c *Client) failTransport(conn clientConnection, err error) error {
 	_ = conn.CloseNow()
 	failClientInFlight(pending, nil, httpStreams, transportErr)
 	go func() {
-		if recoveryErr := c.recoverConnection(context.Background()); recoveryErr != nil {
+		startedAt := time.Now()
+		attachCtx, cancelAttach := context.WithDeadline(
+			context.Background(),
+			startedAt.Add(clientRecoveryTimeout-clientRecoveryReplayReserve),
+		)
+		recoveryErr := c.recoverConnection(attachCtx)
+		cancelAttach()
+		if recoveryErr != nil {
 			c.failProcessSessions(recoveryErr)
 			return
 		}
-		c.recoverProcessSessions()
+		replayCtx, cancelReplay := context.WithDeadline(
+			context.Background(),
+			startedAt.Add(clientRecoveryTimeout),
+		)
+		defer cancelReplay()
+		c.recoverProcessSessions(replayCtx)
 	}()
 	return transportErr
 }
@@ -2856,7 +2872,7 @@ func failClientInFlight(
 	}
 }
 
-func (c *Client) recoverProcessSessions() {
+func (c *Client) recoverProcessSessions(ctx context.Context) {
 	c.mu.Lock()
 	sessions := make(map[string]*clientProcessSession, len(c.sessions))
 	for processID, session := range c.sessions {
@@ -2871,7 +2887,7 @@ func (c *Client) recoverProcessSessions() {
 		if closed {
 			continue
 		}
-		response, err := c.Read(context.Background(), &ReadParams{ProcessID: processID, AfterSeq: &after})
+		response, err := c.Read(ctx, &ReadParams{ProcessID: processID, AfterSeq: &after})
 		if err != nil {
 			c.failProcessSession(processID, session, err)
 			continue

@@ -44,10 +44,9 @@ var Registry = []Spec{
 		ExperimentalName:            "Analytics plan history",
 		ExperimentalMenuDescription: "Preview five-hour and weekly allowance history for consumer accounts in /analytics.",
 	},
-	// Rust (codex-rs/features/src/lib.rs #47179): automatic background-server
-	// startup was promoted to stable and is enabled by default; the
-	// experimental menu entry and announcement are gone.
-	{Key: "daemon_auto_start", Stage: StageStable, DefaultEnabled: true},
+	// Rust (codex-rs/features/src/lib.rs #58940): the flag is retired.
+	// Eligible launches always start or reuse the daemon; --no-daemon opts out.
+	{Key: "daemon_auto_start", Stage: StageRemoved, DefaultEnabled: true},
 	// Rust (codex-rs/features/src/lib.rs #56097): the TUI may discover and
 	// select among multiple conversation backends. Under development and off
 	// by default; Go launches a single backend session, so the key only keeps
@@ -409,6 +408,9 @@ var Registry = []Spec{
 	// Rust (codex-rs/features/src/lib.rs 5ad6891696 #51207): gate the CLI
 	// Daybreak controls and model selection behind an opt-in.
 	{Key: "cli_daybreak", Stage: StageStable, DefaultEnabled: true},
+	// Rust (codex-rs/features/src/lib.rs #58890): restrict CLI resume of
+	// attributed local threads to their creator.
+	{Key: "cli_resume_account_check", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	// Rust (codex-rs/features/src/lib.rs 7c35e1551f #49406): explicit cyber
 	// access programs with OpenAI API keys.
 	{Key: "api_key_cyber_access_programs", Stage: StageStable, DefaultEnabled: true},
@@ -448,7 +450,9 @@ var Registry = []Spec{
 	{Key: "executor_capability_discovery_v2", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "guardian_trust_orchestrator_connectors", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "output_token_replay", Stage: StageUnderDevelopment, DefaultEnabled: false},
-	{Key: "retain_client_tool_outputs", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust (codex-rs/features/src/lib.rs #58964): client tool output retention
+	// is stable and on by default.
+	{Key: "retain_client_tool_outputs", Stage: StageStable, DefaultEnabled: true},
 	{Key: "subagent_default_context_limits", Stage: StageUnderDevelopment, DefaultEnabled: false},
 }
 

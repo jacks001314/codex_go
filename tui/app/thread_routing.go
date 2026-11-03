@@ -21,11 +21,15 @@ type ThreadRoute struct {
 }
 
 type ThreadEventStore struct {
-	Session                  *ThreadSessionState
-	Turns                    []appserver.Turn
-	InputState               *ThreadInputState
-	Active                   bool
-	ActiveTurnID             string
+	Session      *ThreadSessionState
+	Turns        []appserver.Turn
+	InputState   *ThreadInputState
+	Active       bool
+	ActiveTurnID string
+	// EvictedActiveTurn retains the start of the active turn after its
+	// TurnStarted notification falls out of the bounded replay buffer, so a
+	// rebuilt widget can still replay steering (Rust #58998).
+	EvictedActiveTurn        *appserver.Turn
 	PendingInterruptTurnID   string
 	Buffer                   []ThreadBufferedEvent
 	Capacity                 int
@@ -185,6 +189,7 @@ func (s *ThreadEventStore) SetTurns(turns []appserver.Turn) {
 	}
 	s.Turns = append([]appserver.Turn(nil), turns...)
 	s.ActiveTurnID = ""
+	s.EvictedActiveTurn = nil
 	for i := len(turns) - 1; i >= 0; i-- {
 		if turns[i].Status == appserver.TurnStatusInProgress {
 			s.ActiveTurnID = turns[i].ID
@@ -246,8 +251,14 @@ func (s *ThreadEventStore) Snapshot() ThreadEventSnapshot {
 		}
 		events = append(events, cloneThreadBufferedEventForRouting(event))
 	}
+	turns := cloneTurnsForReplay(s.Turns)
+	if s.EvictedActiveTurn != nil && s.ActiveTurnID == s.EvictedActiveTurn.ID && !appTurnsContain(turns, s.EvictedActiveTurn.ID) {
+		cloned := *s.EvictedActiveTurn
+		cloned.Items = append([]appserver.ThreadItem(nil), s.EvictedActiveTurn.Items...)
+		turns = append(turns, cloned)
+	}
 	snapshot := ThreadEventSnapshot{
-		Turns:          cloneTurnsForReplay(s.Turns),
+		Turns:          turns,
 		Events:         events,
 		DelegatedTurns: s.DelegatedTurnIDs(),
 	}
@@ -302,6 +313,7 @@ func (s *ThreadEventStore) ClearActiveTurn() {
 		return
 	}
 	s.ActiveTurnID = ""
+	s.EvictedActiveTurn = nil
 }
 
 func (s *ThreadEventStore) BeginInterrupt(turnID string) bool {
@@ -387,6 +399,12 @@ func (s *ThreadEventStore) appendEvent(event ThreadBufferedEvent) {
 		s.Buffer = s.Buffer[:len(s.Buffer)-1]
 		if evicted.Type == ThreadBufferedEventRequest && evicted.Request != nil {
 			s.PendingInteractiveReplay.NoteEvictedServerRequest(*evicted.Request)
+		} else if evicted.Type == ThreadBufferedEventNotification && evicted.Notification != nil &&
+			evicted.Notification.Name == ServerNotificationTurnStarted && evicted.Notification.Turn != nil &&
+			s.ActiveTurnID == evicted.Notification.Turn.ID {
+			cloned := *evicted.Notification.Turn
+			cloned.Items = append([]appserver.ThreadItem(nil), evicted.Notification.Turn.Items...)
+			s.EvictedActiveTurn = &cloned
 		}
 	}
 }
@@ -405,6 +423,7 @@ func (s *ThreadEventStore) updateActiveTurnFromNotification(notification ServerE
 		}
 	case ServerNotificationThreadClosed:
 		s.ActiveTurnID = ""
+		s.EvictedActiveTurn = nil
 		s.PendingInterruptTurnID = ""
 	}
 }

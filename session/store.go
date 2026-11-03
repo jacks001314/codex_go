@@ -423,6 +423,16 @@ type ListOptions struct {
 	// Rust's ThreadListParams::excluded_thread_ids (#51595). Empty means no
 	// exclusions.
 	ExcludedThreadIDs []ThreadID
+	// HistoryAccount limits local discovery to threads visible to the current
+	// ChatGPT login (Rust #58918). Nil leaves the listing unscoped.
+	HistoryAccount *HistoryAccount
+}
+
+// HistoryAccount is the current ChatGPT identity used to scope local history.
+// Untagged threads remain visible to every login.
+type HistoryAccount struct {
+	UserID    string
+	AccountID string
 }
 
 type RelationFilter struct {
@@ -1931,6 +1941,14 @@ func matchesListOptions(record *Record, options *ListOptions, all []Record) bool
 	}
 	if len(options.ModelProviders) > 0 && !containsString(options.ModelProviders, record.Metadata.ModelProvider) {
 		return false
+	}
+	if options.HistoryAccount != nil {
+		if creator := strings.TrimSpace(record.Metadata.CreatorUserID); creator != "" && creator != strings.TrimSpace(options.HistoryAccount.UserID) {
+			return false
+		}
+		if creator := strings.TrimSpace(record.Metadata.CreatorAccountID); creator != "" && creator != strings.TrimSpace(options.HistoryAccount.AccountID) {
+			return false
+		}
 	}
 	if options.CWDSet && len(options.CWDs) == 0 {
 		// Rust #51602: `cwd_filters.is_some_and(is_empty)` returns an empty page

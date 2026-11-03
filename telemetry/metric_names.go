@@ -1,6 +1,10 @@
 package telemetry
 
-import "codex_go/metrics"
+import (
+	"sort"
+
+	"codex_go/metrics"
+)
 
 // Metric names emitted by Codex, mirroring codex-rs/otel/src/metrics/names.rs.
 // Keep the values byte-for-byte identical to Rust: they are the OTLP instrument
@@ -156,8 +160,18 @@ const (
 const ConversationTurnCountMetric = "codex.conversation.turn.count"
 
 // AdditionalContextValueBytesBuckets mirrors Rust
-// ADDITIONAL_CONTEXT_VALUE_BYTES_BUCKETS (#58144): the size histogram buckets
-// for additional-context values.
-var AdditionalContextValueBytesBuckets = []float64{
-	0, 256, 512, 1000, 2000, 4000, 8000, 16000, 32000, 64000, 128000, 256000, 512000, 1024000, 4096000,
+// ADDITIONAL_CONTEXT_VALUE_BYTES_BUCKETS (#58939): logarithmic byte buckets
+// through 4 MiB, with a 4 KiB boundary near the truncation cap.
+var AdditionalContextValueBytesBuckets = additionalContextValueBytesBuckets()
+
+func additionalContextValueBytesBuckets() []float64 {
+	buckets := append(metrics.ContextLogBuckets(22), 4096)
+	sort.Float64s(buckets)
+	out := buckets[:0]
+	for _, bucket := range buckets {
+		if len(out) == 0 || out[len(out)-1] != bucket {
+			out = append(out, bucket)
+		}
+	}
+	return out
 }

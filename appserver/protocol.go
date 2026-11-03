@@ -2696,8 +2696,12 @@ func (n ThreadSectionChangedNotification) MarshalJSON() ([]byte, error) {
 }
 
 type ThreadListParams struct {
-	Cursor *string `json:"cursor,omitempty"`
-	Limit  *int    `json:"limit,omitempty"`
+	// CurrentAccountOnly scopes local history to the current ChatGPT login
+	// (Rust #58918). The transient HistoryAccount carries the resolved identity.
+	CurrentAccountOnly bool                    `json:"currentAccountOnly,omitempty"`
+	HistoryAccount     *session.HistoryAccount `json:"-"`
+	Cursor             *string                 `json:"cursor,omitempty"`
+	Limit              *int                    `json:"limit,omitempty"`
 	// ExcludedThreadIDs drops these threads before the result limit is applied
 	// (Rust ThreadListParams::excluded_thread_ids, #51595). Up to 100 entries;
 	// invalid IDs or a larger list are rejected, never truncated. Callers must
@@ -2924,13 +2928,15 @@ func (r *ThreadListResponse) MarshalJSON() ([]byte, error) {
 }
 
 type ThreadSearchParams struct {
-	Cursor        *string            `json:"cursor,omitempty"`
-	Limit         *int               `json:"limit,omitempty"`
-	SortKey       SortKey            `json:"sortKey,omitempty"`
-	SortDirection SortDirection      `json:"sortDirection,omitempty"`
-	SourceKinds   []ThreadSourceKind `json:"sourceKinds,omitempty"`
-	Archived      *bool              `json:"archived,omitempty"`
-	SearchTerm    string             `json:"searchTerm"`
+	CurrentAccountOnly bool                    `json:"currentAccountOnly,omitempty"`
+	HistoryAccount     *session.HistoryAccount `json:"-"`
+	Cursor             *string                 `json:"cursor,omitempty"`
+	Limit              *int                    `json:"limit,omitempty"`
+	SortKey            SortKey                 `json:"sortKey,omitempty"`
+	SortDirection      SortDirection           `json:"sortDirection,omitempty"`
+	SourceKinds        []ThreadSourceKind      `json:"sourceKinds,omitempty"`
+	Archived           *bool                   `json:"archived,omitempty"`
+	SearchTerm         string                  `json:"searchTerm"`
 }
 
 type ThreadSearchOccurrencesParams struct {
@@ -4037,6 +4043,7 @@ func BuildListOptions(params *ThreadListParams) (session.ListOptions, error) {
 	if params == nil {
 		return options, nil
 	}
+	options.HistoryAccount = params.HistoryAccount
 	if params.Cursor != nil {
 		if !validThreadListCursor(*params.Cursor) {
 			return session.ListOptions{}, jsonRPCInvalidRequest(fmt.Sprintf("invalid cursor: %s", *params.Cursor))

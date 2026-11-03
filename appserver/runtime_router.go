@@ -1094,6 +1094,7 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 	}
 	if router.services.ThreadRouter != nil {
 		router.services.ThreadRouter.resumeModelProviderCheck = router.validateResumeModelProvider
+		router.services.ThreadRouter.resumeAccountCheck = router.validateResumeAccount
 	}
 	router.captureStartupModelProviderRoute()
 	router.configureOAuthStorageTelemetry()
@@ -5322,6 +5323,14 @@ func (r *RuntimeRouter) handleThreadListRuntime(request *Request) (any, error) {
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
+	if params.CurrentAccountOnly {
+		params.HistoryAccount = r.localHistoryAccountFilter()
+		updated, err := requestWithRuntimeParams(request, params)
+		if err != nil {
+			return nil, err
+		}
+		request = updated
+	}
 	if runtimeThreadListShouldDefaultModelProvider(request, &params) {
 		if provider := strings.TrimSpace(r.runtimeThreadListDefaultModelProvider()); provider != "" {
 			params.ModelProviders = []string{provider}
@@ -5347,12 +5356,40 @@ func (r *RuntimeRouter) handleThreadSearchRuntime(request *Request) (any, error)
 	if r == nil || request == nil || r.services.ThreadRouter == nil {
 		return nil, fmt.Errorf("%w: thread router is not configured", ErrInvalidRequest)
 	}
+	var params ThreadSearchParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if params.CurrentAccountOnly {
+		params.HistoryAccount = r.localHistoryAccountFilter()
+		updated, err := requestWithRuntimeParams(request, params)
+		if err != nil {
+			return nil, err
+		}
+		request = updated
+	}
 	result, err := r.services.ThreadRouter.dispatch(request)
 	if err != nil {
 		return nil, err
 	}
 	r.applyRuntimeThreadStatuses(result)
 	return result, nil
+}
+
+// localHistoryAccountFilter resolves the ChatGPT identity for
+// currentAccountOnly listings. API-key logins see all local history, matching
+// Rust #58918.
+func (r *RuntimeRouter) localHistoryAccountFilter() *session.HistoryAccount {
+	snapshot := r.currentCachedAuthSnapshot()
+	if snapshot != nil && snapshot.Mode() == "api-key" {
+		return nil
+	}
+	filter := &session.HistoryAccount{}
+	if snapshot != nil {
+		filter.UserID = auth.ChatGPTUserIDFromAuth(snapshot)
+		filter.AccountID = auth.AccountIDFromAuthForRestrictions(snapshot)
+	}
+	return filter
 }
 
 func (r *RuntimeRouter) applyRuntimeThreadStatuses(result any) {

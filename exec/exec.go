@@ -247,6 +247,17 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	if err := r.rejectRemoteWorktreeDefault(req); err != nil {
 		return nil, err
 	}
+	// Bind the last-message destination before the turn starts so sandboxed tools
+	// cannot replace the path and redirect the final write (Rust #58974).
+	var boundLastMessage *execserver.BoundOutput
+	if lastMessagePath := strings.TrimSpace(req.Exec.LastMessageFile); lastMessagePath != "" {
+		bound, err := execserver.OpenBoundOutput(lastMessagePath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to open last message file %q: %w", lastMessagePath, err)
+		}
+		boundLastMessage = bound
+		defer func() { _ = boundLastMessage.Close() }()
+	}
 	// Rust #42993 re-targeted the strict-config coverage to `codex exec`, which
 	// honors --strict-config from either the root or the exec subcommand.
 	// `codex review` declares the same flag on ReviewCommand, so a review-level
@@ -702,7 +713,11 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	}
 
 	if req.Exec.LastMessageFile != "" {
-		writeLastMessageFile(stderr, req.Exec.LastMessageFile, lastMessage, hasLastMessage)
+		if boundLastMessage != nil {
+			writeBoundLastMessageFile(stderr, boundLastMessage, req.Exec.LastMessageFile, lastMessage, hasLastMessage)
+		} else {
+			writeLastMessageFile(stderr, req.Exec.LastMessageFile, lastMessage, hasLastMessage)
+		}
 	}
 
 	if err := emitFinalEventsFromAgentResult(eventSink, turnResult, compactedThisTurn); err != nil {
@@ -3146,6 +3161,18 @@ func writeHumanFinalMessage(stdout io.Writer, stderr io.Writer, message string, 
 // writes an empty file and warns.
 func writeLastMessageFile(stderr io.Writer, path string, message string, hasMessage bool) {
 	if err := os.WriteFile(path, []byte(message), 0o600); err != nil && stderr != nil {
+		fmt.Fprintf(stderr, "Failed to write last message file %q: %v\n", path, ioErrorMessage(err))
+	}
+	if !hasMessage && stderr != nil {
+		fmt.Fprintf(stderr, "Warning: no last agent message; wrote empty content to %s\n", path)
+	}
+}
+
+// writeBoundLastMessageFile writes through the handle opened before the turn.
+// A failed or redirected write is reported and ignored, matching the existing
+// last-message contract.
+func writeBoundLastMessageFile(stderr io.Writer, output *execserver.BoundOutput, path string, message string, hasMessage bool) {
+	if err := output.Write([]byte(message)); err != nil && stderr != nil {
 		fmt.Fprintf(stderr, "Failed to write last message file %q: %v\n", path, ioErrorMessage(err))
 	}
 	if !hasMessage && stderr != nil {
