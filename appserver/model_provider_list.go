@@ -15,15 +15,19 @@ import (
 // "Amazon Bedrock" because it identifies the auth family.
 const amazonBedrockMantleProviderName = "Amazon Bedrock Mantle"
 
-// handleModelProviderList mirrors Rust #58845: it reports OpenAI plus every
-// explicitly configured provider, the provider-specific settings a client may
-// edit, and the effective default provider.
-func (r *RuntimeRouter) handleModelProviderList(request *Request) (*model.ProviderListResponse, error) {
-	var params model.ProviderListParams
-	if err := request.DecodeParams(&params); err != nil {
-		return nil, err
-	}
-	if r.services.Config == nil {
+// modelProviderCatalog is the configuration view shared by provider discovery
+// and provider writes (#58845/#58876).
+type modelProviderCatalog struct {
+	effective  map[string]any
+	layers     []config.Layer
+	userLayer  *config.Layer
+	managed    *config.ConfigRequirements
+	builtins   map[string]model.ProviderInfo
+	configured map[string]any
+}
+
+func loadModelProviderCatalog(r *RuntimeRouter) (*modelProviderCatalog, error) {
+	if r == nil || r.services.Config == nil {
 		return nil, fmt.Errorf("failed to read providers: config service is unavailable")
 	}
 	read, err := r.services.Config.Read(&config.ConfigReadParams{IncludeLayers: true})
@@ -34,42 +38,207 @@ func (r *RuntimeRouter) handleModelProviderList(request *Request) (*model.Provid
 	if effective == nil {
 		effective = map[string]any{}
 	}
-	layers := read.Layers
 	var managed *config.ConfigRequirements
 	if requirementsRead := r.services.Config.Requirements(); requirementsRead != nil {
 		managed = requirementsRead.Requirements
 	}
-	configured := map[string]any{}
+	catalog := &modelProviderCatalog{
+		effective: effective,
+		layers:    read.Layers,
+		userLayer: activeUserLayer(read.Layers),
+		managed:   managed,
+		builtins:  model.BuiltInProviders(""),
+	}
+	catalog.configured = map[string]any{}
 	if table, ok := effective["model_providers"].(map[string]any); ok {
 		for id, definition := range table {
-			configured[id] = definition
+			catalog.configured[id] = definition
 		}
 	}
 	if managed != nil {
 		// Rust merges required provider definitions into the effective config,
 		// where a required definition replaces the local entry wholesale.
 		for id, definition := range managed.ModelProviders {
-			configured[id] = definition
+			catalog.configured[id] = definition
 		}
 	}
+	return catalog, nil
+}
 
-	defaultID := model.OpenAIProviderID
-	if managed != nil && managed.ModelProvider != nil && strings.TrimSpace(*managed.ModelProvider) != "" {
-		defaultID = strings.TrimSpace(*managed.ModelProvider)
-	} else if selected := strings.TrimSpace(stringFromMap(effective, "model_provider")); selected != "" {
-		defaultID = selected
+// defaultProviderID mirrors Rust's required_model_provider() fallback chain.
+func (c *modelProviderCatalog) defaultProviderID() string {
+	if c == nil {
+		return model.OpenAIProviderID
+	}
+	if c.managed != nil && c.managed.ModelProvider != nil && strings.TrimSpace(*c.managed.ModelProvider) != "" {
+		return strings.TrimSpace(*c.managed.ModelProvider)
+	}
+	if selected := strings.TrimSpace(stringFromMap(c.effective, "model_provider")); selected != "" {
+		return selected
+	}
+	return model.OpenAIProviderID
+}
+
+func (c *modelProviderCatalog) tableFor(id string) map[string]any {
+	table, _ := c.configured[id].(map[string]any)
+	return table
+}
+
+// summarize mirrors Rust's summarize_provider: safe display data only.
+func (c *modelProviderCatalog) summarize(id string) model.ProviderSummary {
+	table := c.tableFor(id)
+	builtin, isBuiltin := c.builtins[id]
+	displayName := id
+	switch {
+	case isBuiltin && id == model.AmazonBedrockProviderID:
+		displayName = amazonBedrockMantleProviderName
+	case isBuiltin:
+		displayName = builtin.Name
+	default:
+		if name := providerStringField(table, "name"); name != nil {
+			displayName = *name
+		}
+	}
+	builtinAuth := usesBuiltinProviderAuth(displayName)
+	requiresRename := !isBuiltin && (strings.TrimSpace(displayName) == "" || builtinAuth)
+	externalAuth := builtinAuth || hasExternalProviderAuth(table)
+
+	var rawBaseURL string
+	var hasBaseURL bool
+	if id == model.OpenAIProviderID {
+		rawBaseURL, hasBaseURL = c.effective["openai_base_url"].(string)
+	} else if value := providerStringField(table, "base_url"); value != nil {
+		rawBaseURL, hasBaseURL = *value, true
+	}
+	baseURL, _ := displayableProviderBaseURL(rawBaseURL, hasBaseURL)
+
+	settings := model.ProviderSettings{Type: "customGateway", Auth: &model.GatewayAuth{Mode: "none"}}
+	switch {
+	case id == model.OpenAIProviderID:
+		settings = model.ProviderSettings{Type: "openai"}
+	case id == model.AmazonBedrockProviderID || id == model.AmazonBedrockRuntimeProviderID:
+		aws := providerMapField(table, "aws")
+		settings = model.ProviderSettings{
+			Type:    "bedrock",
+			Profile: providerStringField(aws, "profile"),
+			Region:  providerStringField(aws, "region"),
+		}
+	case id == model.GCPProviderID:
+		settings = model.ProviderSettings{
+			Type:           "gcp",
+			ProjectID:      providerStringField(table, "project_id"),
+			Location:       providerStringField(table, "location"),
+			CredentialFile: providerStringField(table, "credential_file"),
+		}
+	default:
+		envKey := providerStringField(table, "env_key")
+		auth := model.GatewayAuth{Mode: "none"}
+		switch {
+		case externalAuth:
+			auth = model.GatewayAuth{Mode: "externallyConfigured", EnvKey: envKey}
+		case envKey != nil:
+			auth = model.GatewayAuth{Mode: "environmentVariable", EnvKey: envKey}
+		}
+		settings = model.ProviderSettings{Type: "customGateway", Auth: &auth}
 	}
 
-	userLayer := activeUserLayer(layers)
-	canChangeDefault := (managed == nil || managed.ModelProvider == nil) && userLayer != nil
+	canEdit := false
+	for _, field := range c.supportedFields(id) {
+		if requiresRename && field != "name" {
+			continue
+		}
+		if field == "env_key" && externalAuth {
+			continue
+		}
+		if c.fieldWritable(id, field) {
+			canEdit = true
+			break
+		}
+	}
+	return model.ProviderSummary{
+		ID:       id,
+		Name:     displayName,
+		CanEdit:  canEdit,
+		BaseURL:  baseURL,
+		Settings: settings,
+	}
+}
+
+// supportedFields mirrors Rust's supported_fields: the provider fields a client
+// may patch. An empty result means the provider exposes no editable settings.
+func (c *modelProviderCatalog) supportedFields(id string) []string {
+	table := c.tableFor(id)
+	_, isBuiltin := c.builtins[id]
+	switch {
+	case isBuiltin && (id == model.AmazonBedrockProviderID || id == model.AmazonBedrockRuntimeProviderID):
+		if _, ok := table["auth"]; ok {
+			return nil
+		}
+		if aws := providerMapField(table, "aws"); aws != nil {
+			if _, ok := aws["credential_export"]; ok {
+				return []string{"aws.region"}
+			}
+		}
+		return []string{"aws.profile", "aws.region"}
+	case isBuiltin && id == model.GCPProviderID:
+		return []string{"project_id", "location", "credential_file"}
+	case isBuiltin:
+		return nil
+	default:
+		return []string{"name", "base_url", "env_key"}
+	}
+}
+
+// fieldWritable mirrors Rust's field_is_writable: the active user layer must be
+// able to change the field, no managed requirement may pin the provider, and no
+// higher-precedence layer may already set it.
+func (c *modelProviderCatalog) fieldWritable(id string, field string) bool {
+	user := c.userLayer
+	if user == nil || id == "" {
+		return false
+	}
+	if c.managed != nil {
+		if _, ok := c.managed.ModelProviders[id]; ok {
+			return false
+		}
+	}
+	for index := len(c.layers) - 1; index >= 0; index-- {
+		if c.layers[index].Name.Precedence() <= user.Name.Precedence() {
+			continue
+		}
+		values, _ := c.layers[index].Config.(map[string]any)
+		providers, _ := values["model_providers"].(map[string]any)
+		entry, _ := providers[id].(map[string]any)
+		if entry == nil {
+			continue
+		}
+		if providerFieldPresent(entry, field) {
+			return false
+		}
+	}
+	return true
+}
+
+// handleModelProviderList mirrors Rust #58845.
+func (r *RuntimeRouter) handleModelProviderList(request *Request) (*model.ProviderListResponse, error) {
+	var params model.ProviderListParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	catalog, err := loadModelProviderCatalog(r)
+	if err != nil {
+		return nil, err
+	}
+	userLayer := catalog.userLayer
+	canChangeDefault := (catalog.managed == nil || catalog.managed.ModelProvider == nil) && userLayer != nil
 	if canChangeDefault {
-		if selection := highestModelProviderSelectionLayer(layers); selection != nil && selection.Name.Precedence() > userLayer.Name.Precedence() {
+		if selection := highestModelProviderSelectionLayer(catalog.layers); selection != nil && selection.Name.Precedence() > userLayer.Name.Precedence() {
 			canChangeDefault = false
 		}
 	}
 
-	ids := make([]string, 0, len(configured)+1)
-	for id := range configured {
+	ids := make([]string, 0, len(catalog.configured)+1)
+	for id := range catalog.configured {
 		// Local OSS built-ins cannot have configured provider tables.
 		if id == model.OllamaOSSProviderID || id == model.LMStudioOSSProviderID {
 			continue
@@ -88,184 +257,33 @@ func (r *RuntimeRouter) handleModelProviderList(request *Request) (*model.Provid
 
 	data := make([]model.ProviderSummary, 0, len(deduped))
 	for _, id := range deduped {
-		providerConfig, _ := configured[id].(map[string]any)
-		data = append(data, summarizeModelProvider(id, providerConfig, effective, layers, userLayer, managed))
+		data = append(data, catalog.summarize(id))
 	}
 	return &model.ProviderListResponse{
 		Data:              data,
-		DefaultProviderID: defaultID,
+		DefaultProviderID: catalog.defaultProviderID(),
 		CanChangeDefault:  canChangeDefault,
 	}, nil
 }
 
-func summarizeModelProvider(id string, providerConfig map[string]any, effective map[string]any, layers []config.Layer, userLayer *config.Layer, managed *config.ConfigRequirements) model.ProviderSummary {
-	var displayName string
-	switch id {
-	case model.AmazonBedrockProviderID:
-		displayName = amazonBedrockMantleProviderName
-	case model.AmazonBedrockRuntimeProviderID:
-		displayName = model.AmazonBedrockRuntimeProviderName
-	case model.GCPProviderID:
-		displayName = model.GCPProviderName
-	case model.OpenAIProviderID:
-		displayName = model.OpenAIProviderName
-	default:
-		displayName = id
-		if name := providerStringField(providerConfig, "name"); name != nil {
-			displayName = *name
-		}
-	}
-	builtinAuth := displayName == model.OpenAIProviderName ||
-		displayName == model.AmazonBedrockProviderName ||
-		displayName == model.AmazonBedrockRuntimeProviderName ||
-		displayName == model.GCPProviderName
-
-	var rawBaseURL string
-	var hasBaseURL bool
-	if id == model.OpenAIProviderID {
-		rawBaseURL, hasBaseURL = effective["openai_base_url"].(string)
-	} else if value := providerStringField(providerConfig, "base_url"); value != nil {
-		rawBaseURL = *value
-		hasBaseURL = true
-	}
-	baseURL, urlHasAuth := displayableProviderBaseURL(rawBaseURL, hasBaseURL)
-
-	settings := model.ProviderSettings{Type: "customGateway", Auth: &model.GatewayAuth{Mode: "none"}}
-	switch id {
-	case model.OpenAIProviderID:
-		settings = model.ProviderSettings{Type: "openai"}
-	case model.AmazonBedrockProviderID, model.AmazonBedrockRuntimeProviderID:
-		aws := providerMapField(providerConfig, "aws")
-		settings = model.ProviderSettings{
-			Type:    "bedrock",
-			Profile: providerStringField(aws, "profile"),
-			Region:  providerStringField(aws, "region"),
-		}
-	case model.GCPProviderID:
-		settings = model.ProviderSettings{
-			Type:           "gcp",
-			ProjectID:      providerStringField(providerConfig, "project_id"),
-			Location:       providerStringField(providerConfig, "location"),
-			CredentialFile: providerStringField(providerConfig, "credential_file"),
-		}
-	default:
-		envKey := providerStringField(providerConfig, "env_key")
-		auth := model.GatewayAuth{Mode: "none"}
-		switch {
-		case builtinAuth || urlHasAuth || hasExternalProviderAuth(providerConfig):
-			auth = model.GatewayAuth{Mode: "externallyConfigured", EnvKey: envKey}
-		case envKey != nil:
-			auth = model.GatewayAuth{Mode: "environmentVariable", EnvKey: envKey}
-		}
-		settings = model.ProviderSettings{Type: "customGateway", Auth: &auth}
-	}
-
-	canEdit := canEditModelProvider(id, providerConfig, settings, strings.TrimSpace(displayName) == "" || builtinAuth, layers, userLayer, managed)
-	return model.ProviderSummary{
-		ID:       id,
-		Name:     displayName,
-		CanEdit:  canEdit,
-		BaseURL:  baseURL,
-		Settings: settings,
-	}
+func usesBuiltinProviderAuth(name string) bool {
+	return name == model.OpenAIProviderName ||
+		name == model.AmazonBedrockProviderName ||
+		name == model.AmazonBedrockRuntimeProviderName ||
+		name == model.GCPProviderName
 }
 
-// displayableProviderBaseURL keeps the configured URL only when a client can
-// safely display it: Rust drops endpoints with credentials, query strings,
-// fragments, non-http(s) schemes, or no host. urlHasAuth reports credentials
-// separately because it also selects externally configured gateway auth.
-func displayableProviderBaseURL(raw string, hasValue bool) (*string, bool) {
-	if !hasValue {
-		return nil, false
-	}
-	parsed, err := url.Parse(raw)
-	if err != nil {
-		return nil, false
-	}
-	urlHasAuth := false
-	if parsed.User != nil {
-		if _, hasPassword := parsed.User.Password(); hasPassword || parsed.User.Username() != "" {
-			urlHasAuth = true
-		}
-	}
-	if parsed.RawQuery != "" || parsed.ForceQuery {
-		urlHasAuth = true
-	}
-	scheme := strings.ToLower(parsed.Scheme)
-	if (scheme != "http" && scheme != "https") || parsed.Host == "" || urlHasAuth || parsed.Fragment != "" {
-		return nil, urlHasAuth
-	}
-	value := raw
-	return &value, urlHasAuth
-}
-
-// canEditModelProvider mirrors Rust's can_edit_provider: a provider is editable
-// when the active user layer can still change at least one supported field
-// without a higher-precedence layer pinning it.
-func canEditModelProvider(id string, providerConfig map[string]any, settings model.ProviderSettings, requiresRename bool, layers []config.Layer, userLayer *config.Layer, managed *config.ConfigRequirements) bool {
-	if userLayer == nil || id == "" {
+// hasExternalProviderAuth mirrors Rust's has_external_auth: credentials carried
+// by the endpoint or by fields the gateway form does not expose.
+func hasExternalProviderAuth(providerConfig map[string]any) bool {
+	if providerConfig == nil {
 		return false
 	}
-	if managed != nil {
-		if _, ok := managed.ModelProviders[id]; ok {
-			return false
-		}
-	}
-	var fields []string
-	switch settings.Type {
-	case "bedrock":
-		if _, ok := providerConfig["auth"]; ok {
-			fields = nil
-		} else if aws := providerMapField(providerConfig, "aws"); aws != nil {
-			if _, ok := aws["credential_export"]; ok {
-				fields = []string{"aws.region"}
-			} else {
-				fields = []string{"aws.profile", "aws.region"}
-			}
-		} else {
-			fields = []string{"aws.profile", "aws.region"}
-		}
-	case "gcp":
-		fields = []string{"project_id", "location", "credential_file"}
-	case "openai":
-		fields = nil
-	case "customGateway":
-		switch {
-		case requiresRename:
-			fields = []string{"name"}
-		case settings.Auth != nil && settings.Auth.Mode == "externallyConfigured":
-			fields = []string{"name", "base_url"}
-		default:
-			fields = []string{"name", "base_url", "env_key"}
-		}
-	}
-	for _, field := range fields {
-		overridden := false
-		for index := len(layers) - 1; index >= 0; index-- {
-			if layers[index].Name.Precedence() <= userLayer.Name.Precedence() {
-				continue
-			}
-			values, _ := layers[index].Config.(map[string]any)
-			providers, _ := values["model_providers"].(map[string]any)
-			entry, _ := providers[id].(map[string]any)
-			if entry == nil {
-				continue
-			}
-			if providerFieldPresent(entry, field) {
-				overridden = true
-				break
-			}
-		}
-		if !overridden {
+	if baseURL := providerStringField(providerConfig, "base_url"); baseURL != nil {
+		if _, hasAuth := parseProviderEndpoint(*baseURL); hasAuth {
 			return true
 		}
 	}
-	return false
-}
-
-// hasExternalProviderAuth mirrors Rust's has_external_auth for custom
-// gateways whose credentials live outside the gateway form.
-func hasExternalProviderAuth(providerConfig map[string]any) bool {
 	for _, key := range []string{"auth", "gateway_oauth", "aws", "experimental_bearer_token"} {
 		if _, ok := providerConfig[key]; ok {
 			return true
@@ -280,6 +298,42 @@ func hasExternalProviderAuth(providerConfig map[string]any) bool {
 		}
 	}
 	return false
+}
+
+// parseProviderEndpoint reports whether a URL may be displayed to a client and
+// whether it carries credentials (userinfo or a query string).
+func parseProviderEndpoint(raw string) (bool, bool) {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return false, false
+	}
+	urlHasAuth := false
+	if parsed.User != nil {
+		if _, hasPassword := parsed.User.Password(); hasPassword || parsed.User.Username() != "" {
+			urlHasAuth = true
+		}
+	}
+	if parsed.RawQuery != "" || parsed.ForceQuery {
+		urlHasAuth = true
+	}
+	scheme := strings.ToLower(parsed.Scheme)
+	safe := (scheme == "http" || scheme == "https") && parsed.Host != "" && !urlHasAuth && parsed.Fragment == ""
+	return safe, urlHasAuth
+}
+
+// displayableProviderBaseURL keeps the configured URL only when a client can
+// safely display it: Rust drops endpoints with credentials, query strings,
+// fragments, non-http(s) schemes, or no host.
+func displayableProviderBaseURL(raw string, hasValue bool) (*string, bool) {
+	if !hasValue {
+		return nil, false
+	}
+	safe, urlHasAuth := parseProviderEndpoint(raw)
+	if !safe {
+		return nil, urlHasAuth
+	}
+	value := raw
+	return &value, urlHasAuth
 }
 
 // activeUserLayer returns the highest-precedence enabled user layer, which is

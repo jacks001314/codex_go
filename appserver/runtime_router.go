@@ -3995,6 +3995,8 @@ func (r *RuntimeRouter) dispatch(request *Request) (result any, err error) {
 		return r.handleModelList(request)
 	case MethodModelProviderList:
 		return r.handleModelProviderList(request)
+	case MethodModelProviderConfigWrite:
+		return r.handleModelProviderConfigWrite(request)
 	case MethodModelProviderCapabilitiesRead:
 		return r.handleModelProviderCapabilitiesRead(request)
 	case MethodPermissionProfileList:

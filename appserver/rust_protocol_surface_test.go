@@ -105,6 +105,7 @@ func TestRustProtocolMethodSurfaceAgainstGoConstants(t *testing.T) {
 		string(MethodPluginUninstall):                        true,
 		string(MethodModelList):                              true,
 		string(MethodModelProviderList):                      true,
+		string(MethodModelProviderConfigWrite):               true,
 		string(MethodModelProviderCapabilitiesRead):          true,
 		string(MethodPermissionProfileList):                  true,
 		string(MethodCollaborationModeList):                  true,

@@ -628,3 +628,288 @@ func cloneBoolPtr(value *bool) *bool {
 	clone := *value
 	return &clone
 }
+
+// ProviderConfigWriteParams is the request body for modelProvider/config/write.
+type ProviderConfigWriteParams struct {
+	Settings ProviderSettingsPatch `json:"settings"`
+}
+
+// ProviderConfigWriteResponse returns the saved provider using the same safe
+// summary shape as modelProvider/list.
+type ProviderConfigWriteResponse struct {
+	Provider ProviderSummary `json:"provider"`
+}
+
+// ProviderSettingsPatch mirrors Rust's tagged ProviderSettingsPatch. Omitted
+// fields keep their values; explicit null clears a nullable field.
+type ProviderSettingsPatch struct {
+	Type          string
+	CustomGateway *CustomGatewaySettingsParams
+	Bedrock       *BedrockSettingsParams
+	Gcp           *GcpSettingsParams
+}
+
+// OptionalString distinguishes an omitted patch field from an explicit null.
+type OptionalString struct {
+	Set   bool
+	Value *string
+}
+
+// CustomGatewaySettingsParams patches a custom gateway. ProviderID is nil when
+// the request allocates a new provider id.
+type CustomGatewaySettingsParams struct {
+	ProviderID *string
+	Name       *string
+	BaseURL    OptionalString
+	EnvKey     OptionalString
+}
+
+// BedrockSettingsParams patches one of the built-in Bedrock providers.
+type BedrockSettingsParams struct {
+	ProviderID string
+	Profile    OptionalString
+	Region     OptionalString
+}
+
+// GcpSettingsParams patches the built-in GCP provider.
+type GcpSettingsParams struct {
+	ProviderID     string
+	ProjectID      OptionalString
+	Location       OptionalString
+	CredentialFile OptionalString
+}
+
+func (p *ProviderSettingsPatch) UnmarshalJSON(data []byte) error {
+	fields, err := decodeStrictProviderPatchObject(data)
+	if err != nil {
+		return err
+	}
+	var patchType string
+	if raw, ok := fields["type"]; ok {
+		if err := json.Unmarshal(raw, &patchType); err != nil {
+			return fmt.Errorf("settings.type must be a string")
+		}
+	}
+	switch patchType {
+	case "customGateway":
+		custom, err := decodeCustomGatewayPatch(fields)
+		if err != nil {
+			return err
+		}
+		p.Type = patchType
+		p.CustomGateway = custom
+		return nil
+	case "bedrock":
+		bedrock, err := decodeBedrockPatch(fields)
+		if err != nil {
+			return err
+		}
+		p.Type = patchType
+		p.Bedrock = bedrock
+		return nil
+	case "gcp":
+		gcp, err := decodeGcpPatch(fields)
+		if err != nil {
+			return err
+		}
+		p.Type = patchType
+		p.Gcp = gcp
+		return nil
+	case "":
+		return fmt.Errorf("settings.type is required")
+	default:
+		return fmt.Errorf("unknown settings type %q", patchType)
+	}
+}
+
+func (p ProviderSettingsPatch) MarshalJSON() ([]byte, error) {
+	switch p.Type {
+	case "customGateway":
+		if p.CustomGateway == nil {
+			return nil, fmt.Errorf("customGateway settings are missing")
+		}
+		payload := map[string]any{"type": p.Type}
+		if p.CustomGateway.ProviderID != nil {
+			payload["providerId"] = *p.CustomGateway.ProviderID
+		}
+		if p.CustomGateway.Name != nil {
+			payload["name"] = *p.CustomGateway.Name
+		}
+		if p.CustomGateway.BaseURL.Set {
+			payload["baseUrl"] = optionalStringWire(p.CustomGateway.BaseURL)
+		}
+		if p.CustomGateway.EnvKey.Set {
+			payload["envKey"] = optionalStringWire(p.CustomGateway.EnvKey)
+		}
+		return json.Marshal(payload)
+	case "bedrock":
+		if p.Bedrock == nil {
+			return nil, fmt.Errorf("bedrock settings are missing")
+		}
+		payload := map[string]any{"type": p.Type, "providerId": p.Bedrock.ProviderID}
+		if p.Bedrock.Profile.Set {
+			payload["profile"] = optionalStringWire(p.Bedrock.Profile)
+		}
+		if p.Bedrock.Region.Set {
+			payload["region"] = optionalStringWire(p.Bedrock.Region)
+		}
+		return json.Marshal(payload)
+	case "gcp":
+		if p.Gcp == nil {
+			return nil, fmt.Errorf("gcp settings are missing")
+		}
+		payload := map[string]any{"type": p.Type, "providerId": p.Gcp.ProviderID}
+		if p.Gcp.ProjectID.Set {
+			payload["projectId"] = optionalStringWire(p.Gcp.ProjectID)
+		}
+		if p.Gcp.Location.Set {
+			payload["location"] = optionalStringWire(p.Gcp.Location)
+		}
+		if p.Gcp.CredentialFile.Set {
+			payload["credentialFile"] = optionalStringWire(p.Gcp.CredentialFile)
+		}
+		return json.Marshal(payload)
+	default:
+		return nil, fmt.Errorf("unknown settings type %q", p.Type)
+	}
+}
+
+func optionalStringWire(value OptionalString) any {
+	if value.Value == nil {
+		return nil
+	}
+	return *value.Value
+}
+
+func decodeStrictProviderPatchObject(data []byte) (map[string]json.RawMessage, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return nil, fmt.Errorf("settings must be an object: %w", err)
+	}
+	return fields, nil
+}
+
+func rejectUnknownProviderPatchFields(fields map[string]json.RawMessage, allowed ...string) error {
+	allowedSet := make(map[string]bool, len(allowed))
+	for _, key := range allowed {
+		allowedSet[key] = true
+	}
+	for key := range fields {
+		if !allowedSet[key] {
+			return fmt.Errorf("unknown field `%s` in provider settings", key)
+		}
+	}
+	return nil
+}
+
+func decodeCustomGatewayPatch(fields map[string]json.RawMessage) (*CustomGatewaySettingsParams, error) {
+	if err := rejectUnknownProviderPatchFields(fields, "type", "providerId", "name", "baseUrl", "envKey"); err != nil {
+		return nil, err
+	}
+	patch := &CustomGatewaySettingsParams{}
+	if raw, ok := fields["providerId"]; ok && !isJSONNull(raw) {
+		var providerID string
+		if err := json.Unmarshal(raw, &providerID); err != nil {
+			return nil, fmt.Errorf("settings.providerId must be a string or null")
+		}
+		patch.ProviderID = &providerID
+	}
+	if raw, ok := fields["name"]; ok {
+		if isJSONNull(raw) {
+			return nil, fmt.Errorf("settings.name must be a string")
+		}
+		var name string
+		if err := json.Unmarshal(raw, &name); err != nil {
+			return nil, fmt.Errorf("settings.name must be a string")
+		}
+		patch.Name = &name
+	}
+	baseURL, err := optionalStringField(fields, "baseUrl")
+	if err != nil {
+		return nil, err
+	}
+	envKey, err := optionalStringField(fields, "envKey")
+	if err != nil {
+		return nil, err
+	}
+	patch.BaseURL = baseURL
+	patch.EnvKey = envKey
+	return patch, nil
+}
+
+func decodeBedrockPatch(fields map[string]json.RawMessage) (*BedrockSettingsParams, error) {
+	if err := rejectUnknownProviderPatchFields(fields, "type", "providerId", "profile", "region"); err != nil {
+		return nil, err
+	}
+	raw, ok := fields["providerId"]
+	if !ok {
+		return nil, fmt.Errorf("settings.providerId is required")
+	}
+	var providerID string
+	if err := json.Unmarshal(raw, &providerID); err != nil {
+		return nil, fmt.Errorf("settings.providerId must be a string")
+	}
+	switch providerID {
+	case AmazonBedrockProviderID, AmazonBedrockRuntimeProviderID:
+	default:
+		return nil, fmt.Errorf("unknown bedrock providerId %q", providerID)
+	}
+	profile, err := optionalStringField(fields, "profile")
+	if err != nil {
+		return nil, err
+	}
+	region, err := optionalStringField(fields, "region")
+	if err != nil {
+		return nil, err
+	}
+	return &BedrockSettingsParams{ProviderID: providerID, Profile: profile, Region: region}, nil
+}
+
+func decodeGcpPatch(fields map[string]json.RawMessage) (*GcpSettingsParams, error) {
+	if err := rejectUnknownProviderPatchFields(fields, "type", "providerId", "projectId", "location", "credentialFile"); err != nil {
+		return nil, err
+	}
+	raw, ok := fields["providerId"]
+	if !ok {
+		return nil, fmt.Errorf("settings.providerId is required")
+	}
+	var providerID string
+	if err := json.Unmarshal(raw, &providerID); err != nil {
+		return nil, fmt.Errorf("settings.providerId must be a string")
+	}
+	if providerID != GCPProviderID {
+		return nil, fmt.Errorf("unknown gcp providerId %q", providerID)
+	}
+	projectID, err := optionalStringField(fields, "projectId")
+	if err != nil {
+		return nil, err
+	}
+	location, err := optionalStringField(fields, "location")
+	if err != nil {
+		return nil, err
+	}
+	credentialFile, err := optionalStringField(fields, "credentialFile")
+	if err != nil {
+		return nil, err
+	}
+	return &GcpSettingsParams{ProviderID: providerID, ProjectID: projectID, Location: location, CredentialFile: credentialFile}, nil
+}
+
+func optionalStringField(fields map[string]json.RawMessage, key string) (OptionalString, error) {
+	raw, ok := fields[key]
+	if !ok {
+		return OptionalString{}, nil
+	}
+	if isJSONNull(raw) {
+		return OptionalString{Set: true}, nil
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return OptionalString{}, fmt.Errorf("settings.%s must be a string or null", key)
+	}
+	return OptionalString{Set: true, Value: &value}, nil
+}
+
+func isJSONNull(raw json.RawMessage) bool {
+	return strings.TrimSpace(string(raw)) == "null"
+}

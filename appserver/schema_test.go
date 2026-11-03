@@ -277,7 +277,8 @@ func TestBuildProtocolSchemaIndexesRPCSurface(t *testing.T) {
 // guards treat them as expected additions until the next re-anchor, and fail
 // once the pinned Rust tree contains them so the entry can be dropped.
 var forwardPortedStableMethods = map[string]string{
-	string(MethodModelProviderList): "3026a8e54e (#58845) ported after the 67f0994b parity baseline",
+	string(MethodModelProviderList):        "3026a8e54e (#58845) ported after the 67f0994b parity baseline",
+	string(MethodModelProviderConfigWrite): "053e5b1ca9 (#58876) ported after the 67f0994b parity baseline",
 }
 
 func TestBuildProtocolSchemaMatchesRustStableFixtures(t *testing.T) {
