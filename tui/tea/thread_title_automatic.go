@@ -12,6 +12,7 @@ func (m *Model) resetAutomaticThreadTitle() {
 	if m == nil {
 		return
 	}
+	m.automaticThreadTitleEpoch.Add(1)
 	m.automaticThreadTitlePending = false
 	m.automaticThreadTitleThreadID = ""
 	m.automaticThreadTitleExpected = ""
@@ -38,6 +39,8 @@ func (m *Model) startAutomaticThreadTitle(text string) bubbletea.Cmd {
 	if provisional == "" {
 		return nil
 	}
+	m.automaticThreadTitleEpoch.Add(1)
+	epoch := m.automaticThreadTitleEpoch.Load()
 	m.automaticThreadTitlePending = true
 	m.automaticThreadTitleThreadID = threadID
 	m.automaticThreadTitleExpected = provisional
@@ -60,6 +63,9 @@ func (m *Model) startAutomaticThreadTitle(text string) bubbletea.Cmd {
 	titlePrompt := tuiapp.ThreadTitlePrompt(prompt)
 	schema := tuiapp.ThreadTitleOutputSchema()
 	return func() bubbletea.Msg {
+		if m.automaticThreadTitleEpoch.Load() != epoch {
+			return nil
+		}
 		if rename != nil {
 			if err := rename(threadID, provisional); err != nil {
 				return ThreadNameSuggestedMsg{
@@ -113,12 +119,51 @@ func (m *Model) applyAutomaticThreadTitle(message ThreadNameSuggestedMsg) bubble
 		return nil
 	}
 	finalTitle := strings.TrimSpace(message.Suggestion)
-	if m.onRenameThread != nil {
-		if err := m.onRenameThread(threadID, finalTitle); err != nil {
+	rename := m.onRenameThread
+	epoch := m.automaticThreadTitleEpoch.Load()
+	// Keep the event loop free while the final title is persisted. The epoch
+	// prevents a slow save from overwriting a manual rename (Rust #58970).
+	return func() bubbletea.Msg {
+		if m.automaticThreadTitleEpoch.Load() != epoch {
 			return nil
 		}
+		var err error
+		if rename != nil {
+			err = rename(threadID, finalTitle)
+		}
+		return AutomaticThreadNameSavedMsg{
+			ThreadID: threadID,
+			Title:    finalTitle,
+			Expected: expected,
+			Epoch:    epoch,
+			Err:      err,
+		}
 	}
-	m.State.SetThreadName(finalTitle)
+}
+
+// AutomaticThreadNameSavedMsg reports the background save of a generated title.
+type AutomaticThreadNameSavedMsg struct {
+	ThreadID string
+	Title    string
+	Expected string
+	Epoch    uint64
+	Err      error
+}
+
+func (m *Model) applyAutomaticThreadNameSaved(message AutomaticThreadNameSavedMsg) bubbletea.Cmd {
+	if m == nil || m.State == nil || message.Err != nil {
+		return nil
+	}
+	if message.Epoch != m.automaticThreadTitleEpoch.Load() {
+		return nil
+	}
+	if strings.TrimSpace(message.ThreadID) != strings.TrimSpace(m.State.ThreadID) {
+		return nil
+	}
+	if strings.TrimSpace(m.State.ThreadName) != strings.TrimSpace(message.Expected) {
+		return nil
+	}
+	m.State.SetThreadName(message.Title)
 	m.refreshTranscript()
 	return m.refreshStatusControlsCmd()
 }

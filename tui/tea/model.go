@@ -2525,10 +2525,10 @@ type Model struct {
 	collaborationModesDiscovered bool
 	// queueAutoSendSuppressed holds queued prompts while a permission selection
 	// is outstanding (Rust input_queue.suppress_queue_autosend).
-	queueAutoSendSuppressed       bool
+	queueAutoSendSuppressed bool
 	// pendingFeatureEnableLabel names the feature whose opt-in write is in
 	// flight, so its notice uses the same label Rust reports (#43113).
-	pendingFeatureEnableLabel string
+	pendingFeatureEnableLabel     string
 	agentsOverviewEmbedded        bool
 	onAgentsOverviewRefresh       AgentsOverviewRefreshFunc
 	onAcknowledgeThreadRead       ThreadReadAcknowledgeFunc
@@ -2848,6 +2848,7 @@ type Model struct {
 	automaticThreadTitlePending      bool
 	automaticThreadTitleThreadID     string
 	automaticThreadTitleExpected     string
+	automaticThreadTitleEpoch        atomic.Uint64
 	pendingTokenActivityRequestID    uint64
 	pendingRateLimitResetRequestID   uint64
 	pendingRateLimitResetForPopup    bool
@@ -2870,15 +2871,15 @@ type Model struct {
 	// a literal leading `!` for ordinary messages.
 	inputHistoryBash []bool
 	// inputHistoryDraftBash is the shell mode of the draft saved when recall began.
-	inputHistoryDraftBash bool
-	historySearch                    *composerhistory.HistorySearchSession
-	historySearchElements            []ComposerTextElement
-	historySearchPreviewText         string
-	historySearchAttachments         []bottompane.ComposerAttachment
-	historySearchMentionBindings     []string
-	submitRequests                   []SubmitRequest
-	queued                           []queuedSubmission
-	pendingSteers                    []pendingSteerSubmission
+	inputHistoryDraftBash        bool
+	historySearch                *composerhistory.HistorySearchSession
+	historySearchElements        []ComposerTextElement
+	historySearchPreviewText     string
+	historySearchAttachments     []bottompane.ComposerAttachment
+	historySearchMentionBindings []string
+	submitRequests               []SubmitRequest
+	queued                       []queuedSubmission
+	pendingSteers                []pendingSteerSubmission
 	// pendingSteersThreadID is the thread that owns pendingSteers. Steers for
 	// other threads are parked in threadPendingSteers, mirroring Rust #42451's
 	// per-thread ThreadInputState snapshots.
@@ -4201,6 +4202,8 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		return m, m.applyRecapGeneratedMsg(msg)
 	case ThreadNameSuggestedMsg:
 		return m, m.applyThreadNameSuggested(msg)
+	case AutomaticThreadNameSavedMsg:
+		return m, m.applyAutomaticThreadNameSaved(msg)
 	case recapCheckMsg:
 		return m, m.applyRecapCheck(m.currentTime())
 	case CyberPolicyErrorMsg:

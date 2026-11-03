@@ -8936,7 +8936,11 @@ func runTeaCmd(t *testing.T, model *Model, cmd bubbletea.Cmd) {
 		}
 		return
 	}
-	model.Update(msg)
+	_, next := model.Update(msg)
+	switch msg.(type) {
+	case ThreadNameSuggestedMsg, AutomaticThreadNameSavedMsg:
+		runTeaCmd(t, model, next)
+	}
 }
 
 func runes(value string) bubbletea.KeyMsg {
