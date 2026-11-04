@@ -343,7 +343,7 @@ func (m *Model) openPermissionsMenu() bubbletea.Cmd {
 	// Rust request_permission_profiles reuses the cached discovery and only
 	// fetches when the catalog is unknown.
 	if m.permissionProfilesDiscovered {
-		m.showPermissionsMenu(true)
+		m.showPermissionsMenu(m.permissionProfilesExplicit)
 		return nil
 	}
 	m.showPermissionsLoadingView()
@@ -477,10 +477,10 @@ func (m *Model) applyPermissionProfilesLoaded(msg permissionProfilesLoadedMsg) b
 	if m.modal == nil || m.modal.kind != ModalKindPermissions {
 		return nil
 	}
-	// Rust on_permission_profiles_loaded always opens the profile picker, which
-	// offers the built-in ask/approve-for-me/full-access/read-only rows plus any
-	// named profiles the server returned.
-	m.showPermissionsMenu(true)
+	// Rust on_permission_profiles_loaded opens the named-profile picker only when
+	// the server reported explicit-profile mode; otherwise the legacy preset
+	// picker keeps offering the built-in ask/full-access/read-only rows.
+	m.showPermissionsMenu(m.permissionProfilesExplicit)
 	return nil
 }
 

@@ -161,7 +161,10 @@ func remoteTUIHasActiveNamedProfile(client *remoteAppServerTUIClient) bool {
 	if client == nil || client.state == nil {
 		return false
 	}
-	profileID := strings.TrimSpace(client.state.Sandbox)
+	// ActivePermissionProfile is the server-reported profile id. Sandbox
+	// carries the legacy sandbox mode ("workspace-write", ...), which is not
+	// a profile and must not gate named-profile discovery.
+	profileID := strings.TrimSpace(client.state.ActivePermissionProfile)
 	return profileID != "" && !strings.HasPrefix(profileID, ":")
 }
 

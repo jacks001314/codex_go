@@ -1410,7 +1410,16 @@ func interactiveRemoteStartSide(ctx context.Context, root *cli.RootOptions, endp
 	mergeTaskToolsMCPConfig(&forkParams.Config, taskToolsHost)
 	var forkResponse appserver.ThreadForkResponse
 	if err := remoteSessionRequest(reqCtx, client, appserver.MethodThreadFork, forkParams, &forkResponse); err != nil {
-		return codextea.SideStartResponse{}, err
+		// A paginated parent rejects an ephemeral fork that copies turns; the
+		// child then inherits the source lineage and pages its own history.
+		if forkParams.ExcludeTurns || !isHistoryPaginationUnsupportedError(err) {
+			return codextea.SideStartResponse{}, err
+		}
+		forkParams.ExcludeTurns = true
+		forkResponse = appserver.ThreadForkResponse{}
+		if retryErr := remoteSessionRequest(reqCtx, client, appserver.MethodThreadFork, forkParams, &forkResponse); retryErr != nil {
+			return codextea.SideStartResponse{}, retryErr
+		}
 	}
 	if forkResponse.Thread == nil || strings.TrimSpace(forkResponse.Thread.ID) == "" {
 		return codextea.SideStartResponse{}, errors.New("thread/fork response did not include a side thread id")
