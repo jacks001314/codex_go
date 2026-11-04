@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	coresandbox "codex_go/sandbox"
+	"codex_go/sandbox/sandboxpath"
 )
 
 type DenyReadPolicy struct {
@@ -21,19 +22,29 @@ type DenyReadPolicy struct {
 // (Rust #38660): exact-path and glob deny-read entries become the planned
 // deny-read paths, with unbounded root-level globs failing closed.
 func ResolveDenyReadPathsFromProfile(profile *coresandbox.PermissionProfile, cwd string) ([]string, error) {
-	if profile == nil || !profile.HasDenyReadEntries() {
+	if profile == nil {
 		return nil, nil
 	}
-	var policy DenyReadPolicy
-	for _, entry := range profile.DeniedReadEntries {
-		switch entry.Path.Type {
-		case "glob_pattern":
-			policy.Globs = append(policy.Globs, entry.Path.Pattern)
-		case "path":
-			policy.Paths = append(policy.Paths, entry.Path.Path)
-		}
+	resolved, err := coresandbox.ResolveFileSystemPermissionsForEnforcement(profile, cwd, sandboxpath.ProjectionNative)
+	if err != nil {
+		return nil, err
 	}
-	return ResolveWindowsDenyReadPolicyPaths(policy, cwd)
+	return ResolveDenyReadPathsFromResolvedPermissions(resolved, cwd)
+}
+
+// ResolveDenyReadPathsFromResolvedPermissions mirrors Rust
+// expand_windows_deny_read_paths (#59233): the resolved enforcement projection
+// owns the concrete denials and deny globs the native ACL pass expands, so a
+// narrower grant that reopens a deny path is not masked again.
+func ResolveDenyReadPathsFromResolvedPermissions(resolved sandboxpath.ResolvedFileSystemPermissions, cwd string) ([]string, error) {
+	if len(resolved.UnreadableRoots) == 0 && len(resolved.UnreadableGlobs) == 0 {
+		return nil, nil
+	}
+	return resolveWindowsDenyReadPolicyPaths(DenyReadPolicy{
+		Paths:            append([]string(nil), resolved.UnreadableRoots...),
+		Globs:            append([]string(nil), resolved.UnreadableGlobs...),
+		GlobScanMaxDepth: resolved.GlobScanMaxDepth,
+	}, cwd)
 }
 
 type GlobScanPlan struct {

@@ -2,11 +2,13 @@ package windowssandbox
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	coresandbox "codex_go/sandbox"
+	"codex_go/sandbox/sandboxpath"
 )
 
 type WindowsSandboxTokenMode string
@@ -25,7 +27,10 @@ type WindowsWritableRoot struct {
 }
 
 type ResolvedWindowsSandboxPermissions struct {
-	ProfileID         string
+	ProfileID string
+	// Profile is the managed permission profile the Windows policy enforces.
+	// Rust #59233 resolves it through the shared enforcement projection.
+	Profile           *coresandbox.PermissionProfile
 	FileSystem        *coresandbox.SandboxPolicy
 	NetworkEnabled    bool
 	WorkspaceRoots    []string
@@ -64,6 +69,7 @@ func ResolvePermissions(profile *coresandbox.PermissionProfile, workspaceRoots [
 		return nil, fmt.Errorf("only restricted managed filesystem permissions can be enforced by the Windows sandbox")
 	}
 	return &ResolvedWindowsSandboxPermissions{
+		Profile:           profile,
 		FileSystem:        profile.SandboxPolicy,
 		NetworkEnabled:    profile.AllowsNetwork(),
 		WorkspaceRoots:    cloneStrings(workspaceRoots),
@@ -173,6 +179,16 @@ func (p *ResolvedWindowsSandboxPermissions) HasFullDiskReadAccess() bool {
 	return p.FileSystem.HasFullDiskReadAccess()
 }
 
+// resolvedForCWD projects the profile through the shared enforcement resolver
+// (Rust #59233 `resolve_for_enforcement`), so volume-root workspaces keep their
+// read-only carveouts instead of collapsing into the raw policy roots.
+func (p *ResolvedWindowsSandboxPermissions) resolvedForCWD(cwd string) (sandboxpath.ResolvedFileSystemPermissions, error) {
+	if p == nil || p.Profile == nil {
+		return sandboxpath.ResolvedFileSystemPermissions{}, nil
+	}
+	return coresandbox.ResolveFileSystemPermissionsForEnforcement(p.Profile, cwd, sandboxpath.ProjectionNative)
+}
+
 func (p *ResolvedWindowsSandboxPermissions) IncludePlatformDefaults() bool {
 	return p != nil && p.FileSystem != nil
 }
@@ -180,6 +196,18 @@ func (p *ResolvedWindowsSandboxPermissions) IncludePlatformDefaults() bool {
 func (p *ResolvedWindowsSandboxPermissions) ReadableRootsForCWD(cwd string) []string {
 	if p == nil || p.FileSystem == nil || p.FileSystem.Kind != coresandbox.SandboxReadOnly {
 		return nil
+	}
+	// Rust #59233: the resolved readable roots replace the raw cwd projection.
+	if resolved, err := p.resolvedForCWD(cwd); err == nil && len(resolved.ReadableRoots) > 0 {
+		roots := make([]string, 0, len(resolved.ReadableRoots))
+		for _, root := range resolved.ReadableRoots {
+			if cleaned := cleanWindowsSandboxAbs(root); cleaned != "" {
+				roots = append(roots, cleaned)
+			}
+		}
+		if len(roots) > 0 {
+			return roots
+		}
 	}
 	return []string{cleanWindowsSandboxAbs(cwd)}
 }
@@ -203,6 +231,42 @@ func (p *ResolvedWindowsSandboxPermissions) WritableRootsForCWD(cwd string, envM
 	if p == nil || p.FileSystem == nil || p.FileSystem.Kind != coresandbox.SandboxWorkspaceWrite {
 		return nil
 	}
+	// Rust #59233: enforce the resolved writable roots, whose read-only
+	// carveouts survive a volume-root workspace.
+	if resolved, err := p.resolvedForCWD(cwd); err == nil && len(resolved.WritableRoots) > 0 {
+		// Rust #51512: the workload environment owns TEMP/TMP. The shared
+		// resolver binds the host temp directory for the policy's temp root, so
+		// drop it when the child environment supplies its own temp roots.
+		hostTemp := cleanWindowsSandboxAbs(os.TempDir())
+		workloadTemps := windowsTempEnvRoots(envMap)
+		roots := make([]WindowsWritableRoot, 0, len(resolved.WritableRoots))
+		seen := map[string]bool{}
+		for _, root := range resolved.WritableRoots {
+			cleaned := cleanWindowsSandboxAbs(root.Root)
+			if cleaned == "" || seen[cleaned] {
+				continue
+			}
+			if hostTemp != "" && strings.EqualFold(cleaned, hostTemp) {
+				continue
+			}
+			seen[cleaned] = true
+			subpaths := append([]string(nil), root.ReadOnlySubpaths...)
+			subpaths = append(subpaths, protectedWindowsMetadataSubpaths(cleaned)...)
+			roots = append(roots, WindowsWritableRoot{Root: cleaned, ReadOnlySubpaths: dedupeWindowsPaths(subpaths)})
+		}
+		if !p.FileSystem.ExcludeTmpdirEnvVar {
+			for _, temp := range workloadTemps {
+				if seen[temp] {
+					continue
+				}
+				seen[temp] = true
+				roots = append(roots, WindowsWritableRoot{Root: temp, ReadOnlySubpaths: protectedWindowsMetadataSubpaths(temp)})
+			}
+		}
+		if len(roots) > 0 {
+			return roots
+		}
+	}
 	var roots []string
 	roots = append(roots, p.FileSystem.WritableRoots...)
 	if cwd != "" {
@@ -212,6 +276,30 @@ func (p *ResolvedWindowsSandboxPermissions) WritableRootsForCWD(cwd string, envM
 		roots = append(roots, windowsTempEnvRoots(envMap)...)
 	}
 	return buildWindowsWritableRoots(roots)
+}
+
+// protectedWindowsMetadataSubpaths lists the metadata names a writable root
+// keeps read-only (Rust #48176).
+func protectedWindowsMetadataSubpaths(root string) []string {
+	return []string{
+		filepath.Join(root, ".git"),
+		filepath.Join(root, ".agents"),
+		filepath.Join(root, ".gcode"),
+		filepath.Join(root, ".aws"),
+	}
+}
+
+func dedupeWindowsPaths(paths []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if strings.TrimSpace(path) == "" || seen[path] {
+			continue
+		}
+		seen[path] = true
+		out = append(out, path)
+	}
+	return out
 }
 
 // windowsTempEnvRoots resolves the writable temp roots from the workload
