@@ -41,9 +41,10 @@ func serverPermissionShortcutModel(t *testing.T, selections *[]PermissionSelecti
 }
 
 // Mirrors Rust #46013: a session-only permission shortcut in a connected thread
-// routes through the shared selection flow, so local permissions keep the
-// confirmed profile until the server's ThreadSettingsUpdated notification
-// arrives, the pending selection clears then, and nothing is written to config.
+// routes through the shared selection flow. The daemon commits the update
+// inside the request, so an accepted selection is adopted immediately; a
+// later ThreadSettingsUpdated notification is still applied, and nothing is
+// written to config.
 func TestModelPermissionShortcutWaitsForServerConfirmationLikeRust(t *testing.T) {
 	var selections []PermissionSelection
 	model := serverPermissionShortcutModel(t, &selections)
@@ -55,14 +56,14 @@ func TestModelPermissionShortcutWaitsForServerConfirmationLikeRust(t *testing.T)
 	if got := selections[0].ProfileID; got != chatwidget.ReadOnlyProfile {
 		t.Fatalf("requested profile = %q, want %q", got, chatwidget.ReadOnlyProfile)
 	}
-	if model.State.Sandbox != chatwidget.WorkspaceProfile {
-		t.Fatalf("sandbox = %q, want the confirmed profile while the request is pending", model.State.Sandbox)
+	if model.State.Sandbox != chatwidget.ReadOnlyProfile {
+		t.Fatalf("sandbox = %q, want the accepted profile", model.State.Sandbox)
 	}
-	if model.pendingServerProfile != chatwidget.ReadOnlyProfile {
-		t.Fatalf("pending profile = %q, want %q", model.pendingServerProfile, chatwidget.ReadOnlyProfile)
+	if model.pendingServerProfile != "" {
+		t.Fatalf("pending profile = %q, want none after an accepted update", model.pendingServerProfile)
 	}
-	if !strings.Contains(model.notice, "Permission selection requested: ") {
-		t.Fatalf("notice = %q, want the requested-selection message", model.notice)
+	if !strings.Contains(modelMessageText(model), "Permissions updated to ") {
+		t.Fatalf("transcript = %q, want the updated-permissions message", modelMessageText(model))
 	}
 
 	profile := chatwidget.ReadOnlyProfile

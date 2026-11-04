@@ -6007,7 +6007,8 @@ func remoteThreadStartParams(root *cli.RootOptions, state *codextui.State) (apps
 		CWD:                   strings.TrimSpace(shared.CWD),
 		Model:                 strings.TrimSpace(shared.Model),
 		ApprovalPolicy:        remoteStringAny(shared.ApprovalPolicy),
-		Sandbox:               remoteStringAny(shared.Sandbox),
+		ApprovalsReviewer:     remoteStringPtr(remoteApprovalsReviewer(state)),
+		Sandbox:               remoteSandboxMode(shared.Sandbox),
 		Config:                configValues,
 		ExperimentalRawEvents: true,
 	}
@@ -6054,9 +6055,10 @@ func remoteSideThreadForkParamsForMode(mode ThreadParamsMode, root *cli.RootOpti
 		ThreadID:              parentThreadID,
 		HistoryMode:           session.ForkAll,
 		ApprovalPolicy:        remoteStringAny(shared.ApprovalPolicy),
+		ApprovalsReviewer:     remoteStringPtr(remoteApprovalsReviewer(state)),
 		DeveloperInstructions: &developerInstructions,
 		Config:                configValues,
-		Sandbox:               remoteStringAny(shared.Sandbox),
+		Sandbox:               remoteSandboxMode(shared.Sandbox),
 		Ephemeral:             true,
 	}
 	if cwd := strings.TrimSpace(shared.CWD); cwd != "" {
@@ -6157,6 +6159,11 @@ func remoteTurnStartParamsForMode(mode ThreadParamsMode, root *cli.RootOptions, 
 	params.CWD = strings.TrimSpace(shared.CWD)
 	params.Model = turnModel
 	params.ApprovalPolicy = remoteStringAny(shared.ApprovalPolicy)
+	// Rust #46008: the chosen reviewer is part of the turn snapshot, so a
+	// preset such as "Approve for me" survives the next turn/start.
+	if reviewer := remoteApprovalsReviewer(state); reviewer != "" {
+		params.ApprovalsReviewer = &reviewer
+	}
 	// Rust app_server_session.rs:1621-1628 via app/thread_routing.rs:938-941: a
 	// thread with a named permission profile sends that profile id as
 	// `permissions`; `sandboxPolicy` and `permissions` are mutually exclusive, so
@@ -6170,7 +6177,7 @@ func remoteTurnStartParamsForMode(mode ThreadParamsMode, root *cli.RootOptions, 
 	if profile := activeProfile; profile != "" {
 		params.Permissions = &profile
 	} else {
-		params.SandboxPolicy = remoteStringAny(shared.Sandbox)
+		params.SandboxPolicy = remoteSandboxMode(shared.Sandbox)
 	}
 	params.Config = configValues
 	params.CollaborationMode = interactiveCollaborationModePayload(request.CollaborationMode)
@@ -6304,6 +6311,42 @@ func remoteStringAny(value string) any {
 		return nil
 	}
 	return strings.TrimSpace(value)
+}
+
+// remoteStringPtr keeps an optional string absent when it is empty.
+func remoteStringPtr(value string) *string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
+}
+
+// remoteApprovalsReviewer reads the session reviewer the TUI state carries.
+func remoteApprovalsReviewer(state *codextui.State) string {
+	if state == nil {
+		return ""
+	}
+	return strings.TrimSpace(state.ApprovalsReviewer)
+}
+
+// remoteSandboxMode maps a built-in permission profile id onto the plain
+// sandbox mode the daemon parses in thread/start, thread/fork and
+// turn/start. The TUI keeps the picker profile ids in its session state.
+func remoteSandboxMode(value string) any {
+	trimmed := strings.TrimSpace(value)
+	switch trimmed {
+	case chatwidget.ReadOnlyProfile, "read-only":
+		return "read-only"
+	case chatwidget.WorkspaceProfile, ":workspace-write", "workspace", "workspace-write", "auto":
+		return "workspace-write"
+	case chatwidget.DangerFullAccessProfile, "danger-full-access", "full-access":
+		return "danger-full-access"
+	case "":
+		return nil
+	default:
+		return trimmed
+	}
 }
 
 func remoteProtocolItemFromPayload(payload appserver.ThreadItemPayload, completed bool) protocol.ThreadItem {

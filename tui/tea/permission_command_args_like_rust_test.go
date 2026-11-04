@@ -268,11 +268,11 @@ func TestPermissionsCommandDiscoversCatalogForInlineRequestLikeRust(t *testing.T
 	if len(recorder.updates) != 1 || recorder.updates[0] != "thread-a|team review" {
 		t.Fatalf("server selections = %#v", recorder.updates)
 	}
-	if model.pendingServerProfile != "team review" {
-		t.Fatalf("pending profile = %q", model.pendingServerProfile)
+	if model.pendingServerProfile != "" {
+		t.Fatalf("pending profile = %q, want none after an accepted update", model.pendingServerProfile)
 	}
-	if model.State.Sandbox == "team review" {
-		t.Fatal("a server profile must not be applied locally before confirmation")
+	if model.State.Sandbox != "team review" || model.State.ActivePermissionProfile != "team review" {
+		t.Fatalf("applied profile = (%q, %q)", model.State.Sandbox, model.State.ActivePermissionProfile)
 	}
 }
 

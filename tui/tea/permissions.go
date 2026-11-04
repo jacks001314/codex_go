@@ -36,7 +36,7 @@ type permissionProfilesLoadedMsg struct {
 // and tracks the selection until the server confirms it (Rust #43340/#46008).
 // Built-in presets use the same path so the server's confirmed settings remain
 // authoritative, and they may be selected while a turn is running.
-func (m *Model) selectServerPermissionProfile(item chatwidget.PermissionMenuItem) bubbletea.Cmd {
+func (m *Model) selectServerPermissionProfile(item chatwidget.PermissionMenuItem, persistReviewer bool) bubbletea.Cmd {
 	if m == nil || m.State == nil {
 		return nil
 	}
@@ -78,14 +78,11 @@ func (m *Model) selectServerPermissionProfile(item chatwidget.PermissionMenuItem
 		m.refreshTranscript()
 		return nil
 	}
-	m.pendingServerProfile = profileID
-	label := strings.TrimSpace(selection.DisplayLabel)
-	if label == "" {
-		label = profileID
-	}
-	m.notice = "Permission selection requested: " + label
-	m.refreshTranscript()
-	return nil
+	// The app server commits thread/settings/update before it answers, but the
+	// confirmation notification leaves on the request's own short-lived
+	// connection, so a daemon-backed session never receives it. A successful
+	// update is the confirmation; adopt the accepted selection here.
+	return m.applyPermissionSelectionLocally(item, persistReviewer)
 }
 
 // permissionSelectionFromItem converts a picker row into the app-server
@@ -636,19 +633,39 @@ func (m *Model) applyPermissionSelectionWithPersistence(item chatwidget.Permissi
 		return nil
 	}
 	profileID := strings.TrimSpace(item.ProfileID)
+	threadID := strings.TrimSpace(m.State.ThreadID)
 	// Rust #43340/#46008: a connected thread's profile selection, including a
 	// built-in preset, goes through thread/settings/update so the server's
-	// confirmed settings stay authoritative.
-	if profileID != "" && m.onUpdateThreadPermissions != nil {
-		return m.selectServerPermissionProfile(item)
+	// confirmed settings stay authoritative. Before the first turn has created
+	// a thread, a built-in preset can still be staged locally; the first
+	// turn/start carries it to the daemon. Named profiles need the server.
+	if profileID != "" && m.onUpdateThreadPermissions != nil && (threadID != "" || !strings.HasPrefix(profileID, ":")) {
+		return m.selectServerPermissionProfile(item, persistReviewer)
 	}
+	return m.applyPermissionSelectionLocally(item, persistReviewer)
+}
+
+// applyPermissionSelectionLocally adopts one picker row in the TUI session
+// state, optionally persisting the chosen reviewer through config/batchWrite.
+func (m *Model) applyPermissionSelectionLocally(item chatwidget.PermissionMenuItem, persistReviewer bool) bubbletea.Cmd {
+	if m == nil || m.State == nil {
+		return nil
+	}
+	profileID := strings.TrimSpace(item.ProfileID)
+	m.pendingServerProfile = ""
 	if item.ApprovalPolicy != nil {
 		m.State.ApprovalPolicy = string(*item.ApprovalPolicy)
 	}
 	if item.Reviewer != nil {
 		m.approvalsReviewer = *item.Reviewer
+		m.State.ApprovalsReviewer = string(*item.Reviewer)
 	}
 	if profileID != "" {
+		if strings.HasPrefix(profileID, ":") {
+			m.State.ActivePermissionProfile = ""
+		} else {
+			m.State.ActivePermissionProfile = profileID
+		}
 		m.State.Sandbox = profileID
 	}
 	m.notice = ""
@@ -718,7 +735,8 @@ func (m *Model) applyPermissionShortcutKey(keySpec string) (bubbletea.Cmd, bool)
 	current := 0
 	for index, item := range available {
 		if item.Current || (strings.TrimSpace(item.ProfileID) != "" &&
-			strings.TrimSpace(item.ProfileID) == strings.TrimSpace(m.State.Sandbox)) {
+			normalizePermissionProfileID(strings.TrimSpace(item.ProfileID)) ==
+				normalizePermissionProfileID(strings.TrimSpace(m.State.Sandbox))) {
 			current = index
 			break
 		}

@@ -94,14 +94,17 @@ func TestPermissionsMenuListsServerProfiles(t *testing.T) {
 	if len(recorder.updates) != 1 || recorder.updates[0] != "thread-a|trusted" {
 		t.Fatalf("update calls = %#v", recorder.updates)
 	}
-	if model.pendingServerProfile != "trusted" {
-		t.Fatalf("pending profile = %q", model.pendingServerProfile)
+	// The daemon commits thread/settings/update before it answers, but its
+	// confirmation notification leaves on that request connection, so a
+	// successful update is the confirmation this session can observe.
+	if model.pendingServerProfile != "" {
+		t.Fatalf("pending profile = %q, want none after an accepted update", model.pendingServerProfile)
 	}
-	if !strings.Contains(model.notice, "Permission selection requested: trusted") {
-		t.Fatalf("notice = %q", model.notice)
+	if !strings.Contains(modelMessageText(model), "Permissions updated to trusted") {
+		t.Fatalf("transcript = %q", modelMessageText(model))
 	}
-	if model.State.Sandbox == "trusted" {
-		t.Fatal("a named server profile must not be applied locally before confirmation")
+	if model.State.Sandbox != "trusted" || model.State.ActivePermissionProfile != "trusted" {
+		t.Fatalf("applied profile = (%q, %q)", model.State.Sandbox, model.State.ActivePermissionProfile)
 	}
 
 	// The server's confirmation clears the pending selection.

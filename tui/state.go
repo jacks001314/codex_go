@@ -129,6 +129,7 @@ type Options struct {
 	Personality             string
 	Provider                string
 	ApprovalPolicy          string
+	ApprovalsReviewer       string
 	Sandbox                 string
 	ServiceTier             string
 	CWD                     string
@@ -156,7 +157,11 @@ type State struct {
 	Personality             string
 	Provider                string
 	ApprovalPolicy          string
-	Sandbox                 string
+	// ApprovalsReviewer is the thread's reviewer ("user", "auto_review", ...).
+	// turn/start carries it so a preset such as "Approve for me" survives the
+	// next turn instead of falling back to the user reviewer.
+	ApprovalsReviewer string
+	Sandbox           string
 	// ActivePermissionProfile is the named (or built-in) permission profile id
 	// the server reported for this thread, e.g. "trusted" or ":workspace".
 	// Rust keeps it separate from the legacy sandbox mode: a turn/start for such
@@ -257,6 +262,7 @@ func NewState(options *Options) *State {
 		state.Personality = strings.TrimSpace(options.Personality)
 		state.Provider = strings.TrimSpace(options.Provider)
 		state.ApprovalPolicy = strings.TrimSpace(options.ApprovalPolicy)
+		state.ApprovalsReviewer = strings.TrimSpace(options.ApprovalsReviewer)
 		state.Sandbox = strings.TrimSpace(options.Sandbox)
 		state.ServiceTier = strings.TrimSpace(options.ServiceTier)
 		state.CWD = strings.TrimSpace(options.CWD)

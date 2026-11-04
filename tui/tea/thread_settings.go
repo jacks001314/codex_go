@@ -123,6 +123,7 @@ func (m *Model) applyThreadSettingsValues(settings appserver.Settings) {
 	// reviewer so a built-in preset adopts the authoritative setting.
 	if reviewer := strings.TrimSpace(settings.ApprovalsReviewer); reviewer != "" {
 		m.approvalsReviewer = chatwidget.ApprovalsReviewer(reviewer)
+		m.State.ApprovalsReviewer = reviewer
 	}
 	if settings.ActivePermissionProfile != nil {
 		if profile := strings.TrimSpace(*settings.ActivePermissionProfile); profile != "" {

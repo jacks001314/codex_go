@@ -220,6 +220,20 @@ type StartManagedWorktreeFunc func(mode string, name string, cwd string, threadI
 
 type ThreadRenameFunc func(threadID string, name string) error
 
+// approvalsReviewerFromState restores the thread reviewer the session state
+// carries so the first permission-menu render matches the daemon.
+func approvalsReviewerFromState(state *codextui.State) chatwidget.ApprovalsReviewer {
+	if state == nil {
+		return chatwidget.ApprovalsReviewerUser
+	}
+	switch chatwidget.ApprovalsReviewer(strings.TrimSpace(state.ApprovalsReviewer)) {
+	case chatwidget.ApprovalsReviewerAutoReview:
+		return chatwidget.ApprovalsReviewerAutoReview
+	default:
+		return chatwidget.ApprovalsReviewerUser
+	}
+}
+
 // PermissionSelection carries one picker decision to the connected app server
 // (Rust #46008 PermissionProfileSelection). Empty approval and reviewer fields
 // preserve the server's active values, matching an omitted update parameter.
@@ -3448,7 +3462,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		rateLimitSnapshots:               map[string]chatwidget.RateLimitSnapshot{},
 		rateLimitSwitchPrompt:            chatwidget.RateLimitSwitchPromptIdle,
 		hideRateLimitModelNudge:          boolPtrValueTea(options.HideRateLimitModelNudge),
-		approvalsReviewer:                chatwidget.ApprovalsReviewerUser,
+		approvalsReviewer:                approvalsReviewerFromState(state),
 		permissionRequirements:           clonePermissionRequirementsTea(options.PermissionRequirements),
 		hasChatGPTAccount:                options.HasChatGPTAccount,
 		chatGPTPlanType:                  strings.TrimSpace(options.ChatGPTPlanType),

@@ -26,8 +26,9 @@ func builtinPermissionModel(recorder *[]PermissionSelection) *Model {
 
 // TestBuiltinPermissionSelectionRoutesThroughAppServerLikeRust covers Rust
 // #46008: a connected thread sends built-in presets through
-// thread/settings/update and adopts the confirmed settings rather than applying
-// the picker result locally.
+// thread/settings/update and adopts the committed settings. The daemon commits
+// inside the request and its notification leaves on that short-lived
+// connection, so the accepted update is the confirmation this session sees.
 func TestBuiltinPermissionSelectionRoutesThroughAppServerLikeRust(t *testing.T) {
 	var selections []PermissionSelection
 	model := builtinPermissionModel(&selections)
@@ -42,14 +43,14 @@ func TestBuiltinPermissionSelectionRoutesThroughAppServerLikeRust(t *testing.T) 
 		got.ApprovalsReviewer != "user" || got.DisplayLabel != "Ask for approval" {
 		t.Fatalf("selection = %#v", got)
 	}
-	if model.State.Sandbox != ":read-only" {
-		t.Fatalf("sandbox = %q, want the previous profile until confirmation", model.State.Sandbox)
+	if model.State.Sandbox != ":workspace" {
+		t.Fatalf("sandbox = %q, want the accepted built-in profile", model.State.Sandbox)
 	}
-	if model.pendingServerProfile != ":workspace" {
-		t.Fatalf("pending profile = %q", model.pendingServerProfile)
+	if model.pendingServerProfile != "" {
+		t.Fatalf("pending profile = %q, want none after an accepted update", model.pendingServerProfile)
 	}
-	if !strings.Contains(model.notice, "Permission selection requested: Ask for approval") {
-		t.Fatalf("notice = %q", model.notice)
+	if !strings.Contains(modelMessageText(model), "Permissions updated to Ask for approval") {
+		t.Fatalf("transcript = %q", modelMessageText(model))
 	}
 
 	profile := ":workspace"
@@ -89,8 +90,8 @@ func TestBuiltinPermissionSelectionAllowedDuringRunningTurnLikeRust(t *testing.T
 	if len(selections) != 1 || selections[0].ProfileID != ":read-only" {
 		t.Fatalf("server updates = %#v, want the built-in selection", selections)
 	}
-	if model.pendingServerProfile != ":read-only" {
-		t.Fatalf("pending profile = %q", model.pendingServerProfile)
+	if model.pendingServerProfile != "" {
+		t.Fatalf("pending profile = %q, want none after an accepted update", model.pendingServerProfile)
 	}
 }
 
