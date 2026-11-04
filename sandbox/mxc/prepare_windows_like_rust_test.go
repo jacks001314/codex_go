@@ -5,6 +5,7 @@ package mxc
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"codex_go/sandbox/windowssandbox"
@@ -70,7 +71,48 @@ func TestDenyParentsAreCreatedLikeRust(t *testing.T) {
 	if _, err := os.Stat(denied); !os.IsNotExist(err) {
 		t.Fatalf("deny path itself must stay absent: %v", err)
 	}
+	for _, directory := range []string{filepath.Join(root, "missing"), filepath.Join(root, "missing", "parent")} {
+		sentinel := filepath.Join(directory, ".chatgptcreated")
+		contents, err := os.ReadFile(sentinel)
+		if err != nil || len(contents) != 0 {
+			t.Fatalf("sentinel %s = %q, %v; want empty", sentinel, contents, err)
+		}
+	}
 	if err := ensureDenyParentDirectories([]string{`C:\`}); err != nil {
 		t.Fatalf("volume-root deny path must be left alone: %v", err)
+	}
+}
+
+func TestDenyParentSentinelPreservesExistingContentsLikeRust(t *testing.T) {
+	root := t.TempDir()
+	directory := filepath.Join(root, "existing")
+	if err := os.Mkdir(directory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := filepath.Join(directory, ".chatgptcreated")
+	if err := os.WriteFile(sentinel, []byte("preserve existing contents"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureDenyParentDirectories([]string{filepath.Join(directory, "secret")}); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(sentinel)
+	if err != nil || string(contents) != "preserve existing contents" {
+		t.Fatalf("sentinel = %q, %v; want preserved contents", contents, err)
+	}
+}
+
+func TestDenyParentRejectsReservedSentinelNameLikeRust(t *testing.T) {
+	root := t.TempDir()
+	missing := filepath.Join(root, "missing")
+	for _, name := range []string{".chatgptcreated", ".CHATGPTCREATED", ".chatgptcreated. "} {
+		denied := filepath.Join(missing, name, "secret")
+		err := ensureDenyParentDirectories([]string{denied})
+		if err == nil || !strings.Contains(err.Error(), "reserved directory name .chatgptcreated") {
+			t.Fatalf("error for %q = %v", name, err)
+		}
+		if _, statErr := os.Stat(missing); !os.IsNotExist(statErr) {
+			t.Fatalf("reserved name %q created a parent: %v", name, statErr)
+		}
 	}
 }

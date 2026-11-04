@@ -451,8 +451,10 @@ func pathWithinRoot(path string, root string) bool {
 }
 
 // ensureDenyParentDirectories creates missing parent directories for explicit
-// deny paths (Rust #58168). MXC cannot evaluate a deny path whose parent does
-// not exist, so the parents are created while the path itself is left absent.
+// deny paths (Rust #58168/#59240). MXC cannot evaluate a deny path whose parent
+// does not exist, so the parents are created while the path itself is left
+// absent. Every directory this launcher creates receives an empty
+// `.chatgptcreated` sentinel so cleanup never removes a user directory.
 func ensureDenyParentDirectories(paths []string) error {
 	for _, denied := range paths {
 		denied = strings.TrimSpace(denied)
@@ -464,17 +466,71 @@ func ensureDenyParentDirectories(paths []string) error {
 		if parent == cleaned {
 			continue
 		}
+		if denyParentUsesReservedName(parent) {
+			return fmt.Errorf("MXC deny path %s uses the reserved directory name .chatgptcreated", denied)
+		}
 		if info, err := os.Stat(parent); err == nil {
 			_ = info
 			continue
 		} else if !os.IsNotExist(err) {
 			continue
 		}
-		if err := os.MkdirAll(parent, 0o755); err != nil {
-			return fmt.Errorf("MXC currently requires deny paths to have existing parent directories. Could not create %s: %w. Create this directory manually or correct the path/permissions, then retry", parent, err)
+		missing := make([]string, 0, 4)
+		for directory := parent; ; directory = filepath.Dir(directory) {
+			if _, err := os.Stat(directory); err == nil {
+				break
+			} else if !os.IsNotExist(err) {
+				break
+			}
+			missing = append(missing, directory)
+			next := filepath.Dir(directory)
+			if next == directory {
+				break
+			}
+		}
+		for index := len(missing) - 1; index >= 0; index-- {
+			directory := missing[index]
+			if err := os.Mkdir(directory, 0o755); err != nil {
+				if os.IsExist(err) {
+					if info, statErr := os.Stat(directory); statErr == nil && info.IsDir() {
+						continue
+					}
+				}
+				return fmt.Errorf("MXC currently requires deny paths to have existing parent directories. Could not create %s: %w. Create this directory manually or correct the path/permissions, then retry", directory, err)
+			}
+			sentinel := filepath.Join(directory, ".chatgptcreated")
+			file, err := os.OpenFile(sentinel, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+			if err != nil {
+				_ = os.Remove(directory)
+				return fmt.Errorf("cannot create MXC directory sentinel %s: %w", sentinel, err)
+			}
+			if closeErr := file.Close(); closeErr != nil {
+				_ = os.Remove(directory)
+				return fmt.Errorf("cannot create MXC directory sentinel %s: %w", sentinel, closeErr)
+			}
 		}
 	}
 	return nil
+}
+
+// denyParentUsesReservedName mirrors Rust #59240: Windows treats trailing dots
+// and spaces as part of the same directory name, and comparison is
+// case-insensitive.
+func denyParentUsesReservedName(parent string) bool {
+	cleaned := filepath.Clean(parent)
+	volume := filepath.VolumeName(cleaned)
+	rest := strings.TrimPrefix(cleaned, volume)
+	for _, component := range strings.FieldsFunc(rest, func(char rune) bool {
+		return char == '\\' || char == '/'
+	}) {
+		normalized := strings.TrimRightFunc(component, func(char rune) bool {
+			return char == '.' || char == ' '
+		})
+		if strings.EqualFold(normalized, ".chatgptcreated") {
+			return true
+		}
+	}
+	return false
 }
 
 type pathSet struct {
