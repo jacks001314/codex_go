@@ -3446,3 +3446,36 @@ func TestDoctorDisplayLabelAuthFileMatchesRust(t *testing.T) {
 		t.Fatalf("doctorDisplayLabel(auth file) = %q, want %q", got, want)
 	}
 }
+
+// Rust #59057: remediation guidance names the problems that were detected.
+func TestMCPCheckRemediationFollowsDetectedProblemsLikeRust(t *testing.T) {
+	withMCPHTTPProbe(t, func(string) (string, error) {
+		return "", errors.New("connect failed")
+	})
+	optional := mcpCheckFromServers(map[string]mcp.ServerConfig{
+		"docs": {URL: "http://127.0.0.1:9/mcp", Enabled: true},
+	}, map[string]string{}, t.TempDir())
+	if optional.Remediation == nil || *optional.Remediation != "Check that the MCP server is running and its URL is reachable. Alternatively, disable the affected server." {
+		t.Fatalf("optional remediation = %v", optional.Remediation)
+	}
+
+	required := mcpCheckFromServers(map[string]mcp.ServerConfig{
+		"required": {URL: "http://127.0.0.1:9/mcp", BearerTokenEnvVar: "CODEX_DOCTOR_MISSING_MCP_TOKEN", Enabled: true, Required: true},
+	}, map[string]string{}, t.TempDir())
+	if required.Remediation == nil || *required.Remediation != "Set the missing MCP env vars. Check that the MCP server is running and its URL is reachable. Alternatively, disable the affected server." {
+		t.Fatalf("required remediation = %v", required.Remediation)
+	}
+
+	invalid := mcpCheckFromServers(map[string]mcp.ServerConfig{
+		"broken": {Command: "definitely-missing-codex-doctor-mcp", Enabled: true, Required: true},
+	}, map[string]string{}, t.TempDir())
+	if invalid.Status != CheckStatusFail {
+		t.Fatalf("invalid check = %+v", invalid)
+	}
+	if invalid.Remediation == nil || *invalid.Remediation != "Correct the listed MCP server configuration errors. Alternatively, disable the affected server." {
+		t.Fatalf("invalid remediation = %v", invalid.Remediation)
+	}
+	if !containsDetail(invalid, "broken: stdio command \"definitely-missing-codex-doctor-mcp\" is not resolvable") {
+		t.Fatalf("details = %#v", invalid.Details)
+	}
+}

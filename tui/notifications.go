@@ -1,13 +1,17 @@
 package tui
 
-import "strings"
+import (
+	"strings"
+	"unicode/utf8"
+)
 
 type NotificationMethod string
 
 const (
-	NotificationMethodAuto NotificationMethod = "auto"
-	NotificationMethodOSC9 NotificationMethod = "osc9"
-	NotificationMethodBEL  NotificationMethod = "bel"
+	NotificationMethodAuto   NotificationMethod = "auto"
+	NotificationMethodOSC9   NotificationMethod = "osc9"
+	NotificationMethodOSC777 NotificationMethod = "osc777"
+	NotificationMethodBEL    NotificationMethod = "bel"
 )
 
 type NotificationCondition string
@@ -20,6 +24,8 @@ const (
 type NotificationSequenceOptions struct {
 	Tmux         bool
 	SupportsOSC9 bool
+	// Ghostty limits a parsed notification body to 255 bytes (Rust #59256).
+	Ghostty bool
 }
 
 func ShouldEmitNotification(condition NotificationCondition, terminalFocused bool) bool {
@@ -33,14 +39,56 @@ func ShouldEmitNotification(condition NotificationCondition, terminalFocused boo
 
 func NotificationSequence(method NotificationMethod, message string, options NotificationSequenceOptions) string {
 	switch resolveNotificationMethod(method, options.SupportsOSC9) {
-	case NotificationMethodOSC9:
-		if options.Tmux {
-			return "\x1bPtmux;\x1b\x1b]9;" + strings.ReplaceAll(message, "\x1b", "\x1b\x1b") + "\x07\x1b\\"
+	case NotificationMethodOSC9, NotificationMethodOSC777:
+		protocol := resolveNotificationMethod(method, options.SupportsOSC9)
+		body := notificationBody(message, protocol == NotificationMethodOSC777)
+		if options.Ghostty {
+			body = truncateGhosttyNotificationBody(body)
 		}
-		return "\x1b]9;" + message + "\x07"
+		sequence := "\x1b]9;" + body + "\x07"
+		if protocol == NotificationMethodOSC777 {
+			sequence = "\x1b]777;notify;Codex;" + body + "\x1b\\"
+		}
+		if options.Tmux {
+			return "\x1bPtmux;" + strings.ReplaceAll(sequence, "\x1b", "\x1b\x1b") + "\x1b\\"
+		}
+		return sequence
 	default:
 		return "\x07"
 	}
+}
+
+// notificationBody keeps terminal control characters out of the OSC payload;
+// OSC 777 also uses ASCII semicolons as field delimiters (Rust #59256).
+func notificationBody(message string, osc777 bool) string {
+	var builder strings.Builder
+	builder.Grow(len(message))
+	for _, r := range message {
+		switch {
+		case osc777 && r == ';':
+			builder.WriteRune('；')
+		case r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f):
+			builder.WriteRune(' ')
+		default:
+			builder.WriteRune(r)
+		}
+	}
+	return builder.String()
+}
+
+// truncateGhosttyNotificationBody mirrors Ghostty's 255-byte notification
+// buffer, keeping the body on a UTF-8 boundary and ending with an ellipsis.
+func truncateGhosttyNotificationBody(body string) string {
+	const limit = 255
+	const ellipsis = "…"
+	if len(body) <= limit {
+		return body
+	}
+	cut := limit - len(ellipsis)
+	for cut > 0 && !utf8.RuneStart(body[cut]) {
+		cut--
+	}
+	return body[:cut] + ellipsis
 }
 
 func NotificationSequenceForEnv(method NotificationMethod, message string, getenv func(string) string) string {
@@ -50,6 +98,7 @@ func NotificationSequenceForEnv(method NotificationMethod, message string, geten
 	return NotificationSequence(method, message, NotificationSequenceOptions{
 		Tmux:         strings.TrimSpace(getenv("TMUX")) != "",
 		SupportsOSC9: NotificationEnvSupportsOSC9(getenv),
+		Ghostty:      normalizeTerminalProgram(getenv("TERM_PROGRAM")) == "ghostty",
 	})
 }
 
@@ -102,7 +151,7 @@ func normalizeTerminalProgram(value string) string {
 
 func resolveNotificationMethod(method NotificationMethod, supportsOSC9 bool) NotificationMethod {
 	switch method {
-	case NotificationMethodOSC9, NotificationMethodBEL:
+	case NotificationMethodOSC9, NotificationMethodOSC777, NotificationMethodBEL:
 		return method
 	default:
 		if supportsOSC9 {

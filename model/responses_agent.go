@@ -563,6 +563,9 @@ type responsesAgentOutputItem struct {
 	Execution             string                       `json:"execution"`
 	Search                map[string]any               `json:"search"`
 	Action                map[string]any               `json:"action"`
+	// InternalMetadata carries the producer's internal message metadata. Only
+	// the completion-token count is read from it (Rust #59041).
+	InternalMetadata json.RawMessage `json:"internal_chat_message_metadata_passthrough"`
 }
 
 type responsesAgentContentBlock struct {
@@ -3962,7 +3965,10 @@ func agentResponseFromResponses(apiResponse *responsesAgentAPIResponse, request 
 		if id == "" {
 			id = fmt.Sprintf("agent-message-%d", index+1)
 		}
-		items = append(items, AgentItem{ID: id, Type: "agent_message", Text: text})
+		items = append(items, AgentItem{
+			ID: id, Type: "agent_message", Text: text,
+			ContentTokenCount: contentTokenCountFromInternalMetadata(output.InternalMetadata),
+		})
 		messages = append(messages, text)
 	}
 	if len(items) > 0 && len(messages) == 0 {

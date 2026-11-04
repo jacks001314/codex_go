@@ -2124,6 +2124,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	// is the exact call-ID evidence the tool events below are classified with.
 	r.rememberSampledToolCallsFromTurnResult(threadID, turnID, result)
 	threadItems := make([]ThreadItem, 0, len(items))
+	contentTokenCounts := contentTokenCountsByItemID(result)
 	for _, item := range items {
 		if sessionItemIsHiddenThreadItem(&item) {
 			continue
@@ -2146,10 +2147,11 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		}
 		if shouldNotifyRuntimeItemCompleted(threadItem) {
 			r.notify(NotificationItemCompleted, &ItemCompletedNotification{
-				Item:          payload,
-				ThreadID:      threadID,
-				TurnID:        turnID,
-				CompletedAtMS: item.CreatedAt.UTC().UnixMilli(),
+				Item:              payload,
+				ThreadID:          threadID,
+				TurnID:            turnID,
+				ContentTokenCount: contentTokenCounts[item.ID],
+				CompletedAtMS:     item.CreatedAt.UTC().UnixMilli(),
 			})
 			r.emitCommandExecutionAnalyticsEvent(ctx, connectionID, threadID, turnID, &threadItem, runConfig)
 			r.emitFileChangeAnalyticsEvent(ctx, connectionID, threadID, turnID, &threadItem, runConfig)
@@ -5155,6 +5157,10 @@ func turnAnalyticsErrorFieldsFromAPIError(err *codexapi.APIError) turnAnalyticsE
 		return fields("usageLimitExceeded", "quota_exceeded")
 	case codexapi.ErrorUsageNotIncluded:
 		return fields("usageLimitExceeded", "usage_not_included")
+	case codexapi.ErrorSessionBudgetExceeded:
+		// Rust #59228: the provider's budget stop is the same terminal session
+		// budget failure the rollout budget reports.
+		return fields("sessionBudgetExceeded", "session_budget_exceeded")
 	case codexapi.ErrorRateLimit:
 		// Rust #48174: only the usage-limit error carries the window; other
 		// error kinds report null.
@@ -5478,6 +5484,33 @@ func runtimeFileChangeFromMap(change map[string]any) (runtimeutil.FileChange, bo
 		out.OverwrittenContent = &overwritten
 	}
 	return out, true
+}
+
+// contentTokenCountsByItemID collects the completion-only token counts the
+// producer supplied for assistant messages (Rust #59041). The counts ride on
+// the in-memory agent items; they are never written to the thread store or
+// replayed into later model requests.
+func contentTokenCountsByItemID(result *turn.AgentLoopResult) map[string]*uint64 {
+	counts := map[string]*uint64{}
+	if result == nil {
+		return counts
+	}
+	for _, response := range result.ModelResponses() {
+		if response == nil {
+			continue
+		}
+		for i := range response.Items {
+			item := &response.Items[i]
+			if item.ContentTokenCount == nil || strings.TrimSpace(item.ID) == "" {
+				continue
+			}
+			switch strings.TrimSpace(item.Type) {
+			case "", "message", "agent_message":
+				counts[item.ID] = item.ContentTokenCount
+			}
+		}
+	}
+	return counts
 }
 
 func (r *RuntimeRouter) sessionItemsForTurn(turnID string, params *turn.TurnStartParams, result *turn.AgentLoopResult, createdAt time.Time) []session.Item {

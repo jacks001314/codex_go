@@ -47,7 +47,14 @@ const keymapCatalogEntryCount = 156
 //
 // T-b12 §T12 originally listed 14; T-b13 accepted 9 as renames and T-b14 landed 3
 // (pager.find, agents.fork, global.find_transcript).
-var rustOnlyKeymapActions = map[string]string{}
+var rustOnlyKeymapActions = map[string]string{
+	"global.change_host":           "Go's TUI binds one app-server backend per process, so there is no host list to cycle (Rust #59007 n/a)",
+	"global.focus_main_composer":   "pending: workspace focus shortcuts (Rust #59208/#59287) are queued in update/plan_2026_11_04.md",
+	"global.focus_sidebar_content": "pending: workspace focus shortcuts (Rust #59130/#59208/#59287) are queued in update/plan_2026_11_04.md",
+	"global.hide_pane":             "pending: hide-focused-side-pane shortcut (Rust #59130) is queued in update/plan_2026_11_04.md",
+	"global.focus_pane_left":       "pending: directional workspace focus (Rust #59287) is queued in update/plan_2026_11_04.md",
+	"global.focus_pane_right":      "pending: directional workspace focus (Rust #59287) is queued in update/plan_2026_11_04.md",
+}
 
 // goOnlyKeymapActions are catalog entries upstream does not declare. Keep them:
 // they back Go-side behavior whose consumers already ask for these names.
@@ -348,13 +355,14 @@ func TestKeymapCatalogMatchesRustActionsLikeRust(t *testing.T) {
 		}
 	}
 	// A truncated parse would silently shrink RUST_KEYS, so pin the parsed shape:
-	// upstream declares 154 actions across 12 contexts (actions.rs:112-293).
+	// upstream declares 160 actions across 12 contexts after the workspace focus
+	// shortcuts (#59007/#59130/#59208/#59287) landed.
 	contexts := map[string]bool{}
 	for _, key := range rustKeys {
 		context, _, _ := strings.Cut(key, ".")
 		contexts[context] = true
 	}
-	if len(rustKeys) != 154 || len(contexts) != 12 {
-		t.Fatalf("parsed %d upstream actions across %d contexts, want 154 across 12", len(rustKeys), len(contexts))
+	if len(rustKeys) != 160 || len(contexts) != 12 {
+		t.Fatalf("parsed %d upstream actions across %d contexts, want 160 across 12", len(rustKeys), len(contexts))
 	}
 }

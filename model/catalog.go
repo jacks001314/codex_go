@@ -841,15 +841,18 @@ type ModelInfo struct {
 	// SupportsReasoningSummaries mirrors Rust ModelInfo.supports_reasoning_summary_parameter
 	// (serde default_true: absent means true). The legacy Go wire name
 	// supports_reasoning_summaries is still accepted on parse.
-	SupportsReasoningSummaries bool             `json:"supports_reasoning_summary_parameter"`
-	DefaultReasoningSummary    string           `json:"default_reasoning_summary"`
-	SupportVerbosity           bool             `json:"support_verbosity"`
-	DefaultVerbosity           string           `json:"default_verbosity"`
-	WebSearchToolType          string           `json:"web_search_tool_type"`
-	TruncationPolicy           TruncationPolicy `json:"truncation_policy"`
-	SupportsParallelToolCalls  bool             `json:"supports_parallel_tool_calls"`
-	ToolMode                   string           `json:"tool_mode"`
-	MultiAgentVersion          string           `json:"multi_agent_version"`
+	SupportsReasoningSummaries bool   `json:"supports_reasoning_summary_parameter"`
+	DefaultReasoningSummary    string `json:"default_reasoning_summary"`
+	SupportVerbosity           bool   `json:"support_verbosity"`
+	DefaultVerbosity           string `json:"default_verbosity"`
+	WebSearchToolType          string `json:"web_search_tool_type"`
+	// WebSearchProvider is the provider preference selected by the resolved
+	// model catalog entry (Rust #59033).
+	WebSearchProvider         *string          `json:"web_search_provider,omitempty"`
+	TruncationPolicy          TruncationPolicy `json:"truncation_policy"`
+	SupportsParallelToolCalls bool             `json:"supports_parallel_tool_calls"`
+	ToolMode                  string           `json:"tool_mode"`
+	MultiAgentVersion         string           `json:"multi_agent_version"`
 	// MultiAgentReasoningEffort mirrors Rust ModelInfo.multi_agent_reasoning_effort
 	// (the reasoning effort used for multi-agent work when the user selects Ultra).
 	MultiAgentReasoningEffort     *string  `json:"multi_agent_reasoning_effort,omitempty"`
@@ -1084,6 +1087,7 @@ func (m *ModelInfo) UnmarshalJSON(data []byte) error {
 		SupportVerbosity                  bool                  `json:"support_verbosity"`
 		DefaultVerbosity                  any                   `json:"default_verbosity"`
 		WebSearchToolType                 string                `json:"web_search_tool_type"`
+		WebSearchProvider                 *string               `json:"web_search_provider"`
 		TruncationPolicy                  rawTruncationPolicy   `json:"truncation_policy"`
 		SupportsParallelToolCalls         bool                  `json:"supports_parallel_tool_calls"`
 		ToolMode                          any                   `json:"tool_mode"`
@@ -1138,6 +1142,7 @@ func (m *ModelInfo) UnmarshalJSON(data []byte) error {
 		SupportVerbosity:               raw.SupportVerbosity,
 		DefaultVerbosity:               stringFromJSONValue(raw.DefaultVerbosity),
 		WebSearchToolType:              raw.WebSearchToolType,
+		WebSearchProvider:              raw.WebSearchProvider,
 		TruncationPolicy:               TruncationPolicy(raw.TruncationPolicy),
 		SupportsParallelToolCalls:      raw.SupportsParallelToolCalls,
 		ToolMode:                       knownToolMode(stringFromJSONValue(raw.ToolMode)),

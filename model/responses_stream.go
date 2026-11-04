@@ -147,6 +147,14 @@ func terminalProviderError(body *responsesAgentAPIErrorBody, status int) *codexa
 		return &codexapi.APIError{Kind: codexapi.ErrorInvalidAudioInput, Status: status, Message: message}
 	}
 	switch code {
+	case "budget_reached":
+		// Rust #59228: a provider budget stop is terminal for a statusless
+		// streamed error or an HTTP 400; retry advice and later completion
+		// events are ignored.
+		if status != 0 && status != http.StatusBadRequest {
+			return nil
+		}
+		return &codexapi.APIError{Kind: codexapi.ErrorSessionBudgetExceeded, Status: status}
 	case "flex_unavailable":
 		if status != 0 && status != http.StatusTooManyRequests {
 			return nil
@@ -593,7 +601,8 @@ func isRetryableResponsesStreamError(err error) bool {
 			// rate limits, so the stream retries them even without a 5xx status.
 			return true
 		case codexapi.ErrorContextWindowExceeded, codexapi.ErrorQuotaExceeded,
-			codexapi.ErrorUsageNotIncluded, codexapi.ErrorInvalidRequest,
+			codexapi.ErrorUsageNotIncluded, codexapi.ErrorSessionBudgetExceeded,
+			codexapi.ErrorInvalidRequest,
 			codexapi.ErrorInvalidPrompt, codexapi.ErrorInvalidAudioInput,
 			codexapi.ErrorCyberPolicy, codexapi.ErrorBioPolicy,
 			codexapi.ErrorFlexUnavailable, codexapi.ErrorModelNotFound:
@@ -2426,7 +2435,41 @@ func agentItemFromResponseOutput(output *responsesAgentOutputItem, rawItem json.
 	if len(output.Content) > 0 {
 		data["outputContent"] = append([]responsesAgentContentBlock(nil), output.Content...)
 	}
-	return &AgentItem{ID: id, Type: "agent_message", Text: text, Data: data}, nil
+	return &AgentItem{
+		ID: id, Type: "agent_message", Text: text, Data: data,
+		ContentTokenCount: contentTokenCountFromInternalMetadata(output.InternalMetadata),
+	}, nil
+}
+
+// contentTokenCountFromInternalMetadata reads the producer-supplied native
+// content-token count leniently: malformed metadata is unavailable, not fatal
+// (Rust #59041 deserializes it with DefaultOnError).
+func contentTokenCountFromInternalMetadata(raw json.RawMessage) *uint64 {
+	if len(raw) == 0 {
+		return nil
+	}
+	var envelope struct {
+		ContentTokenCount json.RawMessage `json:"content_token_count"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil || len(envelope.ContentTokenCount) == 0 {
+		return nil
+	}
+	literal := strings.TrimSpace(string(envelope.ContentTokenCount))
+	if literal == "" || literal[0] < '0' || literal[0] > '9' {
+		// encoding/json also accepts a quoted numeric string for json.Number;
+		// serde's u64 does not, so reject anything that is not a bare number.
+		return nil
+	}
+	var number json.Number
+	if err := json.Unmarshal(envelope.ContentTokenCount, &number); err != nil {
+		return nil
+	}
+	value, err := number.Int64()
+	if err != nil || value < 0 {
+		return nil
+	}
+	count := uint64(value)
+	return &count
 }
 
 func reasoningAgentItemFromRaw(raw json.RawMessage, index int) (*AgentItem, bool) {

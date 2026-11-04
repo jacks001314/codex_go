@@ -44,6 +44,13 @@ func ExecApprovalRequestedNotification(command string) Notification {
 	return Notification{Kind: NotificationExecApprovalRequested, Command: command}
 }
 
+// ExecApprovalRequestedSubjectNotification names what the approval is for
+// (a command, terminal input or network host) so the desktop notification
+// describes the request without truncating it (Rust #59256).
+func ExecApprovalRequestedSubjectNotification(subject string) Notification {
+	return Notification{Kind: NotificationExecApprovalRequested, Command: subject}
+}
+
 func EditApprovalRequestedNotification(cwd string, changes []string) Notification {
 	return Notification{Kind: NotificationEditApprovalRequested, CWD: cwd, Changes: append([]string(nil), changes...)}
 }
@@ -68,7 +75,7 @@ func (n Notification) Display() string {
 		}
 		return "Agent turn complete"
 	case NotificationExecApprovalRequested:
-		return "Approval requested: " + TruncateRunes(n.Command, 30)
+		return "Approval requested: " + n.Command
 	case NotificationEditApprovalRequested:
 		if len(n.Changes) == 1 {
 			return "Codex wants to edit " + displayPathFor(n.Changes[0], n.CWD)

@@ -9,12 +9,15 @@ import (
 type APIErrorKind string
 
 const (
-	ErrorTransport                   APIErrorKind = "transport"
-	ErrorAPI                         APIErrorKind = "api"
-	ErrorStream                      APIErrorKind = "stream"
-	ErrorContextWindowExceeded       APIErrorKind = "contextWindowExceeded"
-	ErrorQuotaExceeded               APIErrorKind = "quotaExceeded"
-	ErrorUsageNotIncluded            APIErrorKind = "usageNotIncluded"
+	ErrorTransport             APIErrorKind = "transport"
+	ErrorAPI                   APIErrorKind = "api"
+	ErrorStream                APIErrorKind = "stream"
+	ErrorContextWindowExceeded APIErrorKind = "contextWindowExceeded"
+	ErrorQuotaExceeded         APIErrorKind = "quotaExceeded"
+	ErrorUsageNotIncluded      APIErrorKind = "usageNotIncluded"
+	// ErrorSessionBudgetExceeded is the provider's terminal `budget_reached`
+	// failure (Rust #59228).
+	ErrorSessionBudgetExceeded       APIErrorKind = "sessionBudgetExceeded"
 	ErrorRetryable                   APIErrorKind = "retryable"
 	ErrorRateLimit                   APIErrorKind = "rateLimit"
 	ErrorInvalidRequest              APIErrorKind = "invalidRequest"
@@ -118,6 +121,8 @@ func (e *APIError) Error() string {
 		return "Quota exceeded. Check your plan and billing details."
 	case ErrorUsageNotIncluded:
 		return "To use Codex with your ChatGPT plan, upgrade to Plus: https://chatgpt.com/explore/plus."
+	case ErrorSessionBudgetExceeded:
+		return "budget reached"
 	case ErrorRetryable:
 		// Rust maps ApiError::Retryable onto CodexErr::Stream, whose display is
 		// the stream copy.

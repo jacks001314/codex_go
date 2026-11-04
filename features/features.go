@@ -91,6 +91,9 @@ var Registry = []Spec{
 	{Key: "web_search_request", Stage: StageDeprecated},
 	{Key: "web_search_cached", Stage: StageDeprecated},
 	{Key: "standalone_web_search", Stage: StageUnderDevelopment},
+	// Rust #59033: the host may authorize MCP search independently of native
+	// search through per-turn policy. Under development and off by default.
+	{Key: "hosted_search_policy", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "search_tool", Stage: StageRemoved},
 	{Key: "codex_git_commit", Stage: StageRemoved},
 	{Key: "runtime_metrics", Stage: StageUnderDevelopment},

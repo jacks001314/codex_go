@@ -418,6 +418,7 @@ var configRequestUserInputFields = map[string]configFieldKind{
 }
 
 var configToolsFields = map[string]configFieldKind{
+	"client_search_provider":          {kind: configKindEnum, variants: []string{"standalone", "search_mcp"}},
 	"web_search":                      {kind: configKindUntaggedStruct, expected: "WebSearchToolConfigInput", allowBool: true, fields: configWebSearchFields},
 	"experimental_request_user_input": {kind: configKindStruct, expected: "ExperimentalRequestUserInput", fields: configRequestUserInputFields},
 	"update_plan":                     {kind: configKindStruct, expected: "UpdatePlanToolConfig", fields: configUpdatePlanFields},

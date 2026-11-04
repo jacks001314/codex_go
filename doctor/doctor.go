@@ -2515,7 +2515,8 @@ func mcpCheckFromServers(servers map[string]mcp.ServerConfig, env map[string]str
 	disabled := 0
 	stdioCount := 0
 	httpCount := 0
-	missingInputs := []string{}
+	invalidConfig := []string{}
+	missingEnv := []string{}
 	unreachableRequiredHTTP := []string{}
 	unreachableOptionalHTTP := []string{}
 	for _, name := range names {
@@ -2529,7 +2530,7 @@ func mcpCheckFromServers(servers map[string]mcp.ServerConfig, env map[string]str
 			if disabledServer {
 				continue
 			}
-			missingInputs = append(missingInputs, missingMCPHTTPInputs(name, &server, env)...)
+			missingEnv = append(missingEnv, missingMCPHTTPInputs(name, &server, env)...)
 			if _, err := mcpHTTPProbeURL(server.URL); err != nil {
 				detail := fmt.Sprintf("%s: %s (%s)", name, server.URL, err.Error())
 				if server.Required {
@@ -2544,14 +2545,16 @@ func mcpCheckFromServers(servers map[string]mcp.ServerConfig, env map[string]str
 		if disabledServer {
 			continue
 		}
-		missingInputs = append(missingInputs, missingMCPStdioInputs(name, &server, env)...)
+		stdioInvalid, stdioMissing := mcpSTDIOInputs(name, &server, env)
+		invalidConfig = append(invalidConfig, stdioInvalid...)
+		missingEnv = append(missingEnv, stdioMissing...)
 		command := strings.TrimSpace(server.Command)
 		if command == "" || !mcpServerIsLocalEnvironment(&server) {
 			continue
 		}
 		if err := stdioCommandResolves(command, server.CWD, server.Env); err != nil {
 			issue := fmt.Sprintf("%s: stdio command %q is not resolvable (%v)", name, server.Command, err)
-			missingInputs = append(missingInputs, issue)
+			invalidConfig = append(invalidConfig, issue)
 		}
 	}
 
@@ -2565,7 +2568,20 @@ func mcpCheckFromServers(servers map[string]mcp.ServerConfig, env map[string]str
 	if httpCount > 0 {
 		details = append(details, fmt.Sprintf("streamable_http servers: %d", httpCount))
 	}
-	details = append(details, missingInputs...)
+	// Rust #59057: remediation guidance follows the issues that were actually
+	// detected instead of always suggesting missing environment variables.
+	hints := []string{}
+	if len(invalidConfig) > 0 {
+		hints = append(hints, "Correct the listed MCP server configuration errors.")
+	}
+	if len(missingEnv) > 0 {
+		hints = append(hints, "Set the missing MCP env vars.")
+	}
+	if len(unreachableRequiredHTTP) > 0 || len(unreachableOptionalHTTP) > 0 {
+		hints = append(hints, "Check that the MCP server is running and its URL is reachable.")
+	}
+	details = append(details, invalidConfig...)
+	details = append(details, missingEnv...)
 	for _, detail := range unreachableRequiredHTTP {
 		details = append(details, "required reachability failed: "+detail)
 	}
@@ -2578,8 +2594,8 @@ func mcpCheckFromServers(servers map[string]mcp.ServerConfig, env map[string]str
 			continue
 		}
 		prefix := name + ":"
-		for _, missing := range missingInputs {
-			if strings.HasPrefix(missing, prefix) {
+		for _, issue := range append(append([]string{}, invalidConfig...), missingEnv...) {
+			if strings.HasPrefix(issue, prefix) {
 				requiredMissing = true
 				break
 			}
@@ -2590,13 +2606,14 @@ func mcpCheckFromServers(servers map[string]mcp.ServerConfig, env map[string]str
 	if requiredMissing || len(unreachableRequiredHTTP) > 0 {
 		status = CheckStatusFail
 		summary = "MCP configuration has failing required inputs or reachability"
-	} else if len(missingInputs) > 0 || len(unreachableOptionalHTTP) > 0 {
+	} else if len(hints) > 0 {
 		status = CheckStatusWarning
 		summary = "MCP configuration has optional issues"
 	}
 	check := NewCheck("mcp.config", "mcp", status, summary).DetailsList(details)
 	if status != CheckStatusOK {
-		check.Remediate("Set the missing MCP env vars or disable the affected server.")
+		hints = append(hints, "Alternatively, disable the affected server.")
+		check.Remediate(strings.Join(hints, " "))
 	}
 	return check
 }
@@ -2639,30 +2656,31 @@ func missingMCPHTTPInputs(name string, server *mcp.ServerConfig, env map[string]
 	return missing
 }
 
-func missingMCPStdioInputs(name string, server *mcp.ServerConfig, env map[string]string) []string {
-	missing := []string{}
+// mcpSTDIOInputs separates configuration errors from missing environment
+// variables (Rust #59057). Only the latter should recommend setting env vars.
+func mcpSTDIOInputs(name string, server *mcp.ServerConfig, env map[string]string) (invalid []string, missing []string) {
 	if server == nil {
-		return missing
+		return nil, nil
 	}
 	localServer := mcpServerIsLocalEnvironment(server)
 	if strings.TrimSpace(server.Command) == "" {
-		missing = append(missing, fmt.Sprintf("%s: stdio command is empty", name))
+		invalid = append(invalid, fmt.Sprintf("%s: stdio command is empty", name))
 	}
 	for key := range server.Env {
 		if strings.TrimSpace(key) == "" {
-			missing = append(missing, fmt.Sprintf("%s: empty env key %s", name, key))
+			invalid = append(invalid, fmt.Sprintf("%s: empty env key %s", name, key))
 		}
 	}
 	if !localServer {
 		serverCWD := strings.TrimSpace(server.CWD)
 		if serverCWD == "" {
-			missing = append(missing, fmt.Sprintf("%s: remote stdio requires an explicit cwd", name))
+			invalid = append(invalid, fmt.Sprintf("%s: remote stdio requires an explicit cwd", name))
 		} else if !mcpRemoteCWDIsAbsolute(serverCWD) {
-			missing = append(missing, fmt.Sprintf("%s: remote stdio cwd is not absolute (%s)", name, serverCWD))
+			invalid = append(invalid, fmt.Sprintf("%s: remote stdio cwd is not absolute (%s)", name, serverCWD))
 		}
 	} else if serverCWD := strings.TrimSpace(server.CWD); serverCWD != "" {
 		if _, err := os.Stat(serverCWD); err != nil {
-			missing = append(missing, fmt.Sprintf("%s: cwd does not exist (%s)", name, serverCWD))
+			invalid = append(invalid, fmt.Sprintf("%s: cwd does not exist (%s)", name, serverCWD))
 		}
 	}
 	for _, envVar := range server.EnvVars {
@@ -2672,7 +2690,7 @@ func missingMCPStdioInputs(name string, server *mcp.ServerConfig, env map[string
 		}
 		if strings.EqualFold(strings.TrimSpace(envVar.Source), "remote") {
 			if localServer {
-				missing = append(missing, fmt.Sprintf("%s: env_vars entry `%s` uses source `remote`, which requires remote MCP stdio", name, envName))
+				invalid = append(invalid, fmt.Sprintf("%s: env_vars entry `%s` uses source `remote`, which requires remote MCP stdio", name, envName))
 			}
 			continue
 		}
@@ -2680,7 +2698,7 @@ func missingMCPStdioInputs(name string, server *mcp.ServerConfig, env map[string
 			missing = append(missing, fmt.Sprintf("%s: env var %s is not set", name, envName))
 		}
 	}
-	return missing
+	return invalid, missing
 }
 
 func mcpServerIsLocalEnvironment(server *mcp.ServerConfig) bool {

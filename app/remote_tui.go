@@ -4222,12 +4222,13 @@ func remoteDecodeServerRequestParams(params json.RawMessage, target any) error {
 
 func (c *remoteAppServerTUIClient) commandExecutionApproval(ctx context.Context, params *appserver.CommandExecutionRequestApprovalParams, requestID string) (*appserver.CommandExecutionRequestApprovalResponse, error) {
 	response, err := c.remoteApproval(ctx, codextea.ApprovalRequestMsg{
-		Title:           "Run command?",
-		Body:            remoteCommandExecutionApprovalBody(params),
-		Command:         remoteCommandExecutionApprovalCommand(params),
-		Options:         remoteCommandExecutionApprovalOptions(params),
-		ThreadID:        strings.TrimSpace(params.ThreadID),
-		ServerRequestID: requestID,
+		Title:               "Run command?",
+		Body:                remoteCommandExecutionApprovalBody(params),
+		Command:             remoteCommandExecutionApprovalCommand(params),
+		NotificationSubject: remoteCommandExecutionApprovalSubject(params),
+		Options:             remoteCommandExecutionApprovalOptions(params),
+		ThreadID:            strings.TrimSpace(params.ThreadID),
+		ServerRequestID:     requestID,
 	}, requestID)
 	if err != nil {
 		return nil, err
@@ -4503,6 +4504,30 @@ func remoteCommandExecutionApprovalBody(params *appserver.CommandExecutionReques
 		return "Command requested approval."
 	}
 	return strings.Join(lines, "\n")
+}
+
+// remoteCommandExecutionApprovalSubject mirrors Rust #59256: terminal input
+// and network approvals describe the subject instead of a raw command.
+func remoteCommandExecutionApprovalSubject(params *appserver.CommandExecutionRequestApprovalParams) string {
+	if params == nil {
+		return ""
+	}
+	if params.Kind == appserver.ExecApprovalKindWriteStdin {
+		return "send terminal input"
+	}
+	if host := networkApprovalHost(params.NetworkApprovalContext); host != "" {
+		return "network access to " + host
+	}
+	return remoteCommandExecutionApprovalCommand(params)
+}
+
+func networkApprovalHost(context any) string {
+	object, ok := context.(map[string]any)
+	if !ok || object == nil {
+		return ""
+	}
+	host, _ := object["host"].(string)
+	return strings.TrimSpace(host)
 }
 
 func remoteCommandExecutionApprovalCommand(params *appserver.CommandExecutionRequestApprovalParams) string {
@@ -5593,10 +5618,7 @@ func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMes
 			if !c.notificationThreadIsActive(payload.ThreadID) {
 				return nil
 			}
-			text := strings.TrimSpace(payload.Error.Message)
-			if text == "" {
-				text = "Reconnecting..."
-			}
+			text := retryStatusMessage(payload.Error)
 			if payload.Error.AdditionalDetails != nil {
 				if details := strings.TrimSpace(*payload.Error.AdditionalDetails); details != "" {
 					text += "\n鈹?" + details
@@ -6695,4 +6717,45 @@ func formatRemoteWebSocketDialError(rawURL string, response *http.Response, err 
 		return fmt.Errorf("connect remote app-server websocket %s: %w", rawURL, err)
 	}
 	return fmt.Errorf("connect remote app-server websocket %s failed with HTTP %s: %w", rawURL, response.Status, err)
+}
+
+// retryStatusMessage mirrors Rust #59253: a stream disconnect caused by HTTP
+// 429 keeps the retry counter but tells the user the server is busy instead of
+// repeating the generic reconnect notice.
+func retryStatusMessage(turnErr appserver.TurnError) string {
+	text := strings.TrimSpace(turnErr.Message)
+	if text == "" {
+		text = "Reconnecting..."
+	}
+	attempt, isReconnect := strings.CutPrefix(text, "Reconnecting... ")
+	if isReconnect && codexErrorHTTPStatusCode(turnErr.CodexErrorInfo, "responseStreamDisconnected") == 429 {
+		return "Server is busy, reconnecting " + attempt
+	}
+	return text
+}
+
+func codexErrorHTTPStatusCode(info appserver.CodexErrorInfo, kind string) int {
+	root, ok := info.(map[string]any)
+	if !ok {
+		return 0
+	}
+	payload, ok := root[kind].(map[string]any)
+	if !ok {
+		return 0
+	}
+	switch value := payload["httpStatusCode"].(type) {
+	case int:
+		return value
+	case int64:
+		return int(value)
+	case uint16:
+		return int(value)
+	case float64:
+		return int(value)
+	case json.Number:
+		if parsed, err := value.Int64(); err == nil {
+			return int(parsed)
+		}
+	}
+	return 0
 }

@@ -114,7 +114,11 @@ type ApprovalRequestMsg struct {
 	Title    string
 	Body     string
 	Command  string
-	Options  []ModalOption
+	// NotificationSubject names the request in the desktop notification
+	// (command, terminal input or network host; Rust #59256). Empty falls back
+	// to Command.
+	NotificationSubject string
+	Options             []ModalOption
 }
 
 // AppLinkAction is one host-side effect of the app-link popup (Rust
@@ -349,7 +353,11 @@ func (m *Model) openApprovalModal(message ApprovalRequestMsg) bubbletea.Cmd {
 	if m.modal != nil && m.modal.kind == ModalKindApproval {
 		m.modal.threadID = strings.TrimSpace(message.ThreadID)
 	}
-	return m.queueNotification(chatwidget.ExecApprovalRequestedNotification(message.Command))
+	subject := strings.TrimSpace(message.NotificationSubject)
+	if subject == "" {
+		subject = message.Command
+	}
+	return m.queueNotification(chatwidget.ExecApprovalRequestedSubjectNotification(subject))
 }
 
 // openApprovalRequest preserves every concurrent approval. Rust's bottom pane

@@ -289,7 +289,7 @@ var (
 	// ErrSessionBudgetExceeded surfaces the Rust SessionBudgetExceeded
 	// codexErrorInfo when the shared rollout budget is exhausted
 	// (core/src/session/rollout_budget.rs).
-	ErrSessionBudgetExceeded = errors.New("session budget exceeded")
+	ErrSessionBudgetExceeded = errors.New("budget reached")
 )
 
 // jsonRPCCodedError carries an explicit JSON-RPC error code so a handler can

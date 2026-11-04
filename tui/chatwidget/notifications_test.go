@@ -13,8 +13,13 @@ func TestNotificationDisplay(t *testing.T) {
 		t.Fatalf("empty agent display = %q", got)
 	}
 	longCommand := "echo " + strings.Repeat("x", 40)
-	if got := ExecApprovalRequestedNotification(longCommand).Display(); got != "Approval requested: echo xxxxxxxxxxxxxxxxxxxxxx..." {
+	// Rust #59256 no longer truncates the notification subject; the terminal
+	// backend owns display limits.
+	if got := ExecApprovalRequestedNotification(longCommand).Display(); got != "Approval requested: "+longCommand {
 		t.Fatalf("exec display = %q", got)
+	}
+	if got := ExecApprovalRequestedSubjectNotification("send terminal input").Display(); got != "Approval requested: send terminal input" {
+		t.Fatalf("subject display = %q", got)
 	}
 	if got := ExecApprovalRequestedNotification("  go test  ").Display(); got != "Approval requested:   go test  " {
 		t.Fatalf("exec display should preserve command spacing, got %q", got)

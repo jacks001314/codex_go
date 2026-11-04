@@ -73,10 +73,14 @@ type ItemStartedNotification struct {
 }
 
 type ItemCompletedNotification struct {
-	Item          ThreadItemPayload `json:"item"`
-	ThreadID      string            `json:"threadId"`
-	TurnID        string            `json:"turnId"`
-	CompletedAtMS int64             `json:"completedAtMs"`
+	Item     ThreadItemPayload `json:"item"`
+	ThreadID string            `json:"threadId"`
+	TurnID   string            `json:"turnId"`
+	// ContentTokenCount is the producer-supplied native content-token count for
+	// a completed assistant message, including any sampled footer (Rust
+	// #59041). Null when unavailable; never part of the stored thread item.
+	ContentTokenCount *uint64 `json:"contentTokenCount"`
+	CompletedAtMS     int64   `json:"completedAtMs"`
 }
 
 type TurnStartedNotification struct {

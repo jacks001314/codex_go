@@ -232,7 +232,7 @@ var configTuiFields = map[string]configFieldKind{
 	"model_availability_nux":          {kind: configKindStruct, expected: "ModelAvailabilityNuxConfig"},
 	"terminal_resize_reflow_max_rows": {kind: configKindUsize, expected: "usize"},
 	"notifications":                   {kind: configKindUntaggedEnum, expected: "Notifications", allowBool: true, flattenPath: true},
-	"notification_method":             {kind: configKindEnum, variants: []string{"auto", "osc9", "bel"}, stringOrMap: true, flattenPath: true},
+	"notification_method":             {kind: configKindEnum, variants: []string{"auto", "osc9", "osc777", "bel"}, stringOrMap: true, flattenPath: true},
 	"notification_condition":          {kind: configKindEnum, variants: []string{"unfocused", "always"}, stringOrMap: true, flattenPath: true},
 }
 

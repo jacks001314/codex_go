@@ -1,6 +1,9 @@
 package tui
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestNotificationSequenceOSC9AndBEL(t *testing.T) {
 	if got := NotificationSequence(NotificationMethodOSC9, "hello", NotificationSequenceOptions{}); got != "\x1b]9;hello\x07" {
@@ -9,7 +12,9 @@ func TestNotificationSequenceOSC9AndBEL(t *testing.T) {
 	if got := NotificationSequence(NotificationMethodBEL, "hello", NotificationSequenceOptions{}); got != "\x07" {
 		t.Fatalf("BEL sequence = %q", got)
 	}
-	if got := NotificationSequence(NotificationMethodOSC9, "danger\x1b[31m", NotificationSequenceOptions{Tmux: true}); got != "\x1bPtmux;\x1b\x1b]9;danger\x1b\x1b[31m\x07\x1b\\" {
+	// Control characters are replaced before the tmux DCS wrapper escapes
+	// (Rust #59256).
+	if got := NotificationSequence(NotificationMethodOSC9, "danger\x1b[31m", NotificationSequenceOptions{Tmux: true}); got != "\x1bPtmux;\x1b\x1b]9;danger [31m\x07\x1b\\" {
 		t.Fatalf("tmux OSC9 sequence = %q", got)
 	}
 }
@@ -72,5 +77,37 @@ func TestTerminalProgramSupportsOSC9MatchesRustNormalization(t *testing.T) {
 		if terminalProgramSupportsOSC9(value) {
 			t.Fatalf("%q should not support OSC9", value)
 		}
+	}
+}
+
+// Rust #59256: OSC 777 sends a title and plain-text body, replacing field
+// delimiters and control characters, directly and through tmux.
+func TestNotificationSequenceOSC777LikeRust(t *testing.T) {
+	if got := NotificationSequence(NotificationMethodOSC777, "Approval requested: cargo test; git clean\x07\x1b\u009c-fd", NotificationSequenceOptions{}); got != "\x1b]777;notify;Codex;Approval requested: cargo test； git clean   -fd\x1b\\" {
+		t.Fatalf("OSC777 sequence = %q", got)
+	}
+	if got := NotificationSequence(NotificationMethodOSC777, "done", NotificationSequenceOptions{Tmux: true}); got != "\x1bPtmux;\x1b\x1b]777;notify;Codex;done\x1b\x1b\\\x1b\\" {
+		t.Fatalf("tmux OSC777 sequence = %q", got)
+	}
+	if got := NotificationSequence(NotificationMethodAuto, "done", NotificationSequenceOptions{SupportsOSC9: true}); got != "\x1b]9;done\x07" {
+		t.Fatalf("auto sequence changed = %q", got)
+	}
+	if got := NotificationSequence(NotificationMethodOSC9, "a", NotificationSequenceOptions{}); got != "\x1b]9;a\x07" {
+		t.Fatalf("OSC9 sequence = %q", got)
+	}
+}
+
+// Rust #59256 truncates Ghostty notification bodies to its 255-byte buffer on
+// a rune boundary and appends an ellipsis.
+func TestNotificationSequenceTruncatesGhosttyBodyLikeRust(t *testing.T) {
+	prefix := "Approval requested: " + strings.Repeat("a", 231)
+	message := prefix + "🦀" + strings.Repeat("b", 2048)
+	wantOSC9 := "\x1b]9;" + prefix + "…\x07"
+	if got := NotificationSequence(NotificationMethodOSC9, message, NotificationSequenceOptions{Ghostty: true}); got != wantOSC9 {
+		t.Fatalf("ghostty OSC9 = %q", got)
+	}
+	wantOSC777 := "\x1b]777;notify;Codex;" + prefix + "…\x1b\\"
+	if got := NotificationSequence(NotificationMethodOSC777, message, NotificationSequenceOptions{Ghostty: true}); got != wantOSC777 {
+		t.Fatalf("ghostty OSC777 = %q", got)
 	}
 }

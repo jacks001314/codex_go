@@ -162,6 +162,11 @@ type AgentItem struct {
 	Execution             string
 	Search                map[string]any
 	Data                  map[string]any
+	// ContentTokenCount is the producer-supplied native content-token count
+	// for a completed assistant message, including any sampled footer.
+	// It is completion telemetry only: it never enters stored items or model
+	// requests, so it is excluded from JSON.
+	ContentTokenCount *uint64 `json:"-"`
 
 	// Locally observed metadata is intentionally private so JSON input cannot
 	// forge warehouse-only executed-tool records.

@@ -29,7 +29,7 @@ func TestValidateTuiConfigTable(t *testing.T) {
 		{
 			name: "notification method lists variants at the table path",
 			toml: "[tui]\nnotification_method = \"bogus\"\n",
-			want: "unknown variant `bogus`, expected one of `auto`, `osc9`, `bel`\nin `tui`",
+			want: "unknown variant `bogus`, expected one of `auto`, `osc9`, `osc777`, `bel`\nin `tui`",
 		},
 		{
 			name: "notification method type",

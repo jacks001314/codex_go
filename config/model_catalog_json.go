@@ -863,14 +863,15 @@ func catalogSimpleStruct(name string) *catalogStructSpec {
 }
 
 var (
-	catalogTruncationModeVariants = []string{"bytes", "tokens"}
-	catalogVisibilityVariants     = []string{"list", "hide", "none"}
-	catalogShellTypeVariants      = []string{"default", "local", "shell_command", "unified_exec", "disabled"}
-	catalogSummaryVariants        = []string{"auto", "concise", "detailed", "none"}
-	catalogVerbosityVariants      = []string{"low", "medium", "high"}
-	catalogModalityVariants       = []string{"text", "image", "audio"}
-	catalogWebSearchVariants      = []string{"text", "text_and_image"}
-	catalogApplyPatchVariants     = []string{"freeform"}
+	catalogTruncationModeVariants    = []string{"bytes", "tokens"}
+	catalogVisibilityVariants        = []string{"list", "hide", "none"}
+	catalogShellTypeVariants         = []string{"default", "local", "shell_command", "unified_exec", "disabled"}
+	catalogSummaryVariants           = []string{"auto", "concise", "detailed", "none"}
+	catalogVerbosityVariants         = []string{"low", "medium", "high"}
+	catalogModalityVariants          = []string{"text", "image", "audio"}
+	catalogWebSearchVariants         = []string{"text", "text_and_image"}
+	catalogWebSearchProviderVariants = []string{"standalone", "search_mcp"}
+	catalogApplyPatchVariants        = []string{"freeform"}
 
 	catalogTruncationPolicySpec = &catalogStructSpec{
 		name: "TruncationPolicyConfig",
@@ -979,6 +980,7 @@ var (
 			{name: "default_verbosity", kind: catalogTypeEnum, optional: true, variants: catalogVerbosityVariants},
 			{name: "apply_patch_tool_type", kind: catalogTypeEnum, optional: true, variants: catalogApplyPatchVariants},
 			{name: "web_search_tool_type", kind: catalogTypeEnum, hasDefault: true, variants: catalogWebSearchVariants},
+			{name: "web_search_provider", kind: catalogTypeEnum, optional: true, variants: catalogWebSearchProviderVariants},
 			{name: "truncation_policy", kind: catalogTypeStruct, structTy: catalogTruncationPolicySpec},
 			{name: "supports_image_detail_original", kind: catalogTypeBool, hasDefault: true},
 			{name: "context_window", kind: catalogTypeI64, optional: true},
