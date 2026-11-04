@@ -29,6 +29,7 @@ import (
 	"codex_go/plugin"
 	"codex_go/protocol"
 	"codex_go/review"
+	"codex_go/sessionlock"
 	"codex_go/shell"
 	codextui "codex_go/tui"
 	agentsoverview "codex_go/tui/agents_overview"
@@ -1407,6 +1408,9 @@ type Options struct {
 	// OnVoiceConversationStart starts a local voice session. A nil hook leaves
 	// /voice unavailable for this runtime.
 	OnVoiceConversationStart func(threadID string, attemptID uint64) bubbletea.Cmd
+	// VoiceLockDetector overrides the platform session lock detector; tests
+	// inject one and nil uses sessionlock.SystemDetector (Rust #59330).
+	VoiceLockDetector sessionlock.Detector
 	// OnVoiceNotifications streams realtime voice notifications for the local
 	// helper session. The router that owns the session must outlive the start
 	// request, so a nil hook would leave the session stuck in connecting.
@@ -1746,6 +1750,10 @@ type Model struct {
 	// onVoiceConversationStart starts a voice session when the runtime layer has
 	// wired a packaged helper to this model.
 	onVoiceConversationStart func(threadID string, attemptID uint64) bubbletea.Cmd
+	// voiceLockDetector observes the desktop session lock for the active call
+	// (Rust #59330). Nil uses the platform detector.
+	voiceLockDetector sessionlock.Detector
+	voiceLockStop     chan struct{}
 	// onVoiceNotifications delivers realtime notifications from the session's
 	// persistent runtime router.
 	onVoiceNotifications func() <-chan VoiceNotificationMsg
@@ -3391,6 +3399,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		pendingExternalAgentImports:      map[string]bool{},
 		onReadRolloutPath:                options.OnReadRolloutPath,
 		onVoiceConversationStart:         options.OnVoiceConversationStart,
+		voiceLockDetector:                options.VoiceLockDetector,
 		onVoiceNotifications:             options.OnVoiceNotifications,
 		onVoiceApplyAnswer:               options.OnVoiceApplyAnswer,
 		onVoiceCloseHelper:               options.OnVoiceCloseHelper,
@@ -4124,6 +4133,8 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		cmd := m.handleVoiceNotification(msg.Notification)
 		// Keep exactly one reader outstanding while the session is live.
 		return m, bubbletea.Batch(cmd, m.refreshStatusControlsCmd(), m.waitVoiceNotificationCmd())
+	case VoiceSessionLockedMsg:
+		return m, bubbletea.Batch(m.applyVoiceSessionLocked(msg), m.refreshStatusControlsCmd())
 	case VoiceAnswerResultMsg:
 		cmd := m.handleVoiceAnswerResult(msg)
 		return m, bubbletea.Batch(cmd, m.refreshStatusControlsCmd())
@@ -10739,6 +10750,11 @@ func (m *Model) applyVoiceCommand(args string) bubbletea.Cmd {
 		m.stopVoiceConversation()
 		return nil
 	}
+	// Rust #59330: an already locked session never opens audio.
+	if m.voiceSessionInitiallyLocked() {
+		m.recordVoiceCommandResult(voiceSessionLockedMessage)
+		return nil
+	}
 	availability := chatwidget.CheckVoiceCommandAvailability(chatwidget.VoiceCommandContext{
 		Phase:             m.VoiceConversation.Phase,
 		FeatureEnabled:    true,
@@ -10761,6 +10777,7 @@ func (m *Model) applyVoiceCommand(args string) bubbletea.Cmd {
 	return bubbletea.Batch(
 		m.onVoiceConversationStart(m.VoiceConversation.ThreadID, m.VoiceConversation.AttemptID),
 		m.waitVoiceNotificationCmd(),
+		m.watchVoiceSessionLockCmd(m.VoiceConversation.AttemptID),
 	)
 }
 
@@ -10879,6 +10896,7 @@ func (m *Model) handleVoiceNotification(notification chatwidget.VoiceNotificatio
 		cmd = m.publishVoiceAnswer(effect.PublishSDP)
 	}
 	if effect.CloseHelper {
+		m.stopVoiceLockWatch()
 		m.recordVoiceStopFailure(m.closeVoiceHelper())
 	}
 	// Rendering is deduplicated, so a completed caption appears exactly once
@@ -11018,6 +11036,7 @@ func (m *Model) pushVoiceMeterSample(microphonePeak uint16, speakerPeak uint16) 
 // stopVoiceConversation ends a running conversation on the user's request and
 // classifies a failed stop request (Rust #52756).
 func (m *Model) stopVoiceConversation() {
+	m.stopVoiceLockWatch()
 	m.VoiceConversation.BeginVoiceStop()
 	m.recordVoiceCommandResult("Stopping voice conversation.")
 	m.recordVoiceStopFailure(m.retireVoiceHelper(true))
@@ -11034,6 +11053,7 @@ func (m *Model) closeVoiceHelper() error {
 // passes false because the shared connection is already gone and the RPC cannot
 // succeed (Rust retires local media without another request).
 func (m *Model) retireVoiceHelper(notifyServer bool) error {
+	m.stopVoiceLockWatch()
 	m.VoiceConversation.FinishVoiceLiveTranscripts()
 	m.refreshVoiceTranscript()
 	m.realtimeHelperAttached = false
