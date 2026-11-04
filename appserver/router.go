@@ -284,7 +284,7 @@ func (r *Router) acquireLifecycleWriters(threadIDs []session.ThreadID) ([]*sessi
 	return r.threadManager().AcquireLifecycleWriters(r.store, threadIDs)
 }
 
-// liveThreadForFork resolves a live source owned by any Router in this
+// liveThreadForFork resolves a source writer owned by any Router in this
 // process. Rust's LocalThreadStore shares its live-writer registry across every
 // app-server connection; Go's connection-scoped ThreadManager needs this store
 // lookup to preserve the same fork behavior.
@@ -308,10 +308,8 @@ func (r *Router) liveThreadForFork(threadID session.ThreadID) *session.LiveThrea
 // process-owned handle, while a writer from another process still reaches the
 // ordinary acquisition error.
 func (r *Router) acquireForkSourceWriter(threadID session.ThreadID) ([]*session.WriterLock, error) {
-	if r.threadManager().LiveThread(threadID) == nil && r.store != nil {
-		if liveThread := r.store.LiveThread(threadID); liveThread != nil && liveThread.OwnsWriter() {
-			return nil, nil
-		}
+	if r.liveThreadForFork(threadID) != nil {
+		return nil, nil
 	}
 	return r.acquireLifecycleWriters([]session.ThreadID{threadID})
 }
