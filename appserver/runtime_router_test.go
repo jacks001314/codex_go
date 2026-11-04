@@ -44,6 +44,7 @@ import (
 	"codex_go/model"
 	"codex_go/plugin"
 	promptctx "codex_go/prompt"
+	"codex_go/protocol"
 	"codex_go/remotecontrol"
 	"codex_go/review"
 	"codex_go/rollout"
@@ -29459,5 +29460,35 @@ func TestRuntimeRouterAssemblesDeferMailboxPreemptionFromFeatureSettingsLikeRust
 				t.Fatalf("DeferMailboxPreemptionEnabled() = %t, want %t (config=%v)", got, tc.want, tc.config)
 			}
 		})
+	}
+}
+
+// Mirrors Rust #59328: a persisted context window id outside the UUIDv7 format
+// is ignored when the thread resumes.
+func TestRestoreConversationWindowIgnoresNonUUIDv7IdentityLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := fixedTime()
+	const threadID = "thread-window-legacy"
+	if err := store.Create(&session.Record{
+		ID: session.ThreadID(threadID), SessionID: threadID,
+		CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+		Metadata: session.Metadata{Model: "gpt-5.4", Extra: map[string]any{
+			"auto_compact_window_number":     int64(2),
+			"auto_compact_context_window_id": "context-legacy",
+		}},
+	}); err != nil {
+		t.Fatalf("Create record error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	router.restoreConversationWindow(threadID)
+	if got := router.windowNumberForThread(threadID); got != 2 {
+		t.Fatalf("restored window number = %d, want 2", got)
+	}
+	id := router.contextWindowIDForThread(threadID)
+	if id == "context-legacy" {
+		t.Fatal("restored a legacy context window id")
+	}
+	if _, ok := protocol.ParseContextWindowID(id); !ok {
+		t.Fatalf("expected a fresh UUIDv7 context window id, got %q", id)
 	}
 }

@@ -20,6 +20,7 @@ import (
 	"codex_go/install"
 	"codex_go/memories"
 	"codex_go/model"
+	"codex_go/protocol"
 	"codex_go/sandbox"
 	"codex_go/session"
 	"codex_go/state"
@@ -89,7 +90,9 @@ func (e *appServerMemoryStageOne) ExtractMemory(ctx context.Context, request mem
 	inputItems := make([]any, 0, len(texts))
 	for _, text := range texts {
 		inputItems = append(inputItems, map[string]any{
-			"id":   "msg_" + uuid.NewString(),
+			// Rust #59312: generated item ids use the shared UUIDv7 item id
+			// generator instead of a raw random UUID.
+			"id":   protocol.NewUUIDv7ItemIDGenerator()("msg"),
 			"type": "message",
 			"role": "user",
 			"content": []map[string]any{{

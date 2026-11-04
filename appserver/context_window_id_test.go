@@ -1,6 +1,10 @@
 package appserver
 
-import "testing"
+import (
+	"testing"
+
+	"codex_go/protocol"
+)
 
 func TestContextWindowIDForThreadIsStableAndAdvancesOnReset(t *testing.T) {
 	router := &RuntimeRouter{}
@@ -20,10 +24,21 @@ func TestContextWindowIDForThreadIsStableAndAdvancesOnReset(t *testing.T) {
 	}
 }
 
-func TestNewContextWindowIDIsUUIDShaped(t *testing.T) {
+func TestNewContextWindowIDIsUUIDv7(t *testing.T) {
+	// Rust #59328: context window IDs are UUIDv7 strings.
 	id := newContextWindowID()
-	if len(id) != 36 {
-		t.Fatalf("expected a 36-char UUID, got %q (len %d)", id, len(id))
+	parsed, ok := protocol.ParseContextWindowID(id)
+	if !ok || len(id) != 36 || parsed.String() != id {
+		t.Fatalf("expected a canonical UUIDv7, got %q (ok=%v)", id, ok)
+	}
+	if _, ok := protocol.ParseContextWindowID("6f1c2d3e-0000-4000-8000-000000000000"); ok {
+		t.Fatal("a UUIDv4 value was accepted as a context window id")
+	}
+	if _, ok := protocol.ParseContextWindowID("context-1"); ok {
+		t.Fatal("a non-UUID value was accepted as a context window id")
+	}
+	if _, ok := protocol.ParseContextWindowID(""); ok {
+		t.Fatal("an empty value was accepted as a context window id")
 	}
 }
 

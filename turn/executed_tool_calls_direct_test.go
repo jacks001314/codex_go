@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"codex_go/model"
 	"codex_go/tool"
 )
@@ -304,5 +306,23 @@ func TestToolDispatcherAttachesDirectMetadataLikeRust(t *testing.T) {
 	recorder.mu.Unlock()
 	if pending != 0 {
 		t.Fatalf("pending direct calls = %d, want 0", pending)
+	}
+}
+
+// Mirrors Rust #59312: a direct tool output that has no id mints one from the
+// shared UUIDv7 item id generator (`fco_<uuidv7>`).
+func TestDirectToolOutputIDIsUUIDv7LikeRust(t *testing.T) {
+	recorder := NewExecutedToolCallRecorder()
+	call, permit := recorder.PrepareDirectCall(directMetadataTestInvocation("call-uuid", `{"text":"hi"}`), "")
+	output := &ToolResponseItem{Type: "function_call_output", CallID: "call-uuid", Output: NewFunctionCallOutputPayload("ok", nil)}
+	recorder.AttachDirectCallToOutput(output, call, permit)
+	permit.Release()
+	suffix, ok := strings.CutPrefix(output.ID, "fco_")
+	if !ok {
+		t.Fatalf("assigned response item ID = %q, want an fco_ prefix", output.ID)
+	}
+	parsed, err := uuid.Parse(suffix)
+	if err != nil || parsed.Version() != 7 {
+		t.Fatalf("assigned response item ID = %q, want a UUIDv7 suffix", output.ID)
 	}
 }

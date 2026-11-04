@@ -115,6 +115,9 @@ func TestMemoryStageOneUsesDetachedResponsesRequestLikeRust(t *testing.T) {
 	}
 	if id, _ := item["id"].(string); !strings.HasPrefix(id, "msg_") {
 		t.Fatalf("memory input item id = %#v", item["id"])
+	} else if parsed, err := uuid.Parse(strings.TrimPrefix(id, "msg_")); err != nil || parsed.Version() != 7 {
+		// Rust #59312: generated item ids are UUIDv7.
+		t.Fatalf("memory input item id = %#v, want a UUIDv7 suffix", item["id"])
 	}
 	if role, _ := item["role"].(string); role != "user" {
 		t.Fatalf("memory input item role = %#v", item["role"])

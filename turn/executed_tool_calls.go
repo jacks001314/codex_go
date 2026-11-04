@@ -2,12 +2,12 @@ package turn
 
 import (
 	"encoding/json"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 
 	"codex_go/model"
+	"codex_go/protocol"
 	"codex_go/retainedctx"
 	"codex_go/tool"
 )
@@ -61,9 +61,6 @@ type ExecutedToolCallRecorder struct {
 	// sampling restores from here and prunes only when the item leaves the live
 	// window (Rust #49401).
 	directCalls map[string]model.ExecutedToolCall
-	// nextDirectItemID mints a stable fco_* ID for output items that do not have
-	// one yet. The prefix is stripped when response item IDs are disabled.
-	nextDirectItemID uint64
 	// historySeeded records that the first prompt's supplied history was
 	// indexed. Rust indexes the session's initial history at construction; Go
 	// records are created before the thread's first sampling request, so the
@@ -511,8 +508,9 @@ func (r *ExecutedToolCallRecorder) AttachDirectCallToOutput(item any, call *mode
 	}
 	itemID := executedToolCallResponseItemID(item)
 	if itemID == "" {
-		r.nextDirectItemID++
-		if assignExecutedToolCallResponseItemID(item, "fco_"+strconv.FormatUint(r.nextDirectItemID, 10)) {
+		// Rust #59312: direct tool outputs mint their history id through the
+		// session's item id generator instead of a per-recorder counter.
+		if assignExecutedToolCallResponseItemID(item, protocol.NewUUIDv7ItemIDGenerator()("fco")) {
 			itemID = executedToolCallResponseItemID(item)
 		}
 	}

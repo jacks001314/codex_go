@@ -2,7 +2,6 @@ package appserver
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20499,14 +20498,10 @@ func (r *RuntimeRouter) advanceContextWindowID(threadID string) {
 	r.contextWindowIDs[threadID] = newContextWindowID()
 }
 
+// newContextWindowID mints a UUIDv7 context window identity (Rust #59328
+// ContextWindowId::new_uuid_v7).
 func newContextWindowID() string {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return fmt.Sprintf("%x", time.Now().UnixNano())
-	}
-	b[6] = (b[6] & 0x0f) | 0x40
-	b[8] = (b[8] & 0x3f) | 0x80
-	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+	return protocol.NewContextWindowID().String()
 }
 
 // restoreConversationWindow loads a thread's persisted conversation window once.
@@ -20552,12 +20547,14 @@ func (r *RuntimeRouter) restoreConversationWindow(threadID string) {
 			r.windowNumbers[threadID] = restored
 		}
 	}
-	if windowID != "" {
+	// Rust #59328: persisted ids outside the UUIDv7 format are ignored, so a
+	// legacy value cannot pin the resumed thread to an unsupported identity.
+	if parsed, ok := protocol.ParseContextWindowID(windowID); ok {
 		if r.contextWindowIDs == nil {
 			r.contextWindowIDs = map[string]string{}
 		}
 		if r.contextWindowIDs[threadID] == "" {
-			r.contextWindowIDs[threadID] = windowID
+			r.contextWindowIDs[threadID] = parsed.String()
 		}
 	}
 }
