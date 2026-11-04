@@ -9180,6 +9180,9 @@ func (r *RuntimeRouter) commitThreadSettingsUpdateWithConnection(params *Setting
 		return nil, nil
 	}
 	service := r.requireThreadExtras()
+	// Rust #59111: an incoming settings write is normalized against the latest
+	// provider catalog before it is committed and persisted.
+	r.normalizeChatSettingsUpdate(params)
 	response, committed, err := service.UpdateSettingsWithCommit(params)
 	if err != nil {
 		return nil, err
@@ -9248,6 +9251,8 @@ func (r *RuntimeRouter) prepareTurnStartParams(params *turn.TurnStartParams) err
 		params.Config = map[string]any{}
 	}
 	params.Config = mergeTurnConfigOverrides(threadRecordConfigOverrides(record), params.Config)
+	// Rust #59111: normalize incoming choices before this turn captures them.
+	normalizeTurnStartChatSettings(params.Config, r.modelInfoForRuntime(strings.TrimSpace(params.Model)))
 	if len(params.DynamicTools) == 0 {
 		params.DynamicTools = dynamicToolsFromRecordMetadata(record.Metadata)
 	}

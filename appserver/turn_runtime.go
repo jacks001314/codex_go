@@ -7676,8 +7676,10 @@ func (r *RuntimeRouter) compactRunnerForRecord(record *session.Record, request *
 	if cfg, cfgErr := r.effectiveConfigForTurn(compactionParams); cfgErr == nil && cfg != nil {
 		compactionMetadataEnabled = features.Enabled(cfg.FeatureSettings(), "executed_tool_call_metadata")
 		overrideEffort, overrideAvailable := r.effortForConfigurationUpdate(string(record.ID), cfg, compactionParams, compactInfo, providerID)
-		compactionEffort = r.reasoningEffortForRequest(
+		compactionEffort = r.reasoningEffortForRequestWithModel(
 			string(record.ID),
+			compactInfo,
+			catalogModelOrigin(r.catalogModelForAppTurn(compactModel, cfg, compactionParams)),
 			reasoningEffortModelSlug(compactInfo, compactModel),
 			appReasoningEffortForTurn(cfg, compactionParams),
 			r.reasoningEffortOverrideEnabled(string(record.ID), cfg, compactInfo, providerID),
@@ -8957,7 +8959,7 @@ func (r *RuntimeRouter) appTurnConfigWithOptions(ctx context.Context, threadID s
 		overrideInputItems = r.reasoningEffortOverrideInputItems(threadID, reasoningEffortModel, overrideEffort, overrideAvailable, historyItems)
 		requestEffortUsage = requestEffortSampling
 	}
-	requestReasoningEffort := r.reasoningEffortForRequest(threadID, reasoningEffortModel, appReasoningEffortForTurn(cfg, params), reasoningEffortOverride, overrideEffort, overrideAvailable, requestEffortUsage)
+	requestReasoningEffort := r.reasoningEffortForRequestWithModel(threadID, modelInfo, catalogModelOrigin(modelCatalog), reasoningEffortModel, appReasoningEffortForTurn(cfg, params), reasoningEffortOverride, overrideEffort, overrideAvailable, requestEffortUsage)
 	// Rust #51480: a responses-lite context window records its tool declarations
 	// once and replays them unchanged. The recorded prefix is placed ahead of the
 	// conversation so a resumed window never moves the declarations it already

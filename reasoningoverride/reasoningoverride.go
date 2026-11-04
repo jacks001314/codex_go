@@ -150,13 +150,46 @@ func OverrideInputItems(pin Pin, modelSlug, effort string, overrideAvailable boo
 // client-level gate (`OverrideEnabled`), so sampling with an unsupported model
 // clears a stale baseline (#46530) just like a disabled feature does.
 func RequestEffort(pin Pin, modelSlug, selectedEffort string, overrideEnabled bool, overrideEffort string, overrideAvailable bool, usage Usage) (string, Pin) {
+	return RequestEffortForModel(nil, model.ModelOriginBundled, pin, modelSlug, selectedEffort, overrideEnabled, overrideEffort, overrideAvailable, usage)
+}
+
+// PinDisallowedByModel mirrors Rust #59111: a pin the step's captured provider
+// catalog can no longer represent is retired. Bundled or synthetic metadata
+// keeps the pin, and a catalog without levels makes no claim about it.
+func PinDisallowedByModel(info *model.ModelInfo, origin model.ModelOrigin, pinned string) bool {
+	if info == nil || origin != model.ModelOriginProvider || len(info.SupportedReasoningLevels) == 0 {
+		return false
+	}
+	pinned = strings.TrimSpace(pinned)
+	if pinned == "" {
+		return false
+	}
+	for _, level := range info.SupportedReasoningLevels {
+		if model.ResolveReasoningEffort(info, level) == pinned {
+			return false
+		}
+	}
+	return true
+}
+
+// RequestEffortForModel is RequestEffort with the step's captured model
+// metadata. A disallowed pin is cleared while sampling and ignored by
+// compaction without mutating the live pin (Rust #59111).
+func RequestEffortForModel(info *model.ModelInfo, origin model.ModelOrigin, pin Pin, modelSlug, selectedEffort string, overrideEnabled bool, overrideEffort string, overrideAvailable bool, usage Usage) (string, Pin) {
+	disallowedPin := false
+	if pinned, ok := pin.Get(modelSlug); ok && PinDisallowedByModel(info, origin, pinned) {
+		disallowedPin = true
+		if usage == UsageSampling {
+			pin = Pin{}
+		}
+	}
 	if !overrideEnabled {
 		if usage == UsageSampling {
 			pin = Pin{}
 		}
 		return selectedEffort, pin
 	}
-	if usage == UsageCompaction {
+	if usage == UsageCompaction && !disallowedPin {
 		if pinned, ok := pin.Get(modelSlug); ok {
 			return pinned, pin
 		}

@@ -78,5 +78,9 @@ func (r *RuntimeRouter) refreshModelCatalogOnline() {
 	}
 	if _, err := service.List(&model.ModelListParams{RefreshStrategy: string(model.RefreshOnline)}); err != nil {
 		slog.Warn("model catalog refresh blocked by provider requirements")
+		return
 	}
+	// Rust #59111: publish the refreshed catalog to the saved settings of every
+	// open chat once a provider response succeeds.
+	r.normalizeSavedChatSettingsAfterRefresh()
 }

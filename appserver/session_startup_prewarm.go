@@ -314,8 +314,10 @@ func (r *RuntimeRouter) reasoningEffortForPrewarm(cfg *config.Config, params *tu
 	}
 	info := r.modelInfoForRuntimeWithConfig(modelID, cfg)
 	overrideEffort, overrideAvailable := r.effortForConfigurationUpdate(params.ThreadID, cfg, params, info, providerID)
-	return r.reasoningEffortForRequest(
+	return r.reasoningEffortForRequestWithModel(
 		params.ThreadID,
+		info,
+		catalogModelOrigin(r.catalogModelForAppTurn(modelID, cfg, params)),
 		reasoningEffortModelSlug(info, modelID),
 		appReasoningEffortForTurn(cfg, params),
 		r.reasoningEffortOverrideEnabled(params.ThreadID, cfg, info, providerID),

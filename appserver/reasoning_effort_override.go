@@ -205,10 +205,20 @@ func (r *RuntimeRouter) reasoningEffortOverrideInputItems(threadID, modelSlug, e
 // Sampling pins the selected effort for the current model; compaction reuses
 // the pin when it matches and never mutates it.
 func (r *RuntimeRouter) reasoningEffortForRequest(threadID, modelSlug, selectedEffort string, featureEnabled bool, overrideEffort string, overrideAvailable bool, usage requestEffortUsage) string {
+	return r.reasoningEffortForRequestWithModel(threadID, nil, "", modelSlug, selectedEffort, featureEnabled, overrideEffort, overrideAvailable, usage)
+}
+
+// reasoningEffortForRequestWithModel also sees the step's captured model
+// metadata, which can retire a pin the provider catalog no longer supports.
+func (r *RuntimeRouter) reasoningEffortForRequestWithModel(threadID string, info *model.ModelInfo, origin model.ModelOrigin, modelSlug, selectedEffort string, featureEnabled bool, overrideEffort string, overrideAvailable bool, usage requestEffortUsage) string {
 	if r == nil {
 		return selectedEffort
 	}
-	effort, pin := reasoningoverride.RequestEffort(
+	// Rust #59111: the step's captured catalog decides whether an existing pin
+	// is still representable.
+	effort, pin := reasoningoverride.RequestEffortForModel(
+		info,
+		origin,
 		r.reasoningEffortPinState(threadID),
 		modelSlug,
 		selectedEffort,
