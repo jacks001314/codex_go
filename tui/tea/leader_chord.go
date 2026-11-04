@@ -60,6 +60,23 @@ var leaderShortcuts = []struct {
 }{
 	{"global", "select_transcript", true},
 	{"chat", "open_presets", true},
+	{"global", "focus_main_composer", true},
+	{"global", "focus_sidebar_content", true},
+	{"global", "hide_pane", true},
+	{"global", "focus_pane_left", true},
+	{"global", "focus_pane_right", true},
+}
+
+// implicitWorkspaceLeaderCompletions are the free leader chords Rust installs
+// only when no explicit binding claims them (keymap/chords/leader_defaults.rs,
+// #59130/#59208/#59287). Keeping them out of the catalog defaults lets a user
+// assign the same chord to another action without a false conflict.
+var implicitWorkspaceLeaderCompletions = map[string][]string{
+	"global.focus_main_composer":   {"c"},
+	"global.focus_sidebar_content": {"s"},
+	"global.hide_pane":             {"-"},
+	"global.focus_pane_left":       {"left", "h"},
+	"global.focus_pane_right":      {"right", "l"},
 }
 
 // leaderBindingsFor collects every leader completion reachable from keySpec.
@@ -87,6 +104,16 @@ func (m *Model) leaderBindingsFor(keySpec string, allow func(action string) bool
 		action := shortcut.context + "." + shortcut.action
 		if allow != nil && !allow(action) {
 			continue
+		}
+		if shortcut.implicit && !custom {
+			if completions, ok := implicitWorkspaceLeaderCompletions[action]; ok {
+				if !m.leaderPrefixClaimed(keySpec, shortcut.context, shortcut.action) {
+					for _, completion := range completions {
+						actions[completion] = action
+					}
+				}
+				continue
+			}
 		}
 		for _, binding := range bindings {
 			completion, ok := codextui.LeaderSpecCompletion(binding)
@@ -131,6 +158,12 @@ func (m *Model) dispatchLeaderAction(action string) bubbletea.Cmd {
 		return m.beginTranscriptSelection()
 	case "chat.open_presets":
 		return m.openQuickDialMenu()
+	case "global.focus_main_composer", "global.focus_pane_left":
+		return m.focusMainComposer()
+	case "global.focus_sidebar_content", "global.focus_pane_right":
+		return m.focusSidebarContent()
+	case "global.hide_pane":
+		return m.hideFocusedSidePane()
 	default:
 		return nil
 	}

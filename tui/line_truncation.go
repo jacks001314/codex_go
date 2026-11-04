@@ -11,6 +11,9 @@ import (
 // Rust parity: codex-rs/tui/src/line_truncation.rs.
 
 func DisplayWidth(text string) int {
+	if strings.Contains(text, "\x1b") {
+		return ansi.StringWidth(text)
+	}
 	width := 0
 	graphemes := uniseg.NewGraphemes(text)
 	for graphemes.Next() {
@@ -32,6 +35,15 @@ func DisplayWidth(text string) int {
 func TruncateToWidth(text string, maxWidth int) string {
 	if maxWidth <= 0 || text == "" {
 		return ""
+	}
+	if strings.Contains(text, "\x1b") {
+		// uniseg may split a long CSI parameter sequence at the width boundary.
+		// Let the ANSI-aware truncator keep the escape intact and close any
+		// active style at the cut.
+		if ansi.StringWidth(text) <= maxWidth {
+			return text
+		}
+		return ansi.Truncate(text, maxWidth, "")
 	}
 	used := 0
 	var out strings.Builder

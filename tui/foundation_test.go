@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestUsableContentWidth(t *testing.T) {
@@ -25,6 +27,16 @@ func TestLineTruncationCountsWideRunes(t *testing.T) {
 	}
 	if got := TruncateWithEllipsis("abcdef", 4); got != "abc…" {
 		t.Fatalf("TruncateWithEllipsis = %q", got)
+	}
+}
+
+func TestTruncateToWidthPreservesLongANSISequence(t *testing.T) {
+	// The prompt fallback uses a long truecolor SGR prefix. Clipping the view at
+	// a narrow width must not split that CSI sequence into visible garbage.
+	line := "\x1b[38;2;238;238;238;48;2;68;68;68mhello world\x1b[0m"
+	got := TruncateToWidth(line, 5)
+	if stripped := ansi.Strip(got); stripped != "hello" {
+		t.Fatalf("visible text = %q, want hello (truncated=%q)", stripped, got)
 	}
 }
 

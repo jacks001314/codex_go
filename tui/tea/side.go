@@ -72,6 +72,63 @@ type SideStartParams struct {
 	RuntimeWorkspaceRoots []string
 }
 
+// focusMainComposer mirrors Rust #59208's workspace shortcut: return input to
+// the parent conversation while keeping both panes available.
+func (m *Model) focusMainComposer() bubbletea.Cmd {
+	if m == nil || m.activeSide == nil || !m.sideWorkspaceEnabled() {
+		return nil
+	}
+	if m.activeSide.ShowingSide {
+		return m.toggleSideConversation()
+	}
+	return nil
+}
+
+// focusSidebarContent focuses the side conversation. A pane hidden by
+// hide_focused_side_pane is retained and reopened here (Rust #59130/#59208).
+func (m *Model) focusSidebarContent() bubbletea.Cmd {
+	if m == nil || m.State == nil || !m.sideWorkspaceEnabled() {
+		return nil
+	}
+	if m.activeSide == nil {
+		threadID := strings.TrimSpace(m.State.ThreadID)
+		side := m.retainedSideConversationForParent(threadID)
+		if side == nil {
+			side = m.retainedSideConversationForThread(threadID)
+		}
+		if side == nil {
+			return nil
+		}
+		return m.activateRetainedSideConversation(side, "")
+	}
+	if m.activeSide.ShowingSide {
+		return nil
+	}
+	return m.toggleSideConversation()
+}
+
+// hideFocusedSidePane closes the visible pane while retaining the side
+// conversation, so the workspace shortcut can reopen it later (Rust #59130).
+func (m *Model) hideFocusedSidePane() bubbletea.Cmd {
+	if m == nil || m.State == nil || m.activeSide == nil || !m.sideWorkspaceEnabled() {
+		return nil
+	}
+	var cmd bubbletea.Cmd
+	if m.activeSide.ShowingSide {
+		cmd = m.toggleSideConversation()
+	}
+	side := m.activeSide
+	m.deactivateSideConversation()
+	if side != nil {
+		m.notice = "Side conversation hidden. Use the focus-sidebar shortcut to reopen."
+	}
+	m.refreshTranscript()
+	if cmd != nil {
+		return cmd
+	}
+	return m.refreshStatusControlsCmd()
+}
+
 func (m *Model) toggleSideConversation() bubbletea.Cmd {
 	if m == nil || m.State == nil || m.activeSide == nil {
 		return nil

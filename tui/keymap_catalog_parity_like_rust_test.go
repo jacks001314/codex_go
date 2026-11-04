@@ -36,10 +36,11 @@ import (
 // slip past this file. T-b14 added agents.fork (#49517) and global.find_transcript
 // (#46734), and moved agents.search to the upstream f3// pair, taking the pinned
 // size from 152 to 154, and T-b15 added global.focus_activity (#46734),
-// taking it to 155. #54381 added chat.open_presets, taking it to 156.
+// taking it to 155. #54381 added chat.open_presets, taking it to 156, and
+// #59130/#59208/#59287 added the five workspace pane actions, taking it to 161.
 // #57223 adds global.select_transcript as a config-only TuiKeymap field, so it
 // stays out of this catalog (Rust keeps it out of KEYMAP_ACTIONS too).
-const keymapCatalogEntryCount = 156
+const keymapCatalogEntryCount = 161
 
 // rustOnlyKeymapActions: Rust actions this Go tree does not register and whose
 // behavior is genuinely missing (still blocked). T-b14 landed agents.fork and
@@ -48,12 +49,7 @@ const keymapCatalogEntryCount = 156
 // T-b12 §T12 originally listed 14; T-b13 accepted 9 as renames and T-b14 landed 3
 // (pager.find, agents.fork, global.find_transcript).
 var rustOnlyKeymapActions = map[string]string{
-	"global.change_host":           "Go's TUI binds one app-server backend per process, so there is no host list to cycle (Rust #59007 n/a)",
-	"global.focus_main_composer":   "pending: workspace focus shortcuts (Rust #59208/#59287) are queued in update/plan_2026_11_04.md",
-	"global.focus_sidebar_content": "pending: workspace focus shortcuts (Rust #59130/#59208/#59287) are queued in update/plan_2026_11_04.md",
-	"global.hide_pane":             "pending: hide-focused-side-pane shortcut (Rust #59130) is queued in update/plan_2026_11_04.md",
-	"global.focus_pane_left":       "pending: directional workspace focus (Rust #59287) is queued in update/plan_2026_11_04.md",
-	"global.focus_pane_right":      "pending: directional workspace focus (Rust #59287) is queued in update/plan_2026_11_04.md",
+	"global.change_host": "Go's TUI binds one app-server backend per process, so there is no host list to cycle (Rust #59007 n/a)",
 }
 
 // goOnlyKeymapActions are catalog entries upstream does not declare. Keep them:
