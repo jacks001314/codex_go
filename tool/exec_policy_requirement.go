@@ -65,6 +65,17 @@ func applyExecPolicyRequirement(request *ShellRequest, validation ShellValidatio
 	)
 	switch requirement.Kind {
 	case safety.ExecForbidden:
+		if dangerousCommandApprovalWithinPermissions(request, validation, context, evaluation, requirement) {
+			if validation.PermissionsPreapproved {
+				return nil
+			}
+			// Rust #59120: reviewing a dangerous command does not grant extra
+			// permissions, and no reusable amendment is offered for this approval.
+			request.ApprovalRequired = true
+			request.ApprovalReason = ""
+			request.PrefixRule = nil
+			return nil
+		}
 		reason := strings.TrimSpace(requirement.Reason)
 		if reason == "" {
 			reason = "command rejected by exec policy"
@@ -105,6 +116,49 @@ func applyExecPolicyRequirement(request *ShellRequest, validation ShellValidatio
 		}
 	}
 	return nil
+}
+
+// dangerousCommandApprovalWithinPermissions mirrors Rust #59120: a heuristic
+// dangerous-command prompt may still reach review when granular sandbox
+// approvals are disabled, provided the call asks for no sandbox override and
+// the Windows sandbox is actually protecting a managed filesystem profile.
+func dangerousCommandApprovalWithinPermissions(
+	request *ShellRequest,
+	validation ShellValidationOptions,
+	context shellExecPolicyContext,
+	evaluation safety.Evaluation,
+	requirement safety.ExecRequirement,
+) bool {
+	if request == nil || strings.TrimSpace(requirement.Reason) != safety.RejectSandboxApprovalReason {
+		return false
+	}
+	policy := shellApprovalPolicy(&validation)
+	if policy.Mode != safety.ApprovalGranular || policy.SandboxApproval {
+		return false
+	}
+	promptIsRule := false
+	for _, match := range evaluation.MatchedRules {
+		if match.IsPolicy && match.Decision == evaluation.Decision {
+			promptIsRule = true
+			break
+		}
+	}
+	if promptIsRule {
+		return false
+	}
+	dangerous := false
+	for _, command := range context.commands {
+		if _, ok := execPolicyDangerousCommandMatch(command, context); ok {
+			dangerous = true
+			break
+		}
+	}
+	if !dangerous || RequestsSandboxOverride(request.SandboxPermissions) {
+		return false
+	}
+	return !(context.platform == execpolicy.DangerousCommandPlatformWindows &&
+		context.windowsSandboxLevel == sandbox.WindowsSandboxDisabled &&
+		execPolicyPermissionProfileRestricted(context.permissionProfile))
 }
 
 func shellExecPolicyContextFor(request *ShellRequest, validation ShellValidationOptions, platform execpolicy.DangerousCommandPlatform) shellExecPolicyContext {

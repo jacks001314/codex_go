@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"codex_go/execpolicy"
+	"codex_go/safety"
 	"codex_go/sandbox"
 	shellutil "codex_go/shell"
 )
@@ -349,5 +350,55 @@ func TestExecPolicyNeverForbidsDangerousUnmatchedCommandLikeRust(t *testing.T) {
 	validation := ShellValidationOptions{ApprovalPolicy: sandbox.ApprovalNever}
 	if err := applyExecPolicyRequirement(request, validation, execpolicy.DangerousCommandPlatformPosix); err == nil {
 		t.Fatal("error = nil, want a forbidden requirement")
+	}
+}
+
+// Rust #59120: granular sandbox_approval=false still permits review of a
+// heuristic dangerous command that requests no sandbox override, without
+// offering a reusable execution-policy amendment.
+func TestExecPolicyGranularDangerousCommandReviewLikeRust(t *testing.T) {
+	request := execPolicyTestRequest([]string{"rm", "-f", "recording.mp4"})
+	validation := ShellValidationOptions{
+		ApprovalPolicy:          sandbox.ApprovalGranular,
+		GranularSandboxApproval: false,
+		GranularRules:           false,
+	}
+	if err := applyExecPolicyRequirement(request, validation, execpolicy.DangerousCommandPlatformPosix); err != nil {
+		t.Fatalf("applyExecPolicyRequirement() error = %v", err)
+	}
+	if !request.ApprovalRequired {
+		t.Fatal("ApprovalRequired = false, want dangerous-command review")
+	}
+	if len(request.PrefixRule) != 0 {
+		t.Fatalf("PrefixRule = %#v, want no reusable amendment", request.PrefixRule)
+	}
+
+	for _, permissions := range []sandbox.SandboxPermissions{
+		sandbox.SandboxPermissionsWithAdditionalPermissions,
+		sandbox.SandboxPermissionsRequireEscalated,
+	} {
+		request := execPolicyTestRequest([]string{"rm", "-f", "recording.mp4"})
+		request.SandboxPermissions = permissions
+		err := applyExecPolicyRequirement(request, validation, execpolicy.DangerousCommandPlatformPosix)
+		if err == nil || !strings.Contains(err.Error(), safety.RejectSandboxApprovalReason) {
+			t.Fatalf("permissions %q error = %v, want the existing sandbox-approval rejection", permissions, err)
+		}
+	}
+}
+
+// Rust #59120 keeps Windows execution without a required sandbox on the existing
+// rejection path.
+func TestExecPolicyGranularDangerousCommandRequiresWindowsSandboxLikeRust(t *testing.T) {
+	request := execPolicyTestRequest([]string{"powershell.exe", "-Command", "Remove-Item -Force recording.mp4"})
+	validation := ShellValidationOptions{ApprovalPolicy: sandbox.ApprovalGranular, WindowsSandboxLevel: sandbox.WindowsSandboxDisabled}
+	err := applyExecPolicyRequirement(request, validation, execpolicy.DangerousCommandPlatformWindows)
+	if err == nil || !strings.Contains(err.Error(), safety.RejectSandboxApprovalReason) {
+		t.Fatalf("error = %v, want the managed-restriction rejection", err)
+	}
+
+	request = execPolicyTestRequest([]string{"powershell.exe", "-Command", "Remove-Item -Force recording.mp4"})
+	validation.WindowsSandboxLevel = sandbox.WindowsSandboxUnelevated
+	if err := applyExecPolicyRequirement(request, validation, execpolicy.DangerousCommandPlatformWindows); err != nil || !request.ApprovalRequired {
+		t.Fatalf("protected Windows review = %v/%v, want approval", err, request.ApprovalRequired)
 	}
 }
