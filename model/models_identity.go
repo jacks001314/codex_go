@@ -59,24 +59,32 @@ func ModelsCatalogIdentity(provider *ProviderInfo, authSnapshot *auth.AuthDotJSO
 		return ""
 	}
 	explicitBearer := apiKey != "" || strings.TrimSpace(provider.ExperimentalBearerToken) != ""
+	// Rust #59255: a provider bearer credential replaces the login credential
+	// and its account metadata, so the cache identity must not depend on an
+	// unused login snapshot or on headers resolved from it.
+	identityAuth := authSnapshot
+	if provider.HasProviderAPIKey() {
+		identityAuth = nil
+		authHeaders = nil
+	}
 
 	authMode := ""
 	accountID, userID, email, plan, rawPlan := "", "", "", "", ""
 	fedramp := false
-	if authSnapshot != nil {
-		authMode = authSnapshot.Mode()
-		accountID = auth.AccountIDFromAuthForRestrictions(authSnapshot)
-		userID = auth.ChatGPTUserIDFromAuth(authSnapshot)
-		if account := auth.AccountFromAuth(authSnapshot); account != nil {
+	if identityAuth != nil {
+		authMode = identityAuth.Mode()
+		accountID = auth.AccountIDFromAuthForRestrictions(identityAuth)
+		userID = auth.ChatGPTUserIDFromAuth(identityAuth)
+		if account := auth.AccountFromAuth(identityAuth); account != nil {
 			plan = string(account.PlanType)
 			if account.Email != nil {
 				email = strings.TrimSpace(*account.Email)
 			}
 		}
-		rawPlan = auth.ChatGPTPlanTypeRawFromAuth(authSnapshot)
-		fedramp = fedrampFromMap(authSnapshot.Tokens)
+		rawPlan = auth.ChatGPTPlanTypeRawFromAuth(identityAuth)
+		fedramp = fedrampFromMap(identityAuth.Tokens)
 	}
-	headerAuth := authMode == "headers" || authSnapshot == nil && authHeaders != nil
+	headerAuth := authMode == "headers" || identityAuth == nil && authHeaders != nil
 	if headerAuth {
 		authMode = "headers"
 		if accountID == "" {
@@ -96,7 +104,7 @@ func ModelsCatalogIdentity(provider *ProviderInfo, authSnapshot *auth.AuthDotJSO
 	// effective backend auth mode (externally managed ChatGPT tokens normalize to
 	// `chatgpt`) selects the default base URL and the provider header map, and a
 	// FedRAMP API key selects the government host.
-	apiProvider, err := ResolveAPIProvider(*provider, authSnapshot)
+	apiProvider, err := ResolveAPIProvider(*provider, identityAuth)
 	if err != nil {
 		return ""
 	}
@@ -104,7 +112,7 @@ func ModelsCatalogIdentity(provider *ProviderInfo, authSnapshot *auth.AuthDotJSO
 	// digesting it, so the residency header is part of the identity.
 	apiProvider.ApplyManagedResidency(residency)
 	if authHeaders == nil && (!stableAccount || explicitBearer) {
-		resolved, err := ResolveProviderAuth(authSnapshot, *provider)
+		resolved, err := ResolveProviderAuth(identityAuth, *provider)
 		if err != nil {
 			// A missing managed credential is not a build failure for the cache
 			// identity; the identity must stay computable while the user is
@@ -159,7 +167,7 @@ func ModelsCatalogIdentity(provider *ProviderInfo, authSnapshot *auth.AuthDotJSO
 		}
 		identityField(digest, encoded)
 	}
-	if authSnapshot != nil || headerAuth {
+	if identityAuth != nil || headerAuth {
 		identityOptionalString(digest, accountID)
 		identityOptionalString(digest, userID)
 		identityOptionalString(digest, email)

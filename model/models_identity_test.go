@@ -103,8 +103,15 @@ func TestModelsCatalogIdentityUsesHeaderAuthAccountLikeRust(t *testing.T) {
 	explicitBearer.ExperimentalBearerToken = "provider-token"
 	explicitFirst := ModelsCatalogIdentity(&explicitBearer, nil, headerAuth("first-token", "account-1"), "")
 	explicitRotated := ModelsCatalogIdentity(&explicitBearer, nil, headerAuth("second-token", "account-1"), "")
-	if explicitFirst == explicitRotated {
-		t.Fatal("explicit provider bearer reused a header-rotated identity")
+	explicitOtherAccount := ModelsCatalogIdentity(&explicitBearer, nil, headerAuth("first-token", "account-2"), "")
+	// Rust #59255: the provider bearer replaces the login/header credential, so
+	// unused account headers cannot change the catalog identity.
+	if explicitFirst == "" || explicitRotated != explicitFirst || explicitOtherAccount != explicitFirst {
+		t.Fatalf("provider bearer identity followed unused account headers: first=%q rotated=%q other=%q", explicitFirst, explicitRotated, explicitOtherAccount)
+	}
+	explicitBearer.ExperimentalBearerToken = "other-provider-token"
+	if ModelsCatalogIdentity(&explicitBearer, nil, headerAuth("first-token", "account-1"), "") == explicitFirst {
+		t.Fatal("provider bearer rotation reused the catalog identity")
 	}
 
 	commandAuth := provider
@@ -214,5 +221,29 @@ func TestModelsCatalogIdentityExcludesChatGPTAccessToken(t *testing.T) {
 	}
 	if got, want := catalogIdentity(t, &provider, first), catalogIdentity(t, &provider, second); got != want {
 		t.Fatalf("identity churned on token rotation: %q != %q", got, want)
+	}
+}
+
+// Mirrors Rust
+// `provider_key_catalog_identity_does_not_depend_on_unused_login` (#59255).
+func TestModelsCatalogIdentityIgnoresUnusedLoginForProviderBearer(t *testing.T) {
+	provider := CreateOpenAIProvider("https://api.openai.com/v1")
+	provider.RequiresOpenAIAuth = false
+	provider.ExperimentalBearerToken = "provider-key"
+
+	withoutLogin := catalogIdentity(t, &provider, nil)
+	if withoutLogin == "" {
+		t.Fatal("identity is empty for an explicit provider bearer key")
+	}
+	selectedKey := auth.FromAPIKey("provider-key")
+	unusedLogin := chatGPTCatalogAuth(t, "user@example.com", "user", "workspace", "team", "token")
+	for _, snapshot := range []*auth.AuthDotJSON{&selectedKey, unusedLogin} {
+		if got := catalogIdentity(t, &provider, snapshot); got != withoutLogin {
+			t.Fatalf("identity depends on the unused login: %q != %q", got, withoutLogin)
+		}
+	}
+	provider.ExperimentalBearerToken = "different-provider-key"
+	if got := catalogIdentity(t, &provider, nil); got == withoutLogin {
+		t.Fatal("identity ignored a changed provider bearer key")
 	}
 }

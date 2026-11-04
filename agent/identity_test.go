@@ -34,6 +34,30 @@ func TestEnvironmentFromChatGPTBaseURL(t *testing.T) {
 	if _, err := EnvironmentFromChatGPTBaseURL("http://localhost:8080"); err == nil {
 		t.Fatalf("custom urls should be rejected")
 	}
+	// Rust #59177: supported ChatGPT subdomains select the environment they
+	// belong to.
+	env, err = EnvironmentFromChatGPTBaseURL("https://us.chatgpt.com/backend-api")
+	if err != nil || env != ChatGPTProduction {
+		t.Fatalf("production subdomain env = %s %v", env, err)
+	}
+	env, err = EnvironmentFromChatGPTBaseURL("https://us.chatgpt-staging.com/backend-api")
+	if err != nil || env != ChatGPTStaging {
+		t.Fatalf("staging subdomain env = %s %v", env, err)
+	}
+	// Rust #59177: lookalike hosts, non-443 ports, userinfo and unknown paths
+	// stay rejected.
+	for _, base := range []string{
+		"http://us.chatgpt.com",
+		"https://chatgpt.com.evil.example",
+		"https://us.chatgpt.com:8443",
+		"https://u@us.chatgpt.com",
+		"https://chatgpt.com/custom",
+		"https://us.chatgpt.com/backend-api?x=1",
+	} {
+		if _, err := EnvironmentFromChatGPTBaseURL(base); err == nil {
+			t.Fatalf("url %q should be rejected", base)
+		}
+	}
 }
 
 func TestAuthorizationHeaderForAgentTask(t *testing.T) {

@@ -19,9 +19,12 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"codex_go/network"
 
 	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/nacl/box"
@@ -46,17 +49,39 @@ const (
 	ChatGPTStaging    ChatGPTEnvironment = "staging"
 )
 
+// EnvironmentFromChatGPTBaseURL resolves the ChatGPT environment used for
+// agent identity registration. Rust #59177 accepts supported ChatGPT
+// subdomains (for example `us.chatgpt.com`): the URL must be HTTPS on port 443
+// without userinfo, query or fragment, name an allowed ChatGPT host, and use
+// one of the supported API paths. Staging hosts and their subdomains select
+// staging; every other allowed host is production.
 func EnvironmentFromChatGPTBaseURL(baseURL string) (ChatGPTEnvironment, error) {
-	switch strings.TrimRight(baseURL, "/") {
-	case "https://chatgpt.com", "https://chatgpt.com/backend-api", "https://chatgpt.com/codex", "https://chatgpt.com/backend-api/codex",
-		"https://chat.openai.com", "https://chat.openai.com/backend-api", "https://chat.openai.com/codex", "https://chat.openai.com/backend-api/codex":
-		return ChatGPTProduction, nil
-	case "https://chatgpt-staging.com", "https://chatgpt-staging.com/backend-api", "https://chatgpt-staging.com/codex", "https://chatgpt-staging.com/backend-api/codex":
-		return ChatGPTStaging, nil
-	default:
-		return "", fmt.Errorf("Agent Identity only supports production and staging ChatGPT environments")
+	parsed, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" ||
+		parsed.RawQuery != "" || parsed.Scheme != "https" {
+		return "", errUnsupportedChatGPTEnvironment
 	}
+	// `port_or_known_default() == Some(443)` rejects explicit non-443 ports and
+	// accepts an omitted port, which defaults to 443 for HTTPS.
+	if port := parsed.Port(); port != "" && port != "443" {
+		return "", errUnsupportedChatGPTEnvironment
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if !network.IsAllowedChatGPTHost(host) {
+		return "", errUnsupportedChatGPTEnvironment
+	}
+	switch strings.TrimRight(parsed.Path, "/") {
+	case "", "/backend-api", "/codex", "/backend-api/codex":
+	default:
+		return "", errUnsupportedChatGPTEnvironment
+	}
+	if host == "chatgpt-staging.com" || strings.HasSuffix(host, ".chatgpt-staging.com") {
+		return ChatGPTStaging, nil
+	}
+	return ChatGPTProduction, nil
 }
+
+var errUnsupportedChatGPTEnvironment = errors.New("Agent Identity only supports production and staging ChatGPT environments")
 
 func (e *ChatGPTEnvironment) ChatGPTBaseURL() string {
 	if e != nil && *e == ChatGPTStaging {
