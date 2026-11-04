@@ -374,7 +374,7 @@ func (s *bedrockState) render(width int, errorMessage string) string {
 		} else if s.view == bedrockViewMethodsDetected && len(s.profiles) > 1 {
 			lines = append(lines, "  Choose an AWS profile.")
 		} else if s.view == bedrockViewMethodsDetected && len(s.environmentCredentials) > 0 {
-			lines = append(lines, "  AWS credentials detected in your environment.")
+			lines = append(lines, "  AWS credentials detected in the server environment.")
 		} else {
 			if s.view == bedrockViewMethodsDetected {
 				lines = append(lines, "  No AWS credentials found.")
@@ -411,7 +411,7 @@ func (s *bedrockState) render(width int, errorMessage string) string {
 		}
 	case bedrockViewEnvironmentInstructions:
 		lines = append(lines,
-			"  Configure AWS credentials in your environment, then restart Codex.",
+			"  Export AWS credentials, then run `codex --no-daemon` in that shell.",
 			"",
 			"  Setup guide: "+authCyanStyle.Underline(true).Render("https://learn.chatgpt.com/docs/amazon-bedrock"),
 			"",
@@ -470,16 +470,16 @@ func (s *bedrockState) methodCopy(method bedrockMethod) (string, string) {
 		}
 		description := ""
 		if len(s.profiles) == 1 {
-			description = "Use your existing AWS credentials"
+			description = "Use AWS access keys from the server environment"
 		} else if profile.Region != nil {
 			description = strings.TrimSpace(*profile.Region)
 		}
 		return title, description
 	case bedrockMethodEnvironment:
-		description := "Use your existing AWS credentials"
+		description := "Use AWS access keys from the server environment"
 		for _, credential := range s.environmentCredentials {
 			if credential.CredentialType == appserver.AwsCredentialTypeBedrockAPIKey {
-				description = "Use your existing Amazon Bedrock API key"
+				description = "Use the Bedrock API key from the server environment"
 				break
 			}
 		}
@@ -494,7 +494,7 @@ func (s *bedrockState) methodCopy(method bedrockMethod) (string, string) {
 	case bedrockMethodAccessKeys:
 		return "AWS access keys", "Enter an access key ID and secret access key"
 	case bedrockMethodEnvironmentInstructions:
-		return "Environment variables", "Configure AWS credentials in your environment, then return here"
+		return "Environment variables", "Use AWS credentials exported in your shell"
 	default:
 		return "Bedrock API key", "Enter a Bedrock API key"
 	}

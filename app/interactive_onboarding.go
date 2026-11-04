@@ -81,7 +81,13 @@ func runInteractiveAuthOnboarding(ctx context.Context, root *cli.RootOptions, st
 	return result.ShouldExit, nil
 }
 
+// gcpSetupWizardRequestedThisLaunch records that the GCP setup wizard will run.
+// Rust #59068 keeps that wizard on the embedded server while the Bedrock wizard
+// may use the local daemon.
+var gcpSetupWizardRequestedThisLaunch bool
+
 func interactiveAuthOnboardingOptions(root *cli.RootOptions) (*onboarding.AuthFlowOptions, bool, error) {
+	gcpSetupWizardRequestedThisLaunch = false
 	if root != nil && (root.Shared.OSS || strings.TrimSpace(root.Shared.OSSProvider) != "") {
 		return nil, false, nil
 	}
@@ -137,6 +143,7 @@ func interactiveAuthOnboardingOptions(root *cli.RootOptions) (*onboarding.AuthFl
 	// the Google Cloud Vertex AI wizard follows the same embedded/openai gate as
 	// Bedrock but is opt-in behind its own feature flag.
 	if features.Enabled(loaded.FeatureSettings(), "gcp_setup_wizard") && effectiveProviderID == modelpkg.OpenAIProviderID {
+		gcpSetupWizardRequestedThisLaunch = true
 		options.GcpAllowed = true
 		options.GcpSetup = interactiveGcpCallbacks(codexHome)
 	}

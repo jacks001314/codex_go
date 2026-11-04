@@ -353,6 +353,14 @@ func interactiveDaemonEndpoint(root *cli.RootOptions) (*appserverdaemon.RemoteAp
 	if daemonElevatedLaunchExcluded(root, false) {
 		return nil, nil
 	}
+	// Rust #59068: GCP setup resolves credential paths and runs gcloud in the
+	// launch environment, so it keeps the embedded server. The Bedrock wizard
+	// works against the local daemon and discovers credentials in the server
+	// environment instead.
+	if daemonAutoStartRequested(root) && gcpSetupWizardRequestedThisLaunch {
+		daemonAutoStartExclusionReason = gcpSignInExclusion
+		return nil, nil
+	}
 	if !daemonAutoStartRequested(root) {
 		return localDaemonEndpointForLaunch(root, false, defaultLocalDaemonSocketPath()), nil
 	}
@@ -380,6 +388,10 @@ func interactiveDaemonEndpoint(root *cli.RootOptions) (*appserverdaemon.RemoteAp
 	}
 	return appserverdaemon.NewUnixSocketEndpoint(socketPath), nil
 }
+
+// gcpSignInExclusion is the exclusion reason Rust reports when the GCP setup
+// wizard needs the embedded server (Rust #59068 daemon_startup exclusion).
+const gcpSignInExclusion = "GCP sign-in"
 
 // detachedLaunchRestrictionExclusion is the exclusion reason Rust reports when
 // the Windows launcher forbids detaching the shared background server.

@@ -173,8 +173,8 @@ func interactiveEmbeddedTUIStartReason(root *cli.RootOptions, selectionReason st
 			return "search"
 		}
 		return "config_override"
-	case exclusion == "Bedrock sign-in":
-		return "bedrock_sign_in"
+	case exclusion == "GCP sign-in":
+		return "gcp_sign_in"
 	case exclusion == wslDrvfsExclusion:
 		return "wsl_drvfs"
 	case exclusion == detachedLaunchRestrictionExclusion:
