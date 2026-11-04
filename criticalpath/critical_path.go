@@ -48,6 +48,7 @@ type Path struct {
 type node struct {
 	previous Path
 	kind     WorkKind
+	reviews  []*ReviewExecution
 	start    time.Time
 	end      time.Time
 	origin   time.Time
@@ -59,10 +60,14 @@ type node struct {
 type Durations struct {
 	Inference  time.Duration
 	AutoReview time.Duration
-	UserWait   time.Duration
-	Tools      time.Duration
-	Overhead   time.Duration
-	Unknown    time.Duration
+	// AutoReviewOverhead excludes the union of observed reviewer child execution.
+	// AutoReviewOverheadUnknown reports that attribution or history was incomplete.
+	AutoReviewOverhead        time.Duration
+	AutoReviewOverheadUnknown bool
+	UserWait                  time.Duration
+	Tools                     time.Duration
+	Overhead                  time.Duration
+	Unknown                   time.Duration
 }
 
 func (d *Durations) record(kind WorkKind, duration time.Duration) {
@@ -79,6 +84,7 @@ func (d *Durations) record(kind WorkKind, duration time.Duration) {
 		d.Overhead += duration
 	default:
 		d.Unknown += duration
+		d.AutoReviewOverheadUnknown = true
 	}
 }
 
@@ -110,6 +116,16 @@ func (p Path) Latest(other Path) Path {
 // empty segments. Exceeding the history limit collapses the retained interval
 // into unknown work.
 func (p Path) Work(start time.Time, end time.Time, kind WorkKind) Path {
+	return p.append(start, end, kind, nil)
+}
+
+// AutoReview appends automatic review work together with the exact reviewer
+// child executions active during the segment (Rust #59251).
+func (p Path) AutoReview(start time.Time, end time.Time, reviews []*ReviewExecution) Path {
+	return p.append(start, end, WorkAutoReview, reviews)
+}
+
+func (p Path) append(start time.Time, end time.Time, kind WorkKind, reviews []*ReviewExecution) Path {
 	if previousEnd, ok := p.End(); ok && previousEnd.After(start) {
 		start = previousEnd
 	}
@@ -126,7 +142,7 @@ func (p Path) Work(start time.Time, end time.Time, kind WorkKind) Path {
 	if depth > MaxPathDepth {
 		return Path{}.Work(origin, end, WorkUnknown)
 	}
-	return Path{node: &node{previous: p, kind: kind, start: start, end: end, origin: origin, depth: depth}}
+	return Path{node: &node{previous: p, kind: kind, reviews: reviews, start: start, end: end, origin: origin, depth: depth}}
 }
 
 // Join selects the full branch that released this join, not just its exposed
@@ -167,6 +183,13 @@ func (p Path) Durations(start time.Time, end time.Time) Durations {
 		}
 		if segmentStart.Before(segmentEnd) {
 			totals.record(current.kind, segmentEnd.Sub(segmentStart))
+			if current.kind == WorkAutoReview && !totals.AutoReviewOverheadUnknown {
+				if overhead, ok := reviewOverhead(current.reviews, segmentStart, segmentEnd); ok {
+					totals.AutoReviewOverhead += overhead
+				} else {
+					totals.AutoReviewOverheadUnknown = true
+				}
+			}
 		}
 		if current.start.Before(end) {
 			end = current.start

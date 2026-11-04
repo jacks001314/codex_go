@@ -61,9 +61,10 @@ func TestParallelWinnerRetainsItsReviewAndSharedInitialPath(t *testing.T) {
 	}
 	got := batchCompleted.Path.Durations(start, batchCompleted.EndedAt)
 	want := criticalpath.Durations{
-		Inference:  time.Second,
-		AutoReview: 3 * time.Second,
-		Tools:      batchCompleted.EndedAt.Sub(start) - 4*time.Second,
+		Inference:                 time.Second,
+		AutoReview:                3 * time.Second,
+		AutoReviewOverheadUnknown: true,
+		Tools:                     batchCompleted.EndedAt.Sub(start) - 4*time.Second,
 	}
 	if got != want {
 		t.Fatalf("Durations() = %+v, want %+v", got, want)
@@ -88,8 +89,8 @@ func TestDuplicateIDsAndLateReviewDropDoNotCompleteAnotherInvocation(t *testing.
 	}
 	activeReviews := timings.calls["same"][0].activeAutoReviews
 	timings.mu.Unlock()
-	if activeReviews != 0 {
-		t.Fatalf("active_auto_reviews = %d, want 0", activeReviews)
+	if len(activeReviews) != 0 {
+		t.Fatalf("active_auto_reviews = %d, want 0", len(activeReviews))
 	}
 	if completed := batch.Completed(); completed != nil {
 		t.Fatalf("batch completed before the remaining invocation finished: %+v", completed)
@@ -185,6 +186,34 @@ func TestMissingDependencyRemainsUnknown(t *testing.T) {
 	}
 }
 
+func TestReviewExecutionAttributionExcludesChildTurnDuration(t *testing.T) {
+	clock := &fakeClock{now: time.Unix(0, 0)}
+	timings := NewTimings()
+	timings.clock = clock.Now
+	batch := NewBatch()
+	empty := criticalpath.Path{}
+	guard := timings.StartTurnDirectCall("call", "turn", batch, clock.Now(), &empty)
+	review := guard.StartReview()
+	execution := review.ReviewExecution()
+	if execution == nil {
+		t.Fatal("auto review did not expose an execution observer")
+	}
+	clock.Set(time.Unix(0, 0).Add(time.Second))
+	execution.Started(clock.Now())
+	clock.Set(time.Unix(0, 0).Add(2 * time.Second))
+	execution.Completed(time.Unix(0, 0).Add(time.Second), clock.Now())
+	clock.Set(time.Unix(0, 0).Add(3 * time.Second))
+	review.End()
+	completed := guard.Finish()
+	if completed == nil || completed.Path == nil {
+		t.Fatalf("Finish() = %+v", completed)
+	}
+	totals := completed.Path.Durations(time.Unix(0, 0), completed.EndedAt)
+	if totals.AutoReview != 3*time.Second || totals.AutoReviewOverhead != 2*time.Second || totals.AutoReviewOverheadUnknown {
+		t.Fatalf("durations = %+v", totals)
+	}
+}
+
 func TestHumanWaitTakesPrecedenceOverReviewsAndOverlappingWaits(t *testing.T) {
 	start := time.Unix(0, 0)
 	at := func(seconds int) time.Time { return start.Add(time.Duration(seconds) * time.Second) }
@@ -195,7 +224,7 @@ func TestHumanWaitTakesPrecedenceOverReviewsAndOverlappingWaits(t *testing.T) {
 	timings.mu.Lock()
 	work := timings.calls["call"][0]
 	work.recordUntil(at(1))
-	work.activeAutoReviews = 1
+	work.activeAutoReviews = []*criticalpath.ReviewExecution{criticalpath.NewReviewExecution()}
 	work.recordUntil(at(2))
 	work.activeUserWaits = 1
 	work.recordUntil(at(3))
@@ -205,14 +234,15 @@ func TestHumanWaitTakesPrecedenceOverReviewsAndOverlappingWaits(t *testing.T) {
 	work.recordUntil(at(5))
 	work.activeUserWaits = 0
 	work.recordUntil(at(6))
-	work.activeAutoReviews = 0
+	work.activeAutoReviews = nil
 	work.recordUntil(at(7))
 	got := work.path.Durations(start, at(7))
 	timings.mu.Unlock()
 	want := criticalpath.Durations{
-		Tools:      2 * time.Second,
-		AutoReview: 2 * time.Second,
-		UserWait:   3 * time.Second,
+		Tools:                     2 * time.Second,
+		AutoReview:                2 * time.Second,
+		AutoReviewOverheadUnknown: true,
+		UserWait:                  3 * time.Second,
 	}
 	if got != want {
 		t.Fatalf("Durations() = %+v, want %+v", got, want)
@@ -275,9 +305,9 @@ func TestGateHandoffPublishesReviewHistoryBeforeAdmittingWaiter(t *testing.T) {
 	timings.mu.Lock()
 	releasingInvocation := timings.calls["releasing"][0]
 	releasingInvocation.recordUntil(start.Add(2 * time.Second))
-	releasingInvocation.activeAutoReviews = 1
+	releasingInvocation.activeAutoReviews = []*criticalpath.ReviewExecution{criticalpath.NewReviewExecution()}
 	releasingInvocation.recordUntil(start.Add(5 * time.Second))
-	releasingInvocation.activeAutoReviews = 0
+	releasingInvocation.activeAutoReviews = nil
 	timings.mu.Unlock()
 	releasingTiming.Finish()
 	waiting := timings.StartTurnDirectCall("waiting", "turn", batch, toolStart, &shared)
@@ -290,9 +320,10 @@ func TestGateHandoffPublishesReviewHistoryBeforeAdmittingWaiter(t *testing.T) {
 	}
 	got := completed.Path.Durations(start, completed.EndedAt)
 	want := criticalpath.Durations{
-		Inference:  time.Second,
-		AutoReview: 3 * time.Second,
-		Tools:      completed.EndedAt.Sub(start) - 4*time.Second,
+		Inference:                 time.Second,
+		AutoReview:                3 * time.Second,
+		AutoReviewOverheadUnknown: true,
+		Tools:                     completed.EndedAt.Sub(start) - 4*time.Second,
 	}
 	if got != want {
 		t.Fatalf("Durations() = %+v, want %+v", got, want)

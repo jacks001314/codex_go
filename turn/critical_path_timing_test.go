@@ -42,6 +42,31 @@ func TestCriticalPathCapturePreservesPhasesAndFreezesMissingDependencies(t *test
 	}
 }
 
+func TestCriticalPathReportsAutoReviewOverheadWhenAttributionIsKnown(t *testing.T) {
+	start := time.Unix(0, 0)
+	review := criticalpath.NewReviewExecution()
+	review.Observe()
+	review.Started(start.Add(200 * time.Millisecond))
+	review.Completed(start.Add(200*time.Millisecond), start.Add(500*time.Millisecond))
+	review.Seal()
+	path := criticalpath.Path{}.AutoReview(start, start.Add(time.Second), []*criticalpath.ReviewExecution{review})
+	report := (&profileState{captureEnabled: true, startedAt: start, path: &path}).criticalPathReport(start.Add(time.Second))
+	if report.Durations == nil || report.Durations.AutoReviewOverheadMS == nil {
+		t.Fatalf("known auto-review overhead missing: %+v", report.Durations)
+	}
+	if got := *report.Durations.AutoReviewOverheadMS; got != 700 {
+		t.Fatalf("auto_review_overhead_ms = %d, want 700", got)
+	}
+
+	// A plain auto-review segment carries no child attribution and must stay
+	// null instead of claiming the whole segment as overhead.
+	unknown := criticalpath.Path{}.Work(start, start.Add(time.Second), criticalpath.WorkAutoReview)
+	report = (&profileState{captureEnabled: true, startedAt: start, path: &unknown}).criticalPathReport(start.Add(time.Second))
+	if report.Durations == nil || report.Durations.AutoReviewOverheadMS != nil {
+		t.Fatalf("unattributed auto-review overhead = %+v, want nil", report.Durations)
+	}
+}
+
 func TestCriticalPathInvalidationAndLateGuardDropCannotRestoreFrozenPath(t *testing.T) {
 	startedAt := time.Unix(0, 0)
 	timing := NewTimingState()

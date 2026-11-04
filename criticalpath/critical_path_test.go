@@ -34,9 +34,10 @@ func TestNestedSerialDependenciesPreserveExclusiveCategories(t *testing.T) {
 		Join(at(turnStart, 200), at(turnStart, 600), child)
 	got := path.Durations(at(turnStart, 0), at(turnStart, 600))
 	want := Durations{
-		Inference:  200 * time.Millisecond,
-		AutoReview: 200 * time.Millisecond,
-		Tools:      200 * time.Millisecond,
+		Inference:                 200 * time.Millisecond,
+		AutoReview:                200 * time.Millisecond,
+		AutoReviewOverheadUnknown: true,
+		Tools:                     200 * time.Millisecond,
 	}
 	if got != want {
 		t.Fatalf("Durations() = %+v, want %+v", got, want)
@@ -67,7 +68,7 @@ func TestPathRetentionExhaustionMarksUnknownInsteadOfClaimingZero(t *testing.T) 
 	}
 	turnEnd := turnStart.Add(time.Duration(MaxPathDepth+1) * time.Microsecond)
 	got := path.Durations(turnStart, turnEnd)
-	want := Durations{Unknown: turnEnd.Sub(turnStart)}
+	want := Durations{Unknown: turnEnd.Sub(turnStart), AutoReviewOverheadUnknown: true}
 	if got != want {
 		t.Fatalf("Durations() = %+v, want %+v", got, want)
 	}
@@ -101,10 +102,11 @@ func TestHumanWaitIsRetainedOnlyOnTheSelectedParallelPath(t *testing.T) {
 	path := prefix.Join(at(start, 100), at(start, 600), parallelTool.Latest(reviewedTool))
 	got := path.Durations(start, at(start, 600))
 	want := Durations{
-		Inference:  100 * time.Millisecond,
-		AutoReview: 100 * time.Millisecond,
-		UserWait:   300 * time.Millisecond,
-		Tools:      100 * time.Millisecond,
+		Inference:                 100 * time.Millisecond,
+		AutoReview:                100 * time.Millisecond,
+		AutoReviewOverheadUnknown: true,
+		UserWait:                  300 * time.Millisecond,
+		Tools:                     100 * time.Millisecond,
 	}
 	if got != want {
 		t.Fatalf("Durations() = %+v, want %+v", got, want)

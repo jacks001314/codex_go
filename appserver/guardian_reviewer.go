@@ -21,6 +21,7 @@ import (
 	"codex_go/compact"
 	"codex_go/config"
 	codexctx "codex_go/context"
+	"codex_go/criticalpath"
 	"codex_go/features"
 	"codex_go/mcp"
 	"codex_go/model"
@@ -1163,12 +1164,14 @@ func (r *modelGuardianReviewer) review(ctx context.Context, threadID, turnID, ta
 	// Rust #57207: bind the review to its owning tool invocation before any
 	// blocking work starts. When the owner is unknown, invalidate the turn's
 	// capture instead of charging an unrelated call.
+	var reviewExecution *criticalpath.ReviewExecution
 	if timing := r.reviewTurnTiming(threadID, turnID); timing.CriticalPathCaptureEnabled() {
 		timingCallID := targetItemID
 		if override, ok := guardianTimingCallIDFromContext(ctx); ok {
 			timingCallID = override
 		}
 		if guard := timing.DirectToolTimings().StartReviewForTurn(timingCallID, turnID); guard != nil {
+			reviewExecution = guard.ReviewExecution()
 			defer guard.End()
 		} else {
 			timing.InvalidateCriticalPath()
@@ -1797,10 +1800,21 @@ reviewAttempt:
 		historyCheckpointReady = true
 	}
 	history := r.guardianConversationHistoryValue(threadID, turnID)
+	reviewExecutionStartedAt := time.Now()
+	if reviewExecution != nil {
+		reviewExecution.Started(reviewExecutionStartedAt)
+	}
 	if history != nil && len(history.Tools) > 0 {
 		response, err = runGuardianReviewWithHistory(reviewCtx, session, reviewRequest, history)
 	} else {
 		response, err = session.Run(reviewCtx, reviewRequest)
+	}
+	if reviewExecution != nil {
+		if err == nil && response != nil {
+			reviewExecution.Completed(reviewExecutionStartedAt, time.Now())
+		} else {
+			reviewExecution.MarkUnknown()
+		}
 	}
 	if err == nil {
 		// The review request reached the session, so the retained-section
@@ -1971,6 +1985,9 @@ reviewAttempt:
 	}
 	discardReviewSession := false
 	if assessment.Outcome == state.OutcomeDeny && guardianDenialReconsiderationEnabled(plan) && session != nil {
+		if reviewExecution != nil {
+			reviewExecution.MarkUnknown()
+		}
 		secondResponse, secondAssessment, aborted := r.reconsiderGuardianDenial(reviewCtx, session, history, reviewRequest, plan)
 		if aborted {
 			return finishAborted()

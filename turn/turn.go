@@ -47,10 +47,13 @@ type CriticalPathDurations struct {
 	DurationMS   uint64
 	InferenceMS  uint64
 	AutoReviewMS uint64
-	UserWaitMS   uint64
-	ToolsMS      uint64
-	OverheadMS   uint64
-	UnknownMS    uint64
+	// AutoReviewOverheadMS is the part of auto-review time outside observed
+	// reviewer turn execution. Nil means attribution was incomplete.
+	AutoReviewOverheadMS *uint64
+	UserWaitMS           uint64
+	ToolsMS              uint64
+	OverheadMS           uint64
+	UnknownMS            uint64
 }
 
 // CriticalPathReport is one finalized turn's capture coverage. Missing capture
@@ -469,16 +472,22 @@ func (p *profileState) criticalPathReport(end time.Time) CriticalPathReport {
 		return CriticalPathReport{Status: CriticalPathStatusIncomplete}
 	}
 	totals := p.path.Durations(p.startedAt, end)
+	var autoReviewOverhead *uint64
+	if !totals.AutoReviewOverheadUnknown {
+		value := criticalpath.DurationMS(totals.AutoReviewOverhead)
+		autoReviewOverhead = &value
+	}
 	return CriticalPathReport{
 		Status: CriticalPathStatusComplete,
 		Durations: &CriticalPathDurations{
-			DurationMS:   durationMS(end.Sub(p.startedAt)),
-			InferenceMS:  criticalpath.DurationMS(totals.Inference),
-			AutoReviewMS: criticalpath.DurationMS(totals.AutoReview),
-			UserWaitMS:   criticalpath.DurationMS(totals.UserWait),
-			ToolsMS:      criticalpath.DurationMS(totals.Tools),
-			OverheadMS:   criticalpath.DurationMS(totals.Overhead),
-			UnknownMS:    criticalpath.DurationMS(totals.Unknown),
+			DurationMS:           durationMS(end.Sub(p.startedAt)),
+			InferenceMS:          criticalpath.DurationMS(totals.Inference),
+			AutoReviewMS:         criticalpath.DurationMS(totals.AutoReview),
+			AutoReviewOverheadMS: autoReviewOverhead,
+			UserWaitMS:           criticalpath.DurationMS(totals.UserWait),
+			ToolsMS:              criticalpath.DurationMS(totals.Tools),
+			OverheadMS:           criticalpath.DurationMS(totals.Overhead),
+			UnknownMS:            criticalpath.DurationMS(totals.Unknown),
 		},
 	}
 }

@@ -9705,13 +9705,14 @@ func analyticsTurnTimingProfile(result *turn.AgentLoopResult, timing *turn.Timin
 	criticalPath := telemetry.CodexTurnCriticalPath{Status: string(profile.CriticalPath.Status)}
 	if profile.CriticalPath.Durations != nil {
 		criticalPath.Durations = &telemetry.CodexTurnCriticalPathDurations{
-			DurationMS:   profile.CriticalPath.Durations.DurationMS,
-			InferenceMS:  profile.CriticalPath.Durations.InferenceMS,
-			AutoReviewMS: profile.CriticalPath.Durations.AutoReviewMS,
-			UserWaitMS:   profile.CriticalPath.Durations.UserWaitMS,
-			ToolsMS:      profile.CriticalPath.Durations.ToolsMS,
-			OverheadMS:   profile.CriticalPath.Durations.OverheadMS,
-			UnknownMS:    profile.CriticalPath.Durations.UnknownMS,
+			DurationMS:           profile.CriticalPath.Durations.DurationMS,
+			InferenceMS:          profile.CriticalPath.Durations.InferenceMS,
+			AutoReviewMS:         profile.CriticalPath.Durations.AutoReviewMS,
+			AutoReviewOverheadMS: profile.CriticalPath.Durations.AutoReviewOverheadMS,
+			UserWaitMS:           profile.CriticalPath.Durations.UserWaitMS,
+			ToolsMS:              profile.CriticalPath.Durations.ToolsMS,
+			OverheadMS:           profile.CriticalPath.Durations.OverheadMS,
+			UnknownMS:            profile.CriticalPath.Durations.UnknownMS,
 		}
 	}
 	return telemetry.CodexTurnTimingProfile{

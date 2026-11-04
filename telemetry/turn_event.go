@@ -70,17 +70,18 @@ type CodexTurnEventParams struct {
 	// default-off `critical_path_timing` feature produced a frozen dependency
 	// path (Rust #57201/#57209). Missing capture never becomes a zero
 	// measurement.
-	CriticalPathStatus      string  `json:"critical_path_status"`
-	CriticalPathDurationMS  *uint64 `json:"critical_path_duration_ms"`
-	CriticalPathInferenceMS *uint64 `json:"critical_path_inference_ms"`
-	CriticalPathAutoReview  *uint64 `json:"critical_path_auto_review_ms"`
-	CriticalPathUserWaitMS  *uint64 `json:"critical_path_user_wait_ms"`
-	CriticalPathToolsMS     *uint64 `json:"critical_path_tools_ms"`
-	CriticalPathOverheadMS  *uint64 `json:"critical_path_overhead_ms"`
-	CriticalPathUnknownMS   *uint64 `json:"critical_path_unknown_ms"`
-	ThreadID                string  `json:"thread_id"`
-	SessionID               string  `json:"session_id"`
-	TurnID                  string  `json:"turn_id"`
+	CriticalPathStatus             string  `json:"critical_path_status"`
+	CriticalPathDurationMS         *uint64 `json:"critical_path_duration_ms"`
+	CriticalPathInferenceMS        *uint64 `json:"critical_path_inference_ms"`
+	CriticalPathAutoReview         *uint64 `json:"critical_path_auto_review_ms"`
+	CriticalPathAutoReviewOverhead *uint64 `json:"critical_path_auto_review_overhead_ms"`
+	CriticalPathUserWaitMS         *uint64 `json:"critical_path_user_wait_ms"`
+	CriticalPathToolsMS            *uint64 `json:"critical_path_tools_ms"`
+	CriticalPathOverheadMS         *uint64 `json:"critical_path_overhead_ms"`
+	CriticalPathUnknownMS          *uint64 `json:"critical_path_unknown_ms"`
+	ThreadID                       string  `json:"thread_id"`
+	SessionID                      string  `json:"session_id"`
+	TurnID                         string  `json:"turn_id"`
 	// VoiceSessionID attributes this turn to a realtime voice session when the
 	// turn was started or steered by one (Rust #46058).
 	VoiceSessionID *string `json:"voice_session_id"`
@@ -257,13 +258,14 @@ type CodexTurnCriticalPath struct {
 // CodexTurnCriticalPathDurations holds exclusive category totals over the turn
 // interval.
 type CodexTurnCriticalPathDurations struct {
-	DurationMS   uint64
-	InferenceMS  uint64
-	AutoReviewMS uint64
-	UserWaitMS   uint64
-	ToolsMS      uint64
-	OverheadMS   uint64
-	UnknownMS    uint64
+	DurationMS           uint64
+	InferenceMS          uint64
+	AutoReviewMS         uint64
+	AutoReviewOverheadMS *uint64
+	UserWaitMS           uint64
+	ToolsMS              uint64
+	OverheadMS           uint64
+	UnknownMS            uint64
 }
 
 // multiAgentVersionValue maps the resolved turn version onto the value the event
@@ -358,6 +360,7 @@ func NewCodexTurnEvent(input CodexTurnEventInput) CodexTurnEventRequest {
 			CriticalPathDurationMS:               criticalPathDuration(input.TimingProfile.CriticalPath, func(value CodexTurnCriticalPathDurations) uint64 { return value.DurationMS }),
 			CriticalPathInferenceMS:              criticalPathDuration(input.TimingProfile.CriticalPath, func(value CodexTurnCriticalPathDurations) uint64 { return value.InferenceMS }),
 			CriticalPathAutoReview:               criticalPathDuration(input.TimingProfile.CriticalPath, func(value CodexTurnCriticalPathDurations) uint64 { return value.AutoReviewMS }),
+			CriticalPathAutoReviewOverhead:       criticalPathOptionalDuration(input.TimingProfile.CriticalPath, func(value CodexTurnCriticalPathDurations) *uint64 { return value.AutoReviewOverheadMS }),
 			CriticalPathUserWaitMS:               criticalPathDuration(input.TimingProfile.CriticalPath, func(value CodexTurnCriticalPathDurations) uint64 { return value.UserWaitMS }),
 			CriticalPathToolsMS:                  criticalPathDuration(input.TimingProfile.CriticalPath, func(value CodexTurnCriticalPathDurations) uint64 { return value.ToolsMS }),
 			CriticalPathOverheadMS:               criticalPathDuration(input.TimingProfile.CriticalPath, func(value CodexTurnCriticalPathDurations) uint64 { return value.OverheadMS }),
@@ -378,6 +381,13 @@ func criticalPathStatus(path CodexTurnCriticalPath) string {
 	default:
 		return CodexTurnCriticalPathStatusDisabled
 	}
+}
+
+func criticalPathOptionalDuration(path CodexTurnCriticalPath, value func(CodexTurnCriticalPathDurations) *uint64) *uint64 {
+	if path.Status != CodexTurnCriticalPathStatusComplete || path.Durations == nil {
+		return nil
+	}
+	return value(*path.Durations)
 }
 
 func criticalPathDuration(path CodexTurnCriticalPath, value func(CodexTurnCriticalPathDurations) uint64) *uint64 {

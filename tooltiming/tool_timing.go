@@ -91,7 +91,7 @@ type invocation struct {
 	identity          *identity
 	path              *criticalpath.Path
 	segmentStartedAt  time.Time
-	activeAutoReviews int
+	activeAutoReviews []*criticalpath.ReviewExecution
 	activeUserWaits   int
 	batch             *Batch
 }
@@ -135,6 +135,7 @@ const (
 // take precedence over reviews.
 type BlockingGuard struct {
 	kind     blockingKind
+	review   *criticalpath.ReviewExecution
 	identity *identity
 	timings  *Timings
 	callID   string
@@ -287,6 +288,9 @@ func (t *Timings) finish(callID string, workIdentity *identity) *CompletedWork {
 	t.mu.Unlock()
 	endedAt := t.now()
 	invocation.recordUntil(endedAt)
+	for _, review := range invocation.activeAutoReviews {
+		review.Seal()
+	}
 	completed := &CompletedWork{EndedAt: endedAt, Path: invocation.path}
 	invocation.batch.record(completed)
 	result := *completed
@@ -301,6 +305,17 @@ func (g *ToolGuard) StartReview() *BlockingGuard {
 
 // StartUserWait starts a human wait for this invocation, taking precedence over
 // automated review.
+// ReviewExecution returns the observer for this exact automatic review. It
+// declares the review instrumented even when no reviewer child runs. Human
+// waits have no observer.
+func (b *BlockingGuard) ReviewExecution() *criticalpath.ReviewExecution {
+	if b == nil || b.kind != blockingAutoReview || b.review == nil {
+		return nil
+	}
+	b.review.Observe()
+	return b.review
+}
+
 func (g *ToolGuard) StartUserWait() *BlockingGuard {
 	return g.startBlocking(blockingUserWait)
 }
@@ -317,13 +332,15 @@ func (g *ToolGuard) startBlocking(kind blockingKind) *BlockingGuard {
 		return nil
 	}
 	invocation.recordUntil(t.now())
+	var review *criticalpath.ReviewExecution
 	switch kind {
 	case blockingAutoReview:
-		invocation.activeAutoReviews++
+		review = criticalpath.NewReviewExecution()
+		invocation.activeAutoReviews = append(invocation.activeAutoReviews, review)
 	case blockingUserWait:
 		invocation.activeUserWaits++
 	}
-	return &BlockingGuard{kind: kind, identity: g.identity, timings: t, callID: g.callID}
+	return &BlockingGuard{kind: kind, review: review, identity: g.identity, timings: t, callID: g.callID}
 }
 
 // End records the end of the blocking interval. It is safe to call more than
@@ -346,10 +363,19 @@ func (b *BlockingGuard) End() {
 		return
 	}
 	invocation.recordUntil(b.timings.now())
+	if b.review != nil {
+		b.review.Seal()
+	}
 	switch b.kind {
 	case blockingAutoReview:
-		if invocation.activeAutoReviews > 0 {
-			invocation.activeAutoReviews--
+		if b.review != nil {
+			retained := invocation.activeAutoReviews[:0]
+			for _, review := range invocation.activeAutoReviews {
+				if review != b.review {
+					retained = append(retained, review)
+				}
+			}
+			invocation.activeAutoReviews = retained
 		}
 	case blockingUserWait:
 		if invocation.activeUserWaits > 0 {
@@ -451,10 +477,15 @@ func (i *invocation) recordUntil(now time.Time) {
 	kind := criticalpath.WorkTools
 	if i.activeUserWaits > 0 {
 		kind = criticalpath.WorkUserWait
-	} else if i.activeAutoReviews > 0 {
+	} else if len(i.activeAutoReviews) > 0 {
 		kind = criticalpath.WorkAutoReview
 	}
-	work := i.path.Work(i.segmentStartedAt, now, kind)
+	var work criticalpath.Path
+	if kind == criticalpath.WorkAutoReview {
+		work = i.path.AutoReview(i.segmentStartedAt, now, i.activeAutoReviews)
+	} else {
+		work = i.path.Work(i.segmentStartedAt, now, kind)
+	}
 	i.path = &work
 	i.segmentStartedAt = now
 }
