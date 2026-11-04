@@ -2747,8 +2747,13 @@ func verifyAgentIdentityAccessToken(ctx context.Context, token string, cfg *conf
 
 func authStoreOptionsFromLoadedConfig(loaded *config.Config) *auth.StoreOptions {
 	options := auth.StoreOptionsFromConfig(loaded.CLIAuthCredentialsStoreMode(), loaded.SecretAuthStorageEnabled())
+	chatGPTLoginAllowed := loaded.IsLoginMethodAllowed(config.ForcedLoginMethodChatGPT)
+	apiLoginAllowed := loaded.IsLoginMethodAllowed(config.ForcedLoginMethodAPI)
 	options.WorkloadIdentity = &auth.WorkloadIdentityAuthOptions{
-		ChatGPTBaseURL: loaded.ChatGPTBaseURL(),
+		ChatGPTBaseURL:          loaded.ChatGPTBaseURL(),
+		ChatGPTLoginAllowed:     &chatGPTLoginAllowed,
+		APILoginAllowed:         &apiLoginAllowed,
+		ForcedChatGPTWorkspaces: loaded.ForcedChatGPTWorkspaceIDs(),
 	}
 	return options
 }

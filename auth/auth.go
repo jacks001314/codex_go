@@ -29,8 +29,45 @@ type AuthDotJSON struct {
 	LastRefresh         string         `json:"last_refresh,omitempty"`
 	AgentIdentity       any            `json:"agent_identity,omitempty"`
 	PersonalAccessToken string         `json:"personal_access_token,omitempty"`
-	BedrockAPIKey       any            `json:"bedrock_api_key,omitempty"`
-	BedrockAccessKeys   any            `json:"bedrock_access_keys,omitempty"`
+	// WorkloadIdentity marks an API key obtained from an API workload identity
+	// exchange (Rust #59275 ApiKeyAuth::workload_identity). Plain API keys leave
+	// it nil.
+	WorkloadIdentity  *WorkloadIdentityAPIMetadata `json:"workload_identity,omitempty"`
+	BedrockAPIKey     any                          `json:"bedrock_api_key,omitempty"`
+	BedrockAccessKeys any                          `json:"bedrock_access_keys,omitempty"`
+}
+
+// sameWorkloadIdentityMetadata compares API workload identity service account
+// metadata; a plain API key (nil) never matches a workload identity.
+func sameWorkloadIdentityMetadata(left *WorkloadIdentityAPIMetadata, right *WorkloadIdentityAPIMetadata) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
+}
+
+// Format redacts the API key from derived debug formatting (Rust #59275
+// ApiKeyAuth's manual Debug implementation).
+func (a *AuthDotJSON) Format(f fmt.State, verb rune) {
+	if a == nil {
+		fmt.Fprint(f, "<nil>")
+		return
+	}
+	const redacted = "<redacted>"
+	apiKey := a.OpenAIAPIKey
+	if strings.TrimSpace(apiKey) != "" {
+		apiKey = redacted
+	}
+	personal := a.PersonalAccessToken
+	if strings.TrimSpace(personal) != "" {
+		personal = redacted
+	}
+	if verb == 'v' && f.Flag('+') {
+		fmt.Fprintf(f, "{AuthMode:%q OpenAIAPIKey:%q Tokens:%v LastRefresh:%q AgentIdentity:%v PersonalAccessToken:%q BedrockAPIKey:%v BedrockAccessKeys:%v WorkloadIdentity:%v}",
+			a.AuthMode, apiKey, a.Tokens, a.LastRefresh, a.AgentIdentity, personal, a.BedrockAPIKey, a.BedrockAccessKeys, a.WorkloadIdentity)
+		return
+	}
+	fmt.Fprintf(f, "auth.AuthDotJSON{AuthMode:%q, OpenAIAPIKey:%q}", a.AuthMode, apiKey)
 }
 
 type BedrockAPIKeyAuth struct {
@@ -299,11 +336,7 @@ func (s *Store) resolveWorkloadIdentity() (*ResolvedAuth, error) {
 		return nil, nil
 	}
 	opts := s.options.WorkloadIdentity
-	config, err := resolveWorkloadIdentityConfig(
-		opts.baseURL(),
-		env,
-		opts.chatgptLoginAllowed(),
-	)
+	config, err := resolveWorkloadIdentityConfig(opts.baseURL(), env)
 	if err != nil {
 		return nil, err
 	}
@@ -315,7 +348,12 @@ func (s *Store) resolveWorkloadIdentity() (*ResolvedAuth, error) {
 	if err != nil {
 		return nil, err
 	}
-	auth, err := (&WorkloadIdentityAuth{session: session}).ResolveAuth(context.Background())
+	auth, err := (&WorkloadIdentityAuth{
+		session:                 session,
+		chatgptLoginAllowed:     opts.chatgptLoginAllowed(),
+		apiLoginAllowed:         opts.apiLoginAllowed(),
+		forcedChatGPTWorkspaces: append([]string(nil), opts.forcedChatGPTWorkspaces()...),
+	}).ResolveAuth(context.Background())
 	if err != nil {
 		return nil, err
 	}

@@ -33,6 +33,12 @@ func SameAuthOwner(previous *AuthDotJSON, current *AuthDotJSON) bool {
 	if previous.Mode() != current.Mode() {
 		return false
 	}
+	// Rust #59275: an API workload identity is owned by its service account, so
+	// renewal for the same identity preserves ownership even though the API key
+	// rotates. A change of product fails the mode check above.
+	if previous.WorkloadIdentity != nil {
+		return sameWorkloadIdentityMetadata(previous.WorkloadIdentity, current.WorkloadIdentity)
+	}
 	user := strings.TrimSpace(ChatGPTUserIDFromAuth(previous))
 	workspace := strings.TrimSpace(AccountIDFromAuthForRestrictions(previous))
 	if user == "" || workspace == "" {

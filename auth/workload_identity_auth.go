@@ -35,8 +35,16 @@ type WorkloadIdentityAuthOptions struct {
 	// ChatGPTBaseURL classifies the auth environment (production vs staging).
 	// Empty means the production default "https://chatgpt.com/backend-api/".
 	ChatGPTBaseURL string
-	// ChatGPTLoginAllowed mirrors Rust's login-policy check; nil means allowed.
+	// ChatGPTLoginAllowed mirrors Rust's login-policy check for the ChatGPT
+	// product; nil means allowed.
 	ChatGPTLoginAllowed *bool
+	// APILoginAllowed is the login-policy check for the API product (#59275);
+	// nil means allowed.
+	APILoginAllowed *bool
+	// ForcedChatGPTWorkspaces restricts the ChatGPT product to the listed
+	// workspace account IDs; empty means unrestricted. API products have no
+	// ChatGPT workspace.
+	ForcedChatGPTWorkspaces []string
 	// HTTPClient performs the token exchange; nil means the default client.
 	HTTPClient *http.Client
 }
@@ -56,6 +64,20 @@ func (o *WorkloadIdentityAuthOptions) chatgptLoginAllowed() bool {
 		return true
 	}
 	return *o.ChatGPTLoginAllowed
+}
+
+func (o *WorkloadIdentityAuthOptions) forcedChatGPTWorkspaces() []string {
+	if o == nil {
+		return nil
+	}
+	return o.ForcedChatGPTWorkspaces
+}
+
+func (o *WorkloadIdentityAuthOptions) apiLoginAllowed() bool {
+	if o == nil || o.APILoginAllowed == nil {
+		return true
+	}
+	return *o.APILoginAllowed
 }
 
 func (o *WorkloadIdentityAuthOptions) httpClient() *http.Client {
@@ -165,12 +187,9 @@ type workloadIdentityFingerprint struct {
 // identity marker selects workload identity, and the configuration is then
 // validated (rule ID, absolute assertion path, login policy, and app routing)
 // without falling back to explicit environment credentials.
-func resolveWorkloadIdentityConfig(baseURL string, env workloadIdentityProcessEnv, chatgptLoginAllowed bool) (*workloadIdentitySessionConfig, error) {
+func resolveWorkloadIdentityConfig(baseURL string, env workloadIdentityProcessEnv) (*workloadIdentitySessionConfig, error) {
 	if !env.hasMarker() {
 		return nil, nil
-	}
-	if !chatgptLoginAllowed {
-		return nil, workloadInvalidConfig("workload identity requires a login policy that permits ChatGPT authentication")
 	}
 	if !env.hasFederationRule || env.federationRuleID == "" {
 		return nil, workloadInvalidConfig("workload identity requires " + OpenAIFederationRuleIDEnv)
@@ -217,14 +236,30 @@ func classifyWorkloadAuthEnvironment(baseURL string) (workloadIdentityEnvironmen
 	}
 }
 
+// workloadIdentitySubject identifies the authenticated identity so a token
+// that changes product or identity is rejected (Rust WorkloadIdentitySubject,
+// #59275).
 type workloadIdentitySubject struct {
-	accountID     string
-	accountUserID string
-	userID        string
+	product        WorkloadIdentityProduct
+	accountID      string
+	accountUserID  string
+	userID         string
+	organizationID string
+	projectID      string
 }
 
 func workloadSubjectFromToken(token WorkloadIdentityToken) workloadIdentitySubject {
+	if token.Product == WorkloadIdentityProductAPI {
+		subject := workloadIdentitySubject{product: token.Product}
+		if token.API != nil {
+			subject.userID = token.API.UserID
+			subject.organizationID = token.API.APIOrganizationID
+			subject.projectID = token.API.APIProjectID
+		}
+		return subject
+	}
 	return workloadIdentitySubject{
+		product:       WorkloadIdentityProductChatGPT,
 		accountID:     token.ChatGPTAccountID,
 		accountUserID: token.ChatGPTAccountUserID,
 		userID:        token.UserID,
@@ -241,7 +276,13 @@ type workloadIdentitySession struct {
 }
 
 func (s *workloadIdentitySession) acceptSubject(token WorkloadIdentityToken, previousAccountID string) error {
-	if previousAccountID != "" && previousAccountID != token.ChatGPTAccountID {
+	accountID := ""
+	if token.Product != WorkloadIdentityProductAPI {
+		accountID = token.ChatGPTAccountID
+	}
+	// An API workload identity has no ChatGPT account, so a previous ChatGPT
+	// account can never carry over to it (Rust accept_subject).
+	if previousAccountID != "" && previousAccountID != accountID {
 		return workloadErrInvalidExchangeResponse
 	}
 	subject := workloadSubjectFromToken(token)
@@ -316,6 +357,11 @@ func workloadIdentitySessionActive() bool {
 type WorkloadIdentityAuth struct {
 	observedTokenVersion atomic.Uint64
 	session              *workloadIdentitySession
+	// Login policy is applied to the product the exchange resolved, not to the
+	// configuration before the exchange (Rust #59275).
+	chatgptLoginAllowed     bool
+	apiLoginAllowed         bool
+	forcedChatGPTWorkspaces []string
 }
 
 // WorkloadIdentityAuthForProcess selects and activates workload identity for
@@ -323,11 +369,7 @@ type WorkloadIdentityAuth struct {
 // It returns (nil, nil) when workload identity is not selected.
 func WorkloadIdentityAuthForProcess(opts *WorkloadIdentityAuthOptions) (*WorkloadIdentityAuth, error) {
 	env := workloadReadProcessEnv()
-	config, err := resolveWorkloadIdentityConfig(
-		opts.baseURL(),
-		env,
-		opts.chatgptLoginAllowed(),
-	)
+	config, err := resolveWorkloadIdentityConfig(opts.baseURL(), env)
 	if err != nil {
 		return nil, err
 	}
@@ -339,7 +381,12 @@ func WorkloadIdentityAuthForProcess(opts *WorkloadIdentityAuthOptions) (*Workloa
 	if err != nil {
 		return nil, err
 	}
-	return &WorkloadIdentityAuth{session: session}, nil
+	return &WorkloadIdentityAuth{
+		session:                 session,
+		chatgptLoginAllowed:     opts.chatgptLoginAllowed(),
+		apiLoginAllowed:         opts.apiLoginAllowed(),
+		forcedChatGPTWorkspaces: append([]string(nil), opts.forcedChatGPTWorkspaces()...),
+	}, nil
 }
 
 // newWorkloadIdentityAuthForRegistry builds an adapter bound to a specific
@@ -351,7 +398,7 @@ func newWorkloadIdentityAuthForRegistry(config workloadIdentitySessionConfig, re
 	if err != nil {
 		return nil, err
 	}
-	return &WorkloadIdentityAuth{session: session}, nil
+	return &WorkloadIdentityAuth{session: session, chatgptLoginAllowed: true, apiLoginAllowed: true}, nil
 }
 
 // ResolveAuth resolves a validated workload identity token (Rust ExternalAuth
@@ -388,6 +435,31 @@ func (a *WorkloadIdentityAuth) buildValidatedAuth(token WorkloadIdentityToken, p
 }
 
 func (a *WorkloadIdentityAuth) validateToken(token WorkloadIdentityToken, previousAccountID string) (*AuthDotJSON, error) {
+	if token.Product == WorkloadIdentityProductAPI {
+		if !a.apiLoginAllowed {
+			return nil, workloadInvalidConfig("workload identity requires a login policy that permits API key authentication")
+		}
+		if token.API == nil {
+			return nil, workloadErrInvalidExchangeResponse
+		}
+		// Rust #59275: an API product exchange resolves as API key auth and
+		// keeps its service account metadata for ownership checks.
+		auth := FromAPIKey(token.AccessToken)
+		metadata := *token.API
+		auth.WorkloadIdentity = &metadata
+		if err := a.session.acceptSubject(token, previousAccountID); err != nil {
+			return nil, err
+		}
+		return &auth, nil
+	}
+	if !a.chatgptLoginAllowed {
+		return nil, workloadInvalidConfig("workload identity requires a login policy that permits ChatGPT authentication")
+	}
+	// Rust #59275 applies the forced-workspace restriction to the resolved
+	// ChatGPT product; API products have no ChatGPT workspace.
+	if err := EnsureWorkspaceAccountAllowed(a.forcedChatGPTWorkspaces, token.ChatGPTAccountID); err != nil {
+		return nil, err
+	}
 	auth := FromChatGPTAuthTokens(token.AccessToken, token.ChatGPTAccountID, token.ChatGPTPLanType)
 	claims := ChatGPTClaimsFromJWT(token.AccessToken)
 	// The exchanged token must carry the same subject as the assertion: the

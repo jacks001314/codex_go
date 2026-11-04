@@ -120,7 +120,10 @@ func AuthsEqualForRefresh(left *AuthDotJSON, right *AuthDotJSON) bool {
 	}
 	switch left.Mode() {
 	case "api-key":
-		return strings.TrimSpace(left.OpenAIAPIKey) == strings.TrimSpace(right.OpenAIAPIKey)
+		// Rust #59275: an API workload identity keeps its service account
+		// metadata alongside the API key.
+		return strings.TrimSpace(left.OpenAIAPIKey) == strings.TrimSpace(right.OpenAIAPIKey) &&
+			sameWorkloadIdentityMetadata(left.WorkloadIdentity, right.WorkloadIdentity)
 	case "chatgpt":
 		return authFingerprint(left) == authFingerprint(right)
 	case "chatgptAuthTokens":

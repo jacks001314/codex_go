@@ -103,11 +103,11 @@ func workloadTestAuth(t *testing.T, registry *workloadIdentitySessionRegistry, t
 
 func TestWorkloadIdentityMarkersSelectAndPartialConfigFailsClosed(t *testing.T) {
 	env := workloadIdentityProcessEnv{}
-	if config, err := resolveWorkloadIdentityConfig("https://chatgpt.com/backend-api", env, true); err != nil || config != nil {
+	if config, err := resolveWorkloadIdentityConfig("https://chatgpt.com/backend-api", env); err != nil || config != nil {
 		t.Fatalf("no markers: config = %+v, err = %v", config, err)
 	}
 	partial := workloadIdentityProcessEnv{hasFederationRule: true, federationRuleID: "partial"}
-	if _, err := resolveWorkloadIdentityConfig("https://chatgpt.com/backend-api", partial, true); err == nil || !strings.Contains(err.Error(), OpenAIIdentityTokenFileEnv) {
+	if _, err := resolveWorkloadIdentityConfig("https://chatgpt.com/backend-api", partial); err == nil || !strings.Contains(err.Error(), OpenAIIdentityTokenFileEnv) {
 		t.Fatalf("partial workload identity marker should fail closed: err = %v", err)
 	}
 
@@ -118,7 +118,7 @@ func TestWorkloadIdentityMarkersSelectAndPartialConfigFailsClosed(t *testing.T) 
 		{env: workloadIdentityProcessEnv{hasIdentityToken: true, identityTokenFile: "/tmp/token"}, missing: OpenAIFederationRuleIDEnv},
 		{env: workloadIdentityProcessEnv{hasFederationRule: true, federationRuleID: "rule-one"}, missing: OpenAIIdentityTokenFileEnv},
 	} {
-		_, err := resolveWorkloadIdentityConfig("https://chatgpt.com/backend-api", test.env, true)
+		_, err := resolveWorkloadIdentityConfig("https://chatgpt.com/backend-api", test.env)
 		if err == nil || !strings.Contains(err.Error(), test.missing) {
 			t.Fatalf("partial config err = %v, want mention of %s", err, test.missing)
 		}
@@ -128,7 +128,7 @@ func TestWorkloadIdentityMarkersSelectAndPartialConfigFailsClosed(t *testing.T) 
 		hasFederationRule: true, federationRuleID: "rule-one",
 		hasIdentityToken: true, identityTokenFile: "relative.jwt",
 	}
-	_, err := resolveWorkloadIdentityConfig("https://chatgpt.com/backend-api", relative, true)
+	_, err := resolveWorkloadIdentityConfig("https://chatgpt.com/backend-api", relative)
 	if err == nil || !strings.Contains(err.Error(), "absolute path") {
 		t.Fatalf("relative assertion path err = %v, want absolute-path failure", err)
 	}
@@ -139,9 +139,10 @@ func TestWorkloadIdentityAuthPolicyAndAppEnvironmentEnforced(t *testing.T) {
 		hasFederationRule: true, federationRuleID: "rule-one",
 		hasIdentityToken: true, identityTokenFile: filepath.Join(t.TempDir(), "identity-token"),
 	}
-	_, err := resolveWorkloadIdentityConfig("https://chatgpt.com/backend-api", complete, false)
-	if err == nil || !strings.Contains(err.Error(), "login policy") {
-		t.Fatalf("policy error = %v, want login-policy failure", err)
+	// Rust #59275 moved login-policy checks to the resolved exchange product;
+	// workload identity configuration itself no longer rejects on policy.
+	if config, err := resolveWorkloadIdentityConfig("https://chatgpt.com/backend-api", complete); err != nil || config == nil {
+		t.Fatalf("config = %+v, err = %v", config, err)
 	}
 
 	for _, test := range []struct {
@@ -154,7 +155,7 @@ func TestWorkloadIdentityAuthPolicyAndAppEnvironmentEnforced(t *testing.T) {
 		{"https://chat.openai.com/backend-api/codex", workloadEnvironmentProduction, workloadProdTokenURL},
 		{"https://chatgpt-staging.com/backend-api", workloadEnvironmentStaging, workloadStagingTokenURL},
 	} {
-		config, err := resolveWorkloadIdentityConfig(test.baseURL, complete, true)
+		config, err := resolveWorkloadIdentityConfig(test.baseURL, complete)
 		if err != nil || config == nil {
 			t.Fatalf("baseURL %q: config = %+v, err = %v", test.baseURL, config, err)
 		}
@@ -163,7 +164,7 @@ func TestWorkloadIdentityAuthPolicyAndAppEnvironmentEnforced(t *testing.T) {
 		}
 	}
 
-	_, err = resolveWorkloadIdentityConfig("https://example.invalid/backend-api", complete, true)
+	_, err := resolveWorkloadIdentityConfig("https://example.invalid/backend-api", complete)
 	if err == nil || !strings.Contains(err.Error(), "app routing") {
 		t.Fatalf("untrusted environment err = %v, want app-routing failure", err)
 	}
@@ -268,7 +269,6 @@ func TestWorkloadIdentityProcessEnvReadsContext(t *testing.T) {
 	config, err := resolveWorkloadIdentityConfig(
 		"https://chatgpt.com",
 		env,
-		/*chatgptLoginAllowed*/ true,
 	)
 	if err != nil {
 		t.Fatalf("resolveWorkloadIdentityConfig() error = %v", err)

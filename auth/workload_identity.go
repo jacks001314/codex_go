@@ -47,8 +47,29 @@ type workloadCachedToken struct {
 	token     WorkloadIdentityToken
 }
 
+// WorkloadIdentityProduct is the product resolved by the federation rule's
+// token exchange (Rust WorkloadIdentityProduct, #59275). Older ChatGPT token
+// endpoints omit the marker.
+type WorkloadIdentityProduct string
+
+const (
+	WorkloadIdentityProductChatGPT WorkloadIdentityProduct = "chatgpt"
+	WorkloadIdentityProductAPI     WorkloadIdentityProduct = "api"
+)
+
+// WorkloadIdentityAPIMetadata describes the API service account resolved by an
+// API workload identity exchange (Rust ApiTokenMetadata).
+type WorkloadIdentityAPIMetadata struct {
+	APIOrganizationID string `json:"api_organization_id"`
+	APIProjectID      string `json:"api_project_id"`
+	UserID            string `json:"user_id"`
+}
+
 type WorkloadIdentityToken struct {
-	AccessToken          string
+	AccessToken string
+	Product     WorkloadIdentityProduct
+	// API carries the service account identity for API product exchanges.
+	API                  *WorkloadIdentityAPIMetadata
 	ChatGPTAccountID     string
 	ChatGPTAccountUserID string
 	ChatGPTPLanType      *string
@@ -356,6 +377,9 @@ func workloadAssertionErrorIsTransient(err error) bool {
 
 type workloadTokenExchangeResponse struct {
 	AccessToken          string  `json:"access_token"`
+	WifProduct           string  `json:"wif_product"`
+	APIOrganizationID    string  `json:"api_organization_id"`
+	APIProjectID         string  `json:"api_project_id"`
 	ChatGPTAccountID     string  `json:"chatgpt_account_id"`
 	ChatGPTAccountUserID string  `json:"chatgpt_account_user_id"`
 	ChatGPTPLanType      *string `json:"chatgpt_plan_type"`
@@ -372,23 +396,50 @@ func (w workloadTokenExchangeResponse) intoToken() (WorkloadIdentityToken, error
 		w.IssuedTokenType != workloadAccessTokenType ||
 		!strings.EqualFold(w.TokenType, "bearer") ||
 		lifetime <= 0 ||
-		lifetime > workloadMaxTokenLifetime ||
-		strings.TrimSpace(w.Scope) == "" ||
-		strings.TrimSpace(w.ChatGPTAccountID) == "" ||
-		strings.TrimSpace(w.ChatGPTAccountUserID) == "" ||
-		strings.TrimSpace(w.UserID) == "" ||
-		(w.ChatGPTPLanType != nil && strings.TrimSpace(*w.ChatGPTPLanType) == "") {
+		lifetime > workloadMaxTokenLifetime {
 		return WorkloadIdentityToken{}, workloadErrInvalidExchangeResponse
 	}
-	return WorkloadIdentityToken{
-		AccessToken:          w.AccessToken,
-		ChatGPTAccountID:     w.ChatGPTAccountID,
-		ChatGPTAccountUserID: w.ChatGPTAccountUserID,
-		ChatGPTPLanType:      cloneOptionalString(w.ChatGPTPLanType),
-		ExpiresIn:            w.ExpiresIn,
-		Scope:                w.Scope,
-		UserID:               w.UserID,
-	}, nil
+	// Rust #59275: wif_product selects the exchange product; a missing marker
+	// keeps the ChatGPT compatibility path.
+	switch strings.ToLower(strings.TrimSpace(w.WifProduct)) {
+	case "", string(WorkloadIdentityProductChatGPT):
+		if strings.TrimSpace(w.Scope) == "" ||
+			strings.TrimSpace(w.ChatGPTAccountID) == "" ||
+			strings.TrimSpace(w.ChatGPTAccountUserID) == "" ||
+			strings.TrimSpace(w.UserID) == "" ||
+			(w.ChatGPTPLanType != nil && strings.TrimSpace(*w.ChatGPTPLanType) == "") {
+			return WorkloadIdentityToken{}, workloadErrInvalidExchangeResponse
+		}
+		return WorkloadIdentityToken{
+			AccessToken:          w.AccessToken,
+			Product:              WorkloadIdentityProductChatGPT,
+			ChatGPTAccountID:     w.ChatGPTAccountID,
+			ChatGPTAccountUserID: w.ChatGPTAccountUserID,
+			ChatGPTPLanType:      cloneOptionalString(w.ChatGPTPLanType),
+			ExpiresIn:            w.ExpiresIn,
+			Scope:                w.Scope,
+			UserID:               w.UserID,
+		}, nil
+	case string(WorkloadIdentityProductAPI):
+		metadata := &WorkloadIdentityAPIMetadata{
+			APIOrganizationID: w.APIOrganizationID,
+			APIProjectID:      w.APIProjectID,
+			UserID:            w.UserID,
+		}
+		if strings.TrimSpace(metadata.APIOrganizationID) == "" ||
+			strings.TrimSpace(metadata.APIProjectID) == "" ||
+			strings.TrimSpace(metadata.UserID) == "" {
+			return WorkloadIdentityToken{}, workloadErrInvalidExchangeResponse
+		}
+		return WorkloadIdentityToken{
+			AccessToken: w.AccessToken,
+			Product:     WorkloadIdentityProductAPI,
+			API:         metadata,
+			ExpiresIn:   w.ExpiresIn,
+		}, nil
+	default:
+		return WorkloadIdentityToken{}, workloadErrInvalidExchangeResponse
+	}
 }
 
 func (s *workloadIdentityCacheState) store(token WorkloadIdentityToken, validFrom time.Time) {
