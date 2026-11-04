@@ -289,6 +289,97 @@ func responsesInputSchema(schema map[string]any) map[string]any {
 	return out
 }
 
+// FlattenTextCustomToolOutputsJSON re-encodes input items through their JSON
+// form and then flattens structured custom tool outputs to plain text. The
+// round trip guarantees every item reaches the same shape the request body
+// uses, whatever Go type produced it. Undecodable input is returned unchanged.
+func FlattenTextCustomToolOutputsJSON(items []any) []any {
+	if len(items) == 0 {
+		return items
+	}
+	encoded, err := json.Marshal(items)
+	if err != nil {
+		return items
+	}
+	var decoded []any
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		return items
+	}
+	return FlattenCustomToolCallOutputParts(decoded)
+}
+
+// FlattenCustomToolCallOutputParts rewrites a custom tool call output from
+// a content-part array to plain text. Responses servers that only implement
+// text custom tools reject the structured output item outright.
+func FlattenCustomToolCallOutputParts(items []any) []any {
+	if len(items) == 0 {
+		return items
+	}
+	out := make([]any, 0, len(items))
+	for _, value := range items {
+		item, ok := value.(map[string]any)
+		if !ok || responseToolString(item["type"]) != "custom_tool_call_output" {
+			out = append(out, value)
+			continue
+		}
+		parts, ok := item["output"].([]any)
+		if !ok {
+			out = append(out, value)
+			continue
+		}
+		texts := make([]string, 0, len(parts))
+		for _, part := range parts {
+			if partMap, ok := part.(map[string]any); ok {
+				if text, ok := partMap["text"].(string); ok {
+					texts = append(texts, text)
+				}
+			}
+		}
+		clone := cloneMapAny(item)
+		clone["output"] = strings.Join(texts, "")
+		out = append(out, clone)
+	}
+	return out
+}
+
+// DowngradeCustomToolGrammarsToText rewrites free-form custom tool
+// declarations from the constrained grammar encoding to plain text. Responses
+// servers that only implement free-form text custom tools reject the grammar
+// form with a 400 before any model output is produced.
+func DowngradeCustomToolGrammarsToText(tools []any) []any {
+	if len(tools) == 0 {
+		return tools
+	}
+	out := make([]any, 0, len(tools))
+	for _, value := range tools {
+		item, ok := value.(map[string]any)
+		if !ok {
+			out = append(out, value)
+			continue
+		}
+		clone := cloneMapAny(item)
+		switch responseToolString(clone["type"]) {
+		case "custom":
+			if format, ok := clone["format"].(map[string]any); ok && responseToolString(format["type"]) == "grammar" {
+				clone["format"] = map[string]any{"type": "text"}
+			}
+		case "namespace":
+			switch children := clone["tools"].(type) {
+			case []any:
+				clone["tools"] = DowngradeCustomToolGrammarsToText(children)
+			case []map[string]any:
+				converted := make([]any, 0, len(children))
+				for i := range children {
+					converted = append(converted, children[i])
+				}
+				clone["tools"] = DowngradeCustomToolGrammarsToText(converted)
+			}
+		}
+		out = append(out, clone)
+	}
+	return out
+}
+
 // normalizeResponseToolParameters sanitizes raw Responses tool definitions so a
 // request can never reach the API with an invalid function parameters schema
 // (missing or null "type", or null "required"). Stale persisted definitions

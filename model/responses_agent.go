@@ -2271,6 +2271,9 @@ func (r *ResponsesAgentRunner) buildResponsesAgentRequest(request *AgentRequest,
 	instructions := responsesInstructions(request)
 	inputItems := responsesInputItemsForProviderWithStore(request, r.providerName(), r.imageStore())
 	tools := normalizeResponseToolParameters(cloneAnySlice(request.Tools))
+	if !r.ProviderCapabilities.CustomToolGrammar {
+		tools = DowngradeCustomToolGrammarsToText(tools)
+	}
 	if !request.DisableHostedImageGeneration {
 		tools = r.withHostedToolsForRequest(tools, &modelInfo)
 	}
@@ -2334,6 +2337,9 @@ func (r *ResponsesAgentRunner) buildResponsesAgentRequest(request *AgentRequest,
 		apiRequest.Include = r.responsesInclude()
 	}
 	apiRequest.Input = boundedInputForResponseMessage(apiRequest, request, r.Metrics)
+	if !r.ProviderCapabilities.CustomToolGrammar {
+		apiRequest.Input = FlattenTextCustomToolOutputsJSON(apiRequest.Input)
+	}
 	return apiRequest, nil
 }
 

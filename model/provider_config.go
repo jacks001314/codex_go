@@ -107,7 +107,7 @@ func providerCapabilitiesOverrideFromConfig(values map[string]any) (*ProviderCap
 	}
 	out := &ProviderCapabilitiesOverride{}
 	for key := range values {
-		if key != "external_web_access" && key != "remote_compaction" && key != "cyber_access_programs" {
+		if key != "external_web_access" && key != "remote_compaction" && key != "cyber_access_programs" && key != "custom_tool_grammar" {
 			return nil, fmt.Errorf("model_providers capabilities has unknown field `%s`", key)
 		}
 	}
@@ -124,6 +124,13 @@ func providerCapabilitiesOverrideFromConfig(values map[string]any) (*ProviderCap
 			return nil, fmt.Errorf("model_providers capabilities.cyber_access_programs must be a boolean")
 		}
 		out.CyberAccessPrograms = &value
+	}
+	if raw, ok := values["custom_tool_grammar"]; ok {
+		value, ok := raw.(bool)
+		if !ok {
+			return nil, fmt.Errorf("model_providers capabilities.custom_tool_grammar must be a boolean")
+		}
+		out.CustomToolGrammar = &value
 	}
 	if raw, ok := values["remote_compaction"]; ok {
 		text, ok := raw.(string)

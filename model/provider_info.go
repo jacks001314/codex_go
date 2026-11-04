@@ -480,6 +480,9 @@ type ProviderCapabilitiesOverride struct {
 	// CyberAccessPrograms lets a non-OpenAI provider opt into Cyber access
 	// programs (Rust #58190 ModelProviderCapabilities::cyber_access_programs).
 	CyberAccessPrograms *bool `json:"cyber_access_programs,omitempty"`
+	// CustomToolGrammar turns the grammar encoding for free-form custom tools
+	// off for providers that only accept free-form text custom tools.
+	CustomToolGrammar *bool `json:"custom_tool_grammar,omitempty"`
 }
 
 // SupportsCyberAccessPrograms mirrors Rust
@@ -490,6 +493,17 @@ func (p ProviderInfo) SupportsCyberAccessPrograms(providerID string) bool {
 		return true
 	}
 	return p.Capabilities != nil && p.Capabilities.CyberAccessPrograms != nil && *p.Capabilities.CyberAccessPrograms
+}
+
+// SupportsCustomToolGrammar resolves whether the provider accepts Responses
+// custom tools whose format is a constrained grammar. The grammar encoding
+// stays enabled by default; a provider that only implements free-form text
+// custom tools opts out with capabilities.custom_tool_grammar.
+func (p ProviderInfo) SupportsCustomToolGrammar() bool {
+	if p.Capabilities != nil && p.Capabilities.CustomToolGrammar != nil {
+		return *p.Capabilities.CustomToolGrammar
+	}
+	return true
 }
 
 type ProviderInfo struct {

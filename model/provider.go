@@ -29,6 +29,11 @@ type ProviderCapabilities struct {
 	ExternalWebAccess bool
 	// RemoteCompaction is the provider's remote context-compaction protocol.
 	RemoteCompaction RemoteCompactionSupport
+	// CustomToolGrammar reports whether the provider accepts Responses custom
+	// tools whose format is a constrained grammar. OpenAI hosts that encoding;
+	// other Responses-compatible servers may only accept free-form text
+	// custom tools and reject the grammar form outright.
+	CustomToolGrammar bool
 }
 
 func DefaultProviderCapabilities() ProviderCapabilities {
@@ -37,6 +42,7 @@ func DefaultProviderCapabilities() ProviderCapabilities {
 		WebSearch:         true,
 		ExternalWebAccess: true,
 		RemoteCompaction:  RemoteCompactionUnsupported,
+		CustomToolGrammar: true,
 	}
 }
 
@@ -162,6 +168,7 @@ func (p *ConfiguredProvider) Capabilities() ProviderCapabilities {
 		WebSearch:         true,
 		ExternalWebAccess: p.info.ExternalWebAccess(),
 		RemoteCompaction:  p.info.RemoteCompactionSupport(),
+		CustomToolGrammar: p.info.SupportsCustomToolGrammar(),
 	}
 }
 
@@ -416,6 +423,7 @@ func (p *AmazonBedrockProvider) Capabilities() ProviderCapabilities {
 		WebSearch:         p.info.Name == AmazonBedrockProviderName,
 		ExternalWebAccess: false,
 		RemoteCompaction:  RemoteCompactionV2,
+		CustomToolGrammar: false,
 	}
 }
 
@@ -825,6 +833,7 @@ func (p *GCPProvider) Capabilities() ProviderCapabilities {
 		WebSearch:         false,
 		ExternalWebAccess: false,
 		RemoteCompaction:  RemoteCompactionV2,
+		CustomToolGrammar: false,
 	}
 }
 
