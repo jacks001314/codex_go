@@ -85,6 +85,22 @@ func (b *Binding) SearchInvocationContext() (any, bool) {
 	return cloneJSONValue(b.searchInvocationContext), true
 }
 
+// ModelSearchInvocationContext returns the opaque connector pin carried by a
+// projected Search declaration. Keeping this lookup in mcp prevents a caller
+// from treating arbitrary Apps metadata as a search pin.
+func ModelSearchInvocationContext(tool *RuntimeToolInfo) (any, bool) {
+	if !IsModelSearchTool(tool) {
+		return nil, false
+	}
+	meta, _ := tool.Meta.(map[string]any)
+	appsMeta := connectorMetaMap(meta[MCPToolCodexAppsMetaKey])
+	context, ok := appsMeta["invocation_context"]
+	if !ok || context == nil {
+		return nil, false
+	}
+	return cloneJSONValue(context), true
+}
+
 // DiscoverModelSearch lists the already authorized host-owned Apps connection
 // with the current model's search profile. It never creates a new transport or
 // treats an empty catalog as a successful discovery.

@@ -48,6 +48,58 @@ func TestAgentLoopTagsOnlyFirstRequestAfterPrewarmLikeRust(t *testing.T) {
 	}
 }
 
+func TestAgentLoopHoldsSearchReservationThroughEmittedTools(t *testing.T) {
+	agent := &fakeLoopAgent{}
+	registry := tool.NewRegistry()
+	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{Name: tool.PlainName("echo")}, func(ctx context.Context, invocation *tool.Invocation) (*tool.Output, error) {
+		return &tool.Output{Success: true, Body: "tool result"}, nil
+	})); err != nil {
+		t.Fatalf("register echo: %v", err)
+	}
+	reserved, released := 0, 0
+	loop := NewAgentLoop(&AgentLoopOptions{Agent: agent, Dispatcher: NewToolDispatcher(&ToolDispatcherOptions{Router: tool.NewRouter(registry)}), MaxTurns: 3})
+	if _, err := loop.Run(context.Background(), &AgentLoopRequest{
+		Prompt: "run echo", Model: "gpt-test",
+		ReserveSearch: func() (func(), error) {
+			reserved++
+			return func() { released++ }, nil
+		},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if reserved != 2 || released != 2 {
+		t.Fatalf("reservations = %d/%d, want 2/2 including the tool-owning step", reserved, released)
+	}
+}
+
+func TestAgentLoopRemovesNativeSearchWhenFallbackReservationLosesRace(t *testing.T) {
+	agent := &fakeLoopAgent{}
+	registry := tool.NewRegistry()
+	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{Name: tool.PlainName("echo")}, func(ctx context.Context, invocation *tool.Invocation) (*tool.Output, error) {
+		return &tool.Output{Success: true, Body: "tool result"}, nil
+	})); err != nil {
+		t.Fatalf("register echo: %v", err)
+	}
+	loop := NewAgentLoop(&AgentLoopOptions{Agent: agent, Dispatcher: NewToolDispatcher(&ToolDispatcherOptions{Router: tool.NewRouter(registry)}), MaxTurns: 2})
+	if _, err := loop.Run(context.Background(), &AgentLoopRequest{
+		Prompt: "run echo", Model: "gpt-test",
+		Tools: []any{
+			map[string]any{"type": "web_search"},
+			map[string]any{"type": "namespace", "name": "web"},
+			map[string]any{"type": "function", "name": "echo"},
+		},
+		ReserveSearch: func() (func(), error) { return nil, ErrSearchReservationUnavailable },
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(agent.requests) == 0 || len(agent.requests[0].Tools) != 1 {
+		t.Fatalf("tools = %#v, want echo only", agent.requests)
+	}
+	if got := agent.requests[0].Tools[0].(map[string]any)["name"]; got != "echo" {
+		t.Fatalf("remaining tool = %#v", agent.requests[0].Tools[0])
+	}
+}
+
 func TestAgentLoopRunsToolsAndContinuesSampling(t *testing.T) {
 	agent := &fakeLoopAgent{}
 	executedToolCalls := NewExecutedToolCallRecorder()

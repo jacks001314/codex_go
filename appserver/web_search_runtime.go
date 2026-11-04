@@ -13,7 +13,14 @@ import (
 )
 
 func (r *RuntimeRouter) webSearchOptionsForTurn(cfg *config.Config, params *turn.TurnStartParams) (*turn.WebSearchOptions, error) {
+	return r.webSearchOptionsForTurnWithMode(cfg, params, nil)
+}
+
+func (r *RuntimeRouter) webSearchOptionsForTurnWithMode(cfg *config.Config, params *turn.TurnStartParams, modeOverride *codexapi.WebSearchMode) (*turn.WebSearchOptions, error) {
 	mode := webSearchModeFromConfig(cfg)
+	if modeOverride != nil {
+		mode = *modeOverride
+	}
 	if cfg == nil || turnStartReviewRuntime(params) || mode == codexapi.WebSearchModeDisabled {
 		return nil, nil
 	}

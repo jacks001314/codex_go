@@ -386,19 +386,29 @@ type RuntimeRouter struct {
 	// #44242's built_tools plans every step from that step's captured model).
 	// The store keeps the newest turn per thread, so it stays bounded by the
 	// live threads without hooking the turn lifecycle.
-	stepToolPlansMu     sync.Mutex
-	stepToolPlans       map[string]rememberedTurnToolInputs
-	sink                NotificationSink
-	requests            ServerRequestSink
-	turnsMu             *sync.Mutex
-	active              map[string]*activeRuntimeTurn
-	diffs               map[string]*runtimeutil.DiffTracker
-	ephemeralMu         *sync.RWMutex
-	ephemeralThreads    map[string]*session.Record
-	subscriptionsMu     *sync.Mutex
-	threadSubscriptions map[string]map[string]struct{}
-	clientInfoMu        sync.RWMutex
-	clientInfo          map[string]ClientInfo
+	stepToolPlansMu sync.Mutex
+	stepToolPlans   map[string]rememberedTurnToolInputs
+	// modelSearchMu guards per-thread provider ownership and step-scoped
+	// discovery reuse. Ownership is claimed only by a call that actually runs;
+	// an unused native fallback offer remains available to recover next step.
+	modelSearchMu             sync.Mutex
+	modelSearchOwners         map[string]modelSearchProvider
+	modelSearchRestored       map[string]bool
+	modelSearchTurnUsage      map[string]uint8
+	modelSearchDiscoveryCache map[string]modelSearchDiscoveryCacheEntry
+	modelSearchReservations   map[string]map[uint64]*modelSearchReservation
+	modelSearchReservationSeq uint64
+	sink                      NotificationSink
+	requests                  ServerRequestSink
+	turnsMu                   *sync.Mutex
+	active                    map[string]*activeRuntimeTurn
+	diffs                     map[string]*runtimeutil.DiffTracker
+	ephemeralMu               *sync.RWMutex
+	ephemeralThreads          map[string]*session.Record
+	subscriptionsMu           *sync.Mutex
+	threadSubscriptions       map[string]map[string]struct{}
+	clientInfoMu              sync.RWMutex
+	clientInfo                map[string]ClientInfo
 	// closedConnections records transports that already reported closure, so a
 	// request that outlived its connection cannot re-subscribe it after slow
 	// startup (Rust #50380).
@@ -7271,6 +7281,7 @@ func (r *RuntimeRouter) markThreadUnloaded(threadID string) {
 	r.cloudCatalogs.dropThread(threadID)
 	r.forgetCatalogMetrics(threadID)
 	r.closeThreadShellSnapshots(threadID)
+	r.deleteModelSearchThreadState(threadID)
 	if err := r.deleteCodeModeRuntime(threadID); err != nil {
 		slog.Warn("failed to close thread code-mode runtime", "thread_id", threadID, "error", err)
 	}
@@ -11853,6 +11864,10 @@ func (r *RuntimeRouter) runtimeAppendItems(threadID session.ThreadID, items []se
 	// item (ContextManager::record_annotated_items), so a resumed thread restores
 	// the same delivery proof instead of minting a new revision.
 	r.annotateRetainedHarnessMetadata(threadID, items)
+	// Native fallback owns the thread's browsing references. The search item
+	// carries that decision in trusted harness metadata so a resumed session
+	// cannot switch the same references back to hosted search.
+	r.annotateModelSearchMetadata(string(threadID), items)
 	// Rust checkpoints the thread's cumulative MCP attribution into the recorded
 	// items before they are persisted (session/mod.rs), then acknowledges the
 	// revision once the append succeeds.
@@ -17079,6 +17094,9 @@ func (r *RuntimeRouter) buildTurnRuntimeContext(ctx context.Context, params *tur
 		// step's captured settings instead of the turn-start plan.
 		StepToolPlan:       r.stepToolPlanForTurn(params.ThreadID, turnID),
 		InvocationRegistry: invocationRegistry,
+		SearchReservation: func() (func(), error) {
+			return r.reserveModelSearchForSampling(params.ThreadID, turnID)
+		},
 	})
 	// A replacement accepted while this turn is running publishes onto this
 	// runtime, which refreshes the tool list before the next sampling step.
@@ -17323,6 +17341,13 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	if err != nil {
 		return nil, err
 	}
+	turnModelInfo := (*model.ModelInfo)(nil)
+	originator := ""
+	if params != nil {
+		originator = params.Originator
+		modelID := firstNonEmpty(strings.TrimSpace(params.Model), stringConfigValue(cfg, "model"))
+		turnModelInfo = r.modelInfoForRuntimeWithConfigAndOriginator(modelID, cfg, originator)
+	}
 	r.refreshCloudPluginCatalogForTurn(ctx, cfg, threadID, turnID)
 	stepCapabilities := newRuntimeStepCapabilitySnapshotContext(ctx, r, threadID, params)
 	if threadID != "" && strings.TrimSpace(turnID) != "" {
@@ -17354,10 +17379,41 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	disableWaitAgent := cfg != nil && !cfg.WaitAgentEnabled()
 	mcpService := r.mcpServiceForThread(threadID, cfg)
 	requiredMCPServers := r.requiredMCPServersForTurn(threadID, cfg, params)
+	if modelSearchMayUseApps(turnModelInfo, cfg) {
+		requiredMCPServers = append(requiredMCPServers, mcp.CodexAppsServerName)
+	}
 	requiredPlugins := r.requiredPluginsForTurn(threadID, cfg, params)
-	candidates, mcpTools, mcpConnectors, err := r.prepareTurnToolInputs(ctx, threadID, cfg, mcpService, requiredMCPServers, requiredPlugins)
+	candidates, mcpTools, mcpConnectors, mcpBinding, err := r.prepareTurnToolInputs(ctx, threadID, cfg, mcpService, requiredMCPServers, requiredPlugins)
 	if err != nil {
 		return nil, err
+	}
+	baseMCPTools := append([]mcp.RuntimeToolInfo(nil), mcpTools...)
+	turnMetadata := modelSearchRequestDocument(r.mcpTurnMetadataProvider(threadID, strings.TrimSpace(turnID)))
+	searchSelection := r.resolveModelSearchForTurn(ctx, threadID, strings.TrimSpace(turnID), cfg, turnModelInfo, mcpTools, mcpBinding, webSearchOptions, turnMetadata)
+	searchSelection, searchReservationID := r.reserveModelSearchSelection(threadID, searchSelection)
+	switch searchSelection.provider {
+	case modelSearchNative:
+		if searchSelection.mode != "" {
+			mode := searchSelection.mode
+			webSearchOptions, err = r.webSearchOptionsForTurnWithMode(cfg, params, &mode)
+			if err != nil {
+				return nil, err
+			}
+			webSearchOptions = r.nativeModelSearchOptions(webSearchOptions, threadID, strings.TrimSpace(turnID))
+		}
+	case modelSearchUnmanaged:
+		// No model search decision exists; preserve the configured native tool.
+	default:
+		webSearchOptions = nil
+	}
+	mcpTools = applyModelSearchTools(mcpTools, searchSelection)
+	if threadID != "" && strings.TrimSpace(turnID) != "" {
+		r.threads.UpdateTurn(threadID, strings.TrimSpace(turnID), func(active *activeRuntimeTurn) {
+			active.ModelSearchProvider = searchSelection.provider
+			active.ModelSearchMode = searchSelection.mode
+			active.ModelSearchFallback = searchSelection.fallback
+			active.ModelSearchReservationID = searchReservationID
+		})
 	}
 	permissionProfile, err := turnSandboxPermissionProfile(cfg, cwd, params)
 	if err != nil {
@@ -17370,13 +17426,6 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	// Rust #41243: the sleep_tool feature gates clock.sleep registration via a
 	// model_driven / always_on mode, and the current-time tool is registered for
 	// a model that declares the clock capability even without the feature flag.
-	turnModelInfo := (*model.ModelInfo)(nil)
-	originator := ""
-	if params != nil {
-		originator = params.Originator
-		modelID := firstNonEmpty(strings.TrimSpace(params.Model), stringConfigValue(cfg, "model"))
-		turnModelInfo = r.modelInfoForRuntimeWithConfigAndOriginator(modelID, cfg, originator)
-	}
 	// Rust effective_tool_mode (core/src/tools/mod.rs): the model/feature
 	// resolved mode decides the tool surface. Only CodeModeOnly matters for the
 	// MCP resource helpers (#50546), and it never falls back to direct.
@@ -17913,11 +17962,17 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	// Rust build_mcp_tool_call_request_meta: MCP tool calls report the turn's
 	// metadata document in `_meta`.
 	options.MCPTurnMetadata = r.mcpTurnMetadataProvider(threadID, strings.TrimSpace(turnID))
+	if searchSelection.provider == modelSearchHosted {
+		options.MCPTurnMetadata = searchCallTurnMetadata(options.MCPTurnMetadata, searchSelection.context)
+	}
 	options.MCPTurnRootTurnID = r.mcpTurnRootTurnIDProvider(threadID, strings.TrimSpace(turnID))
 	// Rust #58378: private agent attribution is scoped to the host-selected
 	// plugin registration installed on this thread.
 	options.MCPAgentMetadataRecipient = r.threadAgentMCPMetadataRecipient(threadID)
 	options.MCPToolRequestMetaHook = r.threadMCPToolRequestMetaHook(threadID)
+	if searchSelection.provider == modelSearchHosted || searchSelection.provider == modelSearchClientMCP {
+		options.MCPToolAdmissionHook = r.modelSearchMCPAdmission(threadID, strings.TrimSpace(turnID), searchSelection)
+	}
 	options.MCPCyberAccessProgram = r.mcpCyberAccessProgramProvider(threadID, strings.TrimSpace(turnID))
 	options.RequestUserInputAvailableModes = requestUserInputModes
 	options.EnableCurrentTimeTool = enableCurrentTimeTool
@@ -18002,6 +18057,7 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	// Rust #44242: a later sampling step plans its tools from that step's
 	// captured settings, so keep the assembled options for the step rebuild.
 	r.rememberTurnToolOptions(threadID, strings.TrimSpace(turnID), cwd, params, cfg, options)
+	r.rememberModelSearchToolInputs(threadID, strings.TrimSpace(turnID), baseMCPTools, mcpBinding, turnMetadata, searchSelection)
 	// Rust #53369: an unavailable message board must not reject turn
 	// construction. Calls to the missing board tools reach the model as ordinary
 	// unsupported-call errors while the rest of the turn continues.
@@ -18352,9 +18408,10 @@ func primaryTurnEnvironmentSelection(params *turn.TurnStartParams) map[string]an
 type turnMCPPreparation struct {
 	tools      []mcp.RuntimeToolInfo
 	connectors []mcp.RuntimeConnector
+	binding    *mcp.Binding
 }
 
-func (r *RuntimeRouter) prepareTurnToolInputs(ctx context.Context, threadID string, cfg *config.Config, mcpService *mcp.MCPService, requiredMCPServers []string, requiredPlugins []string) ([]plugin.DiscoverableInfo, []mcp.RuntimeToolInfo, []mcp.RuntimeConnector, error) {
+func (r *RuntimeRouter) prepareTurnToolInputs(ctx context.Context, threadID string, cfg *config.Config, mcpService *mcp.MCPService, requiredMCPServers []string, requiredPlugins []string) ([]plugin.DiscoverableInfo, []mcp.RuntimeToolInfo, []mcp.RuntimeConnector, *mcp.Binding, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -18373,23 +18430,23 @@ func (r *RuntimeRouter) prepareTurnToolInputs(ctx context.Context, threadID stri
 		recommendations <- candidates
 	}()
 	go func() {
-		tools, connectors := r.mcpRuntimeInputsForServiceWithRequirements(threadID, cfg, mcpService, requiredMCPServers, requiredPlugins)
-		mcpPrepared <- turnMCPPreparation{tools: tools, connectors: connectors}
+		tools, connectors, binding := r.mcpRuntimeInputsForServiceWithRequirementsAndBinding(threadID, cfg, mcpService, requiredMCPServers, requiredPlugins)
+		mcpPrepared <- turnMCPPreparation{tools: tools, connectors: connectors, binding: binding}
 	}()
 
 	var candidates []plugin.DiscoverableInfo
 	select {
 	case <-ctx.Done():
-		return nil, nil, nil, ctx.Err()
+		return nil, nil, nil, nil, ctx.Err()
 	case candidates = <-recommendations:
 	}
 	var prepared turnMCPPreparation
 	select {
 	case <-ctx.Done():
-		return nil, nil, nil, ctx.Err()
+		return nil, nil, nil, nil, ctx.Err()
 	case prepared = <-mcpPrepared:
 	}
-	return candidates, prepared.tools, prepared.connectors, nil
+	return candidates, prepared.tools, prepared.connectors, prepared.binding, nil
 }
 
 func runtimeToolsUseOpenAIFileUpload(tools []mcp.RuntimeToolInfo) bool {
@@ -19963,8 +20020,13 @@ func (r *RuntimeRouter) mcpRuntimeInputsForServiceWithRequired(threadID string, 
 }
 
 func (r *RuntimeRouter) mcpRuntimeInputsForServiceWithRequirements(threadID string, cfg *config.Config, service *mcp.MCPService, requiredServers []string, requiredPlugins []string) ([]mcp.RuntimeToolInfo, []mcp.RuntimeConnector) {
+	tools, connectors, _ := r.mcpRuntimeInputsForServiceWithRequirementsAndBinding(threadID, cfg, service, requiredServers, requiredPlugins)
+	return tools, connectors
+}
+
+func (r *RuntimeRouter) mcpRuntimeInputsForServiceWithRequirementsAndBinding(threadID string, cfg *config.Config, service *mcp.MCPService, requiredServers []string, requiredPlugins []string) ([]mcp.RuntimeToolInfo, []mcp.RuntimeConnector, *mcp.Binding) {
 	if r == nil || service == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	// Rust #41199: the optional MCP startup grace is configurable; a zero value
 	// disables the shared grace (servers wait for their own startup timeout).
@@ -19981,11 +20043,12 @@ func (r *RuntimeRouter) mcpRuntimeInputsForServiceWithRequirements(threadID stri
 		OptionalStartupGrace: optionalStartupGrace,
 	})
 	if err != nil || response == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
+	binding := service.CaptureBinding(response.Data)
 	tools := mcp.RuntimeToolsFromStatuses(response.Data)
 	if len(tools) == 0 {
-		return nil, nil
+		return nil, nil, binding
 	}
 	if cfg != nil {
 		for i := range tools {
@@ -19994,7 +20057,7 @@ func (r *RuntimeRouter) mcpRuntimeInputsForServiceWithRequirements(threadID stri
 	}
 	tools = r.annotateRuntimeMCPToolsWithPluginSources(tools)
 	tools = filterCodexAppsRuntimeTools(tools, cfg)
-	return tools, r.mcpRuntimeConnectorsForTurn(threadID, cfg)
+	return tools, r.mcpRuntimeConnectorsForTurn(threadID, cfg), binding
 }
 
 // filterCodexAppsRuntimeTools ports Rust

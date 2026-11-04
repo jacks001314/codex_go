@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"codex_go/auth"
+	"codex_go/codexapi"
 	"codex_go/config"
 	"codex_go/features"
 	"codex_go/model"
@@ -136,13 +137,27 @@ func (r *RuntimeRouter) hostedToolsForTurn(params *turn.TurnStartParams, turnRun
 	modelInfo := r.modelInfoForRuntimeWithConfig(modelProviderConfig.Model, cfg)
 	capabilities := runtimeProvider.Capabilities()
 	tools := []any{}
+	nativeSearchAllowed := true
+	activeSearchMode := codexapi.WebSearchMode("")
+	if r != nil && r.threads != nil && params != nil {
+		if active := r.threads.ActiveTurn(strings.TrimSpace(params.ThreadID)); active != nil {
+			if active.ModelSearchProvider != "" && active.ModelSearchProvider != modelSearchNative && active.ModelSearchProvider != modelSearchUnmanaged {
+				nativeSearchAllowed = false
+			}
+			activeSearchMode = active.ModelSearchMode
+		}
+	}
 	standaloneWebSearchRegistered := standaloneWebSearch != nil
 	if len(turnRuntimes) > 0 && turnRuntimes[0] != nil {
 		standaloneWebSearchRegistered = turnRuntimes[0].StandaloneWebSearchRegistered()
 	}
-	if !standaloneWebSearchRegistered && modelInfo != nil && !modelInfo.UseResponsesLite && capabilities.WebSearch {
+	if nativeSearchAllowed && !standaloneWebSearchRegistered && modelInfo != nil && !modelInfo.UseResponsesLite && capabilities.WebSearch {
 		// A provider that disallows external web access pins hosted search to cached.
-		mode := webSearchModeFromConfig(cfg).RestrictToProviderWebAccess(capabilities.ExternalWebAccess)
+		mode := webSearchModeFromConfig(cfg)
+		if activeSearchMode != "" {
+			mode = activeSearchMode
+		}
+		mode = mode.RestrictToProviderWebAccess(capabilities.ExternalWebAccess)
 		if hosted := turn.HostedWebSearchTool(mode, webSearchSettingsFromConfig(cfg, mode), modelInfo.WebSearchToolType); hosted != nil {
 			tools = append(tools, hosted)
 		}

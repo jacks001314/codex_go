@@ -49,6 +49,10 @@ type WebSearchOptions struct {
 	// its schema property on the active model's experimental tool list
 	// (Rust #57542).
 	SupportsLiteratureSearch bool
+	// Admit reserves the thread's native search provider immediately before a
+	// call. A stale response or background cell is rejected when MCP search has
+	// already taken ownership of the thread's browsing references.
+	Admit func() error
 }
 
 // LiteratureSearchQueryToolName is the model capability that enables
@@ -90,6 +94,11 @@ func (h *WebSearchHandler) Execute(ctx context.Context, invocation *tool.Invocat
 	}
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if h.options.Admit != nil {
+		if err := h.options.Admit(); err != nil {
+			return nil, err
+		}
 	}
 	var commands codexapi.SearchCommands
 	args := strings.TrimSpace(invocation.Payload.Arguments)

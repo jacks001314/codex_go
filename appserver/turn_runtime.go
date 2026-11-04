@@ -124,6 +124,13 @@ type activeRuntimeTurn struct {
 	// A mid-turn model change replaces its contents so the next sampling step
 	// publishes that model's message-board descriptions (Rust #47670).
 	MessageBoardOverrides *agentboard.MessageBoardToolOverrides
+	// ModelSearchProvider and ModelSearchMode describe the provider selected
+	// for the current sampling step. Hosted declarations suppress the native
+	// web_search tool even while a Responses stream is already in flight.
+	ModelSearchProvider      modelSearchProvider
+	ModelSearchMode          codexapi.WebSearchMode
+	ModelSearchFallback      bool
+	ModelSearchReservationID uint64
 }
 
 // recordRuntimeTurnResponseID stores the turn's newest response id (Rust #45441).
@@ -1090,6 +1097,10 @@ func (r *RuntimeRouter) notifyResponsesStreamEvent(threadID string, turnID strin
 	case model.ResponsesStreamEventOutputAdded:
 		state.rememberOutputItem(event)
 		state.rememberTool(event)
+		if event.Item != nil && event.Item.Type == "web_search_call" {
+			r.claimModelSearchProvider(threadID, modelSearchNative)
+			r.recordModelSearchUse(threadID, turnID, modelSearchNative)
+		}
 		if streamAgentItemLooksLikeMCP(event.Item) || streamAgentItemIsToolSearch(event.Item) || streamAgentItemLooksLikeCollaboration(event.Item) {
 			return
 		}
@@ -3115,6 +3126,8 @@ func (r *RuntimeRouter) runtimeToolStartedNotifier(threadID string, turnID strin
 			return
 		}
 		if isWebSearchInvocation(invocation) {
+			r.claimModelSearchProvider(threadID, modelSearchNative)
+			r.recordModelSearchUse(threadID, turnID, modelSearchNative)
 			r.notify(NotificationItemStarted, &ItemStartedNotification{
 				Item: ThreadItemPayload{
 					"id":     firstNonEmpty(invocation.CallID, "web-search-"+safeIdentifier(turnID)),
@@ -4207,6 +4220,7 @@ func (r *RuntimeRouter) consumeCompletedRuntimeTurn(threadID string, turnID stri
 	if _, ok := r.threads.ConsumeTurn(threadID, turnID, false); !ok {
 		return false
 	}
+	r.clearModelSearchReservations(threadID)
 	if r.networkApproval != nil {
 		r.networkApproval.clearActiveCallsForTurn(threadID, turnID)
 	}
@@ -4221,6 +4235,7 @@ func (r *RuntimeRouter) cancelActiveRuntimeTurn(threadID string, turnID string) 
 	if !ok {
 		return nil, false
 	}
+	r.clearModelSearchReservations(threadID)
 	if active.Cancel != nil {
 		active.Cancel()
 	}
@@ -4264,6 +4279,7 @@ func (r *RuntimeRouter) cancelActiveRuntimeTurnTracked(threadID string, turnID s
 	if !ok {
 		return nil, false
 	}
+	r.clearModelSearchReservations(threadID)
 	if active.Cancel != nil {
 		active.Cancel()
 	}

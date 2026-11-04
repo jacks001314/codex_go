@@ -108,6 +108,10 @@ type ToolExecutorOptions struct {
 	// (Rust #58378). Nil omits both keys unless the turn installed one.
 	AgentMetadataRecipient *AgentMCPMetadataRecipient
 	ToolRequestMetaHook    *MCPToolRequestMetaHook
+	// ToolAdmission runs after approval and immediately before dispatch. It
+	// lets the host reject a stale prepared call when another provider has since
+	// taken ownership of the thread.
+	ToolAdmission func(serverName string, toolName string, callID string) error
 	// ResolvedServer is this executor's effective MCP registration. Matching the
 	// recipient requires the loaded source, plugin attribution, environment and
 	// transport, not just the server name.
@@ -217,6 +221,7 @@ type ToolExecutor struct {
 	turnRootTurnID                func() string
 	agentMetadataRecipient        *AgentMCPMetadataRecipient
 	toolRequestMetaHook           *MCPToolRequestMetaHook
+	toolAdmission                 func(serverName string, toolName string, callID string) error
 	resolvedServer                *ResolvedServer
 	turnCyberAccessProgram        func() string
 	hostOwnedApps                 bool
@@ -264,6 +269,7 @@ func NewToolExecutor(options *ToolExecutorOptions) *ToolExecutor {
 	executor.turnRootTurnID = options.TurnRootTurnID
 	executor.agentMetadataRecipient = options.AgentMetadataRecipient
 	executor.toolRequestMetaHook = options.ToolRequestMetaHook
+	executor.toolAdmission = options.ToolAdmission
 	executor.resolvedServer = options.ResolvedServer
 	executor.turnCyberAccessProgram = options.TurnCyberAccessProgram
 	executor.toolInputSchemaMaxBytes = options.ToolInputSchemaMaxBytes
@@ -435,6 +441,11 @@ func (e *ToolExecutor) Execute(ctx context.Context, invocation *tool.Invocation)
 	// can require the user to approve a call before it runs.
 	if denied, err := e.approveToolCallIfNeeded(ctx, invocation.CallID, arguments, linkID); err != nil || denied != nil {
 		return denied, err
+	}
+	if e.toolAdmission != nil {
+		if err := e.toolAdmission(e.resolvedServerName(), e.resolvedRemoteToolName(), invocation.CallID); err != nil {
+			return nil, tool.RespondToModel(err.Error())
+		}
 	}
 	callParams := &MCPToolCallParams{
 		Context:    ctx,

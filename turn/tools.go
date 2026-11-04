@@ -70,6 +70,10 @@ type ToolRegistryOptions struct {
 	// MCPToolRequestMetaHook is the host-scoped private metadata hook for one
 	// server/tool registration. Nil disables the hook.
 	MCPToolRequestMetaHook *mcp.MCPToolRequestMetaHook
+	// MCPToolAdmission rejects a prepared MCP call before approval or dispatch.
+	// Search uses it to keep one provider responsible for a thread's browsing
+	// references when a background call outlives its sampling step.
+	MCPToolAdmissionHook func(info *mcp.RuntimeToolInfo, callID string) error
 	// MCPCyberAccessProgram supplies the issuing turn's explicit Cyber program
 	// for a matching agent registration (Rust turn_context.cyber_access_program).
 	MCPCyberAccessProgram func() string
@@ -1144,6 +1148,13 @@ func registerMCPToolSet(registry *tool.Registry, options *ToolRegistryOptions, t
 				resolvedServer = &registration
 			}
 		}
+		var admission func(serverName string, toolName string, callID string) error
+		if options.MCPToolAdmissionHook != nil {
+			infoForHook := info
+			admission = func(serverName string, toolName string, callID string) error {
+				return options.MCPToolAdmissionHook(&infoForHook, callID)
+			}
+		}
 		executor := mcp.NewToolExecutor(&mcp.ToolExecutorOptions{
 			Service:    options.MCPService,
 			ServerName: info.ServerName,
@@ -1173,6 +1184,7 @@ func registerMCPToolSet(registry *tool.Registry, options *ToolRegistryOptions, t
 			TurnRootTurnID:                    options.MCPTurnRootTurnID,
 			AgentMetadataRecipient:            options.MCPAgentMetadataRecipient,
 			ToolRequestMetaHook:               options.MCPToolRequestMetaHook,
+			ToolAdmission:                     admission,
 			ResolvedServer:                    resolvedServer,
 			TurnCyberAccessProgram:            options.MCPCyberAccessProgram,
 			HostOwnedApps:                     info.HostOwnedApps,
@@ -1209,6 +1221,9 @@ func mcpRuntimeToolRequestMeta(info *mcp.RuntimeToolInfo) map[string]any {
 	apps := map[string]any{}
 	if connectorID := strings.TrimSpace(info.ConnectorID); connectorID != "" {
 		apps["connector_id"] = connectorID
+	}
+	if invocationContext, ok := mcp.ModelSearchInvocationContext(info); ok {
+		apps["invocation_context"] = invocationContext
 	}
 	return map[string]any{"_codex_apps": apps}
 }

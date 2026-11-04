@@ -1,10 +1,12 @@
 package appserver
 
 import (
+	"context"
 	"strings"
 
 	"codex_go/config"
 	"codex_go/features"
+	"codex_go/mcp"
 	"codex_go/model"
 	"codex_go/tool"
 	"codex_go/turn"
@@ -22,6 +24,12 @@ type rememberedTurnToolInputs struct {
 	params  turn.TurnStartParams
 	cfg     *config.Config
 	options *turn.ToolRegistryOptions
+	// The raw MCP catalog and binding are retained so a later step can apply
+	// that step model's search provider without losing the original declaration.
+	mcpTools        []mcp.RuntimeToolInfo
+	mcpBinding      *mcp.Binding
+	turnMetadata    map[string]any
+	searchSelection modelSearchSelection
 }
 
 // rememberTurnToolOptions records the tool options a turn assembled so a later
@@ -80,6 +88,26 @@ func (r *RuntimeRouter) stepToolPlanForTurn(threadID string, turnID string) func
 	}
 }
 
+func (r *RuntimeRouter) rememberModelSearchToolInputs(threadID string, turnID string, tools []mcp.RuntimeToolInfo, binding *mcp.Binding, metadata map[string]any, selection modelSearchSelection) {
+	if r == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	turnID = strings.TrimSpace(turnID)
+	if threadID == "" || turnID == "" {
+		return
+	}
+	r.stepToolPlansMu.Lock()
+	if inputs, ok := r.stepToolPlans[threadID]; ok && inputs.turnID == turnID {
+		inputs.mcpTools = append([]mcp.RuntimeToolInfo(nil), tools...)
+		inputs.mcpBinding = binding
+		inputs.turnMetadata = cloneSearchObject(metadata)
+		inputs.searchSelection = selection
+		r.stepToolPlans[threadID] = inputs
+	}
+	r.stepToolPlansMu.Unlock()
+}
+
 func (r *RuntimeRouter) rememberedTurnToolInputs(threadID string, turnID string) (rememberedTurnToolInputs, bool) {
 	r.stepToolPlansMu.Lock()
 	defer r.stepToolPlansMu.Unlock()
@@ -95,6 +123,11 @@ func (r *RuntimeRouter) rememberedTurnToolInputs(threadID string, turnID string)
 // every step from that step's model, so returning to the turn's model restores
 // its tools rather than keeping the previous step's).
 func (r *RuntimeRouter) restoreTurnToolPlan(inputs rememberedTurnToolInputs) (*turn.StepToolPlan, error) {
+	r.threads.UpdateTurn(strings.TrimSpace(inputs.params.ThreadID), strings.TrimSpace(inputs.turnID), func(active *activeRuntimeTurn) {
+		active.ModelSearchProvider = inputs.searchSelection.provider
+		active.ModelSearchMode = inputs.searchSelection.mode
+		active.ModelSearchFallback = inputs.searchSelection.fallback
+	})
 	options := *inputs.options
 	router, err := turn.BuildToolRouter(&options)
 	if err != nil {
@@ -208,15 +241,63 @@ func (r *RuntimeRouter) stepToolRegistryOptions(inputs rememberedTurnToolInputs,
 	// whether the turn still declares the hosted tools.
 	stepParams := inputs.params
 	stepParams.Model = modelID
-	webSearchOptions, err := r.webSearchOptionsForTurn(inputs.cfg, &stepParams)
+	nativeWebSearchOptions, err := r.webSearchOptionsForTurn(inputs.cfg, &stepParams)
 	if err != nil {
 		return nil, nil, err
 	}
+	mcpTools := inputs.mcpTools
+	mcpBinding := inputs.mcpBinding
+	hasSearchConnector := false
+	for i := range mcpTools {
+		if mcp.IsModelSearchTool(&mcpTools[i]) {
+			hasSearchConnector = true
+			break
+		}
+	}
+	if !hasSearchConnector && modelSearchMayUseApps(info, inputs.cfg) && inputs.options.MCPService != nil {
+		refreshed, connectors, binding := r.mcpRuntimeInputsForServiceWithRequirementsAndBinding(inputs.params.ThreadID, inputs.cfg, inputs.options.MCPService, []string{mcp.CodexAppsServerName}, nil)
+		if len(refreshed) > 0 {
+			mcpTools = refreshed
+			mcpBinding = binding
+			options.MCPConnectors = connectors
+		}
+	}
+	searchSelection := r.resolveModelSearchForTurn(context.Background(), inputs.params.ThreadID, inputs.turnID, inputs.cfg, info, mcpTools, mcpBinding, nativeWebSearchOptions, inputs.turnMetadata)
+	searchSelection, searchReservationID := r.reserveModelSearchSelection(inputs.params.ThreadID, searchSelection)
+	switch searchSelection.provider {
+	case modelSearchNative:
+		if searchSelection.mode != "" {
+			mode := searchSelection.mode
+			nativeWebSearchOptions, err = r.webSearchOptionsForTurnWithMode(inputs.cfg, &stepParams, &mode)
+			if err != nil {
+				return nil, nil, err
+			}
+			nativeWebSearchOptions = r.nativeModelSearchOptions(nativeWebSearchOptions, inputs.params.ThreadID, inputs.turnID)
+		}
+	case modelSearchUnmanaged:
+		// Legacy configuration keeps the step model's standalone tool unchanged.
+	default:
+		nativeWebSearchOptions = nil
+	}
+	options.MCPTools = applyModelSearchTools(mcpTools, searchSelection)
+	if searchSelection.provider == modelSearchHosted {
+		options.MCPTurnMetadata = searchCallTurnMetadata(options.MCPTurnMetadata, searchSelection.context)
+	}
+	options.MCPToolAdmissionHook = nil
+	if searchSelection.provider == modelSearchHosted || searchSelection.provider == modelSearchClientMCP {
+		options.MCPToolAdmissionHook = r.modelSearchMCPAdmission(inputs.params.ThreadID, inputs.turnID, searchSelection)
+	}
+	r.threads.UpdateTurn(strings.TrimSpace(inputs.params.ThreadID), strings.TrimSpace(inputs.turnID), func(active *activeRuntimeTurn) {
+		active.ModelSearchProvider = searchSelection.provider
+		active.ModelSearchMode = searchSelection.mode
+		active.ModelSearchFallback = searchSelection.fallback
+		active.ModelSearchReservationID = searchReservationID
+	})
 	imageGenerationOptions, err := r.imageGenerationOptionsForTurn(inputs.cfg, &stepParams)
 	if err != nil {
 		return nil, nil, err
 	}
-	options.WebSearch = webSearchOptions
+	options.WebSearch = nativeWebSearchOptions
 	options.ImageGeneration = imageGenerationOptions
 	hostedTools, err := r.hostedToolsForTurn(&stepParams)
 	if err != nil {
