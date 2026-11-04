@@ -17,10 +17,10 @@ func TestStyleUserMessageMentionsColorsMention(t *testing.T) {
 	restoreLevel := codextui.SetStdoutColorLevelForTest(codextui.ColorANSI256)
 	defer restoreLevel()
 	got := styleUserMessageMentions("use $openai-docs and @plugin")
-	if !strings.Contains(got, "\x1b[36m$openai-docs\x1b[0m") {
+	if !strings.Contains(got, ansiUserMessageMention+"$openai-docs"+ansiUserMessageMentionEnd) {
 		t.Fatalf("tool mention not cyan: %q", got)
 	}
-	if !strings.Contains(got, "\x1b[36m@plugin\x1b[0m") {
+	if !strings.Contains(got, ansiUserMessageMention+"@plugin"+ansiUserMessageMentionEnd) {
 		t.Fatalf("plugin mention not cyan: %q", got)
 	}
 	if utils.StripANSI(got) != "use $openai-docs and @plugin" {

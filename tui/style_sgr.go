@@ -38,14 +38,22 @@ func DefaultBackgroundRGB() (RGB, bool) {
 	return background, ok
 }
 
-// HistoryPromptSGR renders Rust's `style::history_prompt_style` background for
+// HistoryPromptSGR renders Rust's `style::history_prompt_style` surface for
 // submitted prompts: a 16% (dark) or 2% (light) blend toward the terminal
-// background. Terminals that do not answer the default-color probe keep the
-// surface shaded with the ANSI DarkGray fallback (Rust #57554).
+// background. A terminal that does not answer the default-color probe gets the
+// xterm grays with 8.4:1 contrast (Rust #59257); ANSI-16 terminals keep their
+// own foreground and background.
 func HistoryPromptSGR(level StdoutColorLevel) string {
 	_, terminalBG, known := defaultTerminalColorsRGB()
 	if !known {
-		return "\x1b[100m"
+		switch level {
+		case ColorTrue:
+			return "\x1b[38;2;238;238;238;48;2;68;68;68m"
+		case ColorANSI256:
+			return "\x1b[38;5;255;48;5;238m"
+		default:
+			return ""
+		}
 	}
 	codes := sgrColorCodes(bestHistoryPromptFill(terminalBG, level), false, level)
 	if len(codes) == 0 {
@@ -54,17 +62,31 @@ func HistoryPromptSGR(level StdoutColorLevel) string {
 	return "\x1b[" + strings.Join(codes, ";") + "m"
 }
 
-// HistoryPromptAccentAllowed reports whether user-message element accents may
-// be painted on the submitted-prompt surface. Rust's `user_message_element_style`
-// keeps the terminal's default foreground when the surface is the ANSI DarkGray
-// fallback or resolves to a terminal-owned ANSI-16 colour (Rust #57554).
-func HistoryPromptAccentAllowed(level StdoutColorLevel) bool {
-	_, terminalBG, known := defaultTerminalColorsRGB()
-	if !known {
-		return false
+// HistoryPromptTextSGR restores the fallback prompt foreground after a span
+// reset, such as the voice marker. A resolved terminal palette keeps the
+// terminal's default foreground.
+func HistoryPromptTextSGR(level StdoutColorLevel) string {
+	_, _, known := defaultTerminalColorsRGB()
+	if known {
+		return ""
 	}
-	fill := bestHistoryPromptFill(terminalBG, level)
-	return fill.Index == nil || *fill.Index >= 16
+	switch level {
+	case ColorTrue:
+		return "\x1b[38;2;238;238;238m"
+	case ColorANSI256:
+		return "\x1b[38;5;255m"
+	default:
+		return ""
+	}
+}
+
+// HistoryPromptAccentAllowed reports whether user-message element accents may
+// be painted on the submitted-prompt surface. With a resolved palette the
+// accent follows the fill; without one, the ANSI-safe fallback keeps the
+// terminal's default foreground for ANSI-16 and paints the same accent when a
+// truecolor/256-color profile is available (Rust #59257).
+func HistoryPromptAccentAllowed(level StdoutColorLevel) bool {
+	return level != ColorUnknown
 }
 
 func bestHistoryPromptFill(terminalBG RGB, level StdoutColorLevel) TerminalColor {

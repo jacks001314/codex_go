@@ -13106,9 +13106,9 @@ func isUserSurfaceBlankLine(line string) bool {
 }
 
 // userPromptSurfaceSGR is the submitted-prompt background currently painted by
-// the history cells. Rust #57554 falls back to ANSI DarkGray when the terminal
-// never answers the palette probe, so grouping must not assume the blended
-// 256-colour fill.
+// the history cells. Rust #59257 falls back to xterm grays (or terminal-owned
+// colors on ANSI-16) when the palette probe fails, so grouping must compare the
+// exact surface prefix rather than assume a blended 256-color fill.
 func userPromptSurfaceSGR() string {
 	return codextui.HistoryPromptSGR(codextui.DetectStdoutColorLevel())
 }

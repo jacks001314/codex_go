@@ -13,12 +13,13 @@ import (
 // Rust parity: codex-rs/tui/src/history_cell/messages.rs.
 
 const (
-	ansiUserMessagePrefix    = "\x1b[1;2m"
-	ansiUserMessageSpoken    = "\x1b[1;31m"
-	ansiUserMessageSpokenEnd = "\x1b[22;39m"
-	ansiUserMessagePrefixEnd = "\x1b[22m"
-	ansiUserMessageReset     = "\x1b[0m"
-	ansiUserMessageMention   = "\x1b[36m"
+	ansiUserMessagePrefix     = "\x1b[1;2m"
+	ansiUserMessageSpoken     = "\x1b[1;31m"
+	ansiUserMessageSpokenEnd  = "\x1b[22;39m"
+	ansiUserMessagePrefixEnd  = "\x1b[22m"
+	ansiUserMessageReset      = "\x1b[0m"
+	ansiUserMessageMention    = "\x1b[36m"
+	ansiUserMessageMentionEnd = "\x1b[39m"
 )
 
 // SpokenPromptMarkerSGR and SpokenPromptMarkerEnd bracket the bold red chevron
@@ -181,6 +182,9 @@ func (c UserHistoryCell) DisplayLines(width int) []string {
 				prefix = ansiUserMessagePrefix + "\u203a " + ansiUserMessagePrefixEnd
 			}
 		}
+		// The voice marker ends its foreground span; restore the fallback prompt
+		// foreground before the text when the terminal palette is unavailable.
+		prefix += tui.HistoryPromptTextSGR(tui.DetectStdoutColorLevel())
 		lines = append(lines, styleUserMessageLine(prefix+styleUserMessageMentions(line), width))
 	}
 	lines = append(lines, styleUserMessageLine("", width))
@@ -318,7 +322,10 @@ func styleUserMessageMentions(text string) string {
 		sb.WriteString(text[cursor:loc[0]])
 		sb.WriteString(ansiUserMessageMention)
 		sb.WriteString(token)
-		sb.WriteString(ansiUserMessageReset)
+		// Reset only the accent foreground so the prompt surface continues to the
+		// end of the row (Rust paints the line style under the element span).
+		sb.WriteString(ansiUserMessageMentionEnd)
+		sb.WriteString(tui.HistoryPromptTextSGR(tui.DetectStdoutColorLevel()))
 		cursor = loc[1]
 	}
 	if cursor == 0 {

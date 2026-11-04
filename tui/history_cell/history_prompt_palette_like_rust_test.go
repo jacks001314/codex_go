@@ -7,12 +7,10 @@ import (
 	codextui "codex_go/tui"
 )
 
-// Rust parity: codex-rs/tui/src/transcript_view_tests.rs
-// `user_prompt_has_a_background_without_a_terminal_palette` (#57554). A
-// terminal that never answers the default-color probe keeps the submitted
-// prompt shaded with the ANSI DarkGray background and keeps the default text
-// foreground for elements instead of painting an accent.
-func TestUserPromptKeepsShadingWithoutTerminalPaletteLikeRust(t *testing.T) {
+// Rust parity: codex-rs/tui/src/style.rs `history_prompt_fallback` (#59257).
+// A terminal that never answers the default-color probe keeps the submitted
+// prompt readable with the xterm 238/255 grays and still paints element accents.
+func TestUserPromptKeepsContrastWithoutTerminalPaletteLikeRust(t *testing.T) {
 	restoreColors := codextui.SetDefaultTerminalColorsForTest(nil)
 	defer restoreColors()
 	restoreLevel := codextui.SetStdoutColorLevelForTest(codextui.ColorANSI256)
@@ -24,21 +22,22 @@ func TestUserPromptKeepsShadingWithoutTerminalPaletteLikeRust(t *testing.T) {
 		t.Fatal("user prompt rendered no lines")
 	}
 	for _, line := range lines {
-		if !strings.Contains(line, "\x1b[100m") {
-			t.Fatalf("prompt row lost the DarkGray fallback background: %q", line)
+		if !strings.Contains(line, "\x1b[38;5;255;48;5;238m") {
+			t.Fatalf("prompt row lost the fallback contrast: %q", line)
 		}
 	}
 	joined := strings.Join(lines, "\n")
-	if strings.Contains(joined, "\x1b[36m") {
-		t.Fatalf("element accent painted without a resolved palette:\n%q", joined)
+	if !strings.Contains(joined, ansiUserMessageMention+"$tool"+ansiUserMessageMentionEnd+codextui.HistoryPromptTextSGR(codextui.ColorANSI256)) {
+		t.Fatalf("element accent did not restore the fallback foreground:\n%q", joined)
 	}
-	if !strings.Contains(joined, "First $tool message") {
+	if !strings.Contains(joined, " message") {
 		t.Fatalf("prompt text was not preserved:\n%q", joined)
 	}
 }
 
 // Rust parity: `vt100_spoken_prompt_keeps_its_marker_color_without_a_terminal_palette`
-// (#57554): the red voice marker survives the DarkGray fallback surface.
+// (#59257): the red voice marker survives and the following text restores the
+// fallback foreground.
 func TestSpokenPromptMarkerStaysRedWithoutTerminalPaletteLikeRust(t *testing.T) {
 	restoreColors := codextui.SetDefaultTerminalColorsForTest(nil)
 	defer restoreColors()
@@ -47,11 +46,29 @@ func TestSpokenPromptMarkerStaysRedWithoutTerminalPaletteLikeRust(t *testing.T) 
 
 	lines := NewSpokenUserPrompt("hello from voice").DisplayLines(30)
 	joined := strings.Join(lines, "\n")
-	if !strings.Contains(joined, ansiUserMessageSpoken+"\u203a ") {
-		t.Fatalf("spoken marker lost its red color:\n%q", joined)
+	if !strings.Contains(joined, ansiUserMessageSpoken+"\u203a "+ansiUserMessageSpokenEnd+codextui.HistoryPromptTextSGR(codextui.ColorANSI256)) {
+		t.Fatalf("spoken marker did not restore the fallback foreground:\n%q", joined)
 	}
-	if !strings.Contains(joined, "\x1b[100m") {
+	if !strings.Contains(joined, "\x1b[38;5;255;48;5;238m") {
 		t.Fatalf("spoken prompt lost the fallback background:\n%q", joined)
+	}
+}
+
+// ANSI-16 terminals keep their own colors: the fallback paints no surface and
+// the element accent remains terminal-owned.
+func TestUserPromptKeepsTerminalColorsWithoutPaletteOnANSI16LikeRust(t *testing.T) {
+	restoreColors := codextui.SetDefaultTerminalColorsForTest(nil)
+	defer restoreColors()
+	restoreLevel := codextui.SetStdoutColorLevelForTest(codextui.ColorANSI16)
+	defer restoreLevel()
+
+	lines := NewUserPrompt("use $tool", nil, nil, nil).DisplayLines(20)
+	joined := strings.Join(lines, "\n")
+	if strings.Contains(joined, "48;5;") || strings.Contains(joined, "48;2;") {
+		t.Fatalf("ANSI-16 fallback painted a surface:\n%q", joined)
+	}
+	if !strings.Contains(joined, ansiUserMessageMention+"$tool") {
+		t.Fatalf("ANSI-16 prompt lost the element accent:\n%q", joined)
 	}
 }
 
