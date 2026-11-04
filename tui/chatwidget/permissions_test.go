@@ -257,4 +257,10 @@ func TestPermissionPresetMatchesCurrentAliases(t *testing.T) {
 	if PermissionPresetMatchesCurrent(config, WorkspaceProfile, ApprovalOnRequest, ApprovalsReviewerUser) {
 		t.Fatal("different preset should not match")
 	}
+	// The app server reports the committed sandbox as danger-full-access, so
+	// the picker must still mark its built-in full-access row as current.
+	config.CurrentProfileID = "danger-full-access"
+	if !PermissionPresetMatchesCurrent(config, DangerFullAccessProfile, ApprovalNever, ApprovalsReviewerUser) {
+		t.Fatal("danger-full-access should match the full-access preset")
+	}
 }

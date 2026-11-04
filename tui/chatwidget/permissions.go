@@ -578,8 +578,10 @@ func permissionProfileAllowed(allowed map[string]bool, profileID string) bool {
 
 func normalizePermissionProfileID(id string) string {
 	switch strings.TrimSpace(id) {
-	case "full-access":
+	case "full-access", "danger-full-access", "dangerFullAccess":
 		return DangerFullAccessProfile
+	case "workspace":
+		return WorkspaceProfile
 	case "read-only":
 		return ReadOnlyProfile
 	case "workspace-write", "auto":
