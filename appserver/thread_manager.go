@@ -43,6 +43,11 @@ type ThreadManager struct {
 
 	ephemeralMu sync.RWMutex
 	ephemeral   map[string]*session.Record
+	// sharedEphemeral is set by transports that serve each connection with a
+	// separate RuntimeRouter. Rust keeps ephemeral threads in the process-wide
+	// local thread store; /side forks on one connection and starts its turn on
+	// another, so the record must outlive the fork connection.
+	sharedEphemeral *sharedEphemeralThreads
 
 	subscriptionsMu sync.Mutex
 	subscriptions   map[string]map[string]struct{}
@@ -67,6 +72,34 @@ type ThreadManager struct {
 
 	attachmentStoreMu sync.RWMutex
 	attachmentStore   attachmentstore.Store
+}
+
+type sharedEphemeralThreads struct {
+	mu      sync.RWMutex
+	records map[string]*session.Record
+}
+
+func newSharedEphemeralThreads() *sharedEphemeralThreads {
+	return &sharedEphemeralThreads{records: map[string]*session.Record{}}
+}
+
+func (m *ThreadManager) setSharedEphemeralThreads(shared *sharedEphemeralThreads) {
+	if m == nil {
+		return
+	}
+	m.ephemeralMu.Lock()
+	m.sharedEphemeral = shared
+	m.ephemeralMu.Unlock()
+}
+
+func (m *ThreadManager) ephemeralStorage() (*sync.RWMutex, map[string]*session.Record) {
+	m.ephemeralMu.RLock()
+	shared := m.sharedEphemeral
+	m.ephemeralMu.RUnlock()
+	if shared != nil {
+		return &shared.mu, shared.records
+	}
+	return &m.ephemeralMu, m.ephemeral
 }
 
 // ErrServerDraining is returned when graceful shutdown rejects new work. It
@@ -1065,17 +1098,18 @@ func (m *ThreadManager) EphemeralRecord(threadID session.ThreadID, includeHistor
 	if m == nil || strings.TrimSpace(string(threadID)) == "" {
 		return nil, false
 	}
-	m.ephemeralMu.RLock()
-	record, ok := m.ephemeral[string(threadID)]
+	mu, records := m.ephemeralStorage()
+	mu.RLock()
+	record, ok := records[string(threadID)]
 	if !ok || record == nil {
-		m.ephemeralMu.RUnlock()
+		mu.RUnlock()
 		return nil, false
 	}
 	// Clone while the read lock is still held. The map entry points at mutable
 	// record state that AppendEphemeralItems updates under the write lock; only
 	// protecting the map lookup leaves the deep copy racing with those writes.
 	clone := cloneRuntimeSessionRecord(record)
-	m.ephemeralMu.RUnlock()
+	mu.RUnlock()
 	if !includeHistory {
 		clone.Items = nil
 	}
@@ -1089,12 +1123,13 @@ func (m *ThreadManager) SaveEphemeralRecord(record *session.Record) bool {
 	clone := cloneRuntimeSessionRecord(record)
 	clone.Metadata.Extra = ensureRecordExtra(clone.Metadata.Extra)
 	clone.Metadata.Extra["ephemeral"] = true
-	m.ephemeralMu.Lock()
-	if existing := m.ephemeral[string(clone.ID)]; existing != nil && len(clone.Items) == 0 && len(existing.Items) > 0 {
+	mu, records := m.ephemeralStorage()
+	mu.Lock()
+	if existing := records[string(clone.ID)]; existing != nil && len(clone.Items) == 0 && len(existing.Items) > 0 {
 		clone.Items = cloneRuntimeSessionItems(existing.Items)
 	}
-	m.ephemeral[string(clone.ID)] = clone
-	m.ephemeralMu.Unlock()
+	records[string(clone.ID)] = clone
+	mu.Unlock()
 	return true
 }
 
@@ -1102,12 +1137,13 @@ func (m *ThreadManager) DeleteEphemeralRecord(threadID session.ThreadID) bool {
 	if m == nil || strings.TrimSpace(string(threadID)) == "" {
 		return false
 	}
-	m.ephemeralMu.Lock()
-	defer m.ephemeralMu.Unlock()
-	if _, ok := m.ephemeral[string(threadID)]; !ok {
+	mu, records := m.ephemeralStorage()
+	mu.Lock()
+	defer mu.Unlock()
+	if _, ok := records[string(threadID)]; !ok {
 		return false
 	}
-	delete(m.ephemeral, string(threadID))
+	delete(records, string(threadID))
 	return true
 }
 
@@ -1115,9 +1151,10 @@ func (m *ThreadManager) AppendEphemeralItems(threadID session.ThreadID, items []
 	if m == nil || strings.TrimSpace(string(threadID)) == "" {
 		return nil, false
 	}
-	m.ephemeralMu.Lock()
-	defer m.ephemeralMu.Unlock()
-	record, ok := m.ephemeral[string(threadID)]
+	mu, records := m.ephemeralStorage()
+	mu.Lock()
+	defer mu.Unlock()
+	record, ok := records[string(threadID)]
 	if !ok || record == nil {
 		return nil, false
 	}
@@ -1147,6 +1184,8 @@ func (m *ThreadManager) ClearEphemeralRecords() {
 	if m == nil {
 		return
 	}
+	// Connection routers clear only their private fallback. Shared transport
+	// records belong to the daemon and remain available to the next connection.
 	m.ephemeralMu.Lock()
 	clear(m.ephemeral)
 	m.ephemeralMu.Unlock()

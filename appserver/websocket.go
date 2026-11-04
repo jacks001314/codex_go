@@ -97,8 +97,10 @@ func NewWebSocketRouterFactoryWithOptions(codexHome string, storeRoot string, op
 	if storeRoot == "" {
 		storeRoot = filepath.Join(codexHome, "sessions")
 	}
+	sharedEphemeral := newSharedEphemeralThreads()
 	return func() *RuntimeRouter {
 		router := NewDefaultRuntimeRouterWithOptions(session.NewStore(storeRoot), codexHome, options)
+		router.threads.setSharedEphemeralThreads(sharedEphemeral)
 		// Rust stamps `rpc.transport = "websocket"` on the request span.
 		router.SetRequestTransport("websocket")
 		return router

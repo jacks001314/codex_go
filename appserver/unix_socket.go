@@ -124,13 +124,17 @@ func ServeUnixSocket(ctx context.Context, options *UnixSocketOptions) error {
 	// once after the server loop returns (Rust app-server/src/lib.rs:1037-1042
 	// keeps the snapshot at daemon scope).
 	recoverySink := daemonRecoverySinkForAccess(options.ShutdownAccess, codexHome)
+	sharedEphemeral := newSharedEphemeralThreads()
 	newRouter := func() *RuntimeRouter {
+		var router *RuntimeRouter
 		if strings.TrimSpace(options.StoreRoot) != "" {
-			router := NewDefaultRuntimeRouterWithOptions(session.NewStore(options.StoreRoot), codexHome, preparedRuntimeOptions)
+			router = NewDefaultRuntimeRouterWithOptions(session.NewStore(options.StoreRoot), codexHome, preparedRuntimeOptions)
 			router.SetRequestTransport("unix_socket")
-			return router
+		} else {
+			router = NewUnixSocketRouterWithOptions(codexHome, preparedRuntimeOptions)
 		}
-		return NewUnixSocketRouterWithOptions(codexHome, preparedRuntimeOptions)
+		router.threads.setSharedEphemeralThreads(sharedEphemeral)
+		return router
 	}
 	// A managed daemon also consumes the previous generation's handoff before it
 	// serves and restores those threads in the background (Rust

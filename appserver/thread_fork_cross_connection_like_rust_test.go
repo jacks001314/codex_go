@@ -1,6 +1,7 @@
 package appserver
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -95,6 +96,48 @@ func TestEphemeralThreadForkUsesLiveWriterFromAnotherConnectionLikeRust(t *testi
 	forked := response.Result.(*ThreadForkResponse)
 	if forked.Thread == nil || !forked.Thread.Ephemeral || forked.Thread.ForkedFromID == nil || *forked.Thread.ForkedFromID != string(record.ID) {
 		t.Fatalf("ephemeral thread/fork response = %+v", forked.Thread)
+	}
+}
+
+// The daemon closes the short-lived connection that creates an ephemeral
+// thread/fork before the TUI opens the connection that starts its turn. Rust's
+// LocalThreadStore keeps that ephemeral record at process scope, so the next
+// connection must still be able to read and use the side thread.
+func TestEphemeralSideRecordSurvivesWebSocketConnectionLikeRust(t *testing.T) {
+	codexHome := t.TempDir()
+	storeRoot := filepath.Join(codexHome, "sessions")
+	parent := crossConnectionForkRecord("thread-side-parent")
+	if err := session.NewStore(storeRoot).Create(parent); err != nil {
+		t.Fatalf("Create(parent) error = %v", err)
+	}
+	factory := NewWebSocketRouterFactoryWithOptions(codexHome, storeRoot, nil)
+	forkRouter := factory()
+	fork := forkRouter.Handle(requestWithParams(t, IntID(1), MethodThreadFork, ThreadForkParams{
+		ThreadID:     string(parent.ID),
+		Ephemeral:    true,
+		ExcludeTurns: true,
+	}))
+	if fork.Error != nil {
+		t.Fatalf("ephemeral thread/fork error = %+v", fork.Error)
+	}
+	forked := fork.Result.(*ThreadForkResponse)
+	if forked.Thread == nil || strings.TrimSpace(forked.Thread.ID) == "" {
+		t.Fatalf("ephemeral thread/fork response = %+v", forked.Thread)
+	}
+	sideThreadID := forked.Thread.ID
+	if err := forkRouter.Close(); err != nil {
+		t.Fatalf("forkRouter.Close() error = %v", err)
+	}
+
+	turnRouter := factory()
+	t.Cleanup(func() { _ = turnRouter.Close() })
+	read := turnRouter.Handle(requestWithParams(t, IntID(2), MethodThreadRead, ThreadReadParams{ThreadID: sideThreadID}))
+	if read.Error != nil {
+		t.Fatalf("ephemeral side thread/read on the next connection error = %+v", read.Error)
+	}
+	thread := read.Result.(*ThreadReadResponse).Thread
+	if thread == nil || thread.ID != sideThreadID || !thread.Ephemeral {
+		t.Fatalf("ephemeral side thread on the next connection = %+v", thread)
 	}
 }
 
