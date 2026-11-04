@@ -1477,6 +1477,9 @@ type Options struct {
 	OnPostNotification        NotificationPostFunc
 	OnReadGitDiff             GitDiffReaderFunc
 	OnStopBackgroundTerminals StopBackgroundTerminalsFunc
+	// OnListBackgroundTerminals reads the displayed thread's live background
+	// terminals after history replay (Rust #59319 RestoreBackgroundTerminals).
+	OnListBackgroundTerminals ListBackgroundTerminalsFunc
 	LocalDaemonSession        bool
 	// DaemonCLIExecutable is the launching Codex CLI's executable path, which
 	// the /daemon menu uses to manage the local background server
@@ -2696,100 +2699,104 @@ type Model struct {
 	programStatusWriter TerminalTitleWriterFunc
 	// programStatusAfterTurn retains a completed or failed live turn until the
 	// user interacts again (Rust #54114 status_state::program_status_after_turn).
-	programStatusAfterTurn            codextui.ProgramStatus
-	notificationPost                  NotificationPostFunc
-	notifications                     chatwidget.NotificationState
-	notificationSettings              chatwidget.NotificationsSetting
-	notificationMethod                codextui.NotificationMethod
-	notificationCondition             codextui.NotificationCondition
-	onReadGitDiff                     GitDiffReaderFunc
-	onStopBackgroundTerminals         StopBackgroundTerminalsFunc
-	onReadDebugConfig                 DebugConfigReaderFunc
-	onReadGoal                        GoalReaderFunc
-	onSetGoal                         GoalSetterFunc
-	onClearGoal                       GoalClearerFunc
-	onEnsureThread                    EnsureThreadFunc
-	onGoalEditText                    GoalEditTextFunc
-	onGoalDraftMaterialize            GoalDraftMaterializeFunc
-	onGoalContinuation                GoalContinuationFunc
-	pendingGoalDraft                  *codextui.GoalDraft
-	onWriteSettings                   SettingsWriteFunc
-	onUpdateCollaborationMode         CollaborationModeUpdateFunc
-	onWriteMemorySettings             MemorySettingsWriteFunc
-	onResetMemories                   MemoryResetFunc
-	onSubmitFeedback                  FeedbackSubmitFunc
-	onReadIDEContext                  IDEContextReaderFunc
-	ideContext                        chatwidget.IdeContextState
-	onApproveAutoReviewDenial         AutoReviewDenialApproveFunc
-	toolRequestRuntime                chatwidget.ToolRequestRuntimeState
-	useMemories                       bool
-	generateMemories                  bool
-	feedbackEnabled                   bool
-	windowsSandboxSetup               WindowsSandboxSetupFunc
-	onReadWindowsSandboxState         WindowsSandboxStateReaderFunc
-	windowsSandboxLevel               chatwidget.WindowsSandboxLevel
-	windowsSandboxRefreshPending      bool
-	windowsSandboxSetupChoiceRequired bool
-	onOpenDesktopThread               DesktopThreadOpenFunc
-	appsScopeGeneration               uint64
-	onDetectExternalAgent             ExternalAgentDetectFunc
-	onImportExternalAgent             ExternalAgentImportFunc
-	pendingExternalAgentImports       map[string]bool
-	onReadRolloutPath                 RolloutPathReaderFunc
-	windowsSandboxSetupActive         bool
-	windowsSandboxSetupMode           chatwidget.WindowsSandboxMode
-	windowsSandboxSetupStatus         chatwidget.WindowsSandboxSetupStatus
-	onReadHooks                       HooksListReaderFunc
-	onWriteHookConfig                 HookConfigWriteFunc
-	hookWriteQueue                    []hookConfigWriteOperation
-	hookWriteActive                   bool
-	nextHookWriteRequestID            uint64
-	hookLifecycle                     chatwidget.HookLifecycleState
-	onReadPlugins                     PluginListReaderFunc
-	onReadPlugin                      PluginReadFunc
-	onInstallPlugin                   PluginInstallFunc
-	onUninstallPlugin                 PluginUninstallFunc
-	onWritePluginEnabled              PluginEnabledWriteFunc
-	onAddMarketplace                  MarketplaceAddFunc
-	onRemoveMarketplace               MarketplaceRemoveFunc
-	onUpgradeMarketplace              MarketplaceUpgradeFunc
-	onOpenPluginURL                   PluginOpenURLFunc
-	onOpenURL                         func(string) error
-	onPrimarySelectionWrite           func(string) error
-	onPrimarySelectionRead            func() (string, error)
-	onPrimarySelectionRelease         func() error
-	primarySelectionPublished         bool
-	nextPrimarySelectionReadID        uint64
-	pendingPrimarySelectionRead       uint64
-	onFetchStartupAnnouncement        func() (string, bool)
-	pluginUserMarketplaces            map[string]bool
-	pluginGitMarketplaces             map[string]bool
-	pluginRuntime                     chatwidget.PluginsRuntimeState
-	pluginToggleDesired               map[string]bool
-	pluginToggleActive                map[string]bool
-	onReadSkills                      SkillsListReaderFunc
-	onWriteSkillEnabled               SkillEnabledWriteFunc
-	nextSkillWriteRequestID           uint64
-	onFuzzyFileSearch                 FuzzyFileSearchReaderFunc
-	onSearchTasks                     TaskMentionSearchFunc
-	onReadExperimentalFeatures        ExperimentalFeaturesReaderFunc
-	onTaskToolsAvailable              func(threadID string) bool
-	onReadApps                        AppListReaderFunc
-	onStartReview                     ReviewStartFunc
-	onStartReviewCommand              ReviewStartCommandFunc
-	onStartCompactCommand             CompactStartCommandFunc
-	onSafetyBufferingRetry            func(threadID, turnID, model, prompt string) bubbletea.Cmd
-	safetyBuffering                   chatwidget.SafetyBufferingState
-	safetyBufferingThreadID           string
-	safetyBufferingFasterModel        string
-	reviewState                       chatwidget.ReviewState
-	reviewTurnID                      string
-	reviewTokenSnapshot               *reviewTokenSnapshot
-	onStartSide                       SideStartFunc
-	onCloseSide                       SideCloseFunc
-	onReadReviewBranches              ReviewBranchesReaderFunc
-	onReadReviewCommits               ReviewCommitsReaderFunc
-	activeSide                        *activeSideConversation
+	programStatusAfterTurn             codextui.ProgramStatus
+	notificationPost                   NotificationPostFunc
+	notifications                      chatwidget.NotificationState
+	notificationSettings               chatwidget.NotificationsSetting
+	notificationMethod                 codextui.NotificationMethod
+	notificationCondition              codextui.NotificationCondition
+	onReadGitDiff                      GitDiffReaderFunc
+	onStopBackgroundTerminals          StopBackgroundTerminalsFunc
+	onListBackgroundTerminals          ListBackgroundTerminalsFunc
+	pendingTerminalRestore             *terminalRestoreState
+	terminalRestoreID                  uint64
+	backgroundTerminalRestoreRequested bool
+	onReadDebugConfig                  DebugConfigReaderFunc
+	onReadGoal                         GoalReaderFunc
+	onSetGoal                          GoalSetterFunc
+	onClearGoal                        GoalClearerFunc
+	onEnsureThread                     EnsureThreadFunc
+	onGoalEditText                     GoalEditTextFunc
+	onGoalDraftMaterialize             GoalDraftMaterializeFunc
+	onGoalContinuation                 GoalContinuationFunc
+	pendingGoalDraft                   *codextui.GoalDraft
+	onWriteSettings                    SettingsWriteFunc
+	onUpdateCollaborationMode          CollaborationModeUpdateFunc
+	onWriteMemorySettings              MemorySettingsWriteFunc
+	onResetMemories                    MemoryResetFunc
+	onSubmitFeedback                   FeedbackSubmitFunc
+	onReadIDEContext                   IDEContextReaderFunc
+	ideContext                         chatwidget.IdeContextState
+	onApproveAutoReviewDenial          AutoReviewDenialApproveFunc
+	toolRequestRuntime                 chatwidget.ToolRequestRuntimeState
+	useMemories                        bool
+	generateMemories                   bool
+	feedbackEnabled                    bool
+	windowsSandboxSetup                WindowsSandboxSetupFunc
+	onReadWindowsSandboxState          WindowsSandboxStateReaderFunc
+	windowsSandboxLevel                chatwidget.WindowsSandboxLevel
+	windowsSandboxRefreshPending       bool
+	windowsSandboxSetupChoiceRequired  bool
+	onOpenDesktopThread                DesktopThreadOpenFunc
+	appsScopeGeneration                uint64
+	onDetectExternalAgent              ExternalAgentDetectFunc
+	onImportExternalAgent              ExternalAgentImportFunc
+	pendingExternalAgentImports        map[string]bool
+	onReadRolloutPath                  RolloutPathReaderFunc
+	windowsSandboxSetupActive          bool
+	windowsSandboxSetupMode            chatwidget.WindowsSandboxMode
+	windowsSandboxSetupStatus          chatwidget.WindowsSandboxSetupStatus
+	onReadHooks                        HooksListReaderFunc
+	onWriteHookConfig                  HookConfigWriteFunc
+	hookWriteQueue                     []hookConfigWriteOperation
+	hookWriteActive                    bool
+	nextHookWriteRequestID             uint64
+	hookLifecycle                      chatwidget.HookLifecycleState
+	onReadPlugins                      PluginListReaderFunc
+	onReadPlugin                       PluginReadFunc
+	onInstallPlugin                    PluginInstallFunc
+	onUninstallPlugin                  PluginUninstallFunc
+	onWritePluginEnabled               PluginEnabledWriteFunc
+	onAddMarketplace                   MarketplaceAddFunc
+	onRemoveMarketplace                MarketplaceRemoveFunc
+	onUpgradeMarketplace               MarketplaceUpgradeFunc
+	onOpenPluginURL                    PluginOpenURLFunc
+	onOpenURL                          func(string) error
+	onPrimarySelectionWrite            func(string) error
+	onPrimarySelectionRead             func() (string, error)
+	onPrimarySelectionRelease          func() error
+	primarySelectionPublished          bool
+	nextPrimarySelectionReadID         uint64
+	pendingPrimarySelectionRead        uint64
+	onFetchStartupAnnouncement         func() (string, bool)
+	pluginUserMarketplaces             map[string]bool
+	pluginGitMarketplaces              map[string]bool
+	pluginRuntime                      chatwidget.PluginsRuntimeState
+	pluginToggleDesired                map[string]bool
+	pluginToggleActive                 map[string]bool
+	onReadSkills                       SkillsListReaderFunc
+	onWriteSkillEnabled                SkillEnabledWriteFunc
+	nextSkillWriteRequestID            uint64
+	onFuzzyFileSearch                  FuzzyFileSearchReaderFunc
+	onSearchTasks                      TaskMentionSearchFunc
+	onReadExperimentalFeatures         ExperimentalFeaturesReaderFunc
+	onTaskToolsAvailable               func(threadID string) bool
+	onReadApps                         AppListReaderFunc
+	onStartReview                      ReviewStartFunc
+	onStartReviewCommand               ReviewStartCommandFunc
+	onStartCompactCommand              CompactStartCommandFunc
+	onSafetyBufferingRetry             func(threadID, turnID, model, prompt string) bubbletea.Cmd
+	safetyBuffering                    chatwidget.SafetyBufferingState
+	safetyBufferingThreadID            string
+	safetyBufferingFasterModel         string
+	reviewState                        chatwidget.ReviewState
+	reviewTurnID                       string
+	reviewTokenSnapshot                *reviewTokenSnapshot
+	onStartSide                        SideStartFunc
+	onCloseSide                        SideCloseFunc
+	onReadReviewBranches               ReviewBranchesReaderFunc
+	onReadReviewCommits                ReviewCommitsReaderFunc
+	activeSide                         *activeSideConversation
 	// sideConversations retains every side conversation, keyed by its parent
 	// thread. Thread navigation hides the active side instead of deleting it
 	// (Rust #52184), so returning to a parent can reopen the existing side with
@@ -3356,6 +3363,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		notificationCondition:            notificationConditionOrDefault(options.NotificationCondition),
 		onReadGitDiff:                    options.OnReadGitDiff,
 		onStopBackgroundTerminals:        options.OnStopBackgroundTerminals,
+		onListBackgroundTerminals:        options.OnListBackgroundTerminals,
 		onReadDebugConfig:                options.OnReadDebugConfig,
 		onReadGoal:                       options.OnReadGoal,
 		onSetGoal:                        options.OnSetGoal,
@@ -3768,6 +3776,13 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 	// Frame requests are delivered through the Program (Rust FrameRequester),
 	// so this never rewrites the command the message handler returned.
 	next.syncFrameDemand()
+	if restoreCmd := next.consumeBackgroundTerminalRestore(); restoreCmd != nil {
+		if cmd == nil {
+			cmd = restoreCmd
+		} else {
+			cmd = bubbletea.Batch(cmd, restoreCmd)
+		}
+	}
 	if replayCmd := next.reconcileApprovalThread(); replayCmd != nil {
 		if cmd == nil {
 			cmd = replayCmd
@@ -3996,6 +4011,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 	case AccountStatusUpdatedMsg:
 		m.applyAccountStatusUpdated(msg)
 		return m, m.refreshStatusControlsCmd()
+	case BackgroundTerminalsLoadedMsg:
+		m.restoreBackgroundTerminals(msg)
+		return m, nil
 	case AccountEmailLoadedMsg:
 		if m.applyAccountEmailLoaded(msg) {
 			return m, m.refreshStatusControlsCmd()
@@ -5983,6 +6001,11 @@ func (m *Model) noteUnifiedExecCommandCompleted(item *protocol.ThreadItem) {
 	processID := strings.TrimSpace(metadataString(item.Metadata, "processId"))
 	if wait := m.commandLifecycle.UnifiedExecWait; wait != nil && processID != "" && wait.ProcessID == processID {
 		m.finishUnifiedExecWaitStreak()
+	}
+	// Rust #59319: a terminal that finishes while its restore request is
+	// pending must not come back as live when the list arrives.
+	if pending := m.pendingTerminalRestore; pending != nil && callID != "" {
+		pending.exited[callID] = struct{}{}
 	}
 	m.commandLifecycle.TrackUnifiedExecProcessEnd(callID, processID)
 }
@@ -12236,7 +12259,7 @@ func (m *Model) applyPsCommand() {
 	if m == nil {
 		return
 	}
-	m.applyHistoryCell(historycell.NewUnifiedExecProcessesOutput(m.backgroundProcesses))
+	m.applyHistoryCell(historycell.NewUnifiedExecProcessesOutput(m.backgroundTerminalDetails()))
 	m.notice = ""
 }
 
@@ -12244,7 +12267,7 @@ func (m *Model) applyStopCommand() bubbletea.Cmd {
 	if m == nil {
 		return nil
 	}
-	m.backgroundProcesses = nil
+	m.clearBackgroundTerminals()
 	m.notice = "Stopping all background terminals."
 	m.addInfoHistoryMessage(m.notice)
 	m.refreshTranscript()

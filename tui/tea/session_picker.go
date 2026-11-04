@@ -881,6 +881,9 @@ func (m *Model) applyResumeResponseWithCWD(threadID string, response SessionResu
 	}
 	m.refreshTranscript()
 	m.transcript.GotoBottom()
+	// Rust #59319: replayed command history must not become live terminals; the
+	// displayed thread's own terminals come from the app server after replay.
+	m.requestBackgroundTerminalRestore()
 }
 
 func normalizeSessionPickerDensityTea(value string) codextui.SessionListDensity {

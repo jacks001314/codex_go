@@ -598,6 +598,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		InitialHistoryCells:         interactiveUpdateHistoryCells(root),
 		WindowsSandboxStartupPrompt: interactiveRemoteWindowsSandboxStartupPrompt(ctx, root, endpoint, settings.PermissionRequirements),
 		OnSessionAction:             interactiveRemoteSessionActionHandler(ctx, endpoint, root, backendID),
+		OnListBackgroundTerminals:   interactiveRemoteListBackgroundTerminals(ctx, endpoint),
 		OnResumeSession:             interactiveRemoteResumeSessionHandler(ctx, endpoint, root, backendID),
 		OnSwitchBackendSession:      interactiveBackendSwitchHandler(interactiveRemoteResumeSessionHandler(ctx, endpoint, root, backendID), backendID),
 		OnContinueSafetyRecourse:    interactiveRemoteContinueSafetyRecourse(ctx, endpoint, root, state, backendID),
@@ -1862,6 +1863,43 @@ func interactiveRemoteRenameThreadHandler(ctx context.Context, endpoint *appserv
 		defer client.close()
 		var response appserver.ThreadSetNameResponse
 		return remoteSessionRequest(ctx, client, appserver.MethodThreadNameSet, appserver.ThreadSetNameParams{ThreadID: threadID, Name: name}, &response)
+	}
+}
+
+// interactiveRemoteListBackgroundTerminals reads every page of a thread's live
+// background terminals from the app server (Rust #59319 list_background_terminals).
+func interactiveRemoteListBackgroundTerminals(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) codextea.ListBackgroundTerminalsFunc {
+	return func(threadID string) ([]codextea.BackgroundTerminal, error) {
+		threadID = strings.TrimSpace(threadID)
+		if threadID == "" {
+			return nil, errors.New("remote background terminal list requires a thread id")
+		}
+		client, err := openRemoteSessionClient(ctx, endpoint)
+		if err != nil {
+			return nil, err
+		}
+		defer client.close()
+		terminals := make([]codextea.BackgroundTerminal, 0)
+		var cursor *string
+		for {
+			var response appserver.BackgroundTerminalsListResponse
+			params := appserver.BackgroundTerminalsListParams{ThreadID: threadID, Cursor: cursor}
+			if err := remoteSessionRequest(ctx, client, appserver.MethodThreadBackgroundTerminalsList, params, &response); err != nil {
+				return nil, err
+			}
+			for _, terminal := range response.Data {
+				terminals = append(terminals, codextea.BackgroundTerminal{
+					ItemID:    terminal.ItemID,
+					ProcessID: terminal.ProcessID,
+					Command:   terminal.Command,
+				})
+			}
+			if response.NextCursor == nil || strings.TrimSpace(*response.NextCursor) == "" {
+				return terminals, nil
+			}
+			next := strings.TrimSpace(*response.NextCursor)
+			cursor = &next
+		}
 	}
 }
 
