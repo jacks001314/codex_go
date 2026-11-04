@@ -5,7 +5,8 @@ package appserver
 // Rust parity: codex-rs/core/src/agent_message_board.rs, which bridges the board
 // extension to the selected controller, clock and active-turn services. The
 // board owns storage and tools; this adapter never starts or restores
-// recipients and never queues a notification for an idle agent.
+// recipients during lookup. Notifications use ordinary agent-message scheduling,
+// so an idle recipient receives the notice in a later turn (Rust #59139).
 
 import (
 	"context"
