@@ -63,6 +63,10 @@ type APIError struct {
 	// instruction for a misalignment policy block (Rust #40952). It is exposed
 	// to live clients but never serialized into rollout storage.
 	Misalignment *MisalignmentDetails `json:"-"`
+	// AudioValidationCode keeps the provider code behind an invalid-audio
+	// failure so the host can tell a per-recording rejection from a request-wide
+	// size failure (Rust #59234 per_recording = code != "audio_too_large").
+	AudioValidationCode string `json:"audioValidationCode,omitempty"`
 	// Delay is retained for compatibility. New code should use WithRetryDelay
 	// and RetryDelay so retry metadata remains independent from error details.
 	Delay time.Duration `json:"delay,omitempty"`

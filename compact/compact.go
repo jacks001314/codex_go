@@ -393,6 +393,10 @@ type RemoteOptions struct {
 	// The compaction pipeline reads `retain_client_tool_outputs` and
 	// `retain_client_developer_messages` from it.
 	FeatureSettings map[string]bool
+	// FileAudioDurations carries measured uploaded-audio durations for the
+	// retained-message budget (Rust #59268). A missing entry reserves the full
+	// Responses maximum.
+	FileAudioDurations FileAudioDurations
 }
 
 func CompactRemotely(ctx context.Context, request *Request, options *RemoteOptions) (*Result, error) {
@@ -415,7 +419,7 @@ func CompactRemotely(ctx context.Context, request *Request, options *RemoteOptio
 			if len(result.NewHistory) == 0 && strings.TrimSpace(result.Summary) != "" {
 				result.NewHistory = BuildCompactedHistory(nil, lastUserMessages(requestHistoryForCompaction(request), 1), result.Summary)
 			}
-			result.NewHistory = processRemoteHistoryWithRetained(
+			result.NewHistory = processRemoteHistoryWithRetainedWithAudio(
 				result.NewHistory,
 				requestHistoryForCompaction(request),
 				options.InitialContext,
@@ -425,6 +429,7 @@ func CompactRemotely(ctx context.Context, request *Request, options *RemoteOptio
 					options.RetainClientDeveloperMessages,
 					options.RetainClientToolOutputs,
 				),
+				options.FileAudioDurations,
 			)
 			if result.CompletedAt.IsZero() {
 				result.CompletedAt = time.Now().UTC()
@@ -663,7 +668,11 @@ func ProcessRemoteHistory(remote []Item, initialContext []Item, injectBeforeLast
 }
 
 func processRemoteHistoryWithRetained(remote []Item, original []Item, initialContext []Item, injectBeforeLastUser bool, policy retentionPolicy) []Item {
-	retained := retainedMessagesForRemoteCompaction(original, RemoteRetainedMessageTokenBudget, policy)
+	return processRemoteHistoryWithRetainedWithAudio(remote, original, initialContext, injectBeforeLastUser, policy, nil)
+}
+
+func processRemoteHistoryWithRetainedWithAudio(remote []Item, original []Item, initialContext []Item, injectBeforeLastUser bool, policy retentionPolicy, durations FileAudioDurations) []Item {
+	retained := retainedMessagesForRemoteCompactionWithAudio(original, RemoteRetainedMessageTokenBudget, policy, durations)
 	filtered := FilterCompactedHistory(remote, policy.clientDeveloperMessages, policy.clientToolOutputs)
 	history := append([]Item(nil), retained...)
 	for _, item := range filtered {
@@ -679,6 +688,13 @@ func processRemoteHistoryWithRetained(remote []Item, original []Item, initialCon
 }
 
 func retainedMessagesForRemoteCompaction(items []Item, maxTokens int, policy retentionPolicy) []Item {
+	return retainedMessagesForRemoteCompactionWithAudio(items, maxTokens, policy, nil)
+}
+
+// retainedMessagesForRemoteCompactionWithAudio mirrors Rust
+// truncate_retained_messages (#59237, #59268): measured uploaded-audio
+// durations replace the conservative maximum when the store knows them.
+func retainedMessagesForRemoteCompactionWithAudio(items []Item, maxTokens int, policy retentionPolicy, durations FileAudioDurations) []Item {
 	if maxTokens <= 0 {
 		return nil
 	}
@@ -708,15 +724,14 @@ func retainedMessagesForRemoteCompaction(items []Item, maxTokens int, policy ret
 		item := candidates[i]
 		clientDeveloper := IsClientAuthoredDeveloperMessage(item)
 		chargeImages := policy.imageBudget && !clientDeveloper
-		textCost := EstimateTextTokens(ItemText(&item))
-		contentCost := EstimateItemTokens(&item)
-		cost := max(1, contentCost)
+		cost := max(1, EstimateItemTokensWithAudio(&item, durations))
 		itemType := strings.ToLower(strings.TrimSpace(item.Type))
 		isMessage := itemType == "message" || itemType == "user_message" || itemType == "assistant_message"
-		if isMessage && !clientDeveloper && !chargeImages {
-			// Without the image budget, retained messages charge their text only
-			// (Rust #40280); outputs and other items keep the serialized estimate.
-			cost = max(1, textCost)
+		if isMessage && !clientDeveloper {
+			// Retained messages charge their content parts: text, images only
+			// with the image budget (Rust #40280), and uploaded file audio
+			// always at its measured or maximum budget (Rust #59237).
+			cost = max(1, retainedMessageTokens(item, chargeImages, durations))
 		}
 		if cost <= remaining {
 			retainedReversed = append(retainedReversed, item)
@@ -733,13 +748,13 @@ func retainedMessagesForRemoteCompaction(items []Item, maxTokens int, policy ret
 		if isStructuredAgentMessage(&item) {
 			continue
 		}
-		if chargeImages && retainedMessageImageCount(item) > 0 {
-			// Rust #40280: an image at the truncation boundary is kept or dropped
-			// whole with its adjacent labels. Once it does not fit, stop
+		if requiresMediaBoundaryTruncation(item, chargeImages) {
+			// Rust #40280/#59237: media at the truncation boundary is kept or
+			// dropped whole with its adjacent labels. Once it does not fit, stop
 			// backfilling the remaining budget with older messages.
 			budget := remaining
 			remaining = 0
-			if truncated, ok := truncateRetainedMessageWithImages(item, budget); ok {
+			if truncated, ok := truncateRetainedMessageWithMedia(item, budget, chargeImages, durations); ok {
 				retainedReversed = append(retainedReversed, truncated)
 			}
 			continue
@@ -770,11 +785,55 @@ func retainedMessageImageCount(item Item) int {
 	return count
 }
 
-// truncateRetainedMessageWithImages keeps later content within a token budget,
-// treating each image (and its immediate `<image>` / `</image>` labels) as an
-// atomic group. Text follows the normal token truncation policy; audio and
-// other media stay uncharged, mirroring Rust #40280.
-func truncateRetainedMessageWithImages(item Item, maxTokens int) (Item, bool) {
+// requiresMediaBoundaryTruncation mirrors Rust #59237: a charged image or any
+// uploaded file audio makes the message boundary media-aware.
+func requiresMediaBoundaryTruncation(item Item, chargeImages bool) bool {
+	return (chargeImages && retainedMessageImageCount(item) > 0) || retainedMessageFileAudioCount(item) > 0
+}
+
+// retainedMessageFileAudioCount counts uploaded-file audio references, which
+// always consume budget regardless of the image budget.
+func retainedMessageFileAudioCount(item Item) int {
+	count := 0
+	for _, part := range item.Content {
+		if isRetainedFileAudioPart(part) {
+			count++
+		}
+	}
+	return count
+}
+
+// isRetainedFileAudioPart reports the uploaded-file arm of an audio part
+// (Rust AudioReference::File). Inline audio keeps its payload in the request.
+func isRetainedFileAudioPart(part ContentPart) bool {
+	kind := retainedContentPartKind(part)
+	if kind != "input_audio" && kind != "audio" {
+		return false
+	}
+	return strings.TrimSpace(part.AudioURL) == "" && strings.TrimSpace(part.FileID) != ""
+}
+
+// retainedMessageTokens mirrors Rust retained_message_token_count.
+func retainedMessageTokens(item Item, chargeImages bool, durations FileAudioDurations) int {
+	itemType := strings.ToLower(strings.TrimSpace(item.Type))
+	if itemType != "message" && itemType != "user_message" && itemType != "assistant_message" {
+		return EstimateItemTokensWithAudio(&item, durations)
+	}
+	if len(item.Content) == 0 {
+		return EstimateTextTokens(ItemText(&item))
+	}
+	total := 0
+	for _, part := range item.Content {
+		total += retainedContentPartTokens(part, chargeImages, durations)
+	}
+	return total
+}
+
+// truncateRetainedMessageWithMedia keeps later content within a token budget,
+// treating each image or audio part (and its immediate <image>/<audio> labels)
+// as an atomic group. Text follows the normal token truncation policy. File
+// audio is charged at its measured or maximum budget (Rust #59237, #59268).
+func truncateRetainedMessageWithMedia(item Item, maxTokens int, chargeImages bool, durations FileAudioDurations) (Item, bool) {
 	if maxTokens <= 0 || len(item.Content) == 0 {
 		return Item{}, false
 	}
@@ -783,32 +842,28 @@ func truncateRetainedMessageWithImages(item Item, maxTokens int) (Item, bool) {
 	keptReversed := make([]ContentPart, 0, len(parts))
 	for len(parts) > 0 && remaining > 0 {
 		last := len(parts) - 1
-		imageIndex := -1
+		mediaIndex := -1
 		switch {
-		case isRetainedImagePart(parts[last]):
-			imageIndex = last
-		case isRetainedImageCloseLabel(parts[last]) && last > 0 && isRetainedImagePart(parts[last-1]):
-			imageIndex = last - 1
+		case isRetainedMediaPart(parts[last]):
+			mediaIndex = last
+		case last > 0 && isRetainedMediaCloseLabel(parts[last], parts[last-1]):
+			mediaIndex = last - 1
 		}
-		if imageIndex >= 0 {
-			start := imageIndex
-			if start > 0 && isRetainedImageOpenLabel(parts[start-1]) {
+		if mediaIndex >= 0 {
+			start := mediaIndex
+			if start > 0 && isRetainedMediaOpenLabel(parts[start-1], parts[start]) {
 				start--
 			}
 			groupTokens := 0
 			for _, part := range parts[start:] {
-				groupTokens += retainedContentPartTokens(part)
+				groupTokens += retainedContentPartTokens(part, chargeImages, durations)
 			}
-			fits := groupTokens <= remaining
-			if fits {
-				remaining -= groupTokens
-			} else {
-				remaining = 0
+			if groupTokens > remaining {
+				break
 			}
-			if fits {
-				for index := len(parts) - 1; index >= start; index-- {
-					keptReversed = append(keptReversed, parts[index])
-				}
+			remaining -= groupTokens
+			for index := len(parts) - 1; index >= start; index-- {
+				keptReversed = append(keptReversed, parts[index])
 			}
 			parts = parts[:start]
 			continue
@@ -816,7 +871,7 @@ func truncateRetainedMessageWithImages(item Item, maxTokens int) (Item, bool) {
 		part := parts[last]
 		parts = parts[:last]
 		switch retainedContentPartKind(part) {
-		case "input_text":
+		case "input_text", "output_text", "text":
 			if remaining == 0 {
 				continue
 			}
@@ -830,8 +885,6 @@ func truncateRetainedMessageWithImages(item Item, maxTokens int) (Item, bool) {
 			if part.Text != "" {
 				keptReversed = append(keptReversed, part)
 			}
-		case "input_audio":
-			keptReversed = append(keptReversed, part)
 		default:
 			keptReversed = append(keptReversed, part)
 		}
@@ -858,32 +911,61 @@ func retainedContentPartKind(part ContentPart) string {
 	return strings.ToLower(strings.TrimSpace(part.Type))
 }
 
-func retainedContentPartTokens(part ContentPart) int {
+// retainedContentPartTokens mirrors Rust compact_remote_v2_media
+// content_item_token_count: inline audio is free, file audio always charges its
+// budget, and images charge only when the image budget is enabled.
+func retainedContentPartTokens(part ContentPart, chargeImages bool, durations FileAudioDurations) int {
 	switch retainedContentPartKind(part) {
-	case "input_text", "output_text":
+	case "input_text", "output_text", "text":
 		return EstimateTextTokens(part.Text)
-	case "input_image":
+	case "input_image", "image":
+		if !chargeImages {
+			return 0
+		}
 		return compactTokensFromBytes(compactImageReferenceBytes(part))
+	case "input_audio", "audio":
+		if isRetainedFileAudioPart(part) {
+			return durations.FileTokens(part.FileID)
+		}
+		return 0
 	default:
-		// Audio and other media remain uncharged, matching Rust.
 		return 0
 	}
 }
 
 func isRetainedImagePart(part ContentPart) bool {
-	return retainedContentPartKind(part) == "input_image"
+	kind := retainedContentPartKind(part)
+	return kind == "input_image" || kind == "image"
 }
 
-func isRetainedImageOpenLabel(part ContentPart) bool {
+// isRetainedMediaPart reports a content part that must move together with its
+// adjacent harness labels.
+func isRetainedMediaPart(part ContentPart) bool {
+	kind := retainedContentPartKind(part)
+	return kind == "input_image" || kind == "image" || kind == "input_audio" || kind == "audio"
+}
+
+// isRetainedMediaOpenLabel mirrors Rust is_opening_media_label.
+func isRetainedMediaOpenLabel(part ContentPart, media ContentPart) bool {
 	if retainedContentPartKind(part) != "input_text" {
 		return false
 	}
 	text := part.Text
-	return text == "<image>" || (strings.HasPrefix(text, "<image name=") && strings.HasSuffix(text, ">"))
+	if isRetainedImagePart(media) {
+		return text == "<image>" || (strings.HasPrefix(text, "<image name=") && strings.HasSuffix(text, ">"))
+	}
+	return text == "<audio>" || (strings.HasPrefix(text, "<audio name=") && strings.HasSuffix(text, ">"))
 }
 
-func isRetainedImageCloseLabel(part ContentPart) bool {
-	return retainedContentPartKind(part) == "input_text" && part.Text == "</image>"
+// isRetainedMediaCloseLabel mirrors Rust is_closing_media_label.
+func isRetainedMediaCloseLabel(part ContentPart, previous ContentPart) bool {
+	if retainedContentPartKind(part) != "input_text" {
+		return false
+	}
+	if isRetainedImagePart(previous) {
+		return part.Text == "</image>"
+	}
+	return part.Text == "</audio>"
 }
 
 func retainedMessageText(parts []ContentPart) string {
@@ -1020,6 +1102,13 @@ func resolveRetentionPolicy(settings map[string]bool, retainClientDeveloperMessa
 }
 
 func EstimateItemTokens(item *Item) int {
+	return EstimateItemTokensWithAudio(item, nil)
+}
+
+// EstimateItemTokensWithAudio mirrors Rust estimate_item_token_count_with_audio
+// (#59268): uploaded file audio is charged from its measured duration when the
+// session cache has one.
+func EstimateItemTokensWithAudio(item *Item, durations FileAudioDurations) int {
 	if item == nil {
 		return 0
 	}
@@ -1060,7 +1149,7 @@ func EstimateItemTokens(item *Item) int {
 		// Rust estimate_response_item_model_visible_bytes counts a message's
 		// content blocks, so an image (inline or file-backed) is charged instead
 		// of contributing zero (#46072).
-		return compactTokensFromBytes(compactItemContentBytes(item))
+		return compactTokensFromBytes(compactItemContentBytes(item, durations))
 	}
 	if tokens := EstimateTextTokens(ItemText(item)); tokens > 0 {
 		return tokens
@@ -1147,9 +1236,23 @@ const compactResizedImageBytes = 7373
 const compactOriginalImageMaxPatches = 10_000
 
 // FileAudioTokensEstimate mirrors Rust FILE_AUDIO_TOKENS_ESTIMATE (#58430):
-// uploaded audio files expose no local duration, so budget the Responses
+// an uploaded audio file with no measured duration reserves the Responses
 // 20-minute maximum at the existing 10 audio tokens per second.
-const FileAudioTokensEstimate = 20 * 60 * 10
+const FileAudioTokensEstimate = audioutil.MaxFileAudioTokens
+
+// FileAudioDurations maps uploaded file IDs to measured durations in seconds
+// (Rust SessionState::file_audio_durations, #59268). A missing entry reserves
+// the full budget because admission belongs to Responses.
+type FileAudioDurations map[string]float64
+
+// FileTokens returns the budget charged for one uploaded recording.
+func (d FileAudioDurations) FileTokens(fileID string) int {
+	var duration *float64
+	if seconds, ok := d[strings.TrimSpace(fileID)]; ok {
+		duration = &seconds
+	}
+	return audioutil.EstimateFileAudioTokens(duration)
+}
 
 // compactImageReferenceBytes mirrors Rust estimate_image_reference_bytes
 // (#46072): an inline image keeps the resized-image estimate, while a file
@@ -1170,9 +1273,9 @@ func compactImageReferenceBytes(part ContentPart) int {
 // (#58430): inline audio is charged from the decoded duration, while a
 // file-backed reference has no local duration and uses the conservative
 // maximum-duration budget.
-func compactAudioReferenceBytes(part ContentPart) int {
+func compactAudioReferenceBytes(part ContentPart, durations FileAudioDurations) int {
 	if strings.TrimSpace(part.AudioURL) == "" && strings.TrimSpace(part.FileID) != "" {
-		return FileAudioTokensEstimate * 4
+		return durations.FileTokens(part.FileID) * 4
 	}
 	return audioutil.EstimateAudioTokenCount(part.AudioURL) * 4
 }
@@ -1190,11 +1293,11 @@ func functionCallModelVisibleBytes(item *Item) int {
 	if namespace == "" {
 		namespace = functionNamespaceDefault
 	}
-	return len(item.Name) + len(namespace) + compactItemContentBytes(item)
+	return len(item.Name) + len(namespace) + compactItemContentBytes(item, nil)
 }
 
 func functionCallOutputModelVisibleBytes(item *Item) int {
-	return compactItemContentBytes(item) +
+	return compactItemContentBytes(item, nil) +
 		len(item.CallID) +
 		len(item.Name) +
 		len(strings.TrimSpace(item.Namespace))
@@ -1203,7 +1306,7 @@ func functionCallOutputModelVisibleBytes(item *Item) int {
 // compactItemContentBytes estimates the model-visible payload bytes: the joined
 // text, or per-block content when structured blocks are present (Rust
 // estimate_function_output_bytes for the shapes Go models).
-func compactItemContentBytes(item *Item) int {
+func compactItemContentBytes(item *Item, durations FileAudioDurations) int {
 	if item == nil {
 		return 0
 	}
@@ -1218,7 +1321,7 @@ func compactItemContentBytes(item *Item) int {
 		case "input_image", "image":
 			bytes += compactImageReferenceBytes(part)
 		case "input_audio", "audio":
-			bytes += compactAudioReferenceBytes(part)
+			bytes += compactAudioReferenceBytes(part, durations)
 		}
 	}
 	if bytes == 0 {

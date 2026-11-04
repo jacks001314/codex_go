@@ -144,7 +144,7 @@ func terminalProviderError(body *responsesAgentAPIErrorBody, status int) *codexa
 		if message == "" {
 			message = AudioInputFallbackMessage
 		}
-		return &codexapi.APIError{Kind: codexapi.ErrorInvalidAudioInput, Status: status, Message: message}
+		return &codexapi.APIError{Kind: codexapi.ErrorInvalidAudioInput, Status: status, Message: message, AudioValidationCode: code}
 	}
 	switch code {
 	case "budget_reached":
@@ -2864,10 +2864,10 @@ func responseFailedError(data []byte) error {
 	// Rust checks the Flex shape with `Value::get("code")` before decoding the
 	// strict error body, so a Flex-capacity failure ends the turn even when
 	// another field is malformed (Rust #47967, #48229).
-	if _, message, ok := audioInputErrorBody(rawError); ok {
+	if code, message, ok := audioInputErrorBody(rawError); ok {
 		// Rust #58434: audio validation failures are terminal and keep the
 		// provider message (falling back when it is absent or blank).
-		return &codexapi.APIError{Kind: codexapi.ErrorInvalidAudioInput, Message: message}
+		return &codexapi.APIError{Kind: codexapi.ErrorInvalidAudioInput, Message: message, AudioValidationCode: code}
 	}
 	if _, message, ok := flexUnavailableErrorBody(rawError); ok {
 		return &codexapi.APIError{

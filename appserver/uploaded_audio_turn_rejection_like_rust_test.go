@@ -64,8 +64,8 @@ func TestTurnStartRejectsUploadedAudioInsideTurnLikeRust(t *testing.T) {
 			continue
 		}
 		reported = true
-		if !strings.Contains(payload.Error.Message, uploadedAudioDisabledMessage) {
-			t.Fatalf("error message = %q, want %q", payload.Error.Message, uploadedAudioDisabledMessage)
+		if !strings.Contains(payload.Error.Message, unsupportedUploadedAudioMessage) {
+			t.Fatalf("error message = %q, want %q", payload.Error.Message, unsupportedUploadedAudioMessage)
 		}
 		if payload.Error.CodexErrorInfo != "badRequest" {
 			t.Fatalf("codexErrorInfo = %q, want badRequest", payload.Error.CodexErrorInfo)
@@ -208,7 +208,7 @@ func TestTurnSteerAcceptsUploadedAudioThenRejectsItLikeRust(t *testing.T) {
 	if len(drained) == 0 {
 		t.Fatalf("the steer was not delivered to the turn: %#v", drained)
 	}
-	if err := validateSteerInputAudioLikeRust(drained); !errors.Is(err, errUploadedAudioDisabled) {
+	if err := validateSteerInputAudioLikeRust(drained); !errors.Is(err, errUnsupportedUploadedAudio) {
 		t.Fatalf("steer validation error = %v, want the uploaded-audio rejection", err)
 	}
 }

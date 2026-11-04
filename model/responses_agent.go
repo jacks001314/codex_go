@@ -1970,7 +1970,7 @@ func websocketTerminalProviderError(event map[string]any) *codexapi.APIError {
 		if message == "" {
 			message = AudioInputFallbackMessage
 		}
-		return &codexapi.APIError{Kind: codexapi.ErrorInvalidAudioInput, Status: int(status), Message: message}
+		return &codexapi.APIError{Kind: codexapi.ErrorInvalidAudioInput, Status: int(status), Message: message, AudioValidationCode: code}
 	}
 	return nil
 }

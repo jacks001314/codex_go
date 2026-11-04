@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 )
@@ -22,6 +23,18 @@ const maxPromptAudioBase64Bytes = (MaxPromptAudioInputBytes + 2) / 3 * 4
 
 // tokensPerSecond is the audio token estimate rate (Rust AUDIO_TOKENS_PER_SECOND).
 const tokensPerSecond = 10.0
+
+// tokensPerSecondInt is the integer rate Rust #59268 uses for uploaded file
+// audio, where the estimate is duration_nanos * 10 rounded up.
+const tokensPerSecondInt = 10
+
+// MaxFileAudioDurationSeconds is the longest recording Responses accepts (20
+// minutes). Longer or unmeasured uploads reserve this whole budget.
+const MaxFileAudioDurationSeconds = 20 * 60
+
+// MaxFileAudioTokens mirrors Rust FILE_AUDIO_TOKENS_ESTIMATE: the 20-minute
+// maximum at 10 tokens per second.
+const MaxFileAudioTokens = MaxFileAudioDurationSeconds * tokensPerSecondInt
 
 // tokenEstimateCacheSize bounds the duration-estimate cache.
 const tokenEstimateCacheSize = 32
@@ -232,4 +245,20 @@ func (c *lruCache) put(key string, value int) {
 		c.order.Remove(oldest)
 		delete(c.entries, oldest.Value.(*lruEntry).key)
 	}
+}
+
+// EstimateFileAudioTokens mirrors Rust estimate_file_audio_tokens (#59268):
+// a measured uploaded-file duration rounds up at 10 tokens per second and is
+// capped at the Responses maximum. A missing or zero measurement reserves the
+// full 20-minute budget, because admission belongs to Responses.
+func EstimateFileAudioTokens(durationSeconds *float64) int {
+	seconds := float64(MaxFileAudioDurationSeconds)
+	if durationSeconds != nil && *durationSeconds > 0 {
+		seconds = math.Min(*durationSeconds, float64(MaxFileAudioDurationSeconds))
+	}
+	tokens := ceil(seconds * float64(tokensPerSecondInt))
+	if tokens >= float64(maxInt) {
+		return maxInt
+	}
+	return int(tokens)
 }

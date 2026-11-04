@@ -29,6 +29,7 @@ import (
 	"codex_go/agentboard"
 	"codex_go/applypatch"
 	"codex_go/apps"
+	"codex_go/audiofiles"
 	"codex_go/auth"
 	"codex_go/codexapi"
 	"codex_go/compact"
@@ -1791,13 +1792,14 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	// substituting `retry`.
 	rootTurnID := rootTurnIDForTurn(params, turnID)
 	_ = r.appendRuntimeTurnStartedWithAttribution(threadID, turnID, rootTurnID, turnAttributionForParams(params, turnID, rootTurnID), startedAt)
-	// Rust #58430: uploaded audio is rejected inside the turn runner. The turn is
-	// accepted, the accompanying text is recorded, and then the turn fails with
-	// the unsupported-operation error instead of the request being refused.
-	if filtered, rejected := turnStartParamsWithoutUploadedAudio(params); rejected {
+	// Rust #59234: uploaded audio is accepted when the selected model declares
+	// audio input. A model without it still accepts the turn, records the
+	// accompanying text, and then fails with the unsupported-operation error
+	// instead of the request being refused.
+	if filtered, rejected := turnStartParamsWithoutUploadedAudio(params); rejected && !modelSupportsAudioInput(runConfig.ModelInfo) {
 		r.persistRuntimeTurnPrompt(threadID, turnID, filtered, startedAt)
 		r.clearActiveRuntimeTurn(threadID, turnID)
-		r.finishTurnWithErrorAnalytics(threadID, turnID, startedAtMS, errUploadedAudioDisabled, &turnCompletionAnalyticsContext{
+		r.finishTurnWithErrorAnalytics(threadID, turnID, startedAtMS, errUnsupportedUploadedAudio, &turnCompletionAnalyticsContext{
 			ConnectionID: connectionID,
 			Params:       params,
 			RunConfig:    runConfig,
@@ -2008,9 +2010,15 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		},
 		SamplingFollowUp:   samplingFollowUp,
 		SamplingCompaction: samplingCompaction,
-		// Rust #58430: a steer that carries uploaded audio fails the running turn
-		// after the accompanying text is recorded.
-		ValidateSteerInput: validateSteerInputAudioLikeRust,
+		// Rust #59234: a steer that carries uploaded audio fails the running turn
+		// after the accompanying text is recorded only when the model has no audio
+		// input; an audio-capable model accepts it into the next request.
+		ValidateSteerInput: func(items []any) error {
+			if modelSupportsAudioInput(runConfig.ModelInfo) {
+				return nil
+			}
+			return validateSteerInputAudioLikeRust(items)
+		},
 		OnTokenUsage: func(usage model.AgentUsage) {
 			r.recordGoalTokenUsageWithDescendants(threadID, turnID, usage)
 		},
@@ -2039,9 +2047,11 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		if pending == nil || (len(pending.InputItems) == 0 && len(pending.ClientMetadata) == 0) {
 			break
 		}
-		if validateErr := validateSteerInputAudioLikeRust(pending.InputItems); validateErr != nil {
-			err = validateErr
-			break
+		if !modelSupportsAudioInput(runConfig.ModelInfo) {
+			if validateErr := validateSteerInputAudioLikeRust(pending.InputItems); validateErr != nil {
+				err = validateErr
+				break
+			}
 		}
 		nextRequest := *agentRequest
 		nextRequest.Prompt = ""
@@ -2060,6 +2070,16 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		}
 		result = mergeAgentLoopAttempts(result, next)
 	}
+	submittedInputItems := append(append([]any(nil), agentRequest.InputItems...), agentRequest.PostPromptInputItems...)
+	if err == nil {
+		// Rust #59234: a completed request proves these recordings decoded for this
+		// model and provider, and #59268 records the measured durations for future
+		// budgets.
+		r.resolveAudioDurations(threadID, submittedInputItems)
+		if pending := audiofiles.PendingConfirmation(r.acceptedFileAudio(threadID), turnID, runConfig.Model, runConfig.ProviderID, submittedInputItems); pending != nil {
+			r.recordAcceptedFileAudio(threadID, pending)
+		}
+	}
 	if finishTurn == nil {
 		finishTurn = r.beginRuntimeTurnFinish(threadID, turnID)
 	}
@@ -2070,6 +2090,9 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	defer finishTurn()
 	executorStepCapabilities := r.activeStepCapabilitySnapshot(threadID)
 	if err != nil {
+		// Rust #59234: attribute a terminal audio failure against this exact
+		// submitted request before the error reaches the client.
+		err = r.attributeRejectedAudio(ctx, threadID, submittedInputItems, err)
 		steerCount := r.activeRuntimeTurnSteerCount(threadID, turnID)
 		if ctx.Err() != nil {
 			r.clearActiveRuntimeTurn(threadID, turnID)
@@ -5105,7 +5128,7 @@ func turnAnalyticsErrorFieldsFromError(err error) turnAnalyticsErrorFields {
 		errors.Is(err, sandbox.ErrInvalidPermissionProfileRequest),
 		errors.Is(err, sandbox.ErrInvalidWindowsSandboxRequest):
 		return turnAnalyticsErrorFields{TurnError: "sandboxError", CodexErrorKind: stringPtrIfNotEmpty("sandbox")}
-	case errors.Is(err, errUploadedAudioDisabled):
+	case errors.Is(err, errUnsupportedUploadedAudio):
 		// Rust #58430 maps CodexErr::UnsupportedOperation to
 		// CodexErrorInfo::BadRequest while the analytics kind keeps the detail name.
 		return turnAnalyticsErrorFields{TurnError: "badRequest", CodexErrorKind: stringPtrIfNotEmpty("unsupported_operation")}
@@ -6196,6 +6219,14 @@ func threadUserInputContent(prompt string, inputs []turn.TurnUserInput) []map[st
 			content = append(content, entry)
 			continue
 		}
+		if fileID := strings.TrimSpace(input.FileID); fileID != "" && strings.EqualFold(inputType, "audio") {
+			content = append(content, map[string]any{"type": "audio", "file_id": fileID})
+			continue
+		}
+		if audioURL := strings.TrimSpace(input.URL); audioURL != "" && strings.EqualFold(inputType, "audio") {
+			content = append(content, map[string]any{"type": "audio", "url": audioURL})
+			continue
+		}
 		if inputType != "" {
 			entry := map[string]any{"type": inputType}
 			if input.Name != "" {
@@ -7205,15 +7236,28 @@ func (r *RuntimeRouter) compactThreadWithHistory(ctx context.Context, params *ru
 			}
 		}
 	}
+	// Rust #59234: an upload that expired since it was recorded cannot reach
+	// Responses. Only an authoritative negative availability check removes it.
+	request.History = r.projectUnavailableAudioForCompaction(request.History)
 	compacted := backgroundCompacted
 	if compacted == nil {
-		compacted, err = compact.CompactRemotely(ctx, request, &compact.RemoteOptions{
+		remoteOptions := &compact.RemoteOptions{
 			Runner:               r.compactRunnerForRecord(record, request, params.Model, r.compactProgramForAttempt(params, record)),
 			MaxSummaryChars:      4000,
 			InitialContext:       initialContext,
 			InjectBeforeLastUser: true,
 			FallbackToLocal:      !params.RemoteOnly,
-		})
+			FileAudioDurations:   r.compactFileAudioDurations(params.ThreadID),
+		}
+		compacted, err = compact.CompactRemotely(ctx, request, remoteOptions)
+		if err != nil {
+			// The file may disappear after the preflight, or the store may defer
+			// validation to Responses: retry once without the unambiguous recording.
+			if fileID, ok := compactionRejectedAudioID(request.History, err); ok {
+				request.History = compactHistoryWithoutFileAudio(request.History, audiofiles.RejectedSet{fileID: {}})
+				compacted, err = compact.CompactRemotely(ctx, request, remoteOptions)
+			}
+		}
 	}
 	if err != nil {
 		// Rust #53670: a terminal response.incomplete from the compaction
@@ -8434,7 +8478,7 @@ func turnStartUsesStructuredUserInput(params *turn.TurnStartParams) bool {
 		return false
 	}
 	for i := range params.Input {
-		if strings.TrimSpace(firstNonEmpty(params.Input[i].URL, params.Input[i].Path)) != "" {
+		if strings.TrimSpace(firstNonEmpty(params.Input[i].URL, params.Input[i].Path, params.Input[i].FileID)) != "" {
 			return true
 		}
 	}
@@ -10302,6 +10346,10 @@ func (r *RuntimeRouter) historyInputItemsForTurnWithPolicy(threadID string, poli
 		CWD:                strings.TrimSpace(record.Metadata.CWD),
 		TruncationPolicy:   policy,
 	})
+	// Rust #59234/#59268: omit confirmed rejected recordings from the request and
+	// keep measured durations for the audio that remains.
+	items = r.projectRejectedAudioForThread(threadID, items)
+	r.resolveAudioDurations(threadID, items)
 	return items, previousResponseID
 }
 
@@ -13901,6 +13949,10 @@ func inputContentFromTurnUserInputs(prompt string, inputs []turn.TurnUserInput) 
 			content = append(content, inputImageContentBlock(imageURL, inputDetail(input)))
 			continue
 		}
+		if fileID := strings.TrimSpace(input.FileID); fileID != "" && strings.EqualFold(inputType, "audio") {
+			content = append(content, map[string]any{"type": "input_audio", "file_id": fileID})
+			continue
+		}
 		if fileID := strings.TrimSpace(input.FileID); fileID != "" && (inputType == "" || strings.EqualFold(inputType, "image")) {
 			// Rust #45794: file references pass through to the Responses API as
 			// `file_id` without being resolved locally.
@@ -14030,6 +14082,10 @@ func sessionContentFromTurnUserInputs(inputs []turn.TurnUserInput) []session.Con
 				inputType = "localImage"
 			}
 			content = append(content, session.ContentPart{Type: inputType, ImageURL: strings.TrimSpace(input.Path), Detail: cloneString(input.Detail)})
+		case strings.TrimSpace(input.FileID) != "" && strings.EqualFold(inputType, "audio"):
+			// Rust #59234 AudioReference::File: durable file identity is preserved in
+			// thread history so later requests can replay or omit it.
+			content = append(content, session.ContentPart{Type: "input_audio", FileID: strings.TrimSpace(input.FileID)})
 		case strings.TrimSpace(input.URL) != "" && strings.EqualFold(inputType, "audio"):
 			content = append(content, session.ContentPart{Type: "audio", AudioURL: strings.TrimSpace(input.URL)})
 		case strings.TrimSpace(input.Path) != "" && strings.EqualFold(inputType, "localAudio"):

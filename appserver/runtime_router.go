@@ -26,6 +26,7 @@ import (
 	"codex_go/agent"
 	"codex_go/agentboard"
 	"codex_go/apps"
+	"codex_go/audiofiles"
 	"codex_go/auth"
 	"codex_go/chatgptapi"
 	"codex_go/codemode"
@@ -332,7 +333,11 @@ type RuntimeRouter struct {
 	// (Rust #55270). They are not persisted, so a cold resume uses the default.
 	threadUnloadDelayMu sync.Mutex
 	threadUnloadDelays  map[string]time.Duration
-	servicesMu          sync.Mutex
+	// audioStateMu guards audioDurations, the runtime-only measured-duration
+	// cache for uploaded audio (Rust #59268 SessionState::file_audio_durations).
+	audioStateMu   sync.Mutex
+	audioDurations map[string]*audiofiles.Durations
+	servicesMu     sync.Mutex
 	// turnFinishHook observes the window between a finished sampling step and
 	// closing steer admission (Rust #58877). Tests use it to submit a steer that
 	// races turn completion; production leaves it nil.
@@ -9581,7 +9586,7 @@ func (r *RuntimeRouter) handleTurnSteer(request *Request) (*turn.TurnSteerRespon
 	inputItems, additionalContexts := r.inputItemsFromTurnSteer(&params, noticeEnabled)
 	if r.hasRuntimeThreadStore() {
 		recordedParams := params
-		if filtered, rejected := turnUserInputsWithoutUploadedAudio(params.Input); rejected {
+		if filtered, rejected := turnUserInputsWithoutUploadedAudio(params.Input); rejected && !r.audioInputSupportedForThread(params.ThreadID) {
 			// Rust #58430: the rejected attachment never enters history, while the
 			// steered text stays recorded before the turn fails.
 			recordedParams.Input = filtered

@@ -8,17 +8,16 @@ import (
 	"codex_go/turn"
 )
 
-// uploadedAudioDisabledMessage mirrors Rust #58430 uploaded_audio_disabled_error
-// (CodexErr::UnsupportedOperation): this build has no runtime integration for
-// uploaded audio, so file-backed audio must be rejected explicitly instead of
-// being forwarded to the Responses API.
-const uploadedAudioDisabledMessage = "Uploaded audio file inputs are not enabled in this build."
+// unsupportedUploadedAudioMessage mirrors Rust #59234
+// unsupported_uploaded_audio_error (CodexErr::UnsupportedOperation): uploaded
+// audio is accepted for audio-capable models, and a model without audio input
+// reports this error after the accompanying text is recorded.
+const unsupportedUploadedAudioMessage = "The selected model does not support uploaded audio. Choose an audio-capable model or remove the attachment."
 
-// errUploadedAudioDisabled mirrors Rust #58430 uploaded_audio_disabled_error
-// (CodexErr::UnsupportedOperation). The turn runner reports it after recording
-// the accompanying text, so the turn completes as failed instead of the RPC
-// being refused.
-var errUploadedAudioDisabled = errors.New(uploadedAudioDisabledMessage)
+// errUnsupportedUploadedAudio mirrors Rust #59234 unsupported_uploaded_audio_error.
+// The turn runner reports it after recording the accompanying text, so the turn
+// completes as failed instead of the RPC being refused.
+var errUnsupportedUploadedAudio = errors.New(unsupportedUploadedAudioMessage)
 
 // turnStartParamsWithoutUploadedAudio returns a copy of the turn parameters
 // whose input drops uploaded audio file references, mirroring Rust
@@ -57,13 +56,13 @@ func turnUserInputsWithoutUploadedAudio(inputs []turn.TurnUserInput) ([]turn.Tur
 	return filtered, true
 }
 
-// validateSteerInputAudioLikeRust mirrors Rust #58430 run_turn: steered input
-// carrying an uploaded audio file is rejected after it is recorded, so the
-// running turn fails instead of the steer request being refused.
+// validateSteerInputAudioLikeRust mirrors Rust run_turn: steered input carrying
+// an uploaded audio file is rejected after it is recorded when the model has no
+// audio input, so the running turn fails instead of the steer being refused.
 func validateSteerInputAudioLikeRust(items []any) error {
 	for _, item := range items {
 		if valueContainsUploadedAudioFile(item) {
-			return errUploadedAudioDisabled
+			return errUnsupportedUploadedAudio
 		}
 	}
 	return nil

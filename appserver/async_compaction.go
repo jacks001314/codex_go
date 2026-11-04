@@ -337,9 +337,10 @@ func (r *RuntimeRouter) maybeStartBackgroundCompaction(ctx context.Context, thre
 			runner = &clone
 		}
 		result, err := compact.CompactRemotely(runCtx, request, &compact.RemoteOptions{
-			Runner:          runner,
-			MaxSummaryChars: 4000,
-			FallbackToLocal: false,
+			Runner:             runner,
+			MaxSummaryChars:    4000,
+			FallbackToLocal:    false,
+			FileAudioDurations: r.compactFileAudioDurations(threadID),
 		})
 		if err != nil || result == nil || !result.Succeeded() {
 			slog.Warn("background compaction failed", "thread_id", threadID, "phase", phase, "error", err)
