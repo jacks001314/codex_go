@@ -12,6 +12,16 @@ type Binding struct {
 	service    *MCPService
 	generation uint64
 	tools      map[string]map[string]bool
+	// toolInfos preserves the exact captured declarations needed by scoped
+	// discovery without requiring a live catalog read.
+	toolInfos map[string][]MCPToolInfo
+	// hostOwnedApps marks the trusted codex_apps registration captured for this
+	// model step.
+	hostOwnedApps map[string]bool
+	// searchTool and searchInvocationContext are populated only by a successful
+	// model-search discovery. The latter is the connector-owned opaque pin.
+	searchTool              *RuntimeToolInfo
+	searchInvocationContext any
 	// catalogs records the exact client catalog each server's tools came from.
 	// A refreshed catalog advances only its own client's revision, so calls for
 	// unrelated servers stay valid (Rust #43031).
@@ -39,7 +49,11 @@ type bindingCatalogRevision struct {
 }
 
 func (s *MCPService) CaptureBinding(statuses []MCPServerStatus) *Binding {
-	b := &Binding{service: s, generation: s.Generation(), tools: map[string]map[string]bool{}}
+	b := &Binding{
+		service: s, generation: s.Generation(),
+		tools: map[string]map[string]bool{}, toolInfos: map[string][]MCPToolInfo{},
+		hostOwnedApps: map[string]bool{},
+	}
 	if s != nil && s.HasPublishedPermissionAuthority() {
 		b.authorityPublished = true
 		b.authority = map[string]bool{}
@@ -72,6 +86,7 @@ func (s *MCPService) CaptureBinding(statuses []MCPServerStatus) *Binding {
 				continue
 			}
 		}
+		toolInfos := cloneMCPToolInfos(status.Tools)
 		if catalog := s.liveClientToolCatalog(server); catalog != nil {
 			var revision uint64
 			catalog.read(func(current uint64, tools []MCPToolInfo) {
@@ -81,6 +96,7 @@ func (s *MCPService) CaptureBinding(statuses []MCPServerStatus) *Binding {
 				// client's own catalog once it has published one.
 				if current > 0 {
 					set = toolNameSet(tools)
+					toolInfos = cloneMCPToolInfos(tools)
 				}
 			})
 			if b.catalogs == nil {
@@ -89,6 +105,8 @@ func (s *MCPService) CaptureBinding(statuses []MCPServerStatus) *Binding {
 			b.catalogs[server] = bindingCatalogRevision{catalog: catalog, revision: revision}
 		}
 		b.tools[server] = set
+		b.toolInfos[server] = toolInfos
+		b.hostOwnedApps[server] = status.hostOwnedApps
 		if source, ok := s.PermissionSourceForServer(server); ok {
 			if b.permissionSources == nil {
 				b.permissionSources = map[string]MCPServerPermissionSource{}

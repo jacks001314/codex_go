@@ -103,6 +103,25 @@ func (s *MCPService) clientToolCatalogForServer(name string, config *ServerConfi
 
 // liveClientToolCatalog reports the catalog owned by the connection this
 // service currently holds for a server, or nil when no connection is live.
+// liveHTTPClient reports the connection already authorized for an HTTP server.
+// Discovery and calls pin to this exact transport, so a later refresh cannot
+// transfer the search declaration to a different connection.
+func (s *MCPService) liveHTTPClient(name string) *httpClient {
+	if s == nil {
+		return nil
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if cached := s.httpClients[name]; cached != nil && cached.client != nil && !cached.client.isClosed() {
+		return cached.client
+	}
+	return nil
+}
+
 func (s *MCPService) liveClientToolCatalog(name string) *clientToolCatalog {
 	if s == nil {
 		return nil

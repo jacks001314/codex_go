@@ -308,7 +308,11 @@ func listMCPHTTPInventoryWithOptions(client *httpClient, serverName string, thre
 }
 
 func listMCPHTTPTools(client *httpClient, options *httpClientCallOptions) ([]MCPToolInfo, json.RawMessage, error) {
-	return collectMCPPaginatedWithLimitAndMeta(context.Background(), "tools/list", mcpPaginationTimeout(client.config), mcpCatalogItemLimit(client.config), func(ctx context.Context, cursor *string) ([]MCPToolInfo, json.RawMessage, *string, error) {
+	return listMCPHTTPToolsWithContext(context.Background(), client, options)
+}
+
+func listMCPHTTPToolsWithContext(ctx context.Context, client *httpClient, options *httpClientCallOptions) ([]MCPToolInfo, json.RawMessage, error) {
+	return collectMCPPaginatedWithLimitAndMeta(ctx, "tools/list", mcpPaginationTimeout(client.config), mcpCatalogItemLimit(client.config), func(ctx context.Context, cursor *string) ([]MCPToolInfo, json.RawMessage, *string, error) {
 		var response struct {
 			Tools      []MCPToolInfo   `json:"tools"`
 			NextCursor *string         `json:"nextCursor,omitempty"`
