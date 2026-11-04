@@ -1,5 +1,15 @@
 package codexapi
 
+// GifOptions mirrors Rust codex_api::GifOptions (#59073): optional controls for
+// animated GIF output. Nil fields use the API defaults (9 frames, 200 ms).
+type GifOptions struct {
+	FrameCount      *uint32 `json:"frame_count,omitempty"`
+	FrameDurationMS *uint32 `json:"frame_duration_ms,omitempty"`
+}
+
+// ImageGenerationRequest mirrors Rust codex_api::ImageGenerationRequest. Rust
+// flattens ImageOutput into `output_format` and the GIF controls; Go keeps the
+// same sibling wire fields on the request.
 type ImageGenerationRequest struct {
 	Prompt     string           `json:"prompt"`
 	Background *ImageBackground `json:"background,omitempty"`
@@ -7,6 +17,10 @@ type ImageGenerationRequest struct {
 	N          *uint64          `json:"n,omitempty"`
 	Quality    *ImageQuality    `json:"quality,omitempty"`
 	Size       *string          `json:"size,omitempty"`
+	// OutputFormat is `gif` for animated output; nil keeps the PNG default.
+	OutputFormat    *string `json:"output_format,omitempty"`
+	FrameCount      *uint32 `json:"frame_count,omitempty"`
+	FrameDurationMS *uint32 `json:"frame_duration_ms,omitempty"`
 }
 
 type ImageEditRequest struct {
@@ -17,6 +31,10 @@ type ImageEditRequest struct {
 	N          *uint64          `json:"n,omitempty"`
 	Quality    *ImageQuality    `json:"quality,omitempty"`
 	Size       *string          `json:"size,omitempty"`
+	// OutputFormat is `gif` for animated output; nil keeps the PNG default.
+	OutputFormat    *string `json:"output_format,omitempty"`
+	FrameCount      *uint32 `json:"frame_count,omitempty"`
+	FrameDurationMS *uint32 `json:"frame_duration_ms,omitempty"`
 }
 
 // ImageReference mirrors Rust codex_protocol::models::ImageReference: an image

@@ -57,6 +57,7 @@ func (r *RuntimeRouter) imageGenerationOptionsForTurn(cfg *config.Config, params
 		HTTPClient:        r.httpClientForConfig(cfg),
 		InputItems:        r.imageGenerationInputItemsForTurn(threadID, params),
 		RequestIDObserver: r.recordImageGenerationRequestID,
+		GIFEnabled:        features.Enabled(cfg.FeatureSettings(), "image_generation_animation"),
 	}, nil
 }
 

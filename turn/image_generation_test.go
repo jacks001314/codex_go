@@ -346,7 +346,7 @@ func TestImageGenerationBackgroundArgumentMatchesRust(t *testing.T) {
 	}
 
 	// The advertised schema carries the new boolean property.
-	schema := imageGenerationSchema()
+	schema := imageGenerationSchema(false)
 	properties, ok := schema["properties"].(map[string]any)
 	if !ok {
 		t.Fatalf("schema properties = %#v", schema["properties"])

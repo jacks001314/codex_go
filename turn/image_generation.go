@@ -30,11 +30,12 @@ const (
 	ImageGenerationNamespace = "image_gen"
 	ImageGenerationToolName  = "imagegen"
 
-	imageGenerationModel         = "gpt-image-2"
-	imageGenerationMaxEditImages = 5
-	imageGenerationDefaultDetail = "high"
-	imageGenerationOutputPrefix  = "data:image/png;base64,"
-	imageTurnIDHeader            = "x-codex-image-turn-id"
+	imageGenerationModel           = "gpt-image-2"
+	imageGenerationMaxEditImages   = 5
+	imageGenerationDefaultDetail   = "high"
+	imageGenerationOutputPrefix    = "data:image/png;base64,"
+	imageGenerationGIFOutputPrefix = "data:image/gif;base64,"
+	imageTurnIDHeader              = "x-codex-image-turn-id"
 	// imagegenRequestIDHeader carries the nested ImageGen service request id
 	// (Rust #47327). It is retained only for in-process analytics; serialized
 	// items and rollout records must not include it.
@@ -59,6 +60,9 @@ type ImageGenerationOptions struct {
 	// call so analytics can retain it without serializing it on the item (Rust
 	// #47327 `ImageGenerationItem::imagegen_request_id` is `#[serde(skip)]`).
 	RequestIDObserver func(threadID string, callID string, requestID string)
+	// GIFEnabled exposes the `gif` argument and animated output (Rust #59073
+	// `features.image_generation_animation`, disabled by default).
+	GIFEnabled bool
 }
 
 type ImageGenerationHandler struct {
@@ -67,6 +71,8 @@ type ImageGenerationHandler struct {
 
 type imageGenerationArgs struct {
 	Prompt string `json:"prompt"`
+	// Gif requests animated output; `{}` uses the API defaults (Rust #59073).
+	Gif *codexapi.GifOptions `json:"gif,omitempty"`
 	// TransparentBackground mirrors Rust's `transparent_background`
 	// (ext/image-generation/src/tool.rs, #47484): true maps the Images API
 	// background to `transparent`, false or omission to `opaque`.
@@ -155,8 +161,8 @@ func NewImageGenerationHandler(options *ImageGenerationOptions) *ImageGeneration
 func (h *ImageGenerationHandler) Spec() tool.Spec {
 	return tool.Spec{
 		Name:                 tool.NamespacedName(ImageGenerationNamespace, ImageGenerationToolName),
-		Description:          imageGenerationDescription,
-		InputSchema:          imageGenerationSchema(),
+		Description:          imageGenerationDescriptionForGIF(h.options.GIFEnabled),
+		InputSchema:          imageGenerationSchema(h.options.GIFEnabled),
 		CodeModeOutputSchema: imageGenerationOutputSchema(),
 		Exposure:             tool.ExposureModelVisible,
 		Parallel:             false,
@@ -178,6 +184,9 @@ func (h *ImageGenerationHandler) Execute(ctx context.Context, invocation *tool.I
 	args.Prompt = strings.TrimSpace(args.Prompt)
 	if args.Prompt == "" {
 		return imageGenerationErrorOutput(invocation, args.Prompt, "prompt must not be empty"), nil
+	}
+	if err := h.validateGIFArgs(args.Gif); err != nil {
+		return imageGenerationErrorOutput(invocation, args.Prompt, err.Error()), nil
 	}
 	request, inputImages, err := h.requestForArgs(ctx, &args)
 	if err != nil {
@@ -201,9 +210,17 @@ func (h *ImageGenerationHandler) Execute(ctx context.Context, invocation *tool.I
 		h.observeImageGenerationRequestID(invocation, requestID)
 		return imageGenerationErrorOutput(invocation, args.Prompt, "image generation returned no image data"), nil
 	}
+	// Rust #59073: the encoded header decides the artifact extension and MIME
+	// type, so an animated result stays an animation in the saved file and data
+	// URL while clients can still render a still preview.
+	gif := generatedImageIsGIF(result)
+	dataURLPrefix := imageGenerationOutputPrefix
+	if gif {
+		dataURLPrefix = imageGenerationGIFOutputPrefix
+	}
 	savedPath := ""
 	if codexHome := strings.TrimSpace(h.options.CodexHome); codexHome != "" {
-		if path, err := eventmap.SaveImageGenerationResult(codexHome, h.sessionID(), invocation.CallID, result); err == nil {
+		if path, err := eventmap.SaveImageGenerationResultForFormat(codexHome, h.sessionID(), invocation.CallID, result, gif); err == nil {
 			savedPath = path
 		}
 	}
@@ -211,7 +228,7 @@ func (h *ImageGenerationHandler) Execute(ctx context.Context, invocation *tool.I
 	detail := imageGenerationDefaultDetail
 	contentItems := []FunctionCallOutputContentItem{{
 		Type:     "input_image",
-		ImageURL: imageGenerationOutputPrefix + result,
+		ImageURL: dataURLPrefix + result,
 		Detail:   &detail,
 	}}
 	if hint != "" {
@@ -224,7 +241,7 @@ func (h *ImageGenerationHandler) Execute(ctx context.Context, invocation *tool.I
 		"result":           result,
 		"revisedPrompt":    args.Prompt,
 		"revised_prompt":   args.Prompt,
-		"image_url":        imageGenerationOutputPrefix + result,
+		"image_url":        dataURLPrefix + result,
 	}
 	if fileID := generatedImageFileRef(h.options, h.sessionID(), result); fileID != "" {
 		// Rust #54398: a durable attachment reference replaces the inline copy
@@ -304,6 +321,31 @@ type imageGenerationInputImage struct {
 	SHA256 string `json:"sha256"`
 }
 
+// validateGIFArgs enforces the Rust #59073 gating and frame bounds before any
+// request is sent.
+func (h *ImageGenerationHandler) validateGIFArgs(options *codexapi.GifOptions) error {
+	if options == nil {
+		return nil
+	}
+	if h == nil || !h.options.GIFEnabled {
+		return fmt.Errorf("GIF output is unavailable in this session")
+	}
+	if options.FrameCount != nil && (*options.FrameCount < 2 || *options.FrameCount > 16) {
+		return fmt.Errorf("`gif.frame_count` must be between 2 and 16")
+	}
+	if options.FrameDurationMS != nil && (*options.FrameDurationMS < 20 || *options.FrameDurationMS > 2000) {
+		return fmt.Errorf("`gif.frame_duration_ms` must be between 20 and 2000")
+	}
+	return nil
+}
+
+// generatedImageIsGIF identifies an animated result from its base64 header
+// (Rust #59073 GeneratedImageFormat::from_base64).
+func generatedImageIsGIF(result string) bool {
+	result = strings.TrimSpace(result)
+	return strings.HasPrefix(result, "R0lGODdh") || strings.HasPrefix(result, "R0lGODlh")
+}
+
 func (h *ImageGenerationHandler) requestForArgs(ctx context.Context, args *imageGenerationArgs) (*imageGenerationRequest, []imageGenerationInputImage, error) {
 	if args == nil {
 		return nil, nil, fmt.Errorf("image generation arguments are required")
@@ -318,17 +360,29 @@ func (h *ImageGenerationHandler) requestForArgs(ctx context.Context, args *image
 	if args.TransparentBackground {
 		background = codexapi.ImageBackgroundTransparent
 	}
+	var outputFormat *string
+	var frameCount *uint32
+	var frameDurationMS *uint32
+	if args.Gif != nil {
+		format := "gif"
+		outputFormat = &format
+		frameCount = args.Gif.FrameCount
+		frameDurationMS = args.Gif.FrameDurationMS
+	}
 	if len(paths) == 0 && args.NumLastImagesToInclude == nil {
 		quality := codexapi.ImageQualityAuto
 		size := "auto"
 		return &imageGenerationRequest{
 			kind: imageGenerationRequestGenerate,
 			generate: codexapi.ImageGenerationRequest{
-				Prompt:     args.Prompt,
-				Background: &background,
-				Model:      imageGenerationModel,
-				Quality:    &quality,
-				Size:       &size,
+				Prompt:          args.Prompt,
+				Background:      &background,
+				Model:           imageGenerationModel,
+				Quality:         &quality,
+				Size:            &size,
+				OutputFormat:    outputFormat,
+				FrameCount:      frameCount,
+				FrameDurationMS: frameDurationMS,
 			},
 		}, nil, nil
 	}
@@ -370,12 +424,15 @@ func (h *ImageGenerationHandler) requestForArgs(ctx context.Context, args *image
 	return &imageGenerationRequest{
 		kind: imageGenerationRequestEdit,
 		edit: codexapi.ImageEditRequest{
-			Images:     images,
-			Prompt:     args.Prompt,
-			Background: &background,
-			Model:      imageGenerationModel,
-			Quality:    &quality,
-			Size:       &size,
+			Images:          images,
+			Prompt:          args.Prompt,
+			Background:      &background,
+			Model:           imageGenerationModel,
+			Quality:         &quality,
+			Size:            &size,
+			OutputFormat:    outputFormat,
+			FrameCount:      frameCount,
+			FrameDurationMS: frameDurationMS,
 		},
 	}, inputImages, nil
 }
@@ -849,34 +906,70 @@ func imageGenerationOutputHint(savedPath string) string {
 	return hint
 }
 
-func imageGenerationSchema() map[string]any {
+// imageGenerationGIFDescription mirrors
+// codex-rs/ext/image-generation/imagegen_gif_description.md (Rust #59073).
+const imageGenerationGIFDescription = `GIF guidelines:
+- Use imagegen only for simple GIFs with 2-16 frames. For more complex animations or more than 16 frames, use other tools instead.
+- Set ` + "`gif`" + ` to request GIF output. Use ` + "`{}`" + ` for the defaults (9 frames, 200 ms per frame), or set ` + "`frame_count`" + ` and ` + "`frame_duration_ms`" + `.
+- To edit a previously generated GIF, first inspect its frames, then create a spritesheet with equal-sized cells in a regular grid. Pass that spritesheet through ` + "`referenced_image_paths`" + ` and set ` + "`gif`" + ` to generate the new GIF. Do not pass the GIF itself as an edit input.`
+
+func imageGenerationDescriptionForGIF(gifEnabled bool) string {
+	if gifEnabled {
+		return imageGenerationDescription + "\n" + imageGenerationGIFDescription
+	}
+	return imageGenerationDescription
+}
+
+func imageGenerationSchema(gifEnabled bool) map[string]any {
+	properties := map[string]any{
+		"prompt": map[string]any{
+			"type":        "string",
+			"description": "The prompt for the image to generate or edit.",
+		},
+		"transparent_background": map[string]any{
+			"type":        "boolean",
+			"description": "Whether the output should have a transparent background. Defaults to false.",
+			"default":     false,
+		},
+		"referenced_image_paths": map[string]any{
+			"type":        "array",
+			"description": "Absolute local image paths to edit. Omit when generating a brand new image.",
+			"maxItems":    imageGenerationMaxEditImages,
+			"items":       map[string]any{"type": "string"},
+		},
+		"num_last_images_to_include": map[string]any{
+			"type":        "integer",
+			"description": "Number of recent conversation images to include for edits when local paths are unavailable.",
+			"minimum":     1,
+			"maximum":     imageGenerationMaxEditImages,
+		},
+	}
+	if gifEnabled {
+		properties["gif"] = map[string]any{
+			"type":                 "object",
+			"description":          "Set this to create a simple looping GIF with 2-16 frames. Use {} for the defaults (9 frames, 200 ms per frame).",
+			"additionalProperties": false,
+			"properties": map[string]any{
+				"frame_count": map[string]any{
+					"type":        "integer",
+					"description": "Number of frames (2-16). Defaults to 9.",
+					"minimum":     2,
+					"maximum":     16,
+				},
+				"frame_duration_ms": map[string]any{
+					"type":        "integer",
+					"description": "Duration of each frame in milliseconds (20-2000). Defaults to 200.",
+					"minimum":     20,
+					"maximum":     2000,
+				},
+			},
+		}
+	}
 	return map[string]any{
 		"type":                 "object",
 		"additionalProperties": false,
 		"required":             []string{"prompt"},
-		"properties": map[string]any{
-			"prompt": map[string]any{
-				"type":        "string",
-				"description": "The prompt for the image to generate or edit.",
-			},
-			"transparent_background": map[string]any{
-				"type":        "boolean",
-				"description": "Whether the output should have a transparent background. Defaults to false.",
-				"default":     false,
-			},
-			"referenced_image_paths": map[string]any{
-				"type":        "array",
-				"description": "Absolute local image paths to edit. Omit when generating a brand new image.",
-				"maxItems":    imageGenerationMaxEditImages,
-				"items":       map[string]any{"type": "string"},
-			},
-			"num_last_images_to_include": map[string]any{
-				"type":        "integer",
-				"description": "Number of recent conversation images to include for edits when local paths are unavailable.",
-				"minimum":     1,
-				"maximum":     imageGenerationMaxEditImages,
-			},
-		},
+		"properties":           properties,
 	}
 }
 

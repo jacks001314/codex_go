@@ -449,15 +449,31 @@ func RawAssistantOutputTextFromItem(item *ResponseItem) (string, bool) {
 }
 
 func ImageGenerationArtifactPath(codexHome string, sessionID string, callID string) string {
-	return filepath.Join(codexHome, "generated_images", sanitizePathPart(sessionID), sanitizePathPart(callID)+".png")
+	return ImageGenerationArtifactPathForFormat(codexHome, sessionID, callID, false)
+}
+
+// ImageGenerationArtifactPathForFormat keeps the encoded format in the file
+// name so an animated result is saved as `.gif` (Rust #59073).
+func ImageGenerationArtifactPathForFormat(codexHome string, sessionID string, callID string, gif bool) string {
+	extension := ".png"
+	if gif {
+		extension = ".gif"
+	}
+	return filepath.Join(codexHome, "generated_images", sanitizePathPart(sessionID), sanitizePathPart(callID)+extension)
 }
 
 func SaveImageGenerationResult(codexHome string, sessionID string, callID string, result string) (string, error) {
+	return SaveImageGenerationResultForFormat(codexHome, sessionID, callID, result, false)
+}
+
+// SaveImageGenerationResultForFormat writes the decoded result as PNG or GIF
+// bytes (Rust #59073 saves the animation bytes unchanged).
+func SaveImageGenerationResultForFormat(codexHome string, sessionID string, callID string, result string, gif bool) (string, error) {
 	bytes, err := base64.StdEncoding.DecodeString(strings.TrimSpace(result))
 	if err != nil {
 		return "", err
 	}
-	path := ImageGenerationArtifactPath(codexHome, sessionID, callID)
+	path := ImageGenerationArtifactPathForFormat(codexHome, sessionID, callID, gif)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return "", err
 	}

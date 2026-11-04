@@ -1956,6 +1956,7 @@ func (r *Runner) imageGenerationOptionsForRun(cfg *config.Config, resolvedAuth *
 		Auth:       authHeaders,
 		HTTPClient: r.httpClientForConfig(cfg),
 		InputItems: append([]any(nil), inputItems...),
+		GIFEnabled: features.Enabled(cfg.FeatureSettings(), "image_generation_animation"),
 	}, nil
 }
 

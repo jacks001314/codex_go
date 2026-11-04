@@ -249,6 +249,9 @@ var Registry = []Spec{
 	{Key: "plugin_sharing", Stage: StageStable, DefaultEnabled: true},
 	{Key: "external_migration", Stage: StageRemoved},
 	{Key: "image_generation", Stage: StageStable, DefaultEnabled: true},
+	// Rust #59073: optional animated GIF output for image generation. Disabled
+	// until the Images API accepts GIF requests for every deployment.
+	{Key: "image_generation_animation", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "view_image", Stage: StageStable, DefaultEnabled: true},
 	{Key: "image_resize_notice", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	// Rust #59282: unified image preparation is stable and enabled by default
