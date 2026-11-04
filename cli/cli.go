@@ -371,6 +371,12 @@ type ExecServerOptions struct {
 	Name                 string
 	UseAgentIdentityAuth bool
 	ExitOnStdinClose     bool
+	// RegistrationBearerStdin mirrors Rust #59254
+	// (`--registration-bearer-stdin`): read one fixed registration bearer from
+	// stdin and use it for remote registration independently of account login.
+	// It requires --remote and cannot be combined with the rotating executor
+	// credential or the other registration auth modes.
+	RegistrationBearerStdin bool
 	// ExecutorCredentialStdin mirrors Rust #54434
 	// (cli/src/exec_server_command.rs `--executor-credential-stdin`): read
 	// rotating scoped executor credentials from stdin and exit when the pipe
@@ -3788,6 +3794,9 @@ func parseExecServer(args []string, execServer *ExecServerOptions) error {
 			execServer.UseAgentIdentityAuth = true
 		case arg == "--exit-on-stdin-close":
 			execServer.ExitOnStdinClose = true
+		case arg == "--registration-bearer-stdin":
+			// Rust #59254: clap `ArgAction::SetTrue`, so the flag takes no value.
+			execServer.RegistrationBearerStdin = true
 		case arg == "--executor-credential-stdin":
 			// Rust #54434: clap `ArgAction::SetTrue`, so the flag takes no value.
 			execServer.ExecutorCredentialStdin = true

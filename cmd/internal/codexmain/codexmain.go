@@ -168,6 +168,7 @@ Options:
       --name <NAME>                      Environment name for --connect
       --strict-config                    Reject unknown configuration keys
       --use-agent-identity-auth          Authenticate remote registration with Agent Identity
+      --registration-bearer-stdin        Read one registration bearer from stdin
       --exit-on-stdin-close              Exit when the parent process closes stdin
       --executor-credential-stdin        Read rotating scoped executor credentials from stdin
       --proxy-private-ips-via-upstream   Allow permitted private IPs to use the upstream proxy

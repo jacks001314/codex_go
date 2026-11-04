@@ -174,6 +174,7 @@ func codexCompletionSpec() *completionNode {
 			"--strict-config", "--listen", "--remote", "--environment-id", "--name",
 			"--use-agent-identity-auth", "--exit-on-stdin-close",
 			// Rust #54434 adds the rotating scoped executor credential pipe.
+			"--registration-bearer-stdin",
 			"--executor-credential-stdin",
 			// Rust #48568 adds the trusted private-IP upstream routing opt-in.
 			"--proxy-private-ips-via-upstream",

@@ -1050,6 +1050,16 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 	if environmentID == "" {
 		return errors.New("environment id is required for remote exec-server registration")
 	}
+	var registrationBearerHeaders http.Header
+	if opts.RegistrationBearerStdin {
+		// Rust #59254 reads the fixed bearer before configuration and account
+		// resolution, so registration works independently of Codex login.
+		headers, err := execserver.RegistrationBearerFromReader(stdin)
+		if err != nil {
+			return err
+		}
+		registrationBearerHeaders = headers
+	}
 	codexHome := auth.DefaultCodexHome()
 	bootstrapConfig, err := config.LoadEffectiveWithOptions(codexHome, &config.EffectiveOptions{
 		RawOverrides:         rootConfigOverrides,
@@ -1062,7 +1072,7 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 	}
 	var cloudConfigBundle *config.CloudConfigLoader
 	var resolved *auth.ResolvedAuth
-	if !opts.ExecutorCredentialStdin && !opts.UseAgentIdentityAuth && !opts.AWSSigV4 {
+	if !opts.ExecutorCredentialStdin && !opts.UseAgentIdentityAuth && !opts.AWSSigV4 && !opts.RegistrationBearerStdin {
 		if bootstrapConfig.RequiresRemoteConfig() {
 			cloudConfigBundle, err = cloudConfigBundleLoaderForRun(ctx, codexHome, bootstrapConfig, nil)
 			if err != nil {
@@ -1093,6 +1103,28 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 		return err
 	}
 	publishApplicationNetworkPolicy(loadedConfig)
+	if opts.RegistrationBearerStdin {
+		// Rust #59254: a supplied registration bearer uses scoped executor
+		// credential mode while keeping the usual local configuration and
+		// plugins. WithExecutorCredentialAuth enforces HTTPS-or-loopback and
+		// rejects the direct transport.
+		scoped, err := (execserver.RemoteEnvironmentConfig{
+			BaseURL:                    baseURL,
+			EnvironmentID:              environmentID,
+			ForwardURL:                 execServerForwardURL(opts),
+			Name:                       strings.TrimSpace(opts.Name),
+			AuthHeaders:                registrationBearerHeaders,
+			HTTPClient:                 policyHTTPClient(loadedConfig, codexnetwork.NewHTTPClient(loadedConfig.RespectSystemProxyEnabled(), 0)),
+			PreferMXC:                  preferMXC,
+			ProxyPrivateIPsViaUpstream: opts.ProxyPrivateIPsViaUpstream,
+			EnvironmentConfigReader:    environmentConfigReader,
+			AllowedSymlinkedCodexHome:  loadedConfig.AllowedSymlinkedCodexHome(),
+		}).WithExecutorCredentialAuth()
+		if err != nil {
+			return err
+		}
+		return runExecServerRemoteWithParentLifetime(ctx, stdin, opts.ExitOnStdinClose, scoped)
+	}
 	if strings.EqualFold(strings.TrimSpace(opts.RemoteTransport), "direct") {
 		if opts.ForwardBound {
 			// Rust rejects forwarding on the Direct transport before startup.
