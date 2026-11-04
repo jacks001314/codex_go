@@ -524,3 +524,25 @@ func TestGuardianIncludeAdditionalContextFeatureRegistration(t *testing.T) {
 		t.Fatalf("ResolveSettings(%s=false) = %#v, want an explicit false", key, settings)
 	}
 }
+
+// TestGuardianDenialReconsiderationFeatureRegistration mirrors Rust #59107:
+// the reconsideration pass is under development and disabled by default.
+func TestGuardianDenialReconsiderationFeatureRegistration(t *testing.T) {
+	const key = "guardian_denial_reconsideration"
+	var spec *Spec
+	for index := range Registry {
+		if Registry[index].Key == key {
+			spec = &Registry[index]
+			break
+		}
+	}
+	if spec == nil {
+		t.Fatalf("%s is missing from the feature registry", key)
+	}
+	if spec.Stage != StageUnderDevelopment || spec.DefaultEnabled {
+		t.Fatalf("%s spec = %#v, want under development and off by default", key, *spec)
+	}
+	if enabled := Enabled(Defaults(), key); enabled {
+		t.Fatalf("%s = true by default", key)
+	}
+}

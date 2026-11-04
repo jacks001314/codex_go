@@ -89,8 +89,9 @@ var configAutoReviewFields = map[string]configFieldKind{
 	"policy":                       {kind: configKindString},
 	"extra_policy":                 {kind: configKindString},
 	"experimental_policy_template": {kind: configKindString},
-	"experimental_conversation_history_prompt": {kind: configKindString},
-	"conversation_history_max_output_tokens":   {kind: configKindNonZeroUsize},
+	"experimental_conversation_history_prompt":   {kind: configKindString},
+	"experimental_denial_reconsideration_prompt": {kind: configKindString},
+	"conversation_history_max_output_tokens":     {kind: configKindNonZeroUsize},
 }
 
 var configBrowserUseOriginPolicyFields = map[string]configFieldKind{

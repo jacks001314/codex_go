@@ -527,7 +527,21 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 	if err := cfg.ValidateWindowsMXCRequirement(); err != nil {
 		return nil, err
 	}
+	if err := cfg.ValidateGuardianDenialReconsiderationPrompt(); err != nil {
+		return nil, err
+	}
 	return cfg, nil
+}
+
+// ValidateGuardianDenialReconsiderationPrompt rejects a reconsideration prompt
+// above Rust's 1,000-byte limit. Programmatic reviewers additionally clip the
+// prompt at the UTF-8 boundary, matching GuardianDenialReconsideration::body.
+func (c *Config) ValidateGuardianDenialReconsiderationPrompt() error {
+	prompt, ok := c.GuardianDenialReconsiderationPrompt()
+	if ok && len(prompt) > 1000 {
+		return fmt.Errorf("auto_review.experimental_denial_reconsideration_prompt exceeds 1,000 UTF-8 bytes")
+	}
+	return nil
 }
 
 // AllowedSymlinkedCodexHome returns the configured CODEX_HOME path whose
@@ -1992,6 +2006,16 @@ func (c *Config) GuardianConversationHistoryPrompt() (string, bool) {
 	}
 	value, ok := autoReview["experimental_conversation_history_prompt"].(string)
 	return value, ok
+}
+
+// GuardianDenialReconsiderationPrompt returns the optional bounded developer
+// message for the gated denial reconsideration pass (Rust #59107). Blank
+// values are treated as unset, like other Guardian policy overrides.
+func (c *Config) GuardianDenialReconsiderationPrompt() (string, bool) {
+	if c == nil {
+		return "", false
+	}
+	return autoReviewConfigValue(c.Values, "experimental_denial_reconsideration_prompt")
 }
 
 // GuardianConversationHistoryMaxOutputTokens returns the positive per-call

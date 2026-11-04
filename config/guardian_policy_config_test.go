@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -171,5 +172,45 @@ func TestGuardianCircuitBreakActionLikeRust(t *testing.T) {
 				t.Fatalf("GuardianCircuitBreakAction() = %q, want %q", got, testCase.want)
 			}
 		})
+	}
+}
+
+// Rust #59107: the denial reconsideration prompt is trimmed, blank values are
+// unset, and a prompt above 1,000 UTF-8 bytes is rejected at load time.
+func TestGuardianDenialReconsiderationPromptLikeRust(t *testing.T) {
+	cfg := &Config{Values: map[string]any{"auto_review": map[string]any{
+		"experimental_denial_reconsideration_prompt": "  Reconsider this denial.  ",
+	}}}
+	if got, ok := cfg.GuardianDenialReconsiderationPrompt(); !ok || got != "Reconsider this denial." {
+		t.Fatalf("GuardianDenialReconsiderationPrompt() = %q, %v", got, ok)
+	}
+	if err := cfg.ValidateGuardianDenialReconsiderationPrompt(); err != nil {
+		t.Fatalf("ValidateGuardianDenialReconsiderationPrompt() error = %v", err)
+	}
+
+	cfg.Values = map[string]any{"auto_review": map[string]any{
+		"experimental_denial_reconsideration_prompt": "   ",
+	}}
+	if got, ok := cfg.GuardianDenialReconsiderationPrompt(); ok {
+		t.Fatalf("blank prompt = %q, true, want unset", got)
+	}
+
+	oversized := strings.Repeat("x", 1001)
+	cfg.Values = map[string]any{"auto_review": map[string]any{
+		"experimental_denial_reconsideration_prompt": oversized,
+	}}
+	if err := cfg.ValidateGuardianDenialReconsiderationPrompt(); err == nil || !strings.Contains(err.Error(), "exceeds 1,000 UTF-8 bytes") {
+		t.Fatalf("oversized prompt error = %v", err)
+	}
+	if err := ValidateConfigValues(cfg.Values); err == nil || !strings.Contains(err.Error(), "exceeds 1,000 UTF-8 bytes") {
+		t.Fatalf("ValidateConfigValues() error = %v", err)
+	}
+
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte("[auto_review]\nexperimental_denial_reconsideration_prompt = \""+strings.Repeat("y", 1001)+"\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(home); err == nil || !strings.Contains(err.Error(), "exceeds 1,000 UTF-8 bytes") {
+		t.Fatalf("Load() error = %v", err)
 	}
 }

@@ -445,6 +445,9 @@ var Registry = []Spec{
 	// Rust (codex-rs/features/src/lib.rs 41ed72c32b #49036): opt-in
 	// conversation history retrieval for Guardian reviews.
 	{Key: "guardian_conversation_history_tools", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust #59107: reconsider a synchronous Guardian denial once before the
+	// final decision is published. Under development and off by default.
+	{Key: "guardian_denial_reconsideration", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	// Rust (codex-rs/features/src/lib.rs 59f18e8133 #50099): opt-in Decisions
 	// comparison for Guardian V2.
 	{Key: "guardianv2_decisions_comparison", Stage: StageUnderDevelopment, DefaultEnabled: false},

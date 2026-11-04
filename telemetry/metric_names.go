@@ -52,6 +52,8 @@ const (
 	TurnCostMicroUSDMetric                      = "codex.turn.cost_microusd"
 	TurnUnifiedExecRunningProcessesMetric       = "codex.turn.unified_exec.running_processes"
 	GuardianReviewCountMetric                   = "codex.guardian.review"
+	GuardianReviewReconsiderationMetric         = "codex.guardian.review.reconsideration"
+	GuardianReviewReconsiderationDurationMetric = "codex.guardian.review.reconsideration_duration_ms"
 	GuardianReviewDurationMetric                = "codex.guardian.review.duration_ms"
 	GuardianReviewTTFTDurationMetric            = "codex.guardian.review.ttft.duration_ms"
 	GuardianReviewTokenUsageMetric              = "codex.guardian.review.token_usage"

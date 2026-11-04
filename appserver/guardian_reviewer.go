@@ -659,6 +659,23 @@ func (r *guardianSessionRunner) rollbackReviewHistory(checkpoint guardianReviewH
 	r.mu.Unlock()
 }
 
+// discardReviewHistory drops the reusable reviewer session after a failed or
+// invalidated follow-up (Rust SessionDisposition::Discard). The next review
+// starts a fresh trunk and cannot continue the discarded assessment.
+func (r *guardianSessionRunner) discardReviewHistory() {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.previous = ""
+	r.seeded = ""
+	r.previousFromPrewarm = false
+	r.priorReview = false
+	r.completedReviews = 0
+	r.lastUsage = 0
+	r.mu.Unlock()
+}
+
 // EnsureReviewPolicy invalidates the cached reviewer session when the
 // effective Node REPL policy changes (#41919). An explicitly empty policy is
 // distinct from an unset one: it suppresses policy injection and must not reuse
@@ -1779,7 +1796,8 @@ reviewAttempt:
 		historyCheckpoint = session.reviewHistoryCheckpoint()
 		historyCheckpointReady = true
 	}
-	if history := r.guardianConversationHistoryValue(threadID, turnID); history != nil && len(history.Tools) > 0 {
+	history := r.guardianConversationHistoryValue(threadID, turnID)
+	if history != nil && len(history.Tools) > 0 {
 		response, err = runGuardianReviewWithHistory(reviewCtx, session, reviewRequest, history)
 	} else {
 		response, err = session.Run(reviewCtx, reviewRequest)
@@ -1951,6 +1969,25 @@ reviewAttempt:
 		r.emitWarning(threadID, rationale)
 		return state.DecisionDenied, nil, message, nil
 	}
+	discardReviewSession := false
+	if assessment.Outcome == state.OutcomeDeny && guardianDenialReconsiderationEnabled(plan) && session != nil {
+		secondResponse, secondAssessment, aborted := r.reconsiderGuardianDenial(reviewCtx, session, history, reviewRequest, plan)
+		if aborted {
+			return finishAborted()
+		}
+		if secondAssessment != nil {
+			if r.guardianReviewContextChanged(threadID, turnID, transcript, budgetCompareEntries, transcriptOmissionNote, rootAuthorization, omittedCallID) {
+				// A follow-up assessed against changed parent authorization is not a
+				// valid replacement for the completed denial (Rust #59225).
+				discardReviewSession = true
+			} else {
+				response = secondResponse
+				assessment = secondAssessment
+			}
+		} else {
+			discardReviewSession = true
+		}
+	}
 	completed, err := store.Complete(event.ID, *assessment)
 	if err != nil {
 		attribution.Decision = state.DecisionAborted
@@ -1964,10 +2001,16 @@ reviewAttempt:
 	}
 	emit(threadID, completed)
 	if session != nil {
-		// Rust complete_review: a completed assessment advances the transcript
-		// cursor and the completed-review count, unlike a failed-but-admitted
-		// attempt which only admits its input (#54264).
-		session.completeReview()
+		if discardReviewSession {
+			// A failed reconsideration discards the session even though the
+			// provisional denial is published (Rust #59118).
+			session.discardReviewHistory()
+		} else {
+			// Rust complete_review: a completed assessment advances the transcript
+			// cursor and the completed-review count, unlike a failed-but-admitted
+			// attempt which only admits its input (#54264).
+			session.completeReview()
+		}
 	}
 	decision := state.DecisionFromEvent(completed)
 	r.recordDecision(threadID, turnID, decision, assessment.Rationale)
