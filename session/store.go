@@ -574,6 +574,12 @@ func NewStore(root string) *Store {
 }
 
 func storeRootLock(root string) *sync.RWMutex {
+	key := storeRootKey(root)
+	lock, _ := storeRootLocks.LoadOrStore(key, &sync.RWMutex{})
+	return lock.(*sync.RWMutex)
+}
+
+func storeRootKey(root string) string {
 	key := filepath.Clean(root)
 	if absolute, err := filepath.Abs(key); err == nil {
 		key = absolute
@@ -581,8 +587,7 @@ func storeRootLock(root string) *sync.RWMutex {
 	if runtime.GOOS == "windows" {
 		key = strings.ToLower(key)
 	}
-	lock, _ := storeRootLocks.LoadOrStore(key, &sync.RWMutex{})
-	return lock.(*sync.RWMutex)
+	return key
 }
 
 func (s *Store) Root() string {

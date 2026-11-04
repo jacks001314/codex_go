@@ -6023,7 +6023,7 @@ func (r *RuntimeRouter) handleEphemeralThreadForkRuntime(request *Request) (*Thr
 	if err != nil {
 		return nil, true, err
 	}
-	sourceLocks, err := r.services.ThreadRouter.acquireLifecycleWriters([]session.ThreadID{sourceID})
+	sourceLocks, err := r.services.ThreadRouter.acquireForkSourceWriter(sourceID)
 	if err != nil {
 		return nil, true, err
 	}
@@ -6035,7 +6035,7 @@ func (r *RuntimeRouter) handleEphemeralThreadForkRuntime(request *Request) (*Thr
 			return nil, true, err
 		}
 	} else {
-		sourceRecord, err = r.threadRecord(sourceID, true, true)
+		sourceRecord, err = r.threadRecordForFork(sourceID, true, true)
 		if err != nil {
 			return nil, true, err
 		}
@@ -7762,7 +7762,7 @@ func (r *RuntimeRouter) handleActiveThreadForkRuntime(request *Request) (any, bo
 	if !ok {
 		return nil, false, nil
 	}
-	sourceLocks, err := r.services.ThreadRouter.acquireLifecycleWriters([]session.ThreadID{sourceID})
+	sourceLocks, err := r.services.ThreadRouter.acquireForkSourceWriter(sourceID)
 	if err != nil {
 		return nil, true, err
 	}
@@ -7772,7 +7772,7 @@ func (r *RuntimeRouter) handleActiveThreadForkRuntime(request *Request) (any, bo
 		mode = session.ForkAll
 	}
 	now := r.services.ThreadRouter.now().UTC()
-	sourceRecord, err := r.threadRecord(sourceID, true, true)
+	sourceRecord, err := r.threadRecordForFork(sourceID, true, true)
 	if err != nil {
 		return nil, true, err
 	}
@@ -11736,6 +11736,27 @@ func (r *RuntimeRouter) resolveConversationSummaryRolloutPath(rawPath string) (s
 		path = canonical
 	}
 	return filepath.Clean(path), nil
+}
+
+// threadRecordForFork reads through a live source owned by any connection in
+// this app-server process. The normal threadRecord path intentionally keeps
+// connection ownership strict for resume and mutation; forks only need a
+// consistent source snapshot, matching Rust's process-shared thread store.
+func (r *RuntimeRouter) threadRecordForFork(threadID session.ThreadID, includeArchived bool, includeHistory bool) (*session.Record, error) {
+	if r == nil || r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil {
+		return nil, fmt.Errorf("%w: %s", session.ErrThreadNotFound, threadID)
+	}
+	if record, ok := r.ephemeralThreadRecord(threadID, includeHistory); ok {
+		return record, nil
+	}
+	record, err := r.services.ThreadRouter.readThreadRecordForFork(threadID, includeArchived, includeHistory)
+	if err == nil {
+		if includeHistory {
+			r.attachRolloutTurnSnapshots(record)
+		}
+		return record, nil
+	}
+	return r.threadRecord(threadID, includeArchived, includeHistory)
 }
 
 func (r *RuntimeRouter) threadRecord(threadID session.ThreadID, includeArchived bool, includeHistory bool) (*session.Record, error) {

@@ -17,6 +17,60 @@ type LiveThread struct {
 	closed      bool
 }
 
+// liveThreadRegistry makes a process-owned writer visible to every Router
+// serving the same session root. The daemon creates a Router per connection;
+// without this registry a fork on a new connection mistakes the live writer
+// owned by another connection for a cross-process writer conflict.
+var liveThreadRegistry = struct {
+	sync.RWMutex
+	byKey map[string]*LiveThread
+}{byKey: map[string]*LiveThread{}}
+
+func liveThreadKey(store *Store, threadID ThreadID) string {
+	if store == nil {
+		return ""
+	}
+	return storeRootKey(store.Root()) + "\x00" + string(threadID)
+}
+
+func registerLiveThread(liveThread *LiveThread) {
+	if liveThread == nil {
+		return
+	}
+	key := liveThreadKey(liveThread.store, liveThread.threadID)
+	if key == "" {
+		return
+	}
+	liveThreadRegistry.Lock()
+	liveThreadRegistry.byKey[key] = liveThread
+	liveThreadRegistry.Unlock()
+}
+
+func unregisterLiveThread(liveThread *LiveThread) {
+	if liveThread == nil {
+		return
+	}
+	key := liveThreadKey(liveThread.store, liveThread.threadID)
+	liveThreadRegistry.Lock()
+	if liveThreadRegistry.byKey[key] == liveThread {
+		delete(liveThreadRegistry.byKey, key)
+	}
+	liveThreadRegistry.Unlock()
+}
+
+// LiveThread returns the process-owned live persistence handle for threadID
+// under this store root. A nil result means the thread is not loaded by this
+// process; another process may still own the on-disk writer.
+func (s *Store) LiveThread(threadID ThreadID) *LiveThread {
+	if s == nil {
+		return nil
+	}
+	liveThreadRegistry.RLock()
+	liveThread := liveThreadRegistry.byKey[liveThreadKey(s, threadID)]
+	liveThreadRegistry.RUnlock()
+	return liveThread
+}
+
 // LiveThreadInitGuard owns a newly opened handle until initialization commits.
 // Callers should defer Discard and take ownership with Commit after all other
 // initialization steps have succeeded.
@@ -63,6 +117,7 @@ func (g *LiveThreadInitGuard) Commit() *LiveThread {
 	}
 	liveThread := g.liveThread
 	g.liveThread = nil
+	registerLiveThread(liveThread)
 	return liveThread
 }
 
@@ -165,7 +220,12 @@ func (l *LiveThread) Close() error {
 	writer := l.writer
 	l.writer = nil
 	l.mu.Unlock()
-	return writer.Close()
+	var closeErr error
+	if writer != nil {
+		closeErr = writer.Close()
+	}
+	unregisterLiveThread(l)
+	return closeErr
 }
 
 func (l *LiveThread) closedError() error {

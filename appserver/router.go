@@ -284,6 +284,38 @@ func (r *Router) acquireLifecycleWriters(threadIDs []session.ThreadID) ([]*sessi
 	return r.threadManager().AcquireLifecycleWriters(r.store, threadIDs)
 }
 
+// liveThreadForFork resolves a live source owned by any Router in this
+// process. Rust's LocalThreadStore shares its live-writer registry across every
+// app-server connection; Go's connection-scoped ThreadManager needs this store
+// lookup to preserve the same fork behavior.
+func (r *Router) liveThreadForFork(threadID session.ThreadID) *session.LiveThread {
+	if r == nil {
+		return nil
+	}
+	if liveThread := r.threadManager().LiveThread(threadID); liveThread != nil {
+		return liveThread
+	}
+	if r.store != nil {
+		if liveThread := r.store.LiveThread(threadID); liveThread != nil && liveThread.OwnsWriter() {
+			return liveThread
+		}
+	}
+	return nil
+}
+
+// acquireForkSourceWriter takes the lifecycle writer only when no Router in
+// this process already owns the source. A live source is read through that
+// process-owned handle, while a writer from another process still reaches the
+// ordinary acquisition error.
+func (r *Router) acquireForkSourceWriter(threadID session.ThreadID) ([]*session.WriterLock, error) {
+	if r.threadManager().LiveThread(threadID) == nil && r.store != nil {
+		if liveThread := r.store.LiveThread(threadID); liveThread != nil && liveThread.OwnsWriter() {
+			return nil, nil
+		}
+	}
+	return r.acquireLifecycleWriters([]session.ThreadID{threadID})
+}
+
 // acquireMetadataRolloutWriter mirrors Rust #44138's ownership step for legacy
 // rollout metadata patches: take the thread writer lock before any store or
 // SQLite write so a competing writer is rejected up front instead of racing the
@@ -303,6 +335,17 @@ func (r *Router) acquireMetadataRolloutWriter(threadID session.ThreadID) (*sessi
 
 func (r *Router) releaseLiveThreads(threadIDs []session.ThreadID) {
 	r.threadManager().ReleaseLiveThreads(threadIDs)
+}
+
+func (r *Router) readThreadRecordForFork(threadID session.ThreadID, includeArchived bool, includeHistory bool) (*session.Record, error) {
+	if liveThread := r.liveThreadForFork(threadID); liveThread != nil {
+		record, err := liveThread.Read(includeArchived, includeHistory)
+		if err == nil {
+			r.applyIndexedThreadName(record)
+		}
+		return record, err
+	}
+	return r.readThreadRecord(threadID, includeArchived, includeHistory)
 }
 
 func (r *Router) readThreadRecord(threadID session.ThreadID, includeArchived bool, includeHistory bool) (*session.Record, error) {
@@ -2547,12 +2590,12 @@ func (r *Router) handleThreadFork(request *Request) (*ThreadForkResponse, error)
 	if err != nil {
 		return nil, err
 	}
-	sourceLocks, err := r.acquireLifecycleWriters([]session.ThreadID{sourceID})
+	sourceLocks, err := r.acquireForkSourceWriter(sourceID)
 	if err != nil {
 		return nil, err
 	}
 	defer closeTemporaryWriters(sourceLocks)
-	sourceWasLive := r.threadManager().LiveThread(sourceID) != nil
+	sourceWasLive := r.liveThreadForFork(sourceID) != nil
 	var sourceRecord *session.Record
 	if params.Path != nil && strings.TrimSpace(*params.Path) != "" {
 		sourceRecord, err = r.readThreadRecordFromRolloutPath(*params.Path, true, true)
@@ -2560,7 +2603,7 @@ func (r *Router) handleThreadFork(request *Request) (*ThreadForkResponse, error)
 			return nil, err
 		}
 	} else {
-		sourceRecord, err = r.readThreadRecord(sourceID, true, true)
+		sourceRecord, err = r.readThreadRecordForFork(sourceID, true, true)
 		if err != nil {
 			sourceRecord, err = r.readThreadRecordFromRollout(sourceID, true, true)
 			if err != nil {
