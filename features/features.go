@@ -272,6 +272,9 @@ var Registry = []Spec{
 	// free-form send_message_to_user_async tool without model catalog support.
 	{Key: "send_message_to_user_async", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "guardian_approval", Stage: StageStable, DefaultEnabled: true},
+	// Rust (codex-rs/features/src/lib.rs #59238): include standalone
+	// additional-context tool outputs in Guardian review history.
+	{Key: "guardian_include_additional_context", Stage: StageStable, DefaultEnabled: true},
 	// Rust #56124: forward private reviewer items and interruptions to raw-event
 	// observers. Under development and off by default. Go's Guardian reviewer is
 	// an inline single request with no private session event stream or reviewer

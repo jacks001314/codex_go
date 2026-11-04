@@ -494,3 +494,33 @@ func TestRetiredWorktreeAndVoiceConfigOverridesAreIgnoredLikeRust(t *testing.T) 
 		}
 	}
 }
+
+// TestGuardianIncludeAdditionalContextFeatureRegistration mirrors Rust #59238:
+// the inclusion policy is stable and enabled by default, while the configuration
+// still allows disabling it for Guardian review history.
+func TestGuardianIncludeAdditionalContextFeatureRegistration(t *testing.T) {
+	const key = "guardian_include_additional_context"
+	var spec *Spec
+	for index := range Registry {
+		if Registry[index].Key == key {
+			spec = &Registry[index]
+			break
+		}
+	}
+	if spec == nil {
+		t.Fatalf("%s is missing from the feature registry", key)
+	}
+	if spec.Stage != StageStable || !spec.DefaultEnabled {
+		t.Fatalf("%s spec = %#v, want stable and enabled by default", key, *spec)
+	}
+	if !Known(key) || !Enabled(Defaults(), key) {
+		t.Fatalf("%s is not recognized and enabled by default", key)
+	}
+	settings, usages := ResolveSettings(map[string]any{key: false})
+	if len(usages) != 0 {
+		t.Fatalf("ResolveSettings(%s=false) legacy usages = %#v, want none", key, usages)
+	}
+	if enabled, ok := settings[key]; !ok || enabled {
+		t.Fatalf("ResolveSettings(%s=false) = %#v, want an explicit false", key, settings)
+	}
+}
