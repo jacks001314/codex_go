@@ -103,16 +103,19 @@ func TestGuardianReviewStaleRetrySkipsServiceBackoffLikeRust(t *testing.T) {
 	}
 }
 
-// Rust #47819 invalidates only an allow: a deny is reported from the evidence
-// it already saw instead of consuming the stale-authorization retry budget.
-func TestGuardianReviewDenySkipsStaleRetryLikeRust(t *testing.T) {
+// Rust #59225: parent input can grant authorization while a denial is in
+// flight. The stale denial is discarded and the refreshed review can approve.
+func TestGuardianReviewDenyRefreshesChangedAuthorizationLikeRust(t *testing.T) {
 	transcript := []string{"user: initial request"}
 	calls := 0
 	reviewer := &modelGuardianReviewer{
 		agent: guardianAgentFunc(func(context.Context, *model.AgentRequest) (*model.AgentResponse, error) {
 			calls++
-			transcript = append(transcript, "user: change while reviewing")
-			return &model.AgentResponse{Message: `{"riskLevel":"high","userAuthorization":"low","outcome":"deny","rationale":"risky"}`}, nil
+			if calls == 1 {
+				transcript = append(transcript, "user: I authorize this action")
+				return &model.AgentResponse{Message: `{"riskLevel":"high","userAuthorization":"low","outcome":"deny","rationale":"stale denial"}`}, nil
+			}
+			return &model.AgentResponse{Message: guardianDecisionDurationAssessment}, nil
 		}),
 		store: state.NewReviewStore(),
 		transcript: func(string) []string {
@@ -123,11 +126,51 @@ func TestGuardianReviewDenySkipsStaleRetryLikeRust(t *testing.T) {
 	if err != nil {
 		t.Fatalf("review error = %v", err)
 	}
-	if calls != 1 {
-		t.Fatalf("agent calls = %d, want the deny reported without a stale retry", calls)
+	if calls != 2 {
+		t.Fatalf("agent calls = %d, want the stale denial plus one refresh", calls)
 	}
-	if decision != state.DecisionDenied {
-		t.Fatalf("decision = %q, want denied", decision)
+	if decision != state.DecisionApproved {
+		t.Fatalf("decision = %q, want the refreshed approval", decision)
+	}
+}
+
+// Repeated stale denials keep consuming the shared attempt budget but never
+// count toward the turn's denial limit, because no invalidated assessment is
+// published.
+func TestGuardianReviewStaleDenialsDoNotCountTowardDenialLimitLikeRust(t *testing.T) {
+	transcript := []string{"user: initial request"}
+	calls := 0
+	breaker := state.NewCircuitBreaker()
+	reviewer := &modelGuardianReviewer{
+		agent: guardianAgentFunc(func(context.Context, *model.AgentRequest) (*model.AgentResponse, error) {
+			calls++
+			transcript = append(transcript, "user: change")
+			return &model.AgentResponse{Message: `{"riskLevel":"high","userAuthorization":"low","outcome":"deny","rationale":"stale denial"}`}, nil
+		}),
+		store:   state.NewReviewStore(),
+		breaker: breaker,
+		transcript: func(string) []string {
+			return append([]string(nil), transcript...)
+		},
+	}
+	decision, message, err := reviewer.Review(context.Background(), "thread-deny-budget", "turn-deny-budget", "call-deny-budget", state.Action{Type: "command", Command: "ls", CWD: t.TempDir()})
+	if err != nil {
+		t.Fatalf("review error = %v", err)
+	}
+	if calls != guardianMaxReviewAttempts {
+		t.Fatalf("agent calls = %d, want %d", calls, guardianMaxReviewAttempts)
+	}
+	if decision != state.DecisionDenied || !strings.Contains(message, "authorization changed before approval could be applied") {
+		t.Fatalf("review = %q/%q, want the stale-authorization denial", decision, message)
+	}
+	for denial := 1; denial <= state.MaxConsecutiveDenialsPerTurn; denial++ {
+		action := breaker.RecordDenial("turn-deny-budget")
+		if denial < state.MaxConsecutiveDenialsPerTurn && action.InterruptTurn {
+			t.Fatalf("invalidated denials counted toward the denial limit before denial %d", denial)
+		}
+		if denial == state.MaxConsecutiveDenialsPerTurn && !action.InterruptTurn {
+			t.Fatal("the denial limit did not count fresh denials")
+		}
 	}
 }
 

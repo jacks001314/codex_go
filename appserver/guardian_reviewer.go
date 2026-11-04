@@ -1796,9 +1796,10 @@ reviewAttempt:
 	}
 	var staleAuthorization bool
 	if err == nil && r.guardianReviewContextChanged(threadID, turnID, transcript, budgetCompareEntries, transcriptOmissionNote, rootAuthorization, omittedCallID) {
-		// Rust #47819 only invalidates a completed allow: a deny stands on the
-		// evidence it saw, while an approval must match the latest authorization.
-		if parsed, parseErr := state.ParseAssessment([]byte(guardianAssessmentText(response))); parseErr == nil && parsed.Outcome == state.OutcomeAllow {
+		// Rust #59225: revalidate both verdicts. Parent input can grant
+		// authorization while a denial is in flight, and a stale denial must not
+		// be published or counted toward the turn's denial limit.
+		if _, parseErr := state.ParseAssessment([]byte(guardianAssessmentText(response))); parseErr == nil {
 			staleAuthorization = true
 			contextChanged = true
 			// Rust #53987 treats stale authorization as a local evidence refresh,
