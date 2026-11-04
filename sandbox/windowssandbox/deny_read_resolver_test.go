@@ -81,3 +81,72 @@ func filesystemRootForTest(t *testing.T, path string) string {
 		absolute = parent
 	}
 }
+
+// Rust #59250: deny-glob expansion snapshots literal brackets without turning
+// them into a character class.
+func TestResolveWindowsDenyReadPolicyPathsHandlesLiteralBracketsLikeRust(t *testing.T) {
+	tmp := t.TempDir()
+	for _, testCase := range []struct {
+		name    string
+		pattern string
+	}{
+		{name: "[]secret.env", pattern: filepath.Join(tmp, "**", "[]*.env")},
+		{name: "[[secret.env", pattern: filepath.Join(tmp, "**", "[[*.env")},
+	} {
+		secret := filepath.Join(tmp, testCase.name)
+		if err := os.WriteFile(secret, []byte("secret"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		got, err := ResolveWindowsDenyReadPolicyPaths(DenyReadPolicy{Globs: []string{testCase.pattern}}, tmp)
+		if err != nil {
+			t.Fatalf("resolve %q: %v", testCase.pattern, err)
+		}
+		if len(got) != 1 || !strings.EqualFold(filepath.Clean(got[0]), filepath.Clean(secret)) {
+			t.Fatalf("paths for %q = %#v, want %s", testCase.pattern, got, secret)
+		}
+	}
+}
+
+// Rust #59250: directory links below the scan root are not traversed, while an
+// explicitly linked scan root is followed; dangling links are skipped.
+func TestResolveWindowsDenyReadPolicyPathsFollowOnlyLinkedRootLikeRust(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "root")
+	outside := filepath.Join(base, "outside")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outside, ".env"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	childLink := filepath.Join(root, "child")
+	if err := os.Symlink(outside, childLink); err != nil {
+		t.Skipf("directory symlinks unavailable: %v", err)
+	}
+	dangling := filepath.Join(root, "dangling.env")
+	if err := os.Symlink(filepath.Join(base, "missing-target"), dangling); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	got, err := ResolveWindowsDenyReadPolicyPaths(DenyReadPolicy{Globs: []string{filepath.Join(root, "**", "*.env")}}, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("child directory link was traversed or dangling link retained: %#v", got)
+	}
+
+	linkedRoot := filepath.Join(base, "linked-root")
+	if err := os.Symlink(outside, linkedRoot); err != nil {
+		t.Skipf("directory symlinks unavailable: %v", err)
+	}
+	got, err = ResolveWindowsDenyReadPolicyPaths(DenyReadPolicy{Globs: []string{filepath.Join(linkedRoot, "**", "*.env")}}, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || !strings.EqualFold(filepath.Clean(got[0]), filepath.Clean(filepath.Join(linkedRoot, ".env"))) {
+		t.Fatalf("linked root paths = %#v, want the linked root's .env", got)
+	}
+}

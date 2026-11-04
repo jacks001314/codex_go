@@ -2,20 +2,13 @@ package windowssandbox
 
 import (
 	"fmt"
-	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 
 	coresandbox "codex_go/sandbox"
 )
-
-// GlobScanProgram is the external deny-glob scanner inventoried by sandbox
-// integrity checks (Rust #51831).
-const GlobScanProgram = "rg"
 
 type DenyReadPolicy struct {
 	Paths            []string
@@ -54,26 +47,24 @@ func ResolveWindowsDenyReadPaths(paths []string) []string {
 }
 
 func ResolveWindowsDenyReadPolicyPaths(policy DenyReadPolicy, cwd string) ([]string, error) {
-	return resolveWindowsDenyReadPolicyPaths(policy, cwd, nil, "")
+	return resolveWindowsDenyReadPolicyPaths(policy, cwd)
 }
 
-// ResolveWindowsDenyReadPathsInEnvironment resolves deny paths with the
-// launcher's scanner in an explicit command environment. The supplied
-// environment replaces inheritance, including when it is empty.
+// ResolveWindowsDenyReadPathsInEnvironment keeps the launcher call shape while
+// expansion runs in-process. The command environment no longer selects an
+// external scanner (Rust #59250).
 func ResolveWindowsDenyReadPathsInEnvironment(
 	policy DenyReadPolicy,
 	cwd string,
-	env map[string]string,
-	commandCWD string,
+	_ map[string]string,
+	_ string,
 ) ([]string, error) {
-	return resolveWindowsDenyReadPolicyPaths(policy, cwd, env, commandCWD)
+	return resolveWindowsDenyReadPolicyPaths(policy, cwd)
 }
 
 func resolveWindowsDenyReadPolicyPaths(
 	policy DenyReadPolicy,
 	cwd string,
-	env map[string]string,
-	commandCWD string,
 ) ([]string, error) {
 	var paths []string
 	seen := map[string]bool{}
@@ -102,118 +93,12 @@ func resolveWindowsDenyReadPolicyPaths(
 				pattern,
 			)
 		}
-		if scanned, ok, err := ripgrepWindowsDenyReadMatches(pattern, plan, env, commandCWD); err != nil {
-			return nil, err
-		} else if ok {
-			for _, path := range scanned {
-				pushDenyReadPath(&paths, seen, path)
-			}
-			continue
-		}
 		seenScanDirs := map[string]bool{}
 		if err := collectExistingGlobMatches(plan.Root, matcher, &paths, seen, seenScanDirs, plan.MaxDepth, 0); err != nil {
 			return nil, err
 		}
 	}
 	return paths, nil
-}
-
-func ripgrepWindowsDenyReadMatches(
-	pattern string,
-	plan GlobScanPlan,
-	env map[string]string,
-	commandCWD string,
-) ([]string, bool, error) {
-	if env == nil {
-		return nil, false, nil
-	}
-	pathEnv := ""
-	for key, value := range env {
-		if strings.EqualFold(key, "PATH") {
-			pathEnv = value
-			break
-		}
-	}
-	scanner := FindExecutableInCommandPath(GlobScanProgram, pathEnv, commandCWD)
-	if scanner == "" {
-		return nil, false, nil
-	}
-	relativeGlob := strings.TrimPrefix(pattern, plan.Root)
-	relativeGlob = strings.TrimPrefix(relativeGlob, string(filepath.Separator))
-	if relativeGlob == "" {
-		return nil, false, nil
-	}
-	args := []string{"--no-config", "--files", "--hidden", "--no-ignore", "--null"}
-	if plan.MaxDepth != nil {
-		args = append(args, "--max-depth", fmt.Sprintf("%d", *plan.MaxDepth))
-	}
-	args = append(args, "--glob", relativeGlob, "--", plan.Root)
-	command := exec.Command(scanner, args...)
-	command.Dir = commandCWD
-	command.Env = windowsEnvironmentEntries(env)
-	output, err := command.Output()
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 && len(exitErr.Stderr) == 0 {
-			return nil, true, nil
-		}
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return nil, false, fmt.Errorf("ripgrep deny-read scan failed for %s: %s", plan.Root, strings.TrimSpace(string(exitErr.Stderr)))
-		}
-		return nil, false, err
-	}
-	paths := make([]string, 0)
-	for _, raw := range strings.Split(string(output), "\x00") {
-		if raw == "" {
-			continue
-		}
-		path := raw
-		if !filepath.IsAbs(path) {
-			path = filepath.Join(plan.Root, path)
-		}
-		paths = append(paths, filepath.Clean(path))
-		if canonical, err := filepath.EvalSymlinks(path); err == nil && canonical != path {
-			paths = append(paths, filepath.Clean(canonical))
-		}
-	}
-	return paths, true, nil
-}
-
-// FindExecutableInCommandPath mirrors `which::which_in`: PATH entries are
-// resolved relative to the command's working directory and empty entries mean
-// that directory.
-func FindExecutableInCommandPath(program, pathEnv, commandCWD string) string {
-	for _, directory := range filepath.SplitList(pathEnv) {
-		directory = strings.Trim(strings.TrimSpace(directory), `"`)
-		if directory == "" {
-			directory = commandCWD
-		} else if !filepath.IsAbs(directory) {
-			directory = filepath.Join(commandCWD, directory)
-		}
-		for _, candidate := range []string{
-			filepath.Join(directory, program),
-			filepath.Join(directory, program+".exe"),
-			filepath.Join(directory, program+".EXE"),
-		} {
-			info, err := os.Stat(candidate)
-			if err != nil || !info.Mode().IsRegular() {
-				continue
-			}
-			absolute, err := filepath.Abs(candidate)
-			if err == nil {
-				return absolute
-			}
-		}
-	}
-	return ""
-}
-
-func windowsEnvironmentEntries(env map[string]string) []string {
-	entries := make([]string, 0, len(env))
-	for key, value := range env {
-		entries = append(entries, key+"="+value)
-	}
-	sort.Strings(entries)
-	return entries
 }
 
 func GlobScanPlanForPattern(pattern string, configuredMaxDepth *int) GlobScanPlan {
@@ -225,14 +110,31 @@ func GlobScanPlanForPattern(pattern string, configuredMaxDepth *int) GlobScanPla
 }
 
 func collectExistingGlobMatches(path string, matcher func(string) bool, paths *[]string, seenPaths map[string]bool, seenScanDirs map[string]bool, maxDepth *int, depth int) error {
-	if _, err := os.Lstat(path); err != nil {
+	info, err := os.Lstat(path)
+	if err != nil {
 		return nil
 	}
+	isLink := info.Mode()&os.ModeSymlink != 0
 	if matcher(path) {
-		pushDenyReadPath(paths, seenPaths, path)
+		// A matching symlink is itself denied only when its target exists. A
+		// dangling link is skipped like ignore::WalkBuilder's metadata check.
+		if !isLink {
+			pushDenyReadPath(paths, seenPaths, path)
+		} else if _, targetErr := os.Stat(path); targetErr == nil {
+			pushDenyReadPath(paths, seenPaths, path)
+		}
 	}
-	info, err := os.Stat(path)
-	if err != nil || !info.IsDir() {
+	if isLink {
+		// Explicitly linked scan roots are followed; directory links below the
+		// root are not traversed (Rust #59250).
+		if depth != 0 {
+			return nil
+		}
+		target, targetErr := os.Stat(path)
+		if targetErr != nil || !target.IsDir() {
+			return nil
+		}
+	} else if !info.IsDir() {
 		return nil
 	}
 	key := CanonicalPathKey(path)
@@ -243,12 +145,12 @@ func collectExistingGlobMatches(path string, matcher func(string) bool, paths *[
 	if maxDepth != nil && depth >= *maxDepth {
 		return nil
 	}
-	entries, err := os.ReadDir(path)
-	if err != nil {
+	entries, readErr := os.ReadDir(path)
+	if readErr != nil {
 		return nil
 	}
 	for _, entry := range entries {
-		if err := collectExistingGlobMatches(filepath.Join(path, entry.Name()), matcher, paths, seenPaths, seenScanDirs, maxDepth, depth+1); err != nil && !strings.Contains(err.Error(), fs.SkipDir.Error()) {
+		if err := collectExistingGlobMatches(filepath.Join(path, entry.Name()), matcher, paths, seenPaths, seenScanDirs, maxDepth, depth+1); err != nil {
 			return err
 		}
 	}
@@ -309,7 +211,7 @@ func globPatternToRegexp(pattern string) (string, error) {
 			out.WriteString(`[^/]`)
 		case '[':
 			end := strings.IndexByte(pattern[i+1:], ']')
-			if end < 0 {
+			if end <= 0 {
 				out.WriteString(`\[`)
 				continue
 			}
