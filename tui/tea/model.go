@@ -4008,6 +4008,10 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		if m.applyInactiveThreadTurnCompleted(msg) {
 			return m, m.refreshStatusControlsCmd()
 		}
+		if cmd, recovered := m.recoverStaleActiveSideThread(msg); recovered {
+			m.flushDeferredSubAgentActivity()
+			return m, bubbletea.Batch(cmd, m.refreshStatusControlsCmd(), m.refreshThreadUsageAfterTurn())
+		}
 		cmd := m.applyTurnCompleted(msg)
 		recapStatus := appserver.TurnStatusCompleted
 		if msg.Err != nil || msg.Failed {

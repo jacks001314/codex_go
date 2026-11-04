@@ -16,6 +16,7 @@ const (
 	SideMainThreadUnavailableMessage = "'/side' is unavailable until the main thread is ready."
 	SideNoStartedConversationMessage = "'/side' is unavailable until the current conversation has started. Send a message first, then try /side again."
 	SideAlreadyOpenMessage           = "A side conversation is already open. Press ctrl + c to return before starting another."
+	sideThreadExpiredMessage         = "Side conversation expired because its server thread is no longer available. Returned to the main thread."
 )
 
 const SideBoundaryPrompt = `Side conversation boundary.
@@ -471,6 +472,94 @@ func (m *Model) applySideStartResult(msg SideStartResultMsg) bubbletea.Cmd {
 	return m.refreshStatusControlsCmd()
 }
 
+// recoverStaleActiveSideThread handles an app-server turn that cannot start
+// because the ephemeral /side thread disappeared, for example after a daemon
+// restart. The parent transcript is restored and the failed submission is put
+// back into the composer so the user can retry it in the main thread.
+func (m *Model) recoverStaleActiveSideThread(msg TurnCompletedMsg) (bubbletea.Cmd, bool) {
+	if m == nil || m.State == nil || msg.Err == nil || m.activeSide == nil || !m.activeSide.ShowingSide {
+		return nil, false
+	}
+	side := m.activeSide
+	if !threadMissingErrorForID(msg.Err.Error(), side.SideThreadID) {
+		return nil, false
+	}
+	request, restoreDraft := m.latestSideSubmissionForRestore()
+	m.abandonSideThread(side.SideThreadID)
+	notice := sideThreadExpiredMessage
+	if restoreDraft {
+		m.restoreSubmissionDraft(request)
+		notice += " Your message is back in the composer."
+	}
+	m.clearSafetyBuffering()
+	m.flushComputerActivityGroup()
+	m.flushActiveExecCell()
+	m.deferPendingSteers()
+	m.finishUnifiedExecWaitStreak()
+	m.clearRetryActivity()
+	m.clearCompactionActivity()
+	m.resetReasoningSummaryHeader()
+	return m.finishReturnFromSideConversation(side, notice), true
+}
+
+func threadMissingErrorForID(message string, threadID string) bool {
+	message = strings.ToLower(strings.TrimSpace(message))
+	threadID = strings.ToLower(strings.TrimSpace(threadID))
+	if message == "" || threadID == "" {
+		return false
+	}
+	for _, prefix := range []string{"thread not found: ", "thread not loaded: "} {
+		needle := prefix + threadID
+		for offset := 0; offset < len(message); {
+			index := strings.Index(message[offset:], needle)
+			if index < 0 {
+				break
+			}
+			end := offset + index + len(needle)
+			if end == len(message) || !isThreadIDContinuation(message[end]) {
+				return true
+			}
+			offset = end
+		}
+	}
+	return false
+}
+
+func isThreadIDContinuation(value byte) bool {
+	return (value >= 'a' && value <= 'z') || (value >= '0' && value <= '9') || value == '-' || value == '_'
+}
+
+func (m *Model) latestSideSubmissionForRestore() (SubmitRequest, bool) {
+	if m == nil || m.State == nil {
+		return SubmitRequest{}, false
+	}
+	if !m.composerIsEmpty() || len(m.attachments) > 0 {
+		return SubmitRequest{}, false
+	}
+	prompt := ""
+	for index := len(m.State.Messages) - 1; index >= 0; index-- {
+		message := m.State.Messages[index]
+		if message.Role != codextui.RoleUser {
+			continue
+		}
+		prompt = strings.TrimSpace(message.UserPrompt)
+		if prompt == "" {
+			prompt = strings.TrimSpace(message.Text)
+		}
+		break
+	}
+	if prompt == "" {
+		return SubmitRequest{}, false
+	}
+	for index := len(m.submitRequests) - 1; index >= 0; index-- {
+		request := m.submitRequests[index]
+		if strings.TrimSpace(request.Prompt) == prompt {
+			return cloneSubmitRequest(request), true
+		}
+	}
+	return SubmitRequest{}, false
+}
+
 func (m *Model) returnFromSideConversation() bubbletea.Cmd {
 	if m == nil || m.State == nil || m.activeSide == nil {
 		return nil
@@ -738,6 +827,12 @@ func (m *Model) applyInactiveThreadTurnCompleted(msg TurnCompletedMsg) bool {
 	}
 	side := m.retainedSideConversationForThread(threadID)
 	if side == nil {
+		return true
+	}
+	if threadID == strings.TrimSpace(side.SideThreadID) && msg.Err != nil && threadMissingErrorForID(msg.Err.Error(), threadID) {
+		m.forgetRetainedSideConversation(side)
+		m.abandonSideThread(threadID)
+		m.notice = sideThreadExpiredMessage
 		return true
 	}
 	if threadID == strings.TrimSpace(side.ParentThreadID) {
