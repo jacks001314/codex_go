@@ -251,7 +251,9 @@ var Registry = []Spec{
 	{Key: "image_generation", Stage: StageStable, DefaultEnabled: true},
 	{Key: "view_image", Stage: StageStable, DefaultEnabled: true},
 	{Key: "image_resize_notice", Stage: StageUnderDevelopment, DefaultEnabled: false},
-	{Key: "unified_image_budget", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust #59282: unified image preparation is stable and enabled by default
+	// for models that support original image detail or Responses Lite.
+	{Key: "unified_image_budget", Stage: StageStable, DefaultEnabled: true},
 	{Key: "resize_all_images", Stage: StageRemoved, DefaultEnabled: true},
 	{Key: "item_ids", Stage: StageRemoved, DefaultEnabled: true},
 	{Key: "concurrent_reasoning_summaries", Stage: StageUnderDevelopment},

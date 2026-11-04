@@ -31,7 +31,7 @@ func TestStepViewImageCapabilitiesFollowCapturedModelLikeRust(t *testing.T) {
 	threadID := "thread-step-view-image"
 	turnID := "turn-step-view-image"
 	dir := t.TempDir()
-	cfg := &config.Config{Values: map[string]any{}}
+	cfg := &config.Config{Values: map[string]any{"features": map[string]any{"unified_image_budget": false}}}
 	params := &turn.TurnStartParams{ThreadID: threadID, Model: "step-image-model"}
 	if err := router.threads.RegisterTurn(threadID, turnID, nil, time.Now().UTC().UnixMilli(), params); err != nil {
 		t.Fatalf("RegisterTurn() error = %v", err)

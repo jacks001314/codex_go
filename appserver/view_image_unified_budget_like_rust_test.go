@@ -33,7 +33,7 @@ func TestViewImageUnifiedImageBudgetFollowsFeatureAndModelLikeRust(t *testing.T)
 		t.Fatalf("unified view_image schema still advertises detail: %#v", properties)
 	}
 
-	disabled := router.viewImageOptionsForTurn(&config.Config{Values: map[string]any{}}, params, cwd, params.ThreadID, "turn-unified-budget")
+	disabled := router.viewImageOptionsForTurn(&config.Config{Values: map[string]any{"features": map[string]any{"unified_image_budget": false}}}, params, cwd, params.ThreadID, "turn-unified-budget")
 	if disabled == nil || disabled.UnifiedImageBudget {
 		t.Fatalf("viewImageOptionsForTurn(disabled) = %#v, want the legacy detail surface", disabled)
 	}

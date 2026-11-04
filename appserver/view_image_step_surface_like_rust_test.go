@@ -45,9 +45,9 @@ func TestRuntimeRouterAdvertisesViewImageForTextOnlyModelLikeRust(t *testing.T) 
 	}
 }
 
-// Rust #44242 rebuilds each step's tool plan from the captured model settings,
-// so the view_image `detail` argument follows the step model's original-detail
-// support even though the handler itself stays registered.
+// Rust #44242 rebuilds each step's tool plan from the captured model settings.
+// With unified image budgeting on by default (#59282), original-detail support
+// no longer re-advertises the legacy `detail` argument.
 func TestStepToolSurfaceRefreshesViewImageDetailLikeRust(t *testing.T) {
 	router := NewRuntimeRouter(RuntimeServices{
 		Models: model.NewModelService(model.NewStaticModelsManager(model.ModelsResponse{Models: []model.ModelInfo{
@@ -83,8 +83,8 @@ func TestStepToolSurfaceRefreshesViewImageDetailLikeRust(t *testing.T) {
 		t.Fatal("mid-turn model switch was not applied")
 	}
 	refresh("original-detail-model")
-	if _, ok := viewImageSpecPropertiesForTest(t, toolRouter)["detail"]; !ok {
-		t.Fatalf("step view_image schema = %#v, missing detail", viewImageSpecPropertiesForTest(t, toolRouter))
+	if _, ok := viewImageSpecPropertiesForTest(t, toolRouter)["detail"]; ok {
+		t.Fatalf("unified step view_image schema = %#v, want detail omitted", viewImageSpecPropertiesForTest(t, toolRouter))
 	}
 
 	writeTinyPNG(t, cwd)
@@ -98,8 +98,8 @@ func TestStepToolSurfaceRefreshesViewImageDetailLikeRust(t *testing.T) {
 	if err != nil {
 		t.Fatalf("view_image on the image-capable step error = %v", err)
 	}
-	if out.Data["detail"] != "original" {
-		t.Fatalf("view_image detail = %#v, want original", out.Data["detail"])
+	if _, ok := out.Data["detail"]; ok {
+		t.Fatalf("unified view_image output kept detail = %#v", out.Data["detail"])
 	}
 }
 

@@ -546,3 +546,25 @@ func TestGuardianDenialReconsiderationFeatureRegistration(t *testing.T) {
 		t.Fatalf("%s = true by default", key)
 	}
 }
+
+// TestUnifiedImageBudgetIsStableAndOnByDefaultLikeRust mirrors Rust #59282.
+func TestUnifiedImageBudgetIsStableAndOnByDefaultLikeRust(t *testing.T) {
+	const key = "unified_image_budget"
+	var spec *Spec
+	for index := range Registry {
+		if Registry[index].Key == key {
+			spec = &Registry[index]
+			break
+		}
+	}
+	if spec == nil || spec.Stage != StageStable || !spec.DefaultEnabled {
+		t.Fatalf("%s spec = %#v, want stable and enabled by default", key, spec)
+	}
+	if !Enabled(Defaults(), key) {
+		t.Fatalf("%s is disabled by default", key)
+	}
+	settings, _ := ResolveSettings(map[string]any{key: false})
+	if enabled, ok := settings[key]; !ok || enabled {
+		t.Fatalf("ResolveSettings(%s=false) = %#v, want explicit false", key, settings)
+	}
+}
