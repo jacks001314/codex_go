@@ -73,6 +73,8 @@ type CodexTurnEventParams struct {
 	CriticalPathStatus             string  `json:"critical_path_status"`
 	CriticalPathDurationMS         *uint64 `json:"critical_path_duration_ms"`
 	CriticalPathInferenceMS        *uint64 `json:"critical_path_inference_ms"`
+	CriticalPathSamplingMS         *uint64 `json:"critical_path_sampling_ms"`
+	CriticalPathCompactionMS       *uint64 `json:"critical_path_compaction_ms"`
 	CriticalPathAutoReview         *uint64 `json:"critical_path_auto_review_ms"`
 	CriticalPathAutoReviewOverhead *uint64 `json:"critical_path_auto_review_overhead_ms"`
 	CriticalPathUserWaitMS         *uint64 `json:"critical_path_user_wait_ms"`
@@ -260,6 +262,8 @@ type CodexTurnCriticalPath struct {
 type CodexTurnCriticalPathDurations struct {
 	DurationMS           uint64
 	InferenceMS          uint64
+	SamplingMS           uint64
+	CompactionMS         uint64
 	AutoReviewMS         uint64
 	AutoReviewOverheadMS *uint64
 	UserWaitMS           uint64
@@ -359,6 +363,8 @@ func NewCodexTurnEvent(input CodexTurnEventInput) CodexTurnEventRequest {
 			CriticalPathStatus:                   criticalPathStatus(input.TimingProfile.CriticalPath),
 			CriticalPathDurationMS:               criticalPathDuration(input.TimingProfile.CriticalPath, func(value CodexTurnCriticalPathDurations) uint64 { return value.DurationMS }),
 			CriticalPathInferenceMS:              criticalPathDuration(input.TimingProfile.CriticalPath, func(value CodexTurnCriticalPathDurations) uint64 { return value.InferenceMS }),
+			CriticalPathSamplingMS:               criticalPathDuration(input.TimingProfile.CriticalPath, func(value CodexTurnCriticalPathDurations) uint64 { return value.SamplingMS }),
+			CriticalPathCompactionMS:             criticalPathDuration(input.TimingProfile.CriticalPath, func(value CodexTurnCriticalPathDurations) uint64 { return value.CompactionMS }),
 			CriticalPathAutoReview:               criticalPathDuration(input.TimingProfile.CriticalPath, func(value CodexTurnCriticalPathDurations) uint64 { return value.AutoReviewMS }),
 			CriticalPathAutoReviewOverhead:       criticalPathOptionalDuration(input.TimingProfile.CriticalPath, func(value CodexTurnCriticalPathDurations) *uint64 { return value.AutoReviewOverheadMS }),
 			CriticalPathUserWaitMS:               criticalPathDuration(input.TimingProfile.CriticalPath, func(value CodexTurnCriticalPathDurations) uint64 { return value.UserWaitMS }),

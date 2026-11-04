@@ -141,10 +141,10 @@ func TestToolDispatcherUnsupportedDirectPathsInvalidateCapture(t *testing.T) {
 			},
 		},
 		{
-			name: "multi-agent spawn",
+			name: "multi-agent followup",
 			invocation: &tool.Invocation{
-				CallID:   "call-spawn",
-				ToolName: tool.PlainName("spawn_agent"),
+				CallID:   "call-followup",
+				ToolName: tool.PlainName("followup_task"),
 			},
 		},
 	}
@@ -204,5 +204,25 @@ func TestToolDispatcherCancellationCompletesTimingOnce(t *testing.T) {
 	}
 	if profile.CriticalPath.Status != CriticalPathStatusComplete {
 		t.Fatalf("CriticalPath.Status = %q, want complete", profile.CriticalPath.Status)
+	}
+}
+
+func TestDirectPathSupportIncludesSpawnAndWaitLikeRust(t *testing.T) {
+	dispatcher := &ToolDispatcher{}
+	for _, name := range []tool.ToolName{
+		tool.NamespacedName("multi_agent_v2", "spawn_agent"),
+		tool.NamespacedName("custom_collaboration", "wait_agent"),
+	} {
+		if !dispatcher.directPathSupported(&tool.Invocation{ToolName: name}) {
+			t.Fatalf("%s must be captured on the direct path", name.Key())
+		}
+	}
+	for _, name := range []tool.ToolName{
+		tool.NamespacedName("multi_agent_v2", "send_input"),
+		tool.NamespacedName("multi_agent_v2", "followup_task"),
+	} {
+		if dispatcher.directPathSupported(&tool.Invocation{ToolName: name}) {
+			t.Fatalf("%s must remain unattributed", name.Key())
+		}
 	}
 }

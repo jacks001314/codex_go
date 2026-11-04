@@ -1932,10 +1932,10 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	instructionsProvider := r.turnStepInstructionsProvider(threadID, turnID, params, runConfig)
 	criticalPathTiming := false
 	if cfg, cfgErr := r.effectiveConfigForTurn(params); cfgErr == nil && cfg != nil {
-		// Rust regular.rs: only a root-agent turn captures the critical path.
+		// Rust regular.rs (#59245) captures every turn except memory
+		// consolidation; child turns carry their own tool timing.
 		criticalPathTiming = features.Enabled(cfg.FeatureSettings(), "critical_path_timing") &&
-			strings.TrimSpace(runConfig.SubagentSource) == "" &&
-			!r.turnThreadIsSubagent(threadID)
+			!memoryConsolidationTimingSource(runConfig.ThreadSource, runConfig.SubagentSource)
 	}
 	timingState := turn.NewTimingState()
 	if active := r.activeRuntimeTurnStateSnapshot(threadID, turnID); active != nil && active.Timing != nil {
@@ -9707,6 +9707,8 @@ func analyticsTurnTimingProfile(result *turn.AgentLoopResult, timing *turn.Timin
 		criticalPath.Durations = &telemetry.CodexTurnCriticalPathDurations{
 			DurationMS:           profile.CriticalPath.Durations.DurationMS,
 			InferenceMS:          profile.CriticalPath.Durations.InferenceMS,
+			SamplingMS:           profile.CriticalPath.Durations.SamplingMS,
+			CompactionMS:         profile.CriticalPath.Durations.CompactionMS,
 			AutoReviewMS:         profile.CriticalPath.Durations.AutoReviewMS,
 			AutoReviewOverheadMS: profile.CriticalPath.Durations.AutoReviewOverheadMS,
 			UserWaitMS:           profile.CriticalPath.Durations.UserWaitMS,
@@ -15355,4 +15357,16 @@ func (r *RuntimeRouter) appendWorldStateStepItem(threadID string, item session.I
 	}
 	_, err = r.runtimeAppendItem(session.ThreadID(threadID), item)
 	return err
+}
+
+func memoryConsolidationTimingSource(values ...string) bool {
+	for _, value := range values {
+		normalized := strings.ToLower(strings.TrimSpace(value))
+		normalized = strings.NewReplacer("-", "_", ":", "_", "/", "_").Replace(normalized)
+		compact := strings.ReplaceAll(normalized, "_", "")
+		if normalized == "memory_consolidation" || strings.Contains(compact, "memoryconsolidation") {
+			return true
+		}
+	}
+	return false
 }

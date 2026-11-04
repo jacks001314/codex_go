@@ -29,6 +29,7 @@ func TestCriticalPathCapturePreservesPhasesAndFreezesMissingDependencies(t *test
 	want := CriticalPathDurations{
 		DurationMS:  60,
 		InferenceMS: 10,
+		SamplingMS:  10,
 		UnknownMS:   30,
 		OverheadMS:  20,
 	}
@@ -134,5 +135,24 @@ func TestCriticalPathCompletedBatchGuardRetainsItsPathAcrossTurns(t *testing.T) 
 	}
 	if totals.Tools < time.Second {
 		t.Fatalf("tools = %v, want >= 1s", totals.Tools)
+	}
+}
+
+func TestCriticalPathSplitsSamplingAndCompactionDurations(t *testing.T) {
+	start := time.Unix(0, 0)
+	timing := NewTimingState()
+	timing.EnableCriticalPath()
+	timing.MarkTurnStarted(start)
+	sampling := timing.BeginSampling(start)
+	sampling.CloseAt(start.Add(10 * time.Millisecond))
+	compaction := timing.BeginCompaction(start.Add(10 * time.Millisecond))
+	compaction.CloseAt(start.Add(40 * time.Millisecond))
+	profile := timing.CompleteProfile(start.Add(40 * time.Millisecond))
+	if profile.CriticalPath.Durations == nil {
+		t.Fatal("critical path durations missing")
+	}
+	durations := *profile.CriticalPath.Durations
+	if durations.SamplingMS != 10 || durations.CompactionMS != 30 || durations.InferenceMS != 40 {
+		t.Fatalf("durations = %+v, want sampling=10 compaction=30 inference=40", durations)
 	}
 }

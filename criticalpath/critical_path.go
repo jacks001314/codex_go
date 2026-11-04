@@ -20,8 +20,10 @@ const MaxPathDepth = 16_384
 type WorkKind uint8
 
 const (
-	// WorkInference is model inference on the selected dependency path.
-	WorkInference WorkKind = iota
+	// WorkSampling is model sampling on the selected dependency path.
+	WorkSampling WorkKind = iota
+	// WorkCompaction is compaction work, including local bookkeeping.
+	WorkCompaction
 	// WorkAutoReview is automatic review work, such as reviewing a tool call
 	// before execution.
 	WorkAutoReview
@@ -39,6 +41,10 @@ const (
 	// collapsed at the depth limit.
 	WorkUnknown
 )
+
+// WorkInference is the legacy aggregate name for sampling work. New code should
+// distinguish WorkSampling from WorkCompaction.
+const WorkInference = WorkSampling
 
 // Path is an immutable observed dependency path. The zero value is empty.
 type Path struct {
@@ -58,7 +64,10 @@ type node struct {
 // Durations is the exclusive time attributed to each category within a
 // requested interval.
 type Durations struct {
+	// Inference is the legacy aggregate of sampling and compaction.
 	Inference  time.Duration
+	Sampling   time.Duration
+	Compaction time.Duration
 	AutoReview time.Duration
 	// AutoReviewOverhead excludes the union of observed reviewer child execution.
 	// AutoReviewOverheadUnknown reports that attribution or history was incomplete.
@@ -72,7 +81,11 @@ type Durations struct {
 
 func (d *Durations) record(kind WorkKind, duration time.Duration) {
 	switch kind {
-	case WorkInference:
+	case WorkSampling:
+		d.Sampling += duration
+		d.Inference += duration
+	case WorkCompaction:
+		d.Compaction += duration
 		d.Inference += duration
 	case WorkAutoReview:
 		d.AutoReview += duration

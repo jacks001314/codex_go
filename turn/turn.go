@@ -15,6 +15,7 @@ import (
 type Profile struct {
 	BeforeFirstSamplingMS      uint64
 	SamplingMS                 uint64
+	CompactionMS               uint64
 	BetweenSamplingOverheadMS  uint64
 	ToolBlockingMS             uint64
 	PendingIdleAfterSamplingMS uint64
@@ -46,6 +47,8 @@ const (
 type CriticalPathDurations struct {
 	DurationMS   uint64
 	InferenceMS  uint64
+	SamplingMS   uint64
+	CompactionMS uint64
 	AutoReviewMS uint64
 	// AutoReviewOverheadMS is the part of auto-review time outside observed
 	// reviewer turn execution. Nil means attribution was incomplete.
@@ -67,6 +70,7 @@ type profilePhase string
 
 const (
 	phaseSampling     profilePhase = "sampling"
+	phaseCompaction   profilePhase = "compaction"
 	phaseToolBlocking profilePhase = "tool_blocking"
 )
 
@@ -90,6 +94,7 @@ type profileState struct {
 	seenSampling             bool
 	beforeFirstSampling      time.Duration
 	sampling                 time.Duration
+	compaction               time.Duration
 	betweenSamplingOverhead  time.Duration
 	toolBlocking             time.Duration
 	pendingIdleAfterSampling time.Duration
@@ -286,6 +291,12 @@ func (t *TimingState) BeginSampling(now time.Time) *TimingGuard {
 	return t.beginPhase(phaseSampling, now)
 }
 
+// BeginCompaction captures local and remote compaction bookkeeping separately
+// from model sampling (Rust #59245).
+func (t *TimingState) BeginCompaction(now time.Time) *TimingGuard {
+	return t.beginPhase(phaseCompaction, now)
+}
+
 func (t *TimingState) BeginToolBlocking(now time.Time, batch *tooltiming.Batch) *TimingGuard {
 	guard := t.beginPhase(phaseToolBlocking, now)
 	if guard != nil {
@@ -398,6 +409,8 @@ func (p *profileState) advance(now time.Time) {
 	switch p.activePhase {
 	case phaseSampling:
 		p.sampling += elapsed
+	case phaseCompaction:
+		p.compaction += elapsed
 	case phaseToolBlocking:
 		p.toolBlocking += elapsed
 	default:
@@ -421,6 +434,7 @@ func (p *profileState) complete(now time.Time) Profile {
 	profile := Profile{
 		BeforeFirstSamplingMS:      durationMS(p.beforeFirstSampling),
 		SamplingMS:                 durationMS(p.sampling),
+		CompactionMS:               durationMS(p.compaction),
 		BetweenSamplingOverheadMS:  durationMS(p.betweenSamplingOverhead),
 		ToolBlockingMS:             durationMS(p.toolBlocking),
 		PendingIdleAfterSamplingMS: durationMS(p.pendingIdleAfterSampling),
@@ -449,10 +463,9 @@ func (p *profileState) pathAt(now time.Time) *criticalpath.Path {
 func (p *profileState) extendPath(path criticalpath.Path, previous time.Time, now time.Time) criticalpath.Path {
 	switch p.activePhase {
 	case phaseSampling:
-		// Compaction is model-related elapsed work, including local
-		// bookkeeping; the existing profile still exposes its separate
-		// duration.
-		return path.Work(previous, now, criticalpath.WorkInference)
+		return path.Work(previous, now, criticalpath.WorkSampling)
+	case phaseCompaction:
+		return path.Work(previous, now, criticalpath.WorkCompaction)
 	case phaseToolBlocking:
 		dependency := path.Work(previous, now, criticalpath.WorkUnknown)
 		if p.toolDependency != nil {
@@ -481,7 +494,9 @@ func (p *profileState) criticalPathReport(end time.Time) CriticalPathReport {
 		Status: CriticalPathStatusComplete,
 		Durations: &CriticalPathDurations{
 			DurationMS:           durationMS(end.Sub(p.startedAt)),
-			InferenceMS:          criticalpath.DurationMS(totals.Inference),
+			InferenceMS:          criticalpath.DurationMS(totals.Sampling) + criticalpath.DurationMS(totals.Compaction),
+			SamplingMS:           criticalpath.DurationMS(totals.Sampling),
+			CompactionMS:         criticalpath.DurationMS(totals.Compaction),
 			AutoReviewMS:         criticalpath.DurationMS(totals.AutoReview),
 			AutoReviewOverheadMS: autoReviewOverhead,
 			UserWaitMS:           criticalpath.DurationMS(totals.UserWait),

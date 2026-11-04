@@ -835,9 +835,10 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			continue
 		}
 		if len(toolItems) > 0 && request.SamplingCompaction != nil {
-			// Rust #49262: the automatic compaction runs in its own
-			// `codex.compaction` phase span.
+			// Rust #49262/#59245: the automatic compaction runs in its own
+			// `codex.compaction` phase span and timing segment.
 			compactionSpan := startTurnPhaseSpan(ctx, request, samplingSpan, CompactionPhaseSpanName, TurnPhaseCompaction, request.ThreadID, request.TurnID)
+			compactionTiming := timing.BeginCompaction(l.now())
 			compacted, err := request.SamplingCompaction(&SamplingCompactionContext{
 				Context:      ctx,
 				Response:     response,
@@ -846,6 +847,7 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 				HasToolCalls: true,
 				Result:       result,
 			})
+			compactionTiming.CloseAt(l.now())
 			if compactionSpan != nil {
 				compactionSpan.End()
 			}

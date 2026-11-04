@@ -18,7 +18,7 @@ func TestJoinReplacesOverlappingWorkWithTheFullWinningBranch(t *testing.T) {
 	path := shared.Work(at(turnStart, 100), at(turnStart, 200), WorkInference).
 		Join(at(turnStart, 200), at(turnStart, 700), reviewedTool.Latest(parallelTool))
 	got := path.Durations(at(turnStart, 0), at(turnStart, 700))
-	want := Durations{Inference: 100 * time.Millisecond, Tools: 600 * time.Millisecond}
+	want := Durations{Inference: 100 * time.Millisecond, Sampling: 100 * time.Millisecond, Tools: 600 * time.Millisecond}
 	if got != want {
 		t.Fatalf("Durations() = %+v, want %+v", got, want)
 	}
@@ -35,6 +35,7 @@ func TestNestedSerialDependenciesPreserveExclusiveCategories(t *testing.T) {
 	got := path.Durations(at(turnStart, 0), at(turnStart, 600))
 	want := Durations{
 		Inference:                 200 * time.Millisecond,
+		Sampling:                  200 * time.Millisecond,
 		AutoReview:                200 * time.Millisecond,
 		AutoReviewOverheadUnknown: true,
 		Tools:                     200 * time.Millisecond,
@@ -80,7 +81,7 @@ func TestOverlappingWorkOnlyAttributesTimeAfterTheExistingPath(t *testing.T) {
 		Work(at(turnStart, 0), at(turnStart, 10), WorkInference).
 		Work(at(turnStart, 5), at(turnStart, 20), WorkTools)
 	got := path.Durations(at(turnStart, 0), at(turnStart, 20))
-	want := Durations{Inference: 10 * time.Millisecond, Tools: 10 * time.Millisecond}
+	want := Durations{Inference: 10 * time.Millisecond, Sampling: 10 * time.Millisecond, Tools: 10 * time.Millisecond}
 	if got != want {
 		t.Fatalf("Durations() = %+v, want %+v", got, want)
 	}
@@ -103,6 +104,7 @@ func TestHumanWaitIsRetainedOnlyOnTheSelectedParallelPath(t *testing.T) {
 	got := path.Durations(start, at(start, 600))
 	want := Durations{
 		Inference:                 100 * time.Millisecond,
+		Sampling:                  100 * time.Millisecond,
 		AutoReview:                100 * time.Millisecond,
 		AutoReviewOverheadUnknown: true,
 		UserWait:                  300 * time.Millisecond,
@@ -119,9 +121,20 @@ func TestDurationsCountsUnrecordedGapsAsOverhead(t *testing.T) {
 	got := path.Durations(start, at(start, 30))
 	want := Durations{
 		Inference: 10 * time.Millisecond,
+		Sampling:  10 * time.Millisecond,
 		Overhead:  20 * time.Millisecond,
 	}
 	if got != want {
 		t.Fatalf("Durations() = %+v, want %+v", got, want)
+	}
+}
+
+func TestSamplingAndCompactionRemainSeparateWorkKinds(t *testing.T) {
+	start := time.Unix(0, 0)
+	path := Path{}.Work(start, start.Add(10*time.Millisecond), WorkSampling)
+	path = path.Work(start.Add(10*time.Millisecond), start.Add(40*time.Millisecond), WorkCompaction)
+	got := path.Durations(start, start.Add(40*time.Millisecond))
+	if got.Sampling != 10*time.Millisecond || got.Compaction != 30*time.Millisecond || got.Inference != 40*time.Millisecond {
+		t.Fatalf("durations = %+v", got)
 	}
 }

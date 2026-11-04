@@ -61,6 +61,8 @@ func TestCodexTurnEventSerializesExpectedRustShape(t *testing.T) {
 			"critical_path_status": "disabled",
 			"critical_path_duration_ms": null,
 			"critical_path_inference_ms": null,
+			"critical_path_sampling_ms": null,
+			"critical_path_compaction_ms": null,
 			"critical_path_auto_review_ms": null,
 			"critical_path_auto_review_overhead_ms": null,
 			"critical_path_user_wait_ms": null,
@@ -218,6 +220,8 @@ func TestCodexTurnEventCriticalPathDisabledMatchesRust(t *testing.T) {
 	for _, key := range []string{
 		"critical_path_duration_ms",
 		"critical_path_inference_ms",
+		"critical_path_sampling_ms",
+		"critical_path_compaction_ms",
 		"critical_path_auto_review_ms",
 		"critical_path_auto_review_overhead_ms",
 		"critical_path_user_wait_ms",

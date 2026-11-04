@@ -189,3 +189,16 @@ func TestNetworkApprovalTimingCallIDUsesTriggerCallIDLikeRust(t *testing.T) {
 		t.Fatalf("networkApprovalTimingCallID(nil) = %q, want empty", got)
 	}
 }
+
+func TestMemoryConsolidationIsExcludedFromCriticalPathTiming(t *testing.T) {
+	for _, source := range []string{"memory_consolidation", "subagent_memory_consolidation", "internalMemoryConsolidation"} {
+		if !memoryConsolidationTimingSource(source) {
+			t.Fatalf("%q must be excluded from critical-path capture", source)
+		}
+	}
+	for _, source := range []string{"", "guardian", "subagent_review", "subagent_thread_spawn"} {
+		if memoryConsolidationTimingSource(source) {
+			t.Fatalf("%q must remain capturable", source)
+		}
+	}
+}

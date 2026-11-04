@@ -882,8 +882,8 @@ func (d *ToolDispatcher) executeParallelToolInvocations(ctx context.Context, tim
 }
 
 // directPathSupported reports whether direct-tool timing can attribute this
-// invocation. Code Mode and agent-communication dependencies are not captured
-// yet (Rust #57201).
+// invocation. Direct spawn and wait calls use this turn tool time; Code Mode and
+// follow-up agent operations still lack runtime capture (Rust #59245).
 func (d *ToolDispatcher) directPathSupported(invocation *tool.Invocation) bool {
 	if invocation == nil {
 		return false
@@ -897,7 +897,7 @@ func (d *ToolDispatcher) directPathSupported(invocation *tool.Invocation) bool {
 	}
 	// Multi-agent tool namespaces can be overridden by the tool catalog.
 	switch name.Name {
-	case "spawn_agent", "send_input", "close_agent", "resume_agent", "wait_agent",
+	case "send_input", "close_agent", "resume_agent",
 		"list_agents", "followup_task", "interrupt_agent", "send_message":
 		return false
 	}

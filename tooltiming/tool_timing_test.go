@@ -62,6 +62,7 @@ func TestParallelWinnerRetainsItsReviewAndSharedInitialPath(t *testing.T) {
 	got := batchCompleted.Path.Durations(start, batchCompleted.EndedAt)
 	want := criticalpath.Durations{
 		Inference:                 time.Second,
+		Sampling:                  time.Second,
 		AutoReview:                3 * time.Second,
 		AutoReviewOverheadUnknown: true,
 		Tools:                     batchCompleted.EndedAt.Sub(start) - 4*time.Second,
@@ -321,6 +322,7 @@ func TestGateHandoffPublishesReviewHistoryBeforeAdmittingWaiter(t *testing.T) {
 	got := completed.Path.Durations(start, completed.EndedAt)
 	want := criticalpath.Durations{
 		Inference:                 time.Second,
+		Sampling:                  time.Second,
 		AutoReview:                3 * time.Second,
 		AutoReviewOverheadUnknown: true,
 		Tools:                     completed.EndedAt.Sub(start) - 4*time.Second,
