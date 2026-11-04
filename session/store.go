@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"codex_go/protocol"
 )
 
 const (
@@ -1713,6 +1715,9 @@ func (s *Store) forkRecordLocked(source *Record, options ForkOptions) (*Record, 
 		prepared.HistoryBase = cloneHistoryPosition(options.HistoryBase)
 	}
 	items := prepared.Items
+	// Rust #59312: forked history backfills missing response item ids through
+	// the shared UUIDv7 generator before the child persists or replays them.
+	BackfillMissingItemIDs(items, protocol.NewUUIDv7ItemIDGenerator())
 	title := options.Title
 	if title == "" && source.Title != "" {
 		title = source.Title
