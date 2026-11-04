@@ -112,7 +112,11 @@ type ToolRegistryOptions struct {
 	CloudSkillProvider skillprovider.Provider
 	// DiscoveryV2Skills exposes skills.installations. It is set only when the
 	// step's executor capability inventory came from discovery V2 (Rust #55330).
-	DiscoveryV2Skills  bool
+	DiscoveryV2Skills bool
+	// SkillMetrics receives the bounded skill tool outcome counters
+	// (Rust #59295 codex.skills.read.result / codex.skills.installations.result).
+	// Nil disables the counters.
+	SkillMetrics       SkillToolMetrics
 	OpenAIFileRewriter *mcp.OpenAIFileRewriter
 	Model              string
 	// ModelConfirmationPolicies carries the issuing model's Browser Use /

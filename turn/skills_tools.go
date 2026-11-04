@@ -105,6 +105,17 @@ type skillsInstallationsResponse struct {
 	NextCursor    *string                      `json:"next_cursor"`
 }
 
+// SkillToolMetrics receives the skill tool outcome counters (Rust
+// SkillsExtension's ExtensionMetrics, #59295). Session telemetry satisfies it.
+type SkillToolMetrics interface {
+	Counter(name string, inc int, tags map[string]string)
+}
+
+const (
+	skillReadResultMetric          = "codex.skills.read.result"
+	skillInstallationsResultMetric = "codex.skills.installations.result"
+)
+
 type skillsToolExecutor struct {
 	spec          tool.Spec
 	mcpService    *mcp.MCPService
@@ -116,6 +127,8 @@ type skillsToolExecutor struct {
 	executor      *executorSkillCatalogCache
 	readMu        sync.Mutex
 	read          *executorReadSnapshot
+	metrics       SkillToolMetrics
+	discoveryV2   bool
 }
 
 type executorReadSnapshot struct {
@@ -196,6 +209,8 @@ func newSkillsToolExecutor(options *ToolRegistryOptions, name string, descriptio
 		catalog:       catalog,
 		providers:     options.SkillProviders,
 		executor:      executor,
+		metrics:       options.SkillMetrics,
+		discoveryV2:   options.DiscoveryV2Skills,
 	}
 }
 
@@ -313,13 +328,29 @@ func (e *skillsToolExecutor) executeList(ctx context.Context, invocation *tool.I
 }
 
 func (e *skillsToolExecutor) executeInstallations(ctx context.Context, invocation *tool.Invocation) (*tool.Output, error) {
+	outcome, sourceFilter, output, err := e.installationsResult(ctx, invocation)
+	e.recordSkillToolResult(skillInstallationsResultMetric, outcome, map[string]string{
+		"source_filter":     sourceFilter,
+		"discovery_version": e.skillDiscoveryVersion(),
+	})
+	return output, err
+}
+
+// installationsResult reports the bounded outcome and source filter Rust
+// records for every skills.installations invocation (#59295).
+func (e *skillsToolExecutor) installationsResult(ctx context.Context, invocation *tool.Invocation) (string, string, *tool.Output, error) {
+	sourceFilter := "unparsed"
 	var args skillsInstallationsArgs
 	if err := decodeStrictToolArgs(invocation, &args); err != nil {
-		return nil, tool.RespondToModel(err.Error())
+		return "invalid_arguments", sourceFilter, nil, tool.RespondToModel(err.Error())
+	}
+	sourceFilter = "all"
+	if args.Source != nil {
+		sourceFilter = strings.TrimSpace(args.Source.Kind)
 	}
 	packageArg := strings.TrimSpace(args.Package)
 	if packageArg == "" || len(packageArg) > maxSkillToolHandleBytes || strings.ContainsFunc(packageArg, unicode.IsControl) {
-		return nil, tool.RespondToModel("package must be non-empty, contain no control characters, and be at most 2048 bytes")
+		return "invalid_package", sourceFilter, nil, tool.RespondToModel("package must be non-empty, contain no control characters, and be at most 2048 bytes")
 	}
 	if args.Source != nil {
 		switch strings.TrimSpace(args.Source.Kind) {
@@ -327,10 +358,10 @@ func (e *skillsToolExecutor) executeInstallations(ctx context.Context, invocatio
 		case "executor":
 			environmentID := strings.TrimSpace(args.Source.EnvironmentID)
 			if environmentID == "" || len(environmentID) > maxSkillToolHandleBytes || strings.ContainsFunc(environmentID, unicode.IsControl) {
-				return nil, tool.RespondToModel("environment_id must be non-empty, contain no control characters, and be at most 2048 bytes")
+				return "invalid_source", sourceFilter, nil, tool.RespondToModel("environment_id must be non-empty, contain no control characters, and be at most 2048 bytes")
 			}
 		default:
-			return nil, tool.RespondToModel("source.kind must be `cloud` or `executor`")
+			return "invalid_source", sourceFilter, nil, tool.RespondToModel("source.kind must be `cloud` or `executor`")
 		}
 	}
 	locations := e.skillInstallations(ctx, packageArg)
@@ -351,15 +382,19 @@ func (e *skillsToolExecutor) executeInstallations(ctx context.Context, invocatio
 		locations = filtered
 	}
 	if len(locations) == 0 {
-		return skillsToolJSONOutput(invocation, skillsInstallationsResponse{Installations: []skillsInstallationLocation{}})
+		output, err := skillsToolJSONOutput(invocation, skillsInstallationsResponse{Installations: []skillsInstallationLocation{}})
+		if err != nil {
+			return "internal_error", sourceFilter, nil, err
+		}
+		return "empty", sourceFilter, output, nil
 	}
 	fingerprint := skillInstallationsFingerprint(packageArg, args.Source, locations)
 	start, err := parseSkillInstallationsCursor(args.Cursor, fingerprint)
 	if err != nil {
-		return nil, err
+		return "invalid_cursor", sourceFilter, nil, err
 	}
 	if start > len(locations) {
-		return nil, tool.RespondToModel("skills.installations cursor is invalid")
+		return "invalid_cursor", sourceFilter, nil, tool.RespondToModel("skills.installations cursor is invalid")
 	}
 	responseByteBudget := invocation.ResponseByteBudget(maxSkillInstallationsResponseBytes)
 	response := skillsInstallationsResponse{Installations: []skillsInstallationLocation{}}
@@ -374,14 +409,18 @@ func (e *skillsToolExecutor) executeInstallations(ctx context.Context, invocatio
 		if skillToolSerializedLen(response) > responseByteBudget {
 			response.Installations = response.Installations[:len(response.Installations)-1]
 			if len(response.Installations) == 0 {
-				return nil, tool.RespondToModel("skills.installations response budget leaves no room for an installation")
+				return "response_budget", sourceFilter, nil, tool.RespondToModel("skills.installations response budget leaves no room for an installation")
 			}
 			cursor := fmt.Sprintf("%s:%d", fingerprint, index)
 			response.NextCursor = &cursor
 			break
 		}
 	}
-	return skillsToolJSONOutput(invocation, response)
+	output, err := skillsToolJSONOutput(invocation, response)
+	if err != nil {
+		return "internal_error", sourceFilter, nil, err
+	}
+	return "success", sourceFilter, output, nil
 }
 
 func (e *skillsToolExecutor) skillInstallations(ctx context.Context, packageArg string) []skillsInstallationLocation {
@@ -532,16 +571,27 @@ func parseSkillListCursor(cursor *string, value any, toolName string) (int, *int
 }
 
 func (e *skillsToolExecutor) executeRead(ctx context.Context, invocation *tool.Invocation) (*tool.Output, error) {
+	outcome, output, err := e.readSkillResult(ctx, invocation)
+	e.recordSkillToolResult(skillReadResultMetric, outcome, map[string]string{
+		"discovery_version": e.skillDiscoveryVersion(),
+	})
+	return output, err
+}
+
+// readSkillResult reports the bounded outcome label Rust records for every
+// skills.read invocation (#59295) alongside the tool result.
+func (e *skillsToolExecutor) readSkillResult(ctx context.Context, invocation *tool.Invocation) (string, *tool.Output, error) {
+	outcome := "internal_error"
 	var args skillsReadArgs
 	if err := decodeStrictToolArgs(invocation, &args); err != nil {
-		return nil, tool.RespondToModel(err.Error())
+		return "invalid_arguments", nil, tool.RespondToModel(err.Error())
 	}
 	responseByteBudget := invocation.ResponseByteBudget(maxSkillToolResponseBytes)
 	authority := args.Authority
 	if args.Source != nil {
 		resolved, resolveErr := e.skillReadAuthorityForSource(ctx, args.Package, args.Source)
 		if resolveErr != nil {
-			return nil, resolveErr
+			return "invalid_arguments", nil, resolveErr
 		}
 		authority = resolved
 	}
@@ -551,19 +601,19 @@ func (e *skillsToolExecutor) executeRead(ctx context.Context, invocation *tool.I
 		// legacy selector but must behave the same when it is omitted.
 		resolved, ok := e.skillReadAuthorityForPackage(ctx, args.Package)
 		if !ok {
-			return nil, tool.RespondToModel("skill package is not available")
+			return "source_unavailable", nil, tool.RespondToModel("skill package is not available")
 		}
 		authority = resolved
 	}
 	if err := validateSkillsToolReadAuthority(authority); err != nil {
-		return nil, err
+		return "invalid_arguments", nil, err
 	}
 	if err := validateSkillToolHandle("package", args.Package, maxSkillToolHandleBytes); err != nil {
-		return nil, err
+		return "invalid_arguments", nil, err
 	}
 	entry, ok := e.availableSkillPackage(ctx, authority, args.Package)
 	if !ok {
-		return nil, tool.RespondToModel("skill package is not available from the requested authority")
+		return "source_unavailable", nil, tool.RespondToModel("skill package is not available from the requested authority")
 	}
 	resource := args.Resource
 	if resource == "" {
@@ -572,12 +622,12 @@ func (e *skillsToolExecutor) executeRead(ctx context.Context, invocation *tool.I
 		resource = entry.MainResource
 	}
 	if err := validateSkillToolHandle("resource", resource, maxSkillToolHandleBytes); err != nil {
-		return nil, err
+		return "invalid_arguments", nil, err
 	}
 	// The requested package may be a rendered alias; validate the resource
 	// against the canonical package the catalog selected (Rust #55631).
 	if !skillResourceBelongsToPackage(authority, entry.Package, resource) {
-		return nil, tool.RespondToModel("skill package is not available from the requested authority")
+		return "invalid_arguments", nil, tool.RespondToModel("skill package is not available from the requested authority")
 	}
 	var result skillprovider.ReadResult
 	var err error
@@ -617,17 +667,17 @@ func (e *skillsToolExecutor) executeRead(ctx context.Context, invocation *tool.I
 		}
 	}
 	if err != nil {
-		return nil, tool.RespondToModel("failed to read skill resource")
+		return "read_failed", nil, tool.RespondToModel("failed to read skill resource")
 	}
 	if result.Resource != resource {
-		return nil, tool.Fatal("skill provider returned a different resource")
+		return outcome, nil, tool.Fatal("skill provider returned a different resource")
 	}
 	start, cursorErr := parseSkillToolCursor(args.Cursor, result.Contents, "skills.read")
 	if cursorErr != nil {
-		return nil, cursorErr
+		return "invalid_cursor", nil, cursorErr
 	}
 	if start > len(result.Contents) || !utf8.ValidString(result.Contents) || !isUTF8Boundary(result.Contents, start) {
-		return nil, tool.RespondToModel("skills.read cursor is invalid")
+		return "invalid_cursor", nil, tool.RespondToModel("skills.read cursor is invalid")
 	}
 	var skillRoot *string
 	if authority.Kind == "executor" {
@@ -637,7 +687,7 @@ func (e *skillsToolExecutor) executeRead(ctx context.Context, invocation *tool.I
 	}
 	response, pageErr := skillReadPage(result.Resource, result.Contents, skillRoot, start, responseByteBudget)
 	if pageErr != nil {
-		return nil, pageErr
+		return "response_budget", nil, pageErr
 	}
 	if authority.Kind == "executor" && response.NextCursor != nil {
 		e.readMu.Lock()
@@ -648,7 +698,26 @@ func (e *skillsToolExecutor) executeRead(ctx context.Context, invocation *tool.I
 		}
 		e.readMu.Unlock()
 	}
-	return skillsToolJSONOutput(invocation, response)
+	output, outputErr := skillsToolJSONOutput(invocation, response)
+	if outputErr != nil {
+		return outcome, nil, outputErr
+	}
+	return "success", output, nil
+}
+
+func (e *skillsToolExecutor) skillDiscoveryVersion() string {
+	if e != nil && e.discoveryV2 {
+		return "v2"
+	}
+	return "v1"
+}
+
+func (e *skillsToolExecutor) recordSkillToolResult(name string, outcome string, tags map[string]string) {
+	if e == nil || e.metrics == nil || outcome == "" {
+		return
+	}
+	tags["outcome"] = outcome
+	e.metrics.Counter(name, 1, tags)
 }
 
 func (e *skillsToolExecutor) skillReadAuthorityForSource(ctx context.Context, packageArg string, source *skillsInstallationSource) (skillsToolAuthority, error) {

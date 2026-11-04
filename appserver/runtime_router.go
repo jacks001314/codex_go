@@ -17746,6 +17746,9 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	options.SkillProviders = executorSkillProviders
 	options.CloudSkillProvider = r.services.CloudSkills
 	options.DiscoveryV2Skills = stepCapabilities != nil && stepCapabilities.executorCapabilityDiscoveryV2Enabled()
+	// Rust #59295: skills tools report outcome counters through the step's
+	// session telemetry, so a model switch keeps the current model metadata.
+	options.SkillMetrics = r.services.TurnMetrics
 	options.MCPTools = mcpTools
 	options.MCPConnectors = mcpConnectors
 	// Rust #46035: the tool exposure policy combines a Codex Apps connector's
