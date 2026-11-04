@@ -45,6 +45,35 @@ func TestRecordDaemonStartTelemetryLikeRust(t *testing.T) {
 	}
 }
 
+// Rust #59058 tags failed auto-starts with a bounded failure reason.
+func TestDaemonStartFailureReasonTagsLikeRust(t *testing.T) {
+	t.Setenv("CODEX_HOME", t.TempDir())
+	sink, _ := stubDaemonMetricSink(t)
+	recordDaemonStartTelemetry(nil, nil, &appserverdaemon.StartError{
+		Reason: appserverdaemon.StartFailureReadinessTimeout,
+		Err:    errors.New("daemon did not become ready"),
+	})
+	if len(sink.tags) != 1 {
+		t.Fatalf("tags = %#v, want one record", sink.tags)
+	}
+	tags := sink.tags[0]
+	if tags["outcome"] != "failed" || tags["failure_reason"] != "readiness_timeout" {
+		t.Fatalf("tags = %#v", tags)
+	}
+
+	sink, _ = stubDaemonMetricSink(t)
+	recordDaemonStartTelemetry(nil, nil, errors.New("unclassified"))
+	if got := sink.tags[0]["failure_reason"]; got != "other" {
+		t.Fatalf("unclassified failure_reason = %q, want other", got)
+	}
+
+	sink, _ = stubDaemonMetricSink(t)
+	recordDaemonStartTelemetry(nil, &appserverdaemon.LifecycleOutput{Status: appserverdaemon.StatusStarted}, nil)
+	if _, ok := sink.tags[0]["failure_reason"]; ok {
+		t.Fatalf("successful start must not carry a failure reason: %#v", sink.tags[0])
+	}
+}
+
 // TestDaemonStartOutcomeLikeRust pins Rust's lifecycle-status mapping.
 func TestDaemonStartOutcomeLikeRust(t *testing.T) {
 	for _, testCase := range []struct {

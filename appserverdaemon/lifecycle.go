@@ -642,11 +642,11 @@ func (r *LifecycleRunner) startWithFeatureOverrides(settings *DaemonSettings, ov
 		daemon.Diagnostic("warning: failed to clear stale daemon recovery before start: %v", err)
 	}
 	if err := prepareManagedDaemon(daemon, settings); err != nil {
-		return nil, err
+		return nil, wrapStartError(StartFailureInstall, err)
 	}
 	daemon.refreshInstallation()
 	if err := ensureManagedCodexBin(daemon.Paths.ManagedCodexBin); err != nil {
-		return nil, err
+		return nil, wrapStartError(StartFailureInstall, err)
 	}
 	if !FeatureOverridesEqual(settings.FeatureOverrides, overrides) {
 		settings.FeatureOverrides = CloneFeatureOverrides(overrides)

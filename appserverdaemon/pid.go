@@ -268,7 +268,7 @@ func (b *PIDBackend) Start() (*uint32, error) {
 	pid, processStartTime, processIdentity, err := startDetachedPIDProcess(b)
 	if err != nil {
 		_ = os.Remove(b.PIDFile)
-		return nil, err
+		return nil, wrapStartError(StartFailureSpawn, err)
 	}
 	record := &PIDRecord{
 		PID:                pid,
@@ -277,15 +277,23 @@ func (b *PIDBackend) Start() (*uint32, error) {
 		ExecutableIdentity: launchedExecutableIdentity(b),
 	}
 	if err := WritePIDRecord(b.PIDFile, record); err != nil {
-		_ = terminatePIDProcess(pid)
+		// Rust #59058: a managed child that is already gone failed before
+		// readiness; a still-running child is terminated before reporting.
+		exited := pid != 0 && !pidProcessExists(pid)
+		if !exited {
+			_ = terminatePIDProcess(pid)
+		}
 		_ = os.Remove(b.PIDFile)
+		if exited {
+			return nil, wrapStartError(StartFailureEarlyChildExit, err)
+		}
 		return nil, err
 	}
 	// A detached updater acknowledges readiness once it serves requests; a
 	// launcher that gave up on it must not leave a half-started backend behind
 	// (Rust PidBackend::finish_updater_start).
 	if err := finishUpdaterStart(b, record); err != nil {
-		return nil, err
+		return nil, wrapStartError(StartFailureReadinessTimeout, err)
 	}
 	return &record.PID, nil
 }

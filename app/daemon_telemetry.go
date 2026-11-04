@@ -138,6 +138,11 @@ func recordDaemonStartTelemetry(root *cli.RootOptions, output *appserverdaemon.L
 	tags := appserverdaemon.DaemonSettingsTagMap(codexHome)
 	tags["initiation_source"] = daemonStartInitiationSource
 	tags["outcome"] = daemonStartOutcome(output, startErr)
+	if startErr != nil {
+		// Rust #59058: failures carry a bounded reason tag so auto-start
+		// regressions can be told apart without parsing diagnostics.
+		tags["failure_reason"] = string(appserverdaemon.StartFailureReasonOf(startErr))
+	}
 	sink.Counter(daemonStartMetric, 1, tags)
 }
 
