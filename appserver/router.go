@@ -2315,6 +2315,16 @@ func (r *Router) checkpointThreadResumeSettings(threadID session.ThreadID, recor
 	if response.ApprovalsReviewer != nil {
 		settings.ApprovalsReviewer = strings.TrimSpace(*response.ApprovalsReviewer)
 	}
+	// Rust #59272: a resumed thread keeps the requested selection it restored,
+	// not the effective value a requirement imposed.
+	if record != nil {
+		if overrides := threadRecordConfigOverrides(record); overrides != nil {
+			if value, _ := overrides["requested_approvals_reviewer"].(string); strings.TrimSpace(value) != "" {
+				reviewer := strings.TrimSpace(value)
+				settings.RequestedApprovalsReviewer = &reviewer
+			}
+		}
+	}
 	if response.ActivePermissionProfile != nil {
 		if encoded, err := json.Marshal(response.ActivePermissionProfile); err == nil {
 			settings.ActivePermissionProfile = encoded

@@ -786,10 +786,13 @@ func persistedModelSettingsFromSnapshot(snapshot persistedThreadSettingsEvent) P
 // is the raw inferred base profile that is restored only when no named profile
 // applies.
 type PersistedResumeSettings struct {
-	ApprovalPolicy           string
-	ApprovalsReviewer        string
-	ActivePermissionProfile  json.RawMessage
-	UnnamedPermissionProfile json.RawMessage
+	ApprovalPolicy string
+	// ApprovalsReviewer is the requested reviewer when a snapshot recorded one;
+	// older histories fall back to the effective reviewer (Rust #59272).
+	ApprovalsReviewer          string
+	RequestedApprovalsReviewer *string
+	ActivePermissionProfile    json.RawMessage
+	UnnamedPermissionProfile   json.RawMessage
 }
 
 // LatestPersistedResumeSettings resolves persisted settings for a resume or
@@ -830,10 +833,19 @@ func LatestPersistedResumeSettings(threadID string, lines []Line) (PersistedResu
 }
 
 func persistedResumeSettingsFromSnapshot(snapshot persistedThreadSettingsEvent) PersistedResumeSettings {
+	reviewer := snapshot.RequestedApprovalsReviewer
+	if reviewer == nil && strings.TrimSpace(snapshot.ApprovalsReviewer) != "" {
+		effective := strings.TrimSpace(snapshot.ApprovalsReviewer)
+		reviewer = &effective
+	}
 	settings := PersistedResumeSettings{
-		ApprovalPolicy:          snapshot.ApprovalPolicy,
-		ApprovalsReviewer:       snapshot.ApprovalsReviewer,
-		ActivePermissionProfile: cloneRawJSON(snapshot.ActivePermissionProfile),
+		ApprovalPolicy:             snapshot.ApprovalPolicy,
+		ApprovalsReviewer:          strings.TrimSpace(snapshot.ApprovalsReviewer),
+		RequestedApprovalsReviewer: cloneTrimmedStringPtr(reviewer),
+		ActivePermissionProfile:    cloneRawJSON(snapshot.ActivePermissionProfile),
+	}
+	if reviewer != nil {
+		settings.ApprovalsReviewer = strings.TrimSpace(*reviewer)
 	}
 	if settings.ActivePermissionProfile == nil {
 		settings.UnnamedPermissionProfile = cloneRawJSON(snapshot.PermissionProfile)
@@ -850,7 +862,7 @@ func latestPersistedResumeSettingsWithoutOwner(lines []Line) (PersistedResumeSet
 		if len(lines[index].TurnContext) > 0 {
 			context := lines[index].TurnContext
 			policy, _ := approvalPolicyFromTurnContext(context)
-			reviewer := approvalsReviewerFromTurnContext(context)
+			reviewer := firstNonEmptyString(requestedApprovalsReviewerFromTurnContext(context), approvalsReviewerFromTurnContext(context))
 			if reviewer == "" {
 				reviewer = previousApprovalsReviewer(lines, index)
 			}
@@ -878,8 +890,28 @@ func previousApprovalsReviewer(lines []Line, before int) string {
 				return reviewer
 			}
 		}
-		if snapshot, ok := threadSettingsSnapshotFromEvent(lines[index].Payload); ok && snapshot.ApprovalsReviewer != "" {
-			return snapshot.ApprovalsReviewer
+		if snapshot, ok := threadSettingsSnapshotFromEvent(lines[index].Payload); ok {
+			if snapshot.RequestedApprovalsReviewer != nil && strings.TrimSpace(*snapshot.RequestedApprovalsReviewer) != "" {
+				return strings.TrimSpace(*snapshot.RequestedApprovalsReviewer)
+			}
+			if snapshot.ApprovalsReviewer != "" {
+				return snapshot.ApprovalsReviewer
+			}
+		}
+	}
+	return ""
+}
+
+// requestedApprovalsReviewerFromTurnContext reads the explicit reviewer a turn
+// captured before model requirements replaced it (Rust #59272).
+func requestedApprovalsReviewerFromTurnContext(raw json.RawMessage) string {
+	var values map[string]any
+	if len(raw) == 0 || json.Unmarshal(raw, &values) != nil {
+		return ""
+	}
+	for _, key := range []string{"requested_approvals_reviewer", "requestedApprovalsReviewer"} {
+		if reviewer := strings.TrimSpace(stringFromAny(values[key])); reviewer != "" {
+			return reviewer
 		}
 	}
 	return ""
@@ -918,17 +950,18 @@ func activePermissionProfileFromTurnContext(raw json.RawMessage) json.RawMessage
 }
 
 type persistedThreadSettingsEvent struct {
-	ThreadID                string
-	CWD                     string
-	RuntimeWorkspaceRoots   *[]string
-	ApprovalPolicy          string
-	ApprovalsReviewer       string
-	PermissionProfile       json.RawMessage
-	ActivePermissionProfile json.RawMessage
-	ServiceTier             *string
-	ReasoningSummary        *string
-	Personality             *string
-	CollaborationMode       json.RawMessage
+	ThreadID                   string
+	CWD                        string
+	RuntimeWorkspaceRoots      *[]string
+	ApprovalPolicy             string
+	ApprovalsReviewer          string
+	RequestedApprovalsReviewer *string
+	PermissionProfile          json.RawMessage
+	ActivePermissionProfile    json.RawMessage
+	ServiceTier                *string
+	ReasoningSummary           *string
+	Personality                *string
+	CollaborationMode          json.RawMessage
 }
 
 func threadSettingsSnapshotFromEvent(raw json.RawMessage) (persistedThreadSettingsEvent, bool) {
@@ -936,16 +969,17 @@ func threadSettingsSnapshotFromEvent(raw json.RawMessage) (persistedThreadSettin
 		Type           string `json:"type"`
 		ThreadID       string `json:"thread_id"`
 		ThreadSettings struct {
-			ApprovalPolicy          string          `json:"approval_policy"`
-			ApprovalsReviewer       string          `json:"approvals_reviewer"`
-			PermissionProfile       json.RawMessage `json:"permission_profile"`
-			ActivePermissionProfile json.RawMessage `json:"active_permission_profile"`
-			CWD                     string          `json:"cwd"`
-			ServiceTier             *string         `json:"service_tier"`
-			ReasoningSummary        *string         `json:"reasoning_summary"`
-			Personality             *string         `json:"personality"`
-			CollaborationMode       json.RawMessage `json:"collaboration_mode"`
-			RuntimeWorkspaceRoots   *[]string       `json:"runtime_workspace_roots"`
+			ApprovalPolicy             string          `json:"approval_policy"`
+			ApprovalsReviewer          string          `json:"approvals_reviewer"`
+			RequestedApprovalsReviewer *string         `json:"requested_approvals_reviewer"`
+			PermissionProfile          json.RawMessage `json:"permission_profile"`
+			ActivePermissionProfile    json.RawMessage `json:"active_permission_profile"`
+			CWD                        string          `json:"cwd"`
+			ServiceTier                *string         `json:"service_tier"`
+			ReasoningSummary           *string         `json:"reasoning_summary"`
+			Personality                *string         `json:"personality"`
+			CollaborationMode          json.RawMessage `json:"collaboration_mode"`
+			RuntimeWorkspaceRoots      *[]string       `json:"runtime_workspace_roots"`
 		} `json:"thread_settings"`
 	}
 	if len(raw) == 0 {
@@ -960,17 +994,18 @@ func threadSettingsSnapshotFromEvent(raw json.RawMessage) (persistedThreadSettin
 		roots = &copied
 	}
 	return persistedThreadSettingsEvent{
-		ThreadID:                strings.TrimSpace(event.ThreadID),
-		CWD:                     strings.TrimSpace(event.ThreadSettings.CWD),
-		RuntimeWorkspaceRoots:   roots,
-		ApprovalPolicy:          strings.TrimSpace(event.ThreadSettings.ApprovalPolicy),
-		ApprovalsReviewer:       strings.TrimSpace(event.ThreadSettings.ApprovalsReviewer),
-		PermissionProfile:       cloneRawJSON(event.ThreadSettings.PermissionProfile),
-		ActivePermissionProfile: cloneRawJSON(event.ThreadSettings.ActivePermissionProfile),
-		ServiceTier:             cloneTrimmedStringPtr(event.ThreadSettings.ServiceTier),
-		ReasoningSummary:        cloneTrimmedStringPtr(event.ThreadSettings.ReasoningSummary),
-		Personality:             cloneTrimmedStringPtr(event.ThreadSettings.Personality),
-		CollaborationMode:       cloneRawJSON(event.ThreadSettings.CollaborationMode),
+		ThreadID:                   strings.TrimSpace(event.ThreadID),
+		CWD:                        strings.TrimSpace(event.ThreadSettings.CWD),
+		RuntimeWorkspaceRoots:      roots,
+		ApprovalPolicy:             strings.TrimSpace(event.ThreadSettings.ApprovalPolicy),
+		ApprovalsReviewer:          strings.TrimSpace(event.ThreadSettings.ApprovalsReviewer),
+		RequestedApprovalsReviewer: cloneTrimmedStringPtr(event.ThreadSettings.RequestedApprovalsReviewer),
+		PermissionProfile:          cloneRawJSON(event.ThreadSettings.PermissionProfile),
+		ActivePermissionProfile:    cloneRawJSON(event.ThreadSettings.ActivePermissionProfile),
+		ServiceTier:                cloneTrimmedStringPtr(event.ThreadSettings.ServiceTier),
+		ReasoningSummary:           cloneTrimmedStringPtr(event.ThreadSettings.ReasoningSummary),
+		Personality:                cloneTrimmedStringPtr(event.ThreadSettings.Personality),
+		CollaborationMode:          cloneRawJSON(event.ThreadSettings.CollaborationMode),
 	}, true
 }
 

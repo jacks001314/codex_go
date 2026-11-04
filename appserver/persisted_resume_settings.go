@@ -95,6 +95,9 @@ func (s persistedResumeSettings) restore(record *session.Record, overrides threa
 		restored.ApprovalsReviewer = &reviewer
 		if record != nil {
 			setThreadRecordConfigOverride(record, "approvals_reviewer", reviewer)
+			// Rust #59272: keep the requested selection separately so a later
+			// settings checkpoint does not persist an imposed effective value.
+			setThreadRecordConfigOverride(record, "requested_approvals_reviewer", reviewer)
 			restored.changed = true
 		}
 	}

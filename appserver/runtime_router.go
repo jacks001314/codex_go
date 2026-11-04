@@ -8414,6 +8414,9 @@ func (r *RuntimeRouter) handleTurnStart(request *Request) (*turn.TurnStartRespon
 		}
 	}
 	settingsUpdate, hasSettingsUpdate := turnStartSettingsUpdateParams(params)
+	// Rust #59272: capture the caller's reviewer before validation can replace
+	// it with a requirement-imposed effective value.
+	requestedReviewerBeforeValidation := cloneString(params.ApprovalsReviewer)
 	if err := r.prepareTurnStartParams(params); err != nil {
 		return nil, err
 	}
@@ -8424,6 +8427,7 @@ func (r *RuntimeRouter) handleTurnStart(request *Request) (*turn.TurnStartRespon
 	if hasSettingsUpdate {
 		// Validation may select AutoReview for the proposed protected model.
 		settingsUpdate.ApprovalsReviewer = cloneString(params.ApprovalsReviewer)
+		settingsUpdate.RequestedApprovalsReviewer = requestedReviewerBeforeValidation
 	}
 	if err := params.Validate(); err != nil {
 		return nil, err
@@ -10246,14 +10250,15 @@ func (r *RuntimeRouter) persistThreadSettingsUpdate(params *SettingsUpdateParams
 	}
 	snapshotRoots := threadRecordRuntimeWorkspaceRoots(record, settingsCWD, nil)
 	snapshot := rollout.ThreadSettingsApplied{
-		ApprovalPolicy:        appliedPolicy,
-		ApprovalsReviewer:     strings.TrimSpace(settingsApprovalsReviewer(committed)),
-		CWD:                   settingsCWD,
-		ServiceTier:           settingsSelectedServiceTier(committed, record),
-		ReasoningSummary:      settingsReasoningSummary(committed, record),
-		Personality:           settingsPersonality(committed, record),
-		CollaborationMode:     collaborationModeSnapshotFromSettings(committed),
-		RuntimeWorkspaceRoots: &snapshotRoots,
+		ApprovalPolicy:             appliedPolicy,
+		ApprovalsReviewer:          strings.TrimSpace(settingsApprovalsReviewer(committed)),
+		RequestedApprovalsReviewer: requestedApprovalsReviewerSnapshot(committed, record),
+		CWD:                        settingsCWD,
+		ServiceTier:                settingsSelectedServiceTier(committed, record),
+		ReasoningSummary:           settingsReasoningSummary(committed, record),
+		Personality:                settingsPersonality(committed, record),
+		CollaborationMode:          collaborationModeSnapshotFromSettings(committed),
+		RuntimeWorkspaceRoots:      &snapshotRoots,
 	}
 	snapshot.ActivePermissionProfile = settingsActivePermissionProfileJSON(committed)
 	if len(snapshot.ActivePermissionProfile) == 0 {
@@ -10295,20 +10300,41 @@ func (r *RuntimeRouter) checkpointThreadSettings(threadID string) {
 	}
 	snapshotRoots := append([]string{}, roots...)
 	snapshot := rollout.ThreadSettingsApplied{
-		ApprovalPolicy:        policy,
-		ApprovalsReviewer:     strings.TrimSpace(settingsApprovalsReviewer(settings)),
-		CWD:                   cwd,
-		ServiceTier:           settingsSelectedServiceTier(settings, record),
-		ReasoningSummary:      settingsReasoningSummary(settings, record),
-		Personality:           settingsPersonality(settings, record),
-		CollaborationMode:     collaborationModeSnapshotFromSettings(settings),
-		RuntimeWorkspaceRoots: &snapshotRoots,
+		ApprovalPolicy:             policy,
+		ApprovalsReviewer:          strings.TrimSpace(settingsApprovalsReviewer(settings)),
+		RequestedApprovalsReviewer: requestedApprovalsReviewerSnapshot(settings, record),
+		CWD:                        cwd,
+		ServiceTier:                settingsSelectedServiceTier(settings, record),
+		ReasoningSummary:           settingsReasoningSummary(settings, record),
+		Personality:                settingsPersonality(settings, record),
+		CollaborationMode:          collaborationModeSnapshotFromSettings(settings),
+		RuntimeWorkspaceRoots:      &snapshotRoots,
 	}
 	snapshot.ActivePermissionProfile = settingsActivePermissionProfileJSON(settings)
 	if len(snapshot.ActivePermissionProfile) == 0 {
 		snapshot.PermissionProfile = recordPermissionProfileJSON(record)
 	}
 	_ = r.services.ThreadRouter.appendThreadSettingsAppliedSnapshot(session.ThreadID(threadID), snapshot, runtimeRouterNow(r).UTC())
+}
+
+// requestedApprovalsReviewerSnapshot keeps the explicit reviewer on the
+// persisted settings without turning an inherited effective value into one
+// (Rust #59272). Older records fall back to no requested value.
+func requestedApprovalsReviewerSnapshot(settings *Settings, record *session.Record) *string {
+	if settings != nil {
+		if value := strings.TrimSpace(settings.RequestedApprovalsReviewer); value != "" {
+			return &value
+		}
+	}
+	if record != nil {
+		if overrides := threadRecordConfigOverrides(record); overrides != nil {
+			if value, _ := overrides["requested_approvals_reviewer"].(string); strings.TrimSpace(value) != "" {
+				trimmed := strings.TrimSpace(value)
+				return &trimmed
+			}
+		}
+	}
+	return nil
 }
 
 func settingsApprovalsReviewer(settings *Settings) string {

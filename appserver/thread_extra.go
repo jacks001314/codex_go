@@ -287,22 +287,25 @@ type SettingsUpdateParams struct {
 	// DisabledPluginIDs replaces this thread's disabled plugin IDs. Omitted or
 	// null preserves the saved list; an explicit empty list clears it
 	// (Rust #44905).
-	DisabledPluginIDs     *[]string                  `json:"disabledPluginIds,omitempty"`
-	CWD                   *string                    `json:"cwd,omitempty"`
-	ApprovalPolicy        *string                    `json:"approvalPolicy,omitempty"`
-	ApprovalsReviewer     *string                    `json:"approvalsReviewer,omitempty"`
-	SandboxPolicy         *string                    `json:"sandboxPolicy,omitempty"`
-	Permissions           *string                    `json:"permissions,omitempty"`
-	Model                 *string                    `json:"model,omitempty"`
-	ServiceTier           *ThreadExtraOptionalString `json:"serviceTier,omitempty"`
-	Effort                *string                    `json:"effort,omitempty"`
-	Summary               *string                    `json:"summary,omitempty"`
-	CollaborationMode     map[string]any             `json:"collaborationMode,omitempty"`
-	MultiAgentMode        *string                    `json:"multiAgentMode,omitempty"`
-	Personality           *string                    `json:"personality,omitempty"`
-	PersonalitySet        bool                       `json:"-"`
-	RuntimeWorkspaceRoots []string                   `json:"runtimeWorkspaceRoots,omitempty"`
-	Extra                 map[string]string          `json:"extra,omitempty"`
+	DisabledPluginIDs *[]string `json:"disabledPluginIds,omitempty"`
+	CWD               *string   `json:"cwd,omitempty"`
+	ApprovalPolicy    *string   `json:"approvalPolicy,omitempty"`
+	ApprovalsReviewer *string   `json:"approvalsReviewer,omitempty"`
+	// RequestedApprovalsReviewer records the explicit choice separately from
+	// the effective value (Rust #59272). Direct settings updates leave it unset.
+	RequestedApprovalsReviewer *string                    `json:"requestedApprovalsReviewer,omitempty"`
+	SandboxPolicy              *string                    `json:"sandboxPolicy,omitempty"`
+	Permissions                *string                    `json:"permissions,omitempty"`
+	Model                      *string                    `json:"model,omitempty"`
+	ServiceTier                *ThreadExtraOptionalString `json:"serviceTier,omitempty"`
+	Effort                     *string                    `json:"effort,omitempty"`
+	Summary                    *string                    `json:"summary,omitempty"`
+	CollaborationMode          map[string]any             `json:"collaborationMode,omitempty"`
+	MultiAgentMode             *string                    `json:"multiAgentMode,omitempty"`
+	Personality                *string                    `json:"personality,omitempty"`
+	PersonalitySet             bool                       `json:"-"`
+	RuntimeWorkspaceRoots      []string                   `json:"runtimeWorkspaceRoots,omitempty"`
+	Extra                      map[string]string          `json:"extra,omitempty"`
 }
 
 func (p *SettingsUpdateParams) UnmarshalJSON(data []byte) error {
@@ -388,24 +391,28 @@ type SettingsUpdateResponse struct{}
 type Settings struct {
 	// DisabledPluginIDs is the saved per-thread selection. It does not yet
 	// filter plugin capabilities (Rust #44905).
-	DisabledPluginIDs       []string       `json:"disabledPluginIds"`
-	CWD                     string         `json:"cwd"`
-	ApprovalPolicy          string         `json:"approvalPolicy"`
-	ApprovalsReviewer       string         `json:"approvalsReviewer"`
-	SandboxPolicy           string         `json:"sandboxPolicy"`
-	ActivePermissionProfile *string        `json:"activePermissionProfile,omitempty"`
-	Model                   string         `json:"model"`
-	ModelProvider           string         `json:"modelProvider"`
-	ServiceTier             *string        `json:"serviceTier"`
-	Effort                  *string        `json:"effort,omitempty"`
-	Summary                 *string        `json:"summary,omitempty"`
-	CollaborationMode       map[string]any `json:"collaborationMode,omitempty"`
-	MultiAgentMode          string         `json:"multiAgentMode"`
-	Personality             *string        `json:"personality,omitempty"`
-	PersonalitySet          bool           `json:"-"`
-	InstructionSources      []string       `json:"instructionSources,omitempty"`
-	InstructionSourcesSet   bool           `json:"-"`
-	RuntimeWorkspaceRoots   []string       `json:"runtimeWorkspaceRoots,omitempty"`
+	DisabledPluginIDs []string `json:"disabledPluginIds"`
+	CWD               string   `json:"cwd"`
+	ApprovalPolicy    string   `json:"approvalPolicy"`
+	// ApprovalsReviewer is the effective reviewer after managed requirements.
+	ApprovalsReviewer string `json:"approvalsReviewer"`
+	// RequestedApprovalsReviewer keeps the explicit selection so a resume can
+	// restore it once a requirement is removed (Rust #59272).
+	RequestedApprovalsReviewer string         `json:"requestedApprovalsReviewer,omitempty"`
+	SandboxPolicy              string         `json:"sandboxPolicy"`
+	ActivePermissionProfile    *string        `json:"activePermissionProfile,omitempty"`
+	Model                      string         `json:"model"`
+	ModelProvider              string         `json:"modelProvider"`
+	ServiceTier                *string        `json:"serviceTier"`
+	Effort                     *string        `json:"effort,omitempty"`
+	Summary                    *string        `json:"summary,omitempty"`
+	CollaborationMode          map[string]any `json:"collaborationMode,omitempty"`
+	MultiAgentMode             string         `json:"multiAgentMode"`
+	Personality                *string        `json:"personality,omitempty"`
+	PersonalitySet             bool           `json:"-"`
+	InstructionSources         []string       `json:"instructionSources,omitempty"`
+	InstructionSourcesSet      bool           `json:"-"`
+	RuntimeWorkspaceRoots      []string       `json:"runtimeWorkspaceRoots,omitempty"`
 }
 
 func (s *Settings) MarshalJSON() ([]byte, error) {
@@ -413,37 +420,39 @@ func (s *Settings) MarshalJSON() ([]byte, error) {
 		return []byte("null"), nil
 	}
 	return json.Marshal(struct {
-		DisabledPluginIDs       []string       `json:"disabledPluginIds"`
-		CWD                     string         `json:"cwd"`
-		ApprovalPolicy          any            `json:"approvalPolicy"`
-		ApprovalsReviewer       string         `json:"approvalsReviewer"`
-		SandboxPolicy           any            `json:"sandboxPolicy"`
-		ActivePermissionProfile any            `json:"activePermissionProfile"`
-		Model                   string         `json:"model"`
-		ModelProvider           string         `json:"modelProvider"`
-		ServiceTier             *string        `json:"serviceTier"`
-		Effort                  *string        `json:"effort"`
-		Summary                 *string        `json:"summary"`
-		CollaborationMode       map[string]any `json:"collaborationMode"`
-		Personality             *string        `json:"personality"`
-		InstructionSources      []string       `json:"instructionSources"`
-		RuntimeWorkspaceRoots   []string       `json:"runtimeWorkspaceRoots"`
+		DisabledPluginIDs          []string       `json:"disabledPluginIds"`
+		CWD                        string         `json:"cwd"`
+		ApprovalPolicy             any            `json:"approvalPolicy"`
+		ApprovalsReviewer          string         `json:"approvalsReviewer"`
+		RequestedApprovalsReviewer string         `json:"requestedApprovalsReviewer,omitempty"`
+		SandboxPolicy              any            `json:"sandboxPolicy"`
+		ActivePermissionProfile    any            `json:"activePermissionProfile"`
+		Model                      string         `json:"model"`
+		ModelProvider              string         `json:"modelProvider"`
+		ServiceTier                *string        `json:"serviceTier"`
+		Effort                     *string        `json:"effort"`
+		Summary                    *string        `json:"summary"`
+		CollaborationMode          map[string]any `json:"collaborationMode"`
+		Personality                *string        `json:"personality"`
+		InstructionSources         []string       `json:"instructionSources"`
+		RuntimeWorkspaceRoots      []string       `json:"runtimeWorkspaceRoots"`
 	}{
-		DisabledPluginIDs:       append([]string{}, s.DisabledPluginIDs...),
-		CWD:                     s.CWD,
-		ApprovalPolicy:          threadSettingsApprovalPolicy(s.ApprovalPolicy),
-		ApprovalsReviewer:       threadSettingsApprovalsReviewer(s.ApprovalsReviewer),
-		SandboxPolicy:           threadSettingsSandboxPolicy(s.SandboxPolicy),
-		ActivePermissionProfile: threadSettingsActivePermissionProfile(s.ActivePermissionProfile),
-		Model:                   s.Model,
-		ModelProvider:           s.ModelProvider,
-		ServiceTier:             cloneString(s.ServiceTier),
-		Effort:                  cloneString(s.Effort),
-		Summary:                 cloneString(s.Summary),
-		CollaborationMode:       threadSettingsCollaborationMode(s),
-		Personality:             cloneString(s.Personality),
-		InstructionSources:      append([]string(nil), s.InstructionSources...),
-		RuntimeWorkspaceRoots:   append([]string(nil), s.RuntimeWorkspaceRoots...),
+		DisabledPluginIDs:          append([]string{}, s.DisabledPluginIDs...),
+		CWD:                        s.CWD,
+		ApprovalPolicy:             threadSettingsApprovalPolicy(s.ApprovalPolicy),
+		ApprovalsReviewer:          threadSettingsApprovalsReviewer(s.ApprovalsReviewer),
+		RequestedApprovalsReviewer: threadSettingsApprovalsReviewer(s.RequestedApprovalsReviewer),
+		SandboxPolicy:              threadSettingsSandboxPolicy(s.SandboxPolicy),
+		ActivePermissionProfile:    threadSettingsActivePermissionProfile(s.ActivePermissionProfile),
+		Model:                      s.Model,
+		ModelProvider:              s.ModelProvider,
+		ServiceTier:                cloneString(s.ServiceTier),
+		Effort:                     cloneString(s.Effort),
+		Summary:                    cloneString(s.Summary),
+		CollaborationMode:          threadSettingsCollaborationMode(s),
+		Personality:                cloneString(s.Personality),
+		InstructionSources:         append([]string(nil), s.InstructionSources...),
+		RuntimeWorkspaceRoots:      append([]string(nil), s.RuntimeWorkspaceRoots...),
 	})
 }
 
@@ -902,6 +911,10 @@ func (s *ThreadExtraService) UpdateSettingsWithCommit(params *SettingsUpdatePara
 	}
 	if params.ApprovalsReviewer != nil {
 		settings.ApprovalsReviewer = *params.ApprovalsReviewer
+		settings.RequestedApprovalsReviewer = *params.ApprovalsReviewer
+	}
+	if params.RequestedApprovalsReviewer != nil {
+		settings.RequestedApprovalsReviewer = *params.RequestedApprovalsReviewer
 	}
 	if params.SandboxPolicy != nil {
 		settings.SandboxPolicy = *params.SandboxPolicy

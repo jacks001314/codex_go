@@ -768,16 +768,20 @@ func (r *Recorder) AppendThreadSettingsAppliedWithWorkspaceRoots(threadID, appro
 // resumed or forked thread restore the permissions the thread acknowledged
 // instead of a stale TurnContext (Rust #57227).
 type ThreadSettingsApplied struct {
-	ApprovalPolicy          string
-	ApprovalsReviewer       string
-	PermissionProfile       json.RawMessage
-	ActivePermissionProfile json.RawMessage
-	CWD                     string
-	ServiceTier             *string
-	ReasoningSummary        *string
-	Personality             *string
-	CollaborationMode       json.RawMessage
-	RuntimeWorkspaceRoots   *[]string
+	ApprovalPolicy string
+	// ApprovalsReviewer is the effective reviewer after managed requirements;
+	// RequestedApprovalsReviewer keeps the explicit choice so removing a
+	// requirement can restore it on resume (Rust #59272).
+	ApprovalsReviewer          string
+	RequestedApprovalsReviewer *string
+	PermissionProfile          json.RawMessage
+	ActivePermissionProfile    json.RawMessage
+	CWD                        string
+	ServiceTier                *string
+	ReasoningSummary           *string
+	Personality                *string
+	CollaborationMode          json.RawMessage
+	RuntimeWorkspaceRoots      *[]string
 }
 
 // AppendThreadSettingsAppliedSnapshot persists a full thread-owned settings
@@ -786,6 +790,12 @@ type ThreadSettingsApplied struct {
 func (r *Recorder) AppendThreadSettingsAppliedSnapshot(threadID string, settings ThreadSettingsApplied, now time.Time) error {
 	approvalPolicy := strings.TrimSpace(settings.ApprovalPolicy)
 	approvalsReviewer := strings.TrimSpace(settings.ApprovalsReviewer)
+	var requestedApprovalsReviewer *string
+	if settings.RequestedApprovalsReviewer != nil {
+		if value := strings.TrimSpace(*settings.RequestedApprovalsReviewer); value != "" {
+			requestedApprovalsReviewer = &value
+		}
+	}
 	threadID = strings.TrimSpace(threadID)
 	cwd := strings.TrimSpace(settings.CWD)
 	collaborationMode := append(json.RawMessage(nil), settings.CollaborationMode...)
@@ -812,42 +822,45 @@ func (r *Recorder) AppendThreadSettingsAppliedSnapshot(threadID string, settings
 		Type           string `json:"type"`
 		ThreadID       string `json:"thread_id,omitempty"`
 		ThreadSettings struct {
-			ApprovalPolicy          string          `json:"approval_policy"`
-			ApprovalsReviewer       string          `json:"approvals_reviewer,omitempty"`
-			PermissionProfile       json.RawMessage `json:"permission_profile,omitempty"`
-			ActivePermissionProfile json.RawMessage `json:"active_permission_profile,omitempty"`
-			CWD                     string          `json:"cwd,omitempty"`
-			ServiceTier             *string         `json:"service_tier,omitempty"`
-			ReasoningSummary        *string         `json:"reasoning_summary,omitempty"`
-			Personality             *string         `json:"personality,omitempty"`
-			CollaborationMode       json.RawMessage `json:"collaboration_mode,omitempty"`
-			RuntimeWorkspaceRoots   *[]string       `json:"runtime_workspace_roots,omitempty"`
+			ApprovalPolicy             string          `json:"approval_policy"`
+			ApprovalsReviewer          string          `json:"approvals_reviewer,omitempty"`
+			RequestedApprovalsReviewer *string         `json:"requested_approvals_reviewer,omitempty"`
+			PermissionProfile          json.RawMessage `json:"permission_profile,omitempty"`
+			ActivePermissionProfile    json.RawMessage `json:"active_permission_profile,omitempty"`
+			CWD                        string          `json:"cwd,omitempty"`
+			ServiceTier                *string         `json:"service_tier,omitempty"`
+			ReasoningSummary           *string         `json:"reasoning_summary,omitempty"`
+			Personality                *string         `json:"personality,omitempty"`
+			CollaborationMode          json.RawMessage `json:"collaboration_mode,omitempty"`
+			RuntimeWorkspaceRoots      *[]string       `json:"runtime_workspace_roots,omitempty"`
 		} `json:"thread_settings"`
 	}{
 		Type:     "thread_settings_applied",
 		ThreadID: threadID,
 		ThreadSettings: struct {
-			ApprovalPolicy          string          `json:"approval_policy"`
-			ApprovalsReviewer       string          `json:"approvals_reviewer,omitempty"`
-			PermissionProfile       json.RawMessage `json:"permission_profile,omitempty"`
-			ActivePermissionProfile json.RawMessage `json:"active_permission_profile,omitempty"`
-			CWD                     string          `json:"cwd,omitempty"`
-			ServiceTier             *string         `json:"service_tier,omitempty"`
-			ReasoningSummary        *string         `json:"reasoning_summary,omitempty"`
-			Personality             *string         `json:"personality,omitempty"`
-			CollaborationMode       json.RawMessage `json:"collaboration_mode,omitempty"`
-			RuntimeWorkspaceRoots   *[]string       `json:"runtime_workspace_roots,omitempty"`
+			ApprovalPolicy             string          `json:"approval_policy"`
+			ApprovalsReviewer          string          `json:"approvals_reviewer,omitempty"`
+			RequestedApprovalsReviewer *string         `json:"requested_approvals_reviewer,omitempty"`
+			PermissionProfile          json.RawMessage `json:"permission_profile,omitempty"`
+			ActivePermissionProfile    json.RawMessage `json:"active_permission_profile,omitempty"`
+			CWD                        string          `json:"cwd,omitempty"`
+			ServiceTier                *string         `json:"service_tier,omitempty"`
+			ReasoningSummary           *string         `json:"reasoning_summary,omitempty"`
+			Personality                *string         `json:"personality,omitempty"`
+			CollaborationMode          json.RawMessage `json:"collaboration_mode,omitempty"`
+			RuntimeWorkspaceRoots      *[]string       `json:"runtime_workspace_roots,omitempty"`
 		}{
-			ApprovalPolicy:          approvalPolicy,
-			ApprovalsReviewer:       approvalsReviewer,
-			PermissionProfile:       permissionProfile,
-			ActivePermissionProfile: activePermissionProfile,
-			CWD:                     cwd,
-			ServiceTier:             serviceTier,
-			ReasoningSummary:        reasoningSummary,
-			Personality:             personality,
-			CollaborationMode:       collaborationMode,
-			RuntimeWorkspaceRoots:   roots,
+			ApprovalPolicy:             approvalPolicy,
+			ApprovalsReviewer:          approvalsReviewer,
+			RequestedApprovalsReviewer: requestedApprovalsReviewer,
+			PermissionProfile:          permissionProfile,
+			ActivePermissionProfile:    activePermissionProfile,
+			CWD:                        cwd,
+			ServiceTier:                serviceTier,
+			ReasoningSummary:           reasoningSummary,
+			Personality:                personality,
+			CollaborationMode:          collaborationMode,
+			RuntimeWorkspaceRoots:      roots,
 		},
 	})
 	if err != nil {
