@@ -787,6 +787,71 @@ type ModelAccessPrograms struct {
 	Cyber []CyberAccessProgram `json:"cyber"`
 }
 
+// SavedDaybreakChoice is the user's saved Daybreak preference resolved against
+// the selected model's advertised programs (Rust #59192).
+type SavedDaybreakChoice int
+
+const (
+	SavedDaybreakChoiceUnset SavedDaybreakChoice = iota
+	SavedDaybreakChoiceOn
+	SavedDaybreakChoiceOff
+)
+
+// SavedDaybreakChoiceFrom converts a saved optional preference into the
+// three-state choice Rust carries.
+func SavedDaybreakChoiceFrom(enabled *bool) SavedDaybreakChoice {
+	if enabled == nil {
+		return SavedDaybreakChoiceUnset
+	}
+	if *enabled {
+		return SavedDaybreakChoiceOn
+	}
+	return SavedDaybreakChoiceOff
+}
+
+// Daybreak selects the preferred advertised Daybreak program, blue before red.
+func (m *ModelAccessPrograms) Daybreak() *CyberAccessProgram {
+	if m == nil {
+		return nil
+	}
+	for _, want := range []CyberAccessProgram{CyberAccessProgramDaybreakBlue, CyberAccessProgramDaybreakRed} {
+		for i := range m.Cyber {
+			if m.Cyber[i] == want {
+				program := m.Cyber[i]
+				return &program
+			}
+		}
+	}
+	return nil
+}
+
+// Standard selects the advertised standard program.
+func (m *ModelAccessPrograms) Standard() *CyberAccessProgram {
+	if m == nil {
+		return nil
+	}
+	for i := range m.Cyber {
+		if m.Cyber[i] == CyberAccessProgramStandard {
+			program := m.Cyber[i]
+			return &program
+		}
+	}
+	return nil
+}
+
+// SelectSaved returns only an advertised program for explicit saved intent.
+// Unset and unsupported choices stay omitted, including On without Daybreak.
+func (m *ModelAccessPrograms) SelectSaved(choice SavedDaybreakChoice) *CyberAccessProgram {
+	switch choice {
+	case SavedDaybreakChoiceOn:
+		return m.Daybreak()
+	case SavedDaybreakChoiceOff:
+		return m.Standard()
+	default:
+		return nil
+	}
+}
+
 // UnmarshalJSON ignores unknown cyber program names so a newer server catalog
 // does not prevent older clients from loading it (Rust #44893).
 func (m *ModelAccessPrograms) UnmarshalJSON(data []byte) error {
