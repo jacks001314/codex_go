@@ -364,23 +364,29 @@ func (h *messageBoardHost) Notify(ctx context.Context, recipient string, post ag
 	if err != nil {
 		return "", err
 	}
-	active := h.router.activeRuntimeTurnSnapshot(recipient)
-	if active == nil {
-		return agentboard.NotificationSkippedInactive, nil
-	}
 	notice := agentboard.NewAgentMessageBoardNotification(post)
 	item := runtimeAgentCommunicationInputItem(string(post.Author), string(recipientPath), notice.Body(), false, true)
 	// Rust #48982 (`LocalBoardHost::notify` ->
 	// InputQueue::deliver_mailbox_communication_to_current_turn): the
-	// notification is stored only while the running turn still accepts mailbox
-	// delivery. A turn that already emitted its final answer is skipped instead
-	// of being handed mail that would reopen the answer.
-	accepted, err := h.router.requireSteerMailbox().EnqueueIfAcceptingDelivery(&turn.SteerEnqueueParams{
-		ThreadID: recipient, TurnID: active.ID, InputItems: []any{item},
-	})
-	if err != nil || !accepted {
-		return agentboard.NotificationSkippedInactive, nil
+	// notification is stored while the running turn still accepts mailbox
+	// delivery. A turn that already emitted its final answer must not have the
+	// answer reopened by late mail.
+	if active := h.router.activeRuntimeTurnSnapshot(recipient); active != nil {
+		accepted, err := h.router.requireSteerMailbox().EnqueueIfAcceptingDelivery(&turn.SteerEnqueueParams{
+			ThreadID: recipient, TurnID: active.ID, InputItems: []any{item},
+		})
+		if err != nil {
+			return "", err
+		}
+		if accepted {
+			return agentboard.NotificationAccepted, nil
+		}
 	}
+	// Rust #59139: idle recipients and turns that already finalized their
+	// answer receive the notice through the ordinary agent mailbox with
+	// trigger_turn disabled, so it can be delivered in a later turn instead of
+	// being dropped.
+	h.router.enqueueRuntimeAgentMessage(recipient, item)
 	return agentboard.NotificationAccepted, nil
 }
 

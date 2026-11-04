@@ -245,9 +245,10 @@ func TestMessageBoardHostResolvesTreeMembershipLikeRust(t *testing.T) {
 	}
 }
 
-// An idle recipient is skipped and nothing is queued for a later turn; a
-// recipient from another tree is a hard error (Rust's notify contract).
-func TestMessageBoardHostNotifyOnlyReachesRunningRecipientsLikeRust(t *testing.T) {
+// Rust #59139: an idle recipient receives the notice through the ordinary
+// agent mailbox for a later turn; a recipient from another tree is a hard
+// error (Rust's notify contract).
+func TestMessageBoardHostNotifyQueuesForIdleRecipientsLikeRust(t *testing.T) {
 	home := t.TempDir()
 	store := session.NewStore(filepath.Join(home, "sessions"))
 	rootID := "root-thread"
@@ -274,11 +275,15 @@ func TestMessageBoardHostNotifyOnlyReachesRunningRecipientsLikeRust(t *testing.T
 	if err != nil {
 		t.Fatalf("Notify(idle) error = %v", err)
 	}
-	if delivery != agentboard.NotificationSkippedInactive {
-		t.Fatalf("Notify(idle) = %q, want skipped", delivery)
+	if delivery != agentboard.NotificationAccepted {
+		t.Fatalf("Notify(idle) = %q, want accepted", delivery)
 	}
 	if pending := router.requireSteerMailbox().HasPending(childID, "turn-1"); pending {
-		t.Fatal("skipped notification queued input for a later turn")
+		t.Fatal("idle notification entered a current-turn mailbox")
+	}
+	queued := router.drainRuntimeAgentMessages(childID)
+	if len(queued) != 1 || !strings.Contains(fmt.Sprint(queued[0]), "hello") {
+		t.Fatalf("queued idle notification = %#v, want one notice for a later turn", queued)
 	}
 
 	// A recipient outside this tree is rejected rather than silently skipped.

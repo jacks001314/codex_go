@@ -159,7 +159,7 @@ func (a *notificationAfterFinalAgent) Run(_ context.Context, request *model.Agen
 	}, nil
 }
 
-func TestMessageBoardNotificationAfterFinalIsSkippedLikeRust(t *testing.T) {
+func TestMessageBoardNotificationAfterFinalQueuesForLaterTurnLikeRust(t *testing.T) {
 	home := t.TempDir()
 	runner := &notificationAfterFinalAgent{}
 	mailbox := turn.NewSteerMailbox()
@@ -201,9 +201,14 @@ func TestMessageBoardNotificationAfterFinalIsSkippedLikeRust(t *testing.T) {
 		t.Fatalf("Notify error = %v", deliverErr)
 	}
 	if markerInFollowUp {
-		t.Fatalf("the closed-delivery notification was queued and reached the next sampling request (deliveries = %v)", deliveries)
+		t.Fatalf("the queued notification reopened the finalized answer (deliveries = %v)", deliveries)
 	}
-	if len(deliveries) != 1 || deliveries[0] != agentboard.NotificationSkippedInactive {
-		t.Fatalf("deliveries = %v, want [skipped] once the turn's answer was finalized", deliveries)
+	if len(deliveries) != 1 || deliveries[0] != agentboard.NotificationAccepted {
+		t.Fatalf("deliveries = %v, want [accepted]", deliveries)
+	}
+	queued := router.drainRuntimeAgentMessages("root-thread")
+	rawQueued, _ := json.Marshal(queued)
+	if len(queued) != 1 || !strings.Contains(string(rawQueued), notificationDeliveryMarker) {
+		t.Fatalf("queued notification = %#v, want one notice for a later turn", queued)
 	}
 }
