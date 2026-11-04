@@ -20231,6 +20231,7 @@ func (r *RuntimeRouter) skillMetadataForMCPRequirements(threadID string, cfg *co
 		if cwd := turnCWD(params); cwd != "" {
 			listParams.CWDs = []string{cwd}
 		}
+		listParams.FileSystem = r.skillFileSystemForTurn(cfg, params)
 	}
 	// Rust #40631: host and plugin skill discovery is skipped when the feature
 	// is enabled and no extension requires host-owned skills.

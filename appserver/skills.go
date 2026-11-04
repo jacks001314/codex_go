@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	pathpkg "path"
@@ -42,6 +43,9 @@ type SkillsListParams struct {
 	CWDs        []string      `json:"cwds,omitempty"`
 	ForceReload bool          `json:"forceReload,omitempty"`
 	Config      []ConfigEntry `json:"-"`
+	// FileSystem carries a turn-scoped accessor for repository roots (Rust
+	// #59279). Host, plugin and system roots keep host authority.
+	FileSystem SkillFileSystem `json:"-"`
 }
 
 type SkillsListEntry struct {
@@ -251,10 +255,14 @@ type SkillsRoot struct {
 	RemotePluginID string
 	PluginRoot     string
 	CWDs           []string
+	// FileSystem overrides the service accessor for this root (Rust #59279
+	// HostSkillRoot::repository uses the turn authority, host roots keep host).
+	FileSystem SkillFileSystem
 }
 
 type SkillsServiceOptions struct {
 	Roots                []string
+	FileSystem           SkillFileSystem
 	RootSpecs            []SkillsRoot
 	Config               *config.ConfigService
 	CodexHome            string
@@ -337,6 +345,7 @@ type skillMetadataPolicy struct {
 
 type SkillsService struct {
 	mu                sync.Mutex
+	fs                SkillFileSystem
 	roots             []SkillsRoot
 	extraRoots        []string
 	config            []ConfigEntry
@@ -392,6 +401,7 @@ func NewSkillsServiceWithOptions(options *SkillsServiceOptions) *SkillsService {
 		watchInterval = 10 * time.Second
 	}
 	return &SkillsService{
+		fs:            skillFileSystemOrHost(options.FileSystem),
 		roots:         dedupeSkillsRoots(roots),
 		configService: options.Config,
 		cache:         map[string]skillsCacheEntry{},
@@ -431,15 +441,12 @@ func (s *SkillsService) List(params *SkillsListParams) (*SkillsListResponse, err
 		}
 		bundledEnabled[cwd] = s.bundledSkillsEnabledForCWD(cwd)
 	}
-	key := strings.Join(params.CWDs, "\x00") + "\x00" + strings.Join(s.extraRoots, "\x00") + "\x00" + configFingerprint
+	key := strings.Join(params.CWDs, "\x00") + "\x00" + strings.Join(s.extraRoots, "\x00") + "\x00" + configFingerprint + "\x00fs:" + s.fs.Key()
+	if params.FileSystem != nil {
+		key += "\x00turnfs:" + params.FileSystem.Key()
+	}
 	for _, cwd := range params.CWDs {
 		key += "\x00bundled:" + strconv.FormatBool(bundledEnabled[strings.TrimSpace(cwd)])
-	}
-	if !params.ForceReload {
-		if cached, ok := s.cache[key]; ok {
-			s.touchCacheKeyLocked(key)
-			return skillsListResponse(cloneSkills(cached.skills), cloneSkillErrors(cached.errors), params.CWDs, bundledEnabled), nil
-		}
 	}
 	roots := cloneSkillsRoots(s.roots)
 	roots = append(roots, skillsRootsFromPaths(s.extraRoots, "user")...)
@@ -448,10 +455,16 @@ func (s *SkillsService) List(params *SkillsListParams) (*SkillsListResponse, err
 		return skillScopeRank(roots[i].Scope) < skillScopeRank(roots[j].Scope)
 	})
 	roots = dedupeSkillsRoots(roots)
+	if !params.ForceReload {
+		if cached, ok := s.cache[key]; ok {
+			s.touchCacheKeyLocked(key)
+			return skillsListResponse(cloneSkills(cached.skills), cloneSkillErrors(cached.errors), params.CWDs, bundledEnabled), nil
+		}
+	}
 	entries := make([]SkillsListEntry, 0)
 	skillErrors := make([]SkillErrorInfo, 0)
 	for rootOrder, root := range roots {
-		found, foundErrors, err := discover(root)
+		found, foundErrors, err := discover(root, s.fileSystemForRoot(root, params.FileSystem))
 		if err != nil {
 			return nil, err
 		}
@@ -577,6 +590,11 @@ func (s *SkillsService) registerWatchedRoots(roots []SkillsRoot) {
 		return
 	}
 	for _, root := range roots {
+		// Rust #59279: restricted accessors decline unsandboxed watches and
+		// fall back to live discovery on the next listing.
+		if !s.fileSystemForRoot(root, nil).WatchSupported() {
+			continue
+		}
 		path := strings.TrimSpace(root.Path)
 		scope := strings.TrimSpace(root.Scope)
 		if path == "" || strings.EqualFold(scope, "environment") || strings.EqualFold(scope, "plugin") || strings.EqualFold(scope, "system") {
@@ -774,7 +792,29 @@ func (s *SkillsService) applyConfigEntries(entries []SkillsListEntry, turnConfig
 	return applyConfig(entries, configEntries), nil
 }
 
-func discover(root SkillsRoot) ([]SkillsListEntry, []SkillErrorInfo, error) {
+// fileSystemForRoot keeps user, plugin and system roots under host authority
+// while repository/executor roots use the service accessor (Rust #59279).
+func (s *SkillsService) fileSystemForRoot(root SkillsRoot, override SkillFileSystem) SkillFileSystem {
+	if root.FileSystem != nil {
+		return root.FileSystem
+	}
+	switch strings.ToLower(strings.TrimSpace(root.Scope)) {
+	case "local", "repo", "repository", "executor", "project":
+		if override != nil {
+			return override
+		}
+		return skillFileSystemOrHost(s.fs)
+	default:
+		return HostSkillFileSystem{}
+	}
+}
+
+func discover(root SkillsRoot, override ...SkillFileSystem) ([]SkillsListEntry, []SkillErrorInfo, error) {
+	access := root.FileSystem
+	if len(override) > 0 && override[0] != nil {
+		access = override[0]
+	}
+	access = skillFileSystemOrHost(access)
 	root.Path = strings.TrimSpace(root.Path)
 	if root.Scope == "" {
 		root.Scope = "local"
@@ -783,15 +823,20 @@ func discover(root SkillsRoot) ([]SkillsListEntry, []SkillErrorInfo, error) {
 		return nil, nil, nil
 	}
 	rootPath := root.Path
-	info, err := os.Stat(rootPath)
+	info, err := access.Stat(rootPath)
 	if os.IsNotExist(err) {
 		return nil, nil, nil
 	}
 	if err != nil {
+		// Rust #59280: a root the captured permissions hide is reported as a
+		// warning and skipped, never read through another authority.
+		if errors.Is(err, fs.ErrPermission) {
+			return nil, []SkillErrorInfo{*skillParseErrorInfo(rootPath, root.Scope, "failed to read file: "+err.Error())}, nil
+		}
 		return nil, nil, err
 	}
 	if !info.IsDir() && filepath.Base(rootPath) == SkillFilename {
-		entry, skillErr, ok := entryFromPath(rootPath, root.Scope, root.PluginID, root.RemotePluginID, root.PluginRoot)
+		entry, skillErr, ok := entryFromPath(access, rootPath, root.Scope, root.PluginID, root.RemotePluginID, root.PluginRoot)
 		if skillErr != nil {
 			skillErr.ApplicableCWDs = append([]string(nil), root.CWDs...)
 			return nil, []SkillErrorInfo{*skillErr}, nil
@@ -809,11 +854,12 @@ func discover(root SkillsRoot) ([]SkillsListEntry, []SkillErrorInfo, error) {
 	if !info.IsDir() {
 		return nil, nil, nil
 	}
-	entries, skillErrors, err := walkSkillRoot(rootPath, root.Scope, root.PluginID, root.RemotePluginID, root.PluginRoot, root.CWDs)
+	entries, skillErrors, err := walkSkillRoot(access, rootPath, root.Scope, root.PluginID, root.RemotePluginID, root.PluginRoot, root.CWDs)
 	return entries, skillErrors, err
 }
 
 type skillRootWalker struct {
+	fs             SkillFileSystem
 	root           string
 	scope          string
 	pluginID       string
@@ -827,8 +873,9 @@ type skillRootWalker struct {
 	errors         []SkillErrorInfo
 }
 
-func walkSkillRoot(rootPath string, scope string, pluginID string, remotePluginID string, pluginRoot string, applicableCWDs []string) ([]SkillsListEntry, []SkillErrorInfo, error) {
+func walkSkillRoot(access SkillFileSystem, rootPath string, scope string, pluginID string, remotePluginID string, pluginRoot string, applicableCWDs []string) ([]SkillsListEntry, []SkillErrorInfo, error) {
 	walker := &skillRootWalker{
+		fs:             skillFileSystemOrHost(access),
 		root:           rootPath,
 		scope:          scope,
 		pluginID:       pluginID,
@@ -847,8 +894,17 @@ func walkSkillRoot(rootPath string, scope string, pluginID string, remotePluginI
 }
 
 func (w *skillRootWalker) walkDir(dir string, depth int) error {
-	children, err := os.ReadDir(dir)
+	children, err := w.fs.ReadDir(dir)
 	if err != nil {
+		if errors.Is(err, fs.ErrPermission) {
+			// A hidden subtree is skipped with a warning, exactly like a read
+			// failure of one skill file (Rust #59280).
+			if skillErr := skillParseErrorInfo(dir, w.scope, "failed to read file: "+err.Error()); skillErr != nil {
+				skillErr.ApplicableCWDs = append([]string(nil), w.applicableCWDs...)
+				w.errors = append(w.errors, *skillErr)
+			}
+			return nil
+		}
 		return err
 	}
 	sort.SliceStable(children, func(i int, j int) bool {
@@ -883,7 +939,7 @@ func (w *skillRootWalker) walkSymlink(path string, name string, parentDepth int)
 	if !w.followSymlinks || strings.HasPrefix(name, ".") {
 		return nil
 	}
-	info, err := os.Stat(path)
+	info, err := w.fs.Stat(path)
 	if err != nil || !info.IsDir() {
 		return nil
 	}
@@ -907,7 +963,7 @@ func (w *skillRootWalker) walkChildDir(path string, depth int) error {
 }
 
 func (w *skillRootWalker) addSkill(path string) {
-	entry, skillErr, ok := entryFromPath(path, w.scope, w.pluginID, w.remotePluginID, w.pluginRoot)
+	entry, skillErr, ok := entryFromPath(w.fs, path, w.scope, w.pluginID, w.remotePluginID, w.pluginRoot)
 	if skillErr != nil {
 		skillErr.ApplicableCWDs = append([]string(nil), w.applicableCWDs...)
 		w.errors = append(w.errors, *skillErr)
@@ -926,17 +982,17 @@ func (w *skillRootWalker) markSeen(path string) {
 
 func (w *skillRootWalker) dirIdentity(path string) string {
 	if w.followSymlinks {
-		if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		if resolved, err := w.fs.EvalSymlinks(path); err == nil {
 			return filepath.Clean(resolved)
 		}
 	}
 	return filepath.Clean(path)
 }
 
-func entryFromPath(path string, scope string, pluginID string, remotePluginID string, pluginRoot string) (SkillsListEntry, *SkillErrorInfo, bool) {
+func entryFromPath(access SkillFileSystem, path string, scope string, pluginID string, remotePluginID string, pluginRoot string) (SkillsListEntry, *SkillErrorInfo, bool) {
 	skillDir := filepath.Dir(path)
 	name := filepath.Base(skillDir)
-	data, err := os.ReadFile(path)
+	data, err := skillFileSystemOrHost(access).ReadFile(path)
 	if err != nil {
 		if skillErr := skillParseErrorInfo(path, scope, "failed to read file: "+err.Error()); skillErr != nil {
 			return SkillsListEntry{}, skillErr, false
@@ -959,7 +1015,7 @@ func entryFromPath(path string, scope string, pluginID string, remotePluginID st
 	// can advertise the path under the configured skill root while still
 	// selecting the canonical skill by identity.
 	entry.DiscoveryPath = filepath.ToSlash(filepath.Clean(path))
-	loadSkillMetadata(&entry, skillDir, pluginRoot)
+	loadSkillMetadata(skillFileSystemOrHost(access), &entry, skillDir, pluginRoot)
 	return entry, nil, true
 }
 
@@ -1209,13 +1265,13 @@ func firstLineFromText(text string) string {
 	return resolveSkillString(text, skillMaxDescriptionLen)
 }
 
-func loadSkillMetadata(entry *SkillsListEntry, skillDir string, pluginRoot string) {
+func loadSkillMetadata(access SkillFileSystem, entry *SkillsListEntry, skillDir string, pluginRoot string) {
 	metadataPath := filepath.Join(skillDir, SkillMetadataDir, SkillMetadataFilename)
-	info, err := os.Stat(metadataPath)
+	info, err := skillFileSystemOrHost(access).Stat(metadataPath)
 	if err != nil || info.IsDir() {
 		return
 	}
-	data, err := os.ReadFile(metadataPath)
+	data, err := skillFileSystemOrHost(access).ReadFile(metadataPath)
 	if err != nil {
 		return
 	}

@@ -11201,6 +11201,9 @@ func (r *RuntimeRouter) instructionsWithSkillsContextForTurn(ctx context.Context
 	if cwd := turnCWD(params); cwd != "" {
 		listParams.CWDs = []string{cwd}
 	}
+	// Rust #59279: repository roots read through the turn's captured
+	// filesystem permissions.
+	listParams.FileSystem = r.skillFileSystemForTurn(cfg, params)
 	// Rust #40631: skip_host_skill_discovery bypasses host and plugin skill
 	// discovery for turn setup. Go has no skill-invocation contributor registry,
 	// so no extension requires host-owned skills and the feature flag alone
@@ -11463,7 +11466,7 @@ func (r *RuntimeRouter) pluginSkillEntriesAndErrorsForRuntime(threadID string) (
 	entries := make([]SkillsListEntry, 0)
 	errors := make([]SkillErrorInfo, 0)
 	for _, root := range roots {
-		discovered, discoveredErrors, err := discover(SkillsRoot{Path: root.Root, Scope: "plugin", PluginID: root.PluginID, RemotePluginID: root.RemotePluginID, PluginRoot: filepath.Dir(root.Root)})
+		discovered, discoveredErrors, err := discover(SkillsRoot{Path: root.Root, Scope: "plugin", PluginID: root.PluginID, RemotePluginID: root.RemotePluginID, PluginRoot: filepath.Dir(root.Root)}, HostSkillFileSystem{})
 		if err != nil {
 			return nil, nil, err
 		}
@@ -11712,7 +11715,7 @@ func (r *RuntimeRouter) selectedCapabilitySkillEntriesForRuntimeSnapshotWithSand
 			if sandboxContext != nil {
 				cached.entries, cached.warnings, cached.err = discoverLocalEnvironmentSkillsWithSandbox(ctx, selected.Location.Path, sandboxContext)
 			} else {
-				cached.entries, discoveredErrors, cached.err = discover(SkillsRoot{Path: path, Scope: "environment"})
+				cached.entries, discoveredErrors, cached.err = discover(SkillsRoot{Path: path, Scope: "environment"}, HostSkillFileSystem{})
 			}
 			if cached.err != nil {
 				cached.partial = true
