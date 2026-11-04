@@ -21109,7 +21109,7 @@ func isThreadMethod(method Method) bool {
 		MethodThreadSampleCancel,
 		MethodThreadQueueAdd, MethodThreadQueueList, MethodThreadQueueUpdate,
 		MethodThreadQueueDelete, MethodThreadQueueReorder, MethodThreadQueueStart,
-		MethodThreadInjectItems:
+		MethodThreadInjectItems, MethodThreadReadStateUpdate, MethodThreadSearchOccurrences:
 		return true
 	default:
 		return false

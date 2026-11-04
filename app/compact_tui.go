@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 
 	bubbletea "github.com/charmbracelet/bubbletea"
@@ -123,15 +124,33 @@ func runInteractiveRemoteCompact(ctx context.Context, root *cli.RootOptions, end
 		messages <- codextea.CompactStartResultMsg{Err: err}
 		return
 	}
-	id, err := client.sendRequest(ctx, appserver.MethodThreadCompactStart, appserver.ThreadCompactStartParams{ThreadID: strings.TrimSpace(threadID)})
-	if err != nil {
-		messages <- codextea.CompactStartResultMsg{Err: err}
-		return
-	}
-	var response appserver.ThreadCompactStartResponse
-	if err := client.waitResponse(ctx, id, &response); err != nil {
-		messages <- codextea.CompactStartResultMsg{Err: err}
-		return
+	if err := remoteCompactStart(ctx, client, threadID); err != nil {
+		// The daemon evicts an idle thread runtime; the persisted thread must be
+		// resumed before manual compaction can run against it.
+		if !remoteTUIThreadSettingsThreadMissing(err, threadID) {
+			messages <- codextea.CompactStartResultMsg{Err: err}
+			return
+		}
+		var resumed appserver.ThreadResumeResponse
+		if resumeErr := remoteSessionRequest(ctx, client, appserver.MethodThreadResume, appserver.ThreadResumeParams{
+			ThreadID: strings.TrimSpace(threadID),
+		}, &resumed); resumeErr != nil {
+			messages <- codextea.CompactStartResultMsg{Err: fmt.Errorf("failed to resume unloaded thread before compacting: %w", resumeErr)}
+			return
+		}
+		if err := remoteCompactStart(ctx, client, threadID); err != nil {
+			messages <- codextea.CompactStartResultMsg{Err: err}
+			return
+		}
 	}
 	messages <- codextea.CompactStartResultMsg{}
+}
+
+func remoteCompactStart(ctx context.Context, client *remoteAppServerTUIClient, threadID string) error {
+	id, err := client.sendRequest(ctx, appserver.MethodThreadCompactStart, appserver.ThreadCompactStartParams{ThreadID: strings.TrimSpace(threadID)})
+	if err != nil {
+		return err
+	}
+	var response appserver.ThreadCompactStartResponse
+	return client.waitResponse(ctx, id, &response)
 }
