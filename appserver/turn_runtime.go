@@ -8698,7 +8698,7 @@ func (r *RuntimeRouter) appTurnConfigWithOptions(ctx context.Context, threadID s
 			realtimeStateSessionItems = append(realtimeStateSessionItems, persisted)
 		}
 	}
-	instructions, additionalInputItems := r.instructionsAndInputItemsWithAdditionalContext(threadID, instructions, params.AdditionalContext, cfg)
+	instructions, additionalInputItems, additionalContextItems := r.instructionsAndInputItemsWithAdditionalContext(threadID, instructions, params.AdditionalContext, cfg)
 	clockNoticeSessionItems := []session.Item{}
 	if items, sessions, err := r.turnEnvironmentContextInputItemForTurn(ctx, threadID, turnID, params, cfg); err != nil {
 		return nil, err
@@ -8790,7 +8790,8 @@ func (r *RuntimeRouter) appTurnConfigWithOptions(ctx context.Context, threadID s
 		return nil, err
 	}
 	instructions = r.instructionsWithMemoryToolContext(cfg, instructions)
-	sessionItems := append([]session.Item(nil), currentTimeSessionItems...)
+	sessionItems := additionalContextSessionItems(turnID, additionalContextItems, time.UnixMilli(startedAtMS).UTC())
+	sessionItems = append(sessionItems, currentTimeSessionItems...)
 	sessionItems = append(sessionItems, realtimeStateSessionItems...)
 	sessionItems = append(sessionItems, permissionsSessionItems...)
 	sessionItems = append(sessionItems, clockNoticeSessionItems...)
@@ -10356,13 +10357,13 @@ func modelInputTextMessage(role string, text string) map[string]any {
 	}
 }
 
-func (r *RuntimeRouter) instructionsAndInputItemsWithAdditionalContext(threadID string, instructions string, values map[string]turn.AdditionalContextEntry, cfg *config.Config) (string, []any) {
-	developer, inputItems := r.mergeAdditionalContext(threadID, values, additionalContextToolOutputsEnabled(cfg))
+func (r *RuntimeRouter) instructionsAndInputItemsWithAdditionalContext(threadID string, instructions string, values map[string]turn.AdditionalContextEntry, cfg *config.Config) (string, []any, []additionalContextToolOutput) {
+	developer, inputItems, persisted := r.mergeAdditionalContext(threadID, values, additionalContextToolOutputsEnabled(cfg))
 	if len(developer) > 0 {
 		sections := append(developer, strings.TrimSpace(instructions))
 		instructions = strings.Join(nonEmpty(sections), "\n\n")
 	}
-	return strings.TrimSpace(instructions), inputItems
+	return strings.TrimSpace(instructions), inputItems, persisted
 }
 
 func (r *RuntimeRouter) recommendedPluginInputItems(threadID string, cfg *config.Config, modelInfo *model.ModelInfo) []any {
@@ -13518,13 +13519,13 @@ func sessionItemFromTurnSteer(params *turn.TurnSteerParams) (session.Item, bool)
 	}, true
 }
 
-func (r *RuntimeRouter) inputItemsFromTurnSteer(params *turn.TurnSteerParams, noticeEnabled bool) []any {
+func (r *RuntimeRouter) inputItemsFromTurnSteer(params *turn.TurnSteerParams, noticeEnabled bool) ([]any, []additionalContextToolOutput) {
 	if params == nil {
-		return nil
+		return nil, nil
 	}
 	// Rust #57279: context items (including agent-namespaced tool outputs) are
 	// emitted before the steered user input.
-	developer, additionalItems := r.mergeAdditionalContext(params.ThreadID, params.AdditionalContext, r.turnSteerAdditionalContextToolOutputs(params.ThreadID))
+	developer, additionalItems, persisted := r.mergeAdditionalContext(params.ThreadID, params.AdditionalContext, r.turnSteerAdditionalContextToolOutputs(params.ThreadID))
 	items := append([]any{}, additionalItems...)
 	if instructions := strings.Join(nonEmpty(developer), "\n\n"); instructions != "" {
 		items = append(items, map[string]any{
@@ -13543,7 +13544,7 @@ func (r *RuntimeRouter) inputItemsFromTurnSteer(params *turn.TurnSteerParams, no
 			items = append(items, prepared[1])
 		}
 	}
-	return items
+	return items, persisted
 }
 
 // turnSteerAdditionalContextToolOutputs reports whether a steer should deliver

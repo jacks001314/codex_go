@@ -51,6 +51,23 @@ func AppendSessionItems(recorder *Recorder, items []session.Item, now time.Time)
 	}
 	for i := range items {
 		if recorder.IsPaginated() {
+			// Additional-context tool outputs keep their ResponseItem shape and
+			// provenance instead of being rewritten as DynamicToolCall items.
+			if payload, metadata, ok := additionalContextToolOutputRolloutItem(&items[i]); ok {
+				createdAt := itemTime(items[i].CreatedAt, now)
+				line := Line{
+					Type:         "response_item",
+					Timestamp:    createdAt.UTC().Format(time.RFC3339Nano),
+					Item:         payload,
+					ItemMetadata: metadata,
+					ItemID:       items[i].ID,
+					TurnID:       sessionItemTurnID(&items[i], i),
+				}
+				if err := recorder.AppendLine(line); err != nil {
+					return fmt.Errorf("append paginated additional-context item %d (%s): %w", i, items[i].ID, err)
+				}
+				continue
+			}
 			// Harness-authored configuration updates have no core TurnItem
 			// variant; persist them as trusted response_item lines (Rust #43110).
 			if payload, metadata, ok := configurationUpdateRolloutItem(&items[i]); ok {

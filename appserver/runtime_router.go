@@ -9562,6 +9562,8 @@ func (r *RuntimeRouter) handleTurnSteer(request *Request) (*turn.TurnSteerRespon
 	// Rust #41924: an accepted steer seals the live transcript before its user
 	// message is recorded.
 	r.sealRealtimeUserInput(params.ThreadID, params.Prompt)
+	noticeEnabled := r.imageResizeNoticeEnabledForSteer(&params)
+	inputItems, additionalContexts := r.inputItemsFromTurnSteer(&params, noticeEnabled)
 	if r.hasRuntimeThreadStore() {
 		recordedParams := params
 		if filtered, rejected := turnUserInputsWithoutUploadedAudio(params.Input); rejected {
@@ -9569,29 +9571,36 @@ func (r *RuntimeRouter) handleTurnSteer(request *Request) (*turn.TurnSteerRespon
 			// steered text stays recorded before the turn fails.
 			recordedParams.Input = filtered
 		}
+		items := additionalContextSessionItems(params.ExpectedTurnID, additionalContexts, createdAt)
+		var userItem session.Item
 		if item, ok := sessionItemFromTurnSteer(&recordedParams); ok {
-			if _, err := r.runtimeAppendItem(session.ThreadID(params.ThreadID), item); err != nil {
+			userItem = item
+			items = append(items, item)
+		}
+		if len(items) > 0 {
+			if _, err := r.runtimeAppendItems(session.ThreadID(params.ThreadID), items); err != nil {
 				return nil, err
 			}
-			_ = r.appendRuntimeRollout(params.ThreadID, []session.Item{item}, item.CreatedAt)
-			threadItem := BuildThreadItem(item)
+			_ = r.appendRuntimeRollout(params.ThreadID, items, createdAt)
+		}
+		if userItem.ID != "" {
+			threadItem := BuildThreadItem(userItem)
 			r.notify(NotificationItemStarted, &ItemStartedNotification{
 				Item:        threadItemPayload(threadItem),
 				ThreadID:    params.ThreadID,
 				TurnID:      params.ExpectedTurnID,
-				StartedAtMS: item.CreatedAt.UTC().UnixMilli(),
+				StartedAtMS: userItem.CreatedAt.UTC().UnixMilli(),
 			})
 			r.notify(NotificationItemCompleted, &ItemCompletedNotification{
 				Item:          threadItemPayload(threadItem),
 				ThreadID:      params.ThreadID,
 				TurnID:        params.ExpectedTurnID,
-				CompletedAtMS: item.CreatedAt.UTC().UnixMilli(),
+				CompletedAtMS: userItem.CreatedAt.UTC().UnixMilli(),
 			})
 		}
 	}
-	noticeEnabled := r.imageResizeNoticeEnabledForSteer(&params)
 	steerMetadata := r.steerClientMetadata(&params)
-	if inputItems := r.inputItemsFromTurnSteer(&params, noticeEnabled); len(inputItems) > 0 {
+	if len(inputItems) > 0 {
 		if len(steerMetadata) > 0 {
 			// Rust merges a steer's responsesapi_client_metadata into the turn's
 			// metadata state, so the turn's later sampling steps keep reporting

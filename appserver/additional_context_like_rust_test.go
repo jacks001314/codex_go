@@ -133,8 +133,9 @@ func TestRuntimeRouterAdditionalContextToolOutputsLikeRust(t *testing.T) {
 		"automation_info": {Value: "run one", Kind: turn.AdditionalContextApplication},
 		"browser_info":    {Value: "tab one", Kind: turn.AdditionalContextUntrusted},
 	}, "same context")
-	if got := len(additionalContextToolOutputs(t, second.InputItems)); got != 0 {
-		t.Fatalf("unchanged context was re-emitted: %d tool outputs", got)
+	outputs = additionalContextToolOutputs(t, second.InputItems)
+	if len(outputs) != 1 || outputs[0]["output"] != "tab one" {
+		t.Fatalf("unchanged context was re-emitted or its history was lost: %#v", outputs)
 	}
 	if strings.Contains(second.Instructions, "run one") {
 		t.Fatalf("unchanged application context was re-emitted: %q", second.Instructions)
@@ -144,7 +145,7 @@ func TestRuntimeRouterAdditionalContextToolOutputsLikeRust(t *testing.T) {
 		"browser_info": {Value: "tab two", Kind: turn.AdditionalContextUntrusted},
 	}, "changed context")
 	outputs = additionalContextToolOutputs(t, third.InputItems)
-	if len(outputs) != 1 || outputs[0]["output"] != "tab two" {
+	if len(outputs) != 2 || outputs[len(outputs)-1]["output"] != "tab two" {
 		t.Fatalf("changed context output = %#v", outputs)
 	}
 
@@ -152,10 +153,10 @@ func TestRuntimeRouterAdditionalContextToolOutputsLikeRust(t *testing.T) {
 		"browser_info": {Value: "tab two", Kind: turn.AdditionalContextUntrusted, Name: &narrow},
 	}, "renamed context")
 	outputs = additionalContextToolOutputs(t, fourth.InputItems)
-	if len(outputs) != 1 {
-		t.Fatalf("renamed context was not emitted: %#v", outputs)
+	if len(outputs) != 3 {
+		t.Fatalf("renamed context was not appended to history: %#v", outputs)
 	}
-	if got := outputs[0]; got["name"] != "browser" || got["output"] != "tab two" {
+	if got := outputs[len(outputs)-1]; got["name"] != "browser" || got["output"] != "tab two" {
 		t.Fatalf("renamed context output = %#v", got)
 	}
 }
@@ -228,18 +229,19 @@ func TestRuntimeRouterAdditionalContextToolOutputTruncationLikeRust(t *testing.T
 
 	changedMiddle := longValue[:10_000] + "c" + longValue[10_001:]
 	second := runTurn(3, changedMiddle, "changed middle")
-	if got := len(additionalContextToolOutputs(t, second.InputItems)); got != 0 {
-		t.Fatalf("truncated-middle change was re-emitted: %d tool outputs", got)
+	secondOutputs := additionalContextToolOutputs(t, second.InputItems)
+	if len(secondOutputs) != 1 || secondOutputs[0]["output"] != outputs[0]["output"] {
+		t.Fatalf("truncated-middle change was re-emitted or history was lost: %#v", secondOutputs)
 	}
 
 	changedHead := strings.Replace(longValue, "browser-head", "browser-view", 1)
 	third := runTurn(4, changedHead, "changed head")
 	outputs = additionalContextToolOutputs(t, third.InputItems)
-	if len(outputs) != 1 {
-		t.Fatalf("changed head was not emitted: %#v", outputs)
+	if len(outputs) != 2 {
+		t.Fatalf("changed head was not appended to history: %#v", outputs)
 	}
-	if !strings.HasPrefix(outputs[0]["output"].(string), "browser-view") {
-		t.Fatalf("changed head output = %q", outputs[0]["output"])
+	if !strings.HasPrefix(outputs[len(outputs)-1]["output"].(string), "browser-view") {
+		t.Fatalf("changed head output = %q", outputs[len(outputs)-1]["output"])
 	}
 }
 
@@ -291,7 +293,7 @@ func TestRuntimeRouterTurnSteerAdditionalContextPrecedesUserInputLikeRust(t *tes
 					"browser_info": {Value: "tab one", Kind: turn.AdditionalContextUntrusted},
 				},
 			}
-			items := router.inputItemsFromTurnSteer(params, true)
+			items, _ := router.inputItemsFromTurnSteer(params, true)
 			if len(items) != 2 {
 				t.Fatalf("steer items = %#v", items)
 			}

@@ -5,8 +5,10 @@ import (
 	"strings"
 	"time"
 
+	"codex_go/features"
 	"codex_go/rollout"
 	"codex_go/session"
+	"codex_go/turn"
 )
 
 type guardianReviewHistoryState struct {
@@ -360,6 +362,56 @@ func (r *RuntimeRouter) guardianReviewHistoryCheckpointWire(threadID string, now
 	return encoded
 }
 
+// guardianIncludesAdditionalContext resolves the current thread setting each
+// time review history is read, so resumed sessions apply the new policy to
+// checkpoints restored from an earlier process.
+func (r *RuntimeRouter) guardianIncludesAdditionalContext(threadID string) bool {
+	const key = "guardian_include_additional_context"
+	if r != nil {
+		cfg, err := r.effectiveConfigForTurn(&turn.TurnStartParams{ThreadID: threadID})
+		if err == nil && cfg != nil {
+			return features.Enabled(cfg.FeatureSettings(), key)
+		}
+	}
+	return features.Enabled(nil, key)
+}
+
+func guardianAdditionalContextToolOutput(item session.Item) bool {
+	for _, values := range []map[string]any{item.Data, item.Metadata} {
+		if len(values) == 0 {
+			continue
+		}
+		var metadata map[string]any
+		switch raw := values["harness_metadata"].(type) {
+		case map[string]any:
+			metadata = raw
+		case json.RawMessage:
+			_ = json.Unmarshal(raw, &metadata)
+		case string:
+			_ = json.Unmarshal([]byte(raw), &metadata)
+		}
+		value, _ := metadata["additional_context_tool_output"].(bool)
+		if value {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *RuntimeRouter) filterGuardianReviewHistoryItems(threadID string, items []session.Item) []session.Item {
+	if r.guardianIncludesAdditionalContext(threadID) {
+		return items
+	}
+	filtered := make([]session.Item, 0, len(items))
+	for _, item := range items {
+		if guardianAdditionalContextToolOutput(item) {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	return filtered
+}
+
 // guardianReviewHistoryItems returns the original conversation evidence used
 // by Guardian. The rollout is consulted when a process has not captured the
 // live transcript yet; current record items fill any gaps that paginated
@@ -373,7 +425,7 @@ func (r *RuntimeRouter) guardianReviewHistoryItems(threadID string, record *sess
 		if state := r.guardianReviewHistory[threadID]; state != nil {
 			items := append([]session.Item(nil), state.items...)
 			r.guardianReviewHistoryMu.Unlock()
-			return items
+			return r.filterGuardianReviewHistoryItems(threadID, items)
 		}
 		r.guardianReviewHistoryMu.Unlock()
 	}
@@ -382,7 +434,7 @@ func (r *RuntimeRouter) guardianReviewHistoryItems(threadID string, record *sess
 	if r != nil && r.services.ThreadRouter != nil {
 		path := r.services.ThreadRouter.threadRolloutPath(record)
 		if strings.TrimSpace(path) == "" {
-			return seed
+			return r.filterGuardianReviewHistoryItems(threadID, seed)
 		}
 		lines, _, err := rollout.Load(path)
 		if err == nil {

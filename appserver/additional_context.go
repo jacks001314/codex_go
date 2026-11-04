@@ -1,13 +1,17 @@
 package appserver
 
 import (
+	"encoding/json"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	"codex_go/config"
 	contextfrag "codex_go/context"
 	"codex_go/features"
 	"codex_go/metrics"
+	"codex_go/session"
 	"codex_go/telemetry"
 	"codex_go/turn"
 	"codex_go/utils"
@@ -38,6 +42,14 @@ type storedAdditionalContext struct {
 	value      string
 }
 
+// additionalContextToolOutput is a rendered untrusted context item that must
+// also be recorded as reviewable conversation history.
+type additionalContextToolOutput struct {
+	key   string
+	name  string
+	value string
+}
+
 func (s storedAdditionalContext) equal(other storedAdditionalContext) bool {
 	if s.toolOutput != other.toolOutput {
 		return false
@@ -52,7 +64,7 @@ func (s storedAdditionalContext) equal(other storedAdditionalContext) bool {
 // the thread's previous values and returns the developer fragments and the user
 // / tool-output items that still need to reach the model (Rust
 // state::additional_context::AdditionalContextStore::merge).
-func (r *RuntimeRouter) mergeAdditionalContext(threadID string, values map[string]turn.AdditionalContextEntry, toolOutputs bool) ([]string, []any) {
+func (r *RuntimeRouter) mergeAdditionalContext(threadID string, values map[string]turn.AdditionalContextEntry, toolOutputs bool) ([]string, []any, []additionalContextToolOutput) {
 	next := make(map[string]storedAdditionalContext, len(values))
 	for key, entry := range values {
 		// Rust #58144: every submitted entry is measured, including entries
@@ -89,17 +101,16 @@ func (r *RuntimeRouter) mergeAdditionalContext(threadID string, values map[strin
 
 	developer := []string{}
 	items := []any{}
+	persisted := []additionalContextToolOutput{}
 	for _, key := range sortedStoredAdditionalContextKeys(next) {
 		stored := next[key]
 		if prior, ok := previous[key]; ok && prior.equal(stored) {
 			continue
 		}
 		if stored.toolOutput {
-			items = append(items, map[string]any{
-				"type":      "function_call_output",
-				"name":      stored.name,
-				"namespace": additionalContextToolNamespace,
-				"output":    stored.value,
+			items = append(items, additionalContextToolOutputModelItem(stored.name, stored.value))
+			persisted = append(persisted, additionalContextToolOutput{
+				key: key, name: stored.name, value: stored.value,
 			})
 			continue
 		}
@@ -124,7 +135,47 @@ func (r *RuntimeRouter) mergeAdditionalContext(threadID string, values map[strin
 			}},
 		})
 	}
-	return developer, items
+	return developer, items, persisted
+}
+
+func additionalContextToolOutputModelItem(name string, value string) map[string]any {
+	return map[string]any{
+		"type":      "function_call_output",
+		"name":      name,
+		"namespace": additionalContextToolNamespace,
+		"output":    value,
+	}
+}
+
+// additionalContextSessionItems records client-supplied tool-output context in
+// conversation history. The provenance stays in harness metadata so the item
+// replayed to the acting model keeps exactly the tool-output payload it saw.
+func additionalContextSessionItems(turnID string, outputs []additionalContextToolOutput, createdAt time.Time) []session.Item {
+	if len(outputs) == 0 {
+		return nil
+	}
+	harnessMetadata, _ := json.Marshal(map[string]any{"additional_context_tool_output": true})
+	items := make([]session.Item, 0, len(outputs))
+	for index, output := range outputs {
+		payload, _ := json.Marshal(additionalContextToolOutputModelItem(output.name, output.value))
+		items = append(items, session.Item{
+			ID:        "additional-context-" + safeIdentifier(turnID) + "-" + safeIdentifier(output.key) + "-" + strconv.Itoa(index+1),
+			Type:      "function_call_output",
+			Name:      output.name,
+			Namespace: additionalContextToolNamespace,
+			Text:      output.value,
+			CreatedAt: createdAt,
+			Data: map[string]any{
+				"name":             output.name,
+				"namespace":        additionalContextToolNamespace,
+				"output":           output.value,
+				"harness_metadata": json.RawMessage(harnessMetadata),
+			},
+			Metadata: appTurnMetadata(turnID, nil),
+			Raw:      payload,
+		})
+	}
+	return items
 }
 
 // forgetAdditionalContext drops a thread's deduplication state when its
