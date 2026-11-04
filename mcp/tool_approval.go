@@ -208,8 +208,13 @@ type MCPToolApprovalRequest struct {
 	// ApprovalAction::McpToolCall's environment_id), used to scope the
 	// PermissionRequest hook to that environment's managed hooks.
 	EnvironmentID string
-	ConnectorID   string
-	ConnectorName string
+	// PreparedPermissionSource is the immutable permission authority captured
+	// when this MCP call was prepared. Guardian reviews use it instead of the
+	// live server owner, whose permissions may have changed since the model step
+	// started (Rust #59028). It is never serialized into the approval action.
+	PreparedPermissionSource *MCPServerPermissionSource
+	ConnectorID              string
+	ConnectorName            string
 	// ConnectorDescription is the connector's own description from the tool
 	// metadata (Rust McpToolApprovalMetadata::connector_description).
 	ConnectorDescription string
@@ -639,7 +644,14 @@ func (e *ToolExecutor) approveToolCallIfNeeded(ctx context.Context, callID strin
 		mode = NormalizeAppToolApprovalMode(policy.Approval)
 	}
 	var profile *sandbox.PermissionProfile
-	if options.PermissionProfileForServer != nil {
+	var preparedPermissionSource *MCPServerPermissionSource
+	if e.binding != nil {
+		if source, ok := e.binding.PermissionSourceForServer(server); ok {
+			preparedPermissionSource = &source
+			profile = source.Profile
+		}
+	}
+	if profile == nil && options.PermissionProfileForServer != nil {
 		profile = options.PermissionProfileForServer(server)
 	}
 	if MCPPermissionPromptAutoApproved(options.ApprovalPolicy, profile, mode) {
@@ -654,26 +666,31 @@ func (e *ToolExecutor) approveToolCallIfNeeded(ctx context.Context, callID strin
 		key := sessionKey
 		sessionKeyPtr = &key
 	}
+	environmentID := e.mcpService().serverEnvironmentID(server)
+	if preparedPermissionSource != nil && strings.TrimSpace(preparedPermissionSource.EnvironmentID) != "" {
+		environmentID = strings.TrimSpace(preparedPermissionSource.EnvironmentID)
+	}
 	outcome, err := options.Handler.ApproveMCPToolCall(ctx, &MCPToolApprovalRequest{
-		Server:                  server,
-		Tool:                    toolName,
-		Arguments:               arguments,
-		Annotations:             annotations,
-		EnvironmentID:           e.mcpService().serverEnvironmentID(server),
-		ConnectorID:             e.connectorID,
-		ConnectorName:           e.connectorName,
-		ConnectorDescription:    e.connectorDescription,
-		ToolTitle:               e.toolInfo.Title,
-		ToolDescription:         e.toolInfo.Description,
-		ApprovalMode:            mode,
-		ThreadID:                e.threadID,
-		TurnID:                  e.turnID,
-		CallID:                  callID,
-		HookToolName:            e.hookToolName(),
-		SessionKey:              sessionKeyPtr,
-		LinkID:                  strings.TrimSpace(linkID),
-		AllowSessionRemember:    allowSessionRemember,
-		AllowPersistentApproval: allowSessionRemember,
+		Server:                   server,
+		Tool:                     toolName,
+		Arguments:                arguments,
+		Annotations:              annotations,
+		EnvironmentID:            environmentID,
+		PreparedPermissionSource: preparedPermissionSource,
+		ConnectorID:              e.connectorID,
+		ConnectorName:            e.connectorName,
+		ConnectorDescription:     e.connectorDescription,
+		ToolTitle:                e.toolInfo.Title,
+		ToolDescription:          e.toolInfo.Description,
+		ApprovalMode:             mode,
+		ThreadID:                 e.threadID,
+		TurnID:                   e.turnID,
+		CallID:                   callID,
+		HookToolName:             e.hookToolName(),
+		SessionKey:               sessionKeyPtr,
+		LinkID:                   strings.TrimSpace(linkID),
+		AllowSessionRemember:     allowSessionRemember,
+		AllowPersistentApproval:  allowSessionRemember,
 	})
 	if err != nil {
 		return nil, err

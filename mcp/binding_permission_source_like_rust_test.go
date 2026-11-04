@@ -65,6 +65,27 @@ func TestPreparedBindingKeepsPermissionSourceAcrossRefreshLikeRust(t *testing.T)
 	if got := binding.permissionSources["remote"].CWD; got != oldEnvironmentCWD {
 		t.Fatalf("prepared remote cwd changed to %q", got)
 	}
+
+	// Approval code reads the captured source through the binding API; it must
+	// still describe the environment that prepared the call after the refresh.
+	prepared, ok := binding.PermissionSourceForServer("remote")
+	if !ok || prepared.Thread || prepared.EnvironmentID != "remote" ||
+		prepared.CWD != oldEnvironmentCWD || prepared.Profile == nil || !prepared.Profile.Disabled {
+		t.Fatalf("binding permission source = %#v, want the prepared remote owner", prepared)
+	}
+	prepared.CWD = newEnvironmentCWD
+	prepared.Profile.Disabled = false
+	again, ok := binding.PermissionSourceForServer("remote")
+	if !ok || again.CWD != oldEnvironmentCWD || again.Profile == nil || !again.Profile.Disabled {
+		t.Fatalf("mutating the returned source changed the binding: %#v", again)
+	}
+	if _, ok := binding.PermissionSourceForServer("missing"); ok {
+		t.Fatal("missing server resolved a permission source")
+	}
+	var nilBinding *Binding
+	if _, ok := nilBinding.PermissionSourceForServer("remote"); ok {
+		t.Fatal("nil binding resolved a permission source")
+	}
 }
 
 func effectiveMPCProfileIsReadOnly(profile *sandbox.PermissionProfile) bool {

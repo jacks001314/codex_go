@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"codex_go/mcp"
 	"codex_go/model"
 	"codex_go/sandbox"
 	"codex_go/state"
@@ -234,5 +235,67 @@ func TestGuardianReviewsTargetEnvironmentAndReusesPrefixLikeRust(t *testing.T) {
 	}
 	if !strings.Contains(primary, `"environment_id": "primary"`) || !strings.Contains(primary, `"tool": "apply_patch"`) {
 		t.Fatalf("primary review missing the planned action environment:\n%s", primary)
+	}
+}
+
+type guardianOriginCapturingReviewer struct {
+	origin *guardianReviewOrigin
+	action state.Action
+}
+
+func (r *guardianOriginCapturingReviewer) Review(ctx context.Context, _ string, _ string, _ string, action state.Action) (state.ReviewDecision, string, error) {
+	r.origin = guardianReviewOriginFromContext(ctx)
+	r.action = action
+	return state.DecisionApproved, "", nil
+}
+
+// Rust #59028: an MCP call's Guardian review uses the permission source captured
+// when the call was prepared, while a thread-owned server keeps the reviewed
+// turn's evidence. The sandbox context stays out of the serialized action.
+func TestGuardianMCPReviewUsesPreparedPermissionSourceLikeRust(t *testing.T) {
+	reviewer := &guardianOriginCapturingReviewer{}
+	router := NewRuntimeRouter(RuntimeServices{GuardianReviewer: reviewer})
+	defer router.Close()
+	handler := &appserverMCPToolApprovalHandler{router: router, threadID: "thread-1", turnID: "turn-1"}
+	profile := sandbox.FullAccessPermissionProfile()
+	request := &mcp.MCPToolApprovalRequest{
+		Server:        "remote",
+		Tool:          "query",
+		CallID:        "call-1",
+		Arguments:     map[string]any{"q": "secret"},
+		EnvironmentID: "remote",
+		PreparedPermissionSource: &mcp.MCPServerPermissionSource{
+			Profile:       &profile,
+			CWD:           "/remote",
+			EnvironmentID: "remote",
+		},
+	}
+	decision, askUser, err := handler.reviewViaGuardian(context.Background(), request)
+	if err != nil || askUser || decision != mcp.MCPToolApprovalApprove {
+		t.Fatalf("reviewViaGuardian() = %v askUser=%v err=%v, want approved", decision, askUser, err)
+	}
+	if reviewer.origin == nil {
+		t.Fatal("Guardian review lost the prepared permission source")
+	}
+	if reviewer.origin.PermissionProfile == nil || !reviewer.origin.PermissionProfile.Disabled ||
+		reviewer.origin.CWD != "/remote" || reviewer.origin.EnvironmentID != "remote" {
+		t.Fatalf("Guardian origin = %#v, want the prepared remote owner", reviewer.origin)
+	}
+	if reviewer.action.Type != "mcp_tool_call" || reviewer.action.Server != "remote" || reviewer.action.ToolName != "query" {
+		t.Fatalf("serialized action = %#v, want the MCP call only", reviewer.action)
+	}
+
+	threadProfile := sandbox.ReadOnlyPermissionProfile()
+	request.PreparedPermissionSource = &mcp.MCPServerPermissionSource{
+		Profile: &threadProfile,
+		CWD:     "/thread",
+		Thread:  true,
+	}
+	decision, askUser, err = handler.reviewViaGuardian(context.Background(), request)
+	if err != nil || askUser || decision != mcp.MCPToolApprovalApprove {
+		t.Fatalf("thread reviewViaGuardian() = %v askUser=%v err=%v, want approved", decision, askUser, err)
+	}
+	if reviewer.origin != nil {
+		t.Fatalf("thread-owned MCP call overrode turn evidence with %#v", reviewer.origin)
 	}
 }

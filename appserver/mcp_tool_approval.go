@@ -350,6 +350,18 @@ func (h *appserverMCPToolApprovalHandler) reviewViaGuardian(ctx context.Context,
 	if len(action.Extra) == 0 {
 		action.Extra = nil
 	}
+	if source := request.PreparedPermissionSource; source != nil && !source.Thread && source.Profile != nil {
+		// Rust #59028: an environment-owned MCP call carries the sandbox context
+		// captured when the call was prepared, so Guardian reviews the same
+		// denied paths and globs that scope the invocation. Thread-owned servers
+		// continue to use the reviewed turn's permission evidence.
+		ctx = withGuardianReviewOrigin(ctx, &guardianReviewOrigin{
+			CWD:                    source.CWD,
+			EnvironmentID:          source.EnvironmentID,
+			PermissionProfile:      source.Profile,
+			PermissionEvidenceOnly: true,
+		})
+	}
 	outcome := h.router.reviewApprovalWithGuardian(ctx, h.threadID, h.turnID, strings.TrimSpace(request.CallID), action)
 	switch {
 	case outcome.Abort:

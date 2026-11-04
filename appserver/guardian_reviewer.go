@@ -104,6 +104,11 @@ type guardianReviewOrigin struct {
 	CWD               string
 	EnvironmentID     string
 	PermissionProfile *sandbox.PermissionProfile
+	// PermissionEvidenceOnly keeps the review's prepared environments and
+	// settings while replacing only the permission evidence. Rust #59028's MCP
+	// path passes a prepared sandbox context for evidence and leaves the rest of
+	// the Guardian review context intact.
+	PermissionEvidenceOnly bool
 }
 
 type guardianReviewOriginKey struct{}
@@ -128,7 +133,7 @@ func guardianReviewOriginFromContext(ctx context.Context) *guardianReviewOrigin 
 // background execution in the environments it started with even when the
 // current turn selects different ones.
 func guardianReviewPlanWithOrigin(plan guardianReviewPlan, origin *guardianReviewOrigin) guardianReviewPlan {
-	if origin == nil {
+	if origin == nil || origin.PermissionEvidenceOnly {
 		return plan
 	}
 	if plan.PrepareInput.ParentConfig != nil {

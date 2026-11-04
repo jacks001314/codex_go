@@ -122,6 +122,21 @@ func (b *Binding) Generation() uint64 {
 	}
 	return b.generation
 }
+
+// PermissionSourceForServer returns the permission authority captured by this
+// binding for server. Approval code must use this source instead of the live
+// service: an environment owner may publish new permissions after the model
+// step prepared the call (Rust #59028).
+func (b *Binding) PermissionSourceForServer(server string) (MCPServerPermissionSource, bool) {
+	if b == nil {
+		return MCPServerPermissionSource{}, false
+	}
+	source, ok := b.permissionSources[strings.TrimSpace(server)]
+	if !ok {
+		return MCPServerPermissionSource{}, false
+	}
+	return cloneMCPServerPermissionSource(source), true
+}
 func (b *Binding) CallTool(params *MCPToolCallParams) (*MCPToolCallResponse, error) {
 	if b == nil || b.service == nil {
 		return nil, invalidMCPRequest("MCP binding is unavailable")
