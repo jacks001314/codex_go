@@ -131,13 +131,23 @@ type CloudClientOptions struct {
 	BaseURL    string
 	Headers    http.Header
 	HTTPClient HTTPDoer
+	// RuntimeAuth resolves runtime request credentials for each attempt when
+	// runtime agent instances are enabled (Rust #59564/#59572). Other
+	// destinations keep the client's static headers.
+	RuntimeAuth CloudRuntimeAuth
+}
+
+// CloudRuntimeAuth supplies per-request credential headers for a destination.
+type CloudRuntimeAuth interface {
+	HeadersForDestination(ctx context.Context, destination string) (http.Header, error)
 }
 
 type CloudClient struct {
-	baseURL    string
-	pathStyle  cloudPathStyle
-	headers    http.Header
-	httpClient HTTPDoer
+	baseURL     string
+	pathStyle   cloudPathStyle
+	headers     http.Header
+	httpClient  HTTPDoer
+	runtimeAuth CloudRuntimeAuth
 }
 
 type cloudPathStyle string
@@ -165,11 +175,19 @@ func NewCloudClient(options *CloudClientOptions) *CloudClient {
 		headers.Set("User-Agent", "codex-go")
 	}
 	return &CloudClient{
-		baseURL:    normalized,
-		pathStyle:  cloudPathStyleFromBaseURL(normalized),
-		headers:    headers,
-		httpClient: httpClient,
+		baseURL:     normalized,
+		pathStyle:   cloudPathStyleFromBaseURL(normalized),
+		headers:     headers,
+		httpClient:  httpClient,
+		runtimeAuth: optionsRuntimeAuth(options),
 	}
+}
+
+func optionsRuntimeAuth(options *CloudClientOptions) CloudRuntimeAuth {
+	if options == nil || options.RuntimeAuth == nil {
+		return nil
+	}
+	return options.RuntimeAuth
 }
 
 // NewCloudClientWithoutRedirects creates a cloud task client that never
@@ -667,6 +685,21 @@ func (c *CloudClient) doJSONWithHeaders(ctx context.Context, method string, path
 		request.Header.Del(key)
 		for _, value := range values {
 			request.Header.Add(key, value)
+		}
+	}
+	// Rust #59572: credentials are resolved for every request attempt, so a
+	// refresh or a credential switch applies to the next call without
+	// rebuilding the client.
+	if c.runtimeAuth != nil {
+		runtimeHeaders, err := c.runtimeAuth.HeadersForDestination(ctx, target.String())
+		if err != nil {
+			return err
+		}
+		for key, values := range runtimeHeaders {
+			request.Header.Del(key)
+			for _, value := range values {
+				request.Header.Add(key, value)
+			}
 		}
 	}
 	if body != nil {
