@@ -1,6 +1,7 @@
 package appserver
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -8,6 +9,22 @@ import (
 	"codex_go/agent"
 	"codex_go/session"
 )
+
+// AgentRef identifies one agent in a host-owned agent session.
+type AgentRef struct {
+	ThreadID session.ThreadID
+	Path     agent.AgentPath
+}
+
+// AgentSessionReader is a read-only view of host-owned agent membership.
+// Implementations must not register, load, or restore agents. Children returns
+// direct children only, loaded children first and alphabetical by path within
+// each group (Rust AgentSessionReader, #59531).
+type AgentSessionReader interface {
+	Root(context.Context) (AgentRef, error)
+	Parent(context.Context) (*AgentRef, error)
+	Children(context.Context) ([]AgentRef, error)
+}
 
 const (
 	// Rust #43491: the multi-agent v2 environment roster is capped at eight
@@ -28,7 +45,7 @@ type environmentSubagentChild struct {
 // AgentControl::format_environment_context_subagents. Multi-agent v2 builds the
 // roster from every registered direct child (including threads that are not
 // loaded), while earlier versions keep the original loaded-children listing.
-func (r *RuntimeRouter) environmentContextSubagentLines(threadID string) []string {
+func (r *RuntimeRouter) environmentContextSubagentLines(ctx context.Context, threadID string) []string {
 	threadID = strings.TrimSpace(threadID)
 	if r == nil || threadID == "" {
 		return nil
@@ -39,6 +56,17 @@ func (r *RuntimeRouter) environmentContextSubagentLines(threadID string) []strin
 	}
 	children := r.openThreadSpawnChildren(threadID)
 	if knownRuntimeMultiAgentVersion(record.Metadata.MultiAgentVersion) == agent.VersionV2 {
+		if r.services.AgentSessionReader != nil {
+			agents, err := r.services.AgentSessionReader.Children(ctx)
+			if err != nil {
+				return nil
+			}
+			paths := make([]agent.AgentPath, 0, len(agents))
+			for _, agent := range agents {
+				paths = append(paths, agent.Path)
+			}
+			return environmentContextSubagentLinesFromPaths(paths)
+		}
 		return environmentContextSubagentLinesV2(record, children)
 	}
 	lines := make([]string, 0, len(children))
@@ -95,6 +123,28 @@ func environmentContextSubagentLinesV2(record *session.Record, children []enviro
 			renderedBytes += lineBytes
 			lines = append(lines, line)
 		}
+	}
+	return lines
+}
+
+func environmentContextSubagentLinesFromPaths(paths []agent.AgentPath) []string {
+	lines := make([]string, 0, len(paths))
+	renderedBytes := len("  <subagents>\n  </subagents>\n")
+	for _, path := range paths {
+		if len(lines) == maxEnvironmentSubagents {
+			break
+		}
+		path = agent.AgentPath(strings.TrimSpace(strings.ReplaceAll(string(path), "\\", "/")))
+		if path == "" {
+			continue
+		}
+		line := fmt.Sprintf("<agent name=\"%s\" />", path)
+		lineBytes := len("    \n") + len(line)
+		if renderedBytes+lineBytes > maxEnvironmentSubagentBytes {
+			continue
+		}
+		renderedBytes += lineBytes
+		lines = append(lines, line)
 	}
 	return lines
 }

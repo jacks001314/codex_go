@@ -128,6 +128,9 @@ type RuntimeServices struct {
 	AccountHTTP           chatgptapi.HTTPDoer
 	HTTPClient            model.HTTPDoer
 	SpawnGraph            agent.Store
+	// AgentSessionReader supplies host-owned V2 agent membership for environment
+	// context. Nil keeps controller ownership backed by SpawnGraph.
+	AgentSessionReader    AgentSessionReader
 	Analytics             telemetry.TurnEventSink
 	SkillShadowMetrics    SkillShadowMetricSink
 	SkillInjectionMetrics telemetry.CounterDurationSink

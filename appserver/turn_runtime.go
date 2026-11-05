@@ -7220,6 +7220,15 @@ func (r *RuntimeRouter) compactThreadWithHistory(ctx context.Context, params *ru
 	}
 	if replacementContext != nil && replacementContext.Record != nil {
 		record = replacementContext.Record
+		// Rust #59531: rendering the replacement context waits on the host-owned
+		// V2 roster read, and only then allocates the new window. Re-read the
+		// window's history after that wait so a concurrent history replacement
+		// invalidates a prepared compaction candidate instead of letting it
+		// install a stale prefix over the newer history.
+		if len(historyOverride) == 0 {
+			history = compactItemsFromSessionItems(record.Items)
+			request.History = history
+		}
 	}
 	hookCtx := r.compactHookContext(record, request)
 	initialContext, err := r.runPreCompactHooks(ctx, hookCtx)
@@ -7579,7 +7588,7 @@ func (r *RuntimeRouter) compactEnvironmentContext(ctx context.Context, record *s
 	if _, err := r.recordEnvironmentWorldState(record, currentDate, "", false, false); err != nil {
 		return nil, err
 	}
-	text := r.turnEnvironmentContextTextAtDateWithTime(r.environmentContextParams(request.ThreadID, params), current, localTimezoneName(), "", cfg.IncludeEnvironmentContextTime())
+	text := r.turnEnvironmentContextTextWithContext(ctx, r.environmentContextParams(request.ThreadID, params), current, localTimezoneName(), "", cfg.IncludeEnvironmentContextTime(), environmentWorldStateRemovals{})
 	return append(items, compact.Item{
 		ID: "environment-context-" + safeIdentifier(request.TurnID), Type: "message", Role: "user", Kind: "environment_context", Text: text, Created: created,
 	}), nil
@@ -9206,7 +9215,7 @@ func (r *RuntimeRouter) turnEnvironmentContextInputItemForTurn(ctx context.Conte
 			return nil, nil, err
 		}
 	}
-	text := r.turnEnvironmentContextText(params, current, localTimezoneName(), shellVersion, cfg.IncludeEnvironmentContextTime(), removals)
+	text := r.turnEnvironmentContextTextWithContext(ctx, params, current, localTimezoneName(), shellVersion, cfg.IncludeEnvironmentContextTime(), removals)
 	items := []any{}
 	sessionItems := []session.Item{}
 	if emitNotice {
@@ -9316,6 +9325,10 @@ func (r *RuntimeRouter) turnEnvironmentContextTextAtDateWithTime(params *turn.Tu
 // that were visible before and are gone now as `status="unavailable"` elements
 // (Rust EnvironmentsState::render_diff, #41232/#45825).
 func (r *RuntimeRouter) turnEnvironmentContextText(params *turn.TurnStartParams, date *time.Time, timezone string, shellVersion string, includeTime bool, removals environmentWorldStateRemovals) string {
+	return r.turnEnvironmentContextTextWithContext(context.Background(), params, date, timezone, shellVersion, includeTime, removals)
+}
+
+func (r *RuntimeRouter) turnEnvironmentContextTextWithContext(ctx context.Context, params *turn.TurnStartParams, date *time.Time, timezone string, shellVersion string, includeTime bool, removals environmentWorldStateRemovals) string {
 	environments := r.unifiedExecEnvironmentsForTurn(params)
 	defaultShellName := r.defaultEnvironmentShellName()
 	var b strings.Builder
@@ -9357,7 +9370,7 @@ func (r *RuntimeRouter) turnEnvironmentContextText(params *turn.TurnStartParams,
 		}
 		fmt.Fprintf(&b, "  <timezone>%s</timezone>\n", escapeEnvironmentXML(timezone))
 	}
-	if lines := r.environmentContextSubagentLines(strings.TrimSpace(params.ThreadID)); len(lines) > 0 {
+	if lines := r.environmentContextSubagentLines(ctx, strings.TrimSpace(params.ThreadID)); len(lines) > 0 {
 		b.WriteString("  <subagents>\n")
 		for _, line := range lines {
 			b.WriteString("    ")
