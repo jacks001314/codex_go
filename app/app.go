@@ -1068,6 +1068,31 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 		}
 		registrationBearerHeaders = headers
 	}
+	var chatGPTTokenAuth *auth.AuthDotJSON
+	stdinAfterToken := stdin
+	if opts.ChatGPTTokenStdin {
+		if err := validateExecServerCredentialHTTPSURL(baseURL, "ChatGPT token registry"); err != nil {
+			return err
+		}
+		tokenFrame, remaining, err := execserver.ReadChatGPTTokenFromReader(stdin)
+		if err != nil {
+			return err
+		}
+		snapshot, err := execServerChatGPTAuthFromToken(tokenFrame, opts.ChatGPTAccountID, opts.ChatGPTAccountIDSet)
+		if err != nil {
+			return err
+		}
+		chatGPTTokenAuth = snapshot
+		stdinAfterToken = remaining
+	}
+	var stdinClosed <-chan struct{}
+	configContext := ctx
+	configCancel := func() {}
+	if opts.ExitOnStdinClose && chatGPTTokenAuth != nil {
+		stdinClosed = monitorExecServerStdinClose(stdinAfterToken)
+		configContext, configCancel = execServerContextWithStdinClose(ctx, stdinClosed)
+	}
+	defer configCancel()
 	codexHome := auth.DefaultCodexHome()
 	bootstrapConfig, err := config.LoadEffectiveWithOptions(codexHome, &config.EffectiveOptions{
 		RawOverrides:         rootConfigOverrides,
@@ -1076,13 +1101,27 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 		ManagedConfigPath:    filepath.Join(codexHome, "managed_config.toml"),
 	})
 	if err != nil {
+		if execServerStdinClosed(stdinClosed) {
+			return nil
+		}
 		return err
+	}
+	if chatGPTTokenAuth != nil && !execServerChatGPTAuthAllowed(bootstrapConfig, chatGPTTokenAuth) {
+		return errors.New("ChatGPT authentication is not permitted for this account")
 	}
 	var cloudConfigBundle *config.CloudConfigLoader
 	var resolved *auth.ResolvedAuth
-	if !opts.ExecutorCredentialStdin && !opts.UseAgentIdentityAuth && !opts.AWSSigV4 && !opts.RegistrationBearerStdin {
+	if chatGPTTokenAuth != nil {
+		cloudConfigBundle, err = managedConfigBundleLoaderForSuppliedAuth(configContext, codexHome, bootstrapConfig, chatGPTTokenAuth)
+		if err != nil {
+			if execServerStdinClosed(stdinClosed) {
+				return nil
+			}
+			return err
+		}
+	} else if !opts.ExecutorCredentialStdin && !opts.UseAgentIdentityAuth && !opts.AWSSigV4 && !opts.RegistrationBearerStdin {
 		if bootstrapConfig.RequiresRemoteConfig() {
-			cloudConfigBundle, err = cloudConfigBundleLoaderForRun(ctx, codexHome, bootstrapConfig, nil)
+			cloudConfigBundle, err = cloudConfigBundleLoaderForRun(configContext, codexHome, bootstrapConfig, nil)
 			if err != nil {
 				return err
 			}
@@ -1093,7 +1132,7 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 				return err
 			}
 			if resolved != nil {
-				cloudConfigBundle, err = cloudConfigBundleLoaderForRun(ctx, codexHome, bootstrapConfig, &resolved.Auth)
+				cloudConfigBundle, err = cloudConfigBundleLoaderForRun(configContext, codexHome, bootstrapConfig, &resolved.Auth)
 				if err != nil {
 					return err
 				}
@@ -1108,9 +1147,35 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 		CloudConfigBundle:    cloudConfigBundle,
 	}, cloudConfigBundle)
 	if err != nil {
+		if execServerStdinClosed(stdinClosed) {
+			return nil
+		}
 		return err
 	}
 	publishApplicationNetworkPolicy(loadedConfig)
+	if chatGPTTokenAuth != nil {
+		headers, err := execServerRemoteAuthHeaders(chatGPTTokenAuth)
+		if err != nil {
+			return err
+		}
+		cfg := (execserver.RemoteEnvironmentConfig{
+			BaseURL:                    baseURL,
+			EnvironmentID:              environmentID,
+			ForwardURL:                 execServerForwardURL(opts),
+			Name:                       strings.TrimSpace(opts.Name),
+			AuthHeaders:                headers,
+			HTTPClient:                 policyHTTPClient(loadedConfig, codexnetwork.NewHTTPClient(loadedConfig.RespectSystemProxyEnabled(), 0)),
+			PreferMXC:                  preferMXC,
+			ProxyPrivateIPsViaUpstream: opts.ProxyPrivateIPsViaUpstream,
+			EnvironmentConfigReader:    environmentConfigReader,
+			AllowedSymlinkedCodexHome:  loadedConfig.AllowedSymlinkedCodexHome(),
+		}).WithRegistryBearerRedaction()
+		runErr := execserver.RunRemoteEnvironment(configContext, cfg)
+		if execServerStdinClosed(stdinClosed) {
+			return nil
+		}
+		return runErr
+	}
 	if opts.RegistrationBearerStdin {
 		// Rust #59254: a supplied registration bearer uses scoped executor
 		// credential mode while keeping the usual local configuration and

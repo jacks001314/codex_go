@@ -96,6 +96,15 @@ type RemoteEnvironmentConfig struct {
 	DirectSigner DirectHandshakeSigner
 }
 
+// WithRegistryBearerRedaction treats the configured ChatGPT bearer as
+// sensitive in registry diagnostics while retaining its account header. The
+// caller must validate that the registry is HTTPS; this mirrors Rust's
+// `RemoteEnvironmentConfig::with_registry_bearer_redaction` (#59569).
+func (cfg RemoteEnvironmentConfig) WithRegistryBearerRedaction() RemoteEnvironmentConfig {
+	cfg.authMode = registryAuthModeChatGPTToken
+	return cfg
+}
+
 // WithExecutorCredentialAuth selects Rust's scoped executor-credential mode
 // (codex-rs/exec-server/src/remote.rs:288, `RemoteEnvironmentConfig::
 // with_executor_credential_auth`, #54346): the registry request carries exactly

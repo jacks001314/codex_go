@@ -35,6 +35,8 @@ var execServerArgSpecs = map[string]execServerArgSpec{
 	"use-agent-identity-auth":   {Token: "--use-agent-identity-auth", Requires: []string{"remote"}, Conflicts: []string{"aws-sigv4"}},
 	"registration-bearer-stdin": {Token: "--registration-bearer-stdin", Requires: []string{"remote"}, Conflicts: []string{"use-agent-identity-auth", "executor-credential-stdin", "aws-sigv4"}},
 	"executor-credential-stdin": {Token: "--executor-credential-stdin", Requires: []string{"remote"}, Conflicts: []string{"use-agent-identity-auth", "aws-sigv4", "registration-bearer-stdin"}},
+	"chatgpt-token-stdin":       {Token: "--chatgpt-token-stdin", Requires: []string{"remote"}, Conflicts: []string{"use-agent-identity-auth", "aws-sigv4", "executor-credential-stdin", "registration-bearer-stdin"}},
+	"chatgpt-account-id":        {Token: "--chatgpt-account-id <ID>", TakesValue: true, Requires: []string{"chatgpt-token-stdin"}},
 	"aws-sigv4":                 {Token: "--aws-sigv4", Requires: []string{"remote"}},
 	"aws-profile":               {Token: "--aws-profile <PROFILE>", TakesValue: true, Requires: []string{"aws-sigv4"}},
 	"aws-region":                {Token: "--aws-region <REGION>", TakesValue: true, Requires: []string{"aws-sigv4"}},

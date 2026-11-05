@@ -104,6 +104,10 @@ type CloudConfigFetchOptions struct {
 	// CloudConfigBundleService::policy). A nil policy uses a one-shot policy
 	// that keeps every write on the staged atomic path.
 	Policy *CloudConfigBundlePolicy
+	// NoCache bypasses both the disk cache read and write. Credential-bearing
+	// startup loads use this so an ephemeral stdin token cannot leave a bundle
+	// cached under another login.
+	NoCache bool
 }
 
 // cloudConfigFallbackAttemptTimeout bounds the primary bootstrap GET, including
@@ -129,8 +133,10 @@ func LoadCloudConfigBundle(ctx context.Context, opts CloudConfigFetchOptions) (*
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if cached := loadCloudConfigBundleCache(opts); cached != nil {
-		return cached, nil
+	if !opts.NoCache {
+		if cached := loadCloudConfigBundleCache(opts); cached != nil {
+			return cached, nil
+		}
 	}
 	opts = scopeCloudConfigFetchOptions(opts)
 	if opts.FallbackHTTPClient != nil {
@@ -215,7 +221,7 @@ func loadCloudConfigBundleAttempt(ctx context.Context, opts CloudConfigFetchOpti
 	// Stage the cache payload and publish it only while the observation is
 	// still current. A retired policy has no revision, so nothing is published
 	// (Rust #49269 CloudConfigBundleService::apply_bundle).
-	if revision != nil {
+	if revision != nil && !opts.NoCache {
 		if staged, err := prepareCloudConfigBundleCache(opts, bundle); err == nil {
 			_ = staged.PublishIfCurrent(revision)
 		}

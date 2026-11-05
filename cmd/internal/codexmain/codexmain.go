@@ -171,6 +171,8 @@ Options:
       --registration-bearer-stdin        Read one registration bearer from stdin
       --exit-on-stdin-close              Exit when the parent process closes stdin
       --executor-credential-stdin        Read rotating scoped executor credentials from stdin
+      --chatgpt-token-stdin              Read a ChatGPT access token from stdin for HTTPS registration
+      --chatgpt-account-id <ID>          ChatGPT account ID; must match the token claim when present
       --proxy-private-ips-via-upstream   Allow permitted private IPs to use the upstream proxy
       --ws-auth <MODE>                   WebSocket authentication mode
       --ws-token-file <PATH>             File containing the WebSocket bearer token

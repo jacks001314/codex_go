@@ -383,6 +383,13 @@ type ExecServerOptions struct {
 	// closes. It requires --remote and cannot be combined with
 	// --use-agent-identity-auth.
 	ExecutorCredentialStdin bool
+	// ChatGPTTokenStdin mirrors Rust #59569: read one ChatGPT access token from
+	// stdin, use it for HTTPS registry registration, and never persist it.
+	ChatGPTTokenStdin bool
+	// ChatGPTAccountID disambiguates a token without an account claim and must
+	// match the claim when the token carries one.
+	ChatGPTAccountID    string
+	ChatGPTAccountIDSet bool
 	// ProxyPrivateIPsViaUpstream mirrors Rust #48568
 	// (cli/src/exec_server_command.rs `--proxy-private-ips-via-upstream`): the
 	// trusted executor-local startup routing that lets permitted private IP
@@ -3800,6 +3807,28 @@ func parseExecServer(args []string, execServer *ExecServerOptions) error {
 		case arg == "--executor-credential-stdin":
 			// Rust #54434: clap `ArgAction::SetTrue`, so the flag takes no value.
 			execServer.ExecutorCredentialStdin = true
+		case arg == "--chatgpt-token-stdin":
+			if execServer.ForwardBound {
+				return clapUnexpectedLongFlagError("exec-server forward", arg, args[:i])
+			}
+			execServer.ChatGPTTokenStdin = true
+		case arg == "--chatgpt-account-id":
+			if execServer.ForwardBound {
+				return clapUnexpectedLongFlagError("exec-server forward", arg, args[:i])
+			}
+			value, next, err := requireValue(args, i, arg)
+			if err != nil {
+				return err
+			}
+			execServer.ChatGPTAccountID = value
+			execServer.ChatGPTAccountIDSet = true
+			i = next
+		case strings.HasPrefix(arg, "--chatgpt-account-id="):
+			if execServer.ForwardBound {
+				return clapUnexpectedLongFlagError("exec-server forward", arg, args[:i])
+			}
+			execServer.ChatGPTAccountID = strings.TrimPrefix(arg, "--chatgpt-account-id=")
+			execServer.ChatGPTAccountIDSet = true
 		case arg == "--proxy-private-ips-via-upstream":
 			// Rust #48568: clap `ArgAction::SetTrue`, so the flag takes no value.
 			execServer.ProxyPrivateIPsViaUpstream = true
@@ -3943,6 +3972,15 @@ func parseExecServer(args []string, execServer *ExecServerOptions) error {
 	}
 	if err := validateExecServerClapScopes(args, execServer); err != nil {
 		return err
+	}
+	// Rust runs validate_remote_transport() once clap accepted the arguments.
+	// These two credentials may sit on opposite sides of `forward`, where clap's
+	// scope-local conflict checks cannot see the combination.
+	if execServer.RegistrationBearerStdin && execServer.ExecutorCredentialStdin {
+		return errors.New("--registration-bearer-stdin cannot be used with --executor-credential-stdin")
+	}
+	if execServer.ChatGPTTokenStdin && execServer.ForwardBound {
+		return errors.New("--chatgpt-token-stdin cannot be used with forward")
 	}
 	transport := strings.ToLower(strings.TrimSpace(execServer.RemoteTransport))
 	switch transport {
