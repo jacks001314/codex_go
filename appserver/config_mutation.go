@@ -48,6 +48,9 @@ func (r *RuntimeRouter) applyConfigBatchWriteMutation(params *config.ConfigBatch
 	if configEditsAreSessionDefaultsOnly(params.Edits) {
 		return
 	}
+	// Rust #59491: a changed workspace policy must fence reloads that validated
+	// credentials against the previous policy before any of them can publish.
+	r.fenceAuthReloadsOnForcedWorkspaceChange()
 	r.clearConfigDerivedCaches()
 	if params.ReloadUserConfig {
 		r.reloadUserConfigForLoadedThreads()

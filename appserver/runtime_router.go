@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -452,6 +453,12 @@ type RuntimeRouter struct {
 	authOwnerRevision uint64
 	authChangeTracker *auth.AuthChangeTracker
 	authChanged       chan struct{}
+	// forcedChatGPTWorkspaces is the last effective workspace policy observed by
+	// the runtime. A change fences pending auth reloads that validated
+	// credentials against the previous policy (Rust #59491).
+	forcedChatGPTWorkspacesMu   sync.Mutex
+	forcedChatGPTWorkspacesSeen bool
+	forcedChatGPTWorkspaces     []string
 	// modelCatalogAuthRevision records the authRevision the model catalog was
 	// last reconciled at. Rust #54169: a successful login or logout invalidates
 	// the catalog ("Invalidate the catalog after successful login and logout,
@@ -1743,8 +1750,16 @@ func (r *RuntimeRouter) resolveAuthWithLoginRestrictions(codexHome string) (*aut
 func (r *RuntimeRouter) resolveAuthWithLoginRestrictionsAndOptions(codexHome string, options *auth.StoreOptions) (*auth.ResolvedAuth, error) {
 	store := auth.NewStoreWithOptions(codexHome, options)
 	resolved, err := store.Resolve()
-	if err != nil || resolved == nil {
-		return resolved, err
+	if err != nil {
+		// Rust #59491: a temporary external auth outage is not a logout. Keep
+		// the cached identity while it still satisfies the active restrictions.
+		if retained := r.retainCachedAuthAfterTransientExternalFailure(err); retained != nil {
+			return retained, nil
+		}
+		return nil, err
+	}
+	if resolved == nil {
+		return nil, nil
 	}
 	violation, err := r.loginRestrictionViolation(&resolved.Auth)
 	if err != nil {
@@ -1762,6 +1777,57 @@ func (r *RuntimeRouter) resolveAuthWithLoginRestrictionsAndOptions(codexHome str
 	}
 	r.requireAccount().Logout()
 	return nil, nil
+}
+
+// retainCachedAuthAfterTransientExternalFailure reports the cached credential
+// that stays active when an external auth provider is temporarily unavailable
+// (Rust #59491 load_auth). A temporary provider outage must not appear as a
+// logout, but credentials the current login or workspace policy forbids are
+// still dropped.
+func (r *RuntimeRouter) retainCachedAuthAfterTransientExternalFailure(err error) *auth.ResolvedAuth {
+	if r == nil || !auth.IsWorkloadIdentitySelected() {
+		return nil
+	}
+	retained, ok := auth.RetainAuthAfterTransientExternalFailure(err, r.requireAccount().AuthSnapshot(), func(snapshot *auth.AuthDotJSON) bool {
+		violation, violationErr := r.loginRestrictionViolation(snapshot)
+		return violationErr == nil && strings.TrimSpace(violation) == ""
+	})
+	if !ok {
+		return nil
+	}
+	return &auth.ResolvedAuth{Auth: *retained, Source: auth.WorkloadIdentitySource}
+}
+
+// fenceAuthReloadsOnForcedWorkspaceChange advances the credential generation
+// when the effective ChatGPT workspace policy changed, so a reload that
+// validated credentials against the previous policy can no longer publish them
+// (Rust #59491 set_forced_chatgpt_workspace_id).
+func (r *RuntimeRouter) fenceAuthReloadsOnForcedWorkspaceChange() {
+	if r == nil || r.services.Config == nil {
+		return
+	}
+	read, err := r.services.Config.Read(&config.ConfigReadParams{})
+	if err != nil || read == nil {
+		return
+	}
+	r.noteForcedChatGPTWorkspaces(config.NewConfigFromRead(read).EffectiveChatGPTWorkspaces())
+}
+
+// noteForcedChatGPTWorkspaces records the effective workspace policy and fences
+// pending auth reloads when it changed (Rust #59491
+// set_forced_chatgpt_workspace_id).
+func (r *RuntimeRouter) noteForcedChatGPTWorkspaces(workspaces []string) {
+	if r == nil {
+		return
+	}
+	r.forcedChatGPTWorkspacesMu.Lock()
+	changed := r.forcedChatGPTWorkspacesSeen && !slices.Equal(r.forcedChatGPTWorkspaces, workspaces)
+	r.forcedChatGPTWorkspacesSeen = true
+	r.forcedChatGPTWorkspaces = append([]string(nil), workspaces...)
+	r.forcedChatGPTWorkspacesMu.Unlock()
+	if changed {
+		r.invalidatePendingAuthReads()
+	}
 }
 
 // threadCreatorIdentity captures the ChatGPT user/account at thread creation

@@ -484,6 +484,26 @@ func workloadIdentityErrorIsPermanent(err error) bool {
 	return !workloadErrorIsTransient(err)
 }
 
+// WorkloadIdentityTransientError reports whether err is a temporary external
+// auth failure that may succeed on retry (Rust RefreshTokenError::Transient).
+func WorkloadIdentityTransientError(err error) bool {
+	return workloadErrorIsTransient(err)
+}
+
+// RetainAuthAfterTransientExternalFailure returns a copy of cached when a
+// temporarily failing external auth provider must not be reported as a logout
+// (Rust #59491 load_auth). validate reports whether the cached credential still
+// satisfies the active login and workspace restrictions.
+func RetainAuthAfterTransientExternalFailure(err error, cached *AuthDotJSON, validate func(*AuthDotJSON) bool) (*AuthDotJSON, bool) {
+	if cached == nil || !WorkloadIdentityTransientError(err) {
+		return nil, false
+	}
+	if validate != nil && !validate(cached) {
+		return nil, false
+	}
+	return cloneAuthDotJSON(cached), true
+}
+
 // WorkloadIdentityPermanentError mirrors Rust RefreshTokenError::Permanent with
 // reason Other for non-transient workload identity failures.
 func WorkloadIdentityPermanentError(err error) *RefreshTokenFailedError {
