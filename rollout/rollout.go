@@ -1079,10 +1079,14 @@ type TurnContextRecord struct {
 	// across recovery (Rust `TurnContextItem::root_turn_id`, Rust #51402
 	// `551bd409eb`). Rust's rollout reconstruction falls back to it when a
 	// `turn_started` record predates the persisted `turn_attribution`.
-	RootTurnID     string `json:"root_turn_id,omitempty"`
-	CWD            string `json:"cwd,omitempty"`
-	ApprovalPolicy string `json:"approval_policy,omitempty"`
-	SandboxPolicy  any    `json:"sandbox_policy,omitempty"`
+	RootTurnID string `json:"root_turn_id,omitempty"`
+	// DirectOnlyToolNamespaces is an explicit per-turn Code Mode routing
+	// override (Rust #59481). Nil inherits the thread defaults; a non-nil empty
+	// slice records that the turn cleared direct-only routing.
+	DirectOnlyToolNamespaces *[]string `json:"direct_only_tool_namespaces,omitempty"`
+	CWD                      string    `json:"cwd,omitempty"`
+	ApprovalPolicy           string    `json:"approval_policy,omitempty"`
+	SandboxPolicy            any       `json:"sandbox_policy,omitempty"`
 	// PermissionProfile is the turn's unnamed runtime permission profile
 	// (Rust TurnContextItem::permission_profile, #53419). It lets a cold resume
 	// restore the profile the turn actually ran with instead of the current

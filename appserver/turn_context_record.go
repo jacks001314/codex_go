@@ -5,8 +5,10 @@ import (
 	"strings"
 	"time"
 
+	"codex_go/config"
 	"codex_go/rollout"
 	"codex_go/session"
+	"codex_go/turn"
 )
 
 // recordRuntimeTurnContext persists the thread's per-turn context record and
@@ -62,7 +64,8 @@ func (r *RuntimeRouter) turnContextRecordForRunConfig(turnID string, rootTurnID 
 		CompHash:       strings.TrimSpace(r.modelCompHash(runConfig.Model)),
 		// The selected program is persisted with the model so resume/fork replay
 		// rebuilds the model/program pair the turn used (Rust #48224).
-		CyberAccessProgram: strings.TrimSpace(runConfig.CyberAccessProgram),
+		CyberAccessProgram:       strings.TrimSpace(runConfig.CyberAccessProgram),
+		DirectOnlyToolNamespaces: cloneStringSlicePointer(runConfig.DirectOnlyToolNamespaces),
 		// The active reasoning-summary setting is no longer recorded; the legacy
 		// placeholder keeps older readers working (Rust #51492).
 		Summary: rollout.TurnContextSummaryPlaceholder,
@@ -77,6 +80,24 @@ func (r *RuntimeRouter) turnContextRecordForRunConfig(turnID string, rootTurnID 
 		return rollout.TurnContextRecord{}, false
 	}
 	return turnContext, true
+}
+
+func directOnlyToolNamespacesForTurn(cfg *config.Config, params *turn.TurnStartParams) []string {
+	if params != nil && params.DirectOnlyToolNamespaces != nil {
+		return append([]string{}, (*params.DirectOnlyToolNamespaces)...)
+	}
+	if cfg != nil {
+		return cfg.CodeModeDirectOnlyToolNamespaces()
+	}
+	return nil
+}
+
+func cloneStringSlicePointer(values *[]string) *[]string {
+	if values == nil {
+		return nil
+	}
+	cloned := append([]string{}, (*values)...)
+	return &cloned
 }
 
 // modelCompHash returns the model's compaction compatibility hash (Rust

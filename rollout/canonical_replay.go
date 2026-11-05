@@ -733,6 +733,7 @@ func canonicalTurnContextPayload(source json.RawMessage) ([]byte, bool, error) {
 	for _, key := range []string{
 		"turn_id",
 		"root_turn_id",
+		"direct_only_tool_namespaces",
 		"disabled_plugin_ids",
 		"cwd",
 		"approval_policy",
@@ -2516,7 +2517,6 @@ func (w *canonicalReplayWriter) writeImageGeneration(entry canonicalReplayLine) 
 	w.reasoning = nil
 	return w.writeItemCompleted(entry.timestamp, turnID, out.finish())
 }
-
 
 // writePatchApplyEnd converts a legacy patch_apply_end event into the
 // FileChange completed item paginated rollouts persist.

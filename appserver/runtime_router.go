@@ -17581,7 +17581,7 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 		}
 	}
 	catalogEnablesApplyPatch := turnModelInfo == nil || strings.TrimSpace(turnModelInfo.ApplyPatchToolType) != ""
-	if allowedTools == nil && catalogEnablesApplyPatch && r != nil && r.services.ToolRouter != nil && turnToolMode != model.ToolModeCodeModeOnly && turn.SupportsLegacyShellCommand(selectedEnvironmentIDs(params)) && executorSkillProviders == nil && r.services.CloudSkills == nil && !requestUserInputDefaultMode && !waitForEnvironmentEnabled && !enableCurrentTimeTool && !enableSleepTool && !disableUpdatePlan && !disableWaitAgent && webSearchOptions == nil && imageGenerationOptions == nil && len(goalToolExecutors) == 0 && (params == nil || len(params.DynamicTools) == 0) && len(candidates) == 0 && len(mcpTools) == 0 {
+	if allowedTools == nil && catalogEnablesApplyPatch && r != nil && r.services.ToolRouter != nil && turnToolMode != model.ToolModeCodeModeOnly && turn.SupportsLegacyShellCommand(selectedEnvironmentIDs(params)) && executorSkillProviders == nil && r.services.CloudSkills == nil && !requestUserInputDefaultMode && !waitForEnvironmentEnabled && !enableCurrentTimeTool && !enableSleepTool && !disableUpdatePlan && !disableWaitAgent && webSearchOptions == nil && imageGenerationOptions == nil && len(goalToolExecutors) == 0 && (params == nil || len(params.DynamicTools) == 0) && len(candidates) == 0 && len(mcpTools) == 0 && (params == nil || params.DirectOnlyToolNamespaces == nil) {
 		return r.services.ToolRouter, nil
 	}
 	options := turn.DefaultToolRegistryOptions(cwd)
@@ -17630,11 +17630,11 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	if cfg != nil {
 		options.CodeModeDefaultExecYieldTime = cfg.CodeModeDefaultExecYieldTime()
 		options.CodeModeShowCellOverhead = cfg.CodeModeExperimentalShowCellOverhead()
-		options.DirectOnlyToolNamespaces = cfg.CodeModeDirectOnlyToolNamespaces()
 		options.ExcludedToolNamespaces = cfg.CodeModeExcludedToolNamespaces()
 		options.CodeModeOnlyStrictThirdPartyTools = cfg.CodeModeOnlyStrictThirdPartyTools()
 		options.CodeModeToolInputSchemaMaxBytes = cfg.CodeModeToolInputSchemaMaxBytes()
 	}
+	options.DirectOnlyToolNamespaces = directOnlyToolNamespacesForTurn(cfg, params)
 	options.DisableCodeModeFallback = r.services.DisableCodeModeFallback
 	options.EnableUnifiedExec = cfg != nil && features.Enabled(cfg.FeatureSettings(), "unified_exec")
 	options.OmitToolSearchSources = cfg != nil && features.Enabled(cfg.FeatureSettings(), "deferred_tool_world_state")

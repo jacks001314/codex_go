@@ -72,6 +72,10 @@ type TurnStartOptions struct {
 	ParentTurnID        string
 	RootTurnID          string
 	InitiatingAgentPath string
+	// DirectOnlyToolNamespaces restores an explicit routing override persisted
+	// on the interrupted turn's model-context record (Rust #59481). Nil leaves
+	// the thread's configured routing in place.
+	DirectOnlyToolNamespaces *[]string
 }
 
 // StartOptions mirrors Rust `TurnAttribution::start_options`: it restores the
@@ -100,21 +104,27 @@ func (r *Record) RecoveredTurnStartOptions(turnID string) TurnStartOptions {
 	if r == nil || turnID == "" {
 		return TurnStartOptions{}
 	}
+	options := TurnStartOptions{}
 	if attribution := r.Metadata.TurnAttribution; attribution != nil && strings.TrimSpace(attribution.TurnID) == turnID {
-		return attribution.StartOptions()
+		options = attribution.StartOptions()
 	}
-	return TurnStartOptions{RootTurnID: contextRootTurnIDForTurn(r.Metadata.TurnContext, turnID)}
+	rootTurnID, directOnly := contextTurnRoutingForTurn(r.Metadata.TurnContext, turnID)
+	if options.RootTurnID == "" {
+		options.RootTurnID = rootTurnID
+	}
+	options.DirectOnlyToolNamespaces = directOnly
+	return options
 }
 
-// contextRootTurnIDForTurn reads the root turn id off a model-context record
-// when that record names the given turn.
-func contextRootTurnIDForTurn(raw json.RawMessage, turnID string) string {
+// contextTurnRoutingForTurn reads the root and explicit direct-only routing off
+// a model-context record when that record names the given turn.
+func contextTurnRoutingForTurn(raw json.RawMessage, turnID string) (string, *[]string) {
 	if len(raw) == 0 {
-		return ""
+		return "", nil
 	}
 	var values map[string]any
 	if json.Unmarshal(raw, &values) != nil {
-		return ""
+		return "", nil
 	}
 	contextTurnID := ""
 	for _, key := range []string{"turn_id", "turnId"} {
@@ -124,12 +134,27 @@ func contextRootTurnIDForTurn(raw json.RawMessage, turnID string) string {
 		}
 	}
 	if contextTurnID != turnID {
-		return ""
+		return "", nil
 	}
+	rootTurnID := ""
 	for _, key := range []string{"root_turn_id", "rootTurnId"} {
 		if value, ok := values[key].(string); ok {
-			return strings.TrimSpace(value)
+			rootTurnID = strings.TrimSpace(value)
+			break
 		}
 	}
-	return ""
+	var directOnly *[]string
+	if value, ok := values["direct_only_tool_namespaces"]; ok && value != nil {
+		namespaces, ok := value.([]any)
+		if ok {
+			cloned := make([]string, 0, len(namespaces))
+			for _, namespace := range namespaces {
+				if text, ok := namespace.(string); ok {
+					cloned = append(cloned, text)
+				}
+			}
+			directOnly = &cloned
+		}
+	}
+	return rootTurnID, directOnly
 }

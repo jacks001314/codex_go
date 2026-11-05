@@ -8614,6 +8614,10 @@ type appTurnRunConfig struct {
 	// (#44893); it is also persisted with the turn context so a resumed thread
 	// keeps the model/program pair (#48224).
 	CyberAccessProgram string
+	// DirectOnlyToolNamespaces is the explicit per-turn Code Mode routing
+	// override (Rust #59481). Nil inherits the thread configuration and an empty
+	// non-nil slice clears it for this turn only.
+	DirectOnlyToolNamespaces *[]string
 	// UsageTags is the turn's usage-tag diagnostics document (Rust #46501),
 	// carried on the sampling-request span as `tags_json`.
 	UsageTags                       map[string]string
@@ -9092,6 +9096,7 @@ func (r *RuntimeRouter) appTurnConfigWithOptions(ctx context.Context, threadID s
 		PromptCacheTTL:                 stringPtrValue(params.PromptCacheTTL),
 		ServiceTier:                    serviceTier,
 		CyberAccessProgram:             appCyberAccessProgramForTurn(params, modelProviderConfig.ProviderID),
+		DirectOnlyToolNamespaces:       cloneStringSlicePointer(params.DirectOnlyToolNamespaces),
 		// Rust #46501: the span carries the usage-tag document alongside the
 		// turn's resolved settings.
 		UsageTags:                       UsageTagsForTurn(cfg, cfg.FeatureSettings(), modelInfo, serviceTier),
@@ -14283,6 +14288,7 @@ func cloneTurnStartParams(params *turn.TurnStartParams) *turn.TurnStartParams {
 	clone.RuntimeWorkspaceRoots = append([]string(nil), params.RuntimeWorkspaceRoots...)
 	clone.Environments = cloneMapSlice(params.Environments)
 	clone.Config = cloneAnyMap(params.Config)
+	clone.DirectOnlyToolNamespaces = cloneStringSlicePointer(params.DirectOnlyToolNamespaces)
 	clone.AdditionalContext = cloneAdditionalContext(params.AdditionalContext)
 	clone.DynamicTools = append([]turn.DynamicToolSpec(nil), params.DynamicTools...)
 	clone.AdditionalInputItems = append([]any(nil), params.AdditionalInputItems...)

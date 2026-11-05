@@ -341,11 +341,16 @@ type TurnStartParams struct {
 	// request starts ("default" for standard speed); it does not change the
 	// thread's tier and is ignored when the request steers a turn (Rust
 	// TurnStartParams::service_tier_for_turn).
-	ServiceTierForTurn *string        `json:"serviceTierForTurn,omitempty"`
-	Effort             *string        `json:"effort,omitempty"`
-	Summary            *string        `json:"summary,omitempty"`
-	OutputSchema       any            `json:"outputSchema,omitempty"`
-	CollaborationMode  map[string]any `json:"collaborationMode,omitempty"`
+	ServiceTierForTurn *string `json:"serviceTierForTurn,omitempty"`
+	// DirectOnlyToolNamespaces overrides the thread's direct-only Code Mode
+	// namespaces for the turn this request starts. A nil pointer inherits the
+	// thread configuration; a non-nil empty slice clears it for this turn.
+	// Steering ignores the option because it targets an already-built turn.
+	DirectOnlyToolNamespaces *[]string      `json:"-"`
+	Effort                   *string        `json:"effort,omitempty"`
+	Summary                  *string        `json:"summary,omitempty"`
+	OutputSchema             any            `json:"outputSchema,omitempty"`
+	CollaborationMode        map[string]any `json:"collaborationMode,omitempty"`
 	// Deprecated: accepted for old app-server clients, but ignored by runtime.
 	MultiAgentMode *string `json:"multiAgentMode,omitempty"`
 	// CyberAccessProgram requests a workspace-authorized cyber program for this

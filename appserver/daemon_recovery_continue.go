@@ -184,9 +184,10 @@ func (r *RuntimeRouter) continueDaemonTurn(threadID string, saved daemonrecovery
 // cyber program and root turn id.
 func daemonRecoveryContinuationParams(threadID string, previous *rollout.TurnContextRecord, saved daemonrecovery.InterruptedTurn) *turn.TurnStartParams {
 	params := &turn.TurnStartParams{
-		ThreadID:    threadID,
-		TurnTrigger: daemonRecoveryTurnTrigger,
-		RootTurnID:  strings.TrimSpace(previous.RootTurnID),
+		ThreadID:                 threadID,
+		TurnTrigger:              daemonRecoveryTurnTrigger,
+		RootTurnID:               strings.TrimSpace(previous.RootTurnID),
+		DirectOnlyToolNamespaces: cloneStringSlicePointer(previous.DirectOnlyToolNamespaces),
 	}
 	if item := daemonRecoveryContinuationInputItem(); item != nil {
 		params.AdditionalInputItems = []any{item}
