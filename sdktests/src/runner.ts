@@ -401,6 +401,9 @@ function buildManifest(
       modelProviderMatch:
         configSummaries.rust.model === configSummaries.go.model &&
         configSummaries.rust.model_provider === configSummaries.go.model_provider,
+      toolSurfaceMatch:
+        configSummaries.rust.mcp_servers === configSummaries.go.mcp_servers &&
+        configSummaries.rust.plugin_sections === configSummaries.go.plugin_sections,
       modelPassedToSdk: Boolean(args.model),
       modelReasoningEffortPassedToSdk: Boolean(args.modelReasoningEffort),
       explicitModel: args.model ?? null,

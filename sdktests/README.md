@@ -27,8 +27,11 @@ By default each side runs against its own user configuration: Rust copies
 `~/.codex`, while Go copies `~/.gcode` when that directory exists (otherwise it
 falls back to `~/.codex`). Pass `--rust-home` or `--go-home` to override either
 side. `run-manifest.json` records both source homes, each side's model/provider
-defaults, and `modelProviderMatch`, so a run whose two homes configure
-different models is visible instead of silently comparing different backends.
+defaults, `modelProviderMatch`, and `toolSurfaceMatch` (MCP server and plugin
+table counts), so a run whose two homes configure different models or different
+tool inventories is visible instead of silently comparing different backends.
+The same surface was captured from live request bodies: `~/.codex` sent 3 MCP
+servers/5 plugin tables and 12 tools, while `~/.gcode` sent none and 8 tools.
 
 Platform-specific shell commands live in `src/platform/linux.ts` and
 `src/platform/windows.ts`. Common prompts, schemas, and observable contracts

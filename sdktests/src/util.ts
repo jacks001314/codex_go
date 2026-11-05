@@ -228,11 +228,24 @@ export function safeConfigSummary(configPath: string): Record<string, string> {
   }
   const text = readFileSync(configPath, "utf8");
   const summary: Record<string, string> = {};
+  let mcpServers = 0;
+  let pluginSections = 0;
   for (const line of text.split(/\r?\n/)) {
-    const match = /^(model|model_provider|model_reasoning_effort)\s*=\s*"([^"]*)"/.exec(line.trim());
+    const trimmed = line.trim();
+    const match = /^(model|model_provider|model_reasoning_effort)\s*=\s*"([^"]*)"/.exec(trimmed);
     if (match) {
       summary[match[1]] = match[2];
     }
+    // Tool-affecting tables: two homes can agree on the model yet still send
+    // different tool inventories because one configures MCP servers/plugins.
+    if (/^\[mcp_servers\.[^\]]+\]/.test(trimmed)) {
+      mcpServers += 1;
+    }
+    if (/^\[plugins(\.[^\]]+)?\]/.test(trimmed)) {
+      pluginSections += 1;
+    }
   }
+  summary.mcp_servers = String(mcpServers);
+  summary.plugin_sections = String(pluginSections);
   return summary;
 }
