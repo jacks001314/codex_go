@@ -50,7 +50,7 @@ func TestSidePaneLayoutRequiresFeatureAndOpenSideConversationLikeRust(t *testing
 }
 
 func TestJoinSidePanesKeepsTailAndPadsLikeRust(t *testing.T) {
-	joined := joinSidePanes("a\nb\nc", "x\ny", 2, 2)
+	joined, _, _, _, _ := joinSidePanes("a\nb\nc", "x\ny", 2, 2, sidePaneTail, sidePaneTail)
 	lines := strings.Split(joined, "\n")
 	want := []string{"b  │ x", "c  │ y"}
 	if len(lines) != len(want) {

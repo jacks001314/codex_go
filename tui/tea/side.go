@@ -187,6 +187,9 @@ func (m *Model) toggleSideConversation() bubbletea.Cmd {
 	m.restoreSidePaneInteraction(side)
 	m.notice = m.sideContextLabel()
 	m.refreshTranscript()
+	// The transcript refresh anchors the new content on its own; re-apply the
+	// destination pane's parked row so the pane comes back where it left off.
+	m.applyParkedPaneScroll(side)
 	return m.refreshStatusControlsCmd()
 }
 
@@ -231,6 +234,23 @@ func (m *Model) restoreSidePaneInteraction(side *activeSideConversation) {
 		m.composer.SetValue(side.ParentDraft)
 		m.transcript.YOffset = side.ParentScroll
 	}
+}
+
+// applyParkedPaneScroll restores the focused pane's parked first row after a
+// thread switch re-rendered the transcript (Rust #59527 keeps per-pane scroll).
+func (m *Model) applyParkedPaneScroll(side *activeSideConversation) {
+	if m == nil || side == nil {
+		return
+	}
+	offset, saved := side.ParentScroll, side.ParentInteractionSaved
+	if side.ShowingSide {
+		offset, saved = side.SideScroll, side.SideInteractionSaved
+	}
+	if !saved {
+		return
+	}
+	m.transcript.SetYOffset(offset)
+	m.activityFollow = m.transcript.AtBottom()
 }
 
 type SideStartResponse struct {
@@ -310,6 +330,11 @@ type activeSideConversation struct {
 	SideScroll             int
 	ParentInteractionSaved bool
 	SideInteractionSaved   bool
+	// ParentViewMax and SideViewMax are the largest first-row offsets the last
+	// rendered frame allowed, so wheel scrolling clamps to each pane's own
+	// content (Rust #59527).
+	ParentViewMax int
+	SideViewMax   int
 }
 
 func (m *Model) retainSideConversation(side *activeSideConversation) {

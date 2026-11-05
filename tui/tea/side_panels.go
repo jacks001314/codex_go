@@ -169,7 +169,30 @@ func (m *Model) renderSideWorkspace(width int, height int) (string, bool) {
 	sideCache := &transcriptMessageCache{}
 	left := m.renderSidePaneTranscript(parentCache, side.ParentThreadID, parentMessages, leftWidth)
 	right := m.renderSidePaneTranscript(sideCache, side.SideThreadID, sideMessages, rightWidth)
-	rendered := joinSidePanes(left, right, leftWidth, height)
+	// Rust #59527 keeps a scroll position per pane: the focused pane follows
+	// the transcript viewport, while the inactive pane keeps the offset parked
+	// when focus left it (or when the wheel last moved over it). A pane whose
+	// offset was never set stays pinned to its latest output.
+	parentFirst, sideFirst := sidePaneTail, sidePaneTail
+	if side.ParentInteractionSaved {
+		parentFirst = side.ParentScroll
+	}
+	if side.SideInteractionSaved {
+		sideFirst = side.SideScroll
+	}
+	if sideFocused {
+		sideFirst = m.transcript.YOffset
+	} else {
+		parentFirst = m.transcript.YOffset
+	}
+	rendered, parentFirst, sideFirst, parentMax, sideMax := joinSidePanes(left, right, leftWidth, height, parentFirst, sideFirst)
+	side.ParentViewMax = parentMax
+	side.SideViewMax = sideMax
+	if sideFocused {
+		side.ParentScroll = parentFirst
+	} else {
+		side.SideScroll = sideFirst
+	}
 	if m.sideResize != nil {
 		rendered += "\n" + m.sideResizeHint(rightWidth)
 	}
@@ -212,14 +235,16 @@ func (m *Model) renderSidePaneTranscript(cache *transcriptMessageCache, threadID
 	return content
 }
 
-// joinSidePanes keeps the tail of each transcript, pads the left column to the
-// divider, and renders exactly `height` rows.
-func joinSidePanes(left string, right string, leftWidth int, height int) string {
+// joinSidePanes draws each pane window, pads the left column to the divider,
+// and renders exactly `height` rows. first is the index of the first painted
+// row, or sidePaneTail to keep the pane pinned to its latest output. The
+// returned maxes bound later wheel scrolling for that pane.
+func joinSidePanes(left string, right string, leftWidth int, height int, leftFirst int, rightFirst int) (string, int, int, int, int) {
 	if height <= 0 {
 		height = 1
 	}
-	leftLines := tailDisplayLines(left, height)
-	rightLines := tailDisplayLines(right, height)
+	leftLines, leftClamped, leftMax := sidePaneWindow(left, height, leftFirst)
+	rightLines, rightClamped, rightMax := sidePaneWindow(right, height, rightFirst)
 	rows := make([]string, 0, height)
 	for index := 0; index < height; index++ {
 		line := ""
@@ -234,7 +259,7 @@ func joinSidePanes(left string, right string, leftWidth int, height int) string 
 		}
 		rows = append(rows, line+sideWorkspaceDivider+content)
 	}
-	return strings.Join(rows, "\n")
+	return strings.Join(rows, "\n"), leftClamped, rightClamped, leftMax, rightMax
 }
 
 // padSidePaneLine pads a styled transcript row to the pane width. Transcript
@@ -251,16 +276,23 @@ func padSidePaneLine(line string, width int) string {
 	return line + strings.Repeat(" ", padding)
 }
 
-func tailDisplayLines(content string, limit int) []string {
-	if limit <= 0 {
-		return nil
-	}
-	if content == "" {
-		return nil
+// sidePaneTail keeps an untouched pane pinned to its latest output, matching
+// the tail view the split layout used before per-pane scrolling (Rust #59527).
+const sidePaneTail = -1
+
+// sidePaneWindow returns the visible rows of one pane plus the clamped
+// first-row index and the largest index this content allows. Wheel-up lowers
+// the first row; sidePaneTail follows the newest rows.
+func sidePaneWindow(content string, limit int, first int) ([]string, int, int) {
+	if limit <= 0 || content == "" {
+		return nil, 0, 0
 	}
 	lines := strings.Split(content, "\n")
-	if len(lines) > limit {
-		lines = lines[len(lines)-limit:]
+	maxFirst := max(len(lines)-limit, 0)
+	if first == sidePaneTail {
+		first = maxFirst
 	}
-	return lines
+	first = min(max(first, 0), maxFirst)
+	end := min(first+limit, len(lines))
+	return lines[first:end], first, maxFirst
 }
