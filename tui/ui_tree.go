@@ -1,21 +1,23 @@
 package tui
 
-// Rust parity: codex-rs/tui/src/ui_tree.rs and ui_tree/render.rs (#57970).
+// Rust parity: codex-rs/tui/src/ui_tree.rs, ui_tree/decode.rs and
+// ui_tree/render.rs (#57970, #59518).
 //
-// A bounded, display-only subset of the `codex-tui/1` tree contract. Producers
-// normalize text into leaf nodes and arrays into composite nodes; unsupported
-// primitives and properties fail deserialization. This slice renders one
-// horizontal line of plain text, links, rows, spacers, dividers, and numeric
-// gaps. Links underline their text and carry an explicit hyperlink range so the
-// footer can truncate without moving the destination onto other cells.
+// The wire tree is a display-only subset of the `codex-tui/1` contract. A
+// whole-tree decode validates JSON size, depth, node count and text bytes so
+// rendering never silently drops content outside the viewport. Text is a string
+// leaf or a `text` element with children; rows carry an explicit gap in terminal
+// columns. Links underline their text and carry an explicit hyperlink range.
 
 import (
 	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -24,25 +26,32 @@ import (
 )
 
 const (
+	// UITreeMaxJSONBytes bounds the complete wire JSON before parsing.
+	UITreeMaxJSONBytes = 64 * 1024
 	// UITreeMaxDepth bounds nested composite nodes.
 	UITreeMaxDepth = 16
-	// UITreeMaxNodes bounds the total nodes visited in one render.
+	// UITreeMaxNodes bounds non-null nodes in a decoded tree.
 	UITreeMaxNodes = 256
-	// UITreeMaxTextBytes bounds the text bytes visited in one render.
+	// UITreeMaxTextBytes bounds the total UTF-8 content of string leaves.
 	UITreeMaxTextBytes = 16 * 1024
-	// UITreeMaxGap clamps a row gap in points before conversion to cells.
-	UITreeMaxGap = 32.0
+	// UITreeMaxGap is the largest JavaScript-safe non-negative row gap.
+	UITreeMaxGap uint64 = (1 << 53) - 1
+	// UITreeMaxLinkBytes bounds a terminal hyperlink destination.
+	UITreeMaxLinkBytes = 8 * 1024
 )
 
 // UINodeKind identifies the serialized node type.
 type UINodeKind string
 
 const (
-	UINodeText    UINodeKind = "text"
-	UINodeLink    UINodeKind = "link"
-	UINodeRow     UINodeKind = "row"
-	UINodeSpacer  UINodeKind = "spacer"
-	UINodeDivider UINodeKind = "divider"
+	// UINodeText is a text element containing child nodes.
+	UINodeText UINodeKind = "text"
+	// UINodeLink is a hyperlink containing child nodes.
+	UINodeLink UINodeKind = "link"
+	// UINodeRow lays its children out horizontally.
+	UINodeRow UINodeKind = "row"
+	// UINodeString is a bare JSON string leaf.
+	UINodeString UINodeKind = "string"
 )
 
 // LinkHref is an absolute HTTP(S) destination safe to embed in a terminal
@@ -51,11 +60,12 @@ type LinkHref struct {
 	value string
 }
 
-// NewLinkHref validates an absolute HTTP(S) URL without control characters.
+// NewLinkHref validates an absolute HTTP(S) URL without control characters and
+// at most 8 KiB in UTF-8.
 func NewLinkHref(raw string) (LinkHref, error) {
 	destination, ok := WebDestination(raw)
-	if !ok || destination != raw {
-		return LinkHref{}, errors.New("link href must be an absolute HTTP(S) URL without control characters")
+	if !ok || destination != raw || len(raw) > UITreeMaxLinkBytes {
+		return LinkHref{}, errors.New("link href must be an absolute HTTP(S) URL of at most 8 KiB without control characters")
 	}
 	return LinkHref{value: raw}, nil
 }
@@ -78,23 +88,35 @@ func (l *LinkHref) UnmarshalJSON(data []byte) error {
 }
 
 // UINode is one display node. Children entries may be nil (serialized null).
+// For UINodeString, Text carries the JSON string leaf. For UINodeText, Children
+// carry all content. Gap is the explicit row spacing in terminal columns.
 type UINode struct {
 	Kind     UINodeKind
-	Key      json.RawMessage
 	Text     string
 	Href     LinkHref
 	Title    *string
-	Gap      *float64
+	Gap      uint64
 	Children []*UINode
 }
 
-// ParseUITree decodes a JSON tree. A JSON null decodes to a nil tree.
+// ParseUITree decodes one whole JSON tree and validates every node, including
+// content outside the eventual viewport. A JSON null decodes to a nil tree.
 func ParseUITree(data []byte) (*UINode, error) {
+	if len(data) > UITreeMaxJSONBytes {
+		return nil, errors.New("UI tree JSON exceeds 64 KiB")
+	}
 	trimmed := bytes.TrimSpace(data)
 	if bytes.Equal(trimmed, []byte("null")) {
 		return nil, nil
 	}
-	return decodeUINode(trimmed)
+	node, err := decodeUINode(trimmed)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateUITree(node); err != nil {
+		return nil, err
+	}
+	return node, nil
 }
 
 // MustUITree is ParseUITree for fixtures that are expected to decode.
@@ -107,12 +129,31 @@ func MustUITree(data []byte) *UINode {
 }
 
 func decodeUINode(data []byte) (*UINode, error) {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	switch {
+	case len(trimmed) == 0:
+		return nil, errors.New("empty ui node")
+	case bytes.Equal(trimmed, []byte("null")):
 		return nil, nil
+	case trimmed[0] == '"':
+		var text string
+		if err := json.Unmarshal(trimmed, &text); err != nil {
+			return nil, err
+		}
+		return &UINode{Kind: UINodeString, Text: text}, nil
+	case trimmed[0] != '{':
+		return nil, errors.New("ui node must be an object, string, or null")
 	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(data, &fields); err != nil {
+	fields, err := decodeJSONObject(trimmed)
+	if err != nil {
 		return nil, err
+	}
+	for name := range fields {
+		switch name {
+		case "type", "props", "children":
+		default:
+			return nil, fmt.Errorf("ui node field %q is not supported", name)
+		}
 	}
 	var kind string
 	if raw, ok := fields["type"]; !ok {
@@ -121,41 +162,21 @@ func decodeUINode(data []byte) (*UINode, error) {
 		return nil, err
 	}
 	node := &UINode{Kind: UINodeKind(kind)}
-	if raw, ok := fields["key"]; ok {
-		node.Key = append(json.RawMessage(nil), raw...)
+	props, err := decodeUIProps(fields["props"])
+	if err != nil {
+		return nil, err
 	}
-	var props map[string]json.RawMessage
-	if raw, ok := fields["props"]; ok && !bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
-		props = map[string]json.RawMessage{}
-		if err := json.Unmarshal(raw, &props); err != nil {
-			return nil, err
-		}
-	}
-	var childrenRaw json.RawMessage
-	if raw, ok := fields["children"]; ok {
-		childrenRaw = raw
-	}
-	allowed := map[string]bool{"type": true, "key": true, "props": true, "children": true}
-	for name := range fields {
-		if !allowed[name] {
-			return nil, fmt.Errorf("ui node field %q is not supported", name)
-		}
-	}
+	childrenRaw, hasChildren := fields["children"]
 	switch node.Kind {
 	case UINodeText:
-		if childrenRaw != nil {
-			return nil, errors.New("ui text node must not carry children")
+		if len(props) != 0 {
+			return nil, errors.New("ui text node props must be empty")
 		}
-		raw, ok := props["text"]
-		if !ok {
-			return nil, errors.New("ui text node missing props.text")
-		}
-		if err := rejectUnknownProps(props, "text"); err != nil {
+		children, err := decodeRequiredUIChildren(childrenRaw, hasChildren)
+		if err != nil {
 			return nil, err
 		}
-		if err := json.Unmarshal(raw, &node.Text); err != nil {
-			return nil, err
-		}
+		node.Children = children
 	case UINodeLink:
 		raw, ok := props["href"]
 		if !ok {
@@ -174,38 +195,117 @@ func decodeUINode(data []byte) (*UINode, error) {
 		if err := rejectUnknownProps(props, "href", "title"); err != nil {
 			return nil, err
 		}
-		children, err := decodeChildren(childrenRaw)
+		children, err := decodeRequiredUIChildren(childrenRaw, hasChildren)
 		if err != nil {
 			return nil, err
 		}
 		node.Children = children
 	case UINodeRow:
-		if rawGap, ok := props["gap"]; ok && !bytes.Equal(bytes.TrimSpace(rawGap), []byte("null")) {
-			var gap float64
-			if err := json.Unmarshal(rawGap, &gap); err != nil {
-				return nil, err
-			}
-			node.Gap = &gap
+		raw, ok := props["gap"]
+		if !ok {
+			return nil, errors.New("ui row node missing props.gap")
 		}
+		gap, err := decodeUIRowGap(raw)
+		if err != nil {
+			return nil, err
+		}
+		node.Gap = gap
 		if err := rejectUnknownProps(props, "gap"); err != nil {
 			return nil, err
 		}
-		children, err := decodeChildren(childrenRaw)
+		children, err := decodeRequiredUIChildren(childrenRaw, hasChildren)
 		if err != nil {
 			return nil, err
 		}
 		node.Children = children
-	case UINodeSpacer, UINodeDivider:
-		if childrenRaw != nil {
-			return nil, errors.New("ui leaf node must not carry children")
-		}
-		if len(props) > 0 {
-			return nil, errors.New("ui leaf node must not carry props")
-		}
 	default:
 		return nil, fmt.Errorf("unsupported ui node type %q", kind)
 	}
 	return node, nil
+}
+
+func decodeUIProps(raw json.RawMessage) (map[string]json.RawMessage, error) {
+	if raw == nil {
+		return map[string]json.RawMessage{}, nil
+	}
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return nil, errors.New("ui node props must be an object")
+	}
+	return decodeJSONObject(raw)
+}
+
+// decodeJSONObject rejects duplicate keys, which encoding/json's map decoder
+// would otherwise collapse before the tree contract can inspect them.
+func decodeJSONObject(data []byte) (map[string]json.RawMessage, error) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	token, err := decoder.Token()
+	if err != nil {
+		return nil, err
+	}
+	if delimiter, ok := token.(json.Delim); !ok || delimiter != '{' {
+		return nil, errors.New("ui node must be an object")
+	}
+	fields := map[string]json.RawMessage{}
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return nil, err
+		}
+		name, ok := token.(string)
+		if !ok {
+			return nil, errors.New("ui object key must be a string")
+		}
+		if _, exists := fields[name]; exists {
+			return nil, fmt.Errorf("duplicate ui object field %q", name)
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return nil, err
+		}
+		fields[name] = append(json.RawMessage(nil), value...)
+	}
+	if _, err := decoder.Token(); err != nil {
+		return nil, err
+	}
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return nil, errors.New("unexpected trailing ui JSON")
+		}
+		return nil, err
+	}
+	return fields, nil
+}
+
+func decodeRequiredUIChildren(raw json.RawMessage, present bool) ([]*UINode, error) {
+	if !present {
+		return nil, errors.New("ui composite node missing children")
+	}
+	return decodeUIChildren(raw)
+}
+
+func decodeUIRowGap(raw json.RawMessage) (uint64, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return 0, err
+	}
+	number, ok := value.(json.Number)
+	if !ok {
+		return 0, errors.New("ui row gap must be a non-negative integer")
+	}
+	text := number.String()
+	if gap, err := strconv.ParseUint(text, 10, 64); err == nil {
+		if gap > UITreeMaxGap {
+			return 0, errors.New("ui row gap exceeds the maximum safe integer")
+		}
+		return gap, nil
+	}
+	gap, err := strconv.ParseFloat(text, 64)
+	if err != nil || math.IsNaN(gap) || math.IsInf(gap, 0) || gap < 0 || math.Trunc(gap) != gap || gap > float64(UITreeMaxGap) {
+		return 0, errors.New("ui row gap must be a non-negative JavaScript-safe integer")
+	}
+	return uint64(gap), nil
 }
 
 func rejectUnknownProps(props map[string]json.RawMessage, allowed ...string) error {
@@ -221,9 +321,9 @@ func rejectUnknownProps(props map[string]json.RawMessage, allowed ...string) err
 	return nil
 }
 
-func decodeChildren(raw json.RawMessage) ([]*UINode, error) {
-	if raw == nil || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
-		return nil, nil
+func decodeUIChildren(raw json.RawMessage) ([]*UINode, error) {
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return nil, errors.New("ui node children must be an array")
 	}
 	var entries []json.RawMessage
 	if err := json.Unmarshal(raw, &entries); err != nil {
@@ -240,20 +340,60 @@ func decodeChildren(raw json.RawMessage) ([]*UINode, error) {
 	return children, nil
 }
 
+func validateUITree(root *UINode) error {
+	if root == nil {
+		return nil
+	}
+	type pendingNode struct {
+		node  *UINode
+		depth int
+	}
+	pending := []pendingNode{{node: root}}
+	nodes := 0
+	textBytes := 0
+	for len(pending) > 0 {
+		entry := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		if entry.depth > UITreeMaxDepth {
+			return errors.New("UI tree exceeds maximum depth 16")
+		}
+		nodes++
+		if nodes > UITreeMaxNodes {
+			return errors.New("UI tree exceeds 256 non-null nodes")
+		}
+		if entry.node.Kind == UINodeString {
+			textBytes += len(entry.node.Text)
+			if textBytes > UITreeMaxTextBytes {
+				return errors.New("UI tree exceeds 16 KiB of text")
+			}
+			continue
+		}
+		for index := len(entry.node.Children) - 1; index >= 0; index-- {
+			if child := entry.node.Children[index]; child != nil {
+				pending = append(pending, pendingNode{node: child, depth: entry.depth + 1})
+			}
+		}
+	}
+	return nil
+}
+
 // MarshalJSON serializes the node in the `codex-tui/1` shape.
 func (n *UINode) MarshalJSON() ([]byte, error) {
 	if n == nil {
 		return []byte("null"), nil
 	}
+	if n.Kind == UINodeString {
+		return json.Marshal(n.Text)
+	}
 	out := map[string]json.RawMessage{}
 	out["type"], _ = json.Marshal(string(n.Kind))
-	if len(n.Key) > 0 {
-		out["key"] = n.Key
-	}
 	switch n.Kind {
 	case UINodeText:
-		props, _ := json.Marshal(map[string]any{"text": n.Text})
-		out["props"] = props
+		children, err := marshalUIChildren(n.Children)
+		if err != nil {
+			return nil, err
+		}
+		out["children"] = children
 	case UINodeLink:
 		props := map[string]any{"href": n.Href.String()}
 		if n.Title != nil {
@@ -261,28 +401,26 @@ func (n *UINode) MarshalJSON() ([]byte, error) {
 		}
 		encodedProps, _ := json.Marshal(props)
 		out["props"] = encodedProps
-		children, err := marshalChildren(n.Children)
+		children, err := marshalUIChildren(n.Children)
 		if err != nil {
 			return nil, err
 		}
 		out["children"] = children
 	case UINodeRow:
-		props := map[string]any{}
-		if n.Gap != nil {
-			props["gap"] = *n.Gap
-		}
-		encodedProps, _ := json.Marshal(props)
+		encodedProps, _ := json.Marshal(map[string]any{"gap": n.Gap})
 		out["props"] = encodedProps
-		children, err := marshalChildren(n.Children)
+		children, err := marshalUIChildren(n.Children)
 		if err != nil {
 			return nil, err
 		}
 		out["children"] = children
+	default:
+		return nil, fmt.Errorf("unsupported ui node type %q", n.Kind)
 	}
 	return json.Marshal(out)
 }
 
-func marshalChildren(children []*UINode) (json.RawMessage, error) {
+func marshalUIChildren(children []*UINode) (json.RawMessage, error) {
 	encoded := make([]json.RawMessage, 0, len(children))
 	for _, child := range children {
 		raw, err := child.MarshalJSON()
@@ -359,95 +497,75 @@ func (n *UINode) RenderLine(width int) UILine {
 	if n == nil || width <= 0 {
 		return UILine{}
 	}
-	budget := &uiRenderBudget{nodes: UITreeMaxNodes, textBytes: UITreeMaxTextBytes}
-	line := uiNodeLine(n, 0, budget)
-	if line == nil {
-		return UILine{}
-	}
-	if DisplayWidth(line.Text) > width {
+	line := uiNodeLine(n, width)
+	if line.Width() > width {
 		keep := width - 1
 		line.Text = TruncateToWidth(line.Text, keep) + "…"
 		line.Hyperlinks = ClipHyperlinksToWidth(line.Hyperlinks, keep)
 	}
-	return *line
+	return line
 }
 
-type uiRenderBudget struct {
-	nodes     int
-	textBytes int
-}
-
-func uiNodeLine(node *UINode, depth int, budget *uiRenderBudget) *UILine {
-	if node == nil || budget.nodes == 0 {
-		return nil
-	}
-	budget.nodes--
-	if depth > UITreeMaxDepth {
-		return nil
+func uiNodeLine(node *UINode, width int) UILine {
+	if node == nil {
+		return UILine{}
 	}
 	switch node.Kind {
+	case UINodeString:
+		raw := boundedUITreeText(node.Text)
+		first := strings.SplitN(raw, "\n", 2)[0]
+		return UILine{Text: strings.ReplaceAll(sanitizeUITreeText(first), "\t", "    ")}
 	case UINodeText:
-		raw := node.Text
-		if budget.textBytes == 0 && raw != "" {
-			return nil
-		}
-		end := len(raw)
-		if end > budget.textBytes {
-			end = budget.textBytes
-		}
-		for end > 0 && end < len(raw) && !utf8.RuneStart(raw[end]) {
-			end--
-		}
-		first := strings.SplitN(raw[:end], "\n", 2)[0]
-		budget.textBytes -= len(first)
-		visible := strings.ReplaceAll(sanitizeUITreeText(first), "\t", "    ")
-		return &UILine{Text: visible}
+		return uiRowLine(node.Children, 0, width)
 	case UINodeLink:
-		line := uiRowLine(node.Children, 0, depth, budget)
-		if line == nil {
-			line = &UILine{}
-		}
-		if width := DisplayWidth(line.Text); width > 0 {
-			line.Hyperlinks = []TerminalHyperlink{{Start: 0, End: width, Destination: node.Href.String()}}
+		line := uiRowLine(node.Children, 0, width)
+		if lineWidth := line.Width(); lineWidth > 0 {
+			line.Hyperlinks = []TerminalHyperlink{{Start: 0, End: lineWidth, Destination: node.Href.String()}}
 		}
 		return line
 	case UINodeRow:
-		gap := 0
-		if node.Gap != nil {
-			points := math.Max(0, math.Min(UITreeMaxGap, *node.Gap))
-			gap = int(math.Ceil(points / 2))
-		}
-		return uiRowLine(node.Children, gap, depth, budget)
-	case UINodeSpacer:
-		return &UILine{Text: " "}
-	case UINodeDivider:
-		return &UILine{Text: "│"}
+		return uiRowLine(node.Children, node.Gap, width)
+	default:
+		return UILine{}
 	}
-	return nil
 }
 
-func uiRowLine(children []*UINode, gap int, depth int, budget *uiRenderBudget) *UILine {
-	var result *UILine
+func boundedUITreeText(raw string) string {
+	if len(raw) <= UITreeMaxTextBytes {
+		return raw
+	}
+	end := UITreeMaxTextBytes
+	for end > 0 && end < len(raw) && !utf8.RuneStart(raw[end]) {
+		end--
+	}
+	return raw[:end]
+}
+
+func uiRowLine(children []*UINode, gap uint64, width int) UILine {
+	var result UILine
 	used := 0
 	for _, child := range children {
-		if budget.nodes == 0 {
-			break
-		}
-		childLine := uiNodeLine(child, depth+1, budget)
-		if childLine == nil {
+		childLine := uiNodeLine(child, width)
+		childWidth := childLine.Width()
+		if childWidth == 0 {
 			continue
 		}
-		spacing := 0
-		if result != nil {
-			spacing = gap
-		} else {
-			result = &UILine{}
+		if used > 0 && gap > 0 {
+			// One column past the viewport is sufficient to detect overflow.
+			available := width + 1 - used
+			if available < 0 {
+				available = 0
+			}
+			spacing := gap
+			if spacing > uint64(available) {
+				spacing = uint64(available)
+			}
+			if spacing > 0 {
+				result.Text += strings.Repeat(" ", int(spacing))
+				used += int(spacing)
+			}
 		}
-		if spacing > 0 {
-			result.Text += strings.Repeat(" ", spacing)
-		}
-		offset := used + spacing
-		used = offset + DisplayWidth(childLine.Text)
+		offset := used
 		result.Text += childLine.Text
 		for _, link := range childLine.Hyperlinks {
 			result.Hyperlinks = append(result.Hyperlinks, TerminalHyperlink{
@@ -455,6 +573,10 @@ func uiRowLine(children []*UINode, gap int, depth int, budget *uiRenderBudget) *
 				End:         link.End + offset,
 				Destination: link.Destination,
 			})
+		}
+		used += childWidth
+		if used > width {
+			break
 		}
 	}
 	return result

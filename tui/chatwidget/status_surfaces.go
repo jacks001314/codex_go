@@ -1,7 +1,6 @@
 package chatwidget
 
 import (
-	"encoding/json"
 	"strings"
 	"time"
 	"unicode"
@@ -664,20 +663,18 @@ func StatusLineExtensionsTree(segments []bottompane.StatusLineSegment, pullReque
 	children := make([]*tui.UINode, 0, len(segments)*2)
 	for index, segment := range segments {
 		if index > 0 {
-			children = append(children, &tui.UINode{Kind: tui.UINodeText, Text: bottompane.StatusLineSeparator})
+			children = append(children, &tui.UINode{Kind: tui.UINodeString, Text: bottompane.StatusLineSeparator})
 		}
-		key, _ := json.Marshal(StatusLineItemID(segment.Item))
-		text := &tui.UINode{Kind: tui.UINodeText, Key: key, Text: segment.Text}
+		text := &tui.UINode{Kind: tui.UINodeString, Text: segment.Text}
 		if segment.Item == bottompane.StatusLinePullRequestNumber {
 			if href, err := tui.NewLinkHref(pullRequestURL); err == nil {
-				children = append(children, &tui.UINode{Kind: tui.UINodeLink, Key: key, Href: href, Children: []*tui.UINode{text}})
+				children = append(children, &tui.UINode{Kind: tui.UINodeLink, Href: href, Children: []*tui.UINode{text}})
 				continue
 			}
 		}
 		children = append(children, text)
 	}
-	key, _ := json.Marshal("status-line")
-	return &tui.UINode{Kind: tui.UINodeRow, Key: key, Children: children}
+	return &tui.UINode{Kind: tui.UINodeRow, Gap: 0, Children: children}
 }
 
 func (d StatusSurfacePreviewData) RateLimitItemName(item StatusSurfacePreviewItem, fallback string) string {
