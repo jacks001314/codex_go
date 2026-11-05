@@ -353,6 +353,29 @@ func (e *ToolExecutor) MCPServerName() string {
 	return e.resolvedServerName()
 }
 
+// invocationMetadata describes one live call for the invocation registry.
+// Rust #59489: an environment-owned server also captures its prepared rules, so
+// a follow-up approval raised by the server reviews the same permissions the
+// call was prepared under, even after the owner republishes them.
+func (e *ToolExecutor) invocationMetadata(arguments any) MCPInvocationMetadata {
+	metadata := MCPInvocationMetadata{
+		ServerName:           e.resolvedServerName(),
+		ToolName:             e.resolvedRemoteToolName(),
+		ConnectorID:          e.connectorID,
+		ConnectorName:        e.connectorName,
+		ConnectorDescription: e.connectorDescription,
+		ToolTitle:            e.toolInfo.Title,
+		ToolDescription:      e.toolInfo.Description,
+		Arguments:            cloneMCPInvocationArguments(arguments),
+		ThreadID:             e.threadID,
+		TurnID:               e.turnID,
+	}
+	if source := e.preparedPermissionSource(e.resolvedServerName()); source != nil && !source.Thread {
+		metadata.PermissionSource = source
+	}
+	return metadata
+}
+
 func (e *ToolExecutor) Spec() tool.Spec {
 	name := e.resolvedToolName()
 	// The normalized parameters come from this manager shared definition index
@@ -395,18 +418,7 @@ func (e *ToolExecutor) Execute(ctx context.Context, invocation *tool.Invocation)
 		return nil, tool.RespondToModel("mcp handler received unsupported payload")
 	}
 	arguments := mcpHookToolInput(invocation.Payload.Arguments)
-	releaseInvocation := e.service.RegisterToolInvocation(e.resolvedServerName(), invocation.CallID, MCPInvocationMetadata{
-		ServerName:           e.resolvedServerName(),
-		ToolName:             e.resolvedRemoteToolName(),
-		ConnectorID:          e.connectorID,
-		ConnectorName:        e.connectorName,
-		ConnectorDescription: e.connectorDescription,
-		ToolTitle:            e.toolInfo.Title,
-		ToolDescription:      e.toolInfo.Description,
-		Arguments:            cloneMCPInvocationArguments(arguments),
-		ThreadID:             e.threadID,
-		TurnID:               e.turnID,
-	})
+	releaseInvocation := e.service.RegisterToolInvocation(e.resolvedServerName(), invocation.CallID, e.invocationMetadata(arguments))
 	defer releaseInvocation()
 	rewrittenArguments := any(nil)
 	if e.openAIFileRewriter != nil && len(e.openAIFileInputOptionalFields) > 0 {

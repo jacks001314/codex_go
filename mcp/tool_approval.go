@@ -598,6 +598,20 @@ func runtimeToolAnnotations(annotations any) *RuntimeToolAnnotations {
 	return &out
 }
 
+// preparedPermissionSource returns the permission authority captured when this
+// call was prepared. A thread-owned server has no environment owner, so it
+// resolves to nil (Rust #59028/#59489 McpPermissionSource::Thread).
+func (e *ToolExecutor) preparedPermissionSource(server string) *MCPServerPermissionSource {
+	if e == nil || e.binding == nil {
+		return nil
+	}
+	source, ok := e.binding.PermissionSourceForServer(server)
+	if !ok {
+		return nil
+	}
+	return &source
+}
+
 // approveToolCallIfNeeded ports the decision half of Rust
 // maybe_request_mcp_tool_approval: it returns a denied tool output when the call
 // must not run, and nil when the call may proceed.
@@ -644,12 +658,9 @@ func (e *ToolExecutor) approveToolCallIfNeeded(ctx context.Context, callID strin
 		mode = NormalizeAppToolApprovalMode(policy.Approval)
 	}
 	var profile *sandbox.PermissionProfile
-	var preparedPermissionSource *MCPServerPermissionSource
-	if e.binding != nil {
-		if source, ok := e.binding.PermissionSourceForServer(server); ok {
-			preparedPermissionSource = &source
-			profile = source.Profile
-		}
+	preparedPermissionSource := e.preparedPermissionSource(server)
+	if preparedPermissionSource != nil {
+		profile = preparedPermissionSource.Profile
 	}
 	if profile == nil && options.PermissionProfileForServer != nil {
 		profile = options.PermissionProfileForServer(server)

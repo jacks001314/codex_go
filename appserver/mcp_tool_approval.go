@@ -360,6 +360,7 @@ func (h *appserverMCPToolApprovalHandler) reviewViaGuardian(ctx context.Context,
 			EnvironmentID:          source.EnvironmentID,
 			PermissionProfile:      source.Profile,
 			PermissionEvidenceOnly: true,
+			MCPOwnerPermissions:    true,
 		})
 	}
 	outcome := h.router.reviewApprovalWithGuardian(ctx, h.threadID, h.turnID, strings.TrimSpace(request.CallID), action)

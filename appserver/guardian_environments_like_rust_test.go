@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -297,5 +298,129 @@ func TestGuardianMCPReviewUsesPreparedPermissionSourceLikeRust(t *testing.T) {
 	}
 	if reviewer.origin != nil {
 		t.Fatalf("thread-owned MCP call overrode turn evidence with %#v", reviewer.origin)
+	}
+}
+
+// Mirrors Rust #59489: an MCP server can belong to an environment other than the
+// turn's primary one. A low score issued for the primary's rules must not skip
+// the review when the prepared owner's permissions differ, while matching owner
+// evidence still reuses the score.
+func TestGuardianMCPOwnerDoesNotReusePrimaryScoreLikeRust(t *testing.T) {
+	cwd := t.TempDir()
+	deniedPath := filepath.Join(cwd, "owner-private")
+	ownerProfile := sandbox.WorkspaceWritePermissionProfile()
+	ownerProfile.DeniedReadEntries = []sandbox.FileSystemSandboxEntry{{
+		Path:   sandbox.FileSystemPath{Type: "path", Path: deniedPath},
+		Access: sandbox.FileSystemAccessDeny,
+	}}
+	primaryProfile := sandbox.ReadOnlyPermissionProfile()
+	primary := "primary"
+	scored := state.ServingAuthorization{
+		EnvironmentID:           &primary,
+		DeniedPaths:             sandbox.UnreadableRootsWithCWD(&primaryProfile, cwd),
+		DeniedGlobs:             sandbox.UnreadableGlobsWithCWD(&primaryProfile, cwd),
+		RetainedContextComplete: true,
+		PolicyFingerprint:       "model|policy",
+	}
+	if slices.Equal(sandbox.UnreadableRootsWithCWD(&ownerProfile, cwd), scored.DeniedPaths) {
+		t.Fatal("test setup: the owner and primary denied paths must differ")
+	}
+	action := state.Action{Type: "mcp_tool_call", Server: "files", ToolName: "echo"}
+	review := func(t *testing.T, origin *guardianReviewOrigin) int {
+		t.Helper()
+		reviewer, calls := servingAssessmentReviewer(t, &state.ServingAssessment{Authorization: scored}, scored)
+		ctx := withGuardianReviewOrigin(context.Background(), origin)
+		if decision, reason, err := reviewer.Review(ctx, "thread-owner", "turn-owner", "call-serving", action); err != nil || decision != state.DecisionApproved {
+			t.Fatalf("Review() = %q, %q, %v; want approved", decision, reason, err)
+		}
+		return *calls
+	}
+	ownerOrigin := func(profile *sandbox.PermissionProfile, environmentID string) *guardianReviewOrigin {
+		return &guardianReviewOrigin{
+			CWD:                    cwd,
+			EnvironmentID:          environmentID,
+			PermissionProfile:      profile,
+			PermissionEvidenceOnly: true,
+			MCPOwnerPermissions:    true,
+		}
+	}
+	if calls := review(t, ownerOrigin(&ownerProfile, "local")); calls != 1 {
+		t.Fatalf("review calls = %d, want 1 when the MCP owner's rules differ from the score", calls)
+	}
+	if calls := review(t, ownerOrigin(&primaryProfile, "primary")); calls != 0 {
+		t.Fatalf("review calls = %d, want the matching owner evidence to reuse the score", calls)
+	}
+	if calls := review(t, nil); calls != 0 {
+		t.Fatalf("review calls = %d, want a thread-owned call to keep reusing its score", calls)
+	}
+}
+
+// Mirrors Rust #59489: a follow-up approval from a local MCP server during a
+// remote-primary turn keeps the action the server asked about but reviews the
+// owner's captured rules. Thread-owned servers keep the turn's evidence.
+func TestGuardianMCPElicitationUsesOwnerPermissionsLikeRust(t *testing.T) {
+	ownerCWD := t.TempDir()
+	deniedPath := filepath.Join(ownerCWD, "owner-private")
+	ownerProfile := sandbox.WorkspaceWritePermissionProfile()
+	ownerProfile.DeniedReadEntries = []sandbox.FileSystemSandboxEntry{{
+		Path:   sandbox.FileSystemPath{Type: "path", Path: deniedPath},
+		Access: sandbox.FileSystemAccessDeny,
+	}}
+	service := mcp.NewMCPService(nil)
+	release := service.RegisterToolInvocation("cua_repl", "call-1", mcp.MCPInvocationMetadata{
+		ServerName: "cua_repl",
+		ToolName:   "js",
+		ThreadID:   "thread-node-repl",
+		TurnID:     "turn-node-repl",
+		PermissionSource: &mcp.MCPServerPermissionSource{
+			Profile:       &ownerProfile,
+			CWD:           ownerCWD,
+			EnvironmentID: "local",
+		},
+	})
+	defer release()
+
+	reviewElicitation := func(t *testing.T, service *mcp.MCPService, callID string) (*guardianReviewOrigin, state.Action) {
+		t.Helper()
+		var origin *guardianReviewOrigin
+		var reviewed state.Action
+		reviewer := guardianReviewerFunc(func(ctx context.Context, _, _, _ string, action state.Action) (state.ReviewDecision, string, error) {
+			origin = guardianReviewOriginFromContext(ctx)
+			reviewed = action
+			return state.DecisionApproved, "", nil
+		})
+		meta := nodeReplNestedReviewMeta()
+		meta["callId"] = callID
+		if _, err := (&appserverMCPElicitationHandler{service: service, reviewer: reviewer}).
+			HandleMCPElicitation(context.Background(), nodeReplNestedReviewRequest("cua_repl", meta)); err != nil {
+			t.Fatalf("HandleMCPElicitation() error = %v", err)
+		}
+		return origin, reviewed
+	}
+
+	origin, action := reviewElicitation(t, service, "call-1")
+	if origin == nil || !origin.MCPOwnerPermissions || !origin.PermissionEvidenceOnly {
+		t.Fatalf("elicitation origin = %#v, want the prepared owner's permission evidence", origin)
+	}
+	if origin.EnvironmentID != "local" || origin.CWD != ownerCWD || origin.PermissionProfile == nil {
+		t.Fatalf("elicitation origin = %#v, want the local MCP owner", origin)
+	}
+	if denied := sandbox.UnreadableRootsWithCWD(origin.PermissionProfile, origin.CWD); !slices.Contains(denied, deniedPath) {
+		t.Fatalf("elicitation origin denied paths = %#v, want %s", denied, deniedPath)
+	}
+	if action.Server != "cua_repl" || action.ToolName != "browser.click" || action.Type != "mcp_tool_call" {
+		t.Fatalf("reviewed action = %#v, want the nested action the server asked about", action)
+	}
+
+	threadService := mcp.NewMCPService(nil)
+	threadProfile := sandbox.ReadOnlyPermissionProfile()
+	threadRelease := threadService.RegisterToolInvocation("cua_repl", "call-2", mcp.MCPInvocationMetadata{
+		ServerName:       "cua_repl",
+		ToolName:         "js",
+		PermissionSource: &mcp.MCPServerPermissionSource{Profile: &threadProfile, CWD: ownerCWD, Thread: true},
+	})
+	defer threadRelease()
+	if origin, _ := reviewElicitation(t, threadService, "call-2"); origin != nil {
+		t.Fatalf("thread-owned elicitation overrode turn evidence with %#v", origin)
 	}
 }

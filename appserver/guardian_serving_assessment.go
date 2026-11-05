@@ -2,6 +2,7 @@ package appserver
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 
 	"codex_go/model"
@@ -50,6 +51,26 @@ func (r *RuntimeRouter) guardianServingPolicyFingerprint(threadID, turnID string
 	}
 	parts = append(parts, strings.TrimSpace(r.guardianApprovalsReviewerForTurn(threadID, turnID)))
 	return strings.Join(parts, "|")
+}
+
+// guardianServingOwnerAuthorizationMatches reports whether the prepared MCP
+// server owner's captured rules match the permission evidence a serving
+// assessment was scored under (Rust #59489: the score must also match the rules
+// of the server that will handle the call).
+func guardianServingOwnerAuthorizationMatches(origin *guardianReviewOrigin, authorization state.ServingAuthorization) bool {
+	if origin == nil || origin.PermissionProfile == nil {
+		return false
+	}
+	ownerEnvironment := strings.TrimSpace(origin.EnvironmentID)
+	scoredEnvironment := ""
+	if authorization.EnvironmentID != nil {
+		scoredEnvironment = strings.TrimSpace(*authorization.EnvironmentID)
+	}
+	if ownerEnvironment != scoredEnvironment || (ownerEnvironment == "") != (authorization.EnvironmentID == nil) {
+		return false
+	}
+	return slices.Equal(sandbox.UnreadableRootsWithCWD(origin.PermissionProfile, origin.CWD), authorization.DeniedPaths) &&
+		slices.Equal(sandbox.UnreadableGlobsWithCWD(origin.PermissionProfile, origin.CWD), authorization.DeniedGlobs)
 }
 
 // recordGuardianServingAssessment retains a matched serving value with the

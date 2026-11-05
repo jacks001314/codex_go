@@ -19,8 +19,13 @@ type MCPInvocationMetadata struct {
 	// Arguments is the JSON value the model supplied for the call, cloned when
 	// the call was registered so later rewrites cannot change its identity.
 	Arguments any
-	ThreadID  string
-	TurnID    string
+	// PermissionSource is the owner permission authority captured when the call
+	// was prepared, when the server belongs to an environment (Rust #59489's
+	// McpToolApprovalContext::environment_permissions). Server-initiated
+	// approvals reuse it instead of the live server owner's rules.
+	PermissionSource *MCPServerPermissionSource
+	ThreadID         string
+	TurnID           string
 }
 
 func cloneMCPInvocationArguments(arguments any) any {

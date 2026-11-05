@@ -144,6 +144,18 @@ func (h *appserverMCPElicitationHandler) HandleMCPElicitation(ctx context.Contex
 			reviewCtx := ctx
 			if liveOK && strings.TrimSpace(liveInvocation.ServerName) == serverName {
 				reviewCtx = withGuardianTimingCallID(ctx, originatingCallID)
+				// Rust #59489: keep the action the server asked about, but review
+				// it with the owning environment's rules captured when the
+				// originating call was prepared.
+				if source := liveInvocation.PermissionSource; source != nil && !source.Thread && source.Profile != nil {
+					reviewCtx = withGuardianReviewOrigin(reviewCtx, &guardianReviewOrigin{
+						CWD:                    source.CWD,
+						EnvironmentID:          source.EnvironmentID,
+						PermissionProfile:      source.Profile,
+						PermissionEvidenceOnly: true,
+						MCPOwnerPermissions:    true,
+					})
+				}
 			}
 			decision, reason, err := h.reviewer.Review(reviewCtx, request.ThreadID, request.TurnID, reviewID, action)
 			if err == nil && decision == state.DecisionAskUser && !strict {

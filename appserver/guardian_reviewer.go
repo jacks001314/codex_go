@@ -110,6 +110,11 @@ type guardianReviewOrigin struct {
 	// path passes a prepared sandbox context for evidence and leaves the rest of
 	// the Guardian review context intact.
 	PermissionEvidenceOnly bool
+	// MCPOwnerPermissions marks PermissionProfile as the rules captured for the
+	// MCP server that will handle the call (Rust #59489's
+	// McpToolApprovalContext::environment_permissions). A retained serving score
+	// may only skip the review when it was scored under those same rules.
+	MCPOwnerPermissions bool
 }
 
 type guardianReviewOriginKey struct{}
@@ -1233,7 +1238,14 @@ func (r *modelGuardianReviewer) review(ctx context.Context, threadID, turnID, ta
 			if r.servingAuthorization != nil {
 				current = r.servingAuthorization(threadID, turnID)
 			}
-			if assessment.AllowsSynchronousReviewSkip(current) {
+			// Rust #59489: MCP prepares the call after the response is scored, so
+			// a low score issued for the turn's primary rules must not skip the
+			// review when the prepared server owner's rules differ.
+			ownerPermissionsMatch := true
+			if origin := guardianReviewOriginFromContext(ctx); origin != nil && origin.MCPOwnerPermissions {
+				ownerPermissionsMatch = guardianServingOwnerAuthorizationMatches(origin, assessment.Authorization)
+			}
+			if ownerPermissionsMatch && assessment.AllowsSynchronousReviewSkip(current) {
 				r.beginApprovalToolCall(threadID, targetItemID)
 				r.markScored(threadID)
 				if r.fastDecision != nil {
