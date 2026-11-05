@@ -28,7 +28,7 @@ const (
 	// after reserving 64 columns for the parent transcript.
 	sideWorkspaceMinSideWidth   = 36
 	sideWorkspaceMinParentWidth = 64
-	sideWorkspaceDefaultPercent = 50
+	sideWorkspaceDefaultPercent = 33
 )
 
 // sideExactWidth pins the sidebar allocation at one terminal width so the
@@ -97,21 +97,10 @@ func (m *Model) sideWorkspaceEnabled() bool {
 }
 
 // sideWorkspaceWidths splits the terminal between the parent (left) and side
-// (right) transcripts, reserving the divider columns.
+// (right) transcripts using the default sidebar share (Rust #59527 uses one
+// third of the terminal until the user saves a width).
 func sideWorkspaceWidths(width int) (leftWidth int, rightWidth int, ok bool) {
-	if width < sideWorkspaceMinWidth {
-		return 0, 0, false
-	}
-	available := width - ansi.StringWidth(sideWorkspaceDivider)
-	if available < 2 {
-		return 0, 0, false
-	}
-	leftWidth = available / 2
-	rightWidth = available - leftWidth
-	if leftWidth < 1 || rightWidth < 1 {
-		return 0, 0, false
-	}
-	return leftWidth, rightWidth, true
+	return sideWorkspaceWidthsForPercent(width, sideWorkspaceDefaultPercent, sideExactWidth{})
 }
 
 // sidePaneLayout reports whether both transcripts are drawn and which of them

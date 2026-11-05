@@ -94,6 +94,9 @@ func TestSidePaneZoomLikeRust(t *testing.T) {
 // Resize mode previews divider movement and saves the width on enter/esc.
 func TestSidePaneKeyboardResizeLikeRust(t *testing.T) {
 	m, edits := sidePaneResizeModel(t, 140, true)
+	// Start above the 36-column minimum so both smaller steps are observable.
+	m.sideWidthPercent = 50
+	m.sideExactWidth = sideExactWidth{}
 	m.beginSidePaneResize()
 	if m.sideResize == nil {
 		t.Fatal("resize mode did not start")

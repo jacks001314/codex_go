@@ -15,12 +15,14 @@ func TestSideWorkspaceWidthsRespectMinimumAndSplitLikeRust(t *testing.T) {
 	if _, _, ok := sideWorkspaceWidths(sideWorkspaceMinWidth - 1); ok {
 		t.Fatalf("layout enabled below %d columns", sideWorkspaceMinWidth)
 	}
+	// Rust #59527: the sidebar defaults to one third of the terminal, clamped
+	// to its 36-column minimum.
 	left, right, ok := sideWorkspaceWidths(100)
-	if !ok || left != 48 || right != 49 {
+	if !ok || left != 61 || right != 36 {
 		t.Fatalf("widths at 100 = %d/%d ok=%t", left, right, ok)
 	}
 	left, right, ok = sideWorkspaceWidths(120)
-	if !ok || left != 58 || right != 59 {
+	if !ok || left != 78 || right != 39 {
 		t.Fatalf("widths at 120 = %d/%d ok=%t", left, right, ok)
 	}
 }

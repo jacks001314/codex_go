@@ -173,7 +173,9 @@ func (m *Model) dispatchLeaderAction(action string) bubbletea.Cmd {
 		return m.beginTranscriptSelection()
 	case "chat.open_presets":
 		return m.openQuickDialMenu()
-	case "global.focus_main_composer", "global.focus_pane_left":
+	case "global.focus_main_composer":
+		return m.focusMainComposerExplicit()
+	case "global.focus_pane_left":
 		return m.focusMainComposer()
 	case "global.focus_sidebar_content", "global.focus_pane_right":
 		return m.focusSidebarContent()

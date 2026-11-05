@@ -2839,6 +2839,8 @@ type Model struct {
 	sideExactWidth sideExactWidth
 	// sideResize is the active keyboard resize preview, if any.
 	sideResize *sidePaneResize
+	// sideDrag is the active mouse divider drag (Rust #59527).
+	sideDrag *sidePaneDrag
 	// sideConversations retains every side conversation, keyed by its parent
 	// thread. Thread navigation hides the active side instead of deleting it
 	// (Rust #52184), so returning to a parent can reopen the existing side with
@@ -4956,6 +4958,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		}
 	case bubbletea.MouseMsg:
 		m.clearLeaderChord()
+		if handled, cmd := m.handleSidePaneMouse(msg); handled {
+			return m, cmd
+		}
 		if m.handleWarningsViewMouse(msg) {
 			return m, nil
 		}
