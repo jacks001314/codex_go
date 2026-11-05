@@ -4416,6 +4416,7 @@ func (r *Router) buildPaginatedThreadItemsResponse(params *ThreadItemsListParams
 			CompletedAtMS: stored.CompletedAtMS,
 		})
 	}
+	data = applyThreadItemOutputDeferral(data, params)
 	return &ThreadItemsListResponse{Data: data, NextCursor: page.NextCursor, BackwardsCursor: page.BackwardsCursor}, nil
 }
 

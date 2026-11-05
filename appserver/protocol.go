@@ -3369,6 +3369,15 @@ type ThreadItemsListParams struct {
 	Cursor        *ThreadItemsListCursor `json:"cursor,omitempty"`
 	Limit         *int                   `json:"limit,omitempty"`
 	SortDirection SortDirection          `json:"sortDirection,omitempty"`
+	// DeferOutput selects saved outputs to fetch separately with
+	// thread/items/read. It only applies to a single requested turn.
+	DeferOutput *ThreadItemOutputDeferral `json:"deferOutput,omitempty"`
+}
+
+// ThreadItemOutputDeferral mirrors Rust's ThreadItemOutputDeferral.
+type ThreadItemOutputDeferral struct {
+	// CommandExecution defers nonempty output from successful commands.
+	CommandExecution bool `json:"commandExecution,omitempty"`
 }
 
 // ThreadItemsListCursor mirrors Rust's untagged ThreadItemsListCursor (#48151):
@@ -3465,6 +3474,9 @@ type ThreadItemsListResponse struct {
 type ThreadItemEntry struct {
 	TurnID string     `json:"turnId"`
 	Item   ThreadItem `json:"item"`
+	// OutputDeferred reports that the saved command output was omitted and can
+	// be fetched with thread/items/read.
+	OutputDeferred bool `json:"outputDeferred,omitempty"`
 	// StartedAtMS and CompletedAtMS are the producer-recorded lifecycle times
 	// from the stored item (Rust #47114). Existing rows and older writers leave
 	// them unknown, so the keys are always present and serialize as null.
@@ -4319,6 +4331,7 @@ func BuildItemsResponse(record *session.Record, params *ThreadItemsListParams) (
 		end = len(items)
 	}
 	page := append([]ThreadItemEntry(nil), items[start:end]...)
+	page = applyThreadItemOutputDeferral(page, params)
 	next := ""
 	if end < len(items) {
 		next = strconv.Itoa(end)
@@ -4328,6 +4341,63 @@ func BuildItemsResponse(record *session.Record, params *ThreadItemsListParams) (
 		NextCursor:      stringPtrIfNotEmpty(next),
 		BackwardsCursor: itemEntryCursor(page),
 	}, nil
+}
+
+// DeferredItemOutputError reports that an entry intentionally omitted its
+// saved output. Callers must use thread/items/read to obtain the complete item.
+type DeferredItemOutputError struct {
+	TurnID string
+	ItemID string
+}
+
+func (e *DeferredItemOutputError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return fmt.Sprintf("output for item %s in turn %s is deferred", e.ItemID, e.TurnID)
+}
+
+// ResolveThreadItem converts a complete entry to a ThreadItem and reports
+// deferred output instead of returning an incomplete item.
+func (entry ThreadItemEntry) ResolveThreadItem() (ThreadItem, error) {
+	if entry.OutputDeferred {
+		return ThreadItem{}, &DeferredItemOutputError{TurnID: entry.TurnID, ItemID: entry.Item.ID}
+	}
+	item := entry.Item
+	if item.StartedAtMS == nil {
+		item.StartedAtMS = cloneInt64(entry.StartedAtMS)
+	}
+	if item.CompletedAtMS == nil {
+		item.CompletedAtMS = cloneInt64(entry.CompletedAtMS)
+	}
+	return item, nil
+}
+
+// applyThreadItemOutputDeferral removes eligible command output from one page.
+// It mutates only the entry's copied data map, leaving stored history intact.
+func applyThreadItemOutputDeferral(entries []ThreadItemEntry, params *ThreadItemsListParams) []ThreadItemEntry {
+	if params == nil || params.TurnID == nil || params.DeferOutput == nil || !params.DeferOutput.CommandExecution {
+		return entries
+	}
+	for index := range entries {
+		entry := &entries[index]
+		item := &entry.Item
+		if entry.CompletedAtMS == nil || item.Type != "commandExecution" || threadItemCommandStatus(item) != CommandExecutionCompleted {
+			continue
+		}
+		exitCode := threadItemInt64PtrFromData(item.Data, "exit_code", "exitCode")
+		output := threadItemAggregatedOutput(item)
+		if exitCode == nil || *exitCode != 0 || output == nil || *output == "" {
+			continue
+		}
+		if item.Data != nil {
+			for _, key := range []string{"aggregatedOutput", "aggregated_output", "hook_response", "output", "formattedOutput", "formatted_output"} {
+				delete(item.Data, key)
+			}
+		}
+		entry.OutputDeferred = true
+	}
+	return entries
 }
 
 func itemEntryCursor(items []ThreadItemEntry) *string {

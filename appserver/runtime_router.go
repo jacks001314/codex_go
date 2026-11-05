@@ -3559,6 +3559,10 @@ func experimentalAPIFieldReasonForRequest(request *Request) string {
 		if rawParamArrayNonEmpty(request, "dynamicTools") {
 			return "turn/start.dynamicTools"
 		}
+	case MethodThreadItemsList:
+		if rawDeferCommandExecution(request) {
+			return "thread/items/list.deferOutput.commandExecution"
+		}
 	}
 	switch request.Method {
 	case MethodThreadStart, MethodThreadResume, MethodThreadFork, MethodTurnStart, MethodThreadSettingsUpdate:
@@ -3702,6 +3706,23 @@ func experimentalAPIMethod(method Method) bool {
 	default:
 		return false
 	}
+}
+
+func rawDeferCommandExecution(request *Request) bool {
+	raw, ok := rawParam(request, "deferOutput")
+	if !ok || strings.TrimSpace(string(raw)) == "null" {
+		return false
+	}
+	var options map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &options); err != nil {
+		return false
+	}
+	commandExecution, ok := options["commandExecution"]
+	if !ok {
+		return false
+	}
+	var deferCommand bool
+	return json.Unmarshal(commandExecution, &deferCommand) == nil && deferCommand
 }
 
 func rawParamPresentNonNull(request *Request, key string) bool {
