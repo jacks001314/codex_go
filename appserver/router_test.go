@@ -4115,6 +4115,46 @@ func TestRouterSearchLoadedTurnsAndInjectItems(t *testing.T) {
 
 }
 
+func TestRouterInjectItemsRecordsCurrentSamplingCheckpoint(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	threadID := session.ThreadID("thread-inject-sequences")
+	now := time.Now().UTC()
+	items := []session.Item{
+		{ID: "user", Type: "user_message", Role: "user", Text: "first turn", CreatedAt: now},
+		{ID: "assistant", Type: "assistant_message", Role: "assistant", Text: "done", CreatedAt: now},
+	}
+	for i := range items {
+		session.MergeItemHarnessMetadata(&items[i], map[string]any{
+			"history_sequence":         i + 1,
+			"sampled_through_sequence": 2,
+		})
+	}
+	if err := store.Create(&session.Record{ID: threadID, CreatedAt: now, UpdatedAt: now, RecencyAt: now, Items: items}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	router := NewRouter(store)
+	response := router.Handle(requestWithParams(t, IntID(1), MethodThreadInjectItems, ThreadInjectItemsParams{
+		ThreadID: string(threadID),
+		Items: []json.RawMessage{
+			json.RawMessage(`{"type":"message","role":"developer","content":[{"type":"input_text","text":"injected after first turn"}]}`),
+		},
+	}))
+	if response.Error != nil {
+		t.Fatalf("inject response = %+v", response.Error)
+	}
+	record, err := store.Read(threadID, true, true)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	injected := &record.Items[len(record.Items)-1]
+	if got := session.ItemHistorySequence(injected); got != 3 {
+		t.Fatalf("injected history sequence = %d, want 3", got)
+	}
+	if got := session.ItemSampledThroughSequence(injected); got != 2 {
+		t.Fatalf("injected sampled checkpoint = %d, want 2", got)
+	}
+}
+
 func TestRouterInjectItemsMarksClientDeveloperMessagesWhenFeatureEnabled(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	threadID := session.ThreadID("thread-client-developer")

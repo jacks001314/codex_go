@@ -1035,17 +1035,19 @@ func compactItemsFromSessionItems(items []session.Item) []compact.Item {
 	for i := range items {
 		item := items[i]
 		compactItem := compact.Item{
-			ID:        item.ID,
-			Type:      item.Type,
-			Role:      item.Role,
-			Name:      item.Name,
-			Namespace: item.Namespace,
-			CallID:    item.CallID,
-			Text:      item.Text,
-			Kind:      compactKindFromSessionItem(&item),
-			Created:   item.CreatedAt,
-			Data:      cloneAnyMapForRouter(item.Data),
-			Raw:       append(json.RawMessage(nil), item.Raw...),
+			ID:                     item.ID,
+			Type:                   item.Type,
+			Role:                   item.Role,
+			Name:                   item.Name,
+			Namespace:              item.Namespace,
+			CallID:                 item.CallID,
+			Text:                   item.Text,
+			Kind:                   compactKindFromSessionItem(&item),
+			Created:                item.CreatedAt,
+			Data:                   cloneAnyMapForRouter(item.Data),
+			Raw:                    append(json.RawMessage(nil), item.Raw...),
+			HistorySequence:        session.ItemHistorySequence(&item),
+			SampledThroughSequence: session.ItemSampledThroughSequence(&item),
 		}
 		for j := range item.Content {
 			compactItem.Content = append(compactItem.Content, compact.ContentPart{
@@ -1098,6 +1100,16 @@ func sessionItemsFromCompactItems(items []compact.Item, now time.Time) []session
 		}
 		if sessionItem.CreatedAt.IsZero() {
 			sessionItem.CreatedAt = now
+		}
+		if item.HistorySequence != 0 || item.SampledThroughSequence != 0 {
+			fields := map[string]any{}
+			if item.HistorySequence != 0 {
+				fields["history_sequence"] = item.HistorySequence
+			}
+			if item.SampledThroughSequence != 0 {
+				fields["sampled_through_sequence"] = item.SampledThroughSequence
+			}
+			session.MergeItemHarnessMetadata(&sessionItem, fields)
 		}
 		for j := range item.Content {
 			sessionItem.Content = append(sessionItem.Content, session.ContentPart{

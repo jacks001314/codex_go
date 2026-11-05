@@ -48,6 +48,31 @@ func TestAgentLoopTagsOnlyFirstRequestAfterPrewarmLikeRust(t *testing.T) {
 	}
 }
 
+func TestAgentLoopCapturesSamplingCheckpointBeforeRequest(t *testing.T) {
+	sequence := uint64(3)
+	agent := &checkpointLoopAgent{sequence: &sequence}
+	loop := NewAgentLoop(&AgentLoopOptions{Agent: agent})
+	result, err := loop.Run(context.Background(), &AgentLoopRequest{
+		Prompt: "finish",
+		Model:  "gpt-test",
+		SamplingCheckpoint: func() (uint64, bool) {
+			return *agent.sequence, true
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if *agent.sequence != 7 {
+		t.Fatalf("sequence after request = %d, want 7", *agent.sequence)
+	}
+	if result.SampledThroughSequence == nil || *result.SampledThroughSequence != 3 {
+		t.Fatalf("result checkpoint = %#v, want 3", result.SampledThroughSequence)
+	}
+	if result.Response == nil || result.Response.SampledThroughSequence == nil || *result.Response.SampledThroughSequence != 3 {
+		t.Fatalf("response checkpoint = %#v, want 3", result.Response)
+	}
+}
+
 func TestAgentLoopHoldsSearchReservationThroughEmittedTools(t *testing.T) {
 	agent := &fakeLoopAgent{}
 	registry := tool.NewRegistry()
@@ -807,6 +832,19 @@ type fakeLoopAgent struct {
 	alwaysTool                 bool
 	enqueueSteerAfterFirstCall bool
 	steerMailbox               *SteerMailbox
+}
+
+type checkpointLoopAgent struct {
+	sequence *uint64
+}
+
+func (a *checkpointLoopAgent) Run(_ context.Context, _ *model.AgentRequest) (*model.AgentResponse, error) {
+	*a.sequence += 4
+	return &model.AgentResponse{
+		ResponseID: "resp-checkpoint",
+		Message:    "done",
+		Items:      []model.AgentItem{{Type: "agent_message", Text: "done"}},
+	}, nil
 }
 
 type countingToolLoopAgent struct {

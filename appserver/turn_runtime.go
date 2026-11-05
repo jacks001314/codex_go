@@ -2011,6 +2011,9 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		},
 		SamplingFollowUp:   samplingFollowUp,
 		SamplingCompaction: samplingCompaction,
+		SamplingCheckpoint: func() (uint64, bool) {
+			return r.runtimeSamplingCheckpoint(session.ThreadID(threadID))
+		},
 		// Rust #59234: a steer that carries uploaded audio fails the running turn
 		// after the accompanying text is recorded only when the model has no audio
 		// input; an audio-capable model accepts it into the next request.
@@ -4369,6 +4372,10 @@ func mergeAgentLoopAttempts(first *turn.AgentLoopResult, second *turn.AgentLoopR
 	merged.SteerInputItems = append(append([]any(nil), first.SteerInputItems...), second.SteerInputItems...)
 	merged.Compactions += first.Compactions
 	merged.SamplingFollowUps += first.SamplingFollowUps
+	if first.SampledThroughSequence != nil && (merged.SampledThroughSequence == nil || *first.SampledThroughSequence > *merged.SampledThroughSequence) {
+		value := *first.SampledThroughSequence
+		merged.SampledThroughSequence = &value
+	}
 	merged.Iterations += first.Iterations
 	merged.InitialInputCount = first.InitialInputCount
 	if merged.Response == nil {
@@ -5747,6 +5754,13 @@ func (r *RuntimeRouter) sessionItemsForTurn(turnID string, params *turn.TurnStar
 	for executionIndex < len(result.ToolExecutions) {
 		items = append(items, sessionItemsForAppToolExecution(turnID, &result.ToolExecutions[executionIndex], createdAt)...)
 		executionIndex++
+	}
+	if result.SampledThroughSequence != nil {
+		for i := range items {
+			session.MergeItemHarnessMetadata(&items[i], map[string]any{
+				"sampled_through_sequence": *result.SampledThroughSequence,
+			})
+		}
 	}
 	return items
 }

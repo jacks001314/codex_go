@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -190,6 +191,11 @@ type Item struct {
 	Data      map[string]any
 	Raw       json.RawMessage
 	Created   time.Time
+	// HistorySequence is the thread-local append identity restored from harness
+	// metadata. SampledThroughSequence is the input prefix acknowledged by a
+	// completed regular inference request (Rust #59404).
+	HistorySequence        uint64
+	SampledThroughSequence uint64
 }
 
 // CompactionPrefix identifies the history snapshot a speculative compaction
@@ -306,7 +312,12 @@ func BuildCompactedHistory(prefix []Item, userMessages []Item, summary string) [
 	history := make([]Item, 0, len(prefix)+len(userMessages)+1)
 	history = append(history, cloneItems(prefix)...)
 	history = append(history, cloneItems(userMessages)...)
-	history = append(history, Item{
+	history = append(history, compactionSummaryItem(summary))
+	return history
+}
+
+func compactionSummaryItem(summary string) Item {
+	return Item{
 		ID:   "compaction-summary",
 		Type: "message",
 		Role: "user",
@@ -317,8 +328,77 @@ func BuildCompactedHistory(prefix []Item, userMessages []Item, summary string) [
 				"content_item_kinds": []any{contextfrag.CompactionSummaryKind},
 			},
 		},
+	}
+}
+
+// pendingMailSequence returns the first agent-message identity newer than the
+// highest completed regular-inference checkpoint. Compactor output is not a
+// delivery proof (Rust compact_pending_input.rs).
+func pendingMailSequence(items []Item) (uint64, bool) {
+	sampledThrough := uint64(0)
+	for i := range items {
+		sampledThrough = max(sampledThrough, items[i].SampledThroughSequence)
+	}
+	for i := range items {
+		if items[i].Type == "agent_message" && items[i].HistorySequence > sampledThrough {
+			return items[i].HistorySequence, true
+		}
+	}
+	return 0, false
+}
+
+func isRetainedPendingMail(item Item, first uint64) bool {
+	return item.Type == "agent_message" && item.HistorySequence >= first &&
+		EstimateItemTokens(&item) <= MaxRetainedAgentMessageTokens
+}
+
+func pendingAgentMessagesForCompaction(items []Item, first uint64, budget int) []Item {
+	if budget <= 0 {
+		return nil
+	}
+	remaining := budget
+	selected := []Item{}
+	for i := len(items) - 1; i >= 0 && remaining > 0; i-- {
+		if !isRetainedPendingMail(items[i], first) {
+			continue
+		}
+		cost := max(1, EstimateItemTokens(&items[i]))
+		if cost > remaining {
+			continue
+		}
+		selected = append(selected, items[i])
+		remaining -= cost
+	}
+	for left, right := 0, len(selected)-1; left < right; left, right = left+1, right-1 {
+		selected[left], selected[right] = selected[right], selected[left]
+	}
+	return selected
+}
+
+func sortByHistorySequence(items []Item) {
+	sort.SliceStable(items, func(i, j int) bool {
+		return items[i].HistorySequence < items[j].HistorySequence
 	})
-	return history
+}
+
+func insertBeforePending(items []Item, inserted []Item, first uint64, hasPending bool) []Item {
+	if len(inserted) == 0 {
+		return items
+	}
+	position := len(items)
+	if hasPending {
+		for i := range items {
+			if items[i].HistorySequence >= first {
+				position = i
+				break
+			}
+		}
+	}
+	out := make([]Item, 0, len(items)+len(inserted))
+	out = append(out, items[:position]...)
+	out = append(out, cloneItems(inserted)...)
+	out = append(out, items[position:]...)
+	return out
 }
 
 func SummarizeLocally(history []Item, maxChars int) string {
@@ -360,7 +440,28 @@ func CompactLocally(request *Request, maxSummaryChars int, initialContext []Item
 	}
 	history := requestHistoryForCompaction(request)
 	summary := SummarizeLocally(history, maxSummaryChars)
-	compacted := BuildCompactedHistory(nil, retainedUserMessagesForLocalCompaction(history, CompactionUserMessageBudget), summary)
+	pendingFirst, hasPending := pendingMailSequence(history)
+	pending := []Item(nil)
+	budget := CompactionUserMessageBudget
+	if hasPending {
+		pending = pendingAgentMessagesForCompaction(history, pendingFirst, budget)
+		for i := range pending {
+			budget -= max(1, EstimateItemTokens(&pending[i]))
+		}
+		if budget < 0 {
+			budget = 0
+		}
+	}
+	users := retainedUserMessagesForLocalCompaction(history, budget)
+	retained := append(cloneItems(users), cloneItems(pending)...)
+	if hasPending {
+		sortByHistorySequence(retained)
+	}
+	compacted := append(retained, compactionSummaryItem(summary))
+	if hasPending {
+		summaryItem := compacted[len(compacted)-1]
+		compacted = insertBeforePending(compacted[:len(compacted)-1], []Item{summaryItem}, pendingFirst, true)
+	}
 	if injectBeforeLastUser {
 		compacted = InsertInitialContextBeforeLastUserOrSummary(compacted, initialContext)
 	}
@@ -676,12 +777,22 @@ func processRemoteHistoryWithRetainedWithAudio(remote []Item, original []Item, i
 	retained := retainedMessagesForRemoteCompactionWithAudio(original, RemoteRetainedMessageTokenBudget, policy, durations)
 	filtered := FilterCompactedHistory(remote, policy.clientDeveloperMessages, policy.clientToolOutputs)
 	history := append([]Item(nil), retained...)
+	checkpoints := []Item{}
 	for _, item := range filtered {
 		if compactHistoryContainsItem(history, item) {
 			continue
 		}
+		if item.Type == "compaction" || item.Type == "context_compaction" {
+			checkpoints = append(checkpoints, item)
+			continue
+		}
 		history = append(history, item)
 	}
+	pendingFirst, hasPending := pendingMailSequence(original)
+	if hasPending {
+		sortByHistorySequence(history)
+	}
+	history = insertBeforePending(history, checkpoints, pendingFirst, hasPending)
 	if injectBeforeLastUser {
 		return InsertInitialContextBeforeLastUserOrSummary(history, initialContext)
 	}
@@ -700,7 +811,9 @@ func retainedMessagesForRemoteCompactionWithAudio(items []Item, maxTokens int, p
 		return nil
 	}
 	candidates := make([]Item, 0, len(items))
+	pendingFirst, hasPending := pendingMailSequence(items)
 	for _, item := range items {
+		pending := hasPending && isRetainedPendingMail(item, pendingFirst)
 		keep := (item.Type == "message" || item.Type == "user_message") && item.Role == "user" && ShouldKeepCompactedHistoryItem(item)
 		if policy.clientDeveloperMessages && IsClientAuthoredDeveloperMessage(item) {
 			keep = true
@@ -712,7 +825,9 @@ func retainedMessagesForRemoteCompactionWithAudio(items []Item, maxTokens int, p
 		}
 		if isStructuredAgentMessage(&item) {
 			cost := EstimateItemTokens(&item)
-			keep = !isAgentCompletionMessage(&item) && cost <= MaxRetainedAgentMessageTokens
+			keep = pending || (!isAgentCompletionMessage(&item) && cost <= MaxRetainedAgentMessageTokens)
+		} else {
+			keep = keep || pending
 		}
 		if keep {
 			candidates = append(candidates, item)

@@ -66,6 +66,34 @@ import (
 // scheduler and temp-file IO can delay a turn well past two seconds.
 const asyncTestWaitTimeout = 10 * time.Second
 
+func TestRuntimeSamplingCheckpointPersistsLegacyHistoryIdentities(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	threadID := session.ThreadID("thread-sampling-checkpoint")
+	if err := store.Create(&session.Record{ID: threadID, Items: []session.Item{
+		{ID: "user", Type: "user_message", Role: "user", Text: "start"},
+		{ID: "assistant", Type: "assistant_message", Role: "assistant", Text: "working"},
+	}}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store), DefaultCWD: t.TempDir()})
+	sequence, ok := router.runtimeSamplingCheckpoint(threadID)
+	if !ok || sequence != 2 {
+		t.Fatalf("runtimeSamplingCheckpoint() = %d, %v; want 2, true", sequence, ok)
+	}
+	record, err := store.Read(threadID, true, true)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	for i := range record.Items {
+		if got := session.ItemHistorySequence(&record.Items[i]); got != uint64(i+1) {
+			t.Fatalf("item %d history sequence = %d, want %d", i, got, i+1)
+		}
+		if got := session.ItemSampledThroughSequence(&record.Items[i]); got != 0 {
+			t.Fatalf("item %d sampled checkpoint = %d, want absent", i, got)
+		}
+	}
+}
+
 func TestRuntimeMCPConfigUsesSharedHTTPClient(t *testing.T) {
 	shared := &http.Client{}
 	router := NewRuntimeRouter(RuntimeServices{HTTPClient: shared})

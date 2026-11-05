@@ -245,6 +245,51 @@ func TestStoreReadHonorsArchiveFlag(t *testing.T) {
 	}
 }
 
+func TestStoreAppendPreservesSamplingCheckpoint(t *testing.T) {
+	store := NewStore(t.TempDir())
+	legacy := Item{ID: "legacy"}
+	sampled := Item{ID: "sampled"}
+	MergeItemHarnessMetadata(&sampled, map[string]any{
+		"history_sequence":         3,
+		"sampled_through_sequence": 2,
+	})
+	if err := store.Create(&Record{ID: "thread-sequences", Items: []Item{legacy, sampled}}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if _, err := store.AppendItems("thread-sequences", []Item{{ID: "pending"}}); err != nil {
+		t.Fatalf("AppendItems() error = %v", err)
+	}
+	record, err := store.Load("thread-sequences")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := ItemHistorySequence(&record.Items[0]); got != 4 {
+		t.Fatalf("legacy history sequence = %d, want 4", got)
+	}
+	if got := ItemSampledThroughSequence(&record.Items[0]); got != 0 {
+		t.Fatalf("legacy sampled checkpoint = %d, want absent", got)
+	}
+	if got := ItemHistorySequence(&record.Items[2]); got != 5 {
+		t.Fatalf("appended history sequence = %d, want 5", got)
+	}
+	if got := ItemSampledThroughSequence(&record.Items[2]); got != 2 {
+		t.Fatalf("appended sampled checkpoint = %d, want 2", got)
+	}
+	if _, err := store.AppendItem("thread-sequences", Item{ID: "next"}); err != nil {
+		t.Fatalf("AppendItem() error = %v", err)
+	}
+	record, err = store.Load("thread-sequences")
+	if err != nil {
+		t.Fatalf("Load(after next) error = %v", err)
+	}
+	if got := ItemHistorySequence(&record.Items[3]); got != 6 {
+		t.Fatalf("second appended history sequence = %d, want 6", got)
+	}
+	if got := ItemSampledThroughSequence(&record.Items[3]); got != 2 {
+		t.Fatalf("second appended sampled checkpoint = %d, want 2", got)
+	}
+}
+
 func TestStoreAppendItemsUpdatesRecencyAndPreview(t *testing.T) {
 	store := NewStore(t.TempDir())
 	now := fixedTime()

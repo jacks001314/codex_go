@@ -430,20 +430,24 @@ type responsesReasoningTextContent struct {
 }
 
 type AgentResponse struct {
-	ResponseID        string
-	Message           string
-	Items             []AgentItem
-	Usage             AgentUsage
-	Model             string
-	ProviderID        string
-	RequestID         string
-	ServerModel       string
-	TurnState         string
-	ModelsETag        string
-	Headers           map[string]string
-	RateLimits        []ResponsesRateLimitSnapshot
-	ReasoningIncluded *bool
-	TimingMetrics     map[string]any
+	ResponseID string
+	// SampledThroughSequence is the highest persisted history identity included
+	// in the regular inference request that produced this response. It is
+	// internal harness state and never serialized to storage as model output.
+	SampledThroughSequence *uint64 `json:"-"`
+	Message                string
+	Items                  []AgentItem
+	Usage                  AgentUsage
+	Model                  string
+	ProviderID             string
+	RequestID              string
+	ServerModel            string
+	TurnState              string
+	ModelsETag             string
+	Headers                map[string]string
+	RateLimits             []ResponsesRateLimitSnapshot
+	ReasoningIncluded      *bool
+	TimingMetrics          map[string]any
 	// Preempted reports that the sampling request was interrupted by new user
 	// input before it produced a response (Rust #48141's
 	// `SamplingRequestResult { needs_follow_up: true }` for a signaled step). The

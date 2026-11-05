@@ -11892,7 +11892,32 @@ func (r *RuntimeRouter) runtimeUpdateThreadMetadata(threadID session.ThreadID, p
 	return r.services.ThreadRouter.store.UpdateMetadata(threadID, patch, includeArchived)
 }
 
+func (r *RuntimeRouter) runtimeSamplingCheckpoint(threadID session.ThreadID) (uint64, bool) {
+	record, err := r.threadRecord(threadID, true, true)
+	if err != nil || record == nil {
+		return 0, false
+	}
+	before := session.MaxHistorySequence(record.Items)
+	sequence := session.EnsureHistorySequences(record.Items)
+	if sequence != before {
+		if err := r.runtimeSaveThreadRecord(record); err != nil {
+			return 0, false
+		}
+	}
+	return sequence, sequence > 0
+}
+
 func (r *RuntimeRouter) runtimeAppendItem(threadID session.ThreadID, item session.Item) (*session.Record, error) {
+	// AppendItem stores a value copy, while the caller also writes this item to
+	// the rollout after the append. Reserve its history identity here so both
+	// representations carry the same harness checkpoint.
+	if record, err := r.threadRecord(threadID, true, true); err == nil && record != nil {
+		sequenced := append([]session.Item(nil), record.Items...)
+		appendedStart := len(sequenced)
+		sequenced = append(sequenced, item)
+		session.EnsureAppendedHistorySequences(sequenced, appendedStart)
+		item = sequenced[len(sequenced)-1]
+	}
 	return r.runtimeAppendItems(threadID, []session.Item{item})
 }
 

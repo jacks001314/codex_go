@@ -240,6 +240,10 @@ type AgentLoopRequest struct {
 	CriticalPathTiming bool
 	SamplingFollowUp   SamplingFollowUp
 	SamplingCompaction SamplingCompaction
+	// SamplingCheckpoint returns the highest persisted history identity visible
+	// before a regular inference request. It is captured before dispatch, so
+	// input appended while the request runs remains pending (Rust #59404).
+	SamplingCheckpoint func() (uint64, bool)
 	OnAssistantMessage AssistantMessageCallback
 	// OnCompletedResponseItem receives every completed model response item.
 	// Hosts use it for opt-in telemetry that must observe a final answer before
@@ -312,6 +316,9 @@ type AgentLoopResult struct {
 	TimingProfile     *Profile
 	SamplingFollowUps int
 	Compactions       int
+	// SampledThroughSequence is the highest input prefix acknowledged by a
+	// completed regular request during this turn.
+	SampledThroughSequence *uint64
 	// ReasoningIncluded is the last server-reported reasoning-inclusion flag of
 	// the turn's sampling requests. Rust #55991 seeds token accounting from the
 	// model's Responses Lite setting and lets server events override it; the
@@ -598,11 +605,19 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 		if request.UnifiedImageBudgetForModel != nil {
 			unifiedImageBudget = request.UnifiedImageBudgetForModel(stepModel)
 		}
+		postPromptForIteration := postPromptInputItemsForIteration(postPromptItems, iteration)
+		var sampledThrough *uint64
+		if request.SamplingCheckpoint != nil {
+			if sequence, ok := request.SamplingCheckpoint(); ok {
+				value := sequence
+				sampledThrough = &value
+			}
+		}
 		response, err := l.agent.Run(stepCtx, &model.AgentRequest{
 			Prompt:                       prompt,
 			Instructions:                 instructions,
 			InputItems:                   inputItems,
-			PostPromptInputItems:         postPromptInputItemsForIteration(postPromptItems, iteration),
+			PostPromptInputItems:         postPromptForIteration,
 			Tools:                        append([]any(nil), stepTools...),
 			Model:                        stepModel,
 			UnifiedImageBudget:           unifiedImageBudget,
@@ -679,6 +694,14 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 				ThreadID: request.ThreadID, TurnID: request.TurnID, CWD: request.CWD, Usage: usage,
 			})
 		}
+		if response != nil && sampledThrough != nil {
+			value := *sampledThrough
+			response.SampledThroughSequence = &value
+			if result.SampledThroughSequence == nil || value > *result.SampledThroughSequence {
+				result.SampledThroughSequence = &value
+			}
+		}
+
 		if err != nil {
 			endSamplingRequestSpan()
 			// Rust #53670 (session/turn.rs `try_run_sampling_request`): a

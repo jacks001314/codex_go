@@ -1159,12 +1159,20 @@ func (m *ThreadManager) AppendEphemeralItems(threadID session.ThreadID, items []
 		return nil, false
 	}
 	now := time.Now().UTC()
+	session.EnsureHistorySequences(record.Items)
+	appendedStart := len(record.Items)
+	appended := make([]session.Item, len(items))
 	for i := range items {
-		item := items[i]
+		item := cloneRuntimeSessionItem(items[i])
 		if item.CreatedAt.IsZero() {
 			item.CreatedAt = now
 		}
-		record.Items = append(record.Items, cloneRuntimeSessionItem(item))
+		appended[i] = item
+	}
+	record.Items = append(record.Items, appended...)
+	session.EnsureAppendedHistorySequences(record.Items, appendedStart)
+	for i := range appended {
+		item := record.Items[appendedStart+i]
 		record.UpdatedAt = item.CreatedAt
 		record.RecencyAt = item.CreatedAt
 		if strings.TrimSpace(record.Preview) == "" {

@@ -1034,7 +1034,10 @@ func (s *Store) AppendItem(threadID ThreadID, item Item) (*Record, error) {
 	if item.CreatedAt.IsZero() {
 		item.CreatedAt = now
 	}
+	EnsureHistorySequences(record.Items)
 	record.Items = append(record.Items, item)
+	EnsureAppendedHistorySequences(record.Items, len(record.Items)-1)
+	item = record.Items[len(record.Items)-1]
 	record.UpdatedAt = item.CreatedAt
 	record.RecencyAt = item.CreatedAt
 	if record.Preview == "" {
@@ -1058,7 +1061,13 @@ func (s *Store) AppendItems(threadID ThreadID, items []Item) (*Record, error) {
 		if items[i].CreatedAt.IsZero() {
 			items[i].CreatedAt = now
 		}
-		record.Items = append(record.Items, items[i])
+	}
+	EnsureHistorySequences(record.Items)
+	appendedStart := len(record.Items)
+	record.Items = append(record.Items, items...)
+	EnsureAppendedHistorySequences(record.Items, appendedStart)
+	copy(items, record.Items[appendedStart:])
+	for i := range items {
 		record.UpdatedAt = items[i].CreatedAt
 		record.RecencyAt = items[i].CreatedAt
 		if record.Preview == "" {
