@@ -3,6 +3,7 @@ package appserver
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 
@@ -304,9 +305,9 @@ func (r *RuntimeRouter) checkStartupModelProvider() error {
 	return r.checkModelProviderRoute(r.startupModelProviderRoute)
 }
 
-// checkThreadModelProviderForID resolves the thread record and applies the
-// retained-provider check. Threads that cannot be loaded are left to the
-// caller's own validation.
+// checkThreadModelProviderForID resolves the thread record and validates its
+// retained provider route against current managed policy. A changed local
+// default does not invalidate an existing thread (Rust #59503).
 func (r *RuntimeRouter) checkThreadModelProviderForID(threadID string) error {
 	if r == nil || strings.TrimSpace(threadID) == "" {
 		return nil
@@ -315,7 +316,7 @@ func (r *RuntimeRouter) checkThreadModelProviderForID(threadID string) error {
 	if err != nil || record == nil {
 		return nil
 	}
-	return r.checkThreadModelProviderForInput(record)
+	return r.checkThreadModelProvider(record)
 }
 
 // existingGoalStatus reports the goal status a set request would leave in
@@ -346,53 +347,12 @@ func (r *RuntimeRouter) existingGoalStatus(threadID string) (GoalStatus, bool) {
 	return "", false
 }
 
-// checkThreadModelProviderForInput mirrors Rust's
-// `ConfigManager::check_thread_model_provider_for_input` (#57840): managed
-// policy still admits the thread's provider, that provider is still
-// configured, and it is the provider the current configuration selects.
-func (r *RuntimeRouter) checkThreadModelProviderForInput(record *session.Record) error {
-	if err := r.checkThreadModelProvider(record); err != nil {
-		return err
-	}
-	if r == nil || record == nil {
-		return nil
-	}
-	route, ok := r.threadModelProviderRoute(record)
-	if !ok {
-		return nil
-	}
-	cfg, err := r.configForThreadRecord(record, nil)
-	if err != nil || cfg == nil {
-		return nil
-	}
-	// Rust compares against the latest configuration, not the thread-owned
-	// settings, so a thread cannot keep itself admitted.
-	current := r.latestConfiguredModelProvider(record)
-	if current == "" {
-		return nil
-	}
-	providers, provErr := model.ProvidersFromConfigForCWD(configValues(cfg), stringConfigValue(cfg, "openai_base_url"), "")
-	if provErr != nil {
-		return configLoadInvalidRequest(provErr)
-	}
-	if _, ok := providers[route.providerID]; !ok {
-		return configLoadInvalidRequest(&ModelProviderError{Kind: ModelProviderNotConfigured, ModelProvider: route.providerID})
-	}
-	if route.providerID != current {
-		return configLoadInvalidRequest(&ModelProviderError{
-			Kind:                 ModelProviderMismatch,
-			ModelProvider:        route.providerID,
-			CurrentModelProvider: current,
-		})
-	}
-	return nil
-}
-
 // validateResumeModelProvider mirrors Rust's `ConfigManager::load_for_resume`
-// (#57840): the provider saved on the thread and the provider the resume asks
-// for must both satisfy managed policy, stay configured, and match the provider
-// the current configuration selects. Validation runs before any resume override
-// rewrites the thread's settings.
+// (#57840, #59503): a cold resume resolves configuration using the provider
+// saved on the thread, so changing the default provider does not block the
+// resume. Managed policy and provider definitions are validated before the
+// saved provider becomes effective, and an explicit request cannot switch the
+// thread to a different provider.
 func (r *RuntimeRouter) validateResumeModelProvider(record *session.Record, params *ThreadResumeParams) error {
 	if r == nil || record == nil {
 		return nil
@@ -410,21 +370,18 @@ func (r *RuntimeRouter) validateResumeModelProvider(record *session.Record, para
 			requestedOverride = value
 		}
 	}
-	cfg, err := r.configForThreadRecord(record, requestConfig)
+	saved := firstNonEmpty(
+		strings.TrimSpace(record.Metadata.ModelProvider),
+		threadConfigStringValueOrEmpty(threadRecordConfigOverrides(record), "model_provider"),
+	)
+	cfg, err := r.configForThreadRecordWithProvider(record, requestConfig, saved)
 	if err != nil {
 		return configLoadInvalidRequest(err)
 	}
 	if cfg == nil {
 		return nil
 	}
-	// Rust's `load_for_resume` resolves the selection before the saved provider
-	// is applied as a resume override.
-	current := r.latestConfiguredModelProvider(record)
-	if current == "" {
-		return configLoadInvalidRequest(errors.New("model provider requirements are unavailable"))
-	}
-	requested := firstNonEmpty(requestedOverride, current)
-	saved := firstNonEmpty(strings.TrimSpace(record.Metadata.ModelProvider), requested)
+	requested := firstNonEmpty(requestedOverride, saved, configuredModelProviderID(cfg))
 	requirements, reqErr := r.managedModelProviderRequirements()
 	if reqErr != nil {
 		return configLoadInvalidRequest(reqErr)
@@ -433,7 +390,14 @@ func (r *RuntimeRouter) validateResumeModelProvider(record *session.Record, para
 	if provErr != nil {
 		return configLoadInvalidRequest(provErr)
 	}
-	for _, provider := range []string{saved, requested} {
+	validated := []string{saved}
+	if requested != saved {
+		validated = append(validated, requested)
+	}
+	for _, provider := range validated {
+		if provider == "" {
+			continue
+		}
 		if requirements != nil && requirements.ModelProvider != nil && *requirements.ModelProvider != provider {
 			return configLoadInvalidRequest(&ModelProviderError{
 				Kind:                  ModelProviderPolicyConflict,
@@ -444,13 +408,13 @@ func (r *RuntimeRouter) validateResumeModelProvider(record *session.Record, para
 		if _, ok := providers[provider]; !ok {
 			return configLoadInvalidRequest(&ModelProviderError{Kind: ModelProviderNotConfigured, ModelProvider: provider})
 		}
-		if provider != current {
-			return configLoadInvalidRequest(&ModelProviderError{
-				Kind:                 ModelProviderMismatch,
-				ModelProvider:        provider,
-				CurrentModelProvider: current,
-			})
-		}
+	}
+	if saved != "" && saved != requested {
+		return jsonRPCInvalidRequest(fmt.Sprintf(
+			"Cannot change this thread's model provider from `%s` to `%s` on resume.",
+			saved,
+			requested,
+		))
 	}
 	return nil
 }
@@ -458,6 +422,13 @@ func (r *RuntimeRouter) validateResumeModelProvider(record *session.Record, para
 // configForThreadRecord resolves a thread's effective configuration, optionally
 // applying a resume request's raw overrides on top of the thread-owned ones.
 func (r *RuntimeRouter) configForThreadRecord(record *session.Record, requestConfig map[string]any) (*config.Config, error) {
+	return r.configForThreadRecordWithProvider(record, requestConfig, "")
+}
+
+// configForThreadRecordWithProvider resolves a thread's effective configuration,
+// forcing the saved provider selection when one is supplied. The forced value
+// mirrors Rust's typed resume override precedence over raw request overrides.
+func (r *RuntimeRouter) configForThreadRecordWithProvider(record *session.Record, requestConfig map[string]any, provider string) (*config.Config, error) {
 	if r == nil || record == nil {
 		return nil, nil
 	}
@@ -468,11 +439,19 @@ func (r *RuntimeRouter) configForThreadRecord(record *session.Record, requestCon
 	for key, value := range requestConfig {
 		merged[key] = value
 	}
+	if provider = strings.TrimSpace(provider); provider != "" {
+		merged["model_provider"] = provider
+	}
 	params := &turn.TurnStartParams{ThreadID: string(record.ID), Config: merged}
 	if cwd := strings.TrimSpace(record.Metadata.CWD); cwd != "" {
 		params.CWD = cwd
 	}
 	return r.effectiveConfigForTurn(params)
+}
+
+func threadConfigStringValueOrEmpty(values map[string]any, key string) string {
+	value, _ := threadConfigStringValue(values, key)
+	return value
 }
 
 // configuredModelProviderID reports the provider the configuration selects.
@@ -482,21 +461,4 @@ func configuredModelProviderID(cfg *config.Config) string {
 		strings.TrimSpace(stringConfigValue(cfg, "modelProvider")),
 		model.OpenAIProviderID,
 	)
-}
-
-// latestConfiguredModelProvider resolves the provider the current user/project
-// configuration selects, ignoring thread- and request-owned overrides.
-func (r *RuntimeRouter) latestConfiguredModelProvider(record *session.Record) string {
-	if r == nil {
-		return ""
-	}
-	params := &turn.TurnStartParams{}
-	if record != nil {
-		params.CWD = strings.TrimSpace(record.Metadata.CWD)
-	}
-	cfg, err := r.effectiveConfigForTurn(params)
-	if err != nil || cfg == nil {
-		return ""
-	}
-	return configuredModelProviderID(cfg)
 }
