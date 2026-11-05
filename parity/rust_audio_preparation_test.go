@@ -31,7 +31,7 @@ func TestRustAudioPreparationConstantsAgainstGo(t *testing.T) {
 		}
 	}
 
-	rate := regexp.MustCompile(`AUDIO_TOKENS_PER_SECOND: f64 = ([0-9.]+);`).FindStringSubmatch(source)
+	rate := regexp.MustCompile(`AUDIO_TOKENS_PER_SECOND: (?:f64|u32) = ([0-9.]+);`).FindStringSubmatch(source)
 	if rate == nil {
 		t.Fatal("Rust AUDIO_TOKENS_PER_SECOND not found")
 	}
@@ -40,6 +40,8 @@ func TestRustAudioPreparationConstantsAgainstGo(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 2 seconds of 8 kHz mono 16-bit PCM must estimate to ceil(2 * rate).
+	// Rust #59268 replaced the f64 rate with an integer u32 rate; both spellings
+	// must keep the same 10 tokens/second contract.
 	wav := wavDataURLForParity()
 	want := int(tokensPerSecond * 2)
 	if got := audioutil.EstimateAudioTokenCount(wav); got != want {

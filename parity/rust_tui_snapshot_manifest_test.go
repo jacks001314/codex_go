@@ -48,8 +48,8 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	// snapshot landed in this window (1437 -> 1452). Round 1017 re-anchored to
 	// upstream b0f977c3a9: the onboarding, app, and bottom-pane suites gained
 	// goldens in the intervening windows (1452 -> 1466).
-	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1468 {
-		t.Fatalf("Rust TUI snapshot total drift: got %d want 1468", got)
+	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1481 {
+		t.Fatalf("Rust TUI snapshot total drift: got %d want 1481", got)
 	}
 
 	gotDirs := rustTUISnapshotDirs(t, root)
@@ -122,7 +122,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// Re-pinned to upstream 18e28fe1b9: #48621 removed follow-up prompt
 			// suggestions from the TUI, so the prompt-suggestion request-history
 			// snapshot is gone and the dir now holds 85 files.
-			Files:    95,
+			Files:    99,
 			Owner:    "tui/app, tui/chatwidget",
 			Focus:    "desktop history UI, cancelled-turn composer restore, and thread goal action rendering",
 			Priority: []string{"app", "composer", "history"},
@@ -155,7 +155,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// two startup-warning summaries into the warnings-viewer snapshots.
 			// #48121 added the command-center draft-handoff snapshot.
 			// #48135 added the remapped-left external-writer view snapshot.
-			Files:    82,
+			Files:    83,
 			Owner:    "tui/app",
 			Focus:    "app-level catalog and migration prompts",
 			Priority: []string{"app", "model"},
@@ -295,7 +295,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		},
 		{
 			Path:     "tui/src/chatwidget/realtime_tests/snapshots",
-			Files:    14,
+			Files:    15,
 			Owner:    "tui/chatwidget",
 			Focus:    "realtime voice lifecycle, transcript replay, delegation handoffs, and privacy snapshots",
 			Priority: []string{"voice", "history"},
@@ -311,7 +311,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// warnings-summary presentation and #46752 added the tmux
 			// pets-unavailable notice; #48015 added the declined-tool-suggestion
 			// snapshot; #48116 added the two Max-reasoning footer snapshots.
-			Files:    336,
+			Files:    337,
 			Owner:    "tui/chatwidget, tui/tea",
 			Focus:    "main chat widget terminal snapshots for status lines, approvals, plugins, hooks, review, usage, and unified exec",
 			Priority: []string{"approval", "status", "history", "unified-exec", "review"},
@@ -482,7 +482,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// guard.
 			// #48562 removed the clear-UI fast-status and thread-read-model
 			// header snapshots with the boxed card.
-			Files:    201,
+			Files:    207,
 			Owner:    "tui, tui/markdown, tui/app",
 			Focus:    "diff render, markdown render, keymap, resume picker, pager overlay, model migration, and status indicator snapshots",
 			Priority: []string{"diff", "markdown", "status", "session", "keymap"},

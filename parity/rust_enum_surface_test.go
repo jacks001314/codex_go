@@ -211,11 +211,11 @@ func TestRustModelInfoFieldSurfaceAgainstGo(t *testing.T) {
 		goSet[field] = true
 	}
 
-	if len(rustSet) != 46 {
-		t.Fatalf("Rust ModelInfo wire field count = %d, want 46 (pinned baseline)", len(rustSet))
+	if len(rustSet) != 47 {
+		t.Fatalf("Rust ModelInfo wire field count = %d, want 47 (pinned baseline)", len(rustSet))
 	}
-	if len(goSet) != 48 {
-		t.Fatalf("Go ModelInfo JSON field count = %d, want 48 (pinned baseline)", len(goSet))
+	if len(goSet) != 49 {
+		t.Fatalf("Go ModelInfo JSON field count = %d, want 49 (pinned baseline)", len(goSet))
 	}
 
 	for field := range rustSet {

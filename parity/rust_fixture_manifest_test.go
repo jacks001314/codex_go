@@ -77,7 +77,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 		},
 		{
 			Path:  "exec/tests",
-			Files: 23,
+			Files: 24,
 			Owner: "exec, app",
 			Focus: "exec JSON output, prompt/stdin, output schema, resume, sandbox, hooks",
 			Required: []string{
@@ -88,7 +88,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 		},
 		{
 			Path:  "exec/tests/suite",
-			Files: 20,
+			Files: 21,
 			Owner: "exec",
 			Focus: "codex exec end-to-end suite cases",
 			Required: []string{
@@ -110,7 +110,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// account-enterprise, GCP/Bedrock, guardian, critical-path, thread
 			// sample/unload and MCP connection-sharing fixtures from the
 			// intervening sync windows.
-			Files: 182,
+			Files: 188,
 			Owner: "appserver",
 			Focus: "JSON-RPC v2 protocol and runtime fixtures",
 			Required: []string{
@@ -161,7 +161,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// fixtures landed across the intervening sync windows.
 			// Re-anchored to upstream e8e6a922c0: `scenarios_reserved_spawn.rs`
 			// (#57586) plus the reserved-child fixtures landed in this window.
-			Files: 410,
+			Files: 456,
 			Owner: "turn, model, tool, session",
 			Focus: "core agent loop, model client, session, tools, sandbox, resume",
 			Required: []string{

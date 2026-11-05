@@ -214,6 +214,9 @@ var Registry = []Spec{
 	// world-state entries by default; promoted to stable and enabled by
 	// default.
 	{Key: "deferred_tool_world_state", Stage: StageStable, DefaultEnabled: true},
+	// Rust (codex-rs/features/src/lib.rs #59633): expose retained command
+	// sessions in incremental world state (under development, disabled).
+	{Key: "command_sessions_world_state", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	// Rust (codex-rs/features/src/lib.rs #50464): track top-level tool
 	// definitions in world state and emit incremental context updates.
 	{Key: "incremental_tools", Stage: StageStable, DefaultEnabled: true},
