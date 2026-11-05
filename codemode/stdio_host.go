@@ -18,14 +18,31 @@ type stdioHostServer struct {
 	read    func(*ClientToHost) (bool, error)
 	writeFn func(any) error
 
-	writeMu      sync.Mutex
-	mu           sync.Mutex
-	sessions     map[SessionID]*stdioHostSession
-	seen         map[SessionID]struct{}
-	requests     map[RequestID]*stdioHostRequest
-	pending      map[DelegateRequestID]chan delegateHostResult
-	nextDelegate atomic.Int64
-	wg           sync.WaitGroup
+	writeMu         sync.Mutex
+	mu              sync.Mutex
+	sessions        map[SessionID]*stdioHostSession
+	seen            map[SessionID]struct{}
+	requests        map[RequestID]*stdioHostRequest
+	pending         map[DelegateRequestID]chan delegateHostResult
+	pendingCount    int
+	pendingSession  map[SessionID]int
+	activeCells     map[activeCellKey]struct{}
+	delegateLimit   int
+	activeCellLimit int
+	enforceSessions bool
+	nextDelegate    atomic.Int64
+	wg              sync.WaitGroup
+}
+
+type codemodeHostOptions struct {
+	// enforceSessionDelegateLimits mirrors the structured gRPC service, where
+	// each session owns a callback budget in addition to the shared host budget.
+	enforceSessionDelegateLimits bool
+}
+
+type activeCellKey struct {
+	sessionID SessionID
+	cellID    CellID
 }
 
 // stdioHostRequest tracks one in-flight host request. The yield signal is the
@@ -50,13 +67,14 @@ func RunStdioHost(ctx context.Context, stdin io.Reader, stdout io.Writer) error 
 		ctx,
 		func(message *ClientToHost) (bool, error) { return reader.Read(message) },
 		func(message any) error { return writer.Write(message) },
+		codemodeHostOptions{},
 	)
 }
 
 // runCodemodeHost runs the code-mode host protocol over an arbitrary message
 // transport. Rust's gRPC stdio host serves the same logic over a framed gRPC
 // stream (#52723).
-func runCodemodeHost(ctx context.Context, read func(*ClientToHost) (bool, error), write func(any) error) error {
+func runCodemodeHost(ctx context.Context, read func(*ClientToHost) (bool, error), write func(any) error, options codemodeHostOptions) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -64,6 +82,9 @@ func runCodemodeHost(ctx context.Context, read func(*ClientToHost) (bool, error)
 		ctx: ctx, read: read, writeFn: write,
 		sessions: map[SessionID]*stdioHostSession{}, seen: map[SessionID]struct{}{},
 		requests: map[RequestID]*stdioHostRequest{}, pending: map[DelegateRequestID]chan delegateHostResult{},
+		pendingSession: map[SessionID]int{}, activeCells: map[activeCellKey]struct{}{},
+		delegateLimit: LegacyMaxPendingDelegateCalls, activeCellLimit: MaxActiveCells,
+		enforceSessions: options.enforceSessionDelegateLimits,
 	}
 	if err := host.negotiate(); err != nil {
 		return err
@@ -115,7 +136,7 @@ func (h *stdioHostServer) negotiate() error {
 	// Rust #48123: the host advertises the supported optional capabilities the
 	// client asked for, and rejects a required capability it cannot provide.
 	supported := CapabilitySet{}
-	for _, name := range []string{SessionCellExecutionResourceLimitsCapability, YieldObservationCapability} {
+	for _, name := range []string{SessionCellExecutionResourceLimitsCapability, YieldObservationCapability, LargeDelegateCapacityCapability} {
 		if capability, err := NewCapability(name); err == nil {
 			supported = append(supported, capability)
 		}
@@ -134,6 +155,11 @@ func (h *stdioHostServer) negotiate() error {
 			hostCapabilities = append(hostCapabilities, capability)
 		}
 	}
+	if (&hostCapabilities).Contains(Capability(LargeDelegateCapacityCapability)) {
+		h.delegateLimit = MaxPendingDelegateCalls
+	} else {
+		h.delegateLimit = LegacyMaxPendingDelegateCalls
+	}
 	return h.write(HostHelloMessage(HostHello{SelectedVersion: ProtocolV1, Capabilities: hostCapabilities}))
 }
 
@@ -145,6 +171,12 @@ func (h *stdioHostServer) startRequest(id RequestID, request *HostRequest) {
 	}
 	entry := &stdioHostRequest{kind: kind, cancel: cancel, yield: tool.NewYieldSignal()}
 	h.mu.Lock()
+	if len(h.requests) >= maxInFlightRequests {
+		h.mu.Unlock()
+		cancel()
+		_ = h.write(HostOperationResponse(id, ResultErr[HostResponse]("code-mode host has too many in-flight requests")))
+		return
+	}
 	if _, exists := h.requests[id]; exists {
 		h.mu.Unlock()
 		cancel()
@@ -205,12 +237,18 @@ func (h *stdioHostServer) handleRequest(ctx context.Context, id RequestID, reque
 			return
 		}
 		cellID := session.nextCellID()
+		if !h.reserveActiveCell(request.SessionID, cellID) {
+			_ = h.write(HostOperationResponse(id, ResultErr[HostResponse]("code-mode host has too many active cells")))
+			return
+		}
 		if err := h.write(HostOperationResponse(id, ResultOK(ExecutionStarted(cellID)))); err != nil {
+			h.releaseActiveCell(request.SessionID, cellID)
 			return
 		}
 		response := session.execute(ctx, cellID, request.Request, yield)
 		_ = h.write(InitialResponse(id, ResultOK(response)))
 		if response.Variant != "Yielded" {
+			h.releaseActiveCell(request.SessionID, cellID)
 			_ = h.write(CellClosed(request.SessionID, cellID))
 		}
 	case "session/wait":
@@ -222,6 +260,7 @@ func (h *stdioHostServer) handleRequest(ctx context.Context, id RequestID, reque
 		outcome := session.wait(ctx, request.Wait, false, yield)
 		_ = h.write(HostOperationResponse(id, ResultOK(WaitCompleted(outcome))))
 		if outcome.Response.Variant != "Yielded" {
+			h.releaseActiveCell(request.SessionID, outcome.Response.CellID)
 			_ = h.write(CellClosed(request.SessionID, outcome.Response.CellID))
 		}
 	case "session/terminate":
@@ -234,11 +273,13 @@ func (h *stdioHostServer) handleRequest(ctx context.Context, id RequestID, reque
 		// server-truncated sessions; client-mode sessions ignore it (Rust #57272).
 		outcome := session.wait(ctx, &WaitRequest{CellID: request.CellID, MaxOutputTokens: request.MaxOutputTokens}, true, yield)
 		_ = h.write(HostOperationResponse(id, ResultOK(WaitCompleted(outcome))))
+		h.releaseActiveCell(request.SessionID, request.CellID)
 		_ = h.write(CellClosed(request.SessionID, request.CellID))
 	case "session/shutdown":
 		h.mu.Lock()
 		session := h.sessions[request.SessionID]
 		delete(h.sessions, request.SessionID)
+		h.releaseSessionActiveCellsLocked(request.SessionID)
 		h.mu.Unlock()
 		if session == nil {
 			_ = h.write(HostOperationResponse(id, ResultErr[HostResponse](fmt.Sprintf("unknown code-mode session %s", request.SessionID))))
@@ -286,12 +327,13 @@ func (h *stdioHostServer) requestDelegate(ctx context.Context, sessionID Session
 	id := DelegateRequestID(h.nextDelegate.Add(1))
 	response := make(chan delegateHostResult, 1)
 	h.mu.Lock()
-	if len(h.pending) >= MaxPendingDelegateCalls {
+	if err := h.reserveDelegateBudgetLocked(sessionID); err != nil {
 		h.mu.Unlock()
-		return DelegateResponse{}, fmt.Errorf("code-mode host exceeded the limit of %d pending delegate calls", MaxPendingDelegateCalls)
+		return DelegateResponse{}, err
 	}
 	h.pending[id] = response
 	h.mu.Unlock()
+	defer h.releaseDelegateBudget(sessionID)
 	if err := h.write(DelegateRequestMessage(id, sessionID, request)); err != nil {
 		h.mu.Lock()
 		delete(h.pending, id)
@@ -307,6 +349,71 @@ func (h *stdioHostServer) requestDelegate(ctx context.Context, sessionID Session
 		h.mu.Unlock()
 		_ = h.write(CancelDelegateRequest(id))
 		return DelegateResponse{}, ctx.Err()
+	}
+}
+
+// reserveDelegateBudgetLocked enforces the negotiated shared-host budget and,
+// for the structured gRPC transport, the owning session's independent budget.
+func (h *stdioHostServer) reserveDelegateBudgetLocked(sessionID SessionID) error {
+	limit := h.delegateLimit
+	if limit <= 0 {
+		limit = LegacyMaxPendingDelegateCalls
+	}
+	if h.enforceSessions && h.pendingSession[sessionID] >= limit {
+		return errors.New("code-mode session has too many pending delegate calls")
+	}
+	if h.pendingCount >= limit {
+		return errors.New("code-mode host has too many pending delegate calls")
+	}
+	h.pendingCount++
+	h.pendingSession[sessionID]++
+	return nil
+}
+
+func (h *stdioHostServer) reserveDelegateBudget(sessionID SessionID) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.reserveDelegateBudgetLocked(sessionID)
+}
+
+func (h *stdioHostServer) releaseDelegateBudget(sessionID SessionID) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.pendingCount > 0 {
+		h.pendingCount--
+	}
+	if h.pendingSession[sessionID] <= 1 {
+		delete(h.pendingSession, sessionID)
+	} else {
+		h.pendingSession[sessionID]--
+	}
+}
+
+func (h *stdioHostServer) reserveActiveCell(sessionID SessionID, cellID CellID) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	limit := h.activeCellLimit
+	if limit <= 0 {
+		limit = MaxActiveCells
+	}
+	if len(h.activeCells) >= limit {
+		return false
+	}
+	h.activeCells[activeCellKey{sessionID: sessionID, cellID: cellID}] = struct{}{}
+	return true
+}
+
+func (h *stdioHostServer) releaseActiveCell(sessionID SessionID, cellID CellID) {
+	h.mu.Lock()
+	delete(h.activeCells, activeCellKey{sessionID: sessionID, cellID: cellID})
+	h.mu.Unlock()
+}
+
+func (h *stdioHostServer) releaseSessionActiveCellsLocked(sessionID SessionID) {
+	for key := range h.activeCells {
+		if key.sessionID == sessionID {
+			delete(h.activeCells, key)
+		}
 	}
 }
 
@@ -339,6 +446,7 @@ func (h *stdioHostServer) shutdown() {
 		sessions = append(sessions, session)
 	}
 	h.sessions = map[SessionID]*stdioHostSession{}
+	h.activeCells = map[activeCellKey]struct{}{}
 	h.mu.Unlock()
 	for _, entry := range requests {
 		entry.cancel()
@@ -392,6 +500,9 @@ func (s *stdioHostSession) execute(ctx context.Context, cellID CellID, request *
 			tool.CodeModeHostObservationContextKey: true,
 		},
 	}
+	invocation.Context[tool.CodeModeCellClosedContextKey] = tool.CodeModeCellClosedFunc(func() {
+		s.host.releaseActiveCell(s.id, cellID)
+	})
 	invocation.Context["code_mode_notify"] = tool.CodeModeNotifyFunc(func(callID, text string) {
 		_, _ = s.host.requestDelegate(ctx, s.id, NotifyRequest(callID, cellID, text))
 	})

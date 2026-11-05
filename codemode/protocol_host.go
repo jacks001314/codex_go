@@ -7,7 +7,54 @@ import (
 	"strings"
 )
 
-const MaxPendingDelegateCalls = 1024
+const (
+	// LegacyMaxPendingDelegateCalls is the callback budget used by clients and
+	// hosts that do not negotiate the larger shared-host capacity.
+	LegacyMaxPendingDelegateCalls = 1024
+
+	// MaxPendingDelegateCalls is the callback budget for a connection that
+	// supports delegate-capacity-4096.
+	MaxPendingDelegateCalls = 4096
+
+	// MaxActiveCells bounds live V8 isolates across every session sharing one
+	// code-mode host (Rust #59590).
+	MaxActiveCells = 2048
+
+	// MaxInFlightCompletions bounds result-delivery RPCs across a provider's
+	// sessions. A full completion burst can otherwise exhaust HTTP/2's small
+	// DATA-frame budget and disconnect every session sharing the transport.
+	MaxInFlightCompletions = 64
+)
+
+const (
+	// LargeDelegateCapacityCapability lets a stdio or framed transport client
+	// advertise that it can accept 4096 unresolved delegate callbacks.
+	LargeDelegateCapacityCapability = "delegate-capacity-4096"
+
+	// maxInFlightRequests leaves observation and control headroom during a full
+	// callback-completion burst.
+	maxInFlightRequests = MaxPendingDelegateCalls * 2
+
+	// outgoingChannelCapacity holds a complete callback burst plus concurrent
+	// control messages.
+	outgoingChannelCapacity = MaxPendingDelegateCalls * 2
+)
+
+// NormalizePendingDelegateCalls validates the optional gRPC session capacity.
+// Absence preserves the legacy budget, zero is invalid, and values above the
+// supported maximum are clamped (Rust #59590).
+func NormalizePendingDelegateCalls(requested *uint32) (int, error) {
+	if requested == nil {
+		return LegacyMaxPendingDelegateCalls, nil
+	}
+	if *requested == 0 {
+		return 0, fmt.Errorf("callback capacity must be positive")
+	}
+	if *requested > uint32(MaxPendingDelegateCalls) {
+		return MaxPendingDelegateCalls, nil
+	}
+	return int(*requested), nil
+}
 
 // DualWebSocketCapability is the optional host capability that pairs the
 // control WebSocket with a second bulk WebSocket carrying delegate callbacks

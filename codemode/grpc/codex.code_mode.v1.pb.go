@@ -329,8 +329,12 @@ type OpenSessionRequest struct {
 	CellExecutionLimits *SessionCellExecutionLimits `protobuf:"bytes,1,opt,name=cell_execution_limits,json=cellExecutionLimits,proto3,oneof" json:"cell_execution_limits,omitempty"`
 	// Absent preserves the legacy client-side truncation behavior.
 	OutputTruncation *OutputTruncation `protobuf:"varint,2,opt,name=output_truncation,json=outputTruncation,proto3,enum=codex.code_mode.v1.OutputTruncation,oneof" json:"output_truncation,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Maximum pending tool callbacks the client can accept.
+	// Absent preserves the legacy 1,024 callback budget. Hosts may impose a lower
+	// shared limit, and older hosts ignore this field and retain their own limit.
+	MaxPendingDelegateCalls *uint32 `protobuf:"varint,3,opt,name=max_pending_delegate_calls,json=maxPendingDelegateCalls,proto3,oneof" json:"max_pending_delegate_calls,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
 }
 
 func (x *OpenSessionRequest) Reset() {
@@ -375,6 +379,13 @@ func (x *OpenSessionRequest) GetOutputTruncation() OutputTruncation {
 		return *x.OutputTruncation
 	}
 	return OutputTruncation_OUTPUT_TRUNCATION_UNSPECIFIED
+}
+
+func (x *OpenSessionRequest) GetMaxPendingDelegateCalls() uint32 {
+	if x != nil && x.MaxPendingDelegateCalls != nil {
+		return *x.MaxPendingDelegateCalls
+	}
+	return 0
 }
 
 type SessionCellExecutionLimits struct {
@@ -2691,12 +2702,14 @@ const file_codex_code_mode_v1_proto_rawDesc = "" +
 	"\x11cpu_seconds_total\x18\x03 \x01(\x01R\x0fcpuSecondsTotal\x122\n" +
 	"\x15resident_memory_bytes\x18\x04 \x01(\x04R\x13residentMemoryBytes\")\n" +
 	"\rFramedMessage\x12\x18\n" +
-	"\apayload\x18\x01 \x01(\fR\apayload\"\x85\x02\n" +
+	"\apayload\x18\x01 \x01(\fR\apayload\"\xe6\x02\n" +
 	"\x12OpenSessionRequest\x12g\n" +
 	"\x15cell_execution_limits\x18\x01 \x01(\v2..codex.code_mode.v1.SessionCellExecutionLimitsH\x00R\x13cellExecutionLimits\x88\x01\x01\x12V\n" +
-	"\x11output_truncation\x18\x02 \x01(\x0e2$.codex.code_mode.v1.OutputTruncationH\x01R\x10outputTruncation\x88\x01\x01B\x18\n" +
+	"\x11output_truncation\x18\x02 \x01(\x0e2$.codex.code_mode.v1.OutputTruncationH\x01R\x10outputTruncation\x88\x01\x01\x12@\n" +
+	"\x1amax_pending_delegate_calls\x18\x03 \x01(\rH\x02R\x17maxPendingDelegateCalls\x88\x01\x01B\x18\n" +
 	"\x16_cell_execution_limitsB\x14\n" +
-	"\x12_output_truncation\"\xae\x01\n" +
+	"\x12_output_truncationB\x1d\n" +
+	"\x1b_max_pending_delegate_calls\"\xae\x01\n" +
 	"\x1aSessionCellExecutionLimits\x12.\n" +
 	"\x11max_yield_time_ms\x18\x01 \x01(\x04H\x00R\x0emaxYieldTimeMs\x88\x01\x01\x122\n" +
 	"\x13max_heap_size_bytes\x18\x02 \x01(\x04H\x01R\x10maxHeapSizeBytes\x88\x01\x01B\x14\n" +

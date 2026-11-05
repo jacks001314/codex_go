@@ -80,8 +80,10 @@ const codeModeDeferredNestedToolsGuidance = "Some deferred nested tools may be o
 	"Tool availability can change between calls."
 
 const (
-	codeModeMaxFrameBytes       = 64 * 1024 * 1024
-	codeModeMaxPendingCallbacks = 1024
+	codeModeMaxFrameBytes = 64 * 1024 * 1024
+	// codeModeMaxPendingCallbacks mirrors codemode.MaxPendingDelegateCalls
+	// without importing the provider package from the tool runtime.
+	codeModeMaxPendingCallbacks = 4096
 	codeModeMaxSafeInteger      = 1<<53 - 1
 )
 
@@ -389,7 +391,17 @@ type codeModeCell struct {
 	texts       []string
 	cursor      int
 	terminated  bool
+	closed      sync.Once
+	onClosed    func()
 }
+
+// CodeModeCellClosedContextKey carries a callback for a host-owned active-cell
+// permit. The callback runs once when the script reaches a terminal state.
+const CodeModeCellClosedContextKey = "code_mode_cell_closed"
+
+// CodeModeCellClosedFunc reports that a code-mode cell no longer needs its
+// shared-host capacity.
+type CodeModeCellClosedFunc func()
 
 type codeModeExecOptions struct {
 	YieldTimeMS     *int `json:"yield_time_ms"`
@@ -911,6 +923,11 @@ func (e *codeModeExecExecutor) execute(ctx context.Context, invocation *Invocati
 	}
 	cellCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	cell := &codeModeCell{done: make(chan struct{}), cancel: cancel, startedAt: time.Now()}
+	if invocation.Context != nil {
+		if onClosed, ok := invocation.Context[CodeModeCellClosedContextKey].(CodeModeCellClosedFunc); ok {
+			cell.onClosed = onClosed
+		}
+	}
 	e.cellsMu.Lock()
 	e.cells[cellID] = cell
 	e.cellsMu.Unlock()
@@ -941,6 +958,7 @@ func (e *codeModeExecExecutor) execute(ctx context.Context, invocation *Invocati
 		cell.completedAt = time.Now()
 		close(cell.done)
 		e.cellsMu.Unlock()
+		cell.notifyClosed()
 	}()
 	timer := time.NewTimer(codeModeYieldTimeout(yieldTimeMS))
 	defer timer.Stop()
@@ -2124,6 +2142,7 @@ func (e *codeModeExecExecutor) consumeCell(cellID string, cell *codeModeCell, ob
 	delete(e.cells, cellID)
 	output, err := cell.output, cell.err
 	e.cellsMu.Unlock()
+	cell.notifyClosed()
 	// Rust's CellClosed fact for an in-process cell.
 	e.observeCall(CodeModeCallObservation{
 		Kind:   CodeModeCallCellClosed,
@@ -2158,6 +2177,13 @@ func (e *codeModeExecExecutor) consumeCell(cellID string, cell *codeModeCell, ob
 		output.Data["result_buffered_for_ns"] = uint64(buffered.Nanoseconds())
 	}
 	return output, err
+}
+
+func (c *codeModeCell) notifyClosed() {
+	if c == nil || c.onClosed == nil {
+		return
+	}
+	c.closed.Do(c.onClosed)
 }
 
 // codeModeResponseHeader mirrors Rust's `CodeModeToolOutput` header (#46288):

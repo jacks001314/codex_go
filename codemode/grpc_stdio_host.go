@@ -216,7 +216,7 @@ func (s *grpcStdioHostServer) Transport(stream codemodev1.CodeModeHost_Transport
 	_ = grpc.SetSendCompressor(stream.Context(), grpcZstdEncodingName)
 	ctx, cancel := context.WithCancel(s.ctx)
 	defer cancel()
-	inbound := make(chan ClientToHost, 16)
+	inbound := make(chan ClientToHost, outgoingChannelCapacity)
 	readErr := make(chan error, 1)
 	go func() {
 		defer close(inbound)
@@ -268,5 +268,5 @@ func (s *grpcStdioHostServer) Transport(stream codemodev1.CodeModeHost_Transport
 		defer writeMu.Unlock()
 		return stream.Send(&codemodev1.FramedMessage{Payload: data})
 	}
-	return runCodemodeHost(ctx, read, write)
+	return runCodemodeHost(ctx, read, write, codemodeHostOptions{enforceSessionDelegateLimits: true})
 }

@@ -596,29 +596,32 @@ func TestWebSocketTransportRejectsTextFrames(t *testing.T) {
 }
 
 func TestRemoteConnectionDelegateLimitRecoversWithoutDisconnecting(t *testing.T) {
-	connection := &remoteConnection{
-		alive:   true,
-		cancels: map[DelegateRequestID]context.CancelFunc{},
-	}
-	cancels := make([]context.CancelFunc, 0, MaxPendingDelegateCalls)
-	for value := 1; value <= MaxPendingDelegateCalls; value++ {
-		_, cancel, ok := connection.reserveDelegate(DelegateRequestID(value))
-		if !ok {
-			t.Fatalf("reserveDelegate(%d) rejected before capacity", value)
+	for _, limit := range []int{LegacyMaxPendingDelegateCalls, MaxPendingDelegateCalls} {
+		connection := &remoteConnection{
+			alive:         true,
+			delegateLimit: limit,
+			cancels:       map[DelegateRequestID]context.CancelFunc{},
 		}
-		cancels = append(cancels, cancel)
-	}
-	if _, overflowCancel, ok := connection.reserveDelegate(DelegateRequestID(MaxPendingDelegateCalls + 1)); ok || overflowCancel != nil || !connection.Alive() {
-		t.Fatalf("overflow reservation = %t cancel=%v alive=%t", ok, overflowCancel != nil, connection.Alive())
-	}
-	connection.releaseDelegate(1, cancels[0])
-	_, recoveredCancel, ok := connection.reserveDelegate(DelegateRequestID(MaxPendingDelegateCalls + 1))
-	if !ok || recoveredCancel == nil || !connection.Alive() {
-		t.Fatalf("connection did not recover capacity: ok=%t cancel=%v alive=%t", ok, recoveredCancel != nil, connection.Alive())
-	}
-	connection.releaseDelegate(DelegateRequestID(MaxPendingDelegateCalls+1), recoveredCancel)
-	for value := 2; value <= MaxPendingDelegateCalls; value++ {
-		connection.releaseDelegate(DelegateRequestID(value), cancels[value-1])
+		cancels := make([]context.CancelFunc, 0, limit)
+		for value := 1; value <= limit; value++ {
+			_, cancel, ok := connection.reserveDelegate(DelegateRequestID(value))
+			if !ok {
+				t.Fatalf("limit %d: reserveDelegate(%d) rejected before capacity", limit, value)
+			}
+			cancels = append(cancels, cancel)
+		}
+		if _, overflowCancel, ok := connection.reserveDelegate(DelegateRequestID(limit + 1)); ok || overflowCancel != nil || !connection.Alive() {
+			t.Fatalf("limit %d: overflow reservation = %t cancel=%v alive=%t", limit, ok, overflowCancel != nil, connection.Alive())
+		}
+		connection.releaseDelegate(1, cancels[0])
+		_, recoveredCancel, ok := connection.reserveDelegate(DelegateRequestID(limit + 1))
+		if !ok || recoveredCancel == nil || !connection.Alive() {
+			t.Fatalf("limit %d: connection did not recover capacity: ok=%t cancel=%v alive=%t", limit, ok, recoveredCancel != nil, connection.Alive())
+		}
+		connection.releaseDelegate(DelegateRequestID(limit+1), recoveredCancel)
+		for value := 2; value <= limit; value++ {
+			connection.releaseDelegate(DelegateRequestID(value), cancels[value-1])
+		}
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -768,6 +769,38 @@ text("x")`} {
 	}
 }
 
+func TestCodeModeCellClosedCallbackReleasesYieldedCell(t *testing.T) {
+	executor, waiter := NewCodeModeExecutors(NewRegistry())
+	closed := make(chan struct{}, 1)
+	output, err := executor.Execute(context.Background(), &Invocation{
+		CallID:  "closed-callback",
+		Payload: Payload{Kind: PayloadCustom, Input: "// @exec: {\"yield_time_ms\":0}\nawait new Promise(resolve => setTimeout(resolve, 60000));"},
+		Context: map[string]any{
+			CodeModeCellIDContextKey: "cell-1",
+			CodeModeCellClosedContextKey: CodeModeCellClosedFunc(func() {
+				closed <- struct{}{}
+			}),
+		},
+	})
+	if err != nil || output == nil {
+		t.Fatalf("yielded output = %#v, %v", output, err)
+	}
+	if running, _ := output.Data["running"].(bool); !running {
+		t.Fatalf("output did not yield: %#v", output.Data)
+	}
+	if _, err := waiter.Execute(context.Background(), &Invocation{
+		CallID:  "terminate-closed-callback",
+		Payload: Payload{Kind: PayloadFunction, Arguments: "{\"cell_id\":\"cell-1\",\"terminate\":true}"},
+	}); err != nil {
+		t.Fatalf("terminate yielded cell: %v", err)
+	}
+	select {
+	case <-closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("cell closed callback was not released after termination")
+	}
+}
+
 func TestCodeModeRejectsTooManyPendingDelegateCalls(t *testing.T) {
 	registry := NewRegistry()
 	release := make(chan struct{})
@@ -782,14 +815,15 @@ func TestCodeModeRejectsTooManyPendingDelegateCalls(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer close(release)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	source := `const calls = []; for (let i = 0; i < 1025; i++) calls.push(tools.blocked({})); await Promise.all(calls);`
+	source := fmt.Sprintf(`const calls = []; for (let i = 0; i < %d; i++) calls.push(tools.blocked({})); await Promise.all(calls);`, codeModeMaxPendingCallbacks+1)
 	output, err := NewCodeModeExecExecutor(registry).Execute(ctx, &Invocation{CallID: "pending-limit", Payload: Payload{Kind: PayloadCustom, Input: source}})
 	if err != nil || output == nil || output.Success {
 		t.Fatalf("output = %#v, error = %v", output, err)
 	}
-	if body := codeModeBodyAfterHeader(t, output.Body, "Script failed"); !strings.Contains(body, "1024 pending delegate calls") {
+	limit := fmt.Sprintf("%d pending delegate calls", codeModeMaxPendingCallbacks)
+	if body := codeModeBodyAfterHeader(t, output.Body, "Script failed"); !strings.Contains(body, limit) {
 		t.Fatalf("failure body = %q", body)
 	}
 }

@@ -25,7 +25,8 @@ import (
 // stay isolated. A dead or unresponsive host is reaped and respawned on the
 // next connect.
 type GrpcProcessProvider struct {
-	program string
+	program     string
+	completions *completionWindow
 
 	mu                 sync.Mutex
 	connection         *remoteConnection
@@ -40,11 +41,18 @@ type GrpcProcessProvider struct {
 }
 
 func NewGrpcProcessProvider(program string) *GrpcProcessProvider {
-	provider := &GrpcProcessProvider{program: program}
+	provider := &GrpcProcessProvider{program: program, completions: newCompletionWindow()}
 	if stat, err := os.Stat(program); err != nil || !stat.Mode().IsRegular() {
 		provider.available = fmt.Errorf("failed to spawn code-mode host %s: host executable was not found", boundedHostProgram(program))
 	}
 	return provider
+}
+
+func (p *GrpcProcessProvider) completionWindow() *completionWindow {
+	if p == nil {
+		return nil
+	}
+	return p.completions
 }
 
 func (p *GrpcProcessProvider) Availability() error {

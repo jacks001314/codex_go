@@ -29,8 +29,9 @@ import (
 // like Rust 85f331772f (#38087), and the shared HTTP client's transport
 // supplies proxy and custom-CA dialing.
 type GrpcCodeModeSessionProvider struct {
-	endpoint   string
-	httpClient *http.Client
+	endpoint    string
+	httpClient  *http.Client
+	completions *completionWindow
 
 	mu                 sync.Mutex
 	connection         *remoteConnection
@@ -39,7 +40,14 @@ type GrpcCodeModeSessionProvider struct {
 }
 
 func NewGrpcCodeModeSessionProvider(endpoint string, httpClient *http.Client) *GrpcCodeModeSessionProvider {
-	return &GrpcCodeModeSessionProvider{endpoint: strings.TrimSpace(endpoint), httpClient: httpClient}
+	return &GrpcCodeModeSessionProvider{endpoint: strings.TrimSpace(endpoint), httpClient: httpClient, completions: newCompletionWindow()}
+}
+
+func (p *GrpcCodeModeSessionProvider) completionWindow() *completionWindow {
+	if p == nil {
+		return nil
+	}
+	return p.completions
 }
 
 // UsesGrpcCodeModeEndpoint reports whether the code-mode host URL selects the

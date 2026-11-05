@@ -48,8 +48,9 @@ var defaultHostWaitTransportTimeout = 60 * time.Second
 var errCodeModeHostRequestTimeout = errors.New("code-mode host timed out waiting for response")
 
 type WebSocketProvider struct {
-	url        string
-	httpClient *http.Client
+	url         string
+	httpClient  *http.Client
+	completions *completionWindow
 
 	mu                 sync.Mutex
 	connection         *remoteConnection
@@ -72,7 +73,18 @@ type remoteTransport interface {
 }
 
 func NewWebSocketProvider(url string, httpClient *http.Client) *WebSocketProvider {
-	return &WebSocketProvider{url: url, httpClient: httpClient}
+	return &WebSocketProvider{url: url, httpClient: httpClient, completions: newCompletionWindow()}
+}
+
+type completionWindowProvider interface {
+	completionWindow() *completionWindow
+}
+
+func (p *WebSocketProvider) completionWindow() *completionWindow {
+	if p == nil {
+		return nil
+	}
+	return p.completions
 }
 
 func (p *WebSocketProvider) Availability() error { return nil }
@@ -165,7 +177,8 @@ func connectRemoteTransportWithHandshake(ctx context.Context, transport remoteTr
 	// Rust #58125 asks for bounded-output-v1 so sessions can negotiate
 	// server-side truncation with hosts that support it.
 	bounded, _ := NewCapability(BoundedOutputCapability)
-	requested := []Capability{limits, yield, bounded}
+	largeDelegateCapacity, _ := NewCapability(LargeDelegateCapacityCapability)
+	requested := []Capability{limits, yield, bounded, largeDelegateCapacity}
 	if options != nil && strings.TrimSpace(options.websocketURL) != "" {
 		requested = append(requested, dual)
 	}
@@ -561,6 +574,9 @@ func (s *remoteSession) admit(ctx context.Context) (*remoteConnection, error) {
 	if err != nil {
 		return nil, err
 	}
+	if provider, ok := s.provider.(completionWindowProvider); ok {
+		connection.setCompletionWindow(provider.completionWindow())
+	}
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -714,16 +730,18 @@ type remoteInitialResult struct {
 }
 
 type remoteConnection struct {
-	transport remoteTransport
-	bulk      remoteTransport
-	writeMu   sync.Mutex
-	bulkMu    sync.Mutex
-	mu        sync.Mutex
-	alive     bool
-	nextID    RequestID
-	pending   map[RequestID]*remotePending
-	delegates map[SessionID]tool.CodeModeRemoteDelegate
-	cancels   map[DelegateRequestID]context.CancelFunc
+	transport     remoteTransport
+	bulk          remoteTransport
+	writeMu       sync.Mutex
+	bulkMu        sync.Mutex
+	mu            sync.Mutex
+	alive         bool
+	nextID        RequestID
+	pending       map[RequestID]*remotePending
+	delegates     map[SessionID]tool.CodeModeRemoteDelegate
+	cancels       map[DelegateRequestID]context.CancelFunc
+	delegateLimit int
+	completions   *completionWindow
 	// capabilities are the host's negotiated capabilities (Rust
 	// Connection::capabilities), used to decide whether a yield frame may be
 	// sent to this host (#48123).
@@ -731,11 +749,65 @@ type remoteConnection struct {
 }
 
 func newRemoteConnection(transport remoteTransport, bulk ...remoteTransport) *remoteConnection {
-	connection := &remoteConnection{transport: transport, alive: true, nextID: 1, pending: map[RequestID]*remotePending{}, delegates: map[SessionID]tool.CodeModeRemoteDelegate{}, cancels: map[DelegateRequestID]context.CancelFunc{}}
+	connection := &remoteConnection{
+		transport: transport, alive: true, nextID: 1,
+		pending: map[RequestID]*remotePending{}, delegates: map[SessionID]tool.CodeModeRemoteDelegate{},
+		cancels: map[DelegateRequestID]context.CancelFunc{}, delegateLimit: MaxPendingDelegateCalls,
+		completions: newCompletionWindow(),
+	}
 	if len(bulk) > 0 {
 		connection.bulk = bulk[0]
 	}
 	return connection
+}
+
+// completionWindow bounds delegate result delivery independently of the number
+// of callbacks that may be running in the client.
+type completionWindow struct {
+	permits chan struct{}
+}
+
+func newCompletionWindow() *completionWindow {
+	return &completionWindow{permits: make(chan struct{}, MaxInFlightCompletions)}
+}
+
+func (w *completionWindow) acquire(ctx context.Context) bool {
+	if w == nil {
+		return true
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case w.permits <- struct{}{}:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+func (w *completionWindow) release() {
+	if w != nil {
+		<-w.permits
+	}
+}
+
+func (c *remoteConnection) setCompletionWindow(window *completionWindow) {
+	if c == nil || window == nil {
+		return
+	}
+	c.mu.Lock()
+	c.completions = window
+	c.mu.Unlock()
+}
+
+func (c *remoteConnection) completionWindow() *completionWindow {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.completions
 }
 
 func (c *remoteConnection) Alive() bool {
@@ -1050,8 +1122,11 @@ func (c *remoteConnection) handleDelegate(message HostToClient) {
 		return
 	}
 	defer c.releaseDelegate(message.DelegateID, cancel)
+	if ctx.Err() != nil {
+		return
+	}
 	if delegate == nil || message.Request == nil {
-		_ = c.write(context.Background(), DelegateResponseMessage(message.DelegateID, ResultErr[DelegateResponse]("code-mode session delegate is unavailable")))
+		c.sendDelegateResponse(ctx, DelegateResponseMessage(message.DelegateID, ResultErr[DelegateResponse]("code-mode session delegate is unavailable")))
 		return
 	}
 	var response DelegateResponse
@@ -1080,11 +1155,23 @@ func (c *remoteConnection) handleDelegate(message HostToClient) {
 	default:
 		err = fmt.Errorf("unknown code-mode delegate request %q", message.Request.Type)
 	}
-	if err != nil {
-		_ = c.write(context.Background(), DelegateResponseMessage(message.DelegateID, ResultErr[DelegateResponse](err.Error())))
+	if ctx.Err() != nil {
 		return
 	}
-	_ = c.write(context.Background(), DelegateResponseMessage(message.DelegateID, ResultOK(response)))
+	if err != nil {
+		c.sendDelegateResponse(ctx, DelegateResponseMessage(message.DelegateID, ResultErr[DelegateResponse](err.Error())))
+		return
+	}
+	c.sendDelegateResponse(ctx, DelegateResponseMessage(message.DelegateID, ResultOK(response)))
+}
+
+func (c *remoteConnection) sendDelegateResponse(ctx context.Context, message ClientToHost) {
+	window := c.completionWindow()
+	if !window.acquire(ctx) {
+		return
+	}
+	defer window.release()
+	_ = c.write(ctx, message)
 }
 
 func (c *remoteConnection) reserveDelegate(id DelegateRequestID) (context.Context, context.CancelFunc, bool) {
@@ -1093,7 +1180,11 @@ func (c *remoteConnection) reserveDelegate(id DelegateRequestID) (context.Contex
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if len(c.cancels) >= MaxPendingDelegateCalls {
+	limit := c.delegateLimit
+	if limit <= 0 {
+		limit = MaxPendingDelegateCalls
+	}
+	if len(c.cancels) >= limit {
 		return nil, nil, false
 	}
 	ctx, cancel := context.WithCancel(context.Background())
