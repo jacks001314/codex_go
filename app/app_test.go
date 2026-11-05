@@ -3891,7 +3891,11 @@ func TestInteractiveSessionActionHandlerMutatesLocalStore(t *testing.T) {
 }
 
 func TestInteractiveWorkingDirectoryChangeHandlerForksAtNewCWD(t *testing.T) {
-	t.Setenv("CODEX_HOME", t.TempDir())
+	codexHome := t.TempDir()
+	t.Setenv("CODEX_HOME", codexHome)
+	if err := os.WriteFile(config.ConfigPath(codexHome), []byte("approval_policy = \"on-request\"\nsandbox_mode = \"read-only\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	store := session.NewStore(filepath.Join(auth.DefaultCodexHome(), "sessions"))
 	now := fixedAppSessionTime()
 	sourceCWD := filepath.Join(t.TempDir(), "source")
@@ -3938,10 +3942,12 @@ func TestInteractiveWorkingDirectoryChangeHandlerForksAtNewCWD(t *testing.T) {
 	if replacement.Metadata.CWD != targetCWD {
 		t.Fatalf("replacement metadata cwd = %q, want %q", replacement.Metadata.CWD, targetCWD)
 	}
-	if replacement.Metadata.ApprovalPolicy != "never" ||
-		replacement.Metadata.SandboxPolicy != "workspace-write" ||
-		replacement.Metadata.ActivePermissionProfile != "trusted" {
-		t.Fatalf("replacement permissions not preserved: %#v", replacement.Metadata)
+	// Rust #59369: an embedded /cd uses the permissions from the current
+	// configuration at the destination, even when the source saved different ones.
+	if replacement.Metadata.ApprovalPolicy != "on-request" ||
+		replacement.Metadata.SandboxPolicy != "read-only" ||
+		replacement.Metadata.ActivePermissionProfile != "read-only" {
+		t.Fatalf("replacement permissions do not reflect current config: %#v", replacement.Metadata)
 	}
 	if len(replacement.Items) != 1 || replacement.Items[0].Text != "hello" {
 		t.Fatalf("replacement history not preserved: %#v", replacement.Items)
@@ -3953,6 +3959,22 @@ func TestInteractiveWorkingDirectoryChangeHandlerForksAtNewCWD(t *testing.T) {
 
 	if _, err := handler("thread-cd", filepath.Join(t.TempDir(), "missing")); err == nil {
 		t.Fatal("working directory change to a missing directory succeeded")
+	}
+}
+
+func TestInteractiveDirectoryPermissionsUsesCurrentLaunchOverrides(t *testing.T) {
+	codexHome := t.TempDir()
+	t.Setenv("CODEX_HOME", codexHome)
+	if err := os.WriteFile(config.ConfigPath(codexHome), []byte("approval_policy = \"on-request\"\nsandbox_mode = \"read-only\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	root := &cli.RootOptions{Shared: cli.SharedOptions{ApprovalPolicy: "never", Sandbox: "workspace-write"}}
+	approval, profile, policy, err := interactiveDirectoryPermissions(root, t.TempDir())
+	if err != nil {
+		t.Fatalf("interactiveDirectoryPermissions() error = %v", err)
+	}
+	if approval != "never" || profile != "workspace-write" || policy != "workspace-write" {
+		t.Fatalf("current launch permissions = approval=%q profile=%q sandbox=%q", approval, profile, policy)
 	}
 }
 

@@ -41,6 +41,7 @@ import (
 	promptctx "codex_go/prompt"
 	"codex_go/protocol"
 	"codex_go/rollout"
+	"codex_go/sandbox"
 	"codex_go/session"
 	"codex_go/state"
 	"codex_go/tool"
@@ -355,11 +356,19 @@ func interactiveWorkingDirectoryChangeHandler(root *cli.RootOptions) codextea.Wo
 		} else if !info.IsDir() {
 			return nil, fmt.Errorf("not a directory: %s", cwd)
 		}
+		approvalPolicy, activeProfile, sandboxPolicy, err := interactiveDirectoryPermissions(root, cwd)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve permissions for %s: %w", cwd, err)
+		}
 		record, err := store.Fork(session.ThreadID(threadID), session.ForkOptions{Mode: session.ForkAll})
 		if err != nil {
 			return nil, fmt.Errorf("failed to change directory: %w", err)
 		}
-		if _, err := store.UpdateMetadata(record.ID, &session.MetadataPatch{CWD: &cwd}, false); err != nil {
+		patch := &session.MetadataPatch{
+			CWD: &cwd, ApprovalPolicy: &approvalPolicy,
+			ActivePermissionProfile: &activeProfile, SandboxPolicy: &sandboxPolicy,
+		}
+		if _, err := store.UpdateMetadata(record.ID, patch, false); err != nil {
 			_ = store.Delete(record.ID)
 			return nil, fmt.Errorf("failed to change directory: %w", err)
 		}
@@ -375,6 +384,70 @@ func interactiveWorkingDirectoryChangeHandler(root *cli.RootOptions) codextea.Wo
 		}
 		return firstSessionSummary(store, updated), nil
 	}
+}
+
+// interactiveDirectoryPermissions resolves the permissions the embedded TUI
+// will use after /cd. Rust #59369 forks with the current configuration for an
+// embedded session, while remote sessions keep the source thread's saved
+// permissions. A fresh directory with no explicit profile uses the same
+// read-only default as the runtime.
+func interactiveDirectoryPermissions(root *cli.RootOptions, cwd string) (string, string, string, error) {
+	options := interactiveKeymapLoadOptions(root)
+	effective := &config.EffectiveOptions{}
+	if options != nil {
+		*effective = *options
+		effective.RawOverrides = append([]string(nil), options.RawOverrides...)
+	}
+	effective.CWD = cwd
+	if root != nil {
+		if value := strings.TrimSpace(root.Shared.Sandbox); value != "" {
+			effective.RawOverrides = append(effective.RawOverrides, "sandbox_mode="+strconv.Quote(value))
+		}
+		if value := strings.TrimSpace(root.Shared.ApprovalPolicy); value != "" {
+			effective.RawOverrides = append(effective.RawOverrides, "approval_policy="+strconv.Quote(value))
+		}
+		if root.Shared.ApproveForMe {
+			effective.RawOverrides = append(effective.RawOverrides,
+				"approval_policy="+strconv.Quote(string(sandbox.ApprovalOnRequest)),
+				"sandbox_mode="+strconv.Quote(string(sandbox.SandboxWorkspaceWrite)))
+		}
+		if root.Shared.DangerouslyBypassApprovalsAndSandbox {
+			effective.RawOverrides = append(effective.RawOverrides,
+				"approval_policy="+strconv.Quote(string(sandbox.ApprovalNever)),
+				"sandbox_mode="+strconv.Quote(string(sandbox.SandboxDangerFullAccess)))
+		}
+	}
+	loaded, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), effective)
+	if err != nil {
+		return "", "", "", err
+	}
+	resolution, err := loaded.ResolveSandboxPermissionProfile("", cwd)
+	if err != nil {
+		return "", "", "", err
+	}
+	if resolution == nil {
+		if loaded.Values == nil {
+			loaded.Values = map[string]any{}
+		}
+		loaded.Values["sandbox_mode"] = string(sandbox.SandboxReadOnly)
+		resolution, err = loaded.ResolveSandboxPermissionProfile("", cwd)
+		if err != nil {
+			return "", "", "", err
+		}
+	}
+	if resolution == nil || resolution.Profile == nil {
+		return "", "", "", errors.New("current permission profile is unavailable")
+	}
+	approval := strings.TrimSpace(interactiveStringFromConfig(loaded.Values, "approval_policy"))
+	if approval == "" {
+		approval = string(sandbox.ApprovalOnRequest)
+	}
+	activeProfile := strings.TrimSpace(resolution.ID)
+	sandboxPolicy := ""
+	if policy := resolution.Profile.LegacySandboxPolicy(); policy != nil {
+		sandboxPolicy = string(policy.Kind)
+	}
+	return approval, activeProfile, sandboxPolicy, nil
 }
 
 type interactiveTurnRunner interface {
