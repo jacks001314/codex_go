@@ -23,6 +23,13 @@ Run a minimal live smoke:
 npm --prefix sdktests run test:smoke -- --rust <rust-codex> --go <go-codex.exe> --sdk D:\qax\reagent\dev\git\codex\sdk\typescript
 ```
 
+By default each side runs against its own user configuration: Rust copies
+`~/.codex`, while Go copies `~/.gcode` when that directory exists (otherwise it
+falls back to `~/.codex`). Pass `--rust-home` or `--go-home` to override either
+side. `run-manifest.json` records both source homes, each side's model/provider
+defaults, and `modelProviderMatch`, so a run whose two homes configure
+different models is visible instead of silently comparing different backends.
+
 Platform-specific shell commands live in `src/platform/linux.ts` and
 `src/platform/windows.ts`. Common prompts, schemas, and observable contracts
 remain in `src/scenarios.ts`. The live runner records the selected platform
