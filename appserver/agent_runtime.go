@@ -360,9 +360,12 @@ func (r *RuntimeRouter) guardianReviewRequiredForTurn(threadID, turnID string) b
 	if active == nil || active.Params == nil {
 		return false
 	}
-	cfg, err := r.effectiveConfigForTurn(active.Params)
-	if err != nil || cfg == nil {
+	cfg := r.guardianTurnConfig(active)
+	if cfg == nil {
 		return false
+	}
+	if guardianScoringDisabledByRequirements(cfg) {
+		return true
 	}
 	modelID := turnParamModel(active.Params)
 	if active.RunConfig != nil {
@@ -410,8 +413,8 @@ func (r *RuntimeRouter) guardianApprovalsReviewerForTurn(threadID, turnID string
 	if active == nil || active.Params == nil {
 		return ""
 	}
-	cfg, err := r.effectiveConfigForTurn(active.Params)
-	if err != nil || cfg == nil {
+	cfg := r.guardianTurnConfig(active)
+	if cfg == nil {
 		return ""
 	}
 	return turnApprovalsReviewerForTurn(cfg, active.Params)
@@ -698,6 +701,39 @@ type guardianReviewPlan struct {
 // current catalog, so a review samples with the selected review model, its
 // request-level reasoning effort (#46292), and the reviewer's policy
 // instructions.
+// guardianTurnConfig returns the configuration captured when the reviewed turn
+// started. Guardian policy text, reviewer/model requirements and classifier
+// instructions must keep the requesting turn's values even after a live config
+// reload (Rust #59642); the live turn config is only a fallback for a turn that
+// has no capture (an idle-thread review).
+func (r *RuntimeRouter) guardianTurnConfig(active *activeRuntimeTurn) *config.Config {
+	if r == nil || active == nil {
+		return nil
+	}
+	if active.RunConfig != nil && active.RunConfig.Config != nil {
+		return active.RunConfig.Config
+	}
+	if active.Params != nil {
+		if cfg, err := r.effectiveConfigForTurn(active.Params); err == nil {
+			return cfg
+		}
+	}
+	return nil
+}
+
+// guardianScoringDisabledByRequirements mirrors Rust #59642
+// ConfigRequirements::constrain_guardian_policy: a managed reviewer allowlist
+// that forbids either interactive reviewer disables scored and cached
+// approvals, so every action takes the full review path. The allowlist applies
+// even when model metadata is unavailable.
+func guardianScoringDisabledByRequirements(cfg *config.Config) bool {
+	if cfg == nil || cfg.Requirements == nil {
+		return false
+	}
+	return !stepApprovalsReviewerAllowed(cfg.Requirements, string(config.ApprovalsReviewerUser)) ||
+		!stepApprovalsReviewerAllowed(cfg.Requirements, string(config.ApprovalsReviewerAutoReview))
+}
+
 func (r *RuntimeRouter) guardianReviewPlanForTurn(threadID, turnID string) guardianReviewPlan {
 	return r.guardianReviewPlanForTurnContext(context.Background(), threadID, turnID)
 }
@@ -715,7 +751,7 @@ func (r *RuntimeRouter) guardianReviewPlanForTurnContext(ctx context.Context, th
 			return guardianReviewPlan{}
 		}
 	}
-	cfg, _ := r.effectiveConfigForTurn(active.Params)
+	cfg := r.guardianTurnConfig(active)
 	parentModel := strings.TrimSpace(firstNonEmpty(active.RunConfig.Model, turnParamModel(active.Params)))
 	// Rust #44574 preserves the action's captured metadata when the reviewer
 	// falls back to the parent model; only a separately selected reviewer is
@@ -1032,8 +1068,8 @@ func (r *RuntimeRouter) guardianReviewNodeReplAutoReviewRequiredForTurn(threadID
 	if active == nil || active.Params == nil {
 		return false
 	}
-	cfg, err := r.effectiveConfigForTurn(active.Params)
-	if err != nil || cfg == nil {
+	cfg := r.guardianTurnConfig(active)
+	if cfg == nil {
 		return false
 	}
 	modelID := turnParamModel(active.Params)
@@ -1056,8 +1092,8 @@ func (r *RuntimeRouter) guardianAllowsInitialCUACallForTurn(threadID, turnID str
 	if active == nil || active.Params == nil {
 		return false
 	}
-	cfg, err := r.effectiveConfigForTurn(active.Params)
-	if err != nil || cfg == nil {
+	cfg := r.guardianTurnConfig(active)
+	if cfg == nil {
 		return false
 	}
 	modelID := turnParamModel(active.Params)
