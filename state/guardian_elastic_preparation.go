@@ -61,6 +61,11 @@ func PrepareGuardianElasticEntries(context GuardianElasticContext, config Guardi
 			item.Text = truncated
 			item.TokenCost = 0
 			item.Incomplete = true
+			if item.Source != nil {
+				source := *item.Source
+				source.Complete = false
+				item.Source = &source
+			}
 		}
 	}
 	return context, nil

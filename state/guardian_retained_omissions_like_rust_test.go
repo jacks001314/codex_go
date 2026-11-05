@@ -115,3 +115,29 @@ func TestRetainedOmissionDeduplicationAssistantContextLikeRust(t *testing.T) {
 		t.Fatalf("assistant context = %#v, want the host notice", got.AssistantContext)
 	}
 }
+
+// TestRetainedAvailabilityChangeIsIdempotentLikeRust covers #59401: a repeated
+// recovery pass cannot insert the host notice twice.
+func TestRetainedAvailabilityChangeIsIdempotentLikeRust(t *testing.T) {
+	delivered := GuardianRetainedOmissions{UserInstructions: true}
+	complete := RetainedInstructionSections{Instructions: []string{
+		retainedUserInstructionsStart + "\n",
+		"Retained source order: 0\nuser: Keep it private.\n",
+		retainedUserInstructionsEnd + "\n",
+	}}
+	first := ApplyRetainedOmissionDeduplication(complete, &delivered, false)
+	second := ApplyRetainedOmissionDeduplication(first, &delivered, false)
+	if len(second.Instructions) != len(first.Instructions) {
+		t.Fatalf("repeated recovery = %#v, want %d items", second.Instructions, len(first.Instructions))
+	}
+	notice := strings.TrimRight(retainedAvailabilityChangedNotice, "\n")
+	count := 0
+	for _, item := range second.Instructions {
+		if strings.TrimRight(item, "\n") == notice {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("availability notices = %d, want one", count)
+	}
+}

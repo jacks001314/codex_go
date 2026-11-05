@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	codexctx "codex_go/context"
 	"codex_go/session"
 )
 
@@ -144,5 +145,49 @@ func TestGuardianReviewHistoryKeepsUserRetentionLimitLikeRust(t *testing.T) {
 	}
 	if users[0] != "user-0" {
 		t.Fatalf("oldest retained user = %q, want only the oldest message evicted", users[0])
+	}
+}
+
+// TestGuardianReviewHistoryElasticKeepsEntriesPastFixedCountLikeRust covers
+// Rust #59401: elastic storage is bounded by bytes rather than entry count and
+// preserves the complete replay order.
+func TestGuardianReviewHistoryElasticKeepsEntriesPastFixedCountLikeRust(t *testing.T) {
+	items := make([]session.Item, 0, maxGuardianReviewItemsPerKind+1)
+	for index := 0; index < maxGuardianReviewItemsPerKind+1; index++ {
+		items = append(items, session.Item{
+			ID:   fmt.Sprintf("tool-%d", index),
+			Type: "function_call_output", CallID: fmt.Sprintf("call-%d", index), Text: "output",
+		})
+	}
+	state := newGuardianReviewHistoryStateWithBudgeting(items, codexctx.GuardianContextBudgetingElastic)
+	if len(state.items) != len(items) {
+		t.Fatalf("retained elastic items = %d, want %d", len(state.items), len(items))
+	}
+	for index := range items {
+		if state.items[index].ID != items[index].ID {
+			t.Fatalf("item %d = %q, want %q", index, state.items[index].ID, items[index].ID)
+		}
+	}
+}
+
+// TestGuardianReviewHistoryElasticEvictsToByteLowWatermarkLikeRust covers Rust
+// #59401: non-user byte overflow removes whole oldest entries down to half the
+// per-kind budget, or the newest entry's size when it is larger.
+func TestGuardianReviewHistoryElasticEvictsToByteLowWatermarkLikeRust(t *testing.T) {
+	state := newGuardianReviewHistoryStateWithBudgeting(nil, codexctx.GuardianContextBudgetingElastic)
+	state.append([]session.Item{{ID: "instruction", Type: "message", Role: "user", Text: "Keep this private."}})
+	const payload = 1_500_000
+	for index := 0; index < 3; index++ {
+		state.append([]session.Item{{
+			ID: fmt.Sprintf("tool-%d", index), Type: "function_call_output",
+			CallID: fmt.Sprintf("call-%d", index), Text: strings.Repeat("x", payload),
+		}})
+	}
+	if len(state.items) != 2 || state.items[0].ID != "instruction" || state.items[1].ID != "tool-2" {
+		ids := make([]string, len(state.items))
+		for index := range state.items {
+			ids[index] = state.items[index].ID
+		}
+		t.Fatalf("retained elastic overflow items = %v, want instruction and newest tool", ids)
 	}
 }

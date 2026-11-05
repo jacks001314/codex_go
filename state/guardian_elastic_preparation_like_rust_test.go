@@ -4,6 +4,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"codex_go/retainedctx"
 )
 
 func guardianElasticTestLimits(t *testing.T, tokens int) GuardianElasticSectionLimits {
@@ -23,6 +25,7 @@ func guardianElasticTestLimits(t *testing.T, tokens int) GuardianElasticSectionL
 func TestGuardianElasticEntryCapsBeforeAllocationLikeRust(t *testing.T) {
 	const entryTokens = 256
 	longRequired := strings.Repeat("required evidence ", 2000)
+	source := &retainedctx.RetainedSource{Complete: true}
 	longOptional := strings.Repeat("quoted \"text\" detail ", 2000)
 	short := GuardianElasticItem{
 		Text:      "small result",
@@ -40,7 +43,7 @@ func TestGuardianElasticEntryCapsBeforeAllocationLikeRust(t *testing.T) {
 		{
 			ID: "conversation_transcript",
 			Items: []GuardianElasticItem{
-				{Text: longRequired, Retention: GuardianElasticRequired()},
+				{Text: longRequired, Retention: GuardianElasticRequired(), Source: source},
 				short,
 				{Text: longOptional, Retention: GuardianElasticOptional(GuardianElasticPriorityTool)},
 			},
@@ -60,6 +63,9 @@ func TestGuardianElasticEntryCapsBeforeAllocationLikeRust(t *testing.T) {
 	items := prepared.Sections[0].Items
 	if !items[0].Incomplete || !strings.Contains(items[0].Text, "<truncated") {
 		t.Fatalf("required entry = %#v, want a marked truncation", items[0])
+	}
+	if items[0].Source == nil || items[0].Source.Complete {
+		t.Fatalf("required source = %#v, want an incomplete source", items[0].Source)
 	}
 	if got := guardianElasticItemTokens(items[0]) + guardianElasticContentFramingTokens(1); got > entryTokens {
 		t.Fatalf("required entry cost = %d, want <= %d", got, entryTokens)
@@ -94,10 +100,12 @@ func TestGuardianElasticEntryCapsBeforeAllocationLikeRust(t *testing.T) {
 		GuardianElasticSectionTranscriptMessages: tiny,
 		GuardianElasticSectionTranscriptTools:    tiny,
 	}}
-	minimal, err := PrepareGuardianElasticEntries(context, tinyConfig)
+	minimalContext := GuardianElasticContext{Sections: context.Sections[:1]}
+	minimal, err := PrepareGuardianElasticEntries(minimalContext, tinyConfig)
 	if err != nil {
 		t.Fatalf("PrepareGuardianElasticEntries(tiny) error = %v", err)
 	}
+	tinyConfig = guardianElasticCompleteMinimumBudget(t, tinyConfig)
 	minimal, err = EnforceGuardianElasticBudget(minimal, tinyConfig, GuardianElasticRequestBudget{MaxInputTokens: entryTokens}, "Evidence was shortened.")
 	if err != nil {
 		t.Fatalf("EnforceGuardianElasticBudget(tiny) error = %v", err)
@@ -136,10 +144,11 @@ func TestGuardianElasticExactActionStaysWholeLikeRust(t *testing.T) {
 	if !items[1].Incomplete || !strings.Contains(items[1].Text, "<truncated") {
 		t.Fatalf("supporting text = %#v, want a marked truncation", items[1])
 	}
+	config = guardianElasticCompleteMinimumBudget(t, config)
 	if _, err := EnforceGuardianElasticBudget(prepared, config, GuardianElasticRequestBudget{MaxInputTokens: entryTokens}, "Evidence omitted."); !errors.Is(err, ErrGuardianElasticEvidenceLimit) {
 		t.Fatalf("EnforceGuardianElasticBudget(smaller than the action) error = %v, want the evidence limit", err)
 	}
-	if _, err := EnforceGuardianElasticBudget(prepared, config, GuardianElasticRequestBudget{MaxInputTokens: prepared.EstimatedTokens()}, "Evidence omitted."); err != nil {
+	if _, err := EnforceGuardianElasticBudget(prepared, config, GuardianElasticRequestBudget{MaxInputTokens: prepared.EstimatedTokens() + entryTokens}, "Evidence omitted."); err != nil {
 		t.Fatalf("EnforceGuardianElasticBudget(exact estimate) error = %v", err)
 	}
 }

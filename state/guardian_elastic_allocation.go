@@ -3,8 +3,9 @@ package state
 import (
 	"errors"
 	"fmt"
-	"sort"
+	"math"
 
+	"codex_go/retainedctx"
 	"codex_go/utils"
 )
 
@@ -12,13 +13,12 @@ import (
 // an opaque image is charged conservatively and is never split.
 const GuardianElasticImageTokenReservation = 10_000
 
-// GuardianElasticPriority names the optional retention priority that selects a
-// group. Only Tool changes the owning transcript group.
+// GuardianElasticPriorityTool names the optional retention priority that
+// selects the transcript tool allocation group.
 const GuardianElasticPriorityTool = "tool"
 
 // GuardianElasticRetention marks one item required or optional. Required and
-// historical evidence is never removed by elastic allocation; historical items
-// differ only in how preparation renders them, not in this budget step.
+// historical evidence is never removed by elastic allocation.
 type GuardianElasticRetention struct {
 	Optional bool
 	Priority string
@@ -43,16 +43,22 @@ type GuardianElasticItem struct {
 	TokenCost int
 	Retention GuardianElasticRetention
 	// Exact marks content delivered verbatim (the planned action JSON), which
-	// entry preparation never shortens (Rust #58444).
+	// entry preparation never shortens and allocation charges globally.
 	Exact bool
 	// Protected marks host framing, authorization warnings and section
 	// boundaries that stay intact when elastic entry caps shorten supporting
-	// evidence (Rust #59003).
+	// evidence.
 	Protected bool
 	// Incomplete marks an entry whose source was shortened during elastic
-	// preparation, so callers projecting it back to retained evidence do not
-	// treat it as a complete revision (Rust #58444).
+	// preparation.
 	Incomplete bool
+	// Source identifies the complete original revision this transcript entry
+	// proves was delivered.
+	Source *retainedctx.RetainedSource
+}
+
+func (item GuardianElasticItem) protected() bool {
+	return item.Protected || item.Exact
 }
 
 // GuardianElasticSectionOutput is one composed section, named for the source
@@ -66,22 +72,20 @@ type GuardianElasticSectionOutput struct {
 
 // GuardianElasticContext is the composed Guardian input before allocation.
 type GuardianElasticContext struct {
-	Sections  []GuardianElasticSectionOutput
-	Truncated bool
-	// Truncations records evidence shortened during entry preparation, in
-	// section order (Rust #58444).
+	Sections    []GuardianElasticSectionOutput
+	Truncated   bool
 	Truncations []GuardianElasticTruncation
 }
 
 // GuardianElasticRequestBudget is the complete input allowance and the context
-// already carried by the reviewer (Rust RequestBudget).
+// already carried by the reviewer.
 type GuardianElasticRequestBudget struct {
 	MaxInputTokens        int
 	ExistingContextTokens int
 }
 
 // ErrGuardianElasticEvidenceLimit reports required evidence that cannot fit the
-// complete-request budget.
+// complete-request budget or a section minimum.
 var ErrGuardianElasticEvidenceLimit = errors.New("guardian elastic evidence does not fit the request budget")
 
 // GuardianElasticBudgetError names the section whose required evidence did not
@@ -105,59 +109,147 @@ func (c GuardianElasticContext) EstimatedTokens() int {
 	return total
 }
 
-// EnforceGuardianElasticBudget mirrors Rust PreparedElasticContext::enforce_budget
-// (#58388): reserve existing context, required evidence, history, and the
-// omission notice before selecting whole optional entries, favoring recent
-// entries and redistributing leftover capacity without reordering content.
+// GuardianElasticInstructionDeduplicator applies delivery credit to retained
+// instructions after a selection. It returns true when it removed evidence and
+// the caller should allocate again with the released budget.
+type GuardianElasticInstructionDeduplicator func(*GuardianElasticContext, map[[2]int]bool) (bool, error)
+
+// EnforceGuardianElasticBudget mirrors Rust
+// PreparedElasticContext::enforce_budget (#59401): section minimums are fixed,
+// only headroom up to each section maximum is scaled, Required records precede
+// Optional records, and protected content reserves global space before
+// selection.
 func EnforceGuardianElasticBudget(
 	context GuardianElasticContext,
 	config GuardianElasticBudgetConfig,
 	budget GuardianElasticRequestBudget,
 	omissionNotice string,
 ) (GuardianElasticContext, error) {
+	return enforceGuardianElasticBudget(context, config, budget, omissionNotice, nil)
+}
+
+// EnforceGuardianElasticBudgetWithDedup reallocates when selected transcript
+// proof credits retained instructions, preserving the same proof on refill.
+func EnforceGuardianElasticBudgetWithDedup(
+	context GuardianElasticContext,
+	config GuardianElasticBudgetConfig,
+	budget GuardianElasticRequestBudget,
+	omissionNotice string,
+	deduplicate GuardianElasticInstructionDeduplicator,
+) (GuardianElasticContext, error) {
+	return enforceGuardianElasticBudget(context, config, budget, omissionNotice, deduplicate)
+}
+
+func enforceGuardianElasticBudget(
+	context GuardianElasticContext,
+	config GuardianElasticBudgetConfig,
+	budget GuardianElasticRequestBudget,
+	omissionNotice string,
+	deduplicate GuardianElasticInstructionDeduplicator,
+) (GuardianElasticContext, error) {
+	if err := config.Validate(); err != nil {
+		return GuardianElasticContext{}, err
+	}
 	sections := make([]GuardianElasticSectionOutput, 0, len(context.Sections))
 	for _, section := range context.Sections {
-		if section.ID == "budget_omission" {
-			continue
+		if section.ID != "budget_omission" {
+			sections = append(sections, section)
 		}
-		sections = append(sections, section)
 	}
 	context.Sections = sections
 	remaining := budget.MaxInputTokens - budget.ExistingContextTokens
 	if remaining < 0 {
 		return GuardianElasticContext{}, GuardianElasticBudgetError{Section: "request_budget"}
 	}
-	demand, err := collectGuardianElasticDemand(context)
-	if err != nil {
-		return GuardianElasticContext{}, err
+	pinned := map[[2]int]bool{}
+	minimumsFunded := false
+	selected := map[[2]int]bool{}
+	needsNotice := false
+	var minimumsFit bool
+	for {
+		demand, err := collectGuardianElasticDemand(context)
+		if err != nil {
+			return GuardianElasticContext{}, err
+		}
+		needsNotice = len(context.Truncations) > 0 || demand.exceedsMaximum(config) || context.EstimatedTokens() > remaining
+		noticeTokens := 0
+		if needsNotice {
+			noticeTokens = guardianElasticSectionTokens(guardianElasticOmissionSection(omissionNotice))
+		}
+		allowance := remaining - demand.protectedTokens - noticeTokens
+		if allowance < 0 {
+			return GuardianElasticContext{}, GuardianElasticBudgetError{Section: "request_budget"}
+		}
+		selected, minimumsFit, err = allocateGuardianElasticItems(&demand, config, allowance, pinned)
+		if err != nil {
+			return GuardianElasticContext{}, err
+		}
+		minimumsFunded = minimumsFunded || minimumsFit
+		if deduplicate == nil {
+			if !minimumsFunded {
+				return GuardianElasticContext{}, GuardianElasticBudgetError{Section: "request_budget"}
+			}
+			break
+		}
+		removed, err := deduplicate(&context, selected)
+		if err != nil {
+			return GuardianElasticContext{}, err
+		}
+		if !removed {
+			if !minimumsFunded {
+				return GuardianElasticContext{}, GuardianElasticBudgetError{Section: "request_budget"}
+			}
+			break
+		}
+		for sectionIndex, section := range context.Sections {
+			if section.Native || section.ID != "conversation_transcript" {
+				continue
+			}
+			for itemIndex, item := range section.Items {
+				if !item.Retention.Optional && selected[[2]int{sectionIndex, itemIndex}] {
+					pinned[[2]int{sectionIndex, itemIndex}] = true
+				}
+			}
+		}
 	}
-	contextTokens := context.EstimatedTokens()
-	if contextTokens <= remaining && !context.Truncated {
-		return context, nil
-	}
-	notice := GuardianElasticSectionOutput{
-		ID: "budget_omission",
-		Items: []GuardianElasticItem{{
-			Text:      omissionNotice,
-			Retention: GuardianElasticRequired(),
-		}},
-	}
-	noticeTokens := guardianElasticSectionTokens(notice)
-	if contextTokens+noticeTokens <= remaining {
-		context.Sections = append(context.Sections, notice)
-		return context, nil
-	}
-	allowance := remaining - (demand.requiredTokens + noticeTokens)
-	if allowance < 0 {
-		return GuardianElasticContext{}, GuardianElasticBudgetError{Section: "request_budget"}
-	}
-	selected := allocateGuardianElasticItems(&demand, config, allowance)
 	retainGuardianElasticSelection(&context, selected)
-	context.Sections = append(context.Sections, notice)
+	if needsNotice || len(context.Truncations) > 0 {
+		context.Sections = append(context.Sections, guardianElasticOmissionSection(omissionNotice))
+	}
 	if context.EstimatedTokens() > remaining {
 		return GuardianElasticContext{}, GuardianElasticBudgetError{Section: "request_budget"}
 	}
 	return context, nil
+}
+
+// RequiredTranscriptSources returns complete originals proved by required
+// transcript entries that survived selection.
+func (c GuardianElasticContext) RequiredTranscriptSources(selected map[[2]int]bool) []retainedctx.RetainedSource {
+	sources := make([]retainedctx.RetainedSource, 0)
+	for sectionIndex, section := range c.Sections {
+		if section.Native || section.ID != "conversation_transcript" {
+			continue
+		}
+		for itemIndex, item := range section.Items {
+			if item.Retention.Optional || !selected[[2]int{sectionIndex, itemIndex}] ||
+				item.Source == nil || !item.Source.Complete {
+				continue
+			}
+			sources = append(sources, *item.Source)
+		}
+	}
+	return sources
+}
+
+func guardianElasticOmissionSection(notice string) GuardianElasticSectionOutput {
+	return GuardianElasticSectionOutput{
+		ID: "budget_omission",
+		Items: []GuardianElasticItem{{
+			Text:      notice,
+			Retention: GuardianElasticRequired(),
+			Protected: true,
+		}},
+	}
 }
 
 type guardianElasticCandidate struct {
@@ -166,18 +258,22 @@ type guardianElasticCandidate struct {
 	cost         int
 }
 
-type guardianElasticGroupDemand struct {
-	pending   []guardianElasticCandidate
-	totalCost int
-	quota     int
-	used      int
+type guardianElasticSectionDemand struct {
+	requiredItems []guardianElasticCandidate
+	optionalItems []guardianElasticCandidate
+	selectedItems []guardianElasticCandidate
+	totalCost     int
+	maximum       int
+	quota         int
+	used          int
 }
 
 type guardianElasticDemand struct {
-	requiredTokens int
-	groups         map[GuardianElasticSection]*guardianElasticGroupDemand
-	contentCounts  []int
-	userContent    []bool
+	protectedTokens int
+	sections        map[GuardianElasticSection]*guardianElasticSectionDemand
+	contentCounts   []int
+	userContent     []bool
+	minimumsFit     bool
 }
 
 // guardianElasticAllocationSection mirrors Rust allocation_section: the
@@ -220,86 +316,113 @@ func guardianElasticAllocationSection(section string, retention GuardianElasticR
 
 func collectGuardianElasticDemand(context GuardianElasticContext) (guardianElasticDemand, error) {
 	demand := guardianElasticDemand{
-		groups:        map[GuardianElasticSection]*guardianElasticGroupDemand{},
+		sections:      map[GuardianElasticSection]*guardianElasticSectionDemand{},
 		contentCounts: make([]int, len(context.Sections)),
 		userContent:   make([]bool, len(context.Sections)),
 	}
 	for sectionIndex, section := range context.Sections {
+		protectedCount := 0
+		if !section.Native {
+			demand.userContent[sectionIndex] = true
+		}
+		add := func(itemIndex int, retention GuardianElasticRetention, cost int) error {
+			group, err := guardianElasticAllocationSection(section.ID, retention)
+			if err != nil {
+				return err
+			}
+			entry := demand.sections[group]
+			if entry == nil {
+				entry = &guardianElasticSectionDemand{}
+				demand.sections[group] = entry
+			}
+			candidate := guardianElasticCandidate{sectionIndex: sectionIndex, itemIndex: itemIndex, cost: cost}
+			if retention.Optional {
+				entry.optionalItems = append(entry.optionalItems, candidate)
+			} else {
+				entry.requiredItems = append(entry.requiredItems, candidate)
+			}
+			return nil
+		}
 		if section.Native {
 			cost := guardianElasticSectionTokens(section)
-			optional := false
+			retention := GuardianElasticRequired()
 			if len(section.Items) > 0 {
-				optional = section.Items[0].Retention.Optional
+				retention = section.Items[0].Retention
 			}
-			if !optional {
-				demand.requiredTokens += cost
+			itemsProtected := false
+			for _, item := range section.Items {
+				itemsProtected = itemsProtected || item.protected()
+			}
+			if section.ID == "intro" || itemsProtected {
+				demand.protectedTokens += cost
 				continue
 			}
-			group, err := guardianElasticAllocationSection(section.ID, section.Items[0].Retention)
-			if err != nil {
+			if err := add(0, retention, cost); err != nil {
 				return guardianElasticDemand{}, err
 			}
-			appendGuardianElasticCandidate(&demand, group, sectionIndex, 0, cost, 0)
 			continue
 		}
-		demand.userContent[sectionIndex] = true
-		requiredCount := 0
-		for _, item := range section.Items {
-			if !item.Retention.Optional {
-				requiredCount++
-			}
-		}
-		demand.contentCounts[sectionIndex] = requiredCount
-		demand.requiredTokens += guardianElasticContentFramingTokens(requiredCount)
-		count := requiredCount
 		for itemIndex, item := range section.Items {
 			cost := guardianElasticItemTokens(item)
-			if !item.Retention.Optional {
-				demand.requiredTokens += cost
+			if section.ID == "intro" || item.protected() {
+				protectedCount++
+				demand.protectedTokens += cost
 				continue
 			}
-			group, err := guardianElasticAllocationSection(section.ID, item.Retention)
-			if err != nil {
+			if err := add(itemIndex, item.Retention, cost); err != nil {
 				return guardianElasticDemand{}, err
 			}
-			framing := guardianElasticContentFramingTokens(count+1) - guardianElasticContentFramingTokens(count)
-			count++
-			appendGuardianElasticCandidate(&demand, group, sectionIndex, itemIndex, cost, framing)
+		}
+		demand.protectedTokens += guardianElasticContentFramingTokens(protectedCount)
+	}
+	for _, entry := range demand.sections {
+		counts := demand.quotaCounts()
+		entry.totalCost = 0
+		for _, item := range entry.requiredItems {
+			entry.totalCost += demand.selectCandidate(item, counts)
+		}
+		for _, item := range entry.optionalItems {
+			entry.totalCost += demand.selectCandidate(item, counts)
 		}
 	}
 	return demand, nil
 }
 
-func appendGuardianElasticCandidate(demand *guardianElasticDemand, group GuardianElasticSection, sectionIndex int, itemIndex int, cost int, framing int) {
-	entry := demand.groups[group]
-	if entry == nil {
-		entry = &guardianElasticGroupDemand{}
-		demand.groups[group] = entry
+func (demand *guardianElasticDemand) quotaCounts() []int {
+	counts := make([]int, len(demand.contentCounts))
+	for index, nonNative := range demand.userContent {
+		if nonNative {
+			counts[index] = 1
+		}
 	}
-	entry.totalCost += cost + framing
-	entry.pending = append(entry.pending, guardianElasticCandidate{sectionIndex: sectionIndex, itemIndex: itemIndex, cost: cost})
+	return counts
 }
 
-// candidateCost charges the shared user-content framing delta for the next
-// selected item in the candidate's section (Rust Candidate::cost). Native
-// sections have no shared framing.
-func (demand *guardianElasticDemand) candidateCost(candidate guardianElasticCandidate) int {
+func (demand *guardianElasticDemand) candidateCost(candidate guardianElasticCandidate, counts []int) int {
 	cost := candidate.cost
 	if !demand.userContent[candidate.sectionIndex] {
 		return cost
 	}
-	count := demand.contentCounts[candidate.sectionIndex]
+	count := counts[candidate.sectionIndex]
 	return cost + guardianElasticContentFramingTokens(count+1) - guardianElasticContentFramingTokens(count)
 }
 
-// selectCandidate charges the framing-aware cost and records the retained item,
-// so later candidates in the same section see the updated count.
-func (demand *guardianElasticDemand) selectCandidate(candidate guardianElasticCandidate) int {
-	cost := demand.candidateCost(candidate)
+func (demand *guardianElasticDemand) selectCandidate(candidate guardianElasticCandidate, counts []int) int {
+	cost := demand.candidateCost(candidate, counts)
 	if demand.userContent[candidate.sectionIndex] {
-		demand.contentCounts[candidate.sectionIndex]++
+		counts[candidate.sectionIndex]++
 	}
 	return cost
+}
+
+func (demand *guardianElasticDemand) exceedsMaximum(config GuardianElasticBudgetConfig) bool {
+	for section, entry := range demand.sections {
+		maximum := config.SectionLimits(section).MaxTotalSectionTokens
+		if maximum != nil && entry.totalCost > *maximum {
+			return true
+		}
+	}
+	return false
 }
 
 // guardianElasticSectionOrder follows the Rust ElasticSection declaration order
@@ -321,113 +444,99 @@ var guardianElasticSectionOrder = []GuardianElasticSection{
 	GuardianElasticSectionPermissionContext,
 }
 
-func allocateGuardianElasticItems(demand *guardianElasticDemand, config GuardianElasticBudgetConfig, allowance int) map[[2]int]bool {
-	groups := demand.groups
-	order := make([]GuardianElasticSection, 0, len(groups))
-	for group := range groups {
-		order = append(order, group)
+func allocateGuardianElasticItems(
+	demand *guardianElasticDemand,
+	config GuardianElasticBudgetConfig,
+	allowance int,
+	pinned map[[2]int]bool,
+) (map[[2]int]bool, bool, error) {
+	if pinned == nil {
+		pinned = map[[2]int]bool{}
 	}
-	rank := make(map[GuardianElasticSection]int, len(guardianElasticSectionOrder))
-	for index, section := range guardianElasticSectionOrder {
-		rank[section] = index
-	}
-	sort.Slice(order, func(i int, j int) bool { return rank[order[i]] < rank[order[j]] })
-	for _, group := range order {
-		entry := groups[group]
-		limits := config.SectionLimits(group)
-		smallest := 0
-		for _, candidate := range entry.pending {
-			cost := demand.candidateCost(candidate)
-			if smallest == 0 || cost < smallest {
-				smallest = cost
-			}
-		}
-		quota := limits.MinTotalSectionTokens
-		if smallest > quota {
-			quota = smallest
-		}
-		if entry.totalCost < quota {
-			quota = entry.totalCost
-		}
-		entry.quota = quota
-	}
-	minimum := 0
-	for _, entry := range groups {
-		minimum += entry.quota
-	}
-	if minimum > allowance {
-		for _, entry := range groups {
-			entry.quota = int(int64(entry.quota) * int64(allowance) / int64(minimum))
-		}
-	}
-	available := allowance
-	for _, entry := range groups {
-		available -= entry.quota
-	}
-	for {
-		active := 0
-		for group, entry := range groups {
-			limits := config.SectionLimits(group)
-			if entry.totalCost <= entry.quota {
-				continue
-			}
-			if limits.MaxTotalSectionTokens != nil && entry.quota >= *limits.MaxTotalSectionTokens {
-				continue
-			}
-			active++
-		}
-		if active == 0 || available/active == 0 {
-			break
-		}
-		share := available / active
-		for _, group := range order {
-			entry := groups[group]
-			limits := config.SectionLimits(group)
-			if limits.MaxTotalSectionTokens != nil && entry.quota >= *limits.MaxTotalSectionTokens {
-				continue
-			}
-			granted := share
-			if remaining := entry.totalCost - entry.quota; remaining < granted {
-				granted = remaining
-			}
-			if limits.MaxTotalSectionTokens != nil {
-				if maximum := *limits.MaxTotalSectionTokens - entry.quota; maximum < granted {
-					granted = maximum
-				}
-			}
-			if granted < 0 {
-				granted = 0
-			}
-			entry.quota += granted
-			available -= granted
-		}
-	}
+	counts := append([]int(nil), demand.contentCounts...)
 	selected := map[[2]int]bool{}
 	remaining := allowance
-	for _, group := range order {
-		entry := groups[group]
-		deferred := make([]guardianElasticCandidate, 0, len(entry.pending))
-		for index := len(entry.pending) - 1; index >= 0; index-- {
-			candidate := entry.pending[index]
-			if demand.candidateCost(candidate) <= entry.quota-entry.used {
-				cost := demand.selectCandidate(candidate)
-				selected[[2]int{candidate.sectionIndex, candidate.itemIndex}] = true
-				entry.used += cost
-				remaining -= cost
+	for _, group := range guardianElasticSectionOrder {
+		entry := demand.sections[group]
+		if entry == nil {
+			continue
+		}
+		limits := config.SectionLimits(group)
+		entry.maximum = math.MaxInt
+		if limits.MaxTotalSectionTokens != nil {
+			entry.maximum = *limits.MaxTotalSectionTokens
+		}
+		quotaCounts := demand.quotaCounts()
+		for _, item := range entry.requiredItems {
+			if !pinned[[2]int{item.sectionIndex, item.itemIndex}] {
 				continue
 			}
-			deferred = append(deferred, candidate)
+			cost := demand.selectCandidate(item, counts)
+			if cost > remaining {
+				return nil, false, GuardianElasticBudgetError{Section: "request_budget"}
+			}
+			remaining -= cost
+			entry.used += demand.selectCandidate(item, quotaCounts)
+			entry.selectedItems = append(entry.selectedItems, item)
+			selected[[2]int{item.sectionIndex, item.itemIndex}] = true
 		}
-		for left, right := 0, len(deferred)-1; left < right; left, right = left+1, right-1 {
-			deferred[left], deferred[right] = deferred[right], deferred[left]
+		if entry.used > entry.maximum {
+			return nil, false, GuardianElasticBudgetError{Section: "request_budget"}
 		}
-		entry.pending = deferred
+		entry.quota = min(limits.MinTotalSectionTokens, entry.totalCost)
+		if entry.quota < entry.used {
+			entry.quota = entry.used
+		}
 	}
-	for remaining > 0 {
-		var chosen *guardianElasticGroupDemand
-		for _, group := range order {
-			entry := groups[group]
-			if len(entry.pending) == 0 {
+
+	reserved := 0
+	for _, entry := range demand.sections {
+		reserved += entry.quota - entry.used
+	}
+	minimumsFit := reserved <= remaining
+	growthBudget := remaining - reserved
+	if growthBudget < 0 {
+		growthBudget = 0
+	}
+	headroom := 0
+	for _, entry := range demand.sections {
+		headroom += min(entry.totalCost, entry.maximum) - entry.quota
+	}
+	for _, group := range guardianElasticSectionOrder {
+		entry := demand.sections[group]
+		if entry == nil {
+			continue
+		}
+		growth := min(entry.totalCost, entry.maximum) - entry.quota
+		if growth <= 0 || headroom <= 0 {
+			continue
+		}
+		entry.quota += int(int64(growth) * int64(min(growthBudget, headroom)) / int64(headroom))
+	}
+	for _, group := range guardianElasticSectionOrder {
+		entry := demand.sections[group]
+		if entry == nil {
+			continue
+		}
+		if err := entry.allocate(demand, &remaining, counts, selected, pinned); err != nil {
+			return nil, false, err
+		}
+	}
+	roundingHeadroom := 0
+	for _, nonNative := range demand.userContent {
+		if nonNative {
+			roundingHeadroom++
+		}
+	}
+	for {
+		var chosen *guardianElasticSectionDemand
+		for _, group := range guardianElasticSectionOrder {
+			entry := demand.sections[group]
+			if entry == nil {
+				continue
+			}
+			target := min(entry.used+remaining+roundingHeadroom, entry.maximum, entry.totalCost)
+			if entry.quota >= target {
 				continue
 			}
 			if chosen == nil || entry.used < chosen.used {
@@ -437,34 +546,95 @@ func allocateGuardianElasticItems(demand *guardianElasticDemand, config Guardian
 		if chosen == nil {
 			break
 		}
-		candidate := chosen.pending[len(chosen.pending)-1]
-		chosen.pending = chosen.pending[:len(chosen.pending)-1]
-		if demand.candidateCost(candidate) <= remaining {
-			cost := demand.selectCandidate(candidate)
-			selected[[2]int{candidate.sectionIndex, candidate.itemIndex}] = true
-			chosen.used += cost
-			remaining -= cost
+		chosen.quota = min(chosen.used+remaining+roundingHeadroom, chosen.maximum, chosen.totalCost)
+		if err := chosen.allocate(demand, &remaining, counts, selected, pinned); err != nil {
+			return nil, false, err
 		}
 	}
-	return selected
+	demand.minimumsFit = minimumsFit
+	return selected, minimumsFit, nil
+}
+
+func (entry *guardianElasticSectionDemand) allocate(
+	demand *guardianElasticDemand,
+	remaining *int,
+	counts []int,
+	selected map[[2]int]bool,
+	pinned map[[2]int]bool,
+) error {
+	for _, item := range entry.selectedItems {
+		delete(selected, [2]int{item.sectionIndex, item.itemIndex})
+		*remaining += item.cost
+		if demand.userContent[item.sectionIndex] {
+			*remaining += guardianElasticContentFramingTokens(counts[item.sectionIndex]) -
+				guardianElasticContentFramingTokens(counts[item.sectionIndex]-1)
+			counts[item.sectionIndex]--
+		}
+	}
+	entry.selectedItems = nil
+	entry.used = 0
+	quotaCounts := demand.quotaCounts()
+	keep := func(item guardianElasticCandidate) bool {
+		if demand.candidateCost(item, quotaCounts) > entry.quota-entry.used ||
+			demand.candidateCost(item, counts) > *remaining {
+			return false
+		}
+		cost := demand.selectCandidate(item, counts)
+		entry.used += demand.selectCandidate(item, quotaCounts)
+		*remaining -= cost
+		selected[[2]int{item.sectionIndex, item.itemIndex}] = true
+		entry.selectedItems = append(entry.selectedItems, item)
+		return true
+	}
+	for _, item := range entry.requiredItems {
+		if pinned[[2]int{item.sectionIndex, item.itemIndex}] && !keep(item) {
+			return GuardianElasticBudgetError{Section: "request_budget"}
+		}
+	}
+	for index := len(entry.requiredItems) - 1; index >= 0; index-- {
+		item := entry.requiredItems[index]
+		if pinned[[2]int{item.sectionIndex, item.itemIndex}] {
+			continue
+		}
+		if !keep(item) {
+			break
+		}
+	}
+	for index := len(entry.optionalItems) - 1; index >= 0; index-- {
+		keep(entry.optionalItems[index])
+	}
+	return nil
 }
 
 func retainGuardianElasticSelection(context *GuardianElasticContext, selected map[[2]int]bool) {
 	for sectionIndex := range context.Sections {
 		section := &context.Sections[sectionIndex]
+		if section.ID == "intro" {
+			continue
+		}
 		if section.Native {
-			if len(section.Items) > 0 && section.Items[0].Retention.Optional && !selected[[2]int{sectionIndex, 0}] {
-				section.Items = nil
-				context.Truncated = true
+			if len(section.Items) == 0 || section.Items[0].protected() || selected[[2]int{sectionIndex, 0}] {
+				continue
 			}
+			context.Truncations = append(context.Truncations, GuardianElasticTruncation{
+				Component:     section.ID,
+				OriginalBytes: len(section.Items[0].Text),
+			})
+			section.Items = nil
+			context.Truncated = true
 			continue
 		}
 		kept := make([]GuardianElasticItem, 0, len(section.Items))
-		for itemIndex, item := range section.Items {
-			if !item.Retention.Optional || selected[[2]int{sectionIndex, itemIndex}] {
+		originalItems := section.Items
+		for itemIndex, item := range originalItems {
+			if item.protected() || selected[[2]int{sectionIndex, itemIndex}] {
 				kept = append(kept, item)
 				continue
 			}
+			context.Truncations = append(context.Truncations, GuardianElasticTruncation{
+				Component:     section.ID,
+				OriginalBytes: len(item.Text),
+			})
 			context.Truncated = true
 		}
 		section.Items = kept

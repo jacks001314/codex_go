@@ -69,8 +69,11 @@ func guardianElasticCompleteMinimumBudget(t *testing.T, config GuardianElasticBu
 	if err != nil {
 		t.Fatalf("NewGuardianElasticSectionLimits(%d, %d) error = %v", minimum, limits.MaxSectionEntryTokens, err)
 	}
-	config.Sections = map[GuardianElasticSection]GuardianElasticSectionLimits{
-		GuardianElasticSectionTrustedSkills: completed,
+	sections := make(map[GuardianElasticSection]GuardianElasticSectionLimits, len(config.Sections)+1)
+	for section, limits := range config.Sections {
+		sections[section] = limits
 	}
+	sections[GuardianElasticSectionTrustedSkills] = completed
+	config.Sections = sections
 	return config
 }

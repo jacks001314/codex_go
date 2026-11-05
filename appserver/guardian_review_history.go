@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	codexctx "codex_go/context"
 	"codex_go/features"
 	"codex_go/rollout"
 	"codex_go/session"
@@ -12,8 +13,9 @@ import (
 )
 
 type guardianReviewHistoryState struct {
-	items []session.Item
-	seen  map[string]struct{}
+	items     []session.Item
+	seen      map[string]struct{}
+	budgeting codexctx.GuardianContextBudgeting
 }
 
 const (
@@ -22,7 +24,14 @@ const (
 )
 
 func newGuardianReviewHistoryState(items []session.Item) *guardianReviewHistoryState {
-	state := &guardianReviewHistoryState{seen: map[string]struct{}{}}
+	return newGuardianReviewHistoryStateWithBudgeting(items, codexctx.GuardianContextBudgetingFixed)
+}
+
+func newGuardianReviewHistoryStateWithBudgeting(items []session.Item, budgeting codexctx.GuardianContextBudgeting) *guardianReviewHistoryState {
+	state := &guardianReviewHistoryState{
+		seen:      map[string]struct{}{},
+		budgeting: budgeting,
+	}
 	state.append(items)
 	return state
 }
@@ -52,11 +61,11 @@ func (s *guardianReviewHistoryState) append(items []session.Item) {
 		}
 		s.seen[key] = struct{}{}
 		s.items = append(s.items, cloneRuntimeSessionItem(item))
-		s.evictKind(userKind)
+		s.evictKind(userKind, len(encoded))
 	}
 }
 
-func (s *guardianReviewHistoryState) evictKind(userKind bool) {
+func (s *guardianReviewHistoryState) evictKind(userKind bool, appendedBytes int) {
 	if s == nil {
 		return
 	}
@@ -72,7 +81,7 @@ func (s *guardianReviewHistoryState) evictKind(userKind bool) {
 		}
 	}
 	removeCount := 0
-	if len(indices) > maxGuardianReviewItemsPerKind {
+	if s.budgeting == codexctx.GuardianContextBudgetingFixed && len(indices) > maxGuardianReviewItemsPerKind {
 		// Rust #43798 counts the entries retained before this append. Non-user
 		// overflow drops the oldest half of them so the following appends do not
 		// evict again and invalidate Guardian's transcript cursor. User messages
@@ -87,6 +96,18 @@ func (s *guardianReviewHistoryState) evictKind(userKind bool) {
 	for _, index := range indices[:removeCount] {
 		if encoded, err := json.Marshal(s.items[index]); err == nil {
 			totalBytes -= len(encoded)
+		}
+	}
+	if s.budgeting == codexctx.GuardianContextBudgetingElastic {
+		retainedBytes := maxGuardianReviewBytesPerKind
+		if !userKind {
+			retainedBytes = max(maxGuardianReviewBytesPerKind/2, appendedBytes)
+		}
+		for removeCount < len(indices) && totalBytes > retainedBytes {
+			if encoded, err := json.Marshal(s.items[indices[removeCount]]); err == nil {
+				totalBytes -= len(encoded)
+			}
+			removeCount++
 		}
 	}
 	for removeCount < len(indices) && totalBytes > maxGuardianReviewBytesPerKind {

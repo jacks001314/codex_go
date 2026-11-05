@@ -58,23 +58,26 @@ func TestGuardianElasticAllocationHonorsSectionMaximumLikeRust(t *testing.T) {
 		config.Sections[group] = limits
 	}
 	demand := guardianElasticDemand{
-		groups:        map[GuardianElasticSection]*guardianElasticGroupDemand{},
+		sections:      map[GuardianElasticSection]*guardianElasticSectionDemand{},
 		contentCounts: make([]int, len(groups)),
 		userContent:   make([]bool, len(groups)),
 	}
 	for sectionIndex, group := range groups {
-		entry := &guardianElasticGroupDemand{}
+		entry := &guardianElasticSectionDemand{}
 		for itemIndex := 0; itemIndex < 10; itemIndex++ {
-			entry.pending = append(entry.pending, guardianElasticCandidate{
+			entry.optionalItems = append(entry.optionalItems, guardianElasticCandidate{
 				sectionIndex: sectionIndex,
 				itemIndex:    itemIndex,
 				cost:         100,
 			})
 			entry.totalCost += 100
 		}
-		demand.groups[group] = entry
+		demand.sections[group] = entry
 	}
-	selected := allocateGuardianElasticItems(&demand, config, 800)
+	selected, _, err := allocateGuardianElasticItems(&demand, config, 800, nil)
+	if err != nil {
+		t.Fatalf("allocateGuardianElasticItems() error = %v", err)
+	}
 	counts := []int{0, 0}
 	for key := range selected {
 		counts[key[0]]++

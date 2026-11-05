@@ -345,13 +345,22 @@ func ApplyRetainedOmissionDeduplication(sections RetainedInstructionSections, pr
 		if len(items) == 0 {
 			items = []string{start + "\n", retainedUserInstructionsEnd + "\n"}
 		}
-		index := 1
-		if index > len(items) {
-			index = len(items)
+		hasAvailabilityChange := false
+		for _, item := range items {
+			if strings.TrimRight(item, "\n") == strings.TrimRight(retainedAvailabilityChangedNotice, "\n") {
+				hasAvailabilityChange = true
+				break
+			}
 		}
-		items = append(items, "")
-		copy(items[index+1:], items[index:])
-		items[index] = retainedAvailabilityChangedNotice + "\n"
+		if !hasAvailabilityChange {
+			index := 1
+			if index > len(items) {
+				index = len(items)
+			}
+			items = append(items, "")
+			copy(items[index+1:], items[index:])
+			items[index] = retainedAvailabilityChangedNotice + "\n"
+		}
 		sections.Instructions = items
 	}
 	return sections
