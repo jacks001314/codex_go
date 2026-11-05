@@ -229,7 +229,10 @@ func newCloudTaskClient(opts *cli.CloudOptions) (*chatgptapi.CloudClient, error)
 		chatgptapi.DefaultCloudTasksBaseURL,
 	)
 	headers := http.Header{}
-	resolved, err := auth.NewStore(codexHome).Resolve()
+	// Rust #59572: the CLI's configuration overrides also select how the saved
+	// cloud credential is loaded.
+	storeOptions := auth.StoreOptionsFromConfig(loaded.CLIAuthCredentialsStoreMode(), loaded.SecretAuthStorageEnabled())
+	resolved, err := auth.NewStoreWithOptions(codexHome, storeOptions).Resolve()
 	if err != nil {
 		return nil, err
 	}

@@ -1583,7 +1583,8 @@ func runApply(ctx context.Context, opts cli.ApplyOptions, root cli.RootOptions, 
 	if err != nil {
 		return err
 	}
-	resolved, err := auth.NewStore(codexHome).Resolve()
+	storeOptions := auth.StoreOptionsFromConfig(loaded.CLIAuthCredentialsStoreMode(), loaded.SecretAuthStorageEnabled())
+	resolved, err := auth.NewStoreWithOptions(codexHome, storeOptions).Resolve()
 	if err != nil {
 		return err
 	}
