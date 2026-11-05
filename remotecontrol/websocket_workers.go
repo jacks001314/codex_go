@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -69,15 +71,27 @@ func (w *RemoteControlWebsocketConnectionWorkers) RunServerWriter(ctx context.Co
 			if !ok {
 				return io.ErrUnexpectedEOF
 			}
-			payloads, writeComplete, err := w.prepareQueuedServerEnvelope(&queued)
+			prepared, err := w.prepareQueuedServerEnvelope(&queued)
 			if err != nil {
 				return err
 			}
-			for _, payload := range payloads {
+			logItemPage := w.itemPageWriteLogger(ctx, &queued, prepared)
+			for _, payload := range prepared.payloads {
 				if err := w.writeText(ctx, payload); err != nil {
+					if logItemPage != nil {
+						outcome := "write_error"
+						if ctx.Err() != nil {
+							outcome = "interrupted"
+						}
+						logItemPage(outcome)
+					}
 					return err
 				}
 			}
+			if logItemPage != nil {
+				logItemPage("success")
+			}
+			writeComplete := prepared.writeComplete
 			if writeComplete != nil {
 				select {
 				case writeComplete <- struct{}{}:
@@ -182,9 +196,18 @@ func (w *RemoteControlWebsocketConnectionWorkers) stateSnapshotEnvelopes() []Ser
 	return w.State.OutboundBuffer.Envelopes()
 }
 
-func (w *RemoteControlWebsocketConnectionWorkers) prepareQueuedServerEnvelope(queued *QueuedServerEnvelope) ([]string, chan<- struct{}, error) {
+// preparedServerEnvelope is one queued message rendered into wire frames.
+type preparedServerEnvelope struct {
+	payloads      []string
+	seqID         uint64
+	writeComplete chan<- struct{}
+	prepareStart  time.Time
+}
+
+func (w *RemoteControlWebsocketConnectionWorkers) prepareQueuedServerEnvelope(queued *QueuedServerEnvelope) (preparedServerEnvelope, error) {
+	prepared := preparedServerEnvelope{prepareStart: time.Now()}
 	if queued == nil {
-		return nil, nil, nil
+		return prepared, nil
 	}
 	w.lockState()
 	defer w.unlockState()
@@ -193,18 +216,71 @@ func (w *RemoteControlWebsocketConnectionWorkers) prepareQueuedServerEnvelope(qu
 	envelope.SeqID = w.State.NextServerEnvelopeSeqID(envelope.ClientID, envelope.StreamID)
 	envelopes, err := SplitServerEnvelopeForTransport(&envelope)
 	if err != nil {
-		return nil, nil, err
+		return prepared, err
 	}
 	payloads := make([]string, 0, len(envelopes))
 	for i := range envelopes {
 		payload, err := json.Marshal(&envelopes[i])
 		if err != nil {
-			return nil, nil, err
+			return prepared, err
 		}
 		w.State.QueueServerEnvelope(&envelopes[i])
 		payloads = append(payloads, string(payload))
 	}
-	return payloads, queued.WriteComplete, nil
+	prepared.payloads = payloads
+	prepared.seqID = envelope.SeqID
+	prepared.writeComplete = queued.WriteComplete
+	return prepared, nil
+}
+
+// itemPageWriteLogger returns a debug logger for a thread/items/list response
+// write, or nil for other envelopes and when debug logging is off (Rust
+// #59497). The collector stays allocation-free unless the frame is an item
+// page.
+func (w *RemoteControlWebsocketConnectionWorkers) itemPageWriteLogger(ctx context.Context, queued *QueuedServerEnvelope, prepared preparedServerEnvelope) func(outcome string) {
+	if queued == nil || !queued.ItemPage {
+		return nil
+	}
+	logger := slog.Default()
+	if !logger.Enabled(ctx, slog.LevelDebug) {
+		return nil
+	}
+	requestID := serverEnvelopeRequestID(&queued.Envelope)
+	streamID := string(queued.Envelope.StreamID)
+	frameCount := len(prepared.payloads)
+	wireBytes := 0
+	for _, payload := range prepared.payloads {
+		wireBytes += len(payload)
+	}
+	writeStart := time.Now()
+	prepareMS := writeStart.Sub(prepared.prepareStart).Milliseconds()
+	return func(outcome string) {
+		logger.DebugContext(ctx, "remote control item page write finished",
+			"request_id", requestID,
+			"stream_id", streamID,
+			"seq_id", prepared.seqID,
+			"frame_count", frameCount,
+			"wire_bytes", wireBytes,
+			"prepare_ms", prepareMS,
+			"write_ms", time.Since(writeStart).Milliseconds(),
+			"outcome", outcome,
+		)
+	}
+}
+
+// serverEnvelopeRequestID returns the JSON-RPC request id a server message
+// answers, for correlating transport logs with a page request (Rust #59497).
+func serverEnvelopeRequestID(envelope *ServerEnvelope) string {
+	if envelope == nil || len(envelope.Message) == 0 {
+		return ""
+	}
+	var response struct {
+		ID json.RawMessage `json:"id"`
+	}
+	if err := json.Unmarshal(envelope.Message, &response); err != nil || len(response.ID) == 0 {
+		return ""
+	}
+	return strings.Trim(string(response.ID), `"`)
 }
 
 func (w *RemoteControlWebsocketConnectionWorkers) writeServerEnvelope(ctx context.Context, envelope *ServerEnvelope) error {

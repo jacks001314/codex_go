@@ -4452,6 +4452,15 @@ func (r *RuntimeRouter) handleThreadItemsListRuntime(request *Request) (*ThreadI
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
+	cursorKind := threadItemsListCursorKind(&params)
+	started := time.Now()
+	response, err := r.threadItemsListRuntime(request, &params)
+	r.logThreadItemsListTiming(request, cursorKind, response, err, started)
+	return response, err
+}
+
+// threadItemsListRuntime validates and serves one thread/items/list page.
+func (r *RuntimeRouter) threadItemsListRuntime(request *Request, params *ThreadItemsListParams) (*ThreadItemsListResponse, error) {
 	if err := params.Validate(); err != nil {
 		return nil, err
 	}
@@ -4468,7 +4477,47 @@ func (r *RuntimeRouter) handleThreadItemsListRuntime(request *Request) (*ThreadI
 	if unmaterializedThread(record) {
 		return nil, jsonRPCInvalidRequest(fmt.Sprintf("thread %s is not materialized yet; thread/items/list is unavailable before first user message", record.ID))
 	}
-	return BuildItemsResponse(record, &params)
+	return BuildItemsResponse(record, params)
+}
+
+// threadItemsListCursorKind names the cursor a page request continues (Rust
+// #59497's ThreadItemsListCursor variants).
+func threadItemsListCursorKind(params *ThreadItemsListParams) string {
+	switch {
+	case params == nil || params.Cursor == nil:
+		return "none"
+	case params.Cursor.Anchor != nil:
+		return "item_anchor"
+	default:
+		return "opaque"
+	}
+}
+
+// logThreadItemsListTiming reports one page request's cursor, size and latency
+// at debug level so slow pagination is diagnosable (Rust #59497).
+func (r *RuntimeRouter) logThreadItemsListTiming(request *Request, cursorKind string, response *ThreadItemsListResponse, err error, started time.Time) {
+	logger := slog.Default()
+	if !logger.Enabled(context.Background(), slog.LevelDebug) {
+		return
+	}
+	itemCount := 0
+	hasNextPage := false
+	if response != nil {
+		itemCount = len(response.Data)
+		hasNextPage = response.NextCursor != nil
+	}
+	requestID := ""
+	if request != nil {
+		requestID = request.ID.String()
+	}
+	logger.DebugContext(context.Background(), "thread/items/list finished",
+		"request_id", requestID,
+		"cursor_kind", cursorKind,
+		"item_count", itemCount,
+		"has_next_page", hasNextPage,
+		"duration_ms", time.Since(started).Milliseconds(),
+		"success", err == nil,
+	)
 }
 
 // handleThreadTimelineListRuntime mirrors handleThreadItemsListRuntime for the

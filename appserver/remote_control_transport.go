@@ -284,12 +284,30 @@ func (s *RemoteControlTransportServer) sendValueToConnection(ctx context.Context
 	writeCtx, cancel := context.WithTimeout(ctx, s.writeTimeout())
 	defer cancel()
 	select {
-	case conn.writer <- remotecontrol.RemoteClientOutgoingMessage{Message: data}:
+	case conn.writer <- remotecontrol.RemoteClientOutgoingMessage{Message: data, ItemPage: remoteControlItemPageResponse(value)}:
 	case <-writeCtx.Done():
 		if conn.disconnect != nil {
 			conn.disconnect()
 		}
 		s.closeConnection(conn.remoteID)
+	}
+}
+
+// remoteControlItemPageResponse reports whether value answers thread/items/list,
+// which the websocket transport logs with frame and write timing (Rust
+// #59497).
+func remoteControlItemPageResponse(value any) bool {
+	response, ok := value.(*Response)
+	if !ok || response == nil {
+		return false
+	}
+	switch result := response.Result.(type) {
+	case *ThreadItemsListResponse:
+		return result != nil
+	case ThreadItemsListResponse:
+		return true
+	default:
+		return false
 	}
 }
 

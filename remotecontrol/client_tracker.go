@@ -38,11 +38,16 @@ type RemoteClientTransportEvent struct {
 type RemoteClientOutgoingMessage struct {
 	Message       json.RawMessage
 	WriteComplete chan<- struct{}
+	// ItemPage marks a thread/items/list response so the writer can report its
+	// frame and write timing (Rust #59497).
+	ItemPage bool
 }
 
 type QueuedServerEnvelope struct {
 	Envelope      ServerEnvelope
 	WriteComplete chan<- struct{}
+	// ItemPage marks a thread/items/list response (Rust #59497).
+	ItemPage bool
 }
 
 type ClientTrackerOptions struct {
@@ -328,6 +333,7 @@ func (t *ClientTracker) runClientOutbound(key envelopeStreamKey, writer <-chan R
 				return
 			}
 			err := t.sendServerEnvelope(context.Background(), QueuedServerEnvelope{
+				ItemPage: outgoing.ItemPage,
 				Envelope: ServerEnvelope{
 					Type:     ServerEventServerMessage,
 					Message:  cloneRawMessage(outgoing.Message),
