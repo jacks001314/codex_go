@@ -64,6 +64,8 @@ export async function runCLI(runOptions: RunCLIOptions): Promise<number> {
         tempRoot: runOptions.tempRoot,
         model,
         modelReasoningEffort,
+        rustHome: stringOption(options["rust-home"]),
+        goHome: stringOption(options["go-home"]),
       });
       log(`sdktests smoke: ${result.comparison.status} (${result.comparison.classification})`);
       log(`sdktests smoke artifact: ${result.artifactDir}`);
@@ -158,6 +160,8 @@ async function runParityCommand(
               tempRoot: runOptions.tempRoot,
               model,
               modelReasoningEffort,
+              rustHome: stringOption(options["rust-home"]),
+              goHome: stringOption(options["go-home"]),
             });
             const comparison = {
               status: result.comparison.status,

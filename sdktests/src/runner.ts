@@ -21,6 +21,8 @@ export type RunArgs = {
   tempRoot?: string;
   model?: string;
   modelReasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
+  rustHome?: string;
+  goHome?: string;
 };
 
 export type ParityRunResult = {
@@ -53,11 +55,16 @@ export async function runParity(args: RunArgs): Promise<ParityRunResult> {
   };
   writeJsonAtomic(runStatePath, runState);
 
-  const homeSource = path.join(os.homedir(), ".codex");
-  const sourceConfig = path.join(homeSource, "config.toml");
-  const configSummary = safeConfigSummary(sourceConfig);
+  const rustHome = args.rustHome ?? path.join(os.homedir(), ".codex");
+  const gcodeHome = path.join(os.homedir(), ".gcode");
+  const goHome = args.goHome ?? (existsSync(gcodeHome) ? gcodeHome : rustHome);
+  const configSummaries = {
+    rust: safeConfigSummary(path.join(rustHome, "config.toml")),
+    go: safeConfigSummary(path.join(goHome, "config.toml")),
+  };
+  const sourceConfig = path.join(rustHome, "config.toml");
 
-  const manifest = buildManifest(args, scenario, configSummary);
+  const manifest = buildManifest(args, scenario, configSummaries, { rust: rustHome, go: goHome });
   writeJson(path.join(artifactDir, "run-manifest.json"), manifest);
 
   const order = args.order ?? ["rust", "go"];
@@ -102,6 +109,7 @@ export async function runParity(args: RunArgs): Promise<ParityRunResult> {
         writeFileSync(path.join(additional, "outside.txt"), "SDK_ADDITIONAL_DIRECTORY_FIXTURE", "utf8");
         additionalDirectories = [additional];
       }
+      const homeSource = impl === "rust" ? rustHome : goHome;
       const homeCopy = copyCodexHome(homeSource, home);
       const sandboxStateCopied = impl === "go" ? copyWindowsSandboxState(homeSource, home) : [];
       const before = snapshotFiles(workspace);
@@ -328,7 +336,12 @@ function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) throw new HarnessAbortError("live SDK run was aborted");
 }
 
-function buildManifest(args: RunArgs, scenario: any, configSummary: Record<string, string>): any {
+function buildManifest(
+  args: RunArgs,
+  scenario: any,
+  configSummaries: { rust: Record<string, string>; go: Record<string, string> },
+  homes: { rust: string; go: string },
+): any {
   const parityPath = path.join(repoRoot, "parity.json");
   const parity = existsSync(parityPath) ? readJson(parityPath) : {};
   const rustRepo = path.resolve(args.sdkPath, "..", "..");
@@ -382,7 +395,12 @@ function buildManifest(args: RunArgs, scenario: any, configSummary: Record<strin
     },
     config: {
       source: "copied isolated CODEX_HOME config.toml",
-      defaults: configSummary,
+      homes,
+      defaults: configSummaries.rust,
+      defaultsByImpl: configSummaries,
+      modelProviderMatch:
+        configSummaries.rust.model === configSummaries.go.model &&
+        configSummaries.rust.model_provider === configSummaries.go.model_provider,
       modelPassedToSdk: Boolean(args.model),
       modelReasoningEffortPassedToSdk: Boolean(args.modelReasoningEffort),
       explicitModel: args.model ?? null,
