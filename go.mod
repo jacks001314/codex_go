@@ -52,6 +52,7 @@ require (
 	github.com/things-go/go-socks5 v0.1.1
 	github.com/valyala/fasthttp v1.72.0
 	github.com/yuin/goldmark v1.7.13
+	github.com/zeebo/blake3 v0.2.4
 	go.opentelemetry.io/proto/otlp v1.7.1
 	golang.org/x/crypto v0.55.0
 	golang.org/x/image v0.35.0
@@ -67,6 +68,8 @@ require (
 	modernc.org/sqlite v1.46.2
 	mvdan.cc/sh/v3 v3.14.1
 )
+
+require github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 
 require (
 	filippo.io/hpke v0.4.0 // indirect
