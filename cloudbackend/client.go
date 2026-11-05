@@ -263,9 +263,16 @@ func (c *Client) forwardNextNonBlocking() {
 	if active == nil {
 		return
 	}
+	// Check the event side first because it is authoritative for a clean end.
+	// Selecting randomly between two ready channels could otherwise observe a
+	// closed error side and admit a turn into a stream that already ended.
 	select {
 	case event, ok := <-active.events:
 		c.forwardStreamEvent(active, event, ok)
+		return
+	default:
+	}
+	select {
 	case err, ok := <-active.errs:
 		c.forwardStreamError(active, err, ok)
 	default:
@@ -291,8 +298,8 @@ func (c *Client) replaceAttachment(ctx context.Context, threadID string) error {
 		return err
 	}
 	notConnected := errors.New("Cloud conversation activated but its stream did not connect. Reopen it before sending.")
-	// A server can close Attach immediately after returning successful headers.
-	// A healthy idle stream needs no event to prove that it is ready.
+	// Prefer a ready event so a buffered frame is not mistaken for a closed
+	// stream when both channels are already ready.
 	select {
 	case event, ok := <-events:
 		if !ok {
@@ -303,10 +310,17 @@ func (c *Client) replaceAttachment(ctx context.Context, threadID string) error {
 		c.active = &attachment{threadID: threadID, events: events, errs: errs, cancel: cancel}
 		c.forwardEvent(threadID, event)
 		return nil
-	case <-errs:
-		// The stream ended before producing anything, so it never connected.
-		cancel()
-		return notConnected
+	default:
+	}
+	// A server can close Attach immediately after returning successful headers.
+	// A healthy idle stream needs no event to prove that it is ready.
+	select {
+	case err, ok := <-errs:
+		if !ok || err != nil {
+			// The stream ended before producing anything, so it never connected.
+			cancel()
+			return notConnected
+		}
 	default:
 	}
 	delete(c.status, threadID)
