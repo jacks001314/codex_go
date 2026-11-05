@@ -3,6 +3,7 @@ package cloudclient
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"strings"
 	"testing"
@@ -308,5 +309,27 @@ func TestClientActivateAndPrewarmUseNativeMethodsLikeRust(t *testing.T) {
 	}
 	if prewarmCalls != 1 || warm.Thread.ID != "thread-1" || warm.ServiceTier == nil || *warm.ServiceTier != "fast" {
 		t.Fatalf("prewarm calls=%d activation=%#v", prewarmCalls, warm)
+	}
+}
+
+func TestClientActivationRejectsEmptyStoredIdentityLikeRust(t *testing.T) {
+	for _, testCase := range []struct {
+		name       string
+		sessionID  string
+		providerID string
+	}{
+		{name: "empty session", sessionID: "", providerID: "openai"},
+		{name: "empty provider", sessionID: "session-1", providerID: ""},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			thread := activationTestThread("thread-1")
+			thread = appendActivationString(thread, 27, testCase.sessionID)
+			thread = appendActivationString(thread, 16, testCase.providerID)
+			response := activationTestResponse("thread-1")
+			response = appendActivationBytes(response, 17, thread)
+			if _, err := decodeThreadActivation(response, "thread-1"); !errors.Is(err, ErrInvalidResponse) {
+				t.Fatalf("decodeThreadActivation() error = %v, want ErrInvalidResponse", err)
+			}
+		})
 	}
 }

@@ -269,6 +269,9 @@ func decodeThreadActivation(data []byte, requestedID string) (*ThreadActivation,
 	if err != nil || (requestedID != "" && thread.ID != requestedID) {
 		return nil, ErrInvalidResponse
 	}
+	if thread.SessionID == "" || thread.ModelProvider == "" {
+		return nil, ErrInvalidResponse
+	}
 	model, err := requiredString(fields, 10, true)
 	if err != nil {
 		return nil, err
@@ -371,7 +374,7 @@ func decodeThreadSnapshot(data []byte) (*ThreadSnapshot, error) {
 	if err != nil {
 		return nil, err
 	}
-	sessionID, err := requiredString(fields, 27, true)
+	sessionID, err := requiredString(fields, 27, false)
 	if err != nil {
 		return nil, err
 	}
@@ -383,7 +386,7 @@ func decodeThreadSnapshot(data []byte) (*ThreadSnapshot, error) {
 	if err != nil {
 		return nil, err
 	}
-	provider, err := requiredString(fields, 16, true)
+	provider, err := requiredString(fields, 16, false)
 	if err != nil {
 		return nil, err
 	}
