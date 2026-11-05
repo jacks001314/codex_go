@@ -95,6 +95,7 @@ type internalSessionHost struct {
 	readyHandlers []func(ThreadReadyInput)
 	sessionStores map[string]*ExtensionStore
 	threadStores  map[string]*ExtensionStore
+	turnStores    map[string]*ExtensionStore
 }
 
 func (h *internalSessionHost) markThread(threadID string) {
@@ -178,6 +179,40 @@ func (h *internalSessionHost) threadStore(threadID string) *ExtensionStore {
 		h.threadStores[threadID] = store
 	}
 	return store
+}
+
+func (h *internalSessionHost) turnStore(turnID string) *ExtensionStore {
+	if h == nil {
+		return nil
+	}
+	turnID = strings.TrimSpace(turnID)
+	if turnID == "" {
+		return nil
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.turnStores == nil {
+		h.turnStores = map[string]*ExtensionStore{}
+	}
+	store := h.turnStores[turnID]
+	if store == nil {
+		store = &ExtensionStore{}
+		h.turnStores[turnID] = store
+	}
+	return store
+}
+
+func (h *internalSessionHost) forgetTurn(turnID string) {
+	if h == nil {
+		return
+	}
+	turnID = strings.TrimSpace(turnID)
+	if turnID == "" {
+		return
+	}
+	h.mu.Lock()
+	delete(h.turnStores, turnID)
+	h.mu.Unlock()
 }
 
 func (h *internalSessionHost) forgetThread(threadID string) {

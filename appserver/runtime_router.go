@@ -341,6 +341,11 @@ type RuntimeRouter struct {
 	// closing steer admission (Rust #58877). Tests use it to submit a steer that
 	// races turn completion; production leaves it nil.
 	turnFinishHook func(threadID string, turnID string)
+	// turnLifecycleMu guards the host lifecycle contributors that observe
+	// completed turn items. The embedded app-server registers extensions here;
+	// calls run after the lock is released.
+	turnLifecycleMu           sync.RWMutex
+	turnLifecycleContributors []TurnLifecycleContributor
 	// feedbackUploads bounds concurrent feedback uploads to Rust #42096's three
 	// permits. A permit stays held until the upload itself finishes, not until the
 	// RPC waiter is cancelled.
@@ -8494,6 +8499,30 @@ func (r *RuntimeRouter) handleTurnStart(request *Request) (*turn.TurnStartRespon
 	return response, nil
 }
 
+// decodeTurnSteerParams decodes turn/steer params, preserving host-only input
+// extension data from an in-process request (Rust #59455).
+func decodeTurnSteerParams(request *Request) (*turn.TurnSteerParams, error) {
+	if request != nil {
+		switch params := request.InternalParams.(type) {
+		case *turn.TurnSteerParams:
+			if params != nil {
+				clone := *params
+				clone.UserInputExtensionData = cloneAnyMap(params.UserInputExtensionData)
+				return &clone, nil
+			}
+		case turn.TurnSteerParams:
+			clone := params
+			clone.UserInputExtensionData = cloneAnyMap(params.UserInputExtensionData)
+			return &clone, nil
+		}
+	}
+	var params turn.TurnSteerParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return &params, nil
+}
+
 // decodeTurnStartParams decodes turn/start params, preferring the in-process
 // params object for internal requests so internal-only fields
 // (ParentTurnID/RootTurnID/AdditionalInputItems/TurnTrigger/Environments) are
@@ -9567,8 +9596,8 @@ func (r *RuntimeRouter) effectiveConfigForSessionTelemetry() *config.Config {
 }
 
 func (r *RuntimeRouter) handleTurnSteer(request *Request) (*turn.TurnSteerResponse, error) {
-	var params turn.TurnSteerParams
-	if err := request.DecodeParams(&params); err != nil {
+	params, err := decodeTurnSteerParams(request)
+	if err != nil {
 		return nil, err
 	}
 	// Rust #49262: a steer joins the accepted turn's trace on `codex.turn_input`.
@@ -9587,21 +9616,21 @@ func (r *RuntimeRouter) handleTurnSteer(request *Request) (*turn.TurnSteerRespon
 	if err := validateTurnUserInputImageURLs(params.Input); err != nil {
 		return nil, err
 	}
-	response, err := r.requireTurns().Steer(&params)
+	response, err := r.requireTurns().Steer(params)
 	if err != nil {
-		r.emitCodexTurnSteerAnalyticsEvent(context.Background(), connectionID, &params, nil, telemetry.TurnSteerResultRejected, turnSteerAnalyticsRejectionReason(err), createdAt)
+		r.emitCodexTurnSteerAnalyticsEvent(context.Background(), connectionID, params, nil, telemetry.TurnSteerResultRejected, turnSteerAnalyticsRejectionReason(err), createdAt)
 		return nil, turnSteerRuntimeError(err)
 	}
 	acceptedTurnID = response.TurnID
 	// Rust reports the steered user input like a turn start
 	// (SessionTelemetry::user_prompt).
 	r.emitUserPromptRecords(context.Background(), params.ThreadID, params.Prompt, params.Input)
-	r.updateActiveTurnApprovalsReviewer(&params)
+	r.updateActiveTurnApprovalsReviewer(params)
 	// Rust #41924: an accepted steer seals the live transcript before its user
 	// message is recorded.
 	r.sealRealtimeUserInput(params.ThreadID, params.Prompt)
-	noticeEnabled := r.imageResizeNoticeEnabledForSteer(&params)
-	inputItems, additionalContexts := r.inputItemsFromTurnSteer(&params, noticeEnabled)
+	noticeEnabled := r.imageResizeNoticeEnabledForSteer(params)
+	inputItems, additionalContexts := r.inputItemsFromTurnSteer(params, noticeEnabled)
 	if r.hasRuntimeThreadStore() {
 		recordedParams := params
 		if filtered, rejected := turnUserInputsWithoutUploadedAudio(params.Input); rejected && !r.audioInputSupportedForThread(params.ThreadID) {
@@ -9611,7 +9640,7 @@ func (r *RuntimeRouter) handleTurnSteer(request *Request) (*turn.TurnSteerRespon
 		}
 		items := additionalContextSessionItems(params.ExpectedTurnID, additionalContexts, createdAt)
 		var userItem session.Item
-		if item, ok := sessionItemFromTurnSteer(&recordedParams); ok {
+		if item, ok := sessionItemFromTurnSteer(recordedParams); ok {
 			userItem = item
 			items = append(items, item)
 		}
@@ -9635,9 +9664,10 @@ func (r *RuntimeRouter) handleTurnSteer(request *Request) (*turn.TurnSteerRespon
 				TurnID:        params.ExpectedTurnID,
 				CompletedAtMS: userItem.CreatedAt.UTC().UnixMilli(),
 			})
+			r.emitTurnItemCompletedLifecycle(params.ThreadID, params.ExpectedTurnID, threadItem, params.UserInputExtensionData)
 		}
 	}
-	steerMetadata := r.steerClientMetadata(&params)
+	steerMetadata := r.steerClientMetadata(params)
 	if len(inputItems) > 0 {
 		if len(steerMetadata) > 0 {
 			// Rust merges a steer's responsesapi_client_metadata into the turn's
@@ -9655,7 +9685,7 @@ func (r *RuntimeRouter) handleTurnSteer(request *Request) (*turn.TurnSteerRespon
 		}
 	}
 	r.noteAcceptedTurnSteer(params.ThreadID, params.ExpectedTurnID)
-	r.emitCodexTurnSteerAnalyticsEvent(context.Background(), connectionID, &params, stringPtrIfNotEmpty(response.TurnID), telemetry.TurnSteerResultAccepted, nil, createdAt)
+	r.emitCodexTurnSteerAnalyticsEvent(context.Background(), connectionID, params, stringPtrIfNotEmpty(response.TurnID), telemetry.TurnSteerResultAccepted, nil, createdAt)
 	return response, nil
 }
 

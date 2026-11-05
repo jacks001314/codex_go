@@ -4478,6 +4478,7 @@ func (r *RuntimeRouter) persistRuntimeTurnPrompt(threadID string, turnID string,
 		TurnID:        turnID,
 		CompletedAtMS: createdAt.UTC().UnixMilli(),
 	})
+	r.emitTurnItemCompletedLifecycle(threadID, turnID, threadItem, params.UserInputExtensionData)
 	return true
 }
 
@@ -5351,7 +5352,11 @@ func interruptedTurnMarkerSessionItem(turnID string, now time.Time) session.Item
 }
 
 func (r *RuntimeRouter) completeTurnRecord(threadID string, turnID string, status TurnStatus) {
-	if r == nil || r.services.Turns == nil {
+	if r == nil {
+		return
+	}
+	r.internalHost.forgetTurn(turnID)
+	if r.services.Turns == nil {
 		return
 	}
 	_ = r.services.Turns.Complete(&turn.TurnCompleteParams{
@@ -14273,6 +14278,7 @@ func cloneTurnStartParams(params *turn.TurnStartParams) *turn.TurnStartParams {
 	}
 	clone := *params
 	clone.Input = append([]turn.TurnUserInput(nil), params.Input...)
+	clone.UserInputExtensionData = cloneAnyMap(params.UserInputExtensionData)
 	clone.ResponsesAPIMetadata = cloneStringMap(params.ResponsesAPIMetadata)
 	clone.RuntimeWorkspaceRoots = append([]string(nil), params.RuntimeWorkspaceRoots...)
 	clone.Environments = cloneMapSlice(params.Environments)

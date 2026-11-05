@@ -306,8 +306,12 @@ type TurnStartParams struct {
 	// UserItemUUID is the host-assigned UUID for this input's Responses item
 	// (Rust #57538 TurnInputRequest::user_item_uuid). It is never part of the
 	// app-server wire; in-process hosts set it directly.
-	UserItemUUID         string            `json:"-"`
-	ResponsesAPIMetadata map[string]string `json:"responsesapiClientMetadata,omitempty"`
+	UserItemUUID string `json:"-"`
+	// UserInputExtensionData is host-only data delivered with this input's
+	// completion callback (Rust #59455). It never enters model input, the
+	// app-server wire, or persisted history.
+	UserInputExtensionData map[string]any    `json:"-"`
+	ResponsesAPIMetadata   map[string]string `json:"responsesapiClientMetadata,omitempty"`
 	// ResponsesAPIMetadataPatch adds or overwrites individual client
 	// metadata entries without replacing the map. It is applied after
 	// ResponsesAPIMetadata when both are supplied (Rust #54053).
@@ -575,8 +579,12 @@ type TurnSteerParams struct {
 	ClientUserMessageID string          `json:"clientUserMessageId,omitempty"`
 	// UserItemUUID is the host-assigned UUID for this steer's Responses item
 	// (Rust #57538); it is never part of the app-server wire.
-	UserItemUUID         string            `json:"-"`
-	ResponsesAPIMetadata map[string]string `json:"responsesapiClientMetadata,omitempty"`
+	UserItemUUID string `json:"-"`
+	// UserInputExtensionData is host-only data delivered with this steer's
+	// user-message completion (Rust #59455). It is never model-visible or
+	// persisted.
+	UserInputExtensionData map[string]any    `json:"-"`
+	ResponsesAPIMetadata   map[string]string `json:"responsesapiClientMetadata,omitempty"`
 	// ResponsesAPIMetadataPatch adds or overwrites individual client
 	// metadata entries without replacing the map. It is applied after
 	// ResponsesAPIMetadata when both are supplied (Rust #54053).
