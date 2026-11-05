@@ -35,13 +35,13 @@ import (
 	"codex_go/execpolicy"
 	"codex_go/features"
 	"codex_go/mcp"
-	"codex_go/runtimeauth"
 	modelpkg "codex_go/model"
 	codexnetwork "codex_go/network"
 	"codex_go/plugin"
 	promptctx "codex_go/prompt"
 	"codex_go/protocol"
 	"codex_go/rollout"
+	"codex_go/runtimeauth"
 	"codex_go/sandbox"
 	"codex_go/session"
 	"codex_go/state"
@@ -1744,6 +1744,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		WindowsSandboxLevel:         interactiveWindowsSandboxLevelForTUI(root),
 		OnSessionAction:             interactiveSessionActionHandler(root),
 		OnListPermissionProfiles:    interactiveLocalListPermissionProfiles(root),
+		OnListModelProviders:        interactiveLocalModelProviderList(root),
 		OnListCollaborationModes:    interactiveLocalListCollaborationModes(),
 		OnWorkingDirectoryChange:    interactiveWorkingDirectoryChangeHandler(root),
 		OnResumeSession:             interactiveResumeSessionHandler(root),

@@ -1566,6 +1566,9 @@ type Options struct {
 	// configured permission profiles, so the picker falls back to its local
 	// built-in presets. Nil keeps the picker on local presets only.
 	OnListPermissionProfiles func() ([]chatwidget.CustomPermissionProfile, bool, error)
+	// OnListModelProviders browses the connected app server's provider catalog
+	// (Rust #59541 app::provider).
+	OnListModelProviders ModelProviderListFunc
 	// OnListCollaborationModes discovers the connected app server's
 	// collaborationMode/list catalog at startup and reconnect (Rust #42401,
 	// ModelCatalog::with_collaboration_modes). Nil keeps the builtin presets; a
@@ -2524,7 +2527,12 @@ type Model struct {
 	managedWorktreeStarting  bool
 	worktreePopupRequestID   string
 	// Named permission profile discovery and pending selection (Rust #43340).
-	onListPermissionProfiles  func() ([]chatwidget.CustomPermissionProfile, bool, error)
+	onListPermissionProfiles func() ([]chatwidget.CustomPermissionProfile, bool, error)
+	onListModelProviders     ModelProviderListFunc
+	// configProviderGeneration invalidates in-flight model provider browser
+	// requests when the popup is dismissed or reopened (Rust #59541). It lives
+	// on the model so closing the configuration panel does not reset it.
+	configProviderGeneration  uint64
 	onUpdateThreadPermissions func(threadID string, selection PermissionSelection) error
 	permissionProfiles        []chatwidget.CustomPermissionProfile
 	permissionProfilesLoading bool
@@ -3301,6 +3309,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onStartManagedWorktree:           options.OnStartManagedWorktree,
 		onManagedWorktreeChanged:         options.OnManagedWorktreeChanged,
 		onListPermissionProfiles:         options.OnListPermissionProfiles,
+		onListModelProviders:             options.OnListModelProviders,
 		onListCollaborationModes:         options.OnListCollaborationModes,
 		onUpdateThreadPermissions:        options.OnUpdateThreadPermissions,
 		terminalSize:                     options.TerminalSize,
@@ -3806,6 +3815,13 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 			cmd = bubbletea.Batch(cmd, restoreCmd)
 		}
 	}
+	if providerCmd := next.refreshOpenProviderBrowserCmd(); providerCmd != nil {
+		if cmd == nil {
+			cmd = providerCmd
+		} else {
+			cmd = bubbletea.Batch(cmd, providerCmd)
+		}
+	}
 	if replayCmd := next.reconcileApprovalThread(); replayCmd != nil {
 		if cmd == nil {
 			cmd = replayCmd
@@ -4194,6 +4210,8 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		return m, nil
 	case configNotificationTestMsg:
 		return m, m.postConfigTestNotification()
+	case configPanelProvidersLoadedMsg:
+		return m, m.applyConfigPanelProvidersLoaded(msg)
 	case asyncQuestionCountdownMsg:
 		return m, m.asyncQuestionCountdownCmd()
 	case permissionProfilesLoadedMsg:
