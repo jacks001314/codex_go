@@ -676,3 +676,20 @@ func TestTurnStartParamsToolOutputValidationLikeRust(t *testing.T) {
 		t.Fatalf("oversized toolOutput error = %T, want InputTooLargeError", tooLargeErr)
 	}
 }
+
+func TestTurnStartParamsPromptCacheTTLValidationLikeRust(t *testing.T) {
+	for _, ttl := range []string{"30m", "12h"} {
+		value := " " + ttl + " "
+		params := &TurnStartParams{ThreadID: "thread-1", PromptCacheTTL: &value}
+		if err := params.Validate(); err != nil {
+			t.Fatalf("ttl %q rejected: %v", ttl, err)
+		}
+		if params.PromptCacheTTL == nil || *params.PromptCacheTTL != ttl {
+			t.Fatalf("normalized ttl = %#v, want %q", params.PromptCacheTTL, ttl)
+		}
+	}
+	bad := "1h"
+	if err := (&TurnStartParams{ThreadID: "thread-1", PromptCacheTTL: &bad}).Validate(); err == nil || !strings.Contains(err.Error(), "30m or 12h") {
+		t.Fatalf("invalid ttl error = %v", err)
+	}
+}

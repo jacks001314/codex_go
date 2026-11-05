@@ -126,6 +126,7 @@ func TestAgentLoopRunsToolsAndContinuesSampling(t *testing.T) {
 		PreviousResponseID: "resp-prev",
 		ServiceTier:        "priority",
 		PromptCacheKey:     "cache-key",
+		PromptCacheTTL:     "12h",
 		ClientMetadata:     map[string]string{"thread_id": "thread-1"},
 		OutputSchema:       map[string]any{"type": "object"},
 		OnAssistantMessage: func(response *model.AgentResponse, iteration int, hasToolCalls bool) {
@@ -155,7 +156,7 @@ func TestAgentLoopRunsToolsAndContinuesSampling(t *testing.T) {
 	if len(agent.requests) != 2 || len(agent.requests[1].InputItems) != 4 {
 		t.Fatalf("agent requests = %#v", agent.requests)
 	}
-	if !agent.requests[0].Store || agent.requests[0].Originator != "codex_app_server" || agent.requests[0].PreviousResponseID != "resp-prev" || agent.requests[0].ServiceTier != "priority" || agent.requests[0].PromptCacheKey != "cache-key" || agent.requests[0].ClientMetadata["thread_id"] != "thread-1" {
+	if !agent.requests[0].Store || agent.requests[0].Originator != "codex_app_server" || agent.requests[0].PreviousResponseID != "resp-prev" || agent.requests[0].ServiceTier != "priority" || agent.requests[0].PromptCacheKey != "cache-key" || agent.requests[0].PromptCacheTTL != "12h" || agent.requests[0].ClientMetadata["thread_id"] != "thread-1" {
 		t.Fatalf("request controls = %#v", agent.requests[0])
 	}
 	if agent.requests[1].PreviousResponseID != "resp-tool" {
@@ -1331,5 +1332,16 @@ func TestAgentLoopBuildsStepInputItemsFromCapturedStepLikeRust(t *testing.T) {
 	}
 	if !inputItemsContainText(result.InputItems, "guidance for gpt-updated") {
 		t.Fatalf("step input was not retained in the turn: %#v", result.InputItems)
+	}
+}
+
+func TestAgentLoopPromptCacheTTLOmittedWhenUnsetLikeRust(t *testing.T) {
+	agent := &singleTurnAgent{}
+	loop := NewAgentLoop(&AgentLoopOptions{Agent: agent, MaxTurns: 1})
+	if _, err := loop.Run(context.Background(), &AgentLoopRequest{Prompt: "hello", Model: "gpt-test"}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(agent.requests) != 1 || agent.requests[0].PromptCacheTTL != "" {
+		t.Fatalf("requests = %#v, want omitted prompt cache TTL", agent.requests)
 	}
 }

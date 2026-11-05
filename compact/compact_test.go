@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"codex_go/audioutil"
+	"codex_go/protocol"
 )
 
 func TestEvaluatePolicy(t *testing.T) {
@@ -815,5 +816,19 @@ func TestEstimateActiveContextTokensHonorsServerReasoningIncluded(t *testing.T) 
 	}
 	if status := Evaluate(limit, EstimateActiveContextTokensWithServerReasoning(items, 80, false)); !status.ShouldCompact {
 		t.Fatalf("re-estimated reasoning must trigger compaction at 81 tokens: %+v", status)
+	}
+}
+
+func TestNewWindowUsesUUIDv7AndSuppliedAdvanceIDsLikeRust(t *testing.T) {
+	window := NewWindow("thread-a")
+	ids := window.IDs()
+	if _, ok := protocol.ParseContextWindowID(ids.WindowID); !ok {
+		t.Fatalf("initial window id %q is not UUIDv7", ids.WindowID)
+	}
+	next := protocol.NewContextWindowID().String()
+	window.SetIDGenerator(func() string { return next })
+	_, advanced := window.Advance()
+	if advanced.PreviousWindowID != ids.WindowID || advanced.WindowID != next || advanced.FirstWindowID != ids.FirstWindowID {
+		t.Fatalf("advanced ids = %#v, want first=%q previous=%q current=%q", advanced, ids.FirstWindowID, ids.WindowID, next)
 	}
 }

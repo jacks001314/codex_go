@@ -3,7 +3,8 @@ package safety
 // Rust parity: #56081 caches decrypted Codex auth and managed secrets. Each
 // non-gateway namespace keeps at most one snapshot process-wide; gateway
 // snapshots stay with their backend. A snapshot is reused only while the file
-// path, ciphertext and keyring passphrase still match, and writes invalidate it.
+// path, ciphertext and keyring passphrase still match, and successful writes
+// publish the committed snapshot.
 
 import (
 	"errors"
@@ -45,6 +46,13 @@ func countDecryptions(t *testing.T) *decryptCounter {
 	return counter
 }
 
+func clearLocalBackendCache(backend *LocalBackend) {
+	cache := backend.decryptedCache()
+	cache.mu.Lock()
+	cache.cached = nil
+	cache.mu.Unlock()
+}
+
 func writeCachedTestDocument(t *testing.T, home string, namespace LocalNamespace, store *fakeKeyringStore, document string) {
 	t.Helper()
 	passphrase, err := store.Load(KeyringService(), SecretKeyringAccount(home, namespace))
@@ -84,6 +92,9 @@ func TestLocalSecretCacheReusesPlaintextLikeRust(t *testing.T) {
 				t.Fatalf("Set: %v", err)
 			}
 			before := counter.value()
+			// Saves populate the cache; clear it so this section still exercises a
+			// concurrent cold read.
+			clearLocalBackendCache(first)
 
 			var wait sync.WaitGroup
 			values := make([]string, 2)
@@ -113,15 +124,23 @@ func TestLocalSecretCacheReusesPlaintextLikeRust(t *testing.T) {
 				t.Fatalf("decryptions after cached read = %d, want 1", got)
 			}
 
-			// A write invalidates the snapshot so the next read sees "two".
+			// A successful write publishes its committed snapshot, so the next
+			// read observes "two" without decrypting again.
 			if err := first.Set(&scope, name, "two"); err != nil {
 				t.Fatalf("Set(two): %v", err)
+			}
+			cache := second.decryptedCache()
+			cache.mu.Lock()
+			populated := cache.cached != nil && cache.cached.path == second.path()
+			cache.mu.Unlock()
+			if !populated {
+				t.Fatal("successful save did not populate the decrypted cache")
 			}
 			if value, ok, err := second.Get(&scope, name); err != nil || !ok || value != "two" {
 				t.Fatalf("Get after write = %q, %v, %v", value, ok, err)
 			}
-			if got := counter.value() - before; got != 2 {
-				t.Fatalf("decryptions after write = %d, want 2", got)
+			if got := counter.value() - before; got != 1 {
+				t.Fatalf("decryptions after write = %d, want 1", got)
 			}
 		})
 	}
@@ -143,6 +162,7 @@ func TestLocalGatewayCacheIsScopedToBackendLikeRust(t *testing.T) {
 	if err := first.Set(&scope, name, "gateway"); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
+	clearLocalBackendCache(first)
 	before := counter.value()
 	for range 2 {
 		if value, ok, err := first.Get(&scope, name); err != nil || !ok || value != "gateway" {
@@ -177,6 +197,7 @@ func TestLocalSecretCacheDetectsExternalChangesLikeRust(t *testing.T) {
 	if err := backend.Set(&scope, name, "one"); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
+	clearLocalBackendCache(backend)
 	before := counter.value()
 	if _, ok, err := backend.Get(&scope, name); err != nil || !ok {
 		t.Fatalf("prime Get = %v, %v", ok, err)
@@ -304,6 +325,7 @@ func TestLocalSecretCacheKeepsOneSnapshotPerNamespaceLikeRust(t *testing.T) {
 	if err := gateway.Set(&scope, name, "gateway"); err != nil {
 		t.Fatalf("gateway Set: %v", err)
 	}
+	clearLocalBackendCache(gateway)
 	before = counter.value()
 	if value, _, _ := first.Get(&scope, name); value != "first" {
 		t.Fatalf("managed value = %q", value)

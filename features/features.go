@@ -44,9 +44,10 @@ var Registry = []Spec{
 		ExperimentalName:            "Analytics plan history",
 		ExperimentalMenuDescription: "Preview five-hour and weekly allowance history for consumer accounts in /analytics.",
 	},
-	// Rust (codex-rs/features/src/lib.rs #58940): the flag is retired.
-	// Eligible launches always start or reuse the daemon; --no-daemon opts out.
-	{Key: "daemon_auto_start", Stage: StageRemoved, DefaultEnabled: true},
+	// Rust #59447 restores the flag to stable/default-on: eligible interactive
+	// launches auto-start the shared daemon unless this setting or --no-daemon
+	// disables it.
+	{Key: "daemon_auto_start", Stage: StageStable, DefaultEnabled: true},
 	// Rust (codex-rs/features/src/lib.rs #56097): the TUI may discover and
 	// select among multiple conversation backends. Under development and off
 	// by default; Go launches a single backend session, so the key only keeps
@@ -146,7 +147,9 @@ var Registry = []Spec{
 	// Rust (codex-rs/features/src/lib.rs #46562): retry eligible bootstrap
 	// requests through the system proxy after normal routing fails.
 	{Key: "system_proxy_fallback", Stage: StageStable, DefaultEnabled: true},
-	{Key: "multi_agent", Stage: StageStable, DefaultEnabled: true},
+	// Rust #59479 deprecates features.multi_agent while keeping its V1 fallback
+	// control and default-on behavior; [agents].enabled is the forward setting.
+	{Key: "multi_agent", Stage: StageDeprecated, DefaultEnabled: true},
 	{Key: "multi_agent_v2", Stage: StageStable},
 	{Key: "multi_agent_mode", Stage: StageRemoved},
 	// Rust (codex-rs/features/src/lib.rs #50082): inherit client-defined

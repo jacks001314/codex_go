@@ -304,6 +304,11 @@ func experimentalFeatureUnconfirmedContains(values []string, value string) bool 
 func experimentalFeatureEdit(item chatwidget.ExperimentalFeatureOption) SettingsEdit {
 	key := strings.TrimSpace(item.Key)
 	value := any(item.Enabled)
+	if key == "daemon_auto_start" {
+		// Rust #59447 keeps an explicit daemon opt-out even when the server
+		// reports a disabled default.
+		return SettingsEdit{KeyPath: "features." + key, Value: any(item.Enabled)}
+	}
 	if key == experimentalFeaturePreventIdleSleepKey || key == experimentalFeatureGuardianApprovalKey {
 		if !item.Enabled && !item.DefaultEnabled {
 			value = nil

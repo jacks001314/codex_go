@@ -6251,6 +6251,7 @@ func (r *RuntimeRouter) applyThreadStartInstructionSources(response *ThreadStart
 			record.Metadata.Extra["instructions_project"] = strings.TrimSpace(parts.project)
 			record.Metadata.Extra["instructions_project_cwd"] = strings.TrimSpace(parts.projectCWD)
 			record.Metadata.Extra["instructions_project_trust"] = strings.TrimSpace(parts.projectTrust)
+			record.Metadata.Extra["instructions_project_budget"] = parts.projectBudget
 			record.Metadata.Extra["instructions_from_agents_md"] = true
 		}
 	} else if params.BaseInstructions != nil {
@@ -6957,8 +6958,9 @@ type threadStartInstructions struct {
 	// projectCWD and projectTrust record the environment facts the repository
 	// snapshot was resolved with, so a turn can re-discover it when either
 	// changes (Rust #44675).
-	projectCWD   string
-	projectTrust string
+	projectCWD    string
+	projectTrust  string
+	projectBudget int
 }
 
 func (r *RuntimeRouter) threadStartInstructionParts(params *ThreadStartParams) (*threadStartInstructions, error) {
@@ -6981,14 +6983,26 @@ func (r *RuntimeRouter) threadStartInstructionParts(params *ThreadStartParams) (
 	if params.Environments == nil {
 		cwd := r.effectiveThreadStartCWD(params)
 		cfg, _ := r.effectiveConfigForThreadStart(params)
-		projectText, projectSources, err := r.loadProjectInstructionsFor(cwd, cfg)
+		projectText, projectSources, projectWarnings, err := r.loadProjectInstructionsFor(cwd, cfg)
 		if err != nil {
 			return nil, err
 		}
 		parts.project = projectText
 		parts.sources = append(parts.sources, projectSources...)
+		parts.warnings = append(parts.warnings, projectWarnings...)
 		parts.projectCWD = cwd
 		parts.projectTrust = projectTrustLabel(cfg, cwd)
+		parts.projectBudget = config.DefaultProjectDocMaxBytes
+		if cfg != nil {
+			parts.projectBudget = cfg.ProjectDocMaxBytes()
+		}
+		if parts.projectBudget > 0 {
+			if combined := joinInstructionsParts(parts.global, parts.project); len(combined) > parts.projectBudget {
+				parts.warnings = append(parts.warnings, fmt.Sprintf(
+					"Combined user instructions use %d bytes, above the %d-byte `project_doc_max_bytes` setting. The total includes global and thread instructions. The limit applies only to project files.",
+					len(combined), parts.projectBudget))
+			}
+		}
 	}
 	return parts, nil
 }
@@ -6996,7 +7010,7 @@ func (r *RuntimeRouter) threadStartInstructionParts(params *ThreadStartParams) (
 // loadProjectInstructionsFor resolves repository-scoped instructions for a cwd
 // using the supplied configuration. Rust #39837: project discovery is skipped
 // for untrusted projects while user-level instructions are preserved.
-func (r *RuntimeRouter) loadProjectInstructionsFor(cwd string, cfg *config.Config) (string, []string, error) {
+func (r *RuntimeRouter) loadProjectInstructionsFor(cwd string, cfg *config.Config) (string, []string, []string, error) {
 	maxBytes := config.DefaultProjectDocMaxBytes
 	var rootMarkers, fallbackNames []string
 	if cfg != nil {
@@ -7022,10 +7036,10 @@ func (r *RuntimeRouter) loadProjectInstructionsFor(cwd string, cfg *config.Confi
 		UntrustedProject: strings.EqualFold(projectTrustLabel(cfg, cwd), "untrusted"),
 	})
 	if err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 	if loaded == nil {
-		return "", nil, nil
+		return "", nil, nil, nil
 	}
 	var sources []string
 	for _, entry := range loaded.Entries {
@@ -7034,7 +7048,7 @@ func (r *RuntimeRouter) loadProjectInstructionsFor(cwd string, cfg *config.Confi
 		}
 		sources = appendInstructionSource(sources, entry.SourcePath)
 	}
-	return strings.TrimSpace(loaded.Text()), sources, nil
+	return strings.TrimSpace(loaded.Text()), sources, append([]string(nil), loaded.Warnings...), nil
 }
 
 // projectTrustLabel returns the active project's trust level for a cwd, or an

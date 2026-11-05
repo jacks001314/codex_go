@@ -111,19 +111,26 @@ func (r *RuntimeRouter) refreshThreadGlobalInstructions(params *turn.TurnStartPa
 	// or the project trust level changed; otherwise reuse the captured one.
 	storedCWD, _ := record.Metadata.Extra["instructions_project_cwd"].(string)
 	storedTrust, _ := record.Metadata.Extra["instructions_project_trust"].(string)
+	storedBudget := intFromAny(record.Metadata.Extra["instructions_project_budget"])
 	currentCWD := firstNonEmpty(strings.TrimSpace(params.CWD), strings.TrimSpace(record.Metadata.CWD))
 	projectConfig := r.threadProjectInstructionsConfig(currentCWD)
 	currentTrust := projectTrustLabel(projectConfig, currentCWD)
-	projectSnapshotChanged := currentCWD != storedCWD || currentTrust != storedTrust
+	currentBudget := config.DefaultProjectDocMaxBytes
+	if projectConfig != nil {
+		currentBudget = projectConfig.ProjectDocMaxBytes()
+	}
+	projectSnapshotChanged := currentCWD != storedCWD || currentTrust != storedTrust || currentBudget != storedBudget
 	projectSources := []string(nil)
 	if projectSnapshotChanged {
-		if refreshedProject, sources, err := r.loadProjectInstructionsFor(currentCWD, projectConfig); err == nil {
+		if refreshedProject, sources, warnings, err := r.loadProjectInstructionsFor(currentCWD, projectConfig); err == nil {
 			projectText = refreshedProject
 			projectSources = sources
+			r.emitInstructionWarnings(params.ThreadID, warnings)
 			record.Metadata.Extra = ensureRecordExtra(record.Metadata.Extra)
 			record.Metadata.Extra["instructions_project"] = refreshedProject
 			record.Metadata.Extra["instructions_project_cwd"] = currentCWD
 			record.Metadata.Extra["instructions_project_trust"] = currentTrust
+			record.Metadata.Extra["instructions_project_budget"] = currentBudget
 		}
 	}
 	globalText, _ := record.Metadata.Extra["instructions_global"].(string)

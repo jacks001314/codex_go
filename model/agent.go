@@ -83,6 +83,10 @@ type AgentRequest struct {
 	ItemIDsEnabled               bool
 	ServiceTier                  string
 	PromptCacheKey               string
+	// PromptCacheTTL requests a minimum prompt-cache lifetime for this turn
+	// ("30m" or "12h"). It maps to prompt_cache_options.ttl and is omitted when
+	// empty (Rust #59480).
+	PromptCacheTTL string
 	// Ephemeral mirrors Rust's `turn_context.config.ephemeral`: the thread
 	// intentionally skips durable persistence, so every attachment upload made
 	// while preparing this request carries that intent (Rust #51517).

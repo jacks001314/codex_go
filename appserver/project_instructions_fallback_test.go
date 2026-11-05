@@ -27,7 +27,7 @@ func TestProjectDocFallbackFilenamesDriveDiscoveryLikeRust(t *testing.T) {
 	}
 
 	router := &RuntimeRouter{}
-	text, _, err := router.loadProjectInstructionsFor(nested, &config.Config{Values: map[string]any{}})
+	text, _, _, err := router.loadProjectInstructionsFor(nested, &config.Config{Values: map[string]any{}})
 	if err != nil {
 		t.Fatalf("loadProjectInstructionsFor() error = %v", err)
 	}
@@ -38,7 +38,7 @@ func TestProjectDocFallbackFilenamesDriveDiscoveryLikeRust(t *testing.T) {
 	cfg := &config.Config{Values: map[string]any{
 		"project_doc_fallback_filenames": []any{"CLAUDE.md"},
 	}}
-	text, sources, err := router.loadProjectInstructionsFor(nested, cfg)
+	text, sources, _, err := router.loadProjectInstructionsFor(nested, cfg)
 	if err != nil {
 		t.Fatalf("loadProjectInstructionsFor() error = %v", err)
 	}
@@ -74,7 +74,7 @@ func TestProjectDocFallbackFilenamesRejectPathSyntaxLikeRust(t *testing.T) {
 	invalid := &config.Config{Values: map[string]any{
 		"project_doc_fallback_filenames": []any{"sub/CLAUDE.md", "..", ".", "nested/CLAUDE.md"},
 	}}
-	text, _, err := router.loadProjectInstructionsFor(repo, invalid)
+	text, _, _, err := router.loadProjectInstructionsFor(repo, invalid)
 	if err != nil {
 		t.Fatalf("loadProjectInstructionsFor(invalid) error = %v", err)
 	}
@@ -85,7 +85,7 @@ func TestProjectDocFallbackFilenamesRejectPathSyntaxLikeRust(t *testing.T) {
 	valid := &config.Config{Values: map[string]any{
 		"project_doc_fallback_filenames": []any{"sub/CLAUDE.md", "CLAUDE.md"},
 	}}
-	text, sources, err := router.loadProjectInstructionsFor(repo, valid)
+	text, sources, _, err := router.loadProjectInstructionsFor(repo, valid)
 	if err != nil {
 		t.Fatalf("loadProjectInstructionsFor(valid) error = %v", err)
 	}
@@ -110,7 +110,7 @@ func TestProjectDocFallbackFilenamesOverrideOrderLikeRust(t *testing.T) {
 	cfg := &config.Config{Values: map[string]any{
 		"project_doc_fallback_filenames": []any{"CLAUDE.md"},
 	}}
-	text, _, err := (&RuntimeRouter{}).loadProjectInstructionsFor(repo, cfg)
+	text, _, _, err := (&RuntimeRouter{}).loadProjectInstructionsFor(repo, cfg)
 	if err != nil {
 		t.Fatalf("loadProjectInstructionsFor() error = %v", err)
 	}
@@ -135,7 +135,7 @@ func TestProjectRootMarkersDriveDiscoveryLikeRust(t *testing.T) {
 		t.Fatalf("mkdir nested error = %v", err)
 	}
 
-	text, _, err := (&RuntimeRouter{}).loadProjectInstructionsFor(nested, &config.Config{Values: map[string]any{}})
+	text, _, _, err := (&RuntimeRouter{}).loadProjectInstructionsFor(nested, &config.Config{Values: map[string]any{}})
 	if err != nil {
 		t.Fatalf("loadProjectInstructionsFor() error = %v", err)
 	}
@@ -144,7 +144,7 @@ func TestProjectRootMarkersDriveDiscoveryLikeRust(t *testing.T) {
 	}
 
 	cfg := &config.Config{Values: map[string]any{"project_root_markers": []any{"PROJECT_MARKER"}}}
-	text, _, err = (&RuntimeRouter{}).loadProjectInstructionsFor(nested, cfg)
+	text, _, _, err = (&RuntimeRouter{}).loadProjectInstructionsFor(nested, cfg)
 	if err != nil {
 		t.Fatalf("loadProjectInstructionsFor() error = %v", err)
 	}

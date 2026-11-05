@@ -437,25 +437,40 @@ type responsesAgentRequest struct {
 	// Rust #49675: keep the routing fields first. encoding/json serializes
 	// struct fields in declaration order, and gateways may inspect a request
 	// body incrementally before buffering a potentially multi-megabyte input.
-	Model                string                  `json:"model"`
-	Stream               bool                    `json:"stream"`
-	ServiceTier          string                  `json:"service_tier,omitempty"`
-	Instructions         string                  `json:"instructions,omitempty"`
-	Input                []any                   `json:"input"`
-	Tools                []any                   `json:"tools,omitempty"`
-	ToolChoice           string                  `json:"tool_choice,omitempty"`
-	ParallelToolCalls    bool                    `json:"parallel_tool_calls"`
-	Reasoning            *responsesReasoning     `json:"reasoning,omitempty"`
-	Store                bool                    `json:"store"`
-	StreamOptions        *responsesStreamOptions `json:"stream_options,omitempty"`
-	Include              []string                `json:"include,omitempty"`
-	PromptCacheKey       string                  `json:"prompt_cache_key,omitempty"`
-	Text                 *responsesTextParam     `json:"text,omitempty"`
-	ClientMetadata       map[string]string       `json:"client_metadata,omitempty"`
-	AccessPrograms       *AccessPrograms         `json:"access_programs,omitempty"`
-	UseResponsesLite     bool                    `json:"-"`
-	IncludeTimingMetrics bool                    `json:"-"`
-	BetaFeaturesHeader   string                  `json:"-"`
+	Model                string                       `json:"model"`
+	Stream               bool                         `json:"stream"`
+	ServiceTier          string                       `json:"service_tier,omitempty"`
+	Instructions         string                       `json:"instructions,omitempty"`
+	Input                []any                        `json:"input"`
+	Tools                []any                        `json:"tools,omitempty"`
+	ToolChoice           string                       `json:"tool_choice,omitempty"`
+	ParallelToolCalls    bool                         `json:"parallel_tool_calls"`
+	Reasoning            *responsesReasoning          `json:"reasoning,omitempty"`
+	Store                bool                         `json:"store"`
+	StreamOptions        *responsesStreamOptions      `json:"stream_options,omitempty"`
+	Include              []string                     `json:"include,omitempty"`
+	PromptCacheKey       string                       `json:"prompt_cache_key,omitempty"`
+	PromptCacheOptions   *responsesPromptCacheOptions `json:"prompt_cache_options,omitempty"`
+	Text                 *responsesTextParam          `json:"text,omitempty"`
+	ClientMetadata       map[string]string            `json:"client_metadata,omitempty"`
+	AccessPrograms       *AccessPrograms              `json:"access_programs,omitempty"`
+	UseResponsesLite     bool                         `json:"-"`
+	IncludeTimingMetrics bool                         `json:"-"`
+	BetaFeaturesHeader   string                       `json:"-"`
+}
+
+// responsesPromptCacheOptions mirrors Rust's PromptCacheOptions (#59480).
+type responsesPromptCacheOptions struct {
+	TTL string `json:"ttl"`
+}
+
+func promptCacheOptionsForTTL(ttl string) *responsesPromptCacheOptions {
+	switch strings.TrimSpace(ttl) {
+	case "30m", "12h":
+		return &responsesPromptCacheOptions{TTL: strings.TrimSpace(ttl)}
+	default:
+		return nil
+	}
 }
 
 type responsesReasoning struct {
@@ -1185,6 +1200,9 @@ func (r *ResponsesAgentRunner) Prewarm(ctx context.Context, request *AgentReques
 	if apiRequest.PromptCacheKey != "" {
 		payload["prompt_cache_key"] = apiRequest.PromptCacheKey
 	}
+	if apiRequest.PromptCacheOptions != nil {
+		payload["prompt_cache_options"] = apiRequest.PromptCacheOptions
+	}
 	if apiRequest.AccessPrograms != nil {
 		payload["access_programs"] = apiRequest.AccessPrograms
 	}
@@ -1836,6 +1854,9 @@ func websocketResponseCreatePayload(apiRequest *responsesAgentRequest, previousR
 	if apiRequest.PromptCacheKey != "" {
 		payload["prompt_cache_key"] = apiRequest.PromptCacheKey
 	}
+	if apiRequest.PromptCacheOptions != nil {
+		payload["prompt_cache_options"] = apiRequest.PromptCacheOptions
+	}
 	if apiRequest.AccessPrograms != nil {
 		payload["access_programs"] = apiRequest.AccessPrograms
 	}
@@ -2099,6 +2120,7 @@ var responsesRequestWireOrder = []string{
 	"stream_options",
 	"include",
 	"prompt_cache_key",
+	"prompt_cache_options",
 	"text",
 	"generate",
 	"client_metadata",
@@ -2324,6 +2346,7 @@ func (r *ResponsesAgentRunner) buildResponsesAgentRequest(request *AgentRequest,
 		ParallelToolCalls:    parallelToolCalls,
 		ServiceTier:          r.serviceTierForRequest(&modelInfo, request.ServiceTier),
 		PromptCacheKey:       strings.TrimSpace(request.PromptCacheKey),
+		PromptCacheOptions:   promptCacheOptionsForTTL(request.PromptCacheTTL),
 		AccessPrograms:       accessPrograms,
 		ClientMetadata:       responsesClientMetadataForRequest(request, r),
 		Text:                 responsesTextParamForRequest(request.OutputSchema, request.ModelVerbosity, &modelInfo),

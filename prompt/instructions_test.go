@@ -622,3 +622,22 @@ func TestDetectImplicitSkillInvocationForCommandMatchesPathIdentityLikeRust(t *t
 		}
 	}
 }
+
+func TestLoadProjectInstructionsWarnsWhenBudgetTruncatesLikeRust(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte(strings.Repeat("A", 64)), 0o600); err != nil {
+		t.Fatalf("write AGENTS.md: %v", err)
+	}
+	loaded, err := LoadProjectInstructions(InstructionsLoadConfig{
+		CWD: dir, MaxBytes: 16, EnvironmentID: "local",
+	})
+	if err != nil {
+		t.Fatalf("LoadProjectInstructions() error = %v", err)
+	}
+	if loaded == nil || loaded.Text() != strings.Repeat("A", 16) {
+		t.Fatalf("loaded = %#v", loaded)
+	}
+	if len(loaded.Warnings) != 1 || !strings.Contains(loaded.Warnings[0], "Loaded only 16 of 64 bytes") || !strings.Contains(loaded.Warnings[0], ProjectDocBudgetGuidance) {
+		t.Fatalf("warnings = %#v", loaded.Warnings)
+	}
+}

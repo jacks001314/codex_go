@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"codex_go/compact"
+	"codex_go/protocol"
 )
 
 type TaskKind string
@@ -171,6 +172,7 @@ type SessionState struct {
 	mcpDependencyPrompted     map[string]bool
 	previousTurnSettings      map[string]any
 	autoCompactWindow         *compact.Window
+	contextWindowIDGenerator  func() string
 	activeConnectorSelection  map[string]bool
 	pendingSessionStartSource []string
 	grantedPermissionsByEnvID map[string]map[string]any
@@ -178,13 +180,44 @@ type SessionState struct {
 }
 
 func NewSessionState(threadID string) *SessionState {
+	return NewSessionStateWithContextWindowIDGenerator(threadID, func() string {
+		return protocol.NewContextWindowID().String()
+	})
+}
+
+// NewSessionStateWithContextWindowIDGenerator installs the runtime-owned ID
+// allocator used for the initial window and every later context-window advance
+// (Rust #59354). Clones that share a session state therefore share the policy.
+func NewSessionStateWithContextWindowIDGenerator(threadID string, generator func() string) *SessionState {
+	if generator == nil {
+		generator = func() string { return protocol.NewContextWindowID().String() }
+	}
+	window := compact.NewWindow(threadID)
+	window.SetIDGenerator(generator)
 	return &SessionState{
 		mcpDependencyPrompted:     map[string]bool{},
-		autoCompactWindow:         compact.NewWindow(threadID),
+		autoCompactWindow:         window,
+		contextWindowIDGenerator:  generator,
 		activeConnectorSelection:  map[string]bool{},
 		grantedPermissionsByEnvID: map[string]map[string]any{},
 		nextTurnIsFirst:           true,
 	}
+}
+
+// AdvanceAutoCompactWindow allocates the next context window through the
+// session's shared generator.
+func (s *SessionState) AdvanceAutoCompactWindow() (uint64, compact.WindowIDs) {
+	s.mu.Lock()
+	window := s.autoCompactWindow
+	generator := s.contextWindowIDGenerator
+	s.mu.Unlock()
+	if window == nil {
+		return 0, compact.WindowIDs{}
+	}
+	if generator != nil {
+		window.SetIDGenerator(generator)
+	}
+	return window.Advance()
 }
 
 func (s *SessionState) RecordItems(items ...any) {

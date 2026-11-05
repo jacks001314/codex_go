@@ -100,7 +100,7 @@ func TestCompactRunnerResolvesEffortFromPinWithoutMutatingItLikeRust(t *testing.
 		Phase:    compact.PhaseStandaloneTurn,
 	}
 
-	runner, ok := router.compactRunnerForRecord(record, request, "", "").(*agentCompactRunner)
+	runner, ok := router.compactRunnerForRecord(record, request, "", "", "").(*agentCompactRunner)
 	if !ok || runner == nil {
 		t.Fatalf("compactRunnerForRecord() = %#v, want an agent compaction runner", runner)
 	}
@@ -108,7 +108,7 @@ func TestCompactRunnerResolvesEffortFromPinWithoutMutatingItLikeRust(t *testing.
 		t.Fatalf("compaction effort = %q, want the pinned medium", runner.effort)
 	}
 
-	fallback, ok := router.compactRunnerForRecord(record, request, "gpt-5.2", "").(*agentCompactRunner)
+	fallback, ok := router.compactRunnerForRecord(record, request, "gpt-5.2", "", "").(*agentCompactRunner)
 	if !ok || fallback == nil {
 		t.Fatalf("fallback compactRunnerForRecord() = %#v, want an agent compaction runner", fallback)
 	}

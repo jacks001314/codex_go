@@ -485,6 +485,7 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 			ItemIDsEnabled:               request.ItemIDsEnabled,
 			ServiceTier:                  request.ServiceTier,
 			PromptCacheKey:               request.PromptCacheKey,
+			PromptCacheTTL:               request.PromptCacheTTL,
 			CyberAccessProgram:           request.CyberAccessProgram,
 			ClientMetadata:               cloneStringMap(clientMetadata),
 			MCPAttribution:               r.mcpAttributionSnapshot(),

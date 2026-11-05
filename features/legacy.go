@@ -52,7 +52,6 @@ var ignoredFeatureKeys = map[string]bool{
 	remoteCompactionV2Key:             true,
 	"skill_env_var_dependency_prompt": true,
 	"terminal_resize_reflow":          true,
-	"daemon_auto_start":               true,
 }
 
 // CanonicalKey returns the canonical feature key for a canonical key or accepted
@@ -158,8 +157,6 @@ func forcedLegacyUsageForKey(key string) (string, string, bool) {
 		return "features.web_search_cached", "web_search_cached", true
 	case "use_legacy_landlock":
 		return "features.use_legacy_landlock", "use_legacy_landlock", true
-	case "daemon_auto_start":
-		return "features.daemon_auto_start", "daemon_auto_start", true
 	default:
 		return "", "", false
 	}
@@ -207,11 +204,6 @@ func NoticeForLegacyFeatureUsage(usage LegacyFeatureUsage) LegacyFeatureNotice {
 		return LegacyFeatureNotice{
 			Summary: "`" + label + "` is deprecated because web search is enabled by default.",
 			Details: "Set `web_search` to `\"live\"`, `\"indexed\"`, `\"cached\"`, or `\"disabled\"` at the top level (or under a profile) in config.toml if you want to override it.",
-		}
-	case "daemon_auto_start":
-		return LegacyFeatureNotice{
-			Summary: "`[features].daemon_auto_start` is deprecated and ignored.",
-			Details: "Remove `daemon_auto_start` from [features] in config.toml or profile configuration files. Use `--no-daemon` to run without the shared background server.",
 		}
 	case "use_legacy_landlock":
 		label := alias

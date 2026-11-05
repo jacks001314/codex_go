@@ -240,6 +240,9 @@ type agentCompactRunner struct {
 	// (Rust `Prompt.cyber_access_program`, #48224): the previous turn's program
 	// for a previous-model compaction, otherwise the current turn's selection.
 	cyberAccessProgram string
+	// promptCacheTTL is the compaction turn's minimum prompt-cache lifetime
+	// (Rust turn_context.prompt_cache_ttl, #59480).
+	promptCacheTTL string
 	// clientMetadata is the compaction turn's Responses client metadata
 	// (Rust `Session::compaction_responses_metadata`): the turn-metadata
 	// document reports the compaction request kind and the turn's identity.
@@ -309,6 +312,7 @@ func (r *agentCompactRunner) Compact(ctx context.Context, request *compact.Reque
 		// (compact.rs) and therefore into the remote request too; an absent
 		// program must not inherit a different turn's selection (#48224).
 		CyberAccessProgram: strings.TrimSpace(r.cyberAccessProgram),
+		PromptCacheTTL:     strings.TrimSpace(r.promptCacheTTL),
 	})
 	if err != nil {
 		return nil, err

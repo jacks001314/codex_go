@@ -329,6 +329,10 @@ type TurnStartParams struct {
 	Environments               []map[string]any           `json:"environments,omitempty"`
 	ServiceTier                *string                    `json:"serviceTier,omitempty"`
 	ServiceTierSet             bool                       `json:"-"`
+	// PromptCacheTTL requests a minimum Responses prompt-cache lifetime for the
+	// turn this request starts ("30m" or "12h"). It is scoped to the started
+	// turn and omitted when unset (Rust #59480).
+	PromptCacheTTL *string `json:"promptCacheTtl,omitempty"`
 	// ServiceTierForTurn overrides the service tier only for the turn this
 	// request starts ("default" for standard speed); it does not change the
 	// thread's tier and is ignored when the request steers a turn (Rust
@@ -405,6 +409,7 @@ func (p *TurnStartParams) MarshalJSON() ([]byte, error) {
 		SandboxPolicy       any                 `json:"sandboxPolicy,omitempty"`
 		Model               string              `json:"model,omitempty"`
 		ServiceTier         *string             `json:"serviceTier,omitempty"`
+		PromptCacheTTL      *string             `json:"promptCacheTtl,omitempty"`
 		Effort              *string             `json:"effort,omitempty"`
 		Summary             *string             `json:"summary,omitempty"`
 		Personality         *string             `json:"personality,omitempty"`
@@ -425,6 +430,7 @@ func (p *TurnStartParams) MarshalJSON() ([]byte, error) {
 		SandboxPolicy:       p.SandboxPolicy,
 		Model:               p.Model,
 		ServiceTier:         p.ServiceTier,
+		PromptCacheTTL:      p.PromptCacheTTL,
 		Effort:              p.Effort,
 		Summary:             p.Summary,
 		Personality:         p.Personality,
@@ -469,6 +475,13 @@ func (p *TurnStartParams) Validate() error {
 	}
 	if err := ValidateDynamicTools(p.DynamicTools); err != nil {
 		return err
+	}
+	if p.PromptCacheTTL != nil {
+		ttl := strings.TrimSpace(*p.PromptCacheTTL)
+		if ttl != "30m" && ttl != "12h" {
+			return fmt.Errorf("%w: promptCacheTtl must be 30m or 12h", ErrInvalidTurnRequest)
+		}
+		p.PromptCacheTTL = &ttl
 	}
 	if err := validateRuntimeWorkspaceRoots(p.RuntimeWorkspaceRoots); err != nil {
 		return err

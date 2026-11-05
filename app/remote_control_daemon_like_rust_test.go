@@ -215,8 +215,8 @@ func TestRemoteControlDaemonEligibilityLikeRust(t *testing.T) {
 	unsetEnv(t, auth.OpenAIFederationRuleIDEnv)
 
 	writeDaemonAutoStartConfig(t, codexHome, false)
-	if !remoteControlDaemonEligible(nil) {
-		t.Fatal("a retired daemon_auto_start=false must not disable daemon eligibility")
+	if remoteControlDaemonEligible(nil) {
+		t.Fatal("daemon_auto_start=false must keep the launch off the daemon path")
 	}
 
 	previousWSL := daemonWSLDrvfsDetector

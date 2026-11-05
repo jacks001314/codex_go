@@ -87,8 +87,9 @@ func requirementsRuleEntry(rule PrefixRule) string {
 		patternParts = append(patternParts, "["+strings.Join(alternative, ",")+"]")
 	}
 	return fmt.Sprintf(
-		"pattern=%s decision=%s justification=%q",
+		"pattern=%s canonical_matching=%t decision=%s justification=%q",
 		strings.Join(patternParts, "|"),
+		rule.CanonicalMatching,
 		string(rule.Decision),
 		rule.Justification,
 	)

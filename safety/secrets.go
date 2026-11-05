@@ -366,11 +366,20 @@ func (b *LocalBackend) save(file *localFile) error {
 	if err := writeSecretsFileAtomically(path, ciphertext); err != nil {
 		return err
 	}
-	// A successful write invalidates any snapshot of this file so the next read
-	// decrypts the new ciphertext instead of serving the old plaintext.
+	// Publish only committed contents. Reads still verify the ciphertext and
+	// keyring, so a racing replacement cannot make this snapshot authoritative
+	// (Rust #59520).
 	cache := b.decryptedCache()
 	cache.mu.Lock()
-	if cache.cached != nil && cache.cached.path == path {
+	if file.Version == SecretsVersion {
+		cache.cached = &cachedLocalFile{
+			path:           path,
+			ciphertextHash: sha256.Sum256(ciphertext),
+			passphraseHash: sha256.Sum256([]byte(passphrase)),
+			file:           cloneLocalFile(file),
+		}
+	} else if cache.cached != nil && cache.cached.path == path {
+		// Leave schema normalization and rejection to the read path.
 		cache.cached = nil
 	}
 	cache.mu.Unlock()

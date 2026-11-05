@@ -75,3 +75,22 @@ func TestRequirementsRulesValidateLikeRust(t *testing.T) {
 		}
 	}
 }
+
+func TestRequirementsCanonicalMatchingLikeRust(t *testing.T) {
+	policy, err := rulesRequirementFromAny(map[string]any{
+		"prefix_rules": []any{map[string]any{
+			"pattern":            []any{map[string]any{"token": "bash"}},
+			"canonical_matching": true,
+			"decision":           "forbidden",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("rulesRequirementFromAny() error = %v", err)
+	}
+	if !policy.Policy().Rules[0].CanonicalMatching {
+		t.Fatalf("canonical matching not retained: %#v", policy.Policy().Rules[0])
+	}
+	if out := policy.Policy().EvaluateCommand([]string{"bAſh"}); out.Decision == nil || *out.Decision != execpolicy.DecisionForbidden {
+		t.Fatalf("canonical managed rule decision = %#v", out.Decision)
+	}
+}

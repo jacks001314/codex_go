@@ -196,6 +196,9 @@ type AgentLoopRequest struct {
 	// records it as the `tags_json` field.
 	UsageTags      map[string]string
 	PromptCacheKey string
+	// PromptCacheTTL requests a per-turn minimum prompt-cache lifetime ("30m"
+	// or "12h"); empty omits prompt_cache_options (Rust #59480).
+	PromptCacheTTL string
 	// CyberAccessProgram is the turn's selected cyber access program (core
 	// snake_case, empty when none was selected or the provider is not OpenAI).
 	// Rust carries it on the turn context and copies it into every Prompt
@@ -624,6 +627,7 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			ItemIDsEnabled:               request.ItemIDsEnabled,
 			ServiceTier:                  stepServiceTier,
 			PromptCacheKey:               request.PromptCacheKey,
+			PromptCacheTTL:               request.PromptCacheTTL,
 			CyberAccessProgram:           request.CyberAccessProgram,
 			ClientMetadata:               cloneStringMap(clientMetadata),
 			MCPAttribution:               l.mcpAttributionSnapshot(),

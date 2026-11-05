@@ -47,6 +47,20 @@ func rulesRequirementFromAny(value any) (*execpolicy.RequirementsPolicy, error) 
 		default:
 			return nil, fmt.Errorf("rules prefix_rule at index %d has unsupported decision %q", ruleIndex, decisionValue)
 		}
+		canonicalMatching := false
+		if value, present := ruleTable["canonical_matching"]; present {
+			parsed, ok := value.(bool)
+			if !ok {
+				return nil, fmt.Errorf("rules prefix_rule at index %d has invalid canonical_matching: expected boolean", ruleIndex)
+			}
+			canonicalMatching = parsed
+		} else if value, present := ruleTable["canonicalMatching"]; present {
+			parsed, ok := value.(bool)
+			if !ok {
+				return nil, fmt.Errorf("rules prefix_rule at index %d has invalid canonicalMatching: expected boolean", ruleIndex)
+			}
+			canonicalMatching = parsed
+		}
 		justification := ""
 		if value, present := stringAnyKey(ruleTable, "justification"); present {
 			if strings.TrimSpace(value) == "" {
@@ -55,10 +69,11 @@ func rulesRequirementFromAny(value any) (*execpolicy.RequirementsPolicy, error) 
 			justification = value
 		}
 		rules = append(rules, execpolicy.PrefixRule{
-			Pattern:       pattern,
-			Decision:      decision,
-			Justification: justification,
-			Source:        "requirements",
+			Pattern:           pattern,
+			CanonicalMatching: canonicalMatching,
+			Decision:          decision,
+			Justification:     justification,
+			Source:            "requirements",
 		})
 	}
 	return execpolicy.NewRequirementsPolicy(&execpolicy.Policy{Rules: rules}), nil

@@ -17,6 +17,7 @@ const (
 	InstructionsDefaultAgentsMDFilename = "AGENTS.md"
 	InstructionsLocalAgentsMDFilename   = "AGENTS.override.md"
 	InstructionsAgentsMDSeparator       = "\n\n--- project-doc ---\n\n"
+	ProjectDocBudgetGuidance            = "Trim your project instructions to fit the budget. If you need to keep them all, increase `project_doc_max_bytes`."
 )
 
 type InstructionsProvenanceKind string
@@ -38,6 +39,9 @@ type InstructionsEntry struct {
 type LoadedInstructions struct {
 	UserInstructions string
 	Entries          []InstructionsEntry
+	// Warnings reports project instruction bytes that were truncated or skipped
+	// because the configured project-document budget was exhausted.
+	Warnings []string
 }
 
 func NewLoadedUserInstructions(contents string, path string) *LoadedInstructions {
@@ -184,6 +188,9 @@ func LoadProjectInstructions(config InstructionsLoadConfig) (*LoadedInstructions
 	}
 	for _, path := range paths {
 		if remaining == 0 {
+			loaded.Warnings = append(loaded.Warnings, fmt.Sprintf(
+				"Skipped project instructions in environment `%s` starting at `%s` because the %d-byte budget was exhausted. %s",
+				config.EnvironmentID, path, config.MaxBytes, ProjectDocBudgetGuidance))
 			break
 		}
 		if config.DenyRead != nil && config.DenyRead(path) {
@@ -196,8 +203,12 @@ func LoadProjectInstructions(config InstructionsLoadConfig) (*LoadedInstructions
 		if err != nil {
 			return nil, err
 		}
-		if len(data) > remaining {
+		size := len(data)
+		if size > remaining {
 			data = data[:remaining]
+			loaded.Warnings = append(loaded.Warnings, fmt.Sprintf(
+				"Loaded only %d of %d bytes from `%s` in environment `%s` under the %d-byte project instruction budget. %s",
+				remaining, size, path, config.EnvironmentID, config.MaxBytes, ProjectDocBudgetGuidance))
 		}
 		text := string(data)
 		if strings.TrimSpace(text) != "" {

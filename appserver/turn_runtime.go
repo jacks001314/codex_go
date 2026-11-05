@@ -1989,6 +1989,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		BetaFeaturesHeader:           runConfig.BetaFeaturesHeader,
 		ItemIDsEnabled:               runConfig.ItemIDsEnabled,
 		PromptCacheKey:               runConfig.PromptCacheKey,
+		PromptCacheTTL:               runConfig.PromptCacheTTL,
 		ServiceTier:                  runConfig.ServiceTier,
 		CyberAccessProgram:           runConfig.CyberAccessProgram,
 		UsageTags:                    runConfig.UsageTags,
@@ -2686,6 +2687,7 @@ func (r *RuntimeRouter) runReviewRuntime(ctx context.Context, params *turn.TurnS
 		BetaFeaturesHeader:           runConfig.BetaFeaturesHeader,
 		ItemIDsEnabled:               runConfig.ItemIDsEnabled,
 		PromptCacheKey:               runConfig.PromptCacheKey,
+		PromptCacheTTL:               runConfig.PromptCacheTTL,
 		ServiceTier:                  runConfig.ServiceTier,
 		UsageTags:                    runConfig.UsageTags,
 		ClientMetadata:               cloneStringMap(runConfig.ClientMetadata),
@@ -7242,7 +7244,7 @@ func (r *RuntimeRouter) compactThreadWithHistory(ctx context.Context, params *ru
 	compacted := backgroundCompacted
 	if compacted == nil {
 		remoteOptions := &compact.RemoteOptions{
-			Runner:               r.compactRunnerForRecord(record, request, params.Model, r.compactProgramForAttempt(params, record)),
+			Runner:               r.compactRunnerForRecord(record, request, params.Model, r.compactProgramForAttempt(params, record), ""),
 			MaxSummaryChars:      4000,
 			InitialContext:       initialContext,
 			InjectBeforeLastUser: true,
@@ -7632,7 +7634,7 @@ func (r *RuntimeRouter) compactProgramForAttempt(params *runtimeCompactRequest, 
 	return program
 }
 
-func (r *RuntimeRouter) compactRunnerForRecord(record *session.Record, request *compact.Request, modelOverride string, cyberAccessProgram string) compact.RemoteRunner {
+func (r *RuntimeRouter) compactRunnerForRecord(record *session.Record, request *compact.Request, modelOverride string, cyberAccessProgram string, promptCacheTTL string) compact.RemoteRunner {
 	if r == nil {
 		return nil
 	}
@@ -7696,6 +7698,7 @@ func (r *RuntimeRouter) compactRunnerForRecord(record *session.Record, request *
 		modelHash:          modelHash,
 		effort:             compactionEffort,
 		cyberAccessProgram: strings.TrimSpace(cyberAccessProgram),
+		promptCacheTTL:     strings.TrimSpace(promptCacheTTL),
 		clientMetadata:     r.compactResponsesClientMetadata(record, request, compactModel),
 		sessionID:          firstNonEmpty(strings.TrimSpace(record.SessionID), strings.TrimSpace(string(record.ID))),
 		// Rust #46044: compaction prompts carry the recorded Code Mode tool
@@ -8584,6 +8587,7 @@ type appTurnRunConfig struct {
 	BetaFeaturesHeader           string
 	ItemIDsEnabled               bool
 	PromptCacheKey               string
+	PromptCacheTTL               string
 	ServiceTier                  string
 	// CyberAccessProgram is the turn's selected cyber access program (core
 	// snake_case, empty when none was selected or the provider is not OpenAI).
@@ -9066,6 +9070,7 @@ func (r *RuntimeRouter) appTurnConfigWithOptions(ctx context.Context, threadID s
 		BetaFeaturesHeader:             features.ModelClientBetaFeaturesHeader(cfg.FeatureSettings()),
 		ItemIDsEnabled:                 cfg.FeatureSettings()["item_ids"],
 		PromptCacheKey:                 r.responsesPromptCacheKey(threadID, lineage, threadSnapshot.Ephemeral),
+		PromptCacheTTL:                 stringPtrValue(params.PromptCacheTTL),
 		ServiceTier:                    serviceTier,
 		CyberAccessProgram:             appCyberAccessProgramForTurn(params, modelProviderConfig.ProviderID),
 		// Rust #46501: the span carries the usage-tag document alongside the

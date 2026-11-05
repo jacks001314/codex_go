@@ -326,7 +326,7 @@ func (r *RuntimeRouter) maybeStartBackgroundCompaction(ctx context.Context, thre
 		if program := appCyberAccessProgramForTurnPointer(params, runConfig.ProviderID); program != nil {
 			cyberProgram = *program
 		}
-		baseRunner := r.compactRunnerForRecord(record, request, runConfig.Model, cyberProgram)
+		baseRunner := r.compactRunnerForRecord(record, request, runConfig.Model, cyberProgram, runConfig.PromptCacheTTL)
 		if baseRunner == nil {
 			return nil, errors.New("background compaction runner is unavailable")
 		}

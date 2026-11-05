@@ -705,3 +705,30 @@ func TestExecutableLookupKeyForPlatform(t *testing.T) {
 		t.Fatalf("posix lookup key = %q, want Git.EXE", got)
 	}
 }
+
+func TestCanonicalMatchingAppliesToEveryPrefixTokenLikeRust(t *testing.T) {
+	policy := &Policy{}
+	if err := policy.Parse("test.rules", `prefix_rule(pattern=["bash", ["run", "exec"]], canonical_matching=True, decision="forbidden")`); err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	for _, command := range [][]string{{"bAſh", "RUN"}, {"BASH", "exec"}} {
+		out := policy.EvaluateCommand(command)
+		if out.Decision == nil || *out.Decision != DecisionForbidden {
+			t.Fatalf("command %v decision = %#v", command, out.Decision)
+		}
+	}
+	exact := &Policy{}
+	if err := exact.Parse("test.rules", `prefix_rule(pattern=["bash"], decision="forbidden")`); err != nil {
+		t.Fatalf("Parse(exact) error = %v", err)
+	}
+	if out := exact.EvaluateCommand([]string{"BASH"}); out.Decision != nil {
+		t.Fatalf("exact rule matched different case: %#v", out.Decision)
+	}
+	accented := &Policy{}
+	if err := accented.Parse("test.rules", `prefix_rule(pattern=["café"], canonical_matching=True, decision="forbidden")`); err != nil {
+		t.Fatalf("Parse(accented) error = %v", err)
+	}
+	if out := accented.EvaluateCommand([]string{"CAFE\u0301"}); out.Decision == nil || *out.Decision != DecisionForbidden {
+		t.Fatalf("canonical accent decision = %#v", out.Decision)
+	}
+}

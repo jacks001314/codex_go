@@ -10,6 +10,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"golang.org/x/text/cases"
+	"golang.org/x/text/unicode/norm"
 )
 
 type Decision string
@@ -35,12 +38,16 @@ type Policy struct {
 }
 
 type PrefixRule struct {
-	Pattern          [][]string
-	Decision         Decision
-	Justification    string
-	MatchExamples    [][]string
-	NotMatchExamples [][]string
-	Source           string
+	Pattern [][]string
+	// CanonicalMatching applies Unicode canonical caseless matching to every
+	// prefix token, including alternatives (Rust #59535). Exact matching stays
+	// the default.
+	CanonicalMatching bool
+	Decision          Decision
+	Justification     string
+	MatchExamples     [][]string
+	NotMatchExamples  [][]string
+	Source            string
 }
 
 // Clone returns a deep copy of the policy so an independent manager can apply
@@ -360,17 +367,17 @@ func (p *Policy) matchRule(rule *PrefixRule, command []string, resolveHostExecut
 		token := command[i]
 		if i == 0 && resolveHostExecutables && filepath.IsAbs(token) {
 			basename := executableLookupKey(filepath.Base(token))
-			if containsPolicyToken(alternatives, token) {
+			if containsPolicyTokenWithMode(alternatives, token, rule.CanonicalMatching) {
 				matched = append(matched, token)
 				continue
 			}
-			if containsString(alternatives, basename) && p.hostExecutableAllows(basename, token) {
+			if containsPolicyTokenWithMode(alternatives, basename, rule.CanonicalMatching) && p.hostExecutableAllows(basename, token) {
 				matched = append(matched, basename)
 				resolvedProgram = token
 				continue
 			}
 		}
-		if !containsPolicyToken(alternatives, token) {
+		if !containsPolicyTokenWithMode(alternatives, token, rule.CanonicalMatching) {
 			return nil, "", false
 		}
 		matched = append(matched, token)
@@ -379,13 +386,29 @@ func (p *Policy) matchRule(rule *PrefixRule, command []string, resolveHostExecut
 }
 
 func containsPolicyToken(alternatives []string, token string) bool {
+	return containsPolicyTokenWithMode(alternatives, token, false)
+}
+
+func containsPolicyTokenWithMode(alternatives []string, token string, canonical bool) bool {
 	normalizedToken := normalizePolicyTokenPath(token)
 	for _, alternative := range alternatives {
 		if alternative == token || normalizePolicyTokenPath(alternative) == normalizedToken {
 			return true
 		}
+		if canonical {
+			if canonicalPolicyToken(alternative) == canonicalPolicyToken(token) {
+				return true
+			}
+		}
 	}
 	return false
+}
+
+// canonicalPolicyToken implements Unicode canonical caseless matching without
+// resolving executables. NFKC plus full case folding matches case and
+// canonically equivalent spellings such as "bash" and "bAſh".
+func canonicalPolicyToken(value string) string {
+	return cases.Fold().String(norm.NFKC.String(value))
 }
 
 func normalizePolicyTokenPath(value string) string {
@@ -433,7 +456,7 @@ func (p *Policy) validateExamples() error {
 }
 
 func parsePrefixRule(eval *policyEval, source string, body string) (PrefixRule, error) {
-	fields, err := bindCallArguments("prefix_rule", body, []string{"pattern", "decision", "match", "not_match", "justification"})
+	fields, err := bindCallArguments("prefix_rule", body, []string{"pattern", "decision", "match", "not_match", "justification", "canonical_matching"})
 	if err != nil {
 		return PrefixRule{}, err
 	}
@@ -484,13 +507,26 @@ func parsePrefixRule(eval *policyEval, source string, body string) (PrefixRule, 
 	if err != nil {
 		return PrefixRule{}, err
 	}
+	canonicalMatching := false
+	if raw, ok := fields["canonical_matching"]; ok {
+		value := strings.TrimSpace(raw)
+		switch value {
+		case "True", "true":
+			canonicalMatching = true
+		case "False", "false":
+			canonicalMatching = false
+		default:
+			return PrefixRule{}, fmt.Errorf("canonical_matching must be a boolean")
+		}
+	}
 	return PrefixRule{
-		Pattern:          pattern,
-		Decision:         decision,
-		Justification:    justification,
-		MatchExamples:    matchExamples,
-		NotMatchExamples: notMatchExamples,
-		Source:           source,
+		Pattern:           pattern,
+		CanonicalMatching: canonicalMatching,
+		Decision:          decision,
+		Justification:     justification,
+		MatchExamples:     matchExamples,
+		NotMatchExamples:  notMatchExamples,
+		Source:            source,
 	}, nil
 }
 

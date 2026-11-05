@@ -16,7 +16,7 @@ type policyBuiltinSignature struct {
 
 var policyBuiltinSignatures = map[string]policyBuiltinSignature{
 	"prefix_rule": {
-		parameters: []string{"pattern", "decision", "match", "not_match", "justification"},
+		parameters: []string{"pattern", "decision", "match", "not_match", "justification", "canonical_matching"},
 		required:   []string{"pattern"},
 	},
 	"network_rule": {

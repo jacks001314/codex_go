@@ -1,6 +1,7 @@
 package compact
 
 import (
+	"codex_go/protocol"
 	"context"
 	"encoding/json"
 	"errors"
@@ -1827,15 +1828,17 @@ type Window struct {
 }
 
 func NewWindow(threadID string) *Window {
-	id := defaultWindowID(threadID, 0)
+	// Rust #59354: context window identity uses the shared UUIDv7 allocator.
+	// threadID remains an argument for source compatibility with callers that
+	// used to derive display-only ids from it.
+	_ = threadID
+	id := protocol.NewContextWindowID().String()
 	return &Window{
 		ids: WindowIDs{
 			FirstWindowID: id,
 			WindowID:      id,
 		},
-		nextID: func() string {
-			return defaultWindowID(threadID, time.Now().UTC().UnixNano())
-		},
+		nextID: func() string { return protocol.NewContextWindowID().String() },
 	}
 }
 
@@ -1843,7 +1846,7 @@ func NewWindowWithIDs(ids WindowIDs) *Window {
 	if ids.FirstWindowID == "" {
 		ids.FirstWindowID = ids.WindowID
 	}
-	return &Window{ids: ids, nextID: func() string { return defaultWindowID("window", time.Now().UTC().UnixNano()) }}
+	return &Window{ids: ids, nextID: func() string { return protocol.NewContextWindowID().String() }}
 }
 
 func (w *Window) SetIDGenerator(next func() string) {
@@ -2316,13 +2319,6 @@ func truncateTextToTokens(text string, maxTokens int) string {
 		}
 	}
 	return strings.TrimSpace(string(runes[:low]))
-}
-
-func defaultWindowID(threadID string, suffix any) string {
-	if threadID == "" {
-		threadID = "thread"
-	}
-	return fmt.Sprintf("%s:%v", threadID, suffix)
 }
 
 func cloneIntPtr(value *int) *int {
