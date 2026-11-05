@@ -469,6 +469,20 @@ type RuntimeAuth struct {
 	// enterprise-managed MCP authorization (Rust #55334).
 	ChatGPTUserID string
 	AccountID     string
+	// RuntimeProvider supplies per-request runtime credentials for remote
+	// plugin and file-storage requests when runtime agent instances are enabled
+	// (Rust #59564). Nil keeps the static headers.
+	RuntimeProvider OpenAIFileRuntimeAuth
+}
+
+// WithRuntimeProvider attaches a per-request runtime credential provider so
+// remote plugin and file-storage requests can present runtime assertions.
+func (r *RuntimeAuth) WithRuntimeProvider(provider OpenAIFileRuntimeAuth) *RuntimeAuth {
+	if r == nil || provider == nil {
+		return r
+	}
+	r.RuntimeProvider = provider
+	return r
 }
 
 func RuntimeConfigFromValues(values map[string]any, codexHome string) *RuntimeConfig {

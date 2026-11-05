@@ -51,6 +51,7 @@ import (
 	"codex_go/retainedctx"
 	"codex_go/review"
 	"codex_go/rollout"
+	"codex_go/runtimeauth"
 	"codex_go/runtimeutil"
 	"codex_go/safety"
 	"codex_go/sandbox"
@@ -13278,6 +13279,14 @@ func (r *RuntimeRouter) configureMCPFromConfigChecked() error {
 	}
 	if snapshot != nil {
 		runtimeAuth = mcp.RuntimeAuthFromSnapshot(snapshot)
+		if runtimeAuth != nil {
+			codexHome := ""
+			if r.services.Config != nil {
+				codexHome = strings.TrimSpace(r.services.Config.CodexHome())
+			}
+			refreshConfig := config.NewConfigFromRead(read)
+			runtimeAuth = runtimeAuth.WithRuntimeProvider(runtimeauth.ProviderForHarness(codexHome, refreshConfig.Values, refreshConfig.FeatureSettings(), refreshConfig.ChatGPTBaseURL(), "codex-go"))
+		}
 	}
 	if r.services.Plugins != nil {
 		authMode := ""
@@ -15185,11 +15194,42 @@ func (r *RuntimeRouter) accountBackendClient(snapshot *auth.AuthDotJSON) (*chatg
 	if err != nil {
 		return nil, err
 	}
+	baseURL := r.chatGPTBackendURL().Resolve(snapshot.Mode(), snapshot.OpenAIAPIKey)
 	return chatgptapi.NewCloudClient(&chatgptapi.CloudClientOptions{
-		BaseURL:    r.chatGPTBackendURL().Resolve(snapshot.Mode(), snapshot.OpenAIAPIKey),
-		Headers:    headers.Headers,
-		HTTPClient: r.accountHTTPClient(),
+		BaseURL:     baseURL,
+		Headers:     headers.Headers,
+		HTTPClient:  r.accountHTTPClient(),
+		RuntimeAuth: r.accountRuntimeAuth(baseURL),
 	}), nil
+}
+
+// accountRuntimeAuth resolves runtime credentials for account backend requests
+// when the runtime agent instance feature is enabled (Rust #59572). Nil keeps
+// the snapshot headers for custom or untrusted destinations.
+func (r *RuntimeRouter) accountRuntimeAuth(baseURL string) chatgptapi.CloudRuntimeAuth {
+	if r == nil || runtimeauth.ClassifyOpenAIDestination(baseURL) != runtimeauth.DestinationSupported {
+		return nil
+	}
+	cfg := r.effectiveConfigForSessionTelemetry()
+	if cfg == nil {
+		return nil
+	}
+	codexHome := r.codexHomeForRollout()
+	installationID, err := install.ResolveInstallationID(codexHome)
+	if err != nil {
+		return nil
+	}
+	provider := runtimeauth.ProviderForConfig(runtimeauth.ProviderOptions{
+		Values:          cfg.Values,
+		FeatureSettings: cfg.FeatureSettings(),
+		CodexHome:       codexHome,
+		InstallationID:  installationID,
+		Harness:         "codex-go",
+	})
+	if provider == nil {
+		return nil
+	}
+	return provider
 }
 
 func accountTokenUsageFetchTimeout() time.Duration {
@@ -16092,7 +16132,28 @@ func (r *RuntimeRouter) requirePlugins() *plugin.PluginService {
 		return service
 	})
 	r.configurePluginMarketplacePolicy()
+	r.configurePluginRuntimeAuth(service)
 	return service
+}
+
+// configurePluginRuntimeAuth installs the per-request runtime credential
+// provider for remote plugin traffic when runtime agent instances are enabled
+// (Rust #59564).
+func (r *RuntimeRouter) configurePluginRuntimeAuth(service *plugin.PluginService) {
+	if service == nil || r == nil {
+		return
+	}
+	cfg := r.effectiveConfigForSessionTelemetry()
+	if cfg == nil {
+		return
+	}
+	codexHome := ""
+	if r.services.Config != nil {
+		codexHome = r.services.Config.CodexHome()
+	}
+	if provider := runtimeauth.ProviderForHarness(codexHome, cfg.Values, cfg.FeatureSettings(), cfg.ChatGPTBaseURL(), "codex-go"); provider != nil {
+		service.SetRuntimeAuthProvider(provider)
+	}
 }
 
 // applyPluginMarketplacePolicy snapshots managed marketplace requirements and
@@ -16250,6 +16311,9 @@ func (r *RuntimeRouter) managedMCPServiceForThread(threadID string, cfg *config.
 		}
 		codexHome := strings.TrimSpace(r.services.Config.CodexHome())
 		runtimeAuth := mcp.RuntimeAuthFromSnapshot(r.requireAccount().AuthSnapshot())
+		if runtimeAuth != nil && cfg != nil {
+			runtimeAuth = runtimeAuth.WithRuntimeProvider(runtimeauth.ProviderForHarness(codexHome, cfg.Values, cfg.FeatureSettings(), cfg.ChatGPTBaseURL(), "codex-go"))
+		}
 		config := r.runtimeMCPConfigForThread(contributionContext, values, codexHome, runtimeAuth, cfg.Requirements)
 		if messageBoardMCP {
 			// Rust #58973: start the temporary tree-scoped HTTP MCP board on
@@ -18047,6 +18111,9 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	}
 	if runtimeToolsUseOpenAIFileUpload(mcpTools) {
 		runtimeAuth := mcp.RuntimeAuthFromSnapshot(r.requireAccount().AuthSnapshot())
+		if runtimeAuth != nil && cfg != nil {
+			runtimeAuth = runtimeAuth.WithRuntimeProvider(runtimeauth.ProviderForHarness(r.services.Config.CodexHome(), cfg.Values, cfg.FeatureSettings(), cfg.ChatGPTBaseURL(), "codex-go"))
+		}
 		fileSystem := r.primaryTurnOpenAIFileSystem(params)
 		if envFS, ok := fileSystem.(*environmentOpenAIFileSystem); ok &&
 			permissionProfile != nil && permissionProfile.Profile != nil && permissionProfile.Profile.HasDenyReadEntries() {

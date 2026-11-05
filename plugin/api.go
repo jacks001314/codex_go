@@ -1427,6 +1427,30 @@ type PluginService struct {
 	// #49100 PluginsConfigInput::remote_http_clients). A shallow copy of the
 	// service shares the pool; independently created services do not.
 	remoteHTTPPool *RemotePluginHTTPPool
+	// runtimeAuthProvider resolves runtime request credentials for remote
+	// plugin traffic when runtime agent instances are enabled (Rust #59564).
+	runtimeAuthProvider RuntimeAuthProvider
+}
+
+// SetRuntimeAuthProvider installs the per-request runtime credential provider
+// for remote plugin traffic built by this service.
+func (s *PluginService) SetRuntimeAuthProvider(provider RuntimeAuthProvider) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.runtimeAuthProvider = provider
+	s.mu.Unlock()
+}
+
+// RuntimeAuthProvider returns the installed remote plugin runtime provider.
+func (s *PluginService) RuntimeAuthProvider() RuntimeAuthProvider {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.runtimeAuthProvider
 }
 
 func (s *PluginService) SetShareBackend(backend PluginShareBackend) {
@@ -1506,6 +1530,9 @@ func (s *PluginService) NewRemotePluginProviderWithProductSKU(baseURL string, ac
 	}
 	provider := NewHTTPSuggestedPluginProviderWithPool(baseURL, accessToken, accountID, client, pool)
 	provider.ProductSKU = strings.TrimSpace(productSKU)
+	if s != nil {
+		provider.RuntimeAuth = s.RuntimeAuthProvider()
+	}
 	return provider
 }
 

@@ -43,6 +43,9 @@ type RemoteCatalogOptions struct {
 	CodexHome    string
 	HTTPClient   HTTPDoer
 	ForceRefresh bool
+	// RuntimeAuth resolves runtime request credentials per request when runtime
+	// agent instances are enabled (Rust #59564).
+	RuntimeAuth RuntimeAuthProvider
 }
 
 // RemoteCatalogRelease is the release metadata returned by the remote catalog.
@@ -186,6 +189,9 @@ func FetchRemotePluginDetail(ctx context.Context, opts *RemoteCatalogOptions, re
 		sku = CODEXProductSKU
 	}
 	request.Header.Set("OAI-Product-Sku", sku)
+	if err := ApplyRuntimeAuth(requestCtx, request, opts.RuntimeAuth); err != nil {
+		return nil, fmt.Errorf("authorize remote plugin request: %w", err)
+	}
 	response, err := client.Do(request)
 	if err != nil {
 		return nil, fmt.Errorf("fetch remote plugin detail: %w", err)
@@ -243,6 +249,10 @@ func fetchRemoteCatalogPages(ctx context.Context, opts *RemoteCatalogOptions, ba
 			sku = CODEXProductSKU
 		}
 		request.Header.Set("OAI-Product-Sku", sku)
+		if err := ApplyRuntimeAuth(requestCtx, request, opts.RuntimeAuth); err != nil {
+			cancel()
+			return nil, fmt.Errorf("authorize remote plugin request: %w", err)
+		}
 		response, err := client.Do(request)
 		if err != nil {
 			cancel()
@@ -372,6 +382,9 @@ func remotePluginMutation(ctx context.Context, opts *RemoteCatalogOptions, remot
 		sku = CODEXProductSKU
 	}
 	request.Header.Set("OAI-Product-Sku", sku)
+	if err := ApplyRuntimeAuth(requestCtx, request, opts.RuntimeAuth); err != nil {
+		return nil, fmt.Errorf("authorize remote plugin request: %w", err)
+	}
 	response, err := client.Do(request)
 	if err != nil {
 		return nil, fmt.Errorf("remote plugin %s failed: %w", action, err)

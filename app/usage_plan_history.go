@@ -34,9 +34,11 @@ func interactivePlanHistoryReader(root *cli.RootOptions) func() (*analytics.Repo
 		if id := auth.AccountIDFromAuthForRestrictions(&resolved.Auth); id != "" {
 			headers.Set("ChatGPT-Account-ID", id)
 		}
+		baseURL := loaded.ChatGPTBaseURL()
 		client := chatgptapi.NewCloudClientWithoutRedirects(&chatgptapi.CloudClientOptions{
-			BaseURL: loaded.ChatGPTBaseURL(),
-			Headers: headers,
+			BaseURL:     baseURL,
+			Headers:     headers,
+			RuntimeAuth: runtimeAuthProviderForCloud(auth.DefaultCodexHome(), loaded, baseURL),
 		})
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()

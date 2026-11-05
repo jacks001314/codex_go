@@ -38,9 +38,11 @@ func interactiveLocalSecuritySetupReader(root *cli.RootOptions) func() (string, 
 		if accountID := auth.AccountIDFromAuthForRestrictions(&resolved.Auth); accountID != "" {
 			headers.Set("ChatGPT-Account-ID", accountID)
 		}
+		baseURL := loaded.ChatGPTBaseURL()
 		client := chatgptapi.NewCloudClientWithoutRedirects(&chatgptapi.CloudClientOptions{
-			BaseURL: loaded.ChatGPTBaseURL(),
-			Headers: headers,
+			BaseURL:     baseURL,
+			Headers:     headers,
+			RuntimeAuth: runtimeAuthProviderForCloud(auth.DefaultCodexHome(), loaded, baseURL),
 		})
 		notice, err := client.GetSecuritySetup(ctx)
 		if err != nil || notice == nil {

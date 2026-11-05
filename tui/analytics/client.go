@@ -11,8 +11,10 @@ import (
 
 	"codex_go/auth"
 	"codex_go/chatgptapi"
+	"codex_go/config"
 	"codex_go/model"
 	"codex_go/remotecontrol"
+	"codex_go/runtimeauth"
 )
 
 // Account-scoped analytics authentication mirrors Rust #45742/#45762: a session
@@ -196,10 +198,33 @@ func (s *AnalyticsSession) client() (*chatgptapi.CloudClient, error) {
 		return nil, err
 	}
 	return chatgptapi.NewCloudClientWithoutRedirects(&chatgptapi.CloudClientOptions{
-		BaseURL:    s.baseURL,
-		Headers:    headers.Headers,
-		HTTPClient: s.httpClient,
+		BaseURL:     s.baseURL,
+		Headers:     headers.Headers,
+		HTTPClient:  s.httpClient,
+		RuntimeAuth: s.runtimeAuth(),
 	}), nil
+}
+
+// runtimeAuth resolves runtime credentials for each analytics request when the
+// runtime agent instance feature is enabled, sharing the harness runtime with
+// turn-cost and cloud requests (Rust #59572).
+func (s *AnalyticsSession) runtimeAuth() chatgptapi.CloudRuntimeAuth {
+	if s == nil {
+		return nil
+	}
+	baseURL := strings.TrimSpace(s.baseURL)
+	if baseURL == "" {
+		baseURL = chatgptapi.DefaultCloudTasksBaseURL
+	}
+	loaded, err := config.LoadEffective(s.codexHome, nil, nil, nil)
+	if err != nil || loaded == nil {
+		return nil
+	}
+	provider := runtimeauth.ProviderForHarness(s.codexHome, loaded.Values, loaded.FeatureSettings(), baseURL, "codex-go")
+	if provider == nil {
+		return nil
+	}
+	return provider
 }
 
 func (s *AnalyticsSession) newRecovery() *remotecontrol.UnauthorizedRecovery {

@@ -37,6 +37,7 @@ import (
 	"codex_go/features"
 	"codex_go/install"
 	"codex_go/mcp"
+	"codex_go/runtimeauth"
 	"codex_go/model"
 	"codex_go/network"
 	"codex_go/prompt"
@@ -1904,6 +1905,9 @@ func (r *Runner) configuredMCPRuntimeForConfig(cfg *config.Config, resolvedAuth 
 	var runtimeAuth *mcp.RuntimeAuth
 	if len(resolvedAuth) > 0 && resolvedAuth[0] != nil {
 		runtimeAuth = mcp.RuntimeAuthFromSnapshot(&resolvedAuth[0].Auth)
+		if runtimeAuth != nil && cfg != nil {
+			runtimeAuth = runtimeAuth.WithRuntimeProvider(runtimeauth.ProviderForHarness(r.CodexHome, cfg.Values, cfg.FeatureSettings(), cfg.ChatGPTBaseURL(), "codex-go"))
+		}
 	}
 	runtimeConfig := mcp.RuntimeConfigFromValuesWithAuthRequirementsAndBinding(cfg.Values, r.CodexHome, runtimeAuth, cfg.Requirements, cfg.CloudConfigBinding())
 	if runtimeConfig == nil || len(runtimeConfig.Servers) == 0 {

@@ -17,6 +17,7 @@ import (
 	"codex_go/auth"
 	"codex_go/cli"
 	"codex_go/config"
+	"codex_go/runtimeauth"
 	codexnetwork "codex_go/network"
 	"codex_go/plugin"
 )
@@ -103,7 +104,21 @@ func newPluginCLIContext(codexHome string) *pluginCLIContext {
 	if snapshot, err := auth.NewStore(codexHome).Load(); err == nil && snapshot != nil {
 		service.SetRuntimeRoute(snapshot.AuthMode, "openai")
 	}
+	if cfg, err := config.Load(codexHome); err == nil {
+		attachPluginRuntimeAuth(service, codexHome, cfg)
+	}
 	return &pluginCLIContext{codexHome: codexHome, service: service}
+}
+
+// attachPluginRuntimeAuth installs the per-request runtime credential provider
+// on a plugin service when runtime agent instances are enabled (Rust #59564).
+func attachPluginRuntimeAuth(service *plugin.PluginService, codexHome string, cfg *config.Config) {
+	if service == nil || cfg == nil {
+		return
+	}
+	if provider := runtimeauth.ProviderForHarness(codexHome, cfg.Values, cfg.FeatureSettings(), cfg.ChatGPTBaseURL(), "codex-go"); provider != nil {
+		service.SetRuntimeAuthProvider(provider)
+	}
 }
 
 // applyPluginMarketplacePolicyFromHome mirrors the app-server policy snapshot
@@ -151,6 +166,12 @@ func (ctx *pluginCLIContext) remoteOptionsForScope(scope string) (*plugin.Remote
 		baseURL = cfg.ChatGPTBaseURL()
 		productSKU, _ = cfg.Values["apps_mcp_product_sku"].(string)
 	}
+	var runtimeAuth plugin.RuntimeAuthProvider
+	if cfg != nil {
+		if provider := runtimeauth.ProviderForHarness(ctx.codexHome, cfg.Values, cfg.FeatureSettings(), baseURL, "codex-go"); provider != nil {
+			runtimeAuth = provider
+		}
+	}
 	return &plugin.RemoteCatalogOptions{
 		BaseURL:     baseURL,
 		AccessToken: token,
@@ -159,6 +180,7 @@ func (ctx *pluginCLIContext) remoteOptionsForScope(scope string) (*plugin.Remote
 		Scope:       scope,
 		CodexHome:   ctx.codexHome,
 		HTTPClient:  codexnetwork.NewHTTPClient(true, 0),
+		RuntimeAuth: runtimeAuth,
 	}, nil
 }
 

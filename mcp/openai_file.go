@@ -46,6 +46,15 @@ type OpenAIFileAuth struct {
 	BaseURL        string
 	Headers        http.Header
 	ApplyRequest   func(*http.Request, []byte) error
+	// RuntimeAuth resolves runtime credentials for each file-storage request
+	// when runtime agent instances are enabled (Rust #59564).
+	RuntimeAuth OpenAIFileRuntimeAuth
+}
+
+// OpenAIFileRuntimeAuth supplies per-request credential headers for a
+// destination.
+type OpenAIFileRuntimeAuth interface {
+	HeadersForDestination(ctx context.Context, destination string) (http.Header, error)
 }
 
 func OpenAIFileAuthFromRuntimeAuth(runtimeAuth *RuntimeAuth, baseURL string) *OpenAIFileAuth {
@@ -65,6 +74,7 @@ func OpenAIFileAuthFromRuntimeAuth(runtimeAuth *RuntimeAuth, baseURL string) *Op
 		BaseURL:        strings.TrimSpace(baseURL),
 		Headers:        headers,
 		ApplyRequest:   runtimeAuth.ApplyHTTPRequest,
+		RuntimeAuth:    runtimeAuth.RuntimeProvider,
 	}
 }
 
@@ -176,9 +186,10 @@ func (u *LocalOpenAIFileUploader) UploadOpenAIFile(ctx context.Context, request 
 		createBody["codex_model"] = request.HostedContext.Model
 	}
 	var created struct {
-		FileID             string `json:"file_id"`
-		UploadURL          string `json:"upload_url"`
-		PDFC2PAReservation bool   `json:"pdf_c2pa_reservation"`
+		FileID             string            `json:"file_id"`
+		UploadURL          string            `json:"upload_url"`
+		UploadHeaders      map[string]string `json:"upload_headers"`
+		PDFC2PAReservation bool              `json:"pdf_c2pa_reservation"`
 	}
 	if err := u.authorizedJSON(ctx, http.MethodPost, createURL, createBody, &created); err != nil {
 		return nil, err
@@ -187,7 +198,7 @@ func (u *LocalOpenAIFileUploader) UploadOpenAIFile(ctx context.Context, request 
 		return nil, fmt.Errorf("failed to decode OpenAI file response from %s: missing file_id or upload_url", createURL)
 	}
 
-	if err := u.uploadBlob(ctx, created.UploadURL, request); err != nil {
+	if err := u.uploadBlob(ctx, created.UploadURL, request, created.UploadHeaders); err != nil {
 		return nil, err
 	}
 
@@ -280,6 +291,18 @@ func (u *LocalOpenAIFileUploader) authorizedJSON(ctx context.Context, method str
 			return fmt.Errorf("failed to authorize OpenAI file request for %s: %w", endpoint, err)
 		}
 	}
+	if u.Auth.RuntimeAuth != nil {
+		runtimeHeaders, err := u.Auth.RuntimeAuth.HeadersForDestination(requestCtx, endpoint)
+		if err != nil {
+			return fmt.Errorf("failed to authorize OpenAI file request for %s: %w", endpoint, err)
+		}
+		for name, values := range runtimeHeaders {
+			request.Header.Del(name)
+			for _, value := range values {
+				request.Header.Add(name, value)
+			}
+		}
+	}
 	response, err := u.httpClient().Do(request)
 	if err != nil {
 		return fmt.Errorf("OpenAI file request to %s failed: %w", endpoint, err)
@@ -298,7 +321,7 @@ func (u *LocalOpenAIFileUploader) authorizedJSON(ctx context.Context, method str
 	return nil
 }
 
-func (u *LocalOpenAIFileUploader) uploadBlob(ctx context.Context, uploadURL string, request OpenAIFileUploadRequest) error {
+func (u *LocalOpenAIFileUploader) uploadBlob(ctx context.Context, uploadURL string, request OpenAIFileUploadRequest, uploadHeaders map[string]string) error {
 	host := openAIFileUploadHost(uploadURL)
 	started := time.Now()
 	// Rust #47393/#47926: opening the stream, every attempt, and the backoff
@@ -321,7 +344,7 @@ func (u *LocalOpenAIFileUploader) uploadBlob(ctx context.Context, uploadURL stri
 			return fmt.Errorf("OpenAI file blob upload failed after %dms (timeout, host=%s)", time.Since(started).Milliseconds(), host)
 		}
 		requestID := uuid.NewString()
-		attemptErr, retryable, serverDelay, hasServerDelay := u.uploadBlobAttempt(ctx, uploadURL, request, requestID, host, started, deadline)
+		attemptErr, retryable, serverDelay, hasServerDelay := u.uploadBlobAttempt(ctx, uploadURL, request, uploadHeaders, requestID, host, started, deadline)
 		if attemptErr == nil {
 			return nil
 		}
@@ -350,6 +373,7 @@ func (u *LocalOpenAIFileUploader) uploadBlobAttempt(
 	ctx context.Context,
 	uploadURL string,
 	request OpenAIFileUploadRequest,
+	uploadHeaders map[string]string,
 	requestID string,
 	host string,
 	started time.Time,
@@ -378,6 +402,15 @@ func (u *LocalOpenAIFileUploader) uploadBlobAttempt(
 	uploadRequest.Header.Set("Content-Length", fmt.Sprintf("%d", request.FileSizeBytes))
 	uploadRequest.Header.Set("x-ms-blob-type", "BlockBlob")
 	uploadRequest.Header.Set("x-ms-client-request-id", requestID)
+	// Rust #59564: the create response may hand the storage host its own
+	// upload headers (content type, disposition, tagging). They belong to the
+	// blob PUT only and never to the authenticated create/finalize requests.
+	for name, value := range uploadHeaders {
+		if strings.TrimSpace(name) == "" {
+			continue
+		}
+		uploadRequest.Header.Set(name, value)
+	}
 	response, err := u.httpClient().Do(uploadRequest)
 	if err != nil {
 		kind := openAIFileUploadErrorKind(err)

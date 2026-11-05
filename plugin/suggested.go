@@ -55,6 +55,9 @@ type HTTPSuggestedPluginProvider struct {
 	// HTTPClient is nil, so repeated service configurations reuse connections
 	// (Rust #49100).
 	Pool *RemotePluginHTTPPool
+	// RuntimeAuth resolves runtime request credentials per request when runtime
+	// agent instances are enabled (Rust #59564).
+	RuntimeAuth RuntimeAuthProvider
 }
 
 func NewHTTPSuggestedPluginProvider(baseURL string, accessToken string, accountID string, client HTTPDoer) *HTTPSuggestedPluginProvider {
@@ -123,6 +126,9 @@ func (p *HTTPSuggestedPluginProvider) ListSuggestedPlugins(ctx context.Context) 
 		request.Header.Set("ChatGPT-Account-ID", accountID)
 	}
 	request.Header.Set("OAI-Product-Sku", p.productSKU())
+	if err := ApplyRuntimeAuth(ctx, request, p.RuntimeAuth); err != nil {
+		return nil, err
+	}
 	response, err := p.httpClient().Do(request)
 	if err != nil {
 		return nil, err

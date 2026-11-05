@@ -1611,8 +1611,9 @@ func runApply(ctx context.Context, opts cli.ApplyOptions, root cli.RootOptions, 
 		return err
 	}
 	client := chatgptapi.NewCloudClientWithoutRedirects(&chatgptapi.CloudClientOptions{
-		BaseURL: baseURL,
-		Headers: authHeaders.Headers,
+		BaseURL:     baseURL,
+		Headers:     authHeaders.Headers,
+		RuntimeAuth: runtimeAuthProviderForCloud(codexHome, loaded, baseURL),
 	})
 	task, err := chatgptapi.GetTask(ctx, client, opts.TaskID)
 	if err != nil {

@@ -18,7 +18,9 @@ import (
 	"codex_go/cli"
 	"codex_go/config"
 	"codex_go/envutil"
+	"codex_go/install"
 	"codex_go/model"
+	"codex_go/runtimeauth"
 )
 
 // cloudSignInRequiredMessage is Rust's cloud sign-in hint. The credential is
@@ -250,9 +252,35 @@ func newCloudTaskClient(opts *cli.CloudOptions) (*chatgptapi.CloudClient, error)
 		mergeHTTPHeadersLocal(headers, authHeaders.Headers)
 	}
 	return chatgptapi.NewCloudClientWithoutRedirects(&chatgptapi.CloudClientOptions{
-		BaseURL: baseURL,
-		Headers: headers,
+		BaseURL:     baseURL,
+		Headers:     headers,
+		RuntimeAuth: runtimeAuthProviderForCloud(codexHome, loaded, baseURL),
 	}), nil
+}
+
+// runtimeAuthProviderForCloud resolves runtime credentials per request when the
+// runtime agent instance feature is enabled (Rust #59572). Custom or otherwise
+// untrusted destinations keep their own authentication, and a host without an
+// installation id falls back to static headers.
+func runtimeAuthProviderForCloud(codexHome string, cfg *config.Config, baseURL string) chatgptapi.CloudRuntimeAuth {
+	if cfg == nil || runtimeauth.ClassifyOpenAIDestination(baseURL) != runtimeauth.DestinationSupported {
+		return nil
+	}
+	installationID, err := install.ResolveInstallationID(codexHome)
+	if err != nil {
+		return nil
+	}
+	provider := runtimeauth.ProviderForConfig(runtimeauth.ProviderOptions{
+		Values:          cfg.Values,
+		FeatureSettings: cfg.FeatureSettings(),
+		CodexHome:       codexHome,
+		InstallationID:  installationID,
+		Harness:         "codex-go",
+	})
+	if provider == nil {
+		return nil
+	}
+	return provider
 }
 
 func listCloudTasks(ctx context.Context, client *chatgptapi.CloudClient, opts *cli.CloudOptions) (*chatgptapi.CloudTaskListPage, error) {

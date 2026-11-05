@@ -35,6 +35,7 @@ import (
 	"codex_go/execpolicy"
 	"codex_go/features"
 	"codex_go/mcp"
+	"codex_go/runtimeauth"
 	modelpkg "codex_go/model"
 	codexnetwork "codex_go/network"
 	"codex_go/plugin"
@@ -2162,6 +2163,9 @@ func interactiveMCPRuntime(root *cli.RootOptions, owner *config.EmbeddedNetworkP
 	var runtimeAuth *mcp.RuntimeAuth
 	if resolved, resolveErr := auth.NewStoreWithOptions(codexHome, storeOptions).Resolve(); resolveErr == nil && resolved != nil {
 		runtimeAuth = mcp.RuntimeAuthFromSnapshot(&resolved.Auth)
+		if runtimeAuth != nil && loaded != nil {
+			runtimeAuth = runtimeAuth.WithRuntimeProvider(runtimeauth.ProviderForHarness(codexHome, loaded.Values, loaded.FeatureSettings(), loaded.ChatGPTBaseURL(), "codex-go"))
+		}
 	}
 	runtimeConfig := mcp.RuntimeConfigFromValuesWithAuthAndRequirements(loaded.Values, codexHome, runtimeAuth, loaded.Requirements)
 	if runtimeConfig == nil || len(runtimeConfig.Servers) == 0 {
@@ -3435,6 +3439,9 @@ func interactivePluginService() *plugin.PluginService {
 	codexHome := auth.DefaultCodexHome()
 	service.SetCodexHome(codexHome)
 	applyPluginMarketplacePolicyFromHome(service, codexHome)
+	if cfg, err := config.Load(codexHome); err == nil {
+		attachPluginRuntimeAuth(service, codexHome, cfg)
+	}
 	return service
 }
 
