@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -263,56 +264,41 @@ func TestRemoteFreshStartUsesServerModelDefaultsLikeRust(t *testing.T) {
 	}
 }
 
-// TestRemoteFreshStartClearsImplicitClientModelWithoutConfigReadLikeRust covers
-// the Rust #50913 `config/read`-unsupported branch of
-// `bootstrap_server_owned_start`: when the app server cannot answer
-// `config/read`, an implicit client model and reasoning effort are cleared
-// rather than restored, while an explicit launch model still survives.
-//
-// Rust test:
-// app/tests/startup_defaults_tests.rs::fresh_startup_uses_server_defaults_with_explicit_and_managed_precedence
-// (its `server_defaults_read == false` path).
-func TestRemoteFreshStartClearsImplicitClientModelWithoutConfigReadLikeRust(t *testing.T) {
+// Mirrors Rust #59510: a fresh start uses the destination server's model
+// defaults, so config/read is required even for servers that predate the
+// method. Explicit launch overrides do not bypass the read; the session stays
+// unstarted and the TUI reports the defaults failure.
+func TestRemoteFreshStartRequiresServerConfigReadLikeRust(t *testing.T) {
 	t.Setenv("CODEX_HOME", t.TempDir())
 
 	cases := []struct {
-		name       string
-		root       func() *cli.RootOptions
-		state      *codextui.State
-		wantModel  string
-		wantEffort string
+		name  string
+		root  func() *cli.RootOptions
+		state *codextui.State
 	}{
+		{name: "implicit client settings"},
 		{
-			name:       "implicit client settings are cleared",
-			wantModel:  "",
-			wantEffort: "",
-		},
-		{
-			name: "explicit harness model survives",
+			name: "explicit harness model",
 			root: func() *cli.RootOptions {
 				root := &cli.RootOptions{}
 				root.Shared.Model = "cli-model"
 				return root
 			},
-			state:      codextui.NewState(&codextui.Options{Model: "cli-model", ReasoningEffort: "low"}),
-			wantModel:  "cli-model",
-			wantEffort: "",
+			state: codextui.NewState(&codextui.Options{Model: "cli-model", ReasoningEffort: "low"}),
 		},
 		{
-			name: "explicit generic override survives",
+			name: "explicit generic override",
 			root: func() *cli.RootOptions {
 				return &cli.RootOptions{ConfigOverrides: []string{"model=override-model"}}
 			},
-			state:      codextui.NewState(&codextui.Options{Model: "override-model", ReasoningEffort: "low"}),
-			wantModel:  "override-model",
-			wantEffort: "",
+			state: codextui.NewState(&codextui.Options{Model: "override-model", ReasoningEffort: "low"}),
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			paramsCh := make(chan map[string]any, 1)
+			started := false
 			serverErrs := make(chan error, 1)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				conn, err := websocket.Accept(w, r, nil)
@@ -330,20 +316,15 @@ func TestRemoteFreshStartClearsImplicitClientModelWithoutConfigReadLikeRust(t *t
 					case string(appserver.MethodInitialize):
 						remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
 					case string(appserver.MethodConfigRead):
-						// An older app server rejects `config/read`, so the launch
-						// has no server defaults to read.
+						// An older app server rejects `config/read`; a fresh start
+						// must not fall back to implicit client defaults.
 						remoteTUITestWrite(ctx, conn, map[string]any{
 							"jsonrpc": "2.0",
 							"id":      req.ID,
 							"error":   map[string]any{"code": -32601, "message": "Method not found"},
 						})
 					case string(appserver.MethodThreadStart):
-						var params map[string]any
-						if err := json.Unmarshal(req.Params, &params); err != nil {
-							remoteTUITestSendErr(serverErrs, err)
-							return
-						}
-						paramsCh <- params
+						started = true
 						remoteTUITestWrite(ctx, conn, map[string]any{
 							"jsonrpc": "2.0",
 							"id":      req.ID,
@@ -372,20 +353,16 @@ func TestRemoteFreshStartClearsImplicitClientModelWithoutConfigReadLikeRust(t *t
 			if state == nil {
 				state = codextui.NewState(&codextui.Options{Model: "stale-client-model", ReasoningEffort: "low"})
 			}
-			threadID, err := client.startThread(ctx, root, state)
-			if err != nil {
-				t.Fatalf("startThread: %v", err)
+			_, err = client.startThread(ctx, root, state)
+			var defaultsErr *remoteNewSessionDefaultsError
+			if err == nil {
+				t.Fatal("startThread succeeded without config/read")
 			}
-			if threadID != "thread-no-config-read" {
-				t.Fatalf("threadID = %q", threadID)
+			if !errors.As(err, &defaultsErr) {
+				t.Fatalf("startThread error = %v, want the new session defaults failure", err)
 			}
-			params := <-paramsCh
-			if got := stringOrEmpty(params["model"]); got != tc.wantModel {
-				t.Fatalf("thread/start model = %q, want %q (params %#v)", got, tc.wantModel, params)
-			}
-			configValues, _ := params["config"].(map[string]any)
-			if got := stringOrEmpty(configValues["model_reasoning_effort"]); got != tc.wantEffort {
-				t.Fatalf("thread/start model_reasoning_effort = %q, want %q (config %#v)", got, tc.wantEffort, configValues)
+			if started {
+				t.Fatal("a fresh start without config/read must not send thread/start")
 			}
 			select {
 			case err := <-serverErrs:

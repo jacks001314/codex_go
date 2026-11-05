@@ -47,7 +47,12 @@ func (c *remoteAppServerTUIClient) remoteManagedThreadStartParams(ctx context.Co
 	// invocation selected. The resolved client configuration stays out of the
 	// request so the app server owns its own new-thread defaults.
 	launchChoices := startupLaunchChoicesFromLaunch(root)
-	defaults, layers, effective, ok, readErr := c.remoteNewThreadModelDefaults(ctx, cwd)
+	// Rust #59510: a fresh start without an explicit profile uses the
+	// destination server's defaults on every connection, so config/read is
+	// required even on servers that predate it. Replacement threads keep the
+	// tolerant fallback.
+	requireServerDefaults := state != nil && state.StartupThreadPending && !remoteTUILaunchSelectedProfile(root)
+	defaults, layers, effective, ok, readErr := c.remoteNewThreadModelDefaultsForStartup(ctx, cwd, requireServerDefaults)
 	if readErr != nil {
 		return params, readErr
 	}
@@ -239,6 +244,13 @@ func applyManagedDefaultsToThreadStartParams(
 // leaving the launch selection untouched; a nil defaults value means the server
 // configures no managed new-thread defaults.
 func (c *remoteAppServerTUIClient) remoteNewThreadModelDefaults(ctx context.Context, cwd string) (*codextui.ManagedNewThreadDefaults, []config.Layer, map[string]any, bool, error) {
+	return c.remoteNewThreadModelDefaultsForStartup(ctx, cwd, false)
+}
+
+// remoteNewThreadModelDefaultsForStartup reads the destination's effective
+// config for a thread start. requireServerDefaults makes a missing config/read
+// a startup failure instead of a silent client-default fallback (Rust #59510).
+func (c *remoteAppServerTUIClient) remoteNewThreadModelDefaultsForStartup(ctx context.Context, cwd string, requireServerDefaults bool) (*codextui.ManagedNewThreadDefaults, []config.Layer, map[string]any, bool, error) {
 	params := config.ConfigReadParams{IncludeLayers: true}
 	if trimmed := strings.TrimSpace(cwd); trimmed != "" {
 		params.CWD = &trimmed
@@ -246,8 +258,14 @@ func (c *remoteAppServerTUIClient) remoteNewThreadModelDefaults(ctx context.Cont
 	var read config.ConfigReadResponse
 	if err := c.remoteConfigRequest(ctx, appserver.MethodConfigRead, params, &read); err != nil {
 		if remoteNewSessionDefaultsUnsupported(err) {
+			if requireServerDefaults {
+				// Rust #59510 (read_effective_config_with_layers): a fresh start
+				// must not fall back to implicit client defaults.
+				return nil, nil, nil, false, &remoteNewSessionDefaultsError{err: err}
+			}
 			// Rust read_effective_config_if_supported: a server without
-			// config/read still starts threads from the client defaults.
+			// config/read still starts replacement threads from the client
+			// defaults.
 			return nil, nil, nil, false, nil
 		}
 		// Any other failure aborts the replacement thread before thread/start so
