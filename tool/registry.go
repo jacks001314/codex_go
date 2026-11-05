@@ -924,6 +924,12 @@ func (r *Router) CanManageChildren() bool {
 	return r != nil && r.canManageChildren
 }
 
+// ExposesTool reports whether the router advertises the named plain tool
+// (Rust StepContext::tool_router.exposes_tool, #59633).
+func (r *Router) ExposesTool(name string) bool {
+	return r.registryHasBaseName(name)
+}
+
 func (r *Router) registryHasBaseName(name string) bool {
 	if r == nil || r.registry == nil {
 		return false

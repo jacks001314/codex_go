@@ -91,6 +91,18 @@ func (r *RuntimeRouter) buildCompactionReplacementContext(ctx context.Context, r
 		contextRecord = record
 	}
 	initialContextItems := orderCompactionInitialContextItems(runConfig.InitialContextItems, runConfig.Instructions, contextRecord)
+	// Rust #59633 refreshes the command-session snapshot after compaction: the
+	// replacement window starts without the earlier fragment, so re-render it
+	// even when the retained sessions did not change.
+	if runConfig.CommandSessionsItem == nil {
+		commandSessions, commandSessionsErr := r.commandSessionsWorldStateSection(request.ThreadID, request.TurnID, runConfig.Config, runConfig.WriteStdinAvailable, startedAt, true)
+		if commandSessionsErr != nil {
+			return nil, commandSessionsErr
+		}
+		if commandSessions.Item != nil {
+			initialContextItems = append(initialContextItems, commandSessions.Item)
+		}
+	}
 	items, err := compactItemsFromInputItems(initialContextItems, startedAt)
 	if err != nil {
 		return nil, err

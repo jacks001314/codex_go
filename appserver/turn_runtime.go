@@ -8587,6 +8587,14 @@ type appTurnRunConfig struct {
 	// conversation in InputItems. Compaction installs this same context in the
 	// replacement history (Rust #51117 build_initial_context_with_world_state).
 	InitialContextItems []any
+	// CommandSessionsItem is the command_sessions world-state fragment this
+	// turn start emitted (nil when unchanged). Compaction installs it in the
+	// replacement window (Rust #59633).
+	CommandSessionsItem any
+	// WriteStdinAvailable reports whether the turn's captured tool router
+	// exposes write_stdin; the command_sessions section reports when polling is
+	// unavailable with the current tool set.
+	WriteStdinAvailable bool
 	// ResponsesLiteDeclarationItems is the recorded (or freshly derived)
 	// responses-lite tool declaration prefix the turn prepended to InputItems
 	// for this context window (Rust #51480). It is empty for legacy windows and
@@ -8860,6 +8868,20 @@ func (r *RuntimeRouter) appTurnConfigWithOptions(ctx context.Context, threadID s
 	} else if item != nil {
 		inputItems = append(inputItems, item)
 	}
+	// Rust #59633 publishes retained command sessions through incremental world
+	// state. The turn-start section is part of the window prefix so a compaction
+	// replacement re-installs it.
+	writeStdinAvailable := cfg != nil && features.Enabled(cfg.FeatureSettings(), "unified_exec")
+	if turnRuntime != nil {
+		writeStdinAvailable = turnRuntime.ExposesTool(tool.DefaultWriteStdinToolName)
+	}
+	commandSessions := commandSessionsSectionResult{}
+	if result, commandSessionsErr := r.commandSessionsWorldStateSection(threadID, turnID, cfg, writeStdinAvailable, time.UnixMilli(startedAtMS).UTC(), false); commandSessionsErr != nil {
+		return nil, commandSessionsErr
+	} else if result.Item != nil {
+		inputItems = append(inputItems, result.Item)
+		commandSessions = result
+	}
 	if item, err := r.pluginGuidanceWorldStateInputItem(threadID, modelInfo); err != nil {
 		return nil, err
 	} else if item != nil {
@@ -8897,6 +8919,9 @@ func (r *RuntimeRouter) appTurnConfigWithOptions(ctx context.Context, threadID s
 	sessionItems = append(sessionItems, collaborationModeSessionItems...)
 	sessionItems = append(sessionItems, persistentModeSessionItems...)
 	sessionItems = append(sessionItems, skillInstructionSessionItemsForTurn(turnID, skillInputItems, time.UnixMilli(startedAtMS).UTC())...)
+	if commandSessions.SessionItem.ID != "" {
+		sessionItems = append(sessionItems, commandSessions.SessionItem)
+	}
 	var extraSessionItemsMu sync.Mutex
 	extraSessionItems := []session.Item{}
 	appendExtraSessionItems := func(items []session.Item) {
@@ -9085,6 +9110,8 @@ func (r *RuntimeRouter) appTurnConfigWithOptions(ctx context.Context, threadID s
 		Personality:                    analyticsOptionalModeString(personality),
 		InputItems:                     inputItems,
 		InitialContextItems:            initialContextItems,
+		CommandSessionsItem:            commandSessions.Item,
+		WriteStdinAvailable:            writeStdinAvailable,
 		ResponsesLiteDeclarationItems:  declarationItems,
 		HostedTools:                    hostedTools,
 		SessionItems:                   sessionItems,
@@ -10043,6 +10070,16 @@ func (r *RuntimeRouter) turnStepInputItemsProvider(threadID string, turnID strin
 		items, err := r.modelWorldStateInputItems(threadID, info, runConfig.Instructions)
 		if err != nil {
 			return nil, err
+		}
+		if commandSessions, commandSessionsErr := r.commandSessionsWorldStateSection(threadID, turnID, runConfig.Config, runConfig.WriteStdinAvailable, time.Now().UTC(), false); commandSessionsErr != nil {
+			return nil, commandSessionsErr
+		} else if commandSessions.Item != nil {
+			items = append(items, commandSessions.Item)
+			if commandSessions.SessionItem.ID != "" {
+				if appendErr := r.appendWorldStateStepItem(threadID, commandSessions.SessionItem); appendErr != nil {
+					return nil, appendErr
+				}
+			}
 		}
 
 		budget := config.ResolveTokenBudgetConfig(

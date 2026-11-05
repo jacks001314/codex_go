@@ -175,6 +175,15 @@ type Runtime struct {
 	searchReservation            func() (func(), error)
 }
 
+// ExposesTool reports whether this turn's tool router advertises the named
+// plain tool (Rust StepContext::tool_router.exposes_tool, #59633).
+func (r *Runtime) ExposesTool(name string) bool {
+	if r == nil || r.router == nil {
+		return false
+	}
+	return r.router.ExposesTool(name)
+}
+
 func NewRuntime(options *RuntimeOptions) *Runtime {
 	if options == nil {
 		options = &RuntimeOptions{}
