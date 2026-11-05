@@ -543,11 +543,58 @@ type PrepareForkParams struct {
 	Boundary ForkBoundary
 }
 
+// ForkSourceReservation keeps a source thread alive until a prepared fork is
+// finalized. Release is called after the child's record is durable.
+type ForkSourceReservation interface {
+	Release()
+}
+
+// heldForkSourceReservation marks a preparation whose source cannot be deleted
+// because the store mutation lock remains held through child creation.
+type heldForkSourceReservation struct{}
+
+func (heldForkSourceReservation) Release() {}
+
 type PreparedFork struct {
 	SourceID     ThreadID
 	HistoryBase  *HistoryPosition
 	Items        []Item
 	RolloutTurns []TurnSnapshot
+
+	sourceReservation ForkSourceReservation
+	revalidateSource  bool
+}
+
+// WithSourceReservation marks this snapshot as protected by a backend-owned
+// source reservation. Revalidation is skipped while the reservation is held.
+func (p *PreparedFork) WithSourceReservation(reservation ForkSourceReservation) *PreparedFork {
+	if p == nil {
+		return nil
+	}
+	p.sourceReservation = reservation
+	p.revalidateSource = reservation == nil
+	return p
+}
+
+// WithSourceRevalidation marks this snapshot for source revalidation when the
+// child's history reference becomes durable. It is used when the backend does
+// not hold a source reservation.
+func (p *PreparedFork) WithSourceRevalidation() *PreparedFork {
+	if p == nil {
+		return nil
+	}
+	p.sourceReservation = nil
+	p.revalidateSource = true
+	return p
+}
+
+func (p *PreparedFork) releaseSourceReservation() {
+	if p == nil || p.sourceReservation == nil {
+		return
+	}
+	reservation := p.sourceReservation
+	p.sourceReservation = nil
+	reservation.Release()
 }
 
 type ResolvedPhysicalHistory struct {
@@ -1677,23 +1724,83 @@ func ListRecords(records []Record, options ListOptions) (*Page, error) {
 
 func (s *Store) Fork(sourceID ThreadID, options ForkOptions) (*Record, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	source, err := s.readLocked(sourceID, true, true)
 	if err != nil {
+		s.mu.Unlock()
 		return nil, err
 	}
-	return s.forkRecordLocked(source, options)
+	prepared, err := s.PrepareFork(source, prepareForkParamsFromOptions(options))
+	if err != nil {
+		s.mu.Unlock()
+		return nil, err
+	}
+	prepared.WithSourceReservation(heldForkSourceReservation{})
+	record, err := s.finalizePreparedForkLocked(source, prepared, options)
+	s.mu.Unlock()
+	prepared.releaseSourceReservation()
+	return record, err
 }
 
 func (s *Store) ForkRecord(source *Record, options ForkOptions) (*Record, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.forkRecordLocked(source, options)
+	prepared, err := s.PrepareFork(source, prepareForkParamsFromOptions(options))
+	if err != nil {
+		s.mu.Unlock()
+		return nil, err
+	}
+	prepared.WithSourceReservation(heldForkSourceReservation{})
+	record, err := s.finalizePreparedForkLocked(source, prepared, options)
+	s.mu.Unlock()
+	prepared.releaseSourceReservation()
+	return record, err
 }
 
-func (s *Store) forkRecordLocked(source *Record, options ForkOptions) (*Record, error) {
+// FinalizePreparedFork validates a prepared snapshot and durably creates the
+// child. It lets alternative backends prepare history outside the store lock
+// while still revalidating the source at the commit boundary.
+func (s *Store) FinalizePreparedFork(source *Record, prepared *PreparedFork, options ForkOptions) (*Record, error) {
+	if s == nil {
+		return nil, fmt.Errorf("%w: store is nil", ErrInvalidThreadID)
+	}
+	s.mu.Lock()
+	record, err := s.finalizePreparedForkLocked(source, prepared, options)
+	s.mu.Unlock()
+	prepared.releaseSourceReservation()
+	return record, err
+}
+
+func (s *Store) finalizePreparedForkLocked(source *Record, prepared *PreparedFork, options ForkOptions) (*Record, error) {
 	if source == nil {
 		return nil, fmt.Errorf("%w: source record is nil", ErrInvalidThreadID)
+	}
+	if prepared == nil {
+		return nil, fmt.Errorf("%w: prepared fork is nil", ErrInvalidThreadID)
+	}
+	if prepared.SourceID != source.ID {
+		return nil, fmt.Errorf("%w: prepared fork source %s does not match %s", ErrInvalidThreadID, prepared.SourceID, source.ID)
+	}
+	if options.HistoryBaseSet {
+		prepared.HistoryBase = cloneHistoryPosition(options.HistoryBase)
+	}
+	if prepared.sourceReservation == nil && prepared.HistoryBase != nil {
+		if !prepared.revalidateSource {
+			return nil, fmt.Errorf("%w: prepared fork has neither a source reservation nor revalidation", ErrInvalidThreadID)
+		}
+		current, err := s.readLocked(prepared.SourceID, true, true)
+		if err == nil {
+			if !current.CreatedAt.Equal(source.CreatedAt) || current.SessionID != source.SessionID {
+				return nil, fmt.Errorf("%w: fork source %s changed while the child was being prepared", ErrConflict, prepared.SourceID)
+			}
+		} else if errors.Is(err, ErrThreadNotFound) && (prepared.HistoryBase.EndOrdinalExclusive != 0 || prepared.HistoryBase.EndByteOffset != 0) {
+			// Some paginated sources live only in the app-server's physical
+			// rollout database. Their absence from the JSON store is valid when
+			// the prepared physical-history reference still resolves.
+			if _, resolveErr := s.resolvePhysicalHistory(*prepared.HistoryBase); resolveErr != nil {
+				return nil, fmt.Errorf("revalidate fork source %s: %w", prepared.SourceID, resolveErr)
+			}
+		} else {
+			return nil, fmt.Errorf("revalidate fork source %s: %w", prepared.SourceID, err)
+		}
 	}
 	newID := options.NewID
 	if newID == "" {
@@ -1715,13 +1822,6 @@ func (s *Store) forkRecordLocked(source *Record, options ForkOptions) (*Record, 
 	}
 	if strings.TrimSpace(options.LastTurnID) != "" && strings.TrimSpace(options.BeforeTurnID) != "" {
 		return nil, fmt.Errorf("%w: `beforeTurnId` cannot be combined with `lastTurnId`", ErrInvalidThreadID)
-	}
-	prepared, err := s.PrepareFork(source, prepareForkParamsFromOptions(options))
-	if err != nil {
-		return nil, err
-	}
-	if options.HistoryBaseSet {
-		prepared.HistoryBase = cloneHistoryPosition(options.HistoryBase)
 	}
 	items := prepared.Items
 	// Rust #59312: forked history backfills missing response item ids through
