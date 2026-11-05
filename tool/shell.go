@@ -130,6 +130,10 @@ type ShellRequest struct {
 	PermissionProfileID   string
 	PermissionProfile     *sandbox.PermissionProfile
 	PermissionProfileJSON string
+	// WorkspaceRoots are resolved on the execution host at the sandbox launch
+	// boundary. Nil means the profile is already resolved; a non-nil empty slice
+	// means no workspace access.
+	WorkspaceRoots []string
 	// PathConvention is the selected executor's path grammar for permission
 	// grant materialization (Rust #41928). Empty keeps the native convention.
 	PathConvention utils.PathConvention
@@ -262,8 +266,11 @@ type UnifiedExecEnvironment struct {
 	PlatformOS string
 	// UserHomeDir is the executor-reported user home directory used to expand
 	// home-relative policy paths in filesystem sandbox contexts (Rust #41204).
-	UserHomeDir   string
-	ExecServerURL string
+	UserHomeDir string
+	// WorkspaceRoots are the executor-bound roots used to materialize symbolic
+	// permission entries. Nil means the profile was already materialized.
+	WorkspaceRoots []string
+	ExecServerURL  string
 	// ExecServerHTTPHeaders are sent on this environment's executor WebSocket
 	// upgrade and reconnects (Rust #47648 executor bearer tokens).
 	ExecServerHTTPHeaders http.Header
@@ -419,6 +426,7 @@ type ShellValidationOptions struct {
 	DefaultTimeoutMS                uint64
 	PermissionProfileID             string
 	PermissionProfile               *sandbox.PermissionProfile
+	WorkspaceRoots                  []string
 	PathConvention                  utils.PathConvention
 	AllowedSymlinkedCodexHome       string
 	WindowsSandboxLevel             sandbox.WindowsSandboxLevel
@@ -814,6 +822,7 @@ func BuildShellRequest(args *ExecCommandArgs, sessionShell *Shell, opts ShellVal
 		SandboxProfile:                  sandboxProfile,
 		PermissionProfileID:             permissionProfileID,
 		PermissionProfile:               permissionProfile,
+		WorkspaceRoots:                  cloneStrings(opts.WorkspaceRoots),
 		PathConvention:                  opts.PathConvention,
 		AllowedSymlinkedCodexHome:       opts.AllowedSymlinkedCodexHome,
 		WindowsSandboxLevel:             opts.WindowsSandboxLevel,

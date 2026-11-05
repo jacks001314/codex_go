@@ -424,6 +424,7 @@ func fsSandboxCommand(ctx *FileSystemSandboxContext, profile *sandbox.Permission
 		ResolvedPermissionProfileID:   "exec-server-fs-helper",
 		ResolvedPermissionProfileJSON: profileJSON,
 		CWD:                           cwd,
+		WorkspaceRoots:                workspaceRoots,
 		// Rust #46112: requests carry absolute paths, so launch the helper from
 		// the filesystem root. The policy cwd still anchors relative permission
 		// rules and the Windows sandbox payload.
@@ -469,7 +470,7 @@ func fsSandboxCommand(ctx *FileSystemSandboxContext, profile *sandbox.Permission
 		CodexHome:                        fsHelperCodexHome(),
 		// Rust #44658: filesystem helpers run through short-lived wrappers, so
 		// the executor keeps the desktop alive and hands over its name.
-		PreparePrivateDesktop:            true,
+		PreparePrivateDesktop: true,
 	})
 	if err != nil {
 		return nil, nil, requestError(-32602, fmt.Sprintf("failed to prepare fs sandbox: %v", err))

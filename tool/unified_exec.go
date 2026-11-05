@@ -1057,6 +1057,7 @@ func unifiedExecSandboxContext(req *ShellRequest) (*execserver.FileSystemSandbox
 		PermissionProfile:               req.PermissionProfile,
 		PermissionProfileJSON:           req.PermissionProfileJSON,
 		CWD:                             req.CWD,
+		WorkspaceRoots:                  req.WorkspaceRoots,
 		UserHomeDir:                     req.UnifiedExecUserHomeDir,
 		WindowsSandboxLevel:             req.WindowsSandboxLevel,
 		WindowsSandboxProxySettingsMode: req.WindowsSandboxProxySettingsMode,

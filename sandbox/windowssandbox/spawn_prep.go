@@ -105,10 +105,16 @@ func ResolveCapturePermissionProfile(req *CaptureRequest) (*coresandbox.Permissi
 		return nil, ErrInvalidRequest
 	}
 	if req.PermissionProfile != nil {
-		return req.PermissionProfile, nil
+		if req.WorkspaceRoots == nil {
+			return req.PermissionProfile, nil
+		}
+		return coresandbox.MaterializePermissionProfileWorkspaceRoots(req.PermissionProfile, req.CWD, req.WorkspaceRoots)
 	}
 	profile, _, err := coresandbox.ResolvePermissionProfile(req.PermissionProfileID)
-	return profile, err
+	if err != nil || req.WorkspaceRoots == nil {
+		return profile, err
+	}
+	return coresandbox.MaterializePermissionProfileWorkspaceRoots(profile, req.CWD, req.WorkspaceRoots)
 }
 
 func PrepareLegacySessionSecurity(usesWriteCapabilities bool, codexHome string, cwd string, capabilityRoots []string) (*LegacySessionSecurity, error) {

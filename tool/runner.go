@@ -78,6 +78,7 @@ func (r *LocalShellRunner) runWithPermissionProfile(ctx context.Context, req *Sh
 		ResolvedPermissionProfileID:   req.PermissionProfileID,
 		ResolvedPermissionProfileJSON: req.PermissionProfileJSON,
 		CWD:                           req.CWD,
+		WorkspaceRoots:                req.WorkspaceRoots,
 		AllowedSymlinkedCodexHome:     req.AllowedSymlinkedCodexHome,
 		Command:                       append([]string(nil), req.Command...),
 	}
@@ -140,7 +141,7 @@ func (r *LocalShellRunner) runWindowsSandbox(ctx context.Context, req *ShellRequ
 	capture := &windowssandbox.CaptureRequest{
 		PermissionProfileID:    plan.PermissionProfileID,
 		PermissionProfile:      plan.PermissionProfile,
-		WorkspaceRoots:         []string{commandCWD},
+		WorkspaceRoots:         windowsCaptureWorkspaceRoots(req.WorkspaceRoots, commandCWD),
 		CodexHome:              codexHome,
 		Command:                append([]string(nil), plan.Command...),
 		CWD:                    commandCWD,
@@ -174,6 +175,13 @@ func (r *LocalShellRunner) runWindowsSandbox(ctx context.Context, req *ShellRequ
 		Duration:    time.Since(started),
 		TimedOut:    result.TimedOut || errors.Is(ctx.Err(), context.DeadlineExceeded),
 	}, nil
+}
+
+func windowsCaptureWorkspaceRoots(roots []string, fallbackCWD string) []string {
+	if roots == nil {
+		return []string{fallbackCWD}
+	}
+	return append([]string{}, roots...)
 }
 
 func windowsShellSandboxUsesElevated(_ *sandbox.PermissionProfile, configured sandbox.WindowsSandboxLevel) bool {

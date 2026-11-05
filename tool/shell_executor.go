@@ -689,6 +689,7 @@ func (e *ShellExecutor) prepareExecCommand(invocation *Invocation) (*execCommand
 			validation.PermissionProfile = environment.PermissionProfile
 			validation.PermissionProfileID = environment.PermissionProfileID
 		}
+		validation.WorkspaceRoots = cloneStrings(environment.WorkspaceRoots)
 	}
 	if e.grantedPermissions != nil {
 		if granted := e.grantedPermissions(e.unifiedExecTurnID, grantEnvironmentID); !granted.IsEmpty() {
@@ -1309,6 +1310,7 @@ func cloneUnifiedExecEnvironments(values []UnifiedExecEnvironment) []UnifiedExec
 			profile := *values[i].PermissionProfile
 			out[i].PermissionProfile = &profile
 		}
+		out[i].WorkspaceRoots = cloneStrings(values[i].WorkspaceRoots)
 	}
 	return out
 }
@@ -1433,6 +1435,7 @@ func prepareUnifiedExecShellRequest(req *ShellRequest) (*ShellRequest, error) {
 		ResolvedPermissionProfileID:   req.PermissionProfileID,
 		ResolvedPermissionProfileJSON: req.PermissionProfileJSON,
 		CWD:                           req.CWD,
+		WorkspaceRoots:                req.WorkspaceRoots,
 		Command:                       append([]string(nil), req.Command...),
 	})
 	if err != nil {
@@ -1445,6 +1448,10 @@ func prepareUnifiedExecShellRequest(req *ShellRequest) (*ShellRequest, error) {
 	prepared.Command = append([]string(nil), plan.Command...)
 	prepared.CWD = plan.CWD
 	prepared.ProcessSandboxType = cloneSandboxType(plan.SandboxType)
+	if plan.PermissionProfile != nil {
+		prepared.PermissionProfile = plan.PermissionProfile
+		prepared.PermissionProfileJSON = plan.PermissionProfileJSON
+	}
 	prepared.Env = cloneEnv(req.Env)
 	if prepared.Env == nil {
 		prepared.Env = map[string]string{}

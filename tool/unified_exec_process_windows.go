@@ -43,7 +43,7 @@ func startUnifiedExecWindowsSandboxCommand(req *ShellRequest) (*startedUnifiedEx
 		Capture: windowssandbox.CaptureRequest{
 			PermissionProfileID:    req.PermissionProfileID,
 			PermissionProfile:      req.PermissionProfile,
-			WorkspaceRoots:         []string{req.CWD},
+			WorkspaceRoots:         windowsCaptureWorkspaceRoots(req.WorkspaceRoots, req.CWD),
 			CodexHome:              codexHome,
 			Command:                append([]string(nil), req.Command...),
 			CWD:                    req.CWD,

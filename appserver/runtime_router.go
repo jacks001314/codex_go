@@ -17694,6 +17694,7 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	if options.Shell != nil && permissionProfile != nil && permissionProfile.Profile != nil {
 		options.Shell.Validation.PermissionProfileID = strings.TrimSpace(permissionProfile.ID)
 		options.Shell.Validation.PermissionProfile = permissionProfile.Profile
+		options.Shell.Validation.WorkspaceRoots = turnEnvironmentWorkspaceRoots(params, cwd)
 	}
 	if options.ApplyPatch != nil && permissionProfile != nil && permissionProfile.Profile != nil {
 		options.ApplyPatch.PermissionProfile = permissionProfile.Profile
@@ -18653,6 +18654,15 @@ func (r *RuntimeRouter) configBaseDirForAgents() string {
 	return processCWD()
 }
 
+func cloneWorkspaceRootsForEnvironment(values []string) []string {
+	if values == nil {
+		return nil
+	}
+	out := make([]string, len(values))
+	copy(out, values)
+	return out
+}
+
 func (r *RuntimeRouter) unifiedExecEnvironmentsForTurn(params *turn.TurnStartParams) []tool.UnifiedExecEnvironment {
 	if r == nil || params == nil || r.services.Environment == nil {
 		return nil
@@ -18730,6 +18740,7 @@ func (r *RuntimeRouter) unifiedExecEnvironmentsForTurn(params *turn.TurnStartPar
 			environment.PermissionProfile = state.Config.PermissionProfile
 			environment.PermissionProfileID = strings.TrimSpace(state.Config.ActivePermissionProfile)
 			environment.PermissionProfileJSON = strings.TrimSpace(state.Config.PermissionProfileJSON)
+			environment.WorkspaceRoots = cloneWorkspaceRootsForEnvironment(state.Config.WorkspaceRoots)
 		}
 		out = append(out, environment)
 	}

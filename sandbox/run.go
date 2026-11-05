@@ -30,7 +30,11 @@ type CommandRunRequest struct {
 	// policy cwd, which is what every caller except the exec-server filesystem
 	// helper wants; that helper launches from the filesystem root so a removed
 	// policy directory cannot block it (Rust #46112).
-	CommandCWD            string
+	CommandCWD string
+	// WorkspaceRoots binds symbolic project-root entries on the execution host.
+	// Nil means they are already resolved; a non-nil empty slice grants no
+	// workspace access and must not fall back to CWD (Rust #59530).
+	WorkspaceRoots        []string
 	IncludeManagedConfig  bool
 	SandboxStateJSON      string
 	SandboxReadableRoots  []string
@@ -52,6 +56,7 @@ type CommandRunPlan struct {
 	Command                 []string
 	CWD                     string
 	CommandCWD              string
+	WorkspaceRoots          []string
 	SandboxType             SandboxType
 	PermissionProfileID     string
 	PermissionProfile       *PermissionProfile
@@ -165,6 +170,7 @@ func BuildCommandRunPlan(req *CommandRunRequest) (*CommandRunPlan, error) {
 		Command:              cloneSandboxStrings(req.Command),
 		CWD:                  strings.TrimSpace(req.CWD),
 		CommandCWD:           strings.TrimSpace(req.CommandCWD),
+		WorkspaceRoots:       cloneSandboxStrings(req.WorkspaceRoots),
 		SandboxType:          SandboxTypeNone,
 		UseLegacyLandlock:    req.UseLegacyLandlock,
 		AllowNetworkForProxy: req.AllowNetworkForProxy,
@@ -244,6 +250,18 @@ func BuildCommandRunPlan(req *CommandRunRequest) (*CommandRunPlan, error) {
 	}
 	if err := applySandboxStateOverrides(plan, req); err != nil {
 		return nil, err
+	}
+	if req.WorkspaceRoots != nil && plan.PermissionProfile != nil && !plan.PermissionProfile.Disabled {
+		materialized, materializeErr := MaterializePermissionProfileWorkspaceRoots(plan.PermissionProfile, plan.CWD, req.WorkspaceRoots)
+		if materializeErr != nil {
+			return nil, fmt.Errorf("%w: invalid sandbox permission policy: %v", ErrInvalidSandboxRunRequest, materializeErr)
+		}
+		profileJSON, jsonErr := RuntimePermissionProfileJSON(*materialized)
+		if jsonErr != nil {
+			return nil, jsonErr
+		}
+		plan.PermissionProfile = materialized
+		plan.PermissionProfileJSON = profileJSON
 	}
 	if !platformSupportsPermissionProfileSandbox() && plan.PermissionProfile != nil && !plan.PermissionProfile.Disabled && !permissionUnsupportedAdded {
 		unsupported = append(unsupported, "sandbox state")

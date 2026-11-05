@@ -2708,6 +2708,7 @@ func prepareExecProcess(params *ExecParams, allowedSymlinkedCodexHome string) ([
 		ResolvedPermissionProfileID:   "exec-server",
 		ResolvedPermissionProfileJSON: profileJSON,
 		CWD:                           cwd,
+		WorkspaceRoots:                sandboxContext.WorkspaceRoots,
 		UseLegacyLandlock:             sandboxContext.UseLegacyLandlock,
 		AllowNetworkForProxy:          params.EnforceManagedNetwork,
 		ManagedNetworkJSON:            managedNetworkJSON,

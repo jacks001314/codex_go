@@ -379,6 +379,7 @@ func runSandbox(ctx context.Context, opts *cli.SandboxOptions, dispatchPaths *cl
 		runReq.ResolvedPermissionProfile = resolved.Profile
 		runReq.ResolvedPermissionProfileID = resolved.ID
 		runReq.ResolvedPermissionProfileJSON = resolved.ProfileJSON
+		runReq.WorkspaceRoots = resolved.WorkspaceRoots
 	}
 	plan, err := sandbox.BuildCommandRunPlan(runReq)
 	if err != nil {
@@ -427,6 +428,13 @@ func runSandbox(ctx context.Context, opts *cli.SandboxOptions, dispatchPaths *cl
 	return processExitError(command.Run())
 }
 
+func windowsPlanWorkspaceRoots(roots []string, fallbackCWD string) []string {
+	if roots == nil {
+		return []string{fallbackCWD}
+	}
+	return append([]string{}, roots...)
+}
+
 func shouldUseWindowsSandbox(plan *sandbox.CommandRunPlan) bool {
 	return runtime.GOOS == "windows" &&
 		plan != nil &&
@@ -450,7 +458,7 @@ func runWindowsSandboxPlan(ctx context.Context, plan *sandbox.CommandRunPlan, en
 	args, err := createWindowsSandboxCommandArgs(windowssandbox.WindowsSandboxCommandArgsRequest{
 		Command:             append([]string(nil), plan.Command...),
 		CommandCWD:          commandCWD,
-		WorkspaceRoots:      []string{commandCWD},
+		WorkspaceRoots:      windowsPlanWorkspaceRoots(plan.WorkspaceRoots, commandCWD),
 		Env:                 env,
 		PermissionProfile:   plan.PermissionProfile,
 		WindowsSandboxLevel: windowssandbox.WindowsSandboxLevelElevated,

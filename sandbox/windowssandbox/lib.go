@@ -149,9 +149,15 @@ func RunWindowsSandboxLegacyPreflight(req *LegacyPreflightRequest) error {
 		return ErrInvalidRequest
 	}
 	profile := req.PermissionProfile
+	var err error
 	if profile == nil {
-		var err error
 		profile, _, err = coresandbox.ResolvePermissionProfile(req.PermissionProfileID)
+		if err != nil {
+			return err
+		}
+	}
+	if req.WorkspaceRoots != nil {
+		profile, err = coresandbox.MaterializePermissionProfileWorkspaceRoots(profile, req.CWD, req.WorkspaceRoots)
 		if err != nil {
 			return err
 		}
