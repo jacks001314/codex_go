@@ -2,6 +2,7 @@ package cloudclient
 
 import (
 	"context"
+	"strings"
 
 	"google.golang.org/protobuf/encoding/protowire"
 )
@@ -189,6 +190,42 @@ type FileChangeSummary struct {
 	ID      string
 	Changes []FileUpdate
 	Status  ItemStatus
+}
+
+// DecodeTranscriptEvent decodes one Attach notification into a typed transcript
+// update (Rust TranscriptEvent::decode).
+func DecodeTranscriptEvent(threadID string, payload []byte) (TranscriptEvent, bool, error) {
+	return decodeTranscriptEvent(threadID, payload)
+}
+
+// ThreadStatusFor returns the supported status update this Attach notification
+// carries for threadID (Rust #59493 Event::thread_status_for).
+func (e Event) ThreadStatusFor(threadID string) (any, bool) {
+	if e.Kind != EventNotification || strings.TrimSpace(threadID) == "" {
+		return nil, false
+	}
+	// Field 3 of Notification.value is thread_status_changed.
+	tag, values, ok, err := selectNotification(e.Payload)
+	if err != nil || !ok || tag != 3 {
+		return nil, false
+	}
+	envelope, err := decodeEnvelope(values)
+	if err != nil {
+		return nil, false
+	}
+	owner, ok := stringField(envelope.Params, 2)
+	if !ok || owner != threadID {
+		return nil, false
+	}
+	statusBytes, ok := bytesField(envelope.Params, 1)
+	if !ok {
+		return nil, false
+	}
+	status, err := decodeThreadStatus(statusBytes)
+	if err != nil {
+		return nil, false
+	}
+	return status, true
 }
 
 // AttachTranscript decodes typed transcript updates from Attach. Unknown

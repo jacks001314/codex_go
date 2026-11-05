@@ -1,0 +1,376 @@
+// Package cloudbackend adapts the authenticated native Cloud client to the
+// app-server request and notification shapes (Rust #59493 cloud_backend).
+//
+// A request is answered from the cloud conversation that is currently
+// attached; a replacement attachment becomes active only after its stream
+// opens successfully, and turns are admitted only while that attachment is
+// connected.
+package cloudbackend
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"strings"
+	"sync"
+
+	"codex_go/appserver"
+	"codex_go/cloudclient"
+)
+
+const (
+	// methodNotFoundCode is the JSON-RPC code for an operation the cloud backend
+	// does not implement.
+	methodNotFoundCode = -32601
+	// internalErrorCode is the JSON-RPC code for a failed cloud operation.
+	internalErrorCode = -32000
+	commandBufferSize = 32
+)
+
+// cloudSource is the subset of the native client this backend drives.
+// *cloudclient.Client implements it.
+type cloudSource interface {
+	Activate(ctx context.Context, threadID string) (*cloudclient.ThreadActivation, error)
+	Attach(ctx context.Context, threadID string) (<-chan cloudclient.Event, <-chan error, error)
+	Close() error
+}
+
+// RPCError is the JSON-RPC error reported for one request.
+type RPCError struct {
+	Code    int
+	Message string
+}
+
+// Error implements error.
+func (e *RPCError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return e.Message
+}
+
+// Notification is one app-server server notification produced by the cloud
+// conversation.
+type Notification struct {
+	Method appserver.NotificationMethod
+	Params any
+}
+
+// Client exposes one attached cloud conversation through app-server requests.
+type Client struct {
+	source  cloudSource
+	account json.RawMessage
+
+	requests  chan *pendingRequest
+	done      chan struct{}
+	closed    chan struct{}
+	cancel    context.CancelFunc
+	closeOnce sync.Once
+
+	outMu   sync.Mutex
+	outCond *sync.Cond
+	out     []Notification
+	outDone bool
+	outCh   chan Notification
+
+	// Dispatch-goroutine state.
+	loaded *appserver.ThreadResumeResponse
+	active *attachment
+	status map[string]any
+}
+
+type pendingRequest struct {
+	method appserver.Method
+	params json.RawMessage
+	reply  chan requestReply
+}
+
+type requestReply struct {
+	result json.RawMessage
+	err    *RPCError
+}
+
+type attachment struct {
+	threadID string
+	events   <-chan cloudclient.Event
+	errs     <-chan error
+	cancel   context.CancelFunc
+}
+
+// Connect opens an app-server client backed by the authenticated native Cloud
+// client. The returned client owns source and closes it with Close.
+func Connect(ctx context.Context, source cloudSource, account json.RawMessage) *Client {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	client := &Client{
+		source:   source,
+		account:  cloneRawMessage(account),
+		requests: make(chan *pendingRequest, commandBufferSize),
+		done:     make(chan struct{}),
+		closed:   make(chan struct{}),
+		cancel:   cancel,
+		outCh:    make(chan Notification),
+	}
+	client.outCond = sync.NewCond(&client.outMu)
+	go client.pumpNotifications()
+	go client.run(runCtx)
+	return client
+}
+
+// Notifications streams the server notifications the cloud conversation
+// produces until the client closes.
+func (c *Client) Notifications() <-chan Notification {
+	if c == nil {
+		closed := make(chan Notification)
+		close(closed)
+		return closed
+	}
+	return c.outCh
+}
+
+// Request performs one app-server request against the attached conversation.
+func (c *Client) Request(ctx context.Context, method appserver.Method, params json.RawMessage) (json.RawMessage, *RPCError) {
+	if c == nil {
+		return nil, &RPCError{Code: internalErrorCode, Message: "cloud client is unavailable"}
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	pending := &pendingRequest{method: method, params: params, reply: make(chan requestReply, 1)}
+	select {
+	case c.requests <- pending:
+	case <-c.done:
+		return nil, &RPCError{Code: internalErrorCode, Message: "cloud client is closed"}
+	case <-ctx.Done():
+		return nil, &RPCError{Code: internalErrorCode, Message: ctx.Err().Error()}
+	}
+	select {
+	case reply := <-pending.reply:
+		return reply.result, reply.err
+	case <-c.done:
+		return nil, &RPCError{Code: internalErrorCode, Message: "cloud client is closed"}
+	case <-ctx.Done():
+		return nil, &RPCError{Code: internalErrorCode, Message: ctx.Err().Error()}
+	}
+}
+
+// Notify reports that client-initiated notifications are unsupported.
+func (c *Client) Notify(appserver.Method) error {
+	return errors.New("Cloud client notifications are not supported yet.")
+}
+
+// AnswerServerRequest reports that a cloud approval must be answered elsewhere.
+func (c *Client) AnswerServerRequest(string) error {
+	return errors.New("Answer this cloud approval in another client; TUI approval replies are not supported yet.")
+}
+
+// Close stops the backend and releases the cloud client.
+func (c *Client) Close() {
+	if c == nil {
+		return
+	}
+	c.closeOnce.Do(func() {
+		close(c.closed)
+		c.cancel()
+		if c.active != nil {
+			c.active.cancel()
+		}
+		if c.source != nil {
+			_ = c.source.Close()
+		}
+	})
+}
+
+func (c *Client) run(ctx context.Context) {
+	defer close(c.done)
+	defer c.stopNotifications()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case pending := <-c.requests:
+			if pending == nil {
+				return
+			}
+			result, rpcErr := c.handleRequest(ctx, pending.method, pending.params)
+			pending.reply <- requestReply{result: result, err: rpcErr}
+		}
+	}
+}
+
+// waitWhileListening runs op while continuing to forward the attached stream,
+// matching Rust's Replies::while_listening.
+func waitWhileListening[T any](c *Client, ctx context.Context, op func() (T, error)) (T, error) {
+	type outcome struct {
+		value T
+		err   error
+	}
+	finished := make(chan outcome, 1)
+	go func() {
+		value, err := op()
+		finished <- outcome{value: value, err: err}
+	}()
+	for {
+		if active := c.active; active != nil {
+			select {
+			case result := <-finished:
+				return result.value, result.err
+			case event, ok := <-active.events:
+				c.forwardStreamEvent(active, event, ok)
+				continue
+			case err, ok := <-active.errs:
+				c.forwardStreamError(active, err, ok)
+				continue
+			}
+		}
+		select {
+		case result := <-finished:
+			return result.value, result.err
+		case <-ctx.Done():
+			var zero T
+			return zero, ctx.Err()
+		}
+	}
+}
+
+// forwardStreamEvent handles one event from the active attachment.
+func (c *Client) forwardStreamEvent(active *attachment, event cloudclient.Event, ok bool) {
+	if !ok {
+		c.streamEnded(active)
+		return
+	}
+	c.forwardEvent(active.threadID, event)
+}
+
+// forwardStreamError handles the error channel of the active attachment. A
+// closed channel without an error is not a failure: the event channel reports
+// the end of the stream.
+func (c *Client) forwardStreamError(active *attachment, err error, ok bool) {
+	if ok && err != nil {
+		c.streamEnded(active)
+		return
+	}
+	if !ok {
+		active.errs = nil
+	}
+}
+
+// forwardNextNonBlocking notices a ready stream end before a turn is sent.
+func (c *Client) forwardNextNonBlocking() {
+	active := c.active
+	if active == nil {
+		return
+	}
+	select {
+	case event, ok := <-active.events:
+		c.forwardStreamEvent(active, event, ok)
+	case err, ok := <-active.errs:
+		c.forwardStreamError(active, err, ok)
+	default:
+	}
+}
+
+func (c *Client) streamEnded(active *attachment) {
+	if c.active != active {
+		return
+	}
+	c.active.cancel()
+	c.active = nil
+	c.enqueue(cloudErrorNotification(active.threadID, "Cloud stream ended. Reopen the conversation to reconnect."))
+}
+
+// replaceAttachment opens threadID and activates it only once its stream is
+// usable, so a failed replacement keeps the previous attachment.
+func (c *Client) replaceAttachment(ctx context.Context, threadID string) error {
+	streamCtx, cancel := context.WithCancel(ctx)
+	events, errs, err := c.source.Attach(streamCtx, threadID)
+	if err != nil {
+		cancel()
+		return err
+	}
+	notConnected := errors.New("Cloud conversation activated but its stream did not connect. Reopen it before sending.")
+	// A server can close Attach immediately after returning successful headers.
+	// A healthy idle stream needs no event to prove that it is ready.
+	select {
+	case event, ok := <-events:
+		if !ok {
+			cancel()
+			return notConnected
+		}
+		delete(c.status, threadID)
+		c.active = &attachment{threadID: threadID, events: events, errs: errs, cancel: cancel}
+		c.forwardEvent(threadID, event)
+		return nil
+	case <-errs:
+		// The stream ended before producing anything, so it never connected.
+		cancel()
+		return notConnected
+	default:
+	}
+	delete(c.status, threadID)
+	c.active = &attachment{threadID: threadID, events: events, errs: errs, cancel: cancel}
+	return nil
+}
+
+func (c *Client) admitTurn(threadID string) error {
+	// Notice a ready disconnect before sending. A continuous stream of events
+	// must still allow commands to make progress.
+	c.forwardNextNonBlocking()
+	if c.active == nil || c.active.threadID != strings.TrimSpace(threadID) {
+		return errors.New("Cloud stream is not connected. Reopen the conversation before sending.")
+	}
+	return nil
+}
+
+func (c *Client) detach(threadID string) {
+	delete(c.status, threadID)
+	if c.active != nil && c.active.threadID == threadID {
+		c.active.cancel()
+		c.active = nil
+	}
+}
+
+// enqueue appends a notification without blocking request handling.
+func (c *Client) enqueue(notification Notification) {
+	c.outMu.Lock()
+	if !c.outDone {
+		c.out = append(c.out, notification)
+		c.outCond.Signal()
+	}
+	c.outMu.Unlock()
+}
+
+func (c *Client) pumpNotifications() {
+	defer close(c.outCh)
+	for {
+		c.outMu.Lock()
+		for len(c.out) == 0 && !c.outDone {
+			c.outCond.Wait()
+		}
+		if len(c.out) == 0 {
+			c.outMu.Unlock()
+			return
+		}
+		notification := c.out[0]
+		c.out = c.out[1:]
+		c.outMu.Unlock()
+		select {
+		case c.outCh <- notification:
+		case <-c.closed:
+			return
+		}
+	}
+}
+
+func (c *Client) stopNotifications() {
+	c.outMu.Lock()
+	c.outDone = true
+	c.outCond.Broadcast()
+	c.outMu.Unlock()
+}
+
+func cloneRawMessage(value json.RawMessage) json.RawMessage {
+	return append(json.RawMessage(nil), value...)
+}
