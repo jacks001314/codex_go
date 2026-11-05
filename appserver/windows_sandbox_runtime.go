@@ -62,7 +62,7 @@ func (r *RuntimeRouter) windowsSandboxSetupRuntimeRequest(mode sandbox.WindowsSe
 	if err != nil {
 		return nil, err
 	}
-	cfg := &config.Config{Values: read.Config}
+	cfg := config.NewConfigFromRead(read)
 	resolved, err := cfg.ResolveSandboxPermissionProfile("", cwd)
 	if err != nil {
 		return nil, err

@@ -137,7 +137,7 @@ func interactiveLocalExperimentalFeatures(root *cli.RootOptions) codextea.Experi
 		if err != nil {
 			return nil, err
 		}
-		settings := (&config.Config{Values: read.Config}).FeatureSettings()
+		settings := config.NewConfigFromRead(read).FeatureSettings()
 		limit := experimentalFeaturesPageLimit
 		response, err := features.NewFeatureService(nil).ListWithSettings(&features.FeatureListParams{Limit: &limit}, settings)
 		if err != nil {

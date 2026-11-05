@@ -231,7 +231,7 @@ func (r *RuntimeRouter) configureEnvironmentHTTPPolicy() {
 	if err != nil || read == nil {
 		return
 	}
-	cfg := &config.Config{Values: read.Config}
+	cfg := config.NewConfigFromRead(read)
 	client, _ := r.httpClientForConfig(cfg).(*http.Client)
 	r.services.Environment.SetHTTPClient(client)
 }
@@ -895,7 +895,7 @@ func (r *RuntimeRouter) rolloutBudgetForSession() *runtimeutil.Budget {
 		if err != nil {
 			return
 		}
-		resolved, err := (&config.Config{Values: read.Config}).RolloutBudgetConfig()
+		resolved, err := config.NewConfigFromRead(read).RolloutBudgetConfig()
 		if err != nil || resolved == nil {
 			return
 		}
@@ -1110,7 +1110,7 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 			if err != nil || read == nil || read.Config == nil {
 				return false
 			}
-			return features.Enabled((&config.Config{Values: read.Config}).FeatureSettings(), "retain_client_developer_messages")
+			return features.Enabled(config.NewConfigFromRead(read).FeatureSettings(), "retain_client_developer_messages")
 		}
 	}
 	router.configureFSChangedCallback()
@@ -1202,7 +1202,7 @@ func (r *RuntimeRouter) notificationMediaFilterEnabled() bool {
 	if err != nil || read == nil {
 		return false
 	}
-	cfg := &config.Config{Values: read.Config}
+	cfg := config.NewConfigFromRead(read)
 	return features.Enabled(cfg.FeatureSettings(), "omit_app_server_notification_media")
 }
 
@@ -1531,7 +1531,7 @@ func (r *RuntimeRouter) authStoreOptions() *auth.StoreOptions {
 	if err != nil || read == nil {
 		return auth.StoreOptionsFromConfig("", false)
 	}
-	cfg := &config.Config{Values: read.Config}
+	cfg := config.NewConfigFromRead(read)
 	options := auth.StoreOptionsFromConfig(cfg.CLIAuthCredentialsStoreMode(), cfg.SecretAuthStorageEnabled())
 	options.WorkloadIdentity = &auth.WorkloadIdentityAuthOptions{
 		ChatGPTBaseURL: cfg.ChatGPTBaseURL(),
@@ -1584,7 +1584,7 @@ func resolveAccountScopedCatalogProvider(codexHome string, read *config.ConfigRe
 	if read == nil {
 		return nil, errors.New("config read is required")
 	}
-	cfg := &config.Config{Values: read.Config}
+	cfg := config.NewConfigFromRead(read)
 	providerID := strings.TrimSpace(stringFromMap(read.Config, "model_provider"))
 	providerInfo, err := model.ProviderForConfigID(read.Config, providerID, strings.TrimSpace(stringFromMap(read.Config, "openai_base_url")))
 	if err != nil || providerInfo == nil {
@@ -1678,7 +1678,7 @@ func buildAccountScopedModelsManagerForCWD(codexHome string, read *config.Config
 	if err != nil || providerInfo == nil {
 		return nil, err
 	}
-	cfg := &config.Config{Values: read.Config}
+	cfg := config.NewConfigFromRead(read)
 	if providerInfo.IsGCP() {
 		// Rust builds the catalog through provider.models_manager(), and GCP
 		// returns a static filtered Vertex catalog instead of a remote manager.
@@ -1782,7 +1782,7 @@ func (r *RuntimeRouter) loginRestrictionViolation(snapshot *auth.AuthDotJSON) (s
 	if err != nil || read == nil {
 		return "", err
 	}
-	cfg := &config.Config{Values: read.Config}
+	cfg := config.NewConfigFromRead(read)
 	switch cfg.ForcedLoginMethod() {
 	case config.ForcedLoginMethodAPI:
 		switch snapshot.Mode() {
@@ -2239,7 +2239,7 @@ func (r *RuntimeRouter) configureAnalyticsFromConfig(codexHome string, options *
 	if err != nil || read == nil {
 		return
 	}
-	cfg := &config.Config{Values: read.Config}
+	cfg := config.NewConfigFromRead(read)
 	defaultEnabled := false
 	if options != nil {
 		defaultEnabled = options.AnalyticsDefaultEnabled
@@ -2300,7 +2300,7 @@ func (r *RuntimeRouter) buildOtelProvider(codexHome string, options *RuntimeRout
 	// unpublished handle would fail every export closed.
 	networkPolicy, _ := r.refreshApplicationNetworkPolicy()
 	return otelinit.BuildProvider(otelinit.Options{
-		Config:                  &config.Config{Values: read.Config},
+		Config:                  config.NewConfigFromRead(read),
 		ServiceName:             otelAppServerServiceName,
 		ServiceVersion:          appServerVersion(),
 		DefaultAnalyticsEnabled: defaultAnalyticsEnabled,
@@ -4250,7 +4250,7 @@ func (r *RuntimeRouter) applyConfiguredResumeCWD(request *Request) (*Request, er
 	if err != nil {
 		return nil, err
 	}
-	mode, err := (&config.Config{Values: read.Config}).ResumeCWDMode()
+	mode, err := config.NewConfigFromRead(read).ResumeCWDMode()
 	if err != nil {
 		return nil, jsonRPCInvalidRequest(err.Error())
 	}
@@ -9592,7 +9592,7 @@ func (r *RuntimeRouter) effectiveConfigForSessionTelemetry() *config.Config {
 	if err != nil || read == nil {
 		return nil
 	}
-	return &config.Config{Values: read.Config}
+	return config.NewConfigFromRead(read)
 }
 
 func (r *RuntimeRouter) handleTurnSteer(request *Request) (*turn.TurnSteerResponse, error) {
@@ -10854,7 +10854,7 @@ func (r *RuntimeRouter) goalsFeatureEnabled() bool {
 	if err != nil || read == nil || read.Config == nil {
 		return features.Enabled(nil, "goals")
 	}
-	return features.Enabled((&config.Config{Values: read.Config}).FeatureSettings(), "goals")
+	return features.Enabled(config.NewConfigFromRead(read).FeatureSettings(), "goals")
 }
 
 // SetDeferredGoalNotifications switches the router into the stream-transport
@@ -11332,7 +11332,7 @@ func (r *RuntimeRouter) handleExperimentalFeatureSet(request *Request) (*feature
 		// Rust #44392: apply the API-key model discovery policy after feature
 		// enablement changes so live discovery requests honor user overrides.
 		if read, err := r.services.Config.Read(&config.ConfigReadParams{}); err == nil && read != nil {
-			settings := (&config.Config{Values: read.Config}).FeatureSettings()
+			settings := config.NewConfigFromRead(read).FeatureSettings()
 			r.services.Models.SetAPIKeyModelDiscoveryEnabled(features.Enabled(settings, "api_key_model_discovery"))
 		}
 	}
@@ -11360,7 +11360,7 @@ func (r *RuntimeRouter) backgroundRolloutMigrationEnabled() bool {
 	if err != nil || read == nil || read.Config == nil {
 		return false
 	}
-	return features.Enabled((&config.Config{Values: read.Config}).FeatureSettings(), "background_paginated_rollout_migration")
+	return features.Enabled(config.NewConfigFromRead(read).FeatureSettings(), "background_paginated_rollout_migration")
 }
 
 // shouldStartBackgroundRolloutMigration ports Rust #40668's transition check:
@@ -11390,7 +11390,7 @@ func (r *RuntimeRouter) experimentalFeatureSettingsForList(params *features.Feat
 	if read == nil {
 		return nil, nil
 	}
-	return (&config.Config{Values: read.Config}).FeatureSettings(), nil
+	return config.NewConfigFromRead(read).FeatureSettings(), nil
 }
 
 func (r *RuntimeRouter) handleAppList(request *Request) (*apps.AppListResponse, error) {
@@ -13124,13 +13124,15 @@ func (r *RuntimeRouter) configureMCPFromConfigChecked() error {
 	if current := r.services.Config.Requirements(); current != nil {
 		requirements = current.Requirements
 	}
-	featureSettings, _ := (&config.Config{Values: read.Config, Requirements: requirements}).FeatureSettingsWithLegacyUsages()
+	featureConfig := config.NewConfigFromRead(read)
+	featureConfig.Requirements = requirements
+	featureSettings, _ := featureConfig.FeatureSettingsWithLegacyUsages()
 	appliedRuntimeConfig := r.runtimeMCPConfig(read.Config, r.services.Config.CodexHome(), runtimeAuth, requirements)
 	appliedRuntimeConfig, enterpriseProfileFingerprint := r.admitEnterpriseMCPAuthority(read.Config, featureSettings, appliedRuntimeConfig)
 	r.requireMCP().ApplyRuntimeConfig(appliedRuntimeConfig)
 	r.rememberAppliedMCPRuntimeConfig(appliedRuntimeConfig, enterpriseProfileFingerprint)
 	if snapshot != nil {
-		httpClient := r.httpClientForConfig(&config.Config{Values: read.Config})
+		httpClient := r.httpClientForConfig(config.NewConfigFromRead(read))
 		r.requireMCP().SetTrustedAccess(mcp.ServiceTrustedAccessFromSnapshot(snapshot, r.chatGPTBaseURL(), httpClient))
 	}
 	r.mcpConfigManaged.Store(true)
@@ -13795,7 +13797,7 @@ func (r *RuntimeRouter) feedbackTransport() *FeedbackTransport {
 	var cfg *config.Config
 	if r != nil && r.services.Config != nil {
 		if read, err := r.services.Config.Read(&config.ConfigReadParams{}); err == nil && read != nil {
-			cfg = &config.Config{Values: read.Config}
+			cfg = config.NewConfigFromRead(read)
 		}
 	}
 	var client model.HTTPDoer
@@ -14245,7 +14247,7 @@ func (r *RuntimeRouter) applyChatGPTLoginConfig(params auth.LoginAccountParams, 
 	if err != nil || read == nil {
 		return
 	}
-	cfg := config.Config{Values: read.Config}
+	cfg := *config.NewConfigFromRead(read)
 	workspaces := normalizedWorkspaceQueryList(cfg.ForcedChatGPTWorkspaceIDs())
 	if len(workspaces) == 0 {
 		return
@@ -14285,7 +14287,7 @@ func (r *RuntimeRouter) validateLoginAccountParams(params *auth.LoginAccountPara
 	if err != nil || read == nil {
 		return err
 	}
-	cfg := config.Config{Values: read.Config}
+	cfg := *config.NewConfigFromRead(read)
 	switch params.Type {
 	case auth.AccountAPIKey, auth.AccountAmazonBedrock:
 		if r.externalChatGPTAuthActive() {
@@ -14386,7 +14388,7 @@ func (r *RuntimeRouter) accountOAuthOptions() *auth.OAuthOptions {
 	cfg := (*config.Config)(nil)
 	if r.services.Config != nil {
 		if read, err := r.services.Config.Read(&config.ConfigReadParams{}); err == nil && read != nil {
-			cfg = &config.Config{Values: read.Config}
+			cfg = config.NewConfigFromRead(read)
 			options.ForcedWorkspaces = cfg.ForcedChatGPTWorkspaceIDs()
 		}
 	}
@@ -14671,7 +14673,7 @@ func (r *RuntimeRouter) maybeStartCuratedRepoSync(force bool) {
 		return
 	}
 	applyPluginMarketplacePolicy(r.services.Plugins, r.services.Config, read.Config)
-	cfg := &config.Config{Values: read.Config}
+	cfg := config.NewConfigFromRead(read)
 	if !features.Enabled(cfg.FeatureSettings(), "plugins") || r.services.Plugins.TargetCuratedMarketplace() == plugin.TargetCuratedOpenAIWithRemote {
 		return
 	}
@@ -17406,7 +17408,7 @@ func (r *RuntimeRouter) codeModeInterruptEnabledForThread(threadID string) bool 
 	if err != nil || read == nil {
 		return false
 	}
-	return features.Enabled((&config.Config{Values: read.Config}).FeatureSettings(), "code_mode_interrupt")
+	return features.Enabled(config.NewConfigFromRead(read).FeatureSettings(), "code_mode_interrupt")
 }
 
 func (r *RuntimeRouter) closeCodeModeRuntimes() error {
@@ -20808,7 +20810,7 @@ func (r *RuntimeRouter) externalAuthRefresh(ctx context.Context, request *model.
 	// rejected without replacing the previously cached authentication.
 	if r.services.Config != nil {
 		if read, err := r.services.Config.Read(&config.ConfigReadParams{}); err == nil && read != nil {
-			cfg := &config.Config{Values: read.Config}
+			cfg := config.NewConfigFromRead(read)
 			workspaces := cfg.ForcedChatGPTWorkspaceIDs()
 			if err := auth.EnsureWorkspaceAccountAllowed(workspaces, response.ChatGPTAccountID); err != nil {
 				return nil, fmt.Errorf("external auth refresh was rejected: %w", err)

@@ -111,7 +111,7 @@ func codexHomeCompressionEnabled(cfg *config.ConfigService) bool {
 	if err != nil || read == nil || read.Config == nil {
 		return false
 	}
-	return features.Enabled((&config.Config{Values: read.Config}).FeatureSettings(), "local_thread_store_compression")
+	return features.Enabled(config.NewConfigFromRead(read).FeatureSettings(), "local_thread_store_compression")
 }
 
 // recordCodexHomeMetrics scans codexHome and records the size histogram for the

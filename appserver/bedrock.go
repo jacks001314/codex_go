@@ -196,7 +196,7 @@ func (r *RuntimeRouter) effectiveAuthConfig() (*config.Config, error) {
 	if read == nil {
 		return nil, fmt.Errorf("failed to load configuration")
 	}
-	cfg := &config.Config{Values: read.Config}
+	cfg := config.NewConfigFromRead(read)
 	if requirements := service.Requirements(); requirements != nil {
 		cfg.Requirements = requirements.Requirements
 	}

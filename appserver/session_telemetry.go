@@ -73,7 +73,7 @@ func (r *RuntimeRouter) sessionTelemetryForThread(threadID string) *telemetry.Se
 	// delta log records for this session while errors and metrics keep reporting.
 	if r.services.Config != nil {
 		if read, err := r.services.Config.Read(&config.ConfigReadParams{}); err == nil && read != nil {
-			if !(&config.Config{Values: read.Config}).Otel().LogSSEDeltas {
+			if !config.NewConfigFromRead(read).Otel().LogSSEDeltas {
 				session = session.WithoutSSEDeltaLogs()
 			}
 		}
@@ -102,7 +102,7 @@ func (r *RuntimeRouter) sessionTelemetryMetadataForThread(threadID string) telem
 	}
 	if r.services.Config != nil {
 		if read, err := r.services.Config.Read(&config.ConfigReadParams{}); err == nil && read != nil {
-			cfg := &config.Config{Values: read.Config}
+			cfg := config.NewConfigFromRead(read)
 			metadata.LogUserPrompts = cfg.Otel().LogUserPrompt
 			metadata.AuthEnv = telemetry.CollectAuthEnvTelemetry(
 				providerEnvKeyForSession(cfg),
@@ -212,6 +212,7 @@ func (r *RuntimeRouter) conversationStartsEvent(cfg *config.Config, params *Thre
 	event.ApprovalPolicy = conversationStartsApprovalPolicy(cfg, params)
 	event.SandboxPolicy = r.conversationStartsSandboxPolicy(cfg, params, cwd)
 	event.MCPServers = enabledMCPServerNames(cfg)
+	event.LegacyMultiAgentDisabledSources = cfg.LegacyMultiAgentDisabledSources()
 	return event
 }
 
@@ -366,7 +367,7 @@ func (r *RuntimeRouter) toolResultLogLimits() protocol.ToolResultLogConfig {
 	if err != nil || read == nil {
 		return protocol.DefaultToolResultLogConfig()
 	}
-	return (&config.Config{Values: read.Config}).Otel().ToolResult
+	return config.NewConfigFromRead(read).Otel().ToolResult
 }
 
 // emitToolResultRecords mirrors the record half of Rust's

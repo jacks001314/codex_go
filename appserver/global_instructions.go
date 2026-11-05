@@ -187,7 +187,7 @@ func (r *RuntimeRouter) threadProjectInstructionsConfig(cwd string) *config.Conf
 	if err != nil || read == nil {
 		return nil
 	}
-	return &config.Config{Values: read.Config}
+	return config.NewConfigFromRead(read)
 }
 
 // turnInstructionsProvider returns a per-request instruction provider for a

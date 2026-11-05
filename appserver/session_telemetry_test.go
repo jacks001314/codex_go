@@ -1116,6 +1116,9 @@ func TestThreadStartEmitsConversationStartsLikeRust(t *testing.T) {
 endpoint = %q
 protocol = "json"
 
+[features]
+multi_agent = false
+
 [mcp_servers.docs]
 command = "npx"
 
@@ -1133,7 +1136,10 @@ enabled = false
 		Config:       config.NewConfigService(home),
 	})
 	router.configureOtelMetrics(home, nil, state.NewTaskMetrics())
-	start := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: home}))
+	start := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+		CWD:    home,
+		Config: map[string]any{"features.multi_agent": true},
+	}))
 	if start.Error != nil {
 		t.Fatalf("thread start error: %+v", start.Error)
 	}
@@ -1173,6 +1179,10 @@ enabled = false
 					}
 					if attributes["reasoning_summary"] != "auto" {
 						t.Fatalf("reasoning_summary = %q", attributes["reasoning_summary"])
+					}
+					// A saved user opt-out remains visible after the session enables it.
+					if attributes["config.legacy_multi_agent_disabled_sources"] != "user" {
+						t.Fatalf("legacy multi-agent sources = %q", attributes["config.legacy_multi_agent_disabled_sources"])
 					}
 					if attributes["auth.env_openai_api_key_present"] != "true" ||
 						attributes["auth.env_codex_api_key_enabled"] != "false" {

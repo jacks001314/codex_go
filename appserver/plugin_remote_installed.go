@@ -81,7 +81,7 @@ func (r *RuntimeRouter) reconcileInstalledRemotePlugins(ctx context.Context) (bo
 		}
 		return false, nil
 	}
-	cfg := &config.Config{Values: read.Config}
+	cfg := config.NewConfigFromRead(read)
 	if !features.Enabled(cfg.FeatureSettings(), "plugins") || !features.Enabled(cfg.FeatureSettings(), "remote_plugin") {
 		return false, nil
 	}

@@ -231,6 +231,9 @@ type ConfigReadResponse struct {
 	Config  map[string]any           `json:"config"`
 	Origins map[string]LayerMetadata `json:"origins"`
 	Layers  []Layer                  `json:"layers,omitempty"`
+	// featureLayers carries the in-memory precedence sources for runtime
+	// views built with NewConfigFromRead. It is not part of the RPC contract.
+	featureLayers []Layer
 }
 
 func (r *ConfigReadResponse) MarshalJSON() ([]byte, error) {
@@ -2353,7 +2356,7 @@ func (s *ConfigService) Read(params *ConfigReadParams) (*ConfigReadResponse, err
 		return nil, err
 	}
 	if strings.TrimSpace(profile) != "" {
-		if _, err := applyProfileLayer(s.codexHome, userValues, profile); err != nil {
+		if _, _, err := applyProfileLayer(s.codexHome, userValues, profile); err != nil {
 			return nil, err
 		}
 	}
@@ -2394,7 +2397,11 @@ func (s *ConfigService) readResponseForLayers(layers []Layer, params *ConfigRead
 		return nil, err
 	}
 	s.recordStartupWarnings(values)
-	response := &ConfigReadResponse{Config: values, Origins: origins}
+	response := &ConfigReadResponse{
+		Config:        values,
+		Origins:       origins,
+		featureLayers: cloneLayers(layers),
+	}
 	if params != nil && params.IncludeLayers {
 		response.Layers = cloneLayers(rpcLayers(layers))
 	}
@@ -2657,7 +2664,7 @@ func (s *ConfigService) startupConfigLayers(cwd string, profile string) ([]Layer
 		return nil, err
 	}
 	if strings.TrimSpace(profile) != "" {
-		if _, err := applyProfileLayer(s.codexHome, userValues, profile); err != nil {
+		if _, _, err := applyProfileLayer(s.codexHome, userValues, profile); err != nil {
 			return nil, err
 		}
 	}

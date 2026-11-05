@@ -507,6 +507,9 @@ type MCPResourceReadParams struct {
 	Server     string  `json:"server,omitempty"`
 	ServerName string  `json:"serverName,omitempty"`
 	URI        string  `json:"uri"`
+	// Meta is caller-provided MCP request metadata forwarded on resources/read.
+	// Account and turn-routing keys are reserved for the host.
+	Meta map[string]any `json:"_meta,omitempty"`
 	// OriginCallID scopes the read to the app tool call that produced the
 	// widget (Rust #39187): the app, account link, and policy context of the
 	// originating call are used when reading the associated resource.
@@ -572,6 +575,7 @@ func (p MCPResourceReadParams) MarshalJSON() ([]byte, error) {
 		ThreadID     *string                `json:"threadId,omitempty"`
 		Server       string                 `json:"server"`
 		URI          string                 `json:"uri"`
+		Meta         map[string]any         `json:"_meta,omitempty"`
 		OriginCallID string                 `json:"originCallId,omitempty"`
 		ConnectorID  string                 `json:"connectorId,omitempty"`
 		Target       *MCPResourceReadTarget `json:"target,omitempty"`
@@ -580,6 +584,7 @@ func (p MCPResourceReadParams) MarshalJSON() ([]byte, error) {
 		ThreadID:     cloneStringPtr(p.ThreadID),
 		Server:       firstNonEmptyMCP(p.Server, p.ServerName),
 		URI:          p.URI,
+		Meta:         cloneAnyMap(p.Meta),
 		OriginCallID: strings.TrimSpace(p.OriginCallID),
 		ConnectorID:  strings.TrimSpace(p.ConnectorID),
 		Target:       p.Target,
@@ -2591,6 +2596,9 @@ func (s *MCPService) ReadResource(params *MCPResourceReadParams) (*MCPResourceRe
 	if err := validateMCPResourceOrigin(params); err != nil {
 		return nil, err
 	}
+	if err := validateMCPResourceReadCallerMeta(params.Meta, server); err != nil {
+		return nil, err
+	}
 	if err := validateMCPResourceTarget(params, server); err != nil {
 		return nil, err
 	}
@@ -2607,8 +2615,13 @@ func (s *MCPService) ReadResource(params *MCPResourceReadParams) (*MCPResourceRe
 		Scope:    resourceReadScopeKey(params),
 		Target:   resourceReadTargetKey(params),
 	}
-	if cached, ok := s.readCachedResource(cacheKey); ok {
-		return cached, nil
+	// Caller metadata can change server-side routing or content, so a read that
+	// carries it always reaches the server and is not stored in the cache.
+	cacheable := len(params.Meta) == 0
+	if cacheable {
+		if cached, ok := s.readCachedResource(cacheKey); ok {
+			return cached, nil
+		}
 	}
 	request := *params
 	request.Server = server
@@ -2631,7 +2644,9 @@ func (s *MCPService) ReadResource(params *MCPResourceReadParams) (*MCPResourceRe
 				return nil, err
 			}
 			setOrigin()
-			s.writeCachedResource(cacheKey, response)
+			if cacheable {
+				s.writeCachedResource(cacheKey, response)
+			}
 			return response, nil
 		}
 		if strings.TrimSpace(config.Command) != "" {
@@ -2640,13 +2655,17 @@ func (s *MCPService) ReadResource(params *MCPResourceReadParams) (*MCPResourceRe
 				return nil, err
 			}
 			setOrigin()
-			s.writeCachedResource(cacheKey, response)
+			if cacheable {
+				s.writeCachedResource(cacheKey, response)
+			}
 			return response, nil
 		}
 	}
 	response = &MCPResourceReadResponse{Contents: []MCPResourceContent{{URI: uri, MimeType: "text/plain", Text: ""}}}
 	setOrigin()
-	s.writeCachedResource(cacheKey, response)
+	if cacheable {
+		s.writeCachedResource(cacheKey, response)
+	}
 	return response, nil
 }
 
@@ -2664,6 +2683,30 @@ func validateMCPResourceOrigin(params *MCPResourceReadParams) error {
 	}
 	if origin != "" && strings.ContainsAny(origin, " \t\r\n") {
 		return invalidMCPRequest("originCallId must be a single call id")
+	}
+	return nil
+}
+
+// validateMCPResourceReadCallerMeta rejects metadata the host owns. A normal
+// MCP server may use connector_id/link_id as caller data; codex_apps reserves
+// them, and its legacy nested resource_uri, for app and account routing.
+func validateMCPResourceReadCallerMeta(meta map[string]any, server string) error {
+	codexApps := IsCodexAppsMCPServerName(server)
+	for key, value := range meta {
+		reserved := key == "threadId" || key == MCPToolTurnMetadataMetaKey || key == ConnectionLeaseMetaKey
+		if codexApps && (key == "connector_id" || key == "link_id") {
+			reserved = true
+		}
+		if codexApps && key == "_codex_apps" {
+			if object, ok := value.(map[string]any); ok {
+				if _, present := object["resource_uri"]; present {
+					return invalidMCPRequest("reserved resource read metadata key: _codex_apps.resource_uri")
+				}
+			}
+		}
+		if reserved {
+			return invalidMCPRequest("reserved resource read metadata key: " + key)
+		}
 	}
 	return nil
 }

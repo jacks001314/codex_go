@@ -37,7 +37,7 @@ func MaybeMigrateRolloutsOnStartup(codexHome string, runtime *state.StateRuntime
 	enabled := false
 	if cfg != nil {
 		if read, err := cfg.Read(&config.ConfigReadParams{}); err == nil && read != nil && read.Config != nil {
-			enabled = features.Enabled((&config.Config{Values: read.Config}).FeatureSettings(), "background_paginated_rollout_migration")
+			enabled = features.Enabled(config.NewConfigFromRead(read).FeatureSettings(), "background_paginated_rollout_migration")
 		}
 	}
 	if !enabled {
@@ -62,7 +62,7 @@ func MaybeSpawnRolloutCompressionOnStartup(codexHome string, cfg *config.ConfigS
 	if err != nil || read == nil || read.Config == nil {
 		return
 	}
-	if !features.Enabled((&config.Config{Values: read.Config}).FeatureSettings(), "local_thread_store_compression") {
+	if !features.Enabled(config.NewConfigFromRead(read).FeatureSettings(), "local_thread_store_compression") {
 		return
 	}
 	rollout.SpawnRolloutCompressionWorker(codexHome, rollout.RolloutCompressionTriggerStartup)

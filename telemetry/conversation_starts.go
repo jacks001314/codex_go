@@ -62,6 +62,9 @@ type ConversationStartsEvent struct {
 	SandboxPolicy         string
 	// MCPServers are the enabled MCP server names.
 	MCPServers []string
+	// LegacyMultiAgentDisabledSources lists saved opt-outs even when a session
+	// override enables multi-agent support.
+	LegacyMultiAgentDisabledSources []string
 }
 
 // EmitConversationStarts mirrors SessionTelemetry::conversation_starts: the
@@ -73,7 +76,12 @@ func EmitConversationStarts(ctx context.Context, telemetry *SessionTelemetry, ev
 		return
 	}
 	authEnv := telemetry.Metadata.AuthEnv
+	disabledSources := strings.Join(event.LegacyMultiAgentDisabledSources, ",")
+	if disabledSources == "" {
+		disabledSources = "none"
+	}
 	common := map[string]string{
+		"config.legacy_multi_agent_disabled_sources": disabledSources,
 		"provider_name":                               event.ProviderName,
 		"auth.env_openai_api_key_present":             strconv.FormatBool(authEnv.OpenAIAPIKeyEnvPresent),
 		"auth.env_codex_api_key_present":              strconv.FormatBool(authEnv.CodexAPIKeyEnvPresent),

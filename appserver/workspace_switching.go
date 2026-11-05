@@ -358,7 +358,7 @@ func (r *RuntimeRouter) workspaceSwitchAllowedWorkspaces() []string {
 	if err != nil || read == nil {
 		return nil
 	}
-	cfg := config.Config{Values: read.Config}
+	cfg := *config.NewConfigFromRead(read)
 	return normalizedWorkspaceQueryList(cfg.ForcedChatGPTWorkspaceIDs())
 }
 

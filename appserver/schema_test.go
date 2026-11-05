@@ -460,7 +460,7 @@ func TestProtocolPayloadsValidateAgainstRustSchemas(t *testing.T) {
 			Name:       "empty-schema",
 			AuthStatus: mcp.MCPAuthUnsupported,
 		}}, NextCursor: stringPtr("cursor-next")}},
-		{"McpResourceReadParams", &mcp.MCPResourceReadParams{ThreadID: &mcpThreadID, Server: "server-schema", URI: "file://schema/readme.md"}},
+		{"McpResourceReadParams", &mcp.MCPResourceReadParams{ThreadID: &mcpThreadID, Server: "server-schema", URI: "file://schema/readme.md", Meta: map[string]any{"example/trace": "schema"}}},
 		{"McpResourceReadResponse", &mcp.MCPResourceReadResponse{Contents: []mcp.MCPResourceContent{
 			{URI: "file://schema/readme.md", MimeType: "text/markdown", Text: "# Schema", Meta: map[string]any{"source": "fixture"}},
 			{URI: "file://schema/blob.bin", MimeType: "application/octet-stream", Blob: "AAEC", Meta: map[string]any{"binary": true}},

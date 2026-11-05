@@ -63,7 +63,8 @@ func TestEmitConversationStartsRoutesLogAndTraceLikeRust(t *testing.T) {
 		_, record := singleLogRecord(t, body)
 		attributes := logRecordAttributes(t, record)
 		for key, want := range map[string]string{
-			"event.name":                                  "codex.conversation_starts",
+			"event.name": "codex.conversation_starts",
+			"config.legacy_multi_agent_disabled_sources": "none",
 			"provider_name":                               "OpenAI",
 			"auth.env_openai_api_key_present":             "true",
 			"auth.env_codex_api_key_present":              "false",
@@ -100,6 +101,9 @@ func TestEmitConversationStartsRoutesLogAndTraceLikeRust(t *testing.T) {
 		}
 		if attributes["approval_policy"] != "on-request" || attributes["sandbox_policy"] != "workspace-write" {
 			t.Fatalf("span event attributes = %#v", attributes)
+		}
+		if attributes["config.legacy_multi_agent_disabled_sources"] != "none" {
+			t.Fatalf("span event legacy multi-agent sources = %#v", attributes)
 		}
 		// The trace event never carries the server names themselves.
 		if _, ok := attributes["mcp_servers"]; ok {

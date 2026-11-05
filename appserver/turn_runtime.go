@@ -10650,7 +10650,7 @@ func (r *RuntimeRouter) configureSuggestedPluginProviderForTurn(cfg *config.Conf
 	}
 	if cfg == nil && r.services.Config != nil {
 		if read, err := r.services.Config.Read(&config.ConfigReadParams{}); err == nil && read != nil {
-			cfg = &config.Config{Values: read.Config}
+			cfg = config.NewConfigFromRead(read)
 		}
 	}
 	if !suggestedPluginsEnabledForConfig(cfg) || r.services.Config == nil {
@@ -10827,7 +10827,7 @@ func applyRuntimeConfigOverrides(cfg *config.Config, overrides map[string]any) {
 			Value: value,
 		})
 	}
-	config.ApplyOverrides(cfg.Values, configOverrides)
+	cfg.ApplyOverrides(configOverrides)
 }
 
 type currentTimeReminderTurnState struct {

@@ -13,7 +13,10 @@ func mcpResourceReadRequestParams(params *MCPResourceReadParams) map[string]any 
 	if params == nil {
 		return payload
 	}
-	meta := map[string]any{}
+	meta := cloneAnyMap(params.Meta)
+	if meta == nil {
+		meta = map[string]any{}
+	}
 	if connector := strings.TrimSpace(params.ConnectorID); connector != "" {
 		meta[MCPToolTurnMetadataMetaKey] = map[string]any{
 			"mcp_request_meta": map[string]any{

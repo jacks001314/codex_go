@@ -302,7 +302,7 @@ func (r *RuntimeRouter) threadIdleUnloadDelay(threadID string) time.Duration {
 			}
 		}
 		if read, err := r.services.Config.Read(params); err == nil && read != nil {
-			cfg = &config.Config{Values: read.Config}
+			cfg = config.NewConfigFromRead(read)
 		}
 	}
 	return cfg.ThreadUnloadDelaySecs()

@@ -168,7 +168,7 @@ func (s *HookDiscoveryService) hooksFeatureEnabled(cwd string) bool {
 	if err != nil || read == nil {
 		return true
 	}
-	return features.Enabled((&config.Config{Values: read.Config}).FeatureSettings(), "hooks")
+	return features.Enabled(config.NewConfigFromRead(read).FeatureSettings(), "hooks")
 }
 
 func MergeHookListResponses(left *HookListResponse, right *HookListResponse) *HookListResponse {

@@ -28,6 +28,10 @@ var embeddedDefaultsTOML string
 type Config struct {
 	Values       map[string]any
 	Requirements *ConfigRequirements
+	// featureLayers preserves the precedence-bearing configuration sources used
+	// to resolve project agent opt-ins (Rust #59476/#59496). It is never
+	// serialized.
+	featureLayers []Layer
 	// allowedSymlinkedCodexHome is the macOS Seatbelt opt-out resolved only from
 	// the host's top-level user config (Rust #42716). Project config, CLI
 	// overrides, and selected profiles cannot set it.
@@ -387,6 +391,10 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 		}
 		values = embedded
 	}
+	featureLayers := []Layer{{
+		Name:   LayerSource{Type: LayerSourcePackagedDefaults, File: packagedDefaultsPath},
+		Config: cloneMap(values),
+	}}
 	userValues, err := loadConfigFile(ConfigPath(codexHome))
 	if err != nil {
 		return nil, err
@@ -396,6 +404,10 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 	// above them rather than the merged value (Rust #57178).
 	chatgptBaseURLExplicit := configValuePresent(userValues, "chatgpt_base_url")
 	mergeConfigMaps(values, userValues)
+	featureLayers = append(featureLayers, Layer{
+		Name:   LayerSource{Type: LayerSourceUser, File: ConfigPath(codexHome)},
+		Config: cloneMap(userValues),
+	})
 	profile := ""
 	cwd := ""
 	if opts != nil {
@@ -430,6 +442,14 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 				sanitizeProjectConfigValues(projectValues, brokerState, trustedProviderEnvKeys)
 				chatgptBaseURLExplicit = chatgptBaseURLExplicit || configValuePresent(projectValues, "chatgpt_base_url")
 				mergeConfigMaps(values, projectValues)
+				featureLayers = append(featureLayers, Layer{
+					Name: LayerSource{
+						Type:           LayerSourceProject,
+						File:           path,
+						DotCodexFolder: filepath.Dir(path),
+					},
+					Config: cloneMap(projectValues),
+				})
 			}
 		}
 	}
@@ -442,11 +462,15 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 		isProjectless = projectDiscoveryIsProjectless(cwd, codexHome, projectRootMarkersFromValues(discoveryValues))
 	}
 	if profile != "" {
-		profileSetsBaseURL, err := applyProfileLayer(codexHome, values, profile)
+		profileSetsBaseURL, profileValues, err := applyProfileLayer(codexHome, values, profile)
 		if err != nil {
 			return nil, err
 		}
 		chatgptBaseURLExplicit = chatgptBaseURLExplicit || profileSetsBaseURL
+		featureLayers = append(featureLayers, Layer{
+			Name:   LayerSource{Type: LayerSourceUser, Profile: stringPtrIfNotEmpty(profile)},
+			Config: cloneMap(profileValues),
+		})
 	}
 	if opts != nil && opts.IncludeManagedConfig {
 		if shouldIgnoreDefaultManagedConfig(opts.ManagedConfigPath) {
@@ -462,6 +486,10 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 			if exists {
 				chatgptBaseURLExplicit = chatgptBaseURLExplicit || configValuePresent(managedValues, "chatgpt_base_url")
 				mergeConfigMaps(values, managedValues)
+				featureLayers = append(featureLayers, Layer{
+					Name:   LayerSource{Type: LayerSourceLegacyManagedConfigFromFile, File: managedConfigPath(codexHome, opts.ManagedConfigPath)},
+					Config: cloneMap(managedValues),
+				})
 			}
 		}
 	}
@@ -483,6 +511,20 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 			return nil, snapshot.Err
 		}
 		if bundle := snapshot.Bundle; bundle != nil && !bundle.IsEmpty() {
+			bundleLayers, err := CloudConfigLayersFromBundle(*bundle, codexHome)
+			if err != nil {
+				return nil, err
+			}
+			for _, layer := range bundleLayers.EnterpriseManagedConfig {
+				featureLayers = append(featureLayers, Layer{
+					Name: LayerSource{
+						Type: LayerSourceEnterpriseManaged,
+						ID:   layer.Source.ID,
+						Name: layer.Source.Name,
+					},
+					Config: cloneMap(layer.Values),
+				})
+			}
 			cloudRequirements, cloudFilesystem, err := applyCloudConfigBundleWithFilesystemSource(values, requirements, *bundle, codexHome)
 			if err != nil {
 				return nil, err
@@ -517,6 +559,7 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 	cfg := &Config{
 		Values:                       values,
 		Requirements:                 requirements,
+		featureLayers:                featureLayers,
 		allowedSymlinkedCodexHome:    allowedSymlinkedCodexHome,
 		isProjectless:                isProjectless,
 		cloudConfigBinding:           cloudConfigBinding,
@@ -834,7 +877,7 @@ func LoadEffectiveWithOptions(codexHome string, opts *EffectiveOptions) (*Config
 			Value: false,
 		})
 	}
-	ApplyOverrides(cfg.Values, overrides)
+	cfg.ApplyOverrides(overrides)
 	applyDisablePasteBurstOverride(overrides, cfg.Values)
 	// Rust #58428: app settings from enabled plugins apply connector-wide.
 	mergePluginApps(cfg.Values)
@@ -2557,6 +2600,9 @@ func (c *Config) FeatureSettingsWithLegacyUsages() (map[string]bool, []featurefl
 		values["experimental_use_unified_exec_tool"] = enabled
 	}
 	settings, usages := featureflags.ResolveSettings(values)
+	if !settings["multi_agent"] && agentsExplicitlyEnabled(c.Values) && projectOverridesLegacySubagentOptOut(c.featureLayers) {
+		settings["multi_agent"] = true
+	}
 	if c.Requirements != nil {
 		requirementValues := make(map[string]any, len(c.Requirements.FeatureRequirements))
 		for key, enabled := range c.Requirements.FeatureRequirements {
@@ -2853,7 +2899,11 @@ func NewConfigFromRead(read *ConfigReadResponse) *Config {
 		return &Config{Values: map[string]any{}}
 	}
 	_, explicit := read.Origins["chatgpt_base_url"]
-	return &Config{Values: read.Config, chatgptBaseURLExplicit: explicit}
+	return &Config{
+		Values:                 read.Config,
+		featureLayers:          cloneLayers(read.featureLayers),
+		chatgptBaseURLExplicit: explicit,
+	}
 }
 
 // Resolve returns the backend URL for the credentials that authenticate the
@@ -3869,30 +3919,31 @@ func resolveConfigFileRelativePath(value string, baseDir string) string {
 }
 
 // applyProfileLayer merges a selected profile and reports whether that profile
-// selected chatgpt_base_url.
-func applyProfileLayer(codexHome string, values map[string]any, profile string) (bool, error) {
+// selected chatgpt_base_url, together with the profile's own values for layer
+// precedence checks.
+func applyProfileLayer(codexHome string, values map[string]any, profile string) (bool, map[string]any, error) {
 	profilePath, err := ResolveProfileConfigPath(codexHome, profile)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	profileValues, exists, err := loadConfigFileIfExists(profilePath)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	if exists {
 		setsBaseURL := configValuePresent(profileValues, "chatgpt_base_url")
 		mergeConfigMaps(values, profileValues)
-		return setsBaseURL, nil
+		return setsBaseURL, profileValues, nil
 	}
 	if legacyProfile, ok, err := legacyProfileValues(values, profile); ok || err != nil {
 		if err != nil {
-			return false, err
+			return false, nil, err
 		}
 		setsBaseURL := configValuePresent(legacyProfile, "chatgpt_base_url")
 		mergeConfigMaps(values, legacyProfile)
-		return setsBaseURL, nil
+		return setsBaseURL, legacyProfile, nil
 	}
-	return false, fmt.Errorf("profile %q not found", profile)
+	return false, nil, fmt.Errorf("profile %q not found", profile)
 }
 
 func legacyProfileValues(values map[string]any, profile string) (map[string]any, bool, error) {

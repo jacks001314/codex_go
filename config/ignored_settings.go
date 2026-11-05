@@ -402,7 +402,7 @@ func (s *ConfigService) configLayersForWarning(cwd string) ([]Layer, error) {
 		return nil, err
 	}
 	if strings.TrimSpace(profile) != "" {
-		if _, err := applyProfileLayer(s.codexHome, userValues, profile); err != nil {
+		if _, _, err := applyProfileLayer(s.codexHome, userValues, profile); err != nil {
 			return nil, err
 		}
 	}
