@@ -31,6 +31,35 @@ func asyncCompactionTestConfig(threshold int, tokenBudget bool, postTurnThreshol
 	return &config.Config{Values: values}
 }
 
+func asyncRootOnlyCompactionTestConfig(threshold int) *config.Config {
+	cfg := asyncCompactionTestConfig(threshold, false, 0)
+	cfg.Values["features"].(map[string]any)["async_compaction_root_only"] = true
+	return cfg
+}
+
+func TestAsyncCompactionNonRootAgentSourceLikeRust(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		threadSource   string
+		subagentSource string
+		want           bool
+	}{
+		{name: "root cli", threadSource: "cli"},
+		{name: "root user", threadSource: "user"},
+		{name: "custom root", threadSource: "automation"},
+		{name: "thread spawn", threadSource: "subAgentThreadSpawn", want: true},
+		{name: "review source", subagentSource: "review", want: true},
+		{name: "guardian internal", threadSource: "guardian_review", want: true},
+		{name: "memory internal", threadSource: "memory_consolidation", want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := asyncCompactionNonRootAgent(tc.threadSource, tc.subagentSource); got != tc.want {
+				t.Fatalf("asyncCompactionNonRootAgent(%q, %q) = %t, want %t", tc.threadSource, tc.subagentSource, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestAsyncCompactionEligibilityLikeRust(t *testing.T) {
 	status := &compact.TokenStatus{ActiveContextTokens: 70}
 	cases := []struct {
@@ -41,6 +70,7 @@ func TestAsyncCompactionEligibilityLikeRust(t *testing.T) {
 		status       *compact.TokenStatus
 		window       int64
 		hasTurnState bool
+		nonRootAgent bool
 		want         bool
 	}{
 		{name: "eligible", cfg: asyncCompactionTestConfig(65, false, 0), support: model.RemoteCompactionV2, phase: compact.PhaseMidTurn, status: status, window: 100, want: true},
@@ -50,10 +80,13 @@ func TestAsyncCompactionEligibilityLikeRust(t *testing.T) {
 		{name: "under threshold", cfg: asyncCompactionTestConfig(65, false, 0), support: model.RemoteCompactionV2, phase: compact.PhaseMidTurn, status: &compact.TokenStatus{ActiveContextTokens: 60}, window: 100},
 		{name: "preturn needs turn state", cfg: asyncCompactionTestConfig(65, false, 0), support: model.RemoteCompactionV2, phase: compact.PhasePreTurn, status: status, window: 100},
 		{name: "postturn threshold reached", cfg: asyncCompactionTestConfig(65, false, 60), support: model.RemoteCompactionV2, phase: compact.PhasePostTurn, status: status, window: 100},
+		{name: "children eligible by default", cfg: asyncCompactionTestConfig(65, false, 0), support: model.RemoteCompactionV2, phase: compact.PhaseMidTurn, status: status, window: 100, nonRootAgent: true, want: true},
+		{name: "root only excludes children", cfg: asyncRootOnlyCompactionTestConfig(65), support: model.RemoteCompactionV2, phase: compact.PhaseMidTurn, status: status, window: 100, nonRootAgent: true},
+		{name: "root only keeps root", cfg: asyncRootOnlyCompactionTestConfig(65), support: model.RemoteCompactionV2, phase: compact.PhaseMidTurn, status: status, window: 100, want: true},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			if got := asyncCompactionEligible(testCase.cfg, testCase.support, testCase.phase, testCase.status, testCase.window, testCase.hasTurnState); got != testCase.want {
+			if got := asyncCompactionEligible(testCase.cfg, testCase.support, testCase.phase, testCase.status, testCase.window, testCase.hasTurnState, testCase.nonRootAgent); got != testCase.want {
 				t.Fatalf("asyncCompactionEligible() = %t, want %t", got, testCase.want)
 			}
 		})

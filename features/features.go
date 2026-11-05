@@ -466,6 +466,8 @@ var Registry = []Spec{
 	// The eight specs below are registered surface-only, all UnderDevelopment
 	// and disabled by default in Rust; behaviour work is tracked separately.
 	{Key: "async_compaction", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust #59598: restrict background compaction to root sessions.
+	{Key: "async_compaction_root_only", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "code_mode_host_grpc", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	// Rust (codex-rs/features/src/lib.rs #58159): let the process-owned
 	// code-mode host apply output budgets before sending results to Core.

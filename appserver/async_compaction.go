@@ -37,9 +37,14 @@ func asyncCompactionThresholdPercent(cfg *config.Config) (int, bool) {
 // preconditions. The background task is only started when the provider speaks
 // remote compaction V2, the turn is below foreground token limits, and the
 // active context crossed the configured percentage.
-func asyncCompactionEligible(cfg *config.Config, support model.RemoteCompactionSupport, phase compact.Phase, status *compact.TokenStatus, usableWindow int64, hasTurnState bool) bool {
+func asyncCompactionEligible(cfg *config.Config, support model.RemoteCompactionSupport, phase compact.Phase, status *compact.TokenStatus, usableWindow int64, hasTurnState bool, nonRootAgent bool) bool {
 	threshold, ok := asyncCompactionThresholdPercent(cfg)
 	if !ok || support != model.RemoteCompactionV2 || status == nil || status.ShouldCompact {
+		return false
+	}
+	// Rust #59598: background compaction remains available to child sessions
+	// unless the root-only feature is explicitly enabled.
+	if nonRootAgent && features.Enabled(cfg.FeatureSettings(), "async_compaction_root_only") {
 		return false
 	}
 	if phase == compact.PhasePreTurn && !hasTurnState {
@@ -52,6 +57,20 @@ func asyncCompactionEligible(cfg *config.Config, support model.RemoteCompactionS
 		return false
 	}
 	return int64(status.ActiveContextTokens)*100 >= usableWindow*int64(threshold)
+}
+
+// asyncCompactionNonRootAgent mirrors Rust SessionSource::is_non_root_agent for
+// the lineage values carried by a Go turn. Subagent and internal sessions are
+// non-root; client and unknown sources retain root eligibility.
+func asyncCompactionNonRootAgent(threadSource string, subagentSource string) bool {
+	if strings.TrimSpace(subagentSource) != "" {
+		return true
+	}
+	normalized := strings.ToLower(strings.NewReplacer("_", "", "-", "", "/", "", ":", "", " ", "").Replace(strings.TrimSpace(threadSource)))
+	if normalized == "" || normalized == "cli" || normalized == "vscode" || normalized == "exec" || normalized == "appserver" || normalized == "unknown" || normalized == "user" {
+		return false
+	}
+	return strings.HasPrefix(normalized, "subagent") || strings.HasPrefix(normalized, "internal") || normalized == "guardianreview" || normalized == "memoryconsolidation"
 }
 
 type compactionAttemptKey struct {
@@ -282,7 +301,7 @@ func (r *RuntimeRouter) maybeStartBackgroundCompaction(ctx context.Context, thre
 		return false
 	}
 	usableWindow, ok := info.UsableContextWindow()
-	if !ok || !asyncCompactionEligible(runConfig.Config, support, phase, status, usableWindow, true) {
+	if !ok || !asyncCompactionEligible(runConfig.Config, support, phase, status, usableWindow, true, asyncCompactionNonRootAgent(runConfig.ThreadSource, runConfig.SubagentSource)) {
 		return false
 	}
 	record, err := r.threadRecord(session.ThreadID(threadID), true, false)
