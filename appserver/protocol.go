@@ -500,6 +500,9 @@ type Request struct {
 	// turnAdmission is the dispatch-time admission permit the transport took
 	// for this request (Rust TurnAdmission::admit). It never crosses the wire.
 	turnAdmission *TurnAdmissionPermit
+	// deferredNotificationScope keys this request's buffered notifications so a
+	// pipelined transport cannot flush them ahead of this request's response.
+	deferredNotificationScope string
 }
 
 // W3CTraceContext mirrors codex_protocol::protocol::W3cTraceContext: the W3C

@@ -5480,7 +5480,7 @@ func (r *RuntimeRouter) handleThreadSectionMoveRuntime(request *Request) (any, e
 		trimmed := strings.TrimSpace(*sectionID)
 		sectionID = &trimmed
 	}
-	r.emitDeferredNotification(request.normalizedConnectionID(), NotificationThreadSectionChanged, &ThreadSectionChangedNotification{
+	r.emitDeferredNotification(deferredNotificationConnection(request), NotificationThreadSectionChanged, &ThreadSectionChangedNotification{
 		ThreadID:  strings.TrimSpace(params.ThreadID),
 		SectionID: sectionID,
 	})
@@ -10270,7 +10270,7 @@ func (r *RuntimeRouter) dispatchThreadExtra(request *Request) (any, error) {
 		if err := r.validateThreadSettingsStepSettings(&params); err != nil {
 			return nil, err
 		}
-		response, err := r.commitThreadSettingsUpdateWithConnection(&params, true, request.normalizedConnectionID(), true)
+		response, err := r.commitThreadSettingsUpdateWithConnection(&params, true, deferredNotificationConnection(request), true)
 		if err != nil {
 			return nil, err
 		}
@@ -10795,6 +10795,7 @@ func (r *RuntimeRouter) setThreadGoal(request *Request, params *GoalSetParams) (
 		return nil, err
 	}
 	connectionID := request.normalizedConnectionID()
+	notificationConnection := deferredNotificationConnection(request)
 	// Rust #44944: an active goal can immediately inject an objective or start
 	// an idle turn, so it is gated on the retained provider route. Pausing,
 	// completing, or clearing a goal must stay possible after policy changes.
@@ -10814,7 +10815,7 @@ func (r *RuntimeRouter) setThreadGoal(request *Request, params *GoalSetParams) (
 		if err != nil {
 			return nil, err
 		}
-		r.emitGoalNotification(connectionID, NotificationThreadGoalUpdated, &GoalUpdatedNotification{ThreadID: response.Goal.ThreadID, Goal: response.Goal})
+		r.emitGoalNotification(notificationConnection, NotificationThreadGoalUpdated, &GoalUpdatedNotification{ThreadID: response.Goal.ThreadID, Goal: response.Goal})
 		r.emitGoalAnalyticsEvent(context.Background(), connectionID, record, &response.Goal, goalAnalyticsEventKindForSet(existing, &response.Goal), nil)
 		r.recordGoalSetMetrics(existing, &response.Goal)
 		return response, nil
@@ -10826,7 +10827,7 @@ func (r *RuntimeRouter) setThreadGoal(request *Request, params *GoalSetParams) (
 		}
 		response, err := r.requireThreadExtras().SetGoal(params)
 		if err == nil && response != nil {
-			r.emitGoalNotification(connectionID, NotificationThreadGoalUpdated, &GoalUpdatedNotification{ThreadID: response.Goal.ThreadID, Goal: response.Goal})
+			r.emitGoalNotification(notificationConnection, NotificationThreadGoalUpdated, &GoalUpdatedNotification{ThreadID: response.Goal.ThreadID, Goal: response.Goal})
 			r.recordGoalSetMetrics(existingGoal, &response.Goal)
 		}
 		return response, err
@@ -10868,7 +10869,7 @@ func (r *RuntimeRouter) setThreadGoal(request *Request, params *GoalSetParams) (
 	if err := r.runtimeSaveThreadRecord(record); err != nil {
 		return nil, err
 	}
-	r.emitGoalNotification(connectionID, NotificationThreadGoalUpdated, &GoalUpdatedNotification{ThreadID: goal.ThreadID, Goal: goal})
+	r.emitGoalNotification(notificationConnection, NotificationThreadGoalUpdated, &GoalUpdatedNotification{ThreadID: goal.ThreadID, Goal: goal})
 	r.emitGoalAnalyticsEvent(context.Background(), connectionID, record, &goal, goalAnalyticsEventKindForSet(existing, &goal), nil)
 	r.recordGoalSetMetrics(existing, &goal)
 	r.applyGoalActiveRuntimeEffects(goal.ThreadID, goal)
@@ -10922,13 +10923,14 @@ func (r *RuntimeRouter) clearThreadGoal(request *Request, params *GoalClearParam
 		return nil, err
 	}
 	connectionID := request.normalizedConnectionID()
+	notificationConnection := deferredNotificationConnection(request)
 	if r != nil && r.services.StateRuntime != nil && r.services.ThreadRouter != nil && r.services.ThreadRouter.store != nil {
 		response, deleted, record, err := r.clearStateThreadGoal(params)
 		if err != nil {
 			return nil, err
 		}
 		if response.Cleared {
-			r.emitGoalNotification(connectionID, NotificationThreadGoalCleared, &GoalClearedNotification{ThreadID: strings.TrimSpace(params.ThreadID)})
+			r.emitGoalNotification(notificationConnection, NotificationThreadGoalCleared, &GoalClearedNotification{ThreadID: strings.TrimSpace(params.ThreadID)})
 			r.emitGoalAnalyticsEvent(context.Background(), connectionID, record, deleted, telemetry.GoalEventKindCleared, nil)
 		}
 		return response, nil
@@ -10936,7 +10938,7 @@ func (r *RuntimeRouter) clearThreadGoal(request *Request, params *GoalClearParam
 	if r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil {
 		response, err := r.requireThreadExtras().ClearGoal(params)
 		if err == nil && response != nil && response.Cleared {
-			r.emitGoalNotification(connectionID, NotificationThreadGoalCleared, &GoalClearedNotification{ThreadID: strings.TrimSpace(params.ThreadID)})
+			r.emitGoalNotification(notificationConnection, NotificationThreadGoalCleared, &GoalClearedNotification{ThreadID: strings.TrimSpace(params.ThreadID)})
 		}
 		return response, err
 	}
@@ -10971,7 +10973,7 @@ func (r *RuntimeRouter) clearThreadGoal(request *Request, params *GoalClearParam
 		if err := r.runtimeSaveThreadRecord(record); err != nil {
 			return nil, err
 		}
-		r.emitGoalNotification(connectionID, NotificationThreadGoalCleared, &GoalClearedNotification{ThreadID: strings.TrimSpace(params.ThreadID)})
+		r.emitGoalNotification(notificationConnection, NotificationThreadGoalCleared, &GoalClearedNotification{ThreadID: strings.TrimSpace(params.ThreadID)})
 		if found && goal != nil {
 			r.emitGoalAnalyticsEvent(context.Background(), connectionID, record, goal, telemetry.GoalEventKindCleared, nil)
 		}
@@ -11004,6 +11006,20 @@ func (r *RuntimeRouter) SetDeferredGoalNotifications(enabled bool) {
 		return
 	}
 	r.deferredGoalMode.Store(enabled)
+}
+
+// deferredNotificationConnection scopes a buffered notification to the request
+// that produced it. Pipelined transports assign a per-request scope so an
+// earlier response cannot flush a later request's notifications ahead of the
+// response that produced them.
+func deferredNotificationConnection(request *Request) string {
+	if request == nil {
+		return ""
+	}
+	if scope := strings.TrimSpace(request.deferredNotificationScope); scope != "" {
+		return scope
+	}
+	return request.normalizedConnectionID()
 }
 
 // emitDeferredNotification delivers a request-scoped notification immediately
@@ -11045,6 +11061,20 @@ func (r *RuntimeRouter) emitGoalNotification(connectionID string, method Notific
 // FlushDeferredGoalNotifications returns and clears the buffered goal
 // notifications for a connection. The stream transport calls it immediately
 // after writing a response so notifications follow their response (Rust order).
+// FlushDeferredNotificationsForRequest returns the notifications buffered for
+// one request, followed by any connection-wide ones, so a transport can write
+// them immediately after that request's response.
+func (r *RuntimeRouter) FlushDeferredNotificationsForRequest(request *Request) []*Notification {
+	if r == nil || request == nil {
+		return nil
+	}
+	notifications := r.FlushDeferredGoalNotifications(deferredNotificationConnection(request))
+	if strings.TrimSpace(request.deferredNotificationScope) != "" {
+		notifications = append(notifications, r.FlushDeferredGoalNotifications(request.normalizedConnectionID())...)
+	}
+	return notifications
+}
+
 func (r *RuntimeRouter) FlushDeferredGoalNotifications(connectionID string) []*Notification {
 	if r == nil {
 		return nil

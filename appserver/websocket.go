@@ -389,6 +389,7 @@ func serveWebSocketConnectionWithCompression(
 	defer router.SetServerRequestSink(nil)
 
 	var requests sync.WaitGroup
+	requestSeq := 0
 	initialized := false
 	for {
 		messageType, data, err := conn.Read(ctx)
@@ -441,6 +442,8 @@ func serveWebSocketConnectionWithCompression(
 			continue
 		}
 		request.ConnectionID = connectionID
+		requestSeq++
+		request.deferredNotificationScope = fmt.Sprintf("%s#%d", connectionID, requestSeq)
 		if !initialized && request.Method != MethodInitialize {
 			setWriteErr(writeJSON(ErrorResponse(request.ID, -32600, "Not initialized", nil)))
 			continue
@@ -462,7 +465,7 @@ func serveWebSocketConnectionWithCompression(
 					}
 					router.notifyWorkspaceRoutingToConnection(connectionID)
 				}
-				for _, notification := range router.FlushDeferredGoalNotifications(connectionID) {
+				for _, notification := range router.FlushDeferredNotificationsForRequest(request) {
 					setWriteErr(writeJSON(notification))
 				}
 			}
@@ -475,7 +478,7 @@ func serveWebSocketConnectionWithCompression(
 			response := router.Handle(request)
 			if response != nil {
 				setWriteErr(writeJSON(response))
-				for _, notification := range router.FlushDeferredGoalNotifications(connectionID) {
+				for _, notification := range router.FlushDeferredNotificationsForRequest(request) {
 					setWriteErr(writeJSON(notification))
 				}
 			}

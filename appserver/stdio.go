@@ -198,6 +198,7 @@ func serveJSONLineConnectionContext(router *RuntimeRouter, ctx context.Context, 
 	defer router.SetServerRequestSink(nil)
 
 	var requests sync.WaitGroup
+	requestSeq := 0
 	started := make(chan struct{})
 	close(started)
 	lineCh := make(chan string)
@@ -237,6 +238,8 @@ readLoop:
 				continue
 			}
 			request.ConnectionID = connectionID
+			requestSeq++
+			request.deferredNotificationScope = fmt.Sprintf("%s#%d", connectionID, requestSeq)
 			if admitErr := router.admitDispatchedRequest(request); admitErr != nil {
 				setWriteErr(writeJSONLine(turnAdmissionErrorResponse(request, admitErr)))
 				continue
@@ -273,7 +276,7 @@ readLoop:
 					// thread/goal/updated|cleared notification; flush any
 					// notifications the handler deferred so they follow their
 					// response on the wire.
-					for _, notification := range router.FlushDeferredGoalNotifications(connectionID) {
+					for _, notification := range router.FlushDeferredNotificationsForRequest(request) {
 						setWriteErr(writeJSONLine(notification))
 					}
 				}
