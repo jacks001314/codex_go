@@ -2,8 +2,10 @@ package pets
 
 import (
 	"encoding/base64"
+	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -52,7 +54,7 @@ func (s PetImageSupport) Supported() bool {
 func (s PetImageSupport) UnsupportedMessage() string {
 	switch s.Reason {
 	case PetImageUnsupportedTmux:
-		return "Pets are disabled in tmux. Terminal images don't stay pane-local in tmux and can corrupt scrollback or move between panes. Run Codex outside tmux to use pets."
+		return "Pets are unavailable in this tmux pane. Use fullscreen Codex with allow-passthrough all, or run Codex outside tmux."
 	case PetImageUnsupportedZellij:
 		return "Pets are disabled in Zellij. Terminal images don't stay reliably pane-local in Zellij. Run Codex outside Zellij to use pets."
 	case PetImageUnsupportedIterm2Old:
@@ -75,6 +77,75 @@ func ResolveProtocolSelection(selection ProtocolSelection, env map[string]string
 	default:
 		return DetectImageSupport(env)
 	}
+}
+
+// TmuxProbe carries the tmux client fields that decide whether pane-local
+// Kitty passthrough is safe (Rust #59579/#59580).
+type TmuxProbe struct {
+	AllowPassthrough   string
+	ClientTermname     string
+	ClientTermtype     string
+	ClientTermfeatures string
+	PaneID             string
+}
+
+// ParseTmuxProbe parses the tab-separated `tmux display-message -p` output.
+func ParseTmuxProbe(output string) (TmuxProbe, bool) {
+	fields := strings.Split(strings.TrimRight(output, "\r\n"), "\t")
+	if len(fields) < 4 {
+		return TmuxProbe{}, false
+	}
+	return TmuxProbe{
+		AllowPassthrough:   strings.TrimSpace(fields[0]),
+		ClientTermname:     strings.TrimSpace(fields[1]),
+		ClientTermtype:     strings.TrimSpace(fields[2]),
+		ClientTermfeatures: strings.TrimSpace(fields[3]),
+		PaneID:             strings.TrimSpace(fields[4]),
+	}, true
+}
+
+// KittyPassthrough reports whether the tmux client can carry pane-local Kitty
+// images: passthrough set to all on a Kitty or Ghostty client with RGB.
+func (p TmuxProbe) KittyPassthrough() bool {
+	if p.AllowPassthrough != "all" {
+		return false
+	}
+	terminal := strings.ToLower(p.ClientTermname)
+	kind := strings.ToLower(p.ClientTermtype)
+	if terminal != "xterm-ghostty" && terminal != "xterm-kitty" &&
+		!strings.HasPrefix(kind, "ghostty ") && !strings.HasPrefix(kind, "kitty(") {
+		return false
+	}
+	for _, feature := range strings.Split(p.ClientTermfeatures, ",") {
+		if strings.EqualFold(strings.TrimSpace(feature), "RGB") {
+			return true
+		}
+	}
+	return false
+}
+
+// KittyImageBase returns the pane-specific image-id base Rust reserves in the
+// upper half of the 24-bit placeholder space (0x800000 + pane << 8).
+func (p TmuxProbe) KittyImageBase() (uint32, bool) {
+	pane := strings.TrimPrefix(p.PaneID, "%")
+	value, err := strconv.ParseUint(pane, 10, 32)
+	if err != nil || value >= 0x8000 {
+		return 0, false
+	}
+	return 0x800000 + uint32(value)<<8, true
+}
+
+// DetectImageSupportInFullscreen resolves image support for the owned screen.
+// Inside tmux, Kitty passthrough is only available in fullscreen with
+// `allow-passthrough all`; otherwise tmux images stay disabled.
+func DetectImageSupportInFullscreen(env map[string]string, probe *TmuxProbe, fullscreen bool) PetImageSupport {
+	if !hasEnv(env, "TMUX") && !hasEnv(env, "TMUX_PANE") {
+		return DetectImageSupport(env)
+	}
+	if fullscreen && probe != nil && probe.KittyPassthrough() {
+		return PetImageSupport{Protocol: ImageProtocolKitty}
+	}
+	return PetImageSupport{Reason: PetImageUnsupportedTmux}
 }
 
 func DetectImageSupport(env map[string]string) PetImageSupport {
@@ -147,15 +218,82 @@ func KittyDeleteImage(imageID uint32, env map[string]string) string {
 	return WrapForTmuxIfNeeded(escapeSequence+"_Ga=d,d=I,i="+uintToString(imageID)+",q=2;"+stringTerm, env)
 }
 
-func KittyTransmitPNGWithID(path string, columns uint16, rows uint16, imageID *uint32, env map[string]string) (string, error) {
+// KittyPlacementKind selects how Kitty anchors one image. Virtual placements
+// attach the image to Unicode placeholder cells so tmux moves it with the pane
+// instead of the terminal cursor (Rust #59579).
+type KittyPlacementKind int
+
+const (
+	// KittyPlacementCursor draws the image at the cursor position.
+	KittyPlacementCursor KittyPlacementKind = iota
+	// KittyPlacementVirtual draws the image into placeholder cells.
+	KittyPlacementVirtual
+)
+
+// KittyPlacement pairs an image id with its anchoring mode.
+type KittyPlacement struct {
+	Kind KittyPlacementKind
+	ID   uint32
+}
+
+// CursorKittyPlacement anchors an image at the cursor.
+func CursorKittyPlacement(id uint32) KittyPlacement {
+	return KittyPlacement{Kind: KittyPlacementCursor, ID: id}
+}
+
+// VirtualKittyPlacement anchors an image to placeholder cells.
+func VirtualKittyPlacement(id uint32) KittyPlacement {
+	return KittyPlacement{Kind: KittyPlacementVirtual, ID: id}
+}
+
+// IsVirtual reports whether the placement uses Unicode placeholder cells.
+func (p KittyPlacement) IsVirtual() bool {
+	return p.Kind == KittyPlacementVirtual
+}
+
+const placeholderRune = "\U0010EEEE"
+
+// kittyPlaceholderMarks addresses the image row of each placeholder cell with
+// the combining marks Kitty documents for virtual placements.
+var kittyPlaceholderMarks = [...]rune{'\u0305', '\u030d', '\u030e', '\u0310', '\u0312', '\u033d'}
+
+// WriteVirtualKittyPlaceholders paints the placeholder grid for a virtual
+// placement. The image id travels as a 24-bit foreground colour and Kitty
+// inherits the first placeholder across the rest of each row.
+func WriteVirtualKittyPlaceholders(writer io.Writer, placement KittyPlacement, x int, y int, columns int, rows int) error {
+	if writer == nil || !placement.IsVirtual() || columns <= 0 || rows <= 0 {
+		return nil
+	}
+	var builder strings.Builder
+	builder.WriteString("\x1b[38;2;")
+	builder.WriteString(uintToString((placement.ID >> 16) & 0xFF))
+	builder.WriteByte(';')
+	builder.WriteString(uintToString((placement.ID >> 8) & 0xFF))
+	builder.WriteByte(';')
+	builder.WriteString(uintToString(placement.ID & 0xFF))
+	builder.WriteByte('m')
+	remaining := strings.Repeat(placeholderRune, max(columns-1, 0))
+	for row := 0; row < rows && row < len(kittyPlaceholderMarks); row++ {
+		builder.WriteString("\x1b[")
+		builder.WriteString(uintToString(uint32(max(y, 0) + row + 1)))
+		builder.WriteByte(';')
+		builder.WriteString(uintToString(uint32(max(x, 0) + 1)))
+		builder.WriteByte('H')
+		builder.WriteString(placeholderRune)
+		builder.WriteRune(kittyPlaceholderMarks[row])
+		builder.WriteString(remaining)
+	}
+	builder.WriteString("\x1b[39m")
+	_, err := io.WriteString(writer, builder.String())
+	return err
+}
+
+func KittyTransmitPNGWithID(path string, columns uint16, rows uint16, placement KittyPlacement, env map[string]string) (string, error) {
 	png, err := os.ReadFile(path)
 	if err != nil {
 		return "", err
 	}
 	payload := base64.StdEncoding.EncodeToString(png)
-	if payload == "" {
-		payload = ""
-	}
 	chunks := splitKittyPayload(payload)
 	var command strings.Builder
 	for index, chunk := range chunks {
@@ -170,10 +308,10 @@ func KittyTransmitPNGWithID(path string, columns uint16, rows uint16, imageID *u
 			command.WriteString(",r=")
 			command.WriteString(uintToString(uint32(rows)))
 			command.WriteString(",q=2")
-			command.WriteString(kittyImageIDArg(imageID))
+			command.WriteString(kittyImageIDArg(placement))
 			command.WriteString(",m=")
 			command.WriteString(more)
-			command.WriteString(";")
+			command.WriteString(",C=1;")
 			command.WriteString(chunk)
 			command.WriteString(stringTerm)
 			continue
@@ -188,7 +326,7 @@ func KittyTransmitPNGWithID(path string, columns uint16, rows uint16, imageID *u
 	return WrapForTmuxIfNeeded(command.String(), env), nil
 }
 
-func KittyTransmitPNGFileWithID(path string, columns uint16, rows uint16, imageID *uint32, env map[string]string) (string, error) {
+func KittyTransmitPNGFileWithID(path string, columns uint16, rows uint16, placement KittyPlacement, env map[string]string) (string, error) {
 	absolute, err := filepath.Abs(path)
 	if err != nil {
 		return "", err
@@ -199,8 +337,8 @@ func KittyTransmitPNGFileWithID(path string, columns uint16, rows uint16, imageI
 		",r=" +
 		uintToString(uint32(rows)) +
 		",q=2" +
-		kittyImageIDArg(imageID) +
-		";" +
+		kittyImageIDArg(placement) +
+		",C=1;" +
 		payload +
 		stringTerm
 	return WrapForTmuxIfNeeded(command, env), nil
@@ -227,11 +365,11 @@ func splitKittyPayload(payload string) []string {
 	return chunks
 }
 
-func kittyImageIDArg(imageID *uint32) string {
-	if imageID == nil {
-		return ""
+func kittyImageIDArg(placement KittyPlacement) string {
+	if placement.IsVirtual() {
+		return ",i=" + uintToString(placement.ID) + ",U=1"
 	}
-	return ",i=" + uintToString(*imageID)
+	return ",i=" + uintToString(placement.ID)
 }
 
 func uintToString(value uint32) string {

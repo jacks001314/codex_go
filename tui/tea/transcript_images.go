@@ -15,6 +15,10 @@ import (
 
 const transcriptImageCacheEntries = 24
 
+// tmuxTranscriptImageSlots is the pane's transcript image share of the 256-id
+// window; the last two ids belong to the ambient pet and picker preview.
+const tmuxTranscriptImageSlots = 254
+
 // transcriptImagePlan reserves rows below one rendered message for a local
 // image preview (Rust transcript_image::ImagePlacement before encoding).
 type transcriptImagePlan struct {
@@ -174,10 +178,53 @@ type transcriptImageRuntime struct {
 	drawn          []drawnTranscriptImage
 	pending        []drawnTranscriptImage
 	overlays       []transcriptImageOverlay
+	// tmuxBase is the pane's Kitty image-id base while fullscreen tmux
+	// passthrough is available. Placements then become virtual so tmux moves
+	// them with the pane (Rust #59579).
+	tmuxBase *uint32
+	// repaintRequested asks the owner to rewrite every text row after a
+	// placeholder cell was released; tmux keeps placeholder text otherwise.
+	repaintRequested bool
 }
 
 func newTranscriptImageRuntime(out io.Writer, env map[string]string) *transcriptImageRuntime {
 	return &transcriptImageRuntime{out: out, env: env}
+}
+
+// setTmuxBase records the pane-specific Kitty image-id base, or clears it when
+// images are cursor-placed (Rust custom_terminal::tmux_kitty_image_base).
+func (r *transcriptImageRuntime) setTmuxBase(base *uint32) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.tmuxBase = nil
+	if base != nil {
+		value := *base
+		r.tmuxBase = &value
+	}
+}
+
+// takeRepaintRequest consumes the pending full-frame repaint request.
+func (r *transcriptImageRuntime) takeRepaintRequest() bool {
+	if r == nil {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	requested := r.repaintRequested
+	r.repaintRequested = false
+	return requested
+}
+
+// imageIDForIndex returns the image id for one placement, offset into the
+// pane's window when tmux passthrough owns the ids.
+func (r *transcriptImageRuntime) imageIDForIndex(index int) uint32 {
+	if r.tmuxBase != nil {
+		return *r.tmuxBase + uint32(index)
+	}
+	return transcript_image.FirstImageID + uint32(index)
 }
 
 func (r *transcriptImageRuntime) setOutput(out io.Writer) {
@@ -261,13 +308,17 @@ func (r *transcriptImageRuntime) beforeWrite() {
 		return
 	}
 	targets := r.targetsLocked()
+	if r.tmuxBase != nil && len(targets) > tmuxTranscriptImageSlots {
+		targets = targets[:tmuxTranscriptImageSlots]
+	}
 	oldByID := make(map[uint32]drawnTranscriptImage, len(r.drawn))
 	for _, drawn := range r.drawn {
 		oldByID[drawn.id] = drawn
 	}
+	changed := len(targets) != len(r.drawn)
 	next := make([]drawnTranscriptImage, 0, len(targets))
 	for index, target := range targets {
-		id := transcript_image.FirstImageID + uint32(index)
+		id := r.imageIDForIndex(index)
 		if old, ok := oldByID[id]; ok {
 			delete(oldByID, id)
 			if old.key == target.key {
@@ -275,11 +326,19 @@ func (r *transcriptImageRuntime) beforeWrite() {
 				continue
 			}
 			r.clearLocked(old)
+			changed = true
 		}
 		next = append(next, drawnTranscriptImage{id: id, key: target.key})
 	}
 	for _, old := range oldByID {
 		r.clearLocked(old)
+		changed = true
+	}
+	if r.tmuxBase != nil && changed && len(r.drawn) > 0 {
+		// Rust invalidates the viewport once a tmux placement is replaced or
+		// removed: Ghostty drops the pixels but tmux keeps the placeholder
+		// cells, so the text underneath has to be written again.
+		r.repaintRequested = true
 	}
 	r.pending = next
 }
@@ -299,12 +358,16 @@ func (r *transcriptImageRuntime) afterWrite() {
 	for index := range drawn {
 		entry := &drawn[index]
 		if entry.encoded == nil {
+			placement := pets.CursorKittyPlacement(entry.id)
+			if r.tmuxBase != nil {
+				placement = pets.VirtualKittyPlacement(entry.id)
+			}
 			encoded, err := entry.key.image.Encode(
 				entry.key.x,
 				entry.key.y,
 				entry.key.firstRow,
 				entry.key.rows,
-				entry.id,
+				placement,
 				r.env,
 			)
 			if err != nil {
@@ -494,6 +557,7 @@ func (m *Model) publishTranscriptImages() {
 	// Bubble Tea's inline renderer ends the frame on the current console row,
 	// so the frame's first row is height-frameRows rather than row zero.
 	top += m.height - frameRows
+	m.transcriptImages.setTmuxBase(m.tmuxImageBase())
 	m.transcriptImages.setFrame(
 		m.transcriptImagePlans,
 		top,

@@ -127,17 +127,17 @@ func TestKittyImageProtocolSequences(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := uint32(0xC0DE)
-	command, err := KittyTransmitPNGWithID(path, 4, 3, &id, nil)
+	command, err := KittyTransmitPNGWithID(path, 4, 3, CursorKittyPlacement(id), nil)
 	if err != nil {
 		t.Fatalf("KittyTransmitPNGWithID() error = %v", err)
 	}
-	if !strings.HasPrefix(command, "\x1b_Ga=T,t=d,f=100,c=4,r=3,q=2,i=49374,m=0;") || !strings.Contains(command, "cG5n") || !strings.HasSuffix(command, "\x1b\\") {
+	if !strings.HasPrefix(command, "\x1b_Ga=T,t=d,f=100,c=4,r=3,q=2,i=49374,m=0,C=1;") || !strings.Contains(command, "cG5n") || !strings.HasSuffix(command, "\x1b\\") {
 		t.Fatalf("kitty inline command = %q", command)
 	}
 	if got := KittyDeleteImage(id, nil); got != "\x1b_Ga=d,d=I,i=49374,q=2;\x1b\\" {
 		t.Fatalf("delete image = %q", got)
 	}
-	fileCommand, err := KittyTransmitPNGFileWithID(path, 2, 1, nil, nil)
+	fileCommand, err := KittyTransmitPNGFileWithID(path, 2, 1, CursorKittyPlacement(id), nil)
 	if err != nil {
 		t.Fatalf("KittyTransmitPNGFileWithID() error = %v", err)
 	}
@@ -231,7 +231,7 @@ func TestRenderPetImageWritesKittyPayloadAndDeletesOnClear(t *testing.T) {
 	}
 	var state PetImageRenderState
 	var output bytes.Buffer
-	if err := RenderAmbientPetImage(&output, &state, &request, nil); err != nil {
+	if err := RenderAmbientPetImage(&output, &state, &request, nil, PetImageOptions{}); err != nil {
 		t.Fatalf("RenderAmbientPetImage() error = %v", err)
 	}
 	text := output.String()
@@ -242,18 +242,18 @@ func TestRenderPetImageWritesKittyPayloadAndDeletesOnClear(t *testing.T) {
 		!strings.HasSuffix(text, "\x1b8") {
 		t.Fatalf("kitty render output = %q", text)
 	}
-	if state.LastProtocol != ImageProtocolKitty {
-		t.Fatalf("last protocol = %q", state.LastProtocol)
+	if state.LastKittyID == nil || *state.LastKittyID != AmbientPetImageID {
+		t.Fatalf("last kitty id = %v", state.LastKittyID)
 	}
 	output.Reset()
-	if err := RenderAmbientPetImage(&output, &state, nil, nil); err != nil {
+	if err := RenderAmbientPetImage(&output, &state, nil, nil, PetImageOptions{}); err != nil {
 		t.Fatalf("clear RenderAmbientPetImage() error = %v", err)
 	}
 	if got := output.String(); got != "\x1b_Ga=d,d=I,i=49374,q=2;\x1b\\" {
 		t.Fatalf("clear kitty output = %q", got)
 	}
-	if state.LastProtocol != "" {
-		t.Fatalf("last protocol after clear = %q", state.LastProtocol)
+	if state.LastKittyID != nil {
+		t.Fatalf("last kitty id after clear = %v", *state.LastKittyID)
 	}
 }
 
@@ -274,7 +274,7 @@ func TestRenderPetImageClearsSixelArea(t *testing.T) {
 	}
 	var state PetImageRenderState
 	var output bytes.Buffer
-	if err := RenderPetImage(&output, &state, 7, &request, nil); err != nil {
+	if err := RenderPetImage(&output, &state, 7, 0, &request, nil, PetImageOptions{}); err != nil {
 		t.Fatalf("RenderPetImage() error = %v", err)
 	}
 	if state.LastSixelClearArea == nil || *state.LastSixelClearArea != (SixelClearArea{X: 1, ClearTopY: 0, ClearBottomY: 4, Columns: 3}) {
@@ -285,7 +285,7 @@ func TestRenderPetImageClearsSixelArea(t *testing.T) {
 		t.Fatalf("sixel render output = %q", rendered)
 	}
 	output.Reset()
-	if err := RenderPetImage(&output, &state, 7, nil, nil); err != nil {
+	if err := RenderPetImage(&output, &state, 7, 0, nil, nil, PetImageOptions{}); err != nil {
 		t.Fatalf("clear RenderPetImage() error = %v", err)
 	}
 	if state.LastSixelClearArea != nil {
