@@ -25,6 +25,11 @@ import (
 //  9. Input history
 //  10. Composer submission / queuing
 func routeKeyMsg(m *Model, msg bubbletea.KeyMsg) bubbletea.Cmd {
+	// Pane resize mode consumes input until Enter/Esc saves or cancels the
+	// preview (Rust #59595 handle_pane_resize runs before other input).
+	if handled, cmd := m.handleSidePaneResizeKey(msg); handled {
+		return cmd
+	}
 	// Transcript overlay
 	if m.overlay != nil {
 		return m.updateTranscriptOverlayKey(msg)
@@ -122,5 +127,8 @@ func routeWindowMsg(m *Model, msg bubbletea.Msg) {
 		m.terminalFocused = true
 	case bubbletea.BlurMsg:
 		m.terminalFocused = false
+		// Rust #59595 discards a pane resize preview when terminal focus is
+		// lost.
+		m.sideResize = nil
 	}
 }

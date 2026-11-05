@@ -65,6 +65,13 @@ var leaderShortcuts = []struct {
 	{"global", "hide_pane", true},
 	{"global", "focus_pane_left", true},
 	{"global", "focus_pane_right", true},
+	{"global", "toggle_pane_zoom", true},
+	{"global", "minimize_pane_width", true},
+	{"global", "maximize_pane_width", true},
+	{"global", "equalize_pane_widths", true},
+	{"global", "resize_panes", true},
+	{"global", "move_divider_left", true},
+	{"global", "move_divider_right", true},
 }
 
 // implicitWorkspaceLeaderCompletions are the free leader chords Rust installs
@@ -77,6 +84,14 @@ var implicitWorkspaceLeaderCompletions = map[string][]string{
 	"global.hide_pane":             {"-"},
 	"global.focus_pane_left":       {"left", "h"},
 	"global.focus_pane_right":      {"right", "l"},
+	// Rust #59595 pane layout shortcuts.
+	"global.toggle_pane_zoom":     {"z"},
+	"global.minimize_pane_width":  {","},
+	"global.maximize_pane_width":  {"."},
+	"global.equalize_pane_widths": {"="},
+	"global.resize_panes":         {"r"},
+	"global.move_divider_left":    {"shift-h"},
+	"global.move_divider_right":   {"shift-l"},
 }
 
 // leaderBindingsFor collects every leader completion reachable from keySpec.
@@ -164,6 +179,20 @@ func (m *Model) dispatchLeaderAction(action string) bubbletea.Cmd {
 		return m.focusSidebarContent()
 	case "global.hide_pane":
 		return m.hideFocusedSidePane()
+	case "global.toggle_pane_zoom":
+		return m.togglePaneZoom()
+	case "global.minimize_pane_width":
+		return m.setFocusedPaneWidth(0)
+	case "global.maximize_pane_width":
+		return m.setFocusedPaneWidth(100)
+	case "global.equalize_pane_widths":
+		return m.setFocusedPaneWidth(50)
+	case "global.resize_panes":
+		return m.beginSidePaneResize()
+	case "global.move_divider_left":
+		return m.nudgeSidePaneWidth(2)
+	case "global.move_divider_right":
+		return m.nudgeSidePaneWidth(-2)
 	default:
 		return nil
 	}

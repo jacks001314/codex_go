@@ -298,6 +298,7 @@ func (m *Model) deactivateSideConversation() {
 	}
 	m.captureActiveSideConversationState()
 	m.activeSide = nil
+	m.resetSidePaneViewState()
 }
 
 func (m *Model) forgetRetainedSideConversation(side *activeSideConversation) {
@@ -323,6 +324,7 @@ func (m *Model) activateRetainedSideConversation(side *activeSideConversation, u
 	}
 	m.retainSideConversation(side)
 	m.activeSide = side
+	m.resetSidePaneViewState()
 	side.ShowingSide = true
 	m.sideStartPending = false
 	m.switchThreadID(side.SideThreadID)

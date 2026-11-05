@@ -214,6 +214,7 @@ var configTuiFields = map[string]configFieldKind{
 	"raw_output_mode":                 {kind: configKindBool},
 	"fullscreen_transcript":           {kind: configKindBool},
 	"mouse_scroll_speed":              {kind: configKindFloat, expected: "f64"},
+	"sidebar_width_percent":           {kind: configKindInteger, expected: "u8"},
 	"copy_on_select":                  {kind: configKindEnum, variants: []string{"auto", "always", "never"}},
 	"copy_on_select_clear_selection":  {kind: configKindBool},
 	"right_click_paste":               {kind: configKindEnum, variants: []string{"auto", "on", "off"}},

@@ -1569,6 +1569,9 @@ type Options struct {
 	// OnListModelProviders browses the connected app server's provider catalog
 	// (Rust #59541 app::provider).
 	OnListModelProviders ModelProviderListFunc
+	// SidebarWidthPercent is the saved `tui.sidebar_width_percent` value for
+	// the side-by-side conversation layout (Rust #59595); 0 uses the default.
+	SidebarWidthPercent int
 	// OnListCollaborationModes discovers the connected app server's
 	// collaborationMode/list catalog at startup and reconnect (Rust #42401,
 	// ModelCatalog::with_collaboration_modes). Nil keeps the builtin presets; a
@@ -2827,6 +2830,15 @@ type Model struct {
 	onReadReviewBranches               ReviewBranchesReaderFunc
 	onReadReviewCommits                ReviewCommitsReaderFunc
 	activeSide                         *activeSideConversation
+	// sideZoomed shows the focused conversation full width (Rust #59595).
+	sideZoomed bool
+	// sideWidthPercent is the saved sidebar share of the split; 0 means the
+	// default 50%.
+	sideWidthPercent int
+	// sideExactWidth pins the sidebar column count at one terminal width.
+	sideExactWidth sideExactWidth
+	// sideResize is the active keyboard resize preview, if any.
+	sideResize *sidePaneResize
 	// sideConversations retains every side conversation, keyed by its parent
 	// thread. Thread navigation hides the active side instead of deleting it
 	// (Rust #52184), so returning to a parent can reopen the existing side with
@@ -3310,6 +3322,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onManagedWorktreeChanged:         options.OnManagedWorktreeChanged,
 		onListPermissionProfiles:         options.OnListPermissionProfiles,
 		onListModelProviders:             options.OnListModelProviders,
+		sideWidthPercent:                 options.SidebarWidthPercent,
 		onListCollaborationModes:         options.OnListCollaborationModes,
 		onUpdateThreadPermissions:        options.OnUpdateThreadPermissions,
 		terminalSize:                     options.TerminalSize,
