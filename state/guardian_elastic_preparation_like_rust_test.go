@@ -2,6 +2,7 @@ package state
 
 import (
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -70,7 +71,7 @@ func TestGuardianElasticEntryCapsBeforeAllocationLikeRust(t *testing.T) {
 	if got := guardianElasticItemTokens(items[0]) + guardianElasticContentFramingTokens(1); got > entryTokens {
 		t.Fatalf("required entry cost = %d, want <= %d", got, entryTokens)
 	}
-	if items[1] != short {
+	if !reflect.DeepEqual(items[1], short) {
 		t.Fatalf("short entry = %#v, want it unchanged", items[1])
 	}
 	if !items[2].Incomplete || !strings.Contains(items[2].Text, "<truncated") {
@@ -79,10 +80,10 @@ func TestGuardianElasticEntryCapsBeforeAllocationLikeRust(t *testing.T) {
 	if got := guardianElasticItemTokens(items[2]) + guardianElasticContentFramingTokens(1); got > entryTokens {
 		t.Fatalf("optional entry cost = %d, want <= %d", got, entryTokens)
 	}
-	if got := prepared.Sections[1].Items[0]; got != image {
+	if got := prepared.Sections[1].Items[0]; !reflect.DeepEqual(got, image) {
 		t.Fatalf("image entry = %#v, want it whole", got)
 	}
-	if got := prepared.Sections[2].Items[0]; got != native {
+	if got := prepared.Sections[2].Items[0]; !reflect.DeepEqual(got, native) {
 		t.Fatalf("native entry = %#v, want it whole", got)
 	}
 	if len(prepared.Truncations) != 2 {
@@ -138,7 +139,7 @@ func TestGuardianElasticExactActionStaysWholeLikeRust(t *testing.T) {
 		t.Fatalf("PrepareGuardianElasticEntries() error = %v", err)
 	}
 	items := prepared.Sections[0].Items
-	if items[0] != (GuardianElasticItem{Text: exactText, Exact: true, Retention: GuardianElasticRequired()}) {
+	if !reflect.DeepEqual(items[0], GuardianElasticItem{Text: exactText, Exact: true, Retention: GuardianElasticRequired()}) {
 		t.Fatalf("exact action = %#v, want it whole", items[0])
 	}
 	if !items[1].Incomplete || !strings.Contains(items[1].Text, "<truncated") {

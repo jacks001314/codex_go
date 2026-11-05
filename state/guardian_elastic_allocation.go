@@ -38,8 +38,11 @@ func GuardianElasticOptional(priority string) GuardianElasticRetention {
 // caller's measured delivery cost; zero derives a conservative estimate. A
 // non-empty ImageURL marks an inline image, which is kept whole.
 type GuardianElasticItem struct {
-	Text      string
-	ImageURL  string
+	Text     string
+	ImageURL string
+	// Native carries one whole native response item whose bytes are never
+	// shortened by elastic preparation.
+	Native    []byte
 	TokenCost int
 	Retention GuardianElasticRetention
 	// Exact marks content delivered verbatim (the planned action JSON), which
@@ -289,7 +292,7 @@ func guardianElasticAllocationSection(section string, retention GuardianElasticR
 	switch section {
 	case "root_conversation":
 		return GuardianElasticSectionRootConversationMessages, nil
-	case "retained_user_instructions":
+	case "retained_user_instructions", "retained_assistant_context":
 		return GuardianElasticSectionRetainedUserInstructions, nil
 	case "trusted_user_answers":
 		return GuardianElasticSectionTrustedUserAnswers, nil
@@ -644,6 +647,9 @@ func retainGuardianElasticSelection(context *GuardianElasticContext, selected ma
 func guardianElasticItemTokens(item GuardianElasticItem) int {
 	if item.TokenCost > 0 {
 		return item.TokenCost
+	}
+	if len(item.Native) > 0 {
+		return utils.ApproxTokenCount(string(item.Native))
 	}
 	if item.ImageURL != "" {
 		return GuardianElasticImageTokenReservation

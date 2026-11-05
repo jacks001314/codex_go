@@ -1524,6 +1524,13 @@ reviewAttempt:
 	// the retained snapshot in Rust's synchronous layout (#51627): one retained
 	// section ahead of the transcript, with the assistant context inside it. The
 	// asynchronous independent snapshot's split belongs to ActionPresentationAsync.
+	var elasticBudget *state.GuardianElasticBudgetConfig
+	var elasticBudgetErr error
+	contextBudgeting := codexctx.GuardianContextBudgetingFixed
+	if plan.Prepared != nil && plan.Prepared.Config != nil {
+		contextBudgeting = plan.Prepared.Config.GuardianContextBudgeting()
+		elasticBudget, elasticBudgetErr = plan.Prepared.Config.GuardianSyncElasticBudget()
+	}
 	buildOptions := state.BuildPromptOptions{
 		Presentation:              state.ActionPresentationSyncFull,
 		TranscriptFormat:          transcriptFormat,
@@ -1536,10 +1543,43 @@ reviewAttempt:
 	var prompt string
 	var promptParts []state.GuardianPromptPart
 	var promptCosts []state.GuardianPromptSectionCost
+	historyTokens := int64(0)
+	if session != nil {
+		historyTokens = session.lastUsageTokens()
+	}
+	elasticMaxTokens := int64(0)
 	buildPrompt := func() error {
-		if transcriptEntries != nil || nativeToolCall {
+		entries := transcriptEntries
+		if entries == nil && contextBudgeting == codexctx.GuardianContextBudgetingElastic {
+			entries = make([]state.GuardianTranscriptEntry, 0, len(transcript))
+			for _, line := range transcript {
+				entries = append(entries, state.GuardianTranscriptEntry{Text: line})
+			}
+		}
+		if contextBudgeting == codexctx.GuardianContextBudgetingElastic {
+			if elasticBudgetErr != nil {
+				return elasticBudgetErr
+			}
+			if elasticBudget == nil {
+				return fmt.Errorf("guardian sync elastic budgeting is enabled without a section policy")
+			}
 			var buildErr error
-			promptParts, promptCosts, buildErr = state.BuildPromptPartsWithSectionCosts(action, transcriptEntries, buildOptions)
+			promptParts, promptCosts, buildErr = state.BuildGuardianElasticPromptPartsWithSectionCosts(
+				action,
+				entries,
+				buildOptions,
+				*elasticBudget,
+				state.GuardianElasticRequestBudget{
+					MaxInputTokens:        guardianBudgetInt(elasticMaxTokens),
+					ExistingContextTokens: guardianBudgetInt(historyTokens),
+				},
+				state.GuardianBudgetOmissionNotice,
+			)
+			return buildErr
+		}
+		if entries != nil || nativeToolCall {
+			var buildErr error
+			promptParts, promptCosts, buildErr = state.BuildPromptPartsWithSectionCosts(action, entries, buildOptions)
 			return buildErr
 		}
 		var buildErr error
@@ -1595,10 +1635,7 @@ reviewAttempt:
 	// cannot fit rejects the review instead of sending an oversized request.
 	budgetLimit := effectiveGuardianInputTokenLimit(contextWindow, windowKnown)
 	outputSchema := guardianAssessmentOutputSchema()
-	historyTokens := int64(0)
-	if session != nil {
-		historyTokens = session.lastUsageTokens()
-	}
+	elasticMaxTokens = budgetLimit
 	composeRequest := func() (string, []any, error) {
 		if buildErr := buildPrompt(); buildErr != nil {
 			return "", nil, buildErr
@@ -1675,11 +1712,42 @@ reviewAttempt:
 	// staleness comparison keeps the selection the review started from.
 	budgetCompareEntries := append([]state.GuardianTranscriptEntry(nil), transcriptEntries...)
 	budgetNoteApplied := false
+	finishExhaustedInputBudget := func() (state.ReviewDecision, *state.Assessment, string, error) {
+		if !requiredReview {
+			rationale := guardianReviewFailureRationale(guardianInputBudgetMessage)
+			completed, abortErr := store.Abort(event.ID, rationale)
+			if abortErr == nil {
+				emit(threadID, completed)
+			}
+			r.discardExhaustedReviewerSession(threadID, session)
+			r.recordNonDenial(threadID, turnID)
+			attribution.Decision = state.DecisionAborted
+			attribution.TerminalStatus = "aborted"
+			attribution.FailureReason = "input_budget"
+			emitReviewMetrics()
+			r.emitWarning(threadID, rationale)
+			return state.DecisionAskUser, nil, guardianInputBudgetMessage, nil
+		}
+		rationale := guardianReviewFailureRationale(guardianInputBudgetMessage)
+		completed, _ := store.FailClosed(event.ID, rationale)
+		emit(threadID, completed)
+		r.discardExhaustedReviewerSession(threadID, session)
+		r.recordNonDenial(threadID, turnID)
+		attribution.Decision = state.DecisionDenied
+		attribution.TerminalStatus = "failed_closed"
+		attribution.FailureReason = "input_budget"
+		emitReviewMetrics()
+		r.emitWarning(threadID, rationale)
+		return state.DecisionDenied, nil, guardianReviewFailureMessage(guardianInputBudgetMessage), nil
+	}
 	var inputItems []any
 	for {
 		var composeErr error
 		prompt, inputItems, composeErr = composeRequest()
 		if composeErr != nil {
+			if contextBudgeting == codexctx.GuardianContextBudgetingElastic && errors.Is(composeErr, state.ErrGuardianElasticEvidenceLimit) {
+				return finishExhaustedInputBudget()
+			}
 			rationale := guardianReviewFailureRationale(composeErr.Error())
 			message := guardianReviewFailureMessage(composeErr.Error())
 			attribution.Decision = state.DecisionDenied
@@ -1692,6 +1760,18 @@ reviewAttempt:
 		requestTokens := guardianCompleteRequestTokens(prompt, inputItems, outputSchema, historyTokens)
 		if requestTokens <= budgetLimit {
 			break
+		}
+		if contextBudgeting == codexctx.GuardianContextBudgetingElastic {
+			excess := requestTokens - budgetLimit
+			if excess < 1 {
+				excess = 1
+			}
+			nextMax := elasticMaxTokens - excess
+			if nextMax <= historyTokens {
+				return finishExhaustedInputBudget()
+			}
+			elasticMaxTokens = nextMax
+			continue
 		}
 		// Rust #44570 reserves the omission notice before reducing evidence, so
 		// the reviewer knows that instructions or approvals may be incomplete.
@@ -1715,41 +1795,7 @@ reviewAttempt:
 			transcript = state.RenderGuardianTranscript(transcriptEntries, transcriptFormat)
 			continue
 		}
-		// Required evidence remains and cannot fit the reviewer's
-		// complete-request budget. Rust #44569 defers an optional review to the
-		// user so the approval can still be answered, while a review the policy
-		// requires fails closed because the model must see the complete action.
-		if !requiredReview {
-			rationale := guardianReviewFailureRationale(guardianInputBudgetMessage)
-			// Rust #44569 completes an exhausted optional review as aborted with
-			// no ReviewDecision, which is what makes the approval fall back to the
-			// user instead of being denied.
-			completed, abortErr := store.Abort(event.ID, rationale)
-			if abortErr == nil {
-				emit(threadID, completed)
-			}
-			r.discardExhaustedReviewerSession(threadID, session)
-			r.recordNonDenial(threadID, turnID)
-			attribution.Decision = state.DecisionAborted
-			attribution.TerminalStatus = "aborted"
-			attribution.FailureReason = "input_budget"
-			emitReviewMetrics()
-			r.emitWarning(threadID, rationale)
-			return state.DecisionAskUser, nil, guardianInputBudgetMessage, nil
-		}
-		// A required review fails closed without sampling. Rust reports the same
-		// rejection to the parent.
-		rationale := guardianReviewFailureRationale(guardianInputBudgetMessage)
-		completed, _ := store.FailClosed(event.ID, rationale)
-		emit(threadID, completed)
-		r.discardExhaustedReviewerSession(threadID, session)
-		r.recordNonDenial(threadID, turnID)
-		attribution.Decision = state.DecisionDenied
-		attribution.TerminalStatus = "failed_closed"
-		attribution.FailureReason = "input_budget"
-		emitReviewMetrics()
-		r.emitWarning(threadID, rationale)
-		return state.DecisionDenied, nil, guardianReviewFailureMessage(guardianInputBudgetMessage), nil
+		return finishExhaustedInputBudget()
 	}
 	r.emitGuardianContextMetrics(promptCosts, prompt, plan.Instructions, inputItems)
 	reviewRequest := &model.AgentRequest{

@@ -573,6 +573,9 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 	if err := cfg.ValidateGuardianDenialReconsiderationPrompt(); err != nil {
 		return nil, err
 	}
+	if err := cfg.ValidateGuardianSyncElasticBudget(); err != nil {
+		return nil, err
+	}
 	return cfg, nil
 }
 
@@ -878,6 +881,9 @@ func LoadEffectiveWithOptions(codexHome string, opts *EffectiveOptions) (*Config
 		})
 	}
 	cfg.ApplyOverrides(overrides)
+	if err := cfg.ValidateGuardianSyncElasticBudget(); err != nil {
+		return nil, err
+	}
 	applyDisablePasteBurstOverride(overrides, cfg.Values)
 	// Rust #58428: app settings from enabled plugins apply connector-wide.
 	mergePluginApps(cfg.Values)

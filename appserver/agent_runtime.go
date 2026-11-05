@@ -10,6 +10,7 @@ import (
 	"codex_go/auth"
 	"codex_go/compact"
 	"codex_go/config"
+	codexctx "codex_go/context"
 	"codex_go/eventmap"
 	"codex_go/features"
 	"codex_go/install"
@@ -504,7 +505,8 @@ func (r *RuntimeRouter) guardianRootUserAuthorizationForTurn(threadID, turnID st
 	if v2Config, v2Err := cfg.MultiAgentV2Config(0); v2Err == nil && v2Config != nil && strings.TrimSpace(v2Config.ToolNamespace) != "" {
 		toolNamespace = strings.TrimSpace(v2Config.ToolNamespace)
 	}
-	return r.guardianRootConversationWithHandoff(threadID, handoffEnabled, worker.Metadata.AgentPath, toolNamespace)
+	return r.guardianRootConversationWithHandoffAndBudgeting(
+		threadID, handoffEnabled, worker.Metadata.AgentPath, toolNamespace, cfg.GuardianContextBudgeting())
 }
 
 // guardianRootConversation returns the last eight root user/final-assistant
@@ -515,6 +517,17 @@ func (r *RuntimeRouter) guardianRootConversation(workerThreadID string) []state.
 }
 
 func (r *RuntimeRouter) guardianRootConversationWithHandoff(workerThreadID string, handoffEnabled bool, workerPath string, toolNamespace string) []state.RootMessage {
+	return r.guardianRootConversationWithHandoffAndBudgeting(
+		workerThreadID, handoffEnabled, workerPath, toolNamespace, codexctx.GuardianContextBudgetingFixed)
+}
+
+func (r *RuntimeRouter) guardianRootConversationWithHandoffAndBudgeting(
+	workerThreadID string,
+	handoffEnabled bool,
+	workerPath string,
+	toolNamespace string,
+	budgeting codexctx.GuardianContextBudgeting,
+) []state.RootMessage {
 	if r == nil || strings.TrimSpace(workerThreadID) == "" {
 		return nil
 	}
@@ -563,7 +576,7 @@ func (r *RuntimeRouter) guardianRootConversationWithHandoff(workerThreadID strin
 	if handoffEnabled {
 		handoffBoundaries = guardianRootHandoffBoundaries(record.Items, workerPath, toolNamespace)
 	}
-	prepared := prepareGuardianRootContext(guardianRootPreparationInput{
+	prepared := prepareGuardianRootContextWithBudgeting(guardianRootPreparationInput{
 		userMessages:            userCandidates,
 		assistantMessages:       assistantCandidates,
 		retainedAssistants:      guardianRootRetainedAssistantCandidates(retained, record.Items),
@@ -572,7 +585,7 @@ func (r *RuntimeRouter) guardianRootConversationWithHandoff(workerThreadID strin
 		missingRootInstructions: missingRootInstructions,
 		missingAssistantContext: retained != nil && retained.HasOmittedAssistantMessages(),
 		missingVerifiedAnswers:  retained != nil && !retained.VerifiedAnswersComplete(),
-	}, r.guardianRootLegacyUserMessages(record))
+	}, r.guardianRootLegacyUserMessages(record), budgeting)
 	return prepared.messages
 }
 

@@ -265,6 +265,19 @@ func guardianReviewItemTurnID(item *session.Item, index int) string {
 	return strings.TrimSpace(item.ID)
 }
 
+// guardianContextBudgetingForThread resolves the session-static Guardian
+// capture policy. Existing review history keeps the policy it was created with.
+func (r *RuntimeRouter) guardianContextBudgetingForThread(threadID string) codexctx.GuardianContextBudgeting {
+	if r == nil {
+		return codexctx.GuardianContextBudgetingFixed
+	}
+	cfg, err := r.effectiveConfigForTurn(&turn.TurnStartParams{ThreadID: threadID})
+	if err == nil && cfg != nil {
+		return cfg.GuardianContextBudgeting()
+	}
+	return codexctx.GuardianContextBudgetingFixed
+}
+
 // captureGuardianReviewHistory merges the current model-facing items into the
 // independent review history. Compaction calls this before replacing the
 // record, so summarized-away user and tool evidence stays available.
@@ -279,7 +292,7 @@ func (r *RuntimeRouter) captureGuardianReviewHistory(threadID string, items []se
 	}
 	state := r.guardianReviewHistory[threadID]
 	if state == nil {
-		state = newGuardianReviewHistoryState(nil)
+		state = newGuardianReviewHistoryStateWithBudgeting(nil, r.guardianContextBudgetingForThread(threadID))
 		r.guardianReviewHistory[threadID] = state
 	}
 	state.append(items)
@@ -334,7 +347,13 @@ func (r *RuntimeRouter) forkGuardianReviewHistory(sourceRecord *session.Record, 
 		return
 	}
 	items := r.guardianReviewHistoryItems(string(sourceRecord.ID), sourceRecord)
-	state := newGuardianReviewHistoryState(items)
+	budgeting := r.guardianContextBudgetingForThread(newThreadID)
+	r.guardianReviewHistoryMu.Lock()
+	if source := r.guardianReviewHistory[string(sourceRecord.ID)]; source != nil {
+		budgeting = source.budgeting
+	}
+	r.guardianReviewHistoryMu.Unlock()
+	state := newGuardianReviewHistoryStateWithBudgeting(items, budgeting)
 	state.retainThroughTurn(lastTurnID)
 	state.truncateBeforeTurn(beforeTurnID)
 	state.retainLastTurns(lastN)
@@ -473,7 +492,7 @@ func (r *RuntimeRouter) guardianReviewHistoryItems(threadID string, record *sess
 		if r.guardianReviewHistory == nil {
 			r.guardianReviewHistory = map[string]*guardianReviewHistoryState{}
 		}
-		state := newGuardianReviewHistoryState(checkpointItems)
+		state := newGuardianReviewHistoryStateWithBudgeting(checkpointItems, r.guardianContextBudgetingForThread(threadID))
 		state.append(record.Items)
 		r.guardianReviewHistory[threadID] = state
 		seed = append([]session.Item(nil), state.items...)

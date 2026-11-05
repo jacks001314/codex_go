@@ -51,6 +51,18 @@ var guardianElasticSections = func() map[GuardianElasticSection]bool {
 	return sections
 }()
 
+// ParseGuardianElasticSection decodes a canonical or legacy section name.
+func ParseGuardianElasticSection(value string) (GuardianElasticSection, error) {
+	section := GuardianElasticSection(value)
+	if canonical, ok := guardianElasticSectionAliases[value]; ok {
+		section = canonical
+	}
+	if !guardianElasticSections[section] {
+		return "", fmt.Errorf("unknown elastic section %q", value)
+	}
+	return section, nil
+}
+
 var guardianElasticSectionAliases = map[string]GuardianElasticSection{
 	"root_messages":                    GuardianElasticSectionRootConversationMessages,
 	"retained_instructions":            GuardianElasticSectionRetainedUserInstructions,
@@ -244,12 +256,12 @@ func (c *GuardianElasticBudgetConfig) UnmarshalJSON(data []byte) error {
 	}
 	sections := make(map[GuardianElasticSection]GuardianElasticSectionLimits, len(fields.Sections))
 	for name, limits := range fields.Sections {
-		section := GuardianElasticSection(name)
-		if canonical, ok := guardianElasticSectionAliases[name]; ok {
-			section = canonical
+		section, err := ParseGuardianElasticSection(name)
+		if err != nil {
+			return err
 		}
-		if !guardianElasticSections[section] {
-			return fmt.Errorf("unknown elastic section %q", name)
+		if _, duplicate := sections[section]; duplicate {
+			return fmt.Errorf("duplicate elastic section %q", name)
 		}
 		sections[section] = limits
 	}

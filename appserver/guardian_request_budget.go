@@ -41,6 +41,16 @@ func effectiveGuardianInputTokenLimit(contextWindow int64, windowKnown bool) int
 	return contextWindow - guardianInputTokenMargin
 }
 
+func guardianBudgetInt(value int64) int {
+	if value <= 0 {
+		return 0
+	}
+	if value > int64(int(^uint(0)>>1)) {
+		return int(^uint(0) >> 1)
+	}
+	return int(value)
+}
+
 // guardianRequestTokenEstimate mirrors Rust's estimate_request_tokens
 // (core/src/guardian/request_budget.rs): every delivered input item, the
 // prompt message, and the output-format metadata all count toward the
