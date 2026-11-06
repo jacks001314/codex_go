@@ -102,6 +102,19 @@ for (const target of targets) {
     resourcesDir: "codex-resources",
     pathDir: "codex-path",
   }, null, 2)}\n`);
+  // npm packs files with the packer's mode bits. A Windows release host cannot
+  // record Unix exec bits, and a root-owned global install cannot chmod the
+  // vendored binaries afterwards, so the platform package repairs the modes at
+  // install time (EACCES from process.execve on Linux/macOS).
+  const unixExecutables = target.goos === "windows" ? [] : [
+    `vendor/${target.targetTriple}/bin/codex`,
+    `vendor/${target.targetTriple}/bin/codex-code-mode-host`,
+    `vendor/${target.targetTriple}/bin/codex-exec-server`,
+    `vendor/${target.targetTriple}/codex-path/rg`,
+    `vendor/${target.targetTriple}/codex-resources/bwrap`,
+  ];
+  const postinstall = unixExecutables.length === 0 ? undefined : `node -e "const fs=require('fs'),p=require('path');for(const f of '${unixExecutables.join(",")}'.split(',')){try{fs.chmodSync(p.join(process.cwd(),f),0o755)}catch(e){}}"`;
+
   writeFileSync(path.join(packageDir, "package.json"), `${JSON.stringify({
     name: `@jacks001314/codex-go-${suffix}`,
     version,
@@ -111,6 +124,7 @@ for (const target of targets) {
     cpu: [target.npmCPU],
     files: ["vendor"],
     repository: { type: "git", url: "git+https://github.com/jacks001314/codex_go.git" },
+    ...(postinstall ? { scripts: { postinstall } } : {}),
   }, null, 2)}\n`);
   for (const file of ["README.md", "LICENSE", "NOTICE"]) {
     try { cpSync(path.join(root, file), path.join(packageDir, file)); } catch {}
