@@ -570,23 +570,18 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 	if err := cfg.ValidateWindowsMXCRequirement(); err != nil {
 		return nil, err
 	}
-	if err := cfg.ValidateGuardianDenialReconsiderationPrompt(); err != nil {
-		return nil, err
-	}
 	if err := cfg.ValidateGuardianSyncElasticBudget(); err != nil {
 		return nil, err
 	}
 	return cfg, nil
 }
 
-// ValidateGuardianDenialReconsiderationPrompt rejects a reconsideration prompt
-// above Rust's 1,000-byte limit. Programmatic reviewers additionally clip the
-// prompt at the UTF-8 boundary, matching GuardianDenialReconsideration::body.
+// ValidateGuardianDenialReconsiderationPrompt is retained for callers but no
+// longer rejects anything: Rust #59659 retired the reconsideration prompt, so
+// the key stays parse-compatible and is ignored.
+//
+// Deprecated: Guardian retries replay the original request without a prompt.
 func (c *Config) ValidateGuardianDenialReconsiderationPrompt() error {
-	prompt, ok := c.GuardianDenialReconsiderationPrompt()
-	if ok && len(prompt) > 1000 {
-		return fmt.Errorf("auto_review.experimental_denial_reconsideration_prompt exceeds 1,000 UTF-8 bytes")
-	}
 	return nil
 }
 

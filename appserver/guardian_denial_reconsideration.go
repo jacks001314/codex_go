@@ -72,8 +72,8 @@ func guardianDenialReconsiderationInputItem(prompt string) map[string]any {
 }
 
 // reconsiderGuardianDenial runs the gated follow-up once in the same review
-// session and under the original review deadline. Only a valid assessment
-// replaces the first denial. Cancellation aborts; timeout and other failures
+// session and under the original review deadline, replaying the unchanged
+// request (Rust #59659). Only a valid assessment replaces the first denial. Cancellation aborts; timeout and other failures
 // keep the first denial and discard the reusable session (Rust #59107/#59118).
 func (r *modelGuardianReviewer) reconsiderGuardianDenial(
 	ctx context.Context,
@@ -86,13 +86,14 @@ func (r *modelGuardianReviewer) reconsiderGuardianDenial(
 		return nil, nil, false
 	}
 	started := time.Now()
+	// Rust #59659: the retry replays the unchanged inference request. Only the
+	// selected assessment enters reviewer history, and no reconsideration prompt
+	// is injected any more.
 	followup := *base
-	followup.Prompt = ""
-	followup.InputItems = []any{guardianDenialReconsiderationInputItem(guardianDenialReconsiderationPrompt(plan))}
-	followup.PostPromptInputItems = nil
 	followup.PreviousResponseID = ""
 	followup.PreviousResponseFromPrewarm = false
 	followup.Store = false
+	_ = plan
 
 	var response *model.AgentResponse
 	var err error

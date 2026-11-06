@@ -199,10 +199,12 @@ func TestGuardianDenialReconsiderationPromptLikeRust(t *testing.T) {
 	cfg.Values = map[string]any{"auto_review": map[string]any{
 		"experimental_denial_reconsideration_prompt": oversized,
 	}}
-	if err := cfg.ValidateGuardianDenialReconsiderationPrompt(); err == nil || !strings.Contains(err.Error(), "exceeds 1,000 UTF-8 bytes") {
-		t.Fatalf("oversized prompt error = %v", err)
+	// Rust #59659 retired the key: an oversized legacy value stays
+	// parse-compatible and no longer fails configuration loading.
+	if err := cfg.ValidateGuardianDenialReconsiderationPrompt(); err != nil {
+		t.Fatalf("retired prompt validation error = %v", err)
 	}
-	if err := ValidateConfigValues(cfg.Values); err == nil || !strings.Contains(err.Error(), "exceeds 1,000 UTF-8 bytes") {
+	if err := ValidateConfigValues(cfg.Values); err != nil {
 		t.Fatalf("ValidateConfigValues() error = %v", err)
 	}
 
@@ -210,7 +212,7 @@ func TestGuardianDenialReconsiderationPromptLikeRust(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte("[auto_review]\nexperimental_denial_reconsideration_prompt = \""+strings.Repeat("y", 1001)+"\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Load(home); err == nil || !strings.Contains(err.Error(), "exceeds 1,000 UTF-8 bytes") {
-		t.Fatalf("Load() error = %v", err)
+	if _, err := Load(home); err != nil {
+		t.Fatalf("Load() error = %v, want the retired key ignored", err)
 	}
 }

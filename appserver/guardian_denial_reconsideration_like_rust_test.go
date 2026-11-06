@@ -3,7 +3,6 @@ package appserver
 import (
 	"context"
 	"encoding/json"
-	"strings"
 	"testing"
 	"time"
 
@@ -81,9 +80,7 @@ func TestGuardianDenialReconsiderationLikeRust(t *testing.T) {
 		if len(requests) != 2 {
 			t.Fatalf("agent calls = %d, want first review plus reconsideration", len(requests))
 		}
-		if requests[1].Prompt != "" || !strings.Contains(guardianReconsiderationRequestText(requests[1]), guardianDenialReconsiderationPromptText) {
-			t.Fatalf("reconsideration request did not carry the scoped developer message: %#v", requests[1])
-		}
+		assertGuardianRetryReplaysRequest(t, requests[0], requests[1])
 		records := metrics.Records()
 		found := false
 		for _, record := range records {
@@ -136,12 +133,10 @@ func TestGuardianDenialReconsiderationLikeRust(t *testing.T) {
 		if _, _, _, err := reviewer.review(context.Background(), "thread", "turn", "call", state.Action{Type: "command", Command: "ls", CWD: t.TempDir()}); err != nil {
 			t.Fatal(err)
 		}
-		if len(requests) != 2 || !strings.Contains(guardianReconsiderationRequestText(requests[1]), custom) {
-			t.Fatalf("custom reconsideration prompt missing: %#v", requests)
+		if len(requests) != 2 {
+			t.Fatalf("agent calls = %d, want first review plus one retry", len(requests))
 		}
-		if strings.Contains(guardianReconsiderationRequestText(requests[1]), guardianDenialReconsiderationPromptText) {
-			t.Fatalf("default reconsideration prompt leaked with the custom prompt: %#v", requests[1])
-		}
+		assertGuardianRetryReplaysRequest(t, requests[0], requests[1])
 	})
 }
 
@@ -235,5 +230,28 @@ func TestGuardianInvalidReconsiderationDiscardsSessionLikeRust(t *testing.T) {
 	}
 	if session := reviewer.sessionFor("thread"); session == nil || session.completedReviewCount() != 1 {
 		t.Fatalf("completed review count = %v, want only the fresh review", session)
+	}
+}
+
+// assertGuardianRetryReplaysRequest freezes Rust #59659: the retry sends the
+// unchanged inference request, with no reconsideration developer message.
+func assertGuardianRetryReplaysRequest(t *testing.T, first *model.AgentRequest, retry *model.AgentRequest) {
+	t.Helper()
+	if first.Prompt != retry.Prompt {
+		t.Fatalf("retry prompt = %q, want the original %q", retry.Prompt, first.Prompt)
+	}
+	firstItems, err := json.Marshal(first.InputItems)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retryItems, err := json.Marshal(retry.InputItems)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(firstItems) != string(retryItems) {
+		t.Fatalf("retry input items = %s, want the original %s", retryItems, firstItems)
+	}
+	if first.PostPromptInputItems != nil || retry.PostPromptInputItems != nil {
+		t.Fatalf("post-prompt items must stay empty across the retry")
 	}
 }

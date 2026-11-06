@@ -61,11 +61,6 @@ func ValidateConfigDocumentValues(values map[string]any, document *ConfigDocumen
 			return err
 		}
 	}
-	if autoReview, ok := values["auto_review"].(map[string]any); ok {
-		if prompt, ok := autoReview["experimental_denial_reconsideration_prompt"].(string); ok && len(strings.TrimSpace(prompt)) > 1000 {
-			return fmt.Errorf("auto_review.experimental_denial_reconsideration_prompt exceeds 1,000 UTF-8 bytes")
-		}
-	}
 	if features, ok := values["features"]; ok {
 		// FeaturesToml is a map of booleans and serde reports the child failure
 		// against the table itself, not against `features.<name>`.
