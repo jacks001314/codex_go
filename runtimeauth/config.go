@@ -49,6 +49,12 @@ func ProviderForConfig(options ProviderOptions) *Provider {
 	if !FeatureEnabled(options.FeatureSettings) {
 		return nil
 	}
+	// Rust #59823: runtime auth binds to the provider's selected credential
+	// source. A provider that selects an explicit key or command credential must
+	// not reuse (or fall back to) the saved login runtime.
+	if providerUsesExplicitCredentials(options.Values) {
+		return nil
+	}
 	if strings.TrimSpace(options.InstallationID) == "" || strings.TrimSpace(options.CodexHome) == "" {
 		return nil
 	}
@@ -64,6 +70,38 @@ func ProviderForConfig(options ProviderOptions) *Provider {
 		Mode:      ModeFromConfigValues(options.Values),
 		Selection: options.Selection,
 	}
+}
+
+// providerUsesExplicitCredentials reports whether the selected model provider
+// supplies its own credential (env_key, experimental bearer token, or a command
+// auth block), which the saved-login runtime must never shadow (Rust #59823).
+func providerUsesExplicitCredentials(values map[string]any) bool {
+	providerID, _ := values["model_provider"].(string)
+	providerID = strings.TrimSpace(providerID)
+	if providerID == "" {
+		providerID = "openai"
+	}
+	if token, _ := values["experimental_bearer_token"].(string); strings.TrimSpace(token) != "" {
+		return true
+	}
+	providers, _ := values["model_providers"].(map[string]any)
+	if providers == nil {
+		return false
+	}
+	direct, _ := providers[providerID].(map[string]any)
+	if direct == nil {
+		return false
+	}
+	if key, _ := direct["env_key"].(string); strings.TrimSpace(key) != "" {
+		return true
+	}
+	if token, _ := direct["experimental_bearer_token"].(string); strings.TrimSpace(token) != "" {
+		return true
+	}
+	if auth, ok := direct["auth"].(map[string]any); ok && len(auth) > 0 {
+		return true
+	}
+	return false
 }
 
 // ProviderForHarness is ProviderForConfig plus the installer's host id. It
