@@ -26,8 +26,10 @@ type AddUserMessageRequest struct {
 	ThreadID            string
 	ClientUserMessageID string
 	Text                string
-	Mode                SubmissionMode
-	SharedAccess        bool
+	// TurnTrigger is the caller-supplied classification for this turn.
+	TurnTrigger  *string
+	Mode         SubmissionMode
+	SharedAccess bool
 }
 
 type InterruptTurnRequest struct {
@@ -153,6 +155,10 @@ func encodeAddUserMessageRequest(request AddUserMessageRequest) []byte {
 	out = protowire.AppendBytes(out, input)
 	out = protowire.AppendTag(out, 23, protowire.BytesType)
 	out = protowire.AppendString(out, request.ThreadID)
+	if request.TurnTrigger != nil && *request.TurnTrigger != "" {
+		out = protowire.AppendTag(out, 25, protowire.BytesType)
+		out = protowire.AppendString(out, *request.TurnTrigger)
+	}
 	if request.SharedAccess {
 		out = protowire.AppendTag(out, 26, protowire.VarintType)
 		out = protowire.AppendVarint(out, 1)

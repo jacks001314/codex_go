@@ -8,16 +8,24 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"codex_go/appserver"
 	"codex_go/cloudclient"
+	"codex_go/turn"
 )
 
 type fakeCloud struct {
-	mu        sync.Mutex
-	activate  func(ctx context.Context, threadID string) (*cloudclient.ThreadActivation, error)
-	attach    func(ctx context.Context, threadID string) (<-chan cloudclient.Event, <-chan error, error)
-	closeHook func()
+	mu          sync.Mutex
+	activate    func(ctx context.Context, threadID string) (*cloudclient.ThreadActivation, error)
+	attach      func(ctx context.Context, threadID string) (<-chan cloudclient.Event, <-chan error, error)
+	listThreads func(ctx context.Context, query cloudclient.ThreadListQuery) (cloudclient.ThreadPage, error)
+	prewarm     func(ctx context.Context, model string, modelProvider string) (*cloudclient.ThreadActivation, error)
+	listTurns   func(ctx context.Context, request cloudclient.ListTurnsRequest) (cloudclient.HistoryPage[cloudclient.HistoryTurn], error)
+	listItems   func(ctx context.Context, request cloudclient.ListItemsRequest) (cloudclient.HistoryPage[cloudclient.HistoryItem], error)
+	addMessage  func(ctx context.Context, request cloudclient.AddUserMessageRequest) (*cloudclient.Admission, error)
+	interrupt   func(ctx context.Context, request cloudclient.InterruptTurnRequest) error
+	closeHook   func()
 }
 
 func (f *fakeCloud) Activate(ctx context.Context, threadID string) (*cloudclient.ThreadActivation, error) {
@@ -32,6 +40,48 @@ func (f *fakeCloud) Attach(ctx context.Context, threadID string) (<-chan cloudcl
 		return nil, nil, errors.New("no attach configured")
 	}
 	return f.attach(ctx, threadID)
+}
+
+func (f *fakeCloud) ListThreads(ctx context.Context, query cloudclient.ThreadListQuery) (cloudclient.ThreadPage, error) {
+	if f.listThreads == nil {
+		return cloudclient.ThreadPage{}, errors.New("no thread list configured")
+	}
+	return f.listThreads(ctx, query)
+}
+
+func (f *fakeCloud) PrewarmDefaultThread(ctx context.Context, model string, modelProvider string) (*cloudclient.ThreadActivation, error) {
+	if f.prewarm == nil {
+		return nil, errors.New("no prewarm configured")
+	}
+	return f.prewarm(ctx, model, modelProvider)
+}
+
+func (f *fakeCloud) ListTurns(ctx context.Context, request cloudclient.ListTurnsRequest) (cloudclient.HistoryPage[cloudclient.HistoryTurn], error) {
+	if f.listTurns == nil {
+		return cloudclient.HistoryPage[cloudclient.HistoryTurn]{}, errors.New("no turn list configured")
+	}
+	return f.listTurns(ctx, request)
+}
+
+func (f *fakeCloud) ListItems(ctx context.Context, request cloudclient.ListItemsRequest) (cloudclient.HistoryPage[cloudclient.HistoryItem], error) {
+	if f.listItems == nil {
+		return cloudclient.HistoryPage[cloudclient.HistoryItem]{}, errors.New("no item list configured")
+	}
+	return f.listItems(ctx, request)
+}
+
+func (f *fakeCloud) AddUserMessage(ctx context.Context, request cloudclient.AddUserMessageRequest) (*cloudclient.Admission, error) {
+	if f.addMessage == nil {
+		return nil, errors.New("no message admission configured")
+	}
+	return f.addMessage(ctx, request)
+}
+
+func (f *fakeCloud) InterruptTurn(ctx context.Context, request cloudclient.InterruptTurnRequest) error {
+	if f.interrupt == nil {
+		return errors.New("no interrupt configured")
+	}
+	return f.interrupt(ctx, request)
 }
 
 func (f *fakeCloud) Close() error {
@@ -279,16 +329,162 @@ func TestCompletedAgentMessagePreservesQuestionsLikeRust(t *testing.T) {
 	}
 }
 
+// Mirrors Rust #59693 and #59746: cloud conversation requests map onto native
+// pagination and admissions, while typed submissions preserve receipt identity.
+func TestCloudConversationRequestsAndTypedReceiptsLikeRust(t *testing.T) {
+	var listedQuery cloudclient.ThreadListQuery
+	var prewarmed [2]string
+	var turnsRequest cloudclient.ListTurnsRequest
+	var itemsRequest cloudclient.ListItemsRequest
+	var admissions []cloudclient.AddUserMessageRequest
+	var interrupt cloudclient.InterruptTurnRequest
+	fake := &fakeCloud{
+		attach: func(context.Context, string) (<-chan cloudclient.Event, <-chan error, error) {
+			return pendingStream()
+		},
+		listThreads: func(_ context.Context, query cloudclient.ThreadListQuery) (cloudclient.ThreadPage, error) {
+			listedQuery = query
+			return cloudclient.ThreadPage{Data: []cloudclient.ThreadSnapshot{{
+				ID: "listed", Preview: "preview", HistoryMode: "legacy", ModelProvider: "openai",
+				CWD: "/repo", CLIVersion: "1", Status: map[string]any{"type": "idle"}, Source: "cli",
+			}}, NextCursor: stringPointerForCloudTest("page-2")}, nil
+		},
+		prewarm: func(_ context.Context, model string, modelProvider string) (*cloudclient.ThreadActivation, error) {
+			prewarmed = [2]string{model, modelProvider}
+			return &cloudclient.ThreadActivation{
+				Thread: cloudclient.ThreadSnapshot{ID: "new-thread", HistoryMode: "legacy", ModelProvider: modelProvider, CWD: "/repo", Status: map[string]any{"type": "idle"}, Source: "cli"},
+				Model:  model, ModelProvider: modelProvider, CWD: "/repo", ApprovalPolicy: "on-request",
+			}, nil
+		},
+		listTurns: func(_ context.Context, request cloudclient.ListTurnsRequest) (cloudclient.HistoryPage[cloudclient.HistoryTurn], error) {
+			turnsRequest = request
+			return cloudclient.HistoryPage[cloudclient.HistoryTurn]{Data: []cloudclient.HistoryTurn{{Summary: cloudclient.TurnSummary{ID: "turn-1", Status: cloudclient.TurnInProgress}}}}, nil
+		},
+		listItems: func(_ context.Context, request cloudclient.ListItemsRequest) (cloudclient.HistoryPage[cloudclient.HistoryItem], error) {
+			itemsRequest = request
+			clientID := "submit-1"
+			started := int64(10)
+			completed := int64(20)
+			return cloudclient.HistoryPage[cloudclient.HistoryItem]{Data: []cloudclient.HistoryItem{
+				{TurnID: "turn-1", Summary: &cloudclient.ItemSummary{Kind: cloudclient.ItemUserMessage, User: cloudclient.UserMessageSummary{ID: "item-1", ClientID: &clientID, Text: []string{"hello"}}}, StartedAtMS: &started, CompletedAtMS: &completed},
+				{TurnID: "turn-1", Summary: nil},
+			}}, nil
+		},
+		addMessage: func(_ context.Context, request cloudclient.AddUserMessageRequest) (*cloudclient.Admission, error) {
+			admissions = append(admissions, request)
+			if request.Mode == cloudclient.SubmissionSteer {
+				original := "turn-prior"
+				return &cloudclient.Admission{Outcome: cloudclient.AdmissionOutcome{Kind: cloudclient.AdmissionDuplicate, TurnID: &original}}, nil
+			}
+			started := cloudclient.TurnSummary{ID: "turn-started", Status: cloudclient.TurnInProgress}
+			return &cloudclient.Admission{Outcome: cloudclient.AdmissionOutcome{Kind: cloudclient.AdmissionStarted, Turn: &started}}, nil
+		},
+		interrupt: func(_ context.Context, request cloudclient.InterruptTurnRequest) error {
+			interrupt = request
+			return nil
+		},
+	}
+	client := Connect(context.Background(), fake, json.RawMessage(`{"account":null}`))
+	defer client.Close()
+	ctx := context.Background()
+
+	listed, rpcErr := client.Request(ctx, appserver.MethodThreadList, json.RawMessage(`{"currentAccountOnly":true,"limit":25,"sortKey":"updated_at","sortDirection":"desc","sourceKinds":["cli","vscode"],"useStateDbOnly":true}`))
+	if rpcErr != nil {
+		t.Fatalf("thread/list error = %#v", rpcErr)
+	}
+	var page appserver.ThreadListResponse
+	if err := json.Unmarshal(listed, &page); err != nil || len(page.Data) != 1 || page.Data[0].ID != "listed" || page.Data[0].HistoryMode != appserver.ThreadHistoryPaginated {
+		t.Fatalf("thread/list = %s (err=%v)", listed, err)
+	}
+	if listedQuery.Limit == nil || *listedQuery.Limit != 25 || listedQuery.SortKey != cloudclient.ThreadSortUpdatedAt || listedQuery.SortDirection != cloudclient.ThreadSortDescending {
+		t.Fatalf("thread list query = %#v", listedQuery)
+	}
+
+	startedRaw, rpcErr := client.Request(ctx, appserver.MethodThreadStart, json.RawMessage(`{"model":"gpt-5","modelProvider":"openai","ephemeral":false}`))
+	if rpcErr != nil {
+		t.Fatalf("thread/start error = %#v", rpcErr)
+	}
+	var started appserver.ThreadStartResponse
+	if err := json.Unmarshal(startedRaw, &started); err != nil || started.Thread == nil || started.Thread.ID != "new-thread" || started.Thread.HistoryMode != appserver.ThreadHistoryPaginated {
+		t.Fatalf("thread/start = %s (err=%v)", startedRaw, err)
+	}
+	if prewarmed != [2]string{"gpt-5", "openai"} {
+		t.Fatalf("prewarm = %#v", prewarmed)
+	}
+
+	turnsRaw, rpcErr := client.Request(ctx, appserver.MethodThreadTurnsList, json.RawMessage(`{"threadId":"new-thread","itemsView":"notLoaded"}`))
+	if rpcErr != nil || !strings.Contains(string(turnsRaw), `"turn-1"`) {
+		t.Fatalf("thread/turns/list = %s, %#v", turnsRaw, rpcErr)
+	}
+	if turnsRequest.Page.Order != cloudclient.HistoryDescending {
+		t.Fatalf("turn order = %v", turnsRequest.Page.Order)
+	}
+	itemsRaw, rpcErr := client.Request(ctx, appserver.MethodThreadItemsList, json.RawMessage(`{"threadId":"new-thread","sortDirection":"asc"}`))
+	if rpcErr != nil {
+		t.Fatalf("thread/items/list error = %#v", rpcErr)
+	}
+	var items appserver.ThreadItemsListResponse
+	if err := json.Unmarshal(itemsRaw, &items); err != nil || len(items.Data) != 1 || items.Data[0].Item.ID != "item-1" || items.Data[0].StartedAtMS == nil || *items.Data[0].StartedAtMS != 10 {
+		t.Fatalf("thread/items/list = %s (err=%v)", itemsRaw, err)
+	}
+	if itemsRequest.Page.Order != cloudclient.HistoryAscending {
+		t.Fatalf("item order = %v", itemsRequest.Page.Order)
+	}
+	select {
+	case notification := <-client.Notifications():
+		if notification.Method != appserver.NotificationWarning {
+			t.Fatalf("partial-history notification = %#v", notification)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("missing partial-history warning")
+	}
+
+	trigger := "safety_recourse_follow_up"
+	receipt, rpcErr := client.SubmitUserMessage(ctx, turn.TurnStartParams{
+		ThreadID: "new-thread", ClientUserMessageID: "submit-1", TurnTrigger: trigger,
+		Input: []turn.TurnUserInput{{Type: "text", Text: "one"}, {Type: "text", Text: "two"}},
+	})
+	if rpcErr != nil || receipt.Kind != CloudUserMessageDuplicate || receipt.TurnID == nil || *receipt.TurnID != "turn-prior" {
+		t.Fatalf("typed receipt = %#v, %#v", receipt, rpcErr)
+	}
+	if len(admissions) != 1 || admissions[0].Mode != cloudclient.SubmissionSteer || admissions[0].Text != "one\ntwo" || admissions[0].TurnTrigger == nil || *admissions[0].TurnTrigger != trigger {
+		t.Fatalf("typed admission = %#v", admissions)
+	}
+	_, rpcErr = client.SubmitUserMessage(ctx, turn.TurnStartParams{
+		ThreadID: "new-thread", ClientUserMessageID: "invalid", Model: "other",
+		Input: []turn.TurnUserInput{{Type: "text", Text: "no"}},
+	})
+	if rpcErr == nil || rpcErr.Code != invalidParamsCode || len(admissions) != 1 {
+		t.Fatalf("invalid typed submission = %#v, admissions=%d", rpcErr, len(admissions))
+	}
+
+	generic, rpcErr := client.Request(ctx, appserver.MethodTurnStart, json.RawMessage(`{"threadId":"new-thread","clientUserMessageId":"generic","input":[{"type":"text","text":"hello","text_elements":[]}]}`))
+	if rpcErr != nil || !strings.Contains(string(generic), `"turn-started"`) {
+		t.Fatalf("turn/start = %s, %#v", generic, rpcErr)
+	}
+	if len(admissions) != 2 || admissions[1].Mode != cloudclient.SubmissionStartIfIdle {
+		t.Fatalf("generic admission = %#v", admissions)
+	}
+	if _, rpcErr := client.Request(ctx, appserver.MethodTurnInterrupt, json.RawMessage(`{"threadId":"new-thread","turnId":"turn-started"}`)); rpcErr != nil {
+		t.Fatalf("turn/interrupt error = %#v", rpcErr)
+	}
+	if interrupt.ThreadID != "new-thread" || interrupt.TurnID != "turn-started" {
+		t.Fatalf("interrupt = %#v", interrupt)
+	}
+}
+
+func stringPointerForCloudTest(value string) *string { return &value }
+
 // Mirrors Rust #59493: unsupported requests and approval replies report
 // explicit errors instead of failing silently.
 func TestUnsupportedRequestsAndApprovalRepliesLikeRust(t *testing.T) {
 	client := newTestClient(&fakeCloud{})
-	result, rpcErr := client.handleRequest(context.Background(), appserver.MethodThreadStart, json.RawMessage(`{}`))
+	result, rpcErr := client.handleRequest(context.Background(), appserver.MethodThreadFork, json.RawMessage(`{}`), cloudclient.SubmissionStartIfIdle, false)
 	if result != nil || rpcErr == nil || rpcErr.Code != methodNotFoundCode {
-		t.Fatalf("thread/start = %s, %#v; want a method-not-found error", result, rpcErr)
+		t.Fatalf("thread/fork = %s, %#v; want a method-not-found error", result, rpcErr)
 	}
-	if !strings.Contains(rpcErr.Message, "thread/start is not supported by the cloud backend yet.") {
-		t.Fatalf("thread/start message = %q", rpcErr.Message)
+	if !strings.Contains(rpcErr.Message, "thread/fork is not supported by the cloud backend yet.") {
+		t.Fatalf("thread/fork message = %q", rpcErr.Message)
 	}
 	if err := client.Notify(appserver.MethodThreadStart); err == nil || !strings.Contains(err.Error(), "Cloud client notifications are not supported yet.") {
 		t.Fatalf("Notify() error = %v", err)

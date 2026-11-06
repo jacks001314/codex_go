@@ -135,6 +135,22 @@ func cloudTurn(summary cloudclient.TurnSummary) (appserver.Turn, error) {
 // itemSummaryPayload renders the item types the cloud conversation announces.
 // Other item kinds stay unreported.
 func itemSummaryPayload(item cloudclient.ItemSummary) (appserver.ThreadItemPayload, bool) {
+	threadItem, ok := threadItemFromSummary(item)
+	if !ok {
+		return nil, false
+	}
+	encoded, err := json.Marshal(&threadItem)
+	if err != nil {
+		return nil, false
+	}
+	payload := appserver.ThreadItemPayload{}
+	if err := json.Unmarshal(encoded, &payload); err != nil {
+		return nil, false
+	}
+	return payload, true
+}
+
+func threadItemFromSummary(item cloudclient.ItemSummary) (appserver.ThreadItem, bool) {
 	var threadItem appserver.ThreadItem
 	switch item.Kind {
 	case cloudclient.ItemUserMessage:
@@ -166,17 +182,9 @@ func itemSummaryPayload(item cloudclient.ItemSummary) (appserver.ThreadItemPaylo
 		}
 		threadItem = appserver.ThreadItem{ID: item.Agent.ID, Type: "agentMessage", Text: item.Agent.Text, Data: data}
 	default:
-		return nil, false
+		return appserver.ThreadItem{}, false
 	}
-	encoded, err := json.Marshal(&threadItem)
-	if err != nil {
-		return nil, false
-	}
-	payload := appserver.ThreadItemPayload{}
-	if err := json.Unmarshal(encoded, &payload); err != nil {
-		return nil, false
-	}
-	return payload, true
+	return threadItem, true
 }
 
 func cloudErrorNotification(threadID string, message string) Notification {

@@ -16,6 +16,7 @@ import (
 
 	"codex_go/appserver"
 	"codex_go/cloudclient"
+	"codex_go/turn"
 )
 
 const (
@@ -24,6 +25,9 @@ const (
 	methodNotFoundCode = -32601
 	// internalErrorCode is the JSON-RPC code for a failed cloud operation.
 	internalErrorCode = -32000
+	// invalidParamsCode rejects a typed submission before it can reach the
+	// Cloud mutation endpoint.
+	invalidParamsCode = -32602
 	commandBufferSize = 32
 )
 
@@ -32,6 +36,12 @@ const (
 type cloudSource interface {
 	Activate(ctx context.Context, threadID string) (*cloudclient.ThreadActivation, error)
 	Attach(ctx context.Context, threadID string) (<-chan cloudclient.Event, <-chan error, error)
+	ListThreads(ctx context.Context, query cloudclient.ThreadListQuery) (cloudclient.ThreadPage, error)
+	PrewarmDefaultThread(ctx context.Context, model string, modelProvider string) (*cloudclient.ThreadActivation, error)
+	ListTurns(ctx context.Context, request cloudclient.ListTurnsRequest) (cloudclient.HistoryPage[cloudclient.HistoryTurn], error)
+	ListItems(ctx context.Context, request cloudclient.ListItemsRequest) (cloudclient.HistoryPage[cloudclient.HistoryItem], error)
+	AddUserMessage(ctx context.Context, request cloudclient.AddUserMessageRequest) (*cloudclient.Admission, error)
+	InterruptTurn(ctx context.Context, request cloudclient.InterruptTurnRequest) error
 	Close() error
 }
 
@@ -74,14 +84,17 @@ type Client struct {
 	outCh   chan Notification
 
 	// Dispatch-goroutine state.
-	loaded *appserver.ThreadResumeResponse
-	active *attachment
-	status map[string]any
+	loaded               *appserver.ThreadResumeResponse
+	active               *attachment
+	status               map[string]any
+	warnedPartialHistory string
 }
 
 type pendingRequest struct {
 	method appserver.Method
 	params json.RawMessage
+	mode   cloudclient.SubmissionMode
+	typed  bool
 	reply  chan requestReply
 }
 
@@ -112,6 +125,7 @@ func Connect(ctx context.Context, source cloudSource, account json.RawMessage) *
 		closed:   make(chan struct{}),
 		cancel:   cancel,
 		outCh:    make(chan Notification),
+		status:   map[string]any{},
 	}
 	client.outCond = sync.NewCond(&client.outMu)
 	go client.pumpNotifications()
@@ -132,13 +146,36 @@ func (c *Client) Notifications() <-chan Notification {
 
 // Request performs one app-server request against the attached conversation.
 func (c *Client) Request(ctx context.Context, method appserver.Method, params json.RawMessage) (json.RawMessage, *RPCError) {
+	return c.request(ctx, method, params, cloudclient.SubmissionStartIfIdle, false)
+}
+
+// SubmitUserMessage admits one Cloud user message with a stable submission ID
+// and returns the server's typed admission receipt. It sends the mutation once;
+// an uncertain transport result must not be retried automatically.
+func (c *Client) SubmitUserMessage(ctx context.Context, params turn.TurnStartParams) (CloudUserMessageReceipt, *RPCError) {
+	encoded, err := json.Marshal(params)
+	if err != nil {
+		return CloudUserMessageReceipt{}, typedSubmissionError(err)
+	}
+	result, rpcErr := c.request(ctx, appserver.MethodTurnStart, encoded, cloudclient.SubmissionSteer, true)
+	if rpcErr != nil {
+		return CloudUserMessageReceipt{}, rpcErr
+	}
+	var receipt CloudUserMessageReceipt
+	if err := json.Unmarshal(result, &receipt); err != nil {
+		return CloudUserMessageReceipt{}, &RPCError{Code: internalErrorCode, Message: "cloud returned an invalid user-message receipt"}
+	}
+	return receipt, nil
+}
+
+func (c *Client) request(ctx context.Context, method appserver.Method, params json.RawMessage, mode cloudclient.SubmissionMode, typed bool) (json.RawMessage, *RPCError) {
 	if c == nil {
 		return nil, &RPCError{Code: internalErrorCode, Message: "cloud client is unavailable"}
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	pending := &pendingRequest{method: method, params: params, reply: make(chan requestReply, 1)}
+	pending := &pendingRequest{method: method, params: cloneRawMessage(params), mode: mode, typed: typed, reply: make(chan requestReply, 1)}
 	select {
 	case c.requests <- pending:
 	case <-c.done:
@@ -194,7 +231,7 @@ func (c *Client) run(ctx context.Context) {
 			if pending == nil {
 				return
 			}
-			result, rpcErr := c.handleRequest(ctx, pending.method, pending.params)
+			result, rpcErr := c.handleRequest(ctx, pending.method, pending.params, pending.mode, pending.typed)
 			pending.reply <- requestReply{result: result, err: rpcErr}
 		}
 	}
@@ -333,7 +370,7 @@ func (c *Client) admitTurn(threadID string) error {
 	// must still allow commands to make progress.
 	c.forwardNextNonBlocking()
 	if c.active == nil || c.active.threadID != strings.TrimSpace(threadID) {
-		return errors.New("Cloud stream is not connected. Reopen the conversation before sending.")
+		return rejectCloudInput("Cloud stream is not connected. Reopen the conversation before sending.")
 	}
 	return nil
 }

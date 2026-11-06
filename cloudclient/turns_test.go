@@ -11,8 +11,9 @@ func testTurnSummaryBytes(id string, status int64) []byte {
 }
 
 func TestAddUserMessageRequestEncoding(t *testing.T) {
+	trigger := "safety_recourse_follow_up"
 	encoded := encodeAddUserMessageRequest(AddUserMessageRequest{
-		ThreadID: "thread", ClientUserMessageID: "client", Text: "hello",
+		ThreadID: "thread", ClientUserMessageID: "client", Text: "hello", TurnTrigger: &trigger,
 		Mode: SubmissionQueue, SharedAccess: true,
 	})
 	text := protoMessage(1, []byte("hello"))
@@ -21,6 +22,7 @@ func TestAddUserMessageRequestEncoding(t *testing.T) {
 	want := protoMessage(4, []byte("client"))
 	want = append(want, protoMessage(11, input)...)
 	want = append(want, protoMessage(23, []byte("thread"))...)
+	want = append(want, protoMessage(25, []byte(trigger))...)
 	want = append(want, protoVarint(26, 1)...)
 	want = append(want, protoVarint(30, 2)...)
 	if !bytes.Equal(encoded, want) {
