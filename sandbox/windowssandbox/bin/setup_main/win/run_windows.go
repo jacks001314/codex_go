@@ -816,13 +816,19 @@ func lockSandboxDir(dir string, realUser string, sandboxGroupSID []byte, sandbox
 	if err != nil {
 		return err
 	}
+	systemMask := uint32(windows.FILE_GENERIC_READ | windows.FILE_GENERIC_WRITE | windows.FILE_GENERIC_EXECUTE | windows.DELETE)
+	if protectDACL {
+		// Rust #59745: the SYSTEM helper must be able to reapply the bin policy to
+		// existing children, so a protected bin DACL also grants inheritable WRITE_DAC.
+		systemMask |= windows.WRITE_DAC
+	}
 	entries := []struct {
 		sidString string
 		mask      uint32
 		mode      windows.ACCESS_MODE
 	}{
 		{sidString: windowssandbox.StringFromSIDBytes(sandboxGroupSID), mask: sandboxGroupMask, mode: sandboxGroupAccessMode},
-		{sidString: systemSID, mask: uint32(windows.FILE_GENERIC_READ | windows.FILE_GENERIC_WRITE | windows.FILE_GENERIC_EXECUTE | windows.DELETE), mode: windows.SET_ACCESS},
+		{sidString: systemSID, mask: systemMask, mode: windows.SET_ACCESS},
 		{sidString: adminsSID, mask: uint32(windows.FILE_GENERIC_READ | windows.FILE_GENERIC_WRITE | windows.FILE_GENERIC_EXECUTE | windows.DELETE), mode: windows.SET_ACCESS},
 		{sidString: realSID, mask: realUserMask, mode: windows.SET_ACCESS},
 	}
