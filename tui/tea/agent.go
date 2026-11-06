@@ -351,6 +351,8 @@ func (m *Model) applyAgentSwitchResult(message AgentSwitchResultMsg) {
 		m.State.BumpMessagesRevision()
 		m.insertSessionHeader()
 		m.transcriptHistoryPartial = message.Response.HasOlderHistory
+		m.olderHistoryCursor = strings.TrimSpace(message.Response.OlderHistoryCursor)
+		m.olderHistoryLoading = false
 		// Rust agents_overview.rs #45980: a summary-only read-only snapshot
 		// tells the user that intermediate items are unavailable.
 		if notice := strings.TrimSpace(message.Response.HistoryNotice); notice != "" {

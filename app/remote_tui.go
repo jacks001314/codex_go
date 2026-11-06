@@ -612,6 +612,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		OnSuggestThreadName:         recapGenerateFuncForMode(paramsMode, interactiveRemoteRecapGenerateHandler(ctx, endpoint)),
 		OnLoadTranscriptPreview:     interactiveRemoteTranscriptPreviewHandler(ctx, endpoint),
 		OnReadSessionTranscript:     interactiveRemoteSessionTranscriptHandler(ctx, endpoint, showRawReasoning),
+		LoadOlderHistory:            interactiveRemoteOlderHistoryLoader(ctx, endpoint),
 		OnAcknowledgeSessionRead:    interactiveRemoteSessionReadAcknowledgeHandler(ctx, endpoint),
 		OnRenameThread:              interactiveRemoteRenameThreadHandler(ctx, endpoint),
 		OnUpdateDaybreak:            interactiveRemoteDaybreakUpdateHandler(ctx, endpoint),
@@ -1992,7 +1993,7 @@ func interactiveRemoteResumeSessionHandler(ctx context.Context, endpoint *appser
 		if !remoteTUIResumeConflict(resumeErr) && providerErr == nil {
 			return codextea.SessionResumeResponse{}, resumeErr
 		}
-		thread, notice, olderHistory, err := remoteTUIReadThreadForViewing(ctx, client, threadID, metadataThread)
+		thread, notice, olderHistory, olderCursor, err := remoteTUIReadThreadForViewing(ctx, client, threadID, metadataThread)
 		if err != nil {
 			return codextea.SessionResumeResponse{}, err
 		}
@@ -2000,6 +2001,7 @@ func interactiveRemoteResumeSessionHandler(ctx context.Context, endpoint *appser
 		response.ReadOnly = true
 		response.HistoryNotice = notice
 		response.HasOlderHistory = olderHistory
+		response.OlderHistoryCursor = olderCursor
 		response.ProviderError = providerErr
 		return response, nil
 	}
@@ -2548,7 +2550,7 @@ func interactiveRemoteSwitchAgentThread(ctx context.Context, endpoint *appserver
 	if !remoteTUIResumeConflict(resumeErr) && providerErr == nil {
 		return codextea.AgentThreadSwitchResponse{}, resumeErr
 	}
-	thread, notice, olderHistory, err := remoteTUIReadThreadForViewing(ctx, client, threadID, metadataThread)
+	thread, notice, olderHistory, olderCursor, err := remoteTUIReadThreadForViewing(ctx, client, threadID, metadataThread)
 	if err != nil {
 		// Rust agents_overview.rs #45980 reports a concise retry message and
 		// keeps the current conversation when both history loads fail.
@@ -2558,6 +2560,7 @@ func interactiveRemoteSwitchAgentThread(ctx context.Context, endpoint *appserver
 	response.ReadOnly = true
 	response.HistoryNotice = notice
 	response.HasOlderHistory = olderHistory
+	response.OlderHistoryCursor = olderCursor
 	response.ProviderError = providerErr
 	if thread != nil && thread.Path != nil {
 		response.RolloutPath = strings.TrimSpace(*thread.Path)
@@ -2660,6 +2663,47 @@ const (
 	remoteTUIConversationUnavailableMessage = "Couldn't load this conversation. Please try again."
 )
 
+// interactiveRemoteOlderHistoryLoader pages the summary turns before cursor
+// for a daemon-owned thread (Rust app/history_pagination.rs). The read-only
+// snapshot keeps turn summaries, so older pages reuse the same projection and
+// the "Showing up to N recent prompts" notice stays accurate.
+func interactiveRemoteOlderHistoryLoader(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) codextea.OlderHistoryLoadFunc {
+	return func(threadID string, cursor string) (codextea.OlderHistoryPage, error) {
+		threadID = strings.TrimSpace(threadID)
+		cursor = strings.TrimSpace(cursor)
+		if threadID == "" || cursor == "" {
+			return codextea.OlderHistoryPage{}, nil
+		}
+		client, err := openRemoteSessionClient(ctx, endpoint)
+		if err != nil {
+			return codextea.OlderHistoryPage{}, err
+		}
+		defer client.close()
+		limit := remoteTUIReadOnlyHistoryTurnLimit
+		var page appserver.TurnsPage
+		if err := remoteSessionRequest(ctx, client, appserver.MethodThreadTurnsList, appserver.ThreadTurnsListParams{
+			ThreadID:      threadID,
+			Cursor:        &cursor,
+			Limit:         &limit,
+			SortDirection: appserver.SortDesc,
+			ItemsView:     appserver.TurnItemsSummary,
+		}, &page); err != nil {
+			return codextea.OlderHistoryPage{}, err
+		}
+		// The page arrives newest first; replay it in chronological order.
+		turns := make([]appserver.Turn, 0, len(page.Data))
+		for index := len(page.Data) - 1; index >= 0; index-- {
+			turns = append(turns, page.Data[index])
+		}
+		next := ""
+		if page.NextCursor != nil {
+			next = strings.TrimSpace(*page.NextCursor)
+		}
+		messages := remoteTUIThreadMessagesFromThread(&appserver.Thread{Turns: turns}, reasoningProjectionChatWidget, false)
+		return codextea.OlderHistoryPage{Messages: messages, Cursor: next, HasOlder: next != ""}, nil
+	}
+}
+
 // remoteTUIReadThreadForViewing loads a read-only history snapshot of a
 // conversation owned by another app. It prefers the full embedded history and,
 // when that load fails for a paginated thread, recovers the latest 100 turn
@@ -2668,20 +2712,20 @@ const (
 // history loaded. The boolean reports whether the summary page was truncated,
 // which the TUI renders as partial history. metadata is the pre-resume thread
 // read when one succeeded.
-func remoteTUIReadThreadForViewing(ctx context.Context, client *remoteAppServerTUIClient, threadID string, metadata *appserver.Thread) (*appserver.Thread, string, bool, error) {
+func remoteTUIReadThreadForViewing(ctx context.Context, client *remoteAppServerTUIClient, threadID string, metadata *appserver.Thread) (*appserver.Thread, string, bool, string, error) {
 	thread, historyErr := remoteTUIReadThread(ctx, client, threadID, true)
 	if historyErr == nil {
-		return thread, "", false, nil
+		return thread, "", false, "", nil
 	}
 	if metadata == nil {
 		var err error
 		metadata, err = remoteTUIReadThread(ctx, client, threadID, false)
 		if err != nil {
-			return nil, "", false, err
+			return nil, "", false, "", err
 		}
 	}
 	if metadata.HistoryMode == "" || metadata.HistoryMode == appserver.ThreadHistoryLegacy {
-		return nil, "", false, historyErr
+		return nil, "", false, "", historyErr
 	}
 	limit := remoteTUIReadOnlyHistoryTurnLimit
 	var page appserver.TurnsPage
@@ -2691,7 +2735,7 @@ func remoteTUIReadThreadForViewing(ctx context.Context, client *remoteAppServerT
 		SortDirection: appserver.SortDesc,
 		ItemsView:     appserver.TurnItemsSummary,
 	}, &page); err != nil {
-		return nil, "", false, err
+		return nil, "", false, "", err
 	}
 	// The summary page arrives newest first; replay it in chronological order.
 	turns := make([]appserver.Turn, 0, len(page.Data))
@@ -2699,7 +2743,11 @@ func remoteTUIReadThreadForViewing(ctx context.Context, client *remoteAppServerT
 		turns = append(turns, page.Data[index])
 	}
 	metadata.Turns = turns
-	return metadata, remoteTUISummaryHistoryNotice, page.NextCursor != nil, nil
+	cursor := ""
+	if page.NextCursor != nil {
+		cursor = strings.TrimSpace(*page.NextCursor)
+	}
+	return metadata, remoteTUISummaryHistoryNotice, cursor != "", cursor, nil
 }
 
 // remoteTUIThreadModel / remoteTUIThreadProvider read the server-reported

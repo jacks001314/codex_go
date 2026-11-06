@@ -277,6 +277,9 @@ type SessionResumeResponse struct {
 	// the transcript footer advertises earlier messages (Rust
 	// TranscriptHistoryState::Partial).
 	HasOlderHistory bool
+	// OlderHistoryCursor is the page cursor for the messages before Messages;
+	// empty means the window starts at the beginning of the thread.
+	OlderHistoryCursor string
 	// ProviderError carries the model provider admission failure that made this
 	// resume a read-only snapshot (Rust #58202), so the transcript stays readable
 	// and the composer offers continuing the chat in a fresh session.
@@ -328,6 +331,8 @@ type AgentThreadSwitchResponse struct {
 	// HasOlderHistory reports that only the newest history page was loaded
 	// (Rust TranscriptHistoryState::Partial).
 	HasOlderHistory bool
+	// OlderHistoryCursor is the page cursor for the messages before Messages.
+	OlderHistoryCursor string
 	// ProviderError carries the provider admission failure that made this
 	// switch a read-only snapshot (Rust #58202).
 	ProviderError *appserver.ModelProviderError
@@ -1405,6 +1410,9 @@ type Options struct {
 	// resume_picker_transcript_preview.rs). Nil leaves expanded rows without a
 	// conversation preview.
 	OnLoadTranscriptPreview TranscriptPreviewFunc
+	// LoadOlderHistory fetches the page of transcript messages before cursor
+	// (Rust app/history_pagination.rs). Nil leaves the transcript unbudgeted.
+	LoadOlderHistory OlderHistoryLoadFunc
 	// OnReadSessionTranscript loads a session's full transcript for the resume
 	// picker's ctrl+t overlay (Rust PickerLoadRequest::Transcript). Nil leaves
 	// the overlay showing a failure notice.
@@ -1920,6 +1928,13 @@ type Model struct {
 	// transcriptHistoryPartial mirrors Rust's `TranscriptHistoryState::Partial`:
 	// the loaded snapshot is the newest page and older messages were not loaded.
 	transcriptHistoryPartial bool
+	// olderHistoryCursor points at the page before the loaded window; empty
+	// means nothing older exists (Rust TranscriptHistoryState cursor).
+	olderHistoryCursor string
+	// olderHistoryLoading guards one in-flight older-history fetch.
+	olderHistoryLoading bool
+	// loadOlderHistory fetches the page before olderHistoryCursor.
+	loadOlderHistory OlderHistoryLoadFunc
 	// followControlRow/Column/Width locate the painted return-to-latest control
 	// in the composer gap so a click can jump back to the tail (Rust
 	// transcript_view::follow_control). followControlRow is -1 when hidden.
@@ -3407,6 +3422,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onUpdateDaybreak:                 options.OnUpdateDaybreak,
 		onLoadTranscriptPreview:          options.OnLoadTranscriptPreview,
 		onReadSessionTranscript:          options.OnReadSessionTranscript,
+		loadOlderHistory:                 options.LoadOlderHistory,
 		onAcknowledgeSessionRead:         options.OnAcknowledgeSessionRead,
 		onListSessionPickerItems:         options.OnListSessionPickerItems,
 		disableAutoRecap:                 options.AutoRecap != nil && !*options.AutoRecap,
@@ -3891,6 +3907,13 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 			cmd = bubbletea.Batch(cmd, delayCmd)
 		}
 	}
+	if historyCmd := next.maybeLoadOlderHistory(); historyCmd != nil {
+		if cmd == nil {
+			cmd = historyCmd
+		} else {
+			cmd = bubbletea.Batch(cmd, historyCmd)
+		}
+	}
 	return next, cmd
 }
 
@@ -3974,6 +3997,10 @@ func (m *Model) handleCtrlInsertCopy(message bubbletea.Msg) (bool, bubbletea.Cmd
 
 func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 	if m == nil {
+		return m, nil
+	}
+	if loaded, ok := message.(olderHistoryLoadedMsg); ok {
+		m.applyOlderHistoryPage(loaded.threadID, loaded.page, loaded.err)
 		return m, nil
 	}
 	if key, ok := message.(keymsg.KeyMsg); ok {

@@ -1795,6 +1795,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		OnExportTranscript:          interactiveTranscriptExportHandler(interactiveShowRawAgentReasoning(root)),
 		OnLoadTranscriptPreview:     interactiveTranscriptPreviewHandler(),
 		OnReadSessionTranscript:     interactiveSessionTranscriptHandler(interactiveShowRawAgentReasoning(root)),
+		LoadOlderHistory:            interactiveOlderHistoryLoader(store, strings.TrimSpace(root.Shared.CWD)),
 		OnAcknowledgeSessionRead:    interactiveSessionReadAcknowledgeHandler(store),
 		OnRenameThread:              interactiveRenameThreadHandler(),
 		OnGenerateRecap:             localStructuredGenerate,
@@ -4376,11 +4377,23 @@ func interactiveResumeSessionHandler(root *cli.RootOptions) codextea.SessionResu
 			value := remoteThreadTokenUsage(*restored)
 			tokenUsage = &value
 		}
+		messages := interactiveSessionMessagesFromRecord(record, reasoningProjectionChatWidget, false)
+		olderCursor := ""
+		hasOlder := false
+		if record != nil && len(record.Items) > interactiveResumeInitialItemBudget {
+			// Rust #46739: a long thread opens on its newest page and streams the
+			// earlier pages in when the reader reaches the top.
+			if window, cursor, older, err := interactiveSessionHistoryWindow(store, threadID, record.Metadata.CWD); err == nil {
+				messages, olderCursor, hasOlder = window, cursor, older
+			}
+		}
 		return codextea.SessionResumeResponse{
-			Summary:    firstSessionSummary(store, record),
-			Messages:   interactiveSessionMessagesFromRecord(record, reasoningProjectionChatWidget, false),
-			Status:     "idle",
-			TokenUsage: tokenUsage,
+			Summary:            firstSessionSummary(store, record),
+			Messages:           messages,
+			Status:             "idle",
+			TokenUsage:         tokenUsage,
+			HasOlderHistory:    hasOlder,
+			OlderHistoryCursor: olderCursor,
 		}, nil
 	}
 }
@@ -4400,14 +4413,24 @@ func interactiveSessionMessagesFromRecord(record *session.Record, projection rea
 	if record == nil {
 		return nil
 	}
-	messages := make([]codextui.Message, 0, len(record.Items))
+	return interactiveSessionMessagesFromItems(record.Items, record.Metadata.CWD, projection, showRawReasoning)
+}
+
+// interactiveSessionMessagesFromItems projects one window of stored items into
+// transcript messages. The older-history loader uses it with a single page so a
+// prepended page renders exactly like the initial window.
+func interactiveSessionMessagesFromItems(items []session.Item, cwd string, projection reasoningProjection, showRawReasoning bool) []codextui.Message {
+	if len(items) == 0 {
+		return nil
+	}
+	messages := make([]codextui.Message, 0, len(items))
 	// Rust #46710: a loaded transcript reuses the live rich history cells, so
 	// persisted tool calls keep their display variant, status, and detail.
-	resume := codextea.NewResumeTranscriptBuilder(record.Metadata.CWD, interactiveResumeTranscriptWidth)
-	folded := interactiveSessionResumeToolItems(record.Items)
+	resume := codextea.NewResumeTranscriptBuilder(cwd, interactiveResumeTranscriptWidth)
+	folded := interactiveSessionResumeToolItems(items)
 	inReviewMode := false
-	for i := range record.Items {
-		item := record.Items[i]
+	for i := range items {
+		item := items[i]
 		itemType := normalizeInteractiveSessionItemType(item.Type)
 		switch itemType {
 		case "enteredreviewmode":
@@ -4469,6 +4492,54 @@ func interactiveSessionMessagesFromRecord(record *session.Record, projection rea
 // interactiveResumeTranscriptWidth renders restored history cells at the same
 // wrap budget a typical terminal uses; the transcript re-wraps stored text.
 const interactiveResumeTranscriptWidth = 100
+
+// interactiveResumeInitialItemBudget is the newest-item window a resumed
+// embedded thread starts with. Rust budgets the initial transcript by screens
+// and items (#46739); the TUI loads the older pages when the reader reaches the
+// top, so a long thread never renders in one pass.
+const interactiveResumeInitialItemBudget = 60
+
+// interactiveSessionHistoryWindow loads the newest item page of a stored
+// thread: messages in transcript order plus the cursor for the page before it.
+func interactiveSessionHistoryWindow(store *session.Store, threadID session.ThreadID, cwd string) ([]codextui.Message, string, bool, error) {
+	return interactiveSessionHistoryPage(store, threadID, "", cwd)
+}
+
+// interactiveSessionHistoryPage loads one page of stored items, newest first in
+// the store and returned in transcript order, with the cursor that addresses
+// the page before it.
+func interactiveSessionHistoryPage(store *session.Store, threadID session.ThreadID, cursor string, cwd string) ([]codextui.Message, string, bool, error) {
+	if store == nil {
+		return nil, "", false, nil
+	}
+	page, err := store.ListItems(threadID, session.ListItemsOptions{
+		PageSize:      interactiveResumeInitialItemBudget,
+		SortDirection: session.SortDesc,
+		Cursor:        cursor,
+	})
+	if err != nil {
+		return nil, "", false, err
+	}
+	items := make([]session.Item, 0, len(page.Items))
+	for index := len(page.Items) - 1; index >= 0; index-- {
+		items = append(items, page.Items[index])
+	}
+	messages := interactiveSessionMessagesFromItems(items, cwd, reasoningProjectionChatWidget, false)
+	next := strings.TrimSpace(page.NextCursor)
+	return messages, next, next != "", nil
+}
+
+// interactiveOlderHistoryLoader serves the TUI's older-history requests from
+// the embedded session store (Rust app/history_pagination.rs).
+func interactiveOlderHistoryLoader(store *session.Store, cwd string) codextea.OlderHistoryLoadFunc {
+	return func(threadID string, cursor string) (codextea.OlderHistoryPage, error) {
+		messages, next, hasOlder, err := interactiveSessionHistoryPage(store, session.ThreadID(strings.TrimSpace(threadID)), cursor, cwd)
+		if err != nil {
+			return codextea.OlderHistoryPage{}, err
+		}
+		return codextea.OlderHistoryPage{Messages: messages, Cursor: next, HasOlder: hasOlder}, nil
+	}
+}
 
 func interactiveSessionItemIsReviewUserMessage(item session.Item) bool {
 	kind := firstNonEmptyLocal(interactiveSessionItemDataString(item, "kind"), remoteTUIAnyString(item.Metadata["kind"]))

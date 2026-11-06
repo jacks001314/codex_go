@@ -349,6 +349,28 @@ func (s *State) AddUserPromptMessage(displayText string, prompt string, localIma
 	s.BumpMessagesRevision()
 }
 
+// InsertMessages splices messages into the transcript at index and marks the
+// slice changed from there, so prepended older history re-renders without
+// invalidating the layout of the messages below it (Rust
+// prepend_older_transcript_cells).
+func (s *State) InsertMessages(index int, messages []Message) {
+	if s == nil || len(messages) == 0 {
+		return
+	}
+	if index < 0 {
+		index = 0
+	}
+	if index > len(s.Messages) {
+		index = len(s.Messages)
+	}
+	combined := make([]Message, 0, len(s.Messages)+len(messages))
+	combined = append(combined, s.Messages[:index]...)
+	combined = append(combined, messages...)
+	combined = append(combined, s.Messages[index:]...)
+	s.Messages = combined
+	s.BumpMessagesRevisionFrom(index)
+}
+
 func (s *State) AddHistoryLines(displayLines []string, rawLines []string) {
 	s.AddHistoryMessage(Message{
 		Role:    RoleHistory,
