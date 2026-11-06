@@ -255,7 +255,9 @@ var Registry = []Spec{
 	// Rust (codex-rs/features/src/lib.rs #57249): app-server startup plugin
 	// discovery prefetch (directory, featured, recommendations). Stable and
 	// enabled by default; inventory-only hosts can turn it off.
-	{Key: "plugin_discovery_prefetch", Stage: StageStable, DefaultEnabled: true},
+	// Rust #59768 retires startup plugin discovery prefetching; the key stays a
+	// parse-compatible removed feature so existing configs keep loading.
+	{Key: "plugin_discovery_prefetch", Stage: StageRemoved, DefaultEnabled: false},
 	{Key: "plugin_sharing", Stage: StageStable, DefaultEnabled: true},
 	{Key: "external_migration", Stage: StageRemoved},
 	{Key: "image_generation", Stage: StageStable, DefaultEnabled: true},

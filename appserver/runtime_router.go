@@ -6505,7 +6505,6 @@ func (r *RuntimeRouter) applyThreadStartConfigSnapshot(response *ThreadStartResp
 	reasoningEffort := firstNonEmpty(stringConfigValue(cfg, "model_reasoning_effort"), stringConfigValue(cfg, "modelReasoningEffort"))
 	serviceTier := r.threadStartServiceTier(cfg, &params, modelID)
 	selectedServiceTier := r.threadStartSelectedServiceTier(cfg, &params)
-	r.prewarmSuggestedPluginsForThreadStart(cfg)
 	response.ApprovalPolicy = params.ApprovalPolicy
 	response.ApprovalsReviewer = cloneString(params.ApprovalsReviewer)
 	response.Sandbox = threadStartResponseSandbox(params.Sandbox)
@@ -13125,7 +13124,47 @@ func (r *RuntimeRouter) handleModelList(request *Request) (*model.ModelListRespo
 	if r.modelCatalogRefreshPending() {
 		r.refreshModelCatalogAfterAuthChange()
 	}
+	if service, err := r.modelListServiceForProvider(params.ModelProvider); err != nil {
+		return nil, err
+	} else if service != nil {
+		return service.List(&params)
+	}
 	return r.requireModels().List(&params)
+}
+
+// modelListServiceForProvider mirrors Rust #59776 `config_for_provider`: an
+// explicit `modelProvider` selection resolves against the providers loaded at
+// startup and uses a temporary catalog so the active provider's catalog and its
+// disk cache stay untouched. Unknown providers return the structured
+// `modelProviderNotConfigured` error, and the selection still has to satisfy
+// current managed provider requirements.
+func (r *RuntimeRouter) modelListServiceForProvider(providerID string) (*model.ModelService, error) {
+	providerID = strings.TrimSpace(providerID)
+	if providerID == "" || r == nil || r.services.Config == nil {
+		return nil, nil
+	}
+	if r.startupModelProviderRouteSet && providerID == strings.TrimSpace(r.startupModelProviderRoute.providerID) {
+		return nil, nil
+	}
+	read, err := r.services.Config.Read(&config.ConfigReadParams{})
+	if err != nil {
+		return nil, err
+	}
+	if active := strings.TrimSpace(stringFromMap(read.Config, "model_provider")); active == providerID {
+		return nil, nil
+	}
+	info, providerErr := model.ProviderForConfigID(read.Config, providerID, strings.TrimSpace(stringFromMap(read.Config, "openai_base_url")))
+	if providerErr != nil || info == nil {
+		return nil, configLoadInvalidRequest(&ModelProviderError{Kind: ModelProviderNotConfigured, ModelProvider: providerID})
+	}
+	if err := r.checkModelProviderRoute(threadModelProviderRoute{providerID: providerID, provider: *info}); err != nil {
+		return nil, err
+	}
+	manager := model.CreateRuntimeProviderForID(providerID, *info, nil).ModelsManager(nil)
+	if manager == nil {
+		return nil, nil
+	}
+	return model.NewModelService(manager), nil
 }
 
 func (r *RuntimeRouter) handleModelProviderCapabilitiesRead(request *Request) (*model.ProviderCapabilitiesReadResponse, error) {

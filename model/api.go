@@ -32,20 +32,29 @@ type ModelListParams struct {
 	RefreshStrategy string  `json:"refreshStrategy,omitempty"`
 	Limit           *uint32 `json:"limit,omitempty"`
 	Cursor          *string `json:"cursor,omitempty"`
+	// ModelProvider selects a configured provider for this listing (Rust #59776).
+	// Empty keeps the app-server's active provider and its cached catalog.
+	ModelProvider string `json:"modelProvider,omitempty"`
 }
 
 func (p *ModelListParams) MarshalJSON() ([]byte, error) {
 	if p == nil {
 		return []byte("null"), nil
 	}
+	var modelProvider *string
+	if trimmed := strings.TrimSpace(p.ModelProvider); trimmed != "" {
+		modelProvider = &trimmed
+	}
 	return json.Marshal(struct {
 		Cursor        *string `json:"cursor"`
 		Limit         *uint32 `json:"limit"`
 		IncludeHidden *bool   `json:"includeHidden"`
+		ModelProvider *string `json:"modelProvider"`
 	}{
 		Cursor:        cloneStringPtr(p.Cursor),
 		Limit:         cloneUint32Ptr(p.Limit),
 		IncludeHidden: cloneBoolPtr(p.IncludeHidden),
+		ModelProvider: modelProvider,
 	})
 }
 

@@ -10744,28 +10744,6 @@ func suggestedPluginProviderKey(baseURL string, productSKU string) string {
 	return strings.TrimRight(strings.TrimSpace(baseURL), "/") + "\x00" + productSKU
 }
 
-// prewarmSuggestedPluginsForThreadStart overlaps the recommendation catalog
-// request with the remaining thread initialization work. Context construction
-// still filters and injects the cached result (Rust #41375).
-func (r *RuntimeRouter) prewarmSuggestedPluginsForThreadStart(cfg *config.Config) {
-	if r == nil || r.services.Plugins == nil || cfg == nil ||
-		!features.PluginRecommendationsEnabled(cfg.FeatureSettings()) {
-		return
-	}
-	// Rust #57249: plugin_discovery_prefetch is stable and enabled by default;
-	// inventory-only hosts can disable startup discovery requests.
-	if !features.Enabled(cfg.FeatureSettings(), "plugin_discovery_prefetch") {
-		return
-	}
-	r.configureSuggestedPluginProviderForTurn(cfg)
-	service := r.services.Plugins
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		service.PrewarmSuggestedPlugins(ctx)
-	}()
-}
-
 func suggestedPluginAccessTokenFromAuth(snapshot *auth.AuthDotJSON) string {
 	if snapshot == nil || snapshot.Tokens == nil {
 		return ""
