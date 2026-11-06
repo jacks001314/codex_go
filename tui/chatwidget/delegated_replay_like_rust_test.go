@@ -1,13 +1,14 @@
 package chatwidget
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
 	"codex_go/appserver"
 )
 
-const delegatedReplayOutput = "<codex_delegation>\n  <source_thread_id>source-task</source_thread_id>\n  <input>Inspect &lt;main&gt; &amp; report</input>\n</codex_delegation>"
+const delegatedReplayOutput = "<codex_delegation>\n  <source_thread_id>source-task</source_thread_id>\n  <input>Inspect `&lt;main&gt;` &amp; report</input>\n</codex_delegation>"
 
 // TestReplayDelegatedToolOutputLikeRust mirrors Rust #41046
 // parse_delegated_tool_output: only create_thread / send_message_to_thread
@@ -16,7 +17,7 @@ const delegatedReplayOutput = "<codex_delegation>\n  <source_thread_id>source-ta
 func TestReplayDelegatedToolOutputLikeRust(t *testing.T) {
 	item := appserver.ThreadItem{Type: "function_call_output", Name: "create_thread", Namespace: "codex_tui", Data: map[string]any{"output": delegatedReplayOutput}}
 	source, prompt, ok := ReplayDelegatedToolOutput(item)
-	if !ok || source != "source-task" || prompt != "Inspect <main> & report" {
+	if !ok || source != "source-task" || prompt != "Inspect `<main>` & report" {
 		t.Fatalf("delegated = (%q,%q,%v)", source, prompt, ok)
 	}
 
@@ -66,7 +67,11 @@ func TestReplayDelegatedToolOutputCellRendersLikeRust(t *testing.T) {
 	}
 	lines := cell.DisplayLines(80)
 	want := []string{"• Sent by Codex from task source-task", "  Inspect <main> & report"}
-	if strings.Join(lines, "\n") != strings.Join(want, "\n") {
+	plain := make([]string, len(lines))
+	for index, line := range lines {
+		plain[index] = stripDelegatedANSI(line)
+	}
+	if strings.Join(plain, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("lines = %#v, want %#v", lines, want)
 	}
 	if cell.RawLines()[0] != "Sent by Codex from task source-task" {
@@ -85,4 +90,11 @@ func TestReplayFunctionCallOutputRouteLikeRust(t *testing.T) {
 	if decision.Route != ReplayItemRouteFunctionCallOutput {
 		t.Fatalf("route = %q, want %q", decision.Route, ReplayItemRouteFunctionCallOutput)
 	}
+}
+
+var delegatedANSIPattern = regexp.MustCompile("\x1b\\[[0-9;]*m")
+
+// stripDelegatedANSI compares rendered text without the inline-code colour span.
+func stripDelegatedANSI(text string) string {
+	return delegatedANSIPattern.ReplaceAllString(text, "")
 }
