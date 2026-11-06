@@ -9,6 +9,9 @@ type AgentMessageConsolidationResult struct {
 	Consolidated bool
 	Start        int
 	End          int
+	// ConsolidationItem is the `turnID:itemID` key an interrupted reply was
+	// reconciled against (Rust #59700).
+	ConsolidationItem string
 }
 
 func ConsolidateAgentMessageRun(cells []TranscriptCell, source string, cwd string, deferred *TranscriptCell) AgentMessageConsolidationResult {

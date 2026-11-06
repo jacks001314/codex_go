@@ -23,6 +23,9 @@ type TranscriptCell struct {
 	StreamContinuation bool
 	Source             string
 	CWD                string
+	// InterruptedItem marks a streaming agent reply flushed before a tool ran
+	// (Rust #59700); the key is `turnID:itemID`.
+	InterruptedItem string
 }
 
 type InitialHistoryReplayBuffer struct {
