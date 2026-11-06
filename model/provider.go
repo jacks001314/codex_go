@@ -114,6 +114,8 @@ func CreateRuntimeProviderForID(providerID string, info ProviderInfo, snapshot *
 		// infallible.
 		if err := info.Validate(); err != nil {
 			configured.gatewayAuthErr = err
+		} else if info.GatewayOAuth.UsesCredentialExport() {
+			configured.gatewayExport = newGatewayCredentialExport(info.GatewayOAuth.CredentialExport)
 		} else if manager, err := sharedGatewayAuthManager(info.GatewayOAuth, auth.DefaultCodexHome()); err != nil {
 			configured.gatewayAuthErr = errors.New("failed to create provider OAuth HTTP client")
 		} else {
@@ -144,6 +146,9 @@ type ConfiguredProvider struct {
 	// gatewayAuthManager is the shared gateway credential manager, eagerly
 	// constructed when the provider configures `gateway_oauth` (Rust #46490).
 	gatewayAuthManager *auth.GatewayAuthManager
+	// gatewayExport supplies gateway tokens from a configured command instead
+	// of browser OAuth (Rust #59787).
+	gatewayExport *gatewayCredentialExport
 	// gatewayAuthErr reports why the gateway manager could not be built; it is
 	// surfaced when authentication is requested.
 	gatewayAuthErr error
@@ -283,9 +288,13 @@ func (p *ConfiguredProvider) APIAuth() (AuthHeaders, error) {
 	if p.gatewayAuthErr != nil {
 		return AuthHeaders{}, p.gatewayAuthErr
 	}
+	var provider gatewayAuthTokenProvider = p.gatewayAuthManager
+	if p.gatewayExport != nil {
+		provider = p.gatewayExport
+	}
 	// Model discovery uses this same composed auth, so gateway tokens refresh
 	// once for inference and discovery alike.
-	return composeGatewayAuth(context.Background(), p.info.GatewayOAuth, p.gatewayAuthManager, primary)
+	return composeGatewayAuth(context.Background(), p.info.GatewayOAuth, provider, primary)
 }
 
 func (p *ConfiguredProvider) GatewayAuthManager() (*auth.GatewayAuthManager, error) {

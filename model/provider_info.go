@@ -204,8 +204,11 @@ type GatewayOAuthConfig struct {
 	// CredentialsStore selects where this gateway's OAuth grants are stored
 	// (Rust #58219 GatewayOAuthConfig::credentials_store). The empty value is
 	// the keyring-backed default and stays out of the serialized identity.
-	CredentialsStore string               `json:"credentials_store,omitempty"`
-	Delivery         GatewayOAuthDelivery `json:"delivery"`
+	CredentialsStore string `json:"credentials_store,omitempty"`
+	// CredentialExport replaces browser OAuth with a command that prints the
+	// gateway access token (Rust #59787).
+	CredentialExport *GatewayCredentialExportConfig `json:"credential_export,omitempty"`
+	Delivery         GatewayOAuthDelivery           `json:"delivery"`
 }
 
 // GatewayOAuthDelivery is Rust's tagged delivery enum: `{kind: "header", name,
@@ -251,7 +254,8 @@ func (d GatewayOAuthDelivery) EffectiveHeaderName() string {
 // RequiresGatewayOrigin reports whether the gateway bearer must only be sent
 // to the configured gateway origin (Rust #57313).
 func (c *GatewayOAuthConfig) RequiresGatewayOrigin() bool {
-	return c != nil && c.Delivery.IsAuthorizationBearer()
+	// Rust #59787: an exported gateway token is only sent to the gateway origin.
+	return c != nil && (c.Delivery.IsAuthorizationBearer() || c.UsesCredentialExport())
 }
 
 // HeaderScheme returns the delivery scheme, applying Rust's "Bearer" default.
@@ -293,11 +297,22 @@ func (c *GatewayOAuthConfig) Validate(provider *ProviderInfo) error {
 	if provider.AWS != nil || provider.IsAmazonBedrock() {
 		return errors.New("provider gateway_oauth cannot be combined with AWS authentication")
 	}
-	if err := validateGatewayOAuthURL(c.AuthorizationURL, "gateway_oauth.authorization_url"); err != nil {
-		return err
-	}
-	if err := validateGatewayOAuthURL(c.TokenURL, "gateway_oauth.token_url"); err != nil {
-		return err
+	if c.CredentialExport != nil {
+		// Rust #59787 rejects a mixed configuration instead of guessing which
+		// credential source wins.
+		if strings.TrimSpace(c.AuthorizationURL) != "" || strings.TrimSpace(c.TokenURL) != "" || strings.TrimSpace(c.ClientID) != "" {
+			return errors.New("choose one gateway credential source: credential_export or OAuth settings (authorization_url, token_url, and client_id)")
+		}
+		if !validCredentialExportCommand(strings.TrimSpace(c.CredentialExport.Command)) {
+			return errors.New("gateway_oauth.credential_export command must be an absolute path or a bare executable name")
+		}
+	} else {
+		if err := validateGatewayOAuthURL(c.AuthorizationURL, "gateway_oauth.authorization_url"); err != nil {
+			return err
+		}
+		if err := validateGatewayOAuthURL(c.TokenURL, "gateway_oauth.token_url"); err != nil {
+			return err
+		}
 	}
 	if strings.TrimSpace(provider.BaseURL) == "" {
 		return errors.New("gateway_oauth requires base_url")
@@ -313,7 +328,7 @@ func (c *GatewayOAuthConfig) Validate(provider *ProviderInfo) error {
 			return errors.New("Codex would send gateway credentials to a different model catalog. Set model_catalog_url to a URL with the same scheme, host, and port as base_url, or remove model_catalog_url to use the gateway's catalog.")
 		}
 	}
-	if strings.TrimSpace(c.ClientID) == "" || (c.RedirectPort != nil && *c.RedirectPort == 0) {
+	if c.CredentialExport == nil && (strings.TrimSpace(c.ClientID) == "" || (c.RedirectPort != nil && *c.RedirectPort == 0)) {
 		return errors.New("gateway_oauth requires a nonempty client_id and a nonzero redirect_port")
 	}
 	delivery := c.Delivery.Effective()
@@ -519,25 +534,25 @@ type ProviderInfo struct {
 	Auth                    *ProviderAuthInfo `json:"auth,omitempty"`
 	// GatewayOAuth carries secondary OAuth credentials required by the
 	// provider's gateway (Rust #46482).
-	GatewayOAuth                *GatewayOAuthConfig  `json:"gateway_oauth,omitempty"`
-	AWS                         *ProviderAWSAuthInfo `json:"aws,omitempty"`
-	WireAPI                     WireAPI              `json:"wire_api,omitempty"`
-	QueryParams                 map[string]string    `json:"query_params,omitempty"`
-	HTTPHeaders                 map[string]string    `json:"http_headers,omitempty"`
-	EnvHTTPHeaders              map[string]string    `json:"env_http_headers,omitempty"`
-	RequestMaxRetries           *uint64              `json:"request_max_retries,omitempty"`
-	StreamMaxRetries            *uint64              `json:"stream_max_retries,omitempty"`
-	StreamIdleTimeoutMS         *uint64              `json:"stream_idle_timeout_ms,omitempty"`
-	WebsocketConnectTimeoutMS   *uint64              `json:"websocket_connect_timeout_ms,omitempty"`
+	GatewayOAuth              *GatewayOAuthConfig  `json:"gateway_oauth,omitempty"`
+	AWS                       *ProviderAWSAuthInfo `json:"aws,omitempty"`
+	WireAPI                   WireAPI              `json:"wire_api,omitempty"`
+	QueryParams               map[string]string    `json:"query_params,omitempty"`
+	HTTPHeaders               map[string]string    `json:"http_headers,omitempty"`
+	EnvHTTPHeaders            map[string]string    `json:"env_http_headers,omitempty"`
+	RequestMaxRetries         *uint64              `json:"request_max_retries,omitempty"`
+	StreamMaxRetries          *uint64              `json:"stream_max_retries,omitempty"`
+	StreamIdleTimeoutMS       *uint64              `json:"stream_idle_timeout_ms,omitempty"`
+	WebsocketConnectTimeoutMS *uint64              `json:"websocket_connect_timeout_ms,omitempty"`
 	// RequiresOpenAIAuth reports whether the provider requires an OpenAI API
 	// key or ChatGPT login token (Rust #49118). When true, the user sees a
 	// login screen on first run and credentials are stored through the backend
 	// selected by cli_auth_credentials_store. When false (the default), the
 	// login screen is skipped and EnvKey names the environment variable that
 	// supplies the API key.
-	RequiresOpenAIAuth          bool                 `json:"requires_openai_auth,omitempty"`
-	SupportsWebsockets          bool                 `json:"supports_websockets,omitempty"`
-	SupportsStandaloneWebSearch bool                 `json:"supports_standalone_web_search,omitempty"`
+	RequiresOpenAIAuth          bool `json:"requires_openai_auth,omitempty"`
+	SupportsWebsockets          bool `json:"supports_websockets,omitempty"`
+	SupportsStandaloneWebSearch bool `json:"supports_standalone_web_search,omitempty"`
 	// Capabilities carries optional API capability overrides for a custom
 	// Responses-compatible provider (Rust ModelProviderCapabilities, #50459).
 	Capabilities *ProviderCapabilitiesOverride `json:"capabilities,omitempty"`
