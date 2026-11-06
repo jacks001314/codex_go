@@ -358,6 +358,12 @@ func (r *RuntimeRouter) startMemoriesStartupTask(response *ThreadStartResponse, 
 	if !r.primaryEnvironmentConfiguredForMemoryStartup(&params, record) {
 		return
 	}
+	// Rust #59754: memory summarization carries no access-program selection, so a
+	// thread that requires one cannot start the pipeline.
+	if len(r.requiredCyberAccessProgramsForThread(string(record.ID))) > 0 {
+		slog.Warn("memories startup skipped: thread requires an explicit cyber access program", "thread_id", record.ID)
+		return
+	}
 	cfg, err := r.effectiveConfigForThreadStart(&params)
 	if err != nil || cfg == nil || !features.Enabled(cfg.FeatureSettings(), "memories") {
 		return

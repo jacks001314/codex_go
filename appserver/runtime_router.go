@@ -136,10 +136,12 @@ type RuntimeServices struct {
 	// requirement: every model request for the thread must send one of the
 	// returned programs. Nil leaves threads unconstrained.
 	RequiredCyberAccessPrograms func(threadID string) []string
-	Analytics                   telemetry.TurnEventSink
-	SkillShadowMetrics          SkillShadowMetricSink
-	SkillInjectionMetrics       telemetry.CounterDurationSink
-	TurnMetrics                 telemetry.TurnMetricSink
+	// AgentTurnOutcomeReporter receives every terminal turn result (Rust #59725).
+	AgentTurnOutcomeReporter AgentTurnOutcomeReporter
+	Analytics                telemetry.TurnEventSink
+	SkillShadowMetrics       SkillShadowMetricSink
+	SkillInjectionMetrics    telemetry.CounterDurationSink
+	TurnMetrics              telemetry.TurnMetricSink
 	// VoiceMetrics receives the voice session lifecycle counters. The Go port
 	// reports product counters from the app-server, which owns the session.
 	VoiceMetrics          telemetry.CounterDurationSink
@@ -345,6 +347,9 @@ type RuntimeRouter struct {
 	// cache for uploaded audio (Rust #59268 SessionState::file_audio_durations).
 	audioStateMu   sync.Mutex
 	audioDurations map[string]*audiofiles.Durations
+	// agentOutcomeWG tracks host outcome handoffs so Close waits for them
+	// before services stop (Rust #59725).
+	agentOutcomeWG sync.WaitGroup
 	servicesMu     sync.Mutex
 	// turnFinishHook observes the window between a finished sampling step and
 	// closing steer admission (Rust #58877). Tests use it to submit a steer that
@@ -2889,6 +2894,9 @@ func (r *RuntimeRouter) BeginDraining() {
 }
 
 func (r *RuntimeRouter) close() error {
+	// Rust #59725: graceful shutdown waits for outstanding host outcome handoffs
+	// before thread-stop hooks and service teardown run.
+	r.waitAgentTurnOutcomes()
 	r.stopEmptyRemoteSkillWatches()
 	r.stopThreadIdleLifecycle()
 	r.modelsRefreshWorker.shutdown()
@@ -11125,6 +11133,10 @@ func (r *RuntimeRouter) dispatchRealtime(request *Request) (any, error) {
 		var params realtime.StartParams
 		if err := request.DecodeParams(&params); err != nil {
 			return nil, err
+		}
+		// Rust #59754: realtime requests cannot carry a required access program.
+		if len(r.requiredCyberAccessProgramsForThread(params.ThreadID)) > 0 {
+			return nil, jsonRPCInvalidRequest("this thread requires an allowed explicit access program")
 		}
 		if err := r.ensureRealtimeThread(params.ThreadID); err != nil {
 			return nil, err

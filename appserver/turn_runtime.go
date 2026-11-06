@@ -2310,6 +2310,13 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	// agent's triggered communication reports its completed activity to that
 	// initiating agent when it is not the child's direct parent.
 	r.emitRuntimeSubAgentCompletedActivity(threadID, turnID, params.ParentTurnID, params.InitiatingAgentPath)
+	r.reportAgentTurnOutcome(AgentTurnOutcome{
+		ThreadID:            threadID,
+		TurnID:              turnID,
+		Status:              CollabAgentStatusCompleted,
+		ParentTurnID:        params.ParentTurnID,
+		InitiatingAgentPath: params.InitiatingAgentPath,
+	})
 	// Rust's turn task timer records the end-to-end duration when the task ends.
 	r.emitTurnE2EDurationMetric(r.services.TurnMetrics, durationMS)
 	completedTurn := completedTurnNotificationTurn(turnID, rootTurnIDForTurn(params, turnID), TurnStatusCompleted, nil, &record.StartedAt, &completedAtUnix, &durationMS)
@@ -4610,9 +4617,22 @@ func (r *RuntimeRouter) appendRuntimeTurnAbortedWithError(threadID string, turnI
 	if appErr != nil {
 		turnError = &rollout.TurnAbortedError{Message: appErr.Message, CodexErrorInfo: appErr.CodexErrorInfo}
 	}
-	return r.withRuntimeRollout(threadID, func(recorder *rollout.Recorder) error {
+	err := r.withRuntimeRollout(threadID, func(recorder *rollout.Recorder) error {
 		return recorder.AppendTurnAbortedWithRootAndError(rootTurnID, turnID, reason, turnError, completedAt, durationMS)
 	})
+	message := ""
+	if appErr != nil {
+		message = appErr.Message
+	} else {
+		message = reason
+	}
+	r.reportAgentTurnOutcome(AgentTurnOutcome{
+		ThreadID:     threadID,
+		TurnID:       turnID,
+		Status:       CollabAgentStatusInterrupted,
+		ErrorMessage: message,
+	})
+	return err
 }
 
 func (r *RuntimeRouter) withRuntimeRollout(threadID string, apply func(*rollout.Recorder) error) error {
