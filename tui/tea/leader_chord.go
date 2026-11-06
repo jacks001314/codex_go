@@ -62,6 +62,7 @@ var leaderShortcuts = []struct {
 	{"chat", "open_presets", true},
 	{"global", "focus_main_composer", true},
 	{"global", "focus_sidebar_content", true},
+	{"global", "focus_sidebar_tabs", true},
 	{"global", "hide_pane", true},
 	{"global", "focus_pane_left", true},
 	{"global", "focus_pane_right", true},
@@ -81,6 +82,7 @@ var leaderShortcuts = []struct {
 var implicitWorkspaceLeaderCompletions = map[string][]string{
 	"global.focus_main_composer":   {"c"},
 	"global.focus_sidebar_content": {"s"},
+	"global.focus_sidebar_tabs":    {"t"},
 	"global.hide_pane":             {"-"},
 	"global.focus_pane_left":       {"left", "h"},
 	"global.focus_pane_right":      {"right", "l"},
@@ -179,6 +181,8 @@ func (m *Model) dispatchLeaderAction(action string) bubbletea.Cmd {
 		return m.focusMainComposer()
 	case "global.focus_sidebar_content", "global.focus_pane_right":
 		return m.focusSidebarContent()
+	case "global.focus_sidebar_tabs":
+		return m.openSidebarChooser()
 	case "global.hide_pane":
 		return m.hideFocusedSidePane()
 	case "global.toggle_pane_zoom":

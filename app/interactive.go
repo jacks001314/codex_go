@@ -1745,6 +1745,8 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		OnSessionAction:             interactiveSessionActionHandler(root),
 		OnListPermissionProfiles:    interactiveLocalListPermissionProfiles(root),
 		OnListModelProviders:        interactiveLocalModelProviderList(root),
+		OnWriteModelProviderConfig:  interactiveLocalModelProviderWriter(root),
+		ModelProviderClientOverride: interactiveLocalModelProviderClientOverride(root),
 		SidebarWidthPercent:         interactiveSidebarWidthPercent(root),
 		OnListCollaborationModes:    interactiveLocalListCollaborationModes(),
 		OnWorkingDirectoryChange:    interactiveWorkingDirectoryChangeHandler(root),

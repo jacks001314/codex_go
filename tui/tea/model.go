@@ -1569,6 +1569,12 @@ type Options struct {
 	// OnListModelProviders browses the connected app server's provider catalog
 	// (Rust #59541 app::provider).
 	OnListModelProviders ModelProviderListFunc
+	// OnWriteModelProviderConfig persists provider edits through the connected
+	// app server's modelProvider/config/write method.
+	OnWriteModelProviderConfig ModelProviderConfigWriteFunc
+	// ModelProviderClientOverride pins the provider selected by this client's
+	// launch settings. While set, the server's new-chat default is read-only.
+	ModelProviderClientOverride string
 	// SidebarWidthPercent is the saved `tui.sidebar_width_percent` value for
 	// the side-by-side conversation layout (Rust #59595); 0 uses the default.
 	SidebarWidthPercent int
@@ -2167,10 +2173,6 @@ type Model struct {
 	// (Rust #43921 StatusState).
 	reasoningItemID       string
 	reasoningResumeTurnID string
-	// reasoningRecoveredAfterRefresh marks a restored active reasoning item whose
-	// earlier deltas may have been missed, so the completed item's complete
-	// summary reconciles with the streamed buffers (Rust #43921).
-	reasoningRecoveredAfterRefresh bool
 	// commandLifecycle tracks unified-exec processes and the background-terminal
 	// wait streak that owns the status row until output arrives (Rust #43921).
 	commandLifecycle        chatwidget.CommandLifecycleState
@@ -2533,8 +2535,10 @@ type Model struct {
 	managedWorktreeStarting  bool
 	worktreePopupRequestID   string
 	// Named permission profile discovery and pending selection (Rust #43340).
-	onListPermissionProfiles func() ([]chatwidget.CustomPermissionProfile, bool, error)
-	onListModelProviders     ModelProviderListFunc
+	onListPermissionProfiles   func() ([]chatwidget.CustomPermissionProfile, bool, error)
+	onListModelProviders       ModelProviderListFunc
+	onWriteModelProviderConfig ModelProviderConfigWriteFunc
+	providerClientOverride     string
 	// configProviderGeneration invalidates in-flight model provider browser
 	// requests when the popup is dismissed or reopened (Rust #59541). It lives
 	// on the model so closing the configuration panel does not reset it.
@@ -2848,7 +2852,14 @@ type Model struct {
 	// thread. Thread navigation hides the active side instead of deleting it
 	// (Rust #52184), so returning to a parent can reopen the existing side with
 	// /side.
-	sideConversations          map[string]*activeSideConversation
+	sideConversations map[string]*activeSideConversation
+	// sidebarTabs keeps sibling side chats per parent in creation order so the
+	// chooser can reopen any of them (Rust #59784).
+	sidebarTabs                map[string][]*activeSideConversation
+	sidebarChooserOpen         bool
+	sidebarChooserParent       string
+	sidebarChooserFocused      bool
+	sidebarChoice              int
 	abandonedSideThreads       map[string]struct{}
 	sideStartPending           bool
 	statusControls             *chatwidget.StatusControlsState
@@ -3327,6 +3338,8 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onManagedWorktreeChanged:         options.OnManagedWorktreeChanged,
 		onListPermissionProfiles:         options.OnListPermissionProfiles,
 		onListModelProviders:             options.OnListModelProviders,
+		onWriteModelProviderConfig:       options.OnWriteModelProviderConfig,
+		providerClientOverride:           strings.TrimSpace(options.ModelProviderClientOverride),
 		sideWidthPercent:                 options.SidebarWidthPercent,
 		onListCollaborationModes:         options.OnListCollaborationModes,
 		onUpdateThreadPermissions:        options.OnUpdateThreadPermissions,
@@ -3368,6 +3381,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onReconnectThreadApprovals:       options.OnReconnectThreadApprovals,
 		backgroundThreadEvents:           map[string][]protocol.ThreadEvent{},
 		sideConversations:                map[string]*activeSideConversation{},
+		sidebarTabs:                      map[string][]*activeSideConversation{},
 		clipboardWrite:                   clipboardWrite,
 		clipboardWriteRich:               clipboardWriteRich,
 		clipboardRead:                    clipboardRead,
@@ -4241,6 +4255,8 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		return m, m.postConfigTestNotification()
 	case configPanelProvidersLoadedMsg:
 		return m, m.applyConfigPanelProvidersLoaded(msg)
+	case configPanelProviderWriteResultMsg:
+		return m, m.applyConfigPanelProviderWriteResult(msg)
 	case asyncQuestionCountdownMsg:
 		return m, m.asyncQuestionCountdownCmd()
 	case permissionProfilesLoadedMsg:
@@ -4745,6 +4761,14 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		}
 		if m.modal != nil {
 			return m, m.updateModal(msg)
+		}
+		if m.sidebarChooserVisible() && m.sidebarChooserFocused {
+			if handled, cmd := m.updateSidebarChooserKey(msg); handled {
+				return m, cmd
+			}
+			// Rust #59767: the chooser owns input while focused, so completion
+			// popups and repeated activation keys never consume its keys.
+			return m, nil
 		}
 		if m.windowsSandboxSetupActive {
 			return m, nil
@@ -5762,7 +5786,6 @@ func (m *Model) applyReasoningItemStarted(itemID string) {
 	if itemID == "" {
 		return
 	}
-	m.reasoningRecoveredAfterRefresh = false
 	if strings.TrimSpace(m.reasoningResumeTurnID) != "" && m.reasoningItemID != itemID {
 		m.finalizeReasoningSummary()
 	}
@@ -5786,37 +5809,73 @@ func (m *Model) finalizeReasoningSummary() {
 	}
 	m.reasoningItemID = ""
 	m.reasoningResumeTurnID = ""
-	m.reasoningRecoveredAfterRefresh = false
 }
 
-// completeReasoningItem consumes a completed reasoning item. When the active
-// item was restored after a refresh, its earlier deltas may be missing, so the
-// complete item reconciles the buffers before the heading is finalized (Rust
-// #43921 reasoning_recovered_after_refresh).
+// completeReasoningItem consumes a completed reasoning item. The completed
+// parts are authoritative when the stream omitted or partially delivered its
+// deltas; an empty completion preserves the live buffer (Rust #59698).
 func (m *Model) completeReasoningItem(item *protocol.ThreadItem) {
-	if m == nil {
+	if m == nil || item == nil {
 		return
 	}
 	itemID := strings.TrimSpace(item.ID)
 	if itemID == "" {
 		itemID = m.reasoningItemID
 	}
-	if m.reasoningRecoveredAfterRefresh {
-		if text := strings.TrimSpace(itemText(item)); text != "" {
-			if itemID != "" && (m.reasoningItemID == "" || itemID == m.reasoningItemID) {
-				// A refreshed snapshot can omit the active item and its earlier
-				// deltas; replace the partial stream with the complete summary.
-				m.reasoningItemID = itemID
-				if m.reasoningSummaryBuffers == nil {
-					m.reasoningSummaryBuffers = map[string]string{}
-				}
-				m.reasoningSummaryBuffers[itemID] = text
-				m.restoreReasoningStatusHeader()
-			}
-		}
-	}
+	m.replaceReasoningParts(itemID, reasoningSummaryParts(item), reasoningContentParts(item))
 	m.commitReasoningSummaryBlock(itemID, item)
 	m.finalizeReasoningSummary()
+}
+
+// replaceReasoningParts replaces an item's streamed summary with the complete
+// parts carried by an item event. Empty completions do not erase the deltas
+// (Rust #59698 replace_reasoning_parts). Raw reasoning is appended only when
+// the session exposes it.
+func (m *Model) replaceReasoningParts(itemID string, summary []string, content []string) {
+	if m == nil {
+		return
+	}
+	itemID = strings.TrimSpace(itemID)
+	if itemID == "" {
+		itemID = strings.TrimSpace(m.reasoningItemID)
+	}
+	if itemID == "" {
+		return
+	}
+	parts := append([]string(nil), summary...)
+	if m.showRawReasoning {
+		parts = append(parts, content...)
+	}
+	allEmpty := true
+	for _, part := range parts {
+		if part != "" {
+			allEmpty = false
+			break
+		}
+	}
+	if allEmpty {
+		return
+	}
+	if m.reasoningSummaryBuffers == nil {
+		m.reasoningSummaryBuffers = map[string]string{}
+	}
+	m.reasoningSummaryBuffers[itemID] = strings.Join(parts, "\n\n")
+	m.restoreReasoningStatusHeader()
+}
+
+func reasoningSummaryParts(item *protocol.ThreadItem) []string {
+	if item == nil {
+		return nil
+	}
+	if len(item.Summary) > 0 {
+		return append([]string(nil), item.Summary...)
+	}
+	if len(item.Content) == 0 {
+		if text := itemText(item); text != "" {
+			return []string{text}
+		}
+	}
+	return nil
 }
 
 // commitReasoningSummaryBlock records a completed reasoning item as a
@@ -7944,17 +8003,17 @@ func (m *Model) applyItemStarted(item *protocol.ThreadItem, startedAtMS int64) {
 	}
 	switch item.Type {
 	case "command_execution":
-		m.Transcript.finishAssistantPreambleBeforeTool()
+		m.Transcript.finishAssistantPreambleBeforeTool(m.State)
 		m.noteUnifiedExecCommandStarted(item)
 		m.renderCommandExecutionItem(item)
 	case "mcp_tool_call":
-		m.Transcript.finishAssistantPreambleBeforeTool()
+		m.Transcript.finishAssistantPreambleBeforeTool(m.State)
 		m.renderMCPToolCallItem(item, false)
 	case "web_search", "webSearch":
-		m.Transcript.finishAssistantPreambleBeforeTool()
+		m.Transcript.finishAssistantPreambleBeforeTool(m.State)
 		m.renderWebSearchItem(item, false)
 	case "tool_call":
-		m.Transcript.finishAssistantPreambleBeforeTool()
+		m.Transcript.finishAssistantPreambleBeforeTool(m.State)
 		if isViewImageThreadItem(item) {
 			// Rust projects view_image calls into an ImageView cell once the
 			// tool completes; do not paint a generic in-progress tool row.
@@ -7962,16 +8021,31 @@ func (m *Model) applyItemStarted(item *protocol.ThreadItem, startedAtMS int64) {
 		}
 		m.startOrUpdateToolCall(item)
 	case "file_change":
-		m.Transcript.finishAssistantPreambleBeforeTool()
+		m.Transcript.finishAssistantPreambleBeforeTool(m.State)
 		m.renderFileChangeItem(item, false)
 	case "agent_message":
-		// Streaming deltas create the visible assistant message.
+		// Some streams carry their first text on item/started. A tool can
+		// interrupt the item and cause a second start, so the same item is
+		// accepted only once until its authoritative completion arrives
+		// (Rust #59700).
+		text := firstNonEmpty(item.Text, item.Message)
+		questions := bottompane.ParseAsyncUserInputQuestions(item.Metadata["questions"])
+		if strings.TrimSpace(text) != "" && len(questions) == 0 &&
+			m.Transcript.activeAssistantDeltaItemID != item.ID &&
+			m.Transcript.lastFlushedAssistantItemID != item.ID {
+			m.Transcript.activeAssistantDeltaTurnID = m.currentTurnID
+			m.appendAssistantDelta(item.ID, text)
+		}
 	case "plan":
 		m.proposedPlanState(item.ID)
 	case "reasoning":
 		// Rust #43921: only the active reasoning item may move the heading, and a
-		// resumed item's start closes the previous snapshot.
-		m.applyReasoningItemStarted(item.ID)
+		// resumed item's start closes the previous snapshot. The item may carry
+		// complete parts even on its first event (#59698).
+		if m.reasoningItemID != strings.TrimSpace(item.ID) {
+			m.applyReasoningItemStarted(item.ID)
+		}
+		m.replaceReasoningParts(item.ID, reasoningSummaryParts(item), reasoningContentParts(item))
 	case "imageGeneration":
 		// The completed event carries the saved path.
 	case "imageView", "image_view":
@@ -8051,7 +8125,7 @@ func (m *Model) applyItemCompleted(item *protocol.ThreadItem) bubbletea.Cmd {
 			// Rust #39312: an async agent message is user-visible but does not
 			// end the turn, so it renders as a standalone assistant message
 			// without becoming the turn's final answer.
-			m.Transcript.finishAssistantPreambleBeforeTool()
+			m.Transcript.finishAssistantPreambleBeforeTool(m.State)
 			// Rust #42891: structured async questions become pending local
 			// questions the composer can answer inline.
 			questions := bottompane.ParseAsyncUserInputQuestions(item.Metadata["questions"])
@@ -8118,7 +8192,7 @@ func (m *Model) applyItemCompleted(item *protocol.ThreadItem) bubbletea.Cmd {
 				// rendered inline; a failed delivery restores it.
 				return m.deliverVoiceSpeech(item.ID, speech)
 			}
-			m.mergeAssistantFinal(item.Text)
+			m.mergeAssistantFinalForItem(item.ID, item.Text)
 		}
 	case "plan":
 		m.completeProposedPlan(item)
@@ -8216,7 +8290,7 @@ func (m *Model) renderCollabAgentToolCall(item *protocol.ThreadItem, completed b
 	if !ok {
 		return
 	}
-	m.Transcript.finishAssistantPreambleBeforeTool()
+	m.Transcript.finishAssistantPreambleBeforeTool(m.State)
 	m.applyHistoryCell(cell)
 }
 
@@ -8788,7 +8862,7 @@ func (m *Model) appendComputerActivityCall(item *protocol.ThreadItem) {
 	if m.computerActivityGroup == nil {
 		m.computerActivityGroup = &historycell.ComputerActivityCell{}
 		m.computerActivityMessageIndex = -1
-		m.Transcript.finishAssistantPreambleBeforeTool()
+		m.Transcript.finishAssistantPreambleBeforeTool(m.State)
 	}
 	invocation := historycell.McpInvocation{Server: strings.TrimSpace(item.Server), Tool: strings.TrimSpace(item.Tool)}
 	if item.Arguments != nil {
@@ -12595,6 +12669,9 @@ func (m *Model) appendAssistantDelta(itemID string, delta string) {
 	if m == nil || delta == "" {
 		return
 	}
+	if strings.TrimSpace(itemID) != "" {
+		m.Transcript.activeAssistantDeltaTurnID = m.currentTurnID
+	}
 	m.markSafetyBufferingAgentMessageStarted()
 	// Rust streaming.rs sync_active_stream_tail hides the status row while the
 	// assistant tail streams; the transcript itself owns that surface.
@@ -12611,6 +12688,16 @@ func (m *Model) mergeAssistantFinal(text string) {
 	// the next tool or commentary restores it.
 	m.hideStatusIndicator()
 	m.Transcript.mergeAssistantFinal(m.State, text, m.width)
+	m.flushDeferredSubAgentActivity()
+}
+
+func (m *Model) mergeAssistantFinalForItem(itemID string, text string) {
+	if m == nil {
+		return
+	}
+	m.markSafetyBufferingAgentMessageStarted()
+	m.hideStatusIndicator()
+	m.Transcript.mergeAssistantFinalForItem(m.State, itemID, text, m.width)
 	m.flushDeferredSubAgentActivity()
 }
 
@@ -13206,7 +13293,13 @@ func isGroupableUserPrompt(message codextui.Message) bool {
 // with the user prompt surface.
 func isUserSurfaceBlankLine(line string) bool {
 	surface := userPromptSurfaceSGR()
-	if surface == "" || !strings.Contains(line, surface) {
+	if surface == "" {
+		// Without a detected color level the prompt cell paints no surface,
+		// so an unpainted blank row is the same separator (Rust #56280 keeps
+		// the adjacency rule regardless of palette).
+		return strings.TrimSpace(utils.StripANSI(line)) == ""
+	}
+	if !strings.Contains(line, surface) {
 		return false
 	}
 	return strings.TrimSpace(utils.StripANSI(line)) == ""

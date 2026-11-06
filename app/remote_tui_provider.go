@@ -9,6 +9,7 @@ import (
 	"codex_go/appserver"
 	appserverdaemon "codex_go/appserverdaemon"
 	"codex_go/model"
+	codextea "codex_go/tui/tea"
 )
 
 // interactiveRemoteModelProviderList browses the connected app server's
@@ -41,4 +42,23 @@ func remoteTUIModelProviderListError(err error) error {
 		}
 	}
 	return fmt.Errorf("Could not load model providers: %w", err)
+}
+
+// interactiveRemoteModelProviderWriter applies a provider patch through the
+// connected app server.
+func interactiveRemoteModelProviderWriter(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) codextea.ModelProviderConfigWriteFunc {
+	return func(params model.ProviderConfigWriteParams) (model.ProviderConfigWriteResponse, error) {
+		reqCtx, cancel := remoteTUIAccountRequestContext(ctx)
+		defer cancel()
+		client, err := openRemoteSessionClient(reqCtx, endpoint)
+		if err != nil {
+			return model.ProviderConfigWriteResponse{}, err
+		}
+		defer client.close()
+		var response model.ProviderConfigWriteResponse
+		if err := remoteSessionRequest(reqCtx, client, appserver.MethodModelProviderConfigWrite, params, &response); err != nil {
+			return model.ProviderConfigWriteResponse{}, fmt.Errorf("modelProvider/config/write failed: %w", err)
+		}
+		return response, nil
+	}
 }

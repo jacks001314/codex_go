@@ -75,6 +75,10 @@ type Message struct {
 	// live reasoning lifecycle can replace the restored snapshot in place
 	// (Rust ReasoningReplay restores the active item instead of committing it).
 	ItemID string
+	// InterruptedItem identifies an assistant reply flushed before a tool ran.
+	// The authoritative item completion replaces it at this original position
+	// (Rust #59700).
+	InterruptedItem string
 	// ReasoningRawText is the raw-chain-of-thought variant of a transcript-only
 	// reasoning block. Rust gates that variant on `show_raw_agent_reasoning`
 	// (RawReasoningVisibility::Visible) when projecting thread items, so both

@@ -34,6 +34,7 @@ var keymapActionCatalog = []KeymapAction{
 	keymapAction("global", "Global", "toggle_raw_output", "Toggle raw scrollback mode.", []string{"alt-r"}),
 	keymapAction("global", "Global", "toggle_side_conversation", "Switch between a side conversation and its parent.", []string{"ctrl-/"}),
 	keymapAction("global", "Global", "focus_main_composer", "Focus the main conversation composer.", nil),
+	keymapAction("global", "Global", "focus_sidebar_tabs", "Open the sidebar tab chooser.", nil),
 	keymapAction("global", "Global", "focus_sidebar_content", "Focus the side conversation.", nil),
 	keymapAction("global", "Global", "focus_pane_left", "Move focus to the left conversation pane.", nil),
 	keymapAction("global", "Global", "focus_pane_right", "Move focus to the right conversation pane.", nil),

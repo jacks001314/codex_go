@@ -106,7 +106,11 @@ func sideWorkspaceWidths(width int) (leftWidth int, rightWidth int, ok bool) {
 // sidePaneLayout reports whether both transcripts are drawn and which of them
 // currently owns the composer.
 func (m *Model) sidePaneLayout(width int) (leftWidth int, rightWidth int, sideFocused bool, ok bool) {
-	if m == nil || m.activeSide == nil || !m.sideWorkspaceEnabled() {
+	if m == nil {
+		return 0, 0, false, false
+	}
+	chooser := m.sidebarChooserVisible()
+	if !m.sideWorkspaceEnabled() || (m.activeSide == nil && !chooser) {
 		return 0, 0, false, false
 	}
 	if m.transcriptUnavailableForPanes() {
@@ -124,6 +128,9 @@ func (m *Model) sidePaneLayout(width int) (leftWidth int, rightWidth int, sideFo
 	}
 	if !ok {
 		return 0, 0, false, false
+	}
+	if chooser {
+		return leftWidth, rightWidth, true, true
 	}
 	return leftWidth, rightWidth, m.activeSide.ShowingSide, true
 }
@@ -156,29 +163,43 @@ func (m *Model) renderSideWorkspace(width int, height int) (string, bool) {
 		}
 	}
 	side := m.activeSide
-	parentMessages := side.ParentMessages
-	sideMessages := side.SideMessages
-	// The focused snapshot is the live transcript; the inactive copy is the
-	// retained one captured when focus last changed.
-	if sideFocused {
-		sideMessages = m.State.Messages
-	} else {
-		parentMessages = m.State.Messages
-	}
 	parentCache := &transcriptMessageCache{}
 	sideCache := &transcriptMessageCache{}
-	left := m.renderSidePaneTranscript(parentCache, side.ParentThreadID, parentMessages, leftWidth)
-	right := m.renderSidePaneTranscript(sideCache, side.SideThreadID, sideMessages, rightWidth)
+	left := ""
+	right := ""
+	if m.sidebarChooserVisible() {
+		// The chooser belongs to the parent conversation, so the live
+		// transcript stays on the left while the list paints on the right
+		// (Rust #59739).
+		left = m.renderSidePaneTranscript(parentCache, m.sidebarParentThreadID(), m.State.Messages, leftWidth)
+		right = m.renderSidebarChooser(rightWidth, height)
+	} else {
+		parentMessages := side.ParentMessages
+		sideMessages := side.SideMessages
+		// The focused snapshot is the live transcript; the inactive copy is the
+		// retained one captured when focus last changed.
+		if sideFocused {
+			sideMessages = m.State.Messages
+		} else {
+			parentMessages = m.State.Messages
+		}
+		left = m.renderSidePaneTranscript(parentCache, side.ParentThreadID, parentMessages, leftWidth)
+		right = m.renderSidePaneTranscript(sideCache, side.SideThreadID, sideMessages, rightWidth)
+		// Rust #59784 paints the sibling tabs above the side transcript.
+		right = m.renderSidebarTabStrip(rightWidth) + "\n" + right
+	}
 	// Rust #59527 keeps a scroll position per pane: the focused pane follows
 	// the transcript viewport, while the inactive pane keeps the offset parked
 	// when focus left it (or when the wheel last moved over it). A pane whose
 	// offset was never set stays pinned to its latest output.
 	parentFirst, sideFirst := sidePaneTail, sidePaneTail
-	if side.ParentInteractionSaved {
-		parentFirst = side.ParentScroll
-	}
-	if side.SideInteractionSaved {
-		sideFirst = side.SideScroll
+	if side != nil {
+		if side.ParentInteractionSaved {
+			parentFirst = side.ParentScroll
+		}
+		if side.SideInteractionSaved {
+			sideFirst = side.SideScroll
+		}
 	}
 	if sideFocused {
 		sideFirst = m.transcript.YOffset
@@ -186,12 +207,14 @@ func (m *Model) renderSideWorkspace(width int, height int) (string, bool) {
 		parentFirst = m.transcript.YOffset
 	}
 	rendered, parentFirst, sideFirst, parentMax, sideMax := joinSidePanes(left, right, leftWidth, height, parentFirst, sideFirst)
-	side.ParentViewMax = parentMax
-	side.SideViewMax = sideMax
-	if sideFocused {
-		side.ParentScroll = parentFirst
-	} else {
-		side.SideScroll = sideFirst
+	if side != nil {
+		side.ParentViewMax = parentMax
+		side.SideViewMax = sideMax
+		if sideFocused {
+			side.ParentScroll = parentFirst
+		} else {
+			side.SideScroll = sideFirst
+		}
 	}
 	if m.sideResize != nil {
 		rendered += "\n" + m.sideResizeHint(rightWidth)

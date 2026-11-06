@@ -17,6 +17,12 @@ func (r *RuntimeRouter) handleModelProviderConfigWrite(request *Request) (*model
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
+	return r.ModelProviderConfigWrite(params)
+}
+
+// ModelProviderConfigWrite exposes the same provider patch used by the
+// app-server method to the embedded TUI.
+func (r *RuntimeRouter) ModelProviderConfigWrite(params model.ProviderConfigWriteParams) (*model.ProviderConfigWriteResponse, error) {
 	catalog, err := loadModelProviderCatalog(r)
 	if err != nil {
 		return nil, err

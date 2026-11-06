@@ -24,6 +24,7 @@ var ContextActions = map[string]map[string]struct{}{
 		"toggle_side_conversation": {},
 		"focus_main_composer":      {},
 		"focus_sidebar_content":    {},
+		"focus_sidebar_tabs":       {},
 		"focus_pane_left":          {},
 		"focus_pane_right":         {},
 		"hide_pane":                {},

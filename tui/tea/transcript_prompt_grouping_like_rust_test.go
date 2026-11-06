@@ -25,6 +25,10 @@ func transcriptLineIndex(lines []string, needle string) int {
 // adjacent visible prompts are separated by a single surface-painted row
 // instead of an unpainted gap.
 func TestConsecutiveUserPromptsShareBackgroundBlockLikeRust(t *testing.T) {
+	// The shared separator is a painted row, so pin the palette instead of
+	// depending on the host terminal's colour detection.
+	restore := codextui.SetStdoutColorLevelForTest(codextui.ColorTrue)
+	defer restore()
 	state := codextui.NewState(nil)
 	state.Messages = []codextui.Message{
 		userPromptMessage("first prompt"),

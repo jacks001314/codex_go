@@ -335,6 +335,9 @@ func (m *Model) applyAgentSwitchResult(message AgentSwitchResultMsg) {
 		// owns the task.
 		if len(messages) == 0 && !message.Response.ReadOnly {
 			replayEvents := filterResolvedMisalignmentReplayEvents(buffered)
+			// A typed reasoning start remains typed even if a later handoff has
+			// already marked the turn delegated in the destination widget.
+			m.rememberBufferedTypedReasoningStarts(replayEvents)
 			// Rust replays through ThreadEventStore::snapshot, which drops the
 			// private content of delegated voice turns.
 			messages = applyBufferedThreadReplay(messages, replayEvents)
@@ -372,10 +375,6 @@ func (m *Model) applyAgentSwitchResult(message AgentSwitchResultMsg) {
 		m.reasoningResumeTurnID = strings.TrimSpace(message.Response.WorkingReasoningTurnID)
 		m.reasoningItemID = strings.TrimSpace(message.Response.WorkingReasoningItemID)
 		m.applyRestoredReasoningHeading()
-		// A restored active item may have missed earlier deltas; the completed
-		// item reconciles the stream (Rust #43921 restore_active_reasoning_item).
-		m.reasoningRecoveredAfterRefresh = strings.TrimSpace(message.Response.WorkingReasoningItemID) != "" ||
-			strings.TrimSpace(message.Response.WorkingStatusHeader) != ""
 		// Rust #43921 ReasoningReplay: when the read snapshot identifies no active
 		// reasoning item, restore it from the buffered deltas so the heading
 		// survives earlier evictions.
@@ -443,22 +442,56 @@ func (m *Model) replayBufferedReasoning(events []protocol.ThreadEvent) {
 func bufferedReasoningMarker(events []protocol.ThreadEvent) (string, bool) {
 	marker := ""
 	seen := false
+	currentTurn := ""
+	delegated := map[string]bool{}
 	for _, event := range events {
+		turnID := strings.TrimSpace(firstNonEmpty(event.TurnID, event.InternalTurnID, currentTurn))
 		switch event.Type {
-		case "item.started":
-			if itemID := bufferedReasoningItemID(event.Item); itemID != "" {
-				marker = itemID
-				seen = true
+		case "turn.started":
+			currentTurn = strings.TrimSpace(firstNonEmpty(event.TurnID, event.InternalTurnID))
+		case "item.started", "item.completed":
+			if realtimeItemIsDelegationUserMessage(event.Item) {
+				delegated[turnID] = true
 			}
-		case "item.completed":
-			if itemID := bufferedReasoningItemID(event.Item); itemID != "" && itemID == marker {
+			if event.Type == "item.started" {
+				if itemID := bufferedReasoningItemID(event.Item); itemID != "" && !delegated[turnID] {
+					marker = itemID
+					seen = true
+				}
+			} else if itemID := bufferedReasoningItemID(event.Item); itemID != "" && itemID == marker {
 				marker = ""
 			}
-		case "turn.started", "turn.completed", "turn.failed":
+		case "turn.completed", "turn.failed":
 			marker = ""
 		}
 	}
 	return marker, seen
+}
+
+// rememberBufferedTypedReasoningStarts restores the typed-item provenance that
+// the bounded replay retains, before the destination widget replays handoff
+// state (Rust #59698 reasoning_replay.rs).
+func (m *Model) rememberBufferedTypedReasoningStarts(events []protocol.ThreadEvent) {
+	if m == nil {
+		return
+	}
+	currentTurn := ""
+	delegated := map[string]bool{}
+	for _, event := range events {
+		turnID := strings.TrimSpace(firstNonEmpty(event.TurnID, event.InternalTurnID, currentTurn))
+		switch event.Type {
+		case "turn.started":
+			currentTurn = strings.TrimSpace(firstNonEmpty(event.TurnID, event.InternalTurnID))
+		case "item.started", "item.completed":
+			if realtimeItemIsDelegationUserMessage(event.Item) {
+				delegated[turnID] = true
+				continue
+			}
+			if event.Type == "item.started" && bufferedReasoningItemID(event.Item) != "" && !delegated[turnID] {
+				m.noteTypedRealtimeItem(turnID, event.Item.ID)
+			}
+		}
+	}
 }
 
 // bufferedReasoningItemID returns a reasoning item's id.

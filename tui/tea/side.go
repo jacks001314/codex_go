@@ -106,6 +106,11 @@ func (m *Model) focusSidebarContent() bubbletea.Cmd {
 	if m == nil || m.State == nil || !m.sideWorkspaceEnabled() {
 		return nil
 	}
+	// An already-open chooser gives focus back to the parent composer
+	// (Rust #59739 handle_side_focus_key).
+	if m.sidebarChooserVisible() {
+		return m.closeSidebarChooser()
+	}
 	// Rust #59458 applies even with side retention disabled: wait for the
 	// queued side-conversation start before moving focus.
 	if m.sideStartPending {
@@ -118,7 +123,9 @@ func (m *Model) focusSidebarContent() bubbletea.Cmd {
 			side = m.retainedSideConversationForThread(threadID)
 		}
 		if side == nil {
-			return nil
+			// Rust #59739: with no side chat yet, the sidebar shortcut opens
+			// the chooser instead of doing nothing.
+			return m.openSidebarChooser()
 		}
 		return m.activateRetainedSideConversation(side, "")
 	}
@@ -350,6 +357,7 @@ func (m *Model) retainSideConversation(side *activeSideConversation) {
 		m.sideConversations = map[string]*activeSideConversation{}
 	}
 	m.sideConversations[parentThreadID] = side
+	m.registerSidebarTab(side)
 }
 
 func (m *Model) retainedSideConversationForParent(parentThreadID string) *activeSideConversation {
@@ -418,6 +426,7 @@ func (m *Model) forgetRetainedSideConversation(side *activeSideConversation) {
 	if stored := m.sideConversations[parentThreadID]; stored == side {
 		delete(m.sideConversations, parentThreadID)
 	}
+	m.unregisterSidebarTab(side)
 }
 
 // activateRetainedSideConversation hides the current parent transcript and
@@ -552,8 +561,10 @@ func (m *Model) startSideConversation(commandName string, userMessage string) bu
 	// Rust #52184: navigating to another thread retains the side conversation.
 	// Returning to the parent and invoking /side reopens that same thread rather
 	// than forking a replacement.
-	if existing := m.retainedSideConversationForParent(parentThreadID); existing != nil {
-		return m.activateRetainedSideConversation(existing, userMessage)
+	// Rust #59784: "/side <prompt>" asks for a new side chat, while a bare
+	// "/side" reopens the selected one.
+	if existing := m.retainedSideConversationForParent(parentThreadID); existing != nil && strings.TrimSpace(userMessage) == "" {
+		return m.activateRetainedSideConversation(existing, "")
 	}
 	if m.onStartSide == nil {
 		m.showSideCommandMessage(commandName, userMessage, "Side conversation requests require app-server thread routing.")

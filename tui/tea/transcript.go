@@ -35,6 +35,9 @@ type TranscriptComponent struct {
 	lastTurnError              string
 	needsFinalMessageSeparator bool
 	activeAssistantDeltaItemID string
+	activeAssistantDeltaTurnID string
+	lastFlushedAssistantItemID string
+	lastFlushedAssistantTurnID string
 }
 
 // newTranscriptComponent initializes the transcript sub-component.
@@ -240,17 +243,26 @@ func (t *TranscriptComponent) appendAssistantDelta(state *codextui.State, itemID
 		return
 	}
 	itemID = strings.TrimSpace(itemID)
-	if itemID != "" && t.activeAssistantDeltaItemID != "" && itemID != t.activeAssistantDeltaItemID {
-		state.Messages = append(state.Messages, codextui.Message{Role: codextui.RoleAssistant, Text: delta})
+	if itemID == "" {
+		state.Messages = appendAssistantDeltaToMessages(state.Messages, delta)
 		state.BumpMessagesRevisionFrom(len(state.Messages) - 1)
-		t.activeAssistantDeltaItemID = itemID
 		return
 	}
-	state.Messages = appendAssistantDeltaToMessages(state.Messages, delta)
-	state.BumpMessagesRevisionFrom(len(state.Messages) - 1)
-	if itemID != "" {
-		t.activeAssistantDeltaItemID = itemID
+	// A tool can interrupt an item and cause another stream fragment for the
+	// same item. That resumed fragment is provisional too; keep it separate so
+	// the authoritative completion can replace the reply at its first position
+	// without mixing it with the earlier fragment (Rust #59700).
+	if t.activeAssistantDeltaItemID == itemID {
+		index := len(state.Messages) - 1
+		if index >= 0 && state.Messages[index].Role == codextui.RoleAssistant && state.Messages[index].ItemID == itemID {
+			state.Messages[index].Text += delta
+			state.BumpMessagesRevisionFrom(index)
+			return
+		}
 	}
+	state.Messages = append(state.Messages, codextui.Message{Role: codextui.RoleAssistant, Text: delta, ItemID: itemID})
+	state.BumpMessagesRevisionFrom(len(state.Messages) - 1)
+	t.activeAssistantDeltaItemID = itemID
 }
 
 // mergeAssistantFinal merges the final assistant message text.
@@ -262,11 +274,77 @@ func (t *TranscriptComponent) mergeAssistantFinal(state *codextui.State, text st
 	state.BumpMessagesRevisionFrom(len(state.Messages) - 1)
 }
 
+// mergeAssistantFinalForItem repairs the reply that was already committed at a
+// tool boundary. The completed item is authoritative, while intervening tool
+// cells keep their order and later fragments of the same item are discarded
+// (Rust #59700 CorrectFlushedAgentMessage).
+func (t *TranscriptComponent) mergeAssistantFinalForItem(state *codextui.State, itemID string, text string, width int) {
+	if t == nil || state == nil {
+		return
+	}
+	if t.replaceAssistantMessageForItem(state, itemID, text, "") {
+		return
+	}
+	state.Messages = mergeAssistantFinalToMessages(state.Messages, text)
+	state.BumpMessagesRevisionFrom(len(state.Messages) - 1)
+}
+
+func (t *TranscriptComponent) replaceAssistantMessageForItem(state *codextui.State, itemID string, text string, phase string) bool {
+	if t == nil || state == nil {
+		return false
+	}
+	itemID = strings.TrimSpace(itemID)
+	text = codextui.NormalizeCompletedAssistantMarkdown(text)
+	if itemID == "" || text == "" {
+		return false
+	}
+	first := -1
+	for index, message := range state.Messages {
+		if message.Role == codextui.RoleAssistant && strings.TrimSpace(message.ItemID) == itemID {
+			first = index
+			break
+		}
+	}
+	if first < 0 {
+		return false
+	}
+	kept := make([]codextui.Message, 0, len(state.Messages))
+	for index, message := range state.Messages {
+		if index != first && message.Role == codextui.RoleAssistant && strings.TrimSpace(message.ItemID) == itemID {
+			continue
+		}
+		kept = append(kept, message)
+	}
+	for index := range kept {
+		if kept[index].Role != codextui.RoleAssistant || strings.TrimSpace(kept[index].ItemID) != itemID {
+			continue
+		}
+		kept[index].Text = text
+		kept[index].RawText = text
+		kept[index].InterruptedItem = ""
+		if phase != "" {
+			kept[index].Phase = phase
+		}
+		state.Messages = kept
+		state.BumpMessagesRevisionFrom(index)
+		if t.lastFlushedAssistantItemID == itemID {
+			t.lastFlushedAssistantItemID = ""
+			t.lastFlushedAssistantTurnID = ""
+		}
+		return true
+	}
+	return false
+}
+
 // completeAssistantCommentary fixes the streamed preamble in transcript history
 // before a tool cell is inserted. Rust treats commentary as a completed
 // mid-turn message rather than leaving it as the active final-answer stream.
 func (t *TranscriptComponent) completeAssistantCommentary(state *codextui.State, itemID string, text string, width int) {
 	if t == nil || state == nil || strings.TrimSpace(text) == "" {
+		return
+	}
+	if t.replaceAssistantMessageForItem(state, itemID, text, messagePhaseCommentary) {
+		t.activeAssistantDeltaItemID = ""
 		return
 	}
 	state.Messages = mergeAssistantPhaseToMessages(state.Messages, text, messagePhaseCommentary)
@@ -278,11 +356,35 @@ func (t *TranscriptComponent) completeAssistantCommentary(state *codextui.State,
 // at the tool boundary. The text is already present in State.Messages; only
 // the streaming identity must be reset so later final-answer deltas cannot
 // merge back into or replace the preamble.
-func (t *TranscriptComponent) finishAssistantPreambleBeforeTool() {
+func (t *TranscriptComponent) finishAssistantPreambleBeforeTool(state *codextui.State) {
 	if t == nil {
 		return
 	}
+	if state != nil && t.activeAssistantDeltaItemID != "" {
+		key := interruptedAgentMessageKey(t.activeAssistantDeltaTurnID, t.activeAssistantDeltaItemID)
+		for index := len(state.Messages) - 1; index >= 0; index-- {
+			message := &state.Messages[index]
+			if message.Role != codextui.RoleAssistant || strings.TrimSpace(message.ItemID) != t.activeAssistantDeltaItemID {
+				continue
+			}
+			message.InterruptedItem = key
+			state.BumpMessagesRevisionFrom(index)
+			t.lastFlushedAssistantItemID = t.activeAssistantDeltaItemID
+			t.lastFlushedAssistantTurnID = t.activeAssistantDeltaTurnID
+			break
+		}
+	}
 	t.activeAssistantDeltaItemID = ""
+	t.activeAssistantDeltaTurnID = ""
+}
+
+func interruptedAgentMessageKey(turnID string, itemID string) string {
+	turnID = strings.TrimSpace(turnID)
+	itemID = strings.TrimSpace(itemID)
+	if turnID == "" || itemID == "" {
+		return ""
+	}
+	return turnID + ":" + itemID
 }
 
 // insertFinalMessageSeparatorIfNeeded inserts a separator between tool calls and assistant message.

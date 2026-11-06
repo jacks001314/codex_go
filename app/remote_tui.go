@@ -574,10 +574,12 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		// enables them (Rust #43120/#43286, #54175).
 		WorktreesEnabled: false,
 		// Rust #43340: the connected server owns named permission profiles.
-		OnListPermissionProfiles:  interactiveRemoteListPermissionProfiles(ctx, endpoint),
-		OnListModelProviders:      interactiveRemoteModelProviderList(ctx, endpoint),
-		SidebarWidthPercent:       interactiveSidebarWidthPercent(root),
-		OnUpdateThreadPermissions: interactiveRemoteUpdateThreadPermissions(ctx, endpoint),
+		OnListPermissionProfiles:    interactiveRemoteListPermissionProfiles(ctx, endpoint),
+		OnListModelProviders:        interactiveRemoteModelProviderList(ctx, endpoint),
+		OnWriteModelProviderConfig:  interactiveRemoteModelProviderWriter(ctx, endpoint),
+		ModelProviderClientOverride: interactiveRemoteModelProviderClientOverride(root),
+		SidebarWidthPercent:         interactiveSidebarWidthPercent(root),
+		OnUpdateThreadPermissions:   interactiveRemoteUpdateThreadPermissions(ctx, endpoint),
 		// The model compares a selection's owner against the backend it displays
 		// (Rust #54681). Without this the remote TUI starts with a zero backend
 		// id, so the first `/fork` or command-center fork of a fresh session was
