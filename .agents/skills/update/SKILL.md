@@ -17,17 +17,19 @@ codex-go是官方rust版本codex cli的go版本同步实现，需要功能高度
 ## 工作流
 0. git 当git 连接失败的时候，要用系统代理
 
-1. 上游rust codex cli 本地git库位于目录：D:\qax\reagent\dev\git\codex，使用git pull origin main拉取最新更新
+1. 上游windows 节点 rust codex cli 本地git库位于目录：D:\qax\reagent\dev\git\codex，使用git pull origin main拉取最新更新
 
-2. 比对当前go版本codex项目和rust codex cli相关功能，制定功能更新计划，输出到update/plan_年_月_日.md
+2. 上游linux 节点 rust codex cli 本地git库位于目录：/home/jacks/jacks_dev/codex ，使用git pull origin main拉取最新更新
 
-3. 根据更新计划开始落地更新同步代码，并进行测试验证
+3. 比对当前go版本codex项目和rust codex cli相关功能，制定功能更新计划，输出到update/plan_年_月_日.md
 
-4. 更新对齐的顺序：核心功能更新对齐，最后对齐tui功能
+4. 根据更新计划开始落地更新同步代码，并进行测试验证
 
-5. git commit and push更新后的go版本codex项目到github远程仓库
+5. 更新对齐的顺序：核心功能更新对齐，最后对齐tui功能
 
-6. 检查是否还有未落地的功能或是延长的功能，若有，继续执行第2步，否则结束。
+6. git commit and push更新后的go版本codex项目到github远程仓库
 
-7. 总结更新对齐情况
+7. 检查是否还有未落地的功能或是延长的功能，若有，继续执行第2步，否则结束。
+
+8. 总结更新对齐情况
 
