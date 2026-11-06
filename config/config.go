@@ -1236,6 +1236,7 @@ var knownTuiConfigFields = map[string]struct{}{
 	"raw_output_mode":                 {},
 	"fullscreen_transcript":           {},
 	"mouse_scroll_speed":              {},
+	"sidebar_width_percent":           {},
 	"copy_on_select":                  {},
 	"right_click_paste":               {},
 	"alternate_screen":                {},

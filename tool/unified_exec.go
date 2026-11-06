@@ -344,19 +344,22 @@ type unifiedExecProcess struct {
 	mu            sync.Mutex
 	interactionMu sync.Mutex
 	interactions  atomic.Int32
-	eventMu       sync.Mutex
-	output        *unifiedExecHeadTailBuffer
-	transcript    *unifiedExecHeadTailBuffer
-	eventPending  []byte
-	emittedDeltas int
-	exited        bool
-	exitCode      int
-	waitErr       error
-	timedOut      bool
-	sandboxDenied bool
-	eventsStarted bool
-	pendingEvents []UnifiedExecEvent
-	endOnce       sync.Once
+	// initialExecActive keeps a session private until its initial exec_command
+	// call returns the first result (Rust #59633 initial_exec_command_active).
+	initialExecActive atomic.Bool
+	eventMu           sync.Mutex
+	output            *unifiedExecHeadTailBuffer
+	transcript        *unifiedExecHeadTailBuffer
+	eventPending      []byte
+	emittedDeltas     int
+	exited            bool
+	exitCode          int
+	waitErr           error
+	timedOut          bool
+	sandboxDenied     bool
+	eventsStarted     bool
+	pendingEvents     []UnifiedExecEvent
+	endOnce           sync.Once
 }
 
 type unifiedExecSandboxProcess interface {
@@ -511,6 +514,7 @@ func (m *UnifiedExecManager) Exec(ctx context.Context, req *ShellRequest, callID
 	m.mu.Lock()
 	m.processes[processID] = process
 	m.mu.Unlock()
+	process.initialExecActive.Store(true)
 	process.emitEvent(UnifiedExecEvent{
 		Kind:        UnifiedExecEventBegin,
 		CallID:      process.callID,
@@ -548,7 +552,9 @@ func (m *UnifiedExecManager) Exec(ctx context.Context, req *ShellRequest, callID
 	}
 
 	yield := clampUnifiedExecInitialYield(req.YieldTimeMS)
-	return m.collect(ctx, process, yield, req.MaxOutputTokens)
+	result, err := m.collect(ctx, process, yield, req.MaxOutputTokens)
+	process.initialExecActive.Store(false)
+	return result, err
 }
 
 func (m *UnifiedExecManager) execWindowsSandbox(ctx context.Context, req *ShellRequest, callID string, processID int) (*ShellResult, error) {
@@ -603,6 +609,7 @@ func (m *UnifiedExecManager) execWindowsSandbox(ctx context.Context, req *ShellR
 	m.mu.Lock()
 	m.processes[processID] = process
 	m.mu.Unlock()
+	process.initialExecActive.Store(true)
 	process.emitEvent(UnifiedExecEvent{
 		Kind:        UnifiedExecEventBegin,
 		CallID:      process.callID,
@@ -636,7 +643,9 @@ func (m *UnifiedExecManager) execWindowsSandbox(ctx context.Context, req *ShellR
 		go process.enforceTimeout(time.Duration(req.TimeoutMS) * time.Millisecond)
 	}
 	yield := clampUnifiedExecInitialYield(req.YieldTimeMS)
-	return m.collect(ctx, process, yield, req.MaxOutputTokens)
+	result, err := m.collect(ctx, process, yield, req.MaxOutputTokens)
+	process.initialExecActive.Store(false)
+	return result, err
 }
 
 var localUnifiedExecOutputDrainGrace = 5 * time.Second
@@ -927,6 +936,7 @@ func (m *UnifiedExecManager) execRemote(ctx context.Context, req *ShellRequest, 
 	m.mu.Lock()
 	m.processes[processID] = process
 	m.mu.Unlock()
+	process.initialExecActive.Store(true)
 	go process.pollRemote()
 	startupTimer := time.NewTimer(unifiedExecEarlyExitGrace)
 	select {
@@ -954,7 +964,9 @@ func (m *UnifiedExecManager) execRemote(ctx context.Context, req *ShellRequest, 
 		go process.enforceTimeout(time.Duration(req.TimeoutMS) * time.Millisecond)
 	}
 	yield := clampUnifiedExecInitialYield(req.YieldTimeMS)
-	return m.collect(ctx, process, yield, req.MaxOutputTokens)
+	result, err := m.collect(ctx, process, yield, req.MaxOutputTokens)
+	process.initialExecActive.Store(false)
+	return result, err
 }
 
 func warnRemoteCredentialMaskingUnavailable(req *ShellRequest, requested bool, executorMasking execserver.RemoteCredentialMasking) {
@@ -1441,6 +1453,48 @@ func (m *UnifiedExecManager) ListProcesses(threadID string) []UnifiedExecProcess
 		})
 	}
 	sort.Slice(out, func(i int, j int) bool { return out[i].ProcessID < out[j].ProcessID })
+	return out
+}
+
+// CommandSessionInfo is one retained unified-exec session visible through the
+// command_sessions world-state section (Rust #59633). A handle stays private
+// until the initial exec_command call has returned.
+type CommandSessionInfo struct {
+	SessionID int
+	Exited    bool
+	InUse     bool
+}
+
+// CommandSessions snapshots the retained sessions of one thread. It includes
+// exited sessions whose results have not been collected yet and excludes the
+// process still serving its initial exec_command call, mirroring Rust's
+// initial_exec_command_active filter.
+func (m *UnifiedExecManager) CommandSessions(threadID string) []CommandSessionInfo {
+	if m == nil {
+		return nil
+	}
+	threadID = strings.TrimSpace(threadID)
+	m.mu.Lock()
+	processes := make([]*unifiedExecProcess, 0, len(m.processes))
+	for _, process := range m.processes {
+		if process == nil || process.initialExecActive.Load() {
+			continue
+		}
+		if threadID != "" && process.threadID != threadID {
+			continue
+		}
+		processes = append(processes, process)
+	}
+	m.mu.Unlock()
+	out := make([]CommandSessionInfo, 0, len(processes))
+	for _, process := range processes {
+		out = append(out, CommandSessionInfo{
+			SessionID: process.id,
+			Exited:    process.hasExited(),
+			InUse:     process.interactions.Load() > 0,
+		})
+	}
+	sort.Slice(out, func(i int, j int) bool { return out[i].SessionID < out[j].SessionID })
 	return out
 }
 

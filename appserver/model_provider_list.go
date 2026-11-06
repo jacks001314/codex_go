@@ -225,6 +225,16 @@ func (r *RuntimeRouter) handleModelProviderList(request *Request) (*model.Provid
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
+	return r.listModelProviders()
+}
+
+// ModelProviderList exposes the modelProvider/list result to in-process TUI
+// clients (Rust #59541 app::provider).
+func (r *RuntimeRouter) ModelProviderList() (*model.ProviderListResponse, error) {
+	return r.listModelProviders()
+}
+
+func (r *RuntimeRouter) listModelProviders() (*model.ProviderListResponse, error) {
 	catalog, err := loadModelProviderCatalog(r)
 	if err != nil {
 		return nil, err

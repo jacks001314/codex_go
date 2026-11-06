@@ -1950,6 +1950,46 @@ func TestUnifiedExecWriteStdinCarriesRuntimeGrantsLikeRust(t *testing.T) {
 	}
 }
 
+// #59633 keeps a session handle private until its initial exec_command call
+// returns the first result (Rust initial_exec_command_active).
+func TestUnifiedExecCommandSessionsHideInitialExecLikeRust(t *testing.T) {
+	manager := NewUnifiedExecManagerWithOptions(4, unifiedExecMinEmptyPollYieldMS)
+	defer manager.Close()
+	const threadID = "thread-command-sessions-initial"
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = manager.Exec(context.Background(), &ShellRequest{
+			Command:             unifiedExecHelperCommand("long"),
+			CWD:                 t.TempDir(),
+			YieldTimeMS:         unifiedExecMinYieldMS,
+			UnifiedExecThreadID: threadID,
+		}, "exec-call")
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		manager.mu.Lock()
+		registered := len(manager.processes)
+		manager.mu.Unlock()
+		if registered > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("initial exec call never registered a process")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if sessions := manager.CommandSessions(threadID); len(sessions) != 0 {
+		t.Fatalf("sessions during initial call = %#v, want none", sessions)
+	}
+	manager.TerminateAll(threadID)
+	select {
+	case <-done:
+	case <-time.After(15 * time.Second):
+		t.Fatal("initial exec call did not return after termination")
+	}
+}
+
 func unifiedExecHelperCommand(mode string) []string {
 	return []string{os.Args[0], "-test.run=^TestUnifiedExecHelperProcess$", "--", "--unified-exec-helper", mode}
 }

@@ -40,6 +40,11 @@ type WorldState struct {
 	// `<current_date status="unavailable" />` (and the shell_version
 	// equivalent) when a value the model already saw disappears (#45825).
 	Environments json.RawMessage `json:"environments,omitempty"`
+	// CommandSessions carries the retained command-session snapshot (Rust
+	// section id `command_sessions`, #59633): the harness-visible sessions the
+	// model has already seen, used to suppress unchanged updates and to clear
+	// stale handles after a restart or when the feature is disabled.
+	CommandSessions json.RawMessage `json:"commandSessions,omitempty"`
 	// PluginsInstructions carries the plugin guidance world-state snapshot
 	// (Rust section id `plugins_instructions`): the hash of the generic wording
 	// the model has seen and whether it came from the catalog (Rust #58894).
@@ -71,6 +76,7 @@ func DecodeWorldState(raw json.RawMessage) (*WorldState, error) {
 	state.SkillsCatalog = append(json.RawMessage(nil), state.SkillsCatalog...)
 	state.HostSkillsCatalog = append(json.RawMessage(nil), state.HostSkillsCatalog...)
 	state.Environments = append(json.RawMessage(nil), state.Environments...)
+	state.CommandSessions = append(json.RawMessage(nil), state.CommandSessions...)
 	return &state, nil
 }
 

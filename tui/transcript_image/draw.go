@@ -19,12 +19,17 @@ type EncodedImage struct {
 	// TempPath is the retained transport file for KittyLocalFile. Other
 	// protocols remove their temporary file once the payload is encoded.
 	TempPath string
+	// Placement records the Kitty image id and anchoring mode so a virtual
+	// placement can paint its placeholder cells (Rust #59579).
+	Placement pets.KittyPlacement
+	Columns   int
+	Rows      int
 }
 
 // Encode renders the visible slice of the image as a terminal graphics
 // payload. firstRow is the offset into the image's reserved cell rows and
 // rows is the number of visible cells.
-func (t *TranscriptImage) Encode(x int, y int, firstRow int, rows int, id uint32, env map[string]string) (*EncodedImage, error) {
+func (t *TranscriptImage) Encode(x int, y int, firstRow int, rows int, placement pets.KittyPlacement, env map[string]string) (*EncodedImage, error) {
 	if t == nil || t.Pixels == nil {
 		return nil, fmt.Errorf("%w: no image pixels", ErrUnsupported)
 	}
@@ -58,12 +63,15 @@ func (t *TranscriptImage) Encode(x int, y int, firstRow int, rows int, id uint32
 		if t.Protocol == pets.ImageProtocolKittyLocalFile {
 			transmit = pets.KittyTransmitPNGFileWithID
 		}
-		command, err := transmit(path, uint16(max(t.Columns, 1)), uint16(max(rows, 1)), &id, env)
+		command, err := transmit(path, uint16(max(t.Columns, 1)), uint16(max(rows, 1)), placement, env)
 		if err != nil {
 			_ = os.Remove(path)
 			return nil, err
 		}
 		encoded.Payload = []byte(command)
+		encoded.Placement = placement
+		encoded.Columns = int(max(t.Columns, 1))
+		encoded.Rows = max(rows, 1)
 		if t.Protocol == pets.ImageProtocolKittyLocalFile {
 			encoded.TempPath = path
 		} else {
@@ -93,6 +101,9 @@ func (e *EncodedImage) Write(writer io.Writer, x int, y int) error {
 		return err
 	}
 	if _, err := writer.Write(e.Payload); err != nil {
+		return err
+	}
+	if err := pets.WriteVirtualKittyPlaceholders(writer, e.Placement, x, y, e.Columns, e.Rows); err != nil {
 		return err
 	}
 	_, err := io.WriteString(writer, "\x1b8")

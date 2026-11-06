@@ -1566,6 +1566,12 @@ type Options struct {
 	// configured permission profiles, so the picker falls back to its local
 	// built-in presets. Nil keeps the picker on local presets only.
 	OnListPermissionProfiles func() ([]chatwidget.CustomPermissionProfile, bool, error)
+	// OnListModelProviders browses the connected app server's provider catalog
+	// (Rust #59541 app::provider).
+	OnListModelProviders ModelProviderListFunc
+	// SidebarWidthPercent is the saved `tui.sidebar_width_percent` value for
+	// the side-by-side conversation layout (Rust #59595); 0 uses the default.
+	SidebarWidthPercent int
 	// OnListCollaborationModes discovers the connected app server's
 	// collaborationMode/list catalog at startup and reconnect (Rust #42401,
 	// ModelCatalog::with_collaboration_modes). Nil keeps the builtin presets; a
@@ -2471,10 +2477,13 @@ type Model struct {
 	vimLastReplaceText []rune
 	// vimHasLastPaste records the last Vim paste for dot-repeat (`.`), which
 	// replays with the live register like Vim (Rust #57564).
-	vimHasLastPaste       bool
-	petRuntime            *petRuntime
-	petCodexHome          string
-	petEnv                map[string]string
+	vimHasLastPaste bool
+	petRuntime      *petRuntime
+	petCodexHome    string
+	petEnv          map[string]string
+	// tmuxImageProbe carries the tmux client fields for pane-local Kitty
+	// passthrough images (Rust #59579).
+	tmuxImageProbe        *pets.TmuxProbe
 	petFetch              pets.AssetFetchFunc
 	petLoadPending        string
 	onSubmit              SubmitFunc
@@ -2524,7 +2533,12 @@ type Model struct {
 	managedWorktreeStarting  bool
 	worktreePopupRequestID   string
 	// Named permission profile discovery and pending selection (Rust #43340).
-	onListPermissionProfiles  func() ([]chatwidget.CustomPermissionProfile, bool, error)
+	onListPermissionProfiles func() ([]chatwidget.CustomPermissionProfile, bool, error)
+	onListModelProviders     ModelProviderListFunc
+	// configProviderGeneration invalidates in-flight model provider browser
+	// requests when the popup is dismissed or reopened (Rust #59541). It lives
+	// on the model so closing the configuration panel does not reset it.
+	configProviderGeneration  uint64
 	onUpdateThreadPermissions func(threadID string, selection PermissionSelection) error
 	permissionProfiles        []chatwidget.CustomPermissionProfile
 	permissionProfilesLoading bool
@@ -2819,6 +2833,17 @@ type Model struct {
 	onReadReviewBranches               ReviewBranchesReaderFunc
 	onReadReviewCommits                ReviewCommitsReaderFunc
 	activeSide                         *activeSideConversation
+	// sideZoomed shows the focused conversation full width (Rust #59595).
+	sideZoomed bool
+	// sideWidthPercent is the saved sidebar share of the split; 0 means the
+	// default 50%.
+	sideWidthPercent int
+	// sideExactWidth pins the sidebar column count at one terminal width.
+	sideExactWidth sideExactWidth
+	// sideResize is the active keyboard resize preview, if any.
+	sideResize *sidePaneResize
+	// sideDrag is the active mouse divider drag (Rust #59527).
+	sideDrag *sidePaneDrag
 	// sideConversations retains every side conversation, keyed by its parent
 	// thread. Thread navigation hides the active side instead of deleting it
 	// (Rust #52184), so returning to a parent can reopen the existing side with
@@ -3301,6 +3326,8 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onStartManagedWorktree:           options.OnStartManagedWorktree,
 		onManagedWorktreeChanged:         options.OnManagedWorktreeChanged,
 		onListPermissionProfiles:         options.OnListPermissionProfiles,
+		onListModelProviders:             options.OnListModelProviders,
+		sideWidthPercent:                 options.SidebarWidthPercent,
 		onListCollaborationModes:         options.OnListCollaborationModes,
 		onUpdateThreadPermissions:        options.OnUpdateThreadPermissions,
 		terminalSize:                     options.TerminalSize,
@@ -3560,6 +3587,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 	model.codexHome = strings.TrimSpace(options.CodexHome)
 	model.mentionUsage = newMentionUsage(model.codexHome, options.HistoryPersistence)
 	model.petEnv = options.PetEnv
+	model.tmuxImageProbe = probeTmuxImageSupport(model.petEnv)
 	model.petFetch = options.PetFetch
 	if model.petFetch == nil {
 		model.petFetch = pets.HTTPAssetFetch(nil)
@@ -3585,6 +3613,7 @@ func NewProgram(ctx context.Context, state *codextui.State, options Options, inp
 	if input != nil {
 		programOptions = append(programOptions, bubbletea.WithInput(input))
 	}
+	var program *bubbletea.Program
 	if output != nil {
 		model.petRuntime.setOutput(output)
 		model.transcriptImages.setOutput(output)
@@ -3595,7 +3624,16 @@ func NewProgram(ctx context.Context, state *codextui.State, options Options, inp
 			// the OSC directly through the frame-output lock.
 			model.terminalTitleWriter = model.writeTerminalTitleSequence
 		}
-		programOptions = append(programOptions, bubbletea.WithOutput(&petOutputWriter{runtime: model.petRuntime, images: model.transcriptImages}))
+		writer := &petOutputWriter{runtime: model.petRuntime, images: model.transcriptImages}
+		// A released tmux placeholder mirrors Rust's invalidate_viewport: the
+		// next frame must rewrite every text row. Re-sending the current size
+		// makes Bubble Tea's renderer repaint without changing the layout.
+		writer.repaint = func() {
+			if program != nil {
+				program.Send(bubbletea.WindowSizeMsg{Width: model.width, Height: model.height})
+			}
+		}
+		programOptions = append(programOptions, bubbletea.WithOutput(writer))
 	}
 	programOptions = append(programOptions, bubbletea.WithReportFocus())
 	if options.usesOwnedScreen() {
@@ -3610,7 +3648,7 @@ func NewProgram(ctx context.Context, state *codextui.State, options Options, inp
 	// (TranscriptMode::resolve). An owned screen captures the mouse so the wheel
 	// scrolls the transcript instead of the terminal scrollback; inline mode
 	// leaves both gestures to the terminal.
-	program := bubbletea.NewProgram(model, programOptions...)
+	program = bubbletea.NewProgram(model, programOptions...)
 	// Rust parity: FrameRequester notifies the TUI event loop. Bubble Tea's
 	// Program.Send is that notification channel, so animation frames are drawn
 	// only while a surface asks for them.
@@ -3804,6 +3842,13 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 			cmd = restoreCmd
 		} else {
 			cmd = bubbletea.Batch(cmd, restoreCmd)
+		}
+	}
+	if providerCmd := next.refreshOpenProviderBrowserCmd(); providerCmd != nil {
+		if cmd == nil {
+			cmd = providerCmd
+		} else {
+			cmd = bubbletea.Batch(cmd, providerCmd)
 		}
 	}
 	if replayCmd := next.reconcileApprovalThread(); replayCmd != nil {
@@ -4194,6 +4239,8 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		return m, nil
 	case configNotificationTestMsg:
 		return m, m.postConfigTestNotification()
+	case configPanelProvidersLoadedMsg:
+		return m, m.applyConfigPanelProvidersLoaded(msg)
 	case asyncQuestionCountdownMsg:
 		return m, m.asyncQuestionCountdownCmd()
 	case permissionProfilesLoadedMsg:
@@ -4925,6 +4972,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		}
 	case bubbletea.MouseMsg:
 		m.clearLeaderChord()
+		if handled, cmd := m.handleSidePaneMouse(msg); handled {
+			return m, cmd
+		}
 		if m.handleWarningsViewMouse(msg) {
 			return m, nil
 		}

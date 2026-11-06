@@ -32,7 +32,7 @@ func TestKeymapPageRowsLikeRust(t *testing.T) {
 	tabs := KeymapPageTabs(rows)
 
 	all := keymapPageTabByLabel(t, tabs, "All")
-	if all.Summary != "159 actions, 0 customized, 11 unbound." {
+	if all.Summary != "166 actions, 0 customized, 18 unbound." {
 		t.Fatalf("all summary = %q (rows=%d)", all.Summary, len(rows))
 	}
 	if got := keymapPageTabByLabel(t, tabs, "Common").Summary; got != "21 actions." {
@@ -42,15 +42,17 @@ func TestKeymapPageRowsLikeRust(t *testing.T) {
 	if customized.Summary != "0 actions." || len(customized.Rows) != 0 {
 		t.Fatalf("customized tab = %q rows:%d", customized.Summary, len(customized.Rows))
 	}
-	unbound := keymapPageTabByLabel(t, tabs, "Unbound (11)")
-	if unbound.Summary != "11 actions." || len(unbound.Rows) != 11 {
+	unbound := keymapPageTabByLabel(t, tabs, "Unbound (18)")
+	if unbound.Summary != "18 actions." || len(unbound.Rows) != 18 {
 		t.Fatalf("unbound tab = %q rows:%d", unbound.Summary, len(unbound.Rows))
 	}
 	wantUnbound := []string{
 		"Open Agents", "Toggle Vim Mode", "Toggle Fast Mode",
 		"Focus Main Composer", "Focus Sidebar Content", "Focus Pane Left",
-		"Focus Pane Right", "Hide Pane", "Previous Permission Mode",
-		"Next Permission Mode", "Kill Whole Line",
+		"Focus Pane Right", "Hide Pane", "Toggle Pane Zoom",
+		"Minimize Pane Width", "Maximize Pane Width", "Equalize Pane Widths",
+		"Resize Panes", "Move Divider Left", "Move Divider Right",
+		"Previous Permission Mode", "Next Permission Mode", "Kill Whole Line",
 	}
 	for index, label := range wantUnbound {
 		if unbound.Rows[index].Label != label {
@@ -59,7 +61,7 @@ func TestKeymapPageRowsLikeRust(t *testing.T) {
 	}
 
 	counts := map[string]int{
-		"App": 28, "Composer": 5, "Editor": 17, "Vim": 69,
+		"App": 35, "Composer": 5, "Editor": 17, "Vim": 69,
 		"Navigation": 21, "Agents": 11, "Approval": 8,
 	}
 	for label, want := range counts {
@@ -100,7 +102,7 @@ func TestKeymapPageRowsLikeRust(t *testing.T) {
 	for index, tab := range tabs {
 		labels[index] = tab.Label
 	}
-	wantLabels := []string{"All", "Common", "Customized (0)", "Unbound (11)", "App", "Composer", "Editor", "Vim", "Navigation", "Agents", "Approval", "Debug"}
+	wantLabels := []string{"All", "Common", "Customized (0)", "Unbound (18)", "App", "Composer", "Editor", "Vim", "Navigation", "Agents", "Approval", "Debug"}
 	if len(labels) != len(wantLabels) {
 		t.Fatalf("tabs = %#v", labels)
 	}

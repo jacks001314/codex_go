@@ -1646,6 +1646,7 @@ func TestKnownTuiConfigFieldsCoverHostReadKeysLikeRust(t *testing.T) {
 		"auto_recap":               "app/interactive.go:1899",
 		"right_click_paste":        "app/interactive.go:1914",
 		"mouse_scroll_speed":       "app/interactive.go:1941",
+		"sidebar_width_percent":    "app/tui_sidebar_width.go:32",
 		"terminal_title":           "doctor/doctor.go:4105",
 		"keymap":                   "tui/keymap_config.go:568",
 		"effects":                  "config/tui_effects.go:45",

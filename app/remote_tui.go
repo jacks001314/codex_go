@@ -575,6 +575,8 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		WorktreesEnabled: false,
 		// Rust #43340: the connected server owns named permission profiles.
 		OnListPermissionProfiles:  interactiveRemoteListPermissionProfiles(ctx, endpoint),
+		OnListModelProviders:      interactiveRemoteModelProviderList(ctx, endpoint),
+		SidebarWidthPercent:       interactiveSidebarWidthPercent(root),
 		OnUpdateThreadPermissions: interactiveRemoteUpdateThreadPermissions(ctx, endpoint),
 		// The model compares a selection's owner against the backend it displays
 		// (Rust #54681). Without this the remote TUI starts with a zero backend

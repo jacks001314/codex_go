@@ -44,6 +44,20 @@ func TestRemoteNewSessionStartFailurePreservesComposedInputLikeRust(t *testing.T
 			wantPrefix: "Failed to read new session defaults: ",
 		},
 		{
+			// Rust #59510: a fresh start requires config/read even when the
+			// server predates the method, so the implicit client defaults are
+			// never restored.
+			name: "config read unsupported",
+			handle: func(ctx context.Context, conn *websocket.Conn, req remoteTUITestRequest) {
+				remoteTUITestWrite(ctx, conn, map[string]any{
+					"jsonrpc": "2.0",
+					"id":      req.ID,
+					"error":   map[string]any{"code": -32601, "message": "Method not found"},
+				})
+			},
+			wantPrefix: "Failed to read new session defaults: ",
+		},
+		{
 			name: "thread start failure",
 			handle: func(ctx context.Context, conn *websocket.Conn, req remoteTUITestRequest) {
 				remoteTUITestWrite(ctx, conn, map[string]any{

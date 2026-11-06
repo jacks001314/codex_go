@@ -137,7 +137,7 @@ func TestEncodeKittyAndSixelPayloadsLikeRust(t *testing.T) {
 		t.Fatalf("load kitty: %v", err)
 	}
 	id := FirstImageID
-	encoded, err := kitty.Encode(3, 4, 0, int(kitty.Rows), id, nil)
+	encoded, err := kitty.Encode(3, 4, 0, int(kitty.Rows), pets.CursorKittyPlacement(id), nil)
 	if err != nil {
 		t.Fatalf("encode kitty: %v", err)
 	}
@@ -160,7 +160,7 @@ func TestEncodeKittyAndSixelPayloadsLikeRust(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load sixel: %v", err)
 	}
-	sixelPayload, err := sixel.Encode(0, 0, 1, 1, id, nil)
+	sixelPayload, err := sixel.Encode(0, 0, 1, 1, pets.CursorKittyPlacement(id), nil)
 	if err != nil {
 		t.Fatalf("encode sixel: %v", err)
 	}

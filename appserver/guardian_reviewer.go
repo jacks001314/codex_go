@@ -1245,7 +1245,15 @@ func (r *modelGuardianReviewer) review(ctx context.Context, threadID, turnID, ta
 			if origin := guardianReviewOriginFromContext(ctx); origin != nil && origin.MCPOwnerPermissions {
 				ownerPermissionsMatch = guardianServingOwnerAuthorizationMatches(origin, assessment.Authorization)
 			}
-			if ownerPermissionsMatch && assessment.AllowsSynchronousReviewSkip(current) {
+			// Rust #59642 rechecks the requesting turn's captured reviewer and
+			// model requirements after the score authorization is collected, so a
+			// policy tightened while scoring was in flight cannot be skipped by a
+			// cached low-risk assessment.
+			requiredReview = requiredReview || (r.requiredReview != nil && r.requiredReview(threadID, turnID))
+			if requiredReview {
+				reviewReason = state.GuardianReviewReasonFreshRequired
+			}
+			if !requiredReview && ownerPermissionsMatch && assessment.AllowsSynchronousReviewSkip(current) {
 				r.beginApprovalToolCall(threadID, targetItemID)
 				r.markScored(threadID)
 				if r.fastDecision != nil {
@@ -1258,15 +1266,17 @@ func (r *modelGuardianReviewer) review(ctx context.Context, threadID, turnID, ta
 				}
 				return state.DecisionApproved, nil, "serving assessment", nil
 			}
-			switch {
-			case assessment.RequiresReview:
-				reviewReason = state.GuardianReviewReasonElevatedRisk
-			case !assessment.Authorization.RetainedContextComplete:
-				// Rust's cached_evidence treats an incomplete retained context
-				// as a policy-driven review rather than a changed authorization.
-				reviewReason = state.GuardianReviewReasonPolicy
-			default:
-				reviewReason = state.GuardianReviewReasonAuthorizationChanged
+			if !requiredReview {
+				switch {
+				case assessment.RequiresReview:
+					reviewReason = state.GuardianReviewReasonElevatedRisk
+				case !assessment.Authorization.RetainedContextComplete:
+					// Rust's cached_evidence treats an incomplete retained context
+					// as a policy-driven review rather than a changed authorization.
+					reviewReason = state.GuardianReviewReasonPolicy
+				default:
+					reviewReason = state.GuardianReviewReasonAuthorizationChanged
+				}
 			}
 		}
 	}

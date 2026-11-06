@@ -75,19 +75,40 @@ type SideStartParams struct {
 // focusMainComposer mirrors Rust #59208's workspace shortcut: return input to
 // the parent conversation while keeping both panes available.
 func (m *Model) focusMainComposer() bubbletea.Cmd {
+	return m.focusMainComposerWithOptions(false)
+}
+
+// focusMainComposerExplicit is the `global.focus_main_composer` shortcut: an
+// explicit focus request clears transcript interaction, while a directional
+// pane switch parks and restores it (Rust #59472).
+func (m *Model) focusMainComposerExplicit() bubbletea.Cmd {
+	return m.focusMainComposerWithOptions(true)
+}
+
+func (m *Model) focusMainComposerWithOptions(clearInteraction bool) bubbletea.Cmd {
 	if m == nil || m.activeSide == nil || !m.sideWorkspaceEnabled() {
 		return nil
 	}
+	var cmd bubbletea.Cmd
 	if m.activeSide.ShowingSide {
-		return m.toggleSideConversation()
+		cmd = m.toggleSideConversation()
 	}
-	return nil
+	if clearInteraction {
+		m.clearMainTranscriptFind(false)
+		m.refreshTranscript()
+	}
+	return cmd
 }
 
 // focusSidebarContent focuses the side conversation. A pane hidden by
 // hide_focused_side_pane is retained and reopened here (Rust #59130/#59208).
 func (m *Model) focusSidebarContent() bubbletea.Cmd {
 	if m == nil || m.State == nil || !m.sideWorkspaceEnabled() {
+		return nil
+	}
+	// Rust #59458 applies even with side retention disabled: wait for the
+	// queued side-conversation start before moving focus.
+	if m.sideStartPending {
 		return nil
 	}
 	if m.activeSide == nil {
@@ -133,7 +154,15 @@ func (m *Model) toggleSideConversation() bubbletea.Cmd {
 	if m == nil || m.State == nil || m.activeSide == nil {
 		return nil
 	}
+	// Rust #59458: a queued side-conversation start must be dispatched before a
+	// focus switch, otherwise the prompt can land in the parent conversation.
+	if m.sideStartPending {
+		return nil
+	}
 	side := m.activeSide
+	// Capture the pane that is about to lose focus before the transcript and
+	// composer switch to its counterpart.
+	m.parkSidePaneInteraction(side)
 	if side.ShowingSide {
 		side.SideMessages = cloneSideMessages(m.State.Messages)
 		side.SideStatus = strings.TrimSpace(m.State.Status)
@@ -155,9 +184,73 @@ func (m *Model) toggleSideConversation() bubbletea.Cmd {
 		m.composer.Placeholder = firstNonEmpty(side.SidePlaceholder, "Ask Codex in side conversation")
 		side.ShowingSide = true
 	}
+	m.restoreSidePaneInteraction(side)
 	m.notice = m.sideContextLabel()
 	m.refreshTranscript()
+	// The transcript refresh anchors the new content on its own; re-apply the
+	// destination pane's parked row so the pane comes back where it left off.
+	m.applyParkedPaneScroll(side)
 	return m.refreshStatusControlsCmd()
+}
+
+// parkSidePaneInteraction stores the focused pane's transcript Find, composer
+// draft and scroll offset on the conversation pair (Rust #59472).
+func (m *Model) parkSidePaneInteraction(side *activeSideConversation) {
+	if m == nil || side == nil {
+		return
+	}
+	if side.ShowingSide {
+		side.SideFind = m.mainFind
+		side.SideDraft = m.composerText()
+		side.SideScroll = m.transcript.YOffset
+		side.SideInteractionSaved = true
+		return
+	}
+	side.ParentFind = m.mainFind
+	side.ParentDraft = m.composerText()
+	side.ParentScroll = m.transcript.YOffset
+	side.ParentInteractionSaved = true
+}
+
+// restoreSidePaneInteraction re-applies the newly focused pane's parked
+// interaction, leaving untouched panes with a cleared transcript search.
+func (m *Model) restoreSidePaneInteraction(side *activeSideConversation) {
+	if m == nil || side == nil {
+		return
+	}
+	m.mainFind = mainTranscriptFind{}
+	m.composer.SetValue("")
+	m.transcript.YOffset = 0
+	if side.ShowingSide {
+		if side.SideInteractionSaved {
+			m.mainFind = side.SideFind
+			m.composer.SetValue(side.SideDraft)
+			m.transcript.YOffset = side.SideScroll
+		}
+		return
+	}
+	if side.ParentInteractionSaved {
+		m.mainFind = side.ParentFind
+		m.composer.SetValue(side.ParentDraft)
+		m.transcript.YOffset = side.ParentScroll
+	}
+}
+
+// applyParkedPaneScroll restores the focused pane's parked first row after a
+// thread switch re-rendered the transcript (Rust #59527 keeps per-pane scroll).
+func (m *Model) applyParkedPaneScroll(side *activeSideConversation) {
+	if m == nil || side == nil {
+		return
+	}
+	offset, saved := side.ParentScroll, side.ParentInteractionSaved
+	if side.ShowingSide {
+		offset, saved = side.SideScroll, side.SideInteractionSaved
+	}
+	if !saved {
+		return
+	}
+	m.transcript.SetYOffset(offset)
+	m.activityFollow = m.transcript.AtBottom()
 }
 
 type SideStartResponse struct {
@@ -226,6 +319,22 @@ type activeSideConversation struct {
 	// conversation cannot lend its markers to another thread.
 	ParentVoice sideVoicePrivacy
 	SideVoice   sideVoicePrivacy
+	// Transcript interaction is parked per pane so switching focus with the
+	// pane-direction shortcuts does not discard a Find query, composer draft,
+	// or scroll position (Rust #59472).
+	ParentFind             mainTranscriptFind
+	SideFind               mainTranscriptFind
+	ParentDraft            string
+	SideDraft              string
+	ParentScroll           int
+	SideScroll             int
+	ParentInteractionSaved bool
+	SideInteractionSaved   bool
+	// ParentViewMax and SideViewMax are the largest first-row offsets the last
+	// rendered frame allowed, so wheel scrolling clamps to each pane's own
+	// content (Rust #59527).
+	ParentViewMax int
+	SideViewMax   int
 }
 
 func (m *Model) retainSideConversation(side *activeSideConversation) {
@@ -298,6 +407,7 @@ func (m *Model) deactivateSideConversation() {
 	}
 	m.captureActiveSideConversationState()
 	m.activeSide = nil
+	m.resetSidePaneViewState()
 }
 
 func (m *Model) forgetRetainedSideConversation(side *activeSideConversation) {
@@ -323,6 +433,7 @@ func (m *Model) activateRetainedSideConversation(side *activeSideConversation, u
 	}
 	m.retainSideConversation(side)
 	m.activeSide = side
+	m.resetSidePaneViewState()
 	side.ShowingSide = true
 	m.sideStartPending = false
 	m.switchThreadID(side.SideThreadID)

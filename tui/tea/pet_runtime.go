@@ -35,10 +35,82 @@ type petRuntime struct {
 	ambient     *pets.AmbientPetState
 	request     *pets.AmbientPetDraw
 	clearNext   bool
+	// paneBase is the tmux pane's Kitty image-id base while fullscreen
+	// passthrough is available (Rust #59580).
+	paneBase *uint32
+	// drawnArea is the cell rectangle of the last rendered sprite.
+	drawnArea petDrawArea
+	// repaintRequested asks the owner to rewrite the rows the sprite covered.
+	repaintRequested bool
+}
+
+// petDrawArea is the comparable cell rectangle of one sprite frame.
+type petDrawArea struct {
+	set     bool
+	x       uint16
+	y       uint16
+	columns uint16
+	rows    uint16
+}
+
+func petDrawAreaOf(request *pets.AmbientPetDraw) petDrawArea {
+	if request == nil {
+		return petDrawArea{}
+	}
+	return petDrawArea{
+		set:     true,
+		x:       request.X,
+		y:       request.Y,
+		columns: request.Columns,
+		rows:    request.Rows,
+	}
 }
 
 func newPetRuntime(out io.Writer, env map[string]string) *petRuntime {
 	return &petRuntime{out: out, env: env}
+}
+
+// setPaneBase records the tmux pane's Kitty image-id base, or clears it when
+// the sprite is cursor-placed.
+func (r *petRuntime) setPaneBase(base *uint32) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.paneBase = nil
+	if base != nil {
+		value := *base
+		r.paneBase = &value
+	}
+}
+
+// takeRepaintRequest consumes the pending full-frame repaint request.
+func (r *petRuntime) takeRepaintRequest() bool {
+	if r == nil {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	requested := r.repaintRequested
+	r.repaintRequested = false
+	return requested
+}
+
+// renderLocked writes one sprite frame. The caller must hold r.mu.
+func (r *petRuntime) renderLocked(request *pets.AmbientPetDraw) {
+	if r.out == nil {
+		return
+	}
+	next := petDrawAreaOf(request)
+	if r.paneBase != nil && next != r.drawnArea {
+		// Rust mark_pet_placeholders (#59580): tmux keeps the placeholder
+		// cells after the image is deleted, so a moved or cleared sprite
+		// needs the text underneath written again.
+		r.repaintRequested = true
+	}
+	r.drawnArea = next
+	_ = pets.RenderAmbientPetImage(r.out, &r.renderState, request, r.env, pets.PetImageOptions{PaneBase: r.paneBase})
 }
 
 func (r *petRuntime) setOutput(out io.Writer) {
@@ -103,7 +175,7 @@ func (r *petRuntime) clearImmediately() {
 	if r.out == nil {
 		return
 	}
-	_ = pets.RenderAmbientPetImage(r.out, &r.renderState, nil, r.env)
+	r.renderLocked(nil)
 }
 
 func (r *petRuntime) installed() bool {
@@ -148,15 +220,15 @@ func (r *petRuntime) drawFromState(area pets.Rect, composerBottomY uint16, now t
 	request := r.computeDrawRequestLocked(area, composerBottomY, now)
 	if r.clearNext {
 		r.clearNext = false
-		_ = pets.RenderAmbientPetImage(r.out, &r.renderState, nil, r.env)
+		r.renderLocked(nil)
 	}
 	r.request = request
 	if request == nil {
-		_ = pets.RenderAmbientPetImage(r.out, &r.renderState, nil, r.env)
+		r.renderLocked(nil)
 		return
 	}
 	requestCopy := *request
-	_ = pets.RenderAmbientPetImage(r.out, &r.renderState, &requestCopy, r.env)
+	r.renderLocked(&requestCopy)
 }
 
 func (r *petRuntime) nextFrameDelay(now time.Time) (time.Duration, bool) {
@@ -174,16 +246,14 @@ func (r *petRuntime) appendPayloadLocked() {
 	if r.clearNext {
 		r.clearNext = false
 		r.request = nil
-		if r.out != nil {
-			_ = pets.RenderAmbientPetImage(r.out, &r.renderState, nil, r.env)
-		}
+		r.renderLocked(nil)
 		return
 	}
 	if r.request == nil || r.out == nil {
 		return
 	}
 	request := *r.request
-	_ = pets.RenderAmbientPetImage(r.out, &r.renderState, &request, r.env)
+	r.renderLocked(&request)
 }
 
 // petOutputWriter appends the pending pet image payload after every write that
@@ -191,6 +261,10 @@ func (r *petRuntime) appendPayloadLocked() {
 type petOutputWriter struct {
 	runtime *petRuntime
 	images  *transcriptImageRuntime
+	// repaint asks Bubble Tea to rewrite every text row. tmux image
+	// placeholders live in the text buffer, so releasing one leaves blank
+	// cells behind until the frame is rewritten (Rust invalidate_viewport).
+	repaint func()
 }
 
 var _ term.File = (*petOutputWriter)(nil)
@@ -199,6 +273,18 @@ func (w *petOutputWriter) Write(p []byte) (int, error) {
 	if w.runtime == nil {
 		return 0, nil
 	}
+	n, err := w.writeFrame(p)
+	if err != nil {
+		return n, err
+	}
+	if w.takeRepaintRequest() {
+		w.repaint()
+	}
+	return n, nil
+}
+
+// writeFrame writes one Bubble Tea frame under the shared output lock.
+func (w *petOutputWriter) writeFrame(p []byte) (int, error) {
 	w.runtime.mu.Lock()
 	defer w.runtime.mu.Unlock()
 	// Clear graphics that no longer fit before the frame text repaints their
@@ -215,6 +301,22 @@ func (w *petOutputWriter) Write(p []byte) (int, error) {
 		w.images.afterWrite()
 	}
 	return n, nil
+}
+
+// takeRepaintRequest reports whether a released tmux placeholder needs the
+// text frame rewritten.
+func (w *petOutputWriter) takeRepaintRequest() bool {
+	if w.repaint == nil {
+		return false
+	}
+	needed := false
+	if w.images != nil && w.images.takeRepaintRequest() {
+		needed = true
+	}
+	if w.runtime != nil && w.runtime.takeRepaintRequest() {
+		needed = true
+	}
+	return needed
 }
 
 func (w *petOutputWriter) Read(p []byte) (int, error) {
@@ -256,7 +358,24 @@ func (m *Model) petImageSupport() pets.PetImageSupport {
 	if m == nil || m.petEnv == nil {
 		return pets.PetImageSupport{Reason: pets.PetImageUnsupportedTerminal}
 	}
-	return pets.DetectImageSupport(m.petEnv)
+	return pets.DetectImageSupportInFullscreen(m.petEnv, m.tmuxImageProbe, m.ownedScreen)
+}
+
+// tmuxImageBase returns the pane-specific Kitty image-id base while this
+// process owns the screen inside a tmux pane whose client can carry passthrough
+// images (Rust #59579).
+func (m *Model) tmuxImageBase() *uint32 {
+	if m == nil || !m.ownedScreen || m.tmuxImageProbe == nil {
+		return nil
+	}
+	if !m.tmuxImageProbe.KittyPassthrough() {
+		return nil
+	}
+	base, ok := m.tmuxImageProbe.KittyImageBase()
+	if !ok {
+		return nil
+	}
+	return &base
 }
 
 func (m *Model) petSurfaceActive() bool {
@@ -306,6 +425,7 @@ func (m *Model) storePetDrawRequest() {
 		return
 	}
 	area := pets.Rect{X: 0, Y: 0, Width: uint16(max(m.width, 0)), Height: uint16(max(m.height, 0))}
+	m.petRuntime.setPaneBase(m.tmuxImageBase())
 	m.petRuntime.storeDrawRequestFromState(area, m.petComposerBottomY(), time.Now())
 }
 
@@ -354,8 +474,13 @@ func (m *Model) petDrawCmd() bubbletea.Cmd {
 	runtime := m.petRuntime
 	area := pets.Rect{X: 0, Y: 0, Width: uint16(max(m.width, 0)), Height: uint16(max(m.height, 0))}
 	composerBottomY := m.petComposerBottomY()
+	runtime.setPaneBase(m.tmuxImageBase())
+	width, height := m.width, m.height
 	return func() bubbletea.Msg {
 		runtime.drawFromState(area, composerBottomY, time.Now())
+		if runtime.takeRepaintRequest() {
+			return bubbletea.WindowSizeMsg{Width: width, Height: height}
+		}
 		return nil
 	}
 }

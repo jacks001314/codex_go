@@ -138,6 +138,18 @@ func TestGuardianReviewUsesServingAssessmentLikeRust(t *testing.T) {
 		t.Fatalf("required review err=%v calls=%d, want a fresh review", err, *calls)
 	}
 
+	// A reviewer/model requirement that tightens after the score authorization
+	// was collected still forces the full review (Rust #59642).
+	reviewer, calls = servingAssessmentReviewer(t, lowRisk, current)
+	checks := 0
+	reviewer.requiredReview = func(string, string) bool {
+		checks++
+		return checks > 1
+	}
+	if _, _, err := reviewer.Review(context.Background(), "thread-serving-review", "turn-serving-review", "call-rechecked", state.Action{Type: "command", Command: "ls", CWD: "/tmp"}); err != nil || *calls != 1 {
+		t.Fatalf("rechecked requirement err=%v calls=%d, want a fresh review", err, *calls)
+	}
+
 	// A missing assessment falls back to the synchronous review.
 	reviewer, calls = servingAssessmentReviewer(t, nil, current)
 	if _, _, err := reviewer.Review(context.Background(), "thread-serving-review", "turn-serving-review", "call-unscored", state.Action{Type: "command", Command: "ls", CWD: "/tmp"}); err != nil || *calls != 1 {

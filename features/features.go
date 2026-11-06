@@ -219,6 +219,10 @@ var Registry = []Spec{
 	{Key: "command_sessions_world_state", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	// Rust (codex-rs/features/src/lib.rs #50464): track top-level tool
 	// definitions in world state and emit incremental context updates.
+	// Rust #59633: publish retained unified-exec sessions through incremental
+	// world state so a dropped command handle stays discoverable. Under
+	// development and off by default.
+	{Key: "command_sessions_world_state", Stage: StageUnderDevelopment},
 	{Key: "incremental_tools", Stage: StageStable, DefaultEnabled: true},
 	// Rust (codex-rs/features/src/lib.rs #58405): omit the model ID
 	// announcement from incremental context after a model switch while still

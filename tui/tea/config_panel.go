@@ -59,6 +59,7 @@ const (
 	configActionAutomaticRecaps
 	configActionSessionPicker
 	configActionResumeCWD
+	configActionModelProviders
 	configActionCopyOnSelect
 	configActionCopyOnSelectClear
 )
@@ -181,6 +182,13 @@ var configPanelRows = []configPanelRow{
 		action:      configActionResumeCWD,
 	},
 	{
+		section:     configSectionSessions,
+		label:       "Model providers",
+		description: "Browse providers configured on the connected app server",
+		keywords:    "provider gateway endpoint model default",
+		action:      configActionModelProviders,
+	},
+	{
 		section:     configSectionTextSelection,
 		label:       "Copy on select",
 		description: "Copy transcript, footer, and composer selections on release; Auto follows terminal defaults",
@@ -220,6 +228,8 @@ type configPanelState struct {
 	// carries save failures and the "Saved · ..." variants without replacing
 	// the panel contents.
 	notice string
+	// providers is the open model-provider browser, if any.
+	providers *configProviderBrowserState
 }
 
 // configPanelChoice mirrors Rust's `SelectionViewParams::picker()` child view.
@@ -367,6 +377,8 @@ func (m *Model) configPanelValue(row configPanelRow) string {
 			return "Comfortable \u203a"
 		}
 		return "Dense \u203a"
+	case configActionModelProviders:
+		return "Browse \u203a"
 	case configActionResumeCWD:
 		switch normalizeResumeCWD(m.resumeCWD) {
 		case "current":
@@ -464,6 +476,9 @@ func (m *Model) updateConfigPanelKey(message bubbletea.KeyMsg) bubbletea.Cmd {
 		return nil
 	}
 	panel := m.modal.configPanel
+	if panel.providers != nil {
+		return m.updateConfigProviderBrowserKey(message)
+	}
 	if panel.choice != nil {
 		return m.updateConfigPanelChoiceKey(message)
 	}
@@ -794,6 +809,9 @@ func (m *Model) activateConfigRow(row configPanelRow) bubbletea.Cmd {
 	case configActionAutomaticRecaps:
 		m.disableAutoRecap = !m.disableAutoRecap
 		return m.saveConfigPanelPreference("tui.auto_recap", !m.disableAutoRecap)
+	case configActionModelProviders:
+		// Rust opens the browsing picker instead of changing the provider.
+		return m.openConfigProviderBrowser()
 	case configActionNotifyCondition, configActionRightClickPaste, configActionSessionPicker,
 		configActionResumeCWD, configActionCopyOnSelect:
 		// Rust opens a child picker for these editors instead of cycling the
@@ -1287,6 +1305,9 @@ func (m *Model) renderConfigPanel() string {
 	}
 	panel := m.modal.configPanel
 	rowWidth := max(m.width, 1)
+	if panel.providers != nil {
+		return m.renderConfigProviderBrowser(panel.providers, rowWidth)
+	}
 	if panel.choice != nil {
 		return m.renderConfigPanelChoice(panel.choice, rowWidth)
 	}
