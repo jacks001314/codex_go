@@ -472,6 +472,7 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 			Instructions:                 instructions,
 			InputItems:                   inputItems,
 			Tools:                        tools,
+			IncrementalTools:             request.IncrementalTools,
 			Model:                        request.Model,
 			ProviderID:                   request.ProviderID,
 			TaskKind:                     request.TaskKind,

@@ -622,6 +622,7 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			InputItems:                   inputItems,
 			PostPromptInputItems:         postPromptForIteration,
 			Tools:                        append([]any(nil), stepTools...),
+			IncrementalTools:             request.IncrementalTools,
 			Model:                        stepModel,
 			UnifiedImageBudget:           unifiedImageBudget,
 			ProviderID:                   request.ProviderID,

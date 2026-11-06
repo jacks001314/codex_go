@@ -7720,6 +7720,8 @@ func (r *RuntimeRouter) compactRunnerForRecord(record *session.Record, request *
 	// mutating the live pin.
 	compactionEffort := ""
 	compactionMetadataEnabled := false
+	compactionIncrementalTools := false
+	compactionHostedTools := []any{}
 	compactionParams := &turn.TurnStartParams{
 		ThreadID: string(record.ID),
 		CWD:      strings.TrimSpace(record.Metadata.CWD),
@@ -7727,6 +7729,17 @@ func (r *RuntimeRouter) compactRunnerForRecord(record *session.Record, request *
 	}
 	if cfg, cfgErr := r.effectiveConfigForTurn(compactionParams); cfgErr == nil && cfg != nil {
 		compactionMetadataEnabled = features.Enabled(cfg.FeatureSettings(), "executed_tool_call_metadata")
+		compactionIncrementalTools = incrementalToolsEnabledForTurn(cfg, compactInfo, providerID)
+		if compactionIncrementalTools {
+			if hosted, hostedErr := r.hostedToolsForTurn(compactionParams); hostedErr == nil {
+				for _, tool := range hosted {
+					if object, ok := tool.(map[string]any); ok &&
+						strings.EqualFold(strings.TrimSpace(stringFromAny(object["type"])), turn.HostedWebSearchToolType) {
+						compactionHostedTools = append(compactionHostedTools, tool)
+					}
+				}
+			}
+		}
 		overrideEffort, overrideAvailable := r.effortForConfigurationUpdate(string(record.ID), cfg, compactionParams, compactInfo, providerID)
 		compactionEffort = r.reasoningEffortForRequestWithModel(
 			string(record.ID),
@@ -7755,6 +7768,8 @@ func (r *RuntimeRouter) compactRunnerForRecord(record *session.Record, request *
 		// inventory from the thread's recorder.
 		executedToolCalls:               r.executedToolCallRecorder(string(record.ID)),
 		executedToolCallMetadataEnabled: compactionMetadataEnabled,
+		incrementalTools:                compactionIncrementalTools,
+		hostedTools:                     compactionHostedTools,
 	}
 }
 
@@ -9055,7 +9070,7 @@ func (r *RuntimeRouter) appTurnConfigWithOptions(ctx context.Context, threadID s
 	// sent keep their position.
 	declarationItems := []any{}
 	incrementalActive := false
-	if incrementalToolsEnabledForTurn(cfg, modelInfo) {
+	if incrementalToolsEnabledForTurn(cfg, modelInfo, modelProviderConfig.ProviderID) {
 		preserveParentTools := r.threadMCPServersDisabled(threadID) &&
 			features.Enabled(cfg.FeatureSettings(), "prediction_preserve_parent_tools")
 		incremental, incrementalErr := r.incrementalToolCatalogForTurnWithModelMessages(

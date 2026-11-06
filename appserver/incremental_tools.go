@@ -51,13 +51,24 @@ type incrementalToolCatalogResult struct {
 }
 
 // incrementalToolsEnabledForTurn mirrors Rust
-// `StepContext::incremental_tools_enabled`: the stable feature is default-on
-// and only applies to Responses Lite models.
-func incrementalToolsEnabledForTurn(cfg *config.Config, info *model.ModelInfo) bool {
-	if cfg == nil || info == nil || !info.UseResponsesLite {
+// `StepContext::incremental_tools_enabled`: Responses Lite windows use the
+// stable default-on `incremental_tools` feature, and regular OpenAI Responses
+// windows opt in through `incremental_tools_legacy` (Rust #59832). Other
+// providers keep the full declaration prefix on every request.
+func incrementalToolsEnabledForTurn(cfg *config.Config, info *model.ModelInfo, providerID string) bool {
+	if cfg == nil || info == nil {
 		return false
 	}
-	return features.Enabled(cfg.FeatureSettings(), "incremental_tools")
+	feature := ""
+	switch {
+	case info.UseResponsesLite:
+		feature = "incremental_tools"
+	case strings.TrimSpace(providerID) == model.OpenAIProviderID:
+		feature = "incremental_tools_legacy"
+	default:
+		return false
+	}
+	return features.Enabled(cfg.FeatureSettings(), feature)
 }
 
 // suppressModelChangeAnnouncements reports the default-off feature that omits

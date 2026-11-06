@@ -257,6 +257,13 @@ type agentCompactRunner struct {
 	// `executed_tool_call_metadata` feature: disabled capture strips direct
 	// records from the compaction prompt instead of attaching.
 	executedToolCallMetadataEnabled bool
+	// incrementalTools reports that this route lays out tool declarations in
+	// history (Rust #59832). Compaction then keeps the recorded declarations as
+	// the prompt's tool source instead of re-declaring the catalog.
+	incrementalTools bool
+	// hostedTools keeps hosted declarations that must stay top-level while the
+	// catalog lives in history; Rust #59832 only needs hosted web search here.
+	hostedTools []any
 }
 
 // mcpAttributionSnapshot reports the thread's cumulative MCP attribution for
@@ -297,8 +304,12 @@ func (r *agentCompactRunner) Compact(ctx context.Context, request *compact.Reque
 		Prompt:          strings.TrimSpace(request.Prompt),
 		Instructions:    remoteCompactInstructions(),
 		InputItems:      inputItems,
-		Model:           firstNonEmpty(r.model, defaultRemoteCompactModel),
-		ProviderID:      strings.TrimSpace(r.providerID),
+		Tools:           append([]any(nil), r.hostedTools...),
+		Model:            firstNonEmpty(r.model, defaultRemoteCompactModel),
+		ProviderID:       strings.TrimSpace(r.providerID),
+		// Rust #59832: compaction only takes the history layout when the
+		// replacement prompt actually carries recorded declarations.
+		IncrementalTools: r.incrementalTools && model.WindowHasToolDeclarations(inputItems),
 		TaskKind:        model.AgentTaskRegular,
 		ThreadID:        request.ThreadID,
 		SessionID:       r.sessionID,

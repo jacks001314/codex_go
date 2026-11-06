@@ -2315,18 +2315,25 @@ func (r *ResponsesAgentRunner) buildResponsesAgentRequest(request *AgentRequest,
 	}
 	tools = normalizeResponseToolParameters(tools)
 	parallelToolCalls := request.ParallelToolCalls && !modelInfo.UseResponsesLite
-	if modelInfo.UseResponsesLite {
+	// Rust #59832: incremental tool declarations cover Responses Lite windows
+	// and, behind `incremental_tools_legacy`, regular OpenAI Responses windows
+	// that already recorded their catalog in history. Hosted web search stays
+	// in the top-level tools field instead of the history declarations.
+	incrementalLayout := modelInfo.UseResponsesLite ||
+		(request.IncrementalTools && responsesProviderIsOpenAI(r.providerName()))
+	if incrementalLayout {
 		// Rust #51480: an existing context window keeps the tool declarations it
 		// already recorded. Only a window that has no declarations builds the
 		// `additional_tools` / base-instruction prefix for this request, so a
 		// resumed window never moves or duplicates declarations it already sent.
+		declarationTools, hostedTools := splitHostedWebSearchTools(tools)
 		if WindowHasToolDeclarations(inputItems) {
 			inputItems = responsesLiteDeclaredInputItems(inputItems)
 		} else {
-			inputItems = responsesLiteInputItems(inputItems, tools, instructions, request.ThreadID)
+			inputItems = responsesLiteInputItems(inputItems, declarationTools, instructions, request.ThreadID)
 		}
 		instructions = ""
-		tools = nil
+		tools = hostedTools
 	} else {
 		// Rust #44249: request copies downgrade `original` image detail when the
 		// receiving model does not support it. Stored image details are left
@@ -2664,6 +2671,27 @@ func responsesToolsContainType(tools []any, toolType string) bool {
 		}
 	}
 	return false
+}
+
+// responsesProviderIsOpenAI reports the provider that owns the regular
+// Responses route; incremental_tools_legacy only applies there (Rust #59832).
+func responsesProviderIsOpenAI(name string) bool {
+	return strings.EqualFold(strings.TrimSpace(name), OpenAIProviderName)
+}
+
+// splitHostedWebSearchTools separates hosted web search declarations from the
+// catalog an incremental window records in history. Rust #59832 keeps
+// WebSearch in top-level `tools` rather than `additional_tools`.
+func splitHostedWebSearchTools(tools []any) (declaration []any, hosted []any) {
+	for _, spec := range tools {
+		object, ok := spec.(map[string]any)
+		if ok && strings.EqualFold(strings.TrimSpace(responseToolString(object["type"])), "web_search") {
+			hosted = append(hosted, spec)
+			continue
+		}
+		declaration = append(declaration, spec)
+	}
+	return declaration, hosted
 }
 
 func responsesToolsContainNamespaceFunction(tools []any, namespace string, name string) bool {

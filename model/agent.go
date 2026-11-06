@@ -32,6 +32,11 @@ type AgentRequest struct {
 	// input so they follow the user message in the request.
 	PostPromptInputItems []any
 	Tools                []any
+	// IncrementalTools reports an incremental-tool context window (Rust
+	// #59832 StepContext::incremental_tools_enabled). Regular OpenAI Responses
+	// fold their catalog into `additional_tools` history items once the window
+	// recorded declarations, while hosted web search stays in top-level tools.
+	IncrementalTools bool
 	// PrewarmTools mirrors Rust #47635: the startup prewarm captures the turn's
 	// step tools (including MCP discovery) concurrently with the websocket
 	// handshake and sends the generate=false warmup with those tools. Prewarm

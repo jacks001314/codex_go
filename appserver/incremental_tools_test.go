@@ -478,28 +478,40 @@ func TestIncrementalToolCatalogWindowReplacementLikeRust(t *testing.T) {
 }
 
 // TestIncrementalToolsEnabledForTurnLikeRust checks the gate of Rust
-// `StepContext::incremental_tools_enabled`: Responses Lite plus the stable,
-// default-on feature.
+// `StepContext::incremental_tools_enabled`: Responses Lite uses the stable,
+// default-on feature, while regular OpenAI Responses opt in through
+// `incremental_tools_legacy` (#59832).
 func TestIncrementalToolsEnabledForTurnLikeRust(t *testing.T) {
 	enabled := &config.Config{Values: map[string]any{"features": map[string]any{"incremental_tools": true}}}
 	disabled := &config.Config{Values: map[string]any{}}
 	explicitlyDisabled := &config.Config{Values: map[string]any{"features": map[string]any{"incremental_tools": false}}}
+	legacy := &config.Config{Values: map[string]any{"features": map[string]any{"incremental_tools_legacy": true}}}
+	liteStableOff := &config.Config{Values: map[string]any{"features": map[string]any{"incremental_tools": false, "incremental_tools_legacy": true}}}
 	lite := &model.ModelInfo{UseResponsesLite: true}
 	full := &model.ModelInfo{UseResponsesLite: false}
 
-	if !incrementalToolsEnabledForTurn(enabled, lite) {
+	if !incrementalToolsEnabledForTurn(enabled, lite, model.OpenAIProviderID) {
 		t.Fatal("lite + feature must enable incremental tools")
 	}
-	if !incrementalToolsEnabledForTurn(disabled, lite) {
+	if !incrementalToolsEnabledForTurn(disabled, lite, model.OpenAIProviderID) {
 		t.Fatal("lite must enable incremental tools by default")
 	}
-	if incrementalToolsEnabledForTurn(explicitlyDisabled, lite) {
+	if incrementalToolsEnabledForTurn(explicitlyDisabled, lite, model.OpenAIProviderID) {
 		t.Fatal("an explicit disable must keep legacy tool declarations")
 	}
-	if incrementalToolsEnabledForTurn(enabled, full) {
-		t.Fatal("non-lite models never use incremental tools")
+	if incrementalToolsEnabledForTurn(liteStableOff, lite, model.OpenAIProviderID) {
+		t.Fatal("the legacy flag must not enable lite windows on its own")
 	}
-	if incrementalToolsEnabledForTurn(nil, lite) || incrementalToolsEnabledForTurn(enabled, nil) {
+	if incrementalToolsEnabledForTurn(enabled, full, model.OpenAIProviderID) {
+		t.Fatal("regular Responses need the legacy feature")
+	}
+	if !incrementalToolsEnabledForTurn(legacy, full, model.OpenAIProviderID) {
+		t.Fatal("regular OpenAI Responses must honor incremental_tools_legacy")
+	}
+	if incrementalToolsEnabledForTurn(legacy, full, "azure") {
+		t.Fatal("the legacy feature only applies to the OpenAI provider")
+	}
+	if incrementalToolsEnabledForTurn(nil, lite, "") || incrementalToolsEnabledForTurn(enabled, nil, "") {
 		t.Fatal("missing config or model info must stay legacy")
 	}
 }

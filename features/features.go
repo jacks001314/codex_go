@@ -224,6 +224,9 @@ var Registry = []Spec{
 	// development and off by default.
 	{Key: "command_sessions_world_state", Stage: StageUnderDevelopment},
 	{Key: "incremental_tools", Stage: StageStable, DefaultEnabled: true},
+	// Rust #59832: publish incremental tool declarations on regular OpenAI
+	// Responses requests, independently of the Responses Lite flag.
+	{Key: "incremental_tools_legacy", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	// Rust (codex-rs/features/src/lib.rs #58405): omit the model ID
 	// announcement from incremental context after a model switch while still
 	// sending changed base instructions and tool definitions.
