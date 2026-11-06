@@ -43,38 +43,49 @@ type CollaborationSettings struct {
 }
 
 type ThreadSnapshot struct {
-	ID                   string               `json:"id"`
-	SessionID            string               `json:"sessionId"`
-	ForkedFromID         *string              `json:"forkedFromId,omitempty"`
-	ParentThreadID       *string              `json:"parentThreadId,omitempty"`
-	Preview              string               `json:"preview"`
-	Ephemeral            bool                 `json:"ephemeral"`
-	DaybreakEnabled      *bool                `json:"daybreakEnabled,omitempty"`
-	ProjectID            *string              `json:"projectId,omitempty"`
-	HistoryMode          string               `json:"historyMode"`
-	ModelProvider        string               `json:"modelProvider"`
-	Model                *string              `json:"model,omitempty"`
-	ReasoningEffort      *string              `json:"reasoningEffort,omitempty"`
-	CreatedAt            int64                `json:"createdAt"`
-	UpdatedAt            int64                `json:"updatedAt"`
-	RecencyAt            *int64               `json:"recencyAt,omitempty"`
-	Status               any                  `json:"status"`
-	Path                 *string              `json:"path,omitempty"`
-	CWD                  string               `json:"cwd"`
-	CLIVersion           string               `json:"cliVersion"`
-	Originator           *string              `json:"originator,omitempty"`
-	Source               any                  `json:"source"`
-	CanAcceptDirectInput *bool                `json:"canAcceptDirectInput,omitempty"`
-	ThreadSource         *string              `json:"threadSource,omitempty"`
-	AgentNickname        *string              `json:"agentNickname,omitempty"`
-	AgentRole            *string              `json:"agentRole,omitempty"`
-	Name                 *string              `json:"name,omitempty"`
-	Environments         *[]ThreadEnvironment `json:"environments,omitempty"`
-	Turns                []any                `json:"turns"`
-	RawProtobuf          []byte               `json:"-"`
+	ID                   string  `json:"id"`
+	SessionID            string  `json:"sessionId"`
+	ForkedFromID         *string `json:"forkedFromId,omitempty"`
+	ParentThreadID       *string `json:"parentThreadId,omitempty"`
+	Preview              string  `json:"preview"`
+	Ephemeral            bool    `json:"ephemeral"`
+	DaybreakEnabled      *bool   `json:"daybreakEnabled,omitempty"`
+	ProjectID            *string `json:"projectId,omitempty"`
+	HistoryMode          string  `json:"historyMode"`
+	ModelProvider        string  `json:"modelProvider"`
+	Model                *string `json:"model,omitempty"`
+	ReasoningEffort      *string `json:"reasoningEffort,omitempty"`
+	CreatedAt            int64   `json:"createdAt"`
+	UpdatedAt            int64   `json:"updatedAt"`
+	RecencyAt            *int64  `json:"recencyAt,omitempty"`
+	Status               any     `json:"status"`
+	Path                 *string `json:"path,omitempty"`
+	CWD                  string  `json:"cwd"`
+	CLIVersion           string  `json:"cliVersion"`
+	Originator           *string `json:"originator,omitempty"`
+	Source               any     `json:"source"`
+	CanAcceptDirectInput *bool   `json:"canAcceptDirectInput,omitempty"`
+	ThreadSource         *string `json:"threadSource,omitempty"`
+	AgentNickname        *string `json:"agentNickname,omitempty"`
+	AgentRole            *string `json:"agentRole,omitempty"`
+	Name                 *string `json:"name,omitempty"`
+	// GitInfo carries the repository metadata the cloud recorded for the
+	// conversation (Rust #59828).
+	GitInfo      *GitInfo             `json:"gitInfo,omitempty"`
+	Environments *[]ThreadEnvironment `json:"environments,omitempty"`
+	Turns        []any                `json:"turns"`
+	RawProtobuf  []byte               `json:"-"`
 }
 
 func (s ThreadSnapshot) Proto() []byte { return append([]byte(nil), s.RawProtobuf...) }
+
+// GitInfo mirrors Rust cloud-client activation::GitInfo; the raw remote URL is
+// redacted by Rust's Debug impl but is part of the snapshot.
+type GitInfo struct {
+	Branch    *string `json:"branch,omitempty"`
+	OriginURL *string `json:"originUrl,omitempty"`
+	SHA       *string `json:"sha,omitempty"`
+}
 
 type ThreadEnvironment struct {
 	EnvironmentID         string   `json:"environmentId"`
@@ -454,6 +465,17 @@ func decodeThreadSnapshot(data []byte) (*ThreadSnapshot, error) {
 	thread.AgentNickname, _ = fieldString(fields, 1)
 	thread.AgentRole, _ = fieldString(fields, 2)
 	thread.Name, _ = fieldString(fields, 17)
+	if gitBytes, ok := fieldBytes(fields, 12); ok {
+		gitFields, gitErr := parseWireFields(gitBytes)
+		if gitErr != nil {
+			return nil, gitErr
+		}
+		git := &GitInfo{}
+		git.Branch, _ = fieldString(gitFields, 1)
+		git.OriginURL, _ = fieldString(gitFields, 2)
+		git.SHA, _ = fieldString(gitFields, 3)
+		thread.GitInfo = git
+	}
 	if environmentsBytes, ok := fieldBytes(fields, 8); ok {
 		environmentFields, err := parseWireFields(environmentsBytes)
 		if err != nil {
