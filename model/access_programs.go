@@ -112,6 +112,28 @@ func authIsHeaderAuthForProgram(snapshot *auth.AuthDotJSON) bool {
 	return snapshot != nil && snapshot.Mode() == "headers"
 }
 
+// ValidateRequiredCyberAccessPrograms mirrors Rust #59754: a thread whose host
+// requires an explicit allowed program must send one of them, and omitting the
+// program is a request error even though the backend would also reject it.
+func ValidateRequiredCyberAccessPrograms(allowed []string, programs *AccessPrograms) error {
+	if len(allowed) == 0 {
+		return nil
+	}
+	selected := ""
+	if programs != nil {
+		selected = strings.TrimSpace(programs.Cyber)
+	}
+	for _, candidate := range allowed {
+		if selected != "" && strings.EqualFold(strings.TrimSpace(candidate), selected) {
+			return nil
+		}
+	}
+	return &codexapi.APIError{
+		Kind:    codexapi.ErrorInvalidRequest,
+		Message: "this thread requires an allowed explicit access program",
+	}
+}
+
 // authIsAPIKeyForProgram reports whether the credential is an OpenAI API key
 // (Rust `CodexAuth::is_api_key_auth` = `AuthMode::ApiKey`; Bedrock and Agent
 // Identity credentials have their own modes and do not qualify).

@@ -91,6 +91,10 @@ type AgentRequest struct {
 	// intentionally skips durable persistence, so every attachment upload made
 	// while preparing this request carries that intent (Rust #51517).
 	Ephemeral bool
+	// RequiredCyberAccessPrograms is the host-installed per-thread requirement
+	// (Rust #59754). Every request must resolve to one of these explicit
+	// programs; an empty slice leaves the thread unconstrained.
+	RequiredCyberAccessPrograms []string
 	// CyberAccessProgram is the turn's selected cyber access program (core
 	// snake_case, empty when the turn selected none). It reaches the request body
 	// only for a ChatGPT-authenticated account (Rust #44893 / for_auth).

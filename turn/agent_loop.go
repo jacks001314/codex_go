@@ -153,7 +153,10 @@ type AgentLoopRequest struct {
 	// preparing this turn's requests carry that intent (Rust #51517).
 	Ephemeral  bool
 	Originator string
-	InputItems []any
+	// RequiredCyberAccessPrograms is the host-installed per-thread requirement
+	// (Rust #59754): every model request must send one of these programs.
+	RequiredCyberAccessPrograms []string
+	InputItems                  []any
 	// PostPromptInputItems are appended after the prompt's user message (and
 	// after InputItems when there is no prompt) for the first sampling request,
 	// then folded into the turn's input for later iterations. Rust records
@@ -644,6 +647,7 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			PromptCacheKey:               request.PromptCacheKey,
 			PromptCacheTTL:               request.PromptCacheTTL,
 			CyberAccessProgram:           request.CyberAccessProgram,
+			RequiredCyberAccessPrograms:  append([]string(nil), request.RequiredCyberAccessPrograms...),
 			ClientMetadata:               cloneStringMap(clientMetadata),
 			MCPAttribution:               l.mcpAttributionSnapshot(),
 			Trace:                        request.Trace,

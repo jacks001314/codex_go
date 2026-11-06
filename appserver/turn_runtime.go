@@ -1993,6 +1993,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		PromptCacheTTL:               runConfig.PromptCacheTTL,
 		ServiceTier:                  runConfig.ServiceTier,
 		CyberAccessProgram:           runConfig.CyberAccessProgram,
+		RequiredCyberAccessPrograms:  r.requiredCyberAccessProgramsForThread(threadID),
 		UsageTags:                    runConfig.UsageTags,
 		ClientMetadata:               cloneStringMap(runConfig.ClientMetadata),
 		Trace:                        params.Trace,

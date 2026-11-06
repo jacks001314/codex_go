@@ -2335,6 +2335,9 @@ func (r *ResponsesAgentRunner) buildResponsesAgentRequest(request *AgentRequest,
 	if err != nil {
 		return nil, err
 	}
+	if err := ValidateRequiredCyberAccessPrograms(request.RequiredCyberAccessPrograms, accessPrograms); err != nil {
+		return nil, err
+	}
 	apiRequest := &responsesAgentRequest{
 		Model:                modelID,
 		Instructions:         instructions,

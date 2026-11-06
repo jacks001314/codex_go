@@ -131,11 +131,15 @@ type RuntimeServices struct {
 	SpawnGraph            agent.Store
 	// AgentSessionReader supplies host-owned V2 agent membership for environment
 	// context. Nil keeps controller ownership backed by SpawnGraph.
-	AgentSessionReader    AgentSessionReader
-	Analytics             telemetry.TurnEventSink
-	SkillShadowMetrics    SkillShadowMetricSink
-	SkillInjectionMetrics telemetry.CounterDurationSink
-	TurnMetrics           telemetry.TurnMetricSink
+	AgentSessionReader AgentSessionReader
+	// RequiredCyberAccessPrograms mirrors Rust #59754's host-installed thread
+	// requirement: every model request for the thread must send one of the
+	// returned programs. Nil leaves threads unconstrained.
+	RequiredCyberAccessPrograms func(threadID string) []string
+	Analytics                   telemetry.TurnEventSink
+	SkillShadowMetrics          SkillShadowMetricSink
+	SkillInjectionMetrics       telemetry.CounterDurationSink
+	TurnMetrics                 telemetry.TurnMetricSink
 	// VoiceMetrics receives the voice session lifecycle counters. The Go port
 	// reports product counters from the app-server, which owns the session.
 	VoiceMetrics          telemetry.CounterDurationSink
@@ -16219,6 +16223,15 @@ func (r *RuntimeRouter) configurePluginMarketplacePolicy() {
 		values = read.Config
 	}
 	applyPluginMarketplacePolicy(r.services.Plugins, r.services.Config, values)
+}
+
+// requiredCyberAccessProgramsForThread resolves the host-installed per-thread
+// access-program requirement (Rust #59754).
+func (r *RuntimeRouter) requiredCyberAccessProgramsForThread(threadID string) []string {
+	if r == nil || r.services.RequiredCyberAccessPrograms == nil {
+		return nil
+	}
+	return r.services.RequiredCyberAccessPrograms(strings.TrimSpace(threadID))
 }
 
 func (r *RuntimeRouter) requireModels() *model.ModelService {
