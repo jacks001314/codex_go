@@ -38,14 +38,6 @@ func platformIntegrityDependencies(request *RunnerRequest, prepared *PreparedPol
 			path: system,
 		})
 	}
-	if prepared.GlobDenials != nil {
-		if scanner := sandboxpath.FindExecutableInPath(linuxsandbox.GlobScanProgram, pathEnv, commandCWD, policy); scanner != "" {
-			dependencies = append(dependencies, integrityDependency{
-				name: "glob_scanner",
-				path: scanner,
-			})
-		}
-	}
 	return dependencies
 }
 

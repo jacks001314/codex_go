@@ -8,7 +8,6 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -264,112 +263,19 @@ func FindBundledBwrapForExecutable(executable, commandCWD string) (string, bool)
 	return "", false
 }
 
-// ExpandUnreadableGlobsInEnvironment mirrors Rust
-// `expand_unreadable_globs_in_environment` (#51840): resolve the deny-glob
-// scanner with the command's explicit PATH and run it with that exact
-// environment and working directory. A missing scanner falls back to the
-// in-process walker so sandbox construction never silently loses a denial.
+// ExpandUnreadableGlobsInEnvironment expands deny-read globs in process.
+// Rust #59711 removed the external `rg` scanner: expansion now includes
+// hidden and ignored files, applies the scan depth limit, and fails closed on
+// traversal errors without depending on the command's PATH.
 func ExpandUnreadableGlobsInEnvironment(
 	patterns []string,
 	cwd string,
-	policy sandboxpath.FilesystemPolicy,
+	_ sandboxpath.FilesystemPolicy,
 	maxDepth *int,
-	env map[string]string,
-	commandCWD string,
+	_ map[string]string,
+	_ string,
 ) ([]string, error) {
-	if len(patterns) == 0 || (maxDepth != nil && *maxDepth == 0) {
-		return nil, nil
-	}
-	scanner := ""
-	if pathEnv, ok := env["PATH"]; ok {
-		scanner = sandboxpath.FindExecutableInPath(GlobScanProgram, pathEnv, commandCWD, policy)
-	}
-	if scanner == "" {
-		return expandUnreadableGlobsInProcess(patterns, cwd, maxDepth)
-	}
-
-	type scanGroup struct {
-		root  string
-		globs []string
-	}
-	groupIndex := map[string]int{}
-	var groups []scanGroup
-	for _, pattern := range patterns {
-		root, glob, ok := splitUnreadableGlobForRipgrep(pattern, cwd)
-		if !ok {
-			continue
-		}
-		usable, err := inspectUnreadableGlobSearchRoot(root)
-		if err != nil {
-			return nil, err
-		}
-		if !usable {
-			continue
-		}
-		index, exists := groupIndex[root]
-		if !exists {
-			index = len(groups)
-			groupIndex[root] = index
-			groups = append(groups, scanGroup{root: root})
-		}
-		groups[index].globs = append(groups[index].globs, glob)
-	}
-
-	expanded := map[string]bool{}
-	for _, group := range groups {
-		args := []string{
-			"--no-config",
-			"--files",
-			"--hidden",
-			"--no-ignore",
-			"--null",
-		}
-		if maxDepth != nil {
-			args = append(args, "--max-depth", fmt.Sprintf("%d", *maxDepth))
-		}
-		for _, glob := range group.globs {
-			args = append(args, "--glob", glob)
-		}
-		args = append(args, "--", group.root)
-		command := exec.Command(scanner, args...)
-		command.Dir = commandCWD
-		command.Env = environmentEntries(env)
-		output, err := command.Output()
-		if err != nil {
-			if errors.Is(err, exec.ErrNotFound) {
-				return expandUnreadableGlobsInProcess(patterns, cwd, maxDepth)
-			}
-			if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 && len(exitErr.Stderr) == 0 {
-				continue
-			}
-			if exitErr, ok := err.(*exec.ExitError); ok {
-				return nil, fmt.Errorf("ripgrep unreadable glob scan failed for %s: %s", group.root, strings.TrimSpace(string(exitErr.Stderr)))
-			}
-			return nil, err
-		}
-		for _, raw := range strings.Split(string(output), "\x00") {
-			if raw == "" {
-				continue
-			}
-			path := raw
-			if !filepath.IsAbs(path) {
-				path = filepath.Join(group.root, path)
-			}
-			expanded[filepath.Clean(path)] = true
-			if canonical, err := filepath.EvalSymlinks(path); err == nil && canonical != path {
-				expanded[filepath.Clean(canonical)] = true
-			}
-			if len(expanded) > maxUnreadableGlobMatches {
-				return nil, fmt.Errorf("unreadable glob expansion for %s matched more than %d paths", group.root, maxUnreadableGlobMatches)
-			}
-		}
-	}
-	paths := make([]string, 0, len(expanded))
-	for path := range expanded {
-		paths = append(paths, path)
-	}
-	sort.Strings(paths)
-	return paths, nil
+	return expandUnreadableGlobsInProcess(patterns, cwd, maxDepth)
 }
 
 // inspectUnreadableGlobSearchRoot reports whether a deny-glob search root can

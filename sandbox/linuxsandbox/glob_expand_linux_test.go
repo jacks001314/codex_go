@@ -5,48 +5,64 @@ package linuxsandbox
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"codex_go/sandbox/sandboxpath"
 )
 
-func TestExpandUnreadableGlobsUsesExplicitEnvironmentLikeRust(t *testing.T) {
+// Rust #59711: deny globs expand in process, so hidden directories are covered
+// and no external scanner has to exist on PATH.
+func TestExpandUnreadableGlobsWalksInProcessLikeRust(t *testing.T) {
 	root := t.TempDir()
-	commandCWD := filepath.Join(root, "command")
-	bin := filepath.Join(root, "bin")
-	scanRoot := filepath.Join(commandCWD, "workspace")
-	for _, path := range []string{commandCWD, bin, scanRoot} {
-		if err := os.MkdirAll(path, 0o755); err != nil {
+	scanRoot := filepath.Join(root, "workspace")
+	hiddenDir := filepath.Join(scanRoot, ".hidden")
+	nestedDir := filepath.Join(scanRoot, "nested")
+	for _, dir := range []string{hiddenDir, nestedDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
-	marker := filepath.Join(root, "marker")
-	envMarker := filepath.Join(root, "env-marker")
-	// The scanner runs with the explicit environment only, so PATH cannot reach
-	// coreutils; use the absolute binary to dump the environment.
-	script := "#!/bin/sh\npwd > \"" + marker + "\"\n/usr/bin/env > \"" + envMarker + "\"\nprintf '%s\\0' 'secret.key'\n"
-	if err := os.WriteFile(filepath.Join(bin, GlobScanProgram), []byte(script), 0o755); err != nil {
-		t.Fatal(err)
+	for _, file := range []string{
+		filepath.Join(scanRoot, "top.key"),
+		filepath.Join(hiddenDir, "hidden.key"),
+		filepath.Join(nestedDir, "nested.key"),
+	} {
+		if err := os.WriteFile(file, []byte("secret"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	patterns := []string{
+		filepath.Join(scanRoot, "*.key"),
+		filepath.Join(hiddenDir, "*.key"),
+		filepath.Join(nestedDir, "*.key"),
 	}
 	paths, err := ExpandUnreadableGlobsInEnvironment(
-		[]string{filepath.Join(scanRoot, "*.key")},
+		patterns,
 		scanRoot,
 		sandboxpath.FilesystemPolicy{},
 		nil,
-		map[string]string{"PATH": bin, "ONLY_THIS": "1"},
-		commandCWD,
+		map[string]string{"PATH": ""},
+		"",
 	)
 	if err != nil {
 		t.Fatalf("ExpandUnreadableGlobsInEnvironment() error = %v", err)
 	}
-	if len(paths) != 1 || paths[0] != filepath.Join(scanRoot, "secret.key") {
-		t.Fatalf("expanded paths = %#v", paths)
+	if len(paths) != 3 {
+		t.Fatalf("expanded paths = %#v, want 3 matches", paths)
 	}
-	if cwd, err := os.ReadFile(marker); err != nil || strings.TrimSpace(string(cwd)) != commandCWD {
-		t.Fatalf("scanner cwd = %q, %v", cwd, err)
+	depth := 1
+	shallow, err := ExpandUnreadableGlobsInEnvironment(
+		patterns,
+		scanRoot,
+		sandboxpath.FilesystemPolicy{},
+		&depth,
+		map[string]string{"PATH": ""},
+		"",
+	)
+	if err != nil {
+		t.Fatalf("depth-limited expansion error = %v", err)
 	}
-	if env, err := os.ReadFile(envMarker); err != nil || !strings.Contains(string(env), "ONLY_THIS=1") {
-		t.Fatalf("scanner environment = %q, %v", env, err)
+	if len(shallow) != 1 || shallow[0] != filepath.Join(scanRoot, "top.key") {
+		t.Fatalf("depth-limited paths = %#v, want the top-level match", shallow)
 	}
 }
