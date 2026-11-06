@@ -48,6 +48,11 @@ type Message struct {
 	// UserPromptTextElements are the composer's structured byte-range elements
 	// relative to UserPrompt.
 	UserPromptTextElements []MessageTextElement
+	// ClientID is the submission identity the app server echoes on a user
+	// message (Rust #59817 ThreadItem::client_id). Resuming a session
+	// reconciles pending steers and queued input by this id, so two
+	// submissions with identical text stay distinct.
+	ClientID string
 	// AsyncQuestionReplies marks a user message that carries one or more desktop
 	// async-question replies. Rust #57292 renders these on a dedicated caption +
 	// Markdown answer surface instead of as ordinary user prose.

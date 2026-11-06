@@ -14849,6 +14849,14 @@ func (r *RuntimeRouter) handleLogoutAccount(request *Request) (*auth.LogoutAccou
 			return nil, err
 		}
 	}
+	// Rust #59823: logout reloads the persisted credential before revoking it.
+	// A failed read keeps the cached identity and reports an internal error
+	// rather than deleting a store the server could not interpret.
+	if codexHome := r.codexHomeForRollout(); codexHome != "" {
+		if _, err := r.authStoreForRequest(codexHome, request).Load(); err != nil {
+			return nil, fmt.Errorf("logout failed: %w", err)
+		}
+	}
 	r.cancelAllAccountLoginRuntimes()
 	r.requireAccount().CancelActiveLogins()
 	if snapshot := r.requireAccount().AuthSnapshot(); snapshot != nil && snapshot.Mode() == "bedrock-access-keys" {

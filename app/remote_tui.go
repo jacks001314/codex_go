@@ -2998,7 +2998,9 @@ func remoteTUIMessageFromThreadItem(item appserver.ThreadItem, projection reason
 	case itemType == "usermessage" || role == "user":
 		text := remoteTUIThreadItemUserText(item)
 		localImages, remoteImages := remoteTUIThreadItemPromptImages(item.Content)
-		return tuiUserMessageFromPrompt(text, localImages, remoteImages), hasVisibleTUIUserMessageText(text)
+		message := tuiUserMessageFromPrompt(text, localImages, remoteImages)
+		message.ClientID = remoteTUIThreadItemClientID(item)
+		return message, hasVisibleTUIUserMessageText(text)
 	case itemType == "agentmessage" || itemType == "assistantmessage" || role == "assistant":
 		text := strings.TrimSpace(item.Text)
 		return codextui.Message{
@@ -3128,6 +3130,16 @@ func remoteTUINormalizedThreadItemType(value string) string {
 
 func remoteTUINormalizedThreadItemRole(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
+}
+
+// remoteTUIThreadItemClientID returns the submission identity the app server
+// echoes on a user message (Rust #59817 ThreadItem::client_id). Resume
+// reconciliation matches by this id so identical prompt text stays distinct.
+func remoteTUIThreadItemClientID(item appserver.ThreadItem) string {
+	return strings.TrimSpace(firstNonEmptyLocal(
+		remoteTUIAnyString(item.Data["clientId"]),
+		remoteTUIAnyString(item.Data["client_id"]),
+	))
 }
 
 func remoteTUIThreadItemUserText(item appserver.ThreadItem) string {

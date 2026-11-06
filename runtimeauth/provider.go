@@ -2,6 +2,7 @@ package runtimeauth
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/url"
 	"strings"
@@ -171,5 +172,56 @@ func (p *Provider) HeadersForDestination(ctx context.Context, destination string
 	if !IsOpenAIAPIURL(destination) {
 		return nil, nil
 	}
+	if p.Manager != nil {
+		if err := ValidateRuntimeEnvironment(p.Manager.RegistrationURL(), destination); err != nil {
+			return nil, err
+		}
+	}
 	return p.Headers(ctx)
+}
+
+// ErrRuntimeEnvironmentMismatch reports a request whose destination is in a
+// different production or staging environment than the runtime registration.
+var ErrRuntimeEnvironmentMismatch = errors.New("requests must use the same production or staging environment as runtime registration")
+
+// ValidateRuntimeEnvironment mirrors Rust #59823: a runtime registered against
+// production must not send its credentials to a staging destination, and the
+// reverse. Explicit registration targets (local test servers) are exempt.
+func ValidateRuntimeEnvironment(registrationURL string, destination string) error {
+	switch runtimeHost(registrationURL) {
+	case "auth.openai.com":
+		if runtimeDestinationStaging(destination) {
+			return ErrRuntimeEnvironmentMismatch
+		}
+	case "auth.api.openai.org":
+		if !runtimeDestinationStaging(destination) {
+			return ErrRuntimeEnvironmentMismatch
+		}
+	default:
+		// Explicit registration targets also support local test servers.
+		return nil
+	}
+	return nil
+}
+
+func runtimeHost(raw string) string {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimRight(strings.ToLower(parsed.Hostname()), ".")
+}
+
+// runtimeDestinationStaging classifies an API destination. An empty destination
+// keeps the model-provider default, which is production.
+func runtimeDestinationStaging(destination string) bool {
+	if strings.TrimSpace(destination) == "" {
+		return false
+	}
+	host := runtimeHost(destination)
+	switch host {
+	case "api.openai.org", "api.openai-staging.com", "chatgpt-staging.com":
+		return true
+	}
+	return strings.HasSuffix(host, ".chatgpt-staging.com")
 }

@@ -790,6 +790,10 @@ func (m *Model) applyResumeResponseWithCWD(threadID string, response SessionResu
 	// state from the thread that was open before.
 	m.resetThreadScopedState()
 	m.switchThreadID(threadID)
+	// Rust #59817: the resumed history confirms which submissions landed
+	// while this view was away. Drop exactly those by client message id so
+	// uncertain input is neither resent nor silently lost.
+	m.reconcileConfirmedSessionInput(threadID, response.Messages)
 	m.seedRecapProgress(response.CompletedTurns)
 	if response.Summary != nil {
 		m.State.SetThreadName(response.Summary.Title)

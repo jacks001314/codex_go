@@ -4426,7 +4426,9 @@ func interactiveSessionMessageFromItem(item session.Item, projection reasoningPr
 	case itemType == "usermessage" || role == "user":
 		text := interactiveSessionItemUserText(item)
 		localImages, remoteImages := interactiveSessionPromptImages(item.Content)
-		return tuiUserMessageFromPrompt(text, localImages, remoteImages), hasVisibleTUIUserMessageText(text)
+		message := tuiUserMessageFromPrompt(text, localImages, remoteImages)
+		message.ClientID = interactiveSessionItemClientID(item)
+		return message, hasVisibleTUIUserMessageText(text)
 	case itemType == "imagegeneration" || itemType == "imagegenerationcall":
 		text := interactiveSessionItemImageGenerationText(item)
 		if text == "" {
@@ -4566,6 +4568,17 @@ func interactiveRepairImageGenerationItems(record *session.Record, codexHome str
 		}
 	}
 	return changed
+}
+
+// interactiveSessionItemClientID returns the submission identity recorded with
+// a local user message (Rust #59817 ThreadItem::client_id). It lets a resumed
+// session acknowledge exactly the input that reached history.
+func interactiveSessionItemClientID(item session.Item) string {
+	return strings.TrimSpace(firstNonEmptyLocal(
+		remoteTUIAnyString(item.Metadata["clientId"]),
+		remoteTUIAnyString(item.Metadata["client_user_message"]),
+		remoteTUIAnyString(item.Data["clientId"]),
+	))
 }
 
 func interactiveSessionItemUserText(item session.Item) string {

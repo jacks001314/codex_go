@@ -110,6 +110,16 @@ func NewManager(options ManagerOptions) (*Manager, error) {
 	}, nil
 }
 
+// RegistrationURL reports the validated endpoint the runtime registers with.
+// Request destinations must stay in that same production or staging
+// environment (Rust #59823 validate_runtime_environment).
+func (m *Manager) RegistrationURL() string {
+	if m == nil {
+		return ""
+	}
+	return m.registrationURL
+}
+
 // SourceGeneration reports the manager's current credential source revision.
 func (m *Manager) SourceGeneration() uint64 {
 	if m == nil || m.sourceGeneration == nil {
