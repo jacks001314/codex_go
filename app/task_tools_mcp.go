@@ -56,6 +56,9 @@ type taskToolsMCPServer struct {
 	// worktrees exposes the local managed-worktree tools alongside the task
 	// namespace when this session is eligible (Rust ToolServices.worktrees).
 	worktrees *managedWorktreeTools
+	// taskTools is false for the embedded worktree-only server, which keeps
+	// task tools on the dynamic-tools callback transport instead.
+	taskTools bool
 
 	mu         sync.Mutex
 	connection *taskToolsMCPConnection
@@ -65,6 +68,17 @@ type taskToolsMCPServer struct {
 // returns the server plus the `mcp_servers.codex_tui` config the TUI injects into
 // thread start/fork params (Rust DynamicToolMcpServer::start).
 func startTaskToolsMCPServer(connection *taskToolsMCPConnection, worktrees *managedWorktreeTools) (*taskToolsMCPServer, error) {
+	return startTaskToolsMCPServerWithMode(connection, worktrees, true)
+}
+
+// startManagedWorktreeMCPServer hosts only the managed-worktree tools. The
+// embedded TUI keeps its task tools on the dynamic-tools callback transport and
+// still needs the worktree namespace (Rust #50148 embedded tool services).
+func startManagedWorktreeMCPServer(worktrees *managedWorktreeTools) (*taskToolsMCPServer, error) {
+	return startTaskToolsMCPServerWithMode(nil, worktrees, false)
+}
+
+func startTaskToolsMCPServerWithMode(connection *taskToolsMCPConnection, worktrees *managedWorktreeTools, taskTools bool) (*taskToolsMCPServer, error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, err
@@ -74,19 +88,23 @@ func startTaskToolsMCPServer(connection *taskToolsMCPConnection, worktrees *mana
 		token:      "Bearer " + uuid.NewString(),
 		connection: connection,
 		worktrees:  worktrees,
+		taskTools:  taskTools,
 	}
-	server.config = map[string]any{
-		"url":          "http://" + listener.Addr().String() + taskToolsMCPPath,
-		"http_headers": map[string]any{"Authorization": server.token},
+	tools := map[string]any{
+		"create_worktree": map[string]any{"approval_mode": "approve"},
+	}
+	if taskTools {
 		// Rust dynamic_tools_mcp server_config: task mutation tools prompt for
 		// approval, everything else is approved.
+		tools["create_thread"] = map[string]any{"approval_mode": "prompt"}
+		tools["send_message_to_thread"] = map[string]any{"approval_mode": "prompt"}
+		tools["fork_thread"] = map[string]any{"approval_mode": "prompt"}
+	}
+	server.config = map[string]any{
+		"url":                         "http://" + listener.Addr().String() + taskToolsMCPPath,
+		"http_headers":                map[string]any{"Authorization": server.token},
 		"default_tools_approval_mode": "approve",
-		"tools": map[string]any{
-			"create_thread":          map[string]any{"approval_mode": "prompt"},
-			"send_message_to_thread": map[string]any{"approval_mode": "prompt"},
-			"fork_thread":            map[string]any{"approval_mode": "prompt"},
-			"create_worktree":        map[string]any{"approval_mode": "approve"},
-		},
+		"tools":                       tools,
 	}
 	server.server = &http.Server{Handler: &taskToolsMCPHandler{server: server}}
 	go func() {
@@ -271,19 +289,21 @@ func (h *taskToolsMCPHandler) dispatch(ctx context.Context, method string, param
 // managed-worktree tools when this session hosts them.
 func (s *taskToolsMCPServer) toolList() []map[string]any {
 	tools := make([]map[string]any, 0, 9)
-	for _, spec := range DynamicToolSpecs() {
-		if spec.Namespace == nil {
-			continue
-		}
-		for _, function := range spec.Namespace.Tools {
-			tools = append(tools, map[string]any{
-				"name":        function.Name,
-				"description": function.Description,
-				"inputSchema": function.InputSchema,
-				"annotations": map[string]any{
-					"readOnlyHint": taskToolsMCPReadOnlyTools[function.Name],
-				},
-			})
+	if s == nil || s.taskTools {
+		for _, spec := range DynamicToolSpecs() {
+			if spec.Namespace == nil {
+				continue
+			}
+			for _, function := range spec.Namespace.Tools {
+				tools = append(tools, map[string]any{
+					"name":        function.Name,
+					"description": function.Description,
+					"inputSchema": function.InputSchema,
+					"annotations": map[string]any{
+						"readOnlyHint": taskToolsMCPReadOnlyTools[function.Name],
+					},
+				})
+			}
 		}
 	}
 	if s != nil && s.worktrees != nil {
@@ -329,6 +349,9 @@ func (h *taskToolsMCPHandler) callTool(ctx context.Context, params json.RawMessa
 			"content": []map[string]any{{"type": "text", "text": text}},
 			"isError": !success,
 		}, nil
+	}
+	if h.server != nil && !h.server.taskTools {
+		return nil, &taskToolsMCPError{Code: -32602, Message: "unknown tool"}
 	}
 	connection, err := h.server.currentConnection()
 	if err != nil {

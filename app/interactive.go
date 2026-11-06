@@ -1703,6 +1703,10 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 	readGoal, setGoal, clearGoal, editGoalText, materializeGoalDraft := interactiveLocalGoalCallbacks(nil)
 	readAgents, switchAgent := interactiveLocalAgentCallbacks(nil)
 	worktreeSettings, worktreeEnabled := interactiveWorktreeSettings(root)
+	// Rust #50148: the embedded session hosts the managed-worktree MCP service
+	// and merges its config into every turn, the same way a daemon session does.
+	embeddedWorktreeHost := startEmbeddedWorktreeMCPHost(root, state, store)
+	defer installEmbeddedWorktreeMCPHost(embeddedWorktreeHost)()
 	// The TUI owns the voice helper and relays its handshake through the
 	// in-process app-server, so the embedded TUI exposes the same /voice
 	// surface as the remote TUI.
@@ -5000,6 +5004,9 @@ func runInteractiveTurn(ctx context.Context, root *cli.RootOptions, runner inter
 	prompt := strings.TrimSpace(request.Prompt)
 	turnRoot := *root
 	turnRoot.Shared = interactiveSharedOptionsFromState(turnRoot.Shared, state)
+	// Rust #50148: the hosted worktree MCP server reaches the embedded runner
+	// through the per-turn configuration overrides.
+	turnRoot.ConfigOverrides = append(append([]string(nil), turnRoot.ConfigOverrides...), embeddedWorktreeMCPConfigOverrides()...)
 	if state != nil {
 		if tier := strings.TrimSpace(state.ServiceTier); tier != "" {
 			turnRoot.ConfigOverrides = append(append([]string(nil), turnRoot.ConfigOverrides...), "service_tier="+tier)

@@ -19,6 +19,7 @@ import (
 	"codex_go/cli"
 	"codex_go/config"
 	"codex_go/execserver"
+	"codex_go/session"
 	codextui "codex_go/tui"
 	"codex_go/turn"
 	"codex_go/worktree"
@@ -134,12 +135,56 @@ type managedWorktreeOperationResult struct {
 
 // managedWorktreeTools is the bounded, thread-scoped operation registry and
 // local worktree manager behind the hosted MCP namespace.
+// managedWorktreeTransport performs the app-server requests a worktree tool
+// needs. A daemon session opens a dedicated client per call; the embedded
+// session serves the same requests through its in-process router so the hosted
+// worktree MCP service works without a transport connection (Rust #50148).
+type managedWorktreeTransport interface {
+	request(ctx context.Context, method appserver.Method, params any, target any) error
+	close()
+}
+
+type remoteManagedWorktreeTransport struct {
+	client *remoteAppServerTUIClient
+}
+
+func (t remoteManagedWorktreeTransport) request(ctx context.Context, method appserver.Method, params any, target any) error {
+	return remoteSessionRequest(ctx, t.client, method, params, target)
+}
+
+func (t remoteManagedWorktreeTransport) close() {
+	if t.client != nil {
+		t.client.close()
+	}
+}
+
+type embeddedManagedWorktreeTransport struct {
+	store *session.Store
+}
+
+func (t embeddedManagedWorktreeTransport) request(_ context.Context, method appserver.Method, params any, target any) error {
+	result, closeRuntime, err := localSessionRouterRequest(t.store, method, params)
+	if closeRuntime != nil {
+		defer closeRuntime()
+	}
+	if err != nil {
+		return err
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(encoded, target)
+}
+
+func (t embeddedManagedWorktreeTransport) close() {}
+
 type managedWorktreeTools struct {
 	manager *worktree.WorktreeManager
-	// openClient opens a dedicated app-server session for tool requests so an
-	// in-flight tool call never competes with the TUI's interactive read loop.
-	openClient func(context.Context) (*remoteAppServerTUIClient, error)
-	now        func() time.Time
+	// openTransport opens the app-server transport for one tool request so an
+	// in-flight call never competes with the TUI's interactive read loop.
+	openTransport func(context.Context) (managedWorktreeTransport, error)
+	now           func() time.Time
 
 	mu         sync.Mutex
 	operations map[string]*managedWorktreeOperation
@@ -148,26 +193,46 @@ type managedWorktreeTools struct {
 func newManagedWorktreeTools(endpoint *appserverdaemon.RemoteAppServerEndpoint, settings worktree.WorktreeSettings) *managedWorktreeTools {
 	return &managedWorktreeTools{
 		manager: worktree.NewWorktreeManager(settings),
-		openClient: func(ctx context.Context) (*remoteAppServerTUIClient, error) {
-			return openRemoteSessionClient(ctx, endpoint)
+		openTransport: func(ctx context.Context) (managedWorktreeTransport, error) {
+			client, err := openRemoteSessionClient(ctx, endpoint)
+			if err != nil {
+				return nil, err
+			}
+			return remoteManagedWorktreeTransport{client: client}, nil
 		},
 		now:        time.Now,
 		operations: map[string]*managedWorktreeOperation{},
 	}
 }
 
-func (t *managedWorktreeTools) withClient(ctx context.Context, fn func(*remoteAppServerTUIClient) error) error {
-	if t == nil || t.openClient == nil {
+// newEmbeddedManagedWorktreeTools builds the same service for the embedded TUI,
+// whose app server runs in process (Rust #50148 embedded tool services).
+func newEmbeddedManagedWorktreeTools(store *session.Store, settings worktree.WorktreeSettings) *managedWorktreeTools {
+	return &managedWorktreeTools{
+		manager: worktree.NewWorktreeManager(settings),
+		openTransport: func(context.Context) (managedWorktreeTransport, error) {
+			if store == nil {
+				return nil, errors.New(managedWorktreeUnavailableOnConnection)
+			}
+			return embeddedManagedWorktreeTransport{store: store}, nil
+		},
+		now:        time.Now,
+		operations: map[string]*managedWorktreeOperation{},
+	}
+}
+
+func (t *managedWorktreeTools) withTransport(ctx context.Context, fn func(managedWorktreeTransport) error) error {
+	if t == nil || t.openTransport == nil {
 		return errors.New(managedWorktreeUnavailableOnConnection)
 	}
-	client, err := t.openClient(ctx)
+	transport, err := t.openTransport(ctx)
 	if err != nil {
 		return err
 	}
-	if client != nil {
-		defer client.close()
+	if transport != nil {
+		defer transport.close()
 	}
-	return fn(client)
+	return fn(transport)
 }
 
 // executeTool runs one managed-worktree tool and returns the bounded text
@@ -255,8 +320,8 @@ func (t *managedWorktreeTools) operationStatus(threadID string, operationID stri
 
 func (t *managedWorktreeTools) listWorktrees(ctx context.Context, threadID string, cursor *string) (string, error) {
 	var response appserver.ThreadAttachmentListResponse
-	err := t.withClient(ctx, func(client *remoteAppServerTUIClient) error {
-		return remoteSessionRequest(ctx, client, appserver.MethodThreadAttachmentList, appserver.ThreadAttachmentListParams{
+	err := t.withTransport(ctx, func(transport managedWorktreeTransport) error {
+		return transport.request(ctx, appserver.MethodThreadAttachmentList, appserver.ThreadAttachmentListParams{
 			ThreadID: threadID,
 			Cursor:   cursor,
 			Limit:    uint32Pointer(1),
@@ -330,8 +395,8 @@ func (t *managedWorktreeTools) createWorktree(ctx context.Context, threadID stri
 		revision = strings.TrimSpace(*args.Revision)
 	}
 	var read appserver.ThreadReadResponse
-	if err := t.withClient(ctx, func(client *remoteAppServerTUIClient) error {
-		return remoteSessionRequest(ctx, client, appserver.MethodThreadRead, appserver.ThreadReadParams{
+	if err := t.withTransport(ctx, func(transport managedWorktreeTransport) error {
+		return transport.request(ctx, appserver.MethodThreadRead, appserver.ThreadReadParams{
 			ThreadID:     threadID,
 			IncludeTurns: false,
 		}, &read)
@@ -346,9 +411,9 @@ func (t *managedWorktreeTools) createWorktree(ctx context.Context, threadID stri
 	}
 	// Verify capability before allocating a checkout, including SQLite
 	// availability on the daemon side.
-	if err := t.withClient(ctx, func(client *remoteAppServerTUIClient) error {
+	if err := t.withTransport(ctx, func(transport managedWorktreeTransport) error {
 		var page appserver.ThreadAttachmentListResponse
-		return remoteSessionRequest(ctx, client, appserver.MethodThreadAttachmentList, appserver.ThreadAttachmentListParams{
+		return transport.request(ctx, appserver.MethodThreadAttachmentList, appserver.ThreadAttachmentListParams{
 			ThreadID: threadID,
 			Limit:    uint32Pointer(1),
 		}, &page)
@@ -459,9 +524,9 @@ func (t *managedWorktreeTools) createAndRegister(ctx context.Context, threadID s
 		if err != nil {
 			registrationErr = err
 		} else {
-			registrationErr = t.withClient(ctx, func(client *remoteAppServerTUIClient) error {
+			registrationErr = t.withTransport(ctx, func(transport managedWorktreeTransport) error {
 				var response appserver.ThreadAttachmentAddResponse
-				return remoteSessionRequest(ctx, client, appserver.MethodThreadAttachmentAdd, appserver.ThreadAttachmentAddParams{
+				return transport.request(ctx, appserver.MethodThreadAttachmentAdd, appserver.ThreadAttachmentAddParams{
 					ThreadID:       threadID,
 					AttachmentType: managedWorktreeAttachmentType,
 					IdentityKey:    created.Root,
