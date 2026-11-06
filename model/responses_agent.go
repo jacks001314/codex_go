@@ -138,10 +138,15 @@ type ResponsesAgentOptions struct {
 	// WorkloadIdentityRefresh refreshes process-scoped workload identity
 	// after a downstream 401 (Rust WorkloadIdentityExternalAuth::refresh,
 	// #38188). When nil, the runner lazily builds one from StoreOptions.
-	WorkloadIdentityRefresh  WorkloadIdentityRefreshFunc
-	AgentIdentity            *AgentIdentityOptions
-	ModelsManager            ModelsManager
-	EnableRequestCompression bool
+	WorkloadIdentityRefresh WorkloadIdentityRefreshFunc
+	// ProviderUnauthorizedRecovery mirrors Rust ModelProvider::recover_from_unauthorized
+	// (#59816): it lets the provider refresh its own credentials (a gateway
+	// credential export, for example) before the shared auth plan runs. It
+	// reports whether a retry should use the refreshed credentials.
+	ProviderUnauthorizedRecovery ProviderUnauthorizedRecoveryFunc
+	AgentIdentity                *AgentIdentityOptions
+	ModelsManager                ModelsManager
+	EnableRequestCompression     bool
 	// ContentItemKindsEnabled mirrors Rust's content_item_kinds feature gate:
 	// when disabled, content_item_kinds is cleared from every response item
 	// carried to the provider (Rust client.rs prepare_response_items_for_request).
@@ -193,25 +198,28 @@ type ResponsesAgentRunner struct {
 	StreamHandler              ResponsesStreamHandler
 	// AuthRecoveryHandler receives the turn-scoped progress of a
 	// provider-owned authentication recovery (Rust #41239).
-	AuthRecoveryHandler        ProviderAuthRecoveryHandler
-	CodexHome                  string
-	AuthSnapshot               *auth.AuthDotJSON
-	AuthIssuer                 string
-	StoreOptions               *auth.StoreOptions
-	ExternalAuthRefresh        ExternalAuthRefreshFunc
-	WorkloadIdentityRefresh    WorkloadIdentityRefreshFunc
-	AgentIdentity              *AgentIdentityOptions
-	AgentIdentityTelemetry     *codexapi.AgentIdentityTelemetry
-	ModelsManager              ModelsManager
-	EnableRequestCompression   bool
-	ContentItemKindsEnabled    *bool
-	IncludeAttestation         bool
-	AttestationProvider        codexapi.AttestationProvider
-	SupportsWebsockets         bool
-	WebsocketConnectTimeout    time.Duration
-	RejectRedirects            bool
-	UnboundedConnectionRetries *bool
-	OutputTokenReplayEnabled   bool
+	AuthRecoveryHandler     ProviderAuthRecoveryHandler
+	CodexHome               string
+	AuthSnapshot            *auth.AuthDotJSON
+	AuthIssuer              string
+	StoreOptions            *auth.StoreOptions
+	ExternalAuthRefresh     ExternalAuthRefreshFunc
+	WorkloadIdentityRefresh WorkloadIdentityRefreshFunc
+	// ProviderUnauthorizedRecovery refreshes provider-owned credentials on a 401
+	// (Rust #59816 provider.recover_from_unauthorized).
+	ProviderUnauthorizedRecovery ProviderUnauthorizedRecoveryFunc
+	AgentIdentity                *AgentIdentityOptions
+	AgentIdentityTelemetry       *codexapi.AgentIdentityTelemetry
+	ModelsManager                ModelsManager
+	EnableRequestCompression     bool
+	ContentItemKindsEnabled      *bool
+	IncludeAttestation           bool
+	AttestationProvider          codexapi.AttestationProvider
+	SupportsWebsockets           bool
+	WebsocketConnectTimeout      time.Duration
+	RejectRedirects              bool
+	UnboundedConnectionRetries   *bool
+	OutputTokenReplayEnabled     bool
 	// AWS carries the Amazon Bedrock SDK credential configuration (Rust
 	// #39410) so expired SDK credentials can be refreshed on 401 failures.
 	AWS *ProviderAWSAuthInfo
@@ -388,6 +396,10 @@ type ExternalAuthRefreshFunc func(ctx context.Context, request *ExternalAuthRefr
 
 // WorkloadIdentityRefreshFunc re-exchanges workload identity tokens preserving
 // the previously authenticated account.
+// ProviderUnauthorizedRecoveryFunc refreshes provider-owned credentials after
+// a 401 and reports whether the request should be retried (Rust #59816).
+type ProviderUnauthorizedRecoveryFunc func(context.Context) (bool, error)
+
 type WorkloadIdentityRefreshFunc func(ctx context.Context, previousAccountID string) (*auth.AuthDotJSON, error)
 
 // MaxResponseMessageBytes mirrors Rust's client_tool_metadata
@@ -777,43 +789,44 @@ func NewResponsesAgentRunner(options *ResponsesAgentOptions) *ResponsesAgentRunn
 		providerRequiresOpenAIAuth = true
 	}
 	return &ResponsesAgentRunner{
-		Provider:                   provider,
-		Auth:                       cloneAuthHeaders(options.Auth),
-		HTTPClient:                 client,
-		ProviderID:                 strings.TrimSpace(options.ProviderID),
-		ProviderCapabilities:       providerCapabilities,
-		ProviderRequiresOpenAIAuth: providerRequiresOpenAIAuth,
-		ProviderUsesOwnCredentials: options.ProviderUsesOwnCredentials || provider.Auth != nil,
-		Stream:                     options.Stream,
-		StreamHandler:              options.StreamHandler,
-		AuthRecoveryHandler:        options.AuthRecoveryHandler,
-		CodexHome:                  strings.TrimSpace(options.CodexHome),
-		AuthSnapshot:               cloneAuthSnapshot(options.AuthSnapshot),
-		AuthIssuer:                 strings.TrimSpace(options.AuthIssuer),
-		StoreOptions:               cloneStoreOptions(options.StoreOptions),
-		ExternalAuthRefresh:        options.ExternalAuthRefresh,
-		WorkloadIdentityRefresh:    options.WorkloadIdentityRefresh,
-		AgentIdentity:              cloneAgentIdentityOptions(options.AgentIdentity),
-		AgentIdentityTelemetry:     agentIdentityTelemetryFromAuthHeaders(options.Auth),
-		ModelsManager:              options.ModelsManager,
-		EnableRequestCompression:   options.EnableRequestCompression,
-		ContentItemKindsEnabled:    cloneBoolPtrModel(options.ContentItemKindsEnabled),
-		IncludeAttestation:         options.IncludeAttestation,
-		AttestationProvider:        options.AttestationProvider,
-		SupportsWebsockets:         options.SupportsWebsockets,
-		WebsocketConnectTimeout:    options.WebsocketConnectTimeout,
-		RejectRedirects:            options.RejectRedirects,
-		OutputTokenReplayEnabled:   options.OutputTokenReplayEnabled,
-		UnboundedConnectionRetries: cloneBoolPtrModel(options.UnboundedConnectionRetries),
-		AWS:                        cloneProviderAWSAuthInfo(options.AWS),
-		Metrics:                    options.Metrics,
-		ApiKeyCyberAccessPrograms:  options.ApiKeyCyberAccessPrograms,
-		ImageStore:                 attachmentstore.StoreOrDefault(options.ImageStore),
-		AWSRefreshMu:               &sync.Mutex{},
-		providerAuthFetchedAt:      providerAuthFetchedAt,
-		turnState:                  &responsesTurnStateCache{},
-		websocketSessions:          &responsesWebsocketSessionCache{sessions: map[string]*responsesWebsocketSession{}},
-		inferenceTools:             &responsesInferenceToolCache{},
+		Provider:                     provider,
+		Auth:                         cloneAuthHeaders(options.Auth),
+		HTTPClient:                   client,
+		ProviderID:                   strings.TrimSpace(options.ProviderID),
+		ProviderCapabilities:         providerCapabilities,
+		ProviderRequiresOpenAIAuth:   providerRequiresOpenAIAuth,
+		ProviderUsesOwnCredentials:   options.ProviderUsesOwnCredentials || provider.Auth != nil,
+		Stream:                       options.Stream,
+		StreamHandler:                options.StreamHandler,
+		AuthRecoveryHandler:          options.AuthRecoveryHandler,
+		CodexHome:                    strings.TrimSpace(options.CodexHome),
+		AuthSnapshot:                 cloneAuthSnapshot(options.AuthSnapshot),
+		AuthIssuer:                   strings.TrimSpace(options.AuthIssuer),
+		StoreOptions:                 cloneStoreOptions(options.StoreOptions),
+		ExternalAuthRefresh:          options.ExternalAuthRefresh,
+		WorkloadIdentityRefresh:      options.WorkloadIdentityRefresh,
+		ProviderUnauthorizedRecovery: options.ProviderUnauthorizedRecovery,
+		AgentIdentity:                cloneAgentIdentityOptions(options.AgentIdentity),
+		AgentIdentityTelemetry:       agentIdentityTelemetryFromAuthHeaders(options.Auth),
+		ModelsManager:                options.ModelsManager,
+		EnableRequestCompression:     options.EnableRequestCompression,
+		ContentItemKindsEnabled:      cloneBoolPtrModel(options.ContentItemKindsEnabled),
+		IncludeAttestation:           options.IncludeAttestation,
+		AttestationProvider:          options.AttestationProvider,
+		SupportsWebsockets:           options.SupportsWebsockets,
+		WebsocketConnectTimeout:      options.WebsocketConnectTimeout,
+		RejectRedirects:              options.RejectRedirects,
+		OutputTokenReplayEnabled:     options.OutputTokenReplayEnabled,
+		UnboundedConnectionRetries:   cloneBoolPtrModel(options.UnboundedConnectionRetries),
+		AWS:                          cloneProviderAWSAuthInfo(options.AWS),
+		Metrics:                      options.Metrics,
+		ApiKeyCyberAccessPrograms:    options.ApiKeyCyberAccessPrograms,
+		ImageStore:                   attachmentstore.StoreOrDefault(options.ImageStore),
+		AWSRefreshMu:                 &sync.Mutex{},
+		providerAuthFetchedAt:        providerAuthFetchedAt,
+		turnState:                    &responsesTurnStateCache{},
+		websocketSessions:            &responsesWebsocketSessionCache{sessions: map[string]*responsesWebsocketSession{}},
+		inferenceTools:               &responsesInferenceToolCache{},
 	}
 }
 
@@ -2195,18 +2208,19 @@ func NewResponsesAgentRunnerFromRuntimeProviderWithAuth(providerID string, runti
 		remote.ConfigureCache(filepath.Clean(codexHome))
 	}
 	return NewResponsesAgentRunner(&ResponsesAgentOptions{
-		Provider:                   &apiProvider,
-		Auth:                       &authHeaders,
-		HTTPClient:                 httpClient,
-		ProviderID:                 providerID,
-		ProviderCapabilities:       cloneProviderCapabilities(runtimeProvider.Capabilities()),
-		ProviderRequiresOpenAIAuth: providerInfo.RequiresOpenAIAuth,
-		ProviderUsesOwnCredentials: strings.TrimSpace(providerInfo.EnvKey) != "" || strings.TrimSpace(providerInfo.ExperimentalBearerToken) != "" || providerInfo.Auth != nil,
-		CodexHome:                  codexHome,
-		AuthSnapshot:               snapshot,
-		ModelsManager:              modelsManager,
-		IncludeAttestation:         runtimeProvider.SupportsAttestation(),
-		SupportsWebsockets:         providerInfo.SupportsWebsockets,
+		Provider:                     &apiProvider,
+		Auth:                         &authHeaders,
+		HTTPClient:                   httpClient,
+		ProviderID:                   providerID,
+		ProviderCapabilities:         cloneProviderCapabilities(runtimeProvider.Capabilities()),
+		ProviderUnauthorizedRecovery: runtimeProviderUnauthorizedRecovery(runtimeProvider),
+		ProviderRequiresOpenAIAuth:   providerInfo.RequiresOpenAIAuth,
+		ProviderUsesOwnCredentials:   strings.TrimSpace(providerInfo.EnvKey) != "" || strings.TrimSpace(providerInfo.ExperimentalBearerToken) != "" || providerInfo.Auth != nil,
+		CodexHome:                    codexHome,
+		AuthSnapshot:                 snapshot,
+		ModelsManager:                modelsManager,
+		IncludeAttestation:           runtimeProvider.SupportsAttestation(),
+		SupportsWebsockets:           providerInfo.SupportsWebsockets,
 		WebsocketConnectTimeout: func() time.Duration {
 			info := runtimeProvider.Info()
 			return (&info).EffectiveWebsocketConnectTimeout()

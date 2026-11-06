@@ -23,11 +23,25 @@ func (m *Model) resetSidePaneViewState() {
 // sidePaneSplitAvailable reports whether both panes are visible at the current
 // width (Rust conversation_focus_available + split layout).
 func (m *Model) sidePaneSplitAvailable() bool {
-	if m == nil || m.activeSide == nil || !m.sideWorkspaceEnabled() || m.transcriptUnavailableForPanes() {
+	if m == nil || !m.sideWorkspaceEnabled() || m.transcriptUnavailableForPanes() {
+		return false
+	}
+	// Rust #59824: the chooser shares the split, so it can be resized before a
+	// side chat exists.
+	if m.activeSide == nil && !m.sidebarChooserVisible() {
 		return false
 	}
 	_, _, ok := sideWorkspaceWidthsForPercent(m.width, m.sideWidthPercentValue(), m.sideExactWidth)
 	return ok
+}
+
+// sideBarResizableSplitAvailable reports whether the sidebar owns a visible
+// split that can be resized: an open side chat or the chooser (Rust #59824).
+func (m *Model) sideBarResizableSplitAvailable() bool {
+	if m == nil || !m.sidePaneSplitAvailable() {
+		return false
+	}
+	return m.sidebarChooserVisible() || (m.activeSide != nil && m.activeSide.ShowingSide)
 }
 
 func (m *Model) togglePaneZoom() bubbletea.Cmd {
@@ -46,7 +60,8 @@ func (m *Model) setFocusedPaneWidth(focusedPercent int) bubbletea.Cmd {
 		return nil
 	}
 	sidePercent := focusedPercent
-	if !m.activeSide.ShowingSide {
+	sideFocused := m.sidebarChooserVisible() || (m.activeSide != nil && m.activeSide.ShowingSide)
+	if !sideFocused {
 		sidePercent = 100 - focusedPercent
 	}
 	available := max(m.width-ansi.StringWidth(sideWorkspaceDivider), 1)
@@ -64,7 +79,7 @@ func (m *Model) setFocusedPaneWidth(focusedPercent int) bubbletea.Cmd {
 // nudgeSidePaneWidth moves the divider by a percentage of the terminal width;
 // Rust binds this to leader shift-h/shift-l while the side pane has focus.
 func (m *Model) nudgeSidePaneWidth(deltaPercent int) bubbletea.Cmd {
-	if m == nil || m.activeSide == nil || !m.activeSide.ShowingSide || !m.sidePaneSplitAvailable() {
+	if m == nil || !m.sideBarResizableSplitAvailable() {
 		return nil
 	}
 	_, sideWidth, ok := sideWorkspaceWidthsForPercent(m.width, m.sideWidthPercentValue(), m.sideExactWidth)

@@ -297,6 +297,34 @@ func (p *ConfiguredProvider) APIAuth() (AuthHeaders, error) {
 	return composeGatewayAuth(context.Background(), p.info.GatewayOAuth, provider, primary)
 }
 
+// RecoverFromUnauthorized refreshes provider-owned credentials after a 401
+// (Rust ModelProvider::recover_from_unauthorized, #59816). A gateway credential
+// export drops its cached token so the retry reruns the command; a browser
+// OAuth gateway owns no local retry and reports NotConfigured.
+func (p *ConfiguredProvider) RecoverFromUnauthorized(_ context.Context) (bool, error) {
+	if p == nil || p.gatewayExport == nil {
+		return false, nil
+	}
+	p.gatewayExport.invalidate()
+	return true, nil
+}
+
+// providerUnauthorizedRecoverer is the optional RuntimeProvider hook the
+// responses runner uses for a 401 retry.
+type providerUnauthorizedRecoverer interface {
+	RecoverFromUnauthorized(ctx context.Context) (bool, error)
+}
+
+// runtimeProviderUnauthorizedRecovery adapts a provider that owns credential
+// recovery into the runner's retry hook.
+func runtimeProviderUnauthorizedRecovery(provider RuntimeProvider) ProviderUnauthorizedRecoveryFunc {
+	recoverer, ok := provider.(providerUnauthorizedRecoverer)
+	if !ok {
+		return nil
+	}
+	return recoverer.RecoverFromUnauthorized
+}
+
 func (p *ConfiguredProvider) GatewayAuthManager() (*auth.GatewayAuthManager, error) {
 	if p == nil || p.info.GatewayOAuth == nil {
 		return nil, nil

@@ -132,6 +132,17 @@ func (r *ResponsesAgentRunner) recoverProviderAuth(ctx context.Context) bool {
 	if messages != nil {
 		r.emitProviderAuthRecovery(ProviderAuthRecoveryPhaseStarted, messages.Started)
 	}
+	if r.ProviderUnauthorizedRecovery != nil {
+		// Rust's provider.recover_from_unauthorized runs once per request, ahead
+		// of the shared plan, so a gateway credential export can retry with a
+		// freshly exported token (#59816).
+		if recovered, recoverErr := r.ProviderUnauthorizedRecovery(ctx); recoverErr == nil && recovered {
+			if messages != nil {
+				r.emitProviderAuthRecovery(ProviderAuthRecoveryPhaseCompleted, messages.Succeeded)
+			}
+			return true
+		}
+	}
 	if err := r.refreshBedrockAWSCredentials(ctx); err == nil && r.bedrockAuthRecoveryAttempted {
 		if messages != nil {
 			r.emitProviderAuthRecovery(ProviderAuthRecoveryPhaseCompleted, messages.Succeeded)

@@ -609,3 +609,69 @@ func writeOpenAIFileTestJSON(t *testing.T, w http.ResponseWriter, value any) {
 		t.Fatalf("encode response: %v", err)
 	}
 }
+
+// Rust #59795: an optional thread id rides on the file creation request as
+// codex_thread_id, while an absent id leaves the body untouched.
+func TestLocalOpenAIFileUploaderIncludesOptionalThreadIDLikeRust(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		threadID string
+		want     any
+	}{
+		{name: "present", threadID: "thread-1", want: "thread-1"},
+		{name: "absent", threadID: "", want: nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var createBody map[string]any
+			var server *httptest.Server
+			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+				switch request.URL.Path {
+				case "/backend-api/files":
+					if err := json.NewDecoder(request.Body).Decode(&createBody); err != nil {
+						t.Errorf("decode create body: %v", err)
+					}
+					writeOpenAIFileTestJSON(t, w, map[string]any{"file_id": "file_thread", "upload_url": server.URL + "/blob"})
+				case "/blob":
+					w.WriteHeader(http.StatusOK)
+				case "/backend-api/files/file_thread/uploaded":
+					writeOpenAIFileTestJSON(t, w, map[string]any{"status": "success", "download_url": server.URL + "/download/file_thread"})
+				default:
+					http.NotFound(w, request)
+				}
+			}))
+			defer server.Close()
+
+			path := filepath.Join(t.TempDir(), "report.pdf")
+			if err := os.WriteFile(path, []byte("%PDF-1.4"), 0o600); err != nil {
+				t.Fatalf("write fixture: %v", err)
+			}
+			uploader := &LocalOpenAIFileUploader{
+				Auth:       &OpenAIFileAuth{ChatGPTBackend: true, BaseURL: server.URL + "/backend-api"},
+				HTTPClient: server.Client(),
+			}
+			if _, err := uploader.UploadOpenAIFile(context.Background(), OpenAIFileUploadRequest{
+				Path:          path,
+				FileName:      "report.pdf",
+				FileSizeBytes: 8,
+				HostedContext: &HostedFileUploadContext{
+					ThreadID:    tc.threadID,
+					ConnectorID: "library",
+					ActionName:  "create_library_file",
+					Model:       "gpt-work",
+				},
+			}); err != nil {
+				t.Fatalf("UploadOpenAIFile() error = %v", err)
+			}
+			got, present := createBody["codex_thread_id"]
+			if tc.want == nil {
+				if present {
+					t.Fatalf("codex_thread_id = %#v, want absent", got)
+				}
+				return
+			}
+			if !present || got != tc.want {
+				t.Fatalf("codex_thread_id = %#v present=%t, want %#v", got, present, tc.want)
+			}
+		})
+	}
+}

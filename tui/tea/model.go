@@ -4557,6 +4557,11 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		}
 		return m, bubbletea.Batch(cmds...)
 	case bubbletea.KeyMsg:
+		// Rust #59595/#59824: keyboard resize mode consumes arrows, h/l, shift
+		// arrows and Enter/Esc before any other handler sees them.
+		if handled, cmd := m.handleSidePaneResizeKey(msg); handled {
+			return m, cmd
+		}
 		// Rust #47185 (app/input.rs): a fork started from the locked view owns
 		// the keyboard until it completes, so a repeated shortcut cannot act on
 		// the resulting view.

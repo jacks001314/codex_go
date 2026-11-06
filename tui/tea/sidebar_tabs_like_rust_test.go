@@ -121,3 +121,37 @@ func TestSidebarTabsKeepMultipleSideChatsLikeRust(t *testing.T) {
 		t.Fatalf("chooser reopened %q, want side-1", model.State.ThreadID)
 	}
 }
+
+// Rust #59824: the chooser shares the sidebar split, so it can be resized, and
+// finishing a resize with Enter must not close it or submit the parent draft.
+func TestSidebarChooserResizesLikeRust(t *testing.T) {
+	model, _ := newSidebarTabsModel(t)
+	if cmd := model.openSidebarChooser(); cmd != nil {
+		runTeaCmd(t, model, cmd)
+	}
+	if cmd := model.beginSidePaneResize(); cmd != nil {
+		runTeaCmd(t, model, cmd)
+	}
+	if model.sideResize == nil {
+		t.Fatal("chooser did not start a resize preview")
+	}
+	preview := model.sideResize.previewWidth
+	model.Update(key(bubbletea.KeyLeft))
+	if model.sideResize == nil || model.sideResize.previewWidth <= preview {
+		t.Fatalf("left arrow did not widen the chooser preview: %#v", model.sideResize)
+	}
+	if handled, cmd := model.handleSidePaneResizeKey(key(bubbletea.KeyEnter)); !handled {
+		t.Fatal("Enter did not finish the resize")
+	} else if cmd != nil {
+		runTeaCmd(t, model, cmd)
+	}
+	if model.sideResize != nil {
+		t.Fatal("resize preview survived Enter")
+	}
+	if !model.sidebarChooserVisible() {
+		t.Fatal("finishing the resize closed the chooser")
+	}
+	if model.sideWidthPercent <= 0 {
+		t.Fatalf("sidebar width percent = %d", model.sideWidthPercent)
+	}
+}

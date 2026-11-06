@@ -102,6 +102,10 @@ type OpenAIFileUploadRequest struct {
 // hosted-app context attached to OpenAI file uploads made from Codex Apps MCP
 // tool calls.
 type HostedFileUploadContext struct {
+	// ThreadID is optional; when set the file creation request carries it as
+	// codex_thread_id (Rust #59795). MCP app uploads leave it empty and keep the
+	// thread id only in tool-call metadata.
+	ThreadID    string
 	ConnectorID string
 	ActionName  string
 	Model       string
@@ -184,6 +188,9 @@ func (u *LocalOpenAIFileUploader) UploadOpenAIFile(ctx context.Context, request 
 		createBody["codex_connector_id"] = request.HostedContext.ConnectorID
 		createBody["codex_action_name"] = request.HostedContext.ActionName
 		createBody["codex_model"] = request.HostedContext.Model
+		if threadID := strings.TrimSpace(request.HostedContext.ThreadID); threadID != "" {
+			createBody["codex_thread_id"] = threadID
+		}
 	}
 	var created struct {
 		FileID             string            `json:"file_id"`
