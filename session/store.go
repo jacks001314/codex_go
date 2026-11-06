@@ -110,15 +110,17 @@ func (s *Store) ListItems(threadID ThreadID, options ListItemsOptions) (*ItemPag
 	if err != nil {
 		return nil, err
 	}
-	if options.AfterUpdatedAtOrdinal != nil && record.ForkedFromID != "" {
-		return nil, fmt.Errorf("%w: incremental item replay is not supported for forked threads", ErrInvalidThreadID)
+	// Rust #59793: forked histories page like any other thread because the child
+	// record materializes the inherited prefix and applies the same segment bounds.
+	if options.AfterUpdatedAtOrdinal != nil && options.BeforeUpdatedAtOrdinal != nil {
+		return nil, fmt.Errorf("%w: update-ordinal boundaries are mutually exclusive", ErrInvalidThreadID)
 	}
 	sortKey := options.SortKey
 	if sortKey == "" {
 		sortKey = ItemSortCreatedAtOrdinal
 	}
-	if sortKey == ItemSortUpdatedAtOrdinal && options.AfterUpdatedAtOrdinal == nil {
-		return nil, fmt.Errorf("%w: update-ordinal item sorting requires an update watermark", ErrInvalidThreadID)
+	if sortKey == ItemSortUpdatedAtOrdinal && options.AfterUpdatedAtOrdinal == nil && options.BeforeUpdatedAtOrdinal == nil {
+		return nil, fmt.Errorf("%w: update-ordinal item sorting requires an update boundary", ErrInvalidThreadID)
 	}
 	if sortKey != ItemSortCreatedAtOrdinal && sortKey != ItemSortUpdatedAtOrdinal {
 		return nil, fmt.Errorf("%w: unsupported item sort key %q", ErrInvalidThreadID, sortKey)
@@ -146,6 +148,9 @@ func (s *Store) ListItems(threadID ThreadID, options ListItemsOptions) (*ItemPag
 			continue
 		}
 		if options.AfterUpdatedAtOrdinal != nil && item.UpdatedAtOrdinal <= *options.AfterUpdatedAtOrdinal {
+			continue
+		}
+		if options.BeforeUpdatedAtOrdinal != nil && item.UpdatedAtOrdinal >= *options.BeforeUpdatedAtOrdinal {
 			continue
 		}
 		ordinal := item.CreatedAtOrdinal
@@ -219,6 +224,9 @@ type ListItemsOptions struct {
 	SortDirection         SortDirection
 	SortKey               ItemSortKey
 	AfterUpdatedAtOrdinal *uint64
+	// BeforeUpdatedAtOrdinal is the exclusive upper bound for an update-window
+	// read (Rust #59793). It is mutually exclusive with AfterUpdatedAtOrdinal.
+	BeforeUpdatedAtOrdinal *uint64
 }
 
 type ItemPage struct {

@@ -71,19 +71,38 @@ func TestListItemsSupportsIncrementalUpdatedOrdinalReplay(t *testing.T) {
 	if _, err := store.ListItems(record.ID, ListItemsOptions{
 		SortKey: ItemSortUpdatedAtOrdinal,
 	}); !errors.Is(err, ErrInvalidThreadID) {
-		t.Fatalf("missing watermark error = %v", err)
+		t.Fatalf("missing boundary error = %v", err)
+	}
+	upper := uint64(4)
+	before, err := store.ListItems(record.ID, ListItemsOptions{
+		SortKey:                ItemSortUpdatedAtOrdinal,
+		BeforeUpdatedAtOrdinal: &upper,
+		SortDirection:          SortDesc,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := replayItemIDs(before.Items); len(got) != 2 || got[0] != "item-3" || got[1] != "item-2" {
+		t.Fatalf("upper-bound update page IDs = %v", got)
 	}
 }
 
-func TestListItemsRejectsIncrementalReplayForFork(t *testing.T) {
+func TestListItemsSupportsIncrementalReplayForFork(t *testing.T) {
 	store := NewStore(t.TempDir())
 	record := &Record{ID: "child", ForkedFromID: "parent", ParentThreadID: "parent", CreatedAt: time.Now().UTC()}
 	if err := store.Create(record); err != nil {
 		t.Fatal(err)
 	}
 	watermark := uint64(0)
-	if _, err := store.ListItems(record.ID, ListItemsOptions{AfterUpdatedAtOrdinal: &watermark}); !errors.Is(err, ErrInvalidThreadID) {
+	if _, err := store.ListItems(record.ID, ListItemsOptions{AfterUpdatedAtOrdinal: &watermark}); err != nil {
 		t.Fatalf("fork incremental replay error = %v", err)
+	}
+	bound := uint64(4)
+	if _, err := store.ListItems(record.ID, ListItemsOptions{BeforeUpdatedAtOrdinal: &bound}); err != nil {
+		t.Fatalf("fork upper-bound replay error = %v", err)
+	}
+	if _, err := store.ListItems(record.ID, ListItemsOptions{AfterUpdatedAtOrdinal: &watermark, BeforeUpdatedAtOrdinal: &bound}); !errors.Is(err, ErrInvalidThreadID) {
+		t.Fatalf("mutually exclusive boundary error = %v", err)
 	}
 }
 
