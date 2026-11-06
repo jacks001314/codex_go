@@ -6,13 +6,12 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	"codex_go/appserver"
 	"codex_go/protocol"
 	codextui "codex_go/tui"
 	agentsoverview "codex_go/tui/agents_overview"
 	bottompane "codex_go/tui/bottom_pane"
+	"codex_go/tui/keymsg"
 	"codex_go/utils"
 )
 
@@ -27,7 +26,7 @@ func agentsOverviewTestRows() []agentsoverview.Row {
 func openAgentsDashboard(t *testing.T, model *Model) {
 	t.Helper()
 	typeText(t, model, "/agents")
-	updated, command := model.Update(key(bubbletea.KeyEnter))
+	updated, command := model.Update(key(keymsg.KeyEnter))
 	model = updated.(*Model)
 	if model.agentsOverview == nil {
 		t.Fatal("/agents did not open the dashboard")
@@ -52,7 +51,7 @@ func TestModelAgentsCommandOpensDashboardAndLoads(t *testing.T) {
 		},
 	})
 	openAgentsDashboard(t, model)
-	output := utils.StripANSI(model.View())
+	output := utils.StripANSI(model.viewString())
 	for _, want := range []string{"Agent command center", "alpha", "beta", "gamma", "All 3", "Needs you 1", "? help"} {
 		if !strings.Contains(output, want) {
 			t.Errorf("dashboard view missing %q:\n%s", want, output)
@@ -72,10 +71,10 @@ func TestModelAgentsStatusFilterTabsLikeRust(t *testing.T) {
 		},
 	})
 	openAgentsDashboard(t, model)
-	if !strings.Contains(utils.StripANSI(model.View()), "tab/shift+tab filter") {
-		t.Fatalf("dashboard does not advertise the status filter:\n%s", utils.StripANSI(model.View()))
+	if !strings.Contains(utils.StripANSI(model.viewString()), "tab/shift+tab filter") {
+		t.Fatalf("dashboard does not advertise the status filter:\n%s", utils.StripANSI(model.viewString()))
 	}
-	model.Update(key(bubbletea.KeyTab))
+	model.Update(key(keymsg.KeyTab))
 	if got := model.agentsOverview.State.StatusFilter; got != agentsoverview.StatusFilterNeedsYou {
 		t.Fatalf("status filter after tab = %d", got)
 	}
@@ -83,14 +82,14 @@ func TestModelAgentsStatusFilterTabsLikeRust(t *testing.T) {
 		model.agentsOverview.Rows[visible[0]].ThreadID != "root-3" {
 		t.Fatalf("needs-you visible = %v", visible)
 	}
-	model.Update(key(bubbletea.KeyShiftTab))
+	model.Update(key(keymsg.KeyShiftTab))
 	if got := model.agentsOverview.State.StatusFilter; got != agentsoverview.StatusFilterAll {
 		t.Fatalf("status filter after shift-tab = %d", got)
 	}
 
 	// Metadata editing owns Tab: it must not change the filter.
 	model.Update(agentsF3Event())
-	model.Update(key(bubbletea.KeyTab))
+	model.Update(key(keymsg.KeyTab))
 	if got := model.agentsOverview.State.StatusFilter; got != agentsoverview.StatusFilterAll {
 		t.Fatalf("search changed the status filter: %d", got)
 	}
@@ -109,17 +108,17 @@ func TestModelAgentsHelpReferenceLikeRust(t *testing.T) {
 	if !model.agentsOverview.State.Help {
 		t.Fatal("? did not open the shortcut help")
 	}
-	if view := utils.StripANSI(model.View()); !strings.Contains(view, "Task shortcuts") {
+	if view := utils.StripANSI(model.viewString()); !strings.Contains(view, "Task shortcuts") {
 		t.Fatalf("help view missing heading:\n%s", view)
 	}
-	model.Update(key(bubbletea.KeyEsc))
+	model.Update(key(keymsg.KeyEsc))
 	if model.agentsOverview.State.Help {
 		t.Fatal("Escape did not close help")
 	}
 
 	// Backspace edits search instead of triggering the task-delete shortcut.
 	model.Update(agentsF3Event())
-	model.Update(key(bubbletea.KeyBackspace))
+	model.Update(key(keymsg.KeyBackspace))
 	if !model.agentsOverview.State.Searching {
 		t.Fatal("backspace closed search")
 	}
@@ -127,8 +126,8 @@ func TestModelAgentsHelpReferenceLikeRust(t *testing.T) {
 
 // agentsKeyEvent builds a plain-character key event, which is how the command
 // center's single-letter shortcuts arrive (Rust #45255).
-func agentsKeyEvent(r rune) bubbletea.KeyMsg {
-	return bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{r}}
+func agentsKeyEvent(r rune) keymsg.KeyMsg {
+	return keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{r}}
 }
 
 func TestModelAgentsDashboardNavigationAndSearch(t *testing.T) {
@@ -143,7 +142,7 @@ func TestModelAgentsDashboardNavigationAndSearch(t *testing.T) {
 	if got := model.agentsOverview.SelectedThreadID(); got != "root-1" {
 		t.Fatalf("initial selection = %q, want root-1", got)
 	}
-	model.Update(key(bubbletea.KeyDown))
+	model.Update(key(keymsg.KeyDown))
 	if got := model.agentsOverview.SelectedThreadID(); got != "root-2" {
 		t.Fatalf("selection after down = %q, want root-2", got)
 	}
@@ -156,7 +155,7 @@ func TestModelAgentsDashboardNavigationAndSearch(t *testing.T) {
 	if visible := model.agentsOverview.VisibleIndices(); len(visible) != 1 {
 		t.Fatalf("search visible = %v, want single gamma row", visible)
 	}
-	model.Update(key(bubbletea.KeyEsc))
+	model.Update(key(keymsg.KeyEsc))
 	if model.agentsOverview.State.Searching || model.agentsOverview.State.Search != "" {
 		t.Fatalf("esc did not exit search: %#v", model.agentsOverview.State)
 	}
@@ -187,11 +186,11 @@ func TestModelAgentsDashboardRightOpensSelectedTask(t *testing.T) {
 		},
 	})
 	openAgentsDashboard(t, model)
-	model.Update(key(bubbletea.KeyDown))
+	model.Update(key(keymsg.KeyDown))
 	if got := model.agentsOverview.SelectedThreadID(); got != "root-2" {
 		t.Fatalf("selection before right = %q, want root-2", got)
 	}
-	updated, _ := model.Update(key(bubbletea.KeyRight))
+	updated, _ := model.Update(key(keymsg.KeyRight))
 	model = updated.(*Model)
 	if model.agentsOverview != nil {
 		t.Fatal("right from an empty composer did not open the selected task")
@@ -208,15 +207,15 @@ func TestModelAgentsDashboardRightOpensSelectedTask(t *testing.T) {
 	openAgentsDashboard(t, editing)
 	// Rust #49517 moved the search shortcut to f3 and `/`.
 	editing.Update(agentsF3Event())
-	updated, _ = editing.Update(key(bubbletea.KeyRight))
+	updated, _ = editing.Update(key(keymsg.KeyRight))
 	editing = updated.(*Model)
 	if editing.agentsOverview == nil {
 		t.Fatal("right while searching must keep the editor, not open the task")
 	}
-	updated, _ = editing.Update(key(bubbletea.KeyEsc))
+	updated, _ = editing.Update(key(keymsg.KeyEsc))
 	editing = updated.(*Model)
 	editing.Update(agentsKeyEvent('r'))
-	updated, _ = editing.Update(key(bubbletea.KeyRight))
+	updated, _ = editing.Update(key(keymsg.KeyRight))
 	editing = updated.(*Model)
 	if editing.agentsOverview == nil {
 		t.Fatal("right while renaming must keep the editor, not open the task")
@@ -236,7 +235,7 @@ func TestModelAgentsDashboardRightOpensSelectedTask(t *testing.T) {
 		},
 	})
 	openAgentsDashboard(t, remapped)
-	updated, _ = remapped.Update(key(bubbletea.KeyRight))
+	updated, _ = remapped.Update(key(keymsg.KeyRight))
 	remapped = updated.(*Model)
 	if remapped.agentsOverview == nil {
 		t.Fatal("an editor move_right remap must keep Right for the editor")
@@ -258,7 +257,7 @@ func TestModelAgentsDashboardRightOpensSelectedTask(t *testing.T) {
 	openAgentsDashboard(t, vimRemapped)
 	vimRemapped.vimMode = true
 	vimRemapped.vimInsert = false
-	updated, _ = vimRemapped.Update(key(bubbletea.KeyRight))
+	updated, _ = vimRemapped.Update(key(keymsg.KeyRight))
 	vimRemapped = updated.(*Model)
 	if vimRemapped.agentsOverview == nil {
 		t.Fatal("a Vim move_right remap must keep Right for the editor")
@@ -429,7 +428,7 @@ func TestModelAgentsDashboardRenameSelected(t *testing.T) {
 		t.Fatal("r did not start renaming")
 	}
 	typeText(t, model, " v2")
-	updated, command := model.Update(key(bubbletea.KeyEnter))
+	updated, command := model.Update(key(keymsg.KeyEnter))
 	model = updated.(*Model)
 	if command == nil {
 		t.Fatal("enter returned no rename command")
@@ -451,11 +450,11 @@ func TestModelAgentsDashboardEscCloses(t *testing.T) {
 		},
 	})
 	openAgentsDashboard(t, model)
-	model.Update(key(bubbletea.KeyEsc))
+	model.Update(key(keymsg.KeyEsc))
 	if model.agentsOverview != nil {
 		t.Fatal("esc did not close the dashboard")
 	}
-	output := utils.StripANSI(model.View())
+	output := utils.StripANSI(model.viewString())
 	if strings.Contains(output, "Agent command center") {
 		t.Fatalf("dashboard still rendered after esc:\n%s", output)
 	}
@@ -480,7 +479,7 @@ func TestModelAgentsDashboardOpenAttachesViaSwitchAgent(t *testing.T) {
 	})
 	openAgentsDashboard(t, model)
 	model.agentsOverview.Selected = 1 // root-2
-	updated, command := model.Update(key(bubbletea.KeyEnter))
+	updated, command := model.Update(key(keymsg.KeyEnter))
 	model = updated.(*Model)
 	if model.agentsOverview != nil {
 		t.Fatal("open did not close the dashboard")
@@ -512,7 +511,7 @@ func TestModelAgentsDashboardOpenCurrentThreadIsNoop(t *testing.T) {
 	})
 	openAgentsDashboard(t, model)
 	model.agentsOverview.Selected = 0 // root-1 is the current thread
-	updated, command := model.Update(key(bubbletea.KeyEnter))
+	updated, command := model.Update(key(keymsg.KeyEnter))
 	model = updated.(*Model)
 	if model.agentsOverview != nil {
 		t.Fatal("open did not close the dashboard")
@@ -549,7 +548,7 @@ func TestModelAgentsDashboardOpenReadOnlyAppliesSnapshot(t *testing.T) {
 	})
 	openAgentsDashboard(t, model)
 	model.agentsOverview.Selected = 1 // root-2
-	updated, command := model.Update(key(bubbletea.KeyEnter))
+	updated, command := model.Update(key(keymsg.KeyEnter))
 	model = updated.(*Model)
 	if command == nil {
 		t.Fatal("open returned no attach command")
@@ -599,7 +598,7 @@ func TestModelAgentsDashboardRefreshErrorShowsNotice(t *testing.T) {
 		},
 	})
 	openAgentsDashboard(t, model)
-	output := utils.StripANSI(model.View())
+	output := utils.StripANSI(model.viewString())
 	if !strings.Contains(output, "Failed to load shared agents") {
 		t.Fatalf("notice missing error:\n%s", output)
 	}
@@ -679,7 +678,7 @@ func TestModelAgentsDashboardPreservesDraftAcrossSwitch(t *testing.T) {
 	model.agentsOverviewDrafts = map[string]string{"root-2": "saved B"}
 	openAgentsDashboard(t, model)
 	model.agentsOverview.Selected = 1
-	updated, command := model.Update(key(bubbletea.KeyEnter))
+	updated, command := model.Update(key(keymsg.KeyEnter))
 	model = updated.(*Model)
 	message := command()
 	updated, _ = model.Update(message)
@@ -707,7 +706,7 @@ func TestModelAgentsDashboardPreservesDraftAcrossSwitch(t *testing.T) {
 	model.composer.SetValue("")
 	openAgentsDashboard(t, model)
 	model.agentsOverview.Selected = 2 // root-3
-	updated, command = model.Update(key(bubbletea.KeyEnter))
+	updated, command = model.Update(key(keymsg.KeyEnter))
 	model = updated.(*Model)
 	message = command()
 	updated, _ = model.Update(message)
@@ -743,7 +742,7 @@ func TestModelAgentsDashboardAttachClearsComposerWithoutSavedDraft(t *testing.T)
 	model.composer.SetValue("")
 	openAgentsDashboard(t, model)
 	model.agentsOverview.Selected = 2 // root-3 has no saved draft
-	updated, command := model.Update(key(bubbletea.KeyEnter))
+	updated, command := model.Update(key(keymsg.KeyEnter))
 	model = updated.(*Model)
 	message := command()
 	updated, _ = model.Update(message)
@@ -771,7 +770,7 @@ func TestModelAgentsDashboardSwitchFailureDiscardsPendingDraft(t *testing.T) {
 	})
 	openAgentsDashboard(t, model)
 	model.agentsOverview.Selected = 1
-	updated, command := model.Update(key(bubbletea.KeyEnter))
+	updated, command := model.Update(key(keymsg.KeyEnter))
 	model = updated.(*Model)
 	message := command()
 	updated, _ = model.Update(message)

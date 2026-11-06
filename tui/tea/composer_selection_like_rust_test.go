@@ -1,13 +1,15 @@
 package tea
 
 import (
+	mousemsg "codex_go/tui/mousemsg"
 	"errors"
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 func newComposerSelectionModel(t *testing.T) (*Model, *string) {
@@ -24,7 +26,7 @@ func newComposerSelectionModel(t *testing.T) (*Model, *string) {
 		},
 	})
 	model.composer.SetValue("hello world")
-	model.View()
+	model.viewString()
 	return model, &copied
 }
 
@@ -58,11 +60,11 @@ func dragComposerSelection(t *testing.T, model *Model, startColumn, endColumn in
 	}
 	x := model.composerTextLeft + model.composerPromptWidth
 	y := model.composerTextTopRow
-	_, _ = model.Update(bubbletea.MouseMsg{
-		X: x + startColumn, Y: y, Action: bubbletea.MouseActionPress, Button: bubbletea.MouseButtonLeft,
+	_, _ = model.Update(mousemsg.MouseMsg{
+		X: x + startColumn, Y: y, Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonLeft,
 	})
-	_, cmd := model.Update(bubbletea.MouseMsg{
-		X: x + endColumn, Y: y, Action: bubbletea.MouseActionRelease, Button: bubbletea.MouseButtonLeft,
+	_, cmd := model.Update(mousemsg.MouseMsg{
+		X: x + endColumn, Y: y, Action: mousemsg.MouseActionRelease, Button: mousemsg.MouseButtonLeft,
 	})
 	return cmd
 }
@@ -80,14 +82,14 @@ func TestComposerSelectionCopiesAndTypingReplacesLikeRust(t *testing.T) {
 	if !model.composerSelection.active || model.composerSelectedText() != "hello" {
 		t.Fatalf("composer selection = %#v/%q", model.composerSelection, model.composerSelectedText())
 	}
-	if view := model.View(); !strings.Contains(view, "\x1b[7m") {
+	if view := model.viewString(); !strings.Contains(view, "\x1b[7m") {
 		t.Fatalf("composer selection was not highlighted:\n%s", view)
 	}
 	if got := model.composer.Value(); got != "hello world" {
 		t.Fatalf("composer value after copy = %q", got)
 	}
 
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune("X")})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune("X")})
 	if got := model.composer.Value(); got != "X world" {
 		t.Fatalf("composer value after replacement = %q, want X world", got)
 	}
@@ -104,7 +106,7 @@ func TestComposerSelectionCopiesAndTypingReplacesLikeRust(t *testing.T) {
 func TestComposerSelectionBackspaceDeletesLikeRust(t *testing.T) {
 	model, _ := newComposerSelectionModel(t)
 	dragComposerSelection(t, model, 0, len("hello"))
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyBackspace})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyBackspace})
 	if got := model.composer.Value(); got != " world" {
 		t.Fatalf("composer value after Backspace = %q, want %q", got, " world")
 	}
@@ -124,7 +126,7 @@ func TestComposerSelectionCtrlCCopiesLikeRust(t *testing.T) {
 	if !model.composerSelection.active {
 		t.Fatal("copy_on_select=never dropped the editable selection")
 	}
-	_, cmd := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyCtrlC})
+	_, cmd := model.Update(keymsg.KeyMsg{Type: keymsg.KeyCtrlC})
 	runTeaCmd(t, model, cmd)
 	if *copied != "hello" {
 		t.Fatalf("Ctrl+C copied %q, want hello", *copied)
@@ -148,8 +150,8 @@ func TestComposerRightClickCopiesAndClearsOnlyWhenConfirmedLikeRust(t *testing.T
 	x := model.composerTextLeft + model.composerPromptWidth + 2
 	y := model.composerTextTopRow
 
-	_, cmd := model.Update(bubbletea.MouseMsg{
-		X: x, Y: y, Action: bubbletea.MouseActionPress, Button: bubbletea.MouseButtonRight,
+	_, cmd := model.Update(mousemsg.MouseMsg{
+		X: x, Y: y, Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonRight,
 	})
 	runTeaCmd(t, model, cmd)
 	if *copied != "hello" {
@@ -167,8 +169,8 @@ func TestComposerRightClickCopiesAndClearsOnlyWhenConfirmedLikeRust(t *testing.T
 	model.clipboardWrite = func(string) error { return errors.New("clipboard unavailable") }
 	model.clipboardForward = func(string, bool) error { return errors.New("OSC unavailable") }
 	dragComposerSelection(t, model, 0, len("hello"))
-	_, cmd = model.Update(bubbletea.MouseMsg{
-		X: x, Y: y, Action: bubbletea.MouseActionPress, Button: bubbletea.MouseButtonRight,
+	_, cmd = model.Update(mousemsg.MouseMsg{
+		X: x, Y: y, Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonRight,
 	})
 	runTeaCmd(t, model, cmd)
 	if !model.composerSelection.active || model.composerSelectedText() != "hello" {
@@ -185,8 +187,8 @@ func TestComposerRightClickOutsideSelectionFallsThroughLikeRust(t *testing.T) {
 	model, copied := newComposerSelectionModel(t)
 	model.copyOnSelectMode = "never"
 	dragComposerSelection(t, model, 0, len("hello"))
-	handled, cmd := model.handleComposerSelectionMouse(bubbletea.MouseMsg{
-		X: 0, Y: 0, Action: bubbletea.MouseActionPress, Button: bubbletea.MouseButtonRight,
+	handled, cmd := model.handleComposerSelectionMouse(mousemsg.MouseMsg{
+		X: 0, Y: 0, Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonRight,
 	})
 	if handled || cmd != nil {
 		t.Fatalf("outside right-click handled=%v cmd=%v", handled, cmd != nil)
@@ -204,19 +206,19 @@ func TestComposerRightClickOutsideSelectionFallsThroughLikeRust(t *testing.T) {
 func TestComposerSelectionMapsWrappedRowsLikeRust(t *testing.T) {
 	model, _ := newComposerSelectionModel(t)
 	model.composer.SetValue(strings.Repeat("word ", 50))
-	model.View()
+	model.viewString()
 	rows := model.composerVisualRows()
 	if len(rows) < 2 || len(rows[1].text) == 0 {
 		t.Fatalf("wrapped rows = %#v, want a nonempty second row", rows)
 	}
 	y := model.composerTextTopRow + 1
 	x := model.composerTextLeft + model.composerPromptWidth
-	_, _ = model.Update(bubbletea.MouseMsg{
-		X: x, Y: y, Action: bubbletea.MouseActionPress, Button: bubbletea.MouseButtonLeft,
+	_, _ = model.Update(mousemsg.MouseMsg{
+		X: x, Y: y, Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonLeft,
 	})
-	_, _ = model.Update(bubbletea.MouseMsg{
+	_, _ = model.Update(mousemsg.MouseMsg{
 		X: x + codextui.DisplayWidth(string(rows[1].text)), Y: y,
-		Action: bubbletea.MouseActionRelease, Button: bubbletea.MouseButtonLeft,
+		Action: mousemsg.MouseActionRelease, Button: mousemsg.MouseButtonLeft,
 	})
 	if got, want := model.composerSelectedText(), string(rows[1].text); got != want {
 		t.Fatalf("wrapped selection = %q, want %q", got, want)
@@ -232,7 +234,7 @@ func TestComposerSelectionClearsOnExternalEdit(t *testing.T) {
 		t.Fatal("selection did not start")
 	}
 	model.composer.SetValue("external edit")
-	model.View()
+	model.viewString()
 	if model.composerSelection.active {
 		t.Fatalf("selection survived an external edit: %#v", model.composerSelection)
 	}

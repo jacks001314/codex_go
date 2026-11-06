@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
 	"codex_go/tui/anim"

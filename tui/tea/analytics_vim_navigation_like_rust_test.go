@@ -5,10 +5,9 @@ import (
 	"testing"
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
 	"codex_go/tui/analytics"
+	"codex_go/tui/keymsg"
 )
 
 // These tests mirror Rust #45772's analytics/navigation_tests.rs: h and l are
@@ -29,7 +28,7 @@ func newAnalyticsVimModel(t *testing.T, plan string, backend *analyticsTestBacke
 }
 
 func pressAnalyticsRune(model *Model, value rune) {
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{value}})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{value}})
 }
 
 // TestAnalyticsVimHorizontalAliasesLikeRust checks that h/l move chart cursors
@@ -157,9 +156,9 @@ func TestAnalyticsVimAliasesIgnoreModifiersLikeRust(t *testing.T) {
 	dashboard := model.analyticsDashboard
 	dashboard.selectSection(analytics.AnalyticsSectionUsage)
 	dashboard.sections[analytics.AnalyticsSectionUsage].Cursor = 3
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{'h'}, Alt: true})
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{'H'}})
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{'l'}, Alt: true})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{'h'}, Alt: true})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{'H'}})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{'l'}, Alt: true})
 	if cursor := dashboard.sections[analytics.AnalyticsSectionUsage].Cursor; cursor != 3 {
 		t.Fatalf("modified aliases moved the cursor to %d", cursor)
 	}

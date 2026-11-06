@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
 )
@@ -66,7 +66,7 @@ func TestAnimatedSurfaceDrivesFramesThroughRequester(t *testing.T) {
 // The chain stops as soon as the last animated surface ends.
 func TestFrameDemandStopsWhenAnimationEnds(t *testing.T) {
 	model, now := sparkleTestModel(t, "gpt-6-astra", true, DefaultEffectsSettings())
-	if view := model.View(); view == "" {
+	if view := model.viewString(); view == "" {
 		t.Fatal("empty view")
 	}
 	model.frames.attach(func(bubbletea.Msg) {})
@@ -76,7 +76,7 @@ func TestFrameDemandStopsWhenAnimationEnds(t *testing.T) {
 	}
 
 	*now = (*now).Add(20 * time.Second)
-	_ = model.View()
+	_ = model.viewString()
 	if model.sparkle.phase != sparkleFinished {
 		t.Fatalf("sparkle phase after deadline = %v, want finished", model.sparkle.phase)
 	}

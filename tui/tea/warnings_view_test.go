@@ -1,10 +1,10 @@
 package tea
 
 import (
+	keymsg "codex_go/tui/keymsg"
+	mousemsg "codex_go/tui/mousemsg"
 	"strings"
 	"testing"
-
-	bubbletea "github.com/charmbracelet/bubbletea"
 
 	codextui "codex_go/tui"
 	historycell "codex_go/tui/history_cell"
@@ -29,8 +29,8 @@ func TestWarningsBodySelectionCopiesLikeRust(t *testing.T) {
 		},
 	})
 	model.composer.InsertString("draft stays")
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyF2})
-	_ = model.View()
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyF2})
+	_ = model.viewString()
 
 	region := model.renderedSelection.regions[renderedRegionWarnings]
 	if region.w <= 0 || len(region.text) == 0 {
@@ -43,8 +43,8 @@ func TestWarningsBodySelectionCopiesLikeRust(t *testing.T) {
 	}
 	start := region.x + column
 	end := start + len("First warning") - 1
-	_, _ = model.Update(bubbletea.MouseMsg{X: start, Y: region.y, Action: bubbletea.MouseActionPress, Button: bubbletea.MouseButtonLeft})
-	_, cmd := model.Update(bubbletea.MouseMsg{X: end, Y: region.y, Action: bubbletea.MouseActionRelease, Button: bubbletea.MouseButtonLeft})
+	_, _ = model.Update(mousemsg.MouseMsg{X: start, Y: region.y, Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonLeft})
+	_, cmd := model.Update(mousemsg.MouseMsg{X: end, Y: region.y, Action: mousemsg.MouseActionRelease, Button: mousemsg.MouseButtonLeft})
 	runTeaCmd(t, model, cmd)
 	if copied != "First warning" {
 		t.Fatalf("copied warning selection = %q", copied)
@@ -52,17 +52,17 @@ func TestWarningsBodySelectionCopiesLikeRust(t *testing.T) {
 	if got := model.composer.Value(); got != "draft stays" {
 		t.Fatalf("composer draft = %q, want unchanged", got)
 	}
-	if view := model.View(); !strings.Contains(view, "\x1b[7m") {
+	if view := model.viewString(); !strings.Contains(view, "\x1b[7m") {
 		t.Fatal("warning selection was not highlighted")
 	}
 
 	// Paging still reaches the second warning; its changed body invalidates the
 	// selection but keeps the viewer in control.
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRight})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyRight})
 	if got := model.warningsView.CurrentIndex(); got != 1 {
 		t.Fatalf("current warning after page right = %d, want 2", got+1)
 	}
-	if view := utils.StripANSI(model.View()); !strings.Contains(view, "Second warning detail") {
+	if view := utils.StripANSI(model.viewString()); !strings.Contains(view, "Second warning detail") {
 		t.Fatalf("paging after selection did not show the second warning:\n%s", view)
 	}
 }
@@ -78,26 +78,26 @@ func TestWarningsBodyWheelScrollsLikeRust(t *testing.T) {
 		ShowTooltips:          &enabled,
 		StartupConfigWarnings: []string{details},
 	})
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyF2})
-	_ = model.View()
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyF2})
+	_ = model.viewString()
 	region := model.renderedSelection.regions[renderedRegionWarnings]
 	if region.w <= 0 || model.warningsView.MaxOffset() == 0 {
 		t.Fatalf("warning body is not scrollable: region=%#v max=%d", region, model.warningsView.MaxOffset())
 	}
 	x, y := region.x+1, region.y
-	model.Update(bubbletea.MouseMsg{X: x, Y: y, Action: bubbletea.MouseActionPress, Button: bubbletea.MouseButtonWheelDown})
+	model.Update(mousemsg.MouseMsg{X: x, Y: y, Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonWheelDown})
 	if got := model.warningsView.Offset(); got != 3 {
 		t.Fatalf("unmodified wheel offset = %d, want 3", got)
 	}
-	model.Update(bubbletea.MouseMsg{X: x, Y: y, Ctrl: true, Action: bubbletea.MouseActionPress, Button: bubbletea.MouseButtonWheelDown})
+	model.Update(mousemsg.MouseMsg{X: x, Y: y, Ctrl: true, Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonWheelDown})
 	if got := model.warningsView.Offset(); got != 3 {
 		t.Fatalf("modified wheel changed warning offset to %d", got)
 	}
-	model.Update(bubbletea.MouseMsg{X: x, Y: region.y - 1, Action: bubbletea.MouseActionPress, Button: bubbletea.MouseButtonWheelDown})
+	model.Update(mousemsg.MouseMsg{X: x, Y: region.y - 1, Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonWheelDown})
 	if got := model.warningsView.Offset(); got != 3 {
 		t.Fatalf("wheel outside body changed warning offset to %d", got)
 	}
-	model.Update(bubbletea.MouseMsg{X: x, Y: y, Action: bubbletea.MouseActionPress, Button: bubbletea.MouseButtonWheelUp})
+	model.Update(mousemsg.MouseMsg{X: x, Y: y, Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonWheelUp})
 	if got := model.warningsView.Offset(); got != 0 {
 		t.Fatalf("wheel up offset = %d, want 0", got)
 	}
@@ -116,11 +116,11 @@ func TestWarningsViewerOpensNavigatesAndDismissesLikeRust(t *testing.T) {
 	})
 	model.composer.InsertString("draft")
 
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyF2})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyF2})
 	if model.warningsView == nil {
 		t.Fatal("F2 did not open the warnings viewer")
 	}
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "Warnings \u00b7 1 of 2") || !strings.Contains(view, "First warning") {
 		t.Fatalf("viewer did not show the first warning:\n%s", view)
 	}
@@ -128,14 +128,14 @@ func TestWarningsViewerOpensNavigatesAndDismissesLikeRust(t *testing.T) {
 		t.Fatalf("viewer footer missing hints:\n%s", view)
 	}
 
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRight})
-	view = utils.StripANSI(model.View())
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyRight})
+	view = utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "Warnings \u00b7 2 of 2") || !strings.Contains(view, "Second warning") {
 		t.Fatalf("viewer did not page to the second warning:\n%s", view)
 	}
 
 	// Esc closes and dismisses the drawn pages; the draft is untouched.
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEsc})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyEsc})
 	if model.warningsView != nil {
 		t.Fatal("Esc did not close the warnings viewer")
 	}
@@ -162,12 +162,12 @@ func TestWarningsViewerKeepAndCopyLikeRust(t *testing.T) {
 		copied = append(copied, text)
 		return nil
 	}
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyF2})
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{'k'}})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyF2})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{'k'}})
 	if got := model.warningsView.CurrentIndex(); got != 1 {
 		t.Fatalf("keep did not advance the viewer: index %d", got)
 	}
-	updateAndRunClipboard(t, model, bubbletea.KeyMsg{Type: bubbletea.KeyCtrlO})
+	updateAndRunClipboard(t, model, keymsg.KeyMsg{Type: keymsg.KeyCtrlO})
 	if len(copied) != 1 || copied[0] != "Second warning" {
 		t.Fatalf("copy = %#v, want the current diagnostic", copied)
 	}
@@ -176,7 +176,7 @@ func TestWarningsViewerKeepAndCopyLikeRust(t *testing.T) {
 	}
 	// The kept first page survives the close; the unvisited page is neither
 	// dismissed nor kept.
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEsc})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyEsc})
 	visible := model.warningDisplay.VisibleEntries([]historycell.WarningCell{model.startupWarnings})
 	if len(visible) != 2 {
 		t.Fatalf("visible warnings after keep = %#v, want both", visible)
@@ -201,7 +201,7 @@ func TestWarningsSlashCommandOpensViewerLikeRust(t *testing.T) {
 	if model.warningsView == nil {
 		t.Fatal("/warnings did not open the warnings viewer")
 	}
-	if view := utils.StripANSI(model.View()); !strings.Contains(view, "Warnings \u00b7 1 of 1") || !strings.Contains(view, "Config warning") {
+	if view := utils.StripANSI(model.viewString()); !strings.Contains(view, "Warnings \u00b7 1 of 1") || !strings.Contains(view, "Config warning") {
 		t.Fatalf("/warnings viewer missing the retained diagnostic:\n%s", view)
 	}
 	if got := len(model.SubmittedRequests()); got != 0 {
@@ -216,8 +216,8 @@ func TestWarningsViewerIncludesThreadWarningsLikeRust(t *testing.T) {
 	model := NewModel(codextui.NewState(nil), Options{Width: 100, Height: 30, ShowTooltips: &enabled})
 	model.Update(StatusMsg{Status: "warning: A runtime warning"})
 
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyF2})
-	view := utils.StripANSI(model.View())
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyF2})
+	view := utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "Warnings \u00b7 1 of 1 \u00b7 Warning") {
 		t.Fatalf("viewer did not include the thread warning title:\n%s", view)
 	}
@@ -234,7 +234,7 @@ func TestWarningsFooterNoticeLikeRust(t *testing.T) {
 	model := NewModel(codextui.NewState(nil), Options{Width: 100, Height: 30, ShowTooltips: &enabled})
 	model.Update(StatusMsg{Status: "warning: A runtime warning"})
 
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	// The static footer hint is wide, so the notice degrades to its compact form
 	// (Rust's `warning_notice` budget rule); the header/history warning lines also
 	// start with the same glyph, so match the count form.
@@ -243,20 +243,20 @@ func TestWarningsFooterNoticeLikeRust(t *testing.T) {
 	}
 
 	// Dismissing the warning through the viewer clears the notice.
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyF2})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyF2})
 	// The page must be drawn for the dismissal to apply (Rust discards only
 	// warnings actually shown).
-	if view := utils.StripANSI(model.View()); !strings.Contains(view, "A runtime warning") {
+	if view := utils.StripANSI(model.viewString()); !strings.Contains(view, "A runtime warning") {
 		t.Fatalf("viewer did not draw the warning:\n%s", view)
 	}
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEsc})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyEsc})
 	if model.warningsView != nil {
 		t.Fatal("Esc did not close the viewer")
 	}
 	if got := model.warningDisplay.WarningCount(); got != 0 {
 		t.Fatalf("warning count after dismissal = %d, want 0", got)
 	}
-	if view := utils.StripANSI(model.View()); hasWarningNotice(view) {
+	if view := utils.StripANSI(model.viewString()); hasWarningNotice(view) {
 		t.Fatalf("dismissed warning still counted in the footer:\n%s", view)
 	}
 }
@@ -271,12 +271,12 @@ func TestWarningsFooterNoticeYieldsToPopupsLikeRust(t *testing.T) {
 	enabled := true
 	model := NewModel(codextui.NewState(nil), Options{Width: 100, Height: 30, ShowTooltips: &enabled})
 	model.Update(StatusMsg{Status: "warning: A runtime warning"})
-	if view := utils.StripANSI(model.View()); !hasWarningNotice(view) {
+	if view := utils.StripANSI(model.viewString()); !hasWarningNotice(view) {
 		t.Fatalf("baseline notice missing:\n%s", view)
 	}
 	// Open the slash popup by typing `/`.
 	typeText(t, model, "/")
-	if view := utils.StripANSI(model.View()); hasWarningNotice(view) {
+	if view := utils.StripANSI(model.viewString()); hasWarningNotice(view) {
 		t.Fatalf("notice rendered while the slash popup is open:\n%s", view)
 	}
 }
@@ -289,9 +289,9 @@ func TestWarningsDismissalResetsWithTranscriptLikeRust(t *testing.T) {
 		ShowTooltips: &enabled,
 	})
 	model.Update(StatusMsg{Status: "warning: repeated diagnostic"})
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyF2})
-	model.View()
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEsc})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyF2})
+	model.viewString()
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyEsc})
 	if got := model.warningDisplay.WarningCount(); got != 0 {
 		t.Fatalf("dismissed warning count = %d, want 0", got)
 	}

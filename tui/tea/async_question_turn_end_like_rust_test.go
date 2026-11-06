@@ -5,11 +5,12 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	"codex_go/protocol"
 	codextui "codex_go/tui"
 	"codex_go/tui/chatwidget"
+	"codex_go/tui/keymsg"
 )
 
 // TestAsyncQuestionNotificationExpiresWhenTurnEndsLikeRust mirrors Rust
@@ -116,10 +117,10 @@ func TestTurnEndRecoversAsyncQuestionDraftsLikeRust(t *testing.T) {
 		map[string]any{"title": "What budget?"},
 	})
 
-	updated, _ := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyUp, Alt: true})
+	updated, _ := model.Update(keymsg.KeyMsg{Type: keymsg.KeyUp, Alt: true})
 	model = updated.(*Model)
 	model.composer.SetValue("  Over-ear  ")
-	updated, _ = model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyUp, Alt: true})
+	updated, _ = model.Update(keymsg.KeyMsg{Type: keymsg.KeyUp, Alt: true})
 	model = updated.(*Model)
 	model.composer.SetValue("Under 250")
 
@@ -164,7 +165,7 @@ func TestTurnEndEscapesCommandDraftBeforeRecoveryLikeRust(t *testing.T) {
 			model = feedAsyncQuestions(t, model, "question", []any{
 				map[string]any{"title": "Which way?"},
 			})
-			updated, _ := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyUp, Alt: true})
+			updated, _ := model.Update(keymsg.KeyMsg{Type: keymsg.KeyUp, Alt: true})
 			model = updated.(*Model)
 			model.composer.SetValue("answer")
 

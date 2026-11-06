@@ -4,9 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 	"codex_go/utils"
 )
 
@@ -194,7 +193,7 @@ func TestConfigPanelResumeDirectoryPickerLikeRust(t *testing.T) {
 		t.Fatalf("opening the picker saved %#v", edits)
 	}
 	model.jumpConfigPanelChoice(2)
-	runTeaCmd(t, model, model.updateConfigPanelChoiceKey(key(bubbletea.KeyEnter)))
+	runTeaCmd(t, model, model.updateConfigPanelChoiceKey(key(keymsg.KeyEnter)))
 	if model.modal.configPanel.choice != nil {
 		t.Fatal("selecting a resume option kept the child picker open")
 	}
@@ -281,7 +280,7 @@ func TestConfigPanelResumeDirectoryRemoteAvailabilityLikeRust(t *testing.T) {
 	if choice.selected != 2 {
 		t.Fatalf("remote jump(2) selected %d, want 2", choice.selected)
 	}
-	model.updateConfigPanelChoiceKey(key(bubbletea.KeyEnter))
+	model.updateConfigPanelChoiceKey(key(keymsg.KeyEnter))
 	if model.resumeCWD != "session" {
 		t.Fatalf("remote pick chose %q, want session", model.resumeCWD)
 	}
@@ -301,7 +300,7 @@ func TestConfigPanelResumeDirectoryRemoteAvailabilityLikeRust(t *testing.T) {
 		t.Fatalf("remote picker with --cd = %#v", choice)
 	}
 	model.jumpConfigPanelChoice(2)
-	model.updateConfigPanelChoiceKey(key(bubbletea.KeyEnter))
+	model.updateConfigPanelChoiceKey(key(keymsg.KeyEnter))
 	if model.resumeCWD != "current" {
 		t.Fatalf("remote pick with --cd chose %q, want current", model.resumeCWD)
 	}

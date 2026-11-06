@@ -3,7 +3,7 @@ package tea
 import (
 	"strings"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 )
 
 // ServerRequestResolvedMsg reports that an app-server request was resolved by

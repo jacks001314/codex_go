@@ -4,13 +4,14 @@ import (
 	"sort"
 	"strings"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	bubbletea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"codex_go/features"
 	codextui "codex_go/tui"
 	bottompane "codex_go/tui/bottom_pane"
 	"codex_go/tui/chatwidget"
+	"codex_go/tui/keymsg"
 )
 
 const slashPopupMaxRows = 8
@@ -237,23 +238,23 @@ func popupAliasCommandTea(name string) bool {
 	}
 }
 
-func (m *Model) updateSlashPopupKey(msg bubbletea.KeyMsg) (bubbletea.Cmd, bool) {
+func (m *Model) updateSlashPopupKey(msg keymsg.KeyMsg) (bubbletea.Cmd, bool) {
 	if m == nil || !m.slashPopup.Active {
 		return nil, false
 	}
 	switch msg.Type {
-	case bubbletea.KeyUp, bubbletea.KeyCtrlP:
+	case keymsg.KeyUp, keymsg.KeyCtrlP:
 		m.moveSlashPopupSelection(-1)
 		return nil, true
-	case bubbletea.KeyDown, bubbletea.KeyCtrlN:
+	case keymsg.KeyDown, keymsg.KeyCtrlN:
 		m.moveSlashPopupSelection(1)
 		return nil, true
-	case bubbletea.KeyEsc:
+	case keymsg.KeyEsc:
 		m.slashPopup = slashCommandPopup{}
 		return nil, true
-	case bubbletea.KeyTab:
+	case keymsg.KeyTab:
 		return m.completeSelectedSlashCommand(), true
-	case bubbletea.KeyEnter:
+	case keymsg.KeyEnter:
 		if cmd, ok := m.dispatchSelectedSlashCommand(); ok {
 			return cmd, true
 		}

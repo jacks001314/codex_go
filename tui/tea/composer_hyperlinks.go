@@ -130,23 +130,29 @@ func annotateDisplayRange(line string, from int, to int, destination string) str
 	if line == "" || from >= to {
 		return line
 	}
+	// Bubble Tea v2 styles the caret rune on its own, so an SGR can split a
+	// grapheme cluster (the ZWJ sequence of an emoji). Segment the visible text
+	// and splice the hyperlink around whole clusters, keeping each cluster's raw
+	// escapes attached to it.
+	plain, offsets := plainRuneOffsets(line)
+	if len(offsets) == 0 {
+		return line
+	}
 	var out strings.Builder
 	out.Grow(len(line) + len(destination) + 16)
 	column := 0
 	opened := false
-	for index := 0; index < len(line); {
-		if line[index] == 0x1b {
-			end := sparkleSequenceEnd(line, index)
-			out.WriteString(line[index:end])
-			index = end
-			continue
-		}
-		graphemes := uniseg.NewGraphemes(line[index:])
-		if !graphemes.Next() {
-			break
-		}
-		grapheme := graphemes.Str()
+	runeIndex := 0
+	graphemes := uniseg.NewGraphemes(plain)
+	for graphemes.Next() {
+		cluster := graphemes.Str()
 		width := max(graphemes.Width(), 1)
+		start := offsets[runeIndex]
+		runeIndex += utf8.RuneCountInString(cluster)
+		end := len(line)
+		if runeIndex < len(offsets) {
+			end = offsets[runeIndex]
+		}
 		selected := column < to && column+width > from
 		if selected && !opened {
 			out.WriteString("\x1b]8;;")
@@ -158,12 +164,35 @@ func annotateDisplayRange(line string, from int, to int, destination string) str
 			out.WriteString("\x1b]8;;\x07")
 			opened = false
 		}
-		out.WriteString(grapheme)
+		out.WriteString(line[start:end])
 		column += width
-		index += len(grapheme)
+		if end == len(line) {
+			break
+		}
 	}
 	if opened {
 		out.WriteString("\x1b]8;;\x07")
 	}
 	return out.String()
+}
+
+// plainRuneOffsets strips ANSI sequences and returns the visible text with the
+// byte offset of every visible rune in the original line.
+func plainRuneOffsets(line string) (string, []int) {
+	var plain strings.Builder
+	offsets := make([]int, 0, len(line))
+	for index := 0; index < len(line); {
+		if line[index] == 0x1b {
+			index = sparkleSequenceEnd(line, index)
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(line[index:])
+		if r == utf8.RuneError && size == 0 {
+			break
+		}
+		offsets = append(offsets, index)
+		plain.WriteString(line[index : index+size])
+		index += size
+	}
+	return plain.String(), offsets
 }

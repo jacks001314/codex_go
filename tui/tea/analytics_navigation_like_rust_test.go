@@ -7,10 +7,9 @@ import (
 	"testing"
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
 	"codex_go/tui/analytics"
+	"codex_go/tui/keymsg"
 )
 
 // readyAnalyticsHistoryLoad settles an in-memory history into a ready load so a
@@ -78,8 +77,8 @@ func TestAnalyticsNavigationKeepsItsRowLikeRust(t *testing.T) {
 		} {
 			dashboard.selectSection(section)
 			position := -1
-			for index, line := range strings.Split(stripAnalyticsTestANSI(model.View()), "\n") {
-				if strings.Contains(line, "Summary") && strings.Contains(line, "usage history") {
+			for index, line := range strings.Split(stripAnalyticsTestANSI(model.viewString()), "\n") {
+				if strings.Contains(line, "Overview") && strings.Contains(line, "Usage") {
 					position = index
 					break
 				}
@@ -110,36 +109,39 @@ func TestAnalyticsTallerReportShowsMoreLegendRowsLikeRust(t *testing.T) {
 	dashboard.sections[analytics.AnalyticsSectionUsage].History = readyAnalyticsHistoryLoad(t, analyticsLegendHistory(t, dashboard))
 
 	model.width, model.height = 120, 30
-	short := stripAnalyticsTestANSI(model.View())
+	short := stripAnalyticsTestANSI(model.viewString())
 	model.width, model.height = 120, 60
-	tall := stripAnalyticsTestANSI(model.View())
+	tall := stripAnalyticsTestANSI(model.viewString())
 	if strings.Count(tall, "\u25cf ") <= strings.Count(short, "\u25cf ") {
 		t.Fatalf("tall legend rows = %d, short = %d", strings.Count(tall, "\u25cf "), strings.Count(short, "\u25cf "))
 	}
-	last := strings.Split(strings.TrimRight(tall, "\n"), "\n")
-	start := len(last) - 3
-	if start < 0 {
-		start = 0
-	}
+	// #46863 moved the report timestamp into the fixed controls area above
+	// the body. It stays in the first six rows at every width.
+	lines := strings.Split(strings.TrimRight(tall, "\n"), "\n")
 	found := false
-	for _, line := range last[start:] {
+	for _, line := range lines[:analyticsMin(6, len(lines))] {
 		if strings.Contains(line, "Updated") {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Fatalf("tall footer missing the update timestamp:\n%s", tall)
+		t.Fatalf("tall controls missing the update timestamp:\n%s", tall)
 	}
 	if got := strings.Count(short, "Updated"); got != 1 {
-		t.Fatalf("update timestamp appears %d times, want once in the footer:\n%s", got, short)
+		t.Fatalf("update timestamp appears %d times, want once in the controls:\n%s", got, short)
 	}
-	// Rust #45770 wraps the footer timestamp onto its own line when narrow.
+	// Narrow layouts reserve a third control row and keep the range control on
+	// row three (Rust #46863 account_layout_tests).
 	for _, width := range []int{24, 40, 64} {
 		model.width, model.height = width, 60
-		lines := strings.Split(strings.TrimRight(stripAnalyticsTestANSI(model.View()), "\n"), "\n")
-		if last := lines[len(lines)-1]; !strings.Contains(last, "UTC") {
-			t.Fatalf("width=%d footer last line = %q, want the update timestamp", width, last)
+		lines := strings.Split(strings.TrimRight(stripAnalyticsTestANSI(model.viewString()), "\n"), "\n")
+		row := ""
+		if len(lines) > 3 {
+			row = lines[3]
+		}
+		if !strings.Contains(row, "7d/30d") {
+			t.Fatalf("width=%d control row = %q, want the 7d/30d range", width, row)
 		}
 	}
 }
@@ -157,12 +159,12 @@ func TestAnalyticsScrollHintsFollowOverflowLikeRust(t *testing.T) {
 	dashboard.sections[analytics.AnalyticsSectionUsage].History = readyAnalyticsHistoryLoad(t, analyticsLegendHistory(t, dashboard))
 
 	model.width, model.height = 120, 80
-	roomy := stripAnalyticsTestANSI(model.View())
+	roomy := stripAnalyticsTestANSI(model.viewString())
 	if strings.Contains(roomy, "scroll") {
 		t.Fatalf("fitted report kept the scroll hint:\n%s", roomy)
 	}
 	model.width, model.height = 120, 20
-	cramped := stripAnalyticsTestANSI(model.View())
+	cramped := stripAnalyticsTestANSI(model.viewString())
 	if !strings.Contains(cramped, "scroll") {
 		t.Fatalf("overflowing report dropped the scroll hint:\n%s", cramped)
 	}
@@ -181,14 +183,14 @@ func TestAnalyticsExactFitHasNoScrollHintLikeRust(t *testing.T) {
 	dashboard.selectSection(analytics.AnalyticsSectionChats)
 
 	model.width, model.height = 120, 60
-	if strings.Contains(stripAnalyticsTestANSI(model.View()), "scroll") {
+	if strings.Contains(stripAnalyticsTestANSI(model.viewString()), "scroll") {
 		t.Fatal("roomy chats panel kept the scroll hint")
 	}
 	chromeHeight := 60 - dashboard.viewportHeight
 	contentHeight := len(dashboard.panel(analytics.AnalyticsSectionChats, 116, 4).Lines)
 
 	model.height = chromeHeight + contentHeight
-	exact := stripAnalyticsTestANSI(model.View())
+	exact := stripAnalyticsTestANSI(model.viewString())
 	if strings.Contains(exact, "scroll") {
 		t.Fatalf("exact fit kept the scroll hint:\n%s", exact)
 	}
@@ -225,7 +227,7 @@ func TestAnalyticsUngroupedSectionsKeepConfiguredGLikeRust(t *testing.T) {
 			t.Fatalf("%v unexpectedly groups by %v", section, options)
 		}
 		dashboard.sections[section].Cursor = 3
-		model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{'g'}})
+		model.Update(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{'g'}})
 		if cursor := dashboard.sections[section].Cursor; cursor != 0 {
 			t.Fatalf("%v cursor after g = %d, want the configured jump top", section, cursor)
 		}

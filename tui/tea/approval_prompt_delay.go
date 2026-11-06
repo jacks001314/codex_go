@@ -4,7 +4,9 @@ import (
 	"strings"
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	"codex_go/tui/keymsg"
+
+	bubbletea "charm.land/bubbletea/v2"
 )
 
 // approvalPromptTypingIdleDelay mirrors Rust's
@@ -25,19 +27,19 @@ type approvalPromptDelayMsg struct {
 	token uint64
 }
 
-func recordsComposerApprovalDelayActivity(msg bubbletea.KeyMsg) bool {
+func recordsComposerApprovalDelayActivity(msg keymsg.KeyMsg) bool {
 	if msg.Alt || msg.Paste {
 		return false
 	}
 	switch msg.Type {
-	case bubbletea.KeyRunes:
+	case keymsg.KeyRunes:
 		return len(msg.Runes) > 0
-	case bubbletea.KeySpace,
-		bubbletea.KeyBackspace,
-		bubbletea.KeyDelete,
-		bubbletea.KeyEnter,
-		bubbletea.KeyTab,
-		bubbletea.KeyShiftTab:
+	case keymsg.KeySpace,
+		keymsg.KeyBackspace,
+		keymsg.KeyDelete,
+		keymsg.KeyEnter,
+		keymsg.KeyTab,
+		keymsg.KeyShiftTab:
 		return true
 	default:
 		return false

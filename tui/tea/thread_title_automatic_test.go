@@ -134,7 +134,7 @@ func TestAutomaticThreadTitlePendingShowsNoProgressSpinnerLikeRust(t *testing.T)
 	}
 	model.refreshStatusControls()
 
-	model.View()
+	model.viewString()
 	footerText := strings.Join(model.renderedSelection.regions[renderedRegionFooter].text, "\n")
 	statusLine, ok := model.statusControls.StatusLineValueForItem(bottompane.StatusLineThreadTitle)
 	if !ok || statusLine != "Fix the login timeout" {

@@ -42,7 +42,7 @@ func TestExploringCommandsGroupIntoOneCellLikeRust(t *testing.T) {
 	model.applyItemStarted(startedCommandItem("read-1", "cat README.md"), 0)
 	model.applyItemStarted(startedCommandItem("list-1", "ls src"), 0)
 
-	view := model.View()
+	view := model.viewString()
 	if !strings.Contains(view, "Read README.md") || !strings.Contains(view, "List src") {
 		t.Fatalf("exploring group should contain both parsed actions:\n%s", view)
 	}
@@ -66,7 +66,7 @@ func TestExploringGroupKeepsReasoningInOrderLikeRust(t *testing.T) {
 
 	message, ok := groupMessageWith(model, "Read README.md")
 	if !ok {
-		t.Fatalf("exploring group message missing:\n%s", model.View())
+		t.Fatalf("exploring group message missing:\n%s", model.viewString())
 	}
 	if !strings.Contains(message.Text, "List src") {
 		t.Fatalf("second exploring call did not join the group: %q", message.Text)
@@ -98,7 +98,7 @@ func TestExploringGroupEndsOnNonExploringCommandLikeRust(t *testing.T) {
 	model.applyItemStarted(startedCommandItem("list-1", "ls src"), 0)
 	model.applyItemStarted(startedCommandItem("run-1", "go test ./..."), 0)
 
-	view := model.View()
+	view := model.viewString()
 	if !strings.Contains(view, "Read README.md") || !strings.Contains(view, "List src") {
 		t.Fatalf("exploring group lost its actions after a later command:\n%s", view)
 	}
@@ -117,7 +117,7 @@ func TestExploringGroupClosesOnCompletionLikeRust(t *testing.T) {
 	model.applyItemCompleted(completedCommandItem("read-1", "cat README.md", "contents\n"))
 	model.applyItemCompleted(completedCommandItem("list-1", "ls src", "src\n"))
 
-	view := model.View()
+	view := model.viewString()
 	if !strings.Contains(view, "Explored") {
 		t.Fatalf("completed exploring group should render as Explored:\n%s", view)
 	}

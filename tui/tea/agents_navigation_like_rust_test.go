@@ -5,11 +5,10 @@ import (
 	"testing"
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
 	agentsoverview "codex_go/tui/agents_overview"
 	bottompane "codex_go/tui/bottom_pane"
+	"codex_go/tui/keymsg"
 	"codex_go/utils"
 )
 
@@ -29,10 +28,10 @@ func agentsNavigationModel(t *testing.T, options Options) *Model {
 // composer in a local-daemon session. A non-empty draft keeps Left local.
 func TestAgentsNavigationOpensOverviewFromEmptyComposerLikeRust(t *testing.T) {
 	model := agentsNavigationModel(t, Options{LocalDaemonSession: true})
-	if !strings.Contains(utils.StripANSI(model.View()), "\u2190 for agents") {
-		t.Fatalf("empty local-daemon composer missing the agents hint:\n%s", utils.StripANSI(model.View()))
+	if !strings.Contains(utils.StripANSI(model.viewString()), "\u2190 for agents") {
+		t.Fatalf("empty local-daemon composer missing the agents hint:\n%s", utils.StripANSI(model.viewString()))
 	}
-	updated, command := model.Update(key(bubbletea.KeyLeft))
+	updated, command := model.Update(key(keymsg.KeyLeft))
 	model = updated.(*Model)
 	if command == nil {
 		t.Fatal("Left returned no dashboard refresh command")
@@ -43,14 +42,14 @@ func TestAgentsNavigationOpensOverviewFromEmptyComposerLikeRust(t *testing.T) {
 
 	draft := agentsNavigationModel(t, Options{LocalDaemonSession: true})
 	typeText(t, draft, "ab")
-	draft.Update(key(bubbletea.KeyLeft))
+	draft.Update(key(keymsg.KeyLeft))
 	if draft.agentsOverview != nil {
 		t.Fatal("Left opened the agents overview from a non-empty draft")
 	}
 	if got := draft.composerText(); got != "ab" {
 		t.Fatalf("draft text = %q, want ab", got)
 	}
-	if strings.Contains(utils.StripANSI(draft.View()), "for agents") {
+	if strings.Contains(utils.StripANSI(draft.viewString()), "for agents") {
 		t.Fatal("non-empty draft still advertises the agents shortcut")
 	}
 }
@@ -60,10 +59,10 @@ func TestAgentsNavigationOpensOverviewFromEmptyComposerLikeRust(t *testing.T) {
 // (Rust #57281/#58238 supports_command_center).
 func TestAgentsNavigationRequiresSharedAppServerLikeRust(t *testing.T) {
 	model := agentsNavigationModel(t, Options{})
-	if strings.Contains(utils.StripANSI(model.View()), "for agents") {
+	if strings.Contains(utils.StripANSI(model.viewString()), "for agents") {
 		t.Fatal("a session without a command center advertises the shortcut")
 	}
-	updated, command := model.Update(key(bubbletea.KeyLeft))
+	updated, command := model.Update(key(keymsg.KeyLeft))
 	model = updated.(*Model)
 	if command != nil || model.agentsOverview != nil {
 		t.Fatal("a session without a command center opened the agents overview")
@@ -74,10 +73,10 @@ func TestAgentsNavigationRequiresSharedAppServerLikeRust(t *testing.T) {
 // command center in-process, so Left opens it from an empty composer.
 func TestAgentsNavigationOpensOverviewForEmbeddedDashboardLikeRust(t *testing.T) {
 	model := agentsNavigationModel(t, Options{AgentsOverviewEmbedded: true})
-	if !strings.Contains(utils.StripANSI(model.View()), "for agents") {
+	if !strings.Contains(utils.StripANSI(model.viewString()), "for agents") {
 		t.Fatal("embedded dashboard session is missing the agents footer hint")
 	}
-	updated, command := model.Update(key(bubbletea.KeyLeft))
+	updated, command := model.Update(key(keymsg.KeyLeft))
 	model = updated.(*Model)
 	if command == nil || model.agentsOverview == nil {
 		t.Fatal("embedded dashboard session did not open the agents overview")
@@ -86,10 +85,10 @@ func TestAgentsNavigationOpensOverviewForEmbeddedDashboardLikeRust(t *testing.T)
 
 func TestAgentsNavigationOpensOverviewForRemoteSessionLikeRust(t *testing.T) {
 	model := agentsNavigationModel(t, Options{RemoteAppServer: true})
-	if !strings.Contains(utils.StripANSI(model.View()), "for agents") {
+	if !strings.Contains(utils.StripANSI(model.viewString()), "for agents") {
 		t.Fatal("remote session is missing the agents footer hint")
 	}
-	updated, command := model.Update(key(bubbletea.KeyLeft))
+	updated, command := model.Update(key(keymsg.KeyLeft))
 	model = updated.(*Model)
 	if command == nil || model.agentsOverview == nil {
 		t.Fatal("remote session did not open the agents overview")
@@ -143,10 +142,10 @@ func TestAgentsNavigationPreservesTransientInputLikeRust(t *testing.T) {
 	for _, testCase := range tests {
 		model := agentsNavigationModel(t, Options{LocalDaemonSession: true})
 		testCase.setup(model)
-		if strings.Contains(utils.StripANSI(model.View()), "for agents") {
+		if strings.Contains(utils.StripANSI(model.viewString()), "for agents") {
 			t.Fatalf("%s: footer advertises the shortcut during a transient input state", testCase.name)
 		}
-		updated, command := model.Update(key(bubbletea.KeyLeft))
+		updated, command := model.Update(key(keymsg.KeyLeft))
 		model = updated.(*Model)
 		if command != nil || model.agentsOverview != nil {
 			t.Fatalf("%s: Left opened the agents overview", testCase.name)
@@ -180,10 +179,10 @@ func TestAgentsNavigationRespectsEditorAndVimRemapsLikeRust(t *testing.T) {
 		if model.agentsNavigationKeyAvailable() {
 			t.Fatalf("vim=%v: remapped move_left still claims Left for agents", vim)
 		}
-		if strings.Contains(utils.StripANSI(model.View()), "for agents") {
+		if strings.Contains(utils.StripANSI(model.viewString()), "for agents") {
 			t.Fatalf("vim=%v: footer advertises a remapped Left", vim)
 		}
-		updated, command := model.Update(key(bubbletea.KeyLeft))
+		updated, command := model.Update(key(keymsg.KeyLeft))
 		model = updated.(*Model)
 		if command != nil || model.agentsOverview != nil {
 			t.Fatalf("vim=%v: Left opened the agents overview despite the remap", vim)
@@ -194,14 +193,14 @@ func TestAgentsNavigationRespectsEditorAndVimRemapsLikeRust(t *testing.T) {
 // The footer hint is gated on the same availability predicate as dispatch.
 func TestAgentsNavigationFooterHintFollowsAvailabilityLikeRust(t *testing.T) {
 	model := agentsNavigationModel(t, Options{LocalDaemonSession: true})
-	if !strings.Contains(utils.StripANSI(model.View()), "\u2190 for agents") {
+	if !strings.Contains(utils.StripANSI(model.viewString()), "\u2190 for agents") {
 		t.Fatal("local-daemon empty composer must advertise the shortcut")
 	}
 	model.composerLastCharAt = func() *time.Time {
 		now := model.currentTime()
 		return &now
 	}()
-	if strings.Contains(utils.StripANSI(model.View()), "for agents") {
+	if strings.Contains(utils.StripANSI(model.viewString()), "for agents") {
 		t.Fatal("paste burst must hide the agents hint")
 	}
 }

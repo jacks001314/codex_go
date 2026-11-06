@@ -4,9 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 // Rust #48549: /copy must hand the completed response to the clipboard with its
@@ -28,11 +27,11 @@ func TestSlashCopyPreservesCompletedResponseTrailingHardBreak(t *testing.T) {
 	model.mergeAssistantFinal(markdown)
 
 	typeText(t, model, "/copy")
-	model.Update(key(bubbletea.KeyEnter))
-	if !strings.Contains(model.View(), "Copy to clipboard") {
-		t.Fatalf("/copy should open a target picker:\n%s", model.View())
+	model.Update(key(keymsg.KeyEnter))
+	if !strings.Contains(model.viewString(), "Copy to clipboard") {
+		t.Fatalf("/copy should open a target picker:\n%s", model.viewString())
 	}
-	updateAndRunClipboard(t, model, key(bubbletea.KeyEnter))
+	updateAndRunClipboard(t, model, key(keymsg.KeyEnter))
 
 	if copied != markdown {
 		t.Fatalf("copied = %q, want %q", copied, markdown)
@@ -67,8 +66,8 @@ func TestSlashCopyPreservesHardBreakAfterAssistantMessageMerge(t *testing.T) {
 	// this test drives the plain writer it replaces after construction.
 	model.clipboardWriteRich = nil
 	typeText(t, model, "/copy")
-	model.Update(key(bubbletea.KeyEnter))
-	updateAndRunClipboard(t, model, key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
+	updateAndRunClipboard(t, model, key(keymsg.KeyEnter))
 
 	if copied != "Intro  \nlast line  " {
 		t.Fatalf("copied = %q, want %q", copied, "Intro  \nlast line  ")

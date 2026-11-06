@@ -6,9 +6,10 @@ package tea
 // TUI first offers to unarchive it and retry instead of failing the startup.
 
 import (
+	keymsg "codex_go/tui/keymsg"
 	"strings"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
 )
@@ -41,21 +42,21 @@ func newUnarchivePromptState(threadID, verb string) *unarchivePromptState {
 // up/down/k/j toggle the highlight, 1/y/Y confirm, esc/2/n/N cancel, and enter
 // accepts the highlighted choice. (bubbletea reports no release events, which
 // Rust ignores anyway.)
-func (s *unarchivePromptState) handleKey(message bubbletea.KeyMsg) (unarchiveChoice, bool) {
+func (s *unarchivePromptState) handleKey(message keymsg.KeyMsg) (unarchiveChoice, bool) {
 	if s == nil {
 		return unarchiveChoiceCancel, true
 	}
 	switch message.Type {
-	case bubbletea.KeyCtrlC, bubbletea.KeyCtrlD:
+	case keymsg.KeyCtrlC, keymsg.KeyCtrlD:
 		return unarchiveChoiceQuit, true
-	case bubbletea.KeyUp, bubbletea.KeyDown:
+	case keymsg.KeyUp, keymsg.KeyDown:
 		s.toggleHighlight()
 		return 0, false
-	case bubbletea.KeyEnter:
+	case keymsg.KeyEnter:
 		return s.highlighted, true
-	case bubbletea.KeyEsc:
+	case keymsg.KeyEsc:
 		return unarchiveChoiceCancel, true
-	case bubbletea.KeyRunes:
+	case keymsg.KeyRunes:
 		key := string(message.Runes)
 		if key == "" {
 			return 0, false
@@ -187,7 +188,7 @@ func (m *Model) openUnarchivePrompt(threadID, verb string, retry codextui.Sessio
 
 // updateUnarchivePromptModal handles the archived confirmation keys and, on
 // confirmation, unarchives the thread and retries the original resume/fork.
-func (m *Model) updateUnarchivePromptModal(message bubbletea.KeyMsg) bubbletea.Cmd {
+func (m *Model) updateUnarchivePromptModal(message keymsg.KeyMsg) bubbletea.Cmd {
 	if m == nil || m.modal == nil || m.modal.unarchivePrompt == nil {
 		return nil
 	}

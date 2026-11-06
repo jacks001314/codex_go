@@ -106,7 +106,7 @@ func TestServerVersionNoticeRendersInCommandCenterFooterLikeRust(t *testing.T) {
 		},
 	})
 	openAgentsDashboard(t, model)
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "Service v0.152.1 < Codex CLI v0.153.0 \u00b7 /daemon") {
 		t.Fatalf("command center missing server-version footer:\n%s", view)
 	}
@@ -114,7 +114,7 @@ func TestServerVersionNoticeRendersInCommandCenterFooterLikeRust(t *testing.T) {
 	model.applyLocalSettings(LocalSettings{Tui: SettingsWriteResult{
 		ShowServerVersionNotice: boolPtrTea(false),
 	}})
-	view = utils.StripANSI(model.View())
+	view = utils.StripANSI(model.viewString())
 	if strings.Contains(view, "Service v0.152.1") {
 		t.Fatalf("disabled server-version notice still rendered:\n%s", view)
 	}

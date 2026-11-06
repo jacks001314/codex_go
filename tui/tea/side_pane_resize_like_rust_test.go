@@ -3,9 +3,10 @@ package tea
 import (
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 // runSettingsCmd executes a settings write command so its OnWriteSettings
@@ -105,11 +106,11 @@ func TestSidePaneKeyboardResizeLikeRust(t *testing.T) {
 	if m.sideResize.previewWidth != start {
 		t.Fatalf("preview = %d, want %d", m.sideResize.previewWidth, start)
 	}
-	handled, _ := m.handleSidePaneResizeKey(key(bubbletea.KeyLeft))
+	handled, _ := m.handleSidePaneResizeKey(key(keymsg.KeyLeft))
 	if !handled || m.sideResize.previewWidth != start+1 {
 		t.Fatalf("left preview = %v/%d, want %d", handled, m.sideResize.previewWidth, start+1)
 	}
-	m.handleSidePaneResizeKey(key(bubbletea.KeyShiftRight))
+	m.handleSidePaneResizeKey(key(keymsg.KeyShiftRight))
 	if m.sideResize.previewWidth != start-9 {
 		t.Fatalf("shift-right preview = %d, want %d", m.sideResize.previewWidth, start-9)
 	}
@@ -117,7 +118,7 @@ func TestSidePaneKeyboardResizeLikeRust(t *testing.T) {
 	if m.sideResize.previewWidth != start-10 {
 		t.Fatalf("l preview = %d, want %d", m.sideResize.previewWidth, start-10)
 	}
-	handled, saveCmd := m.handleSidePaneResizeKey(key(bubbletea.KeyEnter))
+	handled, saveCmd := m.handleSidePaneResizeKey(key(keymsg.KeyEnter))
 	if !handled {
 		t.Fatal("enter was not consumed by resize mode")
 	}
@@ -183,23 +184,23 @@ func TestSidePaneDividerNudgeLikeRust(t *testing.T) {
 // dispatch (Rust #59595 leader z / , / . / = / r / shift-h / shift-l).
 func TestSidePaneLeaderShortcutsLikeRust(t *testing.T) {
 	m, _ := sidePaneResizeModel(t, 140, true)
-	m.Update(key(bubbletea.KeyCtrlX))
+	m.Update(key(keymsg.KeyCtrlX))
 	m.Update(configPanelRunes("z"))
 	if !m.sideZoomed {
 		t.Fatal("leader z did not zoom the focused pane")
 	}
-	m.Update(key(bubbletea.KeyCtrlX))
+	m.Update(key(keymsg.KeyCtrlX))
 	m.Update(configPanelRunes("z"))
 	if m.sideZoomed {
 		t.Fatal("leader z did not restore the split")
 	}
-	m.Update(key(bubbletea.KeyCtrlX))
+	m.Update(key(keymsg.KeyCtrlX))
 	m.Update(configPanelRunes(","))
 	_, side, ok := sideWorkspaceWidthsForPercent(m.width, m.sideWidthPercentValue(), m.sideExactWidth)
 	if !ok || side != sideWorkspaceMinSideWidth {
 		t.Fatalf("leader , width = %d ok=%t", side, ok)
 	}
-	m.Update(key(bubbletea.KeyCtrlX))
+	m.Update(key(keymsg.KeyCtrlX))
 	m.Update(configPanelRunes("r"))
 	if m.sideResize == nil {
 		t.Fatal("leader r did not enter resize mode")

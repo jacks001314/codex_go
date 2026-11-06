@@ -1,10 +1,11 @@
 package tea
 
 import (
+	keymsg "codex_go/tui/keymsg"
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 )
 
 // Batch T2-8b: `/title` and `/statusline` must tokenize their arguments with the
@@ -50,9 +51,9 @@ func TestStatusSurfaceBareDoubleDashLeavesSettingsPositionalLikeRust(t *testing.
 	// the selection intact (statusSurfaceTestModel fails the test on a submit).
 	typed := statusSurfaceTestModel(t, nil)
 	typeText(t, typed, "/statusline model")
-	typed.Update(key(bubbletea.KeyEnter))
+	typed.Update(key(keymsg.KeyEnter))
 	typeText(t, typed, "/statusline -- --clear")
-	typed.Update(key(bubbletea.KeyEnter))
+	typed.Update(key(keymsg.KeyEnter))
 	if want := "Unknown status-line item '--clear'. Use /statusline to see available items."; typed.notice != want {
 		t.Fatalf("typed notice = %q, want %q", typed.notice, want)
 	}

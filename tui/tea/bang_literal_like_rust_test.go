@@ -3,9 +3,8 @@ package tea
 import (
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	composerhistory "codex_go/tui/bottom_pane/chat_composer"
+	"codex_go/tui/keymsg"
 )
 
 // Rust parity: codex-rs/tui/src/bottom_pane/chat_composer.rs #58412
@@ -19,11 +18,11 @@ func TestDeletingPrefixKeepsBangLiteralLikeRust(t *testing.T) {
 	// Go routes Home to transcript paging, so the composer cursor moves directly;
 	// the edit sequence is Rust's typing/Home/Delete.
 	model.setComposerCursorOffset(0)
-	updated, _ := model.Update(key(bubbletea.KeyDelete))
+	updated, _ := model.Update(key(keymsg.KeyDelete))
 	model = updated.(*Model)
 	for i := 0; i < 3; i++ {
 		if i > 0 {
-			updated, _ = model.Update(key(bubbletea.KeyDelete))
+			updated, _ = model.Update(key(keymsg.KeyDelete))
 		}
 		model = updated.(*Model)
 	}
@@ -49,7 +48,7 @@ func TestDeletingPrefixKeepsBangLiteralLikeRust(t *testing.T) {
 		t.Fatalf("composerText() = %q, want %q", got, "! I agree.!")
 	}
 
-	updated, _ = model.Update(key(bubbletea.KeyEnter))
+	updated, _ = model.Update(key(keymsg.KeyEnter))
 	model = updated.(*Model)
 	requests := model.SubmittedRequests()
 	if len(requests) != 1 {
@@ -67,11 +66,11 @@ func TestDeletingWholePrefixLeavesNoBangLikeRust(t *testing.T) {
 	model := prefixTestModel(t)
 	model = typeComposerRunes(t, model, "Yes! I agree.")
 	model.setComposerCursorOffset(0)
-	updated, _ := model.Update(key(bubbletea.KeyDelete))
+	updated, _ := model.Update(key(keymsg.KeyDelete))
 	model = updated.(*Model)
 	for i := 0; i < 4; i++ {
 		if i > 0 {
-			updated, _ = model.Update(key(bubbletea.KeyDelete))
+			updated, _ = model.Update(key(keymsg.KeyDelete))
 		}
 		model = updated.(*Model)
 	}
@@ -92,7 +91,7 @@ func TestTypedLeadingBangStartsShellModeLikeRust(t *testing.T) {
 	if !model.isBangShellCommand() {
 		t.Fatal("isBangShellCommand() = false, want true for a typed leading bang")
 	}
-	updated, _ := model.Update(key(bubbletea.KeyEnter))
+	updated, _ := model.Update(key(keymsg.KeyEnter))
 	model = updated.(*Model)
 	requests := model.SubmittedRequests()
 	if len(requests) != 1 || requests[0].Prompt != "!echo hi" || requests[0].LiteralInput {
@@ -100,7 +99,7 @@ func TestTypedLeadingBangStartsShellModeLikeRust(t *testing.T) {
 	}
 
 	// History recall restores the same shell mode (Rust ComposerDraft::is_bash_mode).
-	updated, _ = model.Update(key(bubbletea.KeyUp))
+	updated, _ = model.Update(key(keymsg.KeyUp))
 	model = updated.(*Model)
 	if model.composerPrefix != composerPrefixShell || model.composer.Value() != "echo hi" {
 		t.Fatalf("recalled prefix=%v body=%q, want shell body", model.composerPrefix, model.composer.Value())
@@ -110,7 +109,7 @@ func TestTypedLeadingBangStartsShellModeLikeRust(t *testing.T) {
 func TestLeadingSpaceBangStaysLiteralLikeRust(t *testing.T) {
 	// Rust: `" !echo hi"` queues as literal input, `"!echo hi"` as shell input.
 	literal := prefixTestModel(t)
-	updated, _ := literal.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune(" !echo hi"), Paste: true})
+	updated, _ := literal.Update(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune(" !echo hi"), Paste: true})
 	literal = updated.(*Model)
 	if literal.composerPrefix != composerPrefixNone || literal.isBangShellCommand() {
 		t.Fatalf("leading-space paste: prefix=%v shell=%v, want literal", literal.composerPrefix, literal.isBangShellCommand())
@@ -125,7 +124,7 @@ func TestLeadingSpaceBangStaysLiteralLikeRust(t *testing.T) {
 	}
 
 	shell := prefixTestModel(t)
-	updated, _ = shell.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune("!echo hi"), Paste: true})
+	updated, _ = shell.Update(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune("!echo hi"), Paste: true})
 	shell = updated.(*Model)
 	if shell.composerPrefix != composerPrefixShell {
 		t.Fatalf("bang paste at the start: prefix=%v, want shell", shell.composerPrefix)
@@ -135,14 +134,14 @@ func TestLeadingSpaceBangStaysLiteralLikeRust(t *testing.T) {
 func TestHistoryRecallKeepsExposedBangLiteralLikeRust(t *testing.T) {
 	model := prefixTestModel(t)
 	model.setComposerPromptLiteral("! I agree.")
-	updated, _ := model.Update(key(bubbletea.KeyEnter))
+	updated, _ := model.Update(key(keymsg.KeyEnter))
 	model = updated.(*Model)
 	requests := model.SubmittedRequests()
 	if len(requests) != 1 || requests[0].Prompt != "! I agree." || !requests[0].LiteralInput {
 		t.Fatalf("submitted = %#v, want literal bang prompt", requests)
 	}
 
-	updated, _ = model.Update(key(bubbletea.KeyUp))
+	updated, _ = model.Update(key(keymsg.KeyUp))
 	model = updated.(*Model)
 	if model.composerPrefix != composerPrefixNone {
 		t.Fatalf("recalled prefix = %v, want none", model.composerPrefix)
@@ -195,7 +194,7 @@ func TestVimDeleteKeepsExposedBangLiteralLikeRust(t *testing.T) {
 func TestTabSubmitsLiteralBangDraftLikeRust(t *testing.T) {
 	model := prefixTestModel(t)
 	model.setComposerPromptLiteral("! I agree.")
-	updated, _ := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyTab})
+	updated, _ := model.Update(keymsg.KeyMsg{Type: keymsg.KeyTab})
 	model = updated.(*Model)
 	requests := model.SubmittedRequests()
 	if len(requests) != 1 || requests[0].Prompt != "! I agree." || !requests[0].LiteralInput {

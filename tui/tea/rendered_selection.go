@@ -1,12 +1,13 @@
 package tea
 
 import (
+	mousemsg "codex_go/tui/mousemsg"
 	"crypto/sha256"
 	"encoding/hex"
 	"strings"
 	"unicode/utf8"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 	"github.com/mattn/go-runewidth"
 
 	codextui "codex_go/tui"
@@ -253,22 +254,22 @@ func (m *Model) renderedSelectionRegionAt(x, y int) (renderedRegion, bool) {
 
 // handleRenderedSelectionMouse captures a drag over registered passive rows.
 // It returns true when the gesture belongs to the selection.
-func (m *Model) handleRenderedSelectionMouse(msg bubbletea.MouseMsg) (bool, bubbletea.Cmd) {
+func (m *Model) handleRenderedSelectionMouse(msg mousemsg.MouseMsg) (bool, bubbletea.Cmd) {
 	if m == nil || !m.fullscreenTranscript || m.rawOutput {
 		return false, nil
 	}
 	state := &m.renderedSelection
-	if msg.Button == bubbletea.MouseButtonWheelUp || msg.Button == bubbletea.MouseButtonWheelDown {
+	if msg.Button == mousemsg.MouseButtonWheelUp || msg.Button == mousemsg.MouseButtonWheelDown {
 		// Rust rendered_selection::handle_mouse clears on ScrollUp/ScrollDown
 		// and returns None, so the same wheel still scrolls the transcript.
 		state.clear()
 		return false, nil
 	}
-	if msg.Button != bubbletea.MouseButtonLeft && msg.Action != bubbletea.MouseActionMotion {
+	if msg.Button != mousemsg.MouseButtonLeft && msg.Action != mousemsg.MouseActionMotion {
 		return false, nil
 	}
 	switch msg.Action {
-	case bubbletea.MouseActionPress:
+	case mousemsg.MouseActionPress:
 		region, ok := m.renderedSelectionRegionAt(msg.X, msg.Y)
 		if !ok {
 			if state.active {
@@ -284,7 +285,7 @@ func (m *Model) handleRenderedSelectionMouse(msg bubbletea.MouseMsg) (bool, bubb
 		state.snapshot = append([]string(nil), region.text...)
 		state.snapshotHash = region.hash
 		return true, nil
-	case bubbletea.MouseActionMotion:
+	case mousemsg.MouseActionMotion:
 		if !state.active {
 			return false, nil
 		}
@@ -292,7 +293,7 @@ func (m *Model) handleRenderedSelectionMouse(msg bubbletea.MouseMsg) (bool, bubb
 		state.endX = clampModalInt(msg.X, region.x, region.x+max(region.w-1, 0))
 		state.endY = clampModalInt(msg.Y, region.y, region.y+max(region.h-1, 0))
 		return true, nil
-	case bubbletea.MouseActionRelease:
+	case mousemsg.MouseActionRelease:
 		if !state.active {
 			return false, nil
 		}

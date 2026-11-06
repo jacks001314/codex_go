@@ -5,9 +5,10 @@ import (
 	"testing"
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 func TestSessionPickerAcknowledgesUnreadTranscriptLikeRust(t *testing.T) {
@@ -32,7 +33,7 @@ func TestSessionPickerAcknowledgesUnreadTranscriptLikeRust(t *testing.T) {
 		t.Fatalf("picker rows lack the unread marker: %q", rows)
 	}
 
-	model.Update(key(bubbletea.KeyCtrlT))
+	model.Update(key(keymsg.KeyCtrlT))
 	if model.sessionTranscriptRevision != "revision-1" {
 		t.Fatalf("observed revision = %q", model.sessionTranscriptRevision)
 	}
@@ -64,7 +65,7 @@ func TestSessionPickerDefersAckUntilTerminalFocusLikeRust(t *testing.T) {
 	})
 	openResumePickerForUnreadTest(t, model)
 	model.terminalFocused = false
-	model.Update(key(bubbletea.KeyCtrlT))
+	model.Update(key(keymsg.KeyCtrlT))
 	_, cmd := model.Update(SessionTranscriptMsg{ThreadID: "thread-1", Messages: []codextui.Message{{Role: codextui.RoleUser, Text: "hello"}}})
 	if ackMessages := runSessionAckCmd(t, model, cmd); len(ackMessages) != 0 || acks != 0 {
 		t.Fatalf("ack fired without terminal focus: %#v", ackMessages)
@@ -88,7 +89,7 @@ func TestSessionPickerUnreadMarkerFollowsAcknowledgementResponseLikeRust(t *test
 		},
 	})
 	openResumePickerForUnreadTest(t, model)
-	model.Update(key(bubbletea.KeyCtrlT))
+	model.Update(key(keymsg.KeyCtrlT))
 	_, cmd := model.Update(SessionTranscriptMsg{ThreadID: "thread-1", Messages: []codextui.Message{{Role: codextui.RoleUser, Text: "hello"}}})
 	runSessionAckCmd(t, model, cmd)
 
@@ -105,7 +106,7 @@ const sessionUnreadMarkerSGR = "\x1b[38;2;59;130;246m\u25cf\x1b[39m"
 func openResumePickerForUnreadTest(t *testing.T, model *Model) {
 	t.Helper()
 	typeText(t, model, "/resume")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if model.modal == nil || model.modal.sessionPicker == nil {
 		t.Fatalf("resume picker not open: %#v", model.modal)
 	}

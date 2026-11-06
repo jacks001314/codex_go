@@ -1,9 +1,10 @@
 package tea
 
 import (
+	mousemsg "codex_go/tui/mousemsg"
 	"strings"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
 	historycell "codex_go/tui/history_cell"
@@ -106,9 +107,9 @@ func (m *Model) applyOpenURLResult(msg OpenURLResultMsg) {
 // handleComposerGapLinkClick maps a Ctrl-click on the composer-gap footer row
 // to an OSC 8 destination. Bubble Tea v1 has no Super modifier, so Ctrl-click
 // is the available carrier for Rust's Ctrl/Super-click behavior.
-func (m *Model) handleComposerGapLinkClick(msg bubbletea.MouseMsg) (bool, bubbletea.Cmd) {
+func (m *Model) handleComposerGapLinkClick(msg mousemsg.MouseMsg) (bool, bubbletea.Cmd) {
 	if m == nil || m.onOpenURL == nil || !msg.Ctrl ||
-		msg.Action != bubbletea.MouseActionPress || msg.Button != bubbletea.MouseButtonLeft {
+		msg.Action != mousemsg.MouseActionPress || msg.Button != mousemsg.MouseButtonLeft {
 		return false, nil
 	}
 	region := m.renderedSelection.regions[renderedRegionFooter]

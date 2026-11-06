@@ -26,7 +26,7 @@ func TestShortFullscreenClipsTranscriptBeforeActivityLikeRust(t *testing.T) {
 	}
 
 	for _, height := range []int{5, 6, 7, 8, 12} {
-		view := utils.StripANSI(newModel(height).View())
+		view := utils.StripANSI(newModel(height).View().Content)
 		if !strings.Contains(view, "COMPOSER-MARKER") {
 			t.Fatalf("height %d clipped the composer:\n%s", height, view)
 		}
@@ -39,10 +39,10 @@ func TestShortFullscreenClipsTranscriptBeforeActivityLikeRust(t *testing.T) {
 	}
 
 	// The activity row is flexible: it survives while the transcript yields.
-	if view := utils.StripANSI(newModel(7).View()); !strings.Contains(view, "Working (") {
+	if view := utils.StripANSI(newModel(7).View().Content); !strings.Contains(view, "Working (") {
 		t.Fatalf("height 7 dropped activity before the transcript:\n%s", view)
 	}
-	if view := utils.StripANSI(newModel(6).View()); strings.Contains(view, "Working (") {
+	if view := utils.StripANSI(newModel(6).View().Content); strings.Contains(view, "Working (") {
 		t.Fatalf("height 6 kept activity after the transcript was clipped:\n%s", view)
 	}
 
@@ -53,7 +53,7 @@ func TestShortFullscreenClipsTranscriptBeforeActivityLikeRust(t *testing.T) {
 		FullscreenTranscript: &inline,
 		Placeholder:          "COMPOSER-MARKER",
 	})
-	inlineView := utils.StripANSI(inlineModel.View())
+	inlineView := utils.StripANSI(inlineModel.viewString())
 	if !strings.Contains(inlineView, "COMPOSER-MARKER") || !strings.Contains(inlineView, footerHelpText) {
 		t.Fatalf("inline layout should keep its footer:\n%s", inlineView)
 	}

@@ -1,6 +1,7 @@
 package tea
 
 import (
+	mousemsg "codex_go/tui/mousemsg"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,10 +14,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"charm.land/bubbles/v2/textarea"
+	bubbletea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	sysclipboard "github.com/atotto/clipboard"
-	"github.com/charmbracelet/bubbles/textarea"
-	bubbletea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/term"
 	"github.com/google/uuid"
 
@@ -43,6 +44,7 @@ import (
 	execcell "codex_go/tui/exec_cell"
 	historycell "codex_go/tui/history_cell"
 	idecontext "codex_go/tui/ide_context"
+	"codex_go/tui/keymsg"
 	"codex_go/tui/markdown"
 	"codex_go/tui/overlay"
 	pets "codex_go/tui/pets"
@@ -1468,6 +1470,7 @@ type Options struct {
 	OnReadRateLimitResetCredits   RateLimitResetCreditsReaderFunc
 	OnConsumeRateLimitResetCredit RateLimitResetCreditConsumerFunc
 	OnReadRateLimits              RateLimitsReaderFunc
+	OnReadRateLimitSnapshots      RateLimitSnapshotsReaderFunc
 	// OnReadThreadUsage reads the active thread's billing estimate for /status
 	// (Rust #44970). Nil keeps the thread-usage surface disabled.
 	OnReadThreadUsage ThreadUsageReaderFunc
@@ -1927,7 +1930,7 @@ type Model struct {
 	followControlPressed bool
 	// windowsKeySequence buffers the seven-key Shift+Enter sequence emitted by
 	// Windows Terminal before deciding whether to replay it or insert a newline.
-	windowsKeySequence           []bubbletea.KeyMsg
+	windowsKeySequence           []keymsg.KeyMsg
 	windowsKeySequenceGeneration uint64
 	windowsTerminalMappedInput   bool
 	// mouseScroll is the live `tui.mouse_scroll_speed` accumulator for the main
@@ -2127,7 +2130,12 @@ type Model struct {
 	// backtrack tracks the Esc-to-edit-prompt state machine (Rust
 	// app_backtrack::BacktrackState) and escBacktrackHint advertises the second
 	// Esc in the composer footer once it is primed.
-	backtrack        tuiapp.BacktrackState
+	backtrack tuiapp.BacktrackState
+	// browsingDetails is the compact/detailed presentation used while the
+	// Escape prompt browser is active (Rust #46739). browsingOrigin restores
+	// the pre-browse transcript position and presentation on cancel.
+	browsingDetails  bool
+	browsingOrigin   *transcriptBrowsingOrigin
 	escBacktrackHint bool
 	// shortcutOverlay mirrors Rust FooterMode::ShortcutOverlay: pressing `?`
 	// on an empty composer swaps the passive hint row for the shortcut
@@ -2689,6 +2697,7 @@ type Model struct {
 	onReadRateLimitResetCredits   RateLimitResetCreditsReaderFunc
 	onConsumeRateLimitResetCredit RateLimitResetCreditConsumerFunc
 	onReadRateLimits              RateLimitsReaderFunc
+	rateLimitSnapshotsReader      RateLimitSnapshotsReaderFunc
 	onReadThreadUsage             ThreadUsageReaderFunc
 	threadUsage                   *ThreadUsageEstimate
 	threadUsageDisabled           bool
@@ -3411,6 +3420,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onReadRateLimitResetCredits:      options.OnReadRateLimitResetCredits,
 		onConsumeRateLimitResetCredit:    options.OnConsumeRateLimitResetCredit,
 		onReadRateLimits:                 options.OnReadRateLimits,
+		rateLimitSnapshotsReader:         options.OnReadRateLimitSnapshots,
 		onReadThreadUsage:                options.OnReadThreadUsage,
 		onReadBackendBanner:              options.OnReadBackendBanner,
 		onReadSecuritySetup:              options.OnReadSecuritySetup,
@@ -3649,14 +3659,6 @@ func NewProgram(ctx context.Context, state *codextui.State, options Options, inp
 		}
 		programOptions = append(programOptions, bubbletea.WithOutput(writer))
 	}
-	programOptions = append(programOptions, bubbletea.WithReportFocus())
-	if options.usesOwnedScreen() {
-		// Rust #52270: the owned transcript captures the mouse so painted
-		// status/footer rows stay selectable and the wheel scrolls the
-		// transcript instead of the terminal scrollback. Inline mode leaves
-		// both gestures to the terminal.
-		programOptions = append(programOptions, bubbletea.WithAltScreen(), bubbletea.WithMouseCellMotion())
-	}
 	// Rust parity: the launcher resolves `tui.fullscreen_transcript`,
 	// `tui.alternate_screen`, and `--no-alt-screen` into NoAltScreen
 	// (TranscriptMode::resolve). An owned screen captures the mouse so the wheel
@@ -3804,6 +3806,11 @@ func (m *Model) Init() bubbletea.Cmd {
 	// Rust StatusIndicatorWidget::render owns the live row's frame cadence
 	// (32 ms while progress/shimmer animate, one second otherwise).
 	commands = append(commands, m.statusRowTickCmd())
+	// Rust #42372 app/rate_limit_refresh.rs: poll account limits more often
+	// as usage approaches exhaustion so Luna Reserve reacts promptly.
+	if m.rateLimitPollEnabled() {
+		commands = append(commands, m.rateLimitPollTickCmd())
+	}
 	m.syncFrameDemand()
 	if m.statusControls != nil {
 		commands = append(commands, m.applyTerminalTitleResult(m.statusControls.RefreshTerminalTitle()))
@@ -3843,6 +3850,11 @@ func (m *Model) Init() bubbletea.Cmd {
 // permanently running tick, so every state change re-derives what should be
 // ticking. See frame_demand.go.
 func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
+	if key, ok := keymsg.FromTea(message); ok {
+		message = key
+	} else if mouse, ok := mousemsg.FromTea(message); ok {
+		message = mouse
+	}
 	model, cmd := m.update(message)
 	next, ok := model.(*Model)
 	if !ok || next == nil {
@@ -3894,13 +3906,13 @@ func (m *Model) update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 	// key (Esc included) before any global shortcut handler.
 	if m.modal != nil && m.modal.keymapInspector != nil {
 		switch msg := message.(type) {
-		case bubbletea.KeyMsg:
+		case keymsg.KeyMsg:
 			return m, m.updateKeymapInspector(msg)
 		case keymapInspectorTickMsg:
 			return m, nil
 		}
 	}
-	if _, key := message.(bubbletea.KeyMsg); key {
+	if _, key := message.(keymsg.KeyMsg); key {
 		// Rust #47847: a text read is bound to its UI owner; new input makes a
 		// late PRIMARY result stale.
 		m.pendingPrimarySelectionRead = 0
@@ -3964,7 +3976,7 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 	if m == nil {
 		return m, nil
 	}
-	if key, ok := message.(bubbletea.KeyMsg); ok {
+	if key, ok := message.(keymsg.KeyMsg); ok {
 		m.prepareComposerSparkleKey(key)
 	}
 	m.flushMCPLoginResultsForCurrentThread()
@@ -3976,7 +3988,7 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 	}
 	// Route through overlay when dialog is active
 	if m.overlays != nil && m.overlays.Active() {
-		if _, ok := message.(bubbletea.KeyMsg); ok {
+		if _, ok := message.(keymsg.KeyMsg); ok {
 			return m, m.overlays.Update(message)
 		}
 	}
@@ -3990,6 +4002,13 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		return m, dashboard.nextPollCmd()
 	case statusRowTickMsg:
 		return m, m.statusRowTickCmd()
+	case rateLimitPollTickMsg:
+		if !m.rateLimitPollEnabled() {
+			return m, nil
+		}
+		return m, m.rateLimitPollReadCmd()
+	case rateLimitPollResultMsg:
+		return m, m.applyRateLimitPollResult(msg)
 	case anim.TickMsg:
 		if m.animEngine != nil {
 			cmd := m.animEngine.Advance()
@@ -4556,7 +4575,7 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 			cmds = append(cmds, waitForStream(msg.Messages))
 		}
 		return m, bubbletea.Batch(cmds...)
-	case bubbletea.KeyMsg:
+	case keymsg.KeyMsg:
 		// Rust #59595/#59824: keyboard resize mode consumes arrows, h/l, shift
 		// arrows and Enter/Esc before any other handler sees them.
 		if handled, cmd := m.handleSidePaneResizeKey(msg); handled {
@@ -4569,17 +4588,17 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 			// An explicit exit is never swallowed: a backend that never answers
 			// must not trap the process in the pending fork. Everything else
 			// belongs to the fork until it completes.
-			if msg.Type != bubbletea.KeyCtrlC && msg.Type != bubbletea.KeyCtrlD {
+			if msg.Type != keymsg.KeyCtrlC && msg.Type != keymsg.KeyCtrlD {
 				return m, nil
 			}
 		}
 		if m.promptSuggestionTabAccepted {
-			if msg.Type == bubbletea.KeyTab {
+			if msg.Type == keymsg.KeyTab {
 				return m, nil
 			}
 			m.promptSuggestionTabAccepted = false
 		}
-		if msg.Type == bubbletea.KeyEsc && m.renderedSelection.active {
+		if msg.Type == keymsg.KeyEsc && m.renderedSelection.active {
 			m.renderedSelection.clear()
 			return m, nil
 		}
@@ -4598,7 +4617,7 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		// Esc followed by that character. When Vim can consume the Esc and no
 		// active binding claims the Alt stroke, replay both halves in order.
 		if m.shouldRecoverVimInsertEscape(msg, m.legacyVimEscapeRecovery) {
-			_, escapeCmd := m.update(bubbletea.KeyMsg{Type: bubbletea.KeyEsc})
+			_, escapeCmd := m.update(keymsg.KeyMsg{Type: keymsg.KeyEsc})
 			msg.Alt = false
 			recoveredModel, characterCmd := m.update(msg)
 			return recoveredModel, bubbletea.Sequence(escapeCmd, characterCmd)
@@ -4611,19 +4630,19 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		// Rust #54381: a key held across a preset-menu action must not reach the
 		// child view. Bubble Tea reports auto-repeat as repeated presses, so the
 		// guard uses a bounded window like Rust's legacy repeat handling.
-		if !(msg.Type == bubbletea.KeyRunes && msg.Paste) &&
+		if !(msg.Type == keymsg.KeyRunes && msg.Paste) &&
 			m.consumeQuickDialKeyGuard(keySpecFromKeyMsg(msg)) {
 			return m, nil
 		}
 		// Rust #57224: a held Enter/Esc/q that left transcript selection must not
 		// submit the preserved composer draft.
-		if !(msg.Type == bubbletea.KeyRunes && msg.Paste) &&
+		if !(msg.Type == keymsg.KeyRunes && msg.Paste) &&
 			m.consumeSelectExitGuard(keySpecFromKeyMsg(msg)) {
 			return m, nil
 		}
 		// Rust #54381: pasting dismisses the passive preset HUD and is then
 		// handled as normal composer input.
-		if msg.Type == bubbletea.KeyRunes && msg.Paste {
+		if msg.Type == keymsg.KeyRunes && msg.Paste {
 			m.quickDialMenu = false
 		}
 		if m.quickDialMenu {
@@ -4631,7 +4650,7 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 				return m, cmd
 			}
 		}
-		if msg.Type == bubbletea.KeyRunes && msg.Paste {
+		if msg.Type == keymsg.KeyRunes && msg.Paste {
 			m.pendingKeyChordPrefix = ""
 			m.pendingKeyChordStarted = time.Time{}
 			m.clearLeaderChord()
@@ -4649,7 +4668,7 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 			// path rather than as KeyCtrlV.
 			if pasted != "" && m.modal == nil {
 				if m.mainFind.active() && m.overlay == nil {
-					m.editMainTranscriptFindQuery(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: msg.Runes})
+					m.editMainTranscriptFindQuery(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: msg.Runes})
 					return m, nil
 				}
 				// Rust #45764: the analytics dashboard owns the screen, so a
@@ -4699,7 +4718,7 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 			return m, cmd
 		}
 		if m.renderedSelection.active {
-			if msg.Type == bubbletea.KeyCtrlC {
+			if msg.Type == keymsg.KeyCtrlC {
 				cmd := m.copyRenderedSelection(false)
 				m.renderedSelection.clear()
 				m.refreshTranscript()
@@ -4708,16 +4727,16 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 			m.renderedSelection.clear()
 		}
 		if m.composerSelection.active {
-			if msg.Type == bubbletea.KeyCtrlC {
+			if msg.Type == keymsg.KeyCtrlC {
 				cmd := m.copyComposerSelection(false)
 				return m, cmd
 			}
-			if msg.Type == bubbletea.KeyEsc {
+			if msg.Type == keymsg.KeyEsc {
 				m.composerSelection.clear()
 				return m, nil
 			}
 		}
-		if m.mainFind.active() && msg.Type == bubbletea.KeyCtrlC {
+		if m.mainFind.active() && msg.Type == keymsg.KeyCtrlC {
 			// Rust #50039: Ctrl+C cancels Find and restores the pre-search
 			// presentation instead of interrupting or quitting the session.
 			m.cancelMainTranscriptFind()
@@ -4726,12 +4745,12 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		// Rust #51411: Alt+V is the keymap's fixed image-paste alias alongside
 		// Ctrl+V, and Bubble Tea delivers it as an Alt rune rather than a
 		// dedicated key type. It shares the same suppression window.
-		if isImagePasteKey(msg) && msg.Type != bubbletea.KeyCtrlV &&
+		if isImagePasteKey(msg) && msg.Type != keymsg.KeyCtrlV &&
 			m.modal == nil && m.overlay == nil {
 			return m, m.pasteClipboardShortcut()
 		}
 		switch msg.Type {
-		case bubbletea.KeyCtrlC:
+		case keymsg.KeyCtrlC:
 			if m.modal != nil && (m.modal.customPrompt != nil || m.modal.manageSkills != nil || m.modal.externalAgentMigration != nil || m.modal.hooksBrowser != nil || m.modal.pluginBrowser != nil || m.modal.keymapInspector != nil) {
 				return m, m.updateModal(msg)
 			}
@@ -4750,13 +4769,13 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 			}
 			m.closeClipboardWorker()
 			return m, bubbletea.Quit
-		case bubbletea.KeyCtrlD:
+		case keymsg.KeyCtrlD:
 			if m.modal != nil && (m.modal.externalAgentMigration != nil || m.modal.hooksBrowser != nil || m.modal.pluginBrowser != nil || m.modal.keymapInspector != nil) {
 				return m, m.updateModal(msg)
 			}
 			m.closeClipboardWorker()
 			return m, bubbletea.Quit
-		case bubbletea.KeyCtrlV:
+		case keymsg.KeyCtrlV:
 			// Bubble Tea does not provide a portable text-paste message on all
 			// terminals. Read the native clipboard explicitly and insert it into
 			// the focused composer.
@@ -4797,7 +4816,7 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		// Rust #45454: an unmodified Tab inside a paste burst is captured before
 		// any popup or shortcut dispatch, so pasted indentation is never mistaken
 		// for a completion, submit, or queue action.
-		if msg.Type == bubbletea.KeyTab {
+		if msg.Type == keymsg.KeyTab {
 			now := m.currentTime()
 			if m.shouldPasteBurstTabInsertInsteadOfShortcut(now) {
 				m.insertComposerPasteTab()
@@ -4826,17 +4845,22 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		}
 		if msg.Alt && m.composerIsEmpty() && len(m.attachments) == 0 {
 			switch msg.Type {
-			case bubbletea.KeyLeft:
+			case keymsg.KeyLeft:
 				return m, m.navigateAgent(-1)
-			case bubbletea.KeyRight:
+			case keymsg.KeyRight:
 				return m, m.navigateAgent(1)
 			}
 		}
 		// Rust app_backtrack: Esc primes/advances prompt editing, Enter confirms
 		// a primed selection, and any other key cancels the primed state.
 		switch msg.Type {
-		case bubbletea.KeyEsc:
+		case keymsg.KeyEsc:
 			if m.shouldHandleBacktrackEsc() {
+				// Rust #46739 remembers the owned reading position before the
+				// first Escape returns a paused viewport to latest.
+				if !m.backtrack.Primed && !m.backtrack.OverlayPreviewActive && m.browsingOrigin == nil {
+					m.browsingOrigin = &transcriptBrowsingOrigin{offset: m.transcript.YOffset}
+				}
 				cmd := m.handleBacktrackEscKey()
 				// Rust's owned-transcript Esc handler returns a paused viewport
 				// to latest in the same press that primes backtrack.
@@ -4849,7 +4873,7 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 				m.rejectSideBacktrackEsc()
 				return m, nil
 			}
-		case bubbletea.KeyEnter:
+		case keymsg.KeyEnter:
 			if tuiapp.ShouldConfirmBacktrackFromMain(m.backtrack.Primed, m.backtrack.NthUserMessage, m.backtrackComposerEmpty()) {
 				return m, m.confirmBacktrackFromMain()
 			}
@@ -4860,7 +4884,7 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		// Rust #41917: a plain Left press on an empty, focused composer opens
 		// the agents overview in local-daemon sessions. Explicit editor/Vim
 		// remaps and every transient input surface take precedence.
-		if PlainKey(bubbletea.KeyLeft).IsPress(msg) && m.agentsNavigationAvailable() {
+		if PlainKey(keymsg.KeyLeft).IsPress(msg) && m.agentsNavigationAvailable() {
 			return m, m.applyAgentsCommand()
 		}
 		if m.keyMatches("global", "toggle_side_conversation", keySpec) ||
@@ -4933,7 +4957,7 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 			return m, m.refreshSkillPopup()
 		}
 		now := m.currentTime()
-		if msg.Type == bubbletea.KeyRunes {
+		if msg.Type == keymsg.KeyRunes {
 			m.noteComposerRunes(msg.Runes, now)
 		}
 		if m.isTaskRunning() && m.keyMatches("chat", "interrupt_turn", keySpec) {
@@ -4953,7 +4977,7 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 			m.clearComposerPasteWindow()
 			return m, m.openExternalEditor()
 		}
-		if msg.Type == bubbletea.KeyEnter {
+		if msg.Type == keymsg.KeyEnter {
 			if m.shouldPasteBurstEnterInsertNewline(now) {
 				m.extendComposerPasteWindow(now)
 				return m, m.insertComposerNewline()
@@ -4993,13 +5017,13 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 				return m, m.submitComposer()
 			}
 		}
-		if msg.Type != bubbletea.KeyRunes {
+		if msg.Type != keymsg.KeyRunes {
 			m.clearComposerPasteWindow()
 		}
 		if m.keyMatches("editor", "insert_newline", keySpec) {
 			return m, m.insertComposerNewline()
 		}
-	case bubbletea.MouseMsg:
+	case mousemsg.MouseMsg:
 		m.clearLeaderChord()
 		if handled, cmd := m.handleSidePaneMouse(msg); handled {
 			return m, cmd
@@ -5071,10 +5095,10 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 
 	var cmd bubbletea.Cmd
 	m.transcript, cmd = m.transcript.Update(message)
-	if _, mouse := message.(bubbletea.MouseMsg); mouse {
+	if _, mouse := message.(mousemsg.MouseMsg); mouse {
 		m.activityFollow = m.transcript.AtBottom()
 	}
-	if key, ok := message.(bubbletea.KeyMsg); ok && recordsComposerApprovalDelayActivity(key) {
+	if key, ok := message.(keymsg.KeyMsg); ok && recordsComposerApprovalDelayActivity(key) {
 		m.recordComposerActivityAt(m.currentTime())
 	}
 	var composerCmd bubbletea.Cmd
@@ -5085,7 +5109,7 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		m.refreshSlashPopup()
 		return m, bubbletea.Batch(cmd, composerCmd)
 	}
-	if key, ok := message.(bubbletea.KeyMsg); ok {
+	if key, ok := message.(keymsg.KeyMsg); ok {
 		if handled, selectionCmd := m.applyComposerSelectionKey(key); handled {
 			m.syncComposerPrefixAfterEdit(composerBefore)
 			m.syncComposerElements(composerBefore)
@@ -5093,7 +5117,7 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 			return m, bubbletea.Batch(cmd, selectionCmd)
 		}
 	}
-	m.composer, composerCmd = m.composer.Update(message)
+	m.composer, composerCmd = m.composer.Update(mousemsg.OriginalMessage(keymsg.OriginalMessage(message)))
 	m.syncComposerPrefixAfterEdit(composerBefore)
 	m.syncComposerElements(composerBefore)
 	m.refreshSlashPopup()
@@ -5101,7 +5125,25 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 	return m, bubbletea.Batch(cmd, composerCmd, skillPopupCmd)
 }
 
-func (m *Model) View() string {
+func (m *Model) View() bubbletea.View {
+	if m == nil {
+		return bubbletea.NewView("")
+	}
+	v := bubbletea.NewView(m.viewString())
+	v.AltScreen = !m.noAltScreen && (m.ownedScreen || m.overlayAltScreen || m.sessionPickerAltScreen)
+	v.ReportFocus = true
+	if m.mouseCaptureActive {
+		v.MouseMode = bubbletea.MouseModeCellMotion
+	}
+	v.KeyboardEnhancements.ReportEventTypes = true
+	v.KeyboardEnhancements.ReportAlternateKeys = true
+	return v
+}
+func (m *Model) ViewContent() string {
+	return m.viewString()
+}
+
+func (m *Model) viewString() string {
 	streamingpkg.SetStreamTheme(m.activeTUITheme())
 	if m == nil {
 		return ""
@@ -5351,7 +5393,7 @@ func (m *Model) footerHelpLine() (string, bool) {
 	if m.shortcutOverlay {
 		// Rust paints the close hint in the passive row while the reference is
 		// open (shortcut_overlay::close_hint).
-		return "? / " + PlainKey(bubbletea.KeyEsc).Label() + " close", false
+		return "? / " + PlainKey(keymsg.KeyEsc).Label() + " close", false
 	}
 	if searchLine, ok := m.historySearchFooterLine(); ok {
 		footerLine = searchLine
@@ -5380,7 +5422,7 @@ func (m *Model) footerHelpLine() (string, bool) {
 		} else {
 			agentsHint := ""
 			if m.agentsNavigationAvailable() {
-				agentsHint = PlainKey(bubbletea.KeyLeft).Label() + " for agents"
+				agentsHint = PlainKey(keymsg.KeyLeft).Label() + " for agents"
 			}
 			hint := m.passiveFooterHintText()
 			switch {
@@ -5418,7 +5460,7 @@ func (m *Model) passiveFooterHintText() string {
 	}
 	if !m.composerIsEmpty() {
 		if m.isTaskRunning() {
-			return PlainKey(bubbletea.KeyTab).Label() + " to queue message"
+			return PlainKey(keymsg.KeyTab).Label() + " to queue message"
 		}
 		return ""
 	}
@@ -6294,11 +6336,11 @@ func (m *Model) currentTime() time.Time {
 
 // isImagePasteKey reports the fixed image-paste shortcuts: Ctrl+V and the
 // keymap's Alt+V alias, which Bubble Tea delivers as an Alt rune (Rust #51411).
-func isImagePasteKey(msg bubbletea.KeyMsg) bool {
-	if msg.Type == bubbletea.KeyCtrlV {
+func isImagePasteKey(msg keymsg.KeyMsg) bool {
+	if msg.Type == keymsg.KeyCtrlV {
 		return true
 	}
-	return msg.Type == bubbletea.KeyRunes && msg.Alt && !msg.Paste && len(msg.Runes) == 1 &&
+	return msg.Type == keymsg.KeyRunes && msg.Alt && !msg.Paste && len(msg.Runes) == 1 &&
 		(msg.Runes[0] == 'v' || msg.Runes[0] == 'V')
 }
 
@@ -11893,15 +11935,8 @@ func (m *Model) closeTranscriptOverlay() bubbletea.Cmd {
 	// tracking was never enabled, so the alternate screen is the only mode to
 	// leave.
 	m.setAlternateScroll(false)
-	var commands []bubbletea.Cmd
-	if m.overlayAltScreen {
-		m.overlayAltScreen = false
-		commands = append(commands, bubbletea.ExitAltScreen)
-	}
-	if len(commands) == 0 {
-		return nil
-	}
-	return bubbletea.Batch(commands...)
+	m.overlayAltScreen = false
+	return nil
 }
 
 func (m *Model) openPagerTerminalMode() bubbletea.Cmd {
@@ -11915,15 +11950,10 @@ func (m *Model) openPagerTerminalMode() bubbletea.Cmd {
 	// `--no-alt-screen` keeps the overlay inline.
 	capture := m.overlayMouseCapture.captures(m.ownedScreen)
 	m.setAlternateScroll(!capture)
-	var commands []bubbletea.Cmd
-	if !m.noAltScreen && !m.overlayAltScreen {
+	if !m.noAltScreen {
 		m.overlayAltScreen = true
-		commands = append(commands, bubbletea.EnterAltScreen)
 	}
-	if len(commands) == 0 {
-		return nil
-	}
-	return bubbletea.Batch(commands...)
+	return nil
 }
 
 // setAlternateScroll toggles the terminal's alternate-scroll mode (DEC private
@@ -11969,7 +11999,11 @@ func (m *Model) renderTranscriptOverlayCached() string {
 	if m == nil {
 		return ""
 	}
-	return renderTranscriptWithCache(&m.overlayMessages, m.State, m.rawOutput, m.width, m.activeTUITheme(), true, m.sessionCWD, m.showRawReasoning)
+	expandedHistory := true
+	if m.backtrack.OverlayPreviewActive {
+		expandedHistory = m.browsingDetails
+	}
+	return renderTranscriptWithCache(&m.overlayMessages, m.State, m.rawOutput, m.width, m.activeTUITheme(), expandedHistory, m.sessionCWD, m.showRawReasoning)
 }
 
 func (m *Model) activeTUITheme() string {
@@ -11984,10 +12018,11 @@ func (m *Model) activeTUITheme() string {
 	return m.tuiTheme
 }
 
-func (m *Model) updateTranscriptOverlayKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
+func (m *Model) updateTranscriptOverlayKey(msg keymsg.KeyMsg) bubbletea.Cmd {
 	if m == nil || m.overlay == nil {
 		return nil
 	}
+	keySpec := keySpecFromKeyMsg(msg)
 	// Rust transcript_view::search owns the keyboard while the find bar is open;
 	// the pager keymap only sees the keys the bar declines (paging while editing).
 	if handled, cmd := m.overlay.HandleFindKey(msg); handled {
@@ -11999,10 +12034,13 @@ func (m *Model) updateTranscriptOverlayKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 		return m.updateTranscriptSelectionKey(msg)
 	}
 	if m.overlayTranscript {
-		if handled, cmd := m.handleLeaderChordKey(keySpecFromKeyMsg(msg), selectTranscriptOnly); handled {
+		if handled, cmd := m.handleKeyChordKey(keySpec, m.currentTime()); handled {
 			return cmd
 		}
-		if m.keyMatches("global", "select_transcript", keySpecFromKeyMsg(msg)) {
+		if handled, cmd := m.handleLeaderChordKey(keySpec, selectTranscriptOnly); handled {
+			return cmd
+		}
+		if m.keyMatches("global", "select_transcript", keySpec) {
 			m.overlay.BeginSelection()
 			return nil
 		}
@@ -12015,7 +12053,7 @@ func (m *Model) updateTranscriptOverlayKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 	if !m.overlayTranscript {
 		return m.updatePagerOverlayKey(msg)
 	}
-	if msg.Type == bubbletea.KeyEsc {
+	if msg.Type == keymsg.KeyEsc {
 		// Rust #47320 (app_backtrack/legacy_input.rs): a conversation locked by
 		// another app closes the transcript overlay instead of starting a
 		// backtrack preview, and the retained draft stays untouched.
@@ -12023,29 +12061,46 @@ func (m *Model) updateTranscriptOverlayKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 			return m.closeTranscriptOverlay()
 		}
 		if m.backtrack.OverlayPreviewActive {
-			m.stepBacktrackAndHighlight(false)
-		} else {
-			m.beginOverlayBacktrackPreview()
+			// Rust #46739: Escape leaves browsing and restores the original
+			// reading position; prompt movement belongs to Left/Right.
+			return m.cancelTranscriptBrowsing()
 		}
+		m.beginOverlayBacktrackPreview()
 		return nil
 	}
 	if m.backtrack.OverlayPreviewActive {
+		// Rust #46739: the configured open_transcript action toggles detailed
+		// cells without cancelling browsing (it wins over pager.close_transcript).
+		if m.keyMatches("global", "open_transcript", keySpec) {
+			m.setBrowsingDetails(!m.browsingDetails)
+			return nil
+		}
 		switch msg.Type {
-		case bubbletea.KeyLeft:
+		case keymsg.KeyLeft:
 			m.stepBacktrackAndHighlight(false)
 			return nil
-		case bubbletea.KeyRight:
+		case keymsg.KeyRight:
 			m.stepBacktrackAndHighlight(true)
 			return nil
-		case bubbletea.KeyEnter:
+		case keymsg.KeyEnter:
 			return m.confirmOverlayBacktrack()
+		}
+		if !m.keyClaimedByPager(keySpec) {
+			switch keySpec {
+			case "h":
+				m.stepBacktrackAndHighlight(false)
+				return nil
+			case "l":
+				m.stepBacktrackAndHighlight(true)
+				return nil
+			}
 		}
 	}
 	return m.updatePagerOverlayKey(msg)
 }
 
 // updatePagerOverlayKey applies the pager keymap to an open overlay.
-func (m *Model) updatePagerOverlayKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
+func (m *Model) updatePagerOverlayKey(msg keymsg.KeyMsg) bubbletea.Cmd {
 	if m == nil || m.overlay == nil {
 		return nil
 	}
@@ -12079,7 +12134,7 @@ func (m *Model) updatePagerOverlayKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 	return nil
 }
 
-func (m *Model) updateTranscriptOverlayMouse(msg bubbletea.MouseMsg) bubbletea.Cmd {
+func (m *Model) updateTranscriptOverlayMouse(msg mousemsg.MouseMsg) bubbletea.Cmd {
 	if m == nil || m.overlay == nil {
 		return nil
 	}
@@ -12491,12 +12546,12 @@ func (m *Model) configuredBindingTakesNavKey(keySpec string) bool {
 	return false
 }
 
-func (m *Model) applyTranscriptNavigationKey(msg bubbletea.KeyMsg) bool {
+func (m *Model) applyTranscriptNavigationKey(msg keymsg.KeyMsg) bool {
 	if m == nil {
 		return false
 	}
 	switch msg.Type {
-	case bubbletea.KeyPgUp, bubbletea.KeyPgDown, bubbletea.KeyHome, bubbletea.KeyCtrlHome, bubbletea.KeyEnd, bubbletea.KeyCtrlEnd:
+	case keymsg.KeyPgUp, keymsg.KeyPgDown, keymsg.KeyHome, keymsg.KeyCtrlHome, keymsg.KeyEnd, keymsg.KeyCtrlEnd:
 	default:
 		return false
 	}
@@ -12506,14 +12561,14 @@ func (m *Model) applyTranscriptNavigationKey(msg bubbletea.KeyMsg) bool {
 	if m.configuredBindingTakesNavKey(keySpecFromKeyMsg(msg)) {
 		return false
 	}
-	if msg.Type == bubbletea.KeyPgUp || msg.Type == bubbletea.KeyPgDown {
+	if msg.Type == keymsg.KeyPgUp || msg.Type == keymsg.KeyPgDown {
 		m.applyTranscriptPagerPageKey(msg)
 		return true
 	}
 	switch msg.Type {
-	case bubbletea.KeyHome, bubbletea.KeyCtrlHome:
+	case keymsg.KeyHome, keymsg.KeyCtrlHome:
 		m.transcript.GotoTop()
-	case bubbletea.KeyEnd, bubbletea.KeyCtrlEnd:
+	case keymsg.KeyEnd, keymsg.KeyCtrlEnd:
 		m.transcript.GotoBottom()
 	}
 	m.activityFollow = m.transcript.AtBottom()
@@ -12526,7 +12581,7 @@ func (m *Model) applyTranscriptNavigationKey(msg bubbletea.KeyMsg) bool {
 // applyTranscriptPagerPageKey resolves unmodified PageUp/PageDown through the
 // pager's scroll bindings, preserving configured single-row/half-page/full-page
 // movement and allowing the key to remain unbound (Rust #50396).
-func (m *Model) applyTranscriptPagerPageKey(msg bubbletea.KeyMsg) {
+func (m *Model) applyTranscriptPagerPageKey(msg keymsg.KeyMsg) {
 	if m == nil {
 		return
 	}
@@ -12562,12 +12617,12 @@ func (m *Model) applyTranscriptPagerPageKey(msg bubbletea.KeyMsg) {
 	}
 }
 
-func (m *Model) applyInputHistoryKey(msg bubbletea.KeyMsg) bool {
+func (m *Model) applyInputHistoryKey(msg keymsg.KeyMsg) bool {
 	if m == nil || len(m.inputHistory) == 0 || m.modal != nil || m.slashPopup.Active || m.skillPopup.Active {
 		return false
 	}
 	switch msg.Type {
-	case bubbletea.KeyUp:
+	case keymsg.KeyUp:
 		if !m.inputHistoryActive {
 			m.inputHistoryDraft = m.composerText()
 			m.inputHistoryDraftElements = m.currentComposerTextElements()
@@ -12580,9 +12635,9 @@ func (m *Model) applyInputHistoryKey(msg bubbletea.KeyMsg) bool {
 		}
 		m.setComposerPromptWithMode(m.inputHistory[m.inputHistoryIndex], m.inputHistoryBashAt(m.inputHistoryIndex))
 		m.restoreComposerTextElements(m.inputHistory[m.inputHistoryIndex], m.inputHistoryElementsAt(m.inputHistoryIndex))
-		m.composer.SetCursor(len(m.composer.Value()))
+		m.composer.SetCursorColumn(len(m.composer.Value()))
 		return true
-	case bubbletea.KeyDown:
+	case keymsg.KeyDown:
 		if !m.inputHistoryActive {
 			return false
 		}
@@ -12595,10 +12650,10 @@ func (m *Model) applyInputHistoryKey(msg bubbletea.KeyMsg) bool {
 			m.restoreComposerTextElements(m.inputHistoryDraft, m.inputHistoryDraftElements)
 			m.resetInputHistoryNavigation()
 		}
-		m.composer.SetCursor(len(m.composer.Value()))
+		m.composer.SetCursorColumn(len(m.composer.Value()))
 		return true
 	default:
-		if m.inputHistoryActive && msg.Type != bubbletea.KeyShiftTab {
+		if m.inputHistoryActive && msg.Type != keymsg.KeyShiftTab {
 			m.resetInputHistoryNavigation()
 		}
 		return false
@@ -12620,7 +12675,7 @@ func (m *Model) applyInputHistoryKey(msg bubbletea.KeyMsg) bool {
 // cycles keep a single queue entry). Normal history navigation is preserved
 // when the composer has text (the empty-composer gate on the Vim path), and
 // remapped bindings are honored through the resolved keymap.
-func (m *Model) applyEditQueuedMessageKey(msg bubbletea.KeyMsg, keySpec string) bool {
+func (m *Model) applyEditQueuedMessageKey(msg keymsg.KeyMsg, keySpec string) bool {
 	if m == nil || len(m.queued) == 0 || m.modal != nil || m.slashPopup.Active || m.skillPopup.Active {
 		return false
 	}
@@ -12634,7 +12689,7 @@ func (m *Model) applyEditQueuedMessageKey(msg bubbletea.KeyMsg, keySpec string) 
 	// Rust #58412: a queued literal bang keeps its literal text when edited.
 	m.setComposerPromptWithMode(last.Request.Prompt, strings.HasPrefix(strings.TrimSpace(last.Request.Prompt), "!") && !last.Request.LiteralInput)
 	m.restoreComposerTextElements(last.Request.Prompt, last.Request.TextElements)
-	m.composer.SetCursor(len(m.composer.Value()))
+	m.composer.SetCursorColumn(len(m.composer.Value()))
 	m.attachments = cloneComposerAttachments(last.Request.Attachments)
 	m.composerMentionBindings = append([]string(nil), last.Request.MentionBindings...)
 	m.slashPopup = slashCommandPopup{}

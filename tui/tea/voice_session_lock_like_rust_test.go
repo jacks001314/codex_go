@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	"codex_go/sessionlock"
 	codextui "codex_go/tui"
@@ -98,7 +98,7 @@ func historyCellContains(model *Model, text string) bool {
 	if model == nil {
 		return false
 	}
-	if strings.Contains(model.notice, text) || strings.Contains(model.View(), text) {
+	if strings.Contains(model.notice, text) || strings.Contains(model.viewString(), text) {
 		return true
 	}
 	for _, message := range model.State.Messages {

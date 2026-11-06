@@ -1,11 +1,10 @@
 package tea
 
 import (
+	keymsg "codex_go/tui/keymsg"
 	"errors"
 	"strings"
 	"testing"
-
-	bubbletea "github.com/charmbracelet/bubbletea"
 
 	"codex_go/chatgptapi"
 	codextui "codex_go/tui"
@@ -45,7 +44,7 @@ func TestUsagePlanRequiresFeatureGateLikeRust(t *testing.T) {
 		},
 	})
 	typeText(t, model, "/usage plan")
-	if _, cmd := model.Update(key(bubbletea.KeyEnter)); cmd != nil {
+	if _, cmd := model.Update(key(keymsg.KeyEnter)); cmd != nil {
 		t.Fatal("disabled plan history must not start a request")
 	}
 	if model.notice != "Plan usage history is not enabled." {
@@ -61,7 +60,7 @@ func TestUsagePlanRendersReportLikeRust(t *testing.T) {
 		OnReadPlanHistory:  func() (*analytics.Report, error) { return planHistoryTestReport(t), nil },
 	})
 	typeText(t, model, "/usage plan")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	if cmd == nil {
 		t.Fatal("enabled plan history did not start a request")
 	}
@@ -83,7 +82,7 @@ func TestUsagePlanReaderFailureRendersUnavailableLikeRust(t *testing.T) {
 		OnReadPlanHistory:  func() (*analytics.Report, error) { return nil, errors.New("boom") },
 	})
 	typeText(t, model, "/usage plan")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	model.Update(cmd())
 	raw := strings.Join(historyRawTexts(state), "\n")
 	if !strings.Contains(raw, "Plan history unavailable for this account.") {

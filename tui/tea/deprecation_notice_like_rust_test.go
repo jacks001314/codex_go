@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	codextui "codex_go/tui"
 	"codex_go/protocol"
+	codextui "codex_go/tui"
 	"codex_go/utils"
 )
 
@@ -33,8 +33,8 @@ func TestDeprecationNoticesDeduplicateRetainedHistoryLikeRust(t *testing.T) {
 	if got := notices(); got != 1 {
 		t.Fatalf("replayed notice count = %d, want 1", got)
 	}
-	if !strings.Contains(utils.StripANSI(model.View()), "Full-history hydration is deprecated") {
-		t.Fatalf("notice missing from the view:\n%s", model.View())
+	if !strings.Contains(utils.StripANSI(model.viewString()), "Full-history hydration is deprecated") {
+		t.Fatalf("notice missing from the view:\n%s", model.viewString())
 	}
 
 	// Different details or a different summary are different notices.

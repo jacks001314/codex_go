@@ -1,7 +1,7 @@
 package tea
 
 import (
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	"codex_go/sessionlock"
 	"codex_go/tui/chatwidget"

@@ -5,10 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
 	"codex_go/tui/chatwidget"
+	"codex_go/tui/keymsg"
 )
 
 // TestModelExperimentalWritesClearDefaultOverridesLikeRust covers Rust
@@ -82,15 +81,15 @@ func TestModelExperimentalMenuUsesServerCatalogLikeRust(t *testing.T) {
 	})
 
 	typeText(t, model, "/experimental")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
-	if !strings.Contains(model.View(), "Loading server experiments") {
-		t.Fatalf("loading status missing:\n%s", model.View())
+	_, cmd := model.Update(key(keymsg.KeyEnter))
+	if !strings.Contains(model.viewString(), "Loading server experiments") {
+		t.Fatalf("loading status missing:\n%s", model.viewString())
 	}
 	runTeaCmd(t, model, cmd)
 	if len(requested) != 1 || requested[0] != "thread-1" {
 		t.Fatalf("catalog requests = %#v", requested)
 	}
-	view := model.View()
+	view := model.viewString()
 	if !strings.Contains(view, "Beta feature") || !strings.Contains(view, "Beta description") {
 		t.Fatalf("server metadata missing:\n%s", view)
 	}
@@ -120,15 +119,15 @@ func TestModelExperimentalMenuUsesServerCatalogLikeRust(t *testing.T) {
 	// An empty catalog reports the empty status; a failure reports the retry
 	// status.
 	model.applyExperimentalFeaturesResult(ExperimentalFeaturesResultMsg{Generation: model.experimentalFeaturesGeneration})
-	if len(model.experimentalItems) != 0 || !strings.Contains(model.View(), "No server experiments available.") {
-		t.Fatalf("empty catalog state:\n%s", model.View())
+	if len(model.experimentalItems) != 0 || !strings.Contains(model.viewString(), "No server experiments available.") {
+		t.Fatalf("empty catalog state:\n%s", model.viewString())
 	}
 	model.applyExperimentalFeaturesResult(ExperimentalFeaturesResultMsg{
 		Generation: model.experimentalFeaturesGeneration,
 		Err:        errors.New("offline"),
 	})
-	if !strings.Contains(model.View(), "Server experiments unavailable. Reopen /experimental to retry") {
-		t.Fatalf("failure status missing:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Server experiments unavailable. Reopen /experimental to retry") {
+		t.Fatalf("failure status missing:\n%s", model.viewString())
 	}
 }
 
@@ -230,7 +229,7 @@ func TestModelExperimentalPopupSavesLikeRust(t *testing.T) {
 		},
 	})
 	typeText(t, model, "/experimental")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 	if len(model.experimentalItems) != 2 || model.modal == nil {
 		t.Fatalf("popup state = %#v modal=%#v", model.experimentalItems, model.modal)
@@ -243,25 +242,25 @@ func TestModelExperimentalPopupSavesLikeRust(t *testing.T) {
 	}
 
 	// The writable row toggles.
-	model.Update(key(bubbletea.KeySpace))
+	model.Update(key(keymsg.KeySpace))
 	if !model.experimentalItems[0].Enabled {
 		t.Fatal("writable row did not toggle")
 	}
 	// The read-only row can be highlighted but refuses to toggle.
-	model.Update(key(bubbletea.KeyDown))
+	model.Update(key(keymsg.KeyDown))
 	if model.modal.selected != 1 {
 		t.Fatalf("selection = %d, want the read-only row", model.modal.selected)
 	}
-	model.Update(key(bubbletea.KeySpace))
+	model.Update(key(keymsg.KeySpace))
 	if !model.experimentalItems[1].Enabled {
 		t.Fatal("read-only row toggled")
 	}
-	model.Update(key(bubbletea.KeyUp))
+	model.Update(key(keymsg.KeyUp))
 	if model.modal.selected != 0 {
 		t.Fatalf("selection = %d, want the writable row", model.modal.selected)
 	}
 
-	_, saveCmd := model.Update(key(bubbletea.KeyEnter))
+	_, saveCmd := model.Update(key(keymsg.KeyEnter))
 	if !model.experimentalFeaturesSaving {
 		t.Fatal("save did not start")
 	}
@@ -272,7 +271,7 @@ func TestModelExperimentalPopupSavesLikeRust(t *testing.T) {
 		t.Fatalf("saving status = %q", model.experimentalFeaturesStatus)
 	}
 	// A toggle during the save is refused.
-	model.Update(key(bubbletea.KeySpace))
+	model.Update(key(keymsg.KeySpace))
 	if !model.experimentalItems[0].Enabled {
 		t.Fatal("toggle applied while a save was in flight")
 	}
@@ -314,10 +313,10 @@ func TestModelExperimentalPopupRetainsUnconfirmedOnFailureLikeRust(t *testing.T)
 		},
 	})
 	typeText(t, model, "/experimental")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
-	model.Update(key(bubbletea.KeySpace))
-	_, saveCmd := model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeySpace))
+	_, saveCmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, saveCmd)
 	if model.modal == nil {
 		t.Fatal("popup closed after a failed save")
@@ -333,11 +332,11 @@ func TestModelExperimentalPopupRetainsUnconfirmedOnFailureLikeRust(t *testing.T)
 	}
 
 	// Reverting the row to its baseline still resends the corrective write.
-	model.Update(key(bubbletea.KeySpace))
+	model.Update(key(keymsg.KeySpace))
 	if model.experimentalItems[0].Enabled {
 		t.Fatal("row did not revert")
 	}
-	_, retryCmd := model.Update(key(bubbletea.KeyEnter))
+	_, retryCmd := model.Update(key(keymsg.KeyEnter))
 	if !model.experimentalFeaturesSaving {
 		t.Fatal("retry did not start")
 	}

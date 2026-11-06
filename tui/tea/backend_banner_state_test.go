@@ -4,9 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 func backendBannerStateModel(t *testing.T, raw *BackendBannerView, recovery BackendBannerRecoveryInput) *Model {
@@ -69,11 +68,11 @@ func TestModelBackendBannerLunaReserveVisibleUntilDismissed(t *testing.T) {
 		Dismissible: true,
 	}
 	model := backendBannerStateModel(t, banner, BackendBannerRecoveryInput{})
-	view := model.View()
+	view := model.viewString()
 	if !strings.Contains(view, "Usage limit reached") || strings.Contains(view, "Reserve copy") {
 		t.Fatalf("reserve banner copy was not overridden off Reserve:\n%s", view)
 	}
-	model.Update(key(bubbletea.KeyEsc))
+	model.Update(key(keymsg.KeyEsc))
 	if model.BackendBanner() != nil {
 		t.Fatal("dismissed reserve banner should stay hidden")
 	}
@@ -125,7 +124,7 @@ func TestModelBackendBannerSameOccurrenceKeepsDismissal(t *testing.T) {
 		Dismissible: true,
 	}
 	model := backendBannerStateModel(t, banner, BackendBannerRecoveryInput{AccountID: "acct"})
-	model.Update(key(bubbletea.KeyEsc))
+	model.Update(key(keymsg.KeyEsc))
 	if model.BackendBanner() != nil {
 		t.Fatal("banner should be dismissed")
 	}

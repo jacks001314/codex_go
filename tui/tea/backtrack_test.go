@@ -4,11 +4,12 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
 	tuiapp "codex_go/tui/app"
 	bottompane "codex_go/tui/bottom_pane"
+	"codex_go/tui/keymsg"
 )
 
 func backtrackTestModel(t *testing.T, onPromptEdit PromptEditFunc, messages ...codextui.Message) *Model {
@@ -36,7 +37,7 @@ func backtrackTestMessages() []codextui.Message {
 func TestModelBacktrackEscPrimesThenOpensHighlightedPreview(t *testing.T) {
 	model := backtrackTestModel(t, nil, backtrackTestMessages()...)
 
-	model.Update(key(bubbletea.KeyEsc))
+	model.Update(key(keymsg.KeyEsc))
 	if !model.backtrack.Primed || !model.escBacktrackHint {
 		t.Fatalf("first Esc should prime backtracking: %#v hint=%v", model.backtrack, model.escBacktrackHint)
 	}
@@ -44,11 +45,11 @@ func TestModelBacktrackEscPrimesThenOpensHighlightedPreview(t *testing.T) {
 		t.Fatal("the first Esc must not open the overlay")
 	}
 	// Rust's esc hint renders the compact `esc` label (#46680).
-	if view := model.View(); !strings.Contains(view, "esc again to edit previous message") {
+	if view := model.viewString(); !strings.Contains(view, "esc again to edit previous message") {
 		t.Fatalf("primed footer missing the edit hint:\n%s", view)
 	}
 
-	model.Update(key(bubbletea.KeyEsc))
+	model.Update(key(keymsg.KeyEsc))
 	if model.overlay == nil || !model.overlayTranscript {
 		t.Fatal("the second Esc should open the transcript overlay")
 	}
@@ -76,31 +77,31 @@ func TestModelBacktrackOverlayStepsAndConfirmsRevert(t *testing.T) {
 	}
 	model := backtrackTestModel(t, onPromptEdit, backtrackTestMessages()...)
 
-	model.Update(key(bubbletea.KeyEsc))
-	model.Update(key(bubbletea.KeyEsc))
+	model.Update(key(keymsg.KeyEsc))
+	model.Update(key(keymsg.KeyEsc))
 	if model.backtrack.NthUserMessage != 1 {
 		t.Fatalf("preview ordinal = %d, want 1", model.backtrack.NthUserMessage)
 	}
 
 	// Left steps to the older prompt, Right steps back to the newest.
-	model.Update(key(bubbletea.KeyLeft))
+	model.Update(key(keymsg.KeyLeft))
 	if model.backtrack.NthUserMessage != 0 {
 		t.Fatalf("Left ordinal = %d, want 0", model.backtrack.NthUserMessage)
 	}
-	model.Update(key(bubbletea.KeyRight))
+	model.Update(key(keymsg.KeyRight))
 	if model.backtrack.NthUserMessage != 1 {
 		t.Fatalf("Right ordinal = %d, want 1", model.backtrack.NthUserMessage)
 	}
 
 	// At the oldest prompt moving further back stays put.
-	model.Update(key(bubbletea.KeyLeft))
-	model.Update(key(bubbletea.KeyLeft))
+	model.Update(key(keymsg.KeyLeft))
+	model.Update(key(keymsg.KeyLeft))
 	if model.backtrack.NthUserMessage != 0 {
 		t.Fatalf("clamped ordinal = %d, want 0", model.backtrack.NthUserMessage)
 	}
-	model.Update(key(bubbletea.KeyRight))
+	model.Update(key(keymsg.KeyRight))
 
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if calls != 1 {
 		t.Fatalf("prompt-edit calls = %d, want 1", calls)
 	}
@@ -135,7 +136,7 @@ func TestModelBacktrackConfirmFromMainRestoresPrompt(t *testing.T) {
 	// Prime and select a prompt manually, then confirm from the main view.
 	model.backtrack.Prime("thread-1")
 	model.backtrack.NthUserMessage = 1
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 
 	if selection.UserOrdinal != 1 || model.composer.Value() != "second" {
 		t.Fatalf("selection = %#v composer = %q", selection, model.composer.Value())
@@ -150,7 +151,7 @@ func TestModelBacktrackFailureRestoresPromptAndReportsError(t *testing.T) {
 
 	model.backtrack.Prime("thread-1")
 	model.backtrack.NthUserMessage = 1
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 
 	if model.State.ThreadID != "thread-1" {
 		t.Fatalf("a failed revert must keep the source thread, got %q", model.State.ThreadID)
@@ -166,11 +167,11 @@ func TestModelBacktrackFailureRestoresPromptAndReportsError(t *testing.T) {
 func TestModelBacktrackWithoutTargetShowsInfoMessage(t *testing.T) {
 	model := backtrackTestModel(t, nil, codextui.Message{Role: codextui.RoleAssistant, Text: "one"})
 
-	model.Update(key(bubbletea.KeyEsc))
+	model.Update(key(keymsg.KeyEsc))
 	if !model.backtrack.Primed || model.escBacktrackHint {
 		t.Fatalf("priming without a target should not advertise the hint: %#v", model.backtrack)
 	}
-	model.Update(key(bubbletea.KeyEsc))
+	model.Update(key(keymsg.KeyEsc))
 	if model.overlay != nil || model.backtrack.Primed {
 		t.Fatal("priming without a target should reset and not open the overlay")
 	}
@@ -182,7 +183,7 @@ func TestModelBacktrackWithoutTargetShowsInfoMessage(t *testing.T) {
 func TestModelBacktrackTypingCancelsPrimedState(t *testing.T) {
 	model := backtrackTestModel(t, nil, backtrackTestMessages()...)
 
-	model.Update(key(bubbletea.KeyEsc))
+	model.Update(key(keymsg.KeyEsc))
 	if !model.backtrack.Primed {
 		t.Fatal("expected the first Esc to prime")
 	}
@@ -196,7 +197,7 @@ func TestModelBacktrackSideConversationRejected(t *testing.T) {
 	model := backtrackTestModel(t, nil, backtrackTestMessages()...)
 	model.activeSide = &activeSideConversation{ShowingSide: true}
 
-	model.Update(key(bubbletea.KeyEsc))
+	model.Update(key(keymsg.KeyEsc))
 	if model.backtrack.Primed || model.overlay != nil {
 		t.Fatal("side conversations must not prime backtracking")
 	}
@@ -224,7 +225,7 @@ func TestModelBacktrackRestoresPromptInsteadOfRenderedAttachmentListing(t *testi
 	model.backtrack.Prime("thread-1")
 	model.backtrack.NthUserMessage = 0
 
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 
 	if selection.Prompt.Text != "describe" || len(selection.Prompt.LocalImages) != 1 {
 		t.Fatalf("selection prompt = %#v", selection.Prompt)
@@ -258,7 +259,7 @@ func TestModelSubmitRecordsRestorablePromptState(t *testing.T) {
 		{Kind: bottompane.AttachmentRemoteImage, URL: "https://example.test/r.png"},
 	}
 	typeText(t, model, "describe")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 
 	var user *codextui.Message
 	for index := range model.State.Messages {

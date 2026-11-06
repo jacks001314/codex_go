@@ -4,9 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 func TestModelHistorySearchNavigationAcceptAndCancelLikeRust(t *testing.T) {
@@ -15,11 +14,11 @@ func TestModelHistorySearchNavigationAcceptAndCancelLikeRust(t *testing.T) {
 	model.inputHistory = []string{"git status", "git diff"}
 	model.composer.SetValue("draft")
 
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyCtrlR})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyCtrlR})
 	if model.historySearch == nil || !model.historySearch.Active {
 		t.Fatal("Ctrl+R did not open history search")
 	}
-	if view := strings.ToLower(model.View()); !strings.Contains(view, "reverse-i-search:") {
+	if view := strings.ToLower(model.viewString()); !strings.Contains(view, "reverse-i-search:") {
 		t.Fatalf("history search footer missing:\n%s", view)
 	}
 
@@ -27,11 +26,11 @@ func TestModelHistorySearchNavigationAcceptAndCancelLikeRust(t *testing.T) {
 	if got := model.composerText(); got != "git diff" {
 		t.Fatalf("first match = %q, want newest git diff", got)
 	}
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyCtrlR})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyCtrlR})
 	if got := model.composerText(); got != "git status" {
 		t.Fatalf("older match = %q, want git status", got)
 	}
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	if model.historySearch != nil || model.composerText() != "git status" {
 		t.Fatalf("accepted search = %#v composer=%q", model.historySearch, model.composerText())
 	}
@@ -39,9 +38,9 @@ func TestModelHistorySearchNavigationAcceptAndCancelLikeRust(t *testing.T) {
 	cancelModel := NewModel(codextui.NewState(nil), Options{Width: 100, Height: 30})
 	cancelModel.inputHistory = []string{"git status", "git diff"}
 	cancelModel.composer.SetValue("draft")
-	cancelModel.Update(bubbletea.KeyMsg{Type: bubbletea.KeyCtrlR})
+	cancelModel.Update(keymsg.KeyMsg{Type: keymsg.KeyCtrlR})
 	typeText(t, cancelModel, "git")
-	cancelModel.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEsc})
+	cancelModel.Update(keymsg.KeyMsg{Type: keymsg.KeyEsc})
 	if cancelModel.historySearch != nil || cancelModel.composerText() != "draft" {
 		t.Fatalf("cancelled search = %#v composer=%q", cancelModel.historySearch, cancelModel.composerText())
 	}
@@ -49,9 +48,9 @@ func TestModelHistorySearchNavigationAcceptAndCancelLikeRust(t *testing.T) {
 	miss := NewModel(codextui.NewState(nil), Options{Width: 100, Height: 30})
 	miss.inputHistory = []string{"git status"}
 	miss.composer.SetValue("draft")
-	miss.Update(bubbletea.KeyMsg{Type: bubbletea.KeyCtrlR})
+	miss.Update(keymsg.KeyMsg{Type: keymsg.KeyCtrlR})
 	typeText(t, miss, "missing")
-	miss.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	miss.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	if miss.historySearch == nil || !miss.historySearch.Active {
 		t.Fatal("Enter without a match closed history search")
 	}
@@ -67,7 +66,7 @@ func TestHistorySearchBackgroundRecoveryPreservesSearchLikeRust(t *testing.T) {
 		model.inputHistory = []string{"earlier prompt"}
 		model.composer.SetValue("$tool main draft")
 		model.registerComposerElement("$tool main draft", 0, len("$tool"))
-		model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyCtrlR})
+		model.Update(keymsg.KeyMsg{Type: keymsg.KeyCtrlR})
 		typeText(t, model, "earlier")
 		if got := model.composerText(); got != "earlier prompt" {
 			t.Fatalf("search preview = %q, want earlier prompt", got)
@@ -87,7 +86,7 @@ func TestHistorySearchBackgroundRecoveryPreservesSearchLikeRust(t *testing.T) {
 	if got := cancel.composerText(); got != "$tool main draft" {
 		t.Fatalf("query update leaked recovered draft into preview = %q", got)
 	}
-	cancel.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEsc})
+	cancel.Update(keymsg.KeyMsg{Type: keymsg.KeyEsc})
 	if got := cancel.composerText(); got != "$tool main draft\n\n> Which way?\n\nanswer" {
 		t.Fatalf("cancel restored composer = %q", got)
 	}
@@ -97,14 +96,14 @@ func TestHistorySearchBackgroundRecoveryPreservesSearchLikeRust(t *testing.T) {
 
 	accept := newModel()
 	accept.appendQuestionDrafts([]string{"> Which way?\n\nanswer"})
-	accept.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	accept.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	if accept.historySearch != nil || accept.composerText() != "earlier prompt" {
 		t.Fatalf("accepted preview = %#v composer=%q", accept.historySearch, accept.composerText())
 	}
 
 	fresh := newModel()
 	fresh.resetComposer()
-	fresh.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEsc})
+	fresh.Update(keymsg.KeyMsg{Type: keymsg.KeyEsc})
 	if fresh.historySearch != nil || fresh.composerText() != "" {
 		t.Fatalf("fresh replacement retained search draft: %#v %q", fresh.historySearch, fresh.composerText())
 	}

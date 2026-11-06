@@ -48,8 +48,8 @@ func TestDaybreakCommandTogglesAndPersistsLikeRust(t *testing.T) {
 	if !model.daybreakEnabled || len(*updates) != 1 || !(*updates)[0] {
 		t.Fatalf("daybreak=%v updates=%v", model.daybreakEnabled, *updates)
 	}
-	if !strings.Contains(utils.StripANSI(model.View()), "Daybreak is on for new turns") {
-		t.Fatalf("missing enable notice:\n%s", utils.StripANSI(model.View()))
+	if !strings.Contains(utils.StripANSI(model.viewString()), "Daybreak is on for new turns") {
+		t.Fatalf("missing enable notice:\n%s", utils.StripANSI(model.viewString()))
 	}
 	model.applyCommand(invocation)
 	if model.daybreakEnabled || len(*updates) != 2 || (*updates)[1] {

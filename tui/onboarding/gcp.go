@@ -6,9 +6,10 @@ import (
 	"strings"
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	"codex_go/appserver"
+	"codex_go/tui/keymsg"
 )
 
 // Google Cloud Vertex AI setup collects provider settings and delegates
@@ -62,11 +63,11 @@ func (s *gcpState) activeInput() *string {
 // handleKey advances the wizard. back reports that cancel returned to the
 // provider menu; submit reports that a setup request must be dispatched;
 // validation is a required-field message to show instead of advancing.
-func (s *gcpState) handleKey(message bubbletea.KeyMsg) (back bool, submit bool, validation string) {
+func (s *gcpState) handleKey(message keymsg.KeyMsg) (back bool, submit bool, validation string) {
 	if s == nil {
 		return false, false, ""
 	}
-	if message.Type == bubbletea.KeyEsc {
+	if message.Type == keymsg.KeyEsc {
 		switch s.view {
 		case gcpViewProject:
 			return true, false, ""
@@ -82,7 +83,7 @@ func (s *gcpState) handleKey(message bubbletea.KeyMsg) (back bool, submit bool, 
 	if !s.isTextEntryActive() {
 		return false, false, ""
 	}
-	if message.Type == bubbletea.KeyEnter {
+	if message.Type == keymsg.KeyEnter {
 		switch s.view {
 		case gcpViewProject:
 			if strings.TrimSpace(s.projectID) == "" {
@@ -99,12 +100,12 @@ func (s *gcpState) handleKey(message bubbletea.KeyMsg) (back bool, submit bool, 
 	}
 	if input := s.activeInput(); input != nil {
 		switch message.Type {
-		case bubbletea.KeyBackspace, bubbletea.KeyDelete:
+		case keymsg.KeyBackspace, keymsg.KeyDelete:
 			runes := []rune(*input)
 			if len(runes) > 0 {
 				*input = string(runes[:len(runes)-1])
 			}
-		case bubbletea.KeyRunes:
+		case keymsg.KeyRunes:
 			if !message.Alt && len(message.Runes) > 0 {
 				value := string(message.Runes)
 				if message.Paste {
@@ -183,7 +184,7 @@ type gcpConfiguredMsg struct {
 	err error
 }
 
-func (m *authFlowModel) handleGCPKey(message bubbletea.KeyMsg) (bubbletea.Model, bubbletea.Cmd) {
+func (m *authFlowModel) handleGCPKey(message keymsg.KeyMsg) (bubbletea.Model, bubbletea.Cmd) {
 	if m.gcp == nil {
 		return m, nil
 	}

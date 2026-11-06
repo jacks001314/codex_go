@@ -5,9 +5,8 @@ import (
 	"testing"
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 func prefixTestModel(t *testing.T) *Model {
@@ -26,7 +25,7 @@ func typeComposerRunes(t *testing.T, model *Model, text string) *Model {
 	model.now = func() time.Time { return clock }
 	for _, r := range text {
 		clock = clock.Add(20 * time.Millisecond)
-		updated, _ := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{r}})
+		updated, _ := model.Update(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{r}})
 		model = updated.(*Model)
 	}
 	return model
@@ -61,8 +60,8 @@ func TestComposerKeepsSlashPrefixInEditableText(t *testing.T) {
 	if text := model.composerText(); text != "/help" {
 		t.Fatalf("composerText() = %q, want /help", text)
 	}
-	view := model.View()
-	if !strings.Contains(view, "› /help") {
+	view := model.viewString()
+	if !strings.Contains(plainView(view), "› /help") {
 		t.Fatalf("composer view is missing the editable slash command:\n%s", view)
 	}
 	if model.composer.Value() != "/help" {
@@ -95,7 +94,7 @@ func TestComposerBackspaceRemovesPromptPrefix(t *testing.T) {
 	for _, marker := range []string{"/", "!"} {
 		model := prefixTestModel(t)
 		model = typeComposerRunes(t, model, marker)
-		updated, _ := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyBackspace})
+		updated, _ := model.Update(keymsg.KeyMsg{Type: keymsg.KeyBackspace})
 		model = updated.(*Model)
 		if model.composerPrefix != composerPrefixNone {
 			t.Fatalf("%q: prefix = %v, want none", marker, model.composerPrefix)
@@ -114,8 +113,8 @@ func TestComposerBackspaceRemovesPromptPrefix(t *testing.T) {
 	if model.composer.Value() != "echo" {
 		t.Fatalf("body = %q, want echo", model.composer.Value())
 	}
-	model.composer.SetCursor(0)
-	updated, _ := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyBackspace})
+	model.composer.SetCursorColumn(0)
+	updated, _ := model.Update(keymsg.KeyMsg{Type: keymsg.KeyBackspace})
 	model = updated.(*Model)
 	if model.composerPrefix != composerPrefixNone || model.composer.Value() != "echo" {
 		t.Fatalf("after backspace: prefix=%v body=%q", model.composerPrefix, model.composer.Value())
@@ -128,7 +127,7 @@ func TestComposerBackspaceRemovesPromptPrefix(t *testing.T) {
 func TestComposerSubmitAndHistoryKeepPromptPrefix(t *testing.T) {
 	model := prefixTestModel(t)
 	model = typeComposerRunes(t, model, "!echo hi")
-	updated, _ := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	updated, _ := model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	model = updated.(*Model)
 
 	requests := model.SubmittedRequests()
@@ -139,7 +138,7 @@ func TestComposerSubmitAndHistoryKeepPromptPrefix(t *testing.T) {
 		t.Fatalf("composer not reset: prefix=%v body=%q", model.composerPrefix, model.composer.Value())
 	}
 
-	updated, _ = model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyUp})
+	updated, _ = model.Update(keymsg.KeyMsg{Type: keymsg.KeyUp})
 	model = updated.(*Model)
 	if model.composerPrefix != composerPrefixShell {
 		t.Fatalf("recalled prefix = %v, want shell", model.composerPrefix)
@@ -218,7 +217,7 @@ func TestComposerHistoryRecallRestoresTextElementsLikeRust(t *testing.T) {
 	model.registerComposerElement(model.composer.Value(), len("/tmp/"), len("/tmp/$imagegen"))
 
 	model.submitComposer()
-	updated, _ := model.Update(key(bubbletea.KeyUp))
+	updated, _ := model.Update(key(keymsg.KeyUp))
 	model = updated.(*Model)
 
 	if model.composerPrefix != composerPrefixNone || model.composer.Value() != "/tmp/$imagegen file" {
@@ -245,7 +244,7 @@ func TestComposerPrefixCountsAsNonEmpty(t *testing.T) {
 	if model.composerIsEmpty() {
 		t.Fatal("a bare slash marker must not count as empty")
 	}
-	updated, _ := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyBackspace})
+	updated, _ := model.Update(keymsg.KeyMsg{Type: keymsg.KeyBackspace})
 	model = updated.(*Model)
 	if !model.composerIsEmpty() {
 		t.Fatal("clearing the marker should restore the empty state")

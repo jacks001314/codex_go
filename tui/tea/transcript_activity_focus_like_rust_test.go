@@ -1,10 +1,9 @@
 package tea
 
 import (
+	keymsg "codex_go/tui/keymsg"
 	"strings"
 	"testing"
-
-	bubbletea "github.com/charmbracelet/bubbletea"
 
 	codextui "codex_go/tui"
 	"codex_go/utils"
@@ -44,28 +43,28 @@ func TestFocusActivityKeymapLikeRust(t *testing.T) {
 // focus/navigation/expand flow for activity groups.
 func TestTranscriptActivityFocusDisclosureLikeRust(t *testing.T) {
 	model := activityFocusFixture(t)
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyF4})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyF4})
 	if !model.activityFocus.active || model.focusedTranscriptActivityIndex() != 1 {
 		t.Fatalf("focus = active=%v message=%d, want newest activity", model.activityFocus.active, model.focusedTranscriptActivityIndex())
 	}
-	if view := utils.StripANSI(model.View()); strings.Contains(view, "hidden detail") {
+	if view := utils.StripANSI(model.viewString()); strings.Contains(view, "hidden detail") {
 		t.Fatalf("focus alone expanded hidden output:\n%s", view)
 	}
-	footer := utils.StripANSI(model.View())
+	footer := utils.StripANSI(model.viewString())
 	if !strings.Contains(footer, "↑ previous · ↓ next · enter details · esc back") {
 		t.Fatalf("activity footer missing:\n%s", footer)
 	}
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyF4})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyF4})
 	if model.activityFocus.active {
 		t.Fatal("second F4 did not clear activity focus")
 	}
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyF4})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyF4})
 	if !model.activityFocus.active {
 		t.Fatal("F4 did not reopen activity focus")
 	}
 
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRight})
-	view := utils.StripANSI(model.View())
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyRight})
+	view := utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "newer hidden detail") {
 		t.Fatalf("Right did not expand the focused activity:\n%s", view)
 	}
@@ -73,33 +72,33 @@ func TestTranscriptActivityFocusDisclosureLikeRust(t *testing.T) {
 		t.Fatalf("Right expanded an unselected activity:\n%s", view)
 	}
 
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyLeft})
-	if view := utils.StripANSI(model.View()); strings.Contains(view, "newer hidden detail") {
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyLeft})
+	if view := utils.StripANSI(model.viewString()); strings.Contains(view, "newer hidden detail") {
 		t.Fatalf("Left did not collapse the focused activity:\n%s", view)
 	}
 
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyUp})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyUp})
 	if model.focusedTranscriptActivityIndex() != 0 {
 		t.Fatalf("Up focus = %d, want 0", model.focusedTranscriptActivityIndex())
 	}
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRight})
-	if view := utils.StripANSI(model.View()); !strings.Contains(view, "older hidden detail") {
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyRight})
+	if view := utils.StripANSI(model.viewString()); !strings.Contains(view, "older hidden detail") {
 		t.Fatalf("older activity did not expand after moving focus:\n%s", view)
 	}
 
 	// Manual expansions persist while focus moves and after Esc closes the
 	// controls.
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyDown})
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
-	view = utils.StripANSI(model.View())
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyDown})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
+	view = utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "older hidden detail") || !strings.Contains(view, "newer hidden detail") {
 		t.Fatalf("manual expansions did not persist across focus movement:\n%s", view)
 	}
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEsc})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyEsc})
 	if model.activityFocus.active {
 		t.Fatal("Esc did not clear activity focus")
 	}
-	view = utils.StripANSI(model.View())
+	view = utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "older hidden detail") || !strings.Contains(view, "newer hidden detail") {
 		t.Fatalf("Esc collapsed manual disclosures:\n%s", view)
 	}
@@ -109,7 +108,7 @@ func TestTranscriptActivityFocusDisclosureLikeRust(t *testing.T) {
 // transcript modes mutually exclusive.
 func TestTranscriptFindClearsActivityFocusLikeRust(t *testing.T) {
 	model := activityFocusFixture(t)
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyF4})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyF4})
 	if !model.activityFocus.active {
 		t.Fatal("F4 did not focus an activity")
 	}
@@ -126,9 +125,9 @@ func TestTranscriptFindClearsActivityFocusLikeRust(t *testing.T) {
 // keyed by tool-call identity instead of the history message position.
 func TestActivityFocusFollowsStableActivityIDsLikeRust(t *testing.T) {
 	model := activityFocusFixture(t)
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyF4})
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRight})
-	if view := utils.StripANSI(model.View()); !strings.Contains(view, "newer hidden detail") {
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyF4})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyRight})
+	if view := utils.StripANSI(model.viewString()); !strings.Contains(view, "newer hidden detail") {
 		t.Fatalf("newer activity was not expanded:\n%s", view)
 	}
 
@@ -141,7 +140,7 @@ func TestActivityFocusFollowsStableActivityIDsLikeRust(t *testing.T) {
 		[]string{"$ newer command", "newer hidden detail updated", "newer tail"},
 		[]string{"call-newer"},
 	)
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if !model.activityFocus.active || model.focusedTranscriptActivityIndex() != 1 {
 		t.Fatalf("focus lost across same-ID replacement: active=%v index=%d", model.activityFocus.active, model.focusedTranscriptActivityIndex())
 	}
@@ -162,7 +161,7 @@ func TestActivityFocusFollowsStableActivityIDsLikeRust(t *testing.T) {
 	if model.activityFocus.active {
 		t.Fatalf("focus followed a different activity ID at the same index")
 	}
-	if view := utils.StripANSI(model.View()); strings.Contains(view, "replacement hidden detail") {
+	if view := utils.StripANSI(model.viewString()); strings.Contains(view, "replacement hidden detail") {
 		t.Fatalf("old disclosure expanded the replacement cell:\n%s", view)
 	}
 
@@ -174,7 +173,7 @@ func TestActivityFocusFollowsStableActivityIDsLikeRust(t *testing.T) {
 		[]string{"$ newer command", "newer hidden detail restored", "newer tail"},
 		[]string{"call-newer"},
 	)
-	view = utils.StripANSI(model.View())
+	view = utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "newer hidden detail restored") {
 		t.Fatalf("restored activity ID did not recover its expansion:\n%s", view)
 	}
@@ -194,9 +193,9 @@ func TestActivityFocusMigratesLiveGroupToHistoryLikeRust(t *testing.T) {
 		[]string{"call-live"},
 	)
 	model.activityFollow = true
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyF4})
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRight})
-	if view := utils.StripANSI(model.View()); !strings.Contains(view, "live hidden detail") {
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyF4})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyRight})
+	if view := utils.StripANSI(model.viewString()); !strings.Contains(view, "live hidden detail") {
 		t.Fatalf("live activity did not expand:\n%s", view)
 	}
 
@@ -210,7 +209,7 @@ func TestActivityFocusMigratesLiveGroupToHistoryLikeRust(t *testing.T) {
 		[]string{"$ next", "next hidden detail", "tail"},
 		[]string{"call-next"},
 	)
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "live hidden detail") {
 		t.Fatalf("live disclosure was lost after history migration:\n%s", view)
 	}
@@ -226,7 +225,7 @@ func TestActivityFocusMigratesLiveGroupToHistoryLikeRust(t *testing.T) {
 // left so a narrow activity footer never shows half a shortcut.
 func TestActivityFocusFooterFitsWidthLikeRust(t *testing.T) {
 	model := activityFocusFixture(t)
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyF4})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyF4})
 	const (
 		all     = "\u2191 previous \u00b7 \u2193 next \u00b7 enter details \u00b7 esc back"
 		next    = "\u2193 next \u00b7 enter details \u00b7 esc back"

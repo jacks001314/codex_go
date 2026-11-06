@@ -4,7 +4,11 @@
 // single Styles struct that can be swapped for theming.
 package styles
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"image/color"
+
+	"charm.land/lipgloss/v2"
+)
 
 // SemanticColor is a typed constant identifying a semantic color role.
 // Use these instead of raw lipgloss.Color("8") or ANSI escapes.
@@ -66,7 +70,7 @@ var semanticToLipgloss = map[SemanticColor]string{
 
 // LipglossColor returns the lipgloss.Color equivalent for a semantic color.
 // Returns "0" (reset) for colors that don't have a lipgloss mapping.
-func LipglossColor(c SemanticColor) lipgloss.Color {
+func LipglossColor(c SemanticColor) color.Color {
 	if v, ok := semanticToLipgloss[c]; ok {
 		return lipgloss.Color(v)
 	}

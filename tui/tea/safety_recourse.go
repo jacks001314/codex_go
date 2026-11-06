@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"strings"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
 	chatwidget "codex_go/tui/chatwidget"
-	"codex_go/tui/history_cell"
+	historycell "codex_go/tui/history_cell"
 )
 
 // Turn-scoped safety recourse (Rust #57363/#57365). A moderation notification

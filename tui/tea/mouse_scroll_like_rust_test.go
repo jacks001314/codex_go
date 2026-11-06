@@ -2,18 +2,18 @@ package tea
 
 import (
 	"bytes"
+	mousemsg "codex_go/tui/mousemsg"
 	"fmt"
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 // wheelPress builds the press event Bubble Tea reports for wheel motion.
-func wheelPress(button bubbletea.MouseButton) bubbletea.MouseMsg {
-	return bubbletea.MouseMsg{Action: bubbletea.MouseActionPress, Button: button}
+func wheelPress(button mousemsg.MouseButton) mousemsg.MouseMsg {
+	return mousemsg.MouseMsg{Action: mousemsg.MouseActionPress, Button: button}
 }
 
 // scrollableTranscript builds a model whose transcript can scroll in both
@@ -61,7 +61,7 @@ func TestTranscriptWheelUsesConfiguredMouseScrollSpeedLikeRust(t *testing.T) {
 		model := scrollableTranscript(t)
 		applyMouseScrollSpeed(t, model, tc.speed)
 		before := model.transcript.YOffset
-		model.Update(wheelPress(bubbletea.MouseButtonWheelUp))
+		model.Update(wheelPress(mousemsg.MouseButtonWheelUp))
 		if got, want := model.transcript.YOffset, before-tc.rows; got != want {
 			t.Fatalf("%s: wheel offset = %d, want %d", tc.name, got, want)
 		}
@@ -76,11 +76,11 @@ func TestTranscriptWheelDefaultsToOneRowPerEventLikeRust(t *testing.T) {
 		t.Fatalf("initial mouse scroll speed = %v, want %v", got, codextui.MouseScrollSpeedDefault)
 	}
 	before := model.transcript.YOffset
-	model.Update(wheelPress(bubbletea.MouseButtonWheelUp))
+	model.Update(wheelPress(mousemsg.MouseButtonWheelUp))
 	if got, want := model.transcript.YOffset, before-1; got != want {
 		t.Fatalf("default wheel offset = %d, want %d", got, want)
 	}
-	model.Update(wheelPress(bubbletea.MouseButtonWheelDown))
+	model.Update(wheelPress(mousemsg.MouseButtonWheelDown))
 	if got, want := model.transcript.YOffset, before; got != want {
 		t.Fatalf("default wheel-down offset = %d, want %d", got, want)
 	}
@@ -92,13 +92,13 @@ func TestTranscriptWheelDefaultsToOneRowPerEventLikeRust(t *testing.T) {
 func TestTranscriptWheelKeepsComposerSelectionLikeRust(t *testing.T) {
 	model := scrollableTranscript(t)
 	model.composer.SetValue("first line\nsecond line")
-	_ = model.View()
+	_ = model.viewString()
 	if model.composerTextTopRow < 0 {
 		t.Fatal("composer layout was not captured")
 	}
 	model.composerSelection = composerTextSelection{active: true, anchorRune: 0, focusRune: 3}
 	before := model.TranscriptYOffset()
-	model.Update(wheelPress(bubbletea.MouseButtonWheelUp))
+	model.Update(wheelPress(mousemsg.MouseButtonWheelUp))
 	if !model.composerSelection.active {
 		t.Fatal("transcript wheel cleared the composer selection")
 	}
@@ -121,11 +121,11 @@ func TestMouseWheelScrollsTranscriptOnDefaultOwnedScreenLikeRust(t *testing.T) {
 	}
 	before := model.TranscriptYOffset()
 	draft := model.composer.Value()
-	model.Update(wheelPress(bubbletea.MouseButtonWheelUp))
+	model.Update(wheelPress(mousemsg.MouseButtonWheelUp))
 	if got, want := model.TranscriptYOffset(), before-1; got != want {
 		t.Fatalf("wheel-up transcript offset = %d, want %d", got, want)
 	}
-	model.Update(wheelPress(bubbletea.MouseButtonWheelDown))
+	model.Update(wheelPress(mousemsg.MouseButtonWheelDown))
 	if got, want := model.TranscriptYOffset(), before; got != want {
 		t.Fatalf("wheel-down transcript offset = %d, want %d", got, want)
 	}
@@ -190,22 +190,22 @@ func TestTranscriptWheelAccumulatesFractionalScrollLikeRust(t *testing.T) {
 	applyMouseScrollSpeed(t, model, 0.5)
 	before := model.transcript.YOffset
 
-	model.Update(wheelPress(bubbletea.MouseButtonWheelUp))
+	model.Update(wheelPress(mousemsg.MouseButtonWheelUp))
 	if got := model.transcript.YOffset; got != before {
 		t.Fatalf("first half-row event moved to %d, want %d", got, before)
 	}
-	model.Update(wheelPress(bubbletea.MouseButtonWheelUp))
+	model.Update(wheelPress(mousemsg.MouseButtonWheelUp))
 	if got, want := model.transcript.YOffset, before-1; got != want {
 		t.Fatalf("second half-row event moved to %d, want %d", got, want)
 	}
 
 	// One more up event keeps half a row pending; the reversed event must start
 	// a fresh (positive) remainder instead of cancelling the pending movement.
-	model.Update(wheelPress(bubbletea.MouseButtonWheelUp))
+	model.Update(wheelPress(mousemsg.MouseButtonWheelUp))
 	if got, want := model.transcript.YOffset, before-1; got != want {
 		t.Fatalf("half-row event after a whole row moved to %d, want %d", got, want)
 	}
-	model.Update(wheelPress(bubbletea.MouseButtonWheelDown))
+	model.Update(wheelPress(mousemsg.MouseButtonWheelDown))
 	if got, want := model.transcript.YOffset, before-1; got != want {
 		t.Fatalf("reversed half-row event moved to %d, want %d", got, want)
 	}
@@ -220,7 +220,7 @@ func TestTranscriptWheelAccumulatesFractionalScrollLikeRust(t *testing.T) {
 func TestTranscriptOverlayWheelUsesConfiguredMouseScrollSpeedLikeRust(t *testing.T) {
 	openOverlay := func(t *testing.T, model *Model) *Model {
 		t.Helper()
-		updated, _ := model.Update(key(bubbletea.KeyCtrlT))
+		updated, _ := model.Update(key(keymsg.KeyCtrlT))
 		model = updated.(*Model)
 		if model.overlay == nil {
 			t.Fatal("Ctrl+T did not open the transcript overlay")
@@ -236,7 +236,7 @@ func TestTranscriptOverlayWheelUsesConfiguredMouseScrollSpeedLikeRust(t *testing
 	applyMouseScrollSpeed(t, model, 3.0)
 	model = openOverlay(t, model)
 	before := model.overlay.YOffset()
-	model.Update(wheelPress(bubbletea.MouseButtonWheelUp))
+	model.Update(wheelPress(mousemsg.MouseButtonWheelUp))
 	if got, want := model.overlay.YOffset(), before-3; got != want {
 		t.Fatalf("triple-speed overlay wheel moved to %d, want %d", got, want)
 	}
@@ -244,7 +244,7 @@ func TestTranscriptOverlayWheelUsesConfiguredMouseScrollSpeedLikeRust(t *testing
 	// A reload that lands while the pager is open retargets the live overlay.
 	applyMouseScrollSpeed(t, model, 1.0)
 	before = model.overlay.YOffset()
-	model.Update(wheelPress(bubbletea.MouseButtonWheelUp))
+	model.Update(wheelPress(mousemsg.MouseButtonWheelUp))
 	if got, want := model.overlay.YOffset(), before-1; got != want {
 		t.Fatalf("reloaded overlay wheel moved to %d, want %d", got, want)
 	}

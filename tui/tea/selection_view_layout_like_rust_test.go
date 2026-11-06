@@ -16,7 +16,7 @@ import (
 func TestSkillsPickerRowsMatchRustSelectionView(t *testing.T) {
 	model := NewModel(codextui.NewState(nil), Options{Width: 120, Height: 40})
 	model.openSkillsMenu()
-	rows := strings.Split(strings.TrimRight(utils.StripANSI(model.View()), "\n"), "\n")
+	rows := strings.Split(strings.TrimRight(utils.StripANSI(model.viewString()), "\n"), "\n")
 	var tail []string
 	for index, row := range rows {
 		if strings.TrimSpace(row) == "Skills" {
@@ -58,7 +58,7 @@ func TestSelectionViewWrapsDescriptionUnderItsColumnLikeRust(t *testing.T) {
 			Description: "Read and edit workspace files and run commands, with approval required for internet access",
 		}},
 	})
-	rows := strings.Split(strings.TrimRight(utils.StripANSI(model.View()), "\n"), "\n")
+	rows := strings.Split(strings.TrimRight(utils.StripANSI(model.viewString()), "\n"), "\n")
 	for _, row := range rows {
 		trimmed := strings.TrimRight(row, " ")
 		if codextui.DisplayWidth(trimmed) > 60 {
@@ -95,7 +95,7 @@ func TestSelectionViewWrapsDescriptionUnderItsColumnLikeRust(t *testing.T) {
 func TestDaemonRestartConfirmationMatchesRustSnapshot(t *testing.T) {
 	model := NewModel(codextui.NewState(nil), Options{Width: 80, Height: 40})
 	model.confirmDaemonRestart()
-	rows := strings.Split(strings.TrimRight(utils.StripANSI(model.View()), "\n"), "\n")
+	rows := strings.Split(strings.TrimRight(utils.StripANSI(model.viewString()), "\n"), "\n")
 	var block []string
 	for index, row := range rows {
 		if strings.TrimSpace(row) == "Restart background server?" {

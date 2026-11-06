@@ -4,10 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
 	"codex_go/tui/chatwidget"
+	"codex_go/tui/keymsg"
 )
 
 func permissionShortcutModel(t *testing.T) *Model {
@@ -35,15 +34,15 @@ func permissionShortcutModel(t *testing.T) *Model {
 
 func TestModelPermissionShortcutsCycleSessionOnlyLikeRust(t *testing.T) {
 	model := permissionShortcutModel(t)
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyF7})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyF7})
 	if model.State.Sandbox != chatwidget.ReadOnlyProfile {
 		t.Fatalf("previous permission mode = %q, want read-only", model.State.Sandbox)
 	}
-	if view := strings.ToLower(model.View()); !strings.Contains(view, "permissions updated to read only") {
-		t.Fatalf("previous permission update missing from transcript:\n%s", model.View())
+	if view := strings.ToLower(model.viewString()); !strings.Contains(view, "permissions updated to read only") {
+		t.Fatalf("previous permission update missing from transcript:\n%s", model.viewString())
 	}
 
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyF10})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyF10})
 	if model.State.Sandbox != chatwidget.WorkspaceProfile {
 		t.Fatalf("next permission mode = %q, want workspace", model.State.Sandbox)
 	}
@@ -51,8 +50,8 @@ func TestModelPermissionShortcutsCycleSessionOnlyLikeRust(t *testing.T) {
 
 func TestModelPermissionShortcutFullAccessStillRequiresConfirmationLikeRust(t *testing.T) {
 	model := permissionShortcutModel(t)
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyF7})
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyF7})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyF7})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyF7})
 
 	if model.State.Sandbox != chatwidget.ReadOnlyProfile {
 		t.Fatalf("full-access shortcut changed state before confirmation: %q", model.State.Sandbox)
@@ -72,7 +71,7 @@ func TestModelPermissionShortcutWaitsForServerCatalogLikeRust(t *testing.T) {
 		fetches++
 		return nil, false, nil
 	}
-	_, cmd := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyF7})
+	_, cmd := model.Update(keymsg.KeyMsg{Type: keymsg.KeyF7})
 	if model.State.Sandbox != chatwidget.WorkspaceProfile {
 		t.Fatalf("shortcut changed state before the server catalog loaded: %q", model.State.Sandbox)
 	}
@@ -87,7 +86,7 @@ func TestModelPermissionShortcutWaitsForServerCatalogLikeRust(t *testing.T) {
 		t.Fatalf("discovery fetches = %d, want 1", fetches)
 	}
 	// A second press while the fetch is in flight must reuse it.
-	if _, retry := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyF7}); retry != nil {
+	if _, retry := model.Update(keymsg.KeyMsg{Type: keymsg.KeyF7}); retry != nil {
 		t.Fatal("shortcut started a second discovery fetch")
 	}
 	if fetches != 1 {
@@ -96,7 +95,7 @@ func TestModelPermissionShortcutWaitsForServerCatalogLikeRust(t *testing.T) {
 
 	model.applyPermissionProfilesLoaded(msg.(permissionProfilesLoadedMsg))
 	model.closePermissionsModal()
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyF7})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyF7})
 	if model.State.Sandbox != chatwidget.ReadOnlyProfile {
 		t.Fatalf("next permission mode = %q, want read-only once the catalog is cached", model.State.Sandbox)
 	}

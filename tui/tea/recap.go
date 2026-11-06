@@ -4,7 +4,7 @@ import (
 	"strings"
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	"codex_go/appserver"
 	codextui "codex_go/tui"

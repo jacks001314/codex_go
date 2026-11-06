@@ -1,13 +1,13 @@
 package tea
 
 import (
+	mousemsg "codex_go/tui/mousemsg"
 	"fmt"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
 	mentionsv2 "codex_go/tui/bottom_pane/mentions_v2"
+	"codex_go/tui/keymsg"
 )
 
 func newScrollableTranscriptModel(t *testing.T) *Model {
@@ -23,8 +23,8 @@ func newScrollableTranscriptModel(t *testing.T) *Model {
 	return model
 }
 
-func wheelUp() bubbletea.MouseMsg {
-	return bubbletea.MouseMsg{Action: bubbletea.MouseActionPress, Button: bubbletea.MouseButtonWheelUp}
+func wheelUp() mousemsg.MouseMsg {
+	return mousemsg.MouseMsg{Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonWheelUp}
 }
 
 // TestTranscriptWheelScrollsWhileModalOpenLikeRust pins Rust #48805
@@ -48,7 +48,7 @@ func TestTranscriptWheelScrollsWhileModalOpenLikeRust(t *testing.T) {
 	}
 	// Keyboard ownership stays with the modal: an unrelated rune never reaches
 	// the composer.
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune("z")})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune("z")})
 	if got := model.composer.Value(); got != "" {
 		t.Fatalf("composer = %q, want the modal to keep the keyboard", got)
 	}

@@ -3,7 +3,9 @@ package overlay
 import (
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	"codex_go/tui/keymsg"
+
+	bubbletea "charm.land/bubbletea/v2"
 )
 
 // =============================================================================
@@ -20,11 +22,11 @@ func (d *testDialog) ID() string                    { return d.id }
 func (d *testDialog) View(width, height int) string { return d.value }
 func (d *testDialog) Update(msg bubbletea.Msg) DialogResult {
 	switch msg := msg.(type) {
-	case bubbletea.KeyMsg:
+	case keymsg.KeyMsg:
 		switch msg.Type {
-		case bubbletea.KeyEnter:
+		case keymsg.KeyEnter:
 			return DialogResult{Action: ActionSubmit, Value: d.value}
-		case bubbletea.KeyEsc:
+		case keymsg.KeyEsc:
 			return DialogResult{Action: ActionCancel}
 		}
 	}
@@ -110,7 +112,7 @@ func TestOverlayUpdate(t *testing.T) {
 	o.Push(d)
 
 	// Update with Enter should trigger ActionSubmit + pop
-	cmd := o.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	cmd := o.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	if cmd != nil {
 		_ = cmd() // consume
 	}
@@ -124,7 +126,7 @@ func TestOverlayUpdateCancel(t *testing.T) {
 	d := &testDialog{id: "dialog", value: "content"}
 	o.Push(d)
 
-	o.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEsc})
+	o.Update(keymsg.KeyMsg{Type: keymsg.KeyEsc})
 	if o.Active() {
 		t.Error("overlay should be inactive after cancel")
 	}
@@ -164,7 +166,7 @@ func TestOverlayClear(t *testing.T) {
 
 func TestOverlayUpdateOnEmpty(t *testing.T) {
 	o := NewOverlay(false)
-	cmd := o.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	cmd := o.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	if cmd != nil {
 		t.Error("Update on empty overlay should return nil")
 	}

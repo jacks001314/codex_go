@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	"codex_go/auth"
+	"codex_go/tui/keymsg"
+	"codex_go/utils"
 )
 
 func TestAuthFlowRendersRustLoginChoices(t *testing.T) {
@@ -19,7 +19,7 @@ func TestAuthFlowRendersRustLoginChoices(t *testing.T) {
 		ChatGPTAllowed: true,
 		APIKeyAllowed:  true,
 	})
-	view := model.View()
+	view := model.viewString()
 	for _, want := range []string{
 		"Sign in with ChatGPT to use Codex as part of your paid plan",
 		"or connect an API key for usage-based billing",
@@ -45,7 +45,7 @@ func TestAuthFlowProviderSetupUsesNeutralHeader(t *testing.T) {
 		APIKeyAllowed:  true,
 		BedrockAllowed: true,
 	})
-	view := model.View()
+	view := model.viewString()
 	for _, want := range []string{
 		"Welcome to Codex, OpenAI's command-line coding agent",
 		"Choose how you want to use Codex.",
@@ -83,20 +83,20 @@ func TestAuthFlowBrowserLoginCompletesAfterConfirmation(t *testing.T) {
 		services:       services,
 	})
 
-	_, start := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	_, start := model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	if start == nil || model.state != SignInChatGPTContinueInBrowser {
 		t.Fatalf("browser start state=%s command=%v", model.state, start)
 	}
 	_, wait := model.Update(start())
-	if wait == nil || !strings.Contains(model.View(), "https://auth.example.test/login") {
-		t.Fatalf("browser waiting view:\n%s", model.View())
+	if wait == nil || !strings.Contains(utils.StripANSI(model.viewString()), "https://auth.example.test/login") {
+		t.Fatalf("browser waiting view:\n%s", model.viewString())
 	}
 	done <- nil
 	model.Update(wait())
 	if model.state != SignInChatGPTSuccessMessage || model.completed {
 		t.Fatalf("browser completion state=%s completed=%v", model.state, model.completed)
 	}
-	_, quit := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	_, quit := model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	if quit == nil || !model.completed || model.state != SignInChatGPTSuccess {
 		t.Fatalf("browser confirmation state=%s completed=%v command=%v", model.state, model.completed, quit)
 	}
@@ -127,7 +127,7 @@ func TestAuthFlowCarriesTheBoundClientLikeRust(t *testing.T) {
 		HTTPClient:     bound,
 		services:       services,
 	})
-	_, start := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{'2'}})
+	_, start := model.Update(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{'2'}})
 	if start == nil {
 		t.Fatal("device start command is nil")
 	}
@@ -165,7 +165,7 @@ func TestAuthFlowDeviceCodeCompletes(t *testing.T) {
 		services:       services,
 	})
 
-	_, start := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{'2'}})
+	_, start := model.Update(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{'2'}})
 	if start == nil || model.state != SignInChatGPTDeviceCode {
 		t.Fatalf("device start state=%s command=%v", model.state, start)
 	}
@@ -173,7 +173,7 @@ func TestAuthFlowDeviceCodeCompletes(t *testing.T) {
 	if finish == nil {
 		t.Fatal("device completion command is nil")
 	}
-	view := model.View()
+	view := utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "https://auth.example.test/device") || !strings.Contains(view, "CODE-X123") {
 		t.Fatalf("device view:\n%s", view)
 	}
@@ -192,13 +192,13 @@ func TestAuthFlowAPIKeyPersistsAndCompletes(t *testing.T) {
 		APIKeyAllowed:  true,
 	})
 
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{'3'}})
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{'1'}})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{'3'}})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{'1'}})
 	if model.state != SignInAPIKeyEntry {
 		t.Fatalf("API key state=%s", model.state)
 	}
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune("sk-onboarding-test"), Paste: true})
-	_, save := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune("sk-onboarding-test"), Paste: true})
+	_, save := model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	if save == nil || !model.savingAPIKey {
 		t.Fatalf("API key save command=%v saving=%v", save, model.savingAPIKey)
 	}
@@ -253,7 +253,7 @@ func TestAuthFlowBrowserLoginCanCompleteWhileOpening(t *testing.T) {
 		services:       services,
 	})
 
-	_, start := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	_, start := model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	if start == nil {
 		t.Fatal("browser start command missing")
 	}
@@ -332,37 +332,37 @@ func TestAuthFlowCopiesBrowserLoginURLLikeRust(t *testing.T) {
 		services:       services,
 	})
 
-	_, start := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	_, start := model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	// The URL is not known yet, so the shortcut is inert.
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{'c'}})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{'c'}})
 	if len(copied) != 0 {
 		t.Fatalf("copied before the URL arrived: %#v", copied)
 	}
 	model.Update(start())
-	if view := model.View(); !strings.Contains(view, "press c to copy it:") {
+	if view := model.viewString(); !strings.Contains(view, "press c to copy it:") {
 		t.Fatalf("browser view missing the copy hint:\n%s", view)
 	}
 
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{'c'}})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{'c'}})
 	if len(copied) != 1 || copied[0] != "https://auth.example.test/login" {
 		t.Fatalf("copied = %#v, want the sign-in URL", copied)
 	}
-	if view := model.View(); !strings.Contains(view, "Copied link to clipboard") {
+	if view := model.viewString(); !strings.Contains(view, "Copied link to clipboard") {
 		t.Fatalf("browser view missing the copy result:\n%s", view)
 	}
 
 	copyErr = errors.New("clipboard offline")
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{'c'}})
-	if view := model.View(); !strings.Contains(view, "Could not copy link: clipboard offline") {
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{'c'}})
+	if view := model.viewString(); !strings.Contains(view, "Could not copy link: clipboard offline") {
 		t.Fatalf("browser view missing the copy failure:\n%s", view)
 	}
 
 	// Esc cancels the attempt and clears the notice.
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEsc})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyEsc})
 	if model.state != SignInPickMode {
 		t.Fatalf("state after esc = %s, want the picker", model.state)
 	}
-	if view := model.View(); strings.Contains(view, "Copied link") || strings.Contains(view, "Could not copy link") {
+	if view := model.viewString(); strings.Contains(view, "Copied link") || strings.Contains(view, "Could not copy link") {
 		t.Fatalf("copy notice survived the cancel:\n%s", view)
 	}
 }
@@ -377,15 +377,15 @@ func TestAPIKeyEntryStorageCopyLikeRust(t *testing.T) {
 		ChatGPTAllowed: true,
 		APIKeyAllowed:  true,
 	})
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{'3'}})
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{'1'}})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{'3'}})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{'1'}})
 	if model.state != SignInAPIKeyEntry {
 		t.Fatalf("API key state=%s", model.state)
 	}
 
 	for _, width := range []int{80, 40} {
 		model.width = width
-		view := model.View()
+		view := model.viewString()
 		if !strings.Contains(view, "Paste or type your API key below.") {
 			t.Fatalf("width %d lost the entry prompt:\n%s", width, view)
 		}
@@ -408,7 +408,7 @@ func TestAPIKeyEntryStorageCopyLikeRust(t *testing.T) {
 func TestChatGPTSuccessMessageCopyLikeRust(t *testing.T) {
 	model := newAuthFlowModel(context.Background(), AuthFlowOptions{CodexHome: t.TempDir()})
 	model.state = SignInChatGPTSuccessMessage
-	view := model.View()
+	view := model.viewString()
 	for _, want := range []string{
 		"Signed in with your ChatGPT account",
 		"You're in control",

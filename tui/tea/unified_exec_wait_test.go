@@ -39,7 +39,7 @@ func TestModelTerminalInteractionOwnsStatusWhileWaiting(t *testing.T) {
 	if !strings.EqualFold(strings.TrimSpace(model.workingStatusHeader), "Waiting for background terminal") {
 		t.Fatalf("status header = %q", model.workingStatusHeader)
 	}
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "Waiting for background terminal") || !strings.Contains(view, "python server.py") {
 		t.Fatalf("waiting status missing:\n%s", view)
 	}
@@ -58,7 +58,7 @@ func TestModelTerminalInteractionOwnsStatusWhileWaiting(t *testing.T) {
 	if strings.EqualFold(strings.TrimSpace(model.workingStatusHeader), "Waiting for background terminal") {
 		t.Fatal("waiting status survived the flush")
 	}
-	view = utils.StripANSI(model.View())
+	view = utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "print(1)") {
 		t.Fatalf("terminal interaction missing from the transcript:\n%s", view)
 	}

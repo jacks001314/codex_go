@@ -6,10 +6,11 @@ import (
 	"testing"
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
 	tuiapp "codex_go/tui/app"
+	"codex_go/tui/keymsg"
 	"codex_go/utils"
 )
 
@@ -40,7 +41,7 @@ func TestModelRecapCommandShowsLoadingThenRecap(t *testing.T) {
 	})
 
 	typeText(t, model, "/recap")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	if !strings.Contains(modelMessageText(model), "Generating conversation recap") {
 		t.Fatalf("loading row missing:\n%s", modelMessageText(model))
 	}
@@ -83,7 +84,7 @@ func TestModelRecapCommandEmptyHistory(t *testing.T) {
 		},
 	})
 	typeText(t, model, "/recap")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if !strings.Contains(modelMessageText(model), tuiapp.ManualRecapEmptyHistoryMessage) {
 		t.Fatalf("missing empty-history notice:\n%s", modelMessageText(model))
 	}
@@ -96,7 +97,7 @@ func TestModelRecapCommandInProgress(t *testing.T) {
 	})
 	model.recapInFlight = true
 	typeText(t, model, "/recap")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if !strings.Contains(modelMessageText(model), tuiapp.ManualRecapInProgressMessage) {
 		t.Fatalf("missing in-progress notice:\n%s", modelMessageText(model))
 	}
@@ -107,7 +108,7 @@ func TestModelRecapCommandFailureShowsMessage(t *testing.T) {
 		return "", errors.New("temporary structured turn timed out")
 	})
 	typeText(t, model, "/recap")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 	text := modelMessageText(model)
 	if strings.Contains(text, "Generating conversation recap") {
@@ -123,7 +124,7 @@ func TestModelRecapCommandInvalidResponseShowsFailure(t *testing.T) {
 		return "not json", nil
 	})
 	typeText(t, model, "/recap")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 	if !strings.Contains(modelMessageText(model), tuiapp.ManualRecapFailureMessage) {
 		t.Fatalf("missing failure notice:\n%s", modelMessageText(model))

@@ -42,7 +42,7 @@ func TestSideParentSnapshotHidesVoiceHandoffOutputLikeRust(t *testing.T) {
 	resumeThreadForTest(model, "parent-a")
 	openSideForTest(t, model)
 	runTeaCmd(t, model, model.toggleSideConversation())
-	view := model.View()
+	view := model.viewString()
 	if strings.Contains(view, "private commentary") {
 		t.Fatalf("delegated parent turn leaked private commentary into the side snapshot:\n%s", view)
 	}
@@ -64,7 +64,7 @@ func TestSideParentSnapshotKeepsOrdinaryTurnLikeRust(t *testing.T) {
 	resumeThreadForTest(model, "parent-a")
 	openSideForTest(t, model)
 	runTeaCmd(t, model, model.toggleSideConversation())
-	if view := model.View(); !strings.Contains(view, "typed commentary") {
+	if view := model.viewString(); !strings.Contains(view, "typed commentary") {
 		t.Fatalf("non-delegated parent turn lost its commentary:\n%s", view)
 	}
 }
@@ -91,7 +91,7 @@ func TestRetainedSideSnapshotHidesVoiceHandoffOutputLikeRust(t *testing.T) {
 
 	resumeThreadForTest(model, "parent-a")
 	openSideForTest(t, model)
-	view := model.View()
+	view := model.viewString()
 	if strings.Contains(view, "side private commentary") {
 		t.Fatalf("delegated side turn leaked private commentary:\n%s", view)
 	}
@@ -121,7 +121,7 @@ func TestSideVoiceMarkersDoNotLeakAcrossThreadsLikeRust(t *testing.T) {
 	model.Update(ThreadScopedEventMsg{ThreadID: "side-parent-b", Event: protocol.TurnStartedWithID("voice-turn")})
 	model.Update(ThreadScopedEventMsg{ThreadID: "side-parent-b", Event: protocol.AgentMessageDelta("commentary-1", "other thread commentary")})
 	runTeaCmd(t, model, model.toggleSideConversation())
-	if view := model.View(); !strings.Contains(view, "other thread commentary") {
+	if view := model.viewString(); !strings.Contains(view, "other thread commentary") {
 		t.Fatalf("delegated marker leaked into another thread:\n%s", view)
 	}
 

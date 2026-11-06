@@ -6,10 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
 	bottompane "codex_go/tui/bottom_pane"
+	"codex_go/tui/keymsg"
 	"codex_go/utils"
 )
 
@@ -25,7 +24,7 @@ func newPasteTestModel(t *testing.T) *Model {
 // bracketedPaste feeds a paste the way Bubble Tea delivers a terminal bracketed
 // paste: one KeyRunes message with Paste set.
 func bracketedPaste(model *Model, text string) {
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune(text), Paste: true})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune(text), Paste: true})
 }
 
 // TestLargePastePlaceholderSubmitLikeRust drives a real bracketed paste through
@@ -43,7 +42,7 @@ func TestLargePastePlaceholderSubmitLikeRust(t *testing.T) {
 
 	bracketedPaste(model, paste)
 
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if !strings.Contains(view, placeholder) {
 		t.Fatalf("composer view is missing the paste placeholder %q:\n%s", placeholder, view)
 	}
@@ -55,7 +54,7 @@ func TestLargePastePlaceholderSubmitLikeRust(t *testing.T) {
 	}
 
 	model.clearComposerPasteWindow()
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	if len(model.submitRequests) != 1 {
 		t.Fatalf("submissions = %d, want 1", len(model.submitRequests))
 	}
@@ -87,7 +86,7 @@ func TestLargePastePlaceholderNumberingLikeRust(t *testing.T) {
 	}
 
 	model.clearComposerPasteWindow()
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	request := model.submitRequests[0]
 	if request.Prompt != paste+paste {
 		t.Fatalf("submitted prompt = %q, want both pastes expanded", request.Prompt)
@@ -139,7 +138,7 @@ func TestLargePasteDraftRestoreLikeRust(t *testing.T) {
 	model.restorePendingAgentsOverviewDraft()
 
 	model.clearComposerPasteWindow()
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	if len(model.submitRequests) != 1 {
 		t.Fatalf("submissions = %d, want 1", len(model.submitRequests))
 	}
@@ -176,7 +175,7 @@ func TestLargePasteTrimAfterExpansionLikeRust(t *testing.T) {
 	}
 
 	model.clearComposerPasteWindow()
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	if len(model.submitRequests) != 1 {
 		t.Fatalf("submissions = %d, want 1", len(model.submitRequests))
 	}
@@ -212,7 +211,7 @@ func TestLargePasteAndImagePasteStaySeparateLikeRust(t *testing.T) {
 	}
 
 	model.clearComposerPasteWindow()
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	if len(model.submitRequests) != 1 {
 		t.Fatalf("submissions = %d, want 1", len(model.submitRequests))
 	}

@@ -27,7 +27,10 @@ const (
 	tableColumnGap           = 2
 	tableCellPadding         = 1
 	minTableColumnWidth      = 3
-	tableMarkerPrefix        = "CODEX_INTERNAL_TABLE_"
+	// Private-use delimiters keep the placeholder inside one wrapped line at
+	// any transcript width; glamour v2 hard-wraps long placeholder tokens.
+	tableMarkerPrefix = "\uE100"
+	tableMarkerSuffix = "\uE101"
 )
 
 var (
@@ -146,7 +149,7 @@ func isTableCandidateLine(line string) bool {
 }
 
 func tableMarkerLine(id int) string {
-	return "<" + tableMarkerPrefix + strconv.Itoa(id) + ">"
+	return tableMarkerPrefix + strconv.Itoa(id) + tableMarkerSuffix
 }
 
 func isTableRowLine(line string) bool {
@@ -249,9 +252,9 @@ func splitBlockquotePrefix(line string) (indent string, leading string) {
 		markerPos := strings.Index(plain[end:], tableMarkerPrefix)
 		if markerPos >= 0 {
 			leading = plain[end : end+markerPos]
-			// The marker is emitted as "<CODEX_INTERNAL_TABLE_N>"; drop the
-			// opening "<" so the leading text does not retain a dangling marker.
-			leading = strings.TrimSuffix(leading, "<")
+			// Drop the placeholder opener so the leading text does not retain a
+			// dangling marker.
+			leading = strings.TrimSuffix(leading, tableMarkerPrefix)
 		}
 		return indent, leading
 	}
@@ -262,7 +265,7 @@ func splitBlockquotePrefix(line string) (indent string, leading string) {
 	if idx < 0 {
 		return "> ", ""
 	}
-	prefix := strings.TrimSuffix(plain[:idx], "<")
+	prefix := strings.TrimSuffix(plain[:idx], tableMarkerPrefix)
 	if prefix == "" {
 		prefix = "> "
 	}
@@ -275,7 +278,7 @@ func tableMarkerID(line string) int {
 		return -1
 	}
 	rest := line[idx+len(tableMarkerPrefix):]
-	end := strings.IndexByte(rest, '>')
+	end := strings.Index(rest, tableMarkerSuffix)
 	if end < 0 {
 		return -1
 	}

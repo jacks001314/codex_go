@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	"codex_go/protocol"
 	codextui "codex_go/tui"
@@ -44,7 +44,7 @@ func TestFreshAstraTaskShowsComposerStarfieldLikeRust(t *testing.T) {
 	if model.sparkle.phase != sparkleWaiting {
 		t.Fatalf("initial sparkle phase = %v, want waiting", model.sparkle.phase)
 	}
-	view := model.View()
+	view := model.viewString()
 	if countSparkleDots(view) == 0 {
 		t.Fatalf("fresh Astra composer has no starfield:\n%s", utils.StripANSI(view))
 	}
@@ -74,7 +74,7 @@ func TestComposerStarfieldHonorsEffectsAndModelLikeRust(t *testing.T) {
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			model, _ := sparkleTestModel(t, testCase.model, testCase.animations, testCase.effects)
-			if dots := countSparkleDots(model.View()); dots != 0 {
+			if dots := countSparkleDots(model.viewString()); dots != 0 {
 				t.Fatalf("ineligible composer rendered %d stars", dots)
 			}
 		})
@@ -89,17 +89,17 @@ func TestComposerStarfieldDismissalRulesLikeRust(t *testing.T) {
 	if model.sparkle.phase != sparkleFinished {
 		t.Fatalf("ordinary input phase = %v, want finished", model.sparkle.phase)
 	}
-	if dots := countSparkleDots(model.View()); dots != 0 {
+	if dots := countSparkleDots(model.viewString()); dots != 0 {
 		t.Fatalf("dismissed composer rendered %d stars", dots)
 	}
 
 	slash, _ := sparkleTestModel(t, "gpt-6-astra", true, DefaultEffectsSettings())
 	typeText(t, slash, "/")
-	_ = slash.View()
+	_ = slash.viewString()
 	if !slash.sparkleActive() {
 		t.Fatalf("slash draft phase = %v, want retained opportunity", slash.sparkle.phase)
 	}
-	if dots := countSparkleDots(slash.View()); dots != 0 {
+	if dots := countSparkleDots(slash.viewString()); dots != 0 {
 		t.Fatalf("slash draft rendered %d stars", dots)
 	}
 	typeText(t, slash, "m")
@@ -107,7 +107,7 @@ func TestComposerStarfieldDismissalRulesLikeRust(t *testing.T) {
 		t.Fatalf("slash command body phase = %v, want retained opportunity", slash.sparkle.phase)
 	}
 	slash.resetComposer()
-	if dots := countSparkleDots(slash.View()); dots == 0 {
+	if dots := countSparkleDots(slash.viewString()); dots == 0 {
 		t.Fatal("clearing the slash draft did not restore the starfield")
 	}
 }
@@ -115,16 +115,16 @@ func TestComposerStarfieldDismissalRulesLikeRust(t *testing.T) {
 // Rust #46096: the field fades out and is gone after the 15-second deadline.
 func TestComposerStarfieldExpiresLikeRust(t *testing.T) {
 	model, now := sparkleTestModel(t, "gpt-6-astra", true, DefaultEffectsSettings())
-	_ = model.View()
+	_ = model.viewString()
 	*now = (*now).Add(16 * time.Second)
-	if dots := countSparkleDots(model.View()); dots != 0 {
+	if dots := countSparkleDots(model.viewString()); dots != 0 {
 		t.Fatalf("expired composer rendered %d stars", dots)
 	}
 	if model.sparkle.phase != sparkleFinished {
 		t.Fatalf("expired phase = %v, want finished", model.sparkle.phase)
 	}
 	model.Update(StatusMsg{Status: "idle"})
-	if dots := countSparkleDots(model.View()); dots != 0 {
+	if dots := countSparkleDots(model.viewString()); dots != 0 {
 		t.Fatalf("expired starfield restarted after an update: %d stars", dots)
 	}
 }
@@ -138,7 +138,7 @@ func TestComposerStarfieldArmsWhenModelBecomesAstraLikeRust(t *testing.T) {
 	if model.sparkle.phase != sparkleWaiting {
 		t.Fatalf("phase after Astra selection = %v, want waiting", model.sparkle.phase)
 	}
-	if dots := countSparkleDots(model.View()); dots == 0 {
+	if dots := countSparkleDots(model.viewString()); dots == 0 {
 		t.Fatal("Astra selection did not render the starfield")
 	}
 }
@@ -152,7 +152,7 @@ func TestComposerStarfieldSurvivesBootstrapThreadStart(t *testing.T) {
 	if model.sparkle.phase != sparkleWaiting {
 		t.Fatalf("phase after bootstrap = %v, want waiting", model.sparkle.phase)
 	}
-	if dots := countSparkleDots(model.View()); dots == 0 {
+	if dots := countSparkleDots(model.viewString()); dots == 0 {
 		t.Fatal("bootstrap Astra thread omitted the starfield")
 	}
 }
@@ -161,7 +161,7 @@ func TestComposerStarfieldSurvivesBootstrapThreadStart(t *testing.T) {
 // keeps running on wall-clock time; regaining focus after it clears the field.
 func TestComposerStarfieldPausesFramesWhileUnfocusedAndExpires(t *testing.T) {
 	model, now := sparkleTestModel(t, "gpt-6-astra", true, DefaultEffectsSettings())
-	_ = model.View()
+	_ = model.viewString()
 	if model.sparkle.phase != sparkleVisible {
 		t.Fatalf("phase before blur = %v, want visible", model.sparkle.phase)
 	}
@@ -179,7 +179,7 @@ func TestComposerStarfieldPausesFramesWhileUnfocusedAndExpires(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("FocusMsg did not restart the tick loop")
 	}
-	if dots := countSparkleDots(model.View()); dots != 0 {
+	if dots := countSparkleDots(model.viewString()); dots != 0 {
 		t.Fatalf("expired starfield rendered %d dots after focus", dots)
 	}
 	if model.sparkle.phase != sparkleFinished {
@@ -191,7 +191,7 @@ func TestComposerStarfieldPausesFramesWhileUnfocusedAndExpires(t *testing.T) {
 // visible deadline instead of restarting the 15-second opportunity.
 func TestComposerStarfieldFocusGainPreservesVisibleDeadline(t *testing.T) {
 	model, now := sparkleTestModel(t, "gpt-6-astra", true, DefaultEffectsSettings())
-	_ = model.View()
+	_ = model.viewString()
 	visibleSince := model.sparkle.visibleSince
 	updated, _ := model.Update(bubbletea.BlurMsg{})
 	model = updated.(*Model)
@@ -201,7 +201,7 @@ func TestComposerStarfieldFocusGainPreservesVisibleDeadline(t *testing.T) {
 	if model.sparkle.phase != sparkleVisible || !model.sparkle.visibleSince.Equal(visibleSince) {
 		t.Fatalf("focus restarted sparkle: phase=%v since=%v want=%v", model.sparkle.phase, model.sparkle.visibleSince, visibleSince)
 	}
-	if dots := countSparkleDots(model.View()); dots == 0 {
+	if dots := countSparkleDots(model.viewString()); dots == 0 {
 		t.Fatal("starfield disappeared during an early focus round-trip")
 	}
 }

@@ -1,14 +1,16 @@
 package chatwidget
 
 import (
+	"codex_go/tui/keymsg"
+	mousemsg "codex_go/tui/mousemsg"
 	"fmt"
 	"math"
 	"strings"
 	"time"
 	"unicode/utf8"
 
-	"github.com/charmbracelet/bubbles/viewport"
-	bubbletea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/viewport"
+	bubbletea "charm.land/bubbletea/v2"
 	"github.com/mattn/go-runewidth"
 
 	codextui "codex_go/tui"
@@ -69,6 +71,12 @@ type TranscriptOverlay struct {
 	selectMode selectModeState
 	// dragActive keeps a mouse drag extending the current selection.
 	dragActive bool
+	// dragOriginRow is the pointer row where the drag started. A horizontal drag
+	// on an edge row must not start autoscroll (Rust #47137).
+	dragOriginRow int
+	// dragMovedVertically becomes sticky once the pointer visits another row, so a
+	// vertical drag can return to its starting edge and still autoscroll.
+	dragMovedVertically bool
 	// lastClick/lastClickAt track the multi-click gesture so double-click marks a
 	// word and triple-click marks a row (Rust text_selection::click_count).
 	lastClickAt    time.Time
@@ -124,7 +132,7 @@ func (o *TranscriptOverlay) Resize(width int, height int) {
 	// Avoid re-laying-out the viewport (and re-wrapping the content) on every
 	// frame when the terminal size is unchanged. Content changes are delivered
 	// separately through SetContent, which preserves the scroll position.
-	if o.viewport.Width > 0 && o.width == width && o.height == height {
+	if o.viewport.Width() > 0 && o.width == width && o.height == height {
 		return
 	}
 	bodyHeight := height - 3
@@ -137,16 +145,16 @@ func (o *TranscriptOverlay) Resize(width int, height int) {
 	}
 
 	follow := o.content == "" || o.viewport.AtBottom()
-	offset := o.viewport.YOffset
-	if o.viewport.Width <= 0 {
-		o.viewport = viewport.New(width, bodyHeight)
+	offset := o.viewport.YOffset()
+	if o.viewport.Width() <= 0 {
+		o.viewport = viewport.New(viewport.WithWidth(width), viewport.WithHeight(bodyHeight))
 		// Rust #50209: the wheel is handled by the overlay itself so the
 		// configurable speed (and its fractional accumulation) applies; the
 		// viewport's fixed three-row wheel handling stays off.
 		o.viewport.MouseWheelEnabled = false
 	} else {
-		o.viewport.Width = width
-		o.viewport.Height = bodyHeight
+		o.viewport.SetWidth(width)
+		o.viewport.SetHeight(bodyHeight)
 	}
 	o.width = width
 	o.height = height
@@ -176,7 +184,7 @@ func (o *TranscriptOverlay) SetContent(content string) {
 		content = "No messages yet."
 	}
 	follow := o.content == "" || o.viewport.AtBottom()
-	offset := o.viewport.YOffset
+	offset := o.viewport.YOffset()
 	o.content = content
 	o.refreshPlainLines()
 	o.viewport.SetContent(o.viewContent())
@@ -382,15 +390,15 @@ func (o *TranscriptOverlay) scrollToHighlight() {
 	if o == nil || !o.hasHighlight {
 		return
 	}
-	if o.highlightStart < o.viewport.YOffset {
+	if o.highlightStart < o.viewport.YOffset() {
 		o.viewport.SetYOffset(o.highlightStart)
 		return
 	}
-	bodyHeight := o.viewport.Height
+	bodyHeight := o.viewport.Height()
 	if bodyHeight <= 0 {
 		return
 	}
-	if o.highlightEnd > o.viewport.YOffset+bodyHeight {
+	if o.highlightEnd > o.viewport.YOffset()+bodyHeight {
 		offset := o.highlightEnd - bodyHeight
 		if offset < 0 {
 			offset = 0
@@ -419,7 +427,22 @@ func (o *TranscriptOverlay) YOffset() int {
 	if o == nil {
 		return 0
 	}
-	return o.viewport.YOffset
+	return o.viewport.YOffset()
+}
+
+// SetYOffset restores a saved reading position, used when cancelling prompt
+// browsing (Rust transcript_view bookmark restore, #46739).
+func (o *TranscriptOverlay) SetYOffset(offset int) {
+	if o == nil {
+		return
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	o.viewport.SetYOffset(offset)
+	if o.find.active() {
+		o.refreshFindMatches()
+	}
 }
 
 func (o *TranscriptOverlay) AtTop() bool {
@@ -436,9 +459,9 @@ func (o *TranscriptOverlay) ApplyPagerAction(action string) bool {
 	}
 	switch action {
 	case PagerScrollUp:
-		o.viewport.LineUp(1)
+		o.viewport.ScrollUp(1)
 	case PagerScrollDown:
-		o.viewport.LineDown(1)
+		o.viewport.ScrollDown(1)
 	case PagerPageUp:
 		o.viewport.PageUp()
 	case PagerPageDown:
@@ -461,10 +484,10 @@ func (o *TranscriptOverlay) ApplyPagerAction(action string) bool {
 // rendered content height. Go's viewport height is the last rendered body
 // height, while the viewport library's own HalfPage helpers round down.
 func (o *TranscriptOverlay) halfPageRows() int {
-	if o == nil || o.viewport.Height <= 0 {
+	if o == nil || o.viewport.Height() <= 0 {
 		return 0
 	}
-	return (o.viewport.Height + 1) / 2
+	return (o.viewport.Height() + 1) / 2
 }
 
 // SetMouseScrollSpeed applies the resolved `tui.mouse_scroll_speed` (Rust #50209
@@ -487,14 +510,14 @@ func (o *TranscriptOverlay) MouseScrollSpeed() float64 {
 // wheelRows maps one wheel event to the whole rows the pager should move,
 // mirroring Rust `TranscriptView::handle_mouse` (#50209): up scrolls toward
 // earlier output (negative rows), down toward later output.
-func (o *TranscriptOverlay) wheelRows(msg bubbletea.MouseMsg) (int, bool) {
-	if o == nil || msg.Action != bubbletea.MouseActionPress {
+func (o *TranscriptOverlay) wheelRows(msg mousemsg.MouseMsg) (int, bool) {
+	if o == nil || msg.Action != mousemsg.MouseActionPress {
 		return 0, false
 	}
 	switch msg.Button {
-	case bubbletea.MouseButtonWheelUp:
+	case mousemsg.MouseButtonWheelUp:
 		return o.mouseScroll.Rows(-1), true
-	case bubbletea.MouseButtonWheelDown:
+	case mousemsg.MouseButtonWheelDown:
 		return o.mouseScroll.Rows(1), true
 	default:
 		return 0, false
@@ -505,7 +528,7 @@ func (o *TranscriptOverlay) Update(message bubbletea.Msg) bubbletea.Cmd {
 	if o == nil {
 		return nil
 	}
-	if msg, ok := message.(bubbletea.MouseMsg); ok {
+	if msg, ok := message.(mousemsg.MouseMsg); ok {
 		if rows, wheel := o.wheelRows(msg); wheel {
 			// Rust #50209 applies the accumulated rows to the transcript view;
 			// the pager's follow behavior is derived from the new offset.
@@ -521,20 +544,20 @@ func (o *TranscriptOverlay) Update(message bubbletea.Msg) bubbletea.Cmd {
 		}
 	}
 	var cmd bubbletea.Cmd
-	o.viewport, cmd = o.viewport.Update(message)
+	o.viewport, cmd = o.viewport.Update(keymsg.OriginalMessage(mousemsg.OriginalMessage(message)))
 	return cmd
 }
 
 // handleSelectMouse maps left-button drags onto the row/column selection model
 // (Rust transcript_view::input mouse selection). The overlay header occupies
 // screen row 0, so body rows are offset by one.
-func (o *TranscriptOverlay) handleSelectMouse(msg bubbletea.MouseMsg) bool {
+func (o *TranscriptOverlay) handleSelectMouse(msg mousemsg.MouseMsg) bool {
 	if o == nil {
 		return false
 	}
 	switch msg.Action {
-	case bubbletea.MouseActionPress:
-		if msg.Button != bubbletea.MouseButtonLeft {
+	case mousemsg.MouseActionPress:
+		if msg.Button != mousemsg.MouseButtonLeft {
 			return false
 		}
 		point := o.mouseSelectPoint(msg)
@@ -544,6 +567,8 @@ func (o *TranscriptOverlay) handleSelectMouse(msg bubbletea.MouseMsg) bool {
 			o.lastClickAt = time.Time{}
 			o.extendMouseSelection(point)
 			o.dragActive = true
+			o.dragOriginRow = msg.Y
+			o.dragMovedVertically = false
 			o.viewport.SetContent(o.viewContent())
 			return true
 		}
@@ -557,7 +582,7 @@ func (o *TranscriptOverlay) handleSelectMouse(msg bubbletea.MouseMsg) bool {
 			o.selectMode = selectModeState{
 				active:          true,
 				preferredColumn: -1,
-				savedOffset:     o.viewport.YOffset,
+				savedOffset:     o.viewport.YOffset(),
 				savedFollow:     o.viewport.AtBottom(),
 			}
 		}
@@ -571,17 +596,25 @@ func (o *TranscriptOverlay) handleSelectMouse(msg bubbletea.MouseMsg) bool {
 		o.selectMode.originEnd = end
 		o.selectMode.preferredColumn = -1
 		o.dragActive = true
+		o.dragOriginRow = msg.Y
+		o.dragMovedVertically = false
 		o.viewport.SetContent(o.viewContent())
 		return true
-	case bubbletea.MouseActionMotion:
+	case mousemsg.MouseActionMotion:
 		if !o.dragActive {
 			return false
 		}
+		if msg.Y != o.dragOriginRow {
+			o.dragMovedVertically = true
+		}
+		// Rust #47137: only a drag that left its starting row may autoscroll, so
+		// dragging horizontally along an edge row keeps the text under the pointer.
+		o.autoscrollDuringDrag(msg.Y)
 		point := o.mouseSelectPoint(msg)
 		o.extendMouseSelection(point)
 		o.viewport.SetContent(o.viewContent())
 		return true
-	case bubbletea.MouseActionRelease:
+	case mousemsg.MouseActionRelease:
 		if !o.dragActive {
 			return false
 		}
@@ -591,9 +624,32 @@ func (o *TranscriptOverlay) handleSelectMouse(msg bubbletea.MouseMsg) bool {
 	return false
 }
 
+// autoscrollDuringDrag scrolls one row when the pointer sits on the top or
+// bottom body row of an active, vertically moved drag (Rust tick_selection).
+// It reports whether the viewport moved.
+func (o *TranscriptOverlay) autoscrollDuringDrag(pointerRow int) bool {
+	if o == nil || !o.dragActive || !o.dragMovedVertically {
+		return false
+	}
+	before := o.viewport.YOffset()
+	switch {
+	case pointerRow <= 1:
+		o.viewport.ScrollUp(1)
+	case pointerRow >= o.height-1:
+		o.viewport.ScrollDown(1)
+	default:
+		return false
+	}
+	if o.viewport.YOffset() == before {
+		return false
+	}
+	o.viewport.SetContent(o.viewContent())
+	return true
+}
+
 // mouseClickCount counts consecutive presses at the same cell within the
 // gesture window, cycling 1, 2, 3 like Rust `text_selection::click_count`.
-func (o *TranscriptOverlay) mouseClickCount(msg bubbletea.MouseMsg) int {
+func (o *TranscriptOverlay) mouseClickCount(msg mousemsg.MouseMsg) int {
 	now := time.Now()
 	clicks := 1
 	if !o.lastClickAt.IsZero() && now.Sub(o.lastClickAt) < 400*time.Millisecond &&
@@ -626,8 +682,8 @@ func (o *TranscriptOverlay) extendMouseSelection(point selectPoint) {
 	o.selectMode.marked = o.selectMode.anchor != o.selectMode.activeEnd
 }
 
-func (o *TranscriptOverlay) mouseSelectPoint(msg bubbletea.MouseMsg) selectPoint {
-	row := o.viewport.YOffset + msg.Y - 1
+func (o *TranscriptOverlay) mouseSelectPoint(msg mousemsg.MouseMsg) selectPoint {
+	row := o.viewport.YOffset() + msg.Y - 1
 	if row < 0 {
 		row = 0
 	}

@@ -5,9 +5,8 @@ import (
 	"testing"
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 func TestSessionPickerRefreshesFromConnectedBackendLikeRust(t *testing.T) {
@@ -27,7 +26,7 @@ func TestSessionPickerRefreshesFromConnectedBackendLikeRust(t *testing.T) {
 		},
 	})
 	typeText(t, model, "/resume")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	if model.modal == nil || model.modal.sessionPicker == nil {
 		t.Fatalf("resume picker not open: %#v", model.modal)
 	}
@@ -65,7 +64,7 @@ func TestSessionPickerOpensForLiveListingWhenSnapshotIsEmptyLikeRust(t *testing.
 		},
 	})
 	typeText(t, model, "/resume")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	if model.modal == nil || model.modal.sessionPicker == nil {
 		t.Fatalf("picker should open while the live listing loads: %#v", model.modal)
 	}
@@ -88,7 +87,7 @@ func TestSessionPickerIgnoresRefreshAfterCloseLikeRust(t *testing.T) {
 		},
 	})
 	typeText(t, model, "/resume")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	model.modal = nil
 	model.Update(SessionPickerRefreshMsg{
 		PickerID: "session-picker-resume",

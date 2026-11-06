@@ -4,7 +4,7 @@
 package overlay
 
 import (
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 )
 
 // =============================================================================

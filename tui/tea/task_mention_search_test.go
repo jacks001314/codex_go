@@ -1,9 +1,8 @@
 package tea
 
 import (
+	keymsg "codex_go/tui/keymsg"
 	"testing"
-
-	bubbletea "github.com/charmbracelet/bubbletea"
 
 	codextui "codex_go/tui"
 	"codex_go/tui/bottom_pane/mentions_v2"
@@ -74,7 +73,7 @@ func TestModelTaskMentionSearchPopulatesTaskCandidatesLikeRust(t *testing.T) {
 	}
 
 	// Backspacing to an empty query clears the task rows without searching.
-	_, cmd = model.Update(key(bubbletea.KeyBackspace))
+	_, cmd = model.Update(key(keymsg.KeyBackspace))
 	runTeaCmd(t, model, cmd)
 	if len(queries) != 1 {
 		t.Fatalf("empty query issued a search: %#v", queries)

@@ -6,10 +6,11 @@ import (
 	"strings"
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	"codex_go/appserver"
 	"codex_go/auth"
+	"codex_go/tui/keymsg"
 )
 
 type bedrockView int
@@ -206,8 +207,8 @@ func (s *bedrockState) selectMethod(method bedrockMethod) (bedrockCredential, st
 	return bedrockCredential{}, "", false
 }
 
-func (s *bedrockState) handleKey(message bubbletea.KeyMsg) (back bool, credential *bedrockCredential, region string) {
-	if message.Type == bubbletea.KeyEsc {
+func (s *bedrockState) handleKey(message keymsg.KeyMsg) (back bool, credential *bedrockCredential, region string) {
+	if message.Type == keymsg.KeyEsc {
 		if s.view == bedrockViewDiscovering || s.view == bedrockViewMethodsDetected {
 			return true, nil, ""
 		}
@@ -219,13 +220,13 @@ func (s *bedrockState) handleKey(message bubbletea.KeyMsg) (back bool, credentia
 		return false, nil, ""
 	}
 	if s.view == bedrockViewGovCloudWarning {
-		if message.Type == bubbletea.KeyEnter {
+		if message.Type == keymsg.KeyEnter {
 			return false, &bedrockCredential{}, ""
 		}
-		if message.Type == bubbletea.KeyUp && s.govCloudScroll > 0 {
+		if message.Type == keymsg.KeyUp && s.govCloudScroll > 0 {
 			s.govCloudScroll--
 		}
-		if message.Type == bubbletea.KeyDown {
+		if message.Type == keymsg.KeyDown {
 			s.govCloudScroll++
 		}
 		return false, nil, ""
@@ -236,19 +237,19 @@ func (s *bedrockState) handleKey(message bubbletea.KeyMsg) (back bool, credentia
 			return false, nil, ""
 		}
 		switch message.Type {
-		case bubbletea.KeyUp:
+		case keymsg.KeyUp:
 			s.highlighted = (s.highlighted + len(methods) - 1) % len(methods)
 			return false, nil, ""
-		case bubbletea.KeyDown:
+		case keymsg.KeyDown:
 			s.highlighted = (s.highlighted + 1) % len(methods)
 			return false, nil, ""
-		case bubbletea.KeyEnter:
+		case keymsg.KeyEnter:
 			selected, selectedRegion, configure := s.selectMethod(methods[s.highlighted])
 			if configure {
 				return false, &selected, selectedRegion
 			}
 			return false, nil, ""
-		case bubbletea.KeyRunes:
+		case keymsg.KeyRunes:
 			if len(message.Runes) == 1 && message.Runes[0] >= '1' && message.Runes[0] <= '9' {
 				index := int(message.Runes[0] - '1')
 				if index < len(methods) {
@@ -263,15 +264,15 @@ func (s *bedrockState) handleKey(message bubbletea.KeyMsg) (back bool, credentia
 	}
 	if s.view == bedrockViewAccessKeyEntry {
 		switch message.Type {
-		case bubbletea.KeyUp, bubbletea.KeyShiftTab:
+		case keymsg.KeyUp, keymsg.KeyShiftTab:
 			s.selectedField = (s.selectedField + len(s.accessKeys) - 1) % len(s.accessKeys)
 			return false, nil, ""
-		case bubbletea.KeyDown, bubbletea.KeyTab:
+		case keymsg.KeyDown, keymsg.KeyTab:
 			s.selectedField = (s.selectedField + 1) % len(s.accessKeys)
 			return false, nil, ""
 		}
 	}
-	if message.Type == bubbletea.KeyEnter {
+	if message.Type == keymsg.KeyEnter {
 		selected, selectedRegion, configure := s.confirmInput()
 		if configure {
 			return false, &selected, selectedRegion
@@ -280,12 +281,12 @@ func (s *bedrockState) handleKey(message bubbletea.KeyMsg) (back bool, credentia
 	}
 	if input := s.activeInput(); input != nil {
 		switch message.Type {
-		case bubbletea.KeyBackspace, bubbletea.KeyDelete:
+		case keymsg.KeyBackspace, keymsg.KeyDelete:
 			runes := []rune(*input)
 			if len(runes) > 0 {
 				*input = string(runes[:len(runes)-1])
 			}
-		case bubbletea.KeyRunes:
+		case keymsg.KeyRunes:
 			if !message.Alt && len(message.Runes) > 0 {
 				value := string(message.Runes)
 				if message.Paste {
@@ -542,7 +543,7 @@ func (m *authFlowModel) handleBedrockDiscovered(message bedrockDiscoveredMsg) (b
 	return m, nil
 }
 
-func (m *authFlowModel) handleBedrockKey(message bubbletea.KeyMsg) (bubbletea.Model, bubbletea.Cmd) {
+func (m *authFlowModel) handleBedrockKey(message keymsg.KeyMsg) (bubbletea.Model, bubbletea.Cmd) {
 	if m.bedrock == nil {
 		return m, nil
 	}

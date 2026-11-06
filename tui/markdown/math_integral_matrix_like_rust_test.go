@@ -182,11 +182,11 @@ func TestMathSpatialLayoutsRequireWidthLikeRust(t *testing.T) {
 		if len(wide) != 1 {
 			t.Fatalf("wide render of %q produced %#v, want one placeholder", source, wide)
 		}
-		if wide["8MATHPROT0END"] == source {
+		if wide[mathPlaceholder(0)] == source {
 			t.Fatalf("wide render of %q restored the source instead of the layout", source)
 		}
 		narrow, _ := protectMathSpans(source, 10)
-		if narrow["8MATHPROT0END"] != source {
+		if narrow[mathPlaceholder(0)] != source {
 			t.Fatalf("narrow render of %q produced %#v, want the verbatim source", source, narrow)
 		}
 	}

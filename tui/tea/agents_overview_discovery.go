@@ -1,6 +1,6 @@
 package tea
 
-import bubbletea "github.com/charmbracelet/bubbletea"
+import bubbletea "charm.land/bubbletea/v2"
 
 // History pagination for the command center (Rust #49106): the "Show more" row
 // publishes the next page of retained tasks and refreshes their metadata.

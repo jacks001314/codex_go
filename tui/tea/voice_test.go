@@ -1,12 +1,13 @@
 package tea
 
 import (
+	keymsg "codex_go/tui/keymsg"
 	"errors"
 	"strings"
 	"testing"
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	"codex_go/metrics"
 	"codex_go/protocol"
@@ -207,14 +208,14 @@ func TestModelVoiceStripRespectsReducedMotionLikeRust(t *testing.T) {
 	model.VoiceConversation.MarkVoiceWebRTCConnected()
 	model.onVoicePeaks = func() (uint16, uint16) { return chatwidget.VoiceMeterFullScale, 0 }
 
-	before := model.View()
+	before := model.viewString()
 	for frame := 0; frame < chatwidget.VoiceMeterHistoryCapacity; frame++ {
 		model.sampleVoicePeaks()
 	}
 	if len(model.audioMeterHistory) != 0 {
 		t.Fatalf("reduced motion recorded meter frames: %#v", model.audioMeterHistory)
 	}
-	if after := model.View(); after != before {
+	if after := model.viewString(); after != before {
 		t.Fatalf("a meter-only sample repainted the frame under reduced motion:\n%s", after)
 	}
 	lines := model.voiceStripLines(80)
@@ -366,7 +367,7 @@ func TestModelVoiceMuteShortcutTogglesRunningSession(t *testing.T) {
 	model.VoiceConversation.MarkVoiceBackendStarted()
 	model.VoiceConversation.MarkVoiceWebRTCConnected()
 
-	model.Update(key(bubbletea.KeyF9))
+	model.Update(key(keymsg.KeyF9))
 	if !model.VoiceConversation.MicrophoneMuted {
 		t.Fatal("the shortcut did not mute the microphone")
 	}
@@ -377,7 +378,7 @@ func TestModelVoiceMuteShortcutTogglesRunningSession(t *testing.T) {
 		t.Fatalf("notice = %q", model.notice)
 	}
 
-	model.Update(key(bubbletea.KeyF9))
+	model.Update(key(keymsg.KeyF9))
 	if model.VoiceConversation.MicrophoneMuted {
 		t.Fatal("the shortcut did not unmute the microphone")
 	}
@@ -393,7 +394,7 @@ func TestModelVoiceMuteShortcutIgnoresInactiveSession(t *testing.T) {
 		applied++
 		return nil
 	}
-	model.Update(key(bubbletea.KeyF9))
+	model.Update(key(keymsg.KeyF9))
 	if applied != 0 {
 		t.Fatalf("an inactive session applied %d microphone states", applied)
 	}
@@ -650,7 +651,7 @@ func TestModelVoiceToggleKeyRunsTheVoiceHandlerLikeRust(t *testing.T) {
 	}
 
 	fromKey := newModel(nil)
-	fromKey.Update(bubbletea.KeyMsg{Type: bubbletea.KeyF8})
+	fromKey.Update(keymsg.KeyMsg{Type: keymsg.KeyF8})
 	fromCommand := newModel(nil)
 	fromCommand.applyVoiceCommand("")
 
@@ -682,11 +683,11 @@ func TestModelVoiceToggleKeyFollowsKeymapLikeRust(t *testing.T) {
 		t.Fatal(err)
 	}
 	model := newModel(remapped)
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyF8})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyF8})
 	if model.notice != "" || !model.VoiceConversation.Inactive() {
 		t.Fatalf("remapped action still ran on F8: notice=%q phase=%q", model.notice, model.VoiceConversation.Phase)
 	}
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyF9})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyF9})
 	if model.notice != fromCommand.notice {
 		t.Fatalf("f9 notice = %q, want %q", model.notice, fromCommand.notice)
 	}
@@ -696,7 +697,7 @@ func TestModelVoiceToggleKeyFollowsKeymapLikeRust(t *testing.T) {
 		t.Fatal(err)
 	}
 	disabled := newModel(unbound)
-	disabled.Update(bubbletea.KeyMsg{Type: bubbletea.KeyF8})
+	disabled.Update(keymsg.KeyMsg{Type: keymsg.KeyF8})
 	if disabled.notice != "" || !disabled.VoiceConversation.Inactive() {
 		t.Fatalf("unbound action still ran on F8: notice=%q phase=%q", disabled.notice, disabled.VoiceConversation.Phase)
 	}
@@ -706,7 +707,7 @@ func TestModelVoiceToggleKeyFollowsKeymapLikeRust(t *testing.T) {
 		t.Fatal(err)
 	}
 	shadowModel := newModel(shadowed)
-	shadowModel.Update(bubbletea.KeyMsg{Type: bubbletea.KeyF8})
+	shadowModel.Update(keymsg.KeyMsg{Type: keymsg.KeyF8})
 	// The user's F8 binding wins: the voice handler must not run, so the notice
 	// is whatever the shadowing action reported.
 	if !shadowModel.VoiceConversation.Inactive() || shadowModel.notice == fromCommand.notice {

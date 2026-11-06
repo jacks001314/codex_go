@@ -5,11 +5,12 @@ import (
 	"testing"
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	"codex_go/config"
 	codextui "codex_go/tui"
 	bottompane "codex_go/tui/bottom_pane"
+	"codex_go/tui/keymsg"
 	"codex_go/utils"
 )
 
@@ -39,7 +40,7 @@ func TestQuickDialsSlashCommandOpensHUDLikeRust(t *testing.T) {
 	if !model.quickDialMenu {
 		t.Fatal("/presets did not open the quick-dial HUD")
 	}
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	for _, want := range []string{
 		"Presets",
 		"1 · Greeting",
@@ -119,7 +120,7 @@ func TestQuickDialMenuEnterKeepsHudOpenLikeRust(t *testing.T) {
 	})
 	typeText(t, model, "keep this draft")
 	model.openQuickDialMenu()
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if !model.quickDialMenu {
 		t.Fatal("Enter dismissed the preset HUD")
 	}
@@ -189,7 +190,7 @@ func TestQuickDialPasteDismissesHudLikeRust(t *testing.T) {
 		},
 	})
 	model.openQuickDialMenu()
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{'1'}, Paste: true})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{'1'}, Paste: true})
 	if model.quickDialMenu {
 		t.Fatal("paste left the preset HUD open")
 	}
@@ -401,7 +402,7 @@ func TestQuickDialNewSlotWritesConfigAndUpdatesLivePresetsLikeRust(t *testing.T)
 	if model.modal == nil || model.modal.customPrompt == nil {
 		t.Fatalf("new preset did not open the editor: %#v", model.modal)
 	}
-	_, cmd = model.Update(key(bubbletea.KeyEnter))
+	_, cmd = model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 	if model.modal == nil || model.modal.id != quickDialSavePickerID {
 		t.Fatalf("save picker modal = %#v", model.modal)
@@ -409,7 +410,7 @@ func TestQuickDialNewSlotWritesConfigAndUpdatesLivePresetsLikeRust(t *testing.T)
 	if model.modal.selected != 0 {
 		t.Fatalf("save picker selected slot = %d, want first empty slot", model.modal.selected)
 	}
-	_, cmd = model.Update(key(bubbletea.KeyEnter))
+	_, cmd = model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 
 	if len(edits) != 1 {
@@ -480,12 +481,12 @@ func TestQuickDialDeletePickerConfirmsAndClearsSlotLikeRust(t *testing.T) {
 	if model.modal == nil || model.modal.id != quickDialDeleteConfirmID {
 		t.Fatalf("delete confirmation modal = %#v", model.modal)
 	}
-	_, cmd = model.Update(key(bubbletea.KeyEnter))
+	_, cmd = model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 	if model.modal == nil || model.modal.id != quickDialDeleteConfirmID {
 		t.Fatal("first confirmation press should only arm the delete")
 	}
-	_, cmd = model.Update(key(bubbletea.KeyEnter))
+	_, cmd = model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 
 	if len(edits) != 1 || edits[0].KeyPath != "tui.presets.1" || edits[0].Value != nil {
@@ -530,17 +531,17 @@ func TestQuickDialEditPickerReopensEditorAndPreservesLabelLikeRust(t *testing.T)
 	if model.modal.customPrompt.Text != "old prompt" || model.modal.title != "Edit preset 1" {
 		t.Fatalf("editor text/title = %q/%q", model.modal.customPrompt.Text, model.modal.title)
 	}
-	_, cmd = model.Update(key(bubbletea.KeyEnter))
+	_, cmd = model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 	if model.modal == nil || model.modal.id != quickDialReplaceConfirmID {
 		t.Fatalf("replace confirmation modal = %#v", model.modal)
 	}
-	_, cmd = model.Update(key(bubbletea.KeyEnter))
+	_, cmd = model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 	if model.modal == nil || model.modal.id != quickDialReplaceConfirmID {
 		t.Fatal("first replacement confirmation press should only arm the write")
 	}
-	_, cmd = model.Update(key(bubbletea.KeyEnter))
+	_, cmd = model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 	if len(edits) != 1 || edits[0].KeyPath != "tui.presets.1" {
 		t.Fatalf("edit writes = %#v", edits)
@@ -572,20 +573,20 @@ func TestQuickDialSavePickerReplacesOccupiedSlotAfterConfirmationLikeRust(t *tes
 	model.openQuickDialMenu()
 	_, cmd := model.Update(runes("n"))
 	runTeaCmd(t, model, cmd)
-	_, cmd = model.Update(key(bubbletea.KeyEnter))
+	_, cmd = model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 	if model.modal == nil || model.modal.id != quickDialSavePickerID {
 		t.Fatalf("save picker modal = %#v", model.modal)
 	}
 	model.modal.selected = 0
-	_, cmd = model.Update(key(bubbletea.KeyEnter))
+	_, cmd = model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 	if model.modal == nil || model.modal.id != quickDialReplaceConfirmID {
 		t.Fatalf("occupied slot did not ask for replacement confirmation: %#v", model.modal)
 	}
-	_, cmd = model.Update(key(bubbletea.KeyEnter))
+	_, cmd = model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
-	_, cmd = model.Update(key(bubbletea.KeyEnter))
+	_, cmd = model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 	if len(edits) != 1 || edits[0].KeyPath != "tui.presets.1" {
 		t.Fatalf("replace writes = %#v", edits)

@@ -8,7 +8,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/charmbracelet/bubbles/textarea"
+	"charm.land/bubbles/v2/textarea"
 
 	bottompane "codex_go/tui/bottom_pane"
 )
@@ -51,6 +51,16 @@ func (m *Model) insertComposerPaste(pasted string) {
 		m.insertLargeComposerPaste(content, charCount)
 		if blockquote {
 			m.composer.InsertString("\n\n")
+		}
+		return
+	}
+	// Rust #57774: a pasted single path that names a regular image file becomes
+	// an attachment, and the caret keeps a separating space after the placeholder.
+	if !blockquote && utf8.RuneCountInString(pasted) > 1 && m.handlePasteImagePath(pasted) {
+		m.composer.InsertString(" ")
+		m.syncComposerPrefixAfterEdit(composerBefore)
+		if m.modal == nil {
+			m.recordComposerActivityAt(m.currentTime())
 		}
 		return
 	}

@@ -5,10 +5,11 @@ import (
 	"strings"
 	"unicode"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
 	chatwidget "codex_go/tui/chatwidget"
+	"codex_go/tui/keymsg"
 )
 
 const keymapCaptureViewID = "keymap-capture"
@@ -189,11 +190,11 @@ func (m *Model) openKeymapCapture(context string, action string, intent keymapCa
 	m.notice = ""
 }
 
-func (m *Model) updateKeymapCapture(message bubbletea.KeyMsg) bubbletea.Cmd {
+func (m *Model) updateKeymapCapture(message keymsg.KeyMsg) bubbletea.Cmd {
 	if m == nil || m.modal == nil || m.modal.keymapCapture == nil {
 		return nil
 	}
-	if message.Type == bubbletea.KeyEsc || message.Type == bubbletea.KeyCtrlC {
+	if message.Type == keymsg.KeyEsc || message.Type == keymsg.KeyCtrlC {
 		m.openKeymapActionMenu(m.modal.keymapCapture.Context, m.modal.keymapCapture.Action)
 		return nil
 	}
@@ -332,16 +333,43 @@ func (m *Model) keyMatches(context string, action string, keySpec string) bool {
 
 // KeySpecFromKeyMsg normalizes a key event into the canonical binding spec
 // form (`ctrl-f`, `alt-enter`, `f`, ...) used by the keymap tables.
-func KeySpecFromKeyMsg(message bubbletea.KeyMsg) string {
+func KeySpecFromKeyMsg(message keymsg.KeyMsg) string {
 	return keySpecFromKeyMsg(message)
 }
 
-func keySpecFromKeyMsg(message bubbletea.KeyMsg) string {
-	key := bubbletea.Key(message)
+func keySpecFromKeyMsg(message keymsg.KeyMsg) string {
+	spec := baseKeySpecFromKeyMsg(message)
+	key := keymsg.Key(message)
+	// Bubble Tea v2 carries the super/cmd modifier, which the keymap runtime can
+	// now route: Rust honours `super` bindings end to end (#53754).
+	if spec == "" || !key.Super {
+		return spec
+	}
+	return addSuperModifier(spec)
+}
+
+// addSuperModifier inserts `super` in front of each stroke's key name, after
+// the other modifiers (ctrl-alt-shift-super order).
+func addSuperModifier(spec string) string {
+	strokes := strings.Split(spec, " ")
+	for index, stroke := range strokes {
+		if stroke == "" || stroke == "leader" {
+			continue
+		}
+		parts := strings.Split(stroke, "-")
+		last := parts[len(parts)-1]
+		parts = append(parts[:len(parts)-1], "super", last)
+		strokes[index] = strings.Join(parts, "-")
+	}
+	return strings.Join(strokes, " ")
+}
+
+func baseKeySpecFromKeyMsg(message keymsg.KeyMsg) string {
+	key := keymsg.Key(message)
 	// Ctrl+/ is commonly encoded as the C0 unit-separator byte (0x1f).
 	// Bubble Tea exposes that byte as Ctrl+_, while Rust/crossterm normalizes
 	// the same byte to Ctrl+7 for Ctrl+/ compatibility.
-	if key.Type == bubbletea.KeyCtrlUnderscore && !key.Alt {
+	if key.Type == keymsg.KeyCtrlUnderscore && !key.Alt {
 		return "ctrl-7"
 	}
 	// Ctrl+Space is delivered as the NUL byte/character. On the ANSI byte path
@@ -352,13 +380,13 @@ func keySpecFromKeyMsg(message bubbletea.KeyMsg) string {
 	// (tui/src/key_hint.rs: `0x00 => Some(' ')`), so both shapes must resolve to
 	// `ctrl-space` instead of the `ctrl-@` spelling that Key.String() would
 	// otherwise produce. Ctrl+/ is the 0x1f byte handled above, not this path.
-	if key.Type == bubbletea.KeyCtrlAt && !key.Alt {
+	if key.Type == keymsg.KeyCtrlAt && !key.Alt {
 		return "ctrl-space"
 	}
-	if key.Type == bubbletea.KeyRunes && len(key.Runes) == 1 && key.Runes[0] == 0 && !key.Alt && !key.Paste {
+	if key.Type == keymsg.KeyRunes && len(key.Runes) == 1 && key.Runes[0] == 0 && !key.Alt && !key.Paste {
 		return "ctrl-space"
 	}
-	if key.Type == bubbletea.KeyRunes {
+	if key.Type == keymsg.KeyRunes {
 		if len(key.Runes) != 1 || key.Paste {
 			return ""
 		}

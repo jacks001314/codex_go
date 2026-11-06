@@ -5,11 +5,10 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	"codex_go/appserver"
 	codextui "codex_go/tui"
 	"codex_go/tui/chatwidget"
+	"codex_go/tui/keymsg"
 )
 
 func serverPermissionShortcutModel(t *testing.T, selections *[]PermissionSelection) *Model {
@@ -49,7 +48,7 @@ func TestModelPermissionShortcutWaitsForServerConfirmationLikeRust(t *testing.T)
 	var selections []PermissionSelection
 	model := serverPermissionShortcutModel(t, &selections)
 
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyF7})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyF7})
 	if len(selections) != 1 {
 		t.Fatalf("server updates = %#v, want one shortcut selection", selections)
 	}
@@ -107,7 +106,7 @@ func TestModelPermissionShortcutRejectionsLikeRust(t *testing.T) {
 				return tc.err
 			}
 
-			model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyF7})
+			model.Update(keymsg.KeyMsg{Type: keymsg.KeyF7})
 			if model.State.Sandbox != chatwidget.WorkspaceProfile {
 				t.Fatalf("sandbox = %q, want the confirmed profile after a rejection", model.State.Sandbox)
 			}

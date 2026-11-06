@@ -4,9 +4,10 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 func TestClearCommandClearsTerminalAndStartsFreshSessionLikeRust(t *testing.T) {
@@ -34,7 +35,7 @@ func TestClearCommandClearsTerminalAndStartsFreshSessionLikeRust(t *testing.T) {
 			model.overlayAltScreen = testCase.overlayActive
 
 			typeText(t, model, "/clear")
-			model.Update(key(bubbletea.KeyEnter))
+			model.Update(key(keymsg.KeyEnter))
 
 			if len(sequences) != 1 || sequences[0] != testCase.want {
 				t.Fatalf("terminal clear sequences = %#v, want %q", sequences, testCase.want)
@@ -43,7 +44,7 @@ func TestClearCommandClearsTerminalAndStartsFreshSessionLikeRust(t *testing.T) {
 				t.Fatalf("clear state = thread %q messages %d status %q", state.ThreadID, len(state.Messages), state.Status)
 			}
 			// Rust #48562 re-inserts the compact borderless header after /clear.
-			if view := model.View(); !strings.Contains(view, ">_ OpenAI Codex (vdev)") || strings.Contains(view, "No messages yet.") {
+			if view := model.viewString(); !strings.Contains(view, ">_ OpenAI Codex (vdev)") || strings.Contains(view, "No messages yet.") {
 				t.Fatalf("View() missing fresh session header:\n%s", view)
 			}
 		})
@@ -63,7 +64,7 @@ func TestNewCommandDoesNotClearTerminalLikeRust(t *testing.T) {
 	})
 
 	typeText(t, model, "/new")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 
 	if len(sequences) != 0 {
 		t.Fatalf("terminal clear sequences = %#v, want none", sequences)
@@ -88,7 +89,7 @@ func TestCtrlLClearsTerminalAndPreservesTranscriptLikeRust(t *testing.T) {
 		t.Fatal("ctrl-l is not bound to global clear_terminal")
 	}
 	typeText(t, model, "unsent draft")
-	model.Update(key(bubbletea.KeyCtrlL))
+	model.Update(key(keymsg.KeyCtrlL))
 
 	if len(sequences) != 1 || sequences[0] != "\x1b[2J\x1b[3J\x1b[H" {
 		t.Fatalf("terminal clear sequences = %#v", sequences)
@@ -99,8 +100,8 @@ func TestCtrlLClearsTerminalAndPreservesTranscriptLikeRust(t *testing.T) {
 	if got := model.composerText(); got != "unsent draft" {
 		t.Fatalf("ctrl-l cleared the draft: %q", got)
 	}
-	if !strings.Contains(model.View(), "old transcript") {
-		t.Fatalf("ctrl-l dropped the transcript:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "old transcript") {
+		t.Fatalf("ctrl-l dropped the transcript:\n%s", model.viewString())
 	}
 }
 
@@ -119,7 +120,7 @@ func TestClearCommandRejectsPendingPermissionRootSwitchLikeRust(t *testing.T) {
 	model.pendingServerProfile = "trusted"
 
 	typeText(t, model, "/clear")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 
 	if len(sequences) != 0 {
 		t.Fatalf("terminal clear sequences = %#v, want none", sequences)
@@ -127,7 +128,7 @@ func TestClearCommandRejectsPendingPermissionRootSwitchLikeRust(t *testing.T) {
 	if state.ThreadID != "thread-before-clear" || len(state.Messages) < 1 {
 		t.Fatalf("clear changed thread state while permissions were pending: thread %q messages %d", state.ThreadID, len(state.Messages))
 	}
-	if !strings.Contains(model.View(), "Wait for permissions to update before switching tasks.") {
-		t.Fatalf("View() missing pending-permission error:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Wait for permissions to update before switching tasks.") {
+		t.Fatalf("View() missing pending-permission error:\n%s", model.viewString())
 	}
 }

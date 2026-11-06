@@ -3,9 +3,8 @@ package tea
 import (
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 func newSessionCheckoutModel(t *testing.T, options Options) *Model {
@@ -36,7 +35,7 @@ func TestNewCommandShowsCheckoutPickerLikeRust(t *testing.T) {
 	})
 
 	typeText(t, model, "/new my thread")
-	if _, cmd := model.Update(key(bubbletea.KeyEnter)); cmd != nil {
+	if _, cmd := model.Update(key(keymsg.KeyEnter)); cmd != nil {
 		t.Fatalf("/new should wait for a checkout choice, got %v", cmd())
 	}
 	if model.modal == nil || model.modal.kind != ModalKindPicker || model.modal.id != sessionCheckoutModalID {
@@ -58,7 +57,7 @@ func TestNewCommandShowsCheckoutPickerLikeRust(t *testing.T) {
 		t.Fatalf("create option = %#v", options[1])
 	}
 
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if model.modal != nil {
 		t.Fatalf("choosing the current worktree must dismiss the picker: %#v", model.modal)
 	}
@@ -88,15 +87,15 @@ func TestForkCommandCheckoutPickerCreatesNamedWorktreeLikeRust(t *testing.T) {
 	})
 
 	typeText(t, model, "/fork named-fork")
-	if _, cmd := model.Update(key(bubbletea.KeyEnter)); cmd != nil {
+	if _, cmd := model.Update(key(keymsg.KeyEnter)); cmd != nil {
 		t.Fatalf("/fork should wait for a checkout choice, got %v", cmd())
 	}
 	if model.modal == nil || model.modal.title != "Where should the forked conversation run?" {
 		t.Fatalf("checkout picker not open: %#v", model.modal)
 	}
 
-	model.Update(key(bubbletea.KeyDown))
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyDown))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 	if len(calls) != 1 || calls[0].mode != managedWorktreeModeFork || calls[0].name != "named-fork" {
 		t.Fatalf("worktree creation calls = %#v", calls)
@@ -115,7 +114,7 @@ func TestCheckoutPickerFallsBackWhenWorktreesUnavailable(t *testing.T) {
 	state.CWD = `D:\repo`
 
 	typeText(t, model, "/new direct")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if model.modal != nil {
 		t.Fatalf("unavailable worktrees must not open the picker: %#v", model.modal)
 	}

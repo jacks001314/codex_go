@@ -3,9 +3,10 @@ package tea
 import (
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 func TestModelCtrlCOpensRunningTaskExitMenuInDaemonSession(t *testing.T) {
@@ -13,7 +14,7 @@ func TestModelCtrlCOpensRunningTaskExitMenuInDaemonSession(t *testing.T) {
 	state.SetStatus("running")
 	model := NewModel(state, Options{LocalDaemonSession: true, OnInterrupt: func() bubbletea.Cmd { return nil }})
 
-	_, cmd := model.Update(key(bubbletea.KeyCtrlC))
+	_, cmd := model.Update(key(keymsg.KeyCtrlC))
 	if cmd != nil {
 		t.Fatalf("Ctrl-C during running task in daemon session should open a menu, got cmd %#v", cmd)
 	}
@@ -34,7 +35,7 @@ func TestModelCtrlCKeepsInterruptWithoutDaemonSession(t *testing.T) {
 		return nil
 	}})
 
-	_, _ = model.Update(key(bubbletea.KeyCtrlC))
+	_, _ = model.Update(key(keymsg.KeyCtrlC))
 	if model.modal != nil {
 		t.Fatalf("modal = %#v, want direct interrupt outside daemon session", model.modal)
 	}

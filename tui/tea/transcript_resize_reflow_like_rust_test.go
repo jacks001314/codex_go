@@ -5,7 +5,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
 	"codex_go/utils"
@@ -17,15 +17,15 @@ import (
 // re-renders without changing that revision.
 func TestTranscriptResizeReflowsWithoutUnseenActivityLikeRust(t *testing.T) {
 	model := scrollableTranscript(t)
-	model.View()
+	model.viewString()
 	model.activityFollow = false
 	model.transcript.SetYOffset(2)
-	model.View()
+	model.viewString()
 	model.transcriptUnseenActivity = false
 
 	long := strings.Repeat("streamed answer words ", 8)
 	model.State.AddMessage(codextui.RoleAssistant, long)
-	model.View()
+	model.viewString()
 	if !model.transcriptUnseenActivity {
 		t.Fatal("new output while paused did not report unseen activity")
 	}
@@ -34,7 +34,7 @@ func TestTranscriptResizeReflowsWithoutUnseenActivityLikeRust(t *testing.T) {
 	model.transcriptUnseenActivity = false
 
 	model.Update(bubbletea.WindowSizeMsg{Width: 40, Height: 10})
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if model.transcriptUnseenActivity {
 		t.Fatalf("a resize-only reflow reported unseen activity:\n%s", view)
 	}

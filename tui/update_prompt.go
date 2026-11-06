@@ -1,11 +1,13 @@
 package tui
 
 import (
+	keymsg "codex_go/tui/keymsg"
+	mousemsg "codex_go/tui/mousemsg"
 	"context"
 	"io"
 	"strings"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 )
 
 // Rust parity: codex-rs/tui/src/update_prompt.rs.
@@ -167,14 +169,11 @@ func RunUpdatePrompt(ctx context.Context, screen *UpdatePromptScreen, input io.R
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	model := &updatePromptProgram{screen: screen, width: 80}
+	model := &updatePromptProgram{screen: screen, width: 80, noAltScreen: noAltScreen}
 	options := []bubbletea.ProgramOption{
 		bubbletea.WithInput(input),
 		bubbletea.WithOutput(output),
 		bubbletea.WithContext(ctx),
-	}
-	if !noAltScreen {
-		options = append(options, bubbletea.WithAltScreen())
 	}
 	if _, err := bubbletea.NewProgram(model, options...).Run(); err != nil {
 		return "", err
@@ -186,8 +185,9 @@ func RunUpdatePrompt(ctx context.Context, screen *UpdatePromptScreen, input io.R
 }
 
 type updatePromptProgram struct {
-	screen *UpdatePromptScreen
-	width  int
+	noAltScreen bool
+	screen      *UpdatePromptScreen
+	width       int
 }
 
 func (m *updatePromptProgram) Init() bubbletea.Cmd {
@@ -195,10 +195,15 @@ func (m *updatePromptProgram) Init() bubbletea.Cmd {
 }
 
 func (m *updatePromptProgram) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
+	if key, ok := keymsg.FromTea(message); ok {
+		message = key
+	} else if mouse, ok := mousemsg.FromTea(message); ok {
+		message = mouse
+	}
 	switch value := message.(type) {
 	case bubbletea.WindowSizeMsg:
 		m.width = value.Width
-	case bubbletea.KeyMsg:
+	case keymsg.KeyMsg:
 		m.screen.HandleKey(value.String())
 		if m.screen.IsDone() {
 			return m, bubbletea.Quit
@@ -207,7 +212,13 @@ func (m *updatePromptProgram) Update(message bubbletea.Msg) (bubbletea.Model, bu
 	return m, nil
 }
 
-func (m *updatePromptProgram) View() string {
+func (m *updatePromptProgram) View() bubbletea.View {
+	v := bubbletea.NewView(m.viewString())
+	v.AltScreen = !m.noAltScreen
+	return v
+}
+
+func (m *updatePromptProgram) viewString() string {
 	return strings.Join(m.screen.Rows(m.width), "\n") + "\n"
 }
 

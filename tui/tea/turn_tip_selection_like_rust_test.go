@@ -1,11 +1,13 @@
 package tea
 
 import (
+	keymsg "codex_go/tui/keymsg"
+	mousemsg "codex_go/tui/mousemsg"
 	"strings"
 	"testing"
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	"codex_go/protocol"
 	codextui "codex_go/tui"
@@ -30,7 +32,7 @@ func newWorkingTipSelectionModel(t *testing.T) (*Model, *string) {
 	model.now = func() time.Time { return base }
 	model.Update(ThreadEventMsg{Event: protocol.TurnStarted()})
 	model.now = func() time.Time { return base.Add(turnTipWorkingDelay + time.Second) }
-	model.View()
+	model.viewString()
 	return model, &copied
 }
 
@@ -57,7 +59,7 @@ func newCompletionTipSelectionModel(t *testing.T) (*Model, *string) {
 		}})
 		model.Update(ThreadEventMsg{Event: protocol.TurnCompletedWithID(protocol.Usage{}, turnID)})
 	}
-	model.View()
+	model.viewString()
 	return model, &copied
 }
 
@@ -73,11 +75,11 @@ func dragTurnTipSelection(t *testing.T, model *Model, kind renderedRegionKind) b
 		t.Fatalf("tip row missing its label: %q", line)
 	}
 	end := start + len("Tip") - 1
-	_, _ = model.Update(bubbletea.MouseMsg{
-		X: start, Y: region.y, Action: bubbletea.MouseActionPress, Button: bubbletea.MouseButtonLeft,
+	_, _ = model.Update(mousemsg.MouseMsg{
+		X: start, Y: region.y, Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonLeft,
 	})
-	_, cmd := model.Update(bubbletea.MouseMsg{
-		X: end, Y: region.y, Action: bubbletea.MouseActionRelease, Button: bubbletea.MouseButtonLeft,
+	_, cmd := model.Update(mousemsg.MouseMsg{
+		X: end, Y: region.y, Action: mousemsg.MouseActionRelease, Button: mousemsg.MouseButtonLeft,
 	})
 	return cmd
 }
@@ -98,14 +100,14 @@ func TestWorkingTurnTipSelectionCopiesLikeRust(t *testing.T) {
 	if got := model.composer.Value(); got != "" {
 		t.Fatalf("composer draft = %q, want untouched", got)
 	}
-	view := model.View()
+	view := model.viewString()
 	if !strings.Contains(view, "\x1b[7m") {
 		t.Fatal("selected working tip was not highlighted")
 	}
 	if !strings.Contains(utils.StripANSI(view), "Selecting text \u00b7 esc cancel") {
 		t.Fatalf("selection hint missing:\n%s", utils.StripANSI(view))
 	}
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEsc})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyEsc})
 	if model.renderedSelection.active {
 		t.Fatal("esc did not cancel the tip selection")
 	}
@@ -121,7 +123,7 @@ func TestWorkingTurnTipSelectionClearsWhenTipDisappearsLikeRust(t *testing.T) {
 		t.Fatal("working tip selection was not active")
 	}
 	model.Update(ThreadEventMsg{Event: protocol.TurnCompleted(protocol.Usage{})})
-	model.View()
+	model.viewString()
 	if model.renderedSelection.active {
 		t.Fatalf("selection survived the working tip disappearing: %#v", model.renderedSelection)
 	}
@@ -134,7 +136,7 @@ func TestWorkingTurnTipSelectionClearsWhenTipDisappearsLikeRust(t *testing.T) {
 // completion tip surface.
 func TestCompletionTurnTipSelectionCopiesLikeRust(t *testing.T) {
 	model, copied := newCompletionTipSelectionModel(t)
-	if view := utils.StripANSI(model.View()); !strings.Contains(view, "\u2514 ") || !strings.Contains(view, "Tip:") {
+	if view := utils.StripANSI(model.viewString()); !strings.Contains(view, "\u2514 ") || !strings.Contains(view, "Tip:") {
 		t.Fatalf("completion tip missing:\n%s", view)
 	}
 	cmd := dragTurnTipSelection(t, model, renderedRegionCompletionTip)

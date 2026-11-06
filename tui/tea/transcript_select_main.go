@@ -1,10 +1,11 @@
 package tea
 
 import (
+	keymsg "codex_go/tui/keymsg"
 	"strings"
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	chatwidget "codex_go/tui/chatwidget"
 )
@@ -35,7 +36,7 @@ func (m *Model) beginTranscriptSelection() bubbletea.Cmd {
 // updateTranscriptSelectionKey routes one key while selection mode owns the
 // overlay. Every key is consumed so selection keystrokes never reach the
 // composer draft (Rust #57224).
-func (m *Model) updateTranscriptSelectionKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
+func (m *Model) updateTranscriptSelectionKey(msg keymsg.KeyMsg) bubbletea.Cmd {
 	if m == nil || m.overlay == nil || !m.overlay.SelectionActive() {
 		return nil
 	}
@@ -70,51 +71,51 @@ func (m *Model) updateTranscriptSelectionKey(msg bubbletea.KeyMsg) bubbletea.Cmd
 
 // overlaySelectCommand resolves a key to a selection command, giving fixed
 // selection controls precedence over remapped pager shortcuts.
-func (m *Model) overlaySelectCommand(msg bubbletea.KeyMsg, keySpec string) (chatwidget.SelectCommand, bool) {
+func (m *Model) overlaySelectCommand(msg keymsg.KeyMsg, keySpec string) (chatwidget.SelectCommand, bool) {
 	switch msg.Type {
-	case bubbletea.KeyEsc:
+	case keymsg.KeyEsc:
 		return chatwidget.SelectCmdClearMark, true
-	case bubbletea.KeyEnter:
+	case keymsg.KeyEnter:
 		return chatwidget.SelectCmdCopyAndFollow, true
-	case bubbletea.KeyLeft:
+	case keymsg.KeyLeft:
 		return chatwidget.SelectCmdLeft, true
-	case bubbletea.KeyRight:
+	case keymsg.KeyRight:
 		return chatwidget.SelectCmdRight, true
-	case bubbletea.KeyUp:
+	case keymsg.KeyUp:
 		return chatwidget.SelectCmdUp, true
-	case bubbletea.KeyDown:
+	case keymsg.KeyDown:
 		return chatwidget.SelectCmdDown, true
-	case bubbletea.KeyShiftLeft:
+	case keymsg.KeyShiftLeft:
 		return chatwidget.SelectCmdLeft, true
-	case bubbletea.KeyShiftRight:
+	case keymsg.KeyShiftRight:
 		return chatwidget.SelectCmdRight, true
-	case bubbletea.KeyShiftUp:
+	case keymsg.KeyShiftUp:
 		return chatwidget.SelectCmdUp, true
-	case bubbletea.KeyShiftDown:
+	case keymsg.KeyShiftDown:
 		return chatwidget.SelectCmdDown, true
-	case bubbletea.KeyHome:
+	case keymsg.KeyHome:
 		return chatwidget.SelectCmdLineStart, true
-	case bubbletea.KeyCtrlHome:
+	case keymsg.KeyCtrlHome:
 		return chatwidget.SelectCmdBeginning, true
-	case bubbletea.KeyEnd:
+	case keymsg.KeyEnd:
 		return chatwidget.SelectCmdLineEnd, true
-	case bubbletea.KeyCtrlEnd:
+	case keymsg.KeyCtrlEnd:
 		return chatwidget.SelectCmdEnd, true
-	case bubbletea.KeyPgUp:
+	case keymsg.KeyPgUp:
 		return chatwidget.SelectCmdPageUp, true
-	case bubbletea.KeyPgDown:
+	case keymsg.KeyPgDown:
 		return chatwidget.SelectCmdPageDown, true
-	case bubbletea.KeyCtrlB:
+	case keymsg.KeyCtrlB:
 		return chatwidget.SelectCmdPageUp, true
-	case bubbletea.KeyCtrlF:
+	case keymsg.KeyCtrlF:
 		return chatwidget.SelectCmdPageDown, true
-	case bubbletea.KeyCtrlU:
+	case keymsg.KeyCtrlU:
 		return chatwidget.SelectCmdHalfPageUp, true
-	case bubbletea.KeyCtrlD:
+	case keymsg.KeyCtrlD:
 		return chatwidget.SelectCmdHalfPageDown, true
-	case bubbletea.KeySpace:
+	case keymsg.KeySpace:
 		return chatwidget.SelectCmdMarkCharacter, true
-	case bubbletea.KeyRunes:
+	case keymsg.KeyRunes:
 		if len(msg.Runes) != 1 {
 			return chatwidget.SelectCmdNone, true
 		}
@@ -181,9 +182,9 @@ func (m *Model) overlaySelectCommand(msg bubbletea.KeyMsg, keySpec string) (chat
 	return chatwidget.SelectCmdNone, true
 }
 
-func isShiftArrow(keyType bubbletea.KeyType) bool {
+func isShiftArrow(keyType keymsg.KeyType) bool {
 	switch keyType {
-	case bubbletea.KeyShiftLeft, bubbletea.KeyShiftRight, bubbletea.KeyShiftUp, bubbletea.KeyShiftDown:
+	case keymsg.KeyShiftLeft, keymsg.KeyShiftRight, keymsg.KeyShiftUp, keymsg.KeyShiftDown:
 		return true
 	default:
 		return false

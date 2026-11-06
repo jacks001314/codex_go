@@ -5,10 +5,11 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	"codex_go/protocol"
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 const misalignmentViolationFixture = `{"error":{"turnId":"turn-1","codexErrorInfo":"misalignmentPolicyViolation","misalignment":{"errorType":"unauthorized_data_transfer","detailedExplanation":"We detected unsafe behavior.","steer":{"message":"Continue safely."}}}}`
@@ -48,12 +49,12 @@ func TestMisalignmentReviewContinueLikeRust(t *testing.T) {
 	}
 
 	model.modal.selected = modalOptionIndex(model.modal, "continue")
-	_, cmd = model.Update(key(bubbletea.KeyEnter))
+	_, cmd = model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 	if model.modal == nil || model.modal.id != misalignmentReviewID {
 		t.Fatal("first continue press should only arm the explicit confirmation")
 	}
-	_, cmd = model.Update(key(bubbletea.KeyEnter))
+	_, cmd = model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 	if len(submitted) != 1 || submitted[0].Prompt != "Continue safely." {
 		t.Fatalf("submitted = %#v", submitted)
@@ -151,14 +152,14 @@ func TestMisalignmentReviewLongFindingsScrollLikeRust(t *testing.T) {
 	if model.modal.bodyOffset != 0 {
 		t.Fatalf("initial body offset = %d", model.modal.bodyOffset)
 	}
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyPgDown})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyPgDown})
 	if model.modal.bodyOffset == 0 {
 		t.Fatal("PageDown did not scroll the review body")
 	}
 	if view := model.renderModal(); !strings.Contains(view, "newer findings") {
 		t.Fatalf("scroll indicator missing:\n%s", view)
 	}
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyPgUp})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyPgUp})
 	if model.modal.bodyOffset != 0 {
 		t.Fatalf("PageUp did not return to the first page: offset=%d", model.modal.bodyOffset)
 	}

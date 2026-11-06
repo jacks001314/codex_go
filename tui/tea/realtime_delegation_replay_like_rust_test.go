@@ -38,7 +38,7 @@ func TestBufferedThreadReplayHidesDelegatedVoiceContentLikeRust(t *testing.T) {
 		},
 	})
 
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "the public answer") {
 		t.Fatalf("final answer missing after the replay:\n%s", view)
 	}

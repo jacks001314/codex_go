@@ -181,7 +181,7 @@ func TestOrderedListMarkerSnapshotSpansLikeRust(t *testing.T) {
 	if !strings.HasPrefix(line, rustLightBlueSGR+"1. "+rustLightBlueResetSGR) {
 		t.Fatalf("snapshot line = %q", line)
 	}
-	if !strings.Contains(line, "\x1b[4m") {
+	if !hasUnderlineSGR(line) {
 		t.Fatalf("link underline style lost: %q", line)
 	}
 	if plain := utils.StripANSI(line); !strings.HasPrefix(plain, "1. plain plain https://example.com code") {

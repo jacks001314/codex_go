@@ -5,10 +5,9 @@ import (
 	"testing"
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
 	bottompane "codex_go/tui/bottom_pane"
+	"codex_go/tui/keymsg"
 	"codex_go/utils"
 )
 
@@ -31,7 +30,7 @@ func newSideConversationModel(t *testing.T) (*Model, *time.Time) {
 	now := time.Unix(0, 0)
 	model.now = func() time.Time { return now }
 	typeText(t, model, "/side")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 	if !model.inSideConversation() {
 		t.Fatal("failed to enter a side conversation")
@@ -71,7 +70,7 @@ func TestSlashSideUnavailableShownDisabledWhenSearchedLikeRust(t *testing.T) {
 	if _, ok := model.currentSlashPopupItem(); ok {
 		t.Fatal("disabled archive must not be completable or dispatchable")
 	}
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "/archive (disabled)") || !strings.Contains(view, "not available in a side conversation") {
 		t.Fatalf("disabled row missing from side view:\n%s", view)
 	}
@@ -79,7 +78,7 @@ func TestSlashSideUnavailableShownDisabledWhenSearchedLikeRust(t *testing.T) {
 	// Tab with only a disabled match visible must swallow instead of completing
 	// or queuing the unavailable command.
 	*now = now.Add(bottompane.PasteBurstCharInterval + time.Millisecond)
-	model.Update(key(bubbletea.KeyTab))
+	model.Update(key(keymsg.KeyTab))
 	if got := model.ComposerValue(); got != "/arch" {
 		t.Fatalf("composer after Tab on a disabled match = %q, want /arch", got)
 	}
@@ -115,7 +114,7 @@ func TestSlashSideRanksAvailableMatchesFirstLikeRust(t *testing.T) {
 	}
 
 	*now = now.Add(bottompane.PasteBurstCharInterval + time.Millisecond)
-	model.Update(key(bubbletea.KeyTab))
+	model.Update(key(keymsg.KeyTab))
 	if got := model.ComposerValue(); got != "/status " {
 		t.Fatalf("composer after Tab = %q, want /status ", got)
 	}
@@ -132,7 +131,7 @@ func TestSlashSideTabQueuesOnlyAvailableMatchesWhileRunningLikeRust(t *testing.T
 	model.State.SetStatus("running")
 	typeText(t, model, "/agents")
 	*now = now.Add(bottompane.PasteBurstCharInterval + time.Millisecond)
-	model.Update(key(bubbletea.KeyTab))
+	model.Update(key(keymsg.KeyTab))
 	if got := model.ComposerValue(); got != "" {
 		t.Fatalf("composer after queueing Tab = %q, want empty", got)
 	}
@@ -145,7 +144,7 @@ func TestSlashSideTabQueuesOnlyAvailableMatchesWhileRunningLikeRust(t *testing.T
 	model.State.SetStatus("running")
 	typeText(t, model, "/arch")
 	*now = now.Add(bottompane.PasteBurstCharInterval + time.Millisecond)
-	model.Update(key(bubbletea.KeyTab))
+	model.Update(key(keymsg.KeyTab))
 	if got := model.ComposerValue(); got != "/arch" {
 		t.Fatalf("composer after disabled Tab = %q, want /arch", got)
 	}

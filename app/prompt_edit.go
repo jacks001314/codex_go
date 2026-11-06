@@ -24,6 +24,13 @@ func interactiveRemotePromptEditHandler(ctx context.Context, endpoint *appserver
 		if threadID == "" {
 			return codextea.SessionResumeResponse{}, errors.New("remote prompt edit requires a thread id")
 		}
+		promptText := strings.TrimSpace(selection.Prompt.Text)
+		if len(selection.Prompt.LocalImages) > 0 ||
+			strings.HasPrefix(promptText, "/") || strings.HasPrefix(promptText, "!") {
+			return codextea.SessionResumeResponse{}, codextea.UnsafePromptRestoreError{
+				Message: "This remote prompt contains local image paths or command syntax that cannot be restored safely. Write a new message and reattach any images.",
+			}
+		}
 		client, err := openRemoteSessionClient(ctx, endpoint)
 		if err != nil {
 			return codextea.SessionResumeResponse{}, err

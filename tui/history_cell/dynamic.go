@@ -8,7 +8,7 @@ import (
 
 // DynamicToolCallCell renders one codex_tui dynamic tool invocation. Retained
 // rows are updated by call id so concurrently completing calls keep their
-// original transcript position.
+// original transcript position. Rust parity: history_cell/dynamic.rs.
 type DynamicToolCallCell struct {
 	CallID      string
 	Name        string
@@ -19,59 +19,117 @@ type DynamicToolCallCell struct {
 	Interrupted bool
 }
 
-func (c DynamicToolCallCell) DisplayLines(width int) []string {
+// dynamicToolPreviewLines is Rust's DETAIL_PREVIEW_LINES: the compact row keeps
+// a bounded tail of the retained output and reports the hidden line count.
+const dynamicToolPreviewLines = tui.PreviewLines
+
+func (c DynamicToolCallCell) active() bool {
+	status := strings.ToLower(strings.TrimSpace(c.Status))
+	return status == "" || status == "inprogress" || status == "in_progress" || status == "running"
+}
+
+// header mirrors Rust DynamicToolCallData::header.
+func (c DynamicToolCallCell) header() string {
 	name := strings.TrimSpace(c.Name)
 	if name == "" {
 		name = "dynamic tool"
 	}
-	marker := "\u2022 "
+	verb := "Called"
 	status := strings.ToLower(strings.TrimSpace(c.Status))
-	if c.Interrupted || status == "failed" || status == "error" {
-		marker = "\u2717 "
-	} else if status == "inprogress" || status == "in_progress" {
-		marker = "\u25cb "
+	switch {
+	case c.Interrupted:
+		verb = "Interrupted"
+	case status == "failed" || status == "error":
+		verb = "Failed"
+	case status == "inprogress" || status == "in_progress" || status == "running" || status == "":
+		verb = "Calling"
 	}
-	heading := marker + name
-	if c.DurationMS != nil && *c.DurationMS > 0 && !c.Interrupted {
-		heading += " (" + formatDynamicDuration(*c.DurationMS) + ")"
+	heading := "\u2022 " + verb + " " + name
+	if c.DurationMS != nil && *c.DurationMS >= 0 {
+		heading += " \u00b7 " + itoaHistory(*c.DurationMS) + "ms"
 	}
-	lines := []string{truncateDynamicLine(heading, width)}
-	if args := strings.TrimSpace(c.Arguments); args != "" {
-		lines = append(lines, truncateDynamicLine("  \u2514 "+args, width))
+	return heading
+}
+
+// outputLines mirrors Rust DynamicToolCallData::output_lines: a retained but
+// empty result says so, a call without a result reports it unavailable, and an
+// active call has no output row yet.
+func (c DynamicToolCallCell) outputLines() []string {
+	if c.Output == nil {
+		if c.active() {
+			return nil
+		}
+		return []string{"(output unavailable)"}
 	}
-	for _, output := range c.Output {
-		output = strings.TrimSpace(output)
-		if output == "" {
+	lines := make([]string, 0, len(c.Output))
+	for _, block := range c.Output {
+		block = strings.TrimSpace(block)
+		if block == "" {
 			continue
 		}
-		for _, line := range strings.Split(output, "\n") {
-			lines = append(lines, truncateDynamicLine("    "+line, width))
+		lines = append(lines, rawLinesFromSource(block)...)
+	}
+	if len(lines) == 0 {
+		return []string{"(no output)"}
+	}
+	return lines
+}
+
+func (c DynamicToolCallCell) DisplayLines(width int) []string {
+	lines := []string{truncateDynamicLine(c.header(), width)}
+	output := c.outputLines()
+	skip := 0
+	preview := output
+	if len(output) > dynamicToolPreviewLines {
+		skip = len(output) - dynamicToolPreviewLines
+		preview = output[skip:]
+	}
+	if skip > 0 {
+		lines = append(lines, truncateDynamicLine("  \u2026 "+itoaHistory(int64(skip))+" earlier lines hidden", width))
+	}
+	for index, line := range preview {
+		prefix := "    "
+		if index == 0 {
+			prefix = "  \u2514 "
 		}
+		lines = append(lines, truncateDynamicLine(prefix+line, width))
 	}
 	return lines
 }
 
 func (c DynamicToolCallCell) RawLines() []string {
-	lines := []string{"Dynamic tool call " + strings.TrimSpace(c.Name)}
+	lines := []string{c.header()}
 	if args := strings.TrimSpace(c.Arguments); args != "" {
-		lines = append(lines, "arguments: "+args)
+		lines = append(lines, rawLinesFromSource("Arguments: "+args)...)
 	}
-	if status := strings.TrimSpace(c.Status); status != "" {
-		lines = append(lines, "status: "+status)
-	}
-	lines = append(lines, c.Output...)
-	return lines
+	return append(lines, c.outputLines()...)
 }
 
+// TranscriptLines keeps the complete arguments and output for the expanded
+// transcript view (Rust transcript_hyperlink_lines).
 func (c DynamicToolCallCell) TranscriptLines(width int) []string {
-	return c.DisplayLines(width)
+	lines := []string{c.header()}
+	details := []string{}
+	if args := strings.TrimSpace(c.Arguments); args != "" {
+		details = append(details, rawLinesFromSource("Arguments: "+args)...)
+	}
+	details = append(details, c.outputLines()...)
+	for _, detail := range details {
+		lines = append(lines, tui.AdaptiveWrapLine(detail, tui.WrapOptions{
+			Width:            max(width, 1),
+			InitialIndent:    "  \u2514 ",
+			SubsequentIndent: "    ",
+			BreakWords:       true,
+		})...)
+	}
+	return lines
 }
 
 func (c DynamicToolCallCell) ActivityIDs() []string {
 	if strings.TrimSpace(c.CallID) == "" {
 		return nil
 	}
-	return []string{"dynamic-tool:" + strings.TrimSpace(c.CallID)}
+	return []string{"dynamic:" + strings.TrimSpace(c.CallID)}
 }
 
 // ActivityDisclosure reports generic transcript details for a dynamic tool
@@ -87,21 +145,13 @@ func truncateDynamicLine(value string, width int) string {
 	return tui.TruncateWithEllipsis(value, width)
 }
 
-func formatDynamicDuration(ms int64) string {
-	if ms < 1000 {
-		return itoaHistory(ms) + "ms"
-	}
-	seconds := ms / 1000
-	if seconds < 60 {
-		return itoaHistory(seconds) + "s"
-	}
-	minutes := seconds / 60
-	return itoaHistory(minutes) + "m " + itoaHistory(seconds%60) + "s"
-}
-
 func itoaHistory(value int64) string {
 	if value == 0 {
 		return "0"
+	}
+	negative := value < 0
+	if negative {
+		value = -value
 	}
 	var digits [20]byte
 	index := len(digits)
@@ -109,6 +159,10 @@ func itoaHistory(value int64) string {
 		index--
 		digits[index] = byte('0' + value%10)
 		value /= 10
+	}
+	if negative {
+		index--
+		digits[index] = '-'
 	}
 	return string(digits[index:])
 }

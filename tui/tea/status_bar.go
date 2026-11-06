@@ -4,7 +4,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 
 	codextui "codex_go/tui"
 	chatwidget "codex_go/tui/chatwidget"

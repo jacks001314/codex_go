@@ -1,20 +1,12 @@
 package tui
 
 import (
-	"io"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
-	"github.com/muesli/termenv"
+	"charm.land/lipgloss/v2"
 )
 
 const SelectedRowMarker = "\u203a"
-
-func forcedColorRenderer() *lipgloss.Renderer {
-	renderer := lipgloss.NewRenderer(io.Discard)
-	renderer.SetColorProfile(termenv.ANSI)
-	return renderer
-}
 
 func RenderSelectedRow(line string) string {
 	// Rust renders the selected row with the contrast-aware selection style
@@ -38,7 +30,7 @@ func RenderSelectedRowFilled(line string, width int) string {
 }
 
 func ForcedColorStyle() lipgloss.Style {
-	return forcedColorRenderer().NewStyle()
+	return lipgloss.NewStyle()
 }
 
 func SelectionPrefix(selected bool) string {

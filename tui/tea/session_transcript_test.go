@@ -4,10 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
 	chatwidget "codex_go/tui/chatwidget"
+	"codex_go/tui/keymsg"
 )
 
 func TestSessionPickerCtrlTOpensSelectedTranscript(t *testing.T) {
@@ -27,12 +26,12 @@ func TestSessionPickerCtrlTOpensSelectedTranscript(t *testing.T) {
 		},
 	})
 	typeText(t, model, "/resume")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if model.modal == nil || model.modal.sessionPicker == nil {
 		t.Fatalf("resume picker not open: %#v", model.modal)
 	}
 
-	_, cmd := model.Update(key(bubbletea.KeyCtrlT))
+	_, cmd := model.Update(key(keymsg.KeyCtrlT))
 	if model.overlay == nil {
 		t.Fatal("ctrl+t should open the transcript overlay")
 	}
@@ -61,11 +60,11 @@ func TestSessionPickerCtrlTRequiresAThread(t *testing.T) {
 		SessionPickerItems: []codextui.SessionSummary{{ThreadID: "", Title: "Path only", Path: "rollout.jsonl", CWD: "/repo"}},
 	})
 	typeText(t, model, "/resume")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if model.modal == nil || model.modal.sessionPicker == nil {
 		t.Fatalf("picker not open: modal=%#v overlay=%v", model.modal, model.overlay != nil)
 	}
-	model.Update(key(bubbletea.KeyCtrlT))
+	model.Update(key(keymsg.KeyCtrlT))
 	if model.overlay != nil {
 		t.Fatal("a session without a thread id should not open the overlay")
 	}
@@ -82,7 +81,7 @@ func TestNonTranscriptOverlayEscKeepsPagerKeymap(t *testing.T) {
 	model.overlay = chatwidget.NewTranscriptOverlayWithTitle(80, 24, "diff content", "D I F F")
 	model.overlayTranscript = false
 
-	model.Update(key(bubbletea.KeyEsc))
+	model.Update(key(keymsg.KeyEsc))
 
 	if model.overlay == nil {
 		t.Fatal("Esc must not close a non-transcript pager")

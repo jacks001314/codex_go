@@ -6,10 +6,11 @@ import (
 	"testing"
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
 	chatwidget "codex_go/tui/chatwidget"
+	"codex_go/tui/keymsg"
 )
 
 func keyChordConfig(t *testing.T, context string, action string, chord string) *codextui.KeymapConfig {
@@ -34,14 +35,14 @@ func TestConfiguredKeyChordSubmitsLikeRust(t *testing.T) {
 		},
 	})
 	typeText(t, model, "send with chord")
-	model.Update(key(bubbletea.KeyCtrlX))
+	model.Update(key(keymsg.KeyCtrlX))
 	if len(requests) != 0 || model.pendingKeyChordPrefix != "ctrl-x" {
 		t.Fatalf("first stroke submitted=%#v pending=%q", requests, model.pendingKeyChordPrefix)
 	}
 	if !strings.Contains(model.notice, "second key") {
 		t.Fatalf("pending chord notice = %q", model.notice)
 	}
-	model.Update(key(bubbletea.KeyCtrlS))
+	model.Update(key(keymsg.KeyCtrlS))
 	if len(requests) != 1 || requests[0].Prompt != "send with chord" {
 		t.Fatalf("completed chord requests = %#v", requests)
 	}
@@ -59,9 +60,9 @@ func TestConfiguredKeyChordSubmitsLikeRust(t *testing.T) {
 	now := time.Unix(100, 0)
 	timeout.now = func() time.Time { return now }
 	typeText(t, timeout, "too late")
-	timeout.Update(key(bubbletea.KeyCtrlX))
+	timeout.Update(key(keymsg.KeyCtrlX))
 	now = now.Add(codextui.LeaderChordTimeout + time.Second)
-	timeout.Update(key(bubbletea.KeyCtrlS))
+	timeout.Update(key(keymsg.KeyCtrlS))
 	if len(requests) != 1 || timeout.pendingKeyChordPrefix != "" {
 		t.Fatalf("expired chord requests=%#v pending=%q", requests, timeout.pendingKeyChordPrefix)
 	}
@@ -74,8 +75,8 @@ func TestConfiguredKeyChordSubmitsLikeRust(t *testing.T) {
 		},
 	})
 	typeText(t, cancelled, "cancel")
-	cancelled.Update(key(bubbletea.KeyCtrlX))
-	cancelled.Update(key(bubbletea.KeyEsc))
+	cancelled.Update(key(keymsg.KeyCtrlX))
+	cancelled.Update(key(keymsg.KeyEsc))
 	if len(requests) != 1 || cancelled.pendingKeyChordPrefix != "" {
 		t.Fatalf("cancelled chord requests=%#v pending=%q", requests, cancelled.pendingKeyChordPrefix)
 	}
@@ -91,8 +92,8 @@ func TestConfiguredGlobalChordSubmitFallbackLikeRust(t *testing.T) {
 		},
 	})
 	typeText(t, model, "global fallback")
-	model.Update(key(bubbletea.KeyCtrlX))
-	model.Update(key(bubbletea.KeyCtrlS))
+	model.Update(key(keymsg.KeyCtrlX))
+	model.Update(key(keymsg.KeyCtrlS))
 	if len(requests) != 1 || requests[0].Prompt != "global fallback" {
 		t.Fatalf("global chord requests = %#v", requests)
 	}
@@ -113,7 +114,7 @@ func TestModelKeymapChordCaptureWritesTwoStrokeSpecLikeRust(t *testing.T) {
 		t.Fatalf("action modal = %#v", model.modal)
 	}
 	model.modal.selected = modalOptionIndexByID(t, model.modal.options, "set_chord")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if model.modal == nil || model.modal.keymapCapture == nil ||
 		model.modal.keymapCapture.Intent != keymapCaptureChordReplaceAll {
 		t.Fatalf("chord capture modal = %#v", model.modal)
@@ -121,13 +122,13 @@ func TestModelKeymapChordCaptureWritesTwoStrokeSpecLikeRust(t *testing.T) {
 	if !strings.Contains(model.renderModal(), "Press the first key of the chord") {
 		t.Fatalf("first-key prompt = %q", model.renderModal())
 	}
-	model.Update(key(bubbletea.KeyCtrlX))
+	model.Update(key(keymsg.KeyCtrlX))
 	if model.modal == nil || model.modal.keymapCapture == nil ||
 		model.modal.keymapCapture.ChordFirst != "ctrl-x" ||
 		!strings.Contains(model.renderModal(), "First key: ctrl-x") {
 		t.Fatalf("second-key state = %#v prompt=%q", model.modal, model.renderModal())
 	}
-	model.Update(key(bubbletea.KeyCtrlS))
+	model.Update(key(keymsg.KeyCtrlS))
 	if len(edits) != 1 || edits[0].Context != "global" || edits[0].Action != "open_transcript" ||
 		!reflect.DeepEqual(edits[0].Bindings, []string{"ctrl-x ctrl-s"}) {
 		t.Fatalf("chord edits = %#v", edits)

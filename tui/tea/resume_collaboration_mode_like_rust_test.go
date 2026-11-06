@@ -3,11 +3,10 @@ package tea
 import (
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	"codex_go/appserver"
 	codextui "codex_go/tui"
 	chatwidget "codex_go/tui/chatwidget"
+	"codex_go/tui/keymsg"
 )
 
 // Rust parity: codex-rs/tui/src/app_server_session.rs (#45519). A resume
@@ -47,7 +46,7 @@ func TestResumeRestoresCollaborationModeLikeRust(t *testing.T) {
 	}
 
 	typeText(t, model, "Continue planning")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	requests := model.SubmittedRequests()
 	if len(requests) != 1 || requests[0].CollaborationMode == nil {
 		t.Fatalf("resumed first prompt requests = %#v", requests)

@@ -4,10 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
 	chatwidget "codex_go/tui/chatwidget"
+	"codex_go/tui/keymsg"
 )
 
 // A daemon-backed session creates its thread with the first turn. A built-in
@@ -29,8 +28,8 @@ func TestModelBuiltInPermissionsBeforeChatStageLocallyLikeRust(t *testing.T) {
 	})
 
 	typeText(t, model, "/permissions")
-	model.Update(key(bubbletea.KeyEnter))
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 
 	if updateCalls != 0 {
 		t.Fatalf("pre-thread selection called the server %d times", updateCalls)
@@ -46,8 +45,8 @@ func TestModelBuiltInPermissionsBeforeChatStageLocallyLikeRust(t *testing.T) {
 	if state.ApprovalsReviewer != string(chatwidget.ApprovalsReviewerUser) {
 		t.Fatalf("staged reviewer = %q, want user", state.ApprovalsReviewer)
 	}
-	if !strings.Contains(model.View(), "Permissions updated to Read Only") {
-		t.Fatalf("permission confirmation missing:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Permissions updated to Read Only") {
+		t.Fatalf("permission confirmation missing:\n%s", model.viewString())
 	}
 }
 

@@ -5,11 +5,10 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	"codex_go/config"
 	"codex_go/model"
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 	"codex_go/utils"
 )
 
@@ -36,14 +35,14 @@ func TestConfigPanelProviderDefaultSelectionLikeRust(t *testing.T) {
 	m.State.Provider = "openai"
 	cmd := openProviderBrowser(t, m)
 	m = applyCmd(t, m, cmd)
-	view := utils.StripANSI(m.View())
+	view := utils.StripANSI(m.viewString())
 	for _, want := range []string{"● OpenAI", "○ Gateway", "space set default"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("provider list missing %q:\n%s", want, view)
 		}
 	}
-	m.Update(key(bubbletea.KeyDown))
-	updated, writeCmd := m.Update(key(bubbletea.KeySpace))
+	m.Update(key(keymsg.KeyDown))
+	updated, writeCmd := m.Update(key(keymsg.KeySpace))
 	m = updated.(*Model)
 	if writeCmd == nil {
 		t.Fatal("space/default action produced no write")
@@ -67,7 +66,7 @@ func TestConfigPanelProviderClientOverrideLocksDefaultLikeRust(t *testing.T) {
 	})
 	cmd := openProviderBrowser(t, m)
 	m = applyCmd(t, m, cmd)
-	view := utils.StripANSI(m.View())
+	view := utils.StripANSI(m.viewString())
 	// Rust keeps the subtitle's default id from the server page and names the
 	// client's pinned provider only in the footer note.
 	if !strings.Contains(view, "Server default: openai") || !strings.Contains(view, "This client's launch settings select gateway") {
@@ -93,12 +92,12 @@ func TestConfigPanelProviderEditorWritesSelectedFieldsLikeRust(t *testing.T) {
 	m.State.Provider = "openai"
 	cmd := openProviderBrowser(t, m)
 	m = applyCmd(t, m, cmd)
-	m.Update(key(bubbletea.KeyDown))
-	m.Update(key(bubbletea.KeyEnter))
-	if view := utils.StripANSI(m.View()); !strings.Contains(view, "enter Edit configuration") {
+	m.Update(key(keymsg.KeyDown))
+	m.Update(key(keymsg.KeyEnter))
+	if view := utils.StripANSI(m.viewString()); !strings.Contains(view, "enter Edit configuration") {
 		t.Fatalf("details missing edit action:\n%s", view)
 	}
-	m.Update(key(bubbletea.KeyEnter))
+	m.Update(key(keymsg.KeyEnter))
 	editor := m.modal.configPanel.providers.editor
 	if editor == nil {
 		t.Fatal("provider editor did not open")
@@ -107,7 +106,7 @@ func TestConfigPanelProviderEditorWritesSelectedFieldsLikeRust(t *testing.T) {
 	editor.fields[1].value = "https://new.example.com/v1"
 	editor.fields[2].value = "NEW_KEY"
 	editor.selected = len(editor.fields)
-	writeCmd := m.updateConfigProviderEditorKey(key(bubbletea.KeyEnter), m.modal.configPanel.providers)
+	writeCmd := m.updateConfigProviderEditorKey(key(keymsg.KeyEnter), m.modal.configPanel.providers)
 	if writeCmd == nil {
 		t.Fatalf("editor save produced no command; error=%q", editor.err)
 	}
@@ -141,12 +140,12 @@ func TestConfigPanelProviderEditorPreservesDraftOnFailureLikeRust(t *testing.T) 
 	})
 	cmd := openProviderBrowser(t, m)
 	m = applyCmd(t, m, cmd)
-	m.Update(key(bubbletea.KeyDown))
-	m.Update(key(bubbletea.KeyEnter))
-	m.Update(key(bubbletea.KeyEnter))
+	m.Update(key(keymsg.KeyDown))
+	m.Update(key(keymsg.KeyEnter))
+	m.Update(key(keymsg.KeyEnter))
 	m.modal.configPanel.providers.editor.fields[0].value = "Draft Name"
 	m.modal.configPanel.providers.editor.selected = len(m.modal.configPanel.providers.editor.fields)
-	writeCmd := m.updateConfigProviderEditorKey(key(bubbletea.KeyEnter), m.modal.configPanel.providers)
+	writeCmd := m.updateConfigProviderEditorKey(key(keymsg.KeyEnter), m.modal.configPanel.providers)
 	m = applyCmd(t, m, writeCmd)
 	editor := m.modal.configPanel.providers.editor
 	if editor == nil || editor.fields[0].value != "Draft Name" || !strings.Contains(editor.err, "denied by requirements") {

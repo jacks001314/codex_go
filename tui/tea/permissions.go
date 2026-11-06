@@ -4,7 +4,7 @@ import (
 	"errors"
 	"strings"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	"codex_go/features"
 	chatwidget "codex_go/tui/chatwidget"

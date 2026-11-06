@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	bottompane "codex_go/tui/bottom_pane"
-	bubbletea "github.com/charmbracelet/bubbletea"
+	"codex_go/tui/keymsg"
 )
 
 // composerKillBufferImage records a local image attachment whose placeholder
@@ -26,7 +26,7 @@ type composerKillBufferImage struct {
 // Rust), kill_whole_line cuts the current line, and yank (ctrl-y) pastes the
 // kill buffer at the cursor. The buffer survives composer-level clears
 // (submit / slash dispatch), matching Rust's single-entry kill buffer.
-func (m *Model) applyEditorKillYankKey(msg bubbletea.KeyMsg, keySpec string) bool {
+func (m *Model) applyEditorKillYankKey(msg keymsg.KeyMsg, keySpec string) bool {
 	if m == nil || m.modal != nil || m.overlay != nil || m.slashPopup.Active || m.skillPopup.Active {
 		return false
 	}

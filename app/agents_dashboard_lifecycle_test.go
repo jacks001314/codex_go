@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	"codex_go/tui/keymsg"
 )
 
 // TestAgentsDashboardArchiveAndDeleteRequireConfirmationLikeRust covers
@@ -24,10 +24,10 @@ func TestAgentsDashboardArchiveAndDeleteRequireConfirmationLikeRust(t *testing.T
 	if model.pendingLifecycle != "archive" {
 		t.Fatalf("a pending action = %q, want archive", model.pendingLifecycle)
 	}
-	if !strings.Contains(model.View(), "Archive this task") {
-		t.Fatalf("archive confirmation missing:\n%s", model.View())
+	if !strings.Contains(model.ViewContent(), "Archive this task") {
+		t.Fatalf("archive confirmation missing:\n%s", model.ViewContent())
 	}
-	model.Update(keyPress(bubbletea.KeyEsc))
+	model.Update(keyPress(keymsg.KeyEsc))
 	if model.pendingLifecycle != "" || len(source.archived) != 0 {
 		t.Fatalf("cancel archived %v pending=%q", source.archived, model.pendingLifecycle)
 	}
@@ -43,14 +43,14 @@ func TestAgentsDashboardArchiveAndDeleteRequireConfirmationLikeRust(t *testing.T
 	}
 
 	// Delete uses the Backspace key and the same confirmation.
-	model.Update(keyPress(bubbletea.KeyBackspace))
+	model.Update(keyPress(keymsg.KeyBackspace))
 	if model.pendingLifecycle != "delete" {
 		t.Fatalf("delete pending action = %q, want delete", model.pendingLifecycle)
 	}
-	if !strings.Contains(model.View(), "Permanently delete this task") {
-		t.Fatalf("delete confirmation missing:\n%s", model.View())
+	if !strings.Contains(model.ViewContent(), "Permanently delete this task") {
+		t.Fatalf("delete confirmation missing:\n%s", model.ViewContent())
 	}
-	updated, command = model.Update(keyPress(bubbletea.KeyEnter))
+	updated, command = model.Update(keyPress(keymsg.KeyEnter))
 	// Rust #44744: permanent deletion keeps an explicit second confirmation.
 	if command != nil || len(source.deleted) != 0 {
 		t.Fatalf("first delete confirmation ran the action: cmd=%v deleted=%#v", command != nil, source.deleted)
@@ -58,10 +58,10 @@ func TestAgentsDashboardArchiveAndDeleteRequireConfirmationLikeRust(t *testing.T
 	if !model.pendingLifecycleArmed {
 		t.Fatal("first delete confirmation did not arm the explicit confirmation")
 	}
-	if !strings.Contains(model.View(), "Press y again to permanently delete") {
-		t.Fatalf("second delete confirmation missing:\n%s", model.View())
+	if !strings.Contains(model.ViewContent(), "Press y again to permanently delete") {
+		t.Fatalf("second delete confirmation missing:\n%s", model.ViewContent())
 	}
-	updated, command = model.Update(keyPress(bubbletea.KeyEnter))
+	updated, command = model.Update(keyPress(keymsg.KeyEnter))
 	if command == nil {
 		t.Fatal("second confirmation returned no delete command")
 	}

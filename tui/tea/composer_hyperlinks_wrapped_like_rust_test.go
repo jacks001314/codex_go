@@ -48,7 +48,7 @@ func TestComposerWrappedURLKeepsCompleteDestinationLikeRust(t *testing.T) {
 	const url = "https://github.com/openai/codex/pull/20252"
 	model := newComposerHyperlinkModel(t)
 	model.composer.SetValue("Fix CI on " + url + " now")
-	view := model.View()
+	view := model.viewString()
 	if count := strings.Count(view, osc8Open(url)); count < 2 {
 		t.Fatalf("wrapped URL emitted %d full destinations, want at least 2:\n%q", count, view)
 	}
@@ -63,7 +63,7 @@ func TestInlineComposerWrappedURLKeepsDestinationLikeRust(t *testing.T) {
 	const url = "https://github.com/openai/codex/pull/20252"
 	model := NewModel(codextui.NewState(nil), Options{Width: 40, Height: 20})
 	model.composer.SetValue("Fix CI on " + url + " now")
-	view := model.View()
+	view := model.viewString()
 	if got := linkedComposerText(view, url); got != url {
 		t.Fatalf("inline linked fragments = %q, want %q", got, url)
 	}
@@ -75,7 +75,7 @@ func TestComposerUnicodeWhitespaceURLKeepsDestinationLikeRust(t *testing.T) {
 	const url = "https://example.test/path?q=1"
 	model := newComposerHyperlinkModel(t)
 	model.composer.SetValue("visit\u00a0" + url + "\u00a0now")
-	if view := model.View(); !strings.Contains(view, osc8Open(url)) {
+	if view := model.viewString(); !strings.Contains(view, osc8Open(url)) {
 		t.Fatalf("Unicode-whitespace URL was not linked:\n%q", view)
 	}
 }
@@ -86,7 +86,7 @@ func TestComposerJoinedEmojiBeforeURLKeepsDestinationLikeRust(t *testing.T) {
 	const url = "https://example.test/grapheme"
 	model := newComposerHyperlinkModel(t)
 	model.composer.SetValue("\U0001F469\u200D\U0001F4BB " + url)
-	view := model.View()
+	view := model.viewString()
 	if got := linkedComposerText(view, url); got != url {
 		t.Fatalf("emoji-prefixed linked text = %q, want %q", got, url)
 	}
@@ -98,7 +98,7 @@ func TestComposerOversizedURLIsNotAnnotatedLikeRust(t *testing.T) {
 	url := "https://example.test/" + strings.Repeat("a", 8200)
 	model := newComposerHyperlinkModel(t)
 	model.composer.SetValue(url)
-	view := model.View()
+	view := model.viewString()
 	if strings.Contains(view, "\x1b]8;;"+url+"\x07") {
 		t.Fatal("oversized destination was annotated")
 	}
@@ -127,11 +127,11 @@ func TestComposerScrolledURLKeepsOffscreenDestinationLikeRust(t *testing.T) {
 	const url = "https://example.test/alpha/beta/gamma/delta/epsilon"
 	model := newComposerHyperlinkModel(t)
 	model.composer.SetValue(strings.Repeat("intro ", 120) + url + " end")
-	model.View()
+	model.viewString()
 	if model.composerScroll <= 0 {
 		t.Fatalf("composer scroll = %d, want a scrolled window", model.composerScroll)
 	}
-	if view := model.View(); !strings.Contains(view, osc8Open(url)) {
+	if view := model.viewString(); !strings.Contains(view, osc8Open(url)) {
 		t.Fatalf("scrolled URL lost its complete destination:\n%q", view)
 	}
 }
@@ -143,7 +143,7 @@ func TestComposerURLHyperlinkPreservesSelectionHighlightLikeRust(t *testing.T) {
 	model := newComposerHyperlinkModel(t)
 	value := "visit " + url
 	model.composer.SetValue(value)
-	model.View()
+	model.viewString()
 	startByte := strings.Index(value, url)
 	startRune := utf8.RuneCountInString(value[:startByte])
 	model.composerSelection = composerTextSelection{
@@ -151,7 +151,7 @@ func TestComposerURLHyperlinkPreservesSelectionHighlightLikeRust(t *testing.T) {
 		anchorRune: startRune,
 		focusRune:  startRune + utf8.RuneCountInString(url),
 	}
-	view := model.View()
+	view := model.viewString()
 	if !strings.Contains(view, osc8Open(url)) || !strings.Contains(view, "\x1b[7m") {
 		t.Fatalf("selection/hyperlink combination was lost:\n%q", view)
 	}

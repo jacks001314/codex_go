@@ -1,9 +1,10 @@
 package tea
 
 import (
+	keymsg "codex_go/tui/keymsg"
 	"strings"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	"codex_go/tui/chatwidget"
 	"codex_go/voicehost"
@@ -259,7 +260,7 @@ func (m *Model) openVoiceInputChannelsModal(device voicehost.AudioDevice) {
 
 // updateVoiceChannelsModal drives the channel multi-select: space toggles,
 // enter saves the selection and esc returns to the device picker (Rust #49836).
-func (m *Model) updateVoiceChannelsModal(message bubbletea.KeyMsg) bubbletea.Cmd {
+func (m *Model) updateVoiceChannelsModal(message keymsg.KeyMsg) bubbletea.Cmd {
 	if m == nil || m.modal == nil || m.modal.voiceChannels == nil {
 		return nil
 	}

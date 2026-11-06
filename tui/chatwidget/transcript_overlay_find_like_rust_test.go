@@ -4,9 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 // Rust parity: keymap_setup/actions.rs:256 declares `pager.find`; keymap.rs:1929
@@ -34,8 +33,8 @@ func TestTranscriptPagerFindCatalogLikeRust(t *testing.T) {
 	}
 }
 
-func findKeyRunes(text string) bubbletea.KeyMsg {
-	return bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune(text)}
+func findKeyRunes(text string) keymsg.KeyMsg {
+	return keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune(text)}
 }
 
 func typeFindQuery(t *testing.T, overlay *TranscriptOverlay, text string) {
@@ -127,7 +126,7 @@ func TestTranscriptOverlayFindBarLikeRust(t *testing.T) {
 	}
 
 	// Esc closes the bar (Rust Search::cancel_search clears the query too).
-	if handled, _ := overlay.HandleFindKey(bubbletea.KeyMsg{Type: bubbletea.KeyEsc}); !handled {
+	if handled, _ := overlay.HandleFindKey(keymsg.KeyMsg{Type: keymsg.KeyEsc}); !handled {
 		t.Fatalf("Esc was not handled by the find bar")
 	}
 	if overlay.FindActive() || overlay.FindQuery() != "" {
@@ -153,7 +152,7 @@ func TestTranscriptOverlayFindBarOwnsKeyboardLikeRust(t *testing.T) {
 	if scrolled <= 0 {
 		t.Fatalf("find did not scroll the viewport onto the match: offset = %d", scrolled)
 	}
-	for _, key := range []bubbletea.KeyMsg{findKeyRunes("q"), findKeyRunes("j"), findKeyRunes("k")} {
+	for _, key := range []keymsg.KeyMsg{findKeyRunes("q"), findKeyRunes("j"), findKeyRunes("k")} {
 		if handled, _ := overlay.HandleFindKey(key); !handled {
 			t.Fatalf("key %q leaked past the find bar", key.String())
 		}
@@ -165,7 +164,7 @@ func TestTranscriptOverlayFindBarOwnsKeyboardLikeRust(t *testing.T) {
 		t.Fatalf("status after the keys = %q, want %q", got, "No matches")
 	}
 	// Rust returns false for paging keys so the pager still scrolls.
-	handled, _ := overlay.HandleFindKey(bubbletea.KeyMsg{Type: bubbletea.KeyPgDown})
+	handled, _ := overlay.HandleFindKey(keymsg.KeyMsg{Type: keymsg.KeyPgDown})
 	if handled {
 		t.Fatalf("PageDown should fall through to the pager")
 	}

@@ -28,8 +28,8 @@ func TestClipboardCopyRunsOffUpdateLoopLikeRust(t *testing.T) {
 		t.Fatal("copy returned no command")
 	}
 	model.Update(cmd())
-	if !called || !strings.Contains(utils.StripANSI(model.View()), "Copied Whole response to clipboard") {
-		t.Fatalf("copy did not complete: called=%v view=%s", called, utils.StripANSI(model.View()))
+	if !called || !strings.Contains(utils.StripANSI(model.viewString()), "Copied Whole response to clipboard") {
+		t.Fatalf("copy did not complete: called=%v view=%s", called, utils.StripANSI(model.viewString()))
 	}
 }
 
@@ -50,8 +50,8 @@ func TestClipboardCopyFailureReturnsNoticeLikeRust(t *testing.T) {
 		t.Fatal("copy returned no command")
 	}
 	model.Update(cmd())
-	if !strings.Contains(utils.StripANSI(model.View()), "Copy failed: clipboard busy") {
-		t.Fatalf("copy failure notice missing:\n%s", utils.StripANSI(model.View()))
+	if !strings.Contains(utils.StripANSI(model.viewString()), "Copy failed: clipboard busy") {
+		t.Fatalf("copy failure notice missing:\n%s", utils.StripANSI(model.viewString()))
 	}
 }
 
@@ -86,7 +86,7 @@ func TestHerdrClipboardCopyForwardsAfterNativeLikeRust(t *testing.T) {
 	if got := strings.Join(calls, ","); got != "native,osc52" {
 		t.Fatalf("clipboard calls = %s, want native,osc52", got)
 	}
-	if !strings.Contains(utils.StripANSI(model.View()), "Copied Whole response to clipboard") {
-		t.Fatalf("copy success notice missing:\n%s", utils.StripANSI(model.View()))
+	if !strings.Contains(utils.StripANSI(model.viewString()), "Copied Whole response to clipboard") {
+		t.Fatalf("copy success notice missing:\n%s", utils.StripANSI(model.viewString()))
 	}
 }

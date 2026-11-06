@@ -7,11 +7,12 @@ import (
 	"time"
 	"unicode"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	"codex_go/config"
 	codextui "codex_go/tui"
 	bottompane "codex_go/tui/bottom_pane"
+	"codex_go/tui/keymsg"
 )
 
 // Rust parity: codex-rs/tui/src/chatwidget/quick_dials.rs and
@@ -193,19 +194,19 @@ func layoutQuickDialEntries(entries []string, width, columns int) []string {
 	return lines
 }
 
-func (m *Model) updateQuickDialMenuKey(message bubbletea.KeyMsg) (bubbletea.Cmd, bool) {
+func (m *Model) updateQuickDialMenuKey(message keymsg.KeyMsg) (bubbletea.Cmd, bool) {
 	if m == nil || !m.quickDialMenu {
 		return nil, false
 	}
 	switch message.Type {
-	case bubbletea.KeyEsc:
+	case keymsg.KeyEsc:
 		m.quickDialMenu = false
 		m.armQuickDialKeyGuard(keySpecFromKeyMsg(message))
 		return nil, true
-	case bubbletea.KeyEnter:
+	case keymsg.KeyEnter:
 		// Rust #54381 consumes Enter without dismissing the passive HUD.
 		return nil, true
-	case bubbletea.KeyRunes:
+	case keymsg.KeyRunes:
 		if message.Alt {
 			break
 		}

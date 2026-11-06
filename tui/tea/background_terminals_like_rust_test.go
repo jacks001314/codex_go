@@ -4,10 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	"codex_go/protocol"
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 func backgroundTerminalTestModel(t *testing.T, loader ListBackgroundTerminalsFunc) *Model {
@@ -65,8 +64,8 @@ func TestModelRestoresBackgroundTerminalsFromDisplayedThreadLikeRust(t *testing.
 	}
 
 	typeText(t, model, "/ps")
-	model.Update(key(bubbletea.KeyEnter))
-	view := model.View()
+	model.Update(key(keymsg.KeyEnter))
+	view := model.viewString()
 	if !strings.Contains(view, "go test ./...") {
 		t.Fatalf("/ps missing the restored terminal:\n%s", view)
 	}

@@ -24,7 +24,7 @@ func TestFooterHintSitsBelowComposerLikeRust(t *testing.T) {
 			FullscreenTranscript: &fullscreen,
 			Placeholder:          "COMPOSER-MARKER",
 		})
-		view := strings.TrimRight(model.View(), "\n")
+		view := plainView(strings.TrimRight(model.viewString(), "\n"))
 		footerIndex := strings.LastIndex(view, footerHelpText)
 		composerIndex := strings.Index(view, "COMPOSER-MARKER")
 		if footerIndex < 0 || composerIndex < 0 {

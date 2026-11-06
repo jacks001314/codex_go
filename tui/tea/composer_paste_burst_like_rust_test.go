@@ -5,10 +5,11 @@ import (
 	"testing"
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
 	bottompane "codex_go/tui/bottom_pane"
+	"codex_go/tui/keymsg"
 )
 
 // Rust #45116: an unbracketed multiline paste arrives as individual key events.
@@ -29,13 +30,13 @@ func TestComposerPasteBurstKeepsMultilinePaste(t *testing.T) {
 
 	type event struct {
 		rune rune
-		key  bubbletea.KeyType
+		key  keymsg.KeyType
 	}
 	paste := "draft-row-0\ndraft-row-1\ndraft-row-2"
 	events := make([]event, 0, len(paste))
 	for _, r := range paste {
 		if r == '\n' {
-			events = append(events, event{key: bubbletea.KeyEnter})
+			events = append(events, event{key: keymsg.KeyEnter})
 			continue
 		}
 		events = append(events, event{rune: r})
@@ -43,7 +44,7 @@ func TestComposerPasteBurstKeepsMultilinePaste(t *testing.T) {
 	for _, ev := range events {
 		clock = clock.Add(time.Millisecond)
 		if ev.key != 0 {
-			model.Update(bubbletea.KeyMsg{Type: ev.key})
+			model.Update(keymsg.KeyMsg{Type: ev.key})
 			continue
 		}
 		model.Update(keyRunes(ev.rune))
@@ -57,7 +58,7 @@ func TestComposerPasteBurstKeepsMultilinePaste(t *testing.T) {
 
 	// After the burst window expires a real Enter still submits.
 	clock = clock.Add(bottompane.PasteEnterSuppressWindow + time.Millisecond)
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if len(submitted) != 1 {
 		t.Fatalf("submitted = %#v, want one message after the burst", submitted)
 	}
@@ -72,12 +73,12 @@ func TestComposerPasteBurstKeepsMultilinePaste(t *testing.T) {
 func TestComposerMultilineDraftPaintsSinglePrompt(t *testing.T) {
 	model := NewModel(codextui.NewState(nil), Options{Width: 100, Height: 30})
 	model.composer.SetValue("draft-row-0\ndraft-row-1\ndraft-row-2")
-	view := model.View()
+	view := model.viewString()
 
 	if got := strings.Count(view, "›"); got != 1 {
 		t.Fatalf("view painted %d prompt glyphs, want 1:\n%s", got, view)
 	}
-	lines := strings.Split(view, "\n")
+	lines := strings.Split(plainView(view), "\n")
 	start := -1
 	for i, line := range lines {
 		if strings.Contains(line, "draft-row-0") {
@@ -93,7 +94,7 @@ func TestComposerMultilineDraftPaintsSinglePrompt(t *testing.T) {
 	}
 	for offset, want := range []string{"  draft-row-1", "  draft-row-2"} {
 		row := lines[start+1+offset]
-		if !strings.HasPrefix(row, want) {
+		if !strings.HasPrefix(plainView(row), want) {
 			t.Fatalf("row %d = %q, want prefix %q", start+1+offset, row, want)
 		}
 	}

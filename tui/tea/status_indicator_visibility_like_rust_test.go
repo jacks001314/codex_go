@@ -128,7 +128,7 @@ func TestUnifiedExecCommandKeepsStatusRowOnlyLikeRust(t *testing.T) {
 	item.Metadata = map[string]any{"source": "unifiedExecStartup"}
 	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(item)})
 
-	view := strings.ToLower(model.View())
+	view := strings.ToLower(model.viewString())
 	if strings.Contains(view, "running powershell") {
 		t.Fatalf("unified exec startup rendered a duplicate running cell:\n%s", view)
 	}

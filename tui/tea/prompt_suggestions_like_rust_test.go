@@ -4,9 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 func TestParsePromptSuggestionMatchesRust(t *testing.T) {
@@ -58,11 +57,11 @@ func TestPromptSuggestionVisibilityAndTabAcceptanceLikeRust(t *testing.T) {
 	if got := model.visiblePromptSuggestion(); got != "Add focused tests" {
 		t.Fatalf("visible suggestion = %q", got)
 	}
-	if view := model.View(); !strings.Contains(view, "Add focused tests") {
+	if view := plainView(model.viewString()); !strings.Contains(view, "Add focused tests") {
 		t.Fatalf("view missing suggestion:\n%s", view)
 	}
 
-	model.Update(key(bubbletea.KeyTab))
+	model.Update(key(keymsg.KeyTab))
 	if got := model.composerText(); got != "Add focused tests" {
 		t.Fatalf("composer after Tab = %q", got)
 	}
@@ -70,7 +69,7 @@ func TestPromptSuggestionVisibilityAndTabAcceptanceLikeRust(t *testing.T) {
 		t.Fatal("suggestion was not consumed")
 	}
 	// The duplicate Tab from the same key cycle must not queue the draft.
-	model.Update(key(bubbletea.KeyTab))
+	model.Update(key(keymsg.KeyTab))
 	if len(model.queued) != 0 {
 		t.Fatalf("duplicate Tab queued the prompt: %#v", model.queued)
 	}
@@ -100,7 +99,7 @@ func TestPromptSuggestionEscapeAndStaleResultsLikeRust(t *testing.T) {
 	if got := model.visiblePromptSuggestion(); got != "Cancel me" {
 		t.Fatalf("current suggestion = %q", got)
 	}
-	model.Update(key(bubbletea.KeyEsc))
+	model.Update(key(keymsg.KeyEsc))
 	if model.promptSuggestion != nil || model.composerText() != "" {
 		t.Fatalf("Escape did not cancel: suggestion=%#v composer=%q", model.promptSuggestion, model.composerText())
 	}
@@ -152,7 +151,7 @@ func TestPromptSuggestionYieldsToConfiguredTabBindingLikeRust(t *testing.T) {
 	if got := model.visiblePromptSuggestion(); got != "do not accept" {
 		t.Fatalf("visible suggestion = %q", got)
 	}
-	model.Update(key(bubbletea.KeyTab))
+	model.Update(key(keymsg.KeyTab))
 	if model.promptSuggestion == nil || model.composerText() != "" {
 		t.Fatalf("configured Tab binding accepted the suggestion: composer=%q", model.composerText())
 	}

@@ -1,10 +1,11 @@
 package tea
 
 import (
+	keymsg "codex_go/tui/keymsg"
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
 	"codex_go/utils"
@@ -39,7 +40,7 @@ func TestOwnedTranscriptFindExpandsOnlyCurrentMatchLikeRust(t *testing.T) {
 
 	// The newest match is selected first. Only that command's hidden output is
 	// revealed; the older command remains compact.
-	view := model.View()
+	view := model.viewString()
 	if !strings.Contains(view, "newer hidden needle") {
 		t.Fatalf("newest hidden match was not revealed:\n%s", view)
 	}
@@ -51,8 +52,8 @@ func TestOwnedTranscriptFindExpandsOnlyCurrentMatchLikeRust(t *testing.T) {
 	}
 
 	// Ctrl+P moves to the older hit and collapses the newer one.
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyCtrlP})
-	view = model.View()
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyCtrlP})
+	view = model.viewString()
 	if !strings.Contains(view, "older hidden needle") {
 		t.Fatalf("older hidden match was not revealed:\n%s", view)
 	}
@@ -64,9 +65,9 @@ func TestOwnedTranscriptFindExpandsOnlyCurrentMatchLikeRust(t *testing.T) {
 	}
 
 	// Ctrl+N returns to the newer hit; running past the end keeps it visible.
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyCtrlN})
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyCtrlN})
-	view = model.View()
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyCtrlN})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyCtrlN})
+	view = model.viewString()
 	if !strings.Contains(view, "newer hidden needle") {
 		t.Fatalf("newer match was not retained after exhaustion:\n%s", view)
 	}
@@ -76,15 +77,15 @@ func TestOwnedTranscriptFindExpandsOnlyCurrentMatchLikeRust(t *testing.T) {
 
 	// Enter accepts the result; Esc then returns to the latest output and clears
 	// the temporary expansion.
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	if !model.mainFind.accepted || model.mainFind.editing {
 		t.Fatalf("accept left editing=%v accepted=%v", model.mainFind.editing, model.mainFind.accepted)
 	}
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEsc})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyEsc})
 	if model.mainFind.active() {
 		t.Fatal("Esc after acceptance did not clear Find")
 	}
-	view = utils.StripANSI(model.View())
+	view = utils.StripANSI(model.viewString())
 	if strings.Contains(view, "hidden needle") {
 		t.Fatalf("cancelled Find left hidden output expanded:\n%s", view)
 	}
@@ -98,11 +99,11 @@ func TestOwnedTranscriptFindEscapeCancelsEditingLikeRust(t *testing.T) {
 	for _, r := range "needle" {
 		model.Update(findKeyRunes(string(r)))
 	}
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEsc})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyEsc})
 	if model.mainFind.active() {
 		t.Fatalf("Escape left Find active: %#v", model.mainFind)
 	}
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if strings.Contains(view, "hidden needle") {
 		t.Fatalf("cancelled Find left hidden output expanded:\n%s", view)
 	}
@@ -127,12 +128,12 @@ func TestOwnedTranscriptFindRevealsTranscriptOnlyMatchLikeRust(t *testing.T) {
 	for _, r := range "needle" {
 		model.Update(findKeyRunes(string(r)))
 	}
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "hidden reasoning needle") {
 		t.Fatalf("transcript-only match was not revealed:\n%s", view)
 	}
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyCtrlC})
-	view = utils.StripANSI(model.View())
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyCtrlC})
+	view = utils.StripANSI(model.viewString())
 	if strings.Contains(view, "hidden reasoning needle") {
 		t.Fatalf("transcript-only match stayed visible after cancel:\n%s", view)
 	}
@@ -150,7 +151,7 @@ func TestOwnedTranscriptFindCtrlCCancelsWithoutQuittingLikeRust(t *testing.T) {
 		t.Fatalf("find setup = %#v", model.mainFind)
 	}
 	savedOffset := model.mainFind.savedOffset
-	_, cmd := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyCtrlC})
+	_, cmd := model.Update(keymsg.KeyMsg{Type: keymsg.KeyCtrlC})
 	if cmd != nil {
 		t.Fatalf("Ctrl+C returned a quit/interrupt command while Find was active")
 	}
@@ -183,7 +184,7 @@ func TestOwnedTranscriptFindPicksUpLiveMessageUpdatesLikeRust(t *testing.T) {
 		[]string{"$ live command", "live hidden needle", "live tail"},
 		[]string{"$ live command", "live hidden needle", "live tail"},
 	)
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "live hidden needle") {
 		t.Fatalf("open Find did not rescan the live message update:\n%s", view)
 	}
@@ -200,7 +201,7 @@ func TestOwnedTranscriptFindRetainsSelectionAcrossResizeLikeRust(t *testing.T) {
 	for _, r := range "needle" {
 		model.Update(findKeyRunes(string(r)))
 	}
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyCtrlP})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyCtrlP})
 	selected, ok := model.mainFind.selected()
 	if !ok || selected.message != 0 {
 		t.Fatalf("selected match before resize = %#v ok=%v", selected, ok)
@@ -210,7 +211,7 @@ func TestOwnedTranscriptFindRetainsSelectionAcrossResizeLikeRust(t *testing.T) {
 	if !ok || selected.message != 0 || model.mainFind.query != "needle" {
 		t.Fatalf("selection after resize = %#v ok=%v query=%q", selected, ok, model.mainFind.query)
 	}
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "older hidden needle") {
 		t.Fatalf("older match was not retained after resize:\n%s", view)
 	}

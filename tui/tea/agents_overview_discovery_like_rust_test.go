@@ -5,9 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	agentsoverview "codex_go/tui/agents_overview"
+	"codex_go/tui/keymsg"
 	"codex_go/utils"
 )
 
@@ -15,12 +14,12 @@ func discoveryRows(count int) []agentsoverview.Row {
 	rows := make([]agentsoverview.Row, 0, count)
 	for i := 0; i < count; i++ {
 		rows = append(rows, agentsoverview.Row{
-			ThreadID:  fmt.Sprintf("task-%02d", i),
-			Name:      fmt.Sprintf("task %02d", i),
-			CWD:       "/work/a",
-			Group:     agentsoverview.GroupReady,
+			ThreadID:   fmt.Sprintf("task-%02d", i),
+			Name:       fmt.Sprintf("task %02d", i),
+			CWD:        "/work/a",
+			Group:      agentsoverview.GroupReady,
 			StatusType: "idle",
-			UpdatedAt: int64(1000 - i),
+			UpdatedAt:  int64(1000 - i),
 		})
 	}
 	return rows
@@ -43,16 +42,16 @@ func TestAgentsOverviewShowMoreLikeRust(t *testing.T) {
 	if !model.agentsOverview.HasMore() {
 		t.Fatal("the dashboard did not report more history")
 	}
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "Show more") {
 		t.Fatalf("Show more row missing:\n%s", view)
 	}
-	updated, _ := model.Update(key(bubbletea.KeyEnd))
+	updated, _ := model.Update(key(keymsg.KeyEnd))
 	model = updated.(*Model)
 	if !model.agentsOverview.ShowMoreSelected() {
 		t.Fatalf("End did not select the Show more row (selected=%d)", model.agentsOverview.Selected)
 	}
-	updated, command := model.Update(key(bubbletea.KeyEnter))
+	updated, command := model.Update(key(keymsg.KeyEnter))
 	model = updated.(*Model)
 	if command != nil {
 		updated, _ = model.Update(command())

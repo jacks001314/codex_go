@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	"codex_go/appserver"
 	"codex_go/config"
@@ -57,7 +57,7 @@ func TestInteractiveStartupConfigWarningsLikeRust(t *testing.T) {
 		StartupConfigWarnings: warnings,
 	})
 	// Rust #46751 keeps the diagnostics out of the live transcript.
-	if view := utils.StripANSI(model.View()); strings.Contains(view, "startup issue") {
+	if view := utils.StripANSI(model.ViewContent()); strings.Contains(view, "startup issue") {
 		t.Fatalf("startup warnings rendered inline:\n%s", view)
 	}
 }
@@ -105,7 +105,7 @@ func TestRemoteConfigWarningFeedsStartupWarningsLikeRust(t *testing.T) {
 	}
 	model := codextea.NewModel(state, codextea.Options{Width: 100, Height: 24, ShowSessionHeader: true})
 	model.Update(message)
-	if view := utils.StripANSI(model.View()); strings.Contains(view, "startup issue") {
+	if view := utils.StripANSI(model.ViewContent()); strings.Contains(view, "startup issue") {
 		t.Fatalf("config warning rendered inline:\n%s", view)
 	}
 }

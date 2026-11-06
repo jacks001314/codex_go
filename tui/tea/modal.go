@@ -5,12 +5,13 @@ import (
 	"strconv"
 	"strings"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	bubbletea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	codextui "codex_go/tui"
 	bottompane "codex_go/tui/bottom_pane"
 	chatwidget "codex_go/tui/chatwidget"
+	"codex_go/tui/keymsg"
 	"codex_go/utils"
 	"codex_go/voicehost"
 )
@@ -492,11 +493,11 @@ func normalizeModalOptions(options []ModalOption) []ModalOption {
 	return out
 }
 
-func (m *Model) updateModal(message bubbletea.KeyMsg) bubbletea.Cmd {
+func (m *Model) updateModal(message keymsg.KeyMsg) bubbletea.Cmd {
 	if m == nil || m.modal == nil {
 		return nil
 	}
-	if m.modal.id == resumeCWDPromptID && message.Type == bubbletea.KeyCtrlC {
+	if m.modal.id == resumeCWDPromptID && message.Type == keymsg.KeyCtrlC {
 		m.modal = nil
 		m.pendingResumeCWD = nil
 		return bubbletea.Quit
@@ -556,12 +557,12 @@ func (m *Model) updateModal(message bubbletea.KeyMsg) bubbletea.Cmd {
 	}
 	if m.modal.userInput != nil {
 		userInput := m.modal.userInput
-		if userInput.ConfirmUnanswered && message.Type == bubbletea.KeyEsc {
+		if userInput.ConfirmUnanswered && message.Type == keymsg.KeyEsc {
 			return m.respondModal(true)
 		}
 		if !userInput.ConfirmUnanswered && userInput.HasOptions() {
 			switch message.Type {
-			case bubbletea.KeyTab:
+			case keymsg.KeyTab:
 				if userInput.NotesVisible {
 					userInput.ClearNotes()
 				} else {
@@ -569,13 +570,13 @@ func (m *Model) updateModal(message bubbletea.KeyMsg) bubbletea.Cmd {
 				}
 				m.refreshRequestUserInputModal()
 				return nil
-			case bubbletea.KeyEsc:
+			case keymsg.KeyEsc:
 				if userInput.NotesVisible {
 					userInput.ClearNotes()
 					m.refreshRequestUserInputModal()
 					return nil
 				}
-			case bubbletea.KeyBackspace:
+			case keymsg.KeyBackspace:
 				if userInput.NotesVisible {
 					userInput.BackspaceDraft()
 					if userInput.Draft == "" {
@@ -584,7 +585,7 @@ func (m *Model) updateModal(message bubbletea.KeyMsg) bubbletea.Cmd {
 					m.refreshRequestUserInputModal()
 					return nil
 				}
-			case bubbletea.KeyRunes:
+			case keymsg.KeyRunes:
 				key := strings.ToLower(string(message.Runes))
 				if userInput.NotesVisible {
 					userInput.AppendDraft(string(message.Runes))
@@ -601,11 +602,11 @@ func (m *Model) updateModal(message bubbletea.KeyMsg) bubbletea.Cmd {
 		}
 		if !userInput.ConfirmUnanswered && !userInput.HasOptions() {
 			switch message.Type {
-			case bubbletea.KeyRunes:
+			case keymsg.KeyRunes:
 				userInput.AppendDraft(string(message.Runes))
 				m.refreshRequestUserInputModal()
 				return nil
-			case bubbletea.KeyBackspace:
+			case keymsg.KeyBackspace:
 				userInput.BackspaceDraft()
 				m.refreshRequestUserInputModal()
 				return nil
@@ -614,9 +615,9 @@ func (m *Model) updateModal(message bubbletea.KeyMsg) bubbletea.Cmd {
 	}
 	if m.modal.statusLineSetup != nil || m.modal.terminalTitleSetup != nil {
 		switch message.Type {
-		case bubbletea.KeySpace:
+		case keymsg.KeySpace:
 			return m.toggleStatusSetupSelection()
-		case bubbletea.KeyRunes:
+		case keymsg.KeyRunes:
 			if string(message.Runes) == " " {
 				return m.toggleStatusSetupSelection()
 			}
@@ -624,10 +625,10 @@ func (m *Model) updateModal(message bubbletea.KeyMsg) bubbletea.Cmd {
 	}
 	if m.modal.kind == ModalKindExperimental {
 		switch message.Type {
-		case bubbletea.KeySpace:
+		case keymsg.KeySpace:
 			m.toggleExperimentalSelection()
 			return nil
-		case bubbletea.KeyRunes:
+		case keymsg.KeyRunes:
 			if string(message.Runes) == " " {
 				m.toggleExperimentalSelection()
 				return nil
@@ -636,44 +637,44 @@ func (m *Model) updateModal(message bubbletea.KeyMsg) bubbletea.Cmd {
 	}
 	if m.modal.kind == ModalKindMisalignment {
 		switch message.Type {
-		case bubbletea.KeyPgUp:
+		case keymsg.KeyPgUp:
 			m.scrollMisalignmentBody(-m.misalignmentBodyPage())
 			return nil
-		case bubbletea.KeyPgDown:
+		case keymsg.KeyPgDown:
 			m.scrollMisalignmentBody(m.misalignmentBodyPage())
 			return nil
 		}
 	}
 	switch message.Type {
-	case bubbletea.KeyEsc:
+	case keymsg.KeyEsc:
 		return m.respondModal(true)
-	case bubbletea.KeyEnter:
+	case keymsg.KeyEnter:
 		return m.activateModalOption(m.modal.selected)
-	case bubbletea.KeyUp:
+	case keymsg.KeyUp:
 		m.moveModalSelection(-1)
 		m.disarmModalOption()
 		return nil
-	case bubbletea.KeyDown, bubbletea.KeyTab:
+	case keymsg.KeyDown, keymsg.KeyTab:
 		m.moveModalSelection(1)
 		m.disarmModalOption()
 		return nil
-	case bubbletea.KeyPgUp:
+	case keymsg.KeyPgUp:
 		m.moveModalSelectionPage(-max(m.modal.optionVisibleRows, 1))
 		m.disarmModalOption()
 		return nil
-	case bubbletea.KeyPgDown:
+	case keymsg.KeyPgDown:
 		m.moveModalSelectionPage(max(m.modal.optionVisibleRows, 1))
 		m.disarmModalOption()
 		return nil
-	case bubbletea.KeyHome, bubbletea.KeyCtrlHome:
+	case keymsg.KeyHome, keymsg.KeyCtrlHome:
 		m.selectModalEdge(false)
 		m.disarmModalOption()
 		return nil
-	case bubbletea.KeyEnd, bubbletea.KeyCtrlEnd:
+	case keymsg.KeyEnd, keymsg.KeyCtrlEnd:
 		m.selectModalEdge(true)
 		m.disarmModalOption()
 		return nil
-	case bubbletea.KeyRunes:
+	case keymsg.KeyRunes:
 		key := strings.ToLower(string(message.Runes))
 		if key == "" {
 			return nil
@@ -792,13 +793,13 @@ func (m *Model) disarmModalOption() {
 	m.modal.footerNote = ""
 }
 
-func (m *Model) updateCustomPromptModal(message bubbletea.KeyMsg) bubbletea.Cmd {
+func (m *Model) updateCustomPromptModal(message keymsg.KeyMsg) bubbletea.Cmd {
 	if m == nil || m.modal == nil || m.modal.customPrompt == nil {
 		return nil
 	}
 	modal := m.modal
 	prompt := modal.customPrompt
-	if message.Type == bubbletea.KeyRunes {
+	if message.Type == keymsg.KeyRunes {
 		if message.Paste {
 			prompt.HandlePaste(string(message.Runes))
 		} else {
@@ -808,25 +809,25 @@ func (m *Model) updateCustomPromptModal(message bubbletea.KeyMsg) bubbletea.Cmd 
 		}
 	} else {
 		switch message.Type {
-		case bubbletea.KeyEsc:
+		case keymsg.KeyEsc:
 			prompt.HandleKey("esc")
-		case bubbletea.KeyCtrlC:
+		case keymsg.KeyCtrlC:
 			prompt.HandleKey("ctrl-c")
-		case bubbletea.KeyEnter:
+		case keymsg.KeyEnter:
 			prompt.HandleKey("enter")
-		case bubbletea.KeyBackspace:
+		case keymsg.KeyBackspace:
 			prompt.HandleKey("backspace")
-		case bubbletea.KeyLeft:
+		case keymsg.KeyLeft:
 			prompt.HandleKey("left")
-		case bubbletea.KeyRight:
+		case keymsg.KeyRight:
 			prompt.HandleKey("right")
-		case bubbletea.KeyUp:
+		case keymsg.KeyUp:
 			prompt.HandleKey("up")
-		case bubbletea.KeyDown:
+		case keymsg.KeyDown:
 			prompt.HandleKey("down")
-		case bubbletea.KeyHome:
+		case keymsg.KeyHome:
 			prompt.HandleKey("home")
-		case bubbletea.KeyEnd:
+		case keymsg.KeyEnd:
 			prompt.HandleKey("end")
 		default:
 			prompt.HandleKey(message.String())
@@ -846,13 +847,13 @@ func (m *Model) updateCustomPromptModal(message bubbletea.KeyMsg) bubbletea.Cmd 
 	return modal.customPromptSubmit(name)
 }
 
-func (m *Model) updateSessionPickerModal(message bubbletea.KeyMsg) bubbletea.Cmd {
+func (m *Model) updateSessionPickerModal(message keymsg.KeyMsg) bubbletea.Cmd {
 	if m == nil || m.modal == nil || m.modal.sessionPicker == nil {
 		return nil
 	}
 	picker := m.modal.sessionPicker
 	switch message.Type {
-	case bubbletea.KeyEsc:
+	case keymsg.KeyEsc:
 		if strings.TrimSpace(picker.Query) != "" {
 			picker.Query = ""
 			picker.SelectFirst()
@@ -860,31 +861,31 @@ func (m *Model) updateSessionPickerModal(message bubbletea.KeyMsg) bubbletea.Cmd
 			return nil
 		}
 		return m.respondModal(true)
-	case bubbletea.KeyCtrlC:
+	case keymsg.KeyCtrlC:
 		return m.respondModal(true)
-	case bubbletea.KeyEnter:
+	case keymsg.KeyEnter:
 		return m.respondModal(false)
-	case bubbletea.KeyUp:
+	case keymsg.KeyUp:
 		picker.Move(-1)
-	case bubbletea.KeyDown:
+	case keymsg.KeyDown:
 		picker.Move(1)
-	case bubbletea.KeyPgUp:
+	case keymsg.KeyPgUp:
 		picker.MovePage(-sessionPickerPageStep(m))
-	case bubbletea.KeyPgDown:
+	case keymsg.KeyPgDown:
 		picker.MovePage(sessionPickerPageStep(m))
-	case bubbletea.KeyHome, bubbletea.KeyCtrlHome:
+	case keymsg.KeyHome, keymsg.KeyCtrlHome:
 		picker.SelectFirst()
-	case bubbletea.KeyEnd, bubbletea.KeyCtrlEnd:
+	case keymsg.KeyEnd, keymsg.KeyCtrlEnd:
 		picker.SelectLast()
-	case bubbletea.KeyTab, bubbletea.KeyShiftTab:
+	case keymsg.KeyTab, keymsg.KeyShiftTab:
 		picker.ToggleToolbarFocus()
-	case bubbletea.KeyLeft:
+	case keymsg.KeyLeft:
 		picker.ChangeFocusedToolbarValueDirection(codextui.SessionFilterPrevious)
-	case bubbletea.KeyRight:
+	case keymsg.KeyRight:
 		picker.ChangeFocusedToolbarValueDirection(codextui.SessionFilterNext)
-	case bubbletea.KeyCtrlO:
+	case keymsg.KeyCtrlO:
 		picker.ToggleDensity()
-	case bubbletea.KeyCtrlE:
+	case keymsg.KeyCtrlE:
 		if item, ok := picker.SelectedItem(); ok {
 			wasExpanded := picker.Expanded[item.ThreadID]
 			picker.ToggleExpanded(item.ThreadID)
@@ -896,19 +897,19 @@ func (m *Model) updateSessionPickerModal(message bubbletea.KeyMsg) bubbletea.Cmd
 			}
 			return nil
 		}
-	case bubbletea.KeyCtrlT:
+	case keymsg.KeyCtrlT:
 		if item, ok := picker.SelectedItem(); ok {
 			// Rust open_selected_transcript: ctrl+t opens the selected session's
 			// full transcript in the pager overlay.
 			return m.openSelectedSessionTranscript(item)
 		}
-	case bubbletea.KeyBackspace:
+	case keymsg.KeyBackspace:
 		if picker.Query != "" {
 			runes := []rune(picker.Query)
 			picker.Query = string(runes[:len(runes)-1])
 			picker.SelectFirst()
 		}
-	case bubbletea.KeyRunes:
+	case keymsg.KeyRunes:
 		text := string(message.Runes)
 		if text == "" {
 			return nil
@@ -1583,7 +1584,7 @@ func (m *Model) closeSessionPickerTerminalMode(next bubbletea.Cmd) bubbletea.Cmd
 		return next
 	}
 	m.sessionPickerAltScreen = false
-	return bubbletea.Sequence(bubbletea.ExitAltScreen, next)
+	return next
 }
 
 func (m *Model) resolveRequestUserInputModal(modal *modalState, optionID string, cancelled bool) (*UserInputDecision, bool, bool) {
@@ -1838,19 +1839,19 @@ func cloneAnyMap(values map[string]any) map[string]any {
 	return out
 }
 
-func (m *Model) updateThemePickerModal(message bubbletea.KeyMsg) bubbletea.Cmd {
+func (m *Model) updateThemePickerModal(message keymsg.KeyMsg) bubbletea.Cmd {
 	if m == nil || m.modal == nil || m.modal.themePicker == nil {
 		return nil
 	}
 	modal := m.modal
 	picker := modal.themePicker
 	switch message.Type {
-	case bubbletea.KeyEsc:
+	case keymsg.KeyEsc:
 		picker.Cancel()
 		m.modal = nil
 		m.notice = "Cancelled"
 		return nil
-	case bubbletea.KeyEnter:
+	case keymsg.KeyEnter:
 		if !themePickerSelectionVisible(modal) {
 			return nil
 		}
@@ -1862,37 +1863,37 @@ func (m *Model) updateThemePickerModal(message bubbletea.KeyMsg) bubbletea.Cmd {
 			return nil
 		}
 		return m.setTUITheme(themeID)
-	case bubbletea.KeyUp:
+	case keymsg.KeyUp:
 		picker.MoveFiltered(-1, modal.themeFilter)
 		return nil
-	case bubbletea.KeyDown, bubbletea.KeyTab:
+	case keymsg.KeyDown, keymsg.KeyTab:
 		picker.MoveFiltered(1, modal.themeFilter)
 		return nil
-	case bubbletea.KeyPgUp:
+	case keymsg.KeyPgUp:
 		m.moveThemePickerFilteredBy(-max(modal.themeVisibleRows, 1))
 		return nil
-	case bubbletea.KeyPgDown:
+	case keymsg.KeyPgDown:
 		m.moveThemePickerFilteredBy(max(modal.themeVisibleRows, 1))
 		return nil
-	case bubbletea.KeyHome, bubbletea.KeyCtrlHome:
+	case keymsg.KeyHome, keymsg.KeyCtrlHome:
 		picker.SelectFirstFiltered(modal.themeFilter)
 		modal.themeScrollTop = 0
 		return nil
-	case bubbletea.KeyEnd, bubbletea.KeyCtrlEnd:
+	case keymsg.KeyEnd, keymsg.KeyCtrlEnd:
 		indices := picker.FilteredIndices(modal.themeFilter)
 		if len(indices) > 0 {
 			picker.Select(indices[len(indices)-1])
 			modal.themeScrollTop = max(len(indices)-max(modal.themeVisibleRows, 1), 0)
 		}
 		return nil
-	case bubbletea.KeyBackspace:
+	case keymsg.KeyBackspace:
 		if modal.themeFilter != "" {
 			runes := []rune(modal.themeFilter)
 			modal.themeFilter = string(runes[:len(runes)-1])
 			ensureThemePickerSelection(modal)
 		}
 		return nil
-	case bubbletea.KeyRunes:
+	case keymsg.KeyRunes:
 		text := string(message.Runes)
 		if text == "" {
 			return nil

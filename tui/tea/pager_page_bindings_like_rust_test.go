@@ -3,9 +3,8 @@ package tea
 import (
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 func pagerPageBindingsConfig(t *testing.T, pageUp, pageDown, halfPageUp, halfPageDown, scrollUp, scrollDown []string) *codextui.KeymapConfig {
@@ -74,11 +73,11 @@ func TestTranscriptPageKeysFollowPagerBindingsLikeRust(t *testing.T) {
 			if bottom <= 0 {
 				t.Fatalf("initial transcript offset = %d, want scrollable bottom", bottom)
 			}
-			model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyPgUp})
+			model.Update(keymsg.KeyMsg{Type: keymsg.KeyPgUp})
 			if got, want := model.transcript.YOffset, max(bottom-testCase.delta, 0); got != want {
 				t.Fatalf("PageUp offset = %d, want %d (bottom %d, delta %d)", got, want, bottom, testCase.delta)
 			}
-			model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyPgDown})
+			model.Update(keymsg.KeyMsg{Type: keymsg.KeyPgDown})
 			if got := model.transcript.YOffset; got != bottom {
 				t.Fatalf("PageDown offset = %d, want bottom %d", got, bottom)
 			}

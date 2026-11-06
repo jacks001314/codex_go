@@ -4,10 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
 	agentsoverview "codex_go/tui/agents_overview"
+	"codex_go/tui/keymsg"
 	"codex_go/utils"
 )
 
@@ -32,7 +31,7 @@ func TestModelAgentsDashboardOpenShowsSwitchNoticeLikeRust(t *testing.T) {
 	})
 	openAgentsDashboard(t, model)
 	model.agentsOverview.Selected = 1 // root-2
-	updated, command := model.Update(key(bubbletea.KeyEnter))
+	updated, command := model.Update(key(keymsg.KeyEnter))
 	model = updated.(*Model)
 	if command == nil {
 		t.Fatal("open returned no attach command")
@@ -42,7 +41,7 @@ func TestModelAgentsDashboardOpenShowsSwitchNoticeLikeRust(t *testing.T) {
 	if !strings.HasPrefix(pendingNotice, "Switching to ") {
 		t.Fatalf("pending attach notice = %q, want a switching notice", pendingNotice)
 	}
-	if output := utils.StripANSI(model.View()); !strings.Contains(output, pendingNotice) {
+	if output := utils.StripANSI(model.viewString()); !strings.Contains(output, pendingNotice) {
 		t.Fatalf("pending attach notice is not rendered:\n%s", output)
 	}
 

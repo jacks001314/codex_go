@@ -1,14 +1,16 @@
 package tea
 
 import (
+	mousemsg "codex_go/tui/mousemsg"
 	"errors"
 	"os"
 	"runtime"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
 	tuiapp "codex_go/tui/app"
+	"codex_go/tui/keymsg"
 	tuiinternal "codex_go/tui/tui"
 )
 
@@ -79,11 +81,11 @@ func (m *Model) composerCanPasteOnRightClick() bool {
 // startRightClickPaste mirrors App::start_right_click_paste: an unmodified
 // right-button press with no pending read and an idle worker starts an
 // asynchronous clipboard read bound to the current composer target.
-func (m *Model) startRightClickPaste(msg bubbletea.MouseMsg) bubbletea.Cmd {
+func (m *Model) startRightClickPaste(msg mousemsg.MouseMsg) bubbletea.Cmd {
 	if m == nil {
 		return nil
 	}
-	rightButtonDown := msg.Action == bubbletea.MouseActionPress && msg.Button == bubbletea.MouseButtonRight
+	rightButtonDown := msg.Action == mousemsg.MouseActionPress && msg.Button == mousemsg.MouseButtonRight
 	// Bubble Tea v1 mouse messages carry no modifier state, so the press is
 	// treated as unmodified; the eligible-by-default branch is the one Rust
 	// enables for `auto`.
@@ -145,19 +147,19 @@ func (m *Model) invalidateRightClickPaste(event tuiapp.RightClickPasteEvent) {
 // leave the pending read alone.
 func rightClickPasteEventFor(message bubbletea.Msg) (tuiapp.RightClickPasteEvent, bool) {
 	switch msg := message.(type) {
-	case bubbletea.KeyMsg:
+	case keymsg.KeyMsg:
 		if msg.Paste {
 			return tuiapp.RightClickPasteEvent{Kind: tuiapp.RightClickPasteEventPaste}, true
 		}
 		return tuiapp.RightClickPasteEvent{Kind: tuiapp.RightClickPasteEventKey}, true
-	case bubbletea.MouseMsg:
+	case mousemsg.MouseMsg:
 		kind := tuiapp.RightClickPasteMouseOther
 		switch {
-		case msg.Action == bubbletea.MouseActionMotion:
+		case msg.Action == mousemsg.MouseActionMotion:
 			kind = tuiapp.RightClickPasteMouseMoved
-		case msg.Action == bubbletea.MouseActionRelease && msg.Button == bubbletea.MouseButtonRight:
+		case msg.Action == mousemsg.MouseActionRelease && msg.Button == mousemsg.MouseButtonRight:
 			kind = tuiapp.RightClickPasteMouseUpRight
-		case msg.Action == bubbletea.MouseActionPress && msg.Button == bubbletea.MouseButtonRight:
+		case msg.Action == mousemsg.MouseActionPress && msg.Button == mousemsg.MouseButtonRight:
 			kind = tuiapp.RightClickPasteMouseDownRight
 		}
 		// Bubble Tea v1 reports no mouse modifiers, so a right-button press is

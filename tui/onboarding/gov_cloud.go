@@ -1,12 +1,15 @@
 package onboarding
 
 import (
+	mousemsg "codex_go/tui/mousemsg"
 	"context"
 	"errors"
 	"io"
 	"strings"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	"codex_go/tui/keymsg"
+
+	bubbletea "charm.land/bubbletea/v2"
 )
 
 // GovCloudGuidanceURL is the configuration and security guidance linked from
@@ -20,11 +23,12 @@ type GovCloudGuidanceResult struct {
 }
 
 type govCloudGuidanceModel struct {
-	width    int
-	height   int
-	offset   int
-	done     bool
-	accepted bool
+	noAltScreen bool
+	width       int
+	height      int
+	offset      int
+	done        bool
+	accepted    bool
 }
 
 // RunGovCloudGuidance shows the blocking AWS GovCloud startup guidance.
@@ -32,16 +36,13 @@ func RunGovCloudGuidance(ctx context.Context, input io.Reader, output io.Writer,
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	model := &govCloudGuidanceModel{width: 80, height: 24}
+	model := &govCloudGuidanceModel{width: 80, height: 24, noAltScreen: noAltScreen}
 	options := []bubbletea.ProgramOption{bubbletea.WithContext(ctx)}
 	if input != nil {
 		options = append(options, bubbletea.WithInput(input))
 	}
 	if output != nil {
 		options = append(options, bubbletea.WithOutput(output))
-	}
-	if !noAltScreen {
-		options = append(options, bubbletea.WithAltScreen())
 	}
 	final, err := bubbletea.NewProgram(model, options...).Run()
 	if err != nil {
@@ -60,6 +61,11 @@ func RunGovCloudGuidance(ctx context.Context, input io.Reader, output io.Writer,
 func (m *govCloudGuidanceModel) Init() bubbletea.Cmd { return nil }
 
 func (m *govCloudGuidanceModel) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
+	if key, ok := keymsg.FromTea(message); ok {
+		message = key
+	} else if mouse, ok := mousemsg.FromTea(message); ok {
+		message = mouse
+	}
 	switch message := message.(type) {
 	case bubbletea.WindowSizeMsg:
 		if message.Width > 0 {
@@ -69,27 +75,33 @@ func (m *govCloudGuidanceModel) Update(message bubbletea.Msg) (bubbletea.Model, 
 			m.height = message.Height
 		}
 		return m, nil
-	case bubbletea.KeyMsg:
+	case keymsg.KeyMsg:
 		switch message.Type {
-		case bubbletea.KeyEnter:
+		case keymsg.KeyEnter:
 			m.accepted = true
 			m.done = true
 			return m, bubbletea.Quit
-		case bubbletea.KeyEsc, bubbletea.KeyCtrlC:
+		case keymsg.KeyEsc, keymsg.KeyCtrlC:
 			m.done = true
 			return m, bubbletea.Quit
-		case bubbletea.KeyUp:
+		case keymsg.KeyUp:
 			if m.offset > 0 {
 				m.offset--
 			}
-		case bubbletea.KeyDown:
+		case keymsg.KeyDown:
 			m.offset++
 		}
 	}
 	return m, nil
 }
 
-func (m *govCloudGuidanceModel) View() string {
+func (m *govCloudGuidanceModel) View() bubbletea.View {
+	v := bubbletea.NewView(m.viewString())
+	v.AltScreen = !m.noAltScreen
+	return v
+}
+
+func (m *govCloudGuidanceModel) viewString() string {
 	if m == nil || m.done {
 		return ""
 	}

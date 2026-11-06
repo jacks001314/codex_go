@@ -27,7 +27,7 @@ func TestConversationInsetPadsToRectLikeRust(t *testing.T) {
 	inset := ConversationRect{X: 4, Y: 2, Width: 40, Height: 12}
 	model.conversationInset = &inset
 
-	view := model.View()
+	view := model.viewString()
 	lines := strings.Split(view, "\n")
 	if len(lines) != model.height {
 		t.Fatalf("rendered rows = %d, want %d", len(lines), model.height)
@@ -69,7 +69,7 @@ func TestConversationInsetReflowsAndRestoresLayoutLikeRust(t *testing.T) {
 	inset := ConversationRect{X: 0, Y: 3, Width: 24, Height: 10}
 	model.conversationInset = &inset
 
-	view := model.View()
+	view := model.viewString()
 	if model.width != fullWidth {
 		t.Fatalf("layout width after the inset render = %d, want %d", model.width, fullWidth)
 	}
@@ -82,7 +82,7 @@ func TestConversationInsetReflowsAndRestoresLayoutLikeRust(t *testing.T) {
 	if model.transcriptContentTopRow != inset.Y {
 		t.Fatalf("transcript top row = %d, want the inset origin %d", model.transcriptContentTopRow, inset.Y)
 	}
-	if got, want := len(messageFragmentRows(view)), len(messageFragmentRows(fullView)); got <= want {
+	if got, want := len(messageFragmentRows(view)), len(messageFragmentRows(fullView.Content)); got <= want {
 		t.Fatalf("inset transcript rows = %d, want more than the %d full-width rows: the transcript did not reflow", got, want)
 	}
 }
@@ -113,7 +113,7 @@ func TestConversationInsetLeavesCenteredDialogFullScreenLikeRust(t *testing.T) {
 		Options: []ModalOption{{ID: "yes", Label: "Delete"}, {ID: "no", Label: "Cancel"}},
 	})
 
-	view := model.View()
+	view := model.viewString()
 	lines := strings.Split(view, "\n")
 	if len(lines) < 2 || strings.TrimSpace(lines[0]) != "" || strings.TrimSpace(lines[1]) != "" {
 		t.Fatalf("centered dialog was painted inside the inset: %q", strings.Join(lines[:2], "|"))

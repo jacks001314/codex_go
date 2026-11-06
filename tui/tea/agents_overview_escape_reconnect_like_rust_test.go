@@ -3,9 +3,8 @@ package tea
 import (
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	agentsoverview "codex_go/tui/agents_overview"
+	"codex_go/tui/keymsg"
 )
 
 // Rust #44360 returned Escape from the overview list to its inline composer.
@@ -26,7 +25,7 @@ func TestModelAgentsDashboardEscapeClosesWhileReconnectingLikeRust(t *testing.T)
 	model.agentsOverviewNotice = "Reconnecting\u2026"
 	model.agentsOverview.Notice = "Reconnecting\u2026"
 
-	updated, command := model.Update(key(bubbletea.KeyEsc))
+	updated, command := model.Update(key(keymsg.KeyEsc))
 	model = updated.(*Model)
 	if command != nil {
 		t.Fatalf("escape during reconnect returned command %T, want nil", command)

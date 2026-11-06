@@ -2,12 +2,14 @@ package tea
 
 import (
 	"bytes"
+	mousemsg "codex_go/tui/mousemsg"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	"codex_go/protocol"
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 // TestProgramStatusTracksLiveResultsLikeRust mirrors Rust #54114
@@ -30,7 +32,7 @@ func TestProgramStatusTracksLiveResultsLikeRust(t *testing.T) {
 	statuses = append(statuses, model.desiredProgramStatus())
 
 	// A key press acknowledges a retained result.
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune("a")})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune("a")})
 	statuses = append(statuses, model.desiredProgramStatus())
 
 	model.Update(ThreadEventMsg{Event: protocol.ThreadEvent{Type: "turn.started"}})
@@ -41,7 +43,7 @@ func TestProgramStatusTracksLiveResultsLikeRust(t *testing.T) {
 	model.Update(TurnCompletedMsg{Err: errTestTurnFailed{}})
 	statuses = append(statuses, model.desiredProgramStatus())
 
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune("a")})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune("a")})
 	statuses = append(statuses, model.desiredProgramStatus())
 
 	want := []codextui.ProgramStatus{
@@ -86,11 +88,11 @@ func TestProgramStatusAcknowledgesOnlyOnDeliberateInputLikeRust(t *testing.T) {
 	model := NewModel(nil, Options{})
 	model.Update(ThreadEventMsg{Event: protocol.ThreadEvent{Type: "turn.started"}})
 	model.Update(TurnCompletedMsg{})
-	model.Update(bubbletea.MouseMsg{Action: bubbletea.MouseActionMotion})
+	model.Update(mousemsg.MouseMsg{Action: mousemsg.MouseActionMotion})
 	if got := model.desiredProgramStatus(); got.State != codextui.ProgramStatusDone {
 		t.Fatalf("motion acknowledged the result: %#v", got)
 	}
-	model.Update(bubbletea.MouseMsg{Action: bubbletea.MouseActionPress})
+	model.Update(mousemsg.MouseMsg{Action: mousemsg.MouseActionPress})
 	if got := model.desiredProgramStatus(); got.State != codextui.ProgramStatusIdle {
 		t.Fatalf("press did not acknowledge the result: %#v", got)
 	}

@@ -6,7 +6,7 @@ package anim
 import (
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 )
 
 // TickMsg is sent on each animation frame tick.

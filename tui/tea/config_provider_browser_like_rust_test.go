@@ -5,10 +5,11 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	"codex_go/model"
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 	"codex_go/utils"
 )
 
@@ -84,12 +85,12 @@ func TestConfigPanelModelProvidersBrowserLikeRust(t *testing.T) {
 		return providerBrowserPage(), nil
 	})
 	cmd := openProviderBrowser(t, m)
-	view := utils.StripANSI(m.View())
+	view := utils.StripANSI(m.viewString())
 	if !strings.Contains(view, "Loading model providers") || !strings.Contains(view, "Back") {
 		t.Fatalf("loading view = %q", view)
 	}
 	m = applyCmd(t, m, cmd)
-	view = utils.StripANSI(m.View())
+	view = utils.StripANSI(m.viewString())
 	for _, want := range []string{
 		"Model providers",
 		"Current chat: openai \u00b7 Default for new chats: gateway",
@@ -104,17 +105,17 @@ func TestConfigPanelModelProvidersBrowserLikeRust(t *testing.T) {
 	}
 
 	// OpenAI is selected as the current provider; entering shows its details.
-	m.Update(key(bubbletea.KeyEnter))
-	view = utils.StripANSI(m.View())
+	m.Update(key(keymsg.KeyEnter))
+	view = utils.StripANSI(m.viewString())
 	for _, want := range []string{"Model provider details", "Provider ID  openai", "Type  Built-in OpenAI provider"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("openai details missing %q:\n%s", want, view)
 		}
 	}
-	m.Update(key(bubbletea.KeyEsc))
-	m.Update(key(bubbletea.KeyDown))
-	m.Update(key(bubbletea.KeyEnter))
-	view = utils.StripANSI(m.View())
+	m.Update(key(keymsg.KeyEsc))
+	m.Update(key(keymsg.KeyDown))
+	m.Update(key(keymsg.KeyEnter))
+	view = utils.StripANSI(m.viewString())
 	for _, want := range []string{"Gateway", "Provider ID  gateway", "Base URL  https://gateway.example.com/v1", "API key variable  GATEWAY_KEY"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("gateway details missing %q:\n%s", want, view)
@@ -128,11 +129,11 @@ func TestConfigPanelModelProvidersBrowserLikeRust(t *testing.T) {
 		t.Fatalf("active provider = %q, want openai", m.State.Provider)
 	}
 	// Esc returns to the list, then to the configuration panel.
-	m.Update(key(bubbletea.KeyEsc))
+	m.Update(key(keymsg.KeyEsc))
 	if m.modal.configPanel.providers == nil {
 		t.Fatal("esc from details closed the browser")
 	}
-	m.Update(key(bubbletea.KeyEsc))
+	m.Update(key(keymsg.KeyEsc))
 	if m.modal.configPanel.providers != nil || m.modal.kind != ModalKindConfig {
 		t.Fatalf("esc from list did not return to the configuration panel: %#v", m.modal)
 	}
@@ -146,14 +147,14 @@ func TestConfigPanelModelProvidersUnsupportedServerLikeRust(t *testing.T) {
 	})
 	cmd := openProviderBrowser(t, m)
 	m = applyCmd(t, m, cmd)
-	view := utils.StripANSI(m.View())
+	view := utils.StripANSI(m.viewString())
 	if !strings.Contains(view, "Update the connected app server to browse model providers.") {
 		t.Fatalf("unsupported view = %q", view)
 	}
 	if !strings.Contains(view, "1. Back") {
 		t.Fatalf("unsupported view has no Back row: %q", view)
 	}
-	m.Update(key(bubbletea.KeyEnter))
+	m.Update(key(keymsg.KeyEnter))
 	if m.modal.configPanel.providers != nil {
 		t.Fatal("Back did not dismiss the error view")
 	}
@@ -167,11 +168,11 @@ func TestConfigPanelModelProvidersDropsStaleResultLikeRust(t *testing.T) {
 		return providerBrowserPage(), nil
 	})
 	staleCmd := openProviderBrowser(t, m)
-	m.Update(key(bubbletea.KeyEsc))
+	m.Update(key(keymsg.KeyEsc))
 	if m.modal.configPanel.providers != nil {
 		t.Fatal("esc did not dismiss the browser")
 	}
-	m.Update(key(bubbletea.KeyEsc))
+	m.Update(key(keymsg.KeyEsc))
 	if m.modal != nil {
 		t.Fatal("second esc did not close the configuration panel")
 	}
@@ -180,12 +181,12 @@ func TestConfigPanelModelProvidersDropsStaleResultLikeRust(t *testing.T) {
 	m.modal.configPanel.section = configSectionSessions
 	freshCmd := m.activateConfigRow(configPanelRowByLabel(t, "Model providers"))
 	m = applyCmd(t, m, staleCmd)
-	view := utils.StripANSI(m.View())
+	view := utils.StripANSI(m.viewString())
 	if strings.Contains(view, "Current chat:") {
 		t.Fatalf("stale reply replaced the reopened list:\n%s", view)
 	}
 	m = applyCmd(t, m, freshCmd)
-	view = utils.StripANSI(m.View())
+	view = utils.StripANSI(m.viewString())
 	if !strings.Contains(view, "Current chat: openai") {
 		t.Fatalf("fresh reply did not load the list:\n%s", view)
 	}
@@ -204,7 +205,7 @@ func TestConfigPanelModelProvidersRefreshesAfterFirstChatLikeRust(t *testing.T) 
 	})
 	cmd := openProviderBrowser(t, m)
 	m = applyCmd(t, m, cmd)
-	if view := utils.StripANSI(m.View()); !strings.Contains(view, "Current chat: No active chat") {
+	if view := utils.StripANSI(m.viewString()); !strings.Contains(view, "Current chat: No active chat") {
 		t.Fatalf("pre-attach view = %q", view)
 	}
 	m.State.ThreadID = "thread-late"
@@ -214,7 +215,7 @@ func TestConfigPanelModelProvidersRefreshesAfterFirstChatLikeRust(t *testing.T) 
 		t.Fatal("first chat attachment did not refresh the open provider list")
 	}
 	m = applyCmd(t, m, refresh)
-	if view := utils.StripANSI(m.View()); !strings.Contains(view, "Current chat: gateway") {
+	if view := utils.StripANSI(m.viewString()); !strings.Contains(view, "Current chat: gateway") {
 		t.Fatalf("refreshed view = %q", view)
 	}
 	if again := m.refreshOpenProviderBrowserCmd(); again != nil {

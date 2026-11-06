@@ -1,16 +1,15 @@
 package tea
 
 import (
+	keymsg "codex_go/tui/keymsg"
 	"testing"
-
-	bubbletea "github.com/charmbracelet/bubbletea"
 
 	codextui "codex_go/tui"
 	"codex_go/tui/chatwidget"
 )
 
-func findKeyRunes(text string) bubbletea.KeyMsg {
-	return bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune(text)}
+func findKeyRunes(text string) keymsg.KeyMsg {
+	return keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune(text)}
 }
 
 // newFindTranscriptModel opens the transcript pager over a fixture with two
@@ -60,12 +59,12 @@ func TestTranscriptFindKeyWiringLikeRust(t *testing.T) {
 	if !ok {
 		t.Fatalf("no match line selected after typing the query")
 	}
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyCtrlP})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyCtrlP})
 	older, ok := model.overlay.FindMatchLine()
 	if !ok || older >= newest {
 		t.Fatalf("ctrl+p match line = %d ok=%v, want a line before %d", older, ok, newest)
 	}
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyCtrlN})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyCtrlN})
 	back, ok := model.overlay.FindMatchLine()
 	if !ok || back != newest {
 		t.Fatalf("ctrl+n match line = %d ok=%v, want %d", back, ok, newest)
@@ -84,7 +83,7 @@ func TestTranscriptFindKeyWiringLikeRust(t *testing.T) {
 	}
 
 	// Esc closes the bar and restores the pager keyboard.
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEsc})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyEsc})
 	if model.overlay.FindActive() || model.overlay.FindQuery() != "" {
 		t.Fatalf("Esc left active=%v query=%q", model.overlay.FindActive(), model.overlay.FindQuery())
 	}
@@ -106,7 +105,7 @@ func TestTranscriptPagerScrollStillWorksLikeRust(t *testing.T) {
 	model := NewModel(state, Options{Width: 60, Height: 10})
 	model.openTranscriptOverlay()
 	before := model.overlay.YOffset()
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyPgUp})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyPgUp})
 	if got := model.overlay.YOffset(); got >= before {
 		t.Fatalf("PageUp offset = %d, want less than %d", got, before)
 	}

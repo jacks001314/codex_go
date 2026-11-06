@@ -25,7 +25,7 @@ func TestReadOnlySummaryHistoryNoticeLikeRust(t *testing.T) {
 		ReadOnly:      true,
 		HistoryNotice: notice,
 	})
-	if view := utils.StripANSI(resumed.View()); !strings.Contains(view, marker) {
+	if view := utils.StripANSI(resumed.viewString()); !strings.Contains(view, marker) {
 		t.Fatalf("resume view missing summary history notice:\n%s", view)
 	}
 
@@ -39,7 +39,7 @@ func TestReadOnlySummaryHistoryNoticeLikeRust(t *testing.T) {
 			HistoryNotice: notice,
 		},
 	})
-	if view := utils.StripANSI(switched.View()); !strings.Contains(view, marker) {
+	if view := utils.StripANSI(switched.viewString()); !strings.Contains(view, marker) {
 		t.Fatalf("agent switch view missing summary history notice:\n%s", view)
 	}
 
@@ -48,7 +48,7 @@ func TestReadOnlySummaryHistoryNoticeLikeRust(t *testing.T) {
 		Summary:  &codextui.SessionSummary{ThreadID: "thread-c"},
 		ReadOnly: true,
 	})
-	if view := utils.StripANSI(complete.View()); strings.Contains(view, marker) {
+	if view := utils.StripANSI(complete.viewString()); strings.Contains(view, marker) {
 		t.Fatalf("complete snapshot must not show the summary notice:\n%s", view)
 	}
 }

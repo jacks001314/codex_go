@@ -3,7 +3,7 @@ package tea
 import (
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 )
 
 // updateAndRunClipboard executes the command returned by a key event and feeds

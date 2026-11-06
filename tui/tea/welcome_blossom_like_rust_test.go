@@ -1,10 +1,9 @@
 package tea
 
 import (
+	mousemsg "codex_go/tui/mousemsg"
 	"testing"
 	"time"
-
-	bubbletea "github.com/charmbracelet/bubbletea"
 
 	codextui "codex_go/tui"
 	"codex_go/utils"
@@ -39,8 +38,8 @@ func countBlossomDots(view string) int {
 // unused space.
 func TestFreshFullscreenShowsSettledBlossomLikeRust(t *testing.T) {
 	model, _ := blossomTestModel(t, true, DefaultEffectsSettings(), 100, 40)
-	if dots := countBlossomDots(model.View()); dots == 0 {
-		t.Fatalf("fresh fullscreen omitted the blossom:\n%s", utils.StripANSI(model.View()))
+	if dots := countBlossomDots(model.viewString()); dots == 0 {
+		t.Fatalf("fresh fullscreen omitted the blossom:\n%s", utils.StripANSI(model.viewString()))
 	}
 	if rect := model.welcomeBlossom.rect; rect.W <= 0 || rect.H < blossomMinRows {
 		t.Fatalf("blossom rect = %#v", rect)
@@ -73,7 +72,7 @@ func TestWelcomeBlossomEligibilityLikeRust(t *testing.T) {
 			if testCase.mutate != nil {
 				testCase.mutate(model)
 			}
-			if dots := countBlossomDots(model.View()); dots != 0 {
+			if dots := countBlossomDots(model.viewString()); dots != 0 {
 				t.Fatalf("ineligible view rendered %d blossom cells", dots)
 			}
 		})
@@ -84,16 +83,16 @@ func TestWelcomeBlossomEligibilityLikeRust(t *testing.T) {
 // settled dim pose.
 func TestWelcomeBlossomClickReplaysLikeRust(t *testing.T) {
 	model, now := blossomTestModel(t, true, DefaultEffectsSettings(), 100, 40)
-	_ = model.View()
+	_ = model.viewString()
 	rect := model.welcomeBlossom.rect
 	if rect.W <= 0 {
 		t.Fatalf("no blossom stage: %#v", rect)
 	}
-	model.Update(bubbletea.MouseMsg{
+	model.Update(mousemsg.MouseMsg{
 		X:      rect.X + rect.W/2,
 		Y:      rect.Y + rect.H/2,
-		Action: bubbletea.MouseActionPress,
-		Button: bubbletea.MouseButtonLeft,
+		Action: mousemsg.MouseActionPress,
+		Button: mousemsg.MouseButtonLeft,
 	})
 	if model.welcomeBlossom.replayStartedAt.IsZero() {
 		t.Fatal("clicking the blossom did not start a replay")
@@ -110,11 +109,11 @@ func TestWelcomeBlossomClickReplaysLikeRust(t *testing.T) {
 	outside := *now
 	model.welcomeBlossom.replayStartedAt = outside.Add(-20 * time.Second)
 	model.blossomOpacity(outside)
-	model.Update(bubbletea.MouseMsg{
+	model.Update(mousemsg.MouseMsg{
 		X:      rect.X + rect.W + 2,
 		Y:      rect.Y,
-		Action: bubbletea.MouseActionPress,
-		Button: bubbletea.MouseButtonLeft,
+		Action: mousemsg.MouseActionPress,
+		Button: mousemsg.MouseButtonLeft,
 	})
 	if !model.welcomeBlossom.replayStartedAt.IsZero() {
 		t.Fatal("click outside the blossom started a replay")

@@ -1,10 +1,11 @@
 package tea
 
 import (
+	keymsg "codex_go/tui/keymsg"
 	"fmt"
 	"strings"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
 )
@@ -326,7 +327,7 @@ func (m *Model) activityFocusBarLine(width int) string {
 	return ""
 }
 
-func (m *Model) updateTranscriptActivityFocusKey(msg bubbletea.KeyMsg) (bool, bubbletea.Cmd) {
+func (m *Model) updateTranscriptActivityFocusKey(msg keymsg.KeyMsg) (bool, bubbletea.Cmd) {
 	if m == nil || !m.activityFocus.active {
 		return false, nil
 	}
@@ -335,22 +336,22 @@ func (m *Model) updateTranscriptActivityFocusKey(msg bubbletea.KeyMsg) (bool, bu
 		return true, nil
 	}
 	switch msg.Type {
-	case bubbletea.KeyEsc, bubbletea.KeyCtrlC:
+	case keymsg.KeyEsc, keymsg.KeyCtrlC:
 		m.clearTranscriptActivityFocus()
 		return true, nil
-	case bubbletea.KeyUp:
+	case keymsg.KeyUp:
 		m.moveTranscriptActivityFocus(-1)
 		return true, nil
-	case bubbletea.KeyDown:
+	case keymsg.KeyDown:
 		m.moveTranscriptActivityFocus(1)
 		return true, nil
-	case bubbletea.KeyPgUp:
+	case keymsg.KeyPgUp:
 		m.moveTranscriptActivityFocus(-5)
 		return true, nil
-	case bubbletea.KeyPgDown:
+	case keymsg.KeyPgDown:
 		m.moveTranscriptActivityFocus(5)
 		return true, nil
-	case bubbletea.KeyHome:
+	case keymsg.KeyHome:
 		indexes := m.transcriptActivityIndexes()
 		if len(indexes) > 0 {
 			m.setFocusedTranscriptActivity(indexes[0])
@@ -358,7 +359,7 @@ func (m *Model) updateTranscriptActivityFocusKey(msg bubbletea.KeyMsg) (bool, bu
 			m.ensureFocusedTranscriptActivityVisible()
 		}
 		return true, nil
-	case bubbletea.KeyEnd:
+	case keymsg.KeyEnd:
 		indexes := m.transcriptActivityIndexes()
 		if len(indexes) > 0 {
 			m.setFocusedTranscriptActivity(indexes[len(indexes)-1])
@@ -366,17 +367,17 @@ func (m *Model) updateTranscriptActivityFocusKey(msg bubbletea.KeyMsg) (bool, bu
 			m.ensureFocusedTranscriptActivityVisible()
 		}
 		return true, nil
-	case bubbletea.KeyEnter:
+	case keymsg.KeyEnter:
 		m.toggleTranscriptActivityExpanded()
 		return true, nil
-	case bubbletea.KeyRight:
+	case keymsg.KeyRight:
 		m.setTranscriptActivityExpanded(true)
 		return true, nil
-	case bubbletea.KeyLeft:
+	case keymsg.KeyLeft:
 		m.setTranscriptActivityExpanded(false)
 		return true, nil
 	}
-	if msg.Type == bubbletea.KeyRunes && len(msg.Runes) == 1 && !msg.Paste {
+	if msg.Type == keymsg.KeyRunes && len(msg.Runes) == 1 && !msg.Paste {
 		switch msg.Runes[0] {
 		case 'k':
 			m.moveTranscriptActivityFocus(-1)

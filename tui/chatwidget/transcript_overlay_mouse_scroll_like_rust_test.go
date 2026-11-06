@@ -1,11 +1,10 @@
 package chatwidget
 
 import (
+	mousemsg "codex_go/tui/mousemsg"
 	"fmt"
 	"strings"
 	"testing"
-
-	bubbletea "github.com/charmbracelet/bubbletea"
 )
 
 // Rust #50209 (4dd51f4a5f, "Make transcript mouse scroll speed configurable"):
@@ -19,8 +18,8 @@ func TestTranscriptOverlayMouseScrollSpeedLikeRust(t *testing.T) {
 	}
 	content := strings.Join(rows, "\n")
 
-	wheelUp := bubbletea.MouseMsg{Action: bubbletea.MouseActionPress, Button: bubbletea.MouseButtonWheelUp}
-	wheelDown := bubbletea.MouseMsg{Action: bubbletea.MouseActionPress, Button: bubbletea.MouseButtonWheelDown}
+	wheelUp := mousemsg.MouseMsg{Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonWheelUp}
+	wheelDown := mousemsg.MouseMsg{Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonWheelDown}
 
 	// Default: one row per event, down from the previous fixed three rows.
 	overlay := NewTranscriptOverlay(40, 6, content)

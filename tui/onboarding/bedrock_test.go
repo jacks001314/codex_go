@@ -5,18 +5,17 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	"codex_go/appserver"
 	"codex_go/auth"
+	"codex_go/tui/keymsg"
 )
 
-func bedrockKeyRune(value rune) bubbletea.KeyMsg {
-	return bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{value}}
+func bedrockKeyRune(value rune) keymsg.KeyMsg {
+	return keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{value}}
 }
 
-func bedrockKeyType(value string) bubbletea.KeyMsg {
-	return bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune(value)}
+func bedrockKeyType(value string) keymsg.KeyMsg {
+	return keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune(value)}
 }
 
 func bedrockTestState(profiles []appserver.BedrockAwsProfile, environment []appserver.BedrockEnvironmentCredential) *bedrockState {
@@ -121,7 +120,7 @@ func TestBedrockProfileFlowConfiguresAndCompletes(t *testing.T) {
 	if model.bedrock == nil || model.bedrock.view != bedrockViewMethodsDetected {
 		t.Fatalf("discovery state = %#v", model.bedrock)
 	}
-	updated, command = model.handleBedrockKey(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	updated, command = model.handleBedrockKey(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	model = updated.(*authFlowModel)
 	if command == nil || model.bedrock.view != bedrockViewConfiguring {
 		t.Fatalf("profile selection state = %#v cmd=%v", model.bedrock, command)
@@ -158,19 +157,19 @@ func TestBedrockAccessKeyFlowUsesAccessKeyLogin(t *testing.T) {
 	model.bedrock = bedrockTestState(nil, nil)
 	model.state = SignInBedrock
 	// Manual profile -> access keys.
-	model.handleBedrockKey(bubbletea.KeyMsg{Type: bubbletea.KeyDown})
-	updated, _ := model.handleBedrockKey(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	model.handleBedrockKey(keymsg.KeyMsg{Type: keymsg.KeyDown})
+	updated, _ := model.handleBedrockKey(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	model = updated.(*authFlowModel)
 	if model.bedrock.view != bedrockViewAccessKeyEntry {
 		t.Fatalf("access key view = %v", model.bedrock.view)
 	}
 	model.handleBedrockKey(bedrockKeyType("AKID"))
-	model.handleBedrockKey(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	model.handleBedrockKey(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	model.handleBedrockKey(bedrockKeyType("SECRET"))
-	model.handleBedrockKey(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
-	model.handleBedrockKey(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	model.handleBedrockKey(keymsg.KeyMsg{Type: keymsg.KeyEnter})
+	model.handleBedrockKey(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	model.handleBedrockKey(bedrockKeyType("us-west-2"))
-	updated, command := model.handleBedrockKey(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	updated, command := model.handleBedrockKey(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	model = updated.(*authFlowModel)
 	if command == nil {
 		t.Fatal("access-key configuration returned no command")
@@ -200,17 +199,17 @@ func TestBedrockAPIKeyFlowAndGovCloudGuidance(t *testing.T) {
 	model.bedrock = bedrockTestState(nil, nil)
 	model.state = SignInBedrock
 	for range 3 {
-		model.handleBedrockKey(bubbletea.KeyMsg{Type: bubbletea.KeyDown})
+		model.handleBedrockKey(keymsg.KeyMsg{Type: keymsg.KeyDown})
 	}
-	updated, _ := model.handleBedrockKey(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	updated, _ := model.handleBedrockKey(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	model = updated.(*authFlowModel)
 	if model.bedrock.view != bedrockViewAPIKeyEntry {
 		t.Fatalf("api key view = %v", model.bedrock.view)
 	}
 	model.handleBedrockKey(bedrockKeyType("bedrock-key"))
-	model.handleBedrockKey(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	model.handleBedrockKey(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	model.handleBedrockKey(bedrockKeyType("us-gov-west-1"))
-	updated, command := model.handleBedrockKey(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	updated, command := model.handleBedrockKey(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	model = updated.(*authFlowModel)
 	updated, govCommand := model.Update(command())
 	model = updated.(*authFlowModel)
@@ -225,10 +224,10 @@ func TestBedrockAPIKeyFlowAndGovCloudGuidance(t *testing.T) {
 	if model.bedrock.view != bedrockViewGovCloudWarning {
 		t.Fatalf("GovCloud view = %v", model.bedrock.view)
 	}
-	if !strings.Contains(model.View(), "Using Codex with AWS GovCloud") {
-		t.Fatalf("guidance render:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Using Codex with AWS GovCloud") {
+		t.Fatalf("guidance render:\n%s", model.viewString())
 	}
-	updated, command = model.handleBedrockKey(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	updated, command = model.handleBedrockKey(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	model = updated.(*authFlowModel)
 	if !model.completed || command == nil {
 		t.Fatalf("guidance acknowledge state=%s cmd=%v", model.state, command)

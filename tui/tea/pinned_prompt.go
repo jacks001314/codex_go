@@ -1,9 +1,8 @@
 package tea
 
 import (
+	mousemsg "codex_go/tui/mousemsg"
 	"strings"
-
-	bubbletea "github.com/charmbracelet/bubbletea"
 
 	codextui "codex_go/tui"
 	historycell "codex_go/tui/history_cell"
@@ -104,11 +103,11 @@ func (m *Model) applyPinnedPromptHeader(transcript string, statusHeight int) str
 
 // handlePinnedPromptClick jumps to the original prompt when the pinned header
 // is clicked. It clears competing transcript interactions first.
-func (m *Model) handlePinnedPromptClick(msg bubbletea.MouseMsg) bool {
+func (m *Model) handlePinnedPromptClick(msg mousemsg.MouseMsg) bool {
 	if m == nil || !m.pinnedPrompt.active {
 		return false
 	}
-	if msg.Action != bubbletea.MouseActionPress || msg.Button != bubbletea.MouseButtonLeft ||
+	if msg.Action != mousemsg.MouseActionPress || msg.Button != mousemsg.MouseButtonLeft ||
 		msg.Y != m.pinnedPrompt.row {
 		return false
 	}

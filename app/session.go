@@ -337,6 +337,12 @@ func runSessionFork(opts *cli.SessionOptions, root *cli.RootOptions, stdin io.Re
 	if err := requireSessionTUIStreams(stdin, stdout); err != nil {
 		return err
 	}
+	if sessionWorktreeRequested(root, opts) {
+		if endpoint != nil {
+			return errors.New("`--worktree` is only supported for local sessions")
+		}
+		return interactiveForkWorktreeStarter(context.Background(), interactiveSessionRoot(root, opts), opts, newSessionStore(), stdin, stdout, stderr)
+	}
 	if endpoint != nil {
 		return runRemoteSessionFork(context.Background(), endpoint, root, opts, stdout)
 	}

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/viewport"
+	"charm.land/bubbles/v2/viewport"
 
 	"codex_go/eventmap"
 	"codex_go/protocol"
@@ -42,7 +42,7 @@ type TranscriptComponent struct {
 
 // newTranscriptComponent initializes the transcript sub-component.
 func newTranscriptComponent() TranscriptComponent {
-	vp := viewport.New(defaultWidth, defaultHeight-defaultComposerHeight-2)
+	vp := viewport.New(viewport.WithWidth(defaultWidth), viewport.WithHeight(defaultHeight-defaultComposerHeight-2))
 	// Rust #50209: wheel scrolling is owned by the model's configurable
 	// `tui.mouse_scroll_speed` path (see tea/mouse_scroll.go); this
 	// component's viewport is not fed mouse messages, so it stays on the
@@ -87,8 +87,10 @@ func (t *TranscriptComponent) refreshTranscript(state *codextui.State, width int
 		}
 	}
 	t.viewport.SetContent(strings.Join(lines, "\n"))
-	t.viewport.Width = max(width, 1)
-	t.viewport.Height = max(t.viewport.Height, 1)
+	t.viewport.SetWidth(max(width, 1))
+	if t.viewport.Height() < 1 {
+		t.viewport.SetHeight(1)
+	}
 	if t.activityFollow {
 		t.viewport.GotoBottom()
 	}
@@ -140,7 +142,7 @@ func (t *TranscriptComponent) addHistoryCell(state *codextui.State, cell history
 	if state == nil || t == nil {
 		return
 	}
-	displayLines := cell.DisplayLines(t.viewport.Width)
+	displayLines := cell.DisplayLines(t.viewport.Width())
 	rawLines := cell.RawLines()
 	if len(displayLines) == 0 && len(rawLines) == 0 {
 		return
@@ -150,7 +152,7 @@ func (t *TranscriptComponent) addHistoryCell(state *codextui.State, cell history
 }
 
 func (t *TranscriptComponent) updateViewportFromState(state *codextui.State) {
-	t.refreshTranscript(state, t.viewport.Width, true)
+	t.refreshTranscript(state, t.viewport.Width(), true)
 }
 
 // Viewport returns the underlying viewport model for Bubble Tea Update delegation.

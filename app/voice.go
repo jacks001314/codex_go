@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	"codex_go/appserver"
 	"codex_go/appserverdaemon"

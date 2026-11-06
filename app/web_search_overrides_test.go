@@ -8,7 +8,7 @@ import (
 	"slices"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	"codex_go/cli"
 	"codex_go/config"

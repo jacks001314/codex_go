@@ -1,9 +1,8 @@
 package tea
 
 import (
+	mousemsg "codex_go/tui/mousemsg"
 	"testing"
-
-	bubbletea "github.com/charmbracelet/bubbletea"
 )
 
 // Rust #59527: dragging the divider previews a width and saves the preference
@@ -14,21 +13,21 @@ func TestSidePaneDividerDragSavesWidthLikeRust(t *testing.T) {
 	if !ok {
 		t.Fatal("split layout unavailable")
 	}
-	handled, _ := m.handleSidePaneMouse(bubbletea.MouseMsg{
-		X: left, Y: 3, Action: bubbletea.MouseActionPress, Button: bubbletea.MouseButtonLeft,
+	handled, _ := m.handleSidePaneMouse(mousemsg.MouseMsg{
+		X: left, Y: 3, Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonLeft,
 	})
 	if !handled || m.sideResize == nil || m.sideResize.previewWidth != right {
 		t.Fatalf("press handled=%v preview=%#v want %d", handled, m.sideResize, right)
 	}
-	handled, _ = m.handleSidePaneMouse(bubbletea.MouseMsg{
-		X: left - 10, Y: 3, Action: bubbletea.MouseActionMotion, Button: bubbletea.MouseButtonLeft,
+	handled, _ = m.handleSidePaneMouse(mousemsg.MouseMsg{
+		X: left - 10, Y: 3, Action: mousemsg.MouseActionMotion, Button: mousemsg.MouseButtonLeft,
 	})
 	want := sidebarColumns(right+10, m.width)
 	if !handled || m.sideResize == nil || m.sideResize.previewWidth != want {
 		t.Fatalf("motion handled=%v preview=%#v want %d", handled, m.sideResize, want)
 	}
-	handled, saveCmd := m.handleSidePaneMouse(bubbletea.MouseMsg{
-		X: left - 10, Y: 3, Action: bubbletea.MouseActionRelease, Button: bubbletea.MouseButtonLeft,
+	handled, saveCmd := m.handleSidePaneMouse(mousemsg.MouseMsg{
+		X: left - 10, Y: 3, Action: mousemsg.MouseActionRelease, Button: mousemsg.MouseButtonLeft,
 	})
 	if !handled || m.sideResize != nil {
 		t.Fatalf("release handled=%v preview=%#v", handled, m.sideResize)
@@ -49,14 +48,14 @@ func TestSidePaneClickFocusesPaneLikeRust(t *testing.T) {
 	if !ok {
 		t.Fatal("split layout unavailable")
 	}
-	handled, _ := m.handleSidePaneMouse(bubbletea.MouseMsg{
-		X: left + 5, Y: 2, Action: bubbletea.MouseActionPress, Button: bubbletea.MouseButtonLeft,
+	handled, _ := m.handleSidePaneMouse(mousemsg.MouseMsg{
+		X: left + 5, Y: 2, Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonLeft,
 	})
 	if !handled || !m.activeSide.ShowingSide {
 		t.Fatalf("right-pane click handled=%v showingSide=%v", handled, m.activeSide.ShowingSide)
 	}
-	handled, _ = m.handleSidePaneMouse(bubbletea.MouseMsg{
-		X: 2, Y: 2, Action: bubbletea.MouseActionPress, Button: bubbletea.MouseButtonLeft,
+	handled, _ = m.handleSidePaneMouse(mousemsg.MouseMsg{
+		X: 2, Y: 2, Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonLeft,
 	})
 	if !handled || m.activeSide.ShowingSide {
 		t.Fatalf("left-pane click handled=%v showingSide=%v", handled, m.activeSide.ShowingSide)

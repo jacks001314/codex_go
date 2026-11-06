@@ -1,16 +1,15 @@
 package tea
 
 import (
+	keymsg "codex_go/tui/keymsg"
 	"testing"
-
-	bubbletea "github.com/charmbracelet/bubbletea"
 
 	codextui "codex_go/tui"
 	chatwidget "codex_go/tui/chatwidget"
 )
 
-func altRuneMsg(r rune) bubbletea.KeyMsg {
-	return bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{r}, Alt: true}
+func altRuneMsg(r rune) keymsg.KeyMsg {
+	return keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{r}, Alt: true}
 }
 
 // Rust #42584: Vim insert/replace/operator-pending consumes Esc, so an
@@ -45,7 +44,7 @@ func TestVimEscapeRecoveryPreservesAltBindingsAndSurfacesLikeRust(t *testing.T) 
 	tests := []struct {
 		name   string
 		setup  func(*Model)
-		msg    bubbletea.KeyMsg
+		msg    keymsg.KeyMsg
 		unix   bool
 		expect bool
 	}{
@@ -101,7 +100,7 @@ func TestVimEscapeRecoveryPreservesAltBindingsAndSurfacesLikeRust(t *testing.T) 
 			setup: func(model *Model) {
 				model.vimInsert = true
 			},
-			msg:    bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{'h'}},
+			msg:    keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{'h'}},
 			unix:   true,
 			expect: false,
 		},
@@ -123,7 +122,7 @@ func TestLegacyVimEscapeRecoveryReplaysEscapeThenCharacterLikeRust(t *testing.T)
 	model.legacyVimEscapeRecovery = true
 	model.vimMode = true
 	model.setComposerPrompt("abc")
-	model.composer.SetCursor(len("abc"))
+	model.composer.SetCursorColumn(len("abc"))
 	model.vimInsert = true
 
 	model.Update(altRuneMsg('h'))
@@ -142,7 +141,7 @@ func TestVimInsertEscapeWinsOverBacktrackLikeRust(t *testing.T) {
 	model := NewModel(nil, Options{})
 	model.vimMode = true
 	model.vimInsert = true
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEsc})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyEsc})
 	if model.vimInsert {
 		t.Fatal("Esc did not exit insert mode")
 	}
@@ -153,7 +152,7 @@ func TestVimInsertEscapeWinsOverBacktrackLikeRust(t *testing.T) {
 	operator := NewModel(nil, Options{})
 	operator.vimMode = true
 	operator.vimPendingOp = "d"
-	operator.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEsc})
+	operator.Update(keymsg.KeyMsg{Type: keymsg.KeyEsc})
 	if operator.vimPendingOp != "" || operator.vimPendingObject != "" {
 		t.Fatal("Esc did not cancel the pending Vim operator")
 	}

@@ -1,9 +1,10 @@
 package tea
 
 import (
+	"errors"
 	"strings"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
 	tuiapp "codex_go/tui/app"
@@ -21,10 +22,136 @@ import (
 // NoPreviousMessageToEdit mirrors Rust NO_PREVIOUS_MESSAGE_TO_EDIT.
 const NoPreviousMessageToEdit = "No previous message to edit."
 
+// UnsafePromptRestoreError rejects a remote prompt containing local image
+// paths or command syntax that cannot be replayed safely (Rust #46739).
+type UnsafePromptRestoreError struct {
+	Message string
+}
+
+func (e UnsafePromptRestoreError) Error() string {
+	if strings.TrimSpace(e.Message) != "" {
+		return e.Message
+	}
+	return "This remote prompt cannot be restored safely. Write a new message and reattach any images."
+}
+
 // PromptEditFunc reverts before a selected transcript prompt and returns the
 // retained conversation so the model can attach to it (Rust
 // RevertSessionForPromptEdit). The model restores the selection into the composer.
 type PromptEditFunc func(selection tuiapp.PromptEditSelection) (SessionResumeResponse, error)
+
+// transcriptBrowsingOrigin is the reading position and presentation to restore
+// when Escape cancels prompt browsing (Rust transcript_view::TranscriptBookmark
+// and BrowsingOrigin, #46739).
+type transcriptBrowsingOrigin struct {
+	overlay bool
+	offset  int
+	details bool
+}
+
+// applyBrowsingHints replaces the pager footer with the prompt-browsing footer.
+func (m *Model) applyBrowsingHints() {
+	if m == nil || m.overlay == nil {
+		return
+	}
+	width := m.width
+	if width <= 0 {
+		width = 80
+	}
+	m.overlay.SetHints("Browsing", m.browsingActionHint(width))
+}
+
+// browsingActionHint picks the widest browsing hint row that fits, keeping the
+// rewind and cancel actions visible on narrow terminals (Rust
+// app_backtrack/prompt_navigation.rs).
+func (m *Model) browsingActionHint(width int) string {
+	details := m.openTranscriptHint()
+	full := "↑↓/jk scroll · ←→/hl prompts"
+	if details != "" {
+		full += " · " + details + " details"
+	}
+	full += " · ↵ rewind · esc back"
+	compact := "↑↓/jk ←→/hl"
+	if details != "" {
+		compact += " · " + details + " details"
+	}
+	compact += " · ↵ rewind · esc back"
+	short := "↵ rewind · esc back"
+	for _, candidate := range []string{full, compact, "↵ rewind · esc", short, "esc"} {
+		if codextui.DisplayWidth(candidate) <= width {
+			return candidate
+		}
+	}
+	return "esc"
+}
+
+// restorePagerHints puts the normal transcript pager hint rows back after a
+// browsing preview is dismissed.
+func (m *Model) restorePagerHints() {
+	if m == nil || m.overlay == nil {
+		return
+	}
+	m.overlay.SetHints(
+		"↑/↓ to scroll · pgup/pgdn to page · home/end to jump",
+		m.pagerActionsHint(),
+	)
+}
+
+// setBrowsingDetails switches the prompt browser between compact and detailed
+// cells without leaving the preview or moving its selection.
+func (m *Model) setBrowsingDetails(details bool) {
+	if m == nil {
+		return
+	}
+	m.browsingDetails = details
+	m.syncTranscriptOverlay()
+	m.refreshBacktrackHighlight()
+}
+
+// cancelTranscriptBrowsing dismisses browsing without rewinding. An existing
+// overlay restores its bookmark; an overlay opened by the double-Escape gesture
+// closes, leaving the owned transcript at its original reading position.
+func (m *Model) cancelTranscriptBrowsing() bubbletea.Cmd {
+	if m == nil {
+		return nil
+	}
+	origin := m.browsingOrigin
+	m.browsingOrigin = nil
+	if origin != nil && origin.overlay && m.overlay != nil {
+		m.backtrack.Reset()
+		m.escBacktrackHint = false
+		m.overlay.ClearHighlightRange()
+		m.browsingDetails = origin.details
+		m.syncTranscriptOverlay()
+		m.overlay.SetYOffset(origin.offset)
+		m.restorePagerHints()
+		return nil
+	}
+	m.browsingDetails = false
+	cmd := m.closeTranscriptOverlay()
+	if origin != nil && !origin.overlay {
+		m.transcript.SetYOffset(origin.offset)
+	}
+	return cmd
+}
+
+// keyClaimedByPager reports whether an explicit pager binding already owns a
+// key, so the h/l browsing aliases never override configured navigation.
+func (m *Model) keyClaimedByPager(spec string) bool {
+	if m == nil || spec == "" {
+		return false
+	}
+	for _, action := range []string{
+		"scroll_up", "scroll_down", "page_up", "page_down",
+		"half_page_up", "half_page_down", "jump_top", "jump_bottom",
+		"close", "close_transcript", "find",
+	} {
+		if m.keyMatches("pager", action, spec) {
+			return true
+		}
+	}
+	return false
+}
 
 // backtrackComposerEmpty mirrors Rust composer_is_empty for the backtrack gate:
 // no draft text and no attachments.
@@ -85,7 +212,7 @@ func (m *Model) handleBacktrackEscKey() bubbletea.Cmd {
 		return m.openBacktrackPreview()
 	}
 	if m.backtrack.OverlayPreviewActive {
-		m.stepBacktrackAndHighlight(false)
+		return m.cancelTranscriptBrowsing()
 	}
 	return nil
 }
@@ -125,9 +252,14 @@ func (m *Model) openBacktrackPreview() bubbletea.Cmd {
 		m.refreshTranscript()
 		return nil
 	}
-	cmd := m.openTranscriptOverlay()
+	if m.browsingOrigin == nil {
+		m.browsingOrigin = &transcriptBrowsingOrigin{}
+	}
+	m.browsingDetails = false
 	m.backtrack.OverlayPreviewActive = true
 	m.escBacktrackHint = false
+	cmd := m.openTranscriptOverlay()
+	m.applyBrowsingHints()
 	m.stepBacktrackAndHighlight(false)
 	return cmd
 }
@@ -145,8 +277,16 @@ func (m *Model) beginOverlayBacktrackPreview() {
 		m.refreshTranscript()
 		return
 	}
+	offset := 0
+	if m.overlay != nil {
+		offset = m.overlay.YOffset()
+	}
+	m.browsingOrigin = &transcriptBrowsingOrigin{overlay: true, offset: offset, details: true}
+	m.browsingDetails = false
 	m.backtrack.Prime(m.currentThreadID())
 	m.backtrack.OverlayPreviewActive = true
+	m.syncTranscriptOverlay()
+	m.applyBrowsingHints()
 	m.stepBacktrackAndHighlight(false)
 }
 
@@ -187,7 +327,7 @@ func (m *Model) refreshBacktrackHighlight() {
 		m.overlay.ClearHighlightRange()
 		return
 	}
-	_, ranges := renderTranscriptMessagesWithRanges(&m.overlayMessages, m.State, m.rawOutput, m.width, m.activeTUITheme(), true, m.sessionCWD, m.showRawReasoning)
+	_, ranges := renderTranscriptMessagesWithRanges(&m.overlayMessages, m.State, m.rawOutput, m.width, m.activeTUITheme(), m.browsingDetails, m.sessionCWD, m.showRawReasoning)
 	if index >= len(ranges) {
 		m.overlay.ClearHighlightRange()
 		return
@@ -245,6 +385,12 @@ func (m *Model) applyBacktrackSelection(selection tuiapp.PromptEditSelection) bu
 	}
 	response, err := m.onPromptEdit(selection)
 	if err != nil {
+		var unsafe UnsafePromptRestoreError
+		if errors.As(err, &unsafe) {
+			m.addErrorHistoryMessage(unsafe.Error())
+			m.refreshTranscript()
+			return nil
+		}
 		message := strings.TrimSpace(err.Error())
 		if message == "" {
 			message = "unknown error"
@@ -350,6 +496,8 @@ func (m *Model) resetBacktrackState() {
 	}
 	m.backtrack.Reset()
 	m.escBacktrackHint = false
+	m.browsingOrigin = nil
+	m.browsingDetails = false
 	if m.overlay != nil {
 		m.overlay.ClearHighlightRange()
 	}

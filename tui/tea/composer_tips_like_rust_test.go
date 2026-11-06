@@ -1,10 +1,9 @@
 package tea
 
 import (
+	mousemsg "codex_go/tui/mousemsg"
 	"strings"
 	"testing"
-
-	bubbletea "github.com/charmbracelet/bubbletea"
 
 	codextui "codex_go/tui"
 	"codex_go/utils"
@@ -24,7 +23,7 @@ func startupTipTestModel(t *testing.T, width int, fullscreen bool) *Model {
 		ShowTooltips:         &show,
 	})
 	model.addStartupSessionHeader("1.0.0")
-	model.View()
+	model.viewString()
 	model.activityFollow = true
 	return model
 }
@@ -33,9 +32,14 @@ func startupTipTestModel(t *testing.T, width int, fullscreen bool) *Model {
 // composer gap stays blank and the passive footer keeps `? for shortcuts`.
 func TestStartupTipStaysOutOfFullscreenComposerGapLikeRust(t *testing.T) {
 	model := startupTipTestModel(t, 100, true)
-	view := model.View()
-	if strings.Contains(view, "**Tip:**") || strings.Contains(view, "Tip: ") {
+	view := model.viewString()
+	if strings.Contains(view, "**Tip:**") {
 		t.Fatalf("fullscreen composer gap rendered a startup tip:\n%s", view)
+	}
+	// #46739 adds a separate contextual discovery tip. The startup announcement
+	// still belongs to the transcript.
+	if strings.Contains(view, "Tip: ") && !strings.Contains(view, "Tip: @ mentions files, skills, and plugins") {
+		t.Fatalf("fullscreen composer gap rendered the wrong tip:\n%s", view)
 	}
 	footer, _ := model.footerHelpLine()
 	if footer != footerHelpText {
@@ -76,8 +80,8 @@ func TestComposerGapCtrlClickOpensOSC8LinkLikeRust(t *testing.T) {
 		opened = url
 		return nil
 	}
-	handled, cmd := model.handleComposerGapLinkClick(bubbletea.MouseMsg{
-		X: 7, Y: 10, Ctrl: true, Action: bubbletea.MouseActionPress, Button: bubbletea.MouseButtonLeft,
+	handled, cmd := model.handleComposerGapLinkClick(mousemsg.MouseMsg{
+		X: 7, Y: 10, Ctrl: true, Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonLeft,
 	})
 	if !handled || cmd == nil {
 		t.Fatalf("Ctrl-click handled=%v cmd=%v", handled, cmd != nil)
@@ -87,8 +91,8 @@ func TestComposerGapCtrlClickOpensOSC8LinkLikeRust(t *testing.T) {
 		t.Fatalf("opened = %q", opened)
 	}
 
-	if handled, _ := model.handleComposerGapLinkClick(bubbletea.MouseMsg{
-		X: 7, Y: 10, Action: bubbletea.MouseActionPress, Button: bubbletea.MouseButtonLeft,
+	if handled, _ := model.handleComposerGapLinkClick(mousemsg.MouseMsg{
+		X: 7, Y: 10, Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonLeft,
 	}); handled {
 		t.Fatal("plain click consumed a link hit test")
 	}

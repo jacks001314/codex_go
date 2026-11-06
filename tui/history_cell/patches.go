@@ -15,6 +15,26 @@ type PatchHistoryCell struct {
 	Changes map[string]tui.FileChange
 	CWD     string
 	Theme   string
+	// ActivityID is the stable disclosure identity of the patch item (Rust
+	// PatchHistoryCell::with_activity_id). Empty keeps the legacy live cells
+	// that never carried one.
+	ActivityID string
+}
+
+// WithActivityID attaches the persisted patch item identity so transcript
+// disclosure can follow the same cell across live and resumed history
+// (Rust #46710).
+func (c PatchHistoryCell) WithActivityID(id string) PatchHistoryCell {
+	c.ActivityID = strings.TrimSpace(id)
+	return c
+}
+
+// ActivityIDs returns the disclosure identity of the patch item.
+func (c PatchHistoryCell) ActivityIDs() []string {
+	if c.ActivityID == "" {
+		return nil
+	}
+	return []string{"patch:" + c.ActivityID}
 }
 
 func NewPatchEvent(changes map[string]tui.FileChange, cwd string) PatchHistoryCell {
@@ -31,6 +51,11 @@ func newPatchEventTheme(changes map[string]tui.FileChange, cwd string, theme str
 		cloned[path] = change
 	}
 	return PatchHistoryCell{Changes: cloned, CWD: strings.TrimSpace(cwd), Theme: theme}
+}
+
+// ActivityDisclosure reports generic transcript details for the inline patch.
+func (c PatchHistoryCell) ActivityDisclosure(int) tui.ActivityDisclosure {
+	return tui.ActivityDisclosure{Generic: true}
 }
 
 func (c PatchHistoryCell) DisplayLines(width int) []string {

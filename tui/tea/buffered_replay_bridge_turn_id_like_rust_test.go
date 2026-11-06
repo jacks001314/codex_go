@@ -42,7 +42,7 @@ func TestBufferedReplayAttributesBridgeItemsToTurnLikeRust(t *testing.T) {
 		},
 	})
 
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	for _, leaked := range []string{"private commentary", "private reasoning"} {
 		if strings.Contains(view, leaked) {
 			t.Fatalf("delegated voice content %q leaked into the replayed transcript:\n%s", leaked, view)
@@ -77,7 +77,7 @@ func TestBufferedReplayKeepsTypedBridgeEventsLikeRust(t *testing.T) {
 		},
 	})
 
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "typed commentary") || !strings.Contains(view, "typed question") {
 		t.Fatalf("typed bridge-shaped replay changed:\n%s", view)
 	}

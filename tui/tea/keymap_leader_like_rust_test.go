@@ -5,10 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
 	chatwidget "codex_go/tui/chatwidget"
+	"codex_go/tui/keymsg"
 )
 
 // Rust #52273 (keymap_setup.rs:252-266, keymap_setup/capture.rs:97-98,161-162):
@@ -27,14 +26,14 @@ func TestModelKeymapLeaderCaptureWritesLeaderSpecLikeRust(t *testing.T) {
 		t.Fatalf("action modal = %#v", model.modal)
 	}
 	model.modal.selected = modalOptionIndexByID(t, model.modal.options, "leader_set")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if model.modal == nil || model.modal.keymapCapture == nil || model.modal.keymapCapture.Intent != keymapCaptureLeader {
 		t.Fatalf("capture modal = %#v", model.modal)
 	}
 	if !strings.Contains(model.renderModal(), "Press the key that follows the configured leader. Esc cancels.") {
 		t.Fatalf("capture prompt = %q", model.renderModal())
 	}
-	model.Update(key(bubbletea.KeyCtrlK))
+	model.Update(key(keymsg.KeyCtrlK))
 	if len(edits) != 1 || edits[0].Context != "global" || edits[0].Action != "open_transcript" {
 		t.Fatalf("leader edits = %#v", edits)
 	}
@@ -63,7 +62,7 @@ func TestModelKeymapConfigureLeaderRoutesToLeaderActionLikeRust(t *testing.T) {
 		t.Fatalf("action modal = %#v", model.modal)
 	}
 	model.modal.selected = modalOptionIndexByID(t, model.modal.options, "leader_config")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if model.modal == nil || model.modal.id != chatwidget.KeymapActionMenuViewID {
 		t.Fatalf("leader modal = %#v", model.modal)
 	}

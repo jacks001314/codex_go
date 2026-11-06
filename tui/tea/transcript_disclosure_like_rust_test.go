@@ -1,14 +1,17 @@
 package tea
 
 import (
+	keymsg "codex_go/tui/keymsg"
+	mousemsg "codex_go/tui/mousemsg"
 	"fmt"
 	"strings"
 	"testing"
-
-	bubbletea "github.com/charmbracelet/bubbletea"
+	"time"
 
 	"codex_go/protocol"
 	codextui "codex_go/tui"
+
+	bubbletea "charm.land/bubbletea/v2"
 	"codex_go/utils"
 )
 
@@ -32,9 +35,9 @@ type disclosureControlPoint struct{ x int }
 
 func transcriptDisclosureControlPoint(t *testing.T, model *Model) (int, disclosureControlPoint) {
 	t.Helper()
-	_ = model.View()
+	_ = model.viewString()
 	if len(model.transcriptDisclosureHits) == 0 {
-		t.Fatalf("no disclosure controls painted:\n%s", utils.StripANSI(model.View()))
+		t.Fatalf("no disclosure controls painted:\n%s", utils.StripANSI(model.viewString()))
 	}
 	row := -1
 	for candidate := range model.transcriptDisclosureHits {
@@ -47,12 +50,12 @@ func transcriptDisclosureControlPoint(t *testing.T, model *Model) (int, disclosu
 }
 
 func clickTranscriptRow(model *Model, x, y int) {
-	model.Update(bubbletea.MouseMsg{X: x, Y: y, Action: bubbletea.MouseActionPress, Button: bubbletea.MouseButtonLeft})
+	model.Update(mousemsg.MouseMsg{X: x, Y: y, Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonLeft})
 }
 
 func TestTranscriptDisclosureClickExpandsLikeRust(t *testing.T) {
 	model := disclosureFixture(t, 2)
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "+ 2 lines (ctrl+t to expand)") {
 		t.Fatalf("collapsed control missing:\n%s", view)
 	}
@@ -61,7 +64,7 @@ func TestTranscriptDisclosureClickExpandsLikeRust(t *testing.T) {
 	}
 	y, hit := transcriptDisclosureControlPoint(t, model)
 	clickTranscriptRow(model, hit.x, y)
-	view = utils.StripANSI(model.View())
+	view = utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "detail line 01") {
 		t.Fatalf("click did not expand details:\n%s", view)
 	}
@@ -74,7 +77,7 @@ func TestTranscriptDisclosureClickExpandsLikeRust(t *testing.T) {
 
 	y, hit = transcriptDisclosureControlPoint(t, model)
 	clickTranscriptRow(model, hit.x, y)
-	view = utils.StripANSI(model.View())
+	view = utils.StripANSI(model.viewString())
 	if strings.Contains(view, "detail line 01") {
 		t.Fatalf("second click did not collapse details:\n%s", view)
 	}
@@ -144,7 +147,7 @@ func TestTranscriptDisclosureClickOutsideClearsFocusLikeRust(t *testing.T) {
 	if !model.transcriptActivityExpanded(0) {
 		t.Fatal("click outside the disclosure collapsed the expanded details")
 	}
-	if view := utils.StripANSI(model.View()); !strings.Contains(view, "detail line 07") {
+	if view := utils.StripANSI(model.viewString()); !strings.Contains(view, "detail line 07") {
 		t.Fatalf("expanded details disappeared after focus dismissal:\n%s", view)
 	}
 }
@@ -156,7 +159,7 @@ func TestTranscriptDisclosureClickRequiresControlColumnLikeRust(t *testing.T) {
 	if model.activityFocus.active {
 		t.Fatal("click outside the control entered activity focus")
 	}
-	model.Update(bubbletea.MouseMsg{X: hit.x, Y: y, Action: bubbletea.MouseActionPress, Button: bubbletea.MouseButtonLeft, Shift: true})
+	model.Update(mousemsg.MouseMsg{X: hit.x, Y: y, Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonLeft, Shift: true})
 	if model.activityFocus.active {
 		t.Fatal("modified click entered activity focus")
 	}
@@ -232,12 +235,15 @@ func TestTranscriptDisclosureProgramMouseLikeRust(t *testing.T) {
 	}
 	options := Options{Width: 80, Height: 20}
 	probe := NewModel(newState(), options)
-	_ = probe.View()
+	_ = probe.viewString()
 	y, hit := transcriptDisclosureControlPoint(t, probe)
 
 	running := startRealProgramWithState(t, newState(), options)
 	waitForProgramOutput(t, running.output, "\x1b[?1049h")
-	waitForProgramOutput(t, running.output, "+ 2 lines")
+	// Bubble Tea v2 paints after the first message; a real terminal delivers the
+	// initial size, so the pipe-driven test sends the same event.
+	running.send(bubbletea.WindowSizeMsg{Width: options.Width, Height: options.Height})
+	waitForProgramText(t, running.output, "+ 2 lines")
 	writeMouse := func(button int, x, y int, release bool) {
 		t.Helper()
 		suffix := "M"
@@ -252,20 +258,28 @@ func TestTranscriptDisclosureProgramMouseLikeRust(t *testing.T) {
 	writeMouse(0, hit.x, y, true)
 	// The expanded details start at the anchored header; the collapse control is
 	// below the viewport until the wheel moves it into view.
-	waitForProgramOutput(t, running.output, "detail line 00")
+	waitForProgramText(t, running.output, "detail line 00")
 
+	before := running.output.String()
 	for range 20 {
 		writeMouse(65, hit.x, y, false)
 	}
-	waitForProgramOutput(t, running.output, "detail line 29")
+	// Bubble Tea v2 repaints changed cells incrementally, so the scrolled rows
+	// arrive as cursor-relative fragments. Wait for a repaint and let the frame
+	// settle before the collapse click is hit-tested against the new layout.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && running.output.String() == before {
+		time.Sleep(20 * time.Millisecond)
+	}
+	time.Sleep(600 * time.Millisecond)
 
 	simulated := NewModel(newState(), options)
-	_ = simulated.View()
-	simulated.Update(bubbletea.MouseMsg{X: hit.x, Y: y, Action: bubbletea.MouseActionPress, Button: bubbletea.MouseButtonLeft})
+	_ = simulated.viewString()
+	simulated.Update(mousemsg.MouseMsg{X: hit.x, Y: y, Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonLeft})
 	for range 20 {
-		simulated.Update(wheelPress(bubbletea.MouseButtonWheelDown))
+		simulated.Update(wheelPress(mousemsg.MouseButtonWheelDown))
 	}
-	_ = simulated.View()
+	_ = simulated.viewString()
 	collapseY, collapseHit := transcriptDisclosureControlPoint(t, simulated)
 	writeMouse(0, collapseHit.x, collapseY, false)
 	writeMouse(0, collapseHit.x, collapseY, true)
@@ -273,9 +287,9 @@ func TestTranscriptDisclosureProgramMouseLikeRust(t *testing.T) {
 	running.quit()
 	final := running.final(t)
 	if final.transcriptActivityExpanded(0) {
-		t.Fatalf("second click did not collapse details:\n%s", utils.StripANSI(final.View()))
+		t.Fatalf("second click did not collapse details:\n%s", utils.StripANSI(final.viewString()))
 	}
-	if view := utils.StripANSI(final.View()); strings.Contains(view, "detail line 29") {
+	if view := utils.StripANSI(final.viewString()); strings.Contains(view, "detail line 29") {
 		t.Fatalf("collapsed activity still paints retained details:\n%s", view)
 	}
 }
@@ -284,25 +298,25 @@ func TestTranscriptExpandedDetailsScrollWithWheelLikeRust(t *testing.T) {
 	model := disclosureFixture(t, 30)
 	y, hit := transcriptDisclosureControlPoint(t, model)
 	clickTranscriptRow(model, hit.x, y)
-	_ = model.View()
+	_ = model.viewString()
 	before := model.transcript.YOffset
-	model.Update(wheelPress(bubbletea.MouseButtonWheelDown))
+	model.Update(wheelPress(mousemsg.MouseButtonWheelDown))
 	if got, want := model.transcript.YOffset, before+1; got != want {
 		t.Fatalf("wheel offset = %d, want %d", got, want)
 	}
 	scrolled := model.transcript.YOffset
-	_ = model.View()
+	_ = model.viewString()
 	if got := model.transcript.YOffset; got != scrolled {
 		t.Fatalf("redraw snapped wheel offset from %d to %d", scrolled, got)
 	}
 	for range 20 {
-		model.Update(wheelPress(bubbletea.MouseButtonWheelDown))
+		model.Update(wheelPress(mousemsg.MouseButtonWheelDown))
 	}
 	deeper := model.transcript.YOffset
 	if deeper <= scrolled {
 		t.Fatalf("wheel did not keep scrolling details: %d -> %d", scrolled, deeper)
 	}
-	_ = model.View()
+	_ = model.viewString()
 	if got := model.transcript.YOffset; got != deeper {
 		t.Fatalf("redraw snapped details at %d back to %d", deeper, got)
 	}
@@ -321,14 +335,14 @@ func TestTranscriptDisclosureHitsSkipStartupTipsLikeRust(t *testing.T) {
 	state.Messages[1].ActivityIDs = []string{"call-after-tip"}
 	state.Messages[1].ActivityHiddenLines = 2
 	model := NewModel(state, Options{Width: 60, Height: 12})
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if strings.Contains(view, "startup tip row") {
 		t.Fatalf("fullscreen transcript kept the startup tip:\n%s", view)
 	}
 	y, hit := transcriptDisclosureControlPoint(t, model)
 	clickTranscriptRow(model, hit.x, y)
 	if !model.activityFocus.active {
-		t.Fatalf("click missed the control after a hidden startup tip:\n%s", utils.StripANSI(model.View()))
+		t.Fatalf("click missed the control after a hidden startup tip:\n%s", utils.StripANSI(model.viewString()))
 	}
 }
 
@@ -359,7 +373,7 @@ func TestCompletedExecCellPublishesDisclosureLikeRust(t *testing.T) {
 	if len(message.ActivityIDs) == 0 || message.ActivityHiddenLines != 9 {
 		t.Fatalf("activity metadata = ids=%v hidden=%d, want one id and 9 hidden lines", message.ActivityIDs, message.ActivityHiddenLines)
 	}
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "+ 9 lines (ctrl+t to expand)") {
 		t.Fatalf("completed exec cell did not paint the disclosure control:\n%s", view)
 	}
@@ -369,7 +383,7 @@ func TestCompletedExecCellPublishesDisclosureLikeRust(t *testing.T) {
 	y, hit := transcriptDisclosureControlPoint(t, model)
 	clickTranscriptRow(model, hit.x, y)
 	if !model.activityFocus.active {
-		t.Fatalf("click did not expand the completed exec cell:\n%s", utils.StripANSI(model.View()))
+		t.Fatalf("click did not expand the completed exec cell:\n%s", utils.StripANSI(model.viewString()))
 	}
 }
 
@@ -385,19 +399,19 @@ func TestExpandedActivityWithoutDetailsShowsHideControlLikeRust(t *testing.T) {
 		ActivityIDs: []string{"call-no-details"},
 	})
 	model := NewModel(state, Options{Width: 60, Height: 12})
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if strings.Contains(view, "Show details") || strings.Contains(view, "Hide details") {
 		t.Fatalf("collapsed activity without details painted a control:\n%s", view)
 	}
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyF4})
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRight})
-	view = utils.StripANSI(model.View())
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyF4})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyRight})
+	view = utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "\u2212 Hide details") {
 		t.Fatalf("expanded activity without details lost its hide control:\n%s", view)
 	}
 	y, hit := transcriptDisclosureControlPoint(t, model)
 	clickTranscriptRow(model, hit.x, y)
-	view = utils.StripANSI(model.View())
+	view = utils.StripANSI(model.viewString())
 	if strings.Contains(view, "Hide details") {
 		t.Fatalf("click did not collapse the activity:\n%s", view)
 	}
@@ -430,7 +444,7 @@ func TestCompletedShortExecCellHasNoDisclosureLikeRust(t *testing.T) {
 		t.Fatalf("short command disclosure = known=%v hidden=%d generic=%v, want known empty",
 			message.ActivityDisclosureKnown, message.ActivityHiddenLines, message.ActivityGenericDetails)
 	}
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if strings.Contains(view, "Show details") || strings.Contains(view, "to expand") {
 		t.Fatalf("short command painted a disclosure control:\n%s", view)
 	}

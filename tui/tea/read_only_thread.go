@@ -3,11 +3,12 @@ package tea
 import (
 	"strings"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	bubbletea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	codextui "codex_go/tui"
 	bottompane "codex_go/tui/bottom_pane"
+	"codex_go/tui/keymsg"
 )
 
 // Rust parity: codex-rs/tui/src/chatwidget/rendering.rs ExternalWriterNotice
@@ -179,7 +180,7 @@ func keymapBindingsContainKey(bindings []string, keySpec string) bool {
 // Left or Esc return to the command center when one is available (Rust #48132),
 // R retries, Ctrl+C/Q exit, and the transcript/raw/copy surfaces stay
 // available. Everything else is ignored.
-func (m *Model) handleReadOnlyThreadKey(msg bubbletea.KeyMsg, keySpec string) bubbletea.Cmd {
+func (m *Model) handleReadOnlyThreadKey(msg keymsg.KeyMsg, keySpec string) bubbletea.Cmd {
 	if m == nil {
 		return nil
 	}
@@ -187,14 +188,14 @@ func (m *Model) handleReadOnlyThreadKey(msg bubbletea.KeyMsg, keySpec string) bu
 		// Rust app/input.rs:600-605 accepts Left only as a plain press with no
 		// modifiers, so Alt+Left (the composer agent-navigation chord) must not
 		// fall through to the command center here.
-		if msg.Type == bubbletea.KeyEsc || (PlainKey(bubbletea.KeyLeft).IsPress(msg) && m.agentsNavigationKeyAvailable()) {
+		if msg.Type == keymsg.KeyEsc || (PlainKey(keymsg.KeyLeft).IsPress(msg) && m.agentsNavigationKeyAvailable()) {
 			return m.applyAgentsCommand()
 		}
-	} else if msg.Type == bubbletea.KeyEsc {
+	} else if msg.Type == keymsg.KeyEsc {
 		return bubbletea.Quit
 	}
 	switch msg.Type {
-	case bubbletea.KeyCtrlC, bubbletea.KeyCtrlD:
+	case keymsg.KeyCtrlC, keymsg.KeyCtrlD:
 		return bubbletea.Quit
 	}
 	if m.keyMatches("global", "open_transcript", keySpec) {
@@ -216,7 +217,7 @@ func (m *Model) handleReadOnlyThreadKey(msg bubbletea.KeyMsg, keySpec string) bu
 		m.copyLastAgentResponse()
 		return nil
 	}
-	if msg.Type == bubbletea.KeyRunes && len(msg.Runes) == 1 {
+	if msg.Type == keymsg.KeyRunes && len(msg.Runes) == 1 {
 		switch msg.Runes[0] {
 		case 'f', 'F':
 			// Rust's locked-thread fork shortcut: f/F (plain or shifted) opens an

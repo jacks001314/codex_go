@@ -1,8 +1,10 @@
 package tea
 
 import (
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+
+	"codex_go/tui/keymsg"
 )
 
 // Pane resize and zoom controls (Rust #59595, codex-rs/tui/src/app/side_pane.rs).
@@ -116,7 +118,7 @@ func (m *Model) beginSidePaneResize() bubbletea.Cmd {
 // handleSidePaneResizeKey consumes input while resize mode is active. Arrow
 // keys and h/l move one column, Shift+Left/Right move ten, and Enter or Esc
 // saves the preview.
-func (m *Model) handleSidePaneResizeKey(message bubbletea.KeyMsg) (bool, bubbletea.Cmd) {
+func (m *Model) handleSidePaneResizeKey(message keymsg.KeyMsg) (bool, bubbletea.Cmd) {
 	if m == nil || m.sideResize == nil {
 		return false, nil
 	}
@@ -126,15 +128,15 @@ func (m *Model) handleSidePaneResizeKey(message bubbletea.KeyMsg) (bool, bubblet
 	}
 	delta := 0
 	switch message.Type {
-	case bubbletea.KeyLeft:
+	case keymsg.KeyLeft:
 		delta = 1
-	case bubbletea.KeyRight:
+	case keymsg.KeyRight:
 		delta = -1
-	case bubbletea.KeyShiftLeft:
+	case keymsg.KeyShiftLeft:
 		delta = 10
-	case bubbletea.KeyShiftRight:
+	case keymsg.KeyShiftRight:
 		delta = -10
-	case bubbletea.KeyEnter, bubbletea.KeyEsc:
+	case keymsg.KeyEnter, keymsg.KeyEsc:
 		preview := m.sideResize.previewWidth
 		m.sideResize = nil
 		if preview <= 0 {
@@ -144,7 +146,7 @@ func (m *Model) handleSidePaneResizeKey(message bubbletea.KeyMsg) (bool, bubblet
 		m.sideExactWidth = sideExactWidth{total: m.width, width: width, valid: true}
 		m.sideWidthPercent = widthPercent(width, m.width)
 		return true, m.saveConfigPanelPreference("tui.sidebar_width_percent", m.sideWidthPercent)
-	case bubbletea.KeyRunes:
+	case keymsg.KeyRunes:
 		if len(message.Runes) == 1 {
 			switch message.Runes[0] {
 			case 'h':

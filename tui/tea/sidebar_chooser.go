@@ -4,9 +4,10 @@ import (
 	"strconv"
 	"strings"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 // Rust #59739/#59767/#59784: each parent owns one sidebar. The chooser lists
@@ -151,25 +152,25 @@ func (m *Model) closeSidebarChooser() bubbletea.Cmd {
 
 // updateSidebarChooserKey handles the chooser's own keys while it owns input
 // (Rust #59739 handle_sidebar_input).
-func (m *Model) updateSidebarChooserKey(msg bubbletea.KeyMsg) (bool, bubbletea.Cmd) {
+func (m *Model) updateSidebarChooserKey(msg keymsg.KeyMsg) (bool, bubbletea.Cmd) {
 	if m == nil || !m.sidebarChooserVisible() || !m.sidebarChooserFocused {
 		return false, nil
 	}
 	tabs := m.sidebarTabsFor(m.sidebarChooserParent)
 	switch msg.Type {
-	case bubbletea.KeyUp:
+	case keymsg.KeyUp:
 		if m.sidebarChoice > 0 {
 			m.sidebarChoice--
 		}
 		return true, nil
-	case bubbletea.KeyDown:
+	case keymsg.KeyDown:
 		if m.sidebarChoice < len(tabs) {
 			m.sidebarChoice++
 		}
 		return true, nil
-	case bubbletea.KeyEsc:
+	case keymsg.KeyEsc:
 		return true, m.closeSidebarChooser()
-	case bubbletea.KeyEnter:
+	case keymsg.KeyEnter:
 		return true, m.openSidebarChoice(tabs)
 	}
 	return false, nil

@@ -4,9 +4,10 @@ import (
 	"errors"
 	"strings"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	historycell "codex_go/tui/history_cell"
+	"codex_go/tui/keymsg"
 )
 
 const (
@@ -73,21 +74,21 @@ func checkboxLabel(enabled bool, label string) string {
 	return "[ ] " + label
 }
 
-func (m *Model) updateMemoriesModal(message bubbletea.KeyMsg) bubbletea.Cmd {
+func (m *Model) updateMemoriesModal(message keymsg.KeyMsg) bubbletea.Cmd {
 	if m == nil || m.modal == nil || m.modal.memories == nil {
 		return nil
 	}
 	state := m.modal.memories
 	if state.enablePrompt {
 		switch message.Type {
-		case bubbletea.KeyEsc, bubbletea.KeyCtrlC:
+		case keymsg.KeyEsc, keymsg.KeyCtrlC:
 			m.modal = nil
 			return nil
-		case bubbletea.KeyUp:
+		case keymsg.KeyUp:
 			m.moveModalSelection(-1)
-		case bubbletea.KeyDown, bubbletea.KeyTab:
+		case keymsg.KeyDown, keymsg.KeyTab:
 			m.moveModalSelection(1)
-		case bubbletea.KeyEnter:
+		case keymsg.KeyEnter:
 			enable := m.modal.selected == 0
 			m.modal = nil
 			if enable {
@@ -103,13 +104,13 @@ func (m *Model) updateMemoriesModal(message bubbletea.KeyMsg) bubbletea.Cmd {
 
 	if state.resetConfirmation {
 		switch message.Type {
-		case bubbletea.KeyEsc, bubbletea.KeyCtrlC:
+		case keymsg.KeyEsc, keymsg.KeyCtrlC:
 			m.closeMemoriesResetConfirmation()
-		case bubbletea.KeyUp:
+		case keymsg.KeyUp:
 			m.moveModalSelection(-1)
-		case bubbletea.KeyDown, bubbletea.KeyTab:
+		case keymsg.KeyDown, keymsg.KeyTab:
 			m.moveModalSelection(1)
-		case bubbletea.KeyEnter:
+		case keymsg.KeyEnter:
 			if m.modal.selected == 0 {
 				m.modal = nil
 				return m.resetMemories()
@@ -120,19 +121,19 @@ func (m *Model) updateMemoriesModal(message bubbletea.KeyMsg) bubbletea.Cmd {
 	}
 
 	switch message.Type {
-	case bubbletea.KeyEsc, bubbletea.KeyCtrlC:
+	case keymsg.KeyEsc, keymsg.KeyCtrlC:
 		m.modal = nil
-	case bubbletea.KeyUp:
+	case keymsg.KeyUp:
 		m.moveModalSelection(-1)
-	case bubbletea.KeyDown, bubbletea.KeyTab:
+	case keymsg.KeyDown, keymsg.KeyTab:
 		m.moveModalSelection(1)
-	case bubbletea.KeySpace:
+	case keymsg.KeySpace:
 		m.toggleSelectedMemorySetting()
-	case bubbletea.KeyRunes:
+	case keymsg.KeyRunes:
 		if string(message.Runes) == " " {
 			m.toggleSelectedMemorySetting()
 		}
-	case bubbletea.KeyEnter:
+	case keymsg.KeyEnter:
 		if m.modal.selected == 2 {
 			m.openMemoriesResetConfirmation()
 			return nil

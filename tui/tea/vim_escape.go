@@ -1,10 +1,9 @@
 package tea
 
 import (
+	keymsg "codex_go/tui/keymsg"
 	"runtime"
 	"unicode"
-
-	bubbletea "github.com/charmbracelet/bubbletea"
 
 	codextui "codex_go/tui"
 	tuiapp "codex_go/tui/app"
@@ -27,11 +26,11 @@ func legacyVimEscapeRecoverySupported() bool {
 // shouldRecoverVimInsertEscape reports whether msg is an ambiguous Alt+character
 // stroke that should be split. The unix argument exists so tests can exercise
 // the Unix-only behavior on every platform.
-func (m *Model) shouldRecoverVimInsertEscape(msg bubbletea.KeyMsg, unix bool) bool {
+func (m *Model) shouldRecoverVimInsertEscape(msg keymsg.KeyMsg, unix bool) bool {
 	if m == nil {
 		return false
 	}
-	if msg.Type != bubbletea.KeyRunes || len(msg.Runes) != 1 || msg.Paste || !msg.Alt {
+	if msg.Type != keymsg.KeyRunes || len(msg.Runes) != 1 || msg.Paste || !msg.Alt {
 		return false
 	}
 	character := msg.Runes[0]

@@ -22,8 +22,8 @@ func TestFastHookStaysHiddenLikeRust(t *testing.T) {
 	model, state := hookStatusTestModel(&now)
 	model.Update(HookRunMsg{ID: "fast", EventName: "preToolUse", StatusMessage: "checking", Running: true})
 	model.Update(HookRunMsg{ID: "fast", EventName: "preToolUse", Status: "completed"})
-	if view := strings.ToLower(model.View()); strings.Contains(view, "checking") || strings.Contains(view, "running hook") {
-		t.Fatalf("fast hook was revealed:\n%s", model.View())
+	if view := strings.ToLower(model.viewString()); strings.Contains(view, "checking") || strings.Contains(view, "running hook") {
+		t.Fatalf("fast hook was revealed:\n%s", model.viewString())
 	}
 	if got := countRole(state.Messages, codextui.RoleHistory); got != 0 {
 		t.Fatalf("quiet successful hook entered history: %#v", state.Messages)
@@ -36,9 +36,9 @@ func TestRunningHookIsIndependentOfTurnLikeRust(t *testing.T) {
 	model, state := hookStatusTestModel(&now)
 	model.Update(HookRunMsg{ID: "run", EventName: "preToolUse", StatusMessage: "checking policy", Running: true})
 	now = now.Add(hookStatusRevealDelay)
-	view := strings.ToLower(model.View())
+	view := strings.ToLower(model.viewString())
 	if !strings.Contains(view, "checking policy") {
-		t.Fatalf("idle turn did not render hook activity:\n%s", model.View())
+		t.Fatalf("idle turn did not render hook activity:\n%s", model.viewString())
 	}
 	if got := countRole(state.Messages, codextui.RoleHistory); got != 0 {
 		t.Fatalf("running hook entered history: %#v", state.Messages)
@@ -54,12 +54,12 @@ func TestRunningHookFoldsIntoWorkingRowLikeRust(t *testing.T) {
 	model.syncTaskRunningTimer()
 	model.Update(HookRunMsg{ID: "run", EventName: "preToolUse", StatusMessage: "checking policy", Running: true})
 	now = now.Add(hookStatusRevealDelay)
-	view := strings.ToLower(model.View())
+	view := strings.ToLower(model.viewString())
 	if !strings.Contains(view, "working") || !strings.Contains(view, "checking policy") {
-		t.Fatalf("working row did not include hook activity:\n%s", model.View())
+		t.Fatalf("working row did not include hook activity:\n%s", model.viewString())
 	}
 	if got := strings.Count(view, "checking policy"); got != 1 {
-		t.Fatalf("hook activity rendered %d times, want one folded line:\n%s", got, model.View())
+		t.Fatalf("hook activity rendered %d times, want one folded line:\n%s", got, model.viewString())
 	}
 }
 
@@ -79,12 +79,12 @@ func TestLongRunningHookReflowsBelowWorkingRowLikeRust(t *testing.T) {
 		Running:       true,
 	})
 	now = now.Add(hookStatusRevealDelay)
-	view := strings.ToLower(model.View())
+	view := strings.ToLower(model.viewString())
 	if !strings.Contains(view, "working") || !strings.Contains(view, "\u2514") || !strings.Contains(view, "checking a delib") {
-		t.Fatalf("reflowed hook activity missing:\n%s", model.View())
+		t.Fatalf("reflowed hook activity missing:\n%s", model.viewString())
 	}
 	if strings.Contains(view, "checking a deliberately long") {
-		t.Fatalf("over-wide hook summary was not truncated:\n%s", model.View())
+		t.Fatalf("over-wide hook summary was not truncated:\n%s", model.viewString())
 	}
 }
 
@@ -96,14 +96,14 @@ func TestConcurrentHooksCollapseToSummaryLikeRust(t *testing.T) {
 	model.Update(HookRunMsg{ID: "a", EventName: "preToolUse", StatusMessage: "checking policy", Running: true})
 	model.Update(HookRunMsg{ID: "b", EventName: "preToolUse", StatusMessage: "scanning secrets", Running: true})
 	now = now.Add(hookStatusRevealDelay)
-	if view := model.View(); !strings.Contains(view, "Running hooks") {
+	if view := model.viewString(); !strings.Contains(view, "Running hooks") {
 		t.Fatalf("mixed hook summary missing:\n%s", view)
 	}
 
 	model.Update(HookRunMsg{ID: "b", EventName: "preToolUse", Status: "completed"})
 	model.Update(HookRunMsg{ID: "c", EventName: "preToolUse", StatusMessage: "checking policy", Running: true})
 	now = now.Add(hookStatusRevealDelay)
-	if view := model.View(); !strings.Contains(view, "Checking policy") {
+	if view := model.viewString(); !strings.Contains(view, "Checking policy") {
 		t.Fatalf("identical hook summary missing:\n%s", view)
 	}
 }
@@ -121,7 +121,7 @@ func TestHookContextIsSuppressedLikeRust(t *testing.T) {
 			{Kind: "error", Text: "hook failed"},
 		},
 	})
-	view := model.View()
+	view := model.viewString()
 	if strings.Contains(view, "model-only context") {
 		t.Fatalf("hook context leaked into TUI:\n%s", view)
 	}

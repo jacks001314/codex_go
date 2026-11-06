@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"strings"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 )
 
 type mcpLoginStartRequest struct {

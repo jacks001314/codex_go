@@ -4,10 +4,10 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 // Rust's footer toggles a multi-line shortcut reference with `?` on an empty
@@ -16,7 +16,7 @@ func TestShortcutOverlayLikeRust(t *testing.T) {
 	model := NewModel(codextui.NewState(nil), Options{Width: 120, Height: 40})
 
 	model.Update(keyRunes('?'))
-	view := model.View()
+	view := plainView(model.viewString())
 	for _, want := range []string{
 		"Keyboard shortcuts",
 		"Compose",
@@ -39,11 +39,11 @@ func TestShortcutOverlayLikeRust(t *testing.T) {
 		t.Fatalf("overlay should replace the passive hint row:\n%s", view)
 	}
 
-	model.Update(key(bubbletea.KeyEsc))
+	model.Update(key(keymsg.KeyEsc))
 	if model.shortcutOverlay {
 		t.Fatal("esc should close the shortcut overlay")
 	}
-	if view := model.View(); strings.Contains(view, "Keyboard shortcuts") {
+	if view := model.viewString(); strings.Contains(view, "Keyboard shortcuts") {
 		t.Fatalf("overlay still painted after esc:\n%s", view)
 	} else if !strings.Contains(view, "? for shortcuts") {
 		t.Fatalf("passive hint should return after esc:\n%s", view)
@@ -77,7 +77,7 @@ func TestShortcutOverlayKeepsDraftTyping(t *testing.T) {
 func TestShortcutOverlayStackedOnNarrowWidth(t *testing.T) {
 	model := NewModel(codextui.NewState(nil), Options{Width: 60, Height: 40})
 	model.Update(keyRunes('?'))
-	view := model.View()
+	view := plainView(model.viewString())
 	for _, want := range []string{"Keyboard shortcuts", "Compose", "Session", "Transcript (open first)"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("narrow overlay missing %q:\n%s", want, view)

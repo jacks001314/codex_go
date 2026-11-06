@@ -55,7 +55,7 @@ func TestAgentsOverviewUsageFetchRendersGroupTotals(t *testing.T) {
 	if reads != 1 {
 		t.Fatalf("usage reads = %d, want 1", reads)
 	}
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	for _, want := range []string{"Tokens: 12K in \u00b7 3K out", "Est. usage: 3.4 credits \u00b7 ~$0.14"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("dashboard missing %q:\n%s", want, view)
@@ -98,7 +98,7 @@ func TestAgentsOverviewUsagePreservesPriorNonzeroEstimate(t *testing.T) {
 			},
 		},
 	})
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	for _, want := range []string{"Est. usage: 3.4 credits", "Tokens: 12K in \u00b7 3K out"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("dashboard missing %q after a zero settlement:\n%s", want, view)
@@ -130,7 +130,7 @@ func TestAgentsOverviewUsageDisabledClearsEstimatesKeepsTokens(t *testing.T) {
 	if entry.estimate != nil {
 		t.Fatalf("estimate = %#v, want cleared on the disabled capability", entry.estimate)
 	}
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "Tokens: 13K in \u00b7 4K out") {
 		t.Errorf("live tokens must survive the disabled capability:\n%s", view)
 	}

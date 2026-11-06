@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	"codex_go/utils"
 )
@@ -32,7 +32,7 @@ func TestPatchApprovalInlineDisclosureResumesFollowLikeRust(t *testing.T) {
 
 	y, hit := transcriptDisclosureControlPoint(t, model)
 	clickTranscriptRow(model, hit.x, y)
-	if view := utils.StripANSI(model.View()); !strings.Contains(view, "detail line 01") {
+	if view := utils.StripANSI(model.viewString()); !strings.Contains(view, "detail line 01") {
 		t.Fatalf("click did not expand the details:\n%s", view)
 	}
 	if model.activityFollow {

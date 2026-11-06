@@ -5,7 +5,7 @@ import (
 
 	codextui "codex_go/tui"
 
-	"github.com/charmbracelet/glamour"
+	"charm.land/glamour/v2"
 )
 
 // TestRenderMarkdownReusesCachedRenderer pins the renderer cache: streaming
@@ -31,7 +31,6 @@ func TestRenderMarkdownReusesCachedRenderer(t *testing.T) {
 		renderer, err := glamour.NewTermRenderer(
 			glamour.WithStyles(style),
 			glamour.WithWordWrap(width),
-			glamour.WithColorProfile(codextui.TermenvProfileForLevel(level)),
 			glamour.WithChromaFormatter(codextui.ChromaFormatterForLevel(level)),
 		)
 		if err != nil {

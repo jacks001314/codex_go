@@ -4,9 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 // TestAccountEmailRefreshOnlyAppliesCurrentRequestLikeRust mirrors #50199:
@@ -44,8 +43,8 @@ func TestAccountEmailRefreshOnlyAppliesCurrentRequestLikeRust(t *testing.T) {
 		t.Fatalf("request id = %q, want cleared after delivery", model.accountEmailRequestID)
 	}
 	model.composer.SetValue("/status")
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
-	if view := model.View(); !strings.Contains(view, "Account:") || !strings.Contains(view, "user@example.com (Pro 200)") {
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
+	if view := model.viewString(); !strings.Contains(view, "Account:") || !strings.Contains(view, "user@example.com (Pro 200)") {
 		t.Fatalf("/status missing refreshed account identity:\n%s", view)
 	}
 }

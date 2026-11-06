@@ -112,7 +112,7 @@ func TestStatusRowOwnerPrecedenceLikeRust(t *testing.T) {
 	}
 
 	// Compaction wins even over an outstanding guardian review.
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if !strings.Contains(view, CompactionStatusHeader) {
 		t.Fatalf("compaction header missing from row:\n%s", view)
 	}
@@ -135,7 +135,7 @@ func TestStatusRowHookInlineAndOverflowLikeRust(t *testing.T) {
 	wide.syncTaskRunningTimer()
 	wide.Update(HookRunMsg{ID: "run", EventName: "preToolUse", StatusMessage: "checking policy", Running: true})
 	now = now.Add(hookStatusRevealDelay)
-	wideView := utils.StripANSI(wide.View())
+	wideView := utils.StripANSI(wide.viewString())
 	wideLower := strings.ToLower(wideView)
 	var inlineLine string
 	for _, line := range strings.Split(wideLower, "\n") {
@@ -155,7 +155,7 @@ func TestStatusRowHookInlineAndOverflowLikeRust(t *testing.T) {
 	narrow.syncTaskRunningTimer()
 	narrow.Update(HookRunMsg{ID: "run", EventName: "preToolUse", StatusMessage: "checking policy", Running: true})
 	now = now.Add(hookStatusRevealDelay)
-	narrowView := utils.StripANSI(narrow.View())
+	narrowView := utils.StripANSI(narrow.viewString())
 	narrowLower := strings.ToLower(narrowView)
 	var overflowLine string
 	for _, line := range strings.Split(narrowLower, "\n") {
@@ -183,7 +183,7 @@ func TestCompactionDoesNotDuplicateTranscriptRowLikeRust(t *testing.T) {
 	if !model.compactionActive {
 		t.Fatalf("compaction did not start")
 	}
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if !strings.Contains(view, CompactionStatusHeader) {
 		t.Fatalf("compaction header missing:\n%s", view)
 	}

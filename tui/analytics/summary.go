@@ -154,14 +154,9 @@ func AnalyticsSummaryLines(opts AnalyticsSummaryOptions) []string {
 		lines = append(lines, values, labels, "")
 	}
 	selected := AnalyticsSummaryViewIndex(opts.View)
-	// Rust #45770 shows only the active activity view beside the heading.
-	controlLine := AnalyticsSummaryViews[selected].Label()
-	if innerWidth >= 58 {
-		lines = append(lines, analyticsColumns("Token activity", controlLine, innerWidth))
-	} else {
-		lines = append(lines, "Token activity")
-		lines = append(lines, analyticsWrap(controlLine, innerWidth)...)
-	}
+	// Rust #46863 moved the Daily/Weekly/Cumulative selector into the fixed
+	// dashboard controls, leaving only the chart heading here.
+	lines = append(lines, "Token activity")
 	lines = append(lines, "Last 12 months", "")
 	if tokens.DailyUsageBuckets != nil {
 		buckets := make([]chatwidget.TokenActivityDailyBucket, 0, len(*tokens.DailyUsageBuckets))

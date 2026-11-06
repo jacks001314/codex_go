@@ -6,10 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
 	chatwidget "codex_go/tui/chatwidget"
+	"codex_go/tui/keymsg"
 )
 
 func exportTestModel(t *testing.T, markdown string, clipboard func(string) error) *Model {
@@ -39,7 +38,7 @@ func TestModelExportCommandWritesMarkdownFile(t *testing.T) {
 	model.sessionCWD = dir
 
 	typeText(t, model, "/export out.md")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 
 	data, err := os.ReadFile(filepath.Join(dir, "out.md"))
 	if err != nil {
@@ -62,7 +61,7 @@ func TestModelExportCommandExistingFileFails(t *testing.T) {
 	model.sessionCWD = dir
 
 	typeText(t, model, "/export out.md")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 
 	if !strings.Contains(model.notice, "Export failed:") {
 		t.Fatalf("notice = %q, want an export failure", model.notice)
@@ -77,7 +76,7 @@ func TestModelExportCommandWithoutArgsOpensPicker(t *testing.T) {
 	model := exportTestModel(t, "# Codex conversation\n\n## User\n\nhello\n", nil)
 
 	typeText(t, model, "/export")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 
 	if model.modal == nil || model.modal.id != chatwidget.TranscriptExportPickerViewID {
 		t.Fatalf("modal = %#v, want the export picker", model.modal)
@@ -109,7 +108,7 @@ func TestModelExportUnavailableWithoutCallback(t *testing.T) {
 	model := NewModel(codextui.NewState(nil), Options{Width: 80, Height: 24, DisablePasteBurst: true})
 	model.sessionCWD = t.TempDir()
 	typeText(t, model, "/export out.md")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if !strings.Contains(model.notice, "Export failed:") {
 		t.Fatalf("notice = %q, want an export failure", model.notice)
 	}

@@ -4,10 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	"codex_go/appserver"
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 	"codex_go/utils"
 )
 
@@ -49,7 +48,7 @@ func TestReadOnlyResumeShowsNoticeAndBlocksInput(t *testing.T) {
 	if !model.readOnlyThread {
 		t.Fatal("a read-only resume must enter the external-writer state")
 	}
-	view := model.View()
+	view := model.viewString()
 	// Rust #47112: the retry hint is rendered lowercase.
 	plainView := utils.StripANSI(view)
 	if !strings.Contains(plainView, "This conversation is open in another app") || !strings.Contains(plainView, "r to retry") {
@@ -65,7 +64,7 @@ func TestReadOnlyResumeShowsNoticeAndBlocksInput(t *testing.T) {
 	if got := model.composer.Value(); got != "" {
 		t.Fatalf("composer = %q, read-only input must be blocked", got)
 	}
-	if _, cmd := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter}); cmd != nil {
+	if _, cmd := model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter}); cmd != nil {
 		t.Fatal("read-only submit must be blocked")
 	}
 	if len(model.SubmittedRequests()) != 0 {
@@ -85,8 +84,8 @@ func TestReadOnlyResumeShowsNoticeAndBlocksInput(t *testing.T) {
 	if model.State.Model != "server-model" || model.State.ApprovalPolicy != "on-request" || model.State.Sandbox != "workspace-write" {
 		t.Fatalf("resumed settings = (%q, %q, %q)", model.State.Model, model.State.ApprovalPolicy, model.State.Sandbox)
 	}
-	if !strings.Contains(model.View(), "Type your message") && !strings.Contains(model.View(), "history") {
-		t.Fatalf("transcript missing after retry:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Type your message") && !strings.Contains(model.viewString(), "history") {
+		t.Fatalf("transcript missing after retry:\n%s", model.viewString())
 	}
 }
 
@@ -99,13 +98,14 @@ func TestReadOnlyResumeKeysAdvertised(t *testing.T) {
 		Summary:  &codextui.SessionSummary{ThreadID: "thread-a"},
 		ReadOnly: true,
 	})
-	if _, cmd := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEsc}); cmd == nil {
+	if _, cmd := model.Update(keymsg.KeyMsg{Type: keymsg.KeyEsc}); cmd == nil {
 		t.Fatal("Esc must exit the read-only view")
 	}
 	if _, cmd := model.Update(keyRunes('q')); cmd == nil {
 		t.Fatal("q must exit the read-only view")
 	}
-	if _, cmd := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyCtrlT}); cmd == nil {
+	updated, _ := model.Update(keymsg.KeyMsg{Type: keymsg.KeyCtrlT})
+	if opened := updated.(*Model); opened.overlay == nil {
 		t.Fatal("the transcript shortcut must stay available")
 	}
 }

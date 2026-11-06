@@ -25,8 +25,8 @@ import (
 // valid raw-HTML tag and swallow a masked span inside angle brackets. A
 // leading digit keeps the token ordinary text everywhere.
 const (
-	mathPlaceholderPrefix = "8MATHPROT"
-	mathPlaceholderSuffix = "END"
+	mathPlaceholderPrefix = "\uE010"
+	mathPlaceholderSuffix = "\uE011"
 )
 
 // mathSpanScan is the full result of Rust's `MathMarkdown::new`: the masked
@@ -92,15 +92,20 @@ type mathScanner struct {
 	displayRanges   [][2]int
 }
 
+// mathPlaceholder names the placeholder for the given ordinal.
+func mathPlaceholder(index int) string {
+	return mathPlaceholderPrefix + strconv.Itoa(index) + mathPlaceholderSuffix
+}
+
 func (s *mathScanner) placeholderFor(rendered string) string {
 	if s.placeholders == nil {
 		s.placeholders = map[string]string{}
 		s.masked.Grow(len(s.text))
 	}
-	placeholder := mathPlaceholderPrefix + strconv.Itoa(s.nextPlaceholder) + mathPlaceholderSuffix
+	placeholder := mathPlaceholder(s.nextPlaceholder)
 	s.nextPlaceholder++
 	for strings.Contains(s.text, placeholder) {
-		placeholder = mathPlaceholderPrefix + strconv.Itoa(s.nextPlaceholder) + mathPlaceholderSuffix
+		placeholder = mathPlaceholder(s.nextPlaceholder)
 		s.nextPlaceholder++
 	}
 	s.placeholders[placeholder] = rendered

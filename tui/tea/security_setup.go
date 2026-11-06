@@ -3,7 +3,9 @@ package tea
 import (
 	"strings"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	"codex_go/tui/keymsg"
+
+	bubbletea "charm.land/bubbletea/v2"
 )
 
 // SecuritySetupNotice is the validated account-security reminder handed to
@@ -84,16 +86,16 @@ func (m *Model) renderSecuritySetupBanner() string {
 	}}, true)
 }
 
-func (m *Model) handleSecuritySetupKey(msg bubbletea.KeyMsg) (bubbletea.Cmd, bool) {
+func (m *Model) handleSecuritySetupKey(msg keymsg.KeyMsg) (bubbletea.Cmd, bool) {
 	if !m.securitySetupBannerVisible() {
 		return nil, false
 	}
 	switch msg.Type {
-	case bubbletea.KeyEsc:
+	case keymsg.KeyEsc:
 		m.securitySetupDismissed = true
 		m.securitySetupNotice = nil
 		return nil, true
-	case bubbletea.KeyRunes:
+	case keymsg.KeyRunes:
 		if msg.Alt || len(msg.Runes) != 1 || msg.Runes[0] != '1' {
 			return nil, false
 		}

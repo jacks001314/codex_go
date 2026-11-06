@@ -4,10 +4,11 @@ import (
 	"testing"
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	"codex_go/protocol"
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 func newApprovalPromptDelayTestModel(t *testing.T, now *time.Time) *Model {
@@ -47,7 +48,7 @@ func TestApprovalPromptWaitsForComposerIdleDelay(t *testing.T) {
 	now := base
 	model := newApprovalPromptDelayTestModel(t, &now)
 
-	updateApprovalPromptDelayTestModel(t, model, bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{'x'}})
+	updateApprovalPromptDelayTestModel(t, model, keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{'x'}})
 	if got := model.approvalPromptDelay.lastComposerActivityAt; !got.Equal(base) {
 		t.Fatalf("last composer activity = %v, want %v", got, base)
 	}
@@ -84,11 +85,11 @@ func TestApprovalPromptDelayResetsWhenTypingContinues(t *testing.T) {
 	now := base
 	model := newApprovalPromptDelayTestModel(t, &now)
 
-	updateApprovalPromptDelayTestModel(t, model, bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{'x'}})
+	updateApprovalPromptDelayTestModel(t, model, keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{'x'}})
 	updateApprovalPromptDelayTestModel(t, model, ApprovalRequestMsg{ID: "reset", Title: "Run?"})
 
 	now = base.Add(750 * time.Millisecond)
-	updateApprovalPromptDelayTestModel(t, model, bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{'y'}})
+	updateApprovalPromptDelayTestModel(t, model, keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{'y'}})
 
 	now = base.Add(approvalPromptTypingIdleDelay)
 	updateApprovalPromptDelayTestModel(t, model, approvalPromptDelayMsg{token: model.approvalPromptDelay.token})
@@ -107,7 +108,7 @@ func TestApprovalPromptDelayIgnoresInactiveThreadRequests(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	model := newApprovalPromptDelayTestModel(t, &now)
 
-	updateApprovalPromptDelayTestModel(t, model, bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{'x'}})
+	updateApprovalPromptDelayTestModel(t, model, keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{'x'}})
 	cmd := updateApprovalPromptDelayTestModel(t, model, ApprovalRequestMsg{ID: "background", ThreadID: "another-thread", Title: "Run?"})
 
 	if model.modal != nil {
@@ -126,7 +127,7 @@ func TestStreamDeliveredApprovalUsesComposerIdleDelay(t *testing.T) {
 	now := base
 	model := newApprovalPromptDelayTestModel(t, &now)
 
-	updateApprovalPromptDelayTestModel(t, model, bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{'x'}})
+	updateApprovalPromptDelayTestModel(t, model, keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{'x'}})
 	cmd := updateApprovalPromptDelayTestModel(t, model, streamEnvelopeMsg{
 		Batch: []bubbletea.Msg{ApprovalRequestMsg{ID: "streamed-approval", Title: "Run?"}},
 		Done:  true,
@@ -215,20 +216,20 @@ func TestWaitForStreamStopsCoalescingAtNonDeltaMessage(t *testing.T) {
 func TestApprovalDelayTracksOnlyComposerEditingKeys(t *testing.T) {
 	tests := []struct {
 		name string
-		msg  bubbletea.KeyMsg
+		msg  keymsg.KeyMsg
 		want bool
 	}{
-		{name: "rune", msg: bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{'a'}}, want: true},
-		{name: "space", msg: bubbletea.KeyMsg{Type: bubbletea.KeySpace}, want: true},
-		{name: "backspace", msg: bubbletea.KeyMsg{Type: bubbletea.KeyBackspace}, want: true},
-		{name: "delete", msg: bubbletea.KeyMsg{Type: bubbletea.KeyDelete}, want: true},
-		{name: "enter", msg: bubbletea.KeyMsg{Type: bubbletea.KeyEnter}, want: true},
-		{name: "tab", msg: bubbletea.KeyMsg{Type: bubbletea.KeyTab}, want: true},
-		{name: "shift tab", msg: bubbletea.KeyMsg{Type: bubbletea.KeyShiftTab}, want: true},
-		{name: "alt rune", msg: bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{'a'}, Alt: true}, want: false},
-		{name: "paste", msg: bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{'a'}, Paste: true}, want: false},
-		{name: "ctrl c", msg: bubbletea.KeyMsg{Type: bubbletea.KeyCtrlC}, want: false},
-		{name: "up", msg: bubbletea.KeyMsg{Type: bubbletea.KeyUp}, want: false},
+		{name: "rune", msg: keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{'a'}}, want: true},
+		{name: "space", msg: keymsg.KeyMsg{Type: keymsg.KeySpace}, want: true},
+		{name: "backspace", msg: keymsg.KeyMsg{Type: keymsg.KeyBackspace}, want: true},
+		{name: "delete", msg: keymsg.KeyMsg{Type: keymsg.KeyDelete}, want: true},
+		{name: "enter", msg: keymsg.KeyMsg{Type: keymsg.KeyEnter}, want: true},
+		{name: "tab", msg: keymsg.KeyMsg{Type: keymsg.KeyTab}, want: true},
+		{name: "shift tab", msg: keymsg.KeyMsg{Type: keymsg.KeyShiftTab}, want: true},
+		{name: "alt rune", msg: keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{'a'}, Alt: true}, want: false},
+		{name: "paste", msg: keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{'a'}, Paste: true}, want: false},
+		{name: "ctrl c", msg: keymsg.KeyMsg{Type: keymsg.KeyCtrlC}, want: false},
+		{name: "up", msg: keymsg.KeyMsg{Type: keymsg.KeyUp}, want: false},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

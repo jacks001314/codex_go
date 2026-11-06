@@ -3,10 +3,11 @@ package tea
 import (
 	"strings"
 
+	bubbletea "charm.land/bubbletea/v2"
+
 	"codex_go/config"
 	codextui "codex_go/tui"
 	bottompane "codex_go/tui/bottom_pane"
-	bubbletea "github.com/charmbracelet/bubbletea"
 )
 
 func (m *Model) openModelPicker() bubbletea.Cmd {

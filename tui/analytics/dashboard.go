@@ -44,30 +44,29 @@ func AnalyticsConsumerAttribution(business bool, attributedUsage *bool) bool {
 	return attributedUsage == nil || *attributedUsage
 }
 
-// AnalyticsSectionTitle is the card and panel title for a section.
-func AnalyticsSectionTitle(section AnalyticsSection, business, consumerAttribution bool) string {
+// AnalyticsSectionTabLabel is the compact report tab and overview card label
+// (Rust analytics/chrome.rs AnalyticsView::tab_label, #46863).
+func AnalyticsSectionTabLabel(section AnalyticsSection, business bool) string {
 	switch section {
+	case AnalyticsSectionSummary:
+		return "Overview"
 	case AnalyticsSectionUsage:
-		switch {
-		case business:
-			return "Token usage history"
-		case consumerAttribution:
-			return "Total usage history"
-		default:
-			return "Usage history"
+		if business {
+			return "Tokens"
 		}
-	case AnalyticsSectionPlugins:
-		return "Plugins called"
+		return "Usage"
 	case AnalyticsSectionCredits:
-		return "Credits usage history"
+		return "Credits"
 	case AnalyticsSectionActivity:
 		return "Messages"
+	case AnalyticsSectionPlugins:
+		return "Plugins"
+	case AnalyticsSectionSkills:
+		return "Skills"
 	case AnalyticsSectionChats:
-		return "Top chats"
-	case AnalyticsSectionSummary:
-		return "Summary"
+		return "Chats"
 	default:
-		return "Skills used"
+		return ""
 	}
 }
 
@@ -239,7 +238,7 @@ func analyticsDashboardCard(
 	for len(content) < innerHeight {
 		content = append(content, "")
 	}
-	label := " " + strconv.Itoa(position) + " " + AnalyticsSectionTitle(section, opts.Business, opts.ConsumerAttribution) + " "
+	label := " " + strconv.Itoa(position) + " " + AnalyticsSectionTabLabel(section, opts.Business) + " "
 	title := "  "
 	if focused {
 		title = " ▸"

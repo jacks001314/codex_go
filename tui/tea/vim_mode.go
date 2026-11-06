@@ -1,13 +1,12 @@
 package tea
 
 import (
+	keymsg "codex_go/tui/keymsg"
+	"github.com/rivo/uniseg"
 	"sort"
 	"strings"
 	"unicode"
 	"unicode/utf8"
-
-	bubbletea "github.com/charmbracelet/bubbletea"
-	"github.com/rivo/uniseg"
 
 	bottompane "codex_go/tui/bottom_pane"
 )
@@ -175,7 +174,7 @@ func (m *Model) enterVimInsertAfterSubmission() {
 // line-operator repeats. In insert mode keys type normally until Esc returns
 // to normal mode. When Vim mode is off, or a modal/popup is active, the key
 // is not handled here.
-func (m *Model) applyVimModeKey(msg bubbletea.KeyMsg, keySpec string) bool {
+func (m *Model) applyVimModeKey(msg keymsg.KeyMsg, keySpec string) bool {
 	if m == nil || !m.vimMode || m.modal != nil || m.overlay != nil || m.slashPopup.Active || m.skillPopup.Active {
 		return false
 	}
@@ -202,7 +201,7 @@ func (m *Model) applyVimModeKey(msg bubbletea.KeyMsg, keySpec string) bool {
 			m.executeVimSearch()
 			return true
 		}
-		if msg.Type == bubbletea.KeyRunes && len(msg.Runes) == 1 {
+		if msg.Type == keymsg.KeyRunes && len(msg.Runes) == 1 {
 			m.vimSearchQuery += string(msg.Runes[0])
 		}
 		return true
@@ -215,7 +214,7 @@ func (m *Model) applyVimModeKey(msg bubbletea.KeyMsg, keySpec string) bool {
 		if keySpec == "esc" {
 			return true
 		}
-		if msg.Type == bubbletea.KeyRunes && len(msg.Runes) == 1 {
+		if msg.Type == keymsg.KeyRunes && len(msg.Runes) == 1 {
 			m.replaceVimCharAtCursor(msg.Runes[0])
 		} else if keySpec == "enter" {
 			m.replaceVimCharAtCursor('\n')
@@ -225,7 +224,7 @@ func (m *Model) applyVimModeKey(msg bubbletea.KeyMsg, keySpec string) bool {
 	// A pending find/till motion (f/F/t/T) consumes the next typed character as
 	// the search target, mirroring Rust vim_commands.rs VimPending::Find.
 	if m.vimPendingFind {
-		if msg.Type == bubbletea.KeyRunes && len(msg.Runes) == 1 {
+		if msg.Type == keymsg.KeyRunes && len(msg.Runes) == 1 {
 			m.resolveVimFind(msg.Runes[0])
 		} else if keySpec == "esc" {
 			m.clearVimFind()
@@ -252,7 +251,7 @@ func (m *Model) applyVimModeKey(msg bubbletea.KeyMsg, keySpec string) bool {
 			m.vimCommitEdit()
 			m.vimReplaceMode = false
 			m.clearVimReplaceRecovery()
-		case msg.Type == bubbletea.KeyRunes && len(msg.Runes) == 1:
+		case msg.Type == keymsg.KeyRunes && len(msg.Runes) == 1:
 			m.replaceVimCharAdvancing(msg.Runes[0])
 			m.absorbVimReplacePromptPrefix()
 		case keySpec == "enter":
@@ -277,9 +276,9 @@ func (m *Model) applyVimModeKey(msg bubbletea.KeyMsg, keySpec string) bool {
 		}
 		if m.vimFindChangeRecording {
 			switch {
-			case msg.Type == bubbletea.KeyRunes:
+			case msg.Type == keymsg.KeyRunes:
 				m.vimLastFindInsertText = append(m.vimLastFindInsertText, msg.Runes...)
-			case msg.Type == bubbletea.KeyBackspace && len(m.vimLastFindInsertText) > 0:
+			case msg.Type == keymsg.KeyBackspace && len(m.vimLastFindInsertText) > 0:
 				m.vimLastFindInsertText = m.vimLastFindInsertText[:len(m.vimLastFindInsertText)-1]
 			}
 		}
@@ -473,7 +472,7 @@ func (m *Model) applyVimModeKey(msg bubbletea.KeyMsg, keySpec string) bool {
 // Rust also requires the composer's `slash_commands_enabled` config; Go's main
 // composer is the only Vim composer and always accepts slash commands, so that
 // term is unconditionally true here.
-func (m *Model) vimEmptyNormalSlashOpensCommands(msg bubbletea.KeyMsg) bool {
+func (m *Model) vimEmptyNormalSlashOpensCommands(msg keymsg.KeyMsg) bool {
 	if m == nil || m.vimSearchMode || m.vimInsert {
 		return false
 	}
@@ -486,7 +485,7 @@ func (m *Model) vimEmptyNormalSlashOpensCommands(msg bubbletea.KeyMsg) bool {
 	if !m.composerIsEmpty() {
 		return false
 	}
-	return msg.Type == bubbletea.KeyRunes && !msg.Alt && len(msg.Runes) == 1 && msg.Runes[0] == '/'
+	return msg.Type == keymsg.KeyRunes && !msg.Alt && len(msg.Runes) == 1 && msg.Runes[0] == '/'
 }
 
 // vimCursorColumn returns the cursor column within the current logical line.
@@ -509,14 +508,14 @@ func (m *Model) vimCurrentLine() string {
 
 func (m *Model) vimCursorLeft() {
 	if col := m.vimCursorColumn(); col > 0 {
-		m.composer.SetCursor(col - 1)
+		m.composer.SetCursorColumn(col - 1)
 	}
 }
 
 func (m *Model) vimCursorRight() {
 	col := m.vimCursorColumn()
 	if col < len([]rune(m.vimCurrentLine())) {
-		m.composer.SetCursor(col + 1)
+		m.composer.SetCursorColumn(col + 1)
 	}
 }
 
@@ -529,7 +528,7 @@ func (m *Model) vimCursorLineStartNonBlank() {
 			break
 		}
 	}
-	m.composer.SetCursor(col)
+	m.composer.SetCursorColumn(col)
 }
 
 // vimValueByteOffset returns the byte offset into the composer value of the
@@ -1002,7 +1001,7 @@ func (m *Model) vimWordMotion(kind int) {
 	if target > len(runes) {
 		target = len(runes)
 	}
-	m.composer.SetCursor(byteOffsetForRuneIndex(line, target))
+	m.composer.SetCursorColumn(byteOffsetForRuneIndex(line, target))
 }
 
 // startVimFind begins a find/till motion that waits for the next typed
@@ -1185,7 +1184,7 @@ func (m *Model) vimSearchMoveCursor(offset int) {
 	for m.composer.Line() > row {
 		m.composer.CursorUp()
 	}
-	m.composer.SetCursor(col)
+	m.composer.SetCursorColumn(col)
 }
 
 func vimLineColumnForByteOffset(value string, offset int) (row int, col int) {
@@ -1335,7 +1334,7 @@ func (m *Model) applyVimFindMotion(kind int, forward bool, target rune, operator
 		} else if kind == 1 {
 			destination = foundEnd
 		}
-		m.composer.SetCursor(runeIndexForByte(line, destination))
+		m.composer.SetCursorColumn(runeIndexForByte(line, destination))
 		return true
 	}
 	var start, end int
@@ -1546,7 +1545,7 @@ func (m *Model) vimSetCursorAtByteOffset(offset int) {
 	if row >= 0 && row < len(lines) {
 		col = runeIndexForByte(lines[row], colByte)
 	}
-	m.composer.SetCursor(col)
+	m.composer.SetCursorColumn(col)
 }
 
 // applyVimLineOperatorRepeat handles dd / yy / cc: the operator repeated on
@@ -1814,12 +1813,12 @@ func (m *Model) jumpToVimBufferLine(last bool) {
 		for m.composer.Line() < m.composer.LineCount()-1 {
 			m.composer.CursorDown()
 		}
-		m.composer.SetCursor(0)
+		m.composer.SetCursorColumn(0)
 	} else {
 		for m.composer.Line() > 0 {
 			m.composer.CursorUp()
 		}
-		m.composer.SetCursor(0)
+		m.composer.SetCursorColumn(0)
 	}
 	m.vimCursorLineStartNonBlank()
 }

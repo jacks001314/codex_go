@@ -4,11 +4,12 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	"codex_go/review"
 	codextui "codex_go/tui"
-	"codex_go/tui/bottom_pane"
+	bottompane "codex_go/tui/bottom_pane"
+	"codex_go/tui/keymsg"
 )
 
 func TestReviewPickerOpensDuringMCPStartupLikeRust(t *testing.T) {
@@ -19,7 +20,7 @@ func TestReviewPickerOpensDuringMCPStartupLikeRust(t *testing.T) {
 	model.mcpStartupActive = true
 	model.composer.SetValue("/review")
 
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 
 	if model.modal == nil || model.modal.kind != ModalKindReview {
 		t.Fatalf("review picker = %#v", model.modal)
@@ -45,7 +46,7 @@ func TestInlineReviewSubmitsDuringMCPStartupLikeRust(t *testing.T) {
 	model.mcpStartupActive = true
 	model.composer.SetValue("/review check regressions")
 
-	_, cmd := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	_, cmd := model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	runTeaCmd(t, model, cmd)
 
 	if started.ThreadID != "thread-review" || started.Target.Type != "custom" ||
@@ -69,7 +70,7 @@ func TestReviewBlockedDuringForegroundWorkPreservesDraftLikeRust(t *testing.T) {
 		URL:  "https://example.com/image.png",
 	}}
 
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 
 	if got := model.composerText(); got != draft {
 		t.Fatalf("composer after blocked review = %q, want %q", got, draft)
@@ -83,7 +84,7 @@ func TestReviewBlockedDuringForegroundWorkPreservesDraftLikeRust(t *testing.T) {
 	if model.notice != "'/review' is disabled while a task is in progress." {
 		t.Fatalf("notice = %q", model.notice)
 	}
-	if view := model.View(); !strings.Contains(view, "'/review' is disabled while a task is in progress.") {
+	if view := model.viewString(); !strings.Contains(view, "'/review' is disabled while a task is in progress.") {
 		t.Fatalf("blocked review error missing:\n%s", view)
 	}
 }
@@ -96,7 +97,7 @@ func TestReviewBlockedByQueuedFollowUpPreservesDraftLikeRust(t *testing.T) {
 	model.queued = append(model.queued, queuedSubmission{Request: SubmitRequest{Prompt: "queued follow-up"}})
 	model.composer.SetValue("/review")
 
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 
 	if got := model.composerText(); got != "/review" {
 		t.Fatalf("composer after queued review block = %q", got)

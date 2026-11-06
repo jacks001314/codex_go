@@ -4,9 +4,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	composerhistory "codex_go/tui/bottom_pane/chat_composer"
+	"codex_go/tui/keymsg"
 )
 
 // maybeBeginHistorySearch opens Rust's composer-owned Ctrl+R search without
@@ -28,7 +27,7 @@ func (m *Model) maybeBeginHistorySearch(keySpec string) bool {
 
 // applyActiveHistorySearchKey owns the query and preview while Ctrl+R search is
 // active. Background draft recovery edits the saved draft, not this preview.
-func (m *Model) applyActiveHistorySearchKey(message bubbletea.KeyMsg, keySpec string) bool {
+func (m *Model) applyActiveHistorySearchKey(message keymsg.KeyMsg, keySpec string) bool {
 	if m == nil || m.historySearch == nil || !m.historySearch.Active {
 		return false
 	}
@@ -40,23 +39,23 @@ func (m *Model) applyActiveHistorySearchKey(message bubbletea.KeyMsg, keySpec st
 	case m.keyMatches("composer", "history_search_next", keySpec):
 		draft, _ := search.SearchInDirection(composerhistory.HistorySearchNewer)
 		m.showHistorySearchDraft(draft)
-	case message.Type == bubbletea.KeyEnter:
+	case message.Type == keymsg.KeyEnter:
 		if draft, accepted := search.Accept(); accepted {
 			m.restoreHistorySearchDraft(draft, m.historyElementsForText(draft.Text))
 			m.endHistorySearch()
 		}
-	case message.Type == bubbletea.KeyEsc || message.Type == bubbletea.KeyCtrlC:
+	case message.Type == keymsg.KeyEsc || message.Type == keymsg.KeyCtrlC:
 		m.restoreHistorySearchDraft(search.Cancel(), m.historySearchElements)
 		m.attachments = cloneComposerAttachments(m.historySearchAttachments)
 		m.composerMentionBindings = append([]string(nil), m.historySearchMentionBindings...)
 		m.endHistorySearch()
-	case message.Type == bubbletea.KeyBackspace || message.Type == bubbletea.KeyCtrlH:
+	case message.Type == keymsg.KeyBackspace || message.Type == keymsg.KeyCtrlH:
 		draft, _ := search.BackspaceQuery()
 		m.showHistorySearchDraft(draft)
-	case message.Type == bubbletea.KeyCtrlU:
+	case message.Type == keymsg.KeyCtrlU:
 		draft, _ := search.ClearQuery()
 		m.showHistorySearchDraft(draft)
-	case message.Type == bubbletea.KeyRunes && !message.Alt:
+	case message.Type == keymsg.KeyRunes && !message.Alt:
 		draft, _ := search.AppendQueryRune(firstRune(message.Runes))
 		m.showHistorySearchDraft(draft)
 	default:

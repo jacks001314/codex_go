@@ -7,10 +7,10 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
 	"github.com/mattn/go-runewidth"
 
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 // Rust parity: bottom_pane/chat_composer/sparkle.rs and sparkle_field.rs.
@@ -136,11 +136,11 @@ func (m *Model) stopAstraSparkle() {
 // prepareComposerSparkleKey mirrors Rust's before_sparkle_key: ordinary draft
 // input ends the opportunity, while a leading slash command may still select
 // Astra and navigation keys leave the flourish alone.
-func (m *Model) prepareComposerSparkleKey(key bubbletea.KeyMsg) {
+func (m *Model) prepareComposerSparkleKey(key keymsg.KeyMsg) {
 	if m == nil || !m.sparkleActive() {
 		return
 	}
-	if key.Paste || key.Type == bubbletea.KeyRunes {
+	if key.Paste || key.Type == keymsg.KeyRunes {
 		text := string(key.Runes)
 		canonical := m.composerText()
 		if m.composerIsEmpty() && (text == "/" || text == "!") {

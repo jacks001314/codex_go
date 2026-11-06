@@ -1,9 +1,11 @@
 package tea
 
 import (
+	keymsg "codex_go/tui/keymsg"
+	mousemsg "codex_go/tui/mousemsg"
 	"strings"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
 	bottompane "codex_go/tui/bottom_pane"
@@ -13,16 +15,16 @@ import (
 // handleWarningsViewMouse gives an unmodified wheel tick inside the painted
 // warning body to the viewer before the transcript sees it. Each tick moves
 // three rows (Rust #57271).
-func (m *Model) handleWarningsViewMouse(msg bubbletea.MouseMsg) bool {
-	if m == nil || m.warningsView == nil || msg.Action != bubbletea.MouseActionPress ||
+func (m *Model) handleWarningsViewMouse(msg mousemsg.MouseMsg) bool {
+	if m == nil || m.warningsView == nil || msg.Action != mousemsg.MouseActionPress ||
 		msg.Alt || msg.Ctrl || msg.Shift {
 		return false
 	}
 	var rows int
 	switch msg.Button {
-	case bubbletea.MouseButtonWheelUp:
+	case mousemsg.MouseButtonWheelUp:
 		rows = -3
-	case bubbletea.MouseButtonWheelDown:
+	case mousemsg.MouseButtonWheelDown:
 		rows = 3
 	default:
 		return false
@@ -105,7 +107,7 @@ func (m *Model) retainedWarningCells() []historycell.WarningCell {
 // `WarningsView::handle_key`: plain `k` keeps and advances, the list actions
 // navigate and cancel, and the global open-warnings/copy keys are consulted only
 // when no list action matched.
-func (m *Model) updateWarningsViewKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
+func (m *Model) updateWarningsViewKey(msg keymsg.KeyMsg) bubbletea.Cmd {
 	if m == nil || m.warningsView == nil {
 		return nil
 	}

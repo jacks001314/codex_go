@@ -50,7 +50,7 @@ func TestDelegatedTurnHidesPrivateContentLikeRust(t *testing.T) {
 		protocol.ThreadEvent{Type: "turn.completed", ThreadID: "thread-voice", TurnID: "turn-voice"},
 	)
 
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "the public answer") {
 		t.Fatalf("final answer missing from the rendered view:\n%s", view)
 	}
@@ -78,7 +78,7 @@ func TestTypedTurnKeepsReasoningAndCommentaryLikeRust(t *testing.T) {
 		protocol.ThreadEvent{Type: "item.delta", ThreadID: "thread-voice", TurnID: "turn-typed", Delta: &protocol.Delta{ItemID: "commentary-1", Text: "typed commentary"}},
 		protocol.ThreadEvent{Type: "item.completed", ThreadID: "thread-voice", TurnID: "turn-typed", Item: &protocol.ThreadItem{ID: "commentary-1", Type: "agent_message", Phase: "commentary", Text: "typed commentary"}},
 	)
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "typed commentary") {
 		t.Fatalf("typed commentary disappeared:\n%s", view)
 	}

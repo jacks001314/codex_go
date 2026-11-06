@@ -12,13 +12,14 @@ import (
 	"testing"
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 	"github.com/coder/websocket"
 
 	"codex_go/appserver"
 	"codex_go/appserverdaemon"
 	"codex_go/cli"
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 	codextea "codex_go/tui/tea"
 )
 
@@ -95,7 +96,7 @@ func TestRemoteTUIReconnectRebuildsBackgroundApprovalLikeRust(t *testing.T) {
 
 		// 4. The answer travels back over the reconnect connection, to the id the
 		// server replayed.
-		_, answerCmd := pump.model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+		_, answerCmd := pump.model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 		if answerCmd != nil {
 			_ = answerCmd()
 		}

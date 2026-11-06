@@ -5,10 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	"codex_go/config"
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 // Rust parity: #43113 (fc748ab8d5). Both opt-in prompts share one view, the
@@ -32,14 +31,14 @@ func TestFeatureEnablePromptSavesMemoriesForNewThreadsLikeRust(t *testing.T) {
 	if model.modal.body != "Memories are disabled in this TUI session." {
 		t.Fatalf("prompt body = %q", model.modal.body)
 	}
-	view := model.View()
+	view := model.viewString()
 	for _, want := range []string{"Save on the server for new threads without changing this thread", memoriesDocsURL, "Not now"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, view)
 		}
 	}
 
-	_, command := model.Update(key(bubbletea.KeyEnter))
+	_, command := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, command)
 	if len(writes) != 1 || len(writes[0]) != 2 {
 		t.Fatalf("writes = %#v, want both memory keys", writes)
@@ -54,8 +53,8 @@ func TestFeatureEnablePromptSavesMemoriesForNewThreadsLikeRust(t *testing.T) {
 	if model.featureSettings["memories"] || model.featureSettings["memory_tool"] {
 		t.Fatal("the current thread's feature settings changed")
 	}
-	if !strings.Contains(model.View(), "Memories setting saved on the server for new threads. This thread is unchanged.") {
-		t.Fatalf("save notice missing:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Memories setting saved on the server for new threads. This thread is unchanged.") {
+		t.Fatalf("save notice missing:\n%s", model.viewString())
 	}
 }
 
@@ -74,13 +73,13 @@ func TestFeatureEnablePromptSubagentsLikeRust(t *testing.T) {
 	if model.modal == nil || model.modal.title != "Enable subagents?" || model.modal.body != "Subagents are disabled in this TUI session." {
 		t.Fatalf("prompt = %#v", model.modal)
 	}
-	_, command := model.Update(key(bubbletea.KeyEnter))
+	_, command := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, command)
 	if len(writes) != 1 || len(writes[0]) != 1 || writes[0][0].KeyPath != "features.multi_agent" {
 		t.Fatalf("writes = %#v", writes)
 	}
-	if !strings.Contains(model.View(), "Subagents setting saved on the server for new threads.") {
-		t.Fatalf("save notice missing:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Subagents setting saved on the server for new threads.") {
+		t.Fatalf("save notice missing:\n%s", model.viewString())
 	}
 }
 
@@ -93,10 +92,10 @@ func TestFeatureEnablePromptReportsOverrideAndFailureLikeRust(t *testing.T) {
 		},
 	})
 	overridden.openFeatureEnablePrompt("multi_agent")
-	_, command := overridden.Update(key(bubbletea.KeyEnter))
+	_, command := overridden.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, overridden, command)
-	if !strings.Contains(overridden.View(), "Subagents setting was saved but is overridden") {
-		t.Fatalf("override notice missing:\n%s", overridden.View())
+	if !strings.Contains(overridden.viewString(), "Subagents setting was saved but is overridden") {
+		t.Fatalf("override notice missing:\n%s", overridden.viewString())
 	}
 
 	failed := NewModel(codextui.NewState(nil), Options{
@@ -107,9 +106,9 @@ func TestFeatureEnablePromptReportsOverrideAndFailureLikeRust(t *testing.T) {
 		},
 	})
 	failed.openFeatureEnablePrompt("multi_agent")
-	_, command = failed.Update(key(bubbletea.KeyEnter))
+	_, command = failed.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, failed, command)
-	if !strings.Contains(failed.View(), "Failed to save Subagents setting: config.toml is read-only") {
-		t.Fatalf("failure notice missing:\n%s", failed.View())
+	if !strings.Contains(failed.viewString(), "Failed to save Subagents setting: config.toml is read-only") {
+		t.Fatalf("failure notice missing:\n%s", failed.viewString())
 	}
 }

@@ -1,14 +1,13 @@
 package tea
 
 import (
+	keymsg "codex_go/tui/keymsg"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	codextui "codex_go/tui"
-
-	bubbletea "github.com/charmbracelet/bubbletea"
 )
 
 func TestModelPwdDisplaysCurrentWorkingDirectory(t *testing.T) {
@@ -22,7 +21,7 @@ func TestModelPwdDisplaysCurrentWorkingDirectory(t *testing.T) {
 	}
 
 	typeText(t, model, "/pwd")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 
 	texts := state.Messages
@@ -60,7 +59,7 @@ func TestModelCdChangesWorkingDirectoryPreservingHistory(t *testing.T) {
 	})
 
 	typeText(t, model, "/cd "+targetCWD)
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 
 	if len(requests) != 1 || requests[0] != "thread-source:"+targetCWD {
@@ -88,7 +87,7 @@ func TestModelCdRejectsRunningSession(t *testing.T) {
 	})
 
 	typeText(t, model, "/cd /tmp")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 	if called {
 		t.Fatal("working directory change ran for a running session")
@@ -111,7 +110,7 @@ func TestModelCdDefaultsToHomeAndExpandsTilde(t *testing.T) {
 	})
 
 	typeText(t, model, "/cd")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 	if len(requests) != 1 || requests[0] != home {
 		t.Fatalf("default cd target = %#v, want home %q", requests, home)

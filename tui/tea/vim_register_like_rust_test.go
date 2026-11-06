@@ -1,9 +1,8 @@
 package tea
 
 import (
+	keymsg "codex_go/tui/keymsg"
 	"testing"
-
-	bubbletea "github.com/charmbracelet/bubbletea"
 
 	bottompane "codex_go/tui/bottom_pane"
 )
@@ -16,7 +15,7 @@ func TestVimRegisterReattachesImagesWithFreshLabelsLikeRust(t *testing.T) {
 	m := vimTestModel("[Image #1] hello")
 	m.attachments = []bottompane.ComposerAttachment{{Kind: bottompane.AttachmentImage, Path: "/tmp/photo.png"}}
 	m.composerElements = []ComposerTextElement{{Start: 0, End: 10, Placeholder: "[Image #1]"}}
-	m.composer.SetCursor(0)
+	m.composer.SetCursorColumn(0)
 
 	m = vimKeyPress(m, 'y')
 	m = vimKeyPress(m, '$')
@@ -72,7 +71,7 @@ func TestVimRegisterReattachesImagesWithFreshLabelsLikeRust(t *testing.T) {
 func TestVimDeleteOperatorFillsRichRegisterLikeRust(t *testing.T) {
 	m := vimTestModel("$tool rest")
 	m.composerElements = []ComposerTextElement{{Start: 0, End: 5, Placeholder: "$tool"}}
-	m.composer.SetCursor(0)
+	m.composer.SetCursorColumn(0)
 
 	m = vimKeyPress(m, 'd')
 	m = vimKeyPress(m, 'w')
@@ -98,7 +97,7 @@ func TestVimUndoRedoRestoresRichDraftLikeRust(t *testing.T) {
 	m := vimTestModel("[Image #1] hello")
 	m.attachments = []bottompane.ComposerAttachment{{Kind: bottompane.AttachmentImage, Path: "/tmp/photo.png"}}
 	m.composerElements = []ComposerTextElement{{Start: 0, End: 10, Placeholder: "[Image #1]"}}
-	m.composer.SetCursor(0)
+	m.composer.SetCursorColumn(0)
 
 	m = vimKeyPress(m, 'd')
 	m = vimKeyPress(m, 'd')
@@ -120,7 +119,7 @@ func TestVimUndoRedoRestoresRichDraftLikeRust(t *testing.T) {
 		t.Fatalf("undo did not restore the attachment: %#v", m.attachments)
 	}
 
-	updated, _ := m.Update(bubbletea.KeyMsg{Type: bubbletea.KeyCtrlR})
+	updated, _ := m.Update(keymsg.KeyMsg{Type: keymsg.KeyCtrlR})
 	m = updated.(*Model)
 	if got := m.composer.Value(); got != "" {
 		t.Fatalf("value after redo = %q, want empty", got)
@@ -140,7 +139,7 @@ func TestVimDeletedRichRegisterSurvivesClearAndLinewisePasteLikeRust(t *testing.
 		{Start: 6, End: 16, Placeholder: "[Image #1]"},
 	}
 	m.attachments = []bottompane.ComposerAttachment{{Kind: bottompane.AttachmentImage, Path: "/tmp/photo.png"}}
-	m.composer.SetCursor(0)
+	m.composer.SetCursorColumn(0)
 
 	m = vimKeyPress(m, 'd')
 	m = vimKeyPress(m, 'd')
@@ -162,7 +161,7 @@ func TestVimDeletedRichRegisterSurvivesClearAndLinewisePasteLikeRust(t *testing.
 	m.composerElements = nil
 	m.attachments = nil
 	m.composer.SetValue("new")
-	m.composer.SetCursor(len("new"))
+	m.composer.SetCursorColumn(len("new"))
 
 	m = vimKeyPress(m, 'p')
 	if got := m.composer.Value(); got != "new\n$tool [Image #1] done" {
@@ -188,7 +187,7 @@ func TestVimRichRegisterSurvivesComposerReplacementLikeRust(t *testing.T) {
 		{Start: 6, End: 16, Placeholder: "[Image #1]"},
 	}
 	m.attachments = []bottompane.ComposerAttachment{{Kind: bottompane.AttachmentImage, Path: "/tmp/photo.png"}}
-	m.composer.SetCursor(0)
+	m.composer.SetCursorColumn(0)
 	m = vimKeyPress(m, 'y')
 	m = vimKeyPress(m, '$')
 
@@ -196,7 +195,7 @@ func TestVimRichRegisterSurvivesComposerReplacementLikeRust(t *testing.T) {
 	m.composerElements = nil
 	m.attachments = nil
 	m.composer.SetValue("new")
-	m.composer.SetCursor(len("new"))
+	m.composer.SetCursorColumn(len("new"))
 
 	m = vimKeyPress(m, 'p')
 	if got := m.composer.Value(); got != "new$tool [Image #1]" {
@@ -216,14 +215,14 @@ func TestVimPlainDeleteReplacesRichRegisterLikeRust(t *testing.T) {
 	m := vimTestModel("[Image #1] hello")
 	m.attachments = []bottompane.ComposerAttachment{{Kind: bottompane.AttachmentImage, Path: "/tmp/photo.png"}}
 	m.composerElements = []ComposerTextElement{{Start: 0, End: 10, Placeholder: "[Image #1]"}}
-	m.composer.SetCursor(0)
+	m.composer.SetCursorColumn(0)
 	m = vimKeyPress(m, 'y')
 	m = vimKeyPress(m, '$')
 
 	m.composerElements = nil
 	m.attachments = nil
 	m.composer.SetValue("abc")
-	m.composer.SetCursor(0)
+	m.composer.SetCursorColumn(0)
 
 	m = vimKeyPress(m, 'x')
 	if got := m.vimYank; got != "a" || m.vimYankLinewise {
@@ -254,14 +253,14 @@ func TestVimCtrlYPastesRichRegisterLikeRust(t *testing.T) {
 		{Start: 6, End: 16, Placeholder: "[Image #1]"},
 	}
 	m.attachments = []bottompane.ComposerAttachment{{Kind: bottompane.AttachmentImage, Path: "/tmp/photo.png"}}
-	m.composer.SetCursor(0)
+	m.composer.SetCursorColumn(0)
 	m = vimKeyPress(m, 'y')
 	m = vimKeyPress(m, '$')
 
 	m.resetComposer()
 	m.composerElements = nil
 	m.attachments = nil
-	updated, _ := m.Update(editorKey(bubbletea.KeyCtrlY))
+	updated, _ := m.Update(editorKey(keymsg.KeyCtrlY))
 	m = updated.(*Model)
 	if got := m.composer.Value(); got != "$tool [Image #1]" {
 		t.Fatalf("value after ctrl-y = %q, want the rich register", got)
@@ -279,7 +278,7 @@ func TestVimCtrlYPastesRichRegisterLikeRust(t *testing.T) {
 func TestVimReplaceModeRichYankClearsStaleRecoveryLikeRust(t *testing.T) {
 	m := vimTestModel("abc")
 	m.vimReplaceMode = true
-	m.composer.SetCursor(0)
+	m.composer.SetCursorColumn(0)
 	m.storeComposerRegister("[Image #1]", false, nil, []composerKillBufferImage{{Start: 0, End: 10, Path: "/tmp/photo.png"}})
 
 	m = vimKeyPress(m, 'Q')
@@ -290,7 +289,7 @@ func TestVimReplaceModeRichYankClearsStaleRecoveryLikeRust(t *testing.T) {
 		t.Fatalf("recovery after replace = %#v, want one entry", m.vimReplaceRecovery)
 	}
 
-	updated, _ := m.Update(editorKey(bubbletea.KeyCtrlY))
+	updated, _ := m.Update(editorKey(keymsg.KeyCtrlY))
 	m = updated.(*Model)
 	if got := m.composer.Value(); got != "Q[Image #1]bc" {
 		t.Fatalf("value after rich yank = %q, want Q[Image #1]bc", got)
@@ -302,7 +301,7 @@ func TestVimReplaceModeRichYankClearsStaleRecoveryLikeRust(t *testing.T) {
 		t.Fatalf("rich yank payloads = attachments:%#v elements:%#v", m.attachments, m.composerElements)
 	}
 
-	updated, _ = m.Update(bubbletea.KeyMsg{Type: bubbletea.KeyBackspace})
+	updated, _ = m.Update(keymsg.KeyMsg{Type: keymsg.KeyBackspace})
 	m = updated.(*Model)
 	if got := m.composer.Value(); got != "Q[Image #1]bc" {
 		t.Fatalf("backspace corrupted a pasted rich object: %q", got)
@@ -318,7 +317,7 @@ func TestVimLinewiseRichPasteKeepsCursorOnLeadingElementLikeRust(t *testing.T) {
 	m := vimTestModel("[Image #1]")
 	m.attachments = []bottompane.ComposerAttachment{{Kind: bottompane.AttachmentImage, Path: "/tmp/photo.png"}}
 	m.composerElements = []ComposerTextElement{{Start: 0, End: 10, Placeholder: "[Image #1]"}}
-	m.composer.SetCursor(0)
+	m.composer.SetCursorColumn(0)
 
 	m = vimKeyPress(m, 'y')
 	m = vimKeyPress(m, 'y')

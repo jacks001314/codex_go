@@ -7,9 +7,8 @@ import (
 	"testing"
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 type csiSequenceMsg string
@@ -42,7 +41,7 @@ func TestCtrlVPastesClipboardTextLikeRust(t *testing.T) {
 	stubClipboardShortcut(t, "hello\nwörld", nil)
 	model := clipboardShortcutModel(t)
 
-	model.Update(key(bubbletea.KeyCtrlV))
+	model.Update(key(keymsg.KeyCtrlV))
 
 	if got := model.composerText(); got != "hello\nwörld" {
 		t.Fatalf("composer after Ctrl+V = %q", got)
@@ -59,7 +58,7 @@ func TestCtrlVPasteReplacesComposerSelectionLikeRust(t *testing.T) {
 	model.composer.SetValue("alpha beta")
 	model.composerSelection = composerTextSelection{active: true, anchorRune: 0, focusRune: 5}
 
-	model.Update(key(bubbletea.KeyCtrlV))
+	model.Update(key(keymsg.KeyCtrlV))
 
 	if got := model.composerText(); got != "gamma beta" {
 		t.Fatalf("composer after pasting into selection = %q", got)
@@ -74,12 +73,12 @@ func TestCtrlVPasteFeedsHistorySearchLikeRust(t *testing.T) {
 	stubClipboardShortcut(t, "git", nil)
 	model := clipboardShortcutModel(t)
 	model.inputHistory = []string{"git status", "git log"}
-	model.Update(key(bubbletea.KeyCtrlR))
+	model.Update(key(keymsg.KeyCtrlR))
 	if model.historySearch == nil || !model.historySearch.Active {
 		t.Fatalf("Ctrl+R did not open history search: %#v", model.historySearch)
 	}
 
-	model.Update(key(bubbletea.KeyCtrlV))
+	model.Update(key(keymsg.KeyCtrlV))
 
 	if model.historySearch == nil || model.historySearch.Query != "git" {
 		t.Fatalf("history search query after Ctrl+V = %#v", model.historySearch)
@@ -107,7 +106,7 @@ func TestAltVPastesImageAndSuppressesRepeatsLikeRust(t *testing.T) {
 	model := clipboardShortcutModel(t)
 	now := time.Unix(0, 0)
 	model.now = func() time.Time { return now }
-	altV := bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{'v'}, Alt: true}
+	altV := keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{'v'}, Alt: true}
 
 	model.Update(altV)
 	model.Update(altV)
@@ -122,7 +121,7 @@ func TestCtrlVPasteFailureNoticeLikeRust(t *testing.T) {
 	stubClipboardShortcut(t, "", errors.New("clipboard unavailable"))
 	model := clipboardShortcutModel(t)
 
-	model.Update(key(bubbletea.KeyCtrlV))
+	model.Update(key(keymsg.KeyCtrlV))
 
 	if model.notice != "Paste failed: clipboard unavailable" {
 		t.Fatalf("paste failure notice = %q", model.notice)

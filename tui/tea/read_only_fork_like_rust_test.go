@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
 	"codex_go/utils"
@@ -57,7 +57,7 @@ func TestLockedConversationForkPreservesDraftAndNoticeLikeRust(t *testing.T) {
 		}
 		return &codextui.SessionSummary{ThreadID: "thread-fork", Title: "Fork"}, nil
 	})
-	if view := utils.StripANSI(model.View()); !strings.Contains(view, "f fork") {
+	if view := utils.StripANSI(model.viewString()); !strings.Contains(view, "f fork") {
 		t.Fatalf("locked footer does not advertise the fork shortcut:\n%s", view)
 	}
 
@@ -71,7 +71,7 @@ func TestLockedConversationForkPreservesDraftAndNoticeLikeRust(t *testing.T) {
 	if forks != 0 {
 		t.Fatalf("fork RPC ran inside the key handler (requests=%d before command)", forks)
 	}
-	if view := utils.StripANSI(model.View()); !strings.Contains(view, "Forking conversation\u2026") {
+	if view := utils.StripANSI(model.viewString()); !strings.Contains(view, "Forking conversation\u2026") {
 		t.Fatalf("progress line missing while the fork is pending:\n%s", view)
 	} else if strings.Contains(view, "open in another app") {
 		t.Fatalf("locked notice still rendered while forking:\n%s", view)
@@ -140,7 +140,7 @@ func TestLockedConversationForkInProgressBlocksKeysLikeRust(t *testing.T) {
 	model.setReadOnlyThread(true)
 	model.forkInProgress = true
 
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "Forking conversation\u2026") {
 		t.Fatalf("fork progress line missing:\n%s", view)
 	}
@@ -182,7 +182,7 @@ func TestLockedForkCommandOutlivesDroppedModelLikeRust(t *testing.T) {
 	}()
 	// The abandoned TUI keeps rendering the progress line; keys stay with the
 	// fork (Rust #47185) and the model is untouched by the background command.
-	before := model.View()
+	before := model.viewString()
 	model.Update(keyRunes('x'))
 	if got := model.composerText(); got != "" {
 		t.Fatalf("pending fork accepted a keystroke: %q", got)
@@ -196,7 +196,7 @@ func TestLockedForkCommandOutlivesDroppedModelLikeRust(t *testing.T) {
 	if model.readOnlyThread != true || !model.forkInProgress {
 		t.Fatal("dropping the result must leave the model untouched")
 	}
-	if after := model.View(); after != before {
+	if after := model.viewString(); after != before {
 		t.Fatalf("background fork mutated the model:\nbefore=%q\nafter=%q", before, after)
 	}
 }

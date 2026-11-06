@@ -52,13 +52,13 @@ func TestStatusTimerFeedsWorkingRowAndCompletionFallbackLikeRust(t *testing.T) {
 	model.taskStartedAt = base
 	model.statusTimer.ResetAt(42*time.Second, base)
 	now = base
-	if view := utils.StripANSI(model.View()); !strings.Contains(view, "42s") {
+	if view := utils.StripANSI(model.viewString()); !strings.Contains(view, "42s") {
 		t.Fatalf("working row did not use independent timer:\n%s", view)
 	}
 
 	model.statusTimer.ResetAt(125*time.Second, base)
 	model.applyTurnCompleted(TurnCompletedMsg{})
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "Worked for 2m 5s") {
 		t.Fatalf("completion footer did not use status timer fallback:\n%s", view)
 	}

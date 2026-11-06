@@ -1,10 +1,12 @@
 package tea
 
 import (
+	keymsg "codex_go/tui/keymsg"
+	mousemsg "codex_go/tui/mousemsg"
 	"strings"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	bubbletea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	codextui "codex_go/tui"
 )
@@ -89,6 +91,59 @@ func (m *Model) followControlLabel(width int) string {
 	return ""
 }
 
+// composerTipLine returns the contextual discovery tip painted in an unused
+// composer-gap row (Rust app/composer_hints.rs, #46739). It changes with the
+// conversation state, never on a timer, and honors tui.show_tooltips.
+func (m *Model) composerTipLine() string {
+	if m == nil || !m.showTooltips || !m.composerIsEmpty() || len(m.attachments) > 0 || m.isTaskRunning() {
+		return ""
+	}
+	if m.modal != nil || m.overlay != nil || m.shortcutOverlay || m.warningsView != nil ||
+		m.renderedSelection.active || m.mainFind.active() || m.activityFocus.active || m.vimSearchMode {
+		return ""
+	}
+	if m.backtrack.Primed || m.backtrack.OverlayPreviewActive || !m.transcript.AtBottom() {
+		return ""
+	}
+	count := 0
+	if m.State != nil {
+		for _, message := range m.State.Messages {
+			if message.Role == codextui.RoleUser {
+				count++
+			}
+		}
+	}
+	if count == 0 {
+		return "Tip: @ mentions files, skills, and plugins"
+	}
+	switch count % 3 {
+	case 0:
+		return "Tip: drag to select text · " + displayKeyBinding("ctrl-c") + " copies"
+	case 1:
+		bindings, _, _ := codextui.ResolvedKeymapBindings(m.keymapConfig, "global", "find_transcript")
+		if len(bindings) == 0 {
+			return ""
+		}
+		return "Tip: " + displayKeyBinding(bindings[0]) + " searches this conversation"
+	default:
+		return "Tip: /copy copies the last response"
+	}
+}
+
+// renderComposerTip paints the tip right-aligned in the gap row above the
+// composer. A tip that cannot fit is omitted, matching Rust's narrow snapshot.
+func (m *Model) renderComposerTip() string {
+	tip := m.composerTipLine()
+	if tip == "" {
+		return ""
+	}
+	width := codextui.DisplayWidth(tip)
+	if width == 0 || width+1 > m.width {
+		return ""
+	}
+	return strings.Repeat(" ", m.width-width-1) + m.footerStyle.Render(tip)
+}
+
 // renderFollowControlRow paints the centered control on the composer gap row.
 // It records the hit rectangle for handleFollowControlMouse.
 func (m *Model) renderFollowControlRow() string {
@@ -97,7 +152,7 @@ func (m *Model) renderFollowControlRow() string {
 	label := m.followControlLabel(m.width)
 	if label == "" {
 		m.followControlHover = false
-		return ""
+		return m.renderComposerTip()
 	}
 	width := codextui.DisplayWidth(label)
 	left := max((m.width-width)/2, 0)
@@ -193,15 +248,15 @@ func (m *Model) transcriptFollowFooterLine() string {
 // handleReturnToLatestKey consumes Esc and a bare Enter while the transcript is
 // paused away from the tail. Esc only reaches this point after backtrack,
 // popups, find, and selection have declined it.
-func (m *Model) handleReturnToLatestKey(msg bubbletea.KeyMsg) bool {
+func (m *Model) handleReturnToLatestKey(msg keymsg.KeyMsg) bool {
 	if m == nil || !m.canReturnToLatest() {
 		return false
 	}
 	switch msg.Type {
-	case bubbletea.KeyEsc:
+	case keymsg.KeyEsc:
 		m.jumpToTranscriptLatest()
 		return true
-	case bubbletea.KeyEnter:
+	case keymsg.KeyEnter:
 		if !m.enterReturnsToLatest() {
 			return false
 		}
@@ -215,7 +270,7 @@ func (m *Model) handleReturnToLatestKey(msg bubbletea.KeyMsg) bool {
 // handleFollowControlMouse owns clicks on the painted return-to-latest control.
 // A press inside the label arms the control; releasing inside jumps. A release
 // outside cancels, matching Rust's drag-out behavior.
-func (m *Model) handleFollowControlMouse(msg bubbletea.MouseMsg) (bool, bubbletea.Cmd) {
+func (m *Model) handleFollowControlMouse(msg mousemsg.MouseMsg) (bool, bubbletea.Cmd) {
 	if m == nil || m.followControlRow < 0 || m.followControlWidth <= 0 {
 		return false, nil
 	}
@@ -223,14 +278,14 @@ func (m *Model) handleFollowControlMouse(msg bubbletea.MouseMsg) (bool, bubblete
 		msg.X >= m.followControlColumn &&
 		msg.X < m.followControlColumn+m.followControlWidth
 	switch msg.Action {
-	case bubbletea.MouseActionPress:
-		if msg.Button != bubbletea.MouseButtonLeft || !inside {
+	case mousemsg.MouseActionPress:
+		if msg.Button != mousemsg.MouseButtonLeft || !inside {
 			return false, nil
 		}
 		m.followControlPressed = true
 		return true, nil
-	case bubbletea.MouseActionRelease:
-		if msg.Button != bubbletea.MouseButtonLeft || !m.followControlPressed {
+	case mousemsg.MouseActionRelease:
+		if msg.Button != mousemsg.MouseButtonLeft || !m.followControlPressed {
 			return false, nil
 		}
 		m.followControlPressed = false
@@ -238,7 +293,7 @@ func (m *Model) handleFollowControlMouse(msg bubbletea.MouseMsg) (bool, bubblete
 			m.jumpToTranscriptLatest()
 		}
 		return true, nil
-	case bubbletea.MouseActionMotion:
+	case mousemsg.MouseActionMotion:
 		if inside == m.followControlHover {
 			return false, nil
 		}

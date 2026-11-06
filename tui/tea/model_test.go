@@ -1,6 +1,7 @@
 package tea
 
 import (
+	mousemsg "codex_go/tui/mousemsg"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -13,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	appsapi "codex_go/apps"
 	"codex_go/appserver"
@@ -28,6 +29,7 @@ import (
 	chatwidget "codex_go/tui/chatwidget"
 	historycell "codex_go/tui/history_cell"
 	idecontext "codex_go/tui/ide_context"
+	"codex_go/tui/keymsg"
 	"codex_go/utils"
 )
 
@@ -42,7 +44,7 @@ func TestModelViewRendersState(t *testing.T) {
 	state.AddMessage(codextui.RoleAssistant, "hi there")
 
 	model := NewModel(state, Options{Width: 72, Height: 18})
-	view := model.View()
+	view := model.viewString()
 	cleanView := utils.StripANSI(view)
 
 	for _, want := range []string{"gpt-test", "› hello", "• hi there", footerHelpText} {
@@ -77,7 +79,7 @@ func TestModelStatusRefreshesRateLimitsInOriginalHistoryCell(t *testing.T) {
 		return []codextui.RateLimitStatus{{Label: "5h", UsedPercent: 92}}, nil
 	}})
 	typeText(t, model, "/status")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	if cmd == nil {
 		t.Fatal("ChatGPT /status did not request a rate-limit refresh")
 	}
@@ -100,7 +102,7 @@ func TestModelStatusDoesNotRefreshRateLimitsWithoutChatGPTAccount(t *testing.T) 
 		return nil, nil
 	}})
 	typeText(t, model, "/status")
-	if _, cmd := model.Update(key(bubbletea.KeyEnter)); cmd != nil {
+	if _, cmd := model.Update(key(keymsg.KeyEnter)); cmd != nil {
 		t.Fatal("non-ChatGPT /status returned a rate-limit refresh command")
 	}
 }
@@ -140,7 +142,7 @@ func TestModelStatusCommandAddsRustStyleHistoryCell(t *testing.T) {
 	model := NewModel(state, Options{SessionHeaderVersion: "0.145.0"})
 
 	typeText(t, model, "/status")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if len(state.Messages) != 1 || state.Messages[0].Role != codextui.RoleHistory {
 		t.Fatalf("status messages = %#v", state.Messages)
 	}
@@ -167,7 +169,7 @@ func TestModelViewSeparatesWideTerminalRegions(t *testing.T) {
 	state.AddMessage(codextui.RoleAssistant, "Working through the repository.")
 	model := NewModel(state, Options{Width: 120, Height: 28})
 
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	for _, notWant := range []string{" ACTIVITY ─", "╭", "╰"} {
 		if strings.Contains(view, notWant) {
 			t.Fatalf("wide view kept retired region chrome %q:\n%s", notWant, view)
@@ -185,7 +187,7 @@ func TestModelViewSeparatesWideTerminalRegions(t *testing.T) {
 
 func TestModelViewKeepsNarrowTerminalCompact(t *testing.T) {
 	model := NewModel(codextui.NewState(nil), Options{Width: 82, Height: 18})
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if strings.Contains(view, " ACTIVITY ─") || strings.Contains(view, "╭") {
 		t.Fatalf("narrow view should not spend rows or columns on region chrome:\n%s", view)
 	}
@@ -198,7 +200,7 @@ func TestModelViewCanShowRustStyleSessionHeader(t *testing.T) {
 		CWD:             `D:\repo`,
 	})
 	model := NewModel(state, Options{Width: 90, Height: 18, ShowSessionHeader: true, SessionHeaderVersion: "0.142.5"})
-	view := model.View()
+	view := model.viewString()
 	// Rust #48513: a bound greeting renders the compact welcome banner instead of
 	// the model/directory card.
 	for _, want := range []string{"OpenAI Codex", "(v0.142.5)", `D:\repo`} {
@@ -236,7 +238,7 @@ func TestModelSubmitPrompt(t *testing.T) {
 	})
 
 	typeText(t, model, "hello codex")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	if cmd != nil {
 		_ = cmd()
 	}
@@ -253,8 +255,8 @@ func TestModelSubmitPrompt(t *testing.T) {
 	if model.ComposerValue() != "" {
 		t.Fatalf("ComposerValue = %q, want empty", model.ComposerValue())
 	}
-	if !strings.Contains(utils.StripANSI(model.View()), "› hello codex") {
-		t.Fatalf("View() should include submitted user message:\n%s", model.View())
+	if !strings.Contains(utils.StripANSI(model.viewString()), "› hello codex") {
+		t.Fatalf("View() should include submitted user message:\n%s", model.viewString())
 	}
 }
 
@@ -268,7 +270,7 @@ func TestModelCtrlJInsertsComposerNewlineWithoutSubmitting(t *testing.T) {
 	})
 
 	typeText(t, model, "line one")
-	model.Update(key(bubbletea.KeyCtrlJ))
+	model.Update(key(keymsg.KeyCtrlJ))
 	typeText(t, model, "line two")
 
 	if len(requests) != 0 {
@@ -278,7 +280,7 @@ func TestModelCtrlJInsertsComposerNewlineWithoutSubmitting(t *testing.T) {
 		t.Fatalf("ComposerValue = %q, want line one newline line two", got)
 	}
 
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if len(requests) != 1 || requests[0].Prompt != "line one\nline two" {
 		t.Fatalf("requests after Enter = %#v", requests)
 	}
@@ -300,7 +302,7 @@ func TestModelEscInterruptsRunningTaskWithoutQuitting(t *testing.T) {
 		},
 	})
 
-	_, cmd := model.Update(key(bubbletea.KeyEsc))
+	_, cmd := model.Update(key(keymsg.KeyEsc))
 	if cmd == nil {
 		t.Fatal("Esc while running returned nil command")
 	}
@@ -322,7 +324,7 @@ func TestModelWorkingIndicatorMatchesRust(t *testing.T) {
 	model.taskStartedAt = start
 	model.now = func() time.Time { return now }
 
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "\u2022 Working (12s \u2022 esc to interrupt)") {
 		t.Fatalf("Working indicator missing or not Rust-like:\n%s", view)
 	}
@@ -379,7 +381,7 @@ func TestModelWorkingIndicatorUsesRemappedInterruptHint(t *testing.T) {
 	model.taskStartedAt = start
 	model.now = func() time.Time { return start }
 
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "\u2022 Working (0s \u2022 ctrl-x to interrupt)") {
 		t.Fatalf("remapped Working indicator missing:\n%s", view)
 	}
@@ -400,23 +402,23 @@ func TestModelCtrlGExternalEditorAppliesEditedDraft(t *testing.T) {
 	})
 
 	typeText(t, model, "draft")
-	_, cmd := model.Update(key(bubbletea.KeyCtrlG))
+	_, cmd := model.Update(key(keymsg.KeyCtrlG))
 	if cmd == nil {
 		t.Fatal("Ctrl+G returned nil command")
 	}
 	if got := seeds; len(got) != 1 || got[0] != "draft" {
 		t.Fatalf("external editor seeds = %#v, want draft", got)
 	}
-	if !strings.Contains(model.View(), "Save and close external editor to continue.") {
-		t.Fatalf("View() missing external editor hint:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Save and close external editor to continue.") {
+		t.Fatalf("View() missing external editor hint:\n%s", model.viewString())
 	}
 
 	model.Update(cmd())
 	if got := model.ComposerValue(); got != "draft\nedited" {
 		t.Fatalf("ComposerValue after editor = %q, want edited draft", got)
 	}
-	if strings.Contains(model.View(), "Save and close external editor") {
-		t.Fatalf("external editor hint should close:\n%s", model.View())
+	if strings.Contains(model.viewString(), "Save and close external editor") {
+		t.Fatalf("external editor hint should close:\n%s", model.viewString())
 	}
 }
 
@@ -433,7 +435,7 @@ func TestModelSlashEditorIsUnrecognizedLikeRust(t *testing.T) {
 	})
 
 	typeText(t, model, "/editor")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if len(seeds) != 0 {
 		t.Fatalf("/editor must not open the external editor: seeds = %#v", seeds)
 	}
@@ -450,7 +452,7 @@ func TestModelKeymapDebugCommandRendersCatalog(t *testing.T) {
 	model := NewModel(nil, Options{})
 
 	typeText(t, model, "/keymap debug")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if got := len(model.State.Messages); got != 1 {
 		t.Fatalf("messages len = %d, want 1", got)
 	}
@@ -477,8 +479,8 @@ func TestModelKeymapCommandRejectsNonRustArguments(t *testing.T) {
 	model := NewModel(nil, Options{})
 
 	typeText(t, model, "/keymap list")
-	model.Update(key(bubbletea.KeyEnter))
-	if view := model.View(); !strings.Contains(view, "Usage: /keymap [debug]") {
+	model.Update(key(keymsg.KeyEnter))
+	if view := model.viewString(); !strings.Contains(view, "Usage: /keymap [debug]") {
 		t.Fatalf("invalid /keymap argument missing Rust usage error:\n%s", view)
 	}
 	if len(model.SubmittedPrompts()) != 0 {
@@ -497,7 +499,7 @@ func TestModelKeymapCommandOpensGuidedPickerAndCapturesKey(t *testing.T) {
 	})
 
 	typeText(t, model, "/keymap")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if model.modal == nil || model.modal.id != chatwidget.KeymapPickerViewID || model.modal.keymapPanel == nil {
 		t.Fatalf("/keymap modal = %#v", model.modal)
 	}
@@ -513,16 +515,16 @@ func TestModelKeymapCommandOpensGuidedPickerAndCapturesKey(t *testing.T) {
 		t.Fatalf("global.open_transcript missing from the keymap page")
 	}
 	model.modal.keymapPanel.selected = selected
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if model.modal == nil || model.modal.id != chatwidget.KeymapActionMenuViewID {
 		t.Fatalf("action modal = %#v", model.modal)
 	}
 	model.modal.selected = modalOptionIndexByID(t, model.modal.options, "set")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if model.modal == nil || model.modal.keymapCapture == nil {
 		t.Fatalf("capture modal = %#v", model.modal)
 	}
-	model.Update(key(bubbletea.KeyCtrlK))
+	model.Update(key(keymsg.KeyCtrlK))
 	if len(edits) != 1 || edits[0].Context != "global" || edits[0].Action != "open_transcript" || !reflect.DeepEqual(edits[0].Bindings, []string{"ctrl-k"}) {
 		t.Fatalf("guided keymap edits = %#v", edits)
 	}
@@ -578,11 +580,11 @@ func TestModelKeymapEditAppliesRuntimeRemap(t *testing.T) {
 	model.keymapConfig = next
 
 	typeText(t, model, "draft")
-	_, cmd := model.Update(key(bubbletea.KeyCtrlG))
+	_, cmd := model.Update(key(keymsg.KeyCtrlG))
 	if cmd != nil || len(seeds) != 0 {
 		t.Fatalf("Ctrl+G should be remapped away, cmd=%v seeds=%#v", cmd, seeds)
 	}
-	_, cmd = model.Update(key(bubbletea.KeyCtrlE))
+	_, cmd = model.Update(key(keymsg.KeyCtrlE))
 	if len(seeds) != 1 || seeds[0] != "draft" {
 		t.Fatalf("Ctrl+E remap failed, cmd=%v seeds=%#v", cmd, seeds)
 	}
@@ -615,18 +617,18 @@ func TestModelKeymapSubmitAndInterruptRemap(t *testing.T) {
 	})
 
 	typeText(t, model, "queued")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if got := model.QueuedRequests(); len(got) != 0 {
 		t.Fatalf("Enter should not submit after remap, queued=%#v", got)
 	}
-	model.Update(key(bubbletea.KeyCtrlS))
+	model.Update(key(keymsg.KeyCtrlS))
 	if got := model.QueuedRequests(); len(got) != 1 || got[0].Prompt != "queued" {
 		t.Fatalf("Ctrl+S should queue while running, queued=%#v requests=%#v", got, requests)
 	}
-	if _, cmd := model.Update(key(bubbletea.KeyEsc)); cmd != nil || interrupts != 0 {
+	if _, cmd := model.Update(key(keymsg.KeyEsc)); cmd != nil || interrupts != 0 {
 		t.Fatalf("Esc should be remapped away, interrupts=%d cmd=%v", interrupts, cmd)
 	}
-	_, cmd := model.Update(key(bubbletea.KeyCtrlX))
+	_, cmd := model.Update(key(keymsg.KeyCtrlX))
 	if cmd == nil || interrupts != 1 {
 		t.Fatalf("Ctrl+X should interrupt, interrupts=%d cmd=%v", interrupts, cmd)
 	}
@@ -642,7 +644,7 @@ func TestModelExternalEditorReportsError(t *testing.T) {
 	})
 
 	typeText(t, model, "draft")
-	_, cmd := model.Update(key(bubbletea.KeyCtrlG))
+	_, cmd := model.Update(key(keymsg.KeyCtrlG))
 	if cmd == nil {
 		t.Fatal("Ctrl+G returned nil command")
 	}
@@ -651,11 +653,11 @@ func TestModelExternalEditorReportsError(t *testing.T) {
 	if got := model.ComposerValue(); got != "draft" {
 		t.Fatalf("ComposerValue after editor error = %q, want draft", got)
 	}
-	if !strings.Contains(model.View(), "Failed to open editor: boom") {
-		t.Fatalf("View() missing editor error:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Failed to open editor: boom") {
+		t.Fatalf("View() missing editor error:\n%s", model.viewString())
 	}
-	if strings.Contains(model.View(), "Save and close external editor") {
-		t.Fatalf("external editor hint should close after error:\n%s", model.View())
+	if strings.Contains(model.viewString(), "Save and close external editor") {
+		t.Fatalf("external editor hint should close after error:\n%s", model.viewString())
 	}
 }
 
@@ -697,7 +699,7 @@ func TestModelImagePasteSuppressionWiringLikeRust(t *testing.T) {
 	model.now = func() time.Time { return now }
 	model.suppressImagePasteUntil = now.Add(time.Second)
 
-	model.Update(key(bubbletea.KeyCtrlV))
+	model.Update(key(keymsg.KeyCtrlV))
 	if want := now.Add(imagePasteRepeatWindow); !model.suppressImagePasteUntil.Equal(want) {
 		t.Fatalf("suppressed Ctrl+V window = %s, want %s", model.suppressImagePasteUntil, want)
 	}
@@ -727,7 +729,7 @@ func TestImagePasteCompletionRefreshesWindowLikeRust(t *testing.T) {
 	}
 	readClipboardTextForPaste = func() (string, error) { return "", nil }
 
-	model.Update(key(bubbletea.KeyCtrlV))
+	model.Update(key(keymsg.KeyCtrlV))
 
 	if want := now.Add(imagePasteRepeatWindow); !model.suppressImagePasteUntil.Equal(want) {
 		t.Fatalf("window after a slow paste = %s, want %s", model.suppressImagePasteUntil, want)
@@ -750,7 +752,7 @@ func TestModelPasteBurstEnterInsertsNewlineWithoutSubmitting(t *testing.T) {
 
 	model.Update(runes("hello"))
 	now = now.Add(10 * time.Millisecond)
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if len(requests) != 0 {
 		t.Fatalf("requests after paste Enter = %#v, want none", requests)
 	}
@@ -760,7 +762,7 @@ func TestModelPasteBurstEnterInsertsNewlineWithoutSubmitting(t *testing.T) {
 
 	typeText(t, model, "there")
 	now = now.Add(bottompane.PasteEnterSuppressWindow + time.Millisecond)
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if len(requests) != 1 || requests[0].Prompt != "hello\nthere" {
 		t.Fatalf("requests after final Enter = %#v", requests)
 	}
@@ -784,7 +786,7 @@ func TestModelDisablePasteBurstSubmitsOnEnterLikeRust(t *testing.T) {
 
 	model.Update(runes("hello"))
 	now = now.Add(10 * time.Millisecond)
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if len(requests) != 1 {
 		t.Fatalf("requests after burst Enter = %#v, want submit (disable_paste_burst)", requests)
 	}
@@ -800,7 +802,7 @@ func TestModelPasteBurstDoesNotBlockSlashCommandEnter(t *testing.T) {
 
 	model.Update(runes("/status"))
 	now = now.Add(10 * time.Millisecond)
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 
 	if got := model.ComposerValue(); got != "" {
 		t.Fatalf("composer after slash command = %q, want empty", got)
@@ -831,15 +833,15 @@ func TestModelQueuesPromptWhileRunningAndSubmitsAfterCompletion(t *testing.T) {
 	// A real Tab press lands well after the last typed character, so the paste
 	// burst does not capture it (Rust #45454).
 	now = now.Add(bottompane.PasteBurstCharInterval + time.Millisecond)
-	model.Update(key(bubbletea.KeyTab))
+	model.Update(key(keymsg.KeyTab))
 	if len(requests) != 0 {
 		t.Fatalf("requests before completion = %#v", requests)
 	}
 	if got := model.QueuedRequests(); len(got) != 1 || got[0].Prompt != "queued while busy" {
 		t.Fatalf("queued requests = %#v", got)
 	}
-	if !strings.Contains(model.View(), "Queued follow-up inputs") || !strings.Contains(model.View(), "queued while busy") {
-		t.Fatalf("queue line missing:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Queued follow-up inputs") || !strings.Contains(model.viewString(), "queued while busy") {
+		t.Fatalf("queue line missing:\n%s", model.viewString())
 	}
 	if got := model.ComposerValue(); got != "" {
 		t.Fatalf("composer after queue = %q, want empty", got)
@@ -852,8 +854,8 @@ func TestModelQueuesPromptWhileRunningAndSubmitsAfterCompletion(t *testing.T) {
 	if got := model.QueuedRequests(); len(got) != 0 {
 		t.Fatalf("queued after completion = %#v", got)
 	}
-	if strings.Contains(model.View(), "Queued follow-up inputs") || strings.Contains(model.View(), "Queued: queued while busy") {
-		t.Fatalf("queued preview remained after completion:\n%s", model.View())
+	if strings.Contains(model.viewString(), "Queued follow-up inputs") || strings.Contains(model.viewString(), "Queued: queued while busy") {
+		t.Fatalf("queued preview remained after completion:\n%s", model.viewString())
 	}
 	if state.Status != "running" {
 		t.Fatalf("status after queued submit = %q, want running", state.Status)
@@ -877,7 +879,7 @@ func TestModelSteersPromptWhileRunningAndCommitsWithoutFutureQueue(t *testing.T)
 		},
 	})
 	model.composer.SetValue("change direction")
-	_, cmd := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	_, cmd := model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	if cmd == nil {
 		t.Fatal("steer command is nil")
 	}
@@ -891,11 +893,11 @@ func TestModelSteersPromptWhileRunningAndCommitsWithoutFutureQueue(t *testing.T)
 	if got := model.QueuedRequests(); len(got) != 0 {
 		t.Fatalf("future queue = %#v", got)
 	}
-	if view := model.View(); !strings.Contains(view, "Messages to be submitted after next tool call") || !strings.Contains(view, "change direction") {
+	if view := model.viewString(); !strings.Contains(view, "Messages to be submitted after next tool call") || !strings.Contains(view, "change direction") {
 		t.Fatalf("pending steer preview missing:\n%s", view)
 	}
 	model.Update(SteerCommittedMsg{Count: 1})
-	if view := model.View(); strings.Contains(view, "Messages to be submitted after next tool call") {
+	if view := model.viewString(); strings.Contains(view, "Messages to be submitted after next tool call") {
 		t.Fatalf("pending steer preview remained:\n%s", view)
 	}
 	if countRole(model.State.Messages, codextui.RoleUser) != 1 || model.State.Messages[len(model.State.Messages)-1].Text != "change direction" {
@@ -917,10 +919,10 @@ func TestModelRejectedSteerFallsBackAtTurnCompletion(t *testing.T) {
 		},
 	})
 	model.composer.SetValue("late steer")
-	_, cmd := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	_, cmd := model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	result := cmd().(SteerResultMsg)
 	model.Update(result)
-	if view := model.View(); !strings.Contains(view, "Messages to be submitted at end of turn") || !strings.Contains(view, "late steer") {
+	if view := model.viewString(); !strings.Contains(view, "Messages to be submitted at end of turn") || !strings.Contains(view, "late steer") {
 		t.Fatalf("rejected steer preview missing:\n%s", view)
 	}
 	_, completion := model.Update(TurnCompletedMsg{})
@@ -937,8 +939,8 @@ func TestModelRejectedSteerFallsBackAtTurnCompletion(t *testing.T) {
 	if len(submitted) != 1 || submitted[0].Prompt != "late steer" {
 		t.Fatalf("fallback submissions = %#v", submitted)
 	}
-	if strings.Contains(model.View(), "Messages to be submitted at end of turn") {
-		t.Fatalf("rejected steer preview remained:\n%s", model.View())
+	if strings.Contains(model.viewString(), "Messages to be submitted at end of turn") {
+		t.Fatalf("rejected steer preview remained:\n%s", model.viewString())
 	}
 }
 
@@ -953,7 +955,7 @@ func TestModelCtrlCInterruptsRunningTaskWithoutQuitting(t *testing.T) {
 		},
 	})
 
-	_, cmd := model.Update(key(bubbletea.KeyCtrlC))
+	_, cmd := model.Update(key(keymsg.KeyCtrlC))
 	if cmd == nil {
 		t.Fatal("running Ctrl+C returned nil command")
 	}
@@ -971,8 +973,8 @@ func TestModelCtrlCInterruptsRunningTaskWithoutQuitting(t *testing.T) {
 	if countRole(state.Messages, codextui.RoleHistory) != 1 {
 		t.Fatalf("history messages after interrupt = %#v, want one", state.Messages)
 	}
-	if !strings.Contains(model.View(), "Conversation interrupted - use /feedback if something went wrong") {
-		t.Fatalf("interrupt notice missing:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Conversation interrupted - use /feedback if something went wrong") {
+		t.Fatalf("interrupt notice missing:\n%s", model.viewString())
 	}
 }
 
@@ -989,12 +991,12 @@ func TestModelTurnInterruptedNoticeLikeRust(t *testing.T) {
 			return func() bubbletea.Msg { return TurnInterruptedMsg{} }
 		},
 	})
-	_, cmd := model.Update(key(bubbletea.KeyCtrlC))
+	_, cmd := model.Update(key(keymsg.KeyCtrlC))
 	if cmd == nil {
 		t.Fatal("running Ctrl+C returned nil command")
 	}
 	model.Update(TurnInterruptedMsg{})
-	view := model.View()
+	view := model.viewString()
 	if !strings.Contains(view, "\u25a0 Conversation interrupted - use /feedback if something went wrong") {
 		t.Fatalf("interrupted notice missing from the transcript:\n%s", view)
 	}
@@ -1013,9 +1015,9 @@ func TestModelInterruptedPromptRemainsInSubmittedHistoryLikeRust(t *testing.T) {
 	state := codextui.NewState(nil)
 	model := NewModel(state, Options{OnSubmit: func(string) bubbletea.Cmd { return nil }, OnInterrupt: func() bubbletea.Cmd { return func() bubbletea.Msg { return TurnInterruptedMsg{} } }})
 	typeText(t, model, "keep this interrupted prompt")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	state.SetStatus("running")
-	_, command := model.Update(key(bubbletea.KeyCtrlC))
+	_, command := model.Update(key(keymsg.KeyCtrlC))
 	if command == nil {
 		t.Fatal("interrupt command = nil")
 	}
@@ -1027,7 +1029,7 @@ func TestModelInterruptedPromptRemainsInSubmittedHistoryLikeRust(t *testing.T) {
 
 func TestModelCtrlCQuitsWhenIdle(t *testing.T) {
 	model := NewModel(nil, Options{})
-	_, cmd := model.Update(key(bubbletea.KeyCtrlC))
+	_, cmd := model.Update(key(keymsg.KeyCtrlC))
 	if cmd == nil {
 		t.Fatal("idle Ctrl+C returned nil command")
 	}
@@ -1200,34 +1202,34 @@ func TestModelTranscriptNavigationPreservesScrollPosition(t *testing.T) {
 		t.Fatalf("initial transcript offset = %d, want scrollable bottom", bottomOffset)
 	}
 
-	model.Update(key(bubbletea.KeyPgUp))
+	model.Update(key(keymsg.KeyPgUp))
 	scrolledOffset := model.transcript.YOffset
 	if scrolledOffset >= bottomOffset {
 		t.Fatalf("PageUp offset = %d, want less than bottom %d", scrolledOffset, bottomOffset)
 	}
 
-	_ = model.View()
+	_ = model.viewString()
 	if got := model.transcript.YOffset; got != scrolledOffset {
 		t.Fatalf("View() reset scroll offset to %d, want %d", got, scrolledOffset)
 	}
 
 	state.AddMessage(codextui.RoleAssistant, "new output while reading")
-	_ = model.View()
+	_ = model.viewString()
 	if got := model.transcript.YOffset; got != scrolledOffset {
 		t.Fatalf("new content reset scroll offset to %d, want %d", got, scrolledOffset)
 	}
 
-	model.Update(key(bubbletea.KeyEnd))
+	model.Update(key(keymsg.KeyEnd))
 	if !model.transcript.AtBottom() {
 		t.Fatalf("End did not move transcript to bottom; offset=%d", model.transcript.YOffset)
 	}
-	model.Update(key(bubbletea.KeyHome))
+	model.Update(key(keymsg.KeyHome))
 	if !model.transcript.AtTop() {
 		t.Fatalf("Home did not move transcript to top; offset=%d", model.transcript.YOffset)
 	}
-	model.Update(key(bubbletea.KeyEnd))
+	model.Update(key(keymsg.KeyEnd))
 	state.AddMessage(codextui.RoleAssistant, "tail follows")
-	_ = model.View()
+	_ = model.viewString()
 	if !model.transcript.AtBottom() {
 		t.Fatalf("bottom transcript did not follow new content; offset=%d", model.transcript.YOffset)
 	}
@@ -1249,7 +1251,7 @@ func TestModelActivityFollowTracksRunningEventsUntilUserScrolls(t *testing.T) {
 		t.Fatalf("running event did not follow to bottom; offset=%d", model.transcript.YOffset)
 	}
 
-	model.Update(key(bubbletea.KeyPgUp))
+	model.Update(key(keymsg.KeyPgUp))
 	if model.activityFollow {
 		t.Fatal("PageUp should pause activity follow")
 	}
@@ -1260,7 +1262,7 @@ func TestModelActivityFollowTracksRunningEventsUntilUserScrolls(t *testing.T) {
 		t.Fatalf("history reading offset changed from %d to %d", offset, model.transcript.YOffset)
 	}
 
-	model.Update(key(bubbletea.KeyEnd))
+	model.Update(key(keymsg.KeyEnd))
 	if !model.activityFollow || !model.transcript.AtBottom() {
 		t.Fatalf("End should resume activity follow; follow=%v offset=%d", model.activityFollow, model.transcript.YOffset)
 	}
@@ -1273,12 +1275,12 @@ func TestModelTranscriptOverlayOpensScrollsAndCloses(t *testing.T) {
 	}
 	model := NewModel(state, Options{Width: 60, Height: 10})
 
-	updated, openCmd := model.Update(key(bubbletea.KeyCtrlT))
+	updated, _ := model.Update(key(keymsg.KeyCtrlT))
 	model = updated.(*Model)
 	if model.overlay == nil {
 		t.Fatal("Ctrl+T did not open transcript overlay")
 	}
-	view := model.View()
+	view := model.viewString()
 	if !strings.Contains(view, "T R A N S C R I P T") {
 		t.Fatalf("overlay view missing title:\n%s", view)
 	}
@@ -1288,26 +1290,26 @@ func TestModelTranscriptOverlayOpensScrollsAndCloses(t *testing.T) {
 	if !model.overlay.AtBottom() || model.overlay.YOffset() <= 0 {
 		t.Fatalf("overlay initial offset=%d atBottom=%v, want scrollable bottom", model.overlay.YOffset(), model.overlay.AtBottom())
 	}
-	if !batchContainsMessageType(openCmd, bubbletea.EnterAltScreen()) {
+	if !model.overlayAltScreen {
 		t.Fatal("opening transcript overlay did not enter the alternate screen")
 	}
 
 	beforeWheel := model.overlay.YOffset()
-	model.Update(bubbletea.MouseMsg{Action: bubbletea.MouseActionPress, Button: bubbletea.MouseButtonWheelUp})
+	model.Update(mousemsg.MouseMsg{Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonWheelUp})
 	if got := model.overlay.YOffset(); got >= beforeWheel {
 		t.Fatalf("mouse wheel offset = %d, want less than %d", got, beforeWheel)
 	}
 
-	model.Update(key(bubbletea.KeyHome))
+	model.Update(key(keymsg.KeyHome))
 	if !model.overlay.AtTop() {
 		t.Fatalf("Home did not move overlay to top; offset=%d", model.overlay.YOffset())
 	}
-	model.Update(key(bubbletea.KeyEnd))
+	model.Update(key(keymsg.KeyEnd))
 	if !model.overlay.AtBottom() {
 		t.Fatalf("End did not move overlay to bottom; offset=%d", model.overlay.YOffset())
 	}
 
-	updated, cmd := model.Update(key(bubbletea.KeyCtrlC))
+	updated, cmd := model.Update(key(keymsg.KeyCtrlC))
 	model = updated.(*Model)
 	if model.overlay != nil {
 		t.Fatal("Ctrl+C did not close transcript overlay")
@@ -1317,11 +1319,11 @@ func TestModelTranscriptOverlayOpensScrollsAndCloses(t *testing.T) {
 			t.Fatal("Ctrl+C inside transcript overlay should not quit")
 		}
 	}
-	if !batchContainsMessageType(cmd, bubbletea.ExitAltScreen()) {
+	if model.overlayAltScreen {
 		t.Fatal("closing transcript overlay did not leave the alternate screen")
 	}
 
-	updated, _ = model.Update(key(bubbletea.KeyCtrlT))
+	updated, _ = model.Update(key(keymsg.KeyCtrlT))
 	model = updated.(*Model)
 	updated, _ = model.Update(runes("q"))
 	model = updated.(*Model)
@@ -1356,21 +1358,21 @@ func TestModelTranscriptOverlayPreservesScrollAndFollowsTail(t *testing.T) {
 		state.AddMessage(codextui.RoleSystem, fmt.Sprintf("event %02d\nmore detail", i))
 	}
 	model := NewModel(state, Options{Width: 60, Height: 10})
-	updated, _ := model.Update(key(bubbletea.KeyCtrlT))
+	updated, _ := model.Update(key(keymsg.KeyCtrlT))
 	model = updated.(*Model)
 
-	model.Update(key(bubbletea.KeyHome))
-	_ = model.View()
+	model.Update(key(keymsg.KeyHome))
+	_ = model.viewString()
 	offset := model.overlay.YOffset()
 	state.AddMessage(codextui.RoleAssistant, "new tail while reading")
-	_ = model.View()
+	_ = model.viewString()
 	if got := model.overlay.YOffset(); got != offset {
 		t.Fatalf("overlay new content offset=%d, want preserved %d", got, offset)
 	}
 
-	model.Update(key(bubbletea.KeyEnd))
+	model.Update(key(keymsg.KeyEnd))
 	state.AddMessage(codextui.RoleAssistant, "tail follows in overlay")
-	_ = model.View()
+	_ = model.viewString()
 	if !model.overlay.AtBottom() {
 		t.Fatalf("bottom overlay did not follow new content; offset=%d", model.overlay.YOffset())
 	}
@@ -1403,7 +1405,7 @@ func TestModelTranscriptOverlayExpandsHistoryRawText(t *testing.T) {
 		t.Fatalf("regular transcript did not stay collapsed:\n%s", regular)
 	}
 
-	updated, _ := model.Update(key(bubbletea.KeyCtrlT))
+	updated, _ := model.Update(key(keymsg.KeyCtrlT))
 	model = updated.(*Model)
 	content := model.overlay.Content()
 	for _, want := range []string{"$ command", "hidden detail one", "hidden detail two", "last line"} {
@@ -1417,7 +1419,7 @@ func TestModelTranscriptOverlayExpandsHistoryRawText(t *testing.T) {
 
 	state.Messages[0].RawText += "\nlate running detail"
 	state.BumpMessagesRevision()
-	_ = model.View()
+	_ = model.viewString()
 	if content := model.overlay.Content(); !strings.Contains(content, "late running detail") {
 		t.Fatalf("expanded transcript did not follow updated raw history:\n%s", content)
 	}
@@ -1436,16 +1438,16 @@ func TestModelCopiesLastAgentResponse(t *testing.T) {
 		},
 	})
 
-	model.Update(key(bubbletea.KeyCtrlO))
-	if !strings.Contains(model.View(), "Copy to clipboard") {
-		t.Fatalf("copy should open a target picker:\n%s", model.View())
+	model.Update(key(keymsg.KeyCtrlO))
+	if !strings.Contains(model.viewString(), "Copy to clipboard") {
+		t.Fatalf("copy should open a target picker:\n%s", model.viewString())
 	}
-	updateAndRunClipboard(t, model, key(bubbletea.KeyEnter))
+	updateAndRunClipboard(t, model, key(keymsg.KeyEnter))
 	if copied != "second" {
 		t.Fatalf("copied = %q, want second", copied)
 	}
-	if !strings.Contains(model.View(), "Copied Whole response to clipboard") {
-		t.Fatalf("copy notice missing:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Copied Whole response to clipboard") {
+		t.Fatalf("copy notice missing:\n%s", model.viewString())
 	}
 }
 
@@ -1458,12 +1460,12 @@ func TestModelCopyLastAgentResponseHandlesEmpty(t *testing.T) {
 		},
 	})
 
-	model.Update(key(bubbletea.KeyCtrlO))
+	model.Update(key(keymsg.KeyCtrlO))
 	if called {
 		t.Fatal("clipboard writer should not be called without an agent response")
 	}
-	if !strings.Contains(model.View(), "No agent response to copy") {
-		t.Fatalf("empty copy notice missing:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "No agent response to copy") {
+		t.Fatalf("empty copy notice missing:\n%s", model.viewString())
 	}
 }
 
@@ -1479,19 +1481,19 @@ func TestModelSlashCopyLastAgentResponse(t *testing.T) {
 	})
 
 	typeText(t, model, "/copy")
-	model.Update(key(bubbletea.KeyEnter))
-	if !strings.Contains(model.View(), "Copy to clipboard") {
-		t.Fatalf("/copy should open a target picker:\n%s", model.View())
+	model.Update(key(keymsg.KeyEnter))
+	if !strings.Contains(model.viewString(), "Copy to clipboard") {
+		t.Fatalf("/copy should open a target picker:\n%s", model.viewString())
 	}
-	updateAndRunClipboard(t, model, key(bubbletea.KeyEnter))
+	updateAndRunClipboard(t, model, key(keymsg.KeyEnter))
 	if copied != "final answer" {
 		t.Fatalf("copied = %q, want final answer", copied)
 	}
 	if len(model.SubmittedPrompts()) != 0 {
 		t.Fatalf("slash copy should not submit a prompt")
 	}
-	if !strings.Contains(model.View(), "Copied Whole response to clipboard") {
-		t.Fatalf("copy notice missing:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Copied Whole response to clipboard") {
+		t.Fatalf("copy notice missing:\n%s", model.viewString())
 	}
 }
 
@@ -1505,12 +1507,12 @@ func TestModelRawCommandTogglesScrollback(t *testing.T) {
 		StatusLineItems: []string{"raw-output"},
 	})
 
-	if rich := model.View(); !strings.Contains(rich, "• final answer") || !strings.Contains(rich, "Tool call") {
+	if rich := model.viewString(); !strings.Contains(rich, "• final answer") || !strings.Contains(rich, "Tool call") {
 		t.Fatalf("rich transcript missing expected rendering:\n%s", rich)
 	}
 
 	typeText(t, model, "/raw on")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if !model.rawOutput {
 		t.Fatal("/raw on did not enable raw output")
 	}
@@ -1523,12 +1525,12 @@ func TestModelRawCommandTogglesScrollback(t *testing.T) {
 			t.Fatalf("raw transcript missing %q:\n%s", want, rawTranscript)
 		}
 	}
-	if view := model.View(); !strings.Contains(view, rawOutputModeOnNotice) || !strings.Contains(view, "raw output") {
+	if view := model.viewString(); !strings.Contains(view, rawOutputModeOnNotice) || !strings.Contains(view, "raw output") {
 		t.Fatalf("raw mode view missing notice/status item:\n%s", view)
 	}
 
 	typeText(t, model, "/raw off")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if model.rawOutput {
 		t.Fatal("/raw off did not disable raw output")
 	}
@@ -1537,24 +1539,24 @@ func TestModelRawCommandTogglesScrollback(t *testing.T) {
 	}
 
 	typeText(t, model, "/raw maybe")
-	model.Update(key(bubbletea.KeyEnter))
-	if !strings.Contains(model.View(), rawOutputUsage) {
-		t.Fatalf("invalid raw command missing usage:\n%s", model.View())
+	model.Update(key(keymsg.KeyEnter))
+	if !strings.Contains(model.viewString(), rawOutputUsage) {
+		t.Fatalf("invalid raw command missing usage:\n%s", model.viewString())
 	}
 }
 
 func TestModelAltRTogglesRawScrollback(t *testing.T) {
 	model := NewModel(codextui.NewState(nil), Options{})
 
-	model.Update(bubbletea.KeyMsg(bubbletea.Key{Type: bubbletea.KeyRunes, Runes: []rune{'r'}, Alt: true}))
+	model.Update(keymsg.KeyMsg(keymsg.Key{Type: keymsg.KeyRunes, Runes: []rune{'r'}, Alt: true}))
 	if !model.rawOutput {
 		t.Fatal("Alt+R did not enable raw output")
 	}
-	if !strings.Contains(model.View(), rawOutputModeOnNotice) {
-		t.Fatalf("Alt+R notice missing:\n%s", model.View())
+	if !strings.Contains(model.viewString(), rawOutputModeOnNotice) {
+		t.Fatalf("Alt+R notice missing:\n%s", model.viewString())
 	}
 
-	model.Update(bubbletea.KeyMsg(bubbletea.Key{Type: bubbletea.KeyRunes, Runes: []rune{'r'}, Alt: true}))
+	model.Update(keymsg.KeyMsg(keymsg.Key{Type: keymsg.KeyRunes, Runes: []rune{'r'}, Alt: true}))
 	if model.rawOutput {
 		t.Fatal("second Alt+R did not disable raw output")
 	}
@@ -1573,12 +1575,12 @@ func TestModelDiffCommandOpensPager(t *testing.T) {
 	})
 
 	typeText(t, model, "/diff")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	if cmd == nil {
 		t.Fatal("/diff did not return a diff command")
 	}
-	if !strings.Contains(model.View(), "Computing diff...") {
-		t.Fatalf("diff loading notice missing:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Computing diff...") {
+		t.Fatalf("diff loading notice missing:\n%s", model.viewString())
 	}
 
 	updated, _ := model.Update(cmd())
@@ -1589,7 +1591,7 @@ func TestModelDiffCommandOpensPager(t *testing.T) {
 	if model.overlay == nil {
 		t.Fatal("diff result did not open pager overlay")
 	}
-	view := model.View()
+	view := model.viewString()
 	for _, want := range []string{"D I F F", "diff --git a/app.go b/app.go", "+new"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("diff pager missing %q:\n%s", want, view)
@@ -1607,14 +1609,14 @@ func TestModelDiffCommandHandlesNoRepoAndEmptyDiff(t *testing.T) {
 		},
 	})
 	typeText(t, model, "/diff")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	if cmd == nil {
 		t.Fatal("/diff no-repo returned nil command")
 	}
 	updated, _ := model.Update(cmd())
 	model = updated.(*Model)
-	if !strings.Contains(model.View(), "`/diff` \u2014 _not inside a git repository_") {
-		t.Fatalf("no-repo diff message missing:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "`/diff` \u2014 _not inside a git repository_") {
+		t.Fatalf("no-repo diff message missing:\n%s", model.viewString())
 	}
 
 	model = NewModel(codextui.NewState(nil), Options{
@@ -1623,11 +1625,11 @@ func TestModelDiffCommandHandlesNoRepoAndEmptyDiff(t *testing.T) {
 		},
 	})
 	typeText(t, model, "/diff")
-	_, cmd = model.Update(key(bubbletea.KeyEnter))
+	_, cmd = model.Update(key(keymsg.KeyEnter))
 	updated, _ = model.Update(cmd())
 	model = updated.(*Model)
-	if !strings.Contains(model.View(), "No changes detected.") {
-		t.Fatalf("empty diff message missing:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "No changes detected.") {
+		t.Fatalf("empty diff message missing:\n%s", model.viewString())
 	}
 }
 
@@ -1647,8 +1649,8 @@ func TestModelPsAndStopCommands(t *testing.T) {
 	})
 
 	typeText(t, model, "/ps")
-	model.Update(key(bubbletea.KeyEnter))
-	view := model.View()
+	model.Update(key(keymsg.KeyEnter))
+	view := model.viewString()
 	for _, want := range []string{"/ps", "Background terminals", "go test ./...", "ok package"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("/ps view missing %q:\n%s", want, view)
@@ -1659,7 +1661,7 @@ func TestModelPsAndStopCommands(t *testing.T) {
 	}
 
 	typeText(t, model, "/stop")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	if cmd != nil {
 		_ = cmd()
 	}
@@ -1669,14 +1671,14 @@ func TestModelPsAndStopCommands(t *testing.T) {
 	if len(model.backgroundProcesses) != 0 {
 		t.Fatalf("background processes after stop = %#v", model.backgroundProcesses)
 	}
-	if !strings.Contains(model.View(), "Stopping all background terminals.") {
-		t.Fatalf("/stop notice missing:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Stopping all background terminals.") {
+		t.Fatalf("/stop notice missing:\n%s", model.viewString())
 	}
 
 	typeText(t, model, "/ps")
-	model.Update(key(bubbletea.KeyEnter))
-	if !strings.Contains(model.View(), "No background terminals running.") {
-		t.Fatalf("/ps after stop should show empty state:\n%s", model.View())
+	model.Update(key(keymsg.KeyEnter))
+	if !strings.Contains(model.viewString(), "No background terminals running.") {
+		t.Fatalf("/ps after stop should show empty state:\n%s", model.viewString())
 	}
 }
 
@@ -1695,7 +1697,7 @@ func TestModelTabSubmitsWhenIdleAndQueuesWhenRunning(t *testing.T) {
 	// The burst window only captures a Tab pressed within the burst interval
 	// (Rust #45454); a human Tab press is later than that.
 	now = now.Add(bottompane.PasteBurstCharInterval + time.Millisecond)
-	model.Update(key(bubbletea.KeyTab))
+	model.Update(key(keymsg.KeyTab))
 	if len(requests) != 1 || requests[0].Prompt != "tab submit" {
 		t.Fatalf("idle tab requests = %#v", requests)
 	}
@@ -1703,7 +1705,7 @@ func TestModelTabSubmitsWhenIdleAndQueuesWhenRunning(t *testing.T) {
 	model.State.SetStatus("running")
 	typeText(t, model, "tab queue")
 	now = now.Add(bottompane.PasteBurstCharInterval + time.Millisecond)
-	model.Update(key(bubbletea.KeyTab))
+	model.Update(key(keymsg.KeyTab))
 	if len(requests) != 1 {
 		t.Fatalf("running tab should not submit immediately: %#v", requests)
 	}
@@ -1731,7 +1733,7 @@ func TestModelTabInsidePasteBurstKeepsIndentationLikeRust(t *testing.T) {
 
 			// A character immediately followed by Tab belongs to the burst.
 			model.Update(runes(first))
-			model.Update(key(bubbletea.KeyTab))
+			model.Update(key(keymsg.KeyTab))
 			if len(requests) != 0 {
 				t.Fatalf("burst Tab submitted: %#v", requests)
 			}
@@ -1745,7 +1747,7 @@ func TestModelTabInsidePasteBurstKeepsIndentationLikeRust(t *testing.T) {
 			// Each appended tab refreshes the burst window, so a further Tab a
 			// half-window later is still captured.
 			now = now.Add(bottompane.PasteEnterSuppressWindow / 2)
-			model.Update(key(bubbletea.KeyTab))
+			model.Update(key(keymsg.KeyTab))
 			if got := model.ComposerValue(); got != first+tab+tab {
 				t.Fatalf("composer after refreshed burst Tab = %q", got)
 			}
@@ -1756,7 +1758,7 @@ func TestModelTabInsidePasteBurstKeepsIndentationLikeRust(t *testing.T) {
 
 			// An expired burst lets the Tab shortcut dispatch again.
 			now = now.Add(bottompane.PasteEnterSuppressWindow + time.Millisecond)
-			model.Update(key(bubbletea.KeyTab))
+			model.Update(key(keymsg.KeyTab))
 			if len(requests) != 1 || requests[0].Prompt != first+tab+tab+"end" {
 				t.Fatalf("expired burst Tab requests = %#v", requests)
 			}
@@ -1774,7 +1776,7 @@ func TestModelTabInSlashContextInsidePasteBurstLikeRust(t *testing.T) {
 
 	model.Update(runes("/"))
 	model.Update(runes("rev"))
-	model.Update(key(bubbletea.KeyTab))
+	model.Update(key(keymsg.KeyTab))
 	// The burst Tab is draft text instead of a completion, so the draft keeps its
 	// indentation and the command is not completed.
 	if got := model.ComposerValue(); got != "/rev    " {
@@ -1796,16 +1798,16 @@ func TestModelAppliesTurnCompleted(t *testing.T) {
 	if state.Status != "idle" {
 		t.Fatalf("Status = %q, want idle", state.Status)
 	}
-	if !strings.Contains(model.View(), "• done") {
-		t.Fatalf("View() missing assistant response:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "• done") {
+		t.Fatalf("View() missing assistant response:\n%s", model.viewString())
 	}
 
 	model.Update(TurnCompletedMsg{Err: errors.New("boom")})
 	if state.Status != "error" {
 		t.Fatalf("Status = %q, want error", state.Status)
 	}
-	if !strings.Contains(model.View(), "Error: boom") {
-		t.Fatalf("View() missing error:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Error: boom") {
+		t.Fatalf("View() missing error:\n%s", model.viewString())
 	}
 }
 
@@ -1835,7 +1837,7 @@ func TestModelAppliesThreadEvents(t *testing.T) {
 	if state.Status != "idle" {
 		t.Fatalf("Status = %q, want idle", state.Status)
 	}
-	view := model.View()
+	view := model.viewString()
 	cleanView := utils.StripANSI(view)
 	for _, want := range []string{"• hello", "Ran date", "ok"} {
 		if !strings.Contains(cleanView, want) {
@@ -1861,7 +1863,7 @@ func TestModelKeepsWeatherCommentaryBeforeCommand(t *testing.T) {
 	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(protocol.AgentMessageItemWithPhase("msg-commentary", "我先查询河北各城市天气。", "commentary"))})
 	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(protocol.CommandExecutionItem("call-weather", "curl weather", "", nil, "in_progress"))})
 
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	commentaryAt := strings.Index(view, "我先查询河北各城市天气。")
 	commandAt := strings.Index(view, "curl weather")
 	if commentaryAt < 0 || commandAt < 0 || commentaryAt >= commandAt {
@@ -1878,7 +1880,7 @@ func TestModelRendersWebSearchLifecycleLikeRust(t *testing.T) {
 
 	model.Update(ThreadEventMsg{Event: protocol.TurnStarted()})
 	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(protocol.WebSearchItem("search-1", "", map[string]any{"type": "other"}))})
-	started := utils.StripANSI(model.View())
+	started := utils.StripANSI(model.viewString())
 	if !strings.Contains(started, "Searching the web") || strings.Contains(started, "Searched the web") {
 		t.Fatalf("started web search lifecycle missing or completed early:\n%s", started)
 	}
@@ -1887,7 +1889,7 @@ func TestModelRendersWebSearchLifecycleLikeRust(t *testing.T) {
 		"type":  "search",
 		"query": "Yunnan weather",
 	}))})
-	completed := utils.StripANSI(model.View())
+	completed := utils.StripANSI(model.viewString())
 	if !strings.Contains(completed, "Searched the web for Yunnan weather") {
 		t.Fatalf("completed web search lifecycle missing query:\n%s", completed)
 	}
@@ -1908,7 +1910,7 @@ func TestModelHidesWebCitationsFromAssistantView(t *testing.T) {
 	model.Update(ThreadEventMsg{Event: protocol.AgentMessageDelta("weather-answer", "| Kunming | "+citation+" |\n")})
 	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(protocol.AgentMessageItem("weather-answer", "| Kunming | "+citation+" |\n"))})
 
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if strings.Contains(view, "turn0forecast0") || strings.Contains(view, "\uE200cite\uE202") {
 		t.Fatalf("assistant view leaked provider citation:\n%s", view)
 	}
@@ -1926,7 +1928,7 @@ func TestModelWeatherLifecycleShowsRunningAndNoDuplicateResults(t *testing.T) {
 	model.Update(ThreadEventMsg{Event: protocol.TurnStarted()})
 	model.Update(ThreadEventMsg{Event: protocol.AgentMessageDelta("msg-commentary", commentary)})
 	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(protocol.CommandExecutionItem("call-weather", "curl weather", "", nil, "in_progress"))})
-	running := utils.StripANSI(model.View())
+	running := utils.StripANSI(model.viewString())
 	if !strings.Contains(running, commentary) || !strings.Contains(running, "Running curl weather") {
 		t.Fatalf("running lifecycle missing commentary or command:\n%s", running)
 	}
@@ -1938,7 +1940,7 @@ func TestModelWeatherLifecycleShowsRunningAndNoDuplicateResults(t *testing.T) {
 	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(protocol.AgentMessageItemWithPhase("msg-final", final, "final_answer"))})
 	model.Update(ThreadEventMsg{Event: protocol.TurnCompleted(protocol.Usage{})})
 
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	for text, want := range map[string]int{commentary: 1, "sunny": 1, final: 1} {
 		if got := strings.Count(view, text); got != want {
 			t.Fatalf("%q count = %d, want %d:\n%s", text, got, want, view)
@@ -1960,7 +1962,7 @@ func TestModelWeatherFailedCommandLifecycleMatchesRust(t *testing.T) {
 	model.Update(ThreadEventMsg{Event: protocol.TurnStarted()})
 	model.Update(ThreadEventMsg{Event: protocol.AgentMessageDelta("msg-commentary", commentary)})
 	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(protocol.CommandExecutionItem("call-weather", command, "", nil, "in_progress"))})
-	if view := utils.StripANSI(model.View()); !strings.Contains(view, commentary) || !strings.Contains(view, "Running "+command) {
+	if view := utils.StripANSI(model.viewString()); !strings.Contains(view, commentary) || !strings.Contains(view, "Running "+command) {
 		t.Fatalf("failed weather command did not expose running lifecycle:\n%s", view)
 	}
 
@@ -1971,7 +1973,7 @@ func TestModelWeatherFailedCommandLifecycleMatchesRust(t *testing.T) {
 	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(protocol.AgentMessageItemWithPhase("msg-final", final, "final_answer"))})
 	model.Update(ThreadEventMsg{Event: protocol.TurnCompleted(protocol.Usage{})})
 
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	for text, want := range map[string]int{commentary: 1, failure[:len(failure)-1]: 1, final: 1} {
 		if got := strings.Count(view, text); got != want {
 			t.Fatalf("%q count = %d, want %d:\n%s", text, got, want, view)
@@ -1985,12 +1987,12 @@ func TestModelRendersFileChangeSuccessAndFailureLikeRust(t *testing.T) {
 	changes := []protocol.FileChange{{Path: `C:\work\a.txt`, Kind: "update", Diff: "@@\n-old\n+new"}}
 
 	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(protocol.FileChangeItem("patch-1", changes, "in_progress"))})
-	if view := utils.StripANSI(model.View()); !strings.Contains(view, "a.txt") || !strings.Contains(view, "(+1 -1)") {
+	if view := utils.StripANSI(model.viewString()); !strings.Contains(view, "a.txt") || !strings.Contains(view, "(+1 -1)") {
 		t.Fatalf("started file change missing summary:\n%s", view)
 	}
 
 	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(protocol.FileChangeItemWithOutput("patch-1", changes, "failed", "", "apply_patch verification failed: bad context"))})
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "Failed to apply patch") || !strings.Contains(view, "apply_patch verification failed: bad context") {
 		t.Fatalf("failed file change missing Rust-style failure cell:\n%s", view)
 	}
@@ -2004,7 +2006,7 @@ func TestModelRendersSuccessfulFileChangeLifecycleOnce(t *testing.T) {
 	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(protocol.FileChangeItem("patch-1", changes, "in_progress"))})
 	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(protocol.FileChangeItem("patch-1", changes, "completed"))})
 
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if got := strings.Count(view, "Added quicksort.java"); got != 1 {
 		t.Fatalf("successful file change rendered %d times, want 1:\n%s", got, view)
 	}
@@ -2017,7 +2019,7 @@ func TestModelRendersCompletedOnlyFileChange(t *testing.T) {
 
 	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(protocol.FileChangeItem("patch-1", changes, "completed"))})
 
-	if view := utils.StripANSI(model.View()); strings.Count(view, "Added quicksort.java") != 1 {
+	if view := utils.StripANSI(model.viewString()); strings.Count(view, "Added quicksort.java") != 1 {
 		t.Fatalf("completed-only file change missing or duplicated:\n%s", view)
 	}
 }
@@ -2030,7 +2032,7 @@ func TestModelStreamsToolInputIntoHistoryCell(t *testing.T) {
 	model.Update(ThreadEventMsg{Event: protocol.ToolCallInputDelta("fc-1", "call-1", `{"cmd":"`)})
 	model.Update(ThreadEventMsg{Event: protocol.ToolCallInputDelta("fc-1", "call-1", `pwd"}`)})
 
-	view := model.View()
+	view := model.viewString()
 	if !strings.Contains(view, "Running pwd") {
 		t.Fatalf("streamed tool input did not update history cell:\n%s", view)
 	}
@@ -2044,19 +2046,19 @@ func TestModelWaitsForActualExecCommandInput(t *testing.T) {
 	model := NewModel(state, Options{Width: 80, Height: 24})
 
 	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(protocol.ToolCallItemWithCallID("fc-1", "call-1", "exec_command", ""))})
-	view := model.View()
+	view := model.viewString()
 	if strings.Contains(view, "Running exec_command") || strings.Contains(view, "Running shell command") {
 		t.Fatalf("empty exec_command input should not render a command cell:\n%s", view)
 	}
 
 	model.Update(ThreadEventMsg{Event: protocol.ToolCallInputDelta("fc-1", "call-1", `{"cmd":"`)})
-	view = model.View()
+	view = model.viewString()
 	if strings.Contains(view, "Running exec_command") || strings.Contains(view, "Running shell command") || strings.Contains(view, `Running {"cmd":"`) {
 		t.Fatalf("partial exec_command JSON should not leak as a command:\n%s", view)
 	}
 
 	model.Update(ThreadEventMsg{Event: protocol.ToolCallInputDelta("fc-1", "call-1", `pwd"}`)})
-	view = model.View()
+	view = model.viewString()
 	if !strings.Contains(view, "Running pwd") {
 		t.Fatalf("complete exec_command input should render the actual command:\n%s", view)
 	}
@@ -2070,7 +2072,7 @@ func TestModelRendersCommandExecutionLifecycle(t *testing.T) {
 	model := NewModel(state, Options{Width: 80, Height: 24})
 
 	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(protocol.CommandExecutionItem("call-1", "Get-ChildItem test.pdf", "", nil, "in_progress"))})
-	view := model.View()
+	view := model.viewString()
 	if !strings.Contains(view, "Running Get-ChildItem test.pdf") {
 		t.Fatalf("command execution start should show the actual command:\n%s", view)
 	}
@@ -2080,7 +2082,7 @@ func TestModelRendersCommandExecutionLifecycle(t *testing.T) {
 
 	exitCode := 0
 	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(protocol.CommandExecutionItem("call-1", "Get-ChildItem test.pdf", "test.pdf\n", &exitCode, "completed"))})
-	view = model.View()
+	view = model.viewString()
 	if !strings.Contains(view, "Ran Get-ChildItem test.pdf") || !strings.Contains(view, "test.pdf") {
 		t.Fatalf("command execution completion should update the active cell:\n%s", view)
 	}
@@ -2089,12 +2091,12 @@ func TestModelRendersCommandExecutionLifecycle(t *testing.T) {
 	}
 
 	model.Update(ThreadEventMsg{Event: protocol.AgentMessageDelta("message-1", "已获取本机网络信息。")})
-	view = model.View()
+	view = model.viewString()
 	// Rust #43558: the final-message cell shows dim completion metadata instead
 	// of a horizontal rule.
 	durationMS := int64(0)
 	model.Update(TurnCompletedMsg{ThreadID: "thread-1", DurationMS: &durationMS})
-	view = model.View()
+	view = model.viewString()
 	if !strings.Contains(view, "Worked for <1s") {
 		t.Fatalf("assistant output after command should use the Rust final-message separator:\n%s", view)
 	}
@@ -2112,7 +2114,7 @@ func TestModelRendersExploringCommandActionsLikeRust(t *testing.T) {
 	model := NewModel(state, Options{Width: 80, Height: 24})
 
 	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(protocol.CommandExecutionItem("call-read", "cat README.md", "", nil, "in_progress"))})
-	view := model.View()
+	view := model.viewString()
 	if !strings.Contains(view, "Exploring") || !strings.Contains(view, "Read README.md") {
 		t.Fatalf("read command should render as an exploring cell with the parsed action:\n%s", view)
 	}
@@ -2121,13 +2123,13 @@ func TestModelRendersExploringCommandActionsLikeRust(t *testing.T) {
 	}
 
 	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(protocol.CommandExecutionItem("call-search", "rg TODO src", "", nil, "in_progress"))})
-	view = model.View()
+	view = model.viewString()
 	if !strings.Contains(view, "Search TODO in src") {
 		t.Fatalf("search command should render the parsed search action:\n%s", view)
 	}
 
 	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(protocol.CommandExecutionItem("call-run", "go test ./...", "", nil, "in_progress"))})
-	view = model.View()
+	view = model.viewString()
 	if !strings.Contains(view, "Running go test ./...") {
 		t.Fatalf("non-exploring command should keep the generic cell:\n%s", view)
 	}
@@ -2153,7 +2155,7 @@ func TestModelRendersMCPToolLifecycleLikeRust(t *testing.T) {
 		nil,
 		"in_progress",
 	))})
-	view := model.View()
+	view := model.viewString()
 	if !strings.Contains(view, `Calling geogebra.geogebra_create_point({"label":"A"})`) {
 		t.Fatalf("MCP start should use the Rust calling cell:\n%s", view)
 	}
@@ -2170,7 +2172,7 @@ func TestModelRendersMCPToolLifecycleLikeRust(t *testing.T) {
 		nil,
 		"completed",
 	))})
-	view = model.View()
+	view = model.viewString()
 	if !strings.Contains(view, `Called geogebra.geogebra_create_point({"label":"A"})`) || !strings.Contains(view, "Point A created") {
 		t.Fatalf("MCP completion should update the Rust calling cell:\n%s", view)
 	}
@@ -2190,27 +2192,27 @@ func TestModelRendersMCPStartupProgressLikeRust(t *testing.T) {
 
 	model.Update(MCPStartupUpdateMsg{Name: "alpha", Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupStarting}})
 	model.Update(MCPStartupUpdateMsg{Name: "beta", Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupStarting}})
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "Starting MCP servers (0/2): alpha, beta (0s") {
 		t.Fatalf("initial MCP startup header missing:\n%s", view)
 	}
 
 	model.Update(MCPStartupUpdateMsg{Name: "alpha", Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupReady}})
-	view = utils.StripANSI(model.View())
+	view = utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "Starting MCP servers (1/2): beta") {
 		t.Fatalf("MCP progress header missing:\n%s", view)
 	}
 
 	_, cmd := model.Update(MCPStartupUpdateMsg{Name: "beta", Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupReady}})
-	if !model.mcpStartupActive || !strings.Contains(utils.StripANSI(model.View()), "Starting MCP servers") {
-		t.Fatalf("settled MCP startup should stay visible during lag:\n%s", model.View())
+	if !model.mcpStartupActive || !strings.Contains(utils.StripANSI(model.viewString()), "Starting MCP servers") {
+		t.Fatalf("settled MCP startup should stay visible during lag:\n%s", model.viewString())
 	}
 	if cmd == nil {
 		t.Fatal("completed MCP startup should schedule finish lag")
 	}
 	model.Update(mcpStartupFinishAfterLagMsg{Generation: model.mcpStartupGeneration})
-	if model.mcpStartupActive || strings.Contains(utils.StripANSI(model.View()), "Starting MCP servers") {
-		t.Fatalf("completed MCP startup should clear after lag:\n%s", model.View())
+	if model.mcpStartupActive || strings.Contains(utils.StripANSI(model.viewString()), "Starting MCP servers") {
+		t.Fatalf("completed MCP startup should clear after lag:\n%s", model.viewString())
 	}
 }
 
@@ -2226,7 +2228,7 @@ func TestModelMCPStartupDoesNotBlockConfiguredInput(t *testing.T) {
 	})
 	model.Update(MCPStartupUpdateMsg{Name: "docs", Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupStarting}})
 	typeText(t, model, "submitted during startup")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if !reflect.DeepEqual(submitted, []string{"submitted during startup"}) || len(model.QueuedRequests()) != 0 {
 		t.Fatalf("MCP startup blocked input: submitted=%#v queued=%#v", submitted, model.QueuedRequests())
 	}
@@ -2255,7 +2257,7 @@ func TestModelMCPStartupFailureWarningsMatchRust(t *testing.T) {
 	model.Update(MCPStartupUpdateMsg{Name: "alpha", Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupFailed, Error: "alpha handshake failed"}})
 	_, cmd := model.Update(MCPStartupUpdateMsg{Name: "beta", Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupReady}})
 
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if strings.Contains(view, "MCP startup incomplete (failed: alpha)") {
 		t.Fatalf("final MCP startup warning should wait for lag:\n%s", view)
 	}
@@ -2280,7 +2282,7 @@ func TestModelMCPStartupFailureWarningsMatchRust(t *testing.T) {
 		t.Fatal("settled MCP startup should schedule finish lag")
 	}
 	model.Update(mcpStartupFinishAfterLagMsg{Generation: model.mcpStartupGeneration})
-	view = utils.StripANSI(model.View())
+	view = utils.StripANSI(model.viewString())
 	if strings.Contains(view, "startup issue") {
 		t.Fatalf("final MCP startup warning rendered inline after lag:\n%s", view)
 	}
@@ -2303,11 +2305,11 @@ func TestModelStartupWarningsWaitForSplashLikeRust(t *testing.T) {
 		[]string{"alpha"},
 		"",
 	))
-	if view := utils.StripANSI(model.View()); strings.Contains(view, "startup issue") || strings.Contains(view, "MCP alpha failed to start.") {
+	if view := utils.StripANSI(model.viewString()); strings.Contains(view, "startup issue") || strings.Contains(view, "MCP alpha failed to start.") {
 		t.Fatalf("startup warnings before the splash rendered:\n%s", view)
 	}
 	model.addStartupSessionHeader("0.1.0")
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if strings.Contains(view, "startup issue") || strings.Contains(view, "MCP alpha failed to start.") {
 		t.Fatalf("startup warnings after the splash rendered inline:\n%s", view)
 	}
@@ -2338,7 +2340,7 @@ func TestModelStartupWarningsSignInSubsetAndHintLikeRust(t *testing.T) {
 	}
 	// A repeated diagnostic must not change the summary.
 	model.mergeStartupWarnings(historycell.NewStartupWarnings([]string{"Skill manifest is invalid."}))
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if strings.Contains(view, "startup issue") {
 		t.Fatalf("retained startup diagnostics rendered inline:\n%s", view)
 	}
@@ -2363,7 +2365,7 @@ func TestModelLateMCPDiagnosticsRetainStartupWarningsLikeRust(t *testing.T) {
 		t.Fatal("turn start should finish the startup warning window")
 	}
 	model.Update(MCPStartupUpdateMsg{Name: "alpha", Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupFailed, Error: "alpha handshake failed"}})
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if strings.Contains(view, "startup issue") {
 		t.Fatalf("late MCP diagnostic rendered inline:\n%s", view)
 	}
@@ -2393,8 +2395,8 @@ func TestModelMCPStartupInterruptIgnoresLateTerminalUpdates(t *testing.T) {
 
 	model.Update(MCPStartupUpdateMsg{Name: "alpha", Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupReady}})
 	model.Update(MCPStartupUpdateMsg{Name: "beta", Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupReady}})
-	if model.mcpStartupActive || strings.Contains(utils.StripANSI(model.View()), "Starting MCP servers") {
-		t.Fatalf("late terminal updates reopened MCP startup:\n%s", model.View())
+	if model.mcpStartupActive || strings.Contains(utils.StripANSI(model.viewString()), "Starting MCP servers") {
+		t.Fatalf("late terminal updates reopened MCP startup:\n%s", model.viewString())
 	}
 }
 
@@ -2426,7 +2428,7 @@ func TestModelStartupSkillLoadWarningsLikeRust(t *testing.T) {
 		t.Fatal("Init() should request the startup skills list")
 	}
 	model.Update(StartupSkillsListMsg{CWD: cwd, Response: response})
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if strings.Contains(view, "startup issue") {
 		t.Fatalf("startup skill warning rendered inline:\n%s", view)
 	}
@@ -2445,7 +2447,7 @@ func TestModelStartupSkillLoadWarningsLikeRust(t *testing.T) {
 	}
 	// A repeated active error stays suppressed.
 	model.Update(StartupSkillsListMsg{CWD: cwd, Response: response})
-	view = utils.StripANSI(model.View())
+	view = utils.StripANSI(model.viewString())
 	if got := model.warningDisplay.WarningCount(); got != 1 {
 		t.Fatalf("repeated active error changed the count: %d", got)
 	}
@@ -2456,7 +2458,7 @@ func TestModelStartupSkillLoadWarningsLikeRust(t *testing.T) {
 		Errors: []appserver.SkillErrorInfo{{Path: cwd + "/.gcode/skills/xyz/SKILL.md", Message: "missing name"}},
 	}}}
 	model.Update(SkillsListResultMsg{CWD: cwd, Response: changed})
-	view = utils.StripANSI(model.View())
+	view = utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "Skipped loading 1 skill(s) due to invalid SKILL.md files.") {
 		t.Fatalf("runtime skill warning missing:\n%s", view)
 	}
@@ -2468,12 +2470,12 @@ func TestModelStreamsUpdatePlanIntoPlanCell(t *testing.T) {
 
 	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(protocol.ToolCallItemWithCallID("plan-item", "plan-call", "update_plan", ""))})
 	model.Update(ThreadEventMsg{Event: protocol.ToolCallInputDelta("plan-item", "plan-call", `{"plan":[{"step":"read Rust TUI","status":"in_progress"},`)})
-	if strings.Contains(model.View(), "Running update_plan") || strings.Contains(model.View(), "Ran update_plan") {
-		t.Fatalf("partial update_plan JSON should not render as exec cell:\n%s", model.View())
+	if strings.Contains(model.viewString(), "Running update_plan") || strings.Contains(model.viewString(), "Ran update_plan") {
+		t.Fatalf("partial update_plan JSON should not render as exec cell:\n%s", model.viewString())
 	}
 	model.Update(ThreadEventMsg{Event: protocol.ToolCallInputDelta("plan-item", "plan-call", `{"step":"port behavior","status":"pending"}],"explanation":"align with Rust"}`)})
 
-	view := model.View()
+	view := model.viewString()
 	for _, want := range []string{"Updated Plan", "align with Rust", "read Rust TUI", "port behavior"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("View() missing %q:\n%s", want, view)
@@ -2495,7 +2497,7 @@ func TestModelDoesNotMarkUpdatePlanFailedOnTurnFailure(t *testing.T) {
 	model.Update(ThreadEventMsg{Event: protocol.ToolCallInputDelta("plan-item", "plan-call", `{"plan":[{"step":"read Rust TUI","status":"completed"},{"step":"port behavior","status":"in_progress"}]}`)})
 	model.Update(ThreadEventMsg{Event: protocol.TurnFailed("network boom")})
 
-	view := model.View()
+	view := model.viewString()
 	for _, want := range []string{"Updated Plan", "read Rust TUI", "port behavior", "Error: network boom"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("View() missing %q:\n%s", want, view)
@@ -2524,7 +2526,7 @@ func TestModelFailsRunningToolCellsAndClearsUnconfirmedThread(t *testing.T) {
 	if state.Status != "error" {
 		t.Fatalf("Status = %q, want error", state.Status)
 	}
-	view := model.View()
+	view := model.viewString()
 	// Rust #54433: a nonzero exit renders as the neutral `Exited (status N)` label
 	// instead of `Ran <cmd>`, so a failed tool cell must not read as a clean run.
 	for _, want := range []string{"Exited (status 1) pwd", "Error: network boom"} {
@@ -2548,8 +2550,8 @@ func TestModelKeepsConfirmedThreadOnTransientTurnFailure(t *testing.T) {
 	if state.ThreadID != "thread-existing" {
 		t.Fatalf("ThreadID after transient failure = %q, want existing thread", state.ThreadID)
 	}
-	if !strings.Contains(model.View(), "Error: read tcp: connection reset") {
-		t.Fatalf("View() missing transient error:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Error: read tcp: connection reset") {
+		t.Fatalf("View() missing transient error:\n%s", model.viewString())
 	}
 }
 
@@ -2563,8 +2565,8 @@ func TestModelClearsThreadNotFoundFailures(t *testing.T) {
 	if state.ThreadID != "" {
 		t.Fatalf("ThreadID after thread-not-found = %q, want cleared", state.ThreadID)
 	}
-	if !strings.Contains(model.View(), "Error: thread not found: thread-missing") {
-		t.Fatalf("View() missing thread-not-found error:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Error: thread not found: thread-missing") {
+		t.Fatalf("View() missing thread-not-found error:\n%s", model.viewString())
 	}
 }
 
@@ -2687,14 +2689,14 @@ func TestModelRateLimitSwitchPromptSwitchesModel(t *testing.T) {
 			UsedPercent: 90,
 		},
 	}})
-	view := model.View()
+	view := model.viewString()
 	for _, want := range []string{"Approaching rate limits", "Switch to " + chatwidget.NudgeModelSlug, "Keep current model (never show again)"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("rate-limit switch prompt missing %q:\n%s", want, view)
 		}
 	}
 
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if state.Model != chatwidget.NudgeModelSlug || state.ReasoningEffort != "low" {
 		t.Fatalf("state model=%q reasoning=%q", state.Model, state.ReasoningEffort)
 	}
@@ -2725,15 +2727,15 @@ func TestModelRateLimitSwitchPromptHidePersistsNotice(t *testing.T) {
 			UsedPercent: 90,
 		},
 	}})
-	model.Update(key(bubbletea.KeyDown))
-	model.Update(key(bubbletea.KeyDown))
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyDown))
+	model.Update(key(keymsg.KeyDown))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 	if len(writes) != 1 || len(writes[0]) != 1 || writes[0][0].KeyPath != "notices.hide_rate_limit_model_nudge" || writes[0][0].Value != true {
 		t.Fatalf("writes = %#v", writes)
 	}
-	if !strings.Contains(model.View(), "Rate limit model switch reminders hidden. Saved to") {
-		t.Fatalf("hide notice missing:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Rate limit model switch reminders hidden. Saved to") {
+		t.Fatalf("hide notice missing:\n%s", model.viewString())
 	}
 
 	model.Update(RateLimitSnapshotMsg{Snapshot: chatwidget.RateLimitSnapshot{
@@ -2742,8 +2744,8 @@ func TestModelRateLimitSwitchPromptHidePersistsNotice(t *testing.T) {
 			UsedPercent: 95,
 		},
 	}})
-	if strings.Contains(model.View(), "Approaching rate limits") {
-		t.Fatalf("hidden prompt should not reopen:\n%s", model.View())
+	if strings.Contains(model.viewString(), "Approaching rate limits") {
+		t.Fatalf("hidden prompt should not reopen:\n%s", model.viewString())
 	}
 }
 
@@ -2776,8 +2778,8 @@ func TestModelRetryStatusIsSingleTransientActivityRow(t *testing.T) {
 	model := NewModel(state, Options{Width: 80, Height: 24})
 
 	model.Update(ModelRetryStatusMsg{Message: "Reconnecting... 2/5 (30s • esc to interrupt)\n└ Stream disconnected before completion: stream closed", Active: true})
-	if !strings.Contains(model.View(), "Reconnecting... 2/5") {
-		t.Fatalf("retry status missing from Activity:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Reconnecting... 2/5") {
+		t.Fatalf("retry status missing from Activity:\n%s", model.viewString())
 	}
 	model.Update(ModelRetryStatusMsg{Message: "Reconnecting... 3/5 (30s • esc to interrupt)\n└ Stream disconnected before completion: stream closed", Active: true})
 	if got := countRole(state.Messages, codextui.RoleHistory); got != 1 {
@@ -2820,11 +2822,11 @@ func TestModelAppliesHookRunMessages(t *testing.T) {
 		StatusMessage: "checking command",
 		Running:       true,
 	})
-	if view := model.View(); strings.Contains(view, "Running PreToolUse hook") {
+	if view := model.viewString(); strings.Contains(view, "Running PreToolUse hook") {
 		t.Fatalf("fast hook was revealed before the 300ms delay:\n%s", view)
 	}
 	now = now.Add(301 * time.Millisecond)
-	view := model.View()
+	view := model.viewString()
 	if state.ThreadID != "thread-hook" {
 		t.Fatalf("ThreadID = %q, want thread-hook", state.ThreadID)
 	}
@@ -2845,7 +2847,7 @@ func TestModelAppliesHookRunMessages(t *testing.T) {
 			{Kind: "error", Text: "hook exited with code 7"},
 		},
 	})
-	view = model.View()
+	view = model.viewString()
 	for _, want := range []string{
 		"PostToolUse hook (failed)",
 		"warning: Heads up from the hook",
@@ -2896,7 +2898,7 @@ func TestModelHooksCommandReadsRuntimeHooks(t *testing.T) {
 	})
 
 	typeText(t, model, "/hooks")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	if cmd == nil {
 		t.Fatal("/hooks did not return hooks reader command")
 	}
@@ -2904,14 +2906,14 @@ func TestModelHooksCommandReadsRuntimeHooks(t *testing.T) {
 	if calls != 1 {
 		t.Fatalf("hooks reader calls = %d, want 1", calls)
 	}
-	view := model.View()
+	view := model.viewString()
 	for _, want := range []string{"Hooks", "Lifecycle hooks from config", "PreToolUse", "Before a tool executes"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("hooks event view missing %q:\n%s", want, view)
 		}
 	}
-	model.Update(key(bubbletea.KeyEnter))
-	view = model.View()
+	model.Update(key(keymsg.KeyEnter))
+	view = model.viewString()
 	for _, want := range []string{"PreToolUse hooks", "Matcher", "Bash", "Command", "echo ok", "Trust", "Trusted"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("hooks handler view missing %q:\n%s", want, view)
@@ -2923,10 +2925,10 @@ func TestModelHooksCommandWithoutReaderMatchesRustLoadFailure(t *testing.T) {
 	state := codextui.NewState(nil)
 	model := NewModel(state, Options{Width: 80, Height: 24})
 	typeText(t, model, "/hooks")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	want := "Failed to load hooks: hooks/list is unavailable in this runtime"
-	if !strings.Contains(model.View(), want) {
-		t.Fatalf("hooks load failure missing %q:\n%s", want, model.View())
+	if !strings.Contains(model.viewString(), want) {
+		t.Fatalf("hooks load failure missing %q:\n%s", want, model.viewString())
 	}
 	if len(state.Messages) != 1 || !strings.Contains(state.Messages[0].RawText, want) {
 		t.Fatalf("hooks load failure history = %#v", state.Messages)
@@ -2955,11 +2957,11 @@ func TestModelHooksBrowserWritesRustConfigEdits(t *testing.T) {
 		name      string
 		status    appserver.HookTrustStatus
 		openEvent bool
-		action    bubbletea.KeyMsg
+		action    keymsg.KeyMsg
 		wantField string
 		wantValue any
 	}{
-		{name: "toggle", status: appserver.HookTrustTrusted, openEvent: true, action: key(bubbletea.KeySpace), wantField: "enabled", wantValue: false},
+		{name: "toggle", status: appserver.HookTrustTrusted, openEvent: true, action: key(keymsg.KeySpace), wantField: "enabled", wantValue: false},
 		{name: "trust one", status: appserver.HookTrustUntrusted, openEvent: true, action: runes("t"), wantField: "trusted_hash", wantValue: "sha256:current"},
 		{name: "trust all", status: appserver.HookTrustModified, action: runes("t"), wantField: "trusted_hash", wantValue: "sha256:current"},
 	}
@@ -2978,10 +2980,10 @@ func TestModelHooksBrowserWritesRustConfigEdits(t *testing.T) {
 				},
 			})
 			typeText(t, model, "/hooks")
-			_, cmd := model.Update(key(bubbletea.KeyEnter))
+			_, cmd := model.Update(key(keymsg.KeyEnter))
 			runTeaCmd(t, model, cmd)
 			if test.openEvent {
-				model.Update(key(bubbletea.KeyEnter))
+				model.Update(key(keymsg.KeyEnter))
 			}
 			_, cmd = model.Update(test.action)
 			runTeaCmd(t, model, cmd)
@@ -3009,10 +3011,10 @@ func TestModelHooksBrowserUsesRustWriteFailureMessages(t *testing.T) {
 		name      string
 		status    appserver.HookTrustStatus
 		openEvent bool
-		action    bubbletea.KeyMsg
+		action    keymsg.KeyMsg
 		prefix    string
 	}{
-		{name: "enable", status: appserver.HookTrustTrusted, openEvent: true, action: key(bubbletea.KeySpace), prefix: "Failed to update hook config: "},
+		{name: "enable", status: appserver.HookTrustTrusted, openEvent: true, action: key(keymsg.KeySpace), prefix: "Failed to update hook config: "},
 		{name: "trust one", status: appserver.HookTrustUntrusted, openEvent: true, action: runes("t"), prefix: "Failed to trust hook: "},
 		{name: "trust all", status: appserver.HookTrustModified, action: runes("t"), prefix: "Failed to trust hooks: "},
 	}
@@ -3035,10 +3037,10 @@ func TestModelHooksBrowserUsesRustWriteFailureMessages(t *testing.T) {
 				OnWriteHookConfig: func(config.ConfigBatchWriteParams) error { return errors.New("denied") },
 			})
 			typeText(t, model, "/hooks")
-			_, cmd := model.Update(key(bubbletea.KeyEnter))
+			_, cmd := model.Update(key(keymsg.KeyEnter))
 			runTeaCmd(t, model, cmd)
 			if test.openEvent {
-				model.Update(key(bubbletea.KeyEnter))
+				model.Update(key(keymsg.KeyEnter))
 			}
 			_, cmd = model.Update(test.action)
 			runTeaCmd(t, model, cmd)
@@ -3058,12 +3060,12 @@ func TestModelHooksBrowserConsumesCtrlDForPageDown(t *testing.T) {
 		},
 	})
 	typeText(t, model, "/hooks")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 	if model.modal == nil || model.modal.hooksBrowser == nil {
 		t.Fatal("hooks browser did not open")
 	}
-	_, cmd = model.Update(key(bubbletea.KeyCtrlD))
+	_, cmd = model.Update(key(keymsg.KeyCtrlD))
 	if cmd != nil {
 		t.Fatal("Ctrl+D returned a quit command while hooks browser was open")
 	}
@@ -3104,18 +3106,18 @@ func TestModelPluginsCommandReadsRuntimeCatalog(t *testing.T) {
 	})
 
 	typeText(t, model, "/plugins")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	if cmd == nil {
 		t.Fatal("/plugins did not return plugin reader command")
 	}
-	if !strings.Contains(model.View(), "Loading plugins") {
-		t.Fatalf("plugins loading view missing:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Loading plugins") {
+		t.Fatalf("plugins loading view missing:\n%s", model.viewString())
 	}
 	runTeaCmd(t, model, cmd)
 	if calls != 1 {
 		t.Fatalf("plugin reader calls = %d, want 1", calls)
 	}
-	view := model.View()
+	view := model.viewString()
 	for _, want := range []string{"Plugins", "Docs", "Installed", "Search docs.", "Installed 1 of 1 available plugins."} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("plugins view missing %q:\n%s", want, view)
@@ -3147,18 +3149,18 @@ func TestModelAppsCommandReadsRuntimeCatalog(t *testing.T) {
 	})
 
 	typeText(t, model, "/apps")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	if cmd == nil {
 		t.Fatal("/apps did not return app reader command")
 	}
-	if !strings.Contains(model.View(), "Loading installed and available apps") {
-		t.Fatalf("apps loading view missing:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Loading installed and available apps") {
+		t.Fatalf("apps loading view missing:\n%s", model.viewString())
 	}
 	runTeaCmd(t, model, cmd)
 	if calls != 1 {
 		t.Fatalf("apps reader calls = %d, want 1", calls)
 	}
-	view := model.View()
+	view := model.viewString()
 	for _, want := range []string{"Apps", "Google Drive", "Search Drive files.", "Installed 1 of 1 available apps."} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("apps view missing %q:\n%s", want, view)
@@ -3185,7 +3187,7 @@ func TestModelReviewCustomStartsRuntimeReview(t *testing.T) {
 	})
 
 	typeText(t, model, "/review check security")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	if cmd == nil {
 		t.Fatal("/review custom did not return review/start command")
 	}
@@ -3199,7 +3201,7 @@ func TestModelReviewCustomStartsRuntimeReview(t *testing.T) {
 	if captured.Target.Type != "custom" || captured.Target.Instructions != "check security" {
 		t.Fatalf("review target = %#v", captured.Target)
 	}
-	view := model.View()
+	view := model.viewString()
 	for _, want := range []string{">> Code review started: check security <<"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("review view missing %q:\n%s", want, view)
@@ -3227,8 +3229,8 @@ func TestModelReviewLifecycleMatchesRustAndRestoresTokenUsage(t *testing.T) {
 	entered := protocol.ThreadItem{ID: "review-turn", Type: "enteredReviewMode", Text: "changes against 'main'"}
 	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(entered)})
 	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(entered)})
-	if count := strings.Count(model.View(), ">> Code review started: changes against 'main' <<"); count != 1 {
-		t.Fatalf("review start banner count = %d:\n%s", count, model.View())
+	if count := strings.Count(model.viewString(), ">> Code review started: changes against 'main' <<"); count != 1 {
+		t.Fatalf("review start banner count = %d:\n%s", count, model.viewString())
 	}
 
 	reviewWindow := int64(64000)
@@ -3240,8 +3242,8 @@ func TestModelReviewLifecycleMatchesRustAndRestoresTokenUsage(t *testing.T) {
 	if state.TotalTokenUsage.TotalTokens != 1200 || state.LastTokenUsage.TotalTokens != 300 || state.ModelContextWindow == nil || *state.ModelContextWindow != window {
 		t.Fatalf("token usage was not restored: total=%#v last=%#v window=%v", state.TotalTokenUsage, state.LastTokenUsage, state.ModelContextWindow)
 	}
-	if count := strings.Count(model.View(), "<< Code review finished >>"); count != 1 {
-		t.Fatalf("review finish banner count = %d:\n%s", count, model.View())
+	if count := strings.Count(model.viewString(), "<< Code review finished >>"); count != 1 {
+		t.Fatalf("review finish banner count = %d:\n%s", count, model.viewString())
 	}
 }
 
@@ -3260,17 +3262,17 @@ func TestModelReviewCustomPresetOpensPromptAndStartsRuntimeReview(t *testing.T) 
 	model.now = func() time.Time { return now }
 
 	typeText(t, model, "/review")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	for range 3 {
-		model.Update(key(bubbletea.KeyDown))
+		model.Update(key(keymsg.KeyDown))
 	}
-	model.Update(key(bubbletea.KeyEnter))
-	if view := model.View(); !strings.Contains(view, "Custom review instructions") || !strings.Contains(view, "Type instructions and press Enter") {
+	model.Update(key(keymsg.KeyEnter))
+	if view := model.viewString(); !strings.Contains(view, "Custom review instructions") || !strings.Contains(view, "Type instructions and press Enter") {
 		t.Fatalf("custom review prompt missing:\n%s", view)
 	}
 	typeText(t, model, "focus auth boundaries")
 	now = now.Add(100 * time.Millisecond)
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	if cmd == nil {
 		t.Fatal("custom review prompt did not return review/start command")
 	}
@@ -3297,7 +3299,7 @@ func TestModelSideCommandStartsRuntimeSideConversation(t *testing.T) {
 	})
 
 	typeText(t, model, "/side")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	if cmd == nil {
 		t.Fatal("/side did not return side start command")
 	}
@@ -3314,11 +3316,11 @@ func TestModelSideCommandStartsRuntimeSideConversation(t *testing.T) {
 	if len(state.Messages) != 0 {
 		t.Fatalf("side transcript should start empty, got %#v", state.Messages)
 	}
-	if view := model.View(); !strings.Contains(view, "Side from main thread") || !strings.Contains(view, "ctrl+/ to switch") {
+	if view := model.viewString(); !strings.Contains(view, "Side from main thread") || !strings.Contains(view, "ctrl+/ to switch") {
 		t.Fatalf("side context missing:\n%s", view)
 	}
 
-	model.Update(key(bubbletea.KeyCtrlC))
+	model.Update(key(keymsg.KeyCtrlC))
 	if state.ThreadID != "thread-parent" {
 		t.Fatalf("thread id after side return = %q", state.ThreadID)
 	}
@@ -3345,9 +3347,9 @@ func TestModelSideReturnClosesRuntimeSideConversation(t *testing.T) {
 	})
 
 	typeText(t, model, "/side")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
-	_, cmd = model.Update(key(bubbletea.KeyCtrlC))
+	_, cmd = model.Update(key(keymsg.KeyCtrlC))
 	if cmd == nil {
 		t.Fatal("side Ctrl+C did not return close command")
 	}
@@ -3379,15 +3381,15 @@ func TestModelSideCloseFailureDoesNotReopenAbandonedSide(t *testing.T) {
 	})
 
 	typeText(t, model, "/side")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
-	_, cmd = model.Update(key(bubbletea.KeyCtrlC))
+	_, cmd = model.Update(key(keymsg.KeyCtrlC))
 	runTeaCmd(t, model, cmd)
 
 	if state.ThreadID != "thread-parent" {
 		t.Fatalf("thread id after failed background side close = %q, want parent", state.ThreadID)
 	}
-	if view := model.View(); strings.Contains(view, "Failed to close side conversation thread-side") {
+	if view := model.viewString(); strings.Contains(view, "Failed to close side conversation thread-side") {
 		t.Fatalf("background close failure reopened side state:\n%s", view)
 	}
 	before := len(state.Messages)
@@ -3409,21 +3411,21 @@ func TestModelSideParentStatusUpdatesFooter(t *testing.T) {
 	})
 
 	typeText(t, model, "/side")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 	model.Update(SideParentStatusChangeMsg{
 		ParentThreadID: "thread-parent",
 		Kind:           SideParentStatusChangeSet,
 		Status:         SideParentStatusNeedsApproval,
 	})
-	if view := model.View(); !strings.Contains(view, "main needs approval") {
+	if view := model.viewString(); !strings.Contains(view, "main needs approval") {
 		t.Fatalf("side footer missing parent status:\n%s", view)
 	}
 	model.Update(SideParentStatusChangeMsg{
 		ParentThreadID: "thread-parent",
 		Kind:           SideParentStatusChangeClearActionable,
 	})
-	if view := model.View(); strings.Contains(view, "main needs approval") {
+	if view := model.viewString(); strings.Contains(view, "main needs approval") {
 		t.Fatalf("side footer did not clear actionable status:\n%s", view)
 	}
 }
@@ -3441,21 +3443,21 @@ func TestModelSideKeepsParentTranscriptSnapshotUpdated(t *testing.T) {
 	})
 
 	typeText(t, model, "/side")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 	model.Update(ThreadScopedEventMsg{
 		ThreadID: "thread-parent",
 		Event:    protocol.AgentMessageDelta("item-parent", "background answer"),
 	})
-	if view := model.View(); strings.Contains(view, "background answer") {
+	if view := model.viewString(); strings.Contains(view, "background answer") {
 		t.Fatalf("parent transcript leaked into side view:\n%s", view)
 	}
 
-	model.Update(key(bubbletea.KeyCtrlC))
+	model.Update(key(keymsg.KeyCtrlC))
 	if state.ThreadID != "thread-parent" {
 		t.Fatalf("thread id after side return = %q", state.ThreadID)
 	}
-	if view := model.View(); !strings.Contains(view, "background answer") {
+	if view := model.viewString(); !strings.Contains(view, "background answer") {
 		t.Fatalf("parent transcript snapshot was not restored:\n%s", view)
 	}
 }
@@ -3472,14 +3474,14 @@ func TestModelSideRejectsUnavailableSlashCommands(t *testing.T) {
 	})
 
 	typeText(t, model, "/side")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 	typeText(t, model, "/review")
-	_, cmd = model.Update(key(bubbletea.KeyEnter))
+	_, cmd = model.Update(key(keymsg.KeyEnter))
 	if cmd != nil {
 		t.Fatalf("side /review returned cmd %#v", cmd)
 	}
-	if view := model.View(); !strings.Contains(view, "'/review' is unavailable in side conversations") {
+	if view := model.viewString(); !strings.Contains(view, "'/review' is unavailable in side conversations") {
 		t.Fatalf("missing side slash rejection:\n%s", view)
 	}
 }
@@ -3499,7 +3501,7 @@ func TestModelSideCommandStartsWhileParentTaskRunning(t *testing.T) {
 	})
 
 	typeText(t, model, "/side inspect")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	if cmd == nil {
 		t.Fatal("running /side did not return side start command")
 	}
@@ -3535,7 +3537,7 @@ func TestModelBtwCommandStartsSideWithPlainUserTurn(t *testing.T) {
 	})
 
 	typeText(t, model, "/btw !echo hello")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 
 	if captured.CommandName != "/btw" || captured.UserMessage != "!echo hello" {
@@ -3562,7 +3564,7 @@ func TestModelSideCommandRequiresStartedThread(t *testing.T) {
 	})
 
 	typeText(t, model, "/side explore")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	if cmd != nil {
 		t.Fatalf("/side without thread returned cmd %#v", cmd)
 	}
@@ -3589,12 +3591,12 @@ func TestModelSideCommandsAreUnavailableDuringReview(t *testing.T) {
 			})
 			model.reviewState.IsReviewMode = true
 			typeText(t, model, command)
-			_, cmd := model.Update(key(bubbletea.KeyEnter))
+			_, cmd := model.Update(key(keymsg.KeyEnter))
 			if cmd != nil || calls != 0 {
 				t.Fatalf("review side command returned cmd=%#v calls=%d", cmd, calls)
 			}
 			name := strings.Fields(command)[0]
-			if view := model.View(); !strings.Contains(view, "'"+name+"' is unavailable while code review is running.") {
+			if view := model.viewString(); !strings.Contains(view, "'"+name+"' is unavailable while code review is running.") {
 				t.Fatalf("missing review rejection:\n%s", view)
 			}
 		})
@@ -3611,14 +3613,14 @@ func TestModelSideRenameUsesEphemeralMessage(t *testing.T) {
 		},
 	})
 	typeText(t, model, "/side")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 	typeText(t, model, "/rename temporary")
-	_, cmd = model.Update(key(bubbletea.KeyEnter))
+	_, cmd = model.Update(key(keymsg.KeyEnter))
 	if cmd != nil {
 		t.Fatalf("side rename returned cmd %#v", cmd)
 	}
-	if view := model.View(); !strings.Contains(view, SideRenameBlockMessage) {
+	if view := model.viewString(); !strings.Contains(view, SideRenameBlockMessage) {
 		t.Fatalf("missing side rename message:\n%s", view)
 	}
 }
@@ -3634,18 +3636,18 @@ func TestModelInactiveParentCompletionStaysInSide(t *testing.T) {
 		},
 	})
 	typeText(t, model, "/side")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 	model.Update(TurnCompletedMsg{ThreadID: "thread-parent", AssistantMessage: "parent finished"})
 	if state.ThreadID != "thread-side" || state.Status != "idle" {
 		t.Fatalf("inactive completion changed side state thread=%q status=%q", state.ThreadID, state.Status)
 	}
-	if view := model.View(); !strings.Contains(view, "main finished") || strings.Contains(view, "parent finished") {
+	if view := model.viewString(); !strings.Contains(view, "main finished") || strings.Contains(view, "parent finished") {
 		t.Fatalf("inactive parent completion was not isolated:\n%s", view)
 	}
-	model.Update(key(bubbletea.KeyCtrlC))
-	if state.ThreadID != "thread-parent" || !strings.Contains(model.View(), "parent finished") {
-		t.Fatalf("parent completion was not restored with parent:\n%s", model.View())
+	model.Update(key(keymsg.KeyCtrlC))
+	if state.ThreadID != "thread-parent" || !strings.Contains(model.viewString(), "parent finished") {
+		t.Fatalf("parent completion was not restored with parent:\n%s", model.viewString())
 	}
 }
 
@@ -3661,9 +3663,9 @@ func TestModelSideStartErrorMapsMissingConversation(t *testing.T) {
 	})
 
 	typeText(t, model, "/side explore")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
-	if view := model.View(); !strings.Contains(view, SideNoStartedConversationMessage) {
+	if view := model.viewString(); !strings.Contains(view, SideNoStartedConversationMessage) {
 		t.Fatalf("missing mapped side error:\n%s", view)
 	}
 }
@@ -3682,9 +3684,9 @@ func TestModelReviewUncommittedPresetStartsRuntimeReview(t *testing.T) {
 	})
 
 	typeText(t, model, "/review")
-	model.Update(key(bubbletea.KeyEnter))
-	model.Update(key(bubbletea.KeyDown))
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
+	model.Update(key(keymsg.KeyDown))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	if cmd == nil {
 		t.Fatal("/review uncommitted did not return review/start command")
 	}
@@ -3715,16 +3717,16 @@ func TestModelReviewBranchPickerStartsRuntimeReview(t *testing.T) {
 	})
 
 	typeText(t, model, "/review")
-	model.Update(key(bubbletea.KeyEnter))
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	if cmd == nil {
 		t.Fatal("review branch picker did not return branch reader command")
 	}
 	runTeaCmd(t, model, cmd)
-	if view := model.View(); !strings.Contains(view, "Select a base branch") || !strings.Contains(view, "feature -> main") {
+	if view := model.viewString(); !strings.Contains(view, "Select a base branch") || !strings.Contains(view, "feature -> main") {
 		t.Fatalf("branch picker missing:\n%s", view)
 	}
-	_, cmd = model.Update(key(bubbletea.KeyEnter))
+	_, cmd = model.Update(key(keymsg.KeyEnter))
 	if cmd == nil {
 		t.Fatal("review branch selection did not return review/start command")
 	}
@@ -3754,18 +3756,18 @@ func TestModelReviewCommitPickerStartsRuntimeReview(t *testing.T) {
 	})
 
 	typeText(t, model, "/review")
-	model.Update(key(bubbletea.KeyEnter))
-	model.Update(key(bubbletea.KeyDown))
-	model.Update(key(bubbletea.KeyDown))
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
+	model.Update(key(keymsg.KeyDown))
+	model.Update(key(keymsg.KeyDown))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	if cmd == nil {
 		t.Fatal("review commit picker did not return commit reader command")
 	}
 	runTeaCmd(t, model, cmd)
-	if view := model.View(); !strings.Contains(view, "Select a commit to review") || !strings.Contains(view, "Fix auth") {
+	if view := model.viewString(); !strings.Contains(view, "Select a commit to review") || !strings.Contains(view, "Fix auth") {
 		t.Fatalf("commit picker missing:\n%s", view)
 	}
-	_, cmd = model.Update(key(bubbletea.KeyEnter))
+	_, cmd = model.Update(key(keymsg.KeyEnter))
 	if cmd == nil {
 		t.Fatal("review commit selection did not return review/start command")
 	}
@@ -3802,20 +3804,20 @@ func TestModelSkillsManageReadsRuntimeInventory(t *testing.T) {
 	})
 
 	typeText(t, model, "/skills")
-	model.Update(key(bubbletea.KeyEnter))
-	model.Update(key(bubbletea.KeyDown))
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
+	model.Update(key(keymsg.KeyDown))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	if cmd == nil {
 		t.Fatal("/skills manage did not return skills reader command")
 	}
-	if !strings.Contains(model.View(), "Loading skills") {
-		t.Fatalf("skills loading view missing:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Loading skills") {
+		t.Fatalf("skills loading view missing:\n%s", model.viewString())
 	}
 	runTeaCmd(t, model, cmd)
 	if calls != 1 {
 		t.Fatalf("skills reader calls = %d, want 1", calls)
 	}
-	view := model.View()
+	view := model.viewString()
 	for _, want := range []string{"Enable/Disable Skills", "Turn skills on or off", "[x] review (Docs)", "Review code"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("skills view missing %q:\n%s", want, view)
@@ -3855,12 +3857,12 @@ func TestModelSkillsManageWritesSummarizesAndReloads(t *testing.T) {
 	})
 
 	typeText(t, model, "/skills")
-	model.Update(key(bubbletea.KeyEnter))
-	model.Update(key(bubbletea.KeyDown))
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
+	model.Update(key(keymsg.KeyDown))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 
-	_, cmd = model.Update(key(bubbletea.KeySpace))
+	_, cmd = model.Update(key(keymsg.KeySpace))
 	if cmd == nil {
 		t.Fatal("skill toggle did not return config write command")
 	}
@@ -3869,7 +3871,7 @@ func TestModelSkillsManageWritesSummarizesAndReloads(t *testing.T) {
 		t.Fatalf("write calls/enabled = %d/%v, want 1/false", writeCalls, enabled)
 	}
 
-	_, cmd = model.Update(key(bubbletea.KeyEsc))
+	_, cmd = model.Update(key(keymsg.KeyEsc))
 	if cmd == nil {
 		t.Fatal("closing skills manager did not force inventory reload")
 	}
@@ -3880,7 +3882,7 @@ func TestModelSkillsManageWritesSummarizesAndReloads(t *testing.T) {
 	if model.modal != nil {
 		t.Fatalf("skills manager remained open after close")
 	}
-	if view := model.View(); !strings.Contains(view, "Disabled 1 skill") {
+	if view := model.viewString(); !strings.Contains(view, "Disabled 1 skill") {
 		t.Fatalf("skills change summary missing:\n%s", view)
 	}
 }
@@ -3903,16 +3905,16 @@ func TestModelSkillsManageWriteFailureDoesNotCountAsChange(t *testing.T) {
 	})
 
 	typeText(t, model, "/skills")
-	model.Update(key(bubbletea.KeyEnter))
-	model.Update(key(bubbletea.KeyDown))
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
+	model.Update(key(keymsg.KeyDown))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
-	_, cmd = model.Update(key(bubbletea.KeyEnter))
+	_, cmd = model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
-	_, cmd = model.Update(key(bubbletea.KeyEsc))
+	_, cmd = model.Update(key(keymsg.KeyEsc))
 	runTeaCmd(t, model, cmd)
 
-	view := model.View()
+	view := model.viewString()
 	want := "Failed to update skill config for " + skillPath + ": permission denied"
 	if !strings.Contains(view, want) {
 		t.Fatalf("skills write error missing %q:\n%s", want, view)
@@ -3952,21 +3954,21 @@ func TestModelSkillPopupReadsRuntimeInventoryAndInsertsSkill(t *testing.T) {
 	})
 
 	_, cmd := model.Update(runes("$"))
-	if !strings.Contains(model.View(), "Loading skills") {
-		t.Fatalf("skill popup loading view missing:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Loading skills") {
+		t.Fatalf("skill popup loading view missing:\n%s", model.viewString())
 	}
 	runTeaCmd(t, model, cmd)
 	if calls != 1 {
 		t.Fatalf("skills reader calls = %d, want 1", calls)
 	}
-	view := model.View()
+	view := model.viewString()
 	for _, want := range []string{"Image Gen", "Generate or edit images"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("skill popup missing %q:\n%s", want, view)
 		}
 	}
 
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if got := model.ComposerValue(); got != "$imagegen " {
 		t.Fatalf("composer = %q, want $imagegen space", got)
 	}
@@ -4000,8 +4002,8 @@ func TestModelSkillPopupSubmissionCarriesMentionBindingAndCatalog(t *testing.T) 
 
 	_, cmd := model.Update(runes("$"))
 	runTeaCmd(t, model, cmd)
-	model.Update(key(bubbletea.KeyEnter))
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 
 	if len(requests) != 1 {
 		t.Fatalf("requests = %#v", requests)
@@ -4050,17 +4052,17 @@ func TestModelReopeningIdenticalUnifiedMentionRestartsFileSearch(t *testing.T) {
 		},
 	})
 	model.composer.SetValue("@foo @foo")
-	model.composer.SetCursor(4)
+	model.composer.SetCursorColumn(4)
 	runTeaCmd(t, model, model.refreshSkillPopup())
 	if !reflect.DeepEqual(queries, []string{"", "foo"}) {
 		t.Fatalf("first queries = %#v", queries)
 	}
-	model.Update(key(bubbletea.KeyEsc))
+	model.Update(key(keymsg.KeyEsc))
 	if model.mentionPopup != nil {
 		t.Fatal("mention popup should close on escape")
 	}
 
-	model.composer.SetCursor(len([]rune("@foo @foo")))
+	model.composer.SetCursorColumn(len([]rune("@foo @foo")))
 	runTeaCmd(t, model, model.refreshSkillPopup())
 	if !reflect.DeepEqual(queries, []string{"", "foo", "", "foo"}) {
 		t.Fatalf("reopen queries = %#v", queries)
@@ -4145,8 +4147,8 @@ func TestModelSkillsListMenuOpensSkillPopup(t *testing.T) {
 	})
 
 	typeText(t, model, "/skills")
-	model.Update(key(bubbletea.KeyEnter))
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	if cmd == nil {
 		t.Fatal("/skills list did not request skills inventory")
 	}
@@ -4155,7 +4157,7 @@ func TestModelSkillsListMenuOpensSkillPopup(t *testing.T) {
 		t.Fatalf("composer = %q, want $", got)
 	}
 	runTeaCmd(t, model, cmd)
-	view := model.View()
+	view := model.viewString()
 	for _, want := range []string{"OpenAI Docs", "Reference OpenAI docs"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("/skills list popup missing %q:\n%s", want, view)
@@ -4170,11 +4172,11 @@ func TestModelSkillsListMenuUsesLegacyDollarShortcutWhenMentionsV2Disabled(t *te
 		FeatureSettings: map[string]bool{"mentions_v2": false},
 	})
 	typeText(t, model, "/skills")
-	model.Update(key(bubbletea.KeyEnter))
-	if view := model.View(); !strings.Contains(view, "press $ to open") {
+	model.Update(key(keymsg.KeyEnter))
+	if view := model.viewString(); !strings.Contains(view, "press $ to open") {
 		t.Fatalf("legacy skills shortcut hint missing:\n%s", view)
 	}
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if got := model.ComposerValue(); got != "$" {
 		t.Fatalf("composer = %q, want $", got)
 	}
@@ -4185,7 +4187,7 @@ func TestModelAppliesHistoryCellMessages(t *testing.T) {
 	model := NewModel(state, Options{Width: 80, Height: 24})
 
 	model.Update(HistoryCellMsg{Cell: historycell.NewInfoEvent("Background task finished", "open /ps")})
-	view := model.View()
+	view := model.viewString()
 	if !strings.Contains(view, "• Background task finished open /ps") {
 		t.Fatalf("View() missing history cell:\n%s", view)
 	}
@@ -4224,8 +4226,8 @@ func TestModelConsumesStreamChannel(t *testing.T) {
 	if got := countRole(state.Messages, codextui.RoleAssistant); got != 1 {
 		t.Fatalf("assistant message count = %d, want 1; messages=%#v", got, state.Messages)
 	}
-	if !strings.Contains(model.View(), "streamed") {
-		t.Fatalf("View() missing streamed text:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "streamed") {
+		t.Fatalf("View() missing streamed text:\n%s", model.viewString())
 	}
 }
 
@@ -4267,25 +4269,25 @@ func TestModelApprovalModalRespondsToShortcut(t *testing.T) {
 		Title:   "Run command?",
 		Command: "go test ./...",
 	})
-	view := model.View()
+	view := model.viewString()
 	for _, want := range []string{"Run command?", "$ go test ./...", "Yes, proceed (y)", "No, and tell Codex what to do differently (esc)"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("approval modal missing %q:\n%s", want, view)
 		}
 	}
 
-	model.Update(bubbletea.KeyMsg(bubbletea.Key{Type: bubbletea.KeyRunes, Runes: []rune{'d'}}))
+	model.Update(keymsg.KeyMsg(keymsg.Key{Type: keymsg.KeyRunes, Runes: []rune{'d'}}))
 	if len(responses) != 1 {
 		t.Fatalf("responses len = %d, want 1", len(responses))
 	}
 	if responses[0].ID != "approval-1" || responses[0].Kind != ModalKindApproval || responses[0].OptionID != "deny" || responses[0].Cancelled {
 		t.Fatalf("response = %#v", responses[0])
 	}
-	if strings.Contains(model.View(), "Run command?") {
-		t.Fatalf("modal should be closed:\n%s", model.View())
+	if strings.Contains(model.viewString(), "Run command?") {
+		t.Fatalf("modal should be closed:\n%s", model.viewString())
 	}
-	if !strings.Contains(model.View(), "No, and tell Codex what to do differently") {
-		t.Fatalf("notice should include selected label:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "No, and tell Codex what to do differently") {
+		t.Fatalf("notice should include selected label:\n%s", model.viewString())
 	}
 }
 
@@ -4316,13 +4318,13 @@ func TestModelElicitationApprovalRespondsWithDecision(t *testing.T) {
 			},
 		},
 	})
-	view := model.View()
+	view := model.viewString()
 	for _, want := range []string{"MCP request from docs", "Allow docs search?", "Allow session", "Decline"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("elicitation modal missing %q:\n%s", want, view)
 		}
 	}
-	model.Update(bubbletea.KeyMsg(bubbletea.Key{Type: bubbletea.KeyRunes, Runes: []rune{'a'}}))
+	model.Update(keymsg.KeyMsg(keymsg.Key{Type: keymsg.KeyRunes, Runes: []rune{'a'}}))
 	if len(responses) != 1 {
 		t.Fatalf("responses len = %d, want 1", len(responses))
 	}
@@ -4360,7 +4362,7 @@ func TestModelElicitationFormSubmitsDefaultContent(t *testing.T) {
 			},
 		},
 	})
-	model.Update(bubbletea.KeyMsg(bubbletea.Key{Type: bubbletea.KeyRunes, Runes: []rune{'y'}}))
+	model.Update(keymsg.KeyMsg(keymsg.Key{Type: keymsg.KeyRunes, Runes: []rune{'y'}}))
 	if len(responses) != 1 {
 		t.Fatalf("responses len = %d, want 1", len(responses))
 	}
@@ -4389,15 +4391,15 @@ func TestModelElicitationRequiredFieldStaysOpen(t *testing.T) {
 			},
 		},
 	})
-	model.Update(bubbletea.KeyMsg(bubbletea.Key{Type: bubbletea.KeyRunes, Runes: []rune{'y'}}))
+	model.Update(keymsg.KeyMsg(keymsg.Key{Type: keymsg.KeyRunes, Runes: []rune{'y'}}))
 	if len(responses) != 0 {
 		t.Fatalf("responses = %#v, want none while invalid", responses)
 	}
-	view := model.View()
+	view := model.viewString()
 	if !strings.Contains(view, `field "email" is required`) || !strings.Contains(view, "Configure docs") {
 		t.Fatalf("view after invalid submit =\n%s", view)
 	}
-	model.Update(key(bubbletea.KeyEsc))
+	model.Update(key(keymsg.KeyEsc))
 	if len(responses) != 1 || responses[0].Elicitation == nil || responses[0].Elicitation.Action != "cancel" {
 		t.Fatalf("cancel response = %#v", responses)
 	}
@@ -4421,8 +4423,8 @@ func TestModelModalNavigationAndCancel(t *testing.T) {
 		},
 	})
 
-	model.Update(key(bubbletea.KeyDown))
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyDown))
+	model.Update(key(keymsg.KeyEnter))
 	if len(responses) != 1 || responses[0].OptionID != "b" || responses[0].Cancelled {
 		t.Fatalf("responses = %#v", responses)
 	}
@@ -4433,7 +4435,7 @@ func TestModelModalNavigationAndCancel(t *testing.T) {
 		Title:   "Pick again",
 		Options: []ModalOption{{ID: "a", Label: "Alpha"}},
 	})
-	model.Update(key(bubbletea.KeyEsc))
+	model.Update(key(keymsg.KeyEsc))
 	if len(responses) != 2 || !responses[1].Cancelled || responses[1].ID != "picker-2" {
 		t.Fatalf("responses = %#v", responses)
 	}
@@ -4451,8 +4453,8 @@ func TestModelModalBlocksComposerInput(t *testing.T) {
 	if got := model.ComposerValue(); got != "" {
 		t.Fatalf("composer value = %q, want empty while modal active", got)
 	}
-	if !strings.Contains(model.View(), "Confirm") {
-		t.Fatalf("modal should still be active:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Confirm") {
+		t.Fatalf("modal should still be active:\n%s", model.viewString())
 	}
 }
 
@@ -4475,12 +4477,12 @@ func TestModelSlashCommands(t *testing.T) {
 		t.Fatalf("slash command should not submit a prompt")
 	}
 	// Rust #54378: an inline selection reports the session-only confirmation.
-	if !strings.Contains(model.View(), "Model changed to gpt-5 default for this session only") {
-		t.Fatalf("View() missing model notice:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Model changed to gpt-5 default for this session only") {
+		t.Fatalf("View() missing model notice:\n%s", model.viewString())
 	}
 
 	typeText(t, model, "/approval always")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if len(model.SubmittedPrompts()) != 0 {
 		t.Fatalf("/approval must not reach the model: %#v", model.SubmittedPrompts())
 	}
@@ -4489,30 +4491,30 @@ func TestModelSlashCommands(t *testing.T) {
 	}
 
 	typeText(t, model, "/clear")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if len(state.Messages) != 0 {
 		t.Fatalf("Messages len = %d, want 0", len(state.Messages))
 	}
 	if state.ThreadID != "" || state.Status != "idle" {
 		t.Fatalf("clear state = thread %q status %q, want fresh idle session", state.ThreadID, state.Status)
 	}
-	if !strings.Contains(model.View(), "No messages yet.") {
-		t.Fatalf("View() missing empty transcript:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "No messages yet.") {
+		t.Fatalf("View() missing empty transcript:\n%s", model.viewString())
 	}
 
 	state.SetThreadID("thread-before-named-clear")
 	state.AddMessage(codextui.RoleUser, "old again")
 	typeText(t, model, "/clear Release triage")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if state.ThreadID != "" || state.ThreadName != "Release triage" || len(state.Messages) != 0 {
 		t.Fatalf("named clear state = thread %q name %q messages %d", state.ThreadID, state.ThreadName, len(state.Messages))
 	}
-	if !strings.Contains(model.View(), "Started a new session named Release triage.") {
-		t.Fatalf("View() missing named clear notice:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Started a new session named Release triage.") {
+		t.Fatalf("View() missing named clear notice:\n%s", model.viewString())
 	}
 
 	typeText(t, model, "/new Follow-up")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if state.ThreadName != "Follow-up" {
 		t.Fatalf("named new ThreadName = %q, want Follow-up", state.ThreadName)
 	}
@@ -4533,20 +4535,20 @@ func TestModelRenameCommandOpensPrefilledPromptAndPersists(t *testing.T) {
 	})
 
 	typeText(t, model, "/rename")
-	model.Update(key(bubbletea.KeyEnter))
-	view := model.View()
+	model.Update(key(keymsg.KeyEnter))
+	view := model.viewString()
 	if !strings.Contains(view, "Rename thread") || !strings.Contains(view, "Current project title") || !strings.Contains(view, "Press enter to submit or esc to cancel") {
 		t.Fatalf("rename prompt view:\n%s", view)
 	}
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if model.modal != nil {
 		t.Fatalf("modal = %#v, want closed after rename", model.modal)
 	}
 	if renamedThreadID != "thread-rename" || renamedName != "Current project title" {
 		t.Fatalf("rename callback = (%q, %q)", renamedThreadID, renamedName)
 	}
-	if state.ThreadName != "Current project title" || !strings.Contains(model.View(), "Thread renamed to Current project title.") {
-		t.Fatalf("renamed state=%q view:\n%s", state.ThreadName, model.View())
+	if state.ThreadName != "Current project title" || !strings.Contains(model.viewString(), "Thread renamed to Current project title.") {
+		t.Fatalf("renamed state=%q view:\n%s", state.ThreadName, model.viewString())
 	}
 }
 
@@ -4565,7 +4567,7 @@ func TestModelRenameCommandAcceptsInlineName(t *testing.T) {
 	})
 
 	typeText(t, model, "/rename Release triage")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if calls != 1 || state.ThreadName != "Release triage" {
 		t.Fatalf("calls=%d ThreadName=%q", calls, state.ThreadName)
 	}
@@ -4582,15 +4584,15 @@ func TestModelRenamePromptStartsEmptyAndCanCancel(t *testing.T) {
 	})
 
 	typeText(t, model, "/rename")
-	model.Update(key(bubbletea.KeyEnter))
-	if view := model.View(); !strings.Contains(view, "Name thread") || !strings.Contains(view, "Type a name and press Enter") {
+	model.Update(key(keymsg.KeyEnter))
+	if view := model.viewString(); !strings.Contains(view, "Name thread") || !strings.Contains(view, "Type a name and press Enter") {
 		t.Fatalf("empty rename prompt:\n%s", view)
 	}
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if model.modal == nil {
 		t.Fatal("empty Enter unexpectedly closed rename prompt")
 	}
-	model.Update(key(bubbletea.KeyEsc))
+	model.Update(key(keymsg.KeyEsc))
 	if model.modal != nil {
 		t.Fatalf("modal = %#v, want cancelled", model.modal)
 	}
@@ -4609,7 +4611,7 @@ func TestModelNamedNewSessionPersistsNameWhenThreadStarts(t *testing.T) {
 	})
 
 	typeText(t, model, "/new Follow-up")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if renamedThreadID != "" || !model.pendingThreadName {
 		t.Fatalf("rename before thread start = (%q, %q), pending=%v", renamedThreadID, renamedName, model.pendingThreadName)
 	}
@@ -4629,7 +4631,7 @@ func TestModelLogoutExitsOnlyAfterCleanupSucceeds(t *testing.T) {
 	})
 
 	typeText(t, model, "/logout")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	if cmd == nil || calls != 0 {
 		t.Fatalf("logout command = %v calls=%d, want asynchronous cleanup", cmd, calls)
 	}
@@ -4654,14 +4656,14 @@ func TestModelLogoutFailureStaysOpenAndShowsError(t *testing.T) {
 	})
 
 	typeText(t, model, "/logout")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	_, quitCmd := model.Update(cmd())
 	if quitCmd != nil {
 		if _, ok := quitCmd().(bubbletea.QuitMsg); ok {
 			t.Fatal("failed logout unexpectedly requested exit")
 		}
 	}
-	if view := model.View(); !strings.Contains(view, "Logout failed: credentials store is locked") {
+	if view := model.viewString(); !strings.Contains(view, "Logout failed: credentials store is locked") {
 		t.Fatalf("logout failure view:\n%s", view)
 	}
 }
@@ -4670,22 +4672,22 @@ func TestModelInputHistoryUpDownRestoresDraft(t *testing.T) {
 	model := NewModel(codextui.NewState(nil), Options{})
 	for _, prompt := range []string{"first prompt", "second prompt"} {
 		typeText(t, model, prompt)
-		model.Update(key(bubbletea.KeyEnter))
+		model.Update(key(keymsg.KeyEnter))
 	}
 	typeText(t, model, "draft")
-	model.Update(key(bubbletea.KeyUp))
+	model.Update(key(keymsg.KeyUp))
 	if got := model.ComposerValue(); got != "second prompt" {
 		t.Fatalf("first up = %q", got)
 	}
-	model.Update(key(bubbletea.KeyUp))
+	model.Update(key(keymsg.KeyUp))
 	if got := model.ComposerValue(); got != "first prompt" {
 		t.Fatalf("second up = %q", got)
 	}
-	model.Update(key(bubbletea.KeyDown))
+	model.Update(key(keymsg.KeyDown))
 	if got := model.ComposerValue(); got != "second prompt" {
 		t.Fatalf("first down = %q", got)
 	}
-	model.Update(key(bubbletea.KeyDown))
+	model.Update(key(keymsg.KeyDown))
 	if got := model.ComposerValue(); got != "draft" {
 		t.Fatalf("restored draft = %q", got)
 	}
@@ -4712,7 +4714,7 @@ func TestModelVisibleSlashCommandsProduceUserVisibleResult(t *testing.T) {
 				options.FeatureSettings = map[string]bool{"cli_daybreak": true}
 			}
 			model := NewModel(state, options)
-			beforeView := utils.StripANSI(model.View())
+			beforeView := utils.StripANSI(model.viewString())
 			beforeNotice := model.notice
 			beforeModal := model.modal
 			beforeSubmitted := len(model.SubmittedRequests())
@@ -4724,7 +4726,7 @@ func TestModelVisibleSlashCommandsProduceUserVisibleResult(t *testing.T) {
 			}
 			runTeaCmd(t, model, model.applyCommand(invocation))
 
-			afterView := utils.StripANSI(model.View())
+			afterView := utils.StripANSI(model.viewString())
 			changed := afterView != beforeView ||
 				model.notice != beforeNotice ||
 				model.modal != beforeModal ||
@@ -4767,7 +4769,7 @@ func TestModelSlashCommandPopupFiltersCompletesAndDispatches(t *testing.T) {
 			t.Fatalf("Rust-aligned default popup contains hidden command /%s", item.Name)
 		}
 	}
-	view := model.View()
+	view := model.viewString()
 	for _, want := range []string{codextui.SelectionPrefix(true) + "/model", "choose what model and reasoning effort to use"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("slash popup view missing %q:\n%s", want, view)
@@ -4779,7 +4781,7 @@ func TestModelSlashCommandPopupFiltersCompletesAndDispatches(t *testing.T) {
 		t.Fatalf("filtered slash popup items = %#v, want only model", model.slashPopup.Items)
 	}
 	now = now.Add(bottompane.PasteBurstCharInterval + time.Millisecond)
-	model.Update(key(bubbletea.KeyTab))
+	model.Update(key(keymsg.KeyTab))
 	if got := model.ComposerValue(); got != "/model " {
 		t.Fatalf("composer after Tab completion = %q, want /model space", got)
 	}
@@ -4789,24 +4791,24 @@ func TestModelSlashCommandPopupFiltersCompletesAndDispatches(t *testing.T) {
 
 	model = NewModel(codextui.NewState(nil), Options{Width: 100, Height: 24})
 	typeText(t, model, "/")
-	model.Update(key(bubbletea.KeyDown))
+	model.Update(key(keymsg.KeyDown))
 	if got := model.selectedSlashPopupName(); got != "presets" {
 		t.Fatalf("selected after Down = %q, want presets", got)
 	}
-	if view := model.View(); !strings.Contains(view, codextui.SelectionPrefix(true)+"/presets") {
+	if view := model.viewString(); !strings.Contains(view, codextui.SelectionPrefix(true)+"/presets") {
 		t.Fatalf("slash popup should render selected color row for /presets:\n%s", view)
 	}
 
 	model = NewModel(codextui.NewState(nil), Options{Width: 100, Height: 24})
 	typeText(t, model, "/")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if model.slashPopup.Active {
 		t.Fatal("slash popup should close after Enter dispatch")
 	}
 	if got := model.ComposerValue(); got != "" {
 		t.Fatalf("composer after Enter dispatch = %q, want empty", got)
 	}
-	if view := model.View(); !strings.Contains(view, "Select Model") {
+	if view := model.viewString(); !strings.Contains(view, "Select Model") {
 		t.Fatalf("Enter on /model should open model picker:\n%s", view)
 	}
 
@@ -4851,7 +4853,7 @@ func TestModelSlashInlineArgumentDispatchMatchesRust(t *testing.T) {
 		return nil
 	}})
 	typeText(t, model, "/model gpt-new")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if len(requests) != 0 || state.Model != "" {
 		t.Fatalf("inline /model args should dispatch locally: model=%q requests=%#v", state.Model, requests)
 	}
@@ -4865,7 +4867,7 @@ func TestModelSlashInlineArgumentDispatchMatchesRust(t *testing.T) {
 		return nil
 	}})
 	typeText(t, model, "/raw on")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if !model.rawOutput {
 		t.Fatal("supported /raw on did not dispatch")
 	}
@@ -4874,7 +4876,7 @@ func TestModelSlashInlineArgumentDispatchMatchesRust(t *testing.T) {
 	// with an info line (chatwidget/slash_dispatch.rs find_slash_command) and
 	// must never be turned into a prompt.
 	typeText(t, model, "/approval never")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if state.ApprovalPolicy == "never" {
 		t.Fatal("/approval must not change the approval policy")
 	}
@@ -4893,7 +4895,7 @@ func TestModelSlashInitSubmitsRustPromptRegardlessOfLoadedInstructions(t *testin
 	}})
 
 	typeText(t, model, "/init")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 
 	if len(requests) != 1 || requests[0].Prompt != initCommandPrompt() {
 		t.Fatalf("/init requests = %#v", requests)
@@ -4938,7 +4940,7 @@ func TestModelSlashCompactStartsRuntimeClearsUsageAndDrainsQueuedInput(t *testin
 	})
 
 	typeText(t, model, "/compact")
-	_, compactCmd := model.Update(key(bubbletea.KeyEnter))
+	_, compactCmd := model.Update(key(keymsg.KeyEnter))
 	if compactCmd == nil || compactThreadID != "thread-compact" || state.Status != "running" {
 		t.Fatalf("compact cmd=%v thread=%q status=%q", compactCmd, compactThreadID, state.Status)
 	}
@@ -4952,7 +4954,7 @@ func TestModelSlashCompactStartsRuntimeClearsUsageAndDrainsQueuedInput(t *testin
 	}
 
 	typeText(t, model, "queued after compact")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if got := model.QueuedRequests(); len(got) != 1 || got[0].Prompt != "queued after compact" {
 		t.Fatalf("queued requests = %#v", got)
 	}
@@ -4970,19 +4972,19 @@ func TestModelSlashCompactFailureReturnsIdleAndShowsError(t *testing.T) {
 	}})
 
 	typeText(t, model, "/compact")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	model.Update(cmd())
 
-	if state.Status != "idle" || !strings.Contains(utils.StripANSI(model.View()), "Compaction: summary failed") {
-		t.Fatalf("status=%q view=%s", state.Status, model.View())
+	if state.Status != "idle" || !strings.Contains(utils.StripANSI(model.viewString()), "Compaction: summary failed") {
+		t.Fatalf("status=%q view=%s", state.Status, model.viewString())
 	}
 }
 
 func TestModelContextCompactionCompletionAddsRustHistoryMarker(t *testing.T) {
 	model := NewModel(codextui.NewState(nil), Options{})
 	model.applyItemCompleted(&protocol.ThreadItem{ID: "compact-item", Type: "contextCompaction"})
-	if !strings.Contains(utils.StripANSI(model.View()), "Context compacted") {
-		t.Fatalf("compaction marker missing:\n%s", model.View())
+	if !strings.Contains(utils.StripANSI(model.viewString()), "Context compacted") {
+		t.Fatalf("compaction marker missing:\n%s", model.viewString())
 	}
 }
 
@@ -4996,8 +4998,8 @@ func TestModelLiveContextCompactionTracksElapsedAndCompletesWithDuration(t *test
 	if !model.compactionActive || model.compactionID != "compact-live" || model.compactionStartedAt.IsZero() {
 		t.Fatalf("live compaction state = active:%v id:%q started:%v", model.compactionActive, model.compactionID, model.compactionStartedAt)
 	}
-	if !strings.Contains(utils.StripANSI(model.View()), "Compacting context") {
-		t.Fatalf("live compaction row missing:\n%s", model.View())
+	if !strings.Contains(utils.StripANSI(model.viewString()), "Compacting context") {
+		t.Fatalf("live compaction row missing:\n%s", model.viewString())
 	}
 
 	// A duplicate start for the same id must keep the original wall clock.
@@ -5005,14 +5007,14 @@ func TestModelLiveContextCompactionTracksElapsedAndCompletesWithDuration(t *test
 	model.now = func() time.Time { return now }
 	model.applyItemStarted(&protocol.ThreadItem{ID: "compact-live", Type: "contextCompaction"}, 0)
 	model.renderRetryActivity()
-	if got := utils.StripANSI(model.View()); !strings.Contains(got, "Compacting context... (30s)") {
+	if got := utils.StripANSI(model.viewString()); !strings.Contains(got, "Compacting context... (30s)") {
 		t.Fatalf("duplicate start reset the compaction timer:\n%s", got)
 	}
 
 	now = now.Add(45 * time.Second)
 	model.now = func() time.Time { return now }
 	model.renderRetryActivity()
-	if got := utils.StripANSI(model.View()); !strings.Contains(got, "Compacting context... (1m 15s)") {
+	if got := utils.StripANSI(model.viewString()); !strings.Contains(got, "Compacting context... (1m 15s)") {
 		t.Fatalf("compaction timer did not advance to 1m 15s:\n%s", got)
 	}
 
@@ -5020,7 +5022,7 @@ func TestModelLiveContextCompactionTracksElapsedAndCompletesWithDuration(t *test
 	if model.compactionActive {
 		t.Fatalf("compaction still active after completion: %#v", model.compactionStartedAt)
 	}
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "Context compacted · 1m 15s") {
 		t.Fatalf("live completion duration missing:\n%s", view)
 	}
@@ -5035,12 +5037,12 @@ func TestModelContextCompactionStartedAtRestoresInFlightTimer(t *testing.T) {
 
 	model.applyItemStarted(&protocol.ThreadItem{ID: "compact-snapshot", Type: "contextCompaction"}, startedAtMS)
 	model.renderRetryActivity()
-	if got := utils.StripANSI(model.View()); !strings.Contains(got, "Compacting context... (1m 30s)") {
+	if got := utils.StripANSI(model.viewString()); !strings.Contains(got, "Compacting context... (1m 30s)") {
 		t.Fatalf("snapshot compaction did not restore elapsed time:\n%s", got)
 	}
 
 	model.applyItemCompleted(&protocol.ThreadItem{ID: "compact-snapshot", Type: "contextCompaction"})
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "Context compacted · 1m 30s") {
 		t.Fatalf("snapshot completion duration missing:\n%s", view)
 	}
@@ -5068,12 +5070,12 @@ func TestModelCompactionSurvivesTransientRetryStatus(t *testing.T) {
 	model.applyItemStarted(&protocol.ThreadItem{ID: "compact-retry", Type: "contextCompaction"}, 0)
 
 	model.Update(ModelRetryStatusMsg{Message: "Reconnecting... 2/5", Active: true})
-	if got := utils.StripANSI(model.View()); !strings.Contains(got, "Reconnecting... 2/5") || strings.Contains(got, "Compacting context") {
+	if got := utils.StripANSI(model.viewString()); !strings.Contains(got, "Reconnecting... 2/5") || strings.Contains(got, "Compacting context") {
 		t.Fatalf("retry status did not take precedence over compaction:\n%s", got)
 	}
 
 	model.Update(ModelRetryStatusMsg{Active: false})
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if !model.compactionActive || !strings.Contains(view, "Compacting context...") {
 		t.Fatalf("compaction row not restored after transient retry: active=%v\n%s", model.compactionActive, view)
 	}
@@ -5088,7 +5090,7 @@ func TestModelRendersCanonicalMultiAgentLifecycleWithoutCiphertext(t *testing.T)
 	activity := &protocol.ThreadItem{ID: "spawn", Type: "sub_agent_activity", ActivityKind: "started", AgentPath: "/root/worker"}
 	model.applyItemStarted(activity, 0)
 	model.applyItemCompleted(activity)
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	for _, want := range []string{"Waiting for agents", "Finished waiting", "No agents completed yet"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("multi-agent view missing %q:\n%s", want, view)
@@ -5134,11 +5136,11 @@ func TestModelIDECommandEnablesReportsStatusInjectsAndDisables(t *testing.T) {
 	})
 
 	typeText(t, model, "/ide on")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if !model.ideContext.Enabled || reads != 1 {
 		t.Fatalf("IDE enabled=%v reads=%d", model.ideContext.Enabled, reads)
 	}
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	for _, want := range []string{"IDE context is on.", "Future messages will include", "IDE context"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("enabled IDE view missing %q:\n%s", want, view)
@@ -5146,7 +5148,7 @@ func TestModelIDECommandEnablesReportsStatusInjectsAndDisables(t *testing.T) {
 	}
 
 	typeText(t, model, "review this")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if reads != 2 || len(requests) != 1 || requests[0].IDEContext == nil {
 		t.Fatalf("IDE submission reads=%d requests=%#v", reads, requests)
 	}
@@ -5156,9 +5158,9 @@ func TestModelIDECommandEnablesReportsStatusInjectsAndDisables(t *testing.T) {
 
 	model.setStatus("idle")
 	typeText(t, model, "/ide off")
-	model.Update(key(bubbletea.KeyEnter))
-	if model.ideContext.Enabled || reads != 2 || !strings.Contains(model.View(), "IDE context is off.") {
-		t.Fatalf("IDE disable enabled=%v reads=%d view=%s", model.ideContext.Enabled, reads, model.View())
+	model.Update(key(keymsg.KeyEnter))
+	if model.ideContext.Enabled || reads != 2 || !strings.Contains(model.viewString(), "IDE context is off.") {
+		t.Fatalf("IDE disable enabled=%v reads=%d view=%s", model.ideContext.Enabled, reads, model.viewString())
 	}
 }
 
@@ -5175,21 +5177,21 @@ func TestModelIDECommandFailureAndPromptWarningMatchRust(t *testing.T) {
 	})
 
 	typeText(t, model, "/ide status")
-	model.Update(key(bubbletea.KeyEnter))
-	if reads != 0 || !strings.Contains(model.View(), "IDE context is off.") {
-		t.Fatalf("disabled status reads=%d view=%s", reads, model.View())
+	model.Update(key(keymsg.KeyEnter))
+	if reads != 0 || !strings.Contains(model.viewString(), "IDE context is off.") {
+		t.Fatalf("disabled status reads=%d view=%s", reads, model.viewString())
 	}
 	typeText(t, model, "/ide on")
-	model.Update(key(bubbletea.KeyEnter))
-	if !model.ideContext.Enabled || reads != 1 || !strings.Contains(model.View(), "Connected to your IDE.") {
-		t.Fatalf("enable result enabled=%v reads=%d view=%s", model.ideContext.Enabled, reads, model.View())
+	model.Update(key(keymsg.KeyEnter))
+	if !model.ideContext.Enabled || reads != 1 || !strings.Contains(model.viewString(), "Connected to your IDE.") {
+		t.Fatalf("enable result enabled=%v reads=%d view=%s", model.ideContext.Enabled, reads, model.viewString())
 	}
 
 	first := SubmitRequest{Prompt: "first"}
 	model.captureIDEContext(&first)
 	second := SubmitRequest{Prompt: "second"}
 	model.captureIDEContext(&second)
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if strings.Count(view, "IDE context was skipped for this message.") != 1 {
 		t.Fatalf("IDE prompt warning should render once:\n%s", view)
 	}
@@ -5210,18 +5212,18 @@ func TestModelIDECommandUnavailableAndInvalidArgs(t *testing.T) {
 	}})
 
 	typeText(t, model, "/ide maybe")
-	model.Update(key(bubbletea.KeyEnter))
-	if reads != 0 || !strings.Contains(model.View(), "Usage: /ide [on|off|status]") {
-		t.Fatalf("invalid /ide reads=%d view=%s", reads, model.View())
+	model.Update(key(keymsg.KeyEnter))
+	if reads != 0 || !strings.Contains(model.viewString(), "Usage: /ide [on|off|status]") {
+		t.Fatalf("invalid /ide reads=%d view=%s", reads, model.viewString())
 	}
 	typeText(t, model, "/ide")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	raw := ""
 	for _, message := range model.State.Messages {
 		raw += message.RawText
 	}
-	if reads != 1 || model.ideContext.Enabled || !strings.Contains(model.View(), "IDE context could not be enabled.") || !strings.Contains(raw, idecontext.OpenIDEHint) {
-		t.Fatalf("unavailable /ide enabled=%v reads=%d view=%s", model.ideContext.Enabled, reads, model.View())
+	if reads != 1 || model.ideContext.Enabled || !strings.Contains(model.viewString(), "IDE context could not be enabled.") || !strings.Contains(raw, idecontext.OpenIDEHint) {
+		t.Fatalf("unavailable /ide enabled=%v reads=%d view=%s", model.ideContext.Enabled, reads, model.viewString())
 	}
 }
 
@@ -5237,9 +5239,9 @@ func TestModelApproveCommandEmptyAndDeniedSelectionMatchRust(t *testing.T) {
 	}})
 
 	typeText(t, model, "/approve")
-	model.Update(key(bubbletea.KeyEnter))
-	if model.modal != nil || !strings.Contains(model.View(), "No recent auto-review denials in this thread.") {
-		t.Fatalf("empty /approve modal=%#v view=%s", model.modal, model.View())
+	model.Update(key(keymsg.KeyEnter))
+	if model.modal != nil || !strings.Contains(model.viewString(), "No recent auto-review denials in this thread.") {
+		t.Fatalf("empty /approve modal=%#v view=%s", model.modal, model.viewString())
 	}
 
 	raw := json.RawMessage(`{"id":"review-1","turnId":"turn-1","status":"denied","action":{"type":"command","command":"go test ./...","cwd":"D:\\repo"}}`)
@@ -5255,24 +5257,24 @@ func TestModelApproveCommandEmptyAndDeniedSelectionMatchRust(t *testing.T) {
 	}
 
 	typeText(t, model, "/approve")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if model.modal == nil || model.modal.kind != ModalKindAutoReview || model.modal.selected != 1 {
 		t.Fatalf("approve modal = %#v", model.modal)
 	}
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	for _, want := range []string{"Auto-review Denials", "Select a denied action to approve.", "go test ./...", "Writes outside"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("approve view missing %q:\n%s", want, view)
 		}
 	}
 
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 	if approvedThreadID != "thread-approve" || approvedEntry.ID != "review-1" || string(approvedEntry.Event) != string(raw) {
 		t.Fatalf("approved thread=%q entry=%#v", approvedThreadID, approvedEntry)
 	}
-	if len(model.toolRequestRuntime.RecentAutoReviewDenials) != 0 || !strings.Contains(model.View(), "Approval recorded for one retry") {
-		t.Fatalf("post-approval denials=%#v view=%s", model.toolRequestRuntime.RecentAutoReviewDenials, model.View())
+	if len(model.toolRequestRuntime.RecentAutoReviewDenials) != 0 || !strings.Contains(model.viewString(), "Approval recorded for one retry") {
+		t.Fatalf("post-approval denials=%#v view=%s", model.toolRequestRuntime.RecentAutoReviewDenials, model.viewString())
 	}
 }
 
@@ -5286,11 +5288,11 @@ func TestModelApproveCommandReportsCallbackFailure(t *testing.T) {
 		ID: "review-1", Summary: "curl example.test", Rationale: "Network denied.", Event: json.RawMessage(`{"id":"review-1","status":"denied","action":{"type":"network_access"}}`),
 	}}
 	typeText(t, model, "/approve")
-	model.Update(key(bubbletea.KeyEnter))
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
-	if !strings.Contains(model.View(), "Failed to approve auto-review denial: rpc unavailable") {
-		t.Fatalf("approval failure missing:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Failed to approve auto-review denial: rpc unavailable") {
+		t.Fatalf("approval failure missing:\n%s", model.viewString())
 	}
 }
 
@@ -5299,12 +5301,12 @@ func TestModelFastSlashCommandTogglesAndPropagatesServiceTier(t *testing.T) {
 	model := NewModel(state, Options{FeatureSettings: map[string]bool{"fast_mode": true}, ServiceTierCommands: []bottompane.ServiceTierCommand{{ID: "priority", Name: "fast", Description: "Fastest inference"}}})
 
 	typeText(t, model, "/fast")
-	model.Update(key(bubbletea.KeyEnter))
-	if state.ServiceTier != chatwidget.ServiceTierFastRequestValue || !strings.Contains(model.View(), "Service tier set to priority") {
-		t.Fatalf("fast enable state=%q view=%s", state.ServiceTier, model.View())
+	model.Update(key(keymsg.KeyEnter))
+	if state.ServiceTier != chatwidget.ServiceTierFastRequestValue || !strings.Contains(model.viewString(), "Service tier set to priority") {
+		t.Fatalf("fast enable state=%q view=%s", state.ServiceTier, model.viewString())
 	}
 	typeText(t, model, "hello")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	requests := model.SubmittedRequests()
 	if len(requests) != 1 || requests[0].ServiceTier != chatwidget.ServiceTierFastRequestValue {
 		t.Fatalf("submitted requests = %#v", requests)
@@ -5330,7 +5332,7 @@ func TestModelFastSlashCommandUsesCatalogTierAndHidesWithoutSupport(t *testing.T
 		},
 	})
 	typeText(t, model, "/fast")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	if state.ServiceTier != "turbo-id" || cmd == nil {
 		t.Fatalf("state tier=%q cmd=%v", state.ServiceTier, cmd)
 	}
@@ -5340,8 +5342,8 @@ func TestModelFastSlashCommandUsesCatalogTierAndHidesWithoutSupport(t *testing.T
 	if len(writes) != 1 || len(writes[0]) != 1 || writes[0][0].KeyPath != "service_tier" || writes[0][0].Value != "fast" {
 		t.Fatalf("writes = %#v", writes)
 	}
-	if !strings.Contains(model.View(), "Service tier set to turbo-id") {
-		t.Fatalf("view = %s", model.View())
+	if !strings.Contains(model.viewString(), "Service tier set to turbo-id") {
+		t.Fatalf("view = %s", model.viewString())
 	}
 }
 
@@ -5353,14 +5355,14 @@ func TestModelModalSelectionRendersColorBar(t *testing.T) {
 		Command: "go test ./...",
 	})
 
-	view := model.View()
+	view := model.viewString()
 	for _, want := range []string{"\x1b[", codextui.NumberedSelectionPrefix(0, true) + "Yes, proceed (y)"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("modal selected row missing %q:\n%s", want, view)
 		}
 	}
-	model.Update(key(bubbletea.KeyDown))
-	if view := model.View(); !strings.Contains(view, codextui.NumberedSelectionPrefix(1, true)+"Yes, and don't ask again for this command in this session (a)") {
+	model.Update(key(keymsg.KeyDown))
+	if view := model.viewString(); !strings.Contains(view, codextui.NumberedSelectionPrefix(1, true)+"Yes, and don't ask again for this command in this session (a)") {
 		t.Fatalf("modal selected row did not move color bar:\n%s", view)
 	}
 }
@@ -5373,20 +5375,20 @@ func TestModelPermissionsMenuAppliesRuntimeState(t *testing.T) {
 	model := NewModel(state, Options{Width: 90, Height: 24})
 
 	typeText(t, model, "/permissions")
-	model.Update(key(bubbletea.KeyEnter))
-	view := model.View()
+	model.Update(key(keymsg.KeyEnter))
+	view := model.viewString()
 	for _, want := range []string{"Update Model Permissions", "Read Only", "Ask for approval", "Full Access"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("permissions menu missing %q:\n%s", want, view)
 		}
 	}
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if state.ApprovalPolicy != string(chatwidget.ApprovalOnRequest) || state.Sandbox != chatwidget.ReadOnlyProfile {
 		t.Fatalf("read-only state approval=%q sandbox=%q", state.ApprovalPolicy, state.Sandbox)
 	}
 
 	typeText(t, model, "/permissions")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	// guardian_approval is default-on, so the picker lists the approve-for-me
 	// row as well; select Full Access by label instead of by position.
 	fullAccessIndex := -1
@@ -5399,19 +5401,19 @@ func TestModelPermissionsMenuAppliesRuntimeState(t *testing.T) {
 		t.Fatalf("full access option not found: %#v", model.modal.options)
 	}
 	model.modal.selected = fullAccessIndex
-	model.Update(key(bubbletea.KeyEnter))
-	if view := model.View(); !strings.Contains(view, "Enable full access?") || !strings.Contains(view, "Yes, continue anyway") || !strings.Contains(view, "Cancel") {
+	model.Update(key(keymsg.KeyEnter))
+	if view := model.viewString(); !strings.Contains(view, "Enable full access?") || !strings.Contains(view, "Yes, continue anyway") || !strings.Contains(view, "Cancel") {
 		t.Fatalf("full access confirmation missing:\n%s", view)
 	}
-	if view := model.View(); strings.Contains(view, "don't ask again") {
+	if view := model.viewString(); strings.Contains(view, "don't ask again") {
 		t.Fatalf("full access confirmation contains obsolete remember choice:\n%s", view)
 	}
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if state.ApprovalPolicy != string(chatwidget.ApprovalNever) || state.Sandbox != chatwidget.DangerFullAccessProfile {
 		t.Fatalf("full-access state approval=%q sandbox=%q", state.ApprovalPolicy, state.Sandbox)
 	}
-	if !strings.Contains(model.View(), "Permissions updated to Full Access") {
-		t.Fatalf("permissions history event missing:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Permissions updated to Full Access") {
+		t.Fatalf("permissions history event missing:\n%s", model.viewString())
 	}
 }
 
@@ -5430,8 +5432,8 @@ func TestModelPermissionsMenuHonorsRequirements(t *testing.T) {
 	})
 
 	typeText(t, model, "/permissions")
-	model.Update(key(bubbletea.KeyEnter))
-	view := model.View()
+	model.Update(key(keymsg.KeyEnter))
+	view := model.viewString()
 	if !strings.Contains(view, "Full Access") || !strings.Contains(view, "Disabled by requirements") {
 		t.Fatalf("permissions menu should show disabled full access:\n%s", view)
 	}
@@ -5451,12 +5453,12 @@ func TestModelPermissionsMenuHonorsRequirements(t *testing.T) {
 		t.Fatalf("full access option not found: %#v", model.modal.options)
 	}
 	model.modal.selected = fullAccessIndex
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 
 	if state.ApprovalPolicy != string(chatwidget.ApprovalOnRequest) || state.Sandbox != chatwidget.WorkspaceProfile {
 		t.Fatalf("disabled full-access changed state approval=%q sandbox=%q", state.ApprovalPolicy, state.Sandbox)
 	}
-	if view := model.View(); strings.Contains(view, "Yes, continue anyway") {
+	if view := model.viewString(); strings.Contains(view, "Yes, continue anyway") {
 		t.Fatalf("disabled full access opened confirmation:\n%s", view)
 	}
 }
@@ -5484,17 +5486,17 @@ func TestModelWindowsSandboxSetupUsesCallbackAndCompletion(t *testing.T) {
 	})
 
 	typeText(t, model, "/setup-default-sandbox")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
-	if !strings.Contains(model.View(), "Setting up sandbox...") || !strings.Contains(model.View(), "Input disabled until setup completes.") {
-		t.Fatalf("setup status missing:\n%s", model.View())
+	_, cmd := model.Update(key(keymsg.KeyEnter))
+	if !strings.Contains(model.viewString(), "Setting up sandbox...") || !strings.Contains(model.viewString(), "Input disabled until setup completes.") {
+		t.Fatalf("setup status missing:\n%s", model.viewString())
 	}
 	runTeaCmd(t, model, cmd)
 
 	if len(calls) != 1 || calls[0] != chatwidget.WindowsSandboxModeElevated {
 		t.Fatalf("setup calls = %#v", calls)
 	}
-	if !strings.Contains(model.View(), "Windows sandbox setup completed.") {
-		t.Fatalf("completion notice missing:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Windows sandbox setup completed.") {
+		t.Fatalf("completion notice missing:\n%s", model.viewString())
 	}
 }
 
@@ -5511,7 +5513,7 @@ func TestModelWindowsSandboxSetupIgnoresCompletionForDifferentMode(t *testing.T)
 	})
 
 	typeText(t, model, "/setup-default-sandbox")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 	if !model.windowsSandboxSetupActive {
 		t.Fatal("setup should stay pending until its completion arrives")
@@ -5523,10 +5525,10 @@ func TestModelWindowsSandboxSetupIgnoresCompletionForDifferentMode(t *testing.T)
 		Success: true,
 	}})
 	if !model.windowsSandboxSetupActive {
-		t.Fatalf("different-mode completion cleared the pending setup:\n%s", model.View())
+		t.Fatalf("different-mode completion cleared the pending setup:\n%s", model.viewString())
 	}
-	if strings.Contains(model.View(), "Windows sandbox setup completed.") {
-		t.Fatalf("different-mode completion leaked a notice:\n%s", model.View())
+	if strings.Contains(model.viewString(), "Windows sandbox setup completed.") {
+		t.Fatalf("different-mode completion leaked a notice:\n%s", model.viewString())
 	}
 
 	model.Update(WindowsSandboxSetupCompletedMsg{Completion: WindowsSandboxSetupCompletion{
@@ -5536,8 +5538,8 @@ func TestModelWindowsSandboxSetupIgnoresCompletionForDifferentMode(t *testing.T)
 	if model.windowsSandboxSetupActive {
 		t.Fatal("matching completion should clear the pending setup")
 	}
-	if !strings.Contains(model.View(), "Windows sandbox setup completed.") {
-		t.Fatalf("completion notice missing:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Windows sandbox setup completed.") {
+		t.Fatalf("completion notice missing:\n%s", model.viewString())
 	}
 }
 
@@ -5561,7 +5563,7 @@ func TestModelWindowsSandboxStartupPromptMatchesRustFlow(t *testing.T) {
 		},
 	})
 
-	view := model.View()
+	view := model.viewString()
 	for _, want := range []string{
 		"Set up the Codex agent sandbox to protect your files and control network access.",
 		"Set up default sandbox (requires Administrator permissions)",
@@ -5577,14 +5579,14 @@ func TestModelWindowsSandboxStartupPromptMatchesRustFlow(t *testing.T) {
 		t.Fatalf("startup prompt contains generic title:\n%s", view)
 	}
 
-	model.Update(key(bubbletea.KeyDown))
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyDown))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 	if len(calls) != 1 || calls[0] != chatwidget.WindowsSandboxModeUnelevated {
 		t.Fatalf("setup calls = %#v", calls)
 	}
-	if !strings.Contains(model.View(), "Windows sandbox setup completed.") {
-		t.Fatalf("completion notice missing:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Windows sandbox setup completed.") {
+		t.Fatalf("completion notice missing:\n%s", model.viewString())
 	}
 }
 
@@ -5598,8 +5600,8 @@ func TestModelRequiredWindowsSandboxPromptCannotBeDismissed(t *testing.T) {
 		},
 	})
 
-	model.Update(key(bubbletea.KeyEsc))
-	view := model.View()
+	model.Update(key(keymsg.KeyEsc))
+	view := model.viewString()
 	if model.modal == nil || !strings.Contains(view, "Your organization requires the default Codex agent sandbox") {
 		t.Fatalf("required prompt was dismissed:\n%s", view)
 	}
@@ -5627,9 +5629,9 @@ func TestModelElevatedWindowsSandboxFailureOpensFallback(t *testing.T) {
 		},
 	})
 
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
-	view := model.View()
+	view := model.viewString()
 	for _, want := range []string{
 		"Couldn't set up your sandbox with Administrator permissions",
 		"Try setting up admin sandbox again",
@@ -5653,18 +5655,18 @@ func TestModelWindowsSandboxSetupCompletionNotificationClearsStatus(t *testing.T
 	})
 
 	typeText(t, model, "/setup-default-sandbox")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
-	if !strings.Contains(model.View(), "Setting up sandbox...") || !model.windowsSandboxSetupActive {
-		t.Fatalf("setup status missing before completion:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Setting up sandbox...") || !model.windowsSandboxSetupActive {
+		t.Fatalf("setup status missing before completion:\n%s", model.viewString())
 	}
 
 	model.Update(WindowsSandboxSetupCompletedMsg{Completion: WindowsSandboxSetupCompletion{
 		Mode:    chatwidget.WindowsSandboxModeElevated,
 		Success: true,
 	}})
-	if model.windowsSandboxSetupActive || strings.Contains(model.View(), "Input disabled until setup completes.") || !strings.Contains(model.View(), "Windows sandbox setup completed.") {
-		t.Fatalf("completion did not clear setup status:\n%s", model.View())
+	if model.windowsSandboxSetupActive || strings.Contains(model.viewString(), "Input disabled until setup completes.") || !strings.Contains(model.viewString(), "Windows sandbox setup completed.") {
+		t.Fatalf("completion did not clear setup status:\n%s", model.viewString())
 	}
 }
 
@@ -5681,15 +5683,15 @@ func TestModelWindowsSandboxSetupHonorsRequirements(t *testing.T) {
 	})
 
 	typeText(t, model, "/setup-default-sandbox")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	if cmd != nil {
 		t.Fatalf("disallowed setup returned cmd %#v", cmd)
 	}
 	if calls != 0 {
 		t.Fatalf("setup callback called %d times", calls)
 	}
-	if !strings.Contains(model.View(), windowsSandboxDisallowedNotice) {
-		t.Fatalf("disallowed notice missing:\n%s", model.View())
+	if !strings.Contains(model.viewString(), windowsSandboxDisallowedNotice) {
+		t.Fatalf("disallowed notice missing:\n%s", model.viewString())
 	}
 }
 
@@ -5711,29 +5713,29 @@ func TestModelRustSlashSettingsDebugAndMCPCommands(t *testing.T) {
 	})
 
 	typeText(t, model, "/experimental")
-	model.Update(key(bubbletea.KeyEnter))
-	if view := model.View(); !strings.Contains(view, "Experimental Features") || !strings.Contains(view, "Network proxy") {
+	model.Update(key(keymsg.KeyEnter))
+	if view := model.viewString(); !strings.Contains(view, "Experimental Features") || !strings.Contains(view, "Network proxy") {
 		t.Fatalf("experimental modal missing:\n%s", view)
 	}
 	// Rust #44870: worktrees is stable and no longer offered in /experimental.
-	if strings.Contains(model.View(), "Worktrees") {
-		t.Fatalf("stable worktrees feature should not be listed in the experimental modal:\n%s", model.View())
+	if strings.Contains(model.viewString(), "Worktrees") {
+		t.Fatalf("stable worktrees feature should not be listed in the experimental modal:\n%s", model.viewString())
 	}
-	model.Update(key(bubbletea.KeyEsc))
+	model.Update(key(keymsg.KeyEsc))
 
 	typeText(t, model, "/debug-config")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	for _, want := range []string{"Config layer stack", "Requirements:", "Session:", "model: gpt-5"} {
-		if !strings.Contains(model.View(), want) {
-			t.Fatalf("debug config output missing %q:\n%s", want, model.View())
+		if !strings.Contains(model.viewString(), want) {
+			t.Fatalf("debug config output missing %q:\n%s", want, model.viewString())
 		}
 	}
 
 	typeText(t, model, "/mcp verbose")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	for _, want := range []string{"MCP Tools", "docs", "Tools: read, search", "Resources: guide (file://guide)"} {
-		if !strings.Contains(model.View(), want) {
-			t.Fatalf("mcp verbose output missing %q:\n%s", want, model.View())
+		if !strings.Contains(model.viewString(), want) {
+			t.Fatalf("mcp verbose output missing %q:\n%s", want, model.viewString())
 		}
 	}
 }
@@ -5761,15 +5763,15 @@ func TestModelMCPCommandRefreshesInventory(t *testing.T) {
 	})
 
 	typeText(t, model, "/mcp verbose")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	if cmd == nil {
 		t.Fatal("/mcp verbose did not start an inventory request")
 	}
-	if view := model.View(); !strings.Contains(view, "Loading MCP inventory") || strings.Contains(view, "stale") {
+	if view := model.viewString(); !strings.Contains(view, "Loading MCP inventory") || strings.Contains(view, "stale") {
 		t.Fatalf("MCP loading state mismatch:\n%s", view)
 	}
 	model.Update(cmd())
-	view := model.View()
+	view := model.viewString()
 	for _, want := range []string{"MCP Tools", "fresh", "Tools: read", "Resources: guide (file://guide)"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("refreshed MCP output missing %q:\n%s", want, view)
@@ -5788,12 +5790,12 @@ func TestModelMCPCommandReportsRefreshFailure(t *testing.T) {
 	})
 
 	typeText(t, model, "/mcp")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	if cmd == nil {
 		t.Fatal("/mcp did not start an inventory request")
 	}
 	model.Update(cmd())
-	if view := model.View(); !strings.Contains(view, "Failed to load MCP inventory: offline") || strings.Contains(view, "Loading MCP inventory") {
+	if view := model.viewString(); !strings.Contains(view, "Failed to load MCP inventory: offline") || strings.Contains(view, "Loading MCP inventory") {
 		t.Fatalf("MCP refresh failure mismatch:\n%s", view)
 	}
 }
@@ -5851,18 +5853,18 @@ func TestModelThemeAndPetsCommandsPersistSelections(t *testing.T) {
 	if len(writes) != 1 || len(writes[0]) != 1 || writes[0][0].KeyPath != "tui.theme" || writes[0][0].Value != "dracula" {
 		t.Fatalf("theme writes = %#v", writes)
 	}
-	if model.tuiTheme != "dracula" || !strings.Contains(model.View(), "Theme set to Dracula. Saved to") {
-		t.Fatalf("theme state/view mismatch: theme=%q view=\n%s", model.tuiTheme, model.View())
+	if model.tuiTheme != "dracula" || !strings.Contains(model.viewString(), "Theme set to Dracula. Saved to") {
+		t.Fatalf("theme state/view mismatch: theme=%q view=\n%s", model.tuiTheme, model.viewString())
 	}
 
 	typeText(t, model, "/pets off")
-	_, cmd = model.Update(key(bubbletea.KeyEnter))
+	_, cmd = model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 	if len(writes) != 2 || len(writes[1]) != 1 || writes[1][0].KeyPath != "tui.pet" || writes[1][0].Value != chatwidget.DisabledPetID {
 		t.Fatalf("pet writes = %#v", writes)
 	}
-	if model.tuiPet != chatwidget.DisabledPetID || !strings.Contains(model.View(), "Terminal pets disabled. Saved to") {
-		t.Fatalf("pet state/view mismatch: pet=%q view=\n%s", model.tuiPet, model.View())
+	if model.tuiPet != chatwidget.DisabledPetID || !strings.Contains(model.viewString(), "Terminal pets disabled. Saved to") {
+		t.Fatalf("pet state/view mismatch: pet=%q view=\n%s", model.tuiPet, model.viewString())
 	}
 }
 
@@ -5877,8 +5879,8 @@ func TestModelThemeAndPetsPickersUseCurrentSelections(t *testing.T) {
 	})
 
 	typeText(t, model, "/theme")
-	model.Update(key(bubbletea.KeyEnter))
-	view := model.View()
+	model.Update(key(keymsg.KeyEnter))
+	view := model.viewString()
 	for _, want := range []string{
 		"Select Syntax Theme",
 		"Type to filter themes...",
@@ -5894,10 +5896,10 @@ func TestModelThemeAndPetsPickersUseCurrentSelections(t *testing.T) {
 		t.Fatalf("theme picker missing Rust-like content:\n%s", view)
 	}
 
-	model.Update(key(bubbletea.KeyEsc))
+	model.Update(key(keymsg.KeyEsc))
 	typeText(t, model, "/pets")
-	model.Update(key(bubbletea.KeyEnter))
-	view = model.View()
+	model.Update(key(keymsg.KeyEnter))
+	view = model.viewString()
 	for _, want := range []string{"Select Pet", "Disable terminal pets", "Dewey (current)", "Null Signal"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("pets picker missing %q:\n%s", want, view)
@@ -5921,14 +5923,14 @@ func TestModelThemePickerFiltersAndPersistsSelection(t *testing.T) {
 	})
 
 	typeText(t, model, "/theme")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	typeText(t, model, "dracula")
-	view := model.View()
+	view := model.viewString()
 	if !strings.Contains(view, "Filter: dracula") || !strings.Contains(view, "dracula") || strings.Contains(view, "base16-ocean-dark") {
 		t.Fatalf("theme filter view mismatch:\n%s", view)
 	}
 
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 	if model.tuiTheme != "dracula" {
 		t.Fatalf("theme = %q, want dracula", model.tuiTheme)
@@ -5936,8 +5938,8 @@ func TestModelThemePickerFiltersAndPersistsSelection(t *testing.T) {
 	if len(writes) != 1 || len(writes[0]) != 1 || writes[0][0].KeyPath != "tui.theme" || writes[0][0].Value != "dracula" {
 		t.Fatalf("writes = %#v", writes)
 	}
-	if !strings.Contains(model.View(), "Theme set to Dracula. Saved to") {
-		t.Fatalf("theme save notice missing:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Theme set to Dracula. Saved to") {
+		t.Fatalf("theme save notice missing:\n%s", model.viewString())
 	}
 }
 
@@ -5950,13 +5952,13 @@ func TestModelThemePickerPreviewPaletteTracksSelection(t *testing.T) {
 	})
 
 	typeText(t, model, "/theme")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if model.modal == nil || model.modal.themePicker == nil {
 		t.Fatal("theme picker did not open")
 	}
 	beforeID := model.modal.themePicker.PreviewThemeID()
 	beforePreview := strings.Join(renderThemePreviewRows(codextui.ThemePreviewRows(48), 48, beforeID), "\n")
-	model.Update(key(bubbletea.KeyDown))
+	model.Update(key(keymsg.KeyDown))
 	afterID := model.modal.themePicker.PreviewThemeID()
 	afterPreview := strings.Join(renderThemePreviewRows(codextui.ThemePreviewRows(48), 48, afterID), "\n")
 
@@ -5980,12 +5982,12 @@ func TestModelThemeAppliesToAssistantMarkdownCodeBlocks(t *testing.T) {
 		TUITheme: "dracula",
 	})
 
-	dracula := model.View()
+	dracula := model.viewString()
 	if !strings.Contains(dracula, "\x1b[") || !strings.Contains(dracula, "package") {
 		t.Fatalf("assistant code block was not highlighted:\n%s", dracula)
 	}
 	model.setTUITheme("github")
-	github := model.View()
+	github := model.viewString()
 	if dracula == github {
 		t.Fatalf("assistant code block did not re-render after theme change")
 	}
@@ -6042,7 +6044,7 @@ func TestModelThemeAppliesToExecCommandCells(t *testing.T) {
 		`{"cmd":"Get-ChildItem -LiteralPath 'tmp\\pdfs' -Filter 'test-*.png'"}`,
 	))})
 
-	view := model.View()
+	view := model.viewString()
 	if !strings.Contains(view, "\x1b[") {
 		t.Fatalf("themed exec command should include ANSI styling:\n%s", view)
 	}
@@ -6063,44 +6065,44 @@ func TestModelRustSlashLongTailCommandSurfaces(t *testing.T) {
 	model := NewModel(state, Options{Width: 90, Height: 24})
 
 	typeText(t, model, "/review")
-	model.Update(key(bubbletea.KeyEnter))
-	if view := model.View(); !strings.Contains(view, "Select a review preset") || !strings.Contains(view, "Review uncommitted changes") {
+	model.Update(key(keymsg.KeyEnter))
+	if view := model.viewString(); !strings.Contains(view, "Select a review preset") || !strings.Contains(view, "Review uncommitted changes") {
 		t.Fatalf("review modal missing:\n%s", view)
 	}
-	model.Update(key(bubbletea.KeyDown))
-	model.Update(key(bubbletea.KeyEnter))
-	if view := model.View(); !strings.Contains(view, "Review start requires app-server review/start.") || !strings.Contains(view, "target: uncommitted changes") {
-		t.Fatalf("review selection missing history:\n%s", model.View())
+	model.Update(key(keymsg.KeyDown))
+	model.Update(key(keymsg.KeyEnter))
+	if view := model.viewString(); !strings.Contains(view, "Review start requires app-server review/start.") || !strings.Contains(view, "target: uncommitted changes") {
+		t.Fatalf("review selection missing history:\n%s", model.viewString())
 	}
 
 	typeText(t, model, "/skills")
-	model.Update(key(bubbletea.KeyEnter))
-	if view := model.View(); !strings.Contains(view, "Skills") || !strings.Contains(view, "List skills") {
+	model.Update(key(keymsg.KeyEnter))
+	if view := model.viewString(); !strings.Contains(view, "Skills") || !strings.Contains(view, "List skills") {
 		t.Fatalf("skills modal missing:\n%s", view)
 	}
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if model.ComposerValue() != "$" {
 		t.Fatalf("skills list should insert $ like Rust, got %q", model.ComposerValue())
 	}
 	model.composer.Reset()
 
 	typeText(t, model, "/mention")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if model.ComposerValue() != "@" {
 		t.Fatalf("mention should insert @, got %q", model.ComposerValue())
 	}
 	model.composer.Reset()
 
 	typeText(t, model, "/vim")
-	model.Update(key(bubbletea.KeyEnter))
-	if !model.vimMode || !strings.Contains(model.View(), "Vim mode enabled.") {
-		t.Fatalf("vim toggle failed:\n%s", model.View())
+	model.Update(key(keymsg.KeyEnter))
+	if !model.vimMode || !strings.Contains(model.viewString(), "Vim mode enabled.") {
+		t.Fatalf("vim toggle failed:\n%s", model.viewString())
 	}
 	// Rust #41921: enabling Vim starts the composer in Insert mode, so the next
 	// slash command types directly.
 
 	typeText(t, model, "/plan investigate architecture")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if !state.PlanMode {
 		t.Fatalf("PlanMode = false, want true")
 	}
@@ -6126,7 +6128,7 @@ func TestModelPlanCommandAppliesRustCollaborationMode(t *testing.T) {
 	})
 
 	typeText(t, model, "/plan investigate architecture")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 
 	if !state.PlanMode || state.EffectiveReasoningEffort() != chatwidget.CollaborationPlanDefaultReasoningEffort {
 		t.Fatalf("plan state = mode %v effort %q", state.PlanMode, state.EffectiveReasoningEffort())
@@ -6142,8 +6144,8 @@ func TestModelPlanCommandAppliesRustCollaborationMode(t *testing.T) {
 	if mode.Settings.ReasoningEffort == nil || *mode.Settings.ReasoningEffort != "medium" || mode.Settings.DeveloperInstructions == nil || !strings.Contains(*mode.Settings.DeveloperInstructions, "## Finalization rule") {
 		t.Fatalf("plan request mode = %#v", mode)
 	}
-	if !strings.Contains(model.View(), "Model changed to gpt-5.4 medium for Plan mode.") {
-		t.Fatalf("plan mode change message missing:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Model changed to gpt-5.4 medium for Plan mode.") {
+		t.Fatalf("plan mode change message missing:\n%s", model.viewString())
 	}
 }
 
@@ -6151,11 +6153,11 @@ func TestModelPlanCommandHonorsDisabledCollaborationModes(t *testing.T) {
 	state := codextui.NewState(nil)
 	model := NewModel(state, Options{Width: 90, Height: 24, FeatureSettings: map[string]bool{"collaboration_modes": false}})
 	typeText(t, model, "/plan investigate")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if state.PlanMode || len(model.SubmittedRequests()) != 0 {
 		t.Fatalf("disabled /plan changed state=%v requests=%#v", state.PlanMode, model.SubmittedRequests())
 	}
-	if view := model.View(); !strings.Contains(view, "Collaboration modes are disabled.") || !strings.Contains(view, "Enable collaboration modes to use /plan.") {
+	if view := model.viewString(); !strings.Contains(view, "Collaboration modes are disabled.") || !strings.Contains(view, "Enable collaboration modes to use /plan.") {
 		t.Fatalf("disabled /plan message missing:\n%s", view)
 	}
 }
@@ -6209,8 +6211,8 @@ func TestModelRuntimeBackedSlashCommands(t *testing.T) {
 	if model.modal == nil || model.modal.kind != ModalKindMemories {
 		t.Fatalf("memories modal = %#v", model.modal)
 	}
-	if !strings.Contains(model.View(), "Memories") {
-		t.Fatalf("view missing memories popup:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Memories") {
+		t.Fatalf("view missing memories popup:\n%s", model.viewString())
 	}
 }
 
@@ -6247,9 +6249,9 @@ func TestModelExternalAgentImportDetectsSelectsImportsAndRendersResults(t *testi
 	})
 
 	typeText(t, model, "/import")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
-	if cmd == nil || !strings.Contains(model.View(), "Checking for compatible setup") {
-		t.Fatalf("import detection state missing:\n%s", model.View())
+	_, cmd := model.Update(key(keymsg.KeyEnter))
+	if cmd == nil || !strings.Contains(model.viewString(), "Checking for compatible setup") {
+		t.Fatalf("import detection state missing:\n%s", model.viewString())
 	}
 	runTeaCmd(t, model, cmd)
 	if detectedCWD != `D:\repo` {
@@ -6258,14 +6260,14 @@ func TestModelExternalAgentImportDetectsSelectsImportsAndRendersResults(t *testi
 	if diff := strings.Join(detectedSources, ","); diff != "claude-code,cursor" {
 		t.Fatalf("detected sources = %q", diff)
 	}
-	view := model.View()
+	view := model.viewString()
 	for _, want := range []string{"Import setup", "Bring over supported setup", "Skills 2", "Selected 1 of 1 item", "Import selected"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("import picker missing %q:\n%s", want, view)
 		}
 	}
 
-	_, cmd = model.Update(key(bubbletea.KeyEnter))
+	_, cmd = model.Update(key(keymsg.KeyEnter))
 	if cmd == nil {
 		t.Fatal("import selection did not return import command")
 	}
@@ -6280,7 +6282,7 @@ func TestModelExternalAgentImportDetectsSelectsImportsAndRendersResults(t *testi
 	if model.modal != nil {
 		t.Fatalf("import modal remained open after success")
 	}
-	view = model.View()
+	view = model.viewString()
 	for _, want := range []string{"Import started", "Skills: 2 - review, docs"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("import start missing %q:\n%s", want, view)
@@ -6301,7 +6303,7 @@ func TestModelExternalAgentImportDetectsSelectsImportsAndRendersResults(t *testi
 	}}
 	close(completion)
 	runTeaCmd(t, model, completionCmd)
-	view = model.View()
+	view = model.viewString()
 	for _, want := range []string{"Import finished: 2 imported, 0 failed", "Run /import again"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("import completion missing %q:\n%s", want, view)
@@ -6316,9 +6318,9 @@ func TestModelExternalAgentImportNoItemsAndFailureMatchRust(t *testing.T) {
 		},
 	})
 	typeText(t, model, "/import")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
-	if view := model.View(); !strings.Contains(view, "No compatible setup was found to import.") {
+	if view := model.viewString(); !strings.Contains(view, "No compatible setup was found to import.") {
 		t.Fatalf("no-items message missing:\n%s", view)
 	}
 
@@ -6328,9 +6330,9 @@ func TestModelExternalAgentImportNoItemsAndFailureMatchRust(t *testing.T) {
 		},
 	})
 	typeText(t, model, "/import")
-	_, cmd = model.Update(key(bubbletea.KeyEnter))
+	_, cmd = model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
-	if view := model.View(); !strings.Contains(view, "Import from other apps is unavailable in remote sessions") {
+	if view := model.viewString(); !strings.Contains(view, "Import from other apps is unavailable in remote sessions") {
 		t.Fatalf("import detection failure missing:\n%s", view)
 	}
 	if model.notice != "Import from other apps is unavailable in remote sessions. Start Codex locally and run /import." {
@@ -6359,20 +6361,20 @@ func TestModelExternalAgentImportChoosesBetweenDetectedSources(t *testing.T) {
 		},
 	})
 	typeText(t, model, "/import")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
-	view := model.View()
+	view := model.viewString()
 	for _, want := range []string{"Choose an import source", "Claude Code", "Cursor", "Press Enter to continue"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("source picker missing %q:\n%s", want, view)
 		}
 	}
-	_, _ = model.Update(key(bubbletea.KeyDown))
-	_, _ = model.Update(key(bubbletea.KeyEnter))
-	if view := model.View(); !strings.Contains(view, "Importing: Hooks 1") {
+	_, _ = model.Update(key(keymsg.KeyDown))
+	_, _ = model.Update(key(keymsg.KeyEnter))
+	if view := model.viewString(); !strings.Contains(view, "Importing: Hooks 1") {
 		t.Fatalf("Cursor migration picker missing:\n%s", view)
 	}
-	_, cmd = model.Update(key(bubbletea.KeyEnter))
+	_, cmd = model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 	if importedSource != "cursor" {
 		t.Fatalf("imported source = %q", importedSource)
@@ -6392,13 +6394,13 @@ func TestModelMemoriesEnablePromptPersistsFeatureBeforeNotice(t *testing.T) {
 	})
 
 	typeText(t, model, "/memories")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	for _, want := range []string{"Enable memories?", "Memories are disabled in this TUI session.", "Yes, enable", "Not now"} {
-		if view := model.View(); !strings.Contains(view, want) {
+		if view := model.viewString(); !strings.Contains(view, want) {
 			t.Fatalf("enable prompt missing %q:\n%s", want, view)
 		}
 	}
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 	// Rust #43113: the opt-in is saved for new threads and also writes the
 	// legacy `features.memory_tool` key older app servers still read.
@@ -6411,8 +6413,8 @@ func TestModelMemoriesEnablePromptPersistsFeatureBeforeNotice(t *testing.T) {
 	if writes[0][1].KeyPath != "features.memory_tool" || writes[0][1].Value != true {
 		t.Fatalf("legacy memory enable edit = %#v", writes[0][1])
 	}
-	if !strings.Contains(model.View(), "Memories setting saved on the server for new threads. This thread is unchanged.") {
-		t.Fatalf("memory enable notice missing:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Memories setting saved on the server for new threads. This thread is unchanged.") {
+		t.Fatalf("memory enable notice missing:\n%s", model.viewString())
 	}
 }
 
@@ -6436,25 +6438,25 @@ func TestModelMemoriesSettingsToggleAndSaveAtomically(t *testing.T) {
 	})
 
 	typeText(t, model, "/memories")
-	model.Update(key(bubbletea.KeyEnter))
-	view := model.View()
+	model.Update(key(keymsg.KeyEnter))
+	view := model.viewString()
 	for _, want := range []string{"[x] Use memories", "[ ] Generate memories", "Reset all memories"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("memory settings missing %q:\n%s", want, view)
 		}
 	}
-	model.Update(key(bubbletea.KeyDown))
-	model.Update(key(bubbletea.KeySpace))
-	if view := model.View(); !strings.Contains(view, "[x] Generate memories") {
+	model.Update(key(keymsg.KeyDown))
+	model.Update(key(keymsg.KeySpace))
+	if view := model.viewString(); !strings.Contains(view, "[x] Generate memories") {
 		t.Fatalf("generate toggle not reflected:\n%s", view)
 	}
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 	if gotThread != "thread-memory" || !gotUse || !gotGenerate || !gotChanged {
 		t.Fatalf("memory write = thread %q use=%v generate=%v changed=%v", gotThread, gotUse, gotGenerate, gotChanged)
 	}
-	if !strings.Contains(model.View(), "Memory settings saved to") {
-		t.Fatalf("memory save result missing:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Memory settings saved to") {
+		t.Fatalf("memory save result missing:\n%s", model.viewString())
 	}
 }
 
@@ -6472,22 +6474,22 @@ func TestModelMemoriesResetRequiresConfirmationAndRunsCallback(t *testing.T) {
 	})
 
 	typeText(t, model, "/memories")
-	model.Update(key(bubbletea.KeyEnter))
-	model.Update(key(bubbletea.KeyDown))
-	model.Update(key(bubbletea.KeyDown))
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
+	model.Update(key(keymsg.KeyDown))
+	model.Update(key(keymsg.KeyDown))
+	model.Update(key(keymsg.KeyEnter))
 	for _, want := range []string{"Reset all memories?", "current Codex home", "Go back"} {
-		if view := model.View(); !strings.Contains(view, want) {
+		if view := model.viewString(); !strings.Contains(view, want) {
 			t.Fatalf("reset confirmation missing %q:\n%s", want, view)
 		}
 	}
 	if called != 0 {
 		t.Fatalf("reset called before confirmation: %d", called)
 	}
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
-	if called != 1 || !strings.Contains(model.View(), "Reset local memories.") {
-		t.Fatalf("reset result called=%d view=\n%s", called, model.View())
+	if called != 1 || !strings.Contains(model.viewString(), "Reset local memories.") {
+		t.Fatalf("reset result called=%d view=\n%s", called, model.viewString())
 	}
 }
 
@@ -6505,29 +6507,29 @@ func TestModelFeedbackFlowSubmitsOptionalNoteWithoutLogs(t *testing.T) {
 	})
 
 	typeText(t, model, "/feedback")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	for _, want := range []string{"How was this?", "bug", "bad result", "good result", "safety check", "other"} {
-		if view := model.View(); !strings.Contains(view, want) {
+		if view := model.viewString(); !strings.Contains(view, want) {
 			t.Fatalf("feedback category picker missing %q:\n%s", want, view)
 		}
 	}
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	for _, want := range []string{"Upload logs?", "codex-logs.log", "codex-doctor-report.json", "Yes", "No"} {
-		if view := model.View(); !strings.Contains(view, want) {
+		if view := model.viewString(); !strings.Contains(view, want) {
 			t.Fatalf("feedback consent missing %q:\n%s", want, view)
 		}
 	}
-	model.Update(key(bubbletea.KeyDown))
-	model.Update(key(bubbletea.KeyEnter))
-	if view := model.View(); !strings.Contains(view, "Tell us more (bug)") || !strings.Contains(view, "(optional)") {
+	model.Update(key(keymsg.KeyDown))
+	model.Update(key(keymsg.KeyEnter))
+	if view := model.viewString(); !strings.Contains(view, "Tell us more (bug)") || !strings.Contains(view, "(optional)") {
 		t.Fatalf("feedback note view missing:\n%s", view)
 	}
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 	if submitted.Classification != "bug" || submitted.IncludeLogs || submitted.Reason != nil || submitted.ThreadID == nil || *submitted.ThreadID != "thread-feedback" {
 		t.Fatalf("feedback params = %#v", submitted)
 	}
-	view := model.View()
+	view := model.viewString()
 	for _, want := range []string{"Feedback recorded (no logs).", "github.com/openai/codex/issues", "thread-feedback"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("feedback result missing %q:\n%s", want, view)
@@ -6545,17 +6547,17 @@ func TestModelFeedbackFlowIncludesNoteAndLogs(t *testing.T) {
 		},
 	})
 	typeText(t, model, "/feedback")
-	model.Update(key(bubbletea.KeyEnter))
-	model.Update(key(bubbletea.KeyEnter))
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	typeText(t, model, "hung after approval")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 	if !submitted.IncludeLogs || submitted.Reason == nil || *submitted.Reason != "hung after approval" {
 		t.Fatalf("feedback params = %#v", submitted)
 	}
-	if !strings.Contains(model.View(), "Feedback uploaded.") {
-		t.Fatalf("feedback upload result missing:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Feedback uploaded.") {
+		t.Fatalf("feedback upload result missing:\n%s", model.viewString())
 	}
 }
 
@@ -6563,13 +6565,13 @@ func TestModelFeedbackDisabledByConfiguration(t *testing.T) {
 	disabled := false
 	model := NewModel(codextui.NewState(nil), Options{FeedbackEnabled: &disabled})
 	typeText(t, model, "/feedback")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	for _, want := range []string{"Sending feedback is disabled", "disabled by configuration", "Close"} {
-		if view := model.View(); !strings.Contains(view, want) {
+		if view := model.viewString(); !strings.Contains(view, want) {
 			t.Fatalf("disabled feedback view missing %q:\n%s", want, view)
 		}
 	}
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if model.modal != nil {
 		t.Fatalf("disabled feedback modal did not close: %#v", model.modal)
 	}
@@ -6590,28 +6592,28 @@ func TestModelFeedbackNoteMultilinePasteBurstDoesNotSubmitEarly(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	model.now = func() time.Time { return now }
 	typeText(t, model, "/feedback")
-	model.Update(key(bubbletea.KeyEnter))
-	model.Update(key(bubbletea.KeyEnter))
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if model.modal == nil || model.modal.feedback == nil || model.modal.feedback.stage != feedbackStageNote {
 		t.Fatalf("feedback note stage not reached: %#v", model.modal)
 	}
 
 	// Rapid input: chars and newlines arrive within the burst interval.
 	typeText(t, model, "ab")
-	if _, cmd := model.Update(key(bubbletea.KeyEnter)); cmd != nil {
+	if _, cmd := model.Update(key(keymsg.KeyEnter)); cmd != nil {
 		t.Fatal("enter submitted during the paste burst instead of inserting a newline")
 	}
 	typeText(t, model, "cd")
-	if _, cmd := model.Update(key(bubbletea.KeyEnter)); cmd != nil {
+	if _, cmd := model.Update(key(keymsg.KeyEnter)); cmd != nil {
 		t.Fatal("second burst enter submitted instead of inserting a newline")
 	}
 	typeText(t, model, "x")
-	model.Update(key(bubbletea.KeyTab))
+	model.Update(key(keymsg.KeyTab))
 	typeText(t, model, "y")
 
 	now = now.Add(time.Second)
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	if cmd == nil {
 		t.Fatalf("enter did not submit after the burst lapsed; note=%q", model.modal.feedback.note)
 	}
@@ -6635,15 +6637,15 @@ func TestModelFeedbackNoteBracketedPasteSubmitsImmediately(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	model.now = func() time.Time { return now }
 	typeText(t, model, "/feedback")
-	model.Update(key(bubbletea.KeyEnter))
-	model.Update(key(bubbletea.KeyEnter))
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune("line1\nline2"), Paste: true})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune("line1\nline2"), Paste: true})
 	if model.modal == nil || model.modal.feedback == nil {
 		t.Fatal("bracketed paste closed the report form")
 	}
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	if cmd == nil {
 		t.Fatal("enter after a bracketed paste did not submit")
 	}
@@ -6657,7 +6659,7 @@ func TestModelAppCommandUsesRustHistoryMessages(t *testing.T) {
 	state := codextui.NewState(nil)
 	model := NewModel(state, Options{})
 	typeText(t, model, "/app")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if len(state.Messages) != 1 || state.Messages[0].Role != codextui.RoleHistory || !strings.Contains(state.Messages[0].RawText, "Session is still starting; try /app again in a moment.") {
 		t.Fatalf("missing-thread messages = %#v", state.Messages)
 	}
@@ -6667,7 +6669,7 @@ func TestModelAppCommandUsesRustHistoryMessages(t *testing.T) {
 		return errors.New("launcher failed")
 	}
 	typeText(t, model, "/app")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	want := "Failed to open this session in the Desktop app: launcher failed. Install or launch the Desktop app and try again."
 	if got := state.Messages[len(state.Messages)-1]; got.Role != codextui.RoleHistory || !strings.Contains(got.RawText, want) {
 		t.Fatalf("open failure message = %#v", got)
@@ -6675,7 +6677,7 @@ func TestModelAppCommandUsesRustHistoryMessages(t *testing.T) {
 
 	model.onOpenDesktopThread = func(threadID string) error { return nil }
 	typeText(t, model, "/app")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if got := state.Messages[len(state.Messages)-1]; got.Role != codextui.RoleHistory || !strings.Contains(got.RawText, "Opened this session in the Desktop app.") {
 		t.Fatalf("open success message = %#v", got)
 	}
@@ -6704,7 +6706,7 @@ func TestModelStatusLineAndTitleCommands(t *testing.T) {
 	// Rust's refresh_status_line repaints both status surfaces, so applying a
 	// status line also emits the default terminal title.
 	baselineWrites := len(writes)
-	view := model.View()
+	view := model.viewString()
 	for _, want := range []string{"gpt-5", "high", "repo", "idle"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("statusline view missing %q:\n%s", want, view)
@@ -6733,18 +6735,18 @@ func TestModelStatusControlsSetupHistoryAndInvalidItem(t *testing.T) {
 	model := NewModel(state, Options{Width: 90, Height: 24, SessionPickerCWD: `D:\repo`})
 
 	typeText(t, model, "/statusline")
-	model.Update(key(bubbletea.KeyEnter))
-	view := model.View()
+	model.Update(key(keymsg.KeyEnter))
+	view := model.viewString()
 	for _, want := range []string{"Status line setup", "Select which items", "[x] model-with-reasoning", "space toggle"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("statusline setup modal missing %q:\n%s", want, view)
 		}
 	}
-	model.Update(key(bubbletea.KeyEsc))
+	model.Update(key(keymsg.KeyEsc))
 
 	_ = model.applyTerminalTitleCommand("does-not-exist")
-	if !strings.Contains(model.View(), "Unknown terminal-title item 'does-not-exist'. Use /title to see available items.") {
-		t.Fatalf("invalid title item notice missing:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Unknown terminal-title item 'does-not-exist'. Use /title to see available items.") {
+		t.Fatalf("invalid title item notice missing:\n%s", model.viewString())
 	}
 }
 
@@ -6757,7 +6759,7 @@ func TestModelStatusLineCommandConfiguresHeader(t *testing.T) {
 	model := NewModel(state, Options{Width: 100, Height: 24})
 
 	_ = model.applyStatusLineCommand("model permissions approval-mode")
-	view := model.View()
+	view := model.viewString()
 	for _, want := range []string{"gpt-5", "workspace-write"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("status line view missing %q:\n%s", want, view)
@@ -6770,14 +6772,14 @@ func TestModelStatusLineSetupModalTogglesAndSaves(t *testing.T) {
 	model := NewModel(state, Options{Width: 100, Height: 24})
 
 	typeText(t, model, "/statusline")
-	model.Update(key(bubbletea.KeyEnter))
-	if view := model.View(); !strings.Contains(view, "Status line setup") || !strings.Contains(view, "space toggle · enter save · esc cancel") {
+	model.Update(key(keymsg.KeyEnter))
+	if view := model.viewString(); !strings.Contains(view, "Status line setup") || !strings.Contains(view, "space toggle · enter save · esc cancel") {
 		t.Fatalf("status line setup modal missing:\n%s", view)
 	}
 
-	model.Update(key(bubbletea.KeySpace))
-	model.Update(key(bubbletea.KeyEnter))
-	if view := model.View(); !strings.Contains(view, "gpt-5") {
+	model.Update(key(keymsg.KeySpace))
+	model.Update(key(keymsg.KeyEnter))
+	if view := model.viewString(); !strings.Contains(view, "gpt-5") {
 		t.Fatalf("saved status line missing selected model:\n%s", view)
 	}
 }
@@ -6858,7 +6860,7 @@ func TestModelGoalCommandsCallRuntimeCallbacks(t *testing.T) {
 	})
 
 	typeText(t, model, "/goal finish parity")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	if cmd == nil {
 		t.Fatal("/goal objective did not return preflight command")
 	}
@@ -6876,12 +6878,12 @@ func TestModelGoalCommandsCallRuntimeCallbacks(t *testing.T) {
 	if raw := state.Messages[len(state.Messages)-1].RawText; !strings.Contains(raw, "Goal active") || !strings.Contains(raw, "Objective: finish parity") {
 		t.Fatalf("goal history missing Rust success event:\n%s", raw)
 	}
-	if !strings.Contains(model.View(), "Goal active") {
-		t.Fatalf("status line missing goal progress:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Goal active") {
+		t.Fatalf("status line missing goal progress:\n%s", model.viewString())
 	}
 
 	typeText(t, model, "/goal pause")
-	_, cmd = model.Update(key(bubbletea.KeyEnter))
+	_, cmd = model.Update(key(keymsg.KeyEnter))
 	if cmd == nil {
 		t.Fatal("/goal pause did not return runtime command")
 	}
@@ -6894,7 +6896,7 @@ func TestModelGoalCommandsCallRuntimeCallbacks(t *testing.T) {
 	}
 
 	typeText(t, model, "/goal clear")
-	_, cmd = model.Update(key(bubbletea.KeyEnter))
+	_, cmd = model.Update(key(keymsg.KeyEnter))
 	if cmd == nil {
 		t.Fatal("/goal clear did not return runtime command")
 	}
@@ -6939,7 +6941,7 @@ func TestModelGoalSetStartsContinuationWhenActiveAndIdle(t *testing.T) {
 	})
 
 	typeText(t, model, "/goal 1+1")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	if cmd == nil {
 		t.Fatal("/goal objective did not return preflight command")
 	}
@@ -6959,7 +6961,7 @@ func TestModelGoalSetStartsContinuationWhenActiveAndIdle(t *testing.T) {
 	}
 
 	typeText(t, model, "/goal pause")
-	_, cmd = model.Update(key(bubbletea.KeyEnter))
+	_, cmd = model.Update(key(keymsg.KeyEnter))
 	if cmd == nil {
 		t.Fatal("/goal pause did not return runtime command")
 	}
@@ -6998,7 +7000,7 @@ func TestModelGoalContinuationSkippedWhileTurnRunning(t *testing.T) {
 	})
 
 	typeText(t, model, "/goal 1+1")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	if cmd == nil {
 		t.Fatal("/goal objective did not return preflight command")
 	}
@@ -7109,7 +7111,7 @@ func TestModelGoalReadAndNotifications(t *testing.T) {
 	model.currentGoal = &appserver.Goal{ThreadID: "thread-goal", Objective: "old", Status: appserver.GoalActive}
 
 	typeText(t, model, "/goal")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	if cmd == nil {
 		t.Fatal("/goal did not return read command")
 	}
@@ -7131,8 +7133,8 @@ func TestModelGoalReadAndNotifications(t *testing.T) {
 	if model.currentGoal == nil || model.currentGoal.Objective != "ship runtime" {
 		t.Fatalf("current goal after notification = %#v", model.currentGoal)
 	}
-	if !strings.Contains(model.View(), "Goal active") {
-		t.Fatalf("goal notification did not refresh status surface:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Goal active") {
+		t.Fatalf("goal notification did not refresh status surface:\n%s", model.viewString())
 	}
 	model.Update(GoalClearedMsg{ThreadID: "thread-goal"})
 	if model.currentGoal != nil {
@@ -7163,7 +7165,7 @@ func TestModelGoalObjectiveUsesRustSyntaxAndReplacementConfirmation(t *testing.T
 	})
 
 	typeText(t, model, "/goal set finish parity --budget 50000")
-	_, readCmd := model.Update(key(bubbletea.KeyEnter))
+	_, readCmd := model.Update(key(keymsg.KeyEnter))
 	if readCmd == nil {
 		t.Fatal("goal objective did not start replacement preflight")
 	}
@@ -7171,7 +7173,7 @@ func TestModelGoalObjectiveUsesRustSyntaxAndReplacementConfirmation(t *testing.T
 	if model.modal == nil || model.modal.kind != ModalKindGoal || model.modal.title != "Replace goal?" || !strings.Contains(model.modal.body, "set finish parity --budget 50000") {
 		t.Fatalf("replacement modal = %#v", model.modal)
 	}
-	_, setCmd := model.Update(key(bubbletea.KeyEnter))
+	_, setCmd := model.Update(key(keymsg.KeyEnter))
 	if setCmd == nil {
 		t.Fatal("replacement confirmation did not start goal set")
 	}
@@ -7200,12 +7202,12 @@ func TestModelGoalEditPromptPreservesRustStatusAndBudget(t *testing.T) {
 	})
 
 	typeText(t, model, "/goal edit")
-	_, readCmd := model.Update(key(bubbletea.KeyEnter))
+	_, readCmd := model.Update(key(keymsg.KeyEnter))
 	model.Update(readCmd())
 	if model.modal == nil || model.modal.customPrompt == nil || model.modal.customPrompt.Text != "edit this goal" {
 		t.Fatalf("goal edit prompt = %#v", model.modal)
 	}
-	_, setCmd := model.Update(key(bubbletea.KeyEnter))
+	_, setCmd := model.Update(key(keymsg.KeyEnter))
 	if setCmd == nil {
 		t.Fatal("goal edit prompt did not submit")
 	}
@@ -7236,7 +7238,7 @@ func TestModelGoalEditResolvesManagedObjectiveFile(t *testing.T) {
 	})
 
 	typeText(t, model, "/goal edit")
-	_, readCmd := model.Update(key(bubbletea.KeyEnter))
+	_, readCmd := model.Update(key(keymsg.KeyEnter))
 	model.Update(readCmd())
 	if model.modal != nil {
 		t.Fatalf("edit prompt should wait for the objective file resolution: %#v", model.modal)
@@ -7277,7 +7279,7 @@ func TestModelGoalWithImageAttachmentMaterializesDraft(t *testing.T) {
 	})
 	model.attachments = []bottompane.ComposerAttachment{{Kind: bottompane.AttachmentImage, Path: imagePath}}
 	typeText(t, model, "/goal describe [Image #1]")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	_, cmd = model.Update(cmd())
 	_, cmd = model.Update(cmd())
 	model.Update(cmd())
@@ -7311,17 +7313,17 @@ func TestModelGoalWithoutThreadMatchesRustUsageAndQueuesObjective(t *testing.T) 
 	})
 
 	typeText(t, model, "/goal")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if raw := state.Messages[len(state.Messages)-1].RawText; !strings.Contains(raw, "Example: /goal improve benchmark coverage") {
 		t.Fatalf("bare goal usage = %q", raw)
 	}
 	typeText(t, model, "/goal pause")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if raw := state.Messages[len(state.Messages)-1].RawText; !strings.Contains(raw, "The session must start before you can change a goal.") {
 		t.Fatalf("goal control usage = %q", raw)
 	}
 	typeText(t, model, "/goal queued objective")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if model.pendingGoalObjective != "queued objective" {
 		t.Fatalf("pending goal objective = %q", model.pendingGoalObjective)
 	}
@@ -7371,7 +7373,7 @@ func TestModelGoalWithoutThreadStartsSession(t *testing.T) {
 	})
 
 	typeText(t, model, "/goal improve coverage")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	if ensureCalls != 1 {
 		t.Fatalf("ensure-thread calls = %d, want 1", ensureCalls)
 	}
@@ -7416,15 +7418,15 @@ func TestModelUsageCommandOpensMenuAndShowsAnalytics(t *testing.T) {
 	})
 
 	typeText(t, model, "/usage")
-	model.Update(key(bubbletea.KeyEnter))
-	view := model.View()
+	model.Update(key(keymsg.KeyEnter))
+	view := model.viewString()
 	for _, want := range []string{"Usage", "Account usage and resets.", "View analytics", "Browse account usage and activity.", "Redeem reset", "2 available."} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("usage menu missing %q:\n%s", want, view)
 		}
 	}
 
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	dashboard := model.analyticsDashboard
 	if dashboard == nil || !dashboard.active {
 		t.Fatalf("usage menu did not open analytics; notice=%q", model.notice)
@@ -7442,9 +7444,9 @@ func TestModelUsageCommandDirectViewAndInvalidView(t *testing.T) {
 	model := NewModel(state, Options{Width: 80, Height: 24, HasChatGPTAccount: true})
 
 	typeText(t, model, "/usage year")
-	model.Update(key(bubbletea.KeyEnter))
-	if !strings.Contains(model.View(), "Usage: /usage [daily|weekly|cumulative|plan]") {
-		t.Fatalf("invalid usage view missing notice:\n%s", model.View())
+	model.Update(key(keymsg.KeyEnter))
+	if !strings.Contains(model.viewString(), "Usage: /usage [daily|weekly|cumulative|plan]") {
+		t.Fatalf("invalid usage view missing notice:\n%s", model.viewString())
 	}
 
 	// Rust #45769 routes explicit views into the Summary tab instead of a
@@ -7458,7 +7460,7 @@ func TestModelUsageCommandDirectViewAndInvalidView(t *testing.T) {
 			CodexHome:         t.TempDir(),
 		})
 		typeText(t, model, "/usage "+args)
-		model.Update(key(bubbletea.KeyEnter))
+		model.Update(key(keymsg.KeyEnter))
 		dashboard := model.analyticsDashboard
 		if dashboard == nil || !dashboard.active {
 			t.Fatalf("/usage %s did not open analytics; notice=%q", args, model.notice)
@@ -7479,9 +7481,9 @@ func TestModelUsageCommandRequiresChatGPTLogin(t *testing.T) {
 	model := NewModel(state, Options{Width: 80, Height: 24})
 
 	typeText(t, model, "/usage weekly")
-	model.Update(key(bubbletea.KeyEnter))
-	if !strings.Contains(model.View(), usageChatGPTLoginRequired) {
-		t.Fatalf("signed-out usage command missing login error:\n%s", model.View())
+	model.Update(key(keymsg.KeyEnter))
+	if !strings.Contains(model.viewString(), usageChatGPTLoginRequired) {
+		t.Fatalf("signed-out usage command missing login error:\n%s", model.viewString())
 	}
 	if got := countRole(state.Messages, codextui.RoleHistory); got != 1 {
 		t.Fatalf("history count = %d, want one login error; messages=%#v", got, state.Messages)
@@ -7493,7 +7495,7 @@ func TestModelUsageWeeklyOpensSummaryWeeklyView(t *testing.T) {
 	model := newAnalyticsTestModel(t, "plus", backend)
 
 	typeText(t, model, "/usage weekly")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 
 	dashboard := model.analyticsDashboard
 	if dashboard == nil || !dashboard.active {
@@ -7509,7 +7511,7 @@ func TestModelUsageWeeklyOpensSummaryWeeklyView(t *testing.T) {
 		t.Fatalf("summary view = %d, want 1 (weekly)", got)
 	}
 	waitForAnalyticsLoads(t, model)
-	if view := stripAnalyticsTestANSI(model.View()); !strings.Contains(view, "Token activity") || !strings.Contains(view, "Weekly") {
+	if view := stripAnalyticsTestANSI(model.viewString()); !strings.Contains(view, "Token activity") || !strings.Contains(view, "Weekly") {
 		t.Fatalf("summary did not select Weekly:\n%s", view)
 	}
 }
@@ -7524,16 +7526,16 @@ func TestModelUsageMenuResetStates(t *testing.T) {
 	})
 
 	typeText(t, model, "/usage")
-	model.Update(key(bubbletea.KeyEnter))
-	view := model.View()
+	model.Update(key(keymsg.KeyEnter))
+	view := model.viewString()
 	if !strings.Contains(view, "Redeem reset") || !strings.Contains(view, "None available.") {
 		t.Fatalf("usage menu disabled reset missing:\n%s", view)
 	}
 	// Rust #45769 makes the analytics row first and the reset row second, so
 	// a disabled reset keeps the selection on the analytics row.
-	model.Update(key(bubbletea.KeyDown))
-	if !strings.Contains(model.View(), codextui.NumberedSelectionPrefix(0, true)+"View analytics") {
-		t.Fatalf("disabled reset should be skipped:\n%s", model.View())
+	model.Update(key(keymsg.KeyDown))
+	if !strings.Contains(model.viewString(), codextui.NumberedSelectionPrefix(0, true)+"View analytics") {
+		t.Fatalf("disabled reset should be skipped:\n%s", model.viewString())
 	}
 
 	two := int64(2)
@@ -7544,10 +7546,10 @@ func TestModelUsageMenuResetStates(t *testing.T) {
 		AvailableRateLimitResetCredits: &two,
 	})
 	typeText(t, model, "/usage")
-	model.Update(key(bubbletea.KeyEnter))
-	model.Update(key(bubbletea.KeyDown))
-	model.Update(key(bubbletea.KeyEnter))
-	view = model.View()
+	model.Update(key(keymsg.KeyEnter))
+	model.Update(key(keymsg.KeyDown))
+	model.Update(key(keymsg.KeyEnter))
+	view = model.viewString()
 	for _, want := range []string{"Usage limit resets", "You have 2 usage limit resets available.", "Use a reset", "Reset your current 5-hour and weekly usage limits."} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("reset confirmation missing %q:\n%s", want, view)
@@ -7562,10 +7564,10 @@ func TestModelUsageMenuResetStates(t *testing.T) {
 		AvailableRateLimitResetCredits: &two,
 	})
 	typeText(t, model, "/usage")
-	model.Update(key(bubbletea.KeyEnter))
-	model.Update(key(bubbletea.KeyDown))
-	model.Update(key(bubbletea.KeyEnter))
-	if view = model.View(); !strings.Contains(view, "Reset your current monthly usage limit.") {
+	model.Update(key(keymsg.KeyEnter))
+	model.Update(key(keymsg.KeyDown))
+	model.Update(key(keymsg.KeyEnter))
+	if view = model.viewString(); !strings.Contains(view, "Reset your current monthly usage limit.") {
 		t.Fatalf("free plan reset confirmation should use monthly copy:\n%s", view)
 	}
 }
@@ -7593,27 +7595,27 @@ func TestModelUsageRateLimitResetCallbacks(t *testing.T) {
 	})
 
 	typeText(t, model, "/usage")
-	model.Update(key(bubbletea.KeyEnter))
-	model.Update(key(bubbletea.KeyDown))
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
+	model.Update(key(keymsg.KeyDown))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	if cmd == nil {
 		t.Fatal("opening reset did not request credits")
 	}
-	if !strings.Contains(model.View(), "Checking your available resets") {
-		t.Fatalf("loading reset view missing:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Checking your available resets") {
+		t.Fatalf("loading reset view missing:\n%s", model.viewString())
 	}
 	model.Update(cmd())
-	if !strings.Contains(model.View(), "You have 2 usage limit resets available.") {
-		t.Fatalf("credits result did not open confirmation:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "You have 2 usage limit resets available.") {
+		t.Fatalf("credits result did not open confirmation:\n%s", model.viewString())
 	}
 
-	model.Update(key(bubbletea.KeyUp))
-	_, cmd = model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyUp))
+	_, cmd = model.Update(key(keymsg.KeyEnter))
 	if cmd == nil {
 		t.Fatal("consume reset did not return command")
 	}
-	if !strings.Contains(model.View(), "Resetting your usage") {
-		t.Fatalf("consume loading view missing:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Resetting your usage") {
+		t.Fatalf("consume loading view missing:\n%s", model.viewString())
 	}
 	_, cmd = model.Update(cmd())
 	if consumedKey == "" {
@@ -7623,8 +7625,8 @@ func TestModelUsageRateLimitResetCallbacks(t *testing.T) {
 		t.Fatal("successful reset did not request refreshed credits")
 	}
 	model.Update(cmd())
-	if !strings.Contains(model.View(), "Usage reset. You have 1 usage limit reset left.") {
-		t.Fatalf("post-reset credits refresh missing:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Usage reset. You have 1 usage limit reset left.") {
+		t.Fatalf("post-reset credits refresh missing:\n%s", model.viewString())
 	}
 }
 
@@ -7677,11 +7679,11 @@ func TestModelResumeCommandOpensSessionPickerAndSetsThread(t *testing.T) {
 	model.now = func() time.Time { return now.Add(48 * time.Hour) }
 
 	typeText(t, model, "/resume")
-	_, openCmd := model.Update(key(bubbletea.KeyEnter))
-	if !batchContainsMessageType(openCmd, bubbletea.EnterAltScreen()) {
+	model.Update(key(keymsg.KeyEnter))
+	if !model.sessionPickerAltScreen {
 		t.Fatal("opening resume picker did not enter the alternate screen")
 	}
-	view := model.View()
+	view := model.viewString()
 	for _, want := range []string{
 		"Resume a previous session",
 		"Type to search",
@@ -7710,8 +7712,8 @@ func TestModelResumeCommandOpensSessionPickerAndSetsThread(t *testing.T) {
 		t.Fatalf("resume picker should start at the top of the full-screen surface; first line = %q", first)
 	}
 
-	_, closeCmd := model.Update(key(bubbletea.KeyEnter))
-	if !batchContainsMessageType(closeCmd, bubbletea.ExitAltScreen()) {
+	model.Update(key(keymsg.KeyEnter))
+	if model.sessionPickerAltScreen {
 		t.Fatal("selecting a resume target did not leave the alternate screen")
 	}
 	if state.ThreadID != "thread-resume" {
@@ -7723,7 +7725,7 @@ func TestModelResumeCommandOpensSessionPickerAndSetsThread(t *testing.T) {
 	if len(state.Messages) != 2 || state.Messages[0].Text != "restored prompt" || state.Messages[1].Text != "restored answer" {
 		t.Fatalf("restored messages = %#v", state.Messages)
 	}
-	if view := model.View(); !strings.Contains(view, "restored prompt") || !strings.Contains(view, "restored answer") {
+	if view := model.viewString(); !strings.Contains(view, "restored prompt") || !strings.Contains(view, "restored answer") {
 		t.Fatalf("restored history not rendered:\n%s", view)
 	}
 	if len(responses) != 1 || responses[0].Picker == nil || responses[0].Picker.Kind != string(codextui.SessionSelectionResume) || responses[0].Picker.Value != "thread-resume" {
@@ -7741,8 +7743,8 @@ func TestModelSessionPickerShowsLaterPageFailureNoticeLikeRust(t *testing.T) {
 		SessionPickerNotice: "Could not load more sessions",
 	})
 	typeText(t, model, "/resume")
-	model.Update(key(bubbletea.KeyEnter))
-	view := model.View()
+	model.Update(key(keymsg.KeyEnter))
+	view := model.viewString()
 	if !strings.Contains(view, "Loaded session") || !strings.Contains(view, "Could not load more sessions") {
 		t.Fatalf("session picker did not preserve loaded rows with the page error:\n%s", view)
 	}
@@ -7753,12 +7755,12 @@ func TestModelResumePickerCancelRestoresInlineScreen(t *testing.T) {
 		SessionPickerItems: []codextui.SessionSummary{{ThreadID: "thread-resume", Preview: "Resume Me"}},
 	})
 	typeText(t, model, "/resume")
-	_, openCmd := model.Update(key(bubbletea.KeyEnter))
-	if !batchContainsMessageType(openCmd, bubbletea.EnterAltScreen()) {
+	model.Update(key(keymsg.KeyEnter))
+	if !model.sessionPickerAltScreen {
 		t.Fatal("opening resume picker did not enter the alternate screen")
 	}
-	_, closeCmd := model.Update(key(bubbletea.KeyEsc))
-	if !batchContainsMessageType(closeCmd, bubbletea.ExitAltScreen()) {
+	model.Update(key(keymsg.KeyEsc))
+	if model.sessionPickerAltScreen {
 		t.Fatal("cancelling resume picker did not leave the alternate screen")
 	}
 	if model.modal != nil || model.sessionPickerAltScreen {
@@ -7772,14 +7774,14 @@ func TestModelResumePickerHonorsNoAltScreen(t *testing.T) {
 		SessionPickerItems: []codextui.SessionSummary{{ThreadID: "thread-resume", Preview: "Resume Me"}},
 	})
 	typeText(t, model, "/resume")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	if cmd != nil {
 		t.Fatalf("no-alt-screen resume picker returned terminal mode command %T", cmd())
 	}
-	if !strings.HasPrefix(normalizeTerminalSnapshot(model.View()), "Resume a previous session") {
-		t.Fatalf("no-alt-screen picker should still replace the chat surface:\n%s", model.View())
+	if !strings.HasPrefix(normalizeTerminalSnapshot(model.viewString()), "Resume a previous session") {
+		t.Fatalf("no-alt-screen picker should still replace the chat surface:\n%s", model.viewString())
 	}
-	_, cmd = model.Update(key(bubbletea.KeyEsc))
+	_, cmd = model.Update(key(keymsg.KeyEsc))
 	if cmd != nil || model.sessionPickerAltScreen {
 		t.Fatalf("no-alt-screen cancel returned command/state: cmd=%v alt=%v", cmd != nil, model.sessionPickerAltScreen)
 	}
@@ -7804,8 +7806,8 @@ func TestModelResumePickerUsesConfiguredDensePreviewRows(t *testing.T) {
 	model.now = func() time.Time { return now }
 
 	typeText(t, model, "/resume")
-	model.Update(key(bubbletea.KeyEnter))
-	view := model.View()
+	model.Update(key(keymsg.KeyEnter))
+	view := model.viewString()
 	for _, want := range []string{"18m ago", "请你写一段快速排序的代码使用go", codextui.ModifierLabelPrefix(codextui.ControlKeyLabel()) + "o comfy"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("dense resume picker missing %q:\n%s", want, view)
@@ -7851,33 +7853,33 @@ func TestModelResumeCommandSearchFilterAndDirectMatchRust(t *testing.T) {
 	model.now = func() time.Time { return now.Add(48 * time.Hour) }
 
 	typeText(t, model, "/resume")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	typeText(t, model, "auth")
-	view := model.View()
+	view := model.viewString()
 	if !strings.Contains(view, "Search: auth") || !strings.Contains(view, "Investigate auth flow") {
 		t.Fatalf("resume search did not filter/show query:\n%s", view)
 	}
-	model.Update(key(bubbletea.KeyEsc))
-	if view := model.View(); strings.Contains(view, "Search: auth") || !strings.Contains(view, "Type to search") {
+	model.Update(key(keymsg.KeyEsc))
+	if view := model.viewString(); strings.Contains(view, "Search: auth") || !strings.Contains(view, "Type to search") {
 		t.Fatalf("Esc should clear resume search first:\n%s", view)
 	}
-	model.Update(key(bubbletea.KeyRight))
-	if view := model.View(); !strings.Contains(view, "Filter:  Cwd [All]") || !strings.Contains(view, "Other Workspace") {
+	model.Update(key(keymsg.KeyRight))
+	if view := model.viewString(); !strings.Contains(view, "Filter:  Cwd [All]") || !strings.Contains(view, "Other Workspace") {
 		t.Fatalf("Right should toggle focused filter to All:\n%s", view)
 	}
-	model.Update(key(bubbletea.KeyTab))
-	model.Update(key(bubbletea.KeyRight))
-	if view := model.View(); !strings.Contains(view, "Sort:  Updated [Created]") {
+	model.Update(key(keymsg.KeyTab))
+	model.Update(key(keymsg.KeyRight))
+	if view := model.viewString(); !strings.Contains(view, "Sort:  Updated [Created]") {
 		t.Fatalf("Tab+Right should toggle sort toolbar:\n%s", view)
 	}
-	model.Update(key(bubbletea.KeyCtrlO))
-	if view := model.View(); !strings.Contains(view, codextui.ModifierLabelPrefix(codextui.ControlKeyLabel())+"o dense") {
+	model.Update(key(keymsg.KeyCtrlO))
+	if view := model.viewString(); !strings.Contains(view, codextui.ModifierLabelPrefix(codextui.ControlKeyLabel())+"o dense") {
 		t.Fatalf("Ctrl+O should toggle comfortable view footer:\n%s", view)
 	}
-	model.Update(key(bubbletea.KeyEsc))
+	model.Update(key(keymsg.KeyEsc))
 
 	typeText(t, model, "/resume Investigate auth flow")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if state.ThreadID != "thread-auth" {
 		t.Fatalf("direct resume ThreadID = %q, want thread-auth", state.ThreadID)
 	}
@@ -7896,8 +7898,8 @@ func TestModelResumeCommandMissingMatchShowsRustError(t *testing.T) {
 	})
 
 	typeText(t, model, "/resume missing")
-	model.Update(key(bubbletea.KeyEnter))
-	view := model.View()
+	model.Update(key(keymsg.KeyEnter))
+	view := model.viewString()
 	if !strings.Contains(view, "No saved chat found matching 'missing'.") {
 		t.Fatalf("missing resume error not shown:\n%s", view)
 	}
@@ -7943,7 +7945,7 @@ func TestModelAgentCommandLoadsPickerAndSwitchesThread(t *testing.T) {
 	// prefix to the upstream "agents" frame, so the canonical spelling is used
 	// here.
 	typeText(t, model, "/subagents")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	if cmd == nil {
 		t.Fatal("/subagents did not request agent list")
 	}
@@ -7951,15 +7953,15 @@ func TestModelAgentCommandLoadsPickerAndSwitchesThread(t *testing.T) {
 	if readCurrent != "thread-main" {
 		t.Fatalf("read current = %q, want thread-main", readCurrent)
 	}
-	view := model.View()
+	view := model.viewString()
 	for _, want := range []string{"Subagents", "Main [default]", "Scout [review]", "Select an agent to watch.", "thread-worker"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("agent picker missing %q:\n%s", want, view)
 		}
 	}
 
-	model.Update(key(bubbletea.KeyDown))
-	_, cmd = model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyDown))
+	_, cmd = model.Update(key(keymsg.KeyEnter))
 	if cmd == nil {
 		t.Fatal("agent selection did not request switch")
 	}
@@ -7973,8 +7975,8 @@ func TestModelAgentCommandLoadsPickerAndSwitchesThread(t *testing.T) {
 	if len(state.Messages) != 2 || state.Messages[0].Text != "worker prompt" || state.Messages[1].Text != "worker answer" {
 		t.Fatalf("messages = %#v", state.Messages)
 	}
-	if !strings.Contains(model.View(), "Scout [review]") {
-		t.Fatalf("active agent notice missing:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Scout [review]") {
+		t.Fatalf("active agent notice missing:\n%s", model.viewString())
 	}
 }
 
@@ -8001,8 +8003,8 @@ func TestModelAgentPickerShowsCacheImmediatelyAndRefreshesInBackground(t *testin
 	if cmd == nil || model.modal == nil || model.modal.id != "agent-picker" {
 		t.Fatalf("cached picker was not opened immediately: modal=%#v cmd=%v", model.modal, cmd != nil)
 	}
-	if strings.Contains(model.View(), "Loading agent threads") || !strings.Contains(model.View(), "Scout") {
-		t.Fatalf("cached picker view =\n%s", model.View())
+	if strings.Contains(model.viewString(), "Loading agent threads") || !strings.Contains(model.viewString(), "Scout") {
+		t.Fatalf("cached picker view =\n%s", model.viewString())
 	}
 	model.modal.selected = 1
 	if coalesced := model.applyAgentCommand(); coalesced != nil {
@@ -8015,8 +8017,8 @@ func TestModelAgentPickerShowsCacheImmediatelyAndRefreshesInBackground(t *testin
 	if selected := model.modal.options[model.modal.selected].ID; selected != "thread-worker" {
 		t.Fatalf("selection after refresh = %q, want thread-worker", selected)
 	}
-	if !strings.Contains(model.View(), "Builder") {
-		t.Fatalf("refreshed picker missing new agent:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Builder") {
+		t.Fatalf("refreshed picker missing new agent:\n%s", model.viewString())
 	}
 }
 
@@ -8103,7 +8105,7 @@ func TestModelAgentFastNavigationLoadsAndWraps(t *testing.T) {
 		},
 	})
 
-	_, loadCmd := model.Update(bubbletea.KeyMsg(bubbletea.Key{Type: bubbletea.KeyRight, Alt: true}))
+	_, loadCmd := model.Update(keymsg.KeyMsg(keymsg.Key{Type: keymsg.KeyRight, Alt: true}))
 	if loadCmd == nil {
 		t.Fatal("alt+right did not load agent threads")
 	}
@@ -8116,7 +8118,7 @@ func TestModelAgentFastNavigationLoadsAndWraps(t *testing.T) {
 		t.Fatalf("first navigation switched=%#v thread=%q", switched, state.ThreadID)
 	}
 
-	_, switchCmd = model.Update(bubbletea.KeyMsg(bubbletea.Key{Type: bubbletea.KeyRight, Alt: true}))
+	_, switchCmd = model.Update(keymsg.KeyMsg(keymsg.Key{Type: keymsg.KeyRight, Alt: true}))
 	if switchCmd == nil {
 		t.Fatal("cached alt+right did not switch agents")
 	}
@@ -8126,7 +8128,7 @@ func TestModelAgentFastNavigationLoadsAndWraps(t *testing.T) {
 	}
 
 	typeText(t, model, "draft")
-	_, cmd := model.Update(bubbletea.KeyMsg(bubbletea.Key{Type: bubbletea.KeyRight, Alt: true}))
+	_, cmd := model.Update(keymsg.KeyMsg(keymsg.Key{Type: keymsg.KeyRight, Alt: true}))
 	if cmd != nil || len(switched) != 2 {
 		t.Fatalf("non-empty draft triggered navigation cmd=%#v switched=%#v", cmd, switched)
 	}
@@ -8142,7 +8144,7 @@ func TestModelMentionCommandOpensUnifiedMentionPopup(t *testing.T) {
 		},
 	})
 	typeText(t, model, "/mention")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 	if model.ComposerValue() != "@" || model.mentionPopup == nil {
 		t.Fatalf("mention command composer=%q popup=%#v", model.ComposerValue(), model.mentionPopup)
@@ -8161,8 +8163,8 @@ func TestModelTestApprovalMatchesPatchApprovalFixture(t *testing.T) {
 		},
 	})
 	typeText(t, model, "/test-approval")
-	model.Update(key(bubbletea.KeyEnter))
-	view := model.View()
+	model.Update(key(keymsg.KeyEnter))
+	view := model.viewString()
 	for _, want := range []string{"Would you like to make the following edits?", "Yes, proceed", "don't ask again for these files", "No, and tell Codex what to do differently"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("test approval missing %q:\n%s", want, view)
@@ -8173,7 +8175,7 @@ func TestModelTestApprovalMatchesPatchApprovalFixture(t *testing.T) {
 			t.Fatalf("test approval unexpectedly contains %q:\n%s", unexpected, view)
 		}
 	}
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 	if len(responses) != 1 || responses[0].ID != "1" || responses[0].Kind != ModalKindApproval || responses[0].OptionID != "accept" || responses[0].Cancelled {
 		t.Fatalf("test approval response = %#v", responses)
@@ -8199,7 +8201,7 @@ func TestModelMisalignmentPolicyViolationStopsChat(t *testing.T) {
 		t.Fatalf("composer should be cleared, got %q", got)
 	}
 	stopped.composer.SetValue("new")
-	next, cmd := stopped.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	next, cmd := stopped.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	if cmd != nil {
 		t.Fatalf("stopped chat submit cmd = %#v, want nil (submit rejected)", cmd)
 	}
@@ -8220,7 +8222,7 @@ func TestModelAsyncAgentMessageRendersWithoutEndingTurn(t *testing.T) {
 		Type: "item.completed",
 		Item: &protocol.ThreadItem{ID: "async-1", Type: "agent_message", Text: "still working", Delivery: "async"},
 	}})
-	view := model.View()
+	view := model.viewString()
 	if !strings.Contains(view, "still working") {
 		t.Fatalf("async message not rendered:\n%s", view)
 	}
@@ -8228,7 +8230,7 @@ func TestModelAsyncAgentMessageRendersWithoutEndingTurn(t *testing.T) {
 		Type: "item.completed",
 		Item: &protocol.ThreadItem{ID: "final-1", Type: "agent_message", Text: "done"},
 	}})
-	view = model.View()
+	view = model.viewString()
 	if !strings.Contains(view, "done") {
 		t.Fatalf("final message not rendered:\n%s", view)
 	}
@@ -8257,7 +8259,7 @@ func TestModelForkCommandForksCurrentSessionImmediately(t *testing.T) {
 	})
 
 	typeText(t, model, "/fork")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 	if len(actions) != 1 || actions[0].Kind != codextui.SessionSelectionFork || actions[0].Target.ThreadID != "thread-source" {
 		t.Fatalf("actions = %#v", actions)
@@ -8290,7 +8292,7 @@ func TestModelForkCommandNamesForkAndKeepsItOpenOnRenameFailure(t *testing.T) {
 	})
 
 	typeText(t, model, "/fork Add User")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 	if len(actions) != 1 || actions[0].Name != "Add User" || renameName != "Add User" {
 		t.Fatalf("named fork actions = %#v rename=%q", actions, renameName)
@@ -8298,7 +8300,7 @@ func TestModelForkCommandNamesForkAndKeepsItOpenOnRenameFailure(t *testing.T) {
 	if state.ThreadID != "thread-forked" {
 		t.Fatalf("rename failure did not keep fork open: %q", state.ThreadID)
 	}
-	if view := model.View(); !strings.Contains(view, "Failed to name the forked session: rename failed") {
+	if view := model.viewString(); !strings.Contains(view, "Failed to name the forked session: rename failed") {
 		t.Fatalf("rename failure missing from history:\n%s", view)
 	}
 }
@@ -8326,12 +8328,12 @@ func TestModelDeleteCommandConfirmsCurrentSessionAndExits(t *testing.T) {
 	})
 
 	typeText(t, model, "/delete")
-	model.Update(key(bubbletea.KeyEnter))
-	if view := model.View(); !strings.Contains(view, "Delete this session?") || !strings.Contains(view, "Cannot be undone. Subagent threads will also be deleted.") || !strings.Contains(view, "No, keep this session") {
+	model.Update(key(keymsg.KeyEnter))
+	if view := model.viewString(); !strings.Contains(view, "Delete this session?") || !strings.Contains(view, "Cannot be undone. Subagent threads will also be deleted.") || !strings.Contains(view, "No, keep this session") {
 		t.Fatalf("delete confirmation view:\n%s", view)
 	}
-	model.Update(key(bubbletea.KeyDown))
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyDown))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	if len(actions) != 1 || actions[0].Kind != codextui.SessionSelectionDelete || actions[0].Target.ThreadID != "thread-delete" {
 		t.Fatalf("actions = %#v", actions)
 	}
@@ -8372,12 +8374,12 @@ func TestModelArchiveCommandConfirmsCurrentSessionAndExits(t *testing.T) {
 	})
 
 	typeText(t, model, "/archive")
-	model.Update(key(bubbletea.KeyEnter))
-	if view := model.View(); !strings.Contains(view, "Archive this session?") || !strings.Contains(view, "This will archive the current session and exit Codex") || !strings.Contains(view, "No, keep this session") {
+	model.Update(key(keymsg.KeyEnter))
+	if view := model.viewString(); !strings.Contains(view, "Archive this session?") || !strings.Contains(view, "This will archive the current session and exit Codex") || !strings.Contains(view, "No, keep this session") {
 		t.Fatalf("archive confirmation view:\n%s", view)
 	}
-	model.Update(key(bubbletea.KeyDown))
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyDown))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	if len(actions) != 1 || actions[0].Kind != codextui.SessionSelectionArchive || actions[0].Target.ThreadID != "thread-archive" {
 		t.Fatalf("actions = %#v", actions)
 	}
@@ -8409,7 +8411,7 @@ func TestModelAttachmentCommandsRenderAndSubmit(t *testing.T) {
 		{Kind: bottompane.AttachmentRemoteImage, URL: "https://example.test/preview.png"},
 	}
 	model.refreshTranscript()
-	view := model.View()
+	view := model.viewString()
 	for _, want := range []string{"Attachments:", "file: notes.md", "image: diagram.png", "remote image: https://example.test/preview.png"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("attachment view missing %q:\n%s", want, view)
@@ -8420,7 +8422,7 @@ func TestModelAttachmentCommandsRenderAndSubmit(t *testing.T) {
 	}
 
 	typeText(t, model, "review these")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if len(requests) != 1 || requests[0].Prompt != "review these" || len(requests[0].Attachments) != 3 {
 		t.Fatalf("submit requests = %#v", requests)
 	}
@@ -8453,7 +8455,7 @@ func TestModelAttachmentCommandsRenderAndSubmit(t *testing.T) {
 func TestModelClearAttachmentsCommandIsUnrecognizedLikeRust(t *testing.T) {
 	model := NewModel(nil, Options{})
 	typeText(t, model, "/clear-attachments")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if want := codextui.UnrecognizedSlashCommandMessage("/clear-attachments"); !strings.Contains(modelMessageText(model), want) {
 		t.Fatalf("/clear-attachments transcript missing %q: %q", want, modelMessageText(model))
 	}
@@ -8474,23 +8476,23 @@ func TestModelCommandWithoutArgsOpensModelPicker(t *testing.T) {
 	})
 
 	typeText(t, model, "/model")
-	model.Update(key(bubbletea.KeyEnter))
-	view := model.View()
+	model.Update(key(keymsg.KeyEnter))
+	view := model.viewString()
 	for _, want := range []string{"Select Model", "GPT A", "GPT B", "current"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("model picker missing %q:\n%s", want, view)
 		}
 	}
 
-	model.Update(bubbletea.KeyMsg(bubbletea.Key{Type: bubbletea.KeyRunes, Runes: []rune{'1'}}))
+	model.Update(keymsg.KeyMsg(keymsg.Key{Type: keymsg.KeyRunes, Runes: []rune{'1'}}))
 	if state.Model != "gpt-a" {
 		t.Fatalf("Model = %q, want gpt-a", state.Model)
 	}
 	if len(responses) != 1 || responses[0].Picker == nil || responses[0].Picker.Kind != "model" || responses[0].Picker.Value != "gpt-a" {
 		t.Fatalf("responses = %#v", responses)
 	}
-	if !strings.Contains(model.View(), "Model: gpt-a") {
-		t.Fatalf("View() missing model notice:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Model: gpt-a") {
+		t.Fatalf("View() missing model notice:\n%s", model.viewString())
 	}
 }
 
@@ -8518,9 +8520,9 @@ func TestModelPickerOpensReasoningPickerForMultiEffortModel(t *testing.T) {
 	})
 
 	typeText(t, model, "/model")
-	model.Update(key(bubbletea.KeyEnter))
-	model.Update(bubbletea.KeyMsg(bubbletea.Key{Type: bubbletea.KeyRunes, Runes: []rune{'1'}}))
-	view := model.View()
+	model.Update(key(keymsg.KeyEnter))
+	model.Update(keymsg.KeyMsg(keymsg.Key{Type: keymsg.KeyRunes, Runes: []rune{'1'}}))
+	view := model.viewString()
 	for _, want := range []string{"Select Reasoning Level for gpt-a", "Low", "Medium", "High"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("reasoning picker missing %q:\n%s", want, view)
@@ -8530,15 +8532,15 @@ func TestModelPickerOpensReasoningPickerForMultiEffortModel(t *testing.T) {
 		t.Fatalf("responses before reasoning selection = %#v", responses)
 	}
 
-	model.Update(bubbletea.KeyMsg(bubbletea.Key{Type: bubbletea.KeyRunes, Runes: []rune{'3'}}))
+	model.Update(keymsg.KeyMsg(keymsg.Key{Type: keymsg.KeyRunes, Runes: []rune{'3'}}))
 	if state.Model != "gpt-a" || state.ReasoningEffort != "high" {
 		t.Fatalf("state model=%q reasoning=%q", state.Model, state.ReasoningEffort)
 	}
 	if len(responses) != 1 || responses[0].Picker == nil || responses[0].Picker.Kind != "model_reasoning" || responses[0].Picker.Value != "gpt-a" || responses[0].Picker.ReasoningEffort != "high" {
 		t.Fatalf("responses = %#v", responses)
 	}
-	if !strings.Contains(model.View(), "Reasoning: high") {
-		t.Fatalf("View() missing reasoning notice/status:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Reasoning: high") {
+		t.Fatalf("View() missing reasoning notice/status:\n%s", model.viewString())
 	}
 }
 
@@ -8558,10 +8560,10 @@ func TestModelReasoningPickerPlanOnlyScope(t *testing.T) {
 	})
 
 	typeText(t, model, "/model")
-	model.Update(key(bubbletea.KeyEnter))
-	model.Update(bubbletea.KeyMsg(bubbletea.Key{Type: bubbletea.KeyRunes, Runes: []rune{'1'}}))
-	model.Update(bubbletea.KeyMsg(bubbletea.Key{Type: bubbletea.KeyRunes, Runes: []rune{'3'}}))
-	view := model.View()
+	model.Update(key(keymsg.KeyEnter))
+	model.Update(keymsg.KeyMsg(keymsg.Key{Type: keymsg.KeyRunes, Runes: []rune{'1'}}))
+	model.Update(keymsg.KeyMsg(keymsg.Key{Type: keymsg.KeyRunes, Runes: []rune{'3'}}))
+	view := model.viewString()
 	for _, want := range []string{"Apply reasoning change", "Apply to Plan mode override", "Apply to global default"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("plan scope picker missing %q:\n%s", want, view)
@@ -8571,7 +8573,7 @@ func TestModelReasoningPickerPlanOnlyScope(t *testing.T) {
 		t.Fatalf("responses before scope selection = %#v", responses)
 	}
 
-	model.Update(bubbletea.KeyMsg(bubbletea.Key{Type: bubbletea.KeyRunes, Runes: []rune{'1'}}))
+	model.Update(keymsg.KeyMsg(keymsg.Key{Type: keymsg.KeyRunes, Runes: []rune{'1'}}))
 	if state.Model != "gpt-a" || state.ReasoningEffort != "medium" || state.PlanModeReasoningEffort != "high" {
 		t.Fatalf("state model=%q reasoning=%q plan reasoning=%q", state.Model, state.ReasoningEffort, state.PlanModeReasoningEffort)
 	}
@@ -8581,8 +8583,8 @@ func TestModelReasoningPickerPlanOnlyScope(t *testing.T) {
 	if len(responses) != 1 || responses[0].Picker == nil || responses[0].Picker.Kind != "plan_reasoning_scope" || responses[0].Picker.Scope != string(codextui.PlanReasoningScopePlanOnly) {
 		t.Fatalf("responses = %#v", responses)
 	}
-	if !strings.Contains(model.View(), "Plan Reasoning: high") {
-		t.Fatalf("View() missing Plan reasoning:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Plan Reasoning: high") {
+		t.Fatalf("View() missing Plan reasoning:\n%s", model.viewString())
 	}
 }
 
@@ -8603,10 +8605,10 @@ func TestModelReasoningPickerAllModesScope(t *testing.T) {
 	})
 
 	typeText(t, model, "/model")
-	model.Update(key(bubbletea.KeyEnter))
-	model.Update(bubbletea.KeyMsg(bubbletea.Key{Type: bubbletea.KeyRunes, Runes: []rune{'1'}}))
-	model.Update(bubbletea.KeyMsg(bubbletea.Key{Type: bubbletea.KeyRunes, Runes: []rune{'3'}}))
-	model.Update(bubbletea.KeyMsg(bubbletea.Key{Type: bubbletea.KeyRunes, Runes: []rune{'2'}}))
+	model.Update(key(keymsg.KeyEnter))
+	model.Update(keymsg.KeyMsg(keymsg.Key{Type: keymsg.KeyRunes, Runes: []rune{'1'}}))
+	model.Update(keymsg.KeyMsg(keymsg.Key{Type: keymsg.KeyRunes, Runes: []rune{'3'}}))
+	model.Update(keymsg.KeyMsg(keymsg.Key{Type: keymsg.KeyRunes, Runes: []rune{'2'}}))
 
 	if state.Model != "gpt-a" || state.ReasoningEffort != "high" || state.PlanModeReasoningEffort != "high" {
 		t.Fatalf("state model=%q reasoning=%q plan reasoning=%q", state.Model, state.ReasoningEffort, state.PlanModeReasoningEffort)
@@ -8639,18 +8641,18 @@ func TestModelRequestUserInputModalAnswersQuestions(t *testing.T) {
 			},
 		},
 	})
-	view := model.View()
+	view := model.viewString()
 	for _, want := range []string{"Request user input", "Where should this apply?", "Plan", "All"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("request_user_input modal missing %q:\n%s", want, view)
 		}
 	}
-	model.Update(bubbletea.KeyMsg(bubbletea.Key{Type: bubbletea.KeyRunes, Runes: []rune{'2'}}))
+	model.Update(keymsg.KeyMsg(keymsg.Key{Type: keymsg.KeyRunes, Runes: []rune{'2'}}))
 	if len(responses) != 0 {
 		t.Fatalf("responses after first question = %#v, want none", responses)
 	}
 	typeText(t, model, "ship it")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if len(responses) != 1 {
 		t.Fatalf("responses len = %d, want 1", len(responses))
 	}
@@ -8685,16 +8687,16 @@ func TestModelRequestUserInputModalOptionNotes(t *testing.T) {
 			Options:  []codextui.RequestUserInputChoice{{Label: "Plan"}, {Label: "All"}},
 		}},
 	})
-	model.Update(key(bubbletea.KeyDown))
-	model.Update(key(bubbletea.KeyTab))
+	model.Update(key(keymsg.KeyDown))
+	model.Update(key(keymsg.KeyTab))
 	typeText(t, model, "include tests")
-	view := model.View()
+	view := model.viewString()
 	for _, want := range []string{"Notes: include tests", "Tab or Esc clear notes"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("notes modal missing %q:\n%s", want, view)
 		}
 	}
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if len(responses) != 1 || responses[0].UserInput == nil {
 		t.Fatalf("responses = %#v", responses)
 	}
@@ -8720,17 +8722,17 @@ func TestModelRequestUserInputModalOtherOptionMatchesRust(t *testing.T) {
 			Options:  []codextui.RequestUserInputChoice{{Label: "Plan"}, {Label: "All"}},
 		}},
 	})
-	view := model.View()
+	view := model.viewString()
 	for _, want := range []string{"None of the above", "Optionally, add details in notes (tab)."} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("other modal missing %q:\n%s", want, view)
 		}
 	}
-	model.Update(key(bubbletea.KeyDown))
-	model.Update(key(bubbletea.KeyDown))
-	model.Update(key(bubbletea.KeyTab))
+	model.Update(key(keymsg.KeyDown))
+	model.Update(key(keymsg.KeyDown))
+	model.Update(key(keymsg.KeyTab))
 	typeText(t, model, "custom scope")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if len(responses) != 1 || responses[0].UserInput == nil {
 		t.Fatalf("responses = %#v", responses)
 	}
@@ -8758,18 +8760,18 @@ func TestModelRequestUserInputEnterOnOtherOpensNotesWithoutSubmittingLikeRust(t 
 	})
 	// Select the generated "Other" option (last) and press Enter: Rust #38624
 	// opens the notes editor instead of submitting the response.
-	model.Update(key(bubbletea.KeyDown))
-	model.Update(key(bubbletea.KeyDown))
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyDown))
+	model.Update(key(keymsg.KeyDown))
+	model.Update(key(keymsg.KeyEnter))
 	if len(responses) != 0 {
 		t.Fatalf("responses after Enter on Other = %#v, want none until notes submitted", responses)
 	}
-	if !strings.Contains(model.View(), "Notes:") && !strings.Contains(model.View(), "Add notes") {
-		t.Fatalf("Enter on Other should reveal the notes editor:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Notes:") && !strings.Contains(model.viewString(), "Add notes") {
+		t.Fatalf("Enter on Other should reveal the notes editor:\n%s", model.viewString())
 	}
 
 	typeText(t, model, "custom via enter")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if len(responses) != 1 || responses[0].UserInput == nil {
 		t.Fatalf("responses = %#v", responses)
 	}
@@ -8793,25 +8795,25 @@ func TestModelRequestUserInputModalUnansweredConfirmation(t *testing.T) {
 			{ID: "second", Question: "Second?"},
 		},
 	})
-	model.Update(key(bubbletea.KeyEnter))
-	model.Update(key(bubbletea.KeyEnter))
-	view := model.View()
+	model.Update(key(keymsg.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
+	view := model.viewString()
 	for _, want := range []string{"Submit with unanswered questions?", "2 unanswered questions", "Proceed", "Go back"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("confirmation modal missing %q:\n%s", want, view)
 		}
 	}
-	model.Update(bubbletea.KeyMsg(bubbletea.Key{Type: bubbletea.KeyRunes, Runes: []rune{'2'}}))
+	model.Update(keymsg.KeyMsg(keymsg.Key{Type: keymsg.KeyRunes, Runes: []rune{'2'}}))
 	if len(responses) != 0 {
 		t.Fatalf("responses after go back = %#v", responses)
 	}
-	if !strings.Contains(model.View(), "First?") {
-		t.Fatalf("expected to return to first unanswered question:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "First?") {
+		t.Fatalf("expected to return to first unanswered question:\n%s", model.viewString())
 	}
 	typeText(t, model, "answered")
-	model.Update(key(bubbletea.KeyEnter))
-	model.Update(key(bubbletea.KeyEnter))
-	model.Update(bubbletea.KeyMsg(bubbletea.Key{Type: bubbletea.KeyRunes, Runes: []rune{'1'}}))
+	model.Update(key(keymsg.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
+	model.Update(keymsg.KeyMsg(keymsg.Key{Type: keymsg.KeyRunes, Runes: []rune{'1'}}))
 	if len(responses) != 1 || responses[0].UserInput == nil {
 		t.Fatalf("responses = %#v", responses)
 	}
@@ -8838,8 +8840,8 @@ func TestModelRequestUserInputModalAutoTimeout(t *testing.T) {
 			Options:  []codextui.RequestUserInputChoice{{Label: "Plan"}, {Label: "All"}},
 		}},
 	})
-	if !strings.Contains(model.View(), "auto-resolves in 1m 00s") {
-		t.Fatalf("request_user_input modal missing timeout:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "auto-resolves in 1m 00s") {
+		t.Fatalf("request_user_input modal missing timeout:\n%s", model.viewString())
 	}
 
 	model.Update(requestUserInputTimeoutMsg{ID: "other"})
@@ -8853,8 +8855,8 @@ func TestModelRequestUserInputModalAutoTimeout(t *testing.T) {
 	if responses[0].UserInput.Answers == nil || len(responses[0].UserInput.Answers) != 0 {
 		t.Fatalf("timeout answers = %#v", responses[0].UserInput.Answers)
 	}
-	if strings.Contains(model.View(), "Where should this apply?") || strings.Contains(model.View(), "Plan") {
-		t.Fatalf("modal should close after timeout:\n%s", model.View())
+	if strings.Contains(model.viewString(), "Where should this apply?") || strings.Contains(model.viewString(), "Plan") {
+		t.Fatalf("modal should close after timeout:\n%s", model.viewString())
 	}
 }
 
@@ -8862,7 +8864,7 @@ func TestModelExitCommandQuits(t *testing.T) {
 	model := NewModel(nil, Options{})
 
 	typeText(t, model, "/exit")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	if cmd == nil {
 		t.Fatal("/exit returned nil command")
 	}
@@ -8903,7 +8905,7 @@ func fixedTeaTime() time.Time {
 func typeText(t *testing.T, model *Model, value string) {
 	t.Helper()
 	for _, r := range value {
-		updated, _ := model.Update(bubbletea.KeyMsg(bubbletea.Key{Type: bubbletea.KeyRunes, Runes: []rune{r}}))
+		updated, _ := model.Update(keymsg.KeyMsg(keymsg.Key{Type: keymsg.KeyRunes, Runes: []rune{r}}))
 		next, ok := updated.(*Model)
 		if !ok {
 			t.Fatalf("Update returned %T, want *Model", updated)
@@ -8917,8 +8919,8 @@ func typeText(t *testing.T, model *Model, value string) {
 	}
 }
 
-func key(keyType bubbletea.KeyType) bubbletea.KeyMsg {
-	return bubbletea.KeyMsg(bubbletea.Key{Type: keyType})
+func key(keyType keymsg.KeyType) keymsg.KeyMsg {
+	return keymsg.KeyMsg(keymsg.Key{Type: keyType})
 }
 
 func runTeaCmd(t *testing.T, model *Model, cmd bubbletea.Cmd) {
@@ -8943,8 +8945,8 @@ func runTeaCmd(t *testing.T, model *Model, cmd bubbletea.Cmd) {
 	}
 }
 
-func runes(value string) bubbletea.KeyMsg {
-	return bubbletea.KeyMsg(bubbletea.Key{Type: bubbletea.KeyRunes, Runes: []rune(value)})
+func runes(value string) keymsg.KeyMsg {
+	return keymsg.KeyMsg(keymsg.Key{Type: keymsg.KeyRunes, Runes: []rune(value)})
 }
 
 func countRole(messages []codextui.Message, role codextui.MessageRole) int {
@@ -8980,7 +8982,7 @@ func TestModelStartupConfigWarningsLikeRust(t *testing.T) {
 			"Configured value for `approval_policy` is disallowed by requirements.",
 		},
 	})
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	// Rust #46751 keeps startup diagnostics out of the live transcript; the
 	// footer count and the Ctrl+T transcript carry them instead.
 	if strings.Contains(view, "startup issue") {
@@ -8995,7 +8997,7 @@ func TestModelStartupConfigWarningsLikeRust(t *testing.T) {
 	}
 	// A later duplicate is suppressed (Rust startup_config_warnings).
 	model.Update(StartupConfigWarningMsg{Message: "Configured value for `approval_policy` is disallowed by requirements."})
-	view = utils.StripANSI(model.View())
+	view = utils.StripANSI(model.viewString())
 	if strings.Count(view, "Configured value for `approval_policy`") != 0 {
 		t.Fatalf("duplicate config warning rendered:\n%s", view)
 	}
@@ -9004,7 +9006,7 @@ func TestModelStartupConfigWarningsLikeRust(t *testing.T) {
 	}
 	// A distinct warning still merges.
 	model.Update(StartupConfigWarningMsg{Message: "Ignored unsupported project-local config keys in /repo/.gcode/config.toml."})
-	view = utils.StripANSI(model.View())
+	view = utils.StripANSI(model.viewString())
 	if got := model.warningDisplay.WarningCount(); got != 2 {
 		t.Fatalf("footer warning count = %d, want 2", got)
 	}
@@ -9015,7 +9017,7 @@ func TestModelStartupConfigWarningsLikeRust(t *testing.T) {
 	// After the first turn the startup window is closed.
 	model.Update(ThreadEventMsg{Event: protocol.TurnStarted()})
 	model.Update(StartupConfigWarningMsg{Message: "Late configuration warning."})
-	view = utils.StripANSI(model.View())
+	view = utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "Late configuration warning.") {
 		t.Fatalf("late config warning should use the warning path:\n%s", view)
 	}
@@ -9035,7 +9037,7 @@ func TestManagedDaemonStartupWarningRestartHintLikeRust(t *testing.T) {
 			"Configured value for `approval_policy` is disallowed by requirements.",
 		},
 	})
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if strings.Contains(view, "startup issue") || strings.Contains(view, "/daemon") {
 		t.Fatalf("startup warning rendered inline:\n%s", view)
 	}
@@ -9055,7 +9057,7 @@ func TestManagedDaemonStartupWarningRestartHintLikeRust(t *testing.T) {
 		LocalDaemonSession:    true,
 		StartupConfigWarnings: []string{"Configured value is disallowed."},
 	})
-	if view := utils.StripANSI(unmanaged.View()); strings.Contains(view, "startup issue") || strings.Contains(view, "/daemon") {
+	if view := utils.StripANSI(unmanaged.viewString()); strings.Contains(view, "startup issue") || strings.Contains(view, "/daemon") {
 		t.Fatalf("unmanaged startup warning rendered inline:\n%s", view)
 	}
 	unmanaged.openWarningsView()
@@ -9078,7 +9080,7 @@ func TestPassiveFooterWarningNoticeFitsIndentLikeRust(t *testing.T) {
 			"Configured value for `approval_policy` is disallowed by requirements.",
 		},
 	})
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "\u26a0 1 warning \u00b7 f2 to view") {
 		t.Fatalf("footer notice clipped:\n%s", view)
 	}
@@ -9122,7 +9124,7 @@ func TestModelDisplayNameSurfacesLikeRust(t *testing.T) {
 	model.addStartupSessionHeader("0.1.0")
 	// Rust #48513: the compact welcome banner carries no model line, so the
 	// display name surfaces through the status line instead.
-	view := model.View()
+	view := model.viewString()
 	if !strings.Contains(view, "GPT-5.6-Terra") {
 		t.Fatalf("status line missing the display name: %q", view)
 	}
@@ -9142,7 +9144,7 @@ func TestModelCompletedCommandsRenderIndividuallyLikeRust(t *testing.T) {
 	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(commandExecutionItemWithSource("call-1", "printf first", "first\n", &exit0, "completed", "agent"))})
 	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(commandExecutionItemWithSource("call-2", "printf second", "", nil, "in_progress", "agent"))})
 
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "Ran printf first") || !strings.Contains(view, "Running printf second") {
 		t.Fatalf("individual command cells missing:\n%s", view)
 	}
@@ -9150,7 +9152,7 @@ func TestModelCompletedCommandsRenderIndividuallyLikeRust(t *testing.T) {
 		t.Fatalf("commands must not collapse into a compact summary:\n%s", view)
 	}
 	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(commandExecutionItemWithSource("call-2", "printf second", "second\n", &exit0, "completed", "agent"))})
-	view = utils.StripANSI(model.View())
+	view = utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "Ran printf second") {
 		t.Fatalf("completed command must stay visible:\n%s", view)
 	}
@@ -9164,7 +9166,7 @@ func TestModelCompletedCommandsRenderIndividuallyLikeRust(t *testing.T) {
 	model.Update(ThreadEventMsg{Event: protocol.AgentMessageDelta("message-1", "Done")})
 	durationMS := int64(0)
 	model.Update(TurnCompletedMsg{ThreadID: "thread-1", DurationMS: &durationMS})
-	view = model.View()
+	view = model.viewString()
 	if !strings.Contains(view, "Worked for <1s") {
 		t.Fatalf("assistant output after the commands should use the final-message separator:\n%s", view)
 	}
@@ -9182,7 +9184,7 @@ func TestModelCommandActivityKeepsFailuresVisible(t *testing.T) {
 	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(commandExecutionItemWithSource("call-broken", "printf broken", "", nil, "in_progress", "agent"))})
 	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(commandExecutionItemWithSource("call-broken", "printf broken", "broken\n", &exit1, "failed", "agent"))})
 
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	// Rust #54433: the failed command keeps its own cell, labelled `Exited (status 1)`.
 	if !strings.Contains(view, "Exited (status 1) printf broken") {
 		t.Fatalf("failed command must stay visible:\n%s", view)
@@ -9203,7 +9205,7 @@ func TestModelCommandActivityRendersManualShellAndTurnBoundaryLikeRust(t *testin
 	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(commandExecutionItemWithSource("call-1", "printf first", "first\n", &exit0, "completed", "agent"))})
 	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(commandExecutionItemWithSource("call-manual", "printf manual", "", nil, "in_progress", "userShell"))})
 	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(commandExecutionItemWithSource("call-manual", "printf manual", "manual\n", &exit0, "completed", "userShell"))})
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "You ran printf manual") || !strings.Contains(view, "Ran printf first") {
 		t.Fatalf("manual shell command must stay visible:\n%s", view)
 	}
@@ -9211,7 +9213,7 @@ func TestModelCommandActivityRendersManualShellAndTurnBoundaryLikeRust(t *testin
 	model.Update(ThreadEventMsg{Event: protocol.ItemStarted(commandExecutionItemWithSource("call-2", "printf second", "", nil, "in_progress", "agent"))})
 	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(commandExecutionItemWithSource("call-2", "printf second", "second\n", &exit0, "completed", "agent"))})
 	model.applyTurnCompleted(TurnCompletedMsg{ThreadID: "thread-1"})
-	if view = utils.StripANSI(model.View()); !strings.Contains(view, "Ran printf second") {
+	if view = utils.StripANSI(model.viewString()); !strings.Contains(view, "Ran printf second") {
 		t.Fatalf("turn completion must keep the rendered command:\n%s", view)
 	}
 }

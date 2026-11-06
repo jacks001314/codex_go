@@ -5,11 +5,12 @@ import (
 	"fmt"
 	"strings"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	"codex_go/config"
 	codextui "codex_go/tui"
 	historycell "codex_go/tui/history_cell"
+	"codex_go/tui/keymsg"
 )
 
 const externalAgentMigrationNoItemsMessage = "No compatible setup was found to import."
@@ -157,7 +158,7 @@ func (s *externalAgentMigrationModalState) selectSource(index int) {
 	s.screen = codextui.NewExternalAgentConfigMigrationScreen(s.detected, s.detected, "")
 }
 
-func (m *Model) updateExternalAgentMigrationModal(message bubbletea.KeyMsg) bubbletea.Cmd {
+func (m *Model) updateExternalAgentMigrationModal(message keymsg.KeyMsg) bubbletea.Cmd {
 	if m == nil || m.modal == nil || m.modal.externalAgentMigration == nil {
 		return nil
 	}
@@ -194,7 +195,7 @@ func (m *Model) updateExternalAgentMigrationModal(message bubbletea.KeyMsg) bubb
 	}
 }
 
-func (m *Model) updateExternalAgentSourceModal(state *externalAgentMigrationModalState, message bubbletea.KeyMsg) bubbletea.Cmd {
+func (m *Model) updateExternalAgentSourceModal(state *externalAgentMigrationModalState, message keymsg.KeyMsg) bubbletea.Cmd {
 	if state == nil || len(state.sources) == 0 {
 		return nil
 	}
@@ -229,27 +230,27 @@ func (m *Model) updateExternalAgentSourceModal(state *externalAgentMigrationModa
 	return nil
 }
 
-func externalAgentMigrationKeyNames(message bubbletea.KeyMsg) []string {
+func externalAgentMigrationKeyNames(message keymsg.KeyMsg) []string {
 	switch message.Type {
-	case bubbletea.KeyRunes:
+	case keymsg.KeyRunes:
 		keys := make([]string, 0, len(message.Runes))
 		for _, value := range message.Runes {
 			keys = append(keys, string(value))
 		}
 		return keys
-	case bubbletea.KeyUp:
+	case keymsg.KeyUp:
 		return []string{"up"}
-	case bubbletea.KeyDown:
+	case keymsg.KeyDown:
 		return []string{"down"}
-	case bubbletea.KeyEnter:
+	case keymsg.KeyEnter:
 		return []string{"enter"}
-	case bubbletea.KeySpace:
+	case keymsg.KeySpace:
 		return []string{" "}
-	case bubbletea.KeyEsc:
+	case keymsg.KeyEsc:
 		return []string{"esc"}
-	case bubbletea.KeyCtrlC:
+	case keymsg.KeyCtrlC:
 		return []string{"ctrl-c"}
-	case bubbletea.KeyCtrlD:
+	case keymsg.KeyCtrlD:
 		return []string{"ctrl-d"}
 	default:
 		return nil

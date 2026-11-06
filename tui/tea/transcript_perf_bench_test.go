@@ -32,7 +32,7 @@ func benchmarkTranscriptModel(tb testing.TB, messages int) *Model {
 	}
 	animations := false
 	model := NewModel(state, Options{Width: 120, Height: 40, AnimationsEnabled: &animations})
-	_ = model.View()
+	_ = model.viewString()
 	return model
 }
 
@@ -47,12 +47,12 @@ func TestTranscriptViewportRowsMatchContent(t *testing.T) {
 		Text: "partial answer that keeps streaming",
 	})
 	model.State.BumpMessagesRevision()
-	_ = model.View()
+	_ = model.viewString()
 	assertTranscriptRowsMatch(t, model)
 
 	model.State.Messages = nil
 	model.State.BumpMessagesRevision()
-	_ = model.View()
+	_ = model.viewString()
 	assertTranscriptRowsMatch(t, model)
 }
 
@@ -70,7 +70,7 @@ func BenchmarkTranscriptViewIdle(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				_ = model.View()
+				_ = model.viewString()
 			}
 		})
 	}
@@ -84,7 +84,7 @@ func BenchmarkTranscriptViewStreamingDelta(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		model.State.Messages[last].Text += "x"
 		model.State.BumpMessagesRevisionFrom(last)
-		_ = model.View()
+		_ = model.viewString()
 	}
 }
 
@@ -102,7 +102,7 @@ func BenchmarkTranscriptViewStreamingScale(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				model.State.Messages[last].Text += "x"
 				model.State.BumpMessagesRevisionFrom(last)
-				_ = model.View()
+				_ = model.viewString()
 			}
 		})
 	}

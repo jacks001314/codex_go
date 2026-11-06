@@ -1,14 +1,16 @@
 package tea
 
 import (
+	mousemsg "codex_go/tui/mousemsg"
 	"io"
 	"strings"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	"codex_go/appserver"
 	codextui "codex_go/tui"
 	bottompane "codex_go/tui/bottom_pane"
+	"codex_go/tui/keymsg"
 )
 
 // Rust parity: codex-rs/tui/src/chatwidget/status_surfaces.rs (through #54114).
@@ -107,13 +109,13 @@ func (m *Model) acknowledgeProgramStatus() {
 // bare pointer movement does not.
 func (m *Model) acknowledgeProgramStatusOnInput(message bubbletea.Msg) {
 	switch msg := message.(type) {
-	case bubbletea.KeyMsg:
+	case keymsg.KeyMsg:
 		if msg.Paste && len(msg.Runes) == 0 {
 			return
 		}
 		m.acknowledgeProgramStatus()
-	case bubbletea.MouseMsg:
-		if msg.Action == bubbletea.MouseActionMotion {
+	case mousemsg.MouseMsg:
+		if msg.Action == mousemsg.MouseActionMotion {
 			return
 		}
 		m.acknowledgeProgramStatus()

@@ -4,10 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	"codex_go/appserver"
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 // Mirrors Rust #46494: a side conversation is a Session-sourced fork, so the
@@ -27,7 +26,7 @@ func TestSideCommandForwardsSessionWorkspaceRootsLikeRust(t *testing.T) {
 	model.applyThreadSettingsValues(appserver.Settings{RuntimeWorkspaceRoots: []string{"/repo", "/repo/lib"}})
 
 	typeText(t, model, "/side")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 
 	if len(captured.RuntimeWorkspaceRoots) != 2 || captured.RuntimeWorkspaceRoots[0] != "/repo" || captured.RuntimeWorkspaceRoots[1] != "/repo/lib" {
@@ -50,7 +49,7 @@ func TestSideTogglePreservesParentAndSideSnapshots(t *testing.T) {
 	})
 
 	typeText(t, model, "/side")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 	state.AddMessage(codextui.RoleUser, "side question")
 

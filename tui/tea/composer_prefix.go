@@ -4,7 +4,9 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	"codex_go/tui/keymsg"
+
+	bubbletea "charm.land/bubbletea/v2"
 	"github.com/rivo/uniseg"
 )
 
@@ -203,7 +205,7 @@ func (m *Model) handleComposerPrefixKey(msg bubbletea.Msg) (bool, bubbletea.Cmd)
 	if m == nil || m.composerPrefix == composerPrefixNone {
 		return false, nil
 	}
-	key, ok := msg.(bubbletea.KeyMsg)
+	key, ok := msg.(keymsg.KeyMsg)
 	if !ok {
 		return false, nil
 	}
@@ -211,11 +213,11 @@ func (m *Model) handleComposerPrefixKey(msg bubbletea.Msg) (bool, bubbletea.Cmd)
 		return false, nil
 	}
 	switch key.Type {
-	case bubbletea.KeyBackspace, bubbletea.KeyCtrlH:
+	case keymsg.KeyBackspace, keymsg.KeyCtrlH:
 		m.clearComposerPrefix()
 		m.refreshSlashPopup()
 		return true, nil
-	case bubbletea.KeyEsc:
+	case keymsg.KeyEsc:
 		// Rust only lets Esc out of shell mode, and only once the body is empty.
 		if m.composerPrefix == composerPrefixShell && m.composer.Value() == "" {
 			m.clearComposerPrefix()
@@ -269,5 +271,5 @@ func (m *Model) setComposerCursorOffset(offset int) {
 	for current := m.composer.Line(); current < row; current++ {
 		m.composer.CursorDown()
 	}
-	m.composer.SetCursor(col)
+	m.composer.SetCursorColumn(col)
 }

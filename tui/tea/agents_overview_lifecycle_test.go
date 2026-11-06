@@ -5,10 +5,11 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
 	agentsoverview "codex_go/tui/agents_overview"
+	"codex_go/tui/keymsg"
 	"codex_go/utils"
 )
 
@@ -62,8 +63,8 @@ func TestModelAgentsLifecyclePendingKeepsDashboardBrowsableLikeRust(t *testing.T
 	openAgentsDashboard(t, model)
 
 	model.Update(agentsKeyEvent('a'))
-	model.Update(key(bubbletea.KeyDown))
-	updated, command := model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyDown))
+	updated, command := model.Update(key(keymsg.KeyEnter))
 	model = updated.(*Model)
 	if command == nil {
 		t.Fatal("confirmed archive returned no lifecycle command")
@@ -78,11 +79,11 @@ func TestModelAgentsLifecyclePendingKeepsDashboardBrowsableLikeRust(t *testing.T
 		t.Fatalf("selection after immediate removal = %q, want root-2", got)
 	}
 
-	model.Update(key(bubbletea.KeyDown))
+	model.Update(key(keymsg.KeyDown))
 	if got := model.agentsOverview.SelectedThreadID(); got != "root-3" {
 		t.Fatalf("down during removal selected %q, want root-3", got)
 	}
-	model.Update(key(bubbletea.KeyUp))
+	model.Update(key(keymsg.KeyUp))
 	if got := model.agentsOverview.SelectedThreadID(); got != "root-2" {
 		t.Fatalf("up during removal selected %q, want root-2", got)
 	}
@@ -92,7 +93,7 @@ func TestModelAgentsLifecyclePendingKeepsDashboardBrowsableLikeRust(t *testing.T
 	if visible := model.agentsOverview.VisibleIndices(); len(visible) != 1 {
 		t.Fatalf("search during removal visible = %v, want gamma only", visible)
 	}
-	model.Update(key(bubbletea.KeyEsc))
+	model.Update(key(keymsg.KeyEsc))
 	if model.agentsOverview.State.Searching || model.agentsOverview.State.Search != "" {
 		t.Fatalf("escape did not close search during removal: %#v", model.agentsOverview.State)
 	}
@@ -101,12 +102,12 @@ func TestModelAgentsLifecyclePendingKeepsDashboardBrowsableLikeRust(t *testing.T
 	if !model.agentsOverview.State.Help {
 		t.Fatal("help did not open during removal")
 	}
-	model.Update(key(bubbletea.KeyEsc))
+	model.Update(key(keymsg.KeyEsc))
 	if model.agentsOverview.State.Help {
 		t.Fatal("escape did not close help during removal")
 	}
 
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if model.agentsOverview == nil {
 		t.Fatal("enter switched tasks while the removal was pending")
 	}
@@ -117,11 +118,11 @@ func TestModelAgentsLifecyclePendingKeepsDashboardBrowsableLikeRust(t *testing.T
 	if model.agentsOverview == nil {
 		t.Fatal("n left the dashboard while the removal was pending")
 	}
-	model.Update(key(bubbletea.KeyEsc))
+	model.Update(key(keymsg.KeyEsc))
 	if model.agentsOverview == nil {
 		t.Fatal("escape left the dashboard while the removal was pending")
 	}
-	if _, quit := model.Update(key(bubbletea.KeyCtrlC)); quit != nil {
+	if _, quit := model.Update(key(keymsg.KeyCtrlC)); quit != nil {
 		t.Fatal("ctrl+c quit the dashboard while the removal was pending")
 	}
 
@@ -176,7 +177,7 @@ func TestModelAgentsLifecycleConfirmationLikeRust(t *testing.T) {
 		t.Fatalf("a did not open the archive confirmation: %#v", model.modal)
 	}
 	// Cancel is selected by default, so plain Enter cancels.
-	updated, cmd := model.Update(key(bubbletea.KeyEnter))
+	updated, cmd := model.Update(key(keymsg.KeyEnter))
 	model = updated.(*Model)
 	if cmd != nil {
 		t.Fatalf("cancel returned a command: %#v", cmd)
@@ -192,8 +193,8 @@ func TestModelAgentsLifecycleConfirmationLikeRust(t *testing.T) {
 	if model.modal == nil {
 		t.Fatalf("second a did not reopen the confirmation (selected=%q rows=%d)", model.agentsOverview.SelectedThreadID(), len(model.agentsOverview.Rows))
 	}
-	model.Update(key(bubbletea.KeyDown))
-	updated, cmd = model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyDown))
+	updated, cmd = model.Update(key(keymsg.KeyEnter))
 	model = updated.(*Model)
 	if cmd == nil {
 		t.Fatalf("confirm returned no lifecycle command (modal=%#v request=%#v busy=%v archiveCb=%v)", model.modal, model.agentsOverviewLifecycle, model.agentsOverviewBusy, model.onAgentsOverviewArchive != nil)
@@ -218,12 +219,12 @@ func TestModelAgentsDeleteDetachesRemovedCurrentTaskLikeRust(t *testing.T) {
 	model.State.SetThreadID("root-1")
 	openAgentsDashboard(t, model)
 
-	model.Update(key(bubbletea.KeyBackspace))
+	model.Update(key(keymsg.KeyBackspace))
 	if model.modal == nil || !strings.Contains(model.modal.title, "delete") {
 		t.Fatalf("delete did not open the confirmation: %#v", model.modal)
 	}
-	model.Update(key(bubbletea.KeyDown))
-	updated, cmd := model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyDown))
+	updated, cmd := model.Update(key(keymsg.KeyEnter))
 	model = updated.(*Model)
 	// Rust #44744: permanent deletion keeps an explicit second confirmation.
 	if cmd != nil || len(calls.deleted) != 0 {
@@ -232,7 +233,7 @@ func TestModelAgentsDeleteDetachesRemovedCurrentTaskLikeRust(t *testing.T) {
 	if model.modal == nil {
 		t.Fatal("delete confirmation closed before the explicit confirmation")
 	}
-	updated, cmd = model.Update(key(bubbletea.KeyEnter))
+	updated, cmd = model.Update(key(keymsg.KeyEnter))
 	model = updated.(*Model)
 	if cmd == nil {
 		t.Fatal("second confirmation returned no lifecycle command")
@@ -255,8 +256,8 @@ func TestModelAgentsDeleteDetachesRemovedCurrentTaskLikeRust(t *testing.T) {
 // confirmation's number shortcut acts immediately, while permanent deletion
 // keeps an explicit second confirmation.
 func TestModelAgentsConfirmationNumberKeysLikeRust(t *testing.T) {
-	runeKey := func(r rune) bubbletea.KeyMsg {
-		return bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{r}}
+	runeKey := func(r rune) keymsg.KeyMsg {
+		return keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{r}}
 	}
 
 	calls := &agentsLifecycleCalls{}
@@ -277,7 +278,7 @@ func TestModelAgentsConfirmationNumberKeysLikeRust(t *testing.T) {
 	deleteCalls := &agentsLifecycleCalls{}
 	remove := newAgentsLifecycleModel(t, deleteCalls, nil, nil)
 	openAgentsDashboard(t, remove)
-	remove.Update(key(bubbletea.KeyBackspace))
+	remove.Update(key(keymsg.KeyBackspace))
 	updated, cmd = remove.Update(runeKey('2'))
 	remove = updated.(*Model)
 	if cmd != nil || len(deleteCalls.deleted) != 0 {
@@ -305,8 +306,8 @@ func TestModelAgentsLifecycleFailureKeepsAttachmentLikeRust(t *testing.T) {
 	openAgentsDashboard(t, model)
 
 	model.Update(agentsKeyEvent('a'))
-	model.Update(key(bubbletea.KeyDown))
-	updated, cmd := model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyDown))
+	updated, cmd := model.Update(key(keymsg.KeyEnter))
 	model = updated.(*Model)
 	updated, _ = model.Update(cmd())
 	model = updated.(*Model)
@@ -345,8 +346,8 @@ func TestModelAgentsArchiveKeepsSelectionAdjacentLikeRust(t *testing.T) {
 	}
 
 	model.Update(agentsKeyEvent('a'))
-	model.Update(key(bubbletea.KeyDown)) // move the confirmation off Cancel
-	updated, command := model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyDown)) // move the confirmation off Cancel
+	updated, command := model.Update(key(keymsg.KeyEnter))
 	model = updated.(*Model)
 	if command == nil {
 		t.Fatal("confirmed archive returned no lifecycle command")
@@ -390,7 +391,7 @@ func TestModelEmbeddedCommandCenterArchivesAndReturnsToDashboardLikeRust(t *test
 			return nil
 		},
 	})
-	updated, command := model.Update(key(bubbletea.KeyLeft))
+	updated, command := model.Update(key(keymsg.KeyLeft))
 	model = updated.(*Model)
 	if command == nil || model.agentsOverview == nil {
 		t.Fatal("embedded Left did not open the command center")
@@ -402,8 +403,8 @@ func TestModelEmbeddedCommandCenterArchivesAndReturnsToDashboardLikeRust(t *test
 	}
 
 	model.Update(agentsKeyEvent('a'))
-	model.Update(key(bubbletea.KeyDown))
-	updated, command = model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyDown))
+	updated, command = model.Update(key(keymsg.KeyEnter))
 	model = updated.(*Model)
 	if command == nil {
 		t.Fatal("confirmed archive returned no lifecycle command")

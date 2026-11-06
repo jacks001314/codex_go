@@ -1,12 +1,14 @@
 package tea
 
 import (
+	mousemsg "codex_go/tui/mousemsg"
 	"strings"
 	"unicode"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 // Rust parity: bottom_pane/chat_composer/mouse.rs and app/owned_transcript.rs
@@ -104,7 +106,7 @@ func (m *Model) composerPositionAt(x int, y int) (int, bool) {
 	return row.endRune, true
 }
 
-func (m *Model) handleComposerSelectionMouse(msg bubbletea.MouseMsg) (bool, bubbletea.Cmd) {
+func (m *Model) handleComposerSelectionMouse(msg mousemsg.MouseMsg) (bool, bubbletea.Cmd) {
 	if m == nil || !m.composerBounded() || m.composerTextTopRow < 0 {
 		return false, nil
 	}
@@ -113,12 +115,12 @@ func (m *Model) handleComposerSelectionMouse(msg bubbletea.MouseMsg) (bool, bubb
 	}
 	// Rust's textarea only owns the wheel inside its own rect and scroll_mouse
 	// never clears the selection, so a transcript wheel keeps both.
-	if msg.Button == bubbletea.MouseButtonWheelUp || msg.Button == bubbletea.MouseButtonWheelDown {
+	if msg.Button == mousemsg.MouseButtonWheelUp || msg.Button == mousemsg.MouseButtonWheelDown {
 		return false, nil
 	}
 	switch msg.Action {
-	case bubbletea.MouseActionPress:
-		if msg.Button == bubbletea.MouseButtonRight {
+	case mousemsg.MouseActionPress:
+		if msg.Button == mousemsg.MouseButtonRight {
 			if m.composerSelection.active {
 				if _, inside := m.composerPositionAt(msg.X, msg.Y); inside {
 					if m.clipboardBusy {
@@ -135,7 +137,7 @@ func (m *Model) handleComposerSelectionMouse(msg bubbletea.MouseMsg) (bool, bubb
 			// right-click paste fallback.
 			return false, nil
 		}
-		if msg.Button != bubbletea.MouseButtonLeft {
+		if msg.Button != mousemsg.MouseButtonLeft {
 			if m.composerSelection.active {
 				m.composerSelection.clear()
 				return true, nil
@@ -157,14 +159,14 @@ func (m *Model) handleComposerSelectionMouse(msg bubbletea.MouseMsg) (bool, bubb
 		}
 		m.composerRightClickCopy = false
 		return true, nil
-	case bubbletea.MouseActionMotion:
+	case mousemsg.MouseActionMotion:
 		if !m.composerSelection.active || !m.composerSelection.dragging {
 			return false, nil
 		}
 		m.extendComposerSelection(msg.X, msg.Y)
 		return true, nil
-	case bubbletea.MouseActionRelease:
-		if msg.Button != bubbletea.MouseButtonLeft ||
+	case mousemsg.MouseActionRelease:
+		if msg.Button != mousemsg.MouseButtonLeft ||
 			!m.composerSelection.active ||
 			!m.composerSelection.dragging {
 			return false, nil
@@ -236,22 +238,22 @@ func (m *Model) copyComposerSelection(primary bool) bubbletea.Cmd {
 
 // applyComposerSelectionKey makes the next edit replace the editable selection.
 // Non-edit keys cancel the highlight and continue through normal dispatch.
-func (m *Model) applyComposerSelectionKey(key bubbletea.KeyMsg) (bool, bubbletea.Cmd) {
+func (m *Model) applyComposerSelectionKey(key keymsg.KeyMsg) (bool, bubbletea.Cmd) {
 	if m == nil || !m.composerSelection.active {
 		return false, nil
 	}
 	switch {
-	case key.Type == bubbletea.KeyEsc:
+	case key.Type == keymsg.KeyEsc:
 		m.composerSelection.clear()
 		return true, nil
-	case key.Type == bubbletea.KeyRunes && !key.Alt && len(key.Runes) > 0 &&
+	case key.Type == keymsg.KeyRunes && !key.Alt && len(key.Runes) > 0 &&
 		(key.Paste || !unicode.IsControl(key.Runes[0])):
 		m.replaceComposerSelection(string(key.Runes))
 		return true, nil
-	case key.Type == bubbletea.KeyBackspace || key.Type == bubbletea.KeyDelete:
+	case key.Type == keymsg.KeyBackspace || key.Type == keymsg.KeyDelete:
 		m.replaceComposerSelection("")
 		return true, nil
-	case key.Type == bubbletea.KeyEnter || key.Type == bubbletea.KeyCtrlJ:
+	case key.Type == keymsg.KeyEnter || key.Type == keymsg.KeyCtrlJ:
 		m.replaceComposerSelection("\n")
 		return true, nil
 	default:
@@ -291,7 +293,7 @@ func (m *Model) setComposerCursorRuneOffset(value string, runeOffset int) {
 		m.composer.CursorDown()
 		line++
 	}
-	m.composer.SetCursor(targetColumn)
+	m.composer.SetCursorColumn(targetColumn)
 }
 
 func (m *Model) applyComposerSelectionHighlight(rows []string, scroll int) {

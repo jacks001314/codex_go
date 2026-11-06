@@ -53,7 +53,7 @@ func TestStaleActiveSideThreadReturnsToParentAndRestoresDraft(t *testing.T) {
 	if got := model.ComposerValue(); got != "我让你干什么了吗" {
 		t.Fatalf("composer = %q, want failed side prompt", got)
 	}
-	if view := model.View(); strings.Contains(view, "thread not found: side-1") {
+	if view := model.viewString(); strings.Contains(view, "thread not found: side-1") {
 		t.Fatalf("stale side error leaked into the parent transcript:\n%s", view)
 	}
 }

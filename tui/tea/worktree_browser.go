@@ -1,10 +1,11 @@
 package tea
 
 import (
+	keymsg "codex_go/tui/keymsg"
 	"fmt"
 	"strings"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 	"github.com/google/uuid"
 
 	codextui "codex_go/tui"
@@ -433,7 +434,7 @@ func (m *Model) applyWorktreeBrowserRemoved(message WorktreeBrowserRemovedMsg) {
 }
 
 // updateWorktreeBrowserModal routes keys to the active popup view.
-func (m *Model) updateWorktreeBrowserModal(message bubbletea.KeyMsg) bubbletea.Cmd {
+func (m *Model) updateWorktreeBrowserModal(message keymsg.KeyMsg) bubbletea.Cmd {
 	browser := m.activeWorktreeBrowser()
 	if browser == nil {
 		return nil
@@ -442,7 +443,7 @@ func (m *Model) updateWorktreeBrowserModal(message bubbletea.KeyMsg) bubbletea.C
 	case worktreeViewChooser:
 		return m.updateWorktreeChooser(message)
 	case worktreeViewLoading:
-		if message.Type == bubbletea.KeyEsc {
+		if message.Type == keymsg.KeyEsc {
 			m.closeWorktreeBrowser()
 		}
 		return nil
@@ -457,19 +458,19 @@ func (m *Model) updateWorktreeBrowserModal(message bubbletea.KeyMsg) bubbletea.C
 	}
 }
 
-func (m *Model) updateWorktreeChooser(message bubbletea.KeyMsg) bubbletea.Cmd {
+func (m *Model) updateWorktreeChooser(message keymsg.KeyMsg) bubbletea.Cmd {
 	browser := m.activeWorktreeBrowser()
 	if browser == nil {
 		return nil
 	}
 	switch message.Type {
-	case bubbletea.KeyEsc:
+	case keymsg.KeyEsc:
 		m.closeWorktreeBrowser()
-	case bubbletea.KeyUp, bubbletea.KeyShiftTab:
+	case keymsg.KeyUp, keymsg.KeyShiftTab:
 		m.moveWorktreeSelection(browser, -1, len(browser.Choices))
-	case bubbletea.KeyDown, bubbletea.KeyTab:
+	case keymsg.KeyDown, keymsg.KeyTab:
 		m.moveWorktreeSelection(browser, 1, len(browser.Choices))
-	case bubbletea.KeyEnter:
+	case keymsg.KeyEnter:
 		if browser.Selected < 0 || browser.Selected >= len(browser.Choices) {
 			return nil
 		}
@@ -482,41 +483,41 @@ func (m *Model) updateWorktreeChooser(message bubbletea.KeyMsg) bubbletea.Cmd {
 	return nil
 }
 
-func (m *Model) updateWorktreeList(message bubbletea.KeyMsg) bubbletea.Cmd {
+func (m *Model) updateWorktreeList(message keymsg.KeyMsg) bubbletea.Cmd {
 	browser := m.activeWorktreeBrowser()
 	if browser == nil {
 		return nil
 	}
 	indices := browser.filteredWorktreeIndices(m.currentTime().Unix())
 	switch message.Type {
-	case bubbletea.KeyEsc:
+	case keymsg.KeyEsc:
 		m.closeWorktreeBrowser()
-	case bubbletea.KeyUp:
+	case keymsg.KeyUp:
 		m.moveWorktreeSelection(browser, -1, len(indices))
-	case bubbletea.KeyDown:
+	case keymsg.KeyDown:
 		m.moveWorktreeSelection(browser, 1, len(indices))
-	case bubbletea.KeyPgUp:
+	case keymsg.KeyPgUp:
 		m.moveWorktreeSelection(browser, -pageStep(len(indices)), len(indices))
-	case bubbletea.KeyPgDown:
+	case keymsg.KeyPgDown:
 		m.moveWorktreeSelection(browser, pageStep(len(indices)), len(indices))
-	case bubbletea.KeyHome:
+	case keymsg.KeyHome:
 		browser.Selected = 0
-	case bubbletea.KeyEnd:
+	case keymsg.KeyEnd:
 		if len(indices) > 0 {
 			browser.Selected = len(indices) - 1
 		}
-	case bubbletea.KeyBackspace:
+	case keymsg.KeyBackspace:
 		if browser.Filter != "" {
 			runes := []rune(browser.Filter)
 			browser.Filter = string(runes[:len(runes)-1])
 			browser.Selected = 0
 		}
-	case bubbletea.KeyRunes:
+	case keymsg.KeyRunes:
 		if text := string(message.Runes); text != "" {
 			browser.Filter += text
 			browser.Selected = 0
 		}
-	case bubbletea.KeyEnter:
+	case keymsg.KeyEnter:
 		entry, ok := m.selectedWorktreeEntry()
 		if !ok {
 			return nil
@@ -526,20 +527,20 @@ func (m *Model) updateWorktreeList(message bubbletea.KeyMsg) bubbletea.Cmd {
 	return nil
 }
 
-func (m *Model) updateWorktreeActions(message bubbletea.KeyMsg) bubbletea.Cmd {
+func (m *Model) updateWorktreeActions(message keymsg.KeyMsg) bubbletea.Cmd {
 	browser := m.activeWorktreeBrowser()
 	if browser == nil {
 		return nil
 	}
 	switch message.Type {
-	case bubbletea.KeyEsc:
+	case keymsg.KeyEsc:
 		browser.View = worktreeViewList
 		browser.Selected = 0
-	case bubbletea.KeyUp:
+	case keymsg.KeyUp:
 		m.moveWorktreeSelection(browser, -1, len(browser.Actions))
-	case bubbletea.KeyDown:
+	case keymsg.KeyDown:
 		m.moveWorktreeSelection(browser, 1, len(browser.Actions))
-	case bubbletea.KeyEnter:
+	case keymsg.KeyEnter:
 		if browser.Selected < 0 || browser.Selected >= len(browser.Actions) {
 			return nil
 		}
@@ -552,20 +553,20 @@ func (m *Model) updateWorktreeActions(message bubbletea.KeyMsg) bubbletea.Cmd {
 	return nil
 }
 
-func (m *Model) updateWorktreeConfirm(message bubbletea.KeyMsg) bubbletea.Cmd {
+func (m *Model) updateWorktreeConfirm(message keymsg.KeyMsg) bubbletea.Cmd {
 	browser := m.activeWorktreeBrowser()
 	if browser == nil {
 		return nil
 	}
 	switch message.Type {
-	case bubbletea.KeyEsc:
+	case keymsg.KeyEsc:
 		browser.View = worktreeViewActions
 		browser.Selected = 0
-	case bubbletea.KeyUp:
+	case keymsg.KeyUp:
 		m.moveWorktreeSelection(browser, -1, len(browser.Confirm))
-	case bubbletea.KeyDown:
+	case keymsg.KeyDown:
 		m.moveWorktreeSelection(browser, 1, len(browser.Confirm))
-	case bubbletea.KeyEnter:
+	case keymsg.KeyEnter:
 		if browser.Selected < 0 || browser.Selected >= len(browser.Confirm) {
 			return nil
 		}

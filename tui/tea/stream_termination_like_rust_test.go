@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	"codex_go/protocol"
 	codextui "codex_go/tui"
@@ -41,7 +41,7 @@ func TestTurnInterruptionPreservesStreamedAnswerAndPlanLikeRust(t *testing.T) {
 	if !foundAnswer {
 		t.Fatalf("interrupted transcript lost the streamed answer: %#v", state.Messages)
 	}
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "plan with $y -") {
 		t.Fatalf("interrupted transcript lost the streamed plan:\n%s", view)
 	}
@@ -102,12 +102,12 @@ func TestTurnTerminationPreservesStreamSourceAcrossModesLikeRust(t *testing.T) {
 			if !modelTranscriptHasText(model, tc.wantText) {
 				t.Fatalf("terminated transcript lost %q: %#v", tc.wantText, state.Messages)
 			}
-			narrow := utils.StripANSI(model.View())
+			narrow := utils.StripANSI(model.viewString())
 			if !strings.Contains(narrow, tc.wantText) {
 				t.Fatalf("narrow view lost %q:\n%s", tc.wantText, narrow)
 			}
 			model.toggleRawOutputMode()
-			raw := utils.StripANSI(model.View())
+			raw := utils.StripANSI(model.viewString())
 			if !strings.Contains(raw, tc.wantText) {
 				t.Fatalf("raw view lost %q:\n%s", tc.wantText, raw)
 			}

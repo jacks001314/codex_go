@@ -1,10 +1,11 @@
 package tea
 
 import (
+	keymsg "codex_go/tui/keymsg"
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
 )
@@ -38,12 +39,12 @@ func TestStatusLineInlineItemsDispatchAndKeepColorPreferenceLikeRust(t *testing.
 	disabled := false
 	model := statusSurfaceTestModel(t, &disabled)
 	typeText(t, model, "/statusline model-with-reasoning current-dir")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 
 	if !model.statusLineConfiguredByUser {
 		t.Fatal("typed inline status-line items did not configure the live status line")
 	}
-	if view := model.View(); !strings.Contains(view, "gpt-5") || !strings.Contains(view, "high") {
+	if view := model.viewString(); !strings.Contains(view, "gpt-5") || !strings.Contains(view, "high") {
 		t.Fatalf("status line did not render the inline items:\n%s", view)
 	}
 	if model.statusControls.StatusLineUseThemeColors {
@@ -68,7 +69,7 @@ func TestTerminalTitleInlineItemsDispatchThroughTheComposerLikeRust(t *testing.T
 		},
 	})
 	typeText(t, model, "/title app-name model")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 
 	if len(writes) != 1 || !strings.Contains(writes[0], "\x1b]0;codex | gpt-5\x07") {
 		t.Fatalf("terminal title writes = %#v", writes)

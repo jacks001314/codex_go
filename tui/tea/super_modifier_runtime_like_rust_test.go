@@ -1,52 +1,45 @@
 package tea
 
 import (
-	"reflect"
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	keymsg "codex_go/tui/keymsg"
 
 	codextui "codex_go/tui"
 )
 
-// Rust parity: #53754 (21c1616119). Rust can honour `super`/`cmd`/`command`
-// shortcuts end to end. In Go the keymap layer already accepts the bindings
-// (codextui.NormalizeKeybindingSpec, tui/keymap_config.go:492), but the runtime
-// half is blocked at the input layer: bubbletea v1 KeyMsg carries
-// Type/Runes/Alt/Paste only (bubbletea@v1.3.10/key.go:52-58), so
-// keySpecFromKeyMsg (tui/tea/keymap_runtime.go:339) cannot produce a `super-*`
-// spec and the capture popup reports the key as unsupported. This guard test
-// pins that boundary: when the dependency exposes a super modifier the test
-// fails, which is the signal to wire super-editor shortcuts through instead of
-// keeping this green.
-func TestSuperModifierRuntimeBoundaryLikeRust(t *testing.T) {
-	keyType := reflect.TypeOf(bubbletea.Key{})
-	fields := map[string]bool{}
-	for i := 0; i < keyType.NumField(); i++ {
-		fields[strings.ToLower(keyType.Field(i).Name)] = true
+// Rust parity: #53754 (21c1616119). Rust honours `super`/`cmd`/`command`
+// shortcuts end to end. Bubble Tea v2 exposes ModSuper, so the key message keeps
+// the modifier and the keymap runtime now produces `super-*` specs instead of
+// dropping the press.
+func TestSuperModifierRuntimeLikeRust(t *testing.T) {
+	cases := []struct {
+		name    string
+		message keymsg.KeyMsg
+		want    string
+	}{
+		{name: "super+a", message: keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{'a'}, Super: true}, want: "super-a"},
+		{name: "super+left", message: keymsg.KeyMsg{Type: keymsg.KeyLeft, Super: true}, want: "super-left"},
+		{name: "super+shift+a", message: keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{'A'}, Super: true}, want: "shift-super-a"},
+		{name: "alt+super+a", message: keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{'a'}, Alt: true, Super: true}, want: "alt-super-a"},
+		{name: "ctrl+super+k", message: keymsg.KeyMsg{Type: keymsg.KeyCtrlK, Super: true}, want: "ctrl-super-k"},
+		{name: "plain a", message: keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{'a'}}, want: "a"},
+		{name: "alt+a", message: keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{'a'}, Alt: true}, want: "alt-a"},
 	}
-	for _, modifier := range []string{"super", "cmd", "command", "hyper", "meta", "mod", "modifiers", "modifier"} {
-		if fields[modifier] {
-			t.Fatalf("bubbletea.Key now exposes %q: wire super bindings into the runtime instead of keeping this guard", modifier)
-		}
-	}
-	for _, required := range []string{"type", "runes", "alt", "paste"} {
-		if !fields[required] {
-			t.Fatalf("bubbletea.Key lost field %q; revisit the super-modifier probe", required)
+	for _, testCase := range cases {
+		if got := KeySpecFromKeyMsg(testCase.message); got != testCase.want {
+			t.Fatalf("%s: KeySpecFromKeyMsg = %q, want %q", testCase.name, got, testCase.want)
 		}
 	}
 
-	// Alt is the only modifier the key message can express, so a super press has
-	// no KeyMsg shape to route through the keymap runtime.
-	if got := KeySpecFromKeyMsg(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{'a'}, Alt: true}); got != "alt-a" {
-		t.Fatalf("alt spec = %q, want alt-a", got)
+	// The keymap inspector reports the modifier the terminal delivered.
+	super := keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{'a'}, Super: true}
+	if raw := keymapInspectorRawEvent(super); !strings.Contains(raw, "modifiers=super") {
+		t.Fatalf("inspector raw event = %q, want the super modifier", raw)
 	}
-	if got := KeySpecFromKeyMsg(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{'a'}}); got != "a" {
-		t.Fatalf("plain spec = %q, want a", got)
-	}
-	if strings.HasPrefix(KeySpecFromKeyMsg(bubbletea.KeyMsg{Type: bubbletea.KeyLeft, Alt: true}), "super") {
-		t.Fatal("the key spec builder invented a super modifier")
+	if label := keymapInspectorDetectedLabel(super); label != "super+a" {
+		t.Fatalf("inspector detected label = %q, want super+a", label)
 	}
 
 	// The configuration layer stays portable: bindings captured on a platform

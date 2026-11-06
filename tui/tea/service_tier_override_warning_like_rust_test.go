@@ -16,7 +16,7 @@ import (
 func TestServiceTierDefaultOverrideWarningLikeRust(t *testing.T) {
 	view := func(model *Model) string {
 		model.refreshTranscript()
-		return model.View()
+		return model.viewString()
 	}
 	model := NewModel(codextui.NewState(nil), Options{Width: 100, Height: 40})
 	model.pendingSettingsRequestID = 11

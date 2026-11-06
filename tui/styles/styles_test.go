@@ -1,6 +1,8 @@
 package styles
 
 import (
+	"charm.land/lipgloss/v2"
+	"reflect"
 	"testing"
 )
 
@@ -70,7 +72,7 @@ func TestLipglossColor(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(string(tt.color), func(t *testing.T) {
 			got := LipglossColor(tt.color)
-			if string(got) != tt.expected {
+			if !reflect.DeepEqual(got, lipgloss.Color(tt.expected)) {
 				t.Errorf("LipglossColor(%s) = %q, want %q", tt.color, got, tt.expected)
 			}
 		})
@@ -126,7 +128,7 @@ func TestUnknownColorReturnsReset(t *testing.T) {
 	if ANSISGR(unknown) != "0" {
 		t.Error("Unknown color should return ANSI reset '0'")
 	}
-	if string(LipglossColor(unknown)) != "0" {
+	if !reflect.DeepEqual(LipglossColor(unknown), lipgloss.Color("0")) {
 		t.Error("Unknown lipgloss color should return '0'")
 	}
 }

@@ -12,13 +12,14 @@ import (
 	"testing"
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 	"github.com/coder/websocket"
 
 	"codex_go/appserver"
 	"codex_go/appserverdaemon"
 	"codex_go/session"
 	agentsoverview "codex_go/tui/agents_overview"
+	"codex_go/tui/keymsg"
 	codextea "codex_go/tui/tea"
 	"codex_go/utils"
 )
@@ -238,8 +239,8 @@ func agentsOverviewPinCreateThreadLikeRust(t *testing.T, store *session.Store, t
 	}
 }
 
-func agentsOverviewPinKeyLikeRust(r rune) bubbletea.KeyMsg {
-	return bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{r}}
+func agentsOverviewPinKeyLikeRust(r rune) keymsg.KeyMsg {
+	return keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{r}}
 }
 
 func agentsOverviewPinUpdateLikeRust(t *testing.T, model *codextea.Model, message bubbletea.Msg) (*codextea.Model, bubbletea.Cmd) {
@@ -281,7 +282,7 @@ func agentsOverviewPinOpenDashboardLikeRust(t *testing.T, model *codextea.Model)
 	for _, r := range "/agents" {
 		model, _ = agentsOverviewPinUpdateLikeRust(t, model, agentsOverviewPinKeyLikeRust(r))
 	}
-	model, command := agentsOverviewPinUpdateLikeRust(t, model, bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	model, command := agentsOverviewPinUpdateLikeRust(t, model, keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	if command == nil {
 		t.Fatal("/agents returned no refresh command")
 	}
@@ -323,18 +324,18 @@ func TestAgentsOverviewPinRequestDrivesRealDashboardLikeRust(t *testing.T) {
 		OnAgentsOverviewTogglePin:     togglePin,
 	})
 	model = agentsOverviewPinOpenDashboardLikeRust(t, model)
-	rendered := utils.StripANSI(model.View())
+	rendered := utils.StripANSI(model.ViewContent())
 	if !strings.Contains(rendered, "Agent command center") {
 		t.Fatalf("command center did not open:\n%s", rendered)
 	}
 	// The rows the real server served carried a pinnable source, so the
 	// dashboard advertises the shortcut (Rust agent_center/hints.rs).
 	model.Update(keyRunes('?'))
-	rendered = utils.StripANSI(model.View())
+	rendered = utils.StripANSI(model.ViewContent())
 	if !strings.Contains(rendered, "Pin/unpin") {
 		t.Fatalf("command center did not advertise shared pinning:\n%s", rendered)
 	}
-	model.Update(keyPress(bubbletea.KeyEsc))
+	model.Update(keyPress(keymsg.KeyEsc))
 
 	// `p` sends thread/section/move through the app adapter.
 	model, pinCommand := agentsOverviewPinUpdateLikeRust(t, model, agentsOverviewPinKeyLikeRust('p'))
@@ -356,7 +357,7 @@ func TestAgentsOverviewPinRequestDrivesRealDashboardLikeRust(t *testing.T) {
 	if len(pinned) != 1 || pinned[0] != "root-1" {
 		t.Fatalf("pinned listing after pin = %#v, want [root-1]", pinned)
 	}
-	if rendered = utils.StripANSI(model.View()); !strings.Contains(rendered, "Pinned") {
+	if rendered = utils.StripANSI(model.ViewContent()); !strings.Contains(rendered, "Pinned") {
 		t.Fatalf("command center does not render the Pinned group:\n%s", rendered)
 	}
 
@@ -425,7 +426,7 @@ func TestAgentsOverviewPinUnsupportedServerDisablesPinningLikeRust(t *testing.T)
 		OnAgentsOverviewTogglePin:     interactiveRemoteAgentsOverviewTogglePin(request),
 	})
 	model = agentsOverviewPinOpenDashboardLikeRust(t, model)
-	if rendered := utils.StripANSI(model.View()); strings.Contains(rendered, "pin/unpin") {
+	if rendered := utils.StripANSI(model.ViewContent()); strings.Contains(rendered, "pin/unpin") {
 		t.Fatalf("command center advertises pinning against an unsupported server:\n%s", rendered)
 	}
 }
@@ -535,7 +536,7 @@ func TestPinnedTaskRendersInPinnedGroupThroughRealListingLikeRust(t *testing.T) 
 		OnAgentsOverviewTogglePin:     interactiveRemoteAgentsOverviewTogglePin(request),
 	})
 	model = agentsOverviewPinOpenDashboardLikeRust(t, model)
-	rendered := utils.StripANSI(model.View())
+	rendered := utils.StripANSI(model.ViewContent())
 	pinnedIndex := strings.Index(rendered, "old pinned task")
 	if pinnedIndex < 0 {
 		t.Fatalf("the pinned task outside the recent window did not render:\n%s", rendered)

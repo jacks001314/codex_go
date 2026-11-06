@@ -6,7 +6,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
 	agentsoverview "codex_go/tui/agents_overview"
@@ -192,7 +192,6 @@ func (m *Model) openSessionPicker(action codextui.SessionPickerAction) bubbletea
 		return bubbletea.Batch(cmds...)
 	}
 	m.sessionPickerAltScreen = true
-	cmds = append(cmds, bubbletea.EnterAltScreen)
 	return bubbletea.Batch(cmds...)
 }
 

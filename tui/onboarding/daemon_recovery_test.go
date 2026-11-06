@@ -4,15 +4,15 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	"codex_go/tui/keymsg"
 )
 
-func daemonRecoveryKey(code rune) bubbletea.KeyMsg {
-	return bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{code}}
+func daemonRecoveryKey(code rune) keymsg.KeyMsg {
+	return keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{code}}
 }
 
-func daemonRecoverySpecial(code bubbletea.KeyType) bubbletea.KeyMsg {
-	return bubbletea.KeyMsg{Type: code}
+func daemonRecoverySpecial(code keymsg.KeyType) keymsg.KeyMsg {
+	return keymsg.KeyMsg{Type: code}
 }
 
 // TestDaemonRecoveryDefaultsToCancelLikeRust covers Rust #55442's recovery
@@ -24,7 +24,7 @@ func TestDaemonRecoveryDefaultsToCancelLikeRust(t *testing.T) {
 		Managed:         true,
 	}
 	model := newDaemonRecoveryModel(options)
-	model.Update(daemonRecoverySpecial(bubbletea.KeyEnter))
+	model.Update(daemonRecoverySpecial(keymsg.KeyEnter))
 	if !model.done || model.result.Cancelled || model.result.Choice != DaemonRecoveryCancel {
 		t.Fatalf("default enter = %#v (done=%v)", model.result, model.done)
 	}
@@ -34,7 +34,7 @@ func TestDaemonRecoveryDefaultsToCancelLikeRust(t *testing.T) {
 	if model.done {
 		t.Fatal("selecting restart must not run it without confirmation")
 	}
-	model.Update(daemonRecoverySpecial(bubbletea.KeyEnter))
+	model.Update(daemonRecoverySpecial(keymsg.KeyEnter))
 	if !model.done || model.result.Choice != DaemonRecoveryRestart {
 		t.Fatalf("confirmed restart = %#v (done=%v)", model.result, model.done)
 	}
@@ -46,7 +46,7 @@ func TestDaemonRecoveryDefaultsToCancelLikeRust(t *testing.T) {
 	}
 
 	model = newDaemonRecoveryModel(options)
-	model.Update(daemonRecoverySpecial(bubbletea.KeyEsc))
+	model.Update(daemonRecoverySpecial(keymsg.KeyEsc))
 	if !model.done || !model.result.Cancelled {
 		t.Fatalf("esc = %#v (done=%v)", model.result, model.done)
 	}
@@ -82,7 +82,7 @@ func TestDaemonRecoveryUnmanagedRestartDisabledLikeRust(t *testing.T) {
 	} {
 		model := newDaemonRecoveryModel(options)
 		model.Update(daemonRecoveryKey('2'))
-		model.Update(daemonRecoverySpecial(bubbletea.KeyEnter))
+		model.Update(daemonRecoverySpecial(keymsg.KeyEnter))
 		if !model.done || model.result.Choice != DaemonRecoveryCancel {
 			t.Fatalf("disabled restart = %#v (done=%v)", model.result, model.done)
 		}
@@ -102,7 +102,7 @@ func TestDaemonRecoveryViewLikeRust(t *testing.T) {
 		},
 		Managed: true,
 	})
-	view := model.View()
+	view := model.viewString()
 	for _, want := range []string{
 		"Background server has incompatible feature settings",
 		"This session requires api_key_model_discovery to be enabled",
@@ -124,7 +124,7 @@ func TestDaemonRecoveryViewLikeRust(t *testing.T) {
 	}
 
 	unmanaged := newDaemonRecoveryModel(DaemonRecoveryOptions{Reason: "mismatch", Managed: true})
-	view = unmanaged.View()
+	view = unmanaged.viewString()
 	if !strings.Contains(view, "Cannot use the background server") ||
 		!strings.Contains(view, "Restart cannot resolve this compatibility check.") {
 		t.Fatalf("non-restartable view:\n%s", view)

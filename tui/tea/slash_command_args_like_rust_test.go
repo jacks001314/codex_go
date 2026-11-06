@@ -4,9 +4,10 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 // Rust #54385 (upstream 36803b180a) introduced
@@ -79,13 +80,13 @@ func TestPwdAndVoiceArgsDispatchLocallyLikeRust(t *testing.T) {
 	})
 
 	typeText(t, model, "/pwd extra")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if want := "Usage: /pwd"; model.notice != want {
 		t.Fatalf("/pwd extra notice = %q, want %q", model.notice, want)
 	}
 
 	typeText(t, model, "/voice nope")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if notice := model.notice; !strings.Contains(notice, "Usage: /voice") {
 		t.Fatalf("/voice nope notice = %q, want the usage text", notice)
 	}

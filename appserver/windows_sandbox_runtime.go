@@ -179,20 +179,11 @@ func defaultWindowsSandboxSetupRunner(request *WindowsSandboxSetupRuntimeRequest
 			Env:         request.Env,
 			Permissions: permissions,
 		}
-		complete, err := windowssandbox.SandboxSetupIsComplete(request.CodexHome)
-		if err != nil {
-			return err
-		}
-		if !complete {
-			if err := windowssandbox.RunElevatedSetup(setupRequest); err != nil {
-				return err
-			}
-		}
 		// The elevated helper only provisions identities and proxy settings.
-		// Always refresh so the current permission profile supplies read, write
-		// and deny paths, including when provisioning was completed earlier
-		// (Rust #42309 prepare_elevated_sandbox).
-		return windowssandbox.RunSetupRefreshForRequest(setupRequest)
+		// PrepareElevatedSandbox provisions when setup is incomplete and always
+		// refreshes so the current permission profile supplies read, write and
+		// deny paths (Rust #42309 prepare_elevated_sandbox).
+		return windowssandbox.PrepareElevatedSandbox(setupRequest)
 	case sandbox.WindowsSetupUnelevated:
 		if runtime.GOOS != "windows" {
 			return errors.New("legacy Windows sandbox setup is only supported on Windows")

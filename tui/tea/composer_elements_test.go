@@ -3,9 +3,8 @@ package tea
 import (
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 // TestTransformComposerElementsMirrorsTextareaEdits covers the range rules:
@@ -64,7 +63,7 @@ func TestSubmittedRequestCarriesComposerTextElements(t *testing.T) {
 	value := "$imagegen make a chart"
 	typeText(t, model, value)
 	model.registerComposerElement(value, 0, len("$imagegen"))
-	updated, _ := model.Update(key(bubbletea.KeyEnter))
+	updated, _ := model.Update(key(keymsg.KeyEnter))
 	model = updated.(*Model)
 	requests := model.SubmittedRequests()
 	if len(requests) != 1 {

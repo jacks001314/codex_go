@@ -55,14 +55,14 @@ func (m *Model) renderConversationInset(rect ConversationRect) string {
 	if width <= 0 || height <= 0 {
 		previous := m.conversationInset
 		m.conversationInset = nil
-		body := m.View()
+		body := m.viewString()
 		m.conversationInset = previous
 		return body
 	}
 	previous := m.conversationInset
 	m.conversationInset = nil
 	m.applyLayoutSize(width, height)
-	body := m.View()
+	body := m.viewString()
 	m.conversationInset = previous
 	m.applyLayoutSize(fullWidth, fullHeight)
 

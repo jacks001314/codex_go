@@ -18,6 +18,7 @@ import (
 	"codex_go/session"
 	tuiapp "codex_go/tui/app"
 	"codex_go/tui/chatwidget"
+	codextea "codex_go/tui/tea"
 )
 
 // TestInteractiveRemotePromptEditHandlerRevertsAndAttaches covers the
@@ -234,5 +235,27 @@ func TestPromptImageExtractionFromPersistedUserMessages(t *testing.T) {
 	}
 	if len(localMessage.UserPromptRemoteImages) != 1 || localMessage.UserPromptRemoteImages[0] != "https://example.test/d.png" {
 		t.Fatalf("local remote images = %#v", localMessage.UserPromptRemoteImages)
+	}
+}
+
+// TestInteractiveRemotePromptEditRejectsUnsafeRestoresLikeRust covers #46739:
+// a remote prompt carrying local image paths or command syntax is rejected
+// before any thread request.
+func TestInteractiveRemotePromptEditRejectsUnsafeRestoresLikeRust(t *testing.T) {
+	handler := interactiveRemotePromptEditHandler(context.Background(), nil, nil, nil)
+	for _, prompt := range []chatwidget.ThreadComposerState{
+		{Text: "look", LocalImages: []string{"/tmp/local.png"}},
+		{Text: "/usage"},
+		{Text: "!ls"},
+	} {
+		_, err := handler(tuiapp.PromptEditSelection{ThreadID: "thread-source", Prompt: prompt})
+		var unsafe codextea.UnsafePromptRestoreError
+		if !errors.As(err, &unsafe) {
+			t.Fatalf("prompt %#v error = %v, want UnsafePromptRestoreError", prompt, err)
+		}
+		want := "This remote prompt contains local image paths or command syntax that cannot be restored safely. Write a new message and reattach any images."
+		if unsafe.Error() != want {
+			t.Fatalf("error = %q, want %q", unsafe.Error(), want)
+		}
 	}
 }

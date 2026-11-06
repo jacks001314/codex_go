@@ -3,9 +3,8 @@ package tea
 import (
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 // Rust #47320 (app_backtrack/legacy_input.rs): with the transcript overlay open
@@ -31,7 +30,7 @@ func TestReadOnlyTranscriptOverlayEscapeClosesWithoutBacktrackLikeRust(t *testin
 		t.Fatal("transcript overlay did not open")
 	}
 
-	updated, cmd := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEsc})
+	updated, cmd := model.Update(keymsg.KeyMsg{Type: keymsg.KeyEsc})
 	model = updated.(*Model)
 	if cmd != nil {
 		// Closing an alt-screen overlay may return terminal commands; nothing

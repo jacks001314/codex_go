@@ -21,7 +21,7 @@ func TestUnifiedExecUnknownActionsMatchRustCommandCell(t *testing.T) {
 	started.CommandActions = &unknown
 	model.applyItemStarted(&started, 0)
 
-	view := model.View()
+	view := model.viewString()
 	if strings.Contains(view, "Exploring") || strings.Contains(view, "List ls") {
 		t.Fatalf("unified-exec unknown command painted a live exploring cell:\n%s", view)
 	}
@@ -32,7 +32,7 @@ func TestUnifiedExecUnknownActionsMatchRustCommandCell(t *testing.T) {
 	completed.CommandActions = &unknown
 	model.applyItemCompleted(&completed)
 
-	view = model.View()
+	view = model.viewString()
 	if strings.Contains(view, "Explored") || strings.Contains(view, "List ls") {
 		t.Fatalf("completed unified-exec command stayed an exploring cell:\n%s", view)
 	}

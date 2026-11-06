@@ -4,10 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
 	"codex_go/tui/chatwidget"
+	"codex_go/tui/keymsg"
 	"codex_go/utils"
 )
 
@@ -36,7 +35,7 @@ func TestGenericConfirmationRetainsComposerBackdropLikeRust(t *testing.T) {
 					{ID: "cancel", Name: "Cancel"},
 				},
 			})
-			view := utils.StripANSI(model.View())
+			view := utils.StripANSI(model.viewString())
 			if !strings.Contains(view, "COMPOSER-MARKER") {
 				t.Fatalf("confirmation removed the composer backdrop:\n%s", view)
 			}
@@ -84,15 +83,15 @@ func TestNestedConfirmationRetainsParentPickerLikeRust(t *testing.T) {
 	}
 	// Rust retains the whole view stack below the centered child, so the
 	// backdrop is the parent picker (the composer is already replaced by it).
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "Child Confirm") || !strings.Contains(view, "Parent Picker") {
 		t.Fatalf("nested overlay missing child/backdrop:\n%s", view)
 	}
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEsc})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyEsc})
 	if model.modal == nil || model.modal.title != "Parent Picker" || len(model.modalParents) != 0 {
 		t.Fatalf("parent was not restored: modal=%#v parents=%d", model.modal, len(model.modalParents))
 	}
-	if view := utils.StripANSI(model.View()); strings.Contains(view, "Child Confirm") || !strings.Contains(view, "Parent Picker") {
+	if view := utils.StripANSI(model.viewString()); strings.Contains(view, "Child Confirm") || !strings.Contains(view, "Parent Picker") {
 		t.Fatalf("child dialog did not restore parent:\n%s", view)
 	}
 }
@@ -161,7 +160,7 @@ func TestWindowsSandboxPromptReplacesComposerLikeRust(t *testing.T) {
 		AllowElevated:       true,
 		SetupChoiceRequired: true,
 	})
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if strings.Contains(view, "COMPOSER-MARKER") {
 		t.Fatalf("sandbox picker should replace the composer:\n%s", view)
 	}

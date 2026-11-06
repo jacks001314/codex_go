@@ -5,10 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
 	agentsoverview "codex_go/tui/agents_overview"
+	"codex_go/tui/keymsg"
 )
 
 // resumePickerTestModel opens the command center with a resume picker item and
@@ -66,7 +65,7 @@ func TestAgentsOverviewResumePickerErrorLikeRust(t *testing.T) {
 		t.Fatalf("picker error options = %#v", model.modal.options)
 	}
 	// Selecting the only item dismisses the view back to the task list.
-	updated, _ := model.Update(key(bubbletea.KeyEnter))
+	updated, _ := model.Update(key(keymsg.KeyEnter))
 	model = updated.(*Model)
 	if model.modal != nil {
 		t.Fatal("return item did not close the picker error view")

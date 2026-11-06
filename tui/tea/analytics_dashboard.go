@@ -3,18 +3,19 @@ package tea
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	"codex_go/auth"
 	"codex_go/chatgptapi"
 	codextui "codex_go/tui"
 	"codex_go/tui/analytics"
+	"codex_go/tui/bottom_pane"
 	"codex_go/tui/chatwidget"
+	"codex_go/tui/keymsg"
 	"codex_go/tui/styles"
 	"codex_go/utils"
 )
@@ -54,7 +55,9 @@ type analyticsDashboard struct {
 
 	section         analytics.AnalyticsSection
 	zoomed          bool
+	showHelp        bool
 	scrollOffset    int
+	helpScroll      int
 	followSelection bool
 	viewportHeight  int
 	ranges          [3]int
@@ -149,6 +152,7 @@ func (d *analyticsDashboard) open(factory func(endDate time.Time) *analytics.Liv
 	}
 	d.active = true
 	d.generation++
+	d.showHelp = false
 	d.liveFactory = factory
 	d.modelNames = modelNames
 	d.chatLister = chatLister
@@ -602,15 +606,15 @@ func analyticsMin(left, right int) int {
 }
 
 // analyticsPlainRune returns a single unmodified rune key.
-func analyticsPlainRune(msg bubbletea.KeyMsg) (rune, bool) {
-	if msg.Type != bubbletea.KeyRunes || len(msg.Runes) != 1 || msg.Alt || msg.Paste {
+func analyticsPlainRune(msg keymsg.KeyMsg) (rune, bool) {
+	if msg.Type != keymsg.KeyRunes || len(msg.Runes) != 1 || msg.Alt || msg.Paste {
 		return 0, false
 	}
 	return msg.Runes[0], true
 }
 
 // analyticsListAction resolves the shared list keymap action for a key.
-func (m *Model) analyticsListAction(msg bubbletea.KeyMsg) string {
+func (m *Model) analyticsListAction(msg keymsg.KeyMsg) string {
 	spec := keySpecFromKeyMsg(msg)
 	if spec == "" {
 		return ""
@@ -638,7 +642,7 @@ func (m *Model) analyticsListAction(msg bubbletea.KeyMsg) string {
 // falling back to the vim horizontal aliases only when the key itself is
 // unbound: explicit bindings win and remapped or unbound arrows stay
 // authoritative (Rust AnalyticsView::handle_key, #45772).
-func (m *Model) analyticsListActionForKey(msg bubbletea.KeyMsg) string {
+func (m *Model) analyticsListActionForKey(msg keymsg.KeyMsg) string {
 	if action := m.analyticsListAction(msg); action != "" {
 		return action
 	}
@@ -648,9 +652,9 @@ func (m *Model) analyticsListActionForKey(msg bubbletea.KeyMsg) string {
 	}
 	switch runeKey {
 	case 'h':
-		return m.analyticsListAction(bubbletea.KeyMsg{Type: bubbletea.KeyLeft})
+		return m.analyticsListAction(keymsg.KeyMsg{Type: keymsg.KeyLeft})
 	case 'l':
-		return m.analyticsListAction(bubbletea.KeyMsg{Type: bubbletea.KeyRight})
+		return m.analyticsListAction(keymsg.KeyMsg{Type: keymsg.KeyRight})
 	}
 	return ""
 }
@@ -659,7 +663,33 @@ func (d *analyticsDashboard) selectSection(section analytics.AnalyticsSection) {
 	if d.zoomed && section != d.section {
 		d.scrollOffset = 0
 	}
+	d.followSelection = !d.zoomed || section != d.section
 	d.section = section
+	d.showHelp = false
+}
+
+// scrollOffsetForRender reports the report or help offset the next frame
+// paints (Rust AnalyticsView::scroll_offset, #46863).
+func (d *analyticsDashboard) scrollOffsetForRender() int {
+	if d != nil && d.showHelp {
+		return d.helpScroll
+	}
+	if d == nil {
+		return 0
+	}
+	return d.scrollOffset
+}
+
+// setScrollOffsetForRender writes the active body's independent scroll offset.
+func (d *analyticsDashboard) setScrollOffsetForRender(offset int) {
+	if d == nil {
+		return
+	}
+	if d.showHelp {
+		d.helpScroll = offset
+		return
+	}
+	d.scrollOffset = offset
 }
 
 // summaryAction scrolls the Summary body. A missing action leaves the view
@@ -668,33 +698,188 @@ func (d *analyticsDashboard) summaryAction(action string) {
 	if d == nil {
 		return
 	}
+	offset := d.scrollOffsetForRender()
 	switch action {
 	case "move_up":
-		d.scrollOffset--
+		offset--
 	case "move_down":
-		d.scrollOffset++
+		offset++
 	case "page_up":
-		d.scrollOffset -= d.viewportHeight
+		offset -= d.viewportHeight
 	case "page_down":
-		d.scrollOffset += d.viewportHeight
+		offset += d.viewportHeight
 	case "jump_top":
-		d.scrollOffset = 0
+		offset = 0
 	case "jump_bottom":
-		d.scrollOffset = int(^uint(0) >> 1)
+		offset = int(^uint(0) >> 1)
 	case "cancel":
 		d.finish()
 		return
 	default:
 		return
 	}
-	if d.scrollOffset < 0 {
-		d.scrollOffset = 0
+	if offset < 0 {
+		offset = 0
 	}
+	d.setScrollOffsetForRender(offset)
 	d.followSelection = false
 }
 
+// analyticsControl is a report action shared by keyboard dispatch, painted
+// controls, and the help screen (Rust analytics/controls.rs Control, #46863).
+type analyticsControl int
+
+const (
+	analyticsControlRange analyticsControl = iota
+	analyticsControlGroup
+	analyticsControlModel
+	analyticsControlTaskMetric
+	analyticsControlDashboard
+	analyticsControlZeroCreditGroups
+)
+
+// analyticsControlAvailable applies one eligibility rule to keyboard actions,
+// visible controls, and help (Rust AnalyticsView::control_available).
+func (d *analyticsDashboard) analyticsControlAvailable(control analyticsControl) bool {
+	if d == nil || len(d.visibleSections()) == 0 {
+		return false
+	}
+	switch control {
+	case analyticsControlRange:
+		return d.section.HasReport()
+	case analyticsControlGroup:
+		return len(d.groupOptions()) > 1
+	case analyticsControlModel:
+		return d.section == analytics.AnalyticsSectionUsage && d.business()
+	case analyticsControlTaskMetric:
+		return d.section == analytics.AnalyticsSectionChats && !d.business()
+	case analyticsControlDashboard:
+		return true
+	case analyticsControlZeroCreditGroups:
+		return d.section == analytics.AnalyticsSectionChats && d.business() && d.sections[d.section].Detail != nil
+	default:
+		return false
+	}
+}
+
+// activateAnalyticsControl applies a visible action without synthesizing a
+// remappable key event.
+func (d *analyticsDashboard) activateAnalyticsControl(m *Model, control analyticsControl) bool {
+	if !d.analyticsControlAvailable(control) {
+		return false
+	}
+	switch control {
+	case analyticsControlRange:
+		d.changeRange()
+	case analyticsControlGroup:
+		options := d.groupOptions()
+		next := 0
+		for index, group := range options {
+			if group == d.sections[d.section].Group {
+				next = (index + 1) % len(options)
+				break
+			}
+		}
+		d.sections[d.section].Group = options[next]
+		d.loadReport(d.section)
+	case analyticsControlModel:
+		d.cycleTokenModel()
+	case analyticsControlTaskMetric:
+		tasks, ok := d.tasks.Ready()
+		var loaded *analytics.AnalyticsTaskChats
+		if ok {
+			loaded = &tasks
+		}
+		metrics := analytics.AnalyticsTaskMetrics(loaded)
+		current := 0
+		for index, metric := range metrics {
+			if metric == d.chatMetric {
+				current = index
+				break
+			}
+		}
+		d.chatMetric = metrics[(current+1)%len(metrics)]
+		d.sections[d.section].Detail = nil
+	case analyticsControlDashboard:
+		d.zoomed = !d.zoomed
+		d.scrollOffset = 0
+		d.followSelection = true
+	case analyticsControlZeroCreditGroups:
+		d.showZeroCreditGroups = !d.showZeroCreditGroups
+	}
+	return true
+}
+
+// analyticsHelpShortcutAvailable keeps a configured binding authoritative when
+// it claims ? or shift-? in the list context (Rust
+// AnalyticsView::help_shortcut_available).
+func (d *analyticsDashboard) analyticsHelpShortcutAvailable(m *Model) bool {
+	if m == nil {
+		return true
+	}
+	for _, action := range []string{
+		"move_up", "move_down", "move_left", "move_right",
+		"page_up", "page_down", "jump_top", "jump_bottom",
+		"accept", "cancel",
+	} {
+		bindings, _, _ := codextui.ResolvedKeymapBindings(m.keymapConfig, "list", action)
+		for _, binding := range bindings {
+			normalized, err := codextui.NormalizeKeybindingSpec(binding)
+			if err != nil {
+				continue
+			}
+			if normalized == "?" || normalized == "shift-?" {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// analyticsHelpLines renders the scrollable Usage shortcuts screen. Control
+// availability matches the keys that actually act on the current report
+// (Rust analytics/chrome.rs help_lines).
+func (d *analyticsDashboard) analyticsHelpLines(m *Model, width int) []string {
+	line := func(action string) string { return analyticsHintLabel(m, action) }
+	raw := []string{
+		"Tab / Shift+Tab · next / previous report",
+		fmt.Sprintf("1–%d · open a report directly", len(d.visibleSections())),
+		line("move_left") + " / " + line("move_right") + " · select chart day or plan window",
+		line("move_up") + " / " + line("move_down") + " · select chat or plan period; scroll Overview",
+		line("accept") + " · expand or collapse details",
+		line("page_up") + " / " + line("page_down") + " · scroll report",
+	}
+	if d.analyticsControlAvailable(analyticsControlRange) {
+		raw = append(raw, "r · switch between 7 and 30 days")
+	}
+	if d.analyticsControlAvailable(analyticsControlGroup) {
+		raw = append(raw, "g · change grouping / Overview aggregation")
+	}
+	if d.analyticsControlAvailable(analyticsControlModel) {
+		raw = append(raw, "m · cycle model filter")
+	}
+	if d.analyticsControlAvailable(analyticsControlTaskMetric) {
+		raw = append(raw, "s · change chat sort metric")
+	}
+	if d.analyticsControlAvailable(analyticsControlZeroCreditGroups) {
+		raw = append(raw, "a · show zero-credit groups in expanded details")
+	}
+	raw = append(raw,
+		"R · refresh all reports",
+		"z · dashboard / focused report; "+line("accept")+" · focus dashboard card",
+		line("cancel")+" · back; q / ctrl+c · close usage",
+	)
+	if d.analyticsHelpShortcutAvailable(m) {
+		raw = append(raw[:len(raw)-1], append([]string{"? · toggle this help"}, raw[len(raw)-1:]...)...)
+	}
+	if updated := d.analyticsUpdatedLabel(); updated != "" {
+		raw = append(raw, "Report updated "+updated)
+	}
+	return analytics.AnalyticsWrapLines(raw, width)
+}
+
 // handleKey applies one key press. It mirrors Rust AnalyticsView::handle_key.
-func (d *analyticsDashboard) handleKey(m *Model, msg bubbletea.KeyMsg) bool {
+func (d *analyticsDashboard) handleKey(m *Model, msg keymsg.KeyMsg) bool {
 	if d == nil || !d.active {
 		return false
 	}
@@ -702,7 +887,7 @@ func (d *analyticsDashboard) handleKey(m *Model, msg bubbletea.KeyMsg) bool {
 		d.finish()
 		return true
 	}
-	if msg.Type == bubbletea.KeyCtrlC {
+	if msg.Type == keymsg.KeyCtrlC {
 		d.finish()
 		return true
 	}
@@ -712,82 +897,62 @@ func (d *analyticsDashboard) handleKey(m *Model, msg bubbletea.KeyMsg) bool {
 	} else {
 		action = m.analyticsListActionForKey(msg)
 	}
-	d.followSelection = true
-	if runeKey, ok := analyticsPlainRune(msg); ok {
-		switch runeKey {
-		case 'z':
-			d.zoomed = !d.zoomed
-			d.scrollOffset = 0
+	switch action {
+	case "accept", "cancel", "move_left", "move_right", "move_up", "move_down", "jump_top", "jump_bottom":
+		d.followSelection = true
+	default:
+		d.followSelection = false
+	}
+	runeKey, hasRune := analyticsPlainRune(msg)
+	if d.analyticsHelpShortcutAvailable(m) && hasRune && runeKey == '?' {
+		d.showHelp = !d.showHelp
+		d.helpScroll = 0
+		d.followSelection = false
+		return true
+	}
+	if d.showHelp {
+		if action == "cancel" {
+			d.showHelp = false
+			d.followSelection = false
 			return true
-		case 'R':
-			d.refresh()
-			return true
-		case 'm':
-			if d.section == analytics.AnalyticsSectionUsage && d.business() {
-				d.cycleTokenModel()
-				return true
-			}
-		case 'r':
-			if d.section != analytics.AnalyticsSectionChats &&
-				d.section != analytics.AnalyticsSectionSummary &&
-				len(d.visibleSections()) > 0 {
-				d.changeRange()
-				return true
-			}
-		case 'a':
-			if d.section == analytics.AnalyticsSectionChats && d.sections[d.section].Detail != nil {
-				d.showZeroCreditGroups = !d.showZeroCreditGroups
-				return true
-			}
-		case 's':
-			if d.section == analytics.AnalyticsSectionChats && !d.business() {
-				tasks, ok := d.tasks.Ready()
-				var loaded *analytics.AnalyticsTaskChats
-				if ok {
-					loaded = &tasks
-				}
-				metrics := analytics.AnalyticsTaskMetrics(loaded)
-				current := 0
-				for index, metric := range metrics {
-					if metric == d.chatMetric {
-						current = index
-						break
-					}
-				}
-				d.chatMetric = metrics[(current+1)%len(metrics)]
-				d.sections[d.section].Detail = nil
-				return true
-			}
-		case 'g':
-			// Rust #45770 cycles the grouping directly instead of opening a
-			// picker.
-			if options := d.groupOptions(); len(options) > 1 {
-				next := 0
-				for index, group := range options {
-					if group == d.sections[d.section].Group {
-						next = (index + 1) % len(options)
-						break
-					}
-				}
-				d.sections[d.section].Group = options[next]
-				d.loadReport(d.section)
-				return true
-			}
 		}
+		d.summaryAction(action)
+		return true
+	}
+	if hasRune && runeKey == 'z' && d.analyticsControlAvailable(analyticsControlDashboard) {
+		d.activateAnalyticsControl(m, analyticsControlDashboard)
+		return true
 	}
 	if !d.zoomed && action == "accept" {
-		d.zoomed = true
-		d.scrollOffset = 0
+		d.activateAnalyticsControl(m, analyticsControlDashboard)
+		return true
+	}
+	if hasRune && runeKey == 'R' {
+		d.refresh()
+		return true
+	}
+	if hasRune && runeKey == 'a' && d.analyticsControlAvailable(analyticsControlZeroCreditGroups) {
+		d.activateAnalyticsControl(m, analyticsControlZeroCreditGroups)
+		return true
+	}
+	if hasRune && runeKey == 'm' && d.analyticsControlAvailable(analyticsControlModel) {
+		d.activateAnalyticsControl(m, analyticsControlModel)
+		return true
+	}
+	if hasRune && runeKey == 'r' && d.analyticsControlAvailable(analyticsControlRange) {
+		d.activateAnalyticsControl(m, analyticsControlRange)
+		return true
+	}
+	if hasRune && runeKey == 'g' && d.analyticsControlAvailable(analyticsControlGroup) {
+		d.activateAnalyticsControl(m, analyticsControlGroup)
+		return true
+	}
+	if hasRune && runeKey == 's' && d.analyticsControlAvailable(analyticsControlTaskMetric) {
+		d.activateAnalyticsControl(m, analyticsControlTaskMetric)
 		return true
 	}
 	visible := d.visibleSections()
-	if len(visible) == 0 {
-		if action == "cancel" {
-			d.finish()
-		}
-		return true
-	}
-	if runeKey, ok := analyticsPlainRune(msg); ok && runeKey >= '1' && runeKey <= '7' {
+	if hasRune && runeKey >= '1' && runeKey <= '7' {
 		if index := int(runeKey - '1'); index < len(visible) {
 			d.selectSection(visible[index])
 		}
@@ -801,11 +966,25 @@ func (d *analyticsDashboard) handleKey(m *Model, msg bubbletea.KeyMsg) bool {
 		}
 	}
 	switch msg.Type {
-	case bubbletea.KeyTab:
-		d.selectSection(visible[(current+1)%len(visible)])
+	case keymsg.KeyTab:
+		if len(visible) > 0 {
+			d.selectSection(visible[(current+1)%len(visible)])
+		}
 		return true
-	case bubbletea.KeyShiftTab:
-		d.selectSection(visible[(current+len(visible)-1)%len(visible)])
+	case keymsg.KeyShiftTab:
+		if len(visible) > 0 {
+			d.selectSection(visible[(current+len(visible)-1)%len(visible)])
+		}
+		return true
+	}
+	if len(visible) == 0 {
+		if action == "cancel" {
+			d.finish()
+		}
+		return true
+	}
+	if !d.zoomed && action == "cancel" {
+		d.finish()
 		return true
 	}
 	if d.section == analytics.AnalyticsSectionSummary {
@@ -837,6 +1016,7 @@ func (d *analyticsDashboard) handleKey(m *Model, msg bubbletea.KeyMsg) bool {
 	count := analyticsMax(d.rowCount(), 1)
 	state := &d.sections[d.section]
 	previousCursor := state.Cursor
+	scrollOffset := d.scrollOffsetForRender()
 	switch action {
 	case "move_up":
 		state.Cursor = analyticsMax(state.Cursor-1, 0)
@@ -869,16 +1049,16 @@ func (d *analyticsDashboard) handleKey(m *Model, msg bubbletea.KeyMsg) bool {
 			state.Detail = &cursor
 		}
 	case "cancel":
-		if !d.zoomed || state.Detail == nil {
+		if state.Detail == nil {
 			d.finish()
 			return true
 		}
 		state.Detail = nil
 	case "page_down":
-		d.scrollOffset += d.viewportHeight
+		scrollOffset += d.viewportHeight
 		d.followSelection = false
 	case "page_up":
-		d.scrollOffset = analyticsMax(d.scrollOffset-d.viewportHeight, 0)
+		scrollOffset = analyticsMax(scrollOffset-d.viewportHeight, 0)
 		d.followSelection = false
 	}
 	if state.Detail != nil {
@@ -888,111 +1068,363 @@ func (d *analyticsDashboard) handleKey(m *Model, msg bubbletea.KeyMsg) bool {
 	if !chart && state.Cursor != previousCursor {
 		state.Detail = nil
 	}
+	d.setScrollOffsetForRender(scrollOffset)
 	return true
 }
 
 // render draws the whole dashboard inside the terminal area (Rust
-// analytics/render.rs AnalyticsView::render).
+// analytics/render.rs AnalyticsView::render, #46863).
 func (d *analyticsDashboard) render(m *Model, width, height int) string {
 	d.pollReports()
-	innerWidth := width - 4
+	innerWidth := width - 2
 	if innerWidth < 1 {
 		innerWidth = 1
 	}
 	visible := d.visibleSections()
-	// Top chats always covers 30 days, so it never shows the 7/30d range row
-	// (Rust render.rs show_range).
-	showRange := len(visible) > 0 &&
-		d.section != analytics.AnalyticsSectionChats &&
-		d.section != analytics.AnalyticsSectionSummary
 	theme := m.styles()
-
-	controls := d.controls(m, showRange)
-	footer := analytics.AnalyticsWrapLines(strings.Split(controls, "\n"), innerWidth)
-	if (d.section == analytics.AnalyticsSectionPlugins ||
-		d.section == analytics.AnalyticsSectionActivity ||
-		d.section == analytics.AnalyticsSectionSkills) &&
-		!d.dayHasDetails(d.section, d.sections[d.section].Cursor) {
-		height := len(footer)
-		controls = strings.Replace(controls, " · "+analyticsHintLabel(m, "accept")+" details", "", 1)
-		footer = analyticsResizeFooter(analytics.AnalyticsWrapLines(strings.Split(controls, "\n"), innerWidth), height)
+	var plan *auth.PlanType
+	if value, ok := d.account.Ready(); ok {
+		plan = &value
 	}
-	// Rust #45770 moves a maximized report's update timestamp into the footer.
-	updated := d.updatedFooterLabel()
-	footer = analyticsAppendUpdated(footer, updated, innerWidth)
-
-	lines := []string{analyticsTitleLine(theme, d.live)}
-	if showRange {
-		lines = append(lines, analyticsRangeLine(theme, d.section.RangeGroup(d.business()), d.ranges, d.endDate), "")
+	lines := []string{analyticsUsageTitleLine(theme, d.live, plan)}
+	if len(visible) > 0 {
+		lines = append(lines, analyticsDashboardTabBar(theme, d, innerWidth, visible))
 	} else {
-		// Rust #45770 keeps the range row at a stable height so the tabs do not
-		// shift between sections.
-		lines = append(lines, "", "")
-	}
-	if tabs := analyticsTabLines(theme, d, innerWidth); len(tabs) > 0 {
-		lines = append(lines, tabs...)
 		lines = append(lines, "")
 	}
-
-	bodyHeight := height - len(lines) - len(footer)
+	reset := theme.ExecCell.Reset
+	lines = append(lines, theme.Chat.DimText+strings.Repeat("─", innerWidth)+reset)
+	controlHeight := 2
+	if innerWidth < 100 {
+		controlHeight = 3
+	}
+	lines = append(lines, d.analyticsControlsLines(m, innerWidth, controlHeight)...)
+	bodyHeight := height - len(lines) - 2
 	if bodyHeight < 0 {
 		bodyHeight = 0
 	}
 	d.viewportHeight = analyticsMax(bodyHeight, 1)
 	d.theme = m.activeTUITheme()
-	body, selectionStart, selectionEnd := d.bodyLines(innerWidth, bodyHeight)
+	var body []string
+	selectionStart, selectionEnd := 0, 0
+	if d.showHelp {
+		body = d.analyticsHelpLines(m, innerWidth)
+	} else {
+		body, selectionStart, selectionEnd = d.bodyLines(innerWidth, bodyHeight)
+	}
+	offset := d.scrollOffsetForRender()
 	if d.followSelection {
-		if selectionStart < d.scrollOffset {
-			d.scrollOffset = selectionStart
+		if selectionStart < offset {
+			offset = selectionStart
 		} else {
 			end := selectionStart + analyticsMin(selectionEnd-selectionStart, d.viewportHeight)
-			if end > d.scrollOffset+d.viewportHeight {
-				d.scrollOffset = end - d.viewportHeight
+			if end > offset+d.viewportHeight {
+				offset = end - d.viewportHeight
 			}
 		}
 	}
-	d.scrollOffset = analyticsMin(analyticsMax(d.scrollOffset, 0), analyticsMax(len(body)-d.viewportHeight, 0))
+	offset = analyticsMin(analyticsMax(offset, 0), analyticsMax(len(body)-d.viewportHeight, 0))
+	d.setScrollOffsetForRender(offset)
 	d.followSelection = false
 	for index := 0; index < bodyHeight; index++ {
-		position := d.scrollOffset + index
+		position := offset + index
 		if position < len(body) {
 			lines = append(lines, body[position])
 		} else {
 			lines = append(lines, "")
 		}
 	}
-	if len(body) <= d.viewportHeight {
-		// Rust #45770 hides scroll hints when the content already fits.
-		height := len(footer)
-		controls = strings.Replace(controls, " · "+analyticsHintLabel(m, "page_up")+"/"+analyticsHintLabel(m, "page_down")+" scroll", "", 1)
-		controls = strings.Replace(controls, " · "+analyticsHintLabel(m, "move_up")+"/"+analyticsHintLabel(m, "move_down")+" scroll", "", 1)
-		footer = analytics.AnalyticsWrapLines(strings.Split(controls, "\n"), innerWidth)
-		footer = analyticsAppendUpdated(footer, updated, innerWidth)
-		if updated != "" {
-			padding := height - len(footer)
-			for index := 0; index < padding; index++ {
-				footer = append([]string{""}, footer...)
-			}
-		} else {
-			footer = analyticsResizeFooter(footer, height)
-		}
+	footer := d.analyticsFooterLines(m, innerWidth, len(body) > d.viewportHeight)
+	for len(footer) < 2 {
+		footer = append(footer, "")
 	}
-	for _, line := range d.styledFooterLines(theme, footer, updated) {
-		lines = append(lines, line)
-	}
-
+	lines = append(lines, footer[0], footer[1])
 	rendered := make([]string, len(lines))
 	for index, line := range lines {
 		if line == "" {
 			rendered[index] = ""
 			continue
 		}
-		rendered[index] = "  " + analyticsTruncateStyled(line, width-2)
+		rendered[index] = " " + analyticsTruncateStyled(line, innerWidth)
 	}
 	if height > 0 && len(rendered) > height {
 		rendered = rendered[:height]
 	}
 	return strings.Join(rendered, "\n")
+}
+
+// analyticsUsageTitleLine renders the fixed Usage heading. The plan and
+// account live in the heading while report controls sit below the tabs.
+func analyticsUsageTitleLine(theme styles.Styles, live *analytics.Live, plan *auth.PlanType) string {
+	title := "Usage"
+	if plan != nil {
+		title += " · " + analyticsHeadingPlanLabel(*plan)
+	}
+	reset := theme.ExecCell.Reset
+	styled := theme.ExecCell.Bold + title + reset
+	if live != nil {
+		if account := live.AccountLabel(); account != nil && strings.TrimSpace(*account) != "" {
+			styled += theme.Chat.DimText + " · " + strings.TrimSpace(*account) + reset
+		}
+	}
+	return styled
+}
+
+// analyticsHeadingPlanLabel is the short plan name in the usage heading (Rust
+// render.rs plan match; distinct from the Summary's quota SKU label).
+func analyticsHeadingPlanLabel(plan auth.PlanType) string {
+	switch plan {
+	case auth.PlanFree:
+		return "Free"
+	case auth.PlanGo:
+		return "Go"
+	case auth.PlanPlus:
+		return "Plus"
+	case auth.PlanPro, auth.PlanProMax:
+		return "Pro"
+	case auth.PlanProlite:
+		return "Pro Lite"
+	case auth.PlanTeam, auth.PlanBusiness, auth.PlanSelfServeBusinessProlite, auth.PlanSelfServeBusinessUsageBased:
+		return "Business"
+	case auth.PlanEnt26, auth.PlanEnterpriseCBPAutomation, auth.PlanEnterpriseCBPUsageBased, auth.PlanEnterprise:
+		return "Enterprise"
+	case auth.PlanEdu, auth.PlanEduPlus, auth.PlanEduPro:
+		return "Education"
+	default:
+		return "Account"
+	}
+}
+
+// analyticsDashboardTabBar paints the compact report tabs. The numbered form
+// appears only when the full labels fit the wide layout.
+func analyticsDashboardTabBar(theme styles.Styles, d *analyticsDashboard, width int, visible []analytics.AnalyticsSection) string {
+	labels := make([]string, 0, len(visible))
+	selected := 0
+	for index, section := range visible {
+		label := analytics.AnalyticsSectionTabLabel(section, d.business())
+		if width >= 80 {
+			label = fmt.Sprintf("%d %s", index+1, label)
+		}
+		if section == d.section {
+			selected = index
+		}
+		labels = append(labels, label)
+	}
+	reset := theme.ExecCell.Reset
+	activeStyle := func(text string) string {
+		return theme.Dialog.Highlight + theme.ExecCell.Bold + text + reset
+	}
+	inactiveStyle := func(text string) string {
+		return theme.Chat.DimText + text + reset
+	}
+	return analyticsTruncateStyled(bottompane.FilledTabBarStyledText(labels, selected, width, activeStyle, inactiveStyle), width)
+}
+
+// analyticsControlsLines paints the date range, grouping, model, sort, and
+// update metadata in rows reserved by terminal width alone.
+func (d *analyticsDashboard) analyticsControlsLines(m *Model, width, height int) []string {
+	rows := make([][]string, height)
+	if height <= 0 {
+		return nil
+	}
+	reset := ""
+	theme := m.styles()
+	reset = theme.ExecCell.Reset
+	key := func(text string) string {
+		return analyticsFooterKeyStyle() + theme.ExecCell.Bold + text + reset
+	}
+	dim := func(text string) string {
+		return theme.Chat.DimText + text + reset
+	}
+	accent := func(text string) string {
+		return theme.Dialog.Highlight + theme.ExecCell.Bold + text + reset
+	}
+	if d.showHelp {
+		rows[0] = append(rows[0], theme.ExecCell.Bold+"Usage shortcuts"+reset)
+	} else if len(d.visibleSections()) > 0 {
+		report := d.analyticsControlAvailable(analyticsControlRange)
+		optionRow := 0
+		if width < 100 && report {
+			optionRow = 1
+		}
+		if !d.zoomed {
+			focus := ""
+			if hint := analyticsHintLabel(m, "accept"); hint != "" {
+				focus = dim(" · ") + key(hint) + dim(" focus")
+			}
+			rows[0] = append(rows[0], theme.ExecCell.Bold+"Dashboard"+reset+focus)
+		}
+		if report {
+			rangeIndex := d.ranges[d.section.RangeGroup(d.business())]
+			sevenDay := dim("7d")
+			thirtyDay := dim("30d")
+			if rangeIndex == 0 {
+				sevenDay = accent("7d")
+			} else {
+				thirtyDay = accent("30d")
+			}
+			dates := analyticsControlDateInterval(d.endDate, rangeIndex, width)
+			rows[0] = append(rows[0], key("r")+" "+sevenDay+dim("/")+thirtyDay+dim(" · "+dates))
+		}
+		if d.analyticsControlAvailable(analyticsControlGroup) {
+			rows[optionRow] = append(rows[optionRow],
+				key("g")+" "+d.section.GroupLabel(d.sections[d.section].Group, d.consumerAttribution()))
+		}
+		if d.analyticsControlAvailable(analyticsControlModel) {
+			model := "All models"
+			if d.tokenModel != nil && strings.TrimSpace(*d.tokenModel) != "" {
+				model = strings.TrimSpace(*d.tokenModel)
+			}
+			rows[optionRow] = append(rows[optionRow], key("m")+" "+model)
+		}
+		if d.analyticsControlAvailable(analyticsControlTaskMetric) {
+			tasks, ok := d.tasks.Ready()
+			var loaded *analytics.AnalyticsTaskChats
+			if ok {
+				loaded = &tasks
+			}
+			metric := analytics.AnalyticsTaskMetric(d.chatMetric, loaded)
+			rows[0] = append(rows[0], key("s")+dim(" sort: ")+analytics.AnalyticsTaskMetricNames[metric])
+		}
+		rows[height-1] = nil
+		if updated := d.analyticsUpdatedLabel(); updated != "" {
+			rows[height-1] = append(rows[height-1], dim("Updated · "+updated))
+		}
+	}
+	lines := make([]string, height)
+	for index, row := range rows {
+		if len(row) == 0 {
+			continue
+		}
+		lines[index] = analyticsTruncateStyled(strings.Join(row, dim(" · ")), width)
+	}
+	return lines
+}
+
+// analyticsControlDateInterval is Rust controls.rs' width-dependent range
+// label, including the numeric cross-year fallback on narrow screens.
+func analyticsControlDateInterval(endDate time.Time, rangeIndex, width int) string {
+	start := analytics.AnalyticsSectionStartDate(endDate, rangeIndex)
+	switch {
+	case start.Year() != endDate.Year() && width < 50:
+		return start.Format("01/02/2006") + "–" + endDate.Format("01/02/2006")
+	case start.Year() == endDate.Year():
+		return start.Format("Jan 2") + "–" + endDate.Format("Jan 2, 2006")
+	default:
+		return start.Format("Jan 2, 2006") + "–" + endDate.Format("Jan 2, 2006")
+	}
+}
+
+// analyticsFooterLines keeps two hint rows regardless of report state.
+func (d *analyticsDashboard) analyticsFooterLines(m *Model, width int, scrollable bool) []string {
+	type hint struct{ key, label string }
+	pair := func(first, second string) string {
+		if first == "" && second == "" {
+			return ""
+		}
+		return first + "/" + second
+	}
+	var actions []hint
+	if d.showHelp {
+		actions = append(actions, hint{analyticsHintLabel(m, "cancel"), "back"})
+	} else if !d.zoomed {
+		actions = append(actions,
+			hint{analyticsHintLabel(m, "accept"), "focus"},
+			hint{"tab", "card"},
+		)
+	} else {
+		switch d.section {
+		case analytics.AnalyticsSectionSummary:
+		case analytics.AnalyticsSectionChats:
+			actions = append(actions, hint{pair(analyticsHintLabel(m, "move_up"), analyticsHintLabel(m, "move_down")), "row"})
+		default:
+			actions = append(actions, hint{pair(analyticsHintLabel(m, "move_left"), analyticsHintLabel(m, "move_right")), "day"})
+		}
+		if d.dayHasDetails(d.section, d.sections[d.section].Cursor) || d.chatHasDetails() {
+			actions = append(actions, hint{analyticsHintLabel(m, "accept"), "details"})
+		}
+	}
+	if scrollable {
+		actions = append(actions, hint{pair(analyticsHintLabel(m, "page_up"), analyticsHintLabel(m, "page_down")), "scroll"})
+	}
+	if !d.showHelp {
+		actions = append(actions, hint{analyticsHintLabel(m, "cancel"), "back"})
+	}
+	var navigation []hint
+	switch {
+	case d.showHelp:
+		navigation = append(navigation, hint{"?", "close help"})
+	case len(d.visibleSections()) == 0:
+		navigation = append(navigation, hint{"R", "retry"})
+	default:
+		reportKey := "tab"
+		if width >= 80 {
+			reportKey = fmt.Sprintf("tab/1–%d", len(d.visibleSections()))
+		}
+		zoom := "focus"
+		switch {
+		case d.zoomed && width < 50:
+			zoom = "all"
+		case d.zoomed:
+			zoom = "dashboard"
+		}
+		helpLabel := ""
+		if width >= 50 {
+			helpLabel = "help"
+		}
+		navigation = append(navigation,
+			hint{reportKey, "report"},
+			hint{"z", zoom},
+			hint{"?", helpLabel},
+			hint{"R", "refresh"},
+		)
+	}
+	if !d.analyticsHelpShortcutAvailable(m) {
+		kept := navigation[:0]
+		for _, item := range navigation {
+			if item.key != "?" {
+				kept = append(kept, item)
+			}
+		}
+		navigation = kept
+	}
+	join := func(items []hint) string {
+		var builder strings.Builder
+		for _, item := range items {
+			if item.key == "" {
+				continue
+			}
+			part := item.key
+			if item.label != "" {
+				part += " " + item.label
+			}
+			separator := ""
+			if builder.Len() > 0 {
+				separator = " · "
+			}
+			if analytics.AnalyticsDisplayWidth(builder.String()+separator+part) > width {
+				continue
+			}
+			builder.WriteString(separator)
+			builder.WriteString(part)
+		}
+		return analyticsStyledControls(m.styles(), builder.String())
+	}
+	return []string{join(actions), join(navigation)}
+}
+
+// chatHasDetails reports whether the selected chat row can open details.
+func (d *analyticsDashboard) chatHasDetails() bool {
+	if d == nil || d.section != analytics.AnalyticsSectionChats {
+		return false
+	}
+	cursor := d.sections[d.section].Cursor
+	if d.business() {
+		chats, ok := d.chats.Ready()
+		return ok && cursor >= 0 && cursor < len(chats.Rows) && chats.Rows[cursor].Usage != nil
+	}
+	tasks, ok := d.tasks.Ready()
+	return ok && cursor >= 0 && cursor < len(tasks.Rows) && analytics.AnalyticsTaskAvailable(tasks.Rows[cursor]) != nil
 }
 
 // bodyLines renders the maximized panel or the overview grid.
@@ -1017,12 +1449,12 @@ func (d *analyticsDashboard) bodyLines(width, height int) ([]string, int, int) {
 		_, profileReady := d.profile.Ready()
 		centerSummary := d.section == analytics.AnalyticsSectionSummary && profileReady
 		if centerSummary {
-			// Keep the heading and rule fixed and center the profile below
-			// them (Rust render.rs center_summary, #45769).
+			// The chrome owns the heading and rule; center the profile in the
+			// report body (Rust render.rs center_summary, #46863).
 			padding := (height - len(panel.Lines)) / 2
 			if padding > 0 {
 				insert := make([]string, padding)
-				panel.Lines = append(panel.Lines[:2], append(insert, panel.Lines[2:]...)...)
+				panel.Lines = append(insert, panel.Lines...)
 			}
 		}
 		start, end := 0, len(panel.Lines)
@@ -1123,10 +1555,8 @@ func (d *analyticsDashboard) panel(section analytics.AnalyticsSection, width, ch
 		ChartHeight:          chartHeight,
 		RangeIndex:           d.ranges[section.RangeGroup(d.business())],
 		EndDate:              d.endDate,
-		Focused:              section == d.section,
 		Business:             d.business(),
 		ConsumerAttribution:  d.consumerAttribution(),
-		TokenModel:           d.tokenModel,
 		ModelName:            d.modelName,
 		Theme:                d.theme,
 	})
@@ -1152,125 +1582,18 @@ func (d *analyticsDashboard) historyLines(section analytics.AnalyticsSection, wi
 	return lines
 }
 
-// controls is the footer hint text, one line per row before wrapping.
-func (d *analyticsDashboard) controls(m *Model, showRange bool) string {
-	cancelHint := analyticsHintLabel(m, "cancel")
-	if len(d.visibleSections()) == 0 {
-		return "R refresh · " + cancelHint + " back · q close"
-	}
-	navigation := analyticsHintLabel(m, "accept") + "/z maximize"
-	if d.zoomed {
-		if d.section == analytics.AnalyticsSectionChats {
-			navigation = analyticsHintLabel(m, "move_up") + "/" + analyticsHintLabel(m, "move_down") + " row · " +
-				analyticsHintLabel(m, "accept") + " details"
-		} else if d.section == analytics.AnalyticsSectionSummary {
-			navigation = analyticsHintLabel(m, "move_up") + "/" + analyticsHintLabel(m, "move_down") + " scroll"
-		} else {
-			navigation = analyticsHintLabel(m, "move_left") + "/" + analyticsHintLabel(m, "move_right") + " day · " +
-				analyticsHintLabel(m, "accept") + " details"
-		}
-	}
-	zoomHint := ""
-	switch {
-	case d.section == analytics.AnalyticsSectionChats && !d.business() && !d.zoomed:
-		zoomHint = "s sort · "
-	case d.section == analytics.AnalyticsSectionChats && !d.business():
-		zoomHint = "s sort · z dashboard · "
-	case d.zoomed:
-		zoomHint = "z dashboard · "
-	}
-	rangeHint := ""
-	if showRange {
-		rangeHint = "r 7/30d · "
-	}
-	groupHint := ""
-	if len(d.groupOptions()) >= 2 {
-		if d.section == analytics.AnalyticsSectionSummary {
-			groupHint = "g view · "
-		} else {
-			groupHint = "g group · "
-		}
-	}
-	return "tab/1–" + strconv.Itoa(len(d.visibleSections())) + " section · " + zoomHint + navigation + "\n" +
-		rangeHint + groupHint + "R refresh · " +
-		analyticsHintLabel(m, "page_up") + "/" + analyticsHintLabel(m, "page_down") + " scroll · " +
-		cancelHint + " back · q close"
-}
-
-// updatedFooterLabel is the maximized report's update timestamp that the
-// footer carries instead of the chart body (Rust render.rs updated).
-func (d *analyticsDashboard) updatedFooterLabel() string {
-	if d == nil || !d.zoomed || !d.section.HasReport() {
+// analyticsUpdatedLabel is the current report's update time. It lives in the
+// fixed controls area above every report and in the help screen (Rust
+// analytics/controls.rs render_controls and chrome.rs help_lines, #46863).
+func (d *analyticsDashboard) analyticsUpdatedLabel() string {
+	if d == nil || !d.section.HasReport() {
 		return ""
 	}
 	history, ok := d.sections[d.section].History.Ready()
 	if !ok || history.UpdatedAt == nil || *history.UpdatedAt <= 0 {
 		return ""
 	}
-	updated := time.Unix(*history.UpdatedAt, 0).UTC()
-	return "Updated " + updated.Format("Jan 2 15:04") + " UTC"
-}
-
-// analyticsAppendUpdated right-aligns the timestamp on the last footer line
-// when it fits and otherwise adds a wrapped line (Rust render.rs add_updated).
-func analyticsAppendUpdated(footer []string, updated string, width int) []string {
-	if updated == "" {
-		return footer
-	}
-	if len(footer) > 0 &&
-		analytics.AnalyticsDisplayWidth(footer[len(footer)-1])+analytics.AnalyticsDisplayWidth(updated)+3 <= width {
-		footer[len(footer)-1] = analyticsColumnsText(footer[len(footer)-1], updated, width)
-		return footer
-	}
-	return append(footer, analytics.AnalyticsWrapLines([]string{analyticsColumnsText("", updated, width)}, width)...)
-}
-
-// analyticsColumnsText right-aligns the second column within width (Rust
-// analytics/render.rs columns).
-func analyticsColumnsText(left, right string, width int) string {
-	padding := width - analytics.AnalyticsDisplayWidth(left) - analytics.AnalyticsDisplayWidth(right)
-	if padding < 1 {
-		padding = 1
-	}
-	return left + strings.Repeat(" ", padding) + right
-}
-
-// analyticsResizeFooter pads or trims footer lines to a stable height.
-func analyticsResizeFooter(lines []string, height int) []string {
-	if len(lines) > height {
-		return lines[:height]
-	}
-	for len(lines) < height {
-		lines = append(lines, "")
-	}
-	return lines
-}
-
-// styledFooterLines highlights footer keys and dims the update timestamp.
-func (d *analyticsDashboard) styledFooterLines(theme styles.Styles, lines []string, updated string) []string {
-	styled := make([]string, 0, len(lines))
-	for _, line := range lines {
-		if line == "" {
-			styled = append(styled, "")
-			continue
-		}
-		styled = append(styled, analyticsStyledControlsWithUpdated(theme, line, updated))
-	}
-	return styled
-}
-
-// analyticsStyledControlsWithUpdated keeps the update timestamp in the
-// secondary style instead of treating it as a key token.
-func analyticsStyledControlsWithUpdated(theme styles.Styles, line, updated string) string {
-	if updated == "" || !strings.HasSuffix(line, updated) {
-		return analyticsStyledControls(theme, line)
-	}
-	reset := theme.ExecCell.Reset
-	if reset == "" {
-		return line
-	}
-	prefix := strings.TrimSuffix(line, updated)
-	return analyticsStyledControls(theme, prefix) + theme.Chat.DimText + updated + reset
+	return time.Unix(*history.UpdatedAt, 0).UTC().Format("Jan 2 15:04") + " UTC"
 }
 
 // analyticsStyledControls dims the footer and highlights each key token.
@@ -1310,105 +1633,6 @@ func analyticsFooterKeyStyle() string {
 		return "\x1b[30m"
 	}
 	return ""
-}
-
-func analyticsTitleLine(theme styles.Styles, live *analytics.Live) string {
-	suffix := "  ·  Live account"
-	if live != nil {
-		if label := live.AccountLabel(); label != nil && strings.TrimSpace(*label) != "" {
-			suffix += " · " + *label
-		}
-	}
-	reset := theme.ExecCell.Reset
-	if reset == "" {
-		return "Analytics" + suffix
-	}
-	return theme.ExecCell.Bold + "Analytics" + reset + theme.Chat.DimText + suffix + reset
-}
-
-func analyticsRangeLine(theme styles.Styles, group analytics.AnalyticsRangeGroup, ranges [3]int, endDate time.Time) string {
-	accent := theme.Dialog.Highlight + theme.ExecCell.Bold
-	reset := theme.ExecCell.Reset
-	sevenDay, thirtyDay := "7d", "30d"
-	if ranges[group] == 0 {
-		if reset != "" {
-			sevenDay = accent + "[7d]" + reset
-		} else {
-			sevenDay = "[7d]"
-		}
-	} else if reset != "" {
-		thirtyDay = accent + "[30d]" + reset
-	} else {
-		thirtyDay = "[30d]"
-	}
-	start := analytics.AnalyticsSectionStartDate(endDate, ranges[group])
-	dates := start.Format("Jan 2") + "–" + endDate.Format("Jan 2, 2006")
-	if reset == "" {
-		return sevenDay + "  " + thirtyDay + "  ·  " + dates
-	}
-	return sevenDay + "  " + thirtyDay + theme.Chat.DimText + "  ·  " + dates + reset
-}
-
-func analyticsTabLines(theme styles.Styles, d *analyticsDashboard, width int) []string {
-	if !d.zoomed {
-		return nil
-	}
-	visible := d.visibleSections()
-	if len(visible) == 0 {
-		return nil
-	}
-	var builder strings.Builder
-	for index, section := range visible {
-		label := analytics.AnalyticsSectionTitle(section, d.business(), d.consumerAttribution())
-		if width >= 64 {
-			label = fmt.Sprintf("%d %s", index+1, label)
-		}
-		if section == d.section {
-			builder.WriteString("[" + label + "]  ")
-		} else {
-			builder.WriteString(label + "  ")
-		}
-	}
-	wrapped := analytics.AnalyticsWrapLines([]string{builder.String()}, width)
-	lines := make([]string, 0, len(wrapped))
-	for _, line := range wrapped {
-		lines = append(lines, analyticsStyledTabs(theme, line))
-	}
-	return lines
-}
-
-// analyticsStyledTabs accents the bracketed (focused) tab and dims the rest.
-func analyticsStyledTabs(theme styles.Styles, line string) string {
-	reset := theme.ExecCell.Reset
-	if reset == "" {
-		return line
-	}
-	secondary := theme.Chat.DimText
-	accent := theme.Dialog.Highlight
-	var builder strings.Builder
-	builder.WriteString(secondary)
-	for {
-		open := strings.Index(line, "[")
-		if open < 0 {
-			builder.WriteString(line)
-			break
-		}
-		close := strings.Index(line[open:], "]")
-		if close < 0 {
-			builder.WriteString(line)
-			break
-		}
-		close += open
-		builder.WriteString(line[:open])
-		builder.WriteString(reset)
-		builder.WriteString(accent)
-		builder.WriteString(line[open : close+1])
-		builder.WriteString(reset)
-		builder.WriteString(secondary)
-		line = line[close+1:]
-	}
-	builder.WriteString(reset)
-	return builder.String()
 }
 
 // analyticsTruncateStyled truncates a styled line by its visible width so the

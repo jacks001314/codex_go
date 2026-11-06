@@ -5,10 +5,11 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
 	bottompane "codex_go/tui/bottom_pane"
+	"codex_go/tui/keymsg"
 	"codex_go/utils"
 )
 
@@ -41,14 +42,14 @@ func TestReadOnlyViewForkShortcutMatchesRust(t *testing.T) {
 
 	for _, testCase := range []struct {
 		name    string
-		message bubbletea.KeyMsg
+		message keymsg.KeyMsg
 		want    bool
 	}{
 		{name: "plain f", message: keyRunes('f'), want: true},
-		{name: "shifted F", message: bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune("F")}, want: true},
-		{name: "alt f", message: bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune("f"), Alt: true}, want: false},
-		{name: "shift-alt f", message: bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune("F"), Alt: true}, want: false},
-		{name: "ctrl f", message: bubbletea.KeyMsg{Type: bubbletea.KeyCtrlF}, want: false},
+		{name: "shifted F", message: keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune("F")}, want: true},
+		{name: "alt f", message: keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune("f"), Alt: true}, want: false},
+		{name: "shift-alt f", message: keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune("F"), Alt: true}, want: false},
+		{name: "ctrl f", message: keymsg.KeyMsg{Type: keymsg.KeyCtrlF}, want: false},
 	} {
 		actions = nil
 		state.SetThreadID("thread-source")
@@ -158,9 +159,10 @@ func TestLockedForkRetainsQueuedPromptDraftImageAndSteersLikeRust(t *testing.T) 
 		t.Fatal("the source thread kept a copy of the steer and would send it twice")
 	}
 
-	view := model.View()
+	view := model.viewString()
+	plainView := utils.StripANSI(view)
 	for _, want := range []string{"Retained draft", "Retained queued prompt", "Fork created. You can continue here."} {
-		if !strings.Contains(view, want) {
+		if !strings.Contains(plainView, want) {
 			t.Fatalf("fork view missing %q:\n%s", want, view)
 		}
 	}

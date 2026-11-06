@@ -1,10 +1,11 @@
 package tea
 
 import (
+	keymsg "codex_go/tui/keymsg"
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
 )
@@ -31,7 +32,7 @@ func TestUnavailableThreadPreservesOrdinaryDraftLikeRust(t *testing.T) {
 	for _, draft := range []string{"keep my draft", "/review", "/rename changed"} {
 		model, submitted := unavailableThreadModel()
 		typeText(t, model, draft)
-		model.Update(key(bubbletea.KeyEnter))
+		model.Update(key(keymsg.KeyEnter))
 		if len(*submitted) != 0 {
 			t.Fatalf("%q submitted while the thread was unavailable", draft)
 		}
@@ -46,7 +47,7 @@ func TestUnavailableThreadPreservesOrdinaryDraftLikeRust(t *testing.T) {
 func TestUnavailableThreadRunsRecoveryCommandLikeRust(t *testing.T) {
 	model, submitted := unavailableThreadModel()
 	typeText(t, model, "/status")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if len(*submitted) != 0 {
 		t.Fatalf("/status was submitted as a prompt: %#v", *submitted)
 	}
@@ -64,7 +65,7 @@ func TestUnavailableThreadNewAndClearRestoreWritableSessionLikeRust(t *testing.T
 	for _, command := range []string{"/new", "/clear"} {
 		model, _ := unavailableThreadModel()
 		typeText(t, model, command)
-		model.Update(key(bubbletea.KeyEnter))
+		model.Update(key(keymsg.KeyEnter))
 		if model.threadUnavailable {
 			t.Fatalf("%s left the thread unavailable", command)
 		}
@@ -84,13 +85,13 @@ func TestUnavailableThreadUsesConfiguredSubmitKeyLikeRust(t *testing.T) {
 	model, _ := unavailableThreadModel()
 	model.keymapConfig = keymapConfig
 	typeText(t, model, "/status")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if strings.Contains(modelMessageText(model), "Model:") {
 		t.Fatalf("Enter bypassed the custom submit binding: %q", modelMessageText(model))
 	}
 	model.resetComposer()
 	typeText(t, model, "/status")
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyCtrlS})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyCtrlS})
 	if !strings.Contains(modelMessageText(model), "Model:") {
 		t.Fatalf("custom submit did not run /status: %q", modelMessageText(model))
 	}
@@ -168,7 +169,7 @@ func TestUnavailableThreadAllowsLocalSetupAndQuitCommandsLikeRust(t *testing.T) 
 	for _, tc := range cases {
 		model, submitted := unavailableThreadModel()
 		typeText(t, model, tc.command)
-		model.Update(key(bubbletea.KeyEnter))
+		model.Update(key(keymsg.KeyEnter))
 		if len(*submitted) != 0 {
 			t.Fatalf("%q was submitted as a prompt while unavailable", tc.command)
 		}
@@ -183,7 +184,7 @@ func TestUnavailableThreadAllowsLocalSetupAndQuitCommandsLikeRust(t *testing.T) 
 	for _, command := range []string{"/quit", "/exit"} {
 		model, submitted := unavailableThreadModel()
 		typeText(t, model, command)
-		_, cmd := model.Update(key(bubbletea.KeyEnter))
+		_, cmd := model.Update(key(keymsg.KeyEnter))
 		if len(*submitted) != 0 {
 			t.Fatalf("%q was submitted as a prompt while unavailable", command)
 		}

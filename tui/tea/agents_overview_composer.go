@@ -3,10 +3,11 @@ package tea
 import (
 	"strings"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
 	agentsoverview "codex_go/tui/agents_overview"
+	"codex_go/tui/keymsg"
 )
 
 // In-session command center composer (Rust #42428): the dashboard composes new
@@ -55,13 +56,13 @@ func (m *Model) handleAgentsOverviewComposerPaste(text string) bool {
 // handleAgentsOverviewComposerKey routes keys to the shared composer while it
 // owns input (Rust AgentsOverviewView::handle_composer_key). Escape returns to
 // the task list unless Vim insert mode or a popup owns it.
-func (m *Model) handleAgentsOverviewComposerKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
+func (m *Model) handleAgentsOverviewComposerKey(msg keymsg.KeyMsg) bubbletea.Cmd {
 	if m == nil || m.agentsOverview == nil {
 		return nil
 	}
 	view := m.agentsOverview
 	keySpec := keySpecFromKeyMsg(msg)
-	if msg.Paste && msg.Type == bubbletea.KeyRunes {
+	if msg.Paste && msg.Type == keymsg.KeyRunes {
 		m.handleAgentsOverviewComposerPaste(string(msg.Runes))
 		return nil
 	}
@@ -100,38 +101,38 @@ func (m *Model) handleAgentsOverviewComposerKey(msg bubbletea.KeyMsg) bubbletea.
 	offline := m.agentsOverviewComposerOffline()
 	submitBound := m.keyMatches("composer", "submit", keySpec)
 	queueBound := m.keyMatches("composer", "queue", keySpec)
-	if offline && (submitBound || queueBound || msg.Type == bubbletea.KeyEnter) {
-		if msg.Type == bubbletea.KeyEnter {
+	if offline && (submitBound || queueBound || msg.Type == keymsg.KeyEnter) {
+		if msg.Type == keymsg.KeyEnter {
 			m.handleAgentsOverviewPasteEnter()
 		}
 		return nil
 	}
 	switch msg.Type {
-	case bubbletea.KeyEnter:
+	case keymsg.KeyEnter:
 		return m.submitAgentsOverviewComposer()
-	case bubbletea.KeyEsc:
+	case keymsg.KeyEsc:
 		if view.ComposerVimEnabled() && view.ComposerVimInsert() {
 			view.SetComposerVimInsert(false)
 			return nil
 		}
 		view.FocusList()
-	case bubbletea.KeyBackspace:
+	case keymsg.KeyBackspace:
 		view.ComposerBackspace()
-	case bubbletea.KeyDelete:
+	case keymsg.KeyDelete:
 		view.ComposerDelete()
-	case bubbletea.KeyLeft:
+	case keymsg.KeyLeft:
 		view.MoveComposerCursor(-1)
-	case bubbletea.KeyRight:
+	case keymsg.KeyRight:
 		view.MoveComposerCursor(1)
-	case bubbletea.KeyHome, bubbletea.KeyCtrlA:
+	case keymsg.KeyHome, keymsg.KeyCtrlA:
 		view.SetComposerCursor(0)
-	case bubbletea.KeyEnd, bubbletea.KeyCtrlE:
+	case keymsg.KeyEnd, keymsg.KeyCtrlE:
 		view.SetComposerCursor(len(view.ComposerText()))
-	case bubbletea.KeyCtrlJ:
+	case keymsg.KeyCtrlJ:
 		view.InsertComposerText("\n")
-	case bubbletea.KeySpace:
+	case keymsg.KeySpace:
 		view.InsertComposerRune(' ')
-	case bubbletea.KeyRunes:
+	case keymsg.KeyRunes:
 		if !msg.Alt {
 			for _, r := range msg.Runes {
 				view.InsertComposerRune(r)

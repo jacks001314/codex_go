@@ -6,10 +6,9 @@ import (
 	"testing"
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
 	chatwidget "codex_go/tui/chatwidget"
+	"codex_go/tui/keymsg"
 )
 
 // Rust parity: #42401 (d4dc882998). collaboration_modes::list feeds
@@ -122,17 +121,17 @@ func TestPlanCommandUsesServerCatalogLikeRust(t *testing.T) {
 	model.withCollaborationModes([]chatwidget.CollaborationModeMask{{Name: "Default", Mode: &defaultKind}})
 
 	typeText(t, model, "/plan investigate")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if state.PlanMode {
 		t.Fatal("plan mode was selected although the server catalog has no plan mask")
 	}
-	if !strings.Contains(model.View(), "Plan mode unavailable right now.") {
-		t.Fatalf("plan-unavailable notice missing:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Plan mode unavailable right now.") {
+		t.Fatalf("plan-unavailable notice missing:\n%s", model.viewString())
 	}
 
 	model.withCollaborationModes(serverPlanCatalog())
 	typeText(t, model, "/plan investigate")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if !state.PlanMode {
 		t.Fatal("plan mode was not selected from the server catalog")
 	}

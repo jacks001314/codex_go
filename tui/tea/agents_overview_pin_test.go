@@ -127,7 +127,7 @@ func TestAgentsOverviewPinnedThreadsRefreshLikeRust(t *testing.T) {
 	if !model.agentsOverview.IsPinned("root-2") {
 		t.Fatal("pinned task from the shared section was not applied")
 	}
-	rendered := utils.StripANSI(model.View())
+	rendered := utils.StripANSI(model.viewString())
 	if !strings.Contains(rendered, "Pinned") {
 		t.Fatalf("dashboard does not render the Pinned group:\n%s", rendered)
 	}

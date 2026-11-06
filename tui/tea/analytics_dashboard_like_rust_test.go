@@ -10,11 +10,10 @@ import (
 	"testing"
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	"codex_go/auth"
 	codextui "codex_go/tui"
 	"codex_go/tui/analytics"
+	"codex_go/tui/keymsg"
 )
 
 // These tests mirror Rust #45764's analytics view coverage: the /usage menu
@@ -143,9 +142,9 @@ func waitForAnalyticsLoads(t *testing.T, model *Model) {
 func openAnalyticsFromUsageMenu(t *testing.T, model *Model) {
 	t.Helper()
 	typeText(t, model, "/usage")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	// Rust #45769 makes "View analytics" the first usage-menu entry.
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if model.analyticsDashboard == nil || !model.analyticsDashboard.active {
 		t.Fatalf("analytics dashboard did not open; notice=%q", model.notice)
 	}
@@ -173,8 +172,8 @@ func TestUsageMenuOpensAnalyticsLikeRust(t *testing.T) {
 	if got := analyticsSectionList(model.analyticsDashboard.visibleSections()); fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("consumer sections = %v, want %v", got, want)
 	}
-	view := model.View()
-	for _, want := range []string{"Analytics", "Live account", "tab/1–6", "Total usage history", "Summary"} {
+	view := model.viewString()
+	for _, want := range []string{"Usage · Plus", "analytics@example.test", "tab/1–6", "1 Overview", "Overview"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("dashboard view missing %q:\n%s", want, view)
 		}
@@ -227,8 +226,8 @@ func TestAnalyticsRangeChangeKeepsSelectionLikeRust(t *testing.T) {
 		t.Fatalf("cursor after r = %d, want 29", got)
 	}
 	waitForAnalyticsLoads(t, model)
-	if !strings.Contains(model.View(), "30d") {
-		t.Fatalf("view missing 30d range:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "30d") {
+		t.Fatalf("view missing 30d range:\n%s", model.viewString())
 	}
 	model.Update(runes("r"))
 	if got := dashboard.sections[analytics.AnalyticsSectionUsage].Cursor; got != 6 {
@@ -294,8 +293,8 @@ func TestAnalyticsBusinessModelFilterLikeRust(t *testing.T) {
 	if dashboard.tokenModel != nil {
 		t.Fatalf("third model filter = %v, want all models", *dashboard.tokenModel)
 	}
-	if !strings.Contains(model.View(), "All models") {
-		t.Fatalf("view missing all-models label:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "All models") {
+		t.Fatalf("view missing all-models label:\n%s", model.viewString())
 	}
 }
 
@@ -324,8 +323,8 @@ func TestAnalyticsCloseCancelsPendingLoadsLikeRust(t *testing.T) {
 	if dashboard.live != nil {
 		t.Fatal("live client retained after close")
 	}
-	if strings.Contains(model.View(), "Live account") {
-		t.Fatalf("dashboard still rendered after close:\n%s", model.View())
+	if strings.Contains(model.viewString(), "Usage · Plus") {
+		t.Fatalf("dashboard still rendered after close:\n%s", model.viewString())
 	}
 }
 
@@ -343,7 +342,7 @@ func TestAnalyticsPreservesComposerDraftLikeRust(t *testing.T) {
 	// the retained composer draft.
 	model.Update(runes("z"))
 	model.Update(runes("1"))
-	model.Update(key(bubbletea.KeyTab))
+	model.Update(key(keymsg.KeyTab))
 	model.Update(runes("q"))
 	if got := model.composer.Value(); got != "keep me" {
 		t.Fatalf("composer draft = %q, want %q", got, "keep me")
@@ -356,7 +355,7 @@ func TestAnalyticsRetainsNavigationAcrossReopenLikeRust(t *testing.T) {
 	openAnalyticsFromUsageMenu(t, model)
 	waitForAnalyticsLoads(t, model)
 
-	model.Update(key(bubbletea.KeyTab))
+	model.Update(key(keymsg.KeyTab))
 	model.Update(runes("r"))
 	section := model.analyticsDashboard.section
 	model.Update(runes("q"))
@@ -379,7 +378,7 @@ func TestAnalyticsSmallTerminalAndZoomKeysLikeRust(t *testing.T) {
 	openAnalyticsFromUsageMenu(t, model)
 	waitForAnalyticsLoads(t, model)
 
-	view := model.View()
+	view := model.viewString()
 	if lines := strings.Split(view, "\n"); len(lines) > model.height {
 		t.Fatalf("dashboard rendered %d lines, want at most %d:\n%s", len(lines), model.height, view)
 	}
@@ -408,11 +407,11 @@ func TestAnalyticsSectionsSwitchAndDetailsLikeRust(t *testing.T) {
 	if dashboard.section != analytics.AnalyticsSectionUsage {
 		t.Fatalf("section after 2 = %v, want usage", dashboard.section)
 	}
-	model.Update(key(bubbletea.KeyLeft))
+	model.Update(key(keymsg.KeyLeft))
 	if got := dashboard.sections[analytics.AnalyticsSectionUsage].Cursor; got != 5 {
 		t.Fatalf("cursor after left = %d, want 5", got)
 	}
-	model.Update(key(bubbletea.KeyRight))
+	model.Update(key(keymsg.KeyRight))
 	if got := dashboard.sections[analytics.AnalyticsSectionUsage].Cursor; got != 6 {
 		t.Fatalf("cursor after right = %d, want 6", got)
 	}
@@ -424,7 +423,7 @@ func TestAnalyticsSectionsSwitchAndDetailsLikeRust(t *testing.T) {
 	if detail := dashboard.sections[analytics.AnalyticsSectionUsage].Detail; detail != nil {
 		t.Fatalf("detail after second space = %v, want nil", detail)
 	}
-	model.Update(key(bubbletea.KeyEsc))
+	model.Update(key(keymsg.KeyEsc))
 	if dashboard.active {
 		t.Fatal("esc did not close the maximized dashboard")
 	}
@@ -457,7 +456,7 @@ func TestAnalyticsSectionLoadFailuresAreIndependentLikeRust(t *testing.T) {
 		t.Fatalf("plugins state = %v, want error", state)
 	}
 	model.Update(runes("4"))
-	if view := model.View(); !strings.Contains(view, "Report request failed") {
+	if view := model.viewString(); !strings.Contains(view, "Report request failed") {
 		t.Fatalf("plugin panel missing the failure message:\n%s", view)
 	}
 }
@@ -468,13 +467,13 @@ func TestAnalyticsUsesTerminalColorsLikeRust(t *testing.T) {
 	openAnalyticsFromUsageMenu(t, model)
 	waitForAnalyticsLoads(t, model)
 
-	view := model.View()
+	view := model.viewString()
 	if !strings.Contains(view, "\x1b[") {
 		t.Fatalf("dashboard rendered without terminal styling:\n%s", view)
 	}
-	// The focused tab keeps its label in the accent style, so the bracketed
-	// label must still be present after stripping the escape sequences.
-	if plain := stripAnalyticsTestANSI(view); !strings.Contains(plain, "[1 ") {
+	// The focused tab keeps its label in the accent style, so the selected
+	// compact label remains visible after stripping the escape sequences.
+	if plain := stripAnalyticsTestANSI(view); !strings.Contains(plain, "1 Overview") {
 		t.Fatalf("focused tab missing from styled view:\n%s", plain)
 	}
 }

@@ -7,9 +7,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 // PromptSuggestionRequest identifies one completed turn whose follow-up
@@ -142,15 +141,15 @@ func (m *Model) visiblePromptSuggestion() string {
 
 // handlePromptSuggestionKey implements Escape cancellation and Tab acceptance.
 // Tab yields to any explicit editor, Vim-normal, or composer binding.
-func (m *Model) handlePromptSuggestionKey(msg bubbletea.KeyMsg, keySpec string) bool {
+func (m *Model) handlePromptSuggestionKey(msg keymsg.KeyMsg, keySpec string) bool {
 	if m == nil || m.promptSuggestion == nil {
 		return false
 	}
-	if msg.Type == bubbletea.KeyEsc {
+	if msg.Type == keymsg.KeyEsc {
 		m.clearPromptSuggestion()
 		return true
 	}
-	if msg.Type != bubbletea.KeyTab || msg.Alt || msg.Paste {
+	if msg.Type != keymsg.KeyTab || msg.Alt || msg.Paste {
 		return false
 	}
 	for _, action := range codextui.KeymapActions(codextui.KeymapActionFilter{}) {

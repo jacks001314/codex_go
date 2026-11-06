@@ -53,7 +53,7 @@ func staticPagerSeparator(width int, percent int) string {
 // Rust's "~" gutter.
 func (o *TranscriptOverlay) staticPagerBody(width int, height int) []string {
 	lines := strings.Split(o.content, "\n")
-	offset := o.viewport.YOffset
+	offset := o.viewport.YOffset()
 	rows := make([]string, 0, height)
 	for index := 0; index < height; index++ {
 		contentIndex := offset + index

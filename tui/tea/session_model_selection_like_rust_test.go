@@ -4,9 +4,10 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 func sessionModelSelectionTestModel(t *testing.T, state *codextui.State, options []codextui.ModelPickerOption, extra Options, responses *[]ModalResponse) *Model {
@@ -76,12 +77,12 @@ func TestSessionModelSelectionShortcutCoversFinalPickersLikeRust(t *testing.T) {
 			model := sessionModelSelectionTestModel(t, testCase.state, testCase.options, Options{}, &responses)
 			model.openModelPicker()
 			if testCase.openChild {
-				model.Update(key(bubbletea.KeyEnter))
+				model.Update(key(keymsg.KeyEnter))
 			}
-			if view := model.View(); !strings.Contains(view, testCase.wantFooter) {
+			if view := model.viewString(); !strings.Contains(view, testCase.wantFooter) {
 				t.Fatalf("picker footer missing %q:\n%s", testCase.wantFooter, view)
 			}
-			model.Update(bubbletea.KeyMsg(bubbletea.Key{Type: bubbletea.KeyRunes, Runes: []rune{'s'}}))
+			model.Update(keymsg.KeyMsg(keymsg.Key{Type: keymsg.KeyRunes, Runes: []rune{'s'}}))
 			if len(responses) != 1 || responses[0].Picker == nil {
 				t.Fatalf("responses = %#v, want one session-model decision", responses)
 			}
@@ -92,7 +93,7 @@ func TestSessionModelSelectionShortcutCoversFinalPickersLikeRust(t *testing.T) {
 			if model.State.Model != testCase.wantModel || model.State.EffectiveReasoningEffort() != testCase.wantEffort {
 				t.Fatalf("state model/effort = %q/%q", model.State.Model, model.State.EffectiveReasoningEffort())
 			}
-			if view := model.View(); !strings.Contains(view, "for this session only") {
+			if view := model.viewString(); !strings.Contains(view, "for this session only") {
 				t.Fatalf("session-only confirmation missing:\n%s", view)
 			}
 		})
@@ -112,10 +113,10 @@ func TestSessionModelSelectionShortcutHonorsListKeymapConflictLikeRust(t *testin
 		&responses,
 	)
 	model.openModelPicker()
-	if view := model.View(); strings.Contains(view, "s session") {
+	if view := model.viewString(); strings.Contains(view, "s session") {
 		t.Fatalf("conflicting secondary shortcut was rendered:\n%s", view)
 	}
-	model.Update(bubbletea.KeyMsg(bubbletea.Key{Type: bubbletea.KeyRunes, Runes: []rune{'s'}}))
+	model.Update(keymsg.KeyMsg(keymsg.Key{Type: keymsg.KeyRunes, Runes: []rune{'s'}}))
 	if len(responses) != 0 || model.State.Model != "gpt-current" {
 		t.Fatalf("conflicting s triggered a selection: responses=%#v model=%q", responses, model.State.Model)
 	}
@@ -134,7 +135,7 @@ func TestSessionModelSelectionKeepsPlanAndNonPlanEffortsSeparateLikeRust(t *test
 			ID: "gpt-plan", Label: "Plan", DefaultReasoningEffort: "medium",
 		}}, Options{}, &responses)
 		model.openModelPicker()
-		model.Update(bubbletea.KeyMsg(bubbletea.Key{Type: bubbletea.KeyRunes, Runes: []rune{'s'}}))
+		model.Update(keymsg.KeyMsg(keymsg.Key{Type: keymsg.KeyRunes, Runes: []rune{'s'}}))
 		if model.State.PlanModeReasoningEffort != "medium" || model.State.ReasoningEffort != "high" {
 			t.Fatalf("plan/current effort = %q/%q", model.State.PlanModeReasoningEffort, model.State.ReasoningEffort)
 		}
@@ -152,8 +153,8 @@ func TestSessionModelSelectionKeepsPlanAndNonPlanEffortsSeparateLikeRust(t *test
 			ID: "gpt-plan", Label: "Plan", DefaultReasoningEffort: "ultra",
 		}}, Options{}, &responses)
 		model.openModelPicker()
-		model.Update(key(bubbletea.KeyEnter))
-		model.Update(bubbletea.KeyMsg(bubbletea.Key{Type: bubbletea.KeyRunes, Runes: []rune{'s'}}))
+		model.Update(key(keymsg.KeyEnter))
+		model.Update(keymsg.KeyMsg(keymsg.Key{Type: keymsg.KeyRunes, Runes: []rune{'s'}}))
 		if model.State.PlanModeReasoningEffort != "ultra" || model.State.ReasoningEffort != "ultra" {
 			t.Fatalf("plan/current effort = %q/%q", model.State.PlanModeReasoningEffort, model.State.ReasoningEffort)
 		}
@@ -210,12 +211,12 @@ func TestSessionModelSelectionWarnsForHighUltraConcurrencyLikeRust(t *testing.T)
 				&responses,
 			)
 			model.openModelPicker()
-			model.Update(key(bubbletea.KeyEnter))
-			model.Update(bubbletea.KeyMsg(bubbletea.Key{Type: bubbletea.KeyRunes, Runes: []rune{'s'}}))
+			model.Update(key(keymsg.KeyEnter))
+			model.Update(keymsg.KeyMsg(keymsg.Key{Type: keymsg.KeyRunes, Runes: []rune{'s'}}))
 			if len(responses) != 1 || responses[0].Picker == nil || responses[0].Picker.ReasoningEffort != "ultra" {
 				t.Fatalf("responses = %#v, want one Ultra session-model decision", responses)
 			}
-			view := strings.Join(strings.Fields(model.View()), " ")
+			view := strings.Join(strings.Fields(model.viewString()), " ")
 			for _, want := range testCase.want {
 				if !strings.Contains(view, want) {
 					t.Fatalf("Ultra concurrency warning missing %q:\n%s", want, view)

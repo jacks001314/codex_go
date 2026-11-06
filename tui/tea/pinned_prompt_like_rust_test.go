@@ -1,11 +1,10 @@
 package tea
 
 import (
+	mousemsg "codex_go/tui/mousemsg"
 	"fmt"
 	"strings"
 	"testing"
-
-	bubbletea "github.com/charmbracelet/bubbletea"
 
 	codextui "codex_go/tui"
 	"codex_go/utils"
@@ -27,10 +26,10 @@ func pinnedPromptModel(t *testing.T, width int) *Model {
 // click jumps back to the original message.
 func TestPinnedPromptHeaderJumpsToOriginalPromptLikeRust(t *testing.T) {
 	model := pinnedPromptModel(t, 60)
-	_ = model.View()
+	_ = model.viewString()
 	model.scrollTranscriptRows(-24)
 
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if !model.pinnedPrompt.active {
 		t.Fatalf("pinned prompt did not activate:\n%s", view)
 	}
@@ -39,13 +38,13 @@ func TestPinnedPromptHeaderJumpsToOriginalPromptLikeRust(t *testing.T) {
 		t.Fatalf("pinned row = %d lines=%#v", model.pinnedPrompt.row, lines)
 	}
 	header := strings.TrimSpace(lines[model.pinnedPrompt.row])
-	model.Update(bubbletea.MouseMsg{
+	model.Update(mousemsg.MouseMsg{
 		X:      2,
 		Y:      model.pinnedPrompt.row,
-		Action: bubbletea.MouseActionPress,
-		Button: bubbletea.MouseButtonLeft,
+		Action: mousemsg.MouseActionPress,
+		Button: mousemsg.MouseButtonLeft,
 	})
-	if view := utils.StripANSI(model.View()); !strings.Contains(view, strings.TrimPrefix(header, "\u203a ")) {
+	if view := utils.StripANSI(model.viewString()); !strings.Contains(view, strings.TrimPrefix(header, "\u203a ")) {
 		t.Fatalf("click did not reveal the prompt:\n%s", view)
 	}
 }
@@ -53,17 +52,17 @@ func TestPinnedPromptHeaderJumpsToOriginalPromptLikeRust(t *testing.T) {
 // Rust #52778: the header yields to visible prompts and narrow screens.
 func TestPinnedPromptHeaderVisibilityLikeRust(t *testing.T) {
 	model := pinnedPromptModel(t, 60)
-	_ = model.View()
+	_ = model.viewString()
 	model.scrollTranscriptRows(-1000)
-	_ = model.View()
+	_ = model.viewString()
 	if model.pinnedPrompt.active {
 		t.Fatal("header pinned while the prompt itself is visible")
 	}
 
 	narrow := pinnedPromptModel(t, 15)
-	_ = narrow.View()
+	_ = narrow.viewString()
 	narrow.scrollTranscriptRows(-4)
-	_ = narrow.View()
+	_ = narrow.viewString()
 	if narrow.pinnedPrompt.active {
 		t.Fatal("narrow screen pinned a prompt header")
 	}

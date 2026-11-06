@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
 )
@@ -37,6 +37,21 @@ func (o *lockedProgramOutput) String() string {
 // waitForProgramOutput blocks until the program has written needle. Startup
 // sequences are written before the first frame, so the wheel test can inject
 // input as soon as the alternate screen and mouse reporting are live.
+// waitForProgramText waits for a visible-text needle in a frame. Bubble Tea v2
+// styles each span separately, so transcript rows must be compared after ANSI
+// stripping.
+func waitForProgramText(t *testing.T, output *lockedProgramOutput, needle string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if strings.Contains(plainView(output.String()), needle) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %q; output=%q", needle, plainView(output.String()))
+}
+
 func waitForProgramOutput(t *testing.T, output *lockedProgramOutput, needle string) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -54,6 +69,7 @@ func waitForProgramOutput(t *testing.T, output *lockedProgramOutput, needle stri
 type realProgram struct {
 	input  *io.PipeWriter
 	output *lockedProgramOutput
+	send   func(bubbletea.Msg)
 	quit   func()
 	final  func(t *testing.T) *Model
 }
@@ -73,13 +89,14 @@ func startRealProgramWithState(t *testing.T, state *codextui.State, options Opti
 	models := make(chan bubbletea.Model, 1)
 	errs := make(chan error, 1)
 	go func() {
-		model, err := program.StartReturningModel()
+		model, err := program.Run()
 		models <- model
 		errs <- err
 	}()
 	running := &realProgram{
 		input:  inputWriter,
 		output: output,
+		send:   program.Send,
 		quit: func() {
 			program.Quit()
 		},

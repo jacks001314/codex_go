@@ -1,11 +1,10 @@
 package tea
 
 import (
+	mousemsg "codex_go/tui/mousemsg"
 	"fmt"
 	"strings"
 	"time"
-
-	bubbletea "github.com/charmbracelet/bubbletea"
 
 	welcome "codex_go/tui/welcome"
 	"codex_go/utils"
@@ -227,8 +226,8 @@ func mathRound(value float64) float64 {
 
 // handleWelcomeBlossomClick replays the blossom when the stage itself is
 // clicked. Unrelated gestures keep their existing owner.
-func (m *Model) handleWelcomeBlossomClick(msg bubbletea.MouseMsg) bool {
-	if m == nil || msg.Action != bubbletea.MouseActionPress || msg.Button != bubbletea.MouseButtonLeft {
+func (m *Model) handleWelcomeBlossomClick(msg mousemsg.MouseMsg) bool {
+	if m == nil || msg.Action != mousemsg.MouseActionPress || msg.Button != mousemsg.MouseButtonLeft {
 		return false
 	}
 	rect := m.welcomeBlossom.rect

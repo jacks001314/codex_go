@@ -37,4 +37,3 @@ func TestApplyRequiresTaskIDLikeRust(t *testing.T) {
 		t.Fatalf("apply created created.txt from stdin: %v", statErr)
 	}
 }
-

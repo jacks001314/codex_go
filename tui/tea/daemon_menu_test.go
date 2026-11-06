@@ -4,10 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
 	chatwidget "codex_go/tui/chatwidget"
+	"codex_go/tui/keymsg"
 	"codex_go/utils"
 )
 
@@ -32,7 +31,7 @@ func TestDaemonSlashCommandOpensMenuAndConfirmsLikeRust(t *testing.T) {
 	if model.modal == nil || model.modal.id != chatwidget.DaemonMenuViewID {
 		t.Fatalf("modal = %#v, want the daemon menu", model.modal)
 	}
-	if view := utils.StripANSI(model.View()); !strings.Contains(view, "Running daemon: 1.2.3") {
+	if view := utils.StripANSI(model.viewString()); !strings.Contains(view, "Running daemon: 1.2.3") {
 		t.Fatalf("/daemon menu missing the daemon status:\n%s", view)
 	}
 
@@ -42,7 +41,7 @@ func TestDaemonSlashCommandOpensMenuAndConfirmsLikeRust(t *testing.T) {
 	if model.modal == nil || model.modal.id != chatwidget.DaemonConfirmViewID {
 		t.Fatalf("modal = %#v, want the daemon confirmation", model.modal)
 	}
-	if view := utils.StripANSI(model.View()); !strings.Contains(view, "Update daemon and exit Codex?") {
+	if view := utils.StripANSI(model.viewString()); !strings.Contains(view, "Update daemon and exit Codex?") {
 		t.Fatalf("confirmation missing its title:\n%s", view)
 	}
 
@@ -101,16 +100,16 @@ func TestManagedDaemonRestartConfirmationLikeRust(t *testing.T) {
 	if model.modal == nil || model.modal.id != chatwidget.DaemonRestartConfirmViewID {
 		t.Fatalf("modal = %#v, want restart confirmation", model.modal)
 	}
-	if view := utils.StripANSI(model.View()); !strings.Contains(view, "Codex will reconnect automatically") {
+	if view := utils.StripANSI(model.viewString()); !strings.Contains(view, "Codex will reconnect automatically") {
 		t.Fatalf("restart confirmation missing reconnect copy:\n%s", view)
 	}
 	model.modal.selected = 1
 	// Rust marks "Restart" with require_explicit_confirmation, so the first
 	// enter only arms the option.
-	if _, cmd := model.Update(key(bubbletea.KeyEnter)); cmd != nil {
+	if _, cmd := model.Update(key(keymsg.KeyEnter)); cmd != nil {
 		t.Fatal("restart confirmation exited before the explicit confirmation")
 	}
-	if _, cmd := model.Update(key(bubbletea.KeyEnter)); cmd == nil {
+	if _, cmd := model.Update(key(keymsg.KeyEnter)); cmd == nil {
 		t.Fatal("restart confirmation did not exit")
 	}
 	if !model.PendingDaemonRestart() {

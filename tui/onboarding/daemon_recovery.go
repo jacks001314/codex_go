@@ -6,6 +6,7 @@ package onboarding
 // confirmation, and the caller re-checks compatibility exactly once.
 
 import (
+	mousemsg "codex_go/tui/mousemsg"
 	"context"
 	"errors"
 	"fmt"
@@ -13,7 +14,9 @@ import (
 	"sort"
 	"strings"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	"codex_go/tui/keymsg"
+
+	bubbletea "charm.land/bubbletea/v2"
 )
 
 // DaemonRecoveryChoice is the selection the recovery screen returned.
@@ -71,9 +74,6 @@ func RunDaemonRecovery(ctx context.Context, options DaemonRecoveryOptions, input
 	if output != nil {
 		programOptions = append(programOptions, bubbletea.WithOutput(output))
 	}
-	if !options.NoAltScreen {
-		programOptions = append(programOptions, bubbletea.WithAltScreen())
-	}
 	final, err := bubbletea.NewProgram(model, programOptions...).Run()
 	if err != nil {
 		return DaemonRecoveryResult{}, err
@@ -119,17 +119,22 @@ func newDaemonRecoveryModel(options DaemonRecoveryOptions) *daemonRecoveryModel 
 func (m *daemonRecoveryModel) Init() bubbletea.Cmd { return nil }
 
 func (m *daemonRecoveryModel) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
+	if key, ok := keymsg.FromTea(message); ok {
+		message = key
+	} else if mouse, ok := mousemsg.FromTea(message); ok {
+		message = mouse
+	}
 	switch message := message.(type) {
-	case bubbletea.KeyMsg:
+	case keymsg.KeyMsg:
 		switch message.Type {
-		case bubbletea.KeyEsc, bubbletea.KeyCtrlC:
+		case keymsg.KeyEsc, keymsg.KeyCtrlC:
 			m.finish(DaemonRecoveryResult{Choice: DaemonRecoveryCancel, Cancelled: true})
 			return m, bubbletea.Quit
-		case bubbletea.KeyUp:
+		case keymsg.KeyUp:
 			m.move(-1)
-		case bubbletea.KeyDown:
+		case keymsg.KeyDown:
 			m.move(1)
-		case bubbletea.KeyEnter:
+		case keymsg.KeyEnter:
 			if m.selectItem(m.selected) {
 				return m, bubbletea.Quit
 			}
@@ -214,7 +219,13 @@ func daemonRecoveryDigit(key string) (int, bool) {
 	}
 }
 
-func (m *daemonRecoveryModel) View() string {
+func (m *daemonRecoveryModel) View() bubbletea.View {
+	v := bubbletea.NewView(m.viewString())
+	v.AltScreen = !m.options.NoAltScreen
+	return v
+}
+
+func (m *daemonRecoveryModel) viewString() string {
 	if m == nil || m.done {
 		return ""
 	}

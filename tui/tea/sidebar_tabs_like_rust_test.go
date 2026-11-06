@@ -4,9 +4,10 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 func newSidebarTabsModel(t *testing.T) (*Model, *[]SideStartParams) {
@@ -52,7 +53,7 @@ func TestSidebarChooserOffersNewSideChatLikeRust(t *testing.T) {
 		}
 	}
 
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 	if len(*started) != 1 {
 		t.Fatalf("side starters = %d, want 1", len(*started))
@@ -78,7 +79,7 @@ func TestSidebarTabsKeepMultipleSideChatsLikeRust(t *testing.T) {
 		runTeaCmd(t, model, cmd)
 	}
 	typeText(t, model, "/side another question")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 
 	if len(*started) != 2 {
@@ -115,7 +116,7 @@ func TestSidebarTabsKeepMultipleSideChatsLikeRust(t *testing.T) {
 		runTeaCmd(t, model, cmd)
 	}
 	model.sidebarChoice = 0
-	_, cmd = model.Update(key(bubbletea.KeyEnter))
+	_, cmd = model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 	if model.State.ThreadID != "side-1" {
 		t.Fatalf("chooser reopened %q, want side-1", model.State.ThreadID)
@@ -136,11 +137,11 @@ func TestSidebarChooserResizesLikeRust(t *testing.T) {
 		t.Fatal("chooser did not start a resize preview")
 	}
 	preview := model.sideResize.previewWidth
-	model.Update(key(bubbletea.KeyLeft))
+	model.Update(key(keymsg.KeyLeft))
 	if model.sideResize == nil || model.sideResize.previewWidth <= preview {
 		t.Fatalf("left arrow did not widen the chooser preview: %#v", model.sideResize)
 	}
-	if handled, cmd := model.handleSidePaneResizeKey(key(bubbletea.KeyEnter)); !handled {
+	if handled, cmd := model.handleSidePaneResizeKey(key(keymsg.KeyEnter)); !handled {
 		t.Fatal("Enter did not finish the resize")
 	} else if cmd != nil {
 		runTeaCmd(t, model, cmd)

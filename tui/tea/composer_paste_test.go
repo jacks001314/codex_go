@@ -5,10 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
 	bottompane "codex_go/tui/bottom_pane"
+	"codex_go/tui/keymsg"
 )
 
 // Rust #49357 (upstream 1983c48fd1), Rust test
@@ -16,7 +15,7 @@ import (
 // (codex-rs/tui/src/bottom_pane/chat_composer/blockquote_paste_tests.rs).
 //
 // The table is the Rust table verbatim, driven through the real bracketed-paste
-// entry point (bubbletea.KeyMsg with Paste set) rather than the helper alone.
+// entry point (keymsg.KeyMsg with Paste set) rather than the helper alone.
 func TestComposerBlockquotePasteContinuesCurrentLinePrefixLikeRust(t *testing.T) {
 	for _, tc := range []struct {
 		draft  string
@@ -40,7 +39,7 @@ func TestComposerBlockquotePasteContinuesCurrentLinePrefixLikeRust(t *testing.T)
 		state := codextui.NewState(nil)
 		model := NewModel(state, Options{Width: 80, Height: 24})
 		model.composer.SetValue(tc.draft)
-		model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune(tc.pasted), Paste: true})
+		model.Update(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune(tc.pasted), Paste: true})
 		if got := model.composer.Value(); got != tc.want {
 			t.Errorf("draft %q + paste %q = %q, want %q", tc.draft, tc.pasted, got, tc.want)
 		}
@@ -56,11 +55,11 @@ func TestComposerBlockquotePasteUsesCursorLineAndPreservesSuffixLikeRust(t *test
 	model.composer.SetValue("intro\n> suffix\nend")
 	// Cursor lands right after the "> " marker on the second line.
 	model.composer.CursorUp()
-	model.composer.SetCursor(len("> "))
+	model.composer.SetCursorColumn(len("> "))
 	if got := composerCursorLinePrefix(&model.composer); got != "> " {
 		t.Fatalf("cursor line prefix = %q, want %q", got, "> ")
 	}
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune("first\nsecond"), Paste: true})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune("first\nsecond"), Paste: true})
 	if got := model.composer.Value(); got != "intro\n> first\n> second\n\nsuffix\nend" {
 		t.Fatalf("composer text = %q, want %q", got, "intro\n> first\n> second\n\nsuffix\nend")
 	}
@@ -76,8 +75,8 @@ func TestComposerBlockquotePasteRejectsPartialMarkerLikeRust(t *testing.T) {
 	state := codextui.NewState(nil)
 	model := NewModel(state, Options{Width: 80, Height: 24})
 	model.composer.SetValue("> abc")
-	model.composer.SetCursor(1)
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune("first\nsecond"), Paste: true})
+	model.composer.SetCursorColumn(1)
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune("first\nsecond"), Paste: true})
 	if got := model.composer.Value(); got != ">first\nsecond abc" {
 		t.Fatalf("composer text = %q, want literal paste at the cursor", got)
 	}
@@ -96,7 +95,7 @@ func TestComposerBlockquotePasteEmbeddedAnswerStartsNextBlockLikeRust(t *testing
 	}})
 	model.asyncQuestions.SelectOther()
 	model.composer.SetValue("> ")
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune("first\nsecond"), Paste: true})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune("first\nsecond"), Paste: true})
 	model.composer.InsertString("Next block")
 	if got := model.composer.Value(); got != "> first\n> second\n\nNext block" {
 		t.Fatalf("embedded answer text = %q, want %q", got, "> first\n> second\n\nNext block")
@@ -115,7 +114,7 @@ func TestComposerBlockquotePasteLargeExpandsQuotedTextOnSubmitLikeRust(t *testin
 	model := NewModel(state, Options{Width: 80, Height: 24})
 	first := strings.Repeat("x", 1000)
 	model.composer.SetValue("> ")
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune(first + "\nsecond"), Paste: true})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune(first + "\nsecond"), Paste: true})
 	quoted := first + "\n> second"
 	placeholder := fmt.Sprintf("[Pasted Content %d chars]", len([]rune(quoted)))
 	if got, want := model.composer.Value(), "> "+placeholder+"\n\n"; got != want {
@@ -126,7 +125,7 @@ func TestComposerBlockquotePasteLargeExpandsQuotedTextOnSubmitLikeRust(t *testin
 	}
 	model.composer.InsertString("Next block")
 	model.clearComposerPasteWindow()
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	if len(model.submitRequests) != 1 {
 		t.Fatalf("submissions = %d, want 1", len(model.submitRequests))
 	}

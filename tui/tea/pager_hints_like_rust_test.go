@@ -32,7 +32,7 @@ func TestPagerHintsUseConfiguredBindingsLikeRust(t *testing.T) {
 	}
 	model := NewModel(codextui.NewState(nil), Options{Width: 80, Height: 24, KeymapConfig: config})
 	model.openTranscriptOverlay()
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "f4 close · f6 find · esc browse prompts") {
 		t.Fatalf("pager hints did not use configured bindings:\n%s", view)
 	}

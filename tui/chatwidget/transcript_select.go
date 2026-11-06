@@ -162,7 +162,7 @@ func (o *TranscriptOverlay) BeginSelection() bool {
 		anchor:          cursor,
 		activeEnd:       cursor,
 		preferredColumn: -1,
-		savedOffset:     o.viewport.YOffset,
+		savedOffset:     o.viewport.YOffset(),
 		savedFollow:     o.viewport.AtBottom(),
 	}
 	if line, ok := o.find.matchLine(); ok {
@@ -219,15 +219,15 @@ func (o *TranscriptOverlay) selectionEntryCursor() selectPoint {
 	if len(o.plainLines) == 0 {
 		return selectPoint{}
 	}
-	row := o.viewport.YOffset + o.bodyHeight() - 1
+	row := o.viewport.YOffset() + o.bodyHeight() - 1
 	if row < 0 {
 		row = 0
 	}
 	if row >= len(o.plainLines) {
 		row = len(o.plainLines) - 1
 	}
-	if row < o.viewport.YOffset {
-		row = o.viewport.YOffset
+	if row < o.viewport.YOffset() {
+		row = o.viewport.YOffset()
 	}
 	return selectPoint{Row: row, Col: 0}
 }
@@ -247,10 +247,10 @@ func (o *TranscriptOverlay) selectPointForMatch(line int) selectPoint {
 }
 
 func (o *TranscriptOverlay) bodyHeight() int {
-	if o == nil || o.viewport.Height <= 0 {
+	if o == nil || o.viewport.Height() <= 0 {
 		return 1
 	}
-	return o.viewport.Height
+	return o.viewport.Height()
 }
 
 func (o *TranscriptOverlay) selectCursor() selectPoint {
@@ -658,7 +658,7 @@ func (o *TranscriptOverlay) revealSelectionCursor() {
 	}
 	cursor := o.selectCursor()
 	height := o.bodyHeight()
-	offset := o.viewport.YOffset
+	offset := o.viewport.YOffset()
 	if cursor.Row < offset {
 		o.viewport.SetYOffset(cursor.Row)
 		return

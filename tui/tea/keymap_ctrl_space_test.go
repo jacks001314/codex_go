@@ -3,9 +3,10 @@ package tea
 import (
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 // Mirrors Rust #18593 (`tui/src/key_hint.rs`): a NUL character (0x00)
@@ -15,13 +16,13 @@ import (
 func TestCtrlSpaceNormalizationLikeRust(t *testing.T) {
 	cases := []struct {
 		name string
-		msg  bubbletea.KeyMsg
+		msg  keymsg.KeyMsg
 		want string
 	}{
-		{"ansi NUL byte (KeyCtrlAt)", bubbletea.KeyMsg{Type: bubbletea.KeyCtrlAt}, "ctrl-space"},
-		{"keyNUL alias (KeyNull)", bubbletea.KeyMsg{Type: bubbletea.KeyNull}, "ctrl-space"},
-		{"windows coninput NUL rune (KeyRunes{0})", bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{0}}, "ctrl-space"},
-		{"C0 unit separator (KeyCtrlUnderscore)", bubbletea.KeyMsg{Type: bubbletea.KeyCtrlUnderscore}, "ctrl-7"},
+		{"ansi NUL byte (KeyCtrlAt)", keymsg.KeyMsg{Type: keymsg.KeyCtrlAt}, "ctrl-space"},
+		{"keyNUL alias (KeyNull)", keymsg.KeyMsg{Type: keymsg.KeyNull}, "ctrl-space"},
+		{"windows coninput NUL rune (KeyRunes{0})", keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{0}}, "ctrl-space"},
+		{"C0 unit separator (KeyCtrlUnderscore)", keymsg.KeyMsg{Type: keymsg.KeyCtrlUnderscore}, "ctrl-7"},
 	}
 	for _, c := range cases {
 		if got := keySpecFromKeyMsg(c.msg); got != c.want {
@@ -37,10 +38,10 @@ func TestCtrlSpaceNormalizationLikeRust(t *testing.T) {
 func TestConfiguredCtrlSpaceSubmitLikeRust(t *testing.T) {
 	encodings := []struct {
 		name string
-		msg  bubbletea.KeyMsg
+		msg  keymsg.KeyMsg
 	}{
-		{"ansi NUL byte (KeyCtrlAt)", bubbletea.KeyMsg{Type: bubbletea.KeyCtrlAt}},
-		{"windows coninput NUL rune (KeyRunes{0})", bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{0}}},
+		{"ansi NUL byte (KeyCtrlAt)", keymsg.KeyMsg{Type: keymsg.KeyCtrlAt}},
+		{"windows coninput NUL rune (KeyRunes{0})", keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{0}}},
 	}
 	for _, encoding := range encodings {
 		var requests []SubmitRequest

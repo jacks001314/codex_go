@@ -1,10 +1,9 @@
 package tea
 
 import (
+	keymsg "codex_go/tui/keymsg"
 	"strings"
 	"testing"
-
-	bubbletea "github.com/charmbracelet/bubbletea"
 
 	codextui "codex_go/tui"
 )
@@ -24,10 +23,10 @@ func TestModelCopyUsesStatusOutputLikeRust(t *testing.T) {
 	})
 
 	typeText(t, model, "/status")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	typeText(t, model, "/copy")
-	model.Update(key(bubbletea.KeyEnter))
-	view := model.View()
+	model.Update(key(keymsg.KeyEnter))
+	view := model.viewString()
 	for _, want := range []string{"Copy to clipboard", "Whole status", "Model", "Directory", "Thread name", "Session ID"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("status copy picker missing %q:\n%s", want, view)
@@ -35,16 +34,16 @@ func TestModelCopyUsesStatusOutputLikeRust(t *testing.T) {
 	}
 
 	// Selecting "Model" (second item) copies just the model.
-	model.Update(key(bubbletea.KeyDown))
-	updateAndRunClipboard(t, model, key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyDown))
+	updateAndRunClipboard(t, model, key(keymsg.KeyEnter))
 	if copied != "gpt-5.4" {
 		t.Fatalf("copied = %q, want gpt-5.4", copied)
 	}
 
 	// Whole status copies the rendered /status text as plain output.
 	typeText(t, model, "/copy")
-	model.Update(key(bubbletea.KeyEnter))
-	updateAndRunClipboard(t, model, key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
+	updateAndRunClipboard(t, model, key(keymsg.KeyEnter))
 	if !strings.HasPrefix(copied, "/status\n") {
 		t.Fatalf("copied = %q, want the /status text", copied)
 	}
@@ -68,23 +67,23 @@ func TestModelCopyReturnsToResponseAfterOtherCommandLikeRust(t *testing.T) {
 	})
 
 	typeText(t, model, "/status")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if model.statusCopyTargets == nil {
 		t.Fatal("/status did not retain copy targets")
 	}
 
 	// Any command other than /copy returns /copy to the assistant response.
 	typeText(t, model, "/help")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if model.statusCopyTargets != nil {
 		t.Fatal("/help did not clear status copy targets")
 	}
 	typeText(t, model, "/copy")
-	model.Update(key(bubbletea.KeyEnter))
-	if view := model.View(); strings.Contains(view, "Whole status") || !strings.Contains(view, "Whole response") {
+	model.Update(key(keymsg.KeyEnter))
+	if view := model.viewString(); strings.Contains(view, "Whole status") || !strings.Contains(view, "Whole response") {
 		t.Fatalf("expected response copy targets:\n%s", view)
 	}
-	updateAndRunClipboard(t, model, key(bubbletea.KeyEnter))
+	updateAndRunClipboard(t, model, key(keymsg.KeyEnter))
 	if copied != "final answer" {
 		t.Fatalf("copied = %q, want final answer", copied)
 	}
@@ -109,10 +108,10 @@ func TestModelWholeStatusCopyKeepsFullPathsAtNarrowWidthsLikeRust(t *testing.T) 
 	})
 
 	typeText(t, model, "/status")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	typeText(t, model, "/copy")
-	model.Update(key(bubbletea.KeyEnter))
-	updateAndRunClipboard(t, model, key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
+	updateAndRunClipboard(t, model, key(keymsg.KeyEnter))
 
 	if copied == "" {
 		t.Fatal("/copy did not copy the whole status")

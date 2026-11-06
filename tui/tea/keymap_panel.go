@@ -4,12 +4,13 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	bubbletea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"codex_go/features"
 	codextui "codex_go/tui"
 	chatwidget "codex_go/tui/chatwidget"
+	"codex_go/tui/keymsg"
 )
 
 // keymapPanelMaxResultRows mirrors keymap_setup/picker.rs max_visible_rows.
@@ -118,7 +119,7 @@ func keymapPanelMoveSelection(selected, delta, total int) int {
 	return selected
 }
 
-func (m *Model) updateKeymapPanelKey(message bubbletea.KeyMsg) bubbletea.Cmd {
+func (m *Model) updateKeymapPanelKey(message keymsg.KeyMsg) bubbletea.Cmd {
 	if m == nil || m.modal == nil || m.modal.keymapPanel == nil {
 		return nil
 	}
@@ -126,35 +127,35 @@ func (m *Model) updateKeymapPanelKey(message bubbletea.KeyMsg) bubbletea.Cmd {
 	tabs := m.keymapPanelTabs()
 	rows := m.keymapPanelRows()
 	switch message.Type {
-	case bubbletea.KeyEsc, bubbletea.KeyCtrlC:
+	case keymsg.KeyEsc, keymsg.KeyCtrlC:
 		m.modal = nil
 		m.refreshTranscript()
 		return nil
-	case bubbletea.KeyLeft:
+	case keymsg.KeyLeft:
 		m.keymapPanelSwitchTab(-1)
 		return nil
-	case bubbletea.KeyRight:
+	case keymsg.KeyRight:
 		m.keymapPanelSwitchTab(1)
 		return nil
-	case bubbletea.KeyUp:
+	case keymsg.KeyUp:
 		panel.selected = keymapPanelMoveSelection(panel.selected, -1, len(rows))
 		return nil
-	case bubbletea.KeyDown:
+	case keymsg.KeyDown:
 		panel.selected = keymapPanelMoveSelection(panel.selected, 1, len(rows))
 		return nil
-	case bubbletea.KeyPgUp:
+	case keymsg.KeyPgUp:
 		panel.selected = max(panel.selected-max(panel.visibleRows, 1), 0)
 		return nil
-	case bubbletea.KeyPgDown:
+	case keymsg.KeyPgDown:
 		panel.selected = min(panel.selected+max(panel.visibleRows, 1), max(len(rows)-1, 0))
 		return nil
-	case bubbletea.KeyHome:
+	case keymsg.KeyHome:
 		panel.selected = 0
 		return nil
-	case bubbletea.KeyEnd:
+	case keymsg.KeyEnd:
 		panel.selected = max(len(rows)-1, 0)
 		return nil
-	case bubbletea.KeyBackspace:
+	case keymsg.KeyBackspace:
 		if panel.query != "" {
 			_, size := utf8.DecodeLastRuneInString(panel.query)
 			panel.query = panel.query[:len(panel.query)-size]
@@ -162,12 +163,12 @@ func (m *Model) updateKeymapPanelKey(message bubbletea.KeyMsg) bubbletea.Cmd {
 			panel.scrollTop = 0
 		}
 		return nil
-	case bubbletea.KeyCtrlU:
+	case keymsg.KeyCtrlU:
 		panel.query = ""
 		panel.selected = 0
 		panel.scrollTop = 0
 		return nil
-	case bubbletea.KeyEnter:
+	case keymsg.KeyEnter:
 		if len(tabs) > 0 && panel.tab == len(tabs)-1 {
 			// Debug tab: Rust opens the live Keypress Inspector.
 			return m.openKeymapInspector()
@@ -176,12 +177,12 @@ func (m *Model) updateKeymapPanelKey(message bubbletea.KeyMsg) bubbletea.Cmd {
 			m.openKeymapActionMenu(rows[panel.selected].Context, rows[panel.selected].Action)
 		}
 		return nil
-	case bubbletea.KeySpace:
+	case keymsg.KeySpace:
 		panel.query += " "
 		panel.selected = 0
 		panel.scrollTop = 0
 		return nil
-	case bubbletea.KeyRunes:
+	case keymsg.KeyRunes:
 		if len(message.Runes) == 0 {
 			return nil
 		}

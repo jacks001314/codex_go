@@ -5,9 +5,10 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 	"codex_go/utils"
 )
 
@@ -67,7 +68,7 @@ func TestSlashForkRunsOffUpdateLoopLikeRust(t *testing.T) {
 	})
 
 	typeText(t, model, "/fork")
-	updated, cmd := model.Update(key(bubbletea.KeyEnter))
+	updated, cmd := model.Update(key(keymsg.KeyEnter))
 	model = updated.(*Model)
 	if len(actions) != 0 {
 		t.Fatalf("thread/fork ran inside the key handler: %#v", actions)
@@ -78,7 +79,7 @@ func TestSlashForkRunsOffUpdateLoopLikeRust(t *testing.T) {
 	if got := model.notice; got != forkInProgressNotice {
 		t.Fatalf("notice = %q, want %q", got, forkInProgressNotice)
 	}
-	if view := utils.StripANSI(model.View()); !strings.Contains(view, "Forking conversation") {
+	if view := utils.StripANSI(model.viewString()); !strings.Contains(view, "Forking conversation") {
 		t.Fatalf("progress line missing from the first frame:\n%s", view)
 	}
 
@@ -113,7 +114,7 @@ func TestPendingForkSwallowsRepeatTriggerLikeRust(t *testing.T) {
 		},
 	})
 	typeText(t, model, "/fork")
-	updated, cmd := model.Update(key(bubbletea.KeyEnter))
+	updated, cmd := model.Update(key(keymsg.KeyEnter))
 	model = updated.(*Model)
 	// Repeat triggers while the request is in flight: `/fork` typed again plus a
 	// direct call into the same entry point (the command center/read-only view
@@ -159,7 +160,7 @@ func TestSessionPickerForkRunsOffUpdateLoopLikeRust(t *testing.T) {
 	// the fork request itself; the alt-screen wrapper is exercised by the PTY
 	// scenario in scripts/fakeappserver.
 	model.sessionPickerAltScreen = false
-	updated, cmd := model.Update(key(bubbletea.KeyEnter))
+	updated, cmd := model.Update(key(keymsg.KeyEnter))
 	model = updated.(*Model)
 	if len(actions) != 0 {
 		t.Fatalf("thread/fork ran inside the picker key handler: %#v", actions)
@@ -195,7 +196,7 @@ func TestUnlockedForkFailureKeepsCurrentThreadLikeRust(t *testing.T) {
 		},
 	})
 	typeText(t, model, "/fork")
-	updated, cmd := model.Update(key(bubbletea.KeyEnter))
+	updated, cmd := model.Update(key(keymsg.KeyEnter))
 	model = updated.(*Model)
 	model = runForkCmd(t, model, cmd)
 	if model.forkInProgress {
@@ -222,12 +223,12 @@ func TestPendingForkStillHonoursExplicitQuitLikeRust(t *testing.T) {
 		},
 	})
 	typeText(t, model, "/fork")
-	updated, cmd := model.Update(key(bubbletea.KeyEnter))
+	updated, cmd := model.Update(key(keymsg.KeyEnter))
 	model = updated.(*Model)
 	if !model.forkInProgress {
 		t.Fatal("fork did not become pending")
 	}
-	_, quitCmd := model.Update(key(bubbletea.KeyCtrlC))
+	_, quitCmd := model.Update(key(keymsg.KeyCtrlC))
 	if quitCmd == nil {
 		t.Fatal("ctrl+c was swallowed by the pending fork")
 	}

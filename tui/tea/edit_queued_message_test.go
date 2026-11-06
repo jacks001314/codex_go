@@ -3,9 +3,8 @@ package tea
 import (
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 // These tests mirror Rust tui/src/chatwidget/tests/composer_submission.rs for
@@ -18,8 +17,8 @@ func newEditQueuedMessageModel() *Model {
 	return NewModel(codextui.NewState(nil), Options{Width: 120, Height: 36})
 }
 
-func keyRunes(r rune) bubbletea.KeyMsg {
-	return bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{r}}
+func keyRunes(r rune) keymsg.KeyMsg {
+	return keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{r}}
 }
 
 // TestEditQueuedMessageAltUpRestoresMostRecentLikeRust mirrors Rust
@@ -36,7 +35,7 @@ func TestEditQueuedMessageAltUpRestoresMostRecentLikeRust(t *testing.T) {
 		t.Fatalf("seeded queue = %d, want 2", len(model.queued))
 	}
 
-	updated, _ := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyUp, Alt: true})
+	updated, _ := model.Update(keymsg.KeyMsg{Type: keymsg.KeyUp, Alt: true})
 	model = updated.(*Model)
 
 	if got := model.composer.Value(); got != "second queued" {
@@ -67,7 +66,7 @@ func TestEditQueuedMessagePreservesSlashPromptElementsLikeRust(t *testing.T) {
 		t.Fatalf("queued element = %#v", element)
 	}
 
-	updated, _ := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyUp, Alt: true})
+	updated, _ := model.Update(keymsg.KeyMsg{Type: keymsg.KeyUp, Alt: true})
 	model = updated.(*Model)
 	if model.composerPrefix != composerPrefixNone || model.composer.Value() != "/tmp/$imagegen file" {
 		t.Fatalf("restored prefix=%v body=%q", model.composerPrefix, model.composer.Value())
@@ -135,7 +134,7 @@ func TestEditQueuedMessageVimHistoryUpUsesRemappedBindingLikeRust(t *testing.T) 
 	// binding only fires after returning to Normal mode.
 	model.vimInsert = false
 
-	updated, _ := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyF2})
+	updated, _ := model.Update(keymsg.KeyMsg{Type: keymsg.KeyF2})
 	model = updated.(*Model)
 	if got := model.composer.Value(); got != "queued message" {
 		t.Fatalf("composer after remapped F2 = %q, want queued message", got)

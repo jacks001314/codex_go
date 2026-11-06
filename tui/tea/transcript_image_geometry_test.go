@@ -12,7 +12,7 @@ import (
 func TestTranscriptImageViewFillsTerminalHeight(t *testing.T) {
 	for _, size := range [][2]int{{80, 24}, {120, 30}, {60, 16}} {
 		model := NewModel(codextui.NewState(nil), Options{Width: size[0], Height: size[1]})
-		view := model.View()
+		view := model.viewString()
 		rows := strings.Count(view, "\n") + 1
 		if rows != size[1] {
 			t.Fatalf("%dx%d view rows = %d, want the full terminal height", size[0], size[1], rows)
@@ -33,7 +33,7 @@ func TestTranscriptImagePositionMatchesInlineRendererLikeRust(t *testing.T) {
 		InitialHistoryCells: []historycell.HistoryCell{historycell.NewImageGenerationCall("img-1", "completed", "a red cube", path)},
 	})
 	model.transcriptImageCell = transcript_image.CellSize{Width: 8, Height: 16}
-	view := model.View()
+	view := model.viewString()
 
 	// Bubble Tea's inline renderer starts at the shell cursor on the bottom
 	// row; each newline scrolls the terminal instead of resetting to row zero.

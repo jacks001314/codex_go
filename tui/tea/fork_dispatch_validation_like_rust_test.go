@@ -3,9 +3,8 @@ package tea
 import (
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 // Rust #58767: rejecting /fork while foreground work is pending must keep the
@@ -23,7 +22,7 @@ func TestModelForkBusyRejectionPreservesDraftLikeRust(t *testing.T) {
 	})
 
 	typeText(t, model, "/fork")
-	updated, cmd := model.Update(key(bubbletea.KeyEnter))
+	updated, cmd := model.Update(key(keymsg.KeyEnter))
 	model = updated.(*Model)
 	runTeaCmd(t, model, cmd)
 
@@ -50,7 +49,7 @@ func TestModelForkAllowedDuringMCPStartupLikeRust(t *testing.T) {
 	model.mcpStartupActive = true
 
 	typeText(t, model, "/fork")
-	updated, cmd := model.Update(key(bubbletea.KeyEnter))
+	updated, cmd := model.Update(key(keymsg.KeyEnter))
 	model = updated.(*Model)
 	runTeaCmd(t, model, cmd)
 

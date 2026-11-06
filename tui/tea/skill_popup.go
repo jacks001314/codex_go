@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	bubbletea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"codex_go/appserver"
 	"codex_go/features"
@@ -15,6 +15,7 @@ import (
 	codextui "codex_go/tui"
 	mentionsv2 "codex_go/tui/bottom_pane/mentions_v2"
 	chatwidget "codex_go/tui/chatwidget"
+	"codex_go/tui/keymsg"
 )
 
 const skillPopupMaxRows = 8
@@ -382,7 +383,7 @@ func (m *Model) applySkillsInventoryResult(message SkillsInventoryResultMsg) {
 	m.refreshSkillPopup()
 }
 
-func (m *Model) updateSkillPopupKey(msg bubbletea.KeyMsg) (bubbletea.Cmd, bool) {
+func (m *Model) updateSkillPopupKey(msg keymsg.KeyMsg) (bubbletea.Cmd, bool) {
 	if m == nil {
 		return nil, false
 	}
@@ -393,16 +394,16 @@ func (m *Model) updateSkillPopupKey(msg bubbletea.KeyMsg) (bubbletea.Cmd, bool) 
 		return nil, false
 	}
 	switch msg.Type {
-	case bubbletea.KeyUp, bubbletea.KeyCtrlP:
+	case keymsg.KeyUp, keymsg.KeyCtrlP:
 		m.moveSkillPopupSelection(-1)
 		return nil, true
-	case bubbletea.KeyDown, bubbletea.KeyCtrlN:
+	case keymsg.KeyDown, keymsg.KeyCtrlN:
 		m.moveSkillPopupSelection(1)
 		return nil, true
-	case bubbletea.KeyEsc:
+	case keymsg.KeyEsc:
 		m.skillPopup = skillPopupState{}
 		return nil, true
-	case bubbletea.KeyEnter, bubbletea.KeyTab:
+	case keymsg.KeyEnter, keymsg.KeyTab:
 		if m.insertSelectedSkillPopupItem() {
 			return nil, true
 		}
@@ -410,37 +411,37 @@ func (m *Model) updateSkillPopupKey(msg bubbletea.KeyMsg) (bubbletea.Cmd, bool) 
 	return nil, false
 }
 
-func (m *Model) updateMentionPopupKey(msg bubbletea.KeyMsg) (bubbletea.Cmd, bool) {
+func (m *Model) updateMentionPopupKey(msg keymsg.KeyMsg) (bubbletea.Cmd, bool) {
 	if m == nil || m.mentionPopup == nil {
 		return nil, false
 	}
 	switch msg.Type {
-	case bubbletea.KeyUp, bubbletea.KeyCtrlP:
+	case keymsg.KeyUp, keymsg.KeyCtrlP:
 		m.mentionPopup.MoveUp()
 		return nil, true
-	case bubbletea.KeyDown, bubbletea.KeyCtrlN:
+	case keymsg.KeyDown, keymsg.KeyCtrlN:
 		m.mentionPopup.MoveDown()
 		return nil, true
-	case bubbletea.KeyLeft:
+	case keymsg.KeyLeft:
 		m.mentionPopup.PreviousSearchMode()
 		return nil, true
-	case bubbletea.KeyRight:
+	case keymsg.KeyRight:
 		m.mentionPopup.NextSearchMode()
 		return nil, true
-	case bubbletea.KeyEsc:
+	case keymsg.KeyEsc:
 		if start, end, query, ok := m.currentMentionPopupTokenRange(); ok {
 			m.mentionDismissedToken = mentionPopupTokenKey(start, end, query)
 		}
 		m.mentionPopup = nil
 		return nil, true
-	case bubbletea.KeyEnter, bubbletea.KeyTab:
+	case keymsg.KeyEnter, keymsg.KeyTab:
 		selection, selected := m.mentionPopup.SelectedSelection()
 		m.mentionPopup = nil
 		if selected {
 			m.insertMentionSelection(selection)
 			return nil, true
 		}
-		return nil, msg.Type == bubbletea.KeyTab
+		return nil, msg.Type == keymsg.KeyTab
 	default:
 		return nil, false
 	}

@@ -5,11 +5,12 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	"codex_go/appserver"
 	"codex_go/session"
 	agentsoverview "codex_go/tui/agents_overview"
+	"codex_go/tui/keymsg"
 )
 
 func dashboardThreadRows() []*appserver.Thread {
@@ -176,12 +177,12 @@ func newFakeDashboardSource() *fakeAgentsDashboardSource {
 	}}
 }
 
-func keyRunes(runes ...rune) bubbletea.KeyMsg {
-	return bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: runes}
+func keyRunes(runes ...rune) keymsg.KeyMsg {
+	return keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: runes}
 }
 
-func keyPress(keyType bubbletea.KeyType) bubbletea.KeyMsg {
-	return bubbletea.KeyMsg{Type: keyType}
+func keyPress(keyType keymsg.KeyType) keymsg.KeyMsg {
+	return keymsg.KeyMsg{Type: keyType}
 }
 
 func TestAgentsDashboardLoadsAndRenders(t *testing.T) {
@@ -200,7 +201,7 @@ func TestAgentsDashboardLoadsAndRenders(t *testing.T) {
 	if !ok {
 		t.Fatalf("Update returned %T", updated)
 	}
-	output := finished.View()
+	output := finished.ViewContent()
 	for _, want := range []string{"Agent command center", "Working 1", "Ready 1", "alpha", "beta"} {
 		if !strings.Contains(output, want) {
 			t.Errorf("view missing %q:\n%s", want, output)
@@ -248,7 +249,7 @@ func TestAgentsDashboardOpenSelectedThread(t *testing.T) {
 	model := newAgentsDashboardModel(context.Background(), source, nil)
 	model.view.ApplyRefresh(source.rows, "")
 	model.view.Selected = 1
-	updated, command := model.Update(keyPress(bubbletea.KeyEnter))
+	updated, command := model.Update(keyPress(keymsg.KeyEnter))
 	if command == nil {
 		t.Fatal("enter returned no quit command")
 	}
@@ -265,7 +266,7 @@ func TestAgentsDashboardExitOnEsc(t *testing.T) {
 	source := newFakeDashboardSource()
 	model := newAgentsDashboardModel(context.Background(), source, nil)
 	model.view.ApplyRefresh(source.rows, "")
-	updated, command := model.Update(keyPress(bubbletea.KeyEsc))
+	updated, command := model.Update(keyPress(keymsg.KeyEsc))
 	if command == nil {
 		t.Fatal("esc returned no quit command")
 	}
@@ -305,7 +306,7 @@ func TestAgentsDashboardRenameSelected(t *testing.T) {
 		t.Fatal("r did not start renaming")
 	}
 	model.Update(keyRunes(' ', 'v', '2'))
-	updated, command := model.Update(keyPress(bubbletea.KeyEnter))
+	updated, command := model.Update(keyPress(keymsg.KeyEnter))
 	if command == nil {
 		t.Fatal("enter returned no rename command")
 	}
@@ -331,7 +332,7 @@ func TestAgentsDashboardSearchAndGrouping(t *testing.T) {
 	if visible := model.view.VisibleIndices(); len(visible) != 1 || model.view.Rows[visible[0]].ThreadID != "root-2" {
 		t.Fatalf("search visible = %v", visible)
 	}
-	model.Update(keyPress(bubbletea.KeyEsc))
+	model.Update(keyPress(keymsg.KeyEsc))
 	if model.view.State.Searching {
 		t.Fatal("esc did not exit search")
 	}
@@ -351,16 +352,16 @@ func TestAgentsDashboardStatusFilterTabsLikeRust(t *testing.T) {
 	source := newFakeDashboardSource()
 	model := newAgentsDashboardModel(context.Background(), source, nil)
 	model.view.ApplyRefresh(source.rows, "")
-	model.Update(keyPress(bubbletea.KeyTab))
+	model.Update(keyPress(keymsg.KeyTab))
 	if model.view.State.StatusFilter != agentsoverview.StatusFilterNeedsYou {
 		t.Fatalf("status filter = %d", model.view.State.StatusFilter)
 	}
-	model.Update(keyPress(bubbletea.KeyShiftTab))
+	model.Update(keyPress(keymsg.KeyShiftTab))
 	if model.view.State.StatusFilter != agentsoverview.StatusFilterAll {
 		t.Fatalf("status filter = %d", model.view.State.StatusFilter)
 	}
-	if !strings.Contains(model.View(), "tab/shift+tab filter") {
-		t.Fatalf("view does not advertise the filter:\n%s", model.View())
+	if !strings.Contains(model.ViewContent(), "tab/shift+tab filter") {
+		t.Fatalf("view does not advertise the filter:\n%s", model.ViewContent())
 	}
 }
 
@@ -371,8 +372,8 @@ func TestAgentsDashboardListErrorShowsNotice(t *testing.T) {
 	command := model.Init()
 	updated, _ := model.Update(command())
 	finished := updated.(*agentsDashboardModel)
-	if !strings.Contains(finished.View(), "Failed to load shared agents") {
-		t.Fatalf("notice missing error:\n%s", finished.View())
+	if !strings.Contains(finished.ViewContent(), "Failed to load shared agents") {
+		t.Fatalf("notice missing error:\n%s", finished.ViewContent())
 	}
 }
 

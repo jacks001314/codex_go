@@ -3,9 +3,8 @@ package tea
 import (
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 func TestCtrlSlashTerminalEncodingTogglesSideConversation(t *testing.T) {
@@ -14,7 +13,7 @@ func TestCtrlSlashTerminalEncodingTogglesSideConversation(t *testing.T) {
 	// KeyCtrlUnderscore and it must normalize to the Rust Ctrl+7 alias and
 	// toggle the side conversation. A NUL byte/char is Ctrl+Space, not Ctrl+/
 	// (see keymap_ctrl_space_test.go), so it is not part of this encoding list.
-	ctrlSlash := bubbletea.KeyMsg{Type: bubbletea.KeyCtrlUnderscore}
+	ctrlSlash := keymsg.KeyMsg{Type: keymsg.KeyCtrlUnderscore}
 	if got := keySpecFromKeyMsg(ctrlSlash); got != "ctrl-7" {
 		t.Fatalf("Ctrl+/ normalized to %q, want ctrl-7", got)
 	}

@@ -5,11 +5,10 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
 	bottompane "codex_go/tui/bottom_pane"
 	chatwidget "codex_go/tui/chatwidget"
+	"codex_go/tui/keymsg"
 	"codex_go/utils"
 )
 
@@ -35,7 +34,7 @@ func TestModalPickerWindowsLongListsLikeRust(t *testing.T) {
 		FooterHint:  chatwidget.PickerPopupHintLine,
 		Items:       modalPickerItems(40),
 	})
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if rows := strings.Count(view, "\n") + 1; rows > model.height {
 		t.Fatalf("picker rendered %d rows into a %d-row terminal", rows, model.height)
 	}
@@ -49,26 +48,26 @@ func TestModalPickerWindowsLongListsLikeRust(t *testing.T) {
 	}
 
 	page := model.modal.optionVisibleRows
-	model.Update(key(bubbletea.KeyPgDown))
+	model.Update(key(keymsg.KeyPgDown))
 	if model.modal.selected != page {
 		t.Fatalf("page down selected %d, want %d", model.modal.selected, page)
 	}
-	view = utils.StripANSI(model.View())
+	view = utils.StripANSI(model.viewString())
 	if !strings.Contains(view, fmt.Sprintf("Item %02d", page)) || !strings.Contains(view, "↑") {
 		t.Fatalf("page down lost the selected row or overflow marker:\n%s", view)
 	}
 
-	model.Update(key(bubbletea.KeyEnd))
+	model.Update(key(keymsg.KeyEnd))
 	if model.modal.selected != 39 {
 		t.Fatalf("end selected %d", model.modal.selected)
 	}
-	view = utils.StripANSI(model.View())
+	view = utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "Item 39") || !strings.Contains(view, "Pick an item") ||
 		!strings.Contains(view, "enter select · esc back") {
 		t.Fatalf("end lost controls or the last row:\n%s", view)
 	}
 
-	model.Update(key(bubbletea.KeyHome))
+	model.Update(key(keymsg.KeyHome))
 	if model.modal.selected != 0 {
 		t.Fatalf("home selected %d", model.modal.selected)
 	}
@@ -83,7 +82,7 @@ func TestModalPickerShortListKeepsAllRowsLikeRust(t *testing.T) {
 		FooterHint:  chatwidget.PickerPopupHintLine,
 		Items:       modalPickerItems(3),
 	})
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	for _, want := range []string{"Item 00", "Item 01", "Item 02"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("short picker missing %q:\n%s", want, view)
@@ -104,7 +103,7 @@ func TestResponsiveModalPickerUsesVisibleRowsLikeRust(t *testing.T) {
 		Items:             modalPickerItems(30),
 		DescriptionLayout: bottompane.NewHideWhenNarrowDescriptionLayout(10),
 	})
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if rows := strings.Count(view, "\n") + 1; rows > model.height {
 		t.Fatalf("responsive picker rendered %d rows into %d", rows, model.height)
 	}
@@ -130,7 +129,7 @@ func TestResponsiveModalPickerCountsWrappedRowsLikeRust(t *testing.T) {
 		Items:             items,
 		DescriptionLayout: bottompane.NewHideWhenNarrowDescriptionLayout(1),
 	})
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if rows := strings.Count(view, "\n") + 1; rows > model.height {
 		t.Fatalf("wrapped picker rendered %d rows into %d", rows, model.height)
 	}

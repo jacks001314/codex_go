@@ -1,10 +1,9 @@
 package tea
 
 import (
+	keymsg "codex_go/tui/keymsg"
 	"strings"
 	"testing"
-
-	bubbletea "github.com/charmbracelet/bubbletea"
 
 	codextui "codex_go/tui"
 )
@@ -24,7 +23,7 @@ func newSelectionModel(t *testing.T, options Options) *Model {
 // and opens the transcript with selection active.
 func TestSelectTranscriptLeaderOpensSelectionLikeRust(t *testing.T) {
 	model := newSelectionModel(t, Options{Width: 60, Height: 12})
-	model.Update(key(bubbletea.KeyCtrlX))
+	model.Update(key(keymsg.KeyCtrlX))
 	if !model.leaderChordPending {
 		t.Fatal("leader prefix was not recorded")
 	}
@@ -44,12 +43,12 @@ func TestSelectTranscriptLeaderRespectsRemapAndUnbindLikeRust(t *testing.T) {
 		t.Fatalf("remap: %v", err)
 	}
 	remapped := newSelectionModel(t, Options{Width: 60, Height: 12, KeymapConfig: config})
-	remapped.Update(key(bubbletea.KeyCtrlX))
+	remapped.Update(key(keymsg.KeyCtrlX))
 	remapped.Update(runes("["))
 	if remapped.overlay != nil {
 		t.Fatal("implicit leader [` still opened selection after a remap")
 	}
-	remapped.Update(key(bubbletea.KeyCtrlS))
+	remapped.Update(key(keymsg.KeyCtrlS))
 	if remapped.overlay == nil || !remapped.overlay.SelectionActive() {
 		t.Fatal("remapped select_transcript did not open selection")
 	}
@@ -59,7 +58,7 @@ func TestSelectTranscriptLeaderRespectsRemapAndUnbindLikeRust(t *testing.T) {
 		t.Fatalf("unbind: %v", err)
 	}
 	model := newSelectionModel(t, Options{Width: 60, Height: 12, KeymapConfig: unbound})
-	model.Update(key(bubbletea.KeyCtrlX))
+	model.Update(key(keymsg.KeyCtrlX))
 	model.Update(runes("["))
 	if model.overlay != nil {
 		t.Fatal("explicit unbind still installed the implicit shortcut")
@@ -71,7 +70,7 @@ func TestSelectTranscriptLeaderRespectsRemapAndUnbindLikeRust(t *testing.T) {
 func TestTranscriptSelectionPreservesDraftLikeRust(t *testing.T) {
 	model := newSelectionModel(t, Options{Width: 60, Height: 12})
 	typeText(t, model, "draft")
-	model.Update(key(bubbletea.KeyCtrlX))
+	model.Update(key(keymsg.KeyCtrlX))
 	model.Update(runes("["))
 	if model.overlay == nil || !model.overlay.SelectionActive() {
 		t.Fatal("selection mode did not start")
@@ -79,7 +78,7 @@ func TestTranscriptSelectionPreservesDraftLikeRust(t *testing.T) {
 	for _, r := range "hjklvyo" {
 		model.Update(runes(string(r)))
 	}
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if model.overlay != nil {
 		t.Fatal("Enter without a mark did not close the selection overlay")
 	}
@@ -87,7 +86,7 @@ func TestTranscriptSelectionPreservesDraftLikeRust(t *testing.T) {
 		t.Fatalf("composer draft = %q, want draft", got)
 	}
 	// A held/repeated exit key is consumed rather than submitting the draft.
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if got := model.composerText(); got != "draft" {
 		t.Fatalf("held exit key submitted the draft: %q", got)
 	}
@@ -105,7 +104,7 @@ func TestTranscriptSelectionCopyAndFollowLikeRust(t *testing.T) {
 		copied = text
 		return nil
 	}
-	model.Update(key(bubbletea.KeyCtrlX))
+	model.Update(key(keymsg.KeyCtrlX))
 	model.Update(runes("["))
 	if model.overlay == nil || !model.overlay.SelectionActive() {
 		t.Fatal("selection mode did not start")
@@ -114,7 +113,7 @@ func TestTranscriptSelectionCopyAndFollowLikeRust(t *testing.T) {
 	if !model.overlay.SelectionMarked() {
 		t.Fatal("V did not mark a whole line")
 	}
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 	if strings.TrimSpace(copied) == "" {
 		t.Fatal("copy-and-follow did not write the marked text")
@@ -127,17 +126,17 @@ func TestTranscriptSelectionCopyAndFollowLikeRust(t *testing.T) {
 // Rust #57223: Esc clears an active mark before it leaves selection mode.
 func TestTranscriptSelectionEscapeClearsMarkThenExitsLikeRust(t *testing.T) {
 	model := newSelectionModel(t, Options{Width: 60, Height: 12})
-	model.Update(key(bubbletea.KeyCtrlX))
+	model.Update(key(keymsg.KeyCtrlX))
 	model.Update(runes("["))
 	model.Update(runes("V"))
 	if !model.overlay.SelectionMarked() {
 		t.Fatal("V did not mark a line")
 	}
-	model.Update(key(bubbletea.KeyEsc))
+	model.Update(key(keymsg.KeyEsc))
 	if model.overlay == nil || model.overlay.SelectionMarked() {
 		t.Fatal("Esc did not clear the mark")
 	}
-	model.Update(key(bubbletea.KeyEsc))
+	model.Update(key(keymsg.KeyEsc))
 	if model.overlay != nil {
 		t.Fatal("second Esc did not close the selection overlay")
 	}

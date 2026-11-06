@@ -11,6 +11,14 @@ import (
 
 var ansiSequenceRE = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
 
+var snapshotStatusPathRE = regexp.MustCompile(`(?m)(gpt-5 high · ).*$`)
+
+// normalizeSnapshotStatusPath replaces the environment-dependent working
+// directory on the status line so the frame snapshots hold in any checkout.
+func normalizeSnapshotStatusPath(view string) string {
+	return snapshotStatusPathRE.ReplaceAllString(view, "${1}<cwd>")
+}
+
 func TestModelTerminalSnapshots(t *testing.T) {
 	t.Run("wide region chrome", func(t *testing.T) {
 		state := codextui.NewState(&codextui.Options{
@@ -24,7 +32,7 @@ func TestModelTerminalSnapshots(t *testing.T) {
 		state.AddMessage(codextui.RoleAssistant, "I am checking the files.")
 		model := NewModel(state, Options{Width: 104, Height: 20})
 
-		view := model.View()
+		view := model.viewString()
 		got := normalizeTerminalSnapshot(view)
 		// Rust has no app-level chrome rows: the transcript owns the viewport,
 		// the composer is a shaded full-width block, and the status line sits
@@ -72,7 +80,7 @@ func TestModelTerminalSnapshots(t *testing.T) {
 		state.AddMessage(codextui.RoleAssistant, "The repo has a Go TUI shell.")
 		model := NewModel(state, Options{Width: 82, Height: 18})
 
-		assertTerminalSnapshot(t, model.View(), `
+		assertTerminalSnapshot(t, normalizeSnapshotStatusPath(model.viewString()), `
 › summarize the repo
 
 
@@ -88,7 +96,7 @@ func TestModelTerminalSnapshots(t *testing.T) {
 
 › Ask Codex to do anything
 
-  gpt-5 high · D:\qax\reagent\dev\codex_go\tui\tea
+  gpt-5 high · <cwd>
   ? for shortcuts`)
 	})
 
@@ -101,7 +109,7 @@ func TestModelTerminalSnapshots(t *testing.T) {
 			Command: "go test ./...",
 		})
 
-		assertTerminalSnapshot(t, model.View(), `
+		assertTerminalSnapshot(t, model.viewString(), `
 No messages yet.
 
 
@@ -149,7 +157,7 @@ No messages yet.
 		}
 		model.openSessionPicker(codextui.SessionPickerResume)
 
-		view := normalizeTerminalSnapshot(model.View())
+		view := normalizeTerminalSnapshot(model.viewString())
 		if !strings.HasPrefix(view, "Resume a previous session\n\nType to search") {
 			t.Fatalf("session picker should start at the top of its full-screen surface:\n%s", view)
 		}
@@ -184,7 +192,7 @@ No messages yet.
 			AutoResolutionMS: &timeout,
 		})
 
-		assertTerminalSnapshot(t, model.View(), `
+		assertTerminalSnapshot(t, model.viewString(), `
 No messages yet.
 
 
@@ -225,5 +233,5 @@ func normalizeTerminalSnapshot(view string) string {
 	for i := range lines {
 		lines[i] = strings.TrimRight(lines[i], " \t")
 	}
-	return strings.TrimSpace(strings.Join(lines, "\n"))
+	return normalizeSnapshotStatusPath(strings.TrimSpace(strings.Join(lines, "\n")))
 }

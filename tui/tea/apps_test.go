@@ -5,11 +5,10 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	appsapi "codex_go/apps"
 	codextui "codex_go/tui"
 	chatwidget "codex_go/tui/chatwidget"
+	"codex_go/tui/keymsg"
 )
 
 // TestAppListFailureShowsRetryablePopupLikeRust covers #43074: a failed app
@@ -49,13 +48,13 @@ func TestAppListFailureShowsRetryablePopupLikeRust(t *testing.T) {
 	if !strings.Contains(model.modal.body, "Failed to load apps.") {
 		t.Fatalf("failure popup body = %q", model.modal.body)
 	}
-	if strings.Contains(model.modal.body, "super-secret-token") || strings.Contains(model.View(), "super-secret-token") {
-		t.Fatalf("raw request error leaked into the UI: %q", model.View())
+	if strings.Contains(model.modal.body, "super-secret-token") || strings.Contains(model.viewString(), "super-secret-token") {
+		t.Fatalf("raw request error leaked into the UI: %q", model.viewString())
 	}
 
 	// The Retry item is the second option; its number shortcut re-runs the
 	// request and restores the loading state.
-	updated, retry := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{'2'}})
+	updated, retry := model.Update(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{'2'}})
 	model = updated.(*Model)
 	if retry == nil {
 		t.Fatal("retry returned no fetch command")

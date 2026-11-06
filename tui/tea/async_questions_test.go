@@ -6,11 +6,12 @@ import (
 	"testing"
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	"codex_go/protocol"
 	codextui "codex_go/tui"
 	chatwidget "codex_go/tui/chatwidget"
+	"codex_go/tui/keymsg"
 	"codex_go/utils"
 )
 
@@ -26,7 +27,7 @@ func TestAsyncQuestionChoicesRenderMarkdownLikeRust(t *testing.T) {
 		},
 	})
 	model.expandAsyncQuestions()
-	view := model.View()
+	view := model.viewString()
 	if !strings.Contains(view, "\x1b[3m") {
 		t.Fatalf("choice lost italic Markdown styling:\n%q", view)
 	}
@@ -57,11 +58,13 @@ func TestAsyncQuestionExpansionDisablesMouseCaptureLikeRust(t *testing.T) {
 	owned = feedAsyncQuestions(t, owned, "question-mouse", []any{
 		map[string]any{"title": "Which database?", "options": []any{"Postgres"}},
 	})
-	if cmd := owned.syncMouseCapture(); cmd != nil || !owned.mouseCaptureActive {
+	owned.syncMouseCapture()
+	if !owned.mouseCaptureActive {
 		t.Fatal("collapsed questions must keep mouse capture")
 	}
 	owned.expandAsyncQuestions()
-	if cmd := owned.syncMouseCapture(); cmd == nil || owned.mouseCaptureActive {
+	owned.syncMouseCapture()
+	if owned.mouseCaptureActive {
 		t.Fatal("expanded questions must hand mouse capture back to the terminal")
 	}
 	if owned.mouseCapturePolicy != mouseCaptureDisabled {
@@ -70,16 +73,19 @@ func TestAsyncQuestionExpansionDisablesMouseCaptureLikeRust(t *testing.T) {
 
 	// An active modal keeps capture so the overlay stays interactive.
 	owned.modal = &modalState{}
-	if cmd := owned.syncMouseCapture(); cmd == nil || !owned.mouseCaptureActive {
+	owned.syncMouseCapture()
+	if !owned.mouseCaptureActive {
 		t.Fatal("an active modal must restore mouse capture")
 	}
 	owned.modal = nil
-	if cmd := owned.syncMouseCapture(); cmd == nil || owned.mouseCaptureActive {
+	owned.syncMouseCapture()
+	if owned.mouseCaptureActive {
 		t.Fatal("closing the modal must disable capture again")
 	}
 
 	owned.collapseAsyncQuestions()
-	if cmd := owned.syncMouseCapture(); cmd == nil || !owned.mouseCaptureActive {
+	owned.syncMouseCapture()
+	if !owned.mouseCaptureActive {
 		t.Fatal("collapsed questions must restore mouse capture")
 	}
 
@@ -88,7 +94,8 @@ func TestAsyncQuestionExpansionDisablesMouseCaptureLikeRust(t *testing.T) {
 	inline.State.SetThreadID("thread-inline")
 	inline = feedAsyncQuestions(t, inline, "question-inline", []any{map[string]any{"title": "Inline?"}})
 	inline.expandAsyncQuestions()
-	if cmd := inline.syncMouseCapture(); cmd != nil || inline.mouseCaptureActive {
+	inline.syncMouseCapture()
+	if inline.mouseCaptureActive {
 		t.Fatal("inline mode must leave mouse handling to the terminal")
 	}
 	if inline.mouseCapturePolicy != mouseCaptureInherit {
@@ -122,13 +129,15 @@ func TestMouseCapturePolicyPrecedence(t *testing.T) {
 	inline.overlay = chatwidget.NewTranscriptOverlay(100, 30, "alpha\nbeta")
 	inline.overlayTranscript = true
 	inline.overlayMouseCapture = mouseCaptureEnabled
-	if cmd := inline.syncMouseCapture(); cmd == nil || !inline.mouseCaptureActive {
+	inline.syncMouseCapture()
+	if !inline.mouseCaptureActive {
 		t.Fatal("transcript overlay must enable capture inline")
 	}
 	inline.overlay = nil
 	inline.overlayTranscript = false
 	inline.overlayMouseCapture = mouseCaptureInherit
-	if cmd := inline.syncMouseCapture(); cmd == nil || inline.mouseCaptureActive {
+	inline.syncMouseCapture()
+	if inline.mouseCaptureActive {
 		t.Fatal("closing the overlay must restore inherit for an inline screen")
 	}
 }
@@ -236,7 +245,7 @@ func TestAsyncQuestionsArriveCollapsedWithSummary(t *testing.T) {
 	if model.asyncQuestions.UnansweredCount() != 2 || model.asyncQuestions.Expanded() {
 		t.Fatalf("questions = %d expanded=%v", model.asyncQuestions.UnansweredCount(), model.asyncQuestions.Expanded())
 	}
-	view := model.View()
+	view := model.viewString()
 	if !strings.Contains(view, "2 questions") || !strings.Contains(view, "shift+← to answer") {
 		t.Fatalf("collapsed summary missing:\n%s", view)
 	}
@@ -255,12 +264,12 @@ func TestAsyncQuestionHintsFollowResolvedShortcutLikeRust(t *testing.T) {
 		map[string]any{"title": "Which database?"},
 		map[string]any{"title": "Deadline?"},
 	})
-	if view := model.View(); !strings.Contains(view, "shift+← to answer") {
+	if view := model.viewString(); !strings.Contains(view, "shift+← to answer") {
 		t.Fatalf("default question hint missing:\n%s", view)
 	}
-	updated, _ := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyShiftLeft})
+	updated, _ := model.Update(keymsg.KeyMsg{Type: keymsg.KeyShiftLeft})
 	model = updated.(*Model)
-	if view := model.View(); !strings.Contains(view, "shift+→ main prompt") || !strings.Contains(view, "shift+← next question") {
+	if view := model.viewString(); !strings.Contains(view, "shift+→ main prompt") || !strings.Contains(view, "shift+← next question") {
 		t.Fatalf("default question footer missing:\n%s", view)
 	}
 
@@ -273,7 +282,7 @@ func TestAsyncQuestionHintsFollowResolvedShortcutLikeRust(t *testing.T) {
 	}
 	model = NewModel(codextui.NewState(nil), Options{Width: 120, Height: 40, KeymapConfig: config})
 	model = feedAsyncQuestions(t, model, "question-1", []any{map[string]any{"title": "Which database?"}})
-	if view := model.View(); !strings.Contains(view, "alt+↑ to answer") {
+	if view := model.viewString(); !strings.Contains(view, "alt+↑ to answer") {
 		t.Fatalf("configured question hint missing:\n%s", view)
 	}
 
@@ -289,12 +298,12 @@ func TestAsyncQuestionHintsFollowResolvedShortcutLikeRust(t *testing.T) {
 		map[string]any{"title": "Which database?"},
 		map[string]any{"title": "Deadline?"},
 	})
-	if view := model.View(); !strings.Contains(view, "ctrl+x ↑ to answer") {
+	if view := model.viewString(); !strings.Contains(view, "ctrl+x ↑ to answer") {
 		t.Fatalf("chord question hint missing:\n%s", view)
 	}
-	updated, _ = model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyShiftLeft})
+	updated, _ = model.Update(keymsg.KeyMsg{Type: keymsg.KeyShiftLeft})
 	model = updated.(*Model)
-	if view := model.View(); !strings.Contains(view, "ctrl+x ↓ main prompt") || !strings.Contains(view, "ctrl+x ↑ next question") {
+	if view := model.viewString(); !strings.Contains(view, "ctrl+x ↓ main prompt") || !strings.Contains(view, "ctrl+x ↑ next question") {
 		t.Fatalf("chord question footer missing:\n%s", view)
 	}
 
@@ -304,10 +313,10 @@ func TestAsyncQuestionHintsFollowResolvedShortcutLikeRust(t *testing.T) {
 	}
 	model = NewModel(codextui.NewState(nil), Options{Width: 120, Height: 40, KeymapConfig: config})
 	model = feedAsyncQuestions(t, model, "question-1", []any{map[string]any{"title": "Which database?"}})
-	if view := model.View(); strings.Contains(view, "to answer") {
+	if view := model.viewString(); strings.Contains(view, "to answer") {
 		t.Fatalf("unbound question hint must be hidden:\n%s", view)
 	}
-	updated, _ = model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyUp, Alt: true})
+	updated, _ = model.Update(keymsg.KeyMsg{Type: keymsg.KeyUp, Alt: true})
 	model = updated.(*Model)
 	if model.asyncQuestions.Expanded() {
 		t.Fatal("unbound edit action must not expand questions through a fallback")
@@ -356,7 +365,7 @@ func TestAsyncQuestionsAnsweredOnAnotherClientDismissesLikeRust(t *testing.T) {
 		t.Fatalf("current question = %#v, %v", question, ok)
 	}
 	// The envelope must not leak into the rendered transcript.
-	if view := model.View(); strings.Contains(view, "<send_user_message_question_reply>") {
+	if view := model.viewString(); strings.Contains(view, "<send_user_message_question_reply>") {
 		t.Fatalf("the reply envelope leaked into the transcript:\n%s", view)
 	}
 }
@@ -465,11 +474,11 @@ func TestAsyncQuestionsAnsweredOnAnotherClientKeepsOtherDraftsLikeRust(t *testin
 		map[string]any{"title": "First question?"},
 		map[string]any{"title": "Second question?"},
 	})
-	updated, _ := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyUp, Alt: true})
+	updated, _ := model.Update(keymsg.KeyMsg{Type: keymsg.KeyUp, Alt: true})
 	model = updated.(*Model)
 	// Alt+Up again moves to the second question; draft it, then answer the first
 	// question from another client.
-	updated, _ = model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyUp, Alt: true})
+	updated, _ = model.Update(keymsg.KeyMsg{Type: keymsg.KeyUp, Alt: true})
 	model = updated.(*Model)
 	if index := model.asyncQuestions.CurrentIndex(); index != 1 {
 		t.Fatalf("focused question = %d, want the second question", index)
@@ -501,7 +510,7 @@ func TestAsyncQuestionsExpandAnswerAndAdvance(t *testing.T) {
 		map[string]any{"title": "Deadline?"},
 	})
 
-	updated, _ := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyUp, Alt: true})
+	updated, _ := model.Update(keymsg.KeyMsg{Type: keymsg.KeyUp, Alt: true})
 	model = updated.(*Model)
 	if !model.asyncQuestions.Expanded() {
 		t.Fatal("Alt+Up must focus the question editor")
@@ -509,12 +518,12 @@ func TestAsyncQuestionsExpandAnswerAndAdvance(t *testing.T) {
 	if got := model.composer.Value(); got != "" {
 		t.Fatalf("composer = %q, want the empty first-question draft", got)
 	}
-	if view := model.View(); !strings.Contains(view, "1 of 2") || !strings.Contains(view, "Which database?") {
+	if view := model.viewString(); !strings.Contains(view, "1 of 2") || !strings.Contains(view, "Which database?") {
 		t.Fatalf("expanded editor missing:\n%s", view)
 	}
 
 	typeText(t, model, "Postgres")
-	updated, _ = model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	updated, _ = model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	model = updated.(*Model)
 
 	requests := model.SubmittedRequests()
@@ -539,9 +548,9 @@ func TestAsyncQuestionsSkipConsumesWithoutSubmitting(t *testing.T) {
 	model.composer.SetValue("main draft")
 	model = feedAsyncQuestions(t, model, "question-1", []any{map[string]any{"title": "Which database?"}})
 
-	updated, _ := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyUp, Alt: true})
+	updated, _ := model.Update(keymsg.KeyMsg{Type: keymsg.KeyUp, Alt: true})
 	model = updated.(*Model)
-	updated, _ = model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyCtrlCloseBracket})
+	updated, _ = model.Update(keymsg.KeyMsg{Type: keymsg.KeyCtrlCloseBracket})
 	model = updated.(*Model)
 
 	if model.asyncQuestions.UnansweredCount() != 0 || model.asyncQuestions.Expanded() {
@@ -553,7 +562,7 @@ func TestAsyncQuestionsSkipConsumesWithoutSubmitting(t *testing.T) {
 	if got := model.composer.Value(); got != "main draft" {
 		t.Fatalf("composer = %q, want the restored main draft", got)
 	}
-	if view := model.View(); strings.Contains(view, "to answer") {
+	if view := model.viewString(); strings.Contains(view, "to answer") {
 		t.Fatalf("summary must disappear after the last question:\n%s", view)
 	}
 }
@@ -566,9 +575,9 @@ func TestAsyncQuestionsEscapeCollapsesAndKeepsDraft(t *testing.T) {
 	model.composer.SetValue("main draft")
 	model = feedAsyncQuestions(t, model, "question-1", []any{map[string]any{"title": "Which database?"}})
 
-	updated, _ := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyUp, Alt: true})
+	updated, _ := model.Update(keymsg.KeyMsg{Type: keymsg.KeyUp, Alt: true})
 	model = updated.(*Model)
-	updated, _ = model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEsc})
+	updated, _ = model.Update(keymsg.KeyMsg{Type: keymsg.KeyEsc})
 	model = updated.(*Model)
 	if model.asyncQuestions.Expanded() {
 		t.Fatal("Escape must collapse the question editor")
@@ -581,12 +590,12 @@ func TestAsyncQuestionsEscapeCollapsesAndKeepsDraft(t *testing.T) {
 	}
 
 	// Re-focusing restores the preserved draft.
-	updated, _ = model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyUp, Alt: true})
+	updated, _ = model.Update(keymsg.KeyMsg{Type: keymsg.KeyUp, Alt: true})
 	model = updated.(*Model)
 	if model.asyncQuestions.Expanded() != true {
 		t.Fatal("Alt+Up must re-focus the question")
 	}
-	if view := model.View(); !strings.Contains(view, "Which database?") {
+	if view := model.viewString(); !strings.Contains(view, "Which database?") {
 		t.Fatalf("re-focused editor missing:\n%s", view)
 	}
 }
@@ -614,14 +623,14 @@ func TestAsyncQuestionsClearedByNewPrompt(t *testing.T) {
 
 	// A slash command preserves pending questions.
 	model.composer.SetValue("/status")
-	updated, _ := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	updated, _ := model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	model = updated.(*Model)
 	if model.asyncQuestions.UnansweredCount() != 1 {
 		t.Fatalf("slash commands must preserve questions: %d", model.asyncQuestions.UnansweredCount())
 	}
 
 	model.composer.SetValue("a new prompt")
-	updated, _ = model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	updated, _ = model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	model = updated.(*Model)
 	if model.asyncQuestions.UnansweredCount() != 0 {
 		t.Fatalf("new prompt must clear questions: %d", model.asyncQuestions.UnansweredCount())
@@ -641,11 +650,11 @@ func TestAsyncQuestionsClearedByNewPrompt(t *testing.T) {
 func TestAsyncQuestionsRejectOversizedAnswer(t *testing.T) {
 	model := newAsyncQuestionModel()
 	model = feedAsyncQuestions(t, model, "question-1", []any{map[string]any{"title": "Which database?"}})
-	updated, _ := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyUp, Alt: true})
+	updated, _ := model.Update(keymsg.KeyMsg{Type: keymsg.KeyUp, Alt: true})
 	model = updated.(*Model)
 	model.composer.SetValue(strings.Repeat("x", 1<<20))
 
-	updated, _ = model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	updated, _ = model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	model = updated.(*Model)
 	if len(model.SubmittedRequests()) != 0 {
 		t.Fatalf("oversized answer submitted: %#v", model.SubmittedRequests())
@@ -653,8 +662,8 @@ func TestAsyncQuestionsRejectOversizedAnswer(t *testing.T) {
 	if model.asyncQuestions.UnansweredCount() != 1 {
 		t.Fatal("oversized answer must keep the question pending")
 	}
-	if !strings.Contains(model.View(), "Answer too long") {
-		t.Fatalf("missing limit notice:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Answer too long") {
+		t.Fatalf("missing limit notice:\n%s", model.viewString())
 	}
 }
 
@@ -666,12 +675,12 @@ func TestAsyncQuestionsNavigationKeepsPerQuestionDrafts(t *testing.T) {
 		map[string]any{"title": "First"},
 		map[string]any{"title": "Second"},
 	})
-	updated, _ := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyUp, Alt: true})
+	updated, _ := model.Update(keymsg.KeyMsg{Type: keymsg.KeyUp, Alt: true})
 	model = updated.(*Model)
 	model.composer.SetValue("first answer")
 
 	// Alt+Up (edit_queued_message) moves forward through the questions.
-	updated, _ = model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyUp, Alt: true})
+	updated, _ = model.Update(keymsg.KeyMsg{Type: keymsg.KeyUp, Alt: true})
 	model = updated.(*Model)
 	if model.asyncQuestions.CurrentIndex() != 1 || model.composer.Value() != "" {
 		t.Fatalf("forward navigation: index=%d composer=%q", model.asyncQuestions.CurrentIndex(), model.composer.Value())
@@ -679,14 +688,14 @@ func TestAsyncQuestionsNavigationKeepsPerQuestionDrafts(t *testing.T) {
 	model.composer.SetValue("second answer")
 
 	// Alt+Down (prompt_stack_back) moves back and restores the first draft.
-	updated, _ = model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyDown, Alt: true})
+	updated, _ = model.Update(keymsg.KeyMsg{Type: keymsg.KeyDown, Alt: true})
 	model = updated.(*Model)
 	if model.asyncQuestions.CurrentIndex() != 0 || model.composer.Value() != "first answer" {
 		t.Fatalf("backward navigation: index=%d composer=%q", model.asyncQuestions.CurrentIndex(), model.composer.Value())
 	}
 
 	// Alt+Down at the first question collapses back to the main composer.
-	updated, _ = model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyDown, Alt: true})
+	updated, _ = model.Update(keymsg.KeyMsg{Type: keymsg.KeyDown, Alt: true})
 	model = updated.(*Model)
 	if model.asyncQuestions.Expanded() {
 		t.Fatal("backward navigation at the first question must collapse the editor")
@@ -699,7 +708,7 @@ func withChoiceQuestion(t *testing.T) *Model {
 	model = feedAsyncQuestions(t, model, "question-1", []any{
 		map[string]any{"title": "Which database?", "options": []any{"Postgres", "SQLite"}},
 	})
-	updated, _ := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyUp, Alt: true})
+	updated, _ := model.Update(keymsg.KeyMsg{Type: keymsg.KeyUp, Alt: true})
 	return updated.(*Model)
 }
 
@@ -708,14 +717,14 @@ func withChoiceQuestion(t *testing.T) *Model {
 // submits the selected label.
 func TestAsyncQuestionsRenderAndSubmitSelectedChoice(t *testing.T) {
 	model := withChoiceQuestion(t)
-	view := model.View()
+	view := model.viewString()
 	for _, want := range []string{"› 1. Postgres", "  2. SQLite", "  3. Other", "enter submit"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("choice view missing %q:\n%s", want, view)
 		}
 	}
 
-	updated, _ := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	updated, _ := model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	model = updated.(*Model)
 	requests := model.SubmittedRequests()
 	if len(requests) != 1 || requests[0].Prompt != asyncQuestionReplyPrompt("question-1", 0, "Which database?", "Postgres") {
@@ -730,15 +739,15 @@ func TestAsyncQuestionsRenderAndSubmitSelectedChoice(t *testing.T) {
 // moving the focused choice.
 func TestAsyncQuestionsArrowNavigationSelectsNextChoice(t *testing.T) {
 	model := withChoiceQuestion(t)
-	updated, _ := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyDown})
+	updated, _ := model.Update(keymsg.KeyMsg{Type: keymsg.KeyDown})
 	model = updated.(*Model)
 	if model.asyncQuestions.SelectedOptionIndex() != 1 {
 		t.Fatalf("selection = %d, want 1", model.asyncQuestions.SelectedOptionIndex())
 	}
-	if view := model.View(); !strings.Contains(view, "› 2. SQLite") {
+	if view := model.viewString(); !strings.Contains(view, "› 2. SQLite") {
 		t.Fatalf("selection marker missing:\n%s", view)
 	}
-	updated, _ = model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	updated, _ = model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	model = updated.(*Model)
 	if requests := model.SubmittedRequests(); len(requests) != 1 || requests[0].Prompt != asyncQuestionReplyPrompt("question-1", 0, "Which database?", "SQLite") {
 		t.Fatalf("submitted requests = %#v", requests)
@@ -772,7 +781,7 @@ func TestAsyncQuestionsTypingOpensOther(t *testing.T) {
 	if !model.asyncQuestions.OtherSelected() {
 		t.Fatalf("selection = %d, want the Other row", model.asyncQuestions.SelectedOptionIndex())
 	}
-	updated, _ = model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	updated, _ = model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	model = updated.(*Model)
 	if requests := model.SubmittedRequests(); len(requests) != 1 || requests[0].Prompt != asyncQuestionReplyPrompt("question-1", 0, "Which database?", "k") {
 		t.Fatalf("submitted requests = %#v", requests)
@@ -783,14 +792,14 @@ func TestAsyncQuestionsTypingOpensOther(t *testing.T) {
 // rejection.
 func TestAsyncQuestionsBlankOtherIsNotSubmitted(t *testing.T) {
 	model := withChoiceQuestion(t)
-	updated, _ := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyDown})
+	updated, _ := model.Update(keymsg.KeyMsg{Type: keymsg.KeyDown})
 	model = updated.(*Model)
-	updated, _ = model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyDown})
+	updated, _ = model.Update(keymsg.KeyMsg{Type: keymsg.KeyDown})
 	model = updated.(*Model)
 	if !model.asyncQuestions.OtherSelected() {
 		t.Fatal("two moves should focus the Other row")
 	}
-	updated, _ = model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	updated, _ = model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	model = updated.(*Model)
 	if len(model.SubmittedRequests()) != 0 {
 		t.Fatalf("blank Other submitted: %#v", model.SubmittedRequests())
@@ -810,25 +819,25 @@ func TestAsyncQuestionsBlockClippedChoice(t *testing.T) {
 		model = feedAsyncQuestions(t, model, "question-1", []any{
 			map[string]any{"title": "Which database should we deploy to production?", "options": options},
 		})
-		updated, _ := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyUp, Alt: true})
+		updated, _ := model.Update(keymsg.KeyMsg{Type: keymsg.KeyUp, Alt: true})
 		return updated.(*Model)
 	}
 
 	clipped := feed(8)
-	updated, _ := clipped.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	updated, _ := clipped.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	clipped = updated.(*Model)
 	if len(clipped.SubmittedRequests()) != 0 {
 		t.Fatalf("clipped choice was submitted: %#v", clipped.SubmittedRequests())
 	}
-	if !strings.Contains(clipped.View(), "Expand terminal to read the entire option") {
-		t.Fatalf("missing clipped-choice notice:\n%s", clipped.View())
+	if !strings.Contains(clipped.viewString(), "Expand terminal to read the entire option") {
+		t.Fatalf("missing clipped-choice notice:\n%s", clipped.viewString())
 	}
 	if clipped.asyncQuestions.UnansweredCount() != 1 {
 		t.Fatal("clipped choice must keep the question pending")
 	}
 
 	roomy := feed(60)
-	updated, _ = roomy.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	updated, _ = roomy.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	roomy = updated.(*Model)
 	if requests := roomy.SubmittedRequests(); len(requests) != 1 || requests[0].Prompt != asyncQuestionReplyPrompt("question-1", 0, "Which database should we deploy to production?", "Postgres") {
 		t.Fatalf("roomy submitted requests = %#v", requests)
@@ -845,21 +854,21 @@ func TestAsyncQuestionsCollapsedCountdownAppearsAndSnoozes(t *testing.T) {
 	model.now = func() time.Time { return now }
 
 	model = feedAsyncQuestions(t, model, "question-1", []any{map[string]any{"title": "Which?"}})
-	if strings.Contains(model.View(), " · 30s") {
-		t.Fatalf("countdown should be hidden with 30 seconds left:\n%s", model.View())
+	if strings.Contains(model.viewString(), " · 30s") {
+		t.Fatalf("countdown should be hidden with 30 seconds left:\n%s", model.viewString())
 	}
 
 	now = now.Add(15 * time.Second)
-	if view := model.View(); !strings.Contains(view, " · 15s") {
+	if view := model.viewString(); !strings.Contains(view, " · 15s") {
 		t.Fatalf("countdown missing:\n%s", view)
 	}
 
 	// Opening the editor snoozes the countdown for every pending question.
-	updated, _ := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyUp, Alt: true})
+	updated, _ := model.Update(keymsg.KeyMsg{Type: keymsg.KeyUp, Alt: true})
 	model = updated.(*Model)
-	updated, _ = model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEsc})
+	updated, _ = model.Update(keymsg.KeyMsg{Type: keymsg.KeyEsc})
 	model = updated.(*Model)
-	if view := model.View(); strings.Contains(view, " · 15s") {
+	if view := model.viewString(); strings.Contains(view, " · 15s") {
 		t.Fatalf("countdown must clear after the editor is opened:\n%s", view)
 	}
 }
@@ -876,12 +885,12 @@ func TestAsyncQuestionsForwardNavigationRestoresQueuedMessage(t *testing.T) {
 	}
 	model = feedAsyncQuestions(t, model, "question-1", []any{map[string]any{"title": "Which?"}})
 
-	updated, _ := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyUp, Alt: true})
+	updated, _ := model.Update(keymsg.KeyMsg{Type: keymsg.KeyUp, Alt: true})
 	model = updated.(*Model)
 	if !model.asyncQuestions.Expanded() {
 		t.Fatal("Alt+Up must focus the question editor")
 	}
-	updated, _ = model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyUp, Alt: true})
+	updated, _ = model.Update(keymsg.KeyMsg{Type: keymsg.KeyUp, Alt: true})
 	model = updated.(*Model)
 
 	if model.asyncQuestions.Expanded() {
@@ -947,12 +956,12 @@ func TestAsyncQuestionTitleLinksWrappedURLsLikeRust(t *testing.T) {
 	model := NewModel(codextui.NewState(nil), Options{Width: 40, Height: 40})
 	model.State.SetThreadID("thread-question-url")
 	model = feedAsyncQuestions(t, model, "question-url", []any{map[string]any{"title": title}})
-	updated, _ := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyUp, Alt: true})
+	updated, _ := model.Update(keymsg.KeyMsg{Type: keymsg.KeyUp, Alt: true})
 	model = updated.(*Model)
 	if !model.asyncQuestions.Expanded() {
 		t.Fatal("Alt+Up must focus the question editor")
 	}
-	view := model.View()
+	view := model.viewString()
 	if linked := linkedTextForDestination(t, view, url); linked != url {
 		t.Fatalf("linked text = %q, want the complete URL %q", linked, url)
 	}

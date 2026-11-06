@@ -1,6 +1,7 @@
 package app
 
 import (
+	mousemsg "codex_go/tui/mousemsg"
 	"context"
 	"errors"
 	"fmt"
@@ -8,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	"codex_go/appserver"
 	"codex_go/appserverdaemon"
@@ -17,6 +18,7 @@ import (
 	"codex_go/session"
 	codextui "codex_go/tui"
 	agentsoverview "codex_go/tui/agents_overview"
+	"codex_go/tui/keymsg"
 	"codex_go/tui/markdown"
 	codextea "codex_go/tui/tea"
 	"codex_go/turn"
@@ -907,15 +909,16 @@ type agentsDashboardLifecycleMsg struct {
 }
 
 type agentsDashboardModel struct {
-	ctx    context.Context
-	view   *agentsoverview.View
-	source agentsDashboardSource
-	width  int
-	height int
-	notice string
-	busy   bool
-	result *agentsDashboardResult
-	done   bool
+	noAltScreen bool
+	ctx         context.Context
+	view        *agentsoverview.View
+	source      agentsDashboardSource
+	width       int
+	height      int
+	notice      string
+	busy        bool
+	result      *agentsDashboardResult
+	done        bool
 	// pendingLifecycle holds "archive" or "delete" while the confirmation is
 	// shown; the destructive action only runs after explicit confirmation
 	// (Rust #44433).
@@ -964,6 +967,11 @@ func (m *agentsDashboardModel) refreshCmd() bubbletea.Cmd {
 }
 
 func (m *agentsDashboardModel) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
+	if key, ok := keymsg.FromTea(message); ok {
+		message = key
+	} else if mouse, ok := mousemsg.FromTea(message); ok {
+		message = mouse
+	}
 	if m == nil {
 		return m, nil
 	}
@@ -976,7 +984,7 @@ func (m *agentsDashboardModel) Update(message bubbletea.Msg) (bubbletea.Model, b
 			m.height = msg.Height
 		}
 		return m, nil
-	case bubbletea.KeyMsg:
+	case keymsg.KeyMsg:
 		return m, m.handleKey(msg)
 	case agentsDashboardListMsg:
 		if msg.err != nil {
@@ -1039,7 +1047,7 @@ func (m *agentsDashboardModel) Update(message bubbletea.Msg) (bubbletea.Model, b
 	}
 }
 
-func (m *agentsDashboardModel) handleKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
+func (m *agentsDashboardModel) handleKey(msg keymsg.KeyMsg) bubbletea.Cmd {
 	if m == nil || m.done {
 		return nil
 	}
@@ -1118,7 +1126,7 @@ func (m *agentsDashboardModel) handleKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 	// Rust #45255: while the search or rename field owns the editor, plain
 	// characters edit it instead of triggering a dashboard shortcut.
 	if m.view.State.Searching || m.view.State.Renaming {
-		if msg.Type == bubbletea.KeyRunes && !msg.Alt {
+		if msg.Type == keymsg.KeyRunes && !msg.Alt {
 			for _, r := range msg.Runes {
 				m.view.TypeChar(r)
 			}
@@ -1131,12 +1139,12 @@ func (m *agentsDashboardModel) handleKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 	}
 	// Rust #46839: Tab and Shift-Tab cycle the command-center status tabs.
 	switch msg.Type {
-	case bubbletea.KeyTab:
+	case keymsg.KeyTab:
 		if m.filterKeyAvailable("tab") {
 			m.view.CycleStatusFilter(true)
 			return nil
 		}
-	case bubbletea.KeyShiftTab:
+	case keymsg.KeyShiftTab:
 		if m.filterKeyAvailable("shift-tab") {
 			m.view.CycleStatusFilter(false)
 			return nil
@@ -1180,7 +1188,7 @@ func (m *agentsDashboardModel) handleKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 
 // agentKey reports whether the key event matches the resolved binding for one
 // agents-dashboard action.
-func (m *agentsDashboardModel) agentKey(action string, msg bubbletea.KeyMsg) bool {
+func (m *agentsDashboardModel) agentKey(action string, msg keymsg.KeyMsg) bool {
 	if m == nil {
 		return false
 	}
@@ -1291,7 +1299,19 @@ func (m *agentsDashboardModel) lifecycleCmd(action string, threadID string) bubb
 	}
 }
 
-func (m *agentsDashboardModel) View() string {
+func (m *agentsDashboardModel) View() bubbletea.View {
+	v := bubbletea.NewView(m.viewString())
+	v.AltScreen = !m.noAltScreen
+	return v
+}
+
+// ViewContent exposes the rendered dashboard without terminal-mode metadata so
+// tests and embedders can assert on the visible text.
+func (m *agentsDashboardModel) ViewContent() string {
+	return m.viewString()
+}
+
+func (m *agentsDashboardModel) viewString() string {
 	if m == nil || m.done {
 		return ""
 	}
@@ -1325,10 +1345,8 @@ func runAgentsDashboard(ctx context.Context, source agentsDashboardSource, opts 
 		return nil, errors.New("agents dashboard source is unavailable")
 	}
 	model := newAgentsDashboardModel(ctx, source, keymap, worktreesEnabled)
+	model.noAltScreen = opts != nil && opts.NoAltScreen
 	programOptions := []bubbletea.ProgramOption{bubbletea.WithInput(stdin), bubbletea.WithOutput(stdout)}
-	if opts == nil || !opts.NoAltScreen {
-		programOptions = append(programOptions, bubbletea.WithAltScreen())
-	}
 	program := bubbletea.NewProgram(model, programOptions...)
 	result, err := program.Run()
 	if err != nil {

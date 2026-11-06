@@ -1,6 +1,7 @@
 package onboarding
 
 import (
+	mousemsg "codex_go/tui/mousemsg"
 	"context"
 	"errors"
 	"fmt"
@@ -10,12 +11,13 @@ import (
 	"strings"
 	"time"
 
+	bubbletea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	sysclipboard "github.com/atotto/clipboard"
-	bubbletea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 
 	"codex_go/appserver"
 	"codex_go/auth"
+	"codex_go/tui/keymsg"
 )
 
 const (
@@ -114,6 +116,7 @@ type authFlowModel struct {
 	gcp                 *gcpState
 	completed           bool
 	shouldExit          bool
+	noAltScreen         bool
 
 	// otherMethodsOpen switches the picker to the "Sign in another way"
 	// submenu (Rust #58427).
@@ -158,9 +161,6 @@ func RunAuthFlow(ctx context.Context, options AuthFlowOptions, input io.Reader, 
 	if output != nil {
 		programOptions = append(programOptions, bubbletea.WithOutput(output))
 	}
-	if !options.NoAltScreen {
-		programOptions = append(programOptions, bubbletea.WithAltScreen())
-	}
 	final, err := bubbletea.NewProgram(model, programOptions...).Run()
 	if err != nil {
 		return AuthFlowResult{}, err
@@ -189,11 +189,12 @@ func newAuthFlowModel(ctx context.Context, options AuthFlowOptions) *authFlowMod
 	}
 	options.APIKeyFromEnv = apiKeyFromEnv
 	model := &authFlowModel{
-		ctx:      ctx,
-		options:  options,
-		services: services,
-		state:    SignInPickMode,
-		width:    80,
+		noAltScreen: options.NoAltScreen,
+		ctx:         ctx,
+		options:     options,
+		services:    services,
+		state:       SignInPickMode,
+		width:       80,
 	}
 	model.highlighted = model.firstSelectableChoice()
 	return model
@@ -204,6 +205,11 @@ func (m *authFlowModel) Init() bubbletea.Cmd {
 }
 
 func (m *authFlowModel) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
+	if key, ok := keymsg.FromTea(message); ok {
+		message = key
+	} else if mouse, ok := mousemsg.FromTea(message); ok {
+		message = mouse
+	}
 	switch message := message.(type) {
 	case bubbletea.WindowSizeMsg:
 		if message.Width > 0 {
@@ -234,14 +240,20 @@ func (m *authFlowModel) Update(message bubbletea.Msg) (bubbletea.Model, bubblete
 		return m.handleBedrockGovCloud(message)
 	case gcpConfiguredMsg:
 		return m.handleGCPConfigured(message)
-	case bubbletea.KeyMsg:
+	case keymsg.KeyMsg:
 		return m.handleKey(message)
 	default:
 		return m, nil
 	}
 }
 
-func (m *authFlowModel) View() string {
+func (m *authFlowModel) View() bubbletea.View {
+	v := bubbletea.NewView(m.viewString())
+	v.AltScreen = !m.noAltScreen
+	return v
+}
+
+func (m *authFlowModel) viewString() string {
 	if m.completed || m.shouldExit {
 		return ""
 	}
@@ -281,8 +293,8 @@ func (m *authFlowModel) result() AuthFlowResult {
 	return AuthFlowResult{Authenticated: m.completed, ShouldExit: m.shouldExit}
 }
 
-func (m *authFlowModel) handleKey(message bubbletea.KeyMsg) (bubbletea.Model, bubbletea.Cmd) {
-	if message.Type == bubbletea.KeyCtrlC {
+func (m *authFlowModel) handleKey(message keymsg.KeyMsg) (bubbletea.Model, bubbletea.Cmd) {
+	if message.Type == keymsg.KeyCtrlC {
 		m.shouldExit = true
 		return m, bubbletea.Batch(m.cancelActiveAttempt(), bubbletea.Quit)
 	}
@@ -298,7 +310,7 @@ func (m *authFlowModel) handleKey(message bubbletea.KeyMsg) (bubbletea.Model, bu
 	if m.state == SignInAPIKeyEntry {
 		return m.handleAPIKeyEntryKey(message)
 	}
-	if message.Type == bubbletea.KeyEsc {
+	if message.Type == keymsg.KeyEsc {
 		// Esc backs out of the alternative methods submenu instead of
 		// cancelling onboarding (Rust #58427).
 		if m.state == SignInPickMode && m.otherMethodsOpen {
@@ -316,7 +328,7 @@ func (m *authFlowModel) handleKey(message bubbletea.KeyMsg) (bubbletea.Model, bu
 		}
 		return m, nil
 	}
-	if m.state == SignInChatGPTSuccessMessage && message.Type == bubbletea.KeyEnter {
+	if m.state == SignInChatGPTSuccessMessage && message.Type == keymsg.KeyEnter {
 		m.state = SignInChatGPTSuccess
 		m.completed = true
 		return m, bubbletea.Quit
@@ -329,15 +341,15 @@ func (m *authFlowModel) handleKey(message bubbletea.KeyMsg) (bubbletea.Model, bu
 		return m, nil
 	}
 	switch message.Type {
-	case bubbletea.KeyUp:
+	case keymsg.KeyUp:
 		m.moveHighlight(-1)
 		return m, nil
-	case bubbletea.KeyDown:
+	case keymsg.KeyDown:
 		m.moveHighlight(1)
 		return m, nil
-	case bubbletea.KeyEnter:
+	case keymsg.KeyEnter:
 		return m.activateChoice(m.highlighted, message)
-	case bubbletea.KeyRunes:
+	case keymsg.KeyRunes:
 		if len(message.Runes) == 0 {
 			return m, nil
 		}
@@ -364,8 +376,8 @@ func (m *authFlowModel) handleKey(message bubbletea.KeyMsg) (bubbletea.Model, bu
 
 // isCopyLinkKey mirrors Rust's `keys::COPY_LINK` press: a plain `c` in the
 // browser sign-in step copies the login URL without touching the login attempt.
-func isCopyLinkKey(message bubbletea.KeyMsg) bool {
-	return message.Type == bubbletea.KeyRunes && len(message.Runes) == 1 &&
+func isCopyLinkKey(message keymsg.KeyMsg) bool {
+	return message.Type == keymsg.KeyRunes && len(message.Runes) == 1 &&
 		!message.Alt && message.Runes[0] == 'c'
 }
 
@@ -388,14 +400,14 @@ func (m *authFlowModel) copyBrowserLoginURL() {
 	m.browserNotice = "Copied link to clipboard"
 }
 
-func (m *authFlowModel) handleAPIKeyEntryKey(message bubbletea.KeyMsg) (bubbletea.Model, bubbletea.Cmd) {
+func (m *authFlowModel) handleAPIKeyEntryKey(message keymsg.KeyMsg) (bubbletea.Model, bubbletea.Cmd) {
 	switch message.Type {
-	case bubbletea.KeyEsc:
+	case keymsg.KeyEsc:
 		m.state = SignInPickMode
 		m.errorMessage = ""
 		m.savingAPIKey = false
 		return m, nil
-	case bubbletea.KeyEnter:
+	case keymsg.KeyEnter:
 		if m.savingAPIKey {
 			return m, nil
 		}
@@ -410,7 +422,7 @@ func (m *authFlowModel) handleAPIKeyEntryKey(message bubbletea.KeyMsg) (bubblete
 		return m, func() bubbletea.Msg {
 			return apiKeySavedMsg{err: m.services.saveAPIKey(store, apiKey)}
 		}
-	case bubbletea.KeyBackspace, bubbletea.KeyDelete:
+	case keymsg.KeyBackspace, keymsg.KeyDelete:
 		if m.savingAPIKey {
 			return m, nil
 		}
@@ -425,7 +437,7 @@ func (m *authFlowModel) handleAPIKeyEntryKey(message bubbletea.KeyMsg) (bubblete
 		}
 		m.errorMessage = ""
 		return m, nil
-	case bubbletea.KeyRunes:
+	case keymsg.KeyRunes:
 		if m.savingAPIKey || message.Alt || len(message.Runes) == 0 {
 			return m, nil
 		}
@@ -519,7 +531,7 @@ func (m *authFlowModel) startChoice(choice AuthChoice) (bubbletea.Model, bubblet
 	return m, nil
 }
 
-func (m *authFlowModel) selectDisplayedOption(index int, key bubbletea.KeyMsg) (bubbletea.Model, bubbletea.Cmd) {
+func (m *authFlowModel) selectDisplayedOption(index int, key keymsg.KeyMsg) (bubbletea.Model, bubbletea.Cmd) {
 	options := m.displayedOptions()
 	if index < 0 || index >= len(options) {
 		return m, nil
@@ -530,7 +542,7 @@ func (m *authFlowModel) selectDisplayedOption(index int, key bubbletea.KeyMsg) (
 // activateChoice runs a picker selection, first arming the activation guard for
 // the entries that replace the picker with a submenu or a login step. Rust
 // #58427 arms the guard for "Sign in another way" and every alternative method.
-func (m *authFlowModel) activateChoice(choice AuthChoice, key bubbletea.KeyMsg) (bubbletea.Model, bubbletea.Cmd) {
+func (m *authFlowModel) activateChoice(choice AuthChoice, key keymsg.KeyMsg) (bubbletea.Model, bubbletea.Cmd) {
 	if choice == AuthChoiceOtherMethods || isAlternativeAuthChoice(choice) {
 		m.activationGuard = newActivationKeyGuard(keyIdentity(key), m.now)
 	}

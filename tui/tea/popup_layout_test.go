@@ -4,9 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 	"codex_go/utils"
 )
 
@@ -103,7 +102,7 @@ func TestPopupKeepsViewWithinTerminalHeight(t *testing.T) {
 	} {
 		model := NewModel(codextui.NewState(nil), Options{Width: tc.w, Height: tc.h})
 		typeText(t, model, "/")
-		view := model.View()
+		view := model.viewString()
 		lines := strings.Split(strings.TrimRight(view, "\n"), "\n")
 		if len(lines) > tc.h {
 			t.Fatalf("size %dx%d: slash popup view = %d lines, exceeds terminal height %d", tc.w, tc.h, len(lines), tc.h)
@@ -112,11 +111,11 @@ func TestPopupKeepsViewWithinTerminalHeight(t *testing.T) {
 			t.Fatalf("size %dx%d: slash popup missing from view:\n%s", tc.w, tc.h, view)
 		}
 		// Closing the popup must restore the full transcript height.
-		model.Update(key(bubbletea.KeyEsc))
+		model.Update(key(keymsg.KeyEsc))
 		if model.slashPopup.Active {
 			t.Fatalf("size %dx%d: slash popup still active after Esc", tc.w, tc.h)
 		}
-		if model.View() == view {
+		if model.viewString() == view {
 			t.Fatalf("size %dx%d: view unchanged after closing popup", tc.w, tc.h)
 		}
 	}

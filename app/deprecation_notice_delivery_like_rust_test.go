@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	"codex_go/appserver"
 	"codex_go/cli"
@@ -68,7 +68,7 @@ func TestRemoteDeprecationNoticeDeliveryDedupesLikeRust(t *testing.T) {
 	if notices != 1 {
 		t.Fatalf("deprecation notices = %d, want 1", notices)
 	}
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.ViewContent())
 	if !strings.Contains(view, "Full-history hydration is deprecated for paginated threads") {
 		t.Fatalf("notice missing from the rendered view:\n%s", view)
 	}
@@ -148,7 +148,7 @@ func TestLocalStartupDeprecationMessagesReachTUIOnceLikeRust(t *testing.T) {
 	if notices != len(messages) {
 		t.Fatalf("deprecation notices = %d, want %d", notices, len(messages))
 	}
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.ViewContent())
 	if !strings.Contains(view, "web_search_request") {
 		t.Fatalf("the deprecated feature is missing from the rendered view:\n%s", view)
 	}

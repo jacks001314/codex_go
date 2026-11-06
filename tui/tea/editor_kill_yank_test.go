@@ -3,10 +3,9 @@ package tea
 import (
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
 	bottompane "codex_go/tui/bottom_pane"
+	"codex_go/tui/keymsg"
 )
 
 // These tests verify the composer editor kill/yank actions (ctrl-k / ctrl-u /
@@ -14,8 +13,8 @@ import (
 // natively, mirroring Rust bottom_pane/textarea.rs: kills cut into a
 // single-entry kill buffer and yank pastes it at the cursor.
 
-func editorKey(keyType bubbletea.KeyType) bubbletea.KeyMsg {
-	return bubbletea.KeyMsg{Type: keyType}
+func editorKey(keyType keymsg.KeyType) keymsg.KeyMsg {
+	return keymsg.KeyMsg{Type: keyType}
 }
 
 // TestEditorKillBufferSurvivesNewSessionLikeRust pins #44742: replacing the
@@ -23,8 +22,8 @@ func editorKey(keyType bubbletea.KeyType) bubbletea.KeyMsg {
 // before the switch can still be yanked into the replacement composer.
 func TestEditorKillBufferSurvivesNewSessionLikeRust(t *testing.T) {
 	m := vimTestModel("saved line")
-	m.composer.SetCursor(len("saved line"))
-	updated, _ := m.Update(editorKey(bubbletea.KeyCtrlU))
+	m.composer.SetCursorColumn(len("saved line"))
+	updated, _ := m.Update(editorKey(keymsg.KeyCtrlU))
 	m = updated.(*Model)
 	if got := m.composerKillBuffer; got != "saved line" {
 		t.Fatalf("kill buffer = %q, want saved line", got)
@@ -37,8 +36,8 @@ func TestEditorKillBufferSurvivesNewSessionLikeRust(t *testing.T) {
 	}
 
 	m.composer.SetValue("new line")
-	m.composer.SetCursor(len("new line"))
-	updated, _ = m.Update(editorKey(bubbletea.KeyCtrlY))
+	m.composer.SetCursorColumn(len("new line"))
+	updated, _ = m.Update(editorKey(keymsg.KeyCtrlY))
 	m = updated.(*Model)
 	if got := m.composer.Value(); got != "new linesaved line" {
 		t.Fatalf("value after yank = %q, want new linesaved line", got)
@@ -60,7 +59,7 @@ func TestVimLineYankSurvivesNewSessionAndThreadSwitchLikeRust(t *testing.T) {
 	}
 	m.startFreshNamedSession("", "Started a new local thread.")
 	m.composer.SetValue("new line")
-	m.composer.SetCursor(len("new line"))
+	m.composer.SetCursorColumn(len("new line"))
 	m = vimKeyPress(m, 'p')
 	if got := m.composer.Value(); got != "new line\nsaved line" {
 		t.Fatalf("/new p value = %q, want new line\\nsaved line", got)
@@ -77,7 +76,7 @@ func TestVimLineYankSurvivesNewSessionAndThreadSwitchLikeRust(t *testing.T) {
 		},
 	})
 	m.composer.SetValue("new line")
-	m.composer.SetCursor(len("new line"))
+	m.composer.SetCursorColumn(len("new line"))
 	m = vimKeyPress(m, 'p')
 	if got := m.composer.Value(); got != "new line\nsaved line" {
 		t.Fatalf("thread-switch p value = %q, want new line\\nsaved line", got)
@@ -88,9 +87,9 @@ func TestVimLineYankSurvivesNewSessionAndThreadSwitchLikeRust(t *testing.T) {
 // ctrl-u (kill to line start) on a single line.
 func TestEditorKillLineEndAndStartLikeRust(t *testing.T) {
 	m := vimTestModel("hello brave world")
-	m.composer.SetCursor(6)
+	m.composer.SetCursorColumn(6)
 	m = vimEscape(m) // no-op; vimTestModel starts in normal mode with Vim on
-	updated, _ := m.Update(editorKey(bubbletea.KeyCtrlK))
+	updated, _ := m.Update(editorKey(keymsg.KeyCtrlK))
 	m = updated.(*Model)
 	if got := m.composer.Value(); got != "hello " {
 		t.Fatalf("ctrl-k value = %q, want hello ", got)
@@ -100,8 +99,8 @@ func TestEditorKillLineEndAndStartLikeRust(t *testing.T) {
 	}
 
 	m = vimTestModel("hello brave world")
-	m.composer.SetCursor(6)
-	updated, _ = m.Update(editorKey(bubbletea.KeyCtrlU))
+	m.composer.SetCursorColumn(6)
+	updated, _ = m.Update(editorKey(keymsg.KeyCtrlU))
 	m = updated.(*Model)
 	if got := m.composer.Value(); got != "brave world" {
 		t.Fatalf("ctrl-u value = %q, want brave world", got)
@@ -119,9 +118,9 @@ func TestEditorKillAtLineBoundaryMergesLinesLikeRust(t *testing.T) {
 	// Move to the end of line zero (row 0, col 8): SetValue leaves the cursor
 	// on the last row, so move up first.
 	m.composer.CursorUp()
-	m.composer.SetCursor(0)
+	m.composer.SetCursorColumn(0)
 	m = vimKeyPress(m, '$')
-	updated, _ := m.Update(editorKey(bubbletea.KeyCtrlK))
+	updated, _ := m.Update(editorKey(keymsg.KeyCtrlK))
 	m = updated.(*Model)
 	if got := m.composer.Value(); got != "line oneline two" {
 		t.Fatalf("ctrl-k at EOL value = %q, want line oneline two", got)
@@ -133,8 +132,8 @@ func TestEditorKillAtLineBoundaryMergesLinesLikeRust(t *testing.T) {
 	m = vimTestModel("line one\nline two")
 	// Move to the start of line one (row 1, col 0).
 	// Cursor is already on the last row (line one).
-	m.composer.SetCursor(0)
-	updated, _ = m.Update(editorKey(bubbletea.KeyCtrlU))
+	m.composer.SetCursorColumn(0)
+	updated, _ = m.Update(editorKey(keymsg.KeyCtrlU))
 	m = updated.(*Model)
 	if got := m.composer.Value(); got != "line oneline two" {
 		t.Fatalf("ctrl-u at BOL value = %q, want line oneline two", got)
@@ -146,7 +145,7 @@ func TestEditorKillWholeLineAndYankLikeRust(t *testing.T) {
 	m := vimTestModel("line zero\nline one\nline two")
 	m.composer.CursorUp()
 	m.composer.CursorUp()
-	m.composer.SetCursor(0)
+	m.composer.SetCursorColumn(0)
 	// Kill the whole first line (ctrl-k twice? no - use the whole-line action;
 	// it has no default binding in the keymap, so drive editorKillRange via
 	// the helper through a ctrl-k at BOL is not whole-line. Call the model
@@ -160,8 +159,8 @@ func TestEditorKillWholeLineAndYankLikeRust(t *testing.T) {
 	}
 
 	// yank pastes the buffer at the cursor (row 0, col 0).
-	m.composer.SetCursor(0)
-	updated, _ := m.Update(editorKey(bubbletea.KeyCtrlY))
+	m.composer.SetCursorColumn(0)
+	updated, _ := m.Update(editorKey(keymsg.KeyCtrlY))
 	m = updated.(*Model)
 	if got := m.composer.Value(); got != "line zero\nline one\nline two" {
 		t.Fatalf("ctrl-y value = %q, want restored line zero\\nline one\\nline two", got)
@@ -176,7 +175,7 @@ func TestKillBufferRestoresLocalImagesLikeRust(t *testing.T) {
 	m := vimTestModel("[Image #1] restore me ")
 	m.attachments = []bottompane.ComposerAttachment{{Kind: bottompane.AttachmentImage, Path: killedImage}}
 	m.composerElements = []ComposerTextElement{{Start: 0, End: 10, Placeholder: "[Image #1]"}}
-	m.composer.SetCursor(len(m.composer.Value()))
+	m.composer.SetCursorColumn(len(m.composer.Value()))
 
 	m.killComposerToLineStart()
 	if got := m.composer.Value(); got != "" {
@@ -204,7 +203,7 @@ func TestKillBufferRestoresLocalImagesLikeRust(t *testing.T) {
 	m.attachments = []bottompane.ComposerAttachment{{Kind: bottompane.AttachmentImage, Path: otherImage}}
 	m.composer.SetValue("[Image #1] ")
 	m.composerElements = []ComposerTextElement{{Start: 0, End: 10, Placeholder: "[Image #1]"}}
-	m.composer.SetCursor(len(m.composer.Value()))
+	m.composer.SetCursorColumn(len(m.composer.Value()))
 
 	m.yankComposerKillBuffer()
 	if got := m.composer.Value(); got != "[Image #1] [Image #2] restore me " {
@@ -230,7 +229,7 @@ func TestKillBufferImageYankRestoresRichObjectsInVimReplaceLikeRust(t *testing.T
 	m.composerKillBuffer = "[Image #1] plain"
 	m.composerKillBufferImages = []composerKillBufferImage{{Start: 0, End: 10, Path: "/tmp/killed-image.png"}}
 	m.composer.SetValue("hi")
-	m.composer.SetCursor(len("hi"))
+	m.composer.SetCursorColumn(len("hi"))
 
 	m.yankComposerKillBuffer()
 	if got := m.composer.Value(); got != "hi[Image #1] plain" {

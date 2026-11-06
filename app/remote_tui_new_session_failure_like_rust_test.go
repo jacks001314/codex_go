@@ -16,7 +16,7 @@ import (
 	codextui "codex_go/tui"
 	codextea "codex_go/tui/tea"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/coder/websocket"
 )
 

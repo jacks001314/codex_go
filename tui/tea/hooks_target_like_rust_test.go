@@ -3,10 +3,9 @@ package tea
 import (
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	"codex_go/appserver"
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 // TestModelHooksTargetUsesActiveThreadLikeRust mirrors Rust #56553:
@@ -25,7 +24,7 @@ func TestModelHooksTargetUsesActiveThreadLikeRust(t *testing.T) {
 		},
 	})
 	typeText(t, model, "/hooks")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 	if !got.IsThread() || got.ThreadID != "thread-1" {
 		t.Fatalf("hooks target = %#v, want the active thread", got)

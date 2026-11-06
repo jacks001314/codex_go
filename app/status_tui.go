@@ -178,3 +178,79 @@ func capitalizeStatusLabel(value string) string {
 	runes[0] = []rune(strings.ToUpper(string(runes[0])))[0]
 	return string(runes)
 }
+
+// interactiveRateLimitSnapshots converts an account-limits read into the
+// chatwidget snapshots the TUI applies for banners and Luna Reserve fallback
+// (Rust #42372 account usage refresh).
+func interactiveRateLimitSnapshots(response *auth.GetAccountRateLimitsResponse) []chatwidget.RateLimitSnapshot {
+	if response == nil {
+		return nil
+	}
+	ordered := make([]auth.RateLimitSnapshot, 0, max(1, len(response.RateLimitsByLimitID)))
+	if len(response.RateLimitsByLimitID) == 0 {
+		ordered = append(ordered, response.RateLimits)
+	} else {
+		keys := make([]string, 0, len(response.RateLimitsByLimitID))
+		for key := range response.RateLimitsByLimitID {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			ordered = append(ordered, response.RateLimitsByLimitID[key])
+		}
+	}
+	snapshots := make([]chatwidget.RateLimitSnapshot, 0, len(ordered))
+	for _, snapshot := range ordered {
+		limitID := "codex"
+		if snapshot.LimitID != nil && strings.TrimSpace(*snapshot.LimitID) != "" {
+			limitID = strings.TrimSpace(*snapshot.LimitID)
+		}
+		converted := chatwidget.RateLimitSnapshot{
+			LimitID:   limitID,
+			Primary:   interactiveRateLimitWindowSnapshot(snapshot.Primary),
+			Secondary: interactiveRateLimitWindowSnapshot(snapshot.Secondary),
+		}
+		if credits := snapshot.Credits; credits != nil {
+			converted.Credits = &chatwidget.RateLimitCredits{
+				HasCredits: credits.HasCredits,
+				Unlimited:  credits.Unlimited,
+				Balance:    credits.Balance,
+			}
+		}
+		snapshots = append(snapshots, converted)
+	}
+	return snapshots
+}
+
+func interactiveRateLimitWindowSnapshot(window *auth.RateLimitWindow) *chatwidget.RateLimitWindow {
+	if window == nil {
+		return nil
+	}
+	return &chatwidget.RateLimitWindow{
+		UsedPercent:        float64(window.UsedPercent),
+		WindowDurationMins: window.WindowDurationMins,
+		ResetsAt:           window.ResetsAt,
+	}
+}
+
+// interactiveLocalRateLimitSnapshotsReader polls the local account limits.
+func interactiveLocalRateLimitSnapshotsReader() func() ([]chatwidget.RateLimitSnapshot, error) {
+	return func() ([]chatwidget.RateLimitSnapshot, error) {
+		response, err := interactiveLocalUsageRead()
+		if err != nil {
+			return nil, err
+		}
+		return interactiveRateLimitSnapshots(response), nil
+	}
+}
+
+// interactiveRemoteRateLimitSnapshotsReader polls the connected app server.
+func interactiveRemoteRateLimitSnapshotsReader(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) func() ([]chatwidget.RateLimitSnapshot, error) {
+	return func() ([]chatwidget.RateLimitSnapshot, error) {
+		response, err := interactiveRemoteUsageRead(ctx, endpoint)
+		if err != nil {
+			return nil, err
+		}
+		return interactiveRateLimitSnapshots(response), nil
+	}
+}

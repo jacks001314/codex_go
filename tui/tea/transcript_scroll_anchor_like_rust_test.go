@@ -46,7 +46,7 @@ func TestCompletedStreamKeepsReaderTopLineLikeRust(t *testing.T) {
 	body.WriteString("beta\n\ngamma\n\ndelta")
 	state.AddMessage(codextui.RoleAssistant, body.String())
 	model := NewModel(state, Options{Width: 80, Height: 14})
-	model.View()
+	model.viewString()
 	model.activityFollow = false
 
 	lines := strings.Split(model.transcriptContent(), "\n")

@@ -6211,14 +6211,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "sandbox/windowssandbox/setup_windows.go adds setupModeInteractiveProvision and elevatedProvisioningPayload: elevated interactive setup sends command_cwd = codex_home, empty read/write/deny roots and mode interactive-provision, so caller workspace and ACL roots no longer ride in the elevated payload.",
-    "sandbox/windowssandbox/bin/setup_main/win/run_windows.go accepts interactive-provision, runs the provision-only helper path for it, and mirrors Rust SetupMode::provisions_accounts (ProvisionOnly and InteractiveProvision always take the global setup lock; Full only without refresh; ReadAclsOnly never).",
-    "appserver/windows_sandbox_runtime.go no longer returns early when setup is already complete: it provisions identities through the elevated helper only when needed and then always runs RunSetupRefreshForRequest with the request resolved permission profile, so the active profile supplies read, write and deny paths.",
-    "Tests: TestElevatedProvisioningPayloadContainsNoCallerACLRootsLikeRust, TestSetupPayloadAcceptsInteractiveProvisionModeLikeRust, TestSetupModeProvisionsAccountsLikeRust (interactive-provision rows) and TestRegisteredRuntimeRejectsHelperOwnedProvisioningLikeRust (interactive-provision row).",
-    "Residual: the TUI enable-agent-mode handler still short-circuits or skips the always-refresh route (Rust removed that early return in tui/src/app/event_dispatch.rs); the Go carriers live in tui/** and app/windows_sandbox_tui.go, which a parallel agent owns.",
-    "Verified with go build ./sandbox/... ./appserver/..., go test ./sandbox/windowssandbox/... -count=1, go test ./appserver -run WindowsSandbox|WindowsSetup -count=1 and go test ./parity -count=1."
+    "sandbox/windowssandbox/prepare.go adds PrepareElevatedSandbox, the Go counterpart of Rust core/src/windows_sandbox.rs prepare_elevated_sandbox (#42309): elevated provisioning runs only while SandboxSetupIsComplete is false, then RunSetupRefreshForRequest always runs so the active permission profile supplies read, write and deny roots. Non-Windows returns nil like Rust's stub.",
+    "appserver/windows_sandbox_runtime.go now routes the elevated branch through PrepareElevatedSandbox instead of repeating the completion check, so every TUI or app-server activation (windowsSandbox/setupStart) refreshes ACLs even when provisioning finished earlier; the TUI setup command always starts that RPC and never short-circuits on completion.",
+    "Tests: sandbox/windowssandbox/prepare_like_rust_windows_test.go covers incomplete (provision then refresh), complete (refresh only, resolved permissions preserved), provisioning failure (no refresh) and nil request. go test ./sandbox/windowssandbox/... -count=1 and go test ./appserver -run 'WindowsSandbox|WindowsSetup' -count=1 pass."
    ]
   },
   {
@@ -6573,12 +6570,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
     "App-server/protocol half: chatgptapi/backend_models.go now decodes the extra normal_model_slug per additional rate limit (AdditionalRateLimitDetails.NormalModelSlug) and exposes it on chatgptapi.RateLimitSnapshot; appserver/runtime_router.go accountRateLimitFromBackend copies it into auth.RateLimitSnapshot, which serializes as normalModelSlug on getAccountRateLimits and account/rateLimits/updated, so clients can render the alias model display metadata without changing the request model.",
     "model/usage_limit.go already keeps Rust protocol/src/error.rs copy: a gpt-reserve limit name does not suggest switching to another model.",
-    "Tests: TestRateLimitSnapshotsCarryNormalModelSlugFromUsagePayload (go test ./chatgptapi -count=1) and TestAccountRateLimitFromBackendCarriesNormalModelSlug (go test ./appserver -run TestAccountRateLimitFromBackendCarriesNormalModelSlug -count=1).",
-    "Residual: the TUI half (automatic switch to Luna Reserve after an exhausted ordinary usage read, per-task restore of model and reasoning effort, reasoning-level restriction while on Reserve, queued-turn pinning, composer and /status Reserve rendering, near-exhaustion polling) is not implemented; that surface lives in tui/** and belongs to the TUI stream."
+    "TUI half already present: tui/tea/luna_reserve_return.go persists the account-bound return target per thread under $CODEX_HOME/tui-luna-reserve/<thread>.json with a 4096-byte read cap; tui/tea/backend_banner_fallback.go enters gpt-reserve from the backend banner, saves the current model and effort, restores it when a fresh read reports ordinary usage recovered, keeps queued submissions on the accepted model, and gates on ChatGPT auth plus catalog visibility; tui/tea/model_command_args.go restricts /model to Reserve while ordinary usage is spent; tui/tea/thread_usage.go renders \"Luna Reserve\" in the usage surface.",
+    "Near-exhaustion polling: tui/chatwidget/rate_limit_refresh.go ports Rust app/rate_limit_refresh.rs (5s at >=99% used, 15s at >=90%, 30s at >=75%, 60s otherwise, using the max used_percent across the codex limit and the current model's limit). tui/tea/rate_limit_poll.go schedules the read from Init when the account has ChatGPT auth and a snapshot reader, runs it off the update loop, applies each snapshot through applyRateLimitSnapshot so banners, Reserve fallback and the status row react exactly as to server notifications, and reschedules from the refreshed usage. app/status_tui.go converts account-limits reads into chatwidget snapshots for both the embedded and app-server-connected TUI.",
+    "Verified: go test ./tui/chatwidget -run TestRateLimitRefreshInterval -count=1; go test ./tui/tea -run 'Reserve|BackendBanner|TestModelRateLimitPoll' -count=1; go test ./tui/tea -count=1 (44.9s); go test ./app -count=1 (30.8s) — all pass."
    ]
   },
   {
@@ -6816,9 +6814,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/2; needs review: with_collaboration_modes"
+    "TUI discovers collaboration modes from the app server (#42401). tui/tea/collaboration_modes_discovery.go fetches the advertised catalog once per session, treats transport failure/timeout as an empty server catalog, and tui/tea/slash_misc_commands.go resolves /plan and composer modes from it; app/interactive_collaboration_modes.go installs the server catalog into interactive settings so local and remote sessions agree.",
+    "Verified: go test ./tui/tea -run '^(TestWithCollaborationModesInstallsServerCatalogLikeRust|TestCollaborationModeDiscoveryFailureLeavesNoServerModesLikeRust|TestCollaborationModeDiscoveryUsesServerCatalogLikeRust|TestCollaborationModeDiscoveryTimesOutLikeRust|TestPlanCommandUsesServerCatalogLikeRust)$' -count=1 and go test ./app -run 'TestInteractiveLocalListCollaborationModesLikeRust' -count=1 — pass."
    ]
   },
   {
@@ -6924,9 +6923,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/3; needs review: add_session_picker_error, apply_resume_picker_selection"
+    "Session resume in the agent command center (#42419). tui/tea/session_picker.go keeps per-thread drafts and input state, renders resume-picker errors inline, and closes the active task view when a resumed thread takes over.",
+    "Verified: go test ./tui/tea -run '^(TestAgentsOverviewResumePickerErrorLikeRust|TestAgentsOverviewResumePickerRestoresDraftLikeRust|TestAgentsOverviewResumePickerActiveTaskClosesLikeRust)$' -count=1 — pass (3 tests)."
    ]
   },
   {
@@ -6962,9 +6962,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/10; needs review: AgentsOverviewFocus, composer_is_vim_enabled, focus_composer, handle_composer_key, handle_paste_enter"
+    "The agent command center uses the shared composer (#42428). tui/agents_overview/composer.go and tui/tea/agents_overview_composer.go wire the same Bubble Tea textarea behaviour as the main composer: focus handling, multiline paste, draft retention across refreshes, and prompt restore on dispatch failure.",
+    "Verified: go test ./tui/agents_overview -run '^(TestAgentsOverviewComposerFocusLikeRust|TestAgentsOverviewComposerDraftSurvivesRefreshLikeRust|TestAgentsOverviewComposerMultilinePasteLikeRust|TestAgentsOverviewRestorePromptLikeRust|TestAgentsOverviewComposerRendersLikeRust)$' -count=1 and go test ./tui/tea -run '^(TestAgentsOverviewComposerDispatchLikeRust|TestAgentsOverviewComposerOfflineBlocksDispatchLikeRust|TestAgentsOverviewComposerKeepsDraftAcrossRefreshLikeRust|TestAgentsOverviewComposerRestoresPromptOnFailureLikeRust)$' -count=1 — pass (9 tests)."
    ]
   },
   {
@@ -7010,9 +7011,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 8/11; needs review: invalidate_permission_discovery, permission_popup_request_is_current, request_permission_profiles"
+    "Permission profiles are discovered from the app server (#42453). tui/tea/permissions.go issues one discovery request, reuses an outstanding request, and drops responses that arrive after the popup closes or the requester invalidates them, so a stale catalog cannot overwrite the current selection.",
+    "Verified: go test ./tui/tea -run '^(TestPermissionDiscoveryAppliesToCurrentPopupLikeRust|TestPermissionDiscoveryDropsResponseAfterInvalidateLikeRust|TestPermissionDiscoveryDropsResponseAfterPopupCloseLikeRust|TestPermissionDiscoveryReusesOutstandingRequestLikeRust)$' -count=1 — pass (4 tests)."
    ]
   },
   {
@@ -7022,9 +7024,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 3/5; needs review: AgentsOverviewActivity, track_agents_overview_activity"
+    "Live task details in the agent command center (#42455). tui/agents_overview/activity.go tracks reasoning, last-message and activity boundaries per agent, and app/agents_dashboard.go forwards live dashboard events so the detail view shows running work instead of a stale snapshot.",
+    "Verified: go test ./tui/agents_overview -run '^(TestAgentsOverviewActivityReasoningHeadingLikeRust|TestAgentsOverviewActivityLastMessageLikeRust|TestAgentsOverviewActivityBoundariesLikeRust|TestAgentsOverviewDetailsShowLiveActivityLikeRust)$' -count=1 and go test ./tui/tea -run '^(TestAgentsOverviewTracksActivityLikeRust)$' -count=1 — pass (5 tests)."
    ]
   },
   {
@@ -7330,9 +7333,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Restore the inline TUI after full-screen overlays (#42641). In the Bubble Tea v2 port the alternate screen is driven by View(): tui/tea/model.go sets AltScreen from ownedScreen/overlayAltScreen/sessionPickerAltScreen, so the runtime repaints the inline view when the flag turns off instead of keeping stale overlay cells. Console widgets are re-laid out at the inline height through applyLayoutSize and the transcript is reflowed for the shorter chat layout, so returning from a full-height overlay rebuilds the visible history once.",
+    "Verified: go test ./tui/tea -run '^(TestModelResumePickerCancelRestoresInlineScreen|TestModelResumePickerHonorsNoAltScreen|TestTranscriptResizeReflowsWithoutUnseenActivityLikeRust)$' -count=1 — pass; PTY coverage for terminal restore lives in tui/tea/terminal_restore_pty_windows_test.go."
    ]
   },
   {
@@ -7429,9 +7433,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 3/4; needs review: FeatureWriteResult"
+    "Server-advertised experimental features persist from the TUI (#42674). tui/tea/experimental_features.go writes only the result the app server reports, keeping locally-derived state out of the config when the server rejects or rewrites a toggle.",
+    "Verified: go test ./tui/tea -run '^(TestExperimentalFeatureWriteResultLikeRust)$' -count=1 — pass."
    ]
   },
   {
@@ -8204,12 +8209,15 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "exec half (#43069): `codex exec fork --worktree` resolves the fork target through the session lookup before allocating anything, reads the source thread's rollout for the newest `turn_context.cwd` (legacy sibling key accepted, malformed lines skipped), and falls back to the thread record's cwd. An explicit --cd still wins. The resolved source cwd is what WorktreeManager.Create branches from, so the checkout preserves the source repository-relative directory.",
-    "Source policy: an explicitly untrusted source (saved projects trust_level) is refused before any checkout is created with Rust's `--worktree requires a source that is not explicitly untrusted`, for plain --worktree and for forks (ProjectTrustLevelForTarget on the resolved source cwd).",
-    "Tests: TestLatestRolloutTurnContextCWDLikeRust, TestLatestThreadCWDFallsBackToThreadCWDLikeRust, TestExecWorktreeRejectsExplicitlyUntrustedSourceLikeRust, TestExecForkWorktreeUsesForkSourceCWDLikeRust, TestExecForkWorktreeKeepsExplicitCWDLikeRust. Verified with go test ./exec -count=1 (package green).",
-    "Residual: the interactive startup half (tui/src/worktree_startup.rs ManagedTuiWorktree::prepare, destination-auth check_source_policy re-check that keeps an unused checkout, StartupRecovery message) is still unimplemented; `codex --worktree` and interactive `codex fork --worktree` allocate no checkout at launch. That half belongs to the TUI/startup stream."
+    "exec half (#43069): `codex exec fork --worktree` resolves the fork target through the session lookup before allocating anything, reads the source thread's rollout for the newest turn_context.cwd (legacy sibling key accepted, malformed lines skipped), and falls back to the thread record's cwd. An explicit --cd still wins. The resolved source cwd is what WorktreeManager.Create branches from, so the checkout preserves the source repository-relative directory.",
+    "Source policy: an explicitly untrusted source (saved projects trust_level) is refused before any checkout is created with Rust's message for plain --worktree and for forks. Tests: TestLatestRolloutTurnContextCWDLikeRust, TestLatestThreadCWDFallsBackToThreadCWDLikeRust, TestExecWorktreeRejectsExplicitlyUntrustedSourceLikeRust, TestExecForkWorktreeUsesForkSourceCWDLikeRust, TestExecForkWorktreeKeepsExplicitCWDLikeRust (go test ./exec).",
+    "Interactive startup half now implemented: app/worktree_startup.go adds interactiveWorktreeStartup, the Go counterpart of Rust tui/src/worktree_startup.rs ManagedTuiWorktree. A local `codex --worktree` launch resolves [desktop] worktree settings, refuses an explicitly untrusted source before allocating, creates the checkout with worktree.Manager.Create and the repo default base, points the launch cwd at the checkout, binds the created thread, and on an exit before binding keeps the checkout and prints Rust's recovery instructions. A remote (non-local) app-server target is rejected with `--worktree` is only supported for local sessions.",
+    "Tests: app/worktree_startup_like_rust_test.go covers checkout creation plus cwd move and thread ownership binding, the no-flag no-op, the untrusted-source refusal (no checkout, cwd unchanged), and the unbound-checkout recovery message. go test ./app -count=1 passes (30.8s).",
+    "Interactive fork half (#43069): app/session.go routes `codex fork <id> --worktree` (flags accepted before or after `fork`) into app/worktree_startup.go:prepareInteractiveForkWorktree. It resolves the source target first, reads the source rollout's newest turn_context.cwd (legacy sibling key accepted, thread cwd fallback), creates the managed checkout from that source directory unless --cd is explicit, forks all history into the checkout, patches the fork cwd, and binds checkout ownership before the TUI can run a turn. Relative --add-dir values are anchored to the invocation directory before the launch cwd moves.",
+    "The interactive TUI now accepts a prestarted forked session and restores its messages at bootstrap instead of creating another fresh thread (app/interactive.go:runInteractiveTUI). The launch returns through the existing Bubble Tea model with the checkout as its cwd and worktree operations enabled.",
+    "Tests: TestPrepareInteractiveForkWorktreeStartsForkInLatestSourceDirectoryLikeRust covers latest turn cwd, inherited history, fork identity, cwd patch, and owner binding; TestPrepareInteractiveForkWorktreeKeepsExplicitCWDLikeRust, TestSessionForkWorktreeUsesInteractiveStarterLikeRust, and TestPrepareInteractiveWorktreeAnchorsRelativeAddDirLikeRust cover precedence and launch routing. `go test ./cli ./exec ./app -count=1` passes (app 32.8s), and `go vet ./app` passes."
    ]
   },
   {
@@ -8375,9 +8383,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/3; needs review: enable_feature_for_new_threads, open_feature_enable_prompt"
+    "Subagent and memory opt-ins are saved through the app server (#43113). tui/tea/feature_enable_prompt.go, memories.go and settings_commands.go persist the enablement via the server RPC, report override and failure paths, and avoid writing config directly.",
+    "Verified: go test ./tui/tea -run '^(TestFeatureEnablePromptSavesMemoriesForNewThreadsLikeRust|TestFeatureEnablePromptSubagentsLikeRust|TestFeatureEnablePromptReportsOverrideAndFailureLikeRust)$' -count=1 — pass (3 tests)."
    ]
   },
   {
@@ -9274,9 +9283,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 8/67; needs review: AnswerOutcome, MAX_REPLAY_TRANSCRIPT_CELLS, MAX_TRANSCRIPT_BYTES, MisalignmentTurnSource, RealtimeAgentItemOrigin"
+    "WebRTC voice conversations in the TUI (#43581). appserver/realtime_runtime.go and turn_runtime.go retire voice handoffs on misalignment so a stale delta cannot land in the next session, and tui/tea/model.go stops the voice session while leaving an idle one untouched.",
+    "Verified: go test ./appserver -run '^(TestRetiredVoiceHandoffsBlockUntilNextSessionLikeRust|TestRetiredVoiceHandoffsIgnoreEmptyThread|TestIsMisalignmentPolicyErrorLikeRust)$' -count=1 and go test ./tui/tea -run '^(TestModelMisalignmentStopsVoiceLikeRust|TestModelMisalignmentLeavesIdleVoiceAlone)$' -count=1 — pass (5 tests)."
    ]
   },
   {
@@ -9430,9 +9440,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Realtime voice regression coverage (#43645). Delegation markers are stored per thread (tui/app/realtime_delegation.go, replay_filter.go) and honoured by every replay path: app/remote_tui.go, tui/tea/transcript.go, tui/tea/side_voice_privacy.go hide delegated voice content from parent snapshots and buffered replays while keeping typed turns visible.",
+    "Verified: go test ./tui/tea -run '^(TestSideParentSnapshotHidesVoiceHandoffOutputLikeRust|TestSideParentSnapshotKeepsOrdinaryTurnLikeRust|TestRetainedSideSnapshotHidesVoiceHandoffOutputLikeRust|TestSideVoiceMarkersDoNotLeakAcrossThreadsLikeRust|TestBufferedThreadReplayHidesDelegatedVoiceContentLikeRust|TestBufferedThreadReplayKeepsTypedTurnsLikeRust|TestDelegatedTurnHidesPrivateContentLikeRust|TestTypedTurnKeepsReasoningAndCommentaryLikeRust|TestTypedReasoningStartedBeforeHandoffStaysVisibleLikeRust|TestDelegatedMarkersDoNotCrossThreadsLikeRust)$' -count=1 (10 tests), go test ./app -run '^(TestRemoteTUIThreadMessagesHideDelegatedVoiceContentLikeRust|TestRemoteTUIThreadActiveReasoningIgnoresDelegatedTurnLikeRust)$' -count=1 (2 tests) and go test ./tui/app -run '^(TestThreadEventStoreMarksDelegatedTurnLikeRust|TestThreadEventSnapshotRestoresDelegatedTurnsLikeRust|TestThreadEventSnapshotDropsPrivateReplayEventsLikeRust|TestThreadEventTrimKeepsDelegatedMarkerWithBufferedOutputLikeRust)$' -count=1 (4 tests) — all pass."
    ]
   },
   {
@@ -9442,9 +9453,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 4/13; needs review: audio_meter_level, handle_realtime_microphone_shortcut, realtime_microphone_is_listening, refresh_realtime_microphone_level, release_realtime_speaker"
+    "Voice mute shortcut and recording activity indicators (#43651). tui/chatwidget/voice.go acknowledges interruptions and clears the speaker sample, tui/chatwidget/status_surfaces.go plus tui/tea/status_controls.go put a recording dot in the terminal title while a voice turn is active, and tui/tea/model.go suppresses the speaker when the user types.",
+    "Verified: go test ./tui/chatwidget -run '^(TestAcknowledgeVoiceInterruptionClearsSpeakerLikeRust|TestAcknowledgeVoiceInterruptionIgnoresQuietTurnLikeRust)$' -count=1 and go test ./tui/tea -run '^(TestModelVoiceStripShowsHeardAfterInterruptionLikeRust|TestModelVoiceTypedInputSuppressesSpeakerLikeRust|TestVoiceTerminalTitleCarriesRecordingDotLikeRust|TestVoiceTerminalTitleMarkerScopeLikeRust)$' -count=1 — pass (6 tests)."
    ]
   },
   {
@@ -9468,9 +9480,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 2/6; needs review: TrustedWorkspaceFile, annotate_spoken_artifacts, new_spoken, trusted_workspace_file"
+    "Spoken prompts are styled and workspace files linked in voice transcripts (#43676). tui/history_cell/spoken_artifacts.go annotates spoken text with confined regular-file hyperlinks (rejecting symlink escapes), tui/history_cell/messages.go renders the styled prompt, and tui/chatwidget/splitflap_styled.go keeps the styling through the transcript.",
+    "Verified: go test ./tui/history_cell -run 'TestTrustedWorkspaceFile|TestAnnotateSpokenArtifactsLinksWorkspaceFiles|TestSpokenAssistantCellLinksArtifacts' -count=1 and go test ./tui/chatwidget -run 'TestSplitflapSpoken' -count=1 — pass."
    ]
   },
   {
@@ -9480,9 +9493,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 5/8; needs review: audio_meter_intensity, render_voice_strip, set_voice_strip"
+    "Voice controls live in a dedicated composer strip (#43683). tui/tea/model.go renders the strip inside the composer, hides it when the composer is clipped or no visible thread exists, and reserves a single row under reduced motion.",
+    "Verified: go test ./tui/tea -run '^(TestVoiceStripRendersInsideTheComposerLikeRust|TestVoiceStripHidesWhenTheComposerIsClippedLikeRust|TestVoiceStripRequiresTheVisibleThreadLikeRust|TestVoiceStripReducedMotionReservesOneComposerRowLikeRust)$' -count=1 — pass (4 tests)."
    ]
   },
   {
@@ -9492,9 +9506,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/4; needs review: handle_realtime_microphone_shortcut, realtime_microphone_shortcut_available, update_realtime_footer"
+    "Make the voice mute shortcut configurable in the TUI (#43690). tui/keymap.go registers chat.toggle_voice_mute (f9 default); tui/keymap_config.go resolves custom bindings, chords and unbinding, yields the f9 default to any main-surface f9 binding, and validates conflicts; tui/tea/model.go dispatches the key through keyMatches and renders the configured hint (falling back to /voice mute when unbound) in the composer strip.",
+    "Verified: go test ./tui -run 'TestVoiceMute' -count=1 (4 tests: default binding, f9 shadowing, unrelated context bindings, explicit binding wins) and go test ./tui/tea -run 'TestVoiceMute|TestVoiceStripShowsMuteHint' -count=1 — pass."
    ]
   },
   {
@@ -9564,9 +9579,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 3/10; needs review: UserVerificationAttempt, UserVerificationRequests, UserVerificationResponse, is_pending, note_request"
+    "Request bookkeeping for user verification (#43708). app/user_verification_requests.go keeps one attempt per verification id, rejects stale attempts, clears outstanding requests on cancel, and keeps approved params; app/user_verification_local.go signs once and drops stale proofs so a replayed verification cannot publish twice.",
+    "Verified: go test ./app -run '^(TestUserVerificationRequestsPreventDuplicateAttemptsLikeRust|TestUserVerificationRequestsRejectStaleAttemptsLikeRust|TestUserVerificationRequestsClearCancelsOutstandingLikeRust|TestUserVerificationRequestsKeepApprovedParamsLikeRust|TestLocalUserVerificationSignsOnceLikeRust|TestLocalUserVerificationDropsStaleProofLikeRust|TestLocalUserVerificationUnavailableProviderDoesNotPublishLikeRust)$' -count=1 — pass (7 tests)."
    ]
   },
   {
@@ -10677,9 +10693,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Rust-specific stack change: Tokio stores task outputs inline even when the future is boxed, so #44176 boxes the Config build result and the App::run future to keep the blocking runtime worker under its stack limit. Go runs the TUI on growable goroutine stacks and has no inline task-output copy, so there is no equivalent allocation to move off the stack.",
+    "The user-visible part of the pin (enter /side, keep the process alive, return with Ctrl+C) is covered in Go by go test ./tui/tea -run '^(TestModelSideReturnClosesRuntimeSideConversation|TestModelSideParentStatusUpdatesFooter)$' -count=1 — pass."
    ]
   },
   {
@@ -11204,9 +11221,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Superseded upstream by #44921 (3f59eb965a \"Enable TUI voice conversations by default\"), which removed the realtime_conversation experimental gate and turned voice on by default. The Go feature registry already matches the later behaviour: features/features.go marks realtime_conversation as StageRemoved with DefaultEnabled=true, and features/legacy.go ignores the retired flag in [features] and managed requirements.",
+    "No #44331-era experimental toggle or announcement applies to the current tree; the pin is recorded by features/features_test.go (TestRealtimeConversationFeatureIsRemovedAndOnLikeRust). go test ./features -run 'TestRealtimeConversation' -count=1 passes."
    ]
   },
   {
@@ -16981,9 +16999,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 2/11; needs review: LineWrapPolicy, LogicalLineSource, WrappedLine, adaptive_wrap_line_with_source, from_line"
+    "Logical source text and styles survive TUI wrapping (#46708). tui/streaming/controller.go keeps the unrendered rawSource for each assistant message and re-derives painted rows with renderSourceLines on every width change (renderPreviewSourceLines for the still-streaming tail), so wrapping never re-parses already-styled output; tui/markdown keeps the source for code spans, math and tables and re-renders from it.",
+    "Verified: go test ./tui/streaming -count=1 (source-reflow, mermaid and math cases), go test ./tui/tea -run '^TestTranscriptResizeReflowsWithoutUnseenActivityLikeRust$' -count=1 and go test ./tui/markdown -count=1 pass."
    ]
   },
   {
@@ -16993,9 +17012,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 14/31; needs review: ActivityDetails, DETAIL_PREVIEW_LINES, PatchFailureCell, adaptive_wrap_line_to_width, clipped_line"
+    "Compact activity rendering with preserved source text (#46709). tui/exec_cell/render.go renders command output through ToolOutputPreviewLines (leading rows plus a '+N lines (ctrl+t to view transcript)' marker) and folds adjacent computer/CUA calls, reasoning and turn boundaries into one activity group; tui/tea keeps the source text per message so the compact preview and the expanded transcript agree.",
+    "Verified: go test ./tui -run 'TestToolOutputPreview' -count=1, go test ./tui/exec_cell -count=1 and go test ./tui/tea -run '^(TestComputerActivityGroupsAdjacentCallsInOneMessage|TestComputerActivityGroupEndsOnOtherItems|TestComputerActivityGroupEndsOnTurnBoundary|TestComputerActivityKeepsReasoningInOrderLikeRust)$' -count=1 — pass."
    ]
   },
   {
@@ -17005,9 +17025,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 3/12; needs review: CommandHistory, DynamicToolCallCell, McpHistory, from_item, historical_tool_fallback"
+    "Loaded transcripts reuse the live rich history cells for persisted tool calls (Rust #46710). tui/tea/resume_history_cell.go projects command, MCP, patch, dynamic-tool, collab-agent, sub-agent, web-search, hook-prompt and image items into the same history messages the live event path renders; app/interactive.go (interactiveSessionMessagesFromRecord) and app/remote_tui.go (remoteTUIThreadMessagesFromThread) route both local and remote resume through it.",
+    "app/interactive_resume_items.go pairs persisted function_call/tool_output items by call id and app/remote_resume_items.go adapts app-server thread items, so an interrupted, declined or failed call keeps its last known status without inventing a completed state. tui/history_cell/dynamic.go bounds the compact row to a three-line tail preview with a hidden-line count while the transcript and raw views retain arguments and full output; tui/history_cell/patches.go carries the patch:<id> activity identity and resume strips the duplicate \"Moved to:\" diff annotation; tui/history_text.go filters untrusted control characters while keeping SGR styling and OSC-8 links.",
+    "Verified: go test ./app -run \"TestSessionMessages|TestRemoteThreadMessages|TestInteractiveSessionMessages\" -count=1; go test ./tui -run \"TestSanitizeHistoryText\" -count=1; go test ./tui/history_cell -run \"TestDynamicToolCall|TestPatchHistoryCell\" -count=1; go test ./app ./tui/... -count=1 — all pass."
    ]
   },
   {
@@ -17065,9 +17087,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 6/14; needs review: consolidate_cells, insert_cell, is_scrolled_to_bottom, replace_cells, set_history_state"
+    "The interactive transcript overlay is its own module in Go: tui/chatwidget/transcript_overlay.go owns rendering, scrolling, find, disclosure and mouse selection, matching the Rust split of pager_overlay::transcript (#46719). Callers (tui/tea model/overlay wiring) only drive it.",
+    "Verified: go test ./tui/chatwidget -run 'TestTranscriptOverlay' -count=1 — pass (12 tests)."
    ]
   },
   {
@@ -17077,9 +17100,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 2/7; needs review: LayoutCache, TextLayout, TextRow, begin_frame, with_leading_separator"
+    "Cache transcript layouts across measurement and rendering (#46720). tui/tea/model.go keeps a transcriptMessageCache per message with a transcriptLayoutCacheEntry (content, ranges, painted rows) validated by state pointer plus MessagesRevision and an expandedMessagesKey fingerprint, so a streamed frame reuses the previous layout instead of re-rendering the thread; transcriptSimpleLayoutHit is the fast path and streaming/resize invalidate the entry.",
+    "Verified: go test ./tui/tea -run '^(TestTranscriptViewportRowsMatchContent|TestTranscriptScrollAnchorFollowsVisibleLineLikeRust|TestCompletedStreamKeepsReaderTopLineLikeRust)$' -count=1 — pass. The 20k-message frame budget is opt-in behind the stability build tag (go test -tags stability ./tui/tea -run TestUIFrameRenderLargeTranscript)."
    ]
   },
   {
@@ -17089,9 +17113,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 11/30; needs review: LayoutCache, TextLayout, TextRow, begin_frame, ensure_entry_visible"
+    "Anchor transcript scrolling to entries and bound viewport rendering (#46721). tui/tea/transcript_scroll_anchor.go records the first non-blank visible line plus its offset and restores the reader's top row after inserted rows, clampTranscriptOffset bounds the viewport, and the viewport renders only the visible window (transcript_perf_bench_test keeps rows equal to the content slice).",
+    "Verified: go test ./tui/tea -run '^(TestTranscriptScrollAnchorFollowsVisibleLineLikeRust|TestCompletedStreamKeepsReaderTopLineLikeRust|TestTranscriptViewportRowsMatchContent)$' -count=1 — pass."
    ]
   },
   {
@@ -17113,9 +17138,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 6/17; needs review: NativeHistory, absorb_activity_detail, cancel_older_history_page, finish_dynamic_activity, flush_native_history"
+    "Dynamic tool activity renders in place without disturbing history order (#46731). tui/history_cell/dynamic.go renders a bounded preview with full arguments and output in detailed/raw views, and tui/tea/dynamic_tools.go binds each dynamic tool call to its original transcript row: metadata for a later-discovered thread folds into the root row, removed tombstones are respected, and reasoning stays in its original position relative to the group.",
+    "Verified: go test ./tui/tea -run '^TestDynamicTool' -count=1 (5 tests) and go test ./tui/tea -run '^TestComputerActivityKeepsReasoningInOrderLikeRust$' -count=1 — pass."
    ]
   },
   {
@@ -17125,9 +17151,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 31/106; needs review: CellPresentation, CopyStatus, JumpTarget, LogicalLine, OverlayInput"
+    "Selection and copying in the transcript viewer. tui/chatwidget/transcript_overlay.go implements mark/anchor selection with character, word and line motions, preferred-column tracking, Shift-click extension, mouse drag, find integration and highlighting; copy goes through the pager copy path (ctrl+space start selection, then copy), matching Rust's transcript_view selection model.",
+    "Verified: go test ./tui/chatwidget -run '^TestTranscriptSelection' -count=1 — pass (7 tests), plus the mouse-drag and Shift-click cases in tui/chatwidget/transcript_select_like_rust_test.go."
    ]
   },
   {
@@ -17137,9 +17164,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 2/30; needs review: ComposerRenderOptions, CopyFeedback, FollowControl, SessionStartConfig, TranscriptFooter"
+    "The interactive transcript is integrated into the alternate-screen TUI (#46733). tui/tea/model.go carries fullscreenTranscript (default on, settable from /tui-mode) and switches View().AltScreen on for the owned transcript; the pager overlay in tui/chatwidget/transcript_overlay.go then owns scrolling, find, disclosure and selection while the overlay is open, and closing it returns to the chat layout with scroll position and follow state preserved.",
+    "Verified: go test ./tui/tea -run '^(TestModelTranscriptOverlayOpensScrollsAndCloses|TestModelTranscriptOverlayPreservesScrollAndFollowsTail|TestModelTranscriptOverlayExpandsHistoryRawText|TestModelRawCommandTogglesScrollback)$' -count=1 — pass."
    ]
   },
   {
@@ -17161,9 +17189,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "partial",
    "evidence": [
-    "Partial symbol coverage 3/22; needs review: BrowsingOrigin, SuppressedHeader, TranscriptBookmark, bookmark, browsing_details"
+    "Round 1400 (implementation): the core browsing loop now matches #46739. tui/tea/backtrack.go records a transcriptBrowsingOrigin before the first Escape returns a paused owned viewport to latest, opens browsing in compact presentation, and restores the owned scroll offset, or an existing overlay's YOffset and detailed presentation, when Escape cancels. tui/tea/model.go routes browsing keys explicitly: Left/Right move prompts, h/l are aliases only when the pager has not claimed them, Enter rewinds, Escape cancels, and the configured global.open_transcript action (including two-stroke chords and a remapped key) toggles compact/detailed cells without closing the preview. The overlay footer switches to Browsing plus responsive scroll/prompts/details/rewind/back hints, and tui/chatwidget/transcript_overlay.go exposes SetYOffset for bookmark restore. tui/tea/transcript_follow_control.go adds the #46739 contextual composer tips in unused gap space: the tip rotates by prompt count through @ mentions, find-transcript with the configured key, /copy, and selection/copy, and yields to drafts, running turns, dialogs, selection/search, non-following viewports, narrow widths, and tui.show_tooltips=false.",
+    "Remote safety: app/prompt_edit.go rejects a prompt carrying local image paths or leading / or ! before any remote request, returning tea.UnsafePromptRestoreError with Rust's message; tea shows the error without repopulating the composer instead of using the ordinary revert-failure restore path.",
+    "Regression coverage: tui/tea/prompt_browsing_like_rust_test.go covers compact details, in-place toggle, h/l, owned and inline bookmark restoration, remapped open_transcript chords, footer widths, and unsafe remote restoration; tui/tea/composer_hints_like_rust_test.go covers the tip rotation/settings/draft/width gates; app/prompt_edit_test.go covers the remote safety guard. Existing startup/turn-tip tests now distinguish contextual composer tips from startup and turn tips. Verified with go test ./tui/chatwidget ./tui/tea -count=1, go test ./app -count=1, go build ./..., and go vet ./tui/tea ./tui/chatwidget ./app.",
+    "Residual: Go still keeps the whole local transcript resident and has no initial-history budget or older-history hydration callback, so Rust's three-screenful/item-scan cap, loading older prompts during browsing, and selected-prompt preservation across pagination have no carrier. Rewind also resolves by user ordinal rather than a cloned cell identity, and the overlay browsing view relies on the highlighted prompt rather than a separate pinned prompt-header row."
    ]
   },
   {
@@ -17185,9 +17216,9 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "Partial symbol coverage 8/30; needs review: OwnedStartupLayout, StartupPresentation, StartupScreen, bind_submission, bottom_area"
+    "Round 1400 (audit): Go never exposes Rust's pre-session startup draft window. The embedded TUI creates its local thread before Bubble Tea starts and stores the id in State (app/interactive.go interactiveStartLocalTUIThread then state.SetThreadID before codextea.Run), so a draft cannot exist while a session is still being created. The remote TUI loads settings before its first frame and creates the thread lazily from the first submitted turn (app/remote_tui.go runInteractiveRemoteTUI and runInteractiveRemoteTurn), while a failed replacement-thread start returns the exact prompt, structured elements, attachments, and mention bindings through NewSessionStartFailedMsg (tui/tea/new_session_start_failure.go), covered by new_session_start_failure_like_rust_test.go. Rust's StartupScreen/OwnedStartupLayout/bind_submission stage therefore has no Go carrier; the Go composer's existing retry path is the applicable startup-failure contract."
    ]
   },
   {
@@ -17209,9 +17240,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 15/39; needs review: AnimationEnd, COMPLETION_FADE, ComposerState, EXTENT, EmptyStateAnimation"
+    "Animated Codex welcome art on fresh conversations and onboarding. tui/tea/welcome_blossom.go renders the settled fullscreen welcome animation (Rust #48513 supersedes the #46752 logo frames), is gated on eligibility (fresh thread, animations enabled, not suppressed, size), replays on click, and yields to centered dialogs; tui/onboarding/welcome.go keeps the onboarding animation behind ShouldShowWelcomeAnimation/WelcomeLines.",
+    "Verified: go test ./tui/tea -run 'TestFreshFullscreenShowsSettledBlossomLikeRust|TestWelcomeBlossomEligibilityLikeRust|TestWelcomeBlossomClickReplaysLikeRust' -count=1 and go test ./tui/onboarding -run 'TestWelcomeStateAndAnimationBreakpoint' -count=1 — pass."
    ]
   },
   {
@@ -17235,9 +17267,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Reduced motion is respected across the voice UI (#46835). tui/bottom_pane/voice_strip.go drops the meter histories and uses a static loading glyph when reduced motion is on, keeping the strip height and control layout stable; tui/tea/model.go forwards the setting.",
+    "Verified: go test ./tui/bottom_pane -run 'TestVoiceStrip' -count=1 (10 tests) and go test ./tui/tea -run '^(TestVoiceLoadingGlyphHonoursReducedMotion|TestVoiceStripLoadingGlyphUsesSharedMotionFramesLikeRust|TestModelVoiceStripRespectsReducedMotionLikeRust)$' -count=1 — pass."
    ]
   },
   {
@@ -17355,9 +17388,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "not_applicable",
    "evidence": [
-    "Partial symbol coverage 2/6; needs review: SelectionUnit, click_count, from_clicks, is_copy_key"
+    "Pure Rust refactor: extracts shared text-selection helpers so the transcript and composer reuse one module. Go has no shared Rust module to split; the two surfaces already share helper functions in tui/tea (rendered_selection.go for app-owned regions, composer_selection.go for the composer) and tui/chatwidget selectMode for the transcript, with no behavioural change to port.",
+    "Related behaviour is covered by go test ./tui/tea -run 'TestComposerSelection|TestRenderedSelection' -count=1 and go test ./tui/chatwidget -run '^TestTranscriptSelection' -count=1 — pass."
    ]
   },
   {
@@ -17367,9 +17401,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/13; needs review: MouseSelection, composer_selection_for_copy, delete_mouse_selection, end_composer_drag, end_mouse_drag"
+    "Mouse selection and editing in the fullscreen composer. tui/tea/composer_selection.go (Rust anchor #53753, which carries #46858's behaviour forward) tracks a rune-level selection across wrapped rows, copies with ctrl+insert / ctrl+c / confirmed right-click, replaces the selection on the next edit, deletes it with backspace, and clears on external edit or focus loss.",
+    "Verified: go test ./tui/tea -run 'TestComposerCtrlInsertCopiesLikeRust|TestComposerSelectionCopiesAndTypingReplacesLikeRust|TestComposerSelectionBackspaceDeletesLikeRust|TestComposerSelectionCtrlCCopiesLikeRust|TestComposerRightClickCopiesAndClearsOnlyWhenConfirmedLikeRust|TestComposerRightClickOutsideSelectionFallsThroughLikeRust|TestComposerSelectionMapsWrappedRowsLikeRust|TestComposerSelectionClearsOnExternalEdit|TestComposerSelectionClearsOnFocusLossLikeRust' -count=1 — pass (9 tests)."
    ]
   },
   {
@@ -17415,9 +17450,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 4/14; needs review: activate_control, chat_has_details, control_available, help_lines, help_shortcut_available"
+    "Round 1400 (implementation): matched #46863's fixed Usage chrome. tui/analytics/dashboard.go replaces the old per-panel titles with AnalyticsSectionTabLabel (Overview, Usage/Tokens, Credits, Messages, Plugins, Skills, Chats) and uses it for overview card titles; tui/analytics/panels.go stops repeating the section heading, grouping, model filter, and rule inside the maximized body; tui/analytics/summary.go removes the inline Daily/Weekly/Cumulative selector now that it lives in the fixed controls. tui/tea/analytics_dashboard.go renders the Rust layout: Usage · plan · account heading, one filled tab row, rule, a controls area reserved at two rows for inner width >= 100 and three otherwise, the report body, and exactly two footer hint rows. The controls show r 7d/30d with the width-dependent date interval, g grouping, m model, s chat sort metric, the overview Dashboard focus action, and Updated · timestamp; loading or report errors no longer move the tab row or footer. showHelp/helpScroll implement the scrollable ? screen with an independent offset, and closing it restores the section, cursor, expanded detail, report scroll offset, and section range. analyticsControlAvailable is shared by key dispatch, painted controls, and help, while analyticsHelpShortcutAvailable leaves ? to a configured list binding when that key is already claimed. The PlanWindow control is not applicable to the Go carrier because Go has no AnalyticsSectionPlan; plan history remains the separate /usage plan surface.",
+    "Regression coverage: tui/tea/analytics_help_like_rust_test.go covers independent help scrolling and state preservation, configured ? precedence, fixed tabs/controls/footer rows across a failed report, cross-year numeric range dates with model/update metadata, narrow help wrapping, and zero-credit help visibility following the expanded-detail gate. tui/analytics/dashboard_like_rust_test.go and summary_like_rust_test.go pin compact tab labels, absence of duplicate panel chrome, and the moved Summary view selector; the existing analytics navigation/chat/summary tests were updated to the new geometry. Verified with go test ./tui/analytics ./tui/tea -count=1 and go build ./... ."
    ]
   },
   {
@@ -17547,9 +17583,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Activity charts honour the effective terminal color level (#46897). tui/analytics/activity_chart palette selection takes the resolved color profile (supports-color semantics), falls back at low color, ignores ANSI when measuring display width, and keeps styled rows inside the card at narrow widths.",
+    "Verified: go test ./tui/analytics -run '^(TestActivityChartPaletteUsesEffectiveTerminalColorLevelLikeRust|TestActivityChartPaletteFallsBackAtLowColorLikeRust|TestAnalyticsDisplayWidthIgnoresANSILikeRust|TestAnalyticsSummaryActivityPaletteHonorsColorLevelLikeRust|TestAnalyticsDashboardNarrowWidthKeepsStyledRowsInsideCardLikeRust|TestAnalyticsSummaryUsesSharedActivityPaletteLikeRust)$' -count=1 — pass (6 tests)."
    ]
   },
   {
@@ -17583,9 +17620,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "/status identifies local background servers (#46905). tui/state.go carries the server origin and tui/tea/model.go renders the Server row with its local/background identity, matching the Rust status card.",
+    "Verified: go test ./tui/tea -run '^(TestModelStatusServerRowLikeRust)$' -count=1 — pass."
    ]
   },
   {
@@ -18033,9 +18071,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Deprecation notices are deduplicated in the TUI transcript (#47065). protocol/exec_events.go and app/remote_tui.go deliver deprecation messages once per thread, tui/tea/deprecation_notice.go drops duplicates already retained in history, and a rebuilt thread can show the notice again.",
+    "Verified: go test ./app -run '^(TestRemoteDeprecationNoticeDeliveryDedupesLikeRust|TestRemoteDeprecationNoticeShowsAgainAfterThreadRebuildLikeRust|TestLocalStartupDeprecationMessagesReachTUIOnceLikeRust|TestInteractiveStartupMessagesPrependDeprecationsLikeRust)$' -count=1 and go test ./tui/tea -run '^(TestDeprecationNoticesDeduplicateRetainedHistoryLikeRust)$' -count=1 — pass (5 tests)."
    ]
   },
   {
@@ -18435,9 +18474,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "tui/chatwidget/transcript_overlay.go now records dragOriginRow and a sticky dragMovedVertically when a drag starts, and autoscrollDuringDrag scrolls one row when an active, vertically moved drag reaches the top body row (Y <= 1) or the bottom body row (Y >= height-1). Horizontal drags along an edge row never scroll because autoscroll requires the pointer to have left its origin row, and the origin row survives wheel scrolling (wheel handling never resets drag state), matching Rust #47137's tick_selection filter.",
+    "Tests: tui/chatwidget/transcript_selection_autoscroll_like_rust_test.go covers horizontal edge drags not scrolling, vertical top-edge autoscroll (one row per motion event), the sticky vertical flag after returning to the origin row, and bottom-edge autoscroll toward newer content. go test ./tui/chatwidget -count=1 passes.",
+    "Note: Rust redraws at tick cadence, so holding the pointer still at an edge keeps scrolling; Go scrolls once per mouse motion event because the overlay has no selection timer. The seeded behaviour (guard + edge scrolling) matches."
    ]
   },
   {
@@ -18579,9 +18620,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Forking conversations locked by another app in the TUI (#47185). Fork work runs off the update loop (tui/tea/read_only_thread.go, session_picker.go, model.go), keeps the draft, queued prompt, image and steers while pending, swallows repeat triggers, and survives an app-server disconnect.",
+    "Verified: go test ./tui/tea -run '^(TestRealTerminalLockedForkPaintsProgressBeforeAnsweringLikeRust|TestRealTerminalSlashForkPaintsProgressLikeRust|TestRealTerminalForkSwallowsKeysWhilePendingLikeRust|TestRealTerminalQuitDuringForkLikeRust|TestRealTerminalForkSurvivesAppServerDisconnectLikeRust|TestRealTerminalAgentsOverviewForkLikeRust|TestLockedConversationForkPreservesDraftAndNoticeLikeRust|TestLockedConversationForkFailureKeepsLockedViewAndDraftLikeRust|TestLockedConversationForkInProgressBlocksKeysLikeRust|TestLockedForkRetainsQueuedPromptDraftImageAndSteersLikeRust|TestLockedForkFailureKeepsDraftImageLikeRust|TestLockedForkCommandOutlivesDroppedModelLikeRust|TestSlashForkRunsOffUpdateLoopLikeRust|TestPendingForkSwallowsRepeatTriggerLikeRust|TestUnlockedForkFailureKeepsCurrentThreadLikeRust)$' -count=1 — pass (15 tests)."
    ]
   },
   {
@@ -18947,9 +18989,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Escape navigation in read-only agent sessions (#47320). tui/tea/backtrack.go and read_only_thread.go close the transcript overlay without backtracking, ignore Esc from an external writer, and restore the retained draft on retry.",
+    "Verified: go test ./tui/tea -run '^(TestReadOnlyTranscriptOverlayEscapeClosesWithoutBacktrackLikeRust|TestShouldHandleBacktrackEscRejectsExternalWriterLikeRust|TestReadOnlyRetryRestoresRetainedDraftLikeRust)$' -count=1 — pass (3 tests)."
    ]
   },
   {
@@ -19080,9 +19123,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+    "Move the activity inspection hint into keyboard shortcut help (#47338). tui/tea/shortcut_overlay.go now resolves the Session rows for \"Inspect activity\" (global.focus_activity) and \"Voice\" (chat.toggle_voice) from the live keymap through shortcutOverlayGroups/resolveShortcutOverlayEntry, so a remapped action shows the configured label and an unbound action disappears; Go's footer already had no passive activity hint, and the focused-activity controls (previous/next/details/back) still shorten to the available width.",
+    "New test: tui/tea/shortcut_overlay_activity_hint_like_rust_test.go (default f4/f8, remapped f7/ctrl+v, unbound rows hidden). go test ./tui/tea -run 'TestShortcutOverlay' -count=1 passes."
    ]
   },
   {
@@ -20962,9 +21006,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 1/6; needs review: AppServerFileSystem, fetch_feedback_upload, fs_create_directory_all_path, fs_read_file_path, fs_remove_path"
+    "TUI client logs are included in diagnostic uploads (#47889). app/tui_client_logs.go captures the client log window and restores the previous handler, app/remote_feedback_logs.go stages a bounded tail only with log consent, and tui/tea/feedback.go plus bottom_pane/feedback_view.go surface the attachment.",
+    "Verified: go test ./app -run 'TestTUIClientLog|TestStageRemoteFeedbackClientLogs' -count=1 — pass (8 tests)."
    ]
   },
   {
@@ -23361,9 +23406,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Partial symbol coverage 3/6; needs review: next_batch, selectable_indices, show_more_agents_overview"
+    "History pagination in the agent command center (#49106). tui/agents_overview/discovery.go and tui/tea/agents_overview_discovery.go page further history with a Show more row, keep the selection stable across pages, and end paging when the server reports no more entries.",
+    "Verified: go test ./tui/agents_overview -run '^(TestAgentsOverviewHistoryPaginationLikeRust|TestAgentsOverviewShowMoreSelectionLikeRust|TestAgentsOverviewShowMoreEndsPagingLikeRust)$' -count=1 and go test ./tui/tea -run '^(TestAgentsOverviewShowMoreLikeRust)$' -count=1 — pass (4 tests)."
    ]
   },
   {
@@ -31050,9 +31096,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "blocked_precondition",
+   "status": "complete",
    "evidence": [
-    "Round 758: keymap specs accept super and normalize cmd/command; canonical modifier ordering, platform labels, chord validation, and editor defaults are implemented. Precondition missing: Bubble Tea v1.3.10 (the latest published v1 release at audit time) has no Super modifier in KeyMsg and its input parser drops unknown CSI-u modifier events, so live Command/Super chords cannot be captured or dispatched. Completing this requires a Bubble Tea fork/upstream release that preserves Super in KeyMsg or a custom input-reader replacement."
+    "Round 1317+ Bubble Tea v2 migration: the internal key model keeps the v2 Super modifier (keymsg.Key.Super/Mod), ToTea restores ModSuper when a key is forwarded to Bubbles components, and keySpecFromKeyMsg emits super-* specs in ctrl-alt-shift-super order, so Command/Super chords resolve through the keymap runtime. The keymap inspector reports modifiers=super and the detected label super+a. Covers runes, arrows, home/end and control chords (super+a, super+left, alt+super+a, ctrl+super+k); NormalizeKeybindingSpec still accepts cmd/command/super spellings.",
+    "Test: go test ./tui/tea -run 'TestSuperModifierRuntimeLikeRust' -count=1; go test ./tui/tea -count=1 passes."
    ]
   },
   {
@@ -36180,11 +36227,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "Round 1246: Go now carries Rust #57175's core configuration-server integration. app/config_server_login.go adds newConfigServerAuthManager (None unless the server declares OAuth), ensureConfigServerLogin (reuse the stored grant, sign in only on auth.ErrGatewayLoginRequired, exactly like ensure_config_server_login), logoutConfigServer and loadManagedLoginConfig (reload with the config-server bundle applied). app/app.go runLogin signs into the required config server instead of ChatGPT for the browser and device-code flows and before storing an API key or access token, while `login status` never signs in; runLogout clears the config-server grant and reports success when either credential set was removed. doctor.Options.ManagedConfigLoader plus loadEffectiveConfigForDoctor make doctor report the managed bundle of the required server and fail the config.load check when the bundle is missing or came from another server; app injects the config-server loader at the doctor call site. Tests: app TestConfigServerAuthManagerRequiresOAuthLikeRust, TestConfigServerSignInIsReusedUntilLogoutLikeRust, TestConfigServerLoginWithoutServerIsNoopLikeRust; doctor TestConfigCheckAppliesRequiredConfigServerLikeRust, TestConfigCheckRejectsMismatchedConfigServerLikeRust, TestConfigCheckRequiresAppliedConfigServerLikeRust. go test ./app ./doctor ./config pass.",
-    "Round 1269 closes the app-server half: config.Config now carries the managed-configuration loader it was resolved from (Config.CloudConfigLoader) and app-server startup hands it to the runtime router (RuntimeRouterOptions.CloudConfigLoader -> ConfigService.SetCloudConfigLoader). ConfigService.Read/ReadDefaults re-read requirements.toml and the app-server managed config path before every read (refreshManagedConfigFromFiles, skipped when a host installed its own SetManagedLayers stack) and merge the loader's latest config-server bundle and its enterprise requirements into each read (applyCloudConfigBundle), so a rewritten managed file or a refreshed fetched bundle is observable without restarting the app-server. Tests: config TestConfigServiceReadPicksUpRewrittenManagedConfigLikeRust, TestConfigServiceReadReloadsManagedRequirementsLikeRust, TestConfigServiceSetManagedLayersWinsOverFileRefreshLikeRust, TestConfigServiceReadAppliesLatestCloudConfigBundleLikeRust, TestConfigServiceReadWithoutCloudConfigLoaderKeepsValuesLikeRust; appserver TestRuntimeRouterConfigServiceKeepsManagedConfigFreshLikeRust, TestRuntimeRouterConfigServiceAppliesLatestCloudConfigBundleLikeRust; go test ./config ./appserver pass.",
-    "Residual: Rust also signs into the config server during interactive TUI startup (tui/src/startup_orchestration.rs, ensure_config_server_login), which belongs to the parallel TUI agent line."
+    "Config-server policies are integrated with startup and authentication (#57175). app/config_server_login.go owns the grant lifecycle (newConfigServerAuthManager, ensureConfigServerLogin, logoutConfigServer, loadManagedLoginConfig); `app login` signs into the required config server for browser, device-code, API-key and access-token flows, `login status` never signs in, and `logout` clears the grant. config.Config carries its managed loader and ConfigService re-reads requirements plus the latest bundle on every read; doctor rejects a missing or mismatched server bundle.",
+    "TUI startup: app/config_server_login_tui.go adds ensureInteractiveStartupConfigServerLogin, the Go counterpart of Rust startup_orchestration::ensure_config_server_login. runInteractiveTUI calls it before the terminal is initialized, so an embedded interactive launch whose effective config requires a customer-hosted server completes the OAuth grant first and prints the sign-in URL to stderr; launches without a required server skip it. Daemon-attached sessions keep the grant on the server, which performs the same login during its own startup.",
+    "Tests: app/config_server_login_tui_like_rust_test.go (required server triggers login with the loaded requirements and prints the URL; no server skips), plus the existing TestConfigServerAuthManagerRequiresOAuthLikeRust, TestConfigServerSignInIsReusedUntilLogoutLikeRust, TestConfigServerLoginWithoutServerIsNoopLikeRust, doctor TestConfigCheck*ConfigServerLikeRust and config/appserver managed-refresh tests. go test ./app -count=1 passes (29.6s)."
    ]
   },
   {
@@ -38709,10 +38756,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "tui/tea/composer_paste.go:23: insertComposerPaste inserts pasted text verbatim and never probes it as an image path, so Rust's regular-file guard has no Go counterpart.",
-    "update/plan_2026_11_01_round1267.md: Go attaches images only through the clipboard shortcut, so pasted-path image detection (#57774) is still missing in the TUI lane (tui/tea)."
+    "tui/tea/composer_paste_image.go implements Rust's ChatComposer::handle_paste_image_path (#57774): a pasted single path (trimmed/quoted, file:// URL, Windows/UNC, or shell-escaped token) is stat'ed, and only a regular file is decoded for image dimensions (png/jpeg/gif/bmp/tiff/webp) before becoming a [Image #N] attachment with a trailing space. Non-regular files (directories, FIFOs, devices, sockets) and non-image files fall through to plain text so probing cannot block the input loop.",
+    "Test: go test ./tui/tea -run 'TestPastedImagePath|TestNormalizePastedPath' -count=1."
    ]
   },
   {
@@ -40168,9 +40215,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Round 1194: registered when the alignment anchor moved from cbe16d525c2d7362fc3d4726143288e932905daa to 67f0994b532b8740f14b5b738af7b7b2a915b1d6; not audited yet."
+    "Exposed leading bangs stay literal in the chat composer (#58412). tui/tea/composer_prefix.go tracks the exposed prefix so deleting into it leaves the bang literal, and composer_paste.go/history_search.go keep recall, vim delete and Tab submit consistent with the Rust composer.",
+    "Verified: go test ./tui/tea -run '^(TestDeletingPrefixKeepsBangLiteralLikeRust|TestDeletingWholePrefixLeavesNoBangLikeRust|TestTypedLeadingBangStartsShellModeLikeRust|TestLeadingSpaceBangStaysLiteralLikeRust|TestHistoryRecallKeepsExposedBangLiteralLikeRust|TestHistorySearchDraftRestoresSavedBangModeLikeRust|TestVimDeleteKeepsExposedBangLiteralLikeRust|TestTabSubmitsLiteralBangDraftLikeRust)$' -count=1 — pass (8 tests)."
    ]
   },
   {
@@ -40192,9 +40240,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Round 1194: registered when the alignment anchor moved from cbe16d525c2d7362fc3d4726143288e932905daa to 67f0994b532b8740f14b5b738af7b7b2a915b1d6; not audited yet."
+    "Alternative sign-in methods are grouped in an onboarding submenu (#58427). tui/onboarding/auth.go renders the grouped picker, auth_flow.go opens the submenu, and activation_key_guard.go blocks a held Enter from immediately activating the nested choice.",
+    "Verified: go test ./tui/onboarding -run '^(TestAuthPickerGroupsAlternativesLikeRust|TestAuthSubmenuRenderLikeRust|TestAuthActivationKeyGuardBlocksHeldEnterLikeRust|TestAuthActivationGuardClearsOnOtherKeyLikeRust)$' -count=1 — pass (4 tests)."
    ]
   },
   {
@@ -40248,9 +40297,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Round 1194: registered when the alignment anchor moved from cbe16d525c2d7362fc3d4726143288e932905daa to 67f0994b532b8740f14b5b738af7b7b2a915b1d6; not audited yet."
+    "Interactive controls and refreshed inline visualization styles (#58436). tui/inline_visualization_controls.go embeds executable runtime controls, tui/inline_visualization.go sets a CSP that allows the injected runtime while rejecting redirected and symlinked caches, and scripts/inline_visualization_csp_ab.mjs is a real-Chrome A/B harness for the policy.",
+    "Verified: go test ./tui -run '^(TestInlineVisualizationViewerEmbedsInteractiveControlsLikeRust|TestInlineVisualizationViewerCSPABInRealChromeLikeRust)$' -count=1; the full ./tui package run also covers the embed/reject variants — pass."
    ]
   },
   {
@@ -40284,9 +40334,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Round 1194: registered when the alignment anchor moved from cbe16d525c2d7362fc3d4726143288e932905daa to 67f0994b532b8740f14b5b738af7b7b2a915b1d6; not audited yet."
+    "Viewed image paths are clickable in the TUI (#58446). tui/file_hyperlinks.go only links a local regular image (rejecting symlinked non-images and junction ancestors, and staying plain for remote/SSH workspaces), tui/history_cell/hyperlink_lines.go keeps links through truncation and wrapping, and app/remote_tui.go preserves the link when history is reloaded.",
+    "Verified: go test ./tui -run '^(TestViewedImageDestinationRequiresLocalImageFileLikeRust|TestViewedImageDestinationRejectsSymlinkedNonImageLikeRust|TestOSC8FileHyperlinkSerializesLocalFilesLikeRust|TestViewedImageDestinationRejectsJunctionAncestorLikeRust)$' -count=1, go test ./tui/history_cell -run '^(TestViewedImageCompactRowLinksPathLikeRust|TestViewedImageCompactRowClipsLinkWhenTruncatedLikeRust|TestViewedImageTranscriptWrapsLinkedPathLikeRust|TestClipHyperlinkLineDropsLinksOutsideVisibleTextLikeRust|TestRenderHyperlinkLinesKeepsWebLinksLikeRust)$' -count=1, go test ./tui/tea -run '^(TestViewedImageRowLinksLocalFileLikeRust|TestViewedImageRowStaysPlainForRemoteWorkspaceLikeRust|TestViewedImageRowStaysPlainOverSSHLikeRust|TestViewedImageRowSkipsMissingImageLikeRust)$' -count=1 and go test ./app -run '^(TestRemoteHistoryViewedImageRowLinksLocalFileLikeRust)$' -count=1 — pass (14 tests)."
    ]
   },
   {
@@ -40320,9 +40371,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "audit_pending",
+   "status": "complete",
    "evidence": [
-    "Round 1194: registered when the alignment anchor moved from cbe16d525c2d7362fc3d4726143288e932905daa to 67f0994b532b8740f14b5b738af7b7b2a915b1d6; not audited yet."
+    "Cross-backend session switching in the TUI (#58457). app/backend_switch.go prepares a switch through the owning connection, tui/tea/backend_switch.go records ownership, blocks switching during an active turn, keeps the current session when preparation fails, and defers background requests until the display catches up.",
+    "Verified: go test ./tui/tea -run '^(TestCrossBackendResumeAdoptsOwningBackendLikeRust|TestBackendSwitchPreparationFailureKeepsCurrentSessionLikeRust|TestBackendSwitchBlockedDuringActiveTurnLikeRust|TestBackendSwitchWithoutHostIsUnavailableLikeRust|TestRecordedOwnershipWinsOverStalePickerStampLikeRust|TestBackgroundBackendRequestWaitsForDisplayLikeRust)$' -count=1 and go test ./app -run '^(TestInteractiveBackendSwitchPreparesThroughOwningConnectionLikeRust|TestInteractiveBackendSwitchPropagatesPreparationFailureLikeRust)$' -count=1 — pass (8 tests)."
    ]
   },
   {

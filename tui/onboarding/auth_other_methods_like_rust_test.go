@@ -6,15 +6,15 @@ import (
 	"testing"
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	"codex_go/tui/keymsg"
 )
 
-func enterKey() bubbletea.KeyMsg {
-	return bubbletea.KeyMsg{Type: bubbletea.KeyEnter}
+func enterKey() keymsg.KeyMsg {
+	return keymsg.KeyMsg{Type: keymsg.KeyEnter}
 }
 
-func runeKey(r rune) bubbletea.KeyMsg {
-	return bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{r}}
+func runeKey(r rune) keymsg.KeyMsg {
+	return keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{r}}
 }
 
 // TestAuthPickerGroupsAlternativesLikeRust mirrors Rust #58427
@@ -47,7 +47,7 @@ func TestAuthPickerGroupsAlternativesLikeRust(t *testing.T) {
 		t.Fatalf("submenu highlight = %s, want api key", model.highlighted)
 	}
 
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEsc})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyEsc})
 	if model.otherMethodsOpen || model.state != SignInPickMode {
 		t.Fatalf("esc left submenu open=%v state=%s", model.otherMethodsOpen, model.state)
 	}
@@ -66,7 +66,7 @@ func TestAuthSubmenuRenderLikeRust(t *testing.T) {
 		GcpAllowed:     true,
 	})
 	model.highlighted = AuthChoiceOtherMethods
-	main := model.View()
+	main := model.viewString()
 	if !strings.Contains(main, "Sign in another way") {
 		t.Fatalf("main menu is missing the submenu entry:\n%s", main)
 	}
@@ -75,7 +75,7 @@ func TestAuthSubmenuRenderLikeRust(t *testing.T) {
 	}
 
 	model.Update(enterKey())
-	submenu := model.View()
+	submenu := model.viewString()
 	for _, want := range []string{"Sign in another way", "Use an OpenAI API key", "Use Google Cloud Vertex AI", "Press esc to go back"} {
 		if !strings.Contains(submenu, want) {
 			t.Fatalf("submenu is missing %q:\n%s", want, submenu)

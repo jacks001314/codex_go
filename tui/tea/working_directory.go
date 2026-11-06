@@ -9,7 +9,7 @@ import (
 	codextui "codex_go/tui"
 	historycell "codex_go/tui/history_cell"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 )
 
 // Working-directory slash commands (Rust #38894): /cd [path] changes an idle

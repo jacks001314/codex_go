@@ -17,7 +17,7 @@ func TestRuntimeWarningEventCountsInFooterAndViewerLikeRust(t *testing.T) {
 
 	updated, _ := model.Update(WarningEventMsg{Message: fallbackMetadataWarningForTest})
 	model = updated.(*Model)
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "\u26a0 1 warning \u00b7 f2 to view") {
 		t.Fatalf("footer notice missing runtime warning:\n%s", view)
 	}
@@ -72,7 +72,7 @@ func TestRuntimeWarningEventCoalescesIntoStartupWindowLikeRust(t *testing.T) {
 	if !strings.Contains(entries[1].Details, "Model metadata for") {
 		t.Fatalf("second entry = %+v, want the model metadata warning", entries[1])
 	}
-	model.View()
+	model.viewString()
 	if got := model.warningDisplay.WarningCount(); got != 2 {
 		t.Fatalf("warning count = %d, want 2", got)
 	}

@@ -3,9 +3,8 @@ package tea
 import (
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 func TestSessionPickerCtrlELoadsTranscriptPreview(t *testing.T) {
@@ -23,12 +22,12 @@ func TestSessionPickerCtrlELoadsTranscriptPreview(t *testing.T) {
 	})
 
 	typeText(t, model, "/resume")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if model.modal == nil || model.modal.sessionPicker == nil {
 		t.Fatalf("resume picker not open: %#v", model.modal)
 	}
 
-	_, cmd := model.Update(key(bubbletea.KeyCtrlE))
+	_, cmd := model.Update(key(keymsg.KeyCtrlE))
 	if cmd == nil {
 		t.Fatal("expanding a row should request the transcript preview")
 	}
@@ -47,10 +46,10 @@ func TestSessionPickerCtrlELoadsTranscriptPreview(t *testing.T) {
 	}
 
 	// Collapsing and re-expanding reuses the cached preview.
-	if _, cmd := model.Update(key(bubbletea.KeyCtrlE)); cmd != nil {
+	if _, cmd := model.Update(key(keymsg.KeyCtrlE)); cmd != nil {
 		t.Fatal("collapsing should not request a preview")
 	}
-	if _, cmd := model.Update(key(bubbletea.KeyCtrlE)); cmd != nil {
+	if _, cmd := model.Update(key(keymsg.KeyCtrlE)); cmd != nil {
 		t.Fatal("a cached preview should not be re-requested")
 	}
 	if len(requested) != 1 {
@@ -70,8 +69,8 @@ func TestSessionPickerCtrlEPreviewFailureIsRecorded(t *testing.T) {
 		},
 	})
 	typeText(t, model, "/resume")
-	model.Update(key(bubbletea.KeyEnter))
-	_, cmd := model.Update(key(bubbletea.KeyCtrlE))
+	model.Update(key(keymsg.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyCtrlE))
 	runTeaCmd(t, model, cmd)
 	state, ok := model.modal.sessionPicker.TranscriptPreview("thread-1")
 	if !ok || state.Kind != codextui.TranscriptPreviewFailedState {

@@ -5,9 +5,10 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 func backendBannerTestModel(t *testing.T, banner *BackendBannerView, readErr error) (*Model, *[]BackendBannerAction) {
@@ -45,7 +46,7 @@ func TestModelBackendBannerRendersCopyAndCTAs(t *testing.T) {
 	if model.BackendBanner() == nil {
 		t.Fatal("banner was not installed by the startup read")
 	}
-	view := model.View()
+	view := model.viewString()
 	for _, want := range []string{
 		"Usage limit reached",
 		"Buy credits to keep working.",
@@ -93,8 +94,8 @@ func TestModelBackendBannerEscDismissesOnlyWhenDismissible(t *testing.T) {
 		Dismissible: false,
 	}, nil)
 	runTeaCmd(t, model, model.Init())
-	model.Update(key(bubbletea.KeyEsc))
-	if !strings.Contains(model.View(), "Persistent notice") {
+	model.Update(key(keymsg.KeyEsc))
+	if !strings.Contains(model.viewString(), "Persistent notice") {
 		t.Fatal("persistent banner was dismissed by esc")
 	}
 
@@ -103,9 +104,9 @@ func TestModelBackendBannerEscDismissesOnlyWhenDismissible(t *testing.T) {
 		Dismissible: true,
 	}, nil)
 	runTeaCmd(t, dismissible, dismissible.Init())
-	dismissible.Update(key(bubbletea.KeyEsc))
-	if strings.Contains(dismissible.View(), "Dismissible notice") {
-		t.Fatalf("dismissible banner did not close on esc:\n%s", dismissible.View())
+	dismissible.Update(key(keymsg.KeyEsc))
+	if strings.Contains(dismissible.viewString(), "Dismissible notice") {
+		t.Fatalf("dismissible banner did not close on esc:\n%s", dismissible.viewString())
 	}
 }
 
@@ -160,21 +161,21 @@ func TestModelBackendBannerDismissesOnNewTurn(t *testing.T) {
 		Dismissible: true,
 	}, nil)
 	runTeaCmd(t, model, model.Init())
-	_ = model.View() // the banner must render once before a new turn dismisses it
+	_ = model.viewString() // the banner must render once before a new turn dismisses it
 	model.composer.InsertString("keep going")
-	if _, cmd := model.Update(key(bubbletea.KeyEnter)); cmd != nil {
+	if _, cmd := model.Update(key(keymsg.KeyEnter)); cmd != nil {
 		t.Fatalf("submitting a prompt returned an unexpected command: %T", cmd)
 	}
-	if strings.Contains(model.View(), "Usage limit reached") {
-		t.Fatalf("dismissible banner survived a new turn:\n%s", model.View())
+	if strings.Contains(model.viewString(), "Usage limit reached") {
+		t.Fatalf("dismissible banner survived a new turn:\n%s", model.viewString())
 	}
 
 	persistent, _ := backendBannerTestModel(t, &BackendBannerView{Title: "Persistent notice"}, nil)
 	runTeaCmd(t, persistent, persistent.Init())
-	_ = persistent.View()
+	_ = persistent.viewString()
 	persistent.composer.InsertString("keep going")
-	persistent.Update(key(bubbletea.KeyEnter))
-	if !strings.Contains(persistent.View(), "Persistent notice") {
+	persistent.Update(key(keymsg.KeyEnter))
+	if !strings.Contains(persistent.viewString(), "Persistent notice") {
 		t.Fatal("persistent banner was dismissed by a new turn")
 	}
 }

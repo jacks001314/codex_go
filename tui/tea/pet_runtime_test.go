@@ -12,9 +12,10 @@ import (
 	"testing"
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 	pets "codex_go/tui/pets"
 )
 
@@ -41,7 +42,7 @@ func TestModelPetsSelectionLoadsAndRendersAmbientPet(t *testing.T) {
 	})
 
 	typeText(t, model, "/pets dewey")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 
 	if model.tuiPet != "dewey" {
@@ -53,7 +54,7 @@ func TestModelPetsSelectionLoadsAndRendersAmbientPet(t *testing.T) {
 
 	var output bytes.Buffer
 	model.petRuntime.setOutput(&output)
-	model.View()
+	model.viewString()
 	wrapper := &petOutputWriter{runtime: model.petRuntime}
 	if _, err := wrapper.Write([]byte("frame")); err != nil {
 		t.Fatalf("write: %v", err)
@@ -114,7 +115,6 @@ func TestModelPickerSelectionDoesNotAccumulateComposerRows(t *testing.T) {
 		bubbletea.WithContext(context.Background()),
 		bubbletea.WithInput(input),
 		bubbletea.WithOutput(&petOutputWriter{runtime: model.petRuntime}),
-		bubbletea.WithReportFocus(),
 	)
 
 	done := make(chan error, 1)
@@ -122,9 +122,13 @@ func TestModelPickerSelectionDoesNotAccumulateComposerRows(t *testing.T) {
 		_, err := program.Run()
 		done <- err
 	}()
+	// Bubble Tea v2 drops messages sent before Run's event loop starts, so wait
+	// for the program to take over the terminal before delivering the initial
+	// size (a real terminal reports it at startup).
+	time.Sleep(50 * time.Millisecond)
 	program.Send(bubbletea.WindowSizeMsg{Width: 90, Height: 24})
 	time.Sleep(20 * time.Millisecond)
-	program.Send(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{'1'}})
+	program.Send(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{'1'}})
 	time.Sleep(400 * time.Millisecond)
 	program.Quit()
 	_ = inputWriter.Close()
@@ -134,7 +138,7 @@ func TestModelPickerSelectionDoesNotAccumulateComposerRows(t *testing.T) {
 
 	terminal := newTestVirtualTerminal(90, 24)
 	terminal.WriteString(output.String())
-	if count := strings.Count(output.String(), "Ask Codex to do anything"); count != 1 {
+	if count := strings.Count(plainView(output.String()), "Ask Codex to do anything"); count != 1 {
 		t.Fatalf("model selection wrote the composer %d times, want exactly 1", count)
 	}
 	if count := strings.Count(terminal.Snapshot(), "Ask Codex to do anything"); count != 1 {
@@ -165,12 +169,12 @@ func TestModelPetsDisableClearsAmbientPetImage(t *testing.T) {
 	})
 
 	typeText(t, model, "/pets dewey")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 	if !model.petRuntime.installed() {
 		t.Fatal("pet should be installed")
 	}
-	model.View()
+	model.viewString()
 
 	var output bytes.Buffer
 	model.petRuntime.setOutput(&output)
@@ -181,7 +185,7 @@ func TestModelPetsDisableClearsAmbientPetImage(t *testing.T) {
 	}
 
 	typeText(t, model, "/pets off")
-	_, cmd = model.Update(key(bubbletea.KeyEnter))
+	_, cmd = model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 	if model.petRuntime.installed() {
 		t.Fatal("pet should be disabled")
@@ -287,7 +291,6 @@ func TestModelPetAnimationDoesNotAccumulateComposerRows(t *testing.T) {
 				bubbletea.WithContext(context.Background()),
 				bubbletea.WithInput(input),
 				bubbletea.WithOutput(&petOutputWriter{runtime: model.petRuntime}),
-				bubbletea.WithReportFocus(),
 			)
 
 			done := make(chan error, 1)
@@ -295,8 +298,9 @@ func TestModelPetAnimationDoesNotAccumulateComposerRows(t *testing.T) {
 				_, err := program.Run()
 				done <- err
 			}()
-			time.Sleep(20 * time.Millisecond)
-			program.Send(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+			time.Sleep(50 * time.Millisecond)
+			program.Send(bubbletea.WindowSizeMsg{Width: 90, Height: 24})
+			program.Send(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 			program.Send(petTickMsg{})
 			time.Sleep(500 * time.Millisecond)
 			program.Quit()
@@ -308,7 +312,7 @@ func TestModelPetAnimationDoesNotAccumulateComposerRows(t *testing.T) {
 			terminal := newTestVirtualTerminal(90, 24)
 			terminal.WriteString(output.String())
 			snapshot := terminal.Snapshot()
-			if count := strings.Count(output.String(), "Ask Codex to do anything"); count != 1 {
+			if count := strings.Count(plainView(output.String()), "Ask Codex to do anything"); count != 1 {
 				t.Fatalf("animation wrote the composer %d times, want exactly 1", count)
 			}
 			if count := strings.Count(output.String(), "\x1b7"); count < 2 {
@@ -352,15 +356,15 @@ func TestModelPetsUnsupportedTerminalShowsMessage(t *testing.T) {
 	state := codextui.NewState(&codextui.Options{Model: "gpt-5"})
 	model := NewModel(state, Options{Width: 90, Height: 24})
 	typeText(t, model, "/pets dewey")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	if cmd != nil {
 		t.Fatalf("unsupported terminal should not select pet, got cmd %#v", cmd)
 	}
 	if model.tuiPet != "" {
 		t.Fatalf("tuiPet should stay empty, got %q", model.tuiPet)
 	}
-	if !strings.Contains(model.View(), "Pets aren't available in this terminal") {
-		t.Fatalf("missing unsupported-terminal notice:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Pets aren't available in this terminal") {
+		t.Fatalf("missing unsupported-terminal notice:\n%s", model.viewString())
 	}
 }
 

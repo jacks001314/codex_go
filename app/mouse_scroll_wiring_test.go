@@ -1,14 +1,13 @@
 package app
 
 import (
+	mousemsg "codex_go/tui/mousemsg"
 	"fmt"
 	"math"
 	"os"
 	"regexp"
 	"strings"
 	"testing"
-
-	bubbletea "github.com/charmbracelet/bubbletea"
 
 	"codex_go/cli"
 	"codex_go/config"
@@ -103,11 +102,11 @@ func TestTUIMouseScrollSpeedFromEffectiveConfigLikeRust(t *testing.T) {
 	if before <= 0 {
 		t.Fatalf("initial transcript offset = %d, want a scrollable bottom", before)
 	}
-	model.Update(bubbletea.MouseMsg{Action: bubbletea.MouseActionPress, Button: bubbletea.MouseButtonWheelUp})
+	model.Update(mousemsg.MouseMsg{Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonWheelUp})
 	if got, want := model.TranscriptYOffset(), before-2; got != want {
 		t.Fatalf("configured wheel offset = %d, want %d (one wheel event moves `mouse_scroll_speed` rows)", got, want)
 	}
-	model.Update(bubbletea.MouseMsg{Action: bubbletea.MouseActionPress, Button: bubbletea.MouseButtonWheelDown})
+	model.Update(mousemsg.MouseMsg{Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonWheelDown})
 	if got, want := model.TranscriptYOffset(), before; got != want {
 		t.Fatalf("wheel-down offset = %d, want %d", got, want)
 	}

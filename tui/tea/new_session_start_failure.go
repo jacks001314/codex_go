@@ -63,7 +63,7 @@ func (m *Model) restoreSubmissionDraft(request SubmitRequest) {
 	m.clearComposerPasteWindow()
 	m.setComposerPrompt(request.Prompt)
 	m.restoreComposerTextElements(request.Prompt, request.TextElements)
-	m.composer.SetCursor(len(m.composer.Value()))
+	m.composer.SetCursorColumn(len(m.composer.Value()))
 	m.attachments = cloneComposerAttachments(request.Attachments)
 	m.composerMentionBindings = append([]string(nil), request.MentionBindings...)
 	m.slashPopup = slashCommandPopup{}

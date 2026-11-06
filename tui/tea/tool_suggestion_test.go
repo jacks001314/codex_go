@@ -1,10 +1,11 @@
 package tea
 
 import (
+	keymsg "codex_go/tui/keymsg"
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	bottompane "codex_go/tui/bottom_pane"
 )
@@ -52,7 +53,7 @@ func TestModelDeclinesInvalidToolSuggestionInstallURLsWithoutPopup(t *testing.T)
 			if model.modal != nil {
 				t.Fatalf("modal = %#v, want no popup for %q", model.modal, installURL)
 			}
-			view := model.View()
+			view := model.viewString()
 			if strings.Contains(view, "Test Connector") {
 				t.Fatalf("view still shows the suggestion for %q:\n%s", installURL, view)
 			}
@@ -109,7 +110,7 @@ func TestModelShowsValidToolSuggestionAppLinkPopupLikeRust(t *testing.T) {
 
 	// Opening the install URL is a host action; the popup stays on the
 	// confirmation screen.
-	model.Update(bubbletea.KeyMsg(bubbletea.Key{Type: bubbletea.KeyEnter}))
+	model.Update(keymsg.KeyMsg(keymsg.Key{Type: keymsg.KeyEnter}))
 	if len(responses) != 0 {
 		t.Fatalf("responses after opening the URL = %#v, want the popup to stay open", responses)
 	}
@@ -126,7 +127,7 @@ func TestModelShowsValidToolSuggestionAppLinkPopupLikeRust(t *testing.T) {
 	}
 
 	// Confirming completes the flow and resolves the elicitation.
-	model.Update(bubbletea.KeyMsg(bubbletea.Key{Type: bubbletea.KeyEnter}))
+	model.Update(keymsg.KeyMsg(keymsg.Key{Type: keymsg.KeyEnter}))
 	if model.modal != nil {
 		t.Fatalf("modal = %#v, want the completed popup closed", model.modal)
 	}

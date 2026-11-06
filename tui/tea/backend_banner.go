@@ -4,10 +4,11 @@ import (
 	"slices"
 	"strings"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
 	"codex_go/tui/chatwidget"
+	"codex_go/tui/keymsg"
 )
 
 // Rust parity: codex-rs/tui/src/backend_banners.rs,
@@ -462,20 +463,20 @@ func (m *Model) backendBannerAcceptsKeys() bool {
 }
 
 // handleBackendBannerKey consumes Esc (dismiss) and the numbered CTA keys.
-func (m *Model) handleBackendBannerKey(message bubbletea.KeyMsg) (bubbletea.Cmd, bool) {
+func (m *Model) handleBackendBannerKey(message keymsg.KeyMsg) (bubbletea.Cmd, bool) {
 	if !m.backendBannerAcceptsKeys() {
 		return nil, false
 	}
 	banner := m.backendBanner.visibleBanner(m.currentBannerModel())
 	actions := m.backendBannerActions(banner)
 	switch message.Type {
-	case bubbletea.KeyEsc:
+	case keymsg.KeyEsc:
 		if !banner.Dismissible {
 			return nil, false
 		}
 		m.backendBanner.dismiss()
 		return nil, true
-	case bubbletea.KeyRunes:
+	case keymsg.KeyRunes:
 		if message.Alt || len(message.Runes) != 1 {
 			return nil, false
 		}

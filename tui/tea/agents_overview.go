@@ -3,10 +3,11 @@ package tea
 import (
 	"strings"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
 	agentsoverview "codex_go/tui/agents_overview"
+	"codex_go/tui/keymsg"
 	"codex_go/tui/markdown"
 )
 
@@ -439,7 +440,7 @@ func (m *Model) markAgentsOverviewVoiceOwners(rows []agentsoverview.Row) {
 }
 
 // updateAgentsOverviewKey routes keys to the dashboard while it is active.
-func (m *Model) updateAgentsOverviewKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
+func (m *Model) updateAgentsOverviewKey(msg keymsg.KeyMsg) bubbletea.Cmd {
 	if m == nil || m.agentsOverview == nil {
 		return nil
 	}
@@ -477,7 +478,7 @@ func (m *Model) updateAgentsOverviewKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 	// Rust #42428: a plain character moves focus to the composer and becomes
 	// draft text. Keys already bound to a list or agents action keep their
 	// shortcut so the dashboard stays navigable from the list.
-	if msg.Type == bubbletea.KeyRunes && !msg.Alt && !m.agentsOverview.State.Searching &&
+	if msg.Type == keymsg.KeyRunes && !msg.Alt && !m.agentsOverview.State.Searching &&
 		!m.agentsOverview.State.Renaming && !m.agentsOverview.State.Help && msg.String() != "?" {
 		if msg.Paste {
 			m.handleAgentsOverviewComposerPaste(string(msg.Runes))
@@ -532,7 +533,7 @@ func (m *Model) updateAgentsOverviewKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 	// Rust #45255: while the search or rename field owns the editor, plain
 	// characters edit it instead of triggering a dashboard shortcut.
 	if m.agentsOverview.State.Searching || m.agentsOverview.State.Renaming {
-		if msg.Type == bubbletea.KeyRunes && !msg.Alt {
+		if msg.Type == keymsg.KeyRunes && !msg.Alt {
 			for _, r := range msg.Runes {
 				m.agentsOverview.TypeChar(r)
 			}
@@ -546,12 +547,12 @@ func (m *Model) updateAgentsOverviewKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 	// Rust #46839: Tab and Shift-Tab cycle the command-center status tabs,
 	// unless either key is already bound to a list or agents action.
 	switch msg.Type {
-	case bubbletea.KeyTab:
+	case keymsg.KeyTab:
 		if m.agentsOverviewFilterKeyAvailable("tab") {
 			m.agentsOverview.CycleStatusFilter(true)
 			return nil
 		}
-	case bubbletea.KeyShiftTab:
+	case keymsg.KeyShiftTab:
 		if m.agentsOverviewFilterKeyAvailable("shift-tab") {
 			m.agentsOverview.CycleStatusFilter(false)
 			return nil
@@ -633,7 +634,7 @@ func (m *Model) updateAgentsOverviewKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 // holds the server lifecycle lock. Rust's AgentsOverviewView still handles
 // search, help, status-filter tabs, and list movement before the removal guard,
 // so browsing stays responsive; every other action is swallowed.
-func (m *Model) updateAgentsOverviewRemovalKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
+func (m *Model) updateAgentsOverviewRemovalKey(msg keymsg.KeyMsg) bubbletea.Cmd {
 	if m == nil || m.agentsOverview == nil {
 		return nil
 	}
@@ -667,12 +668,12 @@ func (m *Model) updateAgentsOverviewRemovalKey(msg bubbletea.KeyMsg) bubbletea.C
 		return nil
 	}
 	switch msg.Type {
-	case bubbletea.KeyTab:
+	case keymsg.KeyTab:
 		if m.agentsOverviewFilterKeyAvailable("tab") {
 			m.agentsOverview.CycleStatusFilter(true)
 		}
 		return nil
-	case bubbletea.KeyShiftTab:
+	case keymsg.KeyShiftTab:
 		if m.agentsOverviewFilterKeyAvailable("shift-tab") {
 			m.agentsOverview.CycleStatusFilter(false)
 		}
@@ -692,7 +693,7 @@ func (m *Model) updateAgentsOverviewRemovalKey(msg bubbletea.KeyMsg) bubbletea.C
 			m.agentsOverview.Backspace()
 			return nil
 		}
-		if msg.Type == bubbletea.KeyRunes && !msg.Alt {
+		if msg.Type == keymsg.KeyRunes && !msg.Alt {
 			for _, r := range msg.Runes {
 				m.agentsOverview.TypeChar(r)
 			}
@@ -723,7 +724,7 @@ func (m *Model) composerIsVimEnabled() bool {
 // updateAgentsOverviewRenameEditorKey routes keys to the single-line rename
 // editor. Vim normal mode is intentionally small but honors the composer's
 // /vim setting: insert entry, h/l/0/$, x/delete, and Esc recovery.
-func (m *Model) renameKey(msg bubbletea.KeyMsg, keySpec string) bool {
+func (m *Model) renameKey(msg keymsg.KeyMsg, keySpec string) bool {
 	if m == nil || m.agentsOverview == nil || !m.agentsOverview.State.Renaming {
 		return false
 	}
@@ -787,7 +788,7 @@ func (m *Model) renameKey(msg bubbletea.KeyMsg, keySpec string) bool {
 		m.agentsOverview.SetInputCursor(len([]rune(state.Input)))
 		return true
 	}
-	if msg.Type == bubbletea.KeyRunes && !msg.Alt {
+	if msg.Type == keymsg.KeyRunes && !msg.Alt {
 		for _, r := range msg.Runes {
 			m.agentsOverview.TypeChar(r)
 		}

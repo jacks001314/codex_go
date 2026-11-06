@@ -1,11 +1,12 @@
 package tea
 
 import (
+	keymsg "codex_go/tui/keymsg"
 	"errors"
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
 	bottompane "codex_go/tui/bottom_pane"
@@ -87,7 +88,7 @@ func TestModelVoiceSettingsSoundDevicesOpenPickerLikeRust(t *testing.T) {
 			t.Fatalf("row %q description = %q", option.ID, option.Description)
 		}
 	}
-	if view := utils.StripANSI(model.View()); !strings.Contains(view, "Sound devices") {
+	if view := utils.StripANSI(model.viewString()); !strings.Contains(view, "Sound devices") {
 		t.Fatalf("sound devices view:\n%s", view)
 	}
 
@@ -314,7 +315,7 @@ func TestModelVoiceInputChannelSelectionLikeRust(t *testing.T) {
 	if len(picker.Items) != 4 {
 		t.Fatalf("channel rows = %d", len(picker.Items))
 	}
-	if view := utils.StripANSI(model.View()); !strings.Contains(view, "Microphone: Zen Go") ||
+	if view := utils.StripANSI(model.viewString()); !strings.Contains(view, "Microphone: Zen Go") ||
 		!strings.Contains(view, "Input 4") {
 		t.Fatalf("channel modal view:\n%s", view)
 	}
@@ -327,7 +328,7 @@ func TestModelVoiceInputChannelSelectionLikeRust(t *testing.T) {
 		}
 	}
 	picker.ApplyFilter()
-	runTeaCmd(t, model, model.updateVoiceChannelsModal(key(bubbletea.KeyEnter)))
+	runTeaCmd(t, model, model.updateVoiceChannelsModal(key(keymsg.KeyEnter)))
 	if model.modal == nil || model.modal.voiceChannels == nil {
 		t.Fatalf("empty selection closed the picker: %#v", model.modal)
 	}
@@ -339,7 +340,7 @@ func TestModelVoiceInputChannelSelectionLikeRust(t *testing.T) {
 	picker = model.modal.voiceChannels
 	picker.Items = bottompane.ToggleMultiSelect(picker.Items, "2")
 	picker.ApplyFilter()
-	runTeaCmd(t, model, model.updateVoiceChannelsModal(key(bubbletea.KeyEnter)))
+	runTeaCmd(t, model, model.updateVoiceChannelsModal(key(keymsg.KeyEnter)))
 	if len(saved) != 1 || saved[0] == nil || len(saved[0].Values) != 1 || saved[0].Values[0] != 2 {
 		t.Fatalf("saved = %#v", saved)
 	}
@@ -355,7 +356,7 @@ func TestModelVoiceInputChannelSelectionLikeRust(t *testing.T) {
 
 	// Escape returns to the device picker without persisting.
 	model.openVoiceInputChannelsModal(device)
-	runTeaCmd(t, model, model.updateVoiceChannelsModal(key(bubbletea.KeyEsc)))
+	runTeaCmd(t, model, model.updateVoiceChannelsModal(key(keymsg.KeyEsc)))
 	if len(saved) != 1 {
 		t.Fatalf("escape saved %#v", saved)
 	}

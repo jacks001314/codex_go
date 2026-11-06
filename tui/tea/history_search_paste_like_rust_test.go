@@ -4,22 +4,21 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
-	"codex_go/tui/bottom_pane/chat_composer"
+	chatcomposer "codex_go/tui/bottom_pane/chat_composer"
+	"codex_go/tui/keymsg"
 )
 
 func historySearchPasteModel(history []string, draft string) *Model {
 	model := NewModel(codextui.NewState(nil), Options{Width: 100, Height: 30})
 	model.inputHistory = append([]string(nil), history...)
 	model.composer.SetValue(draft)
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyCtrlR})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyCtrlR})
 	return model
 }
 
 func pasteIntoModel(model *Model, text string) {
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune(text), Paste: true})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune(text), Paste: true})
 }
 
 func TestHistorySearchPasteAppendsQueryAndAcceptsLikeRust(t *testing.T) {
@@ -39,7 +38,7 @@ func TestHistorySearchPasteAppendsQueryAndAcceptsLikeRust(t *testing.T) {
 	if got := model.composerText(); got != "git status" {
 		t.Fatalf("matching preview = %q, want git status", got)
 	}
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	if model.historySearch != nil || model.composerText() != "git status" {
 		t.Fatalf("accepted paste = %#v composer=%q", model.historySearch, model.composerText())
 	}
@@ -48,7 +47,7 @@ func TestHistorySearchPasteAppendsQueryAndAcceptsLikeRust(t *testing.T) {
 func TestHistorySearchEmptyPastePreservesSelectedMatchLikeRust(t *testing.T) {
 	model := historySearchPasteModel([]string{"git status", "git log"}, "draft")
 	pasteIntoModel(model, "git")
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyCtrlR})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyCtrlR})
 	selected := model.composerText()
 	query := model.historySearch.Query
 
@@ -74,7 +73,7 @@ func TestHistorySearchPasteShowsSeparatorsAndConsumesLargeTextLikeRust(t *testin
 	if !ok || !strings.Contains(footer, "foo\u21b5bar\u21e5baz") {
 		t.Fatalf("footer = %q ok=%v, want visible separators", footer, ok)
 	}
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEsc})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyEsc})
 	if got := model.composerText(); got != "draft" {
 		t.Fatalf("cancel restored composer = %q", got)
 	}

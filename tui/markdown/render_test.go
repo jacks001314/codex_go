@@ -57,7 +57,7 @@ func TestRenderWithThemeLongURLClickable(t *testing.T) {
 	if openerIndex < 0 || closeIndex < 0 || !strings.Contains(rendered[openerIndex:closeIndex], url) {
 		t.Fatalf("long URL not annotated as one full hyperlink:\n%q", rendered)
 	}
-	if !strings.Contains(rendered[openerIndex:closeIndex], "\x1b[4m") {
+	if !hasUnderlineSGR(rendered[openerIndex:closeIndex]) {
 		t.Fatalf("long URL lost its link underline styling:\n%q", rendered)
 	}
 	if strings.ContainsRune(rendered, '\uE000') {
@@ -165,6 +165,20 @@ func TestRenderWithThemeRendersBoxDrawingTable(t *testing.T) {
 			t.Fatalf("table content missing %q:\n%s", want, clean)
 		}
 	}
+}
+
+// hasUnderlineSGR reports whether text carries an SGR that enables underline.
+// glamour v2 combines colour and attribute codes in one sequence, so the v1
+// spelling "\x1b[4m" no longer appears on its own.
+func hasUnderlineSGR(text string) bool {
+	for _, match := range renderedSGRRE.FindAllStringSubmatch(text, -1) {
+		for _, param := range strings.Split(match[1], ";") {
+			if param == "4" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func containsExactLine(text string, want string) bool {

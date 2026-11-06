@@ -4,12 +4,13 @@ import (
 	"errors"
 	"strings"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	"codex_go/appserver"
 	"codex_go/config"
 	codextui "codex_go/tui"
 	bottompane "codex_go/tui/bottom_pane"
+	"codex_go/tui/keymsg"
 )
 
 type hookConfigWriteOperation struct {
@@ -85,7 +86,7 @@ func (m *Model) openHooksView(entry appserver.HookListEntry) {
 	m.notice = "Hooks"
 }
 
-func (m *Model) updateHooksBrowserModal(message bubbletea.KeyMsg) bubbletea.Cmd {
+func (m *Model) updateHooksBrowserModal(message keymsg.KeyMsg) bubbletea.Cmd {
 	if m == nil || m.modal == nil || m.modal.hooksBrowser == nil || m.modal.hooksBrowser.view == nil {
 		return nil
 	}

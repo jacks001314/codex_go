@@ -1,14 +1,14 @@
 package tea
 
 import (
-	"strings"
-	"unicode"
-
-	bubbletea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
+	mousemsg "codex_go/tui/mousemsg"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/mattn/go-runewidth"
 	"github.com/rivo/uniseg"
+	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	codextui "codex_go/tui"
 )
@@ -182,14 +182,14 @@ func (m *Model) effectiveComposerScroll(total int, target int) int {
 // handleComposerWheel consumes wheel events over a scrollable owned-screen
 // prompt. The transcript, its selection/search/activity focus, and the caret
 // all stay put.
-func (m *Model) handleComposerWheel(msg bubbletea.MouseMsg) bool {
+func (m *Model) handleComposerWheel(msg mousemsg.MouseMsg) bool {
 	if m == nil || !m.composerBounded() || m.composerTopRow < 0 {
 		return false
 	}
-	if msg.Action != bubbletea.MouseActionPress {
+	if msg.Action != mousemsg.MouseActionPress {
 		return false
 	}
-	if msg.Button != bubbletea.MouseButtonWheelUp && msg.Button != bubbletea.MouseButtonWheelDown {
+	if msg.Button != mousemsg.MouseButtonWheelUp && msg.Button != mousemsg.MouseButtonWheelDown {
 		return false
 	}
 	if msg.Alt || msg.Ctrl || msg.Shift {
@@ -205,7 +205,7 @@ func (m *Model) handleComposerWheel(msg bubbletea.MouseMsg) bool {
 	}
 	scroll := m.effectiveComposerScroll(total, target)
 	delta := composerWheelRows
-	if msg.Button == bubbletea.MouseButtonWheelUp {
+	if msg.Button == mousemsg.MouseButtonWheelUp {
 		delta = -composerWheelRows
 	}
 	next := clampModalInt(scroll+delta, 0, total-target)
@@ -240,7 +240,14 @@ func (m *Model) renderComposerWindow() string {
 		m.composer.MaxHeight = total
 	}
 	m.composer.SetHeight(total)
+	// Bubble Tea v2 renders the textarea through an internal viewport that
+	// follows the caret, so the full-height frame is only top-anchored while the
+	// caret sits on the first row. The caret is restored before the window is
+	// cropped so the model-owned scroll offset keeps working.
+	cursorRow, cursorColumn := m.composer.Line(), m.composer.Column()
+	m.composer.MoveToBegin()
 	full := m.composer.View()
+	m.restoreComposerCursor(cursorRow, cursorColumn)
 	m.composer.SetHeight(target)
 	rows := strings.Split(strings.TrimSuffix(full, "\n"), "\n")
 	if len(rows) < total {
@@ -266,6 +273,20 @@ func (m *Model) renderComposerWindow() string {
 		visible[len(visible)-1] = composerScrollArrowLine(visible[len(visible)-1], "↓", m.width)
 	}
 	return strings.Join(visible, "\n")
+}
+
+// restoreComposerCursor puts the caret back on the logical row/column it held
+// before the full-height render.
+func (m *Model) restoreComposerCursor(row, column int) {
+	if m == nil {
+		return
+	}
+	lines := strings.Split(m.composer.Value(), "\n")
+	offset := column
+	for index := 0; index < row && index < len(lines); index++ {
+		offset += utf8.RuneCountInString(lines[index]) + 1
+	}
+	m.setComposerCursorOffset(offset)
 }
 
 // paintComposerPromptGutter keeps the prompt glyph on the first visible row and

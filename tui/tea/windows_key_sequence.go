@@ -1,12 +1,13 @@
 package tea
 
 import (
+	keymsg "codex_go/tui/keymsg"
 	"os"
 	"runtime"
 	"strings"
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 )
 
 // Bubble Tea reports an unrecognized CSI sequence through an unexported
@@ -21,15 +22,15 @@ type windowsKeySequenceTimeoutMsg struct {
 	generation uint64
 }
 
-func windowsShiftEnterKeys() []bubbletea.KeyMsg {
-	return []bubbletea.KeyMsg{
-		{Type: bubbletea.KeyEsc},
-		{Type: bubbletea.KeyRunes, Runes: []rune{'['}},
-		{Type: bubbletea.KeyRunes, Runes: []rune{'1'}},
-		{Type: bubbletea.KeyRunes, Runes: []rune{'3'}},
-		{Type: bubbletea.KeyRunes, Runes: []rune{';'}},
-		{Type: bubbletea.KeyRunes, Runes: []rune{'2'}},
-		{Type: bubbletea.KeyRunes, Runes: []rune{'u'}},
+func windowsShiftEnterKeys() []keymsg.KeyMsg {
+	return []keymsg.KeyMsg{
+		{Type: keymsg.KeyEsc},
+		{Type: keymsg.KeyRunes, Runes: []rune{'['}},
+		{Type: keymsg.KeyRunes, Runes: []rune{'1'}},
+		{Type: keymsg.KeyRunes, Runes: []rune{'3'}},
+		{Type: keymsg.KeyRunes, Runes: []rune{';'}},
+		{Type: keymsg.KeyRunes, Runes: []rune{'2'}},
+		{Type: keymsg.KeyRunes, Runes: []rune{'u'}},
 	}
 }
 
@@ -41,12 +42,12 @@ func (m *Model) handleWindowsMappedShiftEnter(message bubbletea.Msg) (bool, bubb
 		if timeout.generation != m.windowsKeySequenceGeneration || len(m.windowsKeySequence) == 0 {
 			return false, nil
 		}
-		pending := append([]bubbletea.KeyMsg(nil), m.windowsKeySequence...)
+		pending := append([]keymsg.KeyMsg(nil), m.windowsKeySequence...)
 		m.windowsKeySequence = nil
 		m.windowsKeySequenceGeneration++
 		return true, m.replayWindowsKeyMessages(pending)
 	}
-	if key, ok := message.(bubbletea.KeyMsg); ok {
+	if key, ok := message.(keymsg.KeyMsg); ok {
 		if !m.windowsTerminalMappedInput {
 			return false, nil
 		}
@@ -74,7 +75,7 @@ func WindowsTerminalMappedInputEnabled() bool {
 	return strings.EqualFold(strings.TrimSpace(os.Getenv("TERM_PROGRAM")), "Windows_Terminal")
 }
 
-func (m *Model) handleWindowsMappedShiftEnterKey(key bubbletea.KeyMsg) (bool, bubbletea.Cmd) {
+func (m *Model) handleWindowsMappedShiftEnterKey(key keymsg.KeyMsg) (bool, bubbletea.Cmd) {
 	if key.Paste || key.Alt {
 		return m.flushWindowsKeySequenceWith(key)
 	}
@@ -104,15 +105,15 @@ func (m *Model) handleWindowsMappedShiftEnterKey(key bubbletea.KeyMsg) (bool, bu
 	return true, m.applyWindowsShiftEnter()
 }
 
-func (m *Model) flushWindowsKeySequenceWith(key bubbletea.KeyMsg) (bool, bubbletea.Cmd) {
-	pending := append([]bubbletea.KeyMsg(nil), m.windowsKeySequence...)
+func (m *Model) flushWindowsKeySequenceWith(key keymsg.KeyMsg) (bool, bubbletea.Cmd) {
+	pending := append([]keymsg.KeyMsg(nil), m.windowsKeySequence...)
 	pending = append(pending, key)
 	m.windowsKeySequence = nil
 	m.windowsKeySequenceGeneration++
 	return true, m.replayWindowsKeyMessages(pending)
 }
 
-func (m *Model) replayWindowsKeyMessages(messages []bubbletea.KeyMsg) bubbletea.Cmd {
+func (m *Model) replayWindowsKeyMessages(messages []keymsg.KeyMsg) bubbletea.Cmd {
 	commands := make([]bubbletea.Cmd, 0, len(messages))
 	for _, message := range messages {
 		_, cmd := m.updateMessage(message)
@@ -136,7 +137,7 @@ func (m *Model) applyWindowsShiftEnter() bubbletea.Cmd {
 	return m.insertComposerNewline()
 }
 
-func windowsKeyMessagesEqual(left bubbletea.KeyMsg, right bubbletea.KeyMsg) bool {
+func windowsKeyMessagesEqual(left keymsg.KeyMsg, right keymsg.KeyMsg) bool {
 	if left.Type != right.Type || left.Alt != right.Alt || left.Paste != right.Paste {
 		return false
 	}

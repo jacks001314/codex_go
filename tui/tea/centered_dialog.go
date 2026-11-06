@@ -62,7 +62,7 @@ func (m *Model) renderCenteredModalOverlay() string {
 	}
 	savedSuppress := m.suppressWelcomeBlossom
 	m.suppressWelcomeBlossom = true
-	base := m.View()
+	base := m.viewString()
 	m.suppressWelcomeBlossom = savedSuppress
 	m.modal = savedModal
 	m.modalParents = parents

@@ -4,10 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	"codex_go/protocol"
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 func newSideNavigationModel(
@@ -42,7 +41,7 @@ func newSideNavigationModel(
 func openSideForTest(t *testing.T, model *Model) {
 	t.Helper()
 	typeText(t, model, "/side")
-	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	_, cmd := model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 }
 
@@ -116,11 +115,11 @@ func TestRetainedSideTracksBackgroundEventsLikeRust(t *testing.T) {
 
 	resumeThreadForTest(model, "parent-a")
 	openSideForTest(t, model)
-	if view := model.View(); !strings.Contains(view, "side background answer") {
+	if view := model.viewString(); !strings.Contains(view, "side background answer") {
 		t.Fatalf("reopened side did not render its background event:\n%s", view)
 	}
 	runTeaCmd(t, model, model.toggleSideConversation())
-	if view := model.View(); !strings.Contains(view, "parent background answer") {
+	if view := model.viewString(); !strings.Contains(view, "parent background answer") {
 		t.Fatalf("returning to the parent did not render its background event:\n%s", view)
 	}
 }
@@ -139,7 +138,7 @@ func TestExplicitSideReturnDiscardsOnlyTheActiveSideLikeRust(t *testing.T) {
 
 	resumeThreadForTest(model, "parent-a")
 	openSideForTest(t, model)
-	_, cmd := model.Update(key(bubbletea.KeyCtrlC))
+	_, cmd := model.Update(key(keymsg.KeyCtrlC))
 	runTeaCmd(t, model, cmd)
 	if len(*closed) != 1 || (*closed)[0].SideThreadID != "side-parent-a" {
 		t.Fatalf("closed sides = %#v, want only side-parent-a", *closed)

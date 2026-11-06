@@ -1,12 +1,14 @@
 package tea
 
 import (
+	mousemsg "codex_go/tui/mousemsg"
 	"testing"
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 func TestComposerCopyOnSelectPublishesPrimaryLikeRust(t *testing.T) {
@@ -28,7 +30,7 @@ func TestComposerCopyOnSelectPublishesPrimaryLikeRust(t *testing.T) {
 		},
 	})
 	model.composer.SetValue("hello world")
-	model.View()
+	model.viewString()
 	runTeaCmd(t, model, dragComposerSelection(t, model, 0, len("hello")))
 	if len(writes) != 1 || writes[0] != "hello" {
 		t.Fatalf("copy-on-select primary writes = %#v", writes)
@@ -58,10 +60,10 @@ func TestMiddleClickPastesPrimarySelectionLikeRust(t *testing.T) {
 			return "primary text", nil
 		},
 	})
-	model.View()
-	handled, cmd := model.startPrimarySelectionPaste(bubbletea.MouseMsg{
-		Button: bubbletea.MouseButtonMiddle,
-		Action: bubbletea.MouseActionPress,
+	model.viewString()
+	handled, cmd := model.startPrimarySelectionPaste(mousemsg.MouseMsg{
+		Button: mousemsg.MouseButtonMiddle,
+		Action: mousemsg.MouseActionPress,
 	})
 	if !handled || cmd == nil {
 		t.Fatalf("middle-click handled=%v cmd=%v", handled, cmd != nil)
@@ -104,15 +106,15 @@ func TestLatePrimaryPasteIsDiscardedAfterInputLikeRust(t *testing.T) {
 			return "stale primary", nil
 		},
 	})
-	model.View()
-	handled, cmd := model.startPrimarySelectionPaste(bubbletea.MouseMsg{
-		Button: bubbletea.MouseButtonMiddle,
-		Action: bubbletea.MouseActionPress,
+	model.viewString()
+	handled, cmd := model.startPrimarySelectionPaste(mousemsg.MouseMsg{
+		Button: mousemsg.MouseButtonMiddle,
+		Action: mousemsg.MouseActionPress,
 	})
 	if !handled || cmd == nil {
 		t.Fatal("middle-click did not start")
 	}
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune("x")})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune("x")})
 	model.Update(cmd())
 	if got := model.composer.Value(); got != "x" {
 		t.Fatalf("late primary paste changed composer to %q", got)

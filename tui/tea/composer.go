@@ -4,8 +4,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/textarea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/textarea"
+	"charm.land/lipgloss/v2"
 
 	bottompane "codex_go/tui/bottom_pane"
 )
@@ -179,6 +179,8 @@ func applyComposerTextareaStyles(composer *textarea.Model) {
 	if composer == nil {
 		return
 	}
-	composer.FocusedStyle.CursorLine = lipgloss.NewStyle()
-	composer.BlurredStyle.CursorLine = lipgloss.NewStyle()
+	styles := composer.Styles()
+	styles.Focused.CursorLine = lipgloss.NewStyle()
+	styles.Blurred.CursorLine = lipgloss.NewStyle()
+	composer.SetStyles(styles)
 }

@@ -3,10 +3,9 @@ package tea
 import (
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
 	agentsoverview "codex_go/tui/agents_overview"
+	"codex_go/tui/keymsg"
 )
 
 func TestAgentsOverviewRenameUsesVimSingleLineEditorLikeRust(t *testing.T) {
@@ -19,7 +18,7 @@ func TestAgentsOverviewRenameUsesVimSingleLineEditorLikeRust(t *testing.T) {
 	if !model.agentsOverview.BeginRename() {
 		t.Fatal("BeginRename returned false")
 	}
-	model.updateAgentsOverviewKey(bubbletea.KeyMsg{Type: bubbletea.KeyEsc})
+	model.updateAgentsOverviewKey(keymsg.KeyMsg{Type: keymsg.KeyEsc})
 	if model.agentsOverview.State.VimInsert {
 		t.Fatal("Esc did not enter Vim normal mode")
 	}
@@ -33,7 +32,7 @@ func TestAgentsOverviewRenameUsesVimSingleLineEditorLikeRust(t *testing.T) {
 	if got := model.agentsOverview.State.Input; got != "Zlpha" {
 		t.Fatalf("insert mode = %q, want Zlpha", got)
 	}
-	model.updateAgentsOverviewKey(bubbletea.KeyMsg{Type: bubbletea.KeyEsc})
+	model.updateAgentsOverviewKey(keymsg.KeyMsg{Type: keymsg.KeyEsc})
 	model.updateAgentsOverviewKey(runes("A"))
 	model.updateAgentsOverviewKey(runes("!"))
 	if got := model.agentsOverview.State.Input; got != "Zlpha!" {
@@ -57,7 +56,7 @@ func TestAgentsOverviewRenameCursorStyleLikeRust(t *testing.T) {
 	if got := model.agentsOverviewCursorStyleSequence(); got != "" {
 		t.Fatalf("repeated cursor sequence = %q, want no duplicate", got)
 	}
-	model.updateAgentsOverviewKey(bubbletea.KeyMsg{Type: bubbletea.KeyEsc})
+	model.updateAgentsOverviewKey(keymsg.KeyMsg{Type: keymsg.KeyEsc})
 	if got := model.agentsOverviewCursorStyleSequence(); got != "\x1b[0 q" {
 		t.Fatalf("normal-mode cursor sequence = %q, want default shape", got)
 	}

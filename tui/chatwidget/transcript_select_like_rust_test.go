@@ -1,10 +1,11 @@
 package chatwidget
 
 import (
+	mousemsg "codex_go/tui/mousemsg"
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	"codex_go/tui/keymsg"
 )
 
 func newSelectOverlay(t *testing.T, content string) *TranscriptOverlay {
@@ -143,7 +144,7 @@ func TestTranscriptSelectionFindIntegrationLikeRust(t *testing.T) {
 	if action := overlay.HandleSelectCommand(SelectCmdBeginFind); action != SelectActionBeginFind {
 		t.Fatalf("begin find = %v", action)
 	}
-	overlay.editFindQuery(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune("alpha")})
+	overlay.editFindQuery(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune("alpha")})
 	if !overlay.AcceptFind() {
 		t.Fatal("AcceptFind returned false")
 	}
@@ -168,13 +169,13 @@ func TestTranscriptSelectionFindIntegrationLikeRust(t *testing.T) {
 // Rust #57223: a left-button drag selects the covered text.
 func TestTranscriptSelectionMouseDragLikeRust(t *testing.T) {
 	overlay := NewTranscriptOverlay(40, 8, "alpha\nbeta\ngamma")
-	press := bubbletea.MouseMsg{Action: bubbletea.MouseActionPress, Button: bubbletea.MouseButtonLeft, X: 0, Y: 1}
+	press := mousemsg.MouseMsg{Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonLeft, X: 0, Y: 1}
 	if !overlay.handleSelectMouse(press) {
 		t.Fatal("press was not handled")
 	}
-	motion := bubbletea.MouseMsg{Action: bubbletea.MouseActionMotion, Button: bubbletea.MouseButtonLeft, X: 4, Y: 2}
+	motion := mousemsg.MouseMsg{Action: mousemsg.MouseActionMotion, Button: mousemsg.MouseButtonLeft, X: 4, Y: 2}
 	overlay.handleSelectMouse(motion)
-	release := bubbletea.MouseMsg{Action: bubbletea.MouseActionRelease, Button: bubbletea.MouseButtonLeft, X: 4, Y: 2}
+	release := mousemsg.MouseMsg{Action: mousemsg.MouseActionRelease, Button: mousemsg.MouseButtonLeft, X: 4, Y: 2}
 	overlay.handleSelectMouse(release)
 	if !overlay.SelectionActive() || !overlay.SelectionMarked() {
 		t.Fatal("drag did not leave a marked selection")
@@ -200,10 +201,10 @@ func TestTranscriptSelectionRendersLikeRust(t *testing.T) {
 	}
 }
 
-func sendTranscriptMouse(overlay *TranscriptOverlay, action bubbletea.MouseAction, col int, row int, shift bool) bool {
-	return overlay.handleSelectMouse(bubbletea.MouseMsg{
+func sendTranscriptMouse(overlay *TranscriptOverlay, action mousemsg.MouseAction, col int, row int, shift bool) bool {
+	return overlay.handleSelectMouse(mousemsg.MouseMsg{
 		Action: action,
-		Button: bubbletea.MouseButtonLeft,
+		Button: mousemsg.MouseButtonLeft,
 		Shift:  shift,
 		X:      col,
 		Y:      row,
@@ -212,8 +213,8 @@ func sendTranscriptMouse(overlay *TranscriptOverlay, action bubbletea.MouseActio
 
 func clickTranscriptMouse(overlay *TranscriptOverlay, col int, row int, times int) {
 	for range times {
-		sendTranscriptMouse(overlay, bubbletea.MouseActionPress, col, row, false)
-		sendTranscriptMouse(overlay, bubbletea.MouseActionRelease, col, row, false)
+		sendTranscriptMouse(overlay, mousemsg.MouseActionPress, col, row, false)
+		sendTranscriptMouse(overlay, mousemsg.MouseActionRelease, col, row, false)
 	}
 }
 
@@ -234,13 +235,13 @@ func TestTranscriptShiftClickExtendsWordSelectionLikeRust(t *testing.T) {
 		{2, "alpha beta"},
 		{13, "beta gamma"},
 	} {
-		if !sendTranscriptMouse(overlay, bubbletea.MouseActionPress, step.col, 1, true) {
+		if !sendTranscriptMouse(overlay, mousemsg.MouseActionPress, step.col, 1, true) {
 			t.Fatalf("shift press at %d was not handled", step.col)
 		}
 		if got := overlay.SelectedText(); got != step.want {
 			t.Fatalf("shift press at %d = %q, want %q", step.col, got, step.want)
 		}
-		sendTranscriptMouse(overlay, bubbletea.MouseActionRelease, step.col, 1, true)
+		sendTranscriptMouse(overlay, mousemsg.MouseActionRelease, step.col, 1, true)
 	}
 	clickTranscriptMouse(overlay, 13, 1, 1)
 	if got := overlay.SelectedText(); got != "" {
@@ -262,15 +263,15 @@ func TestTranscriptShiftClickPreservesUnitsAndDragLikeRust(t *testing.T) {
 		// Repeated presses on one cell raise the click count while the gesture
 		// stays open, matching Rust's begin_selection(clicks) setup.
 		for range tc.clicks {
-			sendTranscriptMouse(overlay, bubbletea.MouseActionPress, 6, 1, false)
+			sendTranscriptMouse(overlay, mousemsg.MouseActionPress, 6, 1, false)
 		}
-		overlay.handleSelectMouse(bubbletea.MouseMsg{Action: bubbletea.MouseActionMotion, Button: bubbletea.MouseButtonLeft, X: 10, Y: 1})
-		overlay.handleSelectMouse(bubbletea.MouseMsg{Action: bubbletea.MouseActionRelease, Button: bubbletea.MouseButtonLeft, X: 10, Y: 1})
-		if !sendTranscriptMouse(overlay, bubbletea.MouseActionPress, 12, 1, true) {
+		overlay.handleSelectMouse(mousemsg.MouseMsg{Action: mousemsg.MouseActionMotion, Button: mousemsg.MouseButtonLeft, X: 10, Y: 1})
+		overlay.handleSelectMouse(mousemsg.MouseMsg{Action: mousemsg.MouseActionRelease, Button: mousemsg.MouseButtonLeft, X: 10, Y: 1})
+		if !sendTranscriptMouse(overlay, mousemsg.MouseActionPress, 12, 1, true) {
 			t.Fatalf("clicks=%d shift press was not handled", tc.clicks)
 		}
-		overlay.handleSelectMouse(bubbletea.MouseMsg{Action: bubbletea.MouseActionMotion, Button: bubbletea.MouseButtonLeft, Shift: true, X: 14, Y: 1})
-		overlay.handleSelectMouse(bubbletea.MouseMsg{Action: bubbletea.MouseActionRelease, Button: bubbletea.MouseButtonLeft, Shift: true, X: 14, Y: 1})
+		overlay.handleSelectMouse(mousemsg.MouseMsg{Action: mousemsg.MouseActionMotion, Button: mousemsg.MouseButtonLeft, Shift: true, X: 14, Y: 1})
+		overlay.handleSelectMouse(mousemsg.MouseMsg{Action: mousemsg.MouseActionRelease, Button: mousemsg.MouseButtonLeft, Shift: true, X: 14, Y: 1})
 		if got := overlay.SelectedText(); got != tc.want {
 			t.Fatalf("clicks=%d selection = %q, want %q", tc.clicks, got, tc.want)
 		}

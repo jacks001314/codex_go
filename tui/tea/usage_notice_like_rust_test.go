@@ -14,7 +14,7 @@ func usageNoticeModel(t *testing.T, snapshot chatwidget.RateLimitSnapshot, width
 	model := NewModel(codextui.NewState(nil), Options{Width: width, Height: 24})
 	model.rateLimitSnapshots = map[string]chatwidget.RateLimitSnapshot{"codex": snapshot}
 	model.now = func() time.Time { return time.Unix(1_700_000_000, 0) }
-	model.View()
+	model.viewString()
 	model.activityFollow = true
 	return model
 }

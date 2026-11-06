@@ -11,7 +11,7 @@ package tea
 import (
 	"strings"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	"codex_go/config"
 	historycell "codex_go/tui/history_cell"

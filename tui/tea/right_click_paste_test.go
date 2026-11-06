@@ -1,15 +1,15 @@
 package tea
 
 import (
+	mousemsg "codex_go/tui/mousemsg"
 	"errors"
 	"strings"
 	"testing"
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
 	tuiapp "codex_go/tui/app"
+	"codex_go/tui/keymsg"
 	tuiinternal "codex_go/tui/tui"
 )
 
@@ -26,8 +26,8 @@ func rightClickPasteTestModel(t *testing.T, mode string, read func() (string, er
 	return model
 }
 
-func rightButtonPress() bubbletea.MouseMsg {
-	return bubbletea.MouseMsg{Action: bubbletea.MouseActionPress, Button: bubbletea.MouseButtonRight}
+func rightButtonPress() mousemsg.MouseMsg {
+	return mousemsg.MouseMsg{Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonRight}
 }
 
 // Mirrors Rust #48118: the fullscreen right click reads the clipboard off the
@@ -53,7 +53,7 @@ func TestRightClickPasteDeliversClipboardTextAtRender(t *testing.T) {
 	if got := model.composer.Value(); got != "" {
 		t.Fatalf("the result must not be delivered before a render: %q", got)
 	}
-	model.View()
+	model.viewString()
 	if got := model.composer.Value(); got != "hello world" {
 		t.Fatalf("composer after render = %q, want %q", got, "hello world")
 	}
@@ -70,9 +70,9 @@ func TestRightClickPasteInvalidatedByInterveningInputAndDraftChanges(t *testing.
 		t.Fatal("expected a read to start")
 	}
 	result := cmd()
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune("x")})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune("x")})
 	model.Update(result)
-	model.View()
+	model.viewString()
 	if got := model.composer.Value(); got != "x" {
 		t.Fatalf("composer after invalidated paste = %q, want %q", got, "x")
 	}
@@ -85,7 +85,7 @@ func TestRightClickPasteInvalidatedByInterveningInputAndDraftChanges(t *testing.
 	}
 	model.Update(cmd())
 	model.composer.SetValue("typed")
-	model.View()
+	model.viewString()
 	if got := model.composer.Value(); got != "typed" {
 		t.Fatalf("stale-target paste = %q, want %q", got, "typed")
 	}
@@ -135,7 +135,7 @@ func TestRightClickPasteReportsReadFailuresAndIgnoresEmptyText(t *testing.T) {
 	})
 	_, cmd := model.Update(rightButtonPress())
 	model.Update(cmd())
-	model.View()
+	model.viewString()
 	if model.notice != "clipboard text is unavailable" {
 		t.Fatalf("read failure notice = %q", model.notice)
 	}
@@ -146,7 +146,7 @@ func TestRightClickPasteReportsReadFailuresAndIgnoresEmptyText(t *testing.T) {
 	model = rightClickPasteTestModel(t, "auto", func() (string, error) { return "", nil })
 	_, cmd = model.Update(rightButtonPress())
 	model.Update(cmd())
-	model.View()
+	model.viewString()
 	if model.notice != "" || model.composer.Value() != "" {
 		t.Fatalf("empty clipboard notice=%q composer=%q", model.notice, model.composer.Value())
 	}
@@ -155,7 +155,7 @@ func TestRightClickPasteReportsReadFailuresAndIgnoresEmptyText(t *testing.T) {
 	model = rightClickPasteTestModel(t, "auto", func() (string, error) { return oversized, nil })
 	_, cmd = model.Update(rightButtonPress())
 	model.Update(cmd())
-	model.View()
+	model.viewString()
 	if model.notice != "clipboard text exceeds the message size limit" {
 		t.Fatalf("oversized notice = %q", model.notice)
 	}

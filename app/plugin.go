@@ -17,9 +17,9 @@ import (
 	"codex_go/auth"
 	"codex_go/cli"
 	"codex_go/config"
-	"codex_go/runtimeauth"
 	codexnetwork "codex_go/network"
 	"codex_go/plugin"
+	"codex_go/runtimeauth"
 )
 
 type pluginCLIContext struct {

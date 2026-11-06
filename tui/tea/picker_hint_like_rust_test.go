@@ -20,7 +20,7 @@ func TestSelectionViewsUseCompactPickerHintLikeRust(t *testing.T) {
 	if model.modal == nil || model.modal.footerHint != chatwidget.PickerPopupHintLine {
 		t.Fatalf("footer hint = %#v", model.modal)
 	}
-	if view := model.View(); !strings.Contains(view, "enter select · esc back") {
+	if view := model.viewString(); !strings.Contains(view, "enter select · esc back") {
 		t.Fatalf("compact picker hint missing:\n%s", view)
 	}
 
@@ -48,7 +48,7 @@ func TestSelectionViewsUseCompactPickerHintLikeRust(t *testing.T) {
 	if model.modal == nil || model.modal.footerHint != "space toggle · enter save/select · esc cancel" {
 		t.Fatalf("memories footer hint = %#v", model.modal)
 	}
-	if view := model.View(); !strings.Contains(view, "space toggle · enter save/select · esc cancel") {
+	if view := model.viewString(); !strings.Contains(view, "space toggle · enter save/select · esc cancel") {
 		t.Fatalf("memories compact picker hint missing:\n%s", view)
 	}
 }

@@ -1,9 +1,10 @@
 package tea
 
 import (
+	keymsg "codex_go/tui/keymsg"
 	"strings"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 )
 
 const mainFindQueryBytes = 4096
@@ -268,19 +269,19 @@ func (m *Model) stepMainTranscriptFind(delta int) bool {
 	return true
 }
 
-func (m *Model) editMainTranscriptFindQuery(msg bubbletea.KeyMsg) {
+func (m *Model) editMainTranscriptFindQuery(msg keymsg.KeyMsg) {
 	f := &m.mainFind
 	switch msg.Type {
-	case bubbletea.KeyBackspace:
+	case keymsg.KeyBackspace:
 		if f.query == "" {
 			return
 		}
 		runes := []rune(f.query)
 		f.query = string(runes[:len(runes)-1])
 		f.truncated = false
-	case bubbletea.KeyRunes, bubbletea.KeySpace:
+	case keymsg.KeyRunes, keymsg.KeySpace:
 		text := string(msg.Runes)
-		if msg.Type == bubbletea.KeySpace {
+		if msg.Type == keymsg.KeySpace {
 			text = " "
 		}
 		if text == "" {
@@ -301,15 +302,15 @@ func (m *Model) editMainTranscriptFindQuery(msg bubbletea.KeyMsg) {
 // updateMainTranscriptFindKey returns handled=false for keys Rust deliberately
 // lets the pager consume, and for every non-Find key while the result is being
 // read.
-func (m *Model) updateMainTranscriptFindKey(msg bubbletea.KeyMsg) (bool, bubbletea.Cmd) {
+func (m *Model) updateMainTranscriptFindKey(msg keymsg.KeyMsg) (bool, bubbletea.Cmd) {
 	if m == nil || !m.mainFind.active() {
 		return false, nil
 	}
 	switch msg.Type {
-	case bubbletea.KeyCtrlC:
+	case keymsg.KeyCtrlC:
 		m.cancelMainTranscriptFind()
 		return true, nil
-	case bubbletea.KeyEsc:
+	case keymsg.KeyEsc:
 		if m.mainFind.accepted {
 			m.clearMainTranscriptFind(true)
 			return true, nil
@@ -318,10 +319,10 @@ func (m *Model) updateMainTranscriptFindKey(msg bubbletea.KeyMsg) (bool, bubblet
 		// presentation; after Enter acceptance it returns to latest output.
 		m.cancelMainTranscriptFind()
 		return true, nil
-	case bubbletea.KeyCtrlN:
+	case keymsg.KeyCtrlN:
 		m.stepMainTranscriptFind(1)
 		return true, nil
-	case bubbletea.KeyCtrlP:
+	case keymsg.KeyCtrlP:
 		m.stepMainTranscriptFind(-1)
 		return true, nil
 	}
@@ -336,27 +337,27 @@ func (m *Model) updateMainTranscriptFindKey(msg bubbletea.KeyMsg) (bool, bubblet
 			return true, nil
 		}
 		switch msg.Type {
-		case bubbletea.KeyPgUp, bubbletea.KeyPgDown, bubbletea.KeyUp, bubbletea.KeyDown,
-			bubbletea.KeyHome, bubbletea.KeyEnd:
+		case keymsg.KeyPgUp, keymsg.KeyPgDown, keymsg.KeyUp, keymsg.KeyDown,
+			keymsg.KeyHome, keymsg.KeyEnd:
 			return false, nil
 		default:
 			return true, nil
 		}
 	}
 	switch msg.Type {
-	case bubbletea.KeyEnter:
+	case keymsg.KeyEnter:
 		if m.mainFind.query != "" && len(m.mainFind.matches) > 0 {
 			m.mainFind.editing = false
 			m.mainFind.accepted = true
 			m.refreshTranscript()
 		}
 		return true, nil
-	case bubbletea.KeyPgUp, bubbletea.KeyPgDown:
+	case keymsg.KeyPgUp, keymsg.KeyPgDown:
 		return false, nil
-	case bubbletea.KeyBackspace:
+	case keymsg.KeyBackspace:
 		m.editMainTranscriptFindQuery(msg)
 		return true, nil
-	case bubbletea.KeyRunes, bubbletea.KeySpace:
+	case keymsg.KeyRunes, keymsg.KeySpace:
 		m.editMainTranscriptFindQuery(msg)
 		return true, nil
 	default:

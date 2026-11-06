@@ -6,12 +6,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	"codex_go/appserver"
 	"codex_go/protocol"
 	agentsoverview "codex_go/tui/agents_overview"
-	"codex_go/tui/history_cell"
+	historycell "codex_go/tui/history_cell"
 )
 
 // taskMentionSearchDebounce mirrors Rust task_mentions::SEARCH_DEBOUNCE.

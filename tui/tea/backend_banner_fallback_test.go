@@ -211,8 +211,8 @@ func TestModelBackendBannerContinueReserveAction(t *testing.T) {
 		Dismissible: true,
 	}, BackendBannerRecoveryInput{AccountID: "acct"})
 	model.State.Model = LunaReserveModel
-	if !strings.Contains(model.View(), "Continue with Luna Reserve") {
-		t.Fatalf("continue choice missing:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Continue with Luna Reserve") {
+		t.Fatalf("continue choice missing:\n%s", model.viewString())
 	}
 	model.Update(runes("1"))
 	if model.BackendBanner() != nil {

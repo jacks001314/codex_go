@@ -180,11 +180,11 @@ func TestVoiceAudioHookOptionsReachHelperAndConfigLikeRust(t *testing.T) {
 	// an overridden one reports the overridden notice.
 	model := codextea.NewModel(nil, modelOptions)
 	model, _ = voiceAudioUpdateLikeRust(t, model, micSaved)
-	if got := utils.StripANSI(model.View()); !strings.Contains(got, voiceAudioSavedNoticeLikeRust) {
+	if got := utils.StripANSI(model.ViewContent()); !strings.Contains(got, voiceAudioSavedNoticeLikeRust) {
 		t.Fatalf("saved notice missing from the view:\n%s", got)
 	}
 	model, _ = voiceAudioUpdateLikeRust(t, model, shadowed)
-	if got := utils.StripANSI(model.View()); !strings.Contains(got, voiceAudioOverriddenNoticeLikeRust) {
+	if got := utils.StripANSI(model.ViewContent()); !strings.Contains(got, voiceAudioOverriddenNoticeLikeRust) {
 		t.Fatalf("overridden notice missing from the view:\n%s", got)
 	}
 }

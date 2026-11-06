@@ -3,11 +3,12 @@ package tea
 import (
 	"strings"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	bubbletea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"codex_go/appserver"
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 // Rust parity: codex-rs/tui/src/chatwidget/provider_error.rs (#58202).
@@ -103,12 +104,12 @@ func (m *Model) providerErrorMessage() string {
 // handleProviderErrorKey routes the keys the notice advertises. Transcript,
 // raw-output, and copy surfaces stay available like the external-writer
 // notice; every submission key is ignored.
-func (m *Model) handleProviderErrorKey(msg bubbletea.KeyMsg, keySpec string) bubbletea.Cmd {
+func (m *Model) handleProviderErrorKey(msg keymsg.KeyMsg, keySpec string) bubbletea.Cmd {
 	if m == nil {
 		return nil
 	}
 	switch msg.Type {
-	case bubbletea.KeyCtrlC, bubbletea.KeyCtrlD:
+	case keymsg.KeyCtrlC, keymsg.KeyCtrlD:
 		return bubbletea.Quit
 	}
 	if m.keyMatches("global", "open_transcript", keySpec) {
@@ -124,12 +125,12 @@ func (m *Model) handleProviderErrorKey(msg bubbletea.KeyMsg, keySpec string) bub
 		m.copyLastAgentResponse()
 		return nil
 	}
-	if msg.Type == bubbletea.KeyEsc {
+	if msg.Type == keymsg.KeyEsc {
 		// Rust #58202: Esc opens the resume picker so the user can pick another
 		// chat instead of being trapped on the blocked conversation.
 		return m.openSessionPicker(codextui.SessionPickerResume)
 	}
-	if msg.Type == bubbletea.KeyRunes && len(msg.Runes) == 1 && !msg.Alt {
+	if msg.Type == keymsg.KeyRunes && len(msg.Runes) == 1 && !msg.Alt {
 		switch msg.Runes[0] {
 		case 'c':
 			if !m.providerErrorCanContinue() {

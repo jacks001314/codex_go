@@ -14234,6 +14234,12 @@ func appTimingMetadata(metadata map[string]any, started time.Time, completed tim
 	return metadata
 }
 
+// BuildThreadItemPayload renders a thread item as the v2 payload map. The
+// persisted transcript projection reads those wire fields (Rust #46710).
+func BuildThreadItemPayload(item ThreadItem) ThreadItemPayload {
+	return threadItemPayload(item)
+}
+
 func threadItemPayload(item ThreadItem) ThreadItemPayload {
 	data, err := json.Marshal(&item)
 	if err == nil {

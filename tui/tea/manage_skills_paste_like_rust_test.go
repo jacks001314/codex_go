@@ -3,9 +3,8 @@ package tea
 import (
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	"codex_go/appserver"
+	"codex_go/tui/keymsg"
 )
 
 // TestManageSkillsPasteAppendsSearchQueryLikeRust covers the TUI wiring of Rust
@@ -25,7 +24,7 @@ func TestManageSkillsPasteAppendsSearchQueryLikeRust(t *testing.T) {
 	state := model.modal.manageSkills
 	state.view.HandleKey("c")
 
-	updated, _ := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune("  ompletion\r\n\t "), Paste: true})
+	updated, _ := model.Update(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune("  ompletion\r\n\t "), Paste: true})
 	model = updated.(*Model)
 	state = model.modal.manageSkills
 	if got, want := state.view.SearchQuery, "completion"; got != want {

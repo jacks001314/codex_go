@@ -4,11 +4,12 @@ import (
 	"errors"
 	"strings"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	"codex_go/appserver"
 	bottompane "codex_go/tui/bottom_pane"
 	chatwidget "codex_go/tui/chatwidget"
+	"codex_go/tui/keymsg"
 )
 
 type skillToggleOperation struct {
@@ -78,7 +79,7 @@ func (m *Model) openManageSkillsModal(response appserver.SkillsListResponse, cwd
 	m.notice = ""
 }
 
-func (m *Model) updateManageSkillsModal(message bubbletea.KeyMsg) bubbletea.Cmd {
+func (m *Model) updateManageSkillsModal(message keymsg.KeyMsg) bubbletea.Cmd {
 	if m == nil || m.modal == nil || m.modal.manageSkills == nil {
 		return nil
 	}
@@ -110,9 +111,9 @@ func (m *Model) updateManageSkillsModal(message bubbletea.KeyMsg) bubbletea.Cmd 
 	return m.startNextSkillWrite()
 }
 
-func manageSkillsKeyNames(message bubbletea.KeyMsg) []string {
+func manageSkillsKeyNames(message keymsg.KeyMsg) []string {
 	switch message.Type {
-	case bubbletea.KeyRunes:
+	case keymsg.KeyRunes:
 		keys := make([]string, 0, len(message.Runes))
 		for _, value := range message.Runes {
 			if value == ' ' {
@@ -122,39 +123,39 @@ func manageSkillsKeyNames(message bubbletea.KeyMsg) []string {
 			}
 		}
 		return keys
-	case bubbletea.KeyUp:
+	case keymsg.KeyUp:
 		return []string{"up"}
-	case bubbletea.KeyCtrlP:
+	case keymsg.KeyCtrlP:
 		return []string{"ctrl+p"}
-	case bubbletea.KeyDown:
+	case keymsg.KeyDown:
 		return []string{"down"}
-	case bubbletea.KeyCtrlN:
+	case keymsg.KeyCtrlN:
 		return []string{"ctrl+n"}
-	case bubbletea.KeyPgUp:
+	case keymsg.KeyPgUp:
 		return []string{"pageup"}
-	case bubbletea.KeyCtrlU:
+	case keymsg.KeyCtrlU:
 		return []string{"ctrl+u"}
-	case bubbletea.KeyPgDown:
+	case keymsg.KeyPgDown:
 		return []string{"pagedown"}
-	case bubbletea.KeyCtrlD:
+	case keymsg.KeyCtrlD:
 		return []string{"ctrl+d"}
-	case bubbletea.KeyHome, bubbletea.KeyCtrlHome:
+	case keymsg.KeyHome, keymsg.KeyCtrlHome:
 		return []string{"home"}
-	case bubbletea.KeyCtrlA:
+	case keymsg.KeyCtrlA:
 		return []string{"ctrl+a"}
-	case bubbletea.KeyEnd, bubbletea.KeyCtrlEnd:
+	case keymsg.KeyEnd, keymsg.KeyCtrlEnd:
 		return []string{"end"}
-	case bubbletea.KeyCtrlE:
+	case keymsg.KeyCtrlE:
 		return []string{"ctrl+e"}
-	case bubbletea.KeyBackspace:
+	case keymsg.KeyBackspace:
 		return []string{"backspace"}
-	case bubbletea.KeySpace:
+	case keymsg.KeySpace:
 		return []string{"space"}
-	case bubbletea.KeyEnter:
+	case keymsg.KeyEnter:
 		return []string{"enter"}
-	case bubbletea.KeyEsc:
+	case keymsg.KeyEsc:
 		return []string{"esc"}
-	case bubbletea.KeyCtrlC:
+	case keymsg.KeyCtrlC:
 		return []string{"ctrl+c"}
 	default:
 		return nil

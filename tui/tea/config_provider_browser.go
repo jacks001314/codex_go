@@ -5,11 +5,12 @@ import (
 	"strconv"
 	"strings"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	"codex_go/config"
 	"codex_go/model"
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 // Model provider browsing (Rust #59541, codex-rs/tui/src/app/provider.rs).
@@ -193,7 +194,7 @@ func (m *Model) refreshOpenProviderBrowserCmd() bubbletea.Cmd {
 	return m.fetchConfigProvidersCmd(browser.generation)
 }
 
-func (m *Model) updateConfigProviderBrowserKey(message bubbletea.KeyMsg) bubbletea.Cmd {
+func (m *Model) updateConfigProviderBrowserKey(message keymsg.KeyMsg) bubbletea.Cmd {
 	if m == nil || m.modal == nil || m.modal.configPanel == nil {
 		return nil
 	}
@@ -212,30 +213,30 @@ func (m *Model) updateConfigProviderBrowserKey(message bubbletea.KeyMsg) bubblet
 		rowCount++
 	}
 	switch message.Type {
-	case bubbletea.KeyEsc:
+	case keymsg.KeyEsc:
 		m.closeConfigProviderBrowser()
 		return nil
-	case bubbletea.KeyCtrlC:
+	case keymsg.KeyCtrlC:
 		m.modal = nil
 		m.refreshTranscript()
 		return nil
-	case bubbletea.KeyUp:
+	case keymsg.KeyUp:
 		m.moveConfigProviderSelection(-1)
 		return nil
-	case bubbletea.KeyDown:
+	case keymsg.KeyDown:
 		m.moveConfigProviderSelection(1)
 		return nil
-	case bubbletea.KeyHome:
+	case keymsg.KeyHome:
 		browser.selected = 0
 		return nil
-	case bubbletea.KeyEnd:
+	case keymsg.KeyEnd:
 		if rowCount > 0 {
 			browser.selected = rowCount - 1
 		}
 		return nil
-	case bubbletea.KeySpace:
+	case keymsg.KeySpace:
 		return m.writeConfigProviderDefaultCmd(browser)
-	case bubbletea.KeyEnter:
+	case keymsg.KeyEnter:
 		if browser.loading || browser.err != "" {
 			m.closeConfigProviderBrowser()
 			return nil
@@ -251,7 +252,7 @@ func (m *Model) updateConfigProviderBrowserKey(message bubbletea.KeyMsg) bubblet
 		browser.details = &provider
 		browser.detailScroll = 0
 		return nil
-	case bubbletea.KeyRunes:
+	case keymsg.KeyRunes:
 		switch m.configPanelListActionForSpec(keySpecFromKeyMsg(message)) {
 		case "move_up":
 			m.moveConfigProviderSelection(-1)
@@ -287,34 +288,34 @@ func (m *Model) moveConfigProviderSelection(delta int) {
 	browser.selected = index
 }
 
-func (m *Model) updateConfigProviderDetailsKey(message bubbletea.KeyMsg, browser *configProviderBrowserState) bubbletea.Cmd {
+func (m *Model) updateConfigProviderDetailsKey(message keymsg.KeyMsg, browser *configProviderBrowserState) bubbletea.Cmd {
 	scroll := func(delta int) {
 		lines := providerDetailLines(*browser.details)
 		maxScroll := max(len(lines)-m.providerDetailsVisibleLines(), 0)
 		browser.detailScroll = clampModalInt(browser.detailScroll+delta, 0, maxScroll)
 	}
 	switch message.Type {
-	case bubbletea.KeyEsc:
+	case keymsg.KeyEsc:
 		browser.details = nil
 		browser.detailScroll = 0
-	case bubbletea.KeyEnter:
+	case keymsg.KeyEnter:
 		if browser.details.CanEdit && browser.details.Settings.Type != "openai" {
 			browser.editor = newConfigProviderEditor(browser.details)
 		}
-	case bubbletea.KeyCtrlC:
+	case keymsg.KeyCtrlC:
 		m.modal = nil
 		m.refreshTranscript()
-	case bubbletea.KeyUp:
+	case keymsg.KeyUp:
 		scroll(-1)
-	case bubbletea.KeyDown:
+	case keymsg.KeyDown:
 		scroll(1)
-	case bubbletea.KeyPgUp:
+	case keymsg.KeyPgUp:
 		scroll(-m.providerDetailsVisibleLines())
-	case bubbletea.KeyPgDown:
+	case keymsg.KeyPgDown:
 		scroll(m.providerDetailsVisibleLines())
-	case bubbletea.KeyHome:
+	case keymsg.KeyHome:
 		browser.detailScroll = 0
-	case bubbletea.KeyEnd:
+	case keymsg.KeyEnd:
 		scroll(len(providerDetailLines(*browser.details)))
 	}
 	return nil
@@ -684,27 +685,27 @@ func newConfigProviderEditor(provider *model.ProviderSummary) *configProviderEdi
 	return editor
 }
 
-func (m *Model) updateConfigProviderEditorKey(message bubbletea.KeyMsg, browser *configProviderBrowserState) bubbletea.Cmd {
+func (m *Model) updateConfigProviderEditorKey(message keymsg.KeyMsg, browser *configProviderBrowserState) bubbletea.Cmd {
 	editor := browser.editor
 	if editor == nil {
 		return nil
 	}
 	count := len(editor.fields) + 1
 	switch message.Type {
-	case bubbletea.KeyEsc:
+	case keymsg.KeyEsc:
 		browser.editor = nil
 		return nil
-	case bubbletea.KeyCtrlC:
+	case keymsg.KeyCtrlC:
 		m.modal = nil
 		m.refreshTranscript()
 		return nil
-	case bubbletea.KeyUp, bubbletea.KeyShiftTab:
+	case keymsg.KeyUp, keymsg.KeyShiftTab:
 		editor.selected = (editor.selected - 1 + count) % count
 		return nil
-	case bubbletea.KeyDown, bubbletea.KeyTab:
+	case keymsg.KeyDown, keymsg.KeyTab:
 		editor.selected = (editor.selected + 1) % count
 		return nil
-	case bubbletea.KeyEnter:
+	case keymsg.KeyEnter:
 		if editor.selected != len(editor.fields) {
 			editor.selected = (editor.selected + 1) % count
 			return nil
@@ -714,7 +715,7 @@ func (m *Model) updateConfigProviderEditorKey(message bubbletea.KeyMsg, browser 
 			return nil
 		}
 		return m.writeConfigProviderEditorCmd(browser)
-	case bubbletea.KeyBackspace, bubbletea.KeyDelete:
+	case keymsg.KeyBackspace, keymsg.KeyDelete:
 		if editor.selected < len(editor.fields) {
 			runes := []rune(editor.fields[editor.selected].value)
 			if len(runes) > 0 {
@@ -724,13 +725,13 @@ func (m *Model) updateConfigProviderEditorKey(message bubbletea.KeyMsg, browser 
 			editor.err = ""
 		}
 		return nil
-	case bubbletea.KeySpace:
+	case keymsg.KeySpace:
 		if editor.selected < len(editor.fields) {
 			editor.fields[editor.selected].value += " "
 			editor.err = ""
 		}
 		return nil
-	case bubbletea.KeyRunes:
+	case keymsg.KeyRunes:
 		if editor.selected < len(editor.fields) {
 			editor.fields[editor.selected].value += message.String()
 			editor.err = ""

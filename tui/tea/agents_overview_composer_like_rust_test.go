@@ -5,10 +5,11 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
 	agentsoverview "codex_go/tui/agents_overview"
+	"codex_go/tui/keymsg"
 )
 
 // Rust #42428: typing in the command center composes a task in the shared
@@ -41,7 +42,7 @@ func TestAgentsOverviewComposerDispatchLikeRust(t *testing.T) {
 	if got := model.agentsOverview.ComposerText(); got != "Build the parser" {
 		t.Fatalf("composer draft = %q", got)
 	}
-	updated, command := model.Update(key(bubbletea.KeyEnter))
+	updated, command := model.Update(key(keymsg.KeyEnter))
 	model = updated.(*Model)
 	if command == nil {
 		t.Fatal("enter returned no task-start command")
@@ -79,7 +80,7 @@ func TestAgentsOverviewComposerOfflineBlocksDispatchLikeRust(t *testing.T) {
 	if !model.agentsOverview.Composing() {
 		t.Fatal("offline editing did not focus the composer")
 	}
-	updated, command := model.Update(key(bubbletea.KeyEnter))
+	updated, command := model.Update(key(keymsg.KeyEnter))
 	model = updated.(*Model)
 	if command != nil {
 		_ = command()
@@ -132,7 +133,7 @@ func TestAgentsOverviewComposerRestoresPromptOnFailureLikeRust(t *testing.T) {
 	})
 	openAgentsDashboard(t, model)
 	typeText(t, model, "Build the parser")
-	updated, command := model.Update(key(bubbletea.KeyEnter))
+	updated, command := model.Update(key(keymsg.KeyEnter))
 	model = updated.(*Model)
 	if command == nil {
 		t.Fatal("enter returned no task-start command")

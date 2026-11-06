@@ -3,9 +3,8 @@ package tea
 import (
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 func openEffectsPanel(t *testing.T, model *Model) {
@@ -28,7 +27,7 @@ func TestEffectsSpaceTogglesSelectedRowLikeRust(t *testing.T) {
 	})
 	openEffectsPanel(t, model)
 
-	_, cmd := model.Update(key(bubbletea.KeySpace))
+	_, cmd := model.Update(key(keymsg.KeySpace))
 	runTeaCmd(t, model, cmd)
 	if model.animationsEnabled {
 		t.Fatal("Space did not toggle Animations off")
@@ -54,7 +53,7 @@ func TestEffectsSpaceHonorsConfiguredCancelBindingLikeRust(t *testing.T) {
 	})
 	openEffectsPanel(t, model)
 
-	model.Update(key(bubbletea.KeySpace))
+	model.Update(key(keymsg.KeySpace))
 	if model.modal == nil || model.modal.configPanel == nil || model.modal.configPanel.effects {
 		t.Fatalf("Space cancel binding did not return to the main panel: %#v", model.modal)
 	}
@@ -81,8 +80,8 @@ func TestEffectsRapidTogglesIgnoreStaleSaveResultLikeRust(t *testing.T) {
 	})
 	openEffectsPanel(t, model)
 
-	_, first := model.Update(key(bubbletea.KeySpace))
-	_, second := model.Update(key(bubbletea.KeySpace))
+	_, first := model.Update(key(keymsg.KeySpace))
+	_, second := model.Update(key(keymsg.KeySpace))
 	if !model.animationsEnabled {
 		t.Fatal("second toggle did not restore Animations on")
 	}
@@ -122,11 +121,11 @@ func TestEffectsComposerStarsPendingValueSurvivesDisabledRowLikeRust(t *testing.
 		t.Fatalf("disabled Composer stars value = %q", value)
 	}
 	// Rust skips disabled rows, so Down wraps back to Animations.
-	model.Update(key(bubbletea.KeyDown))
+	model.Update(key(keymsg.KeyDown))
 	if model.modal.configPanel.selected != 0 {
 		t.Fatalf("selection landed on the disabled row: %#v", model.modal.configPanel)
 	}
-	model.Update(key(bubbletea.KeySpace))
+	model.Update(key(keymsg.KeySpace))
 	if !model.animationsEnabled {
 		t.Fatal("Animations did not turn back on")
 	}
@@ -136,8 +135,8 @@ func TestEffectsComposerStarsPendingValueSurvivesDisabledRowLikeRust(t *testing.
 	if value := model.configPanelValue(model.configPanelFilteredRows()[1]); value != "[x] On" {
 		t.Fatalf("Composer stars after re-enabling animations = %q, want [x] On", value)
 	}
-	model.Update(key(bubbletea.KeyDown))
-	model.Update(key(bubbletea.KeySpace))
+	model.Update(key(keymsg.KeyDown))
+	model.Update(key(keymsg.KeySpace))
 	if model.effects.Starfield {
 		t.Fatal("Composer stars Space toggle did not turn the preserved value off")
 	}

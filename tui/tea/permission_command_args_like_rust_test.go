@@ -4,11 +4,10 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
 	bottompane "codex_go/tui/bottom_pane"
 	chatwidget "codex_go/tui/chatwidget"
+	"codex_go/tui/keymsg"
 )
 
 // TestPermissionProfileArgsMatchRust mirrors the parser vectors of
@@ -234,13 +233,13 @@ func TestPermissionsCommandKeepsFullAccessConfirmationLikeRust(t *testing.T) {
 	if model.modal == nil || model.modal.kind != ModalKindPermissions {
 		t.Fatalf("full access must open its confirmation, modal = %#v", model.modal)
 	}
-	if !strings.Contains(model.View(), "Enable full access?") {
-		t.Fatalf("confirmation view missing:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Enable full access?") {
+		t.Fatalf("confirmation view missing:\n%s", model.viewString())
 	}
 	if model.State.Sandbox != chatwidget.WorkspaceProfile {
 		t.Fatalf("full access applied before confirmation: %q", model.State.Sandbox)
 	}
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if model.State.Sandbox != chatwidget.DangerFullAccessProfile {
 		t.Fatalf("confirmed sandbox = %q, want %q", model.State.Sandbox, chatwidget.DangerFullAccessProfile)
 	}
@@ -284,8 +283,8 @@ func TestPermissionsCommandWithoutArgumentsOpensPickerLikeRust(t *testing.T) {
 	if model.modal == nil || model.modal.kind != ModalKindPermissions {
 		t.Fatalf("bare /permissions must open the picker, modal = %#v", model.modal)
 	}
-	if !strings.Contains(model.View(), "Update Model Permissions") {
-		t.Fatalf("picker missing:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Update Model Permissions") {
+		t.Fatalf("picker missing:\n%s", model.viewString())
 	}
 }
 
@@ -308,14 +307,14 @@ func TestPermissionsCommandDispatchesInlineArgumentsLikeRust(t *testing.T) {
 func TestPermissionsCommandRoutingLikeRust(t *testing.T) {
 	model := inlinePermissionsModel(t, false, nil)
 	typeText(t, model, "/permissions :read-only")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if model.State.Sandbox != chatwidget.ReadOnlyProfile {
 		t.Fatalf("typed inline request sandbox = %q, want %q", model.State.Sandbox, chatwidget.ReadOnlyProfile)
 	}
 
 	// A bare `/permissions` still opens the picker.
 	typeText(t, model, "/permissions")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if model.modal == nil || model.modal.kind != ModalKindPermissions {
 		t.Fatalf("typed bare command modal = %#v, want the permissions picker", model.modal)
 	}

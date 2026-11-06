@@ -1,10 +1,9 @@
 package tea
 
 import (
+	keymsg "codex_go/tui/keymsg"
 	"strings"
 	"testing"
-
-	bubbletea "github.com/charmbracelet/bubbletea"
 
 	codextui "codex_go/tui"
 	"codex_go/utils"
@@ -13,7 +12,7 @@ import (
 func TestThemePickerNarrowViewportDropsPreviewAndKeepsControlsLikeRust(t *testing.T) {
 	model := NewModel(codextui.NewState(nil), Options{Width: 50, Height: 18})
 	model.openThemePicker()
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if rows := strings.Count(view, "\n") + 1; rows > model.height {
 		t.Fatalf("theme picker rendered %d rows into %d:\n%s", rows, model.height, view)
 	}
@@ -33,17 +32,17 @@ func TestThemePickerNarrowViewportDropsPreviewAndKeepsControlsLikeRust(t *testin
 		t.Fatalf("theme visible rows = %d", visible)
 	}
 	before := model.modal.themePicker.Selected
-	model.Update(key(bubbletea.KeyPgDown))
+	model.Update(key(keymsg.KeyPgDown))
 	if model.modal.themePicker.Selected == before {
 		t.Fatal("page down did not move the theme selection")
 	}
-	view = utils.StripANSI(model.View())
+	view = utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "↑") || !strings.Contains(view, "Select Syntax Theme") ||
 		!strings.Contains(view, "enter select · esc back") {
 		t.Fatalf("page down lost controls or the above-overflow marker:\n%s", view)
 	}
-	model.Update(key(bubbletea.KeyEnd))
-	view = utils.StripANSI(model.View())
+	model.Update(key(keymsg.KeyEnd))
+	view = utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "Select Syntax Theme") || !strings.Contains(view, "enter select · esc back") {
 		t.Fatalf("end lost picker controls:\n%s", view)
 	}
@@ -52,7 +51,7 @@ func TestThemePickerNarrowViewportDropsPreviewAndKeepsControlsLikeRust(t *testin
 func TestThemePickerWidePreviewSurvivesWindowLikeRust(t *testing.T) {
 	model := NewModel(codextui.NewState(nil), Options{Width: 120, Height: 24})
 	model.openThemePicker()
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if rows := strings.Count(view, "\n") + 1; rows > model.height {
 		t.Fatalf("wide theme picker rendered %d rows into %d", rows, model.height)
 	}

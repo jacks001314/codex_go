@@ -1,10 +1,9 @@
 package tea
 
 import (
+	keymsg "codex_go/tui/keymsg"
 	"strings"
 	"testing"
-
-	bubbletea "github.com/charmbracelet/bubbletea"
 
 	codextui "codex_go/tui"
 )
@@ -22,7 +21,7 @@ func vimTestModel(value string) *Model {
 	m.vimInsert = false
 	if value != "" {
 		m.composer.SetValue(value)
-		m.composer.SetCursor(0)
+		m.composer.SetCursorColumn(0)
 	}
 	return m
 }
@@ -33,17 +32,17 @@ func vimCursorColumn(m *Model) int {
 }
 
 func vimKeyPress(m *Model, r rune) *Model {
-	updated, _ := m.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{r}})
+	updated, _ := m.Update(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{r}})
 	return updated.(*Model)
 }
 
 func vimEscape(m *Model) *Model {
-	updated, _ := m.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEsc})
+	updated, _ := m.Update(keymsg.KeyMsg{Type: keymsg.KeyEsc})
 	return updated.(*Model)
 }
 
 func vimEnter(m *Model) *Model {
-	updated, _ := m.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	updated, _ := m.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	return updated.(*Model)
 }
 
@@ -112,7 +111,7 @@ func TestVimSearchQueryFooterLikeRust(t *testing.T) {
 	for _, r := range "hello" {
 		m = vimKeyPress(m, r)
 	}
-	view := m.View()
+	view := m.viewString()
 	if !strings.Contains(view, "/hello") {
 		t.Fatalf("view does not show the forward search footer: %q", view)
 	}
@@ -121,7 +120,7 @@ func TestVimSearchQueryFooterLikeRust(t *testing.T) {
 	for _, r := range "world" {
 		m = vimKeyPress(m, r)
 	}
-	view = m.View()
+	view = m.viewString()
 	if !strings.Contains(view, "?world") {
 		t.Fatalf("view does not show the backward search footer: %q", view)
 	}
@@ -185,7 +184,7 @@ func TestVimEmptyNormalSlashOpensCommandsLikeRust(t *testing.T) {
 
 	// A pending operator keeps the operator search (`d/`).
 	operator := vimTestModel("hello world hello")
-	operator.composer.SetCursor(6)
+	operator.composer.SetCursorColumn(6)
 	operator = vimKeyPress(operator, 'd')
 	operator = vimKeyPress(operator, '/')
 	if !operator.vimSearchMode || operator.vimSearchOp != "d" {
@@ -199,7 +198,7 @@ func TestVimEmptyNormalSlashOpensCommandsLikeRust(t *testing.T) {
 func TestVimOperatorSearchLikeVim(t *testing.T) {
 	// d/ deletes from the cursor to the start of the next match.
 	m := vimTestModel("hello world hello")
-	m.composer.SetCursor(6)
+	m.composer.SetCursorColumn(6)
 	m = vimKeyPress(m, 'd')
 	m = vimKeyPress(m, '/')
 	if !m.vimSearchMode || m.vimSearchOp != "d" {
@@ -218,7 +217,7 @@ func TestVimOperatorSearchLikeVim(t *testing.T) {
 
 	// y/ yanks from the cursor to the start of the next match.
 	m = vimTestModel("hello world hello")
-	m.composer.SetCursor(6)
+	m.composer.SetCursorColumn(6)
 	m = vimKeyPress(m, 'y')
 	m = vimKeyPress(m, '/')
 	for _, r := range "hello" {
@@ -231,7 +230,7 @@ func TestVimOperatorSearchLikeVim(t *testing.T) {
 
 	// c/ changes from the cursor to the match start and enters insert mode.
 	m = vimTestModel("hello world hello")
-	m.composer.SetCursor(6)
+	m.composer.SetCursorColumn(6)
 	m = vimKeyPress(m, 'c')
 	m = vimKeyPress(m, '/')
 	for _, r := range "hello" {
@@ -244,7 +243,7 @@ func TestVimOperatorSearchLikeVim(t *testing.T) {
 
 	// Backward d? deletes back to the previous match start.
 	m = vimTestModel("hello world hello")
-	m.composer.SetCursor(6)
+	m.composer.SetCursorColumn(6)
 	m = vimKeyPress(m, 'd')
 	m = vimKeyPress(m, '?')
 	for _, r := range "hello" {
@@ -274,7 +273,7 @@ func TestVimModeToggleStartsInInsertModeAndNormalMotions(t *testing.T) {
 	if m.vimInsert {
 		t.Fatal("esc did not return to normal mode")
 	}
-	m.composer.SetCursor(0)
+	m.composer.SetCursorColumn(0)
 	m = vimKeyPress(m, 'x')
 	if got := m.composer.Value(); got != "" {
 		t.Fatalf("composer after x = %q, want empty (delete_char)", got)
@@ -311,13 +310,13 @@ func TestVimSubmittedDraftStartsInInsertModeLikeRust(t *testing.T) {
 // without changing the draft.
 func TestVimSearchBackspaceCancelsEmptyQueryLikeRust(t *testing.T) {
 	m := vimTestModel("hello world")
-	m.composer.SetCursor(0)
+	m.composer.SetCursorColumn(0)
 	m = vimKeyPress(m, 'd')
 	m = vimKeyPress(m, '/')
 	if !m.vimSearchMode {
 		t.Fatal("slash did not start a Vim search")
 	}
-	updated, _ := m.Update(bubbletea.KeyMsg{Type: bubbletea.KeyBackspace})
+	updated, _ := m.Update(keymsg.KeyMsg{Type: keymsg.KeyBackspace})
 	m = updated.(*Model)
 	if m.vimSearchMode {
 		t.Fatal("backspace did not cancel the empty search")
@@ -336,7 +335,7 @@ func TestVimOperatorLineMotionsDeleteYankAdjacentLinesLikeVim(t *testing.T) {
 	m := vimTestModel("line zero\nline one\nline two")
 	m.composer.CursorUp()
 	m.composer.CursorUp()
-	m.composer.SetCursor(0) // cursor on line zero (row 0)
+	m.composer.SetCursorColumn(0) // cursor on line zero (row 0)
 	m = vimKeyPress(m, 'd')
 	m = vimKeyPress(m, 'j')
 	if got := m.composer.Value(); got != "line two" {
@@ -345,7 +344,7 @@ func TestVimOperatorLineMotionsDeleteYankAdjacentLinesLikeVim(t *testing.T) {
 
 	m = vimTestModel("line zero\nline one\nline two")
 	m.composer.CursorUp()
-	m.composer.SetCursor(0) // cursor on line one (row 1)
+	m.composer.SetCursorColumn(0) // cursor on line one (row 1)
 	m = vimKeyPress(m, 'd')
 	m = vimKeyPress(m, 'k')
 	if got := m.composer.Value(); got != "line two" {
@@ -353,7 +352,7 @@ func TestVimOperatorLineMotionsDeleteYankAdjacentLinesLikeVim(t *testing.T) {
 	}
 
 	m = vimTestModel("line zero\nline one\nline two")
-	m.composer.SetCursor(0) // cursor on line two (row 2, the last)
+	m.composer.SetCursorColumn(0) // cursor on line two (row 2, the last)
 	m = vimKeyPress(m, 'y')
 	m = vimKeyPress(m, 'j')
 	if got := m.vimYank; got != "line two" {
@@ -361,7 +360,7 @@ func TestVimOperatorLineMotionsDeleteYankAdjacentLinesLikeVim(t *testing.T) {
 	}
 
 	m = vimTestModel("line zero\nline one\nline two")
-	m.composer.SetCursor(0) // cursor on line two (row 2)
+	m.composer.SetCursorColumn(0) // cursor on line two (row 2)
 	m = vimKeyPress(m, 'y')
 	m = vimKeyPress(m, 'k')
 	if got := m.vimYank; got != "line one\nline two" {
@@ -373,7 +372,7 @@ func TestVimOperatorLineMotionsDeleteYankAdjacentLinesLikeVim(t *testing.T) {
 // which targets the whitespace-delimited word like the plain w object.
 func TestVimBigWordTextObjectLikeVim(t *testing.T) {
 	m := vimTestModel("hello brave world")
-	m.composer.SetCursor(6)
+	m.composer.SetCursorColumn(6)
 	m = vimKeyPress(m, 'd')
 	m = vimKeyPress(m, 'i')
 	m = vimKeyPress(m, 'W')
@@ -387,7 +386,7 @@ func TestVimBigWordTextObjectLikeVim(t *testing.T) {
 func TestVimOperatorMotionsDeleteYankChangeLikeVim(t *testing.T) {
 	// dw deletes from the cursor to the start of the next word.
 	m := vimTestModel("hello brave world")
-	m.composer.SetCursor(6)
+	m.composer.SetCursorColumn(6)
 	m = vimKeyPress(m, 'd')
 	m = vimKeyPress(m, 'w')
 	if got := m.composer.Value(); got != "hello world" {
@@ -396,7 +395,7 @@ func TestVimOperatorMotionsDeleteYankChangeLikeVim(t *testing.T) {
 
 	// dh deletes the character left of the cursor.
 	m = vimTestModel("hello brave world")
-	m.composer.SetCursor(6)
+	m.composer.SetCursorColumn(6)
 	m = vimKeyPress(m, 'd')
 	m = vimKeyPress(m, 'h')
 	if got := m.composer.Value(); got != "hellobrave world" {
@@ -405,14 +404,14 @@ func TestVimOperatorMotionsDeleteYankChangeLikeVim(t *testing.T) {
 
 	// d0 deletes to the start of the line; d$ to the end.
 	m = vimTestModel("hello brave world")
-	m.composer.SetCursor(6)
+	m.composer.SetCursorColumn(6)
 	m = vimKeyPress(m, 'd')
 	m = vimKeyPress(m, '0')
 	if got := m.composer.Value(); got != "brave world" {
 		t.Fatalf("d0 value = %q, want brave world", got)
 	}
 	m = vimTestModel("hello brave world")
-	m.composer.SetCursor(6)
+	m.composer.SetCursorColumn(6)
 	m = vimKeyPress(m, 'd')
 	m = vimKeyPress(m, '$')
 	if got := m.composer.Value(); got != "hello " {
@@ -421,7 +420,7 @@ func TestVimOperatorMotionsDeleteYankChangeLikeVim(t *testing.T) {
 
 	// c$ deletes to the line end and enters insert mode.
 	m = vimTestModel("hello brave world")
-	m.composer.SetCursor(6)
+	m.composer.SetCursorColumn(6)
 	m = vimKeyPress(m, 'c')
 	m = vimKeyPress(m, '$')
 	if got := m.composer.Value(); got != "hello " || !m.vimInsert {
@@ -430,7 +429,7 @@ func TestVimOperatorMotionsDeleteYankChangeLikeVim(t *testing.T) {
 
 	// yw yanks from the cursor to the next word start.
 	m = vimTestModel("hello brave world")
-	m.composer.SetCursor(6)
+	m.composer.SetCursorColumn(6)
 	m = vimKeyPress(m, 'y')
 	m = vimKeyPress(m, 'w')
 	if got := m.vimYank; got != "brave " {
@@ -442,7 +441,7 @@ func TestVimOperatorMotionsDeleteYankChangeLikeVim(t *testing.T) {
 // di( and the yank-paste path (yiw + p).
 func TestVimOperatorTextObjectsDeleteInnerAroundParensLikeVim(t *testing.T) {
 	m := vimTestModel("hello brave world")
-	m.composer.SetCursor(6)
+	m.composer.SetCursorColumn(6)
 	m = vimKeyPress(m, 'd')
 	m = vimKeyPress(m, 'i')
 	m = vimKeyPress(m, 'w')
@@ -451,7 +450,7 @@ func TestVimOperatorTextObjectsDeleteInnerAroundParensLikeVim(t *testing.T) {
 	}
 
 	m = vimTestModel("hello brave world")
-	m.composer.SetCursor(6)
+	m.composer.SetCursorColumn(6)
 	m = vimKeyPress(m, 'd')
 	m = vimKeyPress(m, 'a')
 	m = vimKeyPress(m, 'w')
@@ -460,7 +459,7 @@ func TestVimOperatorTextObjectsDeleteInnerAroundParensLikeVim(t *testing.T) {
 	}
 
 	m = vimTestModel("call(foo, bar)")
-	m.composer.SetCursor(7)
+	m.composer.SetCursorColumn(7)
 	m = vimKeyPress(m, 'd')
 	m = vimKeyPress(m, 'i')
 	m = vimKeyPress(m, '(')
@@ -469,7 +468,7 @@ func TestVimOperatorTextObjectsDeleteInnerAroundParensLikeVim(t *testing.T) {
 	}
 
 	m = vimTestModel("hello brave world")
-	m.composer.SetCursor(6)
+	m.composer.SetCursorColumn(6)
 	m = vimKeyPress(m, 'y')
 	m = vimKeyPress(m, 'i')
 	m = vimKeyPress(m, 'w')
@@ -486,7 +485,7 @@ func TestVimOperatorTextObjectsDeleteInnerAroundParensLikeVim(t *testing.T) {
 func TestVimLineOperatorRepeatsAndEscCancel(t *testing.T) {
 	m := vimTestModel("line one\nline two")
 	m.composer.CursorUp()
-	m.composer.SetCursor(0)
+	m.composer.SetCursorColumn(0)
 	m = vimKeyPress(m, 'c')
 	m = vimKeyPress(m, 'c')
 	if got := m.composer.Value(); got != "line two" || !m.vimInsert {
@@ -502,7 +501,7 @@ func TestVimLineOperatorRepeatsAndEscCancel(t *testing.T) {
 
 	// Esc cancels a pending operator; the following w is then a plain motion.
 	m = vimTestModel("hello brave world")
-	m.composer.SetCursor(0)
+	m.composer.SetCursorColumn(0)
 	m = vimKeyPress(m, 'd')
 	m = vimEscape(m)
 	m = vimKeyPress(m, 'w')
@@ -514,7 +513,7 @@ func TestVimLineOperatorRepeatsAndEscCancel(t *testing.T) {
 // TestVimMotionsMoveCursorLikeVim pins h/l/w/b/e/0/$ on a single line.
 func TestVimMotionsMoveCursorLikeVim(t *testing.T) {
 	m := vimTestModel("alpha beta gamma")
-	m.composer.SetCursor(0)
+	m.composer.SetCursorColumn(0)
 	if got := vimCursorColumn(m); got != 0 {
 		t.Fatalf("initial cursor = %d, want 0", got)
 	}
@@ -576,7 +575,7 @@ func TestVimFindTillMotionsLikeVim(t *testing.T) {
 	}
 
 	m = vimTestModel("hello world")
-	m.composer.SetCursor(6)
+	m.composer.SetCursorColumn(6)
 	m = vimKeyPress(m, 'F')
 	m = vimKeyPress(m, 'o')
 	if got := vimCursorColumn(m); got != 4 {
@@ -584,7 +583,7 @@ func TestVimFindTillMotionsLikeVim(t *testing.T) {
 	}
 
 	m = vimTestModel("hello world")
-	m.composer.SetCursor(6)
+	m.composer.SetCursorColumn(6)
 	m = vimKeyPress(m, 'T')
 	m = vimKeyPress(m, 'o')
 	if got := vimCursorColumn(m); got != 5 {
@@ -654,7 +653,7 @@ func TestVimFindTillUsesExtendedGraphemesLikeRust(t *testing.T) {
 // find_and_till_handle_missing_cancelled_and_adjacent_targets.
 func TestVimFindOperatorYankCursorAndAdjacentTargetsLikeRust(t *testing.T) {
 	m := vimTestModel("abcrdef")
-	m.composer.SetCursor(3)
+	m.composer.SetCursorColumn(3)
 	m = vimKeyPress(m, 'y')
 	m = vimKeyPress(m, 'F')
 	m = vimKeyPress(m, 'b')
@@ -671,7 +670,7 @@ func TestVimFindOperatorYankCursorAndAdjacentTargetsLikeRust(t *testing.T) {
 	} {
 		m = vimTestModel("abc")
 		if command[1] == 'T' {
-			m.composer.SetCursor(2)
+			m.composer.SetCursorColumn(2)
 		}
 		for _, key := range command {
 			m = vimKeyPress(m, key)
@@ -726,7 +725,7 @@ func TestVimFindChangeDotRepeatLikeRust(t *testing.T) {
 	}
 	for _, testCase := range cases {
 		m = vimTestModel("abcr abcr")
-		m.composer.SetCursor(testCase.cursor)
+		m.composer.SetCursorColumn(testCase.cursor)
 		for _, key := range []rune(testCase.command) {
 			m = vimKeyPress(m, key)
 		}
@@ -767,14 +766,14 @@ func TestVimFindOperatorUsesConfiguredBindingsLikeRust(t *testing.T) {
 		m := NewModel(codextui.NewState(nil), Options{Width: 200, Height: 36, KeymapConfig: keymap})
 		m.vimMode = true
 		m.composer.SetValue("alpha beta gamma")
-		m.composer.SetCursor(0)
+		m.composer.SetCursorColumn(0)
 		for _, key := range []rune(testCase.motion) {
 			m = vimKeyPress(m, key)
 		}
 		if got := m.vimValueByteOffset(); got != testCase.cursor {
 			t.Fatalf("%s cursor = %d, want %d", testCase.motion, got, testCase.cursor)
 		}
-		m.composer.SetCursor(0)
+		m.composer.SetCursorColumn(0)
 		m = vimKeyPress(m, 'd')
 		for _, key := range []rune(testCase.motion) {
 			m = vimKeyPress(m, key)
@@ -794,7 +793,7 @@ func TestVimEditsDeleteAndChangeLikeVim(t *testing.T) {
 	}
 
 	m = vimTestModel("hello world")
-	m.composer.SetCursor(6)
+	m.composer.SetCursorColumn(6)
 	m = vimKeyPress(m, 'D')
 	if got := m.composer.Value(); got != "hello " {
 		t.Fatalf("D value = %q, want hello ", got)
@@ -807,7 +806,7 @@ func TestVimEditsDeleteAndChangeLikeVim(t *testing.T) {
 	}
 
 	m = vimTestModel("hello world")
-	m.composer.SetCursor(6)
+	m.composer.SetCursorColumn(6)
 	m = vimKeyPress(m, 'C')
 	if got := m.composer.Value(); got != "hello " || !m.vimInsert {
 		t.Fatalf("C value = %q insert=%v, want hello  + insert", got, m.vimInsert)
@@ -819,7 +818,7 @@ func TestVimEditsDeleteAndChangeLikeVim(t *testing.T) {
 // pending replacement, and cw / cj / ck change motions work alongside cc.
 func TestVimReplaceCharAndChangeMotionsLikeVim(t *testing.T) {
 	m := vimTestModel("hello world")
-	m.composer.SetCursor(0)
+	m.composer.SetCursorColumn(0)
 	m = vimKeyPress(m, 'r')
 	m = vimKeyPress(m, 'H')
 	if got := m.composer.Value(); got != "Hello world" {
@@ -831,7 +830,7 @@ func TestVimReplaceCharAndChangeMotionsLikeVim(t *testing.T) {
 
 	// Esc cancels a pending replacement without mutating the composer.
 	m = vimTestModel("hello world")
-	m.composer.SetCursor(0)
+	m.composer.SetCursorColumn(0)
 	m = vimKeyPress(m, 'r')
 	m = vimEscape(m)
 	if got := m.composer.Value(); got != "hello world" || m.vimPendingReplace {
@@ -840,7 +839,7 @@ func TestVimReplaceCharAndChangeMotionsLikeVim(t *testing.T) {
 
 	// cw changes from the cursor to the next word start and enters insert.
 	m = vimTestModel("hello brave world")
-	m.composer.SetCursor(6)
+	m.composer.SetCursorColumn(6)
 	m = vimKeyPress(m, 'c')
 	m = vimKeyPress(m, 'w')
 	if got := m.composer.Value(); got != "hello world" || !m.vimInsert {
@@ -851,7 +850,7 @@ func TestVimReplaceCharAndChangeMotionsLikeVim(t *testing.T) {
 	m = vimTestModel("line one\nline two\nline three")
 	m.composer.CursorUp()
 	m.composer.CursorUp()
-	m.composer.SetCursor(0)
+	m.composer.SetCursorColumn(0)
 	m = vimKeyPress(m, 'c')
 	m = vimKeyPress(m, 'j')
 	if got := m.composer.Value(); got != "line three" || !m.vimInsert {
@@ -885,7 +884,7 @@ func TestVimReplaceModeOverwritesUntilEscape(t *testing.T) {
 
 	// Typing at the end appends and normal-mode edits resume after Esc.
 	m = vimTestModel("ab")
-	m.composer.SetCursor(len("ab"))
+	m.composer.SetCursorColumn(len("ab"))
 	m = vimKeyPress(m, 'R')
 	m = vimKeyPress(m, 'c')
 	if got := m.composer.Value(); got != "abc" {
@@ -907,23 +906,23 @@ func TestVimReplaceModeBackspaceRestoresCharactersLikeRust(t *testing.T) {
 	if got := m.composer.Value(); got != "XYcde" {
 		t.Fatalf("replace value = %q, want XYcde", got)
 	}
-	m = vimKeyMsg(m, bubbletea.KeyBackspace)
+	m = vimKeyMsg(m, keymsg.KeyBackspace)
 	if got := m.composer.Value(); got != "Xbcde" {
 		t.Fatalf("first replace backspace = %q, want Xbcde", got)
 	}
-	m = vimKeyMsg(m, bubbletea.KeyBackspace)
+	m = vimKeyMsg(m, keymsg.KeyBackspace)
 	if got := m.composer.Value(); got != "abcde" {
 		t.Fatalf("second replace backspace = %q, want abcde", got)
 	}
 
 	m = vimTestModel("ab")
-	m.composer.SetCursor(len("ab"))
+	m.composer.SetCursorColumn(len("ab"))
 	m = vimKeyPress(m, 'R')
 	m = vimKeyPress(m, 'c')
 	if got := m.composer.Value(); got != "abc" {
 		t.Fatalf("append replace value = %q, want abc", got)
 	}
-	m = vimKeyMsg(m, bubbletea.KeyBackspace)
+	m = vimKeyMsg(m, keymsg.KeyBackspace)
 	if got := m.composer.Value(); got != "ab" {
 		t.Fatalf("append replace backspace = %q, want ab", got)
 	}
@@ -940,7 +939,7 @@ func TestVimReplaceModeKeepsSlashInTextLikeRust(t *testing.T) {
 		t.Fatalf("after slash prefix: prefix=%v body=%q", m.composerPrefix, m.composer.Value())
 	}
 
-	m = vimKeyMsg(m, bubbletea.KeyBackspace)
+	m = vimKeyMsg(m, keymsg.KeyBackspace)
 	if m.composerPrefix != composerPrefixNone || m.composer.Value() != "abc" {
 		t.Fatalf("after prefix Backspace: prefix=%v body=%q", m.composerPrefix, m.composer.Value())
 	}
@@ -951,7 +950,7 @@ func TestVimReplaceModeKeepsSlashInTextLikeRust(t *testing.T) {
 	if m.composerPrefix != composerPrefixNone || m.composer.Value() != "/" {
 		t.Fatalf("empty slash prefix: prefix=%v body=%q", m.composerPrefix, m.composer.Value())
 	}
-	m = vimKeyMsg(m, bubbletea.KeyBackspace)
+	m = vimKeyMsg(m, keymsg.KeyBackspace)
 	if m.composerPrefix != composerPrefixNone || m.composer.Value() != "" {
 		t.Fatalf("empty prefix Backspace: prefix=%v body=%q", m.composerPrefix, m.composer.Value())
 	}
@@ -971,8 +970,8 @@ func TestVimReplaceModeDotRepeatLikeRust(t *testing.T) {
 	}
 }
 
-func vimKeyMsg(m *Model, key bubbletea.KeyType) *Model {
-	updated, _ := m.Update(bubbletea.KeyMsg{Type: key})
+func vimKeyMsg(m *Model, key keymsg.KeyType) *Model {
+	updated, _ := m.Update(keymsg.KeyMsg{Type: key})
 	return updated.(*Model)
 }
 
@@ -988,12 +987,12 @@ func TestVimUndoRedoNormalEditsLikeVim(t *testing.T) {
 	if got := m.composer.Value(); got != "hello world" {
 		t.Fatalf("undo after x value = %q, want hello world", got)
 	}
-	m = vimKeyMsg(m, bubbletea.KeyCtrlR)
+	m = vimKeyMsg(m, keymsg.KeyCtrlR)
 	if got := m.composer.Value(); got != "ello world" {
 		t.Fatalf("redo after undo value = %q, want ello world", got)
 	}
 	// Redo stack is exhausted; a second redo keeps the current draft.
-	m = vimKeyMsg(m, bubbletea.KeyCtrlR)
+	m = vimKeyMsg(m, keymsg.KeyCtrlR)
 	if got := m.composer.Value(); got != "ello world" {
 		t.Fatalf("empty redo changed value = %q", got)
 	}
@@ -1015,7 +1014,7 @@ func TestVimUndoInsertSessionRestoresWholeSessionLikeVim(t *testing.T) {
 	if got := m.composer.Value(); got != "world" {
 		t.Fatalf("undo insert session value = %q, want world", got)
 	}
-	m = vimKeyMsg(m, bubbletea.KeyCtrlR)
+	m = vimKeyMsg(m, keymsg.KeyCtrlR)
 	if got := m.composer.Value(); got != "hello world" {
 		t.Fatalf("redo insert session value = %q, want hello world", got)
 	}
@@ -1033,7 +1032,7 @@ func TestVimLineYankPasteAndOperators(t *testing.T) {
 	m = vimTestModel("line one\nline two\nline three")
 	m.composer.CursorUp()
 	m.composer.CursorUp()
-	m.composer.SetCursor(0)
+	m.composer.SetCursorColumn(0)
 	m = vimKeyPress(m, 'd')
 	m = vimKeyPress(m, 'd')
 	if got := m.composer.Value(); got != "line two\nline three" {
@@ -1042,7 +1041,7 @@ func TestVimLineYankPasteAndOperators(t *testing.T) {
 
 	m = vimTestModel("line one\nline two")
 	m.composer.CursorUp()
-	m.composer.SetCursor(0)
+	m.composer.SetCursorColumn(0)
 	m = vimKeyPress(m, 'y')
 	m = vimKeyPress(m, 'y')
 	if got := m.vimYank; got != "line one" {
@@ -1124,7 +1123,7 @@ func TestVimBufferJumpMotionsLikeRust(t *testing.T) {
 	m = vimTestModel("  alpha\n beta\n  gamma")
 	m.composer.CursorUp()
 	m.composer.CursorUp()
-	m.composer.SetCursor(0)
+	m.composer.SetCursorColumn(0)
 	m = vimKeyPress(m, 'G')
 	if got := m.composer.Line(); got != 2 {
 		t.Fatalf("G line = %d, want 2", got)

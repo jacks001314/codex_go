@@ -3,7 +3,9 @@ package chatwidget
 import (
 	"strings"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	"codex_go/tui/keymsg"
+
+	bubbletea "charm.land/bubbletea/v2"
 )
 
 // Rust parity: codex-rs/tui/src/transcript_view/search.rs (find-bar state and
@@ -206,23 +208,23 @@ func (o *TranscriptOverlay) stepFind(delta int) bool {
 // HandleFindKey routes one key to the find bar. handled=false hands the key back
 // to the pager, mirroring Rust handle_search_key returning false for the paging
 // keys and for every key once a match has been accepted.
-func (o *TranscriptOverlay) HandleFindKey(msg bubbletea.KeyMsg) (bool, bubbletea.Cmd) {
+func (o *TranscriptOverlay) HandleFindKey(msg keymsg.KeyMsg) (bool, bubbletea.Cmd) {
 	if o == nil || !o.find.active() {
 		return false, nil
 	}
 	switch msg.Type {
-	case bubbletea.KeyEsc, bubbletea.KeyCtrlC:
+	case keymsg.KeyEsc, keymsg.KeyCtrlC:
 		// Rust: Esc cancels while editing, and returns to the latest output once
 		// a match is accepted.
 		o.CancelFind()
-		if msg.Type == bubbletea.KeyEsc {
+		if msg.Type == keymsg.KeyEsc {
 			o.viewport.GotoBottom()
 		}
 		return true, nil
-	case bubbletea.KeyCtrlN:
+	case keymsg.KeyCtrlN:
 		o.FindNext()
 		return true, nil
-	case bubbletea.KeyCtrlP:
+	case keymsg.KeyCtrlP:
 		o.FindPrevious()
 		return true, nil
 	}
@@ -230,10 +232,10 @@ func (o *TranscriptOverlay) HandleFindKey(msg bubbletea.KeyMsg) (bool, bubbletea
 		return false, nil
 	}
 	switch msg.Type {
-	case bubbletea.KeyEnter:
+	case keymsg.KeyEnter:
 		o.AcceptFind()
 		return true, nil
-	case bubbletea.KeyPgUp, bubbletea.KeyPgDown:
+	case keymsg.KeyPgUp, keymsg.KeyPgDown:
 		// Rust returns false so paging keeps driving the viewport.
 		return false, nil
 	}
@@ -244,9 +246,9 @@ func (o *TranscriptOverlay) HandleFindKey(msg bubbletea.KeyMsg) (bool, bubbletea
 // editFindQuery mirrors the query-editing branch of Rust handle_search_key:
 // runes edit the query under the 4 KiB cap and every other key is swallowed so
 // the pager's single-letter bindings (q, j, k, ...) cannot fire mid-query.
-func (o *TranscriptOverlay) editFindQuery(msg bubbletea.KeyMsg) {
+func (o *TranscriptOverlay) editFindQuery(msg keymsg.KeyMsg) {
 	switch msg.Type {
-	case bubbletea.KeyBackspace:
+	case keymsg.KeyBackspace:
 		if o.find.query == "" {
 			return
 		}
@@ -254,12 +256,12 @@ func (o *TranscriptOverlay) editFindQuery(msg bubbletea.KeyMsg) {
 		o.find.query = string(runes[:len(runes)-1])
 		o.find.truncated = false
 		o.refreshFindMatches()
-	case bubbletea.KeyRunes, bubbletea.KeySpace:
+	case keymsg.KeyRunes, keymsg.KeySpace:
 		if msg.Paste || msg.Alt {
 			return
 		}
 		text := string(msg.Runes)
-		if msg.Type == bubbletea.KeySpace {
+		if msg.Type == keymsg.KeySpace {
 			text = " "
 			if len(msg.Runes) > 0 && string(msg.Runes) != " " {
 				return
@@ -308,7 +310,7 @@ func (o *TranscriptOverlay) refreshFindMatches() {
 // reading position: the first match at or below the viewport top, otherwise the
 // last match above it.
 func (o *TranscriptOverlay) firstFindMatchFromViewport() int {
-	top := o.viewport.YOffset
+	top := o.viewport.YOffset()
 	for index, line := range o.find.matches {
 		if line >= top {
 			return index
@@ -324,7 +326,7 @@ func (o *TranscriptOverlay) scrollToFindMatch() {
 	if !ok {
 		return
 	}
-	offset := line - o.viewport.Height/3
+	offset := line - o.viewport.Height()/3
 	if offset < 0 {
 		offset = 0
 	}

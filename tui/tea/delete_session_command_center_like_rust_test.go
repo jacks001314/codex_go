@@ -3,10 +3,11 @@ package tea
 import (
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
-	"codex_go/tui/agents_overview"
+	agentsoverview "codex_go/tui/agents_overview"
+	"codex_go/tui/keymsg"
 )
 
 func TestDeleteCurrentSessionReturnsToCommandCenterOnSharedServerLikeRust(t *testing.T) {
@@ -39,8 +40,8 @@ func TestDeleteCurrentSessionReturnsToCommandCenterOnSharedServerLikeRust(t *tes
 		if !shared && model.modal.options[1].Label != "Yes, delete and exit" {
 			t.Fatalf("embedded delete label = %q", model.modal.options[1].Label)
 		}
-		model.Update(key(bubbletea.KeyDown))
-		_, cmd := model.Update(key(bubbletea.KeyEnter))
+		model.Update(key(keymsg.KeyDown))
+		_, cmd := model.Update(key(keymsg.KeyEnter))
 		if cmd == nil {
 			t.Fatal("delete confirmation returned no command")
 		}

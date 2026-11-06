@@ -1,7 +1,9 @@
 package tea
 
 import (
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
+
+	"codex_go/tui/keymsg"
 )
 
 // MessageRouter provides categorized message routing for the Update loop.
@@ -24,7 +26,7 @@ import (
 //  8. Transcript navigation
 //  9. Input history
 //  10. Composer submission / queuing
-func routeKeyMsg(m *Model, msg bubbletea.KeyMsg) bubbletea.Cmd {
+func routeKeyMsg(m *Model, msg keymsg.KeyMsg) bubbletea.Cmd {
 	// Pane resize mode consumes input until Enter/Esc saves or cancels the
 	// preview (Rust #59595 handle_pane_resize runs before other input).
 	if handled, cmd := m.handleSidePaneResizeKey(msg); handled {
@@ -36,7 +38,7 @@ func routeKeyMsg(m *Model, msg bubbletea.KeyMsg) bubbletea.Cmd {
 	}
 
 	// Ctrl+C dispatch
-	if msg.Type == bubbletea.KeyCtrlC {
+	if msg.Type == keymsg.KeyCtrlC {
 		if m.modal != nil && m.modal.sessionPicker != nil {
 			m.respondModal(true)
 			return nil
@@ -51,7 +53,7 @@ func routeKeyMsg(m *Model, msg bubbletea.KeyMsg) bubbletea.Cmd {
 	}
 
 	// Ctrl+D quit
-	if msg.Type == bubbletea.KeyCtrlD {
+	if msg.Type == keymsg.KeyCtrlD {
 		return bubbletea.Quit
 	}
 

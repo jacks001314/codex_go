@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 )
 
 // frameRequestMsg is the animation frame notification delivered to the event

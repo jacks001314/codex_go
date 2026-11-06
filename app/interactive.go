@@ -20,7 +20,9 @@ import (
 	"sync"
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
+
+	"github.com/google/uuid"
 
 	"codex_go/appserver"
 	"codex_go/appserverdaemon"
@@ -57,7 +59,6 @@ import (
 	codextea "codex_go/tui/tea"
 	"codex_go/turn"
 	"codex_go/worktree"
-	"github.com/google/uuid"
 )
 
 const remoteAddressUsage = "expected `ws://host:port`, `wss://host:port`, `unix://`, or `unix://PATH`"
@@ -1507,6 +1508,15 @@ func runInteractive(ctx context.Context, root *cli.RootOptions, stdin io.Reader,
 		}
 		remoteEndpoint = resolvedEndpoint
 	}
+	// Rust #43069: `--worktree` only allocates a checkout for local
+	// sessions; a remote workspace cannot see the local checkout.
+	if root.Shared.Worktree && remoteEndpoint != nil && !interactiveRemoteEndpointIsLocal(remoteEndpoint) {
+		return interactiveFatalExit(stderr, "`--worktree` is only supported for local sessions")
+	}
+	worktreeStartup, err := prepareInteractiveWorktree(root)
+	if err != nil {
+		return interactiveFatalExit(stderr, err.Error())
+	}
 	if remoteEndpoint != nil {
 		if strings.TrimSpace(root.Prompt) != "" {
 			return runInteractiveRemotePrompt(ctx, root, remoteEndpoint, stdout, stderr)
@@ -1520,7 +1530,7 @@ func runInteractive(ctx context.Context, root *cli.RootOptions, stdin io.Reader,
 		return runInteractivePrompt(ctx, root, stdin, stdout, stderr)
 	}
 	if shouldRunInteractiveTUI(stdin, stdout) {
-		return runInteractiveTUI(ctx, root, stdin, stdout, stderr)
+		return runInteractiveTUI(ctx, root, stdin, stdout, stderr, worktreeStartup, nil)
 	}
 	runner, err := newLocalRunnerWithEnvironments(auth.DefaultCodexHome(), false)
 	if err != nil {
@@ -1556,7 +1566,17 @@ func isRealTerminal(value any) bool {
 	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
-func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Reader, stdout io.Writer, stderr io.Writer) error {
+func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Reader, stdout io.Writer, stderr io.Writer, worktreeStartup *interactiveWorktreeStartup, forkedSession *session.Record) error {
+	if worktreeStartup != nil {
+		// A launch that exits before binding a thread keeps the checkout on disk
+		// and prints Rust's recovery instructions.
+		defer worktreeStartup.reportStartupFailure(stderr)
+	}
+	// Rust #57175: an interactive launch that requires a customer-hosted
+	// configuration server signs in before the terminal is initialized.
+	if err := ensureInteractiveStartupConfigServerLogin(ctx, root, stderr); err != nil {
+		return err
+	}
 	state := interactiveUIState(root)
 	// The embedded TUI owns one policy pair for its lifetime (Rust
 	// `EmbeddedNetworkPolicy`): the runner's model/executor clients and the MCP
@@ -1588,11 +1608,25 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 	state.RequiresOpenAIAuth = requiresOpenAIAuth
 	daemonCLIExecutable, daemonCLIVersion, daemonCLIPackage := interactiveDaemonCLIIdentity()
 	store := newSessionStore()
-	threadID, err := interactiveStartLocalTUIThread(root, state, store)
-	if err != nil {
-		return err
+	var threadID string
+	if forkedSession != nil {
+		threadID = strings.TrimSpace(string(forkedSession.ID))
+		if threadID == "" {
+			return errors.New("interactive fork startup did not create a thread")
+		}
+		state.SetThreadName(forkedSession.Title)
+		state.Messages = interactiveSessionMessagesFromRecord(forkedSession, reasoningProjectionChatWidget, false)
+	} else {
+		var startErr error
+		threadID, startErr = interactiveStartLocalTUIThread(root, state, store)
+		if startErr != nil {
+			return startErr
+		}
 	}
 	state.SetThreadID(threadID)
+	if err := worktreeStartup.bind(threadID); err != nil {
+		return err
+	}
 	runner, err := newLocalRunnerWithEnvironments(auth.DefaultCodexHome(), false)
 	if err != nil {
 		return err
@@ -1845,6 +1879,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		},
 		OnStartMCPLogin:           interactiveLocalMCPLoginStarter(mcpService),
 		OnReadRateLimits:          interactiveLocalRateLimitsReader(),
+		OnReadRateLimitSnapshots:  interactiveLocalRateLimitSnapshotsReader(),
 		OnReadThreadUsage:         interactiveLocalThreadUsageReader(),
 		OnReadPlanHistory:         interactivePlanHistoryReader(root),
 		PlanHistoryEnabled:        features.Enabled(settings.FeatureSettings, "analytics_plan_history"),
@@ -4362,12 +4397,17 @@ func interactiveSessionMessagesFromRecord(record *session.Record, projection rea
 		return nil
 	}
 	messages := make([]codextui.Message, 0, len(record.Items))
+	// Rust #46710: a loaded transcript reuses the live rich history cells, so
+	// persisted tool calls keep their display variant, status, and detail.
+	resume := codextea.NewResumeTranscriptBuilder(record.Metadata.CWD, interactiveResumeTranscriptWidth)
+	folded := interactiveSessionResumeToolItems(record.Items)
 	inReviewMode := false
 	for i := range record.Items {
 		item := record.Items[i]
 		itemType := normalizeInteractiveSessionItemType(item.Type)
 		switch itemType {
 		case "enteredreviewmode":
+			messages = append(messages, resume.Flush()...)
 			hint := strings.TrimSpace(firstNonEmptyLocal(item.Text, interactiveSessionItemDataString(item, "review"), remoteTUIAnyString(item.Metadata["review"])))
 			if hint == "" {
 				hint = "current changes"
@@ -4377,6 +4417,7 @@ func interactiveSessionMessagesFromRecord(record *session.Record, projection rea
 			inReviewMode = true
 			continue
 		case "exitedreviewmode":
+			messages = append(messages, resume.Flush()...)
 			if inReviewMode {
 				text := "<< Code review finished >>"
 				messages = append(messages, codextui.Message{Role: codextui.RoleHistory, Text: text, RawText: text})
@@ -4384,6 +4425,7 @@ func interactiveSessionMessagesFromRecord(record *session.Record, projection rea
 			inReviewMode = false
 			continue
 		case "contextcompaction":
+			messages = append(messages, resume.Flush()...)
 			text := "Context compacted"
 			messages = append(messages, codextui.Message{Role: codextui.RoleHistory, Text: text, RawText: text})
 			continue
@@ -4391,13 +4433,38 @@ func interactiveSessionMessagesFromRecord(record *session.Record, projection rea
 		if interactiveSessionItemIsHiddenContextInstruction(item) || interactiveSessionItemIsReviewUserMessage(item) || (inReviewMode && normalizeInteractiveSessionItemRole(item.Role) == "user") {
 			continue
 		}
+		if interactiveSessionItemIsToolOutput(item) {
+			// The paired call owns the rendered row (Rust tools.rs).
+			continue
+		}
+		if itemType == "reasoning" {
+			// Hidden reasoning between exploration commands stays attached to the
+			// open group and renders in the expanded transcript only.
+			if text, raw := reasoningProjectionText(sessionItemAsThreadItem(item), projection, showRawReasoning); text != "" || raw != "" {
+				if resume.AttachReasoning(strings.TrimSpace(item.ID), text, raw) {
+					continue
+				}
+			}
+		}
+		if projected, ok := folded[i]; ok {
+			if projectedMessages, handled := resume.Project(&projected); handled {
+				messages = append(messages, projectedMessages...)
+				continue
+			}
+		}
+		messages = append(messages, resume.Flush()...)
 		message, ok := interactiveSessionMessageFromItem(item, projection, showRawReasoning)
 		if ok {
 			messages = append(messages, message)
 		}
 	}
+	messages = append(messages, resume.Flush()...)
 	return messages
 }
+
+// interactiveResumeTranscriptWidth renders restored history cells at the same
+// wrap budget a typical terminal uses; the transcript re-wraps stored text.
+const interactiveResumeTranscriptWidth = 100
 
 func interactiveSessionItemIsReviewUserMessage(item session.Item) bool {
 	kind := firstNonEmptyLocal(interactiveSessionItemDataString(item, "kind"), remoteTUIAnyString(item.Metadata["kind"]))
@@ -4646,14 +4713,19 @@ func interactiveSessionItemToolText(item session.Item) string {
 	if status := firstNonEmptyLocal(strings.TrimSpace(item.Status), interactiveSessionItemDataString(item, "status")); status != "" {
 		lines = append(lines, "status: "+status)
 	}
-	for _, key := range []string{"arguments", "input", "output", "aggregatedOutput", "formattedOutput", "result"} {
-		if value := interactiveSessionItemDataString(item, key); value != "" {
-			lines = append(lines, value)
-			break
-		}
+	// Rust #46710 keeps the call arguments and the full output for the detailed
+	// and raw transcript views instead of collapsing a resumed tool call to one
+	// field. Both are retained here; the compact row is derived later.
+	arguments := interactiveSessionItemDataString(item, "arguments", "input")
+	output := interactiveSessionItemDataString(item, "output", "aggregatedOutput", "formattedOutput", "result")
+	if arguments != "" {
+		lines = append(lines, arguments)
 	}
-	if strings.TrimSpace(item.Text) != "" {
-		lines = append(lines, strings.TrimSpace(item.Text))
+	if output != "" && output != arguments {
+		lines = append(lines, output)
+	}
+	if text := strings.TrimSpace(item.Text); text != "" && text != arguments && text != output {
+		lines = append(lines, text)
 	}
 	return strings.TrimSpace(strings.Join(lines, "\n"))
 }

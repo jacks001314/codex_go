@@ -3,7 +3,7 @@ package app
 import (
 	"strings"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	"codex_go/auth"
 	codextea "codex_go/tui/tea"

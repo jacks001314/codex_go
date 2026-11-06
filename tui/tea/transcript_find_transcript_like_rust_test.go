@@ -1,9 +1,8 @@
 package tea
 
 import (
+	keymsg "codex_go/tui/keymsg"
 	"testing"
-
-	bubbletea "github.com/charmbracelet/bubbletea"
 
 	codextui "codex_go/tui"
 )
@@ -45,11 +44,11 @@ func TestGlobalFindTranscriptStartsOwnedFindLikeRust(t *testing.T) {
 	}
 
 	// Enter accepts the readable result; Esc then returns to latest output.
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	if !model.mainFind.active() || !model.mainFind.accepted || model.mainFind.query != "needle" {
 		t.Fatalf("Enter did not accept the readable result: %#v", model.mainFind)
 	}
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEsc})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyEsc})
 	if model.mainFind.active() {
 		t.Fatalf("Esc left accepted Find active")
 	}
@@ -60,7 +59,7 @@ func TestGlobalFindTranscriptStartsOwnedFindLikeRust(t *testing.T) {
 // their distinct Rust behavior.
 func TestGlobalOpenTranscriptDoesNotStartFindLikeRust(t *testing.T) {
 	model := newTranscriptFindFixture(t)
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyCtrlT})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyCtrlT})
 	if model.overlay == nil || !model.overlayTranscript {
 		t.Fatal("ctrl-t did not open the transcript overlay")
 	}

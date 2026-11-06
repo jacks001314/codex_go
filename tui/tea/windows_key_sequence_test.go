@@ -3,11 +3,12 @@
 package tea
 
 import (
+	keymsg "codex_go/tui/keymsg"
 	"runtime"
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
 	chatwidget "codex_go/tui/chatwidget"
@@ -39,8 +40,8 @@ func TestWindowsMappedShiftEnterInsertsNewline(t *testing.T) {
 	if got := model.composer.Value(); got != "first line\nsecond line" {
 		t.Fatalf("composer = %q, want two lines", got)
 	}
-	if strings.Contains(model.View(), "first linesecond line") {
-		t.Fatalf("Shift+Enter was swallowed:\n%s", model.View())
+	if strings.Contains(model.viewString(), "first linesecond line") {
+		t.Fatalf("Shift+Enter was swallowed:\n%s", model.viewString())
 	}
 
 	model = NewModel(codextui.NewState(nil), Options{Width: 80, Height: 24, DisablePasteBurst: true, WindowsTerminalMappedInput: true})
@@ -68,9 +69,9 @@ func TestWindowsMappedShiftEnterIgnoresOtherCSIAndModals(t *testing.T) {
 	}
 
 	// A mismatching prefix is replayed through normal key handling.
-	for _, key := range []bubbletea.KeyMsg{
-		{Type: bubbletea.KeyEsc},
-		{Type: bubbletea.KeyRunes, Runes: []rune{'x'}},
+	for _, key := range []keymsg.KeyMsg{
+		{Type: keymsg.KeyEsc},
+		{Type: keymsg.KeyRunes, Runes: []rune{'x'}},
 	} {
 		updated, _ = model.Update(key)
 		model = updated.(*Model)
@@ -99,7 +100,7 @@ func TestWindowsMappedShiftEnterDoesNotDelayOtherTerminals(t *testing.T) {
 	}
 	model := NewModel(codextui.NewState(nil), Options{Width: 80, Height: 24, DisablePasteBurst: true})
 	model.escBacktrackHint = false
-	updated, _ := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEsc})
+	updated, _ := model.Update(keymsg.KeyMsg{Type: keymsg.KeyEsc})
 	model = updated.(*Model)
 	if len(model.windowsKeySequence) != 0 {
 		t.Fatalf("non-Windows-Terminal Esc was buffered: %#v", model.windowsKeySequence)

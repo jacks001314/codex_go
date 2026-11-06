@@ -7,9 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	"codex_go/tui/analytics"
+	"codex_go/tui/keymsg"
 )
 
 // startSummaryAnalyticsBackend serves the accounts check, the account profile
@@ -72,9 +71,9 @@ func TestAnalyticsSummaryTabLoadsProfileAndScrollsLikeRust(t *testing.T) {
 	if dashboard.profile.State() != analytics.AnalyticsLoadStateReady {
 		t.Fatalf("profile state = %v, want ready", dashboard.profile.State())
 	}
-	view := stripAnalyticsTestANSI(model.View())
+	view := stripAnalyticsTestANSI(model.viewString())
 	for _, want := range []string{
-		"Summary",
+		"Overview",
 		"Test user",
 		"@test.user",
 		"Plus",
@@ -107,23 +106,23 @@ func TestAnalyticsSummaryTabLoadsProfileAndScrollsLikeRust(t *testing.T) {
 		t.Fatalf("summary view = %d, want 1", got)
 	}
 	waitForAnalyticsLoads(t, model)
-	if view := stripAnalyticsTestANSI(model.View()); !strings.Contains(view, "Token activity") || !strings.Contains(view, "Weekly") {
+	if view := stripAnalyticsTestANSI(model.viewString()); !strings.Contains(view, "Token activity") || !strings.Contains(view, "Weekly") {
 		t.Fatalf("summary did not switch to Weekly:\n%s", view)
 	}
 
 	// Scrolling moves the offset without moving a selection.
-	model.Update(key(bubbletea.KeyPgDown))
+	model.Update(key(keymsg.KeyPgDown))
 	if dashboard.scrollOffset <= 0 {
 		t.Fatalf("page down did not scroll: %d", dashboard.scrollOffset)
 	}
-	model.Update(key(bubbletea.KeyPgDown))
-	scrolled := stripAnalyticsTestANSI(model.View())
+	model.Update(key(keymsg.KeyPgDown))
+	scrolled := stripAnalyticsTestANSI(model.viewString())
 	for _, want := range []string{"Activity insights", "Fast Mode", "Most used plugins and skills", "@github", "$review"} {
 		if !strings.Contains(scrolled, want) {
 			t.Fatalf("scrolled summary missing %q:\n%s", want, scrolled)
 		}
 	}
-	model.Update(key(bubbletea.KeyHome))
+	model.Update(key(keymsg.KeyHome))
 	if dashboard.scrollOffset != 0 {
 		t.Fatalf("jump top = %d, want 0", dashboard.scrollOffset)
 	}
@@ -142,8 +141,8 @@ func TestAnalyticsSummaryProfileFailureKeepsTabLikeRust(t *testing.T) {
 	if dashboard.profile.State() != analytics.AnalyticsLoadStateError {
 		t.Fatalf("profile state = %v, want error", dashboard.profile.State())
 	}
-	view := stripAnalyticsTestANSI(model.View())
-	if !strings.Contains(view, "Summary") || !strings.Contains(view, "Report request failed") {
+	view := stripAnalyticsTestANSI(model.viewString())
+	if !strings.Contains(view, "Overview") || !strings.Contains(view, "Report request failed") {
 		t.Fatalf("summary failure view:\n%s", view)
 	}
 	// Other reports still loaded independently of the profile.

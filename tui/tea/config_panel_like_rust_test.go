@@ -5,9 +5,10 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 	"codex_go/utils"
 )
 
@@ -20,8 +21,8 @@ func configPanelModel(t *testing.T, write func([]SettingsEdit) (SettingsWriteRes
 	})
 }
 
-func configPanelRunes(text string) bubbletea.KeyMsg {
-	return bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune(text)}
+func configPanelRunes(text string) keymsg.KeyMsg {
+	return keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune(text)}
 }
 
 func configPanelRowByLabel(t *testing.T, label string) configPanelRow {
@@ -45,7 +46,7 @@ func TestConfigCommandOpensSearchablePanelLikeRust(t *testing.T) {
 	if model.modal == nil || model.modal.kind != ModalKindConfig || model.modal.configPanel == nil {
 		t.Fatalf("config modal = %#v", model.modal)
 	}
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	for _, want := range []string{
 		"Configuration",
 		"Appearance",
@@ -63,27 +64,27 @@ func TestConfigCommandOpensSearchablePanelLikeRust(t *testing.T) {
 		}
 	}
 
-	model.Update(key(bubbletea.KeyRight))
-	view = utils.StripANSI(model.View())
+	model.Update(key(keymsg.KeyRight))
+	view = utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "Notify when") || strings.Contains(view, "Terminal title") {
 		t.Fatalf("tab switch did not show notifications rows:\n%s", view)
 	}
-	model.Update(key(bubbletea.KeyLeft))
-	model.Update(key(bubbletea.KeyRight))
-	model.Update(key(bubbletea.KeyRight))
+	model.Update(key(keymsg.KeyLeft))
+	model.Update(key(keymsg.KeyRight))
+	model.Update(key(keymsg.KeyRight))
 	model.Update(configPanelRunes("/"))
 	model.Update(configPanelRunes("keyboard"))
-	view = utils.StripANSI(model.View())
+	view = utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "Keyboard") || strings.Contains(view, "Right-click paste") {
 		t.Fatalf("config search did not filter input rows:\n%s", view)
 	}
 	// Rust #53429: Esc clears an active search first and closes on the next
 	// press.
-	model.Update(key(bubbletea.KeyEsc))
+	model.Update(key(keymsg.KeyEsc))
 	if model.modal == nil || model.modal.configPanel == nil || model.modal.configPanel.query != "" {
 		t.Fatalf("Esc did not clear the config search: %#v", model.modal)
 	}
-	model.Update(key(bubbletea.KeyEsc))
+	model.Update(key(keymsg.KeyEsc))
 	if model.modal != nil {
 		t.Fatal("Esc did not close the config panel")
 	}
@@ -96,7 +97,7 @@ func TestConfigPanelSearchSpansGroupsLikeRust(t *testing.T) {
 	model.openConfigPanel()
 	model.Update(configPanelRunes("/"))
 	model.Update(configPanelRunes("paste"))
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	// Paste detection lives in Input and Right-click paste in Text selection,
 	// yet both match while Appearance is the active tab.
 	for _, want := range []string{
@@ -114,11 +115,11 @@ func TestConfigPanelSearchSpansGroupsLikeRust(t *testing.T) {
 			t.Fatalf("global search kept non-matching %q:\n%s", unwanted, view)
 		}
 	}
-	model.Update(key(bubbletea.KeyRight))
+	model.Update(key(keymsg.KeyRight))
 	if model.modal == nil || model.modal.configPanel == nil || model.modal.configPanel.query != "paste" {
 		t.Fatalf("tab switch dropped the search query: %#v", model.modal)
 	}
-	if view := utils.StripANSI(model.View()); !strings.Contains(view, "Right-click paste") {
+	if view := utils.StripANSI(model.viewString()); !strings.Contains(view, "Right-click paste") {
 		t.Fatalf("search results did not survive a tab switch:\n%s", view)
 	}
 }
@@ -128,7 +129,7 @@ func TestConfigPanelSearchSpansGroupsLikeRust(t *testing.T) {
 func TestConfigPanelNarrowKeepsValueAndDescribesBelowLikeRust(t *testing.T) {
 	model := NewModel(codextui.NewState(nil), Options{Width: 60, Height: 30})
 	model.openConfigPanel()
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "Theme") || !strings.Contains(view, "Configure") {
 		t.Fatalf("narrow panel hid the selected value:\n%s", view)
 	}
@@ -136,8 +137,8 @@ func TestConfigPanelNarrowKeepsValueAndDescribesBelowLikeRust(t *testing.T) {
 		t.Fatalf("narrow panel did not describe the selection below the list:\n%s", view)
 	}
 	height := strings.Count(view, "\n")
-	model.Update(key(bubbletea.KeyDown))
-	down := utils.StripANSI(model.View())
+	model.Update(key(keymsg.KeyDown))
+	down := utils.StripANSI(model.viewString())
 	if got := strings.Count(down, "\n"); got != height {
 		t.Fatalf("panel height changed with selection: %d -> %d", height, got)
 	}
@@ -149,7 +150,7 @@ func TestConfigPanelNarrowKeepsValueAndDescribesBelowLikeRust(t *testing.T) {
 	}
 	model.Update(configPanelRunes("/"))
 	model.Update(configPanelRunes("tips"))
-	if view := utils.StripANSI(model.View()); !strings.Contains(view, "enter toggle") {
+	if view := utils.StripANSI(model.viewString()); !strings.Contains(view, "enter toggle") {
 		t.Fatalf("footer did not switch to the toggle hint:\n%s", view)
 	}
 }
@@ -203,7 +204,7 @@ func TestConfigPanelEditorsAndPreferenceCyclesLikeRust(t *testing.T) {
 	if len(edits) != 1 || edits[0].KeyPath != "tui.effects.starfield" || edits[0].Value != false {
 		t.Fatalf("composer stars write = %#v", edits)
 	}
-	model.Update(key(bubbletea.KeyEsc))
+	model.Update(key(keymsg.KeyEsc))
 	if model.modal == nil || model.modal.configPanel == nil || model.modal.configPanel.effects {
 		t.Fatalf("Esc should return from Effects to Configuration: %#v", model.modal)
 	}
@@ -219,7 +220,7 @@ func TestConfigPanelEditorsAndPreferenceCyclesLikeRust(t *testing.T) {
 		t.Fatalf("opening the notify picker saved %#v", edits)
 	}
 	model.jumpConfigPanelChoice(2)
-	runTeaCmd(t, model, model.updateConfigPanelChoiceKey(key(bubbletea.KeyEnter)))
+	runTeaCmd(t, model, model.updateConfigPanelChoiceKey(key(keymsg.KeyEnter)))
 	if model.modal.configPanel.choice != nil {
 		t.Fatal("notify picker stayed open after select")
 	}
@@ -238,7 +239,7 @@ func TestConfigPanelEditorsAndPreferenceCyclesLikeRust(t *testing.T) {
 		t.Fatal("Right-click paste did not open a child picker")
 	}
 	model.jumpConfigPanelChoice(2)
-	runTeaCmd(t, model, model.updateConfigPanelChoiceKey(key(bubbletea.KeyEnter)))
+	runTeaCmd(t, model, model.updateConfigPanelChoiceKey(key(keymsg.KeyEnter)))
 	if len(edits) != 1 || edits[0].KeyPath != "tui.right_click_paste" || edits[0].Value != "on" {
 		t.Fatalf("right-click write = %#v", edits)
 	}
@@ -250,7 +251,7 @@ func TestConfigPanelEditorsAndPreferenceCyclesLikeRust(t *testing.T) {
 		t.Fatal("Session picker layout did not open a child picker")
 	}
 	model.jumpConfigPanelChoice(2)
-	runTeaCmd(t, model, model.updateConfigPanelChoiceKey(key(bubbletea.KeyEnter)))
+	runTeaCmd(t, model, model.updateConfigPanelChoiceKey(key(keymsg.KeyEnter)))
 	if len(edits) != 1 || edits[0].KeyPath != "tui.session_picker_view" || edits[0].Value != "comfortable" {
 		t.Fatalf("session picker write = %#v", edits)
 	}
@@ -260,11 +261,11 @@ func TestConfigPanelEditorsAndPreferenceCyclesLikeRust(t *testing.T) {
 
 	edits = nil
 	model.openConfigPanel()
-	model.Update(key(bubbletea.KeyRight))
-	model.Update(key(bubbletea.KeyRight))
-	model.Update(key(bubbletea.KeyRight))
-	model.Update(key(bubbletea.KeyRight))
-	view := utils.StripANSI(model.View())
+	model.Update(key(keymsg.KeyRight))
+	model.Update(key(keymsg.KeyRight))
+	model.Update(key(keymsg.KeyRight))
+	model.Update(key(keymsg.KeyRight))
+	view := utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "Copy on select") || !strings.Contains(view, "Deselect after copy") {
 		t.Fatalf("text selection tab missing rows:\n%s", view)
 	}
@@ -282,7 +283,7 @@ func TestConfigPanelEditorsAndPreferenceCyclesLikeRust(t *testing.T) {
 		t.Fatalf("copy-on-select labels = %#v", copyChoice.items)
 	}
 	model.jumpConfigPanelChoice(2)
-	runTeaCmd(t, model, model.updateConfigPanelChoiceKey(key(bubbletea.KeyEnter)))
+	runTeaCmd(t, model, model.updateConfigPanelChoiceKey(key(keymsg.KeyEnter)))
 	if len(edits) != 1 || edits[0].KeyPath != "tui.copy_on_select" || edits[0].Value != "always" {
 		t.Fatalf("copy-on-select write = %#v", edits)
 	}
@@ -324,16 +325,16 @@ func TestConfigPanelChildPickerKeysLikeRust(t *testing.T) {
 	if got := choice().selected; got != 0 {
 		t.Fatalf("k selected %d, want 0", got)
 	}
-	model.updateConfigPanelChoiceKey(key(bubbletea.KeyEnd))
+	model.updateConfigPanelChoiceKey(key(keymsg.KeyEnd))
 	if got := choice().selected; got != 1 {
 		t.Fatalf("End selected %d, want 1", got)
 	}
-	model.updateConfigPanelChoiceKey(key(bubbletea.KeyHome))
+	model.updateConfigPanelChoiceKey(key(keymsg.KeyHome))
 	if got := choice().selected; got != 0 {
 		t.Fatalf("Home selected %d, want 0", got)
 	}
 	parentSelected := model.modal.configPanel.selected
-	if cmd := model.updateConfigPanelChoiceKey(key(bubbletea.KeyEsc)); cmd != nil {
+	if cmd := model.updateConfigPanelChoiceKey(key(keymsg.KeyEsc)); cmd != nil {
 		t.Fatalf("Esc returned a command: %v", cmd)
 	}
 	if model.modal == nil || model.modal.configPanel == nil || model.modal.configPanel.choice != nil {
@@ -343,7 +344,7 @@ func TestConfigPanelChildPickerKeysLikeRust(t *testing.T) {
 		t.Fatalf("Esc moved the parent selection %d -> %d", parentSelected, model.modal.configPanel.selected)
 	}
 	model.activateConfigRow(configPanelRowByLabel(t, "Notify when"))
-	model.updateConfigPanelChoiceKey(key(bubbletea.KeyCtrlC))
+	model.updateConfigPanelChoiceKey(key(keymsg.KeyCtrlC))
 	if model.modal != nil {
 		t.Fatal("Ctrl+C did not close the panel from the child picker")
 	}
@@ -435,7 +436,7 @@ func TestConfigPanelSaveErrorKeepsPanelAndExplainsRetryLikeRust(t *testing.T) {
 		!strings.Contains(model.notice, "The task can continue") {
 		t.Fatalf("save failure notice = %q", model.notice)
 	}
-	if view := utils.StripANSI(model.View()); !strings.Contains(view, "Failed to save configuration: failed to parse config.toml") {
+	if view := utils.StripANSI(model.viewString()); !strings.Contains(view, "Failed to save configuration: failed to parse config.toml") {
 		t.Fatalf("save failure is not visible in the open panel:\n%s", view)
 	}
 }
@@ -450,7 +451,7 @@ func TestConfigPanelSaveNoticesLikeRust(t *testing.T) {
 	if overridden.notice != wantOverride || overridden.modal.configPanel.notice != wantOverride {
 		t.Fatalf("override notice = %q panel:%q", overridden.notice, overridden.modal.configPanel.notice)
 	}
-	if view := utils.StripANSI(overridden.View()); !strings.Contains(view, wantOverride) {
+	if view := utils.StripANSI(overridden.viewString()); !strings.Contains(view, wantOverride) {
 		t.Fatalf("override notice is not visible in the panel:\n%s", view)
 	}
 
@@ -472,7 +473,7 @@ func TestConfigPanelSaveNoticesLikeRust(t *testing.T) {
 	if plain.notice != "" || plain.modal.configPanel.notice != "" {
 		t.Fatalf("plain save notice = %q panel:%q", plain.notice, plain.modal.configPanel.notice)
 	}
-	if view := utils.StripANSI(plain.View()); !strings.Contains(view, "Changes save automatically") {
+	if view := utils.StripANSI(plain.viewString()); !strings.Contains(view, "Changes save automatically") {
 		t.Fatalf("plain save did not restore the default subtitle:\n%s", view)
 	}
 }

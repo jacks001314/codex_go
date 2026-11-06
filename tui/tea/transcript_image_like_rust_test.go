@@ -159,7 +159,7 @@ func TestTranscriptImageOverlayHidesPlacementsLikeRust(t *testing.T) {
 		t.Fatalf("plans = %#v", model.transcriptImagePlans)
 	}
 	model.overlay = chatwidget.NewTranscriptOverlay(80, 20, "transcript")
-	_ = model.View()
+	_ = model.viewString()
 	if len(model.transcriptImages.plans) != 0 || model.transcriptImages.surface {
 		t.Fatalf("overlay retained graphics: %#v surface=%v", model.transcriptImages.plans, model.transcriptImages.surface)
 	}
@@ -174,7 +174,7 @@ func TestTranscriptImageSurvivesBottomPaneModalLikeRust(t *testing.T) {
 		Body:    "Reason: preview stays visible",
 		Command: "go test ./...",
 	})
-	_ = model.View()
+	_ = model.viewString()
 	if !model.transcriptImages.surface || len(model.transcriptImages.plans) != 1 {
 		t.Fatalf("bottom modal removed transcript graphics: surface=%v plans=%#v", model.transcriptImages.surface, model.transcriptImages.plans)
 	}
@@ -418,7 +418,7 @@ func TestTranscriptImageChromeTopOffsetLikeRust(t *testing.T) {
 		InitialHistoryCells: []historycell.HistoryCell{historycell.NewImageGenerationCall("img-1", "completed", "cube", path)},
 	})
 	model.transcriptImageCell = transcript_image.CellSize{Width: 8, Height: 16}
-	_ = model.View()
+	_ = model.viewString()
 	if len(model.transcriptImages.plans) != 1 {
 		t.Fatalf("plans = %#v", model.transcriptImages.plans)
 	}

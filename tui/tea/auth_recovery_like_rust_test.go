@@ -16,7 +16,7 @@ func TestModelRendersAuthRecoveryHistoryLikeRust(t *testing.T) {
 	model.Update(AuthRecoveryMsg{Message: "AWS session has expired. Reauthenticating..."})
 	model.Update(AuthRecoveryMsg{Completed: true, Message: "Signed in with AWS."})
 
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	for _, want := range []string{
 		"• AWS session has expired. Reauthenticating...",
 		"✓ Signed in with AWS.",

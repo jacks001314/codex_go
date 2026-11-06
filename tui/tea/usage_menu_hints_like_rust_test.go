@@ -1,10 +1,9 @@
 package tea
 
 import (
+	keymsg "codex_go/tui/keymsg"
 	"strings"
 	"testing"
-
-	bubbletea "github.com/charmbracelet/bubbletea"
 
 	codextui "codex_go/tui"
 )
@@ -26,7 +25,7 @@ func TestUsageMenuHintsUseListKeymapLikeRust(t *testing.T) {
 		HasChatGPTAccount: true,
 	})
 	typeText(t, model, "/usage")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if model.modal == nil {
 		t.Fatal("usage menu did not open")
 	}
@@ -46,8 +45,8 @@ func TestUsageMenuNarrowHidesDescriptionsLikeRust(t *testing.T) {
 		AvailableRateLimitResetCredits: &credits,
 	})
 	typeText(t, model, "/usage")
-	model.Update(key(bubbletea.KeyEnter))
-	view := model.View()
+	model.Update(key(keymsg.KeyEnter))
+	view := model.viewString()
 	if !strings.Contains(view, "View analytics") || !strings.Contains(view, "Redeem reset") {
 		t.Fatalf("narrow usage menu missing rows:\n%s", view)
 	}
@@ -67,11 +66,11 @@ func TestRateLimitResetConfirmationUsesConfirmHintLikeRust(t *testing.T) {
 		AvailableRateLimitResetCredits: &credits,
 	})
 	typeText(t, model, "/usage")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	// Rust #45769 makes "View analytics" the first entry, so one row down
 	// reaches "Redeem reset".
-	model.Update(key(bubbletea.KeyDown))
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyDown))
+	model.Update(key(keymsg.KeyEnter))
 	if model.modal == nil {
 		t.Fatal("reset confirmation did not open")
 	}

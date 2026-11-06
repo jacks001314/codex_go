@@ -1,12 +1,14 @@
 package tea
 
 import (
+	mousemsg "codex_go/tui/mousemsg"
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 	"codex_go/utils"
 )
 
@@ -20,7 +22,7 @@ func renderedSelectionModel(t *testing.T, options Options) (*Model, *string) {
 		return nil
 	}
 	model := NewModel(codextui.NewState(&codextui.Options{Model: "gpt-5"}), options)
-	_ = model.View()
+	_ = model.viewString()
 	return model, &copied
 }
 
@@ -45,8 +47,8 @@ func dragFooterSelection(t *testing.T, model *Model, from, to string) bubbletea.
 		t.Fatalf("selection text not found in footer %q", line)
 	}
 	y := region.y
-	_, _ = model.Update(bubbletea.MouseMsg{X: start, Y: y, Action: bubbletea.MouseActionPress, Button: bubbletea.MouseButtonLeft})
-	_, cmd := model.Update(bubbletea.MouseMsg{X: end, Y: y, Action: bubbletea.MouseActionRelease, Button: bubbletea.MouseButtonLeft})
+	_, _ = model.Update(mousemsg.MouseMsg{X: start, Y: y, Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonLeft})
+	_, cmd := model.Update(mousemsg.MouseMsg{X: end, Y: y, Action: mousemsg.MouseActionRelease, Button: mousemsg.MouseButtonLeft})
 	return cmd
 }
 
@@ -55,11 +57,11 @@ func dragFooterSelection(t *testing.T, model *Model, from, to string) bubbletea.
 // footer text a drag can reach.
 func TestRenderedFooterSelectionCopiesPlainTextLikeRust(t *testing.T) {
 	model, copied := renderedSelectionModel(t, Options{})
-	_ = model.View()
+	_ = model.viewString()
 
 	cmd := dragFooterSelection(t, model, "? for shortcuts", "shortcuts")
 	runTeaCmd(t, model, cmd)
-	if view := model.View(); !strings.Contains(view, "\x1b[7m") {
+	if view := model.viewString(); !strings.Contains(view, "\x1b[7m") {
 		t.Fatalf("footer selection was not highlighted:\n%s", utils.StripANSI(view))
 	}
 	if !strings.HasPrefix(*copied, "? for") {
@@ -70,7 +72,7 @@ func TestRenderedFooterSelectionCopiesPlainTextLikeRust(t *testing.T) {
 	}
 
 	// The composer keeps accepting input after a footer selection.
-	_, _ = model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune("x")})
+	_, _ = model.Update(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune("x")})
 	if got := model.composer.Value(); got != "x" {
 		t.Fatalf("composer draft after typing = %q, want x", got)
 	}
@@ -93,14 +95,14 @@ func TestRenderedSelectionPreservesUnicodeAndHyperlinksLikeRust(t *testing.T) {
 func TestRenderedSelectionInvalidatesChangedRegionLikeRust(t *testing.T) {
 	model, _ := renderedSelectionModel(t, Options{})
 	region := model.renderedSelection.regions[renderedRegionFooter]
-	model.Update(bubbletea.MouseMsg{X: 0, Y: region.y, Action: bubbletea.MouseActionPress, Button: bubbletea.MouseButtonLeft})
+	model.Update(mousemsg.MouseMsg{X: 0, Y: region.y, Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonLeft})
 	if !model.renderedSelection.active {
 		t.Fatal("selection did not start")
 	}
 	// Copy/status notices may appear above the footer without relocating the
 	// selected cells; a real footer-line change still invalidates them.
 	model.escBacktrackHint = true
-	_ = model.View()
+	_ = model.viewString()
 	if model.renderedSelection.active {
 		t.Fatal("selection survived a footer change")
 	}
@@ -117,7 +119,7 @@ func TestRenderedSelectionKeyboardCopyLikeRust(t *testing.T) {
 	if !model.renderedSelection.active {
 		t.Fatal("copy_on_select=never dropped the selection")
 	}
-	_, copyCmd := model.Update(key(bubbletea.KeyCtrlC))
+	_, copyCmd := model.Update(key(keymsg.KeyCtrlC))
 	runTeaCmd(t, model, copyCmd)
 	if !strings.Contains(*copied, "? for") {
 		t.Fatalf("Ctrl+C copied %q", *copied)
@@ -130,8 +132,8 @@ func TestRenderedSelectionKeyboardCopyLikeRust(t *testing.T) {
 func TestRenderedSelectionStationaryClickAndInlineModeLikeRust(t *testing.T) {
 	model, copied := renderedSelectionModel(t, Options{})
 	region := model.renderedSelection.regions[renderedRegionFooter]
-	_, cmd := model.Update(bubbletea.MouseMsg{X: 0, Y: region.y, Action: bubbletea.MouseActionPress, Button: bubbletea.MouseButtonLeft})
-	_, cmd = model.Update(bubbletea.MouseMsg{X: 0, Y: region.y, Action: bubbletea.MouseActionRelease, Button: bubbletea.MouseButtonLeft})
+	_, cmd := model.Update(mousemsg.MouseMsg{X: 0, Y: region.y, Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonLeft})
+	_, cmd = model.Update(mousemsg.MouseMsg{X: 0, Y: region.y, Action: mousemsg.MouseActionRelease, Button: mousemsg.MouseButtonLeft})
 	if cmd != nil || *copied != "" {
 		t.Fatalf("stationary click copied %q", *copied)
 	}
@@ -156,7 +158,7 @@ func TestRenderedSelectionWheelClearsAndScrollsLikeRust(t *testing.T) {
 		state.AddMessage(codextui.RoleSystem, "event\nmore detail")
 	}
 	model := NewModel(state, Options{Width: 100, Height: 12, CopyOnSelect: "never"})
-	_ = model.View()
+	_ = model.viewString()
 	region := model.renderedSelection.regions[renderedRegionFooter]
 	if region.w <= 0 {
 		t.Fatalf("footer region not registered: %#v", region)
@@ -167,14 +169,14 @@ func TestRenderedSelectionWheelClearsAndScrollsLikeRust(t *testing.T) {
 	if start < 0 || end < 0 {
 		t.Fatalf("footer text not found in %q", line)
 	}
-	_, _ = model.Update(bubbletea.MouseMsg{X: start, Y: region.y, Action: bubbletea.MouseActionPress, Button: bubbletea.MouseButtonLeft})
-	_, _ = model.Update(bubbletea.MouseMsg{X: end, Y: region.y, Action: bubbletea.MouseActionRelease, Button: bubbletea.MouseButtonLeft})
+	_, _ = model.Update(mousemsg.MouseMsg{X: start, Y: region.y, Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonLeft})
+	_, _ = model.Update(mousemsg.MouseMsg{X: end, Y: region.y, Action: mousemsg.MouseActionRelease, Button: mousemsg.MouseButtonLeft})
 	if !model.renderedSelection.active {
 		t.Fatal("footer drag did not leave a selection active")
 	}
 
 	before := model.TranscriptYOffset()
-	_, _ = model.Update(bubbletea.MouseMsg{Action: bubbletea.MouseActionPress, Button: bubbletea.MouseButtonWheelUp})
+	_, _ = model.Update(mousemsg.MouseMsg{Action: mousemsg.MouseActionPress, Button: mousemsg.MouseButtonWheelUp})
 	if model.renderedSelection.active {
 		t.Fatal("wheel left the rendered selection active")
 	}

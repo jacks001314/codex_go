@@ -6,14 +6,15 @@ import (
 	"time"
 	"unicode/utf8"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	bubbletea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/rivo/uniseg"
 
 	"codex_go/protocol"
 	codextui "codex_go/tui"
-	"codex_go/tui/bottom_pane"
+	bottompane "codex_go/tui/bottom_pane"
 	"codex_go/tui/chatwidget"
+	"codex_go/tui/keymsg"
 	"codex_go/tui/markdown"
 	"codex_go/tui/styles"
 )
@@ -77,7 +78,7 @@ func asyncQuestionNotificationTitle(questions []bottompane.AsyncUserInputQuestio
 // selection. It returns handled=false so unrelated keys keep flowing to the
 // composer, which edits the focused question's draft while the editor is
 // expanded.
-func (m *Model) applyAsyncQuestionKey(msg bubbletea.KeyMsg, keySpec string) (bubbletea.Cmd, bool) {
+func (m *Model) applyAsyncQuestionKey(msg keymsg.KeyMsg, keySpec string) (bubbletea.Cmd, bool) {
 	if !m.asyncQuestionEditorActive() {
 		return nil, false
 	}
@@ -104,7 +105,7 @@ func (m *Model) applyAsyncQuestionKey(msg bubbletea.KeyMsg, keySpec string) (bub
 	case m.keyMatches("chat", "prompt_stack_back", keySpec):
 		m.navigateAsyncQuestions(false)
 		return nil, true
-	case m.questionEscBack && msg.Type == bubbletea.KeyEsc:
+	case m.questionEscBack && msg.Type == keymsg.KeyEsc:
 		m.collapseAsyncQuestions()
 		return nil, true
 	}
@@ -116,10 +117,10 @@ func (m *Model) applyAsyncQuestionKey(msg bubbletea.KeyMsg, keySpec string) (bub
 		// The editable Other choice has notes focus; Up/Down still move between
 		// choices (Rust keeps arrows out of the inline editor).
 		switch msg.Type {
-		case bubbletea.KeyUp:
+		case keymsg.KeyUp:
 			m.asyncQuestions.MoveSelection(false)
 			return nil, true
-		case bubbletea.KeyDown:
+		case keymsg.KeyDown:
 			m.asyncQuestions.MoveSelection(true)
 			return nil, true
 		}
@@ -163,7 +164,7 @@ func (m *Model) applyAsyncQuestionKey(msg bubbletea.KeyMsg, keySpec string) (bub
 			return nil, true
 		}
 	}
-	if msg.Type == bubbletea.KeyRunes && len(msg.Runes) == 1 && !msg.Alt {
+	if msg.Type == keymsg.KeyRunes && len(msg.Runes) == 1 && !msg.Alt {
 		if index, ok := asyncQuestionDigitIndex(msg.Runes[0], m.asyncQuestions.ChoiceCount()); ok {
 			m.asyncQuestions.SelectOption(index)
 			if m.asyncQuestions.OtherSelected() {

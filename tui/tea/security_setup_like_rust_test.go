@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	"codex_go/tui/keymsg"
 )
 
 func securitySetupTestModel() *Model {
@@ -31,7 +31,7 @@ func TestSecuritySetupBannerDismissAndActionLikeRust(t *testing.T) {
 	if !model.securitySetupBannerVisible() {
 		t.Fatal("security setup banner is not visible")
 	}
-	if view := model.View(); !strings.Contains(view, "Secure your account") ||
+	if view := model.viewString(); !strings.Contains(view, "Secure your account") ||
 		!strings.Contains(view, "Open settings") {
 		t.Fatalf("view missing security setup banner:\n%s", view)
 	}
@@ -56,7 +56,7 @@ func TestSecuritySetupBannerDismissAndActionLikeRust(t *testing.T) {
 
 	model.securitySetupDismissed = false
 	model.securitySetupNotice = securitySetupTestNotice()
-	model.Update(key(bubbletea.KeyEsc))
+	model.Update(key(keymsg.KeyEsc))
 	if model.securitySetupBannerVisible() || !model.securitySetupDismissed {
 		t.Fatal("Escape did not dismiss the banner")
 	}

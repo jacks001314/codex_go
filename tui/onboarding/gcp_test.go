@@ -6,9 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	"codex_go/appserver"
+	"codex_go/tui/keymsg"
 )
 
 // AuthOptionsIncludeGcpOnlyWithAPIAndFeature pins Rust #57857: the Google Cloud
@@ -60,25 +59,25 @@ func TestGcpSetupFlowCollectsFieldsAndCompletesLikeRust(t *testing.T) {
 	if model.state != SignInGCP || model.gcp == nil || model.gcp.view != gcpViewProject {
 		t.Fatalf("gcp start state=%s view=%#v", model.state, model.gcp)
 	}
-	if !strings.Contains(model.View(), "Set up Google Cloud Vertex AI") ||
-		!strings.Contains(model.View(), "Project ID") {
-		t.Fatalf("project render:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Set up Google Cloud Vertex AI") ||
+		!strings.Contains(model.viewString(), "Project ID") {
+		t.Fatalf("project render:\n%s", model.viewString())
 	}
 
 	model.handleGCPKey(bedrockKeyType("my-project"))
-	updated, _ := model.handleGCPKey(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	updated, _ := model.handleGCPKey(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	model = updated.(*authFlowModel)
 	if model.gcp.view != gcpViewLocation {
 		t.Fatalf("project confirm view = %v", model.gcp.view)
 	}
 	model.handleGCPKey(bedrockKeyType("us-central1"))
-	updated, _ = model.handleGCPKey(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	updated, _ = model.handleGCPKey(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	model = updated.(*authFlowModel)
 	if model.gcp.view != gcpViewCredentials {
 		t.Fatalf("location confirm view = %v", model.gcp.view)
 	}
 	model.handleGCPKey(bedrockKeyType("/tmp/adc.json"))
-	updated, command := model.handleGCPKey(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	updated, command := model.handleGCPKey(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	model = updated.(*authFlowModel)
 	if model.gcp.view != gcpViewConfiguring {
 		t.Fatalf("credentials confirm view = %v", model.gcp.view)
@@ -106,7 +105,7 @@ func TestGcpSetupFlowCollectsFieldsAndCompletesLikeRust(t *testing.T) {
 // and surfaces the required-field error until a project ID is entered.
 func TestGcpSetupRequiresProjectIDLikeRust(t *testing.T) {
 	model := gcpTestModel(func(context.Context, appserver.GcpSetupParams) error { return nil })
-	updated, command := model.handleGCPKey(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	updated, command := model.handleGCPKey(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	model = updated.(*authFlowModel)
 	if command != nil {
 		t.Fatal("empty project id dispatched a setup command")
@@ -114,8 +113,8 @@ func TestGcpSetupRequiresProjectIDLikeRust(t *testing.T) {
 	if model.gcp.view != gcpViewProject {
 		t.Fatalf("view advanced past project: %v", model.gcp.view)
 	}
-	if !strings.Contains(model.View(), "Enter a Google Cloud project ID.") {
-		t.Fatalf("missing project error:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "Enter a Google Cloud project ID.") {
+		t.Fatalf("missing project error:\n%s", model.viewString())
 	}
 }
 
@@ -128,11 +127,11 @@ func TestGcpSetupDefaultsToGlobalAndAdcLikeRust(t *testing.T) {
 		return nil
 	})
 	model.handleGCPKey(bedrockKeyType("proj"))
-	updated, _ := model.handleGCPKey(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	updated, _ := model.handleGCPKey(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	model = updated.(*authFlowModel)
-	updated, _ = model.handleGCPKey(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	updated, _ = model.handleGCPKey(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	model = updated.(*authFlowModel)
-	updated, command := model.handleGCPKey(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	updated, command := model.handleGCPKey(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	model = updated.(*authFlowModel)
 	model.Update(command())
 	if got.Location != nil || got.CredentialFile != nil {
@@ -143,7 +142,7 @@ func TestGcpSetupDefaultsToGlobalAndAdcLikeRust(t *testing.T) {
 // TestGcpCancelReturnsToProviderMenuLikeRust covers esc from the project step.
 func TestGcpCancelReturnsToProviderMenuLikeRust(t *testing.T) {
 	model := gcpTestModel(func(context.Context, appserver.GcpSetupParams) error { return nil })
-	updated, _ := model.handleGCPKey(bubbletea.KeyMsg{Type: bubbletea.KeyEsc})
+	updated, _ := model.handleGCPKey(keymsg.KeyMsg{Type: keymsg.KeyEsc})
 	model = updated.(*authFlowModel)
 	if model.state != SignInPickMode || model.gcp != nil {
 		t.Fatalf("cancel state=%s gcp=%#v", model.state, model.gcp)
@@ -158,7 +157,7 @@ func TestGcpSetupErrorReturnsToCredentialsLikeRust(t *testing.T) {
 	})
 	model.gcp.projectID = "proj"
 	model.gcp.view = gcpViewCredentials
-	updated, command := model.handleGCPKey(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	updated, command := model.handleGCPKey(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	model = updated.(*authFlowModel)
 	updated, _ = model.Update(command())
 	model = updated.(*authFlowModel)
@@ -168,7 +167,7 @@ func TestGcpSetupErrorReturnsToCredentialsLikeRust(t *testing.T) {
 	if model.gcp.view != gcpViewCredentials {
 		t.Fatalf("error view = %v, want credentials", model.gcp.view)
 	}
-	if !strings.Contains(model.View(), "credential file invalid") {
-		t.Fatalf("setup error missing:\n%s", model.View())
+	if !strings.Contains(model.viewString(), "credential file invalid") {
+		t.Fatalf("setup error missing:\n%s", model.viewString())
 	}
 }

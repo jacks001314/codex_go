@@ -4,11 +4,12 @@ import (
 	"fmt"
 	"strings"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	"codex_go/appserver"
 	bottompane "codex_go/tui/bottom_pane"
 	historycell "codex_go/tui/history_cell"
+	"codex_go/tui/keymsg"
 )
 
 type feedbackCategory string
@@ -75,7 +76,7 @@ func feedbackCategoryOptions() []ModalOption {
 	}
 }
 
-func (m *Model) updateFeedbackModal(message bubbletea.KeyMsg) bubbletea.Cmd {
+func (m *Model) updateFeedbackModal(message keymsg.KeyMsg) bubbletea.Cmd {
 	if m == nil || m.modal == nil || m.modal.feedback == nil {
 		return nil
 	}
@@ -84,16 +85,16 @@ func (m *Model) updateFeedbackModal(message bubbletea.KeyMsg) bubbletea.Cmd {
 		return m.updateFeedbackNote(message)
 	}
 	switch message.Type {
-	case bubbletea.KeyEsc, bubbletea.KeyCtrlC:
+	case keymsg.KeyEsc, keymsg.KeyCtrlC:
 		m.modal = nil
 		return nil
-	case bubbletea.KeyUp:
+	case keymsg.KeyUp:
 		m.moveModalSelection(-1)
 		return nil
-	case bubbletea.KeyDown, bubbletea.KeyTab:
+	case keymsg.KeyDown, keymsg.KeyTab:
 		m.moveModalSelection(1)
 		return nil
-	case bubbletea.KeyEnter:
+	case keymsg.KeyEnter:
 		switch state.stage {
 		case feedbackStageDisabled:
 			m.modal = nil
@@ -142,13 +143,13 @@ func feedbackNoteTitle(category feedbackCategory) string {
 	return "Tell us more (" + label + ")"
 }
 
-func (m *Model) updateFeedbackNote(message bubbletea.KeyMsg) bubbletea.Cmd {
+func (m *Model) updateFeedbackNote(message keymsg.KeyMsg) bubbletea.Cmd {
 	state := m.modal.feedback
 	now := m.currentTime()
 	switch message.Type {
-	case bubbletea.KeyEsc, bubbletea.KeyCtrlC:
+	case keymsg.KeyEsc, keymsg.KeyCtrlC:
 		m.modal = nil
-	case bubbletea.KeyEnter:
+	case keymsg.KeyEnter:
 		if !m.disablePasteBurst && state.pasteBurst.DirectInsertNewlineShouldInsert(now) {
 			// A newline inside a rapid paste burst is note content, not submit.
 			state.pasteBurst.ExtendWindow(now)
@@ -161,22 +162,22 @@ func (m *Model) updateFeedbackNote(message bubbletea.KeyMsg) bubbletea.Cmd {
 		}
 		m.modal = nil
 		return m.submitFeedback(state.category, state.note, state.includeLogs)
-	case bubbletea.KeyCtrlJ:
+	case keymsg.KeyCtrlJ:
 		state.note += "\n"
 		state.pasteBurst.ClearAfterExplicitPaste()
-	case bubbletea.KeyTab:
+	case keymsg.KeyTab:
 		inBurst := !m.disablePasteBurst && state.pasteBurst.DirectInsertNewlineShouldInsert(now)
 		state.note += "\t"
 		if inBurst {
 			state.pasteBurst.ExtendWindow(now)
 		}
-	case bubbletea.KeyBackspace:
+	case keymsg.KeyBackspace:
 		runes := []rune(state.note)
 		if len(runes) > 0 {
 			state.note = string(runes[:len(runes)-1])
 		}
 		state.pasteBurst.ClearAfterExplicitPaste()
-	case bubbletea.KeyRunes:
+	case keymsg.KeyRunes:
 		if message.Paste {
 			// A bracketed paste is explicit input: keep it whole and end any
 			// burst so a following Enter submits immediately.

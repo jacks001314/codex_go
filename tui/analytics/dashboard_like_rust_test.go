@@ -149,17 +149,20 @@ func TestAnalyticsConsumerAttributionAndTitlesMatchRust(t *testing.T) {
 	if AnalyticsConsumerAttribution(true, &attributed) {
 		t.Fatal("business accounts do not use consumer attribution")
 	}
-	if got := AnalyticsSectionTitle(AnalyticsSectionUsage, true, false); got != "Token usage history" {
-		t.Fatalf("business usage title = %q", got)
+	if got := AnalyticsSectionTabLabel(AnalyticsSectionUsage, true); got != "Tokens" {
+		t.Fatalf("business usage tab = %q", got)
 	}
-	if got := AnalyticsSectionTitle(AnalyticsSectionUsage, false, true); got != "Total usage history" {
-		t.Fatalf("attributed usage title = %q", got)
+	if got := AnalyticsSectionTabLabel(AnalyticsSectionUsage, false); got != "Usage" {
+		t.Fatalf("consumer usage tab = %q", got)
 	}
-	if got := AnalyticsSectionTitle(AnalyticsSectionUsage, false, false); got != "Usage history" {
-		t.Fatalf("legacy usage title = %q", got)
+	if got := AnalyticsSectionTabLabel(AnalyticsSectionSummary, false); got != "Overview" {
+		t.Fatalf("summary tab = %q", got)
 	}
-	if got := AnalyticsSectionTitle(AnalyticsSectionSkills, false, false); got != "Skills used" {
-		t.Fatalf("skills title = %q", got)
+	if got := AnalyticsSectionTabLabel(AnalyticsSectionActivity, false); got != "Messages" {
+		t.Fatalf("activity tab = %q", got)
+	}
+	if got := AnalyticsSectionTabLabel(AnalyticsSectionSkills, false); got != "Skills" {
+		t.Fatalf("skills tab = %q", got)
 	}
 }
 
@@ -222,10 +225,10 @@ func TestAnalyticsDashboardLayoutMatchesRust(t *testing.T) {
 	if start != 0 || end != 16 {
 		t.Fatalf("focused range = (%d,%d), want (0,16)", start, end)
 	}
-	if !strings.HasPrefix(lines[0], "╭─") || !strings.Contains(lines[0], "1 Summary") {
+	if !strings.HasPrefix(lines[0], "╭─") || !strings.Contains(lines[0], "1 Overview") {
 		t.Fatalf("first card top = %q", lines[0])
 	}
-	if !strings.Contains(lines[0], "2 Usage history") || !strings.Contains(lines[0], "▸") {
+	if !strings.Contains(lines[0], "2 Usage") || !strings.Contains(lines[0], "▸") {
 		t.Fatalf("focused card title = %q, want a focus marker", lines[0])
 	}
 	for index, line := range lines {
@@ -267,8 +270,9 @@ func TestAnalyticsDashboardTruncatesOverflowLikeRust(t *testing.T) {
 	}
 }
 
-// TestAnalyticsPanelContainsChartLikeRust covers the maximized panel heading,
-// grouping, business model line, and its full selection range.
+// TestAnalyticsPanelContainsChartLikeRust covers the maximized panel body:
+// #46863 moved its heading, grouping, and model filter into the dashboard
+// chrome, leaving the chart and its full selection range here.
 func TestAnalyticsPanelContainsChartLikeRust(t *testing.T) {
 	history := &AccountAnalyticsHistory{
 		Unit: AccountAnalyticsUnitCredits,
@@ -291,17 +295,18 @@ func TestAnalyticsPanelContainsChartLikeRust(t *testing.T) {
 		ChartHeight:         4,
 		RangeIndex:          0,
 		EndDate:             time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC),
-		Focused:             true,
 		Business:            true,
 		ConsumerAttribution: false,
-		TokenModel:          strPtrForTest("gpt-5"),
 	})
 	text := strings.Join(panel.Lines, "\n")
-	if !strings.Contains(text, "Token usage history") || !strings.Contains(text, "By product") {
-		t.Fatalf("panel heading:\n%s", text)
+	if strings.Contains(text, "Token usage history") || strings.Contains(text, "By product") {
+		t.Fatalf("panel repeated chrome heading:\n%s", text)
 	}
-	if !strings.Contains(text, "gpt-5 · m change model") {
-		t.Fatalf("business model line missing:\n%s", text)
+	if strings.Contains(text, "m change model") {
+		t.Fatalf("panel repeated the model control:\n%s", text)
+	}
+	if len(panel.Lines) == 0 {
+		t.Fatal("panel body is empty")
 	}
 	if panel.SelectionStart != 0 || panel.SelectionEnd != len(panel.Lines) {
 		t.Fatalf("panel selection = (%d,%d), want (0,%d)", panel.SelectionStart, panel.SelectionEnd, len(panel.Lines))
@@ -310,8 +315,6 @@ func TestAnalyticsPanelContainsChartLikeRust(t *testing.T) {
 		t.Fatalf("chart bands = %d, want 1", panel.ChartBands)
 	}
 }
-
-func strPtrForTest(value string) *string { return &value }
 
 func readyAnalyticsLoad[T any](value T) AnalyticsLoad[T] {
 	var load AnalyticsLoad[T]

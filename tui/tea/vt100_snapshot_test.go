@@ -36,7 +36,7 @@ func TestModelVT100TerminalSnapshotMainView(t *testing.T) {
 	state.AddMessage(codextui.RoleAssistant, "The repo has a Go TUI shell.")
 	model := NewModel(state, Options{Width: 82, Height: 18})
 
-	assertVT100Snapshot(t, model.View(), 82, 24, `
+	assertVT100Snapshot(t, normalizeSnapshotStatusPath(model.viewString()), 82, 24, `
 › summarize the repo
 
 
@@ -52,7 +52,7 @@ func TestModelVT100TerminalSnapshotMainView(t *testing.T) {
 
 › Ask Codex to do anything
 
-  gpt-5 high · D:\qax\reagent\dev\codex_go\tui\tea
+  gpt-5 high · <cwd>
   ? for shortcuts`)
 }
 
@@ -65,7 +65,7 @@ func TestModelVT100TerminalSnapshotApprovalModal(t *testing.T) {
 		Command: "go test ./...",
 	})
 
-	assertVT100Snapshot(t, model.View(), 76, 24, `
+	assertVT100Snapshot(t, model.viewString(), 76, 24, `
 No messages yet.
 
 
@@ -91,7 +91,7 @@ func assertVT100Snapshot(t *testing.T, view string, width int, height int, want 
 	terminal := newTestVirtualTerminal(width, height)
 	terminal.WriteString("\x1b[2J\x1b[H")
 	terminal.WriteString(view)
-	got := strings.TrimSpace(terminal.Snapshot())
+	got := normalizeSnapshotStatusPath(strings.TrimSpace(terminal.Snapshot()))
 	want = strings.TrimSpace(strings.ReplaceAll(want, "\r\n", "\n"))
 	if got != want {
 		t.Fatalf("vt100 snapshot mismatch\n--- got ---\n%s\n--- want ---\n%s", got, want)

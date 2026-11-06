@@ -1,11 +1,12 @@
 package tea
 
 import (
+	keymsg "codex_go/tui/keymsg"
 	"errors"
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
 	chatwidget "codex_go/tui/chatwidget"
@@ -26,13 +27,13 @@ func confirmSelectedTUIMode(t *testing.T, model *Model, down int) bubbletea.Cmd 
 	t.Helper()
 	model.openTUIModePicker()
 	for range down {
-		model.Update(key(bubbletea.KeyDown))
+		model.Update(key(keymsg.KeyDown))
 	}
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if model.modal == nil {
 		t.Fatal("first confirmation press closed the picker")
 	}
-	_, command := model.Update(key(bubbletea.KeyEnter))
+	_, command := model.Update(key(keymsg.KeyEnter))
 	if command == nil {
 		t.Fatal("confirmed TUI mode returned no settings write")
 	}
@@ -63,7 +64,7 @@ func TestTUIModePickerPersistsNextLaunchOnlyLikeRust(t *testing.T) {
 	if !model.noAltScreen {
 		t.Fatal("saving the next-launch mode changed the running renderer")
 	}
-	if view := utils.StripANSI(model.View()); !strings.Contains(view, "Saved TUI mode: Fullscreen. Restart Codex to apply; launch overrides still apply.") {
+	if view := utils.StripANSI(model.viewString()); !strings.Contains(view, "Saved TUI mode: Fullscreen. Restart Codex to apply; launch overrides still apply.") {
 		t.Fatalf("save confirmation missing:\n%s", view)
 	}
 }
@@ -80,7 +81,7 @@ func TestTUIModePickerFailureKeepsStoredPreferenceLikeRust(t *testing.T) {
 	if !model.fullscreenTranscript {
 		t.Fatal("failed save changed the stored preference")
 	}
-	if view := utils.StripANSI(model.View()); !strings.Contains(view, "Failed to save TUI mode: boom") {
+	if view := utils.StripANSI(model.viewString()); !strings.Contains(view, "Failed to save TUI mode: boom") {
 		t.Fatalf("save failure missing:\n%s", view)
 	}
 }
@@ -92,7 +93,7 @@ func TestTUIModePickerCancelWritesNothingLikeRust(t *testing.T) {
 		return SettingsWriteResult{}, nil
 	}, false)
 	model.openTUIModePicker()
-	model.Update(key(bubbletea.KeyEsc))
+	model.Update(key(keymsg.KeyEsc))
 	if model.modal != nil || wrote {
 		t.Fatalf("cancel left modal=%#v wrote=%v", model.modal, wrote)
 	}

@@ -1,6 +1,6 @@
 package tea
 
-import bubbletea "github.com/charmbracelet/bubbletea"
+import bubbletea "charm.land/bubbletea/v2"
 
 const (
 	clearVisibleTerminalSequence    = "\x1b[2J\x1b[H"

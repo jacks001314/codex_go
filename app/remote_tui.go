@@ -19,7 +19,7 @@ import (
 	"sync"
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 	"github.com/coder/websocket"
 
 	appsapi "codex_go/apps"
@@ -704,11 +704,12 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		OnConsumeRateLimitResetCredit: func(idempotencyKey string) (chatwidget.RateLimitResetConsumeOutcome, error) {
 			return interactiveRemoteConsumeRateLimitResetCredit(ctx, endpoint, idempotencyKey)
 		},
-		OnReadRateLimits:    interactiveRemoteRateLimitsReader(ctx, endpoint),
-		OnReadThreadUsage:   interactiveRemoteThreadUsageReader(ctx, endpoint),
-		OnReadPlanHistory:   interactivePlanHistoryReader(root),
-		PlanHistoryEnabled:  features.Enabled(settings.FeatureSettings, "analytics_plan_history"),
-		OnReadBackendBanner: interactiveRemoteBackendBannerReader(ctx, endpoint),
+		OnReadRateLimits:         interactiveRemoteRateLimitsReader(ctx, endpoint),
+		OnReadRateLimitSnapshots: interactiveRemoteRateLimitSnapshotsReader(ctx, endpoint),
+		OnReadThreadUsage:        interactiveRemoteThreadUsageReader(ctx, endpoint),
+		OnReadPlanHistory:        interactivePlanHistoryReader(root),
+		PlanHistoryEnabled:       features.Enabled(settings.FeatureSettings, "analytics_plan_history"),
+		OnReadBackendBanner:      interactiveRemoteBackendBannerReader(ctx, endpoint),
 		OnBackendBannerAction: interactiveBackendBannerActionHandler(
 			interactiveRemoteAddCreditsNudgeSender(ctx, endpoint),
 		),
@@ -2843,6 +2844,9 @@ func remoteTUIThreadMessagesFromThread(thread *appserver.Thread, projection reas
 		return nil
 	}
 	messages := []codextui.Message{}
+	// Rust #46710: a loaded transcript reuses the live rich history cells for
+	// persisted tool calls instead of flattening them to status text.
+	resume := codextea.NewResumeTranscriptBuilder(thread.CWD, interactiveResumeTranscriptWidth)
 	inReviewMode := false
 	for _, turn := range thread.Turns {
 		// Rust ThreadEventStore::snapshot hides a delegated voice turn's private
@@ -2854,6 +2858,7 @@ func remoteTUIThreadMessagesFromThread(thread *appserver.Thread, projection reas
 			itemType := remoteTUINormalizedThreadItemType(item.Type)
 			switch itemType {
 			case "enteredreviewmode":
+				messages = append(messages, resume.Flush()...)
 				hint := strings.TrimSpace(firstNonEmptyLocal(item.Text, remoteTUIAnyString(item.Data["review"])))
 				if hint == "" {
 					hint = "current changes"
@@ -2863,6 +2868,7 @@ func remoteTUIThreadMessagesFromThread(thread *appserver.Thread, projection reas
 				inReviewMode = true
 				continue
 			case "exitedreviewmode":
+				messages = append(messages, resume.Flush()...)
 				if inReviewMode {
 					text := "<< Code review finished >>"
 					messages = append(messages, codextui.Message{Role: codextui.RoleHistory, Text: text, RawText: text})
@@ -2870,6 +2876,7 @@ func remoteTUIThreadMessagesFromThread(thread *appserver.Thread, projection reas
 				inReviewMode = false
 				continue
 			case "contextcompaction":
+				messages = append(messages, resume.Flush()...)
 				text := "Context compacted"
 				messages = append(messages, codextui.Message{Role: codextui.RoleHistory, Text: text, RawText: text})
 				continue
@@ -2877,6 +2884,21 @@ func remoteTUIThreadMessagesFromThread(thread *appserver.Thread, projection reas
 			if remoteTUIThreadItemIsReviewUserMessage(item) || (inReviewMode && remoteTUINormalizedThreadItemRole(item.Role) == "user") {
 				continue
 			}
+			if itemType == "reasoning" {
+				if text, raw := reasoningProjectionText(item, projection, showRawReasoning); text != "" || raw != "" {
+					if resume.AttachReasoning(strings.TrimSpace(item.ID), text, raw) {
+						continue
+					}
+				}
+			}
+			if remoteResumeToolItemType(itemType) {
+				projected := remoteResumeProtocolItem(item)
+				if projectedMessages, handled := resume.Project(&projected); handled {
+					messages = append(messages, projectedMessages...)
+					continue
+				}
+			}
+			messages = append(messages, resume.Flush()...)
 			message, ok := remoteTUIMessageFromThreadItem(item, projection, showRawReasoning)
 			if ok {
 				messages = append(messages, message)
@@ -2891,6 +2913,7 @@ func remoteTUIThreadMessagesFromThread(thread *appserver.Thread, projection reas
 			messages = append(messages, codextui.Message{Role: codextui.RoleSystem, Text: "Error: " + strings.TrimSpace(turn.Error.Message)})
 		}
 	}
+	messages = append(messages, resume.Flush()...)
 	return messages
 }
 

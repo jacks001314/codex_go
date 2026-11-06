@@ -4,9 +4,10 @@ import (
 	"fmt"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 func navKeyPriorityConfig(t *testing.T, context string, action string, binding string) *codextui.KeymapConfig {
@@ -44,7 +45,7 @@ func TestConfiguredNavKeyWinsOverTranscriptScrollLikeRust(t *testing.T) {
 			t.Fatalf("initial transcript offset = %d, want scrollable bottom", bottom)
 		}
 		typeText(t, model, "send once")
-		model.Update(key(bubbletea.KeyPgUp))
+		model.Update(key(keymsg.KeyPgUp))
 		if len(requests) != 1 || requests[0].Prompt != "send once" {
 			t.Fatalf("configured PageUp should submit, requests=%#v", requests)
 		}
@@ -65,7 +66,7 @@ func TestConfiguredNavKeyWinsOverTranscriptScrollLikeRust(t *testing.T) {
 			t.Fatalf("initial transcript offset = %d, want scrollable bottom", model.transcript.YOffset)
 		}
 		typeText(t, model, "send once")
-		model.Update(key(bubbletea.KeyPgUp))
+		model.Update(key(keymsg.KeyPgUp))
 		if len(requests) != 1 || requests[0].Prompt != "send once" {
 			t.Fatalf("global.submit PageUp should submit, requests=%#v", requests)
 		}
@@ -85,7 +86,7 @@ func TestConfiguredNavKeyWinsOverTranscriptScrollLikeRust(t *testing.T) {
 			OnInterrupt:  func() bubbletea.Cmd { interrupts++; return nil },
 		})
 		bottom := model.transcript.YOffset
-		model.Update(key(bubbletea.KeyPgDown))
+		model.Update(key(keymsg.KeyPgDown))
 		if interrupts != 1 {
 			t.Fatalf("configured PageDown should interrupt, interrupts=%d", interrupts)
 		}
@@ -103,7 +104,7 @@ func TestDefaultNavKeyStillScrollsLikeRust(t *testing.T) {
 	if bottom <= 0 {
 		t.Fatalf("initial transcript offset = %d, want scrollable bottom", bottom)
 	}
-	model.Update(key(bubbletea.KeyPgUp))
+	model.Update(key(keymsg.KeyPgUp))
 	if got := model.transcript.YOffset; got >= bottom {
 		t.Fatalf("default PageUp offset = %d, want less than bottom %d", got, bottom)
 	}

@@ -1,7 +1,7 @@
 package tea
 
 import (
-	bubbletea "github.com/charmbracelet/bubbletea"
+	mousemsg "codex_go/tui/mousemsg"
 
 	codextui "codex_go/tui"
 )
@@ -18,14 +18,14 @@ import (
 // should move, mirroring Rust `TranscriptView::handle_mouse`'s ScrollUp/
 // ScrollDown arm (#50209). Wheel up scrolls toward earlier output (negative
 // rows), wheel down toward later output.
-func (m *Model) transcriptWheelRows(msg bubbletea.MouseMsg) (int, bool) {
-	if m == nil || msg.Action != bubbletea.MouseActionPress {
+func (m *Model) transcriptWheelRows(msg mousemsg.MouseMsg) (int, bool) {
+	if m == nil || msg.Action != mousemsg.MouseActionPress {
 		return 0, false
 	}
 	switch msg.Button {
-	case bubbletea.MouseButtonWheelUp:
+	case mousemsg.MouseButtonWheelUp:
 		return m.mouseScroll.Rows(-1), true
-	case bubbletea.MouseButtonWheelDown:
+	case mousemsg.MouseButtonWheelDown:
 		return m.mouseScroll.Rows(1), true
 	default:
 		return 0, false

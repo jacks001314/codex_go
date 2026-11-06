@@ -1,7 +1,8 @@
 package tea
 
 import (
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
+	mousemsg "codex_go/tui/mousemsg"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -13,7 +14,7 @@ type sidePaneDrag struct {
 	active bool
 }
 
-func (m *Model) handleSidePaneMouse(msg bubbletea.MouseMsg) (bool, bubbletea.Cmd) {
+func (m *Model) handleSidePaneMouse(msg mousemsg.MouseMsg) (bool, bubbletea.Cmd) {
 	if m == nil || m.State == nil || m.activeSide == nil || !m.sideWorkspaceEnabled() || m.sideZoomed {
 		return false, nil
 	}
@@ -52,8 +53,8 @@ func (m *Model) handleSidePaneMouse(msg bubbletea.MouseMsg) (bool, bubbletea.Cmd
 		return true, nil
 	}
 	switch msg.Action {
-	case bubbletea.MouseActionPress:
-		if msg.Button != bubbletea.MouseButtonLeft {
+	case mousemsg.MouseActionPress:
+		if msg.Button != mousemsg.MouseButtonLeft {
 			return false, nil
 		}
 		if msg.X >= dividerStart && msg.X <= dividerEnd {
@@ -70,7 +71,7 @@ func (m *Model) handleSidePaneMouse(msg bubbletea.MouseMsg) (bool, bubbletea.Cmd
 		if msg.X < dividerStart && m.activeSide.ShowingSide {
 			return true, m.focusMainComposer()
 		}
-	case bubbletea.MouseActionMotion:
+	case mousemsg.MouseActionMotion:
 		if m.sideDrag == nil || !m.sideDrag.active {
 			return false, nil
 		}
@@ -79,7 +80,7 @@ func (m *Model) handleSidePaneMouse(msg bubbletea.MouseMsg) (bool, bubbletea.Cmd
 			m.sideResize = &sidePaneResize{previewWidth: width}
 		}
 		return true, nil
-	case bubbletea.MouseActionRelease:
+	case mousemsg.MouseActionRelease:
 		if m.sideDrag == nil {
 			return false, nil
 		}

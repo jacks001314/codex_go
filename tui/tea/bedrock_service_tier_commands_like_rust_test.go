@@ -5,11 +5,10 @@ import (
 	"fmt"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	"codex_go/model"
 	codextui "codex_go/tui"
 	bottompane "codex_go/tui/bottom_pane"
+	"codex_go/tui/keymsg"
 )
 
 // TestBedrockUltrafastSlashCommandSelectsAndClearsTierLikeRust mirrors Rust
@@ -55,7 +54,7 @@ func TestBedrockUltrafastSlashCommandSelectsAndClearsTierLikeRust(t *testing.T) 
 			}
 
 			typeText(t, m, "/ultrafast")
-			_, cmd := m.Update(key(bubbletea.KeyEnter))
+			_, cmd := m.Update(key(keymsg.KeyEnter))
 			if m.State.ServiceTier != "ultrafast" {
 				t.Fatalf("after /ultrafast tier = %q, want ultrafast", m.State.ServiceTier)
 			}
@@ -80,7 +79,7 @@ func TestBedrockUltrafastSlashCommandSelectsAndClearsTierLikeRust(t *testing.T) 
 				t.Fatalf("tier after returning to Astra = %q, want ultrafast", m.State.ServiceTier)
 			}
 			typeText(t, m, "/ultrafast")
-			m.Update(key(bubbletea.KeyEnter))
+			m.Update(key(keymsg.KeyEnter))
 			if m.State.ServiceTier != codextui.ServiceTierDefaultRequestValue {
 				t.Fatalf("second /ultrafast tier = %q, want default", m.State.ServiceTier)
 			}
@@ -128,7 +127,7 @@ func TestCustomBedrockCatalogTierSlashCommandLikeRust(t *testing.T) {
 		t.Fatalf("explicit default tier = %q", m.State.ServiceTier)
 	}
 	typeText(t, m, "/express")
-	m.Update(key(bubbletea.KeyEnter))
+	m.Update(key(keymsg.KeyEnter))
 	if m.State.ServiceTier != "ultrafast" {
 		t.Fatalf("after /express tier = %q, want ultrafast", m.State.ServiceTier)
 	}

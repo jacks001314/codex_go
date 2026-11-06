@@ -1,13 +1,15 @@
 package tea
 
 import (
+	keymsg "codex_go/tui/keymsg"
+	mousemsg "codex_go/tui/mousemsg"
 	"strings"
 
-	bubbleskey "github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/viewport"
-	"github.com/charmbracelet/lipgloss"
+	bubbleskey "charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/viewport"
+	bubbletea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
-	bubbletea "github.com/charmbracelet/bubbletea"
 )
 
 // transcriptViewport holds the transcript pane's scroll state over rows the
@@ -150,7 +152,7 @@ func (v transcriptViewport) View() string {
 // Update keeps the viewport's key and wheel bindings.
 func (v transcriptViewport) Update(msg bubbletea.Msg) (transcriptViewport, bubbletea.Cmd) {
 	switch msg := msg.(type) {
-	case bubbletea.KeyMsg:
+	case keymsg.KeyMsg:
 		switch {
 		case bubbleskey.Matches(msg, v.keyMap.PageDown):
 			v.pageDown()
@@ -165,14 +167,14 @@ func (v transcriptViewport) Update(msg bubbletea.Msg) (transcriptViewport, bubbl
 		case bubbleskey.Matches(msg, v.keyMap.Up):
 			v.ScrollUp(1)
 		}
-	case bubbletea.MouseMsg:
-		if !v.MouseWheelEnabled || msg.Action != bubbletea.MouseActionPress {
+	case mousemsg.MouseMsg:
+		if !v.MouseWheelEnabled || msg.Action != mousemsg.MouseActionPress {
 			break
 		}
 		switch msg.Button {
-		case bubbletea.MouseButtonWheelUp:
+		case mousemsg.MouseButtonWheelUp:
 			v.ScrollUp(v.MouseWheelDelta)
-		case bubbletea.MouseButtonWheelDown:
+		case mousemsg.MouseButtonWheelDown:
 			v.ScrollDown(v.MouseWheelDelta)
 		}
 	}

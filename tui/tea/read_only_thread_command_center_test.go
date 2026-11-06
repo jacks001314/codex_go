@@ -4,10 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
 	agentsoverview "codex_go/tui/agents_overview"
+	"codex_go/tui/keymsg"
 )
 
 func readOnlyCommandCenterModel(t *testing.T, options Options) *Model {
@@ -39,10 +38,10 @@ func availableCommandCenterOptions() Options {
 func TestReadOnlyViewReturnsToCommandCenterWithLeftOrEscape(t *testing.T) {
 	for _, testCase := range []struct {
 		name string
-		key  bubbletea.KeyMsg
+		key  keymsg.KeyMsg
 	}{
-		{name: "Esc", key: bubbletea.KeyMsg{Type: bubbletea.KeyEsc}},
-		{name: "Left", key: bubbletea.KeyMsg{Type: bubbletea.KeyLeft}},
+		{name: "Esc", key: keymsg.KeyMsg{Type: keymsg.KeyEsc}},
+		{name: "Left", key: keymsg.KeyMsg{Type: keymsg.KeyLeft}},
 	} {
 		model := readOnlyCommandCenterModel(t, availableCommandCenterOptions())
 		notice := model.renderReadOnlyThreadNotice()
@@ -70,7 +69,7 @@ func TestReadOnlyViewReturnsToCommandCenterFromEmbeddedLikeRust(t *testing.T) {
 	if !strings.Contains(notice, "\u2190/Esc command center") {
 		t.Fatalf("embedded notice = %q", notice)
 	}
-	if _, command := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyLeft}); command == nil || model.agentsOverview == nil {
+	if _, command := model.Update(keymsg.KeyMsg{Type: keymsg.KeyLeft}); command == nil || model.agentsOverview == nil {
 		t.Fatal("embedded Left did not open the command center")
 	}
 }
@@ -123,7 +122,7 @@ func TestReadOnlyViewKeepsEscapeWhenLeftIsUnavailable(t *testing.T) {
 		if model.agentsNavigationKeyAvailable() {
 			t.Fatalf("%s: Left must be unavailable for navigation", testCase.name)
 		}
-		model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyLeft})
+		model.Update(keymsg.KeyMsg{Type: keymsg.KeyLeft})
 		if model.agentsOverview != nil {
 			t.Fatalf("%s: Left opened the command center", testCase.name)
 		}
@@ -133,7 +132,7 @@ func TestReadOnlyViewKeepsEscapeWhenLeftIsUnavailable(t *testing.T) {
 		if testCase.afterModel != nil {
 			testCase.afterModel(t, fresh)
 		}
-		if _, command := fresh.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEsc}); command == nil || fresh.agentsOverview == nil {
+		if _, command := fresh.Update(keymsg.KeyMsg{Type: keymsg.KeyEsc}); command == nil || fresh.agentsOverview == nil {
 			t.Fatalf("%s: Esc did not open the command center", testCase.name)
 		}
 	}
@@ -153,10 +152,10 @@ func TestReadOnlyViewWithoutCommandCenterKeepsExitKeys(t *testing.T) {
 		if !strings.Contains(notice, "Esc/ctrl+c/q exit") || strings.Contains(notice, "command center") {
 			t.Fatalf("%s: notice = %q", testCase.name, notice)
 		}
-		if _, command := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyLeft}); command != nil || model.agentsOverview != nil {
+		if _, command := model.Update(keymsg.KeyMsg{Type: keymsg.KeyLeft}); command != nil || model.agentsOverview != nil {
 			t.Fatalf("%s: Left must be inert without a command center", testCase.name)
 		}
-		if _, command := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEsc}); command == nil {
+		if _, command := model.Update(keymsg.KeyMsg{Type: keymsg.KeyEsc}); command == nil {
 			t.Fatalf("%s: Esc must exit without a command center", testCase.name)
 		}
 	}
@@ -167,11 +166,11 @@ func TestReadOnlyViewWithoutCommandCenterKeepsExitKeys(t *testing.T) {
 // agent-navigation chord) would open the dashboard instead of switching agents.
 func TestReadOnlyViewIgnoresModifiedLeftLikeRust(t *testing.T) {
 	model := readOnlyCommandCenterModel(t, availableCommandCenterOptions())
-	if _, command := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyLeft, Alt: true}); command != nil || model.agentsOverview != nil {
+	if _, command := model.Update(keymsg.KeyMsg{Type: keymsg.KeyLeft, Alt: true}); command != nil || model.agentsOverview != nil {
 		t.Fatal("Alt+Left must not open the command center")
 	}
 	// Control: the unmodified key still returns to the command center.
-	if _, command := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyLeft}); command == nil || model.agentsOverview == nil {
+	if _, command := model.Update(keymsg.KeyMsg{Type: keymsg.KeyLeft}); command == nil || model.agentsOverview == nil {
 		t.Fatal("plain Left must open the command center")
 	}
 }

@@ -147,7 +147,7 @@ func TestResolveModelSelectionMirrorsRustPickerEvents(t *testing.T) {
 func TestModelSelectionSyncSurfacesFailuresAndOverrides(t *testing.T) {
 	view := func(model *Model) string {
 		model.refreshTranscript()
-		return model.View()
+		return model.viewString()
 	}
 
 	model := NewModel(codextui.NewState(nil), Options{Width: 100, Height: 40})
@@ -189,7 +189,7 @@ func TestModelSelectionSyncShowsCloudNoticeLikeRust(t *testing.T) {
 		ThreadSettingsNotice: CloudModelSelectionUnsupportedMessage,
 	})
 	model.refreshTranscript()
-	got := model.View()
+	got := model.viewString()
 	if !strings.Contains(got, CloudModelSelectionUnsupportedMessage) {
 		t.Fatalf("cloud notice missing:\n%s", got)
 	}
@@ -200,7 +200,7 @@ func TestModelSelectionSyncShowsCloudNoticeLikeRust(t *testing.T) {
 	model = NewModel(codextui.NewState(nil), Options{Width: 100, Height: 40})
 	model.applyModelSelectionSync(ModelSelectionSyncMsg{ThreadSettingsErr: errors.New("method not found")})
 	model.refreshTranscript()
-	if got := model.View(); strings.Contains(got, CloudModelSelectionUnsupportedMessage) {
+	if got := model.viewString(); strings.Contains(got, CloudModelSelectionUnsupportedMessage) {
 		t.Fatalf("client-owned failure showed the cloud notice:\n%s", got)
 	}
 }

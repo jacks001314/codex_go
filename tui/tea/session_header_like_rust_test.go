@@ -4,10 +4,11 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
 	chatwidget "codex_go/tui/chatwidget"
+	"codex_go/tui/keymsg"
 	"codex_go/utils"
 )
 
@@ -58,13 +59,13 @@ func TestClearReinsertsBorderlessSessionHeaderLikeRust(t *testing.T) {
 	model.State.AddMessage(codextui.RoleUser, "old transcript")
 
 	typeText(t, model, "/clear")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 
 	if len(model.State.Messages) != 1 {
 		t.Fatalf("messages after clear = %#v, want one session header", model.State.Messages)
 	}
 	assertBorderlessHeader(t, model.State.Messages[0])
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if !strings.Contains(view, ">_ OpenAI Codex (v1.2.3)") || !strings.Contains(view, `D:\repo\project`) {
 		t.Fatalf("cleared view missing the fresh header:\n%s", view)
 	}
@@ -80,9 +81,9 @@ func TestClearHeaderHonorsRawOutputModeLikeRust(t *testing.T) {
 	model.rawOutput = true
 
 	typeText(t, model, "/clear")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	for _, want := range []string{"OpenAI Codex (v1.2.3)", "model: gpt-5 high", `directory: D:\repo\project`} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("raw cleared view missing %q:\n%s", want, view)

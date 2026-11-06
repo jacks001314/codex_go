@@ -4,16 +4,17 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
 	agentsoverview "codex_go/tui/agents_overview"
+	"codex_go/tui/keymsg"
 )
 
 // agentsF3Event is the f3 key event, the upstream default for the moved
 // `agents.search` shortcut (Rust #49517) and for `global.find_transcript`.
-func agentsF3Event() bubbletea.KeyMsg {
-	return bubbletea.KeyMsg{Type: bubbletea.KeyF3}
+func agentsF3Event() keymsg.KeyMsg {
+	return keymsg.KeyMsg{Type: keymsg.KeyF3}
 }
 
 // TestAgentsOverviewForkShortcutLikeRust covers Rust #49517 (d42056091a): in the

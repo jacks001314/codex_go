@@ -4,9 +4,10 @@ import (
 	"testing"
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 func leaderChordModel(t *testing.T, config *codextui.KeymapConfig) *Model {
@@ -24,11 +25,11 @@ func leaderChordModel(t *testing.T, config *codextui.KeymapConfig) *Model {
 // works.
 func TestPresetsLeaderChordOpensQuickDialLikeRust(t *testing.T) {
 	model := leaderChordModel(t, nil)
-	model.Update(key(bubbletea.KeyCtrlX))
+	model.Update(key(keymsg.KeyCtrlX))
 	if !model.leaderChordPending || model.quickDialMenu {
 		t.Fatalf("prefix state pending=%v menu=%v", model.leaderChordPending, model.quickDialMenu)
 	}
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{'p'}})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{'p'}})
 	if model.leaderChordPending || !model.quickDialMenu {
 		t.Fatalf("completion state pending=%v menu=%v", model.leaderChordPending, model.quickDialMenu)
 	}
@@ -38,7 +39,7 @@ func TestPresetsLeaderChordOpensQuickDialLikeRust(t *testing.T) {
 		t.Fatalf("remap presets: %v", err)
 	}
 	remapped := leaderChordModel(t, config)
-	remapped.Update(bubbletea.KeyMsg{Type: bubbletea.KeyCtrlP})
+	remapped.Update(keymsg.KeyMsg{Type: keymsg.KeyCtrlP})
 	if !remapped.quickDialMenu {
 		t.Fatal("plain open_presets binding did not open the menu")
 	}
@@ -46,8 +47,8 @@ func TestPresetsLeaderChordOpensQuickDialLikeRust(t *testing.T) {
 
 func TestPresetsLeaderChordCancelsOnOtherKeyAndTimeoutLikeRust(t *testing.T) {
 	model := leaderChordModel(t, nil)
-	model.Update(key(bubbletea.KeyCtrlX))
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{'a'}})
+	model.Update(key(keymsg.KeyCtrlX))
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{'a'}})
 	if model.leaderChordPending || model.quickDialMenu {
 		t.Fatalf("other key state pending=%v menu=%v", model.leaderChordPending, model.quickDialMenu)
 	}
@@ -58,9 +59,9 @@ func TestPresetsLeaderChordCancelsOnOtherKeyAndTimeoutLikeRust(t *testing.T) {
 	now := time.Unix(100, 0)
 	timeout := leaderChordModel(t, nil)
 	timeout.now = func() time.Time { return now }
-	timeout.Update(key(bubbletea.KeyCtrlX))
+	timeout.Update(key(keymsg.KeyCtrlX))
 	now = now.Add(codextui.LeaderChordTimeout + time.Second)
-	timeout.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{'p'}})
+	timeout.Update(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{'p'}})
 	if timeout.quickDialMenu {
 		t.Fatal("expired leader chord still opened the menu")
 	}
@@ -69,7 +70,7 @@ func TestPresetsLeaderChordCancelsOnOtherKeyAndTimeoutLikeRust(t *testing.T) {
 	}
 
 	blurred := leaderChordModel(t, nil)
-	blurred.Update(key(bubbletea.KeyCtrlX))
+	blurred.Update(key(keymsg.KeyCtrlX))
 	blurred.Update(bubbletea.BlurMsg{})
 	if blurred.leaderChordPending {
 		t.Fatal("blur did not cancel the pending leader chord")

@@ -5,10 +5,11 @@ import (
 	"strings"
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	bubbletea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 // keymapInspectorViewID names Rust's keymap_setup/debug.rs KeymapDebugView, the
@@ -86,11 +87,11 @@ func (m *Model) closeKeymapInspector() {
 
 // updateKeymapInspector records every non-Ctrl+C keypress: Rust's view asks for
 // raw key capture, so Esc is inspected instead of dismissing the view.
-func (m *Model) updateKeymapInspector(message bubbletea.KeyMsg) bubbletea.Cmd {
+func (m *Model) updateKeymapInspector(message keymsg.KeyMsg) bubbletea.Cmd {
 	if m == nil || m.modal == nil || m.modal.keymapInspector == nil {
 		return nil
 	}
-	if message.Type == bubbletea.KeyCtrlC && !message.Alt {
+	if message.Type == keymsg.KeyCtrlC && !message.Alt {
 		m.closeKeymapInspector()
 		return nil
 	}
@@ -206,9 +207,9 @@ func keymapInspectorWrap(text string, width int, initial string, subsequent stri
 
 // keymapInspectorCodeDebug renders KeyCode's Debug form the way crossterm does
 // (`code=Char('k'), modifiers=ctrl, kind=Press`).
-func keymapInspectorCodeDebug(message bubbletea.KeyMsg) string {
-	key := bubbletea.Key(message)
-	if key.Type == bubbletea.KeyRunes {
+func keymapInspectorCodeDebug(message keymsg.KeyMsg) string {
+	key := keymsg.Key(message)
+	if key.Type == keymsg.KeyRunes {
 		if len(key.Runes) == 1 {
 			if key.Runes[0] == 0 {
 				// Rust's `{:?}` on a NUL char escapes it as `\u{0}`.
@@ -225,47 +226,47 @@ func keymapInspectorCodeDebug(message bubbletea.KeyMsg) string {
 		return fmt.Sprintf("Char('%c')", letter)
 	}
 	switch key.Type {
-	case bubbletea.KeyCtrlUnderscore:
+	case keymsg.KeyCtrlUnderscore:
 		return "Char('/')"
-	case bubbletea.KeyCtrlBackslash:
+	case keymsg.KeyCtrlBackslash:
 		return "Char('\\\\')"
-	case bubbletea.KeyCtrlCloseBracket:
+	case keymsg.KeyCtrlCloseBracket:
 		return "Char(']')"
-	case bubbletea.KeyCtrlCaret:
+	case keymsg.KeyCtrlCaret:
 		return "Char('^')"
-	case bubbletea.KeyCtrlAt:
+	case keymsg.KeyCtrlAt:
 		return "Char(' ')"
-	case bubbletea.KeySpace:
+	case keymsg.KeySpace:
 		return "Char(' ')"
-	case bubbletea.KeyEsc:
+	case keymsg.KeyEsc:
 		return "Esc"
-	case bubbletea.KeyEnter:
+	case keymsg.KeyEnter:
 		return "Enter"
-	case bubbletea.KeyTab:
+	case keymsg.KeyTab:
 		return "Tab"
-	case bubbletea.KeyBackspace:
+	case keymsg.KeyBackspace:
 		return "Backspace"
-	case bubbletea.KeyDelete:
+	case keymsg.KeyDelete:
 		return "Delete"
-	case bubbletea.KeyInsert:
+	case keymsg.KeyInsert:
 		return "Insert"
-	case bubbletea.KeyUp, bubbletea.KeyShiftUp, bubbletea.KeyCtrlUp, bubbletea.KeyCtrlShiftUp:
+	case keymsg.KeyUp, keymsg.KeyShiftUp, keymsg.KeyCtrlUp, keymsg.KeyCtrlShiftUp:
 		return "Up"
-	case bubbletea.KeyDown, bubbletea.KeyShiftDown, bubbletea.KeyCtrlDown, bubbletea.KeyCtrlShiftDown:
+	case keymsg.KeyDown, keymsg.KeyShiftDown, keymsg.KeyCtrlDown, keymsg.KeyCtrlShiftDown:
 		return "Down"
-	case bubbletea.KeyLeft, bubbletea.KeyShiftLeft, bubbletea.KeyCtrlLeft, bubbletea.KeyCtrlShiftLeft:
+	case keymsg.KeyLeft, keymsg.KeyShiftLeft, keymsg.KeyCtrlLeft, keymsg.KeyCtrlShiftLeft:
 		return "Left"
-	case bubbletea.KeyRight, bubbletea.KeyShiftRight, bubbletea.KeyCtrlRight, bubbletea.KeyCtrlShiftRight:
+	case keymsg.KeyRight, keymsg.KeyShiftRight, keymsg.KeyCtrlRight, keymsg.KeyCtrlShiftRight:
 		return "Right"
-	case bubbletea.KeyHome, bubbletea.KeyShiftHome, bubbletea.KeyCtrlHome:
+	case keymsg.KeyHome, keymsg.KeyShiftHome, keymsg.KeyCtrlHome:
 		return "Home"
-	case bubbletea.KeyEnd, bubbletea.KeyShiftEnd, bubbletea.KeyCtrlEnd:
+	case keymsg.KeyEnd, keymsg.KeyShiftEnd, keymsg.KeyCtrlEnd:
 		return "End"
-	case bubbletea.KeyPgUp, bubbletea.KeyCtrlPgUp:
+	case keymsg.KeyPgUp, keymsg.KeyCtrlPgUp:
 		return "PageUp"
-	case bubbletea.KeyPgDown, bubbletea.KeyCtrlPgDown:
+	case keymsg.KeyPgDown, keymsg.KeyCtrlPgDown:
 		return "PageDown"
-	case bubbletea.KeyShiftTab:
+	case keymsg.KeyShiftTab:
 		return "BackTab"
 	}
 	if number, ok := keymapInspectorFunctionKey(key.Type); ok {
@@ -274,52 +275,52 @@ func keymapInspectorCodeDebug(message bubbletea.KeyMsg) string {
 	return strings.ReplaceAll(message.String(), "+", "-")
 }
 
-func keymapInspectorCtrlLetter(keyType bubbletea.KeyType) (rune, bool) {
-	if keyType < bubbletea.KeyCtrlA || keyType > bubbletea.KeyCtrlZ {
+func keymapInspectorCtrlLetter(keyType keymsg.KeyType) (rune, bool) {
+	if keyType < keymsg.KeyCtrlA || keyType > keymsg.KeyCtrlZ {
 		return 0, false
 	}
 	// Bubble Tea aliases Ctrl+I to KeyTab and Ctrl+M to KeyEnter; terminals
 	// cannot distinguish them, and Rust reports the named key.
-	letter := rune('a' + int(keyType-bubbletea.KeyCtrlA))
+	letter := rune('a' + int(keyType-keymsg.KeyCtrlA))
 	if letter == 'i' || letter == 'm' {
 		return 0, false
 	}
 	return letter, true
 }
 
-func keymapInspectorFunctionKey(keyType bubbletea.KeyType) (int, bool) {
+func keymapInspectorFunctionKey(keyType keymsg.KeyType) (int, bool) {
 	// Named keys count downward from KeyRunes, so KeyF1 > KeyF2 > ... > KeyF20.
-	if keyType > bubbletea.KeyF1 || keyType < bubbletea.KeyF20 {
+	if keyType > keymsg.KeyF1 || keyType < keymsg.KeyF20 {
 		return 0, false
 	}
-	return int(bubbletea.KeyF1-keyType) + 1, true
+	return int(keymsg.KeyF1-keyType) + 1, true
 }
 
-func keymapInspectorModifiers(message bubbletea.KeyMsg) (ctrl bool, alt bool, shift bool) {
-	key := bubbletea.Key(message)
+func keymapInspectorModifiers(message keymsg.KeyMsg) (ctrl bool, alt bool, shift bool) {
+	key := keymsg.Key(message)
 	alt = key.Alt
-	if key.Type >= bubbletea.KeyCtrlA && key.Type <= bubbletea.KeyCtrlZ {
+	if key.Type >= keymsg.KeyCtrlA && key.Type <= keymsg.KeyCtrlZ {
 		// KeyTab, KeyEnter and KeyEsc share their byte values with control
 		// codes; Bubble Tea reports the named key, so they carry no ctrl.
-		ctrl = key.Type != bubbletea.KeyTab && key.Type != bubbletea.KeyEnter
+		ctrl = key.Type != keymsg.KeyTab && key.Type != keymsg.KeyEnter
 	}
 	switch key.Type {
-	case bubbletea.KeyCtrlAt, bubbletea.KeyCtrlUnderscore, bubbletea.KeyCtrlBackslash,
-		bubbletea.KeyCtrlCloseBracket, bubbletea.KeyCtrlCaret:
+	case keymsg.KeyCtrlAt, keymsg.KeyCtrlUnderscore, keymsg.KeyCtrlBackslash,
+		keymsg.KeyCtrlCloseBracket, keymsg.KeyCtrlCaret:
 		ctrl = true
 	}
 	switch key.Type {
-	case bubbletea.KeyCtrlUp, bubbletea.KeyCtrlDown, bubbletea.KeyCtrlLeft, bubbletea.KeyCtrlRight,
-		bubbletea.KeyCtrlHome, bubbletea.KeyCtrlEnd, bubbletea.KeyCtrlPgUp, bubbletea.KeyCtrlPgDown:
+	case keymsg.KeyCtrlUp, keymsg.KeyCtrlDown, keymsg.KeyCtrlLeft, keymsg.KeyCtrlRight,
+		keymsg.KeyCtrlHome, keymsg.KeyCtrlEnd, keymsg.KeyCtrlPgUp, keymsg.KeyCtrlPgDown:
 		ctrl = true
-	case bubbletea.KeyShiftUp, bubbletea.KeyShiftDown, bubbletea.KeyShiftLeft, bubbletea.KeyShiftRight,
-		bubbletea.KeyShiftHome, bubbletea.KeyShiftEnd, bubbletea.KeyShiftTab:
+	case keymsg.KeyShiftUp, keymsg.KeyShiftDown, keymsg.KeyShiftLeft, keymsg.KeyShiftRight,
+		keymsg.KeyShiftHome, keymsg.KeyShiftEnd, keymsg.KeyShiftTab:
 		shift = true
-	case bubbletea.KeyCtrlShiftUp, bubbletea.KeyCtrlShiftDown, bubbletea.KeyCtrlShiftLeft, bubbletea.KeyCtrlShiftRight:
+	case keymsg.KeyCtrlShiftUp, keymsg.KeyCtrlShiftDown, keymsg.KeyCtrlShiftLeft, keymsg.KeyCtrlShiftRight:
 		ctrl = true
 		shift = true
 	}
-	if key.Type == bubbletea.KeyRunes && len(key.Runes) == 1 {
+	if key.Type == keymsg.KeyRunes && len(key.Runes) == 1 {
 		letter := key.Runes[0]
 		if letter >= 'A' && letter <= 'Z' {
 			shift = true
@@ -328,9 +329,14 @@ func keymapInspectorModifiers(message bubbletea.KeyMsg) (ctrl bool, alt bool, sh
 	return ctrl, alt, shift
 }
 
+// keymapInspectorSuper reports the super/cmd modifier Bubble Tea v2 carries.
+func keymapInspectorSuper(message keymsg.KeyMsg) bool {
+	return keymsg.Key(message).Super
+}
+
 // keymapInspectorModifierList is key_modifiers_debug_label: ctrl, alt, shift in
 // that order, joined with `|`, or "none".
-func keymapInspectorModifierList(message bubbletea.KeyMsg) string {
+func keymapInspectorModifierList(message keymsg.KeyMsg) string {
 	ctrl, alt, shift := keymapInspectorModifiers(message)
 	parts := []string{}
 	if ctrl {
@@ -342,21 +348,24 @@ func keymapInspectorModifierList(message bubbletea.KeyMsg) string {
 	if shift {
 		parts = append(parts, "shift")
 	}
+	if keymapInspectorSuper(message) {
+		parts = append(parts, "super")
+	}
 	if len(parts) == 0 {
 		return "none"
 	}
 	return strings.Join(parts, "|")
 }
 
-func keymapInspectorRawEvent(message bubbletea.KeyMsg) string {
+func keymapInspectorRawEvent(message keymsg.KeyMsg) string {
 	return fmt.Sprintf("code=%s, modifiers=%s, kind=Press", keymapInspectorCodeDebug(message), keymapInspectorModifierList(message))
 }
 
 // keymapInspectorDetectedLabel is KeyBinding::display_label: `ctrl+shift+alt`
 // before the normalized key name (arrows use their glyphs).
-func keymapInspectorDetectedLabel(message bubbletea.KeyMsg) string {
-	key := bubbletea.Key(message)
-	if key.Type == bubbletea.KeyRunes && len(key.Runes) == 1 && key.Runes[0] == 0 {
+func keymapInspectorDetectedLabel(message keymsg.KeyMsg) string {
+	key := keymsg.Key(message)
+	if key.Type == keymsg.KeyRunes && len(key.Runes) == 1 && key.Runes[0] == 0 {
 		// key_hint.rs::c0_control_char_to_ctrl_char normalizes a bare NUL to
 		// Ctrl+Space, so the detected label is the normalized binding.
 		return "ctrl+space"
@@ -372,12 +381,15 @@ func keymapInspectorDetectedLabel(message bubbletea.KeyMsg) string {
 	if alt {
 		label += "alt+"
 	}
+	if keymapInspectorSuper(message) {
+		label += "super+"
+	}
 	return label + keymapInspectorKeyLabel(message)
 }
 
-func keymapInspectorKeyLabel(message bubbletea.KeyMsg) string {
-	key := bubbletea.Key(message)
-	if key.Type == bubbletea.KeyRunes && len(key.Runes) == 1 {
+func keymapInspectorKeyLabel(message keymsg.KeyMsg) string {
+	key := keymsg.Key(message)
+	if key.Type == keymsg.KeyRunes && len(key.Runes) == 1 {
 		letter := key.Runes[0]
 		if letter >= 'A' && letter <= 'Z' {
 			letter = letter + ('a' - 'A')
@@ -391,45 +403,45 @@ func keymapInspectorKeyLabel(message bubbletea.KeyMsg) string {
 		return string(letter)
 	}
 	switch key.Type {
-	case bubbletea.KeyCtrlUnderscore:
+	case keymsg.KeyCtrlUnderscore:
 		return "/"
-	case bubbletea.KeyCtrlBackslash:
+	case keymsg.KeyCtrlBackslash:
 		return "\\\\"
-	case bubbletea.KeyCtrlCloseBracket:
+	case keymsg.KeyCtrlCloseBracket:
 		return "]"
-	case bubbletea.KeyCtrlCaret:
+	case keymsg.KeyCtrlCaret:
 		return "^"
-	case bubbletea.KeyCtrlAt, bubbletea.KeySpace:
+	case keymsg.KeyCtrlAt, keymsg.KeySpace:
 		return "space"
-	case bubbletea.KeyEsc:
+	case keymsg.KeyEsc:
 		return "esc"
-	case bubbletea.KeyEnter:
+	case keymsg.KeyEnter:
 		return "enter"
-	case bubbletea.KeyTab:
+	case keymsg.KeyTab:
 		return "tab"
-	case bubbletea.KeyBackspace:
+	case keymsg.KeyBackspace:
 		return "backspace"
-	case bubbletea.KeyDelete:
+	case keymsg.KeyDelete:
 		return "delete"
-	case bubbletea.KeyInsert:
+	case keymsg.KeyInsert:
 		return "insert"
-	case bubbletea.KeyUp, bubbletea.KeyShiftUp, bubbletea.KeyCtrlUp, bubbletea.KeyCtrlShiftUp:
+	case keymsg.KeyUp, keymsg.KeyShiftUp, keymsg.KeyCtrlUp, keymsg.KeyCtrlShiftUp:
 		return "\u2191"
-	case bubbletea.KeyDown, bubbletea.KeyShiftDown, bubbletea.KeyCtrlDown, bubbletea.KeyCtrlShiftDown:
+	case keymsg.KeyDown, keymsg.KeyShiftDown, keymsg.KeyCtrlDown, keymsg.KeyCtrlShiftDown:
 		return "\u2193"
-	case bubbletea.KeyLeft, bubbletea.KeyShiftLeft, bubbletea.KeyCtrlLeft, bubbletea.KeyCtrlShiftLeft:
+	case keymsg.KeyLeft, keymsg.KeyShiftLeft, keymsg.KeyCtrlLeft, keymsg.KeyCtrlShiftLeft:
 		return "\u2190"
-	case bubbletea.KeyRight, bubbletea.KeyShiftRight, bubbletea.KeyCtrlRight, bubbletea.KeyCtrlShiftRight:
+	case keymsg.KeyRight, keymsg.KeyShiftRight, keymsg.KeyCtrlRight, keymsg.KeyCtrlShiftRight:
 		return "\u2192"
-	case bubbletea.KeyHome, bubbletea.KeyShiftHome, bubbletea.KeyCtrlHome:
+	case keymsg.KeyHome, keymsg.KeyShiftHome, keymsg.KeyCtrlHome:
 		return "home"
-	case bubbletea.KeyEnd, bubbletea.KeyShiftEnd, bubbletea.KeyCtrlEnd:
+	case keymsg.KeyEnd, keymsg.KeyShiftEnd, keymsg.KeyCtrlEnd:
 		return "end"
-	case bubbletea.KeyPgUp, bubbletea.KeyCtrlPgUp:
+	case keymsg.KeyPgUp, keymsg.KeyCtrlPgUp:
 		return "pgup"
-	case bubbletea.KeyPgDown, bubbletea.KeyCtrlPgDown:
+	case keymsg.KeyPgDown, keymsg.KeyCtrlPgDown:
 		return "pgdn"
-	case bubbletea.KeyShiftTab:
+	case keymsg.KeyShiftTab:
 		return "backtab"
 	}
 	if number, ok := keymapInspectorFunctionKey(key.Type); ok {

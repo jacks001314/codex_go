@@ -3,7 +3,7 @@ package tea
 import (
 	"strings"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	"codex_go/features"
 	"codex_go/plugin"
@@ -11,6 +11,7 @@ import (
 	bottompane "codex_go/tui/bottom_pane"
 	chatwidget "codex_go/tui/chatwidget"
 	historycell "codex_go/tui/history_cell"
+	"codex_go/tui/keymsg"
 )
 
 type PluginReadResultMsg struct {
@@ -228,7 +229,7 @@ func (m *Model) pluginMarketplaceCapabilities(response plugin.PluginListResponse
 	return remove, upgrade
 }
 
-func (m *Model) updatePluginBrowserModal(message bubbletea.KeyMsg) bubbletea.Cmd {
+func (m *Model) updatePluginBrowserModal(message keymsg.KeyMsg) bubbletea.Cmd {
 	state := m.pluginBrowserState()
 	if state == nil {
 		return nil
@@ -242,17 +243,17 @@ func (m *Model) updatePluginBrowserModal(message bubbletea.KeyMsg) bubbletea.Cmd
 	return m.updatePluginCatalog(message)
 }
 
-func (m *Model) updatePluginCatalog(message bubbletea.KeyMsg) bubbletea.Cmd {
+func (m *Model) updatePluginCatalog(message keymsg.KeyMsg) bubbletea.Cmd {
 	state := m.pluginBrowserState()
 	if state == nil || len(state.catalog.Tabs) == 0 {
 		return nil
 	}
 	switch message.Type {
-	case bubbletea.KeyCtrlC:
+	case keymsg.KeyCtrlC:
 		m.modal = nil
 		m.notice = ""
 		return nil
-	case bubbletea.KeyEsc:
+	case keymsg.KeyEsc:
 		if state.query != "" {
 			state.query = ""
 			state.setSelected(0)
@@ -261,46 +262,46 @@ func (m *Model) updatePluginCatalog(message bubbletea.KeyMsg) bubbletea.Cmd {
 		m.modal = nil
 		m.notice = ""
 		return nil
-	case bubbletea.KeyLeft, bubbletea.KeyShiftTab:
+	case keymsg.KeyLeft, keymsg.KeyShiftTab:
 		state.activeTab = (state.activeTab - 1 + len(state.catalog.Tabs)) % len(state.catalog.Tabs)
 		return nil
-	case bubbletea.KeyRight, bubbletea.KeyTab:
+	case keymsg.KeyRight, keymsg.KeyTab:
 		state.activeTab = (state.activeTab + 1) % len(state.catalog.Tabs)
 		return nil
-	case bubbletea.KeyUp:
+	case keymsg.KeyUp:
 		state.moveSelected(-1)
 		return nil
-	case bubbletea.KeyDown:
+	case keymsg.KeyDown:
 		state.moveSelected(1)
 		return nil
-	case bubbletea.KeyPgUp:
+	case keymsg.KeyPgUp:
 		state.moveSelected(-m.pluginPageSize())
 		return nil
-	case bubbletea.KeyPgDown, bubbletea.KeyCtrlD:
+	case keymsg.KeyPgDown, keymsg.KeyCtrlD:
 		state.moveSelected(m.pluginPageSize())
 		return nil
-	case bubbletea.KeyHome:
+	case keymsg.KeyHome:
 		state.setSelected(0)
 		return nil
-	case bubbletea.KeyEnd:
+	case keymsg.KeyEnd:
 		state.setSelected(len(state.filteredItems()) - 1)
 		return nil
-	case bubbletea.KeyBackspace:
+	case keymsg.KeyBackspace:
 		if state.query != "" {
 			runes := []rune(state.query)
 			state.query = string(runes[:len(runes)-1])
 			state.setSelected(0)
 		}
 		return nil
-	case bubbletea.KeySpace:
+	case keymsg.KeySpace:
 		return m.toggleSelectedPlugin()
-	case bubbletea.KeyEnter:
+	case keymsg.KeyEnter:
 		return m.openSelectedPlugin()
-	case bubbletea.KeyCtrlR:
+	case keymsg.KeyCtrlR:
 		return m.confirmActiveMarketplaceRemoval()
-	case bubbletea.KeyCtrlU:
+	case keymsg.KeyCtrlU:
 		return m.upgradeActiveMarketplace()
-	case bubbletea.KeyRunes:
+	case keymsg.KeyRunes:
 		if len(message.Runes) > 0 {
 			state.query += string(message.Runes)
 			state.setSelected(0)
@@ -522,34 +523,34 @@ func (m *Model) applyPluginEnabledWriteResult(message PluginEnabledWriteResultMs
 	return nil
 }
 
-func (m *Model) updatePluginSelectionView(message bubbletea.KeyMsg) bubbletea.Cmd {
+func (m *Model) updatePluginSelectionView(message keymsg.KeyMsg) bubbletea.Cmd {
 	state := m.pluginBrowserState()
 	if state == nil || state.view == nil {
 		return nil
 	}
 	items := state.view.Items
 	switch message.Type {
-	case bubbletea.KeyCtrlC:
+	case keymsg.KeyCtrlC:
 		m.modal = nil
 		m.notice = ""
-	case bubbletea.KeyEsc:
+	case keymsg.KeyEsc:
 		if !state.view.AllowCancel {
 			return nil
 		}
 		m.showPluginCatalog()
-	case bubbletea.KeyUp:
+	case keymsg.KeyUp:
 		state.viewSelected = nextPluginViewItem(items, state.viewSelected, -1)
-	case bubbletea.KeyDown:
+	case keymsg.KeyDown:
 		state.viewSelected = nextPluginViewItem(items, state.viewSelected, 1)
-	case bubbletea.KeyPgUp:
+	case keymsg.KeyPgUp:
 		state.viewSelected = pluginViewPage(items, state.viewSelected, -m.pluginPageSize())
-	case bubbletea.KeyPgDown, bubbletea.KeyCtrlD:
+	case keymsg.KeyPgDown, keymsg.KeyCtrlD:
 		state.viewSelected = pluginViewPage(items, state.viewSelected, m.pluginPageSize())
-	case bubbletea.KeyHome:
+	case keymsg.KeyHome:
 		state.viewSelected = firstEnabledPluginViewItem(items)
-	case bubbletea.KeyEnd:
+	case keymsg.KeyEnd:
 		state.viewSelected = lastEnabledPluginViewItem(items)
-	case bubbletea.KeyEnter:
+	case keymsg.KeyEnter:
 		return m.applyPluginSelectionAction()
 	}
 	return nil
@@ -746,24 +747,24 @@ func (m *Model) advancePluginAuthFlow(abandon bool) bubbletea.Cmd {
 	return nil
 }
 
-func (m *Model) updatePluginMarketplacePrompt(message bubbletea.KeyMsg) bubbletea.Cmd {
+func (m *Model) updatePluginMarketplacePrompt(message keymsg.KeyMsg) bubbletea.Cmd {
 	state := m.pluginBrowserState()
 	if state == nil {
 		return nil
 	}
 	switch message.Type {
-	case bubbletea.KeyCtrlC:
+	case keymsg.KeyCtrlC:
 		m.modal = nil
 		m.notice = ""
-	case bubbletea.KeyEsc:
+	case keymsg.KeyEsc:
 		state.addPrompt = false
 		state.addPromptInput = ""
-	case bubbletea.KeyBackspace:
+	case keymsg.KeyBackspace:
 		if state.addPromptInput != "" {
 			runes := []rune(state.addPromptInput)
 			state.addPromptInput = string(runes[:len(runes)-1])
 		}
-	case bubbletea.KeyEnter:
+	case keymsg.KeyEnter:
 		source := strings.TrimSpace(state.addPromptInput)
 		if source == "" || m.onAddMarketplace == nil {
 			return nil
@@ -776,7 +777,7 @@ func (m *Model) updatePluginMarketplacePrompt(message bubbletea.KeyMsg) bubblete
 			response, err := adder(plugin.MarketplaceAddParams{Source: source})
 			return MarketplaceAddResultMsg{CWD: cwd, Source: source, Response: response, Err: err}
 		}
-	case bubbletea.KeyRunes:
+	case keymsg.KeyRunes:
 		state.addPromptInput += string(message.Runes)
 	}
 	return nil

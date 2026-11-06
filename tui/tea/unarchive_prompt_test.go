@@ -1,13 +1,12 @@
 package tea
 
 import (
+	keymsg "codex_go/tui/keymsg"
 	"errors"
 	"regexp"
 	"strings"
 	"testing"
 	"time"
-
-	bubbletea "github.com/charmbracelet/bubbletea"
 
 	codextui "codex_go/tui"
 )
@@ -67,7 +66,7 @@ func TestUnarchivePromptRenderLikeRust(t *testing.T) {
 		t.Fatalf("resume prompt =\n%s\nwant\n%s", got, wantResume)
 	}
 	fork := newUnarchivePromptState(threadID, "fork")
-	if choice, done := fork.handleKey(key(bubbletea.KeyDown)); done || choice != 0 {
+	if choice, done := fork.handleKey(key(keymsg.KeyDown)); done || choice != 0 {
 		t.Fatalf("down = %v done=%v, want highlight toggle", choice, done)
 	}
 	wantFork := strings.Join([]string{
@@ -82,7 +81,7 @@ func TestUnarchivePromptRenderLikeRust(t *testing.T) {
 	if got := plainTeaText(fork.render()); got != wantFork {
 		t.Fatalf("fork prompt =\n%s\nwant\n%s", got, wantFork)
 	}
-	if choice, done := fork.handleKey(key(bubbletea.KeyEnter)); !done || choice != unarchiveChoiceCancel {
+	if choice, done := fork.handleKey(key(keymsg.KeyEnter)); !done || choice != unarchiveChoiceCancel {
 		t.Fatalf("enter on highlighted cancel = %v done=%v", choice, done)
 	}
 }
@@ -91,8 +90,8 @@ func TestUnarchivePromptRenderLikeRust(t *testing.T) {
 // unarchive_prompt_tests::confirmation_requires_an_accept_key.
 func TestUnarchivePromptKeysLikeRust(t *testing.T) {
 	prompt := newUnarchivePromptState("thread-1", "fork")
-	for _, message := range []bubbletea.KeyMsg{
-		key(bubbletea.KeyEsc),
+	for _, message := range []keymsg.KeyMsg{
+		key(keymsg.KeyEsc),
 		keyRunes('n'),
 		keyRunes('2'),
 	} {
@@ -101,9 +100,9 @@ func TestUnarchivePromptKeysLikeRust(t *testing.T) {
 		}
 	}
 	for _, r := range []rune{'c', 'd'} {
-		message := bubbletea.KeyMsg{Type: bubbletea.KeyCtrlC}
+		message := keymsg.KeyMsg{Type: keymsg.KeyCtrlC}
 		if r == 'd' {
-			message.Type = bubbletea.KeyCtrlD
+			message.Type = keymsg.KeyCtrlD
 		}
 		if choice, done := prompt.handleKey(message); !done || choice != unarchiveChoiceQuit {
 			t.Fatalf("ctrl+%c = %v done=%v", r, choice, done)
@@ -112,7 +111,7 @@ func TestUnarchivePromptKeysLikeRust(t *testing.T) {
 	if choice, done := prompt.handleKey(keyRunes('y')); !done || choice != unarchiveChoiceUnarchive {
 		t.Fatalf("y = %v done=%v", choice, done)
 	}
-	if choice, done := prompt.handleKey(key(bubbletea.KeyEnter)); !done || choice != unarchiveChoiceUnarchive {
+	if choice, done := prompt.handleKey(key(keymsg.KeyEnter)); !done || choice != unarchiveChoiceUnarchive {
 		t.Fatalf("enter = %v done=%v", choice, done)
 	}
 }
@@ -159,12 +158,12 @@ func TestModelArchivedResumePromptsToUnarchiveAndRetriesLikeRust(t *testing.T) {
 	model.now = func() time.Time { return now }
 
 	typeText(t, model, "/resume")
-	model.Update(key(bubbletea.KeyEnter)) // open the picker
-	model.Update(key(bubbletea.KeyEnter)) // resume the archived session
+	model.Update(key(keymsg.KeyEnter)) // open the picker
+	model.Update(key(keymsg.KeyEnter)) // resume the archived session
 	if resumeCalls != 1 {
 		t.Fatalf("resume calls = %d, want 1", resumeCalls)
 	}
-	view := plainTeaText(model.View())
+	view := plainTeaText(model.viewString())
 	for _, want := range []string{
 		"This conversation is archived",
 		threadID,

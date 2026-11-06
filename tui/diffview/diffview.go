@@ -4,10 +4,12 @@
 package diffview
 
 import (
+	"image/color"
 	"strings"
 
+	"charm.land/lipgloss/v2"
+
 	codextui "codex_go/tui"
-	"github.com/charmbracelet/lipgloss"
 )
 
 // Layout controls how the diff is displayed.
@@ -62,12 +64,12 @@ type View struct {
 	Width        int
 
 	// Styles
-	AddFg     lipgloss.Color
-	AddBg     lipgloss.Color
-	DelFg     lipgloss.Color
-	DelBg     lipgloss.Color
-	ContextFg lipgloss.Color
-	HeaderFg  lipgloss.Color
+	AddFg     color.Color
+	AddBg     color.Color
+	DelFg     color.Color
+	DelBg     color.Color
+	ContextFg color.Color
+	HeaderFg  color.Color
 
 	maxLineNumWidth int
 }
@@ -136,8 +138,8 @@ func (v *View) renderHunkUnified(h Hunk) string {
 	var lines []string
 	for _, dl := range h.Lines {
 		var prefix string
-		var fg lipgloss.Color
-		var bg lipgloss.Color
+		var fg color.Color
+		var bg color.Color
 
 		switch dl.Kind {
 		case LineInsert:
@@ -224,7 +226,7 @@ func (v *View) truncateLine(line string) string {
 	return codextui.TruncateWithEllipsis(line, v.Width)
 }
 
-func (v *View) padOrTruncate(line string, width int, fg, bg lipgloss.Color) string {
+func (v *View) padOrTruncate(line string, width int, fg, bg color.Color) string {
 	lineWidth := codextui.DisplayWidth(line)
 	if lineWidth > width {
 		line = codextui.TruncateWithEllipsis(line, width)

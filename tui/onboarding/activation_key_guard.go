@@ -3,7 +3,7 @@ package onboarding
 import (
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	"codex_go/tui/keymsg"
 )
 
 // Rust parity: codex-rs/tui/src/activation_key_guard.rs (Rust #58427). A key
@@ -39,7 +39,7 @@ func newActivationKeyGuard(key string, now func() time.Time) *activationKeyGuard
 }
 
 // consume reports whether this key press must be dropped.
-func (g *activationKeyGuard) consume(message bubbletea.KeyMsg) bool {
+func (g *activationKeyGuard) consume(message keymsg.KeyMsg) bool {
 	if g == nil || !g.active {
 		return false
 	}
@@ -58,6 +58,6 @@ func (g *activationKeyGuard) consume(message bubbletea.KeyMsg) bool {
 
 // keyIdentity names the physical key a Bubble Tea message came from. The guard
 // only compares a key with itself, so the printable form is enough.
-func keyIdentity(message bubbletea.KeyMsg) string {
+func keyIdentity(message keymsg.KeyMsg) string {
 	return message.String()
 }

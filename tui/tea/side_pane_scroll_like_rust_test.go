@@ -1,12 +1,11 @@
 package tea
 
 import (
+	mousemsg "codex_go/tui/mousemsg"
+	"github.com/charmbracelet/x/ansi"
 	"strconv"
 	"strings"
 	"testing"
-
-	bubbletea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/x/ansi"
 
 	"codex_go/protocol"
 	codextui "codex_go/tui"
@@ -42,9 +41,9 @@ func TestSidePaneWheelScrollsUnfocusedPaneLikeRust(t *testing.T) {
 	rightX := left + ansi.StringWidth(sideWorkspaceDivider) + 1
 	focusedBefore := m.transcript.YOffset
 	for attempt := 0; attempt < 400 && m.activeSide.SideScroll > 0; attempt++ {
-		handled, _ := m.handleSidePaneMouse(bubbletea.MouseMsg{
-			Action: bubbletea.MouseActionPress,
-			Button: bubbletea.MouseButtonWheelUp,
+		handled, _ := m.handleSidePaneMouse(mousemsg.MouseMsg{
+			Action: mousemsg.MouseActionPress,
+			Button: mousemsg.MouseButtonWheelUp,
 			X:      rightX,
 			Y:      2,
 		})
@@ -70,9 +69,9 @@ func TestSidePaneWheelScrollsUnfocusedPaneLikeRust(t *testing.T) {
 	}
 
 	// The wheel over the focused parent pane still moves the transcript.
-	handled, _ := m.handleSidePaneMouse(bubbletea.MouseMsg{
-		Action: bubbletea.MouseActionPress,
-		Button: bubbletea.MouseButtonWheelUp,
+	handled, _ := m.handleSidePaneMouse(mousemsg.MouseMsg{
+		Action: mousemsg.MouseActionPress,
+		Button: mousemsg.MouseButtonWheelUp,
 		X:      1,
 		Y:      2,
 	})

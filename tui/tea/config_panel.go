@@ -8,12 +8,13 @@ import (
 	"time"
 	"unicode/utf8"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	bubbletea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	codextui "codex_go/tui"
 	tuiapp "codex_go/tui/app"
 	bottompane "codex_go/tui/bottom_pane"
+	"codex_go/tui/keymsg"
 )
 
 type configPanelSection int
@@ -471,7 +472,7 @@ func (m *Model) configEffectsRowDisabledReason(row configPanelRow) string {
 	return ""
 }
 
-func (m *Model) updateConfigPanelKey(message bubbletea.KeyMsg) bubbletea.Cmd {
+func (m *Model) updateConfigPanelKey(message keymsg.KeyMsg) bubbletea.Cmd {
 	if m == nil || m.modal == nil || m.modal.configPanel == nil {
 		return nil
 	}
@@ -484,7 +485,7 @@ func (m *Model) updateConfigPanelKey(message bubbletea.KeyMsg) bubbletea.Cmd {
 	}
 	rows := m.configPanelFilteredRows()
 	switch message.Type {
-	case bubbletea.KeyEsc:
+	case keymsg.KeyEsc:
 		if panel.effects {
 			panel.effects = false
 			panel.selected = 0
@@ -502,11 +503,11 @@ func (m *Model) updateConfigPanelKey(message bubbletea.KeyMsg) bubbletea.Cmd {
 		m.modal = nil
 		m.refreshTranscript()
 		return nil
-	case bubbletea.KeyCtrlC:
+	case keymsg.KeyCtrlC:
 		m.modal = nil
 		m.refreshTranscript()
 		return nil
-	case bubbletea.KeyLeft:
+	case keymsg.KeyLeft:
 		// Rust switches the underlying tab during a "/" search but keeps the
 		// query and its results visible until Esc.
 		panel.section = (panel.section + configSectionCount - 1) % configSectionCount
@@ -514,49 +515,49 @@ func (m *Model) updateConfigPanelKey(message bubbletea.KeyMsg) bubbletea.Cmd {
 			m.resetConfigPanelSelection()
 		}
 		return nil
-	case bubbletea.KeyRight:
+	case keymsg.KeyRight:
 		panel.section = (panel.section + 1) % configSectionCount
 		if !panel.search {
 			m.resetConfigPanelSelection()
 		}
 		return nil
-	case bubbletea.KeyUp:
+	case keymsg.KeyUp:
 		m.configPanelMoveSelection(-1)
 		return nil
-	case bubbletea.KeyDown:
+	case keymsg.KeyDown:
 		m.configPanelMoveSelection(1)
 		return nil
-	case bubbletea.KeyPgUp:
+	case keymsg.KeyPgUp:
 		panel.selected = max(panel.selected-max(panel.visibleRows, 1), 0)
 		return nil
-	case bubbletea.KeyPgDown:
+	case keymsg.KeyPgDown:
 		panel.selected = min(panel.selected+max(panel.visibleRows, 1), max(len(rows)-1, 0))
 		return nil
-	case bubbletea.KeyHome:
+	case keymsg.KeyHome:
 		panel.selected = 0
 		return nil
-	case bubbletea.KeyEnd:
+	case keymsg.KeyEnd:
 		panel.selected = max(len(rows)-1, 0)
 		return nil
-	case bubbletea.KeyBackspace:
+	case keymsg.KeyBackspace:
 		if panel.search && panel.query != "" {
 			_, size := utf8.DecodeLastRuneInString(panel.query)
 			panel.query = panel.query[:len(panel.query)-size]
 			m.resetConfigPanelSelection()
 		}
 		return nil
-	case bubbletea.KeyCtrlU:
+	case keymsg.KeyCtrlU:
 		if panel.search {
 			panel.query = ""
 			m.resetConfigPanelSelection()
 		}
 		return nil
-	case bubbletea.KeyEnter:
+	case keymsg.KeyEnter:
 		if panel.selected >= 0 && panel.selected < len(rows) {
 			return m.activateConfigRow(rows[panel.selected])
 		}
 		return nil
-	case bubbletea.KeySpace:
+	case keymsg.KeySpace:
 		if panel.effects {
 			// Rust #53496: the Effects picker uses the shared list toggle
 			// handling, so Space toggles the selected row. A configured list
@@ -579,7 +580,7 @@ func (m *Model) updateConfigPanelKey(message bubbletea.KeyMsg) bubbletea.Cmd {
 			m.resetConfigPanelSelection()
 		}
 		return nil
-	case bubbletea.KeyRunes:
+	case keymsg.KeyRunes:
 		if len(message.Runes) == 0 {
 			return nil
 		}
@@ -638,7 +639,7 @@ func (m *Model) configPanelSearchKeyAvailable() bool {
 
 // applyConfigPanelListAction runs the list binding a printable key resolves to
 // and reports whether it was consumed.
-func (m *Model) applyConfigPanelListAction(message bubbletea.KeyMsg) bool {
+func (m *Model) applyConfigPanelListAction(message keymsg.KeyMsg) bool {
 	if m == nil || m.modal == nil || m.modal.configPanel == nil {
 		return false
 	}
@@ -958,30 +959,30 @@ func (m *Model) jumpConfigPanelChoice(number int) {
 	}
 }
 
-func (m *Model) updateConfigPanelChoiceKey(message bubbletea.KeyMsg) bubbletea.Cmd {
+func (m *Model) updateConfigPanelChoiceKey(message keymsg.KeyMsg) bubbletea.Cmd {
 	panel := m.modal.configPanel
 	choice := panel.choice
 	switch message.Type {
-	case bubbletea.KeyEsc:
+	case keymsg.KeyEsc:
 		panel.choice = nil
 		return nil
-	case bubbletea.KeyCtrlC:
+	case keymsg.KeyCtrlC:
 		m.modal = nil
 		m.refreshTranscript()
 		return nil
-	case bubbletea.KeyUp:
+	case keymsg.KeyUp:
 		m.moveConfigPanelChoice(-1)
 		return nil
-	case bubbletea.KeyDown:
+	case keymsg.KeyDown:
 		m.moveConfigPanelChoice(1)
 		return nil
-	case bubbletea.KeyHome:
+	case keymsg.KeyHome:
 		choice.selected = 0
 		return nil
-	case bubbletea.KeyEnd:
+	case keymsg.KeyEnd:
 		choice.selected = max(len(choice.items)-1, 0)
 		return nil
-	case bubbletea.KeyEnter:
+	case keymsg.KeyEnter:
 		if choice.selected < 0 || choice.selected >= len(choice.items) {
 			return nil
 		}
@@ -991,7 +992,7 @@ func (m *Model) updateConfigPanelChoiceKey(message bubbletea.KeyMsg) bubbletea.C
 		}
 		panel.choice = nil
 		return m.applyConfigPanelChoiceItem(choice.action, item)
-	case bubbletea.KeyRunes:
+	case keymsg.KeyRunes:
 		if len(message.Runes) == 1 && message.Runes[0] >= '1' && message.Runes[0] <= '9' {
 			m.jumpConfigPanelChoice(int(message.Runes[0] - '0'))
 			return nil

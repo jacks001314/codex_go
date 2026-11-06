@@ -87,7 +87,7 @@ func TestViewRendersSideWorkspacePanesLikeRust(t *testing.T) {
 	}
 	model.refreshTranscript()
 
-	view := model.View()
+	view := model.viewString()
 	if !strings.Contains(view, "side conversation answer") {
 		t.Fatalf("side transcript missing:\n%s", view)
 	}

@@ -34,11 +34,11 @@ func TestModelStartupHelpHonorsTooltipPreferenceLikeRust(t *testing.T) {
 				FullscreenTranscript: &fullscreen,
 			})
 			model.rawOutput = true
-			view := utils.StripANSI(model.View())
+			view := utils.StripANSI(model.viewString())
 			if got := strings.Contains(view, "To get started, describe a task"); got != test.wantHelp {
 				t.Fatalf("startup help present = %v, want %v:\n%s", got, test.wantHelp, view)
 			}
-			if got := strings.Contains(view, "Tip: "); got != test.wantTip {
+			if got := containsNonComposerTip(view); got != test.wantTip {
 				t.Fatalf("startup tip present = %v, want %v:\n%s", got, test.wantTip, view)
 			}
 		})

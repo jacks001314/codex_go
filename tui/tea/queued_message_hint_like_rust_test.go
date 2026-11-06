@@ -4,9 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 func newQueuedMessageHintModel(t *testing.T, config *codextui.KeymapConfig) *Model {
@@ -43,7 +42,7 @@ func TestQueuedMessageEditHintUsesPrimaryShortcutLikeRust(t *testing.T) {
 				}
 			}
 			model := newQueuedMessageHintModel(t, config)
-			if view := model.View(); !strings.Contains(view, tc.want) {
+			if view := model.viewString(); !strings.Contains(view, tc.want) {
 				t.Fatalf("queued hint missing %q:\n%s", tc.want, view)
 			}
 		})
@@ -54,12 +53,12 @@ func TestQueuedMessageEditHintUsesPrimaryShortcutLikeRust(t *testing.T) {
 		t.Fatalf("unbind edit_queued_message: %v", err)
 	}
 	model := newQueuedMessageHintModel(t, config)
-	if view := model.View(); strings.Contains(view, "edit last queued message") {
+	if view := model.viewString(); strings.Contains(view, "edit last queued message") {
 		t.Fatalf("unbound edit hint must be hidden:\n%s", view)
 	}
-	for _, key := range []bubbletea.KeyMsg{
-		{Type: bubbletea.KeyShiftLeft},
-		{Type: bubbletea.KeyUp, Alt: true},
+	for _, key := range []keymsg.KeyMsg{
+		{Type: keymsg.KeyShiftLeft},
+		{Type: keymsg.KeyUp, Alt: true},
 	} {
 		updated, _ := model.Update(key)
 		model = updated.(*Model)
@@ -73,9 +72,9 @@ func TestQueuedMessageEditHintUsesPrimaryShortcutLikeRust(t *testing.T) {
 // default_shortcuts_edit_most_recent_queued_message: Shift+Left is primary,
 // and Alt+Up remains an accepted alternative.
 func TestQueuedMessageEditAcceptsBothDefaultShortcutsLikeRust(t *testing.T) {
-	for _, key := range []bubbletea.KeyMsg{
-		{Type: bubbletea.KeyShiftLeft},
-		{Type: bubbletea.KeyUp, Alt: true},
+	for _, key := range []keymsg.KeyMsg{
+		{Type: keymsg.KeyShiftLeft},
+		{Type: keymsg.KeyUp, Alt: true},
 	} {
 		model := NewModel(codextui.NewState(nil), Options{Width: 120, Height: 36, KeymapConfig: codextui.NewKeymapConfig()})
 		model.composer.SetValue("first queued")

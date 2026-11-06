@@ -1,12 +1,11 @@
 package tea
 
 import (
+	mousemsg "codex_go/tui/mousemsg"
 	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
-
-	bubbletea "github.com/charmbracelet/bubbletea"
 
 	codextui "codex_go/tui"
 	"codex_go/utils"
@@ -220,7 +219,7 @@ func (m *Model) transcriptDisclosureControlsEnabled() bool {
 
 // transcriptMouseContentRow converts a terminal mouse row into the transcript
 // content row painted there (Rust TranscriptView::area).
-func (m *Model) transcriptMouseContentRow(msg bubbletea.MouseMsg) (int, bool) {
+func (m *Model) transcriptMouseContentRow(msg mousemsg.MouseMsg) (int, bool) {
 	if m == nil || m.transcriptContentTopRow < 0 || m.transcript.Height <= 0 {
 		return 0, false
 	}
@@ -233,8 +232,8 @@ func (m *Model) transcriptMouseContentRow(msg bubbletea.MouseMsg) (int, bool) {
 
 // handleTranscriptDisclosureClick toggles the activity whose painted control
 // row was clicked. Rust requires an unmodified left-button press.
-func (m *Model) handleTranscriptDisclosureClick(msg bubbletea.MouseMsg) bool {
-	if m == nil || msg.Action != bubbletea.MouseActionPress || msg.Button != bubbletea.MouseButtonLeft ||
+func (m *Model) handleTranscriptDisclosureClick(msg mousemsg.MouseMsg) bool {
+	if m == nil || msg.Action != mousemsg.MouseActionPress || msg.Button != mousemsg.MouseButtonLeft ||
 		msg.Ctrl || msg.Alt || msg.Shift {
 		return false
 	}
@@ -292,9 +291,9 @@ func (m *Model) syncPatchApprovalFollow() {
 // dismissTranscriptActivityFocusOnClick mirrors Rust pointer_down: a left press
 // that misses the disclosure clears focus before selection starts. The explicit
 // expansion stays keyed by activity IDs, so details remain visible.
-func (m *Model) dismissTranscriptActivityFocusOnClick(msg bubbletea.MouseMsg) bool {
+func (m *Model) dismissTranscriptActivityFocusOnClick(msg mousemsg.MouseMsg) bool {
 	if m == nil || !m.activityFocus.active ||
-		msg.Action != bubbletea.MouseActionPress || msg.Button != bubbletea.MouseButtonLeft {
+		msg.Action != mousemsg.MouseActionPress || msg.Button != mousemsg.MouseButtonLeft {
 		return false
 	}
 	if m.overlay != nil || !m.transcriptDisclosureLayoutEnabled() {

@@ -4,11 +4,10 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
 	bottompane "codex_go/tui/bottom_pane"
 	chatwidget "codex_go/tui/chatwidget"
+	"codex_go/tui/keymsg"
 )
 
 // Rust #50764 (dde5f8c5ae, codex-rs/tui/src/slash_command.rs +
@@ -82,7 +81,7 @@ func TestSlashArchiveCancellationKeepsTaskRunningLikeRust(t *testing.T) {
 	if model.modal == nil {
 		t.Fatal("expected the archive confirmation modal while running")
 	}
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEsc})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyEsc})
 	if model.modal != nil {
 		t.Fatalf("esc left the archive confirmation open")
 	}

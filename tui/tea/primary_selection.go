@@ -1,10 +1,11 @@
 package tea
 
 import (
+	mousemsg "codex_go/tui/mousemsg"
 	"strings"
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 )
 
 // PrimarySelectionReadResultMsg carries an asynchronous middle-click paste.
@@ -82,10 +83,10 @@ func (m *Model) releasePrimarySelectionOwnership() {
 // startPrimarySelectionPaste starts the X11 PRIMARY read for an unmodified
 // middle-button press (Rust #49112). The result is inserted only when no
 // interaction surface took ownership meanwhile.
-func (m *Model) startPrimarySelectionPaste(msg bubbletea.MouseMsg) (bool, bubbletea.Cmd) {
+func (m *Model) startPrimarySelectionPaste(msg mousemsg.MouseMsg) (bool, bubbletea.Cmd) {
 	if m == nil || m.onPrimarySelectionRead == nil ||
-		msg.Action != bubbletea.MouseActionPress ||
-		msg.Button != bubbletea.MouseButtonMiddle ||
+		msg.Action != mousemsg.MouseActionPress ||
+		msg.Button != mousemsg.MouseButtonMiddle ||
 		msg.Ctrl || msg.Alt || msg.Shift ||
 		m.modal != nil || m.slashPopup.Active || m.skillPopup.Active || m.mentionPopup != nil ||
 		m.readOnlyThread {

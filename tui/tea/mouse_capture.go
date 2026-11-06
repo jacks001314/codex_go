@@ -1,6 +1,6 @@
 package tea
 
-import bubbletea "github.com/charmbracelet/bubbletea"
+import bubbletea "charm.land/bubbletea/v2"
 
 // Rust parity: codex-rs/tui/src/tui.rs `MouseCapture::{Inherit, Enabled,
 // Disabled}` and `MouseCapture::captures_mouse` (#57284).
@@ -49,7 +49,7 @@ func (m *Model) desiredMouseCapture() mouseCapturePolicy {
 	return mouseCaptureInherit
 }
 
-// syncMouseCapture emits a terminal command when the capture state changes. The
+// syncMouseCapture updates the capture state consumed by View.MouseMode. The
 // state is retained across temporary editor, suspend, and panic handoffs so a
 // close path can always restore the inherited policy.
 func (m *Model) syncMouseCapture() bubbletea.Cmd {
@@ -63,8 +63,5 @@ func (m *Model) syncMouseCapture() bubbletea.Cmd {
 		return nil
 	}
 	m.mouseCaptureActive = desired
-	if desired {
-		return bubbletea.EnableMouseCellMotion
-	}
-	return bubbletea.DisableMouse
+	return nil
 }

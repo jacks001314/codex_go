@@ -11,10 +11,11 @@ import (
 	"testing"
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	"codex_go/stability/harness/report"
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 // TestUIKeyLatency measures the keypress-to-first-frame path: one Update and
@@ -26,14 +27,14 @@ func TestUIKeyLatency(t *testing.T) {
 
 	for i := 0; i < 25; i++ {
 		model.Update(runeKey('a'))
-		_ = model.View()
+		_ = model.viewString()
 	}
 	const samples = 400
 	durations := make([]time.Duration, 0, samples)
 	for i := 0; i < samples; i++ {
 		start := time.Now()
 		model.Update(runeKey('a'))
-		_ = model.View()
+		_ = model.viewString()
 		durations = append(durations, time.Since(start))
 	}
 	p99 := percentile(durations, 0.99)
@@ -64,12 +65,12 @@ func TestUIFrameRenderLargeTranscript(t *testing.T) {
 	model := NewModel(state, Options{Width: 120, Height: 40})
 
 	// Warm up the layout cache once.
-	_ = model.View()
+	_ = model.viewString()
 	const samples = 30
 	durations := make([]time.Duration, 0, samples)
 	for i := 0; i < samples; i++ {
 		start := time.Now()
-		view := model.View()
+		view := model.viewString()
 		durations = append(durations, time.Since(start))
 		if view == "" {
 			t.Fatal("empty frame")
@@ -109,7 +110,7 @@ func TestUIEventStorm(t *testing.T) {
 	for i := 0; i < total; i++ {
 		sampleStart := time.Now()
 		model.Update(runeKey('x'))
-		_ = model.View()
+		_ = model.viewString()
 		if elapsed := time.Since(sampleStart); elapsed > worst {
 			worst = elapsed
 		}
@@ -155,13 +156,13 @@ func TestUIComposerLongDraft(t *testing.T) {
 	model := newStabilityModel(120, 40)
 	for i := 0; i < draft-measured; i++ {
 		model.Update(runeKey('x'))
-		_ = model.View()
+		_ = model.viewString()
 	}
 	durations := make([]time.Duration, 0, measured)
 	for i := 0; i < measured; i++ {
 		start := time.Now()
 		model.Update(runeKey('x'))
-		_ = model.View()
+		_ = model.viewString()
 		durations = append(durations, time.Since(start))
 	}
 	p99 := percentile(durations, 0.99)
@@ -185,7 +186,7 @@ func TestUIResizeStorm(t *testing.T) {
 		width := 60 + (i%4)*20
 		height := 20 + (i%3)*10
 		model.Update(bubbletea.WindowSizeMsg{Width: width, Height: height})
-		view := model.View()
+		view := model.viewString()
 		if view == "" {
 			t.Fatalf("empty frame after resize %dx%d", width, height)
 		}
@@ -204,8 +205,8 @@ func newStabilityModel(width, height int) *Model {
 	return NewModel(state, Options{Width: width, Height: height})
 }
 
-func runeKey(r rune) bubbletea.KeyMsg {
-	return bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{r}}
+func runeKey(r rune) keymsg.KeyMsg {
+	return keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune{r}}
 }
 
 func percentile(values []time.Duration, fraction float64) time.Duration {

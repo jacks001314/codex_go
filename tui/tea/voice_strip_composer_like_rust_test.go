@@ -33,7 +33,7 @@ func firstRowContaining(view string, needle string) int {
 // visible below the composer.
 func TestVoiceStripRendersInsideTheComposerLikeRust(t *testing.T) {
 	model := voiceComposerModel(t)
-	view := model.View()
+	view := plainView(model.viewString())
 
 	stripRow := firstRowContaining(view, "/voice stop")
 	if stripRow < 0 {
@@ -60,9 +60,11 @@ func TestVoiceStripRendersInsideTheComposerLikeRust(t *testing.T) {
 	if strings.TrimSpace(rows[draftRow+1]) != "" {
 		t.Fatalf("composer bottom padding row = %q", rows[draftRow+1])
 	}
-	// The passive rows still follow the composer block.
-	if label := firstRowContaining(view, "tui"); label <= draftRow+1 {
-		t.Fatalf("trailing label row = %d did not survive below the composer:\n%s", label, view)
+	// The passive rows still follow the composer block. The status row carries the
+	// checkout path, so only its position below the composer is asserted.
+	statusRow := draftRow + 2
+	if statusRow >= len(rows) || strings.TrimSpace(rows[statusRow]) == "" {
+		t.Fatalf("status row %d missing below the composer:\n%s", statusRow, view)
 	}
 }
 
@@ -80,7 +82,7 @@ func TestVoiceStripHidesWhenTheComposerIsClippedLikeRust(t *testing.T) {
 	if lines := model.voiceStripLines(model.width); len(lines) != stripHeight {
 		t.Fatalf("strip at the fit threshold = %#v", lines)
 	}
-	if view := model.View(); !strings.Contains(view, "/voice stop") {
+	if view := plainView(model.viewString()); !strings.Contains(view, "/voice stop") {
 		t.Fatalf("strip missing at the fit threshold:\n%s", view)
 	}
 
@@ -88,7 +90,7 @@ func TestVoiceStripHidesWhenTheComposerIsClippedLikeRust(t *testing.T) {
 	if lines := model.voiceStripLines(model.width); lines != nil {
 		t.Fatalf("clipped composer kept the strip: %#v", lines)
 	}
-	view := model.View()
+	view := plainView(model.viewString())
 	if strings.Contains(view, "/voice stop") {
 		t.Fatalf("clipped composer rendered the strip:\n%s", view)
 	}
@@ -110,7 +112,7 @@ func TestVoiceStripRequiresTheVisibleThreadLikeRust(t *testing.T) {
 	if lines := model.voiceStripLines(model.width); lines != nil {
 		t.Fatalf("parked session painted on another thread: %#v", lines)
 	}
-	if view := model.View(); strings.Contains(view, "/voice stop") {
+	if view := model.viewString(); strings.Contains(view, "/voice stop") {
 		t.Fatalf("parked session painted on another thread:\n%s", view)
 	}
 	model.State.SetThreadID("thread-voice")
@@ -134,7 +136,7 @@ func TestVoiceStripReducedMotionReservesOneComposerRowLikeRust(t *testing.T) {
 	if got, want := model.composerSectionRows(), model.composerTargetRows()+2+2; got != want {
 		t.Fatalf("composer block = %d, want %d", got, want)
 	}
-	view := model.View()
+	view := model.viewString()
 	stripRow := firstRowContaining(view, "/voice stop")
 	if stripRow < 0 || stripRow != model.composerTopRow+1 {
 		t.Fatalf("reduced-motion strip row = %d (composer top %d):\n%s", stripRow, model.composerTopRow, view)
@@ -143,4 +145,3 @@ func TestVoiceStripReducedMotionReservesOneComposerRowLikeRust(t *testing.T) {
 		t.Fatalf("reduced motion painted a meter row:\n%s", view)
 	}
 }
-

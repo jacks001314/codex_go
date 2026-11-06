@@ -23,7 +23,7 @@ func TestModelStartupSessionHeaderTooltipHonorsShowTooltipsLikeRust(t *testing.T
 	disabled := NewModel(resumed(), Options{
 		Width: 100, Height: 24, ShowSessionHeader: true, ShowTooltips: &off,
 	})
-	if view := utils.StripANSI(disabled.View()); strings.Contains(view, "Tip: ") {
+	if view := utils.StripANSI(disabled.viewString()); containsNonComposerTip(view) {
 		t.Fatalf("disabled tooltips rendered a tip:\n%s", view)
 	}
 
@@ -31,12 +31,12 @@ func TestModelStartupSessionHeaderTooltipHonorsShowTooltipsLikeRust(t *testing.T
 	enabled := NewModel(resumed(), Options{
 		Width: 100, Height: 24, ShowSessionHeader: true, ShowTooltips: &on,
 	})
-	view := utils.StripANSI(enabled.View())
-	if strings.Contains(view, "Tip: ") {
+	view := utils.StripANSI(enabled.viewString())
+	if containsNonComposerTip(view) {
 		t.Fatalf("fullscreen transcript must hide the startup tip (Rust #48513):\n%s", view)
 	}
 	enabled.rawOutput = true
-	if raw := utils.StripANSI(enabled.View()); !strings.Contains(raw, "Tip: ") {
+	if raw := utils.StripANSI(enabled.viewString()); !containsNonComposerTip(raw) {
 		t.Fatalf("raw output must retain the startup tip:\n%s", raw)
 	}
 	enabled.rawOutput = false
@@ -45,14 +45,14 @@ func TestModelStartupSessionHeaderTooltipHonorsShowTooltipsLikeRust(t *testing.T
 	inline := NewModel(resumed(), Options{
 		Width: 100, Height: 24, ShowSessionHeader: true, ShowTooltips: &on, FullscreenTranscript: &fullscreenOff,
 	})
-	if inlineView := utils.StripANSI(inline.View()); !strings.Contains(inlineView, "Tip: ") {
+	if inlineView := utils.StripANSI(inline.viewString()); !containsNonComposerTip(inlineView) {
 		t.Fatalf("inline scrollback must retain the startup tip:\n%s", inlineView)
 	}
 	narrow := NewModel(resumed(), Options{
 		Width: 32, Height: 24, ShowSessionHeader: true, ShowTooltips: &on,
 	})
-	narrowView := utils.StripANSI(narrow.View())
-	if strings.Contains(narrowView, "Tip: ") {
+	narrowView := utils.StripANSI(narrow.viewString())
+	if containsNonComposerTip(narrowView) {
 		t.Fatalf("narrow fullscreen transcript must hide the startup tip:\n%s", narrowView)
 	}
 	if strings.Contains(narrowView, "**") || strings.Contains(narrowView, "](") {

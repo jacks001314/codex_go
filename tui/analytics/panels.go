@@ -2,7 +2,6 @@ package analytics
 
 import (
 	"strconv"
-	"strings"
 	"time"
 
 	"codex_go/auth"
@@ -37,10 +36,8 @@ type AnalyticsPanelOptions struct {
 	ChartHeight          int
 	RangeIndex           int
 	EndDate              time.Time
-	Focused              bool
 	Business             bool
 	ConsumerAttribution  bool
-	TokenModel           *string
 	ModelName            func(string) string
 	// Theme supplies the activity accent for the Summary token calendar
 	// (Rust #46897).
@@ -56,29 +53,14 @@ type AnalyticsPanel struct {
 	ChartBands     int
 }
 
-// AnalyticsPanelLines builds the maximized section: heading, grouping, and
-// the history chart with its breakdown table.
+// AnalyticsPanelLines builds the maximized section body: the history chart or
+// the chats/Summary content. Fixed report chrome lives in tui/tea (#46863).
 func AnalyticsPanelLines(opts AnalyticsPanelOptions) AnalyticsPanel {
 	width := opts.Width
 	if width < 1 {
 		width = 1
 	}
-	title := "  " + AnalyticsSectionTitle(opts.Section, opts.Business, opts.ConsumerAttribution)
-	if opts.Focused {
-		title = "▎ " + AnalyticsSectionTitle(opts.Section, opts.Business, opts.ConsumerAttribution)
-	}
-	heading := title
-	if opts.Section == AnalyticsSectionUsage || opts.Section == AnalyticsSectionCredits || opts.Section == AnalyticsSectionActivity {
-		heading = analyticsColumns(heading, "By "+strings.ToLower(opts.Section.GroupLabel(opts.State.Group, opts.ConsumerAttribution)), width)
-	}
-	lines := []string{heading, strings.Repeat("─", width)}
-	if opts.Section == AnalyticsSectionUsage && opts.Business {
-		model := "All models"
-		if opts.TokenModel != nil && *opts.TokenModel != "" {
-			model = *opts.TokenModel
-		}
-		lines = append(lines, model+" · m change model")
-	}
+	var lines []string
 	bands := 0
 	selectionStart := 0
 	selectionEnd := len(lines)

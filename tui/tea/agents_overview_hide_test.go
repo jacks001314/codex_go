@@ -4,9 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	agentsoverview "codex_go/tui/agents_overview"
+	"codex_go/tui/keymsg"
 	"codex_go/utils"
 )
 
@@ -23,10 +22,10 @@ func TestModelAgentsHideShortcutLikeRust(t *testing.T) {
 	})
 	openAgentsDashboard(t, model)
 	model.Update(agentsKeyEvent('?'))
-	if !strings.Contains(utils.StripANSI(model.View()), "Hide") {
-		t.Fatalf("dashboard help missing hide hint:\n%s", utils.StripANSI(model.View()))
+	if !strings.Contains(utils.StripANSI(model.viewString()), "Hide") {
+		t.Fatalf("dashboard help missing hide hint:\n%s", utils.StripANSI(model.viewString()))
 	}
-	model.Update(key(bubbletea.KeyEsc))
+	model.Update(key(keymsg.KeyEsc))
 	if got := model.agentsOverview.SelectedThreadID(); got != "root-1" {
 		t.Fatalf("initial selection = %q, want root-1", got)
 	}
@@ -49,7 +48,7 @@ func TestModelAgentsHideShortcutLikeRust(t *testing.T) {
 	}
 
 	// Close and reopen: the hide persists across dashboard renders.
-	model.Update(key(bubbletea.KeyEsc))
+	model.Update(key(keymsg.KeyEsc))
 	if model.agentsOverview != nil {
 		t.Fatal("esc did not close the dashboard")
 	}

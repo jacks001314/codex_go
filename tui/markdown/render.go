@@ -1,26 +1,32 @@
 package markdown
 
 import (
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	codextui "codex_go/tui"
 	"codex_go/utils"
 
-	"github.com/charmbracelet/glamour"
-	"github.com/charmbracelet/glamour/ansi"
-	"github.com/charmbracelet/glamour/styles"
+	"charm.land/glamour/v2"
+	"charm.land/glamour/v2/ansi"
+	"charm.land/glamour/v2/styles"
 	"github.com/yuin/goldmark/ast"
 	gmtext "github.com/yuin/goldmark/text"
 )
 
 const defaultWidth = 80
 
+// Code-block markers travel through glamour as code-block block prefixes and
+// suffixes. glamour v2 hard-wraps every block to the render width, so the
+// markers must be narrow enough to survive a single-column wrap; private-use
+// runes keep them intact at any transcript width.
 const (
-	codeBlockStartMarker = "CODEX_INTERNAL_CODE_BLOCK_START"
-	codeBlockEndMarker   = "CODEX_INTERNAL_CODE_BLOCK_END"
+	codeBlockStartMarker = "\uE020"
+	codeBlockEndMarker   = "\uE021"
 )
 
 type sourceCodeBlock struct {
@@ -265,7 +271,6 @@ func renderMarkdown(kind markdownStyleKind, style ansi.StyleConfig, width int, t
 		created, err := glamour.NewTermRenderer(
 			glamour.WithStyles(style),
 			glamour.WithWordWrap(width),
-			glamour.WithColorProfile(codextui.TermenvProfileForLevel(colorLevel)),
 			glamour.WithChromaFormatter(codextui.ChromaFormatterForLevel(colorLevel)),
 		)
 		if err != nil {
@@ -323,6 +328,14 @@ func renderWithStyleSpacing(text string, width int, themeID string, cwd string, 
 	if err != nil {
 		return "", err
 	}
+	// glamour v2 emits its own OSC-8 hyperlinks; the TUI annotates links with a
+	// single stable format afterwards (annotateRenderedLineURLs etc.), so its
+	// escapes are removed here to avoid nesting two hyperlinks around one label.
+	out = stripOSC8Hyperlinks(out)
+	out = adaptRenderedColorLevel(out, colorLevel)
+	// glamour v2 emits the short reset "[m"; the TUI keeps the canonical
+	// "[0m" so downstream span handling sees one reset spelling.
+	out = strings.ReplaceAll(out, "\x1b[m", "\x1b[0m")
 	out = replaceListParagraphBreakMarkers(out)
 	if renderLists {
 		out = stripRenderedTaskBullets(out)
@@ -352,18 +365,21 @@ func renderWithStyleSpacing(text string, width int, themeID string, cwd string, 
 // linkStyleSGR renders the Markdown link style (color and underline) as an SGR
 // prefix, so bare URLs can borrow the same affordance as explicit links.
 func linkStyleSGR(link ansi.StylePrimitive, level codextui.StdoutColorLevel) string {
-	var sgr strings.Builder
-	if link.Underline != nil && *link.Underline {
-		sgr.WriteString("\x1b[4m")
-	}
+	params := []string{}
 	if link.Color != nil {
 		if color := codextui.TermenvProfileForLevel(level).Color(*link.Color); color != nil {
-			sgr.WriteString("\x1b[")
-			sgr.WriteString(color.Sequence(false))
-			sgr.WriteString("m")
+			params = append(params, strings.Split(color.Sequence(false), ";")...)
 		}
 	}
-	return sgr.String()
+	if link.Underline != nil && *link.Underline {
+		params = append(params, "4")
+	}
+	if len(params) == 0 {
+		return ""
+	}
+	// One combined sequence matches the SGR lipgloss v2 emits for a link span,
+	// so the styled URL and the annotation use the same spelling.
+	return "\x1b[" + strings.Join(params, ";") + "m"
 }
 
 // styleBareWebURLs gives detected URLs the link style while leaving code
@@ -432,7 +448,18 @@ var hyphenUnorderedListMarkerRE = regexp.MustCompile(`^((?:` + blockQuoteIndentT
 func hyphenUnorderedListMarkers(rendered string) string {
 	lines := strings.Split(strings.ReplaceAll(rendered, "\r\n", "\n"), "\n")
 	for index, line := range lines {
-		lines[index] = hyphenUnorderedListMarkerRE.ReplaceAllString(line, "$1$2- ")
+		plain := utils.StripANSI(line)
+		match := hyphenUnorderedListMarkerRE.FindStringSubmatchIndex(plain)
+		if match == nil {
+			continue
+		}
+		// The marker is matched in the plain text because glamour v2 renders
+		// the blockquote indent and the bullet in separate styled spans.
+		markerEnd, ok := rawIndexForVisible(line, match[5]+len(unorderedListMarkerToken))
+		if !ok {
+			continue
+		}
+		lines[index] = plain[:match[5]] + "- " + line[markerEnd:]
 	}
 	return strings.Join(lines, "\n")
 }
@@ -440,7 +467,28 @@ func hyphenUnorderedListMarkers(rendered string) string {
 // stripRenderedTaskBullets removes the bullet glamour inserts before the
 // Unicode checkbox. Ordered task items keep their numbering.
 func stripRenderedTaskBullets(rendered string) string {
-	return renderedTaskBulletRE.ReplaceAllString(rendered, "$1$2 ")
+	lines := strings.Split(strings.ReplaceAll(rendered, "\r\n", "\n"), "\n")
+	for index, line := range lines {
+		plain := utils.StripANSI(line)
+		match := renderedTaskBulletRE.FindStringSubmatchIndex(plain)
+		if match == nil {
+			continue
+		}
+		headEnd, ok := rawIndexForVisible(line, match[3])
+		if !ok {
+			continue
+		}
+		bulletEnd, ok := rawIndexForVisible(line, match[4])
+		if !ok {
+			continue
+		}
+		// glamour v2 styles the bullet and the checkbox in separate spans, so
+		// the marker has to be located in the plain text and cut out of the
+		// styled line at the matching raw offsets: drop the bullet between the
+		// indentation and the checkbox and keep the checkbox span intact.
+		lines[index] = line[:headEnd] + line[bulletEnd:]
+	}
+	return strings.Join(lines, "\n")
 }
 
 func colorTaskListMarkers(rendered string, markerSGR string) string {
@@ -453,12 +501,62 @@ func colorTaskListMarkers(rendered string, markerSGR string) string {
 		if renderedOrderedMarkerRE.MatchString(plain) {
 			continue
 		}
-		lines[index] = renderedTaskMarkerRE.ReplaceAllString(
-			line,
-			"$1"+markerSGR+"$2"+orderedListMarkerResetSGR+" ",
-		)
+		match := renderedTaskMarkerRE.FindStringSubmatchIndex(plain)
+		if match == nil {
+			continue
+		}
+		repainted, ok := repaintPlainMarker(line, plain, match, markerSGR)
+		if ok {
+			lines[index] = repainted
+		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+// ansiControlRE matches the SGR (CSI) and OSC sequences the renderer emits, so
+// helpers can map offsets in a line's plain text back onto its styled form.
+var ansiControlRE = regexp.MustCompile("\x1b\\[[0-9;?]*[A-Za-z]|\x1b\\][^\x07\x1b]*(?:\x07|\x1b\\\\)")
+
+// rawIndexForVisible returns the raw byte offset in styled where visible has
+// consumed plainBytes bytes of the line's ANSI-stripped text.
+func rawIndexForVisible(styled string, plainBytes int) (int, bool) {
+	consumed := 0
+	for i := 0; i < len(styled); {
+		if consumed == plainBytes {
+			return i, true
+		}
+		if styled[i] == 0x1b {
+			if loc := ansiControlRE.FindStringIndex(styled[i:]); loc != nil && loc[0] == 0 {
+				i += loc[1]
+				continue
+			}
+		}
+		_, size := utf8.DecodeRuneInString(styled[i:])
+		if size <= 0 {
+			return 0, false
+		}
+		consumed += size
+		i += size
+	}
+	if consumed == plainBytes {
+		return len(styled), true
+	}
+	return 0, false
+}
+
+// repaintPlainMarker repaints the marker captured by the second submatch group
+// of match, keeping the leading indentation untouched. glamour v2 renders each
+// styled token in its own span, so matching the raw line cannot work.
+func repaintPlainMarker(line, plain string, match []int, markerSGR string) (string, bool) {
+	headEnd, ok := rawIndexForVisible(line, match[3])
+	if !ok {
+		return "", false
+	}
+	markerEnd, ok := rawIndexForVisible(line, match[5])
+	if !ok {
+		return "", false
+	}
+	return line[:headEnd] + markerSGR + plain[match[4]:match[5]] + orderedListMarkerResetSGR + line[markerEnd:], true
 }
 
 // blockQuoteIndentToken is the indent the TUI paints in front of every
@@ -562,13 +660,14 @@ func repaintListMarkers(rendered string, marker *regexp.Regexp, markerSGR string
 			}
 			continue
 		}
-		if !marker.MatchString(line) {
+		match := marker.FindStringSubmatchIndex(plain)
+		if match == nil {
 			continue
 		}
-		lines[index] = marker.ReplaceAllString(
-			line,
-			"$1"+markerSGR+"$2"+orderedListMarkerResetSGR,
-		)
+		repainted, ok := repaintPlainMarker(line, plain, match, markerSGR)
+		if ok {
+			lines[index] = repainted
+		}
 	}
 	return strings.Join(lines, "\n")
 }
@@ -909,6 +1008,53 @@ func inCodeRange(pos int, ranges [][2]int) bool {
 // annotateRenderedLineURLs wraps web URLs in each rendered line with OSC-8
 // terminal hyperlinks so URLs in assistant messages are clickable, matching the
 // Rust codex TUI behavior.
+var renderedSGRRE = regexp.MustCompile("\x1b\\[([0-9;]*)m")
+
+// adaptRenderedColorLevel rewrites the truecolor sequences glamour v2 emits into
+// the closest colour the terminal supports. glamour v1 took the colour profile
+// as a renderer option; v2 removed it, so the adaptation happens on the rendered
+// text instead.
+func adaptRenderedColorLevel(rendered string, level codextui.StdoutColorLevel) string {
+	if level == codextui.ColorTrue || !strings.Contains(rendered, "\x1b[") {
+		return rendered
+	}
+	return renderedSGRRE.ReplaceAllStringFunc(rendered, func(sequence string) string {
+		params := renderedSGRRE.FindStringSubmatch(sequence)[1]
+		if params == "" {
+			return sequence
+		}
+		parts := strings.Split(params, ";")
+		out := make([]string, 0, len(parts))
+		for index := 0; index < len(parts); index++ {
+			if (parts[index] == "38" || parts[index] == "48") && index+4 < len(parts) && parts[index+1] == "2" {
+				red, rerr := strconv.Atoi(parts[index+2])
+				green, gerr := strconv.Atoi(parts[index+3])
+				blue, berr := strconv.Atoi(parts[index+4])
+				if rerr == nil && gerr == nil && berr == nil {
+					hex := fmt.Sprintf("#%02x%02x%02x", red, green, blue)
+					if converted := codextui.TermenvProfileForLevel(level).Color(hex); converted != nil {
+						out = append(out, strings.Split(converted.Sequence(parts[index] == "48"), ";")...)
+						index += 4
+						continue
+					}
+				}
+			}
+			out = append(out, parts[index])
+		}
+		return "\x1b[" + strings.Join(out, ";") + "m"
+	})
+}
+
+var osc8HyperlinkRE = regexp.MustCompile("\x1b\\]8;[^\x07\x1b]*(?:\x07|\x1b\\\\)")
+
+// stripOSC8Hyperlinks removes the terminal hyperlink escapes glamour emits.
+func stripOSC8Hyperlinks(rendered string) string {
+	if !strings.Contains(rendered, "\x1b]8;") {
+		return rendered
+	}
+	return osc8HyperlinkRE.ReplaceAllString(rendered, "")
+}
+
 func annotateRenderedLineURLs(rendered string) string {
 	if !strings.Contains(rendered, "http") {
 		return rendered
@@ -943,7 +1089,7 @@ func codexMarkdownStyle() ansi.StyleConfig {
 	// index 6 (cyan) is used instead of the colour name.
 	style.Code = ansi.StyleBlock{StylePrimitive: ansi.StylePrimitive{Color: styleString("6")}}
 	style.Strikethrough = ansi.StylePrimitive{CrossedOut: styleBool(true)}
-	style.Link = ansi.StylePrimitive{Color: styleString("cyan"), Underline: styleBool(true)}
+	style.Link = ansi.StylePrimitive{Color: styleString("6"), Underline: styleBool(true)}
 	style.BlockQuote = ansi.StyleBlock{
 		StylePrimitive: ansi.StylePrimitive{Color: styleString("green")},
 		Indent:         styleUint(1),

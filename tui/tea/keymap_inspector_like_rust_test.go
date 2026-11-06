@@ -5,10 +5,9 @@ import (
 	"testing"
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
 	chatwidget "codex_go/tui/chatwidget"
+	"codex_go/tui/keymsg"
 )
 
 // openKeymapInspectorForTest drives the real /keymap flow: submit the command,
@@ -17,19 +16,19 @@ func openKeymapInspectorForTest(t *testing.T) *Model {
 	t.Helper()
 	model := NewModel(nil, Options{})
 	typeText(t, model, "/keymap")
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if model.modal == nil || model.modal.keymapPanel == nil {
 		t.Fatalf("/keymap modal = %#v", model.modal)
 	}
 	model.modal.keymapPanel.tab = len(model.keymapPanelTabs()) - 1
-	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(keymsg.KeyEnter))
 	if model.modal == nil || model.modal.keymapInspector == nil {
 		t.Fatalf("Debug tab Enter should open the inspector, modal = %#v", model.modal)
 	}
 	return model
 }
 
-func keymapInspectorReportAfter(t *testing.T, model *Model, message bubbletea.KeyMsg) *keymapInspectorReport {
+func keymapInspectorReportAfter(t *testing.T, model *Model, message keymsg.KeyMsg) *keymapInspectorReport {
 	t.Helper()
 	model.Update(message)
 	if model.modal == nil || model.modal.keymapInspector == nil {
@@ -68,7 +67,7 @@ func keymapInspectorRequireMatches(t *testing.T, label string, report *keymapIns
 func TestKeymapInspectorKeypressReportsLikeRust(t *testing.T) {
 	cases := []struct {
 		name     string
-		message  bubbletea.KeyMsg
+		message  keymsg.KeyMsg
 		detected string
 		config   string
 		raw      string
@@ -89,7 +88,7 @@ func TestKeymapInspectorKeypressReportsLikeRust(t *testing.T) {
 		},
 		{
 			name:     "ctrl+k",
-			message:  key(bubbletea.KeyCtrlK),
+			message:  key(keymsg.KeyCtrlK),
 			detected: "ctrl+k",
 			config:   "ctrl-k",
 			raw:      "code=Char('k'), modifiers=ctrl, kind=Press",
@@ -100,7 +99,7 @@ func TestKeymapInspectorKeypressReportsLikeRust(t *testing.T) {
 		},
 		{
 			name:     "esc is inspected",
-			message:  key(bubbletea.KeyEsc),
+			message:  key(keymsg.KeyEsc),
 			detected: "esc",
 			config:   "esc",
 			raw:      "code=Esc, modifiers=none, kind=Press",
@@ -125,7 +124,7 @@ func TestKeymapInspectorKeypressReportsLikeRust(t *testing.T) {
 		},
 		{
 			name:     "left arrow",
-			message:  key(bubbletea.KeyLeft),
+			message:  key(keymsg.KeyLeft),
 			detected: "\u2190",
 			config:   "left",
 			raw:      "code=Left, modifiers=none, kind=Press",
@@ -137,7 +136,7 @@ func TestKeymapInspectorKeypressReportsLikeRust(t *testing.T) {
 		},
 		{
 			name:     "space",
-			message:  key(bubbletea.KeySpace),
+			message:  key(keymsg.KeySpace),
 			detected: "space",
 			config:   "space",
 			raw:      "code=Char(' '), modifiers=none, kind=Press",
@@ -147,7 +146,7 @@ func TestKeymapInspectorKeypressReportsLikeRust(t *testing.T) {
 		},
 		{
 			name:     "f1",
-			message:  key(bubbletea.KeyF1),
+			message:  key(keymsg.KeyF1),
 			detected: "f1",
 			config:   "f1",
 			raw:      "code=F(1), modifiers=none, kind=Press",
@@ -155,7 +154,7 @@ func TestKeymapInspectorKeypressReportsLikeRust(t *testing.T) {
 		},
 		{
 			name:     "home",
-			message:  key(bubbletea.KeyHome),
+			message:  key(keymsg.KeyHome),
 			detected: "home",
 			config:   "home",
 			raw:      "code=Home, modifiers=none, kind=Press",
@@ -167,7 +166,7 @@ func TestKeymapInspectorKeypressReportsLikeRust(t *testing.T) {
 		},
 		{
 			name:     "page down",
-			message:  key(bubbletea.KeyPgDown),
+			message:  key(keymsg.KeyPgDown),
 			detected: "pgdn",
 			config:   "page-down",
 			raw:      "code=PageDown, modifiers=none, kind=Press",
@@ -178,7 +177,7 @@ func TestKeymapInspectorKeypressReportsLikeRust(t *testing.T) {
 		},
 		{
 			name:     "backspace",
-			message:  key(bubbletea.KeyBackspace),
+			message:  key(keymsg.KeyBackspace),
 			detected: "backspace",
 			config:   "backspace",
 			raw:      "code=Backspace, modifiers=none, kind=Press",
@@ -189,7 +188,7 @@ func TestKeymapInspectorKeypressReportsLikeRust(t *testing.T) {
 		},
 		{
 			name:     "tab",
-			message:  key(bubbletea.KeyTab),
+			message:  key(keymsg.KeyTab),
 			detected: "tab",
 			config:   "tab",
 			raw:      "code=Tab, modifiers=none, kind=Press",
@@ -199,7 +198,7 @@ func TestKeymapInspectorKeypressReportsLikeRust(t *testing.T) {
 		},
 		{
 			name:     "bare NUL normalizes to ctrl+space",
-			message:  bubbletea.KeyMsg(bubbletea.Key{Type: bubbletea.KeyRunes, Runes: []rune{0}}),
+			message:  keymsg.KeyMsg(keymsg.Key{Type: keymsg.KeyRunes, Runes: []rune{0}}),
 			detected: "ctrl+space",
 			config:   "ctrl-space",
 			raw:      "code=Char('\\u{0}'), modifiers=none, kind=Press",
@@ -231,7 +230,7 @@ func TestKeymapInspectorKeypressReportsLikeRust(t *testing.T) {
 func TestKeymapInspectorUnsupportedKeyLikeRust(t *testing.T) {
 	model := openKeymapInspectorForTest(t)
 	model.width = 120
-	report := keymapInspectorReportAfter(t, model, key(bubbletea.KeyInsert))
+	report := keymapInspectorReportAfter(t, model, key(keymsg.KeyInsert))
 	if report.Detected != "insert" || report.ConfigKey != "" {
 		t.Fatalf("Insert report = %q / %q", report.Detected, report.ConfigKey)
 	}
@@ -251,15 +250,15 @@ func TestKeymapInspectorUnsupportedKeyLikeRust(t *testing.T) {
 		"Assigned actions:",
 		"  - vim_normal.enter_insert (Enter Insert) - Enter insert mode at the cursor. [Default]",
 	}, "\n")
-	if view := model.renderKeymapInspector(); view != want {
+	if view := plainView(model.renderKeymapInspector()); view != want {
 		t.Fatalf("insert view = \n%s\nwant:\n%s", view, want)
 	}
 
 	f1 := openKeymapInspectorForTest(t)
 	f1.width = 120
-	report = keymapInspectorReportAfter(t, f1, key(bubbletea.KeyF1))
+	report = keymapInspectorReportAfter(t, f1, key(keymsg.KeyF1))
 	keymapInspectorRequireMatches(t, "f1", report, nil)
-	if view := f1.renderKeymapInspector(); !strings.HasSuffix(view, "Assigned actions:\n  none") {
+	if view := plainView(f1.renderKeymapInspector()); !strings.HasSuffix(view, "Assigned actions:\n  none") {
 		t.Fatalf("f1 view should render no matches:\n%s", view)
 	}
 }
@@ -298,7 +297,7 @@ func TestKeymapInspectorDelayedHintLikeRust(t *testing.T) {
 // to /keymap on the Debug tab, as out/kmdbg-close-go.txt shows.
 func TestKeymapInspectorCtrlCClosesToDebugTabLikeRust(t *testing.T) {
 	model := openKeymapInspectorForTest(t)
-	model.Update(key(bubbletea.KeyCtrlC))
+	model.Update(key(keymsg.KeyCtrlC))
 	if model.modal == nil || model.modal.id != chatwidget.KeymapPickerViewID || model.modal.keymapPanel == nil {
 		t.Fatalf("Ctrl+C modal = %#v", model.modal)
 	}

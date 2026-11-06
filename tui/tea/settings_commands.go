@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"strings"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
 	"codex_go/config"
 	"codex_go/features"
@@ -12,6 +12,7 @@ import (
 	agentsoverview "codex_go/tui/agents_overview"
 	chatwidget "codex_go/tui/chatwidget"
 	historycell "codex_go/tui/history_cell"
+	"codex_go/tui/keymsg"
 	"codex_go/tui/markdown"
 )
 
@@ -270,37 +271,37 @@ func (m *Model) toggleExperimentalSelection() {
 // the selected writable feature, Enter saves and keeps the popup open while the
 // write is in flight, and a second Enter or Esc closes it while the write
 // finishes (Rust ExperimentalFeaturesView::handle_key_event / on_ctrl_c).
-func (m *Model) updateExperimentalModal(message bubbletea.KeyMsg) bubbletea.Cmd {
+func (m *Model) updateExperimentalModal(message keymsg.KeyMsg) bubbletea.Cmd {
 	if m == nil || m.modal == nil || m.modal.kind != ModalKindExperimental {
 		return nil
 	}
 	switch message.Type {
-	case bubbletea.KeyEsc:
+	case keymsg.KeyEsc:
 		// Rust on_ctrl_c: retry the unconfirmed rows (or save pending changes),
 		// then close; the write continues independently.
 		cmd := m.saveExperimentalFeatures()
 		m.modal = nil
 		m.refreshTranscript()
 		return cmd
-	case bubbletea.KeySpace:
+	case keymsg.KeySpace:
 		m.toggleExperimentalSelection()
 		return nil
-	case bubbletea.KeyEnter:
+	case keymsg.KeyEnter:
 		if m.experimentalFeaturesSaving || !m.experimentalFeaturesHaveUpdates() {
 			m.modal = nil
 			m.refreshTranscript()
 			return nil
 		}
 		return m.saveExperimentalFeatures()
-	case bubbletea.KeyUp:
+	case keymsg.KeyUp:
 		m.moveModalSelection(-1)
 		m.disarmModalOption()
 		return nil
-	case bubbletea.KeyDown, bubbletea.KeyTab:
+	case keymsg.KeyDown, keymsg.KeyTab:
 		m.moveModalSelection(1)
 		m.disarmModalOption()
 		return nil
-	case bubbletea.KeyRunes:
+	case keymsg.KeyRunes:
 		switch string(message.Runes) {
 		case " ":
 			m.toggleExperimentalSelection()

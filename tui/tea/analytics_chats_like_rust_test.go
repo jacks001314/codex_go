@@ -10,9 +10,8 @@ import (
 	"testing"
 	"time"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	"codex_go/tui/analytics"
+	"codex_go/tui/keymsg"
 )
 
 // These tests mirror the Rust #45765 dashboard half: the Top chats tab, the
@@ -137,9 +136,9 @@ func TestAnalyticsChatsTabRendersTableLikeRust(t *testing.T) {
 		t.Fatalf("rows = %+v", rows)
 	}
 
-	view := model.View()
+	view := model.viewString()
 	for _, want := range []string{
-		"Top chats",
+		"Chats",
 		"Active in past 30 days · sorted by lifetime credits",
 		"Chat usage unavailable",
 		"1 chat estimate unavailable",
@@ -198,7 +197,7 @@ func TestAnalyticsChatsZeroCreditToggleNeedsDetailLikeRust(t *testing.T) {
 	}
 
 	// Moving the cursor closes the detail, so the toggle stops working.
-	model.Update(key(bubbletea.KeyDown))
+	model.Update(key(keymsg.KeyDown))
 	if detail := dashboard.sections[analytics.AnalyticsSectionChats].Detail; detail != nil {
 		t.Fatalf("detail after cursor move = %v, want nil", detail)
 	}
@@ -211,17 +210,17 @@ func TestAnalyticsChatsZeroCreditToggleNeedsDetailLikeRust(t *testing.T) {
 	if detail := dashboard.sections[analytics.AnalyticsSectionChats].Detail; detail != nil {
 		t.Fatalf("detail on an unavailable row = %v, want nil", detail)
 	}
-	model.Update(key(bubbletea.KeyRight))
+	model.Update(key(keymsg.KeyRight))
 	if detail := dashboard.sections[analytics.AnalyticsSectionChats].Detail; detail != nil {
 		t.Fatalf("move_right opened details on an unavailable row: %v", detail)
 	}
 	// move_left closes an open detail instead of moving the cursor.
-	model.Update(key(bubbletea.KeyUp))
-	model.Update(key(bubbletea.KeyRight))
+	model.Update(key(keymsg.KeyUp))
+	model.Update(key(keymsg.KeyRight))
 	if detail := dashboard.sections[analytics.AnalyticsSectionChats].Detail; detail == nil || *detail != 0 {
 		t.Fatalf("move_right detail = %v, want 0", detail)
 	}
-	model.Update(key(bubbletea.KeyLeft))
+	model.Update(key(keymsg.KeyLeft))
 	if detail := dashboard.sections[analytics.AnalyticsSectionChats].Detail; detail != nil {
 		t.Fatalf("move_left did not close the detail: %v", detail)
 	}
@@ -246,7 +245,7 @@ func TestAnalyticsChatsIgnoresRangeKeyLikeRust(t *testing.T) {
 	if dashboard.ranges != before {
 		t.Fatalf("r changed the chats range: %v -> %v", before, dashboard.ranges)
 	}
-	if view := model.View(); strings.Contains(view, "[30d]") {
+	if view := model.viewString(); strings.Contains(view, "[30d]") {
 		t.Fatalf("chats view rendered a range switch:\n%s", view)
 	}
 }
@@ -276,7 +275,7 @@ func TestAnalyticsChatsOverviewCardLikeRust(t *testing.T) {
 		t.Fatal("z did not open the overview")
 	}
 
-	view := model.View()
+	view := model.viewString()
 	for _, want := range []string{"30d active · lifetime credits", "Local chats · excludes subagents"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("overview missing %q:\n%s", want, view)
@@ -319,16 +318,16 @@ func TestAnalyticsConsumerChatsTableAndSortCyclingLikeRust(t *testing.T) {
 		t.Fatal("consumer tasks lost their freshness timestamp")
 	}
 
-	plain := stripAnalyticsTestANSI(model.View())
+	plain := stripAnalyticsTestANSI(model.viewString())
 	for _, want := range []string{
-		"Top chats",
+		"Chats",
 		"Usage estimates · active in past 30 days · sorted by Weekly %",
 		"Recorded usage / current full limit · may exceed 100%",
 		"Weekly review",
 		"Chat usage unavailable",
 		"12.50",
 		"Local chats · includes discovered descendants · excludes archived roots",
-		"s sort · ",
+		"s sort: Weekly %",
 		"row · ",
 	} {
 		if !strings.Contains(plain, want) {
@@ -343,7 +342,7 @@ func TestAnalyticsConsumerChatsTableAndSortCyclingLikeRust(t *testing.T) {
 	if dashboard.chatMetric != 1 {
 		t.Fatalf("metric after s = %d, want 1", dashboard.chatMetric)
 	}
-	plain = stripAnalyticsTestANSI(model.View())
+	plain = stripAnalyticsTestANSI(model.viewString())
 	if !strings.Contains(plain, "sorted by 5-hour %") || !strings.Contains(plain, "42.2%") {
 		t.Fatalf("five-hour view missing:\n%s", plain)
 	}
@@ -351,7 +350,7 @@ func TestAnalyticsConsumerChatsTableAndSortCyclingLikeRust(t *testing.T) {
 	if dashboard.chatMetric != 2 {
 		t.Fatalf("metric after second s = %d, want 2", dashboard.chatMetric)
 	}
-	plain = stripAnalyticsTestANSI(model.View())
+	plain = stripAnalyticsTestANSI(model.viewString())
 	if !strings.Contains(plain, "sorted by Balance credits") ||
 		!strings.Contains(plain, "Credits debited from balance · includes adjustments") {
 		t.Fatalf("balance view missing:\n%s", plain)
@@ -362,12 +361,12 @@ func TestAnalyticsConsumerChatsTableAndSortCyclingLikeRust(t *testing.T) {
 	}
 
 	// The row without accounting cannot open details.
-	model.Update(key(bubbletea.KeyDown))
+	model.Update(key(keymsg.KeyDown))
 	model.Update(runes(" "))
 	if detail := dashboard.sections[analytics.AnalyticsSectionChats].Detail; detail != nil {
 		t.Fatalf("detail on an unavailable row = %v, want nil", detail)
 	}
-	model.Update(key(bubbletea.KeyUp))
+	model.Update(key(keymsg.KeyUp))
 	model.Update(runes(" "))
 	if detail := dashboard.sections[analytics.AnalyticsSectionChats].Detail; detail == nil || *detail != 0 {
 		t.Fatalf("detail = %v, want 0", detail)
@@ -384,7 +383,7 @@ func TestAnalyticsConsumerChatsTableAndSortCyclingLikeRust(t *testing.T) {
 	if dashboard.zoomed {
 		t.Fatal("z did not open the overview")
 	}
-	plain = stripAnalyticsTestANSI(model.View())
+	plain = stripAnalyticsTestANSI(model.viewString())
 	if !strings.Contains(plain, "Showing top 2 of 2 chats") {
 		t.Fatalf("consumer card missing its top-five counter:\n%s", plain)
 	}

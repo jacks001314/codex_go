@@ -1,10 +1,9 @@
 package tea
 
 import (
+	keymsg "codex_go/tui/keymsg"
 	"strings"
 	"testing"
-
-	bubbletea "github.com/charmbracelet/bubbletea"
 
 	codextui "codex_go/tui"
 	"codex_go/worktree"
@@ -112,7 +111,7 @@ func TestWorktreeCommandStartsManagedSession(t *testing.T) {
 		},
 	})
 	model.applyWorktreeCommand("")
-	if _, cmd := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter}); cmd == nil {
+	if _, cmd := model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter}); cmd == nil {
 		t.Fatal("creation should be scheduled off the update loop")
 	} else {
 		model.Update(cmd())
@@ -139,7 +138,7 @@ func TestWorktreeBrowserLoadsFiltersAndGatesStaleResults(t *testing.T) {
 	})
 	model.applyWorktreeCommand("")
 	model.moveWorktreeSelection(model.activeWorktreeBrowser(), 2, 3)
-	if _, cmd := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter}); cmd == nil {
+	if _, cmd := model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter}); cmd == nil {
 		t.Fatal("browse should schedule the listing")
 	}
 	browser := model.activeWorktreeBrowser()
@@ -176,20 +175,20 @@ func TestWorktreeBrowserLoadsFiltersAndGatesStaleResults(t *testing.T) {
 	if browser.View != worktreeViewList || len(browser.Entries) != 2 {
 		t.Fatalf("browser = %#v, want the list view", browser)
 	}
-	view := model.View()
+	view := model.viewString()
 	if !strings.Contains(view, "Database work") || !strings.Contains(view, "No attached thread") {
 		t.Fatalf("list rows missing:\n%s", view)
 	}
 
 	// Search filters on the owner title and working directory.
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune("wt-b")})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune("wt-b")})
 	if indices := browser.filteredWorktreeIndices(model.currentTime().Unix()); len(indices) != 1 || indices[0] != 1 {
 		t.Fatalf("filtered indices = %#v", indices)
 	}
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyBackspace})
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyBackspace})
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyBackspace})
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyBackspace})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyBackspace})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyBackspace})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyBackspace})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyBackspace})
 	if indices := browser.filteredWorktreeIndices(model.currentTime().Unix()); len(indices) != 2 {
 		t.Fatalf("cleared filter indices = %#v", indices)
 	}
@@ -214,7 +213,7 @@ func TestWorktreeBrowserActionsAndRemoval(t *testing.T) {
 	})
 	model.applyWorktreeCommand("")
 	model.moveWorktreeSelection(model.activeWorktreeBrowser(), 2, 3)
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	request := model.activeWorktreeBrowser().Request
 	model.Update(WorktreeBrowserLoadedMsg{Request: request, Entries: []codextui.WorktreeBrowserEntry{
 		{
@@ -227,14 +226,14 @@ func TestWorktreeBrowserActionsAndRemoval(t *testing.T) {
 			},
 		},
 	}})
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	browser := model.activeWorktreeBrowser()
 	if browser == nil || browser.View != worktreeViewActions || len(browser.Actions) != 3 {
 		t.Fatalf("actions = %#v", browser)
 	}
 
 	// Resume the owner thread.
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	if len(resumed) != 1 || resumed[0] != "owner-a" {
 		t.Fatalf("resumed = %#v", resumed)
 	}
@@ -245,11 +244,11 @@ func TestWorktreeBrowserActionsAndRemoval(t *testing.T) {
 	// Copy the working directory.
 	model.applyWorktreeCommand("")
 	model.moveWorktreeSelection(model.activeWorktreeBrowser(), 2, 3)
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	request = model.activeWorktreeBrowser().Request
 	model.Update(WorktreeBrowserLoadedMsg{Request: request, Entries: []codextui.WorktreeBrowserEntry{{Root: `D:\repo\wt-b`, CWD: `D:\repo\wt-b`}}})
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	if len(copied) != 1 || copied[0] != `D:\repo\wt-b` {
 		t.Fatalf("copied = %#v", copied)
 	}
@@ -258,10 +257,10 @@ func TestWorktreeBrowserActionsAndRemoval(t *testing.T) {
 	// worktree can be deleted after confirmation.
 	model.applyWorktreeCommand("")
 	model.moveWorktreeSelection(model.activeWorktreeBrowser(), 2, 3)
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	request = model.activeWorktreeBrowser().Request
 	model.Update(WorktreeBrowserLoadedMsg{Request: request, Entries: []codextui.WorktreeBrowserEntry{{Root: `D:\repo`, CWD: `D:\repo`}}})
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	browser = model.activeWorktreeBrowser()
 	deleteItem := -1
 	for index, item := range browser.Actions {
@@ -276,22 +275,22 @@ func TestWorktreeBrowserActionsAndRemoval(t *testing.T) {
 	// A sibling worktree can be deleted after confirmation.
 	model.applyWorktreeCommand("")
 	model.moveWorktreeSelection(model.activeWorktreeBrowser(), 2, 3)
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	request = model.activeWorktreeBrowser().Request
 	model.Update(WorktreeBrowserLoadedMsg{Request: request, Entries: []codextui.WorktreeBrowserEntry{{Root: `D:\repo\wt-c`, CWD: `D:\repo\wt-c`}}})
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	browser = model.activeWorktreeBrowser()
 	for index, item := range browser.Actions {
 		if item.Action.Kind == codextui.WorktreeActionRemove {
 			browser.Selected = index
 		}
 	}
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	if browser := model.activeWorktreeBrowser(); browser == nil || browser.View != worktreeViewConfirm {
 		t.Fatalf("confirm view = %#v", browser)
 	}
-	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyDown})
-	_, cmd := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyDown})
+	_, cmd := model.Update(keymsg.KeyMsg{Type: keymsg.KeyEnter})
 	if cmd == nil {
 		t.Fatal("confirming deletion should schedule removal")
 	}

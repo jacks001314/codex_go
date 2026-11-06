@@ -1,8 +1,9 @@
 package tea
 
 import (
-	bubbletea "github.com/charmbracelet/bubbletea"
+	bubbletea "charm.land/bubbletea/v2"
 
+	"codex_go/tui/keymsg"
 	"codex_go/tui/overlay"
 )
 
@@ -36,12 +37,12 @@ func (c *ModalCompat) Update(msg bubbletea.Msg) overlay.DialogResult {
 
 	// Route through the existing modal update logic
 	switch msg := msg.(type) {
-	case bubbletea.KeyMsg:
-		if msg.Type == bubbletea.KeyEsc {
+	case keymsg.KeyMsg:
+		if msg.Type == keymsg.KeyEsc {
 			c.model.respondModal(true)
 			return overlay.DialogResult{Action: overlay.ActionCancel}
 		}
-		if msg.Type == bubbletea.KeyEnter {
+		if msg.Type == keymsg.KeyEnter {
 			c.model.respondModal(false)
 			return overlay.DialogResult{Action: overlay.ActionSubmit}
 		}

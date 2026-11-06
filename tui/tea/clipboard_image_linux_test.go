@@ -15,9 +15,8 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 )
 
 func testPNGBytes(t *testing.T) []byte {
@@ -196,7 +195,7 @@ func TestCtrlVImageBackendFailureShowsErrorLikeRust(t *testing.T) {
 		return "", nil
 	}
 	model := NewModel(codextui.NewState(nil), Options{Width: 100, Height: 30})
-	model.Update(key(bubbletea.KeyCtrlV))
+	model.Update(key(keymsg.KeyCtrlV))
 	if !strings.HasPrefix(model.notice, "Failed to paste image: clipboard unavailable:") {
 		t.Fatalf("notice = %q", model.notice)
 	}

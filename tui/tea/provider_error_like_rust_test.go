@@ -4,10 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	bubbletea "github.com/charmbracelet/bubbletea"
-
 	"codex_go/appserver"
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
 	"codex_go/utils"
 )
 
@@ -29,7 +28,7 @@ func TestProviderErrorResumeShowsNoticeAndBlocksInputLikeRust(t *testing.T) {
 	if !model.readOnlyThread || !model.hasProviderError() {
 		t.Fatalf("provider error resume must be read-only with provider error, got readonly=%v err=%v", model.readOnlyThread, model.hasProviderError())
 	}
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	for _, want := range []string{
 		"Continue in a new chat",
 		"This chat uses old-provider, but Codex now uses new-provider, so this chat is read-only.",
@@ -78,8 +77,8 @@ func TestProviderErrorFreshAndOtherChatsKeysLikeRust(t *testing.T) {
 			ModelProvider: "retired-provider",
 		},
 	})
-	if !strings.Contains(utils.StripANSI(fresh.View()), "Model provider unavailable") {
-		t.Fatalf("missing not-configured title:\n%s", fresh.View())
+	if !strings.Contains(utils.StripANSI(fresh.viewString()), "Model provider unavailable") {
+		t.Fatalf("missing not-configured title:\n%s", fresh.viewString())
 	}
 	fresh.Update(keyRunes('n'))
 	if fresh.hasProviderError() || fresh.readOnlyThread {
@@ -100,7 +99,7 @@ func TestProviderErrorFreshAndOtherChatsKeysLikeRust(t *testing.T) {
 			RequiredModelProvider: "required-provider",
 		},
 	})
-	escape.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEsc})
+	escape.Update(keymsg.KeyMsg{Type: keymsg.KeyEsc})
 	if escape.modal == nil || escape.modal.sessionPicker == nil {
 		t.Fatal("Esc must open the resume picker")
 	}
@@ -123,7 +122,7 @@ func TestAgentSwitchProviderErrorNoticeLikeRust(t *testing.T) {
 	if !model.hasProviderError() {
 		t.Fatal("agent switch must show the provider error")
 	}
-	if view := utils.StripANSI(model.View()); !strings.Contains(view, "Model provider unavailable") {
+	if view := utils.StripANSI(model.viewString()); !strings.Contains(view, "Model provider unavailable") {
 		t.Fatalf("agent switch provider notice missing:\n%s", view)
 	}
 }

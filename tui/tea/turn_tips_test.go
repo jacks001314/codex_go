@@ -19,11 +19,11 @@ func TestTurnTipsWorkingTipAppearsAfterDelayLikeRust(t *testing.T) {
 	model.now = func() time.Time { return base }
 	model.Update(ThreadEventMsg{Event: protocol.TurnStarted()})
 
-	if view := utils.StripANSI(model.View()); strings.Contains(view, "\u2514 ") {
+	if view := utils.StripANSI(model.viewString()); strings.Contains(view, "\u2514 ") {
 		t.Fatalf("tip rendered before the working delay:\n%s", view)
 	}
 	model.now = func() time.Time { return base.Add(turnTipWorkingDelay + time.Second) }
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "\u2514 ") {
 		t.Fatalf("working tip missing after the delay:\n%s", view)
 	}
@@ -34,7 +34,7 @@ func TestTurnTipsWorkingTipAppearsAfterDelayLikeRust(t *testing.T) {
 	}
 	// The tip stays for the rest of the turn and its template does not change.
 	model.now = func() time.Time { return base.Add(2 * time.Minute) }
-	again := utils.StripANSI(model.View())
+	again := utils.StripANSI(model.viewString())
 	if !strings.Contains(again, tip) {
 		t.Fatalf("working tip did not persist:\n%s", again)
 	}
@@ -75,7 +75,7 @@ func TestTurnTipsHonorShowTooltipsAndGatesLikeRust(t *testing.T) {
 	model := NewModel(codextui.NewState(nil), Options{Width: 120, Height: 30, ShowTooltips: &disabled})
 	model.now = func() time.Time { return base.Add(time.Minute) }
 	model.Update(ThreadEventMsg{Event: protocol.TurnStarted()})
-	if view := utils.StripANSI(model.View()); strings.Contains(view, "\u2514 ") {
+	if view := utils.StripANSI(model.viewString()); strings.Contains(view, "\u2514 ") {
 		t.Fatalf("disabled tooltips rendered a tip:\n%s", view)
 	}
 
@@ -84,7 +84,7 @@ func TestTurnTipsHonorShowTooltipsAndGatesLikeRust(t *testing.T) {
 	model.now = func() time.Time { return base.Add(time.Minute) }
 	model.Update(ThreadEventMsg{Event: protocol.TurnStarted()})
 	model.composer.InsertString("draft")
-	if view := utils.StripANSI(model.View()); strings.Contains(view, "\u2514 ") {
+	if view := utils.StripANSI(model.viewString()); strings.Contains(view, "\u2514 ") {
 		t.Fatalf("a non-empty composer rendered a tip:\n%s", view)
 	}
 }
@@ -182,7 +182,7 @@ func TestTurnTipsCompletionTipRendersInTranscriptLikeRust(t *testing.T) {
 		}})
 		model.Update(ThreadEventMsg{Event: protocol.TurnCompletedWithID(protocol.Usage{}, turnID)})
 	}
-	view := utils.StripANSI(model.View())
+	view := utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "\u2514 ") || !strings.Contains(view, "Tip: ") {
 		t.Fatalf("completion tip missing from the transcript:\n%s", view)
 	}
@@ -199,7 +199,7 @@ func TestTurnTipsCompletionTipRendersInTranscriptLikeRust(t *testing.T) {
 		}})
 		off.Update(ThreadEventMsg{Event: protocol.TurnCompletedWithID(protocol.Usage{}, turnID)})
 	}
-	if view := utils.StripANSI(off.View()); strings.Contains(view, "\u2514 ") {
+	if view := utils.StripANSI(off.viewString()); strings.Contains(view, "\u2514 ") {
 		t.Fatalf("disabled tooltips rendered a completion tip:\n%s", view)
 	}
 }
@@ -219,21 +219,21 @@ func TestTurnTipsGateBacktrackReadOnlyAndQueueLikeRust(t *testing.T) {
 		}})
 		model.Update(ThreadEventMsg{Event: protocol.TurnCompletedWithID(protocol.Usage{}, turnID)})
 	}
-	if view := utils.StripANSI(model.View()); !strings.Contains(view, "Tip: ") {
+	if view := utils.StripANSI(model.viewString()); !containsNonComposerTip(view) {
 		t.Fatalf("baseline completion tip missing:\n%s", view)
 	}
 	model.backtrack.Primed = true
-	if view := utils.StripANSI(model.View()); strings.Contains(view, "Tip: ") {
+	if view := utils.StripANSI(model.viewString()); containsNonComposerTip(view) {
 		t.Fatalf("a primed backtrack selection rendered a tip:\n%s", view)
 	}
 	model.backtrack.Primed = false
 	model.readOnlyThread = true
-	if view := utils.StripANSI(model.View()); strings.Contains(view, "Tip: ") {
+	if view := utils.StripANSI(model.viewString()); containsNonComposerTip(view) {
 		t.Fatalf("a read-only thread rendered a tip:\n%s", view)
 	}
 	model.readOnlyThread = false
 	model.queued = append(model.queued, queuedSubmission{})
-	if view := utils.StripANSI(model.View()); strings.Contains(view, "Tip: ") {
+	if view := utils.StripANSI(model.viewString()); containsNonComposerTip(view) {
 		t.Fatalf("a queued follow-up rendered a tip:\n%s", view)
 	}
 }
@@ -250,7 +250,7 @@ func TestTurnTipsShownWorkingTipSurvivesLeavingTailLikeRust(t *testing.T) {
 	model.now = func() time.Time { return base }
 	model.Update(ThreadEventMsg{Event: protocol.TurnStarted()})
 	model.now = func() time.Time { return base.Add(turnTipWorkingDelay + time.Second) }
-	if view := utils.StripANSI(model.View()); !strings.Contains(view, "\u2514 ") {
+	if view := utils.StripANSI(model.viewString()); !strings.Contains(view, "\u2514 ") {
 		t.Fatalf("baseline working tip missing:\n%s", view)
 	}
 	if model.turnTips.current == nil || !model.turnTips.current.shown {
@@ -260,7 +260,7 @@ func TestTurnTipsShownWorkingTipSurvivesLeavingTailLikeRust(t *testing.T) {
 	if model.turnTipsAllowed() != true {
 		t.Fatal("shown working tip was suppressed after leaving the tail")
 	}
-	if view := utils.StripANSI(model.View()); !strings.Contains(view, "\u2514 ") || !strings.Contains(view, "Tip: ") {
+	if view := utils.StripANSI(model.viewString()); !strings.Contains(view, "\u2514 ") || !strings.Contains(view, "Tip: ") {
 		t.Fatalf("shown working tip disappeared after leaving the tail:\n%s", view)
 	}
 
@@ -273,7 +273,7 @@ func TestTurnTipsShownWorkingTipSurvivesLeavingTailLikeRust(t *testing.T) {
 	if unseen.turnTipsAllowed() {
 		t.Fatal("an unseen working tip was allowed off the tail")
 	}
-	if view := utils.StripANSI(unseen.View()); strings.Contains(view, "\u2514 ") {
+	if view := utils.StripANSI(unseen.View().Content); strings.Contains(view, "\u2514 ") {
 		t.Fatalf("an unseen working tip rendered off the tail:\n%s", view)
 	}
 
