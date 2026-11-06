@@ -82,7 +82,9 @@ func AccessProgramsForAuth(program string, snapshot *auth.AuthDotJSON, policy Ap
 	if snapshot == nil {
 		return nil, nil
 	}
-	if authHasChatGPTAccountForProgram(snapshot) {
+	// Rust #59743: header-authenticated requests forward an explicit program so
+	// the server can evaluate entitlement, exactly like a ChatGPT account.
+	if authHasChatGPTAccountForProgram(snapshot) || authIsHeaderAuthForProgram(snapshot) {
 		return &AccessPrograms{Cyber: trimmed}, nil
 	}
 	if !authIsAPIKeyForProgram(snapshot) {
@@ -101,6 +103,13 @@ func AccessProgramsForAuth(program string, snapshot *auth.AuthDotJSON, policy Ap
 	default:
 		return &AccessPrograms{Cyber: trimmed}, nil
 	}
+}
+
+// authIsHeaderAuthForProgram mirrors the `CodexAuth::Headers` arm of Rust's
+// `for_auth` gate (#59743): host-supplied header credentials forward the
+// explicit program and leave the entitlement decision to the backend.
+func authIsHeaderAuthForProgram(snapshot *auth.AuthDotJSON) bool {
+	return snapshot != nil && snapshot.Mode() == "headers"
 }
 
 // authIsAPIKeyForProgram reports whether the credential is an OpenAI API key

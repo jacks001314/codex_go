@@ -2457,6 +2457,16 @@ const guardianTranscriptOmissionNotice = state.GuardianTranscriptOmissionNotice
 // native MAv2 call: `entry_limits.tool_tokens.min(9_000)` (#57448).
 const guardianNativeToolCallTokenLimit = 9_000
 
+// guardianNativeMultiAgentHistoryEnabled mirrors Rust #59737: native Guardian
+// agent history requires both the feature flag and the OpenAI provider, since
+// only OpenAI serves the native multi-agent namespace that review preserves.
+func guardianNativeMultiAgentHistoryEnabled(cfg *config.Config) bool {
+	if cfg == nil || !features.Enabled(cfg.FeatureSettings(), "guardian_native_multi_agent_history") {
+		return false
+	}
+	return configuredModelProviderID(cfg) == model.OpenAIProviderID
+}
+
 // guardianNativeMultiAgentNamespace resolves Rust's
 // `profile.transcript.options.native_multi_agent_namespace`: native calls are
 // preserved only when `guardian_native_multi_agent_history` is enabled on an
@@ -2470,7 +2480,7 @@ func (r *RuntimeRouter) guardianNativeMultiAgentNamespace(threadID string) strin
 	if err != nil || cfg == nil {
 		return ""
 	}
-	if !features.Enabled(cfg.FeatureSettings(), "guardian_native_multi_agent_history") {
+	if !guardianNativeMultiAgentHistoryEnabled(cfg) {
 		return ""
 	}
 	agentsConfig, agentsErr := cfg.AgentsConfig(r.configBaseDirForAgents())

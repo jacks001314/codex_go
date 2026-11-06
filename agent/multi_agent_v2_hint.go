@@ -63,6 +63,10 @@ type MultiAgentV2UsageHintOptions struct {
 	// <multi_agent_role> markers.
 	RootCatalogHintText     *string
 	SubagentCatalogHintText *string
+	// OmitBundledRole mirrors Rust #59732: when native tools are disabled the
+	// bundled and model-catalog role guidance is dropped and no usage hint is
+	// rendered, while explicitly configured role text still applies.
+	OmitBundledRole bool
 }
 
 // MultiAgentV2UsageHint composes the developer-instruction fragment shown to a
@@ -87,6 +91,9 @@ func MultiAgentV2UsageHint(options MultiAgentV2UsageHintOptions) string {
 	} else if options.RootCatalogHintText != nil {
 		identity = strings.TrimSpace(*options.RootCatalogHintText)
 		identity = markMultiAgentRoleInstruction(identity)
+	}
+	if options.OmitBundledRole && !configured {
+		return ""
 	}
 	// Rust #41744 returns configured role text before applying the bundled
 	// update_plan filter; only catalog/bundled instructions are Codex-owned.

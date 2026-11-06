@@ -54,6 +54,7 @@ type execMultiAgentTools struct {
 	maxConcurrency            int
 	rootHint                  *string
 	subagentHint              *string
+	disableNativeTools        bool
 	usageHintText             *string
 	// toolOverrides carries the model catalog's per-tool Multi-Agent V2
 	// overrides (Rust #46505).
@@ -308,6 +309,7 @@ func (r *Runner) multiAgentToolsForRun(ctx context.Context, req *Request, cfg *c
 		options.hideSpawnMetadata = v2Config.HideSpawnAgentMetadata
 		options.exposeSpawnModelOverrides = v2Config.ExposeSpawnAgentModelOverrides
 		options.omitUpdatePlan = !cfg.UpdatePlanEnabled()
+		options.disableNativeTools = v2Config.DisableNativeTools
 		options.rootHint = v2Config.RootAgentUsageHintText
 		options.subagentHint = v2Config.SubagentUsageHintText
 		options.usageHintText = v2Config.UsageHintText
@@ -451,6 +453,7 @@ func execMultiAgentV2UsageHint(req *Request, options *execMultiAgentTools) strin
 		OmitUpdatePlanInstructions:     options.omitUpdatePlan,
 		RootUsageHintText:              options.rootHint,
 		SubagentUsageHintText:          options.subagentHint,
+		OmitBundledRole:                options.disableNativeTools,
 	})
 }
 

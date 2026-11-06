@@ -15366,6 +15366,7 @@ func (r *RuntimeRouter) multiAgentUsageHintInputItemForModel(threadID string, cf
 		RootCatalogHintText:            rootCatalogHintText,
 		SubagentCatalogHintText:        subagentCatalogHintText,
 		OmitUpdatePlanInstructions:     !cfg.UpdatePlanEnabled() && rootCatalogHintText == nil && subagentCatalogHintText == nil,
+		OmitBundledRole:                v2Config.DisableNativeTools,
 	})
 	if strings.TrimSpace(hint) == "" {
 		return nil, nil

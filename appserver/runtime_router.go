@@ -18243,7 +18243,7 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 				defaults.DeveloperInstructions = v2Config.SubagentDeveloperInstructions
 			}
 			options.AgentVersion = version
-			options.AgentGuardianNativeMultiAgentReview = cfg != nil && features.Enabled(cfg.FeatureSettings(), "guardian_native_multi_agent_history")
+			options.AgentGuardianNativeMultiAgentReview = guardianNativeMultiAgentHistoryEnabled(cfg)
 			// Rust's spawn/send-input tools copy the initiating turn's
 			// cyber_access_program into the child's start options (#44893), so the
 			// delegated turn keeps the same model/program pair.

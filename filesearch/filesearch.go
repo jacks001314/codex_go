@@ -142,6 +142,9 @@ func Run(ctx context.Context, pattern string, roots []string, options Options) (
 			return nil, err
 		}
 	}
+	if !strings.ContainsAny(pattern, "/\\") {
+		promoteBasenameMatches(pattern, matches)
+	}
 	sort.SliceStable(matches, func(i int, j int) bool {
 		if matches[i].Score != matches[j].Score {
 			return matches[i].Score > matches[j].Score
@@ -184,6 +187,56 @@ func Score(pattern string, candidate string) (int, []int, bool) {
 	}
 	score -= len(candidateLower) / 8
 	return score, indices, true
+}
+
+// fileNameMatchBonus separates promoted filename matches from scores that only
+// match parent directory names, so the two groups never interleave.
+const fileNameMatchBonus = 1 << 16
+
+// promoteBasenameMatches mirrors Rust #59709: for a single fuzzy query without
+// path separators, filename matches are ranked ahead of parent-directory matches
+// before the result limit is applied. Exact filenames rank first, then the
+// strongest exact directory name, then any other matching filename; remaining
+// directory matches keep their path-ordered scores.
+func promoteBasenameMatches(pattern string, matches []FileMatch) {
+	needleLen := len([]rune(pattern))
+	exactDirectoryFound := false
+	for i := range matches {
+		match := &matches[i]
+		name := FileNameFromPath(match.Path)
+		nameScore, nameIndices, ok := Score(pattern, name)
+		if !ok {
+			continue
+		}
+		exact := len([]rune(name)) == needleLen
+		switch {
+		case match.MatchType == MatchFile:
+			bonus := fileNameMatchBonus
+			if exact {
+				bonus = 3 * fileNameMatchBonus
+			}
+			match.Score = bonus + nameScore
+			if match.Indices != nil {
+				match.Indices = offsetIndices(nameIndices, len(match.Path)-len(name))
+			}
+		case exact && !exactDirectoryFound:
+			// Keep the strongest exact folder; later folders with the same name
+			// compete in path order so they cannot crowd out matching files.
+			exactDirectoryFound = true
+			match.Score = 2*fileNameMatchBonus + match.Score
+		}
+	}
+}
+
+func offsetIndices(indices []int, offset int) []int {
+	if len(indices) == 0 || offset == 0 {
+		return indices
+	}
+	out := make([]int, len(indices))
+	for i, index := range indices {
+		out[i] = index + offset
+	}
+	return out
 }
 
 func FileNameFromPath(path string) string {
