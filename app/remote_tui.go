@@ -3669,6 +3669,15 @@ func (c *remoteAppServerTUIClient) connect(ctx context.Context) error {
 		}
 		c.transport = &remoteWebSocketTransport{conn: conn}
 		return nil
+	case appserverdaemon.RemoteEndpointCloud:
+		// Rust #59828: the hosted Cloud backend serves the same app-server
+		// protocol, so the TUI talks to it through an in-process transport.
+		requester, err := openCloudTUIAppServer(ctx, c.root)
+		if err != nil {
+			return asRemoteTransportError(err)
+		}
+		c.transport = newCloudAppServerTransport(ctx, requester)
+		return nil
 	default:
 		return fmt.Errorf("unknown remote app-server endpoint kind %q", c.endpoint.Kind)
 	}

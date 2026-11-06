@@ -23,6 +23,9 @@ type RemoteAppServerEndpointKind string
 const (
 	RemoteEndpointWebSocket  RemoteAppServerEndpointKind = "webSocket"
 	RemoteEndpointUnixSocket RemoteAppServerEndpointKind = "unixSocket"
+	// RemoteEndpointCloud serves the hosted Cloud backend in process (Rust
+	// #59828 gates this behind the TuiMultiBackend feature).
+	RemoteEndpointCloud RemoteAppServerEndpointKind = "cloud"
 )
 
 type RemoteAppServerEndpoint struct {
@@ -44,6 +47,12 @@ func NewUnixSocketEndpoint(socketPath string) *RemoteAppServerEndpoint {
 	return &RemoteAppServerEndpoint{Kind: RemoteEndpointUnixSocket, SocketPath: socketPath}
 }
 
+// NewCloudEndpoint selects the hosted Cloud backend instead of a local daemon
+// or remote socket.
+func NewCloudEndpoint() *RemoteAppServerEndpoint {
+	return &RemoteAppServerEndpoint{Kind: RemoteEndpointCloud}
+}
+
 func (e *RemoteAppServerEndpoint) String() string {
 	if e == nil {
 		return ""
@@ -51,6 +60,8 @@ func (e *RemoteAppServerEndpoint) String() string {
 	switch e.Kind {
 	case RemoteEndpointUnixSocket:
 		return e.SocketPath
+	case RemoteEndpointCloud:
+		return "cloud"
 	default:
 		return e.WebSocketURL
 	}
@@ -218,6 +229,8 @@ func ValidateEndpoint(endpoint *RemoteAppServerEndpoint) error {
 		if endpoint.SocketPath == "" {
 			return fmt.Errorf("remote app-server unix socket path is required")
 		}
+	case RemoteEndpointCloud:
+		// The hosted Cloud backend needs no address.
 	default:
 		return fmt.Errorf("unknown remote app-server endpoint kind %q", endpoint.Kind)
 	}

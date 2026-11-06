@@ -21,6 +21,14 @@ func (c *Client) handleRequest(
 	typedSubmission bool,
 ) (json.RawMessage, *RPCError) {
 	switch method {
+	case appserver.MethodInitialize:
+		// Rust #59828: the hosted Cloud backend answers the app-server handshake
+		// itself; there is no separate daemon to negotiate with.
+		encoded, err := json.Marshal(appserver.NewInitializeResponse("", "codex-cloud-backend"))
+		if err != nil {
+			return nil, internalRPCError(err)
+		}
+		return encoded, nil
 	case appserver.MethodGetAccount:
 		if len(c.account) == 0 {
 			return json.RawMessage("null"), nil
@@ -154,10 +162,9 @@ func (c *Client) startThread(ctx context.Context, params json.RawMessage) (json.
 	if start.Ephemeral {
 		return nil, internalRPCError(errors.New("Cloud conversations start with server defaults. Custom settings are not supported yet."))
 	}
-	start.Ephemeral = false
-	if !reflect.DeepEqual(start, appserver.ThreadStartParams{}) {
-		return nil, internalRPCError(errors.New("Cloud conversations start with server defaults. Custom settings are not supported yet."))
-	}
+	// Rust #59828: the TUI forwards its local backend settings and lets Cloud
+	// own the conversation environment, so those fields are dropped instead of
+	// rejecting the thread start.
 	activation, err := waitWhileListening(c, ctx, func() (*cloudclient.ThreadActivation, error) {
 		return c.source.PrewarmDefaultThread(ctx, model, provider)
 	})
@@ -186,7 +193,11 @@ func (c *Client) resumeThread(ctx context.Context, params json.RawMessage) (json
 		return nil, internalRPCError(err)
 	}
 	supported := appserver.ThreadResumeParams{ThreadID: resume.ThreadID, ExcludeTurns: true}
-	if !reflect.DeepEqual(resume, supported) {
+	// Rust #59828: a local working-directory override is dropped; Cloud opens
+	// the thread where it was created.
+	normalized := resume
+	normalized.CWD = nil
+	if !reflect.DeepEqual(normalized, supported) {
 		return nil, internalRPCError(errors.New("Cloud conversations resume by ID with saved settings. Set excludeTurns to true and load history separately."))
 	}
 	if strings.TrimSpace(resume.ThreadID) == "" {

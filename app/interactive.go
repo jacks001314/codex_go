@@ -5796,6 +5796,12 @@ func resolveInteractiveRemoteEndpoint(root *cli.RootOptions) (*appserverdaemon.R
 }
 
 func resolveInteractiveRemoteAddress(addr string) (*appserverdaemon.RemoteAppServerEndpoint, error) {
+	// Rust #59828: the hosted Cloud backend is selected explicitly and served
+	// in process; openCloudTUIAppServer refuses it unless tui_multi_backend is
+	// enabled.
+	if trimmed := strings.TrimSpace(addr); strings.EqualFold(trimmed, "cloud") || strings.HasPrefix(strings.ToLower(trimmed), "cloud://") {
+		return appserverdaemon.NewCloudEndpoint(), nil
+	}
 	if strings.HasPrefix(addr, "unix://") {
 		socketPath := strings.TrimPrefix(addr, "unix://")
 		if socketPath == "" {
