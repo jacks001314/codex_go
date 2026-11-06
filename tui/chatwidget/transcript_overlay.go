@@ -60,6 +60,10 @@ type TranscriptOverlay struct {
 	mouseScroll codextui.MouseScrollAccumulator
 	// find is the Ctrl+T pager's find bar (Rust transcript_view::search).
 	find transcriptFind
+	// pinnedHeader is a presentation-only top row holding the prompt of the
+	// first visible answer (Rust transcript_view::prompt_header). It is chrome:
+	// it never joins the content, so copy, find and export stay exact.
+	pinnedHeader string
 	// staticPager marks Rust's StaticOverlay (Overlay::new_static_with_lines):
 	// the /diff-style pager with a "/ TITLE" header, "~" filler, a rule that
 	// carries the percentage and a two-row hint block, anchored at the top.
@@ -135,14 +139,7 @@ func (o *TranscriptOverlay) Resize(width int, height int) {
 	if o.viewport.Width() > 0 && o.width == width && o.height == height {
 		return
 	}
-	bodyHeight := height - 3
-	if o.staticPager {
-		// header + separator + two hint rows + one blank row.
-		bodyHeight = height - 5
-	}
-	if bodyHeight < minOverlayBodyHeight {
-		bodyHeight = minOverlayBodyHeight
-	}
+	bodyHeight := o.bodyHeightFor(height)
 
 	follow := o.content == "" || o.viewport.AtBottom()
 	offset := o.viewport.YOffset()
@@ -164,6 +161,62 @@ func (o *TranscriptOverlay) Resize(width int, height int) {
 		return
 	}
 	o.viewport.SetYOffset(offset)
+}
+
+// bodyHeightFor reports the content rows for a total overlay height. A pinned
+// prompt header adds one chrome row above the content (Rust
+// transcript_view::prompt_header reserves the top row of the view area).
+func (o *TranscriptOverlay) bodyHeightFor(height int) int {
+	bodyHeight := height - 3
+	if o.staticPager {
+		// header + separator + two hint rows + one blank row.
+		bodyHeight = height - 5
+	} else if o.pinnedHeader != "" {
+		bodyHeight--
+	}
+	if bodyHeight < minOverlayBodyHeight {
+		bodyHeight = minOverlayBodyHeight
+	}
+	return bodyHeight
+}
+
+// SetPinnedHeader installs the presentation-only top row that keeps the
+// preceding prompt visible above an answer (Rust
+// transcript_view::prompt_header). An empty line removes the row and returns
+// its height to the content.
+func (o *TranscriptOverlay) SetPinnedHeader(line string) {
+	if o == nil || o.staticPager {
+		return
+	}
+	line = strings.TrimRight(line, "\r\n")
+	if line == o.pinnedHeader {
+		return
+	}
+	follow := o.viewport.AtBottom()
+	offset := o.viewport.YOffset()
+	o.pinnedHeader = line
+	o.viewport.SetHeight(o.bodyHeightFor(firstPositive(o.height, defaultOverlayHeight)))
+	if follow {
+		o.viewport.GotoBottom()
+		return
+	}
+	o.viewport.SetYOffset(offset)
+}
+
+// PinnedHeader reports the installed header row, if any.
+func (o *TranscriptOverlay) PinnedHeader() string {
+	if o == nil {
+		return ""
+	}
+	return o.pinnedHeader
+}
+
+// headerRows counts the chrome rows between the title and the content.
+func (o *TranscriptOverlay) headerRows() int {
+	if o == nil || o.staticPager || o.pinnedHeader == "" {
+		return 0
+	}
+	return 1
 }
 
 // SetHints installs the resolved two-row pager help text.
@@ -560,6 +613,12 @@ func (o *TranscriptOverlay) handleSelectMouse(msg mousemsg.MouseMsg) bool {
 		if msg.Button != mousemsg.MouseButtonLeft {
 			return false
 		}
+		// The pinned prompt header is chrome; a press on it never starts a
+		// selection over the content row it covers (Rust keeps hit rows aligned
+		// with the reserved header row).
+		if msg.Y >= 0 && msg.Y <= o.headerRows() {
+			return false
+		}
 		point := o.mouseSelectPoint(msg)
 		// Rust #47414: Shift-click extends the existing range from its original
 		// anchor and unit instead of starting a new gesture.
@@ -633,7 +692,7 @@ func (o *TranscriptOverlay) autoscrollDuringDrag(pointerRow int) bool {
 	}
 	before := o.viewport.YOffset()
 	switch {
-	case pointerRow <= 1:
+	case pointerRow <= 1+o.headerRows():
 		o.viewport.ScrollUp(1)
 	case pointerRow >= o.height-1:
 		o.viewport.ScrollDown(1)
@@ -683,7 +742,7 @@ func (o *TranscriptOverlay) extendMouseSelection(point selectPoint) {
 }
 
 func (o *TranscriptOverlay) mouseSelectPoint(msg mousemsg.MouseMsg) selectPoint {
-	row := o.viewport.YOffset() + msg.Y - 1
+	row := o.viewport.YOffset() + msg.Y - 1 - o.headerRows()
 	if row < 0 {
 		row = 0
 	}
@@ -716,7 +775,15 @@ func (o *TranscriptOverlay) View() string {
 	if o.find.active() {
 		actions = fitLine(o.FindBarLine(), width)
 	}
-	return strings.Join([]string{header, o.viewport.View(), help, actions}, "\n")
+	rows := make([]string, 0, 5)
+	rows = append(rows, header)
+	if o.pinnedHeader != "" {
+		// The header is pre-fitted to the overlay width by its owner; wrapping it
+		// here would count SGR bytes as cells.
+		rows = append(rows, o.pinnedHeader)
+	}
+	rows = append(rows, o.viewport.View(), help, actions)
+	return strings.Join(rows, "\n")
 }
 
 // staticPagerView renders Rust PagerView's chrome: header, scrolled content

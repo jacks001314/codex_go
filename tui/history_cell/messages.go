@@ -70,6 +70,40 @@ func SanitizeUserText(text string) string {
 	return out.String()
 }
 
+// pinnedPromptHeaderMaxRunes bounds the work a pasted multi-megabyte prompt
+// costs the pinned header, matching Rust prompt_header::line.
+const pinnedPromptHeaderMaxRunes = 512
+
+// PinnedPromptHeaderLine renders Rust transcript_view::prompt_header::line: the
+// single row that keeps the prompt of the first visible answer on screen. The
+// text is sanitized, whitespace-collapsed, capped at 512 runes and truncated to
+// one cell short of width. The caller paints the row above the transcript body;
+// it never joins the transcript content, so copy, find and export stay exact.
+func PinnedPromptHeaderLine(message string, spoken bool, width int) string {
+	if width < 1 {
+		return ""
+	}
+	prefix := []rune(message)
+	if len(prefix) > pinnedPromptHeaderMaxRunes {
+		prefix = prefix[:pinnedPromptHeaderMaxRunes]
+	}
+	text := strings.Join(strings.Fields(SanitizeUserText(string(prefix))), " ")
+	if text == "" {
+		text = "[attachments]"
+	}
+	marker := ansiUserMessagePrefix + "\u203a " + ansiUserMessagePrefixEnd
+	if spoken {
+		marker = ansiUserMessageSpoken + "\u203a " + ansiUserMessageSpokenEnd
+	}
+	line := marker + tui.HistoryPromptTextSGR(tui.DetectStdoutColorLevel()) + text
+	limit := width
+	if limit > 1 {
+		limit--
+	}
+	line = tui.TruncateWithEllipsis(line, limit)
+	return styleUserMessageLine(line, width)
+}
+
 // csiSequenceEnd returns the length of the CSI sequence in rest, counting the
 // leading "[", up to and including its final byte ('@'..'~'). It returns -1
 // when the sequence never terminates.

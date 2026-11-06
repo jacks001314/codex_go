@@ -11985,6 +11985,9 @@ func (m *Model) syncTranscriptOverlay() {
 	if content := m.renderTranscriptOverlayCached(); content != m.overlay.Content() {
 		m.overlay.SetContent(content)
 	}
+	// Rust transcript_view::prompt_header: keep the first visible answer's
+	// prompt on the row above the content.
+	m.syncOverlayPinnedHeader()
 	if m.backtrack.OverlayPreviewActive {
 		m.refreshBacktrackHighlight()
 	}
