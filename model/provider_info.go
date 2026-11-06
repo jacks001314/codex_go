@@ -195,12 +195,15 @@ func (a ProviderAuthRefreshInfo) Format(f fmt.State, verb rune) {
 // (#46482): secondary OAuth credentials delivered alongside the provider's
 // primary authentication.
 type GatewayOAuthConfig struct {
-	AuthorizationURL string   `json:"authorization_url,omitempty"`
-	TokenURL         string   `json:"token_url,omitempty"`
-	ClientID         string   `json:"client_id,omitempty"`
-	Resource         *string  `json:"resource,omitempty"`
-	Scopes           []string `json:"scopes,omitempty"`
-	RedirectPort     *uint16  `json:"redirect_port,omitempty"`
+	AuthorizationURL string `json:"authorization_url,omitempty"`
+	// DeviceAuthorizationURL enables device-code sign-in for terminals that
+	// cannot open a browser (Rust #59822).
+	DeviceAuthorizationURL string   `json:"device_authorization_url,omitempty"`
+	TokenURL               string   `json:"token_url,omitempty"`
+	ClientID               string   `json:"client_id,omitempty"`
+	Resource               *string  `json:"resource,omitempty"`
+	Scopes                 []string `json:"scopes,omitempty"`
+	RedirectPort           *uint16  `json:"redirect_port,omitempty"`
 	// CredentialsStore selects where this gateway's OAuth grants are stored
 	// (Rust #58219 GatewayOAuthConfig::credentials_store). The empty value is
 	// the keyring-backed default and stays out of the serialized identity.

@@ -127,6 +127,14 @@ func BuildTypeScriptProtocolSchema(experimental bool, internal bool) *ProtocolSc
 			// params absent/nullable.
 			schema.ClientRequests[i].Params = "GetAccountTokenUsageParams"
 		}
+		if schema.ClientRequests[i].Method == string(MethodGatewayOAuthRead) {
+			// Rust emits params?: GatewayOAuthReadParams | null | undefined while
+			// the stable JSON variant keeps a nullable anyOf reference.
+			schema.ClientRequests[i].Params = "GatewayOAuthReadParams"
+		}
+		if schema.ClientRequests[i].Method == string(MethodGatewayOAuthLogin) {
+			schema.ClientRequests[i].Params = "GatewayOAuthLoginParams"
+		}
 		if schema.ClientRequests[i].Method == string(MethodGetAccountRateLimits) {
 			// Rust emits params?: GetAccountRateLimitsParams in the TypeScript
 			// client surface while the stable JSON request variant keeps its
@@ -222,8 +230,8 @@ func baseClientRequestMethods() []ProtocolMethod {
 		{Method: string(MethodPluginUninstall)},
 		{Method: string(MethodReviewStart)},
 		{Method: string(MethodSendAddCreditsNudgeEmail)},
-		// Rust #47170/#47207: the explicit gateway sign-in RPCs take no params
-		// and are advertised without a params reference.
+		// Rust #59819: read and login accept an optional provider selector;
+		// cancel stays param-free.
 		{Method: string(MethodGatewayOAuthRead)},
 		{Method: string(MethodGatewayOAuthLogin)},
 		{Method: string(MethodGatewayOAuthCancel)},

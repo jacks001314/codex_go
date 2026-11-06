@@ -4259,7 +4259,7 @@ func (r *RuntimeRouter) dispatch(request *Request) (result any, err error) {
 	case MethodSendAddCreditsNudgeEmail:
 		return r.handleSendAddCreditsNudgeEmail(request)
 	case MethodGatewayOAuthRead:
-		return r.handleGatewayOAuthRead()
+		return r.handleGatewayOAuthRead(request)
 	case MethodGatewayOAuthLogin:
 		return r.handleGatewayOAuthLogin(request)
 	case MethodGatewayOAuthCancel:

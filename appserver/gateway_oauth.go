@@ -9,10 +9,14 @@ package appserver
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"reflect"
+	"sort"
 	"strings"
 
 	"codex_go/auth"
+	"codex_go/config"
 	"codex_go/model"
 	"codex_go/turn"
 )
@@ -47,6 +51,19 @@ type GatewayOAuthReadResponse struct {
 	Error        *string             `json:"error"`
 }
 
+// GatewayOAuthReadParams selects the configured provider whose gateway
+// credential readiness is read. A nil provider keeps the current provider
+// (Rust #59819).
+type GatewayOAuthReadParams struct {
+	ModelProvider *string `json:"modelProvider,omitempty"`
+}
+
+// GatewayOAuthLoginParams selects the configured provider to authorize. The
+// default provider and any thread's provider stay unchanged.
+type GatewayOAuthLoginParams struct {
+	ModelProvider *string `json:"modelProvider,omitempty"`
+}
+
 type GatewayOAuthLoginResponse struct{}
 
 type GatewayOAuthCancelResponse struct{}
@@ -61,12 +78,20 @@ type activeGatewayLogin struct {
 
 // gatewayOAuthProvider resolves the effective provider's gateway credential
 // manager. A nil manager means the selected provider does not use gateway OAuth.
-func (r *RuntimeRouter) gatewayOAuthProvider() (string, string, *auth.GatewayAuthManager, error) {
+func (r *RuntimeRouter) gatewayOAuthProvider(modelProvider string) (string, string, *auth.GatewayAuthManager, error) {
 	cfg, err := r.effectiveConfigForTurn(&turn.TurnStartParams{})
 	if err != nil {
 		return "", "", nil, errors.New("failed to load gateway configuration: " + err.Error())
 	}
-	providerID := firstNonEmpty(stringConfigValue(cfg, "model_provider"), model.OpenAIProviderID)
+	explicit := strings.TrimSpace(modelProvider)
+	providerID := firstNonEmpty(explicit, stringConfigValue(cfg, "model_provider"), model.OpenAIProviderID)
+	if explicit != "" {
+		// Rust #59819 validates an explicit selector against current managed
+		// policy without changing the default or any thread's provider.
+		if err := r.validateGatewayOAuthProviderSelection(cfg, explicit); err != nil {
+			return "", "", nil, err
+		}
+	}
 	providerInfo, err := model.ProviderForConfigID(configValues(cfg), providerID, stringConfigValue(cfg, "openai_base_url"))
 	if err != nil || providerInfo == nil {
 		return providerID, "", nil, errors.New("failed to load gateway configuration: unknown model provider")
@@ -79,8 +104,81 @@ func (r *RuntimeRouter) gatewayOAuthProvider() (string, string, *auth.GatewayAut
 	return providerID, providerInfo.Name, manager, nil
 }
 
-func (r *RuntimeRouter) handleGatewayOAuthRead() (*GatewayOAuthReadResponse, error) {
-	providerID, providerName, manager, err := r.gatewayOAuthProvider()
+// validateGatewayOAuthProviderSelection applies the managed provider
+// requirement and the configured-provider catalog to an explicit selector.
+func (r *RuntimeRouter) validateGatewayOAuthProviderSelection(cfg *config.Config, providerID string) error {
+	requirements, err := r.managedModelProviderRequirements()
+	if err != nil {
+		return configLoadInvalidRequest(err)
+	}
+	if requirements != nil && requirements.ModelProvider != nil && *requirements.ModelProvider != providerID {
+		return configLoadInvalidRequest(&ModelProviderError{
+			Kind:                  ModelProviderPolicyConflict,
+			ModelProvider:         providerID,
+			RequiredModelProvider: *requirements.ModelProvider,
+		})
+	}
+	providers, err := model.ProvidersFromConfigForCWD(configValues(cfg), stringConfigValue(cfg, "openai_base_url"), "")
+	if err != nil {
+		return configLoadInvalidRequest(err)
+	}
+	if _, ok := providers[providerID]; !ok {
+		return configLoadInvalidRequest(&ModelProviderError{Kind: ModelProviderNotConfigured, ModelProvider: providerID})
+	}
+	return nil
+}
+
+// gatewayOAuthProviderSelection decodes the optional modelProvider parameter.
+// An absent, null, or empty selector keeps the current provider.
+func gatewayOAuthProviderSelection(request *Request) (string, error) {
+	if request == nil {
+		return "", nil
+	}
+	raw := strings.TrimSpace(string(request.Params))
+	if raw == "" || raw == "null" {
+		return "", nil
+	}
+	var params struct {
+		ModelProvider *string `json:"modelProvider"`
+	}
+	if err := json.Unmarshal(request.Params, &params); err != nil {
+		return "", jsonRPCInvalidRequest("Invalid params: " + err.Error())
+	}
+	if params.ModelProvider == nil {
+		return "", nil
+	}
+	return strings.TrimSpace(*params.ModelProvider), nil
+}
+
+// gatewayOAuthCredentialProviderIDs lists every configured provider whose
+// gateway OAuth configuration shares the selected provider's credential, so a
+// sign-in reports readiness for all of them (Rust #59819).
+func gatewayOAuthCredentialProviderIDs(values map[string]any, openAIBaseURL string, providerID string) []string {
+	providers, err := model.ProvidersFromConfigForCWD(values, openAIBaseURL, "")
+	if err != nil {
+		return nil
+	}
+	base, ok := providers[providerID]
+	if !ok || base.GatewayOAuth == nil {
+		return nil
+	}
+	ids := make([]string, 0, len(providers))
+	for id, info := range providers {
+		if info.GatewayOAuth == nil || !reflect.DeepEqual(info.GatewayOAuth, base.GatewayOAuth) {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+func (r *RuntimeRouter) handleGatewayOAuthRead(request *Request) (*GatewayOAuthReadResponse, error) {
+	selection, err := gatewayOAuthProviderSelection(request)
+	if err != nil {
+		return nil, err
+	}
+	providerID, providerName, manager, err := r.gatewayOAuthProvider(selection)
 	if err != nil {
 		return nil, err
 	}
@@ -123,12 +221,27 @@ func (r *RuntimeRouter) handleGatewayOAuthLogin(request *Request) (*GatewayOAuth
 	if request != nil {
 		connectionID = strings.TrimSpace(request.ConnectionID)
 	}
-	providerID, _, manager, err := r.gatewayOAuthProvider()
+	selection, err := gatewayOAuthProviderSelection(request)
+	if err != nil {
+		return nil, err
+	}
+	providerID, _, manager, err := r.gatewayOAuthProvider(selection)
 	if err != nil {
 		return nil, err
 	}
 	if manager == nil {
+		if selection != "" {
+			return nil, jsonRPCInvalidRequest("The selected provider does not use gateway OAuth")
+		}
 		return nil, jsonRPCInvalidRequest("The current provider does not use gateway OAuth")
+	}
+	// Rust #59819 reports readiness for every configured provider sharing this
+	// credential, so a client watching another provider learns it is ready too.
+	credentialProviders := []string{providerID}
+	if cfg, cfgErr := r.effectiveConfigForTurn(&turn.TurnStartParams{}); cfgErr == nil && cfg != nil {
+		if shared := gatewayOAuthCredentialProviderIDs(configValues(cfg), stringConfigValue(cfg, "openai_base_url"), providerID); len(shared) > 0 {
+			credentialProviders = shared
+		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	active := &activeGatewayLogin{connectionID: connectionID, cancel: cancel, done: make(chan struct{})}
@@ -159,17 +272,21 @@ func (r *RuntimeRouter) handleGatewayOAuthLogin(request *Request) (*GatewayOAuth
 	})
 	if loginErr != nil {
 		message := loginErr.Error()
-		r.notify(NotificationGatewayOAuthChanged, &GatewayOAuthChangedNotification{
-			ProviderID: providerID,
-			Status:     GatewayOAuthStatusFailed,
-			Error:      &message,
-		})
+		for _, id := range credentialProviders {
+			r.notify(NotificationGatewayOAuthChanged, &GatewayOAuthChangedNotification{
+				ProviderID: id,
+				Status:     GatewayOAuthStatusFailed,
+				Error:      &message,
+			})
+		}
 		return nil, errors.New(message)
 	}
-	r.notify(NotificationGatewayOAuthChanged, &GatewayOAuthChangedNotification{
-		ProviderID: providerID,
-		Status:     GatewayOAuthStatusSucceeded,
-	})
+	for _, id := range credentialProviders {
+		r.notify(NotificationGatewayOAuthChanged, &GatewayOAuthChangedNotification{
+			ProviderID: id,
+			Status:     GatewayOAuthStatusSucceeded,
+		})
+	}
 	return &GatewayOAuthLoginResponse{}, nil
 }
 

@@ -21,11 +21,14 @@ const gatewayRefreshSkewSeconds int64 = 30
 // provider gateway (Rust GatewayAuthConfig).
 type GatewayAuthConfig struct {
 	AuthorizationURL string
-	TokenURL         string
-	ClientID         string
-	Resource         string
-	Scopes           []string
-	RedirectPort     *uint16
+	// DeviceAuthorizationURL enables device-code sign-in for terminals that
+	// cannot open a browser (Rust #59822).
+	DeviceAuthorizationURL string
+	TokenURL               string
+	ClientID               string
+	Resource               string
+	Scopes                 []string
+	RedirectPort           *uint16
 	// CredentialsStore selects the grant store: "" or "keyring" uses the
 	// encrypted keyring namespace, "file" uses <codex_home>/secrets/gateway_oauth.json
 	// (Rust #58219 OAuthCredentialsStore).
@@ -175,14 +178,22 @@ func diagnosticURL(value string) string {
 // authorization endpoint must not carry OAuth request parameters, and the
 // client id and redirect port must be usable.
 func validateGatewayAuthConfig(config GatewayAuthConfig) error {
-	authorization, err := validateOAuthEndpoint(config.AuthorizationURL, "provider OAuth authorization endpoint")
-	if err != nil {
-		return err
+	// A device-only configuration omits the browser authorization endpoint.
+	if strings.TrimSpace(config.AuthorizationURL) != "" || strings.TrimSpace(config.DeviceAuthorizationURL) == "" {
+		authorization, err := validateOAuthEndpoint(config.AuthorizationURL, "provider OAuth authorization endpoint")
+		if err != nil {
+			return err
+		}
+		for name := range authorization.Query() {
+			switch name {
+			case "response_type", "client_id", "redirect_uri", "state", "scope", "resource", "code_challenge", "code_challenge_method":
+				return errors.New("provider OAuth authorization endpoint cannot include OAuth request parameters")
+			}
+		}
 	}
-	for name := range authorization.Query() {
-		switch name {
-		case "response_type", "client_id", "redirect_uri", "state", "scope", "resource", "code_challenge", "code_challenge_method":
-			return errors.New("provider OAuth authorization endpoint cannot include OAuth request parameters")
+	if strings.TrimSpace(config.DeviceAuthorizationURL) != "" {
+		if _, err := validateOAuthEndpoint(config.DeviceAuthorizationURL, "provider OAuth device authorization endpoint"); err != nil {
+			return err
 		}
 	}
 	if _, err := validateOAuthEndpoint(config.TokenURL, "provider OAuth token endpoint"); err != nil {

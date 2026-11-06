@@ -276,6 +276,14 @@ func TestBuildProtocolSchemaIndexesRPCSurface(t *testing.T) {
 // parity baseline (parity/commits.json rustToInclusive). The stable fixture
 // guards treat them as expected additions until the next re-anchor, and fail
 // once the pinned Rust tree contains them so the entry can be dropped.
+// forwardPortedOptionalTypeScriptParams lists optional request params Go emits
+// ahead of the frozen Rust TypeScript fixture (#59819). Once the anchor fixture
+// names them, drop the entry.
+var forwardPortedOptionalTypeScriptParams = map[string]string{
+	string(MethodGatewayOAuthRead):  "GatewayOAuthReadParams",
+	string(MethodGatewayOAuthLogin): "GatewayOAuthLoginParams",
+}
+
 var forwardPortedStableMethods = map[string]string{
 	string(MethodModelProviderList):        "3026a8e54e (#58845) ported after the 67f0994b parity baseline",
 	string(MethodModelProviderConfigWrite): "053e5b1ca9 (#58876) ported after the 67f0994b parity baseline",
@@ -1177,6 +1185,15 @@ func requireProtocolMethodSetMatchesRustFixture(t *testing.T, path string, actua
 			diffs = append(diffs, "missing method "+method)
 			continue
 		}
+		if forward, ok := forwardPortedOptionalTypeScriptParams[method]; ok {
+			if params == forward {
+				diffs = append(diffs, "forward-ported optional params for "+method+" are now in the Rust fixture; drop it from forwardPortedOptionalTypeScriptParams")
+				continue
+			}
+			if found.Params == forward {
+				continue
+			}
+		}
 		if found.Params != params {
 			diffs = append(diffs, "method "+method+" params = "+found.Params+", want "+params)
 		}
@@ -1222,6 +1239,15 @@ func requireTypeScriptMethodSetMatchesRustFixture(t *testing.T, path string, act
 		if !ok {
 			diffs = append(diffs, "missing method "+method)
 			continue
+		}
+		if forward, ok := forwardPortedOptionalTypeScriptParams[method]; ok {
+			if params == forward {
+				diffs = append(diffs, "forward-ported optional params for "+method+" are now in the Rust fixture; drop it from forwardPortedOptionalTypeScriptParams")
+				continue
+			}
+			if found.Params == forward {
+				continue
+			}
 		}
 		if found.Params != params {
 			diffs = append(diffs, "method "+method+" params = "+found.Params+", want "+params)

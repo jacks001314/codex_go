@@ -33,13 +33,14 @@ func gatewayAuthConfigFromInfo(config *GatewayOAuthConfig) auth.GatewayAuthConfi
 		resource = strings.TrimSpace(*config.Resource)
 	}
 	return auth.GatewayAuthConfig{
-		AuthorizationURL: strings.TrimSpace(config.AuthorizationURL),
-		TokenURL:         strings.TrimSpace(config.TokenURL),
-		ClientID:         strings.TrimSpace(config.ClientID),
-		Resource:         resource,
-		Scopes:           append([]string(nil), config.Scopes...),
-		RedirectPort:     config.RedirectPort,
-		CredentialsStore: strings.TrimSpace(config.CredentialsStore),
+		AuthorizationURL:       strings.TrimSpace(config.AuthorizationURL),
+		DeviceAuthorizationURL: strings.TrimSpace(config.DeviceAuthorizationURL),
+		TokenURL:               strings.TrimSpace(config.TokenURL),
+		ClientID:               strings.TrimSpace(config.ClientID),
+		Resource:               resource,
+		Scopes:                 append([]string(nil), config.Scopes...),
+		RedirectPort:           config.RedirectPort,
+		CredentialsStore:       strings.TrimSpace(config.CredentialsStore),
 	}
 }
 
@@ -92,6 +93,7 @@ func sharedGatewayAuthManager(config *GatewayOAuthConfig, codexHome string) (*au
 
 func gatewayAuthConfigEqual(left auth.GatewayAuthConfig, right auth.GatewayAuthConfig) bool {
 	if left.AuthorizationURL != right.AuthorizationURL ||
+		left.DeviceAuthorizationURL != right.DeviceAuthorizationURL ||
 		left.TokenURL != right.TokenURL ||
 		left.ClientID != right.ClientID ||
 		left.Resource != right.Resource ||
