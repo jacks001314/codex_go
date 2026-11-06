@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"codex_go/mcp"
 	"codex_go/session"
 	"codex_go/state"
 )
@@ -146,6 +147,88 @@ func TestThreadGuardianReviewReturnsAssessmentLikeRust(t *testing.T) {
 	if _, err := filepath.Glob(filepath.Join(router.services.DefaultCWD, "guardian-direct.txt")); err != nil {
 		t.Fatalf("glob: %v", err)
 	}
+}
+
+func TestThreadGuardianReviewRecordedMCPLikeRust(t *testing.T) {
+	newMCPRouter := func(t *testing.T, reviewer GuardianReviewer) (*RuntimeRouter, *mcp.MCPService) {
+		t.Helper()
+		router := guardianReviewTestRouter(t, reviewer,
+			`{"type":"function_call","namespace":"mcp__docs","name":"search","call_id":"mcp-review","arguments":"{\"query\":\"release notes\"}"}`,
+		)
+		service := mcp.NewMCPService(nil)
+		service.SetServer(mcp.MCPServerStatus{
+			Name:  "docs",
+			State: mcp.MCPServerReady,
+			Tools: []mcp.MCPToolInfo{{
+				Name:        "search",
+				Title:       "Search docs",
+				Description: "Search the documentation.",
+				Annotations: map[string]any{"destructiveHint": true, "openWorldHint": false},
+			}},
+		})
+		router.services.MCP = service
+		return router, service
+	}
+
+	t.Run("reviews the current catalog entry without dispatching", func(t *testing.T) {
+		reviewer := &assessmentGuardianReviewer{
+			decision: state.DecisionApproved,
+			assessment: &state.Assessment{
+				Outcome:           state.OutcomeAllow,
+				RiskLevel:         state.RiskLow,
+				UserAuthorization: state.AuthorizationHigh,
+				Rationale:         "The search is authorized.",
+			},
+		}
+		router, service := newMCPRouter(t, reviewer)
+		defer service.Close()
+		response := router.Handle(guardianReviewRequest(t, "guardian-review-thread"))
+		if response.Error != nil {
+			t.Fatalf("thread/guardianReview error = %+v", response.Error)
+		}
+		want := `{"callId":"mcp-review","assessment":{"outcome":"allow","riskLevel":"low","userAuthorization":"high","rationale":"The search is authorized."}}`
+		if got := guardianReviewResponseJSON(t, response); got != want {
+			t.Fatalf("response = %s, want %s", got, want)
+		}
+		called, action, target, _ := reviewer.snapshot()
+		if !called || target != "mcp-review" {
+			t.Fatalf("reviewer was not asked to assess the recorded MCP call: called=%v target=%q", called, target)
+		}
+		arguments, _ := action.Arguments.(map[string]any)
+		if action.Type != "mcp_tool_call" || action.Server != "docs" || action.ToolName != "search" ||
+			action.ToolTitle != "Search docs" || action.ToolDescription != "Search the documentation." || arguments["query"] != "release notes" {
+			t.Fatalf("action = %#v, arguments = %#v", action, arguments)
+		}
+	})
+
+	t.Run("uses a remembered session approval", func(t *testing.T) {
+		reviewer := &assessmentGuardianReviewer{decision: state.DecisionApproved}
+		router, service := newMCPRouter(t, reviewer)
+		defer service.Close()
+		router.rememberMCPToolApproval("guardian-review-thread", mcp.MCPToolApprovalKey{Server: "docs", Tool: "search"})
+		response := router.Handle(guardianReviewRequest(t, "guardian-review-thread"))
+		if response.Error != nil {
+			t.Fatalf("thread/guardianReview error = %+v", response.Error)
+		}
+		if got := guardianReviewResponseJSON(t, response); got != `{"callId":"mcp-review","assessment":null}` {
+			t.Fatalf("response = %s", got)
+		}
+		if called, _, _, _ := reviewer.snapshot(); called {
+			t.Fatal("a remembered MCP approval must skip review")
+		}
+	})
+
+	t.Run("rejects a tool outside the current catalog", func(t *testing.T) {
+		reviewer := &assessmentGuardianReviewer{decision: state.DecisionApproved}
+		router := guardianReviewTestRouter(t, reviewer,
+			`{"type":"function_call","namespace":"mcp__missing","name":"search","call_id":"mcp-review","arguments":"{}"}`,
+		)
+		router.services.MCP = mcp.NewMCPService(nil)
+		response := router.Handle(guardianReviewRequest(t, "guardian-review-thread"))
+		if response.Error == nil || !strings.Contains(response.Error.Message, "unsupported tool for direct review") {
+			t.Fatalf("response = %+v, want an unsupported-tool error", response)
+		}
+	})
 }
 
 func TestThreadGuardianReviewSkipsAssessmentWhenPolicyAllowsLikeRust(t *testing.T) {

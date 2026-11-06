@@ -6,8 +6,10 @@ import (
 	"errors"
 	"strings"
 
+	"codex_go/apps"
 	"codex_go/execserver"
 	"codex_go/features"
+	"codex_go/mcp"
 	"codex_go/sandbox"
 	"codex_go/session"
 	"codex_go/state"
@@ -50,6 +52,8 @@ const (
 	guardianRecordedCallExecCommand        guardianRecordedCallKind = "exec_command"
 	guardianRecordedCallApplyPatch         guardianRecordedCallKind = "apply_patch"
 	guardianRecordedCallRequestPermissions guardianRecordedCallKind = "request_permissions"
+	// guardianRecordedCallMCP covers recorded MCP tool calls (Rust #59735).
+	guardianRecordedCallMCP guardianRecordedCallKind = "mcp_tool_call"
 )
 
 // guardianRecordedToolCall is the recorded tool call a direct review may
@@ -65,9 +69,13 @@ type guardianRecordedToolCall struct {
 	Reason        string
 	Permissions   map[string]any
 	EnvironmentID string
+	// Server, ToolName and ArgumentsMap carry a recorded MCP call.
+	Server       string
+	ToolName     string
+	ArgumentsMap map[string]any
 }
 
-const guardianRecordedToolCallRequirement = "expected a completed plaintext exec_command, apply_patch or request_permissions call with a nonempty call ID"
+const guardianRecordedToolCallRequirement = "expected a completed plaintext exec_command, apply_patch, request_permissions or MCP call with a nonempty call ID"
 
 func (r *RuntimeRouter) handleThreadGuardianReviewRuntime(request *Request) (*ThreadGuardianReviewResponse, error) {
 	if r == nil {
@@ -140,6 +148,15 @@ func (r *RuntimeRouter) handleThreadGuardianReviewRuntime(request *Request) (*Th
 			return response, nil
 		}
 		action = applyPatchApprovalAction(prepared.Request)
+	case guardianRecordedCallMCP:
+		actionValue, reviewRequired, err := r.prepareRecordedMCPReview(reviewCtx, threadID, turnID, record, call)
+		if err != nil {
+			return nil, err
+		}
+		if !reviewRequired {
+			return response, nil
+		}
+		action = actionValue
 	case guardianRecordedCallRequestPermissions:
 		params := r.guardianReviewTurnParams(threadID, record)
 		cfg, _ := r.effectiveConfigForTurn(params)
@@ -241,6 +258,166 @@ func threadGuardianAssessment(decision state.ReviewDecision, assessment *state.A
 	}
 }
 
+// prepareRecordedMCPReview resolves a recorded MCP call against the thread's
+// current catalog and approval policy. It never dispatches the call or records
+// an approval (Rust #59735).
+func (r *RuntimeRouter) prepareRecordedMCPReview(
+	ctx context.Context,
+	threadID string,
+	turnID string,
+	record *session.Record,
+	call *guardianRecordedToolCall,
+) (state.Action, bool, error) {
+	params := r.guardianReviewTurnParams(threadID, record)
+	cfg, err := r.effectiveConfigForTurn(params)
+	if err != nil || cfg == nil {
+		return state.Action{}, false, invalidParams("MCP tool call is unavailable on this thread")
+	}
+	service := r.mcpServiceForThread(threadID, cfg)
+	if service == nil {
+		return state.Action{}, false, invalidParams("unsupported tool for direct review")
+	}
+	response, err := service.ListStatusChecked(&mcp.MCPListServerStatusParams{
+		ThreadID:             stringPtrIfNotEmpty(threadID),
+		Detail:               &mcp.MCPServerStatusDetail{Mode: mcp.MCPServerStatusDetailToolsAndAuthOnly},
+		NonBlockingOptional:  true,
+		OptionalStartupGrace: cfg.MCPOptionalStartupGrace(),
+	})
+	if err != nil {
+		return state.Action{}, false, invalidParams("MCP tool call is unavailable on this thread")
+	}
+	if response == nil {
+		return state.Action{}, false, invalidParams("unsupported tool for direct review")
+	}
+	info, ok := guardianRecordedMCPToolInfo(mcp.RuntimeToolsFromStatuses(response.Data), call.Server, call.ToolName)
+	if !ok {
+		return state.Action{}, false, invalidParams("unsupported tool for direct review")
+	}
+
+	arguments := cloneAnyMapAppserver(call.ArgumentsMap)
+	invocation := &tool.Invocation{
+		CallID:   call.CallID,
+		ToolName: tool.NamespacedName(info.CallableNamespace, info.CallableName),
+		Payload:  tool.Payload{Kind: tool.PayloadFunction},
+	}
+	if encoded, marshalErr := json.Marshal(arguments); marshalErr == nil {
+		invocation.Payload.Arguments = string(encoded)
+	}
+	executor := mcp.NewToolExecutor(&mcp.ToolExecutorOptions{
+		Service:              service,
+		ServerName:           info.ServerName,
+		ToolInfo:             &mcp.MCPToolInfo{Name: info.Tool.Name, Title: info.Tool.Title, Description: info.Tool.Description},
+		ToolName:             invocation.ToolName,
+		ConnectorID:          info.ConnectorID,
+		ConnectorName:        info.ConnectorName,
+		ConnectorDescription: info.ConnectorDescription,
+		AgentPlugin:          info.PluginID != "",
+	})
+	effective, err := r.applyRecordedPreToolUse(ctx, params, turnID, executor, invocation)
+	if err != nil {
+		return state.Action{}, false, err
+	}
+	if effective != nil {
+		if raw := strings.TrimSpace(effective.Payload.Arguments); raw != "" {
+			var rewritten map[string]any
+			if err := json.Unmarshal([]byte(raw), &rewritten); err != nil {
+				return state.Action{}, false, invalidParams("MCP tool arguments must be a JSON object")
+			}
+			arguments = rewritten
+		}
+	}
+
+	mode := service.ToolApprovalMode(info.ServerName, info.Tool.Name)
+	linkID := strings.TrimSpace(mcp.MCPToolCallLinkID(info.Meta))
+	if mcp.IsCodexAppsMCPServerName(info.ServerName) {
+		var destructiveHint, openWorldHint *bool
+		if info.Tool.Annotations != nil {
+			destructiveHint = info.Tool.Annotations.DestructiveHint
+			openWorldHint = info.Tool.Annotations.OpenWorldHint
+		}
+		policy := apps.NewAppToolPolicyEvaluatorWithRequirements(
+			apps.AppsConfigFromValues(cfg.Values),
+			appsRequirementsForConfig(cfg),
+		).Policy(apps.AppToolPolicyInput{
+			ConnectorID:     info.ConnectorID,
+			LinkID:          linkID,
+			ToolName:        info.Tool.Name,
+			ToolTitle:       info.Tool.Title,
+			DestructiveHint: destructiveHint,
+			OpenWorldHint:   openWorldHint,
+		})
+		if !policy.Enabled {
+			return state.Action{}, false, invalidParams(mcp.MCPToolCallBlockedByAppConfigurationMessage)
+		}
+		mode = policy.Approval
+	}
+	profile := (*sandbox.PermissionProfile)(nil)
+	if current, ok := service.PermissionProfileForServer(info.ServerName); ok {
+		profile = current
+	}
+	approvalPolicy := turnApprovalPolicyForTurn(cfg, params)
+	if mcp.MCPPermissionPromptAutoApproved(approvalPolicy, profile, mode) ||
+		!mcp.RequiresMCPToolApprovalForMode(info.Tool.Annotations, mode) {
+		return state.Action{}, false, nil
+	}
+	if key, ok := mcp.MCPSessionToolApprovalKey(mode, info.ServerName, info.Tool.Name, info.ConnectorID, linkID); ok &&
+		r.mcpToolApprovalRemembered(threadID, key) {
+		return state.Action{}, false, nil
+	}
+
+	return guardianRecordedMCPAction(info, arguments), true, nil
+}
+
+func guardianRecordedMCPToolInfo(tools []mcp.RuntimeToolInfo, namespace string, name string) (mcp.RuntimeToolInfo, bool) {
+	namespace = strings.TrimSpace(namespace)
+	name = strings.TrimSpace(name)
+	for i := range tools {
+		info := tools[i]
+		if !(&info).IsModelVisible() {
+			continue
+		}
+		if namespace != strings.TrimSpace(info.ServerName) && namespace != strings.TrimSpace(info.CallableNamespace) {
+			continue
+		}
+		if name == strings.TrimSpace(info.Tool.Name) || name == strings.TrimSpace(info.CallableName) {
+			return info, true
+		}
+	}
+	return mcp.RuntimeToolInfo{}, false
+}
+
+func guardianRecordedMCPAction(info mcp.RuntimeToolInfo, arguments map[string]any) state.Action {
+	clonedArguments := cloneAnyMapAppserver(arguments)
+	action := state.Action{
+		Type:                 "mcp_tool_call",
+		Server:               strings.TrimSpace(info.ServerName),
+		ToolName:             strings.TrimSpace(info.Tool.Name),
+		ConnectorID:          strings.TrimSpace(info.ConnectorID),
+		ConnectorName:        strings.TrimSpace(info.ConnectorName),
+		ToolTitle:            strings.TrimSpace(info.Tool.Title),
+		Arguments:            clonedArguments,
+		ToolDescription:      strings.TrimSpace(info.Tool.Description),
+		ConnectorDescription: strings.TrimSpace(info.ConnectorDescription),
+	}
+	if info.Tool.Annotations != nil {
+		action.Annotations = &state.ActionAnnotations{
+			DestructiveHint: info.Tool.Annotations.DestructiveHint,
+			OpenWorldHint:   info.Tool.Annotations.OpenWorldHint,
+			ReadOnlyHint:    info.Tool.Annotations.ReadOnlyHint,
+		}
+	}
+	if len(clonedArguments) > 0 {
+		action.Extra = map[string]any{"arguments": cloneAnyMapAppserver(clonedArguments)}
+	}
+	if action.ToolDescription != "" {
+		if action.Extra == nil {
+			action.Extra = map[string]any{}
+		}
+		action.Extra["tool_description"] = action.ToolDescription
+	}
+	return action
+}
+
 // guardianRecordedToolCallFromItems reads the recorded call from the thread's
 // final item (Rust's RecordedToolCall::from_item). A trailing tool output or
 // any other item invalidates the request.
@@ -256,9 +433,7 @@ func guardianRecordedToolCallFromItems(items []session.Item) (*guardianRecordedT
 }
 
 func guardianRecordedToolCallFields(payload map[string]any) (*guardianRecordedToolCall, error) {
-	if !guardianDefaultFunctionNamespace(stringFromAny(payload["namespace"])) {
-		return nil, invalidParams(guardianRecordedToolCallRequirement)
-	}
+	namespace := strings.TrimSpace(stringFromAny(payload["namespace"]))
 	callID := strings.TrimSpace(stringFromAny(payload["call_id"]))
 	if callID == "" {
 		return nil, invalidParams(guardianRecordedToolCallRequirement)
@@ -270,6 +445,31 @@ func guardianRecordedToolCallFields(payload map[string]any) (*guardianRecordedTo
 	}
 	payloadType := strings.TrimSpace(stringFromAny(payload["type"]))
 	name := strings.TrimSpace(stringFromAny(payload["name"]))
+	if !guardianDefaultFunctionNamespace(namespace) {
+		// Rust #59735: a recorded MCP call reviews against the current catalog
+		// without executing it or remembering an approval.
+		if payloadType != "function_call" || name == "" {
+			return nil, invalidParams(guardianRecordedToolCallRequirement)
+		}
+		if guardianEncryptedArgsPresent(payload["encrypted_function_args"]) {
+			return nil, invalidParams(guardianRecordedToolCallRequirement)
+		}
+		arguments := strings.TrimSpace(stringFromAny(payload["arguments"]))
+		if arguments == "" {
+			return nil, invalidParams(guardianRecordedToolCallRequirement)
+		}
+		var decoded map[string]any
+		if err := json.Unmarshal([]byte(arguments), &decoded); err != nil {
+			return nil, invalidParams("MCP tool arguments must be a JSON object")
+		}
+		return &guardianRecordedToolCall{
+			CallID:       callID,
+			Kind:         guardianRecordedCallMCP,
+			Server:       namespace,
+			ToolName:     name,
+			ArgumentsMap: decoded,
+		}, nil
+	}
 	switch {
 	case payloadType == "function_call" && name == "exec_command":
 		if guardianEncryptedArgsPresent(payload["encrypted_function_args"]) {
