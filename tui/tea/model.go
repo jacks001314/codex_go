@@ -2885,7 +2885,12 @@ type Model struct {
 	sidebarChooserFocused bool
 	sidebarChoice         int
 	// sidebarTabHover is the tab index the pointer is over, or -1 (Rust #59928).
-	sidebarTabHover            int
+	sidebarTabHover int
+	// sidebarTabStripTop is the painted screen row of the sidebar tab strip, or
+	// -1 when nothing paints one (Rust #59928 sidebar_tab_strip.rs hit). The
+	// strip owns the pane's first row, so the renderer records where that row
+	// landed and the pointer hit test reads it back instead of assuming row 0.
+	sidebarTabStripTop         int
 	abandonedSideThreads       map[string]struct{}
 	sideStartPending           bool
 	statusControls             *chatwidget.StatusControlsState
@@ -5181,6 +5186,7 @@ func (m *Model) viewString() string {
 		return m.renderConversationInset(*inset)
 	}
 	m.transcriptContentTopRow = -1
+	m.sidebarTabStripTop = -1
 	m.composerTopRow = -1
 	m.composerTextTopRow = -1
 	m.followControlRow = -1

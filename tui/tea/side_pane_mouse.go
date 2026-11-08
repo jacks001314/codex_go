@@ -35,7 +35,12 @@ func (m *Model) sidebarStripColumn(x int) (int, bool) {
 // chooser on the new-chat row. It runs before the side-pane guards because a
 // first side chat has no active side conversation yet.
 func (m *Model) handleSidebarTabStripMouse(msg mousemsg.MouseMsg) (bool, bubbletea.Cmd) {
-	if m == nil || m.State == nil || msg.Y != 0 || !m.sidebarTabStripVisible() {
+	if m == nil || m.State == nil || m.sidebarTabStripTop < 0 || !m.sidebarTabStripVisible() {
+		return false, nil
+	}
+	// The pointer row is measured against the row the strip was painted on, so a
+	// banner or inset above the sidebar cannot shift the hit targets.
+	if msg.Y != m.sidebarTabStripTop {
 		return false, nil
 	}
 	column, inside := m.sidebarStripColumn(msg.X)

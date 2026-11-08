@@ -96,7 +96,7 @@ func (m *Model) offsetConversationPointerRows(x, y int) {
 	if m == nil {
 		return
 	}
-	for _, row := range []*int{&m.transcriptContentTopRow, &m.composerTopRow, &m.composerTextTopRow, &m.followControlRow} {
+	for _, row := range []*int{&m.transcriptContentTopRow, &m.composerTopRow, &m.composerTextTopRow, &m.followControlRow, &m.sidebarTabStripTop} {
 		if *row >= 0 {
 			*row += y
 		}
