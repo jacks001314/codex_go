@@ -6844,7 +6844,7 @@ func TestFeatureEnablementFromRoot(t *testing.T) {
 		DisableFeatures: []string{"goals", "plugins"},
 		ConfigOverrides: []string{"features.web_search=true", "features.apps=false", "model=gpt-5"},
 	}
-	enablement := featureEnablementFromRoot(root)
+	enablement := featureEnablementFromRoot(root, nil)
 	want := map[string]bool{
 		"memories":   true,
 		"goals":      false,
@@ -6855,8 +6855,25 @@ func TestFeatureEnablementFromRoot(t *testing.T) {
 	if !reflect.DeepEqual(enablement, want) {
 		t.Fatalf("featureEnablementFromRoot = %#v, want %#v", enablement, want)
 	}
-	if featureEnablementFromRoot(nil) != nil {
-		t.Fatalf("nil root should yield nil enablement")
+	if featureEnablementFromRoot(nil, nil) != nil {
+		t.Fatalf("nil root and config should yield nil enablement")
+	}
+
+	// Config-layer feature values seed the map so an explicit opt-out in
+	// config.toml reaches the runtime router; CLI toggles still win over them.
+	cfg := &config.Config{Values: map[string]any{"features": map[string]any{
+		"code_mode_host_grpc":              false,
+		"code_mode_host_output_truncation": true,
+	}}}
+	merged := featureEnablementFromRoot(&cli.RootOptions{EnableFeatures: []string{"code_mode_host_grpc"}}, cfg)
+	if merged["code_mode_host_output_truncation"] != true {
+		t.Fatalf("config feature value dropped: %#v", merged)
+	}
+	if merged["code_mode_host_grpc"] != true {
+		t.Fatalf("CLI enable must override the config opt-out: %#v", merged)
+	}
+	if got := featureEnablementFromRoot(nil, cfg); got["code_mode_host_grpc"] != false {
+		t.Fatalf("config-only enablement = %#v, want the opt-out preserved", got)
 	}
 }
 

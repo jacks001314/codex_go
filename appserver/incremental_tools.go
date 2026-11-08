@@ -52,9 +52,11 @@ type incrementalToolCatalogResult struct {
 
 // incrementalToolsEnabledForTurn mirrors Rust
 // `StepContext::incremental_tools_enabled`: Responses Lite windows use the
-// stable default-on `incremental_tools` feature, and regular OpenAI Responses
-// windows opt in through `incremental_tools_legacy` (Rust #59832). Other
-// providers keep the full declaration prefix on every request.
+// stable default-on `incremental_tools` feature, and regular Responses windows
+// served by one of the two bundled Amazon Bedrock providers opt in through
+// `incremental_tools_legacy`. Rust #59832 introduced the legacy flag for OpenAI
+// and #60040 (762f87d5bb) narrowed it to Bedrock. Other providers keep the full
+// declaration prefix on every request.
 func incrementalToolsEnabledForTurn(cfg *config.Config, info *model.ModelInfo, providerID string) bool {
 	if cfg == nil || info == nil {
 		return false
@@ -63,7 +65,7 @@ func incrementalToolsEnabledForTurn(cfg *config.Config, info *model.ModelInfo, p
 	switch {
 	case info.UseResponsesLite:
 		feature = "incremental_tools"
-	case strings.TrimSpace(providerID) == model.OpenAIProviderID:
+	case model.IsBedrockProviderID(strings.TrimSpace(providerID)):
 		feature = "incremental_tools_legacy"
 	default:
 		return false

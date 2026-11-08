@@ -635,14 +635,25 @@ func rootConfigOverridesWithFeatureToggles(root cli.RootOptions) []string {
 	return overrides
 }
 
-// featureEnablementFromRoot converts the CLI --enable/--disable feature toggles
-// (and features.* config overrides) into the enablement map seeded into the
-// app-server ConfigService so protocol-level feature gates apply at startup.
-func featureEnablementFromRoot(root *cli.RootOptions) map[string]bool {
-	if root == nil {
-		return nil
-	}
+// featureEnablementFromRoot converts the merged config layers plus the CLI
+// --enable/--disable feature toggles (and features.* config overrides) into the
+// enablement map seeded into the app-server ConfigService so protocol-level
+// feature gates apply at startup. Config-layer values come first so an explicit
+// opt-out in config.toml survives; keys absent from the map still resolve to
+// their registered default through features.Enabled.
+func featureEnablementFromRoot(root *cli.RootOptions, cfg *config.Config) map[string]bool {
 	enablement := map[string]bool{}
+	if cfg != nil {
+		for key, value := range cfg.FeatureSettings() {
+			enablement[strings.TrimSpace(key)] = value
+		}
+	}
+	if root == nil {
+		if len(enablement) == 0 {
+			return nil
+		}
+		return enablement
+	}
 	for _, feature := range root.EnableFeatures {
 		enablement[strings.TrimSpace(feature)] = true
 	}
@@ -1933,7 +1944,7 @@ func runAppServer(ctx context.Context, opts cli.AppServerOptions, root *cli.Root
 	// Rust #57175: keep the config server's managed-configuration loader so
 	// later config/read calls observe refreshed enterprise policies.
 	runtimeOptions.CloudConfigLoader = loadedConfig.CloudConfigLoader()
-	runtimeOptions.FeatureEnablement = featureEnablementFromRoot(root)
+	runtimeOptions.FeatureEnablement = featureEnablementFromRoot(root, loadedConfig)
 	runtimeOptions.Requirements = requirements
 	runtimeOptions.EnableLogDB = true
 	runtimeOptions.RemoteControlDisabledByRequirements = remoteControlDisabledByRequirements

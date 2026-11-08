@@ -479,8 +479,9 @@ func TestIncrementalToolCatalogWindowReplacementLikeRust(t *testing.T) {
 
 // TestIncrementalToolsEnabledForTurnLikeRust checks the gate of Rust
 // `StepContext::incremental_tools_enabled`: Responses Lite uses the stable,
-// default-on feature, while regular OpenAI Responses opt in through
-// `incremental_tools_legacy` (#59832).
+// default-on feature, while regular Responses served by one of the two bundled
+// Amazon Bedrock providers opt in through `incremental_tools_legacy`. Rust
+// #60040 (762f87d5bb) narrowed that legacy gate from OpenAI to Bedrock.
 func TestIncrementalToolsEnabledForTurnLikeRust(t *testing.T) {
 	enabled := &config.Config{Values: map[string]any{"features": map[string]any{"incremental_tools": true}}}
 	disabled := &config.Config{Values: map[string]any{}}
@@ -502,14 +503,20 @@ func TestIncrementalToolsEnabledForTurnLikeRust(t *testing.T) {
 	if incrementalToolsEnabledForTurn(liteStableOff, lite, model.OpenAIProviderID) {
 		t.Fatal("the legacy flag must not enable lite windows on its own")
 	}
-	if incrementalToolsEnabledForTurn(enabled, full, model.OpenAIProviderID) {
+	if incrementalToolsEnabledForTurn(enabled, full, model.AmazonBedrockProviderID) {
 		t.Fatal("regular Responses need the legacy feature")
 	}
-	if !incrementalToolsEnabledForTurn(legacy, full, model.OpenAIProviderID) {
-		t.Fatal("regular OpenAI Responses must honor incremental_tools_legacy")
+	if !incrementalToolsEnabledForTurn(legacy, full, model.AmazonBedrockProviderID) {
+		t.Fatal("regular Amazon Bedrock Responses must honor incremental_tools_legacy")
+	}
+	if !incrementalToolsEnabledForTurn(legacy, full, model.AmazonBedrockRuntimeProviderID) {
+		t.Fatal("regular Amazon Bedrock Runtime Responses must honor incremental_tools_legacy")
+	}
+	if incrementalToolsEnabledForTurn(legacy, full, model.OpenAIProviderID) {
+		t.Fatal("the legacy feature no longer applies to the OpenAI provider")
 	}
 	if incrementalToolsEnabledForTurn(legacy, full, "azure") {
-		t.Fatal("the legacy feature only applies to the OpenAI provider")
+		t.Fatal("the legacy feature only applies to the Amazon Bedrock providers")
 	}
 	if incrementalToolsEnabledForTurn(nil, lite, "") || incrementalToolsEnabledForTurn(enabled, nil, "") {
 		t.Fatal("missing config or model info must stay legacy")

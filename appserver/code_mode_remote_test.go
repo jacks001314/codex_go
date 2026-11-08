@@ -136,8 +136,19 @@ func TestRuntimeRouterSelectsCodeModeProviderFromStartupPolicy(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			router := NewDefaultRuntimeRouterWithOptions(session.NewStore(filepath.Join(home, testCase.name)), filepath.Join(home, testCase.name), testCase.options)
 			defer router.Close()
-			_, isProcess := router.services.CodeModeProvider.(*codemode.ProcessProvider)
-			_, isDisabled := router.services.CodeModeProvider.(*codemode.DisabledProvider)
+			// Host-side output truncation is default-on (Rust #59973), so the
+			// startup-policy selection sits under the truncation wrapper.
+			provider := router.services.CodeModeProvider
+			if wrapped, ok := provider.(*codemode.LocalServerOutputProvider); ok {
+				provider = wrapped.Inner
+			}
+			// gRPC over stdio is the default process transport (Rust #59973);
+			// this case only distinguishes a process-owned host from the
+			// disabled provider.
+			_, isGrpc := provider.(*codemode.GrpcProcessProvider)
+			_, isStdio := provider.(*codemode.ProcessProvider)
+			isProcess := isGrpc || isStdio
+			_, isDisabled := provider.(*codemode.DisabledProvider)
 			if isProcess != testCase.process || isDisabled == testCase.process {
 				t.Fatalf("provider = %T", router.services.CodeModeProvider)
 			}

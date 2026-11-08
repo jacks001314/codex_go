@@ -10,7 +10,7 @@ import (
 	"codex_go/auth"
 )
 
-func captureIncrementalRequestBody(t *testing.T, slug string, lite bool, incremental bool, input []any) map[string]any {
+func captureIncrementalRequestBody(t *testing.T, providerName string, slug string, lite bool, incremental bool, input []any) map[string]any {
 	t.Helper()
 	recorded := map[string]any{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -21,7 +21,7 @@ func captureIncrementalRequestBody(t *testing.T, slug string, lite bool, increme
 	}))
 	t.Cleanup(server.Close)
 	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
-		Provider: &APIProvider{Name: OpenAIProviderName, BaseURL: server.URL + "/v1"},
+		Provider: &APIProvider{Name: providerName, BaseURL: server.URL + "/v1"},
 		AuthSnapshot: &auth.AuthDotJSON{
 			AuthMode: "chatgpt",
 			Tokens:   map[string]any{"access_token": "token"},
@@ -50,11 +50,12 @@ func captureIncrementalRequestBody(t *testing.T, slug string, lite bool, increme
 }
 
 // TestIncrementalToolsLegacyKeepsWebSearchTopLevelLikeRust covers Rust #59832:
-// a regular OpenAI Responses window that opts into incremental tools records the
-// function catalog in `additional_tools`, while hosted web search stays in the
-// top-level tools field.
+// a regular Amazon Bedrock Responses window that opts into incremental tools
+// records the function catalog in `additional_tools`, while hosted web search
+// stays in the top-level tools field. Rust #60040 (762f87d5bb) narrowed the
+// legacy gate from OpenAI to the two bundled Bedrock providers.
 func TestIncrementalToolsLegacyKeepsWebSearchTopLevelLikeRust(t *testing.T) {
-	body := captureIncrementalRequestBody(t, "gpt-regular", false, true, nil)
+	body := captureIncrementalRequestBody(t, AmazonBedrockProviderName, "gpt-regular", false, true, nil)
 
 	tools, _ := body["tools"].([]any)
 	if len(tools) != 1 || !hasResponseToolType(tools, "web_search") {
@@ -83,7 +84,7 @@ func TestIncrementalToolsLegacyKeepsWebSearchTopLevelLikeRust(t *testing.T) {
 // TestIncrementalToolsLegacyOffKeepsFullCatalogLikeRust ensures the regular
 // Responses layout stays unchanged unless the window opts in.
 func TestIncrementalToolsLegacyOffKeepsFullCatalogLikeRust(t *testing.T) {
-	body := captureIncrementalRequestBody(t, "gpt-regular", false, false, nil)
+	body := captureIncrementalRequestBody(t, AmazonBedrockProviderName, "gpt-regular", false, false, nil)
 	tools, _ := body["tools"].([]any)
 	if !hasResponseToolType(tools, "function") || !hasResponseToolType(tools, "web_search") {
 		t.Fatalf("top-level tools = %#v, want the full catalog", tools)
@@ -99,7 +100,7 @@ func TestIncrementalToolsLegacyOffKeepsFullCatalogLikeRust(t *testing.T) {
 // TestResponsesLiteKeepsWebSearchTopLevelLikeRust covers the same split for
 // Responses Lite windows.
 func TestResponsesLiteKeepsWebSearchTopLevelLikeRust(t *testing.T) {
-	body := captureIncrementalRequestBody(t, "gpt-lite", true, false, nil)
+	body := captureIncrementalRequestBody(t, OpenAIProviderName, "gpt-lite", true, false, nil)
 	tools, _ := body["tools"].([]any)
 	if len(tools) != 1 || !hasResponseToolType(tools, "web_search") {
 		t.Fatalf("lite top-level tools = %#v, want only web_search", tools)
@@ -112,5 +113,35 @@ func TestResponsesLiteKeepsWebSearchTopLevelLikeRust(t *testing.T) {
 	declared, _ := additional["tools"].([]any)
 	if hasResponseToolType(declared, "web_search") {
 		t.Fatalf("lite additional_tools kept web_search: %#v", declared)
+	}
+}
+
+// TestIncrementalToolsLegacyGatesOnBedrockProvidersLikeRust covers Rust #60040
+// (762f87d5bb): both bundled Amazon Bedrock providers publish incremental tool
+// declarations on the regular Responses route, while a regular OpenAI Responses
+// window keeps the full declaration prefix even when it opts in.
+func TestIncrementalToolsLegacyGatesOnBedrockProvidersLikeRust(t *testing.T) {
+	for _, providerName := range []string{AmazonBedrockProviderName, AmazonBedrockRuntimeProviderID} {
+		body := captureIncrementalRequestBody(t, providerName, "gpt-regular", false, true, nil)
+		input, _ := body["input"].([]any)
+		if len(input) == 0 {
+			t.Fatalf("%s: input = %#v", providerName, body["input"])
+		}
+		first, _ := input[0].(map[string]any)
+		if first["type"] != "additional_tools" {
+			t.Fatalf("%s: first input item = %#v, want additional_tools", providerName, input[0])
+		}
+	}
+
+	body := captureIncrementalRequestBody(t, OpenAIProviderName, "gpt-regular", false, true, nil)
+	tools, _ := body["tools"].([]any)
+	if !hasResponseToolType(tools, "function") {
+		t.Fatalf("OpenAI regular Responses dropped the full catalog: %#v", tools)
+	}
+	input, _ := body["input"].([]any)
+	if len(input) > 0 {
+		if first, ok := input[0].(map[string]any); ok && first["type"] == "additional_tools" {
+			t.Fatalf("OpenAI still published incremental declarations: %#v", first)
+		}
 	}
 }
