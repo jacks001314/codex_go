@@ -447,8 +447,17 @@ func TestCloudConversationRequestsAndTypedReceiptsLikeRust(t *testing.T) {
 	if rpcErr != nil || receipt.Kind != CloudUserMessageDuplicate || receipt.TurnID == nil || *receipt.TurnID != "turn-prior" {
 		t.Fatalf("typed receipt = %#v, %#v", receipt, rpcErr)
 	}
-	if len(admissions) != 1 || admissions[0].Mode != cloudclient.SubmissionSteer || admissions[0].Text != "one\ntwo" || admissions[0].TurnTrigger == nil || *admissions[0].TurnTrigger != trigger {
+	if len(admissions) != 1 {
+		t.Fatalf("admissions = %d, want one typed submission", len(admissions))
+	}
+	admitted := admissions[0]
+	if admitted.Mode != cloudclient.SubmissionSteer || admitted.TurnTrigger == nil || *admitted.TurnTrigger != trigger {
 		t.Fatalf("typed admission = %#v", admissions)
+	}
+	// Two app-server text inputs stay two ordered parts instead of being joined.
+	if len(admitted.Input) != 2 || admitted.Input[0].Kind != cloudclient.UserMessageText || admitted.Input[0].Text != "one" ||
+		admitted.Input[1].Kind != cloudclient.UserMessageText || admitted.Input[1].Text != "two" {
+		t.Fatalf("typed admission parts = %#v, want the two text parts in order", admitted.Input)
 	}
 	_, rpcErr = client.SubmitUserMessage(ctx, turn.TurnStartParams{
 		ThreadID: "new-thread", ClientUserMessageID: "invalid", Model: "other",

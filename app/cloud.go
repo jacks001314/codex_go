@@ -273,12 +273,17 @@ func runtimeAuthProviderForCloud(codexHome string, cfg *config.Config, baseURL s
 	if err != nil {
 		return nil
 	}
+	// Rust #60014: a managed `features.runtime_agent_instances.mode`
+	// requirement wins over the configured mode.
+	resolvedMode, _ := cfg.RuntimeAuthMode()
+	mode := runtimeauth.Mode(resolvedMode)
 	provider := runtimeauth.ProviderForConfig(runtimeauth.ProviderOptions{
 		Values:          cfg.Values,
 		FeatureSettings: cfg.FeatureSettings(),
 		CodexHome:       codexHome,
 		InstallationID:  installationID,
 		Harness:         "codex-go",
+		Mode:            &mode,
 	})
 	if provider == nil {
 		return nil

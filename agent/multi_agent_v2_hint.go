@@ -42,6 +42,14 @@ const (
 
 	MultiAgentV2WaitAgentUsageHint = "When calling `wait_agent`, prefer longer waits (minutes) to avoid busy polling."
 
+	// MultiAgentV2HostedToolsUsageHint is the guidance rendered when native
+	// tools are disabled (Rust #60011). It replaces the bundled role text rather
+	// than sitting next to it: the identity paragraphs describe native
+	// collaboration calls that this session cannot make.
+	MultiAgentV2HostedToolsUsageHint = "Native tool calls are disabled for this session, so the multi-agent collaboration tools are not available as native functions. " +
+		"Do not call `spawn_agent`, `followup_task`, `send_message`, `wait_agent`, `interrupt_agent`, or `list_agents` directly. " +
+		"Use the hosted tools this session exposes instead: they are listed with the session's tool definitions, they carry the same task names and message payloads described in the messages you receive, and they are the only supported way to delegate, message, wait on, or inspect another agent here."
+
 	MultiAgentV2ModelOverrideUsageHint = "Full-history forks (`fork_turns` omitted or `\"all\"`) inherit the parent model and reasoning effort and do not accept overrides. Only set `model` or `reasoning_effort` when explicitly requested by the user, applicable `AGENTS.md` instructions, or skill instructions; when doing so, set `fork_turns` to `\"none\"`."
 )
 
@@ -93,7 +101,10 @@ func MultiAgentV2UsageHint(options MultiAgentV2UsageHintOptions) string {
 		identity = markMultiAgentRoleInstruction(identity)
 	}
 	if options.OmitBundledRole && !configured {
-		return ""
+		// Rust #60011: with native tools disabled the collaboration tools are not
+		// exposed as native functions, so the guidance points at the hosted tools
+		// instead of disappearing and leaving the model to guess.
+		return MultiAgentV2HostedToolsUsageHint
 	}
 	// Rust #41744 returns configured role text before applying the bundled
 	// update_plan filter; only catalog/bundled instructions are Codex-owned.

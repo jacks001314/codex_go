@@ -57,6 +57,28 @@ func applyStepSettingsConstraints(candidate stepSettingsConstraints) (string, er
 	return reviewer, autoReviewRequiredModelError(candidate.model)
 }
 
+// resolveGuardianReviewer mirrors Rust config::resolve_guardian_reviewer: the
+// model's auto-review requirement wins, an allowed request is kept, and a
+// request the managed requirements reject falls back to the constrained
+// default before the final allow-list check.
+func resolveGuardianReviewer(requested, model string, requirements *config.ConfigRequirements) (string, error) {
+	reviewer := normalizeStepApprovalsReviewer(requested)
+	if requirements != nil && requirements.AutoReviewRequiredForModel(model) {
+		reviewer = string(config.ApprovalsReviewerAutoReview)
+	} else if !stepApprovalsReviewerAllowed(requirements, reviewer) {
+		if len(requirements.AllowedApprovalsReviewers) > 0 {
+			reviewer = normalizeStepApprovalsReviewer(string(requirements.AllowedApprovalsReviewers[0]))
+		}
+	}
+	if !stepApprovalsReviewerAllowed(requirements, reviewer) {
+		return reviewer, fmt.Errorf(
+			"invalid value for `approvals_reviewer`: `%s` is not in the allowed set",
+			reviewer,
+		)
+	}
+	return reviewer, nil
+}
+
 func autoReviewRequiredModelError(model string) error {
 	return fmt.Errorf("To use model `%s`, you need to use auto review.", strings.TrimSpace(model))
 }
@@ -83,13 +105,6 @@ func stepApprovalsReviewerAllowed(requirements *config.ConfigRequirements, revie
 		}
 	}
 	return false
-}
-
-func permissionProfileHasFullDiskWriteAccess(profile *sandbox.PermissionProfile) bool {
-	return profile == nil ||
-		profile.Disabled ||
-		profile.SandboxPolicy == nil ||
-		profile.SandboxPolicy.HasFullDiskWriteAccess()
 }
 
 // validateTurnStepSettings validates a turn candidate using the permissions
@@ -123,6 +138,9 @@ func (r *RuntimeRouter) validateTurnStepSettings(params *turn.TurnStartParams, r
 			string(config.ApprovalsReviewerUser),
 		)
 	}
+	// inheritedReviewer is what the caller would get without this validation; a
+	// selection that differs from it has to be written back into the params.
+	inheritedReviewer := reviewer
 	cwd := firstNonEmpty(strings.TrimSpace(params.CWD), threadSettingsCWD(settings), r.services.DefaultCWD)
 	protectedModel := cfg.Requirements != nil && cfg.Requirements.AutoReviewRequiredForModel(model)
 	var profile *sandbox.PermissionProfile
@@ -135,19 +153,39 @@ func (r *RuntimeRouter) validateTurnStepSettings(params *turn.TurnStartParams, r
 			profile = resolution.Profile
 		}
 	}
+	modelChanged := !strings.EqualFold(strings.TrimSpace(model), strings.TrimSpace(currentModel))
+	if modelChanged && !reviewerExplicit {
+		// Rust #59893: a model switch without an explicit reviewer restores the
+		// requested reviewer instead of carrying over the AutoReview selection a
+		// protected model imposed. An explicit AutoReview choice keeps winning.
+		if record, _ := r.threadRecord(session.ThreadID(strings.TrimSpace(params.ThreadID)), false, false); !r.guardianThreadIsBasicSessionSource(record) {
+			requested := ""
+			if value := requestedApprovalsReviewerSnapshot(settings, record); value != nil {
+				requested = *value
+			}
+			if requested == "" {
+				requested = reviewer
+			}
+			resolved, resolveErr := resolveGuardianReviewer(requested, model, cfg.Requirements)
+			if resolveErr != nil {
+				return jsonRPCInvalidRequest(resolveErr.Error())
+			}
+			reviewer = resolved
+		}
+	}
 	selected, err := applyStepSettingsConstraints(stepSettingsConstraints{
 		requirements:              cfg.Requirements,
 		guardianApprovalEnabled:   features.Enabled(cfg.FeatureSettings(), "guardian_approval"),
-		hasFullDiskWriteAccess:    protectedModel && permissionProfileHasFullDiskWriteAccess(profile),
+		hasFullDiskWriteAccess:    protectedModel && sandbox.PermissionProfileHasFullDiskWriteAccess(profile),
 		model:                     model,
 		approvalsReviewer:         reviewer,
 		approvalsReviewerExplicit: reviewerExplicit,
-		modelChanged:              !strings.EqualFold(strings.TrimSpace(model), strings.TrimSpace(currentModel)),
+		modelChanged:              modelChanged,
 	})
 	if err != nil {
 		return jsonRPCInvalidRequest(err.Error())
 	}
-	if selected != reviewer {
+	if selected != inheritedReviewer {
 		value := selected
 		params.ApprovalsReviewer = &value
 	}

@@ -37,7 +37,7 @@ func TestStepSettingsConstraintsUseProposedPermissionsLikeRust(t *testing.T) {
 	reviewer, err := applyStepSettingsConstraints(stepSettingsConstraints{
 		requirements:            requirements,
 		guardianApprovalEnabled: true,
-		hasFullDiskWriteAccess:  permissionProfileHasFullDiskWriteAccess(readOnly),
+		hasFullDiskWriteAccess:  sandbox.PermissionProfileHasFullDiskWriteAccess(readOnly),
 		model:                   "protected-model",
 		approvalsReviewer:       "user",
 		modelChanged:            true,
@@ -52,7 +52,7 @@ func TestStepSettingsConstraintsUseProposedPermissionsLikeRust(t *testing.T) {
 	if _, err := applyStepSettingsConstraints(stepSettingsConstraints{
 		requirements:              requirements,
 		guardianApprovalEnabled:   true,
-		hasFullDiskWriteAccess:    permissionProfileHasFullDiskWriteAccess(readOnly),
+		hasFullDiskWriteAccess:    sandbox.PermissionProfileHasFullDiskWriteAccess(readOnly),
 		model:                     "protected-model",
 		approvalsReviewer:         "user",
 		approvalsReviewerExplicit: true,
@@ -63,17 +63,17 @@ func TestStepSettingsConstraintsUseProposedPermissionsLikeRust(t *testing.T) {
 	if _, err := applyStepSettingsConstraints(stepSettingsConstraints{
 		requirements:            requirements,
 		guardianApprovalEnabled: false,
-		hasFullDiskWriteAccess:  permissionProfileHasFullDiskWriteAccess(readOnly),
+		hasFullDiskWriteAccess:  sandbox.PermissionProfileHasFullDiskWriteAccess(readOnly),
 		model:                   "protected-model",
 		approvalsReviewer:       string(config.ApprovalsReviewerAutoReview),
 	}); err == nil || !strings.Contains(err.Error(), "you need to use auto review") {
 		t.Fatalf("disabled Guardian error = %v", err)
 	}
 
-	if !permissionProfileHasFullDiskWriteAccess(fullAccess) {
+	if !sandbox.PermissionProfileHasFullDiskWriteAccess(fullAccess) {
 		t.Fatal("full-access profile was not classified as full-disk write access")
 	}
-	if permissionProfileHasFullDiskWriteAccess(readOnly) {
+	if sandbox.PermissionProfileHasFullDiskWriteAccess(readOnly) {
 		t.Fatal("read-only profile was classified as full-disk write access")
 	}
 }
@@ -237,6 +237,55 @@ func TestActiveTurnSettingsProtectedModelRejectsUserReviewerLikeRust(t *testing.
 		t.Fatalf("turn/interrupt error: %+v", interrupt.Error)
 	}
 	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusInterrupted)
+}
+
+// Rust #59893: switching models without an explicit reviewer restores the
+// requested reviewer instead of keeping the AutoReview a protected model forced,
+// while an explicit AutoReview choice stays selected across later switches.
+func TestModelSwitchRestoresRequestedApprovalsReviewerLikeRust(t *testing.T) {
+	router, threadID, _ := newStepSettingsConstraintRouter(t)
+	user := string(config.ApprovalsReviewerUser)
+	autoReview := string(config.ApprovalsReviewerAutoReview)
+	readOnly := ":" + sandbox.BuiltInPermissionProfileReadOnly
+
+	if response := router.Handle(requestWithParams(t, IntID(1), MethodThreadSettingsUpdate, SettingsUpdateParams{
+		ThreadID:          threadID,
+		ApprovalsReviewer: &user,
+		Permissions:       &readOnly,
+	})); response.Error != nil {
+		t.Fatalf("initial reviewer update error: %+v", response.Error)
+	}
+
+	steps := []struct {
+		id       int64
+		model    string
+		reviewer *string
+		want     string
+	}{
+		{2, "ordinary-model", nil, user},
+		{3, "protected-model", nil, autoReview},
+		{4, "ordinary-model", nil, user},
+		{5, "ordinary-model", &autoReview, autoReview},
+		{6, "protected-model", nil, autoReview},
+		{7, "ordinary-model", nil, autoReview},
+	}
+	for _, step := range steps {
+		model := step.model
+		if response := router.Handle(requestWithParams(t, IntID(step.id), MethodThreadSettingsUpdate, SettingsUpdateParams{
+			ThreadID:          threadID,
+			Model:             &model,
+			ApprovalsReviewer: step.reviewer,
+		})); response.Error != nil {
+			t.Fatalf("model %q update error: %+v", step.model, response.Error)
+		}
+		settings := router.threadSettingsForTurn(threadID)
+		if settings == nil || settings.Model != step.model {
+			t.Fatalf("model %q committed settings = %#v", step.model, settings)
+		}
+		if settings.ApprovalsReviewer != step.want {
+			t.Fatalf("model %q reviewer = %q, want %q", step.model, settings.ApprovalsReviewer, step.want)
+		}
+	}
 }
 
 func newStepSettingsConstraintRouter(t *testing.T) (*RuntimeRouter, string, *NotificationBuffer) {

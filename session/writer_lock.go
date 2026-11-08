@@ -172,23 +172,36 @@ func (p *PublicationLock) Release() error {
 	return releaseErr
 }
 
+// Close drops thread ownership. Rust #59969: the close path is not allowed to
+// queue behind another process's coordination hold, because cleanup retries
+// every 50 ms for the whole 30 s budget and that amplification shows up as a
+// latency cliff under cross-process contention. Cleanup therefore takes a
+// shared coordination lock without waiting: two closers never exclude each
+// other, a writer inside its critical section is detected and the lock file is
+// left for the next writer's stale-lock cleanup instead of racing it.
 func (l *WriterLock) Close() error {
 	if l == nil {
 		return nil
 	}
 	var closeErr error
 	l.once.Do(func() {
-		if err := lockWriterCoordination(l.coordinator.coordination); err != nil {
+		coordination, shared, err := l.coordinator.tryRLock()
+		if err != nil {
 			closeErr = err
 			return
 		}
-		defer func() {
-			if err := l.coordinator.coordination.Unlock(); closeErr == nil && err != nil {
-				closeErr = err
-			}
-		}()
+		if shared {
+			defer func() {
+				if unlockErr := coordination.Unlock(); closeErr == nil && unlockErr != nil {
+					closeErr = unlockErr
+				}
+			}()
+		}
 		if err := l.lock.Unlock(); err != nil {
 			closeErr = err
+			return
+		}
+		if !shared {
 			return
 		}
 		if err := os.Remove(l.path); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -196,6 +209,31 @@ func (l *WriterLock) Close() error {
 		}
 	})
 	return closeErr
+}
+
+// openCoordination prepares the directory and returns the shared coordination
+// lock handle without locking it.
+func (c *writerLockCoordinator) openCoordination() (*flock.Flock, error) {
+	if err := os.MkdirAll(c.directory, 0o700); err != nil {
+		return nil, fmt.Errorf("create thread writer lock directory: %w", err)
+	}
+	return c.coordination, nil
+}
+
+// tryRLock probes the coordination lock with a shared, non-blocking acquire.
+// The boolean reports whether the probe succeeded; a failed probe is not an
+// error, it only means another process is inside a coordination critical
+// section right now.
+func (c *writerLockCoordinator) tryRLock() (*flock.Flock, bool, error) {
+	lock, err := c.openCoordination()
+	if err != nil {
+		return nil, false, err
+	}
+	locked, err := lock.TryRLock()
+	if err != nil {
+		return lock, false, fmt.Errorf("acquire thread writer coordination read lock: %w", err)
+	}
+	return lock, locked, nil
 }
 
 // lockWriterCoordination mirrors Rust's bounded coordination wait: retry every

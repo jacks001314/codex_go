@@ -79,7 +79,7 @@ func composeGuardianElasticPromptSections(
 		add("retained_assistant_context", guardianElasticTextItems(retained.AssistantContext, GuardianElasticOptional(GuardianElasticPriorityCommentary), true), false)
 	}
 	if items := TrustedUserAnswersSectionItems(RenderVerifiedAnswers(options.RetainedContext).Fragments); len(items) > 0 {
-		add("trusted_user_answers", guardianElasticTextItems(items, GuardianElasticRequired(), false), false)
+		add("trusted_user_answers", guardianElasticVerifiedAnswerItems(items), false)
 	}
 
 	transcriptText := []GuardianElasticItem{{Text: "Recent transcript:\n", Retention: GuardianElasticRequired(), Protected: true}}
@@ -168,6 +168,22 @@ func guardianElasticTextItems(items []string, retention GuardianElasticRetention
 	for _, item := range items {
 		protected := protectFraming && guardianElasticPromptFraming(item)
 		out = append(out, GuardianElasticItem{Text: item, Retention: retention, Protected: protected})
+	}
+	return out
+}
+
+// guardianElasticVerifiedAnswerItems marks the trusted-answer section as
+// verified evidence: every item, including the section framing, is kept or
+// dropped whole because the section is rendered from accepted
+// request_user_input answers (#59902).
+func guardianElasticVerifiedAnswerItems(items []string) []GuardianElasticItem {
+	out := make([]GuardianElasticItem, 0, len(items))
+	for _, item := range items {
+		out = append(out, GuardianElasticItem{
+			Text:           item,
+			Retention:      GuardianElasticRequired(),
+			VerifiedAnswer: true,
+		})
 	}
 	return out
 }

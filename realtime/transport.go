@@ -48,6 +48,12 @@ type TransportBackendConfig struct {
 	HTTPClient        *http.Client
 	Headers           http.Header
 	CallHeaders       http.Header
+	// RuntimeAuthHeaders resolves the runtime credential for one handshake. It is
+	// called on every dial - including sideband retries and reconnects - and its
+	// result replaces the actor credential headers rather than extending them
+	// (Rust #60003/#60055). A nil hook keeps the static Headers snapshot, so
+	// callers that never wired runtime auth are unaffected.
+	RuntimeAuthHeaders func(ctx context.Context, endpoint string) (http.Header, error)
 	QueryParams       map[string]string
 	PrepareCall       func(context.Context, *http.Request, []byte) error
 }
@@ -221,6 +227,7 @@ func cloneTransportBackendConfig(config *TransportBackendConfig) *TransportBacke
 		return nil
 	}
 	clone.Headers = config.Headers.Clone()
+	clone.RuntimeAuthHeaders = config.RuntimeAuthHeaders
 	if clone.Headers == nil {
 		clone.Headers = make(http.Header)
 	}

@@ -617,15 +617,11 @@ func sanitizeUITreeText(text string) string {
 	for index := 0; index < len(text); {
 		r, size := utf8.DecodeRuneInString(text[index:])
 		if r == 0x1b {
-			rest := text[index+size:]
-			if strings.HasPrefix(rest, "[") {
-				if end := csiUITreeEnd(rest); end >= 0 {
-					index += size + end
-					continue
-				}
+			skip := escapeSequenceLen(text[index+size:])
+			if skip < 0 {
 				return out.String()
 			}
-			index += size
+			index += size + skip
 			continue
 		}
 		if r != '\n' && r != '\t' && unicode.IsControl(r) {
@@ -636,6 +632,42 @@ func sanitizeUITreeText(text string) string {
 		index += size
 	}
 	return out.String()
+}
+
+// escapeSequenceLen returns how many bytes after the ESC introducer belong to
+// one complete escape sequence, or -1 when the sequence never terminates.
+//
+// Rust #60020: only CSI used to be stripped, so OSC hyperlinks such as
+// ESC ]8;;URL BEL were rendered as visible text. OSC, DCS, SOS, PM and APC are
+// control strings terminated by BEL (OSC only) or ST (ESC backslash); every
+// other ESC introduces a two-byte sequence.
+func escapeSequenceLen(rest string) int {
+	if rest == "" {
+		return -1
+	}
+	switch rest[0] {
+	case '[':
+		return csiUITreeEnd(rest)
+	case ']':
+		for offset := 1; offset < len(rest); offset++ {
+			if rest[offset] == 0x07 {
+				return offset + 1
+			}
+			if rest[offset] == 0x1b && offset+1 < len(rest) && rest[offset+1] == '\\' {
+				return offset + 2
+			}
+		}
+		return -1
+	case 'P', 'X', '^', '_':
+		for offset := 1; offset < len(rest); offset++ {
+			if rest[offset] == 0x1b && offset+1 < len(rest) && rest[offset+1] == '\\' {
+				return offset + 2
+			}
+		}
+		return -1
+	default:
+		return 1
+	}
 }
 
 func csiUITreeEnd(rest string) int {

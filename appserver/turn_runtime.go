@@ -1272,6 +1272,10 @@ func (r *RuntimeRouter) notifyResponsesStreamEvent(threadID string, turnID strin
 			Verifications: modelVerifications(event.Verification.Verifications),
 		})
 	case model.ResponsesStreamEventModeration:
+		// Rust #59842: the verdict is published turn-scoped as before, and it is
+		// also kept until the turn's answer item completes so that item can carry
+		// the moderation result itself.
+		r.recordFinalAnswerModeration(threadID, turnID, event.ModerationMetadata)
 		r.notify(NotificationTurnModerationMetadata, &TurnModerationMetadataNotification{
 			ThreadID: threadID,
 			TurnID:   turnID,
@@ -2165,6 +2169,10 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	r.rememberSampledToolCallsFromTurnResult(threadID, turnID, result)
 	threadItems := make([]ThreadItem, 0, len(items))
 	contentTokenCounts := contentTokenCountsByItemID(result)
+	// Rust #59842: the moderation verdict the model stream reported for this turn
+	// belongs to its final answer, so the completed answer item carries it.
+	finalAnswerID := finalAnswerThreadItemID(items)
+	finalAnswerModeration := r.takeFinalAnswerModeration(threadID, turnID)
 	for _, item := range items {
 		if sessionItemIsHiddenThreadItem(&item) {
 			continue
@@ -2174,6 +2182,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		}
 		threadItem := BuildThreadItem(item)
 		r.attributeCommandExecutionItem(&threadItem)
+		applyFinalAnswerModeration(&threadItem, finalAnswerID, finalAnswerModeration)
 		threadItems = append(threadItems, threadItem)
 		payload := threadItemPayload(threadItem)
 		if item.Type == "configuration_update" && params.ExperimentalRawEvents {
@@ -9004,12 +9013,7 @@ func (r *RuntimeRouter) appTurnConfigWithOptions(ctx context.Context, threadID s
 	}
 	approvalPolicy := turnApprovalPolicyForTurn(cfg, params)
 	protectedModel := autoReviewRequiredForModel(cfg, modelProviderConfig.Model)
-	if protectedModel && permissionProfile != nil && permissionProfile.Profile != nil && permissionProfile.Profile.Disabled {
-		// Rust 208f05b233: downgrade Full Access to workspace-write for
-		// auto-review-protected models.
-		workspace := sandbox.WorkspaceWritePermissionProfile()
-		permissionProfile = &config.SandboxPermissionProfileResolution{ID: sandbox.BuiltInPermissionProfileWorkspace, Profile: &workspace}
-	}
+	permissionProfile = protectedModelStartupPermissionProfile(protectedModel, permissionProfile)
 	approvalsReviewer := turnApprovalsReviewerForTurn(cfg, params)
 	if protectedModel {
 		approvalsReviewer = string(config.ApprovalsReviewerAutoReview)
@@ -15536,4 +15540,25 @@ func memoryConsolidationTimingSource(values ...string) bool {
 		}
 	}
 	return false
+}
+
+// protectedModelStartupPermissionProfile applies the startup restriction for
+// models that require automatic review (Rust #59933). It reads the effective
+// permission profile instead of the projected legacy sandbox policy, so full
+// disk write plus network is downgraded while external enforcement and writable
+// paths that cannot be projected locally keep their permissions. The settings
+// entry point uses the same sandbox predicate, so both entry points agree.
+func protectedModelStartupPermissionProfile(
+	protectedModel bool,
+	resolution *config.SandboxPermissionProfileResolution,
+) *config.SandboxPermissionProfileResolution {
+	if !protectedModel || resolution == nil || resolution.Profile == nil ||
+		!resolution.Profile.RequiresProtectedModelWorkspaceWriteDowngrade() {
+		return resolution
+	}
+	workspace := sandbox.WorkspaceWritePermissionProfile()
+	return &config.SandboxPermissionProfileResolution{
+		ID:      sandbox.BuiltInPermissionProfileWorkspace,
+		Profile: &workspace,
+	}
 }

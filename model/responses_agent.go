@@ -124,6 +124,8 @@ type ResponsesAgentOptions struct {
 	ProviderID                 string
 	ProviderCapabilities       *ProviderCapabilities
 	ProviderRequiresOpenAIAuth bool
+	// RuntimeAuthActive mirrors Rust's `runtime_auth.is_some()` for this request.
+	RuntimeAuthActive          bool
 	ProviderUsesOwnCredentials bool
 	Stream                     bool
 	StreamHandler              ResponsesStreamHandler
@@ -187,11 +189,15 @@ type ResponsesAgentOptions struct {
 }
 
 type ResponsesAgentRunner struct {
-	Provider                   *APIProvider
-	Auth                       *AuthHeaders
-	HTTPClient                 HTTPDoer
-	ProviderID                 string
-	ProviderCapabilities       ProviderCapabilities
+	Provider             *APIProvider
+	Auth                 *AuthHeaders
+	HTTPClient           HTTPDoer
+	ProviderID           string
+	ProviderCapabilities ProviderCapabilities
+	// RuntimeAuthActive records that this request presented runtime credentials,
+	// so a terminal runtime denial must not spend the credential-recovery plan
+	// (Rust #60096).
+	RuntimeAuthActive          bool
 	ProviderRequiresOpenAIAuth bool
 	ProviderUsesOwnCredentials bool
 	Stream                     bool
@@ -796,6 +802,7 @@ func NewResponsesAgentRunner(options *ResponsesAgentOptions) *ResponsesAgentRunn
 		ProviderCapabilities:         providerCapabilities,
 		ProviderRequiresOpenAIAuth:   providerRequiresOpenAIAuth,
 		ProviderUsesOwnCredentials:   options.ProviderUsesOwnCredentials || provider.Auth != nil,
+		RuntimeAuthActive:            options.RuntimeAuthActive,
 		Stream:                       options.Stream,
 		StreamHandler:                options.StreamHandler,
 		AuthRecoveryHandler:          options.AuthRecoveryHandler,
@@ -845,6 +852,16 @@ func (r *ResponsesAgentRunner) websocketSession(request *AgentRequest) *response
 	if session == nil {
 		session = &responsesWebsocketSession{}
 		r.websocketSessions.sessions[key] = session
+	}
+	// Rust #60055: a runtime-authenticated request revalidates access on a fresh
+	// handshake, so a cached socket never carries it. connection_pool.rs opens a
+	// fresh connection whenever `runtime_id.is_some()`, and ConnectionLease::reuse
+	// keeps only non-runtime connections. Closing here keeps exactly one reuse
+	// point and leaves `connectionReused` false for every runtime request.
+	if r != nil && r.RuntimeAuthActive && session.conn != nil {
+		session.mu.Lock()
+		closeResponsesWebsocketSession(session, "runtime auth requires a fresh handshake")
+		session.mu.Unlock()
 	}
 	return session
 }
@@ -1141,6 +1158,7 @@ func (r *ResponsesAgentRunner) Prewarm(ctx context.Context, request *AgentReques
 				CFRay:         responseHeaderValue(response.Header, "cf-ray"),
 				AuthError:     responseHeaderValue(response.Header, "x-openai-authorization-error"),
 				AuthErrorCode: responseAuthorizationErrorCode(response.Header),
+				StatusCode:    response.StatusCode,
 			}
 			mode, phase, refreshErr := r.recoverUnauthorizedAuth(ctx, recovery, debug)
 			if refreshErr == nil {
@@ -1467,6 +1485,7 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 					CFRay:         responseHeaderValue(response.Header, "cf-ray"),
 					AuthError:     responseHeaderValue(response.Header, "x-openai-authorization-error"),
 					AuthErrorCode: responseAuthorizationErrorCode(response.Header),
+					StatusCode:    response.StatusCode,
 				}
 				if mode, phase, refreshErr := r.recoverUnauthorizedAuth(ctx, recovery, debug); refreshErr == nil {
 					session.mu.Unlock()
@@ -2316,11 +2335,12 @@ func (r *ResponsesAgentRunner) buildResponsesAgentRequest(request *AgentRequest,
 	tools = normalizeResponseToolParameters(tools)
 	parallelToolCalls := request.ParallelToolCalls && !modelInfo.UseResponsesLite
 	// Rust #59832: incremental tool declarations cover Responses Lite windows
-	// and, behind `incremental_tools_legacy`, regular OpenAI Responses windows
-	// that already recorded their catalog in history. Hosted web search stays
+	// and, behind `incremental_tools_legacy`, regular Responses windows served by
+	// Amazon Bedrock that already recorded their catalog in history (Rust #60040
+	// narrowed the legacy gate from OpenAI to Bedrock). Hosted web search stays
 	// in the top-level tools field instead of the history declarations.
 	incrementalLayout := modelInfo.UseResponsesLite ||
-		(request.IncrementalTools && responsesProviderIsOpenAI(r.providerName()))
+		(request.IncrementalTools && responsesProviderPublishesLegacyIncrementalTools(r.providerName()))
 	if incrementalLayout {
 		// Rust #51480: an existing context window keeps the tool declarations it
 		// already recorded. Only a window that has no declarations builds the
@@ -2673,10 +2693,13 @@ func responsesToolsContainType(tools []any, toolType string) bool {
 	return false
 }
 
-// responsesProviderIsOpenAI reports the provider that owns the regular
-// Responses route; incremental_tools_legacy only applies there (Rust #59832).
-func responsesProviderIsOpenAI(name string) bool {
-	return strings.EqualFold(strings.TrimSpace(name), OpenAIProviderName)
+// responsesProviderPublishesLegacyIncrementalTools reports the providers whose
+// regular Responses route publishes incremental tool declarations behind
+// `incremental_tools_legacy`. Rust #60040 (762f87d5bb) narrowed the gate from
+// OpenAI to the two bundled Amazon Bedrock providers.
+func responsesProviderPublishesLegacyIncrementalTools(name string) bool {
+	info := ProviderInfo{Name: strings.TrimSpace(name)}
+	return info.IsAmazonBedrock()
 }
 
 // splitHostedWebSearchTools separates hosted web search declarations from the
@@ -3155,11 +3178,18 @@ func (r *ResponsesAgentRunner) doResponsesHTTPRequestWithRetry(ctx context.Conte
 			"retryable":       shouldRetry,
 		})
 		if shouldRetry && httpResponse != nil && httpResponse.StatusCode == http.StatusUnauthorized {
+			responseBody := ""
+			var responsesErr *ResponsesAPIError
+			if errors.As(err, &responsesErr) && responsesErr != nil {
+				responseBody = responsesErr.Body
+			}
 			debug := authRecoveryDebug{
 				RequestID:     responseHeaderValue(httpResponse.Header, responsesRequestIDHeader, responsesOAIRequestIDHeader),
 				CFRay:         responseHeaderValue(httpResponse.Header, "cf-ray"),
 				AuthError:     responseHeaderValue(httpResponse.Header, "x-openai-authorization-error"),
 				AuthErrorCode: responseAuthorizationErrorCode(httpResponse.Header),
+				StatusCode:    httpResponse.StatusCode,
+				ResponseBody:  responseBody,
 			}
 			mode, phase, recoverErr := r.recoverUnauthorizedAuth(ctx, recovery, debug)
 			if recoverErr != nil {
@@ -4921,6 +4951,10 @@ type authRecoveryDebug struct {
 	CFRay         string
 	AuthError     string
 	AuthErrorCode string
+	// StatusCode and ResponseBody carry the denied response so a terminal runtime
+	// denial is recognized before any recovery step runs (Rust #60096).
+	StatusCode   int
+	ResponseBody string
 }
 
 // recordAuthRecovery reports one recovery step (Rust's record_auth_recovery).

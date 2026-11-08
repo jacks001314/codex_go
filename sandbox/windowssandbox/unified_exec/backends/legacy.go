@@ -25,11 +25,12 @@ func runLegacyBackendPTY(req *windowssandbox.CaptureRequest) (*windowssandbox.Ca
 	if err != nil {
 		return nil, err
 	}
-	if !context.Permissions.HasFullDiskReadAccess() {
-		return nil, fmt.Errorf("restricted read-only access requires the elevated Windows sandbox backend")
-	}
-	if len(req.DenyReadPaths) > 0 {
-		return nil, fmt.Errorf("deny-read overrides require the elevated Windows sandbox backend")
+	overrides, err := windowssandbox.ResolveWindowsSandboxFilesystemOverrides(windowssandbox.WindowsSandboxLevelRestrictedToken, context.Permissions, windowssandbox.WindowsSandboxFilesystemOverrides{
+		AdditionalDenyReadPaths:  req.DenyReadPaths,
+		AdditionalDenyWritePaths: req.DenyWritePaths,
+	})
+	if err != nil {
+		return nil, err
 	}
 	capabilityRoots := windowssandbox.LegacySessionCapabilityRoots(context.Permissions, context.CurrentDir, context.Env, req.CodexHome)
 	security, err := windowssandbox.PrepareLegacySessionSecurity(context.UsesWriteCapabilities, req.CodexHome, req.CWD, capabilityRoots)
@@ -45,12 +46,12 @@ func runLegacyBackendPTY(req *windowssandbox.CaptureRequest) (*windowssandbox.Ca
 		context.CurrentDir,
 		context.Env,
 		nil,
-		req.DenyWritePaths,
+		overrides.AdditionalDenyWritePaths,
 		windowssandbox.LegacyAclSIDs{ReadonlySID: security.ReadonlySID, WriteRootSIDs: security.WriteRootSIDs},
 	); err != nil {
 		return nil, err
 	}
-	desktop, err := windowssandbox.PrepareLegacyLaunchDesktop(security, context.Permissions, context.CurrentDir, context.Env, req.DenyWritePaths, context.LogsBaseDir)
+	desktop, err := windowssandbox.PrepareLegacyLaunchDesktop(security, context.Permissions, context.CurrentDir, context.Env, overrides.AdditionalDenyWritePaths, context.LogsBaseDir)
 	if err != nil {
 		return nil, err
 	}

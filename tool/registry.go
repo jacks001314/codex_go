@@ -287,6 +287,15 @@ type RequestErrorCoder interface {
 	RequestErrorCode() string
 }
 
+// ModelVisibleError marks a readiness failure that belongs in the tool result
+// the model sees rather than in a turn-level failure (Rust's
+// FunctionCallError::RespondToModel). Cancellation and infrastructure errors
+// must not implement it: those still fail the turn.
+type ModelVisibleError interface {
+	error
+	ModelVisibleToolError()
+}
+
 // ReadinessWaiter lets an exact tool runtime wait for external readiness before
 // it enters the response's parallel/serial execution gate.
 type ReadinessWaiter interface {

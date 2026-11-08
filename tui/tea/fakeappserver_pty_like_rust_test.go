@@ -257,7 +257,12 @@ func TestRealTerminalSlashForkPaintsProgressLikeRust(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 	session.send("\r")
 	painted := session.mustWaitFor("Forking conversation", 5*time.Second)
-	done := session.mustWaitFor("Forked session", 15*time.Second)
+	// bubbletea repaints by cell diff: the footer already showed "Forking"
+	// conversation…, so the finished notice only rewrites the cells that changed
+	// and the stream carries "…ed session <id>" exactly as a real terminal would.
+	// Anchor on the session id (the notice text plus the forked thread id) instead
+	// of the full sentence, which no diffing renderer ever emits contiguously.
+	done := session.mustWaitFor("session 01910000-0000-7000-8000-000000000002", 15*time.Second)
 	if elapsed := done.Sub(painted); elapsed < 700*time.Millisecond {
 		t.Fatalf("result appeared %s after the progress line; the fork blocked the UI", elapsed)
 	}

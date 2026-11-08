@@ -497,9 +497,16 @@ func TestClientConsumesOrderedPushedProcessEventsLikeRust(t *testing.T) {
 				t.Fatalf("exit event = %#v", event)
 			}
 		case ProcessEventClosed:
-			if !sawExit || output.String() != "pushed" {
+			// A real ConPTY session wraps the child's own bytes in the console's
+			// VT initialisation and teardown sequences (ESC[?9001h, ESC[2J, the
+			// window title, ...), so the pty stream is never the bare payload.
+			// This assertion used to require exactly "pushed", which only held
+			// while PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE carried the HPCON's
+			// address and no client ever attached (plan §17).
+			if !sawExit || !strings.Contains(output.String(), "pushed") {
 				t.Fatalf("events closed with output %q, sawExit=%v", output.String(), sawExit)
 			}
+			t.Logf("pty stream = %q", output.String())
 			cancelServer()
 			select {
 			case err := <-serverDone:

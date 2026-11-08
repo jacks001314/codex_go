@@ -189,6 +189,9 @@ var Registry = []Spec{
 	// initializing eligible local stdio servers, and share those connections
 	// across chats when they negotiate MCP 2026-07-28 (#57211).
 	{Key: "mcp_connection_sharing", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust (codex-rs/features/src/lib.rs #60039): defer optional stdio server
+	// startup in regular chats when a warm tool catalog already covers them.
+	{Key: "mcp_lazy_stdio_startup", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	// Rust (codex-rs/features/src/lib.rs eb680c0558 #44318): hosted Codex Apps
 	// get an independent MCP protocol opt-in.
 	{Key: "codex_apps_mcp_2026_07_28", Stage: StageUnderDevelopment, DefaultEnabled: false},
@@ -480,10 +483,16 @@ var Registry = []Spec{
 	{Key: "async_compaction", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	// Rust #59598: restrict background compaction to root sessions.
 	{Key: "async_compaction_root_only", Stage: StageUnderDevelopment, DefaultEnabled: false},
-	{Key: "code_mode_host_grpc", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust #59973 (247934cfe5): gRPC over stdio is the default transport for the
+	// process-owned code-mode host; stdio stays reachable through an explicit
+	// `features.code_mode_host_grpc = false` opt-out.
+	{Key: "code_mode_host_grpc", Stage: StageStable, DefaultEnabled: true},
 	// Rust (codex-rs/features/src/lib.rs #58159): let the process-owned
 	// code-mode host apply output budgets before sending results to Core.
-	{Key: "code_mode_host_output_truncation", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust #59973 (247934cfe5): the host applies its own output budget before
+	// results cross the transport, also on by default; an explicit opt-out keeps
+	// Core's unbounded transfer.
+	{Key: "code_mode_host_output_truncation", Stage: StageStable, DefaultEnabled: true},
 	{Key: "credential_masking", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "executor_capability_discovery_v2", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "guardian_trust_orchestrator_connectors", Stage: StageUnderDevelopment, DefaultEnabled: false},

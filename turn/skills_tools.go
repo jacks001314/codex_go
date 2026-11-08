@@ -599,7 +599,10 @@ func (e *skillsToolExecutor) readSkillResult(ctx context.Context, invocation *to
 		// Rust's read handler has no authority argument: it derives the source
 		// from the matched catalog entry (`matching_packages`). Go accepts the
 		// legacy selector but must behave the same when it is omitted.
-		resolved, ok := e.skillReadAuthorityForPackage(ctx, args.Package)
+		resolved, ok, resolveErr := e.skillReadAuthorityForPackage(ctx, args.Package)
+		if resolveErr != nil {
+			return "invalid_arguments", nil, tool.RespondToModel(resolveErr.Error())
+		}
 		if !ok {
 			return "source_unavailable", nil, tool.RespondToModel("skill package is not available")
 		}
@@ -611,7 +614,10 @@ func (e *skillsToolExecutor) readSkillResult(ctx context.Context, invocation *to
 	if err := validateSkillToolHandle("package", args.Package, maxSkillToolHandleBytes); err != nil {
 		return "invalid_arguments", nil, err
 	}
-	entry, ok := e.availableSkillPackage(ctx, authority, args.Package)
+	entry, ok, resolveErr := e.availableSkillPackage(ctx, authority, args.Package)
+	if resolveErr != nil {
+		return "invalid_arguments", nil, tool.RespondToModel(resolveErr.Error())
+	}
 	if !ok {
 		return "source_unavailable", nil, tool.RespondToModel("skill package is not available from the requested authority")
 	}
@@ -755,30 +761,70 @@ func (e *skillsToolExecutor) skillReadAuthorityForSource(ctx context.Context, pa
 // matched catalog entry when skills.read omits an authority selector. Cloud
 // entries win over executor entries, and a generated `cN/`/`eN/` alias keeps
 // the search scoped to its own source.
-func (e *skillsToolExecutor) skillReadAuthorityForPackage(ctx context.Context, packageArg string) (skillsToolAuthority, bool) {
+func (e *skillsToolExecutor) skillReadAuthorityForPackage(ctx context.Context, packageArg string) (skillsToolAuthority, bool, error) {
 	aliasSource := skillAliasSource(packageArg)
+	cloud := e.orchestratorSkillCatalog()
+	cloudEntries := orchestratorCatalogAsSkillProviderEntries(cloud)
 	if aliasSource != "executor" {
-		cloud := e.orchestratorSkillCatalog()
-		entries := orchestratorCatalogAsSkillProviderEntries(cloud)
 		for _, skill := range cloud.Skills {
-			if skill.Package == packageArg || skillPackageMatchesAlias(entries, skill.Package, packageArg) {
-				return skillsToolAuthority{Kind: "orchestrator"}, true
+			if skill.Package == packageArg || skillPackageMatchesLocator(cloudEntries, skill.Package, packageArg) {
+				return skillsToolAuthority{Kind: "orchestrator"}, true, nil
 			}
 		}
 	}
-	if aliasSource == "cloud" || aliasSource == "host" {
-		return skillsToolAuthority{}, false
-	}
+	executorAllowed := aliasSource != "cloud" && aliasSource != "host"
 	executor := e.executorSkillCatalog(ctx)
+	if executorAllowed {
+		for _, entry := range executor.Entries {
+			if !entry.Enabled || entry.Authority.Kind != skillprovider.SourceExecutor || entry.Authority.ID == "" {
+				continue
+			}
+			if entry.PackageID == packageArg || skillPackageMatchesLocator(executor.Entries, entry.PackageID, packageArg) {
+				return skillsToolAuthority{Kind: "executor", ID: entry.Authority.ID}, true, nil
+			}
+		}
+	}
+	// Rust reaches the display-name tier only for locators without a generated
+	// `cN/`/`eN/` alias, and a name shared by several installations is an error:
+	// taking the first would read a different environment's copy of the skill.
+	if aliasSource != "" {
+		return skillsToolAuthority{}, false, nil
+	}
+	type namedInstallation struct {
+		authority skillsToolAuthority
+		pkg       string
+	}
+	named := make([]namedInstallation, 0, 1)
+	seen := map[namedInstallation]bool{}
+	addNamed := func(authority skillsToolAuthority, pkg string) {
+		installation := namedInstallation{authority: authority, pkg: pkg}
+		if seen[installation] {
+			return
+		}
+		seen[installation] = true
+		named = append(named, installation)
+	}
+	for _, skill := range cloud.Skills {
+		if skillListedNameMatches(skill.Name, packageArg) {
+			addNamed(skillsToolAuthority{Kind: "orchestrator"}, skill.Package)
+		}
+	}
 	for _, entry := range executor.Entries {
-		if !entry.Enabled || entry.Authority.Kind != skillprovider.SourceExecutor || entry.Authority.ID == "" {
+		if !entry.Enabled || !entry.PromptVisible || entry.Authority.Kind != skillprovider.SourceExecutor || entry.Authority.ID == "" {
 			continue
 		}
-		if entry.PackageID == packageArg || skillPackageMatchesAlias(executor.Entries, entry.PackageID, packageArg) {
-			return skillsToolAuthority{Kind: "executor", ID: entry.Authority.ID}, true
+		if skillListedNameMatches(entry.Name, packageArg) {
+			addNamed(skillsToolAuthority{Kind: "executor", ID: entry.Authority.ID}, entry.PackageID)
 		}
 	}
-	return skillsToolAuthority{}, false
+	switch len(named) {
+	case 0:
+		return skillsToolAuthority{}, false, nil
+	case 1:
+		return named[0].authority, true, nil
+	default:
+		return skillsToolAuthority{}, false, errors.New(skillNameAmbiguousMessage)
+	}
 }
 
 func (e *skillsToolExecutor) orchestratorSkillCatalog() OrchestratorSkillCatalog {
@@ -952,33 +998,96 @@ func (e *skillsToolExecutor) listedSkills(ctx context.Context, kind string) ([]l
 	return listed, catalog.Warnings
 }
 
-func (e *skillsToolExecutor) availableSkillPackage(ctx context.Context, authority skillsToolAuthority, pkg string) (listedSkill, bool) {
+// skillNameAmbiguousMessage is Rust's ambiguity error: a display name that
+// resolves to more than one catalog entry must name the package instead of
+// silently picking the first match.
+const skillNameAmbiguousMessage = "skill name is ambiguous; use skills.list and pass the package for the intended skill"
+
+// availableSkillPackage resolves the package (or alias, or model-visible display
+// name) a `skills.read` call asked for, mirroring Rust #59954's
+// `matching_packages` order: the exact package locator wins, a `skill://`
+// locator never falls through to looser matching, and a display name that
+// matches several entries is reported as ambiguous.
+func (e *skillsToolExecutor) availableSkillPackage(ctx context.Context, authority skillsToolAuthority, pkg string) (listedSkill, bool, error) {
 	aliasSource := skillAliasSource(pkg)
 	if aliasSource == "cloud" || aliasSource == "host" {
 		if authority.Kind != "orchestrator" || aliasSource == "host" {
-			return listedSkill{}, false
+			return listedSkill{}, false, nil
 		}
 	}
 	if aliasSource == "executor" && authority.Kind != "executor" {
-		return listedSkill{}, false
+		return listedSkill{}, false, nil
 	}
 	listed, _ := e.listedSkills(ctx, authority.Kind)
+	candidates := make([]listedSkill, 0, len(listed))
+	var entries []skillprovider.CatalogEntry
 	if authority.Kind == "executor" {
 		catalog := e.executorSkillCatalog(ctx)
+		entries = catalog.Entries
 		for _, entry := range catalog.Entries {
-			if entry.Enabled && entry.Authority.Kind == skillprovider.SourceExecutor && entry.Authority.ID == authority.ID && skillPackageMatchesAlias(catalog.Entries, entry.PackageID, pkg) {
-				return listedSkill{Authority: authority, Package: entry.PackageID, Name: entry.Name, Description: entry.Description, MainResource: entry.MainResource}, true
+			if !entry.Enabled || entry.Authority.Kind != skillprovider.SourceExecutor || entry.Authority.ID != authority.ID {
+				continue
 			}
+			candidates = append(candidates, listedSkill{
+				Authority:    authority,
+				Package:      entry.PackageID,
+				Name:         truncateUTF8Bytes(entry.Name, maxOrchestratorQualifiedNameChars),
+				Description:  entry.Description,
+				MainResource: entry.MainResource,
+			})
 		}
-		return listedSkill{}, false
+	} else {
+		entries = orchestratorCatalogAsSkillProviderEntries(e.orchestratorSkillCatalog())
+		candidates = append(candidates, listed...)
 	}
-	for _, entry := range listed {
-		entries := orchestratorCatalogAsSkillProviderEntries(e.orchestratorSkillCatalog())
-		if skillPackageMatchesAlias(entries, entry.Package, pkg) {
-			return entry, true
+	return resolveListedSkill(candidates, entries, pkg)
+}
+
+// resolveListedSkill applies Rust #59954's three-level resolution to the
+// candidates one authority exposes: the exact package locator, then a
+// `skill://` short-circuit, then the short alias or model-visible display name.
+// Several distinct entries matching one name are reported as ambiguous instead
+// of silently resolving to the first.
+func resolveListedSkill(candidates []listedSkill, entries []skillprovider.CatalogEntry, pkg string) (listedSkill, bool, error) {
+	for _, candidate := range candidates {
+		if candidate.Package != "" && candidate.Package == pkg {
+			return candidate, true, nil
 		}
 	}
-	return listedSkill{}, false
+	if strings.HasPrefix(pkg, "skill://") {
+		return listedSkill{}, false, nil
+	}
+	// Locator aliases keep the catalog order: Rust only treats the display-name
+	// tier as ambiguous, and a generated `cN/`/`eN/` locator never reaches it.
+	for _, candidate := range candidates {
+		if skillPackageMatchesLocator(entries, candidate.Package, pkg) {
+			return candidate, true, nil
+		}
+	}
+	if skillAliasSource(pkg) != "" {
+		return listedSkill{}, false, nil
+	}
+	matches := make([]listedSkill, 0, 1)
+	seen := map[string]bool{}
+	for _, candidate := range candidates {
+		if !skillPackageMatchesListedName(entries, candidate.Package, pkg) {
+			continue
+		}
+		key := candidate.Authority.Kind + "\x00" + candidate.Authority.ID + "\x00" + candidate.Package
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		matches = append(matches, candidate)
+	}
+	switch len(matches) {
+	case 0:
+		return listedSkill{}, false, nil
+	case 1:
+		return matches[0], true, nil
+	default:
+		return listedSkill{}, false, errors.New(skillNameAmbiguousMessage)
+	}
 }
 
 // skillPackageMatchesAlias accepts the complete package locator or the short
@@ -986,6 +1095,15 @@ func (e *skillsToolExecutor) availableSkillPackage(ctx context.Context, authorit
 // (Rust #38261). Aliases are derived from the leading URI segments and are
 // stable for a single authority/kind list.
 func skillPackageMatchesAlias(entries []skillprovider.CatalogEntry, packageID string, candidate string) bool {
+	return skillPackageMatchesLocator(entries, packageID, candidate) ||
+		skillPackageMatchesListedName(entries, packageID, candidate)
+}
+
+// skillPackageMatchesLocator accepts the complete package locator or the short
+// alias rendered in the skills catalog under metadata pressure (Rust #38261).
+// It intentionally excludes the display name: Rust orders that as its own tier,
+// which is the only one where several installations are an error.
+func skillPackageMatchesLocator(entries []skillprovider.CatalogEntry, packageID string, candidate string) bool {
 	if packageID == "" || candidate == "" {
 		return false
 	}
@@ -1006,8 +1124,36 @@ func skillPackageMatchesAlias(entries []skillprovider.CatalogEntry, packageID st
 			break
 		}
 	}
-	short := skillShortPackageLocator(packageID, roots, prefix)
-	return short == candidate
+	return skillShortPackageLocator(packageID, roots, prefix) == candidate
+}
+
+// skillPackageMatchesListedName resolves the model-visible display name, which
+// is the exact name `skills.list` returned — possibly truncated to
+// MAX_SKILL_NAME_BYTES on a character boundary. Reusing the listing truncation
+// keeps "the name list showed" and "the name read accepts" the same string.
+func skillPackageMatchesListedName(entries []skillprovider.CatalogEntry, packageID string, candidate string) bool {
+	if packageID == "" || candidate == "" {
+		return false
+	}
+	for _, entry := range entries {
+		if entry.Enabled && entry.PromptVisible && entry.PackageID == packageID &&
+			skillListedNameMatches(entry.Name, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+// skillListedNameMatches accepts the complete display name or its listed form.
+func skillListedNameMatches(name string, candidate string) bool {
+	name = strings.TrimSpace(name)
+	if name == "" || candidate == "" {
+		return false
+	}
+	if name == candidate {
+		return true
+	}
+	return truncateUTF8Bytes(name, maxOrchestratorQualifiedNameChars) == candidate
 }
 
 const (

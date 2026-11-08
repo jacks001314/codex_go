@@ -1,0 +1,1283 @@
+[
+ {
+  "sha": "ddd1812a51f4aded35c3ec5446672474d5cb546b",
+  "subject": "Carry targeted moderation decisions on final-answer messages (#59842)",
+  "kind": "protocol",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺 final-answer 的定向审核决定与 display metadata：Go 的 protocol/appserver 侧没有 moderation decision 随消息下发的字段",
+   "Go 锚点：protocol/（item 结构无审核决定字段）、appserver/（turn_runtime 未携带 decision）",
+   "plan: update/plan_2026_11_08_context_budget.md（#59842），契约 final-answer-moderation"
+  ]
+ },
+ {
+  "sha": "b6f53857fcff781b6bef10a46bb33405b5c75985",
+  "subject": "Remove incomplete prereleases after asset upload failures (#59887)",
+  "kind": "release",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺「上传资产失败后按 release id 删除本次新建 prerelease、保留 tag」：Go 的 release.yml:140-147 用 softprops/action-gh-release 一步建 release 并上传，没有阶段边界",
+   "plan: update/plan_2026_11_08_ci_3.md（#59887 + #59903 合并为契约 release-prerelease-cleanup）"
+  ]
+ },
+ {
+  "sha": "b1a0dff15854d5f62a9c0931431d70f6148da9e6",
+  "subject": "Bound REPL provenance costs in elastic context preparation (#59891)",
+  "kind": "runtime",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺 elastic 准备里 REPL provenance 的上界（Rust guardian-context/src/preparation/repl.rs）",
+   "Go 锚点：context/（无 provenance 预算）、state/（无存储侧上界）",
+   "plan: update/plan_2026_11_08_context_budget.md（#59891），契约 guardian-repl-provenance-bound"
+  ]
+ },
+ {
+  "sha": "f49ae52079859e9cfff41ed92dd935d022a2da0b",
+  "subject": "Recompute the approval reviewer when switching models (#59893)",
+  "kind": "runtime",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "complete",
+  "evidence": [
+   "Go: appserver/step_settings_constraints.go 新增 resolveGuardianReviewer（模型变化 + 未显式给 reviewer + 非 Guardian basic-session 时重算）；appserver/runtime_router.go 在 thread/settings/update 与 turn/start 两条路径保留已存的 RequestedApprovalsReviewer",
+   "verifier: appserver/step_settings_constraints_test.go::TestModelSwitchRestoresRequestedApprovalsReviewerLikeRust（锁 Rust 六步序列）",
+   "由负责人 lane 落地；本 agent 的 project scope 未同步该 lane 产物（路径来自其交付说明）"
+  ]
+ },
+ {
+  "sha": "b8725c1896089b1bcf8e74973077d5a69a71686c",
+  "subject": "Keep verified question/answer records whole under elastic budgets (#59902)",
+  "kind": "runtime",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺 elastic 预算下「已验证问答整条保留」的强制（Rust guardian-context/src/enforcement.rs + preparation/elastic.rs）",
+   "Go 锚点：state/、appserver/、retainedctx/ 均无该 enforce 点",
+   "plan: update/plan_2026_11_08_context_budget.md（#59902），契约 guardian-verified-answer-whole"
+  ]
+ },
+ {
+  "sha": "e3fe1ade2ca4cfcea0c192317beefa38c0ff1b5a",
+  "subject": "Delete incomplete prereleases by release ID (#59903)",
+  "kind": "release",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "与 #59887 同源：缺按 release id 的清理（Go 侧无 release 脚本、无 id 级 DELETE）",
+   "plan: update/plan_2026_11_08_ci_3.md（与 #59887 合并一条契约 release-prerelease-cleanup）"
+  ]
+ },
+ {
+  "sha": "f57966695fc936a1b4e5da6758ad6d532724fe83",
+  "subject": "Validate implicit API keys for Guardian Decisions (#59905)",
+  "kind": "security",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "not_applicable",
+  "evidence": [
+   "Go 没有 Guardian Decisions 客户端：features/features.go 只登记 guardianv2_decisions_comparison（UnderDevelopment，默认关），全仓无 cached-key precedence 代码，缺陷面不存在",
+   "plan: update/plan_2026_11_08_guardian.md（#59905）"
+  ]
+ },
+ {
+  "sha": "bbf57cec15bcc8b96ec96638d0e83c9d787d6919",
+  "subject": "Avoid full image decoding for original-detail context estimates (#59908)",
+  "kind": "runtime",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "not_applicable",
+  "evidence": [
+   "Go 侧根本没有 original-detail 的按尺寸估算：context/history.go:596 对每个 ContentInputImage 无条件 bytes += 7373，compact/compact.go:1347 同一常量，context/*.go 无 image/token patch 估算；本条要修的「整图解码」缺陷面不存在",
+   "连带：该事实使既有账本 commit ce0323f2f2(#54776) 由 complete 降为 partial（无 size-aware 估算），见 plan: update/plan_2026_11_08_context_budget.md（#59908）"
+  ]
+ },
+ {
+  "sha": "ad1dbba32db4b0204d2f769c762f329dc37c8895",
+  "subject": "Scope file change approval cancellation to the requesting turn (#59910)",
+  "kind": "runtime",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺「patch 审批取消按发起 turn 收敛」：Go 的取消路径不区分 turn 归属",
+   "Go 锚点：appserver/（审批取消处理）、turn/（approval broker）",
+   "plan: update/plan_2026_11_08_misc_2.md（#59910），契约 patch-approval-cancel-turn-scope"
+  ]
+ },
+ {
+  "sha": "22103802324dc51e4dfa5b1f5d2c5fe2fad3d21e",
+  "subject": "Resolve Guardian policy from the reviewed thread's catalog (#59913)",
+  "kind": "runtime",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "complete",
+  "evidence": [
+   "Go: appserver/guardian_reviewer.go 的 reviewPlan/reviewPlanContext 按被审线程解析策略；appserver/guardian_review_catalog_refresh.go 的 ensureGuardianCatalogRefresh 按线程刷新目录",
+   "verifier: appserver/guardian_reviewer_catalog_refresh_like_rust_test.go::TestGuardianReviewerRefreshesCatalogOnceLikeRust（及 TestGuardianReviewerRespectsCatalogOriginsLikeRust）",
+   "plan: update/plan_2026_11_08_guardian.md（#59913）"
+  ]
+ },
+ {
+  "sha": "2c502d8b3d382dd609179164f31396d95deee55c",
+  "subject": "Bind Guardian Decisions requests to their credential source (#59914)",
+  "kind": "security",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "not_applicable",
+  "evidence": [
+   "Go 无 async_scorer / 无 queued comparison，Rust 的「Decisions 请求绑定凭据源」没有对应实现面",
+   "plan: update/plan_2026_11_08_guardian.md（#59914）"
+  ]
+ },
+ {
+  "sha": "814347ecd21b49d25479f5499f168b9f7b7e1803",
+  "subject": "Improve sidebar chat selection and tab hover highlighting (#59928)",
+  "kind": "runtime",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺 sidebar chooser 的可配置键位、tab hover 高亮、滚轮/溢出箭头（Go 的 chooser 硬编码 Up/Down/Esc/Enter）",
+   "Go 锚点：tui/（sidebar chooser）、tui/tea/（tab strip 无 hover）",
+   "plan: update/plan_2026_11_08_cloud_sidebar.md（#59928），契约 sidebar-chooser-list-bindings-and-hover"
+  ]
+ },
+ {
+  "sha": "c1c07853fe6e8e712f264030a30758cfa80eedfe",
+  "subject": "Use permission profiles for protected-model startup downgrades (#59933)",
+  "kind": "security",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺「受保护模型启动降级统一走 permission profile」：Go 的 protected-model 判定分散在 settings 与 turn 两层，无统一启动降级点",
+   "Go 锚点：appserver/（thread settings）、sandbox/（权限配置）",
+   "plan: update/plan_2026_11_08_model_2.md（#59933），契约 protected-model-profile-downgrade"
+  ]
+ },
+ {
+  "sha": "4980f9585a0a2dea0cdc4bb0cee4e631b75fcf5c",
+  "subject": "Narrow openai-docs to product Q&A and first-time API setup (#59944)",
+  "kind": "runtime",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "Go 的 openai-docs 资产仍是 Rust 收窄前的版本（与 4980f9585a^ 内容逐字节相同，仅行尾 CRLF）：systemskills/assets/samples/openai-docs/SKILL.md:3 仍是宽口径 description，agents/openai.yaml:3/:6 仍是旧 short_description/default_prompt",
+   "缺：按 748ab55ca7 重 vendor + 保留 :12 的 broad-setup 段落（#59949）+ 行尾改 LF",
+   "plan: update/plan_2026_11_08_tail5.md §4（#59944）"
+  ]
+ },
+ {
+  "sha": "4688e49329637b8b50dd8450ef784020537e2215",
+  "subject": "Route broad Codex setup questions through self-knowledge guidance (#59949)",
+  "kind": "runtime",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "complete",
+  "evidence": [
+   "Go 的 openai-docs 技能已把「broad Codex setup / 团队定制」路由到 self-knowledge：systemskills/assets/samples/openai-docs/SKILL.md:28（Explicitly broad Codex setup, orientation, or cross-topic synthesis → references/codex-self-knowledge.md），且该 reference 文件在树里",
+   "verifier: systemskills/systemskills_test.go::TestInstallSystemSkillsMatchesRustCacheBehavior（断言 openai-docs 资产（含 agents/openai.yaml）会被安装到缓存）",
+   "注意：Go 尚未收窄（见 #59944），重 vendor 时该证据点应改指新文案的 broad-setup 段落"
+  ]
+ },
+ {
+  "sha": "0768988e5563dd78a6802be5bdffc9cc3eceee09",
+  "subject": "Resolve skill display names in read and installations tools (#59954)",
+  "kind": "runtime",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺展示名解析：Go 的 skills.read/skills.installations 只认 package id 或短别名（turn/skills_tools.go:955 availableSkillPackage → :988 skillPackageMatchesAlias），`rg -n ambiguous turn/skills_tools.go` 零命中",
+   "缺：skills.list 的 Name 截断（turn/skills_tools.go:947）与解析侧共用同一截断函数；跨 authority 同名应报 ambiguous",
+   "plan: update/plan_2026_11_08_tail5.md §3（#59954），契约 skills-tool-name-resolution"
+  ]
+ },
+ {
+  "sha": "ebe94e25c5930fd6154490e50155f7f88a4a398c",
+  "subject": "Bump `ignore` to `0.4.30` (#59955)",
+  "kind": "runtime",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "not_applicable",
+  "evidence": [
+   "纯 Rust 依赖版本升级（Cargo.toml/Cargo.lock/MODULE.bazel.lock 各 1-2 行）；Go 无 Cargo 依赖，无可对齐物",
+   "plan: update/plan_2026_11_08_ci_3.md（#59955）"
+  ]
+ },
+ {
+  "sha": "12dc86beb3d407091f34a246b22af348933a79c2",
+  "subject": "Expose model metadata from each thread's catalog and settings (#59958)",
+  "kind": "protocol",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺 thread 级 selected model metadata 的暴露：Go 既无 models_manager_for_startup 也无 selected_model_info，turn/start 无 fallback 元数据告警",
+   "Go 锚点：appserver/（thread 启动）、model/（catalog 选择）",
+   "plan: update/plan_2026_11_08_model_2.md（#59958），契约 thread-model-metadata-exposure"
+  ]
+ },
+ {
+  "sha": "4e688da4372888da372596948786ca00f421c979",
+  "subject": "Skip the network denial grace period when remote decisions drain (#59960)",
+  "kind": "security",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "not_applicable",
+  "evidence": [
+   "Go 的 unified exec 只有输出/早退宽限（tool/unified_exec.go 的 unifiedExecTrailingOutputGrace / unifiedExecEarlyExitGrace），没有 deferred network approval、没有 blocked-request observer，本条要改的宽限期对象不存在",
+   "plan: update/plan_2026_11_08_guardian.md（#59960）"
+  ]
+ },
+ {
+  "sha": "2889d8e1bf564af2ed3a72dc929b583551561363",
+  "subject": "Normalize turn context permissions to a required profile (#59963)",
+  "kind": "protocol",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺 turn context 权限规范化为 required profile：Go 的 turn context 仍允许缺省/隐式权限，无 required profile 字段与冷恢复校验",
+   "Go 锚点：protocol/（turn context）、state/（extract）、appserver/（turn 启动）",
+   "plan: update/plan_2026_11_08_misc_2.md（#59963），契约 turn-context-required-permission-profile"
+  ]
+ },
+ {
+  "sha": "e428b9a16b033fb7ca65020a489f2d05231d8ddf",
+  "subject": "Reduce contention in thread writer lock coordination (#59969)",
+  "kind": "persistence",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺共享协调读：Go 的 writer lock 是独占且阻塞（30s 超时/50ms 重试），Close() 先拿独占再删文件；Rust 已改共享协调 + 拿不到就保留文件",
+   "Go 锚点：session/（writer lock）、rollout/（store 协调）",
+   "plan: update/plan_2026_11_08_thread_storage.md（#59969），契约 thread-writer-lock-shared-coordination"
+  ]
+ },
+ {
+  "sha": "8842c09a7fca16650b86ca9c8442975b9bd46a15",
+  "subject": "Fix Opus header installation with relative symlink inputs (#59972)",
+  "kind": "release",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "not_applicable",
+  "evidence": [
+   "Rust 第三方 crate（opusic_sys）的头文件安装补丁；Go 无 Cargo、无 vendored crate、无 Bazel patch 机制",
+   "plan: update/plan_2026_11_08_ci_3.md（#59972）"
+  ]
+ },
+ {
+  "sha": "247934cfe5f57daffe064a7229ab8bfb3feffb49",
+  "subject": "Enable gRPC and host output truncation by default for Code Mode (#59973)",
+  "kind": "runtime",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "complete",
+  "evidence": [
+   "Go: features/features.go 的 code_mode_host_grpc 与 code_mode_host_output_truncation 两个默认值放开；appserver/runtime_router.go 的 newRuntimeCodeModeProcessProvider 从读 options.FeatureEnablement 原始 map 改为 features.Enabled(...)；app/app.go 的 featureEnablementFromRoot 先按 config 各层播种再叠 CLI",
+   "verifier: 契约 code-mode-host-default-features 已由负责人改 complete（对应测试在其 lane 登记）",
+   "由负责人 lane 落地；本 agent scope 未同步该改动（features/features.go 仍是 UnderDevelopment/false），路径来自其交付说明"
+  ]
+ },
+ {
+  "sha": "1be4eb123e5f870cfdee701dee171801cab39c66",
+  "subject": "Test command completion before network denial grace expires (#59974)",
+  "kind": "test",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "not_applicable",
+  "evidence": [
+   "纯 Rust 测试（命令完成早于网络拒绝宽限到期）；Go 无该宽限期对象",
+   "plan: update/plan_2026_11_08_ci_2.md（#59974）"
+  ]
+ },
+ {
+  "sha": "6abffd442d6865a72056b305a31a604b83d087d8",
+  "subject": "Test rejection of PNGs with readable dimensions but corrupt pixels (#59980)",
+  "kind": "test",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "not_applicable",
+  "evidence": [
+   "纯 Rust 测试（PNG 尺寸可读但像素损坏的拒绝）；Go 已有 PNG 解码校验与对应用例",
+   "plan: update/plan_2026_11_08_ci_2.md（#59980）"
+  ]
+ },
+ {
+  "sha": "78b1dda5f6b9f78a452d8b0b3d10b1d5fc1c6d51",
+  "subject": "Render typed prompts as Markdown in the TUI (#59983)",
+  "kind": "runtime",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺用户提示的 markdown 渲染：tui/history_cell/messages.go:135-140 枚举只有 Plain/Spoken，:153-161 NewUserPrompt 写死 Plain，:171-215 DisplayLines 按 \\n 切行 + WrapLine 纯文本渲染",
+   "缺：用户 cell 的 DisplayHyperlinkLines（span/链接列承载）；mention 高亮现为字符串级（:339 styleUserMessageMentions），改渲染会一起失效",
+   "plan: update/plan_2026_11_08_tail5.md §5（#59983），契约 typed-prompt-markdown-render"
+  ]
+ },
+ {
+  "sha": "cf39544acd74ad649d98b96ceb43320b6e9b88ec",
+  "subject": "Resolve startup models using thread creation options (#59987)",
+  "kind": "runtime",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺「按 thread 创建选项解析启动模型」：Go 的模型解析不读 thread 创建时的 provider，provider 路由门独立于模型解析",
+   "Go 锚点：appserver/（turn 启动）、model/（catalog/auth 选择）",
+   "plan: update/plan_2026_11_08_model_1.md（#59987），契约 startup-model-from-thread-options"
+  ]
+ },
+ {
+  "sha": "1a2f5babe83bc4b8d4d89701a01b7044a0ea6135",
+  "subject": "Add inherited styling to TUI display trees (#59988)",
+  "kind": "protocol",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺 UI tree 的继承样式：tui/ui_tree.go:93 UINode 只有 Kind/Text/Href/Title/Gap/Children，:155/:173/:222/:318 对样式字段一律报错，:516 只渲染首行",
+   "Go 锚点：tui/ui_tree.go",
+   "plan: update/plan_2026_11_08_ui_tree.md（#59988）"
+  ]
+ },
+ {
+  "sha": "8fcabd75a033ef281561a80e8595b2fc24d3743a",
+  "subject": "Preserve app invocation context across MCP tool refreshes (#59991)",
+  "kind": "runtime",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺跨 MCP 工具刷新保留 app 调用上下文（invocation context/binding 快照）",
+   "Go 锚点：mcp/（tool catalog 刷新）、turn/（mcp tool call）",
+   "plan: update/plan_2026_11_08_mcp_lazy.md（#59991），契约 mcp-app-invocation-context-refresh"
+  ]
+ },
+ {
+  "sha": "632eee03e9707fbd2424b4a44f5d068605f857e6",
+  "subject": "Add fixed read views for local message boards (#59993)",
+  "kind": "persistence",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺 message board 固定读视图（LocalBoardReadView / post_cutoff 快照）；Go 只有 ReadOnly() 实时连接",
+   "Go 锚点：agentboard/（local board 读取）",
+   "plan: update/plan_2026_11_08_thread_storage.md（#59993），契约 message-board-fixed-read-view"
+  ]
+ },
+ {
+  "sha": "e4bd7871b1b156e4c69ff66fbd9ea89890875091",
+  "subject": "Add read-only evidence retrieval tools for Guardian reviewers (#59994)",
+  "kind": "runtime",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺 Guardian 只读证据检索工具集：Go 有 agentboard.Board 与 guardian 命名空间，但没有捕获视图/固定截止点、没有检索工具",
+   "Go 锚点：agentboard/（api.go、guardian.go、tools.go）",
+   "plan: update/plan_2026_11_08_guardian.md（#59994）"
+  ]
+ },
+ {
+  "sha": "8d0098930ef555097f1f155a2b0b5ecbea98a7de",
+  "subject": "Add subscription tools for Guardian reviewers (#59995)",
+  "kind": "runtime",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺 Guardian 订阅工具：Go 的 Board.SetSubscription 允许改他人订阅、不限捕获目录、不回传 captured post IDs",
+   "Go 锚点：agentboard/api.go、agentboard/guardian.go",
+   "plan: update/plan_2026_11_08_guardian.md（#59995）"
+  ]
+ },
+ {
+  "sha": "eb485f57ba02ca8cdedfcc07aca0f9d75c8faefd",
+  "subject": "Add atomic bulk channel subscription updates (#59998)",
+  "kind": "persistence",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺原子批量订阅更新：Go 只有单条 SetSubscription，无「一次事务内多目标、失败整体回滚」",
+   "Go 锚点：agentboard/（subscriptions 写入）",
+   "plan: update/plan_2026_11_08_thread_storage.md（#59998），契约 message-board-bulk-subscriptions"
+  ]
+ },
+ {
+  "sha": "af83299ada26148091325c2198286c1373940027",
+  "subject": "Add model-driven Guardian channel selection (#59999)",
+  "kind": "runtime",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺模型驱动的 Guardian 频道选择：agentboard 无 sampling、无 OperationResult、无「校验频道名唯一后原子替换订阅」",
+   "Go 锚点：agentboard/、model/（采样调用）",
+   "plan: update/plan_2026_11_08_guardian.md（#59999）"
+  ]
+ },
+ {
+  "sha": "5f82dc9e59b47783b79ad51567c8ddc516f5c204",
+  "subject": "Plan Guardian evidence delivery in source order (#60000)",
+  "kind": "runtime",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺证据投递规划器：Go 只有分页读取，没有「按插入序跨频道去重、按源顺序、拒绝超出 cutoff 的证据」",
+   "Go 锚点：agentboard/local.go（SearchPosts/ReadThread）",
+   "plan: update/plan_2026_11_08_guardian.md（#60000）"
+  ]
+ },
+ {
+  "sha": "ecef7e09366ef08490de7daa0c48739871394ec6",
+  "subject": "Add bounded original-evidence delivery for Guardian reviewers (#60001)",
+  "kind": "runtime",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺有界原始证据投递执行：无 guardian_original_evidence 上下文通道、无按预算分批/超限拒绝、无 admission 成功后记 ordinal 的账本",
+   "Go 锚点：agentboard/、guardiancontext/",
+   "plan: update/plan_2026_11_08_guardian.md（#60001）"
+  ]
+ },
+ {
+  "sha": "09bd19a0deb54cce82439c23373b07b84d3e5d04",
+  "subject": "Decouple Guardian retrieval from local message-board handles (#60002)",
+  "kind": "persistence",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺 Guardian 检索与本地 message-board 句柄解耦：Go 的 Board 接口没有 namespace/read-view/subscription 捕获方法，LocalAgentMessageBoard 是具体类型",
+   "Go 锚点：agentboard/api.go",
+   "plan: update/plan_2026_11_08_guardian.md（#60002）"
+  ]
+ },
+ {
+  "sha": "44f1b0e867d0a638be0a32ed76f9480bfd0e8505",
+  "subject": "Apply runtime authentication to realtime connections (#60003)",
+  "kind": "security",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "realtime 面存在但握手仍用一次性捕获的静态 Bearer：realtime/ 与 appserver/realtime*.go 对 runtimeauth 零引用",
+   "Go 锚点：realtime/、appserver/realtime_runtime.go:463（静态 Bearer）",
+   "plan: update/plan_2026_11_08_runtime_auth.md（#60003），契约 realtime-runtime-auth"
+  ]
+ },
+ {
+  "sha": "01ab354312f758c343c85c139d5fee3be0ec93f2",
+  "subject": "Expose ChatGPT user IDs in `account/read` responses (#60004)",
+  "kind": "protocol",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺 account/read 的 userId：auth/account.go:565 GetAccountResponse 只有 Account/RequiresOpenAIAuth/WorkspaceRouting；响应有两个构造点 appserver/runtime_router.go:14977 与 :15041，都要填",
+   "取值能力已在：auth.ChatGPTUserIDFromAuth（appserver/workspace_switching.go:64 在用）",
+   "plan: update/plan_2026_11_08_tail5.md §2（#60004），契约 account-read-user-id"
+  ]
+ },
+ {
+  "sha": "df769889c0b4d41afcc9e02502aab91bac862083",
+  "subject": "Reduce SQLite write overhead for thread activity and history (#60006)",
+  "kind": "persistence",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺 SQLite 写放大三项子改动（token 窄更新/历史写准入/日志窗口帧）；底座（pool、ExecWrite busy 重试、BeginImmediate、分区 prune 谓词）已在",
+   "Go 锚点：state/（threads/history 写入）、rollout/",
+   "plan: update/plan_2026_11_08_thread_storage.md（#60006，拆 a/b/c），契约 thread-token-narrow-update"
+  ]
+ },
+ {
+  "sha": "7de8a0afc0c14fb600ec657befafa1312845f155",
+  "subject": "Start cloud threads with the local GitHub project (#60007)",
+  "kind": "runtime",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺 cloud thread 绑定本地 GitHub 项目：prewarm 仍发空的 ManagedEnvironment，无 ProjectEnvironment、无 origin→GitHub 归一化",
+   "Go 锚点：cloudclient/（prewarm）、app/（cloud 提交）",
+   "plan: update/plan_2026_11_08_cloud_sidebar.md（#60007），契约 cloud-thread-project-binding"
+  ]
+ },
+ {
+  "sha": "0389e80f07871a51e7b5a7b7e393139c38e5cbf0",
+  "subject": "Refactor TUI clipboard and composer input handling (#60008)",
+  "kind": "runtime",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "not_applicable",
+  "evidence": [
+   "纯重构（TUI 剪贴板与 composer 输入处理），无行为差异；Go 侧无对应重构对象，也无需对齐",
+   "plan: update/plan_2026_11_08_misc_3.md（#60008）"
+  ]
+ },
+ {
+  "sha": "2497eab2511d450d4f25d7ffa389018aaaf7a5ad",
+  "subject": "Add custom gateway selection to TUI sign-in (#60009)",
+  "kind": "runtime",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺 TUI 登录时的自定义 gateway 选择：Go 侧 gateway_setup_wizard 两处都没有",
+   "Go 锚点：app/（登录流程）、auth/、tui/",
+   "plan: update/plan_2026_11_08_model_1.md（#60009），契约 tui-custom-gateway-signin"
+  ]
+ },
+ {
+  "sha": "a5a00d6c7394590c348430145ee439ce16b4c7e0",
+  "subject": "Add a shared Windows Bazel setup action (#60010)",
+  "kind": "release",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "not_applicable",
+  "evidence": [
+   "Rust CI 的共享 Windows Bazel setup action；Go 无 Bazel、无该 action",
+   "plan: update/plan_2026_11_08_ci_2.md（#60010）"
+  ]
+ },
+ {
+  "sha": "e0aa0434f415b0c5bc0fb64abd7f03c5510f9ed6",
+  "subject": "Adapt multi-agent mode guidance for hosted tools (#60011)",
+  "kind": "runtime",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺多 agent 模式对 hosted tools 的指引导语（native tools 关闭时的协作提示）",
+   "Go 锚点：agent/、appserver/（多 agent 模式提示词）",
+   "plan: update/plan_2026_11_08_misc_2.md（#60011），契约 multi-agent-hosted-tools-guidance"
+  ]
+ },
+ {
+  "sha": "10cf2b9ea230ccad1aa6b66cb7ff45231daaf056",
+  "subject": "Honor managed runtime authentication modes and expand coverage (#60014)",
+  "kind": "security",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "requirements.toml 的 runtime_agent_instances.mode 被 FeatureRequirements 的 map[string]bool 静默丢弃：用户配置已支持托管模式，但企业强制配置不生效也不报错",
+   "Go 锚点：config/（requirements 解析 FeatureRequirements）、config/api.go（要求模型）",
+   "plan: update/plan_2026_11_08_runtime_auth_extra.md（#60014），契约 managed-runtime-auth-mode"
+  ]
+ },
+ {
+  "sha": "2f742f58856618deaaa86fa7f7048aad57c972a9",
+  "subject": "Disable bundled skills in the prompt-prefix comparison test (#60017)",
+  "kind": "test",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "not_applicable",
+  "evidence": [
+   "纯 Rust 测试稳定性修正（prompt-prefix 对比测试里禁用内置技能）；Go 无该测试装置",
+   "plan: update/plan_2026_11_08_ci_1.md（#60017）"
+  ]
+ },
+ {
+  "sha": "5ff78c5e66051f2527cf38967f52e8ef6cdac6cb",
+  "subject": "Propagate turn triggers to usage analytics events (#60018)",
+  "kind": "runtime",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺 usage 分析事件的 turn_trigger：Go 只有 telemetry/turn_event.go 的 turn 级事件带 turn_trigger，tool/artifact/skill/app/plugin/hook 六类 usage 事件（telemetry/tool_result.go、artifact_operation_event.go、skill_invocation_event.go、app_event.go、plugin_event.go、hook_run_event.go）都没有该字段",
+   "缺：从 session/turn_attribution.go（TurnTriggerValue）注入，并让 MCP 工具事件在 turn 完成后仍保留触发源",
+   "Rust: analytics/src/events.rs + reducer.rs（record_tool_event 改收 turn_metadata）"
+  ]
+ },
+ {
+  "sha": "2157f986489f36a0cd4c866b17e8f8ff418cf959",
+  "subject": "Add theme-aware semantic colors to extension UI trees (#60019)",
+  "kind": "protocol",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺 UI tree 的语义颜色：UINode 无 color/background 字段；主题侧 tui/theme_scope_foreground.go、theme_accent.go、syntax_theme.go 只服务 native span 渲染，ui_tree 无入口",
+   "Go 锚点：tui/ui_tree.go、tui/theme_*.go",
+   "plan: update/plan_2026_11_08_ui_tree.md（#60019）"
+  ]
+ },
+ {
+  "sha": "7e980a54fee3bb71182b3443677595dee973a77f",
+  "subject": "Strip terminal commands from UI tree strings (#60020)",
+  "kind": "runtime",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺 UI tree 字符串的完整终端序列清洗：tui/ui_tree.go:614 sanitizeUITreeText 只处理 CSI（:641），非 '[ ' 的 ESC 会丢掉 ESC 保留后续字节，OSC-8 链接会以可见文本渲染",
+   "Go 锚点：tui/ui_tree.go:614-660",
+   "plan: update/plan_2026_11_08_ui_tree.md（#60020）"
+  ]
+ },
+ {
+  "sha": "1a20f53c331c81a3fab6aeba3b90ad28eb68cc27",
+  "subject": "Normalize inline UI tree text across styled leaves (#60021)",
+  "kind": "runtime",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺跨节点内联文本规范化：tui/ui_tree.go:544 uiRowLine 直接拼接子行，无跨节点空白折叠/字素合并；:509/:516 对 string 只取首行",
+   "Go 锚点：tui/ui_tree.go",
+   "plan: update/plan_2026_11_08_ui_tree.md（#60021）"
+  ]
+ },
+ {
+  "sha": "d749ee847f350d4ec8434fe925d1046d693060e7",
+  "subject": "Separate UI tree preparation from line rendering (#60022)",
+  "kind": "runtime",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺 prepare/render 分离与自然/受限宽度测量：Go 只有 tui/ui_tree.go:496 RenderLine(width)，宽度仅在裁剪时用",
+   "Go 锚点：tui/ui_tree.go",
+   "plan: update/plan_2026_11_08_ui_tree.md（#60022）"
+  ]
+ },
+ {
+  "sha": "8e7ccd8472e249efb7dc9c155e2cbc5e6db0d908",
+  "subject": "Add multiline layout and row wrapping to UI trees (#60026)",
+  "kind": "runtime",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺多行布局与 row 换行：无 wrap prop（:318 未知名报错）、:516 只渲染首行、无高度概念",
+   "Go 锚点：tui/ui_tree.go",
+   "plan: update/plan_2026_11_08_ui_tree.md（#60026）"
+  ]
+ },
+ {
+  "sha": "66a56b17a120b286207a372d4e8ec44f2b0a7db4",
+  "subject": "Keep configured status lines on the native renderer (#60027)",
+  "kind": "runtime",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺「配置状态行及其实时预览始终走 native、扩展旗标只启用 MCP 状态行提供方」：Go 的预览路径仍按旗标切换 —— tui/tea/status_surface_preview_color.go:26 在 tui_extensions_statusline 开启时改走 chatwidget.StatusLineExtensionsTree（纯文本树渲染），关闭时才 StatusLineFromSegments",
+   "live footer 恒为 native（tui/bottom_pane/status_line_style.go:99 StatusLineFromSegments；StatusLineRendererFromFeature 无生产调用方），于是旗标开启时预览与 footer 渲染器不一致——正是 Rust 本条要消除的偏差",
+   "Rust: bottom_pane/status_line_setup.rs、status_surface_preview.rs、chatwidget/status_surfaces.rs（并删除 status_line_content.rs 65 行）",
+   "plan: update/plan_2026_11_08_ui_tree.md（#60027）；本条由先前判定 aligned 更正为 partial，原因见 plan 与本文件 §更正"
+  ]
+ },
+ {
+  "sha": "f8df49a196c4da4b6b482c727aa087fa7e07f5e0",
+  "subject": "Reuse prepared UI trees for footer rendering (#60028)",
+  "kind": "runtime",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "not_applicable",
+  "evidence": [
+   "纯 Rust 内部优化（Arc<PreparedUiTree>、单次渲染内缓存颜色解析）；Go 的树构造一次、渲染一次，无重复 prepare 也无颜色缓存需求",
+   "plan: update/plan_2026_11_08_ui_tree.md（#60028）"
+  ]
+ },
+ {
+  "sha": "7cdb2198831e3e6e647c31a1d5c409ab8acc8568",
+  "subject": "Render UI trees directly into terminal buffers (#60029)",
+  "kind": "runtime",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺 terminal buffer 直绘与尺寸测量：Go 输出 tui.UILine{Text,Hyperlinks}（tui/ui_tree.go:437-482），OSC-8 在输出时贴，无 natural/viewport 约束测量",
+   "Go 锚点：tui/ui_tree.go",
+   "plan: update/plan_2026_11_08_ui_tree.md（#60029）"
+  ]
+ },
+ {
+  "sha": "5c7a1602c8594554a97b7485f1ddd298648cdb0d",
+  "subject": "Unify TUI status line layout for extension content (#60031)",
+  "kind": "runtime",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺扩展状态内容进入 live footer：StatusLineExtensionsTree 的唯一生产调用点是配置预览（tui/tea/status_surface_preview_color.go:29，且需 tui_extensions_statusline 开启），live footer 仍是单行 native 拼接（tui/bottom_pane/footer.go:159 FooterHeight、tui/bottom_pane/status_line_style.go:99）",
+   "Go 锚点：tui/bottom_pane/footer.go、tui/chatwidget/status_surfaces.go",
+   "plan: update/plan_2026_11_08_ui_tree.md（#60031）"
+  ]
+ },
+ {
+  "sha": "cfc11eb483bb3adc63c8bfc74ea17b732ff7a4e9",
+  "subject": "Allow extension status content to use multiple footer rows (#60032)",
+  "kind": "runtime",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺 footer 多行：FooterHeight = len(FooterLines(props))（tui/bottom_pane/footer.go:159 FooterHeight）与单字符串返回、chat_composer.go:232 单行截断",
+   "Go 锚点：tui/bottom_pane/footer.go、tui/bottom_pane/chat_composer.go",
+   "plan: update/plan_2026_11_08_ui_tree.md（#60032）"
+  ]
+ },
+ {
+  "sha": "738ef9f3bb4a5f17892eda6e5b52e06f11f680ea",
+  "subject": "Omit sensitive process inputs from spawn trace logs (#60034)",
+  "kind": "security",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "not_applicable",
+  "evidence": [
+   "Go 核心 spawn 路径没有 argv/env 的 trace 日志面（无 spawn trace bundle），本条要脱敏的对象不存在",
+   "由负责人 lane 判定（Windows lane 第三包），本 agent scope 无对应实现可复核"
+  ]
+ },
+ {
+  "sha": "0c58612c3c178428f38c907912cd52888ae5d6b9",
+  "subject": "Fix authentication for git-attribution settings requests (#60035)",
+  "kind": "security",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "not_applicable",
+  "evidence": [
+   "Go 无 git-attribution 设置的远端请求面（该请求在 Rust 由 TUI 发往 backend）；无可对齐鉴权点",
+   "plan: update/plan_2026_11_08_runtime_auth_extra.md（#60035）"
+  ]
+ },
+ {
+  "sha": "7ccf78dec4abcba68367b79172fda6f3fe609601",
+  "subject": "Preserve MCP sharing discovery when deferring cached stdio startup (#60037)",
+  "kind": "runtime",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺延迟启动下保留 MCP sharing discovery：Go 的现代协商即作废旧目录语义会精确复现该 bug",
+   "Go 锚点：mcp/（connection manager、catalog cache）",
+   "plan: update/plan_2026_11_08_mcp_lazy.md（#60037），契约 mcp-sharing-discovery-deferred-startup"
+  ]
+ },
+ {
+  "sha": "fb2b06a829893a917142dda91089818bff084af4",
+  "subject": "Surface MCP server startup errors when preparing cached tool calls (#60038)",
+  "kind": "runtime",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺缓存工具调用准备时上抛 MCP 启动错误：模型只能拿到与「工具被过滤」不可区分的提示",
+   "Go 锚点：mcp/（tool catalog）、appserver/（tool 调用准备）",
+   "plan: update/plan_2026_11_08_mcp_lazy.md（#60038），契约 mcp-cached-tool-startup-errors"
+  ]
+ },
+ {
+  "sha": "af9a98b07401cb9e5279eb4128e50078b18ee7c4",
+  "subject": "Add opt-in lazy startup for cached stdio MCP servers (#60039)",
+  "kind": "runtime",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺 stdio server 的 opt-in 懒启动（deferred server 带 DiscoverLocalStdio 启动）",
+   "Go 锚点：mcp/（connection manager）、config/（mcp server 类型）、features/",
+   "plan: update/plan_2026_11_08_mcp_lazy.md（#60039），契约 mcp-lazy-stdio-startup"
+  ]
+ },
+ {
+  "sha": "762f87d5bb8794bd4859cdd04061eb07c6c8bb8b",
+  "subject": "Restrict legacy incremental tools to Amazon Bedrock providers (#60040)",
+  "kind": "runtime",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "complete",
+  "evidence": [
+   "Go: appserver/incremental_tools.go 把 incremental_tools_legacy 的门控从 OpenAI 收窄到 Bedrock；model/responses_agent.go 的第二处门控改名 responsesProviderPublishesLegacyIncrementalTools 并改用 ProviderInfo.IsAmazonBedrock（只改 appserver 一处等于没改）",
+   "verifier: appserver/incremental_tools_test.go::TestIncrementalToolsEnabledForTurnLikeRust",
+   "由负责人 lane 落地；本 agent scope 未同步（model/responses_agent.go:2323 仍是 responsesProviderIsOpenAI），路径与改名来自其交付说明"
+  ]
+ },
+ {
+  "sha": "11ca3f7531866b22b07bd7ed181e814f087b7ee5",
+  "subject": "Require explicit project trust in non-interactive runs (#60041)",
+  "kind": "security",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "complete",
+  "evidence": [
+   "Go: --trust 两个入口（非交互 exec 与 TUI 启动）、互斥校验、信任持久化、--ephemeral 不落盘、以及禁用项目层配置时的 warning；均在负责人 lane 第七/八包落地（plan §16）",
+   "verifier: 由负责人 lane 登记（本 agent scope 未同步该改动，无法在此给出函数名）",
+   "Rust: core/src/…/trust 相关 + tui 启动路径（#60041 标题 Require explicit project trust in non-interactive runs）"
+  ]
+ },
+ {
+  "sha": "a90c80840869a8cfb313ef181d7721997b86c8e5",
+  "subject": "Centralize Windows sandbox filesystem override resolution (#60042)",
+  "kind": "security",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "complete",
+  "evidence": [
+   "Go: sandbox/windowssandbox/filesystem_overrides.go —— Windows 沙箱文件系统 override 解析集中化（负责人 lane Windows 第一包）",
+   "verifier: 由负责人 lane 登记（本 agent scope 未同步该文件，无法在此给出函数名）",
+   "Rust: windows-sandbox 的文件系统 override 解析（#60042 Centralize Windows sandbox filesystem override resolution）"
+  ]
+ },
+ {
+  "sha": "b7d2321ef7b2405b72a4186447c810756866896b",
+  "subject": "Derive MCP network policy and preserve saved denials (#60046)",
+  "kind": "security",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺 MCP 网络策略推导与保留已保存拒绝：Rust 本条里 mcp_network_policy 是 dead_code、接线在后续提交，验收口径按后续 PR 一起算",
+   "Go 锚点：network/、execpolicy/、appserver/、mcp/",
+   "plan: update/plan_2026_11_08_mcp_lazy.md（#60046），契约 mcp-network-policy-derivation（保持 partial）"
+  ]
+ },
+ {
+  "sha": "358e46452858242bf6463923e1fac0f14e5c0549",
+  "subject": "Allow plugin starter prompts up to 512 characters (#60048)",
+  "kind": "runtime",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺插件起始提示词长度阈值放开（128→512）：Go 的 manifest 校验仍按旧上限，随 manifest 校验落地即可，不单独占契约位",
+   "Go 锚点：plugin/（manifest 校验）",
+   "plan: update/plan_2026_11_08_misc_1.md（#60048）"
+  ]
+ },
+ {
+  "sha": "44ccf394573cabb95e1f751a59f9d76f6f79faf1",
+  "subject": "Preserve model catalogs when starting child agents (#60049)",
+  "kind": "runtime",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺子 agent 启动时保留模型 catalog：appserver/agent_controller.go:107 spawnAgentWithReservedID 与 :502 resolveSpawnModelOverrides 按请求参数/捕获设置重算模型，不保留父 catalog",
+   "Go 锚点：appserver/（agent_controller、child spawn）、model/（catalog）",
+   "plan: update/plan_2026_11_08_model_2.md（#60049），契约 child-agent-catalog-preservation"
+  ]
+ },
+ {
+  "sha": "d4a341bd52cc47ff635761334bde8a972d6de943",
+  "subject": "Reauthenticate runtime requests before reusing WebSocket access (#60055)",
+  "kind": "security",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺 WS 复用前重新鉴权：与 #60003 同一处（realtime_runtime.go:463 静态 Bearer），重连不重新解析凭据",
+   "Go 锚点：realtime/、appserver/realtime_runtime.go",
+   "plan: update/plan_2026_11_08_runtime_auth_extra.md（#60055），契约 runtime-auth-websocket-revalidation"
+  ]
+ },
+ {
+  "sha": "e6bf88ae022cdab968e5a48d5cbeea4d2e304fc9",
+  "subject": "Support Cloud image messages and editable draft handoffs (#60061)",
+  "kind": "protocol",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺 Cloud 图片消息与可编辑 draft 交接：Go 的 Cloud 提交仍纯文本，且逐字保留 Rust 改前的拒绝文案（Cloud conversations currently accept plain text only.）",
+   "Go 锚点：cloudclient/、cloudbackend/、appserver/",
+   "plan: update/plan_2026_11_08_cloud_sidebar.md（#60061），契约 cloud-image-messages-and-draft-handoff"
+  ]
+ },
+ {
+  "sha": "1c414e0d6525ea385aeabad32fac252467a6b836",
+  "subject": "Use thread runtime auth for Guardian Decisions and memory quota checks (#60064)",
+  "kind": "security",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "not_applicable",
+  "evidence": [
+   "两半都缺对应物：Guardian Decisions 客户端不存在（同 #59914）；memories/ 只有读/合并侧，全文无 quota 相关内容，本条要改的目标不存在",
+   "plan: update/plan_2026_11_08_guardian.md（#60064）"
+  ]
+ },
+ {
+  "sha": "0ed34eb9ceddc759e283f0d657be9339afc6b25a",
+  "subject": "Ensure side-chat policy reaches the first model request (#60067)",
+  "kind": "runtime",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺侧聊策略进入首个模型请求：Go 的策略只走 fork config、boundary 走 inject-items，继承 turn 压制时首个请求可能没有策略（可能接着父任务干）",
+   "Go 锚点：tui/（side chat）、app/（side coordinator）、appserver/",
+   "plan: update/plan_2026_11_08_cloud_sidebar.md（#60067），契约 side-chat-policy-first-request"
+  ]
+ },
+ {
+  "sha": "f4275a2a2e6a50d030280439ba161305b324c851",
+  "subject": "Use runtime authentication for remote-control requests (#60073)",
+  "kind": "security",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺 remote-control 的 runtime auth：Go 用 model.AuthHeaders（快照静态头）+ ApplyRequest 签名，无 runtime 选择、无目标校验、无 denial 分类；remotecontrol/ 对 runtimeauth 零引用",
+   "Go 锚点：remotecontrol/",
+   "plan: update/plan_2026_11_08_runtime_auth.md（#60073），契约 remote-control-runtime-auth"
+  ]
+ },
+ {
+  "sha": "f5ac7a757e8f6f4fe922f3daab0fcaba02f1fa72",
+  "subject": "Support asynchronous host service-tier reads and acceptance (#60075)",
+  "kind": "protocol",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺 host service-tier 的异步读取与接受：Go 无对应 host 钩子与接受路径",
+   "Go 锚点：appserver/（host service tier）",
+   "plan: update/plan_2026_11_08_misc_1.md（#60075），契约 async-host-service-tier-acceptance"
+  ]
+ },
+ {
+  "sha": "c4f0e09912fd4c1173258ccd17e33284a876e826",
+  "subject": "Allow asynchronous model request budget checks (#60080)",
+  "kind": "runtime",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "not_applicable",
+  "evidence": [
+   "Go 无 model request budget 钩子（ModelRequestBudget/BudgetCheck 零命中），异步化无对象",
+   "plan: update/plan_2026_11_08_model_3.md（#60080）"
+  ]
+ },
+ {
+  "sha": "4be90eb069e6e027423c29eedeab5cab9da349dd",
+  "subject": "Fetch account security reminders through app-server (#60082)",
+  "kind": "protocol",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺 account/securitySetup/read：安全提醒取数仍在客户端进程（app/security_setup.go:19-66 自读 auth.json 拼 Bearer、:31/:55 客户端事后比身份），app-server 侧零命中（rg securitySetup appserver/ protocol/ → exit 1），app/remote_tui.go 无该路径",
+   "缺：方法常量与处理器（appserver/protocol.go:200 旁）、带 accountId/userId 的响应（auth/account.go）、runtime auth 解析与 generation 前后比对、3s 超时",
+   "plan: update/plan_2026_11_08_tail5.md §1（#60082），契约 account-security-setup-appserver-fetch"
+  ]
+ },
+ {
+  "sha": "efdacaf46ff54660a239189a6d62434c5db33d2c",
+  "subject": "Stop retrying terminal runtime authentication denials (#60096)",
+  "kind": "security",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺 terminal runtime denial 的分类处理：Go 能解析 x-error-json 的 error.code 但只进 telemetry，recoverUnauthorizedAuth 与 isRetryableResponsesStreamError 都不读它，四个 terminal denial code 零命中",
+   "Go 锚点：model/（responses stream 错误处理）、telemetry/",
+   "plan: update/plan_2026_11_08_runtime_auth_extra.md（#60096），契约 runtime-auth-terminal-denials"
+  ]
+ },
+ {
+  "sha": "cce9d3228b5d649cea400bc6d19514a0342ad998",
+  "subject": "Use runtime authentication for Analytics requests (#60101)",
+  "kind": "security",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺 typed runtime 错误 → Sign in again 的映射：Analytics 已接 runtime auth（Rust #59572），但 isUnauthorizedAnalyticsError 只认 HTTP 401",
+   "Go 锚点：tui/analytics/（错误分类）、cloudclient/",
+   "plan: update/plan_2026_11_08_runtime_auth_extra.md（#60101），契约 analytics-runtime-auth"
+  ]
+ },
+ {
+  "sha": "43b4274f3ff80b91cee6b3407efa499a5e542229",
+  "subject": "Buffer payload JSON reads during rollout trace replay (#60118)",
+  "kind": "persistence",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "not_applicable",
+  "evidence": [
+   "Go 没有 rollout trace bundle / 逐 payload 文件读取路径；recordreplay 的 JSONL 已是 16MB bufio 读",
+   "plan: update/plan_2026_11_08_thread_storage.md（#60118）"
+  ]
+ },
+ {
+  "sha": "57a808a3920f05f2d4b9eab2d0493e1df136ae6b",
+  "subject": "Preserve code mode dispatch errors in rollout traces (#60122)",
+  "kind": "runtime",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "not_applicable",
+  "evidence": [
+   "Go 没有 rollout-trace 的 tool dispatch 记录器（rollout-trace crate 无对应物），缺陷面不存在",
+   "plan: update/plan_2026_11_08_code_mode_b.md（#60122）"
+  ]
+ },
+ {
+  "sha": "57e64682f8ef83c09cc868c39010733dd6760805",
+  "subject": "Persist local workspace side chats and add tab close controls (#60152)",
+  "kind": "persistence",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺本地工作区侧聊持久化与 tab 关闭：Go 的侧聊只在内存映射，无 close_sidebar_tab，侧聊仍不可重命名",
+   "Go 锚点：tui/（side chat）、app/、rollout/（session index）",
+   "plan: update/plan_2026_11_08_cloud_sidebar.md（#60152），契约 side-chat-persistence-and-tab-close"
+  ]
+ },
+ {
+  "sha": "2bc8e7f5459b084afa482c7aac3f56fef36286b3",
+  "subject": "Add support for incremental code mode tool definitions (#60157)",
+  "kind": "protocol",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺增量 code mode 工具定义的结构化 ExecDefinition：Go 的增量只到「每个 top-level definition 一个 hash」，functions.exec 是单个 hash key",
+   "Go 锚点：codemode/、session/（top level tools）",
+   "plan: update/plan_2026_11_08_code_mode_a.md（#60157），契约 code-mode-incremental-exec-definitions"
+  ]
+ },
+ {
+  "sha": "33b3f80a0935e51a49cbbda7d6473ef757d4241b",
+  "subject": "Wire incremental exec tool updates into Code Mode sessions (#60163)",
+  "kind": "runtime",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "incremental_exec_tools 在 Go 是死开关：只有注册与一条注册测试，没有任何消费点",
+   "Go 锚点：appserver/、session/、turn/（tool spec 规划）",
+   "plan: update/plan_2026_11_08_code_mode_a.md（#60163），契约 code-mode-incremental-exec-wiring"
+  ]
+ },
+ {
+  "sha": "202b590e84d01fb4326c50969b8ff4d41e37d2d6",
+  "subject": "Preserve display instructions in answer moderation (#60172)",
+  "kind": "protocol",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺 final-answer 审核的 display instructions 保留（与 #59842 同一族，Go 侧无该元数据下发）",
+   "Go 锚点：protocol/、appserver/",
+   "plan: update/plan_2026_11_08_misc_1.md（#60172），契约 answer-moderation-display-metadata"
+  ]
+ },
+ {
+  "sha": "aa9b9cc94e215eb205901fcbfee6c68037130a4a",
+  "subject": "Test exec catalog preservation across session and compaction changes (#60173)",
+  "kind": "test",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "not_applicable",
+  "evidence": [
+   "纯 Rust 测试（跨 session/压缩验证 exec catalog 保留）；Go 侧无该测试装置，验收要点已转记到 #60157/#60163",
+   "plan: update/plan_2026_11_08_ci_1.md（#60173）"
+  ]
+ },
+ {
+  "sha": "5226f2fb4bcbc4aa3ec1863b6ba0bd2c4ddb0486",
+  "subject": "Add metrics for incremental exec catalog updates (#60177)",
+  "kind": "runtime",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺增量 exec catalog 的两个指标：Go 只有 incremental_updates 与 spec_description_bytes，缺 exec_entry_updates / exec_update_bytes",
+   "Go 锚点：metrics/、session/（top level tools）",
+   "plan: update/plan_2026_11_08_code_mode_a.md（#60177），契约 incremental-exec-catalog-metrics"
+  ]
+ },
+ {
+  "sha": "1455fda735925389b59d43d185e865ff1de49455",
+  "subject": "Attach typed punctuation to completed skill mentions (#60180)",
+  "kind": "runtime",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺完成态技能 mention 的类型化标点拼接（Go 的 mention 解析与 paste 路径不一致）",
+   "Go 锚点：tui/tea/（composer mention 解析）",
+   "plan: update/plan_2026_11_08_misc_3.md（#60180），契约 skill-mention-punctuation-join"
+  ]
+ },
+ {
+  "sha": "8044c6867ce14316876a6c7cec5efa44579f7eb7",
+  "subject": "Add keyboard and mouse navigation for sidebar tabs (#60181)",
+  "kind": "runtime",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺侧栏 tab 的键盘/滚轮导航与溢出箭头：Go 无 sidebar_up/sidebar_down 动作、无 tab 滚轮",
+   "Go 锚点：tui/（side focus、tab strip）、config/（keymap）",
+   "plan: update/plan_2026_11_08_cloud_sidebar.md（#60181），契约 sidebar-tab-keyboard-mouse-navigation"
+  ]
+ },
+ {
+  "sha": "d960b366941bf062adb4d43111e81b64507e8879",
+  "subject": "Allow creating custom providers during sign-in (#60186)",
+  "kind": "runtime",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺登录流程中创建自定义 provider：Go 的 provider 写入向导缺席",
+   "Go 锚点：app/、appserver/、tui/",
+   "plan: update/plan_2026_11_08_model_1.md（#60186），契约 provider-creation-during-signin"
+  ]
+ },
+ {
+  "sha": "c3936b4b8a66b590b1ee4edd2276314899c87e8a",
+  "subject": "Allow model overrides for incremental Code Mode tool messages (#60188)",
+  "kind": "protocol",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "缺增量 Code Mode 工具消息的两个 override 字段（exec_tools_update_hint / exec_tools_removed_definitions_header），Go 的 override 表只有 5 个通用字段",
+   "Go 锚点：session/（model messages override）",
+   "plan: update/plan_2026_11_08_code_mode_a.md（#60188），契约 incremental-exec-message-overrides"
+  ]
+ },
+ {
+  "sha": "c9b4267c370a755da12ec1c8648c2451163212b7",
+  "subject": "Expose agent tree IDs and environment removal (#60190)",
+  "kind": "protocol",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "partial",
+  "evidence": [
+   "environment 移除已对齐（appserver.EnvironmentManager.Remove + TestManagerRemove）；agent tree ID 缺失且语义不同（Go 用 root thread id 填 TreeID，重载不换新）",
+   "Go 锚点：agent/shutdown_report.go:64（TreeID 注释明确是运行时关联 id，不是 thread id）、:116 NewAgentTreeShutdownState(treeID)",
+   "plan: update/plan_2026_11_08_thread_storage.md（#60190），契约 agent-tree-id"
+  ]
+ },
+ {
+  "sha": "748ab55ca7de0b647d9a7a9d9a8e70e00f28666d",
+  "subject": "Increase Bazel core unit test shards from 8 to 16 (#60206)",
+  "kind": "release",
+  "domains": [
+   "codex_go"
+  ],
+  "status": "not_applicable",
+  "evidence": [
+   "Rust CI 的 Bazel core 单测分片数 8→16；Go 无 Bazel 分片概念",
+   "plan: update/plan_2026_11_08_ci_1.md（#60206）"
+  ]
+ }
+]

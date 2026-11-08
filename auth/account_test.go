@@ -372,37 +372,37 @@ func TestGetAccountResponseMarshalRustUnionShape(t *testing.T) {
 		{
 			name: "none requiring openai auth",
 			in:   &GetAccountResponse{RequiresOpenAIAuth: true},
-			want: `{"account":null,"requiresOpenaiAuth":true,"workspaceRouting":null}`,
+			want: `{"account":null,"requiresOpenaiAuth":true,"userId":null,"workspaceRouting":null}`,
 		},
 		{
 			name: "api key",
 			in:   &GetAccountResponse{Account: &Account{Type: AccountAPIKey}, RequiresOpenAIAuth: true},
-			want: `{"account":{"type":"apiKey"},"requiresOpenaiAuth":true,"workspaceRouting":null}`,
+			want: `{"account":{"type":"apiKey"},"requiresOpenaiAuth":true,"userId":null,"workspaceRouting":null}`,
 		},
 		{
 			name: "chatgpt with email",
 			in:   &GetAccountResponse{Account: &Account{Type: AccountChatGPT, Email: &email, PlanType: PlanPro}, RequiresOpenAIAuth: true},
-			want: `{"account":{"type":"chatgpt","email":"user@example.com","planType":"pro","workspaceName":null},"requiresOpenaiAuth":true,"workspaceRouting":null}`,
+			want: `{"account":{"type":"chatgpt","email":"user@example.com","planType":"pro","workspaceName":null},"requiresOpenaiAuth":true,"userId":null,"workspaceRouting":null}`,
 		},
 		{
 			name: "chatgpt without email",
 			in:   &GetAccountResponse{Account: &Account{Type: AccountChatGPT, PlanType: PlanEnterprise}, RequiresOpenAIAuth: true},
-			want: `{"account":{"type":"chatgpt","email":null,"planType":"enterprise","workspaceName":null},"requiresOpenaiAuth":true,"workspaceRouting":null}`,
+			want: `{"account":{"type":"chatgpt","email":null,"planType":"enterprise","workspaceName":null},"requiresOpenaiAuth":true,"userId":null,"workspaceRouting":null}`,
 		},
 		{
 			name: "chatgpt ent26",
 			in:   &GetAccountResponse{Account: &Account{Type: AccountChatGPT, PlanType: PlanEnt26}, RequiresOpenAIAuth: true},
-			want: `{"account":{"type":"chatgpt","email":null,"planType":"ent26","workspaceName":null},"requiresOpenaiAuth":true,"workspaceRouting":null}`,
+			want: `{"account":{"type":"chatgpt","email":null,"planType":"ent26","workspaceName":null},"requiresOpenaiAuth":true,"userId":null,"workspaceRouting":null}`,
 		},
 		{
 			name: "chatgpt missing plan",
 			in:   &GetAccountResponse{Account: &Account{Type: AccountChatGPT, Email: &email}, RequiresOpenAIAuth: true},
-			want: `{"account":{"type":"chatgpt","email":"user@example.com","planType":"unknown","workspaceName":null},"requiresOpenaiAuth":true,"workspaceRouting":null}`,
+			want: `{"account":{"type":"chatgpt","email":"user@example.com","planType":"unknown","workspaceName":null},"requiresOpenaiAuth":true,"userId":null,"workspaceRouting":null}`,
 		},
 		{
 			name: "amazon bedrock",
 			in:   &GetAccountResponse{Account: &Account{Type: AccountAmazonBedrock, UsesCodexManagedCredentials: true}},
-			want: `{"account":{"type":"amazonBedrock","usesCodexManagedCredentials":true},"requiresOpenaiAuth":false,"workspaceRouting":null}`,
+			want: `{"account":{"type":"amazonBedrock","usesCodexManagedCredentials":true},"requiresOpenaiAuth":false,"userId":null,"workspaceRouting":null}`,
 		},
 		{
 			name: "chatgpt with workspace name",
@@ -412,7 +412,7 @@ func TestGetAccountResponseMarshalRustUnionShape(t *testing.T) {
 				PlanType:      PlanBusiness,
 				WorkspaceName: &workspace,
 			}, RequiresOpenAIAuth: true},
-			want: `{"account":{"type":"chatgpt","email":"user@example.com","planType":"business","workspaceName":"Acme"},"requiresOpenaiAuth":true,"workspaceRouting":null}`,
+			want: `{"account":{"type":"chatgpt","email":"user@example.com","planType":"business","workspaceName":"Acme"},"requiresOpenaiAuth":true,"userId":null,"workspaceRouting":null}`,
 		},
 	}
 	for _, tc := range cases {

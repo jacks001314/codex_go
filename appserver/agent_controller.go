@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"codex_go/agent"
 	"codex_go/config"
 	"codex_go/features"
@@ -38,9 +40,13 @@ type runtimeAgentController struct {
 	depth              int
 	maxDepth           int
 	version            agent.MultiAgentVersion
-	environments       []map[string]any
-	disabledPluginIDs  []string
-	registry           *agent.Registry
+	// treeID correlates the whole loaded agent tree. It is generated when the
+	// tree is first seen and shared by its children, and it is deliberately
+	// distinct from any thread id (Rust #60190).
+	treeID            string
+	environments      []map[string]any
+	disabledPluginIDs []string
+	registry          *agent.Registry
 }
 
 func newRuntimeAgentController(router *RuntimeRouter, parentID string, cwd string, maxThreads int) agent.ToolController {
@@ -75,6 +81,7 @@ func newRuntimeAgentControllerForTurn(router *RuntimeRouter, parentID string, pa
 		turnTrigger:        strings.TrimSpace(turnTrigger),
 		cyberAccessProgram: strings.TrimSpace(cyberAccessProgram),
 		rootID:             rootID,
+		treeID:             runtimeAgentTreeIDFor(router, rootID),
 		scopePath:          scopePath,
 		cwd:                strings.TrimSpace(cwd),
 		maxThreads:         maxThreads,
@@ -530,7 +537,10 @@ func (c *runtimeAgentController) resolveSpawnModelOverrides(args *agent.SpawnAge
 	selectedModel := capturedModel
 	var selectedPreset *model.ModelPreset
 	if requestedModel != "" {
-		presets := manager.ListModels(model.RefreshOffline)
+		// Rust #60049: a child reads the catalog its selector already loaded.
+		// Reading offline would let an older on-disk cache replace the parent's
+		// in-memory snapshot, dropping capabilities such as tool_search.
+		presets := manager.ListModels(model.RefreshInMemory)
 		name, err := model.SpawnAgentModelName(presets, requestedModel, string(c.version))
 		if err != nil {
 			return err
@@ -751,7 +761,7 @@ func (c *runtimeAgentController) CloseAgent(ctx context.Context, args *agent.Clo
 	// reachable from the spawn tree (shutdown_agent_tree). Rust #51515: the
 	// teardown records a bounded, payload-free failure report instead of
 	// dropping cleanup errors; the report travels back in the result.
-	state := agent.NewAgentTreeShutdownState(firstNonEmpty(c.rootID, target))
+	state := agent.NewAgentTreeShutdownState(c.agentTreeID())
 	closeIDs := []string{target}
 	if c.router.services.SpawnGraph != nil {
 		openStatus := agent.ThreadSpawnEdgeOpen
@@ -1312,6 +1322,44 @@ func (r *RuntimeRouter) discardAllRuntimeAgentMessages() {
 	r.agentMessages = map[string][]any{}
 	r.agentMessagesMu.Unlock()
 	r.discardAllInheritedExecPolicies()
+}
+
+// agentTreeID is the correlation id of the tree this controller belongs to.
+func (c *runtimeAgentController) agentTreeID() string {
+	if c == nil {
+		return uuid.NewString()
+	}
+	if id := strings.TrimSpace(c.treeID); id != "" {
+		return id
+	}
+	return uuid.NewString()
+}
+
+// runtimeAgentTreeIDFor returns the shared tree id for router+rootID, or a fresh
+// one when there is no router to share it through.
+func runtimeAgentTreeIDFor(router *RuntimeRouter, rootID string) string {
+	if router == nil {
+		return uuid.NewString()
+	}
+	return router.runtimeAgentTreeID(rootID)
+}
+
+// runtimeAgentTreeID returns the tree correlation id for one root, generating it
+// on first use (Rust #60190 generates the tree id when the tree is loaded rather
+// than reusing a thread id, so shutdown reports of two loads never collide).
+func (r *RuntimeRouter) runtimeAgentTreeID(rootID string) string {
+	key := strings.TrimSpace(rootID)
+	r.agentTreeIDMu.Lock()
+	defer r.agentTreeIDMu.Unlock()
+	if r.agentTreeIDs == nil {
+		r.agentTreeIDs = map[string]string{}
+	}
+	if id, ok := r.agentTreeIDs[key]; ok {
+		return id
+	}
+	id := uuid.NewString()
+	r.agentTreeIDs[key] = id
+	return id
 }
 
 func (r *RuntimeRouter) runtimeAgentIdentity(threadID string) (string, string) {

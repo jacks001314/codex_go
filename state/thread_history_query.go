@@ -436,7 +436,7 @@ func (r *StateRuntime) prepareThreadHistoryReadForMode(ctx context.Context, thre
 		if segment.Meta.HistoryBase != nil {
 			initialOrdinal = segment.Meta.HistoryBase.EndOrdinalExclusive
 		}
-		if err := MaterializeThreadHistory(ctx, db, segment.ThreadID, segment.Path, initialOrdinal, segment.Meta.SubagentHistoryStartOrdinal); err != nil {
+		if err := r.MaterializeThreadHistory(ctx, db, segment.ThreadID, segment.Path, initialOrdinal, segment.Meta.SubagentHistoryStartOrdinal); err != nil {
 			return nil, nil, err
 		}
 	}

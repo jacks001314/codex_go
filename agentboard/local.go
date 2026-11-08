@@ -86,11 +86,12 @@ type localBoardPool struct {
 
 // LocalAgentMessageBoard is the SQLite board for one agent tree.
 type LocalAgentMessageBoard struct {
-	identity string
-	poolPath string
-	db       *sql.DB
-	host     Host
-	access   accessMode
+	identity  string
+	namespace string
+	poolPath  string
+	db        *sql.DB
+	host      Host
+	access    accessMode
 }
 
 // storedPost mirrors Rust's StoredPost payload.
@@ -126,7 +127,7 @@ func OpenLocalBoardWithOptions(ctx context.Context, sqlite state.SqliteConfig, o
 	if err != nil {
 		return nil, err
 	}
-	return &LocalAgentMessageBoard{identity: identity, poolPath: path, db: db, host: host}, nil
+	return &LocalAgentMessageBoard{identity: identity, namespace: localBoardStorageNamespace(options), poolPath: path, db: db, host: host}, nil
 }
 
 // Close releases this handle's claim on the shared pool.
@@ -745,12 +746,175 @@ func (b *LocalAgentMessageBoard) SetSubscription(ctx context.Context, caller str
 	}, nil
 }
 
+// SetSubscriptions replaces an agent's channel subscriptions atomically
+// (Rust #59998). The request names the complete membership, so the board first
+// proves every channel exists - a short membership fails the whole call and
+// writes nothing - and then applies only the difference between the stored
+// membership and the requested one in one transaction.
+func (b *LocalAgentMessageBoard) SetSubscriptions(ctx context.Context, caller string, request BulkSubscriptionsRequest) (*BulkSubscriptionsState, error) {
+	callerPath, err := b.host.AgentPath(ctx, caller)
+	if err != nil {
+		return nil, err
+	}
+	targetPath := callerPath
+	if request.TargetAgent != nil {
+		targetPath = *request.TargetAgent
+	}
+	targetAgent, err := b.host.ResolveAgent(ctx, targetPath)
+	if err != nil {
+		return nil, err
+	}
+	if targetAgent != caller {
+		if err := b.access.requireWrite(b.identity, "board.manage_subscriptions"); err != nil {
+			return nil, err
+		}
+	}
+	wanted := make([]string, 0, len(request.Channels))
+	requested := make(map[string]struct{}, len(request.Channels))
+	for _, name := range request.Channels {
+		if err := validateChannelName(name); err != nil {
+			return nil, err
+		}
+		if _, ok := requested[name]; ok {
+			return nil, invalid("bulk subscriptions must not repeat a channel")
+		}
+		requested[name] = struct{}{}
+		wanted = append(wanted, name)
+	}
+	sort.Strings(wanted)
+
+	tx, err := b.beginWrite(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.rollback(ctx)
+
+	// Full validation first: membership.len() != channels.len() means the request
+	// named a channel this board does not have, and the whole call fails.
+	known, err := b.channelMembership(ctx, tx, wanted)
+	if err != nil {
+		return nil, err
+	}
+	if len(known) != len(wanted) {
+		for _, name := range wanted {
+			if _, ok := known[name]; !ok {
+				return nil, invalid(fmt.Sprintf("channel %q is not in this board", name))
+			}
+		}
+	}
+	current, err := b.subscribedChannelNames(ctx, tx, targetAgent)
+	if err != nil {
+		return nil, err
+	}
+	currentSet := make(map[string]struct{}, len(current))
+	for _, name := range current {
+		currentSet[name] = struct{}{}
+	}
+	// Only the difference is written, so a channel that stays subscribed never
+	// loses its row (and its place in the timeline).
+	for _, name := range wanted {
+		if _, ok := currentSet[name]; ok {
+			continue
+		}
+		key, err := subscriptionTargetKey(SubscriptionTarget{Kind: "channel", ChannelName: name})
+		if err != nil {
+			return nil, err
+		}
+		if _, err := tx.conn.ExecContext(ctx, "DELETE FROM subscription_opt_outs WHERE board=? AND target=? AND agent=?", b.identity, key, targetAgent); err != nil {
+			return nil, err
+		}
+		if _, err := tx.conn.ExecContext(ctx, "INSERT OR IGNORE INTO subscriptions(board,target,agent) VALUES(?,?,?)", b.identity, key, targetAgent); err != nil {
+			return nil, err
+		}
+	}
+	for _, name := range current {
+		if _, ok := requested[name]; ok {
+			continue
+		}
+		key, err := subscriptionTargetKey(SubscriptionTarget{Kind: "channel", ChannelName: name})
+		if err != nil {
+			return nil, err
+		}
+		if _, err := tx.conn.ExecContext(ctx, "DELETE FROM subscriptions WHERE board=? AND target=? AND agent=?", b.identity, key, targetAgent); err != nil {
+			return nil, err
+		}
+		// The opt-out keeps the channel from being re-subscribed implicitly.
+		if _, err := tx.conn.ExecContext(ctx, "INSERT OR IGNORE INTO subscription_opt_outs(board,target,agent) VALUES(?,?,?)", b.identity, key, targetAgent); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.commit(ctx); err != nil {
+		return nil, err
+	}
+	return &BulkSubscriptionsState{Channels: wanted, TargetAgent: targetPath}, nil
+}
+
+// channelMembership returns the requested channel names this board actually has.
+func (b *LocalAgentMessageBoard) channelMembership(ctx context.Context, tx *localBoardWrite, names []string) (map[string]struct{}, error) {
+	known := make(map[string]struct{}, len(names))
+	if len(names) == 0 {
+		return known, nil
+	}
+	rows, err := tx.conn.QueryContext(ctx, "SELECT name FROM channels WHERE board=?", b.identity)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	wanted := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		wanted[name] = struct{}{}
+	}
+	for rows.Next() {
+		name := ""
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		if _, ok := wanted[name]; ok {
+			known[name] = struct{}{}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return known, nil
+}
+
+// subscribedChannelNames lists the channel subscriptions one agent holds on this
+// board, in name order. Thread subscriptions are not channel memberships.
+func (b *LocalAgentMessageBoard) subscribedChannelNames(ctx context.Context, tx *localBoardWrite, targetAgent string) ([]string, error) {
+	rows, err := tx.conn.QueryContext(ctx,
+		"SELECT json_extract(target, '$.Channel') FROM subscriptions WHERE board=? AND agent=? AND json_extract(target, '$.Channel') IS NOT NULL ORDER BY 1",
+		b.identity, targetAgent)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	names := []string{}
+	for rows.Next() {
+		name := ""
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		names = append(names, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return names, nil
+}
+
 // ReadPost reads a bounded slice of one post; offsets count Unicode characters.
 func (b *LocalAgentMessageBoard) ReadPost(ctx context.Context, caller string, request ReadPostRequest) (*PostContent, error) {
+	return b.readPostAt(ctx, caller, request, nil)
+}
+
+// readPostAt is ReadPost bounded by a captured view. Membership, not content,
+// is decided by the cutoff: a post appended after the capture is not found.
+func (b *LocalAgentMessageBoard) readPostAt(ctx context.Context, caller string, request ReadPostRequest, scope *boardReadScope) (*PostContent, error) {
 	if _, err := b.host.AgentPath(ctx, caller); err != nil {
 		return nil, err
 	}
-	post, err := b.loadPost(ctx, b.db, request.MessageID)
+	post, err := b.loadPostAt(ctx, b.db, request.MessageID, scope)
 	if err != nil {
 		return nil, err
 	}
@@ -869,6 +1033,13 @@ func (b *LocalAgentMessageBoard) SubscribedChannels(ctx context.Context, caller 
 }
 
 func (b *LocalAgentMessageBoard) ListThreads(ctx context.Context, caller string, query ThreadQuery) (*Page[ThreadSummary], error) {
+	return b.listThreadsAt(ctx, caller, query, nil)
+}
+
+// listThreadsAt is ListThreads bounded by a captured view: roots, reply counts
+// and the latest-reply probe all read at or below the cutoff, and the channel
+// must be part of the frozen catalog (Rust local/queries.rs list_threads).
+func (b *LocalAgentMessageBoard) listThreadsAt(ctx context.Context, caller string, query ThreadQuery, scope *boardReadScope) (*Page[ThreadSummary], error) {
 	if _, err := b.host.AgentPath(ctx, caller); err != nil {
 		return nil, err
 	}
@@ -876,7 +1047,7 @@ func (b *LocalAgentMessageBoard) ListThreads(ctx context.Context, caller string,
 	if err != nil {
 		return nil, err
 	}
-	if !exists {
+	if !exists || !scope.hasChannel(query.ChannelName) {
 		return nil, invalid("channel not found in this board")
 	}
 	offset, limit, err := boardWindow(query.Page)
@@ -886,15 +1057,33 @@ func (b *LocalAgentMessageBoard) ListThreads(ctx context.Context, caller string,
 	order := boardOrder(query.Direction)
 	sortExpression := "p.timestamp"
 	if query.Sort == ThreadSortActivity {
-		sortExpression = "(SELECT MAX(r.timestamp) FROM posts r WHERE r.board=p.board AND r.root=p.id)"
+		if scope == nil {
+			sortExpression = "(SELECT MAX(r.timestamp) FROM posts r WHERE r.board=p.board AND r.root=p.id)"
+		} else {
+			sortExpression = "(SELECT MAX(r.timestamp) FROM visible_by_time r WHERE r.board=p.board AND r.root=p.id)"
+		}
 	}
-	sqlText := "WITH page AS MATERIALIZED (SELECT p.board,p.id,p.payload,p.seq," + sortExpression + " AS sort_timestamp " +
-		"FROM posts p WHERE p.board=? AND p.channel=? AND p.id=p.root ORDER BY sort_timestamp " + order + ",p.seq " + order +
+	// A sequence cutoff makes SQLite scan and sort a whole channel or thread, so
+	// keep the ordered root and activity indexes and let only the reply count use
+	// the plain sequence range (Rust's visible_roots/visible_by_time/visible_posts).
+	cte := "WITH "
+	roots, byTime, forCount := "posts", "posts", "posts"
+	args := []any{}
+	if scope != nil {
+		roots, byTime, forCount = "visible_roots", "visible_by_time", "visible_posts"
+		cte += "visible_roots AS NOT MATERIALIZED (SELECT * FROM posts INDEXED BY posts_roots_created WHERE id=root AND seq<=?), " +
+			"visible_by_time AS NOT MATERIALIZED (SELECT * FROM posts INDEXED BY posts_board_root_timestamp WHERE seq<=?), " +
+			"visible_posts AS NOT MATERIALIZED (SELECT * FROM posts WHERE seq<=?), "
+		args = append(args, scope.cutoff, scope.cutoff, scope.cutoff)
+	}
+	sqlText := cte + "page AS MATERIALIZED (SELECT p.board,p.id,p.payload,p.seq," + sortExpression + " AS sort_timestamp " +
+		"FROM " + roots + " p WHERE p.board=? AND p.channel=? AND p.id=p.root ORDER BY sort_timestamp " + order + ",p.seq " + order +
 		" LIMIT ? OFFSET ?) " +
-		"SELECT p.payload, (SELECT COUNT(*) FROM posts r WHERE r.board=p.board AND r.root=p.id AND r.id<>r.root), " +
-		"(SELECT r.payload FROM posts r WHERE r.board=p.board AND r.root=p.id AND r.id<>r.root ORDER BY r.timestamp DESC,r.seq DESC LIMIT 1) " +
+		"SELECT p.payload, (SELECT COUNT(*) FROM " + forCount + " r WHERE r.board=p.board AND r.root=p.id AND r.id<>r.root), " +
+		"(SELECT r.payload FROM " + byTime + " r WHERE r.board=p.board AND r.root=p.id AND r.id<>r.root ORDER BY r.timestamp DESC,r.seq DESC LIMIT 1) " +
 		"FROM page p ORDER BY p.sort_timestamp " + order + ",p.seq " + order
-	rows, err := b.db.QueryContext(ctx, sqlText, b.identity, query.ChannelName, int64(limit+1), int64(offset))
+	args = append(args, b.identity, query.ChannelName, int64(limit+1), int64(offset))
+	rows, err := b.db.QueryContext(ctx, sqlText, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -957,6 +1146,13 @@ func (b *LocalAgentMessageBoard) ListThreads(ctx context.Context, caller string,
 }
 
 func (b *LocalAgentMessageBoard) SearchPosts(ctx context.Context, caller string, query PostQuery) (*Page[PostPreview], error) {
+	return b.searchPostsAt(ctx, caller, query, nil)
+}
+
+// searchPostsAt is SearchPosts bounded by a captured view's post cutoff. The
+// cutoff also bounds the `after` cursor lookup, so a post appended after the
+// capture cannot restart paging inside the frozen window.
+func (b *LocalAgentMessageBoard) searchPostsAt(ctx context.Context, caller string, query PostQuery, scope *boardReadScope) (*Page[PostPreview], error) {
 	if _, err := b.host.AgentPath(ctx, caller); err != nil {
 		return nil, err
 	}
@@ -968,7 +1164,12 @@ func (b *LocalAgentMessageBoard) SearchPosts(ctx context.Context, caller string,
 	if query.AfterMessageID != nil {
 		var timestamp int64
 		var sequence int64
-		row := b.db.QueryRowContext(ctx, "SELECT timestamp,seq FROM posts WHERE board=? AND id=?", b.identity, *query.AfterMessageID)
+		var row *sql.Row
+		if scope == nil {
+			row = b.db.QueryRowContext(ctx, "SELECT timestamp,seq FROM posts WHERE board=? AND id=?", b.identity, *query.AfterMessageID)
+		} else {
+			row = b.db.QueryRowContext(ctx, "SELECT timestamp,seq FROM posts WHERE seq<=? AND board=? AND id=?", scope.cutoff, b.identity, *query.AfterMessageID)
+		}
 		if err := row.Scan(&timestamp, &sequence); err != nil {
 			if err == sql.ErrNoRows {
 				return nil, invalid("post not found in this board")
@@ -977,8 +1178,18 @@ func (b *LocalAgentMessageBoard) SearchPosts(ctx context.Context, caller string,
 		}
 		after = &[2]int64{timestamp, sequence}
 	}
-	statement := "SELECT payload FROM posts WHERE board=?"
+	// A frozen channel page scans in result order so SQLite keeps the timestamp
+	// index instead of sorting the whole channel for the cutoff.
+	statement := "SELECT payload FROM posts"
+	if scope != nil && query.ChannelName != nil {
+		statement += " INDEXED BY posts_board_channel_timestamp"
+	}
+	statement += " WHERE board=?"
 	args := []any{b.identity}
+	if scope != nil {
+		statement += " AND seq<=?"
+		args = append(args, scope.cutoff)
+	}
 	if query.ChannelName != nil {
 		statement += " AND channel=?"
 		args = append(args, *query.ChannelName)
@@ -1014,10 +1225,16 @@ func (b *LocalAgentMessageBoard) SearchPosts(ctx context.Context, caller string,
 }
 
 func (b *LocalAgentMessageBoard) ReadThread(ctx context.Context, caller string, request ReadThreadRequest) (*ThreadPage, error) {
+	return b.readThreadAt(ctx, caller, request, nil)
+}
+
+// readThreadAt is ReadThread bounded by a captured view: the root lookup and
+// the reply page both read at or below the cutoff.
+func (b *LocalAgentMessageBoard) readThreadAt(ctx context.Context, caller string, request ReadThreadRequest, scope *boardReadScope) (*ThreadPage, error) {
 	if _, err := b.host.AgentPath(ctx, caller); err != nil {
 		return nil, err
 	}
-	root, err := b.loadPost(ctx, b.db, request.ThreadID)
+	root, err := b.loadPostAt(ctx, b.db, request.ThreadID, scope)
 	if err != nil {
 		return nil, err
 	}
@@ -1028,9 +1245,14 @@ func (b *LocalAgentMessageBoard) ReadThread(ctx context.Context, caller string, 
 	if err != nil {
 		return nil, err
 	}
-	rows, err := b.db.QueryContext(ctx,
-		"SELECT payload FROM posts WHERE board=? AND root=? AND id<>root ORDER BY timestamp DESC,seq DESC LIMIT ? OFFSET ?",
-		b.identity, request.ThreadID, int64(limit+1), int64(offset))
+	repliesSQL := "SELECT payload FROM posts WHERE board=? AND root=? AND id<>root ORDER BY timestamp DESC,seq DESC LIMIT ? OFFSET ?"
+	repliesArgs := []any{b.identity, request.ThreadID, int64(limit + 1), int64(offset)}
+	if scope != nil {
+		repliesSQL = "SELECT payload FROM posts INDEXED BY posts_board_root_timestamp " +
+			"WHERE seq<=? AND board=? AND root=? AND id<>root ORDER BY timestamp DESC,seq DESC LIMIT ? OFFSET ?"
+		repliesArgs = []any{scope.cutoff, b.identity, request.ThreadID, int64(limit + 1), int64(offset)}
+	}
+	rows, err := b.db.QueryContext(ctx, repliesSQL, repliesArgs...)
 	if err != nil {
 		return nil, err
 	}
@@ -1166,8 +1388,18 @@ func (b *LocalAgentMessageBoard) subscribedRecipients(ctx context.Context, tx *l
 }
 
 func (b *LocalAgentMessageBoard) loadPost(ctx context.Context, querier queryRower, id string) (storedPost, error) {
+	return b.loadPostAt(ctx, querier, id, nil)
+}
+
+// loadPostAt is loadPost bounded by a captured view's post cutoff.
+func (b *LocalAgentMessageBoard) loadPostAt(ctx context.Context, querier queryRower, id string, scope *boardReadScope) (storedPost, error) {
 	var payload string
-	err := querier.QueryRowContext(ctx, "SELECT payload FROM posts WHERE board=? AND id=?", b.identity, id).Scan(&payload)
+	var err error
+	if scope == nil {
+		err = querier.QueryRowContext(ctx, "SELECT payload FROM posts WHERE board=? AND id=?", b.identity, id).Scan(&payload)
+	} else {
+		err = querier.QueryRowContext(ctx, "SELECT payload FROM posts WHERE seq<=? AND board=? AND id=?", scope.cutoff, b.identity, id).Scan(&payload)
+	}
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return storedPost{}, invalid("post not found in this board")

@@ -13,6 +13,7 @@ import (
 	"github.com/coder/websocket"
 
 	"codex_go/network"
+	"codex_go/runtimeauth"
 )
 
 const realtimeContextAppendMaxBytes = 500
@@ -40,6 +41,21 @@ func dialRealtimeTransport(ctx context.Context, threadID string, backend *Transp
 	headers := backend.Headers.Clone()
 	if headers == nil {
 		headers = make(http.Header)
+	}
+	// Rust #60003/#60055: resolve the runtime credential on every handshake,
+	// including sideband retries and reconnects, and replace the actor credential
+	// headers instead of extending them.
+	if backend.RuntimeAuthHeaders != nil {
+		resolved, resolveErr := backend.RuntimeAuthHeaders(ctx, endpoint)
+		if resolveErr != nil {
+			return nil, fmt.Errorf("resolve realtime runtime auth: %w", resolveErr)
+		}
+		// A nil result means the destination keeps its own credential (a
+		// non-OpenAI backend), so the static snapshot must survive unchanged
+		// (Rust with_auth only overrides the destinations runtime auth owns).
+		if resolved != nil {
+			runtimeauth.ReplaceAuthHeaders(headers, resolved)
+		}
 	}
 	applyRealtimeSessionHeaders(headers, config)
 	switch config.Version {

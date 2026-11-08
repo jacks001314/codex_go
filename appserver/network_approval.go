@@ -62,9 +62,19 @@ type networkApprovalService struct {
 	promptQueues map[networkApprovalKey]*networkApprovalPromptQueue
 	allowed      map[networkApprovalKey]struct{}
 	denied       map[networkApprovalKey]struct{}
+	// deniedHosts/allowedHosts carry host-scoped decisions published by a
+	// network policy amendment. The queued rule is host-level (Rust
+	// `proxy.add_denied_domain`), so it has to answer for every protocol and
+	// port of that host, not just the request that triggered the amendment.
+	deniedHosts  map[string]struct{}
+	allowedHosts map[string]struct{}
 	saved        map[string][]networkRuleSavedFragment
-	callsMu      sync.Mutex
-	calls        map[string]*activeNetworkApprovalCall
+	// persistMu serializes runtime policy updates with the policy commit, so a
+	// later amendment cannot publish before an earlier one is durable
+	// (Rust #59917 apply_network_rule_and_persist update_lock).
+	persistMu sync.Mutex
+	callsMu   sync.Mutex
+	calls     map[string]*activeNetworkApprovalCall
 	// executions keeps the originating execution snapshot and cancellation
 	// token for processes that outlive their launching tool call (Rust #44575).
 	executions map[string]*activeNetworkApprovalCall
@@ -156,7 +166,102 @@ func (s *networkApprovalService) persistNetworkPolicyAmendment(amendment *Networ
 	if s == nil || s.persistAmendment == nil {
 		return errors.New("network policy persistence is unavailable")
 	}
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
 	return s.persistAmendment(amendment, protocol)
+}
+
+// applyCommandNetworkPolicyAmendment applies an amendment chosen on a shell
+// command approval. Rust Session::resolve_exec_approval shares the same policy
+// path as the network approval, so the command side must persist the rule and
+// publish it instead of only answering the one command.
+func (s *networkApprovalService) applyCommandNetworkPolicyAmendment(threadID string, host string, action NetworkPolicyRuleAction) error {
+	if s == nil {
+		return errors.New("network policy persistence is unavailable")
+	}
+	host = network.NormalizeProxyHost(host)
+	key := networkApprovalKey{
+		threadID:      strings.TrimSpace(threadID),
+		environmentID: "local",
+		host:          host,
+	}
+	if action == NetworkPolicyRuleDeny {
+		// The denial is effective even when the write fails (Rust #59917).
+		s.publishNetworkDenial(key)
+	}
+	if err := s.persistNetworkPolicyAmendment(
+		&NetworkPolicyAmendment{Host: host, Action: action},
+		NetworkApprovalHTTPS,
+	); err != nil {
+		return err
+	}
+	if action == NetworkPolicyRuleAllow {
+		s.publishNetworkGrant(key)
+	}
+	return nil
+}
+
+// publishNetworkDenial records a denial in memory. Rust #59917 stores the deny
+// before the policy write, so a failed write still blocks the host instead of
+// re-prompting or falling back to an older grant.
+func (s *networkApprovalService) publishNetworkDenial(key networkApprovalKey) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.denied == nil {
+		s.denied = map[networkApprovalKey]struct{}{}
+	}
+	s.denied[key] = struct{}{}
+	if s.deniedHosts == nil {
+		s.deniedHosts = map[string]struct{}{}
+	}
+	s.deniedHosts[networkApprovalHostKey(key.threadID, key.host)] = struct{}{}
+	delete(s.allowedHosts, networkApprovalHostKey(key.threadID, key.host))
+	s.mu.Unlock()
+}
+
+// publishNetworkGrant records an approved allowance. Rust #59917 publishes the
+// grant only after the policy write succeeds.
+func (s *networkApprovalService) publishNetworkGrant(key networkApprovalKey) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.allowed == nil {
+		s.allowed = map[networkApprovalKey]struct{}{}
+	}
+	s.allowed[key] = struct{}{}
+	if s.allowedHosts == nil {
+		s.allowedHosts = map[string]struct{}{}
+	}
+	s.allowedHosts[networkApprovalHostKey(key.threadID, key.host)] = struct{}{}
+	delete(s.deniedHosts, networkApprovalHostKey(key.threadID, key.host))
+	s.mu.Unlock()
+}
+
+// networkApprovalHostKey scopes a host-scoped policy decision to its thread,
+// matching how the per-request keys are scoped.
+func networkApprovalHostKey(threadID string, host string) string {
+	return threadID + "\x00" + host
+}
+
+// hostPolicyDecision reports a host-scoped decision published by a policy
+// amendment. Denials win over grants, like Rust's proxy denylist.
+func (s *networkApprovalService) hostPolicyDecision(threadID string, host string) (allow bool, denied bool) {
+	if s == nil {
+		return false, false
+	}
+	hostKey := networkApprovalHostKey(threadID, host)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.deniedHosts[hostKey]; ok {
+		return false, true
+	}
+	if _, ok := s.allowedHosts[hostKey]; ok {
+		return true, false
+	}
+	return false, false
 }
 
 func (s *networkApprovalService) Decide(ctx context.Context, request network.ProxyPolicyRequest) network.ProxyDecision {
@@ -214,12 +319,21 @@ func (s *networkApprovalService) decide(ctx context.Context, threadID string, re
 	}
 
 	s.mu.Lock()
+	if _, ok := s.deniedHosts[networkApprovalHostKey(key.threadID, key.host)]; ok {
+		s.mu.Unlock()
+		s.recordUserDenialForThread(active.threadID)
+		return network.DenyProxyDecision(network.ProxyReasonNotAllowed)
+	}
 	if _, ok := s.denied[key]; ok {
 		s.mu.Unlock()
 		s.recordUserDenialForThread(active.threadID)
 		return network.DenyProxyDecision(network.ProxyReasonNotAllowed)
 	}
 	if _, ok := s.allowed[key]; ok {
+		s.mu.Unlock()
+		return network.AllowProxyDecision()
+	}
+	if _, ok := s.allowedHosts[networkApprovalHostKey(key.threadID, key.host)]; ok {
 		s.mu.Unlock()
 		return network.AllowProxyDecision()
 	}
@@ -521,6 +635,9 @@ func (s *networkApprovalService) requestApproval(ctx context.Context, active *ne
 			// Rust #42746: record the explicit denial before waiting on the
 			// policy commit so process cleanup cannot replace the call outcome.
 			s.recordUserDenialForThread(active.threadID)
+			// Rust #59917: publish the denial before the write, so a failed
+			// commit still blocks this host for later requests.
+			s.publishNetworkDenial(key)
 		}
 		if err := s.persistNetworkPolicyAmendment(amendment, protocol); err != nil {
 			slog.Warn("Failed to apply network policy amendment", "error", err)
@@ -530,6 +647,10 @@ func (s *networkApprovalService) requestApproval(ctx context.Context, active *ne
 			return network.DenyProxyDecision(network.ProxyReasonNotAllowed), ""
 		}
 		s.rememberNetworkRuleSaved(active.threadID, active.turnID, amendment)
+		if amendment.Action == NetworkPolicyRuleAllow {
+			// Rust #59917: the grant becomes effective only after the write.
+			s.publishNetworkGrant(key)
+		}
 		s.router.emitToolDecisionRecords(ctx, active.threadID, decisionToolName, decisionCallID,
 			networkApprovalUserDecision(response.Decision, true, amendment.Action == NetworkPolicyRuleAllow), "")
 		if amendment.Action == NetworkPolicyRuleAllow {

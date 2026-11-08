@@ -45,12 +45,18 @@ func TestRunMainFailsClosedAfterValidatingNativeRequestLikeRust(t *testing.T) {
 		t.Setenv(key, value)
 	}
 
+	// Force the unavailable branch so the assertion holds on hosts where PSEC
+	// exists: the launcher must refuse instead of running unsandboxed.
+	previous := nativeLaunchSupport
+	nativeLaunchSupport = func() NativeSupport { return NativeSupport{Reason: "probe disabled for test"} }
+	defer func() { nativeLaunchSupport = previous }()
+
 	var stdout, stderr bytes.Buffer
 	if code := RunMain(strings.NewReader(""), &stdout, &stderr); code != 1 {
 		t.Fatalf("RunMain() = %d, want 1", code)
 	}
 	// The request decodes and builds; only the native launch is unavailable.
-	want := LauncherFailurePrefix + NativeUnavailableMessage + "\n"
+	want := LauncherFailurePrefix + NativeUnavailableMessage + ": probe disabled for test\n"
 	if got := stderr.String(); got != want {
 		t.Fatalf("stderr = %q, want %q", got, want)
 	}

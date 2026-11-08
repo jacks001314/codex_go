@@ -675,7 +675,9 @@ func (c *execAgentController) resolveSpawnModelOverrides(args *agent.SpawnAgentA
 	}
 	selectedModel := requestedModel
 	var selectedPreset *model.ModelPreset
-	availableModels := s.modelsManager.ListModels(model.RefreshOffline)
+	// Rust #60049: read the catalog the parent already loaded instead of letting
+	// an older on-disk cache replace it.
+	availableModels := s.modelsManager.ListModels(model.RefreshInMemory)
 	if requestedModel != "" {
 		targetVersion := string(knownExecMultiAgentVersion(s.multiAgentVersion))
 		if targetVersion == "" {

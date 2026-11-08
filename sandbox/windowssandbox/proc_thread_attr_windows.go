@@ -18,6 +18,11 @@ const (
 	processCreationDesktopAppBreakawayOverride           = 4
 )
 
+// procThreadAttributeJobList carries one job handle so the child joins that job
+// during creation (winbase.h PROC_THREAD_ATTRIBUTE_JOB_LIST). x/sys/windows
+// exposes the pseudoconsole and handle-list attributes but not this one.
+const procThreadAttributeJobList = 0x0002000D
+
 func NewProcThreadAttributeList() (*ProcThreadAttributeList, error) {
 	return NewProcThreadAttributeListWithCount(1)
 }
@@ -52,14 +57,50 @@ func (l *ProcThreadAttributeList) SetPseudoconsole(handle uintptr) error {
 	if l == nil || l.impl == nil || handle == 0 {
 		return ErrInvalidRequest
 	}
-	value := windows.Handle(handle)
+	// PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE carries the HPCON value itself, not a
+	// pointer to it. Both Rust ports spell the attribute that way
+	// (codex-rs/windows-sandbox-rs/src/proc_thread_attr.rs `set_pseudoconsole`:
+	// `hpc as *mut c_void`, and codex-rs/utils/pty/src/win/procthreadattr.rs
+	// `set_pty`), and the Microsoft ConPTY sample passes hPC directly.
+	// Passing &hPC instead leaves the console unattached: CreateProcess still
+	// succeeds and the child runs, but nothing ever reaches the pseudoconsole's
+	// output pipe. The three-state matrix in
+	// sandbox/windowssandbox/conpty/conpty_raw_probe_windows_test.go records
+	// the difference (plan §17).
 	err := l.container().Update(
 		windows.PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
-		unsafe.Pointer(&value),
-		unsafe.Sizeof(value),
+		handleBitsAsPointer(handle),
+		unsafe.Sizeof(handle),
 	)
-	runtime.KeepAlive(value)
+	runtime.KeepAlive(l)
 	return err
+}
+
+// SetJob attaches the child to a job object atomically at creation, mirroring
+// Rust's `ProcThreadAttributeList::set_job`
+// (codex-rs/utils/pty/src/win/procthreadattr.rs). The ConPTY launcher needs it:
+// the job must contain the console child from its first instruction, because a
+// window between CreateProcess and AssignProcessToJobObject would let the child
+// start its own tree outside the kill-on-close job.
+func (l *ProcThreadAttributeList) SetJob(handle uintptr) error {
+	if l == nil || l.impl == nil || handle == 0 {
+		return ErrInvalidRequest
+	}
+	l.jobList = append(l.jobList[:0], handle)
+	err := l.container().Update(
+		procThreadAttributeJobList,
+		unsafe.Pointer(&l.jobList[0]),
+		uintptr(len(l.jobList))*unsafe.Sizeof(l.jobList[0]),
+	)
+	runtime.KeepAlive(l)
+	return err
+}
+
+// handleBitsAsPointer reinterprets a Windows handle or HPCON value as the
+// opaque pointer Win32 expects for the pseudoconsole attribute, without a
+// uintptr-to-unsafe.Pointer conversion that go vet's unsafeptr check rejects.
+func handleBitsAsPointer(handle uintptr) unsafe.Pointer {
+	return *(*unsafe.Pointer)(unsafe.Pointer(&handle))
 }
 
 // PreserveDesktopAppContext ports Rust's
@@ -95,6 +136,7 @@ func (l *ProcThreadAttributeList) Close() {
 	l.container().Delete()
 	l.impl = nil
 	l.handleList = nil
+	l.jobList = nil
 }
 
 func (l *ProcThreadAttributeList) container() *windows.ProcThreadAttributeListContainer {

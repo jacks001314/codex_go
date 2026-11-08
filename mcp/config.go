@@ -379,6 +379,10 @@ type RuntimeConfig struct {
 	Auth                 *RuntimeAuth
 	Requirements         *managedconfig.ConfigRequirements
 	ProtocolMode         MCPProtocolMode
+	// LazyStdioStartup mirrors Rust's `mcp_lazy_stdio_startup` feature (#60039):
+	// a regular chat may satisfy startup for an eligible stdio server from a warm
+	// tool catalog and connect on first use.
+	LazyStdioStartup bool
 	// DiscoverLocalStdio mirrors Rust McpConfig::discover_local_stdio (feature
 	// mcp_connection_sharing, disabled by default): eligible local stdio servers
 	// are probed with `server/discover` before the legacy handshake (#57210).
@@ -518,6 +522,7 @@ func runtimeConfigFromValues(values map[string]any, codexHome string, runtimeAut
 		Requirements:              managedconfig.CloneConfigRequirements(requirements),
 		ProtocolMode:              mcpProtocolModeFromValues(values),
 		DiscoverLocalStdio:        mcpFeatureEnabled(values, "mcp_connection_sharing"),
+		LazyStdioStartup:          mcpFeatureEnabled(values, "mcp_lazy_stdio_startup"),
 		HostOwnedAppsProtocolMode: hostOwnedAppsProtocolModeFromValues(values),
 		// Rust #54656 reads the notification refresh from the same feature set
 		// as the MCP protocol modes.

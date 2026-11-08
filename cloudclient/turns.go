@@ -3,6 +3,8 @@ package cloudclient
 import (
 	"context"
 	"errors"
+	"strings"
+	"unicode/utf8"
 
 	"google.golang.org/protobuf/encoding/protowire"
 )
@@ -12,6 +14,10 @@ const (
 	threadServiceInterruptTurnMethod  = "/oaiproto.codex_app_server_backend.ThreadService/InterruptTurn"
 )
 
+// maxImageMessageBytes mirrors Rust's MAX_IMAGE_MESSAGE_BYTES: CCA forwards the
+// envelope through a 4 MiB boundary and reserves 256 KiB for forwarding.
+const maxImageMessageBytes = 4*1024*1024 - 256*1024
+
 type SubmissionMode int
 
 const (
@@ -20,12 +26,82 @@ const (
 	SubmissionStartIfIdle
 )
 
-// AddUserMessageRequest is plain text using the thread's existing configuration.
-// Persist the message ID before calling and never reuse it for another submission.
+// UserMessageInputKind selects one ordered part of a user message.
+type UserMessageInputKind int
+
+const (
+	// UserMessageText is a text part with optional placeholder elements.
+	UserMessageText UserMessageInputKind = iota + 1
+	// UserMessageImage is an inline data URL or an uploaded file reference.
+	UserMessageImage
+)
+
+// ImageDetail is the server-side rendering detail of one image part. The wire
+// values are Rust's ImageDetail discriminants.
+type ImageDetail int
+
+const (
+	ImageDetailAuto ImageDetail = iota + 1
+	ImageDetailLow
+	ImageDetailHigh
+	ImageDetailOriginal
+)
+
+// String renders the detail the way the app-server thread item payload spells it.
+func (d ImageDetail) String() string {
+	switch d {
+	case ImageDetailLow:
+		return "low"
+	case ImageDetailHigh:
+		return "high"
+	case ImageDetailOriginal:
+		return "original"
+	default:
+		return "auto"
+	}
+}
+
+// ImageReference is one image source. FileID takes precedence when both fields
+// are set: an uploaded file reference carries no URL (Rust ImageReference).
+// HTTP image URLs are not supported by the native cloud API.
+type ImageReference struct {
+	URL    string
+	FileID string
+}
+
+func (r ImageReference) value() string {
+	if r.FileID != "" {
+		return r.FileID
+	}
+	return r.URL
+}
+
+// UserMessageTextElement is a placeholder span measured in UTF-8 bytes of the
+// text part it belongs to (Rust UserMessageTextElement).
+type UserMessageTextElement struct {
+	Start       int
+	End         int
+	Placeholder *string
+}
+
+// UserMessageInput is one ordered part of one logical user message. Rust's
+// AddUserMessageRequest carries the same `Vec<UserMessageInput>`.
+type UserMessageInput struct {
+	Kind         UserMessageInputKind
+	Text         string
+	TextElements []UserMessageTextElement
+	Image        ImageReference
+	Detail       *ImageDetail
+}
+
+// AddUserMessageRequest sends text and image parts using the thread's existing
+// configuration. Persist the message ID before calling and never reuse it for
+// another submission.
 type AddUserMessageRequest struct {
 	ThreadID            string
 	ClientUserMessageID string
-	Text                string
+	// Input is the ordered content of one logical user message.
+	Input []UserMessageInput
 	// TurnTrigger is the caller-supplied classification for this turn.
 	TurnTrigger  *string
 	Mode         SubmissionMode
@@ -96,10 +172,13 @@ func (c *Client) AddUserMessage(ctx context.Context, request AddUserMessageReque
 	if c == nil || c.conn == nil {
 		return nil, &MutationError{Kind: MutationOutcomeUnknown, Err: ErrClientBuild}
 	}
-	if request.ThreadID == "" || request.ClientUserMessageID == "" || request.Text == "" {
+	if !validAddUserMessageRequest(request) {
 		return nil, &MutationError{Kind: MutationInvalidRequest}
 	}
 	encoded := encodeAddUserMessageRequest(request)
+	if hasImageInput(request.Input) && len(encoded) > maxImageMessageBytes {
+		return nil, &MutationError{Kind: MutationInvalidRequest}
+	}
 	if len(encoded) > maxMessageBytes {
 		return nil, &MutationError{Kind: MutationInvalidRequest}
 	}
@@ -141,13 +220,121 @@ func (c *Client) InterruptTurn(ctx context.Context, request InterruptTurnRequest
 	return nil
 }
 
+// validAddUserMessageRequest mirrors Rust's add_user_message preflight: at
+// least one non-blank text part or one image, valid placeholder ranges, and an
+// inline image that really is a data: URL or a non-blank file ID.
+func validAddUserMessageRequest(request AddUserMessageRequest) bool {
+	if strings.TrimSpace(request.ThreadID) == "" || strings.TrimSpace(request.ClientUserMessageID) == "" {
+		return false
+	}
+	hasContent := false
+	for _, input := range request.Input {
+		switch input.Kind {
+		case UserMessageText:
+			if strings.TrimSpace(input.Text) != "" {
+				hasContent = true
+			}
+			for _, element := range input.TextElements {
+				if element.Start < 0 || element.End < element.Start || element.End > len(input.Text) ||
+					!utf8.ValidString(input.Text[element.Start:element.End]) {
+					return false
+				}
+			}
+		case UserMessageImage:
+			hasContent = true
+			if input.Image.FileID != "" {
+				if strings.TrimSpace(input.Image.FileID) == "" {
+					return false
+				}
+				continue
+			}
+			if !validInlineImageURL(input.Image.URL) {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return hasContent
+}
+
+// validInlineImageURL accepts only a data: URL with a non-blank payload.
+func validInlineImageURL(value string) bool {
+	prefix, payload, ok := strings.Cut(value, ",")
+	if !ok || len(prefix) < len("data:") || !strings.EqualFold(prefix[:len("data:")], "data:") {
+		return false
+	}
+	return strings.TrimSpace(payload) != ""
+}
+
+func hasImageInput(inputs []UserMessageInput) bool {
+	for _, input := range inputs {
+		if input.Kind == UserMessageImage {
+			return true
+		}
+	}
+	return false
+}
+
+// encodeUserInputs renders the ordered parts shared by the AddRequest input and
+// a user-message item's content: one `Input`-shaped body, i.e. one field-1 entry
+// per part, each holding one `UserInput` (Rust turns_wire::UserInput, tags 1..7;
+// this client emits the text and image alternatives).
+func encodeUserInputs(inputs []UserMessageInput) []byte {
+	var out []byte
+	for _, input := range inputs {
+		if input.Kind == UserMessageImage {
+			var reference []byte
+			if input.Detail != nil {
+				reference = appendProtoVarint(reference, 1, int64(*input.Detail))
+			}
+			reference = appendProtoString(reference, 2, input.Image.value())
+			source := int64(1)
+			if input.Image.FileID != "" {
+				source = 2
+			}
+			image := appendProtoBytes(nil, source, reference)
+			part := appendProtoBytes(nil, 2, image)
+			out = appendProtoBytes(out, 1, part)
+			continue
+		}
+		text := appendProtoString(nil, 1, input.Text)
+		if len(input.TextElements) > 0 {
+			var elements []byte
+			for _, element := range input.TextElements {
+				var byteRange []byte
+				byteRange = appendProtoVarint(byteRange, 1, int64(element.End))
+				byteRange = appendProtoVarint(byteRange, 2, int64(element.Start))
+				entry := appendProtoBytes(nil, 1, byteRange)
+				if element.Placeholder != nil {
+					entry = appendProtoString(entry, 2, *element.Placeholder)
+				}
+				elements = appendProtoBytes(elements, 1, entry)
+			}
+			text = appendProtoBytes(text, 2, elements)
+		}
+		out = appendProtoBytes(out, 1, appendProtoBytes(nil, 1, text))
+	}
+	return out
+}
+
+func appendProtoVarint(dst []byte, tag int64, value int64) []byte {
+	dst = protowire.AppendTag(dst, protowire.Number(tag), protowire.VarintType)
+	return protowire.AppendVarint(dst, uint64(value))
+}
+
+func appendProtoBytes(dst []byte, tag int64, value []byte) []byte {
+	dst = protowire.AppendTag(dst, protowire.Number(tag), protowire.BytesType)
+	return protowire.AppendBytes(dst, value)
+}
+
+func appendProtoString(dst []byte, tag int64, value string) []byte {
+	dst = protowire.AppendTag(dst, protowire.Number(tag), protowire.BytesType)
+	return protowire.AppendString(dst, value)
+}
+
 func encodeAddUserMessageRequest(request AddUserMessageRequest) []byte {
-	text := protowire.AppendTag(nil, 1, protowire.BytesType)
-	text = protowire.AppendString(text, request.Text)
-	userInput := protowire.AppendTag(nil, 1, protowire.BytesType)
-	userInput = protowire.AppendBytes(userInput, text)
-	input := protowire.AppendTag(nil, 1, protowire.BytesType)
-	input = protowire.AppendBytes(input, userInput)
+	input := encodeUserInputs(request.Input)
 
 	out := protowire.AppendTag(nil, 4, protowire.BytesType)
 	out = protowire.AppendString(out, request.ClientUserMessageID)

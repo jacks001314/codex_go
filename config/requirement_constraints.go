@@ -70,6 +70,11 @@ func applyManagedConstrainedOverrides(values map[string]any, requirements *Confi
 	if err := ValidateManagedWindowsMXCOptOut(values, requirements); err != nil {
 		return err
 	}
+	// Rust #60014: a configured runtime auth mode that the managed requirement
+	// forbids fails the load with the same text as the startup warning.
+	if err := ValidateRuntimeAuthModeRequirement(values, requirements); err != nil {
+		return err
+	}
 	return nil
 }
 

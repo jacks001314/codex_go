@@ -1,9 +1,20 @@
 package context
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
+	"image"
 	"strings"
 	"sync"
+
+	// Inline image dimensions are read through image.DecodeConfig, which only
+	// parses the header; the decoders below mirror the formats the rest of the
+	// host accepts (session/, exec/, tool/view_image.go).
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 
 	"codex_go/eventmap"
 )
@@ -593,13 +604,162 @@ func EstimateItemTokens(item *HistoryItem) int64 {
 	for _, content := range item.Content {
 		if content.Kind == eventmap.ContentInputImage {
 			bytes -= int64(len(content.ImageURL))
-			bytes += 7373
+			bytes += EstimateImageReferenceBytes(content.ImageURL, content.FileID, content.Detail)
 		}
 	}
 	if bytes < 0 {
 		bytes = 0
 	}
 	return ApproxTokensFromBytes(bytes)
+}
+
+// resizedImageBytesEstimate mirrors Rust RESIZED_IMAGE_BYTES_ESTIMATE
+// (context_manager/history.rs:1313): the fixed charge for an inline image
+// unless the request asks for `original` detail.
+const resizedImageBytesEstimate = 7373
+
+// originalImagePatchSize mirrors Rust ORIGINAL_IMAGE_PATCH_SIZE: `original`
+// detail images are charged one token per 32x32 patch.
+const originalImagePatchSize = 32
+
+// originalImageMaxPatches mirrors Rust ORIGINAL_IMAGE_MAX_PATCHES.
+const originalImageMaxPatches = 10_000
+
+// originalImageEstimateCacheSize mirrors Rust ORIGINAL_IMAGE_ESTIMATE_CACHE_SIZE.
+// The dimension estimate is a pure function of the data URL, so a small bounded
+// cache keeps repeated history accounting from decoding the same payload again.
+const originalImageEstimateCacheSize = 32
+
+// approxImageBytesPerToken mirrors Rust approx_bytes_for_tokens: one estimated
+// token is charged four bytes.
+const approxImageBytesPerToken = 4
+
+// imageDetailOriginal reports whether one image reference asked for `original`
+// detail (Rust ImageDetail::Original). Any other value, including empty,
+// keeps the resized-image estimate.
+func imageDetailOriginal(detail string) bool {
+	return strings.EqualFold(strings.TrimSpace(detail), "original")
+}
+
+// EstimateImageReferenceBytes mirrors Rust estimate_image_reference_bytes
+// (#54776): an inline `original` image is charged from its measured dimensions,
+// a file-backed reference cannot expose dimensions and reserves the maximum
+// patch count, and every other reference keeps the fixed resized estimate.
+func EstimateImageReferenceBytes(imageURL string, fileID string, detail string) int64 {
+	if strings.TrimSpace(fileID) == "" {
+		return EstimateInlineImageBytes(imageURL, detail)
+	}
+	if imageDetailOriginal(detail) {
+		return originalImageMaxPatches * approxImageBytesPerToken
+	}
+	return resizedImageBytesEstimate
+}
+
+// EstimateInlineImageBytes mirrors Rust estimate_image_bytes: only an
+// `original` detail data URL is measured, and anything the estimator cannot read
+// (non-base64 URL, undecodable payload, unknown format) falls back to the fixed
+// resized-image estimate, exactly like Rust's unwrap_or(RESIZED_IMAGE_BYTES_ESTIMATE).
+func EstimateInlineImageBytes(imageURL string, detail string) int64 {
+	if !imageDetailOriginal(detail) {
+		return resizedImageBytesEstimate
+	}
+	if bytes, ok := estimateOriginalImageBytes(imageURL); ok {
+		return bytes
+	}
+	return resizedImageBytesEstimate
+}
+
+// imageEstimate is one cached estimator result; ok=false records a payload the
+// estimator refused so repeated accounting stays cheap.
+type imageEstimate struct {
+	bytes int64
+	ok    bool
+}
+
+var originalImageEstimates = struct {
+	mu      sync.Mutex
+	order   [][sha256.Size]byte
+	entries map[[sha256.Size]byte]imageEstimate
+}{entries: map[[sha256.Size]byte]imageEstimate{}}
+
+// estimateOriginalImageBytes mirrors Rust estimate_original_image_bytes: decode
+// the inline payload, read only its dimensions, and charge one token per 32x32
+// patch capped at ORIGINAL_IMAGE_MAX_PATCHES.
+func estimateOriginalImageBytes(imageURL string) (int64, bool) {
+	key := sha256.Sum256([]byte(imageURL))
+	originalImageEstimates.mu.Lock()
+	cached, hit := originalImageEstimates.entries[key]
+	originalImageEstimates.mu.Unlock()
+	if hit {
+		return cached.bytes, cached.ok
+	}
+	estimate := imageEstimate{}
+	if payload, ok := parseBase64ImageDataURL(imageURL); ok {
+		if raw, err := base64.StdEncoding.DecodeString(payload); err == nil {
+			if config, _, err := image.DecodeConfig(bytes.NewReader(raw)); err == nil &&
+				config.Width > 0 && config.Height > 0 {
+				estimate = imageEstimate{bytes: originalImagePatchBytes(int64(config.Width), int64(config.Height)), ok: true}
+			}
+		}
+	}
+	originalImageEstimates.mu.Lock()
+	if _, exists := originalImageEstimates.entries[key]; !exists {
+		for len(originalImageEstimates.order) >= originalImageEstimateCacheSize {
+			oldest := originalImageEstimates.order[0]
+			originalImageEstimates.order = originalImageEstimates.order[1:]
+			delete(originalImageEstimates.entries, oldest)
+		}
+		originalImageEstimates.order = append(originalImageEstimates.order, key)
+		originalImageEstimates.entries[key] = estimate
+	}
+	originalImageEstimates.mu.Unlock()
+	return estimate.bytes, estimate.ok
+}
+
+// originalImagePatchBytes turns measured dimensions into the charged bytes:
+// ceil(width/32) * ceil(height/32) patches, capped, at four bytes per patch.
+func originalImagePatchBytes(width int64, height int64) int64 {
+	patch := int64(originalImagePatchSize)
+	wide := (width + patch - 1) / patch
+	high := (height + patch - 1) / patch
+	patches := wide * high
+	if patches <= 0 {
+		return 0
+	}
+	if patches > originalImageMaxPatches {
+		patches = originalImageMaxPatches
+	}
+	return patches * approxImageBytesPerToken
+}
+
+// parseBase64ImageDataURL mirrors Rust parse_base64_image_data_url: only an
+// `image/*;base64,` data URL can be measured, and the media type is parsed
+// without decoding so the estimator stays cheap.
+func parseBase64ImageDataURL(url string) (string, bool) {
+	if len(url) < len("data:") || !strings.EqualFold(url[:len("data:")], "data:") {
+		return "", false
+	}
+	comma := strings.IndexByte(url, ',')
+	if comma < 0 {
+		return "", false
+	}
+	metadata := url[len("data:"):comma]
+	payload := url[comma+1:]
+	parts := strings.Split(metadata, ";")
+	mimeType := parts[0]
+	hasBase64Marker := false
+	for _, part := range parts[1:] {
+		if strings.EqualFold(part, "base64") {
+			hasBase64Marker = true
+		}
+	}
+	if len(mimeType) < len("image/") || !strings.EqualFold(mimeType[:len("image/")], "image/") {
+		return "", false
+	}
+	if !hasBase64Marker {
+		return "", false
+	}
+	return payload, true
 }
 
 func ApproxTokenCount(text string) int64 {

@@ -81,6 +81,7 @@ func (s *ConfigService) ConfigWarningsForCWD(cwd string) []string {
 // warnings last).
 func StartupWarnings(values map[string]any, requirements *ConfigRequirements) []string {
 	warnings := requirementStartupWarnings(values, requirements)
+	warnings = append(warnings, runtimeAuthModeStartupWarnings(values, requirements)...)
 	return append(warnings, OtelStartupWarnings(values)...)
 }
 

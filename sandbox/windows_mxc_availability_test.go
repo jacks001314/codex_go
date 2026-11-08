@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"runtime"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -49,7 +50,8 @@ func TestWindowsMXCAvailabilityRecordedOnceLikeRust(t *testing.T) {
 		t.Fatalf("counters = %#v, want one", recorder.counters)
 	}
 	counter := recorder.counters[0]
-	if counter.name != WindowsMXCAvailableMetric || counter.inc != 1 || counter.tags["available"] != "false" {
+	if counter.name != WindowsMXCAvailableMetric || counter.inc != 1 ||
+		counter.tags["available"] != strconv.FormatBool(WindowsMXCAvailable()) {
 		t.Fatalf("counter = %#v", counter)
 	}
 }

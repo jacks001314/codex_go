@@ -1,0 +1,846 @@
+{
+ "schemaVersion": 1,
+ "generatedAt": "2026-11-08",
+ "source": "parity/commits.json（status=partial 且未被任何契约引用）+ update/plan_2026_11_08_status_reconciliation.md §6",
+ "targetManifest": "137 contracts (112 complete / 25 partial)",
+ "rustOracle": "codex-rs @ 748ab55ca7de0b647d9a7a9d9a8e70e00f28666d",
+ "counts": {
+  "adopt": 13,
+  "defer": 11,
+  "skip": 5
+ },
+ "total": 29,
+ "proposals": [
+  {
+   "shortSha": "202b590e84",
+   "sha": "202b590e84d01fb4326c50969b8ff4d41e37d2d6",
+   "pr": "#60172",
+   "subject": "Preserve display instructions in answer moderation (#60172)",
+   "proposedId": "answer-moderation-display-metadata",
+   "kind": "source-surface",
+   "phase": "P1",
+   "recommend": "adopt",
+   "recommendReason": "display metadata 是 final-answer 的 wire 字段（含 blockType/cyberTrustedAccess/checkTrustedContacts），与 final-answer-moderation 的“决定”面不重叠；也是你上轮点名要占的位",
+   "rustPaths": [
+    "protocol/src/items.rs",
+    "app-server-protocol/src/protocol/v2/item.rs",
+    "app-server-protocol/src/protocol/thread_history.rs"
+   ],
+   "goPaths": [
+    "protocol",
+    "appserver",
+    "state"
+   ],
+   "verifier": "",
+   "evidence": "Final-answer moderation carries optional `display` metadata (`action` plus `blockType`, `cyberTrustedAccess`, `checkTrustedContacts`) through final answers, legacy events, thread-history reconstruction and rollout migration.",
+   "rustPathsVerifiedAtTarget": [
+    "protocol/src/items.rs",
+    "app-server-protocol/src/protocol/v2/item.rs",
+    "app-server-protocol/src/protocol/thread_history.rs"
+   ],
+   "goPathsMissingInMyMirror": []
+  },
+  {
+   "shortSha": "7e980a54fe",
+   "sha": "7e980a54fee3bb71182b3443677595dee973a77f",
+   "pr": "#60020",
+   "subject": "Strip terminal commands from UI tree strings (#60020)",
+   "proposedId": "ui-tree-terminal-escape-stripping",
+   "kind": "shared-fixtures",
+   "phase": "P1",
+   "recommend": "adopt",
+   "recommendReason": "这是安全面且今天就有影响：Go 的 sanitizeUITreeText 只处理 CSI，OSC-8 尾巴会以可见文本漏出来（TUI lane 已定位 tui/ui_tree.go:614），必须立契约锁住",
+   "rustPaths": [
+    "tui/src/ui_tree/render.rs"
+   ],
+   "goPaths": [
+    "tui"
+   ],
+   "verifier": "",
+   "evidence": "Terminal control sequences embedded in tree strings are stripped down to printable text (tab and newline kept) instead of leaking partial escape bytes such as an OSC-8 hyperlink tail into the rendered line.",
+   "rustPathsVerifiedAtTarget": [
+    "tui/src/ui_tree/render.rs"
+   ],
+   "goPathsMissingInMyMirror": []
+  },
+  {
+   "shortSha": "857415f7f2",
+   "sha": "857415f7f202eb806cbe1308bfb196218b1d8d83",
+   "pr": "#59003",
+   "subject": "Preserve Guardian review framing under elastic context limits (#59003)",
+   "proposedId": "guardian-review-framing-elastic-limits",
+   "kind": "source-surface",
+   "phase": "P1",
+   "recommend": "adopt",
+   "recommendReason": "elastic 预算下必须保留的 framing/host notice/planned action 是安全语义（裁错了会改变评审结论），Go 有 guardian elastic 同族实现",
+   "rustPaths": [
+    "guardian-context/src/composition.rs",
+    "guardian-context/src/action.rs",
+    "guardian-context/src/preparation/repl.rs",
+    "guardian-context/src/authorization.rs"
+   ],
+   "goPaths": [
+    "state",
+    "context",
+    "appserver"
+   ],
+   "verifier": "",
+   "evidence": "Elastic entry preparation preserves protected framing, host notices and exact planned actions while allowing supporting text to be capped, and carries protection metadata through root conversation, trusted answer and node_repl evidence.",
+   "rustPathsVerifiedAtTarget": [
+    "guardian-context/src/composition.rs",
+    "guardian-context/src/action.rs",
+    "guardian-context/src/preparation/repl.rs",
+    "guardian-context/src/authorization.rs"
+   ],
+   "goPathsMissingInMyMirror": []
+  },
+  {
+   "shortSha": "8d0098930e",
+   "sha": "8d0098930ef555097f1f155a2b0b5ecbea98a7de",
+   "pr": "#59995",
+   "subject": "Add subscription tools for Guardian reviewers (#59995)",
+   "proposedId": "guardian-subscription-tools",
+   "kind": "source-surface",
+   "phase": "P1",
+   "recommend": "adopt",
+   "recommendReason": "订阅工具同样是暴露给 Guardian 的工具面，且与通道选择共享 selection 状态，两者要一起验收",
+   "rustPaths": [
+    "ext/guardian-v3/src/subscription_tools.rs",
+    "ext/guardian-v3/src/selection.rs",
+    "message-board/src/local.rs",
+    "message-board/src/tools.rs"
+   ],
+   "goPaths": [
+    "agentboard",
+    "state",
+    "appserver"
+   ],
+   "verifier": "",
+   "evidence": "Guardian reviewers get subscription tools over message-board channels and threads, recorded through the selection state shared with model-driven channel selection.",
+   "rustPathsVerifiedAtTarget": [
+    "ext/guardian-v3/src/subscription_tools.rs",
+    "ext/guardian-v3/src/selection.rs",
+    "message-board/src/local.rs",
+    "message-board/src/tools.rs"
+   ],
+   "goPathsMissingInMyMirror": []
+  },
+  {
+   "shortSha": "cf39544acd",
+   "sha": "cf39544acd74ad649d98b96ceb43320b6e9b88ec",
+   "pr": "#59987",
+   "subject": "Resolve startup models using thread creation options (#59987)",
+   "proposedId": "startup-model-from-thread-options",
+   "kind": "source-surface",
+   "phase": "P1",
+   "recommend": "adopt",
+   "recommendReason": "“启动前解析出的 model 必须等于线程实际选中的 model”是强可断言行为，Go 有 model/catalog 与 session 启动面；也是你上轮点名要占的位",
+   "rustPaths": [
+    "core/src/session/mod.rs",
+    "core/src/thread_manager.rs"
+   ],
+   "goPaths": [
+    "model",
+    "session",
+    "appserver"
+   ],
+   "verifier": "",
+   "evidence": "Startup model resolution takes `StartThreadOptions` and returns the selected `ModelInfo` before the thread starts, sharing catalog, configuration overrides and provider fallback with thread startup.",
+   "rustPathsVerifiedAtTarget": [
+    "core/src/session/mod.rs",
+    "core/src/thread_manager.rs"
+   ],
+   "goPathsMissingInMyMirror": []
+  },
+  {
+   "shortSha": "e4bd7871b1",
+   "sha": "e4bd7871b1b156e4c69ff66fbd9ea89890875091",
+   "pr": "#59994",
+   "subject": "Add read-only evidence retrieval tools for Guardian reviewers (#59994)",
+   "proposedId": "guardian-read-only-evidence-tools",
+   "kind": "source-surface",
+   "phase": "P1",
+   "recommend": "adopt",
+   "recommendReason": "只读证据工具是对模型暴露的工具面（工具名、参数、只读约束），也是安全边界，Go 有同族工具宿主面",
+   "rustPaths": [
+    "ext/guardian-v3/src/retrieval_tools.rs",
+    "ext/guardian-v3/src/evidence.rs",
+    "message-board/src/local/json_search.rs",
+    "message-board/src/local/queries.rs"
+   ],
+   "goPaths": [
+    "appserver",
+    "agentboard",
+    "state"
+   ],
+   "verifier": "",
+   "evidence": "Guardian reviewers get read-only `guardian_board` tools (list channels and threads, search posts, read evidence) over a captured read-only view, with literal case-insensitive search over decoded JSON fields and nested call arguments.",
+   "rustPathsVerifiedAtTarget": [
+    "ext/guardian-v3/src/retrieval_tools.rs",
+    "ext/guardian-v3/src/evidence.rs",
+    "message-board/src/local/json_search.rs",
+    "message-board/src/local/queries.rs"
+   ],
+   "goPathsMissingInMyMirror": []
+  },
+  {
+   "shortSha": "ecef7e0936",
+   "sha": "ecef7e09366ef08490de7daa0c48739871394ec6",
+   "pr": "#60001",
+   "subject": "Add bounded original-evidence delivery for Guardian reviewers (#60001)",
+   "proposedId": "guardian-bounded-original-evidence",
+   "kind": "source-surface",
+   "phase": "P1",
+   "recommend": "adopt",
+   "recommendReason": "Guardian 送审证据的预算裁剪是对外可观测的 wire 面（送什么、按什么顺序、裁到多少），Go 有 state/guardian_* 与 agentboard 同族面",
+   "rustPaths": [
+    "ext/guardian-v3/src/delivery.rs",
+    "ext/guardian-v3/src/lib.rs",
+    "message-board/src/local/catalog.rs"
+   ],
+   "goPaths": [
+    "state",
+    "agentboard",
+    "appserver"
+   ],
+   "verifier": "",
+   "evidence": "Guardian reviewer evidence delivery is bounded: original evidence is trimmed to the reviewer budget while keeping the catalogue references needed to resolve it.",
+   "rustPathsVerifiedAtTarget": [
+    "ext/guardian-v3/src/delivery.rs",
+    "ext/guardian-v3/src/lib.rs",
+    "message-board/src/local/catalog.rs"
+   ],
+   "goPathsMissingInMyMirror": []
+  },
+  {
+   "shortSha": "358e464528",
+   "sha": "358e46452858242bf6463923e1fac0f14e5c0549",
+   "pr": "#60048",
+   "subject": "Allow plugin starter prompts up to 512 characters (#60048)",
+   "proposedId": "plugin-starter-prompt-length",
+   "kind": "source-surface",
+   "phase": "P2",
+   "recommend": "adopt",
+   "recommendReason": "128→512 是可直接断言的边界值，Go 有 plugin/provider.go 的 DefaultPrompt 面与 appserver schema，成本低、回归价值高",
+   "rustPaths": [
+    "core-plugins/src/manifest.rs",
+    "app-server-protocol/src/protocol/v2/plugin.rs"
+   ],
+   "goPaths": [
+    "plugin",
+    "appserver"
+   ],
+   "verifier": "",
+   "evidence": "Plugin `interface.defaultPrompt` entries accept up to 512 characters (still at most three prompts), with matching protocol documentation and schema.",
+   "rustPathsVerifiedAtTarget": [
+    "core-plugins/src/manifest.rs",
+    "app-server-protocol/src/protocol/v2/plugin.rs"
+   ],
+   "goPathsMissingInMyMirror": []
+  },
+  {
+   "shortSha": "5f82dc9e59",
+   "sha": "5f82dc9e59b47783b79ad51567c8ddc516f5c204",
+   "pr": "#60000",
+   "subject": "Plan Guardian evidence delivery in source order (#60000)",
+   "proposedId": "guardian-evidence-source-order",
+   "kind": "source-surface",
+   "phase": "P2",
+   "recommend": "adopt",
+   "recommendReason": "证据投递顺序决定评审员看到什么顺序，可观测且与 #60001 同族；两条应共享同一 verifier 族",
+   "rustPaths": [
+    "ext/guardian-v3/src/delivery.rs",
+    "ext/guardian-v3/src/evidence.rs",
+    "message-board/src/local/catalog.rs",
+    "ext/guardian-v3/src/housekeeper.rs"
+   ],
+   "goPaths": [
+    "state",
+    "agentboard",
+    "appserver"
+   ],
+   "verifier": "",
+   "evidence": "Guardian evidence delivery is planned in source order so delivered evidence keeps the catalogue ordering the reviewer read.",
+   "rustPathsVerifiedAtTarget": [
+    "ext/guardian-v3/src/delivery.rs",
+    "ext/guardian-v3/src/evidence.rs",
+    "message-board/src/local/catalog.rs",
+    "ext/guardian-v3/src/housekeeper.rs"
+   ],
+   "goPathsMissingInMyMirror": []
+  },
+  {
+   "shortSha": "5ff78c5e66",
+   "sha": "5ff78c5e66051f2527cf38967f52e8ef6cdac6cb",
+   "pr": "#60018",
+   "subject": "Propagate turn triggers to usage analytics events (#60018)",
+   "proposedId": "usage-analytics-turn-triggers",
+   "kind": "source-surface",
+   "phase": "P2",
+   "recommend": "adopt",
+   "recommendReason": "turn_trigger 进 analytics 事件是可直接断言的 wire 面（缺省时不得出现该字段），Go 有 session/turn_attribution.go 与 telemetry/turn_event.go",
+   "rustPaths": [
+    "analytics/src/reducer.rs",
+    "analytics/src/events.rs"
+   ],
+   "goPaths": [
+    "tui/analytics",
+    "session",
+    "telemetry"
+   ],
+   "verifier": "",
+   "evidence": "Usage analytics events for tools, artifacts, skills, apps, plugins and hooks carry the turn metadata `turn_trigger`, omitting the field when no trigger is available.",
+   "rustPathsVerifiedAtTarget": [
+    "analytics/src/reducer.rs",
+    "analytics/src/events.rs"
+   ],
+   "goPathsMissingInMyMirror": []
+  },
+  {
+   "shortSha": "af83299ada",
+   "sha": "af83299ada26148091325c2198286c1373940027",
+   "pr": "#59999",
+   "subject": "Add model-driven Guardian channel selection (#59999)",
+   "proposedId": "guardian-model-driven-channel-selection",
+   "kind": "source-surface",
+   "phase": "P2",
+   "recommend": "adopt",
+   "recommendReason": "通道选择由模型采样输出决定，是可观测的评审链行为（选了哪个通道、housekeeper 何时采样），Go 有 guardian 同族实现",
+   "rustPaths": [
+    "ext/guardian-v3/src/selection.rs",
+    "ext/guardian-v3/src/sampling.rs",
+    "ext/guardian-v3/src/housekeeper.rs",
+    "ext/guardian-v3/src/lib.rs"
+   ],
+   "goPaths": [
+    "state",
+    "appserver"
+   ],
+   "verifier": "",
+   "evidence": "Guardian channel selection is driven by the model sampling output instead of a fixed schedule, with the housekeeper sampling and recording the chosen channel.",
+   "rustPathsVerifiedAtTarget": [
+    "ext/guardian-v3/src/selection.rs",
+    "ext/guardian-v3/src/sampling.rs",
+    "ext/guardian-v3/src/housekeeper.rs",
+    "ext/guardian-v3/src/lib.rs"
+   ],
+   "goPathsMissingInMyMirror": []
+  },
+  {
+   "shortSha": "ce0323f2f2",
+   "sha": "ce0323f2f2d3b25e82806cd555237da3db4e1897",
+   "pr": "#54776",
+   "subject": "Support typed content in contextual prompt fragments (#54776)",
+   "proposedId": "context-fragment-typed-content",
+   "kind": "source-surface",
+   "phase": "P2",
+   "recommend": "adopt",
+   "recommendReason": "typed content（文本标记只作用于 InputText、其它类型原样透传）是可断言的上下文构造面；Go 已有 context/typed_fragment_content_like_rust_test.go 这一入口，立契约即可锁住",
+   "rustPaths": [
+    "context-fragments/src/fragment.rs",
+    "context-fragments/src/annotated_content.rs",
+    "ext/extension-api/src/contributors/world_state.rs",
+    "core/src/context/world_state/mod.rs"
+   ],
+   "goPaths": [
+    "context",
+    "appserver",
+    "protocol"
+   ],
+   "verifier": "",
+   "evidence": "Fragment bodies and rendering return `ContentItem`, applying text markers only to `InputText` while passing other kinds through, so extension prompts and world-state contributions carry typed content and media survives context-window hints.",
+   "rustPathsVerifiedAtTarget": [
+    "context-fragments/src/fragment.rs",
+    "context-fragments/src/annotated_content.rs",
+    "ext/extension-api/src/contributors/world_state.rs",
+    "core/src/context/world_state/mod.rs"
+   ],
+   "goPathsMissingInMyMirror": []
+  },
+  {
+   "shortSha": "f5ac7a757e",
+   "sha": "f5ac7a757e8f6f4fe922f3daab0fcaba02f1fa72",
+   "pr": "#60075",
+   "subject": "Support asynchronous host service-tier reads and acceptance (#60075)",
+   "proposedId": "async-host-service-tier-acceptance",
+   "kind": "source-surface",
+   "phase": "P2",
+   "recommend": "adopt",
+   "recommendReason": "异步读 + 本地接受回执是并发语义（等接受/可取消/重试不重复更新），Go 有 model provider 与 agent host 面；上轮点名的 async-host-service-tier-acceptance 就指这条",
+   "rustPaths": [
+    "core/src/agent/host/service_tier.rs",
+    "core/src/thread_manager.rs",
+    "core/src/session/mod.rs",
+    "core/src/state/session.rs"
+   ],
+   "goPaths": [
+    "agent",
+    "model",
+    "state"
+   ],
+   "verifier": "",
+   "evidence": "`AgentServiceTier` reads became asynchronous and updates return a local-acceptance receipt, awaited during root startup, settings updates, child preparation, startup prewarm and step capture, with cancellation while capturing a step.",
+   "rustPathsVerifiedAtTarget": [
+    "core/src/agent/host/service_tier.rs",
+    "core/src/thread_manager.rs",
+    "core/src/session/mod.rs",
+    "core/src/state/session.rs"
+   ],
+   "goPathsMissingInMyMirror": []
+  },
+  {
+   "shortSha": "654b2ec1f5",
+   "sha": "654b2ec1f58b34af304404463549ab49c140a671",
+   "pr": "#57267",
+   "subject": "Keep cloud conversation settings server-owned in the TUI (#57267)",
+   "proposedId": "cloud-settings-server-owned",
+   "kind": "source-surface",
+   "phase": "P1",
+   "recommend": "defer",
+   "recommendReason": "云会话设置归属是 wire 面差异（本地设置不得下送、模型/推理选择必须等服务端接受），但 Go 侧 cloud lane 还在接线，先记提案、等 cloud 面稳定再立",
+   "rustPaths": [
+    "tui/src/app_server_session.rs",
+    "tui/src/app/misalignment_policy.rs",
+    "tui/src/app/model_defaults.rs",
+    "tui/src/app/event_dispatch.rs"
+   ],
+   "goPaths": [
+    "app",
+    "appserver",
+    "cloudclient"
+   ],
+   "verifier": "",
+   "evidence": "A distinct cloud parameter mode omits local execution settings from thread start, resume and turn requests, and cloud model/reasoning selections go through `thread/settings/update` requiring server acceptance instead of falling back to local state.",
+   "rustPathsVerifiedAtTarget": [
+    "tui/src/app_server_session.rs",
+    "tui/src/app/misalignment_policy.rs",
+    "tui/src/app/model_defaults.rs",
+    "tui/src/app/event_dispatch.rs"
+   ],
+   "goPathsMissingInMyMirror": []
+  },
+  {
+   "shortSha": "181b4a853d",
+   "sha": "181b4a853d396f009a3a02b9c36eb393e6acbe75",
+   "pr": "#58720",
+   "subject": "Prioritize pending approvals in the subagent picker (#58720)",
+   "proposedId": "subagent-picker-pending-approvals",
+   "kind": "shared-fixtures",
+   "phase": "P2",
+   "recommend": "defer",
+   "recommendReason": "Go 有 tui/tea/approval*.go 面，但 picker 排序/标签属 TUI 呈现，正被 agents-overview / approval 系列契约覆盖中，等那批收口再立",
+   "rustPaths": [
+    "tui/src/app/session_lifecycle.rs",
+    "tui/src/app/thread_routing.rs",
+    "tui/src/app/agent_picker.rs",
+    "tui/src/app/agent_navigation.rs"
+   ],
+   "goPaths": [
+    "tui/tea",
+    "appserver",
+    "agent"
+   ],
+   "verifier": "",
+   "evidence": "`/subagents` groups threads that need approval first, marks them `(needs approval)` and preselects the first waiting thread, refreshing as requests and agent metadata change and tracking approvals that arrive before thread metadata.",
+   "rustPathsVerifiedAtTarget": [
+    "tui/src/app/session_lifecycle.rs",
+    "tui/src/app/thread_routing.rs",
+    "tui/src/app/agent_picker.rs",
+    "tui/src/app/agent_navigation.rs"
+   ],
+   "goPathsMissingInMyMirror": []
+  },
+  {
+   "shortSha": "1a2f5babe8",
+   "sha": "1a2f5babe83bc4b8d4d89701a01b7044a0ea6135",
+   "pr": "#59988",
+   "subject": "Add inherited styling to TUI display trees (#59988)",
+   "proposedId": "ui-tree-inherited-styling",
+   "kind": "shared-fixtures",
+   "phase": "P2",
+   "recommend": "defer",
+   "recommendReason": "Go tui/ui_tree.go 现在把带 bold/italic/underline 或 props.color 的树直接判为非法（整棵树被拒），要先有消费方接线再立契约，否则只是账面 partial",
+   "rustPaths": [
+    "tui/src/ui_tree.rs",
+    "tui/src/ui_tree/render.rs",
+    "tui/src/ui_tree/theme.rs",
+    "tui/src/ui_tree/decode.rs"
+   ],
+   "goPaths": [
+    "tui"
+   ],
+   "verifier": "",
+   "evidence": "Display-tree nodes accept inherited bold/italic/underline containers plus text colour/weight/italic/underline props and row backgrounds, resolving ANSI or #RRGGBB colours through the terminal palette and keeping overflow ellipses unlinked.",
+   "rustPathsVerifiedAtTarget": [
+    "tui/src/ui_tree.rs",
+    "tui/src/ui_tree/render.rs",
+    "tui/src/ui_tree/theme.rs",
+    "tui/src/ui_tree/decode.rs"
+   ],
+   "goPathsMissingInMyMirror": []
+  },
+  {
+   "shortSha": "5c7a1602c8",
+   "sha": "5c7a1602c8594554a97b7485f1ddd298648cdb0d",
+   "pr": "#60031",
+   "subject": "Unify TUI status line layout for extension content (#60031)",
+   "proposedId": "ui-tree-status-line-unified-layout",
+   "kind": "shared-fixtures",
+   "phase": "P2",
+   "recommend": "defer",
+   "recommendReason": "需要 measure_natural 与扩展状态内容接线，Go 两者都没有；等 #60032 那批接线后一起立",
+   "rustPaths": [
+    "tui/src/bottom_pane/chat_composer/status_surface.rs",
+    "tui/src/bottom_pane/chat_composer.rs",
+    "tui/src/bottom_pane/footer.rs",
+    "tui/src/bottom_pane/footer/footer_content.rs"
+   ],
+   "goPaths": [
+    "tui"
+   ],
+   "verifier": "",
+   "evidence": "Shared footer rows and separate status lines use one status renderer, giving extension content the width left by the mode indicator and measuring with `measure_natural()`; reasoning-effort transitions are skipped for extension content and cleared when it replaces the status line.",
+   "rustPathsVerifiedAtTarget": [
+    "tui/src/bottom_pane/chat_composer/status_surface.rs",
+    "tui/src/bottom_pane/chat_composer.rs",
+    "tui/src/bottom_pane/footer.rs",
+    "tui/src/bottom_pane/footer/footer_content.rs"
+   ],
+   "goPathsMissingInMyMirror": []
+  },
+  {
+   "shortSha": "8e7ccd8472",
+   "sha": "8e7ccd8472e249efb7dc9c155e2cbc5e6db0d908",
+   "pr": "#60026",
+   "subject": "Add multiline layout and row wrapping to UI trees (#60026)",
+   "proposedId": "ui-tree-multiline-row-wrap",
+   "kind": "shared-fixtures",
+   "phase": "P2",
+   "recommend": "defer",
+   "recommendReason": "Go 树只有单行 RenderLine、没有 wrap prop 也没有“高”的概念；属于能力缺失，接线后再立才能真正验收",
+   "rustPaths": [
+    "tui/src/ui_tree/render.rs",
+    "tui/src/ui_tree/render/text.rs",
+    "tui/src/ui_tree/render/prepare.rs",
+    "tui/src/ui_tree.rs"
+   ],
+   "goPaths": [
+    "tui"
+   ],
+   "verifier": "",
+   "evidence": "Rows accept `wrap: \"wrap\"` so children flow onto extra lines (default `nowrap`), and space is allocated while reserving later siblings minimum widths.",
+   "rustPathsVerifiedAtTarget": [
+    "tui/src/ui_tree/render.rs",
+    "tui/src/ui_tree/render/text.rs",
+    "tui/src/ui_tree/render/prepare.rs",
+    "tui/src/ui_tree.rs"
+   ],
+   "goPathsMissingInMyMirror": []
+  },
+  {
+   "shortSha": "cfc11eb483",
+   "sha": "cfc11eb483bb3adc63c8bfc74ea17b732ff7a4e9",
+   "pr": "#60032",
+   "subject": "Allow extension status content to use multiple footer rows (#60032)",
+   "proposedId": "ui-tree-status-multi-row-footer",
+   "kind": "shared-fixtures",
+   "phase": "P2",
+   "recommend": "defer",
+   "recommendReason": "Go footer 天生单行（FooterHeight/FooterLines 返回单串），要先有扩展状态内容接线才谈得上多行让位",
+   "rustPaths": [
+    "tui/src/bottom_pane/chat_composer/composer_layout.rs",
+    "tui/src/bottom_pane/chat_composer/status_surface.rs",
+    "tui/src/bottom_pane/chat_composer/footer_state.rs",
+    "tui/src/bottom_pane/chat_composer.rs"
+   ],
+   "goPaths": [
+    "tui"
+   ],
+   "verifier": "",
+   "evidence": "Extension status content is measured at the available width and may reserve up to four rows in shared and separate status layouts, yielding to the draft when vertical space is short while an unfocused composer stays single-row and dim.",
+   "rustPathsVerifiedAtTarget": [
+    "tui/src/bottom_pane/chat_composer/composer_layout.rs",
+    "tui/src/bottom_pane/chat_composer/status_surface.rs",
+    "tui/src/bottom_pane/chat_composer/footer_state.rs",
+    "tui/src/bottom_pane/chat_composer.rs"
+   ],
+   "goPathsMissingInMyMirror": []
+  },
+  {
+   "shortSha": "194f2662b8",
+   "sha": "194f2662b8b63390416c44ebb7e6a3a35a845e3a",
+   "pr": "#59739",
+   "subject": "Add a sidebar chooser and floating workspace shortcut panels (#59739)",
+   "proposedId": "tui-workspace-shortcut-hud",
+   "kind": "shared-fixtures",
+   "phase": "P3",
+   "recommend": "defer",
+   "recommendReason": "侧栏 chooser/tabs 已被 sidebar-chooser-list-bindings-and-hover / sidebar-tab-keyboard-mouse-navigation / side-chat-persistence-and-tab-close 三条契约覆盖；本条唯一未被覆盖的面是 shortcut HUD 与开合动画，等 TUI 接线后并入更合适",
+   "rustPaths": [
+    "tui/src/bottom_pane/shortcut_hud.rs",
+    "tui/src/app/sidebar.rs",
+    "tui/src/app/side_pane.rs"
+   ],
+   "goPaths": [
+    "tui",
+    "app"
+   ],
+   "verifier": "",
+   "evidence": "A sidebar chooser opens when no side chat exists (keyboard/mouse, preserving the parent draft), sidebar open/close animates and reverses mid-transition, and a floating panel renders workspace shortcuts and presets after a short delay without moving the composer.",
+   "rustPathsVerifiedAtTarget": [
+    "tui/src/bottom_pane/shortcut_hud.rs",
+    "tui/src/app/sidebar.rs",
+    "tui/src/app/side_pane.rs"
+   ],
+   "goPathsMissingInMyMirror": []
+  },
+  {
+   "shortSha": "1a20f53c33",
+   "sha": "1a20f53c331c81a3fab6aeba3b90ad28eb68cc27",
+   "pr": "#60021",
+   "subject": "Normalize inline UI tree text across styled leaves (#60021)",
+   "proposedId": "ui-tree-inline-text-normalization",
+   "kind": "shared-fixtures",
+   "phase": "P3",
+   "recommend": "defer",
+   "recommendReason": "跨叶空白折叠/字素合一是可观测输出，但依赖 styled leaf 模型；与 #59988 同批",
+   "rustPaths": [
+    "tui/src/ui_tree/render/text.rs",
+    "tui/src/ui_tree/render.rs"
+   ],
+   "goPaths": [
+    "tui"
+   ],
+   "verifier": "",
+   "evidence": "Inline leaves collapse spaces and tabs, trim leading and trailing whitespace, keep rendering to the first line, prepare Unicode line-break opportunities across style boundaries and join graphemes split across leaves.",
+   "rustPathsVerifiedAtTarget": [
+    "tui/src/ui_tree/render/text.rs",
+    "tui/src/ui_tree/render.rs"
+   ],
+   "goPathsMissingInMyMirror": []
+  },
+  {
+   "shortSha": "2157f98648",
+   "sha": "2157f986489f36a0cd4c866b17e8f8ff418cf959",
+   "pr": "#60019",
+   "subject": "Add theme-aware semantic colors to extension UI trees (#60019)",
+   "proposedId": "ui-tree-semantic-colors",
+   "kind": "shared-fixtures",
+   "phase": "P3",
+   "recommend": "defer",
+   "recommendReason": "语义色要落在 styled run 渲染模型上，而 Go 树还没有颜色字段；与 #59988 同批接线后再立",
+   "rustPaths": [
+    "tui/src/ui_tree/theme.rs",
+    "tui/src/ui_tree/render.rs",
+    "tui/src/bottom_pane/status_line_style.rs",
+    "tui/src/render/highlight.rs"
+   ],
+   "goPaths": [
+    "tui"
+   ],
+   "verifier": "",
+   "evidence": "Extension trees accept `primary`/`surface`/`accent`/`status-*` semantic colour roles for text foregrounds and row backgrounds, resolved against the active theme with `codex.accent` preferred and terminal-default fallback.",
+   "rustPathsVerifiedAtTarget": [
+    "tui/src/ui_tree/theme.rs",
+    "tui/src/ui_tree/render.rs",
+    "tui/src/bottom_pane/status_line_style.rs",
+    "tui/src/render/highlight.rs"
+   ],
+   "goPathsMissingInMyMirror": []
+  },
+  {
+   "shortSha": "66a56b17a1",
+   "sha": "66a56b17a120b286207a372d4e8ec44f2b0a7db4",
+   "pr": "#60027",
+   "subject": "Keep configured status lines on the native renderer (#60027)",
+   "proposedId": "ui-tree-status-line-native-renderer",
+   "kind": "shared-fixtures",
+   "phase": "P3",
+   "recommend": "defer",
+   "recommendReason": "Go 现状已等价（TUI lane 判 aligned：配置状态行与预览始终走 native）；立契约只剩“防回归”价值，等扩展状态内容接线时一起立更划算",
+   "rustPaths": [
+    "tui/src/bottom_pane/status_line_setup.rs",
+    "tui/src/bottom_pane/status_surface_preview.rs",
+    "tui/src/chatwidget/status_surfaces.rs",
+    "tui/src/bottom_pane/footer/footer_content.rs"
+   ],
+   "goPaths": [
+    "tui"
+   ],
+   "verifier": "",
+   "evidence": "Configured status lines and picker previews keep rendering through the native renderer instead of the extension tree path, so configured status content is not replaced by extension output.",
+   "rustPathsVerifiedAtTarget": [
+    "tui/src/bottom_pane/status_line_setup.rs",
+    "tui/src/bottom_pane/status_surface_preview.rs",
+    "tui/src/chatwidget/status_surfaces.rs",
+    "tui/src/bottom_pane/footer/footer_content.rs"
+   ],
+   "goPathsMissingInMyMirror": []
+  },
+  {
+   "shortSha": "8c811e8d93",
+   "sha": "8c811e8d93839103b5185d1f6324ebd2671adff1",
+   "pr": "#58718",
+   "subject": "Support rendering TUI conversations within an inset area (#58718)",
+   "proposedId": "tui-inset-conversation-area",
+   "kind": "shared-fixtures",
+   "phase": "P3",
+   "recommend": "defer",
+   "recommendReason": "inset 渲染是 TUI 布局能力，Go 侧没有对应 inset 消费方；属“能力缺失”，接线后再立",
+   "rustPaths": [
+    "tui/src/app/owned_transcript.rs",
+    "tui/src/bottom_pane/view_stack.rs",
+    "tui/src/transcript_image.rs",
+    "tui/src/app.rs"
+   ],
+   "goPaths": [
+    "tui"
+   ],
+   "verifier": "",
+   "evidence": "Conversation rendering splits into preparation, painting and post-draw steps using the supplied conversation bounds for transcript wrapping, composer layout and suggestion overlays, preserving surrounding text and image placements across redraws.",
+   "rustPathsVerifiedAtTarget": [
+    "tui/src/app/owned_transcript.rs",
+    "tui/src/bottom_pane/view_stack.rs",
+    "tui/src/transcript_image.rs",
+    "tui/src/app.rs"
+   ],
+   "goPathsMissingInMyMirror": []
+  },
+  {
+   "shortSha": "09bd19a0de",
+   "sha": "09bd19a0deb54cce82439c23373b07b84d3e5d04",
+   "pr": "#60002",
+   "subject": "Decouple Guardian retrieval from local message-board handles (#60002)",
+   "proposedId": "message-board-read-view-namespace",
+   "kind": "source-surface",
+   "phase": "P1",
+   "recommend": "skip",
+   "recommendReason": "读面已被 message-board-fixed-read-view（含 TestLocalBoardFixedReadViewFreezesCatalogAndCutoffLikeRust）覆盖；本条多出的 namespace/subscription 两个入口建议并入该契约验收要点",
+   "rustPaths": [
+    "message-board/src/read_view.rs",
+    "message-board/src/local/catalog.rs",
+    "message-board/src/api.rs",
+    "message-board/src/tools.rs"
+   ],
+   "goPaths": [
+    "agentboard"
+   ],
+   "verifier": "",
+   "evidence": "Message boards expose a captured `BoardReadView` (catalogs, post boundaries, read operations, JSON search config, no mutation) plus namespace identification, read-view capture and channel subscription operations on `AgentMessageBoard`.",
+   "rustPathsVerifiedAtTarget": [
+    "message-board/src/read_view.rs",
+    "message-board/src/local/catalog.rs",
+    "message-board/src/api.rs",
+    "message-board/src/tools.rs"
+   ],
+   "goPathsMissingInMyMirror": []
+  },
+  {
+   "shortSha": "4980f9585a",
+   "sha": "4980f9585a0a2dea0cdc4bb0cee4e631b75fcf5c",
+   "pr": "#59944",
+   "subject": "Narrow openai-docs to product Q&A and first-time API setup (#59944)",
+   "proposedId": "openai-docs-scope-narrowing",
+   "kind": "shared-fixtures",
+   "phase": "P3",
+   "recommend": "skip",
+   "recommendReason": "纯 skill 资产/文案改动（单文件 openai.yaml + catalog 快照），无行为面；Go 侧没有 vendored skills 树，属“行为在 Go 侧不适用”",
+   "rustPaths": [
+    "skills/src/assets/samples/openai-docs/agents/openai.yaml"
+   ],
+   "goPaths": [
+    "appserver"
+   ],
+   "verifier": "",
+   "evidence": "The bundled `openai-docs` skill is narrowed to Codex/ChatGPT Work behaviour and first-time API setup, with updated skill display metadata and catalogue snapshots.",
+   "rustPathsVerifiedAtTarget": [
+    "skills/src/assets/samples/openai-docs/agents/openai.yaml"
+   ],
+   "goPathsMissingInMyMirror": []
+  },
+  {
+   "shortSha": "7cdb219883",
+   "sha": "7cdb2198831e3e6e647c31a1d5c409ab8acc8568",
+   "pr": "#60029",
+   "subject": "Render UI trees directly into terminal buffers (#60029)",
+   "proposedId": "ui-tree-terminal-buffer-render",
+   "kind": "shared-fixtures",
+   "phase": "P3",
+   "recommend": "skip",
+   "recommendReason": "纯绘制实现路径（直绘 buffer）；可观察输出已被 #59988/#60019/#60026 的渲染契约覆盖，单独立只会记录一个实现选择",
+   "rustPaths": [
+    "tui/src/ui_tree/render.rs",
+    "tui/src/ui_tree/render/text.rs",
+    "tui/src/terminal_hyperlinks/paragraph.rs",
+    "tui/src/ui_tree/render/prepare.rs"
+   ],
+   "goPaths": [
+    "tui"
+   ],
+   "verifier": "",
+   "evidence": "Prepared trees are measured with a shared layout traversal (natural and viewport-constrained) and painted directly into terminal buffers, preserving wrapping, styles and hyperlinks with grapheme-boundary clipping and unlinked overflow ellipses.",
+   "rustPathsVerifiedAtTarget": [
+    "tui/src/ui_tree/render.rs",
+    "tui/src/ui_tree/render/text.rs",
+    "tui/src/terminal_hyperlinks/paragraph.rs",
+    "tui/src/ui_tree/render/prepare.rs"
+   ],
+   "goPathsMissingInMyMirror": []
+  },
+  {
+   "shortSha": "9df200a068",
+   "sha": "9df200a0680f5653ffb69725ecac6a201e2790fb",
+   "pr": "#59767",
+   "subject": "Add sidebar tabs and nonblocking side-chat creation (#59767)",
+   "proposedId": "sidebar-tabs-nonblocking-side-chat",
+   "kind": "shared-fixtures",
+   "phase": "P3",
+   "recommend": "skip",
+   "recommendReason": "已被 sidebar-tab-keyboard-mouse-navigation（tab + leader t 绑定）与 side-chat-persistence-and-tab-close（多 side chat 保持/关闭）覆盖，再立等于一个行为两个契约",
+   "rustPaths": [
+    "tui/src/app/side.rs",
+    "tui/src/app/side_focus.rs",
+    "tui/src/app/sidebar.rs"
+   ],
+   "goPaths": [
+    "tui",
+    "app"
+   ],
+   "verifier": "",
+   "evidence": "A clickable `Side chat` tab plus `+` chooser and the `focus_sidebar_tabs` action (default `leader t`), with side chats created in the background showing loading/failure states and Enter-to-retry.",
+   "rustPathsVerifiedAtTarget": [
+    "tui/src/app/side.rs",
+    "tui/src/app/side_focus.rs",
+    "tui/src/app/sidebar.rs"
+   ],
+   "goPathsMissingInMyMirror": []
+  },
+  {
+   "shortSha": "d749ee847f",
+   "sha": "d749ee847f350d4ec8434fe925d1046d693060e7",
+   "pr": "#60022",
+   "subject": "Separate UI tree preparation from line rendering (#60022)",
+   "proposedId": "ui-tree-prepared-measurement",
+   "kind": "shared-fixtures",
+   "phase": "P3",
+   "recommend": "skip",
+   "recommendReason": "纯内部结构拆分（prepare/PreparedUiTree）；它的可观测价值只通过 #60026 wrap 与 #60031 measure_natural 体现，已在那些条目里覆盖",
+   "rustPaths": [
+    "tui/src/ui_tree/render/prepare.rs",
+    "tui/src/ui_tree/render.rs",
+    "tui/src/ui_tree/render/text.rs"
+   ],
+   "goPaths": [
+    "tui"
+   ],
+   "verifier": "",
+   "evidence": "`UiTree::prepare` builds a `PreparedUiTree` of styled inline text and row structure independent of viewport width, computing minimum and preferred widths while still rendering one line with overflow ellipses.",
+   "rustPathsVerifiedAtTarget": [
+    "tui/src/ui_tree/render/prepare.rs",
+    "tui/src/ui_tree/render.rs",
+    "tui/src/ui_tree/render/text.rs"
+   ],
+   "goPathsMissingInMyMirror": []
+  }
+ ]
+}

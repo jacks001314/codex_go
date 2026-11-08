@@ -20,14 +20,14 @@ func TestExecHelpPagesLikeRust(t *testing.T) {
 		first  string
 		absent string
 	}{
-		{name: "exec long", kind: ExecHelpExec, lines: 118, usage: "Usage: codex exec [OPTIONS] [PROMPT]", first: "Run Codex non-interactively", absent: "Usage: codex exec resume"},
-		{name: "exec short", kind: ExecHelpExec, short: true, lines: 83, usage: "Usage: codex exec [OPTIONS] [PROMPT]", first: "Run Codex non-interactively"},
-		{name: "resume long", kind: ExecHelpResume, lines: 86, usage: "Usage: codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]", absent: "Usage: codex exec fork"},
-		{name: "resume short", kind: ExecHelpResume, short: true, lines: 59, usage: "Usage: codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]"},
-		{name: "fork long", kind: ExecHelpFork, lines: 79, usage: "Usage: codex exec fork [OPTIONS] <SESSION_ID> [PROMPT]"},
-		{name: "fork short", kind: ExecHelpFork, short: true, lines: 54, usage: "Usage: codex exec fork [OPTIONS] <SESSION_ID> [PROMPT]"},
-		{name: "review long", kind: ExecHelpReview, lines: 85, usage: "Usage: codex exec review [OPTIONS] [PROMPT]"},
-		{name: "review short", kind: ExecHelpReview, short: true, lines: 59, usage: "Usage: codex exec review [OPTIONS] [PROMPT]"},
+		{name: "exec long", kind: ExecHelpExec, lines: 121, usage: "Usage: codex exec [OPTIONS] [PROMPT]", first: "Run Codex non-interactively", absent: "Usage: codex exec resume"},
+		{name: "exec short", kind: ExecHelpExec, short: true, lines: 86, usage: "Usage: codex exec [OPTIONS] [PROMPT]", first: "Run Codex non-interactively"},
+		{name: "resume long", kind: ExecHelpResume, lines: 89, usage: "Usage: codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]", absent: "Usage: codex exec fork"},
+		{name: "resume short", kind: ExecHelpResume, short: true, lines: 62, usage: "Usage: codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]"},
+		{name: "fork long", kind: ExecHelpFork, lines: 82, usage: "Usage: codex exec fork [OPTIONS] <SESSION_ID> [PROMPT]"},
+		{name: "fork short", kind: ExecHelpFork, short: true, lines: 57, usage: "Usage: codex exec fork [OPTIONS] <SESSION_ID> [PROMPT]"},
+		{name: "review long", kind: ExecHelpReview, lines: 88, usage: "Usage: codex exec review [OPTIONS] [PROMPT]"},
+		{name: "review short", kind: ExecHelpReview, short: true, lines: 62, usage: "Usage: codex exec review [OPTIONS] [PROMPT]"},
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {

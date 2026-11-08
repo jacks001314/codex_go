@@ -98,7 +98,21 @@ WHERE thread_id = ?`, threadID).Scan(&byteOffset, &ordinal)
 
 // MaterializeThreadHistory projects a newline-terminated rollout suffix and
 // advances its byte/ordinal checkpoint atomically with the projected rows.
+//
+// This entry does not take the runtime's writer permit; callers that own a
+// runtime must use StateRuntime.MaterializeThreadHistory so their write is
+// admitted like every other thread-history writer (Rust #60006(b)).
 func MaterializeThreadHistory(ctx context.Context, db *sql.DB, threadID string, rolloutPath string, initialOrdinal uint64, subagentHistoryStartOrdinal *uint64) error {
+	return materializeThreadHistory(ctx, db, nil, threadID, rolloutPath, initialOrdinal, subagentHistoryStartOrdinal)
+}
+
+// MaterializeThreadHistory projects one rollout suffix under the runtime's
+// single-writer admission.
+func (r *StateRuntime) MaterializeThreadHistory(ctx context.Context, db *sql.DB, threadID string, rolloutPath string, initialOrdinal uint64, subagentHistoryStartOrdinal *uint64) error {
+	return materializeThreadHistory(ctx, db, r.acquireHistoryWriter, threadID, rolloutPath, initialOrdinal, subagentHistoryStartOrdinal)
+}
+
+func materializeThreadHistory(ctx context.Context, db *sql.DB, admit func(context.Context) (func(), error), threadID string, rolloutPath string, initialOrdinal uint64, subagentHistoryStartOrdinal *uint64) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -137,7 +151,7 @@ func MaterializeThreadHistory(ctx context.Context, db *sql.DB, threadID string, 
 	if len(steps) == 0 && startOffset == nextOffset {
 		return nil
 	}
-	return applyThreadHistoryProjection(ctx, db, threadID, startOffset, nextOffset, initialOrdinal, subagentHistoryStartOrdinal, steps)
+	return applyThreadHistoryProjection(ctx, db, admit, threadID, startOffset, nextOffset, initialOrdinal, subagentHistoryStartOrdinal, steps)
 }
 
 // readThreadHistoryProjectionSteps mirrors Rust #53947's
@@ -148,13 +162,28 @@ func MaterializeThreadHistory(ctx context.Context, db *sql.DB, threadID string, 
 // predicate is passed into the rollout reader, whose checks are the
 // cancellation points (before opening, during decompression, and between
 // history records).
+// admitHistoryWrite takes the writer permit when the caller supplied one.
+func admitHistoryWrite(ctx context.Context, admit func(context.Context) (func(), error)) (func(), error) {
+	if admit == nil {
+		return func() {}, nil
+	}
+	release, err := admit(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if release == nil {
+		release = func() {}
+	}
+	return release, nil
+}
+
 func readThreadHistoryProjectionSteps(ctx context.Context, rolloutPath string, startOffset uint64, expectedOrdinal uint64, validate func(*rollout.Line) error) ([]rollout.ProjectionStep, uint64, error) {
 	return rollout.ReadProjectionStepsCancellable(rolloutPath, startOffset, expectedOrdinal, validate, func() bool {
 		return ctx.Err() != nil
 	})
 }
 
-func applyThreadHistoryProjection(ctx context.Context, db *sql.DB, threadID string, startOffset uint64, nextOffset uint64, initialOrdinal uint64, subagentHistoryStartOrdinal *uint64, steps []rollout.ProjectionStep) (err error) {
+func applyThreadHistoryProjection(ctx context.Context, db *sql.DB, admit func(context.Context) (func(), error), threadID string, startOffset uint64, nextOffset uint64, initialOrdinal uint64, subagentHistoryStartOrdinal *uint64, steps []rollout.ProjectionStep) (err error) {
 	if startOffset > maxSQLiteInteger || nextOffset > maxSQLiteInteger || initialOrdinal > maxSQLiteInteger {
 		return errors.New("thread history projection checkpoint exceeds SQLite integer range")
 	}
@@ -163,6 +192,15 @@ func applyThreadHistoryProjection(ctx context.Context, db *sql.DB, threadID stri
 			return errors.New("thread history projection step exceeds SQLite integer range")
 		}
 	}
+	// Rust #60006(b): the writer permit is taken before the snapshot, so a
+	// projection never starts its write transaction while another one holds it.
+	// Without that, several IMMEDIATE writers queue on SQLite's write lock and
+	// every reader behind them pays for the queue.
+	release, err := admitHistoryWrite(ctx, admit)
+	if err != nil {
+		return fmt.Errorf("admit thread history projection: %w", err)
+	}
+	defer release()
 	// Writer admission retries a busy slot before any read snapshot is taken
 	// (Rust #54369 `7ae8319917`).
 	conn, err := BeginImmediate(ctx, db)

@@ -4255,10 +4255,11 @@ func localEnvironmentInfo() *EnvironmentInfo {
 			// Rust #50177: the executor supports replacement opens and
 			// positional `fs/writeBlock`.
 			FileWriteStreaming: true,
-			// Rust #45524 reports native MXC availability on Windows. Go has no
-			// native MXC runner (`sandbox/mxc` always fails closed), so the
-			// capability stays honest and reports false on every platform.
-			WindowsMxc: false,
+			// Rust #45524 reports native MXC availability on Windows. The bit
+			// follows the launcher's own probe (sandbox.WindowsMXCAvailable),
+			// which `sandbox/mxc` registers at init from the PSEC capability, so
+			// the advertised capability and what launch() can do cannot diverge.
+			WindowsMxc: sandbox.WindowsMXCAvailable(),
 		},
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"testing"
+	"time"
 )
 
 func TestRuntimeRouterUserVerificationUnavailableSurface(t *testing.T) {
@@ -282,5 +283,82 @@ func (p *stubUserVerificationProvider) Delete() (*UserVerificationDeleteResponse
 func (p *stubUserVerificationProvider) Verify(params UserVerificationVerifyParams) (*UserVerificationVerifyResponse, error) {
 	p.calls = append(p.calls, "verify")
 	p.verifyParams = params
+	return &UserVerificationVerifyResponse{}, nil
+}
+
+// Rust's Service::run drops CancelOnDrop when the RPC future ends, so a timed
+// out worker is cancelled instead of leaving its native prompt up.
+func TestUserVerificationWorkerTimeoutCancelsNativeWork(t *testing.T) {
+	provider := &slowUserVerificationProvider{started: make(chan struct{}), unblock: make(chan struct{})}
+	token := &userVerificationCancelToken{}
+	service := &userVerificationService{provider: provider, cancel: token, timeout: 30 * time.Millisecond}
+	defer close(provider.unblock)
+
+	_, err := service.runNativeWork(func() (any, error) {
+		return service.providerForRequest(service.cancellation()).Status()
+	})
+	detail, ok := err.(*userVerificationError)
+	if !ok {
+		t.Fatalf("timeout error = %#v", err)
+	}
+	if detail.data.Reason != string(UserVerificationFailureTimeout) || detail.message != "User verification timed out." {
+		t.Fatalf("timeout error = %+v", detail)
+	}
+	if !token.IsCancelled() {
+		t.Fatal("a timed out worker must be cancelled like Rust's dropped CancelOnDrop")
+	}
+}
+
+// Rust re-checks the guard before handing a successful payload back, so work
+// that finished after the request was cancelled never returns a stale proof.
+func TestUserVerificationCancelledPayloadIsRejected(t *testing.T) {
+	token := &userVerificationCancelToken{}
+	provider := &slowUserVerificationProvider{started: make(chan struct{}), unblock: make(chan struct{}), cancel: token}
+	service := &userVerificationService{provider: provider, cancel: token, timeout: 5 * time.Second}
+	defer close(provider.unblock)
+
+	_, err := service.runNativeWork(func() (any, error) {
+		return service.providerForRequest(service.cancellation()).Status()
+	})
+	detail, ok := err.(*userVerificationError)
+	if !ok {
+		t.Fatalf("cancelled payload error = %#v", err)
+	}
+	if detail.data.Type != "cancelled" || detail.data.Reason != string(UserVerificationCancellationInterrupted) ||
+		detail.message != userVerificationCancelledMessage {
+		t.Fatalf("cancelled payload error = %+v", detail)
+	}
+}
+
+// slowUserVerificationProvider blocks inside Status until unblock closes,
+// optionally cancelling the request while it runs.
+type slowUserVerificationProvider struct {
+	started chan struct{}
+	unblock chan struct{}
+	cancel  *userVerificationCancelToken
+}
+
+func (p *slowUserVerificationProvider) Status() (*UserVerificationStatusResponse, error) {
+	close(p.started)
+	credentialID := "credential-1"
+	if p.cancel != nil {
+		// Finish the work after cancelling it, like a native operation whose
+		// callback lands after the RPC already went away.
+		p.cancel.Cancel()
+		return &UserVerificationStatusResponse{CredentialID: &credentialID}, nil
+	}
+	<-p.unblock
+	return &UserVerificationStatusResponse{CredentialID: &credentialID}, nil
+}
+
+func (p *slowUserVerificationProvider) EnsureKey() (*UserVerificationEnrollResponse, error) {
+	return &UserVerificationEnrollResponse{}, nil
+}
+
+func (p *slowUserVerificationProvider) Delete() (*UserVerificationDeleteResponse, error) {
+	return &UserVerificationDeleteResponse{}, nil
+}
+
+func (p *slowUserVerificationProvider) Verify(UserVerificationVerifyParams) (*UserVerificationVerifyResponse, error) {
 	return &UserVerificationVerifyResponse{}, nil
 }

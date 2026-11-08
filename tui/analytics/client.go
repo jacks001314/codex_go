@@ -267,7 +267,21 @@ func RequestAnalytics[T any](ctx context.Context, session *AnalyticsSession, req
 
 func isUnauthorizedAnalyticsError(err error) bool {
 	var statusErr *chatgptapi.HTTPStatusError
-	return errors.As(err, &statusErr) && statusErr.IsStatus(http.StatusUnauthorized)
+	if errors.As(err, &statusErr) && statusErr.IsStatus(http.StatusUnauthorized) {
+		return true
+	}
+	// Rust #60101: a runtime credential that cannot be resolved is a sign-in
+	// problem, not a report problem, so the dashboard keeps its guidance.
+	return isAnalyticsRuntimeAuthError(err)
+}
+
+// isAnalyticsRuntimeAuthError reports runtime credential failures that only a
+// fresh sign-in can fix (Rust #60101 preserves these typed errors instead of
+// collapsing them into a generic request failure).
+func isAnalyticsRuntimeAuthError(err error) bool {
+	return errors.Is(err, runtimeauth.ErrUnavailable) ||
+		errors.Is(err, runtimeauth.ErrRefreshFailed) ||
+		errors.Is(err, runtimeauth.ErrUnsupported)
 }
 
 // analyticsRequestErrorMessage maps a failed report request to the dashboard's
@@ -283,6 +297,9 @@ func analyticsRequestErrorMessage(err error) string {
 		case http.StatusNotFound:
 			return analyticsReportUnavailableMessage
 		}
+	}
+	if isAnalyticsRuntimeAuthError(err) {
+		return analyticsReportSignInMessage
 	}
 	return analyticsReportFailedMessage
 }

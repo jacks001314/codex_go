@@ -2879,11 +2879,13 @@ type Model struct {
 	sideConversations map[string]*activeSideConversation
 	// sidebarTabs keeps sibling side chats per parent in creation order so the
 	// chooser can reopen any of them (Rust #59784).
-	sidebarTabs                map[string][]*activeSideConversation
-	sidebarChooserOpen         bool
-	sidebarChooserParent       string
-	sidebarChooserFocused      bool
-	sidebarChoice              int
+	sidebarTabs           map[string][]*activeSideConversation
+	sidebarChooserOpen    bool
+	sidebarChooserParent  string
+	sidebarChooserFocused bool
+	sidebarChoice         int
+	// sidebarTabHover is the tab index the pointer is over, or -1 (Rust #59928).
+	sidebarTabHover            int
 	abandonedSideThreads       map[string]struct{}
 	sideStartPending           bool
 	statusControls             *chatwidget.StatusControlsState

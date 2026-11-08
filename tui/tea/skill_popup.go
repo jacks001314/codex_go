@@ -463,7 +463,7 @@ func (m *Model) insertMentionSelection(selection mentionsv2.Selection) {
 		return
 	}
 	runes := []rune(m.composer.Value())
-	text := string(runes[:start]) + insert + " " + string(runes[end:])
+	text := completedMentionValue(string(runes[:start]), insert, string(runes[end:]))
 	insertStart := len(string(runes[:start]))
 	insertEnd := insertStart + len(insert)
 	m.composer.SetValue(text)
@@ -523,7 +523,7 @@ func (m *Model) insertSelectedSkillPopupItem() bool {
 	if insert == "$" || insert == "@" {
 		return false
 	}
-	text := replaceSkillPopupToken(m.composer.Value(), insert+" ")
+	text := replaceSkillPopupToken(m.composer.Value(), insert)
 	m.composer.SetValue(text)
 	m.addComposerSkillMentionBinding(item)
 	m.mentionUsage.record(item.Path)
@@ -705,7 +705,33 @@ func replaceSkillPopupToken(text string, insert string) string {
 		}
 		return text + insert
 	}
-	return text[:start] + insert + text[end:]
+	return completedMentionValue(text[:start], insert, text[end:])
+}
+
+// completedMentionPunctuation is the sentence punctuation a user may already
+// have typed directly after a mention when they accept it. Rust #60180 joins
+// the completed mention to that punctuation without inserting a space, so
+// `$skill,` keeps reading `$skill,` instead of becoming `$skill ,`.
+const completedMentionPunctuation = ",.;:!?)]}'\""
+
+// completedMentionValue places one completed mention between the text before and
+// after its token. The mention boundary (insert) is whatever the picker chose;
+// only the separator is decided here, and both insertion paths share that rule:
+// punctuation and existing whitespace attach directly, a following word gets one
+// space, and completing at the end of the draft leaves the composer ready for
+// the next word.
+func completedMentionValue(before string, insert string, after string) string {
+	if after == "" {
+		return before + insert + " "
+	}
+	if strings.ContainsRune(completedMentionPunctuation, rune(after[0])) || isComposerWhitespace(after[0]) {
+		return before + insert + after
+	}
+	return before + insert + " " + after
+}
+
+func isComposerWhitespace(b byte) bool {
+	return b == ' ' || b == '\t' || b == '\n' || b == '\r'
 }
 
 func skillPopupItemsFromResponse(response appserver.SkillsListResponse, cwd string) []skillPopupItem {

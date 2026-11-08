@@ -37,7 +37,6 @@ import (
 	"codex_go/features"
 	"codex_go/install"
 	"codex_go/mcp"
-	"codex_go/runtimeauth"
 	"codex_go/model"
 	"codex_go/network"
 	"codex_go/prompt"
@@ -45,6 +44,7 @@ import (
 	"codex_go/reasoningoverride"
 	"codex_go/review"
 	"codex_go/rollout"
+	"codex_go/runtimeauth"
 	"codex_go/sandbox"
 	"codex_go/session"
 	"codex_go/shell"
@@ -273,6 +273,10 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		DisableFeatures: req.Root.DisableFeatures,
 		CWD:             requestCWD(req),
 		StrictConfig:    strictConfig,
+		// `--ignore-user-config` has to reach the loader, not just the CLI
+		// parser and the worktree conflict check: the user config file is the
+		// thing the flag claims this run does not read.
+		IgnoreUserConfig: req.Exec.IgnoreUserConfig,
 	})
 	if err != nil {
 		if r.NetworkPolicy != nil {

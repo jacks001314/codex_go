@@ -1,6 +1,6 @@
 {
  "schemaVersion": 1,
- "targetRustCommit": "67f0994b532b8740f14b5b738af7b7b2a915b1d6",
+ "targetRustCommit": "748ab55ca7de0b647d9a7a9d9a8e70e00f28666d",
  "allowedIdentityMappings": [
   {
    "rust": "codex",
@@ -189,14 +189,13 @@
    "severity": "P0",
    "phase": "P1",
    "owner": "appserver",
-   "status": "complete",
+   "status": "partial",
    "acceptance": "Stable and experimental JSON Schema and TypeScript exports have zero canonical diff.",
    "evidence": [
-    "go test ./appserver ./app ./cli ./parity -count=1",
-    "go test -race ./appserver -run TestPrecomputed -count=1",
-    "stable, experimental and internal export trees compare byte-for-byte with embedded target-Rust maps",
-    "vendored zstd archives compare byte-for-byte with the frozen Rust target checkout",
-    "index suppression, generated-header stripping, Prettier ordering, trailing-whitespace cleanup and relative-path validation match Rust"
+    "Re-checked against pin 55897425e839d943a744c658701445ff732568a0 (2026-11-08): the vendored precomputed pair is behind the pin. Decompressed key counts stable typescript 776 vs 778 and json_schema 326 vs 328; experimental 941 vs 943 and 474 vs 476. Rust has v2/GatewayOAuthLoginParams and v2/GatewayOAuthReadParams (typescript + nullable json_schema) but the vendored tree does not; shared entries also differ in content in 4 (stable) and 7 (experimental) keys, e.g. v2/QueuedSubmission.ts lacks responsesapiClientMetadata.",
+    "TestPrecomputedExportArtifactsMatchTargetRustCommit fails on the vendored bytes: sha256 6e0fb0e51dd149b0add1013835b8caeab941467a6bbf9b62d4a6f3b3b500f072 (stable) and 6b336adc058aaacc53614253887415de3c79dae2a946611004be95538f483b8a (experimental) versus the frozen pins 5a93be76c2f389899b3a201bb470d69e48ac01ddc5233a431613bbff5a634a7f and 72216e6360b4aadb896c46fe3608f43c2f1f1e46ff894da0f82539703faa5667, which appserver/schema_test.go records as the round-1195 re-anchor to 67f0994b.",
+    "Still true at this pin: index suppression, generated-header stripping, Prettier ordering, trailing-whitespace cleanup and relative-path validation match Rust; the Go generator produces both export trees from the embedded protocol types.",
+    "Fix path: re-vendor both .zst from the pin tree, add the missing Go protocol exports/fields (GatewayOAuthLogin/Read, responsesapiClientMetadata), re-freeze the pins, then run the Generate* drift tests."
    ]
   },
   {
@@ -377,6 +376,7 @@
    "acceptance": "Enterprise automation is parsed, mapped, serialized and rendered exactly like Rust.",
    "evidence": [
     "go test ./auth ./chatgptapi ./appserver ./tui/status ./tui -count=1",
+    "tui/analytics is a full Go surface (35 .go files: dashboard, plot, summary, task_panel, plan_history, chats, tasks, tokens, normalize, report_data); its session resolves runtime auth per request (tui/analytics/client.go -> chatgptapi.CloudClient.RuntimeAuth), so TUI rendering/analytics commits must not be judged not_applicable; verify: go test ./tui/analytics ./chatgptapi ./auth -count=1",
     "Rust GetAccountResponse schema validation"
    ]
   },
@@ -389,6 +389,7 @@
    "acceptance": "All active remote requests have matching interaction and failure semantics.",
    "evidence": [
     "go test ./tui/... ./appserver -count=1",
+    "TUI analytics lives in the tui/analytics subpackage (35 .go files), not in the top-level ./tui package; scope TUI rendering/analytics commits against tui/analytics/** as well",
     "TUI remote app-server event targets, approvals, plugins, external-agent import, goals, realtime and connection status success/failure paths are covered",
     "TestRustTUISnapshotManifestCoversPrioritySurfaces"
    ]

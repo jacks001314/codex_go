@@ -13,6 +13,7 @@ import (
 
 	"codex_go/gitutil"
 	"codex_go/mcp"
+	"codex_go/model"
 	"codex_go/protocol"
 	"codex_go/realtime"
 	"codex_go/rollout"
@@ -762,39 +763,53 @@ type ThreadEnvironment struct {
 	RuntimeWorkspaceRoots []string `json:"runtimeWorkspaceRoots"`
 }
 
+// SelectedModelInfo is the catalog entry a thread's model resolves to
+// (Rust #59958 `selected_model_info`). A thread exposes it so a turn that falls
+// back to synthetic metadata can explain why this model was used instead of
+// leaving the client to correlate a separate warning.
+type SelectedModelInfo struct {
+	Slug                      string `json:"slug"`
+	DisplayName               string `json:"displayName,omitempty"`
+	DefaultReasoningLevel     string `json:"defaultReasoningLevel,omitempty"`
+	UsedFallbackModelMetadata bool   `json:"usedFallbackModelMetadata"`
+	Origin                    string `json:"origin,omitempty"`
+}
+
 type Thread struct {
-	ID                   string              `json:"id"`
-	Environments         []ThreadEnvironment `json:"environments"`
-	Extra                map[string]any      `json:"extra,omitempty"`
-	SessionID            string              `json:"sessionId"`
-	ForkedFromID         *string             `json:"forkedFromId"`
-	ParentThreadID       *string             `json:"parentThreadId"`
-	Preview              string              `json:"preview"`
-	Ephemeral            bool                `json:"ephemeral"`
-	Section              *ThreadSection      `json:"section"`
-	SectionEnteredAt     *int64              `json:"sectionEnteredAt"`
-	ProjectID            *string             `json:"projectId"`
-	HistoryMode          ThreadHistoryMode   `json:"historyMode"`
-	ModelProvider        string              `json:"modelProvider"`
-	Model                *string             `json:"model"`
-	ReasoningEffort      *ReasoningEffort    `json:"reasoningEffort"`
-	CreatedAt            int64               `json:"createdAt"`
-	UpdatedAt            int64               `json:"updatedAt"`
-	RecencyAt            *int64              `json:"recencyAt"`
-	Status               ThreadStatus        `json:"status"`
-	Path                 *string             `json:"path"`
-	CWD                  string              `json:"cwd"`
-	CLIVersion           string              `json:"cliVersion"`
-	Originator           *string             `json:"originator"`
-	Source               SessionSource       `json:"source"`
-	CanAcceptDirectInput *bool               `json:"canAcceptDirectInput"`
-	ThreadSource         *ThreadSource       `json:"threadSource"`
-	AgentNickname        *string             `json:"agentNickname"`
-	AgentRole            *string             `json:"agentRole"`
-	GitInfo              *GitInfo            `json:"gitInfo"`
-	Name                 *string             `json:"name"`
-	DaybreakEnabled      *bool               `json:"daybreakEnabled"`
-	Turns                []Turn              `json:"turns"`
+	ID               string              `json:"id"`
+	Environments     []ThreadEnvironment `json:"environments"`
+	Extra            map[string]any      `json:"extra,omitempty"`
+	SessionID        string              `json:"sessionId"`
+	ForkedFromID     *string             `json:"forkedFromId"`
+	ParentThreadID   *string             `json:"parentThreadId"`
+	Preview          string              `json:"preview"`
+	Ephemeral        bool                `json:"ephemeral"`
+	Section          *ThreadSection      `json:"section"`
+	SectionEnteredAt *int64              `json:"sectionEnteredAt"`
+	ProjectID        *string             `json:"projectId"`
+	HistoryMode      ThreadHistoryMode   `json:"historyMode"`
+	ModelProvider    string              `json:"modelProvider"`
+	Model            *string             `json:"model"`
+	// SelectedModelInfo carries the catalog entry behind Model.
+	SelectedModelInfo    *SelectedModelInfo `json:"selectedModelInfo"`
+	ReasoningEffort      *ReasoningEffort   `json:"reasoningEffort"`
+	CreatedAt            int64              `json:"createdAt"`
+	UpdatedAt            int64              `json:"updatedAt"`
+	RecencyAt            *int64             `json:"recencyAt"`
+	Status               ThreadStatus       `json:"status"`
+	Path                 *string            `json:"path"`
+	CWD                  string             `json:"cwd"`
+	CLIVersion           string             `json:"cliVersion"`
+	Originator           *string            `json:"originator"`
+	Source               SessionSource      `json:"source"`
+	CanAcceptDirectInput *bool              `json:"canAcceptDirectInput"`
+	ThreadSource         *ThreadSource      `json:"threadSource"`
+	AgentNickname        *string            `json:"agentNickname"`
+	AgentRole            *string            `json:"agentRole"`
+	GitInfo              *GitInfo           `json:"gitInfo"`
+	Name                 *string            `json:"name"`
+	DaybreakEnabled      *bool              `json:"daybreakEnabled"`
+	Turns                []Turn             `json:"turns"`
 }
 
 func (t *Thread) MarshalJSON() ([]byte, error) {
@@ -820,6 +835,7 @@ func (t *Thread) MarshalJSON() ([]byte, error) {
 		HistoryMode          ThreadHistoryMode   `json:"historyMode"`
 		ModelProvider        string              `json:"modelProvider"`
 		Model                *string             `json:"model"`
+		SelectedModelInfo    *SelectedModelInfo  `json:"selectedModelInfo"`
 		ReasoningEffort      *ReasoningEffort    `json:"reasoningEffort"`
 		CreatedAt            int64               `json:"createdAt"`
 		UpdatedAt            int64               `json:"updatedAt"`
@@ -852,6 +868,7 @@ func (t *Thread) MarshalJSON() ([]byte, error) {
 		HistoryMode:          historyMode,
 		ModelProvider:        t.ModelProvider,
 		Model:                t.Model,
+		SelectedModelInfo:    t.SelectedModelInfo,
 		ReasoningEffort:      t.ReasoningEffort,
 		CreatedAt:            t.CreatedAt,
 		UpdatedAt:            t.UpdatedAt,
@@ -1049,6 +1066,11 @@ type ThreadItem struct {
 	Data       map[string]any      `json:"data,omitempty"`
 	Raw        json.RawMessage     `json:"raw,omitempty"`
 	ResponseID string              `json:"responseId,omitempty"`
+	// Moderation carries the final-answer moderation result the model stream
+	// reported for this item (Rust #59842). It is only set on the completed
+	// answer item of a turn, and only for agent messages, so item/completed
+	// publishes the verdict next to the answer it judged.
+	Moderation any `json:"moderation,omitempty"`
 	// StartedAtMS and CompletedAtMS are the recorded item lifecycle times in
 	// Unix milliseconds. Rust #57172 keeps them nullable on the wire, so the
 	// keys are always present and serialize as null when the time is unknown.
@@ -1085,6 +1107,7 @@ func (i *ThreadItem) UnmarshalJSON(data []byte) error {
 		Data          map[string]any  `json:"data,omitempty"`
 		Raw           json.RawMessage `json:"raw,omitempty"`
 		ResponseID    string          `json:"responseId,omitempty"`
+		Moderation    json.RawMessage `json:"moderation,omitempty"`
 		StartedAtMS   *int64          `json:"startedAtMs"`
 		CompletedAtMS *int64          `json:"completedAtMs"`
 	}
@@ -1108,6 +1131,13 @@ func (i *ThreadItem) UnmarshalJSON(data []byte) error {
 		ResponseID:    wire.ResponseID,
 		StartedAtMS:   cloneInt64(wire.StartedAtMS),
 		CompletedAtMS: cloneInt64(wire.CompletedAtMS),
+	}
+	if len(wire.Moderation) > 0 && !bytes.Equal(bytes.TrimSpace(wire.Moderation), []byte("null")) {
+		var moderation any
+		if err := json.Unmarshal(wire.Moderation, &moderation); err != nil {
+			return fmt.Errorf("decode thread item moderation: %w", err)
+		}
+		i.Moderation = moderation
 	}
 	if len(wire.Content) > 0 && !bytes.Equal(bytes.TrimSpace(wire.Content), []byte("null")) {
 		var rawContents []json.RawMessage
@@ -1161,7 +1191,7 @@ func threadItemStructuralJSONField(key string) bool {
 	switch key {
 	case "id", "type", "role", "text", "name", "namespace", "callId", "status",
 		"turnId", "createdAt", "delivery", "content", "data", "raw", "responseId",
-		"startedAtMs", "completedAtMs":
+		"moderation", "startedAtMs", "completedAtMs":
 		return true
 	default:
 		return false
@@ -1263,6 +1293,7 @@ func (i *ThreadItem) marshalPayloadJSON() ([]byte, error) {
 			Delivery       any    `json:"delivery"`
 			Questions      any    `json:"questions"`
 			ResponseID     string `json:"responseId,omitempty"`
+			Moderation     any    `json:"moderation,omitempty"`
 		}{
 			Type:           "agentMessage",
 			ID:             i.ID,
@@ -1272,6 +1303,7 @@ func (i *ThreadItem) marshalPayloadJSON() ([]byte, error) {
 			Delivery:       agentMessageDelivery(i),
 			Questions:      threadItemAnyFromData(i.Data, "questions"),
 			ResponseID:     i.ResponseID,
+			Moderation:     i.moderation(),
 		})
 	case "plan":
 		return json.Marshal(struct {
@@ -3835,6 +3867,32 @@ type EnvironmentConnectionNotification struct {
 	EnvironmentID string `json:"environmentId"`
 }
 
+// selectedModelInfoForModel resolves a thread's model against the catalog the
+// session started from. It is derived from the persisted record, so thread/read,
+// thread/start, thread/resume and the live thread path all report the same
+// entry; a slug the catalog does not know still resolves, with
+// UsedFallbackModelMetadata set, which is exactly the case a fallback warning
+// explains.
+func selectedModelInfoForModel(slug string) *SelectedModelInfo {
+	slug = strings.TrimSpace(slug)
+	if slug == "" {
+		return nil
+	}
+	catalog := model.ModelsCatalogFromConfigValues(nil)
+	if catalog == nil {
+		bundled := model.BundledModelsResponse()
+		catalog = &bundled
+	}
+	info := model.NewStaticModelsManager(*catalog).GetModelInfo(slug, nil)
+	return &SelectedModelInfo{
+		Slug:                      firstNonEmpty(info.Slug, slug),
+		DisplayName:               info.DisplayName,
+		DefaultReasoningLevel:     info.DefaultReasoningLevel,
+		UsedFallbackModelMetadata: info.UsedFallbackModelMetadata,
+		Origin:                    string(model.ModelOriginBundled),
+	}
+}
+
 func BuildThread(record *session.Record, path string, includeTurns bool) *Thread {
 	if record == nil {
 		return nil
@@ -3866,35 +3924,36 @@ func BuildThread(record *session.Record, path string, includeTurns bool) *Thread
 		sectionEnteredAt = &value
 	}
 	thread := &Thread{
-		ID:               threadID,
-		Environments:     threadEnvironmentsFromRecord(record),
-		SessionID:        sessionID,
-		ForkedFromID:     stringPtrIfNotEmpty(string(record.ForkedFromID)),
-		ParentThreadID:   stringPtrIfNotEmpty(string(record.ParentThreadID)),
-		Preview:          record.Preview,
-		Ephemeral:        boolFromMap(record.Metadata.Extra, "ephemeral"),
-		Section:          threadSectionFromRecord(record),
-		SectionEnteredAt: sectionEnteredAt,
-		HistoryMode:      historyMode,
-		ModelProvider:    modelProvider,
-		Model:            stringPtrIfNotEmpty(record.Metadata.Model),
-		ReasoningEffort:  reasoningEffortFromRecord(record),
-		CreatedAt:        unixOrZero(record.CreatedAt),
-		UpdatedAt:        unixOrZero(record.UpdatedAt),
-		RecencyAt:        recencyAt,
-		Status:           NotLoadedStatus(),
-		Path:             threadPath,
-		CWD:              record.Metadata.CWD,
-		CLIVersion:       record.Metadata.CLIVersion,
-		Originator:       stringPtrIfNotEmpty(record.Metadata.Originator),
-		Source:           source,
-		ThreadSource:     threadSource,
-		AgentNickname:    stringPtrIfNotEmpty(record.Metadata.AgentNickname),
-		AgentRole:        stringPtrIfNotEmpty(record.Metadata.AgentRole),
-		GitInfo:          gitInfoFromMap(record.Metadata.Git),
-		Name:             stringPtrIfNotEmpty(record.Title),
-		DaybreakEnabled:  record.Metadata.DaybreakEnabled,
-		Turns:            []Turn{},
+		ID:                threadID,
+		Environments:      threadEnvironmentsFromRecord(record),
+		SessionID:         sessionID,
+		ForkedFromID:      stringPtrIfNotEmpty(string(record.ForkedFromID)),
+		ParentThreadID:    stringPtrIfNotEmpty(string(record.ParentThreadID)),
+		Preview:           record.Preview,
+		Ephemeral:         boolFromMap(record.Metadata.Extra, "ephemeral"),
+		Section:           threadSectionFromRecord(record),
+		SectionEnteredAt:  sectionEnteredAt,
+		HistoryMode:       historyMode,
+		ModelProvider:     modelProvider,
+		Model:             stringPtrIfNotEmpty(record.Metadata.Model),
+		SelectedModelInfo: selectedModelInfoForModel(record.Metadata.Model),
+		ReasoningEffort:   reasoningEffortFromRecord(record),
+		CreatedAt:         unixOrZero(record.CreatedAt),
+		UpdatedAt:         unixOrZero(record.UpdatedAt),
+		RecencyAt:         recencyAt,
+		Status:            NotLoadedStatus(),
+		Path:              threadPath,
+		CWD:               record.Metadata.CWD,
+		CLIVersion:        record.Metadata.CLIVersion,
+		Originator:        stringPtrIfNotEmpty(record.Metadata.Originator),
+		Source:            source,
+		ThreadSource:      threadSource,
+		AgentNickname:     stringPtrIfNotEmpty(record.Metadata.AgentNickname),
+		AgentRole:         stringPtrIfNotEmpty(record.Metadata.AgentRole),
+		GitInfo:           gitInfoFromMap(record.Metadata.Git),
+		Name:              stringPtrIfNotEmpty(record.Title),
+		DaybreakEnabled:   record.Metadata.DaybreakEnabled,
+		Turns:             []Turn{},
 	}
 	if includeTurns {
 		thread.Turns = turnsFromRecord(record)

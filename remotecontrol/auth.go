@@ -10,6 +10,7 @@ import (
 
 	"codex_go/auth"
 	"codex_go/model"
+	"codex_go/runtimeauth"
 )
 
 const RemoteControlAccountIDHeader = "chatgpt-account-id"
@@ -24,11 +25,60 @@ var (
 	ErrRemoteControlRequestFailed       = errors.New("remote control request failed")
 	ErrRemoteControlRefreshDeferred     = errors.New("remote control server token refresh deferred")
 	ErrRemoteControlPairingUnavailable  = errors.New("remote control pairing is unavailable until the server token is refreshed")
+	// Rust request_context: a runtime-bound login fails instead of falling back
+	// to the actor credential before the runtime is initialized (WouldBlock).
+	ErrRemoteControlRuntimeAuthNotInitialized = errors.New("runtime authentication is not initialized")
+	// Rust validate_runtime_destination: an unrecognized OpenAI origin is a hard
+	// error, never a bearer fallback.
+	ErrRemoteControlRuntimeAuthUnsupportedEndpoint = errors.New("runtime auth does not support this OpenAI endpoint")
 )
 
 type RemoteControlConnectionAuth struct {
 	AuthHeaders *model.AuthHeaders
 	AccountID   string
+	// RuntimeAuth binds this login lifetime to a runtime slot. Nil keeps the
+	// actor credential, which is the behavior every non-runtime caller relies on.
+	RuntimeAuth *RuntimeAuthSelection
+}
+
+// RuntimeAuthSelection mirrors the (RuntimeAuthSlot, RuntimeAuthMode) pair Rust
+// captures with one remote-control login lifetime.
+type RuntimeAuthSelection struct {
+	Slot *RuntimeAuthSlot
+	Mode runtimeauth.Mode
+}
+
+// RuntimeAuthSlot mirrors Rust RuntimeAuthSlot: it starts empty and receives the
+// runtime manager once runtime auth is enabled. A request that arrives first
+// fails instead of silently dropping the runtime credential.
+type RuntimeAuthSlot struct {
+	mu      sync.RWMutex
+	manager *runtimeauth.Manager
+}
+
+// Set fills the slot once. Rust RuntimeAuthSlot::set rejects a second manager so
+// a connection cannot adopt a replacement authentication owner.
+func (s *RuntimeAuthSlot) Set(manager *runtimeauth.Manager) error {
+	if s == nil || manager == nil {
+		return fmt.Errorf("%w: runtime auth slot requires a manager", ErrInvalidRequest)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.manager != nil {
+		return fmt.Errorf("%w: runtime auth slot is already filled", ErrInvalidRequest)
+	}
+	s.manager = manager
+	return nil
+}
+
+// Get returns the manager bound to this login lifetime.
+func (s *RuntimeAuthSlot) Get() *runtimeauth.Manager {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.manager
 }
 
 func NewRemoteControlConnectionAuthFromSnapshot(snapshot *auth.AuthDotJSON) (*RemoteControlConnectionAuth, error) {
@@ -50,6 +100,25 @@ func NewRemoteControlConnectionAuthFromSnapshot(snapshot *auth.AuthDotJSON) (*Re
 		AuthHeaders: &headers,
 		AccountID:   accountID,
 	}, nil
+}
+
+// WithRuntimeAuth binds every connection auth a loader produces to one runtime
+// slot, mirroring Rust RemoteControlAuth::capture, which stores the runtime pair
+// with the captured login. The slot is read per request, so rotating the runtime
+// takes effect without reloading the connection.
+func WithRuntimeAuth(loader RemoteControlAuthLoader, selection *RuntimeAuthSelection) RemoteControlAuthLoader {
+	if loader == nil || selection == nil {
+		return loader
+	}
+	return func(ctx context.Context) (*RemoteControlConnectionAuth, error) {
+		connectionAuth, err := loader(ctx)
+		if err != nil || connectionAuth == nil {
+			return connectionAuth, err
+		}
+		bound := *connectionAuth
+		bound.RuntimeAuth = selection
+		return &bound, nil
+	}
 }
 
 func NewRemoteControlAuthLoaderForCodexHome(codexHome string) RemoteControlAuthLoader {
@@ -477,8 +546,128 @@ func (a *RemoteControlConnectionAuth) RequestHeaders() (http.Header, error) {
 	return headers, nil
 }
 
-func (a *RemoteControlConnectionAuth) ApplyRequest(ctx context.Context, request *http.Request, body []byte) ([]byte, error) {
+// RequestHeadersForEndpoint resolves the credential for one request destination
+// (Rust RemoteControlConnectionAuth::request_context). A login lifetime bound to
+// runtime auth sends the runtime assertion instead of the actor credential for
+// first-party destinations, and fails rather than falling back when the runtime
+// is not initialized or the destination is an unsupported OpenAI origin.
+func (a *RemoteControlConnectionAuth) RequestHeadersForEndpoint(ctx context.Context, endpoint string) (http.Header, error) {
+	headers, _, err := a.headersForEndpoint(ctx, endpoint)
+	if err != nil {
+		return nil, err
+	}
+	return headers, nil
+}
+
+// headersForEndpoint builds the request headers and reports the runtime
+// selection used for them, so the caller can skip the actor credential that the
+// runtime just replaced.
+func (a *RemoteControlConnectionAuth) headersForEndpoint(ctx context.Context, endpoint string) (http.Header, *runtimeauth.Auth, error) {
 	headers, err := a.RequestHeaders()
+	if err != nil {
+		return nil, nil, err
+	}
+	selected, err := a.runtimeAuthForEndpoint(ctx, endpoint)
+	if err != nil {
+		return nil, nil, err
+	}
+	if selected == nil {
+		return headers, nil, nil
+	}
+	runtimeHeaders, err := selected.Headers(a.RuntimeAuth.Mode)
+	if err != nil {
+		return nil, nil, err
+	}
+	// Runtime headers replace the actor credential, so switching modes or
+	// rotating a runtime never leaves the previous credential behind
+	// (Rust replace_auth_headers).
+	runtimeauth.ReplaceAuthHeaders(headers, runtimeHeaders)
+	// The login lifetime's account id stays authoritative; the runtime has to
+	// agree with it (Rust request_headers followed by validate_headers).
+	headers.Set(RemoteControlAccountIDHeader, strings.TrimSpace(a.AccountID))
+	if err := validateRuntimeSelectors(headers, selected.Instance().Actor()); err != nil {
+		return nil, nil, err
+	}
+	return headers, selected, nil
+}
+
+// runtimeAuthForEndpoint selects the runtime for one destination. Rust rejects
+// unsupported OpenAI origins, skips runtime auth for other providers, and reads
+// the slot on every request so a rotation takes effect immediately.
+func (a *RemoteControlConnectionAuth) runtimeAuthForEndpoint(ctx context.Context, endpoint string) (*runtimeauth.Auth, error) {
+	if a == nil || a.RuntimeAuth == nil || a.RuntimeAuth.Slot == nil {
+		return nil, nil
+	}
+	// An unrecognized OpenAI origin must not silently fall back to legacy auth.
+	if runtimeauth.ClassifyOpenAIDestination(endpoint) == runtimeauth.DestinationUnsupported {
+		return nil, ErrRemoteControlRuntimeAuthUnsupportedEndpoint
+	}
+	// Custom backends keep their own authentication.
+	if !runtimeauth.IsOpenAIAPIURL(endpoint) {
+		return nil, nil
+	}
+	manager := a.RuntimeAuth.Slot.Get()
+	if manager == nil {
+		return nil, ErrRemoteControlRuntimeAuthNotInitialized
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// The runtime is selected against the manager's current credential source,
+	// so a replaced login re-registers or fails instead of continuing with
+	// another authentication owner.
+	return manager.AuthWithSelection(ctx, runtimeauth.Selection{})
+}
+
+// validateRuntimeSelectors mirrors Rust validate_runtime_selectors: selectors
+// that disagree with the registered runtime actor are rejected instead of being
+// sent to the backend.
+func validateRuntimeSelectors(headers http.Header, actor runtimeauth.ActorInfo) error {
+	validate := func(name string, expected *string) error {
+		values := runtimeSelectorValues(headers, name)
+		if len(values) == 0 {
+			return nil
+		}
+		if expected == nil || values[0] != *expected {
+			return fmt.Errorf("configured %s does not match the registered runtime", name)
+		}
+		return nil
+	}
+	switch actor.Kind {
+	case runtimeauth.ActorChatGPT:
+		accountID := actor.AccountID
+		if err := validate(RemoteControlAccountIDHeader, &accountID); err != nil {
+			return err
+		}
+		if err := validate("openai-organization", nil); err != nil {
+			return err
+		}
+		return validate("openai-project", nil)
+	case runtimeauth.ActorPlatform:
+		organizationID := actor.OrganizationID
+		if err := validate(RemoteControlAccountIDHeader, nil); err != nil {
+			return err
+		}
+		return validate("openai-organization", &organizationID)
+	default:
+		return nil
+	}
+}
+
+func runtimeSelectorValues(headers http.Header, name string) []string {
+	for key, values := range headers {
+		if strings.EqualFold(key, name) {
+			return values
+		}
+	}
+	return nil
+}
+
+func (a *RemoteControlConnectionAuth) ApplyRequest(ctx context.Context, request *http.Request, body []byte) ([]byte, error) {
+	if request == nil || request.URL == nil {
+		return nil, fmt.Errorf("%w: remote control request is nil", ErrInvalidRequest)
+	}
+	headers, selected, err := a.headersForEndpoint(ctx, request.URL.String())
 	if err != nil {
 		return nil, err
 	}
@@ -488,7 +677,9 @@ func (a *RemoteControlConnectionAuth) ApplyRequest(ctx context.Context, request 
 			request.Header.Add(key, value)
 		}
 	}
-	if a != nil && a.AuthHeaders != nil {
+	// A runtime selection replaced the actor credential outright; re-applying
+	// AuthHeaders here would append the bearer the runtime just removed.
+	if selected == nil && a.AuthHeaders != nil {
 		signed, err := a.AuthHeaders.ApplyRequest(ctx, request, body)
 		if err != nil {
 			return nil, err

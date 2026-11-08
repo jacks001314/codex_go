@@ -1,6 +1,7 @@
 package cloudclient
 
 import (
+	"reflect"
 	"testing"
 
 	"google.golang.org/protobuf/encoding/protowire"
@@ -190,5 +191,65 @@ func TestTranscriptDeltaPatchAndTurnUpdates(t *testing.T) {
 	}
 	if _, ok, err := decodeTranscriptEvent("other", testNotification(23, 12, turnParams)); err != nil || ok {
 		t.Fatalf("foreign turn ok=%v err=%v, want skipped", ok, err)
+	}
+}
+
+// TestUserMessageContentRoundTripsTypedPartsLikeRust pins the decode half: the
+// same ordered parts the request encoder emits come back typed and equal, and a
+// single image part no longer drops the whole user-message item.
+func TestUserMessageContentRoundTripsTypedPartsLikeRust(t *testing.T) {
+	placeholder := "@file"
+	detail := ImageDetailOriginal
+	want := []UserMessageInput{
+		{Kind: UserMessageText, Text: "read @file now", TextElements: []UserMessageTextElement{{Start: 5, End: 10, Placeholder: &placeholder}}},
+		{Kind: UserMessageImage, Image: ImageReference{FileID: "file-1"}, Detail: &detail},
+	}
+	user := appendProtoBytes(nil, 2, encodeUserInputs(want))
+	user = appendProtoString(user, 3, "user-item")
+	item, ok, err := decodeItem(protoMessage(1, user))
+	if err != nil || !ok || item.Kind != ItemUserMessage {
+		t.Fatalf("decodeItem = %#v ok=%v err=%v", item, ok, err)
+	}
+	if !reflect.DeepEqual(item.User.Content, want) {
+		t.Fatalf("round trip content = %#v, want %#v", item.User.Content, want)
+	}
+	if len(item.User.Text) != 1 || item.User.Text[0] != "read @file now" {
+		t.Fatalf("text parts = %#v, want only the text part", item.User.Text)
+	}
+}
+
+// TestUserMessageContentKeepsDataURLImagesLikeRust pins that an inline image
+// survives decoding with its data URL and detail, and that its bytes stay out of
+// the text parts.
+func TestUserMessageContentKeepsDataURLImagesLikeRust(t *testing.T) {
+	detail := ImageDetailAuto
+	want := []UserMessageInput{
+		{Kind: UserMessageImage, Image: ImageReference{URL: "data:image/png;base64,AAA"}, Detail: &detail},
+		{Kind: UserMessageText, Text: "caption"},
+	}
+	user := appendProtoBytes(nil, 2, encodeUserInputs(want))
+	user = appendProtoString(user, 3, "user-item")
+	item, ok, err := decodeItem(protoMessage(1, user))
+	if err != nil || !ok {
+		t.Fatalf("decodeItem ok=%v err=%v, want the item kept", ok, err)
+	}
+	if !reflect.DeepEqual(item.User.Content, want) {
+		t.Fatalf("content = %#v, want %#v", item.User.Content, want)
+	}
+	if len(item.User.Text) != 1 || item.User.Text[0] != "caption" {
+		t.Fatalf("text parts = %#v, want the caption alone", item.User.Text)
+	}
+}
+
+// TestUserMessageContentDropsUnsupportedPartsLikeRust pins Rust's rule for an
+// input alternative this client does not model: the whole summary is dropped
+// rather than flattened.
+func TestUserMessageContentDropsUnsupportedPartsLikeRust(t *testing.T) {
+	audio := protoMessage(4, []byte("raw-bytes"))
+	content := protoMessage(1, audio)
+	user := appendProtoBytes(nil, 2, content)
+	user = appendProtoString(user, 3, "user-item")
+	if _, ok, err := decodeItem(protoMessage(1, user)); ok || err != nil {
+		t.Fatalf("decodeItem ok=%v err=%v, want an unsupported part to drop the item", ok, err)
 	}
 }

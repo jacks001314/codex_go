@@ -5,10 +5,9 @@ package doctor
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 )
-
-const desktopMacBundleIdentifier = "com.openai.codex"
 
 var errDesktopBundle = errors.New("desktop bundle metadata is unreadable")
 
@@ -47,17 +46,28 @@ func desktopInstalledApp() (*desktopApp, error) {
 			if version == "" || metadata["CFBundleVersion"] == "" {
 				return nil, errDesktopBundle
 			}
-			return &desktopApp{identity: desktopMacBundleIdentifier, version: version}, nil
+			return &desktopApp{identity: desktopMacBundleIdentifier, version: version, bundle: bundle}, nil
 		}
 	}
 	return nil, nil
 }
 
-// desktopApplicationRunning needs proc_pidpath to compare the candidate's
-// executable against the bundle; the Windows probe is the aligned one today, so
-// the macOS session probe reports no running session.
-func desktopApplicationRunning(_ *desktopApp, _ int) bool {
-	return false
+// desktopApplicationRunning mirrors Rust's platform::application_running: the
+// candidate process is the desktop application only when proc_pidpath resolves
+// its executable inside <bundle>/Contents/MacOS.
+func desktopApplicationRunning(app *desktopApp, pid int) bool {
+	if app == nil || app.bundle == "" || pid <= 0 {
+		return false
+	}
+	executable, ok := darwinProcessExecutablePath(pid)
+	if !ok {
+		return false
+	}
+	macOSDirectory := filepath.Join(app.bundle, "Contents", "MacOS")
+	if executable == macOSDirectory {
+		return true
+	}
+	return strings.HasPrefix(executable, macOSDirectory+string(os.PathSeparator))
 }
 
 func desktopBundleMetadata(bundle string) (map[string]string, error) {

@@ -188,6 +188,12 @@ func (m *Model) renderSideWorkspace(width int, height int) (string, bool) {
 		// Rust #59784 paints the sibling tabs above the side transcript.
 		right = m.renderSidebarTabStrip(rightWidth) + "\n" + right
 	}
+	// Rust #59928 paints the strip on the pane's first row; record which screen
+	// row that is so the pointer hit test follows the painted origin. An inset
+	// render shifts it later through offsetConversationPointerRows.
+	if m.sidebarTabStripVisible() {
+		m.sidebarTabStripTop = 0
+	}
 	// Rust #59527 keeps a scroll position per pane: the focused pane follows
 	// the transcript viewport, while the inactive pane keeps the offset parked
 	// when focus left it (or when the wheel last moved over it). A pane whose

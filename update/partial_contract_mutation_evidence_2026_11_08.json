@@ -1,0 +1,363 @@
+{
+ "schemaVersion": 2,
+ "generatedAt": "2026-11-08",
+ "source": {
+  "manifest": "parity/contracts/manifest.json",
+  "sha256": "5e41d4e156c2d85e316fc7964895f53a20db1b3bfe7c039046ac1e6fec688f28",
+  "bytes": 67985,
+  "contracts": 138,
+  "statusCounts": {
+   "complete": 137,
+   "partial": 1
+  }
+ },
+ "method": "removalEvidence 全部在主干树的副本 /tmp/m13 上真跑：改一处实现 → 跑指定用例 → 记录变红行 → 还原（sha256 复核）。没有真跑的条目一律不给 complete。",
+ "counts": {
+  "needs-behaviour": 7,
+  "complete": 12,
+  "undecidable": 1
+ },
+ "total": 20,
+ "verdicts": [
+  {
+   "id": "managed-runtime-auth-mode",
+   "status": "complete",
+   "verdict": "needs-behaviour",
+   "rustAnchor": "config/src/config_requirements.rs:968-990 runtime_agent_instances（configured 与 managed requirement 冲突时是 ConstraintError::InvalidValue，加载期硬失败）",
+   "goImplementation": "config/runtime_auth_mode.go:61-76 Config.RuntimeAuthMode()（required 胜出 + overridden 标志）+ :78 RuntimeAuthModeConflictWarning（只产出 warning）；runtimeauth/config.go:44-70 ProviderOptions.Mode 注入",
+   "verifier": [
+    "TestModeFromConfigValuesLikeRust"
+   ],
+   "removalEvidence": null,
+   "residual": "**冲突处理方式不同**：Rust 在配置加载期把「配置值被 managed requirement 禁止」当错误中止；Go 应用 required 值并在启动时打 warning 继续跑（`RuntimeAuthModeConflictWarning`）。最终 mode 值一致，错误面不一致 → 保持 partial"
+  },
+  {
+   "id": "mcp-network-policy-derivation",
+   "status": "partial",
+   "verdict": "needs-behaviour",
+   "rustAnchor": "core/src/exec_policy.rs:567-640 apply_network_rule_and_persist（update_lock → clone → add_network_rule → Arc store 发布 → proxy.add_allowed_domain/add_denied_domain → 落盘）",
+   "goImplementation": "appserver/network_approval.go:1491-1520 persistNetworkPolicyAmendment（只做 execpolicy.AppendNetworkRule 落盘）",
+   "verifier": [
+    "TestMCPNetworkPolicyCapabilityOnlyAdvertisedToTrustedChatGPTOriginsLikeRust",
+    "TestEnvironmentNetworkPolicyApplyToPreservesInheritedDenials"
+   ],
+   "removalEvidence": null,
+   "residual": "你的反证成立：Go 没有「先内存发布、再写盘」的语义，也没有 update_lock 与 proxy denylist 更新；**写盘失败时 deny 不生效**，而 Rust 的 deny 已先进入内存/代理。登记的 verifier 只覆盖通告与继承 denial，覆盖不到这条"
+  },
+  {
+   "id": "mcp-app-invocation-context-refresh",
+   "status": "complete",
+   "verdict": "complete",
+   "rustAnchor": "codex-mcp/src/binding.rs（binding 在 model step 捕获；catalog 变更后旧 binding 的调用被拒）+ codex-mcp/src/connection_manager.rs（refresh 使旧 catalog 失效）——文件级定位，未逐行",
+   "goImplementation": "mcp/binding.go:155-172 CallTool 的三道闸：generation 变更、`!b.tools[server][tool]`（不可见工具）、cachedRevisions 不匹配",
+   "verifier": [
+    "TestBindingRejectsCatalogRefreshAndInvisibleTools",
+    "TestModelSearchDiscoveryProjectsConnectorInvocationContextLikeRust"
+   ],
+   "removalEvidence": {
+    "test": "TestBindingRejectsCatalogRefreshAndInvisibleTools",
+    "assertion": "binding_test.go:13: invisible tool err=<nil>",
+    "mutation": "mcp/binding.go:167 把 `if !b.tools[server][tool] {` 改成 `if false && !b.tools[server][tool] {`",
+    "command": "go test ./mcp -run TestBindingRejectsCatalogRefreshAndInvisibleTools -count=1"
+   },
+   "residual": "无（catalog refresh 那一半由 generation 闸覆盖，同一用例第二段断言 stale binding err=ErrInvalidMCPRequest）"
+  },
+  {
+   "id": "message-board-fixed-read-view",
+   "status": "complete",
+   "verdict": "needs-behaviour",
+   "rustAnchor": "message-board/src/read_view.rs（captured catalog + post cutoff 的完整读面）+ local/queries.rs / paging.rs",
+   "goImplementation": "agentboard/read_view.go:55-120：只暴露 Cutoff() / Channels() / ReadPost()，其余方法一律 ErrBoardReadViewReadOnly",
+   "verifier": [
+    "TestLocalBoardPersistsPagesAndReadsLikeRust",
+    "TestLocalBoardAppendPersistsEvidenceWithoutSideEffectsLikeRust",
+    "TestLocalBoardFixedReadViewFreezesCatalogAndCutoffLikeRust"
+   ],
+   "removalEvidence": {
+    "test": "TestLocalBoardFixedReadViewFreezesCatalogAndCutoffLikeRust",
+    "assertion": "local_read_view_like_rust_test.go:34: view channels = %v, want the frozen catalog [alpha beta]（mutate Channels 返回实时目录即红）",
+    "mutation": "agentboard/read_view.go:64 Channels() 改为回读实时 channel 表",
+    "command": "go test ./agentboard -run TestLocalBoardFixedReadViewFreezesCatalogAndCutoffLikeRust -count=1"
+   },
+   "residual": "读面只有三面（Cutoff/Channels/ReadPost）；Rust read view 还提供线程列表/分页/搜索等读取入口，Go 侧未暴露 → 保持 partial（与你的判断一致）"
+  },
+  {
+   "id": "cloud-image-messages-and-draft-handoff",
+   "status": "complete",
+   "supersededBy": "cloud-image-messages",
+   "verdict": "needs-behaviour",
+   "rustAnchor": "cloud-client/src/items.rs（typed items：text + image）+ app-server-client/src/cloud_backend/requests.rs（draft handoff）",
+   "goImplementation": "cloudclient/turns.go:144-173 encodeAddUserMessageRequest（只写文本 content item）",
+   "verifier": [
+    "TestAddUserMessageRequestEncoding",
+    "TestCloudConversationRequestsAndTypedReceiptsLikeRust"
+   ],
+   "removalEvidence": null,
+   "residual": "① 无 image content item：`rg -i image cloudclient/ cloudbackend/` → 0 命中；② 无 draft handoff 落点"
+  },
+  {
+   "id": "cloud-thread-project-binding",
+   "status": "complete",
+   "verdict": "complete",
+   "rustAnchor": "cloud-client/src/prewarm.rs:31-41 prewarm_default_thread / prewarm_thread（managed environment + 可选 model/provider）",
+   "goImplementation": "cloudclient/prewarm.go:46-56 encodePrewarmRequest（field 10 environments / field 15 model / field 16 provider）",
+   "verifier": [
+    "TestPrewarmRequestUsesManagedEnvironmentAndOptionalModelLikeRust"
+   ],
+   "removalEvidence": {
+    "test": "TestPrewarmRequestUsesManagedEnvironmentAndOptionalModelLikeRust",
+    "assertion": "prewarm_test.go:66: default request omitted environments",
+    "mutation": "cloudclient/prewarm.go:50-51 去掉 environments 信封（`out := []byte{}`）",
+    "command": "go test ./cloudclient -run TestPrewarmRequestUsesManagedEnvironmentAndOptionalModelLikeRust -count=1"
+   },
+   "residual": "无（sanitized git url 半由 appserver 的 nutil.SanitizeGitURL 承担，本契约 rustPaths 里 protocol/src/sanitized_git_url.rs 不在本用例断言范围）"
+  },
+  {
+   "id": "sidebar-tab-keyboard-mouse-navigation",
+   "status": "complete",
+   "verdict": "complete",
+   "rustAnchor": "tui/src/app/side_focus.rs:376 focus_pane_left（leader 隐式和弦）+ tui/src/sidebar_tab_strip.rs",
+   "goImplementation": "tui/tea/leader_chord.go:100-140 leaderBindingsFor + implicitWorkspaceLeaderCompletions（leader_chord.go:80-97）",
+   "verifier": [
+    "TestWorkspacePaneLeaderBindingsLikeRust",
+    "TestSidebarTabsKeepMultipleSideChatsLikeRust"
+   ],
+   "removalEvidence": {
+    "test": "TestWorkspacePaneLeaderBindingsLikeRust",
+    "assertion": "side_focus_like_rust_test.go:29: leader - = \"\", want \"global.hide_pane\" (bindings=map[string]string{\"[\":\"global.select_transcript\", \"p\":\"chat.open_presets\"})",
+    "mutation": "tui/tea/leader_chord.go:126-133 删掉 implicit workspace completions 的填充（只 `continue`）",
+    "command": "go test ./tui/tea -run TestWorkspacePaneLeaderBindingsLikeRust -count=1"
+   },
+   "residual": "键盘面已锁；鼠标点选 tab 不在本契约（Rust 在 sidebar_tab_strip.rs:81 hit()，Go 无鼠标处理）——见 sidebar-chooser-list-bindings-and-hover 的 residual"
+  },
+  {
+   "id": "side-chat-persistence-and-tab-close",
+   "status": "complete",
+   "verdict": "complete",
+   "rustAnchor": "tui/src/app/side.rs（side chat 生命周期）+ rollout/src/session_index.rs（持久化）",
+   "goImplementation": "tui/tea/sidebar_chooser.go:26-33 sidebarTabsFor / :35-52 registerSidebarTab（同 parent 下去重登记）",
+   "verifier": [
+    "TestSidebarTabsKeepMultipleSideChatsLikeRust",
+    "TestSidebarChooserOffersNewSideChatLikeRust"
+   ],
+   "removalEvidence": {
+    "test": "TestSidebarTabsKeepMultipleSideChatsLikeRust",
+    "assertion": "sidebar_tabs_like_rust_test.go:90: sidebar tabs = 1, want 2",
+    "mutation": "tui/tea/sidebar_chooser.go:30 让 sidebarTabsFor 只返回 `tabs[:1]`",
+    "command": "go test ./tui/tea -run TestSidebarTabsKeepMultipleSideChatsLikeRust -count=1"
+   },
+   "residual": "无"
+  },
+  {
+   "id": "side-chat-policy-first-request",
+   "status": "complete",
+   "verdict": "complete",
+   "rustAnchor": "context-fragments/src/lib.rs + tui/src/app/side.rs（side developer instructions 合并既有策略）",
+   "goImplementation": "tui/tea/side.go:476 SideDeveloperInstructions（既有策略 + 空白行 + side 文本）（原指向 tui/app 死副本，2026-11-08 更正）",
+   "verifier": [
+    "TestSideDeveloperInstructionsAppendsExistingPolicyMatchRust",
+    "TestSideDeveloperInstructionsKeepExistingPolicyLikeRust",
+    "TestSideBoundaryPromptMarksInheritedHistoryReferenceOnlyMatchRust"
+   ],
+   "supersededBy": {
+    "TestSideDeveloperInstructionsAppendsExistingPolicyMatchRust": "TestSideDeveloperInstructionsKeepExistingPolicyLikeRust"
+   },
+   "removalEvidence": {
+    "test": "TestSideDeveloperInstructionsAppendsExistingPolicyMatchRust（2026-11-08 已随 tui/app 死副本删除；见 supersededBy，现由 TestSideDeveloperInstructionsKeepExistingPolicyLikeRust 守）",
+    "assertion": "side_test.go:55: SideDeveloperInstructions() missing existing policy: \"...\"（只返回 side 文本）（2026-11-08 在 tui/tea/side.go:481 复现同一断言：side_developer_instructions_like_rust_test.go:16 同一句红行）",
+    "mutation": "tui/tea/side.go:481 直接 `return SideDeveloperInstructionText`（丢弃 existingInstructions）（原指向 tui/app 死副本，2026-11-08 更正）",
+    "command": "go test ./tui/tea -run TestSideDeveloperInstructionsKeepExistingPolicyLikeRust -count=1"
+   },
+   "residual": "⚠️ `tui/tea/side.go:476` 有一份**同名同形**的 SideDeveloperInstructions，改它**不会**变红（我先改的就是它，测试仍 ok）——两处实现是否都需要，建议你确认哪处是生产路径。（2026-11-08 结案：生产路径是 tui/tea——app/side_tui.go 与 app/remote_tui.go 都调 codextea.；该处现由 TestSideDeveloperInstructionsKeepExistingPolicyLikeRust 覆盖，把 tui/tea/side.go:481 改成只返回 side 文本，该用例即红）"
+  },
+  {
+   "id": "sidebar-chooser-list-bindings-and-hover",
+   "status": "complete",
+   "verdict": "needs-behaviour",
+   "rustAnchor": "tui/src/sidebar_chooser.rs:215 page_size(area,count,choice)（步长=可视行数）+ tui/src/sidebar_tab_strip.rs:81 hit(area, point)（鼠标命中可见单元格）",
+   "goImplementation": "tui/tea/sidebar_chooser.go:162 `const sidebarChooserPageSize = 5`；tui/tea 内无任何 mouse 处理",
+   "verifier": [
+    "TestSidebarChooserOffersNewSideChatLikeRust",
+    "TestSidebarChooserResizesLikeRust",
+    "TestSidebarChooserUsesListBindingsAndHoverLikeRust"
+   ],
+   "removalEvidence": {
+    "test": "TestSidebarChooserUsesListBindingsAndHoverLikeRust",
+    "assertion": "sidebar_chooser_bindings_like_rust_test.go:13 起的 home/ctrl-n/ctrl-p/end 与 hover 断言（去掉 hover 绘制即红）",
+    "mutation": "tui/tea/sidebar_chooser.go 的 hoverSidebarTab 恒返回 -1",
+    "command": "go test ./tui/tea -run TestSidebarChooserUsesListBindingsAndHoverLikeRust -count=1"
+   },
+   "residual": "① PageUp/PageDown 步长写死 5，Rust 按可视行数（sidebar_chooser.rs:215）；② 鼠标点选 tab 缺失（Rust sidebar_tab_strip.rs:81 hit()）；③ hover 只覆盖条带首行（mac lane 报的）"
+  },
+  {
+   "id": "code-mode-incremental-exec-definitions",
+   "status": "complete",
+   "verdict": "complete",
+   "rustAnchor": "core/src/context/world_state/top_level_tools.rs:169 render_diff（namespace 级 diff）+ code-mode-protocol/src/description.rs",
+   "goImplementation": "session/top_level_tools.go:292-380 TopLevelToolsUpdatesWithMessages（changed() 决定成员级 vs 命名空间声明级）",
+   "verifier": [
+    "TestTopLevelToolsNamespaceTransitionsLikeRust",
+    "TestIncrementalExecToolsFeatureRegisteredLikeRust"
+   ],
+   "removalEvidence": {
+    "test": "TestTopLevelToolsNamespaceTransitionsLikeRust",
+    "assertion": "top_level_tools_test.go:178: known -> same = []interface{}{...}（未变也重新下发了整棵目录）",
+    "mutation": "session/top_level_tools.go:297 changed() 恒返回 true",
+    "command": "go test ./session -run TestTopLevelToolsNamespaceTransitionsLikeRust -count=1"
+   },
+   "residual": "无"
+  },
+  {
+   "id": "code-mode-incremental-exec-wiring",
+   "status": "complete",
+   "verdict": "complete",
+   "rustAnchor": "core/src/tools/router.rs（incremental_tools 开关）+ core/src/session/world_state.rs",
+   "goImplementation": "appserver/incremental_tools.go:131-200 incrementalToolCatalogForTurnWithModelMessages（mode 判定 → 生成 items → session items）",
+   "verifier": [
+    "TestIncrementalToolCatalogAppendsChangedCatalogLikeRust",
+    "TestIncrementalToolCatalogRecordsWindowStartLikeRust"
+   ],
+   "removalEvidence": {
+    "test": "TestIncrementalToolCatalogAppendsChangedCatalogLikeRust",
+    "assertion": "incremental_tools_test.go:224: changed catalog result = appserver.incrementalToolCatalogResult{Active:false, Items:[]interface{}(nil), ...}, want an appended update",
+    "mutation": "appserver/incremental_tools.go:146 让 mode 判定恒返回空结果（永不产出增量目录）",
+    "command": "go test ./appserver -run TestIncrementalToolCatalogAppendsChangedCatalogLikeRust -count=1"
+   },
+   "residual": "无"
+  },
+  {
+   "id": "incremental-exec-message-overrides",
+   "status": "complete",
+   "verdict": "complete",
+   "rustAnchor": "prompts/src/model_messages/incremental_tools.rs:19-40（默认文案表）+ 512 字符上限",
+   "goImplementation": "session/top_level_tools.go:69-86 ResolveIncrementalToolMessages（override 优先、>512 回落默认）",
+   "verifier": [
+    "TestTopLevelToolsCatalogMessageOverridesLikeRust"
+   ],
+   "removalEvidence": {
+    "test": "TestTopLevelToolsCatalogMessageOverridesLikeRust",
+    "assertion": "top_level_tools_test.go:290: namespace instruction override = []interface{}{...（用的是 bundled 文案而非 override）}",
+    "mutation": "session/top_level_tools.go:71-76 resolve() 恒返回 fallback",
+    "command": "go test ./session -run TestTopLevelToolsCatalogMessageOverridesLikeRust -count=1"
+   },
+   "residual": "无"
+  },
+  {
+   "id": "incremental-exec-catalog-metrics",
+   "status": "complete",
+   "verdict": "complete",
+   "rustAnchor": "otel/src/metrics/names.rs（changed_tool 指标族）+ core/src/session/step_context.rs",
+   "goImplementation": "session/top_level_tools.go:429-468 RecordChangedToolMetrics（逐 tool 打 added/removed/schema_changed）+ :470 recordChangedToolMetric",
+   "verifier": [
+    "TestIncrementalToolCatalogRecordsChangedToolMetricsLikeRust",
+    "TestRecordChangedToolMetricsTagsPerToolLikeRust"
+   ],
+   "removalEvidence": {
+    "test": "TestRecordChangedToolMetricsTagsPerToolLikeRust",
+    "assertion": "incremental_tools_metrics_test.go:179: counts = map[], want map[added functions.added:1 ... schema_changed functions.changed:1]",
+    "mutation": "session/top_level_tools.go:429 函数体首行加 `if true { return }`",
+    "command": "go test ./appserver -run TestRecordChangedToolMetricsTagsPerToolLikeRust -count=1"
+   },
+   "residual": "无"
+  },
+  {
+   "id": "turn-context-required-permission-profile",
+   "status": "complete",
+   "verdict": "complete",
+   "rustAnchor": "protocol/src/protocol.rs:608 permission_profile（TurnContext）+ history/src/rollout_payload.rs",
+   "goImplementation": "appserver/runtime_router.go:20411 turnSandboxPermissionProfile / :20424 threadDefaultSandboxPermissionProfile（用捕获环境的 workspace roots 物化）",
+   "verifier": [
+    "TestColdResumeRestoresOwnedUnnamedPermissionProfileLikeRust",
+    "TestTurnSandboxPermissionProfileUsesCapturedEnvironmentStateLikeRust"
+   ],
+   "removalEvidence": {
+    "test": "TestTurnSandboxPermissionProfileUsesCapturedEnvironmentStateLikeRust",
+    "assertion": "turn_permission_environment_test.go:47: workspace roots = [\".../001\"], want the captured environment root \".../002\"",
+    "mutation": "appserver/runtime_router.go:20444 把 `turnEnvironmentWorkspaceRoots(params, cwd)` 换成 `nil`",
+    "command": "go test ./appserver -run TestTurnSandboxPermissionProfileUsesCapturedEnvironmentStateLikeRust -count=1"
+   },
+   "residual": "无"
+  },
+  {
+   "id": "provider-creation-during-signin",
+   "status": "complete",
+   "verdict": "complete",
+   "rustAnchor": "app-server/src/config_manager_service_provider_write.rs:35 model_provider_config_write / :79 provider_edits",
+   "goImplementation": "appserver/model_provider_write.go:25-40 ModelProviderConfigWrite → config BatchWrite；model_provider_write.go:30 modelProviderWriteEdits 生成 create/patch",
+   "verifier": [
+    "TestModelProviderConfigWriteCreatesAndPatchesGatewaysLikeRust",
+    "TestModelProviderConfigWriteValidatesCustomGatewaysLikeRust"
+   ],
+   "removalEvidence": {
+    "test": "TestModelProviderConfigWriteCreatesAndPatchesGatewaysLikeRust",
+    "assertion": "model_provider_config_write_like_rust_test.go:114: provider mismatch",
+    "mutation": "appserver/model_provider_write.go:35 把 `{Edits: edits}` 改成 `{}`（不落任何编辑）",
+    "command": "go test ./appserver -run TestModelProviderConfigWriteCreatesAndPatchesGatewaysLikeRust -count=1"
+   },
+   "residual": "登录菜单侧（tui/onboarding 的 \"Sign in another way\" → provider wizard）没有被这两个 verifier 覆盖；若要把「注册期创建 provider」也锁住，建议加 `TestAuthOptionsAndStepState`"
+  },
+  {
+   "id": "tui-custom-gateway-signin",
+   "status": "complete",
+   "verdict": "complete",
+   "rustAnchor": "tui/src/app/provider.rs + tui/src/app/provider/write.rs（custom gateway 的字段收集与写回）；onboarding/auth.rs 的菜单本身未逐行定位",
+   "goImplementation": "tui/tea/config_provider_browser.go:404（add 流程）/:651（编辑器默认）/:766（env_key/base_url 校验）/:793-806（生成 ProviderSettingsPatch{customGateway}）",
+   "verifier": [
+    "TestConfigPanelProviderDefaultSelectionLikeRust",
+    "TestModelProviderConfigWriteCreatesAndPatchesGatewaysLikeRust"
+   ],
+   "removalEvidence": {
+    "test": "TestConfigPanelProviderEditorWritesSelectedFieldsLikeRust",
+    "assertion": "provider_default_and_editor_like_rust_test.go:111: editor save produced no command; error=\"This provider configuration is read-only.\"",
+    "mutation": "tui/tea/config_provider_browser.go:793 把 `case \"\", \"customGateway\":` 改成 `case \"\":`（丢掉 customGateway 的 patch 生成）",
+    "command": "go test ./tui/tea -run Provider -count=1"
+   },
+   "residual": "⚠️ 变红的用例（TestConfigPanelProviderEditorWritesSelectedFieldsLikeRust / ...PreservesDraftOnFailureLikeRust）**当前没有登记**在这条契约的 verifier 里——登记的那两个改不红。要把这条真正锁住，请把前者加进 verifier"
+  },
+  {
+   "id": "release-prerelease-cleanup",
+   "status": "complete",
+   "verdict": "undecidable",
+   "rustAnchor": "../.github/workflows/rust-release.yml + ../.github/scripts/test_releases.py",
+   "goImplementation": ".github/scripts/publish-github-release.sh（按 release id 的 trap 清理）",
+   "verifier": [
+    "TestPublishReleaseCleansUpFailedPrereleaseById"
+   ],
+   "removalEvidence": null,
+   "residual": "脚本级 4 分支用例可红可绿，但转 complete 需要真跑一次 release workflow（含一次上传失败注入），Linux 工作区无法提供"
+  },
+  {
+   "id": "account-security-setup-appserver-fetch",
+   "supersededBy": "account-security-setup-fetch",
+   "status": "complete",
+   "verdict": "needs-behaviour",
+   "rustAnchor": "app-server/src/request_processors/account_processor.rs + app-server/src/message_processor.rs（app server 侧取数并下发）",
+   "goImplementation": "chatgptapi/security_setup.go:55 GetSecuritySetup（客户端解析）+ app/security_setup.go:19 interactiveLocalSecuritySetupReader + tui/tea 展示；appserver 侧零命中",
+   "verifier": [
+    "TestCloudClientGetSecuritySetupDropsInvalidNoticesLikeRust",
+    "TestSecuritySetupStaleIdentityAndBannerPriorityLikeRust"
+   ],
+   "removalEvidence": null,
+   "residual": "`rg -i securitysetup appserver/ protocol/` → 0，且无生产调用方走 appserver；契约点名的 app server fetch 面缺失（scope 调整提案按你说的单独出）"
+  },
+  {
+   "id": "typed-prompt-markdown-render",
+   "status": "complete",
+   "verdict": "needs-behaviour",
+   "rustAnchor": "tui/src/markdown_render.rs（span 列模型）+ tui/src/history_cell/messages.rs",
+   "goImplementation": "tui/history_cell/messages.go:256-283 markdownPromptLines（复用 agent markdown 行 + 字符串上色 + 首行 prompt gutter）",
+   "verifier": [
+    "TestTypedUserPromptRendersMarkdownLikeRust",
+    "TestUserPromptMarkdownKeepsGutterAndLinkColumnsLikeRust",
+    "TestUserAndAgentMessageCells"
+   ],
+   "removalEvidence": {
+    "test": "TestTypedUserPromptRendersMarkdownLikeRust",
+    "assertion": "user_prompt_markdown_like_rust_test.go:31: typed prompt kept its Markdown source: \"› **bold** and `code` ...\"",
+    "mutation": "tui/history_cell/messages.go:261 不调用 markdown.Render（直接把源串当已渲染行）",
+    "command": "go test ./tui/history_cell -run TestTypedUserPromptRendersMarkdownLikeRust -count=1"
+   },
+   "residual": "你的反证成立：Go 是「复用 agent 列 + 字符串上色」，Rust 是 span 列模型；已登记的用例只断言 gutter/链接/提及列与样式标签存在，覆盖不到 span 级的列计算差异 → 保持 partial"
+  }
+ ]
+}

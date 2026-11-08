@@ -67,8 +67,13 @@ func TestRuntimeAgentControllerShutdownReportLikeRust(t *testing.T) {
 	if report == nil {
 		t.Fatal("a failed teardown returned no shutdown report")
 	}
-	if report.TreeID != "parent" {
-		t.Fatalf("tree id = %q, want the runtime correlation id", report.TreeID)
+	// Rust #60190: the correlation id is a tree id generated when the tree is
+	// loaded, so it is neither the root thread id nor empty.
+	if report.TreeID == "" || report.TreeID == "parent" {
+		t.Fatalf("tree id = %q, want a generated tree id rather than the root thread id", report.TreeID)
+	}
+	if report.TreeID != controller.treeID {
+		t.Fatalf("tree id = %q, want the controller's tree id %q", report.TreeID, controller.treeID)
 	}
 	if len(report.Failures) != 2 {
 		t.Fatalf("failures = %#v, want the list and spawn-edge failures", report.Failures)

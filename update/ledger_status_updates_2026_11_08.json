@@ -1,0 +1,402 @@
+{
+ "schemaVersion": 1,
+ "generatedAt": "2026-11-08",
+ "target": "parity/commits.json",
+ "scope": "A 类 13 条契约（不含关联错位的 image-original-detail-token-estimate）",
+ "recordCount": 13,
+ "distinctCommitCount": 12,
+ "sharedCommitNote": "df769889c0 (#60006) 同时承载 logs-prune-window-frame 与 thread-token-narrow-update 两条契约，所以 13 条记录只对应 12 个 commit / 12 行 status 改动。",
+ "baseline": {
+  "sha256": "51987b587ca49fa54c9880fd6988cdc182d484221e6ef430a66e9e9d733a520b",
+  "bytes": 2894357,
+  "total": 3677,
+  "statusCounts": {
+   "complete": 2963,
+   "not_applicable": 639,
+   "partial": 71,
+   "blocked_precondition": 4
+  }
+ },
+ "result": {
+  "sha256": "df4c073b2809bd0439a5c6cf7b798405a053328bc9c5ab638ff9b8942dc4b9fc",
+  "bytes": 2894369,
+  "total": 3677,
+  "statusCounts": {
+   "complete": 2975,
+   "not_applicable": 639,
+   "partial": 59,
+   "blocked_precondition": 4
+  }
+ },
+ "updates": [
+  {
+   "contract": "account-read-user-id",
+   "pr": "#60004",
+   "sha": "01ab354312f758c343c85c139d5fee3be0ec93f2",
+   "shortSha": "01ab354312",
+   "before": "partial",
+   "after": "complete",
+   "reason": "account/read 响应补 userId：取值复用 auth.ChatGPTUserIDFromAuth，构造点（AccountManager.GetAccount、runtime_router 的两处 RequiresOpenAIAuth 提前返回、providerAccountResponse）在主干已齐。",
+   "goAnchors": [
+    "auth/account.go: GetAccountResponse 结构体",
+    "appserver/runtime_router.go: RequiresOpenAIAuth 两处提前返回",
+    "providerAccountResponse(snapshot)"
+   ],
+   "verifiers": {
+    "registeredInMyManifestCopy": [
+     "TestChatGPTAccountUserIDRequiresMatchingWorkspaceLikeRust",
+     "TestRuntimeRouterGetAccountWorkspaceRoutingSelectionLikeRust"
+    ],
+    "leaderReportedInTrunk": [],
+    "presentInMyMirror": {
+     "TestChatGPTAccountUserIDRequiresMatchingWorkspaceLikeRust": true,
+     "TestRuntimeRouterGetAccountWorkspaceRoutingSelectionLikeRust": true
+    },
+    "verifiedLocallyHere": false,
+    "localNote": "本镜像落后主干（state/**、mcp/** 等 lane 文件缺失），无法独立复跑这些 verifier；依据为主干合并声明 + 契约在主干 manifest 记为 complete。"
+   },
+   "manifestStatusInMyCopy": "partial"
+  },
+  {
+   "contract": "agent-tree-id",
+   "pr": "#60190",
+   "sha": "c9b4267c370a755da12ec1c8648c2451163212b7",
+   "shortSha": "c9b4267c37",
+   "before": "partial",
+   "after": "complete",
+   "reason": "agent tree id 生产者已在主干（appserver/runtime_router.go 的 agentTreeIDs/agentTreeIDMu + agent_controller.go 的 treeID 字段与 agentTreeID()），用例 TestAgentTreeIDChangesOnReloadAndIsSharedByChildrenLikeRust 在主干跑绿。",
+   "goAnchors": [
+    "appserver/runtime_router.go: agentTreeIDs / agentTreeIDMu",
+    "appserver/agent_controller.go: treeID / agentTreeID()"
+   ],
+   "verifiers": {
+    "registeredInMyManifestCopy": [
+     "TestManagerRemove",
+     "TestAgentTreeShutdownReportFormattingIsPayloadFreeLikeRust"
+    ],
+    "leaderReportedInTrunk": [
+     "TestAgentTreeIDChangesOnReloadAndIsSharedByChildrenLikeRust"
+    ],
+    "presentInMyMirror": {
+     "TestManagerRemove": true,
+     "TestAgentTreeShutdownReportFormattingIsPayloadFreeLikeRust": true,
+     "TestAgentTreeIDChangesOnReloadAndIsSharedByChildrenLikeRust": false
+    },
+    "verifiedLocallyHere": false,
+    "localNote": "本镜像落后主干（state/**、mcp/** 等 lane 文件缺失），无法独立复跑这些 verifier；依据为主干合并声明 + 契约在主干 manifest 记为 complete。"
+   },
+   "manifestStatusInMyCopy": "partial"
+  },
+  {
+   "contract": "child-agent-catalog-preservation",
+   "pr": "#60049",
+   "sha": "44ccf394573cabb95e1f751a59f9d76f6f79faf1",
+   "shortSha": "44ccf39457",
+   "before": "partial",
+   "after": "complete",
+   "reason": "子 agent 启动时的目录保留：ListModels(RefreshOffline)→RefreshInMemory，三处消费点已改完。",
+   "goAnchors": [
+    "model/ 目录刷新入口",
+    "三处 ListModels 消费点"
+   ],
+   "verifiers": {
+    "registeredInMyManifestCopy": [
+     "TestConfigPanelModelProvidersRefreshesAfterFirstChatLikeRust"
+    ],
+    "leaderReportedInTrunk": [],
+    "presentInMyMirror": {
+     "TestConfigPanelModelProvidersRefreshesAfterFirstChatLikeRust": true
+    },
+    "verifiedLocallyHere": false,
+    "localNote": "本镜像落后主干（state/**、mcp/** 等 lane 文件缺失），无法独立复跑这些 verifier；依据为主干合并声明 + 契约在主干 manifest 记为 complete。"
+   },
+   "manifestStatusInMyCopy": "partial"
+  },
+  {
+   "contract": "final-answer-moderation",
+   "pr": "#59842",
+   "sha": "ddd1812a51f4aded35c3ec5446672474d5cb546b",
+   "shortSha": "ddd1812a51",
+   "before": "partial",
+   "after": "complete",
+   "reason": "final-answer 定向审核决定随消息下发：mac lane 已并 appserver/final_answer_moderation*.go，且 runtime_router 新增 finalAnswerModeration 字段。",
+   "goAnchors": [
+    "appserver/final_answer_moderation*.go",
+    "appserver/runtime_router.go: finalAnswerModeration 字段"
+   ],
+   "verifiers": {
+    "registeredInMyManifestCopy": [
+     "TestModelSafetyRecourseDefersBlockedTurnAndExplainsIt"
+    ],
+    "leaderReportedInTrunk": [],
+    "presentInMyMirror": {
+     "TestModelSafetyRecourseDefersBlockedTurnAndExplainsIt": true
+    },
+    "verifiedLocallyHere": false,
+    "localNote": "本镜像落后主干（state/**、mcp/** 等 lane 文件缺失），无法独立复跑这些 verifier；依据为主干合并声明 + 契约在主干 manifest 记为 complete。"
+   },
+   "manifestStatusInMyCopy": "partial"
+  },
+  {
+   "contract": "guardian-repl-provenance-bound",
+   "pr": "#59891",
+   "sha": "b1a0dff15854d5f62a9c0931431d70f6148da9e6",
+   "shortSha": "b1a0dff158",
+   "before": "partial",
+   "after": "complete",
+   "reason": "elastic 准备阶段对 REPL provenance 加上界：context 预算批已落地。",
+   "goAnchors": [
+    "context/: elastic 预算",
+    "state/guardian_elastic_*.go"
+   ],
+   "verifiers": {
+    "registeredInMyManifestCopy": [
+     "TestNodeReplElasticRenderingKeepsStoredTextImagesAndOmissionsLikeRust",
+     "TestNodeReplElasticBoundsProvenanceHeadersLikeRust",
+     "TestNodeReplElasticKeepsOversizedAnswerBodyLikeRust",
+     "TestNodeReplFixedBudgetStillChargesBodyBytesLikeRust"
+    ],
+    "leaderReportedInTrunk": [],
+    "presentInMyMirror": {
+     "TestNodeReplElasticRenderingKeepsStoredTextImagesAndOmissionsLikeRust": true,
+     "TestNodeReplElasticBoundsProvenanceHeadersLikeRust": false,
+     "TestNodeReplElasticKeepsOversizedAnswerBodyLikeRust": false,
+     "TestNodeReplFixedBudgetStillChargesBodyBytesLikeRust": false
+    },
+    "verifiedLocallyHere": false,
+    "localNote": "本镜像落后主干（state/**、mcp/** 等 lane 文件缺失），无法独立复跑这些 verifier；依据为主干合并声明 + 契约在主干 manifest 记为 complete。"
+   },
+   "manifestStatusInMyCopy": "complete"
+  },
+  {
+   "contract": "guardian-verified-answer-whole",
+   "pr": "#59902",
+   "sha": "b8725c1896089b1bcf8e74973077d5a69a71686c",
+   "shortSha": "b8725c1896",
+   "before": "partial",
+   "after": "complete",
+   "reason": "elastic 预算下「已验证问答整条保留」的强制点已落地。",
+   "goAnchors": [
+    "state/guardian_elastic_*.go",
+    "appserver/: verified answer 记录"
+   ],
+   "verifiers": {
+    "registeredInMyManifestCopy": [
+     "TestGuardianElasticEntryCapsBeforeAllocationLikeRust",
+     "TestRuntimeRouterRecordsVerifiedAnswersLikeRust",
+     "TestGuardianElasticKeepsVerifiedAnswersWholeLikeRust",
+     "TestGuardianElasticDropsVerifiedAnswersWholeLikeRust"
+    ],
+    "leaderReportedInTrunk": [],
+    "presentInMyMirror": {
+     "TestGuardianElasticEntryCapsBeforeAllocationLikeRust": true,
+     "TestRuntimeRouterRecordsVerifiedAnswersLikeRust": true,
+     "TestGuardianElasticKeepsVerifiedAnswersWholeLikeRust": false,
+     "TestGuardianElasticDropsVerifiedAnswersWholeLikeRust": false
+    },
+    "verifiedLocallyHere": false,
+    "localNote": "本镜像落后主干（state/**、mcp/** 等 lane 文件缺失），无法独立复跑这些 verifier；依据为主干合并声明 + 契约在主干 manifest 记为 complete。"
+   },
+   "manifestStatusInMyCopy": "complete"
+  },
+  {
+   "contract": "logs-prune-window-frame",
+   "pr": "#60006",
+   "sha": "df769889c0b4d41afcc9e02502aab91bac862083",
+   "shortSha": "df769889c0",
+   "before": "partial",
+   "after": "complete",
+   "reason": "#60006 子项 (c)：日志 prune 用 ROWS UNBOUNDED PRECEDING 一次算 byte+row 限额，已落地。",
+   "goAnchors": [
+    "state/: logs prune 谓词",
+    "单趟窗口帧"
+   ],
+   "verifiers": {
+    "registeredInMyManifestCopy": [
+     "TestLogsPruneEachRustPartitionByRowAndByteLimit",
+     "TestLogsPruneWindowUsesSinglePassLikeRust"
+    ],
+    "leaderReportedInTrunk": [],
+    "presentInMyMirror": {
+     "TestLogsPruneEachRustPartitionByRowAndByteLimit": true,
+     "TestLogsPruneWindowUsesSinglePassLikeRust": false
+    },
+    "verifiedLocallyHere": false,
+    "localNote": "本镜像落后主干（state/**、mcp/** 等 lane 文件缺失），无法独立复跑这些 verifier；依据为主干合并声明 + 契约在主干 manifest 记为 complete。"
+   },
+   "manifestStatusInMyCopy": "complete"
+  },
+  {
+   "contract": "thread-token-narrow-update",
+   "pr": "#60006",
+   "sha": "df769889c0b4d41afcc9e02502aab91bac862083",
+   "shortSha": "df769889c0",
+   "before": "partial",
+   "after": "complete",
+   "reason": "#60006 子项 (a)：token 观测只写时间戳与 token 总量、保留并发元数据编辑，已落地。",
+   "goAnchors": [
+    "state/: thread 元数据窄更新",
+    "rollout/: rebuild timestamp 路径"
+   ],
+   "verifiers": {
+    "registeredInMyManifestCopy": [
+     "TestRolloutRebuildTimestampOnlyTouchesTimestampsLikeRust",
+     "TestThreadTokenUpdateKeepsConcurrentMetadataLikeRust"
+    ],
+    "leaderReportedInTrunk": [],
+    "presentInMyMirror": {
+     "TestRolloutRebuildTimestampOnlyTouchesTimestampsLikeRust": true,
+     "TestThreadTokenUpdateKeepsConcurrentMetadataLikeRust": false
+    },
+    "verifiedLocallyHere": false,
+    "localNote": "本镜像落后主干（state/**、mcp/** 等 lane 文件缺失），无法独立复跑这些 verifier；依据为主干合并声明 + 契约在主干 manifest 记为 complete。"
+   },
+   "manifestStatusInMyCopy": "complete"
+  },
+  {
+   "contract": "mcp-lazy-stdio-startup",
+   "pr": "#60039",
+   "sha": "af9a98b07401cb9e5279eb4128e50078b18ee7c4",
+   "shortSha": "af9a98b074",
+   "before": "partial",
+   "after": "complete",
+   "reason": "cached stdio MCP server 的 opt-in 懒启动已落地（win lane 的 mcp/** 批）。",
+   "goAnchors": [
+    "mcp/: 懒启动门",
+    "features/features.go: 懒启动开关"
+   ],
+   "verifiers": {
+    "registeredInMyManifestCopy": [
+     "TestCatalogStartupReadinessAcceptsFilteredVisibleCachedCatalog",
+     "TestMCPConnectionSharingKeepsLegacyAndStartupInteractiveServersPrivate",
+     "TestMcpLazyStdioStartupDefersCachedServersLikeRust",
+     "TestToolCatalogCacheWarmsNewChatsLikeRust",
+     "TestToolCatalogCacheExpiresAfterTTLLikeRust",
+     "TestToolCatalogCacheHonorsServerOptOutLikeRust",
+     "TestToolCatalogCacheGenerationOrderingLikeRust"
+    ],
+    "leaderReportedInTrunk": [],
+    "presentInMyMirror": {
+     "TestCatalogStartupReadinessAcceptsFilteredVisibleCachedCatalog": true,
+     "TestMCPConnectionSharingKeepsLegacyAndStartupInteractiveServersPrivate": true,
+     "TestMcpLazyStdioStartupDefersCachedServersLikeRust": false,
+     "TestToolCatalogCacheWarmsNewChatsLikeRust": false,
+     "TestToolCatalogCacheExpiresAfterTTLLikeRust": false,
+     "TestToolCatalogCacheHonorsServerOptOutLikeRust": false,
+     "TestToolCatalogCacheGenerationOrderingLikeRust": false
+    },
+    "verifiedLocallyHere": false,
+    "localNote": "本镜像落后主干（state/**、mcp/** 等 lane 文件缺失），无法独立复跑这些 verifier；依据为主干合并声明 + 契约在主干 manifest 记为 complete。"
+   },
+   "manifestStatusInMyCopy": "complete"
+  },
+  {
+   "contract": "message-board-bulk-subscriptions",
+   "pr": "#59998",
+   "sha": "eb485f57ba02ca8cdedfcc07aca0f9d75c8faefd",
+   "shortSha": "eb485f57ba",
+   "before": "partial",
+   "after": "complete",
+   "reason": "agentboard 原子批量订阅（一次事务多目标、失败整体回滚）已落地。",
+   "goAnchors": [
+    "agentboard/: subscriptions 批量写"
+   ],
+   "verifiers": {
+    "registeredInMyManifestCopy": [
+     "TestLocalBoardSubscriptionsOptOutsAndDeletionLikeRust"
+    ],
+    "leaderReportedInTrunk": [],
+    "presentInMyMirror": {
+     "TestLocalBoardSubscriptionsOptOutsAndDeletionLikeRust": true
+    },
+    "verifiedLocallyHere": false,
+    "localNote": "本镜像落后主干（state/**、mcp/** 等 lane 文件缺失），无法独立复跑这些 verifier；依据为主干合并声明 + 契约在主干 manifest 记为 complete。"
+   },
+   "manifestStatusInMyCopy": "partial"
+  },
+  {
+   "contract": "patch-approval-cancel-turn-scope",
+   "pr": "#59910",
+   "sha": "ad1dbba32db4b0204d2f769c762f329dc37c8895",
+   "shortSha": "ad1dbba32d",
+   "before": "partial",
+   "after": "complete",
+   "reason": "文件变更审批 cancel 按发起 turn 收敛、不再落到 default，主干合并并配了反证（TestFileChangeApprovalCancelInterruptsRequestingTurnLikeRust + TestPatchApprovalCancelStaysScopedToRequestingTurnLikeRust）。",
+   "goAnchors": [
+    "appserver/: 审批取消处理",
+    "turn/: approval broker turn 归属"
+   ],
+   "verifiers": {
+    "registeredInMyManifestCopy": [
+     "TestCancelCommandApprovalAbortsTurnLikeRust"
+    ],
+    "leaderReportedInTrunk": [
+     "TestFileChangeApprovalCancelInterruptsRequestingTurnLikeRust",
+     "TestPatchApprovalCancelStaysScopedToRequestingTurnLikeRust"
+    ],
+    "presentInMyMirror": {
+     "TestCancelCommandApprovalAbortsTurnLikeRust": true,
+     "TestFileChangeApprovalCancelInterruptsRequestingTurnLikeRust": false,
+     "TestPatchApprovalCancelStaysScopedToRequestingTurnLikeRust": false
+    },
+    "verifiedLocallyHere": false,
+    "localNote": "本镜像落后主干（state/**、mcp/** 等 lane 文件缺失），无法独立复跑这些 verifier；依据为主干合并声明 + 契约在主干 manifest 记为 complete。"
+   },
+   "manifestStatusInMyCopy": "partial"
+  },
+  {
+   "contract": "runtime-auth-terminal-denials",
+   "pr": "#60096",
+   "sha": "efdacaf46ff54660a239189a6d62434c5db33d2c",
+   "shortSha": "efdacaf46f",
+   "before": "partial",
+   "after": "complete",
+   "reason": "四个 terminal runtime auth denial 接入 provider 谓词（isRuntimeAuthDenial 等价于 Rust is_recoverable_auth_error 的补集面），恢复路径短路不再重试。",
+   "goAnchors": [
+    "model/responses_agent.go: responseAuthorizationErrorCode / recoverUnauthorizedAuth",
+    "model/: isRetryableResponsesStreamError"
+   ],
+   "verifiers": {
+    "registeredInMyManifestCopy": [
+     "TestManagerCachesForbiddenAndRefreshesUnauthorizedLikeRust"
+    ],
+    "leaderReportedInTrunk": [],
+    "presentInMyMirror": {
+     "TestManagerCachesForbiddenAndRefreshesUnauthorizedLikeRust": true
+    },
+    "verifiedLocallyHere": false,
+    "localNote": "本镜像落后主干（state/**、mcp/** 等 lane 文件缺失），无法独立复跑这些 verifier；依据为主干合并声明 + 契约在主干 manifest 记为 complete。"
+   },
+   "manifestStatusInMyCopy": "partial"
+  },
+  {
+   "contract": "thread-writer-lock-shared-coordination",
+   "pr": "#59969",
+   "sha": "e428b9a16b033fb7ca65020a489f2d05231d8ddf",
+   "shortSha": "e428b9a16b",
+   "before": "partial",
+   "after": "complete",
+   "reason": "writer lock 由独占阻塞改为共享协调、拿不到锁时保留文件，已落地。",
+   "goAnchors": [
+    "session/: writer lock",
+    "rollout/: store 协调"
+   ],
+   "verifiers": {
+    "registeredInMyManifestCopy": [
+     "TestWriterLockRejectsCompetingStoreAndTransfersOwnership",
+     "TestTryAcquireForPublicationSkipsLiveWriterAndHoldsCoordination",
+     "TestWriterLockCloseDoesNotBlockOnHeldCoordination"
+    ],
+    "leaderReportedInTrunk": [],
+    "presentInMyMirror": {
+     "TestWriterLockRejectsCompetingStoreAndTransfersOwnership": true,
+     "TestTryAcquireForPublicationSkipsLiveWriterAndHoldsCoordination": true,
+     "TestWriterLockCloseDoesNotBlockOnHeldCoordination": false
+    },
+    "verifiedLocallyHere": false,
+    "localNote": "本镜像落后主干（state/**、mcp/** 等 lane 文件缺失），无法独立复跑这些 verifier；依据为主干合并声明 + 契约在主干 manifest 记为 complete。"
+   },
+   "manifestStatusInMyCopy": "complete"
+  }
+ ]
+}

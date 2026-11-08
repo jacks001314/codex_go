@@ -95,8 +95,13 @@ type StateRuntime struct {
 	ownsDBs         bool
 	threadHistoryMu sync.Mutex
 	threadHistoryDB *sql.DB
-	metrics         *TaskMetrics
-	closed          bool
+	// historyWriter admits one thread-history writer at a time (Rust #60006(b),
+	// permits = 1). The projection transaction is an IMMEDIATE write; letting
+	// several of them queue on SQLite's own write lock only lengthens the wait a
+	// reader behind them sees, so admission happens before the snapshot is taken.
+	historyWriter chan struct{}
+	metrics       *TaskMetrics
+	closed        bool
 	// logsMaintenanceMu guards the background diagnostic-log pruning tasks
 	// (Rust #49425, upstream 8ea2c0e0d4).
 	logsMaintenanceMu   sync.Mutex
@@ -136,6 +141,7 @@ func InitStateRuntime(ctx context.Context, sqliteConfig SqliteConfig, defaultPro
 		goalsDB:         dbs[RuntimeDBGoals],
 		memoriesDB:      dbs[RuntimeDBMemories],
 		ownsDBs:         true,
+		historyWriter:   make(chan struct{}, 1),
 	}
 	// Rust spawns the reclamation worker as the runtime is constructed and
 	// stops it in `StateRuntime::close` (upstream 33a0f766a6 / #49069).
@@ -285,6 +291,25 @@ func (r *StateRuntime) Close() error {
 		closeSQLiteDB(r.logsDB),
 		closeSQLiteDB(r.stateDB),
 	)
+}
+
+// acquireHistoryWriter takes the single thread-history write permit. The wait
+// honours ctx, so a cancelled caller never enters the write transaction, and a
+// runtime built without the permit admits immediately (unit tests that drive the
+// projection straight against a database handle).
+func (r *StateRuntime) acquireHistoryWriter(ctx context.Context) (func(), error) {
+	if r == nil || r.historyWriter == nil {
+		return func() {}, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case r.historyWriter <- struct{}{}:
+		return func() { <-r.historyWriter }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 func (r *StateRuntime) ThreadHistoryDB(ctx context.Context) (*sql.DB, error) {

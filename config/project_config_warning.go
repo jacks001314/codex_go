@@ -84,10 +84,26 @@ func (s *ConfigService) ProjectConfigWarningForCWD(cwd string) string {
 // project layer exists whenever the dot-codex folder is present, and the
 // decision that governs it supplies a disabled reason when it is not trusted.
 func (s *ConfigService) projectLayersForTrustWarning(cwd string) ([]Layer, error) {
+	return s.projectLayersForTrustWarningWithOptions(cwd, false)
+}
+
+// projectLayersForTrustWarningWithOptions applies the trust decision with the
+// same user-layer treatment the real load used. Under `--ignore-user-config`
+// the User layer is empty (the file is never read), so a `trust_level` saved
+// there cannot mark a project trusted: the project layers stay disabled and the
+// caller still warns. That is exactly why `--trust` refuses to be combined with
+// the flag -- "saved project trust decisions must be checked".
+func (s *ConfigService) projectLayersForTrustWarningWithOptions(cwd string, ignoreUserConfig bool) ([]Layer, error) {
 	userPath := ConfigPath(s.codexHome)
-	userValues, err := loadConfigFile(userPath)
-	if err != nil {
-		return nil, err
+	var userValues map[string]any
+	if ignoreUserConfig {
+		userValues = map[string]any{}
+	} else {
+		loaded, err := loadConfigFile(userPath)
+		if err != nil {
+			return nil, err
+		}
+		userValues = loaded
 	}
 	// Rust derives trust from the layers above the project (packaged defaults,
 	// user, managed), so managed trust decisions are honoured here too.
@@ -263,4 +279,34 @@ func trustLevelIsTrusted(level string) bool {
 
 func trustLevelIsUntrusted(level string) bool {
 	return strings.EqualFold(strings.TrimSpace(level), "untrusted")
+}
+
+// ExecProjectTrustWarningForCWD reports the `codex exec` project-trust warning
+// for cwd. Rust prints it once, after the configuration is built, when any
+// project layer was disabled by the trust decision
+// (codex-rs/exec/src/lib.rs, #60041); an unreadable startup configuration
+// yields no warning, matching the best-effort startup path.
+func (s *ConfigService) ExecProjectTrustWarningForCWD(cwd string) string {
+	return s.ExecProjectTrustWarningForOptions(cwd, false)
+}
+
+// ExecProjectTrustWarningForOptions is ExecProjectTrustWarningForCWD with the
+// launch's `--ignore-user-config` state: the warning must describe the trust
+// decision the run actually used, so an ignored user config cannot silence it.
+func (s *ConfigService) ExecProjectTrustWarningForOptions(cwd string, ignoreUserConfig bool) string {
+	if s == nil {
+		return ""
+	}
+	cwd = strings.TrimSpace(cwd)
+	if cwd == "" {
+		return ""
+	}
+	layers, err := s.projectLayersForTrustWarningWithOptions(cwd, ignoreUserConfig)
+	if err != nil {
+		return ""
+	}
+	if len(ProjectConfigDisabledFolders(layers)) == 0 {
+		return ""
+	}
+	return ExecProjectTrustWarning
 }

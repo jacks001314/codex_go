@@ -48,7 +48,7 @@ type desktopSecurityEvidence struct {
 	detail string
 }
 
-func desktopSecurityEnforcement() *DoctorCheck {
+func desktopSecurityEnforcement(_ *desktopApp) *DoctorCheck {
 	systemRoot := os.Getenv("SystemRoot")
 	if systemRoot == "" {
 		return classifyDesktopSecurity(nil)

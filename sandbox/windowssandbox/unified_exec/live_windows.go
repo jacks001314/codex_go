@@ -25,7 +25,7 @@ func SpawnWindowsSandboxLiveSessionForLevel(req *WindowsSandboxSessionRequest) (
 	capture.TTY = req.PTY
 	capture.StdinOpen = capture.StdinOpen || req.PTY
 	capture.ProxyEnforced = req.ProxyEnforced
-	if req.WindowsSandboxLevel == WindowsSandboxLevelElevated {
+	if req.WindowsSandboxLevel.usesElevatedBackend() {
 		return spawnWindowsSandboxLiveSessionElevated(&capture)
 	}
 	if capture.ProxyEnforced {
@@ -41,11 +41,12 @@ func SpawnWindowsSandboxLiveSessionForLevel(req *WindowsSandboxSessionRequest) (
 	if err != nil {
 		return nil, err
 	}
-	if !spawnContext.Permissions.HasFullDiskReadAccess() {
-		return nil, fmt.Errorf("restricted read-only access requires the elevated Windows sandbox backend")
-	}
-	if len(capture.DenyReadPaths) > 0 {
-		return nil, fmt.Errorf("deny-read overrides require the elevated Windows sandbox backend")
+	overrides, err := windowssandbox.ResolveWindowsSandboxFilesystemOverrides(windowssandbox.WindowsSandboxLevelRestrictedToken, spawnContext.Permissions, windowssandbox.WindowsSandboxFilesystemOverrides{
+		AdditionalDenyReadPaths:  capture.DenyReadPaths,
+		AdditionalDenyWritePaths: capture.DenyWritePaths,
+	})
+	if err != nil {
+		return nil, err
 	}
 	capabilityRoots := windowssandbox.LegacySessionCapabilityRoots(spawnContext.Permissions, spawnContext.CurrentDir, spawnContext.Env, capture.CodexHome)
 	security, err := windowssandbox.PrepareLegacySessionSecurity(spawnContext.UsesWriteCapabilities, capture.CodexHome, capture.CWD, capabilityRoots)
@@ -66,12 +67,12 @@ func SpawnWindowsSandboxLiveSessionForLevel(req *WindowsSandboxSessionRequest) (
 		spawnContext.CurrentDir,
 		spawnContext.Env,
 		nil,
-		capture.DenyWritePaths,
+		overrides.AdditionalDenyWritePaths,
 		windowssandbox.LegacyAclSIDs{ReadonlySID: security.ReadonlySID, WriteRootSIDs: security.WriteRootSIDs},
 	); err != nil {
 		return nil, err
 	}
-	desktop, err := windowssandbox.PrepareLegacyLaunchDesktop(security, spawnContext.Permissions, spawnContext.CurrentDir, spawnContext.Env, capture.DenyWritePaths, spawnContext.LogsBaseDir)
+	desktop, err := windowssandbox.PrepareLegacyLaunchDesktop(security, spawnContext.Permissions, spawnContext.CurrentDir, spawnContext.Env, overrides.AdditionalDenyWritePaths, spawnContext.LogsBaseDir)
 	if err != nil {
 		return nil, err
 	}
@@ -150,7 +151,9 @@ func SpawnWindowsSandboxLiveSessionForLevel(req *WindowsSandboxSessionRequest) (
 	cleanupToken = false
 	var sessionStdin io.WriteCloser = stdin
 	if capture.TTY && stdin != nil {
-		sessionStdin = &windowsTTYWriteCloser{inner: stdin}
+		// Same normalization the MXC launcher session uses; both port Rust's
+		// `WindowsTtyInputNormalizer`.
+		sessionStdin = conpty.NewInputWriteCloser(stdin)
 	}
 	session := &LiveSession{Stdin: sessionStdin, Readers: readers}
 	session.wait = func() (int, error) {
@@ -199,58 +202,12 @@ func SpawnWindowsSandboxLiveSessionForLevel(req *WindowsSandboxSessionRequest) (
 	return session, nil
 }
 
-type windowsTTYWriteCloser struct {
-	mu            sync.Mutex
-	inner         io.WriteCloser
-	previousWasCR bool
-}
-
-func (w *windowsTTYWriteCloser) Write(data []byte) (int, error) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.inner == nil {
-		return 0, os.ErrClosed
-	}
-	normalized := make([]byte, 0, len(data))
-	for _, b := range data {
-		switch b {
-		case '\b':
-			normalized = append(normalized, 0x7f)
-		case '\n':
-			if !w.previousWasCR {
-				normalized = append(normalized, '\r')
-			}
-		default:
-			normalized = append(normalized, b)
-		}
-		w.previousWasCR = b == '\r'
-	}
-	if len(normalized) == 0 {
-		return len(data), nil
-	}
-	if _, err := w.inner.Write(normalized); err != nil {
-		return 0, err
-	}
-	return len(data), nil
-}
-
-func (w *windowsTTYWriteCloser) Close() error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.inner == nil {
-		return nil
-	}
-	err := w.inner.Close()
-	w.inner = nil
-	return err
-}
-
 type elevatedFrameWriter struct {
-	mu            sync.Mutex
-	writer        io.Writer
-	tty           bool
-	previousWasCR bool
-	closed        bool
+	mu         sync.Mutex
+	writer     io.Writer
+	tty        bool
+	normalizer conpty.InputNormalizer
+	closed     bool
 }
 
 func (w *elevatedFrameWriter) Write(data []byte) (int, error) {
@@ -261,23 +218,7 @@ func (w *elevatedFrameWriter) Write(data []byte) (int, error) {
 	}
 	payload := append([]byte(nil), data...)
 	if w.tty {
-		normalizer := windowsTTYWriteCloser{previousWasCR: w.previousWasCR}
-		var normalized []byte
-		for _, b := range payload {
-			switch b {
-			case '\b':
-				normalized = append(normalized, 0x7f)
-			case '\n':
-				if !normalizer.previousWasCR {
-					normalized = append(normalized, '\r')
-				}
-			default:
-				normalized = append(normalized, b)
-			}
-			normalizer.previousWasCR = b == '\r'
-		}
-		w.previousWasCR = normalizer.previousWasCR
-		payload = normalized
+		payload = w.normalizer.Normalize(payload)
 	}
 	if len(payload) == 0 {
 		return len(data), nil

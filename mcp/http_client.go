@@ -289,6 +289,7 @@ func listMCPHTTPInventoryWithOptions(client *httpClient, serverName string, thre
 	// triggers, so read them after the attempt even when discovery failed.
 	if client != nil {
 		result.ServerCapabilities = client.serverCapabilitiesRaw()
+		result.NegotiatedModern = client.effectiveProtocolVersion() == modernMCPProtocol
 	}
 	if err != nil {
 		return result, err
