@@ -41,6 +41,10 @@ type ProviderOptions struct {
 	Selection       Selection
 	Harness         string
 	HarnessVersion  string
+	// Mode overrides the configured mode once the caller resolved the managed
+	// `features.runtime_agent_instances.mode` requirement (Rust #60014
+	// resolve_runtime_auth_mode). Nil keeps the configured value.
+	Mode *Mode
 }
 
 // ProviderForConfig returns the runtime provider for the current configuration,
@@ -65,9 +69,13 @@ func ProviderForConfig(options ProviderOptions) *Provider {
 	if err != nil {
 		return nil
 	}
+	mode := ModeFromConfigValues(options.Values)
+	if options.Mode != nil {
+		mode = *options.Mode
+	}
 	return &Provider{
 		Manager:   manager,
-		Mode:      ModeFromConfigValues(options.Values),
+		Mode:      mode,
 		Selection: options.Selection,
 	}
 }

@@ -396,7 +396,7 @@ func runMCPSharingHelper(t *testing.T) {
 			result := map[string]any{
 				"resultType":        "complete",
 				"supportedVersions": []string{modernMCPProtocol},
-				"capabilities":      map[string]any{"tools": map[string]any{}},
+				"capabilities":      sharingHelperCapabilities(mode),
 			}
 			if mode == "startup-input" {
 				// Ask the starting chat for input before discovery completes.
@@ -417,7 +417,7 @@ func runMCPSharingHelper(t *testing.T) {
 			initialized = true
 			writeMCPSharingResponse(t, message.ID, map[string]any{
 				"protocolVersion": defaultMCPProtocol,
-				"capabilities":    map[string]any{"tools": map[string]any{}},
+				"capabilities":    sharingHelperCapabilities(mode),
 				"serverInfo":      map[string]any{"name": "sharing-helper", "version": "1.0.0"},
 			})
 		case "notifications/initialized":
@@ -479,6 +479,18 @@ func TestMCPConnectionSharingHelperProcess(t *testing.T) {
 		t.Skip("helper process only")
 	}
 	runMCPSharingHelper(t)
+}
+
+// sharingHelperCapabilities lets a helper opt out of the tool catalog cache the
+// way Rust's `codex/tool-catalog-cache` capability does.
+func sharingHelperCapabilities(mode string) map[string]any {
+	capabilities := map[string]any{"tools": map[string]any{}}
+	if mode == "cache-opt-out" {
+		capabilities["experimental"] = map[string]any{
+			MCPToolCatalogCacheCapability: map[string]any{MCPToolCatalogCacheableProperty: false},
+		}
+	}
+	return capabilities
 }
 
 func appendMCPSharingLog(t *testing.T, path string, line string) {

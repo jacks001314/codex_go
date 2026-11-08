@@ -1,11 +1,11 @@
 # Codex Go
 
-The latest audited alignment target is Rust `main` at `67f0994b532b8740f14b5b738af7b7b2a915b1d6`; see [the 2026-10-31 alignment record](./update/plan_2026_10_31_round1194.md).
+The latest audited alignment target is Rust `main` at `748ab55ca7de0b647d9a7a9d9a8e70e00f28666d`; see [the 2026-11-08 ledger alignment record](./update/plan_2026_11_08_ledger.md).
 [parity.json](./parity.json) records the current SDK and implementation evidence. Candidate baseline, commit, domain, and contract state live under [parity/](./parity/); only `parity/baseline.json` with `certificationReady: true` denotes a fully certified release.
 
 `codex_go` 是 Codex CLI 的 Go 实现，目标是逐步对齐 Rust 版 Codex CLI 的命令行行为、配置语义、认证、模型请求、TUI、app-server、MCP、插件、沙箱和会话能力。
 
-当前仓库是迁移中的工程版本。开发时以 Rust 版本为行为基线，进度和待办以 [plan.md](./plan.md) 为准。
+当前仓库是迁移中的工程版本。开发时以 Rust 版本为行为基线，进度和待办以 [update/plan_2026_11_08_ledger.md](./update/plan_2026_11_08_ledger.md) 与 [parity/README.md](./parity/README.md) 为准。
 
 ## 环境要求
 
@@ -220,13 +220,13 @@ docs                              设计和技术选型文档
 - 新功能优先放入已有功能包，避免无必要地新增目录。
 - 结构体参数和结构体返回值默认优先使用指针，简单标量按 Go 惯例传值。
 - 代码变更后至少运行相关包测试；模块收口时运行 `go list -buildvcs=false ./...` 和 `go test ./...`。
-- 迁移进度、验收项和工作日志维护在 [plan.md](./plan.md)。
+- 迁移进度、验收项和工作日志维护在 [update/](./update/)（最新一轮见 [plan_2026_11_08_ledger.md](./update/plan_2026_11_08_ledger.md)）。
 
 ## 参考文档
 
-- [plan.md](./plan.md)：迁移进度和待办
-- [desgn.md](./desgn.md)：迁移设计草案
-- [docs/tui_tech_selection.md](./docs/tui_tech_selection.md)：TUI 技术选型
+- [update/plan_2026_11_08_ledger.md](./update/plan_2026_11_08_ledger.md)：迁移进度和待办（当前对齐轮次）
+- [parity/README.md](./parity/README.md)：对齐控制面（基线、提交账本、领域与契约）
+- [tui_alignment.md](./tui_alignment.md)：TUI 对齐与选型记录
 
 ## 许可证
 

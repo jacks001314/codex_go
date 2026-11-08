@@ -61,6 +61,13 @@ const (
 	WindowsSandboxLevelElevated WindowsSandboxLevel = "elevated"
 )
 
+// usesElevatedBackend mirrors Rust `windows_sandbox_uses_elevated_backend`: the
+// elevated/restricted-token choice is made through the shared sandbox resolver
+// instead of each caller comparing the level itself (Rust #60042).
+func (l WindowsSandboxLevel) usesElevatedBackend() bool {
+	return windowssandbox.WindowsSandboxUsesElevatedBackend(windowssandbox.WindowsSandboxLevel(l))
+}
+
 type WindowsSandboxSessionRequest struct {
 	Capture             windowssandbox.CaptureRequest
 	PTY                 bool
@@ -78,7 +85,7 @@ func SpawnWindowsSandboxSessionForLevel(req *WindowsSandboxSessionRequest) (*Win
 	if req == nil {
 		return nil, windowssandbox.ErrInvalidRequest
 	}
-	if req.WindowsSandboxLevel == WindowsSandboxLevelElevated {
+	if req.WindowsSandboxLevel.usesElevatedBackend() {
 		return SpawnWindowsSandboxSessionElevatedForPermissionProfile(req)
 	}
 	if req.ProxyEnforced {

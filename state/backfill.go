@@ -614,8 +614,16 @@ func (r *StateRuntime) upsertRolloutThread(ctx context.Context, metadata rollout
 	// column here, so the narrow write is taken only when the stored row already
 	// matches the rebuild outcome and the rollout path is unchanged. Missing rows,
 	// changed rollout paths and any metadata difference keep the full repair path.
-	if exists && rolloutThreadRowMatchesExceptTimestamps(existing, intendedRolloutThreadRow(metadata, existing, createdMillis, updatedMillis)) {
+	intended := intendedRolloutThreadRow(metadata, existing, createdMillis, updatedMillis)
+	if exists && rolloutThreadRowMatchesExceptTimestamps(existing, intended) {
 		return r.touchThreadUpdatedAt(ctx, metadata.id, metadata.updatedAt.Unix(), updatedMillis)
+	}
+	// Rust #60006(a): usage-only observations take a three-column write as well.
+	// A rollout that only grew its token count must not rewrite the metadata or
+	// its indexes, so the narrow branch is taken whenever nothing but tokens_used
+	// and the thread timestamps moved.
+	if exists && rolloutThreadRowMatchesExceptTokens(existing, intended) {
+		return r.UpdateThreadTokenUsage(ctx, metadata.id, metadata.tokensUsed, metadata.updatedAt.Unix(), updatedMillis)
 	}
 	_, err = ExecWrite(ctx, r.stateDB, `
 INSERT INTO threads (
@@ -973,6 +981,28 @@ func rolloutThreadRowMatchesExceptTimestamps(stored, intended storedRolloutThrea
 		stored.archived == intended.archived &&
 		stored.archivedAt == intended.archivedAt &&
 		stored.attachedThreadParentID == intended.attachedThreadParentID
+}
+
+// rolloutThreadRowMatchesExceptTokens is rolloutThreadRowMatchesExceptTimestamps
+// with tokens_used excluded: the stored row already carries every other rebuilt
+// value, so only the token count and the thread timestamps would move.
+func rolloutThreadRowMatchesExceptTokens(stored, intended storedRolloutThreadRow) bool {
+	stored.tokensUsed = intended.tokensUsed
+	return rolloutThreadRowMatchesExceptTimestamps(stored, intended)
+}
+
+// UpdateThreadTokenUsage moves only the recorded token count and the thread
+// timestamps (Rust #60006(a)). Usage advances far more often than the rest of
+// the row, so the narrow write keeps WAL frames and the metadata indexes
+// untouched.
+func (r *StateRuntime) UpdateThreadTokenUsage(ctx context.Context, threadID string, tokensUsed int64, updatedAtUnix int64, updatedAtMillis int64) error {
+	if _, err := ExecWrite(ctx, r.stateDB, `
+UPDATE threads
+SET tokens_used = ?, updated_at = ?, updated_at_ms = ?
+WHERE id = ?`, tokensUsed, updatedAtUnix, updatedAtMillis, threadID); err != nil {
+		return fmt.Errorf("update thread token usage %s: %w", threadID, err)
+	}
+	return nil
 }
 
 // touchThreadUpdatedAt moves only the stored thread timestamps. Rust keeps the

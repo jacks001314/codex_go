@@ -2,6 +2,7 @@ package doctor
 
 import (
 	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -25,20 +26,27 @@ const (
 type desktopApp struct {
 	identity string
 	version  string
+	// bundle is the installed .app path on macOS; empty on other platforms.
+	bundle string
 }
+
+// desktopMacBundleIdentifier is the macOS bundle doctor inspects. It lives in the
+// platform-neutral file so non-darwin builds (and their tests) can reference it;
+// only desktop_darwin.go uses it at runtime.
+const desktopMacBundleIdentifier = "com.openai.codex"
 
 var (
 	desktopAppProbe      = func() (*desktopApp, error) { return desktopInstalledApp() }
 	desktopLogRootProbe  = func(identity string) string { return desktopLogRoot(identity) }
 	desktopRunningProbe  = func(app *desktopApp, pid int) bool { return desktopApplicationRunning(app, pid) }
-	desktopSecurityProbe = func() *DoctorCheck { return desktopSecurityEnforcement() }
+	desktopSecurityProbe = func(app *desktopApp) *DoctorCheck { return desktopSecurityEnforcement(app) }
 )
 
 func desktopChecks() []*DoctorCheck {
 	app, err := desktopAppProbe()
 	if err != nil {
 		checks := []*DoctorCheck{desktopUnavailableCheck("desktop.app.version")}
-		if security := desktopSecurityProbe(); security != nil {
+		if security := desktopSecurityProbe(nil); security != nil {
 			checks = append(checks, security)
 		}
 		return checks
@@ -51,7 +59,7 @@ func desktopChecks() []*DoctorCheck {
 	handshake := desktopStoppedCheck()
 	if root != "" {
 		running, handshake = inspectDesktopSession(
-			root+`\`+time.Now().Format("2006/01/02"),
+			filepath.Join(root, time.Now().Format("2006/01/02")),
 			func(pid int) bool { return desktopRunningProbe(app, pid) },
 		)
 	}
@@ -66,7 +74,7 @@ func desktopChecks() []*DoctorCheck {
 			Detail("log directory: " + logDirectory),
 		handshake,
 	}
-	if security := desktopSecurityProbe(); security != nil {
+	if security := desktopSecurityProbe(app); security != nil {
 		checks = append(checks, security)
 	}
 	return checks
@@ -169,7 +177,7 @@ func discoverDesktopLogs(directory string) []desktopLog {
 			continue
 		}
 		logs = append(logs, desktopLog{
-			path:      directory + `\` + entry.Name(),
+			path:      filepath.Join(directory, entry.Name()),
 			sessionID: session,
 			processID: pid,
 			modified:  info.ModTime(),

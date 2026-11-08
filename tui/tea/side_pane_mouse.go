@@ -14,7 +14,70 @@ type sidePaneDrag struct {
 	active bool
 }
 
+// sidebarStripColumn maps a terminal column onto the sidebar pane's own column
+// space. The strip only owns columns inside the sidebar pane; the divider and
+// the parent pane report false.
+func (m *Model) sidebarStripColumn(x int) (int, bool) {
+	left, _, _, ok := m.sidePaneLayout(firstPositive(m.width, defaultWidth))
+	if !ok {
+		return 0, false
+	}
+	dividerEnd := left + ansi.StringWidth(sideWorkspaceDivider) - 1
+	if x <= dividerEnd {
+		return 0, false
+	}
+	return x - dividerEnd - 1, true
+}
+
+// handleSidebarTabStripMouse hit-tests the strip exactly as it paints
+// (Rust #59928 sidebar_tab_strip.rs hit): motion highlights the tab under the
+// pointer, a left press selects that tab, and a press on " + " opens the
+// chooser on the new-chat row. It runs before the side-pane guards because a
+// first side chat has no active side conversation yet.
+func (m *Model) handleSidebarTabStripMouse(msg mousemsg.MouseMsg) (bool, bubbletea.Cmd) {
+	if m == nil || m.State == nil || msg.Y != 0 || !m.sidebarTabStripVisible() {
+		return false, nil
+	}
+	column, inside := m.sidebarStripColumn(msg.X)
+	if !inside {
+		return false, nil
+	}
+	window := m.sidebarTabStripWindow()
+	switch msg.Action {
+	case mousemsg.MouseActionMotion:
+		return m.hoverSidebarTab(column), nil
+	case mousemsg.MouseActionPress:
+		if msg.Button != mousemsg.MouseButtonLeft {
+			return false, nil
+		}
+		if window.addAt(column) {
+			return true, m.openSidebarChooser()
+		}
+		if index := window.tabAt(column); index >= 0 {
+			return true, m.selectSidebarTab(index)
+		}
+	}
+	return false, nil
+}
+
+// selectSidebarTab reopens the tab the pointer picked and leaves the chooser
+// when it was open (Rust #59928 paints the tabs as click targets).
+func (m *Model) selectSidebarTab(index int) bubbletea.Cmd {
+	tabs := m.sidebarTabsFor(m.sidebarParentThreadID())
+	if index < 0 || index >= len(tabs) || tabs[index] == nil {
+		return nil
+	}
+	if m.activeSide == tabs[index] && m.activeSide.ShowingSide && !m.sidebarChooserOpen {
+		return nil
+	}
+	m.sidebarTabHover = -1
+	return batchSideCommands(m.closeSidebarChooser(), m.activateRetainedSideConversation(tabs[index], ""))
+}
+
 func (m *Model) handleSidePaneMouse(msg mousemsg.MouseMsg) (bool, bubbletea.Cmd) {
+	if handled, cmd := m.handleSidebarTabStripMouse(msg); handled {
+		return true, cmd
+	}
 	if m == nil || m.State == nil || m.activeSide == nil || !m.sideWorkspaceEnabled() || m.sideZoomed {
 		return false, nil
 	}

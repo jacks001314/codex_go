@@ -32,3 +32,5 @@ func.md
 npm_token.md
 stability/reports/
 .tmp-stability-*.json.log
+# Local-only Rust baseline archives staged for cross-node delivery.
+artifacts/

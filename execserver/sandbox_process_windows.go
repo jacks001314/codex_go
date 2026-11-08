@@ -6,9 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"sort"
 	"strings"
 
 	"codex_go/sandbox"
+	"codex_go/sandbox/mxc"
 	"codex_go/sandbox/windowssandbox"
 	windowsunified "codex_go/sandbox/windowssandbox/unified_exec"
 )
@@ -43,11 +46,16 @@ func startExecServerSandboxProcess(params *ExecParams) (*startedExecServerSandbo
 		if params.Arg0 != nil {
 			return nil, true, requestError(-32602, "MXC custom argv0 is not supported")
 		}
-		// Go has no native MXC runner, so every remaining MXC request fails
-		// closed exactly like Rust on an executor without a usable MXC
-		// environment. Rust validates managed networking only after this
-		// check, so no managed-network error can surface here.
-		return nil, true, requestError(-32602, "native MXC is unavailable on this executor")
+		// Availability is the launcher's own PSEC probe, so this check and
+		// sandbox.WindowsMXCAvailable() cannot disagree.
+		if !sandbox.WindowsMXCAvailable() {
+			return nil, true, requestError(-32602, "native MXC is unavailable on this executor")
+		}
+		session, err := startExecServerMXCProcess(params, &sandboxContext)
+		if err != nil {
+			return nil, true, err
+		}
+		return session, true, nil
 	}
 	if !hasJSONValue(sandboxContext.Permissions) {
 		return nil, true, requestError(-32602, "invalid sandbox context: permissions are required")
@@ -134,4 +142,154 @@ func windowsSandboxProxySettingsMode(mode WindowsSandboxProxySettingsMode) windo
 		return windowssandbox.ProxySettingsPreserve
 	}
 	return windowssandbox.ProxySettingsReconcile
+}
+
+// startExecServerMXCProcess launches the request through sandbox/mxc's native
+// PSEC runner and adapts it to the executor's process API (Rust
+// `prepare_exec_request` MXC branch).
+func startExecServerMXCProcess(params *ExecParams, sandboxContext *FileSystemSandboxContext) (*startedExecServerSandboxProcess, error) {
+	if sandboxContext == nil || !hasJSONValue(sandboxContext.Permissions) {
+		return nil, requestError(-32602, "invalid sandbox context: permissions are required")
+	}
+	if params.EnforceManagedNetwork && params.ManagedNetwork == nil {
+		return nil, requestError(-32602, "managed network enforcement requires managedNetwork context")
+	}
+	if err := sandboxContext.WindowsSandboxProxySettingsMode.Validate(); err != nil {
+		return nil, requestError(-32602, "invalid sandbox context: "+err.Error())
+	}
+	cwd, err := nativeExecServerPath(params.CWD, "cwd")
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(cwd) == "" {
+		return nil, requestError(-32602, "cwd is required for Windows sandbox process launch")
+	}
+	profileJSON, err := nativePermissionProfileJSON(sandboxContext.Permissions)
+	if err != nil {
+		return nil, requestError(-32602, fmt.Sprintf("invalid sandbox permission path URI: %v", err))
+	}
+	profile, err := sandbox.ParseRuntimePermissionProfileJSON(profileJSON)
+	if err != nil {
+		return nil, requestError(-32602, fmt.Sprintf("invalid sandbox permission profile: %v", err))
+	}
+	if profile.Disabled {
+		return nil, requestError(-32602, "sandbox intent cannot be enforced on this executor")
+	}
+	env := childEnv(params)
+	// A managed-network launch is "proxied" whenever the request carries the
+	// context: Rust gates on `command.managed_network.is_some()` alone, without
+	// looking at enforce_managed_network, and then denies direct egress while
+	// allowing host loopback so the child can reach the managed proxy. That
+	// shape is what lets a proxy launch work here too; MXC's own
+	// `network_policy.proxy` form is not emitted by codex, so this branch needs
+	// no executor-local proxy address.
+	var managed *mxc.ManagedNetworkContext
+	if params.ManagedNetwork != nil {
+		managed = &mxc.ManagedNetworkContext{
+			LoopbackPorts:     append([]uint16(nil), params.ManagedNetwork.LoopbackPorts...),
+			AllowLocalBinding: params.ManagedNetwork.AllowLocalBinding,
+		}
+	}
+	// A TTY request goes through the two-stage launcher instead: see
+	// startExecServerMXCTTYProcess and plan section 18.
+	if params.TTY {
+		return startExecServerMXCTTYProcess(params, profile, cwd, managed, env)
+	}
+	policy, err := mxc.PrepareFileSystemPolicy(profile, cwd, env, cwd)
+	if err != nil {
+		return nil, err
+	}
+	egress, ingress, err := mxc.TranslateNetworkPolicy(profile.AllowsNetwork(), managed)
+	if err != nil {
+		return nil, err
+	}
+	request := &mxc.NativeRequest{
+		ScriptCode:       windowssandbox.ArgvToCommandLine(params.Argv),
+		WorkingDirectory: cwd,
+		Env:              envListForMXC(env),
+		Policy: mxc.NativeContainerPolicy{
+			Capabilities:         []string{"registryRead"},
+			ReadWritePaths:       policy.ReadWritePaths,
+			ReadOnlyPaths:        policy.ReadOnlyPaths,
+			DeniedPaths:          policy.DeniedPaths,
+			NetworkEgress:        egress,
+			NetworkIngress:       ingress,
+			NetworkSpecified:     true,
+			NetworkModeSpecified: true,
+			UI:                   mxc.UIPolicy{Disable: false},
+			BaseProcessUI:        mxc.BaseProcessUI{Isolation: "desktop"},
+		},
+	}
+	session, err := mxc.SpawnLiveSession(request)
+	if err != nil {
+		return nil, err
+	}
+	return &startedExecServerSandboxProcess{
+		stdin:     session.Stdin,
+		readers:   append([]io.ReadCloser(nil), session.Readers...),
+		wait:      session.Wait,
+		terminate: session.Terminate,
+		close:     session.Close,
+	}, nil
+}
+
+// startExecServerMXCTTYProcess launches a TTY request through the two-stage MXC
+// path (Rust #45524).
+//
+// A PSEC child cannot receive a pseudoconsole, so the executor starts its own
+// executable as a launcher helper under a ConPTY, and that helper enters the
+// sandbox for the real command. Rust reaches the same shape by rewriting the
+// prepared command to `[sandbox_exe, LauncherArg1]` and handing it to its
+// generic PTY spawner (codex-rs/sandboxing/src/manager.rs, `WindowsMxc` branch);
+// sandbox/mxc exposes the two steps as CreateCommandArgs + SpawnLauncherSession.
+func startExecServerMXCTTYProcess(
+	params *ExecParams,
+	profile *sandbox.PermissionProfile,
+	cwd string,
+	managed *mxc.ManagedNetworkContext,
+	env map[string]string,
+) (*startedExecServerSandboxProcess, error) {
+	// CreateCommandArgs stamps the host-owned launcher variables into the map it
+	// is handed, so it gets this launch's copy instead of the shared child env.
+	launcherEnv := make(map[string]string, len(env)+4)
+	for key, value := range env {
+		launcherEnv[key] = value
+	}
+	args, err := mxc.CreateCommandArgs(params.Argv, *profile, cwd, managed, launcherEnv)
+	if err != nil {
+		return nil, err
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		return nil, fmt.Errorf("resolve the Codex executable for the MXC launcher: %w", err)
+	}
+	session, err := mxc.SpawnLauncherSession(executable, args, launcherEnv, cwd)
+	if err != nil {
+		return nil, err
+	}
+	return &startedExecServerSandboxProcess{
+		stdin:     session.Stdin,
+		readers:   append([]io.ReadCloser(nil), session.Readers...),
+		wait:      session.Wait,
+		terminate: session.Terminate,
+		close:     session.Close,
+	}, nil
+}
+
+// envListForMXC renders the filtered child environment as sorted KEY=VALUE
+// entries; nil keeps the SDK's inherited-environment behavior.
+func envListForMXC(env map[string]string) []string {
+	if len(env) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(env))
+	for key := range env {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	entries := make([]string, 0, len(keys))
+	for _, key := range keys {
+		entries = append(entries, key+"="+env[key])
+	}
+	return entries
 }

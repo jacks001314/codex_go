@@ -18,6 +18,7 @@ import (
 	"codex_go/prompt"
 	"codex_go/realtime"
 	"codex_go/rollout"
+	"codex_go/runtimeauth"
 	"codex_go/session"
 	"codex_go/turn"
 )
@@ -478,6 +479,11 @@ func (r *RuntimeRouter) realtimeStartOptions(params *realtime.StartParams) (*rea
 	// application network policy is enforced by the client's transport (Rust
 	// guards WebSocket setup with the same permit).
 	client := r.policyHTTPClientForConfig(cfg)
+	// Rust #60003: every handshake - including sideband retries and reconnects
+	// - resolves the runtime credential for the destination it is dialing. The
+	// hook stays nil when runtime auth is off or the provider supplies its own
+	// credential, which keeps the static snapshot below unchanged.
+	runtimeAuthHeaders := r.realtimeRuntimeAuthHeaders(cfg)
 	backend := &realtime.TransportBackendConfig{
 		WebsocketBaseURL:  websocketProvider.BaseURL,
 		WebRTCCallBaseURL: callProvider.BaseURL,
@@ -489,6 +495,7 @@ func (r *RuntimeRouter) realtimeStartOptions(params *realtime.StartParams) (*rea
 		PrepareCall: func(ctx context.Context, request *http.Request, body []byte) error {
 			return callAuth.Apply(ctx, request, body)
 		},
+		RuntimeAuthHeaders: runtimeAuthHeaders,
 	}
 
 	instructions := r.realtimeInstructions(cfg, record, params)
@@ -500,6 +507,21 @@ func (r *RuntimeRouter) realtimeStartOptions(params *realtime.StartParams) (*rea
 		SessionMode:    realtimeSessionModeFromConfig(cfg),
 		Instructions:   &instructions,
 	}, nil
+}
+
+// realtimeRuntimeAuthHeaders returns the per-handshake runtime credential resolver
+// for a realtime thread, or nil when the feature is off or the selected provider
+// supplies an explicit credential (Rust #60003). The provider is built once per
+// start; the credentials themselves are re-selected on every dial.
+func (r *RuntimeRouter) realtimeRuntimeAuthHeaders(cfg *config.Config) func(ctx context.Context, endpoint string) (http.Header, error) {
+	if r == nil || cfg == nil {
+		return nil
+	}
+	provider := runtimeauth.ProviderForHarness(r.codexHomeForRollout(), cfg.Values, cfg.FeatureSettings(), cfg.ChatGPTBaseURL(), "codex-go")
+	if provider == nil {
+		return nil
+	}
+	return provider.HeadersForDestination
 }
 
 func (r *RuntimeRouter) effectiveRealtimeThreadConfig(threadID string) (*config.Config, *session.Record, error) {

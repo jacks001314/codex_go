@@ -29,6 +29,10 @@ type stdioInventory struct {
 	// that produced Tools (Rust #54686); nil when tool discovery failed, so the
 	// status wire field serializes as null.
 	ToolListMeta json.RawMessage
+	// NegotiatedModern reports that the connection that produced this catalog
+	// finished the modern discovery handshake, so the catalog belongs to the
+	// modern protocol generation (Rust #60037).
+	NegotiatedModern bool
 }
 
 // mcpStdioStderrDrainGrace bounds how long teardown waits for queued stderr
@@ -97,6 +101,10 @@ type stdioClient struct {
 	// toolListChanges counts tools/list_changed notifications received on this
 	// connection, so a catalog captured before one is never reused (Rust #54656).
 	toolListChanges mcpToolListRevision
+	// negotiatedModern records that this connection finished the modern
+	// discovery handshake, so the catalog published on it belongs to the modern
+	// protocol generation (Rust #60037).
+	negotiatedModern bool
 }
 
 // toolCatalog returns the catalog owned by this connection, creating an empty
@@ -109,6 +117,19 @@ func (c *stdioClient) toolCatalog() *clientToolCatalog {
 		c.catalog = newClientToolCatalog(nil)
 	})
 	return c.catalog
+}
+
+// negotiatedModernProtocol reports whether this connection finished the modern
+// discovery handshake. A connection that fell back to the legacy initialize
+// reports false even though it keeps the modern framing limit, and that is the
+// distinction the tool catalog cache needs (Rust #60037).
+func (c *stdioClient) negotiatedModernProtocol() bool {
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.negotiatedModern && c.initialized
 }
 
 // os/exec copies a child's output from background goroutines. Keep each
@@ -204,6 +225,7 @@ func listMCPStdioInventoryWithOptions(client *stdioClient, serverName string, th
 	// triggers, so read them after the attempt even when discovery failed.
 	if client != nil {
 		result.ServerCapabilities = client.serverCapabilitiesRaw()
+		result.NegotiatedModern = client.negotiatedModernProtocol()
 	}
 	if err != nil {
 		return result, err
@@ -805,6 +827,7 @@ func (c *stdioClient) startProcess(protocolMode MCPProtocolMode, launchEnv map[s
 	c.stderr = stderr
 	c.started = true
 	c.initialized = false
+	c.negotiatedModern = false
 	c.startupInputReceived = false
 	c.capabilitiesMu.Lock()
 	c.serverCapabilities = nil
@@ -847,6 +870,7 @@ func (c *stdioClient) finishModernInitialization(response *stdioRPCResponse) {
 	c.supportsSandboxStateMetaCapability = checkSandboxStateMetaCapability(response.Result)
 	c.mu.Lock()
 	c.protocolMode = MCPProtocol20260728
+	c.negotiatedModern = true
 	c.initialized = true
 	c.capabilitiesMu.Lock()
 	c.serverCapabilities = mcpServerCapabilitiesFromInitializeResult(response.Result)

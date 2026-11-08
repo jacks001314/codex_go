@@ -249,3 +249,25 @@ func mustTreeJSONBytes(t *testing.T, raw []byte) {
 		t.Fatalf("ParseUITree(%s) error = %v", raw, err)
 	}
 }
+
+// TestUITreeTextSanitizerStripsControlStrings mirrors Rust #60020: control
+// strings such as OSC hyperlinks must not survive as visible text, while plain
+// text, tabs and newlines are preserved.
+func TestUITreeTextSanitizerStripsControlStrings(t *testing.T) {
+	cases := []struct{ name, in, want string }{
+		{"osc-bel", "\x1b]8;;https://example.com\x07label\x1b]8;;\x07", "label"},
+		{"osc-st", "\x1b]8;;https://example.com\x1b\\label\x1b]8;;\x1b\\", "label"},
+		{"csi", "\x1b[31mred\x1b[0m", "red"},
+		{"dcs", "\x1bPq#0;2;0;0;0\x1b\\text", "text"},
+		{"two-byte", "\x1b7saved\x1b8", "saved"},
+		{"keeps-tabs-and-newlines", "a\tb\nc", "a\tb\nc"},
+	}
+	for _, tc := range cases {
+		if got := sanitizeUITreeText(tc.in); got != tc.want {
+			t.Fatalf("%s = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+	if got := sanitizeUITreeText("open\x1b]8;;https://example.com"); got != "open" {
+		t.Fatalf("unterminated control string = %q, want %q", got, "open")
+	}
+}

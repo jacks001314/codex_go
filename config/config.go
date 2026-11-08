@@ -347,6 +347,16 @@ type LoadOptions struct {
 	// configuration layers (Rust LoaderOverrides::ignore_project_config,
 	// #38647). Other configuration sources stay active.
 	IgnoreProjectConfig bool
+	// IgnoreUserConfig mirrors --ignore-user-config
+	// (Rust LoaderOverrides::ignore_user_config). CODEX_HOME/config.toml is
+	// never read, so a broken or hostile user config cannot influence the run,
+	// but the User layer stays in the stack with no values: layer precedence --
+	// and therefore every project-trust decision derived from the layers above
+	// the project -- stays comparable with a normal load. Packaged defaults,
+	// managed config, project layers and CLI overrides are unaffected, and the
+	// user's exec-policy rule files are a separate input that this flag does not
+	// touch (Rust ignores only the config file).
+	IgnoreUserConfig bool
 }
 
 type EffectiveOptions struct {
@@ -361,6 +371,7 @@ type EffectiveOptions struct {
 	ManagedConfigPath    string
 	CloudConfigBundle    *CloudConfigLoader
 	IgnoreProjectConfig  bool
+	IgnoreUserConfig     bool
 }
 
 func Load(codexHome string) (*Config, error) {
@@ -395,9 +406,22 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 		Name:   LayerSource{Type: LayerSourcePackagedDefaults, File: packagedDefaultsPath},
 		Config: cloneMap(values),
 	}}
-	userValues, err := loadConfigFile(ConfigPath(codexHome))
-	if err != nil {
-		return nil, err
+	ignoreUserConfig := opts != nil && opts.IgnoreUserConfig
+	// Rust's load_user_config_layer (codex-rs/config/src/loader/mod.rs)
+	// returns an empty User layer when ignore_user_config is set instead of
+	// reading the file, which is why an
+	// ignored file may even be syntactically invalid without failing the load.
+	// The layer itself is kept so precedence (and project trust) still sees a
+	// user layer, just with no values.
+	var userValues map[string]any
+	if ignoreUserConfig {
+		userValues = map[string]any{}
+	} else {
+		loaded, loadErr := loadConfigFile(ConfigPath(codexHome))
+		if loadErr != nil {
+			return nil, loadErr
+		}
+		userValues = loaded
 	}
 	allowedSymlinkedCodexHome := resolveAllowedSymlinkedCodexHome(codexHome, userValues)
 	// Packaged defaults always supply a URL, so explicitness needs the layers
@@ -461,7 +485,11 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 	if cwd != "" && !ignoreProjectConfig {
 		isProjectless = projectDiscoveryIsProjectless(cwd, codexHome, projectRootMarkersFromValues(discoveryValues))
 	}
-	if profile != "" {
+	// A selected profile is user configuration: with --ignore-user-config Rust
+	// keeps only the empty User layer (its metadata still records the profile),
+	// so the profile file and any [profiles.*] table contribute nothing and an
+	// unknown profile is not an error either.
+	if profile != "" && !ignoreUserConfig {
 		profileSetsBaseURL, profileValues, err := applyProfileLayer(codexHome, values, profile)
 		if err != nil {
 			return nil, err
@@ -846,6 +874,7 @@ func LoadEffectiveWithOptions(codexHome string, opts *EffectiveOptions) (*Config
 		loadOpts.ManagedConfigPath = opts.ManagedConfigPath
 		loadOpts.CloudConfigBundle = opts.CloudConfigBundle
 		loadOpts.IgnoreProjectConfig = opts.IgnoreProjectConfig
+		loadOpts.IgnoreUserConfig = opts.IgnoreUserConfig
 	}
 	cfg, err := LoadWithOptions(codexHome, loadOpts)
 	if err != nil {

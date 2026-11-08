@@ -128,8 +128,9 @@ func (e *NodeReplReviewEvidence) SnapshotSince(reviewedSequence uint64) *NodeRep
 }
 
 // SnapshotSinceWithBudgeting returns a snapshot prepared with the selected
-// request policy (Rust ContextBudgeting, #58454). Elastic snapshots keep every
-// admitted response and only report the storage omission count.
+// request policy (Rust ContextBudgeting). Elastic snapshots bound the rendered
+// suffix by protected provenance-header cost instead of raw response bytes
+// (#59891); fixed snapshots keep the byte budget of every rendered response.
 func (e *NodeReplReviewEvidence) SnapshotSinceWithBudgeting(reviewedSequence uint64, budgeting GuardianContextBudgeting) *NodeReplReviewEvidenceFragment {
 	if e == nil {
 		return nil
@@ -228,15 +229,14 @@ func (f *NodeReplReviewEvidenceFragment) Body() string {
 	return body
 }
 
-// selectResponses retains the newest contiguous suffix whose rendered cost fits
-// the layout's budget. Responses before the returned index are added to the
+// selectResponses retains the newest contiguous suffix whose cost fits the
+// layout's budget. Responses before the returned index are added to the
 // snapshot's own omitted count (Rust select_node_repl_responses).
+//
+// Elastic preparation runs the same selection (Rust #59891): it no longer keeps
+// every captured response, because a run with thousands of tiny responses would
+// spend the whole rendered budget on protected provenance headers.
 func (f *NodeReplReviewEvidenceFragment) selectResponses(layout nodeReplEvidenceLayout) (int, uint64) {
-	if f.budgeting == GuardianContextBudgetingElastic {
-		// Rust #58454: elastic preparation keeps every captured response; only
-		// the snapshot's own storage omissions are reported.
-		return 0, f.omittedResponses
-	}
 	start, end := f.Markers()
 	noticeBytes := nodeReplTextNoticeBytes
 	if layout == nodeReplEvidenceMultimodalLayout {
@@ -259,8 +259,18 @@ func (f *NodeReplReviewEvidenceFragment) selectResponses(layout nodeReplEvidence
 
 // responseCost mirrors Rust's per-layout cost: image bytes are free in both
 // layouts, and a response without visible text pays for the notice marker.
+//
+// Elastic preparation charges only the protected response header, converted to
+// budget units the way the elastic allocator counts it: ApproxTokenCount+1
+// tokens at 4 bytes per token (#59891). The body is required evidence rather
+// than protected framing, so an oversized answer is still delivered whole once
+// its header fits.
 func (f *NodeReplReviewEvidenceFragment) responseCost(response nodeReplReviewResponse, layout nodeReplEvidenceLayout) int {
-	cost := len(fmt.Sprintf("[REPL response %d %s]\n", response.sequence, response.provenance))
+	header := fmt.Sprintf("[REPL response %d %s]\n", response.sequence, response.provenance)
+	if f.budgeting == GuardianContextBudgetingElastic {
+		return utils.ApproxBytesForTokens(utils.ApproxTokenCount(header) + 1)
+	}
+	cost := len(header)
 	const emptyNotice = "<completed without visible text>\n"
 	if response.text != "" {
 		return cost + len(response.text) + 1

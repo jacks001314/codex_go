@@ -3,7 +3,6 @@
 package conpty
 
 import (
-	"errors"
 	"testing"
 	"time"
 	"unsafe"
@@ -82,14 +81,23 @@ func TestReleasePseudoConsoleOwnershipSucceedsWhenAvailable(t *testing.T) {
 	}
 }
 
-// Mirrors Rust #45504's user-visible effect: a successful spawn releases the
-// pseudoconsole, so output readers see EOF once the last attached client exits
-// instead of blocking while the session stays alive.
-func TestSpawnedConsoleOutputReachesEOFAfterLastClientExits(t *testing.T) {
-	if !ReleasePseudoConsoleAvailable() {
-		t.Skip("this host does not export ReleasePseudoConsole")
-	}
-	instance, err := SpawnProcessAsUser([]string{"cmd", "/c", "exit 0"}, "")
+// A console EOF must come with console bytes behind it.
+//
+// This test replaced one documented as Rust #45504's "readers see EOF once the
+// last client exits", which passed for the wrong reason: the
+// PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE attribute carried the HPCON's address
+// instead of its value, so no client ever attached, ReleasePseudoConsole tore
+// that never-attached console down during the spawn, and the pipe broke with
+// zero bytes -- before the child had even exited. Once SetPseudoconsole sent
+// the HPCON value (plan §17) the console really attaches and the old test
+// started failing, which is the proof that its pass was an artifact.
+//
+// What distinguishes the two states on this host is the payload: an attached
+// console emits its own initialisation/teardown sequences (ESC[?9001h, ESC[?25l,
+// window title, ...) before EOF; a never-attached one emits nothing at all. So
+// EOF alone is never evidence -- it has to carry console bytes.
+func TestSpawnedConsoleOutputEOFCarriesConsoleBytes(t *testing.T) {
+	instance, err := SpawnProcessAsUser([]string{"cmd", "/d", "/c", "exit 0"}, "")
 	if err != nil {
 		t.Skipf("this host cannot spawn a console process: %v", err)
 	}
@@ -103,19 +111,13 @@ func TestSpawnedConsoleOutputReachesEOFAfterLastClientExits(t *testing.T) {
 	if handle == 0 {
 		t.Fatal("spawn returned no output read handle")
 	}
-	defer windows.CloseHandle(handle)
-
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		_, peekErr := peekOutputPipeBytes(handle)
-		if peekErr == nil {
-			time.Sleep(20 * time.Millisecond)
-			continue
-		}
-		if errors.Is(peekErr, windows.ERROR_BROKEN_PIPE) {
-			return
-		}
-		t.Fatalf("unexpected console output error: %v", peekErr)
+	output, readErr := readConsoleBytes(handle, 20*time.Second)
+	if readErr != nil {
+		t.Fatalf("reading console output: %v", readErr)
 	}
-	t.Fatal("the console output pipe stayed open after the last client exited")
+	if len(output) == 0 {
+		t.Fatal("the console output reached EOF with zero bytes: no client ever attached " +
+			"(this is the signature of PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE carrying the HPCON address)")
+	}
+	t.Logf("console produced %d bytes before EOF: %q", len(output), output)
 }

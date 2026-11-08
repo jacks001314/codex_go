@@ -127,11 +127,15 @@ type RootOptions struct {
 }
 
 type ExecOptions struct {
-	StrictConfig          bool
-	Shared                SharedOptions
-	ThreadSource          string
-	CyberAccessProgram    string
-	SkipGitRepoCheck      bool
+	StrictConfig       bool
+	Shared             SharedOptions
+	ThreadSource       string
+	CyberAccessProgram string
+	SkipGitRepoCheck   bool
+	// Trust mirrors Rust's global `--trust` (#60041): save project trust for
+	// this project and future chats. It persists even with --ephemeral and
+	// never overrides an explicitly untrusted project.
+	Trust                 bool
 	Ephemeral             bool
 	IgnoreUserConfig      bool
 	IgnoreRules           bool
@@ -772,10 +776,14 @@ type ReviewOptions struct {
 	// top-level `codex review` declares it on the subcommand instead of
 	// inheriting the root parser's copy.
 	StrictConfig bool
-	Base         string
-	Commit       string
-	CommitTitle  string
-	Prompt       string
+	// Trust mirrors ReviewCommand's own `--trust` flag (#60041), which the
+	// top-level `codex review` declares instead of inheriting. It saves project
+	// trust for this project and future chats, persisting even with --ephemeral.
+	Trust       bool
+	Base        string
+	Commit      string
+	CommitTitle string
+	Prompt      string
 }
 
 type Parsed struct {
@@ -1505,6 +1513,8 @@ func parseExec(args []string, exec *ExecOptions) error {
 			}
 		case arg == "--skip-git-repo-check":
 			exec.SkipGitRepoCheck = true
+		case arg == "--trust":
+			exec.Trust = true
 		case arg == "--ephemeral":
 			exec.Ephemeral = true
 		case arg == "--ignore-user-config":
@@ -1887,6 +1897,11 @@ func parseReview(args []string, review *ReviewOptions, exec *ExecOptions, overri
 			// ReviewCommand declares --strict-config itself; inside `codex exec
 			// review` the exec Cli marks the same flag global.
 			review.StrictConfig = true
+		case arg == "--trust":
+			// ReviewCommand declares --trust itself; inside `codex exec review`
+			// the exec Cli marks the same flag global, so parseExecGlobalOption
+			// consumed it before this switch ran.
+			review.Trust = true
 		case arg == "--uncommitted":
 			recordReviewPosition(positions, "uncommitted", i)
 			review.Uncommitted = true
@@ -1959,6 +1974,10 @@ func parseReview(args []string, review *ReviewOptions, exec *ExecOptions, overri
 // token clap counts. clap's SetTrue actions reject a second occurrence during
 // parsing, unlike the value options it validates after the scan.
 func reviewBooleanUsageToken(command, arg string) (string, bool) {
+	if arg == "--trust" {
+		// clap's SetTrue rejects a second occurrence on both review commands.
+		return "--trust", true
+	}
 	switch arg {
 	case "--uncommitted":
 		return "--uncommitted", true
@@ -2049,6 +2068,8 @@ func parseExecGlobalOption(args []string, i *int, exec *ExecOptions, deferred *e
 		}
 	case arg == "--skip-git-repo-check":
 		exec.SkipGitRepoCheck = true
+	case arg == "--trust":
+		exec.Trust = true
 	case arg == "--ephemeral":
 		exec.Ephemeral = true
 	case arg == "--ignore-user-config":

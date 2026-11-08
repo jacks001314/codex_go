@@ -20,11 +20,11 @@ type LegacyPreflightRequest struct {
 // openLaunchDesktopForCapture reuses the parent-owned desktop when the wrapper
 // command line carries one (Rust #44658) and otherwise falls back to creating a
 // desktop inside this process for direct in-process callers.
-func openLaunchDesktopForCapture(req *CaptureRequest, security *LegacySessionSecurity, context *SpawnContext) (*LaunchDesktop, error) {
+func openLaunchDesktopForCapture(req *CaptureRequest, security *LegacySessionSecurity, context *SpawnContext, denyWritePaths []string) (*LaunchDesktop, error) {
 	if name := strings.TrimSpace(req.PrivateDesktopName); name != "" {
 		return OpenPrivateLaunchDesktop(name)
 	}
-	return PrepareLegacyLaunchDesktop(security, context.Permissions, context.CurrentDir, context.Env, req.DenyWritePaths, context.LogsBaseDir)
+	return PrepareLegacyLaunchDesktop(security, context.Permissions, context.CurrentDir, context.Env, denyWritePaths, context.LogsBaseDir)
 }
 
 func RunWindowsSandboxCapture(req *CaptureRequest) (*CaptureResult, error) {
@@ -51,11 +51,12 @@ func RunWindowsSandboxCaptureWithFilesystemOverrides(req *CaptureRequest) (*Capt
 	if err != nil {
 		return nil, err
 	}
-	if !context.Permissions.HasFullDiskReadAccess() {
-		return nil, fmt.Errorf("restricted read-only access requires the elevated Windows sandbox backend")
-	}
-	if len(req.DenyReadPaths) > 0 {
-		return nil, fmt.Errorf("deny-read overrides require the elevated Windows sandbox backend")
+	overrides, err := ResolveWindowsSandboxFilesystemOverrides(WindowsSandboxLevelRestrictedToken, context.Permissions, WindowsSandboxFilesystemOverrides{
+		AdditionalDenyReadPaths:  req.DenyReadPaths,
+		AdditionalDenyWritePaths: req.DenyWritePaths,
+	})
+	if err != nil {
+		return nil, err
 	}
 	capabilityRoots := LegacySessionCapabilityRoots(context.Permissions, context.CurrentDir, context.Env, req.CodexHome)
 	security, err := PrepareLegacySessionSecurity(context.UsesWriteCapabilities, req.CodexHome, req.CWD, capabilityRoots)
@@ -71,12 +72,12 @@ func RunWindowsSandboxCaptureWithFilesystemOverrides(req *CaptureRequest) (*Capt
 		context.CurrentDir,
 		context.Env,
 		nil,
-		req.DenyWritePaths,
+		overrides.AdditionalDenyWritePaths,
 		LegacyAclSIDs{ReadonlySID: security.ReadonlySID, WriteRootSIDs: security.WriteRootSIDs},
 	); err != nil {
 		return nil, err
 	}
-	desktop, err := openLaunchDesktopForCapture(req, security, context)
+	desktop, err := openLaunchDesktopForCapture(req, security, context, overrides.AdditionalDenyWritePaths)
 	if err != nil {
 		return nil, err
 	}

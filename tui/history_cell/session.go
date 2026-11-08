@@ -1,6 +1,7 @@
 package historycell
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -85,13 +86,35 @@ func (c SessionHeaderHistoryCell) formatDirectory(maxWidth int) string {
 	if dir == "" {
 		dir = "."
 	}
-	if clean, err := filepath.Abs(dir); err == nil {
-		dir = filepath.Clean(clean)
-	}
+	// Rust session.rs:347-372 renders the directory as given, relativized to
+	// $HOME when it is a descendant of it. It never absolutizes the path, so a
+	// cwd that is already relative (or a Windows-style path on a POSIX host)
+	// stays exactly as recorded in the session state.
+	dir = relativizeDirectoryToHome(dir)
 	if maxWidth > 0 && tui.DisplayWidth(dir) > maxWidth {
 		return tui.CenterTruncatePath(dir, maxWidth)
 	}
 	return dir
+}
+
+// relativizeDirectoryToHome mirrors Rust `relativize_to_home`: a directory at or
+// below the user's home renders as "~" or "~/sub/dir", and anything else renders
+// unchanged.
+func relativizeDirectoryToHome(dir string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return dir
+	}
+	home = filepath.Clean(home)
+	cleaned := filepath.Clean(dir)
+	if cleaned == home {
+		return "~"
+	}
+	rel, err := filepath.Rel(home, cleaned)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return dir
+	}
+	return "~" + string(filepath.Separator) + rel
 }
 
 func reasoningSuffix(reasoning string) string {

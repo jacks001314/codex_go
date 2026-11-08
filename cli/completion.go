@@ -212,6 +212,7 @@ func execCompletionOptions() []string {
 		[]string{
 			"--strict-config",
 			"--skip-git-repo-check",
+			"--trust",
 			"--ephemeral",
 			"--ignore-user-config",
 			"--ignore-rules",
@@ -231,7 +232,7 @@ func execResumeCompletionOptions() []string {
 
 func reviewCompletionOptions() []string {
 	return combineCompletionOptions(configCompletionOptions, sharedCompletionOptions,
-		[]string{"--strict-config", "--uncommitted", "--base", "--commit", "--title"})
+		[]string{"--strict-config", "--trust", "--uncommitted", "--base", "--commit", "--title"})
 }
 
 func pluginSelectorCompletionOptions() []string {

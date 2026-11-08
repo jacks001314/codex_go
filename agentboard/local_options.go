@@ -49,3 +49,11 @@ func validBoardStorageNamespace(namespace string) bool {
 	}
 	return true
 }
+
+// localBoardStorageNamespace resolves the namespace a board stores its posts in.
+func localBoardStorageNamespace(options LocalBoardOptions) string {
+	if options.StorageNamespace != "" {
+		return options.StorageNamespace
+	}
+	return DefaultBoardStorageNamespace
+}

@@ -18,8 +18,11 @@ import (
 // changes.
 
 const (
-	userVerificationUnavailableMessage = "User verification is not available in this build or account."
-	userVerificationInvalidMessage     = "Invalid verification challenge or display text."
+	userVerificationUnavailableMessage      = "User verification is not available in this build or account."
+	userVerificationLocalUnavailableMessage = "Local user verification is unavailable."
+	userVerificationCancelledMessage        = "User verification was cancelled."
+	userVerificationFailedMessage           = "User verification failed."
+	userVerificationInvalidMessage          = "Invalid verification challenge or display text."
 
 	// maxUserVerificationChallengeEncodedBytes is base64url-no-pad of 4096 bytes.
 	maxUserVerificationChallengeEncodedBytes = 5462
@@ -294,6 +297,33 @@ func userVerificationInvalidError() error {
 	)
 }
 
+// userVerificationLocalUnavailableError is the adapter's public error for a
+// native provider that reported an unavailable category (Rust
+// adapter::native_error's Unavailable arm).
+func userVerificationLocalUnavailableError(reason UserVerificationUnavailableReason) error {
+	return newUserVerificationError(
+		UserVerificationErrorDetails{Type: "unavailable", Reason: string(reason)},
+		userVerificationLocalUnavailableMessage,
+		false,
+	)
+}
+
+func userVerificationCancelledError(reason UserVerificationCancellationReason) error {
+	return newUserVerificationError(
+		UserVerificationErrorDetails{Type: "cancelled", Reason: string(reason)},
+		userVerificationCancelledMessage,
+		false,
+	)
+}
+
+func userVerificationFailedError(reason UserVerificationFailureReason) error {
+	return newUserVerificationError(
+		UserVerificationErrorDetails{Type: "failed", Reason: string(reason)},
+		userVerificationFailedMessage,
+		false,
+	)
+}
+
 func userVerificationUnavailableStatus() *UserVerificationStatusResponse {
 	reason := UserVerificationUnavailableProviderUnavailable
 	message := userVerificationUnavailableMessage
@@ -305,8 +335,10 @@ func validateUserVerificationRequest(params *UserVerificationVerifyParams) error
 	if params == nil {
 		return userVerificationInvalidError()
 	}
+	// Rust's adapter rejects only an empty title (String::is_empty); surrounding
+	// whitespace is accepted, so the Go validation must not trim the title.
 	if len(params.Challenge) > maxUserVerificationChallengeEncodedBytes ||
-		strings.TrimSpace(params.Title) == "" ||
+		params.Title == "" ||
 		len(params.Title) > maxUserVerificationTitleBytes ||
 		len(params.Description) > maxUserVerificationDescriptionBytes {
 		return userVerificationInvalidError()

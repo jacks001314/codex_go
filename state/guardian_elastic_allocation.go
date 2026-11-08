@@ -52,6 +52,11 @@ type GuardianElasticItem struct {
 	// boundaries that stay intact when elastic entry caps shorten supporting
 	// evidence.
 	Protected bool
+	// VerifiedAnswer marks one accepted request_user_input answer rendered
+	// verbatim from retained evidence. Elastic preparation never shortens it and
+	// allocation keeps or drops the whole item, so a verified Q&A is never cut in
+	// half (#59902).
+	VerifiedAnswer bool
 	// Incomplete marks an entry whose source was shortened during elastic
 	// preparation.
 	Incomplete bool

@@ -1,0 +1,110 @@
+{
+ "schemaVersion": 1,
+ "generatedAt": "2026-11-08",
+ "manifest": {
+  "sha256": "918623495668733e036c7d4416cfc7aef1e03531a7024e689460b2302c6c41d0",
+  "bytes": 67227,
+  "contracts": 138
+ },
+ "proposals": [
+  {
+   "id": "account-security-setup-appserver-fetch",
+   "action": "adjust-scope",
+   "before": {
+    "goPaths": [
+     "app",
+     "appserver",
+     "chatgptapi",
+     "tui"
+    ],
+    "rustPaths": [
+     "app-server/src/request_processors/account_processor.rs",
+     "app-server/src/request_processors/account_processor/workspace_routing.rs",
+     "app-server/src/message_processor.rs"
+    ],
+    "verifier": [
+     "TestCloudClientGetSecuritySetupDropsInvalidNoticesLikeRust",
+     "TestSecuritySetupStaleIdentityAndBannerPriorityLikeRust"
+    ]
+   },
+   "after": {
+    "goPaths": [
+     "app",
+     "chatgptapi",
+     "tui"
+    ],
+    "rustPaths": [
+     "app-server/src/request_processors/account_processor/security_setup.rs",
+     "app-server-protocol/src/protocol/v2/account.rs",
+     "tui/src/security_setup.rs"
+    ],
+    "verifier": [
+     "TestCloudClientGetSecuritySetupDropsInvalidNoticesLikeRust",
+     "TestSecuritySetupStaleIdentityAndBannerPriorityLikeRust"
+    ]
+   },
+   "suggestedId": "account-security-setup-fetch",
+   "suggestedStatusAfterSign": "complete",
+   "rationale": "Go 不经 app server：appserver/ 与 protocol/ 里 `rg -i securitysetup` → 0。行为在 chatgptapi(取数) + app(eligibility/身份复核) + tui(展示)。去掉的三条是 app-server 的 RPC 装配/分发/无关的 workspace_routing；换入的是行为真正出处（取数、wire 形状、展示）。",
+   "risk": "改动后需跑 TestAlignmentRustContractOraclePathsExist（三条已 test -e 验过）与 TestContractVerifierAuditMatchesTree（verifier 不变）"
+  },
+  {
+   "id": "cloud-image-messages-and-draft-handoff",
+   "action": "adjust-scope-and-split",
+   "before": {
+    "goPaths": [
+     "cloudbackend",
+     "cloudclient"
+    ],
+    "rustPaths": [
+     "app-server-client/src/cloud_backend/requests.rs",
+     "cloud-client/src/items.rs"
+    ],
+    "verifier": [
+     "TestAddUserMessageRequestEncoding",
+     "TestCloudConversationRequestsAndTypedReceiptsLikeRust"
+    ]
+   },
+   "after": {
+    "goPaths": [
+     "cloudclient/turns.go",
+     "cloudclient/transcript.go",
+     "cloudbackend/submission.go"
+    ],
+    "rustPaths": [
+     "app-server-client/src/cloud_backend/requests.rs",
+     "cloud-client/src/items.rs"
+    ],
+    "verifier": [
+     "TestAddUserMessageRequestEncoding",
+     "TestCloudConversationRequestsAndTypedReceiptsLikeRust"
+    ]
+   },
+   "split": [
+    {
+     "id": "cloud-image-messages",
+     "goPaths": [
+      "cloudclient/turns.go",
+      "cloudclient/transcript.go"
+     ],
+     "rustPaths": [
+      "cloud-client/src/items.rs"
+     ],
+     "blocking": "需先补 image content item 编码/解码（closeout §6）",
+     "suggestedStatus": "partial"
+    },
+    {
+     "id": "cloud-draft-handoff",
+     "goPaths": [],
+     "rustPaths": [
+      "app-server-client/src/cloud_backend/requests.rs"
+     ],
+     "blocking": "Go 侧无任何 draft handoff 承载面（rg -i draft → 0），建议暂不登记",
+     "suggestedStatus": "not-registered"
+    }
+   ],
+   "rationale": "goPaths 从目录改成真实承载文件；image 半可落，draft 半无承载，故建议拆条。",
+   "risk": "拆条会变动契约数（138 → 139 或 138 视是否登记 draft 半而定），需同步 baseline 文案"
+  }
+ ]
+}

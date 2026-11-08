@@ -180,9 +180,11 @@ type RuntimeServices struct {
 	RemoteControlDisabledByRequirements bool
 
 	// UserVerificationProvider installs the platform backend for the
-	// experimental user-verification RPCs. Nil keeps the unsupported provider,
-	// which reports providerUnavailable like a Rust build without a native
-	// backend (Rust resolves the same seam through platform_provider).
+	// experimental user-verification RPCs. NewDefaultRuntimeRouterWithOptions
+	// always installs newUserVerificationPlatformProvider(), which reports
+	// providerUnavailable on builds without a native backend (Rust resolves the
+	// same seam through platform_provider). A nil field only survives a hand-built
+	// RuntimeServices, where the service falls back to the platform provider.
 	UserVerificationProvider UserVerificationProvider
 }
 
@@ -339,6 +341,12 @@ type RuntimeRouter struct {
 	// configured delay while keeping ephemeral children and running threads
 	// resident (Rust #52081/#52034).
 	idleLifecycle threadIdleLifecycle
+	// agentTreeIDMu guards agentTreeIDs, the per-tree correlation id handed to
+	// shutdown reports. The id is generated when a tree is first seen and shared
+	// by every controller in it; it is never persisted, so a reload gets a new one
+	// and the id never masquerades as a thread id (Rust #60190).
+	agentTreeIDMu sync.Mutex
+	agentTreeIDs  map[string]string
 	// threadUnloadDelays holds runtime-only per-thread retention overrides
 	// (Rust #55270). They are not persisted, so a cold resume uses the default.
 	threadUnloadDelayMu sync.Mutex
@@ -666,6 +674,11 @@ type RuntimeRouter struct {
 	// evidence a tool event is classified with.
 	sampledToolCallsMu sync.Mutex
 	sampledToolCalls   map[string]map[string]string
+	// finalAnswerModeration records, per (thread, turn), the moderation metadata
+	// the model stream reported for the turn (#59842). The completed answer item
+	// carries it, so clients read the verdict off the answer it judged.
+	finalAnswerModerationMu sync.Mutex
+	finalAnswerModeration   map[string]any
 	// codeModeChildCalls records, per (thread, turn), the child calls a Code Mode
 	// cell dispatched with the cell they belong to (Rust #45535's
 	// `cell_ids_by_child_call_id`).
@@ -2028,6 +2041,11 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 		EmbeddedNetworkPolicy: embeddedNetworkPolicyFromOptions(options),
 
 		RemoteControlDisabledByRequirements: remoteControlDisabledByRequirements(options),
+
+		// Rust's Service::new resolves the provider through
+		// native::platform_provider; install the same seam here so the platform
+		// backend is present without an embedder opt-in.
+		UserVerificationProvider: newUserVerificationPlatformProvider(),
 	}
 	if logDBInstallation != nil {
 		services.LogDBHandler = logDBInstallation.Handler
@@ -2125,15 +2143,19 @@ func (r *RuntimeRouter) sampleCodeModeProcessMetrics(ctx context.Context) (tool.
 // newRuntimeCodeModeProcessProvider mirrors Rust #52723's feature selection:
 // code_mode_host_grpc selects gRPC over stdio for the process-owned host.
 func newRuntimeCodeModeProcessProvider(options *RuntimeRouterOptions, program string) tool.CodeModeRemoteProvider {
+	// The enablement map only carries explicit overrides, so resolve through
+	// features.Enabled: the registered defaults (gRPC over stdio and host-side
+	// output truncation are default-on after Rust #59973) apply when a key is
+	// absent, while an explicit opt-out still selects the legacy stdio provider.
 	var provider tool.CodeModeRemoteProvider
-	if options != nil && options.FeatureEnablement["code_mode_host_grpc"] {
+	if options != nil && features.Enabled(options.FeatureEnablement, "code_mode_host_grpc") {
 		provider = codemode.NewGrpcProcessProvider(program)
 	} else {
 		provider = codemode.NewProcessProvider(program)
 	}
 	// Rust #58159: LocalServerOutputProvider wraps only Core's built-in
 	// providers; injected providers retain control of their session settings.
-	if options != nil && options.FeatureEnablement["code_mode_host_output_truncation"] {
+	if options != nil && features.Enabled(options.FeatureEnablement, "code_mode_host_output_truncation") {
 		provider = codemode.NewLocalServerOutputProvider(provider)
 	}
 	return provider
@@ -2699,6 +2721,10 @@ func (r *RuntimeRouter) remoteControlManagerBackend(codexHome string, options *R
 	if authLoader == nil && strings.TrimSpace(codexHome) != "" {
 		authLoader = remotecontrol.NewRemoteControlAuthLoaderForCodexHome(codexHome)
 	}
+	// Rust #60073: every remote-control request re-reads the runtime slot, so
+	// binding the slot to the captured login is what makes rotation take
+	// effect without reloading the connection. Nil keeps the actor bearer.
+	authLoader = remotecontrol.WithRuntimeAuth(authLoader, r.remoteControlRuntimeAuthSelection())
 	authRecovery, authRecoveryReset, authRecoveryChanged := r.remoteControlAuthRecovery(codexHome, options)
 	remoteControlURL := strings.TrimSpace(options.RemoteControlURL)
 	if remoteControlURL == "" {
@@ -2790,7 +2816,36 @@ func (r *RuntimeRouter) remoteControlExternalAuthRecovery(ctx context.Context, p
 	if err != nil {
 		return nil, false, err
 	}
+	// The recovered connection belongs to the same login lifetime, so it must
+	// keep the runtime slot it was captured with; dropping it would silently
+	// fall back to the actor bearer after one unauthorized recovery (Rust
+	// #60073).
+	if previous != nil {
+		recovered.RuntimeAuth = previous.RuntimeAuth
+	}
 	return recovered, true, nil
+}
+
+// remoteControlRuntimeAuthSelection binds the remote-control backend to the
+// runtime credentials of the current configuration, or returns nil when runtime
+// auth is off or the provider supplies its own credential (Rust #60073).
+func (r *RuntimeRouter) remoteControlRuntimeAuthSelection() *remotecontrol.RuntimeAuthSelection {
+	if r == nil {
+		return nil
+	}
+	cfg := r.effectiveConfigForSessionTelemetry()
+	if cfg == nil {
+		return nil
+	}
+	provider := runtimeauth.ProviderForHarness(r.codexHomeForRollout(), cfg.Values, cfg.FeatureSettings(), cfg.ChatGPTBaseURL(), "codex-go")
+	if provider == nil || provider.Manager == nil {
+		return nil
+	}
+	slot := &remotecontrol.RuntimeAuthSlot{}
+	if err := slot.Set(provider.Manager); err != nil {
+		return nil
+	}
+	return &remotecontrol.RuntimeAuthSelection{Slot: slot, Mode: provider.Mode}
 }
 
 func remoteControlDisabledByRequirements(options *RuntimeRouterOptions) bool {
@@ -2878,6 +2933,9 @@ func (r *RuntimeRouter) Close() error {
 		return nil
 	}
 	r.closeOnce.Do(func() {
+		// The embedded TUI never reports a transport close, so retiring the
+		// router is the closure signal for the default connection.
+		r.markConnectionClosed(defaultRequestConnectionID)
 		r.closeErr = r.close()
 	})
 	return r.closeErr
@@ -6525,6 +6583,10 @@ func (r *RuntimeRouter) applyThreadStartConfigSnapshot(response *ThreadStartResp
 	if modelID != "" {
 		response.Model = modelID
 		response.Thread.Model = stringPtrIfNotEmpty(modelID)
+		// Rust #59958: the start response carries the catalog entry behind the
+		// model it just resolved, so it matches thread/read instead of exposing
+		// the persisted value it was built from.
+		response.Thread.SelectedModelInfo = selectedModelInfoForModel(modelID)
 	}
 	if providerID != "" {
 		response.ModelProvider = providerID
@@ -8601,7 +8663,16 @@ func (r *RuntimeRouter) handleTurnStart(request *Request) (*turn.TurnStartRespon
 	if hasSettingsUpdate {
 		// Validation may select AutoReview for the proposed protected model.
 		settingsUpdate.ApprovalsReviewer = cloneString(params.ApprovalsReviewer)
-		settingsUpdate.RequestedApprovalsReviewer = requestedReviewerBeforeValidation
+		if requestedReviewerBeforeValidation != nil {
+			settingsUpdate.RequestedApprovalsReviewer = requestedReviewerBeforeValidation
+		} else if params.ApprovalsReviewer != nil {
+			// Rust #59893: validation replaced an inherited reviewer without the
+			// caller asking for one, so the stored explicit request must survive.
+			if settings := r.threadSettingsForTurn(params.ThreadID); settings != nil {
+				preserved := settings.RequestedApprovalsReviewer
+				settingsUpdate.RequestedApprovalsReviewer = &preserved
+			}
+		}
 	}
 	if err := params.Validate(); err != nil {
 		return nil, err
@@ -10282,8 +10353,17 @@ func (r *RuntimeRouter) dispatchThreadExtra(request *Request) (any, error) {
 				return nil, err
 			}
 		}
+		requestedReviewerBeforeValidation := cloneString(params.ApprovalsReviewer)
 		if err := r.validateThreadSettingsStepSettings(&params); err != nil {
 			return nil, err
+		}
+		if requestedReviewerBeforeValidation == nil && params.ApprovalsReviewer != nil {
+			// Rust #59893: validation may replace an inherited reviewer without
+			// the caller asking for one; keep the stored explicit request.
+			if settings := r.threadSettingsForTurn(params.ThreadID); settings != nil {
+				preserved := settings.RequestedApprovalsReviewer
+				params.RequestedApprovalsReviewer = &preserved
+			}
 		}
 		response, err := r.commitThreadSettingsUpdateWithConnection(&params, true, deferredNotificationConnection(request), true)
 		if err != nil {
@@ -10345,6 +10425,9 @@ func applyThreadModelSettings(thread *Thread, settings *Settings) {
 	}
 	if model := strings.TrimSpace(settings.Model); model != "" {
 		thread.Model = stringPtrIfNotEmpty(model)
+		// Overlaying a live model must carry its catalog entry too, otherwise a
+		// loaded thread keeps the metadata of the model it was persisted with.
+		thread.SelectedModelInfo = selectedModelInfoForModel(model)
 	}
 	if settings.Effort != nil {
 		thread.ReasoningEffort = reasoningEffortPtr(*settings.Effort)
@@ -15282,12 +15365,17 @@ func (r *RuntimeRouter) accountRuntimeAuth(baseURL string) chatgptapi.CloudRunti
 	if err != nil {
 		return nil
 	}
+	// Rust #60014: a managed `features.runtime_agent_instances.mode`
+	// requirement wins over the configured mode.
+	resolvedMode, _ := cfg.RuntimeAuthMode()
+	mode := runtimeauth.Mode(resolvedMode)
 	provider := runtimeauth.ProviderForConfig(runtimeauth.ProviderOptions{
 		Values:          cfg.Values,
 		FeatureSettings: cfg.FeatureSettings(),
 		CodexHome:       codexHome,
 		InstallationID:  installationID,
 		Harness:         "codex-go",
+		Mode:            &mode,
 	})
 	if provider == nil {
 		return nil
@@ -20003,7 +20091,23 @@ func (r *RuntimeRouter) shellApprovalForTurn(threadID string, turnID string, ign
 			}
 			return tool.ShellApprovalDecision{Approved: true}, nil
 		case string(CommandExecutionApprovalApplyNetworkPolicyAmendment):
-			if commandExecutionApprovalDecisionNetworkAction(response.Decision) == string(NetworkPolicyRuleAllow) {
+			// Rust Session::resolve_exec_approval persists the network policy
+			// amendment and publishes it, so the decision also covers later
+			// requests instead of only this command.
+			amendment, ok := networkPolicyAmendmentFromDecision(response.Decision)
+			if !ok {
+				return tool.ShellApprovalDecision{}, nil
+			}
+			if r.networkApproval != nil {
+				if err := r.networkApproval.applyCommandNetworkPolicyAmendment(threadID, amendment.Host, amendment.Action); err != nil {
+					r.notify(NotificationWarning, &WarningNotification{
+						ThreadID: stringPtrIfNotEmpty(strings.TrimSpace(threadID)),
+						Message:  "Failed to apply network policy amendment: " + err.Error(),
+					})
+					return tool.ShellApprovalDecision{}, nil
+				}
+			}
+			if amendment.Action == NetworkPolicyRuleAllow {
 				return tool.ShellApprovalDecision{Approved: true}, nil
 			}
 			return tool.ShellApprovalDecision{}, nil
@@ -20154,6 +20258,14 @@ func (r *RuntimeRouter) applyPatchApprovalForTurn(threadID string, turnID string
 		case string(FileChangeApprovalAcceptForSession):
 			r.rememberFileChangeApprovalForSession(threadID)
 			return tool.ApplyPatchApprovalDecision{Approved: true, AllowSession: true}, nil
+		case string(FileChangeApprovalCancel):
+			// Rust #59910: cancelling a file change approval aborts the turn that
+			// issued it. The abort carries this approval's own turn id, so a
+			// delayed cancellation can never interrupt a later turn.
+			if r.hasRuntimeThreadStore() {
+				_, _ = r.interruptRuntimeTurn(threadID, turnID, nil, turnAbortReasonInterrupted)
+			}
+			return tool.ApplyPatchApprovalDecision{}, nil
 		default:
 			return tool.ApplyPatchApprovalDecision{}, nil
 		}

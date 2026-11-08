@@ -18,9 +18,10 @@ type GuardianElasticTruncation struct {
 // capped once per section entry before optional allocation, so a later grant
 // cannot change an entry's representation.
 //
-// Required and optional text share the same cap. Exact actions and opaque
-// media stay whole, native sections are never shortened, and request
-// scaffolding ("intro", "budget_omission") is not contributed evidence.
+// Required and optional text share the same cap. Exact actions, verified
+// answers (accepted request_user_input evidence) and opaque media stay whole,
+// native sections are never shortened, and request scaffolding ("intro",
+// "budget_omission") is not contributed evidence.
 // Truncated entries are marked incomplete and their measured cost is cleared
 // so allocation charges the retained text.
 func PrepareGuardianElasticEntries(context GuardianElasticContext, config GuardianElasticBudgetConfig) (GuardianElasticContext, error) {
@@ -36,7 +37,9 @@ func PrepareGuardianElasticEntries(context GuardianElasticContext, config Guardi
 				return GuardianElasticContext{}, err
 			}
 			maximum := config.SectionLimits(group).MaxSectionEntryTokens
-			if item.Exact || item.Protected || item.ImageURL != "" || item.Text == "" {
+			if item.Exact || item.Protected || item.VerifiedAnswer || item.ImageURL != "" || item.Text == "" {
+				// A verified answer is only ever kept or dropped as a whole; cutting
+				// it in half would hand the reviewer a question without its answer.
 				continue
 			}
 			framing := guardianElasticContentFramingTokens(1)

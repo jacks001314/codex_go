@@ -566,7 +566,7 @@ func TestGCPAccountReadLikeRust(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal account/read: %v", err)
 	}
-	want := `{"account":{"type":"gcp"},"requiresOpenaiAuth":false,"workspaceRouting":null}`
+	want := `{"account":{"type":"gcp"},"requiresOpenaiAuth":false,"userId":null,"workspaceRouting":null}`
 	if string(encoded) != want {
 		t.Fatalf("account/read = %s, want %s", encoded, want)
 	}

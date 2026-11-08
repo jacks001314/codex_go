@@ -1371,18 +1371,18 @@ func (d FileAudioDurations) FileTokens(fileID string) int {
 }
 
 // compactImageReferenceBytes mirrors Rust estimate_image_reference_bytes
-// (#46072): an inline image keeps the resized-image estimate, while a file
-// reference is charged the fixed resized cost or the maximum patch count when
-// the request asks for `original` detail.
+// (#46072, #54776): an inline image keeps the resized-image estimate unless the
+// request asks for `original` detail, which is measured from the payload's
+// dimensions; a file reference cannot expose dimensions and is charged the fixed
+// resized cost or the maximum patch count for `original` detail. The shared
+// estimate lives in context so history accounting and compaction charge the same
+// bytes for the same reference.
 func compactImageReferenceBytes(part ContentPart) int {
-	if strings.TrimSpace(part.FileID) == "" {
-		return compactResizedImageBytes
+	detail := ""
+	if part.Detail != nil {
+		detail = *part.Detail
 	}
-	if part.Detail != nil && strings.EqualFold(strings.TrimSpace(*part.Detail), "original") {
-		// Rust approx_bytes_for_tokens(ORIGINAL_IMAGE_MAX_PATCHES): 4 bytes/token.
-		return compactOriginalImageMaxPatches * 4
-	}
-	return compactResizedImageBytes
+	return int(contextfrag.EstimateImageReferenceBytes(part.ImageURL, part.FileID, detail))
 }
 
 // compactAudioReferenceBytes mirrors Rust estimate_audio_reference_bytes

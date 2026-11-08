@@ -1,0 +1,50 @@
+{
+ "schemaVersion": 1,
+ "generatedAt": "2026-11-08",
+ "upstreamProbe": "GitHub commits API answers 422 {\"message\":\"No commit found for SHA: <prefix>\"} for all four prefixes, so no upstream object exists under them (probed by the maintainer; not re-probed here).",
+ "decision": "A: substitute the subject-matched 40-hex from the local mirror and record the provenance, instead of keeping an unresolvable 10-hex prefix.",
+ "why": [
+  "A 10-hex prefix that no upstream resolves is a dangling identifier: anyone auditing the ledger gets 422 and cannot verify the entry.",
+  "The subject is byte-identical in the local mirror, so the change is auditable today with git cat-file / git log in a checkout every lane already has.",
+  "Keeping the prefix would require the baseline to keep asserting 'must be backfilled from the authoritative mirror', which is provably impossible."
+ ],
+ "consequences": [
+  "parity/commits.json: sha40 3673 -> 3677, prefixOnly10 []; each of the four entries carries an appended evidence sentence naming the prefix, the 422, and the substituted digest.",
+  "parity/baseline.json: the old blocker ('absent from the local mirror, must be backfilled') is replaced by a blocker that states these four are subject-identified and must not be read as GitHub-compare entries.",
+  "These four must not be used to reconcile a git range: they are not ancestors of the anchor unless resolvedShaIsAncestorOfAnchor says so."
+ ],
+ "entries": [
+  {
+   "prefix": "8d712cc542",
+   "subject": "Remove the legacy Seatbelt network policy wrapper (#59632)",
+   "resolvedSha": "c0100ad4ecd2251c2b48b68534db08afac78c606",
+   "resolvedShaIsAncestorOfAnchor": true,
+   "resolution": "subject match in the local Rust mirror (rebased history line); the prefix itself has no upstream object",
+   "verification": "git cat-file -e c0100ad4ecd2251c2b48b68534db08afac78c606 && git log -1 --format=%s c0100ad4ecd2251c2b48b68534db08afac78c606 == subject"
+  },
+  {
+   "prefix": "45704d8c64",
+   "subject": "Expose retained command sessions in incremental world state (#59633)",
+   "resolvedSha": "d4902cedbf508411f6f8bf049cc5919b4edc24f6",
+   "resolvedShaIsAncestorOfAnchor": true,
+   "resolution": "subject match in the local Rust mirror (rebased history line); the prefix itself has no upstream object",
+   "verification": "git cat-file -e d4902cedbf508411f6f8bf049cc5919b4edc24f6 && git log -1 --format=%s d4902cedbf508411f6f8bf049cc5919b4edc24f6 == subject"
+  },
+  {
+   "prefix": "803d519ad3",
+   "subject": "Ignore the unmaintained pin-utils advisory in dependency audits (#59638)",
+   "resolvedSha": "2be3dd3ff3afe74205ed341e1eec2ed8f298ee48",
+   "resolvedShaIsAncestorOfAnchor": true,
+   "resolution": "subject match in the local Rust mirror (rebased history line); the prefix itself has no upstream object",
+   "verification": "git cat-file -e 2be3dd3ff3afe74205ed341e1eec2ed8f298ee48 && git log -1 --format=%s 2be3dd3ff3afe74205ed341e1eec2ed8f298ee48 == subject"
+  },
+  {
+   "prefix": "24ed4a1b6c",
+   "subject": "Preserve turn configuration in Guardian scoring and approvals (#59642)",
+   "resolvedSha": "86ac0916597244a2e67a197822a5483924660ff1",
+   "resolvedShaIsAncestorOfAnchor": true,
+   "resolution": "subject match in the local Rust mirror (rebased history line); the prefix itself has no upstream object",
+   "verification": "git cat-file -e 86ac0916597244a2e67a197822a5483924660ff1 && git log -1 --format=%s 86ac0916597244a2e67a197822a5483924660ff1 == subject"
+  }
+ ]
+}

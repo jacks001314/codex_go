@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -6656,6 +6657,12 @@ func TestModelFeedbackNoteBracketedPasteSubmitsImmediately(t *testing.T) {
 }
 
 func TestModelAppCommandUsesRustHistoryMessages(t *testing.T) {
+	// Rust gates SlashCommand::App to macOS and Windows (slash_command.rs:318
+	// `cfg!(any(target_os = "macos", target_os = "windows"))`), so /app has no
+	// popup row elsewhere and the handler below cannot be reached from the composer.
+	if runtime.GOOS != "windows" && runtime.GOOS != "darwin" {
+		t.Skip("Rust only offers /app on macOS and Windows")
+	}
 	state := codextui.NewState(nil)
 	model := NewModel(state, Options{})
 	typeText(t, model, "/app")

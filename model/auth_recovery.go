@@ -53,6 +53,12 @@ func (r *ResponsesAgentRunner) recoverUnauthorizedAuth(ctx context.Context, stat
 	if state == nil {
 		state = &authRecoveryState{}
 	}
+	// Rust #60096: a terminal runtime denial cannot be repaired by refreshing the
+	// original credential or by retrying the request, so it surfaces as the
+	// sign-in error without spending a recovery step.
+	if !r.isRecoverableAuthError(debug.StatusCode, debug.ResponseBody, debug.AuthErrorCode) {
+		return "", "", errTerminalRuntimeAuthDenial
+	}
 	// The provider owns one recovery attempt per request (Rust's
 	// `provider_auth_recovery_attempted`): a Bedrock credential refresh or a
 	// workload-identity refresh recovers the provider's own credentials, and Rust
@@ -92,6 +98,11 @@ func (r *ResponsesAgentRunner) recoverUnauthorizedAuth(ctx context.Context, stat
 	r.recordAuthRecoveryWithReason(ctx, mode, stepName, auth.AuthRecoveryOutcomeNotRun, reason, debug, nil)
 	return "", "", errNoAuthRecoveryStep
 }
+
+// errTerminalRuntimeAuthDenial reports a 401 that is a terminal runtime denial
+// (Rust #60096): the original response, not a refreshed credential, is what the
+// caller must surface.
+var errTerminalRuntimeAuthDenial = errors.New("terminal runtime authentication denial")
 
 // errNoAuthRecoveryStep reports a 401 that ran no recovery step (Rust's
 // recovery_not_run): the caller surfaces the original error instead of retrying.

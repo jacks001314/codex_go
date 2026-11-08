@@ -1,0 +1,308 @@
+{
+ "schemaVersion": 1,
+ "generatedAt": "2026-11-08",
+ "target": "parity/commits.json",
+ "scope": "12 个 commit 的 evidence[] 重写（r8 A 类 13 条契约对应；image-original-detail-token-estimate 不动）",
+ "before": {
+  "sha256": "df4c073b2809bd0439a5c6cf7b798405a053328bc9c5ab638ff9b8942dc4b9fc",
+  "bytes": 2894369
+ },
+ "after": {
+  "sha256": "cf6cb6f979814c116f041315316bff919bc344c6f9df25328805b07ee74ccb00",
+  "bytes": 2894577
+ },
+ "statusCounts": {
+  "complete": 2975,
+  "not_applicable": 639,
+  "blocked_precondition": 4,
+  "partial": 59
+ },
+ "records": [
+  {
+   "sha": "01ab354312f758c343c85c139d5fee3be0ec93f2",
+   "shortSha": "01ab354312",
+   "pr": "#60004",
+   "contracts": [
+    "account-read-user-id"
+   ],
+   "subject": "Expose ChatGPT user IDs in `account/read` responses (#60004)",
+   "status": "complete",
+   "beforeEvidence": [
+    "缺 account/read 的 userId：auth/account.go:565 GetAccountResponse 只有 Account/RequiresOpenAIAuth/WorkspaceRouting；响应有两个构造点 appserver/runtime_router.go:14977 与 :15041，都要填",
+    "取值能力已在：auth.ChatGPTUserIDFromAuth（appserver/workspace_switching.go:64 在用）",
+    "plan: update/plan_2026_11_08_tail5.md §2（#60004），契约 account-read-user-id"
+   ],
+   "afterEvidence": [
+    "Go auth/account.go implements resolving the ChatGPT user id from the auth snapshot (ChatGPTUserIDFromAuth) for account/read responses; verified by TestAccountReadResponseCarriesChatGPTUserIDLikeRust",
+    "Go appserver/runtime_router.go implements filling that user id at every account/read response construction point, including the RequiresOpenAIAuth early returns and providerAccountResponse; verified by TestAccountReadResponseCarriesChatGPTUserIDLikeRust"
+   ],
+   "verifiers": [
+    "TestAccountReadResponseCarriesChatGPTUserIDLikeRust"
+   ],
+   "directoryLevelPaths": []
+  },
+  {
+   "sha": "c9b4267c370a755da12ec1c8648c2451163212b7",
+   "shortSha": "c9b4267c37",
+   "pr": "#60190",
+   "contracts": [
+    "agent-tree-id"
+   ],
+   "subject": "Expose agent tree IDs and environment removal (#60190)",
+   "status": "complete",
+   "beforeEvidence": [
+    "environment 移除已对齐（appserver.EnvironmentManager.Remove + TestManagerRemove）；agent tree ID 缺失且语义不同（Go 用 root thread id 填 TreeID，重载不换新）",
+    "Go 锚点：agent/shutdown_report.go:64（TreeID 注释明确是运行时关联 id，不是 thread id）、:116 NewAgentTreeShutdownState(treeID)",
+    "plan: update/plan_2026_11_08_thread_storage.md（#60190），契约 agent-tree-id"
+   ],
+   "afterEvidence": [
+    "Go appserver/runtime_router.go implements reload-scoped agent tree ids (agentTreeIDs guarded by agentTreeIDMu); verified by TestAgentTreeIDChangesOnReloadAndIsSharedByChildrenLikeRust",
+    "Go appserver/agent_controller.go implements the treeID field plus the agentTreeID() accessor that child agents inherit; verified by TestAgentTreeIDChangesOnReloadAndIsSharedByChildrenLikeRust"
+   ],
+   "verifiers": [
+    "TestAgentTreeIDChangesOnReloadAndIsSharedByChildrenLikeRust"
+   ],
+   "directoryLevelPaths": []
+  },
+  {
+   "sha": "44ccf394573cabb95e1f751a59f9d76f6f79faf1",
+   "shortSha": "44ccf39457",
+   "pr": "#60049",
+   "contracts": [
+    "child-agent-catalog-preservation"
+   ],
+   "subject": "Preserve model catalogs when starting child agents (#60049)",
+   "status": "complete",
+   "beforeEvidence": [
+    "缺子 agent 启动时保留模型 catalog：appserver/agent_controller.go:107 spawnAgentWithReservedID 与 :502 resolveSpawnModelOverrides 按请求参数/捕获设置重算模型，不保留父 catalog",
+    "Go 锚点：appserver/（agent_controller、child spawn）、model/（catalog）",
+    "plan: update/plan_2026_11_08_model_2.md（#60049），契约 child-agent-catalog-preservation"
+   ],
+   "afterEvidence": [
+    "Go model/models_endpoint.go implements serving a child agent's catalog from the in-memory model catalog (RefreshInMemory) instead of forcing an offline refresh; verified by TestChildAgentInheritsParentCatalogLikeRust"
+   ],
+   "verifiers": [
+    "TestChildAgentInheritsParentCatalogLikeRust"
+   ],
+   "directoryLevelPaths": []
+  },
+  {
+   "sha": "ddd1812a51f4aded35c3ec5446672474d5cb546b",
+   "shortSha": "ddd1812a51",
+   "pr": "#59842",
+   "contracts": [
+    "final-answer-moderation"
+   ],
+   "subject": "Carry targeted moderation decisions on final-answer messages (#59842)",
+   "status": "complete",
+   "beforeEvidence": [
+    "缺 final-answer 的定向审核决定与 display metadata：Go 的 protocol/appserver 侧没有 moderation decision 随消息下发的字段",
+    "Go 锚点：protocol/（item 结构无审核决定字段）、appserver/（turn_runtime 未携带 decision）",
+    "plan: update/plan_2026_11_08_context_budget.md（#59842），契约 final-answer-moderation"
+   ],
+   "afterEvidence": [
+    "Go appserver/final_answer_moderation*.go implements attaching the targeted moderation decision to the completed final answer; verified by TestFinalAnswerModerationAttachedToCompletedAnswerLikeRust",
+    "Go appserver/runtime_router.go implements carrying finalAnswerModeration on the turn runtime so the decision reaches the completed answer; verified by TestFinalAnswerModerationAttachedToCompletedAnswerLikeRust"
+   ],
+   "verifiers": [
+    "TestFinalAnswerModerationAttachedToCompletedAnswerLikeRust"
+   ],
+   "directoryLevelPaths": []
+  },
+  {
+   "sha": "ad1dbba32db4b0204d2f769c762f329dc37c8895",
+   "shortSha": "ad1dbba32d",
+   "pr": "#59910",
+   "contracts": [
+    "patch-approval-cancel-turn-scope"
+   ],
+   "subject": "Scope file change approval cancellation to the requesting turn (#59910)",
+   "status": "complete",
+   "beforeEvidence": [
+    "缺「patch 审批取消按发起 turn 收敛」：Go 的取消路径不区分 turn 归属",
+    "Go 锚点：appserver/（审批取消处理）、turn/（approval broker）",
+    "plan: update/plan_2026_11_08_misc_2.md（#59910），契约 patch-approval-cancel-turn-scope"
+   ],
+   "afterEvidence": [
+    "Go appserver/server_request.go implements scoping a file change approval cancel to the requesting turn instead of the default turn; verified by TestFileChangeApprovalCancelInterruptsRequestingTurnLikeRust",
+    "Go appserver/turn_runtime.go implements interrupting only the requesting turn when a patch approval is cancelled; verified by TestPatchApprovalCancelStaysScopedToRequestingTurnLikeRust"
+   ],
+   "verifiers": [
+    "TestFileChangeApprovalCancelInterruptsRequestingTurnLikeRust",
+    "TestPatchApprovalCancelStaysScopedToRequestingTurnLikeRust"
+   ],
+   "directoryLevelPaths": []
+  },
+  {
+   "sha": "efdacaf46ff54660a239189a6d62434c5db33d2c",
+   "shortSha": "efdacaf46f",
+   "pr": "#60096",
+   "contracts": [
+    "runtime-auth-terminal-denials"
+   ],
+   "subject": "Stop retrying terminal runtime authentication denials (#60096)",
+   "status": "complete",
+   "beforeEvidence": [
+    "缺 terminal runtime denial 的分类处理：Go 能解析 x-error-json 的 error.code 但只进 telemetry，recoverUnauthorizedAuth 与 isRetryableResponsesStreamError 都不读它，四个 terminal denial code 零命中",
+    "Go 锚点：model/（responses stream 错误处理）、telemetry/",
+    "plan: update/plan_2026_11_08_runtime_auth_extra.md（#60096），契约 runtime-auth-terminal-denials"
+   ],
+   "afterEvidence": [
+    "Go model/responses_agent.go implements classifying terminal runtime auth denials through responseAuthorizationErrorCode and short-circuiting recovery so they surface as sign-in; verified by TestTerminalRuntimeDenialsSurfaceSignInLikeRust",
+    "Go model/responses_agent.go implements treating a runtime auth denial as non-recoverable instead of retryable; verified by TestRuntimeAuthDenialIsNotRecoverableAuthErrorLikeRust"
+   ],
+   "verifiers": [
+    "TestTerminalRuntimeDenialsSurfaceSignInLikeRust",
+    "TestRuntimeAuthDenialIsNotRecoverableAuthErrorLikeRust"
+   ],
+   "directoryLevelPaths": []
+  },
+  {
+   "sha": "df769889c0b4d41afcc9e02502aab91bac862083",
+   "shortSha": "df769889c0",
+   "pr": "#60006",
+   "contracts": [
+    "logs-prune-window-frame",
+    "thread-token-narrow-update"
+   ],
+   "subject": "Reduce SQLite write overhead for thread activity and history (#60006)",
+   "status": "complete",
+   "beforeEvidence": [
+    "缺 SQLite 写放大三项子改动（token 窄更新/历史写准入/日志窗口帧）；底座（pool、ExecWrite busy 重试、BeginImmediate、分区 prune 谓词）已在",
+    "Go 锚点：state/（threads/history 写入）、rollout/",
+    "plan: update/plan_2026_11_08_thread_storage.md（#60006，拆 a/b/c），契约 thread-token-narrow-update"
+   ],
+   "afterEvidence": [
+    "Go state/logs.go implements pruning each Rust log partition with one ROWS UNBOUNDED PRECEDING window that computes byte and row limits in a single pass; verified by TestLogsPruneWindowUsesSinglePassLikeRust",
+    "Go state/backfill.go implements a token-usage activity narrow update that touches only timestamps and token totals while keeping concurrent metadata edits; verified by TestThreadTokenUpdateKeepsConcurrentMetadataLikeRust",
+    "Go state/runtime.go implements serializing local history writes through historyWriter/acquireHistoryWriter before BeginImmediate; verified by TestHistoryWriteAdmission"
+   ],
+   "verifiers": [
+    "TestLogsPruneWindowUsesSinglePassLikeRust",
+    "TestThreadTokenUpdateKeepsConcurrentMetadataLikeRust",
+    "TestHistoryWriteAdmission"
+   ],
+   "directoryLevelPaths": []
+  },
+  {
+   "sha": "eb485f57ba02ca8cdedfcc07aca0f9d75c8faefd",
+   "shortSha": "eb485f57ba",
+   "pr": "#59998",
+   "contracts": [
+    "message-board-bulk-subscriptions"
+   ],
+   "subject": "Add atomic bulk channel subscription updates (#59998)",
+   "status": "complete",
+   "beforeEvidence": [
+    "缺原子批量订阅更新：Go 只有单条 SetSubscription，无「一次事务内多目标、失败整体回滚」",
+    "Go 锚点：agentboard/（subscriptions 写入）",
+    "plan: update/plan_2026_11_08_thread_storage.md（#59998），契约 message-board-bulk-subscriptions"
+   ],
+   "afterEvidence": [
+    "Go agentboard/local.go implements atomic bulk channel subscription updates in one transaction with all-or-nothing rollback; verified by TestLocalBoardBulkSubscriptionsAreAtomicLikeRust"
+   ],
+   "verifiers": [
+    "TestLocalBoardBulkSubscriptionsAreAtomicLikeRust"
+   ],
+   "directoryLevelPaths": []
+  },
+  {
+   "sha": "e428b9a16b033fb7ca65020a489f2d05231d8ddf",
+   "shortSha": "e428b9a16b",
+   "pr": "#59969",
+   "contracts": [
+    "thread-writer-lock-shared-coordination"
+   ],
+   "subject": "Reduce contention in thread writer lock coordination (#59969)",
+   "status": "complete",
+   "beforeEvidence": [
+    "缺共享协调读：Go 的 writer lock 是独占且阻塞（30s 超时/50ms 重试），Close() 先拿独占再删文件；Rust 已改共享协调 + 拿不到就保留文件",
+    "Go 锚点：session/（writer lock）、rollout/（store 协调）",
+    "plan: update/plan_2026_11_08_thread_storage.md（#59969），契约 thread-writer-lock-shared-coordination"
+   ],
+   "afterEvidence": [
+    "Go session/writer_lock.go implements shared coordination so Close does not block on a held coordination lock and keeps the lock file; verified by TestWriterLockCloseDoesNotBlockOnHeldCoordination",
+    "Go session/writer_lock.go implements TryAcquireForPublication skipping a live writer while holding coordination; verified by TestTryAcquireForPublicationSkipsLiveWriterAndHoldsCoordination"
+   ],
+   "verifiers": [
+    "TestWriterLockCloseDoesNotBlockOnHeldCoordination",
+    "TestTryAcquireForPublicationSkipsLiveWriterAndHoldsCoordination"
+   ],
+   "directoryLevelPaths": []
+  },
+  {
+   "sha": "af9a98b07401cb9e5279eb4128e50078b18ee7c4",
+   "shortSha": "af9a98b074",
+   "pr": "#60039",
+   "contracts": [
+    "mcp-lazy-stdio-startup"
+   ],
+   "subject": "Add opt-in lazy startup for cached stdio MCP servers (#60039)",
+   "status": "complete",
+   "beforeEvidence": [
+    "缺 stdio server 的 opt-in 懒启动（deferred server 带 DiscoverLocalStdio 启动）",
+    "Go 锚点：mcp/（connection manager）、config/（mcp server 类型）、features/",
+    "plan: update/plan_2026_11_08_mcp_lazy.md（#60039），契约 mcp-lazy-stdio-startup"
+   ],
+   "afterEvidence": [
+    "Go mcp/connection_pool.go implements deferring cached stdio server startup until first use when lazy startup is enabled; verified by TestMcpLazyStdioStartupDefersCachedServersLikeRust",
+    "Go appserver/ implements warming the tool catalog cache when a new chat starts; verified by TestToolCatalogCacheWarmsNewChatsLikeRust"
+   ],
+   "verifiers": [
+    "TestMcpLazyStdioStartupDefersCachedServersLikeRust",
+    "TestToolCatalogCacheWarmsNewChatsLikeRust"
+   ],
+   "directoryLevelPaths": [
+    "appserver/"
+   ]
+  },
+  {
+   "sha": "b1a0dff15854d5f62a9c0931431d70f6148da9e6",
+   "shortSha": "b1a0dff158",
+   "pr": "#59891",
+   "contracts": [
+    "guardian-repl-provenance-bound"
+   ],
+   "subject": "Bound REPL provenance costs in elastic context preparation (#59891)",
+   "status": "complete",
+   "beforeEvidence": [
+    "缺 elastic 准备里 REPL provenance 的上界（Rust guardian-context/src/preparation/repl.rs）",
+    "Go 锚点：context/（无 provenance 预算）、state/（无存储侧上界）",
+    "plan: update/plan_2026_11_08_context_budget.md（#59891），契约 guardian-repl-provenance-bound"
+   ],
+   "afterEvidence": [
+    "Go context/ implements bounding REPL provenance headers inside the elastic context preparation budget; verified by TestNodeReplElasticBoundsProvenanceHeadersLikeRust"
+   ],
+   "verifiers": [
+    "TestNodeReplElasticBoundsProvenanceHeadersLikeRust"
+   ],
+   "directoryLevelPaths": [
+    "context/"
+   ]
+  },
+  {
+   "sha": "b8725c1896089b1bcf8e74973077d5a69a71686c",
+   "shortSha": "b8725c1896",
+   "pr": "#59902",
+   "contracts": [
+    "guardian-verified-answer-whole"
+   ],
+   "subject": "Keep verified question/answer records whole under elastic budgets (#59902)",
+   "status": "complete",
+   "beforeEvidence": [
+    "缺 elastic 预算下「已验证问答整条保留」的强制（Rust guardian-context/src/enforcement.rs + preparation/elastic.rs）",
+    "Go 锚点：state/、appserver/、retainedctx/ 均无该 enforce 点",
+    "plan: update/plan_2026_11_08_context_budget.md（#59902），契约 guardian-verified-answer-whole"
+   ],
+   "afterEvidence": [
+    "Go state/guardian_elastic_allocation.go implements keeping verified question/answer records whole under elastic budgets; verified by TestGuardianElasticKeepsVerifiedAnswersWholeLikeRust",
+    "Go state/guardian_elastic_preparation.go implements dropping over-budget unverified entries instead of truncating verified answers; verified by TestGuardianElasticDropsVerifiedAnswersWholeLikeRust"
+   ],
+   "verifiers": [
+    "TestGuardianElasticKeepsVerifiedAnswersWholeLikeRust",
+    "TestGuardianElasticDropsVerifiedAnswersWholeLikeRust"
+   ],
+   "directoryLevelPaths": []
+  }
+ ]
+}

@@ -115,6 +115,21 @@ func (d *ToolDispatcher) completeDirectCall(invocation *tool.Invocation, respons
 	}
 }
 
+// readinessFailureResult reports a readiness failure the model must see as the
+// tool result instead of a turn-level abort (Rust #60038: an MCP call whose
+// server failed to start answers the model with "Could not start MCP server
+// `x`: ..." and the turn continues). Cancellation and other infrastructure
+// failures do not implement tool.ModelVisibleError, so they still fail the turn.
+func (d *ToolDispatcher) readinessFailureResult(invocation *tool.Invocation, err error) (*ToolExecutionResult, bool) {
+	var visible tool.ModelVisibleError
+	if !errors.As(err, &visible) {
+		return nil, false
+	}
+	result := d.rejectedInvocationResult(invocation, err)
+	d.completeDirectCall(invocation, result.Response, nil)
+	return result, true
+}
+
 // releasePreparedDirectCalls frees every pending direct-call slot still reserved
 // for this batch.
 func (d *ToolDispatcher) releasePreparedDirectCalls() {
@@ -694,6 +709,10 @@ func (d *ToolDispatcher) ExecuteToolItemsWithBatch(ctx context.Context, items []
 		guard := d.beginDirectTiming(invocations[0], startedAt)
 		if err := d.router.WaitUntilReady(ctx, invocations[0]); err != nil {
 			d.finishDirectTiming(guard, nil)
+			if result, ok := d.readinessFailureResult(invocations[0], err); ok {
+				d.releasePreparedDirectCalls()
+				return []ToolExecutionResult{*result}, nil
+			}
 			d.releasePreparedDirectCalls()
 			return nil, err
 		}
@@ -747,6 +766,12 @@ func (d *ToolDispatcher) executeToolInvocations(ctx context.Context, invocations
 		guard := d.beginDirectTiming(invocation, startedAt)
 		if err := d.router.WaitUntilReady(ctx, invocation); err != nil {
 			d.finishDirectTiming(guard, nil)
+			if result, ok := d.readinessFailureResult(invocation, err); ok {
+				readinessErrMu.Lock()
+				results[index] = *result
+				readinessErrMu.Unlock()
+				return
+			}
 			readinessErrMu.Lock()
 			if readinessErr == nil {
 				readinessErr = err

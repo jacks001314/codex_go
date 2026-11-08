@@ -154,14 +154,7 @@ func threadItemFromSummary(item cloudclient.ItemSummary) (appserver.ThreadItem, 
 	var threadItem appserver.ThreadItem
 	switch item.Kind {
 	case cloudclient.ItemUserMessage:
-		content := make([]any, 0, len(item.User.Text))
-		for _, text := range item.User.Text {
-			content = append(content, map[string]any{
-				"type":          "text",
-				"text":          text,
-				"text_elements": []any{},
-			})
-		}
+		content := cloudUserContent(item.User)
 		data := map[string]any{"content": content}
 		if item.User.ClientID != nil {
 			data["clientId"] = *item.User.ClientID
@@ -185,6 +178,45 @@ func threadItemFromSummary(item cloudclient.ItemSummary) (appserver.ThreadItem, 
 		return appserver.ThreadItem{}, false
 	}
 	return threadItem, true
+}
+
+// cloudUserContent renders the announced parts in order. A typed image part
+// keeps its `{"type":"image"}` shape instead of being flattened into text; text
+// parts carry an empty placeholder list, as before.
+func cloudUserContent(user cloudclient.UserMessageSummary) []any {
+	if len(user.Content) > 0 {
+		content := make([]any, 0, len(user.Content))
+		for _, part := range user.Content {
+			if part.Kind == cloudclient.UserMessageImage {
+				entry := map[string]any{"type": "image"}
+				if part.Image.FileID != "" {
+					entry["fileId"] = part.Image.FileID
+				} else {
+					entry["url"] = part.Image.URL
+				}
+				if part.Detail != nil {
+					entry["detail"] = part.Detail.String()
+				}
+				content = append(content, entry)
+				continue
+			}
+			content = append(content, map[string]any{
+				"type":          "text",
+				"text":          part.Text,
+				"text_elements": []any{},
+			})
+		}
+		return content
+	}
+	content := make([]any, 0, len(user.Text))
+	for _, text := range user.Text {
+		content = append(content, map[string]any{
+			"type":          "text",
+			"text":          text,
+			"text_elements": []any{},
+		})
+	}
+	return content
 }
 
 func cloudErrorNotification(threadID string, message string) Notification {

@@ -336,15 +336,15 @@ func TestRolloutRebuildTimestampOnlyTouchesTimestampsLikeRust(t *testing.T) {
 	if err != nil {
 		t.Fatalf("extractRolloutThreadMetadata() error = %v", err)
 	}
-	metadata.tokensUsed = 99
+	metadata.cwd = "/metadata-workspace"
 	if err := runtime.upsertRolloutThread(ctx, metadata); err != nil {
 		t.Fatalf("upsertRolloutThread() error = %v", err)
 	}
 	if _, fullRows = readTimestampProbeWrites(t, runtime); fullRows != 1 {
 		t.Fatalf("metadata rebuild full-row writes = %d, want 1", fullRows)
 	}
-	if changed := readTimestampProbeRow(t, runtime, threadID); changed.tokensUsed != 99 {
-		t.Fatalf("tokens_used after metadata change = %d, want 99", changed.tokensUsed)
+	if changed := readTimestampProbeRow(t, runtime, threadID); changed.cwd != "/metadata-workspace" {
+		t.Fatalf("cwd after metadata change = %q, want /metadata-workspace", changed.cwd)
 	}
 
 	// Missing rows still need the full repair path.

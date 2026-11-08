@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -125,7 +126,14 @@ func TestTerminalTitleSpinnerHonorsProgressEffectLikeRust(t *testing.T) {
 // thread-name, project-name; an unnamed thread omits only thread-name.
 func TestModelDefaultTerminalTitleMatchesRust(t *testing.T) {
 	state := codextui.NewState(&codextui.Options{Model: "gpt-5"})
-	state.CWD = `D:\repo`
+	// Rust derives the project name with Path::file_name (status_surfaces.rs:562),
+	// so the fixture has to be a native path: a Windows literal is one path
+	// component on POSIX hosts and would title the window "D:\\repo" there.
+	cwd, wantProject := `D:\repo`, "repo"
+	if runtime.GOOS != "windows" {
+		cwd = "/work/repo"
+	}
+	state.CWD = cwd
 	state.ThreadName = "Fix login timeout"
 	state.Status = "running"
 	writes := []string{}
@@ -146,7 +154,7 @@ func TestModelDefaultTerminalTitleMatchesRust(t *testing.T) {
 	if len(writes) == 0 {
 		t.Fatal("default terminal title was not written")
 	}
-	if got, want := writes[len(writes)-1], "\x1b]0;⠋ Fix login timeout | repo\x07"; got != want {
+	if got, want := writes[len(writes)-1], "\x1b]0;⠋ Fix login timeout | "+wantProject+"\x07"; got != want {
 		t.Fatalf("default title = %q, want %q (writes %#v)", got, want, writes)
 	}
 }

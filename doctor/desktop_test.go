@@ -3,11 +3,19 @@ package doctor
 import (
 	"errors"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestDesktopChecksReportInstalledAppLikeRust(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		// The fixture asserts the Windows log directory (%LOCALAPPDATA%\Codex\Logs);
+		// Rust only defines that path on Windows.
+		t.Skip("windows log layout only")
+	}
 	home := t.TempDir()
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("LOCALAPPDATA", home+`\AppData\Local`)
@@ -17,7 +25,7 @@ func TestDesktopChecksReportInstalledAppLikeRust(t *testing.T) {
 		return &desktopApp{identity: "OpenAI.Codex", version: "26.1021.3705.0"}, nil
 	}
 	desktopLogRootProbe = func(identity string) string { return desktopLogRoot(identity) }
-	desktopSecurityProbe = func() *DoctorCheck {
+	desktopSecurityProbe = func(*desktopApp) *DoctorCheck {
 		return NewCheck("desktop.security.enforcement", "desktop", CheckStatusOK, "no locally visible recent Codex security enforcement was found")
 	}
 	checks := desktopChecks()
@@ -28,10 +36,14 @@ func TestDesktopChecksReportInstalledAppLikeRust(t *testing.T) {
 		checks[0].Summary != "the desktop application is installed" {
 		t.Fatalf("desktop.app.version = %+v", checks[0])
 	}
+	wantLogDirectory := `log directory: $HOME\AppData\Local\Codex/Logs`
+	if runtime.GOOS == "darwin" {
+		wantLogDirectory = "log directory: $HOME/Library/Logs/OpenAI.Codex"
+	}
 	wantDetails := []string{
 		"version: 26.1021.3705.0",
 		"running: false",
-		`log directory: $HOME\AppData\Local\Codex/Logs`,
+		wantLogDirectory,
 	}
 	for index, want := range wantDetails {
 		if checks[0].Details[index] != want {
@@ -59,7 +71,7 @@ func TestDesktopChecksWarnWhenInstallationProbeFailsLikeRust(t *testing.T) {
 	restore := stubDesktopProbes(t)
 	defer restore()
 	desktopAppProbe = func() (*desktopApp, error) { return nil, errors.New("boom") }
-	desktopSecurityProbe = func() *DoctorCheck {
+	desktopSecurityProbe = func(*desktopApp) *DoctorCheck {
 		return NewCheck("desktop.security.enforcement", "desktop", CheckStatusOK, "no locally visible recent Codex security enforcement was found")
 	}
 	checks := desktopChecks()
@@ -153,9 +165,63 @@ func TestRedactedDesktopPathMatchesRust(t *testing.T) {
 	}
 }
 
+// TestDesktopChecksFindDarwinSessionLogsOnDisk reproduces the macOS log-path bug
+// end to end: the log tree lives at
+// ~/Library/Logs/<identity>/<yyyy/mm/dd>/codex-desktop-<session>-<pid>-t<id>.log,
+// so joining the day directory and the file name with a literal backslash can
+// never find it. It fails on the old `root + "\\" + ...` path and passes once
+// both joins use the platform separator.
+func TestDesktopChecksFindDarwinSessionLogsOnDisk(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("macOS log layout only")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	root := desktopLogRoot(desktopMacBundleIdentifier)
+	directory := filepath.Join(root, time.Now().Format("2006/01/02"))
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatalf("mkdir %s: %v", directory, err)
+	}
+	writeDesktopLog(t, directory, "codex-desktop-abc123-4242-t2026-01-01T00-00-00.log", []string{
+		"2026-01-01T00:00:00Z  INFO [AppServerConnection] initialize_handshake_result outcome=success transportKind=stdio",
+	})
+
+	restore := stubDesktopProbes(t)
+	defer restore()
+	desktopAppProbe = func() (*desktopApp, error) {
+		return &desktopApp{identity: desktopMacBundleIdentifier, version: "26.1021.3705.0"}, nil
+	}
+	desktopLogRootProbe = func(identity string) string { return desktopLogRoot(identity) }
+	desktopRunningProbe = func(_ *desktopApp, pid int) bool { return pid == 4242 }
+	desktopSecurityProbe = func(*desktopApp) *DoctorCheck { return nil }
+
+	checks := desktopChecks()
+	if len(checks) < 2 {
+		t.Fatalf("desktopChecks = %d checks, want the app row plus the handshake row", len(checks))
+	}
+	if got := checks[0].Details[1]; got != "running: true" {
+		t.Fatalf("session log under %s was not discovered: %q", directory, got)
+	}
+	if checks[1].Summary != "the desktop app-server initialized successfully" {
+		t.Fatalf("handshake check = %+v", checks[1])
+	}
+}
+
 func TestDesktopLogRootMatchesRust(t *testing.T) {
 	home := t.TempDir()
+	t.Setenv("HOME", home)
 	t.Setenv("LOCALAPPDATA", home+`\AppData\Local`)
+	if runtime.GOOS == "darwin" {
+		if got, want := desktopLogRoot("OpenAI.Codex"), filepath.Join(home, "Library", "Logs", "OpenAI.Codex"); got != want {
+			t.Fatalf("desktopLogRoot = %q, want %q", got, want)
+		}
+		return
+	}
+	if runtime.GOOS != "windows" {
+		// Rust only defines a log root for macOS and Windows; other platforms have
+		// no desktop app to inspect.
+		t.Skip("desktop log root is defined per platform")
+	}
 	if got, want := desktopLogRoot("OpenAI.Codex"), home+`\AppData\Local\Codex/Logs`; got != want {
 		t.Fatalf("desktopLogRoot = %q, want %q", got, want)
 	}
@@ -176,7 +242,7 @@ func stubDesktopProbes(t *testing.T) func() {
 
 func writeDesktopLog(t *testing.T, directory string, name string, lines []string) {
 	t.Helper()
-	if err := os.WriteFile(directory+`\`+name, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(directory, name), []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
 		t.Fatalf("write log %s: %v", name, err)
 	}
 }

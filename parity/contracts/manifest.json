@@ -1,6 +1,6 @@
 {
  "schemaVersion": 1,
- "targetRustCommit": "67f0994b532b8740f14b5b738af7b7b2a915b1d6",
+ "targetRustCommit": "748ab55ca7de0b647d9a7a9d9a8e70e00f28666d",
  "contracts": [
   {
    "id": "features",
@@ -1251,6 +1251,897 @@
    "phase": "P1",
    "status": "complete",
    "verifier": "TestRustAudioPreparationConstantsAgainstGo;TestRustAudioCanonicalMIMEMatchesGo"
+  },
+  {
+   "id": "windows-sandbox-filesystem-override-resolution",
+   "kind": "source-surface",
+   "rustPaths": [
+    "sandboxing/src/windows.rs",
+    "sandboxing/src/manager.rs",
+    "core/src/sandboxing/mod.rs",
+    "exec-server/src/process_sandbox.rs"
+   ],
+   "goPaths": [
+    "sandbox/windowssandbox/filesystem_overrides.go",
+    "sandbox/windowssandbox/lib.go",
+    "sandbox/windowssandbox/unified_exec/backends/legacy.go",
+    "sandbox/windowssandbox/unified_exec/live_windows.go"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestResolveWindowsSandboxFilesystemOverridesSelectsBackendLikeRust"
+  },
+  {
+   "id": "windows-mxc-psec-availability",
+   "kind": "source-surface",
+   "rustPaths": [
+    "mxc-sandbox/src/availability.rs",
+    "mxc-sandbox/src/native.rs",
+    "mxc-sandbox/src/windows.rs"
+   ],
+   "goPaths": [
+    "sandbox/mxc/psec_spec.go",
+    "sandbox/mxc/psec_process_windows.go",
+    "sandbox/mxc/run_windows.go",
+    "sandbox/mxc/psec_windows.go"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestProbeNativeSupportMatchesPlatform;TestSecurityEnvironmentSpecAcceptedByNativeApi;TestLaunchNativeFailsClosed;TestWindowsMXCAvailabilityRecordedOnceLikeRust;TestExecServerRejectsMXCLevelLikeRust"
+  },
+  {
+   "id": "windows-mxc-job-ui-limit-capability",
+   "kind": "source-surface",
+   "rustPaths": [
+    "mxc-sandbox/src/policy.rs",
+    "sandboxing/src/windows.rs"
+   ],
+   "goPaths": [
+    "sandbox/mxc/ui_limits.go",
+    "sandbox/mxc/ui_limits_windows.go",
+    "sandbox/mxc/os_build_windows.go",
+    "sandbox/mxc/psec_process_windows.go"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestSupportedUILimitMaskForBuildLikeRust;TestApplyJobUILimitsAllFlagsSucceedsOnAnyBuild;TestNewSandboxJobAppliesPolicyUILimits"
+  },
+  {
+   "id": "windows-mxc-managed-network-proxied-shape",
+   "kind": "source-surface",
+   "rustPaths": [
+    "mxc-sandbox/src/policy.rs",
+    "sandboxing/src/windows.rs"
+   ],
+   "goPaths": [
+    "sandbox/mxc/policy.go",
+    "execserver/sandbox_process_windows.go"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestTranslateNetworkPolicyLikeRust;TestExecServerRejectsMXCLevelLikeRust"
+  },
+  {
+   "id": "windows-mxc-tty-launch",
+   "kind": "source-surface",
+   "rustPaths": [
+    "sandboxing/src/windows.rs",
+    "mxc-sandbox/src/windows.rs"
+   ],
+   "goPaths": [
+    "sandbox/mxc/session_windows.go",
+    "execserver/sandbox_process_windows.go"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestExecServerMXCTTYDeliversConsoleContent;TestTTYCapabilityMatchesSpawnBehaviour;TestTTYCapabilityGatePrecedesLaunchValidation"
+  },
+  {
+   "id": "realtime-runtime-auth",
+   "kind": "source-surface",
+   "rustPaths": [
+    "codex-api/src/endpoint/realtime_websocket/methods.rs",
+    "core/src/realtime_conversation.rs",
+    "core/src/runtime_auth.rs"
+   ],
+   "goPaths": [
+    "realtime",
+    "appserver",
+    "runtimeauth"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestExistingCallSidebandPrefersPerCallEndpointLikeRust;TestRealtimeSidebandReconnectHelpersLikeRust;TestRealtimeAuthResolvesRuntimeAuthPerConnectLikeRust;TestRuntimeAuthHeadersReplaceActorCredentialLikeRust;TestRealtimeStartWiresRuntimeAuthPerHandshakeLikeRust"
+  },
+  {
+   "id": "remote-control-runtime-auth",
+   "kind": "source-surface",
+   "rustPaths": [
+    "app-server-transport/src/transport/remote_control/auth.rs",
+    "app-server-transport/src/transport/remote_control/mod.rs"
+   ],
+   "goPaths": [
+    "remotecontrol",
+    "runtimeauth"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestRemoteControlWebsocketLoopRetiresOnAuthOwnerChangeWhileConnected;TestRemoteControlRequestsUseRuntimeAuthLikeRust;TestRemoteControlRuntimeAuthRejectsNonOpenAIDestinationLikeRust;TestRemoteControlBackendBindsRuntimeAuthSlotLikeRust"
+  },
+  {
+   "id": "analytics-runtime-auth",
+   "kind": "source-surface",
+   "rustPaths": [
+    "backend-client/src/analytics_session.rs",
+    "tui/src/analytics/client.rs"
+   ],
+   "goPaths": [
+    "tui/analytics",
+    "chatgptapi"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestCloudClientResolvesRuntimeAuthPerRequestLikeRust;TestCloudClientGetAccountAnalyticsRoutesReportsLikeRust;TestAnalyticsRuntimeAuthErrorsKeepSignInGuidanceLikeRust"
+  },
+  {
+   "id": "runtime-auth-terminal-denials",
+   "kind": "source-surface",
+   "rustPaths": [
+    "protocol/src/error.rs",
+    "model-provider/src/provider.rs",
+    "response-debug-context/src/lib.rs"
+   ],
+   "goPaths": [
+    "model",
+    "codexapi",
+    "runtimeauth"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestManagerCachesForbiddenAndRefreshesUnauthorizedLikeRust;TestTerminalRuntimeDenialsSurfaceSignInLikeRust;TestRuntimeAuthDenialIsNotRecoverableAuthErrorLikeRust"
+  },
+  {
+   "id": "managed-runtime-auth-mode",
+   "kind": "source-surface",
+   "rustPaths": [
+    "config/src/config_requirements.rs",
+    "core/src/config/managed_features.rs"
+   ],
+   "goPaths": [
+    "config",
+    "runtimeauth",
+    "features"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestModeFromConfigValuesLikeRust;TestRuntimeAuthModeConflictIsALoadErrorLikeRust"
+  },
+  {
+   "id": "runtime-auth-websocket-revalidation",
+   "kind": "source-surface",
+   "rustPaths": [
+    "core/src/client.rs",
+    "ext/guardian-v2/src/async_scorer/sampler/connection_pool.rs"
+   ],
+   "goPaths": [
+    "model",
+    "appserver"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestWebsocketReauthTracksLastConnectedCredential;TestWebsocketReconnectRevalidatesRuntimeAuthLikeRust;TestWebsocketRevalidationRevalidatesWhenCredentialUnchangedLikeRust"
+  },
+  {
+   "id": "mcp-cached-tool-startup-errors",
+   "kind": "source-surface",
+   "rustPaths": [
+    "codex-mcp/src/connection_manager/tool_catalog.rs",
+    "codex-mcp/src/runtime.rs",
+    "codex-mcp/src/tools.rs"
+   ],
+   "goPaths": [
+    "mcp",
+    "appserver",
+    "turn"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestBindingPreservesCachedToolsForNonReadyServersLikeRust;TestCatalogStartupReadinessRejectsMissingLiveConnectionOnExecution;TestCachedToolCallSurfacesMCPServerStartupErrorLikeRust"
+  },
+  {
+   "id": "mcp-sharing-discovery-deferred-startup",
+   "kind": "source-surface",
+   "rustPaths": [
+    "codex-mcp/src/connection_manager.rs",
+    "codex-mcp/src/rmcp_client.rs",
+    "codex-mcp/src/tool_catalog_cache.rs"
+   ],
+   "goPaths": [
+    "mcp"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestMCPDiscoverLocalStdioKeepsLegacyCatalogIdentity;TestMCPConnectionSharingGatesLocalStdioDiscoveryLikeRust;TestDeferredStartupKeepsDiscoverLocalStdioSharingLikeRust"
+  },
+  {
+   "id": "mcp-lazy-stdio-startup",
+   "kind": "source-surface",
+   "rustPaths": [
+    "config/src/mcp_types.rs",
+    "codex-mcp/src/connection_manager.rs",
+    "core/src/session/mcp_runtime.rs",
+    "features/src/lib.rs"
+   ],
+   "goPaths": [
+    "mcp",
+    "appserver",
+    "features"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestCatalogStartupReadinessAcceptsFilteredVisibleCachedCatalog;TestMCPConnectionSharingKeepsLegacyAndStartupInteractiveServersPrivate;TestMcpLazyStdioStartupDefersCachedServersLikeRust;TestToolCatalogCacheWarmsNewChatsLikeRust;TestToolCatalogCacheExpiresAfterTTLLikeRust;TestToolCatalogCacheHonorsServerOptOutLikeRust;TestToolCatalogCacheGenerationOrderingLikeRust"
+  },
+  {
+   "id": "mcp-network-policy-derivation",
+   "kind": "source-surface",
+   "rustPaths": [
+    "core/src/config/network_proxy_spec.rs",
+    "core/src/exec_policy.rs",
+    "network-proxy/src/config.rs"
+   ],
+   "goPaths": [
+    "network",
+    "execpolicy",
+    "appserver",
+    "mcp"
+   ],
+   "phase": "P1",
+   "status": "partial",
+   "verifier": "TestMCPNetworkPolicyCapabilityOnlyAdvertisedToTrustedChatGPTOriginsLikeRust;TestEnvironmentNetworkPolicyApplyToPreservesInheritedDenials;TestNetworkPolicyAmendmentAppliesDenyBeforePersistLikeRust;TestCommandApprovalNetworkPolicyAmendmentPersistsAndPublishesLikeRust"
+  },
+  {
+   "id": "mcp-app-invocation-context-refresh",
+   "kind": "source-surface",
+   "rustPaths": [
+    "codex-mcp/src/binding.rs",
+    "codex-mcp/src/connection_manager.rs",
+    "core/src/mcp_tool_call.rs"
+   ],
+   "goPaths": [
+    "mcp",
+    "turn"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestModelSearchDiscoveryProjectsConnectorInvocationContextLikeRust;TestBindingRejectsCatalogRefreshAndInvisibleTools"
+  },
+  {
+   "id": "guardian-verified-answer-whole",
+   "kind": "source-surface",
+   "rustPaths": [
+    "guardian-context/src/enforcement.rs",
+    "guardian-context/src/preparation/elastic.rs",
+    "guardian-context/src/authorization.rs"
+   ],
+   "goPaths": [
+    "state",
+    "appserver",
+    "retainedctx"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestGuardianElasticEntryCapsBeforeAllocationLikeRust;TestRuntimeRouterRecordsVerifiedAnswersLikeRust;TestGuardianElasticKeepsVerifiedAnswersWholeLikeRust;TestGuardianElasticDropsVerifiedAnswersWholeLikeRust"
+  },
+  {
+   "id": "guardian-repl-provenance-bound",
+   "kind": "source-surface",
+   "rustPaths": [
+    "guardian-context/src/preparation/repl.rs"
+   ],
+   "goPaths": [
+    "context",
+    "state"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestNodeReplElasticRenderingKeepsStoredTextImagesAndOmissionsLikeRust;TestNodeReplElasticBoundsProvenanceHeadersLikeRust;TestNodeReplElasticKeepsOversizedAnswerBodyLikeRust;TestNodeReplFixedBudgetStillChargesBodyBytesLikeRust"
+  },
+  {
+   "id": "final-answer-moderation",
+   "kind": "source-surface",
+   "rustPaths": [
+    "protocol/src/items.rs",
+    "protocol/src/protocol.rs",
+    "app-server-protocol/src/protocol/v2/item.rs",
+    "app-server-protocol/src/protocol/thread_history.rs"
+   ],
+   "goPaths": [
+    "appserver",
+    "state",
+    "protocol"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestFinalAnswerModerationAttachedToCompletedAnswerLikeRust;TestModelSafetyRecourseDefersBlockedTurnAndExplainsIt"
+  },
+  {
+   "id": "thread-token-narrow-update",
+   "kind": "source-surface",
+   "rustPaths": [
+    "state/src/runtime/threads.rs",
+    "thread-store/src/local/update_thread_metadata.rs"
+   ],
+   "goPaths": [
+    "state"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestRolloutRebuildTimestampOnlyTouchesTimestampsLikeRust;TestThreadTokenUpdateKeepsConcurrentMetadataLikeRust"
+  },
+  {
+   "id": "logs-prune-window-frame",
+   "kind": "source-surface",
+   "rustPaths": [
+    "state/src/runtime/logs.rs"
+   ],
+   "goPaths": [
+    "state"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestLogsPruneEachRustPartitionByRowAndByteLimit;TestLogsPruneWindowUsesSinglePassLikeRust"
+  },
+  {
+   "id": "thread-writer-lock-shared-coordination",
+   "kind": "source-surface",
+   "rustPaths": [
+    "rollout/src/writer_lock.rs"
+   ],
+   "goPaths": [
+    "session"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestWriterLockRejectsCompetingStoreAndTransfersOwnership;TestTryAcquireForPublicationSkipsLiveWriterAndHoldsCoordination;TestWriterLockCloseDoesNotBlockOnHeldCoordination"
+  },
+  {
+   "id": "agent-tree-id",
+   "kind": "source-surface",
+   "rustPaths": [
+    "core/src/codex_thread.rs",
+    "core/src/agent/control/runtime.rs",
+    "exec-server/src/environment.rs"
+   ],
+   "goPaths": [
+    "agent",
+    "appserver"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestManagerRemove;TestAgentTreeShutdownReportFormattingIsPayloadFreeLikeRust;TestAgentTreeIDChangesOnReloadAndIsSharedByChildrenLikeRust"
+  },
+  {
+   "id": "message-board-bulk-subscriptions",
+   "kind": "source-surface",
+   "rustPaths": [
+    "message-board/src/local.rs",
+    "message-board/src/local/queries.rs"
+   ],
+   "goPaths": [
+    "agentboard"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestLocalBoardSubscriptionsOptOutsAndDeletionLikeRust;TestLocalBoardBulkSubscriptionsAreAtomicLikeRust"
+  },
+  {
+   "id": "message-board-fixed-read-view",
+   "kind": "source-surface",
+   "rustPaths": [
+    "message-board/src/local/queries.rs",
+    "message-board/src/local.rs",
+    "message-board/src/local/connection.rs",
+    "message-board/src/local/paging.rs"
+   ],
+   "goPaths": [
+    "agentboard"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestLocalBoardPersistsPagesAndReadsLikeRust;TestLocalBoardAppendPersistsEvidenceWithoutSideEffectsLikeRust;TestLocalBoardFixedReadViewFreezesCatalogAndCutoffLikeRust;TestLocalBoardReadViewServesListSearchAndReadThreadLikeRust;TestLocalBoardReadViewSearchHonorsCutoffAfterBackdatingLikeRust"
+  },
+  {
+   "id": "cloud-image-messages",
+   "kind": "source-surface",
+   "rustPaths": [
+    "app-server-client/src/cloud_backend/requests.rs",
+    "cloud-client/src/items.rs"
+   ],
+   "goPaths": [
+    "cloudbackend",
+    "cloudclient"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestAddUserMessageRequestEncoding;TestCloudConversationRequestsAndTypedReceiptsLikeRust;TestAddUserMessageEncodesImageContentItemLikeRust"
+  },
+  {
+   "id": "cloud-thread-project-binding",
+   "kind": "source-surface",
+   "rustPaths": [
+    "cloud-client/src/prewarm.rs",
+    "protocol/src/sanitized_git_url.rs",
+    "tui/src/app_server_session.rs"
+   ],
+   "goPaths": [
+    "cloudclient",
+    "state",
+    "protocol"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestPrewarmRequestUsesManagedEnvironmentAndOptionalModelLikeRust"
+  },
+  {
+   "id": "sidebar-tab-keyboard-mouse-navigation",
+   "kind": "source-surface",
+   "rustPaths": [
+    "tui/src/app/side_focus.rs",
+    "tui/src/sidebar_tab_strip.rs",
+    "config/src/tui_keymap.rs",
+    "tui/src/keymap.rs"
+   ],
+   "goPaths": [
+    "tui",
+    "app"
+   ],
+   "phase": "P3",
+   "status": "complete",
+   "verifier": "TestWorkspacePaneLeaderBindingsLikeRust;TestSidebarTabsKeepMultipleSideChatsLikeRust"
+  },
+  {
+   "id": "side-chat-persistence-and-tab-close",
+   "kind": "source-surface",
+   "rustPaths": [
+    "tui/src/sidebar_chooser.rs",
+    "tui/src/app/side.rs",
+    "rollout/src/session_index.rs"
+   ],
+   "goPaths": [
+    "app",
+    "tui",
+    "session"
+   ],
+   "phase": "P3",
+   "status": "complete",
+   "verifier": "TestSidebarTabsKeepMultipleSideChatsLikeRust;TestSidebarChooserOffersNewSideChatLikeRust"
+  },
+  {
+   "id": "side-chat-policy-first-request",
+   "kind": "source-surface",
+   "rustPaths": [
+    "context-fragments/src/lib.rs",
+    "tui/src/app/side.rs",
+    "tui/src/app_server_session.rs"
+   ],
+   "goPaths": [
+    "app",
+    "context"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestSideBoundaryPromptMarksInheritedHistoryReferenceOnlyMatchRust;TestSideDeveloperInstructionsKeepExistingPolicyLikeRust"
+  },
+  {
+   "id": "sidebar-chooser-list-bindings-and-hover",
+   "kind": "source-surface",
+   "rustPaths": [
+    "tui/src/sidebar_chooser.rs",
+    "tui/src/sidebar_tab_strip.rs",
+    "tui/src/keymap.rs"
+   ],
+   "goPaths": [
+    "tui"
+   ],
+   "phase": "P3",
+   "status": "complete",
+   "verifier": "TestSidebarChooserOffersNewSideChatLikeRust;TestSidebarChooserResizesLikeRust;TestSidebarChooserUsesListBindingsAndHoverLikeRust;TestSidebarChooserPagesByVisibleRowsLikeRust;TestSidebarTabStripMouseSelectsVisibleTabLikeRust;TestSidebarTabStripMouseHitFollowsRenderedOriginLikeRust;TestSidebarTabStripUsesFixedRustTabWidthLikeRust"
+  },
+  {
+   "id": "code-mode-incremental-exec-definitions",
+   "kind": "source-surface",
+   "rustPaths": [
+    "code-mode-protocol/src/description.rs",
+    "core/src/context/world_state/top_level_tools.rs"
+   ],
+   "goPaths": [
+    "session",
+    "codemode"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestTopLevelToolsNamespaceTransitionsLikeRust;TestIncrementalExecToolsFeatureRegisteredLikeRust"
+  },
+  {
+   "id": "code-mode-incremental-exec-wiring",
+   "kind": "source-surface",
+   "rustPaths": [
+    "core/src/tools/router.rs",
+    "core/src/tools/spec_plan.rs",
+    "core/src/session/world_state.rs"
+   ],
+   "goPaths": [
+    "session",
+    "appserver"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestIncrementalToolCatalogAppendsChangedCatalogLikeRust;TestIncrementalToolCatalogRecordsWindowStartLikeRust"
+  },
+  {
+   "id": "incremental-exec-message-overrides",
+   "kind": "source-surface",
+   "rustPaths": [
+    "prompts/src/model_messages/incremental_tools.rs",
+    "protocol/src/openai_models/incremental_tools.rs"
+   ],
+   "goPaths": [
+    "session",
+    "prompt"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestTopLevelToolsCatalogMessageOverridesLikeRust"
+  },
+  {
+   "id": "incremental-exec-catalog-metrics",
+   "kind": "source-surface",
+   "rustPaths": [
+    "otel/src/metrics/names.rs",
+    "core/src/session/step_context.rs"
+   ],
+   "goPaths": [
+    "metrics"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestIncrementalToolCatalogRecordsChangedToolMetricsLikeRust;TestRecordChangedToolMetricsTagsPerToolLikeRust"
+  },
+  {
+   "id": "code-mode-host-default-features",
+   "kind": "source-surface",
+   "rustPaths": [
+    "features/src/lib.rs",
+    "core/src/tools/router.rs"
+   ],
+   "goPaths": [
+    "features",
+    "appserver"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestCodeModeHostGrpcFeatureSelectsProcessProviderLikeRust;TestRuntimeRouterSelectsCodeModeProviderFromStartupPolicy"
+  },
+  {
+   "id": "incremental-tools-legacy-bedrock-gate",
+   "kind": "source-surface",
+   "rustPaths": [
+    "features/src/lib.rs",
+    "core/src/context/world_state/top_level_tools.rs"
+   ],
+   "goPaths": [
+    "appserver",
+    "features"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestIncrementalToolsEnabledForTurnLikeRust;TestIncrementalToolsLegacyGatesOnBedrockProvidersLikeRust"
+  },
+  {
+   "id": "user-verification-activity-check",
+   "kind": "source-surface",
+   "rustPaths": [
+    "app-server/src/user_verification.rs",
+    "user-verification/src/guard.rs",
+    "user-verification/src/native_operation.rs"
+   ],
+   "goPaths": [
+    "appserver"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestUserVerificationActivityCancelsOnConnectionClosed;TestUserVerificationActivityCancelsOnAuthRevision;TestUserVerificationActivityCancelsOnIdentityChange;TestUserVerificationActivityIgnoresOtherConnections;TestUserVerificationActivityCancelsOnRouterClose"
+  },
+  {
+   "id": "exec-ignore-user-config-skips-user-layer",
+   "kind": "source-surface",
+   "rustPaths": [
+    "config/src/loader/mod.rs",
+    "exec/src/lib.rs"
+   ],
+   "goPaths": [
+    "config",
+    "exec",
+    "app"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestExecIgnoreUserConfigReachesConfigLoader;TestLoadWithOptionsIgnoreUserConfigKeepsEmptyUserLayerLikeRust;TestIgnoreUserConfigLeavesSavedProjectTrustUnused"
+  },
+  {
+   "id": "multi-agent-hosted-tools-guidance",
+   "kind": "source-surface",
+   "rustPaths": [
+    "core/src/session/multi_agents.rs",
+    "core/src/context/world_state/multi_agent_mode.rs"
+   ],
+   "goPaths": [
+    "agent",
+    "appserver"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestDisableNativeToolsKeepsV2RuntimeLikeRust;TestCollabToolsGateMatchesRustLikeRust;TestMultiAgentGuidanceNamesHostedToolsLikeRust"
+  },
+  {
+   "id": "turn-context-required-permission-profile",
+   "kind": "source-surface",
+   "rustPaths": [
+    "protocol/src/protocol.rs",
+    "history/src/rollout_payload.rs",
+    "state/src/extract.rs"
+   ],
+   "goPaths": [
+    "protocol",
+    "state",
+    "appserver"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestColdResumeRestoresOwnedUnnamedPermissionProfileLikeRust;TestTurnSandboxPermissionProfileUsesCapturedEnvironmentStateLikeRust"
+  },
+  {
+   "id": "patch-approval-cancel-turn-scope",
+   "kind": "source-surface",
+   "rustPaths": [
+    "core/src/session/handlers.rs",
+    "app-server/src/bespoke_event_handling.rs",
+    "protocol/src/protocol.rs"
+   ],
+   "goPaths": [
+    "appserver"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestCancelCommandApprovalAbortsTurnLikeRust;TestFileChangeApprovalCancelInterruptsRequestingTurnLikeRust;TestPatchApprovalCancelStaysScopedToRequestingTurnLikeRust"
+  },
+  {
+   "id": "skill-mention-punctuation-join",
+   "kind": "source-surface",
+   "rustPaths": [
+    "tui/src/bottom_pane/chat_composer.rs",
+    "tui/src/bottom_pane/chat_composer/paste_input.rs"
+   ],
+   "goPaths": [
+    "tui"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestParseLinkedToolMentionPreservesByteOffsetsAndTrimsPathsLikeRust;TestCompletedSkillMentionJoinsTypedPunctuationLikeRust"
+  },
+  {
+   "id": "provider-creation-during-signin",
+   "kind": "source-surface",
+   "rustPaths": [
+    "tui/src/app/provider.rs",
+    "tui/src/app/provider/write.rs",
+    "app-server/src/config_manager_service_provider_write.rs"
+   ],
+   "goPaths": [
+    "app",
+    "appserver",
+    "tui"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestModelProviderConfigWriteCreatesAndPatchesGatewaysLikeRust;TestModelProviderConfigWriteValidatesCustomGatewaysLikeRust"
+  },
+  {
+   "id": "tui-custom-gateway-signin",
+   "kind": "source-surface",
+   "rustPaths": [
+    "tui/src/onboarding/auth.rs",
+    "tui/src/app/provider.rs",
+    "tui/src/startup_orchestration.rs"
+   ],
+   "goPaths": [
+    "app",
+    "auth",
+    "features",
+    "tui"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestConfigPanelProviderDefaultSelectionLikeRust;TestModelProviderConfigWriteCreatesAndPatchesGatewaysLikeRust;TestConfigPanelProviderEditorWritesSelectedFieldsLikeRust"
+  },
+  {
+   "id": "child-agent-catalog-preservation",
+   "kind": "source-surface",
+   "rustPaths": [
+    "models-manager/src/manager.rs",
+    "models-manager/src/catalog.rs"
+   ],
+   "goPaths": [
+    "appserver",
+    "model"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestConfigPanelModelProvidersRefreshesAfterFirstChatLikeRust;TestChildAgentInheritsParentCatalogLikeRust"
+  },
+  {
+   "id": "thread-model-metadata-exposure",
+   "kind": "source-surface",
+   "rustPaths": [
+    "core/src/thread_manager.rs",
+    "core/src/codex_thread.rs",
+    "core/src/session/mod.rs"
+   ],
+   "goPaths": [
+    "appserver",
+    "model"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestTurnStartWarnsForFallbackModelMetadataLikeRust;TestThreadSelectedModelInfoUsesThreadCatalogLikeRust"
+  },
+  {
+   "id": "protected-model-profile-downgrade",
+   "kind": "source-surface",
+   "rustPaths": [
+    "core/src/session/mod.rs",
+    "protocol/src/permissions.rs"
+   ],
+   "goPaths": [
+    "appserver",
+    "sandbox"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestThreadSettingsProtectedModelUsesProposedPermissionsLikeRust;TestProtectedModelForcesAutoReviewerForTurn;TestProtectedModelDowngradeUsesPermissionProfileLikeRust;TestLegacyWritablePathProjectsOnlyLocalWritePathsLikeRust"
+  },
+  {
+   "id": "release-prerelease-cleanup",
+   "kind": "source-surface",
+   "rustPaths": [
+    "../.github/workflows/rust-release.yml",
+    "../.github/scripts/test_releases.py"
+   ],
+   "goPaths": [
+    ".github"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestPublishReleaseCleansUpFailedPrereleaseById;TestPublishReleaseRefusesMissingTagLikeRust;TestPublishReleaseStableDraftFailureCleanupDiffersFromRust"
+  },
+  {
+   "id": "account-security-setup-fetch",
+   "kind": "source-surface",
+   "rustPaths": [
+    "app-server/src/request_processors/account_processor/security_setup.rs",
+    "app-server-protocol/src/protocol/v2/account.rs",
+    "tui/src/security_setup.rs"
+   ],
+   "goPaths": [
+    "app",
+    "chatgptapi",
+    "tui"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestCloudClientGetSecuritySetupDropsInvalidNoticesLikeRust;TestSecuritySetupStaleIdentityAndBannerPriorityLikeRust"
+  },
+  {
+   "id": "account-read-user-id",
+   "kind": "source-surface",
+   "rustPaths": [
+    "app-server-protocol/src/protocol/v2/account.rs",
+    "app-server/src/request_processors/account_processor/workspace_routing.rs"
+   ],
+   "goPaths": [
+    "auth",
+    "appserver"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestChatGPTAccountUserIDRequiresMatchingWorkspaceLikeRust;TestRuntimeRouterGetAccountWorkspaceRoutingSelectionLikeRust;TestAccountReadResponseCarriesChatGPTUserIDLikeRust"
+  },
+  {
+   "id": "skills-tool-name-resolution",
+   "kind": "source-surface",
+   "rustPaths": [
+    "ext/skills/src/tools/mod.rs",
+    "ext/skills/src/tools/list.rs",
+    "ext/skills/src/tools/read.rs",
+    "ext/skills/src/tools/installations.rs"
+   ],
+   "goPaths": [
+    "turn"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestSkillsReadAliasResolutionAndExecutorSkillRoot;TestSkillsInstallationsListsAndFiltersDiscoveryV2Sources;TestSkillsReadResolvesListedDisplayNameLikeRust;TestSkillsReadOmittingAuthorityRejectsAmbiguousDisplayNameLikeRust"
+  },
+  {
+   "id": "typed-prompt-markdown-render",
+   "kind": "source-surface",
+   "rustPaths": [
+    "tui/src/history_cell/messages.rs",
+    "tui/src/markdown_render.rs"
+   ],
+   "goPaths": [
+    "tui"
+   ],
+   "phase": "P2",
+   "status": "complete",
+   "verifier": "TestUserAndAgentMessageCells;TestTypedUserPromptRendersMarkdownLikeRust;TestUserPromptMarkdownKeepsGutterAndLinkColumnsLikeRust;TestTypedPromptMarkdownKeepsPromptSurfaceLikeRust;TestTypedPromptMarkdownWrapsToViewportLikeRust"
+  },
+  {
+   "id": "user-verification-platform-provider",
+   "kind": "source-surface",
+   "rustPaths": [
+    "app-server/src/user_verification.rs",
+    "user-verification/src/platform_macos/provider.rs",
+    "user-verification/src/credential.rs"
+   ],
+   "goPaths": [
+    "appserver"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestDefaultRuntimeRouterInstallsUserVerificationPlatformProvider;TestUserVerificationDeviceSupportPrefersInjectedProvider;TestDarwinUserVerificationKeyInfoMatchesSecurityFrameworkExport;TestDarwinUserVerificationErrorClassificationCoversRustTable;TestDarwinUserVerificationLockTimeoutKeepsHolderLockFile;TestDarwinUserVerificationProviderStatusBranches;TestUserVerificationRemoteControlPeerRestrictedLikeRust"
+  },
+  {
+   "id": "image-original-detail-token-estimate",
+   "kind": "source-surface",
+   "rustPaths": [
+    "core/src/context_manager/history.rs",
+    "core/src/compact_remote_v2_media.rs"
+   ],
+   "goPaths": [
+    "context",
+    "compact"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestOriginalDetailImageTokensUseDimensionsLikeRust;TestMergeContextualMessagesAndTokenInfo"
+  },
+  {
+   "id": "history-write-admission-serialization",
+   "kind": "source-surface",
+   "rustPaths": [
+    "thread-store/src/local/thread_history.rs",
+    "thread-store/src/local/mod.rs"
+   ],
+   "goPaths": [
+    "state"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestHistoryWriteAdmission"
+  },
+  {
+   "id": "ui-tree-terminal-escape-stripping",
+   "kind": "shared-fixtures",
+   "rustPaths": [
+    "tui/src/ui_tree/render.rs"
+   ],
+   "goPaths": [
+    "tui"
+   ],
+   "phase": "P1",
+   "status": "complete",
+   "verifier": "TestUITreeTextSanitizerStripsControlStrings"
   }
  ]
 }

@@ -567,6 +567,19 @@ func configRequirementsFromMapWithResolver(values map[string]any, remoteConfigs 
 	if values, ok := boolMapAnyKey(values, "feature_requirements", "featureRequirements", "features"); ok {
 		out.FeatureRequirements = values
 	}
+	runtimeAuthMode, runtimeEnabled, err := runtimeAuthModeRequirementFromMap(values)
+	if err != nil {
+		return nil, err
+	}
+	if runtimeAuthMode != nil {
+		out.RuntimeAuthMode = runtimeAuthMode
+	}
+	if runtimeEnabled != nil {
+		if out.FeatureRequirements == nil {
+			out.FeatureRequirements = map[string]bool{}
+		}
+		out.FeatureRequirements["runtime_agent_instances"] = *runtimeEnabled
+	}
 	if nested, ok := mapAnyKey(values, "hooks"); ok {
 		out.Hooks = managedHooksRequirementsFromMap(nested)
 	}

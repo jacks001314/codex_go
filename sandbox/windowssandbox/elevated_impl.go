@@ -16,15 +16,15 @@ func elevatedDesktopPolicyForCapture(capture *CaptureRequest, permissions *Resol
 		ProxyEnforced: capture.ProxyEnforced,
 		Permissions:   permissions,
 	}
-	overrides := SetupRootOverrides{
-		ReadRoots:                        cloneStrings(capture.ReadRootsOverride),
+	overrides := WindowsSandboxFilesystemOverrides{
+		ReadRoots:                        capture.ReadRootsOverride,
 		ReadRootsSet:                     capture.ReadRootsOverrideSet,
 		ReadRootsIncludePlatformDefaults: capture.ReadRootsIncludePlatformDefaults,
-		WriteRoots:                       cloneStrings(capture.WriteRootsOverride),
+		WriteRoots:                       capture.WriteRootsOverride,
 		WriteRootsSet:                    capture.WriteRootsOverrideSet,
-		DenyReadPaths:                    cloneStrings(capture.DenyReadPaths),
-		DenyWritePaths:                   cloneStrings(capture.DenyWritePaths),
-	}
+		AdditionalDenyReadPaths:          capture.DenyReadPaths,
+		AdditionalDenyWritePaths:         capture.DenyWritePaths,
+	}.SetupRootOverrides()
 	return NewElevatedDesktopPolicy(request, overrides, capabilitySIDs, "")
 }
 

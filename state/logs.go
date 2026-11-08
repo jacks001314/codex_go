@@ -192,7 +192,20 @@ func pruneLogPartition(ctx context.Context, tx *sql.Tx, predicate string, predic
 	if totalBytes <= logPartitionSizeLimitBytes && rowCount <= logPartitionRowLimit {
 		return nil
 	}
-	query := `
+	query := logPruneWindowStatement(predicate)
+	args := append([]any(nil), predicateArgs...)
+	args = append(args, logPartitionSizeLimitBytes, logPartitionRowLimit)
+	_, err := tx.ExecContext(ctx, query, args...)
+	return err
+}
+
+// logPruneWindowStatement returns the bounded-window prune statement for one
+// partition predicate. Rust #60006(c): the frame is stated explicitly, so the
+// size and row windows are one ordered pass over the partition instead of one
+// co-routine per window function. The selected rows are unchanged - both
+// windows keep the default running frame, only spelled out.
+func logPruneWindowStatement(predicate string) string {
+	return `
 DELETE FROM logs
 WHERE id IN (
     SELECT id
@@ -201,19 +214,17 @@ WHERE id IN (
             id,
             SUM(estimated_bytes) OVER (
                 ORDER BY ts DESC, ts_nanos DESC, id DESC
+                ROWS UNBOUNDED PRECEDING
             ) AS cumulative_bytes,
             ROW_NUMBER() OVER (
                 ORDER BY ts DESC, ts_nanos DESC, id DESC
+                ROWS UNBOUNDED PRECEDING
             ) AS row_number
         FROM logs
         WHERE ` + predicate + `
     )
     WHERE cumulative_bytes > ? OR row_number > ?
 )`
-	args := append([]any(nil), predicateArgs...)
-	args = append(args, logPartitionSizeLimitBytes, logPartitionRowLimit)
-	_, err := tx.ExecContext(ctx, query, args...)
-	return err
 }
 
 func (r *StateRuntime) DeleteLogsBefore(ctx context.Context, cutoffTS int64) (int64, error) {

@@ -254,3 +254,20 @@ type SubscriptionRequest struct {
 	TargetAgent *agent.AgentPath   `json:"target_agent"`
 	Change      SubscriptionChange `json:"change"`
 }
+
+// BulkSubscriptionsRequest replaces one agent's channel subscriptions in a
+// single atomic step (Rust #59998). Channels is the complete membership the
+// agent should have, not a delta: every entry must name a channel this board
+// has, and an unknown channel fails the whole request before anything is
+// written.
+type BulkSubscriptionsRequest struct {
+	Channels []string `json:"channels"`
+	// TargetAgent is nil to change the caller's own subscriptions.
+	TargetAgent *agent.AgentPath `json:"target_agent"`
+}
+
+// BulkSubscriptionsState is the membership a bulk request left behind.
+type BulkSubscriptionsState struct {
+	Channels    []string        `json:"channels"`
+	TargetAgent agent.AgentPath `json:"target_agent"`
+}

@@ -3,6 +3,7 @@ package cloudclient
 import (
 	"context"
 	"strings"
+	"unicode/utf8"
 
 	"google.golang.org/protobuf/encoding/protowire"
 )
@@ -122,7 +123,10 @@ type ItemSummary struct {
 type UserMessageSummary struct {
 	ID       string
 	ClientID *string
-	Text     []string
+	// Text lists the text parts in order; images are absent from it.
+	Text []string
+	// Content keeps every part typed, in the order the server announced them.
+	Content []UserMessageInput
 }
 
 type AgentMessageSummary struct {
@@ -576,18 +580,113 @@ func decodeUserMessageSummary(data []byte) (ItemSummary, bool, error) {
 		return ItemSummary{}, false, nil
 	}
 	texts := []string{}
+	content := []UserMessageInput{}
 	for _, input := range repeatedBytes(contentBytes, 1) {
 		kind, value, err := selectOneof(input, 1, 7)
-		if err != nil || kind != 1 {
+		if err != nil {
 			return ItemSummary{}, false, err
 		}
-		text, ok := stringField(value, 1)
-		if !ok {
+		switch kind {
+		case 1:
+			text, ok := stringField(value, 1)
+			if !ok {
+				return ItemSummary{}, false, nil
+			}
+			elements, ok := decodeUserMessageTextElements(value, text)
+			if !ok {
+				return ItemSummary{}, false, nil
+			}
+			content = append(content, UserMessageInput{Kind: UserMessageText, Text: text, TextElements: elements})
+			texts = append(texts, text)
+		case 2:
+			image, detail, ok := decodeUserMessageImage(value)
+			if !ok {
+				return ItemSummary{}, false, nil
+			}
+			content = append(content, UserMessageInput{Kind: UserMessageImage, Image: image, Detail: detail})
+		default:
+			// Rust keeps only text and image parts; on any other alternative the
+			// whole summary is dropped rather than flattened to text.
 			return ItemSummary{}, false, nil
 		}
-		texts = append(texts, text)
 	}
-	return ItemSummary{Kind: ItemUserMessage, User: UserMessageSummary{ID: id, ClientID: clientID, Text: texts}}, true, nil
+	return ItemSummary{Kind: ItemUserMessage, User: UserMessageSummary{ID: id, ClientID: clientID, Text: texts, Content: content}}, true, nil
+}
+
+// decodeUserMessageTextElements reads the placeholder spans of one text part and
+// validates them against the text they describe (Rust items::summary).
+func decodeUserMessageTextElements(data []byte, text string) ([]UserMessageTextElement, bool) {
+	encoded, ok := bytesField(data, 2)
+	if !ok {
+		return nil, true
+	}
+	elements := []UserMessageTextElement{}
+	for _, element := range repeatedBytes(encoded, 1) {
+		byteRange, ok := bytesField(element, 1)
+		if !ok {
+			return nil, false
+		}
+		end, ok := int64Field(byteRange, 1)
+		if !ok {
+			return nil, false
+		}
+		start, ok := int64Field(byteRange, 2)
+		if !ok {
+			return nil, false
+		}
+		if start < 0 || end < start || end > int64(len(text)) || !utf8.ValidString(text[start:end]) {
+			return nil, false
+		}
+		decoded := UserMessageTextElement{Start: int(start), End: int(end)}
+		if placeholder, ok := optionalStringField(element, 2); ok {
+			value := placeholder
+			decoded.Placeholder = &value
+		}
+		elements = append(elements, decoded)
+	}
+	return elements, true
+}
+
+// decodeUserMessageImage reads one image part. Unknown detail values keep the
+// receipt identity without a detail (Rust items::summary).
+func decodeUserMessageImage(data []byte) (ImageReference, *ImageDetail, bool) {
+	source, reference, err := selectOneof(data, 1, 2)
+	if err != nil || source == 0 {
+		return ImageReference{}, nil, false
+	}
+	value, ok := stringField(reference, 2)
+	if !ok {
+		return ImageReference{}, nil, false
+	}
+	var image ImageReference
+	if source == 2 {
+		image.FileID = value
+	} else {
+		image.URL = value
+	}
+	var detail *ImageDetail
+	if encoded := optionalInt64Field(reference, 1); encoded != nil {
+		if mapped, known := imageDetailFromWire(*encoded); known {
+			detail = &mapped
+		}
+	}
+	return image, detail, true
+}
+
+// imageDetailFromWire maps Rust's ImageDetail discriminants onto the Go enum.
+func imageDetailFromWire(value int64) (ImageDetail, bool) {
+	switch value {
+	case 1:
+		return ImageDetailAuto, true
+	case 2:
+		return ImageDetailLow, true
+	case 3:
+		return ImageDetailHigh, true
+	case 4:
+		return ImageDetailOriginal, true
+	default:
+		return 0, false
+	}
 }
 
 func decodeAgentMessageSummary(data []byte) (ItemSummary, bool, error) {

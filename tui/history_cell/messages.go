@@ -7,6 +7,7 @@ import (
 	"unicode/utf8"
 
 	"codex_go/tui"
+	"codex_go/tui/markdown"
 	"codex_go/utils"
 )
 
@@ -187,7 +188,16 @@ func (c UserHistoryCell) DisplayLines(width int) []string {
 		message = strings.TrimLeft(message, " \t\n\r")
 	}
 	wrappedMessage := []string{}
-	if message != "" {
+	// The Markdown path returns complete rows (gutter, mention accents and the
+	// prompt surface included), so the plain-path prefix loop below must not
+	// wrap them a second time -- that used to paint `› › ` and overflow the row.
+	markdownRows := false
+	if message != "" && typedPromptRendersMarkdown(c.IsSpoken(), message) {
+		// Rust #59983: a typed prompt is Markdown, so emphasis, headings, lists,
+		// code fences and links render instead of showing their source.
+		wrappedMessage = c.markdownPromptLines(width, message)
+		markdownRows = true
+	} else if message != "" {
 		for _, line := range strings.Split(message, "\n") {
 			wrappedMessage = append(wrappedMessage, tui.WrapLine(line, tui.WrapOptions{
 				Width:      wrapWidth,
@@ -207,22 +217,136 @@ func (c UserHistoryCell) DisplayLines(width int) []string {
 	if len(wrappedRemoteImages) > 0 && len(wrappedMessage) > 0 {
 		lines = append(lines, styleUserMessageLine("", width))
 	}
-	for index, line := range wrappedMessage {
-		prefix := "  "
-		if index == 0 {
-			if c.IsSpoken() {
-				prefix = ansiUserMessageSpoken + "\u203a " + ansiUserMessageSpokenEnd
-			} else {
-				prefix = ansiUserMessagePrefix + "\u203a " + ansiUserMessagePrefixEnd
+	if markdownRows {
+		lines = append(lines, wrappedMessage...)
+	} else {
+		for index, line := range wrappedMessage {
+			prefix := "  "
+			if index == 0 {
+				if c.IsSpoken() {
+					prefix = ansiUserMessageSpoken + "\u203a " + ansiUserMessageSpokenEnd
+				} else {
+					prefix = ansiUserMessagePrefix + "\u203a " + ansiUserMessagePrefixEnd
+				}
 			}
+			// The voice marker ends its foreground span; restore the fallback prompt
+			// foreground before the text when the terminal palette is unavailable.
+			prefix += tui.HistoryPromptTextSGR(tui.DetectStdoutColorLevel())
+			lines = append(lines, styleUserMessageLine(prefix+styleUserMessageMentions(line), width))
 		}
-		// The voice marker ends its foreground span; restore the fallback prompt
-		// foreground before the text when the terminal palette is unavailable.
-		prefix += tui.HistoryPromptTextSGR(tui.DetectStdoutColorLevel())
-		lines = append(lines, styleUserMessageLine(prefix+styleUserMessageMentions(line), width))
 	}
 	lines = append(lines, styleUserMessageLine("", width))
 	return lines
+}
+
+// typedPromptMarkdownPattern matches the Markdown constructs a typed prompt can
+// ask for: emphasis, inline code, headings, list items, block quotes, fenced
+// code and inline links. Speech transcripts keep the plain presentation.
+var typedPromptMarkdownPattern = regexp.MustCompile(
+	"(?m)(^\\s{0,3}([-*+]|[0-9]+\\.)\\s|^\\s{0,3}#{1,6}\\s|^\\s{0,3}>\\s|^\\s{0,3}```)" +
+		"|\\*\\*|__|`|\\[[^\\]\\n]+\\]\\([^)\\n]+\\)",
+)
+
+// typedPromptRendersMarkdown reports whether one submitted prompt should take the
+// Markdown presentation. Spoken prompts never do, and a prompt without any
+// Markdown construct keeps the byte-for-byte plain rendering so the legacy
+// transcript text is untouched.
+func typedPromptRendersMarkdown(spoken bool, message string) bool {
+	if spoken {
+		return false
+	}
+	return typedPromptMarkdownPattern.MatchString(message)
+}
+
+// markdownPromptLines renders a typed prompt through the same Markdown column
+// the agent cells use (codex_go/tui/markdown), then puts the prompt gutter back
+// on the first row. Continuation rows keep the two-column indent the plain path
+// uses, so the transcript's gutter column stays aligned across presentations.
+//
+// Two Rust-parity properties are enforced here instead of inside the Markdown
+// renderer, so agent cells keep the renderer's output byte-for-byte:
+//
+//   - the prompt surface stays continuous: `markdown.Render` closes every styled
+//     run with a full `ESC[0m` reset, which would drop the prompt background for
+//     the rest of the row. Rust folds the prompt style into every span
+//     (`messages.rs` line.style(...).resolve_span_styles()), so Go re-applies the
+//     prompt style after each reset instead.
+//   - rows respect the prompt budget: the renderer wraps prose but keeps long
+//     URLs and code runs intact, which overflows the transcript column. Rust
+//     wraps with `word_wrap_line_with_source`, so Go hard-wraps here.
+//
+// What stays different from Rust: after wrapping, Rust remaps each hyperlink's
+// source onto the physical rows (`remap_source_wrapped_line`); the string-based
+// renderer keeps no span→source map, so a link split across rows cannot report
+// which row carries which part of its destination.
+func (c UserHistoryCell) markdownPromptLines(width int, message string) []string {
+	wrapWidth := width - tui.LivePrefixCols - 1
+	if wrapWidth < 1 {
+		wrapWidth = 1
+	}
+	rendered, err := markdown.Render(message, wrapWidth)
+	if err != nil {
+		return nil
+	}
+	logical := trimmedMarkdownLines(rendered)
+	if len(logical) == 0 {
+		return nil
+	}
+	level := tui.DetectStdoutColorLevel()
+	base := tui.HistoryPromptSGR(level) + tui.HistoryPromptTextSGR(level)
+	rows := make([]string, 0, len(logical))
+	for _, line := range logical {
+		rows = append(rows, wrapPromptRow(line, wrapWidth)...)
+	}
+	out := make([]string, 0, len(rows))
+	for index, row := range rows {
+		prefix := "  "
+		if index == 0 {
+			prefix = ansiUserMessagePrefix + "\u203a " + ansiUserMessagePrefixEnd
+		}
+		prefix += tui.HistoryPromptTextSGR(level)
+		out = append(out, styleUserMessageLine(prefix+reapplyPromptSurface(styleUserMessageMentions(row), base), width))
+	}
+	return out
+}
+
+// wrapPromptRow hard-wraps one rendered Markdown row to the prompt budget. Rows
+// that already fit are returned untouched so list markers and indentation stay
+// as the renderer produced them.
+func wrapPromptRow(row string, width int) []string {
+	if tui.DisplayWidth(row) <= width {
+		return []string{row}
+	}
+	return tui.AdaptiveWrapLine(row, tui.WrapOptions{Width: width, BreakWords: true})
+}
+
+// reapplyPromptSurface restores the prompt surface after every full reset the
+// Markdown renderer emits, so one row is painted with one continuous background.
+func reapplyPromptSurface(content, base string) string {
+	if base == "" || !strings.Contains(content, ansiUserMessageReset) {
+		return content
+	}
+	return strings.ReplaceAll(content, ansiUserMessageReset, ansiUserMessageReset+base)
+}
+
+// trimmedMarkdownLines splits a rendered Markdown block into transcript rows:
+// the renderer pads every row to the wrap width and frames the block with blank
+// rows, which a history cell must not paint.
+func trimmedMarkdownLines(rendered string) []string {
+	raw := strings.Split(rendered, "\n")
+	lines := make([]string, 0, len(raw))
+	for _, line := range raw {
+		lines = append(lines, strings.TrimRight(line, " "))
+	}
+	start := 0
+	for start < len(lines) && strings.TrimSpace(lines[start]) == "" {
+		start++
+	}
+	end := len(lines)
+	for end > start && strings.TrimSpace(lines[end-1]) == "" {
+		end--
+	}
+	return lines[start:end]
 }
 
 var userPromptURLRE = regexp.MustCompile(`https?://[^\s"'<>]+`)

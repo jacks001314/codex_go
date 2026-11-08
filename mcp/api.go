@@ -803,6 +803,16 @@ type MCPService struct {
 	// both local stdio protocol discovery (#57210) and connection sharing
 	// (#57211).
 	discoverLocalStdio bool
+	// toolCatalogCache is the process-scoped catalog cache a new chat reuses to
+	// start without launching the server (Rust ToolCatalogCache). It is an
+	// interface so a later batch can persist entries to disk.
+	toolCatalogCache ToolCatalogCacheStore
+	// toolCatalogClock supplies read/publish timestamps; nil means time.Now.
+	toolCatalogClock func() time.Time
+	// lazyStdioStartup mirrors Rust's `mcp_lazy_stdio_startup` feature (#60039):
+	// a regular chat may start an eligible stdio server on first use instead of
+	// eagerly, as long as a warm tool catalog already covers it.
+	lazyStdioStartup bool
 	// networkPolicyMetadata, when set, supplies call-scoped network policy
 	// metadata to trusted ChatGPT MCP servers (Rust
 	// NetworkPolicyMetadataProvider, #56278). A nil provider disables the
@@ -936,6 +946,8 @@ func NewMCPService(runtime *RuntimeConfig) *MCPService {
 		service.sharedHTTPClientKey = mcpHTTPDoerIdentity(runtime.HTTPClient)
 		service.refreshToolListOnNotifications = runtime.RefreshToolListOnNotifications
 		service.discoverLocalStdio = runtime.DiscoverLocalStdio
+		service.lazyStdioStartup = runtime.LazyStdioStartup
+		service.toolCatalogCache = defaultToolCatalogCacheStore
 		service.networkPolicyMetadata = runtime.NetworkPolicyMetadata
 		service.chatGPTBaseURL = strings.TrimSpace(runtime.ChatGPTBaseURL)
 		if strings.TrimSpace(runtime.CodexHome) != "" {
@@ -1105,6 +1117,7 @@ func (s *MCPService) ApplyRuntimeConfig(runtime *RuntimeConfig) {
 	s.serverPermissionSources = refreshed.serverPermissionSources
 	s.selectedEnvironments = refreshed.selectedEnvironments
 	s.discoverLocalStdio = refreshed.discoverLocalStdio
+	s.lazyStdioStartup = refreshed.lazyStdioStartup
 	s.networkPolicyMetadata = refreshed.networkPolicyMetadata
 	s.chatGPTBaseURL = refreshed.chatGPTBaseURL
 	s.refreshToolListOnNotifications = refreshed.refreshToolListOnNotifications
@@ -1501,6 +1514,82 @@ func (s *MCPService) ValidateRequiredServers(threadID string) error {
 	return fmt.Errorf("required MCP servers failed to initialize: %s", strings.Join(failures, "; "))
 }
 
+// toolCatalogCacheStore returns the cache store this service publishes to. A
+// nil field keeps the process-wide default so a service built without going
+// through NewMCPService still shares what the rest of the process cached.
+func (s *MCPService) toolCatalogCacheStore() ToolCatalogCacheStore {
+	if s == nil {
+		return nil
+	}
+	if s.toolCatalogCache != nil {
+		return s.toolCatalogCache
+	}
+	return defaultToolCatalogCacheStore
+}
+
+// mcpNow supplies the timestamp for cache reads and publications.
+func (s *MCPService) mcpNow() time.Time {
+	if s != nil && s.toolCatalogClock != nil {
+		return s.toolCatalogClock()
+	}
+	return time.Now()
+}
+
+// beginToolCatalogFetch allocates the generation for one discovery attempt, or
+// 0 when this server's catalog is not cacheable.
+func (s *MCPService) beginToolCatalogFetch(name string, config *ServerConfig) uint64 {
+	identity, ok := mcpToolCatalogIdentity(name, config)
+	if !ok {
+		return 0
+	}
+	entry := s.toolCatalogCacheStore().Entry(identity)
+	if entry == nil {
+		return 0
+	}
+	return entry.BeginFetch(s.mcpNow())
+}
+
+// publishToolCatalog stores a successful catalog so a later chat can satisfy
+// startup from it, and honours the server's opt-out capability.
+func (s *MCPService) publishToolCatalog(name string, config *ServerConfig, generation uint64, tools []MCPToolInfo, serverCapabilities any) {
+	if generation == 0 {
+		return
+	}
+	identity, ok := mcpToolCatalogIdentity(name, config)
+	if !ok {
+		return
+	}
+	entry := s.toolCatalogCacheStore().Entry(identity)
+	if entry == nil {
+		return
+	}
+	if mcpServerOptsOutOfToolCatalogCache(serverCapabilities) {
+		entry.Disable()
+		return
+	}
+	entry.PublishIfNewest(generation, tools, nil, s.mcpNow())
+}
+
+// recordModernToolCatalogDiscovery marks the generation at which this identity
+// negotiated the modern protocol, so a discovery client never reuses a catalog
+// published before that handshake while a legacy client still may (Rust #60037).
+// It runs before the publish so the fresh catalog is not older than the
+// handshake it belongs to.
+func (s *MCPService) recordModernToolCatalogDiscovery(name string, config *ServerConfig, generation uint64) {
+	if generation == 0 {
+		return
+	}
+	identity, ok := mcpToolCatalogIdentity(name, config)
+	if !ok {
+		return
+	}
+	entry := s.toolCatalogCacheStore().Entry(identity)
+	if entry == nil {
+		return
+	}
+	entry.RecordModernDiscovery(generation, s.mcpNow())
+}
+
 // WaitForServerStartup refreshes only the MCP server that owns the selected
 // tool. The inventory request can block without occupying the tool execution
 // gate, so unrelated calls in the same model response remain runnable.
@@ -1523,10 +1612,9 @@ func (s *MCPService) WaitForServerStartup(ctx context.Context, name string, thre
 	if !starting && (status.State == "" || status.State == MCPServerReady) {
 		return nil
 	}
-	done := make(chan struct{}, 1)
+	done := make(chan mcpInventoryStatusResult, 1)
 	go func() {
-		_ = s.inventoryStatusForConfig(0, name, &config, status, false, strings.TrimSpace(threadID))
-		done <- struct{}{}
+		done <- s.inventoryStatusForConfig(0, name, &config, status, false, strings.TrimSpace(threadID))
 	}()
 	if ctx == nil {
 		ctx = context.Background()
@@ -1534,7 +1622,18 @@ func (s *MCPService) WaitForServerStartup(ctx context.Context, name string, thre
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-done:
+	case result := <-done:
+		// Rust #60038: a cached tool stays advertised after its server failed to
+		// start, so the call has to carry the startup failure instead of the
+		// generic "not available to the model" text. The inventory attempt above
+		// already published the failed status, so the error is the same one the
+		// model would see if it read the server list.
+		if result.Err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return &MCPServerStartupError{Server: name, Err: result.Err}
+		}
 		return nil
 	}
 }
@@ -1874,10 +1973,17 @@ func (s *MCPService) populateStatusInventories(params *MCPListServerStatusParams
 		// Rust #38217's lazy-startup behavior still applies to required servers
 		// during non-blocking capture. Explicit turn/plugin requirements always
 		// wait for a live connection.
+		//
+		// Rust #60039: with `mcp_lazy_stdio_startup` a regular chat may also defer
+		// an eligible stdio server (optional, or required with catalog readiness)
+		// and connect on first use. The catalog still has to be warm, which
+		// cachedCatalogStartupTools checks below.
+		lazyStdioStartup := s.lazyStdioStartup && mcpServerCanDeferStdioStartup(&config)
 		cachedStartupCandidate := !explicitlyRequired &&
 			(config.StartupReadiness.Effective() == MCPStartupReadinessCatalog ||
 				(params != nil && params.NonBlockingOptional &&
-					servers[i].State == MCPServerReady && config.Required))
+					servers[i].State == MCPServerReady && config.Required) ||
+				lazyStdioStartup)
 		if cachedStartupCandidate {
 			if tools, ok := s.cachedCatalogStartupTools(name, &config, servers[i]); ok {
 				servers[i].Tools = tools
@@ -1989,6 +2095,7 @@ func (s *MCPService) inventoryStatusForConfig(index int, name string, config *Se
 	// Rust #54656: an ordinary server whose connection reported a tool-list
 	// change is listed again before its catalog is published, and the previous
 	// catalog is retained when that refresh fails.
+	catalogGeneration := s.beginToolCatalogFetch(name, config)
 	inventory, err := s.discoverToolCatalogForStatus(name, config, threadID, status)
 	status.ServerCapabilities = nil
 	// A failed discovery reports no catalog metadata either, so the wire field
@@ -2008,6 +2115,15 @@ func (s *MCPService) inventoryStatusForConfig(index int, name string, config *Se
 		}
 		status.State = MCPServerReady
 		status.Error = nil
+		// A connection that negotiated the modern protocol records that
+		// generation before publishing, so a discovery client never reuses a
+		// catalog that predates this handshake (Rust #60037).
+		if inventory.NegotiatedModern {
+			s.recordModernToolCatalogDiscovery(name, config, catalogGeneration)
+		}
+		// Publish into the process-scoped cache so a later chat can start from
+		// this catalog instead of launching the server (Rust ToolCatalogCache).
+		s.publishToolCatalog(name, config, catalogGeneration, inventory.Tools, inventory.ServerCapabilities)
 	} else if isRunnableMCPConfig(config) {
 		message := mcpStartupErrorMessage(err)
 		authStatus := s.authStatusForConfig(name, config)

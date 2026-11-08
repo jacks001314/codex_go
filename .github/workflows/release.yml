@@ -136,12 +136,17 @@ jobs:
           commit="$(git rev-parse "${GITHUB_SHA}^{commit}")"
           git log -1 --format=%B "${commit}" > "${RUNNER_TEMP}/release-notes.md"
           echo >> "${RUNNER_TEMP}/release-notes.md"
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          name: ${{ env.VERSION }}
-          tag_name: ${{ github.ref_name }}
-          body_path: ${{ runner.temp }}/release-notes.md
-          files: dist/**
-          make_latest: ${{ !contains(needs.build.outputs.version, '-') }}
-          prerelease: ${{ contains(needs.build.outputs.version, '-') }}
+      # Rust #59887/#59903: create the release, remember its id, upload the
+      # assets, and delete only this run's release when the upload fails. A
+      # single action cannot do that, and a half-published prerelease blocks
+      # every rerun because the release event only fires once.
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          TAG_NAME: ${{ github.ref_name }}
+          RELEASE_NAME: ${{ env.VERSION }}
+          NOTES_FILE: ${{ runner.temp }}/release-notes.md
+          DIST_DIR: dist
+          PRERELEASE: ${{ contains(needs.build.outputs.version, '-') }}
+        run: bash .github/scripts/publish-github-release.sh

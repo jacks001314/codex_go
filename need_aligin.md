@@ -1,4 +1,6 @@
-﻿# Go 版 Codex 与 Rust 版 Codex 对齐缺口审计（刷新版）
+﻿> **已过期，最新口径见 docs/alignment_gap_analysis_2026_11_08.md。**
+
+# Go 版 Codex 与 Rust 版 Codex 对齐缺口审计（刷新版）
 
 > 本文件是 2026-08-13 版 `need_aligin.md` 的刷新：对原报告的每一项做
 > **源码/证据复核**（`git show 6c108912ee` 冻结基线 + Go 当前工作树），

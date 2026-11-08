@@ -611,6 +611,10 @@ type ConfigRequirements struct {
 	InAppBrowser               *InAppBrowserRequirements `json:"inAppBrowser,omitempty"`
 	AutoReview                 *AutoReviewRequirements   `json:"autoReview,omitempty"`
 	FeatureRequirements        map[string]bool           `json:"featureRequirements,omitempty"`
+	// RuntimeAuthMode pins `features.runtime_agent_instances.mode` (Rust
+	// FeatureRequirementsToml.runtime_auth_mode, #60014). It is internal and
+	// stays off the app-server wire schema.
+	RuntimeAuthMode *RuntimeAuthModeRequirement `json:"-"`
 	Hooks                      *ManagedHooksRequirements `json:"hooks,omitempty"`
 	EnforceResidency           *ResidencyRequirement     `json:"enforceResidency,omitempty"`
 	Application                *ApplicationRequirements  `json:"application,omitempty"`

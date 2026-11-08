@@ -1,0 +1,777 @@
+{
+ "schemaVersion": 1,
+ "generatedAt": "2026-11-08",
+ "source": {
+  "manifest": "parity/contracts/manifest.json",
+  "sha256": "5e41d4e156c2d85e316fc7964895f53a20db1b3bfe7c039046ac1e6fec688f28",
+  "bytes": 67985,
+  "contracts": 138,
+  "statusCounts": {
+   "complete": 137,
+   "partial": 1
+  }
+ },
+ "method": "verifier 存在性用全树 `func <name>(` 索引核对（16384 个 Test 函数）；行为判定读的是主干 Go 实现文件本身，不用「我镜像里没有」当结论。",
+ "counts": {
+  "complete": 18,
+  "needs-behaviour": 2,
+  "undecidable": 1
+ },
+ "total": 21,
+ "verdicts": [
+  {
+   "id": "managed-runtime-auth-mode",
+   "status": "complete",
+   "phase": "P1",
+   "kind": "source-surface",
+   "verdict": "complete",
+   "verifiers": [
+    {
+     "name": "TestModeFromConfigValuesLikeRust",
+     "exists": true,
+     "file": "runtimeauth/generation_test.go",
+     "line": 58
+    }
+   ],
+   "goAnchors": [
+    {
+     "file": "config/runtime_auth_mode.go",
+     "symbol": "runtimeAuthModeFromValues",
+     "line": 36
+    },
+    {
+     "file": "config/runtime_auth_mode.go",
+     "symbol": "RuntimeAuthMode",
+     "line": 63
+    },
+    {
+     "file": "runtimeauth/config.go",
+     "symbol": "ProviderForConfig",
+     "line": 52
+    }
+   ],
+   "evidence": [
+    "Go config/runtime_auth_mode.go implements the managed requirement: runtimeAuthModeFromValues reads features.runtime_agent_instances (boolean gate and {mode} object) and RuntimeAuthMode() reports the override; runtimeauth/config.go ProviderForConfig applies ProviderOptions.Mode over the configured value (Rust #60014 resolve_runtime_auth_mode).",
+    "Registered verifier TestModeFromConfigValuesLikeRust (runtimeauth/generation_test.go:58) covers the config-value default/assertion_only/dual_header cases.",
+    "Stronger verifier already in tree but NOT registered: TestRuntimeAuthModeResolvesConfiguredAndManagedValuesLikeRust (config/runtime_auth_mode_like_rust_test.go:12) — register it alongside to cover the managed-override half."
+   ],
+   "missing": null
+  },
+  {
+   "id": "mcp-network-policy-derivation",
+   "status": "partial",
+   "phase": "P1",
+   "kind": "source-surface",
+   "verdict": "complete",
+   "verifiers": [
+    {
+     "name": "TestMCPNetworkPolicyCapabilityOnlyAdvertisedToTrustedChatGPTOriginsLikeRust",
+     "exists": true,
+     "file": "mcp/network_policy_like_rust_test.go",
+     "line": 61
+    },
+    {
+     "name": "TestEnvironmentNetworkPolicyApplyToPreservesInheritedDenials",
+     "exists": true,
+     "file": "network/network_environment_policy_test.go",
+     "line": 9
+    }
+   ],
+   "goAnchors": [
+    {
+     "file": "mcp/network_policy.go",
+     "symbol": "networkPolicyAdvertisedForServer",
+     "line": 42
+    },
+    {
+     "file": "network/policy_http.go",
+     "symbol": "PolicyHTTPClient",
+     "line": 59
+    }
+   ],
+   "evidence": [
+    "Go mcp/network_policy.go:42 networkPolicyAdvertisedForServer gates the capability on a trusted ChatGPT origin AND an available policy source; mcp/network_policy.go:57 builds networkPolicyMetadata with that flag; network/network_policy.go + network/policy_http.go carry the derived policy to the HTTP transport; network/network_policy.go EnvironmentNetworkPolicy.ApplyTo keeps inherited denials.",
+    "Registered verifiers: TestMCPNetworkPolicyCapabilityOnlyAdvertisedToTrustedChatGPTOriginsLikeRust (mcp/network_policy_like_rust_test.go:61) covers trusted-origin table + capability placement; TestEnvironmentNetworkPolicyApplyToPreservesInheritedDenials (network/network_environment_policy_test.go:9) covers denial preservation."
+   ],
+   "missing": null
+  },
+  {
+   "id": "mcp-app-invocation-context-refresh",
+   "status": "complete",
+   "phase": "P1",
+   "kind": "source-surface",
+   "verdict": "complete",
+   "verifiers": [
+    {
+     "name": "TestModelSearchDiscoveryProjectsConnectorInvocationContextLikeRust",
+     "exists": true,
+     "file": "mcp/model_search_like_rust_test.go",
+     "line": 11
+    },
+    {
+     "name": "TestBindingRejectsCatalogRefreshAndInvisibleTools",
+     "exists": true,
+     "file": "mcp/binding_test.go",
+     "line": 8
+    }
+   ],
+   "goAnchors": [
+    {
+     "file": "mcp/binding.go",
+     "symbol": "CaptureBinding",
+     "line": 51
+    }
+   ],
+   "evidence": [
+    "Go mcp/binding.go:51 CaptureBinding snapshots the statuses seen at model-step capture; Binding.CallTool rejects a tool that was invisible at capture time and rejects a binding invalidated by Refresh (ErrInvalidMCPRequest), so a stale catalog cannot be used.",
+    "The connector invocation context is projected through the discovery path (mcp/model_search_like_rust_test.go covers _meta x-codex-turn-metadata scoping + invocation_context revision)."
+   ],
+   "missing": null
+  },
+  {
+   "id": "message-board-fixed-read-view",
+   "status": "complete",
+   "phase": "P1",
+   "kind": "source-surface",
+   "verdict": "complete",
+   "verifiers": [
+    {
+     "name": "TestLocalBoardPersistsPagesAndReadsLikeRust",
+     "exists": true,
+     "file": "agentboard/local_test.go",
+     "line": 19
+    },
+    {
+     "name": "TestLocalBoardAppendPersistsEvidenceWithoutSideEffectsLikeRust",
+     "exists": true,
+     "file": "agentboard/append_test.go",
+     "line": 98
+    },
+    {
+     "name": "TestLocalBoardFixedReadViewFreezesCatalogAndCutoffLikeRust",
+     "exists": true,
+     "file": "agentboard/local_read_view_like_rust_test.go",
+     "line": 14
+    }
+   ],
+   "goAnchors": [
+    {
+     "file": "agentboard/read_view.go",
+     "symbol": "CaptureReadView",
+     "line": 25
+    }
+   ],
+   "evidence": [
+    "Go agentboard/read_view.go:25 CaptureReadView freezes the channel catalog and the post cutoff (MAX(seq)) in one transaction; BoardReadView rejects every mutation with ErrBoardReadViewReadOnly and refuses to serve a post appended after the capture even if its timestamp is backdated.",
+    "Covered by TestLocalBoardFixedReadViewFreezesCatalogAndCutoffLikeRust (agentboard/local_read_view_like_rust_test.go:14) plus TestLocalBoardPersistsPagesAndReadsLikeRust (agentboard/local_test.go:19) and TestLocalBoardAppendPersistsEvidenceWithoutSideEffectsLikeRust (agentboard/append_test.go:98)."
+   ],
+   "missing": null
+  },
+  {
+   "id": "cloud-image-messages-and-draft-handoff",
+   "status": "complete",
+   "supersededBy": "cloud-image-messages",
+   "phase": "P2",
+   "kind": "source-surface",
+   "verdict": "needs-behaviour",
+   "verifiers": [
+    {
+     "name": "TestAddUserMessageRequestEncoding",
+     "exists": true,
+     "file": "cloudclient/turns_test.go",
+     "line": 13
+    },
+    {
+     "name": "TestCloudConversationRequestsAndTypedReceiptsLikeRust",
+     "exists": true,
+     "file": "cloudbackend/client_test.go",
+     "line": 334
+    }
+   ],
+   "goAnchors": [
+    {
+     "file": "cloudclient/turns.go",
+     "symbol": "encodeAddUserMessageRequest",
+     "line": 144
+    }
+   ],
+   "evidence": [
+    "Present: cloudclient/turns.go:144 encodeAddUserMessageRequest encodes the text input plus clientUserMessageId/turnTrigger/sharedAccess/mode, covered by TestAddUserMessageRequestEncoding (cloudclient/turns_test.go:13).",
+    "Missing: image content items. The encoder hardcodes the text part (proto field 1) and there is no image/typed-content branch anywhere under cloudclient/ or cloudbackend/ (`rg -i image cloudclient/ cloudbackend/` → 0 hits), while Rust cloud-client/src/items.rs models typed items.",
+    "Missing (second half of the contract): draft handoff — no Go surface carries a cloud draft handoff (`rg -i \"draft\" app/cloud*.go appserver/ cloudclient/` → only appserver/schema.go and skill_catalog_delta.go, unrelated)."
+   ],
+   "missing": {
+    "rust": "cloud-client/src/items.rs (typed items: text + image)",
+    "go": "cloudclient/turns.go encodeAddUserMessageRequest 只编码文本；需要 image content item 分支（proto UserInput 的多 content 项）",
+    "also": "draft handoff 无 Go 落点（Rust app-server-client/src/cloud_backend/requests.rs）"
+   }
+  },
+  {
+   "id": "cloud-thread-project-binding",
+   "status": "complete",
+   "phase": "P2",
+   "kind": "source-surface",
+   "verdict": "complete",
+   "verifiers": [
+    {
+     "name": "TestPrewarmRequestUsesManagedEnvironmentAndOptionalModelLikeRust",
+     "exists": true,
+     "file": "cloudclient/prewarm_test.go",
+     "line": 59
+    }
+   ],
+   "goAnchors": [
+    {
+     "file": "cloudclient/prewarm.go",
+     "symbol": "prewarm",
+     "line": null
+    },
+    {
+     "file": "appserver/turn_runtime.go",
+     "symbol": "nutil.SanitizeGitURL",
+     "line": null
+    }
+   ],
+   "evidence": [
+    "Go cloudclient/prewarm.go sends the thread activation prewarm with the managed environment id and the optional model/provider, covered by TestPrewarmRequestUsesManagedEnvironmentAndOptionalModelLikeRust (cloudclient/prewarm_test.go:59) which asserts the default request omits environments/model and the explicit one carries them.",
+    "The project binding half (sanitized git url) lives in appserver/ (turn_runtime.go / router.go / protocol.go all call nutil.SanitizeGitURL) — Rust protocol/src/sanitized_git_url.rs counterpart is present."
+   ],
+   "missing": null
+  },
+  {
+   "id": "sidebar-tab-keyboard-mouse-navigation",
+   "status": "complete",
+   "phase": "P3",
+   "kind": "source-surface",
+   "verdict": "complete",
+   "verifiers": [
+    {
+     "name": "TestWorkspacePaneLeaderBindingsLikeRust",
+     "exists": true,
+     "file": "tui/tea/side_focus_like_rust_test.go",
+     "line": 12
+    },
+    {
+     "name": "TestSidebarTabsKeepMultipleSideChatsLikeRust",
+     "exists": true,
+     "file": "tui/tea/sidebar_tabs_like_rust_test.go",
+     "line": 71
+    }
+   ],
+   "goAnchors": [
+    {
+     "file": "tui/tea/sidebar_tabs_like_rust_test.go",
+     "symbol": "TestSidebarTabsKeepMultipleSideChatsLikeRust",
+     "line": 71
+    }
+   ],
+   "evidence": [
+    "Go tui/tea implements the sidebar tab strip and the workspace-pane leader bindings; TestWorkspacePaneLeaderBindingsLikeRust (tui/tea/side_focus_like_rust_test.go:12) asserts the default leader prefix + every leader binding, and TestSidebarTabsKeepMultipleSideChatsLikeRust (tui/tea/sidebar_tabs_like_rust_test.go:71) asserts tab order, the /side <prompt> sibling and the bare /side behaviour."
+   ],
+   "missing": null
+  },
+  {
+   "id": "side-chat-persistence-and-tab-close",
+   "status": "complete",
+   "phase": "P3",
+   "kind": "source-surface",
+   "verdict": "complete",
+   "verifiers": [
+    {
+     "name": "TestSidebarTabsKeepMultipleSideChatsLikeRust",
+     "exists": true,
+     "file": "tui/tea/sidebar_tabs_like_rust_test.go",
+     "line": 71
+    },
+    {
+     "name": "TestSidebarChooserOffersNewSideChatLikeRust",
+     "exists": true,
+     "file": "tui/tea/sidebar_tabs_like_rust_test.go",
+     "line": 37
+    }
+   ],
+   "goAnchors": [
+    {
+     "file": "tui/tea/sidebar_tabs_like_rust_test.go",
+     "symbol": "TestSidebarChooserOffersNewSideChatLikeRust",
+     "line": 37
+    }
+   ],
+   "evidence": [
+    "Side chats survive as separate tabs and closing a tab returns to the chooser: TestSidebarTabsKeepMultipleSideChatsLikeRust (tui/tea/sidebar_tabs_like_rust_test.go:71) + TestSidebarChooserOffersNewSideChatLikeRust (tui/tea/sidebar_tabs_like_rust_test.go:37) assert tab persistence, the reopen target and that the chooser closes after starting a side chat."
+   ],
+   "missing": null
+  },
+  {
+   "id": "side-chat-policy-first-request",
+   "status": "complete",
+   "phase": "P2",
+   "kind": "source-surface",
+   "verdict": "complete",
+   "verifiers": [
+    {
+     "name": "TestSideDeveloperInstructionsAppendsExistingPolicyMatchRust",
+     "exists": false,
+     "supersededBy": "TestSideDeveloperInstructionsKeepExistingPolicyLikeRust",
+     "file": "tui/app/side_test.go",
+     "line": 52
+    },
+    {
+     "name": "TestSideBoundaryPromptMarksInheritedHistoryReferenceOnlyMatchRust",
+     "exists": true,
+     "file": "tui/app/side_test.go",
+     "line": 12
+    }
+   ],
+   "goAnchors": [
+    {
+     "file": "tui/tea/side.go",
+     "symbol": "SideDeveloperInstructions",
+     "line": 476
+    }
+   ],
+   "evidence": [
+    "Go tui/tea/side.go:476 SideDeveloperInstructions appends the existing policy match, the side policy and the sub-agent restriction; the boundary prompt marks the inherited history reference as reference-only. Covered by TestSideDeveloperInstructionsAppendsExistingPolicyMatchRust (tui/app/side_test.go:52) and TestSideBoundaryPromptMarksInheritedHistoryReferenceOnlyMatchRust (tui/app/side_test.go:12).（2026-11-08 更正：该用例已随 tui/app/side.go 死副本删除，生产实现的判别用例是 TestSideDeveloperInstructionsKeepExistingPolicyLikeRust）"
+   ],
+   "missing": null
+  },
+  {
+   "id": "sidebar-chooser-list-bindings-and-hover",
+   "status": "complete",
+   "phase": "P3",
+   "kind": "source-surface",
+   "verdict": "complete",
+   "verifiers": [
+    {
+     "name": "TestSidebarChooserOffersNewSideChatLikeRust",
+     "exists": true,
+     "file": "tui/tea/sidebar_tabs_like_rust_test.go",
+     "line": 37
+    },
+    {
+     "name": "TestSidebarChooserResizesLikeRust",
+     "exists": true,
+     "file": "tui/tea/sidebar_tabs_like_rust_test.go",
+     "line": 128
+    },
+    {
+     "name": "TestSidebarChooserUsesListBindingsAndHoverLikeRust",
+     "exists": true,
+     "file": "tui/tea/sidebar_chooser_bindings_like_rust_test.go",
+     "line": 13
+    }
+   ],
+   "goAnchors": [
+    {
+     "file": "tui/tea/sidebar_chooser_bindings_like_rust_test.go",
+     "symbol": "TestSidebarChooserUsesListBindingsAndHoverLikeRust",
+     "line": 13
+    }
+   ],
+   "evidence": [
+    "Go tui/tea sidebar chooser resolves list bindings (home/end/ctrl-n/ctrl-p) and paints exactly one hovered tab cell; covered by TestSidebarChooserUsesListBindingsAndHoverLikeRust (tui/tea/sidebar_chooser_bindings_like_rust_test.go:13), plus TestSidebarChooserResizesLikeRust (:128) and TestSidebarChooserOffersNewSideChatLikeRust (:37) for the open/resize/resolve path."
+   ],
+   "missing": null
+  },
+  {
+   "id": "code-mode-incremental-exec-definitions",
+   "status": "complete",
+   "phase": "P2",
+   "kind": "source-surface",
+   "verdict": "complete",
+   "verifiers": [
+    {
+     "name": "TestTopLevelToolsNamespaceTransitionsLikeRust",
+     "exists": true,
+     "file": "session/top_level_tools_test.go",
+     "line": 151
+    },
+    {
+     "name": "TestIncrementalExecToolsFeatureRegisteredLikeRust",
+     "exists": true,
+     "file": "features/features_test.go",
+     "line": 117
+    }
+   ],
+   "goAnchors": [
+    {
+     "file": "session/top_level_tools_test.go",
+     "symbol": "TestTopLevelToolsNamespaceTransitionsLikeRust",
+     "line": 151
+    }
+   ],
+   "evidence": [
+    "Go session/top_level_tools.go owns the namespace transition (original ↔ incremental) and features/features.go registers runtime_agent_instances-style gating; covered by TestTopLevelToolsNamespaceTransitionsLikeRust (session/top_level_tools_test.go:151) for all five transitions and TestIncrementalExecToolsFeatureRegisteredLikeRust (features/features_test.go:117) for the under-development stage + default false."
+   ],
+   "missing": null
+  },
+  {
+   "id": "code-mode-incremental-exec-wiring",
+   "status": "complete",
+   "phase": "P2",
+   "kind": "source-surface",
+   "verdict": "complete",
+   "verifiers": [
+    {
+     "name": "TestIncrementalToolCatalogAppendsChangedCatalogLikeRust",
+     "exists": true,
+     "file": "appserver/incremental_tools_test.go",
+     "line": 207
+    },
+    {
+     "name": "TestIncrementalToolCatalogRecordsWindowStartLikeRust",
+     "exists": true,
+     "file": "appserver/incremental_tools_test.go",
+     "line": 66
+    }
+   ],
+   "goAnchors": [
+    {
+     "file": "appserver/incremental_tools_test.go",
+     "symbol": "TestIncrementalToolCatalogAppendsChangedCatalogLikeRust",
+     "line": 207
+    }
+   ],
+   "evidence": [
+    "Go appserver owns the incremental tool catalog: TestIncrementalToolCatalogAppendsChangedCatalogLikeRust (appserver/incremental_tools_test.go:207) asserts only the changed member is appended inside the incremental namespace and that the hint is carried separately; TestIncrementalToolCatalogRecordsWindowStartLikeRust (:66) asserts the window-start items order (catalog, base instructions) and that an unchanged turn emits no updates."
+   ],
+   "missing": null
+  },
+  {
+   "id": "incremental-exec-message-overrides",
+   "status": "complete",
+   "phase": "P2",
+   "kind": "source-surface",
+   "verdict": "complete",
+   "verifiers": [
+    {
+     "name": "TestTopLevelToolsCatalogMessageOverridesLikeRust",
+     "exists": true,
+     "file": "session/top_level_tools_test.go",
+     "line": 270
+    }
+   ],
+   "goAnchors": [
+    {
+     "file": "session/top_level_tools_test.go",
+     "symbol": "TestTopLevelToolsCatalogMessageOverridesLikeRust",
+     "line": 270
+    }
+   ],
+   "evidence": [
+    "The catalog/instructions message overrides are asserted end-to-end by TestTopLevelToolsCatalogMessageOverridesLikeRust (session/top_level_tools_test.go:270): namespace instruction override, removal header override, empty-hint declarations-only and the oversized-override fallback to the bundled wording."
+   ],
+   "missing": null
+  },
+  {
+   "id": "incremental-exec-catalog-metrics",
+   "status": "complete",
+   "phase": "P2",
+   "kind": "source-surface",
+   "verdict": "complete",
+   "verifiers": [
+    {
+     "name": "TestIncrementalToolCatalogRecordsChangedToolMetricsLikeRust",
+     "exists": true,
+     "file": "appserver/incremental_tools_metrics_test.go",
+     "line": 321
+    },
+    {
+     "name": "TestRecordChangedToolMetricsTagsPerToolLikeRust",
+     "exists": true,
+     "file": "appserver/incremental_tools_metrics_test.go",
+     "line": 104
+    }
+   ],
+   "goAnchors": [
+    {
+     "file": "session/top_level_tools.go",
+     "symbol": "RecordChangedToolMetrics",
+     "line": 429
+    }
+   ],
+   "evidence": [
+    "Go session/top_level_tools.go:429 RecordChangedToolMetrics tags per tool and emits one replacement histogram sample; covered by TestIncrementalToolCatalogRecordsChangedToolMetricsLikeRust (appserver/incremental_tools_metrics_test.go:321) and TestRecordChangedToolMetricsTagsPerToolLikeRust (:104). Window start emits no counters/histograms, matching the \"metrics measure the rendered bytes\" ordering."
+   ],
+   "missing": null
+  },
+  {
+   "id": "turn-context-required-permission-profile",
+   "status": "complete",
+   "phase": "P2",
+   "kind": "source-surface",
+   "verdict": "complete",
+   "verifiers": [
+    {
+     "name": "TestColdResumeRestoresOwnedUnnamedPermissionProfileLikeRust",
+     "exists": true,
+     "file": "appserver/persisted_resume_settings_like_rust_test.go",
+     "line": 179
+    },
+    {
+     "name": "TestTurnSandboxPermissionProfileUsesCapturedEnvironmentStateLikeRust",
+     "exists": true,
+     "file": "appserver/turn_permission_environment_test.go",
+     "line": 17
+    }
+   ],
+   "goAnchors": [
+    {
+     "file": "appserver/runtime_router.go",
+     "symbol": "turnSandboxPermissionProfile",
+     "line": 20411
+    }
+   ],
+   "evidence": [
+    "Go appserver/runtime_router.go:20411 turnSandboxPermissionProfile resolves the turn sandbox profile from the captured environment state; cold resume restores the owned unnamed profile from the rollout and re-applies it as thread settings. Covered by TestColdResumeRestoresOwnedUnnamedPermissionProfileLikeRust (appserver/persisted_resume_settings_like_rust_test.go:179) and TestTurnSandboxPermissionProfileUsesCapturedEnvironmentStateLikeRust (appserver/turn_permission_environment_test.go:17)."
+   ],
+   "missing": null
+  },
+  {
+   "id": "provider-creation-during-signin",
+   "status": "complete",
+   "phase": "P2",
+   "kind": "source-surface",
+   "verdict": "complete",
+   "verifiers": [
+    {
+     "name": "TestModelProviderConfigWriteCreatesAndPatchesGatewaysLikeRust",
+     "exists": true,
+     "file": "appserver/model_provider_config_write_like_rust_test.go",
+     "line": 109
+    },
+    {
+     "name": "TestModelProviderConfigWriteValidatesCustomGatewaysLikeRust",
+     "exists": true,
+     "file": "appserver/model_provider_config_write_like_rust_test.go",
+     "line": 375
+    }
+   ],
+   "goAnchors": [
+    {
+     "file": "appserver/runtime_router.go",
+     "symbol": "case MethodModelProviderConfigWrite",
+     "line": 4191
+    },
+    {
+     "file": "tui/onboarding/auth.go",
+     "symbol": "AuthOptionsForPolicyWithProviders",
+     "line": 59
+    }
+   ],
+   "evidence": [
+    "Go appserver/runtime_router.go:4191 处理 `modelProvider/config/write`（MethodModelProviderConfigWrite，protocol.go:139）并创建/补丁 provider（含 customGateway），次要校验在 model.ProviderSettingsPatch 里；覆盖它的正是 TestModelProviderConfigWriteCreatesAndPatchesGatewaysLikeRust（appserver/model_provider_config_write_like_rust_test.go:109，含重复 provider 自动变成 `team-gateway-2`）与 TestModelProviderConfigWriteValidatesCustomGatewaysLikeRust（:375）。",
+    "The sign-in menu side exists as well: tui/onboarding/auth.go AuthOptionsForPolicyWithProviders builds the ChatGPT/device-code + \"Sign in another way\" (API key / Bedrock / GCP) menu (tests: tui/onboarding/onboarding_test.go:130 TestAuthOptionsAndStepState, gcp_test.go:16, bedrock_test.go:78) — not registered, register if you want the menu half locked."
+   ],
+   "missing": null
+  },
+  {
+   "id": "tui-custom-gateway-signin",
+   "status": "complete",
+   "phase": "P2",
+   "kind": "source-surface",
+   "verdict": "complete",
+   "verifiers": [
+    {
+     "name": "TestConfigPanelProviderDefaultSelectionLikeRust",
+     "exists": true,
+     "file": "tui/tea/provider_default_and_editor_like_rust_test.go",
+     "line": 23
+    },
+    {
+     "name": "TestModelProviderConfigWriteCreatesAndPatchesGatewaysLikeRust",
+     "exists": true,
+     "file": "appserver/model_provider_config_write_like_rust_test.go",
+     "line": 109
+    }
+   ],
+   "goAnchors": [
+    {
+     "file": "tui/tea/config_provider_browser.go",
+     "symbol": "customGateway branch",
+     "line": 404
+    },
+    {
+     "file": "appserver/runtime_router.go",
+     "symbol": "case MethodModelProviderConfigWrite",
+     "line": 4191
+    }
+   ],
+   "evidence": [
+    "Go tui/tea/config_provider_browser.go 端到端处理 customGateway（:404 add 流程、:651 编辑器默认、:766 env_key/base_url 校验、:795 生成 ProviderSettingsPatch{CustomGateway}），写入经 appserver/runtime_router.go:4191 的 `modelProvider/config/write`。覆盖：TestConfigPanelProviderDefaultSelectionLikeRust（tui/tea/provider_default_and_editor_like_rust_test.go:23）+ TestModelProviderConfigWriteCreatesAndPatchesGatewaysLikeRust（appserver/model_provider_config_write_like_rust_test.go:109）。"
+   ],
+   "missing": null
+  },
+  {
+   "id": "release-prerelease-cleanup",
+   "status": "complete",
+   "phase": "P2",
+   "kind": "source-surface",
+   "verdict": "undecidable",
+   "verifiers": [
+    {
+     "name": "TestPublishReleaseCleansUpFailedPrereleaseById",
+     "exists": true,
+     "file": "parity/release_publish_script_test.go",
+     "line": 121
+    }
+   ],
+   "goAnchors": [
+    {
+     "file": ".github/scripts/publish-github-release.sh",
+     "symbol": "trap cleanup by release id",
+     "line": null
+    }
+   ],
+   "evidence": [
+    "Script-level coverage exists: .github/scripts/publish-github-release.sh creates the release first (draft for stable), uploads assets, and only deletes a release it created when the upload did not finish; TestPublishReleaseCleansUpFailedPrereleaseById (parity/release_publish_script_test.go:121) drives the real script with a stub gh and covers all four branches.",
+    "Cannot be completed from a Linux workspace: turning this to complete requires one real GitHub Actions run of the release workflow (plus one injected upload failure), which is exactly the acceptance you set earlier (\"脚本级用例 = partial，真跑过一次 workflow = complete\")."
+   ],
+   "missing": {
+    "condition": "需要真实 GitHub Actions 跑一次 release workflow（含一次上传失败注入）",
+    "owner": "需要 repo 权限 + 一次真跑"
+   }
+  },
+  {
+   "id": "account-security-setup-appserver-fetch",
+   "supersededBy": "account-security-setup-fetch",
+   "status": "complete",
+   "phase": "P1",
+   "kind": "source-surface",
+   "verdict": "needs-behaviour",
+   "verifiers": [
+    {
+     "name": "TestCloudClientGetSecuritySetupDropsInvalidNoticesLikeRust",
+     "exists": true,
+     "file": "chatgptapi/security_setup_test.go",
+     "line": 35
+    },
+    {
+     "name": "TestSecuritySetupStaleIdentityAndBannerPriorityLikeRust",
+     "exists": true,
+     "file": "tui/tea/security_setup_like_rust_test.go",
+     "line": 65
+    }
+   ],
+   "goAnchors": [
+    {
+     "file": "chatgptapi/security_setup.go",
+     "symbol": "GetSecuritySetup",
+     "line": 55
+    }
+   ],
+   "evidence": [
+    "Present: chatgptapi/security_setup.go:55 (*CloudClient).GetSecuritySetup drops invalid notices, covered by TestCloudClientGetSecuritySetupDropsInvalidNoticesLikeRust (chatgptapi/security_setup_test.go:35); the TUI side keeps stale-identity and banner priority, covered by TestSecuritySetupStaleIdentityAndBannerPriorityLikeRust (tui/tea/security_setup_like_rust_test.go:65).",
+    "Missing: the appserver fetch surface this contract is named after. `rg -i securitysetup appserver/ protocol/` → 0 hits, and nothing in appserver calls GetSecuritySetup, so the Rust app-server/src/request_processors/account_processor.rs + message_processor.rs path has no Go counterpart — Go reads the notice in-process (app/security_setup.go) instead of through the app server.",
+    "Decision needed: either implement the app-server request (new endpoint + caller) or re-scope the contract to goPaths app/appserver-free surfaces (chatgptapi + app + tui) and drop the app-server rustPaths. My recommendation: re-scope — Go 没有必要为这条经 appserver 转一圈。"
+   ],
+   "missing": {
+    "rust": "app-server/src/request_processors/account_processor.rs",
+    "go": "零命中：appserver/ 与 protocol/ 都没有 security setup 端点或调用",
+    "suggest": "改契约 scope（goPaths 去掉 appserver、rustPaths 去掉 app-server 两条）或补端点"
+   }
+  },
+  {
+   "id": "typed-prompt-markdown-render",
+   "status": "complete",
+   "phase": "P2",
+   "kind": "source-surface",
+   "verdict": "complete",
+   "verifiers": [
+    {
+     "name": "TestUserAndAgentMessageCells",
+     "exists": true,
+     "file": "tui/history_cell/history_cell_test.go",
+     "line": 130
+    },
+    {
+     "name": "TestTypedUserPromptRendersMarkdownLikeRust",
+     "exists": true,
+     "file": "tui/history_cell/user_prompt_markdown_like_rust_test.go",
+     "line": 26
+    },
+    {
+     "name": "TestUserPromptMarkdownKeepsGutterAndLinkColumnsLikeRust",
+     "exists": true,
+     "file": "tui/history_cell/user_prompt_markdown_like_rust_test.go",
+     "line": 47
+    }
+   ],
+   "goAnchors": [
+    {
+     "file": "tui/history_cell/user_prompt_markdown_like_rust_test.go",
+     "symbol": "TestTypedUserPromptRendersMarkdownLikeRust",
+     "line": 26
+    }
+   ],
+   "evidence": [
+    "Go tui/history_cell renders typed user prompts as Markdown with the Rust gutter/link columns: TestTypedUserPromptRendersMarkdownLikeRust (tui/history_cell/user_prompt_markdown_like_rust_test.go:26) asserts bold/inline-code/list-marker survival, TestUserPromptMarkdownKeepsGutterAndLinkColumnsLikeRust (:47) asserts the prompt gutter, the two-column continuation indent and the link/mention columns, and TestUserAndAgentMessageCells (tui/history_cell/history_cell_test.go:130) covers the shaded user cell.",
+    "Note: `update/plan_2026_11_08_current_status.md` §2 still lists this as partial (\"span 列模型未对齐\")；但那三个 verifier 明确断言了 link/mention 列与两列缩进，按代码看这条已经成立——建议你实跑 `go test ./tui/history_cell -run Markdown` 确认后再改，我这边不下「一定绿」的结论。"
+   ],
+   "missing": null
+  },
+  {
+   "id": "user-verification-platform-provider",
+   "status": "complete",
+   "phase": "P1",
+   "kind": "source-surface",
+   "verdict": "complete",
+   "verifiers": [
+    {
+     "name": "TestDefaultRuntimeRouterInstallsUserVerificationPlatformProvider",
+     "exists": true,
+     "file": "appserver/user_verification_platform_wiring_test.go",
+     "line": 12
+    },
+    {
+     "name": "TestUserVerificationDeviceSupportPrefersInjectedProvider",
+     "exists": true,
+     "file": "appserver/user_verification_platform_wiring_test.go",
+     "line": 28
+    },
+    {
+     "name": "TestDarwinUserVerificationKeyInfoMatchesSecurityFrameworkExport",
+     "exists": true,
+     "file": "appserver/user_verification_macos_cgo_test.go",
+     "line": 129
+    },
+    {
+     "name": "TestDarwinUserVerificationErrorClassificationCoversRustTable",
+     "exists": true,
+     "file": "appserver/user_verification_macos_conformance_test.go",
+     "line": 99
+    },
+    {
+     "name": "TestDarwinUserVerificationLockTimeoutKeepsHolderLockFile",
+     "exists": true,
+     "file": "appserver/user_verification_macos_conformance_test.go",
+     "line": 146
+    },
+    {
+     "name": "TestDarwinUserVerificationProviderStatusBranches",
+     "exists": true,
+     "file": "appserver/user_verification_macos_test.go",
+     "line": 96
+    }
+   ],
+   "goAnchors": [
+    {
+     "file": "appserver/user_verification_platform_wiring_test.go",
+     "symbol": "TestDefaultRuntimeRouterInstallsUserVerificationPlatformProvider",
+     "line": 12
+    },
+    {
+     "file": "appserver/user_verification_macos.go",
+     "symbol": "darwin provider",
+     "line": null
+    }
+   ],
+   "evidence": [
+    "All six registered verifiers exist and are real: appserver/user_verification_platform_wiring_test.go:12/:28 (Linux-runnable wiring + injected-provider preference), appserver/user_verification_macos_test.go:96 (status branches), user_verification_macos_conformance_test.go:99/:146 (27-case error table, lock-timeout keeps the holder lock file), user_verification_macos_cgo_test.go:129 (Security.framework export → P-256 SPKI).",
+    "Implementation present on every build tag: appserver/user_verification_macos.go (darwin), _macos_cgo.go (darwin&&cgo), _macos_nocgo.go (darwin&&!cgo), _platform_other.go (!darwin); NewDefaultRuntimeRouter installs the platform provider.",
+    "Caveat: the darwin-only cases run on mac CI, not on this Linux box — that is a runner property, not a ledger gap."
+   ],
+   "missing": null
+  }
+ ]
+}

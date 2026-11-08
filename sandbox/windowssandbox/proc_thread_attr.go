@@ -3,6 +3,7 @@ package windowssandbox
 type ProcThreadAttributeList struct {
 	impl             any
 	handleList       []uintptr
+	jobList          []uintptr
 	desktopAppPolicy uint32
 }
 

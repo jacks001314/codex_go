@@ -17,10 +17,9 @@ import (
 // sandbox at all (Rust `mxc_sandbox::is_available` on non-Windows hosts).
 const helperSupported = true
 
-// NativeUnavailableMessage mirrors the executor's fail-closed diagnostic. Go
-// has no binding to MXC's native launcher, so the helper validates the whole
-// request and then refuses to launch instead of falling back to a weaker
-// sandbox backend.
+// NativeUnavailableMessage mirrors the executor's fail-closed diagnostic. The
+// helper reports it when the host's process security environment cannot be
+// used, instead of falling back to a weaker sandbox backend.
 const NativeUnavailableMessage = "native MXC is unavailable on this executor"
 
 // runHelper resolves executor-local state and runs the decoded launcher
@@ -46,13 +45,16 @@ func runHelper(stdin io.Reader, stdout, stderr io.Writer) (int, error) {
 }
 
 // launch hands a prepared request to the native launcher and propagates the
-// child exit code. Rust gates this on `is_available()`; Go encodes that gate as
-// the durable architectural gap rather than silently degrading the sandbox.
+// child exit code. It mirrors Rust's `mxc_sandbox::windows::run`: gate on
+// availability, then launch inside the process security environment. The
+// command inherits the helper's stdio, so stdin/stdout/stderr are not rewritten
+// here.
 func launch(request *NativeRequest, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+	_, _, _ = stdin, stdout, stderr
 	if request == nil {
 		return 0, errors.New("invalid MXC launcher request")
 	}
-	return 0, errors.New(NativeUnavailableMessage)
+	return launchNative(request)
 }
 
 // currentEnvironment reads the already-filtered wrapper environment. Rust
