@@ -674,6 +674,11 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		NotificationCondition:   settings.NotificationCondition,
 		PermissionRequirements:  settings.PermissionRequirements,
 		OnStartMCPLogin:         interactiveRemoteMCPLoginStarter(ctx, endpoint),
+		// Rust #60319: list the attached side chats and their latest prompts
+		// through the shared app server, then open a saved chat in the sidebar.
+		OnListSideChats:       interactiveRemoteListSideChats(ctx, endpoint),
+		OnReadSideChatPrompts: interactiveRemoteReadSideChatPrompts(ctx, endpoint),
+		OnOpenSideChat:        interactiveRemoteOpenSideChat(ctx, endpoint, root),
 		// Rust #60280: a shared app server only sends startup updates after
 		// subscription and may run a different MCP configuration, so wait only
 		// for the servers it reports.

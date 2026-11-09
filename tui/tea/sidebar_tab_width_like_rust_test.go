@@ -28,12 +28,14 @@ func TestSidebarTabStripUsesFixedRustTabWidthLikeRust(t *testing.T) {
 	model.activeSide.ShowingSide = true
 	model.refreshTranscript()
 
-	// count == available / tab_width with available = width-1-min(width-1,3).
+	// Rust #60319: count == (available + gap) / (tab_width + gap), so the
+	// separating columns are part of the strip budget.
 	labels := sidebarTabLabels(len(tabs))
+	stride := sidebarTabWidth + sidebarTabGap
 	for _, width := range []int{23, 60, 120, 124} {
 		available := width - 1 - min(width-1, len(sidebarAddLabel))
 		tabWidth, count := sidebarTabLayout(labels, width)
-		if want := available / sidebarTabWidth; count != want {
+		if want := (available + sidebarTabGap) / stride; count != want {
 			t.Fatalf("width %d fits %d tabs, want %d (available %d / %d)",
 				width, count, want, available, sidebarTabWidth)
 		}
@@ -46,8 +48,8 @@ func TestSidebarTabStripUsesFixedRustTabWidthLikeRust(t *testing.T) {
 	width := model.sidebarTabStripWidth()
 	window := model.sidebarTabStripWindowWidth(width)
 	available := width - 1 - min(width-1, len(sidebarAddLabel))
-	if window.count != available/sidebarTabWidth {
-		t.Fatalf("strip window fits %d tabs, want %d", window.count, available/sidebarTabWidth)
+	if want := (available + sidebarTabGap) / stride; window.count != want {
+		t.Fatalf("strip window fits %d tabs, want %d", window.count, want)
 	}
 	if window.tabWidth != sidebarTabWidth {
 		t.Fatalf("strip tab cell = %d, want %d", window.tabWidth, sidebarTabWidth)
@@ -79,7 +81,8 @@ func TestSidebarTabStripUsesFixedRustTabWidthLikeRust(t *testing.T) {
 		} else {
 			want += strings.Repeat(" ", window.tabWidth-len(want))
 		}
-		got := strip[offset*window.tabWidth : (offset+1)*window.tabWidth]
+		start := offset * window.stride
+		got := strip[start : start+window.tabWidth]
 		if got != want {
 			t.Fatalf("cell %d = %q, want %q clipped to %d columns", offset, got, want, window.tabWidth)
 		}

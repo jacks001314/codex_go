@@ -1882,7 +1882,12 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 			}
 			return interactiveHistoryMCPStatuses(response.Data), nil
 		},
-		OnStartMCPLogin:           interactiveLocalMCPLoginStarter(mcpService),
+		OnStartMCPLogin: interactiveLocalMCPLoginStarter(mcpService),
+		// Rust #60319: the sidebar chooser discovers saved side chats from the
+		// local attached-thread records and previews their latest user prompt.
+		OnListSideChats:           interactiveEmbeddedListSideChats(store),
+		OnReadSideChatPrompts:     interactiveEmbeddedReadSideChatPrompts(store),
+		OnOpenSideChat:            interactiveEmbeddedOpenSideChat(store),
 		OnReadRateLimits:          interactiveLocalRateLimitsReader(),
 		OnReadRateLimitSnapshots:  interactiveLocalRateLimitSnapshotsReader(),
 		OnReadThreadUsage:         interactiveLocalThreadUsageReader(),

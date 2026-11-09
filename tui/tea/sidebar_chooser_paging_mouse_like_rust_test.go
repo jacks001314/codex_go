@@ -16,7 +16,9 @@ func paintedChooserRows(panel string) int {
 	rows := 0
 	for _, line := range strings.Split(panel, "\n") {
 		title := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "›"))
-		if strings.HasPrefix(title, "Side chat") || strings.HasPrefix(title, sidebarNewChatTitle) {
+		title = strings.TrimSpace(title)
+		if strings.HasPrefix(title, "○ ") || strings.HasPrefix(title, sidebarNewChatTitle) ||
+			strings.HasPrefix(title, sidebarRetryChatsTitle) {
 			rows++
 		}
 	}
@@ -137,8 +139,8 @@ func TestSidebarTabStripMouseSelectsVisibleTabLikeRust(t *testing.T) {
 	}
 	// Rust sidebar.rs show(Chooser): the choice starts on the selected tab
 	// (falling back to the new-chat row), and the "+" row is offered below it.
-	if want := 1; model.sidebarChoice != want {
-		t.Fatalf("chooser row = %d, want the selected tab %d", model.sidebarChoice, want)
+	if want := 2; model.sidebarChoice != want {
+		t.Fatalf("chooser row = %d, want the selected tab row %d", model.sidebarChoice, want)
 	}
 	_, right, _, ok = model.sidePaneLayout(model.width)
 	if panel := model.renderSidebarChooser(right, model.transcript.Height); !strings.Contains(panel, sidebarNewChatTitle) {

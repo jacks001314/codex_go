@@ -1688,8 +1688,15 @@ type Options struct {
 	OnSafetyBufferingRetry func(threadID, turnID, model, prompt string) bubbletea.Cmd
 	OnStartSide            SideStartFunc
 	OnCloseSide            SideCloseFunc
-	OnReadReviewBranches   ReviewBranchesReaderFunc
-	OnReadReviewCommits    ReviewCommitsReaderFunc
+	// OnListSideChats discovers the saved side chats for the chooser; nil keeps
+	// the chooser on its retained tabs only.
+	OnListSideChats SideChatListFunc
+	// OnReadSideChatPrompts reads the latest user prompts for the visible rows.
+	OnReadSideChatPrompts SideChatPromptFunc
+	// OnOpenSideChat attaches a saved side chat that is not retained in memory.
+	OnOpenSideChat       SideOpenFunc
+	OnReadReviewBranches ReviewBranchesReaderFunc
+	OnReadReviewCommits  ReviewCommitsReaderFunc
 
 	HasChatGPTAccount              bool
 	ChatGPTPlanType                string
@@ -2874,6 +2881,9 @@ type Model struct {
 	reviewTokenSnapshot                *reviewTokenSnapshot
 	onStartSide                        SideStartFunc
 	onCloseSide                        SideCloseFunc
+	onListSideChats                    SideChatListFunc
+	onReadSideChatPrompts              SideChatPromptFunc
+	onOpenSideChat                     SideOpenFunc
 	onReadReviewBranches               ReviewBranchesReaderFunc
 	onReadReviewCommits                ReviewCommitsReaderFunc
 	activeSide                         *activeSideConversation
@@ -2900,8 +2910,20 @@ type Model struct {
 	sidebarChooserParent  string
 	sidebarChooserFocused bool
 	sidebarChoice         int
+	// sidebarChoices caches the saved side chats from the last discovery, and
+	// sidebarPrompts the latest user prompt per visible chat (Rust #60319).
+	sidebarChoices          []SideChatChoice
+	sidebarPrompts          map[string]string
+	sidebarPromptsRequest   uint64
+	sidebarDiscovery        SideChatDiscoveryKind
+	sidebarDiscoveryRetry   bool
+	sidebarDiscoveryError   string
+	sidebarDiscoveryRequest uint64
 	// sidebarTabHover is the tab index the pointer is over, or -1 (Rust #59928).
 	sidebarTabHover int
+	// sidebarAddHover highlights the trailing "+" while the pointer is on it
+	// (Rust #60319 hover target for the add button).
+	sidebarAddHover bool
 	// sidebarTabStripTop is the painted screen row of the sidebar tab strip, or
 	// -1 when nothing paints one (Rust #59928 sidebar_tab_strip.rs hit). The
 	// strip owns the pane's first row, so the renderer records where that row
@@ -3549,6 +3571,9 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onSafetyBufferingRetry:              options.OnSafetyBufferingRetry,
 		onStartSide:                         options.OnStartSide,
 		onCloseSide:                         options.OnCloseSide,
+		onListSideChats:                     options.OnListSideChats,
+		onReadSideChatPrompts:               options.OnReadSideChatPrompts,
+		onOpenSideChat:                      options.OnOpenSideChat,
 		onReadReviewBranches:                options.OnReadReviewBranches,
 		onReadReviewCommits:                 options.OnReadReviewCommits,
 		statusLineConfiguredByUser:          options.StatusLineItems != nil,
@@ -4569,6 +4594,12 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 	case AgentSwitchResultMsg:
 		m.applyAgentSwitchResult(msg)
 		return m, m.refreshStatusControlsCmd()
+	case SideChatsLoadedMsg:
+		return m, m.applySideChatsLoaded(msg)
+	case SideChatPromptsLoadedMsg:
+		return m, m.applySideChatPrompts(msg)
+	case SideOpenResultMsg:
+		return m, m.applySideOpenResult(msg)
 	case WorkingDirectoryChangeResultMsg:
 		m.applyWorkingDirectoryChangeResult(msg)
 		// The replacement session can change the cwd, project root, and title,
@@ -4810,6 +4841,11 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		}
 		switch msg.Type {
 		case keymsg.KeyCtrlC:
+			if m.sidebarChooserVisible() && m.sidebarChooserFocused {
+				// Rust #60319: Ctrl+C dismisses the chooser and returns focus to
+				// the main composer, preserving its draft.
+				return m, batchSideCommands(m.closeSidebarChooser(), m.focusMainComposer())
+			}
 			if m.modal != nil && (m.modal.customPrompt != nil || m.modal.manageSkills != nil || m.modal.externalAgentMigration != nil || m.modal.hooksBrowser != nil || m.modal.pluginBrowser != nil || m.modal.keymapInspector != nil) {
 				return m, m.updateModal(msg)
 			}
@@ -7791,15 +7827,6 @@ func (m *Model) applyTurnCompleted(message TurnCompletedMsg) bubbletea.Cmd {
 			elapsedSeconds = &value
 		}
 	}
-	if path := strings.TrimSpace(os.Getenv("CODEX_DEBUG_EVENT_LOG")); path != "" && m.State != nil {
-		if file, err := os.OpenFile(path+".state", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600); err == nil {
-			for index, message := range m.State.Messages {
-				encoded, _ := json.Marshal(map[string]any{"index": index, "role": message.Role, "item": message.ItemID, "phase": message.Phase, "text": message.Text})
-				_, _ = file.Write(append(encoded, '\n'))
-			}
-			_ = file.Close()
-		}
-	}
 	m.Transcript.appendCompletionFooter(m.State, m.width, elapsedSeconds, time.Now())
 	// Rust #54114: a live completion is reported as done until acknowledged.
 	m.programStatusAfterTurn = codextui.ProgramStatus{State: codextui.ProgramStatusDone}
@@ -7888,14 +7915,6 @@ func (m *Model) interruptRunningTask() bubbletea.Cmd {
 func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 	var cmd bubbletea.Cmd
 	var questionDrafts []string
-	if path := strings.TrimSpace(os.Getenv("CODEX_DEBUG_EVENT_LOG")); path != "" {
-		if file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600); err == nil {
-			if encoded, err := json.Marshal(event); err == nil {
-				_, _ = file.Write(append(encoded, 10))
-			}
-			_ = file.Close()
-		}
-	}
 	// Rust #42455: delivered events feed the command center's bounded live
 	// previews while the dashboard is open.
 	if m != nil && m.agentsOverview != nil {
@@ -11615,7 +11634,18 @@ func (m *Model) transcriptHeightForLayout() int {
 	// leaves, and the bottom pane is measured by bottomReservedRows. On short
 	// terminals the transcript may collapse to zero rows so the composer and
 	// its hints stay on screen.
-	return max(m.height-m.bottomReservedRows(), 0)
+	rows := max(m.height-m.bottomReservedRows(), 0)
+	// Inline mode has no alternate screen to repaint: every row is padded to
+	// the full width, so a frame that reaches the last row leaves the terminal
+	// cursor wrapped past the margin and the next downward move scrolls the
+	// screen. Bubble Tea's relative cursor model cannot see that scroll, so it
+	// repaints rows one line off and finalized output is printed twice. Keep
+	// the frame one row shorter than the terminal, which is also the room the
+	// inline viewport reserves at startup.
+	if !m.ownedScreen && rows > 0 {
+		rows--
+	}
+	return rows
 }
 
 // bottomReservedRows returns the rows the bottom sections occupy below the

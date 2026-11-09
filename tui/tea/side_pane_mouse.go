@@ -83,6 +83,19 @@ func (m *Model) handleSidePaneMouse(msg mousemsg.MouseMsg) (bool, bubbletea.Cmd)
 	if handled, cmd := m.handleSidebarTabStripMouse(msg); handled {
 		return true, cmd
 	}
+	// The chooser can be open before any side chat exists, so its row hit test
+	// runs ahead of the active-side guard (Rust #60319 choice_at on click).
+	if m != nil && m.sidebarChooserVisible() && m.sidebarChooserFocused &&
+		msg.Action == mousemsg.MouseActionPress && msg.Button == mousemsg.MouseButtonLeft {
+		if left, _, _, ok := m.sidePaneLayout(m.width); ok {
+			dividerWidth := ansi.StringWidth(sideWorkspaceDivider)
+			if msg.X >= left+dividerWidth {
+				if handled, cmd, _ := m.handleSidebarChooserMouseRow(msg.Y); handled {
+					return true, cmd
+				}
+			}
+		}
+	}
 	if m == nil || m.State == nil || m.activeSide == nil || !m.sideWorkspaceEnabled() || m.sideZoomed {
 		return false, nil
 	}

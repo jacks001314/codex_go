@@ -45048,11 +45048,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "Go has sidebar tab strip and chooser infrastructure from #59767 (tui/tea side/sidebar state and key chords).",
-    "Residual: Rust adds saved-chat discovery states, hover highlighting, and changed tab/cancel navigation; these are not ported, and the parent commit #59767 is itself partial.",
-    "plan: update/plan_2026_11_09.md (#60319)"
+    "tui/tea/sidebar_chooser.go ports #60319: Discovery (loading/refresh/failed) with an inline retry row, cached chats kept while a refresh runs, saved-chat choices with newest-prompt previews fetched only for painted rows, selection preserved by thread id across reordered lists, preview rows counted in paging, click hit-testing, a waiting-for-first-main-message state, and tab gaps plus tab/add hover targets.",
+    "app/side_chats.go implements saved side-chat discovery and prompt previews for both hosts: embedded reads session.Store AttachedThreadsOf records plus their first user message, remote pages thread/list attachedToThreadId and thread/items/list sortDirection=asc; embedded and remote also attach a saved chat that is not retained in memory.",
+    "tui/tea/model.go dismisses the chooser with Ctrl+C while keeping the main draft and arms the view-transition key guard after activation (Rust guard_chooser_key).",
+    "Tests: go test ./tui/tea (TestSidebarChooserDiscoveryAndPromptPreviewsLikeRust, TestSidebarChooserDiscoveryFailureRetryLikeRust, TestSidebarChooserPagingAccountsForPreviewRowsLikeRust, TestSidebarChooserWaitsForFirstMainMessageLikeRust, TestSidebarChooserCtrlCPreservesMainDraftLikeRust, TestSidebarChooserKeepsSelectionAcrossRefreshLikeRust, TestSidebarChooserOpensSavedChatLikeRust, TestSidebarChooserClickActivatesPreviewRowLikeRust, TestSidebarChooserActivationGuardSwallowsHeldEnterLikeRust, TestSidebarTabStripHoverHighlightsAddButtonLikeRust); go test ./app; go vet ./tui/tea ./app."
    ]
   },
   {

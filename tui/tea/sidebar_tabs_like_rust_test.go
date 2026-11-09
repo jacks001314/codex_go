@@ -14,6 +14,8 @@ func newSidebarTabsModel(t *testing.T) (*Model, *[]SideStartParams) {
 	t.Helper()
 	state := codextui.NewState(nil)
 	state.SetThreadID("parent-a")
+	// Rust #60319: a side chat can start only after the main chat has a turn.
+	state.AddMessage(codextui.RoleUser, "hello from the main chat")
 	var started []SideStartParams
 	model := NewModel(state, Options{
 		Width:  120,
@@ -115,7 +117,7 @@ func TestSidebarTabsKeepMultipleSideChatsLikeRust(t *testing.T) {
 	if cmd := model.openSidebarChooser(); cmd != nil {
 		runTeaCmd(t, model, cmd)
 	}
-	model.sidebarChoice = 0
+	model.sidebarChoice = 1
 	_, cmd = model.Update(key(keymsg.KeyEnter))
 	runTeaCmd(t, model, cmd)
 	if model.State.ThreadID != "side-1" {
