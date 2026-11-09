@@ -34,6 +34,68 @@ func interactiveRemoteAgentsOverviewRefresh(ctx context.Context, endpoint *appse
 	}
 }
 
+// interactiveRemoteAgentsOverviewSearch asks the app server for task history
+// matching the command center query (Rust #60286). It pages thread/list by
+// searchTerm so tasks outside the recent window remain discoverable.
+func interactiveRemoteAgentsOverviewSearch(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) codextea.AgentsOverviewSearchFunc {
+	return func(query string) ([]agentsoverview.Row, error) {
+		query = strings.TrimSpace(query)
+		if query == "" {
+			return nil, nil
+		}
+		client, err := openRemoteSessionClient(ctx, endpoint)
+		if err != nil {
+			return nil, err
+		}
+		defer client.close()
+		const (
+			pageLimit  = 100
+			maxMatches = 200
+			maxPages   = 10
+		)
+		archived := false
+		var cursor *string
+		threads := make([]*appserver.Thread, 0, pageLimit)
+		receipts := make(map[string]agentsOverviewReadReceipt)
+		for page := 0; page < maxPages && len(threads) < maxMatches; page++ {
+			limit := pageLimit
+			params := appserver.ThreadListParams{
+				Limit:          &limit,
+				Archived:       &archived,
+				ModelProviders: []string{},
+				UseStateDBOnly: true,
+				SearchTerm:     &query,
+			}
+			if cursor != nil {
+				params.Cursor = cursor
+			}
+			response, err := remoteThreadListWithCwdFallback(ctx, client, params)
+			if err != nil {
+				return nil, err
+			}
+			for id, receipt := range agentsOverviewReadReceiptsFromThreadList(response.ReadStates) {
+				receipts[id] = receipt
+			}
+			for index := range response.Data {
+				thread := &response.Data[index]
+				if thread.Ephemeral || (thread.ParentThreadID != nil && strings.TrimSpace(*thread.ParentThreadID) != "") {
+					continue
+				}
+				threads = append(threads, thread)
+				if len(threads) >= maxMatches {
+					break
+				}
+			}
+			if response.NextCursor == nil || strings.TrimSpace(*response.NextCursor) == "" {
+				break
+			}
+			next := strings.TrimSpace(*response.NextCursor)
+			cursor = &next
+		}
+		return agentsOverviewRowsFromThreadsWithReadReceipts(threads, "", receipts), nil
+	}
+}
+
 // interactiveRemoteAgentsOverviewNewSession starts a blank session in the
 // selected checkout without sending a turn, and returns the snapshot the
 // dashboard attaches to (Rust #45255 new_agents_overview_session). The started

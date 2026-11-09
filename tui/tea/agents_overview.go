@@ -2,6 +2,7 @@ package tea
 
 import (
 	"strings"
+	"time"
 
 	bubbletea "charm.land/bubbletea/v2"
 
@@ -18,6 +19,17 @@ import (
 // dashboard actions (Rust #58238/#58239).
 
 type AgentsOverviewRefreshFunc func(currentThreadID string) ([]agentsoverview.Row, error)
+
+// AgentsOverviewSearchFunc searches task history beyond the rows already
+// published by the dashboard (Rust #60286 agents_overview_discovery::HistorySearch).
+type AgentsOverviewSearchFunc func(query string) ([]agentsoverview.Row, error)
+
+type agentsOverviewSearchMsg struct {
+	requestID uint64
+	query     string
+	rows      []agentsoverview.Row
+	err       error
+}
 
 // AgentsOverviewNewWorktreeFunc creates a managed worktree from the selected
 // project's default branch and starts a blank session in it (Rust #45276
@@ -304,6 +316,53 @@ func (m *Model) refreshAgentsOverviewCmd() bubbletea.Cmd {
 			}
 		}
 		return message
+	}
+}
+
+// searchAgentsOverviewCmd asks the host for history matches. Results are merged
+// into the published rows so the existing search filter can render them.
+func (m *Model) searchAgentsOverviewCmd() bubbletea.Cmd {
+	if m == nil || m.agentsOverview == nil || m.onAgentsOverviewSearch == nil || !m.agentsOverview.State.Searching {
+		return nil
+	}
+	query := strings.ToLower(strings.TrimSpace(m.agentsOverview.State.Search))
+	if query == "" {
+		return nil
+	}
+	m.agentsOverviewSearchRequestID++
+	requestID := m.agentsOverviewSearchRequestID
+	return func() bubbletea.Msg {
+		// Rust debounces the first page so typing does not scan history per key.
+		time.Sleep(180 * time.Millisecond)
+		rows, err := m.onAgentsOverviewSearch(query)
+		return agentsOverviewSearchMsg{requestID: requestID, query: query, rows: rows, err: err}
+	}
+}
+
+func (m *Model) applyAgentsOverviewSearch(message agentsOverviewSearchMsg) {
+	if m == nil || m.agentsOverview == nil || message.requestID != m.agentsOverviewSearchRequestID {
+		return
+	}
+	if !m.agentsOverview.State.Searching || strings.ToLower(strings.TrimSpace(m.agentsOverview.State.Search)) != message.query {
+		return
+	}
+	if message.err != nil || len(message.rows) == 0 {
+		return
+	}
+	// Record the discovered threads as known rows before appending the ones the
+	// dashboard is not showing yet.
+	m.mergeAgentsOverviewRows(message.rows)
+	existing := make(map[string]bool, len(m.agentsOverview.Rows))
+	for _, row := range m.agentsOverview.Rows {
+		existing[strings.TrimSpace(row.ThreadID)] = true
+	}
+	for _, row := range message.rows {
+		threadID := strings.TrimSpace(row.ThreadID)
+		if threadID == "" || existing[threadID] || m.agentsOverviewRemoved[threadID] {
+			continue
+		}
+		existing[threadID] = true
+		m.agentsOverview.Rows = append(m.agentsOverview.Rows, row)
 	}
 }
 
@@ -697,17 +756,18 @@ func (m *Model) updateAgentsOverviewRemovalKey(msg keymsg.KeyMsg) bubbletea.Cmd 
 	}
 	if m.keyMatches("agents", "search", keySpec) {
 		m.agentsOverview.ToggleSearch()
-		return nil
+		return m.searchAgentsOverviewCmd()
 	}
 	if m.agentsOverview.State.Searching {
 		if msg.String() == "backspace" {
 			m.agentsOverview.Backspace()
-			return nil
+			return m.searchAgentsOverviewCmd()
 		}
 		if msg.Type == keymsg.KeyRunes && !msg.Alt {
 			for _, r := range msg.Runes {
 				m.agentsOverview.TypeChar(r)
 			}
+			return m.searchAgentsOverviewCmd()
 		}
 	}
 	return nil

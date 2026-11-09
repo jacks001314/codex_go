@@ -1328,6 +1328,9 @@ type Options struct {
 	OnReconnectThreadApprovals ThreadApprovalReconnectFunc
 	AgentsOverviewEmbedded     bool
 	OnAgentsOverviewRefresh    AgentsOverviewRefreshFunc
+	// OnAgentsOverviewSearch searches task history beyond the published rows
+	// (Rust #60286). Nil keeps search local to the loaded rows.
+	OnAgentsOverviewSearch AgentsOverviewSearchFunc
 	// OnAcknowledgeThreadRead marks a focused conversation's observed receipt
 	// read. Nil disables automatic read acknowledgement (Rust #58263).
 	OnAcknowledgeThreadRead ThreadReadAcknowledgeFunc
@@ -2597,6 +2600,8 @@ type Model struct {
 	pendingFeatureEnableLabel     string
 	agentsOverviewEmbedded        bool
 	onAgentsOverviewRefresh       AgentsOverviewRefreshFunc
+	onAgentsOverviewSearch        AgentsOverviewSearchFunc
+	agentsOverviewSearchRequestID uint64
 	onAcknowledgeThreadRead       ThreadReadAcknowledgeFunc
 	onAgentsOverviewUsage         AgentsOverviewUsageReaderFunc
 	onAgentsOverviewNewSession    AgentsOverviewNewSessionFunc
@@ -3379,6 +3384,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		sizeMonitorEnabled:               terminalSizeMonitorNeeded(runtime.GOOS, os.Getenv),
 		agentsOverviewEmbedded:           options.AgentsOverviewEmbedded,
 		onAgentsOverviewRefresh:          options.OnAgentsOverviewRefresh,
+		onAgentsOverviewSearch:           options.OnAgentsOverviewSearch,
 		onAcknowledgeThreadRead:          options.OnAcknowledgeThreadRead,
 		onAgentsOverviewUsage:            options.OnAgentsOverviewUsage,
 		agentsOverviewUsage:              map[string]*agentsOverviewUsageEntry{},
@@ -4511,6 +4517,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		return m, nil
 	case agentsOverviewListMsg:
 		return m, m.applyAgentsOverviewList(msg)
+	case agentsOverviewSearchMsg:
+		m.applyAgentsOverviewSearch(msg)
+		return m, nil
 	case agentsOverviewUsageLoadedMsg:
 		return m, m.applyAgentsOverviewUsageLoaded(msg)
 	case agentsOverviewUsageRefreshMsg:
@@ -7724,6 +7733,15 @@ func (m *Model) applyTurnCompleted(message TurnCompletedMsg) bubbletea.Cmd {
 		if elapsed > 0 {
 			value := int64(elapsed.Seconds())
 			elapsedSeconds = &value
+		}
+	}
+	if path := strings.TrimSpace(os.Getenv("CODEX_DEBUG_EVENT_LOG")); path != "" && m.State != nil {
+		if file, err := os.OpenFile(path+".state", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600); err == nil {
+			for index, message := range m.State.Messages {
+				encoded, _ := json.Marshal(map[string]any{"index": index, "role": message.Role, "item": message.ItemID, "phase": message.Phase, "text": message.Text})
+				_, _ = file.Write(append(encoded, '\n'))
+			}
+			_ = file.Close()
 		}
 	}
 	m.Transcript.appendCompletionFooter(m.State, m.width, elapsedSeconds, time.Now())

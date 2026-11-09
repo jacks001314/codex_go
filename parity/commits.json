@@ -45019,10 +45019,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "Go command center already filters published rows by name/preview/cwd (tui/agents_overview Search/Searching state plus view filters).",
-    "Residual: Rust now scans backend history with a per-query paging cursor at 100 rows per page and merges hits into search_matches; Go has no search callback, so tasks outside the loaded page are invisible to search.",
+    "tui/tea/agents_overview.go adds AgentsOverviewSearchFunc; typing in command-center search issues a debounced history query and applies returned rows through mergeAgentsOverviewRows without resetting the dashboard.",
+    "app/agents_overview_tui.go pages thread/list with searchTerm (100 per page, up to 200 matches) and maps read receipts; app/agents_overview_embedded.go filters local history by name/preview/cwd. Both hosts wire OnAgentsOverviewSearch.",
+    "Tests: TestAgentsOverviewSearchPublishesHistoryMatchesLikeRust.",
     "plan: update/plan_2026_11_09.md (#60286)"
    ]
   },

@@ -232,6 +232,30 @@ func embeddedAgentsOverviewRefresh(store *session.Store, closeSideConversations 
 	}
 }
 
+// embeddedAgentsOverviewSearch filters the local session history by the same
+// fields the command center renders (Rust #60286 matches_query).
+func embeddedAgentsOverviewSearch(store *session.Store) codextea.AgentsOverviewSearchFunc {
+	source := newEmbeddedAgentsDashboardSource(store, nil)
+	return func(query string) ([]agentsoverview.Row, error) {
+		query = strings.ToLower(strings.TrimSpace(query))
+		if query == "" {
+			return nil, nil
+		}
+		rows, err := source.List(context.Background())
+		if err != nil {
+			return nil, err
+		}
+		matches := make([]agentsoverview.Row, 0, len(rows))
+		for _, row := range rows {
+			haystack := strings.ToLower(strings.Join([]string{row.Name, row.Preview, row.CWD}, " "))
+			if strings.Contains(haystack, query) {
+				matches = append(matches, row)
+			}
+		}
+		return matches, nil
+	}
+}
+
 func embeddedAgentsOverviewNewSession(store *session.Store) codextea.AgentsOverviewNewSessionFunc {
 	source := newEmbeddedAgentsDashboardSource(store, nil)
 	return func(cwd string) (codextea.AgentThreadSwitchResponse, error) {

@@ -636,6 +636,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		},
 		AgentsOverviewEmbedded:  false,
 		OnAgentsOverviewRefresh: interactiveRemoteAgentsOverviewRefresh(ctx, endpoint),
+		OnAgentsOverviewSearch:  interactiveRemoteAgentsOverviewSearch(ctx, endpoint),
 		OnAcknowledgeThreadRead: interactiveRemoteAgentsOverviewAcknowledgeThreadRead(ctx, endpoint),
 		// Rust #51500: the shared pinned section backs the dashboard's pin
 		// group and its `p` shortcut.
