@@ -1241,6 +1241,15 @@ func (r *RuntimeRouter) continueThreadGoalIfIdle(threadID string) {
 			},
 		},
 	}
+	// Rust #60342: the objective travels as untrusted context; the continuation
+	// prompt only points at it so a model-written goal cannot gain instruction
+	// priority over the user.
+	if promptGoal != nil && strings.TrimSpace(promptGoal.Objective) != "" {
+		params.AdditionalContext["goal_objective"] = turn.AdditionalContextEntry{
+			Kind:  turn.AdditionalContextUntrusted,
+			Value: promptGoal.Objective,
+		}
+	}
 	if lineage, ok := r.goalTurnLineageFor(threadID); ok {
 		params.RootTurnID = lineage.RootTurnID
 		params.ParentTurnID = lineage.ParentTurnID

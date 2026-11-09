@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"codex_go/gitutil"
 	"codex_go/mcp"
@@ -3413,6 +3414,8 @@ type ThreadItemsListParams struct {
 type ThreadItemOutputDeferral struct {
 	// CommandExecution defers nonempty output from successful commands.
 	CommandExecution bool `json:"commandExecution,omitempty"`
+	// McpToolCall defers nonempty plain-text results from successful MCP calls.
+	McpToolCall bool `json:"mcpToolCall,omitempty"`
 }
 
 // ThreadItemsListCursor mirrors Rust's untagged ThreadItemsListCursor (#48151):
@@ -4435,31 +4438,133 @@ func (entry ThreadItemEntry) ResolveThreadItem() (ThreadItem, error) {
 	return item, nil
 }
 
-// applyThreadItemOutputDeferral removes eligible command output from one page.
+// applyThreadItemOutputDeferral removes eligible saved output from one page.
 // It mutates only the entry's copied data map, leaving stored history intact.
+// Command and MCP output are deferred independently (Rust #60390).
 func applyThreadItemOutputDeferral(entries []ThreadItemEntry, params *ThreadItemsListParams) []ThreadItemEntry {
-	if params == nil || params.TurnID == nil || params.DeferOutput == nil || !params.DeferOutput.CommandExecution {
+	if params == nil || params.TurnID == nil || params.DeferOutput == nil {
+		return entries
+	}
+	options := params.DeferOutput
+	if !options.CommandExecution && !options.McpToolCall {
 		return entries
 	}
 	for index := range entries {
 		entry := &entries[index]
-		item := &entry.Item
-		if entry.CompletedAtMS == nil || item.Type != "commandExecution" || threadItemCommandStatus(item) != CommandExecutionCompleted {
+		if entry.CompletedAtMS == nil {
 			continue
 		}
-		exitCode := threadItemInt64PtrFromData(item.Data, "exit_code", "exitCode")
-		output := threadItemAggregatedOutput(item)
-		if exitCode == nil || *exitCode != 0 || output == nil || *output == "" {
+		if options.CommandExecution && deferThreadItemCommandOutput(&entry.Item) {
+			entry.OutputDeferred = true
 			continue
 		}
-		if item.Data != nil {
-			for _, key := range []string{"aggregatedOutput", "aggregated_output", "hook_response", "output", "formattedOutput", "formatted_output"} {
-				delete(item.Data, key)
-			}
+		if options.McpToolCall && deferThreadItemMCPOutput(&entry.Item) {
+			entry.OutputDeferred = true
 		}
-		entry.OutputDeferred = true
 	}
 	return entries
+}
+
+func deferThreadItemCommandOutput(item *ThreadItem) bool {
+	if item == nil || item.Type != "commandExecution" || threadItemCommandStatus(item) != CommandExecutionCompleted {
+		return false
+	}
+	exitCode := threadItemInt64PtrFromData(item.Data, "exit_code", "exitCode")
+	output := threadItemAggregatedOutput(item)
+	if exitCode == nil || *exitCode != 0 || output == nil || *output == "" {
+		return false
+	}
+	if item.Data != nil {
+		for _, key := range []string{"aggregatedOutput", "aggregated_output", "hook_response", "output", "formattedOutput", "formatted_output"} {
+			delete(item.Data, key)
+		}
+	}
+	return true
+}
+
+// deferThreadItemMCPOutput clears plain-text content from a completed MCP call.
+// Rich results, app-backed results, errors and widget results stay inline so the
+// listing never hides data the client needs to render (Rust #60390).
+func deferThreadItemMCPOutput(item *ThreadItem) bool {
+	result, ok := deferrableMCPOutputResult(item)
+	if !ok {
+		return false
+	}
+	result["content"] = []any{}
+	if item.Data == nil {
+		item.Data = map[string]any{}
+	}
+	item.Data["result"] = result
+	for _, key := range []string{"content", "structuredContent", "structured_content", "_meta", "meta"} {
+		delete(item.Data, key)
+	}
+	return true
+}
+
+func deferrableMCPOutputResult(item *ThreadItem) (map[string]any, bool) {
+	if item == nil || item.Type != "mcpToolCall" || threadItemMCPStatus(item) != "completed" {
+		return nil, false
+	}
+	if item.Data["error"] != nil || threadItemMCPServer(item) == "codex_app" {
+		return nil, false
+	}
+	if context := threadItemMCPAppContext(item); context != nil {
+		values, isMap := context.(map[string]any)
+		if !isMap {
+			return nil, false
+		}
+		if uri := values["resourceUri"]; uri != nil {
+			if text, ok := uri.(string); !ok || text != "" {
+				return nil, false
+			}
+		}
+	}
+	if threadItemAnyFromData(item.Data, "mcpAppResourceUri", "mcp_app_resource_uri") != nil ||
+		threadItemAnyFromData(item.Data, "mcpAppUi", "mcp_app_ui") != nil {
+		return nil, false
+	}
+	result, ok := threadItemMCPResult(item).(map[string]any)
+	if !ok || result["structuredContent"] != nil || result["_meta"] != nil {
+		return nil, false
+	}
+	content, _ := result["content"].([]any)
+	hasText := false
+	for _, block := range content {
+		text, ok := plainMCPOutputText(block)
+		if !ok {
+			return nil, false
+		}
+		hasText = hasText || text != ""
+	}
+	if !hasText {
+		return nil, false
+	}
+	return result, true
+}
+
+// plainMCPOutputText mirrors Rust's plain_output_text: only an unannotated
+// text block that does not carry embedded JSON or fenced markup is plain.
+func plainMCPOutputText(block any) (string, bool) {
+	values, ok := block.(map[string]any)
+	if !ok || len(values) != 2 {
+		return "", false
+	}
+	if kind, _ := values["type"].(string); kind != "text" {
+		return "", false
+	}
+	text, ok := values["text"].(string)
+	if !ok {
+		return "", false
+	}
+	trimmed := strings.TrimLeftFunc(text, func(r rune) bool {
+		return unicode.IsSpace(r) || r == '\ufeff'
+	})
+	for _, prefix := range []string{"{", "[", "```", "~~~"} {
+		if strings.HasPrefix(trimmed, prefix) {
+			return "", false
+		}
+	}
+	return text, true
 }
 
 func itemEntryCursor(items []ThreadItemEntry) *string {

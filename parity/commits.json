@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
  "rustFromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
- "rustToInclusive": "748ab55ca7de0b647d9a7a9d9a8e70e00f28666d",
+ "rustToInclusive": "e54a5713caf331f42a6eef0166186df5f7563c29",
  "commits": [
   {
    "sha": "27c05a52e0cdf93ef7db5a96ccaf88d6b9095472",
@@ -44968,6 +44968,185 @@
    "evidence": [
     "Rust CI 的 Bazel core 单测分片数 8→16；Go 无 Bazel 分片概念",
     "plan: update/plan_2026_11_08_ci_1.md（#60206）"
+   ]
+  },
+  {
+   "sha": "a73fa8a869b3de00cf64f3ab62e40505a5da0314",
+   "subject": "Warn when a CLI model is absent from the ChatGPT model list (#60270)",
+   "kind": "tui",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "tui/tea/model_picker.go: applyModelCatalogResult calls warnIfChatGPTModelMissingFromCatalog; an OpenAI provider + ChatGPT account + selected model absent from the catalog writes one visible warning and never repeats it.",
+    "Test: TestCatalogWarnsWhenChatGPTModelIsMissingLikeRust.",
+    "plan: update/plan_2026_11_09.md (#60270)"
+   ]
+  },
+  {
+   "sha": "9ba7a3df527e7bfdf0b7df6ef281212bcd2d5125",
+   "subject": "Keep the agents overview open when there is no chat to return to (#60271)",
+   "kind": "tui",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "tui/tea/agents_overview.go sets ExitOnCancel from agentsOverviewCanReturnToChat (current thread id or pending startup thread); tui/agents_overview/overview.go Cancel returns ActionExit only in that case and the model only closes on ActionExit.",
+    "Test: TestAgentsOverviewCancelNeedsChatToReturnToLikeRust (initial dashboard stays open, attached dashboard closes).",
+    "plan: update/plan_2026_11_09.md (#60271)"
+   ]
+  },
+  {
+   "sha": "ee51bb132e",
+   "subject": "Fix MCP startup tracking when attaching to shared app servers (#60280)",
+   "kind": "tui",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "partial",
+   "evidence": [
+    "Go already tracks MCP startup rounds with expected servers (tui/tea/model.go mcpStartup, MCPStartupUpdateMsg, mcpStartupFinishLag) and refreshes expected servers on lagged events (tui/app/app_server_events.go RefreshMCPStartupExpectedServers).",
+    "Residual: the shared-app-server attach path does not yet refresh the expected-server set and reconcile an already-running startup round the way Rust chatwidget/mcp_startup.rs does; no attach-scenario startup test exists.",
+    "plan: update/plan_2026_11_09.md (#60280)"
+   ]
+  },
+  {
+   "sha": "4e4767ffa763ec0d0a19e04cf8ff0163a987297b",
+   "subject": "Search task history from the command center (#60286)",
+   "kind": "tui",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "partial",
+   "evidence": [
+    "Go command center already filters published rows by name/preview/cwd (tui/agents_overview Search/Searching state plus view filters).",
+    "Residual: Rust now scans backend history with a per-query paging cursor at 100 rows per page and merges hits into search_matches; Go has no search callback, so tasks outside the loaded page are invisible to search.",
+    "plan: update/plan_2026_11_09.md (#60286)"
+   ]
+  },
+  {
+   "sha": "25f4940d4affcf8c60f96ffec5e3752e1f590b8a",
+   "subject": "Defer executor readiness when prewarming a selected project (#60309)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "partial",
+   "evidence": [
+    "cloudclient/prewarm.go only implements PrewarmDefaultThread with a managed environment selection; there is no ProjectEnvironment argument or project prewarm path, so deferred_environment cannot be selected.",
+    "Residual depends on #60007 (local GitHub project binding), still partial; once project prewarm exists the wire field is tag 29 deferred_environment=true.",
+    "plan: update/plan_2026_11_09.md (#60309)"
+   ]
+  },
+  {
+   "sha": "8fcba7fae9",
+   "subject": "Improve side-chat discovery and navigation in the TUI (#60319)",
+   "kind": "tui",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "partial",
+   "evidence": [
+    "Go has sidebar tab strip and chooser infrastructure from #59767 (tui/tea side/sidebar state and key chords).",
+    "Residual: Rust adds saved-chat discovery states, hover highlighting, and changed tab/cancel navigation; these are not ported, and the parent commit #59767 is itself partial.",
+    "plan: update/plan_2026_11_09.md (#60319)"
+   ]
+  },
+  {
+   "sha": "b9796386e5f8fc10087bc4476e30896f97e16e5d",
+   "subject": "Include older itemless Cloud failures in full transcripts (#60320)",
+   "kind": "tui",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "app/remote_tui.go remoteTUIThreadMessagesFromThread appends turn.Error as a system message for every turn, including turns with zero items; interactiveRemoteOlderHistoryLoader pages raw turn summaries without row-based pruning.",
+    "plan: update/plan_2026_11_09.md (#60320)"
+   ]
+  },
+  {
+   "sha": "ffdf2daddb2051ffff1cbb38ce4b07660467c693",
+   "subject": "Suppress stale cloud stream disconnects after reopening a thread (#60327)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "cloudbackend/client.go tracks streamLossState per thread, records a loss before queueing the disconnect, supersedes pending losses on a successful replacement, and the notification pump drops only superseded losses.",
+    "Tests: TestReplacementSupersedesQueuedStreamLossLikeRust and TestTurnAdmissionFailsAfterStreamEndsLikeRust.",
+    "plan: update/plan_2026_11_09.md (#60327)"
+   ]
+  },
+  {
+   "sha": "6107b9886c114702e5c1cfd1c1b54f7c48bfaf49",
+   "subject": "Avoid duplicate assistant messages when resuming Cloud threads (#60335)",
+   "kind": "tui",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "app/remote_tui.go keeps the upstream item id on replayed assistant messages; tui/tea/transcript.go replaceAssistantMessageForItem replaces the replayed message and discards later same-id fragments.",
+    "Tests: TestReplayedAssistantMessageKeepsItemIdentityLikeRust and TestReplayedAssistantMessageReplacedByLiveCompletionLikeRust.",
+    "plan: update/plan_2026_11_09.md (#60335)"
+   ]
+  },
+  {
+   "sha": "8703d32bd0ea5cf26768859a3dd476df906ba053",
+   "subject": "Treat goal objectives as untrusted context (#60342)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "prompt/goal.go continuation template no longer embeds the objective and points at goal_objective context; appserver/thread_goal_state.go, app/remote_tui.go, and app/interactive.go deliver the objective as untrusted additional context. The creating turn still receives it through create_goal tool output.",
+    "Tests: prompt continuation/budget tests and parity TestGoalPromptTemplates.",
+    "plan: update/plan_2026_11_09.md (#60342)"
+   ]
+  },
+  {
+   "sha": "e787af96240815c01ac6d89a04a0f66791dfef49",
+   "subject": "Include Codex Apps configuration in cloud prewarm requests (#60389)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "cloudclient/prewarm.go appends PrewarmRequest field 28 PluginsMcp{productSku:codex}; TestPrewarmRequestUsesManagedEnvironmentAndOptionalModelLikeRust parses field 28 and asserts the SKU.",
+    "plan: update/plan_2026_11_09.md (#60389)"
+   ]
+  },
+  {
+   "sha": "d2b4d63e95aaca86730e10d6ed049d2aaba159dd",
+   "subject": "Allow deferring plain-text MCP output in thread item listings (#60390)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "appserver/protocol.go adds ThreadItemOutputDeferral.McpToolCall and deferrableMCPOutputResult (completed, no error, non-codex_app, no widget/app resource, no structured/meta, all plain text); appserver/runtime_router.go gates the experimental field; rollout/persist_policy.go keeps a readable Truncated tool output preview for successful plain results.",
+    "Tests: TestThreadItemsListDefersPlainMCPOutputLikeRust, output-deferral experimental-field cases, TestTruncateMCPPlainResultKeepsReadablePreviewLikeRust.",
+    "plan: update/plan_2026_11_09.md (#60390)"
+   ]
+  },
+  {
+   "sha": "e54a5713caf331f42a6eef0166186df5f7563c29",
+   "subject": "Simplify Guardian's post-denial approval guidance (#60391)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "state/templates/guardian/policy_template.md matches Rust prompts/templates/guardian/policy_template.md after #60391.",
+    "plan: update/plan_2026_11_09.md (#60391)"
    ]
   }
  ]

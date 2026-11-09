@@ -48,7 +48,7 @@ func TestContinuationWithUpdatePlanLikeRust(t *testing.T) {
 	if strings.Contains(without, "If update_plan is available") {
 		t.Fatal("disabled continuation kept the planning guidance")
 	}
-	if !strings.Contains(without, "finish the sync") {
-		t.Fatal("disabled continuation lost the objective")
+	if !strings.Contains(without, "Use the current goal_objective context") {
+		t.Fatal("disabled continuation lost the goal_objective reference")
 	}
 }

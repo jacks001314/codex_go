@@ -8,6 +8,7 @@ import (
 	"codex_go/config"
 	codextui "codex_go/tui"
 	bottompane "codex_go/tui/bottom_pane"
+	"codex_go/tui/history_cell"
 )
 
 func (m *Model) openModelPicker() bubbletea.Cmd {
@@ -429,4 +430,27 @@ func (m *Model) applyModelCatalogResult(msg ModelCatalogResultMsg) {
 	// the picker catalog (the Reserve model is picker-hidden but still resolves
 	// through this list).
 	m.modelCatalogOpts = codextui.ConstrainServerServiceTierOptions(append([]codextui.ModelPickerOption(nil), msg.Options...), m.serviceTierRequirements)
+	m.warnIfChatGPTModelMissingFromCatalog()
+}
+
+// warnIfChatGPTModelMissingFromCatalog mirrors Rust #60270: an explicitly
+// selected CLI model that the ChatGPT catalog does not list is probably a typo,
+// so the transcript explains it instead of silently falling back.
+func (m *Model) warnIfChatGPTModelMissingFromCatalog() {
+	if m == nil || m.State == nil || m.warnedMissingChatGPTModel || len(m.modelCatalogOpts) == 0 {
+		return
+	}
+	model := strings.TrimSpace(m.State.Model)
+	if model == "" || !m.hasChatGPTAccount || !strings.EqualFold(strings.TrimSpace(m.State.Provider), "openai") {
+		return
+	}
+	for _, option := range m.modelCatalogOpts {
+		if strings.TrimSpace(option.ID) == model {
+			return
+		}
+	}
+	m.warnedMissingChatGPTModel = true
+	m.applyHistoryCell(historycell.NewWarningEvent(
+		"Your ChatGPT model list doesn't include `" + model + "`. Check the spelling or use /model to choose another model.",
+	))
 }

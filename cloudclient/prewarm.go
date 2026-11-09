@@ -55,6 +55,10 @@ func encodePrewarmRequest(model string, modelProvider string) []byte {
 	if modelProvider != "" {
 		out = pwAppendString(out, 16, modelProvider)
 	}
+	// Rust #60389: every prewarm asks the hosted service for the Codex Apps
+	// integration so a prepared thread can expose its app tools immediately.
+	plugins := pwAppendString(nil, 1, "codex")
+	out = pwAppendBytes(out, 28, plugins)
 	return out
 }
 

@@ -3,6 +3,8 @@ package rollout
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
+	"unicode"
 
 	"codex_go/utils"
 )
@@ -73,11 +75,17 @@ func truncateMCPResultValue(result any, maxBytes int) (any, bool) {
 		return result, false
 	}
 	isError, hasIsError := mcpResultIsError(mapFromAny(result))
+	previewSource := string(serialized)
+	// Keep plain output recognizable after truncation; rich results retain
+	// their serialized preview so history can distinguish them (#60390).
+	if plain, ok := plainMCPTruncationPreview(result); ok {
+		previewSource = plain
+	}
 	previewBudget := maxBytes
 	for {
 		preview := ""
 		if previewBudget > 0 {
-			preview = utils.TruncateText(string(serialized), utils.BytesPolicy(previewBudget))
+			preview = utils.TruncateText(previewSource, utils.BytesPolicy(previewBudget))
 		}
 		truncated := map[string]any{
 			"content": []any{map[string]any{"type": "text", "text": preview}},
@@ -98,6 +106,57 @@ func truncateMCPResultValue(result any, maxBytes int) (any, bool) {
 		}
 		previewBudget = scaled
 	}
+}
+
+func plainMCPTruncationPreview(result any) (string, bool) {
+	values := mapFromAny(result)
+	if values == nil {
+		return "", false
+	}
+	if isError, ok := mcpResultIsError(values); ok && isError {
+		return "", false
+	}
+	for _, key := range []string{"structuredContent", "structured_content", "_meta", "meta"} {
+		if values[key] != nil {
+			return "", false
+		}
+	}
+	content, _ := values["content"].([]any)
+	blocks := make([]string, 0, len(content))
+	hasText := false
+	for _, raw := range content {
+		block := mapFromAny(raw)
+		if len(block) != 2 {
+			return "", false
+		}
+		if kind, _ := block["type"].(string); kind != "text" {
+			return "", false
+		}
+		text, ok := block["text"].(string)
+		if !ok {
+			return "", false
+		}
+		trimmed := strings.TrimLeftFunc(text, func(r rune) bool {
+			return unicode.IsSpace(r) || r == '\ufeff'
+		})
+		for _, prefix := range []string{"{", "[", "```", "~~~"} {
+			if strings.HasPrefix(trimmed, prefix) {
+				return "", false
+			}
+		}
+		blocks = append(blocks, text)
+		hasText = hasText || text != ""
+	}
+	if !hasText {
+		return "", false
+	}
+	var preview strings.Builder
+	preview.WriteString("Truncated tool output:")
+	for _, text := range blocks {
+		preview.WriteString("\n")
+		preview.WriteString(text)
+	}
+	return preview.String(), true
 }
 
 func mcpResultIsError(result map[string]any) (bool, bool) {

@@ -503,11 +503,11 @@ type View struct {
 	// History pagination (Rust #49106): paged enables the seeded window and the
 	// "Show more" row, historyLimit is how many task rows are published, and
 	// hasMore reports that older tasks remain retained or undiscovered.
-	paged            bool
-	historyLimit     int
-	hasMore          bool
-	showMoreLoading  bool
-	showMoreFailed   bool
+	paged           bool
+	historyLimit    int
+	hasMore         bool
+	showMoreLoading bool
+	showMoreFailed  bool
 }
 
 // KeyChordHint is one pending multi-stroke binding shown in the dashboard
@@ -1501,7 +1501,6 @@ func (v *View) Cancel() Action {
 		v.Completion = CompletionCancelled
 		return ActionExit
 	}
-	v.Completion = CompletionCancelled
 	return ActionNone
 }
 

@@ -136,6 +136,9 @@ func (m *Model) applyAgentsCommand() bubbletea.Cmd {
 	}
 	m.agentsOverviewPendingDraft = nil
 	m.agentsOverview = agentsoverview.New(nil, "", false)
+	// Rust #60271: Escape returns to the chat only when one exists; an initial
+	// agents overview without a thread keeps the dashboard open.
+	m.agentsOverview.ExitOnCancel = m.agentsOverviewCanReturnToChat()
 	// Rust #49106: the command center publishes a recent window and offers a
 	// "Show more" row for older history.
 	m.agentsOverview.SetHistoryPaging(true)
@@ -169,6 +172,15 @@ func (m *Model) agentsOverviewWorktreesEnabled() bool {
 		return false
 	}
 	return m.localSession
+}
+
+// agentsOverviewCanReturnToChat reports whether the dashboard has a chat to
+// reveal when the user cancels (Rust #60271 AgentsOverviewView::can_return_to_chat).
+func (m *Model) agentsOverviewCanReturnToChat() bool {
+	if m == nil || m.State == nil {
+		return false
+	}
+	return strings.TrimSpace(m.State.ThreadID) != "" || m.State.StartupThreadPending
 }
 
 // applyAgentsOverviewKeymapHints resolves the agents-dashboard shortcuts from
@@ -519,8 +531,7 @@ func (m *Model) updateAgentsOverviewKey(msg keymsg.KeyMsg) bubbletea.Cmd {
 			return m.showMoreAgentsOverviewCmd()
 		}
 	case "esc":
-		m.agentsOverview.Cancel()
-		if m.agentsOverview.Completion != agentsoverview.CompletionNone {
+		if action := m.agentsOverview.Cancel(); action == agentsoverview.ActionExit {
 			m.closeAgentsOverview()
 			m.notice = ""
 			return nil

@@ -138,10 +138,82 @@ func TestThreadItemsListOutputDeferralRequiresTurnAndExperimentalFieldLikeRust(t
 		`{"threadId":"thread","turnId":"turn","deferOutput":{"commandExecution":true,"unknownItemKind":true}}`:  "thread/items/list.deferOutput.commandExecution",
 		`{"threadId":"thread","turnId":"turn","deferOutput":{"commandExecution":false,"unknownItemKind":true}}`: "",
 		`{"threadId":"thread","turnId":"turn","deferOutput":{"unknownItemKind":true}}`:                          "",
+		`{"threadId":"thread","turnId":"turn","deferOutput":{"mcpToolCall":true}}`:                              "thread/items/list.deferOutput.mcpToolCall",
+		`{"threadId":"thread","turnId":"turn","deferOutput":{"mcpToolCall":false}}`:                             "",
 	} {
 		request := &Request{Method: MethodThreadItemsList, Params: json.RawMessage(raw)}
 		if got := experimentalAPIFieldReasonForRequest(request); got != want {
 			t.Fatalf("experimental reason for %s = %q, want %q", raw, got, want)
 		}
+	}
+}
+
+func outputDeferralMCPItem(id string, status string, data map[string]any) session.Item {
+	itemData := map[string]any{
+		"turn_id":         "turn",
+		"completed_at_ms": int64(100),
+		"status":          status,
+		"server":          "docs",
+		"tool":            "lookup",
+	}
+	for key, value := range data {
+		itemData[key] = value
+	}
+	return session.Item{ID: id, Type: "mcpToolCall", Status: status, Data: itemData}
+}
+
+func outputDeferralMCPTextResult(text string) map[string]any {
+	return map[string]any{"content": []any{map[string]any{"type": "text", "text": text}}}
+}
+
+func TestThreadItemsListDefersPlainMCPOutputLikeRust(t *testing.T) {
+	plain := outputDeferralMCPTextResult("plain output")
+	rich := outputDeferralMCPTextResult("rich output")
+	rich["structuredContent"] = map[string]any{"value": 1}
+	withMeta := outputDeferralMCPTextResult("meta output")
+	withMeta["_meta"] = map[string]any{"source": "test"}
+	record := &session.Record{ID: "thread", Items: []session.Item{
+		outputDeferralMCPItem("plain", "completed", map[string]any{"result": plain}),
+		outputDeferralMCPItem("json", "completed", map[string]any{"result": outputDeferralMCPTextResult("{\"value\":1}")}),
+		outputDeferralMCPItem("fenced", "completed", map[string]any{"result": outputDeferralMCPTextResult("```json\n{}\n```")}),
+		outputDeferralMCPItem("empty", "completed", map[string]any{"result": outputDeferralMCPTextResult("")}),
+		outputDeferralMCPItem("rich", "completed", map[string]any{"result": rich}),
+		outputDeferralMCPItem("meta", "completed", map[string]any{"result": withMeta}),
+		outputDeferralMCPItem("nontext", "completed", map[string]any{"result": map[string]any{"content": []any{map[string]any{"type": "image", "data": "x"}}}}),
+		outputDeferralMCPItem("failed", "failed", map[string]any{"result": outputDeferralMCPTextResult("failed output")}),
+		outputDeferralMCPItem("error", "completed", map[string]any{"result": outputDeferralMCPTextResult("error output"), "error": "boom"}),
+		outputDeferralMCPItem("codexapp", "completed", map[string]any{"result": outputDeferralMCPTextResult("app output"), "server": "codex_app"}),
+		outputDeferralMCPItem("appresource", "completed", map[string]any{
+			"result":     outputDeferralMCPTextResult("resource output"),
+			"appContext": map[string]any{"resourceUri": "ui://widget/x"},
+		}),
+		outputDeferralMCPItem("widget", "completed", map[string]any{"result": outputDeferralMCPTextResult("widget output"), "mcpAppUi": map[string]any{"templateId": "t"}}),
+	}}
+	turnID := "turn"
+	deferred, err := BuildItemsResponse(record, &ThreadItemsListParams{
+		ThreadID: "thread", TurnID: &turnID, DeferOutput: &ThreadItemOutputDeferral{McpToolCall: true},
+	})
+	if err != nil {
+		t.Fatalf("deferred BuildItemsResponse() error = %v", err)
+	}
+	if !deferred.Data[0].OutputDeferred {
+		t.Fatal("plain MCP output was not deferred")
+	}
+	result, ok := deferred.Data[0].Item.Data["result"].(map[string]any)
+	if !ok || len(result["content"].([]any)) != 0 {
+		t.Fatalf("deferred result = %#v", deferred.Data[0].Item.Data["result"])
+	}
+	for index := 1; index < len(deferred.Data); index++ {
+		if deferred.Data[index].OutputDeferred {
+			t.Fatalf("ineligible MCP entry %d was deferred", index)
+		}
+	}
+	stored, _ := record.Items[0].Data["result"].(map[string]any)
+	if content, _ := stored["content"].([]any); len(content) != 1 {
+		t.Fatalf("stored history result mutated: %#v", stored)
+	}
+	read, err := BuildItemsReadResponse(record, &ThreadItemsReadParams{ThreadID: "thread", TurnID: "turn", ItemIDs: []string{"plain"}})
+	if err != nil || len(read.Data) != 1 || len(read.Data[0].Item.Data["result"].(map[string]any)["content"].([]any)) != 1 {
+		t.Fatalf("thread/items/read after deferral = %#v (err=%v)", read, err)
 	}
 }

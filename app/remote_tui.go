@@ -3079,6 +3079,9 @@ func remoteTUIMessageFromThreadItem(item appserver.ThreadItem, projection reason
 			Text:           text,
 			RawText:        text,
 			AsyncQuestions: tuiMessageAsyncQuestions(item.Data["questions"]),
+			// Rust #60335: keep the restored item identity so the live
+			// completion replaces this message instead of appending a copy.
+			ItemID: strings.TrimSpace(item.ID),
 		}, text != ""
 	case itemType == "plan":
 		text := strings.TrimSpace(item.Text)
@@ -3527,6 +3530,10 @@ func interactiveRemoteGoalContinuationCommand(ctx context.Context, root *cli.Roo
 				"goal": map[string]any{
 					"kind":  string(turn.AdditionalContextApplication),
 					"value": continuation,
+				},
+				"goal_objective": map[string]any{
+					"kind":  string(turn.AdditionalContextUntrusted),
+					"value": strings.TrimSpace(goal.Objective),
 				},
 			},
 		}

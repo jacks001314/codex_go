@@ -57,6 +57,17 @@ func TestLoadedUserReplyPreservesStructuredRepliesLikeRust(t *testing.T) {
 	}
 }
 
+// Rust #60335: restored Cloud assistant text must keep its item id so the live
+// completion replaces the replayed message instead of adding a second copy.
+func TestReplayedAssistantMessageKeepsItemIdentityLikeRust(t *testing.T) {
+	message, ok := remoteTUIMessageFromThreadItem(appserver.ThreadItem{
+		ID: "cloud-item-1", Type: "agentMessage", Text: "already answered",
+	}, reasoningProjectionChatWidget, false)
+	if !ok || message.ItemID != "cloud-item-1" {
+		t.Fatalf("replayed assistant message = %#v ok=%v", message, ok)
+	}
+}
+
 // TestInteractiveHideRateLimitModelNudgeAcceptsRustAndLegacyTables pins the
 // notice suppression read: both Rust's `notice` table and the legacy Go
 // `notices` table are honored, with the Rust name winning when both exist.

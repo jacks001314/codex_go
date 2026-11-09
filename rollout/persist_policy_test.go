@@ -103,6 +103,41 @@ func TestTruncateMCPResultValueLikeRust(t *testing.T) {
 
 // TestApplyPersistedItemTruncationCapsMCPResult confirms the 64 KiB persisted
 // cap is wired into the paginated ItemCompleted path.
+func TestTruncateMCPPlainResultKeepsReadablePreviewLikeRust(t *testing.T) {
+	const maxBytes = 1024
+	result := map[string]any{
+		"content": []any{
+			map[string]any{"type": "text", "text": "first output\n" + strings.Repeat("a", 5000)},
+			map[string]any{"type": "text", "text": "second output"},
+		},
+	}
+	truncated, changed := truncateMCPResultValue(result, maxBytes)
+	if !changed {
+		t.Fatal("expected plain MCP output to be truncated")
+	}
+	content, _ := mapFromAny(truncated)["content"].([]any)
+	if len(content) != 1 {
+		t.Fatalf("content = %#v", content)
+	}
+	preview, _ := mapFromAny(content[0])["text"].(string)
+	if !strings.HasPrefix(preview, "Truncated tool output:\nfirst output") || !strings.Contains(preview, "second output") {
+		t.Fatalf("plain preview = %q", preview)
+	}
+
+	rich := map[string]any{
+		"content":           []any{map[string]any{"type": "text", "text": strings.Repeat("b", 5000)}},
+		"structuredContent": map[string]any{"value": strings.Repeat("c", 100)},
+	}
+	richTruncated, changed := truncateMCPResultValue(rich, maxBytes)
+	if !changed {
+		t.Fatal("expected rich result to be truncated")
+	}
+	richPreview, _ := mapFromAny(mapFromAny(richTruncated)["content"].([]any)[0])["text"].(string)
+	if strings.HasPrefix(richPreview, "Truncated tool output:") {
+		t.Fatalf("rich preview used the plain marker: %q", richPreview)
+	}
+}
+
 func TestApplyPersistedItemTruncationCapsMCPResult(t *testing.T) {
 	raw, err := json.Marshal(map[string]any{
 		"type": "McpToolCall",

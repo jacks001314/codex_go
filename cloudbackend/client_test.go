@@ -205,6 +205,54 @@ func TestTurnAdmissionFailsAfterStreamEndsLikeRust(t *testing.T) {
 	}
 }
 
+// Mirrors Rust #60327: a replacement attachment supersedes the queued loss of
+// the previous reply stream, so reopening a thread does not surface a stale
+// disconnect. A loss without a replacement is still delivered.
+func TestReplacementSupersedesQueuedStreamLossLikeRust(t *testing.T) {
+	fake := &fakeCloud{}
+	client := newTestClient(fake)
+	oldEvents := make(chan cloudclient.Event)
+	oldErrs := make(chan error)
+	fake.attach = func(context.Context, string) (<-chan cloudclient.Event, <-chan error, error) {
+		return oldEvents, oldErrs, nil
+	}
+	if err := client.replaceAttachment(context.Background(), "old"); err != nil {
+		t.Fatalf("attach old: %v", err)
+	}
+	close(oldEvents)
+	close(oldErrs)
+	client.forwardNextNonBlocking()
+	notifications := client.testNotifications()
+	if len(notifications) != 1 || !notifications[0].streamDisconnect {
+		t.Fatalf("notifications = %#v, want one stream loss", notifications)
+	}
+
+	newEvents := make(chan cloudclient.Event)
+	newErrs := make(chan error)
+	fake.attach = func(context.Context, string) (<-chan cloudclient.Event, <-chan error, error) {
+		return newEvents, newErrs, nil
+	}
+	if err := client.replaceAttachment(context.Background(), "old"); err != nil {
+		t.Fatalf("reattach old: %v", err)
+	}
+	if client.shouldDeliverStreamLoss("old") {
+		t.Fatal("stale stream loss survived a successful replacement")
+	}
+
+	if err := client.replaceAttachment(context.Background(), "fresh"); err != nil {
+		t.Fatalf("attach fresh: %v", err)
+	}
+	if err := client.admitTurn("fresh"); err != nil {
+		t.Fatalf("fresh stream rejected: %v", err)
+	}
+	close(newEvents)
+	close(newErrs)
+	client.forwardNextNonBlocking()
+	if !client.shouldDeliverStreamLoss("fresh") {
+		t.Fatal("loss without a replacement was suppressed")
+	}
+}
+
 func statusNotification(t *testing.T, payload string) cloudclient.Event {
 	t.Helper()
 	bytes, err := hex.DecodeString(strings.ReplaceAll(payload, " ", ""))

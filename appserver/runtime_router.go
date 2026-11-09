@@ -3637,6 +3637,9 @@ func experimentalAPIFieldReasonForRequest(request *Request) string {
 		if rawDeferCommandExecution(request) {
 			return "thread/items/list.deferOutput.commandExecution"
 		}
+		if rawDeferMCPToolCall(request) {
+			return "thread/items/list.deferOutput.mcpToolCall"
+		}
 	}
 	switch request.Method {
 	case MethodThreadStart, MethodThreadResume, MethodThreadFork, MethodTurnStart, MethodThreadSettingsUpdate:
@@ -3783,6 +3786,14 @@ func experimentalAPIMethod(method Method) bool {
 }
 
 func rawDeferCommandExecution(request *Request) bool {
+	return rawDeferOutputOption(request, "commandExecution")
+}
+
+func rawDeferMCPToolCall(request *Request) bool {
+	return rawDeferOutputOption(request, "mcpToolCall")
+}
+
+func rawDeferOutputOption(request *Request, key string) bool {
 	raw, ok := rawParam(request, "deferOutput")
 	if !ok || strings.TrimSpace(string(raw)) == "null" {
 		return false
@@ -3791,12 +3802,12 @@ func rawDeferCommandExecution(request *Request) bool {
 	if err := json.Unmarshal(raw, &options); err != nil {
 		return false
 	}
-	commandExecution, ok := options["commandExecution"]
+	option, ok := options[key]
 	if !ok {
 		return false
 	}
-	var deferCommand bool
-	return json.Unmarshal(commandExecution, &deferCommand) == nil && deferCommand
+	var deferOutput bool
+	return json.Unmarshal(option, &deferOutput) == nil && deferOutput
 }
 
 func rawParamPresentNonNull(request *Request, key string) bool {

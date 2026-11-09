@@ -2753,6 +2753,7 @@ type Model struct {
 	codexHome                      string
 	mentionUsage                   *mentionUsage
 	modelCatalogOpts               []codextui.ModelPickerOption
+	warnedMissingChatGPTModel      bool
 	nextModelCatalogRequestID      uint64
 	pendingModelCatalogRequestID   uint64
 	nextStatusRateLimitRequestID   uint64
@@ -7813,6 +7814,14 @@ func (m *Model) interruptRunningTask() bubbletea.Cmd {
 func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 	var cmd bubbletea.Cmd
 	var questionDrafts []string
+	if path := strings.TrimSpace(os.Getenv("CODEX_DEBUG_EVENT_LOG")); path != "" {
+		if file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600); err == nil {
+			if encoded, err := json.Marshal(event); err == nil {
+				_, _ = file.Write(append(encoded, 10))
+			}
+			_ = file.Close()
+		}
+	}
 	// Rust #42455: delivered events feed the command center's bounded live
 	// previews while the dashboard is open.
 	if m != nil && m.agentsOverview != nil {

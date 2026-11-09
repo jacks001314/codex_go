@@ -4890,10 +4890,32 @@ func interactiveLocalGoalContinuationCommand(ctx context.Context, root *cli.Root
 		if item == nil {
 			return nil
 		}
-		request := codextea.SubmitRequest{InternalInputItems: []any{item}}
+		items := []any{item}
+		if objectiveItem := interactiveGoalObjectiveInputItem(goal.Objective); objectiveItem != nil {
+			items = append(items, objectiveItem)
+		}
+		request := codextea.SubmitRequest{InternalInputItems: items}
 		request.TurnTrigger = "goal"
 		request.CyberAccessProgram = cyberAccessProgram
 		return interactiveTurnCommandWithRequest(ctx, root, runner, state, request, approvalBroker, elicitationBroker, userInputBroker, interrupts)
+	}
+}
+
+// interactiveGoalObjectiveInputItem carries the objective as user-provided
+// context beside the continuation prompt (Rust #60342). Keeping the two apart
+// prevents a model-written goal from reading like a developer instruction.
+func interactiveGoalObjectiveInputItem(objective string) any {
+	rendered := contextfrag.Render(contextfrag.NewAdditionalContextFragment(contextfrag.RoleUser, "goal_objective", objective))
+	if rendered == nil || strings.TrimSpace(rendered.Content) == "" {
+		return nil
+	}
+	return map[string]any{
+		"type": "message",
+		"role": contextfrag.RoleUser,
+		"content": []map[string]any{{
+			"type": "input_text",
+			"text": rendered.Content,
+		}},
 	}
 }
 

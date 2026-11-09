@@ -93,4 +93,15 @@ func TestPrewarmRequestUsesManagedEnvironmentAndOptionalModelLikeRust(t *testing
 	if provider, _ := fieldBytes(explicit, 16); string(provider) != "p" {
 		t.Fatalf("provider = %q", provider)
 	}
+	plugins, ok := fieldBytes(fields, 28)
+	if !ok {
+		t.Fatal("prewarm omitted Codex Apps plugins")
+	}
+	pluginFields, err := parseWireFields(plugins)
+	if err != nil {
+		t.Fatalf("parse plugins: %v", err)
+	}
+	if sku, _ := fieldBytes(pluginFields, 1); string(sku) != "codex" {
+		t.Fatalf("plugins productSku = %q", sku)
+	}
 }

@@ -64,6 +64,9 @@ func (e *RPCError) Error() string {
 type Notification struct {
 	Method appserver.NotificationMethod
 	Params any
+	// streamDisconnect marks the queued loss of one Cloud reply stream. A
+	// replacement attachment supersedes losses that have not been delivered.
+	streamDisconnect bool
 }
 
 // Client exposes one attached cloud conversation through app-server requests.
@@ -82,6 +85,9 @@ type Client struct {
 	out     []Notification
 	outDone bool
 	outCh   chan Notification
+
+	streamMu     sync.Mutex
+	streamLosses map[string]*streamLossState
 
 	// Dispatch-goroutine state.
 	loaded               *appserver.ThreadResumeResponse
@@ -108,6 +114,14 @@ type attachment struct {
 	events   <-chan cloudclient.Event
 	errs     <-chan error
 	cancel   context.CancelFunc
+}
+
+// streamLossState tracks losses queued for delivery for one conversation. A
+// successful replacement marks earlier losses superseded, even if the
+// replacement stream later ends (Rust #60327).
+type streamLossState struct {
+	remaining  int
+	superseded int
 }
 
 // Connect opens an app-server client backed by the authenticated native Cloud
@@ -322,7 +336,8 @@ func (c *Client) streamEnded(active *attachment) {
 	}
 	c.active.cancel()
 	c.active = nil
-	c.enqueue(cloudErrorNotification(active.threadID, "Cloud stream ended. Reopen the conversation to reconnect."))
+	c.recordStreamLoss(active.threadID)
+	c.enqueue(cloudStreamEndedNotification(active.threadID))
 }
 
 // replaceAttachment opens threadID and activates it only once its stream is
@@ -345,6 +360,7 @@ func (c *Client) replaceAttachment(ctx context.Context, threadID string) error {
 		}
 		delete(c.status, threadID)
 		c.active = &attachment{threadID: threadID, events: events, errs: errs, cancel: cancel}
+		c.supersedeStreamLosses(threadID)
 		c.forwardEvent(threadID, event)
 		return nil
 	default:
@@ -362,7 +378,63 @@ func (c *Client) replaceAttachment(ctx context.Context, threadID string) error {
 	}
 	delete(c.status, threadID)
 	c.active = &attachment{threadID: threadID, events: events, errs: errs, cancel: cancel}
+	c.supersedeStreamLosses(threadID)
 	return nil
+}
+
+func (c *Client) recordStreamLoss(threadID string) {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return
+	}
+	c.streamMu.Lock()
+	defer c.streamMu.Unlock()
+	if c.streamLosses == nil {
+		c.streamLosses = map[string]*streamLossState{}
+	}
+	state := c.streamLosses[threadID]
+	if state == nil {
+		state = &streamLossState{}
+		c.streamLosses[threadID] = state
+	}
+	state.remaining++
+}
+
+func (c *Client) supersedeStreamLosses(threadID string) {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return
+	}
+	c.streamMu.Lock()
+	defer c.streamMu.Unlock()
+	if state := c.streamLosses[threadID]; state != nil {
+		state.superseded = state.remaining
+	}
+}
+
+// shouldDeliverStreamLoss consumes one queued loss and reports whether the
+// client should surface it. A single dispatcher sends losses in order, so each
+// superseded loss is skipped exactly once.
+func (c *Client) shouldDeliverStreamLoss(threadID string) bool {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return true
+	}
+	c.streamMu.Lock()
+	defer c.streamMu.Unlock()
+	state := c.streamLosses[threadID]
+	if state == nil {
+		return true
+	}
+	deliver := state.superseded == 0
+	if state.superseded > 0 {
+		state.superseded--
+	}
+	state.remaining--
+	if state.remaining <= 0 {
+		delete(c.streamLosses, threadID)
+	}
+	return deliver
 }
 
 func (c *Client) admitTurn(threadID string) error {
@@ -407,6 +479,11 @@ func (c *Client) pumpNotifications() {
 		notification := c.out[0]
 		c.out = c.out[1:]
 		c.outMu.Unlock()
+		if notification.streamDisconnect {
+			if payload, ok := notification.Params.(appserver.ErrorNotification); ok && !c.shouldDeliverStreamLoss(payload.ThreadID) {
+				continue
+			}
+		}
 		select {
 		case c.outCh <- notification:
 		case <-c.closed:

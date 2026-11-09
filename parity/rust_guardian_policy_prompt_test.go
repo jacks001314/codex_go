@@ -20,23 +20,26 @@ import (
 func TestRustGuardianPolicyPromptMatchesGo(t *testing.T) {
 	root := rustSnapshotRoot(t)
 	rustRepo := filepath.Dir(root)
+	// The policy template changed in #60391 after the certification anchor;
+	// pin the vendored assets to the current upstream freeze explicitly.
+	target := "e54a5713caf331f42a6eef0166186df5f7563c29"
 	for _, asset := range []struct {
 		rust   string
 		goPath string
 		marker string
 	}{
 		{
-			rust:   "HEAD:codex-rs/prompts/templates/guardian/policy.md",
+			rust:   target + ":codex-rs/prompts/templates/guardian/policy.md",
 			goPath: filepath.Join("..", "state", "templates", "guardian", "policy.md"),
 			marker: "## Risk Taxonomy and Allow/Deny Rules",
 		},
 		{
-			rust:   "HEAD:codex-rs/prompts/templates/guardian/policy_template.md",
+			rust:   target + ":codex-rs/prompts/templates/guardian/policy_template.md",
 			goPath: filepath.Join("..", "state", "templates", "guardian", "policy_template.md"),
 			marker: "{{ tenant_policy_config }}",
 		},
 		{
-			rust:   "HEAD:codex-rs/prompts/templates/guardian/node_repl_policy.md",
+			rust:   target + ":codex-rs/prompts/templates/guardian/node_repl_policy.md",
 			goPath: filepath.Join("..", "state", "templates", "guardian", "node_repl_policy.md"),
 			marker: "# Computer and Browser Use",
 		},

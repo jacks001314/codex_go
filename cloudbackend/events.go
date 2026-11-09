@@ -229,3 +229,9 @@ func cloudErrorNotification(threadID string, message string) Notification {
 		},
 	}
 }
+
+func cloudStreamEndedNotification(threadID string) Notification {
+	notification := cloudErrorNotification(threadID, "Cloud stream ended. Reopen the conversation to reconnect.")
+	notification.streamDisconnect = true
+	return notification
+}
