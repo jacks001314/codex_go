@@ -38,6 +38,7 @@ type cloudSource interface {
 	Attach(ctx context.Context, threadID string) (<-chan cloudclient.Event, <-chan error, error)
 	ListThreads(ctx context.Context, query cloudclient.ThreadListQuery) (cloudclient.ThreadPage, error)
 	PrewarmDefaultThread(ctx context.Context, model string, modelProvider string) (*cloudclient.ThreadActivation, error)
+	PrewarmThread(ctx context.Context, model string, modelProvider string, project *cloudclient.ProjectEnvironment) (*cloudclient.ThreadActivation, error)
 	ListTurns(ctx context.Context, request cloudclient.ListTurnsRequest) (cloudclient.HistoryPage[cloudclient.HistoryTurn], error)
 	ListItems(ctx context.Context, request cloudclient.ListItemsRequest) (cloudclient.HistoryPage[cloudclient.HistoryItem], error)
 	AddUserMessage(ctx context.Context, request cloudclient.AddUserMessageRequest) (*cloudclient.Admission, error)
@@ -52,6 +53,38 @@ type RPCError struct {
 }
 
 // Error implements error.
+// SetLocalProject records the host project the next cloud thread start should
+// provision (Rust #60007). Each start resolves the project from the caller's
+// working directory, so a nil project clears any previous selection.
+func (c *Client) SetLocalProject(project *cloudclient.ProjectEnvironment) {
+	if c == nil {
+		return
+	}
+	c.projectMu.Lock()
+	c.localProject = cloneCloudProject(project)
+	c.projectMu.Unlock()
+}
+
+func (c *Client) localProjectSnapshot() *cloudclient.ProjectEnvironment {
+	if c == nil {
+		return nil
+	}
+	c.projectMu.Lock()
+	defer c.projectMu.Unlock()
+	return cloneCloudProject(c.localProject)
+}
+
+func cloneCloudProject(project *cloudclient.ProjectEnvironment) *cloudclient.ProjectEnvironment {
+	if project == nil {
+		return nil
+	}
+	return &cloudclient.ProjectEnvironment{
+		Name:       project.Name,
+		OriginURLs: append([]string(nil), project.OriginURLs...),
+		CWD:        project.CWD,
+	}
+}
+
 func (e *RPCError) Error() string {
 	if e == nil {
 		return ""
@@ -88,6 +121,9 @@ type Client struct {
 
 	streamMu     sync.Mutex
 	streamLosses map[string]*streamLossState
+
+	projectMu    sync.Mutex
+	localProject *cloudclient.ProjectEnvironment
 
 	// Dispatch-goroutine state.
 	loaded               *appserver.ThreadResumeResponse

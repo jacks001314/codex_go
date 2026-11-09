@@ -166,7 +166,9 @@ func (c *Client) startThread(ctx context.Context, params json.RawMessage) (json.
 	// own the conversation environment, so those fields are dropped instead of
 	// rejecting the thread start.
 	activation, err := waitWhileListening(c, ctx, func() (*cloudclient.ThreadActivation, error) {
-		return c.source.PrewarmDefaultThread(ctx, model, provider)
+		// Rust #60007/#60309: each start resolves the host project freshly; a
+		// selected project defers executor readiness in the prewarm request.
+		return c.source.PrewarmThread(ctx, model, provider, c.localProjectSnapshot())
 	})
 	if err != nil {
 		return nil, internalRPCError(err)

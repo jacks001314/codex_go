@@ -83,7 +83,18 @@ type cloudAppServerRequester interface {
 	Request(ctx context.Context, method appserver.Method, params json.RawMessage) (json.RawMessage, *cloudbackend.RPCError)
 	Notifications() <-chan cloudbackend.Notification
 	AnswerServerRequest(requestID string) error
+	// SetLocalProject carries the host project outside the app-server wire
+	// protocol (Rust #60007).
+	SetLocalProject(project *cloudclient.ProjectEnvironment)
 	Close()
+}
+
+// SetLocalProject forwards the host project to the cloud backend for the next
+// thread start.
+func (t *cloudAppServerTransport) SetLocalProject(project *cloudclient.ProjectEnvironment) {
+	if t != nil && t.client != nil {
+		t.client.SetLocalProject(project)
+	}
 }
 
 // cloudAppServerTransport bridges the TUI's byte-oriented transport onto the

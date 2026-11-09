@@ -85,3 +85,49 @@ func TestCloudBackendAnswersInitializeLikeRust(t *testing.T) {
 		t.Fatalf("initialize = %s (err=%v)", raw, err)
 	}
 }
+
+// Rust #60007/#60309: every thread start resolves the caller's host project,
+// so the prewarm carries it and clearing the selection returns to the default.
+func TestCloudThreadStartPrewarmsWithLocalProjectLikeRust(t *testing.T) {
+	starts := 0
+	fake := &fakeCloud{
+		attach: func(context.Context, string) (<-chan cloudclient.Event, <-chan error, error) {
+			return pendingStream()
+		},
+		prewarm: func(context.Context, string, string) (*cloudclient.ThreadActivation, error) {
+			starts++
+			id := "cloud-thread"
+			if starts > 1 {
+				id = "cloud-thread-2"
+			}
+			return &cloudclient.ThreadActivation{
+				Thread: cloudclient.ThreadSnapshot{ID: id, HistoryMode: "legacy", ModelProvider: "openai", CWD: "/repo", Status: map[string]any{"type": "idle"}, Source: "cli"},
+				CWD:    "/repo",
+			}, nil
+		},
+	}
+	client := Connect(context.Background(), fake, json.RawMessage("{}"))
+	defer client.Close()
+
+	client.SetLocalProject(&cloudclient.ProjectEnvironment{
+		Name:       "repo",
+		OriginURLs: []string{"https://github.com/org/repo"},
+		CWD:        "/workspace/org/repo",
+	})
+	if _, rpcErr := client.Request(context.Background(), appserver.MethodThreadStart, json.RawMessage(`{"ephemeral":false}`)); rpcErr != nil {
+		t.Fatalf("thread/start error = %#v", rpcErr)
+	}
+	if fake.prewarmProject == nil || fake.prewarmProject.Name != "repo" ||
+		fake.prewarmProject.CWD != "/workspace/org/repo" ||
+		len(fake.prewarmProject.OriginURLs) != 1 || fake.prewarmProject.OriginURLs[0] != "https://github.com/org/repo" {
+		t.Fatalf("prewarm project = %#v", fake.prewarmProject)
+	}
+
+	client.SetLocalProject(nil)
+	if _, rpcErr := client.Request(context.Background(), appserver.MethodThreadStart, json.RawMessage(`{"ephemeral":false}`)); rpcErr != nil {
+		t.Fatalf("second thread/start error = %#v", rpcErr)
+	}
+	if fake.prewarmProject != nil {
+		t.Fatalf("cleared project still prewarmed %#v", fake.prewarmProject)
+	}
+}

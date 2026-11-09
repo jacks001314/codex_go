@@ -9,12 +9,14 @@ import (
 	"codex_go/appserver"
 	"codex_go/appserverdaemon"
 	"codex_go/cloudbackend"
+	"codex_go/cloudclient"
 )
 
 type fakeCloudRequester struct {
 	notifications chan cloudbackend.Notification
 	answers       []string
 	closed        bool
+	project       *cloudclient.ProjectEnvironment
 }
 
 func (f *fakeCloudRequester) Request(_ context.Context, method appserver.Method, _ json.RawMessage) (json.RawMessage, *cloudbackend.RPCError) {
@@ -31,6 +33,10 @@ func (f *fakeCloudRequester) Notifications() <-chan cloudbackend.Notification {
 func (f *fakeCloudRequester) AnswerServerRequest(requestID string) error {
 	f.answers = append(f.answers, requestID)
 	return nil
+}
+
+func (f *fakeCloudRequester) SetLocalProject(project *cloudclient.ProjectEnvironment) {
+	f.project = project
 }
 
 func (f *fakeCloudRequester) Close() { f.closed = true }
@@ -125,4 +131,26 @@ func readCloudTransportMessage(t *testing.T, transport *cloudAppServerTransport)
 		t.Fatalf("read() error = %v", err)
 	}
 	return message
+}
+
+// Rust #60007: the host project travels outside the app-server wire protocol
+// and reaches the cloud backend through the transport.
+func TestCloudTransportForwardsLocalProjectLikeRust(t *testing.T) {
+	requester := &fakeCloudRequester{notifications: make(chan cloudbackend.Notification, 1)}
+	transport := newCloudAppServerTransport(context.Background(), requester)
+	defer transport.close()
+
+	project := &cloudclient.ProjectEnvironment{
+		Name:       "repo",
+		OriginURLs: []string{"https://github.com/org/repo"},
+		CWD:        "/workspace/org/repo",
+	}
+	transport.SetLocalProject(project)
+	if requester.project == nil || requester.project.Name != "repo" || requester.project.CWD != "/workspace/org/repo" {
+		t.Fatalf("forwarded project = %#v", requester.project)
+	}
+	transport.SetLocalProject(nil)
+	if requester.project != nil {
+		t.Fatalf("cleared project = %#v", requester.project)
+	}
 }

@@ -55,7 +55,13 @@ func SanitizeGitURL(value string) (string, error) {
 	// URL-style scheme remotes with an authority: strip userinfo.
 	if scheme, rest, ok := strings.Cut(address, "://"); ok {
 		authorityEnd := len(rest)
-		if idx := strings.IndexByte(rest, '/'); idx >= 0 {
+		// Rust #60007: Git treats '?' and '#' as authority text on non-HTTP
+		// transports, while HTTP(S) URLs end the authority at any of them.
+		if scheme == "http" || scheme == "https" {
+			if idx := strings.IndexAny(rest, "/?#"); idx >= 0 {
+				authorityEnd = idx
+			}
+		} else if idx := strings.IndexByte(rest, '/'); idx >= 0 {
 			authorityEnd = idx
 		}
 		authority := rest[:authorityEnd]
@@ -148,4 +154,102 @@ func RunWithTimeout(ctx context.Context, timeout time.Duration, cwd string, args
 // command timeout.
 func IsCancellation(err error) bool {
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "timed out")
+}
+
+// CanonicalizeGitRemoteURL mirrors Rust git-utils
+// canonicalize_git_remote_url (#60007): reduce a remote to "host/path",
+// dropping credentials, default ports, query strings, fragments and the .git
+// suffix. GitHub paths are lowercased; other hosts keep their path case.
+func CanonicalizeGitRemoteURL(value string) (string, bool) {
+	value = strings.TrimRight(strings.TrimSpace(value), "/")
+	value = trimGitSuffix(value)
+	if value == "" {
+		return "", false
+	}
+
+	if scheme, rest, ok := strings.Cut(value, "://"); ok {
+		defaultPort := ""
+		switch scheme {
+		case "git":
+			defaultPort = "9418"
+		case "http":
+			defaultPort = "80"
+		case "https":
+			defaultPort = "443"
+		case "ssh":
+			defaultPort = "22"
+		default:
+			return "", false
+		}
+		if idx := strings.IndexAny(rest, "?#"); idx >= 0 {
+			rest = rest[:idx]
+		}
+		hostPart, path, ok := strings.Cut(rest, "/")
+		if !ok {
+			return "", false
+		}
+		return canonicalizeGitRemoteHostPath(hostPart, path, defaultPort)
+	}
+
+	if hostPart, path, ok := parseSCPLikeRemote(value); ok {
+		return canonicalizeGitRemoteHostPath(hostPart, path, "")
+	}
+
+	hostPart, path, ok := strings.Cut(value, "/")
+	if !ok {
+		return "", false
+	}
+	return canonicalizeGitRemoteHostPath(hostPart, path, "")
+}
+
+func parseSCPLikeRemote(remote string) (string, string, bool) {
+	if slash := strings.IndexByte(remote, '/'); slash >= 0 {
+		if colon := strings.IndexByte(remote, ':'); colon < 0 || slash < colon {
+			return "", "", false
+		}
+	}
+	hostPart, path, ok := strings.Cut(remote, ":")
+	if !ok || hostPart == "" || path == "" {
+		return "", "", false
+	}
+	return hostPart, path, true
+}
+
+func canonicalizeGitRemoteHostPath(hostPart, path, defaultPort string) (string, bool) {
+	if idx := strings.LastIndex(hostPart, "@"); idx >= 0 {
+		hostPart = hostPart[idx+1:]
+	}
+	host := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(hostPart), "/"))
+	if defaultPort != "" {
+		if idx := strings.LastIndex(host, ":"); idx >= 0 && host[idx+1:] == defaultPort {
+			host = host[:idx]
+		}
+	}
+	if host == "" {
+		return "", false
+	}
+
+	path = trimGitSuffix(strings.Trim(strings.TrimSpace(path), "/"))
+	components := make([]string, 0, 3)
+	for _, component := range strings.Split(path, "/") {
+		if component != "" {
+			components = append(components, component)
+		}
+	}
+	if len(components) < 2 {
+		return "", false
+	}
+	owner, repo := components[0], components[1]
+	if owner == "." || owner == ".." || repo == "." || repo == ".." {
+		return "", false
+	}
+	joined := strings.Join(components, "/")
+	if host == "github.com" {
+		joined = strings.ToLower(joined)
+	}
+	return host + "/" + joined, true
+}
+
+func trimGitSuffix(value string) string {
+	return strings.TrimSuffix(value, ".git")
 }

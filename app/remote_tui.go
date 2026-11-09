@@ -27,6 +27,7 @@ import (
 	"codex_go/appserverdaemon"
 	"codex_go/auth"
 	"codex_go/cli"
+	"codex_go/cloudclient"
 	"codex_go/codexuds"
 	"codex_go/config"
 	"codex_go/doctor"
@@ -87,6 +88,11 @@ type remoteAppServerTUIClient struct {
 	// turnDurationMS carries the completed turn's protocol duration so the TUI
 	// can show "Worked for" completion metadata (Rust #43558).
 	turnDurationMS *int64
+	// hostProject retains the last attached local GitHub project so a backend
+	// switch that reports a managed cloud cwd can still provision it
+	// (Rust #60007 remember_attached_host_project).
+	hostProjectMu sync.Mutex
+	hostProject   *cloudclient.ProjectEnvironment
 	// accountEmailMu guards the single account/update email request so an
 	// obsolete identity can never replace a newer one (Rust #50199).
 	accountEmailMu        sync.Mutex
@@ -3908,6 +3914,26 @@ func (c *remoteAppServerTUIClient) startThread(ctx context.Context, root *cli.Ro
 	if err != nil {
 		return "", err
 	}
+	// Rust #60007: the Cloud host project is resolved from the displayed
+	// working directory for each start and kept off the wire protocol. A
+	// resumed cloud thread can replace the displayed cwd with the managed
+	// executor path, so the last attached local project is retained as a
+	// fallback when switching backends.
+	if setter, ok := c.transport.(interface {
+		SetLocalProject(*cloudclient.ProjectEnvironment)
+	}); ok {
+		hostCWD := ""
+		if state != nil {
+			hostCWD = strings.TrimSpace(state.CWD)
+		}
+		project := resolveCloudProjectFromCWD(ctx, hostCWD)
+		if project != nil {
+			c.rememberHostProject(project)
+		} else {
+			project = c.rememberedHostProject()
+		}
+		setter.SetLocalProject(project)
+	}
 	// Rust #57267: a cloud thread skips start_dynamic_tool_mcp entirely
 	// (app_server_session.rs:563), so a server-owned conversation never
 	// advertises the client's dynamic tool namespace or hosted MCP server.
@@ -5373,6 +5399,31 @@ func remoteUint32Ptr(value any) *uint32 {
 	default:
 		return nil
 	}
+}
+
+func (c *remoteAppServerTUIClient) rememberHostProject(project *cloudclient.ProjectEnvironment) {
+	if c == nil || project == nil {
+		return
+	}
+	cloned := *project
+	cloned.OriginURLs = append([]string(nil), project.OriginURLs...)
+	c.hostProjectMu.Lock()
+	c.hostProject = &cloned
+	c.hostProjectMu.Unlock()
+}
+
+func (c *remoteAppServerTUIClient) rememberedHostProject() *cloudclient.ProjectEnvironment {
+	if c == nil {
+		return nil
+	}
+	c.hostProjectMu.Lock()
+	defer c.hostProjectMu.Unlock()
+	if c.hostProject == nil {
+		return nil
+	}
+	cloned := *c.hostProject
+	cloned.OriginURLs = append([]string(nil), c.hostProject.OriginURLs...)
+	return &cloned
 }
 
 func (c *remoteAppServerTUIClient) notificationThreadIsActive(threadID string) bool {

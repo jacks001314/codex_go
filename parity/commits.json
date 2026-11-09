@@ -44251,11 +44251,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "缺 cloud thread 绑定本地 GitHub 项目：prewarm 仍发空的 ManagedEnvironment，无 ProjectEnvironment、无 origin→GitHub 归一化",
-    "Go 锚点：cloudclient/（prewarm）、app/（cloud 提交）",
-    "plan: update/plan_2026_11_08_cloud_sidebar.md（#60007），契约 cloud-thread-project-binding"
+    "cloudclient/prewarm.go adds ProjectEnvironment{Name, OriginURLs, CWD} and PrewarmThread: the managed environment encodes environment_config_id=asenvcfg_base (tag 1), cwd (tag 2) and overrides (tag 3: repository origins tag 1/5 and project name tag 2).",
+    "gitutil.CanonicalizeGitRemoteURL reduces remotes to credential-free host/path (default ports, query strings, fragments and .git removed, GitHub paths lowercased), and SanitizeGitURL stops HTTP(S) authorities at '?'/'#'.",
+    "app/cloud_project.go resolves the repository origin for each thread start and accepts github.com plus ssh://ssh.github.com:443, producing name/cwd/origin URLs; app/remote_tui.go passes it to the cloud transport outside the wire protocol and retains the last attached local project for backend switches; cloudbackend prewarms with that project.",
+    "Tests: go test ./gitutil ./cloudclient ./cloudbackend ./app (TestCanonicalizeGitRemoteURL*, TestSanitizeGitURLStopsHTTPAuthorityAtQueryLikeRust, TestPrewarmRequestIncludesProjectEnvironmentAndDeferredFlagLikeRust, TestGitHubCloudProject*, TestResolveCloudProjectFromCWDReadsGitOriginLikeRust, TestCloudThreadStartPrewarmsWithLocalProjectLikeRust, TestCloudTransportForwardsLocalProjectLikeRust)."
    ]
   },
   {
@@ -45034,11 +45035,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "cloudclient/prewarm.go only implements PrewarmDefaultThread with a managed environment selection; there is no ProjectEnvironment argument or project prewarm path, so deferred_environment cannot be selected.",
-    "Residual depends on #60007 (local GitHub project binding), still partial; once project prewarm exists the wire field is tag 29 deferred_environment=true.",
-    "plan: update/plan_2026_11_09.md (#60309)"
+    "cloudclient.encodePrewarmRequestWithProject sets deferred_environment (tag 29, bool true) only when a project is selected; the default prewarm request omits it.",
+    "Tests: TestPrewarmRequestIncludesProjectEnvironmentAndDeferredFlagLikeRust verifies the project request carries tag 29 plus the managed overrides and the default request omits tag 29."
    ]
   },
   {

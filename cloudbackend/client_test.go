@@ -21,11 +21,13 @@ type fakeCloud struct {
 	attach      func(ctx context.Context, threadID string) (<-chan cloudclient.Event, <-chan error, error)
 	listThreads func(ctx context.Context, query cloudclient.ThreadListQuery) (cloudclient.ThreadPage, error)
 	prewarm     func(ctx context.Context, model string, modelProvider string) (*cloudclient.ThreadActivation, error)
-	listTurns   func(ctx context.Context, request cloudclient.ListTurnsRequest) (cloudclient.HistoryPage[cloudclient.HistoryTurn], error)
-	listItems   func(ctx context.Context, request cloudclient.ListItemsRequest) (cloudclient.HistoryPage[cloudclient.HistoryItem], error)
-	addMessage  func(ctx context.Context, request cloudclient.AddUserMessageRequest) (*cloudclient.Admission, error)
-	interrupt   func(ctx context.Context, request cloudclient.InterruptTurnRequest) error
-	closeHook   func()
+	// prewarmProject records the host project of the last cloud thread start.
+	prewarmProject *cloudclient.ProjectEnvironment
+	listTurns      func(ctx context.Context, request cloudclient.ListTurnsRequest) (cloudclient.HistoryPage[cloudclient.HistoryTurn], error)
+	listItems      func(ctx context.Context, request cloudclient.ListItemsRequest) (cloudclient.HistoryPage[cloudclient.HistoryItem], error)
+	addMessage     func(ctx context.Context, request cloudclient.AddUserMessageRequest) (*cloudclient.Admission, error)
+	interrupt      func(ctx context.Context, request cloudclient.InterruptTurnRequest) error
+	closeHook      func()
 }
 
 func (f *fakeCloud) Activate(ctx context.Context, threadID string) (*cloudclient.ThreadActivation, error) {
@@ -54,6 +56,19 @@ func (f *fakeCloud) PrewarmDefaultThread(ctx context.Context, model string, mode
 		return nil, errors.New("no prewarm configured")
 	}
 	return f.prewarm(ctx, model, modelProvider)
+}
+
+func (f *fakeCloud) PrewarmThread(ctx context.Context, model string, modelProvider string, project *cloudclient.ProjectEnvironment) (*cloudclient.ThreadActivation, error) {
+	f.mu.Lock()
+	if project == nil {
+		f.prewarmProject = nil
+	} else {
+		cloned := *project
+		cloned.OriginURLs = append([]string(nil), project.OriginURLs...)
+		f.prewarmProject = &cloned
+	}
+	f.mu.Unlock()
+	return f.PrewarmDefaultThread(ctx, model, modelProvider)
 }
 
 func (f *fakeCloud) ListTurns(ctx context.Context, request cloudclient.ListTurnsRequest) (cloudclient.HistoryPage[cloudclient.HistoryTurn], error) {

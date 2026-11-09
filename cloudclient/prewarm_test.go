@@ -105,3 +105,99 @@ func TestPrewarmRequestUsesManagedEnvironmentAndOptionalModelLikeRust(t *testing
 		t.Fatalf("plugins productSku = %q", sku)
 	}
 }
+
+func wireBytesFields(fields []wireField, number protowire.Number) [][]byte {
+	out := make([][]byte, 0, 1)
+	for _, field := range fields {
+		if field.number == number && field.typ == protowire.BytesType {
+			out = append(out, field.bytes)
+		}
+	}
+	return out
+}
+
+// Rust #60007/#60309: a selected project encodes the managed environment
+// overrides and defers executor readiness; the default request omits both.
+func TestPrewarmRequestIncludesProjectEnvironmentAndDeferredFlagLikeRust(t *testing.T) {
+	project := &ProjectEnvironment{
+		Name:       "repo",
+		OriginURLs: []string{"https://github.com/org/repo"},
+		CWD:        "/workspace/org/repo",
+	}
+	fields, err := parseWireFields(encodePrewarmRequestWithProject("", "", project))
+	if err != nil {
+		t.Fatalf("parse project request: %v", err)
+	}
+	deferred, ok := firstField(fields, 29)
+	if !ok || deferred.typ != protowire.VarintType || deferred.value != 1 {
+		t.Fatalf("deferred_environment = %#v", deferred)
+	}
+	environments := wireBytesFields(fields, 10)
+	if len(environments) != 1 {
+		t.Fatalf("environments = %d", len(environments))
+	}
+	environmentFields, err := parseWireFields(environments[0])
+	if err != nil {
+		t.Fatalf("parse environments: %v", err)
+	}
+	selections := wireBytesFields(environmentFields, 1)
+	if len(selections) != 1 {
+		t.Fatalf("selections = %d", len(selections))
+	}
+	selectionFields, err := parseWireFields(selections[0])
+	if err != nil {
+		t.Fatalf("parse selection: %v", err)
+	}
+	manageds := wireBytesFields(selectionFields, 1)
+	if len(manageds) != 1 {
+		t.Fatalf("managed environments = %d", len(manageds))
+	}
+	managedFields, err := parseWireFields(manageds[0])
+	if err != nil {
+		t.Fatalf("parse managed environment: %v", err)
+	}
+	if id, _ := fieldBytes(managedFields, 1); string(id) != "asenvcfg_base" {
+		t.Fatalf("environment config id = %q", id)
+	}
+	if cwd, _ := fieldBytes(managedFields, 2); string(cwd) != "/workspace/org/repo" {
+		t.Fatalf("managed cwd = %q", cwd)
+	}
+	overridesBytes := wireBytesFields(managedFields, 3)
+	if len(overridesBytes) != 1 {
+		t.Fatalf("overrides = %d", len(overridesBytes))
+	}
+	overrides, err := parseWireFields(overridesBytes[0])
+	if err != nil {
+		t.Fatalf("parse overrides: %v", err)
+	}
+	if name, _ := fieldBytes(overrides, 2); string(name) != "repo" {
+		t.Fatalf("overrides name = %q", name)
+	}
+	repositoriesBytes := wireBytesFields(overrides, 1)
+	if len(repositoriesBytes) != 1 {
+		t.Fatalf("repositories = %d", len(repositoriesBytes))
+	}
+	repositories, err := parseWireFields(repositoriesBytes[0])
+	if err != nil {
+		t.Fatalf("parse repositories: %v", err)
+	}
+	values := wireBytesFields(repositories, 1)
+	if len(values) != 1 {
+		t.Fatalf("repository values = %d", len(values))
+	}
+	valueFields, err := parseWireFields(values[0])
+	if err != nil {
+		t.Fatalf("parse repository override: %v", err)
+	}
+	if origin, _ := fieldBytes(valueFields, 5); string(origin) != "https://github.com/org/repo" {
+		t.Fatalf("origin url = %q", origin)
+	}
+
+	defaultFields, err := parseWireFields(encodePrewarmRequest("m", "p"))
+	if err != nil {
+		t.Fatalf("parse default request: %v", err)
+	}
+	if deferred, ok := firstField(defaultFields, 29); ok {
+		t.Fatalf("default request set deferred_environment = %#v", deferred)
+	}
+}
