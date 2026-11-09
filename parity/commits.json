@@ -44974,7 +44974,7 @@
   {
    "sha": "a73fa8a869b3de00cf64f3ab62e40505a5da0314",
    "subject": "Warn when a CLI model is absent from the ChatGPT model list (#60270)",
-   "kind": "tui",
+   "kind": "runtime",
    "domains": [
     "codex_go"
    ],
@@ -44988,7 +44988,7 @@
   {
    "sha": "9ba7a3df527e7bfdf0b7df6ef281212bcd2d5125",
    "subject": "Keep the agents overview open when there is no chat to return to (#60271)",
-   "kind": "tui",
+   "kind": "runtime",
    "domains": [
     "codex_go"
    ],
@@ -45000,9 +45000,9 @@
    ]
   },
   {
-   "sha": "ee51bb132e",
+   "sha": "ee51bb132e8e530869e5cf352b1597b99bedb7d4",
    "subject": "Fix MCP startup tracking when attaching to shared app servers (#60280)",
-   "kind": "tui",
+   "kind": "runtime",
    "domains": [
     "codex_go"
    ],
@@ -45016,7 +45016,7 @@
   {
    "sha": "4e4767ffa763ec0d0a19e04cf8ff0163a987297b",
    "subject": "Search task history from the command center (#60286)",
-   "kind": "tui",
+   "kind": "runtime",
    "domains": [
     "codex_go"
    ],
@@ -45042,9 +45042,9 @@
    ]
   },
   {
-   "sha": "8fcba7fae9",
+   "sha": "8fcba7fae90e170345d0a8d0ab68706cb3a33d2c",
    "subject": "Improve side-chat discovery and navigation in the TUI (#60319)",
-   "kind": "tui",
+   "kind": "runtime",
    "domains": [
     "codex_go"
    ],
@@ -45059,7 +45059,7 @@
   {
    "sha": "b9796386e5f8fc10087bc4476e30896f97e16e5d",
    "subject": "Include older itemless Cloud failures in full transcripts (#60320)",
-   "kind": "tui",
+   "kind": "runtime",
    "domains": [
     "codex_go"
    ],
@@ -45086,7 +45086,7 @@
   {
    "sha": "6107b9886c114702e5c1cfd1c1b54f7c48bfaf49",
    "subject": "Avoid duplicate assistant messages when resuming Cloud threads (#60335)",
-   "kind": "tui",
+   "kind": "runtime",
    "domains": [
     "codex_go"
    ],
