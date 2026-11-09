@@ -674,14 +674,18 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		NotificationCondition:   settings.NotificationCondition,
 		PermissionRequirements:  settings.PermissionRequirements,
 		OnStartMCPLogin:         interactiveRemoteMCPLoginStarter(ctx, endpoint),
-		HideRateLimitModelNudge: settings.HideRateLimitModelNudge,
-		TUITheme:                settings.TUITheme,
-		StartupConfigWarnings:   remoteTUIStartupConfigWarnings(settings.TUITheme),
-		TUIPet:                  settings.TUIPet,
-		CodexHome:               auth.DefaultCodexHome(),
-		HistoryPersistence:      settings.HistoryPersistence,
-		PetEnv:                  environmentMapFromEnviron(os.Environ()),
-		OnPostNotification:      interactiveNotificationPoster(stdout),
+		// Rust #60280: a shared app server only sends startup updates after
+		// subscription and may run a different MCP configuration, so wait only
+		// for the servers it reports.
+		MCPStartupTrackReportedOnly: true,
+		HideRateLimitModelNudge:     settings.HideRateLimitModelNudge,
+		TUITheme:                    settings.TUITheme,
+		StartupConfigWarnings:       remoteTUIStartupConfigWarnings(settings.TUITheme),
+		TUIPet:                      settings.TUIPet,
+		CodexHome:                   auth.DefaultCodexHome(),
+		HistoryPersistence:          settings.HistoryPersistence,
+		PetEnv:                      environmentMapFromEnviron(os.Environ()),
+		OnPostNotification:          interactiveNotificationPoster(stdout),
 		OnSubmitRequest: func(request codextea.SubmitRequest) bubbletea.Cmd {
 			return interactiveRemoteTurnCommandWithTaskTools(ctx, root, endpoint, state, request, brokers, taskToolsHost, interrupts)
 		},
@@ -5466,6 +5470,32 @@ func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMes
 			Revision: payload.ReadState.Revision,
 		})
 		return nil
+	case appserver.NotificationMcpServerStatusUpdated:
+		var payload appserver.MCPServerStatusUpdatedNotification
+		if err := json.Unmarshal(message.Params, &payload); err != nil {
+			return err
+		}
+		if !c.notificationThreadIsActive(stringPtrValue(payload.ThreadID)) {
+			return nil
+		}
+		name := strings.TrimSpace(payload.Name)
+		if name == "" {
+			return nil
+		}
+		kind := chatwidget.McpStartupStatusKind(strings.TrimSpace(payload.Status))
+		switch kind {
+		case chatwidget.McpStartupStarting, chatwidget.McpStartupReady, chatwidget.McpStartupFailed, chatwidget.McpStartupCancelled:
+		default:
+			kind = chatwidget.McpStartupFailed
+		}
+		status := chatwidget.McpStartupStatus{Kind: kind}
+		if payload.Error != nil {
+			status.Error = strings.TrimSpace(*payload.Error)
+		}
+		if payload.FailureReason != nil {
+			status.FailureReason = strings.TrimSpace(string(*payload.FailureReason))
+		}
+		c.send(codextea.MCPStartupUpdateMsg{Name: name, Status: status})
 	case appserver.NotificationThreadStarted:
 		var payload appserver.ThreadStartedNotification
 		if err := json.Unmarshal(message.Params, &payload); err != nil {

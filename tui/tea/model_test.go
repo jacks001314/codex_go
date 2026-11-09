@@ -2385,19 +2385,64 @@ func TestModelLateMCPDiagnosticsRetainStartupWarningsLikeRust(t *testing.T) {
 }
 
 func TestModelMCPStartupInterruptIgnoresLateTerminalUpdates(t *testing.T) {
+	// Mirrors Rust's app_server_mcp_startup_lag_settles_startup_and_ignores_late_updates:
+	// the lagged round settles and the remaining server stays buffered because
+	// the configured round never looks complete again.
 	state := codextui.NewState(nil)
-	model := NewModel(state, Options{MCPStartupExpectedServers: []string{"alpha", "beta"}})
+	model := NewModel(state, Options{MCPStartupExpectedServers: []string{"alpha", "beta", "gamma"}})
 	model.Update(MCPStartupUpdateMsg{Name: "alpha", Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupStarting}})
+	model.Update(MCPStartupUpdateMsg{Name: "alpha", Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupFailed, Error: "handshake failed"}})
 	model.Update(MCPStartupUpdateMsg{Name: "beta", Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupStarting}})
 	model.Update(MCPStartupFinishAfterLagMsg{})
 	if model.mcpStartupActive {
 		t.Fatal("MCP startup remained active after interruption")
 	}
 
-	model.Update(MCPStartupUpdateMsg{Name: "alpha", Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupReady}})
+	model.Update(MCPStartupUpdateMsg{Name: "beta", Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupStarting}})
 	model.Update(MCPStartupUpdateMsg{Name: "beta", Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupReady}})
 	if model.mcpStartupActive || strings.Contains(utils.StripANSI(model.viewString()), "Starting MCP servers") {
 		t.Fatalf("late terminal updates reopened MCP startup:\n%s", model.viewString())
+	}
+}
+
+func TestModelReportedOnlyMCPStartupMatchesRust(t *testing.T) {
+	// Rust #60280: a client attaching to a shared app server can miss starts.
+	// Standalone failures are reported while idle and identical repeats are
+	// suppressed until an observed retry.
+	state := codextui.NewState(nil)
+	model := NewModel(state, Options{Width: 120, Height: 30, ShowSessionHeader: true, MCPStartupTrackReportedOnly: true})
+	failure := chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupFailed, Error: "Session expired", FailureReason: historycell.MCPStartupFailureReauthenticationRequired}
+	model.Update(MCPStartupUpdateMsg{Name: "deferred", Status: failure})
+	if model.mcpStartupActive {
+		t.Fatal("idle terminal failure opened a startup round")
+	}
+	raw := model.State.Messages[model.startupWarningsIndex].RawText
+	if !strings.Contains(raw, "Session expired") || !strings.Contains(raw, "MCP startup incomplete (failed: deferred)") {
+		t.Fatalf("idle failure diagnostics = %q", raw)
+	}
+	count := model.warningDisplay.WarningCount()
+	model.Update(MCPStartupUpdateMsg{Name: "deferred", Status: failure})
+	if got := model.warningDisplay.WarningCount(); got != count {
+		t.Fatalf("repeated idle failure changed diagnostics: %d -> %d", count, got)
+	}
+	if model.mcpStartupActive {
+		t.Fatal("repeated idle failure opened a startup round")
+	}
+
+	model.Update(MCPStartupUpdateMsg{Name: "deferred", Status: chatwidget.McpStartupStatus{Kind: chatwidget.McpStartupStarting}})
+	if !model.mcpStartupActive {
+		t.Fatal("observed retry did not open a startup round")
+	}
+	_, cmd := model.Update(MCPStartupUpdateMsg{Name: "deferred", Status: failure})
+	if cmd == nil {
+		t.Fatal("settled reported-only round should schedule finish lag")
+	}
+	model.Update(mcpStartupFinishAfterLagMsg{Generation: model.mcpStartupGeneration})
+	if model.mcpStartupActive {
+		t.Fatal("reported-only round stayed active after the finish lag")
+	}
+	if raw := model.State.Messages[model.startupWarningsIndex].RawText; !strings.Contains(raw, "MCP startup incomplete (failed: deferred)") {
+		t.Fatalf("retry summary missing from retained warnings: %q", raw)
 	}
 }
 

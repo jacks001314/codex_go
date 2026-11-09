@@ -117,3 +117,135 @@ func TestMcpStartupPreservesServerAndErrorTextMatchRust(t *testing.T) {
 		t.Fatalf("warnings should preserve error text: %#v", finished.Warnings)
 	}
 }
+
+func TestMcpStartupReportedOnlySettlesOnObservedStartsMatchRust(t *testing.T) {
+	// Rust #60280: a shared app server may run servers the local configuration
+	// does not know about, so only the observed startups belong to the round.
+	state := NewMcpStartupRoundState([]string{"configured"})
+	state.TrackReportedServers()
+
+	started := state.Update("alpha", McpStartupStatus{Kind: McpStartupStarting}, true)
+	if !started.Active || started.Settled || started.Finished {
+		t.Fatalf("alpha start = %#v", started)
+	}
+	state.Update("beta", McpStartupStatus{Kind: McpStartupStarting}, true)
+	if alphaReady := state.Update("alpha", McpStartupStatus{Kind: McpStartupReady}, false); alphaReady.Settled {
+		t.Fatalf("alpha ready must keep waiting for beta: %#v", alphaReady)
+	}
+	if lateStart := state.Update("late", McpStartupStatus{Kind: McpStartupStarting}, false); lateStart.Settled {
+		t.Fatalf("a newly observed start stays in the round: %#v", lateStart)
+	}
+	state.Update("beta", McpStartupStatus{Kind: McpStartupReady}, false)
+	finished := state.Update("late", McpStartupStatus{Kind: McpStartupReady}, true)
+	if !finished.Finished || len(finished.Failed) != 0 || len(finished.Cancelled) != 0 {
+		t.Fatalf("reported-only round settled on observed starts = %#v", finished)
+	}
+}
+
+func TestMcpStartupReportedOnlyIdleTerminalDiagnosticsMatchRust(t *testing.T) {
+	state := NewMcpStartupRoundState(nil)
+	state.TrackReportedServers()
+	failure := McpStartupStatus{Kind: McpStartupFailed, Error: "Session expired", FailureReason: "reauthenticationRequired"}
+
+	failed := state.Update("deferred", failure, true)
+	if !failed.StandaloneDiagnostic || failed.Active || failed.Finished || len(state.Status) != 0 {
+		t.Fatalf("idle failure = %#v state=%#v", failed, state)
+	}
+	if !reflect.DeepEqual(failed.Failed, []string{"deferred"}) {
+		t.Fatalf("idle failure servers = %#v", failed.Failed)
+	}
+	if got := strings.Join(failed.Warnings, "\n"); !strings.Contains(got, "Session expired") || !strings.Contains(got, "MCP startup incomplete (failed: deferred)") {
+		t.Fatalf("idle failure warnings = %#v", failed.Warnings)
+	}
+
+	repeat := state.Update("deferred", failure, true)
+	if repeat.StandaloneDiagnostic || repeat.Failed != nil || len(repeat.Warnings) != 0 || len(state.Status) != 0 {
+		t.Fatalf("repeated idle failure = %#v state=%#v", repeat, state)
+	}
+
+	cancelled := state.Update("other", McpStartupStatus{Kind: McpStartupCancelled}, true)
+	if !cancelled.StandaloneDiagnostic || !reflect.DeepEqual(cancelled.Cancelled, []string{"other"}) {
+		t.Fatalf("idle cancellation = %#v", cancelled)
+	}
+	if got := strings.Join(cancelled.Warnings, "\n"); !strings.Contains(got, "MCP startup interrupted. The following servers were not initialized: other") {
+		t.Fatalf("idle cancellation warnings = %#v", cancelled.Warnings)
+	}
+
+	ready := state.Update("eager", McpStartupStatus{Kind: McpStartupReady}, true)
+	if ready.StandaloneDiagnostic || ready.Active || len(ready.Warnings) != 0 || len(state.Status) != 0 {
+		t.Fatalf("idle ready = %#v state=%#v", ready, state)
+	}
+}
+
+func TestMcpStartupReportedOnlyReannouncesAfterObservedRetryMatchRust(t *testing.T) {
+	state := NewMcpStartupRoundState(nil)
+	state.TrackReportedServers()
+	failure := McpStartupStatus{Kind: McpStartupFailed, Error: "Session expired"}
+	if first := state.Update("deferred", failure, true); !first.StandaloneDiagnostic {
+		t.Fatalf("first idle failure = %#v", first)
+	}
+
+	started := state.Update("deferred", McpStartupStatus{Kind: McpStartupStarting}, true)
+	if !started.Active || started.Settled {
+		t.Fatalf("observed retry start = %#v", started)
+	}
+	retry := state.Update("deferred", failure, true)
+	if retry.StandaloneDiagnostic || !retry.Finished || !reflect.DeepEqual(retry.Failed, []string{"deferred"}) {
+		t.Fatalf("retry failure = %#v", retry)
+	}
+	if got := strings.Join(retry.Warnings, "\n"); !strings.Contains(got, "Session expired") || !strings.Contains(got, "MCP startup incomplete (failed: deferred)") {
+		t.Fatalf("retry warnings = %#v", retry.Warnings)
+	}
+}
+
+func TestMcpStartupReportedOnlyRechecksIdenticalFailureAfterLagMatchRust(t *testing.T) {
+	state := NewMcpStartupRoundState(nil)
+	state.TrackReportedServers()
+	failure := McpStartupStatus{Kind: McpStartupFailed, Error: "handshake failed"}
+	first := state.Update("alpha", failure, true)
+	if len(first.Warnings) == 0 {
+		t.Fatalf("first failure = %#v", first)
+	}
+
+	if lag := state.FinishAfterLag(); lag.Finished || len(state.Status) != 0 {
+		t.Fatalf("lag without an active round = %#v state=%#v", lag, state)
+	}
+	again := state.Update("alpha", failure, true)
+	if !again.StandaloneDiagnostic || !reflect.DeepEqual(again.Warnings, first.Warnings) {
+		t.Fatalf("identical failure after lag = %#v, want warnings %#v", again, first.Warnings)
+	}
+	if len(state.Status) != 0 {
+		t.Fatalf("diagnostics reopened startup: %#v", state)
+	}
+}
+
+func TestMcpStartupReportedOnlyRoundSummaryIncludesAllOutcomesMatchRust(t *testing.T) {
+	state := NewMcpStartupRoundState(nil)
+	state.TrackReportedServers()
+	failure := McpStartupStatus{Kind: McpStartupFailed, Error: "Session expired"}
+
+	state.Update("deferred", failure, true)
+	state.Update("deferred", failure, true)
+	state.Update("other", McpStartupStatus{Kind: McpStartupCancelled}, true)
+	state.Update("deferred", McpStartupStatus{Kind: McpStartupStarting}, true)
+	firstRound := state.Update("deferred", failure, true)
+	if !firstRound.Finished || !reflect.DeepEqual(firstRound.Failed, []string{"deferred"}) {
+		t.Fatalf("first round = %#v", firstRound)
+	}
+
+	// The next reload only delivered eager's start; both terminal outcomes and
+	// the cancellation still count in the round summary.
+	state.Update("eager", McpStartupStatus{Kind: McpStartupStarting}, true)
+	state.Update("deferred", failure, false)
+	state.Update("other", McpStartupStatus{Kind: McpStartupCancelled}, false)
+	last := state.Update("eager", failure, true)
+	if !last.Finished {
+		t.Fatalf("second round = %#v", last)
+	}
+	if !reflect.DeepEqual(last.Failed, []string{"deferred", "eager"}) || !reflect.DeepEqual(last.Cancelled, []string{"other"}) {
+		t.Fatalf("second round outcomes failed=%#v cancelled=%#v", last.Failed, last.Cancelled)
+	}
+	if got := strings.Join(last.Warnings, "\n"); !strings.Contains(got, "MCP startup interrupted. The following servers were not initialized: other") || !strings.Contains(got, "MCP startup incomplete (failed: deferred, eager)") {
+		t.Fatalf("second round warnings = %#v", last.Warnings)
+	}
+}

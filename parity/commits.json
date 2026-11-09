@@ -45005,11 +45005,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "Go already tracks MCP startup rounds with expected servers (tui/tea/model.go mcpStartup, MCPStartupUpdateMsg, mcpStartupFinishLag) and refreshes expected servers on lagged events (tui/app/app_server_events.go RefreshMCPStartupExpectedServers).",
-    "Residual: the shared-app-server attach path does not yet refresh the expected-server set and reconcile an already-running startup round the way Rust chatwidget/mcp_startup.rs does; no attach-scenario startup test exists.",
-    "plan: update/plan_2026_11_09.md (#60280)"
+    "tui/chatwidget/mcp_startup.go ports #60280: TrackReportedServers/ReportedOnly rounds settle once every observed start is terminal, LastDiagnostics suppresses duplicate failure/cancellation diagnostics, idle terminal updates emit standalone failure+summary diagnostics, and FinishAfterLag clears the diagnostic record so an identical failure after lag is reported again.",
+    "tui/tea/model.go and tui/tea/agent.go refresh the expected-server set like Rust's refresh_mcp_startup_expected_servers_from_config: shared app-server attachments (Options.MCPStartupTrackReportedOnly) and subagent threads track reported servers, while embedded primary/side threads restore the configured round. app/remote_tui.go forwards mcpServerStatusUpdated notifications and marks the attachment reported-only.",
+    "Tests: go test ./tui/chatwidget ./tui/tea (TestMcpStartupReportedOnly*, TestModelReportedOnlyMCPStartupMatchesRust, TestModelMCPStartupInterruptIgnoresLateTerminalUpdates); go test ./app -run RemoteMCPStartup; go vet ./tui/chatwidget ./tui/tea ./app."
    ]
   },
   {

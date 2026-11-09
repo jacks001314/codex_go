@@ -40,8 +40,19 @@ func MCPStartupIncompleteMessage(failed []string) string {
 }
 
 type McpStartupRoundState struct {
-	ExpectedServers             []string
-	ExpectedServersSet          bool
+	ExpectedServers    []string
+	ExpectedServersSet bool
+	// ReportedOnly marks a startup view whose round membership comes from the
+	// startup notifications the client observed (Rust #60280). Shared app
+	// servers only send updates after subscription and may run a different
+	// configuration, and subagents can start deferred servers individually, so
+	// waiting for locally configured servers would leave the TUI stuck busy.
+	ReportedOnly bool
+	// LastDiagnostics remembers the last terminal outcome reported per server so
+	// an identical failure or cancellation is not announced twice. An observed
+	// retry or a lagged notification stream clears the record.
+	LastDiagnostics map[string]McpStartupStatus
+
 	Status                      map[string]McpStartupStatus
 	IgnoreUpdatesUntilNextStart bool
 	AllowTerminalOnlyNextRound  bool
@@ -57,6 +68,10 @@ type McpStartupUpdateResult struct {
 	Failed    []string
 	Cancelled []string
 	Active    bool
+	// StandaloneDiagnostic reports a terminal outcome that arrived while no
+	// round was active (Rust #60280). The caller renders the diagnostics but
+	// must not open or close a startup round for it.
+	StandaloneDiagnostic bool
 }
 
 func NewMcpStartupRoundState(expectedServers []string) McpStartupRoundState {
@@ -68,12 +83,27 @@ func NewMcpStartupRoundState(expectedServers []string) McpStartupRoundState {
 	}
 }
 
+// TrackReportedServers switches the round to wait only for startups the client
+// observes, mirroring Rust's ChatWidget::track_reported_mcp_startup_servers.
+// Repeating the call keeps the diagnostics recorded for the current view.
+func (s *McpStartupRoundState) TrackReportedServers() {
+	if s == nil || s.ReportedOnly {
+		return
+	}
+	s.ReportedOnly = true
+	s.ExpectedServers = nil
+	s.ExpectedServersSet = true
+	s.LastDiagnostics = map[string]McpStartupStatus{}
+}
+
 func (s *McpStartupRoundState) SetExpectedServers(serverNames []string) {
 	if s == nil {
 		return
 	}
 	s.ExpectedServers = normalizeStringSet(serverNames)
 	s.ExpectedServersSet = true
+	s.ReportedOnly = false
+	s.LastDiagnostics = nil
 }
 
 func (s *McpStartupRoundState) Update(server string, status McpStartupStatus, completeWhenSettled bool) McpStartupUpdateResult {
@@ -88,6 +118,29 @@ func (s *McpStartupRoundState) Update(server string, status McpStartupStatus, co
 	}
 	if s.PendingNextRound == nil {
 		s.PendingNextRound = map[string]McpStartupStatus{}
+	}
+
+	reportDiagnostic := true
+	if s.ReportedOnly {
+		if s.LastDiagnostics == nil {
+			s.LastDiagnostics = map[string]McpStartupStatus{}
+		}
+		if mcpStartupStatusIsDiagnostic(status) {
+			previous, seen := s.LastDiagnostics[server]
+			s.LastDiagnostics[server] = status
+			reportDiagnostic = !seen || !sameMcpStartupStatus(previous, status)
+		} else {
+			delete(s.LastDiagnostics, server)
+			reportDiagnostic = false
+		}
+		// An idle client can receive a terminal update without ever seeing its
+		// start; report it without reopening startup.
+		if len(s.Status) == 0 && status.Kind != McpStartupStarting {
+			if !reportDiagnostic {
+				return McpStartupUpdateResult{}
+			}
+			return standaloneMcpStartupDiagnostic(server, status)
+		}
 	}
 
 	var warnings []string
@@ -111,8 +164,8 @@ func (s *McpStartupRoundState) Update(server string, status McpStartupStatus, co
 		s.PendingNextRound = map[string]McpStartupStatus{}
 		activatedPendingRound = true
 	} else {
-		if status.Kind == McpStartupFailed {
-			if previous, ok := s.Status[server]; !ok || previous.Kind != McpStartupFailed || previous.Error != status.Error || previous.FailureReason != status.FailureReason {
+		if status.Kind == McpStartupFailed && reportDiagnostic {
+			if previous, ok := s.Status[server]; !ok || !sameMcpStartupStatus(previous, status) {
 				warnings = append(warnings, status.Error)
 			}
 		}
@@ -181,16 +234,21 @@ func (s *McpStartupRoundState) FinishAfterLag() McpStartupUpdateResult {
 	if s == nil {
 		return McpStartupUpdateResult{}
 	}
+	result := McpStartupUpdateResult{}
+	if len(s.Status) > 0 {
+		result = s.Finish()
+	}
+	if s.ReportedOnly {
+		// A missed Starting may have begun a new attempt with the same error.
+		s.LastDiagnostics = map[string]McpStartupStatus{}
+	}
 	if s.IgnoreUpdatesUntilNextStart {
 		if len(s.PendingNextRound) == 0 {
 			s.PendingNextRoundSawStarting = false
 		}
 		s.AllowTerminalOnlyNextRound = true
 	}
-	if len(s.Status) == 0 {
-		return McpStartupUpdateResult{}
-	}
-	return s.Finish()
+	return result
 }
 
 func (s McpStartupRoundState) Header() string {
@@ -226,12 +284,14 @@ func (s McpStartupRoundState) isSettled() bool {
 	if len(s.Status) == 0 {
 		return false
 	}
-	if !s.ExpectedServersSet {
-		return false
-	}
-	for _, name := range s.ExpectedServers {
-		if _, ok := s.Status[name]; !ok {
+	if !s.ReportedOnly {
+		if !s.ExpectedServersSet {
 			return false
+		}
+		for _, name := range s.ExpectedServers {
+			if _, ok := s.Status[name]; !ok {
+				return false
+			}
 		}
 	}
 	for _, status := range s.Status {
@@ -260,6 +320,55 @@ func (s McpStartupRoundState) pendingRoundLooksFresh() bool {
 		}
 	}
 	return false
+}
+
+func mcpStartupStatusIsDiagnostic(status McpStartupStatus) bool {
+	return status.Kind == McpStartupFailed || status.Kind == McpStartupCancelled
+}
+
+func sameMcpStartupStatus(left, right McpStartupStatus) bool {
+	return left.Kind == right.Kind && left.Error == right.Error && left.FailureReason == right.FailureReason
+}
+
+// standaloneMcpStartupDiagnostic mirrors Rust's idle ReportedOnly branch: the
+// failure or cancellation is surfaced together with the round summary even
+// though the client never saw the server start.
+func standaloneMcpStartupDiagnostic(server string, status McpStartupStatus) McpStartupUpdateResult {
+	result := McpStartupUpdateResult{StandaloneDiagnostic: true}
+	switch status.Kind {
+	case McpStartupFailed:
+		result.Failed = []string{server}
+		if status.Error != "" {
+			result.Warnings = append(result.Warnings, status.Error)
+		}
+	case McpStartupCancelled:
+		result.Cancelled = []string{server}
+	}
+	result.Warnings = append(result.Warnings, summarizeMcpStartupOutcomes(map[string]McpStartupStatus{server: status})...)
+	return result
+}
+
+func summarizeMcpStartupOutcomes(statuses map[string]McpStartupStatus) []string {
+	failed := []string{}
+	cancelled := []string{}
+	for name, status := range statuses {
+		switch status.Kind {
+		case McpStartupFailed:
+			failed = append(failed, name)
+		case McpStartupCancelled:
+			cancelled = append(cancelled, name)
+		}
+	}
+	sort.Strings(failed)
+	sort.Strings(cancelled)
+	warnings := []string{}
+	if len(cancelled) > 0 {
+		warnings = append(warnings, MCPStartupInterruptedMessage(cancelled))
+	}
+	if len(failed) > 0 {
+		warnings = append(warnings, MCPStartupIncompleteMessage(failed))
+	}
+	return warnings
 }
 
 func cloneMcpStartupMap(in map[string]McpStartupStatus) map[string]McpStartupStatus {
