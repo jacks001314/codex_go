@@ -45736,10 +45736,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "本轮未审计落地：sandbox CLI 启动未统一走共享 sandbox manager",
-    "Go 锚点：sandbox/",
+    "sandbox/run.go: 新增 CommandRunPlan.applyInheritedTerminalPolicy，在共享规划层对 seatbelt 计划应用继承终端策略并加 deny file-ioctl（TIOCSTI），app/app.go 不再自己调用 HardenSeatbeltArgsForInheritedTerminal，所有走 BuildCommandRunPlan 的启动路径（CLI、exec-server fs helper、exec-server）自动继承。",
+    "sandbox/run.go: 新增 WrappedSandboxCommand（Argv/Dir/SandboxType/PermissionProfileID/RequiresPlatformSandbox）与 CommandRunPlan.WrappedCommand、ProcessCommand(ctx)、RequiresSessionLauncher()；argv 原样保留（Linux helper 的 argv[0] 不被改写），Dir 取 CommandCWD 否则 CWD。app.runSandbox 改为由 wrapped.ProcessCommand 构建进程。",
+    "Go 其余映射说明：权限 profile、workspace roots、托管网络 JSON 与 linux/seatbelt 包装早已集中在 BuildCommandRunPlan；Windows 原生 token sandbox 在 app 层只有 session launcher 路径（runWindowsSandboxPlan -> runWindowsSandboxWrapperExitCode），RequiresSessionLauncher 把该约束显式化；代理环境变量仍由 CreateEnv 在 CLI 侧生成后交给子进程；Go 没有 Rust 的 WrappedSandboxCommand::exec_request 结构，exec-server 直接以 argv+cwd+sandbox context 调用，Argv/Dir 即等价信息。",
+    "测试：sandbox/wrapped_command_like_rust_test.go 覆盖策略移入规划层（seatbelt 被加固、非 seatbelt 不变）、argv 与 CommandCWD 保真、Linux helper 路径与 argv[0]、Windows token/MXC 需要 session launcher、nil/空命令报错。验证：go test ./sandbox -count=1 ok；go test ./app -run Sandbox -count=1 ok；go build ./... exit 0。",
     "plan: update/plan_2026_11_10.md (#60517)"
    ]
   },
