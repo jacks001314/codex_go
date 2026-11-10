@@ -45630,10 +45630,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "本轮未审计落地：sandbox 遥测标签未从 permission profile 推导",
-    "Go 锚点：otel/",
+    "appserver/session_telemetry.go: conversation_starts 的 sandbox_policy 标签由 turnSandboxPermissionProfile 解析出的 effective permission profile 直接推导（telemetrySandboxPolicy），没有为事件另建 legacy SandboxPolicy，与 Rust legacy_sandbox_policy_label 的分支一致。",
+    "标签映射已固定：disabled→danger-full-access、read-only→read-only、workspace-write→workspace-write、full-disk+network→danger-full-access、external(no network)→external-sandbox、external(network)→danger-full-access；可写但无 legacy 投影的 profile 仍报 workspace-write。",
+    "测试：新增 TestSandboxTelemetryLabelComesFromPermissionProfileLikeRust（7 个分支 + nil profile），go test ./appserver -run 'SandboxTelemetryLabelComes' 通过。",
     "plan: update/plan_2026_11_10.md (#60500)"
    ]
   },
