@@ -1239,7 +1239,7 @@ func (r *ResponsesAgentRunner) Prewarm(ctx context.Context, request *AgentReques
 	}
 	requestStartedAt := time.Now()
 	r.recordWebsocketContinuation("full", "prewarm", "warmup", false)
-	writeErr := conn.Write(connectCtx, websocket.MessageText, marshalResponsesMessage(payload))
+	writeErr := writeResponsesWebsocketMessage(connectCtx, conn, websocket.MessageText, marshalResponsesMessage(payload))
 	r.recordWebsocketRequest(writeErr, time.Since(requestStartedAt))
 	// A warmup that redialed reports a fresh transport like any other handshake.
 	r.recordWebsocketRequestRecord(ctx, writeErr, time.Since(requestStartedAt), false)
@@ -1519,7 +1519,7 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 	// and clears the flag on that same attempt.
 	afterPrewarm := request.PreviousResponseFromPrewarm
 	r.recordWebsocketContinuation(continuationMode, continuationReason, "generation", afterPrewarm)
-	writeErr := conn.Write(ctx, websocket.MessageText, marshalResponsesMessage(payload))
+	writeErr := writeResponsesWebsocketMessage(ctx, conn, websocket.MessageText, marshalResponsesMessage(payload))
 	r.recordWebsocketRequest(writeErr, time.Since(requestStartedAt))
 	r.recordWebsocketRequestRecord(ctx, writeErr, time.Since(requestStartedAt), connectionReused)
 	if writeErr == nil {
@@ -1735,6 +1735,40 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 	}
 }
 
+// responsesWebsocketFragmentSize bounds each frame of a large Responses
+// request (Rust #60522 keeps the same 1 MiB fragment size).
+const responsesWebsocketFragmentSize = 1024 * 1024
+
+// writeResponsesWebsocketMessage sends one WebSocket message, splitting text
+// payloads larger than 1 MiB into bounded frames with continuation opcodes and
+// a final frame (Rust #60522 send_message). Bytes are never re-encoded, so a
+// multibyte UTF-8 character may cross a frame boundary unchanged.
+func writeResponsesWebsocketMessage(ctx context.Context, conn *websocket.Conn, typ websocket.MessageType, payload []byte) error {
+	if conn == nil {
+		return errors.New("responses websocket connection is nil")
+	}
+	if typ != websocket.MessageText || len(payload) <= responsesWebsocketFragmentSize {
+		return conn.Write(ctx, typ, payload)
+	}
+	writer, err := conn.Writer(ctx, typ)
+	if err != nil {
+		return err
+	}
+	remaining := payload
+	for len(remaining) > 0 {
+		size := responsesWebsocketFragmentSize
+		if len(remaining) < size {
+			size = len(remaining)
+		}
+		if _, err := writer.Write(remaining[:size]); err != nil {
+			_ = writer.Close()
+			return err
+		}
+		remaining = remaining[size:]
+	}
+	return writer.Close()
+}
+
 // writeResponsesWebsocketInterrupt asks the server to stop generating the
 // current response while preserving what it already completed (Rust #55969's
 // `ResponseInterrupt::Drain`).
@@ -1747,7 +1781,7 @@ func writeResponsesWebsocketInterrupt(ctx context.Context, conn *websocket.Conn,
 		"response_id": strings.TrimSpace(responseID),
 		"mode":        "discard_partial_items",
 	}
-	return conn.Write(ctx, websocket.MessageText, marshalResponsesMessage(payload))
+	return writeResponsesWebsocketMessage(ctx, conn, websocket.MessageText, marshalResponsesMessage(payload))
 }
 
 // drainedAgentResponse builds the preempted result of a drained WebSocket

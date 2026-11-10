@@ -45750,10 +45750,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "本轮未审计落地：大 Responses WebSocket 消息未分帧",
-    "Go 锚点：codexapi/",
+    "model/responses_agent.go: 新增 writeResponsesWebsocketMessage，文本载荷超过 1 MiB 时用 coder/websocket 的 Writer 逐段写入，产生 text + continuation 分帧并以 final 帧结束，字节原样保留（Rust #60522 send_message 的 FRAGMENT_SIZE=1 MiB 同值）。",
+    "三处 Responses WebSocket 写入（预热请求、普通请求、interrupt）全部改走该 helper；≤1 MiB 仍走单帧 conn.Write。",
+    "测试：新增 TestResponsesWebsocketFragmentsLargeMessagesLikeRust，用裸 TCP 捕获帧头部，断言首帧 FIN=false opcode=1 且正好 1 MiB、后续帧 opcode=0、末帧 FIN=true、跨帧多字节字符与总载荷逐字节一致，并覆盖 1 MiB 边界单帧；go test ./model -count=1、go test ./appserver -run 'Websocket|WebSocket'、go build ./... 通过。",
     "plan: update/plan_2026_11_10.md (#60522)"
    ]
   },
