@@ -29,6 +29,26 @@ func TestBundledSQLiteMeetsRustMinimum(t *testing.T) {
 
 // TestSqliteConfigForCodexHomeWithOverride pins the sqlite_home precedence:
 // the configured override wins, then CODEX_SQLITE_HOME, then the codex home.
+// TestBundledSQLiteDriverVersionMatchesRuntime keeps the link-time driver
+// constant and the amalgamation actually running in the process in sync. Rust
+// pins the same pairing through `libsqlite3_sys::SQLITE_VERSION_NUMBER`
+// (#60432).
+func TestBundledSQLiteDriverVersionMatchesRuntime(t *testing.T) {
+	db, err := OpenSQLite(context.Background(), ":memory:")
+	if err != nil {
+		t.Fatalf("OpenSQLite() error = %v", err)
+	}
+	defer db.Close()
+
+	var version string
+	if err := db.QueryRow(`SELECT sqlite_version()`).Scan(&version); err != nil {
+		t.Fatalf("query sqlite_version(): %v", err)
+	}
+	if version != bundledSQLiteVersion {
+		t.Fatalf("driver constant %q != running sqlite version %q", bundledSQLiteVersion, version)
+	}
+}
+
 func TestSqliteConfigForCodexHomeWithOverride(t *testing.T) {
 	codexHome := t.TempDir()
 	override := t.TempDir()

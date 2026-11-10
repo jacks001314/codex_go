@@ -12,7 +12,7 @@
   "goStartCommit": "5e25b91daebea89b54db643b2d70ee4c930f9cd7"
  },
  "requirements": {
-  "minimumSQLiteVersion": "3.51.3",
+  "minimumSQLiteVersion": "3.54.0",
   "zeroExceptions": true,
   "requiredPlatforms": [
    "windows/amd64",
@@ -33,7 +33,7 @@
   "finalRawFork": "sdktests/artifacts/2026-08-01T065723289Z-raw_paginated_fork",
   "finalRawConfigRequirements": "sdktests/artifacts/2026-08-01T065723280Z-raw_config_requirements",
   "nativeSQLite": [
-   "windows/amd64: SQLite 3.51.3, lifecycle and WAL recovery pass"
+   "windows/amd64: SQLite 3.54.1, lifecycle and WAL recovery pass"
   ]
  },
  "certificationBlockers": [

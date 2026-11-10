@@ -17,10 +17,15 @@ import (
 	"time"
 
 	modernsqlite "modernc.org/sqlite"
+	sqlitelib "modernc.org/sqlite/lib"
 )
 
+// MinimumSQLiteVersion is the oldest SQLite the state layer accepts. Rust
+// #60432 raises the bundled floor to 3.54: that release fixes
+// RUSTSEC-2026-0459 for databases opened with a WAL while keeping the
+// WAL-reset corruption fix.
 const (
-	MinimumSQLiteVersion   = "3.51.3"
+	MinimumSQLiteVersion   = "3.54.0"
 	StateSQLiteFilename    = "state_5.sqlite"
 	LogsSQLiteFilename     = "logs_2.sqlite"
 	GoalsSQLiteFilename    = "goals_1.sqlite"
@@ -745,6 +750,27 @@ func sqliteFileDSNWithMode(path string, mode string, pragmas bool) (string, erro
 	}
 	u.RawQuery = query.Encode()
 	return u.String(), nil
+}
+
+// bundledSQLiteVersion is the SQLite amalgamation compiled into
+// modernc.org/sqlite at build time. Rust asserts the same invariant at compile
+// time via `libsqlite3_sys::SQLITE_VERSION_NUMBER` (#60432). Go cannot compare
+// version strings during compilation, so the equivalent check runs while the
+// package is initialized: a driver that regresses below the floor panics
+// instead of silently shipping an older WAL implementation.
+const bundledSQLiteVersion = sqlitelib.SQLITE_VERSION
+
+var _ = mustMeetBundledSQLiteFloor(bundledSQLiteVersion)
+
+func mustMeetBundledSQLiteFloor(version string) struct{} {
+	ok, err := SQLiteVersionAtLeast(version, MinimumSQLiteVersion)
+	if err != nil {
+		panic(fmt.Sprintf("invalid bundled sqlite version %q: %v", version, err))
+	}
+	if !ok {
+		panic(fmt.Sprintf("bundled sqlite %s must be >= %s for the WAL-reset and WAL page-size fixes", version, MinimumSQLiteVersion))
+	}
+	return struct{}{}
 }
 
 func RequireSQLiteVersion(ctx context.Context, db *sql.DB) error {

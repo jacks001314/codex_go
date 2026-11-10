@@ -101,7 +101,7 @@ func TestAlignmentBaselineIsFrozenAndTraceable(t *testing.T) {
 	if baseline.Target.RustCommit != candidateRustTo || baseline.Target.RustBranch != "main" || baseline.Target.GoStartCommit != candidateGoStart {
 		t.Fatalf("candidate target = %#v", baseline.Target)
 	}
-	if baseline.Requirements.MinimumSQLiteVersion != "3.51.3" || !baseline.Requirements.ZeroExceptions {
+	if baseline.Requirements.MinimumSQLiteVersion != "3.54.0" || !baseline.Requirements.ZeroExceptions {
 		t.Fatalf("candidate requirements = %#v", baseline.Requirements)
 	}
 	if len(baseline.Requirements.RequiredPlatforms) != 6 || baseline.Requirements.RequiredConsecutiveDifferentialRuns != 3 || baseline.Requirements.RequiredConsecutiveSDKRuns != 3 {
