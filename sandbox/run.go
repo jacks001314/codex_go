@@ -1,9 +1,11 @@
 package sandbox
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -320,7 +322,88 @@ func BuildCommandRunPlan(req *CommandRunRequest) (*CommandRunPlan, error) {
 			plan.SandboxType = SandboxTypeWindowsRestrictedToken
 		}
 	}
+	if err := plan.applyInheritedTerminalPolicy(); err != nil {
+		return nil, err
+	}
 	return plan, nil
+}
+
+// applyInheritedTerminalPolicy keeps the macOS launcher from serving terminal
+// input back to the sandboxed command. Rust #60517 moved this policy out of the
+// CLI and into the shared sandbox manager so every launch path inherits it.
+func (p *CommandRunPlan) applyInheritedTerminalPolicy() error {
+	if p == nil || p.SandboxType != SandboxTypeMacosSeatbelt {
+		return nil
+	}
+	hardened, err := HardenSeatbeltArgsForInheritedTerminal(p.Command)
+	if err != nil {
+		return err
+	}
+	p.Command = hardened
+	return nil
+}
+
+// WrappedSandboxCommand is the sandboxed launch a prepared plan yields (Rust
+// sandboxing::launch::WrappedSandboxCommand, #60517). It carries the native
+// argv unchanged - a Linux helper keeps its own argv[0] - together with the
+// launch directory and the sandbox facts a caller needs to build a process or
+// hand the command to an executor.
+type WrappedSandboxCommand struct {
+	Argv                    []string
+	Dir                     string
+	SandboxType             SandboxType
+	PermissionProfileID     string
+	RequiresPlatformSandbox bool
+}
+
+// WrappedCommand returns the launch for a prepared plan.
+func (p *CommandRunPlan) WrappedCommand() (*WrappedSandboxCommand, error) {
+	if p == nil {
+		return nil, fmt.Errorf("%w: plan is nil", ErrInvalidSandboxRunRequest)
+	}
+	if len(p.Command) == 0 || strings.TrimSpace(p.Command[0]) == "" {
+		return nil, fmt.Errorf("%w: command is required", ErrInvalidSandboxRunRequest)
+	}
+	dir := strings.TrimSpace(p.CWD)
+	if commandCWD := strings.TrimSpace(p.CommandCWD); commandCWD != "" {
+		dir = commandCWD
+	}
+	return &WrappedSandboxCommand{
+		Argv:                    cloneSandboxStrings(p.Command),
+		Dir:                     dir,
+		SandboxType:             p.SandboxType,
+		PermissionProfileID:     strings.TrimSpace(p.PermissionProfileID),
+		RequiresPlatformSandbox: p.RequiresPlatformSandbox,
+	}, nil
+}
+
+// RequiresSessionLauncher reports whether the launch must go through the
+// long-lived session wrapper instead of a plain process. Rust #60517 requires it
+// for native Windows token sandboxes, which need the wrapper's desktop and
+// token setup.
+func (c *WrappedSandboxCommand) RequiresSessionLauncher() bool {
+	if c == nil {
+		return false
+	}
+	switch c.SandboxType {
+	case SandboxTypeWindowsRestrictedToken, SandboxTypeWindowsMxc:
+		return true
+	default:
+		return false
+	}
+}
+
+// ProcessCommand builds the host process for the wrapped command. The caller
+// owns stdin, stdout, stderr, the environment, and the exit-code mapping.
+func (c *WrappedSandboxCommand) ProcessCommand(ctx context.Context) *exec.Cmd {
+	if c == nil || len(c.Argv) == 0 {
+		return nil
+	}
+	command := exec.CommandContext(ctx, c.Argv[0], c.Argv[1:]...)
+	if strings.TrimSpace(c.Dir) != "" {
+		command.Dir = filepath.Clean(c.Dir)
+	}
+	return command
 }
 
 // planCommandCWD resolves where the sandboxed command starts, defaulting to the

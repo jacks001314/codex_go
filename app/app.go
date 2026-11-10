@@ -387,13 +387,8 @@ func runSandbox(ctx context.Context, opts *cli.SandboxOptions, dispatchPaths *cl
 	if err := plan.UnsupportedError(); err != nil {
 		return err
 	}
-	if plan.SandboxType == sandbox.SandboxTypeMacosSeatbelt {
-		hardened, err := sandbox.HardenSeatbeltArgsForInheritedTerminal(plan.Command)
-		if err != nil {
-			return err
-		}
-		plan.Command = hardened
-	}
+	// The macOS inherited-terminal policy is applied by the shared planner
+	// (Rust #60517), so every launch path inherits it.
 	if plan.PermissionProfile != nil && !plan.PermissionProfile.Disabled {
 		integrityCWD := plan.CWD
 		if integrityCWD == "" {
@@ -413,13 +408,17 @@ func runSandbox(ctx context.Context, opts *cli.SandboxOptions, dispatchPaths *cl
 	if shouldUseWindowsSandbox(plan) {
 		return runWindowsSandboxPlan(ctx, plan, env, stdin, stdout, stderr)
 	}
-	command := exec.CommandContext(ctx, plan.Command[0], plan.Command[1:]...)
+	wrapped, err := plan.WrappedCommand()
+	if err != nil {
+		return err
+	}
+	command := wrapped.ProcessCommand(ctx)
+	if command == nil {
+		return errors.New("sandbox command is empty")
+	}
 	command.Stdin = stdin
 	command.Stdout = stdout
 	command.Stderr = stderr
-	if plan.CWD != "" {
-		command.Dir = filepath.Clean(plan.CWD)
-	}
 	command.Env = envSlice(env)
 	// Rust #48483: the sandboxed command is piped, so it must not allocate a
 	// console window when the CLI itself has no console.
