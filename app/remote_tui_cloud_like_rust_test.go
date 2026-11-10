@@ -10,6 +10,7 @@ import (
 	"codex_go/appserverdaemon"
 	"codex_go/cloudbackend"
 	"codex_go/cloudclient"
+	"codex_go/turn"
 )
 
 type fakeCloudRequester struct {
@@ -17,13 +18,27 @@ type fakeCloudRequester struct {
 	answers       []string
 	closed        bool
 	project       *cloudclient.ProjectEnvironment
+	submitted     []turn.TurnStartParams
+	submitErr     *cloudbackend.RPCError
+	methods       []appserver.Method
 }
 
 func (f *fakeCloudRequester) Request(_ context.Context, method appserver.Method, _ json.RawMessage) (json.RawMessage, *cloudbackend.RPCError) {
+	f.methods = append(f.methods, method)
 	if method == appserver.Method("initialize") {
 		return json.RawMessage("{\"userAgent\":\"codex-cloud\"}"), nil
 	}
 	return nil, &cloudbackend.RPCError{Code: -32601, Message: "Method not found"}
+}
+
+// SubmitUserMessage records the typed start-or-steer admission (Rust #60462).
+func (f *fakeCloudRequester) SubmitUserMessage(_ context.Context, params turn.TurnStartParams) (cloudbackend.CloudUserMessageReceipt, *cloudbackend.RPCError) {
+	f.submitted = append(f.submitted, params)
+	if f.submitErr != nil {
+		return cloudbackend.CloudUserMessageReceipt{}, f.submitErr
+	}
+	turnID := params.ClientUserMessageID
+	return cloudbackend.CloudUserMessageReceipt{Kind: cloudbackend.CloudUserMessageSteered, Turn: &appserver.Turn{ID: turnID}}, nil
 }
 
 func (f *fakeCloudRequester) Notifications() <-chan cloudbackend.Notification {

@@ -19,6 +19,8 @@ import (
 	"codex_go/cloudclient"
 	"codex_go/config"
 	"codex_go/features"
+	codextea "codex_go/tui/tea"
+	"codex_go/turn"
 )
 
 // cloudTUIOrigin is the hosted Cloud backend the preview talks to (Rust
@@ -81,12 +83,65 @@ func cloudTUIAuthString(values map[string]any, keys ...string) string {
 // cloudAppServerRequester is the slice of cloudbackend.Client the bridge uses.
 type cloudAppServerRequester interface {
 	Request(ctx context.Context, method appserver.Method, params json.RawMessage) (json.RawMessage, *cloudbackend.RPCError)
+	// SubmitUserMessage admits a user message through Cloud's native
+	// start-or-steer path (Rust #60462).
+	SubmitUserMessage(ctx context.Context, params turn.TurnStartParams) (cloudbackend.CloudUserMessageReceipt, *cloudbackend.RPCError)
 	Notifications() <-chan cloudbackend.Notification
 	AnswerServerRequest(requestID string) error
 	// SetLocalProject carries the host project outside the app-server wire
 	// protocol (Rust #60007).
 	SetLocalProject(project *cloudclient.ProjectEnvironment)
 	Close()
+}
+
+// SubmitUserMessage admits a user message through Cloud's native
+// start-or-steer path instead of the generic turn/start request (Rust #60462).
+func (t *cloudAppServerTransport) SubmitUserMessage(ctx context.Context, params turn.TurnStartParams) (cloudbackend.CloudUserMessageReceipt, *cloudbackend.RPCError) {
+	if t == nil || t.client == nil {
+		return cloudbackend.CloudUserMessageReceipt{}, &cloudbackend.RPCError{Code: -32603, Message: "cloud app-server client is unavailable"}
+	}
+	return t.client.SubmitUserMessage(ctx, params)
+}
+
+// cloudQuestionAnswerAdmitter is implemented by transports that can admit a
+// message with Cloud's start-or-steer semantics.
+type cloudQuestionAnswerAdmitter interface {
+	SubmitUserMessage(ctx context.Context, params turn.TurnStartParams) (cloudbackend.CloudUserMessageReceipt, *cloudbackend.RPCError)
+}
+
+// usesCloudQuestionAnswerAdmission reports whether a submission must use the
+// typed Cloud admission. Rust #60462 resolves Cloud question answers to
+// start-or-steer and leaves every other submission on the generic request path.
+func usesCloudQuestionAnswerAdmission(mode ThreadParamsMode, request codextea.SubmitRequest) bool {
+	return mode == ThreadParamsModeCloud && request.Source == codextea.SubmitSourceQuestionAnswer
+}
+
+// admitCloudUserMessage sends one start-or-steer admission and reports the turn
+// it admitted. A receipt without a turn means the message was accepted before,
+// which must not be resent.
+func admitCloudUserMessage(ctx context.Context, admitter cloudQuestionAnswerAdmitter, params turn.TurnStartParams) (string, error) {
+	receipt, rpcErr := admitter.SubmitUserMessage(ctx, params)
+	if rpcErr != nil {
+		return "", &remoteRPCError{Code: rpcErr.Code, Message: rpcErr.Message}
+	}
+	switch receipt.Kind {
+	case cloudbackend.CloudUserMessageStarted, cloudbackend.CloudUserMessageSteered:
+		if receipt.Turn != nil {
+			if turnID := strings.TrimSpace(receipt.Turn.ID); turnID != "" {
+				return turnID, nil
+			}
+		}
+		return "", errors.New("cloud admission did not return a turn id")
+	case cloudbackend.CloudUserMessageDuplicate:
+		if receipt.TurnID != nil {
+			if turnID := strings.TrimSpace(*receipt.TurnID); turnID != "" {
+				return turnID, nil
+			}
+		}
+		return "", errors.New("Cloud already accepted this message; reopen the conversation to see its status before sending again.")
+	default:
+		return "", errors.New("The cloud returned an unsupported admission receipt.")
+	}
 }
 
 // SetLocalProject forwards the host project to the cloud backend for the next

@@ -353,6 +353,17 @@ func (m *Model) acceptAsyncQuestion() {
 // the editable Other draft must not be blank. While a turn is running the
 // answer is queued, matching Rust's queue_user_message path.
 func (m *Model) submitAsyncQuestionAnswer(queue bool) bubbletea.Cmd {
+	return m.submitAsyncQuestionAnswerWith(queue, m.submitComposerWithSource)
+}
+
+// submitAsyncQuestionAnswerDuringTurn answers the focused question through the
+// running turn. Cloud sessions admit it with start-or-steer semantics so the
+// answer is not left behind the turn (Rust #60462).
+func (m *Model) submitAsyncQuestionAnswerDuringTurn() bubbletea.Cmd {
+	return m.submitAsyncQuestionAnswerWith(false, m.steerComposerWithSource)
+}
+
+func (m *Model) submitAsyncQuestionAnswerWith(queue bool, submit func(SubmitSource) bubbletea.Cmd) bubbletea.Cmd {
 	if m == nil || m.asyncQuestions.UnansweredCount() == 0 {
 		return nil
 	}
@@ -395,7 +406,7 @@ func (m *Model) submitAsyncQuestionAnswer(queue bool) bubbletea.Cmd {
 	if queue {
 		cmd = m.queueComposer(false)
 	} else {
-		cmd = m.submitComposer()
+		cmd = submit(SubmitSourceQuestionAnswer)
 	}
 	m.asyncQuestionAnswerInFlight = false
 	m.attachments = attachments

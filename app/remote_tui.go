@@ -265,6 +265,17 @@ func (c *remoteTUIInterruptController) steer(request codextea.SubmitRequest, cli
 		return err
 	}
 	defer client.close()
+	// Rust #60462: Cloud question answers steer through the native start-or-steer
+	// admission; a Cloud thread has no turn/steer handler.
+	if admitter, ok := client.transport.(cloudQuestionAnswerAdmitter); ok && usesCloudQuestionAnswerAdmission(client.threadParamsMode, request) {
+		_, admitErr := admitCloudUserMessage(ctx, admitter, turn.TurnStartParams{
+			ThreadID:            params.ThreadID,
+			ClientUserMessageID: params.ClientUserMessageID,
+			Input:               params.Input,
+			TurnTrigger:         interactiveTurnTrigger(request),
+		})
+		return admitErr
+	}
 	var response turn.TurnSteerResponse
 	return remoteSessionRequest(ctx, client, appserver.MethodTurnSteer, params, &response)
 }
@@ -4010,6 +4021,11 @@ func (c *remoteAppServerTUIClient) startTurn(ctx context.Context, root *cli.Root
 	params, err := remoteTurnStartParamsForMode(c.threadParamsMode, root, state, threadID, request)
 	if err != nil {
 		return "", err
+	}
+	// Rust #60462: a Cloud question answer is admitted through the native
+	// start-or-steer path so it reaches the running turn instead of waiting.
+	if admitter, ok := c.transport.(cloudQuestionAnswerAdmitter); ok && usesCloudQuestionAnswerAdmission(c.threadParamsMode, request) {
+		return admitCloudUserMessage(ctx, admitter, params)
 	}
 	id, err := c.sendRequest(ctx, appserver.MethodTurnStart, params)
 	if err != nil {

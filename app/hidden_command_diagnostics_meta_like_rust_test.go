@@ -32,7 +32,10 @@ func TestHiddenCommandDiagnosticsMetaLikeRust(t *testing.T) {
 		{
 			name: "tcp-tunnel missing required",
 			args: []string{"tcp-tunnel"},
-			want: "error: the following required arguments were not provided:\n  --proxy-url <PROXY_URL>\n  --proxy-origins-file <PROXY_ORIGINS_FILE>\n  --target <TARGET>\n\nUsage: codex tcp-tunnel --proxy-url <PROXY_URL> --proxy-origins-file <PROXY_ORIGINS_FILE> --target <TARGET>\n\nFor more information, try '--help'.\n",
+			// Upstream made --proxy-origins-file an optional listener-mode input
+			// (`requires = "auth_token_stdin"`), so a bare invocation only lacks
+			// the proxy URL and target.
+			want: "error: the following required arguments were not provided:\n  --proxy-url <PROXY_URL>\n  --target <TARGET>\n\nUsage: codex tcp-tunnel --proxy-url <PROXY_URL> --target <TARGET>\n\nFor more information, try '--help'.\n",
 		},
 		{
 			name: "tcp-tunnel invalid proxy url",

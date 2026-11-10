@@ -128,6 +128,8 @@ func cloneSubmitRequest(request SubmitRequest) SubmitRequest {
 		AdditionalContext:          cloneAnyMap(request.AdditionalContext),
 		ResponsesAPIClientMetadata: cloneStringMapTea(request.ResponsesAPIClientMetadata),
 		LiteralInput:               request.LiteralInput,
+		Source:                     request.Source,
+		DuringTurn:                 request.DuringTurn,
 	}
 }
 

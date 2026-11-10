@@ -121,7 +121,25 @@ type SubmitRequest struct {
 	// paste expansion. It must be submitted as literal model input with shell
 	// escapes disabled (Rust #39604 QueuedInputAction::Literal).
 	LiteralInput bool
+	// Source records why the submission was sent. Cloud question answers use
+	// native start-or-steer admission instead of the generic turn/start request
+	// (Rust #60462 UserMessageSource).
+	Source SubmitSource
+	// DuringTurn marks a submission that arrived while a turn was running.
+	DuringTurn bool
 }
+
+// SubmitSource mirrors Rust's `UserMessageSource` (#60462).
+type SubmitSource string
+
+const (
+	// SubmitSourcePrompt is ordinary composer input.
+	SubmitSourcePrompt SubmitSource = "prompt"
+	// SubmitSourceQuestionAnswer is a reply to an asynchronous agent question.
+	SubmitSourceQuestionAnswer SubmitSource = "question_answer"
+	// SubmitSourceSafetyRecourse is a safety explanation continuation.
+	SubmitSourceSafetyRecourse SubmitSource = "safety_recourse"
+)
 
 // probeTerminalColorsForTUI runs the bounded terminal color probe only when the
 // TUI owns real terminal stdio, so tests and piped sessions are untouched. It
@@ -5108,7 +5126,13 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		if m.keyMatches("composer", "submit", keySpec) {
 			m.clearComposerPasteWindow()
 			if m.asyncQuestions.Expanded() && m.asyncQuestions.UnansweredCount() > 0 {
-				return m, m.submitAsyncQuestionAnswer(m.isUserTurnPendingOrRunning())
+				// Rust #60462: an answer submitted during a turn reaches the
+				// running turn through Cloud's start-or-steer admission instead of
+				// waiting in the queue.
+				if m.isUserTurnPendingOrRunning() {
+					return m, m.submitAsyncQuestionAnswerDuringTurn()
+				}
+				return m, m.submitAsyncQuestionAnswer(false)
 			}
 			if m.isUserTurnPendingOrRunning() {
 				if cmd, handled := m.submitRunningSlashCommand(); handled {
@@ -6578,6 +6602,12 @@ func (m *Model) TerminalFocused() bool {
 }
 
 func (m *Model) submitComposer() bubbletea.Cmd {
+	return m.submitComposerWithSource(SubmitSourcePrompt)
+}
+
+// submitComposerWithSource submits composer input and records why it was sent so
+// the Cloud path can pick its admission (Rust #60462).
+func (m *Model) submitComposerWithSource(source SubmitSource) bubbletea.Cmd {
 	if m != nil && m.readOnlyThread {
 		// Rust #43253: a conversation owned by another app accepts no input.
 		return nil
@@ -6625,6 +6655,7 @@ func (m *Model) submitComposer() bubbletea.Cmd {
 		MentionBindings: m.activeComposerMentionBindings(input),
 		MentionCatalog:  m.submissionMentionCatalog(),
 		TextElements:    textElements,
+		Source:          source,
 	}
 	request.LiteralInput = literalBangInput(input, shellMode)
 	m.attachments = nil
@@ -6868,6 +6899,12 @@ func (m *Model) queueComposer(parseCommand bool) bubbletea.Cmd {
 }
 
 func (m *Model) steerComposer() bubbletea.Cmd {
+	return m.steerComposerWithSource(SubmitSourcePrompt)
+}
+
+// steerComposerWithSource steers the running turn and records why the input was
+// sent (Rust #60462).
+func (m *Model) steerComposerWithSource(source SubmitSource) bubbletea.Cmd {
 	if m == nil || m.onSteerRequest == nil {
 		return m.queueComposer(true)
 	}
@@ -6895,6 +6932,8 @@ func (m *Model) steerComposer() bubbletea.Cmd {
 		MentionBindings: m.activeComposerMentionBindings(input),
 		MentionCatalog:  m.submissionMentionCatalog(),
 		TextElements:    textElements,
+		Source:          source,
+		DuringTurn:      true,
 	}
 	request.LiteralInput = literalBangInput(input, shellMode)
 	m.attachments = nil
