@@ -500,8 +500,16 @@ func formatFeedbackLogLine(ts int64, tsNanos int64, level string, body string) s
 }
 
 func (r *StateRuntime) requireLogsDB() error {
-	if r == nil || r.logsDB == nil {
+	if r == nil {
 		return errors.New("state runtime is nil")
+	}
+	if r.logsDB == nil {
+		// Rust #60466: log operations return the startup failure that kept the
+		// diagnostic database from opening.
+		if r.diagnosticLogsErr != nil {
+			return r.diagnosticLogsErr
+		}
+		return errors.New("diagnostic logs database is unavailable")
 	}
 	return nil
 }

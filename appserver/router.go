@@ -3213,6 +3213,14 @@ func (r *Router) handleThreadDelete(request *Request) (*ThreadDeleteResponse, er
 	if err := params.Validate(); err != nil {
 		return nil, err
 	}
+	// Rust #60466: the delete is rejected before destructive cleanup when the
+	// diagnostic logs database never opened, so saved conversations and their
+	// rollouts survive a failed delete.
+	if r.state != nil {
+		if diagErr := r.state.DiagnosticLogsError(); diagErr != nil {
+			return nil, fmt.Errorf("failed to delete thread: %w", diagErr)
+		}
+	}
 	threadIDs, err := r.deleteSubtreeThreadIDs(session.ThreadID(params.ThreadID))
 	if err != nil {
 		return nil, threadDeleteError(params.ThreadID, err)

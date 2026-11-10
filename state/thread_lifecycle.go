@@ -175,6 +175,12 @@ func (r *StateRuntime) DeleteThreadsStrict(ctx context.Context, threadIDs []stri
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	// Rust #60466: deletion is rejected before any destructive cleanup while
+	// the diagnostic logs database is unavailable, so the saved conversation
+	// is never removed by a partial delete.
+	if err := r.requireLogsDB(); err != nil {
+		return 0, fmt.Errorf("delete threads: %w", err)
+	}
 	ids := compactThreadIDs(threadIDs)
 	for _, threadID := range ids {
 		if _, err := ExecWrite(ctx, r.logsDB, `DELETE FROM logs WHERE thread_id = ?`, threadID); err != nil {

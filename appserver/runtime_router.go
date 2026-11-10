@@ -2097,6 +2097,16 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 	router.configureEnvironmentHTTPPolicy()
 	router.configureAnalyticsFromConfig(codexHome, options)
 	router.configureOtelMetrics(codexHome, options, runtimeMetrics)
+	// Rust #60466: report the original diagnostic database failure once
+	// tracing is installed, so the warning reaches the configured log sink
+	// instead of being lost during startup.
+	if rt := router.services.StateRuntime; rt != nil {
+		if diagErr := rt.DiagnosticLogsError(); diagErr != nil {
+			slog.Warn("diagnostic database unavailable",
+				"event.name", "diagnostic_database_unavailable",
+				"error", diagErr)
+		}
+	}
 	router.configureRemoteControlBackendForStartup(codexHome, options)
 	router.configureManagedNetworkFromConfig()
 	if resolved, err := router.resolveAuthWithLoginRestrictions(codexHome); err == nil && resolved != nil {

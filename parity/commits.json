@@ -45408,10 +45408,15 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "本轮未审计落地：诊断日志写失败时的线程存储降级未对齐",
-    "Go 锚点：appserver/",
+    "state/runtime.go: InitStateRuntime 在日志库打不开（非损坏）时记录 diagnosticLogsErr 并继续，线程库与数据库历史清单照常可用；损坏仍走原备份重建后失败路径；新增 DiagnosticLogsError()。",
+    "state/logs.go: requireLogsDB 在 logsDB 为空时返回原始启动错误，InsertLog/MaxLogID/QueryFeedbackLogs 等日志操作因此带上根因。",
+    "state/logs_maintenance.go: 周期清理在没有当前日志库时继续，只跳过当前库、仍清理 legacy 库（Rust #60466）。",
+    "state/thread_lifecycle.go: DeleteThreadsStrict 先检查日志库可用性再做破坏性清理。",
+    "appserver/runtime_router.go: tracing 安装后以 event.name=diagnostic_database_unavailable 告警并带上原始错误。",
+    "appserver/router.go: thread/delete 在删除 rollout 之前拒绝，返回 -32603 且消息含根因；rollout 与回合保留。",
+    "测试：go test ./state -count=1 通过；go test ./appserver -run 'ThreadDelete|ThreadRead|Deleted' 通过；新增 state/appserver 各一个 like-rust 用例。",
     "plan: update/plan_2026_11_10.md (#60466)"
    ]
   },

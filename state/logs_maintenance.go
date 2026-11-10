@@ -29,9 +29,12 @@ const (
 // wait holds no strong reference; Go's goroutine owns the runtime and exits
 // through the done channel that Close signals.
 func (r *StateRuntime) startPeriodicLogsMaintenance(period time.Duration) {
-	if r == nil || r.logsDB == nil {
+	if r == nil {
 		return
 	}
+	// Rust #60466: legacy log cleanup keeps running while the current
+	// diagnostic database is unavailable, so the sweep is installed even
+	// without a live logs handle.
 	if period <= 0 {
 		period = logsMaintenancePeriod
 	}
@@ -84,9 +87,14 @@ func (r *StateRuntime) runLogsMaintenance(done <-chan struct{}, period time.Dura
 // maintenance never touches the live logs connection.
 func (r *StateRuntime) pruneDiagnosticLogs(ctx context.Context, firstSweep bool) {
 	legacy := r.openLegacyLogsForCleanup(ctx)
-	pools := []*sql.DB{r.logsDB}
 	if legacy != nil {
 		defer legacy.Close()
+	}
+	pools := make([]*sql.DB, 0, 2)
+	if r.logsDB != nil {
+		pools = append(pools, r.logsDB)
+	}
+	if legacy != nil {
 		pools = append(pools, legacy)
 	}
 	for _, db := range pools {

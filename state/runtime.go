@@ -85,10 +85,15 @@ type StateRuntime struct {
 	defaultProvider string
 	stateDB         *sql.DB
 	logsDB          *sql.DB
-	goalsDB         *sql.DB
-	memoriesDB      *sql.DB
-	memoriesV2Mu    sync.Mutex
-	memoriesV2DB    *sql.DB
+	// diagnosticLogsErr records why the diagnostic logs database could not be
+	// opened. Thread storage stays usable in that case (Rust #60466
+	// `diagnostic_logs_error`): log operations and thread deletion surface this
+	// error instead of the runtime failing to initialize.
+	diagnosticLogsErr error
+	goalsDB           *sql.DB
+	memoriesDB        *sql.DB
+	memoriesV2Mu      sync.Mutex
+	memoriesV2DB      *sql.DB
 	// ownsDBs is true only for the runtime that opened the shared databases.
 	// Version-scoped memory store views share those handles and must not close
 	// them.
@@ -124,9 +129,18 @@ func InitStateRuntime(ctx context.Context, sqliteConfig SqliteConfig, defaultPro
 	}
 	opened := make([]*sql.DB, 0, len(runtimeDBSpecs))
 	dbs := make(map[RuntimeDBKind]*sql.DB, len(runtimeDBSpecs))
+	var diagnosticLogsErr error
 	for _, spec := range runtimeDBSpecs {
 		db, err := sqliteConfig.openRuntimeDB(ctx, spec)
 		if err != nil {
+			// Rust #60466: a diagnostic logs database that cannot be opened
+			// must not disable thread storage or database-only history
+			// listing. Corruption keeps the recovery-then-fail behaviour, so
+			// only non-corruption failures leave the logs handle unset.
+			if spec.kind == RuntimeDBLogs && !IsSQLiteCorruptionError(err) {
+				diagnosticLogsErr = err
+				continue
+			}
 			closeSQLiteDBs(opened)
 			return nil, err
 		}
@@ -134,14 +148,15 @@ func InitStateRuntime(ctx context.Context, sqliteConfig SqliteConfig, defaultPro
 		dbs[spec.kind] = db
 	}
 	runtime := &StateRuntime{
-		sqlite:          sqliteConfig,
-		defaultProvider: defaultProvider,
-		stateDB:         dbs[RuntimeDBState],
-		logsDB:          dbs[RuntimeDBLogs],
-		goalsDB:         dbs[RuntimeDBGoals],
-		memoriesDB:      dbs[RuntimeDBMemories],
-		ownsDBs:         true,
-		historyWriter:   make(chan struct{}, 1),
+		sqlite:            sqliteConfig,
+		defaultProvider:   defaultProvider,
+		stateDB:           dbs[RuntimeDBState],
+		logsDB:            dbs[RuntimeDBLogs],
+		diagnosticLogsErr: diagnosticLogsErr,
+		goalsDB:           dbs[RuntimeDBGoals],
+		memoriesDB:        dbs[RuntimeDBMemories],
+		ownsDBs:           true,
+		historyWriter:     make(chan struct{}, 1),
 	}
 	// Rust spawns the reclamation worker as the runtime is constructed and
 	// stops it in `StateRuntime::close` (upstream 33a0f766a6 / #49069).
@@ -240,6 +255,15 @@ func (c SqliteConfig) OpenThreadHistoryDB(ctx context.Context) (*sql.DB, error) 
 		path:     SqliteConfig.ThreadHistoryDBPath,
 		recovery: dbRecoveryUnavailable,
 	})
+}
+
+// DiagnosticLogsError reports why the diagnostic logs database is unavailable,
+// or nil when it opened. Rust `StateRuntime::diagnostic_logs_error` (#60466).
+func (r *StateRuntime) DiagnosticLogsError() error {
+	if r == nil {
+		return nil
+	}
+	return r.diagnosticLogsErr
 }
 
 func (r *StateRuntime) SQLite() SqliteConfig         { return r.sqlite }
