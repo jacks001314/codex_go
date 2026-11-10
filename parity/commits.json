@@ -45787,11 +45787,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "本轮未审计落地：模型无访问时未禁用 Daybreak",
-    "Go 锚点：tui/tea/",
-    "plan: update/plan_2026_11_10.md (#60526)"
+    "tui/tea/daybreak.go：shouldDisableDaybreak 只在目录对该模型给出显式 cyber program 元数据且不含 daybreak_blue/daybreak_red 时判定不可用；元数据缺失（nil）视为未知，不改动偏好。",
+    "tui/tea/daybreak.go：maybeDisableUnavailableDaybreak 走既有的 Daybreak 持久化钩子先写线程元数据、成功后才落地关闭，并在失败时保留开启、只报错；成功后追加 Rust 原文告警（不得用于该模型、已知晓早期网络安全上下文仍可能被拒、可换回有权限模型再 /daybreak 打开）。",
+    "tui/tea/model.go：Update 尾部统一挂钩，覆盖模型选择器、/model、服务端 settings 回写、协作模式变化与目录刷新；应用前重新读取当前模型。",
+    "Tests: go test ./tui/tea ./tui/chatwidget -count=1，含 TestDaybreakDisabledWhenSelectedModelLacksAccess、TestDaybreakKeptOnWhenCatalogLacksAccessMetadata、TestDaybreakDisableFollowsCatalogRefresh、TestDaybreakStaysOnWhenDisableCannotPersist、TestDaybreakStaysOffAfterSwitchingBack。"
    ]
   },
   {
