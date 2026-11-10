@@ -863,6 +863,17 @@ func (r *ResponsesAgentRunner) websocketSession(request *AgentRequest) *response
 		closeResponsesWebsocketSession(session, "runtime auth requires a fresh handshake")
 		session.mu.Unlock()
 	}
+	// Rust #60436: credentials can change while a request is prepared (an
+	// account switch or a refreshed managed token), so a socket opened with the
+	// previous owner must not send the next request. Comparing the handshake
+	// revision against the credential the runner would use now drops the
+	// connection, and the caller dials again with the current owner instead of
+	// reusing stale credentials.
+	if session.conn != nil && session.websocketReauth(r.AuthSnapshot) {
+		session.mu.Lock()
+		closeResponsesWebsocketSession(session, "auth ownership changed")
+		session.mu.Unlock()
+	}
 	return session
 }
 

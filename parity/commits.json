@@ -45332,10 +45332,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "本轮未审计落地：预算检查后未重新校验请求 auth 归属",
-    "Go 锚点：model/",
+    "model/responses_agent.go: websocketSession 的单点复用处在 Rust #60055 的 runtime-auth 判断之后新增 websocketReauth(r.AuthSnapshot) 校验——缓存 socket 握手时所用的凭据与当前快照不一致就关闭连接（reason \"auth ownership changed\"），调用方随后用当前凭据重新握手，对应 Rust #60436 的 continue + 新 socket。",
+    "HTTP 侧映射：Go 没有 ModelRequestBudget contributor/异步 budget 检查点（#60080 已判 not_applicable），每次尝试都由 ConfiguredProvider.APIAuth()/AuthHeadersFromAuth 从当时的快照解析凭据并即时构造请求，不存在「预算检查后凭据已陈旧」的窗口，故无对应改动；WS 侧的复用窗口正是本次修复点。",
+    "model/responses_websocket_auth_owner_like_rust_test.go: 复刻 Rust websocket_sends_after_external_auth_changes_during_request_setup——同一会话两次 Run 之间替换 AuthSnapshot/Auth，断言产生两次握手且 Authorization 依次为 Bearer token-a / Bearer token-b；临时禁用新增判断后该用例在 5s 判过期握手超时失败，恢复后通过。",
+    "验证：go test ./model -count=1 ok（31.6s）；go test ./appserver -run 'Websocket|WebSocket|AuthOwner|Reauth' ok。",
     "plan: update/plan_2026_11_10.md (#60436)"
    ]
   },
