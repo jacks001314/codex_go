@@ -1834,10 +1834,13 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		// /experimental is populated from the embedded app server's catalog
 		// resolved through the same config service (Rust
 		// experimental_features::fetch).
-		OnReadExperimentalFeatures:       interactiveLocalExperimentalFeatures(root),
-		OnWriteMemorySettings:            interactiveMemorySettingsWriteHandler(root),
-		OnResetMemories:                  interactiveMemoryResetHandler(),
-		OnSubmitFeedback:                 interactiveFeedbackSubmitHandler(),
+		OnReadExperimentalFeatures: interactiveLocalExperimentalFeatures(root),
+		OnWriteMemorySettings:      interactiveMemorySettingsWriteHandler(root),
+		OnResetMemories:            interactiveMemoryResetHandler(),
+		OnSubmitFeedback:           interactiveFeedbackSubmitHandler(),
+		// Rust #60542: the local app server also writes diagnostic ZIPs, so the
+		// report editor can save locally with Ctrl+S.
+		OnSaveFeedback:                   interactiveFeedbackSaveHandler(),
 		OnReadIDEContext:                 interactiveIDEContextReader,
 		OnApproveAutoReviewDenial:        interactiveApproveAutoReviewDenialHandler(),
 		OnStartWindowsSandboxSetup:       interactiveWindowsSandboxSetupHandler(root),
@@ -2843,6 +2846,44 @@ func interactiveFeedbackSubmitHandler() codextea.FeedbackSubmitFunc {
 			IncludeLogs:    params.IncludeLogs,
 		})
 		return appserver.FeedbackUploadResponse{ThreadID: threadID}, nil
+	}
+}
+
+// interactiveFeedbackSaveHandler writes the report editor's local diagnostic
+// ZIP (Rust #60542 feedback/save). The archive lands under the app server's
+// Codex home so a save never leaves the machine.
+func interactiveFeedbackSaveHandler() codextea.FeedbackSaveFunc {
+	return func(params appserver.FeedbackSaveParams) (appserver.FeedbackSaveResponse, error) {
+		home := strings.TrimSpace(auth.DefaultCodexHome())
+		if home == "" {
+			return appserver.FeedbackSaveResponse{}, errors.New("the app server did not report its Codex home directory")
+		}
+		if strings.TrimSpace(params.SavePath) == "" {
+			directory := filepath.Join(home, "feedback")
+			name := fmt.Sprintf("codex-diagnostics-%s-%08x.zip", time.Now().UTC().Format("2006-01-02T15-04-05Z"), uint32(time.Now().UnixNano()))
+			params.SavePath = filepath.Join(directory, name)
+		}
+		if err := params.Validate(); err != nil {
+			return appserver.FeedbackSaveResponse{}, err
+		}
+		if err := os.MkdirAll(filepath.Dir(params.SavePath), 0o755); err != nil {
+			return appserver.FeedbackSaveResponse{}, fmt.Errorf("could not create the feedback directory at %s: %w", filepath.Dir(params.SavePath), err)
+		}
+		threadID := "feedback-local"
+		if params.ThreadID != nil && strings.TrimSpace(*params.ThreadID) != "" {
+			threadID = strings.TrimSpace(*params.ThreadID)
+		}
+		snapshot := &appserver.FeedbackSnapshot{ThreadID: threadID}
+		options := &appserver.FeedbackUploadOptions{
+			Classification: params.Classification,
+			Reason:         params.Reason,
+			ClientTags:     params.Tags,
+			IncludeLogs:    params.IncludeLogs,
+		}
+		if err := snapshot.SaveFeedback(options, params.SavePath); err != nil {
+			return appserver.FeedbackSaveResponse{}, err
+		}
+		return appserver.FeedbackSaveResponse{SavedPath: params.SavePath, ThreadID: threadID}, nil
 	}
 }
 

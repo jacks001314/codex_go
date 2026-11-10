@@ -31,6 +31,15 @@ const (
 	feedbackStageNote     feedbackStage = "note"
 )
 
+// feedbackDestination selects where a submitted report goes (Rust #60542
+// FeedbackDestination): the OpenAI upload, or a local diagnostic ZIP.
+type feedbackDestination string
+
+const (
+	feedbackDestinationOpenAI   feedbackDestination = "openai"
+	feedbackDestinationLocalZip feedbackDestination = "local_zip"
+)
+
 type feedbackModalState struct {
 	stage       feedbackStage
 	category    feedbackCategory
@@ -46,7 +55,7 @@ func (m *Model) openFeedbackFlow() {
 	if m == nil {
 		return
 	}
-	if !m.feedbackEnabled {
+	if !m.feedbackEnabled && !m.feedbackLocalSaveAvailable {
 		m.openModal(ModalRequestMsg{
 			ID:      "feedback-disabled",
 			Kind:    ModalKindFeedback,
@@ -111,9 +120,14 @@ func (m *Model) updateFeedbackModal(message keymsg.KeyMsg) bubbletea.Cmd {
 
 func (m *Model) openFeedbackConsent(state *feedbackModalState) {
 	m.modal.id = "feedback-consent"
-	m.modal.title = "Upload logs?"
+	// Rust #60542: the same consent choice now covers both destinations.
+	m.modal.title = "Include logs and session history?"
+	disclosure := "Files may contain prompts, commands, and tool output:"
+	if m.feedbackLocalSaveAvailable {
+		disclosure = "Saving a ZIP does not submit feedback to OpenAI.\n" + disclosure
+	}
 	m.modal.body = strings.Join([]string{
-		"The following files will be sent:",
+		disclosure,
 		"  - codex-logs.log",
 		// Rust #47889: the TUI's own client log is staged for remote uploads.
 		"  - client-logs.txt (if available)",
@@ -149,6 +163,12 @@ func (m *Model) updateFeedbackNote(message keymsg.KeyMsg) bubbletea.Cmd {
 	switch message.Type {
 	case keymsg.KeyEsc, keymsg.KeyCtrlC:
 		m.modal = nil
+	case keymsg.KeyCtrlS:
+		// Rust #60542: Ctrl+S saves a diagnostic ZIP locally, without uploading.
+		if m.feedbackLocalSaveAvailable {
+			m.modal = nil
+			return m.submitFeedback(state.category, state.note, state.includeLogs, feedbackDestinationLocalZip)
+		}
 	case keymsg.KeyEnter:
 		if !m.disablePasteBurst && state.pasteBurst.DirectInsertNewlineShouldInsert(now) {
 			// A newline inside a rapid paste burst is note content, not submit.
@@ -160,8 +180,12 @@ func (m *Model) updateFeedbackNote(message keymsg.KeyMsg) bubbletea.Cmd {
 			state.note += "\n"
 			return nil
 		}
+		if !m.feedbackEnabled {
+			// Rust #60542: Enter only sends while OpenAI uploads are enabled.
+			return nil
+		}
 		m.modal = nil
-		return m.submitFeedback(state.category, state.note, state.includeLogs)
+		return m.submitFeedback(state.category, state.note, state.includeLogs, feedbackDestinationOpenAI)
 	case keymsg.KeyCtrlJ:
 		state.note += "\n"
 		state.pasteBurst.ClearAfterExplicitPaste()
@@ -214,15 +238,18 @@ func (m *Model) renderFeedbackNoteModal() string {
 	if text == "" {
 		text = placeholder
 	}
-	return strings.Join([]string{
-		feedbackNoteTitle(state.category),
-		"  " + text,
-		"",
-		"Enter submit  Ctrl+J newline  Esc cancel",
-	}, "\n")
+	lines := []string{feedbackNoteTitle(state.category)}
+	if !m.feedbackEnabled {
+		lines = append(lines, "  Feedback uploads are disabled.")
+	}
+	if m.feedbackLocalSaveAvailable {
+		lines = append(lines, "  You can save feedback to a ZIP file, which is not sent to OpenAI.")
+	}
+	lines = append(lines, "  "+text, "", m.feedbackNoteHintLine())
+	return strings.Join(lines, "\n")
 }
 
-func (m *Model) submitFeedback(category feedbackCategory, note string, includeLogs bool) bubbletea.Cmd {
+func (m *Model) submitFeedback(category feedbackCategory, note string, includeLogs bool, destination feedbackDestination) bubbletea.Cmd {
 	params := appserver.FeedbackUploadParams{
 		Classification: string(category),
 		IncludeLogs:    includeLogs,
@@ -235,6 +262,26 @@ func (m *Model) submitFeedback(category feedbackCategory, note string, includeLo
 			params.ThreadID = &threadID
 		}
 	}
+	if destination == feedbackDestinationLocalZip {
+		save := m.onSaveFeedback
+		if save == nil {
+			return func() bubbletea.Msg {
+				return FeedbackSubmitResultMsg{Category: category, Destination: destination, IncludeLogs: includeLogs, Err: fmt.Errorf("Update the Codex server to save a feedback ZIP")}
+			}
+		}
+		return func() bubbletea.Msg {
+			// The save path is owned by the host handler: it resolves the app
+			// server's Codex home and names the archive (Rust #60542).
+			response, err := save(appserver.FeedbackSaveParams{FeedbackUploadParams: params})
+			return FeedbackSubmitResultMsg{
+				Category:    category,
+				IncludeLogs: includeLogs,
+				Destination: destination,
+				SavedPath:   response.SavedPath,
+				Err:         err,
+			}
+		}
+	}
 	if m.onSubmitFeedback == nil {
 		return func() bubbletea.Msg {
 			return FeedbackSubmitResultMsg{Category: category, IncludeLogs: includeLogs, Err: fmt.Errorf("feedback/upload is unavailable in this runtime")}
@@ -243,13 +290,49 @@ func (m *Model) submitFeedback(category feedbackCategory, note string, includeLo
 	submit := m.onSubmitFeedback
 	return func() bubbletea.Msg {
 		response, err := submit(params)
-		return FeedbackSubmitResultMsg{Category: category, IncludeLogs: includeLogs, Response: response, Err: err}
+		return FeedbackSubmitResultMsg{Category: category, IncludeLogs: includeLogs, Destination: destination, Response: response, Err: err}
 	}
+}
+
+// feedbackNoteHintLine mirrors Rust #60542's action hints: the save action only
+// appears when a local ZIP is available, the send action only when OpenAI
+// uploads are enabled, and the labels shorten on narrow terminals.
+func (m *Model) feedbackNoteHintLine() string {
+	long := m.feedbackNoteHintActions("save ZIP", "send to OpenAI")
+	if len([]rune(long)) <= 72 {
+		return long
+	}
+	return m.feedbackNoteHintActions("save", "send")
+}
+
+func (m *Model) feedbackNoteHintActions(save string, send string) string {
+	actions := make([]string, 0, 3)
+	if m.feedbackLocalSaveAvailable {
+		actions = append(actions, "Ctrl+S "+save)
+	}
+	if m.feedbackEnabled {
+		actions = append(actions, "Enter "+send)
+	}
+	actions = append(actions, "Esc cancel")
+	return strings.Join(actions, "  ")
 }
 
 func (m *Model) applyFeedbackSubmitResult(message FeedbackSubmitResultMsg) {
 	if message.Err != nil {
+		if message.Destination == feedbackDestinationLocalZip {
+			m.applyHistoryCell(historycell.NewErrorEvent("Failed to save feedback ZIP: " + message.Err.Error()))
+			return
+		}
 		m.applyHistoryCell(historycell.NewErrorEvent("Failed to submit feedback: " + message.Err.Error()))
+		return
+	}
+	if message.Destination == feedbackDestinationLocalZip {
+		// Rust #60542 shows the archive path on completion.
+		path := strings.TrimSpace(message.SavedPath)
+		if path == "" {
+			path = "(unknown path)"
+		}
+		m.applyHistoryCell(historycell.NewPlainHistoryCell([]string{"Feedback ZIP saved to " + path}))
 		return
 	}
 	threadID := strings.TrimSpace(message.Response.ThreadID)

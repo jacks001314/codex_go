@@ -584,6 +584,10 @@ type MemoryResetFunc func() error
 
 type FeedbackSubmitFunc func(params appserver.FeedbackUploadParams) (appserver.FeedbackUploadResponse, error)
 
+// FeedbackSaveFunc writes a local diagnostic ZIP (Rust #60542 feedback/save) and
+// reports the archive path. A nil hook means this runtime cannot save locally.
+type FeedbackSaveFunc func(params appserver.FeedbackSaveParams) (appserver.FeedbackSaveResponse, error)
+
 type IDEContextReaderFunc func(cwd string) (*idecontext.IdeContext, error)
 
 type AutoReviewDenialApproveFunc func(threadID string, entry chatwidget.AutoReviewDenialEntry) error
@@ -1051,8 +1055,12 @@ type MemoryResetResultMsg struct {
 type FeedbackSubmitResultMsg struct {
 	Category    feedbackCategory
 	IncludeLogs bool
+	// Destination records where the report went (Rust #60542).
+	Destination feedbackDestination
 	Response    appserver.FeedbackUploadResponse
-	Err         error
+	// SavedPath is the local diagnostic ZIP a save produced.
+	SavedPath string
+	Err       error
 }
 
 type GuardianReviewMsg struct {
@@ -1639,15 +1647,18 @@ type Options struct {
 	// OnEnsureThread starts the session thread for a command that needs a
 	// thread id before the first turn (see EnsureThreadFunc). Nil leaves the
 	// command waiting for the thread that its own submission starts.
-	OnEnsureThread             EnsureThreadFunc
-	OnGoalEditText             GoalEditTextFunc
-	OnGoalDraftMaterialize     GoalDraftMaterializeFunc
-	OnGoalContinuation         GoalContinuationFunc
-	OnWriteSettings            SettingsWriteFunc
-	OnUpdateCollaborationMode  CollaborationModeUpdateFunc
-	OnWriteMemorySettings      MemorySettingsWriteFunc
-	OnResetMemories            MemoryResetFunc
-	OnSubmitFeedback           FeedbackSubmitFunc
+	OnEnsureThread            EnsureThreadFunc
+	OnGoalEditText            GoalEditTextFunc
+	OnGoalDraftMaterialize    GoalDraftMaterializeFunc
+	OnGoalContinuation        GoalContinuationFunc
+	OnWriteSettings           SettingsWriteFunc
+	OnUpdateCollaborationMode CollaborationModeUpdateFunc
+	OnWriteMemorySettings     MemorySettingsWriteFunc
+	OnResetMemories           MemoryResetFunc
+	OnSubmitFeedback          FeedbackSubmitFunc
+	// OnSaveFeedback writes a local diagnostic ZIP for the report editor's
+	// Ctrl+S action (Rust #60542). Nil keeps local saves unavailable.
+	OnSaveFeedback             FeedbackSaveFunc
 	OnReadIDEContext           IDEContextReaderFunc
 	OnApproveAutoReviewDenial  AutoReviewDenialApproveFunc
 	OnStartWindowsSandboxSetup WindowsSandboxSetupFunc
@@ -2859,74 +2870,79 @@ type Model struct {
 	useMemories                        bool
 	generateMemories                   bool
 	feedbackEnabled                    bool
-	windowsSandboxSetup                WindowsSandboxSetupFunc
-	onReadWindowsSandboxState          WindowsSandboxStateReaderFunc
-	windowsSandboxLevel                chatwidget.WindowsSandboxLevel
-	windowsSandboxRefreshPending       bool
-	windowsSandboxSetupChoiceRequired  bool
-	onOpenDesktopThread                DesktopThreadOpenFunc
-	appsScopeGeneration                uint64
-	onDetectExternalAgent              ExternalAgentDetectFunc
-	onImportExternalAgent              ExternalAgentImportFunc
-	pendingExternalAgentImports        map[string]bool
-	onReadRolloutPath                  RolloutPathReaderFunc
-	windowsSandboxSetupActive          bool
-	windowsSandboxSetupMode            chatwidget.WindowsSandboxMode
-	windowsSandboxSetupStatus          chatwidget.WindowsSandboxSetupStatus
-	onReadHooks                        HooksListReaderFunc
-	onWriteHookConfig                  HookConfigWriteFunc
-	hookWriteQueue                     []hookConfigWriteOperation
-	hookWriteActive                    bool
-	nextHookWriteRequestID             uint64
-	hookLifecycle                      chatwidget.HookLifecycleState
-	onReadPlugins                      PluginListReaderFunc
-	onReadPlugin                       PluginReadFunc
-	onInstallPlugin                    PluginInstallFunc
-	onUninstallPlugin                  PluginUninstallFunc
-	onWritePluginEnabled               PluginEnabledWriteFunc
-	onAddMarketplace                   MarketplaceAddFunc
-	onRemoveMarketplace                MarketplaceRemoveFunc
-	onUpgradeMarketplace               MarketplaceUpgradeFunc
-	onOpenPluginURL                    PluginOpenURLFunc
-	onOpenURL                          func(string) error
-	onPrimarySelectionWrite            func(string) error
-	onPrimarySelectionRead             func() (string, error)
-	onPrimarySelectionRelease          func() error
-	primarySelectionPublished          bool
-	nextPrimarySelectionReadID         uint64
-	pendingPrimarySelectionRead        uint64
-	onFetchStartupAnnouncement         func() (string, bool)
-	pluginUserMarketplaces             map[string]bool
-	pluginGitMarketplaces              map[string]bool
-	pluginRuntime                      chatwidget.PluginsRuntimeState
-	pluginToggleDesired                map[string]bool
-	pluginToggleActive                 map[string]bool
-	onReadSkills                       SkillsListReaderFunc
-	onWriteSkillEnabled                SkillEnabledWriteFunc
-	nextSkillWriteRequestID            uint64
-	onFuzzyFileSearch                  FuzzyFileSearchReaderFunc
-	onSearchTasks                      TaskMentionSearchFunc
-	onReadExperimentalFeatures         ExperimentalFeaturesReaderFunc
-	onTaskToolsAvailable               func(threadID string) bool
-	onReadApps                         AppListReaderFunc
-	onStartReview                      ReviewStartFunc
-	onStartReviewCommand               ReviewStartCommandFunc
-	onStartCompactCommand              CompactStartCommandFunc
-	onSafetyBufferingRetry             func(threadID, turnID, model, prompt string) bubbletea.Cmd
-	safetyBuffering                    chatwidget.SafetyBufferingState
-	safetyBufferingThreadID            string
-	safetyBufferingFasterModel         string
-	reviewState                        chatwidget.ReviewState
-	reviewTurnID                       string
-	reviewTokenSnapshot                *reviewTokenSnapshot
-	onStartSide                        SideStartFunc
-	onCloseSide                        SideCloseFunc
-	onListSideChats                    SideChatListFunc
-	onReadSideChatPrompts              SideChatPromptFunc
-	onOpenSideChat                     SideOpenFunc
-	onReadReviewBranches               ReviewBranchesReaderFunc
-	onReadReviewCommits                ReviewCommitsReaderFunc
-	activeSide                         *activeSideConversation
+	// feedbackLocalSaveAvailable reports whether this runtime can save a
+	// diagnostic ZIP locally (Rust #60542): the local app server does,
+	// remote connections do not.
+	feedbackLocalSaveAvailable        bool
+	onSaveFeedback                    FeedbackSaveFunc
+	windowsSandboxSetup               WindowsSandboxSetupFunc
+	onReadWindowsSandboxState         WindowsSandboxStateReaderFunc
+	windowsSandboxLevel               chatwidget.WindowsSandboxLevel
+	windowsSandboxRefreshPending      bool
+	windowsSandboxSetupChoiceRequired bool
+	onOpenDesktopThread               DesktopThreadOpenFunc
+	appsScopeGeneration               uint64
+	onDetectExternalAgent             ExternalAgentDetectFunc
+	onImportExternalAgent             ExternalAgentImportFunc
+	pendingExternalAgentImports       map[string]bool
+	onReadRolloutPath                 RolloutPathReaderFunc
+	windowsSandboxSetupActive         bool
+	windowsSandboxSetupMode           chatwidget.WindowsSandboxMode
+	windowsSandboxSetupStatus         chatwidget.WindowsSandboxSetupStatus
+	onReadHooks                       HooksListReaderFunc
+	onWriteHookConfig                 HookConfigWriteFunc
+	hookWriteQueue                    []hookConfigWriteOperation
+	hookWriteActive                   bool
+	nextHookWriteRequestID            uint64
+	hookLifecycle                     chatwidget.HookLifecycleState
+	onReadPlugins                     PluginListReaderFunc
+	onReadPlugin                      PluginReadFunc
+	onInstallPlugin                   PluginInstallFunc
+	onUninstallPlugin                 PluginUninstallFunc
+	onWritePluginEnabled              PluginEnabledWriteFunc
+	onAddMarketplace                  MarketplaceAddFunc
+	onRemoveMarketplace               MarketplaceRemoveFunc
+	onUpgradeMarketplace              MarketplaceUpgradeFunc
+	onOpenPluginURL                   PluginOpenURLFunc
+	onOpenURL                         func(string) error
+	onPrimarySelectionWrite           func(string) error
+	onPrimarySelectionRead            func() (string, error)
+	onPrimarySelectionRelease         func() error
+	primarySelectionPublished         bool
+	nextPrimarySelectionReadID        uint64
+	pendingPrimarySelectionRead       uint64
+	onFetchStartupAnnouncement        func() (string, bool)
+	pluginUserMarketplaces            map[string]bool
+	pluginGitMarketplaces             map[string]bool
+	pluginRuntime                     chatwidget.PluginsRuntimeState
+	pluginToggleDesired               map[string]bool
+	pluginToggleActive                map[string]bool
+	onReadSkills                      SkillsListReaderFunc
+	onWriteSkillEnabled               SkillEnabledWriteFunc
+	nextSkillWriteRequestID           uint64
+	onFuzzyFileSearch                 FuzzyFileSearchReaderFunc
+	onSearchTasks                     TaskMentionSearchFunc
+	onReadExperimentalFeatures        ExperimentalFeaturesReaderFunc
+	onTaskToolsAvailable              func(threadID string) bool
+	onReadApps                        AppListReaderFunc
+	onStartReview                     ReviewStartFunc
+	onStartReviewCommand              ReviewStartCommandFunc
+	onStartCompactCommand             CompactStartCommandFunc
+	onSafetyBufferingRetry            func(threadID, turnID, model, prompt string) bubbletea.Cmd
+	safetyBuffering                   chatwidget.SafetyBufferingState
+	safetyBufferingThreadID           string
+	safetyBufferingFasterModel        string
+	reviewState                       chatwidget.ReviewState
+	reviewTurnID                      string
+	reviewTokenSnapshot               *reviewTokenSnapshot
+	onStartSide                       SideStartFunc
+	onCloseSide                       SideCloseFunc
+	onListSideChats                   SideChatListFunc
+	onReadSideChatPrompts             SideChatPromptFunc
+	onOpenSideChat                    SideOpenFunc
+	onReadReviewBranches              ReviewBranchesReaderFunc
+	onReadReviewCommits               ReviewCommitsReaderFunc
+	activeSide                        *activeSideConversation
 	// sideZoomed shows the focused conversation full width (Rust #59595).
 	sideZoomed bool
 	// sideWidthPercent is the saved sidebar share of the split; 0 means the
@@ -3559,6 +3575,8 @@ func NewModel(state *codextui.State, options Options) *Model {
 		useMemories:                         boolPtrValueTeaDefault(options.UseMemories, true),
 		generateMemories:                    boolPtrValueTeaDefault(options.GenerateMemories, true),
 		feedbackEnabled:                     boolPtrValueTeaDefault(options.FeedbackEnabled, true),
+		feedbackLocalSaveAvailable:          options.OnSaveFeedback != nil,
+		onSaveFeedback:                      options.OnSaveFeedback,
 		windowsSandboxSetup:                 options.OnStartWindowsSandboxSetup,
 		windowsSandboxLevel:                 options.WindowsSandboxLevel,
 		onReadWindowsSandboxState:           options.OnReadWindowsSandboxState,

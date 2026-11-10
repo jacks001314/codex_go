@@ -6560,7 +6560,9 @@ func TestModelFeedbackFlowSubmitsOptionalNoteWithoutLogs(t *testing.T) {
 		}
 	}
 	model.Update(key(keymsg.KeyEnter))
-	for _, want := range []string{"Upload logs?", "codex-logs.log", "codex-doctor-report.json", "Yes", "No"} {
+	// Rust #60542 retitled the consent popup so one choice covers sending and
+	// saving the report.
+	for _, want := range []string{"Include logs and session history?", "codex-logs.log", "codex-doctor-report.json", "Yes", "No"} {
 		if view := model.viewString(); !strings.Contains(view, want) {
 			t.Fatalf("feedback consent missing %q:\n%s", want, view)
 		}
