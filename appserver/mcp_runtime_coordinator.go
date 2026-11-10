@@ -3,6 +3,7 @@ package appserver
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"sync"
@@ -10,6 +11,17 @@ import (
 	"codex_go/config"
 	"codex_go/mcp"
 	"codex_go/turn"
+)
+
+// mcpRefreshReason names why cached MCP runtimes are invalidated (Rust
+// thread_manager::McpRefreshReason, #60505). Only the reasons this tree emits
+// are modelled; Rust's remaining variants have no Go call site yet.
+type mcpRefreshReason string
+
+const (
+	mcpRefreshReasonExplicitInvalidation    mcpRefreshReason = "explicit_invalidation"
+	mcpRefreshReasonEffectivePluginsChanged mcpRefreshReason = "effective_plugins_changed"
+	mcpRefreshReasonInstalledPluginMetadata mcpRefreshReason = "installed_plugin_metadata"
 )
 
 // mcpRuntimeCoordinator owns the MCP service associated with each loaded
@@ -268,9 +280,17 @@ func (c *mcpRuntimeCoordinator) setUserVerificationEnabled(enabled bool) {
 }
 
 func (c *mcpRuntimeCoordinator) invalidateAll() {
+	c.invalidateAllFor(mcpRefreshReasonExplicitInvalidation)
+}
+
+// invalidateAllFor mirrors Rust's invalidate_mcp_runtimes_for: the refresh
+// reason is logged so a runtime refresh can be attributed to the change that
+// requested it (#60505).
+func (c *mcpRuntimeCoordinator) invalidateAllFor(reason mcpRefreshReason) {
 	if c == nil {
 		return
 	}
+	slog.Debug("invalidate mcp runtime caches", "reason", string(reason))
 	c.mu.Lock()
 	c.globalEpoch++
 	services := make([]*mcp.MCPService, 0, len(c.bindings))

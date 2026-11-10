@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -2086,12 +2087,20 @@ func (s *PluginService) addPluginLocked(detail PluginDetail) PluginDetail {
 // (Rust #46309). A display-only refresh must not invalidate loaded plugins, so
 // callers clear their caches only when this returns true.
 func (s *PluginService) ReplaceInstalledRemotePlugins(marketplaceName string, details []PluginDetail) bool {
+	changed, _ := s.ReplaceInstalledRemotePluginsWithChanges(marketplaceName, details)
+	return changed
+}
+
+// ReplaceInstalledRemotePluginsWithChanges is ReplaceInstalledRemotePlugins
+// plus the change id that attributes this invalidation (Rust #60505): callers
+// pass the id to the MCP refresh they trigger so both diagnostics correlate.
+// The id is empty when only display metadata changed.
+func (s *PluginService) ReplaceInstalledRemotePluginsWithChanges(marketplaceName string, details []PluginDetail) (bool, string) {
 	if s == nil {
-		return false
+		return false, ""
 	}
 	marketplaceName = strings.TrimSpace(marketplaceName)
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	previous := make([]PluginDetail, 0, len(details))
 	for id, detail := range s.plugins {
 		if detail.Summary.MarketplaceName == marketplaceName && strings.TrimSpace(detail.Summary.RemotePluginID) != "" {
@@ -2115,7 +2124,20 @@ func (s *PluginService) ReplaceInstalledRemotePlugins(marketplaceName string, de
 	if len(installed) > 0 {
 		sortInstalledPluginDetailsForCompare(installed)
 	}
-	return !InstalledPluginMetadataEqual(previous, installed)
+	changes := InstalledPluginMetadataChanges(previous, installed)
+	s.mu.Unlock()
+	if len(changes) == 0 {
+		return false, ""
+	}
+	changeID := NewInstalledPluginMetadataChangeID()
+	// Rust logs field names only, never plugin values.
+	slog.Info("installed plugin runtime metadata invalidated",
+		"change_id", changeID,
+		"marketplace", marketplaceName,
+		"changes", changes,
+		"initial_snapshot", len(previous) == 0,
+	)
+	return true, changeID
 }
 
 // sortInstalledPluginDetailsForCompare gives the comparison a stable order by

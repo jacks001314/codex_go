@@ -125,21 +125,34 @@ func (r *RuntimeRouter) reconcileInstalledRemotePlugins(ctx context.Context) (bo
 		detailsByMarketplace[marketplaceName] = details
 	}
 	changed := false
+	var metadataChangeIDs []string
 	for _, marketplaceName := range []string{
 		remoteInstalledGlobalMarketplace,
 		remoteInstalledUserMarketplace,
 		remoteInstalledWorkspaceMarketplace,
 		remoteInstalledWorkspaceSharedMarketplace,
 	} {
-		if r.services.Plugins.ReplaceInstalledRemotePlugins(marketplaceName, detailsByMarketplace[marketplaceName]) {
+		marketplaceChanged, changeID := r.services.Plugins.ReplaceInstalledRemotePluginsWithChanges(marketplaceName, detailsByMarketplace[marketplaceName])
+		if marketplaceChanged {
 			changed = true
+		}
+		if changeID != "" {
+			metadataChangeIDs = append(metadataChangeIDs, changeID)
 		}
 	}
 	// Rust #46309: a display-only metadata refresh publishes the new payload for
 	// display consumers but keeps live MCP sessions and cached skill resources,
-	// so the derived caches are cleared only when behavior changed.
+	// so the derived caches are cleared only when behavior changed. Rust #60505
+	// tags the refresh with InstalledPluginMetadata and the change id when the
+	// invalidation came from installed-plugin metadata.
 	if changed {
-		r.effectivePluginsChanged()
+		reason := mcpRefreshReasonEffectivePluginsChanged
+		changeID := ""
+		if len(metadataChangeIDs) > 0 {
+			reason = mcpRefreshReasonInstalledPluginMetadata
+			changeID = strings.Join(metadataChangeIDs, ",")
+		}
+		r.effectivePluginsChangedFor(reason, changeID)
 	}
 	return true, nil
 }

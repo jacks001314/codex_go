@@ -15048,6 +15048,14 @@ func (r *RuntimeRouter) clearRecommendedPluginsCache() {
 }
 
 func (r *RuntimeRouter) effectivePluginsChanged() {
+	r.effectivePluginsChangedFor(mcpRefreshReasonExplicitInvalidation, "")
+}
+
+// effectivePluginsChangedFor is effectivePluginsChanged with the refresh reason
+// Rust threads through invalidate_mcp_runtimes_for (#60505). An installed
+// plugin metadata invalidation passes its change id so the metadata log and the
+// MCP refresh below can be correlated.
+func (r *RuntimeRouter) effectivePluginsChangedFor(reason mcpRefreshReason, changeID string) {
 	if r == nil {
 		return
 	}
@@ -15055,7 +15063,10 @@ func (r *RuntimeRouter) effectivePluginsChanged() {
 	// refresh the config-derived MCP and hook runtimes of the loaded threads.
 	r.clearConfigDerivedCaches()
 	r.configureMCPFromConfig()
-	r.mcpRuntimes.invalidateAll()
+	r.mcpRuntimes.invalidateAllFor(reason)
+	if changeID != "" {
+		slog.Info("effective plugins changed", "reason", string(reason), "change_id", changeID)
+	}
 	if err := r.refreshPluginHookRuntimes(); err != nil {
 		slog.Warn("failed to refresh hook runtimes after a plugin change", "error", err)
 	}

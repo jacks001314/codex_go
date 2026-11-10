@@ -1,6 +1,9 @@
 package plugin
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 const remoteMetadataMarketplace = "openai-curated-remote"
 
@@ -228,3 +231,80 @@ func TestRemoteCatalogMetadataReorderingAndBehaviorLikeRust(t *testing.T) {
 }
 
 func stringPointerForPluginTest(value string) *string { return &value }
+
+// Mirrors Rust remote_metadata_tests.rs::installed_ordering_remains_significant
+// (#60505): the diagnostics attribute a pure reordering of an otherwise
+// identical membership to every moved plugin as "position".
+func TestInstalledPluginMetadataChangesReportPositionsLikeRust(t *testing.T) {
+	first := remoteMetadataPlugin("first")
+	second := remoteMetadataPlugin("second")
+	second.Summary.ID = pluginID("other", remoteMetadataMarketplace)
+	second.Summary.RemotePluginID = "plugin-other"
+	second.Summary.Name = "other"
+	previous := []PluginDetail{first, second}
+	current := []PluginDetail{second, first}
+	if InstalledPluginMetadataEqual(previous, current) {
+		t.Fatal("reordering must invalidate installed plugin metadata")
+	}
+	got := InstalledPluginMetadataChanges(previous, current)
+	want := map[string][]string{
+		"plugin-test":  {"position"},
+		"plugin-other": {"position"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("metadata changes = %#v, want %#v", got, want)
+	}
+}
+
+// Mirrors Rust
+// remote_metadata_tests.rs::diagnostics_attribute_fields_by_plugin_id_across_membership_changes
+// (#60505): plugins are matched by remote id, so an insertion or removal never
+// misattributes a survivor's changed fields to its neighbour.
+func TestInstalledPluginMetadataChangesAttributeFieldsByPluginIDLikeRust(t *testing.T) {
+	kept := remoteMetadataPlugin("first")
+	removed := remoteMetadataPlugin("second")
+	removed.Summary.ID = pluginID("removed", remoteMetadataMarketplace)
+	removed.Summary.RemotePluginID = "plugin-removed"
+	removed.Summary.Name = "removed"
+	previous := []PluginDetail{kept, removed}
+
+	added := remoteMetadataPlugin("third")
+	added.Summary.ID = pluginID("added", remoteMetadataMarketplace)
+	added.Summary.RemotePluginID = "plugin-added"
+	added.Summary.Name = "added"
+
+	updated := kept
+	updated.Summary.Enabled = false
+	version := "2"
+	updated.Summary.Version = &version
+
+	got := InstalledPluginMetadataChanges(previous, []PluginDetail{added, updated})
+	want := map[string][]string{
+		"plugin-added":   {"added"},
+		"plugin-removed": {"removed"},
+		"plugin-test":    {"version", "enabled"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("metadata changes = %#v, want %#v", got, want)
+	}
+}
+
+// Mirrors Rust #60505's change-id correlation: a behavior change mints one id,
+// a display-only refresh reports no change and no id.
+func TestReplaceInstalledRemotePluginsReportsMetadataChangeIDLikeRust(t *testing.T) {
+	service := NewPluginService()
+	changed, changeID := service.ReplaceInstalledRemotePluginsWithChanges(remoteMetadataMarketplace, []PluginDetail{remoteMetadataPlugin("first")})
+	if !changed || changeID == "" {
+		t.Fatalf("initial snapshot changed = %v, changeID = %q", changed, changeID)
+	}
+	if again, _ := service.ReplaceInstalledRemotePluginsWithChanges(remoteMetadataMarketplace, []PluginDetail{remoteMetadataPlugin("renewed")}); again {
+		t.Fatal("a renewed display image must not invalidate installed plugin metadata")
+	}
+	version := "2"
+	behavioral := remoteMetadataPlugin("renewed")
+	behavioral.Summary.Version = &version
+	changed, changeID = service.ReplaceInstalledRemotePluginsWithChanges(remoteMetadataMarketplace, []PluginDetail{behavioral})
+	if !changed || changeID == "" {
+		t.Fatalf("behavior change reported changed = %v, changeID = %q", changed, changeID)
+	}
+}
