@@ -42,6 +42,13 @@ type gatewayDeviceAuthorization struct {
 	Interval                int    `json:"interval"`
 }
 
+// SupportsDeviceAuthorization reports whether the provider configured a
+// device authorization endpoint, which the app-server advertises as
+// supportsDeviceAuth (Rust #60486).
+func (m *GatewayAuthManager) SupportsDeviceAuthorization() bool {
+	return m != nil && strings.TrimSpace(m.config.DeviceAuthorizationURL) != ""
+}
+
 // LoginWithDeviceCode runs the caller-initiated device sign-in. onPrompt
 // receives the verification URL and code; completion means the credential was
 // saved and is visible to existing request consumers.

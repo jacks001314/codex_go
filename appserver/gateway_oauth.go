@@ -14,6 +14,9 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
+
+	"github.com/google/uuid"
 
 	"codex_go/auth"
 	"codex_go/config"
@@ -35,6 +38,9 @@ const (
 // current gateway. auth_url is an authorization handoff and is only sent to the
 // connection that started the login.
 type GatewayOAuthChangedNotification struct {
+	// LoginID correlates a device-authorization completion with the prompt that
+	// started it; other notifications leave it null (Rust #60486).
+	LoginID    *string            `json:"loginId"`
 	AuthURL    *string            `json:"authUrl"`
 	ProviderID string             `json:"providerId"`
 	Status     GatewayOAuthStatus `json:"status"`
@@ -47,8 +53,11 @@ type GatewayOAuthReadResponse struct {
 	ProviderID   string              `json:"providerId"`
 	ProviderName string              `json:"providerName"`
 	Required     bool                `json:"required"`
-	Status       *GatewayOAuthStatus `json:"status"`
-	Error        *string             `json:"error"`
+	// SupportsDeviceAuth reports whether the provider configures a device
+	// authorization endpoint (Rust #60486).
+	SupportsDeviceAuth bool                `json:"supportsDeviceAuth"`
+	Status             *GatewayOAuthStatus `json:"status"`
+	Error              *string             `json:"error"`
 }
 
 // GatewayOAuthReadParams selects the configured provider whose gateway
@@ -62,9 +71,23 @@ type GatewayOAuthReadParams struct {
 // default provider and any thread's provider stay unchanged.
 type GatewayOAuthLoginParams struct {
 	ModelProvider *string `json:"modelProvider,omitempty"`
+	// DeviceAuth asks for the device-authorization flow (Rust #60486).
+	DeviceAuth bool `json:"deviceAuth,omitempty"`
 }
 
-type GatewayOAuthLoginResponse struct{}
+// GatewayOAuthPrompt is the device-authorization prompt a caller must show
+// before the grant is approved.
+type GatewayOAuthPrompt struct {
+	LoginID         string `json:"loginId"`
+	VerificationURL string `json:"verificationUrl"`
+	UserCode        string `json:"userCode"`
+}
+
+// GatewayOAuthLoginResponse carries a device prompt when one is needed and
+// stays null when saved credentials already satisfy the gateway.
+type GatewayOAuthLoginResponse struct {
+	Prompt *GatewayOAuthPrompt `json:"prompt"`
+}
 
 type GatewayOAuthCancelResponse struct{}
 
@@ -150,6 +173,22 @@ func gatewayOAuthProviderSelection(request *Request) (string, error) {
 	return strings.TrimSpace(*params.ModelProvider), nil
 }
 
+// gatewayOAuthLoginDeviceAuth decodes the optional deviceAuth flag.
+func gatewayOAuthLoginDeviceAuth(request *Request) (bool, error) {
+	if request == nil {
+		return false, nil
+	}
+	raw := strings.TrimSpace(string(request.Params))
+	if raw == "" || raw == "null" {
+		return false, nil
+	}
+	var params GatewayOAuthLoginParams
+	if err := json.Unmarshal(request.Params, &params); err != nil {
+		return false, jsonRPCInvalidRequest("Invalid params: " + err.Error())
+	}
+	return params.DeviceAuth, nil
+}
+
 // gatewayOAuthCredentialProviderIDs lists every configured provider whose
 // gateway OAuth configuration shares the selected provider's credential, so a
 // sign-in reports readiness for all of them (Rust #59819).
@@ -191,10 +230,11 @@ func (r *RuntimeRouter) handleGatewayOAuthRead(request *Request) (*GatewayOAuthR
 	}
 	wireStatus := gatewayOAuthWireStatus(status)
 	response := &GatewayOAuthReadResponse{
-		ProviderID:   providerID,
-		ProviderName: providerName,
-		Required:     true,
-		Status:       &wireStatus,
+		ProviderID:         providerID,
+		ProviderName:       providerName,
+		Required:           true,
+		SupportsDeviceAuth: manager.SupportsDeviceAuthorization(),
+		Status:             &wireStatus,
 	}
 	if strings.TrimSpace(status.Message) != "" {
 		message := status.Message
@@ -222,6 +262,10 @@ func (r *RuntimeRouter) handleGatewayOAuthLogin(request *Request) (*GatewayOAuth
 		connectionID = strings.TrimSpace(request.ConnectionID)
 	}
 	selection, err := gatewayOAuthProviderSelection(request)
+	if err != nil {
+		return nil, err
+	}
+	deviceAuth, err := gatewayOAuthLoginDeviceAuth(request)
 	if err != nil {
 		return nil, err
 	}
@@ -253,14 +297,23 @@ func (r *RuntimeRouter) handleGatewayOAuthLogin(request *Request) (*GatewayOAuth
 	}
 	r.gatewayLogin = active
 	r.gatewayLoginMu.Unlock()
-	defer func() {
-		r.gatewayLoginMu.Lock()
-		if r.gatewayLogin == active {
-			r.gatewayLogin = nil
-		}
-		r.gatewayLoginMu.Unlock()
-		close(active.done)
-	}()
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() {
+			r.gatewayLoginMu.Lock()
+			if r.gatewayLogin == active {
+				r.gatewayLogin = nil
+			}
+			r.gatewayLoginMu.Unlock()
+			close(active.done)
+		})
+	}
+	if deviceAuth {
+		// Rust #60486 answers with the device prompt before approval and keeps
+		// the sign-in slot owned until the grant completes.
+		return r.loginGatewayWithDeviceCode(ctx, cancel, release, manager, providerID, connectionID, credentialProviders)
+	}
+	defer release()
 
 	loginErr := manager.LoginWithBrowser(ctx, func(url string) {
 		authURL := url
@@ -288,6 +341,75 @@ func (r *RuntimeRouter) handleGatewayOAuthLogin(request *Request) (*GatewayOAuth
 		})
 	}
 	return &GatewayOAuthLoginResponse{}, nil
+}
+
+// loginGatewayWithDeviceCode starts the device flow, answers with its prompt,
+// and reports the outcome to the initiating connection under the same login id
+// (Rust #60486). Saved credentials are reused before another grant is asked
+// for.
+func (r *RuntimeRouter) loginGatewayWithDeviceCode(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	release func(),
+	manager *auth.GatewayAuthManager,
+	providerID string,
+	connectionID string,
+	credentialProviders []string,
+) (*GatewayOAuthLoginResponse, error) {
+	if !manager.SupportsDeviceAuthorization() {
+		cancel()
+		release()
+		return nil, jsonRPCInvalidRequest("The gateway does not support device authorization")
+	}
+	if _, err := manager.ResolveAccessTokenWithoutLogin(ctx); err == nil {
+		cancel()
+		release()
+		return &GatewayOAuthLoginResponse{}, nil
+	} else if !errors.Is(err, auth.ErrGatewayLoginRequired) {
+		cancel()
+		release()
+		return nil, errors.New(err.Error())
+	}
+	loginID := uuid.NewString()
+	prompts := make(chan GatewayOAuthPrompt, 1)
+	go func() {
+		defer release()
+		loginErr := manager.LoginWithDeviceCode(ctx, func(prompt auth.GatewayDeviceCodePrompt) {
+			select {
+			case prompts <- GatewayOAuthPrompt{LoginID: loginID, VerificationURL: prompt.VerificationURL, UserCode: prompt.UserCode}:
+			default:
+			}
+		})
+		status := GatewayOAuthStatusSucceeded
+		var message *string
+		if loginErr != nil {
+			status = GatewayOAuthStatusFailed
+			text := loginErr.Error()
+			message = &text
+		}
+		r.notifyToConnection(connectionID, NotificationGatewayOAuthChanged, &GatewayOAuthChangedNotification{
+			LoginID:    &loginID,
+			ProviderID: providerID,
+			Status:     status,
+			Error:      message,
+		})
+		for _, id := range credentialProviders {
+			if id == providerID {
+				continue
+			}
+			r.notify(NotificationGatewayOAuthChanged, &GatewayOAuthChangedNotification{
+				ProviderID: id,
+				Status:     status,
+				Error:      message,
+			})
+		}
+	}()
+	select {
+	case prompt := <-prompts:
+		return &GatewayOAuthLoginResponse{Prompt: &prompt}, nil
+	case <-ctx.Done():
+		return nil, jsonRPCInvalidRequest("Gateway sign-in cancelled")
+	}
 }
 
 func (r *RuntimeRouter) handleGatewayOAuthCancel(request *Request) (*GatewayOAuthCancelResponse, error) {

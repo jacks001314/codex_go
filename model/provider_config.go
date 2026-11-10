@@ -419,9 +419,12 @@ func providerInfoFromConfig(values map[string]any, validate bool) (*ProviderInfo
 func gatewayOAuthConfigFromConfig(values map[string]any) (*GatewayOAuthConfig, error) {
 	gateway := &GatewayOAuthConfig{
 		AuthorizationURL: stringConfig(values, "authorization_url"),
-		TokenURL:         stringConfig(values, "token_url"),
-		ClientID:         stringConfig(values, "client_id"),
-		Scopes:           stringSliceConfig(values, "scopes"),
+		// Rust #59822/#60486: the device authorization endpoint enables
+		// device-code sign-in for both the TUI and app-server clients.
+		DeviceAuthorizationURL: stringConfig(values, "device_authorization_url"),
+		TokenURL:               stringConfig(values, "token_url"),
+		ClientID:               stringConfig(values, "client_id"),
+		Scopes:                 stringSliceConfig(values, "scopes"),
 	}
 	if resource, ok := configValue(values, "resource").(string); ok {
 		gateway.Resource = &resource
