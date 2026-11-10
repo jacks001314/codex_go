@@ -45406,10 +45406,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "本轮未审计落地：TUI 提问答复未经 Cloud 消息准入",
-    "Go 锚点：tui/tea/",
+    "Rust e1cc9671：TUI 记录 UserMessageSource（Prompt/QuestionAnswer/SafetyRecourse）；QuestionAnswer 按 during_turn 解析意图——Cloud 会话回答中继为 CloudSubmissionIntent::StartOrSteer，空闲为 StartIfIdle，本地会话仍 UseKnownTurn；Cloud 回答走原生 start-or-steer 准入并按普通准入处理（接受清空 composer、拒绝还原）",
+    "Go 实现：tui/tea SubmitRequest 新增 Source/DuringTurn（含 clone 透传）；enter 在有运行回合时调用 submitAsyncQuestionAnswerDuringTurn 走 steer 路径并携带 SubmitSourceQuestionAnswer，空闲仍走普通提交；app/remote_tui_cloud.go 新增 cloudQuestionAnswerAdmitter 与 usesCloudQuestionAnswerAdmission（Cloud + QuestionAnswer），cloudAppServerTransport.SubmitUserMessage 桥接 cloudbackend.Client.SubmitUserMessage（SubmissionSteer = 原生 start-or-steer）；remoteAppServerTUIClient.startTurn 与 interrupt controller steer 命中条件时走 admitCloudUserMessage，其余保持 thread/startTurn 与 thread/steer",
+    "测试：tui/tea 新增运行中回答走 steer 且带 question_answer 源、空闲回答走提交且带源、普通 prompt 源保持；app 新增路由真值表与 CloudQuestionAnswerUsesNativeAdmissionLikeRust（断言提交给 typed 准入的 threadId/clientUserMessageId/input/turnTrigger，且不额外发 thread/startTurn；拒绝时返回错误以便还原）；go test ./app ./tui/tea ./cloudbackend ./cli ./tcptunnel 通过",
+    "顺带修正 app/hidden_command_diagnostics_meta_like_rust_test.go 中 tcp-tunnel 缺参期望：上游已把 --proxy-origins-file 改为 requires=auth-token-stdin 的可选项，裸调用只缺 --proxy-url/--target",
     "plan: update/plan_2026_11_10.md (#60462)"
    ]
   },
