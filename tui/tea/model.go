@@ -2182,6 +2182,16 @@ type Model struct {
 	hideRateLimitModelNudge  bool
 	rateLimitSwitchModel     string
 	rateLimitSwitchReasoning string
+	// rateLimitRecoveryDeadline and rateLimitRecoverySecondsShown drive the five
+	// second recovery notice that replaces a visible switch prompt once account
+	// usage recovers (Rust #60435).
+	rateLimitRecoveryDeadline     time.Time
+	rateLimitRecoverySecondsShown int
+	// rateLimitReadSeq numbers started account usage reads, and
+	// rateLimitStaleThrough remembers the newest read that a rolling update has
+	// already outrun, so a late read cannot confirm recovery (Rust #60435).
+	rateLimitReadSeq      uint64
+	rateLimitStaleThrough uint64
 
 	statusStyle lipgloss.Style
 	footerStyle lipgloss.Style
@@ -4090,6 +4100,8 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		return m, m.rateLimitPollReadCmd()
 	case rateLimitPollResultMsg:
 		return m, m.applyRateLimitPollResult(msg)
+	case rateLimitRecoveryTickMsg:
+		return m, m.tickRateLimitRecoveryPrompt(m.currentTime())
 	case anim.TickMsg:
 		if m.animEngine != nil {
 			cmd := m.animEngine.Advance()
@@ -10622,10 +10634,26 @@ func warningMessageFromStatus(status string) (string, bool) {
 	return message, message != ""
 }
 
+// applyRateLimitSnapshot records a rolling thread-event snapshot, the source
+// Rust calls RateLimitSnapshotSource::RollingUpdate.
 func (m *Model) applyRateLimitSnapshot(snapshot chatwidget.RateLimitSnapshot) bubbletea.Cmd {
+	return m.applyRateLimitSnapshotFromSource(snapshot, rateLimitSnapshotRollingUpdate, false)
+}
+
+// applyRateLimitSnapshotFromSource mirrors Rust's apply_rate_limit_snapshot:
+// rolling updates merge into the cached windows, a full account usage read
+// replaces them, and a fresh read that finds every window below the switch
+// threshold retires a pending or visible switch prompt (Rust #60435).
+func (m *Model) applyRateLimitSnapshotFromSource(snapshot chatwidget.RateLimitSnapshot, source rateLimitSnapshotSource, staleRead bool) bubbletea.Cmd {
 	if m == nil {
 		return nil
 	}
+	if source == rateLimitSnapshotRollingUpdate {
+		// Rust marks the newest account read as too old once a rolling update
+		// lands, so a read that started earlier cannot confirm recovery.
+		m.rateLimitStaleThrough = m.rateLimitReadSeq
+	}
+	incoming := snapshot
 	limitID := strings.TrimSpace(snapshot.LimitID)
 	if limitID == "" {
 		limitID = "codex"
@@ -10633,8 +10661,10 @@ func (m *Model) applyRateLimitSnapshot(snapshot chatwidget.RateLimitSnapshot) bu
 	if m.rateLimitSnapshots == nil {
 		m.rateLimitSnapshots = map[string]chatwidget.RateLimitSnapshot{}
 	}
-	if previous, ok := m.rateLimitSnapshots[limitID]; ok {
-		snapshot = mergeRollingRateLimitSnapshot(previous, true, snapshot)
+	if source == rateLimitSnapshotRollingUpdate {
+		if previous, ok := m.rateLimitSnapshots[limitID]; ok {
+			snapshot = mergeRollingRateLimitSnapshot(previous, true, snapshot)
+		}
 	}
 	if strings.TrimSpace(snapshot.PlanType) != "" {
 		// Rust #44970: an account/plan change invalidates cached dashboard usage
@@ -10661,7 +10691,32 @@ func (m *Model) applyRateLimitSnapshot(snapshot chatwidget.RateLimitSnapshot) bu
 		}
 		m.refreshTranscript()
 	}
-	return m.maybeOpenRateLimitSwitchPrompt(snapshot)
+	isCodexLimit := strings.TrimSpace(incoming.LimitID) == "" || strings.EqualFold(strings.TrimSpace(incoming.LimitID), "codex")
+	replenished := source == rateLimitSnapshotAccountUsage &&
+		!staleRead &&
+		isCodexLimit &&
+		chatwidget.RateLimitUsageReplenished(incoming)
+	recoveryCmd := bubbletea.Cmd(nil)
+	switch m.rateLimitSwitchPrompt {
+	case chatwidget.RateLimitSwitchPromptPending:
+		if replenished {
+			m.rateLimitSwitchPrompt = chatwidget.RateLimitSwitchPromptIdle
+		}
+	case chatwidget.RateLimitSwitchPromptShown:
+		if replenished {
+			m.startRateLimitRecoveryNotice()
+			recoveryCmd = m.tickRateLimitRecoveryPrompt(m.currentTime())
+		}
+	}
+	promptCmd := m.maybeOpenRateLimitSwitchPrompt(snapshot)
+	switch {
+	case promptCmd == nil:
+		return recoveryCmd
+	case recoveryCmd == nil:
+		return promptCmd
+	default:
+		return bubbletea.Batch(promptCmd, recoveryCmd)
+	}
 }
 
 func (m *Model) syncStateRateLimits() {

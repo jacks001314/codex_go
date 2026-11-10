@@ -17,6 +17,9 @@ type rateLimitPollTickMsg struct{}
 
 // rateLimitPollResultMsg carries one background account-limits read.
 type rateLimitPollResultMsg struct {
+	// ReadID identifies the read that produced these snapshots so a rolling
+	// update that landed meanwhile can mark it stale (Rust #60435).
+	ReadID    uint64
 	Snapshots []chatwidget.RateLimitSnapshot
 	Err       error
 }
@@ -50,23 +53,30 @@ func (m *Model) rateLimitPollReadCmd() bubbletea.Cmd {
 	if reader == nil {
 		return nil
 	}
+	// Rust start_usage_notice_read: remember the newest read so a rolling
+	// update can retire reads that started before it.
+	m.rateLimitReadSeq++
+	readID := m.rateLimitReadSeq
 	return func() bubbletea.Msg {
 		snapshots, err := reader()
-		return rateLimitPollResultMsg{Snapshots: snapshots, Err: err}
+		return rateLimitPollResultMsg{ReadID: readID, Snapshots: snapshots, Err: err}
 	}
 }
 
-// applyRateLimitPollResult feeds every snapshot through the rolling-update path
-// so banners, Reserve fallback and status rows react exactly as they do to
-// server notifications. The next tick is scheduled from the refreshed usage.
+// applyRateLimitPollResult feeds every snapshot through the full account usage
+// path so banners, Reserve fallback, status rows and switch-prompt recovery
+// react exactly as they do to server notifications. A read that started before
+// the newest rolling update cannot confirm recovery (Rust #60435). The next
+// tick is scheduled from the refreshed usage.
 func (m *Model) applyRateLimitPollResult(message rateLimitPollResultMsg) bubbletea.Cmd {
 	if m == nil {
 		return nil
 	}
+	staleRead := m.rateLimitStaleThrough != 0 && message.ReadID != 0 && message.ReadID <= m.rateLimitStaleThrough
 	var commands []bubbletea.Cmd
 	if message.Err == nil {
 		for _, snapshot := range message.Snapshots {
-			if cmd := m.applyRateLimitSnapshot(snapshot); cmd != nil {
+			if cmd := m.applyRateLimitSnapshotFromSource(snapshot, rateLimitSnapshotAccountUsage, staleRead); cmd != nil {
 				commands = append(commands, cmd)
 			}
 		}

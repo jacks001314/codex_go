@@ -10,11 +10,14 @@ const (
 	NudgeModelSlug = "gpt-5.4-mini"
 	// ReserveModelSlug mirrors Rust's LUNA_RESERVE_MODEL: a session running on
 	// Reserve never shows the lower-cost switch prompt.
-	ReserveModelSlug               = "gpt-reserve"
-	RateLimitSwitchPromptViewID    = "rate-limit-switch-prompt"
-	RateLimitSwitchPromptThreshold = 90.0
-	primaryLimitFallbackLabel      = "usage"
-	secondaryLimitFallbackLabel    = "secondary usage"
+	ReserveModelSlug            = "gpt-reserve"
+	RateLimitSwitchPromptViewID = "rate-limit-switch-prompt"
+	// RateLimitSwitchRecoveryNoticeSeconds is Rust's five second countdown
+	// before the recovery notice dismisses itself (Rust #60435).
+	RateLimitSwitchRecoveryNoticeSeconds = 5
+	RateLimitSwitchPromptThreshold       = 90.0
+	primaryLimitFallbackLabel            = "usage"
+	secondaryLimitFallbackLabel          = "secondary usage"
 )
 
 // rateLimitWarningThresholds mirrors Rust RATE_LIMIT_WARNING_THRESHOLDS
@@ -35,6 +38,10 @@ const (
 	RateLimitSwitchPromptIdle    RateLimitSwitchPromptState = "idle"
 	RateLimitSwitchPromptPending RateLimitSwitchPromptState = "pending"
 	RateLimitSwitchPromptShown   RateLimitSwitchPromptState = "shown"
+	// RateLimitSwitchPromptRecovering is the post-recovery notice: account
+	// usage fell back below the threshold and the notice counts down before it
+	// dismisses itself (Rust #60435).
+	RateLimitSwitchPromptRecovering RateLimitSwitchPromptState = "recovering"
 )
 
 type RateLimitWindow struct {
@@ -108,7 +115,7 @@ func (s *RateLimitWarningState) TakeWarnings(snapshot RateLimitSnapshot) []strin
 }
 
 func ShouldQueueRateLimitSwitchPrompt(snapshot RateLimitSnapshot, currentModel string, hidden bool, state RateLimitSwitchPromptState) bool {
-	if hidden || state == RateLimitSwitchPromptShown || !isCodexLimit(snapshot.LimitID) || hasWorkspaceCredits(snapshot.Credits) {
+	if hidden || state == RateLimitSwitchPromptShown || state == RateLimitSwitchPromptRecovering || !isCodexLimit(snapshot.LimitID) || hasWorkspaceCredits(snapshot.Credits) {
 		return false
 	}
 	if strings.EqualFold(strings.TrimSpace(currentModel), NudgeModelSlug) ||
@@ -116,6 +123,55 @@ func ShouldQueueRateLimitSwitchPrompt(snapshot RateLimitSnapshot, currentModel s
 		return false
 	}
 	return rateLimitWindowHighUsage(snapshot.Primary) || rateLimitWindowHighUsage(snapshot.Secondary)
+}
+
+// RateLimitUsageReplenished reports whether every reported usage window sits
+// below the switch-prompt threshold, which lets a fresh account usage read
+// clear a pending or visible switch prompt (Rust #60435).
+func RateLimitUsageReplenished(snapshot RateLimitSnapshot) bool {
+	var maxUsed float64
+	seen := false
+	for _, window := range []*RateLimitWindow{snapshot.Primary, snapshot.Secondary} {
+		if window == nil {
+			continue
+		}
+		seen = true
+		if window.UsedPercent > maxUsed {
+			maxUsed = window.UsedPercent
+		}
+	}
+	return seen && maxUsed < RateLimitSwitchPromptThreshold
+}
+
+// NewRateLimitRecoveryNoticeView renders the notice that replaces a visible
+// switch prompt once account usage recovers (Rust #60435). It shares the switch
+// prompt view ID so the notice takes the prompt's place, and its single Dismiss
+// item closes it the way Enter or Esc do.
+func NewRateLimitRecoveryNoticeView(secondsRemaining int) SelectionView {
+	if secondsRemaining < 1 {
+		secondsRemaining = 1
+	}
+	return SelectionView{
+		ViewID:      RateLimitSwitchPromptViewID,
+		Title:       "You\u2019re no longer close to your usage limit.",
+		Subtitle:    fmt.Sprintf("Dismissing in %d second%s\u2026", secondsRemaining, plural(secondsRemaining)),
+		FooterHint:  standardPopupHintLine,
+		AllowCancel: true,
+		Items: []SelectionItem{
+			{
+				ID:              "dismiss",
+				Name:            "Dismiss",
+				DismissOnSelect: true,
+			},
+		},
+	}
+}
+
+func plural(count int) string {
+	if count == 1 {
+		return ""
+	}
+	return "s"
 }
 
 func NewRateLimitSwitchPromptView(preset RateLimitSwitchPreset) SelectionView {

@@ -1192,6 +1192,15 @@ func (m *Model) respondModal(cancelled bool) bubbletea.Cmd {
 		return bubbletea.Batch(m.applyPermissionsModalOption(response.OptionID), m.settlePermissionPopup())
 	}
 	if modal.kind == ModalKindRateLimitSwitch {
+		if m.rateLimitSwitchPrompt == chatwidget.RateLimitSwitchPromptRecovering {
+			// Enter, Esc and the notice's single Dismiss row all close the
+			// recovery notice; the prompt stays Shown so a recovered account is
+			// not asked to switch models again (Rust #60435). Cancelling a picker
+			// leaves no notice behind, so drop the placeholder respondModal set.
+			m.closeRateLimitRecoveryNotice()
+			m.notice = ""
+			return nil
+		}
 		m.modal = nil
 		if cancelled {
 			m.notice = "Cancelled"
