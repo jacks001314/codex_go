@@ -45309,11 +45309,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "本轮未审计落地：usage 恢复后模型切换提示未自动消失",
-    "Go 锚点：tui/tea/",
-    "plan: update/plan_2026_11_10.md (#60435)"
+    "tui/tea/rate_limit_poll.go、rate_limit_switch.go：账户用量读取按 Rust RateLimitSnapshotSource::AccountUsage 全量替换窗口，线程事件仍走滚动合并；新鲜读数（未被之后到达的滚动更新超越）在所有窗口低于 90% 时把 pending 提示清回 idle。",
+    "tui/tea/rate_limit_switch.go：已展示的提示替换为 5 秒恢复通知，同 Rust 文案「Dismissing in N seconds…」每秒改写倒计时，到期关闭；Enter/Esc/Dismiss 关闭后提示保持 shown 不再重开；后端 banner 只在 shown 时把提示改回 pending。",
+    "Tests: go test ./tui/tea ./tui/chatwidget -count=1，含 TestRateLimitSwitchPromptClearedByFreshAccountRead、TestRateLimitRecoveryIgnoresStaleAccountRead、TestRateLimitRecoveryNoticeCountsDownAndDismisses、TestRateLimitRecoveryNoticeDismissedManually、TestBackendBannerPreservesRecoveryNotice。"
    ]
   },
   {
