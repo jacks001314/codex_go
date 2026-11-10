@@ -614,16 +614,16 @@ type ConfigRequirements struct {
 	// RuntimeAuthMode pins `features.runtime_agent_instances.mode` (Rust
 	// FeatureRequirementsToml.runtime_auth_mode, #60014). It is internal and
 	// stays off the app-server wire schema.
-	RuntimeAuthMode *RuntimeAuthModeRequirement `json:"-"`
-	Hooks                      *ManagedHooksRequirements `json:"hooks,omitempty"`
-	EnforceResidency           *ResidencyRequirement     `json:"enforceResidency,omitempty"`
-	Application                *ApplicationRequirements  `json:"application,omitempty"`
-	Network                    *NetworkRequirements      `json:"network,omitempty"`
-	Models                     *ModelsRequirements       `json:"models,omitempty"`
-	AllowedLoginMethods        []ForcedLoginMethod       `json:"allowedLoginMethods,omitempty"`
-	AllowedChatGPTWorkspaces   []string                  `json:"allowedChatGPTWorkspaces,omitempty"`
-	CliAuthCredentialsStore    *AuthCredentialsStoreMode `json:"cliAuthCredentialsStore,omitempty"`
-	ChatgptBaseURL             *string                   `json:"chatgptBaseUrl,omitempty"`
+	RuntimeAuthMode          *RuntimeAuthModeRequirement `json:"-"`
+	Hooks                    *ManagedHooksRequirements   `json:"hooks,omitempty"`
+	EnforceResidency         *ResidencyRequirement       `json:"enforceResidency,omitempty"`
+	Application              *ApplicationRequirements    `json:"application,omitempty"`
+	Network                  *NetworkRequirements        `json:"network,omitempty"`
+	Models                   *ModelsRequirements         `json:"models,omitempty"`
+	AllowedLoginMethods      []ForcedLoginMethod         `json:"allowedLoginMethods,omitempty"`
+	AllowedChatGPTWorkspaces []string                    `json:"allowedChatGPTWorkspaces,omitempty"`
+	CliAuthCredentialsStore  *AuthCredentialsStoreMode   `json:"cliAuthCredentialsStore,omitempty"`
+	ChatgptBaseURL           *string                     `json:"chatgptBaseUrl,omitempty"`
 	// ConfigServer is the local managed requirement selecting a customer-hosted
 	// configuration server (Rust ConfigRequirementsToml.config_server). Only
 	// local managed requirements may configure it, so it stays off the
@@ -3375,12 +3375,13 @@ func (s *ConfigService) DetectExternalAgentConfig(params *ExternalAgentConfigDet
 		params = &ExternalAgentConfigDetectParams{}
 	}
 	migrationSource := normalizeExternalMigrationSource(params.MigrationSource)
+	skillMode := externalSkillImportModeForSource(params.MigrationSource)
 	items := make([]ExternalAgentConfigMigrationItem, 0, len(params.CWDs)+1)
 	if params.IncludeHome {
 		if migrationSource == externalMigrationSourceCursor {
 			items = append(items, s.detectExternalCursorMigrations(externalMigrationScope{})...)
 		} else {
-			items = append(items, s.detectExternalCoreMigrations(externalMigrationScope{})...)
+			items = append(items, s.detectExternalCoreMigrations(externalMigrationScope{}, skillMode)...)
 		}
 		if item, ok := s.detectExternalSessionMigrationForSource(migrationSource, params); ok {
 			items = append(items, item)
@@ -3394,7 +3395,7 @@ func (s *ConfigService) DetectExternalAgentConfig(params *ExternalAgentConfigDet
 		if migrationSource == externalMigrationSourceCursor {
 			items = append(items, s.detectExternalCursorMigrations(externalMigrationScope{repoRoot: root})...)
 		} else {
-			items = append(items, s.detectExternalCoreMigrations(externalMigrationScope{repoRoot: root})...)
+			items = append(items, s.detectExternalCoreMigrations(externalMigrationScope{repoRoot: root}, skillMode)...)
 		}
 	}
 	if params.IncludeHome {
@@ -3491,6 +3492,7 @@ func (s *ConfigService) ImportExternalAgentConfigItems(params *ExternalAgentConf
 
 func (s *ConfigService) importExternalAgentConfigItemsLocked(params *ExternalAgentConfigImportParams, deferPlugins bool) []ExternalAgentConfigImportTypeResult {
 	migrationSource := normalizeExternalMigrationSource(params.MigrationSource)
+	skillMode := externalSkillImportModeForSource(params.MigrationSource)
 	var typeResults []ExternalAgentConfigImportTypeResult
 	for i := range params.MigrationItems {
 		item := params.MigrationItems[i]
@@ -3508,7 +3510,7 @@ func (s *ConfigService) importExternalAgentConfigItemsLocked(params *ExternalAge
 			continue
 		}
 		if item.ItemType == MigrationConfig || item.ItemType == MigrationSkills || item.ItemType == MigrationAgentsMD {
-			result := s.importExternalCoreMigration(item)
+			result := s.importExternalCoreMigration(item, skillMode)
 			typeResults = append(typeResults, result)
 			continue
 		}

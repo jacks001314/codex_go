@@ -45589,10 +45589,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "本轮未审计落地：Claude Code skill 本地迁移未实现",
-    "Go 锚点：externalagentmigration/",
+    "config/external_source.go: 新增 migration source \"claude-code-local-skills\" 与 externalSkillImportMode（all/localOnly）+ externalSkillImportModeForSource，来源仍归一为 Claude。",
+    "config/external_core_import.go: externalReservedSkillDirectory 在 home 作用域始终排除 .trash、localOnly 时再排除 synced；导入 synced 时跳过其内部 .trash（copyExternalSkill 的 excludeTrash 分支）。",
+    "config/api.go: DetectExternalAgentConfig 与 ImportExternalAgentConfig 都按 params.MigrationSource 计算 skillMode 并传入 core 检测/导入。",
+    "测试：新增 TestExternalClaudeSkillImportHonorsLocalOnlyModeLikeRust（localOnly 只检出 alpha、默认检出 alpha+synced、导入后 synced/.trash 与 home .trash 均不存在）；go test ./config -count=1 通过；go build ./... 通过。",
     "plan: update/plan_2026_11_10.md (#60492)"
    ]
   },

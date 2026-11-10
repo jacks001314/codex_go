@@ -26,7 +26,7 @@ func (s externalMigrationScope) home() bool {
 	return strings.TrimSpace(s.repoRoot) == ""
 }
 
-func (s *ConfigService) detectExternalCoreMigrations(scope externalMigrationScope) []ExternalAgentConfigMigrationItem {
+func (s *ConfigService) detectExternalCoreMigrations(scope externalMigrationScope, skillMode externalSkillImportMode) []ExternalAgentConfigMigrationItem {
 	items := make([]ExternalAgentConfigMigrationItem, 0, 7)
 	cwd := externalScopeCWD(scope)
 	if source, target, migrated, ok := s.externalConfigMigration(scope); ok && externalConfigHasMissing(target, migrated) {
@@ -42,7 +42,7 @@ func (s *ConfigService) detectExternalCoreMigrations(scope externalMigrationScop
 	if item, ok := s.detectExternalHooksMigration(scope); ok {
 		items = append(items, item)
 	}
-	if source, target, names := s.externalSkillsMigration(scope); len(names) > 0 {
+	if source, target, names := s.externalSkillsMigration(scope, skillMode); len(names) > 0 {
 		details := NewMigrationDetails()
 		for _, name := range names {
 			details.Skills = append(details.Skills, NamedMigration{Name: name})
@@ -73,7 +73,7 @@ func (s *ConfigService) detectExternalCoreMigrations(scope externalMigrationScop
 	return items
 }
 
-func (s *ConfigService) importExternalCoreMigration(item ExternalAgentConfigMigrationItem) ExternalAgentConfigImportTypeResult {
+func (s *ConfigService) importExternalCoreMigration(item ExternalAgentConfigMigrationItem, skillMode externalSkillImportMode) ExternalAgentConfigImportTypeResult {
 	result := ExternalAgentConfigImportTypeResult{
 		ItemType:  item.ItemType,
 		Successes: []ExternalAgentConfigImportItemTypeSuccess{},
@@ -88,7 +88,7 @@ func (s *ConfigService) importExternalCoreMigration(item ExternalAgentConfigMigr
 	case MigrationConfig:
 		err = s.importExternalConfig(scope, &result)
 	case MigrationSkills:
-		err = s.importExternalSkills(scope, &result)
+		err = s.importExternalSkills(scope, skillMode, &result)
 	case MigrationAgentsMD:
 		err = s.importExternalInstructions(scope, &result)
 	default:
@@ -113,7 +113,7 @@ func (s *ConfigService) externalConfigMigration(scope externalMigrationScope) (s
 	return source, s.externalTargetConfigPath(scope), migrated, true
 }
 
-func (s *ConfigService) externalSkillsMigration(scope externalMigrationScope) (string, string, []string) {
+func (s *ConfigService) externalSkillsMigration(scope externalMigrationScope, mode externalSkillImportMode) (string, string, []string) {
 	var source, target string
 	if scope.home() {
 		source = filepath.Join(s.externalAgentHome, "skills")
@@ -128,7 +128,12 @@ func (s *ConfigService) externalSkillsMigration(scope externalMigrationScope) (s
 	}
 	names := make([]string, 0, len(entries))
 	for _, entry := range entries {
-		if entry.IsDir() && !pathExists(filepath.Join(target, entry.Name())) {
+		// Rust #60492: the Claude home keeps a trash directory for removed
+		// skills, and the local-only source also skips marketplace-synced ones.
+		if !entry.IsDir() || externalReservedSkillDirectory(scope, entry.Name(), mode) {
+			continue
+		}
+		if !pathExists(filepath.Join(target, entry.Name())) {
 			names = append(names, entry.Name())
 		}
 	}
@@ -203,8 +208,8 @@ func (s *ConfigService) importExternalConfig(scope externalMigrationScope, resul
 	return nil
 }
 
-func (s *ConfigService) importExternalSkills(scope externalMigrationScope, result *ExternalAgentConfigImportTypeResult) error {
-	source, target, names := s.externalSkillsMigration(scope)
+func (s *ConfigService) importExternalSkills(scope externalMigrationScope, mode externalSkillImportMode, result *ExternalAgentConfigImportTypeResult) error {
+	source, target, names := s.externalSkillsMigration(scope, mode)
 	if len(names) == 0 {
 		return nil
 	}
@@ -212,7 +217,10 @@ func (s *ConfigService) importExternalSkills(scope externalMigrationScope, resul
 		return err
 	}
 	for _, name := range names {
-		if err := copyExternalSkill(filepath.Join(source, name), filepath.Join(target, name)); err != nil {
+		// Rust #60492: the synced tree carries its own trash directory that is
+		// never part of the import.
+		excludeTrash := scope.home() && name == "synced"
+		if err := copyExternalSkill(filepath.Join(source, name), filepath.Join(target, name), excludeTrash); err != nil {
 			return err
 		}
 		result.Successes = append(result.Successes, externalMigrationSuccess(MigrationSkills, name, name, externalScopeCWD(scope)))
@@ -390,7 +398,19 @@ func nonEmptyTextFile(path string) bool {
 	return err == nil && strings.TrimSpace(string(data)) != ""
 }
 
-func copyExternalSkill(source string, target string) error {
+// externalReservedSkillDirectory reports skill directory names that never
+// migrate from the Claude home (Rust #60492 is_reserved_skill_directory).
+func externalReservedSkillDirectory(scope externalMigrationScope, name string, mode externalSkillImportMode) bool {
+	if !scope.home() {
+		return false
+	}
+	if name == ".trash" {
+		return true
+	}
+	return mode == externalSkillImportLocalOnly && name == "synced"
+}
+
+func copyExternalSkill(source string, target string, excludeTrash bool) error {
 	if err := rejectRedirectedExternalTarget(target); err != nil {
 		return err
 	}
@@ -402,10 +422,13 @@ func copyExternalSkill(source string, target string) error {
 		return err
 	}
 	for _, entry := range entries {
+		if excludeTrash && entry.Name() == ".trash" {
+			continue
+		}
 		from := filepath.Join(source, entry.Name())
 		to := filepath.Join(target, entry.Name())
 		if entry.IsDir() {
-			if err := copyExternalSkill(from, to); err != nil {
+			if err := copyExternalSkill(from, to, false); err != nil {
 				return err
 			}
 			continue
