@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Recompute every number reported by round 2026-11-08 from parity/commits.json."""
+"""Recompute every number reported from parity/commits.json and gate the ledger shape.
+
+Anchor-agnostic since the 2026-11-10 round: the range comes from the ledger itself so a
+re-anchor cannot leave a stale pin behind in this verifier.
+"""
 import collections, json, os, re, sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -49,7 +53,9 @@ ok = (
     and report["openStatusCount"] == 0
     and report["fieldsConsistent"]
     and report["closedWithEvidence"]
-    and ledger["rustToInclusive"].startswith("748ab55ca7")
+    and sha40.match(ledger["rustFromExclusive"] or "")
+    and sha40.match(ledger["rustToInclusive"] or "")
+    and len(ledger["commits"]) > 0
     and report["lastSha"] == ledger["rustToInclusive"]
 )
 print("\nprefix-only without evidence:", undocumented)

@@ -175,8 +175,12 @@ func TestPrecomputedExportArtifactsMatchTargetRustCommit(t *testing.T) {
 		// Re-anchored to upstream 67f0994b (round 1195): both vendored artifacts are
 		// byte-identical to app-server-protocol/schema/precomputed/ at the current
 		// pin, so the pins below are recomputed from those exact bytes.
-		{"stable", stablePrecomputedExports, "5a93be76c2f389899b3a201bb470d69e48ac01ddc5233a431613bbff5a634a7f"},
-		{"experimental", experimentalPrecomputedExports, "72216e6360b4aadb896c46fe3608f43c2f1f1e46ff894da0f82539703faa5667"},
+		// Re-vendored at upstream e54a5713ca (#60391): both artifacts were
+		// copied byte-for-byte from app-server-protocol/schema/precomputed/ in
+		// the anchor checkout, so the pins below are recomputed from those
+		// exact bytes.
+		{"stable", stablePrecomputedExports, "850b25f34ab8e9745a901f02e412723756553f5ad65df0ba82db2b3daef87980"},
+		{"experimental", experimentalPrecomputedExports, "b59f3d438f232eb8448b713cb7e6f7efd3f1d7bfd44d36764009110697bdc0e0"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -279,15 +283,13 @@ func TestBuildProtocolSchemaIndexesRPCSurface(t *testing.T) {
 // forwardPortedOptionalTypeScriptParams lists optional request params Go emits
 // ahead of the frozen Rust TypeScript fixture (#59819). Once the anchor fixture
 // names them, drop the entry.
-var forwardPortedOptionalTypeScriptParams = map[string]string{
-	string(MethodGatewayOAuthRead):  "GatewayOAuthReadParams",
-	string(MethodGatewayOAuthLogin): "GatewayOAuthLoginParams",
-}
+// Re-anchored to e54a5713ca: the anchor TypeScript fixture now carries the
+// optional gatewayOAuth login/read params, so no entry is forward-ported.
+var forwardPortedOptionalTypeScriptParams = map[string]string{}
 
-var forwardPortedStableMethods = map[string]string{
-	string(MethodModelProviderList):        "3026a8e54e (#58845) ported after the 67f0994b parity baseline",
-	string(MethodModelProviderConfigWrite): "053e5b1ca9 (#58876) ported after the 67f0994b parity baseline",
-}
+// Re-anchored to e54a5713ca: modelProvider/list and modelProvider/config/write
+// are in the anchor Rust fixture, so no method is forward-ported in stable.
+var forwardPortedStableMethods = map[string]string{}
 
 func TestBuildProtocolSchemaMatchesRustStableFixtures(t *testing.T) {
 	root := rustAppServerProtocolSchemaRoot(t)

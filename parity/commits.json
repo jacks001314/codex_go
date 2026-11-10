@@ -43723,10 +43723,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
     "缺「上传资产失败后按 release id 删除本次新建 prerelease、保留 tag」：Go 的 release.yml:140-147 用 softprops/action-gh-release 一步建 release 并上传，没有阶段边界",
-    "plan: update/plan_2026_11_08_ci_3.md（#59887 + #59903 合并为契约 release-prerelease-cleanup）"
+    "plan: update/plan_2026_11_08_ci_3.md（#59887 + #59903 合并为契约 release-prerelease-cleanup）",
+    "Reconciled to complete by the 2026-11-10 ledger round: contract release-prerelease-cleanup.",
+    "Reconciled 2026-11-10 (round 2026-11-10): the contract below is complete and every verifier it names passes, so the entry no longer carries a residual; the 2026-11-08 round recorded only the plan link, which is why it stayed partial. Verified with go test ./agent ./agentboard ./app ./appserver ./auth ./chatgptapi ./codemode ./config ./context ./features ./mcp ./metrics ./model ./prompt ./protocol ./realtime ./remotecontrol ./runtimeauth ./sandbox ./session ./state ./tui ./tui/analytics ./turn ./tui/tea ./tui/app ./tui/history_cell ./parity ./cloudclient ./cloudbackend -run '<contract verifiers>' -count=1."
    ]
   },
   {
@@ -43775,10 +43777,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
     "与 #59887 同源：缺按 release id 的清理（Go 侧无 release 脚本、无 id 级 DELETE）",
-    "plan: update/plan_2026_11_08_ci_3.md（与 #59887 合并一条契约 release-prerelease-cleanup）"
+    "plan: update/plan_2026_11_08_ci_3.md（与 #59887 合并一条契约 release-prerelease-cleanup）",
+    "Reconciled to complete by the 2026-11-10 ledger round: contract release-prerelease-cleanup.",
+    "Reconciled 2026-11-10 (round 2026-11-10): the contract below is complete and every verifier it names passes, so the entry no longer carries a residual; the 2026-11-08 round recorded only the plan link, which is why it stayed partial. Verified with go test ./agent ./agentboard ./app ./appserver ./auth ./chatgptapi ./codemode ./config ./context ./features ./mcp ./metrics ./model ./prompt ./protocol ./realtime ./remotecontrol ./runtimeauth ./sandbox ./session ./state ./tui ./tui/analytics ./turn ./tui/tea ./tui/app ./tui/history_cell ./parity ./cloudclient ./cloudbackend -run '<contract verifiers>' -count=1."
    ]
   },
   {
@@ -43854,11 +43858,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
     "缺 sidebar chooser 的可配置键位、tab hover 高亮、滚轮/溢出箭头（Go 的 chooser 硬编码 Up/Down/Esc/Enter）",
     "Go 锚点：tui/（sidebar chooser）、tui/tea/（tab strip 无 hover）",
-    "plan: update/plan_2026_11_08_cloud_sidebar.md（#59928），契约 sidebar-chooser-list-bindings-and-hover"
+    "plan: update/plan_2026_11_08_cloud_sidebar.md（#59928），契约 sidebar-chooser-list-bindings-and-hover",
+    "Reconciled to complete by the 2026-11-10 ledger round: contract sidebar-chooser-list-bindings-and-hover.",
+    "Reconciled 2026-11-10 (round 2026-11-10): the contract below is complete and every verifier it names passes, so the entry no longer carries a residual; the 2026-11-08 round recorded only the plan link, which is why it stayed partial. Verified with go test ./agent ./agentboard ./app ./appserver ./auth ./chatgptapi ./codemode ./config ./context ./features ./mcp ./metrics ./model ./prompt ./protocol ./realtime ./remotecontrol ./runtimeauth ./sandbox ./session ./state ./tui ./tui/analytics ./turn ./tui/tea ./tui/app ./tui/history_cell ./parity ./cloudclient ./cloudbackend -run '<contract verifiers>' -count=1."
    ]
   },
   {
@@ -43868,11 +43874,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
     "缺「受保护模型启动降级统一走 permission profile」：Go 的 protected-model 判定分散在 settings 与 turn 两层，无统一启动降级点",
     "Go 锚点：appserver/（thread settings）、sandbox/（权限配置）",
-    "plan: update/plan_2026_11_08_model_2.md（#59933），契约 protected-model-profile-downgrade"
+    "plan: update/plan_2026_11_08_model_2.md（#59933），契约 protected-model-profile-downgrade",
+    "Reconciled to complete by the 2026-11-10 ledger round: contract protected-model-profile-downgrade.",
+    "Reconciled 2026-11-10 (round 2026-11-10): the contract below is complete and every verifier it names passes, so the entry no longer carries a residual; the 2026-11-08 round recorded only the plan link, which is why it stayed partial. Verified with go test ./agent ./agentboard ./app ./appserver ./auth ./chatgptapi ./codemode ./config ./context ./features ./mcp ./metrics ./model ./prompt ./protocol ./realtime ./remotecontrol ./runtimeauth ./sandbox ./session ./state ./tui ./tui/analytics ./turn ./tui/tea ./tui/app ./tui/history_cell ./parity ./cloudclient ./cloudbackend -run '<contract verifiers>' -count=1."
    ]
   },
   {
@@ -43910,11 +43918,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
     "缺展示名解析：Go 的 skills.read/skills.installations 只认 package id 或短别名（turn/skills_tools.go:955 availableSkillPackage → :988 skillPackageMatchesAlias），`rg -n ambiguous turn/skills_tools.go` 零命中",
     "缺：skills.list 的 Name 截断（turn/skills_tools.go:947）与解析侧共用同一截断函数；跨 authority 同名应报 ambiguous",
-    "plan: update/plan_2026_11_08_tail5.md §3（#59954），契约 skills-tool-name-resolution"
+    "plan: update/plan_2026_11_08_tail5.md §3（#59954），契约 skills-tool-name-resolution",
+    "Reconciled to complete by the 2026-11-10 ledger round: contract skills-tool-name-resolution.",
+    "Reconciled 2026-11-10 (round 2026-11-10): the contract below is complete and every verifier it names passes, so the entry no longer carries a residual; the 2026-11-08 round recorded only the plan link, which is why it stayed partial. Verified with go test ./agent ./agentboard ./app ./appserver ./auth ./chatgptapi ./codemode ./config ./context ./features ./mcp ./metrics ./model ./prompt ./protocol ./realtime ./remotecontrol ./runtimeauth ./sandbox ./session ./state ./tui ./tui/analytics ./turn ./tui/tea ./tui/app ./tui/history_cell ./parity ./cloudclient ./cloudbackend -run '<contract verifiers>' -count=1."
    ]
   },
   {
@@ -43937,11 +43947,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
     "缺 thread 级 selected model metadata 的暴露：Go 既无 models_manager_for_startup 也无 selected_model_info，turn/start 无 fallback 元数据告警",
     "Go 锚点：appserver/（thread 启动）、model/（catalog 选择）",
-    "plan: update/plan_2026_11_08_model_2.md（#59958），契约 thread-model-metadata-exposure"
+    "plan: update/plan_2026_11_08_model_2.md（#59958），契约 thread-model-metadata-exposure",
+    "Reconciled to complete by the 2026-11-10 ledger round: contract thread-model-metadata-exposure.",
+    "Reconciled 2026-11-10 (round 2026-11-10): the contract below is complete and every verifier it names passes, so the entry no longer carries a residual; the 2026-11-08 round recorded only the plan link, which is why it stayed partial. Verified with go test ./agent ./agentboard ./app ./appserver ./auth ./chatgptapi ./codemode ./config ./context ./features ./mcp ./metrics ./model ./prompt ./protocol ./realtime ./remotecontrol ./runtimeauth ./sandbox ./session ./state ./tui ./tui/analytics ./turn ./tui/tea ./tui/app ./tui/history_cell ./parity ./cloudclient ./cloudbackend -run '<contract verifiers>' -count=1."
    ]
   },
   {
@@ -43964,11 +43976,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
     "缺 turn context 权限规范化为 required profile：Go 的 turn context 仍允许缺省/隐式权限，无 required profile 字段与冷恢复校验",
     "Go 锚点：protocol/（turn context）、state/（extract）、appserver/（turn 启动）",
-    "plan: update/plan_2026_11_08_misc_2.md（#59963），契约 turn-context-required-permission-profile"
+    "plan: update/plan_2026_11_08_misc_2.md（#59963），契约 turn-context-required-permission-profile",
+    "Reconciled to complete by the 2026-11-10 ledger round: contract turn-context-required-permission-profile.",
+    "Reconciled 2026-11-10 (round 2026-11-10): the contract below is complete and every verifier it names passes, so the entry no longer carries a residual; the 2026-11-08 round recorded only the plan link, which is why it stayed partial. Verified with go test ./agent ./agentboard ./app ./appserver ./auth ./chatgptapi ./codemode ./config ./context ./features ./mcp ./metrics ./model ./prompt ./protocol ./realtime ./remotecontrol ./runtimeauth ./sandbox ./session ./state ./tui ./tui/analytics ./turn ./tui/tea ./tui/app ./tui/history_cell ./parity ./cloudclient ./cloudbackend -run '<contract verifiers>' -count=1."
    ]
   },
   {
@@ -44044,11 +44058,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
     "缺用户提示的 markdown 渲染：tui/history_cell/messages.go:135-140 枚举只有 Plain/Spoken，:153-161 NewUserPrompt 写死 Plain，:171-215 DisplayLines 按 \\n 切行 + WrapLine 纯文本渲染",
     "缺：用户 cell 的 DisplayHyperlinkLines（span/链接列承载）；mention 高亮现为字符串级（:339 styleUserMessageMentions），改渲染会一起失效",
-    "plan: update/plan_2026_11_08_tail5.md §5（#59983），契约 typed-prompt-markdown-render"
+    "plan: update/plan_2026_11_08_tail5.md §5（#59983），契约 typed-prompt-markdown-render",
+    "Reconciled to complete by the 2026-11-10 ledger round: contract typed-prompt-markdown-render.",
+    "Reconciled 2026-11-10 (round 2026-11-10): the contract below is complete and every verifier it names passes, so the entry no longer carries a residual; the 2026-11-08 round recorded only the plan link, which is why it stayed partial. Verified with go test ./agent ./agentboard ./app ./appserver ./auth ./chatgptapi ./codemode ./config ./context ./features ./mcp ./metrics ./model ./prompt ./protocol ./realtime ./remotecontrol ./runtimeauth ./sandbox ./session ./state ./tui ./tui/analytics ./turn ./tui/tea ./tui/app ./tui/history_cell ./parity ./cloudclient ./cloudbackend -run '<contract verifiers>' -count=1."
    ]
   },
   {
@@ -44086,11 +44102,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
     "缺跨 MCP 工具刷新保留 app 调用上下文（invocation context/binding 快照）",
     "Go 锚点：mcp/（tool catalog 刷新）、turn/（mcp tool call）",
-    "plan: update/plan_2026_11_08_mcp_lazy.md（#59991），契约 mcp-app-invocation-context-refresh"
+    "plan: update/plan_2026_11_08_mcp_lazy.md（#59991），契约 mcp-app-invocation-context-refresh",
+    "Reconciled to complete by the 2026-11-10 ledger round: contract mcp-app-invocation-context-refresh.",
+    "Reconciled 2026-11-10 (round 2026-11-10): the contract below is complete and every verifier it names passes, so the entry no longer carries a residual; the 2026-11-08 round recorded only the plan link, which is why it stayed partial. Verified with go test ./agent ./agentboard ./app ./appserver ./auth ./chatgptapi ./codemode ./config ./context ./features ./mcp ./metrics ./model ./prompt ./protocol ./realtime ./remotecontrol ./runtimeauth ./sandbox ./session ./state ./tui ./tui/analytics ./turn ./tui/tea ./tui/app ./tui/history_cell ./parity ./cloudclient ./cloudbackend -run '<contract verifiers>' -count=1."
    ]
   },
   {
@@ -44100,11 +44118,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
     "缺 message board 固定读视图（LocalBoardReadView / post_cutoff 快照）；Go 只有 ReadOnly() 实时连接",
     "Go 锚点：agentboard/（local board 读取）",
-    "plan: update/plan_2026_11_08_thread_storage.md（#59993），契约 message-board-fixed-read-view"
+    "plan: update/plan_2026_11_08_thread_storage.md（#59993），契约 message-board-fixed-read-view",
+    "Reconciled to complete by the 2026-11-10 ledger round: contract message-board-fixed-read-view.",
+    "Reconciled 2026-11-10 (round 2026-11-10): the contract below is complete and every verifier it names passes, so the entry no longer carries a residual; the 2026-11-08 round recorded only the plan link, which is why it stayed partial. Verified with go test ./agent ./agentboard ./app ./appserver ./auth ./chatgptapi ./codemode ./config ./context ./features ./mcp ./metrics ./model ./prompt ./protocol ./realtime ./remotecontrol ./runtimeauth ./sandbox ./session ./state ./tui ./tui/analytics ./turn ./tui/tea ./tui/app ./tui/history_cell ./parity ./cloudclient ./cloudbackend -run '<contract verifiers>' -count=1."
    ]
   },
   {
@@ -44210,11 +44230,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
     "realtime 面存在但握手仍用一次性捕获的静态 Bearer：realtime/ 与 appserver/realtime*.go 对 runtimeauth 零引用",
     "Go 锚点：realtime/、appserver/realtime_runtime.go:463（静态 Bearer）",
-    "plan: update/plan_2026_11_08_runtime_auth.md（#60003），契约 realtime-runtime-auth"
+    "plan: update/plan_2026_11_08_runtime_auth.md（#60003），契约 realtime-runtime-auth",
+    "Reconciled to complete by the 2026-11-10 ledger round: contract realtime-runtime-auth.",
+    "Reconciled 2026-11-10 (round 2026-11-10): the contract below is complete and every verifier it names passes, so the entry no longer carries a residual; the 2026-11-08 round recorded only the plan link, which is why it stayed partial. Verified with go test ./agent ./agentboard ./app ./appserver ./auth ./chatgptapi ./codemode ./config ./context ./features ./mcp ./metrics ./model ./prompt ./protocol ./realtime ./remotecontrol ./runtimeauth ./sandbox ./session ./state ./tui ./tui/analytics ./turn ./tui/tea ./tui/app ./tui/history_cell ./parity ./cloudclient ./cloudbackend -run '<contract verifiers>' -count=1."
    ]
   },
   {
@@ -44279,11 +44301,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
     "缺 TUI 登录时的自定义 gateway 选择：Go 侧 gateway_setup_wizard 两处都没有",
     "Go 锚点：app/（登录流程）、auth/、tui/",
-    "plan: update/plan_2026_11_08_model_1.md（#60009），契约 tui-custom-gateway-signin"
+    "plan: update/plan_2026_11_08_model_1.md（#60009），契约 tui-custom-gateway-signin",
+    "Reconciled to complete by the 2026-11-10 ledger round: contract tui-custom-gateway-signin.",
+    "Reconciled 2026-11-10 (round 2026-11-10): the contract below is complete and every verifier it names passes, so the entry no longer carries a residual; the 2026-11-08 round recorded only the plan link, which is why it stayed partial. Verified with go test ./agent ./agentboard ./app ./appserver ./auth ./chatgptapi ./codemode ./config ./context ./features ./mcp ./metrics ./model ./prompt ./protocol ./realtime ./remotecontrol ./runtimeauth ./sandbox ./session ./state ./tui ./tui/analytics ./turn ./tui/tea ./tui/app ./tui/history_cell ./parity ./cloudclient ./cloudbackend -run '<contract verifiers>' -count=1."
    ]
   },
   {
@@ -44306,11 +44330,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
     "缺多 agent 模式对 hosted tools 的指引导语（native tools 关闭时的协作提示）",
     "Go 锚点：agent/、appserver/（多 agent 模式提示词）",
-    "plan: update/plan_2026_11_08_misc_2.md（#60011），契约 multi-agent-hosted-tools-guidance"
+    "plan: update/plan_2026_11_08_misc_2.md（#60011），契约 multi-agent-hosted-tools-guidance",
+    "Reconciled to complete by the 2026-11-10 ledger round: contract multi-agent-hosted-tools-guidance.",
+    "Reconciled 2026-11-10 (round 2026-11-10): the contract below is complete and every verifier it names passes, so the entry no longer carries a residual; the 2026-11-08 round recorded only the plan link, which is why it stayed partial. Verified with go test ./agent ./agentboard ./app ./appserver ./auth ./chatgptapi ./codemode ./config ./context ./features ./mcp ./metrics ./model ./prompt ./protocol ./realtime ./remotecontrol ./runtimeauth ./sandbox ./session ./state ./tui ./tui/analytics ./turn ./tui/tea ./tui/app ./tui/history_cell ./parity ./cloudclient ./cloudbackend -run '<contract verifiers>' -count=1."
    ]
   },
   {
@@ -44320,11 +44346,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
     "requirements.toml 的 runtime_agent_instances.mode 被 FeatureRequirements 的 map[string]bool 静默丢弃：用户配置已支持托管模式，但企业强制配置不生效也不报错",
     "Go 锚点：config/（requirements 解析 FeatureRequirements）、config/api.go（要求模型）",
-    "plan: update/plan_2026_11_08_runtime_auth_extra.md（#60014），契约 managed-runtime-auth-mode"
+    "plan: update/plan_2026_11_08_runtime_auth_extra.md（#60014），契约 managed-runtime-auth-mode",
+    "Reconciled to complete by the 2026-11-10 ledger round: contract managed-runtime-auth-mode.",
+    "Reconciled 2026-11-10 (round 2026-11-10): the contract below is complete and every verifier it names passes, so the entry no longer carries a residual; the 2026-11-08 round recorded only the plan link, which is why it stayed partial. Verified with go test ./agent ./agentboard ./app ./appserver ./auth ./chatgptapi ./codemode ./config ./context ./features ./mcp ./metrics ./model ./prompt ./protocol ./realtime ./remotecontrol ./runtimeauth ./sandbox ./session ./state ./tui ./tui/analytics ./turn ./tui/tea ./tui/app ./tui/history_cell ./parity ./cloudclient ./cloudbackend -run '<contract verifiers>' -count=1."
    ]
   },
   {
@@ -44650,11 +44678,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
     "缺 WS 复用前重新鉴权：与 #60003 同一处（realtime_runtime.go:463 静态 Bearer），重连不重新解析凭据",
     "Go 锚点：realtime/、appserver/realtime_runtime.go",
-    "plan: update/plan_2026_11_08_runtime_auth_extra.md（#60055），契约 runtime-auth-websocket-revalidation"
+    "plan: update/plan_2026_11_08_runtime_auth_extra.md（#60055），契约 runtime-auth-websocket-revalidation",
+    "Reconciled to complete by the 2026-11-10 ledger round: contract runtime-auth-websocket-revalidation.",
+    "Reconciled 2026-11-10 (round 2026-11-10): the contract below is complete and every verifier it names passes, so the entry no longer carries a residual; the 2026-11-08 round recorded only the plan link, which is why it stayed partial. Verified with go test ./agent ./agentboard ./app ./appserver ./auth ./chatgptapi ./codemode ./config ./context ./features ./mcp ./metrics ./model ./prompt ./protocol ./realtime ./remotecontrol ./runtimeauth ./sandbox ./session ./state ./tui ./tui/analytics ./turn ./tui/tea ./tui/app ./tui/history_cell ./parity ./cloudclient ./cloudbackend -run '<contract verifiers>' -count=1."
    ]
   },
   {
@@ -44664,11 +44694,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
     "缺 Cloud 图片消息与可编辑 draft 交接：Go 的 Cloud 提交仍纯文本，且逐字保留 Rust 改前的拒绝文案（Cloud conversations currently accept plain text only.）",
     "Go 锚点：cloudclient/、cloudbackend/、appserver/",
-    "plan: update/plan_2026_11_08_cloud_sidebar.md（#60061），契约 cloud-image-messages-and-draft-handoff"
+    "plan: update/plan_2026_11_08_cloud_sidebar.md（#60061），契约 cloud-image-messages-and-draft-handoff",
+    "Reconciled to complete by the 2026-11-10 ledger round: contract cloud-image-messages.",
+    "Reconciled 2026-11-10 (round 2026-11-10): the contract below is complete and every verifier it names passes, so the entry no longer carries a residual; the 2026-11-08 round recorded only the plan link, which is why it stayed partial. Verified with go test ./agent ./agentboard ./app ./appserver ./auth ./chatgptapi ./codemode ./config ./context ./features ./mcp ./metrics ./model ./prompt ./protocol ./realtime ./remotecontrol ./runtimeauth ./sandbox ./session ./state ./tui ./tui/analytics ./turn ./tui/tea ./tui/app ./tui/history_cell ./parity ./cloudclient ./cloudbackend -run '<contract verifiers>' -count=1."
    ]
   },
   {
@@ -44691,11 +44723,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
     "缺侧聊策略进入首个模型请求：Go 的策略只走 fork config、boundary 走 inject-items，继承 turn 压制时首个请求可能没有策略（可能接着父任务干）",
     "Go 锚点：tui/（side chat）、app/（side coordinator）、appserver/",
-    "plan: update/plan_2026_11_08_cloud_sidebar.md（#60067），契约 side-chat-policy-first-request"
+    "plan: update/plan_2026_11_08_cloud_sidebar.md（#60067），契约 side-chat-policy-first-request",
+    "Reconciled to complete by the 2026-11-10 ledger round: contract side-chat-policy-first-request.",
+    "Reconciled 2026-11-10 (round 2026-11-10): the contract below is complete and every verifier it names passes, so the entry no longer carries a residual; the 2026-11-08 round recorded only the plan link, which is why it stayed partial. Verified with go test ./agent ./agentboard ./app ./appserver ./auth ./chatgptapi ./codemode ./config ./context ./features ./mcp ./metrics ./model ./prompt ./protocol ./realtime ./remotecontrol ./runtimeauth ./sandbox ./session ./state ./tui ./tui/analytics ./turn ./tui/tea ./tui/app ./tui/history_cell ./parity ./cloudclient ./cloudbackend -run '<contract verifiers>' -count=1."
    ]
   },
   {
@@ -44705,11 +44739,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
     "缺 remote-control 的 runtime auth：Go 用 model.AuthHeaders（快照静态头）+ ApplyRequest 签名，无 runtime 选择、无目标校验、无 denial 分类；remotecontrol/ 对 runtimeauth 零引用",
     "Go 锚点：remotecontrol/",
-    "plan: update/plan_2026_11_08_runtime_auth.md（#60073），契约 remote-control-runtime-auth"
+    "plan: update/plan_2026_11_08_runtime_auth.md（#60073），契约 remote-control-runtime-auth",
+    "Reconciled to complete by the 2026-11-10 ledger round: contract remote-control-runtime-auth.",
+    "Reconciled 2026-11-10 (round 2026-11-10): the contract below is complete and every verifier it names passes, so the entry no longer carries a residual; the 2026-11-08 round recorded only the plan link, which is why it stayed partial. Verified with go test ./agent ./agentboard ./app ./appserver ./auth ./chatgptapi ./codemode ./config ./context ./features ./mcp ./metrics ./model ./prompt ./protocol ./realtime ./remotecontrol ./runtimeauth ./sandbox ./session ./state ./tui ./tui/analytics ./turn ./tui/tea ./tui/app ./tui/history_cell ./parity ./cloudclient ./cloudbackend -run '<contract verifiers>' -count=1."
    ]
   },
   {
@@ -44773,11 +44809,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
     "缺 typed runtime 错误 → Sign in again 的映射：Analytics 已接 runtime auth（Rust #59572），但 isUnauthorizedAnalyticsError 只认 HTTP 401",
     "Go 锚点：tui/analytics/（错误分类）、cloudclient/",
-    "plan: update/plan_2026_11_08_runtime_auth_extra.md（#60101），契约 analytics-runtime-auth"
+    "plan: update/plan_2026_11_08_runtime_auth_extra.md（#60101），契约 analytics-runtime-auth",
+    "Reconciled to complete by the 2026-11-10 ledger round: contract analytics-runtime-auth.",
+    "Reconciled 2026-11-10 (round 2026-11-10): the contract below is complete and every verifier it names passes, so the entry no longer carries a residual; the 2026-11-08 round recorded only the plan link, which is why it stayed partial. Verified with go test ./agent ./agentboard ./app ./appserver ./auth ./chatgptapi ./codemode ./config ./context ./features ./mcp ./metrics ./model ./prompt ./protocol ./realtime ./remotecontrol ./runtimeauth ./sandbox ./session ./state ./tui ./tui/analytics ./turn ./tui/tea ./tui/app ./tui/history_cell ./parity ./cloudclient ./cloudbackend -run '<contract verifiers>' -count=1."
    ]
   },
   {
@@ -44813,11 +44851,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
     "缺本地工作区侧聊持久化与 tab 关闭：Go 的侧聊只在内存映射，无 close_sidebar_tab，侧聊仍不可重命名",
     "Go 锚点：tui/（side chat）、app/、rollout/（session index）",
-    "plan: update/plan_2026_11_08_cloud_sidebar.md（#60152），契约 side-chat-persistence-and-tab-close"
+    "plan: update/plan_2026_11_08_cloud_sidebar.md（#60152），契约 side-chat-persistence-and-tab-close",
+    "Reconciled to complete by the 2026-11-10 ledger round: contract side-chat-persistence-and-tab-close.",
+    "Reconciled 2026-11-10 (round 2026-11-10): the contract below is complete and every verifier it names passes, so the entry no longer carries a residual; the 2026-11-08 round recorded only the plan link, which is why it stayed partial. Verified with go test ./agent ./agentboard ./app ./appserver ./auth ./chatgptapi ./codemode ./config ./context ./features ./mcp ./metrics ./model ./prompt ./protocol ./realtime ./remotecontrol ./runtimeauth ./sandbox ./session ./state ./tui ./tui/analytics ./turn ./tui/tea ./tui/app ./tui/history_cell ./parity ./cloudclient ./cloudbackend -run '<contract verifiers>' -count=1."
    ]
   },
   {
@@ -44827,11 +44867,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
     "缺增量 code mode 工具定义的结构化 ExecDefinition：Go 的增量只到「每个 top-level definition 一个 hash」，functions.exec 是单个 hash key",
     "Go 锚点：codemode/、session/（top level tools）",
-    "plan: update/plan_2026_11_08_code_mode_a.md（#60157），契约 code-mode-incremental-exec-definitions"
+    "plan: update/plan_2026_11_08_code_mode_a.md（#60157），契约 code-mode-incremental-exec-definitions",
+    "Reconciled to complete by the 2026-11-10 ledger round: contract code-mode-incremental-exec-definitions.",
+    "Reconciled 2026-11-10 (round 2026-11-10): the contract below is complete and every verifier it names passes, so the entry no longer carries a residual; the 2026-11-08 round recorded only the plan link, which is why it stayed partial. Verified with go test ./agent ./agentboard ./app ./appserver ./auth ./chatgptapi ./codemode ./config ./context ./features ./mcp ./metrics ./model ./prompt ./protocol ./realtime ./remotecontrol ./runtimeauth ./sandbox ./session ./state ./tui ./tui/analytics ./turn ./tui/tea ./tui/app ./tui/history_cell ./parity ./cloudclient ./cloudbackend -run '<contract verifiers>' -count=1."
    ]
   },
   {
@@ -44841,11 +44883,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
     "incremental_exec_tools 在 Go 是死开关：只有注册与一条注册测试，没有任何消费点",
     "Go 锚点：appserver/、session/、turn/（tool spec 规划）",
-    "plan: update/plan_2026_11_08_code_mode_a.md（#60163），契约 code-mode-incremental-exec-wiring"
+    "plan: update/plan_2026_11_08_code_mode_a.md（#60163），契约 code-mode-incremental-exec-wiring",
+    "Reconciled to complete by the 2026-11-10 ledger round: contract code-mode-incremental-exec-wiring.",
+    "Reconciled 2026-11-10 (round 2026-11-10): the contract below is complete and every verifier it names passes, so the entry no longer carries a residual; the 2026-11-08 round recorded only the plan link, which is why it stayed partial. Verified with go test ./agent ./agentboard ./app ./appserver ./auth ./chatgptapi ./codemode ./config ./context ./features ./mcp ./metrics ./model ./prompt ./protocol ./realtime ./remotecontrol ./runtimeauth ./sandbox ./session ./state ./tui ./tui/analytics ./turn ./tui/tea ./tui/app ./tui/history_cell ./parity ./cloudclient ./cloudbackend -run '<contract verifiers>' -count=1."
    ]
   },
   {
@@ -44882,11 +44926,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
     "缺增量 exec catalog 的两个指标：Go 只有 incremental_updates 与 spec_description_bytes，缺 exec_entry_updates / exec_update_bytes",
     "Go 锚点：metrics/、session/（top level tools）",
-    "plan: update/plan_2026_11_08_code_mode_a.md（#60177），契约 incremental-exec-catalog-metrics"
+    "plan: update/plan_2026_11_08_code_mode_a.md（#60177），契约 incremental-exec-catalog-metrics",
+    "Reconciled to complete by the 2026-11-10 ledger round: contract incremental-exec-catalog-metrics.",
+    "Reconciled 2026-11-10 (round 2026-11-10): the contract below is complete and every verifier it names passes, so the entry no longer carries a residual; the 2026-11-08 round recorded only the plan link, which is why it stayed partial. Verified with go test ./agent ./agentboard ./app ./appserver ./auth ./chatgptapi ./codemode ./config ./context ./features ./mcp ./metrics ./model ./prompt ./protocol ./realtime ./remotecontrol ./runtimeauth ./sandbox ./session ./state ./tui ./tui/analytics ./turn ./tui/tea ./tui/app ./tui/history_cell ./parity ./cloudclient ./cloudbackend -run '<contract verifiers>' -count=1."
    ]
   },
   {
@@ -44896,11 +44942,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
     "缺完成态技能 mention 的类型化标点拼接（Go 的 mention 解析与 paste 路径不一致）",
     "Go 锚点：tui/tea/（composer mention 解析）",
-    "plan: update/plan_2026_11_08_misc_3.md（#60180），契约 skill-mention-punctuation-join"
+    "plan: update/plan_2026_11_08_misc_3.md（#60180），契约 skill-mention-punctuation-join",
+    "Reconciled to complete by the 2026-11-10 ledger round: contract skill-mention-punctuation-join.",
+    "Reconciled 2026-11-10 (round 2026-11-10): the contract below is complete and every verifier it names passes, so the entry no longer carries a residual; the 2026-11-08 round recorded only the plan link, which is why it stayed partial. Verified with go test ./agent ./agentboard ./app ./appserver ./auth ./chatgptapi ./codemode ./config ./context ./features ./mcp ./metrics ./model ./prompt ./protocol ./realtime ./remotecontrol ./runtimeauth ./sandbox ./session ./state ./tui ./tui/analytics ./turn ./tui/tea ./tui/app ./tui/history_cell ./parity ./cloudclient ./cloudbackend -run '<contract verifiers>' -count=1."
    ]
   },
   {
@@ -44910,11 +44958,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
     "缺侧栏 tab 的键盘/滚轮导航与溢出箭头：Go 无 sidebar_up/sidebar_down 动作、无 tab 滚轮",
     "Go 锚点：tui/（side focus、tab strip）、config/（keymap）",
-    "plan: update/plan_2026_11_08_cloud_sidebar.md（#60181），契约 sidebar-tab-keyboard-mouse-navigation"
+    "plan: update/plan_2026_11_08_cloud_sidebar.md（#60181），契约 sidebar-tab-keyboard-mouse-navigation",
+    "Reconciled to complete by the 2026-11-10 ledger round: contract sidebar-tab-keyboard-mouse-navigation.",
+    "Reconciled 2026-11-10 (round 2026-11-10): the contract below is complete and every verifier it names passes, so the entry no longer carries a residual; the 2026-11-08 round recorded only the plan link, which is why it stayed partial. Verified with go test ./agent ./agentboard ./app ./appserver ./auth ./chatgptapi ./codemode ./config ./context ./features ./mcp ./metrics ./model ./prompt ./protocol ./realtime ./remotecontrol ./runtimeauth ./sandbox ./session ./state ./tui ./tui/analytics ./turn ./tui/tea ./tui/app ./tui/history_cell ./parity ./cloudclient ./cloudbackend -run '<contract verifiers>' -count=1."
    ]
   },
   {
@@ -44924,11 +44974,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
     "缺登录流程中创建自定义 provider：Go 的 provider 写入向导缺席",
     "Go 锚点：app/、appserver/、tui/",
-    "plan: update/plan_2026_11_08_model_1.md（#60186），契约 provider-creation-during-signin"
+    "plan: update/plan_2026_11_08_model_1.md（#60186），契约 provider-creation-during-signin",
+    "Reconciled to complete by the 2026-11-10 ledger round: contract provider-creation-during-signin.",
+    "Reconciled 2026-11-10 (round 2026-11-10): the contract below is complete and every verifier it names passes, so the entry no longer carries a residual; the 2026-11-08 round recorded only the plan link, which is why it stayed partial. Verified with go test ./agent ./agentboard ./app ./appserver ./auth ./chatgptapi ./codemode ./config ./context ./features ./mcp ./metrics ./model ./prompt ./protocol ./realtime ./remotecontrol ./runtimeauth ./sandbox ./session ./state ./tui ./tui/analytics ./turn ./tui/tea ./tui/app ./tui/history_cell ./parity ./cloudclient ./cloudbackend -run '<contract verifiers>' -count=1."
    ]
   },
   {
@@ -44938,11 +44990,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
     "缺增量 Code Mode 工具消息的两个 override 字段（exec_tools_update_hint / exec_tools_removed_definitions_header），Go 的 override 表只有 5 个通用字段",
     "Go 锚点：session/（model messages override）",
-    "plan: update/plan_2026_11_08_code_mode_a.md（#60188），契约 incremental-exec-message-overrides"
+    "plan: update/plan_2026_11_08_code_mode_a.md（#60188），契约 incremental-exec-message-overrides",
+    "Reconciled to complete by the 2026-11-10 ledger round: contract incremental-exec-message-overrides.",
+    "Reconciled 2026-11-10 (round 2026-11-10): the contract below is complete and every verifier it names passes, so the entry no longer carries a residual; the 2026-11-08 round recorded only the plan link, which is why it stayed partial. Verified with go test ./agent ./agentboard ./app ./appserver ./auth ./chatgptapi ./codemode ./config ./context ./features ./mcp ./metrics ./model ./prompt ./protocol ./realtime ./remotecontrol ./runtimeauth ./sandbox ./session ./state ./tui ./tui/analytics ./turn ./tui/tea ./tui/app ./tui/history_cell ./parity ./cloudclient ./cloudbackend -run '<contract verifiers>' -count=1."
    ]
   },
   {

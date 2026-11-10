@@ -41,6 +41,28 @@ func terminalSequenceWriterOrDefault(writer TerminalTitleWriterFunc) TerminalTit
 	}
 }
 
+// terminalRawSequenceWriterOrDefault writes invisible control sequences -- the
+// OSC 7501/21337 lifecycle status -- straight to the program output.
+//
+// These must not go through bubbletea.Printf: Printf routes the body to
+// renderer.insertAbove, which walks the cursor to the bottom of the viewport,
+// emits a newline and an insert-line, and thereby scrolls the inline viewport
+// up by one row on every state change (working -> idle -> working). Each scroll
+// shifts the already painted transcript by a row and makes the first answer
+// show up twice on screen. Raw writes the bytes without touching the renderer
+// grid; an OSC sequence moves neither the cursor nor any cell.
+func terminalRawSequenceWriterOrDefault(writer TerminalTitleWriterFunc) TerminalTitleWriterFunc {
+	if writer != nil {
+		return writer
+	}
+	return func(sequence string) bubbletea.Cmd {
+		if sequence == "" {
+			return nil
+		}
+		return bubbletea.Raw(sequence)
+	}
+}
+
 // statusSurfaceItemArgs mirrors Rust #54387 (codex-rs/tui/src/chatwidget/
 // status_surface_commands.rs) tokenizing for the two status-surface commands:
 // positional items, the `--clear` switch, and -- for `/statusline` only -- the

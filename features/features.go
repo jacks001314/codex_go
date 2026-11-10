@@ -501,6 +501,10 @@ var Registry = []Spec{
 	// is stable and on by default.
 	{Key: "retain_client_tool_outputs", Stage: StageStable, DefaultEnabled: true},
 	{Key: "subagent_default_context_limits", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust (codex-rs/features/src/lib.rs 2497eab251 #60009): the TUI sign-in
+	// wizard that creates and selects custom gateway providers. Stable and
+	// off by default, matching the Rust spec.
+	{Key: "gateway_setup_wizard", Stage: StageStable, DefaultEnabled: false},
 }
 
 func preventIdleSleepStage() Stage {

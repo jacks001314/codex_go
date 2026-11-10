@@ -106,6 +106,10 @@ func rustAppServerV2SuiteManifest() []rustAppServerV2SuiteCase {
 		{Module: "model_list_requirements_tests", Owner: "config, model, appserver", Focus: "current provider requirements enforced against the served model list (#46917)"},
 		{Module: "model_provider_capabilities_read", Owner: "model", Focus: "modelProvider/capabilities/read RPC"},
 		{Module: "model_provider_enforcement", Owner: "appserver, config", Focus: "managed model provider requirements enforced on existing threads"},
+		// Rust #58845/#58876 landed in the anchor tree, so the forward-ported
+		// model-provider suites are part of the v2 module surface now.
+		{Module: "model_provider_config_tests", Owner: "model, appserver", Focus: "modelProvider/config/write RPC"},
+		{Module: "model_provider_list_tests", Owner: "model, appserver", Focus: "modelProvider/list RPC"},
 		{Module: "multi_agent_v2_developer_instructions", Owner: "agent, prompt", Focus: "multi-agent developer instruction propagation"},
 		{Module: "otel", Owner: "telemetry, appserver", Focus: "OpenTelemetry provider reload after account and config changes"},
 		{Module: "output_schema", Owner: "model, turn", Focus: "turn output schema propagation"},

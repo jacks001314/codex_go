@@ -3493,7 +3493,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		pendingStatusRateLimitRequests:      map[uint64]pendingStatusRateLimitRequest{},
 		terminalTitleWriter:                 options.OnWriteTerminalTitle,
 		terminalClearWriter:                 terminalSequenceWriterOrDefault(options.OnClearTerminal),
-		programStatusWriter:                 terminalSequenceWriterOrDefault(options.OnWriteProgramStatus),
+		programStatusWriter:                 terminalRawSequenceWriterOrDefault(options.OnWriteProgramStatus),
 		notificationPost:                    options.OnPostNotification,
 		notificationSettings:                notificationSettingsOrDefault(options.Notifications),
 		notificationMethod:                  notificationMethodOrDefault(options.NotificationMethod),

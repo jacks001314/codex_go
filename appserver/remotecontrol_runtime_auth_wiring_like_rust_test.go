@@ -22,6 +22,18 @@ func remoteControlAuthRouter(t *testing.T, configBody string) *RuntimeRouter {
 	return router
 }
 
+// closeRemoteControlBackendStore releases the enrollment store the router opens
+// for a manager backend. The manager normally owns it through CloseStoreOnClose;
+// a test that only inspects the backend has to close it so the SQLite handle does
+// not outlive t.TempDir cleanup.
+func closeRemoteControlBackendStore(t *testing.T, backend *remotecontrol.ManagerBackendOptions) {
+	t.Helper()
+	if backend == nil || !backend.CloseStoreOnClose || backend.Store == nil {
+		return
+	}
+	t.Cleanup(func() { _ = backend.Store.Close() })
+}
+
 func stubRemoteControlAuth(t *testing.T) remotecontrol.RemoteControlAuthLoader {
 	t.Helper()
 	return func(context.Context) (*remotecontrol.RemoteControlConnectionAuth, error) {
@@ -39,6 +51,7 @@ func TestRemoteControlBackendBindsRuntimeAuthSlotLikeRust(t *testing.T) {
 		RemoteControlBackendEnabled: true,
 		RemoteControlAuthLoader:     stubRemoteControlAuth(t),
 	})
+	closeRemoteControlBackendStore(t, backend)
 	if backend == nil || backend.AuthLoader == nil {
 		t.Fatal("remote-control backend produced no auth loader")
 	}
@@ -58,6 +71,7 @@ func TestRemoteControlBackendBindsRuntimeAuthSlotLikeRust(t *testing.T) {
 		RemoteControlBackendEnabled: true,
 		RemoteControlAuthLoader:     stubRemoteControlAuth(t),
 	})
+	closeRemoteControlBackendStore(t, plainBackend)
 	plain, err := plainBackend.AuthLoader(context.Background())
 	if err != nil {
 		t.Fatalf("auth loader with the feature off error = %v", err)
