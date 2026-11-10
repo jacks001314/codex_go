@@ -45698,10 +45698,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "本轮未审计落地：权限授予的 MCP refresh 原因未记录",
-    "Go 锚点：mcp/",
+    "Rust 本次只新增 McpRefreshReason::SessionPermissionsGranted 并把既有 mark_mcp_runtime_dirty 的原因带上；刷新本身早于该提交。",
+    "Go 没有 MCP runtime 缓存也没有 refresh-reason 诊断：prepareTurnToolInputs 每回合经 ListStatusChecked 重新列出 MCP 工具（appserver/runtime_router.go），调用期权限由 grantedPermissionsForEnvironment 现取（appserver/permission_grants.go），因此会话级授予在后续回合天然生效，无需 dirty 标记。",
+    "测试：新增 TestSessionPermissionGrantAppliesToLaterTurnsWithoutMcpRuntimeRefreshLikeRust，断言 turn-1 的 session 授予在 turn-2/turn-3 可见且 turn 级授予仍按回合清理。",
     "plan: update/plan_2026_11_10.md (#60513)"
    ]
   },
