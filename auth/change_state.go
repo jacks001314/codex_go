@@ -37,7 +37,23 @@ func SameAuthOwner(previous *AuthDotJSON, current *AuthDotJSON) bool {
 	// renewal for the same identity preserves ownership even though the API key
 	// rotates. A change of product fails the mode check above.
 	if previous.WorkloadIdentity != nil {
-		return sameWorkloadIdentityMetadata(previous.WorkloadIdentity, current.WorkloadIdentity)
+		if !sameWorkloadIdentityMetadata(previous.WorkloadIdentity, current.WorkloadIdentity) {
+			return false
+		}
+		// Rust #60433: a rotated token only continues the same source when its
+		// OAuth source claims still match, so a new session family or provider
+		// and mapping revision retires the old source.
+		previousToken := strings.TrimSpace(previous.OpenAIAPIKey)
+		currentToken := strings.TrimSpace(current.OpenAIAPIKey)
+		if previousToken == currentToken {
+			return true
+		}
+		previousSource, ok := oauthSourceFromToken(previousToken)
+		if !ok {
+			return false
+		}
+		currentSource, ok := oauthSourceFromToken(currentToken)
+		return ok && previousSource == currentSource
 	}
 	user := strings.TrimSpace(ChatGPTUserIDFromAuth(previous))
 	workspace := strings.TrimSpace(AccountIDFromAuthForRestrictions(previous))

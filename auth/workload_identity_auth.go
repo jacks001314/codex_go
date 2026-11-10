@@ -442,6 +442,11 @@ func (a *WorkloadIdentityAuth) validateToken(token WorkloadIdentityToken, previo
 		if token.API == nil {
 			return nil, workloadErrInvalidExchangeResponse
 		}
+		// Rust #60433: an API exchange token must carry OAuth source claims so
+		// the credential can be bound to a session family.
+		if !hasOAuthSessionClaim(token.AccessToken) {
+			return nil, workloadErrInvalidExchangeResponse
+		}
 		// Rust #59275: an API product exchange resolves as API key auth and
 		// keeps its service account metadata for ownership checks.
 		auth := FromAPIKey(token.AccessToken)

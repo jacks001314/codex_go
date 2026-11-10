@@ -45283,10 +45283,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "本轮未审计落地：workload identity 复用未绑定 session claims",
-    "Go 锚点：login/",
+    "auth/oauth_source.go: 新增 oauthSourceFromToken/hasOAuthSessionClaim，按 Rust OAuthSource 解析 iss/session_id/sub/client_id/azp 与 https://api.openai.com/auth 身份块（缺失与空值可区分）。",
+    "auth/change_state.go: API workload identity 的 SameAuthOwner 在 token 轮换后比较 OAuth source claims，普通刷新保持来源，session 家族或 provider/mapping revision 变化即失效。",
+    "auth/workload_identity_auth.go: API 产品交换 token 无有效会话声明时返回 invalid exchange response，resolve 路径用 InvalidateIfCurrent 驱逐后下次重新交换。",
+    "auth/workload_identity_source_claims_like_rust_test.go: 刷新连续、家族/provider/mapping/缺失/空 session_id 六种判定，以及缺失/空/空白 session_id 的拒绝与重交换（交换两次）。",
+    "验证：go test ./auth -count=1（ok 20.757s）、go test ./runtimeauth -count=1、go test ./appserver -run Auth|ChangeState|WorkloadIdentity|RuntimeAuth。",
     "plan: update/plan_2026_11_10.md (#60433)"
    ]
   },

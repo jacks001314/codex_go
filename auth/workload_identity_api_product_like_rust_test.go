@@ -11,6 +11,11 @@ import (
 )
 
 func workloadAPITestResponse(accessToken string, organizationID string, projectID string, userID string) string {
+	// Rust #60433: an API exchange token must carry parseable OAuth source
+	// claims, so test markers become inert JWTs.
+	if !strings.HasPrefix(accessToken, "e30.") {
+		accessToken = apiWorkloadAccessToken(accessToken, nil)
+	}
 	return fmt.Sprintf(`{"access_token":%q,"token_type":"Bearer","issued_token_type":"urn:ietf:params:oauth:token-type:access_token","expires_in":600,"wif_product":"api","api_organization_id":%q,"api_project_id":%q,"user_id":%q}`, accessToken, organizationID, projectID, userID)
 }
 
@@ -75,7 +80,7 @@ func TestWorkloadIdentityResolvesAPIProductAsAPIKeyLikeRust(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if resolved.Mode() != "api-key" || resolved.OpenAIAPIKey != "sk-api-one" {
+	if resolved.Mode() != "api-key" || resolved.OpenAIAPIKey != apiWorkloadAccessToken("sk-api-one", nil) {
 		t.Fatalf("resolved = %+v", resolved)
 	}
 	if resolved.WorkloadIdentity == nil || resolved.WorkloadIdentity.APIOrganizationID != "org-one" || resolved.WorkloadIdentity.APIProjectID != "project-one" || resolved.WorkloadIdentity.UserID != "service-account-one" {
