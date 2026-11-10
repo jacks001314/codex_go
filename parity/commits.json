@@ -45388,10 +45388,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "本轮未审计落地：executor 能力发现未按 permission grant scope 过滤",
-    "Go 锚点：appserver/",
+    "appserver/permission_grants.go: 新增 sessionGrantedPermissionsForEnvironment（仅 session scope，对应 Rust Session::granted_permissions）与 skillDiscoveryGrantedPermissions（有 turn 用 session+turn 合并，无 turn 只看 session）。",
+    "appserver/executor_skill_sandbox.go: executorSkillSandboxContextsForTurn 增加 threadID/turnID，按环境用 PermissionProfileWithAdditionalPermissionsForConvention 把发现期授权并进 permission profile 后再建 sandbox context——批准过的文件系统访问因此在授权有效期内让执行器技能可被发现/读取。step_capabilities、turn_runtime、required_skills 三处调用点传入当前 turn。",
+    "Rust 其余分支的 Go 映射：持久 plugin server / hook 不读取 turn 级授权（Go 的 hooks/plugin 清单从不传 grants），因此 turn 授权不会外溢；Go 每回合重新列出 MCP 工具并逐次读取 grantedPermissionsForEnvironment，会话级授权对后续回合自然生效，无需额外的 refresh reason；Rust 的 disabled-plugin 清单归属推断（不可读 manifest、symlink 与祖先生成标记）属于 Rust executor_provider 内部实现，Go 的执行器技能禁用走 #46015 的配置路径匹配、插件禁用走配置 plugin id 过滤，没有从 manifest 推断归属的逻辑。",
+    "测试：appserver/permission_grant_scopes_like_rust_test.go 断言 restricted profile + 会话授权使发现上下文包含授权路径、turn 级授权只在带 turn 的发现里出现且不泄漏到 session 发现；sessionGrantedPermissionsForEnvironment 只返回 session 条目。验证：go test ./appserver -run Skill|Sandbox|Permission|Capability|Discovery -count=1 ok（37.7s）；go build ./... exit 0。",
     "plan: update/plan_2026_11_10.md (#60461)"
    ]
   },
