@@ -64,6 +64,9 @@ type ProxyServer struct {
 	// (Rust NetworkProxyHandle::wait).
 	serveErrMu sync.Mutex
 	serveErr   error
+	// baseEnv is the process environment this proxy was started with; it names
+	// the HTTP CONNECT next hop for upstream-routed TCP traffic (Rust #60523).
+	baseEnv map[string]string
 }
 
 // localAWSSigners lists the signing pairs whose placeholders a local process may
@@ -190,6 +193,7 @@ func startProxyServer(parent context.Context, config ProxyConfig, runtimeConfig 
 		auditMetadata: config.AuditMetadata,
 		auditProvider: config.AuditMetadataProvider,
 		environmentID: config.EnvironmentID,
+		baseEnv:       cloneProxyEnv(baseEnv),
 	}
 	server.policy.Store(policy)
 	server.SetProxyPrivateIPsViaUpstream(config.PrivateIPsViaUpstream)
@@ -1636,11 +1640,15 @@ func (s *ProxyServer) dialSOCKS5Target(ctx context.Context, network string, addr
 		if err != nil {
 			return nil, err
 		}
+		// UDP cannot ride an HTTP CONNECT tunnel, so it always dials directly.
 		conn, err := s.dialCheckedTargetForProtocol(ctx, network, address, ProxyProtocolSocks5UDP)
 		if err != nil {
 			return nil, err
 		}
 		return &proxyPolicyUDPConn{Conn: conn, server: s, host: host, port: uint16(port)}, nil
+	}
+	if conn, used, err := s.dialSOCKSUpstreamTunnel(ctx, address); used {
+		return conn, err
 	}
 	return s.dialCheckedTargetForProtocol(ctx, network, address, ProxyProtocolSocks5TCP)
 }
@@ -1808,6 +1816,89 @@ func containsProxySpelling(spellings []string, value string) bool {
 		}
 	}
 	return false
+}
+
+// dialSOCKSUpstreamTunnel forwards opaque SOCKS TCP through the configured HTTP
+// CONNECT next hop (Rust #60523 TcpUpstreamProxy). The caller keeps the target
+// policy decision; this only changes how the connection is established. used
+// reports whether an upstream hop applies, so the caller falls back to a direct
+// dial for loopback, local, or upstream-disabled traffic.
+func (s *ProxyServer) dialSOCKSUpstreamTunnel(ctx context.Context, address string) (conn net.Conn, used bool, err error) {
+	if s == nil {
+		return nil, false, nil
+	}
+	policy := s.runtimePolicy()
+	if policy == nil || !policy.settings.AllowUpstreamProxy || !s.mayUseUpstreamProxyForAddress(address) {
+		return nil, false, nil
+	}
+	upstream := ProxyAddressForConnect(s.baseEnv)
+	if upstream == nil || strings.TrimSpace(upstream.Host) == "" {
+		return nil, false, nil
+	}
+	port := strings.TrimSpace(upstream.Port)
+	if port == "" {
+		port = "80"
+	}
+	upstreamAddress := net.JoinHostPort(upstream.Host, port)
+	// Rust #60523 rejects an upstream hop that points back at this proxy: the
+	// tunnel would re-enter the same listener forever.
+	if s.listenerOwnsAddress(upstreamAddress) {
+		return nil, true, fmt.Errorf("upstream proxy loop rejected: %s", upstreamAddress)
+	}
+	dialer := net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
+	raw, err := dialer.DialContext(ctx, "tcp", upstreamAddress)
+	if err != nil {
+		return nil, true, fmt.Errorf("dial upstream proxy: %w", err)
+	}
+	tunnel, err := authenticateProxyTunnel(ctx, raw, address, upstream.Host, nil)
+	if err != nil {
+		_ = raw.Close()
+		return nil, true, err
+	}
+	return tunnel, true, nil
+}
+
+// listenerOwnsAddress reports whether address is one of this proxy's own listen
+// addresses, which would make an upstream hop a loop.
+func (s *ProxyServer) listenerOwnsAddress(address string) bool {
+	if s == nil {
+		return false
+	}
+	listeners := []net.Listener{s.httpListener}
+	if s.socksListener != nil {
+		listeners = append(listeners, s.socksListener)
+	}
+	host, port, err := net.SplitHostPort(strings.TrimSpace(address))
+	if err != nil {
+		return false
+	}
+	for _, listener := range listeners {
+		if listener == nil {
+			continue
+		}
+		listenHost, listenPort, splitErr := net.SplitHostPort(listener.Addr().String())
+		if splitErr != nil || listenPort != port {
+			continue
+		}
+		if listenHost == host || loopbackUpstreamHostsEqual(listenHost, host) {
+			return true
+		}
+	}
+	return false
+}
+
+// loopbackUpstreamHostsEqual treats a wildcard and loopback spelling of the same
+// port as the same listener, so a loop is still caught when the proxy bound
+// 0.0.0.0 and the upstream names 127.0.0.1.
+func loopbackUpstreamHostsEqual(left, right string) bool {
+	loopback := func(host string) bool {
+		if host == "" || host == "0.0.0.0" || host == "::" {
+			return true
+		}
+		ip := net.ParseIP(host)
+		return ip != nil && ip.IsLoopback()
+	}
+	return loopback(left) && loopback(right)
 }
 
 func socks5Destination(address *statute.AddrSpec) (string, uint16) {
