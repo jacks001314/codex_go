@@ -45375,10 +45375,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "本轮未审计落地：macOS 原生剪贴板图片与方向未处理",
-    "Go 锚点：tui/",
+    "Rust 0598a96e：macOS 先读 NSPasteboard 原生表示（每个 item 内 PNG 优先、JPEG/TIFF 按 owner 顺序，遇到 public.tiff 即交回 arboard 的 TIFF 读法），再回退 arboard；复制文件优先于剪贴板预览；文件与原生 PNG/JPEG 解码时应用 EXIF 方向；新增 image_decode::decode_oriented 并与 transcript 缩略图共用",
+    "Go 实现：新增 tui/imagedecode（DecodeFile/DecodeBytes/Decode、Orientation、ApplyOrientation，覆盖 1-8 方向与分配预算 ErrTooLarge），tui/transcript_image.LoadPixels 改用它；tui/tea/pasteboard_image.go 实现 firstPasteboardImage（item 内 PNG 优先、JPEG/TIFF 保持顺序、TIFF 交回回退）与 clipboardPNGPassthrough；tui/tea/clipboard_image_darwin.go 通过 osascript JXA 按 item 顺序枚举 public.png/public.jpeg/public.file-url，复制文件优先、方向解码后写 PNG，最后用 pbpaste -Prefer tiff 回退；Linux 侧文件与带方向 PNG 也改走方向解码（无方向 PNG 仍逐字节透传）",
+    "测试：tui/imagedecode 覆盖 PNG/JPEG 全 8 种 EXIF 方向与预算拒绝；tui/tea 新增 4 个 pasteboard 顺序用例 + PNG 透传用例；go test ./tui/tea ./tui/transcript_image ./tui/imagedecode 通过；GOOS=darwin go vet ./tui/... 与 go build ./... 通过",
     "plan: update/plan_2026_11_10.md (#60455)"
    ]
   },
