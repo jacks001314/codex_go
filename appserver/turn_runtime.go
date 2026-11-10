@@ -5289,6 +5289,11 @@ func turnAnalyticsErrorFieldsFromAPIError(err *codexapi.APIError) turnAnalyticsE
 		// Rust #60476: the access-program rejection maps to
 		// CodexErrorInfo::HttpConnectionFailed too.
 		return fields(codexErrorInfoWithHTTPStatus("httpConnectionFailed", status), "access_program_not_enabled")
+	case codexapi.ErrorInferenceHookDenied:
+		// Rust #60511: a workspace inference-hook denial has its own
+		// app-server variant and analytics kind; the provider status is not
+		// reported because the core error carries only the message.
+		return fields("inferenceHookDenied", "inference_hook_denied")
 	case codexapi.ErrorContentPolicyViolation:
 		// Rust #60479 maps ContentPolicyViolation to CodexErrorInfo::InvalidPrompt,
 		// which the app-server v2 surface renders as `other` while analytics keeps

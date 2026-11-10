@@ -45689,10 +45689,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "本轮未审计落地：inference_hook_denied 分类与 analytics 已落地；CodexErrorInfo 生成 schema 变体未导出",
-    "Go 锚点：appserver/",
+    "model/responses_stream.go 已把 inference_hook_denied（无状态或 403）分类为 codexapi.ErrorInferenceHookDenied 并在终态列表中排除重试，缺省消息 \"Your workspace inference hook blocked this request.\"。",
+    "appserver/turn_runtime.go: turnAnalyticsErrorFieldsFromAPIError 新增 ErrorInferenceHookDenied 分支，输出 CodexErrorInfo \"inferenceHookDenied\" 与 analytics kind inference_hook_denied，且不携带 http status（对齐 Rust 该错误只带 message）。",
+    "Rust 新增的 schema 变体已随预计算导出在 a7a9d82f 重 vendor 时同步（stable/experimental 哈希已更新），Go 的 turnaround 错误通过 TurnError.codexErrorInfo 直接序列化该变体。",
+    "测试：新增 TestTurnAnalyticsExposesInferenceHookDeniedLikeRust（CodexErrorInfo 序列化为 \"inferenceHookDenied\"、analytics kind、无 http status、TurnError wire shape 往返）；go test ./appserver -run 'TurnAnalytics' 通过。",
     "plan: update/plan_2026_11_10.md (#60511)"
    ]
   },
