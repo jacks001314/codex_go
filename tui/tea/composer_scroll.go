@@ -240,14 +240,15 @@ func (m *Model) renderComposerWindow() string {
 		m.composer.MaxHeight = total
 	}
 	m.composer.SetHeight(total)
-	// Bubble Tea v2 renders the textarea through an internal viewport that
-	// follows the caret, so the full-height frame is only top-anchored while the
-	// caret sits on the first row. The caret is restored before the window is
-	// cropped so the model-owned scroll offset keeps working.
+	// Bubbles paints the caret into the text it returns and renders only the
+	// rows its own viewport offset selects. MoveToBegin resets that offset to
+	// the first row, so the caret has to be restored before View: with every
+	// wrapped row visible the restore cannot scroll the viewport again, and the
+	// painted caret stays on the draft's real position.
 	cursorRow, cursorColumn := m.composer.Line(), m.composer.Column()
 	m.composer.MoveToBegin()
-	full := m.composer.View()
 	m.restoreComposerCursor(cursorRow, cursorColumn)
+	full := m.composer.View()
 	m.composer.SetHeight(target)
 	rows := strings.Split(strings.TrimSuffix(full, "\n"), "\n")
 	if len(rows) < total {
