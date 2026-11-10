@@ -45776,10 +45776,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "本轮未审计落地：thread metadata 构造未封装",
-    "Go 锚点：rollout/",
+    "Rust #60524 主要是把 ThreadMetadataBuilder 移入独立模块、字段私有化并改成 with_* 链式构造；Go 的线程元数据只有内部 rolloutThreadMetadata 结构与单一提取入口（state/backfill.go extractRolloutThreadMetadata），没有需要封装的公开 builder。",
+    "Rust 同时固定了两个默认行为，Go 已一致：state/backfill.go 以 approvalMode: \"on-request\" 初始化，updatedAt 缺省取 createdAt（有 mtime 时用 mtime）、recencyAt 取 updatedAt。",
+    "测试：go test ./state -run Backfill -count=1 通过，既有 assertBackfilledThread 断言 approval_mode=on-request；go build ./... 通过。",
     "plan: update/plan_2026_11_10.md (#60524)"
    ]
   },
