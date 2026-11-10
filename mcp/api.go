@@ -180,6 +180,10 @@ type MCPListServerStatusParams struct {
 	RequiredPlugins      []string      `json:"-"`
 	NonBlockingOptional  bool          `json:"-"`
 	OptionalStartupGrace time.Duration `json:"-"`
+	// SkipDeferredStartup makes an aggregate resource-discovery read report a
+	// server that still needs a live start as deferred instead of launching it
+	// (Rust #60423: discovery leaves dormant servers unstarted).
+	SkipDeferredStartup bool `json:"-"`
 }
 
 type MCPServerInfo struct {
@@ -1978,6 +1982,16 @@ func (s *MCPService) populateStatusInventories(params *MCPListServerStatusParams
 		// an eligible stdio server (optional, or required with catalog readiness)
 		// and connect on first use. The catalog still has to be warm, which
 		// cachedCatalogStartupTools checks below.
+		if params != nil && params.SkipDeferredStartup && len(servers[i].Tools) == 0 {
+			// Rust #60423: an aggregate resource listing reports a server that
+			// still needs a live start as deferred. A connected server already
+			// carries its tool catalog here, so only unstarted servers reach this
+			// branch and the read never launches them.
+			notStarted := MCPConnectionNotStarted
+			servers[i].RuntimeStatus = &notStarted
+			notifyMCPStartupObserver(observer, name, servers[i].State, servers[i].FailureReason, nil)
+			continue
+		}
 		lazyStdioStartup := s.lazyStdioStartup && mcpServerCanDeferStdioStartup(&config)
 		cachedStartupCandidate := !explicitlyRequired &&
 			(config.StartupReadiness.Effective() == MCPStartupReadinessCatalog ||

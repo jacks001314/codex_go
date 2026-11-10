@@ -137,12 +137,18 @@ type ListMCPResourcesPayload struct {
 	Server     *string       `json:"server,omitempty"`
 	Resources  []MCPResource `json:"resources"`
 	NextCursor *string       `json:"nextCursor,omitempty"`
+	// DeferredServers names configured servers whose startup was deferred, so a
+	// dormant server is still discoverable by an explicit read (Rust #60423).
+	DeferredServers []string `json:"deferredServers,omitempty"`
 }
 
 type ListMCPResourceTemplatesPayload struct {
 	Server            *string               `json:"server,omitempty"`
 	ResourceTemplates []MCPResourceTemplate `json:"resourceTemplates"`
 	NextCursor        *string               `json:"nextCursor,omitempty"`
+	// DeferredServers names configured servers whose startup was deferred, so a
+	// dormant server is still discoverable by an explicit read (Rust #60423).
+	DeferredServers []string `json:"deferredServers,omitempty"`
 }
 
 type ReadMCPResourcePayload struct {
@@ -152,6 +158,13 @@ type ReadMCPResourcePayload struct {
 }
 
 func MCPResourcesFromAllServers(resourcesByServer map[string][]MCPResource) ListMCPResourcesPayload {
+	return MCPResourcesFromAllServersWithDeferred(resourcesByServer, nil)
+}
+
+// MCPResourcesFromAllServersWithDeferred mirrors Rust #60423's aggregate
+// listing: resources come from the servers that answered, and deferred servers
+// are reported by name so callers can query them explicitly.
+func MCPResourcesFromAllServersWithDeferred(resourcesByServer map[string][]MCPResource, deferredServers []string) ListMCPResourcesPayload {
 	servers := sortedKeys(resourcesByServer)
 	var resources []MCPResource
 	for _, server := range servers {
@@ -160,10 +173,16 @@ func MCPResourcesFromAllServers(resourcesByServer map[string][]MCPResource) List
 			resources = append(resources, resource)
 		}
 	}
-	return ListMCPResourcesPayload{Resources: resources}
+	return ListMCPResourcesPayload{Resources: resources, DeferredServers: sortedDeferredServers(deferredServers)}
 }
 
 func MCPResourceTemplatesFromAllServers(templatesByServer map[string][]MCPResourceTemplate) ListMCPResourceTemplatesPayload {
+	return MCPResourceTemplatesFromAllServersWithDeferred(templatesByServer, nil)
+}
+
+// MCPResourceTemplatesFromAllServersWithDeferred is the template counterpart of
+// MCPResourcesFromAllServersWithDeferred (Rust #60423).
+func MCPResourceTemplatesFromAllServersWithDeferred(templatesByServer map[string][]MCPResourceTemplate, deferredServers []string) ListMCPResourceTemplatesPayload {
 	servers := sortedKeys(templatesByServer)
 	var templates []MCPResourceTemplate
 	for _, server := range servers {
@@ -172,7 +191,27 @@ func MCPResourceTemplatesFromAllServers(templatesByServer map[string][]MCPResour
 			templates = append(templates, template)
 		}
 	}
-	return ListMCPResourceTemplatesPayload{ResourceTemplates: templates}
+	return ListMCPResourceTemplatesPayload{ResourceTemplates: templates, DeferredServers: sortedDeferredServers(deferredServers)}
+}
+
+// sortedDeferredServers returns the deduplicated, sorted deferred names, or nil
+// when there are none so the JSON field stays absent.
+func sortedDeferredServers(names []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	sort.Strings(out)
+	return out
 }
 
 func ParseMCPResourceArguments(raw string) (map[string]any, bool, error) {

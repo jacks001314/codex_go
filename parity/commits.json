@@ -45254,11 +45254,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "本轮未审计落地：deferred MCP server 未出现在资源清单",
-    "Go 锚点：mcp/",
-    "plan: update/plan_2026_11_10.md (#60423)"
+    "mcp/api.go: MCPListServerStatusParams 新增 SkipDeferredStartup；populateStatusInventories 在该模式下对还没有工具目录的服务器不再启动，改为 RuntimeStatus=notStarted 后跳过，聚合读取因此不会拉起 dormant server（Rust #60423）。",
+    "mcp/resource.go: list_mcp_resources 与 list_mcp_resource_templates 的 payload 增加 deferredServers（排序去重、为空时省略），并新增 MCPResourcesFromAllServersWithDeferred / MCPResourceTemplatesFromAllServersWithDeferred。",
+    "turn/mcp_resource_handlers.go: 聚合查询启用 SkipDeferredStartup，并把 notStarted 的服务器名收进 deferredServers；显式 server 查询仍会启动并读取该服务器，单服务器结果不带 deferredServers。",
+    "Tests: TestMCPResourceListingReportsDeferredServersLikeRust（聚合 resources/templates 与显式查询）、TestDeferredResourceDiscoveryLeavesDormantServersUnstartedLikeRust（lazy stdio 在发现阶段不启动，显式读取才启动）；go test ./mcp ./turn，go test ./appserver -run 'MCPResource|Resource'。"
    ]
   },
   {

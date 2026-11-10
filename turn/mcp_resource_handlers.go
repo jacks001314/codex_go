@@ -82,6 +82,10 @@ func (h *mcpResourceListExecutor) Execute(ctx context.Context, inv *tool.Invocat
 	}
 	detail := &mcp.MCPServerStatusDetail{Mode: mcp.MCPServerStatusDetailFull}
 	params := &mcp.MCPListServerStatusParams{Detail: detail}
+	// Rust #60423: an aggregate discovery read reports dormant servers by name
+	// instead of launching them, while an explicit server query still reads that
+	// server's resources.
+	params.SkipDeferredStartup = server == ""
 	if h.threadID != "" {
 		params.ThreadID = &h.threadID
 	}
@@ -89,6 +93,7 @@ func (h *mcpResourceListExecutor) Execute(ctx context.Context, inv *tool.Invocat
 	if err != nil {
 		return nil, err
 	}
+	deferred := mcpDeferredServerNames(status.Data, server)
 	if h.templates {
 		m := map[string][]mcp.MCPResourceTemplate{}
 		for _, s := range status.Data {
@@ -96,7 +101,7 @@ func (h *mcpResourceListExecutor) Execute(ctx context.Context, inv *tool.Invocat
 				m[s.Server.Name] = append(m[s.Server.Name], s.ResourceTemplates...)
 			}
 		}
-		return marshalMCPResourceTool(mcp.MCPResourceTemplatesFromAllServers(m), effectiveResourceServer(server), h.Spec().Name.Name)
+		return marshalMCPResourceTool(mcp.MCPResourceTemplatesFromAllServersWithDeferred(m, deferred), effectiveResourceServer(server), h.Spec().Name.Name)
 	}
 	m := map[string][]mcp.MCPResource{}
 	for _, s := range status.Data {
@@ -104,7 +109,30 @@ func (h *mcpResourceListExecutor) Execute(ctx context.Context, inv *tool.Invocat
 			m[s.Server.Name] = append(m[s.Server.Name], s.Resources...)
 		}
 	}
-	return marshalMCPResourceTool(mcp.MCPResourcesFromAllServers(m), effectiveResourceServer(server), h.Spec().Name.Name)
+	return marshalMCPResourceTool(mcp.MCPResourcesFromAllServersWithDeferred(m, deferred), effectiveResourceServer(server), h.Spec().Name.Name)
+}
+
+// mcpDeferredServerNames collects the servers an aggregate listing reported as
+// dormant. A single-server query keeps the field empty, matching Rust #60423's
+// from_server payload.
+func mcpDeferredServerNames(statuses []mcp.MCPServerStatus, server string) []string {
+	if strings.TrimSpace(server) != "" {
+		return nil
+	}
+	names := make([]string, 0, len(statuses))
+	for _, status := range statuses {
+		if status.RuntimeStatus == nil || *status.RuntimeStatus != mcp.MCPConnectionNotStarted {
+			continue
+		}
+		name := strings.TrimSpace(status.Name)
+		if name == "" {
+			name = strings.TrimSpace(status.Server.Name)
+		}
+		if name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 type mcpResourceReadExecutor struct {
