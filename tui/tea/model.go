@@ -3978,6 +3978,15 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 			cmd = bubbletea.Batch(cmd, historyCmd)
 		}
 	}
+	// Rust #60526: a model switch or catalog refresh that proves Daybreak is
+	// unavailable for the selected model turns it off for the thread.
+	if daybreakCmd := next.maybeDisableUnavailableDaybreak(); daybreakCmd != nil {
+		if cmd == nil {
+			cmd = daybreakCmd
+		} else {
+			cmd = bubbletea.Batch(cmd, daybreakCmd)
+		}
+	}
 	return next, cmd
 }
 

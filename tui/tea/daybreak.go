@@ -216,6 +216,48 @@ func (m *Model) setDaybreakPreference(enabled bool) bubbletea.Cmd {
 	return m.refreshStatusControlsCmd()
 }
 
+// shouldDisableDaybreak mirrors Rust ChatWidget::should_disable_daybreak: only
+// explicit catalog metadata that excludes Daybreak for this exact model turns
+// an enabled Daybreak off. Unknown metadata (no access programs reported) or an
+// advertised Daybreak program leaves the preference alone.
+func (m *Model) shouldDisableDaybreak(model string) bool {
+	if m == nil || !m.daybreakEnabled {
+		return false
+	}
+	option, ok := m.currentModelCatalogOption(model)
+	if !ok || option.AvailableCyberPrograms == nil {
+		return false
+	}
+	return daybreakProgram(option.AvailableCyberPrograms) == ""
+}
+
+// maybeDisableUnavailableDaybreak mirrors Rust #60526's DisableUnavailableDaybreak
+// event: a model switch or catalog refresh that proves the selected model has no
+// Daybreak access turns Daybreak off for the thread, persists the preference and
+// warns that earlier cybersecurity context may still cause refusals. The check
+// re-reads the live model, so a queued change only applies while that model is
+// still selected.
+func (m *Model) maybeDisableUnavailableDaybreak() bubbletea.Cmd {
+	if m == nil || m.State == nil || !m.daybreakEnabled || !m.daybreakFeatureEnabled() {
+		return nil
+	}
+	model := strings.TrimSpace(m.State.Model)
+	if !m.shouldDisableDaybreak(model) || strings.TrimSpace(m.currentThreadID()) == "" {
+		return nil
+	}
+	cmd := m.setDaybreakPreference(false)
+	if m.daybreakEnabled {
+		// Persisting the preference failed and already reported the error;
+		// Rust keeps Daybreak enabled in that case.
+		return cmd
+	}
+	m.addInfoHistoryMessage("Daybreak has been turned off for new turns because it is not available for " + model +
+		" with your current account and server. Prior cybersecurity context in this thread may cause a refusal. " +
+		"You can switch back to a model where you have Daybreak access and use /daybreak to re-enable it.")
+	m.refreshTranscript()
+	return cmd
+}
+
 // syncDaybreakFeatureGate re-applies cli_daybreak to the live thread
 // preference after a feature toggle or configuration reload (Rust
 // ChatWidget::set_daybreak_enabled).
