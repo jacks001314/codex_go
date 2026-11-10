@@ -45657,10 +45657,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "本轮未审计落地：MCP refresh 原因与插件元数据未追踪",
-    "Go 锚点：appserver/",
+    "plugin/remote_metadata.go: 抽出 installedPluginMetadataFieldChanges（Rust remote_metadata.rs 字段名与顺序，Go 无 canonical_app_id），InstalledPluginMetadataEqual 改用同一份字段列表；新增 InstalledPluginMetadataChanges 按 remote plugin id 归因（added/removed/position/字段名，仅名字不含值）与 NewInstalledPluginMetadataChangeID。",
+    "plugin/api.go: 新增 ReplaceInstalledRemotePluginsWithChanges 返回 (changed, changeID)，变更时 slog.Info(\"installed plugin runtime metadata invalidated\", change_id, marketplace, changes, initial_snapshot)；ReplaceInstalledRemotePlugins 委托它，显示元数据变更仍不返回 change id。",
+    "appserver/mcp_runtime_coordinator.go: 新增 mcpRefreshReason（explicit_invalidation / effective_plugins_changed / installed_plugin_metadata）与 invalidateAllFor(reason)，invalidateAll 归一为 explicit_invalidation 并在刷新时记录 reason；appserver/runtime_router.go 增加 effectivePluginsChangedFor(reason, changeID)，plugin_remote_installed.go 在 installed-plugin 元数据失效时用 installed_plugin_metadata + change id 触发，其余走 effective_plugins_changed。",
+    "Rust 剩余两半的 Go 结构说明：取消前恢复 claimed refresh reasons 依赖 Rust 异步刷新协调器的 reason 队列，Go 的 mcpRuntimeCoordinator 只做 epoch + dirty 标记，没有可取消的发布或 claimed reason 状态；后台 bundle 同步来源（startup/list/install）在 Go 里是三个独立调用点，无统一 sync 日志。两者均无对应状态，故只迁移可观测面。",
+    "测试：plugin/remote_metadata_test.go 新增重排->position、成员增删->added/removed+字段归因、change id 用例（复刻 Rust installed_ordering_remains_significant / diagnostics_attribute_fields_by_plugin_id_across_membership_changes）；go test ./plugin -count=1 ok；go test ./appserver -run Plugin|Marketplace|MCPRuntime ok。",
     "plan: update/plan_2026_11_10.md (#60505)"
    ]
   },
