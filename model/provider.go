@@ -297,6 +297,40 @@ func (p *ConfiguredProvider) APIAuth() (AuthHeaders, error) {
 	return composeGatewayAuth(context.Background(), p.info.GatewayOAuth, provider, primary)
 }
 
+// gatewayAuthTokenFunc adapts a bare resolver into the gateway token provider
+// interface so a catalog can reuse the non-interactive resolution.
+type gatewayAuthTokenFunc func(ctx context.Context) (string, error)
+
+func (f gatewayAuthTokenFunc) ResolveAccessToken(ctx context.Context) (string, error) {
+	return f(ctx)
+}
+
+// catalogAuth mirrors Rust's without_interactive_login gateway manager (Rust
+// #60414): a model catalog refresh reuses an existing gateway session and never
+// starts an interactive login.
+func (p *ConfiguredProvider) catalogAuth() (AuthHeaders, error) {
+	primary, err := ResolveProviderAuth(p.auth, p.info)
+	if err != nil {
+		return AuthHeaders{}, err
+	}
+	if p.info.GatewayOAuth == nil {
+		return primary, nil
+	}
+	if err := p.info.Validate(); err != nil {
+		return AuthHeaders{}, err
+	}
+	if p.gatewayAuthErr != nil {
+		return AuthHeaders{}, p.gatewayAuthErr
+	}
+	var provider gatewayAuthTokenProvider = p.gatewayAuthManager
+	if p.gatewayExport != nil {
+		provider = p.gatewayExport
+	} else if p.gatewayAuthManager != nil {
+		provider = gatewayAuthTokenFunc(p.gatewayAuthManager.ResolveAccessTokenWithoutLogin)
+	}
+	return composeGatewayAuth(context.Background(), p.info.GatewayOAuth, provider, primary)
+}
+
 // RecoverFromUnauthorized refreshes provider-owned credentials after a 401
 // (Rust ModelProvider::recover_from_unauthorized, #59816). A gateway credential
 // export drops its cached token so the retry reruns the command; a browser
@@ -348,14 +382,21 @@ func (p *ConfiguredProvider) ModelsManager(configCatalog *ModelsResponse) Models
 	if err != nil {
 		return NewStaticModelsManager(BundledModelsResponse())
 	}
+	// Rust #60414: a gateway-owned catalog reuses the existing session instead
+	// of starting an interactive login; every other provider keeps APIAuth.
 	authHeaders, err := p.APIAuth()
+	if err == nil && SupportsGatewayCatalog(p.info) {
+		authHeaders, err = p.catalogAuth()
+	}
 	if err != nil {
 		return NewStaticModelsManager(BundledModelsResponse())
 	}
 	supportsAPIKeyModels := p.info.SupportsAPIKeyModels()
 	// Rust `uses_api_key_auth`: an explicit provider key also opts the session
 	// into API-key discovery, even when the picker itself uses ChatGPT (#46561).
-	usesAPIKeyAuth := p.info.HasProviderAPIKey() || authUsesAPIKey(p.auth)
+	// Rust #60414 keeps an unrelated saved API key from gating a gateway-owned
+	// model catalog that shares the provider's origin.
+	usesAPIKeyAuth := UsesAPIKeyAuth(p.info, authUsesAPIKey(p.auth))
 	if supportsAPIKeyModels && usesAPIKeyAuth && strings.TrimSpace(p.info.ModelCatalogURL) == "" && strings.TrimSpace(p.info.BaseURL) == "" {
 		// Codex model metadata is served by the Codex backend, not the public
 		// /v1/models API (Rust #44392). Inference keeps its own base URL.

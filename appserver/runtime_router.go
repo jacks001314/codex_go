@@ -1740,8 +1740,9 @@ func buildAccountScopedModelsManagerForCWD(codexHome string, read *config.Config
 	hasChatGPTAccount := account != nil && account.Type == auth.AccountChatGPT
 	supportsAPIKeyModels := providerInfo.SupportsAPIKeyModels()
 	// Rust `uses_api_key_auth` (#46561): an explicit provider key joins API-key
-	// logins as a discovery opt-in.
-	usesAPIKeyAuth := providerInfo.HasProviderAPIKey() || authSnapshot.Mode() == "api-key"
+	// logins as a discovery opt-in. Rust #60414 keeps an unrelated saved API key
+	// from gating a gateway-owned model catalog that shares the provider origin.
+	usesAPIKeyAuth := model.UsesAPIKeyAuth(*providerInfo, authSnapshot.Mode() == "api-key")
 	if supportsAPIKeyModels && usesAPIKeyAuth && strings.TrimSpace(providerInfo.ModelCatalogURL) == "" && strings.TrimSpace(providerInfo.BaseURL) == "" {
 		// Codex model metadata is served by the Codex backend, not the
 		// public /v1/models API (Rust #44392). Inference is unaffected, and a
