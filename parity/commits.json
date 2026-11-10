@@ -45783,12 +45783,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "network/proxy_server.go: dialCheckedTargetForProtocol 在解析后对每个地址执行 resolvedAddressPolicyReason——deny 规则命中返回 denied、review 规则命中返回 policy_denied，均写 policy_decision 审计并记入 blocked 请求，然后跳过该地址（上游不会被连接）；dialCheckedTarget 保留为 HTTP/CONNECT 入口，SOCKS5 TCP/UDP 各自传自己的协议。",
-    "network/proxy_server.go: 新增 proxyIPSpellings，让限制规则识别等价数值写法（规范形式、4 字节 IPv4、显式 ::ffff: 形式），因此写成 ::ffff:10.1.2.3 的规则能拦住解析到 10.1.2.3 的主机名。",
-    "测试：network/proxy_resolved_address_policy_like_rust_test.go 覆盖等价拼写、deny/review 在解析地址上的判定（含不命中项返回空），以及 SOCKS 拨号在解析地址被拒时不触碰上游 listener。验证：go test ./network -count=1 ok（14.9s）；go build ./... exit 0。",
-    "仍缺（本轮未完成，需下一轮继续）：Rust 的 TcpUpstreamProxy/HTTP CONNECT 下一跳（Go 服务器侧目前直接拨号，settings.AllowUpstreamProxy 只在配置校验层）、转发 DNS 时的远端 TCP DNS 准入（allow_local_binding 且无 IP deny/review 模式才允许）、upstream 回环检测、Linux 代理桥的 managed 环境变量/loopback 端口白名单与并发 worker 上限。",
+    "network/proxy_server.go: 新增 dialSOCKSUpstreamTunnel 与 listenerOwnsAddress/loopbackUpstreamHostsEqual——settings.AllowUpstreamProxy 且目标可用上游时，SOCKS TCP 先拨 HTTP CONNECT 下一跳（地址取自代理启动环境 HTTPS_PROXY/HTTP_PROXY/ALL_PROXY），等待 CONNECT 成功后才转发，authenticateProxyTunnel 返回的 proxyTunnelConn 保留响应头之后的缓冲字节；上游指回本代理监听地址时报 loop 错误；UDP 不能走 CONNECT，保持直连。",
+    "上一轮已落地：resolvedAddressPolicyReason 在拨号前对每个解析地址执行 deny/review（denied / policy_denied，写审计与 blocked 记录，不触达上游）与 proxyIPSpellings 等价数值写法识别。",
+    "Go 结构差异说明：Rust 的远端 TCP DNS 准入在 Go 无对应路径——Go 代理在进程内本地解析并就地套用同一套 deny/review/local 检查，不存在把 DNS 交给上游的不透明转发；Rust linux-sandbox 的 TCP 代理桥（managed 环境变量/loopback 端口白名单、并发 worker 上限）在 Go 的 linuxsandbox 助手里没有实现，助手只透传 --allow-network-for-proxy，因此没有需要约束的桥接状态。",
+    "测试：network/proxy_resolved_address_policy_like_rust_test.go（等价拼写、解析地址 deny/review、被拒解析不触达上游）与 network/proxy_socks_upstream_tunnel_like_rust_test.go（CONNECT 成功并保留缓冲负载、403 拒绝、回环拒绝）。验证：go test ./network -count=1 ok（14.4s）；go build ./... exit 0。",
     "plan: update/plan_2026_11_10.md (#60523)"
    ]
   },
