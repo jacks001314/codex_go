@@ -45296,11 +45296,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "本轮未审计落地：Go 无跨回合 TurnSummary 聚合，错误不会跨回合残留",
-    "Go 锚点：appserver/",
-    "plan: update/plan_2026_11_10.md (#60434)"
+    "Go 的 app-server 没有 Rust ThreadState.turn_summary 那样的跨回合摘要：appserver/ 全目录检索 TurnSummary/turn_summary 零命中（cloudclient 的同名类型是云端回合数据，与本地回合摘要无关）。",
+    "回合完成通知由当前回合自身构造：turn_runtime.go notifyTurnCompletedOnce(completedTurnNotificationTurn(turnID, ..., TurnStatusCompleted, nil, ...))；失败状态只在该回合自己的 finishTurnWithErrorAnalytics -> completeTurnRecord(..., TurnStatusFailed) 路径写入，空闲期收到的错误没有可残留的载体。",
+    "新增 TestTurnCompletionCarriesOnlyItsOwnErrorLikeRust 固定该不变量：前一回合以 TurnStatusFailed 结束后，下一回合的完成通知 status=completed、Error=nil，并保留自身 turn id 与 started_at。",
+    "Tests: go test ./appserver -run TestTurnCompletionCarriesOnlyItsOwnErrorLikeRust。"
    ]
   },
   {
