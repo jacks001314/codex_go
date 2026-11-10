@@ -44782,11 +44782,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "缺 account/securitySetup/read：安全提醒取数仍在客户端进程（app/security_setup.go:19-66 自读 auth.json 拼 Bearer、:31/:55 客户端事后比身份），app-server 侧零命中（rg securitySetup appserver/ protocol/ → exit 1），app/remote_tui.go 无该路径",
-    "缺：方法常量与处理器（appserver/protocol.go:200 旁）、带 accountId/userId 的响应（auth/account.go）、runtime auth 解析与 generation 前后比对、3s 超时",
-    "plan: update/plan_2026_11_08_tail5.md §1（#60082），契约 account-security-setup-appserver-fetch"
+    "appserver: 新增 account/securitySetup/read 常量、schema 条目与处理器，用 managed ChatGPT 凭据在 3s 期限内读取安全提醒，并随响应返回 accountId/userId 供客户端校验。",
+    "auth: GetAccountSecuritySetupResponse/AccountSecuritySetupNotice/AccountSecuritySetupAction 类型。",
+    "Tests: go test ./appserver -run 'TestRustProtocolMethodSurface|TestBuildProtocolSchema|TestBuildTypeScriptProtocolSchema|TestAccount|TestGetAccount' 通过。"
    ]
   },
   {
@@ -45538,11 +45538,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "本轮未审计落地：untrusted context tool outputs 的默认开关未对齐",
-    "Go 锚点：features/",
-    "plan: update/plan_2026_11_10.md (#60487)"
+    "features/features.go: untrusted_as_tool_output 由 UnderDevelopment/false 改为 Stable/true（Rust #60487）。",
+    "appserver: 关掉开关时保留用户消息格式的用例改为显式 opt-out；goal 续跑与 context-only steer 用例断言目标/上下文以 agent 命名空间的 function_call_output 到达。",
+    "Tests: go test ./appserver -run 'AdditionalContext|Goal'; go test ./prompt; go test ./tui/tea -run Goal; go test ./app -run Goal。"
    ]
   },
   {
