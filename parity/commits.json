@@ -45637,10 +45637,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "本轮未审计落地：Guardian 上下文准备未跨 reviewer 统一",
-    "Go 锚点：appserver/",
+    "appserver/guardian_reviewer.go 拆出 guardianCollectTranscriptWithProfile（只采集原始条目与证据：不再做文本截断、native 省略、心跳压缩）与 prepareGuardianTranscriptSelection（对应 Rust prepare_context）：准备阶段先 CompressGuardianTranscriptHeartbeats(evidence, 0)，再按 budgeting 决定是否 applyGuardianFixedTranscriptCaps（非授权文本按 message/tool/node_repl 上限截断、超限 native 在同一位置换成省略提示）。transcriptSelection 钩子改为 budget 感知，elastic 经 guardianReviewTranscriptSelectionForBudgeting 取原始条目交给 BuildGuardianElasticPromptPartsWithSectionCosts 分配，不再使用固定选择后的结果；appserver/agent_runtime.go 接线。",
+    "state/guardian_profile.go 新增 RenderTranscriptForBudgeting：Elastic 对同步与异步两个 profile 都保留全部条目且不产出省略提示（Rust 放开 (Async, Elastic)），Fixed 仍走 RenderTranscript 的保留策略；抽出 renderTranscriptText 共用编号与渲染。",
+    "新增 appserver/guardian_unified_preparation_like_rust_test.go 四个用例：采集保留超长工具文本、固定准备截断、弹性准备保留全文；超限 native 在固定准备下变成同位置省略而弹性保留密文；重复心跳在准备阶段压缩为 transcript entry [2] 引用且不改动采集证据、二次准备编号不变；同步/异步 profile 的弹性准备都保留全部 60 条证据而固定准备会淘汰。临时去掉 budgeting 门控后前两个用例失败。",
+    "测试：go test ./appserver -run Guardian -count=1 通过（含既有 Guardian 用例）；go test ./state -run 'Guardian|Transcript' -count=1 通过；go build ./... 通过；LF 化副本 gofmt -l 无差异。",
     "plan: update/plan_2026_11_10.md (#60498)"
    ]
   },
