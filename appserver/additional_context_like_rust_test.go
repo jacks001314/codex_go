@@ -246,7 +246,9 @@ func TestRuntimeRouterAdditionalContextToolOutputTruncationLikeRust(t *testing.T
 }
 
 func TestRuntimeRouterAdditionalContextMessagesPreservedWhenFeatureDisabled(t *testing.T) {
-	router, agent, sink, _ := newAdditionalContextTestRouter(t, "")
+	// Rust #60487 enables untrusted_as_tool_output by default, so the legacy
+	// user-message format now requires an explicit opt-out.
+	router, agent, sink, _ := newAdditionalContextTestRouter(t, "[features]\nuntrusted_as_tool_output = false\n")
 	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
 		CWD:    t.TempDir(),
 		Prompt: "hello legacy",

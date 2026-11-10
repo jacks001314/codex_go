@@ -163,6 +163,7 @@ func TestRustProtocolMethodSurfaceAgainstGoConstants(t *testing.T) {
 		string(MethodLogoutAccount):                          true,
 		string(MethodGetAccount):                             true,
 		string(MethodGetAccountRateLimits):                   true,
+		string(MethodGetAccountSecuritySetup):true,
 		string(MethodConsumeAccountRateLimitResetCredit):     true,
 		string(MethodGetAccountTokenUsage):                   true,
 		string(MethodGetWorkspaceMessages):                   true,

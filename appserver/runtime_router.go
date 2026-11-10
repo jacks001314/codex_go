@@ -4319,6 +4319,8 @@ func (r *RuntimeRouter) dispatch(request *Request) (result any, err error) {
 		return r.handleGetAccount(request)
 	case MethodGetAccountRateLimits:
 		return r.handleGetAccountRateLimits(request)
+	case MethodGetAccountSecuritySetup:
+		return r.handleGetAccountSecuritySetup(request)
 	case MethodConsumeAccountRateLimitResetCredit:
 		return r.handleConsumeResetCredit(request)
 	case MethodGetAccountTokenUsage:
@@ -15245,6 +15247,43 @@ func rateLimitsSupportsLunaReserve(snapshot *auth.AuthDotJSON, params auth.Nulla
 		snapshot != nil && snapshot.Mode() == "chatgpt" &&
 		!auth.IsFedrampAccount(snapshot)
 }
+
+// handleGetAccountSecuritySetup mirrors Rust #60082: the app-server reads the
+// optional account-security reminder with the managed ChatGPT credentials and
+// returns it with the account identity clients verify, so the reminder never
+// requires a client-side fetch. An account without a reminder reports no notice.
+func (r *RuntimeRouter) handleGetAccountSecuritySetup(request *Request) (*auth.GetAccountSecuritySetupResponse, error) {
+	snapshot, err := r.requireCodexBackendAuthForAccountRead("account security setup")
+	if err != nil {
+		return nil, err
+	}
+	client, err := r.accountBackendClient(snapshot)
+	if err != nil {
+		return nil, fmt.Errorf("failed to construct backend client: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), accountSecuritySetupReadTimeout)
+	defer cancel()
+	notice, err := client.GetSecuritySetup(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if notice == nil {
+		return &auth.GetAccountSecuritySetupResponse{}, nil
+	}
+	return &auth.GetAccountSecuritySetupResponse{Notice: &auth.AccountSecuritySetupNotice{
+		AccountID:   auth.AccountIDFromAuthForRestrictions(snapshot),
+		UserID:      auth.ChatGPTUserIDFromAuth(snapshot),
+		Title:       notice.Title,
+		Description: notice.Description,
+		Action: auth.AccountSecuritySetupAction{
+			Label: notice.Action.Label,
+			URL:   notice.Action.URL,
+		},
+	}}, nil
+}
+
+// accountSecuritySetupReadTimeout bounds the reminder read (Rust #60082).
+const accountSecuritySetupReadTimeout = 3 * time.Second
 
 func (r *RuntimeRouter) handleGetAccountTokenUsage(request *Request) (*auth.GetAccountTokenUsageResponse, error) {
 	var params auth.GetAccountTokenUsageParams

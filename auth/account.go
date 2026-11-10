@@ -734,6 +734,27 @@ type GetAccountTokenUsageParams struct {
 	ThreadID *string `json:"threadId,omitempty"`
 }
 
+// GetAccountSecuritySetupResponse mirrors Rust v2::GetAccountSecuritySetupResponse
+// (#60082): the optional account-security reminder plus the account identity the
+// client verifies before rendering it. An ineligible account reports no notice.
+type GetAccountSecuritySetupResponse struct {
+	Notice *AccountSecuritySetupNotice `json:"notice,omitempty"`
+}
+
+// AccountSecuritySetupNotice is the server-owned reminder copy and action.
+type AccountSecuritySetupNotice struct {
+	AccountID   string                    `json:"accountId"`
+	UserID      string                    `json:"userId"`
+	Title       string                    `json:"title"`
+	Description string                    `json:"description"`
+	Action      AccountSecuritySetupAction `json:"action"`
+}
+
+type AccountSecuritySetupAction struct {
+	Label string `json:"label"`
+	URL   string `json:"url"`
+}
+
 type GetAccountTokenUsageResponse struct {
 	Summary           AccountTokenUsageSummary       `json:"summary"`
 	DailyUsageBuckets []AccountTokenUsageDailyBucket `json:"dailyUsageBuckets"`

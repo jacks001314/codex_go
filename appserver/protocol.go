@@ -200,6 +200,9 @@ const (
 	MethodLogoutAccount                      Method = "account/logout"
 	MethodGetAccount                         Method = "account/read"
 	MethodGetAccountRateLimits               Method = "account/rateLimits/read"
+	// Rust #60082: reads the optional account-security reminder through the
+	// app-server so clients never fetch it with their own credentials.
+	MethodGetAccountSecuritySetup            Method = "account/securitySetup/read"
 	MethodConsumeAccountRateLimitResetCredit Method = "account/rateLimitResetCredit/consume"
 	MethodGetAccountTokenUsage               Method = "account/usage/read"
 	MethodGetWorkspaceMessages               Method = "account/workspaceMessages/read"

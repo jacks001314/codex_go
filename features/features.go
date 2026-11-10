@@ -386,7 +386,11 @@ var Registry = []Spec{
 	{Key: "content_item_kinds", Stage: StageStable, DefaultEnabled: true},
 	// Rust (codex-rs/features/src/lib.rs #57204): render client-supplied
 	// untrusted context as standalone named tool outputs.
-	{Key: "untrusted_as_tool_output", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust #60487: untrusted additional context (browser information, goal
+	// objectives) reaches the model as agent-namespace function_call_output
+	// items by default; features.untrusted_as_tool_output = false keeps the
+	// user-message format.
+	{Key: "untrusted_as_tool_output", Stage: StageStable, DefaultEnabled: true},
 	{Key: "code_mode_prewarm", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "skip_host_skill_discovery", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	// Rust (codex-rs/features/src/lib.rs #57500/#57262): omit descriptions from

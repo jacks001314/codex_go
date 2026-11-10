@@ -12744,8 +12744,20 @@ func TestRuntimeRouterTurnSteerAcceptsContextOnlyInputWithoutUserMessageItemLike
 	if err != nil {
 		t.Fatalf("Read thread after steer error = %v", err)
 	}
-	if len(after.Items) != len(before.Items) {
-		t.Fatalf("context-only steer appended items: before=%d after=%d items=%#v", len(before.Items), len(after.Items), after.Items)
+	// Rust #60487 persists untrusted additional context as agent-namespace
+	// function_call_output items by default, so a context-only steer appends
+	// that output and still adds no user message item.
+	appended := after.Items[len(before.Items):]
+	for _, item := range appended {
+		if item.Type == "message" && item.Role == "user" {
+			t.Fatalf("context-only steer appended a user message: %#v", item)
+		}
+		if item.Type != "function_call_output" || item.Namespace != "agent" {
+			t.Fatalf("context-only steer appended an unexpected item: type=%s namespace=%s", item.Type, item.Namespace)
+		}
+	}
+	if len(appended) != 1 {
+		t.Fatalf("context-only steer appended %d items, want the single additional-context tool output", len(appended))
 	}
 	for i := range after.Items {
 		if after.Items[i].Metadata["additionalContext"] != nil {

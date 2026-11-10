@@ -435,8 +435,17 @@ func TestRuntimeRouterActiveGoalContinuationStartsTurnWhenIdle(t *testing.T) {
 
 	select {
 	case request := <-requests:
-		if !strings.Contains(request.Instructions, objective) {
-			t.Fatalf("continuation instructions = %q, want objective %q", request.Instructions, objective)
+		// Rust #60487 delivers untrusted additional context as agent-namespace
+		// function_call_output items by default, so the goal objective arrives in
+		// the input items instead of the instruction text.
+		objectiveDelivered := false
+		for _, output := range additionalContextToolOutputs(t, request.InputItems) {
+			if text, _ := output["output"].(string); strings.Contains(text, objective) {
+				objectiveDelivered = true
+			}
+		}
+		if !objectiveDelivered {
+			t.Fatalf("continuation input items = %#v, want objective %q as additional-context tool output", request.InputItems, objective)
 		}
 		// Rust's goal runtime attributes automatic continuations with the
 		// "goal" turn trigger (ext/goal/src/runtime.rs).
