@@ -45591,15 +45591,16 @@
   {
    "sha": "064b2d9bca2b5ba2f9f399ffefd06a75d97852f0",
    "subject": "Preserve typed gRPC code-mode session admission errors (#60496)",
-   "kind": "protocol",
+   "kind": "runtime",
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "本轮未审计落地：gRPC code-mode 会话准入错误未类型化",
-    "Go 锚点：codemode/",
-    "plan: update/plan_2026_11_10.md (#60496)"
+    "codemode/grpc_session_open.go 新增 GrpcSessionOpenError（Code/Timeout/Message，诊断截断到 512 字节）与 GrpcCodeModeSessionProvider.OpenSession：立即完成准入握手并返回类型化错误，Code 保留终态 gRPC 状态（PermissionDenied、ResourceExhausted 重试耗尽、DeadlineExceeded 等），Timeout 表示调用方上下文在握手/重试期间结束，其余为 setup 失败。",
+    "惰性 NewSessionWithOptions/Execute 路径保持不变，继续返回字符串错误，与 Rust 保留 CodeModeSessionProvider trait 字符串 API 一致；Go 包级导出天然覆盖 Rust 在 codex-core 的 ProcessOwnedGrpcCodeModeSessionProvider 再导出。",
+    "新增 grpc_session_open_like_rust_test.go：终态状态码（PermissionDenied/InvalidArgument/DeadlineExceeded）各只尝试 1 次并原样返回；ResourceExhausted 重试到 grpcSessionAdmissionAttempts 后返回该状态；上下文取消时归为 Timeout。",
+    "Tests: go test ./codemode -count=1；go build ./...。"
    ]
   },
   {
