@@ -15,6 +15,7 @@ import (
 
 	xdraw "golang.org/x/image/draw"
 
+	"codex_go/tui/imagedecode"
 	"codex_go/tui/pets"
 )
 
@@ -130,8 +131,11 @@ func LoadPixels(path string, maxWidth int, maxHeight int) (*image.RGBA, error) {
 		return nil, err
 	}
 	defer file.Close()
-	source, _, err := image.Decode(file)
+	source, err := imagedecode.DecodeFile(path, MaxAllocBytes)
 	if err != nil {
+		if errors.Is(err, imagedecode.ErrTooLarge) {
+			return nil, fmt.Errorf("%w: allocation budget %d", ErrTooLarge, MaxAllocBytes)
+		}
 		return nil, err
 	}
 	bounds := source.Bounds()

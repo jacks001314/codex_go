@@ -7,9 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"image"
-	_ "image/gif"
-	_ "image/jpeg"
 	"image/png"
 	"net/url"
 	"os"
@@ -19,6 +16,7 @@ import (
 	"time"
 
 	codextui "codex_go/tui"
+	"codex_go/tui/imagedecode"
 )
 
 // Rust parity: codex-rs/tui/src/clipboard_paste.rs. Rust reads the clipboard
@@ -194,12 +192,8 @@ func clipboardImageFromFiles(ctx context.Context, tool clipboardImageTool) (stri
 		if parsed, parseErr := url.Parse(line); parseErr == nil && parsed.Scheme == "file" {
 			path = parsed.Path
 		}
-		file, openErr := os.Open(path)
-		if openErr != nil {
-			continue
-		}
-		img, _, decodeErr := image.Decode(file)
-		file.Close()
+		// Rust #60455: copied files decode in display orientation.
+		img, decodeErr := imagedecode.DecodeFile(path, 0)
 		if decodeErr != nil {
 			continue
 		}
@@ -216,12 +210,12 @@ func clipboardImageFromFiles(ctx context.Context, tool clipboardImageTool) (stri
 
 // writeClipboardImagePNG turns one clipboard payload into a PNG temp file.
 func writeClipboardImagePNG(data []byte, mime string) (string, error) {
-	if strings.EqualFold(mime, "image/png") && bytes.HasPrefix(data, []byte("\x89PNG\r\n\x1a\n")) {
-		if _, err := png.DecodeConfig(bytes.NewReader(data)); err == nil {
-			return writeClipboardPNG(data)
-		}
+	// Rust #60455: an oriented PNG decodes and re-encodes in display
+	// orientation; an unoriented payload is written through verbatim.
+	if strings.EqualFold(mime, "image/png") && clipboardPNGPassthrough(data) {
+		return writeClipboardPNG(data)
 	}
-	img, _, err := image.Decode(bytes.NewReader(data))
+	img, err := imagedecode.DecodeBytes(data, 0)
 	if err != nil {
 		return "", codextui.PasteImageError{
 			Kind:    codextui.PasteImageEncodeFailed,
