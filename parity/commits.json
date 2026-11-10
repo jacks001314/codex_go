@@ -45212,10 +45212,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "本轮未审计落地：Go 模型目录没有 gateway OAuth 发现路径",
-    "Go 锚点：model/",
+    "Rust 6222faa3：新增 supports_gateway_catalog（自定义 gateway provider 且 model_catalog_url 与 base_url 同源才允许仅用 gateway OAuth 刷新目录）；GatewayAuthManager::without_interactive_login 让目录刷新复用已存会话、不开浏览器；uses_api_key_auth 改为 has_provider_api_key || (login==ApiKey && (!supports_gateway_catalog || requires_openai_auth))，避免无关的已存 API key 影响 gateway 目录发现",
+    "Go 实现：model/gateway_catalog.go 新增 SupportsGatewayCatalog（http(s)+host 校验后比较 scheme/host）与 UsesAPIKeyAuth；model/provider.go 的 ModelsManager 用 UsesAPIKeyAuth 计算 APIKeyAuth，命中 SupportsGatewayCatalog 时改用 catalogAuth()——经 ResolveAccessTokenWithoutLogin 复用 gateway 会话（无交互登录）；appserver/runtime_router.go 的 catalog manager 同样改用 model.UsesAPIKeyAuth",
+    "测试：model/gateway_catalog_test.go 覆盖同源/异源/异构 scheme/缺 URL/非法 URL/无 gateway OAuth/内置 OpenAI，以及 uses_api_key_auth 的四种组合；go test ./model 与 go test ./appserver -run 'Catalog|Gateway|ModelCatalog|APIKey' 通过",
     "plan: update/plan_2026_11_10.md (#60414)"
    ]
   },
