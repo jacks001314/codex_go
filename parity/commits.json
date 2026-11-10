@@ -45885,8 +45885,11 @@
    ],
    "status": "partial",
    "evidence": [
-    "本轮未审计落地：fullscreen transcript 工具调用摘要未实现",
-    "Go 锚点：tui/tea/",
+    "已落地：tui.collapse_turn_details 配置键（默认 false）、全屏设置面板 Collapse turn details 开关与持久化；命令执行摘要为无输出标签（首行调用行），多次调用合并到可展开行；默认关闭时行为完全不变。",
+    "tui/tea/transcript_turn_details.go 新增 CollapseTurnDetails：把某个回合内连续的工单活动（RoleHistory + ActivityIDs）折叠成一行摘要，摘要只取每个单元格的首行调用标签（TurnDetailSummaryLabel 复刻 Rust ToolGroup::label 的 Ran N commands / Explored files · ran 1 command / N tool calls · <最后一条>），输出正文一律不进入摘要；被吸收的单元格置空占位，切片长度与原始会话一一对应，行号与展开状态不错位。",
+    "tui/tea/model.go 的 renderTranscriptOverlayCached 在 tui.collapse_turn_details 打开时用折叠后的影子 State 渲染（不污染会话，也不复用按原始会话建的布局缓存）；展开状态复用既有 activityFocus/transcriptActivityExpanded，展开后恢复原始单元格。",
+    "测试：go test ./tui/tea -count=1（含新增 TestCollapseTurnDetails*、TestTurnDetailSummaryLabelMixLikeRust、TestTranscriptOverlayCollapsesCompletedTurnActivityLikeRust 与面板开关用例）通过 56.6s；go test ./app -run 'TUI|Interactive|Config|Fullscreen' 通过 38.9s；go test ./config 通过；go build ./... 通过。把渲染接线临时关掉后全屏用例按预期失败。",
+    "仍未落地：同提交里「恢复历史分页时把 interruption notice 放回其回合边界」的部分——Go 的 older-history 分页（tui/tea/history_pagination.go）直接拼接已渲染消息，没有按回合分组重排 interruption notice 的入口。",
     "plan: update/plan_2026_11_10.md (#60554)"
    ]
   },
@@ -45899,8 +45902,8 @@
    ],
    "status": "partial",
    "evidence": [
-    "本轮未审计落地：更多工具的无输出摘要未支持",
-    "Go 锚点：tui/tea/",
+    "已落地：摘要标签对任意带 ActivityIDs 的工具单元格通用（不限于 exec），MCP/动态工具/补丁/图片/计划等单元格只要报告 activity id 与首行调用标签即可折叠，摘要始终不含输出正文。",
+    "仍未落地：Rust 为不带 activity id 的单元格补的 disclosure 身份、以及 footer 的 expand/collapse 提示文案。",
     "plan: update/plan_2026_11_10.md (#60555)"
    ]
   },
@@ -45911,10 +45914,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "本轮未审计落地：连续工具调用未分组",
-    "Go 锚点：tui/tea/",
+    "覆盖 Rust #60556 的分组语义：CollapseTurnDetails 把同一回合内连续的工具活动合并为一行，摘要按 Ran/Explored 计数并保留最后一条调用标签，展开后逐条还原；等价于 Rust turn_details::ToolGroup 的 push/finish/label。",
+    "tui/tea/transcript_turn_details.go 新增 CollapseTurnDetails：把某个回合内连续的工单活动（RoleHistory + ActivityIDs）折叠成一行摘要，摘要只取每个单元格的首行调用标签（TurnDetailSummaryLabel 复刻 Rust ToolGroup::label 的 Ran N commands / Explored files · ran 1 command / N tool calls · <最后一条>），输出正文一律不进入摘要；被吸收的单元格置空占位，切片长度与原始会话一一对应，行号与展开状态不错位。",
+    "tui/tea/model.go 的 renderTranscriptOverlayCached 在 tui.collapse_turn_details 打开时用折叠后的影子 State 渲染（不污染会话，也不复用按原始会话建的布局缓存）；展开状态复用既有 activityFocus/transcriptActivityExpanded，展开后恢复原始单元格。",
+    "测试：go test ./tui/tea -count=1（含新增 TestCollapseTurnDetails*、TestTurnDetailSummaryLabelMixLikeRust、TestTranscriptOverlayCollapsesCompletedTurnActivityLikeRust 与面板开关用例）通过 56.6s；go test ./app -run 'TUI|Interactive|Config|Fullscreen' 通过 38.9s；go test ./config 通过；go build ./... 通过。把渲染接线临时关掉后全屏用例按预期失败。",
+    "残余差异：Rust 以 HistoryCell 的 activity_ids 与 tool_call_labels 作为分组身份，Go 以 Message.ActivityIDs 判定并把首行当标签；不报告 activity id 的单元格（例如无 id 的搜索单元格）不会被折叠。",
     "plan: update/plan_2026_11_10.md (#60556)"
    ]
   },
@@ -45925,10 +45931,14 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "本轮未审计落地：完成回合活动未折叠到提示下",
-    "Go 锚点：tui/tea/",
+    "覆盖 Rust #60557 的完成回合折叠：turnDetailCompletes 只在工具活动之后、下一个用户提示之前出现最终助手消息（Phase 空或 final）时才折叠；仍在进行的回合、只有 commentary 的回合保持原样，活动行跟随其提示出现在同一位置。",
+    "tui/tea/transcript_turn_details.go 新增 CollapseTurnDetails：把某个回合内连续的工单活动（RoleHistory + ActivityIDs）折叠成一行摘要，摘要只取每个单元格的首行调用标签（TurnDetailSummaryLabel 复刻 Rust ToolGroup::label 的 Ran N commands / Explored files · ran 1 command / N tool calls · <最后一条>），输出正文一律不进入摘要；被吸收的单元格置空占位，切片长度与原始会话一一对应，行号与展开状态不错位。",
+    "tui/tea/model.go 的 renderTranscriptOverlayCached 在 tui.collapse_turn_details 打开时用折叠后的影子 State 渲染（不污染会话，也不复用按原始会话建的布局缓存）；展开状态复用既有 activityFocus/transcriptActivityExpanded，展开后恢复原始单元格。",
+    "配置面：config 允许 tui.collapse_turn_details（config.go、config_toml_schema.go），app/interactive.go 解析进 Options/SettingsWriteResult，tui/tea 设置面板新增 Collapse turn details 开关并写回 tui.collapse_turn_details（默认关闭）。",
+    "测试：go test ./tui/tea -count=1（含新增 TestCollapseTurnDetails*、TestTurnDetailSummaryLabelMixLikeRust、TestTranscriptOverlayCollapsesCompletedTurnActivityLikeRust 与面板开关用例）通过 56.6s；go test ./app -run 'TUI|Interactive|Config|Fullscreen' 通过 38.9s；go test ./config 通过；go build ./... 通过。把渲染接线临时关掉后全屏用例按预期失败。",
+    "残余差异：Rust 同提交里的 turn_tip/footer 提示与 separators 间距微调未逐像素复刻；Go 的摘要行使用 ▸ 前缀表示可展开，展开/收起走既有 activity focus 交互。",
     "plan: update/plan_2026_11_10.md (#60557)"
    ]
   },
