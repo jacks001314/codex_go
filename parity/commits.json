@@ -45785,8 +45785,10 @@
    ],
    "status": "partial",
    "evidence": [
-    "本轮未审计落地：SOCKS TCP 上游隧道未实现",
-    "Go 锚点：network/",
+    "network/proxy_server.go: dialCheckedTargetForProtocol 在解析后对每个地址执行 resolvedAddressPolicyReason——deny 规则命中返回 denied、review 规则命中返回 policy_denied，均写 policy_decision 审计并记入 blocked 请求，然后跳过该地址（上游不会被连接）；dialCheckedTarget 保留为 HTTP/CONNECT 入口，SOCKS5 TCP/UDP 各自传自己的协议。",
+    "network/proxy_server.go: 新增 proxyIPSpellings，让限制规则识别等价数值写法（规范形式、4 字节 IPv4、显式 ::ffff: 形式），因此写成 ::ffff:10.1.2.3 的规则能拦住解析到 10.1.2.3 的主机名。",
+    "测试：network/proxy_resolved_address_policy_like_rust_test.go 覆盖等价拼写、deny/review 在解析地址上的判定（含不命中项返回空），以及 SOCKS 拨号在解析地址被拒时不触碰上游 listener。验证：go test ./network -count=1 ok（14.9s）；go build ./... exit 0。",
+    "仍缺（本轮未完成，需下一轮继续）：Rust 的 TcpUpstreamProxy/HTTP CONNECT 下一跳（Go 服务器侧目前直接拨号，settings.AllowUpstreamProxy 只在配置校验层）、转发 DNS 时的远端 TCP DNS 准入（allow_local_binding 且无 IP deny/review 模式才允许）、upstream 回环检测、Linux 代理桥的 managed 环境变量/loopback 端口白名单与并发 worker 上限。",
     "plan: update/plan_2026_11_10.md (#60523)"
    ]
   },
