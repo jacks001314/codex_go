@@ -327,7 +327,8 @@ func (m *Model) refreshBacktrackHighlight() {
 		m.overlay.ClearHighlightRange()
 		return
 	}
-	_, ranges := renderTranscriptMessagesWithRanges(&m.overlayMessages, m.State, m.rawOutput, m.width, m.activeTUITheme(), m.browsingDetails, m.sessionCWD, m.showRawReasoning)
+	view, cache := m.overlayTranscriptView()
+	_, ranges := renderTranscriptMessagesWithRanges(cache, view, m.rawOutput, m.width, m.activeTUITheme(), m.browsingDetails, m.sessionCWD, m.showRawReasoning)
 	if index >= len(ranges) {
 		m.overlay.ClearHighlightRange()
 		return

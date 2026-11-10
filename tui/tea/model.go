@@ -12270,20 +12270,30 @@ func (m *Model) renderTranscriptOverlayCached() string {
 	if m.backtrack.OverlayPreviewActive {
 		expandedHistory = m.browsingDetails
 	}
-	// Rust #60554/#60556: with `tui.collapse_turn_details` enabled the
-	// full-screen transcript folds each completed turn's consecutive tool
-	// activity into one disclosure row. Expanded groups keep their cells, and
-	// the source conversation is never mutated.
-	if m.collapseTurnDetails && m.State != nil {
-		if collapsed := CollapseTurnDetails(m.State.Messages, m.transcriptActivityExpanded); collapsed != nil {
-			shadow := *m.State
-			shadow.Messages = collapsed
-			// The per-message cache is keyed to the source conversation, so the
-			// folded presentation renders without it.
-			return renderTranscriptWithCache(nil, &shadow, m.rawOutput, m.width, m.activeTUITheme(), expandedHistory, m.sessionCWD, m.showRawReasoning)
+	view, cache := m.overlayTranscriptView()
+	return renderTranscriptWithCache(cache, view, m.rawOutput, m.width, m.activeTUITheme(), expandedHistory, m.sessionCWD, m.showRawReasoning)
+}
+
+// overlayTranscriptView returns the conversation the full-screen transcript
+// renders together with its per-message cache. Rust #60554/#60556 folds each
+// completed turn's consecutive tool activity into one disclosure row when
+// `tui.collapse_turn_details` is enabled; the source state is never mutated and
+// the folded presentation renders without the cache (which is keyed to the
+// source conversation).
+func (m *Model) overlayTranscriptView() (*codextui.State, *transcriptMessageCache) {
+	if m == nil || m.State == nil || !m.collapseTurnDetails {
+		if m == nil {
+			return nil, nil
 		}
+		return m.State, &m.overlayMessages
 	}
-	return renderTranscriptWithCache(&m.overlayMessages, m.State, m.rawOutput, m.width, m.activeTUITheme(), expandedHistory, m.sessionCWD, m.showRawReasoning)
+	collapsed := CollapseTurnDetails(m.State.Messages, m.transcriptActivityExpanded)
+	if collapsed == nil {
+		return m.State, &m.overlayMessages
+	}
+	shadow := *m.State
+	shadow.Messages = collapsed
+	return &shadow, nil
 }
 
 func (m *Model) activeTUITheme() string {

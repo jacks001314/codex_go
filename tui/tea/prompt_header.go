@@ -51,7 +51,8 @@ func (m *Model) overlayPinnedPromptHeader() string {
 	if m.backtrack.OverlayPreviewActive {
 		expanded = m.browsingDetails
 	}
-	_, ranges := renderTranscriptMessagesWithRanges(&m.overlayMessages, m.State, m.rawOutput, m.width, m.activeTUITheme(), expanded, m.sessionCWD, m.showRawReasoning)
+	view, cache := m.overlayTranscriptView()
+	_, ranges := renderTranscriptMessagesWithRanges(cache, view, m.rawOutput, m.width, m.activeTUITheme(), expanded, m.sessionCWD, m.showRawReasoning)
 	first, ok := transcriptMessageAtLine(ranges, m.overlay.YOffset())
 	if !ok || first >= len(messages) {
 		return ""
