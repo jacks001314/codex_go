@@ -174,6 +174,60 @@ func terminalProviderError(body *responsesAgentAPIErrorBody, status int) *codexa
 			message = "model_not_found"
 		}
 		return &codexapi.APIError{Kind: codexapi.ErrorModelNotFound, Status: status, Message: message}
+	case "inference_hook_denied":
+		// Rust #60511: a workspace inference-hook denial is terminal on a
+		// statusless streamed error or an HTTP 403 and keeps the provider
+		// message.
+		if status != 0 && status != http.StatusForbidden {
+			return nil
+		}
+		message := strings.TrimSpace(body.Message)
+		if message == "" {
+			message = InferenceHookDeniedFallbackMessage
+		}
+		return &codexapi.APIError{Kind: codexapi.ErrorInferenceHookDenied, Status: status, Message: message}
+	case "context_length_exceeded":
+		// Rust #60482: a context-length failure is typed on the same 400 the
+		// HTTP path classifies, and also on a statusless streamed error, so both
+		// transports compact instead of retrying. A 503 keeps the generic
+		// retryable path.
+		if status != 0 && status != http.StatusBadRequest {
+			return nil
+		}
+		return &codexapi.APIError{Kind: codexapi.ErrorContextWindowExceeded, Status: status, Message: strings.TrimSpace(body.Message)}
+	case "invalid_access_program", "unsupported_access_program":
+		// Rust #60481: a statusless streamed rejection names the access
+		// program the model cannot use, and is terminal.
+		if status != 0 {
+			return nil
+		}
+		message := strings.TrimSpace(body.Message)
+		if message == "" {
+			message = AccessProgramUnsupportedFallbackMessage
+		}
+		return &codexapi.APIError{Kind: codexapi.ErrorInvalidRequest, Status: status, Message: message}
+	case "content_policy_violation":
+		// Rust #60479: content-policy refusals are terminal on a statusless
+		// streamed error or an HTTP 400 and keep their provider message.
+		if status != 0 && status != http.StatusBadRequest {
+			return nil
+		}
+		message := strings.TrimSpace(body.Message)
+		if message == "" {
+			message = ContentPolicyFallbackMessage
+		}
+		return &codexapi.APIError{Kind: codexapi.ErrorContentPolicyViolation, Status: status, Message: message}
+	case "access_program_not_enabled":
+		// Rust #60476: an HTTP 403 keeps its response details in the API
+		// bridge; the statusless streamed form is terminal here.
+		if status != 0 {
+			return nil
+		}
+		message := strings.TrimSpace(body.Message)
+		if message == "" {
+			message = AccessProgramNotEnabledFallbackMessage
+		}
+		return &codexapi.APIError{Kind: codexapi.ErrorAccessProgramNotEnabled, Status: status, Message: message}
 	}
 	return nil
 }
@@ -605,7 +659,12 @@ func isRetryableResponsesStreamError(err error) bool {
 			codexapi.ErrorInvalidRequest,
 			codexapi.ErrorInvalidPrompt, codexapi.ErrorInvalidAudioInput,
 			codexapi.ErrorCyberPolicy, codexapi.ErrorBioPolicy,
-			codexapi.ErrorFlexUnavailable, codexapi.ErrorModelNotFound:
+			codexapi.ErrorFlexUnavailable, codexapi.ErrorModelNotFound,
+			// Rust #60475/#60476/#60479/#60480: workspace access denials,
+			// access-program rejections and content-policy refusals are
+			// terminal, so the stream spends no retry on them.
+			codexapi.ErrorWorkspaceAccessDenied, codexapi.ErrorAccessProgramNotEnabled,
+			codexapi.ErrorContentPolicyViolation, codexapi.ErrorInferenceHookDenied:
 			return false
 		default:
 			return details.Status >= http.StatusInternalServerError

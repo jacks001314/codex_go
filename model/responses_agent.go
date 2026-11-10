@@ -4714,7 +4714,50 @@ func responsesHTTPError(providerName string, statusCode int, headers http.Header
 		apiError.retryAfter = retryAfter
 		apiError.hasRetryAfter = true
 	}
+	// Rust #60475/#60480/#60476 (api_bridge.rs): a 403 naming a workspace or
+	// access-program rejection becomes a typed terminal error that keeps the
+	// UnexpectedResponseError display, status and retry state untouched.
+	if kind := forbiddenProviderErrorKind(statusCode, body, headers); kind != "" {
+		return &codexapi.APIError{Kind: kind, Status: statusCode, Message: apiError.Error()}
+	}
 	return apiError
+}
+
+// forbiddenProviderErrorKind classifies the 403 provider codes Rust maps to
+// CodexErrorDetails::WorkspaceAccessDenied and AccessProgramNotEnabled
+// (#60475/#60476/#60480). The code comes from the body's `/detail/code`, then
+// `/error/code`, and falls back to the x-error-json identity header; a 403 with
+// any other code keeps the ordinary unexpected-status handling and its retry
+// policy.
+func forbiddenProviderErrorKind(status int, body []byte, headers http.Header) codexapi.APIErrorKind {
+	if status != http.StatusForbidden {
+		return ""
+	}
+	code := ""
+	var payload struct {
+		Detail struct {
+			Code string `json:"code"`
+		} `json:"detail"`
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(body, &payload) == nil {
+		code = strings.TrimSpace(payload.Detail.Code)
+		if code == "" {
+			code = strings.TrimSpace(payload.Error.Code)
+		}
+	}
+	if code == "" {
+		code = strings.TrimSpace(responseAuthorizationErrorCode(headers))
+	}
+	switch code {
+	case "invalid_workspace_selected", "codex_workspace_access_denied":
+		return codexapi.ErrorWorkspaceAccessDenied
+	case "access_program_not_enabled":
+		return codexapi.ErrorAccessProgramNotEnabled
+	}
+	return ""
 }
 
 const bedrockExpiredSignatureMessage = "Amazon Bedrock rejected the request because its AWS signature has expired. Refresh your AWS credentials and retry. If `AWS_BEARER_TOKEN_BEDROCK` is set, update or unset it, then restart Codex"
@@ -4727,6 +4770,15 @@ const (
 	// AudioInputFallbackMessage is Rust's copy for audio validation failures
 	// whose provider message is absent or blank (Rust #58434).
 	AudioInputFallbackMessage = "Invalid audio input."
+	// ContentPolicyFallbackMessage is Rust's copy for a content-policy
+	// refusal whose provider message is absent or blank (Rust #60479).
+	ContentPolicyFallbackMessage = "The input was rejected by the content policy."
+	// AccessProgramNotEnabledFallbackMessage mirrors Rust #60476.
+	AccessProgramNotEnabledFallbackMessage = "The requested access program is not enabled."
+	// InferenceHookDeniedFallbackMessage mirrors Rust #60511.
+	InferenceHookDeniedFallbackMessage = "Your workspace inference hook blocked this request."
+	// AccessProgramUnsupportedFallbackMessage mirrors Rust #60481.
+	AccessProgramUnsupportedFallbackMessage = "The requested access program cannot be used with this model."
 )
 
 func fallbackPolicyMessage(message string, fallback string) string {

@@ -5280,6 +5280,20 @@ func turnAnalyticsErrorFieldsFromAPIError(err *codexapi.APIError) turnAnalyticsE
 		// CodexErrorInfo::BadRequest while analytics keeps the
 		// invalid_audio_input kind and reports no HTTP status.
 		return fields("badRequest", "invalid_audio_input")
+	case codexapi.ErrorWorkspaceAccessDenied:
+		// Rust #60475/#60480: a workspace access denial reports the same
+		// HttpConnectionFailed shape as an unexpected status while analytics keeps
+		// the dedicated kind.
+		return fields(codexErrorInfoWithHTTPStatus("httpConnectionFailed", status), "workspace_access_denied")
+	case codexapi.ErrorAccessProgramNotEnabled:
+		// Rust #60476: the access-program rejection maps to
+		// CodexErrorInfo::HttpConnectionFailed too.
+		return fields(codexErrorInfoWithHTTPStatus("httpConnectionFailed", status), "access_program_not_enabled")
+	case codexapi.ErrorContentPolicyViolation:
+		// Rust #60479 maps ContentPolicyViolation to CodexErrorInfo::InvalidPrompt,
+		// which the app-server v2 surface renders as `other` while analytics keeps
+		// the content-policy kind.
+		return fields("other", "content_policy_violation")
 	case codexapi.ErrorRetryable:
 		return fields(codexErrorInfoWithHTTPStatus("responseTooManyFailedAttempts", status), "retry_limit")
 	case codexapi.ErrorTransport:
@@ -5307,6 +5321,10 @@ func analyticsErrorHTTPStatus(kind codexapi.APIErrorKind, status *uint16) *uint1
 		return &tooManyRequests
 	case codexapi.ErrorModelNotFound:
 		// Rust reports the ModelNotFound status only when the error carried one.
+		return status
+	case codexapi.ErrorWorkspaceAccessDenied, codexapi.ErrorAccessProgramNotEnabled, codexapi.ErrorContentPolicyViolation:
+		// Rust #60475/#60476/#60479: these kinds report the status they arrived
+		// with; a statusless streamed rejection reports none.
 		return status
 	default:
 		return nil

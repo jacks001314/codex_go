@@ -40,6 +40,23 @@ const (
 	// validation codes (Rust #58434). It surfaces as BadRequest and is never
 	// retried because resending the same audio cannot succeed.
 	ErrorInvalidAudioInput APIErrorKind = "invalidAudioInput"
+	// ErrorWorkspaceAccessDenied is the terminal 403 failure for the
+	// `invalid_workspace_selected` and `codex_workspace_access_denied` provider
+	// codes (Rust #60475/#60480). The account cannot use Codex in the selected
+	// workspace, so retries and compaction model fallbacks stop.
+	ErrorWorkspaceAccessDenied APIErrorKind = "workspaceAccessDenied"
+	// ErrorAccessProgramNotEnabled is the terminal failure for
+	// `access_program_not_enabled` (Rust #60476): the provider denied the access
+	// program required by the request.
+	ErrorAccessProgramNotEnabled APIErrorKind = "accessProgramNotEnabled"
+	// ErrorInferenceHookDenied is the terminal failure for a workspace
+	// inference-hook denial (Rust #60511). Retries, compaction model fallbacks
+	// and guardian review stop on it.
+	ErrorInferenceHookDenied APIErrorKind = "inferenceHookDenied"
+	// ErrorContentPolicyViolation is the terminal failure for
+	// `content_policy_violation` (Rust #60479). It keeps the provider status and
+	// message instead of being retried as a generic API error.
+	ErrorContentPolicyViolation APIErrorKind = "contentPolicyViolation"
 )
 
 type APIError struct {
@@ -167,6 +184,11 @@ func (e *APIError) Error() string {
 	case ErrorInvalidAudioInput:
 		// Rust's CodexErrorDetails::InvalidAudioInput displays the provider
 		// message verbatim; classification supplies the fallback text.
+		return e.Message
+	case ErrorWorkspaceAccessDenied, ErrorAccessProgramNotEnabled, ErrorContentPolicyViolation, ErrorInferenceHookDenied:
+		// Rust's CodexErrorDetails::WorkspaceAccessDenied,
+		// AccessProgramNotEnabled and ContentPolicyViolation all display the
+		// provider message verbatim, matching #[error("{0}")].
 		return e.Message
 	default:
 		return e.Message
