@@ -45348,10 +45348,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "本轮未审计落地：realtime attach 无取消与截止时间",
-    "Go 锚点：realtime/",
+    "Rust 9f04d886f3：RealtimeAttachmentOptions{cancel, start_before} 挂在 Op::RealtimeConversationAttach；handle_attach 用 select 先判取消/截止，命中后 token.cancel() 并等待清理；替换已有会话前拒绝已取消/已过期请求；发布连接前在 watch guard 下再检查；已发布连接后到达的取消不拆连接；sender 以 false 值被 drop 时继续尝试",
+    "Go 实现：realtime/attachment.go 新增 AttachmentOptions{Cancel *AttachmentCancellation, StartBefore}、AttachmentCancellation（Cancel/Close/Cancelled，Close 语义等价 watch sender 被 drop 且未置 true）、ErrRealtimeAttachmentCanceled 与 realtimeAttachmentControl（watch/interrupt/commit/seal）；realtime/realtime.go 的 StartOptions.Attachment 在 startWithOptions 的 startLock 前后各检查一次、dial 与 frameless 握手复用可取消 startContext、发布在 control.commit 内完成（提交成功后 sealed，后到取消保留驻留）",
+    "测试：realtime/attachment_control_like_rust_test.go 四个用例覆盖取消释放挂起握手且下一次调用可发布、取消/过期在替换前被拒且后到取消保留驻留会话、无 cancel 通道的截止时间释放握手、sender 未取消即 drop 继续尝试；go test ./realtime -count=1 ok；go test ./appserver -run Realtime 与 ./voicehost ok；临时禁用 control.watch() 后两个挂起握手用例 5s 超时失败（已还原）",
     "plan: update/plan_2026_11_10.md (#60443)"
    ]
   },
