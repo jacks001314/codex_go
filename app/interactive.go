@@ -1777,6 +1777,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		ShowTooltips:                settings.ShowTooltips,
 		ShowServerVersionNotice:     settings.ShowServerVersionNotice,
 		FullscreenTranscript:        settings.FullscreenTranscript,
+		CollapseTurnDetails:         settings.CollapseTurnDetails,
 		SessionHeaderVersion:        doctor.Version(),
 		WindowsSandboxStartupPrompt: interactiveWindowsSandboxStartupPrompt(root, settings.PermissionRequirements),
 		WindowsSandboxLevel:         interactiveWindowsSandboxLevelForTUI(root),
@@ -2930,6 +2931,7 @@ func interactiveSettingsFromConfig(loaded *config.Config) codextea.SettingsWrite
 		ShowTooltips:               interactiveShowTooltips(values),
 		ShowServerVersionNotice:    interactiveShowServerVersionNotice(values),
 		FullscreenTranscript:       interactiveFullscreenTranscript(values),
+		CollapseTurnDetails:        interactiveCollapseTurnDetails(values),
 		AlternateScreenMode:        interactiveAlternateScreenMode(values),
 		StatusLineUseColors:        interactiveStatusLineUseColors(values),
 		StatusLineItems:            interactiveTUIStringListFromConfig(values, "status_line"),
@@ -3023,6 +3025,20 @@ func interactiveShowServerVersionNotice(values map[string]any) *bool {
 func interactiveFullscreenTranscript(values map[string]any) *bool {
 	enabled := true
 	if raw, ok := interactiveTUIConfig(values)["fullscreen_transcript"]; ok {
+		if configured, ok := raw.(bool); ok {
+			enabled = configured
+		}
+	}
+	return &enabled
+}
+
+// interactiveCollapseTurnDetails resolves the configured
+// `tui.collapse_turn_details` preference (Rust #60554): the full-screen
+// transcript summarizes tool calls and collapses completed turns. The config
+// default is disabled.
+func interactiveCollapseTurnDetails(values map[string]any) *bool {
+	enabled := false
+	if raw, ok := interactiveTUIConfig(values)["collapse_turn_details"]; ok {
 		if configured, ok := raw.(bool); ok {
 			enabled = configured
 		}

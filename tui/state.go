@@ -65,6 +65,11 @@ type Message struct {
 	// overlay renders, mirroring Rust's transcript-only history cells (a
 	// completed reasoning block belongs to Ctrl+T, not to the live scrollback).
 	TranscriptOnly bool
+	// TurnDetailSummary marks the collapsed row that stands in for one
+	// completed turn's consecutive tool activity. The full-screen transcript
+	// renders only its summary line; expanding the group restores the original
+	// cells (Rust #60554/#60556, turn_details::TurnRow::Tools).
+	TurnDetailSummary bool
 	// StartupTip marks the retained startup tooltip row. Fullscreen rendering
 	// hides it while raw output and terminal scrollback keep the copy
 	// (Rust #48513).

@@ -396,6 +396,14 @@ func TestConfigPanelRemainingTogglesLikeRust(t *testing.T) {
 	if len(edits) != 1 || edits[0].KeyPath != "tui.auto_recap" || edits[0].Value != false {
 		t.Fatalf("automatic recaps toggle = %#v", edits)
 	}
+	// Rust #60554 adds the "Collapse turn details" toggle, disabled by default.
+	if got := model.configPanelValue(configPanelRowByLabel(t, "Collapse turn details")); got != "[ ] Off" {
+		t.Fatalf("collapse turn details initial value = %q, want Off", got)
+	}
+	activate("Collapse turn details")
+	if len(edits) != 1 || edits[0].KeyPath != "tui.collapse_turn_details" || edits[0].Value != true || !model.collapseTurnDetails {
+		t.Fatalf("collapse turn details toggle = %#v enabled=%v", edits, model.collapseTurnDetails)
+	}
 	activate("Deselect after copy")
 	if len(edits) != 1 || edits[0].KeyPath != "tui.copy_on_select_clear_selection" || edits[0].Value != true {
 		t.Fatalf("deselect toggle = %#v", edits)

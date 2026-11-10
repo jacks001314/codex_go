@@ -1259,6 +1259,7 @@ var knownTuiConfigFields = map[string]struct{}{
 	"question_esc_back":               {},
 	"raw_output_mode":                 {},
 	"fullscreen_transcript":           {},
+	"collapse_turn_details":           {},
 	"mouse_scroll_speed":              {},
 	"sidebar_width_percent":           {},
 	"copy_on_select":                  {},

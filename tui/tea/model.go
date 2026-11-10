@@ -463,6 +463,10 @@ type SettingsWriteResult struct {
 	// (Rust #46883). Nil preserves the current value; the config default is
 	// enabled.
 	FullscreenTranscript *bool
+	// CollapseTurnDetails is the configured `tui.collapse_turn_details` value
+	// (Rust #60554). Nil preserves the current value; the config default is
+	// disabled.
+	CollapseTurnDetails *bool
 	// AlternateScreenMode is the configured `tui.alternate_screen` mode
 	// (`always`/`never`/`auto`). Empty means auto.
 	AlternateScreenMode   string
@@ -1306,7 +1310,11 @@ type Options struct {
 	ShowServerVersionNotice *bool
 	// FullscreenTranscript seeds the stored `tui.fullscreen_transcript`
 	// preference for the `/tui` picker. Nil defaults to enabled.
-	FullscreenTranscript      *bool
+	FullscreenTranscript *bool
+	// CollapseTurnDetails seeds `tui.collapse_turn_details` (Rust #60554): the
+	// full-screen transcript summarizes tool calls and collapses completed turns.
+	// Nil defaults to disabled.
+	CollapseTurnDetails       *bool
 	OnSubmit                  SubmitFunc
 	OnSubmitRequest           SubmitRequestFunc
 	OnSteerRequest            SteerRequestFunc
@@ -2279,6 +2287,10 @@ type Model struct {
 	// fullscreenTranscript is the stored next-launch renderer preference
 	// (`tui.fullscreen_transcript`); the running renderer is unchanged.
 	fullscreenTranscript bool
+	// collapseTurnDetails is the live `tui.collapse_turn_details` preference
+	// (Rust #60554): the full-screen transcript summarizes tool calls and
+	// collapses completed turns. The config default is disabled.
+	collapseTurnDetails bool
 	// tuiModeWrite holds the pending `/tui` save value so a failed write never
 	// changes the stored preference.
 	tuiModeWrite *bool
@@ -3675,6 +3687,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 	model.showTooltips = options.ShowTooltips != nil && *options.ShowTooltips
 	model.showServerVersionNotice = options.ShowServerVersionNotice == nil || *options.ShowServerVersionNotice
 	model.fullscreenTranscript = options.FullscreenTranscript == nil || *options.FullscreenTranscript
+	model.collapseTurnDetails = options.CollapseTurnDetails != nil && *options.CollapseTurnDetails
 	model.statusTimer = codextui.NewStatusTimer(model.currentTime())
 	model.sessionHeaderEnabled = options.ShowSessionHeader
 	model.sessionHeaderVersion = strings.TrimSpace(options.SessionHeaderVersion)
@@ -12256,6 +12269,19 @@ func (m *Model) renderTranscriptOverlayCached() string {
 	expandedHistory := true
 	if m.backtrack.OverlayPreviewActive {
 		expandedHistory = m.browsingDetails
+	}
+	// Rust #60554/#60556: with `tui.collapse_turn_details` enabled the
+	// full-screen transcript folds each completed turn's consecutive tool
+	// activity into one disclosure row. Expanded groups keep their cells, and
+	// the source conversation is never mutated.
+	if m.collapseTurnDetails && m.State != nil {
+		if collapsed := CollapseTurnDetails(m.State.Messages, m.transcriptActivityExpanded); collapsed != nil {
+			shadow := *m.State
+			shadow.Messages = collapsed
+			// The per-message cache is keyed to the source conversation, so the
+			// folded presentation renders without it.
+			return renderTranscriptWithCache(nil, &shadow, m.rawOutput, m.width, m.activeTUITheme(), expandedHistory, m.sessionCWD, m.showRawReasoning)
+		}
 	}
 	return renderTranscriptWithCache(&m.overlayMessages, m.State, m.rawOutput, m.width, m.activeTUITheme(), expandedHistory, m.sessionCWD, m.showRawReasoning)
 }

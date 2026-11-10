@@ -58,6 +58,7 @@ const (
 	configActionPasteDetection
 	configActionRightClickPaste
 	configActionAutomaticRecaps
+	configActionCollapseTurnDetails
 	configActionSessionPicker
 	configActionResumeCWD
 	configActionModelProviders
@@ -167,6 +168,13 @@ var configPanelRows = []configPanelRow{
 		description: "Prepare recaps while the terminal is unfocused",
 		keywords:    "summary background",
 		action:      configActionAutomaticRecaps,
+	},
+	{
+		section:     configSectionSessions,
+		label:       "Collapse turn details",
+		description: "Summarize tool calls and collapse completed turns in the full-screen transcript",
+		keywords:    "transcript summary tools compact fold",
+		action:      configActionCollapseTurnDetails,
 	},
 	{
 		section:     configSectionSessions,
@@ -373,6 +381,8 @@ func (m *Model) configPanelValue(row configPanelRow) string {
 		return configPanelToggleValue(!m.disablePasteBurst)
 	case configActionAutomaticRecaps:
 		return configPanelToggleValue(!m.disableAutoRecap)
+	case configActionCollapseTurnDetails:
+		return configPanelToggleValue(m.collapseTurnDetails)
 	case configActionSessionPicker:
 		if m.sessionPickerDensity == codextui.SessionDensityComfortable {
 			return "Comfortable \u203a"
@@ -810,6 +820,9 @@ func (m *Model) activateConfigRow(row configPanelRow) bubbletea.Cmd {
 	case configActionAutomaticRecaps:
 		m.disableAutoRecap = !m.disableAutoRecap
 		return m.saveConfigPanelPreference("tui.auto_recap", !m.disableAutoRecap)
+	case configActionCollapseTurnDetails:
+		m.collapseTurnDetails = !m.collapseTurnDetails
+		return m.saveConfigPanelPreference("tui.collapse_turn_details", m.collapseTurnDetails)
 	case configActionModelProviders:
 		// Rust opens the browsing picker instead of changing the provider.
 		return m.openConfigProviderBrowser()
@@ -1193,6 +1206,10 @@ func configPanelEffectiveValue(result SettingsWriteResult, keyPath string) (any,
 		if result.AutoRecap != nil {
 			return *result.AutoRecap, true
 		}
+	case "tui.collapse_turn_details":
+		if result.CollapseTurnDetails != nil {
+			return *result.CollapseTurnDetails, true
+		}
 	case "tui.vim_mode_default":
 		if result.StartInVimMode != nil {
 			return *result.StartInVimMode, true
@@ -1534,7 +1551,7 @@ func configPanelAcceptLabel(row configPanelRow) string {
 	switch row.action {
 	case configActionTips, configActionStatusLineColors, configActionComposerStars, configActionNotifications,
 		configActionStartInVimMode, configActionPasteDetection, configActionAutomaticRecaps,
-		configActionCopyOnSelectClear:
+		configActionCollapseTurnDetails, configActionCopyOnSelectClear:
 		return "toggle"
 	case configActionNotificationTest:
 		return "test"

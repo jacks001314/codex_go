@@ -213,6 +213,7 @@ var configTuiFields = map[string]configFieldKind{
 	"question_esc_back":               {kind: configKindBool},
 	"raw_output_mode":                 {kind: configKindBool},
 	"fullscreen_transcript":           {kind: configKindBool},
+	"collapse_turn_details":           {kind: configKindBool},
 	"mouse_scroll_speed":              {kind: configKindFloat, expected: "f64"},
 	"sidebar_width_percent":           {kind: configKindInteger, expected: "u8"},
 	"copy_on_select":                  {kind: configKindEnum, variants: []string{"auto", "always", "never"}},

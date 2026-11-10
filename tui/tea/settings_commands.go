@@ -619,6 +619,9 @@ func (m *Model) applyLocalSettingsValues(result SettingsWriteResult) {
 	if result.AutoRecap != nil {
 		m.disableAutoRecap = !*result.AutoRecap
 	}
+	if result.CollapseTurnDetails != nil {
+		m.collapseTurnDetails = *result.CollapseTurnDetails
+	}
 	if result.PromptSuggestions != nil {
 		m.promptSuggestionsEnabled = *result.PromptSuggestions
 		if !m.promptSuggestionsEnabled {

@@ -9,6 +9,28 @@ import (
 
 func boolPtrApp(value bool) *bool { return &value }
 
+// Rust #60554: `tui.collapse_turn_details` defaults to disabled and follows the
+// configured boolean.
+func TestInteractiveCollapseTurnDetailsResolutionLikeRust(t *testing.T) {
+	for _, testCase := range []struct {
+		name   string
+		values map[string]any
+		want   bool
+	}{
+		{name: "default", values: map[string]any{}, want: false},
+		{name: "enabled", values: map[string]any{"tui": map[string]any{"collapse_turn_details": true}}, want: true},
+		{name: "disabled", values: map[string]any{"tui": map[string]any{"collapse_turn_details": false}}, want: false},
+		{name: "wrong type", values: map[string]any{"tui": map[string]any{"collapse_turn_details": "yes"}}, want: false},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			resolved := interactiveCollapseTurnDetails(testCase.values)
+			if resolved == nil || *resolved != testCase.want {
+				t.Fatalf("collapse turn details = %v, want %v", resolved, testCase.want)
+			}
+		})
+	}
+}
+
 // Rust #46883/#47417: fullscreen transcript and alternate-screen policy both
 // decide terminal ownership; --no-alt-screen always wins.
 func TestInteractiveNoAltScreenResolutionLikeRust(t *testing.T) {
