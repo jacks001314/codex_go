@@ -45552,11 +45552,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "本轮未审计落地：Xcode 26.4 MCP elicitation 兼容补丁未移除",
-    "Go 锚点：mcp/",
-    "plan: update/plan_2026_11_10.md (#60488)"
+    "Go 从未实现 Xcode 26.4 的 MCP elicitation 自动拒绝兼容分支：全仓库检索 Xcode/autoDeny 只命中 envutil 的 Xcode 工具链路径白名单，app-server 的 MCP elicitation 一律走标准分发路径。",
+    "现有分发用例：TestGuardianMCPElicitationUsesOwnerPermissionsLikeRust、browser MCP elicitation 系列、TestMCPElicitationAskUserFallsBackToUserLikeRust。"
    ]
   },
   {
