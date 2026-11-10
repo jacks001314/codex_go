@@ -119,7 +119,7 @@ func TestGuardianNativeEncryptedHistoryAcrossReviewsLikeRust(t *testing.T) {
 			reviewer := &modelGuardianReviewer{
 				agent: runner,
 				store: state.NewReviewStore(),
-				transcriptSelection: func(string) guardianTranscriptSelection {
+				transcriptSelection: func(string, guardianTranscriptBudgeting) guardianTranscriptSelection {
 					return router.guardianReviewTranscriptSelectionWithProfile(guardianProfileTestThreadID, profile)
 				},
 				transcriptFormat: func(string) state.GuardianTranscriptFormat {

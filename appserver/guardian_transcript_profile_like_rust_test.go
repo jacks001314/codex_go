@@ -126,7 +126,7 @@ func TestGuardianReviewPromptRendersTranscriptOmissionNoticeLikeRust(t *testing.
 			return &model.AgentResponse{Message: guardianDecisionDurationAssessment}, nil
 		}),
 		store: state.NewReviewStore(),
-		transcriptSelection: func(string) guardianTranscriptSelection {
+		transcriptSelection: func(string, guardianTranscriptBudgeting) guardianTranscriptSelection {
 			return guardianTranscriptSelection{
 				Entries: []state.GuardianTranscriptEntry{
 					{Author: "user", LineRole: "user", Text: "inspect only"},

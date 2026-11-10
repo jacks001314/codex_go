@@ -181,7 +181,7 @@ func TestGuardianReviewShortensOldestAuthorizationEvidenceLikeRust(t *testing.T)
 				return &model.AgentResponse{Message: guardianDecisionDurationAssessment}, nil
 			}),
 			store: state.NewReviewStore(),
-			transcriptSelection: func(string) guardianTranscriptSelection {
+			transcriptSelection: func(string, guardianTranscriptBudgeting) guardianTranscriptSelection {
 				return guardianTranscriptSelection{Entries: selected}
 			},
 		}
@@ -206,7 +206,7 @@ func TestGuardianReviewShortensOldestAuthorizationEvidenceLikeRust(t *testing.T)
 			return &model.AgentResponse{Message: guardianDecisionDurationAssessment}, nil
 		}),
 		store: state.NewReviewStore(),
-		transcriptSelection: func(string) guardianTranscriptSelection {
+		transcriptSelection: func(string, guardianTranscriptBudgeting) guardianTranscriptSelection {
 			return guardianTranscriptSelection{Entries: entries}
 		},
 	}
@@ -255,7 +255,7 @@ func TestGuardianReviewOmitsOptionalEvidenceToFitCompleteRequestLikeRust(t *test
 			return &model.AgentResponse{Message: guardianDecisionDurationAssessment}, nil
 		}),
 		store: state.NewReviewStore(),
-		transcriptSelection: func(string) guardianTranscriptSelection {
+		transcriptSelection: func(string, guardianTranscriptBudgeting) guardianTranscriptSelection {
 			return guardianTranscriptSelection{Entries: guardianBudgetTestEntries("")}
 		},
 	}
@@ -280,7 +280,7 @@ func TestGuardianReviewOmitsOptionalEvidenceToFitCompleteRequestLikeRust(t *test
 			return &model.AgentResponse{Message: guardianDecisionDurationAssessment}, nil
 		}),
 		store: state.NewReviewStore(),
-		transcriptSelection: func(string) guardianTranscriptSelection {
+		transcriptSelection: func(string, guardianTranscriptBudgeting) guardianTranscriptSelection {
 			return guardianTranscriptSelection{Entries: guardianBudgetTestEntries(commentary)}
 		},
 	}
@@ -326,7 +326,7 @@ func TestGuardianReviewRejectsRequiredEvidenceOverBudgetLikeRust(t *testing.T) {
 			return &model.AgentResponse{Message: guardianDecisionDurationAssessment}, nil
 		}),
 		store: state.NewReviewStore(),
-		transcriptSelection: func(string) guardianTranscriptSelection {
+		transcriptSelection: func(string, guardianTranscriptBudgeting) guardianTranscriptSelection {
 			return guardianTranscriptSelection{Entries: guardianBudgetTestEntries("")}
 		},
 		// Rust #44569: a review the policy requires stays closed to approval when

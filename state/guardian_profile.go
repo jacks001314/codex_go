@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	codexctx "codex_go/context"
 	"codex_go/utils"
 )
 
@@ -336,6 +337,52 @@ type transcriptProfileEntry struct {
 	retainedBytes int
 }
 
+// renderTranscriptText numbers and attributes one prepared evidence entry.
+// Both budgeting modes share it so a deferred allocation sees the exact text a
+// fixed request would have rendered (Rust guardian-context, #60498).
+func (p ContextProfile) renderTranscriptText(entry TranscriptEvidenceEntry, number int) (string, int) {
+	role := strings.TrimSpace(entry.Role)
+	if role == "" {
+		role = entry.Kind.defaultRole()
+	}
+	suffix := ""
+	if p.Target == ContextTargetAsync {
+		suffix = "\n"
+	}
+	text := fmt.Sprintf("[%d] %s: %s%s", number, role, entry.Text, suffix)
+	tokens := entry.Tokens
+	if tokens <= 0 {
+		tokens = utils.ApproxTokenCount(text)
+	}
+	return text, tokens
+}
+
+// RenderTranscriptForBudgeting applies one profile and budgeting mode to the
+// prepared evidence (Rust guardian-context prepare_transcript_for_budgeting,
+// #60498). Fixed keeps the entry and aggregate selection RenderTranscript
+// applies. Elastic keeps every captured entry so the configured allocation
+// decides which whole entries survive; both reviewer profiles share it and no
+// omission note is reported before that allocation runs.
+func (p ContextProfile) RenderTranscriptForBudgeting(
+	entries []TranscriptEvidenceEntry,
+	entryNumberOffset int,
+	budgeting codexctx.GuardianContextBudgeting,
+) RenderedTranscript {
+	if budgeting != codexctx.GuardianContextBudgetingElastic {
+		return p.RenderTranscript(entries, entryNumberOffset)
+	}
+	rendered := RenderedTranscript{
+		Indices: make([]int, 0, len(entries)),
+		Items:   make([]string, 0, len(entries)),
+	}
+	for index, entry := range entries {
+		text, _ := p.renderTranscriptText(entry, index+entryNumberOffset+1)
+		rendered.Indices = append(rendered.Indices, index)
+		rendered.Items = append(rendered.Items, text)
+	}
+	return rendered
+}
+
 // RenderTranscript applies the profile's sync or async retention policy without
 // advancing the host's full/delta cursor. The host supplies the collected slice
 // and original offset; empty placeholders remain a host concern.
@@ -343,19 +390,7 @@ func (p ContextProfile) RenderTranscript(entries []TranscriptEvidenceEntry, entr
 	profileEntries := make([]transcriptProfileEntry, 0, len(entries))
 	for index, entry := range entries {
 		number := index + entryNumberOffset + 1
-		role := strings.TrimSpace(entry.Role)
-		if role == "" {
-			role = entry.Kind.defaultRole()
-		}
-		suffix := ""
-		if p.Target == ContextTargetAsync {
-			suffix = "\n"
-		}
-		text := fmt.Sprintf("[%d] %s: %s%s", number, role, entry.Text, suffix)
-		tokens := entry.Tokens
-		if tokens <= 0 {
-			tokens = utils.ApproxTokenCount(text)
-		}
+		text, tokens := p.renderTranscriptText(entry, number)
 		profileEntries = append(profileEntries, transcriptProfileEntry{
 			kind:          entry.Kind,
 			tokens:        tokens,

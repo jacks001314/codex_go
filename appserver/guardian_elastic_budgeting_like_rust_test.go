@@ -109,7 +109,7 @@ func TestGuardianSynchronousReviewUsesElasticBudgetingLikeRust(t *testing.T) {
 			Text: fmt.Sprintf("%d %s", index, strings.Repeat("tool evidence ", 80)),
 		})
 	}
-	reviewer.transcriptSelection = func(string) guardianTranscriptSelection {
+	reviewer.transcriptSelection = func(string, guardianTranscriptBudgeting) guardianTranscriptSelection {
 		return guardianTranscriptSelection{Entries: entries}
 	}
 	reviewer.syncImageContextWindow = func(string, string) (int64, bool) { return 50_000, true }

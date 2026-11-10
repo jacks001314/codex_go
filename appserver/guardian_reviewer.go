@@ -207,7 +207,7 @@ type modelGuardianReviewer struct {
 	// transcriptSelection carries the profile-retained host-attributed entries,
 	// including native encrypted agent messages that cannot be rendered as text
 	// (#49038), plus the retention omission and truncation observations.
-	transcriptSelection func(threadID string) guardianTranscriptSelection
+	transcriptSelection func(threadID string, budgeting guardianTranscriptBudgeting) guardianTranscriptSelection
 	transcriptFormat    func(threadID string) state.GuardianTranscriptFormat
 	// feedbackCaptureEnabled gates the bounded failed-review records exported
 	// by log-enabled feedback uploads (#41936): ephemeral threads and disabled
@@ -1467,7 +1467,7 @@ reviewAttempt:
 		transcriptFormat = r.transcriptFormat(threadID)
 	}
 	if r.transcriptSelection != nil {
-		selection := r.transcriptSelection(threadID)
+		selection := r.transcriptSelection(threadID, guardianTranscriptBudgetingFixed)
 		transcriptEntries = selection.Entries
 		transcriptOmissionNote = selection.OmissionNote
 		transcript = state.RenderGuardianTranscript(transcriptEntries, transcriptFormat)
@@ -1572,13 +1572,23 @@ reviewAttempt:
 	elasticMaxTokens := int64(0)
 	buildPrompt := func() error {
 		entries := transcriptEntries
-		if entries == nil && contextBudgeting == codexctx.GuardianContextBudgetingElastic {
-			entries = make([]state.GuardianTranscriptEntry, 0, len(transcript))
-			for _, line := range transcript {
-				entries = append(entries, state.GuardianTranscriptEntry{Text: line})
-			}
-		}
+		options := buildOptions
 		if contextBudgeting == codexctx.GuardianContextBudgetingElastic {
+			// Rust #60498: elastic preparation keeps the captured originals so
+			// the configured allocation decides which whole entries survive.
+			if r.transcriptSelection != nil {
+				selection := r.transcriptSelection(threadID, guardianTranscriptBudgetingElastic)
+				entries = selection.Entries
+				if omittedCallID != "" {
+					entries = state.GuardianTranscriptWithoutProposedCall(entries, omittedCallID)
+				}
+				options.TranscriptOmissionNote = selection.OmissionNote
+			} else if entries == nil {
+				entries = make([]state.GuardianTranscriptEntry, 0, len(transcript))
+				for _, line := range transcript {
+					entries = append(entries, state.GuardianTranscriptEntry{Text: line})
+				}
+			}
 			if elasticBudgetErr != nil {
 				return elasticBudgetErr
 			}
@@ -1589,7 +1599,7 @@ reviewAttempt:
 			promptParts, promptCosts, buildErr = state.BuildGuardianElasticPromptPartsWithSectionCosts(
 				action,
 				entries,
-				buildOptions,
+				options,
 				*elasticBudget,
 				state.GuardianElasticRequestBudget{
 					MaxInputTokens:        guardianBudgetInt(elasticMaxTokens),
@@ -2498,6 +2508,20 @@ func (r *RuntimeRouter) guardianNativeMultiAgentNamespace(threadID string) strin
 	return "functions"
 }
 
+// guardianTranscriptBudgeting is the request policy a transcript selection is
+// prepared for (Rust guardian-context ContextBudgeting, #60498). Fixed applies
+// entry caps and aggregate retention; Elastic keeps the captured originals for
+// the configured allocation.
+type guardianTranscriptBudgeting = codexctx.GuardianContextBudgeting
+
+const (
+	// guardianTranscriptBudgetingFixed applies the per-section request caps.
+	guardianTranscriptBudgetingFixed = codexctx.GuardianContextBudgetingFixed
+	// guardianTranscriptBudgetingElastic defers entry caps and selection to the
+	// configured allocation.
+	guardianTranscriptBudgetingElastic = codexctx.GuardianContextBudgetingElastic
+)
+
 // guardianTranscriptSelection is the host-selected, profile-retained transcript
 // plus the retention notices that must accompany the prompt (#43806).
 type guardianTranscriptSelection struct {
@@ -2560,9 +2584,87 @@ func guardianTranscriptRetainedSource(
 }
 
 // guardianReviewTranscriptSelection collects the full host snapshot, applies
-// the shared synchronous profile's per-entry caps and aggregate retention, and
+// the shared synchronous profile's request caps and aggregate retention, and
 // preserves original entry numbering for JSON records (#43806, #51465).
 func (r *RuntimeRouter) guardianReviewTranscriptSelection(threadID string) guardianTranscriptSelection {
+	return r.guardianReviewTranscriptSelectionWithProfile(threadID, r.guardianReviewTranscriptProfile(threadID))
+}
+
+// guardianTranscriptCapKind selects the request entry limit that bounds one
+// collected text entry (Rust guardian-context prepare_fixed_content, #60498).
+type guardianTranscriptCapKind int
+
+const (
+	// guardianTranscriptCapNone keeps user messages and manual approvals
+	// complete until the final complete-request budget (#44570).
+	guardianTranscriptCapNone guardianTranscriptCapKind = iota
+	// guardianTranscriptCapMessage bounds ordinary messages.
+	guardianTranscriptCapMessage
+	// guardianTranscriptCapTool bounds tool calls and outputs.
+	guardianTranscriptCapTool
+	// guardianTranscriptCapNodeRepl bounds node_repl backed tool output.
+	guardianTranscriptCapNodeRepl
+)
+
+// guardianNativeEntryKind selects the fixed entry cap a native payload follows.
+type guardianNativeEntryKind int
+
+const (
+	// guardianNativeEntryText marks evidence whose cap applies to its text.
+	guardianNativeEntryText guardianNativeEntryKind = iota
+	// guardianNativeEntryProtectedMessage is an encrypted agent message, capped
+	// by the message entry limit (#49038, #57241).
+	guardianNativeEntryProtectedMessage
+	// guardianNativeEntryToolCall is a native MAv2 function call, capped by the
+	// tool entry limit (#57448).
+	guardianNativeEntryToolCall
+)
+
+// guardianCollectedTranscriptEntry captures one transcript item before any
+// request policy applies. Rust #60498 keeps collection free of entry caps,
+// native-message omission and heartbeat compression so the caller's profile and
+// budgeting mode decide what the request delivers.
+type guardianCollectedTranscriptEntry struct {
+	entry    state.GuardianTranscriptEntry
+	evidence state.TranscriptEvidenceEntry
+	// nativeKind and nativeSize describe a native payload that fixed
+	// preparation may replace with an omission notice at the same position.
+	nativeKind guardianNativeEntryKind
+	nativeSize int
+	// capKind resolves the entry limit applied during fixed preparation.
+	capKind guardianTranscriptCapKind
+}
+
+// guardianReviewTranscriptSelectionWithProfile applies a caller-resolved
+// profile to one host snapshot, so synchronous and asynchronous consumers share
+// the same collection and preparation path (#41422, #43806, #60498).
+func (r *RuntimeRouter) guardianReviewTranscriptSelectionWithProfile(threadID string, profile state.ContextProfile) guardianTranscriptSelection {
+	return prepareGuardianTranscriptSelection(
+		r.guardianCollectTranscriptWithProfile(threadID, profile),
+		profile,
+		codexctx.GuardianContextBudgetingFixed,
+	)
+}
+
+// guardianReviewTranscriptSelectionForBudgeting prepares the same host snapshot
+// for the caller's budgeting mode, so an elastic reviewer receives captured
+// originals instead of evidence the fixed request policy already shortened.
+func (r *RuntimeRouter) guardianReviewTranscriptSelectionForBudgeting(
+	threadID string,
+	budgeting codexctx.GuardianContextBudgeting,
+) guardianTranscriptSelection {
+	profile := r.guardianReviewTranscriptProfile(threadID)
+	return prepareGuardianTranscriptSelection(
+		r.guardianCollectTranscriptWithProfile(threadID, profile),
+		profile,
+		budgeting,
+	)
+}
+
+// guardianReviewTranscriptProfile resolves the synchronous reviewer transcript
+// profile for one thread: the entry limits and options the host snapshot uses
+// before any budgeting mode applies.
+func (r *RuntimeRouter) guardianReviewTranscriptProfile(threadID string) state.ContextProfile {
 	profile := state.SynchronousContextProfile()
 	// Rust #57176 resolves the node_repl output cap from the turn's evidence
 	// mode before transcript preparation; a disabled evidence mode keeps the
@@ -2571,16 +2673,16 @@ func (r *RuntimeRouter) guardianReviewTranscriptSelection(threadID string) guard
 	// Rust #57448 resolves the native MAv2 namespace from the reviewed turn, so
 	// only an enabled feature on a V2 turn preserves native calls.
 	profile.Transcript.Options.NativeMultiAgentNamespace = r.guardianNativeMultiAgentNamespace(threadID)
-	return r.guardianReviewTranscriptSelectionWithProfile(threadID, profile)
+	return profile
 }
 
-// guardianReviewTranscriptSelectionWithProfile applies a caller-resolved
-// profile to one host snapshot, so synchronous and asynchronous consumers share
-// the same collection and retention path (#41422, #43806).
-func (r *RuntimeRouter) guardianReviewTranscriptSelectionWithProfile(threadID string, profile state.ContextProfile) guardianTranscriptSelection {
+// guardianCollectTranscriptWithProfile captures original transcript entries
+// without applying request entry caps, native omission or heartbeat
+// compression (Rust guardian-context collection, #60498).
+func (r *RuntimeRouter) guardianCollectTranscriptWithProfile(threadID string, profile state.ContextProfile) []guardianCollectedTranscriptEntry {
 	record, err := r.threadRecord(session.ThreadID(strings.TrimSpace(threadID)), true, true)
 	if err != nil || record == nil {
-		return guardianTranscriptSelection{}
+		return nil
 	}
 	items := r.guardianReviewHistoryItems(threadID, record)
 	retainedContext := r.guardianRetainedContextForTurn(threadID, "")
@@ -2593,8 +2695,7 @@ func (r *RuntimeRouter) guardianReviewTranscriptSelectionWithProfile(threadID st
 			}
 		}
 	}
-	entries := make([]state.GuardianTranscriptEntry, 0, len(items))
-	evidence := make([]state.TranscriptEvidenceEntry, 0, len(items))
+	collected := make([]guardianCollectedTranscriptEntry, 0, len(items))
 	seenNativeAgentMessageIDs := map[string][]byte{}
 	for i := range items {
 		item := items[i]
@@ -2606,8 +2707,8 @@ func (r *RuntimeRouter) guardianReviewTranscriptSelectionWithProfile(threadID st
 			continue
 		}
 		// Rust #49038: encrypted agent messages carry evidence such as a
-		// parent reply. They cannot be truncated, so the complete native item
-		// is delivered in order, or replaced whole by an omission notice.
+		// parent reply. The ciphertext stays whole; fixed preparation decides
+		// whether it fits the message entry limit or becomes an omission notice.
 		if native, ok := guardianNativeAgentMessage(&item); ok {
 			if id := strings.TrimSpace(item.ID); id != "" {
 				if previous, duplicate := seenNativeAgentMessageIDs[id]; duplicate {
@@ -2620,70 +2721,41 @@ func (r *RuntimeRouter) guardianReviewTranscriptSelectionWithProfile(threadID st
 				}
 				seenNativeAgentMessageIDs[id] = append([]byte(nil), native...)
 			}
-			// Rust #57241: encrypted agent messages use the configured message
-			// entry cap directly instead of a hard-coded 9,000-token ceiling, so a
-			// larger configured limit admits larger native items. The whole item
-			// still becomes an omission notice at the same position when it exceeds
-			// the budget.
-			if len(native) > utils.ApproxBytesForTokens(profile.Transcript.EntryLimits.MessageTokens) {
-				entries = append(entries, state.GuardianTranscriptEntry{
-					Author:   "assistant",
-					LineRole: "assistant",
-					Text:     guardianTranscriptOmissionNotice,
-				})
-				evidence = append(evidence, state.TranscriptEvidenceEntry{
-					Kind:          state.GuardianTranscriptProtectedMessage,
-					Role:          "assistant",
-					Text:          guardianTranscriptOmissionNotice,
-					OriginalBytes: 0,
-				})
-			} else {
-				entries = append(entries, state.GuardianTranscriptEntry{Author: "assistant", Native: native})
-				// Native ciphertext cannot be text-truncated or rendered. Charge
-				// its serialized cost to the protected-message pool so retention
-				// still bounds the total evidence, while keeping it out of the
-				// async text-truncation observations.
-				evidence = append(evidence, state.TranscriptEvidenceEntry{
-					Kind:   state.GuardianTranscriptProtectedMessage,
-					Role:   "assistant",
-					Tokens: utils.ApproxTokenCount(string(native)),
-				})
-			}
+			collected = append(collected, guardianCollectedTranscriptEntry{
+				entry:    state.GuardianTranscriptEntry{Author: "assistant", Native: native},
+				evidence: state.TranscriptEvidenceEntry{Kind: state.GuardianTranscriptProtectedMessage, Role: "assistant", Tokens: utils.ApproxTokenCount(string(native))},
+				// Native ciphertext cannot be text-truncated or rendered. Its
+				// serialized cost stays out of async text-truncation
+				// observations, so the cap decision uses nativeSize instead.
+				nativeKind: guardianNativeEntryProtectedMessage,
+				nativeSize: len(native),
+				capKind:    guardianTranscriptCapNone,
+			})
 			continue
 		}
 		// Rust #57448: an enabled native MAv2 history keeps the complete
-		// function call so the backend can decrypt it, or replaces the whole
-		// item with an omission notice when it exceeds the tool-entry cap.
+		// function call so the backend can decrypt it, or fixed preparation
+		// replaces the whole item with an omission notice at the same position.
 		if native, ok := guardianNativeMultiAgentCall(&item, profile.Transcript.Options.NativeMultiAgentNamespace); ok {
 			name := guardianNativeFunctionCallName(&item)
 			lineRole := "tool " + name + " call"
-			if state.GuardianNativeFunctionCallTokens(native) <= min(profile.Transcript.EntryLimits.ToolTokens, guardianNativeToolCallTokenLimit) {
-				entries = append(entries, state.GuardianTranscriptEntry{
+			collected = append(collected, guardianCollectedTranscriptEntry{
+				entry: state.GuardianTranscriptEntry{
 					Author:   "tool",
 					Label:    name,
 					LineRole: lineRole,
 					Native:   native,
-				})
-				evidence = append(evidence, state.TranscriptEvidenceEntry{
+				},
+				evidence: state.TranscriptEvidenceEntry{
 					Kind:          state.GuardianTranscriptTool,
 					Role:          lineRole,
 					Tokens:        state.GuardianNativeFunctionCallTokens(native),
 					OriginalBytes: len(native),
-				})
-			} else {
-				entries = append(entries, state.GuardianTranscriptEntry{
-					Author:   "tool",
-					Label:    name,
-					LineRole: lineRole,
-					Text:     guardianTranscriptOmissionNotice,
-				})
-				evidence = append(evidence, state.TranscriptEvidenceEntry{
-					Kind:          state.GuardianTranscriptTool,
-					Role:          lineRole,
-					Text:          guardianTranscriptOmissionNotice,
-					OriginalBytes: len(native),
-				})
-			}
+				},
+				nativeKind: guardianNativeEntryToolCall,
+				nativeSize: len(native),
+				capKind:    guardianTranscriptCapNone,
+			})
 			continue
 		}
 		text := strings.TrimSpace(item.Text)
@@ -2712,23 +2784,25 @@ func (r *RuntimeRouter) guardianReviewTranscriptSelectionWithProfile(threadID st
 			if !include {
 				continue
 			}
-			tokenLimit := profile.Transcript.EntryLimits.ToolTokens
+			capKind := guardianTranscriptCapTool
 			if mcp.IsNodeReplBackedServer(strings.TrimSpace(item.Namespace)) ||
 				mcp.IsNodeReplBackedServer(strings.TrimSpace(item.Name)) {
-				tokenLimit = profile.Transcript.EntryLimits.NodeReplOutputTokens
+				capKind = guardianTranscriptCapNodeRepl
 			}
-			limited, _ := truncateGuardianTranscriptEntry(text, tokenLimit)
-			entries = append(entries, state.GuardianTranscriptEntry{
-				Author:   "tool",
-				Label:    label,
-				LineRole: lineRole,
-				Text:     limited,
-			})
-			evidence = append(evidence, state.TranscriptEvidenceEntry{
-				Kind:          state.GuardianTranscriptTool,
-				Role:          lineRole,
-				Text:          limited,
-				OriginalBytes: len(text),
+			collected = append(collected, guardianCollectedTranscriptEntry{
+				entry: state.GuardianTranscriptEntry{
+					Author:   "tool",
+					Label:    label,
+					LineRole: lineRole,
+					Text:     text,
+				},
+				evidence: state.TranscriptEvidenceEntry{
+					Kind:          state.GuardianTranscriptTool,
+					Role:          lineRole,
+					Text:          text,
+					OriginalBytes: len(text),
+				},
+				capKind: capKind,
 			})
 			continue
 		}
@@ -2738,15 +2812,15 @@ func (r *RuntimeRouter) guardianReviewTranscriptSelectionWithProfile(threadID st
 		}
 		if guardianTranscriptIsCompactionSummary(&item) {
 			// Rust #54281: local compaction stores generated summaries with the
-			// `user` wire role, but a summary is not user authorization, so the
+			// "user" wire role, but a summary is not user authorization, so the
 			// transcript attributes it to the assistant while real user
 			// messages keep their attribution.
 			role = "assistant"
 		}
 		kind := guardianTranscriptKindForItem(&item, role)
-		tokenLimit := profile.Transcript.EntryLimits.MessageTokens
+		capKind := guardianTranscriptCapMessage
 		if kind == state.GuardianTranscriptTool {
-			tokenLimit = profile.Transcript.EntryLimits.ToolTokens
+			capKind = guardianTranscriptCapTool
 			nodeRepl := mcp.IsNodeReplBackedServer(strings.TrimSpace(item.Namespace)) ||
 				mcp.IsNodeReplBackedServer(strings.TrimSpace(item.Name))
 			if !nodeRepl {
@@ -2756,45 +2830,37 @@ func (r *RuntimeRouter) guardianReviewTranscriptSelectionWithProfile(threadID st
 				}
 			}
 			if nodeRepl {
-				tokenLimit = profile.Transcript.EntryLimits.NodeReplOutputTokens
+				capKind = guardianTranscriptCapNodeRepl
 			}
 		}
 		// Rust #44570 keeps user messages and manual approvals complete through
-		// transcript collection. They may be shortened only by the final
+		// transcript preparation. They may be shortened only by the final
 		// complete-request budget so a later instruction is not lost first.
-		limited, truncated := text, false
-		if kind != state.GuardianTranscriptUser && kind != state.GuardianTranscriptManualApproval {
-			limited, truncated = truncateGuardianTranscriptEntry(text, tokenLimit)
+		if kind == state.GuardianTranscriptUser || kind == state.GuardianTranscriptManualApproval {
+			capKind = guardianTranscriptCapNone
 		}
 		var retainedSource *retainedctx.RetainedSource
 		var retainedOrder string
 		if kind == state.GuardianTranscriptUser {
-			retainedSource, retainedOrder = guardianTranscriptRetainedSource(retainedContext, &item, i, truncated, profile.Target)
+			retainedSource, retainedOrder = guardianTranscriptRetainedSource(retainedContext, &item, i, false, profile.Target)
+		}
+		entry := state.GuardianTranscriptEntry{
+			Author:              guardianTranscriptAuthor(role),
+			RetainedSourceOrder: retainedOrder,
+			RetainedSource:      retainedSource,
+			Text:                text,
 		}
 		if role != "" {
-			entries = append(entries, state.GuardianTranscriptEntry{
-				Author:              guardianTranscriptAuthor(role),
-				Label:               guardianTranscriptLabel(role),
-				LineRole:            role,
-				RetainedSourceOrder: retainedOrder,
-				RetainedSource:      retainedSource,
-				Text:                limited,
-			})
-		} else {
-			entries = append(entries, state.GuardianTranscriptEntry{
-				Author:              guardianTranscriptAuthor(role),
-				RetainedSourceOrder: retainedOrder,
-				RetainedSource:      retainedSource,
-				Text:                limited,
-			})
+			entry.Label = guardianTranscriptLabel(role)
+			entry.LineRole = role
 		}
 		label := guardianTranscriptLabel(role)
 		if label == "" {
 			label = role
 		}
-		// Rust #57519: keep scheduler provenance on the collected entry. Sync
-		// compression runs over the complete transcript before suffix selection;
-		// async consumers compress during this collection pass.
+		// Rust #57519: keep scheduler provenance on the collected entry.
+		// Compression runs during preparation over the complete snapshot, so
+		// full and delta requests keep absolute reference numbers.
 		scheduled := false
 		var heartbeat *state.TranscriptHeartbeat
 		if kind == state.GuardianTranscriptUser {
@@ -2810,19 +2876,48 @@ func (r *RuntimeRouter) guardianReviewTranscriptSelectionWithProfile(threadID st
 				}
 			}
 		}
-		evidence = append(evidence, state.TranscriptEvidenceEntry{
-			Kind:          kind,
-			Role:          label,
-			Text:          limited,
-			OriginalBytes: len(text),
-			Scheduled:     scheduled,
-			Heartbeat:     heartbeat,
+		collected = append(collected, guardianCollectedTranscriptEntry{
+			entry: entry,
+			evidence: state.TranscriptEvidenceEntry{
+				Kind:          kind,
+				Role:          label,
+				Text:          text,
+				OriginalBytes: len(text),
+				Scheduled:     scheduled,
+				Heartbeat:     heartbeat,
+			},
+			capKind: capKind,
 		})
 	}
+	return collected
+}
+
+// prepareGuardianTranscriptSelection turns captured evidence into the request
+// transcript for one profile and budgeting mode (Rust prepare_context, #60498).
+// Heartbeat compression and fixed entry caps run here, after collection, so a
+// later delta offset still references absolute entry numbers. Elastic
+// preparation keeps every captured entry so the configured allocation decides
+// what is delivered.
+func prepareGuardianTranscriptSelection(
+	collected []guardianCollectedTranscriptEntry,
+	profile state.ContextProfile,
+	budgeting codexctx.GuardianContextBudgeting,
+) guardianTranscriptSelection {
+	if collected == nil {
+		// Collection reports a missing thread record as nil so callers keep the
+		// zero-value selection instead of an empty transcript (#60498).
+		return guardianTranscriptSelection{}
+	}
+	entries := make([]state.GuardianTranscriptEntry, 0, len(collected))
+	evidence := make([]state.TranscriptEvidenceEntry, 0, len(collected))
+	for _, item := range collected {
+		entries = append(entries, item.entry)
+		evidence = append(evidence, item.evidence)
+	}
 	state.CompressGuardianTranscriptHeartbeats(evidence, 0)
-	// Collection keeps entries and evidence parallel; mirror compressed scheduler
-	// text onto the host-attributed entries the prompt renders. Native entries
-	// carry ciphertext instead of text and are never scheduler messages.
+	// Entries and evidence stay parallel; mirror compressed scheduler text onto
+	// the host-attributed entries the prompt renders. Native entries carry
+	// ciphertext instead of text and are never scheduler messages.
 	for index := range entries {
 		if len(entries[index].Native) == 0 {
 			// Rust clears an asynchronous scheduled copy's source when heartbeat
@@ -2836,7 +2931,10 @@ func (r *RuntimeRouter) guardianReviewTranscriptSelectionWithProfile(threadID st
 		}
 		entries[index].Async = profile.Target == state.ContextTargetAsync
 	}
-	rendered := profile.RenderTranscript(evidence, 0)
+	if budgeting == codexctx.GuardianContextBudgetingFixed {
+		applyGuardianFixedTranscriptCaps(collected, entries, evidence, profile)
+	}
+	rendered := profile.RenderTranscriptForBudgeting(evidence, 0, budgeting)
 	retained := make([]state.GuardianTranscriptEntry, 0, len(rendered.Indices))
 	for _, index := range rendered.Indices {
 		entry := entries[index]
@@ -2850,6 +2948,71 @@ func (r *RuntimeRouter) guardianReviewTranscriptSelectionWithProfile(threadID st
 		Entries:      retained,
 		OmissionNote: rendered.OmissionNote,
 		Truncations:  rendered.Truncations,
+	}
+}
+
+// applyGuardianFixedTranscriptCaps applies the request-time entry caps Rust
+// guardian-context prepare_fixed_content owns (#60498): non-authorization text
+// is truncated to the profile entry limit and an oversized native payload
+// becomes an omission notice at the same position.
+func applyGuardianFixedTranscriptCaps(
+	collected []guardianCollectedTranscriptEntry,
+	entries []state.GuardianTranscriptEntry,
+	evidence []state.TranscriptEvidenceEntry,
+	profile state.ContextProfile,
+) {
+	limits := profile.Transcript.EntryLimits
+	for index := range collected {
+		item := collected[index]
+		switch item.nativeKind {
+		case guardianNativeEntryProtectedMessage:
+			// Rust #57241: encrypted agent messages use the configured message
+			// entry cap directly instead of a hard-coded 9,000-token ceiling, so
+			// a larger configured limit admits larger native items.
+			if item.nativeSize > utils.ApproxBytesForTokens(limits.MessageTokens) {
+				entries[index] = state.GuardianTranscriptEntry{
+					Author:   "assistant",
+					LineRole: "assistant",
+					Text:     guardianTranscriptOmissionNotice,
+				}
+				evidence[index] = state.TranscriptEvidenceEntry{
+					Kind: state.GuardianTranscriptProtectedMessage,
+					Role: "assistant",
+					Text: guardianTranscriptOmissionNotice,
+				}
+			}
+			continue
+		case guardianNativeEntryToolCall:
+			if state.GuardianNativeFunctionCallTokens(entries[index].Native) > min(limits.ToolTokens, guardianNativeToolCallTokenLimit) {
+				lineRole := entries[index].LineRole
+				entries[index] = state.GuardianTranscriptEntry{
+					Author:   entries[index].Author,
+					Label:    entries[index].Label,
+					LineRole: lineRole,
+					Text:     guardianTranscriptOmissionNotice,
+				}
+				evidence[index] = state.TranscriptEvidenceEntry{
+					Kind:          state.GuardianTranscriptTool,
+					Role:          lineRole,
+					Text:          guardianTranscriptOmissionNotice,
+					OriginalBytes: item.nativeSize,
+				}
+			}
+			continue
+		}
+		if item.capKind == guardianTranscriptCapNone {
+			continue
+		}
+		limit := limits.MessageTokens
+		switch item.capKind {
+		case guardianTranscriptCapTool:
+			limit = limits.ToolTokens
+		case guardianTranscriptCapNodeRepl:
+			limit = limits.NodeReplOutputTokens
+		}
+		limited, _ := truncateGuardianTranscriptEntry(evidence[index].Text, limit)
+		evidence[index].Text = limited
+		entries[index].Text = limited
 	}
 }
 
@@ -3730,7 +3893,7 @@ func (r *modelGuardianReviewer) guardianReviewContextChanged(threadID, turnID st
 		return false
 	}
 	if r.transcriptSelection != nil {
-		selection := r.transcriptSelection(threadID)
+		selection := r.transcriptSelection(threadID, guardianTranscriptBudgetingFixed)
 		// The proposed call is part of the plan, not a context change, so both
 		// sides of the comparison drop it.
 		fresh := state.GuardianTranscriptWithoutProposedCall(selection.Entries, omittedCallID)

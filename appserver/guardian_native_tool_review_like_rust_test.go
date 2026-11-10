@@ -128,7 +128,7 @@ func TestNativeToolGuardianReviewSuppressesClientEventsLikeRust(t *testing.T) {
 		logAssessment: func(_ string, event *state.Event) {
 			assessed = append(assessed, event.ID)
 		},
-		transcriptSelection: func(string) guardianTranscriptSelection {
+		transcriptSelection: func(string, guardianTranscriptBudgeting) guardianTranscriptSelection {
 			return guardianTranscriptSelection{Entries: []state.GuardianTranscriptEntry{
 				{Index: 0, Author: "user", LineRole: "user", Text: "Please send it."},
 				{Index: 1, Label: "tool send_message call", Native: call},
