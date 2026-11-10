@@ -1636,13 +1636,13 @@ func (s *ProxyServer) dialSOCKS5Target(ctx context.Context, network string, addr
 		if err != nil {
 			return nil, err
 		}
-		conn, err := s.dialCheckedTarget(ctx, network, address)
+		conn, err := s.dialCheckedTargetForProtocol(ctx, network, address, ProxyProtocolSocks5UDP)
 		if err != nil {
 			return nil, err
 		}
 		return &proxyPolicyUDPConn{Conn: conn, server: s, host: host, port: uint16(port)}, nil
 	}
-	return s.dialCheckedTarget(ctx, network, address)
+	return s.dialCheckedTargetForProtocol(ctx, network, address, ProxyProtocolSocks5TCP)
 }
 
 type proxyPolicyUDPConn struct {
@@ -1675,7 +1675,13 @@ func (c *proxyPolicyUDPConn) Write(payload []byte) (int, error) {
 	return c.Conn.Write(payload)
 }
 
+// dialCheckedTarget dials a CONNECT-side target: the HTTP transport and the
+// MITM forwarder both go through it.
 func (s *ProxyServer) dialCheckedTarget(ctx context.Context, network string, address string) (net.Conn, error) {
+	return s.dialCheckedTargetForProtocol(ctx, network, address, ProxyProtocolHTTP)
+}
+
+func (s *ProxyServer) dialCheckedTargetForProtocol(ctx context.Context, network string, address string, protocol ProxyProtocol) (net.Conn, error) {
 	policy := s.runtimePolicy()
 	settings := policy.settings
 	host, port, err := net.SplitHostPort(address)
@@ -1705,6 +1711,13 @@ func (s *ProxyServer) dialCheckedTarget(ctx context.Context, network string, add
 			lastErr = fmt.Errorf("network target rejected by policy")
 			continue
 		}
+		// Rust #60523: allowing a hostname must not bypass deny or review rules
+		// written against the addresses it resolves to. A blocked resolution is
+		// reported as a policy denial and the remaining addresses are skipped.
+		if reason := s.resolvedAddressPolicyReason(ctx, protocol, host, port, resolved.IP); reason != "" {
+			lastErr = fmt.Errorf("network target rejected by policy: %s", reason)
+			continue
+		}
 		resolvedHost := resolved.IP.String()
 		if resolved.Zone != "" {
 			resolvedHost += "%" + resolved.Zone
@@ -1719,6 +1732,82 @@ func (s *ProxyServer) dialCheckedTarget(ctx context.Context, network string, add
 		lastErr = fmt.Errorf("no addresses resolved for %s", host)
 	}
 	return nil, lastErr
+}
+
+// resolvedAddressPolicyReason applies destination-scoped deny and review rules
+// to an address the proxy is about to dial (Rust #60523). The audit entry names
+// the requested host, so a denial caused by a resolved address stays
+// attributable to the request that triggered it.
+func (s *ProxyServer) resolvedAddressPolicyReason(ctx context.Context, protocol ProxyProtocol, host string, portText string, ip net.IP) string {
+	if s == nil || ip == nil {
+		return ""
+	}
+	policy := s.runtimePolicy()
+	if policy == nil || (policy.denyMatcher == nil && policy.reviewMatcher == nil) {
+		return ""
+	}
+	port := uint16(0)
+	if parsed, err := strconv.ParseUint(strings.TrimSpace(portText), 10, 16); err == nil {
+		port = uint16(parsed)
+	}
+	request := ProxyPolicyRequest{
+		Protocol:      protocol,
+		Host:          NormalizeProxyHost(host),
+		Port:          port,
+		EnvironmentID: s.environmentID,
+	}
+	for _, spelling := range proxyIPSpellings(ip) {
+		if policy.denyMatcher != nil && policy.denyMatcher.Match(spelling) {
+			decision := DenyProxyDecisionWithSource(ProxyReasonDenied, ProxyDecisionSourceBaselinePolicy)
+			s.emitProxyPolicyAudit(request, decision, false)
+			s.recordBlockedRequest(ctx, request, decision, policy.settings.Mode)
+			return decision.Reason
+		}
+		if policy.reviewMatcher != nil && policy.reviewMatcher.Match(spelling) {
+			// A review rule scoped to this address is not satisfied by an
+			// approval granted for the hostname, so the connection fails closed.
+			decision := DenyProxyDecisionWithSource(ProxyReasonPolicyDenied, ProxyDecisionSourceBaselinePolicy)
+			s.emitProxyPolicyAudit(request, decision, false)
+			s.recordBlockedRequest(ctx, request, decision, policy.settings.Mode)
+			return decision.Reason
+		}
+	}
+	return ""
+}
+
+// proxyIPSpellings lists the textual forms a restrictive rule may use for the
+// same address: the canonical Go form, the four-byte IPv4 form, and the
+// IPv4-mapped IPv6 form, so a rule written as ::ffff:10.0.0.5 also matches a
+// resolved 10.0.0.5.
+func proxyIPSpellings(ip net.IP) []string {
+	if ip == nil {
+		return nil
+	}
+	spellings := []string{ip.String()}
+	if v4 := ip.To4(); v4 != nil {
+		if text := v4.String(); !containsProxySpelling(spellings, text) {
+			spellings = append(spellings, text)
+		}
+		// net.IP.String() renders an IPv4-mapped address as a dotted quad, so
+		// the mapped spelling has to be formatted explicitly.
+		if text := "::ffff:" + v4.String(); !containsProxySpelling(spellings, text) {
+			spellings = append(spellings, text)
+		}
+	} else if v6 := ip.To16(); v6 != nil {
+		if text := v6.String(); !containsProxySpelling(spellings, text) {
+			spellings = append(spellings, text)
+		}
+	}
+	return spellings
+}
+
+func containsProxySpelling(spellings []string, value string) bool {
+	for _, spelling := range spellings {
+		if spelling == value {
+			return true
+		}
+	}
+	return false
 }
 
 func socks5Destination(address *statute.AddrSpec) (string, uint16) {
