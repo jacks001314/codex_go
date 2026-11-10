@@ -488,27 +488,58 @@ func IsAPIMessage(item *HistoryItem) bool {
 	}
 }
 
+// callOutputTypeForCall maps a model-emitted call to the output type Rust's
+// ensure_call_outputs_present pairs it with. A forked or recovered history can
+// restore a call before its output was written, so the caller synthesizes an
+// aborted output instead of leaving the call unpaired (Rust #60519).
+func callOutputTypeForCall(action string) (string, bool) {
+	switch action {
+	case "function_call", "local_shell_call":
+		// Local shell calls are represented upstream by a function_call_output.
+		return "function_call_output", true
+	case "custom_tool_call":
+		return "custom_tool_call_output", true
+	case "tool_search_call":
+		return "tool_search_output", true
+	default:
+		return "", false
+	}
+}
+
+func callOutputKey(action, id string) string {
+	return action + "\x00" + id
+}
+
 func EnsureCallOutputsPresent(items *[]HistoryItem) {
 	if items == nil {
 		return
 	}
 	outputs := map[string]bool{}
 	for _, item := range *items {
-		if item.Kind == eventmap.ResponseOther && item.WebSearchAction == "function_call_output" {
-			outputs[item.ID] = true
+		if item.Kind == eventmap.ResponseOther {
+			outputs[callOutputKey(item.WebSearchAction, item.ID)] = true
 		}
 	}
 	insertions := make([]insertion, 0)
 	for index, item := range *items {
-		if item.Kind != eventmap.ResponseOther || item.WebSearchAction != "function_call" || item.ID == "" || outputs[item.ID] {
+		if item.Kind != eventmap.ResponseOther || item.ID == "" {
 			continue
 		}
-		insertions = append(insertions, insertion{Index: index + 1, Item: HistoryItem{
+		outputType, ok := callOutputTypeForCall(item.WebSearchAction)
+		if !ok || outputs[callOutputKey(outputType, item.ID)] {
+			continue
+		}
+		synthetic := HistoryItem{
 			Kind:            eventmap.ResponseOther,
 			ID:              item.ID,
-			WebSearchAction: "function_call_output",
-			ImageResult:     "aborted",
-		}})
+			WebSearchAction: outputType,
+		}
+		if outputType != "tool_search_output" {
+			// Tool search outputs carry no text payload; the others report the
+			// interrupted work as an aborted result.
+			synthetic.ImageResult = "aborted"
+		}
+		insertions = append(insertions, insertion{Index: index + 1, Item: synthetic})
 	}
 	for i := len(insertions) - 1; i >= 0; i-- {
 		insert := insertions[i]
@@ -522,7 +553,12 @@ func RemoveOrphanOutputs(items *[]HistoryItem) {
 	}
 	calls := map[string]bool{}
 	for _, item := range *items {
-		if item.Kind == eventmap.ResponseOther && item.WebSearchAction == "function_call" {
+		if item.Kind != eventmap.ResponseOther {
+			continue
+		}
+		// Local shell calls are paired with a function_call_output upstream, so
+		// their synthetic or recorded output is not an orphan (Rust #60519).
+		if item.WebSearchAction == "function_call" || item.WebSearchAction == "local_shell_call" {
 			calls[item.ID] = true
 		}
 	}

@@ -45715,15 +45715,17 @@
   {
    "sha": "39b42aaacdbb55b86528b4294443696985c348ee",
    "subject": "Handle unfinished tool calls in restored history (#60519)",
-   "kind": "persistence",
+   "kind": "runtime",
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "本轮未审计落地：恢复历史里未完成的工具调用未合成 aborted 输出",
-    "Go 锚点：state/",
-    "plan: update/plan_2026_11_10.md (#60519)"
+    "context/history.go EnsureCallOutputsPresent 现在按 Rust 的配对关系补齐 synthetic 输出：custom_tool_call -> custom_tool_call_output、local_shell_call -> function_call_output、tool_search_call -> tool_search_output；除 tool search 外都标记 aborted。",
+    "RemoveOrphanOutputs 把 local_shell_call 视为 function_call_output 的 owner，避免刚合成的输出在下一步被当作孤儿删除（Rust 同样以上游的 function_call_output 表示 local shell 结果）。",
+    "新增 TestUnfinishedRestoredCallsGetAbortedOutputsLikeRust 覆盖恢复历史里未完成的 apply_patch（custom_tool_call）、local shell 与 tool search 调用，验证 ForPrompt 输出里每个调用后紧跟配对输出且 apply_patch 为 aborted，即 Rust #60519 的 fork 输入断言。",
+    "TestRecordedCallsKeepTheirOwnOutputs 保证已有输出的调用不会被再合成一份；Go 没有 Rust error_or_panic 的严格校验路径，因此对所有缺输出调用都补 aborted 而不区分 restored_through_sequence。",
+    "Tests: go test ./context ./compact -count=1；go test ./appserver -run 'ApplyPatch|Fork|History'。"
    ]
   },
   {
