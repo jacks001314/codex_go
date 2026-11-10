@@ -13812,6 +13812,29 @@ func (r *RuntimeRouter) mcpCatalogTelemetrySpan(request *Request, threadID strin
 	return span.End
 }
 
+// requestTraceContext carries the request's validated W3C trace context into
+// MCP transports. The active span still wins when tracing is enabled; this
+// fallback keeps traceparent/tracestate on outbound MCP HTTP requests when no
+// tracing layer is installed (Rust #60506). Invalid carriers are dropped, the
+// same way the request span drops them.
+func requestTraceContext(request *Request) context.Context {
+	ctx := context.Background()
+	if request == nil || request.Trace == nil {
+		return ctx
+	}
+	traceparent := strings.TrimSpace(request.Trace.Traceparent)
+	if traceparent == "" {
+		return ctx
+	}
+	if _, ok := telemetry.ParseTraceContext(traceparent, request.Trace.Tracestate); !ok {
+		return ctx
+	}
+	return protocol.WithTraceContext(ctx, &protocol.W3CTraceContext{
+		Traceparent: traceparent,
+		Tracestate:  strings.TrimSpace(request.Trace.Tracestate),
+	})
+}
+
 func (r *RuntimeRouter) handleMCPServerResourceRead(request *Request) (*mcp.MCPResourceReadResponse, error) {
 	var params mcp.MCPResourceReadParams
 	if err := request.DecodeParams(&params); err != nil {
@@ -13822,6 +13845,7 @@ func (r *RuntimeRouter) handleMCPServerResourceRead(request *Request) (*mcp.MCPR
 			return nil, err
 		}
 	}
+	params.Context = requestTraceContext(request)
 	return r.mcpServiceForThread(stringPtrValue(params.ThreadID), nil).ReadResource(&params)
 }
 
@@ -13838,6 +13862,7 @@ func (r *RuntimeRouter) handleMCPServerToolCall(request *Request) (*mcp.MCPToolC
 	if err := r.ensureDirectInputAllowed(request, params.ThreadID); err != nil {
 		return nil, err
 	}
+	params.Context = requestTraceContext(request)
 	return r.mcpServiceForThread(params.ThreadID, nil).CallTool(&params)
 }
 

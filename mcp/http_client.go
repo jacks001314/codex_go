@@ -377,19 +377,28 @@ func callMCPHTTPToolWithClient(ctx context.Context, client *httpClient, serverNa
 
 func readMCPHTTPResource(config *ServerConfig, serverName string, elicitation MCPElicitationHandler, progress MCPProgressHandler, params *MCPResourceReadParams) (*MCPResourceReadResponse, error) {
 	client := newMCPHTTPClient(config)
-	return readMCPHTTPResourceWithClient(client, serverName, nil, elicitation, progress, params)
+	return readMCPHTTPResourceWithClient(nil, client, serverName, nil, elicitation, progress, params)
 }
 
-func readMCPHTTPResourceWithClient(client *httpClient, serverName string, roots []MCPRoot, elicitation MCPElicitationHandler, progress MCPProgressHandler, params *MCPResourceReadParams) (*MCPResourceReadResponse, error) {
+// readMCPHTTPResourceWithClient performs the resources/read call. ctx carries
+// the caller's request context so the outbound request keeps its W3C trace
+// context even when no tracing layer is installed (Rust #60506).
+func readMCPHTTPResourceWithClient(ctx context.Context, client *httpClient, serverName string, roots []MCPRoot, elicitation MCPElicitationHandler, progress MCPProgressHandler, params *MCPResourceReadParams) (*MCPResourceReadResponse, error) {
 	if params == nil || strings.TrimSpace(params.URI) == "" {
 		return nil, invalidMCPRequest("server and uri are required")
+	}
+	if ctx == nil {
+		ctx = params.Context
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	threadID := ""
 	if params != nil && params.ThreadID != nil {
 		threadID = strings.TrimSpace(*params.ThreadID)
 	}
 	var response MCPResourceReadResponse
-	if err := client.CallWithOptions(&httpClientCallOptions{
+	if err := client.CallWithOptionsContext(ctx, &httpClientCallOptions{
 		ServerName:  serverName,
 		ThreadID:    threadID,
 		Roots:       roots,

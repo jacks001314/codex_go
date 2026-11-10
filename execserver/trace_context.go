@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+
+	"codex_go/protocol"
 )
 
 // TraceContext carries a request trace identifier from receipt through
@@ -88,8 +90,17 @@ func traceContextFromContext(ctx context.Context) TraceContext {
 	if ctx == nil {
 		return TraceContext{}
 	}
-	trace, _ := ctx.Value(traceContextKey{}).(TraceContext)
-	return trace
+	if trace, _ := ctx.Value(traceContextKey{}).(TraceContext); !trace.IsZero() {
+		return trace
+	}
+	// Rust #60506: fall back to the W3C carrier stored on the request context
+	// when no active span trace was installed for this call.
+	if w3c, ok := protocol.TraceContextFromContext(ctx); ok && w3c != nil {
+		if trace, ok := TraceContextFromW3C(w3c.Traceparent); ok {
+			return trace
+		}
+	}
+	return TraceContext{}
 }
 
 // logEnvironmentTrace exposes the active request trace on environment

@@ -525,6 +525,10 @@ type MCPResourceReadParams struct {
 	// (Rust #47248). The backend supports it only for `codex_apps`; omitting it
 	// keeps the legacy discovery behavior.
 	Target *MCPResourceReadTarget `json:"target,omitempty"`
+	// Context carries the caller's request context into the MCP transport so the
+	// outbound HTTP request keeps its W3C trace context when tracing is disabled
+	// (Rust #60506). It is never serialized.
+	Context context.Context `json:"-"`
 }
 
 // MCPResourceReadTarget is a direct hosted app/account resource target
@@ -2769,7 +2773,7 @@ func (s *MCPService) ReadResource(params *MCPResourceReadParams) (*MCPResourceRe
 			if err := ValidateServerAuth(server, &config); err != nil {
 				return nil, err
 			}
-			response, err = readMCPHTTPResourceWithClient(s.httpClientForServer(server, &config), server, roots, s.elicitationHandlerForServer(server), s.progressHandler(), &request)
+			response, err = readMCPHTTPResourceWithClient(nil, s.httpClientForServer(server, &config), server, roots, s.elicitationHandlerForServer(server), s.progressHandler(), &request)
 			if err != nil {
 				return nil, err
 			}
