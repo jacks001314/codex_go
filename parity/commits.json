@@ -45222,15 +45222,16 @@
   {
    "sha": "83f02f706caac31b16db93b7a21cb36d280bc099",
    "subject": "Keep fitting URLs intact in fullscreen Markdown transcripts (#60416)",
-   "kind": "runtime",
+   "kind": "test",
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "本轮未审计落地：fullscreen Markdown 的 URL 换行未按 Rust 放宽",
-    "Go 锚点：tui/tea/",
-    "plan: update/plan_2026_11_10.md (#60416)"
+    "Go 的 Markdown 列（tui/markdown，基于 glamour 的按词换行）本来就把可整行容纳的 URL 整体移到独立一行；全屏转录渲染路径 transcriptMessageDisplayLines -> markdown.RenderUniformListsWithThemeCwd 在 46 列下复现了 Rust 新增快照的两行布局。",
+    "新增回归 TestFullscreenMarkdownKeepsFittingURLOnOneRowLikeRust，固定 `• See the documentation at` / `  https://example.com/docs/reference.` 两行并断言 URL 只出现在一行。",
+    "超过整行宽度的 URL 仍保持整行，与 Go AdaptiveWrapLine 对应的 Rust 用例 adaptive_wrap_line_keeps_long_url_like_token_intact 语义一致；#60416 针对的是可容纳 URL 被拆开的问题。",
+    "Tests: go test ./tui/tea ./tui/markdown ./tui/chatwidget -count=1。"
    ]
   },
   {
