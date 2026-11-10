@@ -79,7 +79,6 @@ func (m *Model) desiredProgramStatus() codextui.ProgramStatus {
 	if m.isTaskRunning() ||
 		m.isUserTurnPendingOrRunning() ||
 		len(m.pendingSteers) > 0 ||
-		len(m.commandLifecycle.UnifiedExecProcesses) > 0 ||
 		(m.programStatusAfterTurn.State == codextui.ProgramStatusDone && m.goalIsActive()) {
 		return codextui.ProgramStatus{State: codextui.ProgramStatusWorking}
 	}

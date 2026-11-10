@@ -9,6 +9,7 @@ import (
 
 	"codex_go/protocol"
 	codextui "codex_go/tui"
+	"codex_go/tui/chatwidget"
 	"codex_go/tui/keymsg"
 )
 
@@ -46,6 +47,16 @@ func TestProgramStatusTracksLiveResultsLikeRust(t *testing.T) {
 	model.Update(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune("a")})
 	statuses = append(statuses, model.desiredProgramStatus())
 
+	// Rust #60418: a running background terminal no longer keeps the status at
+	// Working after the turn completes; Done is reported and acknowledged to
+	// Idle while the process stays visible.
+	model.Update(ThreadEventMsg{Event: protocol.ThreadEvent{Type: "turn.started"}})
+	model.commandLifecycle.UnifiedExecProcesses = []chatwidget.UnifiedExecProcessSummary{{Key: "bg-1"}}
+	model.Update(TurnCompletedMsg{})
+	statuses = append(statuses, model.desiredProgramStatus())
+	model.Update(keymsg.KeyMsg{Type: keymsg.KeyRunes, Runes: []rune("a")})
+	statuses = append(statuses, model.desiredProgramStatus())
+
 	want := []codextui.ProgramStatus{
 		{State: codextui.ProgramStatusIdle},
 		{State: codextui.ProgramStatusWorking},
@@ -55,6 +66,8 @@ func TestProgramStatusTracksLiveResultsLikeRust(t *testing.T) {
 		{State: codextui.ProgramStatusIdle},
 		{State: codextui.ProgramStatusIdle},
 		{State: codextui.ProgramStatusError},
+		{State: codextui.ProgramStatusIdle},
+		{State: codextui.ProgramStatusDone},
 		{State: codextui.ProgramStatusIdle},
 	}
 	if len(statuses) != len(want) {
