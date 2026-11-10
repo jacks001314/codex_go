@@ -1007,6 +1007,9 @@ type StartOptions struct {
 	DefaultVoice   Voice
 	SessionMode    SessionMode
 	Instructions   *string
+	// Attachment lets a caller cancel a pending realtime attachment or bound
+	// how long it may take to publish its connection (Rust #60443).
+	Attachment *AttachmentOptions
 }
 
 type SessionState struct {
@@ -1607,9 +1610,27 @@ func (m *Manager) startWithOptions(params *StartParams, options *StartOptions, a
 	if m == nil {
 		return nil, nil, fmt.Errorf("%w: manager is nil", ErrInvalidRealtimeRequest)
 	}
+	// Rust #60443: a caller may cancel a pending attachment or bound how long
+	// it may take to publish its connection. Interrupting the attempt reuses
+	// the start context so the dial and the frameless session handshake stop
+	// as soon as cancellation or the deadline fires.
+	control := newRealtimeAttachmentControl(startContext, options)
+	defer control.close()
+	if control.isCancelled() {
+		return nil, nil, ErrRealtimeAttachmentCanceled
+	}
+	if control.context() != nil {
+		startContext = control.context()
+	}
 	startLock := m.startLock(config.ThreadID)
 	startLock.Lock()
 	defer startLock.Unlock()
+	// A cancelled or expired request is rejected before it replaces the
+	// conversation that is already resident; Rust checks this before taking
+	// the previous conversation.
+	if control.isCancelled() {
+		return nil, nil, ErrRealtimeAttachmentCanceled
+	}
 	m.mu.Lock()
 	m.ensureLocked()
 	if m.shutdown {
@@ -1670,13 +1691,13 @@ func (m *Manager) startWithOptions(params *StartParams, options *StartOptions, a
 	if config.Transport.Type == "websocket" && backend != nil && backend.WebsocketBaseURL != "" {
 		connection, err = dialRealtimeTransport(startContext, config.ThreadID, backend, config, "", realtimeInitializeNewSession)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, control.attachmentError(err)
 		}
 	}
 	if config.Transport.Type == "webrtc" && backend != nil && backend.WebRTCCallBaseURL != "" && backend.SidebandBaseURL != "" {
 		call, callErr := createRealtimeWebRTCCall(startContext, backend, config)
 		if callErr != nil {
-			return nil, nil, callErr
+			return nil, nil, control.attachmentError(callErr)
 		}
 		sdpAnswer = call.SDP
 		sideband = newRealtimeSideband(config.ThreadID, call.CallID, backend, config)
@@ -1700,18 +1721,36 @@ func (m *Manager) startWithOptions(params *StartParams, options *StartOptions, a
 		}
 		return nil, nil, fmt.Errorf("%w: manager is shut down", ErrInvalidRealtimeRequest)
 	}
-	now := m.now().UTC()
-	state := &SessionState{Config: *config, StartedAt: now, LastActivity: now}
-	m.sessions[config.ThreadID] = state
-	if connection != nil {
-		m.connections[config.ThreadID] = connection
-		m.backgroundTaskWait.Add(1)
+	// Cancellation and the deadline are rechecked at publication under the
+	// attachment guard, so a pending attempt never replaces the resident
+	// conversation and a published connection survives a later cancellation.
+	var stateSnapshot *SessionState
+	published := control.commit(func() {
+		now := m.now().UTC()
+		state := &SessionState{Config: *config, StartedAt: now, LastActivity: now}
+		m.sessions[config.ThreadID] = state
+		if connection != nil {
+			m.connections[config.ThreadID] = connection
+			m.backgroundTaskWait.Add(1)
+		}
+		if sideband != nil {
+			m.sidebands[config.ThreadID] = sideband
+			m.backgroundTaskWait.Add(1)
+		}
+		stateSnapshot = cloneState(state)
+	})
+	if !published {
+		m.mu.Unlock()
+		// Finish the canceled attempt's cleanup before acknowledging it; the
+		// previous conversation was never taken.
+		if connection != nil {
+			connection.closeNow()
+		}
+		if sideband != nil {
+			sideband.cancel()
+		}
+		return nil, nil, ErrRealtimeAttachmentCanceled
 	}
-	if sideband != nil {
-		m.sidebands[config.ThreadID] = sideband
-		m.backgroundTaskWait.Add(1)
-	}
-	stateSnapshot := cloneState(state)
 	m.mu.Unlock()
 	if connection != nil {
 		m.startRealtimeConnection(connection)
