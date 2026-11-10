@@ -161,7 +161,9 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// fixtures landed across the intervening sync windows.
 			// Re-anchored to upstream e8e6a922c0: `scenarios_reserved_spawn.rs`
 			// (#57586) plus the reserved-child fixtures landed in this window.
-			Files: 471,
+			// Round-today re-anchor to a7a9d82f: #60461 added
+			// skills_extension/discovery_grants_tests.rs.
+			Files: 472,
 			Owner: "turn, model, tool, session",
 			Focus: "core agent loop, model client, session, tools, sandbox, resume",
 			Required: []string{

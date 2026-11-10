@@ -48,8 +48,10 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	// snapshot landed in this window (1437 -> 1452). Round 1017 re-anchored to
 	// upstream b0f977c3a9: the onboarding, app, and bottom-pane suites gained
 	// goldens in the intervening windows (1452 -> 1466).
-	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1515 {
-		t.Fatalf("Rust TUI snapshot total drift: got %d want 1515", got)
+	// Re-anchored to upstream a7a9d82f: the full-screen transcript work
+	// (#60554-#60557) and the recovery-notice snapshot added five goldens.
+	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1520 {
+		t.Fatalf("Rust TUI snapshot total drift: got %d want 1520", got)
 	}
 
 	gotDirs := rustTUISnapshotDirs(t, root)
@@ -122,7 +124,9 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// Re-pinned to upstream 18e28fe1b9: #48621 removed follow-up prompt
 			// suggestions from the TUI, so the prompt-suggestion request-history
 			// snapshot is gone and the dir now holds 85 files.
-			Files:    106,
+			// Re-anchored to a7a9d82f: the recovery-notice and transcript work
+			// added one app-level golden.
+			Files:    107,
 			Owner:    "tui/app, tui/chatwidget",
 			Focus:    "desktop history UI, cancelled-turn composer restore, and thread goal action rendering",
 			Priority: []string{"app", "composer", "history"},
@@ -155,7 +159,8 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// two startup-warning summaries into the warnings-viewer snapshots.
 			// #48121 added the command-center draft-handoff snapshot.
 			// #48135 added the remapped-left external-writer view snapshot.
-			Files:    86,
+			// Re-anchored to a7a9d82f: one app test golden was added.
+			Files:    87,
 			Owner:    "tui/app",
 			Focus:    "app-level catalog and migration prompts",
 			Priority: []string{"app", "model"},
@@ -215,7 +220,8 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// #46680-#46710 added the shared picker presentation and filled-tab
 			// snapshots; #46734/#46749/#46751 added the clipped mention popup,
 			// the customized shortcut overlays and the narrow warnings view.
-			Files:    261,
+			// Re-anchored to a7a9d82f: one bottom-pane golden was added.
+			Files:    262,
 			Owner:    "tui/bottom_pane",
 			Focus:    "composer, footer, slash popup, approval overlays, MCP elicitation, queued input, and bottom pane layout",
 			Priority: []string{"composer", "approval", "status", "mcp", "slash"},
@@ -323,7 +329,8 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// warnings-summary presentation and #46752 added the tmux
 			// pets-unavailable notice; #48015 added the declined-tool-suggestion
 			// snapshot; #48116 added the two Max-reasoning footer snapshots.
-			Files:    337,
+			// Re-anchored to a7a9d82f: the rate-limit recovery notice (#60435) and one more golden landed.
+			Files:    339,
 			Owner:    "tui/chatwidget, tui/tea",
 			Focus:    "main chat widget terminal snapshots for status lines, approvals, plugins, hooks, review, usage, and unified exec",
 			Priority: []string{"approval", "status", "history", "unified-exec", "review"},

@@ -347,7 +347,7 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// protocol/client/suite surfaces advanced across the
 		// 748ab55ca7..e54a5713ca window; every hash below is the LF-normalized
 		// digest of the anchor checkout.
-		{Path: "Cargo.toml", SHA256: "180d6ef1ff7481ea13e5718585313702b5fbd6cbb0e0ae7b4786b03439a7d410"},
+		{Path: "Cargo.toml", SHA256: "6864e0f338c382e7056999cb8338d1d22a7a29a7b577639294355a9b1dea7363"},
 		{Path: "cli/src/lib.rs", SHA256: "bc73cee3f5714a1ab90ca8853bbaa74f16dc5abd6edc6bb888d8648b6c49f14a"},
 		// Re-pinned to upstream 8ae55c863d (#47411): the shared network policy
 		// runs through embedded Codex startup.
@@ -376,7 +376,7 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// unavailable images (#57585) and the catalog-heading metadata changed.
 		// Re-anchored to upstream 68b67f0ff4: model providers and catalogs share
 		// runtime authentication through ProviderAuthContext (#57607).
-		{Path: "core/src/client.rs", SHA256: "7932eada60fb00da913e12219491ffdbe35903e8df8c59e2dcd98348a24fc9c7"},
+		{Path: "core/src/client.rs", SHA256: "544c428df0ebe2eb7e99bdaf507eb7873d6a8ec8e4e193885b3bfa37a200d03f"},
 		// Re-pinned to upstream 8ae55c863d (#47207/#47248/#47377/#47648): the
 		// gateway OAuth, MCP resource-target, realtime reasoning-status and
 		// executor bearer-token requests.
