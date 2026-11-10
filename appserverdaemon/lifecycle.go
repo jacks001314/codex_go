@@ -209,6 +209,36 @@ func (r *LifecycleRunner) RestartWithFeatures(features map[string]bool) (*Lifecy
 	return r.restart(settings, &backendKind)
 }
 
+// StartApplyingFeatures applies the confirmed `--enable`, `--disable` and
+// `-c features.<name>=<bool>` toggles to an `app-server daemon start` launch
+// (Rust #60489). The launch set is saved when a stopped daemon is started; an
+// already running daemon keeps its process and saved overrides.
+func (r *LifecycleRunner) StartApplyingFeatures(featureOverrides map[string]bool) (*LifecycleOutput, error) {
+	if err := EnsureNonElevated(); err != nil {
+		return nil, err
+	}
+	daemon := r.daemon()
+	lock, err := r.acquireOperationLock()
+	if err != nil {
+		return nil, err
+	}
+	defer lock.Close()
+	daemon.refreshInstallation()
+	settings, err := daemon.LoadSettings()
+	if err != nil {
+		return nil, err
+	}
+	merged := map[string]bool{}
+	for name, enabled := range featureOverrides {
+		canonical, ok := features.CanonicalKey(name)
+		if !ok {
+			return nil, fmt.Errorf("daemon start requires a boolean feature toggle: %s", name)
+		}
+		merged[canonical] = enabled
+	}
+	return r.startWithFeatureOverrides(settings, merged)
+}
+
 // RestartApplyingFeatures applies an explicit restart's confirmed feature
 // toggles, replaces saved alias spellings, and always restarts the managed
 // backend. Rust #53751 uses the same path for running and stopped daemons.

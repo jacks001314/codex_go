@@ -19,10 +19,21 @@ type daemonRestartFeatureEntry struct {
 // daemon restart should persist. Rust #53751 accepts --enable/--disable,
 // boolean features.* overrides, and nested features.<name>.enabled values.
 // Unknown features and non-boolean toggles fail before the daemon is stopped.
+// daemonRestartFeatureOverrides and daemonStartFeatureOverrides read the
+// `features.<name>` toggles the CLI attached to a daemon lifecycle command.
+// Rust #60489 gives `start` the same handling `restart` already had.
 func daemonRestartFeatureOverrides(root *cli.RootOptions) (map[string]bool, error) {
+	return daemonFeatureOverrides(root, "restart")
+}
+
+func daemonStartFeatureOverrides(root *cli.RootOptions) (map[string]bool, error) {
+	return daemonFeatureOverrides(root, "start")
+}
+
+func daemonFeatureOverrides(root *cli.RootOptions, action string) (map[string]bool, error) {
 	overrides, err := config.ParseOverrides(daemonRawLaunchOverrides(root))
 	if err != nil {
-		return nil, fmt.Errorf("parse daemon restart overrides: %w", err)
+		return nil, fmt.Errorf("parse daemon %s overrides: %w", action, err)
 	}
 	sort.SliceStable(overrides, func(i, j int) bool {
 		return overrides[i].Path < overrides[j].Path
