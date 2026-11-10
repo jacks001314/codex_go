@@ -45549,10 +45549,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "本轮未审计落地：app-server gateway OAuth 设备授权未实现",
-    "Go 锚点：appserver/",
+    "Rust d8c42ecf：account/gatewayOAuth/read 增加 supportsDeviceAuth（config.device_authorization_url 是否存在）；login 接受 deviceAuth，先用 without_interactive_login 复用/刷新凭据（成功返回 prompt:null），否则启动设备码登录，先回 {verificationUrl,userCode,loginId}，完成后按 loginId 通知发起连接；GatewayOAuthChanged 增加 loginId，login 响应增加 prompt",
+    "Go 实现：auth 新增 GatewayAuthManager.SupportsDeviceAuthorization；appserver 增加 GatewayOAuthPrompt/GatewayOAuthLoginResponse.Prompt、GatewayOAuthChangedNotification.LoginID、GatewayOAuthReadResponse.SupportsDeviceAuth、GatewayOAuthLoginParams.DeviceAuth 与 deviceAuth 解析；handleGatewayOAuthLogin 拆出 release 闭包并在 deviceAuth 时走 loginGatewayWithDeviceCode（ResolveAccessTokenWithoutLogin 复用→无提示；否则 LoginWithDeviceCode 后台运行、prompt 立即返回、完成后按 loginId 通知发起连接并广播其他共享凭据 provider）",
+    "顺带修复：model/provider_config.go 之前未解析 gateway_oauth.device_authorization_url，导致设备授权永远不可用（调试用例确认解析为空，修复后为 issuer URL）",
+    "测试：appserver/gateway_oauth_device_auth_like_rust_test.go 覆盖 read 能力上报、login 返回设备提示（loginId/userCode/verificationUrl）、按 loginId 关联的成功通知、以及保存凭据后再次登录 prompt 为 null；go test ./appserver（全量 272s）与 ./model 相关用例通过",
     "plan: update/plan_2026_11_10.md (#60486)"
    ]
   },
