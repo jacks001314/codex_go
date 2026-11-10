@@ -35,6 +35,10 @@ type ModelListParams struct {
 	// ModelProvider selects a configured provider for this listing (Rust #59776).
 	// Empty keeps the app-server's active provider and its cached catalog.
 	ModelProvider string `json:"modelProvider,omitempty"`
+	// DisplayOrder lists catalog slugs in catalog display order. When set, the
+	// listing keeps that order instead of priority order (Rust #60525 applies
+	// it to first-party provider catalogs). It never travels on the wire.
+	DisplayOrder []string `json:"-"`
 }
 
 func (p *ModelListParams) MarshalJSON() ([]byte, error) {
@@ -109,6 +113,9 @@ type ModelSummary struct {
 	AvailabilityNux           *ModelAvailabilityNux       `json:"availabilityNux,omitempty"`
 	ContextWindow             int64                       `json:"contextWindow,omitempty"`
 	SupportsSearchTool        bool                        `json:"supportsSearchTool,omitempty"`
+	// priority orders rows the way Rust's build_available_models does; the
+	// wire shape carries no priority field.
+	priority int
 }
 
 func (m *ModelSummary) MarshalJSON() ([]byte, error) {
@@ -450,12 +457,14 @@ func (s *ModelService) List(params *ModelListParams) (*ModelListResponse, error)
 		}
 		models = append(models, summaryFromModel(info, hidden))
 	}
+	// Rust `build_available_models` orders presets by priority. The app server
+	// may ask for first-party catalog display order instead (Rust #60525).
 	sort.SliceStable(models, func(i int, j int) bool {
-		if models[i].IsDefault != models[j].IsDefault {
-			return models[i].IsDefault
-		}
-		return models[i].ID < models[j].ID
+		return models[i].priority < models[j].priority
 	})
+	if len(params.DisplayOrder) > 0 {
+		models = orderModelsByDisplayPosition(models, params.DisplayOrder)
+	}
 	if len(models) > 0 {
 		defaultID := s.manager.GetDefaultModel("", true, strategy)
 		for i := range models {
@@ -481,6 +490,39 @@ func (s *ModelService) ProviderCapabilities(params *ProviderCapabilitiesReadPara
 		ImageGeneration: containsString(info.InputModalities, "image"),
 		WebSearch:       info.SupportsSearchTool,
 	}
+}
+
+// ParseRefreshStrategy resolves a protocol refreshStrategy string the way
+// model/list does, so callers inspecting the same catalog reuse its snapshot.
+func ParseRefreshStrategy(value string) RefreshStrategy {
+	return parseStrategy(value)
+}
+
+// orderModelsByDisplayPosition sorts rows into the supplied catalog order,
+// keeping rows the catalog did not mention after the known ones in priority
+// order.
+func orderModelsByDisplayPosition(models []ModelSummary, order []string) []ModelSummary {
+	positions := make(map[string]int, len(order))
+	for index, slug := range order {
+		if _, ok := positions[slug]; !ok {
+			positions[slug] = index
+		}
+	}
+	sort.SliceStable(models, func(i int, j int) bool {
+		left, leftOK := positions[models[i].ID]
+		right, rightOK := positions[models[j].ID]
+		switch {
+		case leftOK && rightOK:
+			return left < right
+		case leftOK:
+			return true
+		case rightOK:
+			return false
+		default:
+			return models[i].priority < models[j].priority
+		}
+	})
+	return models
 }
 
 func parseStrategy(value string) RefreshStrategy {
@@ -512,6 +554,7 @@ func summaryFromModel(info ModelInfo, hidden bool) ModelSummary {
 		InputModalities:           append([]string(nil), info.InputModalities...),
 		SupportsPersonality:       (&info).SupportsPersonality(),
 		SupportsSearchTool:        info.SupportsSearchTool,
+		priority:                  info.Priority,
 	}
 	summary.AvailableAccessPrograms = ModelAccessProgramsSummaryFromInfo(info.AvailableAccessPrograms)
 	if version := strings.TrimSpace(info.MultiAgentVersion); version != "" {

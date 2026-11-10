@@ -45784,10 +45784,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "本轮未审计落地：app-server 模型清单未保留首方目录顺序",
-    "Go 锚点：appserver/",
+    "model/api.go: model/list 行改按 priority 排序（Rust build_available_models），新增 DisplayOrder 参数（json:\"-\"，不上线）按目录位置稳定排序，未被目录提及的行排在已知行之后并保持优先级序。",
+    "appserver/runtime_router.go: handleModelList 在 provider 为 openai 且支持 Codex 后端路由或显式 model_catalog_url、且目录全部来自 provider origin 时，用 catalog 显示序回答，默认模型仍按优先级标记。",
+    "测试：go test ./model -count=1 通过；go test ./appserver -run 'Model' 通过；新增 TestModelListUsesFirstPartyCatalogDisplayOrderLikeRust（目录序 z/a/recommended，默认 recommended）与 TestModelListKeepsPriorityOrderForCustomProviderLikeRust（反转目录仍按 priority）。",
     "plan: update/plan_2026_11_10.md (#60525)"
    ]
   },

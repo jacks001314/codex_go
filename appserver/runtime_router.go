@@ -13246,12 +13246,62 @@ func (r *RuntimeRouter) handleModelList(request *Request) (*model.ModelListRespo
 	if r.modelCatalogRefreshPending() {
 		r.refreshModelCatalogAfterAuthChange()
 	}
-	if service, err := r.modelListServiceForProvider(params.ModelProvider); err != nil {
+	service, err := r.modelListServiceForProvider(params.ModelProvider)
+	if err != nil {
 		return nil, err
-	} else if service != nil {
-		return service.List(&params)
 	}
-	return r.requireModels().List(&params)
+	if service == nil {
+		service = r.requireModels()
+	}
+	// Rust #60525: the first-party catalog supplies picker rows in display
+	// order, while bundled, configured and third-party catalogs keep the
+	// manager's priority order and the same default selection.
+	params.DisplayOrder = r.modelListCatalogDisplayOrder(service, params.ModelProvider, &params)
+	return service.List(&params)
+}
+
+// modelListCatalogDisplayOrder returns the catalog slugs in display order when
+// model/list is served from a first-party provider catalog, and nil otherwise
+// (Rust #60525 `use_catalog_order`): only the OpenAI provider using Codex
+// backend routes or an explicit `model_catalog_url`, with every entry coming
+// from the provider catalog, keeps catalog order.
+func (r *RuntimeRouter) modelListCatalogDisplayOrder(service *model.ModelService, providerID string, params *model.ModelListParams) []string {
+	if r == nil || service == nil || params == nil || r.services.Config == nil {
+		return nil
+	}
+	read, err := r.services.Config.Read(&config.ConfigReadParams{})
+	if err != nil || read == nil {
+		return nil
+	}
+	if strings.TrimSpace(providerID) == "" {
+		providerID = strings.TrimSpace(stringFromMap(read.Config, "model_provider"))
+	}
+	providerID = strings.TrimSpace(providerID)
+	if providerID == "" {
+		providerID = model.OpenAIProviderID
+	}
+	if providerID != model.OpenAIProviderID {
+		return nil
+	}
+	info, err := model.ProviderForConfigID(read.Config, providerID, strings.TrimSpace(stringFromMap(read.Config, "openai_base_url")))
+	if err != nil || info == nil {
+		return nil
+	}
+	if !info.SupportsCodexBackendRoutes() && strings.TrimSpace(info.ModelCatalogURL) == "" {
+		return nil
+	}
+	catalog := service.ModelCatalogWithOrigins(model.ParseRefreshStrategy(params.RefreshStrategy))
+	if len(catalog) == 0 {
+		return nil
+	}
+	order := make([]string, 0, len(catalog))
+	for _, entry := range catalog {
+		if entry.Origin != model.ModelOriginProvider {
+			return nil
+		}
+		order = append(order, entry.Model.Slug)
+	}
+	return order
 }
 
 // modelListServiceForProvider mirrors Rust #59776 `config_for_provider`: an
