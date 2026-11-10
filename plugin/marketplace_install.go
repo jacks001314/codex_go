@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -147,16 +148,16 @@ func materializeGitMarketplace(source *ParsedMarketplaceSource, sparsePaths []st
 	// Remove abandoned staging directories from earlier operations, then keep
 	// the owner lock for validation, installation and rollback (Rust #55689).
 	cleanupMarketplaceStaging(parent, time.Now())
-	staged, err := newMarketplaceStagingDir(parent)
+	referenceDestination := ""
+	if replaceExisting {
+		referenceDestination = destination
+	}
+	staged, err := stageGitMarketplaceClone(parent, referenceDestination, "marketplace directory", source, sparsePaths, automatic)
 	if err != nil {
-		return fmt.Errorf("failed to create temporary marketplace directory in %s: %w", parent, err)
+		return err
 	}
 	defer staged.Close()
 	stagedRoot := staged.Path()
-
-	if err := cloneGitMarketplaceSource(source.URL, source.RefName, sparsePaths, stagedRoot, automatic); err != nil {
-		return err
-	}
 	if _, err := os.Stat(destination); err == nil {
 		if !replaceExisting {
 			return fmt.Errorf("%w: marketplace install destination already exists", ErrInvalidPluginRequest)
@@ -225,9 +226,132 @@ func (r *GitMarketplaceRevisionResolver) MarketplaceRevision(source *ParsedMarke
 	return fields[0], nil
 }
 
-func cloneGitMarketplaceSource(url string, refName *string, sparsePaths []string, destination string, automatic bool) error {
+// stageGitMarketplaceClone clones the marketplace into a fresh staging
+// directory. When the destination is an installed checkout, the clone borrows
+// its objects so already-fetched commits are not downloaded again (Rust
+// #60528); a failed reference clone restarts in a new staging directory and
+// falls back to a plain clone, exactly like an unsupported Git version.
+func stageGitMarketplaceClone(installRoot string, destination string, description string, source *ParsedMarketplaceSource, sparsePaths []string, automatic bool) (*MarketplaceStagingDir, error) {
+	staged, err := newMarketplaceStagingDir(installRoot)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create temporary %s in %s: %w", description, installRoot, err)
+	}
+	if strings.TrimSpace(destination) != "" {
+		if reference, ok := resolveMarketplaceCloneReference(destination, automatic); ok && marketplaceGitSupportsAlternateRefs(automatic) {
+			if err := cloneGitMarketplaceSource(source.URL, source.RefName, sparsePaths, staged.Path(), &reference, automatic); err == nil {
+				return staged, nil
+			}
+			staged.Close()
+			staged, err = newMarketplaceStagingDir(installRoot)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create temporary %s in %s: %w", description, installRoot, err)
+			}
+		}
+	}
+	if err := cloneGitMarketplaceSource(source.URL, source.RefName, sparsePaths, staged.Path(), nil, automatic); err != nil {
+		staged.Close()
+		return nil, err
+	}
+	return staged, nil
+}
+
+// marketplaceHaveRevisionEnv carries the installed commit Git should use for
+// alternate-ref negotiation (Rust #60528 CODEX_MARKETPLACE_HAVE).
+const marketplaceHaveRevisionEnv = "CODEX_MARKETPLACE_HAVE"
+
+// marketplaceAlternateRefsCommand keeps Git from advertising private local
+// branch revisions from the reference repository; the trailing `:` consumes the
+// repository path Git appends.
+const marketplaceAlternateRefsCommand = `core.alternateRefsCommand=echo "$CODEX_MARKETPLACE_HAVE" && :`
+
+// marketplaceCloneReference is the installed checkout an upgrade borrows
+// objects from.
+type marketplaceCloneReference struct {
+	gitDir   string
+	revision string
+}
+
+// resolveMarketplaceCloneReference resolves the installed checkout's object
+// directory and recorded commit, or reports false when the destination is not a
+// Git checkout.
+func resolveMarketplaceCloneReference(destination string, automatic bool) (marketplaceCloneReference, bool) {
+	info, err := os.Stat(destination)
+	if err != nil || !info.IsDir() {
+		return marketplaceCloneReference{}, false
+	}
+	gitDir := filepath.Join(destination, ".git")
+	if gitDirInfo, err := os.Stat(gitDir); err != nil || !gitDirInfo.IsDir() {
+		return marketplaceCloneReference{}, false
+	}
+	output, err := runMarketplaceGitOutput(&destination, automatic, "rev-parse", "HEAD")
+	if err != nil {
+		return marketplaceCloneReference{}, false
+	}
+	revision := strings.TrimSpace(output)
+	if revision == "" {
+		return marketplaceCloneReference{}, false
+	}
+	return marketplaceCloneReference{gitDir: gitDir, revision: revision}, true
+}
+
+// marketplaceGitSupportsAlternateRefs reports whether Git is 2.20 or newer;
+// older releases silently ignore the alternate-refs command.
+func marketplaceGitSupportsAlternateRefs(automatic bool) bool {
+	output, err := runMarketplaceGitOutput(nil, automatic, "--version")
+	if err != nil {
+		return false
+	}
+	major, minor, ok := parseMarketplaceGitRelease(output)
+	return ok && (major > 2 || (major == 2 && minor >= 20))
+}
+
+// parseMarketplaceGitRelease extracts the release from `git --version`,
+// ignoring Apple or Windows build suffixes. An unrecognized version disables
+// reference cloning.
+func parseMarketplaceGitRelease(output string) (int, int, bool) {
+	output = strings.TrimSpace(output)
+	const prefix = "git version "
+	if !strings.HasPrefix(output, prefix) {
+		return 0, 0, false
+	}
+	fields := strings.Fields(strings.TrimPrefix(output, prefix))
+	if len(fields) == 0 {
+		return 0, 0, false
+	}
+	parts := strings.SplitN(fields[0], ".", 3)
+	if len(parts) < 3 {
+		return 0, 0, false
+	}
+	major, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return 0, 0, false
+	}
+	minor, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return 0, 0, false
+	}
+	patch := parts[2]
+	if index := strings.Index(patch, ".windows."); index >= 0 {
+		patch = patch[:index]
+	}
+	if _, err := strconv.Atoi(patch); err != nil {
+		return 0, 0, false
+	}
+	return major, minor, true
+}
+
+func cloneGitMarketplaceSource(url string, refName *string, sparsePaths []string, destination string, reference *marketplaceCloneReference, automatic bool) error {
+	args := make([]string, 0, 12)
+	var extraEnv []string
+	if reference != nil {
+		extraEnv = []string{marketplaceHaveRevisionEnv + "=" + reference.revision}
+		args = append(args, "-c", marketplaceAlternateRefsCommand, "clone", "--reference", reference.gitDir, "--dissociate")
+	} else {
+		args = append(args, "clone")
+	}
 	if len(sparsePaths) == 0 {
-		if err := runMarketplaceGit(nil, automatic, "clone", url, destination); err != nil {
+		args = append(args, "--", url, destination)
+		if _, err := runMarketplaceGitOutputEnv(nil, automatic, extraEnv, args...); err != nil {
 			return err
 		}
 		if refName != nil && strings.TrimSpace(*refName) != "" {
@@ -237,10 +361,11 @@ func cloneGitMarketplaceSource(url string, refName *string, sparsePaths []string
 		}
 		return nil
 	}
-	if err := runMarketplaceGit(nil, automatic, "clone", "--filter=blob:none", "--no-checkout", url, destination); err != nil {
+	args = append(args, "--filter=blob:none", "--no-checkout", "--", url, destination)
+	if _, err := runMarketplaceGitOutputEnv(nil, automatic, extraEnv, args...); err != nil {
 		return err
 	}
-	args := append([]string{"sparse-checkout", "set"}, sparsePaths...)
+	args = append([]string{"sparse-checkout", "set"}, sparsePaths...)
 	if err := runMarketplaceGit(&destination, automatic, args...); err != nil {
 		return err
 	}
@@ -257,6 +382,12 @@ func runMarketplaceGit(cwd *string, automatic bool, args ...string) error {
 }
 
 func runMarketplaceGitOutput(cwd *string, automatic bool, args ...string) (string, error) {
+	return runMarketplaceGitOutputEnv(cwd, automatic, nil, args...)
+}
+
+// runMarketplaceGitOutputEnv runs Git with caller-supplied environment entries
+// in addition to the trusted or ambient environment.
+func runMarketplaceGitOutputEnv(cwd *string, automatic bool, extraEnv []string, args ...string) (string, error) {
 	command := exec.Command("git", args...)
 	if automatic {
 		// Rust #42324: resolve the Git executable from trusted installation
@@ -274,6 +405,9 @@ func runMarketplaceGitOutput(cwd *string, automatic bool, args ...string) (strin
 		command.Env = env
 	} else {
 		command.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	}
+	if len(extraEnv) > 0 {
+		command.Env = append(command.Env, extraEnv...)
 	}
 	if cwd != nil {
 		command.Dir = *cwd

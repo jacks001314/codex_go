@@ -221,28 +221,33 @@ func upgradeConfiguredGitMarketplace(
 		return fmt.Errorf("failed to create marketplace install directory %s: %w", parent, err)
 	}
 	cleanupMarketplaceStaging(installRoot, time.Now())
-	staged, err := newMarketplaceStagingDir(installRoot)
-	if err != nil {
-		return fmt.Errorf("failed to create temporary marketplace upgrade directory in %s: %w", installRoot, err)
+	// Rust #60528: the built-in Git upgrade borrows the installed checkout's
+	// objects; custom materializers own their own staging.
+	builtinGit := isGitMarketplaceMaterializer(materializer) || materializer == nil
+	var staged *MarketplaceStagingDir
+	var err error
+	if builtinGit {
+		staged, err = stageGitMarketplaceClone(installRoot, destination, "marketplace upgrade directory", source, sparsePaths, automatic)
+		if err != nil {
+			return err
+		}
+	} else {
+		staged, err = newMarketplaceStagingDir(installRoot)
+		if err != nil {
+			return fmt.Errorf("failed to create temporary marketplace upgrade directory in %s: %w", installRoot, err)
+		}
 	}
 	defer staged.Close()
 	switch {
-	case isGitMarketplaceMaterializer(materializer):
+	case builtinGit:
 		// The configured upgrade owns staging and activation, so the built-in
 		// Git materializer must not create a second staging tree underneath it.
-		if err := cloneGitMarketplaceSource(source.URL, source.RefName, sparsePaths, staged.Path(), automatic); err != nil {
-			return err
-		}
 	case materializer != nil:
 		if upgrader, ok := materializer.(MarketplaceUpgrader); ok {
 			if err := upgrader.UpgradeMarketplace(source, sparsePaths, staged.Path()); err != nil {
 				return err
 			}
 		} else if err := materializer.MaterializeMarketplace(source, sparsePaths, staged.Path()); err != nil {
-			return err
-		}
-	default:
-		if err := cloneGitMarketplaceSource(source.URL, source.RefName, sparsePaths, staged.Path(), automatic); err != nil {
 			return err
 		}
 	}
