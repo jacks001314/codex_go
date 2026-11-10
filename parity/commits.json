@@ -45674,10 +45674,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "本轮未审计落地：tracing 关闭时的 MCP trace context 未保留",
-    "Go 锚点：mcp/",
+    "model/telemetry_trace_context.go: InjectTraceHeadersFromContext 先取活动 span carrier，缺失时回退到 protocol.TraceContextFromContext 携带的 inbound W3C carrier；无 carrier 或无 traceparent 时不写入任何头，对应 Rust #60506 的 current_span.or_else(request fallback)。",
+    "mcp/api.go + mcp/http_client.go: MCPResourceReadParams 新增不序列化的 Context；ReadResource 的 HTTP 分支把 ctx 传入 readMCPHTTPResourceWithClient，再做 resources/read 时用 CallWithOptionsContext（工具调用路径本来就带 ctx）。",
+    "appserver/runtime_router.go: 新增 requestTraceContext（用 telemetry.ParseTraceContext 校验请求 trace，非法丢弃），mcpServer/resource/read 与 mcpServer/tool/call 在调用 MCP 服务前写入 params.Context，使遥测关闭时 outbound 请求仍带 traceparent/tracestate。",
+    "execserver/trace_context.go: traceContextFromContext 在显式 exec-server trace 缺失时回退到请求上的 W3C carrier（TraceContextFromW3C 解析并校验），对应 Rust 的 exec-server RPC HTTP 头回退。",
+    "测试：model 三个 fallback/preference 用例；mcp/resource_read_trace_context_like_rust_test.go 用假 HTTP MCP server 断言 resources/read 收到 inbound traceparent/tracestate（临时禁用回退后该用例失败，已做负向验证），无 carrier 时不发明 trace 头；execserver fallback 用例。验证：go test ./mcp -count=1 ok（26.8s）；go test ./model -count=1 ok（31.2s）；go test ./execserver -count=1 -skip TestLocalEnvironmentReportsWindowsMxcCapabilityLikeRust ok（该 MXC 用例在干净 HEAD 上也失败，属宿主环境既存问题）；go test ./appserver -run MCP|Mcp ok。",
     "plan: update/plan_2026_11_10.md (#60506)"
    ]
   },
