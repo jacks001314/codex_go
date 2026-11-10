@@ -11359,7 +11359,7 @@ func (r *RuntimeRouter) instructionsWithSkillsContextForTurn(ctx context.Context
 		skillEntries = append(skillEntries, pluginSkillEntries...)
 	}
 	hostSkillEntries := cloneSkills(skillEntries)
-	executorSandboxContexts, err := r.executorSkillSandboxContextsForTurn(cfg, turnCWD(params), params)
+	executorSandboxContexts, err := r.executorSkillSandboxContextsForTurn(cfg, turnCWD(params), threadID, turnID, params)
 	if err != nil {
 		return "", nil, nil, err
 	}

@@ -29,7 +29,7 @@ func (r *RuntimeRouter) requiredSkillsPreSamplingValidation(params *turn.TurnSta
 	// fails the turn for.
 	var sandboxContexts map[string]*execserverclient.FileSystemSandboxContext
 	if cfg, err := r.effectiveConfigForTurn(params); err == nil && cfg != nil {
-		if contexts, contextErr := r.executorSkillSandboxContextsForTurn(cfg, turnCWD(params), params); contextErr == nil {
+		if contexts, contextErr := r.executorSkillSandboxContextsForTurn(cfg, turnCWD(params), threadID, turnID, params); contextErr == nil {
 			sandboxContexts = contexts
 		}
 	}

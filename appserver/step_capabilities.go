@@ -75,9 +75,18 @@ func (s *runtimeStepCapabilitySnapshot) refreshContext(ctx context.Context, rout
 		capabilities = filterCanonicalDisabledConnectors(capabilities, router.canonicalDisabledConnectorIDs(disabled))
 		skillRoots = cloneRuntimeEnabledSkillRoots(router.services.Plugins.EnabledSkillRoots())
 	}
+	// The snapshot belongs to the active turn, so its discovery sees that
+	// turn's approved filesystem grants (Rust #60461). Turn-less refreshes keep
+	// the session-scope view.
+	stepTurnID := ""
+	if router != nil && router.threads != nil {
+		if active := router.threads.ActiveTurn(strings.TrimSpace(threadID)); active != nil {
+			stepTurnID = strings.TrimSpace(active.TurnID)
+		}
+	}
 	if router != nil {
 		cfg, _ := router.effectiveConfigForTurn(params)
-		sandboxContexts, _ = router.executorSkillSandboxContextsForTurn(cfg, turnCWD(params), params)
+		sandboxContexts, _ = router.executorSkillSandboxContextsForTurn(cfg, turnCWD(params), threadID, stepTurnID, params)
 		discoveryV2 = router.executorCapabilityDiscoveryV2ForStep(ctx, threadID, params, cfg, sandboxContexts, s.discoveryV2Cache)
 		if discoveryV2 != nil && router.services.Plugins != nil && cfg != nil {
 			executorCatalog := plugin.CatalogFromExecutorSnapshots(*discoveryV2)

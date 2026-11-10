@@ -68,7 +68,7 @@ func TestExecutorSkillSandboxContextsPreserveRestrictedProfileAndWorkspaceRoots(
 		},
 	}}
 	router := NewRuntimeRouter(RuntimeServices{DefaultCWD: cwd})
-	contexts, err := router.executorSkillSandboxContextsForTurn(cfg, cwd, &turn.TurnStartParams{RuntimeWorkspaceRoots: []string{cwd}})
+	contexts, err := router.executorSkillSandboxContextsForTurn(cfg, cwd, "", "", &turn.TurnStartParams{RuntimeWorkspaceRoots: []string{cwd}})
 	if err != nil {
 		t.Fatalf("executorSkillSandboxContextsForTurn() error = %v", err)
 	}
@@ -85,7 +85,7 @@ func TestExecutorSkillSandboxContextsPreserveRestrictedProfileAndWorkspaceRoots(
 		t.Fatalf("restricted permissions were not preserved: %s", permissionText)
 	}
 
-	fullRead, err := router.executorSkillSandboxContextsForTurn(&config.Config{Values: map[string]any{"sandbox_mode": "workspace-write"}}, cwd, &turn.TurnStartParams{})
+	fullRead, err := router.executorSkillSandboxContextsForTurn(&config.Config{Values: map[string]any{"sandbox_mode": "workspace-write"}}, cwd, "", "", &turn.TurnStartParams{})
 	if err != nil || fullRead != nil {
 		t.Fatalf("full-read workspace context = %#v, error = %v", fullRead, err)
 	}
@@ -106,7 +106,7 @@ func TestExecutorSkillSandboxContextsCarryRemoteTemporaryDirectoriesLikeRust(t *
 		TemporaryDirectories: []string{"file:///tmp/remote"},
 	})
 	router := NewRuntimeRouter(RuntimeServices{DefaultCWD: hostCWD, Environment: manager})
-	contexts, err := router.executorSkillSandboxContextsForTurn(cfg, hostCWD, &turn.TurnStartParams{
+	contexts, err := router.executorSkillSandboxContextsForTurn(cfg, hostCWD, "", "", &turn.TurnStartParams{
 		Environments: []map[string]any{{"environmentId": "remote", "cwd": "/remote/project"}},
 	})
 	if err != nil {
@@ -133,7 +133,7 @@ func TestExecutorSkillLocalContextUsesLocalSelectionNotRemotePrimaryLikeRust(t *
 		},
 	}}
 	router := NewRuntimeRouter(RuntimeServices{DefaultCWD: hostCWD})
-	contexts, err := router.executorSkillSandboxContextsForTurn(cfg, hostCWD, &turn.TurnStartParams{
+	contexts, err := router.executorSkillSandboxContextsForTurn(cfg, hostCWD, "", "", &turn.TurnStartParams{
 		CWD: "/remote/project",
 		Environments: []map[string]any{
 			{"environmentId": "remote", "cwd": "/remote/project"},

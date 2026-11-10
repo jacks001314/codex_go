@@ -18110,7 +18110,7 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 		}
 		trustedPluginRoots = plugin.NewTrustedPluginRoots(r.services.Config.CodexHome(), pluginIDs)
 	}
-	executorSandboxContexts, err := r.executorSkillSandboxContextsForTurn(cfg, cwd, params)
+	executorSandboxContexts, err := r.executorSkillSandboxContextsForTurn(cfg, cwd, threadID, turnID, params)
 	if err != nil {
 		return nil, err
 	}

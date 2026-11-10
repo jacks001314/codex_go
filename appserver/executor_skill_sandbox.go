@@ -15,7 +15,12 @@ import (
 	"codex_go/utils"
 )
 
-func (r *RuntimeRouter) executorSkillSandboxContextsForTurn(cfg *config.Config, cwd string, params *turn.TurnStartParams) (map[string]*execserverclient.FileSystemSandboxContext, error) {
+// executorSkillSandboxContextsForTurn builds the sandbox context each
+// environment's executor capability discovery runs under. Approved filesystem
+// access joins the profile so skills behind that path stay discoverable for the
+// life of the grant (Rust #60461): a turn's discovery uses its own grants,
+// while turn-less discovery (plugin servers, hooks) only sees session grants.
+func (r *RuntimeRouter) executorSkillSandboxContextsForTurn(cfg *config.Config, cwd string, threadID string, turnID string, params *turn.TurnStartParams) (map[string]*execserverclient.FileSystemSandboxContext, error) {
 	// The local and registered environments resolve from the thread config (Rust
 	// TurnEnvironment::permission_profile_with_workspace_roots): a selected
 	// environment's own profile must not leak into the local sandbox context.
@@ -73,6 +78,22 @@ func (r *RuntimeRouter) executorSkillSandboxContextsForTurn(cfg *config.Config, 
 		for i := range workspaceRoots {
 			workspaceRoots[i] = executorEnvironmentNativePath(workspaceRoots[i])
 		}
+		if profile != nil {
+			if granted := r.skillDiscoveryGrantedPermissions(threadID, turnID, environmentID); !granted.IsEmpty() {
+				merged, mergeErr := sandbox.PermissionProfileWithAdditionalPermissionsForConvention(
+					profile,
+					granted,
+					tool.PathConventionForPath(environmentCWD),
+				)
+				if mergeErr != nil {
+					return mergeErr
+				}
+				profile = merged
+				if raw, rawErr := sandbox.RuntimePermissionProfileJSON(*merged); rawErr == nil {
+					profileJSON = raw
+				}
+			}
+		}
 		temporaryDirectories := execserverclient.LocalTemporaryDirectories(environmentCWD)
 		if environmentID != execserverclient.LocalEnvironmentID && r != nil && r.services.Environment != nil {
 			if info, ok := r.services.Environment.CachedInfo(environmentID); ok && info != nil {
@@ -83,14 +104,14 @@ func (r *RuntimeRouter) executorSkillSandboxContextsForTurn(cfg *config.Config, 
 			temporaryDirectories[i] = executorEnvironmentNativePath(temporaryDirectories[i])
 		}
 		context, contextErr := tool.NewFileSystemSandboxContext(tool.FileSystemSandboxContextOptions{
-			PermissionProfile:            profile,
-			PermissionProfileJSON:        profileJSON,
-			CWD:                          environmentCWD,
-			WorkspaceRoots:               workspaceRoots,
-			TemporaryDirectories:         temporaryDirectories,
-			WindowsSandboxLevel:          windowsLevel,
-			UseLegacyLandlock:            useLegacyLandlock,
-			AllowedSymlinkedCodexHome:    r.allowedSymlinkedCodexHome,
+			PermissionProfile:         profile,
+			PermissionProfileJSON:     profileJSON,
+			CWD:                       environmentCWD,
+			WorkspaceRoots:            workspaceRoots,
+			TemporaryDirectories:      temporaryDirectories,
+			WindowsSandboxLevel:       windowsLevel,
+			UseLegacyLandlock:         useLegacyLandlock,
+			AllowedSymlinkedCodexHome: r.allowedSymlinkedCodexHome,
 		})
 		if contextErr != nil {
 			return contextErr

@@ -99,7 +99,7 @@ func TestExecutorSkillSandboxContextUsesEnvironmentProfileLikeRust(t *testing.T)
 		t.Fatalf("attachment profile resolution error = %v", err)
 	}
 	router := NewRuntimeRouter(RuntimeServices{DefaultCWD: cwd})
-	contexts, err := router.executorSkillSandboxContextsForTurn(cfg, cwd, &turn.TurnStartParams{
+	contexts, err := router.executorSkillSandboxContextsForTurn(cfg, cwd, "thread-1", "", &turn.TurnStartParams{
 		ThreadID: "thread-1",
 		CWD:      cwd,
 		Environments: []map[string]any{{

@@ -88,6 +88,48 @@ func (r *RuntimeRouter) grantedPermissionsForEnvironment(threadID, turnID, envir
 	return granted
 }
 
+// sessionGrantedPermissionsForEnvironment returns only the session-scope
+// grants (Rust Session::granted_permissions, #60461). Persistent consumers -
+// plugin servers, hooks, and the session capability inventory - must never widen
+// with a turn-scoped approval.
+func (r *RuntimeRouter) sessionGrantedPermissionsForEnvironment(threadID, environmentID string) *sandbox.AdditionalPermissionProfile {
+	if r == nil {
+		return nil
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return nil
+	}
+	environmentKey := permissionGrantEnvironmentKey(environmentID)
+	r.permissionGrantsMu.Lock()
+	defer r.permissionGrantsMu.Unlock()
+	state := r.permissionGrants[threadID]
+	if state == nil {
+		return nil
+	}
+	profile := state.session[environmentKey]
+	if profile == nil || profile.IsEmpty() {
+		return nil
+	}
+	return sandbox.MergePermissionProfiles(nil, profile)
+}
+
+// skillDiscoveryGrantedPermissions mirrors Rust's discovery_sandbox (#60461): a
+// discovery that belongs to a turn sees that turn's grants (session plus turn),
+// while a turn-less discovery only sees session-scope grants. Approved
+// filesystem access therefore makes executor skills discoverable for the life
+// of the grant without letting a turn-scoped approval reach persistent plugin
+// servers or hooks.
+func (r *RuntimeRouter) skillDiscoveryGrantedPermissions(threadID, turnID, environmentID string) *sandbox.AdditionalPermissionProfile {
+	if r == nil {
+		return nil
+	}
+	if strings.TrimSpace(turnID) == "" {
+		return r.sessionGrantedPermissionsForEnvironment(threadID, environmentID)
+	}
+	return r.grantedPermissionsForEnvironment(threadID, turnID, environmentID)
+}
+
 func (r *RuntimeRouter) clearTurnPermissionGrants(threadID, turnID string) {
 	if r == nil {
 		return

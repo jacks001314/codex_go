@@ -13676,7 +13676,7 @@ func TestRuntimeRouterPermissionProfileUpdateAppliesToNextTurnLikeRust(t *testin
 	if resolution == nil || resolution.ID != restrictedProfile || resolution.Profile == nil {
 		t.Fatalf("permission resolution = %#v, want %q profile", resolution, restrictedProfile)
 	}
-	contexts, err := router.executorSkillSandboxContextsForTurn(cfg, cwd, params)
+	contexts, err := router.executorSkillSandboxContextsForTurn(cfg, cwd, "", "", params)
 	if err != nil {
 		t.Fatalf("executorSkillSandboxContextsForTurn() error = %v", err)
 	}
