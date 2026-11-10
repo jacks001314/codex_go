@@ -221,7 +221,7 @@ FROM threads WHERE id = ?`, id).Scan(
 	if path != wantPath || source != "cli" || historyMode != "paginated" || provider != "openai" || cwd != "/workspace" || cliVersion != "1.2.3" {
 		t.Fatalf("thread identity metadata = path:%q source:%q history:%q provider:%q cwd:%q cli:%q", path, source, historyMode, provider, cwd, cliVersion)
 	}
-	if title != preview || gotPreview != preview || sandboxPolicy != "read-only" || approvalMode != "on-request" || memoryMode != "disabled" || archivedValue != archived || tokens != 42 {
+	if title != preview || gotPreview != preview || sandboxPolicy != defaultThreadSandboxPolicy() || approvalMode != "on-request" || memoryMode != "disabled" || archivedValue != archived || tokens != 42 {
 		t.Fatalf("thread derived metadata = title:%q preview:%q sandbox:%q approval:%q memory:%q archived:%v tokens:%d", title, gotPreview, sandboxPolicy, approvalMode, memoryMode, archivedValue, tokens)
 	}
 }

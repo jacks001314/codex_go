@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"codex_go/rollout"
+	"codex_go/sandbox"
 	"codex_go/session"
 )
 
@@ -346,7 +347,7 @@ func extractRolloutThreadMetadata(path string, archived bool, defaultProvider st
 	}
 	metadata := rolloutThreadMetadata{
 		path: filepath.Clean(rollout.PlainRolloutPath(path)), historyMode: "legacy",
-		source: "unknown", modelProvider: defaultProvider, sandboxPolicy: "read-only",
+		source: "unknown", modelProvider: defaultProvider, sandboxPolicy: defaultThreadSandboxPolicy(),
 		approvalMode: "on-request", memoryMode: "enabled", archived: archived,
 	}
 	for i := range lines {
@@ -428,6 +429,18 @@ func applySessionMetaToBackfill(metadata *rolloutThreadMetadata, meta *rollout.S
 // prompts rather than user input.
 func metadataIsGuardianReview(metadata *rolloutThreadMetadata) bool {
 	return metadata != nil && session.IsGuardianReviewSource(metadata.source)
+}
+
+// defaultThreadSandboxPolicy is the stored default for a thread whose rollout
+// recorded no permission settings (Rust #60472): the serialized read-only
+// permission profile, matching the format turn contexts and session settings
+// use. Readers still accept the legacy "read-only" string.
+func defaultThreadSandboxPolicy() string {
+	encoded, err := sandbox.RuntimePermissionProfileJSON(sandbox.ReadOnlyPermissionProfile())
+	if err != nil || strings.TrimSpace(encoded) == "" {
+		return "read-only"
+	}
+	return encoded
 }
 
 // applyGuardianDisplayDefaults mirrors the Guardian defaults Rust applies in

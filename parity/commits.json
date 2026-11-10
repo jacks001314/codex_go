@@ -45427,10 +45427,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "本轮未审计落地：默认线程权限未序列化为 permission profile",
-    "Go 锚点：rollout/",
+    "state/backfill.go: 无设置的线程默认 sandbox_policy 由 legacy \"read-only\" 改为 sandbox.RuntimePermissionProfileJSON(ReadOnlyPermissionProfile()) 的序列化 permission profile（与 turn context/session settings 同格式），序列化失败才回退 \"read-only\"。",
+    "读取侧继续兼容两种写法的值：legacy 字符串经 sandbox.ParseSandboxMode/SandboxPolicyFromMode，序列化 profile 经 sandbox.ParseRuntimePermissionProfileJSON（appserver/persisted_permission_profile.go），结构化 SandboxPolicy 经 parseTurnSandboxPolicy。",
+    "Go 的 backfill 元数据结构本来没有 Rust ThreadMetadataBuilder 的 legacy SandboxPolicy 字段，Rust 删除该字段的部分无对应代码。",
+    "测试：go test ./state -count=1 通过（backfill 断言改用 defaultThreadSandboxPolicy()，新增 TestDefaultThreadSandboxPolicySerializesReadOnlyProfileLikeRust 校验序列化只读 profile 与 legacy read-only/danger-full-access 仍可解析）；go test ./appserver -run 'Thread|Sandbox|Project' 通过。",
     "plan: update/plan_2026_11_10.md (#60472)"
    ]
   },
