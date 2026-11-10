@@ -2667,6 +2667,11 @@ func (r *Router) handleThreadFork(request *Request) (*ThreadForkResponse, error)
 	if err != nil {
 		return nil, threadForkRecordError(err)
 	}
+	// Rust #60559: a reference-backed fork has no local opening user message in
+	// its own rollout, so inherit the preview the source carries.
+	if strings.TrimSpace(record.Preview) == "" && mode != session.ForkNone {
+		record.Preview = r.inheritedForkPreview(sourceRecord)
+	}
 	if params.AttachToSource {
 		// Attached forks are saved forks of their resolved source; unlike a
 		// spawned agent, the relationship never enters the spawn graph.
@@ -2733,6 +2738,14 @@ func (r *Router) handleThreadFork(request *Request) (*ThreadForkResponse, error)
 			}
 		}
 	}
+	// Rust #60559: persist the inherited preview so a reference-backed fork is
+	// listed before it records its first local turn.
+	if !params.Ephemeral && r.state != nil && strings.TrimSpace(record.Preview) != "" {
+		if _, err := r.state.SetThreadPreviewIfEmpty(context.Background(), string(record.ID), record.Preview); err != nil {
+			r.rollbackThreadForkInitialization(record)
+			return nil, fmt.Errorf("failed to record inherited preview: %w", err)
+		}
+	}
 	if !params.Ephemeral && explicitThreadName(record) {
 		if err := rollout.AppendThreadName(codexHomeFromSessionStore(r.store), string(record.ID), record.Title); err != nil {
 			r.rollbackThreadForkInitialization(record)
@@ -2770,6 +2783,43 @@ func (r *Router) handleThreadFork(request *Request) (*ThreadForkResponse, error)
 		DisabledPluginIDs:       disabledPluginIDsFromRecord(record),
 		ActivePermissionProfile: restoredForkSettings.activePermissionProfileResponse(params.Permissions),
 	}, nil
+}
+
+// inheritedForkPreview derives the preview a reference-backed fork inherits
+// (Rust #60559). Paginated sources keep their transcript in the thread history
+// store, so the opening user message may be absent from the loaded record; the
+// stored preview then seeds the fork instead, and the transcript supplies it
+// when compaction removed the opening message from the model context.
+func (r *Router) inheritedForkPreview(source *session.Record) string {
+	if source == nil {
+		return ""
+	}
+	if preview := strings.TrimSpace(source.Preview); preview != "" {
+		return preview
+	}
+	if preview := historyPreview(source.Items); preview != "" {
+		return preview
+	}
+	if r == nil || r.state == nil || !threadUsesPaginatedHistory(source) {
+		return ""
+	}
+	page, err := r.state.ListThreadHistoryItems(context.Background(), state.ThreadHistoryListItemsParams{
+		ThreadID: string(source.ID), PageSize: 64, SortDirection: state.ThreadHistorySortAsc,
+	})
+	if err != nil || page == nil {
+		return ""
+	}
+	now := r.now().UTC()
+	items := make([]session.Item, 0, len(page.Items))
+	for index := range page.Items {
+		raw := ThreadResumeHistoryItem(page.Items[index].ItemJSON)
+		item, err := sessionItemFromResumeHistory(&raw, now, index)
+		if err != nil || item.ID == "" {
+			continue
+		}
+		items = append(items, item)
+	}
+	return historyPreview(items)
 }
 
 func validatePaginatedForkParams(source *session.Record, params *ThreadForkParams) error {

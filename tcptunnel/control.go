@@ -2,6 +2,7 @@ package tcptunnel
 
 import (
 	"bufio"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -68,9 +69,23 @@ func ReadConnectHeaders(reader *bufio.Reader) (http.Header, error) {
 	return headers, nil
 }
 
-// ReadAuthToken mirrors Rust's `read_auth_token`: one trimmed bearer line, with
-// a nil result meaning the controlling pipe closed.
-func ReadAuthToken(reader *bufio.Reader) (*string, error) {
+// TunnelCredential selects the bearer shape a proxy expects: a plain OAuth or
+// opaque bearer, or the ERS-issued tunnel JWT that Portals requires for
+// ERS-authenticated listeners (Rust #60568).
+type TunnelCredential int
+
+const (
+	// CredentialBearer accepts any non-empty token but rejects ERS tunnel JWTs
+	// that predate the v2 wire version.
+	CredentialBearer TunnelCredential = iota
+	// CredentialErsTunnelJWT additionally requires every token to be an
+	// ERS-issued v2 tunnel JWT.
+	CredentialErsTunnelJWT
+)
+
+// Read returns one trimmed bearer line, with a nil result meaning the
+// controlling pipe closed.
+func (c TunnelCredential) Read(reader *bufio.Reader) (*string, error) {
 	line, err := readBoundedLine(reader, MaxTokenBytes)
 	if err != nil {
 		return nil, fmt.Errorf("reading MASQUE token: %w", err)
@@ -84,15 +99,66 @@ func ReadAuthToken(reader *bufio.Reader) (*string, error) {
 	if !utf8.Valid(line) {
 		return nil, fmt.Errorf("invalid MASQUE token encoding")
 	}
-	token := strings.TrimSpace(string(line))
+	auth, err := c.Header(strings.TrimSpace(string(line)))
+	if err != nil {
+		return nil, err
+	}
+	return &auth, nil
+}
+
+// Header validates one token and renders the Authorization value. Tokens that
+// announce themselves as ERS tunnel JWTs are checked for the v2 wire version;
+// the gateway still verifies the signature.
+func (c TunnelCredential) Header(token string) (string, error) {
 	if token == "" {
-		return nil, fmt.Errorf("empty MASQUE token")
+		return "", fmt.Errorf("empty MASQUE token")
+	}
+	parts := strings.Split(token, ".")
+	ers := false
+	if header, ok := jwtSegment(parts[0]); ok {
+		if typ, _ := header["typ"].(string); typ == "cca-tunnel+jwt" {
+			ers = true
+		}
+	}
+	if ers || c == CredentialErsTunnelJWT {
+		if !ers || len(parts) != 3 || parts[2] == "" || !jwtVersionTwo(parts[1]) {
+			return "", fmt.Errorf("Portals requires an ERS-issued v2 tunnel JWT")
+		}
 	}
 	auth := "Bearer " + token
 	if !validHeaderValue(auth) {
-		return nil, fmt.Errorf("invalid MASQUE token header")
+		return "", fmt.Errorf("invalid MASQUE token header")
 	}
-	return &auth, nil
+	return auth, nil
+}
+
+// ReadAuthToken mirrors Rust's former read_auth_token: one trimmed bearer line
+// in plain bearer mode.
+func ReadAuthToken(reader *bufio.Reader) (*string, error) {
+	return CredentialBearer.Read(reader)
+}
+
+// jwtSegment decodes one unpadded base64url JWT segment as a JSON object.
+func jwtSegment(segment string) (map[string]any, bool) {
+	decoded, err := base64.RawURLEncoding.DecodeString(segment)
+	if err != nil {
+		return nil, false
+	}
+	var object map[string]any
+	if json.Unmarshal(decoded, &object) != nil {
+		return nil, false
+	}
+	return object, true
+}
+
+// jwtVersionTwo reports whether the claims segment carries ver equal to 2.
+func jwtVersionTwo(segment string) bool {
+	claims, ok := jwtSegment(segment)
+	if !ok {
+		return false
+	}
+	version, ok := claims["ver"].(float64)
+	return ok && version == 2
 }
 
 // readBoundedLine mirrors Rust's `Read::take(limit + 1).read_until(b'\n', ..)`:
@@ -172,7 +238,7 @@ type controlInput struct {
 	tokens   chan controlToken
 }
 
-func newControlInput(reader *bufio.Reader, connectHeadersStdin bool) *controlInput {
+func newControlInput(reader *bufio.Reader, connectHeadersStdin bool, proxyOrigin string) *controlInput {
 	input := &controlInput{
 		metadata: make(chan controlMetadata, 1),
 		tokens:   make(chan controlToken, 1),
@@ -189,8 +255,14 @@ func newControlInput(reader *bufio.Reader, connectHeadersStdin bool) *controlInp
 			headers = parsed
 		}
 		input.metadata <- controlMetadata{headers: headers}
+		// Portals listeners need ERS-issued v2 tunnel JWTs unless the caller
+		// selected OAuth mode explicitly (Rust #60568).
+		credential := CredentialBearer
+		if containsString(GatewayOrigins, proxyOrigin) && headers.Get("x-portals-auth-mode") != "oauth" {
+			credential = CredentialErsTunnelJWT
+		}
 		for {
-			token, err := ReadAuthToken(reader)
+			token, err := credential.Read(reader)
 			if err != nil {
 				input.tokens <- controlToken{err: err}
 				close(input.tokens)

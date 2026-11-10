@@ -128,7 +128,7 @@ func TestHandshakeTimeoutRecord(t *testing.T) {
 
 // Mirrors the Rust flag-parsing coverage for `--diagnostics-json`.
 func TestParseArgsDiagnosticsJSON(t *testing.T) {
-	base := []string{"--proxy-url", "https://proxy.example.org", "--proxy-origins-file", "origins.txt", "--target", "127.0.0.1:22"}
+	base := []string{"--proxy-url", "https://proxy.example.org", "--proxy-origins-file", "origins.txt", "--target", "127.0.0.1:22", "--auth-token-stdin"}
 	parsed, err := ParseArgs(append(append([]string{}, base...), "--diagnostics-json"))
 	if err != nil {
 		t.Fatalf("ParseArgs() error = %v", err)

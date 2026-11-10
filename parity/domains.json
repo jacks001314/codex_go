@@ -1,6 +1,6 @@
 {
  "schemaVersion": 1,
- "targetRustCommit": "a7a9d82f15f15e8a89399abb15f4766430b9d5c7",
+ "targetRustCommit": "c82708f85803d21fe9046af407107a1ee105b6e5",
  "allowedIdentityMappings": [
   {
    "rust": "codex",
@@ -192,7 +192,7 @@
    "status": "partial",
    "acceptance": "Stable and experimental JSON Schema and TypeScript exports have zero canonical diff.",
    "evidence": [
-    "Re-checked at a7a9d82f15f15e8a89399abb15f4766430b9d5c7 (2026-11-10): both vendored precomputed artifacts are byte-identical to app-server-protocol/schema/precomputed/ in the anchor checkout (sha256 08c1705f123cfd2433a82b2aebba70b7acbafa5cc884173672288743f4062da0 stable, 1be5d8a35589e8aff8e55a6c1db7ad76f8e6aaf29e5a5a13e292953fb64afe84 experimental), so TestPrecomputedExportArtifactsMatchTargetRustCommit and TestPrecomputedAppServerExportsMatchRustTarget pass; the earlier key-count drift analysis no longer applies.",
+    "Re-checked at c82708f85803d21fe9046af407107a1ee105b6e5 (2026-11-10): both vendored precomputed artifacts are byte-identical to app-server-protocol/schema/precomputed/ in the anchor checkout (sha256 08c1705f123cfd2433a82b2aebba70b7acbafa5cc884173672288743f4062da0 stable, 1be5d8a35589e8aff8e55a6c1db7ad76f8e6aaf29e5a5a13e292953fb64afe84 experimental), so TestPrecomputedExportArtifactsMatchTargetRustCommit and TestPrecomputedAppServerExportsMatchRustTarget pass; the earlier key-count drift analysis no longer applies.",
     "The generator surface still differs from the anchor fixtures in exactly one client request: account/securitySetup/read (#60082) is not in BuildProtocolSchema, so ClientRequest.json and ClientRequest.ts disagree with the Rust fixtures (TestBuildProtocolSchemaMatchesRustStableFixtures, TestBuildTypeScriptProtocolSchemaMatchesRustFixtures, TestRustProtocolMethodSurfaceIsCoveredByGoSchemas).",
     "Forward-ported exemptions were trimmed at this anchor: modelProvider/list, modelProvider/config/write and the optional gatewayOAuth login/read params are now in the Rust fixtures, so forwardPortedStableMethods and forwardPortedOptionalTypeScriptParams are empty and no method is excused from the stable fixture comparison.",
     "Still true at this anchor: index suppression, generated-header stripping, Prettier ordering, trailing-whitespace cleanup and relative-path validation match Rust; the Go generator produces both export trees from the embedded protocol types.",

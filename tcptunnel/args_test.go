@@ -103,8 +103,8 @@ func TestParseArgsMirrorsClapRequirements(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseArgs() error = %v", err)
 	}
-	if args.ListenAddr != DefaultListenAddr {
-		t.Fatalf("ListenAddr = %q, want %q", args.ListenAddr, DefaultListenAddr)
+	if args.ListenAddr != "" {
+		t.Fatalf("ListenAddr = %q, want the runtime default", args.ListenAddr)
 	}
 	if !args.AuthTokenStdin || !args.AuthTokenUpdatesStdin || !args.ConnectHeadersStdin {
 		t.Fatalf("ParseArgs() = %#v", args)
@@ -112,15 +112,37 @@ func TestParseArgsMirrorsClapRequirements(t *testing.T) {
 
 	for _, argv := range [][]string{
 		{"--proxy-origins-file", "origins.txt", "--target", "127.0.0.1:22"},   // missing --proxy-url
-		{"--proxy-url", "https://p.example", "--target", "127.0.0.1:22"},      // missing --proxy-origins-file
 		{"--proxy-url", "https://p.example", "--proxy-origins-file", "o.txt"}, // missing --target
 		{"--proxy-url", "https://p.example", "--proxy-origins-file", "o.txt", "--target", "127.0.0.1:22", "--auth-token-updates-stdin"},
 		{"--proxy-url", "https://p.example", "--proxy-origins-file", "o.txt", "--target", "127.0.0.1:22", "--connect-headers-stdin"},
 		{"--proxy-url", "https://p.example", "--proxy-origins-file", "o.txt", "--target", "127.0.0.1:22", "--listen-addr", "not-an-addr"},
+		{"--auth-token-stdin"},                          // listener control protocol without a target or origins
+		{"--proxy-origins-file", "o.txt"},               // origins require the stdin bearer
+		{"--listen-addr", "127.0.0.1:0"},                // listener options require the stdin bearer
+		{"--diagnostics-json"},                          // listener diagnostics require the stdin bearer
+		{"--port", "22"},                                // a published port requires an environment id
+		{"--environment-id", "env", "--target", "t:22"}, // env and target are exclusive
+		{"--environment-id", "env", "--auth-token-stdin", "--proxy-origins-file", "o.txt"},
+		{"--environment-id", "env", "--port", "0"},
 		{"--bogus"},
 	} {
 		if _, err := ParseArgs(argv); err == nil {
 			t.Fatalf("ParseArgs(%v) succeeded, want error", argv)
 		}
+	}
+
+	ssh, err := ParseArgs([]string{"--proxy-url", "https://p.example", "--target", "env:22"})
+	if err != nil {
+		t.Fatalf("ParseArgs(ssh) error = %v", err)
+	}
+	if ssh.EnvironmentID != "" || ssh.Target != "env:22" || ssh.AuthTokenStdin {
+		t.Fatalf("ParseArgs(ssh) = %#v", ssh)
+	}
+	named, err := ParseArgs([]string{"--environment-id", "env"})
+	if err != nil {
+		t.Fatalf("ParseArgs(--environment-id) error = %v", err)
+	}
+	if named.ProxyURL != PublicGateway || named.Port != 0 {
+		t.Fatalf("ParseArgs(--environment-id) = %#v", named)
 	}
 }

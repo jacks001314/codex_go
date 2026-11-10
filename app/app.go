@@ -46,7 +46,6 @@ import (
 	"codex_go/sandbox/windowssandbox"
 	"codex_go/skillprovider"
 	"codex_go/state"
-	"codex_go/tcptunnel"
 )
 
 const (
@@ -223,7 +222,7 @@ func RunWithOptions(ctx context.Context, args []string, stdin io.Reader, stdout,
 	case cli.CommandQueue:
 		return runSessionQueue(&parsed.Queue, &parsed.Root, stdout, stderr)
 	case cli.CommandTcpTunnel:
-		return tcptunnel.Run(ctx, &parsed.TcpTunnel.Args, stdin, stdout, stderr)
+		return runTcpTunnel(ctx, parsed, stdin, stdout, stderr)
 	case cli.CommandAgents:
 		return runAgentsCommandWithIO(ctx, &parsed.Agents, &parsed.Root, stdin, stdout, stderr)
 	case cli.CommandUpdate:

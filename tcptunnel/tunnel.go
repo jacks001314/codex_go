@@ -57,7 +57,11 @@ func run(ctx context.Context, args *Args, stdin io.Reader, stdout, stderr io.Wri
 		if !args.AuthTokenStdin {
 			return errors.New("--auth-token-stdin is required")
 		}
-		listenAddr, err := net.ResolveTCPAddr("tcp", args.ListenAddr)
+		listenAddrText := args.ListenAddr
+		if strings.TrimSpace(listenAddrText) == "" {
+			listenAddrText = DefaultListenAddr
+		}
+		listenAddr, err := net.ResolveTCPAddr("tcp", listenAddrText)
 		if err != nil {
 			return fmt.Errorf("invalid listen address: %w", err)
 		}
@@ -82,7 +86,7 @@ func run(ctx context.Context, args *Args, stdin io.Reader, stdout, stderr io.Wri
 		}
 
 		phase = PhaseControl
-		control := newControlInput(bufio.NewReader(stdin), args.ConnectHeadersStdin)
+		control := newControlInput(bufio.NewReader(stdin), args.ConnectHeadersStdin, originOf(proxyURL))
 		metadata := <-control.metadata
 		if metadata.err != nil {
 			return metadata.err
@@ -196,8 +200,13 @@ type session struct {
 	quicConf  *quic.Config
 	transport *http3.Transport
 
-	mu   sync.Mutex
-	conn *quic.Conn
+	// noGSO dials over a socket without the batch interfaces so Linux SSH
+	// tunnels avoid UDP segmentation offload (Rust #60568).
+	noGSO bool
+
+	mu         sync.Mutex
+	conn       *quic.Conn
+	transports []*quic.Transport
 }
 
 func newSession(target *ProxyTarget) *session {
@@ -231,6 +240,17 @@ func (s *session) close() {
 		_ = conn.CloseWithError(0, "")
 	}
 	_ = s.transport.Close()
+	for _, transport := range s.transports {
+		_ = transport.Close()
+	}
+	s.transports = nil
+}
+
+// keepTransport owns an extra QUIC transport (one per no-GSO dial) until the
+// session closes.
+// keepTransport assumes the caller holds s.mu (ensureConnected does).
+func (s *session) keepTransport(transport *quic.Transport) {
+	s.transports = append(s.transports, transport)
 }
 
 // dial is the http3.Transport connection hook: it returns the cached connection
@@ -256,12 +276,20 @@ func (s *session) ensureConnected(ctx context.Context, tlsConfig *tls.Config, qu
 			return s.conn, nil
 		}
 	}
-	conn, err := dialProxy(ctx, s.target, tlsConfig, quicConf)
+	conn, err := s.dialProxy(ctx, tlsConfig, quicConf)
 	if err != nil {
 		return nil, err
 	}
 	s.conn = conn
 	return conn, nil
+}
+
+// dialProxy selects the plain or segmentation-offload-free QUIC dial.
+func (s *session) dialProxy(ctx context.Context, tlsConfig *tls.Config, quicConf *quic.Config) (*quic.Conn, error) {
+	if s.noGSO {
+		return s.dialProxyWithoutGSO(ctx, tlsConfig, quicConf)
+	}
+	return dialProxy(ctx, s.target, tlsConfig, quicConf)
 }
 
 // dialProxy resolves the proxy host and tries every peer, mirroring Rust's
@@ -422,9 +450,26 @@ func reconnect(ctx context.Context, session *session, accepts <-chan acceptResul
 	}
 }
 
+// bridgeMode selects how a CONNECT stream is shut down.
+type bridgeMode int
+
+const (
+	// bridgeListener forwards an accepted loopback TCP stream.
+	bridgeListener bridgeMode = iota
+	// bridgeProxyCommand relays one OpenSSH stdio session (Rust #60568).
+	bridgeProxyCommand
+)
+
 // bridge forwards one local connection through its own authenticated CONNECT.
 func bridge(ctx context.Context, session *session, socket net.Conn, target *ProxyTarget, headers http.Header, auth *authState) error {
-	defer socket.Close()
+	return bridgeStreams(ctx, session, socket, socket, target, headers, auth.load(), bridgeListener)
+}
+
+// bridgeStreams copies local bytes through one authenticated CONNECT request.
+// The upload runs until local EOF, which ends the request stream and so
+// half-closes the tunnel; the download copies peer bytes until the gateway
+// finishes. A rejected CONNECT surfaces only its HTTP status.
+func bridgeStreams(ctx context.Context, session *session, localRead io.Reader, localWrite io.Writer, target *ProxyTarget, headers http.Header, bearer string, mode bridgeMode) error {
 	pipeReader, pipeWriter := io.Pipe()
 	request := (&http.Request{
 		Method: http.MethodConnect,
@@ -436,7 +481,7 @@ func bridge(ctx context.Context, session *session, socket net.Conn, target *Prox
 		Header: headers.Clone(),
 		Body:   pipeReader,
 	}).WithContext(ctx)
-	request.Header.Set("Authorization", auth.load())
+	request.Header.Set("Authorization", bearer)
 
 	response, err := session.transport.RoundTrip(request)
 	if err != nil {
@@ -452,7 +497,7 @@ func bridge(ctx context.Context, session *session, socket net.Conn, target *Prox
 	uploadErr := make(chan error, 1)
 	go func() {
 		buffer := make([]byte, bridgeCopyBufferSize)
-		_, err := io.CopyBuffer(pipeWriter, socket, buffer)
+		_, err := io.CopyBuffer(pipeWriter, localRead, buffer)
 		// Closing the pipe ends the request stream, mirroring Rust's
 		// `send.finish()` on local EOF.
 		_ = pipeWriter.CloseWithError(err)
@@ -460,12 +505,21 @@ func bridge(ctx context.Context, session *session, socket net.Conn, target *Prox
 	}()
 
 	buffer := make([]byte, bridgeCopyBufferSize)
-	_, downloadErr := io.CopyBuffer(socket, response.Body, buffer)
-	if tcp, ok := socket.(*net.TCPConn); ok && downloadErr == nil {
-		_ = tcp.CloseWrite()
+	_, downloadErr := io.CopyBuffer(localWrite, response.Body, buffer)
+	if mode == bridgeListener {
+		if tcp, ok := localWrite.(*net.TCPConn); ok && downloadErr == nil {
+			_ = tcp.CloseWrite()
+		}
 	}
 	if downloadErr != nil {
+		_ = pipeWriter.Close()
 		return downloadErr
+	}
+	if mode == bridgeProxyCommand {
+		// OpenSSH needs EOF as soon as the peer finishes, even when stdin is
+		// still open. Releasing the pipe stops the detached upload copy.
+		_ = pipeWriter.Close()
+		return nil
 	}
 	select {
 	case err := <-uploadErr:

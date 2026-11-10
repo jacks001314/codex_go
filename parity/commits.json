@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
  "rustFromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
- "rustToInclusive": "a7a9d82f15f15e8a89399abb15f4766430b9d5c7",
+ "rustToInclusive": "c82708f85803d21fe9046af407107a1ee105b6e5",
  "commits": [
   {
    "sha": "27c05a52e0cdf93ef7db5a96ccaf88d6b9095472",
@@ -45824,10 +45824,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "本轮未审计落地：marketplace 升级未复用已装 Git 对象",
-    "Go 锚点：plugin/",
+    "plugin/marketplace_install.go: stageGitMarketplaceClone 先尝试 --reference <installed gitdir> --dissociate，失败即重建 staging 并回退普通 clone；resolveMarketplaceCloneReference/marketplaceGitSupportsAlternateRefs/parseMarketplaceGitRelease 与 core.alternateRefsCommand 校验。",
+    "plugin/marketplace_upgrade.go: upgradeConfiguredGitMarketplace 的内置 Git 升级改走 stageGitMarketplaceClone，自定义 materializer 仍自管 staging。",
+    "plugin/marketplace_upgrade_git_objects_like_rust_test.go: 安装→源仓库新提交→升级，断言 revision 前进、无 alternates、删除源仓库后仍可 rev-parse；版本解析 6 例。",
+    "验证：go build ./plugin；go test ./plugin -count=1（ok）。",
     "plan: update/plan_2026_11_10.md (#60528)"
    ]
   },
@@ -45899,6 +45901,70 @@
     "本轮未审计落地：完成回合活动未折叠到提示下",
     "Go 锚点：tui/tea/",
     "plan: update/plan_2026_11_10.md (#60557)"
+   ]
+  },
+  {
+   "sha": "ae5c75dbfc1a1e802db7ea9e4231f71ae86507a1",
+   "subject": "Discard opening prompts when side chat creation fails (#60558)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "tui/tea/side.go: startSideConversation 只把提示词放进 SideStartParams 交给 onStartSide，applySideStartResult 的失败分支仅写 system notice，没有 Rust restore_side_user_message 的等价物，失败提示词与图片不会回到父会话草稿。",
+    "stale 侧会话恢复（recoverStaleActiveSideThread）只恢复最近一次已提交的 side 提交，创建失败本身没有可恢复的 pending message。",
+    "plan: update/plan_2026_11_10.md (#60558)"
+   ]
+  },
+  {
+   "sha": "f988a5f0da566270150a0031edec457064c8cccd",
+   "subject": "Preserve inherited previews for paginated thread forks (#60559)",
+   "kind": "persistence",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "appserver/router.go: 新增 inheritedForkPreview（记录 preview → 已载入 items → thread history 首页 userMessage），handleThreadFork 在 preview 为空且非 ForkNone 时继承源会话 preview。",
+    "appserver/router.go: 分页 fork 建好后调用 StateRuntime.SetThreadPreviewIfEmpty 落库，参考型 fork 在首条本地消息前即可出现在列表。",
+    "state/backfill.go 的 upsert 在传入 preview 为空时保留已存 threads.preview，后续 rollout 观察不会清空继承值。",
+    "appserver/attached_fork_preview_like_rust_test.go: 父会话 preview 进入 fork 响应与列表，再次 ReconcileRollout 后仍保持。",
+    "验证：go test ./appserver -run TestAttachedForkKeepsInheritedPreviewLikeRust（ok）。",
+    "plan: update/plan_2026_11_10.md (#60559)"
+   ]
+  },
+  {
+   "sha": "6dfaca4dad030f5ecaf4925f210f539353b15594",
+   "subject": "Avoid periodic wakeups in idle Windows file watchers (#60560)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "上游改动只替换 Rust notify 8.2.0 的 Windows 后端（Bazel patch 与 file-watcher/src/file_watcher_tests.rs）。",
+    "Go 没有 codex-rs/file-watcher 对应物：execserver/capability_discovery_v2_cache.go、execserver/missing_watch.go、appserver/managed_network_reload.go 直接用 fsnotify，Windows 走 ReadDirectoryChangesW 阻塞等待，没有 100ms 轮询。",
+    "plan: update/plan_2026_11_10.md (#60560)"
+   ]
+  },
+  {
+   "sha": "c82708f85803d21fe9046af407107a1ee105b6e5",
+   "subject": "Add an OpenSSH ProxyCommand mode to codex tcp-tunnel (#60568)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "tcptunnel/args.go: --proxy-url/--target 变为 required_unless_present=environment_id，新增 --environment-id/--port，监听类参数 requires --auth-token-stdin，--auth-token-stdin requires --proxy-origins-file，冲突/缺省/端口解析按 clap 4.5.58 实测文案。",
+    "tcptunnel/ssh.go: PublicGateway/GatewayOrigins、SSHDestination（ENV:PORT、环境 ID 字符集、网关 origin 固定）、oauthBearer；RunSSHProxy 先连网关再取 OAuth token，Linux 走隐藏 batch 接口的无 GSO QUIC dial。",
+    "tcptunnel/control.go: TunnelCredential 区分 Bearer/ErsTunnelJWT，Portals 监听在未声明 oauth 时要求 ERS v2 tunnel JWT，续期同样校验。",
+    "tcptunnel/tunnel.go: bridgeStreams 承担监听与 ProxyCommand 两种模式，二进制透传、本地 EOF 半关闭、网关 EOF 立即退出、拒绝只暴露 HTTP 状态。",
+    "app/tcp_tunnel.go: OAuth 模式先加载 Cloud config 并 acquire 应用网络策略，只接受 chatgpt 登录，token 在 permit 校验后取用。",
+    "tcptunnel/ssh_like_rust_test.go 覆盖路由/凭据边界/JWT v2/二进制半关闭/网关 EOF/401；app/tcp_tunnel_test.go 覆盖非 ChatGPT 凭据与不可信网关拒绝。",
+    "验证：go test ./tcptunnel ./cli ./auth；go test ./app -run TestTcpTunnel。",
+    "plan: update/plan_2026_11_10.md (#60568)"
    ]
   }
  ]

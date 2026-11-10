@@ -187,6 +187,15 @@ func AccountIDFromAuthForRestrictions(snapshot *AuthDotJSON) string {
 	return ""
 }
 
+// ChatGPTAccessTokenFromAuth returns the stored OAuth access token. Callers
+// that need a ChatGPT login must check AuthDotJSON.Mode first.
+func ChatGPTAccessTokenFromAuth(snapshot *AuthDotJSON) string {
+	if snapshot == nil {
+		return ""
+	}
+	return strings.TrimSpace(stringFromAny(snapshot.Tokens, "access_token"))
+}
+
 func ChatGPTUserIDFromAuth(snapshot *AuthDotJSON) string {
 	if snapshot == nil {
 		return ""
@@ -743,10 +752,10 @@ type GetAccountSecuritySetupResponse struct {
 
 // AccountSecuritySetupNotice is the server-owned reminder copy and action.
 type AccountSecuritySetupNotice struct {
-	AccountID   string                    `json:"accountId"`
-	UserID      string                    `json:"userId"`
-	Title       string                    `json:"title"`
-	Description string                    `json:"description"`
+	AccountID   string                     `json:"accountId"`
+	UserID      string                     `json:"userId"`
+	Title       string                     `json:"title"`
+	Description string                     `json:"description"`
 	Action      AccountSecuritySetupAction `json:"action"`
 }
 

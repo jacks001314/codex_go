@@ -26,7 +26,7 @@ func TestControlInputAcknowledgesBearerRenewalWithOrWithoutMetadata(t *testing.T
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			input := newControlInput(bufio.NewReader(strings.NewReader(tc.input)), tc.includesMetadata)
+			input := newControlInput(bufio.NewReader(strings.NewReader(tc.input)), tc.includesMetadata, "https://proxy.example")
 			metadata := <-input.metadata
 			if metadata.err != nil {
 				t.Fatalf("metadata error = %v", metadata.err)
@@ -63,7 +63,7 @@ func TestControlInputAcknowledgesBearerRenewalWithOrWithoutMetadata(t *testing.T
 // TestClosedParentPipeFinishesEvenBeforeProxyReadiness mirrors Rust's
 // `closed_parent_pipe_finishes_even_before_proxy_readiness`.
 func TestClosedParentPipeFinishesEvenBeforeProxyReadiness(t *testing.T) {
-	input := newControlInput(bufio.NewReader(strings.NewReader("")), false)
+	input := newControlInput(bufio.NewReader(strings.NewReader("")), false, "https://proxy.example")
 	metadata := <-input.metadata
 	if metadata.err != nil {
 		t.Fatalf("metadata error = %v", metadata.err)
@@ -114,7 +114,7 @@ func TestInvalidControlInputStopsCredentialsWithoutExposingSecrets(t *testing.T)
 		{"header count", oversizedCount},
 	}
 	for _, tc := range invalidMetadata {
-		input := newControlInput(bufio.NewReader(strings.NewReader(tc.input+"private-secret\n")), true)
+		input := newControlInput(bufio.NewReader(strings.NewReader(tc.input+"private-secret\n")), true, "https://proxy.example")
 		metadata := <-input.metadata
 		if metadata.err == nil {
 			t.Fatalf("%s: metadata error = nil, want error", tc.name)
@@ -136,7 +136,7 @@ func TestInvalidControlInputStopsCredentialsWithoutExposingSecrets(t *testing.T)
 		{"bearer limit", strings.Repeat("x", MaxTokenBytes+1)},
 	}
 	for _, tc := range invalidTokens {
-		input := newControlInput(bufio.NewReader(strings.NewReader(tc.input)), false)
+		input := newControlInput(bufio.NewReader(strings.NewReader(tc.input)), false, "https://proxy.example")
 		metadata := <-input.metadata
 		if metadata.err != nil {
 			t.Fatalf("%s: metadata error = %v", tc.name, metadata.err)
