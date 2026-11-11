@@ -2726,7 +2726,7 @@ func interactiveRemoteOlderHistoryLoader(ctx context.Context, endpoint *appserve
 		if page.NextCursor != nil {
 			next = strings.TrimSpace(*page.NextCursor)
 		}
-		messages := remoteTUIThreadMessagesFromThread(&appserver.Thread{Turns: turns}, reasoningProjectionChatWidget, false)
+		messages := remoteTUIThreadMessagesFromOlderTurns(turns, reasoningProjectionChatWidget, false)
 		return codextea.OlderHistoryPage{Messages: messages, Cursor: next, HasOlder: next != ""}, nil
 	}
 }
@@ -2992,6 +2992,26 @@ func remoteTUIThreadMessagesFromThread(thread *appserver.Thread, projection reas
 	return messages
 }
 
+// remoteTUIThreadMessagesFromOlderTurns renders one older turn page and
+// restores the interruption notice at the end of each interrupted turn
+// (Rust #60554 project_older_history_cells). The initial window replays
+// through remoteTUIThreadMessagesFromThread instead, so a live notice is
+// never duplicated by the restored cells.
+func remoteTUIThreadMessagesFromOlderTurns(turns []appserver.Turn, projection reasoningProjection, showRawReasoning bool) []codextui.Message {
+	if len(turns) == 0 {
+		return nil
+	}
+	messages := make([]codextui.Message, 0, len(turns))
+	for index := range turns {
+		turn := turns[index]
+		messages = append(messages, remoteTUIThreadMessagesFromThread(&appserver.Thread{Turns: []appserver.Turn{turn}}, projection, showRawReasoning)...)
+		if turn.Status == appserver.TurnStatusInterrupted {
+			messages = append(messages, interruptionNoticeMessage())
+		}
+	}
+	return messages
+}
+
 // remoteTUIThreadActiveReasoning returns the live reasoning item of a thread
 // whose latest turn is in progress and whose trailing item is a reasoning item
 // (Rust #43921). The heading is the item's latest usable summary line.
@@ -3150,11 +3170,12 @@ func remoteTUIMessageFromThreadItem(item appserver.ThreadItem, projection reason
 		}
 		text := strings.Join(cell.DisplayLines(0), "\n")
 		return codextui.Message{
-			Role:        codextui.RoleHistory,
-			Text:        text,
-			RawText:     text,
-			ImagePath:   cell.ImagePath(),
-			ActivityIDs: cell.ActivityIDs(),
+			Role:         codextui.RoleHistory,
+			Text:         text,
+			RawText:      text,
+			ImagePath:    cell.ImagePath(),
+			ActivityIDs:  cell.ActivityIDs(),
+			ToolActivity: true,
 		}, true
 	case itemType == "imagegeneration":
 		status := firstNonEmptyLocal(
@@ -3172,18 +3193,23 @@ func remoteTUIMessageFromThreadItem(item appserver.ThreadItem, projection reason
 		)
 		cell := historycell.NewImageGenerationCall(item.ID, status, revisedPrompt, savedPath)
 		text := strings.Join(cell.DisplayLines(0), "\n")
+		// Rust #60555 summarizes image generation by its call label; the
+		// revised prompt and saved path stay in the expanded transcript.
 		return codextui.Message{
-			Role:      codextui.RoleHistory,
-			Text:      text,
-			RawText:   text,
-			ImagePath: cell.ImagePath(),
+			Role:         codextui.RoleHistory,
+			Text:         text,
+			RawText:      text,
+			ImagePath:    cell.ImagePath(),
+			ToolActivity: true,
 		}, true
 	case itemType == "commandexecution" || itemType == "mcptoolcall" || itemType == "dynamictoolcall" || itemType == "collabagenttoolcall" || itemType == "subagentactivity":
 		text := remoteTUIThreadItemToolText(item)
 		if text == "" {
 			return codextui.Message{}, false
 		}
-		return codextui.Message{Role: codextui.RoleHistory, Text: text, RawText: text}, true
+		// Restored tool cells carry no activity id; ToolActivity lets the
+		// full-screen transcript summarize their invocation labels (#60555).
+		return codextui.Message{Role: codextui.RoleHistory, Text: text, RawText: text, ToolActivity: true}, true
 	default:
 		text := strings.TrimSpace(item.Text)
 		if text == "" {

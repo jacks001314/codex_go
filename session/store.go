@@ -2434,6 +2434,12 @@ func itemTurnID(item *Item, index int) string {
 	return turnID
 }
 
+// ItemTurnID exposes the turn attribution ListItems uses, including the
+// legacy positional fallback for records written before items carried turn ids.
+func ItemTurnID(item *Item, index int) string {
+	return itemTurnID(item, index)
+}
+
 func itemTurnIDWithExplicit(item *Item, index int) (string, bool) {
 	if item != nil {
 		if value, ok := item.Metadata["turnId"].(string); ok && strings.TrimSpace(value) != "" {

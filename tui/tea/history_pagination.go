@@ -97,10 +97,16 @@ func (m *Model) applyOlderHistoryPage(threadID string, page OlderHistoryPage, er
 		overlayOffset = m.overlay.YOffset()
 		overlayRows = contentLineCount(m.overlay.Content())
 	}
-	if m.backtrack.HasSelection() && strings.TrimSpace(m.backtrack.BaseThreadID) == m.currentThreadID() {
-		m.backtrack.NthUserMessage += tuiapp.UserCount(page.Messages)
+	inserted := page.Messages
+	if m.isSideConversationThread(threadID) {
+		// Rust #60554 leaves interruption notices out of side threads: the
+		// restored row describes the main conversation's turn boundary.
+		inserted = dropInterruptionNotices(page.Messages)
 	}
-	m.State.InsertMessages(insertAt, page.Messages)
+	if m.backtrack.HasSelection() && strings.TrimSpace(m.backtrack.BaseThreadID) == m.currentThreadID() {
+		m.backtrack.NthUserMessage += tuiapp.UserCount(inserted)
+	}
+	m.State.InsertMessages(insertAt, inserted)
 	m.refreshTranscript()
 	if !inlineFollowing {
 		inserted := len(m.transcript.lines) - inlineRows
@@ -122,6 +128,36 @@ func (m *Model) sessionHeaderPrefixLen() int {
 		return 0
 	}
 	return 1
+}
+
+// isSideConversationThread reports whether threadID is one of the retained
+// side conversations, which never restore interruption notices.
+func (m *Model) isSideConversationThread(threadID string) bool {
+	if m == nil {
+		return false
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return false
+	}
+	for _, side := range m.sideConversations {
+		if side != nil && strings.TrimSpace(side.SideThreadID) == threadID {
+			return true
+		}
+	}
+	return false
+}
+
+// dropInterruptionNotices removes restored interrupted-turn boundary rows.
+func dropInterruptionNotices(messages []codextui.Message) []codextui.Message {
+	kept := make([]codextui.Message, 0, len(messages))
+	for _, message := range messages {
+		if message.InterruptionNotice {
+			continue
+		}
+		kept = append(kept, message)
+	}
+	return kept
 }
 
 func contentLineCount(content string) int {

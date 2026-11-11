@@ -70,6 +70,15 @@ type Message struct {
 	// renders only its summary line; expanding the group restores the original
 	// cells (Rust #60554/#60556, turn_details::TurnRow::Tools).
 	TurnDetailSummary bool
+	// ToolActivity marks a history entry that renders one tool invocation even
+	// when the producing cell reports no activity ids (restored MCP, dynamic,
+	// patch, image and agent cells). Rust #60555 summarizes those cells too:
+	// the summary keeps only the invocation label and never the output.
+	ToolActivity bool
+	// InterruptionNotice marks the neutral interrupted-turn row an older
+	// history page places at that turn's boundary (Rust #60554
+	// history_pagination); side conversations drop these rows.
+	InterruptionNotice bool
 	// StartupTip marks the retained startup tooltip row. Fullscreen rendering
 	// hides it while raw output and terminal scrollback keep the copy
 	// (Rust #48513).
