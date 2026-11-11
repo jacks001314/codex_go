@@ -402,7 +402,7 @@ func (s *ConfigService) EffectivePermissionProfileForCWD(cwd string) *sandbox.Pe
 		return nil
 	}
 	values, _ := mergeConfigLayers(layers)
-	cfg := &Config{Values: values, Requirements: s.LocalRequirements()}
+	cfg := &Config{Values: values, Requirements: s.LocalRequirements(), featureLayers: cloneLayers(layers)}
 	if !permissionProfileSelectionConfigured(values) {
 		// Rust's PermissionProfile::default() is managed read-only, and the Go
 		// runtime already derives that default (loadSandboxRunConfigForRunContext),
@@ -462,7 +462,15 @@ func (c *Config) ResolveSandboxPermissionProfileWithWorkspaceRoots(profileID str
 	}
 	profileID = strings.TrimSpace(profileID)
 	if profileID == "" {
-		profileID = stringFromConfigValue(c.Values["default_permissions"])
+		// Rust #60702: resolve competing sandbox_mode/default_permissions
+		// selectors at their original layer precedence instead of letting the
+		// merged default_permissions value always win.
+		if selection := ResolvePermissionConfig(c.featureLayers, c.Values, nil); selection != nil {
+			if selection.Legacy {
+				return c.resolveLegacySandboxPermissionProfileForModeWithWorkspaceRoots(selection.Mode, selection.WorkspaceWrite, cwd, workspaceRoots)
+			}
+			profileID = selection.ID
+		}
 	}
 	// A disallowed selection falls back to the required default rather than
 	// failing (Rust apply_requirement_constrained_value).
@@ -574,6 +582,14 @@ func (c *Config) resolveLegacySandboxPermissionProfileWithWorkspaceRoots(cwd str
 	if err != nil {
 		return nil, err
 	}
+	return c.resolveLegacySandboxPermissionProfileForModeWithWorkspaceRoots(mode, c.Values["sandbox_workspace_write"], cwd, workspaceRoots)
+}
+
+// resolveLegacySandboxPermissionProfileForModeWithWorkspaceRoots translates a
+// layer-selected legacy mode with the merged workspace-write settings
+// (Rust #60702 translate_legacy_permissions): custom roots, networking and
+// temporary-directory exclusions are preserved without assigning a profile id.
+func (c *Config) resolveLegacySandboxPermissionProfileForModeWithWorkspaceRoots(mode sandbox.SandboxMode, workspaceWrite any, cwd string, workspaceRoots []string) (*SandboxPermissionProfileResolution, error) {
 	var profile sandbox.PermissionProfile
 	switch mode {
 	case sandbox.SandboxReadOnly:
@@ -582,9 +598,9 @@ func (c *Config) resolveLegacySandboxPermissionProfileWithWorkspaceRoots(cwd str
 		profile = sandbox.FullAccessPermissionProfile()
 	case sandbox.SandboxWorkspaceWrite:
 		profile = sandbox.WorkspaceWritePermissionProfile()
-		applyLegacyWorkspaceWriteConfig(&profile, c.Values["sandbox_workspace_write"], turnWorkspaceRootOrCWD(workspaceRoots, cwd))
+		applyLegacyWorkspaceWriteConfig(&profile, workspaceWrite, turnWorkspaceRootOrCWD(workspaceRoots, cwd))
 	default:
-		return nil, fmt.Errorf("unknown sandbox mode %q", modeText)
+		return nil, fmt.Errorf("unknown sandbox mode %q", mode)
 	}
 	raw, err := sandbox.RuntimePermissionProfileJSON(profile)
 	if err != nil {
