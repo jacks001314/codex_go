@@ -88,7 +88,7 @@ func (m *Model) desiredProgramStatus() codextui.ProgramStatus {
 // goalIsActive reports whether the displayed thread has a goal the runtime will
 // continue after the current turn.
 func (m *Model) goalIsActive() bool {
-	return m != nil && m.currentGoal != nil && m.currentGoal.Status == appserver.GoalActive
+	return m != nil && m.goalBelongsToCurrentThread(m.currentGoal) && m.currentGoal.Status == appserver.GoalActive
 }
 
 // acknowledgeProgramStatus clears an unseen completed or failed result. Active

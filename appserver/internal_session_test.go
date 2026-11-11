@@ -214,6 +214,11 @@ func TestInternalSessionThreadReadyLifecycleLikeRust(t *testing.T) {
 	if parentInput.SessionStore == nil || parentInput.ThreadStore == nil {
 		t.Fatalf("thread-ready stores = %+v", parentInput)
 	}
+	// Rust #60670: thread-ready contributors see how this runtime obtained its
+	// history and the effective history mode.
+	if parentInput.HistoryInitialization != session.HistoryInitializationNew || parentInput.HistoryMode != ThreadHistoryLegacy {
+		t.Fatalf("parent thread-ready history = %q, %q", parentInput.HistoryInitialization, parentInput.HistoryMode)
+	}
 	context, ok := router.GuardianThreadContext(parent.ID)
 	if !ok || context.ParentThreadID != parent.ID || context.ParentModel != "gpt-ready" {
 		t.Fatalf("guardian thread context = %+v, ok=%v", context, ok)

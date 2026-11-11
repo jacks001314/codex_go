@@ -325,11 +325,6 @@ func (m *Model) applyAgentSwitchResult(message AgentSwitchResultMsg) {
 		// (tool-call display, retry, review) from the thread that was active.
 		m.resetThreadScopedState()
 		m.switchThreadID(entry.ThreadID)
-		// Rust #60280: a subagent can start deferred MCP servers individually, so
-		// its startup round tracks only the servers that report. Switching back
-		// to an embedded primary or side thread restores the configured round.
-		m.mcpStartupDisplayedThreadSubagent = strings.TrimSpace(entry.ParentThreadID) != ""
-		m.refreshMCPStartupExpectedServers()
 		messages := append([]codextui.Message(nil), message.Response.Messages...)
 		buffered := m.backgroundThreadEvents[entry.ThreadID]
 		// Only replay the buffer when the persisted thread is empty (the typical

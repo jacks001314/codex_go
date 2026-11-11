@@ -208,6 +208,12 @@ func (m *Model) applyGoalResult(msg GoalResultMsg) bubbletea.Cmd {
 	}
 	m.pendingGoalRequestID = 0
 	if msg.Err != nil {
+		if msg.Action == goalActionRefresh {
+			// Post-turn refresh is background maintenance. A side conversation
+			// is an ephemeral thread that cannot hold a goal, so its read error
+			// must not surface as a goal-command failure.
+			return nil
+		}
 		action := "read"
 		switch msg.Action {
 		case goalActionPause, goalActionResume:
@@ -276,11 +282,7 @@ func (m *Model) applyGoalResult(msg GoalResultMsg) bubbletea.Cmd {
 	case goalActionRefresh:
 		// Post-turn refresh: the model may have completed, blocked, or cleared
 		// the goal during the turn, so re-read it before deciding whether to
-		// start another continuation. Errors are background noise and should
-		// not surface as a goal command failure.
-		if msg.Err != nil {
-			return nil
-		}
+		// start another continuation.
 		if msg.Goal == nil {
 			m.applyGoalCleared(msg.ThreadID, false)
 			return nil
@@ -297,6 +299,9 @@ func (m *Model) applyGoalResult(msg GoalResultMsg) bubbletea.Cmd {
 // input item so no user message is rendered.
 func (m *Model) maybeContinueGoal(goal *appserver.Goal) bubbletea.Cmd {
 	if m == nil || goal == nil || m.onGoalContinuation == nil {
+		return nil
+	}
+	if !m.goalBelongsToCurrentThread(goal) {
 		return nil
 	}
 	if goal.Status != appserver.GoalActive {
@@ -436,13 +441,24 @@ func (m *Model) applyGoalUpdated(goal appserver.Goal, notify bool) {
 	if goal.ThreadID == "" && m.State != nil {
 		goal.ThreadID = strings.TrimSpace(m.State.ThreadID)
 	}
-	if m.State != nil && goal.ThreadID != "" {
-		m.switchThreadID(goal.ThreadID)
+	if goal.ThreadID == "" {
+		return
 	}
-	m.currentGoal = cloneGoalTea(&goal)
-	m.goalObservedAt = m.currentTime()
-	if goal.Status != appserver.GoalActive {
-		m.goalStatusTickActive = false
+	if m.threadGoals == nil {
+		m.threadGoals = map[string]*appserver.Goal{}
+	}
+	m.threadGoals[goal.ThreadID] = cloneGoalTea(&goal)
+	currentThreadID := m.goalThreadID()
+	if currentThreadID == "" {
+		m.switchThreadID(goal.ThreadID)
+		currentThreadID = m.goalThreadID()
+	}
+	if currentThreadID == goal.ThreadID {
+		m.currentGoal = cloneGoalTea(&goal)
+		m.goalObservedAt = m.currentTime()
+		if goal.Status != appserver.GoalActive {
+			m.goalStatusTickActive = false
+		}
 	}
 	if notify {
 		m.notice = "Goal updated: " + chatwidget.GoalStatusLabel(goal.Status)
@@ -455,7 +471,11 @@ func (m *Model) applyGoalCleared(threadID string, notify bool) {
 		return
 	}
 	threadID = strings.TrimSpace(threadID)
-	if threadID == "" || m.currentGoal == nil || m.currentGoal.ThreadID == "" || m.currentGoal.ThreadID == threadID {
+	if threadID != "" && m.threadGoals != nil {
+		delete(m.threadGoals, threadID)
+	}
+	currentThreadID := m.goalThreadID()
+	if threadID == "" || currentThreadID == "" || currentThreadID == threadID {
 		m.currentGoal = nil
 		m.goalObservedAt = m.currentTime()
 		m.goalStatusTickActive = false
@@ -464,6 +484,54 @@ func (m *Model) applyGoalCleared(threadID string, notify bool) {
 		m.notice = "Goal cleared"
 		m.refreshTranscript()
 	}
+}
+
+// syncGoalForCurrentThread swaps in the displayed thread's last observed goal.
+// Side conversations are ephemeral and never own a goal, so switching to one
+// clears the parent thread's goal from the status surface.
+func (m *Model) syncGoalForCurrentThread() {
+	if m == nil {
+		return
+	}
+	threadID := m.goalThreadID()
+	if threadID == "" {
+		m.clearDisplayedGoal()
+		return
+	}
+	if goal, ok := m.threadGoals[threadID]; ok {
+		m.currentGoal = cloneGoalTea(goal)
+		m.goalObservedAt = m.currentTime()
+		if m.currentGoal == nil || m.currentGoal.Status != appserver.GoalActive {
+			m.goalStatusTickActive = false
+		}
+		return
+	}
+	if m.currentGoal == nil || strings.TrimSpace(m.currentGoal.ThreadID) != threadID {
+		m.clearDisplayedGoal()
+	}
+}
+
+func (m *Model) clearDisplayedGoal() {
+	if m == nil {
+		return
+	}
+	m.currentGoal = nil
+	m.goalObservedAt = m.currentTime()
+	m.goalStatusTickActive = false
+}
+
+// goalBelongsToCurrentThread reports whether goal is the displayed thread's
+// goal. Automatic continuation and post-turn refresh must never run against a
+// side conversation's ephemeral thread.
+func (m *Model) goalBelongsToCurrentThread(goal *appserver.Goal) bool {
+	if m == nil || goal == nil {
+		return false
+	}
+	goalThreadID := strings.TrimSpace(goal.ThreadID)
+	if goalThreadID == "" {
+		return false
+	}
+	return goalThreadID == m.goalThreadID()
 }
 
 func (m *Model) goalThreadID() string {

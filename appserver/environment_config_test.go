@@ -2,6 +2,7 @@ package appserver
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -140,16 +141,18 @@ func TestResolveEnvironmentConfigTracksOwnershipLikeRust(t *testing.T) {
 
 func TestValidateTurnEnvironmentSelectionsAcceptsConfigStates(t *testing.T) {
 	manager := NewEnvironmentManager(EnvironmentShellInfo{Name: "fake", Path: "fake-shell"}, t.TempDir())
-	if _, err := manager.Add(&EnvironmentAddParams{EnvironmentID: "env-a", ExecServerURL: "ws://127.0.0.1:1234"}); err != nil {
-		t.Fatal(err)
+	for index, environmentID := range []string{"env-a", "env-b", "env-c"} {
+		if _, err := manager.Add(&EnvironmentAddParams{EnvironmentID: environmentID, ExecServerURL: fmt.Sprintf("ws://127.0.0.1:%d", 1234+index)}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	router := NewRuntimeRouter(RuntimeServices{Environment: manager})
 	defer router.Close()
 
 	environments := []map[string]any{
 		{"environmentId": "env-a", "cwd": "/remote"},
-		{"environmentId": "env-a", "cwd": "/remote", "config": map[string]any{"state": "pending"}},
-		{"environmentId": "env-a", "cwd": "/remote", "config": map[string]any{"state": "failed", "error": "provisioning failed"}},
+		{"environmentId": "env-b", "cwd": "/remote", "config": map[string]any{"state": "pending"}},
+		{"environmentId": "env-c", "cwd": "/remote", "config": map[string]any{"state": "failed", "error": "provisioning failed"}},
 	}
 	if err := router.validateTurnEnvironmentSelections(environments); err != nil {
 		t.Fatalf("validateTurnEnvironmentSelections() error = %v", err)

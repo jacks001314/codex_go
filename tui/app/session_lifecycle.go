@@ -102,12 +102,13 @@ func ThreadAttachPresentationFor(startupDraftPresent bool, started bool) ThreadA
 
 // ThreadSwitchResetDecision is the transcript-reset contract Rust runs for a
 // thread attach: both variants reset the thread-scoped transcript state and
-// clear the previous thread's pending history lines, while only the
-// draft-preserving variant defers the terminal clear.
+// clear the previous thread's pending history lines, while only the plain
+// reset clears the terminal. The draft-preserving variant keeps the visible
+// frame until the next synchronized draw (Rust #60675).
 type ThreadSwitchResetDecision struct {
 	ResetTranscriptState bool
 	ClearPendingHistory  bool
-	DeferTerminalClear   bool
+	ClearTerminal        bool
 	Event                string
 }
 
@@ -117,7 +118,7 @@ func ThreadSwitchResetFor(presentation ThreadAttachPresentation) ThreadSwitchRes
 	return ThreadSwitchResetDecision{
 		ResetTranscriptState: true,
 		ClearPendingHistory:  true,
-		DeferTerminalClear:   preserving,
+		ClearTerminal:        !preserving,
 		Event:                ThreadSwitchResetEvent(preserving),
 	}
 }

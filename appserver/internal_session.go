@@ -83,8 +83,14 @@ type ThreadReadyInput struct {
 	ParentThreadID string
 	SessionSource  string
 	Config         *config.Config
-	SessionStore   *ExtensionStore
-	ThreadStore    *ExtensionStore
+	// HistoryInitialization is how this runtime obtained its starting history
+	// (Rust #60670 ThreadReadyInput.history_initialization).
+	HistoryInitialization session.HistoryInitialization
+	// HistoryMode is the effective thread history mode, including a mode
+	// persisted by the host on resume (Rust #60670 ThreadReadyInput.history_mode).
+	HistoryMode  ThreadHistoryMode
+	SessionStore *ExtensionStore
+	ThreadStore  *ExtensionStore
 }
 
 // internalSessionHost owns host-side state for private internal sessions.
@@ -509,12 +515,14 @@ func (r *RuntimeRouter) emitThreadReadyLifecycle(threadID string) {
 	cfg := r.threadReadyConfig(record)
 	sessionID := firstNonEmpty(strings.TrimSpace(record.SessionID), threadID)
 	input := ThreadReadyInput{
-		ThreadID:       threadID,
-		ParentThreadID: strings.TrimSpace(string(record.ParentThreadID)),
-		SessionSource:  strings.TrimSpace(record.Metadata.Source),
-		Config:         cfg,
-		SessionStore:   r.internalHost.sessionStore(sessionID),
-		ThreadStore:    r.internalHost.threadStore(threadID),
+		ThreadID:              threadID,
+		ParentThreadID:        strings.TrimSpace(string(record.ParentThreadID)),
+		SessionSource:         strings.TrimSpace(record.Metadata.Source),
+		Config:                cfg,
+		HistoryInitialization: session.HistoryInitialization(r.threadHistoryInitialization(threadID)),
+		HistoryMode:           r.threadReadyHistoryMode(record),
+		SessionStore:          r.internalHost.sessionStore(sessionID),
+		ThreadStore:           r.internalHost.threadStore(threadID),
 	}
 	if senderSessionSourceIsInternal(record) {
 		r.internalHost.markThread(threadID)
@@ -541,6 +549,23 @@ func (r *RuntimeRouter) threadReadyConfig(record *session.Record) *config.Config
 	}
 	applyRuntimeConfigOverrides(cfg, threadRecordConfigOverrides(record))
 	return cfg
+}
+
+// threadReadyHistoryMode reports the effective history mode Rust exposes to
+// thread-ready contributors: the mode persisted with the thread, otherwise the
+// host store's default.
+func (r *RuntimeRouter) threadReadyHistoryMode(record *session.Record) ThreadHistoryMode {
+	if record != nil {
+		if mode := strings.TrimSpace(record.Metadata.HistoryMode); mode != "" {
+			return ThreadHistoryMode(mode)
+		}
+	}
+	if r != nil && r.services.ThreadRouter != nil {
+		if mode := r.services.ThreadRouter.defaultHistoryMode; mode != "" {
+			return mode
+		}
+	}
+	return ThreadHistoryLegacy
 }
 
 func threadReadyModel(record *session.Record, cfg *config.Config) string {

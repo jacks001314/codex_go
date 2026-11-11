@@ -64,7 +64,6 @@ const (
 	maxBottomLines        = 6
 	regionChromeMinWidth  = 100
 	footerHelpText        = "? for shortcuts"
-	mcpStartupFinishLag   = 4 * time.Second
 	// imagePasteRepeatWindow mirrors Rust's IMAGE_PASTE_REPEAT_WINDOW (#51411):
 	// the sliding window that suppresses auto-repeat image-paste presses.
 	imagePasteRepeatWindow = 250 * time.Millisecond
@@ -832,10 +831,6 @@ type ModelsResultMsg struct {
 }
 
 type MCPStartupFinishAfterLagMsg struct{}
-
-type mcpStartupFinishAfterLagMsg struct {
-	Generation uint64
-}
 
 type ThreadEventMsg struct {
 	Event protocol.ThreadEvent
@@ -1749,11 +1744,6 @@ type Options struct {
 	OnReadMCPInventory             func(detail bool) ([]historycell.McpServerStatus, error)
 	OnStartMCPLogin                func(name, threadID string) (MCPLoginStart, error)
 	OnListModels                   func(cwd string, includeHidden bool) ([]codextui.ModelPickerOption, error)
-	MCPStartupExpectedServers      []string
-	// MCPStartupTrackReportedOnly marks a shared app-server attachment or a
-	// subagent view, where a startup round contains only the servers that
-	// actually reported (Rust #60280).
-	MCPStartupTrackReportedOnly bool
 	// StartupConfigWarnings carries the requirement-driven config warnings known
 	// at startup so they coalesce into the startup warnings entry (Rust
 	// config.startup_warnings -> ConfigWarning notifications).
@@ -2241,13 +2231,7 @@ type Model struct {
 	// stream is active (Rust #46867).
 	deferredSubAgentActivity []protocol.ThreadItem
 	mcpStartup               chatwidget.McpStartupRoundState
-	// mcpStartupConfiguredExpectedServers restores the configured round when the
-	// displayed thread returns to an embedded primary or side thread (Rust
-	// refresh_mcp_startup_expected_servers_from_config).
-	mcpStartupConfiguredExpectedServers []string
-	mcpStartupTrackReportedOnly         bool
-	mcpStartupDisplayedThreadSubagent   bool
-	mcpStartupHeader                    string
+	mcpStartupHeader         string
 	// workingStatusHeader is the live reasoning summary line shown as the
 	// working indicator's header (Rust #43921).
 	workingStatusHeader string
@@ -2267,8 +2251,6 @@ type Model struct {
 	// wait streak that owns the status row until output arrives (Rust #43921).
 	commandLifecycle        chatwidget.CommandLifecycleState
 	mcpStartupActive        bool
-	mcpStartupGeneration    uint64
-	mcpStartupFinishPending bool
 	// startupWarnings coalesces the startup diagnostics into one history entry
 	// directly below the session splash (Rust StartupWarningsCell +
 	// App::merge_startup_warnings); startupWarningsIndex tracks that entry so
@@ -3406,256 +3388,254 @@ func NewModel(state *codextui.State, options Options) *Model {
 			},
 			AlternateScreen: options.NoAltScreen,
 		},
-		quickDialWriteSlot:                  -1,
-		terminalFocused:                     true,
-		statusStyle:                         lipgloss.NewStyle().Bold(true),
-		footerStyle:                         lipgloss.NewStyle().Foreground(lipgloss.Color("8")),
-		bottomStyle:                         lipgloss.NewStyle(),
-		modelPickerOpts:                     codextui.ConstrainServerServiceTierOptions(append([]codextui.ModelPickerOption(nil), options.ModelPickerOptions...), options.ServiceTierRequirements),
-		serviceTierCommands:                 serviceTierCommandsForPolicy(options.FeatureSettings, constrainServiceTierCommandsByRequirements(options.ServiceTierRequirements, options.ServiceTierCommands)),
-		savedServiceTier:                    strings.TrimSpace(state.ServiceTier),
-		serviceTierRequirements:             options.ServiceTierRequirements,
-		sessionItems:                        append([]codextui.SessionSummary(nil), options.SessionPickerItems...),
-		sessionCWD:                          strings.TrimSpace(options.SessionPickerCWD),
-		profile:                             strings.TrimSpace(options.Profile),
-		sessionPickerLoadNotice:             strings.TrimSpace(options.SessionPickerNotice),
-		sessionPickerDensity:                normalizeSessionPickerDensityTea(options.SessionPickerView),
-		agentsOverviewGrouping:              agentsoverview.ParseGroupingConfig(options.AgentsOverviewGrouping),
-		backgroundProcesses:                 cloneUnifiedExecProcessDetails(options.BackgroundProcesses),
-		mcpServers:                          cloneMcpServerStatuses(options.MCPServers),
-		onReadMCPInventory:                  options.OnReadMCPInventory,
-		onStartMCPLogin:                     options.OnStartMCPLogin,
-		activeMCPLoginIDs:                   map[string]string{},
-		mcpLoginResultsByThread:             map[string][]MCPLoginCompletedMsg{},
-		onListModels:                        options.OnListModels,
-		pendingMCPInventoryMessageIndex:     -1,
-		mcpStartup:                          chatwidget.NewMcpStartupRoundState(options.MCPStartupExpectedServers),
-		mcpStartupConfiguredExpectedServers: append([]string(nil), options.MCPStartupExpectedServers...),
-		mcpStartupTrackReportedOnly:         options.MCPStartupTrackReportedOnly,
-		initialMessages:                     options.InitialMessages,
-		featureSettings:                     cloneBoolMapTea(options.FeatureSettings),
-		multiAgentV2MaxConcurrentThreads:    options.MultiAgentV2MaxConcurrentThreads,
-		daybreakEnabled:                     daybreakFeatureEnabledForAccount(options.FeatureSettings, options.HasChatGPTAccount, state.AccountDisplay) && options.DaybreakDefault,
-		disablePasteBurst:                   options.DisablePasteBurst,
-		windowsTerminalMappedInput:          options.WindowsTerminalMappedInput,
-		personality:                         initialPersonality(state, options.Personality),
-		tuiTheme:                            strings.TrimSpace(options.TUITheme),
-		tuiPet:                              normalizePetIDTea(options.TUIPet),
-		onSubmit:                            options.OnSubmit,
-		onSubmitRequest:                     options.OnSubmitRequest,
-		onSteerRequest:                      options.OnSteerRequest,
-		onInterrupt:                         options.OnInterrupt,
-		onInterruptMCPStartup:               options.OnInterruptMCPStartup,
-		localDaemonSession:                  options.LocalDaemonSession,
-		daemonCLIExecutable:                 strings.TrimSpace(options.DaemonCLIExecutable),
-		daemonCLIVersion:                    strings.TrimSpace(options.DaemonCLIVersion),
-		daemonCLIPackage:                    options.DaemonCLIPackage,
-		daemonVersion:                       strings.TrimSpace(options.DaemonVersion),
-		daemonManaged:                       options.DaemonManaged,
-		remoteAppServer:                     options.RemoteAppServer,
-		localSession:                        options.LocalSession,
-		animationsEnabled:                   options.AnimationsEnabled == nil || *options.AnimationsEnabled,
-		conversationInset:                   options.ConversationInset,
-		effects:                             effectsSettingsOrDefault(options.Effects),
-		statusLineUseColors:                 options.StatusLineUseColors == nil || *options.StatusLineUseColors,
-		questionEscBack:                     options.QuestionEscBack == nil || *options.QuestionEscBack,
-		asyncQuestions:                      *bottompane.NewAsyncQuestions(),
-		worktreesEnabled:                    options.WorktreesEnabled,
-		localWorktreeOperations:             options.LocalWorktreeOperations,
-		worktreeSettings:                    options.WorktreeSettings,
-		worktreeRepoCheck:                   options.WorktreeRepositoryAvailable,
-		onWorktreeOwnerLookup:               options.OnWorktreeOwnerLookup,
-		onStartManagedWorktree:              options.OnStartManagedWorktree,
-		onManagedWorktreeChanged:            options.OnManagedWorktreeChanged,
-		onListPermissionProfiles:            options.OnListPermissionProfiles,
-		onListModelProviders:                options.OnListModelProviders,
-		onWriteModelProviderConfig:          options.OnWriteModelProviderConfig,
-		providerClientOverride:              strings.TrimSpace(options.ModelProviderClientOverride),
-		sideWidthPercent:                    options.SidebarWidthPercent,
-		onListCollaborationModes:            options.OnListCollaborationModes,
-		onUpdateThreadPermissions:           options.OnUpdateThreadPermissions,
-		terminalSize:                        options.TerminalSize,
-		sizeMonitorEnabled:                  terminalSizeMonitorNeeded(runtime.GOOS, os.Getenv),
-		agentsOverviewEmbedded:              options.AgentsOverviewEmbedded,
-		onAgentsOverviewRefresh:             options.OnAgentsOverviewRefresh,
-		onAgentsOverviewSearch:              options.OnAgentsOverviewSearch,
-		onAcknowledgeThreadRead:             options.OnAcknowledgeThreadRead,
-		onAgentsOverviewUsage:               options.OnAgentsOverviewUsage,
-		agentsOverviewUsage:                 map[string]*agentsOverviewUsageEntry{},
-		onAgentsOverviewNewSession:          options.OnAgentsOverviewNewSession,
-		onAgentsOverviewNewWorktree:         options.OnAgentsOverviewNewWorktree,
-		onAgentsOverviewStop:                options.OnAgentsOverviewStop,
-		onAgentsOverviewRename:              options.OnAgentsOverviewRename,
-		onAgentsOverviewArchive:             options.OnAgentsOverviewArchive,
-		onAgentsOverviewDelete:              options.OnAgentsOverviewDelete,
-		onAgentsOverviewPinnedThreads:       pinnedThreads,
-		onAgentsOverviewTogglePin:           togglePin,
-		analyticsChats:                      options.OnAnalyticsChats,
-		analyticsTaskThreads:                options.OnAnalyticsTaskThreads,
-		agentsOverviewDrafts:                map[string]string{},
-		onExternalEditor:                    options.OnExternalEditor,
-		externalEditorDirectory:             options.OnExternalEditorDirectory,
-		keymapConfig:                        options.KeymapConfig.Clone(),
-		onKeymapEdit:                        options.OnKeymapEdit,
-		onModalResponse:                     options.OnModalResponse,
-		onAppLinkAction:                     options.OnAppLinkAction,
-		onSessionAction:                     options.OnSessionAction,
-		onWorkingDirectoryChange:            options.OnWorkingDirectoryChange,
-		onResumeSession:                     options.OnResumeSession,
-		onSwitchBackendSession:              options.OnSwitchBackendSession,
-		onContinueSafetyRecourse:            options.OnContinueSafetyRecourse,
-		onPromptEdit:                        options.OnPromptEdit,
-		backtrack:                           tuiapp.BacktrackState{NthUserMessage: tuiapp.BacktrackNoSelection},
-		onRenameThread:                      options.OnRenameThread,
-		onLogout:                            options.OnLogout,
-		onReadAgents:                        options.OnReadAgents,
-		onSwitchAgent:                       options.OnSwitchAgent,
-		onReconnectThreadApprovals:          options.OnReconnectThreadApprovals,
-		backgroundThreadEvents:              map[string][]protocol.ThreadEvent{},
-		sideConversations:                   map[string]*activeSideConversation{},
-		threadGoals:                         map[string]*appserver.Goal{},
-		sidebarTabs:                         map[string][]*activeSideConversation{},
-		clipboardWrite:                      clipboardWrite,
-		clipboardWriteRich:                  clipboardWriteRich,
-		clipboardRead:                       clipboardRead,
-		clipboardForward:                    clipboardForward,
-		clipboardEnvironment:                clipboardEnvironment,
-		clipboardSetupTimeout:               5 * time.Second,
-		rightClickPasteMode:                 tuiapp.ParseRightClickPasteMode(options.RightClickPaste),
-		copyOnSelectMode:                    normalizeCopyOnSelectMode(options.CopyOnSelect),
-		copyOnSelectClear:                   options.CopyOnSelectClearSelection,
-		rightClickPasteEnv:                  detectRightClickPasteEnvironment(),
-		onExportTranscript:                  options.OnExportTranscript,
-		onGenerateRecap:                     options.OnGenerateRecap,
-		onSuggestThreadName:                 options.OnSuggestThreadName,
-		onUpdateDaybreak:                    options.OnUpdateDaybreak,
-		onLoadTranscriptPreview:             options.OnLoadTranscriptPreview,
-		onReadSessionTranscript:             options.OnReadSessionTranscript,
-		loadOlderHistory:                    options.LoadOlderHistory,
-		onAcknowledgeSessionRead:            options.OnAcknowledgeSessionRead,
-		onListSessionPickerItems:            options.OnListSessionPickerItems,
-		disableAutoRecap:                    options.AutoRecap != nil && !*options.AutoRecap,
-		promptSuggestionsEnabled:            options.PromptSuggestions != nil && *options.PromptSuggestions,
-		composerPlaceholder:                 firstNonEmpty(options.Placeholder, "Ask Codex to do anything"),
-		showRawReasoning:                    options.ShowRawReasoning,
-		recapLoadingIndex:                   -1,
-		onReadTokenActivity:                 options.OnReadTokenActivity,
-		onReadPlanHistory:                   options.OnReadPlanHistory,
-		planHistoryEnabled:                  options.PlanHistoryEnabled,
-		onReadRateLimitResetCredits:         options.OnReadRateLimitResetCredits,
-		onConsumeRateLimitResetCredit:       options.OnConsumeRateLimitResetCredit,
-		onReadRateLimits:                    options.OnReadRateLimits,
-		rateLimitSnapshotsReader:            options.OnReadRateLimitSnapshots,
-		onReadThreadUsage:                   options.OnReadThreadUsage,
-		onReadBackendBanner:                 options.OnReadBackendBanner,
-		onReadSecuritySetup:                 options.OnReadSecuritySetup,
-		onBackendBannerAction:               options.OnBackendBannerAction,
-		requiresOpenAIAuthOverride:          options.RequiresOpenAIAuth,
-		pendingStatusRateLimitRequests:      map[uint64]pendingStatusRateLimitRequest{},
-		terminalTitleWriter:                 options.OnWriteTerminalTitle,
-		terminalClearWriter:                 terminalSequenceWriterOrDefault(options.OnClearTerminal),
-		programStatusWriter:                 terminalRawSequenceWriterOrDefault(options.OnWriteProgramStatus),
-		notificationPost:                    options.OnPostNotification,
-		notificationSettings:                notificationSettingsOrDefault(options.Notifications),
-		notificationMethod:                  notificationMethodOrDefault(options.NotificationMethod),
-		notificationCondition:               notificationConditionOrDefault(options.NotificationCondition),
-		onReadGitDiff:                       options.OnReadGitDiff,
-		onStopBackgroundTerminals:           options.OnStopBackgroundTerminals,
-		onListBackgroundTerminals:           options.OnListBackgroundTerminals,
-		onReadDebugConfig:                   options.OnReadDebugConfig,
-		onReadGoal:                          options.OnReadGoal,
-		onSetGoal:                           options.OnSetGoal,
-		onClearGoal:                         options.OnClearGoal,
-		onEnsureThread:                      options.OnEnsureThread,
-		onGoalEditText:                      options.OnGoalEditText,
-		onGoalDraftMaterialize:              options.OnGoalDraftMaterialize,
-		onGoalContinuation:                  options.OnGoalContinuation,
-		onWriteSettings:                     options.OnWriteSettings,
-		onUpdateCollaborationMode:           options.OnUpdateCollaborationMode,
-		onWriteMemorySettings:               options.OnWriteMemorySettings,
-		onResetMemories:                     options.OnResetMemories,
-		onSubmitFeedback:                    options.OnSubmitFeedback,
-		onReadIDEContext:                    options.OnReadIDEContext,
-		onApproveAutoReviewDenial:           options.OnApproveAutoReviewDenial,
-		useMemories:                         boolPtrValueTeaDefault(options.UseMemories, true),
-		generateMemories:                    boolPtrValueTeaDefault(options.GenerateMemories, true),
-		feedbackEnabled:                     boolPtrValueTeaDefault(options.FeedbackEnabled, true),
-		feedbackLocalSaveAvailable:          options.OnSaveFeedback != nil,
-		onSaveFeedback:                      options.OnSaveFeedback,
-		windowsSandboxSetup:                 options.OnStartWindowsSandboxSetup,
-		windowsSandboxLevel:                 options.WindowsSandboxLevel,
-		onReadWindowsSandboxState:           options.OnReadWindowsSandboxState,
-		onOpenDesktopThread:                 options.OnOpenDesktopThread,
-		onDetectExternalAgent:               options.OnDetectExternalAgent,
-		onImportExternalAgent:               options.OnImportExternalAgent,
-		pendingExternalAgentImports:         map[string]bool{},
-		onReadRolloutPath:                   options.OnReadRolloutPath,
-		onVoiceConversationStart:            options.OnVoiceConversationStart,
-		voiceLockDetector:                   options.VoiceLockDetector,
-		onVoiceNotifications:                options.OnVoiceNotifications,
-		onVoiceApplyAnswer:                  options.OnVoiceApplyAnswer,
-		onVoiceCloseHelper:                  options.OnVoiceCloseHelper,
-		onVoiceSetMicrophoneMuted:           options.OnVoiceSetMicrophoneMuted,
-		onVoicePeaks:                        options.OnVoicePeaks,
-		onVoiceSettings:                     options.OnVoiceSettings,
-		onVoiceSaveVoice:                    options.OnVoiceSaveVoice,
-		onVoiceListDevices:                  options.OnVoiceListDevices,
-		onVoiceSaveDevice:                   options.OnVoiceSaveDevice,
-		onVoiceSaveInputChannel:             options.OnVoiceSaveInputChannel,
-		onVoiceAppendSpeech:                 options.OnVoiceAppendSpeech,
-		onReadHooks:                         options.OnReadHooks,
-		onWriteHookConfig:                   options.OnWriteHookConfig,
-		onReadPlugins:                       options.OnReadPlugins,
-		onReadPlugin:                        options.OnReadPlugin,
-		onInstallPlugin:                     options.OnInstallPlugin,
-		onUninstallPlugin:                   options.OnUninstallPlugin,
-		onWritePluginEnabled:                options.OnWritePluginEnabled,
-		onAddMarketplace:                    options.OnAddMarketplace,
-		onRemoveMarketplace:                 options.OnRemoveMarketplace,
-		onUpgradeMarketplace:                options.OnUpgradeMarketplace,
-		onOpenPluginURL:                     options.OnOpenPluginURL,
-		onOpenURL:                           options.OnOpenURL,
-		onPrimarySelectionWrite:             options.OnPrimarySelectionWrite,
-		onPrimarySelectionRead:              options.OnPrimarySelectionRead,
-		onPrimarySelectionRelease:           options.OnPrimarySelectionRelease,
-		onFetchStartupAnnouncement:          options.OnFetchStartupAnnouncement,
-		pluginUserMarketplaces:              cloneBoolMapTea(options.PluginUserMarketplaces),
-		pluginGitMarketplaces:               cloneBoolMapTea(options.PluginGitMarketplaces),
-		onReadSkills:                        options.OnReadSkills,
-		onWriteSkillEnabled:                 options.OnWriteSkillEnabled,
-		onFuzzyFileSearch:                   options.OnFuzzyFileSearch,
-		onSearchTasks:                       options.OnSearchTasks,
-		onReadExperimentalFeatures:          options.OnReadExperimentalFeatures,
-		onTaskToolsAvailable:                options.OnTaskToolsAvailable,
-		onReadApps:                          options.OnReadApps,
-		onStartReview:                       options.OnStartReview,
-		onStartReviewCommand:                options.OnStartReviewCommand,
-		onStartCompactCommand:               options.OnStartCompactCommand,
-		onSafetyBufferingRetry:              options.OnSafetyBufferingRetry,
-		onStartSide:                         options.OnStartSide,
-		onCloseSide:                         options.OnCloseSide,
-		onListSideChats:                     options.OnListSideChats,
-		onReadSideChatPrompts:               options.OnReadSideChatPrompts,
-		onOpenSideChat:                      options.OnOpenSideChat,
-		onReadReviewBranches:                options.OnReadReviewBranches,
-		onReadReviewCommits:                 options.OnReadReviewCommits,
-		statusLineConfiguredByUser:          options.StatusLineItems != nil,
-		rateLimitSnapshots:                  map[string]chatwidget.RateLimitSnapshot{},
-		rateLimitSwitchPrompt:               chatwidget.RateLimitSwitchPromptIdle,
-		hideRateLimitModelNudge:             boolPtrValueTea(options.HideRateLimitModelNudge),
-		approvalsReviewer:                   approvalsReviewerFromState(state),
-		permissionRequirements:              clonePermissionRequirementsTea(options.PermissionRequirements),
-		hasChatGPTAccount:                   options.HasChatGPTAccount,
-		chatGPTPlanType:                     strings.TrimSpace(options.ChatGPTPlanType),
-		availableRateLimitResetCredits:      cloneInt64PtrTea(options.AvailableRateLimitResetCredits),
-		toolCalls:                           map[string]*toolCallDisplayState{},
-		mcpToolCalls:                        map[string]*mcpToolCallDisplayState{},
-		renderedFileChanges:                 map[string]bool{},
-		webSearches:                         map[string]*webSearchDisplayState{},
-		activeProposedPlans:                 map[string]*proposedPlanDisplayState{},
-		startedThreadIDs:                    map[string]bool{},
-		completedThreadIDs:                  map[string]bool{},
-		now:                                 time.Now,
+		quickDialWriteSlot:               -1,
+		terminalFocused:                  true,
+		statusStyle:                      lipgloss.NewStyle().Bold(true),
+		footerStyle:                      lipgloss.NewStyle().Foreground(lipgloss.Color("8")),
+		bottomStyle:                      lipgloss.NewStyle(),
+		modelPickerOpts:                  codextui.ConstrainServerServiceTierOptions(append([]codextui.ModelPickerOption(nil), options.ModelPickerOptions...), options.ServiceTierRequirements),
+		serviceTierCommands:              serviceTierCommandsForPolicy(options.FeatureSettings, constrainServiceTierCommandsByRequirements(options.ServiceTierRequirements, options.ServiceTierCommands)),
+		savedServiceTier:                 strings.TrimSpace(state.ServiceTier),
+		serviceTierRequirements:          options.ServiceTierRequirements,
+		sessionItems:                     append([]codextui.SessionSummary(nil), options.SessionPickerItems...),
+		sessionCWD:                       strings.TrimSpace(options.SessionPickerCWD),
+		profile:                          strings.TrimSpace(options.Profile),
+		sessionPickerLoadNotice:          strings.TrimSpace(options.SessionPickerNotice),
+		sessionPickerDensity:             normalizeSessionPickerDensityTea(options.SessionPickerView),
+		agentsOverviewGrouping:           agentsoverview.ParseGroupingConfig(options.AgentsOverviewGrouping),
+		backgroundProcesses:              cloneUnifiedExecProcessDetails(options.BackgroundProcesses),
+		mcpServers:                       cloneMcpServerStatuses(options.MCPServers),
+		onReadMCPInventory:               options.OnReadMCPInventory,
+		onStartMCPLogin:                  options.OnStartMCPLogin,
+		activeMCPLoginIDs:                map[string]string{},
+		mcpLoginResultsByThread:          map[string][]MCPLoginCompletedMsg{},
+		onListModels:                     options.OnListModels,
+		pendingMCPInventoryMessageIndex:  -1,
+		mcpStartup:                       chatwidget.NewMcpStartupRoundState(),
+		initialMessages:                  options.InitialMessages,
+		featureSettings:                  cloneBoolMapTea(options.FeatureSettings),
+		multiAgentV2MaxConcurrentThreads: options.MultiAgentV2MaxConcurrentThreads,
+		daybreakEnabled:                  daybreakFeatureEnabledForAccount(options.FeatureSettings, options.HasChatGPTAccount, state.AccountDisplay) && options.DaybreakDefault,
+		disablePasteBurst:                options.DisablePasteBurst,
+		windowsTerminalMappedInput:       options.WindowsTerminalMappedInput,
+		personality:                      initialPersonality(state, options.Personality),
+		tuiTheme:                         strings.TrimSpace(options.TUITheme),
+		tuiPet:                           normalizePetIDTea(options.TUIPet),
+		onSubmit:                         options.OnSubmit,
+		onSubmitRequest:                  options.OnSubmitRequest,
+		onSteerRequest:                   options.OnSteerRequest,
+		onInterrupt:                      options.OnInterrupt,
+		onInterruptMCPStartup:            options.OnInterruptMCPStartup,
+		localDaemonSession:               options.LocalDaemonSession,
+		daemonCLIExecutable:              strings.TrimSpace(options.DaemonCLIExecutable),
+		daemonCLIVersion:                 strings.TrimSpace(options.DaemonCLIVersion),
+		daemonCLIPackage:                 options.DaemonCLIPackage,
+		daemonVersion:                    strings.TrimSpace(options.DaemonVersion),
+		daemonManaged:                    options.DaemonManaged,
+		remoteAppServer:                  options.RemoteAppServer,
+		localSession:                     options.LocalSession,
+		animationsEnabled:                options.AnimationsEnabled == nil || *options.AnimationsEnabled,
+		conversationInset:                options.ConversationInset,
+		effects:                          effectsSettingsOrDefault(options.Effects),
+		statusLineUseColors:              options.StatusLineUseColors == nil || *options.StatusLineUseColors,
+		questionEscBack:                  options.QuestionEscBack == nil || *options.QuestionEscBack,
+		asyncQuestions:                   *bottompane.NewAsyncQuestions(),
+		worktreesEnabled:                 options.WorktreesEnabled,
+		localWorktreeOperations:          options.LocalWorktreeOperations,
+		worktreeSettings:                 options.WorktreeSettings,
+		worktreeRepoCheck:                options.WorktreeRepositoryAvailable,
+		onWorktreeOwnerLookup:            options.OnWorktreeOwnerLookup,
+		onStartManagedWorktree:           options.OnStartManagedWorktree,
+		onManagedWorktreeChanged:         options.OnManagedWorktreeChanged,
+		onListPermissionProfiles:         options.OnListPermissionProfiles,
+		onListModelProviders:             options.OnListModelProviders,
+		onWriteModelProviderConfig:       options.OnWriteModelProviderConfig,
+		providerClientOverride:           strings.TrimSpace(options.ModelProviderClientOverride),
+		sideWidthPercent:                 options.SidebarWidthPercent,
+		onListCollaborationModes:         options.OnListCollaborationModes,
+		onUpdateThreadPermissions:        options.OnUpdateThreadPermissions,
+		terminalSize:                     options.TerminalSize,
+		sizeMonitorEnabled:               terminalSizeMonitorNeeded(runtime.GOOS, os.Getenv),
+		agentsOverviewEmbedded:           options.AgentsOverviewEmbedded,
+		onAgentsOverviewRefresh:          options.OnAgentsOverviewRefresh,
+		onAgentsOverviewSearch:           options.OnAgentsOverviewSearch,
+		onAcknowledgeThreadRead:          options.OnAcknowledgeThreadRead,
+		onAgentsOverviewUsage:            options.OnAgentsOverviewUsage,
+		agentsOverviewUsage:              map[string]*agentsOverviewUsageEntry{},
+		onAgentsOverviewNewSession:       options.OnAgentsOverviewNewSession,
+		onAgentsOverviewNewWorktree:      options.OnAgentsOverviewNewWorktree,
+		onAgentsOverviewStop:             options.OnAgentsOverviewStop,
+		onAgentsOverviewRename:           options.OnAgentsOverviewRename,
+		onAgentsOverviewArchive:          options.OnAgentsOverviewArchive,
+		onAgentsOverviewDelete:           options.OnAgentsOverviewDelete,
+		onAgentsOverviewPinnedThreads:    pinnedThreads,
+		onAgentsOverviewTogglePin:        togglePin,
+		analyticsChats:                   options.OnAnalyticsChats,
+		analyticsTaskThreads:             options.OnAnalyticsTaskThreads,
+		agentsOverviewDrafts:             map[string]string{},
+		onExternalEditor:                 options.OnExternalEditor,
+		externalEditorDirectory:          options.OnExternalEditorDirectory,
+		keymapConfig:                     options.KeymapConfig.Clone(),
+		onKeymapEdit:                     options.OnKeymapEdit,
+		onModalResponse:                  options.OnModalResponse,
+		onAppLinkAction:                  options.OnAppLinkAction,
+		onSessionAction:                  options.OnSessionAction,
+		onWorkingDirectoryChange:         options.OnWorkingDirectoryChange,
+		onResumeSession:                  options.OnResumeSession,
+		onSwitchBackendSession:           options.OnSwitchBackendSession,
+		onContinueSafetyRecourse:         options.OnContinueSafetyRecourse,
+		onPromptEdit:                     options.OnPromptEdit,
+		backtrack:                        tuiapp.BacktrackState{NthUserMessage: tuiapp.BacktrackNoSelection},
+		onRenameThread:                   options.OnRenameThread,
+		onLogout:                         options.OnLogout,
+		onReadAgents:                     options.OnReadAgents,
+		onSwitchAgent:                    options.OnSwitchAgent,
+		onReconnectThreadApprovals:       options.OnReconnectThreadApprovals,
+		backgroundThreadEvents:           map[string][]protocol.ThreadEvent{},
+		sideConversations:                map[string]*activeSideConversation{},
+		threadGoals:                      map[string]*appserver.Goal{},
+		sidebarTabs:                      map[string][]*activeSideConversation{},
+		clipboardWrite:                   clipboardWrite,
+		clipboardWriteRich:               clipboardWriteRich,
+		clipboardRead:                    clipboardRead,
+		clipboardForward:                 clipboardForward,
+		clipboardEnvironment:             clipboardEnvironment,
+		clipboardSetupTimeout:            5 * time.Second,
+		rightClickPasteMode:              tuiapp.ParseRightClickPasteMode(options.RightClickPaste),
+		copyOnSelectMode:                 normalizeCopyOnSelectMode(options.CopyOnSelect),
+		copyOnSelectClear:                options.CopyOnSelectClearSelection,
+		rightClickPasteEnv:               detectRightClickPasteEnvironment(),
+		onExportTranscript:               options.OnExportTranscript,
+		onGenerateRecap:                  options.OnGenerateRecap,
+		onSuggestThreadName:              options.OnSuggestThreadName,
+		onUpdateDaybreak:                 options.OnUpdateDaybreak,
+		onLoadTranscriptPreview:          options.OnLoadTranscriptPreview,
+		onReadSessionTranscript:          options.OnReadSessionTranscript,
+		loadOlderHistory:                 options.LoadOlderHistory,
+		onAcknowledgeSessionRead:         options.OnAcknowledgeSessionRead,
+		onListSessionPickerItems:         options.OnListSessionPickerItems,
+		disableAutoRecap:                 options.AutoRecap != nil && !*options.AutoRecap,
+		promptSuggestionsEnabled:         options.PromptSuggestions != nil && *options.PromptSuggestions,
+		composerPlaceholder:              firstNonEmpty(options.Placeholder, "Ask Codex to do anything"),
+		showRawReasoning:                 options.ShowRawReasoning,
+		recapLoadingIndex:                -1,
+		onReadTokenActivity:              options.OnReadTokenActivity,
+		onReadPlanHistory:                options.OnReadPlanHistory,
+		planHistoryEnabled:               options.PlanHistoryEnabled,
+		onReadRateLimitResetCredits:      options.OnReadRateLimitResetCredits,
+		onConsumeRateLimitResetCredit:    options.OnConsumeRateLimitResetCredit,
+		onReadRateLimits:                 options.OnReadRateLimits,
+		rateLimitSnapshotsReader:         options.OnReadRateLimitSnapshots,
+		onReadThreadUsage:                options.OnReadThreadUsage,
+		onReadBackendBanner:              options.OnReadBackendBanner,
+		onReadSecuritySetup:              options.OnReadSecuritySetup,
+		onBackendBannerAction:            options.OnBackendBannerAction,
+		requiresOpenAIAuthOverride:       options.RequiresOpenAIAuth,
+		pendingStatusRateLimitRequests:   map[uint64]pendingStatusRateLimitRequest{},
+		terminalTitleWriter:              options.OnWriteTerminalTitle,
+		terminalClearWriter:              terminalSequenceWriterOrDefault(options.OnClearTerminal),
+		programStatusWriter:              terminalRawSequenceWriterOrDefault(options.OnWriteProgramStatus),
+		notificationPost:                 options.OnPostNotification,
+		notificationSettings:             notificationSettingsOrDefault(options.Notifications),
+		notificationMethod:               notificationMethodOrDefault(options.NotificationMethod),
+		notificationCondition:            notificationConditionOrDefault(options.NotificationCondition),
+		onReadGitDiff:                    options.OnReadGitDiff,
+		onStopBackgroundTerminals:        options.OnStopBackgroundTerminals,
+		onListBackgroundTerminals:        options.OnListBackgroundTerminals,
+		onReadDebugConfig:                options.OnReadDebugConfig,
+		onReadGoal:                       options.OnReadGoal,
+		onSetGoal:                        options.OnSetGoal,
+		onClearGoal:                      options.OnClearGoal,
+		onEnsureThread:                   options.OnEnsureThread,
+		onGoalEditText:                   options.OnGoalEditText,
+		onGoalDraftMaterialize:           options.OnGoalDraftMaterialize,
+		onGoalContinuation:               options.OnGoalContinuation,
+		onWriteSettings:                  options.OnWriteSettings,
+		onUpdateCollaborationMode:        options.OnUpdateCollaborationMode,
+		onWriteMemorySettings:            options.OnWriteMemorySettings,
+		onResetMemories:                  options.OnResetMemories,
+		onSubmitFeedback:                 options.OnSubmitFeedback,
+		onReadIDEContext:                 options.OnReadIDEContext,
+		onApproveAutoReviewDenial:        options.OnApproveAutoReviewDenial,
+		useMemories:                      boolPtrValueTeaDefault(options.UseMemories, true),
+		generateMemories:                 boolPtrValueTeaDefault(options.GenerateMemories, true),
+		feedbackEnabled:                  boolPtrValueTeaDefault(options.FeedbackEnabled, true),
+		feedbackLocalSaveAvailable:       options.OnSaveFeedback != nil,
+		onSaveFeedback:                   options.OnSaveFeedback,
+		windowsSandboxSetup:              options.OnStartWindowsSandboxSetup,
+		windowsSandboxLevel:              options.WindowsSandboxLevel,
+		onReadWindowsSandboxState:        options.OnReadWindowsSandboxState,
+		onOpenDesktopThread:              options.OnOpenDesktopThread,
+		onDetectExternalAgent:            options.OnDetectExternalAgent,
+		onImportExternalAgent:            options.OnImportExternalAgent,
+		pendingExternalAgentImports:      map[string]bool{},
+		onReadRolloutPath:                options.OnReadRolloutPath,
+		onVoiceConversationStart:         options.OnVoiceConversationStart,
+		voiceLockDetector:                options.VoiceLockDetector,
+		onVoiceNotifications:             options.OnVoiceNotifications,
+		onVoiceApplyAnswer:               options.OnVoiceApplyAnswer,
+		onVoiceCloseHelper:               options.OnVoiceCloseHelper,
+		onVoiceSetMicrophoneMuted:        options.OnVoiceSetMicrophoneMuted,
+		onVoicePeaks:                     options.OnVoicePeaks,
+		onVoiceSettings:                  options.OnVoiceSettings,
+		onVoiceSaveVoice:                 options.OnVoiceSaveVoice,
+		onVoiceListDevices:               options.OnVoiceListDevices,
+		onVoiceSaveDevice:                options.OnVoiceSaveDevice,
+		onVoiceSaveInputChannel:          options.OnVoiceSaveInputChannel,
+		onVoiceAppendSpeech:              options.OnVoiceAppendSpeech,
+		onReadHooks:                      options.OnReadHooks,
+		onWriteHookConfig:                options.OnWriteHookConfig,
+		onReadPlugins:                    options.OnReadPlugins,
+		onReadPlugin:                     options.OnReadPlugin,
+		onInstallPlugin:                  options.OnInstallPlugin,
+		onUninstallPlugin:                options.OnUninstallPlugin,
+		onWritePluginEnabled:             options.OnWritePluginEnabled,
+		onAddMarketplace:                 options.OnAddMarketplace,
+		onRemoveMarketplace:              options.OnRemoveMarketplace,
+		onUpgradeMarketplace:             options.OnUpgradeMarketplace,
+		onOpenPluginURL:                  options.OnOpenPluginURL,
+		onOpenURL:                        options.OnOpenURL,
+		onPrimarySelectionWrite:          options.OnPrimarySelectionWrite,
+		onPrimarySelectionRead:           options.OnPrimarySelectionRead,
+		onPrimarySelectionRelease:        options.OnPrimarySelectionRelease,
+		onFetchStartupAnnouncement:       options.OnFetchStartupAnnouncement,
+		pluginUserMarketplaces:           cloneBoolMapTea(options.PluginUserMarketplaces),
+		pluginGitMarketplaces:            cloneBoolMapTea(options.PluginGitMarketplaces),
+		onReadSkills:                     options.OnReadSkills,
+		onWriteSkillEnabled:              options.OnWriteSkillEnabled,
+		onFuzzyFileSearch:                options.OnFuzzyFileSearch,
+		onSearchTasks:                    options.OnSearchTasks,
+		onReadExperimentalFeatures:       options.OnReadExperimentalFeatures,
+		onTaskToolsAvailable:             options.OnTaskToolsAvailable,
+		onReadApps:                       options.OnReadApps,
+		onStartReview:                    options.OnStartReview,
+		onStartReviewCommand:             options.OnStartReviewCommand,
+		onStartCompactCommand:            options.OnStartCompactCommand,
+		onSafetyBufferingRetry:           options.OnSafetyBufferingRetry,
+		onStartSide:                      options.OnStartSide,
+		onCloseSide:                      options.OnCloseSide,
+		onListSideChats:                  options.OnListSideChats,
+		onReadSideChatPrompts:            options.OnReadSideChatPrompts,
+		onOpenSideChat:                   options.OnOpenSideChat,
+		onReadReviewBranches:             options.OnReadReviewBranches,
+		onReadReviewCommits:              options.OnReadReviewCommits,
+		statusLineConfiguredByUser:       options.StatusLineItems != nil,
+		rateLimitSnapshots:               map[string]chatwidget.RateLimitSnapshot{},
+		rateLimitSwitchPrompt:            chatwidget.RateLimitSwitchPromptIdle,
+		hideRateLimitModelNudge:          boolPtrValueTea(options.HideRateLimitModelNudge),
+		approvalsReviewer:                approvalsReviewerFromState(state),
+		permissionRequirements:           clonePermissionRequirementsTea(options.PermissionRequirements),
+		hasChatGPTAccount:                options.HasChatGPTAccount,
+		chatGPTPlanType:                  strings.TrimSpace(options.ChatGPTPlanType),
+		availableRateLimitResetCredits:   cloneInt64PtrTea(options.AvailableRateLimitResetCredits),
+		toolCalls:                        map[string]*toolCallDisplayState{},
+		mcpToolCalls:                     map[string]*mcpToolCallDisplayState{},
+		renderedFileChanges:              map[string]bool{},
+		webSearches:                      map[string]*webSearchDisplayState{},
+		activeProposedPlans:              map[string]*proposedPlanDisplayState{},
+		startedThreadIDs:                 map[string]bool{},
+		completedThreadIDs:               map[string]bool{},
+		now:                              time.Now,
 	}
 	if shouldWarmClipboardReader(options.OnClipboardRead != nil, options.usesOwnedScreen(), model.rightClickPasteEnv, model.rightClickPasteMode) {
 		warmDefaultClipboardReader()
@@ -3755,9 +3735,6 @@ func NewModel(state *codextui.State, options Options) *Model {
 	// installed. Re-render now so resumed image entries can reserve preview rows.
 	model.refreshTranscript()
 	model.composerTips = newComposerTips(options.StartupAnnouncement)
-	if model.mcpStartupTrackReportedOnly {
-		model.mcpStartup.TrackReportedServers()
-	}
 	return model
 }
 
@@ -4339,9 +4316,7 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		m.applyModelsResult(msg)
 		return m, nil
 	case MCPStartupFinishAfterLagMsg:
-		return m, m.finishMCPStartupAfterLag(0)
-	case mcpStartupFinishAfterLagMsg:
-		return m, m.finishMCPStartupAfterLag(msg.Generation)
+		return m, m.finishMCPStartupAfterLag()
 	case ExternalEditorFinishedMsg:
 		m.applyExternalEditorFinished(msg)
 		return m, m.refreshSkillPopup()
@@ -7215,12 +7190,11 @@ func (m *Model) applyMCPStartupUpdate(message MCPStartupUpdateMsg) bubbletea.Cmd
 	if m == nil {
 		return nil
 	}
-	m.refreshMCPStartupExpectedServers()
 	status := message.Status
 	if status.Kind == chatwidget.McpStartupFailed && status.Error == "" {
 		status.Error = "MCP client for `" + message.Name + "` failed to start"
 	}
-	result := m.mcpStartup.Update(message.Name, status, false)
+	result := m.mcpStartup.Update(message.Name, status)
 	if result.StandaloneDiagnostic {
 		m.applyMCPStartupStandaloneDiagnostic(message.Name, status, result)
 		m.refreshTranscript()
@@ -7230,7 +7204,6 @@ func (m *Model) applyMCPStartupUpdate(message MCPStartupUpdateMsg) bubbletea.Cmd
 	if result.Finished {
 		m.mcpStartupActive = false
 		m.mcpStartupHeader = ""
-		m.mcpStartupFinishPending = false
 	} else if result.Active {
 		m.mcpStartupActive = true
 		if strings.TrimSpace(result.Header) != "" {
@@ -7242,22 +7215,11 @@ func (m *Model) applyMCPStartupUpdate(message MCPStartupUpdateMsg) bubbletea.Cmd
 	if result.Finished {
 		return m.submitNextQueued()
 	}
-	if result.Settled && !m.mcpStartupFinishPending {
-		m.mcpStartupGeneration++
-		generation := m.mcpStartupGeneration
-		m.mcpStartupFinishPending = true
-		return bubbletea.Tick(mcpStartupFinishLag, func(time.Time) bubbletea.Msg {
-			return mcpStartupFinishAfterLagMsg{Generation: generation}
-		})
-	}
 	return nil
 }
 
-func (m *Model) finishMCPStartupAfterLag(generation uint64) bubbletea.Cmd {
+func (m *Model) finishMCPStartupAfterLag() bubbletea.Cmd {
 	if m == nil {
-		return nil
-	}
-	if generation != 0 && (!m.mcpStartupFinishPending || generation != m.mcpStartupGeneration) {
 		return nil
 	}
 	result := m.mcpStartup.FinishAfterLag()
@@ -7265,7 +7227,6 @@ func (m *Model) finishMCPStartupAfterLag(generation uint64) bubbletea.Cmd {
 	if result.Finished {
 		m.mcpStartupActive = false
 		m.mcpStartupHeader = ""
-		m.mcpStartupFinishPending = false
 	}
 	m.syncTaskRunningTimer()
 	m.refreshTranscript()
@@ -7365,23 +7326,6 @@ func (m *Model) applyStartupConfigWarning(message string) {
 	}
 	m.warningDisplay.MarkStartupConfigWarning(message)
 	m.mergeStartupWarnings(historycell.NewStartupWarnings([]string{message}))
-}
-
-// refreshMCPStartupExpectedServers mirrors Rust's
-// refresh_mcp_startup_expected_servers_from_config (#60280): a shared app
-// server may run a different MCP configuration and only sends startup updates
-// after subscription, and subagents may start deferred servers individually.
-// Both wait only for the startups they observe; embedded primary and side
-// threads keep expecting the configured servers.
-func (m *Model) refreshMCPStartupExpectedServers() {
-	if m == nil {
-		return
-	}
-	if m.mcpStartupTrackReportedOnly || m.mcpStartupDisplayedThreadSubagent {
-		m.mcpStartup.TrackReportedServers()
-		return
-	}
-	m.mcpStartup.SetExpectedServers(m.mcpStartupConfiguredExpectedServers)
 }
 
 // applyMCPStartupStandaloneDiagnostic renders a terminal outcome that arrived

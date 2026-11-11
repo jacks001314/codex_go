@@ -2,7 +2,10 @@
 
 package provisionservice
 
-import "time"
+import (
+	"path/filepath"
+	"time"
+)
 
 // WindowsTransport is inert outside Windows: there is no provisioning service.
 type WindowsTransport struct{}
@@ -23,4 +26,19 @@ func (t *WindowsTransport) ConnectAfterRestart(previousPID uint32, deadline time
 // StartServiceForSetup is a no-op outside Windows.
 func StartServiceForSetup() error {
 	return nil
+}
+
+// canonicalizeProvisioningHome resolves the request home the way the Windows
+// client does. Other platforms have no provisioning service, so this only keeps
+// the client's shared code compiling with the same signature.
+func canonicalizeProvisioningHome(path string) string {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return path
+	}
+	resolved, err := filepath.EvalSymlinks(absolute)
+	if err != nil {
+		return path
+	}
+	return filepath.Clean(resolved)
 }

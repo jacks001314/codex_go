@@ -6,148 +6,47 @@ import (
 	"testing"
 )
 
-func TestMcpStartupFinishAfterLagWithoutActiveStatusDoesNotEnterIgnoreModeMatchRust(t *testing.T) {
-	state := NewMcpStartupRoundState([]string{"alpha", "beta"})
-
-	lag := state.FinishAfterLag()
-	if lag.Finished || state.IgnoreUpdatesUntilNextStart {
-		t.Fatalf("finish after lag without active status = %#v state=%#v", lag, state)
-	}
-
-	failed := state.Update("alpha", McpStartupStatus{Kind: McpStartupFailed, Error: "alpha failed"}, true)
-	if !failed.Active || !reflect.DeepEqual(failed.Warnings, []string{"alpha failed"}) {
-		t.Fatalf("alpha failed update = %#v", failed)
-	}
-	if failed.Finished {
-		t.Fatalf("startup should wait for beta, got %#v", failed)
-	}
-
-	finished := state.Update("beta", McpStartupStatus{Kind: McpStartupReady}, true)
-	if !finished.Finished || !reflect.DeepEqual(finished.Failed, []string{"alpha"}) {
-		t.Fatalf("settled update = %#v", finished)
-	}
-	if got := strings.Join(finished.Warnings, "\n"); !strings.Contains(got, "MCP startup incomplete (failed: alpha)") {
-		t.Fatalf("warnings = %#v", finished.Warnings)
-	}
-}
-
-func TestMcpStartupSettledCanWaitForLagMatchRust(t *testing.T) {
-	state := NewMcpStartupRoundState([]string{"alpha", "beta"})
-	state.Update("alpha", McpStartupStatus{Kind: McpStartupStarting}, false)
-	state.Update("beta", McpStartupStatus{Kind: McpStartupStarting}, false)
-	state.Update("alpha", McpStartupStatus{Kind: McpStartupFailed, Error: "alpha failed"}, false)
-
-	settled := state.Update("beta", McpStartupStatus{Kind: McpStartupReady}, false)
-	if !settled.Settled || settled.Finished || len(settled.Warnings) != 0 {
-		t.Fatalf("settled before lag = %#v", settled)
-	}
-
-	finished := state.FinishAfterLag()
-	if !finished.Finished || !reflect.DeepEqual(finished.Failed, []string{"alpha"}) {
-		t.Fatalf("finished after lag = %#v", finished)
-	}
-}
-
-func TestMcpStartupIgnoreModeRequiresExpectedServersMatchRust(t *testing.T) {
-	state := McpStartupRoundState{
-		IgnoreUpdatesUntilNextStart: true,
-		PendingNextRound:            map[string]McpStartupStatus{},
-	}
-
-	result := state.Update("runtime", McpStartupStatus{Kind: McpStartupStarting}, true)
-	if result.Active || result.Header != "" || len(state.Status) != 0 {
-		t.Fatalf("unexpected activation without expected servers: result=%#v state=%#v", result, state)
-	}
-}
-
-func TestMcpStartupEmptyExpectedServersReactivatesNextRoundMatchRust(t *testing.T) {
-	state := NewMcpStartupRoundState(nil)
-	state.SetExpectedServers(nil)
-	state.Finish()
-
-	started := state.Update("runtime", McpStartupStatus{Kind: McpStartupStarting}, true)
-	if !started.Active || started.Header != MCPStartupSingleHeaderPrefix+" runtime" {
-		t.Fatalf("started = %#v", started)
-	}
-
-	finished := state.Update("runtime", McpStartupStatus{Kind: McpStartupFailed, Error: "runtime failed"}, true)
-	if !finished.Finished || !reflect.DeepEqual(finished.Failed, []string{"runtime"}) {
-		t.Fatalf("finished = %#v", finished)
-	}
-	if got := strings.Join(finished.Warnings, "\n"); !strings.Contains(got, "runtime failed") || !strings.Contains(got, "MCP startup incomplete (failed: runtime)") {
-		t.Fatalf("warnings = %#v", finished.Warnings)
-	}
-}
-
-func TestMcpStartupAfterLagTerminalOnlyNextRoundMatchRust(t *testing.T) {
-	state := NewMcpStartupRoundState([]string{"alpha", "beta"})
-	state.Update("alpha", McpStartupStatus{Kind: McpStartupStarting}, true)
-	state.Update("alpha", McpStartupStatus{Kind: McpStartupFailed, Error: "alpha failed"}, true)
-	state.Update("beta", McpStartupStatus{Kind: McpStartupStarting}, true)
-
-	firstFinish := state.FinishAfterLag()
-	if !firstFinish.Finished || !reflect.DeepEqual(firstFinish.Failed, []string{"alpha"}) || !reflect.DeepEqual(firstFinish.Cancelled, []string{"beta"}) {
-		t.Fatalf("first finish = %#v", firstFinish)
-	}
-
-	lateAlpha := state.Update("alpha", McpStartupStatus{Kind: McpStartupFailed, Error: "stale alpha failed"}, true)
-	if lateAlpha.Active || len(lateAlpha.Warnings) != 0 {
-		t.Fatalf("late alpha should stay buffered: %#v", lateAlpha)
-	}
-	state.FinishAfterLag()
-
-	next := state.Update("beta", McpStartupStatus{Kind: McpStartupReady}, true)
-	if !next.Finished || !reflect.DeepEqual(next.Failed, []string{"alpha"}) {
-		t.Fatalf("terminal-only next round = %#v", next)
-	}
-	if got := strings.Join(next.Warnings, "\n"); !strings.Contains(got, "stale alpha failed") || !strings.Contains(got, "MCP startup incomplete (failed: alpha)") {
-		t.Fatalf("warnings = %#v", next.Warnings)
-	}
-}
-
-func TestMcpStartupPreservesServerAndErrorTextMatchRust(t *testing.T) {
-	state := NewMcpStartupRoundState([]string{" alpha "})
-	started := state.Update(" alpha ", McpStartupStatus{Kind: McpStartupStarting}, true)
-	if started.Header != MCPStartupSingleHeaderPrefix+"  alpha " {
-		t.Fatalf("header should preserve server text, got %q", started.Header)
-	}
-
-	finished := state.Update(" alpha ", McpStartupStatus{Kind: McpStartupFailed, Error: "  boom  "}, true)
-	if !reflect.DeepEqual(finished.Warnings[:1], []string{"  boom  "}) {
-		t.Fatalf("warnings should preserve error text: %#v", finished.Warnings)
-	}
-}
-
-func TestMcpStartupReportedOnlySettlesOnObservedStartsMatchRust(t *testing.T) {
-	// Rust #60280: a shared app server may run servers the local configuration
-	// does not know about, so only the observed startups belong to the round.
-	state := NewMcpStartupRoundState([]string{"configured"})
-	state.TrackReportedServers()
-
-	started := state.Update("alpha", McpStartupStatus{Kind: McpStartupStarting}, true)
-	if !started.Active || started.Settled || started.Finished {
+// Rust #60622: a startup round settles once every start the client observed has
+// a terminal outcome. Locally configured servers the app server never reports
+// are not part of the round.
+func TestMcpStartupObservedRoundSettlesLikeRust(t *testing.T) {
+	state := NewMcpStartupRoundState()
+	started := state.Update("alpha", McpStartupStatus{Kind: McpStartupStarting})
+	if !started.Active || started.Header != MCPStartupSingleHeaderPrefix+" alpha" || started.Finished {
 		t.Fatalf("alpha start = %#v", started)
 	}
-	state.Update("beta", McpStartupStatus{Kind: McpStartupStarting}, true)
-	if alphaReady := state.Update("alpha", McpStartupStatus{Kind: McpStartupReady}, false); alphaReady.Settled {
-		t.Fatalf("alpha ready must keep waiting for beta: %#v", alphaReady)
+	if beta := state.Update("beta", McpStartupStatus{Kind: McpStartupStarting}); beta.Header == "" {
+		t.Fatalf("beta start = %#v", beta)
 	}
-	if lateStart := state.Update("late", McpStartupStatus{Kind: McpStartupStarting}, false); lateStart.Settled {
-		t.Fatalf("a newly observed start stays in the round: %#v", lateStart)
+	if ready := state.Update("alpha", McpStartupStatus{Kind: McpStartupReady}); ready.Finished {
+		t.Fatalf("alpha ready must keep waiting for beta: %#v", ready)
 	}
-	state.Update("beta", McpStartupStatus{Kind: McpStartupReady}, false)
-	finished := state.Update("late", McpStartupStatus{Kind: McpStartupReady}, true)
+	if late := state.Update("late", McpStartupStatus{Kind: McpStartupStarting}); late.Finished {
+		t.Fatalf("a newly observed start stays in the round: %#v", late)
+	}
+	state.Update("beta", McpStartupStatus{Kind: McpStartupReady})
+	finished := state.Update("late", McpStartupStatus{Kind: McpStartupReady})
 	if !finished.Finished || len(finished.Failed) != 0 || len(finished.Cancelled) != 0 {
-		t.Fatalf("reported-only round settled on observed starts = %#v", finished)
+		t.Fatalf("round settled on observed starts = %#v", finished)
 	}
 }
 
-func TestMcpStartupReportedOnlyIdleTerminalDiagnosticsMatchRust(t *testing.T) {
-	state := NewMcpStartupRoundState(nil)
-	state.TrackReportedServers()
+// Rust #60622: an unreported locally configured server must not keep startup
+// busy after the observed servers finish.
+func TestMcpStartupUnreportedConfiguredServerDoesNotStayBusyLikeRust(t *testing.T) {
+	state := NewMcpStartupRoundState()
+	state.Update("first", McpStartupStatus{Kind: McpStartupStarting})
+	running := state.Update("first", McpStartupStatus{Kind: McpStartupReady})
+	if !running.Finished || len(state.Status) != 0 {
+		t.Fatalf("single observed server did not settle: %#v state=%#v", running, state)
+	}
+}
+
+func TestMcpStartupIdleTerminalDiagnosticsMatchRust(t *testing.T) {
+	state := NewMcpStartupRoundState()
 	failure := McpStartupStatus{Kind: McpStartupFailed, Error: "Session expired", FailureReason: "reauthenticationRequired"}
 
-	failed := state.Update("deferred", failure, true)
+	failed := state.Update("deferred", failure)
 	if !failed.StandaloneDiagnostic || failed.Active || failed.Finished || len(state.Status) != 0 {
 		t.Fatalf("idle failure = %#v state=%#v", failed, state)
 	}
@@ -158,12 +57,12 @@ func TestMcpStartupReportedOnlyIdleTerminalDiagnosticsMatchRust(t *testing.T) {
 		t.Fatalf("idle failure warnings = %#v", failed.Warnings)
 	}
 
-	repeat := state.Update("deferred", failure, true)
+	repeat := state.Update("deferred", failure)
 	if repeat.StandaloneDiagnostic || repeat.Failed != nil || len(repeat.Warnings) != 0 || len(state.Status) != 0 {
 		t.Fatalf("repeated idle failure = %#v state=%#v", repeat, state)
 	}
 
-	cancelled := state.Update("other", McpStartupStatus{Kind: McpStartupCancelled}, true)
+	cancelled := state.Update("other", McpStartupStatus{Kind: McpStartupCancelled})
 	if !cancelled.StandaloneDiagnostic || !reflect.DeepEqual(cancelled.Cancelled, []string{"other"}) {
 		t.Fatalf("idle cancellation = %#v", cancelled)
 	}
@@ -171,25 +70,24 @@ func TestMcpStartupReportedOnlyIdleTerminalDiagnosticsMatchRust(t *testing.T) {
 		t.Fatalf("idle cancellation warnings = %#v", cancelled.Warnings)
 	}
 
-	ready := state.Update("eager", McpStartupStatus{Kind: McpStartupReady}, true)
+	ready := state.Update("eager", McpStartupStatus{Kind: McpStartupReady})
 	if ready.StandaloneDiagnostic || ready.Active || len(ready.Warnings) != 0 || len(state.Status) != 0 {
 		t.Fatalf("idle ready = %#v state=%#v", ready, state)
 	}
 }
 
-func TestMcpStartupReportedOnlyReannouncesAfterObservedRetryMatchRust(t *testing.T) {
-	state := NewMcpStartupRoundState(nil)
-	state.TrackReportedServers()
+func TestMcpStartupReannouncesAfterObservedRetryMatchRust(t *testing.T) {
+	state := NewMcpStartupRoundState()
 	failure := McpStartupStatus{Kind: McpStartupFailed, Error: "Session expired"}
-	if first := state.Update("deferred", failure, true); !first.StandaloneDiagnostic {
+	if first := state.Update("deferred", failure); !first.StandaloneDiagnostic {
 		t.Fatalf("first idle failure = %#v", first)
 	}
 
-	started := state.Update("deferred", McpStartupStatus{Kind: McpStartupStarting}, true)
-	if !started.Active || started.Settled {
+	started := state.Update("deferred", McpStartupStatus{Kind: McpStartupStarting})
+	if !started.Active || started.Finished {
 		t.Fatalf("observed retry start = %#v", started)
 	}
-	retry := state.Update("deferred", failure, true)
+	retry := state.Update("deferred", failure)
 	if retry.StandaloneDiagnostic || !retry.Finished || !reflect.DeepEqual(retry.Failed, []string{"deferred"}) {
 		t.Fatalf("retry failure = %#v", retry)
 	}
@@ -198,11 +96,10 @@ func TestMcpStartupReportedOnlyReannouncesAfterObservedRetryMatchRust(t *testing
 	}
 }
 
-func TestMcpStartupReportedOnlyRechecksIdenticalFailureAfterLagMatchRust(t *testing.T) {
-	state := NewMcpStartupRoundState(nil)
-	state.TrackReportedServers()
+func TestMcpStartupRechecksIdenticalFailureAfterLagMatchRust(t *testing.T) {
+	state := NewMcpStartupRoundState()
 	failure := McpStartupStatus{Kind: McpStartupFailed, Error: "handshake failed"}
-	first := state.Update("alpha", failure, true)
+	first := state.Update("alpha", failure)
 	if len(first.Warnings) == 0 {
 		t.Fatalf("first failure = %#v", first)
 	}
@@ -210,7 +107,7 @@ func TestMcpStartupReportedOnlyRechecksIdenticalFailureAfterLagMatchRust(t *test
 	if lag := state.FinishAfterLag(); lag.Finished || len(state.Status) != 0 {
 		t.Fatalf("lag without an active round = %#v state=%#v", lag, state)
 	}
-	again := state.Update("alpha", failure, true)
+	again := state.Update("alpha", failure)
 	if !again.StandaloneDiagnostic || !reflect.DeepEqual(again.Warnings, first.Warnings) {
 		t.Fatalf("identical failure after lag = %#v, want warnings %#v", again, first.Warnings)
 	}
@@ -219,26 +116,25 @@ func TestMcpStartupReportedOnlyRechecksIdenticalFailureAfterLagMatchRust(t *test
 	}
 }
 
-func TestMcpStartupReportedOnlyRoundSummaryIncludesAllOutcomesMatchRust(t *testing.T) {
-	state := NewMcpStartupRoundState(nil)
-	state.TrackReportedServers()
+func TestMcpStartupRoundSummaryIncludesAllOutcomesMatchRust(t *testing.T) {
+	state := NewMcpStartupRoundState()
 	failure := McpStartupStatus{Kind: McpStartupFailed, Error: "Session expired"}
 
-	state.Update("deferred", failure, true)
-	state.Update("deferred", failure, true)
-	state.Update("other", McpStartupStatus{Kind: McpStartupCancelled}, true)
-	state.Update("deferred", McpStartupStatus{Kind: McpStartupStarting}, true)
-	firstRound := state.Update("deferred", failure, true)
+	state.Update("deferred", failure)
+	state.Update("deferred", failure)
+	state.Update("other", McpStartupStatus{Kind: McpStartupCancelled})
+	state.Update("deferred", McpStartupStatus{Kind: McpStartupStarting})
+	firstRound := state.Update("deferred", failure)
 	if !firstRound.Finished || !reflect.DeepEqual(firstRound.Failed, []string{"deferred"}) {
 		t.Fatalf("first round = %#v", firstRound)
 	}
 
-	// The next reload only delivered eager's start; both terminal outcomes and
-	// the cancellation still count in the round summary.
-	state.Update("eager", McpStartupStatus{Kind: McpStartupStarting}, true)
-	state.Update("deferred", failure, false)
-	state.Update("other", McpStartupStatus{Kind: McpStartupCancelled}, false)
-	last := state.Update("eager", failure, true)
+	// The next reload starts eager; deferred and other terminal outcomes are
+	// delivered again before eager finishes, and all of them count in the round.
+	state.Update("eager", McpStartupStatus{Kind: McpStartupStarting})
+	state.Update("deferred", failure)
+	state.Update("other", McpStartupStatus{Kind: McpStartupCancelled})
+	last := state.Update("eager", failure)
 	if !last.Finished {
 		t.Fatalf("second round = %#v", last)
 	}
@@ -247,5 +143,34 @@ func TestMcpStartupReportedOnlyRoundSummaryIncludesAllOutcomesMatchRust(t *testi
 	}
 	if got := strings.Join(last.Warnings, "\n"); !strings.Contains(got, "MCP startup interrupted. The following servers were not initialized: other") || !strings.Contains(got, "MCP startup incomplete (failed: deferred, eager)") {
 		t.Fatalf("second round warnings = %#v", last.Warnings)
+	}
+}
+
+func TestMcpStartupPreservesServerAndErrorTextMatchRust(t *testing.T) {
+	state := NewMcpStartupRoundState()
+	started := state.Update(" alpha ", McpStartupStatus{Kind: McpStartupStarting})
+	if started.Header != MCPStartupSingleHeaderPrefix+"  alpha " {
+		t.Fatalf("header should preserve server text, got %q", started.Header)
+	}
+
+	finished := state.Update(" alpha ", McpStartupStatus{Kind: McpStartupFailed, Error: "  boom  "})
+	if len(finished.Warnings) < 1 || !reflect.DeepEqual(finished.Warnings[:1], []string{"  boom  "}) {
+		t.Fatalf("warnings should preserve error text: %#v", finished.Warnings)
+	}
+}
+
+func TestMcpStartupReactivatesOnNewStartAfterFinishMatchRust(t *testing.T) {
+	state := NewMcpStartupRoundState()
+	state.Update("alpha", McpStartupStatus{Kind: McpStartupStarting})
+	if first := state.Update("alpha", McpStartupStatus{Kind: McpStartupReady}); !first.Finished {
+		t.Fatalf("first round = %#v", first)
+	}
+	started := state.Update("beta", McpStartupStatus{Kind: McpStartupStarting})
+	if !started.Active || started.Header != MCPStartupSingleHeaderPrefix+" beta" {
+		t.Fatalf("new round = %#v", started)
+	}
+	finished := state.Update("beta", McpStartupStatus{Kind: McpStartupFailed, Error: "beta failed"})
+	if !finished.Finished || !reflect.DeepEqual(finished.Failed, []string{"beta"}) {
+		t.Fatalf("second round = %#v", finished)
 	}
 }

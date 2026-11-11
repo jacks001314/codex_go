@@ -4,7 +4,7 @@ import "testing"
 
 func TestHandleAppServerLaggedAndDisconnectedDecisionMatchRust(t *testing.T) {
 	lagged := HandleAppServerLaggedDecision()
-	if lagged.Kind != AppServerEventLagged || !lagged.RefreshMCPStartupExpectedServers || !lagged.FinishMCPStartupAfterLag {
+	if lagged.Kind != AppServerEventLagged || !lagged.FinishMCPStartupAfterLag {
 		t.Fatalf("lagged decision = %#v", lagged)
 	}
 
@@ -32,7 +32,7 @@ func TestHandleServerNotificationEventDecisionSpecialCasesMatchRust(t *testing.T
 	}
 
 	mcp := HandleServerNotificationEventDecision(rustThreadID1, pending, ServerEvent{Name: ServerNotificationMcpServerStatusUpdated})
-	if !mcp.RefreshMCPStartupExpectedServers || mcp.NotificationRoute != ServerEventRouteAppScoped || mcp.IgnoredReason != "app_scoped_without_tui_target" {
+	if mcp.NotificationRoute != ServerEventRouteAppScoped || mcp.IgnoredReason != "app_scoped_without_tui_target" {
 		t.Fatalf("mcp decision = %#v", mcp)
 	}
 

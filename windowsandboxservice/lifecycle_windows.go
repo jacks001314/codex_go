@@ -234,6 +234,13 @@ func (lifecycle *Lifecycle) RestoreAuthenticatedUser(sessionID uint32) error {
 	if retained {
 		return nil
 	}
+	// Restoring the owner migrates a saved junction, so it must serialize with
+	// provisioning and uninstall (Rust acquire_sandbox_setup_lock).
+	lock, err := windowssandbox.AcquireSandboxSetupLock(pipeSetupLockTimeoutMillis)
+	if err != nil {
+		return err
+	}
+	defer lock.Release()
 	record, err := lifecycle.loadRecord()
 	if err != nil || record == nil {
 		return err
@@ -260,6 +267,34 @@ func (lifecycle *Lifecycle) RestoreAuthenticatedUser(sessionID uint32) error {
 		_ = token.Close()
 		return errors.New("logged-in user does not match the recorded sandbox owner")
 	}
+	var pins []windows.Handle
+	defer func() { closeHandles(pins) }()
+	migratedHome := ""
+	if err := withOwnerImpersonation(token, func() error {
+		home, migrated, err := resolveRestoredHome(record.CodexHome, record.Runtime, &pins)
+		if err != nil {
+			return err
+		}
+		if migrated {
+			migratedHome = home
+		}
+		return nil
+	}); err != nil {
+		_ = token.Close()
+		return err
+	}
+	if migratedHome != "" {
+		record.CodexHome = migratedHome
+		if record.DesktopInstallation != nil {
+			// A historical junction cannot authorize deleting its target on uninstall.
+			record.DesktopInstallation.CreatedCodexHome = false
+		}
+		if err := windowssandbox.SaveInstallation(record); err != nil {
+			_ = token.Close()
+			return err
+		}
+	}
+	lock.Release()
 	restored := *record
 	restored.SessionID = sessionID
 	if _, err := lifecycle.RegisterOwner(&restored, token, windowssandbox.SetupRuntimeLegacy); err != nil {

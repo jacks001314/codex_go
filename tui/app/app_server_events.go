@@ -38,29 +38,27 @@ type ServerEvent struct {
 }
 
 type AppServerEventDecision struct {
-	Kind                             AppServerEventKind
-	ThreadID                         string
-	NotificationRoute                ServerEventRoute
-	RequestRoute                     ServerEventRoute
-	RefreshMCPStartupExpectedServers bool
-	FinishMCPStartupAfterLag         bool
-	ErrorMessage                     string
-	FatalExitMessage                 string
-	RejectUnsupported                *UnsupportedAppServerRequest
-	DismissResolvedRequest           *ResolvedAppServerRequest
-	HandleGlobalNotification         bool
-	UpdateRateLimits                 bool
-	UpdateAccountState               bool
-	ReloadExternalAgentConfig        bool
-	LoadConnectorsSnapshot           bool
-	IgnoredReason                    string
+	Kind                      AppServerEventKind
+	ThreadID                  string
+	NotificationRoute         ServerEventRoute
+	RequestRoute              ServerEventRoute
+	FinishMCPStartupAfterLag  bool
+	ErrorMessage              string
+	FatalExitMessage          string
+	RejectUnsupported         *UnsupportedAppServerRequest
+	DismissResolvedRequest    *ResolvedAppServerRequest
+	HandleGlobalNotification  bool
+	UpdateRateLimits          bool
+	UpdateAccountState        bool
+	ReloadExternalAgentConfig bool
+	LoadConnectorsSnapshot    bool
+	IgnoredReason             string
 }
 
 func HandleAppServerLaggedDecision() AppServerEventDecision {
 	return AppServerEventDecision{
-		Kind:                             AppServerEventLagged,
-		RefreshMCPStartupExpectedServers: true,
-		FinishMCPStartupAfterLag:         true,
+		Kind:                     AppServerEventLagged,
+		FinishMCPStartupAfterLag: true,
 	}
 }
 
@@ -81,8 +79,6 @@ func HandleServerNotificationEventDecision(primaryThreadID string, pending *Pend
 				decision.DismissResolvedRequest = &resolved
 			}
 		}
-	case ServerNotificationMcpServerStatusUpdated:
-		decision.RefreshMCPStartupExpectedServers = true
 	case ServerNotificationAccountRateLimitsUpdated:
 		decision.UpdateRateLimits = true
 		return decision

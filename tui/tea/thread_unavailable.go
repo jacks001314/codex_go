@@ -25,7 +25,6 @@ func (m *Model) setThreadUnavailable(unavailable bool) {
 	m.mentionPopup = nil
 	m.mcpStartupActive = false
 	m.mcpStartupHeader = ""
-	m.mcpStartupFinishPending = false
 	m.setStatus("idle")
 	m.refreshTranscript()
 }

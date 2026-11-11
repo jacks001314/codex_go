@@ -9,6 +9,8 @@ import (
 	"io"
 	"math"
 	"os"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 	"unsafe"
@@ -22,6 +24,55 @@ var (
 )
 
 const framePollInterval = 5 * time.Millisecond
+
+// canonicalizeProvisioningHome mirrors Rust path_normalization::canonicalize_path
+// (dunce): the home a service request names is resolved through directory
+// junctions so provisioning and desktop registration never record an alias.
+// An unresolvable path keeps the caller's spelling, matching Rust's fallback.
+func canonicalizeProvisioningHome(path string) string {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return path
+	}
+	name, err := windows.UTF16PtrFromString(absolute)
+	if err != nil {
+		return path
+	}
+	handle, err := windows.CreateFile(
+		name,
+		windows.FILE_READ_ATTRIBUTES,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE,
+		nil,
+		windows.OPEN_EXISTING,
+		windows.FILE_FLAG_BACKUP_SEMANTICS,
+		0,
+	)
+	if err != nil {
+		return path
+	}
+	defer windows.CloseHandle(handle)
+	buffer := make([]uint16, 260)
+	for {
+		length, err := windows.GetFinalPathNameByHandle(handle, &buffer[0], uint32(len(buffer)), 0)
+		if err != nil {
+			return path
+		}
+		if int(length) < len(buffer) {
+			resolved := windows.UTF16ToString(buffer[:length])
+			return cleanFinalWindowsPath(resolved)
+		}
+		buffer = make([]uint16, length)
+	}
+}
+
+// cleanFinalWindowsPath converts GetFinalPathNameByHandle's extended-length
+// spelling into the ordinary path form dunce produces for Rust.
+func cleanFinalWindowsPath(resolved string) string {
+	if strings.HasPrefix(resolved, `\\?\UNC\`) {
+		return filepath.Clean(`\\` + strings.TrimPrefix(resolved, `\\?\UNC\`))
+	}
+	return filepath.Clean(strings.TrimPrefix(resolved, `\\?\`))
+}
 
 // WindowsTransport dials the installed provisioning service over its
 // authenticated named pipe.

@@ -253,12 +253,12 @@ func TestThreadAttachPresentationAndResetMatchRust(t *testing.T) {
 		if !decision.ResetTranscriptState || !decision.ClearPendingHistory {
 			t.Fatalf("reset decision %#v must reset transcript state and pending history", decision)
 		}
-		wantDefer := tc.want == ThreadAttachPresentationFreshWithDraft
-		if decision.DeferTerminalClear != wantDefer {
-			t.Fatalf("presentation %q deferred clear = %v, want %v", got, decision.DeferTerminalClear, wantDefer)
+		wantPreserving := tc.want == ThreadAttachPresentationFreshWithDraft
+		if decision.ClearTerminal != !wantPreserving {
+			t.Fatalf("presentation %q clear terminal = %v, want %v", got, decision.ClearTerminal, !wantPreserving)
 		}
 		wantEvent := ResetTranscriptForThreadSwitchEvent
-		if wantDefer {
+		if wantPreserving {
 			wantEvent = ResetTranscriptForThreadSwitchPreservingScreenEvent
 		}
 		if decision.Event != wantEvent {

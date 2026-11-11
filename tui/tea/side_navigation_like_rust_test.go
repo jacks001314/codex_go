@@ -124,6 +124,37 @@ func TestRetainedSideTracksBackgroundEventsLikeRust(t *testing.T) {
 	}
 }
 
+// TestSwitchingRetainedSideChatDoesNotReloadThreadLikeRust mirrors Rust #60675:
+// returning to the parent keeps its live transcript, so the switch performs no
+// further thread read or agent switch request.
+func TestSwitchingRetainedSideChatDoesNotReloadThreadLikeRust(t *testing.T) {
+	switches := 0
+	model, _, _ := newSideNavigationModel(t, func(threadID string) (AgentThreadSwitchResponse, error) {
+		switches++
+		return AgentThreadSwitchResponse{}, nil
+	})
+	openSideForTest(t, model)
+	side := model.retainedSideConversationForParent("parent-a")
+	if side == nil {
+		t.Fatal("side conversation was not retained")
+	}
+	side.ParentMessages = append(side.ParentMessages, codextui.Message{Role: codextui.RoleUser, Text: "parent live message"})
+	runTeaCmd(t, model, model.toggleSideConversation())
+	if model.State.ThreadID != "parent-a" {
+		t.Fatalf("returned thread = %q", model.State.ThreadID)
+	}
+	if switches != 0 {
+		t.Fatalf("returning from the side requested %d agent switches", switches)
+	}
+	if !messagesContainText(model.State.Messages, "parent live message") {
+		t.Fatalf("returning to the parent lost its live transcript: %#v", model.State.Messages)
+	}
+	runTeaCmd(t, model, model.toggleSideConversation())
+	if model.State.ThreadID != side.SideThreadID || switches != 0 {
+		t.Fatalf("reopened side thread = %q, switches = %d", model.State.ThreadID, switches)
+	}
+}
+
 // Rust #52184's discard path belongs only to the active side. Closing side A
 // must leave side B available when the user later returns to parent B.
 func TestExplicitSideReturnDiscardsOnlyTheActiveSideLikeRust(t *testing.T) {

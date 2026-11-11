@@ -699,15 +699,14 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		// Rust #60280: a shared app server only sends startup updates after
 		// subscription and may run a different MCP configuration, so wait only
 		// for the servers it reports.
-		MCPStartupTrackReportedOnly: true,
-		HideRateLimitModelNudge:     settings.HideRateLimitModelNudge,
-		TUITheme:                    settings.TUITheme,
-		StartupConfigWarnings:       remoteTUIStartupConfigWarnings(settings.TUITheme),
-		TUIPet:                      settings.TUIPet,
-		CodexHome:                   auth.DefaultCodexHome(),
-		HistoryPersistence:          settings.HistoryPersistence,
-		PetEnv:                      environmentMapFromEnviron(os.Environ()),
-		OnPostNotification:          interactiveNotificationPoster(stdout),
+		HideRateLimitModelNudge: settings.HideRateLimitModelNudge,
+		TUITheme:                settings.TUITheme,
+		StartupConfigWarnings:   remoteTUIStartupConfigWarnings(settings.TUITheme),
+		TUIPet:                  settings.TUIPet,
+		CodexHome:               auth.DefaultCodexHome(),
+		HistoryPersistence:      settings.HistoryPersistence,
+		PetEnv:                  environmentMapFromEnviron(os.Environ()),
+		OnPostNotification:      interactiveNotificationPoster(stdout),
 		OnSubmitRequest: func(request codextea.SubmitRequest) bubbletea.Cmd {
 			return interactiveRemoteTurnCommandWithTaskTools(ctx, root, endpoint, state, request, brokers, taskToolsHost, interrupts)
 		},

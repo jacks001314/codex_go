@@ -27,8 +27,6 @@ type StatusBarComponent struct {
 	mcpStartup              chatwidget.McpStartupRoundState
 	mcpStartupHeader        string
 	mcpStartupActive        bool
-	mcpStartupGeneration    uint64
-	mcpStartupFinishPending bool
 
 	// Terminal title
 	lastTerminalTitleSequence string

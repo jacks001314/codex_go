@@ -112,7 +112,7 @@ func (c *Client) RefreshRegisteredCore(codexHome string, settings Settings, list
 func (c *Client) RegisterDesktopInstallation(codexHome string) error {
 	request := &Frame{
 		Version: ProtocolVersion,
-		Message: Message{Kind: KindRegisterInstallationRequest, CodexHome: codexHome},
+		Message: Message{Kind: KindRegisterInstallationRequest, CodexHome: canonicalizeProvisioningHome(codexHome)},
 	}
 	response, err := c.send(request, RegistrationTimeout)
 	if err != nil {
@@ -140,7 +140,7 @@ func (c *Client) provision(codexHome string, settings Settings, listeners Listen
 	request := &Frame{
 		Version: ProtocolVersion,
 		Message: Message{Kind: KindProvisionSandboxRequest, Request: &ProvisionRequest{
-			CodexHome:      codexHome,
+			CodexHome:      canonicalizeProvisioningHome(codexHome),
 			RegisteredCore: c.registeredCore(),
 			RefreshOnly:    intent == IntentRefreshRegistration,
 			Settings:       settings,

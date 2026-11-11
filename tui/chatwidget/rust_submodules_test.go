@@ -63,20 +63,20 @@ func TestModelPopupsBuildQuickAllAndReasoningViews(t *testing.T) {
 }
 
 func TestMcpStartupRoundStateTracksHeadersAndFinish(t *testing.T) {
-	state := NewMcpStartupRoundState([]string{"docs", "db"})
-	first := state.Update("docs", McpStartupStatus{Kind: McpStartupStarting}, true)
+	state := NewMcpStartupRoundState()
+	first := state.Update("docs", McpStartupStatus{Kind: McpStartupStarting})
 	if first.Header != MCPStartupSingleHeaderPrefix+" docs" || !first.Active {
 		t.Fatalf("first update = %#v", first)
 	}
-	second := state.Update("db", McpStartupStatus{Kind: McpStartupStarting}, true)
+	second := state.Update("db", McpStartupStatus{Kind: McpStartupStarting})
 	if second.Header != MCPStartupMultiHeaderPrefix+" (0/2): db, docs" {
 		t.Fatalf("second header = %q", second.Header)
 	}
-	ready := state.Update("docs", McpStartupStatus{Kind: McpStartupReady}, true)
+	ready := state.Update("docs", McpStartupStatus{Kind: McpStartupReady})
 	if ready.Header != MCPStartupMultiHeaderPrefix+" (1/2): db" {
 		t.Fatalf("ready header = %q", ready.Header)
 	}
-	finished := state.Update("db", McpStartupStatus{Kind: McpStartupFailed, Error: "db failed"}, true)
+	finished := state.Update("db", McpStartupStatus{Kind: McpStartupFailed, Error: "db failed"})
 	if !finished.Finished || len(finished.Failed) != 1 || finished.Failed[0] != "db" {
 		t.Fatalf("finished = %#v", finished)
 	}
