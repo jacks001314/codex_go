@@ -310,14 +310,11 @@ func (s *MCPService) ToolApprovalMode(serverName string, toolName string) apps.A
 	return apps.AppToolApprovalAuto
 }
 
-// RequiresMCPToolApproval ports Rust requires_mcp_tool_approval: a destructive
-// hint requires approval, a read-only hint does not, and otherwise the call
-// requires approval unless both hints explicitly say it is safe.
+// RequiresMCPToolApproval ports Rust requires_mcp_tool_approval: a read-only
+// hint takes precedence over destructive and open-world hints, and otherwise
+// the call requires approval unless both hints explicitly say it is safe.
 func RequiresMCPToolApproval(annotations *RuntimeToolAnnotations) bool {
 	if annotations == nil {
-		return true
-	}
-	if annotations.DestructiveHint != nil && *annotations.DestructiveHint {
 		return true
 	}
 	if annotations.ReadOnlyHint != nil && *annotations.ReadOnlyHint {

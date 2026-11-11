@@ -12,6 +12,7 @@ import (
 
 	"codex_go/codexapi"
 	"codex_go/config"
+	contextfrag "codex_go/context"
 	"codex_go/features"
 	"codex_go/model"
 	"codex_go/session"
@@ -24,6 +25,9 @@ const (
 	threadSampleMaxOutput    = 64 * 1024
 	threadSampleOriginator   = "thread_sample"
 	threadSampleThreadSource = "thread_sample"
+	threadSnapshotNote       = "\nThis snapshot is a copy of the source thread’s history taken while its turn was still running. " +
+		"Making the copy did not stop the source turn. " +
+		"A tool call that was pending at capture may appear as \"aborted\" in this copy.\n"
 )
 
 // handleThreadSampleRuntime captures one model response with the source
@@ -51,7 +55,8 @@ func (r *RuntimeRouter) handleThreadSampleRuntime(request *Request) (*ThreadSamp
 	if !r.threads.HasLiveThread(session.ThreadID(threadID)) {
 		return nil, invalidParams("sample source is not loaded")
 	}
-	if r.threads.ActiveTurn(threadID) != nil {
+	activeTurn := r.threads.ActiveTurn(threadID)
+	if activeTurn != nil && !params.AllowInProgressTurn {
 		return nil, invalidParams("sample source must be idle")
 	}
 	record, err := r.threadRecord(session.ThreadID(threadID), true, false)
@@ -61,8 +66,15 @@ func (r *RuntimeRouter) handleThreadSampleRuntime(request *Request) (*ThreadSamp
 	if boolFromMap(record.Metadata.Extra, "ephemeral") || runtimeRecordIsSubagent(record) || strings.TrimSpace(string(record.ParentThreadID)) != "" {
 		return nil, invalidParams("sample source must be a persistent root thread")
 	}
-	if !threadSampleLatestTurnMatches(record, expectedTurnID) {
+	sourceInProgress, latestTurnMatches := threadSampleLatestTurnState(record, expectedTurnID, params.AllowInProgressTurn)
+	if !latestTurnMatches {
+		if params.AllowInProgressTurn {
+			return nil, invalidParams("sample source turn must be the latest turn")
+		}
 		return nil, invalidParams("sample source turn must be the latest finished turn")
+	}
+	if activeTurn != nil && activeTurn.TurnID == expectedTurnID {
+		sourceInProgress = true
 	}
 	historyVersion, err := threadSampleHistoryVersion(record)
 	if err != nil {
@@ -110,6 +122,26 @@ func (r *RuntimeRouter) handleThreadSampleRuntime(request *Request) (*ThreadSamp
 	}
 	if preserveParentTools {
 		inputItems = append(inputItems, predictionMCPUnavailableNoticeInputItem())
+	}
+	if sourceInProgress {
+		// Rust #60620 replaces the copy's default interruption marker with this
+		// application context note. Go samples the source directly rather than
+		// materializing an interrupted fork, so there is no default marker to
+		// suppress; the note is still part of the model input.
+		if rendered := contextfrag.Render(contextfrag.NewAdditionalContextFragment(
+			contextfrag.RoleDeveloper,
+			"thread_snapshot",
+			threadSnapshotNote,
+		)); rendered != nil {
+			inputItems = append(inputItems, map[string]any{
+				"type": "message",
+				"role": "developer",
+				"content": []map[string]any{{
+					"type": "input_text",
+					"text": rendered.Content,
+				}},
+			})
+		}
 	}
 	runContext, _ := r.buildTurnRuntimeContext(context.Background(), paramsForTurn, sampleTurnID)
 	var tools []any
@@ -191,13 +223,15 @@ func (r *RuntimeRouter) handleThreadSampleRuntime(request *Request) (*ThreadSamp
 	if response == nil || strings.TrimSpace(response.ResponseID) == "" {
 		return nil, fmt.Errorf("sample completed without a response")
 	}
-	current, err := r.threadRecord(session.ThreadID(threadID), true, false)
-	if err != nil || current == nil {
-		return nil, invalidParams("sample source changed")
-	}
-	currentVersion, err := threadSampleHistoryVersion(current)
-	if err != nil || currentVersion != historyVersion {
-		return nil, invalidParams("sample source changed")
+	if !params.AllowInProgressTurn {
+		current, err := r.threadRecord(session.ThreadID(threadID), true, false)
+		if err != nil || current == nil {
+			return nil, invalidParams("sample source changed")
+		}
+		currentVersion, err := threadSampleHistoryVersion(current)
+		if err != nil || currentVersion != historyVersion {
+			return nil, invalidParams("sample source changed")
+		}
 	}
 	text, err := threadSampleResponseText(response)
 	if err != nil {
@@ -293,23 +327,34 @@ func (r *RuntimeRouter) cancelThreadSamplesForConnection(connectionID string) {
 }
 
 func threadSampleLatestTurnMatches(record *session.Record, expectedTurnID string) bool {
+	_, ok := threadSampleLatestTurnState(record, expectedTurnID, false)
+	return ok
+}
+
+// threadSampleLatestTurnState validates the requested source turn and reports
+// whether it was still running. Without allowInProgressTurn only completed,
+// failed, and interrupted turns are eligible; with it, an in-progress latest
+// turn is accepted too (Rust #60620).
+func threadSampleLatestTurnState(record *session.Record, expectedTurnID string, allowInProgressTurn bool) (bool, bool) {
 	if record == nil {
-		return false
+		return false, false
 	}
 	turns := record.Metadata.RolloutTurns
 	if len(turns) == 0 {
-		return false
+		return false, false
 	}
 	latest := turns[len(turns)-1]
 	if strings.TrimSpace(latest.ID) != expectedTurnID {
-		return false
+		return false, false
 	}
-	// Rust #56020: completed, failed, and interrupted are all finished turns.
 	switch strings.ToLower(strings.TrimSpace(latest.Status)) {
+	case "inprogress", "in_progress", "in-progress":
+		return true, allowInProgressTurn
+	// Rust #56020: completed, failed, and interrupted are all finished turns.
 	case "completed", "failed", "interrupted":
-		return true
+		return false, true
 	default:
-		return false
+		return false, false
 	}
 }
 

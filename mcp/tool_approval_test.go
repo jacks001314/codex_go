@@ -167,6 +167,11 @@ func TestRequiresMCPToolApprovalForModeLikeRust(t *testing.T) {
 		DestructiveHint: boolPtrMCPApproval(false),
 		OpenWorldHint:   boolPtrMCPApproval(false),
 	}
+	readOnlyDestructiveOpenWorld := &RuntimeToolAnnotations{
+		ReadOnlyHint:    boolPtrMCPApproval(true),
+		DestructiveHint: boolPtrMCPApproval(true),
+		OpenWorldHint:   boolPtrMCPApproval(true),
+	}
 	tests := []struct {
 		name        string
 		annotations *RuntimeToolAnnotations
@@ -175,6 +180,7 @@ func TestRequiresMCPToolApprovalForModeLikeRust(t *testing.T) {
 	}{
 		{name: "auto destructive", annotations: destructive, mode: apps.AppToolApprovalAuto, want: true},
 		{name: "auto read-only", annotations: readOnly, mode: apps.AppToolApprovalAuto, want: false},
+		{name: "auto read-only wins conflicting hints", annotations: readOnlyDestructiveOpenWorld, mode: apps.AppToolApprovalAuto, want: false},
 		{name: "auto unannotated", annotations: nil, mode: apps.AppToolApprovalAuto, want: true},
 		{name: "auto open-world", annotations: openWorldOnly, mode: apps.AppToolApprovalAuto, want: true},
 		{name: "auto safe", annotations: safe, mode: apps.AppToolApprovalAuto, want: false},

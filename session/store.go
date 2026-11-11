@@ -429,6 +429,9 @@ type ListOptions struct {
 	SourceKinds    []string
 	Relation       *RelationFilter
 	IncludeHistory bool
+	// IncludeAttachedThreads includes persisted attached threads in a
+	// search listing without changing provider or source filters (Rust #60574).
+	IncludeAttachedThreads bool
 	// ExcludedThreadIDs drops threads before the page size is applied, mirroring
 	// Rust's ThreadListParams::excluded_thread_ids (#51595). Empty means no
 	// exclusions.
@@ -2099,7 +2102,7 @@ func matchesListOptions(record *Record, options *ListOptions, all []Record) bool
 	}
 	// Attached forks are hidden from ordinary listings and from every other
 	// relationship listing (Rust #56351).
-	if record.AttachedThreadParentID != "" &&
+	if record.AttachedThreadParentID != "" && !options.IncludeAttachedThreads &&
 		(options.Relation == nil || options.Relation.AttachedThreadsOf == "") {
 		return false
 	}

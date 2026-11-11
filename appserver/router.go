@@ -4128,7 +4128,8 @@ func (r *Router) listRecordsFromState(options session.ListOptions) (*session.Pag
 		// Rust's SQLite listing hides threads without a discoverable preview from
 		// the plain active collection; the archived collection, a relation
 		// listing and a specific-section listing all keep them (#48199).
-		if stateThreadListRequiresPreview(options) && nullString(row.Preview) == "" {
+		if stateThreadListRequiresPreview(options) && nullString(row.Preview) == "" &&
+			!(options.IncludeAttachedThreads && nullString(row.AttachedThreadParentID) != "") {
 			continue
 		}
 		record := session.Record{
@@ -4251,7 +4252,9 @@ func (r *Router) listRecordsIncludingRollouts(records []session.Record, options 
 	}
 	codexHome := codexHomeFromSessionStore(r.store)
 	for _, archived := range []bool{false, true} {
-		rolloutPage, err := rollout.ListThreads(codexHome, rollout.ListOptions{Archived: archived, PageSize: 0})
+		rolloutPage, err := rollout.ListThreads(codexHome, rollout.ListOptions{
+			Archived: archived, PageSize: 0, IncludeAttachedThreads: options.IncludeAttachedThreads,
+		})
 		if err != nil {
 			continue
 		}
@@ -4779,15 +4782,16 @@ func (r *Router) handleThreadSearch(request *Request) (*ThreadSearchResponse, er
 	}
 	searchTerm := strings.TrimSpace(params.SearchTerm)
 	listParams := &ThreadListParams{
-		CurrentAccountOnly: params.CurrentAccountOnly,
-		HistoryAccount:     params.HistoryAccount,
-		Cursor:             params.Cursor,
-		Limit:              params.Limit,
-		SortKey:            params.SortKey,
-		SortDirection:      params.SortDirection,
-		SourceKinds:        append([]ThreadSourceKind(nil), params.SourceKinds...),
-		Archived:           params.Archived,
-		SearchTerm:         &searchTerm,
+		CurrentAccountOnly:     params.CurrentAccountOnly,
+		HistoryAccount:         params.HistoryAccount,
+		Cursor:                 params.Cursor,
+		Limit:                  params.Limit,
+		SortKey:                params.SortKey,
+		SortDirection:          params.SortDirection,
+		SourceKinds:            append([]ThreadSourceKind(nil), params.SourceKinds...),
+		Archived:               params.Archived,
+		SearchTerm:             &searchTerm,
+		IncludeAttachedThreads: params.IncludeAttachedThreads,
 	}
 	options, err := BuildListOptions(listParams)
 	if err != nil {

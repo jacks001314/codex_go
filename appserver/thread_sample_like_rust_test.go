@@ -129,6 +129,81 @@ func TestThreadSampleReturnsNullTextForToolCalls(t *testing.T) {
 	}
 }
 
+func TestThreadSampleAllowsInProgressTurnLikeRust(t *testing.T) {
+	home := t.TempDir()
+	store := session.NewStore(home)
+	record := &session.Record{
+		ID: "thread-sample-running",
+		Metadata: session.Metadata{
+			CWD:          home,
+			Model:        "gpt-test",
+			RolloutTurns: []session.TurnSnapshot{{ID: "turn-running", Status: "inProgress"}},
+		},
+		Items: []session.Item{
+			{Role: "user", Text: "do the work"},
+			{Role: "assistant", Text: "working"},
+		},
+	}
+	if err := store.Create(record); err != nil {
+		t.Fatal(err)
+	}
+	agent := &threadSampleRecordingAgent{response: &model.AgentResponse{
+		ResponseID: "resp-running",
+		Items:      []model.AgentItem{{Type: "agent_message", Text: "snapshot"}},
+	}}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store), Agent: agent, DefaultCWD: home})
+	if err := router.threads.RetainLiveThread(store, record); err != nil {
+		t.Fatal(err)
+	}
+	cancelled := false
+	if err := router.threads.RegisterTurn(string(record.ID), "turn-running", func() { cancelled = true }, time.Now().UnixMilli(), nil); err != nil {
+		t.Fatal(err)
+	}
+	defer router.threads.ConsumeTurn(string(record.ID), "turn-running", false)
+	initializeThreadSampleConnection(t, router, "conn-1")
+
+	rejected := router.Handle(&Request{
+		JSONRPC: "2.0", ID: IntID(1), Method: MethodThreadSample, ConnectionID: "conn-1",
+		Params: mustJSON(t, ThreadSampleParams{ThreadID: string(record.ID), ExpectedTurnID: "turn-running", Prompt: "sample"}),
+	})
+	if rejected.Error == nil || rejected.Error.Message != "sample source must be idle" {
+		t.Fatalf("sample without allowInProgressTurn = %+v", rejected.Error)
+	}
+
+	response := router.Handle(&Request{
+		JSONRPC: "2.0", ID: IntID(2), Method: MethodThreadSample, ConnectionID: "conn-1",
+		Params: mustJSON(t, ThreadSampleParams{
+			ThreadID: string(record.ID), ExpectedTurnID: "turn-running", Prompt: "sample", AllowInProgressTurn: true,
+		}),
+	})
+	if response.Error != nil {
+		t.Fatalf("thread/sample error = %+v", response.Error)
+	}
+	agent.mu.Lock()
+	request := agent.request
+	agent.mu.Unlock()
+	if request == nil {
+		t.Fatal("sample did not reach the agent")
+	}
+	foundNote := false
+	for _, item := range request.InputItems {
+		message, _ := item.(map[string]any)
+		content, _ := message["content"].([]map[string]any)
+		if len(content) == 0 {
+			continue
+		}
+		if text, _ := content[0]["text"].(string); strings.Contains(text, "Making the copy did not stop the source turn") {
+			foundNote = true
+		}
+	}
+	if !foundNote {
+		t.Fatalf("sample input is missing the in-progress snapshot note: %#v", request.InputItems)
+	}
+	if cancelled {
+		t.Fatal("sampling an in-progress turn cancelled the source turn")
+	}
+}
+
 func TestThreadSampleRejectsPromptAndStaleTurnLikeRust(t *testing.T) {
 	home := t.TempDir()
 	store := session.NewStore(home)

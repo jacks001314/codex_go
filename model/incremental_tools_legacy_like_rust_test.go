@@ -117,11 +117,12 @@ func TestResponsesLiteKeepsWebSearchTopLevelLikeRust(t *testing.T) {
 }
 
 // TestIncrementalToolsLegacyGatesOnBedrockProvidersLikeRust covers Rust #60040
-// (762f87d5bb): both bundled Amazon Bedrock providers publish incremental tool
-// declarations on the regular Responses route, while a regular OpenAI Responses
-// window keeps the full declaration prefix even when it opts in.
+// (762f87d5bb) and #60617: both bundled Amazon Bedrock providers and Google
+// Cloud Vertex AI publish incremental tool declarations on the regular
+// Responses route, while a regular OpenAI Responses window keeps the full
+// declaration prefix even when it opts in.
 func TestIncrementalToolsLegacyGatesOnBedrockProvidersLikeRust(t *testing.T) {
-	for _, providerName := range []string{AmazonBedrockProviderName, AmazonBedrockRuntimeProviderID} {
+	for _, providerName := range []string{AmazonBedrockProviderName, AmazonBedrockRuntimeProviderID, GCPProviderName} {
 		body := captureIncrementalRequestBody(t, providerName, "gpt-regular", false, true, nil)
 		input, _ := body["input"].([]any)
 		if len(input) == 0 {

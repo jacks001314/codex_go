@@ -2740,11 +2740,11 @@ func responsesToolsContainType(tools []any, toolType string) bool {
 
 // responsesProviderPublishesLegacyIncrementalTools reports the providers whose
 // regular Responses route publishes incremental tool declarations behind
-// `incremental_tools_legacy`. Rust #60040 (762f87d5bb) narrowed the gate from
-// OpenAI to the two bundled Amazon Bedrock providers.
+// `incremental_tools_legacy`. Rust #60617 extends the #60040 gate from the two
+// bundled Amazon Bedrock providers to Google Cloud Vertex AI.
 func responsesProviderPublishesLegacyIncrementalTools(name string) bool {
 	info := ProviderInfo{Name: strings.TrimSpace(name)}
-	return info.IsAmazonBedrock()
+	return info.IsAmazonBedrock() || info.IsGCP()
 }
 
 // splitHostedWebSearchTools separates hosted web search declarations from the

@@ -25,6 +25,10 @@ type ThreadSampleParams struct {
 	// InterruptOnCancel overrides upstream interruption on cancellation for
 	// this sample; nil inherits the parent configuration (Rust #57864).
 	InterruptOnCancel *bool `json:"interruptOnCancel,omitempty"`
+	// AllowInProgressTurn samples a snapshot of the latest turn while the
+	// source keeps running (Rust #60620). The source is not stopped, so pending
+	// tool calls may appear as aborted in the copy.
+	AllowInProgressTurn bool `json:"allowInProgressTurn,omitempty"`
 }
 
 type ThreadSampleResponse struct {

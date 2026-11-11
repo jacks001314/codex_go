@@ -195,11 +195,11 @@ const (
 	MethodAccountSessionsSwitch                  Method = "account/sessions/switch"
 	// Experimental singular account-session API (#57514): lists and switches
 	// workspaces of the active managed ChatGPT login.
-	MethodAccountSessionList                 Method = "accountSession/list"
-	MethodAccountSessionSwitch               Method = "accountSession/switch"
-	MethodLogoutAccount                      Method = "account/logout"
-	MethodGetAccount                         Method = "account/read"
-	MethodGetAccountRateLimits               Method = "account/rateLimits/read"
+	MethodAccountSessionList   Method = "accountSession/list"
+	MethodAccountSessionSwitch Method = "accountSession/switch"
+	MethodLogoutAccount        Method = "account/logout"
+	MethodGetAccount           Method = "account/read"
+	MethodGetAccountRateLimits Method = "account/rateLimits/read"
 	// Rust #60082: reads the optional account-security reminder through the
 	// app-server so clients never fetch it with their own credentials.
 	MethodGetAccountSecuritySetup            Method = "account/securitySetup/read"
@@ -780,20 +780,21 @@ type SelectedModelInfo struct {
 }
 
 type Thread struct {
-	ID               string              `json:"id"`
-	Environments     []ThreadEnvironment `json:"environments"`
-	Extra            map[string]any      `json:"extra,omitempty"`
-	SessionID        string              `json:"sessionId"`
-	ForkedFromID     *string             `json:"forkedFromId"`
-	ParentThreadID   *string             `json:"parentThreadId"`
-	Preview          string              `json:"preview"`
-	Ephemeral        bool                `json:"ephemeral"`
-	Section          *ThreadSection      `json:"section"`
-	SectionEnteredAt *int64              `json:"sectionEnteredAt"`
-	ProjectID        *string             `json:"projectId"`
-	HistoryMode      ThreadHistoryMode   `json:"historyMode"`
-	ModelProvider    string              `json:"modelProvider"`
-	Model            *string             `json:"model"`
+	ID                 string              `json:"id"`
+	Environments       []ThreadEnvironment `json:"environments"`
+	Extra              map[string]any      `json:"extra,omitempty"`
+	SessionID          string              `json:"sessionId"`
+	ForkedFromID       *string             `json:"forkedFromId"`
+	AttachedToThreadID *string             `json:"attachedToThreadId"`
+	ParentThreadID     *string             `json:"parentThreadId"`
+	Preview            string              `json:"preview"`
+	Ephemeral          bool                `json:"ephemeral"`
+	Section            *ThreadSection      `json:"section"`
+	SectionEnteredAt   *int64              `json:"sectionEnteredAt"`
+	ProjectID          *string             `json:"projectId"`
+	HistoryMode        ThreadHistoryMode   `json:"historyMode"`
+	ModelProvider      string              `json:"modelProvider"`
+	Model              *string             `json:"model"`
 	// SelectedModelInfo carries the catalog entry behind Model.
 	SelectedModelInfo    *SelectedModelInfo `json:"selectedModelInfo"`
 	ReasoningEffort      *ReasoningEffort   `json:"reasoningEffort"`
@@ -830,6 +831,7 @@ func (t *Thread) MarshalJSON() ([]byte, error) {
 		Environments         []ThreadEnvironment `json:"environments"`
 		SessionID            string              `json:"sessionId"`
 		ForkedFromID         *string             `json:"forkedFromId"`
+		AttachedToThreadID   *string             `json:"attachedToThreadId"`
 		ParentThreadID       *string             `json:"parentThreadId"`
 		Preview              string              `json:"preview"`
 		Ephemeral            bool                `json:"ephemeral"`
@@ -863,6 +865,7 @@ func (t *Thread) MarshalJSON() ([]byte, error) {
 		Environments:         t.Environments,
 		SessionID:            t.SessionID,
 		ForkedFromID:         t.ForkedFromID,
+		AttachedToThreadID:   t.AttachedToThreadID,
 		ParentThreadID:       t.ParentThreadID,
 		Preview:              t.Preview,
 		Ephemeral:            t.Ephemeral,
@@ -2758,8 +2761,12 @@ type ThreadListParams struct {
 	CWD               *ThreadListCwdFilter `json:"cwd,omitempty"`
 	UseStateDBOnly    bool                 `json:"useStateDbOnly,omitempty"`
 	SearchTerm        *string              `json:"searchTerm,omitempty"`
-	ParentThreadID    *string              `json:"parentThreadId,omitempty"`
-	AncestorThreadID  *string              `json:"ancestorThreadId,omitempty"`
+	// IncludeAttachedThreads includes persisted attached threads in a search
+	// listing. Rust requires a non-empty searchTerm so the ordinary resume
+	// listing is not polluted by attached side chats (Rust #60574).
+	IncludeAttachedThreads bool    `json:"includeAttachedThreads,omitempty"`
+	ParentThreadID         *string `json:"parentThreadId,omitempty"`
+	AncestorThreadID       *string `json:"ancestorThreadId,omitempty"`
 	// AttachedToThreadID returns only persistent threads attached to this
 	// thread, including empty threads. It is mutually exclusive with
 	// parentThreadId and ancestorThreadId (Rust #56351).
@@ -2913,6 +2920,9 @@ func (p *ThreadListParams) Validate() error {
 	if p == nil {
 		return nil
 	}
+	if p.IncludeAttachedThreads && (p.SearchTerm == nil || strings.TrimSpace(*p.SearchTerm) == "") {
+		return jsonRPCInvalidRequest("includeAttachedThreads requires a non-empty searchTerm")
+	}
 	if p.AttachedToThreadID != nil && (p.ParentThreadID != nil || p.AncestorThreadID != nil) {
 		return jsonRPCInvalidRequest("attachedToThreadId cannot be combined with parentThreadId or ancestorThreadId")
 	}
@@ -2978,6 +2988,9 @@ type ThreadSearchParams struct {
 	SourceKinds        []ThreadSourceKind      `json:"sourceKinds,omitempty"`
 	Archived           *bool                   `json:"archived,omitempty"`
 	SearchTerm         string                  `json:"searchTerm"`
+	// IncludeAttachedThreads also searches persisted attached threads
+	// (Rust #60574).
+	IncludeAttachedThreads bool `json:"includeAttachedThreads,omitempty"`
 }
 
 type ThreadSearchOccurrencesParams struct {
@@ -3930,36 +3943,37 @@ func BuildThread(record *session.Record, path string, includeTurns bool) *Thread
 		sectionEnteredAt = &value
 	}
 	thread := &Thread{
-		ID:                threadID,
-		Environments:      threadEnvironmentsFromRecord(record),
-		SessionID:         sessionID,
-		ForkedFromID:      stringPtrIfNotEmpty(string(record.ForkedFromID)),
-		ParentThreadID:    stringPtrIfNotEmpty(string(record.ParentThreadID)),
-		Preview:           record.Preview,
-		Ephemeral:         boolFromMap(record.Metadata.Extra, "ephemeral"),
-		Section:           threadSectionFromRecord(record),
-		SectionEnteredAt:  sectionEnteredAt,
-		HistoryMode:       historyMode,
-		ModelProvider:     modelProvider,
-		Model:             stringPtrIfNotEmpty(record.Metadata.Model),
-		SelectedModelInfo: selectedModelInfoForModel(record.Metadata.Model),
-		ReasoningEffort:   reasoningEffortFromRecord(record),
-		CreatedAt:         unixOrZero(record.CreatedAt),
-		UpdatedAt:         unixOrZero(record.UpdatedAt),
-		RecencyAt:         recencyAt,
-		Status:            NotLoadedStatus(),
-		Path:              threadPath,
-		CWD:               record.Metadata.CWD,
-		CLIVersion:        record.Metadata.CLIVersion,
-		Originator:        stringPtrIfNotEmpty(record.Metadata.Originator),
-		Source:            source,
-		ThreadSource:      threadSource,
-		AgentNickname:     stringPtrIfNotEmpty(record.Metadata.AgentNickname),
-		AgentRole:         stringPtrIfNotEmpty(record.Metadata.AgentRole),
-		GitInfo:           gitInfoFromMap(record.Metadata.Git),
-		Name:              stringPtrIfNotEmpty(record.Title),
-		DaybreakEnabled:   record.Metadata.DaybreakEnabled,
-		Turns:             []Turn{},
+		ID:                 threadID,
+		Environments:       threadEnvironmentsFromRecord(record),
+		SessionID:          sessionID,
+		ForkedFromID:       stringPtrIfNotEmpty(string(record.ForkedFromID)),
+		AttachedToThreadID: stringPtrIfNotEmpty(string(record.AttachedThreadParentID)),
+		ParentThreadID:     stringPtrIfNotEmpty(string(record.ParentThreadID)),
+		Preview:            record.Preview,
+		Ephemeral:          boolFromMap(record.Metadata.Extra, "ephemeral"),
+		Section:            threadSectionFromRecord(record),
+		SectionEnteredAt:   sectionEnteredAt,
+		HistoryMode:        historyMode,
+		ModelProvider:      modelProvider,
+		Model:              stringPtrIfNotEmpty(record.Metadata.Model),
+		SelectedModelInfo:  selectedModelInfoForModel(record.Metadata.Model),
+		ReasoningEffort:    reasoningEffortFromRecord(record),
+		CreatedAt:          unixOrZero(record.CreatedAt),
+		UpdatedAt:          unixOrZero(record.UpdatedAt),
+		RecencyAt:          recencyAt,
+		Status:             NotLoadedStatus(),
+		Path:               threadPath,
+		CWD:                record.Metadata.CWD,
+		CLIVersion:         record.Metadata.CLIVersion,
+		Originator:         stringPtrIfNotEmpty(record.Metadata.Originator),
+		Source:             source,
+		ThreadSource:       threadSource,
+		AgentNickname:      stringPtrIfNotEmpty(record.Metadata.AgentNickname),
+		AgentRole:          stringPtrIfNotEmpty(record.Metadata.AgentRole),
+		GitInfo:            gitInfoFromMap(record.Metadata.Git),
+		Name:               stringPtrIfNotEmpty(record.Title),
+		DaybreakEnabled:    record.Metadata.DaybreakEnabled,
+		Turns:              []Turn{},
 	}
 	if includeTurns {
 		thread.Turns = turnsFromRecord(record)
@@ -4211,6 +4225,9 @@ func BuildListOptions(params *ThreadListParams) (session.ListOptions, error) {
 			return session.ListOptions{}, err
 		}
 		options.Relation = &session.RelationFilter{AttachedThreadsOf: threadID}
+	}
+	if params.IncludeAttachedThreads && options.Relation == nil {
+		options.IncludeAttachedThreads = true
 	}
 	if options.Relation != nil && params.SourceKinds == nil {
 		options.Sources = nil
