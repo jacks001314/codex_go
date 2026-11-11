@@ -145,4 +145,3 @@ func TestStdioHostServerTruncationLabelsFailuresLikeRust(t *testing.T) {
 		t.Fatalf("the observation carries the label twice: %q", got)
 	}
 }
-

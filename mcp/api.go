@@ -844,6 +844,13 @@ type MCPService struct {
 	openAIForm             bool
 	userVerification       bool
 	generation             uint64
+	// appsRefreshInFlight tracks Apps catalog fetches that run outside the
+	// runtime publication lock (Rust #60639). Waiters block until the current
+	// batch drains so model tool capture and shutdown never observe a partial
+	// refresh.
+	appsRefreshInFlight int
+	appsRefreshIdle     chan struct{}
+	closed              bool
 	// resourceGeneration advances when resource catalogs and contents must be
 	// refreshed even if the connection set is reused (Rust #46033).
 	resourceGeneration uint64
@@ -1178,7 +1185,12 @@ func (s *MCPService) Close() error {
 	if s == nil {
 		return nil
 	}
+	// Waiting outside s.mu keeps close ordered after in-flight Apps fetches
+	// without blocking their completion (Rust #60639).
+	s.WaitForAppsToolRefresh(context.Background())
 	s.mu.Lock()
+	s.closed = true
+	s.generation++
 	httpClients := s.httpClientsForCloseLocked()
 	stdioClients := s.stdioClientsForCloseLocked()
 	oauthLogins := s.oauthLoginsForCancelLocked()

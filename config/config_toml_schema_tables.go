@@ -84,11 +84,9 @@ var configAudioFields = map[string]configFieldKind{
 }
 
 var configAutoReviewFields = map[string]configFieldKind{
-	"timeout_ms":                   {kind: configKindU32},
-	"circuit_break_action":         {kind: configKindEnum, variants: []string{"default", "strict"}},
-	"policy":                       {kind: configKindString},
-	"extra_policy":                 {kind: configKindString},
-	"experimental_policy_template": {kind: configKindString},
+	"timeout_ms":           {kind: configKindU32},
+	"circuit_break_action": {kind: configKindEnum, variants: []string{"default", "strict"}},
+	"policy":               {kind: configKindString},
 	"experimental_conversation_history_prompt":   {kind: configKindString},
 	"experimental_denial_reconsideration_prompt": {kind: configKindString},
 	"conversation_history_max_output_tokens":     {kind: configKindNonZeroUsize},

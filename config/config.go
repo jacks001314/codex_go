@@ -2011,10 +2011,10 @@ func (c *Config) GuardianPolicyConfig() (string, bool) {
 	return autoReviewConfigValue(c.Values, "policy")
 }
 
-// GuardianExtraPolicy mirrors Rust Config::guardian_extra_policy (#47125): the
-// managed `guardian_extra_policy` requirement wins over the `[auto_review]
-// extra_policy` config value, and a blank value in either layer is ignored so
-// the lower-priority layer can still apply.
+// GuardianExtraPolicy mirrors Rust Config::guardian_extra_policy: only the
+// managed `guardian_extra_policy` requirement supplies additional rules after
+// #60646 retired `[auto_review] extra_policy`. A blank managed value is treated
+// as unset.
 func (c *Config) GuardianExtraPolicy() (string, bool) {
 	if c == nil {
 		return "", false
@@ -2024,18 +2024,15 @@ func (c *Config) GuardianExtraPolicy() (string, bool) {
 			return value, true
 		}
 	}
-	return autoReviewConfigValue(c.Values, "extra_policy")
+	return "", false
 }
 
-// GuardianPolicyTemplate mirrors Rust Config::guardian_policy_template
-// (`[auto_review] experimental_policy_template`): the full reviewer prompt
-// template whose `{{ tenant_policy_config }}` placeholder receives the resolved
-// policy.
+// GuardianPolicyTemplate reports a host-provided reviewer prompt template.
+// Config.toml no longer supplies one: #60646 retired
+// `[auto_review] experimental_policy_template` so managed rules always use the
+// bundled trusted template.
 func (c *Config) GuardianPolicyTemplate() (string, bool) {
-	if c == nil {
-		return "", false
-	}
-	return autoReviewConfigValue(c.Values, "experimental_policy_template")
+	return "", false
 }
 
 // GuardianReviewTimeout mirrors Rust Config::guardian_review_timeout (#56371):

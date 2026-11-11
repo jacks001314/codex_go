@@ -106,6 +106,9 @@ func startExecServerSandboxProcess(params *ExecParams) (*startedExecServerSandbo
 	if len(command) > 0 {
 		command[0] = windowsSandboxPowerShellProgram(command[0], string(selection))
 	}
+	if selection == WindowsSandboxSelectionMXC {
+		command = prefixMXCPowerShellCWD(command)
+	}
 	session, err := windowsunified.SpawnWindowsSandboxLiveSessionForLevel(&windowsunified.WindowsSandboxSessionRequest{
 		Capture: windowssandbox.CaptureRequest{
 			PermissionProfileID:              "exec-server",
@@ -190,10 +193,16 @@ func startExecServerMXCProcess(params *ExecParams, sandboxContext *FileSystemSan
 			AllowLocalBinding: params.ManagedNetwork.AllowLocalBinding,
 		}
 	}
+	// Rust #60647: PowerShell under MXC can start with $PWD unset when a
+	// workspace ancestor is unreadable; prefix the guarded workaround before
+	// either the native or the two-stage launcher path.
+	argv := prefixMXCPowerShellCWD(params.Argv)
 	// A TTY request goes through the two-stage launcher instead: see
 	// startExecServerMXCTTYProcess and plan section 18.
 	if params.TTY {
-		return startExecServerMXCTTYProcess(params, profile, cwd, managed, env)
+		ttyParams := *params
+		ttyParams.Argv = argv
+		return startExecServerMXCTTYProcess(&ttyParams, profile, cwd, managed, env)
 	}
 	policy, err := mxc.PrepareFileSystemPolicy(profile, cwd, env, cwd)
 	if err != nil {
@@ -204,7 +213,7 @@ func startExecServerMXCProcess(params *ExecParams, sandboxContext *FileSystemSan
 		return nil, err
 	}
 	request := &mxc.NativeRequest{
-		ScriptCode:       windowssandbox.ArgvToCommandLine(params.Argv),
+		ScriptCode:       windowssandbox.ArgvToCommandLine(argv),
 		WorkingDirectory: cwd,
 		Env:              envListForMXC(env),
 		Policy: mxc.NativeContainerPolicy{

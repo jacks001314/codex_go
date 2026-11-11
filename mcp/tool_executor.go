@@ -443,6 +443,11 @@ func (e *ToolExecutor) Execute(ctx context.Context, invocation *tool.Invocation)
 	// execution so a required link_id cannot be bypassed by omitting it.
 	linkID := ""
 	if IsCodexAppsMCPServerName(e.resolvedServerName()) {
+		// Apps refreshes fetch outside the runtime gate; drain them before
+		// capturing this call's catalog (Rust #60639).
+		if e.service != nil {
+			_ = e.service.WaitForAppsToolRefresh(ctx)
+		}
 		resolved, err := resolveMCPToolAccount(&e.toolInfo, arguments)
 		if err != nil {
 			return nil, tool.RespondToModel(err.Error())

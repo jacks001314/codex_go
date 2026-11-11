@@ -19083,6 +19083,12 @@ func (r *RuntimeRouter) prepareTurnToolInputs(ctx context.Context, threadID stri
 		recommendations <- candidates
 	}()
 	go func() {
+		// Apps catalog fetches run outside the runtime gate. Wait for any
+		// in-flight refresh before capturing the model catalog so a completed
+		// turn never plans from a partial inventory (Rust #60639).
+		if mcpService != nil {
+			_ = mcpService.WaitForAppsToolRefresh(ctx)
+		}
 		tools, connectors, binding := r.mcpRuntimeInputsForServiceWithRequirementsAndBinding(threadID, cfg, mcpService, requiredMCPServers, requiredPlugins)
 		mcpPrepared <- turnMCPPreparation{tools: tools, connectors: connectors, binding: binding}
 	}()

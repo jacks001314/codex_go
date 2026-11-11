@@ -179,6 +179,8 @@ func obsoleteConfigFieldPaths(values map[string]any) [][]string {
 	}
 	out := [][]string{}
 	for _, path := range [][]string{
+		{"auto_review", "extra_policy"},
+		{"auto_review", "experimental_policy_template"},
 		{"windows", "sandbox_private_desktop"},
 		{"permissions", "windows_sandbox_private_desktop"},
 	} {
@@ -247,6 +249,10 @@ func ignoredSettingHint(key string) string {
 		return " Use [features].view_image to configure the image tool."
 	case "windows.sandbox_private_desktop", "permissions.windows_sandbox_private_desktop":
 		return " Remove windows.sandbox_private_desktop; legacy Windows sandboxes always use a private desktop."
+	case "auto_review.experimental_policy_template":
+		return " Remove auto_review.experimental_policy_template from config.toml."
+	case "auto_review.extra_policy":
+		return " To enforce additional Guardian rules, set guardian_extra_policy in managed requirements.toml."
 	}
 	segments := strings.Split(key, ".")
 	if len(segments) >= 2 && segments[0] == "profiles" && segments[len(segments)-1] == "include_view_image_tool" {

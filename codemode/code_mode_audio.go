@@ -66,10 +66,7 @@ func normalizeSobekAudio(value sobek.Value) (ContentItem, string) {
 	if !audioutil.IsDataURL(audioURL) {
 		return ContentItem{}, invalidAudioURLMessage
 	}
-	if duration, ok := wavDurationSeconds(audioURL); ok && duration < 0.025 {
-		return InputText(shortAudioOmissionText), ""
-	}
-	return InputAudio(audioURL), ""
+	return audioOutputItem(audioURL), ""
 }
 
 // wavDurationSeconds measures the audio bytes actually present, using the WAV
@@ -156,4 +153,13 @@ func isWaveExtensibleSubtype(subtype []byte) bool {
 		}
 	}
 	return true
+}
+
+// audioOutputItem applies the short-clip omission used by audio() and by
+// content() when an MCP audio block is forwarded (Rust #60665).
+func audioOutputItem(audioURL string) ContentItem {
+	if duration, ok := wavDurationSeconds(audioURL); ok && duration < 0.025 {
+		return InputText(shortAudioOmissionText)
+	}
+	return InputAudio(audioURL)
 }

@@ -9,9 +9,9 @@ import (
 
 // TestGuardianPolicyConfigLikeRust mirrors Rust Config::guardian_policy_config:
 // the managed `guardian_policy_config` requirement wins over `[auto_review]
-// policy`, a value that normalizes to empty is treated as unset so the
-// lower-priority layer still applies, and `[auto_review]
-// experimental_policy_template` is the reviewer prompt template.
+// policy`, and a value that normalizes to empty is treated as unset so the
+// lower-priority layer still applies. #60646 retired the config.toml policy
+// template.
 func TestGuardianPolicyConfigLikeRust(t *testing.T) {
 	managed := "  Managed policy.  "
 	cfg := &Config{
@@ -24,8 +24,8 @@ func TestGuardianPolicyConfigLikeRust(t *testing.T) {
 	if got, ok := cfg.GuardianPolicyConfig(); !ok || got != "Managed policy." {
 		t.Fatalf("GuardianPolicyConfig() = %q, %v, want the managed policy", got, ok)
 	}
-	if got, ok := cfg.GuardianPolicyTemplate(); !ok || got != "Template: {{ tenant_policy_config }}" {
-		t.Fatalf("GuardianPolicyTemplate() = %q, %v", got, ok)
+	if got, ok := cfg.GuardianPolicyTemplate(); ok || got != "" {
+		t.Fatalf("GuardianPolicyTemplate() = %q, %v, want the retired config value ignored", got, ok)
 	}
 
 	// A requirement that normalizes to empty falls back to the config value.
@@ -59,10 +59,9 @@ func TestRequirementsFileParsesGuardianPolicyConfig(t *testing.T) {
 	}
 }
 
-// TestGuardianExtraPolicyConfigLikeRust mirrors Rust #47125's
-// Config::guardian_extra_policy precedence: the managed `guardian_extra_policy`
-// requirement wins over `[auto_review] extra_policy`, and a blank value in
-// either layer is ignored.
+// TestGuardianExtraPolicyConfigLikeRust mirrors Rust #47125/#60646:
+// Config::guardian_extra_policy is supplied only by the managed requirement;
+// the retired `[auto_review] extra_policy` value is ignored.
 func TestGuardianExtraPolicyConfigLikeRust(t *testing.T) {
 	managed := "  Managed extra policy.  "
 	cfg := &Config{
@@ -75,13 +74,13 @@ func TestGuardianExtraPolicyConfigLikeRust(t *testing.T) {
 
 	empty := " \n\t "
 	cfg.Requirements.GuardianExtraPolicy = &empty
-	if got, ok := cfg.GuardianExtraPolicy(); !ok || got != "Config extra policy." {
-		t.Fatalf("GuardianExtraPolicy() with an empty requirement = %q, %v", got, ok)
+	if got, ok := cfg.GuardianExtraPolicy(); ok || got != "" {
+		t.Fatalf("GuardianExtraPolicy() with an empty requirement = %q, %v, want unset", got, ok)
 	}
 
-	cfg.Values = map[string]any{"auto_review": map[string]any{"extra_policy": "   "}}
+	cfg.Values = map[string]any{"auto_review": map[string]any{"extra_policy": "Config extra policy."}}
 	if got, ok := cfg.GuardianExtraPolicy(); ok || got != "" {
-		t.Fatalf("GuardianExtraPolicy() with a blank config value = %q, %v, want unset", got, ok)
+		t.Fatalf("GuardianExtraPolicy() with the retired config value = %q, %v, want unset", got, ok)
 	}
 	if got, ok := (&Config{}).GuardianExtraPolicy(); ok || got != "" {
 		t.Fatalf("GuardianExtraPolicy() = %q, %v, want unset", got, ok)

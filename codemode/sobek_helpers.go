@@ -52,6 +52,31 @@ func installSobekHelpers(runtime *sobek.Runtime, items *[]ContentItem, state *so
 	}); err != nil {
 		return fmt.Errorf("install audio helper: %w", err)
 	}
+	if err := runtime.Set("content", func(call sobek.FunctionCall) sobek.Value {
+		if !state.active() {
+			return sobek.Undefined()
+		}
+		value := sobek.Undefined()
+		if len(call.Arguments) > 0 {
+			value = call.Argument(0)
+		}
+		item, message := normalizeSobekContent(value)
+		if !state.active() {
+			return sobek.Undefined()
+		}
+		if message != "" {
+			state.mu.Lock()
+			defer state.mu.Unlock()
+			if !state.active() {
+				return sobek.Undefined()
+			}
+			panic(runtime.NewTypeError(message))
+		}
+		state.appendOutput(items, item)
+		return sobek.Undefined()
+	}); err != nil {
+		return fmt.Errorf("install content helper: %w", err)
+	}
 	if err := runtime.Set("exit", func() {
 		state.exitRequested.Store(true)
 		state.requestTermination(errEngineExit)
@@ -61,6 +86,9 @@ func installSobekHelpers(runtime *sobek.Runtime, items *[]ContentItem, state *so
 	}
 	if _, err := runtime.RunString(sobekSettledHelpers); err != nil {
 		return fmt.Errorf("install settled helpers: %w", err)
+	}
+	if _, err := runtime.RunString(sobekContentHelpers); err != nil {
+		return fmt.Errorf("install content helpers: %w", err)
 	}
 	return nil
 }

@@ -10,8 +10,9 @@ import (
 
 const statusTimeout = 2 * time.Second
 
-// statusRunner executes `git status --porcelain` in cwd and returns the raw
-// trimmed stdout. It is an interface so tests can inject slow/failing runs.
+// statusRunner executes `git status --porcelain --ignore-submodules=dirty` in
+// cwd and returns the raw trimmed stdout. It is an interface so tests can
+// inject slow/failing runs.
 type statusRunner func(ctx context.Context, cwd string) (string, error)
 
 type statusRun struct {
@@ -28,7 +29,8 @@ var (
 // HasChangesInRepo reports whether the repository containing cwd has
 // uncommitted changes, coalescing concurrent scans for the same canonical
 // repository root into a single in-flight `git status --porcelain`
-// invocation (Rust b6c3b51533, #37151). Scans for different repositories
+// invocation that ignores dirty submodule worktrees (Rust b6c3b51533,
+// #37151; #60669). Scans for different repositories
 // stay independent and a fresh scan starts after an in-flight request
 // completes. The shared run uses its own time budget so cancelling one
 // consumer (or its context deadline) does not abort scans other consumers
@@ -38,7 +40,10 @@ func HasChangesInRepo(ctx context.Context, cwd, repoRoot string) (bool, error) {
 }
 
 func defaultStatusRunner(ctx context.Context, cwd string) (string, error) {
-	return RunWithTimeout(ctx, statusTimeout, cwd, "status", "--porcelain")
+	// Submodule worktree scans can execute clean filters selected by
+	// task-writable Git configuration. Skip those scans while still reporting
+	// gitlink changes (Rust #60669).
+	return RunWithTimeout(ctx, statusTimeout, cwd, "status", "--porcelain", "--ignore-submodules=dirty")
 }
 
 func hasChangesInRepoWithRunner(ctx context.Context, cwd, repoRoot string, runner statusRunner) (bool, error) {

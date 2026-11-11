@@ -952,6 +952,12 @@ func guardianReviewBaseInstructions(cfg *config.Config, autoReview *model.AutoRe
 		}
 		if value, ok := cfg.GuardianPolicyTemplate(); ok {
 			policyTemplate = value
+		} else if managedGuardianRulesPresent(cfg) {
+			// Model catalogs are user configuration and can omit policy slots
+			// or add conflicting instructions. Managed rules always use the
+			// bundled trusted template unless the host supplies its own
+			// (Rust #60646).
+			policyTemplate = state.GuardianPolicyTemplate()
 		}
 	}
 	extraPolicy := ""
@@ -961,6 +967,21 @@ func guardianReviewBaseInstructions(cfg *config.Config, autoReview *model.AutoRe
 		}
 	}
 	return state.RenderGuardianPolicyInstructions(policy, extraPolicy, policyTemplate, state.GuardianOutputContractPrompt())
+}
+
+// managedGuardianRulesPresent reports whether managed requirements supply a
+// Guardian tenant policy or extra rules. Those rules need a trusted template.
+func managedGuardianRulesPresent(cfg *config.Config) bool {
+	if cfg == nil || cfg.Requirements == nil {
+		return false
+	}
+	if policy := cfg.Requirements.GuardianPolicyConfig; policy != nil && strings.TrimSpace(*policy) != "" {
+		return true
+	}
+	if extra := cfg.Requirements.GuardianExtraPolicy; extra != nil && strings.TrimSpace(*extra) != "" {
+		return true
+	}
+	return false
 }
 
 // guardianReviewInstructions adds the reviewer-only prompt sections (conversation

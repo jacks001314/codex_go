@@ -14,9 +14,9 @@ func TestValidateBrowserComputerUseConfigValuesAcceptsValidRustShape(t *testing.
 			},
 			"origins": map[string]any{
 				"https://example.com": map[string]any{
-					"downloads":          "deny",
-					"uploads":            "allow",
-					"full_cdp_access":    "deny",
+					"downloads":           "deny",
+					"uploads":             "allow",
+					"full_cdp_access":     "deny",
 					"persistent_approval": true,
 				},
 			},
@@ -74,12 +74,12 @@ func TestBrowserComputerUseRequirementsFromMapExpanded(t *testing.T) {
 	req := ConfigRequirementsFromMap(map[string]any{
 		"allow_browser_and_computer_use": true,
 		"browser_use": map[string]any{
-			"allow_history_access":          true,
-			"disable_auto_review":           true,
+			"allow_history_access":             true,
+			"disable_auto_review":              true,
 			"allow_global_persistent_approval": true,
 			"default_origin_policy": map[string]any{
-				"access":            "allow",
-				"full_cdp_access":   "deny",
+				"access":          "allow",
+				"full_cdp_access": "deny",
 			},
 			"origins": map[string]any{
 				"https://example.com": map[string]any{

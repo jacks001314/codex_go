@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	shellutil "codex_go/shell"
 )
 
 // Windows sandbox PowerShell fallback resolution.
@@ -156,4 +158,47 @@ func windowsSandboxPowerShellProgram(program string, level string) string {
 		return replacement
 	}
 	return program
+}
+
+// mxcPowerShellCWDWorkaround restores $PWD when a denied ancestor leaves it
+// unset (PowerShell/PowerShell#27899, Rust #60647). It runs in a child scope so
+// the helper's variables do not leak into the user script, and it leaves a
+// location already initialized by startup or a profile untouched.
+const mxcPowerShellCWDWorkaround = `& {
+    if ($ExecutionContext.SessionState.LanguageMode -ne 'FullLanguage') { return }
+    if ($null -ne $ExecutionContext.SessionState.PSVariable.GetValue('global:PWD')) { return }
+    $drive = $ExecutionContext.SessionState.Drive.Current
+    $cwd = [Environment]::CurrentDirectory
+    if ($drive.Provider.Name -eq 'FileSystem' -and !$drive.CurrentLocation -and
+        $drive.Root -eq [IO.Path]::GetPathRoot($cwd) -and $cwd.Length -gt $drive.Root.Length) {
+        $drive.CurrentLocation = $cwd.Substring($drive.Root.Length)
+        Microsoft.PowerShell.Utility\Set-Variable -Name PWD -Scope Global -Value $ExecutionContext.SessionState.Path.CurrentLocation -Force
+    }
+}
+`
+
+// prefixMXCPowerShellCWD applies the MXC-only PowerShell working-directory
+// workaround (Rust #60647). The command must end in `-Command SCRIPT`; the
+// workaround is inserted after the UTF-8 console prefix so both prepare steps
+// keep their upstream order.
+func prefixMXCPowerShellCWD(command []string) []string {
+	if len(command) < 3 {
+		return command
+	}
+	if shellType, ok := shellutil.DetectShellType(command[0]); !ok || shellType != shellutil.ShellPowerShell {
+		return command
+	}
+	if !strings.EqualFold(command[len(command)-2], "-Command") {
+		return command
+	}
+	out := append([]string(nil), command...)
+	script := out[len(out)-1]
+	if strings.HasPrefix(script, shellutil.UTF8OutputPrefix) {
+		script = shellutil.UTF8OutputPrefix + mxcPowerShellCWDWorkaround +
+			strings.TrimPrefix(script, shellutil.UTF8OutputPrefix)
+	} else {
+		script = mxcPowerShellCWDWorkaround + script
+	}
+	out[len(out)-1] = script
+	return out
 }

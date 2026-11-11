@@ -26,6 +26,8 @@ type clientCatalogTestServer struct {
 	calls       int
 	blockCalls  <-chan struct{}
 	callStarted chan struct{}
+	blockLists  <-chan struct{}
+	listStarted chan struct{}
 }
 
 func newClientCatalogTestServer(t *testing.T, tools ...string) *clientCatalogTestServer {
@@ -33,6 +35,7 @@ func newClientCatalogTestServer(t *testing.T, tools ...string) *clientCatalogTes
 	ts := &clientCatalogTestServer{
 		tools:       append([]string(nil), tools...),
 		callStarted: make(chan struct{}, 8),
+		listStarted: make(chan struct{}, 8),
 	}
 	ts.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodDelete {
@@ -61,7 +64,16 @@ func newClientCatalogTestServer(t *testing.T, tools ...string) *clientCatalogTes
 			ts.lists++
 			fail := ts.fail
 			tools := append([]string(nil), ts.tools...)
+			block := ts.blockLists
+			ts.blockLists = nil
 			ts.mu.Unlock()
+			if block != nil {
+				select {
+				case ts.listStarted <- struct{}{}:
+				default:
+				}
+				<-block
+			}
 			if fail {
 				http.Error(w, "catalog unavailable", http.StatusInternalServerError)
 				return
@@ -120,6 +132,12 @@ func (s *clientCatalogTestServer) setBlockCalls(release <-chan struct{}) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.blockCalls = release
+}
+
+func (s *clientCatalogTestServer) setBlockLists(release <-chan struct{}) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.blockLists = release
 }
 
 func (s *clientCatalogTestServer) listCount() int {
@@ -298,5 +316,90 @@ func TestAppsCatalogPublicationWaitsForActiveCallsLikeRust(t *testing.T) {
 	}
 	if _, err := binding.CallTool(&MCPToolCallParams{Server: CodexAppsServerName, Tool: "search_v1"}); !errors.Is(err, ErrInvalidMCPRequest) {
 		t.Fatalf("binding after completed refresh error = %v, want rejection", err)
+	}
+}
+
+// TestAppsRefreshRetriesAfterInvalidationLikeRust mirrors Rust #60639: a fetch
+// that finishes after the runtime generation advanced must not publish, and a
+// single retry should return the catalog from the current runtime.
+func TestAppsRefreshRetriesAfterInvalidationLikeRust(t *testing.T) {
+	release := make(chan struct{})
+	apps := newClientCatalogTestServer(t, "search_v1")
+	apps.setBlockLists(release)
+	service := newClientCatalogTestService(t, apps, nil)
+
+	type result struct {
+		snapshot *CodexAppsToolSnapshot
+		err      error
+	}
+	done := make(chan result, 1)
+	go func() {
+		snapshot, err := service.RefreshCodexAppsTools(context.Background())
+		done <- result{snapshot: snapshot, err: err}
+	}()
+	select {
+	case <-apps.listStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Apps refresh never listed tools")
+	}
+
+	apps.setTools("search_v2")
+	service.mu.Lock()
+	service.generation++
+	service.mu.Unlock()
+	close(release)
+
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatalf("RefreshCodexAppsTools() error = %v", got.err)
+		}
+		if names := clientCatalogToolNames(got.snapshot.Tools); len(names) != 1 || names[0] != "search_v2" {
+			t.Fatalf("retried snapshot tools = %#v, want search_v2", names)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Apps refresh did not finish")
+	}
+	if apps.listCount() != 2 {
+		t.Fatalf("tools/list calls = %d, want one superseded fetch and one retry", apps.listCount())
+	}
+	status := clientCatalogListStatus(t, service)
+	if len(status) != 1 || len(status[0].Tools) != 1 || status[0].Tools[0].Name != "search_v2" {
+		t.Fatalf("published Apps status = %#v, want search_v2", status)
+	}
+}
+
+// TestWaitForAppsToolRefreshDrainsInFlightLikeRust verifies model capture can
+// wait outside the runtime gate while the Apps fetch is still listing tools.
+func TestWaitForAppsToolRefreshDrainsInFlightLikeRust(t *testing.T) {
+	release := make(chan struct{})
+	apps := newClientCatalogTestServer(t, "search_v1")
+	apps.setBlockLists(release)
+	service := newClientCatalogTestService(t, apps, nil)
+
+	refreshDone := make(chan error, 1)
+	go func() {
+		_, err := service.RefreshCodexAppsTools(context.Background())
+		refreshDone <- err
+	}()
+	select {
+	case <-apps.listStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Apps refresh never listed tools")
+	}
+
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- service.WaitForAppsToolRefresh(context.Background()) }()
+	select {
+	case err := <-waitDone:
+		t.Fatalf("WaitForAppsToolRefresh() returned before the fetch drained (err = %v)", err)
+	case <-time.After(150 * time.Millisecond):
+	}
+	close(release)
+	if err := <-refreshDone; err != nil {
+		t.Fatalf("RefreshCodexAppsTools() error = %v", err)
+	}
+	if err := <-waitDone; err != nil {
+		t.Fatalf("WaitForAppsToolRefresh() error = %v", err)
 	}
 }

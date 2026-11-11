@@ -219,3 +219,68 @@ func TestHasChangesInRepoPropagatesRunnerError(t *testing.T) {
 		t.Fatalf("scan = %v, %v; want error", ok, err)
 	}
 }
+
+// TestHasChangesInRepoIgnoresDirtySubmoduleWorktreesLikeRust mirrors Rust
+// #60669: uncommitted submodule contents are skipped (their clean filters are
+// task-writable), while gitlink changes still count.
+func TestHasChangesInRepoIgnoresDirtySubmoduleWorktreesLikeRust(t *testing.T) {
+	if _, err := Run(context.Background(), ".", "version"); err != nil {
+		t.Skipf("git unavailable: %v", err)
+	}
+	root := t.TempDir()
+	submodule := filepath.Join(root, "sub")
+	super := filepath.Join(root, "super")
+	runGit := func(dir string, args ...string) error {
+		_, err := Run(context.Background(), dir, args...)
+		return err
+	}
+	for _, dir := range []string{submodule, super} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := runGit(dir, "init", "-q"); err != nil {
+			t.Fatalf("git init %s: %v", dir, err)
+		}
+		_ = runGit(dir, "config", "user.email", "test@example.com")
+		_ = runGit(dir, "config", "user.name", "test")
+	}
+	if err := os.WriteFile(filepath.Join(submodule, "file.txt"), []byte("one\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := runGit(submodule, "add", "file.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if err := runGit(submodule, "commit", "-qm", "initial"); err != nil {
+		t.Fatal(err)
+	}
+	if err := runGit(super, "-c", "protocol.file.allow=always", "submodule", "add", submodule, "sub"); err != nil {
+		t.Fatalf("git submodule add: %v", err)
+	}
+	if err := runGit(super, "commit", "-qm", "add submodule"); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if ok, err := HasChangesInRepo(ctx, super, super); err != nil || ok {
+		t.Fatalf("clean superproject = %v, %v; want false, nil", ok, err)
+	}
+	if err := os.WriteFile(filepath.Join(super, "sub", "file.txt"), []byte("two\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := HasChangesInRepo(ctx, super, super); err != nil || ok {
+		t.Fatalf("dirty submodule worktree = %v, %v; want false, nil", ok, err)
+	}
+	submoduleWorktree := filepath.Join(super, "sub")
+	other := filepath.Join(submoduleWorktree, "other.txt")
+	if err := os.WriteFile(other, []byte("two\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := runGit(submoduleWorktree, "add", "other.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if err := runGit(submoduleWorktree, "commit", "-qm", "other"); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := HasChangesInRepo(ctx, super, super); err != nil || !ok {
+		t.Fatalf("changed submodule gitlink = %v, %v; want true, nil", ok, err)
+	}
+}

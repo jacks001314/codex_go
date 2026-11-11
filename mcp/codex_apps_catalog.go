@@ -31,18 +31,33 @@ func (s *MCPService) RefreshCodexAppsTools(ctx context.Context) (*CodexAppsToolS
 		}
 	}
 	name := CodexAppsServerName
-	config, ok := s.ServerConfigForServer(name)
-	if !ok || !isRunnableMCPConfig(&config) {
-		return nil, fmt.Errorf("unknown MCP server %q", name)
+	for attempt := 0; attempt < 2; attempt++ {
+		config, ok := s.ServerConfigForServer(name)
+		if !ok || !isRunnableMCPConfig(&config) {
+			return nil, fmt.Errorf("unknown MCP server %q", name)
+		}
+		generation, done := s.beginAppsToolRefresh()
+		catalog, err := s.refreshClientToolCatalogUnpublished(name, &config)
+		published := err == nil && catalog != nil && s.finishAppsToolRefresh(generation)
+		if published {
+			s.publishClientCatalogTools(name, catalog.listedTools())
+		}
+		done()
+		if err != nil {
+			return nil, err
+		}
+		if published {
+			return appsToolSnapshot(catalog, &config, s), nil
+		}
 	}
-	catalog, err := s.refreshClientToolCatalog(name, &config)
-	if err != nil {
-		return nil, err
-	}
+	return nil, fmt.Errorf("MCP runtime changed during both Apps tool refresh attempts")
+}
+
+func appsToolSnapshot(catalog *clientToolCatalog, config *ServerConfig, service *MCPService) *CodexAppsToolSnapshot {
 	tools := catalog.listedTools()
 	modelVisibleToolNames := map[string]bool{}
-	if _, ok := s.PermissionProfileForServer(name); ok {
-		filtered := FilterMCPTools(tools, ToolFilterFromServerConfig(&config))
+	if _, ok := service.PermissionProfileForServer(CodexAppsServerName); ok {
+		filtered := FilterMCPTools(tools, ToolFilterFromServerConfig(config))
 		for i := range filtered {
 			if !mcpToolIsModelVisible(&filtered[i]) {
 				continue
@@ -52,13 +67,87 @@ func (s *MCPService) RefreshCodexAppsTools(ctx context.Context) (*CodexAppsToolS
 			}
 		}
 	}
-	return &CodexAppsToolSnapshot{Tools: tools, ModelVisibleToolNames: modelVisibleToolNames}, nil
+	return &CodexAppsToolSnapshot{Tools: tools, ModelVisibleToolNames: modelVisibleToolNames}
+}
+
+// beginAppsToolRefresh registers one Apps catalog fetch against the runtime
+// generation. The returned done function must run once the fetch publishes or
+// gives up.
+func (s *MCPService) beginAppsToolRefresh() (uint64, func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.appsRefreshInFlight == 0 {
+		s.appsRefreshIdle = make(chan struct{})
+	}
+	s.appsRefreshInFlight++
+	generation := s.generation
+	return generation, func() {
+		s.mu.Lock()
+		if s.appsRefreshInFlight > 0 {
+			s.appsRefreshInFlight--
+		}
+		if s.appsRefreshInFlight == 0 && s.appsRefreshIdle != nil {
+			close(s.appsRefreshIdle)
+			s.appsRefreshIdle = nil
+		}
+		s.mu.Unlock()
+	}
+}
+
+// finishAppsToolRefresh reports whether the captured generation is still
+// current, so a superseded fetch cannot publish after configuration or auth
+// changes (Rust #60639).
+func (s *MCPService) finishAppsToolRefresh(generation uint64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return !s.closed && s.generation == generation
+}
+
+// WaitForAppsToolRefresh blocks until every in-flight Apps catalog fetch has
+// finished. Callers must not hold s.mu: refreshes fetch outside the runtime
+// gate, and waiting outside it lets a superseded refresh retry.
+func (s *MCPService) WaitForAppsToolRefresh(ctx context.Context) error {
+	if s == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for {
+		s.mu.Lock()
+		if s.appsRefreshInFlight == 0 {
+			s.mu.Unlock()
+			return nil
+		}
+		idle := s.appsRefreshIdle
+		s.mu.Unlock()
+		if idle == nil {
+			continue
+		}
+		select {
+		case <-idle:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 }
 
 // refreshClientToolCatalog lists one server through the exact client this
 // service already uses for it, preserving connection reuse, and publishes the
 // result on that client's catalog.
 func (s *MCPService) refreshClientToolCatalog(name string, config *ServerConfig) (*clientToolCatalog, error) {
+	catalog, err := s.refreshClientToolCatalogUnpublished(name, config)
+	if err != nil {
+		return nil, err
+	}
+	s.publishClientCatalogTools(name, catalog.listedTools())
+	return catalog, nil
+}
+
+// refreshClientToolCatalogUnpublished fetches one server's tools without
+// publishing the retained status, so the Apps path can validate its generation
+// first (Rust #60639).
+func (s *MCPService) refreshClientToolCatalogUnpublished(name string, config *ServerConfig) (*clientToolCatalog, error) {
 	catalog, httpTarget, stdioTarget, err := s.clientToolCatalogForServer(name, config)
 	if err != nil {
 		return nil, err
@@ -80,7 +169,6 @@ func (s *MCPService) refreshClientToolCatalog(name string, config *ServerConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to refresh tools for MCP server %q: %w", name, err)
 	}
-	s.publishClientCatalogTools(name, catalog.listedTools())
 	return catalog, nil
 }
 

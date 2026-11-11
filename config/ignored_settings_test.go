@@ -160,3 +160,38 @@ func TestConfigServiceIgnoredSettingsWarning(t *testing.T) {
 		t.Fatalf("warning leaked a value: %q", warning)
 	}
 }
+
+// TestRemovedGuardianAutoReviewSettingsWarnLikeRust mirrors Rust #60646: the
+// retired auto_review extra_policy and experimental_policy_template keys stay
+// parse-compatible and point users at managed requirements or removal.
+func TestRemovedGuardianAutoReviewSettingsWarnLikeRust(t *testing.T) {
+	home := t.TempDir()
+	body := "[auto_review]\n" +
+		"extra_policy = \"user rules\"\n" +
+		"experimental_policy_template = \"{{ tenant_policy_config }}\"\n"
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(home)
+	if err != nil {
+		t.Fatalf("Load() error = %v, want retired keys ignored", err)
+	}
+	if got, ok := cfg.GuardianExtraPolicy(); ok || got != "" {
+		t.Fatalf("GuardianExtraPolicy() = %q, %v, want the retired config value ignored", got, ok)
+	}
+	if got, ok := cfg.GuardianPolicyTemplate(); ok || got != "" {
+		t.Fatalf("GuardianPolicyTemplate() = %q, %v, want the retired config value ignored", got, ok)
+	}
+	warning := IgnoredConfigWarning([]Layer{{
+		Name:   LayerSource{Type: LayerSourceUser, File: "config.toml"},
+		Config: cfg.Values,
+	}}, nil)
+	for _, want := range []string{
+		"`auto_review.experimental_policy_template` is ignored. Remove auto_review.experimental_policy_template from config.toml.",
+		"`auto_review.extra_policy` is ignored. To enforce additional Guardian rules, set guardian_extra_policy in managed requirements.toml.",
+	} {
+		if !strings.Contains(warning, want) {
+			t.Fatalf("warning missing %q:\n%s", want, warning)
+		}
+	}
+}

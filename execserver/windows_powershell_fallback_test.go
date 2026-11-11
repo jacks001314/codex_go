@@ -3,7 +3,11 @@ package execserver
 import (
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
+
+	shellutil "codex_go/shell"
 )
 
 // Rust #49098 adds Windows RPC regression coverage for lowercase and mixed-case
@@ -110,6 +114,50 @@ func TestWindowsPowerShellProgramStemLikeRust(t *testing.T) {
 	for program, want := range cases {
 		if got := windowsPowerShellProgramStem(program); got != want {
 			t.Fatalf("windowsPowerShellProgramStem(%q) = %q, want %q", program, got, want)
+		}
+	}
+}
+
+// TestPrefixMXCPowerShellCWDRestoresWorkingDirectoryLikeRust mirrors Rust
+// #60647: the guarded workaround prefixes only MXC PowerShell -Command scripts,
+// after the UTF-8 console prefix, and leaves other invocations untouched.
+func TestPrefixMXCPowerShellCWDRestoresWorkingDirectoryLikeRust(t *testing.T) {
+	command := []string{"pwsh", "-NoProfile", "-Command", "Get-Location"}
+	got := prefixMXCPowerShellCWD(command)
+	if len(got) != len(command) || got[0] != "pwsh" || got[1] != "-NoProfile" || got[2] != "-Command" {
+		t.Fatalf("prefixed command = %#v", got)
+	}
+	script := got[3]
+	for _, want := range []string{
+		"if ($null -ne $ExecutionContext.SessionState.PSVariable.GetValue('global:PWD')) { return }",
+		"$drive.CurrentLocation = $cwd.Substring($drive.Root.Length)",
+		"Microsoft.PowerShell.Utility\\Set-Variable -Name PWD -Scope Global",
+		"Get-Location",
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("script missing %q:\n%s", want, script)
+		}
+	}
+	if strings.Index(script, "Set-Variable") > strings.Index(script, "Get-Location") {
+		t.Fatalf("workaround must run before the user script: %q", script)
+	}
+	if command[3] != "Get-Location" {
+		t.Fatalf("prefixMXCPowerShellCWD mutated its input: %#v", command)
+	}
+
+	utf8Command := []string{"powershell.exe", "-NoProfile", "-Command", shellutil.UTF8OutputPrefix + "Get-Location"}
+	utf8Got := prefixMXCPowerShellCWD(utf8Command)
+	if !strings.HasPrefix(utf8Got[3], shellutil.UTF8OutputPrefix+mxcPowerShellCWDWorkaround) {
+		t.Fatalf("UTF-8 prefix and workaround order drifted: %q", utf8Got[3])
+	}
+
+	for _, untouched := range [][]string{
+		{"pwsh", "-NoProfile", "-File", "script.ps1"},
+		{"bash", "-c", "pwd"},
+		{"pwsh", "-Command"},
+	} {
+		if got := prefixMXCPowerShellCWD(untouched); !reflect.DeepEqual(got, untouched) {
+			t.Fatalf("prefixMXCPowerShellCWD(%#v) = %#v, want unchanged", untouched, got)
 		}
 	}
 }

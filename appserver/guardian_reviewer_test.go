@@ -708,8 +708,9 @@ func TestGuardianReviewInstructionsPrecedenceLikeRust(t *testing.T) {
 		t.Fatalf("catalog instructions = %q, want %q", catalog, want)
 	}
 
-	// The managed policy wins over the catalog's, and the configured template
-	// is used as-is.
+	// Rust #60646: managed rules force the bundled trusted template even when
+	// the user-configured catalog publishes its own template. The retired
+	// config.toml template is ignored too.
 	managed := "Managed policy."
 	configuredTemplate := "Configured template:\n{{ tenant_policy_config }}"
 	cfg := &config.Config{
@@ -717,26 +718,27 @@ func TestGuardianReviewInstructionsPrecedenceLikeRust(t *testing.T) {
 		Requirements: &config.ConfigRequirements{GuardianPolicyConfig: &managed},
 	}
 	overridden := guardianReviewInstructions(cfg, &model.AutoReviewMessages{Policy: &policy, PolicyTemplate: &template})
-	if want := state.RenderGuardianPolicyInstructions(managed, "", configuredTemplate, contract); overridden != want {
-		t.Fatalf("configured instructions = %q, want %q", overridden, want)
+	if want := state.RenderGuardianPolicyInstructions(managed, "", state.GuardianPolicyTemplate(), contract); overridden != want {
+		t.Fatalf("trusted-template instructions = %q, want %q", overridden, want)
+	}
+	if strings.Contains(overridden, "Catalog template") || strings.Contains(overridden, "Configured template") {
+		t.Fatalf("managed rules accepted a user template: %q", overridden)
 	}
 
-	// Rust #47125: the managed extra policy reaches the template's
-	// `{{ extra_policy }}` slot alongside the tenant policy.
-	extraTemplate := "Tenant:\n{{ tenant_policy_config }}\n\nExtra:\n{{ extra_policy }}"
+	// Rust #47125/#60646: the managed extra policy reaches the bundled
+	// template's `{{ extra_policy }}` slot alongside the tenant policy.
 	managedExtra := "Managed extra policy."
 	withExtra := &config.Config{
-		Values: map[string]any{"auto_review": map[string]any{"experimental_policy_template": extraTemplate}},
 		Requirements: &config.ConfigRequirements{
 			GuardianPolicyConfig: &managed,
 			GuardianExtraPolicy:  &managedExtra,
 		},
 	}
-	got := guardianReviewInstructions(withExtra, nil)
-	if want := state.RenderGuardianPolicyInstructions(managed, managedExtra, extraTemplate, contract); got != want {
+	got := guardianReviewInstructions(withExtra, &model.AutoReviewMessages{Policy: &policy, PolicyTemplate: &template})
+	if want := state.RenderGuardianPolicyInstructions(managed, managedExtra, state.GuardianPolicyTemplate(), contract); got != want {
 		t.Fatalf("extra-policy instructions = %q, want %q", got, want)
 	}
-	if !strings.Contains(got, "Extra:\nManaged extra policy.") {
+	if !strings.Contains(got, "Managed extra policy.") {
 		t.Fatalf("extra policy did not reach the reviewer instructions: %q", got)
 	}
 }
