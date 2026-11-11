@@ -45887,13 +45887,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "已落地：tui.collapse_turn_details 配置键（默认 false）、全屏设置面板 Collapse turn details 开关与持久化；命令执行摘要为无输出标签（首行调用行），多次调用合并到可展开行；默认关闭时行为完全不变。",
-    "tui/tea/transcript_turn_details.go 新增 CollapseTurnDetails：把某个回合内连续的工单活动（RoleHistory + ActivityIDs）折叠成一行摘要，摘要只取每个单元格的首行调用标签（TurnDetailSummaryLabel 复刻 Rust ToolGroup::label 的 Ran N commands / Explored files · ran 1 command / N tool calls · <最后一条>），输出正文一律不进入摘要；被吸收的单元格置空占位，切片长度与原始会话一一对应，行号与展开状态不错位。",
-    "tui/tea/model.go 的 renderTranscriptOverlayCached 在 tui.collapse_turn_details 打开时用折叠后的影子 State 渲染（不污染会话，也不复用按原始会话建的布局缓存）；展开状态复用既有 activityFocus/transcriptActivityExpanded，展开后恢复原始单元格。",
-    "测试：go test ./tui/tea -count=1（含新增 TestCollapseTurnDetails*、TestTurnDetailSummaryLabelMixLikeRust、TestTranscriptOverlayCollapsesCompletedTurnActivityLikeRust 与面板开关用例）通过 56.6s；go test ./app -run 'TUI|Interactive|Config|Fullscreen' 通过 38.9s；go test ./config 通过；go build ./... 通过。把渲染接线临时关掉后全屏用例按预期失败。",
-    "仍未落地：同提交里「恢复历史分页时把 interruption notice 放回其回合边界」的部分——Go 的 older-history 分页（tui/tea/history_pagination.go）直接拼接已渲染消息，没有按回合分组重排 interruption notice 的入口。",
+    "配置面与折叠：tui.collapse_turn_details 默认关闭，全屏设置面板提供 Collapse turn details 开关；tui/tea/transcript_turn_details.go 的 CollapseTurnDetails 把完成回合内连续工具活动折算成一行无输出摘要（Ran N commands / Explored files · ran 1 command / N tool calls · <最后一条>），被吸收单元格置空占位以保持行号与展开状态对齐，展开经 activityFocus 状态还原原始单元格。",
+    "历史分页中断边界（本次补齐）：app/interactive.go 新增 interruptionNoticeMessage 与 interactiveHistoryPageGroups，复刻 Rust group_turn_items —— 内嵌会话按 rollout turn 快照和 item 的 turn 归属分组，只有包含该回合最后一条 item 的页才在其后补回「■ Conversation interrupted - use /feedback if something went wrong」；无 item 的中断回合沿用前一回合边界（history 起点时位于首条 item 之前）；被分页截断的回合不会重复出现。app/remote_tui.go 的 daemon 分页按 thread/turns/list 的每条 turn 追加提示，初始窗口仍走 replay 以避免与实时提示重复。tui/tea/history_pagination.go 在侧会话（side thread）中丢弃恢复出来的提示行，对齐 Rust !side_threads 规则。",
+    "测试：go test ./app -run 'InteractiveOlderHistory|HistoryPageWires' -skip Remote 通过（4 个新用例覆盖分页边界、无 item 中断、跨页回合与 loader 接线）；go test ./tui/tea -run 'HistoryPagination|SideConversationDropsInterruption' 通过；go build ./... 通过。",
+    "残余：内嵌分页仍不恢复 Completed 回合的 Worked for … 完成元数据，Rust merge_older_turns 的 items_view 继承在 Go 没有对应物；两者都不影响中断提示的归属。",
     "plan: update/plan_2026_11_10.md (#60554)"
    ]
   },
@@ -45904,10 +45903,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "已落地：摘要标签对任意带 ActivityIDs 的工具单元格通用（不限于 exec），MCP/动态工具/补丁/图片/计划等单元格只要报告 activity id 与首行调用标签即可折叠，摘要始终不含输出正文。",
-    "仍未落地：Rust 为不带 activity id 的单元格补的 disclosure 身份、以及 footer 的 expand/collapse 提示文案。",
+    "工具摘要（本次补齐）：tui/state.go 新增 Message.ToolActivity；app/interactive.go 与 app/remote_tui.go 在恢复命令执行、MCP、动态工具、协作工具、子代理、图片与图片生成 item 时打上标记，使没有 activity id 的单元格也能进入摘要；CollapseTurnDetails 对无 id 的摘要补 summary:<index> 身份（Rust work:{key}），摘要仍只取首行调用标签，绝不输出正文。",
+    "footer 提示：tui/tea/transcript_activity_focus.go 的 activityFocusBarLine 按当前展开状态显示 enter expand / enter collapse（Rust #60555 disclosure_footer），从左侧丢弃提示的宽度裁剪规则不变；聚焦表头滚入视口沿用既有 ensureFocusedTranscriptActivityVisible。",
+    "测试：go test ./tui/tea -run 'TurnDetail|ActivityFocus|HistoryPagination|WithoutActivityIDs' 通过；TestTranscriptActivityFocusDisclosureLikeRust 追加展开后 enter collapse 断言，宽度表按新文案更新；新增 TestCollapseTurnDetailsSummarizesToolCellsWithoutActivityIDsLikeRust 断言图片生成输出不进入摘要且摘要带身份；go test ./tui/tea -count=1 -skip 'Analytics|Usage|StatusProjectRoot' 40.5s 通过。",
+    "残余：Ctrl+T 分页内的 disclosure 焦点沿用既有 activityFocus 展开状态，pager 本身没有 F4/Enter 焦点导航；find 临时展开的行在 footer 中仍显示 find bar（Rust 显示 collapse）。",
     "plan: update/plan_2026_11_10.md (#60555)"
    ]
   },
