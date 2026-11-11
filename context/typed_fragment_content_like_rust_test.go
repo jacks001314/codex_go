@@ -69,3 +69,18 @@ func TestToolOutputPartsPreservesAudioLikeRust(t *testing.T) {
 		t.Fatalf("ToolOutputParts() = %#v", parts)
 	}
 }
+
+// Mirrors Rust #60735: uploaded audio keeps its file reference in tool output
+// and, like images, contributes that reference to code-mode text.
+func TestToolOutputPartsPreservesFileAudioLikeRust(t *testing.T) {
+	parts := ToolOutputParts([]eventmap.ContentItem{{Kind: eventmap.ContentInputAudio, FileID: "file-clip"}})
+	if len(parts) != 1 || parts[0]["type"] != "input_audio" || parts[0]["file_id"] != "file-clip" {
+		t.Fatalf("ToolOutputParts() = %#v", parts)
+	}
+	if _, ok := parts[0]["audio_url"]; ok {
+		t.Fatalf("file audio also carried an inline URL: %#v", parts)
+	}
+	if got := ToolOutputText(parts); got != "file-clip" {
+		t.Fatalf("ToolOutputText() = %q, want file-clip", got)
+	}
+}

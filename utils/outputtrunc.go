@@ -36,8 +36,8 @@ type FunctionCallOutputContentItem struct {
 	Kind     ContentItemKind
 	Text     string
 	ImageURL string
-	// FileID is the uploaded-file form of an image content item (Rust #45794):
-	// truncation keeps these items intact instead of resolving them.
+	// FileID is the uploaded-file form of an image or audio content item (Rust
+	// #45794, #60735); truncation keeps the reference instead of resolving it.
 	FileID           string
 	Detail           *string
 	AudioURL         string
@@ -320,8 +320,8 @@ func truncateOutputItems(
 		case ContentInputImage, ContentEncryptedContent:
 			keep = true
 		case ContentInputAudio:
-			tokenCost := 0
-			if estimateAudioTokenCount != nil {
+			tokenCost := audioutil.MaxFileAudioTokens
+			if item.FileID == "" && estimateAudioTokenCount != nil {
 				tokenCost = estimateAudioTokenCount(item.AudioURL)
 			}
 			cost := tokenCost

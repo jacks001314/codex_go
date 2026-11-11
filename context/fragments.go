@@ -94,8 +94,8 @@ func ToolOutputParts(items []eventmap.ContentItem) []map[string]any {
 }
 
 // ToolOutputText mirrors Rust's `content_items_to_code_mode_result`: non-empty
-// text parts are joined with newlines, an image contributes its URL or file id,
-// and an audio part contributes its audio URL (Rust #54776 code-mode output).
+// text parts are joined with newlines, an image or audio part contributes its
+// URL or file id (Rust #54776, #60735 code-mode output).
 func ToolOutputText(parts []map[string]any) string {
 	texts := make([]string, 0, len(parts))
 	for _, part := range parts {
@@ -119,6 +119,10 @@ func ToolOutputText(parts []map[string]any) string {
 		case "input_audio":
 			if audioURL, _ := part["audio_url"].(string); strings.TrimSpace(audioURL) != "" {
 				texts = append(texts, audioURL)
+				continue
+			}
+			if fileID, _ := part["file_id"].(string); strings.TrimSpace(fileID) != "" {
+				texts = append(texts, fileID)
 			}
 		}
 	}

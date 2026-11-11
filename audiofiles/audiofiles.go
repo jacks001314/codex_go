@@ -649,25 +649,12 @@ func ProjectFileAudio(items []any, rejected RejectedSet) []any {
 			out = append(out, value)
 			continue
 		}
-		content, ok := item["content"].([]any)
-		if !ok {
-			out = append(out, value)
-			continue
-		}
-		kept := make([]any, 0, len(content))
-		removed := false
-		for _, raw := range content {
-			if part, ok := raw.(map[string]any); ok && isRejectedAudioPart(part, rejected) {
-				removed = true
-				continue
-			}
-			kept = append(kept, raw)
-		}
+		kept, removed := projectRejectedAudioParts(item["content"], rejected)
 		if !removed {
 			out = append(out, value)
 			continue
 		}
-		if strings.EqualFold(strings.TrimSpace(stringFromAny(item["role"])), "user") && len(kept) == 0 {
+		if strings.EqualFold(strings.TrimSpace(stringFromAny(item["role"])), "user") && contentPartCount(kept) == 0 {
 			continue
 		}
 		clone := make(map[string]any, len(item))
@@ -678,6 +665,55 @@ func ProjectFileAudio(items []any, rejected RejectedSet) []any {
 		out = append(out, clone)
 	}
 	return out
+}
+
+// projectRejectedAudioParts drops rejected audio from either content shape the
+// pipeline produces: the wire form uses []any, while history blocks built from
+// stored session items use []map[string]any.
+func projectRejectedAudioParts(content any, rejected RejectedSet) (any, bool) {
+	switch parts := content.(type) {
+	case []any:
+		kept := make([]any, 0, len(parts))
+		removed := false
+		for _, raw := range parts {
+			if part, ok := raw.(map[string]any); ok && isRejectedAudioPart(part, rejected) {
+				removed = true
+				continue
+			}
+			kept = append(kept, raw)
+		}
+		if !removed {
+			return content, false
+		}
+		return kept, true
+	case []map[string]any:
+		kept := make([]map[string]any, 0, len(parts))
+		removed := false
+		for _, part := range parts {
+			if isRejectedAudioPart(part, rejected) {
+				removed = true
+				continue
+			}
+			kept = append(kept, part)
+		}
+		if !removed {
+			return content, false
+		}
+		return kept, true
+	default:
+		return content, false
+	}
+}
+
+func contentPartCount(content any) int {
+	switch parts := content.(type) {
+	case []any:
+		return len(parts)
+	case []map[string]any:
+		return len(parts)
+	default:
+		return 0
+	}
 }
 
 func isRejectedAudioPart(part map[string]any, rejected RejectedSet) bool {

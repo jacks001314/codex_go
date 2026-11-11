@@ -2059,6 +2059,7 @@ func codeModeTruncationItems(output *Output) ([]utils.FunctionCallOutputContentI
 			}
 		case utils.ContentInputAudio:
 			item.AudioURL = codeModeStringValue(part["audio_url"])
+			item.FileID = codeModeStringValue(part["file_id"])
 		case utils.ContentEncryptedContent:
 			item.EncryptedContent = codeModeStringValue(part["encrypted_content"])
 		default:
@@ -2100,6 +2101,12 @@ func codeModeContentItemMaps(items []utils.FunctionCallOutputContentItem) []map[
 			}
 			out = append(out, image)
 		case utils.ContentInputAudio:
+			// Rust #60735 drops file-backed audio when converting a host
+			// tool output into the code-mode protocol, which only carries
+			// inline data URLs.
+			if item.FileID != "" {
+				continue
+			}
 			out = append(out, map[string]any{"type": "input_audio", "audio_url": item.AudioURL})
 		case utils.ContentEncryptedContent:
 			out = append(out, map[string]any{"type": "encrypted_content", "encrypted_content": item.EncryptedContent})

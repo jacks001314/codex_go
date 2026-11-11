@@ -39,11 +39,13 @@ func (e *UnsupportedVersionError) Error() string {
 	return fmt.Sprintf("unsupported model-facing ID generator version %d", e.Version)
 }
 
-// ID is one generated identifier. The salt and value stay separate so an ID
-// that displays like another still round-trips through its snapshot fields.
+// ID is one generated identifier. The salt, allocation ordinal and value stay
+// separate so an ID that displays like another still round-trips through its
+// snapshot fields, and an allocated ID can resume its generator (#60732).
 type ID struct {
-	Salt  string `json:"salt"`
-	Value uint64 `json:"value"`
+	Salt    string `json:"salt"`
+	Ordinal uint64 `json:"ordinal"`
+	Value   uint64 `json:"value"`
 }
 
 // String renders the salt followed by the padded value.
@@ -88,10 +90,21 @@ type Generator struct {
 // also prefixes each displayed ID; choose a stable single-token salt such as
 // "environment".
 func New(seed uint64, salt string) (*Generator, error) {
+	return StartingAt(seed, salt, 0)
+}
+
+// StartingAt continues a sequence at nextOrdinal using the original seed and
+// salt. Rust #60732 ModelFacingIdGenerator::starting_at.
+func StartingAt(seed uint64, salt string, nextOrdinal uint64) (*Generator, error) {
 	if salt == "" {
 		return nil, ErrInvalidSalt
 	}
-	return &Generator{state: State{Version: Version, Seed: deriveSeed(seed, salt), Salt: salt}}, nil
+	return &Generator{state: State{
+		Version:     Version,
+		Seed:        deriveSeed(seed, salt),
+		Salt:        salt,
+		NextOrdinal: nextOrdinal,
+	}}, nil
 }
 
 // Next issues the next ID. After every uint64 value is issued the sequence
@@ -107,7 +120,12 @@ func (g *Generator) Next() ID {
 	} else {
 		g.state.NextOrdinal = ordinal + 1
 	}
-	return ID{Salt: g.state.Salt, Value: value}
+	return ID{Salt: g.state.Salt, Ordinal: ordinal, Value: value}
+}
+
+// NextOrdinal reports the position the next allocation will use.
+func (g *Generator) NextOrdinal() uint64 {
+	return g.state.NextOrdinal
 }
 
 // Snapshot captures the position of the next allocation.

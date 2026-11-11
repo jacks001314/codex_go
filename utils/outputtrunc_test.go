@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"codex_go/audioutil"
 )
 
 func TestTruncateBytesAndTokens(t *testing.T) {
@@ -88,6 +90,22 @@ func TestTruncateFunctionOutputItemsRetainsFileImages(t *testing.T) {
 	}
 	if kept == nil || kept.FileID != "file_kept" || kept.ImageURL != "" {
 		t.Fatalf("file image not retained: %#v", output)
+	}
+}
+
+// Mirrors Rust #60735 estimate_tool_audio_tokens: a file-backed audio item
+// costs the unmeasured file maximum and is kept verbatim when it fits.
+func TestTruncateFunctionOutputItemsTreatsFileAudioLikeRust(t *testing.T) {
+	items := []FunctionCallOutputContentItem{{Kind: ContentInputAudio, FileID: "file-clip"}}
+	kept := TruncateFunctionOutputItemsWithPolicy(items, TokensPolicy(audioutil.MaxFileAudioTokens))
+	if len(kept) != 1 || kept[0].FileID != "file-clip" || kept[0].AudioURL != "" {
+		t.Fatalf("file audio not retained: %#v", kept)
+	}
+	omitted := TruncateFunctionOutputItemsWithPolicy(items, TokensPolicy(audioutil.MaxFileAudioTokens-1))
+	for _, item := range omitted {
+		if item.Kind == ContentInputAudio {
+			t.Fatalf("over-budget file audio was kept: %#v", omitted)
+		}
 	}
 }
 

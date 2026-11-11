@@ -202,7 +202,11 @@ func historyContentItemsValue(items []utils.FunctionCallOutputContentItem) []any
 				entry["detail"] = *item.Detail
 			}
 		case utils.ContentInputAudio:
-			entry["audio_url"] = item.AudioURL
+			if item.FileID != "" {
+				entry["file_id"] = item.FileID
+			} else {
+				entry["audio_url"] = item.AudioURL
+			}
 		case utils.ContentEncryptedContent:
 			entry["encrypted_content"] = item.EncryptedContent
 		}
@@ -711,10 +715,12 @@ func contentBlocksFromSessionItem(item *Item, role string, options *HistoryBuild
 			if item.Content[i].Text != "" {
 				block["text"] = item.Content[i].Text
 			}
-			if item.Content[i].ImageURL != "" {
+			if item.Content[i].FileID != "" {
+				block["file_id"] = item.Content[i].FileID
+			} else if item.Content[i].ImageURL != "" {
 				block["image_url"] = item.Content[i].ImageURL
 			}
-			if item.Content[i].AudioURL != "" {
+			if item.Content[i].AudioURL != "" && item.Content[i].FileID == "" {
 				block["audio_url"] = item.Content[i].AudioURL
 			}
 			if item.Content[i].Detail != nil {

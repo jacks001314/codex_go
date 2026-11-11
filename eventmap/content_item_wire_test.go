@@ -45,6 +45,16 @@ func TestContentItemWireMatchesRustShape(t *testing.T) {
 			item: ContentItem{Kind: ContentInputAudio, AudioURL: "data:audio/wav;base64,AAAA"},
 			want: map[string]any{"type": "input_audio", "audio_url": "data:audio/wav;base64,AAAA"},
 		},
+		{
+			name: "file audio",
+			item: ContentItem{Kind: ContentInputAudio, FileID: "file-clip"},
+			want: map[string]any{"type": "input_audio", "file_id": "file-clip"},
+		},
+		{
+			name: "file audio wins over an inline url",
+			item: ContentItem{Kind: ContentInputAudio, AudioURL: "data:audio/wav;base64,AAAA", FileID: "file-clip"},
+			want: map[string]any{"type": "input_audio", "file_id": "file-clip"},
+		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			if got := testCase.item.Wire(); !reflect.DeepEqual(got, testCase.want) {
@@ -78,6 +88,11 @@ func TestContentItemRustJSONMatchesSerde(t *testing.T) {
 			name: "audio",
 			item: ContentItem{Kind: ContentInputAudio, AudioURL: "audio-one"},
 			want: `{"type":"input_audio","audio_url":"audio-one"}`,
+		},
+		{
+			name: "file audio",
+			item: ContentItem{Kind: ContentInputAudio, FileID: "file-clip"},
+			want: `{"type":"input_audio","file_id":"file-clip"}`,
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {

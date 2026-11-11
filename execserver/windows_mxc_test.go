@@ -115,20 +115,24 @@ func TestExecServerRejectsMXCLevelLikeRust(t *testing.T) {
 	}
 }
 
-// Mirrors Rust's EnvironmentInfo::local windows_mxc capability (#45524): Rust
-// reports native MXC availability on Windows, and Go always reports false
-// because `sandbox/mxc` has no native runner. The field is always serialized,
-// so the wire shape matches Rust even when the value is false.
+// Mirrors Rust's EnvironmentInfo::local windows_mxc capability (#45524, #60647):
+// Rust reports native MXC availability on Windows, and Go reports the
+// sandbox/mxc launcher's own PSEC probe. The field is always serialized, so the
+// wire shape matches Rust for either value.
 func TestLocalEnvironmentReportsWindowsMxcCapabilityLikeRust(t *testing.T) {
 	info := localEnvironmentInfo()
-	if info.Capabilities.WindowsMxc {
-		t.Fatal("local windowsMxc capability = true, want false without a native MXC runner")
+	if info.Capabilities.WindowsMxc != sandbox.WindowsMXCAvailable() {
+		t.Fatalf("local windowsMxc capability = %v, want the launcher probe %v", info.Capabilities.WindowsMxc, sandbox.WindowsMXCAvailable())
 	}
 	encoded, err := json.Marshal(info.Capabilities)
 	if err != nil {
 		t.Fatalf("Marshal(capabilities) error = %v", err)
 	}
-	if !strings.Contains(string(encoded), `"windowsMxc":false`) {
+	want := `"windowsMxc":false`
+	if info.Capabilities.WindowsMxc {
+		want = `"windowsMxc":true`
+	}
+	if !strings.Contains(string(encoded), want) {
 		t.Fatalf("capabilities wire form = %s", encoded)
 	}
 }

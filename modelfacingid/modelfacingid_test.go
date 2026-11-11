@@ -34,18 +34,19 @@ func TestExhaustsThreeDigitIDsBeforeOpeningSixDigitPoolLikeRust(t *testing.T) {
 	}
 }
 
-// Mirrors Rust #59540: IDs keep the salt and value separate so equal display
-// text still round-trips.
-func TestPersistedIDsKeepSaltAndValueSeparateLikeRust(t *testing.T) {
+// Mirrors Rust #60732: the same display text can come from different salts,
+// ordinals and values, and all three round-trip through their snapshot fields.
+func TestPersistedIDsKeepAllocationFieldsSeparateLikeRust(t *testing.T) {
 	cases := []struct {
-		salt  string
-		value uint64
+		salt    string
+		ordinal uint64
+		value   uint64
 	}{
-		{salt: "env123", value: 0},
-		{salt: "env", value: 123_000},
+		{salt: "env123", ordinal: 8, value: 0},
+		{salt: "env", ordinal: 97, value: 123_000},
 	}
 	for _, testCase := range cases {
-		saved := []byte(fmt.Sprintf(`{"salt":%q,"value":%d}`, testCase.salt, testCase.value))
+		saved := []byte(fmt.Sprintf(`{"salt":%q,"ordinal":%d,"value":%d}`, testCase.salt, testCase.ordinal, testCase.value))
 		var id ID
 		if err := json.Unmarshal(saved, &id); err != nil {
 			t.Fatalf("unmarshal %s: %v", saved, err)
@@ -60,6 +61,37 @@ func TestPersistedIDsKeepSaltAndValueSeparateLikeRust(t *testing.T) {
 		if string(encoded) != string(saved) {
 			t.Fatalf("ID json = %s, want %s", encoded, saved)
 		}
+	}
+}
+
+// Mirrors Rust #60732: an allocated ID records the ordinal that produced it, so
+// a generator can resume without a separate snapshot.
+func TestAllocatedIDResumesNextValueLikeRust(t *testing.T) {
+	original, err := StartingAt(42, "item", 999)
+	if err != nil {
+		t.Fatalf("StartingAt() error = %v", err)
+	}
+	last := original.Next()
+	if last.Ordinal != 999 {
+		t.Fatalf("last ordinal = %d, want 999", last.Ordinal)
+	}
+	if got := original.NextOrdinal(); got != 1000 {
+		t.Fatalf("NextOrdinal() = %d, want 1000", got)
+	}
+	saved, err := json.Marshal(last)
+	if err != nil {
+		t.Fatalf("marshal ID: %v", err)
+	}
+	var restoredID ID
+	if err := json.Unmarshal(saved, &restoredID); err != nil {
+		t.Fatalf("unmarshal ID: %v", err)
+	}
+	resumed, err := StartingAt(42, "item", restoredID.Ordinal+1)
+	if err != nil {
+		t.Fatalf("StartingAt() error = %v", err)
+	}
+	if got, want := resumed.Next(), original.Next(); got != want {
+		t.Fatalf("resumed ID = %v, want %v", got, want)
 	}
 }
 
