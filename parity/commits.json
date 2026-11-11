@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
  "rustFromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
- "rustToInclusive": "c82708f85803d21fe9046af407107a1ee105b6e5",
+ "rustToInclusive": "9018f3a3b021082ef186ddd6503c0b4fd7a26260",
  "commits": [
   {
    "sha": "27c05a52e0cdf93ef7db5a96ccaf88d6b9095472",
@@ -46009,6 +46009,513 @@
     "tcptunnel/ssh_like_rust_test.go 覆盖路由/凭据边界/JWT v2/二进制半关闭/网关 EOF/401；app/tcp_tunnel_test.go 覆盖非 ChatGPT 凭据与不可信网关拒绝。",
     "验证：go test ./tcptunnel ./cli ./auth；go test ./app -run TestTcpTunnel。",
     "plan: update/plan_2026_11_10.md (#60568)"
+   ]
+  },
+  {
+   "sha": "77fde36ae112437a8ce23e752209099ee04a0d50",
+   "subject": "Allow searching persisted attached threads (#60574)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "session/store.go, appserver/router.go, appserver/protocol.go: thread/list search covers persisted attached threads; appserver/attached_thread_search_like_rust_test.go TestAttachedThreadSearchOptInLikeRust.",
+    "plan: update/plan_2026_11_11.md"
+   ]
+  },
+  {
+   "sha": "b32ada5320b043bde03a10edab6b88fc126812b4",
+   "subject": "Add published OAuth metadata discovery to the RMCP client (#60578)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "mcp/oauth_discovery.go: authorization-server metadata discovery follows the published resource metadata; mcp/oauth_authorization_metadata_like_rust_test.go (3 cases).",
+    "plan: update/plan_2026_11_11.md"
+   ]
+  },
+  {
+   "sha": "37103d7f01e82162472c6fba7b4088d5a1303321",
+   "subject": "Keep the TUI responsive while opening saved side chats (#60599)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "tui/tea/sidebar_loading_like_rust_test.go: a newer saved-chat selection supersedes a stale completion and cancel ignores the late result.",
+    "plan: update/plan_2026_11_11.md"
+   ]
+  },
+  {
+   "sha": "039d0f27d56c31913ffc0f2055a3432b1bcb0b06",
+   "subject": "Clarify safety recourse messaging and add a reporting option (#60613)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "tui/chatwidget/safety_recourse.go, tui/tea/safety_recourse.go: safety recourse copy and feedback entry; TestModelSafetyRecourseFeedbackOptionOpensSafetyConsentLikeRust and chatwidget copy tests.",
+    "plan: update/plan_2026_11_11.md"
+   ]
+  },
+  {
+   "sha": "0d37c062de16c81caa1376e072ccd15cf3d68506",
+   "subject": "Support incremental tool declarations on GCP (#60617)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "model/responses_agent.go: GCP providers use incremental tool declarations; model/incremental_tools_legacy_like_rust_test.go (4 cases).",
+    "plan: update/plan_2026_11_11.md"
+   ]
+  },
+  {
+   "sha": "c37fd5665f55fa2b5accdf1d229855416ce696c1",
+   "subject": "Allow sampling in-progress turns with `thread/sample` (#60620)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "appserver/thread_sample.go, appserver/thread_sample_protocol.go: sampling accepts in-progress turns; appserver/thread_sample_like_rust_test.go TestThreadSampleAllowsInProgressTurnLikeRust and siblings.",
+    "plan: update/plan_2026_11_11.md"
+   ]
+  },
+  {
+   "sha": "2df465732a10250121c9feb1255c9cecf72ee34f",
+   "subject": "Use app-server MCP configuration and startup events in the TUI (#60622)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "app/interactive.go, tui/app/app_server_events.go, tui/chatwidget/mcp_startup.go: TUI follows app-server MCP configuration and startup events; tui/chatwidget/mcp_startup_test.go and tui/app/session_lifecycle_test.go.",
+    "plan: update/plan_2026_11_11.md"
+   ]
+  },
+  {
+   "sha": "627b579219d492b5445d6d433d3110eb53e507dc",
+   "subject": "Preserve script quotes in Windows sandbox cmd invocations (#60624)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "sandbox/windowssandbox/winutil.go: cmd script argv keeps quoted executables and hash commands; winutil_test.go (4 cases).",
+    "plan: update/plan_2026_11_11.md"
+   ]
+  },
+  {
+   "sha": "df82e2fe0ab2757fa676927d2ade4deea437df72",
+   "subject": "Support archiving and restoring cloud threads (#60635)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "cloudclient/archive.go, cloudbackend/submission.go: archive detaches attachments and unarchive restores snapshot plus notification; cloudbackend/cloud_archive_like_rust_test.go (3 cases).",
+    "plan: update/plan_2026_11_11.md"
+   ]
+  },
+  {
+   "sha": "4a784f63e8b062449bd154ecf86e588714cd60e9",
+   "subject": "Show pending key chords in a shared floating shortcut guide (#60637)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "tui/tea/key_chord_hud.go, tui/tea/key_chord.go: delayed floating guide for pending chords with timeout and compact layout; tui/tea/key_chord_hud_like_rust_test.go (6 cases).",
+    "plan: update/plan_2026_11_11.md"
+   ]
+  },
+  {
+   "sha": "057d9140a8b356a4b1eb71f01c8e981f2aeef20f",
+   "subject": "Honor read-only MCP tool hints in automatic approval (#60638)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "mcp/tool_approval.go: read-only MCP hints bypass automatic approval; mcp/tool_approval_test.go TestRequiresMCPToolApprovalForModeLikeRust and related.",
+    "plan: update/plan_2026_11_11.md"
+   ]
+  },
+  {
+   "sha": "3f797555cdc0940072fe387c9180fd2736e08239",
+   "subject": "Refresh Apps tools outside the MCP runtime gate (#60639)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "mcp/codex_apps_catalog.go, appserver/runtime_router.go: Apps catalog refresh no longer depends on the MCP runtime gate; mcp client catalog cases.",
+    "plan: update/plan_2026_11_11.md"
+   ]
+  },
+  {
+   "sha": "30b42cb802a08ecc69d3c4199891e520485c12cf",
+   "subject": "Keep interrupts responsive during host service-tier updates (#60644)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "not_applicable: Go has no AgentServiceTier host-receipt channel. appserver/thread_extra.go UpdateSettingsWithCommit commits synchronously and appserver/runtime_router.go has no host acceptance await, so interrupts cannot be blocked by one.",
+    "plan: update/plan_2026_11_11.md"
+   ]
+  },
+  {
+   "sha": "2c2d99f0e3794f3cc4807b21b8dff8c424883ae1",
+   "subject": "Update the safety consent test for the current dialog (#60645)",
+   "kind": "test",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "tui/tea/safety_recourse_test.go TestModelSafetyRecourseFeedbackOptionOpensSafetyConsentLikeRust pins the current consent dialog copy and entry point.",
+    "plan: update/plan_2026_11_11.md"
+   ]
+  },
+  {
+   "sha": "a2b7c4a655a124c3e798b7744c5f83397eb2ada3",
+   "subject": "Use trusted Guardian templates for managed policies (#60646)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "config/config.go, appserver/guardian_reviewer_test.go: managed policy prefers trusted Guardian templates; TestGuardianReviewInstructionsPrecedenceLikeRust and guardian policy tests.",
+    "plan: update/plan_2026_11_11.md"
+   ]
+  },
+  {
+   "sha": "a92eae0891724eb960ccfc82904551d152786cc3",
+   "subject": "Restore PowerShell's working directory in the MXC sandbox (#60647)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "execserver/windows_powershell_fallback.go: MXC PowerShell prefix restores the working directory; execserver/windows_powershell_fallback_test.go TestPrefixMXCPowerShellCWDRestoresWorkingDirectoryLikeRust.",
+    "plan: update/plan_2026_11_11.md"
+   ]
+  },
+  {
+   "sha": "82e6bacb9c6950d3b56cb153847fa80bdd698053",
+   "subject": "Enable model and reasoning effort selection for Cloud conversations (#60651)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "cloudclient/turns.go, cloudbackend/client.go: Cloud turns carry model and reasoning effort; cloudclient turn tests and TUI cloud model cases.",
+    "plan: update/plan_2026_11_11.md"
+   ]
+  },
+  {
+   "sha": "c9bbed2dae6aa1d3a0057001dec64d08e7882a9f",
+   "subject": "Support environment updates in app-server settings APIs (#60655)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "appserver/thread_settings_environments.go, appserver/thread_extra.go: thread/settings/update accepts environment selections; TestThreadSettingsEnvironmentsLikeRust and decode case.",
+    "plan: update/plan_2026_11_11.md"
+   ]
+  },
+  {
+   "sha": "45d1f24d79cc27b115de959c4c10cca0decf5cc8",
+   "subject": "Support gateway device-code sign-in in headless TUI sessions (#60662)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "app/gateway_device_login.go: device login runs before TUI init for local and resumed sessions and skips Bedrock/explicit remotes; app/gateway_device_login_test.go (6 cases).",
+    "plan: update/plan_2026_11_11.md"
+   ]
+  },
+  {
+   "sha": "f7aad26f1d4e098bbd86ce8415a622fda55b0208",
+   "subject": "Defer exec-server sandbox preparation to the execution host (#60663)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "execserver/server.go, appserver/environment.go: sandbox preparation defers to the execution host; execserver/runtime_readable_paths_like_rust_test.go.",
+    "plan: update/plan_2026_11_11.md"
+   ]
+  },
+  {
+   "sha": "733a1cca06f0428840ff185fe68ed10e818f06c4",
+   "subject": "Add a content helper for forwarding MCP blocks in Code Mode (#60665)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "utils/mcp_content.go, codemode/sobek_content.go: mixed MCP blocks forward through the content helper; codemode/code_mode_content_like_rust_test.go (4 cases).",
+    "plan: update/plan_2026_11_11.md"
+   ]
+  },
+  {
+   "sha": "39f422522ee6bf209411086ee1fc33616d660b2e",
+   "subject": "Skip submodule worktree scans when checking repository changes (#60669)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "gitutil/status.go: dirty submodule worktrees are ignored by the repository change check; gitutil/status_test.go TestHasChangesInRepoIgnoresDirtySubmoduleWorktreesLikeRust.",
+    "plan: update/plan_2026_11_11.md"
+   ]
+  },
+  {
+   "sha": "fad8b3d5bcb32dcefb2660a9d46e4d16233697c7",
+   "subject": "Initialize Guardian evidence cursors from thread history state (#60670)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "appserver/runtime_router.go, appserver/agent_runtime.go: Guardian evidence cursor initializes from thread history; guardian reviewer evidence cases.",
+    "plan: update/plan_2026_11_11.md"
+   ]
+  },
+  {
+   "sha": "568c592f9cbe4388aafe9759bf6f3ed1bb0fd5e3",
+   "subject": "Add sign-only mode and tighten macOS signing verification (#60671)",
+   "kind": "release",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "not_applicable: the Go repository has no macos-signing release scripts or signer service counterpart (rg --files | rg macos-signing is empty).",
+    "plan: update/plan_2026_11_11.md"
+   ]
+  },
+  {
+   "sha": "d4b19eca27895e704f9929a70ad80abdd9588728",
+   "subject": "Preserve agent message deliveries in rollout traces (#60673)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "not_applicable: Go's rollout package is session rollout storage; it has no codex-rs/rollout-trace reducer or trace protocol counterpart.",
+    "plan: update/plan_2026_11_11.md"
+   ]
+  },
+  {
+   "sha": "ad3d3521eddcee24cd6ce0d335d597544578c5e1",
+   "subject": "Avoid redundant reads and screen clears when switching side chats (#60675)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "tui/tea/side_navigation_like_rust_test.go TestSwitchingRetainedSideChatDoesNotReloadThreadLikeRust: retained side chat switches without reloading or clearing the screen.",
+    "plan: update/plan_2026_11_11.md"
+   ]
+  },
+  {
+   "sha": "8a7a723dcd670fed88c4a7363b397e3303faf26d",
+   "subject": "Keep TUI status content separate from composer hints (#60680)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "tui/tea/model.go statusLineRowBudget/renderStatusLineSection: status rows are budgeted separately from hint rows; tui/tea/footer_row_budget_like_rust_test.go TestStatusLineWrapsWithinRowBudgetLikeRust.",
+    "plan: update/plan_2026_11_11.md"
+   ]
+  },
+  {
+   "sha": "192e2ef3ce9710418f59d7bc42d6b2e52d486416",
+   "subject": "Prioritize draft space when allocating composer footer rows (#60681)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "tui/tea/model.go shouldRenderFooterHintRow: an occupied status line yields the blank hint row to the draft; TestEmptyFooterHintRowYieldsToStatusLikeRust.",
+    "plan: update/plan_2026_11_11.md"
+   ]
+  },
+  {
+   "sha": "65dbdb5f03489b3394383ae802bc751a6d65e955",
+   "subject": "Wrap built-in TUI status lines within the footer row budget (#60682)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "tui/tea/model.go wrapStatusLineRows: status lines wrap within the row budget and clip with an ellipsis; TestStatusLineWrapsWithinRowBudgetLikeRust.",
+    "plan: update/plan_2026_11_11.md"
+   ]
+  },
+  {
+   "sha": "87b7bdbf2efb9cb6fb15d821ef535061012c0138",
+   "subject": "Fit composer footer hints to available terminal space (#60683)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "tui/tea/model.go renderFooterHintRows: whole shortcut/label pairs wrap and overflow hints drop instead of splitting; TestFooterHintsFitWholeHintsLikeRust.",
+    "plan: update/plan_2026_11_11.md"
+   ]
+  },
+  {
+   "sha": "ac54a05173d090b9fdfa181ea49b92f45aff2681",
+   "subject": "Add a Signer Service backend for macOS notarization (#60695)",
+   "kind": "release",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "not_applicable: Go has no Signer Service backend or macOS notarization script to extend (no signer/notarize files in the repository).",
+    "plan: update/plan_2026_11_11.md"
+   ]
+  },
+  {
+   "sha": "4dd5f1e70b544967b76ebacda08b9ad28a7ab5bb",
+   "subject": "Limit MCP product attribution to configured REPL-backed calls (#60697)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "mcp/tool_executor.go: product SKU attribution only applies to configured REPL-backed calls; TestMCPToolCallRequestMetaAttributesOnlyReplCallsLikeRust.",
+    "plan: update/plan_2026_11_11.md"
+   ]
+  },
+  {
+   "sha": "83e3d63ba1b928d9f73d52480473694f84aa5a18",
+   "subject": "Finalize aborted turns and ignore unrelated late aborts (#60700)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "appserver/runtime_router.go, rollout/session_items.go: aborted turns finalize once and unrelated late aborts are ignored; rollout/late_abort_like_rust_test.go.",
+    "plan: update/plan_2026_11_11.md"
+   ]
+  },
+  {
+   "sha": "fe8e540a80f17716bf2a3007f06e8a602192c704",
+   "subject": "Centralize permission config selection and legacy translation (#60702)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "config/permission_config.go: permission selection is centralized with legacy translation preserved; config/permission_config_like_rust_test.go (3 cases).",
+    "plan: update/plan_2026_11_11.md"
+   ]
+  },
+  {
+   "sha": "5228d94a27b7f84cae4854acbb5ea3b3e90dfeaf",
+   "subject": "Canonicalize Windows sandbox homes and migrate saved junction paths (#60708)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "sandbox/windowssandbox/provisionservice/client.go, windowsandboxservice/installation_record_windows.go: provisioning homes canonicalize junctions and saved paths migrate; TestCanonicalizeProvisioningHomeResolvesJunctionLikeRust.",
+    "plan: update/plan_2026_11_11.md"
+   ]
+  },
+  {
+   "sha": "fe2f18520864ddbee86cdd4b103a9fefffe9c6a2",
+   "subject": "Gate plugin recommendation cache warming on feature flags (#60721)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "appserver/turn_runtime.go configureSuggestedPluginProviderForTurn clears the recommendation provider when features.PluginRecommendationsEnabled is false; appserver/suggested_plugin_gate_test.go TestSuggestedPluginWarmHonorsRecommendationFeatureGateLikeRust.",
+    "plan: update/plan_2026_11_11.md"
+   ]
+  },
+  {
+   "sha": "36ed546b77e91a61d52d482ab82e687a15fa30be",
+   "subject": "Apply session app overrides during MCP config refresh (#60730)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "Go persists session plugins/apps overrides on the thread record and reapplies them on the next configuration projection; appserver/mcp_session_override_refresh_test.go TestMCPConfigRefreshPreservesSessionAppAndPluginOverridesLikeRust.",
+    "plan: update/plan_2026_11_11.md"
+   ]
+  },
+  {
+   "sha": "ce6f7d9503dea36c90af9d264b20aa60448b0530",
+   "subject": "Allow model-facing ID sequences to resume from allocated IDs (#60732)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "modelfacingid/modelfacingid.go adds ID.Ordinal, StartingAt and NextOrdinal; modelfacingid/modelfacingid_test.go TestAllocatedIDResumesNextValueLikeRust.",
+    "plan: update/plan_2026_11_11.md"
+   ]
+  },
+  {
+   "sha": "9018f3a3b021082ef186ddd6503c0b4fd7a26260",
+   "subject": "Preserve file-backed audio in tool outputs (#60735)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "eventmap/eventmap.go, utils/outputtrunc.go, context/fragments.go, session/history.go and tool/code_mode_exec.go preserve input_audio file_id references; TestToolOutputPartsPreservesFileAudioLikeRust, TestTruncateFunctionOutputItemsTreatsFileAudioLikeRust, TestFileAudioReferencesSurviveHistoryLikeRust.",
+    "plan: update/plan_2026_11_11.md"
    ]
   }
  ]

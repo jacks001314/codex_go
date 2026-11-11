@@ -33,7 +33,6 @@ type turnUserInputAlias struct {
 	FileID string `json:"fileId"`
 }
 
-
 // Mirrors Rust validate_injected_response_item: raw injection cannot smuggle an
 // uploaded audio reference into history.
 func TestValidateResponseItemAudioFilesLikeRust(t *testing.T) {

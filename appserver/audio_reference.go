@@ -83,7 +83,6 @@ func turnUserInputAudioFile(input turn.TurnUserInput) bool {
 	return strings.TrimSpace(input.URL) == "" && strings.TrimSpace(input.FileID) != ""
 }
 
-
 // validateResponseItemAudioFiles rejects raw history injection that contains an
 // uploaded audio reference, mirroring Rust validate_injected_response_item: the
 // whole item is rejected because typed turn input owns admission checks.

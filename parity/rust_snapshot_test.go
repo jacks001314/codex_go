@@ -347,6 +347,11 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// protocol/client/suite surfaces advanced across the
 		// 748ab55ca7..e54a5713ca window; every hash below is the LF-normalized
 		// digest of the anchor checkout.
+		// Re-anchored to upstream 9018f3a3 (#60735): exec/src/lib.rs preserves
+		// file-backed audio in tool outputs, and
+		// app-server-protocol/src/protocol/common.rs gained the attached-thread
+		// search, in-progress thread/sample, environment settings and late-abort
+		// surfaces; both pins are the LF-normalized digest of the target checkout.
 		{Path: "Cargo.toml", SHA256: "6864e0f338c382e7056999cb8338d1d22a7a29a7b577639294355a9b1dea7363"},
 		{Path: "cli/src/lib.rs", SHA256: "bc73cee3f5714a1ab90ca8853bbaa74f16dc5abd6edc6bb888d8648b6c49f14a"},
 		// Re-pinned to upstream 8ae55c863d (#47411): the shared network policy
@@ -355,7 +360,7 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// ThreadListParams literals in resolve_resume_thread_id gained
 		// `excluded_thread_ids: None` (mechanical consequence of the
 		// thread/list exclusion field; Go side already landed as sync551).
-		{Path: "exec/src/lib.rs", SHA256: "727e9726650d33ea19159860c5d4d8acee3708253efac48520671bbf719866d6"},
+		{Path: "exec/src/lib.rs", SHA256: "05490e995c4672cbe585cffb8514cb1df0fe7b5be452b947782c86efbb10cd72"},
 		// Re-pinned to upstream 7498521d (#46319): exec JSON web-search items
 		// now carry the structured results array.
 		{Path: "exec/src/exec_events.rs", SHA256: "dafa872d7e86a099e56e28a329dcb9c03db90ed768c3b88cca8c91d46dc1d0e5"},
@@ -382,7 +387,7 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// executor bearer-token requests.
 		// Round-112 re-anchor to 8196bcdc18: thread/sample/cancel joined the
 		// client request definitions.
-		{Path: "app-server-protocol/src/protocol/common.rs", SHA256: "e57f2702e09fc8f527a77993a4690fc7af33784420b4a3353e05f072456a4a07"},
+		{Path: "app-server-protocol/src/protocol/common.rs", SHA256: "37f54d16134ccf8fdbe4b74b8369237daed7f6ceb5e0de54fc11a5fdb26dbdf0"},
 		// Re-pinned to upstream 8ae55c863d (#46917/#47028/#47207/#47407): the
 		// provider-requirements, message-board, gateway-auth and network-policy
 		// suites joined the module list.

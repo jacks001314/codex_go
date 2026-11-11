@@ -110,7 +110,9 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// account-enterprise, GCP/Bedrock, guardian, critical-path, thread
 			// sample/unload and MCP connection-sharing fixtures from the
 			// intervening sync windows.
-			Files: 189,
+			// Re-anchored to upstream 9018f3a3: #60620 added the compacted-parent
+			// pending-tool-call thread/sample snapshot.
+			Files: 190,
 			Owner: "appserver",
 			Focus: "JSON-RPC v2 protocol and runtime fixtures",
 			Required: []string{
@@ -163,7 +165,9 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// (#57586) plus the reserved-child fixtures landed in this window.
 			// Round-today re-anchor to a7a9d82f: #60461 added
 			// skills_extension/discovery_grants_tests.rs.
-			Files: 472,
+			// Re-anchored to upstream 9018f3a3: #60665 added the mixed MCP
+			// content Code Mode scenario snapshot.
+			Files: 473,
 			Owner: "turn, model, tool, session",
 			Focus: "core agent loop, model client, session, tools, sandbox, resume",
 			Required: []string{

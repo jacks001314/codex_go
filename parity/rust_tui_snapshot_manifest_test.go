@@ -50,8 +50,11 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	// goldens in the intervening windows (1452 -> 1466).
 	// Re-anchored to upstream a7a9d82f: the full-screen transcript work
 	// (#60554-#60557) and the recovery-notice snapshot added five goldens.
-	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1520 {
-		t.Fatalf("Rust TUI snapshot total drift: got %d want 1520", got)
+	// Re-anchored to upstream 9018f3a3: the safety-recourse (#60613), pending
+	// key-chord guide (#60637), MCP startup (#60622) and composer footer
+	// row-budget (#60680-#60683) suites added nine goldens.
+	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1529 {
+		t.Fatalf("Rust TUI snapshot total drift: got %d want 1529", got)
 	}
 
 	gotDirs := rustTUISnapshotDirs(t, root)
@@ -160,7 +163,10 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// #48121 added the command-center draft-handoff snapshot.
 			// #48135 added the remapped-left external-writer view snapshot.
 			// Re-anchored to a7a9d82f: one app test golden was added.
-			Files:    87,
+			// Re-anchored to 9018f3a3: the pending key-chord guide (#60637)
+			// added two app goldens and the saved-chat loading states (#60599)
+			// added one.
+			Files:    90,
 			Owner:    "tui/app",
 			Focus:    "app-level catalog and migration prompts",
 			Priority: []string{"app", "model"},
@@ -191,7 +197,10 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// mention menu above history, the status-surface layouts and the
 			// warning-notice styles.
 			// #54742 added the history-search absorbed-slash snapshot.
-			Files:    32,
+			// Re-anchored to 9018f3a3: the composer footer row-budget work
+			// (#60680-#60683) replaced two status-surface goldens with six new
+			// layouts, a net gain of four.
+			Files:    36,
 			Owner:    "tui/bottom_pane/chat_composer",
 			Focus:    "draft and voice composer layout snapshots",
 			Priority: []string{"composer"},
@@ -501,7 +510,9 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// guard.
 			// #48562 removed the clear-UI fast-status and thread-read-model
 			// header snapshots with the boxed card.
-			Files:    215,
+			// Re-anchored to 9018f3a3: the safe key-chord guide (#60637) and
+			// the headless gateway device-code prompt (#60662) added two.
+			Files:    217,
 			Owner:    "tui, tui/markdown, tui/app",
 			Focus:    "diff render, markdown render, keymap, resume picker, pager overlay, model migration, and status indicator snapshots",
 			Priority: []string{"diff", "markdown", "status", "session", "keymap"},

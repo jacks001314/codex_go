@@ -26,8 +26,10 @@ func newMCPToolApprovalProvenanceHandler(t *testing.T, resolve func(*ServerReque
 		}
 	}))
 	return &appserverMCPToolApprovalHandler{
-		router:                    router,
-		responder:                 func(context.Context, string, *tool.RequestUserInputArgs) (*tool.UserInputResponse, error) { return nil, nil },
+		router: router,
+		responder: func(context.Context, string, *tool.RequestUserInputArgs) (*tool.UserInputResponse, error) {
+			return nil, nil
+		},
 		threadID:                  "thread-1",
 		turnID:                    "turn-1",
 		approvalPolicy:            sandbox.ApprovalOnRequest,

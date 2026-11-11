@@ -232,10 +232,10 @@ func TestGuardianTranscriptNativeMultiAgentBudgetIncludesPairedOutputLikeRust(t 
 // for an enabled feature on a MultiAgent V2 turn.
 func TestGuardianNativeMultiAgentNamespaceResolvesFeatureAndVersionLikeRust(t *testing.T) {
 	for _, test := range []struct {
-		name       string
-		config     string
-		version    string
-		want       string
+		name    string
+		config  string
+		version string
+		want    string
 	}{
 		{
 			name:    "v2 enabled",

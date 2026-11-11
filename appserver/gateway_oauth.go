@@ -50,9 +50,9 @@ type GatewayOAuthChangedNotification struct {
 // GatewayOAuthReadResponse is the current effective gateway policy and
 // credential readiness; it never contains credentials.
 type GatewayOAuthReadResponse struct {
-	ProviderID   string              `json:"providerId"`
-	ProviderName string              `json:"providerName"`
-	Required     bool                `json:"required"`
+	ProviderID   string `json:"providerId"`
+	ProviderName string `json:"providerName"`
+	Required     bool   `json:"required"`
 	// SupportsDeviceAuth reports whether the provider configures a device
 	// authorization endpoint (Rust #60486).
 	SupportsDeviceAuth bool                `json:"supportsDeviceAuth"`

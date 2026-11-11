@@ -44,7 +44,7 @@ func (r *RuntimeRouter) modelCatalogWorldStateInputItem(threadID string, cfg *co
 	}
 	limit := uint32(model.MaxSpawnAgentModelOverrides)
 	response, err := r.requireModels().List(&model.ModelListParams{
-		Limit:           &limit,
+		Limit: &limit,
 		// Rust #60049/#49560: the section renders the catalog the turn already
 		// loaded (turn_context.available_models); reloading from disk could
 		// publish a stale choice list next to fresher tools.

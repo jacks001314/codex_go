@@ -1,6 +1,6 @@
 {
  "schemaVersion": 1,
- "targetRustCommit": "c82708f85803d21fe9046af407107a1ee105b6e5",
+ "targetRustCommit": "9018f3a3b021082ef186ddd6503c0b4fd7a26260",
  "allowedIdentityMappings": [
   {
    "rust": "codex",
@@ -189,14 +189,14 @@
    "severity": "P0",
    "phase": "P1",
    "owner": "appserver",
-   "status": "partial",
+   "status": "complete",
    "acceptance": "Stable and experimental JSON Schema and TypeScript exports have zero canonical diff.",
    "evidence": [
-    "Re-checked at c82708f85803d21fe9046af407107a1ee105b6e5 (2026-11-10): both vendored precomputed artifacts are byte-identical to app-server-protocol/schema/precomputed/ in the anchor checkout (sha256 08c1705f123cfd2433a82b2aebba70b7acbafa5cc884173672288743f4062da0 stable, 1be5d8a35589e8aff8e55a6c1db7ad76f8e6aaf29e5a5a13e292953fb64afe84 experimental), so TestPrecomputedExportArtifactsMatchTargetRustCommit and TestPrecomputedAppServerExportsMatchRustTarget pass; the earlier key-count drift analysis no longer applies.",
-    "The generator surface still differs from the anchor fixtures in exactly one client request: account/securitySetup/read (#60082) is not in BuildProtocolSchema, so ClientRequest.json and ClientRequest.ts disagree with the Rust fixtures (TestBuildProtocolSchemaMatchesRustStableFixtures, TestBuildTypeScriptProtocolSchemaMatchesRustFixtures, TestRustProtocolMethodSurfaceIsCoveredByGoSchemas).",
-    "Forward-ported exemptions were trimmed at this anchor: modelProvider/list, modelProvider/config/write and the optional gatewayOAuth login/read params are now in the Rust fixtures, so forwardPortedStableMethods and forwardPortedOptionalTypeScriptParams are empty and no method is excused from the stable fixture comparison.",
-    "Still true at this anchor: index suppression, generated-header stripping, Prettier ordering, trailing-whitespace cleanup and relative-path validation match Rust; the Go generator produces both export trees from the embedded protocol types.",
-    "Fix path: expose account/securitySetup/read on the app-server router (no params, response v2::GetAccountSecuritySetupResponse) and route the TUI security-reminder fetch through it, then rerun the Generate*/fixture drift tests."
+    "Re-checked at 9018f3a3 (2026-11-11): both vendored precomputed artifacts are byte-identical to app-server-protocol/schema/precomputed/ in the anchor checkout (sha256 0213200411a08a1e60a132241ed97376af7312b518d9a3097183b35bf24fcf86 stable, 51428010c7d568b9dc9e34f02a2251e5381e3a34be8a7f2f0a1797df513e1895 experimental), so TestPrecomputedExportArtifactsMatchTargetRustCommit and TestPrecomputedAppServerExportsMatchRustTarget pass.",
+    "account/securitySetup/read (#60082) is now in BuildProtocolSchema and served by RuntimeRouter, closing the only generator gap; TestBuildProtocolSchemaMatchesRustStableFixtures, TestBuildTypeScriptProtocolSchemaMatchesRustFixtures, TestRustProtocolMethodSurfaceIsCoveredByGoSchemas, TestRustAppServerProtocolSchemaTreeIsCoveredByGoGenerators and TestProtocolPayloadsValidateAgainstRustSchemas pass against the 9018f3a3 fixtures.",
+    "The Go generators reproduce both vendored export trees exactly: TestPrecomputedExportsAreWrittenToDiskLikeRust (typescript, json, internal-json) and TestPrecomputedExperimentalExportsAreWrittenToDiskLikeRust pass, so the stable and experimental schemas have zero canonical diff at this target.",
+    "Forward-ported exemptions stay empty: modelProvider/list, modelProvider/config/write and the optional gatewayOAuth login/read params are in the Rust fixtures, so no method is excused from the stable fixture comparison.",
+    "Still true at this anchor: index suppression, generated-header stripping, Prettier ordering, trailing-whitespace cleanup and relative-path validation match Rust; the Go generator produces both export trees from the embedded protocol types."
    ]
   },
   {

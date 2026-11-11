@@ -301,24 +301,24 @@ func (r *agentCompactRunner) Compact(ctx context.Context, request *compact.Reque
 		inputItems = r.executedToolCalls.AttachToCompactionPrompt(inputItems, r.executedToolCallMetadataEnabled)
 	}
 	response, err := r.agent.Run(ctx, &model.AgentRequest{
-		Prompt:          strings.TrimSpace(request.Prompt),
-		Instructions:    remoteCompactInstructions(),
-		InputItems:      inputItems,
-		Tools:           append([]any(nil), r.hostedTools...),
-		Model:            firstNonEmpty(r.model, defaultRemoteCompactModel),
-		ProviderID:       strings.TrimSpace(r.providerID),
+		Prompt:       strings.TrimSpace(request.Prompt),
+		Instructions: remoteCompactInstructions(),
+		InputItems:   inputItems,
+		Tools:        append([]any(nil), r.hostedTools...),
+		Model:        firstNonEmpty(r.model, defaultRemoteCompactModel),
+		ProviderID:   strings.TrimSpace(r.providerID),
 		// Rust #59832: compaction only takes the history layout when the
 		// replacement prompt actually carries recorded declarations.
 		IncrementalTools: r.incrementalTools && model.WindowHasToolDeclarations(inputItems),
-		TaskKind:        model.AgentTaskRegular,
-		ThreadID:        request.ThreadID,
-		SessionID:       r.sessionID,
-		TurnID:          request.TurnID,
-		Store:           false,
-		ClientMetadata:  clientMetadata,
-		MCPAttribution:  r.mcpAttributionSnapshot(),
-		ServiceTier:     r.serviceTier,
-		ReasoningEffort: strings.TrimSpace(r.effort),
+		TaskKind:         model.AgentTaskRegular,
+		ThreadID:         request.ThreadID,
+		SessionID:        r.sessionID,
+		TurnID:           request.TurnID,
+		Store:            false,
+		ClientMetadata:   clientMetadata,
+		MCPAttribution:   r.mcpAttributionSnapshot(),
+		ServiceTier:      r.serviceTier,
+		ReasoningEffort:  strings.TrimSpace(r.effort),
 		// Rust passes the compaction turn's access program into the local prompt
 		// (compact.rs) and therefore into the remote request too; an absent
 		// program must not inherit a different turn's selection (#48224).
