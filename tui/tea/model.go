@@ -3022,10 +3022,14 @@ type Model struct {
 	// initial_enabled), experimentalFeatureUnconfirmed keeps the rows whose save is
 	// not yet confirmed for an explicit retry, and experimentalFeaturesSaving
 	// guards a second save while one is in flight.
-	experimentalFeatureBaseline      map[string]bool
-	experimentalFeatureUnconfirmed   []string
-	experimentalFeaturesSaving       bool
-	currentGoal                      *appserver.Goal
+	experimentalFeatureBaseline    map[string]bool
+	experimentalFeatureUnconfirmed []string
+	experimentalFeaturesSaving     bool
+	currentGoal                    *appserver.Goal
+	// threadGoals keeps the last observed goal per thread. The TUI displays one
+	// thread at a time and side conversations are ephemeral forks with no goal
+	// state, so the parent thread's goal must not leak into a side transcript.
+	threadGoals                      map[string]*appserver.Goal
 	goalStatusTickActive             bool
 	goalObservedAt                   time.Time
 	pendingGoalObjective             string
@@ -3509,6 +3513,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onReconnectThreadApprovals:          options.OnReconnectThreadApprovals,
 		backgroundThreadEvents:              map[string][]protocol.ThreadEvent{},
 		sideConversations:                   map[string]*activeSideConversation{},
+		threadGoals:                         map[string]*appserver.Goal{},
 		sidebarTabs:                         map[string][]*activeSideConversation{},
 		clipboardWrite:                      clipboardWrite,
 		clipboardWriteRich:                  clipboardWriteRich,
@@ -5442,11 +5447,6 @@ func (m *Model) viewString() string {
 			hudIndex = len(sections)
 			sections = append(sections, m.bottomStyle.Render(hud))
 		}
-		// Rust #57363: the pending safety-block notice replaces the space above
-		// the composer until the explanation is ready.
-		if notice := m.renderSafetyRecourseNotice(); notice != "" {
-			sections = append(sections, m.bottomStyle.Render(notice))
-		}
 		// Rust anchors command/skill suggestions directly above the composer.
 		if popup := m.renderSkillPopup(); popup != "" {
 			sections = append(sections, popup)
@@ -7051,6 +7051,7 @@ func (m *Model) switchThreadID(threadID string) {
 	}
 	threadID = strings.TrimSpace(threadID)
 	m.State.SetThreadID(threadID)
+	m.syncGoalForCurrentThread()
 	m.setPendingSteerThread(threadID)
 	m.noteThreadBackend(threadID, m.backendID)
 	// Rust #58720: selecting a waiting thread replays the approval request that
@@ -7933,7 +7934,7 @@ func (m *Model) applyTurnCompleted(message TurnCompletedMsg) bubbletea.Cmd {
 	// idle. Refresh the persisted goal first so the model's update_goal
 	// completion/block decisions during the turn are honored instead of
 	// looping on a stale in-memory status.
-	if m.currentGoal != nil && m.currentGoal.Status == appserver.GoalActive &&
+	if m.goalBelongsToCurrentThread(m.currentGoal) && m.currentGoal.Status == appserver.GoalActive &&
 		m.onGoalContinuation != nil && m.onReadGoal != nil {
 		return m.readGoalForAction(goalActionRefresh, m.goalThreadID(), "")
 	}

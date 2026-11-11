@@ -71,9 +71,6 @@ func TestModelSafetyRecourseDefersBlockedTurnAndExplainsIt(t *testing.T) {
 	if model.pendingSafetyRecourse == nil {
 		t.Fatalf("loading metadata did not open a pending notice")
 	}
-	if notice := model.renderSafetyRecourseNotice(); !strings.Contains(notice, "This content can't be shown") {
-		t.Fatalf("pending notice = %q", notice)
-	}
 
 	model.Update(TurnModerationMetadataMsg{
 		ThreadID: "thread-safety",
@@ -105,10 +102,10 @@ func TestModelSafetyRecourseDefersBlockedTurnAndExplainsIt(t *testing.T) {
 	if model.modal == nil || model.modal.id != chatwidget.SafetyRecourseViewID {
 		t.Fatalf("rewrite picker = %#v", model.modal)
 	}
-	if model.modal.title != safetyRecoursePickerTitle || model.modal.body != safetyRecoursePickerSubtitle {
+	if model.modal.title != safetyRecoursePickerTitle || model.modal.body != "" {
 		t.Fatalf("picker copy = %q / %q", model.modal.title, model.modal.body)
 	}
-	if len(model.modal.options) != 3 {
+	if len(model.modal.options) != 4 || model.modal.options[3].Label != "Give feedback" {
 		t.Fatalf("picker options = %#v", model.modal.options)
 	}
 }
@@ -238,13 +235,48 @@ func TestModelSafetyRecourseCyberPickerOffersDaybreak(t *testing.T) {
 	if model.modal == nil || model.modal.id != chatwidget.SafetyRecourseViewID {
 		t.Fatalf("cyber recourse picker = %#v", model.modal)
 	}
-	last := model.modal.options[len(model.modal.options)-1]
-	if last.ID != safetyRecourseEnableDaybreakID || last.Label != "Enable Daybreak" {
-		t.Fatalf("daybreak option = %#v", last)
+	var daybreak *ModalOption
+	for index := range model.modal.options {
+		if model.modal.options[index].ID == safetyRecourseEnableDaybreakID {
+			daybreak = &model.modal.options[index]
+		}
+	}
+	if daybreak == nil || daybreak.Label != "Enable Daybreak" {
+		t.Fatalf("daybreak option = %#v", daybreak)
 	}
 	model.applySafetyRecourseModalOption(safetyRecourseEnableDaybreakID)
 	if daybreakUpdates != 1 || !model.daybreakEnabled {
 		t.Fatalf("daybreak updates = %d enabled = %v", daybreakUpdates, model.daybreakEnabled)
+	}
+}
+
+// TestModelSafetyRecourseFeedbackOptionOpensSafetyConsentLikeRust mirrors Rust
+// #60613: the picker's feedback item jumps straight to the feedback consent
+// step with the safety-check category preselected.
+func TestModelSafetyRecourseFeedbackOptionOpensSafetyConsentLikeRust(t *testing.T) {
+	model := newSafetyRecourseModel(Options{})
+	model.Update(TurnModerationMetadataMsg{
+		ThreadID: "thread-safety",
+		TurnID:   "turn-safety",
+		Metadata: safetyRecourseTestMetadata("bio", "risky_biological_activities"),
+	})
+	model.Update(TurnCompletedMsg{Err: errors.New(chatwidget.SafetyAccessBlockPrefix + " blocked")})
+	if model.modal == nil || model.modal.id != chatwidget.SafetyRecourseViewID {
+		t.Fatalf("rewrite picker = %#v", model.modal)
+	}
+	found := false
+	for _, option := range model.modal.options {
+		if option.ID == safetyRecourseFeedbackID {
+			found = option.Label == "Give feedback"
+		}
+	}
+	if !found {
+		t.Fatalf("feedback option missing: %#v", model.modal.options)
+	}
+	model.applySafetyRecourseModalOption(safetyRecourseFeedbackID)
+	if model.modal == nil || model.modal.feedback == nil || model.modal.feedback.stage != feedbackStageConsent ||
+		model.modal.feedback.category != feedbackCategorySafetyCheck {
+		t.Fatalf("feedback consent = %#v", model.modal)
 	}
 }
 

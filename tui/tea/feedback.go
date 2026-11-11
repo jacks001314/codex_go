@@ -75,6 +75,18 @@ func (m *Model) openFeedbackFlow() {
 	m.modal.feedback = &feedbackModalState{stage: feedbackStageCategory}
 }
 
+// openFeedbackConsentForCategory opens the consent step directly for a
+// category chosen by another surface (Rust AppEvent::OpenFeedbackConsent).
+func (m *Model) openFeedbackConsentForCategory(category feedbackCategory) {
+	if m == nil {
+		return
+	}
+	m.modal = nil
+	m.openModal(ModalRequestMsg{ID: "feedback-consent", Kind: ModalKindFeedback})
+	m.modal.feedback = &feedbackModalState{category: category}
+	m.openFeedbackConsent(m.modal.feedback)
+}
+
 func feedbackCategoryOptions() []ModalOption {
 	return []ModalOption{
 		{ID: string(feedbackCategoryBug), Label: "bug", Description: "Crash, error message, hang, or broken UI/behavior."},

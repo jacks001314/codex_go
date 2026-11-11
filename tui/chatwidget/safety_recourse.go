@@ -17,8 +17,9 @@ import (
 const (
 	// SafetyRecourseViewID identifies the safer-rewrite picker.
 	SafetyRecourseViewID = "safety-recourse"
-	// SafetyRecourseStatusHeader is shown while the explanation is pending.
-	SafetyRecourseStatusHeader = "Finding an explanation and safer ways to continue…"
+	// SafetyRecourseStatusHeader is shown while the explanation is pending
+	// (Rust #60613).
+	SafetyRecourseStatusHeader = "I can’t help with this request. Preparing alternative suggestions…"
 )
 
 // SafetyRecourseDomain is the policy domain of a blocked turn.
@@ -218,7 +219,7 @@ func ParseSafetyRecourseMetadata(metadata any) (SafetyRecourseDomain, *SafetyRec
 	}, true
 }
 
-const safetyRecourseOverviewOffer = "We can still help with an overview of "
+const safetyRecourseOverviewOffer = "You can ask Codex for an overview of "
 
 func safetyRecourseObject(metadata any) (map[string]json.RawMessage, bool) {
 	switch value := metadata.(type) {
@@ -298,11 +299,11 @@ func safetyRecourseLead(source, kind, role string) (bioLead, cyberLead, bioOffer
 	case "file_content\x00file_tool_call\x00assistant",
 		"file_content\x00file_tool_result\x00tool":
 		return "when content from a file involves ", "when content could enable ",
-			"You can continue without this file or get an overview of ", true
+			"You can continue without this file or ask Codex for an overview of ", true
 	case "web_search_result\x00web_tool_call\x00assistant",
 		"web_search_result\x00web_tool_result\x00tool":
 		return "when a web search result contains information about ", "when content could enable ",
-			"You can retry without web search or get an overview of ", true
+			"You can retry without web search or ask Codex for an overview of ", true
 	case "other_tool\x00other_tool_call\x00assistant",
 		"other_tool\x00other_tool_result\x00tool":
 		return "when content involves ", "when content could enable ", "", true

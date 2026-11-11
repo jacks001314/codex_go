@@ -34,7 +34,7 @@ func TestParseSafetyRecourseBioUserRequestLikeRust(t *testing.T) {
 	if !ok || domain != SafetyRecourseDomainBio || recourse == nil {
 		t.Fatalf("parse = (%q, %+v, %v)", domain, recourse, ok)
 	}
-	want := "We take extra caution with requests involving biological activities that could pose safety risks. We can still help with an overview of biological research and safety considerations."
+	want := "We take extra caution with requests involving biological activities that could pose safety risks. You can ask Codex for an overview of biological research and safety considerations."
 	if recourse.Explanation != want {
 		t.Fatalf("explanation = %q, want %q", recourse.Explanation, want)
 	}
@@ -52,7 +52,7 @@ func TestParseSafetyRecourseCyberFileContentLikeRust(t *testing.T) {
 	if !ok || domain != SafetyRecourseDomainCyber || recourse == nil {
 		t.Fatalf("parse = (%q, %+v, %v)", domain, recourse, ok)
 	}
-	want := "We take extra caution when content could enable capability or technique development for bypassing security controls. We can still help with an overview of safe assessment and remediation."
+	want := "We take extra caution when content could enable capability or technique development for bypassing security controls. You can ask Codex for an overview of safe assessment and remediation."
 	if recourse.Explanation != want {
 		t.Fatalf("explanation = %q, want %q", recourse.Explanation, want)
 	}

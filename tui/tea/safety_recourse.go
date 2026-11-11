@@ -19,8 +19,8 @@ import (
 const (
 	safetyRecourseRewriteActionPrefix = "safety-recourse-rewrite:"
 	safetyRecourseEnableDaybreakID    = "enable-daybreak"
-	safetyRecoursePickerTitle         = "Here are a few ways I can help:"
-	safetyRecoursePickerSubtitle      = "Choosing a rewrite sends it in a new chat."
+	safetyRecoursePickerTitle         = "You can choose a rewrite to start a new chat with your earlier context:"
+	safetyRecourseFeedbackID          = "safety-recourse-feedback"
 	safetyRecourseFollowUpTrigger     = "safety_recourse_follow_up"
 	// safetyRecourseCyberFallbackMessage keeps the failed tool-call text
 	// non-empty when a cyber refusal arrives without its server message.
@@ -266,9 +266,6 @@ func (m *Model) safetyRecourseSelectionView(domain chatwidget.SafetyRecourseDoma
 		Title:       safetyRecoursePickerTitle,
 		AllowCancel: true,
 	}
-	if len(suggestions) > 0 {
-		view.Subtitle = safetyRecoursePickerSubtitle
-	}
 	for index, suggestion := range suggestions {
 		view.Items = append(view.Items, chatwidget.SelectionItem{
 			ID:              fmt.Sprintf("%s%d", safetyRecourseRewriteActionPrefix, index),
@@ -287,6 +284,16 @@ func (m *Model) safetyRecourseSelectionView(domain chatwidget.SafetyRecourseDoma
 			DismissOnSelect: true,
 		})
 	}
+	// Rust #60613: offer a safety-check feedback report whenever feedback is
+	// enabled, after the rewrite and Daybreak choices.
+	if m.feedbackEnabled {
+		view.Items = append(view.Items, chatwidget.SelectionItem{
+			ID:              safetyRecourseFeedbackID,
+			Name:            "Give feedback",
+			Action:          chatwidget.UsageMenuAction(safetyRecourseFeedbackID),
+			DismissOnSelect: true,
+		})
+	}
 	return view
 }
 
@@ -298,6 +305,10 @@ func (m *Model) applySafetyRecourseModalOption(optionID string) bubbletea.Cmd {
 		return nil
 	}
 	optionID = strings.TrimSpace(optionID)
+	if optionID == safetyRecourseFeedbackID {
+		m.openFeedbackConsentForCategory(feedbackCategorySafetyCheck)
+		return nil
+	}
 	if optionID == safetyRecourseEnableDaybreakID {
 		m.notice = ""
 		return m.setDaybreakPreference(true)
@@ -452,23 +463,6 @@ func (m *Model) restoreSafetyRecoursePrompt(prompt string) {
 		prompt += "\n" + draft
 	}
 	m.setComposerPrompt(prompt)
-}
-
-// renderSafetyRecourseNotice draws the transient block notice above the
-// composer while the explanation is pending (Rust rendering.rs).
-func (m *Model) renderSafetyRecourseNotice() string {
-	if m == nil || m.pendingSafetyRecourse == nil || m.modal != nil {
-		return ""
-	}
-	width := m.width
-	if width < 20 {
-		width = 20
-	}
-	lines := m.pendingSafetyRecourse.Notice.DisplayLines(width)
-	if len(lines) == 0 {
-		return ""
-	}
-	return strings.Join(lines, "\n")
 }
 
 func (r SessionResumeResponse) SummaryThreadID() string {
