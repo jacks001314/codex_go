@@ -18,7 +18,13 @@ import (
 // tool-call label; notices, reasoning blocks and generated summaries stay
 // untouched.
 func transcriptToolActivity(message codextui.Message) bool {
-	if message.Role != codextui.RoleHistory || len(message.ActivityIDs) == 0 {
+	if message.Role != codextui.RoleHistory {
+		return false
+	}
+	// Rust #60555: restored tool cells (MCP, dynamic, patch, image, agent)
+	// report no activity ids, so the producer marks them as tool activity
+	// and the summary label alone identifies the row.
+	if len(message.ActivityIDs) == 0 && !message.ToolActivity {
 		return false
 	}
 	if message.TranscriptOnly || message.StartupTip || message.Recap || message.TurnDetailSummary {
@@ -189,6 +195,11 @@ func CollapseTurnDetails(messages []codextui.Message, expanded func(index int) b
 		summary.RawText = ""
 		summary.TranscriptText = ""
 		summary.ActivityIDs = ids
+		if len(ids) == 0 {
+			// Rust #60555 gives every summary a stable disclosure identity even
+			// when the cells it stands for report none (Rust work:{key}).
+			summary.ActivityIDs = []string{"summary:" + itoaTurnDetail(index)}
+		}
 		summary.TurnDetailSummary = true
 		collapsed[index] = summary
 		for member := index + 1; member <= end; member++ {

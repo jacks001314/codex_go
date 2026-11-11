@@ -295,11 +295,17 @@ func (m *Model) ensureTranscriptLineVisible(line int) {
 
 // activityFocusBarLine renders the disclosure footer from the configured list
 // keymap (Rust TranscriptView::disclosure_footer). Navigation hints are
-// dropped from the left before the details/back controls, and a hint is never
+// dropped from the left before the toggle/back controls, and a hint is never
 // split from its key (Rust footer_hint::first_fitting_line).
 func (m *Model) activityFocusBarLine(width int) string {
 	if m == nil || !m.activityFocus.active {
 		return ""
+	}
+	// Rust #60555: the accept hint names the action the disclosure will take,
+	// so an expanded group offers "collapse" instead of a generic "details".
+	toggle := "expand"
+	if index := m.focusedTranscriptActivityIndex(); index >= 0 && m.transcriptActivityExpanded(index) {
+		toggle = "collapse"
 	}
 	hints := []struct {
 		action string
@@ -307,7 +313,7 @@ func (m *Model) activityFocusBarLine(width int) string {
 	}{
 		{action: "move_up", label: "previous"},
 		{action: "move_down", label: "next"},
-		{action: "accept", label: "details"},
+		{action: "accept", label: toggle},
 		{action: "cancel", label: "back"},
 	}
 	parts := make([]string, 0, len(hints))

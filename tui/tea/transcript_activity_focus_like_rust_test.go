@@ -51,7 +51,7 @@ func TestTranscriptActivityFocusDisclosureLikeRust(t *testing.T) {
 		t.Fatalf("focus alone expanded hidden output:\n%s", view)
 	}
 	footer := utils.StripANSI(model.viewString())
-	if !strings.Contains(footer, "↑ previous · ↓ next · enter details · esc back") {
+	if !strings.Contains(footer, "↑ previous · ↓ next · enter expand · esc back") {
 		t.Fatalf("activity footer missing:\n%s", footer)
 	}
 	model.Update(keymsg.KeyMsg{Type: keymsg.KeyF4})
@@ -67,6 +67,10 @@ func TestTranscriptActivityFocusDisclosureLikeRust(t *testing.T) {
 	view := utils.StripANSI(model.viewString())
 	if !strings.Contains(view, "newer hidden detail") {
 		t.Fatalf("Right did not expand the focused activity:\n%s", view)
+	}
+	// Rust #60555: an expanded disclosure offers the collapse action.
+	if !strings.Contains(view, "enter collapse") {
+		t.Fatalf("expanded activity footer lost the collapse hint:\n%s", view)
 	}
 	if strings.Contains(view, "older hidden detail") {
 		t.Fatalf("Right expanded an unselected activity:\n%s", view)
@@ -227,23 +231,22 @@ func TestActivityFocusFooterFitsWidthLikeRust(t *testing.T) {
 	model := activityFocusFixture(t)
 	model.Update(keymsg.KeyMsg{Type: keymsg.KeyF4})
 	const (
-		all     = "\u2191 previous \u00b7 \u2193 next \u00b7 enter details \u00b7 esc back"
-		next    = "\u2193 next \u00b7 enter details \u00b7 esc back"
-		details = "enter details \u00b7 esc back"
-		back    = "esc back"
+		all    = "\u2191 previous \u00b7 \u2193 next \u00b7 enter expand \u00b7 esc back"
+		next   = "\u2193 next \u00b7 enter expand \u00b7 esc back"
+		toggle = "enter expand \u00b7 esc back"
+		back   = "esc back"
 	)
 	for _, testCase := range []struct {
 		width int
 		want  string
 	}{
 		{width: 80, want: all},
-		{width: 46, want: all},
-		{width: 45, want: next},
-		{width: 33, want: next},
-		{width: 32, want: details},
-		{width: 24, want: details},
-		{width: 23, want: back},
-		{width: 20, want: back},
+		{width: 45, want: all},
+		{width: 44, want: next},
+		{width: 32, want: next},
+		{width: 31, want: toggle},
+		{width: 23, want: toggle},
+		{width: 22, want: back},
 		{width: 8, want: back},
 		{width: 7, want: ""},
 		{width: 0, want: ""},
