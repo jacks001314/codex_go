@@ -103,7 +103,12 @@ type AddUserMessageRequest struct {
 	// Input is the ordered content of one logical user message.
 	Input []UserMessageInput
 	// TurnTrigger is the caller-supplied classification for this turn.
-	TurnTrigger  *string
+	TurnTrigger *string
+	// Model and Effort stage the next new turn's model settings (Rust #60651).
+	// Omit both to inherit the thread settings; a model alone uses its default
+	// effort. Queue mode cannot carry either setting.
+	Model        *string
+	Effort       *string
 	Mode         SubmissionMode
 	SharedAccess bool
 }
@@ -227,6 +232,9 @@ func validAddUserMessageRequest(request AddUserMessageRequest) bool {
 	if strings.TrimSpace(request.ThreadID) == "" || strings.TrimSpace(request.ClientUserMessageID) == "" {
 		return false
 	}
+	if (request.Model != nil || request.Effort != nil) && request.Mode == SubmissionQueue {
+		return false
+	}
 	hasContent := false
 	for _, input := range request.Input {
 		switch input.Kind {
@@ -338,8 +346,16 @@ func encodeAddUserMessageRequest(request AddUserMessageRequest) []byte {
 
 	out := protowire.AppendTag(nil, 4, protowire.BytesType)
 	out = protowire.AppendString(out, request.ClientUserMessageID)
+	if request.Effort != nil {
+		out = protowire.AppendTag(out, 9, protowire.BytesType)
+		out = protowire.AppendString(out, *request.Effort)
+	}
 	out = protowire.AppendTag(out, 11, protowire.BytesType)
 	out = protowire.AppendBytes(out, input)
+	if request.Model != nil {
+		out = protowire.AppendTag(out, 12, protowire.BytesType)
+		out = protowire.AppendString(out, *request.Model)
+	}
 	out = protowire.AppendTag(out, 23, protowire.BytesType)
 	out = protowire.AppendString(out, request.ThreadID)
 	if request.TurnTrigger != nil && *request.TurnTrigger != "" {

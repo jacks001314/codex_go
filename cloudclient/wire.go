@@ -12,8 +12,10 @@ import (
 type rawMessage []byte
 
 const (
-	threadServiceResumeMethod = "/oaiproto.codex_app_server_backend.ThreadService/Resume"
-	threadServiceAttachMethod = "/oaiproto.codex_app_server_backend.ThreadService/Attach"
+	threadServiceResumeMethod    = "/oaiproto.codex_app_server_backend.ThreadService/Resume"
+	threadServiceAttachMethod    = "/oaiproto.codex_app_server_backend.ThreadService/Attach"
+	threadServiceArchiveMethod   = "/oaiproto.codex_app_server_backend.ThreadService/ArchiveThread"
+	threadServiceUnarchiveMethod = "/oaiproto.codex_app_server_backend.ThreadService/UnarchiveThread"
 )
 
 func encodeResumeRequest(request ResumeRequest) []byte {
@@ -34,6 +36,17 @@ func encodeResumeRequest(request ResumeRequest) []byte {
 }
 
 func encodeAttachRequest(threadID string) []byte {
+	var out []byte
+	if threadID != "" {
+		out = protowire.AppendTag(out, 1, protowire.BytesType)
+		out = protowire.AppendString(out, threadID)
+	}
+	return out
+}
+
+// encodeThreadIDRequest is the shared ThreadIdRequest envelope used by
+// Attach, ArchiveThread and UnarchiveThread (thread_id is field 1).
+func encodeThreadIDRequest(threadID string) []byte {
 	var out []byte
 	if threadID != "" {
 		out = protowire.AppendTag(out, 1, protowire.BytesType)

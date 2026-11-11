@@ -1866,6 +1866,15 @@ func (r *Runner) toolRouterForRequest(req *Request, run *agentRunConfig) (*tool.
 				return turn.RootTurnIDFromResponsesMetadata(clientMetadata[codexapi.ClientCodexTurnMetadataHeader])
 			}
 		}
+		if run.Config != nil {
+			// Rust #60697: only REPL-backed MCP calls report the turn's configured
+			// product attribution; unrelated servers never see it.
+			options.MCPAppsProductSKU = strings.TrimSpace(firstNonEmpty(
+				execStringFromAny(run.Config.Values["apps_mcp_product_sku"]),
+				execStringFromAny(run.Config.Values["appsMcpProductSku"]),
+				execStringFromAny(run.Config.Values["appsMCPProductSKU"]),
+			))
+		}
 	}
 	if run != nil && strings.TrimSpace(run.Model) != "" {
 		// Forward the issuing model's confirmation-policy documents to actor MCP

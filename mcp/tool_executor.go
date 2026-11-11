@@ -100,6 +100,10 @@ type ToolExecutorOptions struct {
 	// x-codex-turn-metadata entry). Nil omits the entry; the callback is invoked
 	// per call so live turn state (the user-input flag) is current.
 	TurnMetadata func() map[string]any
+	// AppsMCPProductSKU is the turn's configured `apps_mcp_product_sku`. Only
+	// REPL-backed servers and the browser connector receive it, bounded to the
+	// known attribution values (Rust #60697).
+	AppsMCPProductSKU string
 	// TurnRootTurnID supplies the issuing turn's root turn id for host-owned
 	// Apps calls (Rust #51421). Nil or empty omits the field.
 	TurnRootTurnID func() string
@@ -218,6 +222,7 @@ type ToolExecutor struct {
 	windowID                      string
 	requestMeta                   map[string]any
 	turnMetadata                  func() map[string]any
+	appsMCPProductSKU             string
 	turnRootTurnID                func() string
 	agentMetadataRecipient        *AgentMCPMetadataRecipient
 	toolRequestMetaHook           *MCPToolRequestMetaHook
@@ -266,6 +271,7 @@ func NewToolExecutor(options *ToolExecutorOptions) *ToolExecutor {
 	executor.windowID = strings.TrimSpace(options.WindowID)
 	executor.requestMeta = cloneAnyMap(options.RequestMeta)
 	executor.turnMetadata = options.TurnMetadata
+	executor.appsMCPProductSKU = strings.TrimSpace(options.AppsMCPProductSKU)
 	executor.turnRootTurnID = options.TurnRootTurnID
 	executor.agentMetadataRecipient = options.AgentMetadataRecipient
 	executor.toolRequestMetaHook = options.ToolRequestMetaHook
@@ -762,7 +768,15 @@ func (e *ToolExecutor) requestMetaForCall(callID ...string) any {
 	// turn metadata document so the server can attribute the call.
 	if e.turnMetadata != nil {
 		if document := e.turnMetadata(); len(document) > 0 {
-			requestMeta[MCPToolTurnMetadataMetaKey] = document
+			// Rust #60697: a client-supplied product_sku is never forwarded to
+			// unrelated MCP servers. Trusted REPL/browser attribution comes from
+			// the turn configuration instead.
+			trusted := cloneAnyMap(document)
+			delete(trusted, "product_sku")
+			if IsNodeReplBackedConnector(e.resolvedServerName(), e.connectorID) && e.appsMCPProductSKU != "" {
+				trusted["product_sku"] = BoundedProductSKU(e.appsMCPProductSKU)
+			}
+			requestMeta[MCPToolTurnMetadataMetaKey] = trusted
 		}
 	}
 	// Rust #58378: private agent attribution reaches only the exact host-selected

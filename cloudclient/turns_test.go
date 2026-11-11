@@ -39,6 +39,38 @@ func TestAddUserMessageRequestEncoding(t *testing.T) {
 	}
 }
 
+// TestAddUserMessageEncodesModelAndEffortLikeRust mirrors Rust #60651: a staged
+// model and effort travel on AddRequest fields 12 and 9, and queue mode cannot
+// carry either setting.
+func TestAddUserMessageEncodesModelAndEffortLikeRust(t *testing.T) {
+	model, effort := "gpt-5.1", "high"
+	encoded := encodeAddUserMessageRequest(AddUserMessageRequest{
+		ThreadID: "thread", ClientUserMessageID: "client",
+		Input: []UserMessageInput{{Kind: UserMessageText, Text: "hello"}},
+		Model: &model, Effort: &effort,
+		Mode: SubmissionStartIfIdle,
+	})
+	want := protoMessage(4, []byte("client"))
+	want = append(want, protoMessage(9, []byte("high"))...)
+	text := protoMessage(1, []byte("hello"))
+	userInput := protoMessage(1, text)
+	input := protoMessage(1, userInput)
+	want = append(want, protoMessage(11, input)...)
+	want = append(want, protoMessage(12, []byte("gpt-5.1"))...)
+	want = append(want, protoMessage(23, []byte("thread"))...)
+	want = append(want, protoVarint(30, 3)...)
+	if !bytes.Equal(encoded, want) {
+		t.Fatalf("add request = %x, want %x", encoded, want)
+	}
+	if validAddUserMessageRequest(AddUserMessageRequest{
+		ThreadID: "thread", ClientUserMessageID: "client",
+		Input: []UserMessageInput{{Kind: UserMessageText, Text: "hello"}},
+		Model: &model, Mode: SubmissionQueue,
+	}) {
+		t.Fatal("queue mode accepted a staged model")
+	}
+}
+
 func TestAdmissionOutcomesPreserveTurnAndQueueIdentity(t *testing.T) {
 	turn := testTurnSummaryBytes("turn-1", 1)
 	response := append(protoMessage(1, turn), protoVarint(2, 1)...)

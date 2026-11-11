@@ -164,6 +164,48 @@ func TestMCPToolExecutorReportsTurnMetadataLikeRust(t *testing.T) {
 	}
 }
 
+// TestMCPToolCallRequestMetaAttributesOnlyReplCallsLikeRust mirrors Rust
+// #60697: client-supplied product_sku is removed, and only configured
+// REPL-backed servers or the browser connector receive the turn's bounded SKU.
+func TestMCPToolCallRequestMetaAttributesOnlyReplCallsLikeRust(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		server     string
+		connector  string
+		configured string
+		want       any
+	}{
+		{name: "node repl", server: "node_repl", configured: "codex", want: "codex"},
+		{name: "browser connector", server: RuntimeCodexAppsMCPServerName, connector: BrowserConnectorID, configured: "codex", want: "codex"},
+		{name: "custom server", server: "custom_server", configured: "codex", want: nil},
+		{name: "unrelated connector", server: RuntimeCodexAppsMCPServerName, connector: "unrelated_connector", configured: "codex", want: nil},
+		{name: "unrecognized", server: "node_repl", configured: "private-product", want: "other"},
+		{name: "empty", server: "node_repl", configured: "", want: nil},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			executor := NewToolExecutor(&ToolExecutorOptions{
+				ServerName:        test.server,
+				ConnectorID:       test.connector,
+				AppsMCPProductSKU: test.configured,
+				TurnMetadata: func() map[string]any {
+					return map[string]any{"product_sku": "spoofed", "turn_id": "turn-1"}
+				},
+			})
+			meta := executor.requestMetaForCall("call-product").(map[string]any)
+			document, ok := meta[MCPToolTurnMetadataMetaKey].(map[string]any)
+			if !ok {
+				t.Fatalf("turn metadata = %#v", meta[MCPToolTurnMetadataMetaKey])
+			}
+			if document["product_sku"] != test.want {
+				t.Fatalf("product_sku = %#v, want %#v", document["product_sku"], test.want)
+			}
+			if document["turn_id"] != "turn-1" {
+				t.Fatalf("turn metadata lost other fields: %#v", document)
+			}
+		})
+	}
+}
+
 func TestCodexAppsMCPToolRequestMetaIncludesCallIDLikeRust(t *testing.T) {
 	executor := NewToolExecutor(&ToolExecutorOptions{ServerName: RuntimeCodexAppsMCPServerName, ThreadID: "thread-live", RequestMeta: map[string]any{"_codex_apps": map[string]any{"connector_id": "calendar"}}})
 	meta := executor.requestMetaForCall("call-123").(map[string]any)

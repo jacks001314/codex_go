@@ -27,6 +27,8 @@ type fakeCloud struct {
 	listItems      func(ctx context.Context, request cloudclient.ListItemsRequest) (cloudclient.HistoryPage[cloudclient.HistoryItem], error)
 	addMessage     func(ctx context.Context, request cloudclient.AddUserMessageRequest) (*cloudclient.Admission, error)
 	interrupt      func(ctx context.Context, request cloudclient.InterruptTurnRequest) error
+	archive        func(ctx context.Context, threadID string) error
+	unarchive      func(ctx context.Context, threadID string) (cloudclient.ThreadSnapshot, error)
 	closeHook      func()
 }
 
@@ -97,6 +99,20 @@ func (f *fakeCloud) InterruptTurn(ctx context.Context, request cloudclient.Inter
 		return errors.New("no interrupt configured")
 	}
 	return f.interrupt(ctx, request)
+}
+
+func (f *fakeCloud) ArchiveThread(ctx context.Context, threadID string) error {
+	if f.archive == nil {
+		return errors.New("no archive configured")
+	}
+	return f.archive(ctx, threadID)
+}
+
+func (f *fakeCloud) UnarchiveThread(ctx context.Context, threadID string) (cloudclient.ThreadSnapshot, error) {
+	if f.unarchive == nil {
+		return cloudclient.ThreadSnapshot{}, errors.New("no unarchive configured")
+	}
+	return f.unarchive(ctx, threadID)
 }
 
 func (f *fakeCloud) Close() error {
@@ -523,18 +539,21 @@ func TestCloudConversationRequestsAndTypedReceiptsLikeRust(t *testing.T) {
 		t.Fatalf("typed admission parts = %#v, want the two text parts in order", admitted.Input)
 	}
 	_, rpcErr = client.SubmitUserMessage(ctx, turn.TurnStartParams{
-		ThreadID: "new-thread", ClientUserMessageID: "invalid", Model: "other",
+		ThreadID: "new-thread", ClientUserMessageID: "staged", Model: "other", Effort: stringPointerForCloudTest("high"),
 		Input: []turn.TurnUserInput{{Type: "text", Text: "no"}},
 	})
-	if rpcErr == nil || rpcErr.Code != invalidParamsCode || len(admissions) != 1 {
-		t.Fatalf("invalid typed submission = %#v, admissions=%d", rpcErr, len(admissions))
+	if rpcErr != nil || len(admissions) != 2 {
+		t.Fatalf("staged typed submission = %#v, admissions=%d", rpcErr, len(admissions))
+	}
+	if staged := admissions[1]; staged.Model == nil || *staged.Model != "other" || staged.Effort == nil || *staged.Effort != "high" {
+		t.Fatalf("staged admission = %#v", staged)
 	}
 
 	generic, rpcErr := client.Request(ctx, appserver.MethodTurnStart, json.RawMessage(`{"threadId":"new-thread","clientUserMessageId":"generic","input":[{"type":"text","text":"hello","text_elements":[]}]}`))
 	if rpcErr != nil || !strings.Contains(string(generic), `"turn-started"`) {
 		t.Fatalf("turn/start = %s, %#v", generic, rpcErr)
 	}
-	if len(admissions) != 2 || admissions[1].Mode != cloudclient.SubmissionStartIfIdle {
+	if len(admissions) != 3 || admissions[2].Mode != cloudclient.SubmissionStartIfIdle {
 		t.Fatalf("generic admission = %#v", admissions)
 	}
 	if _, rpcErr := client.Request(ctx, appserver.MethodTurnInterrupt, json.RawMessage(`{"threadId":"new-thread","turnId":"turn-started"}`)); rpcErr != nil {

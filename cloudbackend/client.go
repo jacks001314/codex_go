@@ -36,6 +36,8 @@ const (
 type cloudSource interface {
 	Activate(ctx context.Context, threadID string) (*cloudclient.ThreadActivation, error)
 	Attach(ctx context.Context, threadID string) (<-chan cloudclient.Event, <-chan error, error)
+	ArchiveThread(ctx context.Context, threadID string) error
+	UnarchiveThread(ctx context.Context, threadID string) (cloudclient.ThreadSnapshot, error)
 	ListThreads(ctx context.Context, query cloudclient.ThreadListQuery) (cloudclient.ThreadPage, error)
 	PrewarmDefaultThread(ctx context.Context, model string, modelProvider string) (*cloudclient.ThreadActivation, error)
 	PrewarmThread(ctx context.Context, model string, modelProvider string, project *cloudclient.ProjectEnvironment) (*cloudclient.ThreadActivation, error)

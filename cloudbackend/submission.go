@@ -79,6 +79,8 @@ func cloudMessage(params turn.TurnStartParams) (cloudclient.AddUserMessageReques
 	normalized.Input = nil
 	normalized.Prompt = ""
 	normalized.TurnTrigger = ""
+	normalized.Model = ""
+	normalized.Effort = nil
 	if !reflect.DeepEqual(normalized, turn.TurnStartParams{}) {
 		return cloudclient.AddUserMessageRequest{}, rejectCloudInput("Changing cloud settings or sending structured input is not supported yet.")
 	}
@@ -98,11 +100,23 @@ func cloudMessage(params turn.TurnStartParams) (cloudclient.AddUserMessageReques
 		value := trigger
 		turnTrigger = &value
 	}
+	var model *string
+	if value := strings.TrimSpace(params.Model); value != "" {
+		model = &value
+	}
+	var effort *string
+	if params.Effort != nil {
+		if value := strings.TrimSpace(*params.Effort); value != "" {
+			effort = &value
+		}
+	}
 	return cloudclient.AddUserMessageRequest{
 		ThreadID:            threadID,
 		ClientUserMessageID: submissionID,
 		Input:               parts,
 		TurnTrigger:         turnTrigger,
+		Model:               model,
+		Effort:              effort,
 		Mode:                cloudclient.SubmissionStartIfIdle,
 		SharedAccess:        false,
 	}, nil

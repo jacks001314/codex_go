@@ -38,6 +38,8 @@ type ThreadListQuery struct {
 	Limit         *uint32
 	SortKey       ThreadSortKey
 	SortDirection ThreadSortDirection
+	// Archived lists archived threads instead of the active set (Rust #60635).
+	Archived bool
 	// Originators restricts discovery to the listed clients. An empty list
 	// requests every originator, including threads created by other clients.
 	Originators []string
@@ -105,7 +107,11 @@ func encodeThreadListRequest(query ThreadListQuery) []byte {
 	out = protowire.AppendTag(out, 4, protowire.VarintType)
 	out = protowire.AppendVarint(out, threadSortDirectionValue(query.SortDirection))
 	out = protowire.AppendTag(out, 5, protowire.VarintType)
-	out = protowire.AppendVarint(out, 0)
+	if query.Archived {
+		out = protowire.AppendVarint(out, 1)
+	} else {
+		out = protowire.AppendVarint(out, 0)
+	}
 	var originators []byte
 	for _, originator := range query.Originators {
 		originators = protowire.AppendTag(originators, 1, protowire.BytesType)

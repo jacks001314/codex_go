@@ -42,6 +42,10 @@ func (c *Client) handleRequest(
 		return c.readThread(params)
 	case appserver.MethodThreadLoadedList:
 		return c.loadedThreadList()
+	case appserver.MethodThreadArchive:
+		return c.archiveThread(ctx, params)
+	case appserver.MethodThreadUnarchive:
+		return c.unarchiveThread(ctx, params)
 	case appserver.MethodThreadUnsubscribe:
 		return c.unsubscribeThread(params)
 	case appserver.MethodThreadResume:
@@ -108,7 +112,7 @@ func cloudThreadListQuery(params appserver.ThreadListParams) (cloudclient.Thread
 	validSources := len(sources) == 0 ||
 		(len(sources) == 2 && ((sources[0] == appserver.ThreadSourceKindCli && sources[1] == appserver.ThreadSourceKindVsCode) ||
 			(sources[0] == appserver.ThreadSourceKindVsCode && sources[1] == appserver.ThreadSourceKindCli)))
-	if !validSources || (params.Archived != nil && *params.Archived) || params.CWD != nil ||
+	if !validSources || params.CWD != nil ||
 		params.SearchTerm != nil || params.SectionID.Set ||
 		params.ParentThreadID != nil || params.AncestorThreadID != nil || params.AttachedToThreadID != nil ||
 		len(params.ModelProviders) > 0 || (params.ExcludedThreadIDs != nil && len(*params.ExcludedThreadIDs) > 0) {
@@ -125,6 +129,7 @@ func cloudThreadListQuery(params appserver.ThreadListParams) (cloudclient.Thread
 	query := cloudclient.ThreadListQuery{
 		Cursor:      cloneStringPointer(params.Cursor),
 		Limit:       limit,
+		Archived:    params.Archived != nil && *params.Archived,
 		Originators: append([]string(nil), params.Originators...),
 	}
 	switch params.SortKey {
@@ -502,10 +507,71 @@ func (c *Client) readThread(params json.RawMessage) (json.RawMessage, *RPCError)
 
 func (c *Client) loadedThreadList() (json.RawMessage, *RPCError) {
 	ids := []string{}
-	if c.loaded != nil && c.loaded.Thread != nil {
-		ids = append(ids, c.loaded.Thread.ID)
+	// Rust #60635: loaded-thread queries report live attachments, not retained
+	// resume metadata. A failed archive therefore still reports the attachment.
+	if c.active != nil && strings.TrimSpace(c.active.threadID) != "" {
+		ids = append(ids, c.active.threadID)
 	}
 	encoded, err := json.Marshal(&appserver.ThreadLoadedListResponse{Data: ids})
+	if err != nil {
+		return nil, internalRPCError(err)
+	}
+	return encoded, nil
+}
+
+func (c *Client) archiveThread(ctx context.Context, params json.RawMessage) (json.RawMessage, *RPCError) {
+	var request appserver.ThreadArchiveParams
+	if err := json.Unmarshal(params, &request); err != nil {
+		return nil, internalRPCError(err)
+	}
+	threadID := strings.TrimSpace(request.ThreadID)
+	if threadID == "" {
+		return nil, internalRPCError(cloudclient.ErrInvalidThreadID)
+	}
+	_, err := waitWhileListening(c, ctx, func() (struct{}, error) {
+		return struct{}{}, c.source.ArchiveThread(ctx, threadID)
+	})
+	if err != nil {
+		return nil, internalRPCError(err)
+	}
+	// Rust #60635: a successful archive detaches the conversation and reports
+	// `thread/archived` after the RPC is acknowledged.
+	c.detach(threadID)
+	c.supersedeStreamLosses(threadID)
+	if c.loaded != nil && c.loaded.Thread != nil && c.loaded.Thread.ID == threadID {
+		c.loaded = nil
+	}
+	c.enqueue(Notification{
+		Method: appserver.NotificationThreadArchived,
+		Params: &appserver.ThreadArchivedNotification{ThreadID: threadID},
+	})
+	return json.RawMessage(`{}`), nil
+}
+
+func (c *Client) unarchiveThread(ctx context.Context, params json.RawMessage) (json.RawMessage, *RPCError) {
+	var request appserver.ThreadUnarchiveParams
+	if err := json.Unmarshal(params, &request); err != nil {
+		return nil, internalRPCError(err)
+	}
+	threadID := strings.TrimSpace(request.ThreadID)
+	if threadID == "" {
+		return nil, internalRPCError(cloudclient.ErrInvalidThreadID)
+	}
+	snapshot, err := waitWhileListening(c, ctx, func() (cloudclient.ThreadSnapshot, error) {
+		return c.source.UnarchiveThread(ctx, threadID)
+	})
+	if err != nil {
+		return nil, internalRPCError(err)
+	}
+	thread, err := cloudThreadSnapshot(snapshot)
+	if err != nil {
+		return nil, internalRPCError(err)
+	}
+	c.enqueue(Notification{
+		Method: appserver.NotificationThreadUnarchived,
+		Params: &appserver.ThreadUnarchivedNotification{ThreadID: threadID},
+	})
+	encoded, err := json.Marshal(&appserver.ThreadUnarchiveResponse{Thread: &thread})
 	if err != nil {
 		return nil, internalRPCError(err)
 	}
