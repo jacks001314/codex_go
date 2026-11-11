@@ -7789,6 +7789,10 @@ func TestRuntimeRouterDispatchesExperienceAPIs(t *testing.T) {
 	if interrupt.Error != nil {
 		t.Fatalf("interrupt = %+v", interrupt)
 	}
+	repeatInterrupt := router.Handle(requestWithParams(t, IntID(11), MethodTurnInterrupt, turn.TurnInterruptParams{ThreadID: threadID, TurnID: turnID}))
+	if repeatInterrupt.Error == nil || repeatInterrupt.Error.Code != -32600 || repeatInterrupt.Error.Message != "no active turn to interrupt" {
+		t.Fatalf("repeat interrupt = %+v", repeatInterrupt)
+	}
 }
 
 func TestRuntimeRouterReviewStartEmitsEnteredReviewModeLikeRust(t *testing.T) {

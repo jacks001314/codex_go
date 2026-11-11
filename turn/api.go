@@ -19,6 +19,13 @@ var (
 	ErrNoActiveTurnToSteer  = errors.New("no active turn to steer")
 	ErrExpectedTurnMismatch = errors.New("expected active turn mismatch")
 	ErrEmptyTurnSteerInput  = errors.New("empty turn steer input")
+	// ErrNoActiveTurnToInterrupt reports a turn/interrupt for a thread whose
+	// requested turn has already terminated (Rust app-server "no active turn to
+	// interrupt").
+	ErrNoActiveTurnToInterrupt = errors.New("no active turn to interrupt")
+	// ErrInterruptTurnMismatch reports an interrupt for a turn other than the
+	// thread's active turn.
+	ErrInterruptTurnMismatch = errors.New("interrupt turn mismatch")
 )
 
 const (
@@ -982,8 +989,11 @@ func (s *TurnService) Interrupt(params *TurnInterruptParams) (*TurnInterruptResp
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	turn, ok := s.active[params.ThreadID]
-	if !ok || turn.ID != params.TurnID {
-		return nil, fmt.Errorf("turn %s is not active", params.TurnID)
+	if !ok {
+		return nil, ErrNoActiveTurnToInterrupt
+	}
+	if turn.ID != params.TurnID {
+		return nil, fmt.Errorf("%w: expected active turn id %s but found %s", ErrInterruptTurnMismatch, params.TurnID, turn.ID)
 	}
 	delete(s.active, params.ThreadID)
 	return &TurnInterruptResponse{}, nil

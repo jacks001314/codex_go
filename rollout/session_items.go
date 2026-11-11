@@ -1329,6 +1329,9 @@ type rolloutReplayTurn struct {
 	itemCount        int
 	openedExplicitly bool
 	sawCompaction    bool
+	// hasGeneratedID marks a turn the rollout opened without an explicit ID.
+	// A late abort for an unknown turn may only fall back to such a turn.
+	hasGeneratedID bool
 }
 
 type rolloutEventPayload struct {
@@ -1444,7 +1447,8 @@ func (b *rolloutReplayBuilder) handleEventLine(line *Line, lineIndex int) bool {
 
 func (b *rolloutReplayBuilder) handleTurnStarted(payload rolloutEventPayload, lineIndex int) {
 	b.finishCurrentTurn()
-	turnID := firstNonEmptyString(payload.TurnID, payload.TurnIDCamel, fmt.Sprintf("rollout-%d", lineIndex))
+	explicitTurnID := firstNonEmptyString(payload.TurnID, payload.TurnIDCamel)
+	turnID := firstNonEmptyString(explicitTurnID, fmt.Sprintf("rollout-%d", lineIndex))
 	rootTurnID := ""
 	switch {
 	case payload.RootTurnID != nil:
@@ -1460,6 +1464,7 @@ func (b *rolloutReplayBuilder) handleTurnStarted(payload rolloutEventPayload, li
 			StartedAt:  firstNonNilInt64(payload.StartedAt, payload.StartedAtCamel),
 		},
 		openedExplicitly: true,
+		hasGeneratedID:   explicitTurnID == "",
 	}
 }
 
@@ -1534,8 +1539,30 @@ func (b *rolloutReplayBuilder) handleTurnAborted(payload rolloutEventPayload, li
 		snapshot.CompletedAt = firstNonNilInt64(payload.CompletedAt, payload.CompletedAtCamel)
 		snapshot.DurationMS = firstNonNilInt64(payload.DurationMS, payload.DurationMSCamel)
 	}
-	if b.current != nil && (turnID == "" || b.current.snapshot.ID == turnID) {
+	if b.current != nil && turnID != "" && b.current.snapshot.ID == turnID {
 		apply(&b.current.snapshot)
+		b.finishCurrentTurn()
+		return
+	}
+	if turnID != "" {
+		for i := range b.turns {
+			if b.turns[i].ID == turnID {
+				apply(&b.turns[i])
+				return
+			}
+		}
+	}
+	// Rust #60700: fall back to the active turn only when the abort has no ID or
+	// the active turn was opened with a generated ID. A late abort for an
+	// unrelated turn must not interrupt an explicitly identified turn.
+	if b.current != nil && (turnID == "" || b.current.hasGeneratedID) {
+		apply(&b.current.snapshot)
+		b.finishCurrentTurn()
+		return
+	}
+	if turnID != "" {
+		// The abort names a turn this rollout never observed; leave the
+		// explicitly identified active turn untouched.
 		return
 	}
 	if turnID == "" && len(b.items) > 0 {
@@ -1549,10 +1576,6 @@ func (b *rolloutReplayBuilder) handleTurnAborted(payload rolloutEventPayload, li
 			apply(&b.turns[i])
 			return
 		}
-	}
-	if b.current != nil {
-		apply(&b.current.snapshot)
-		return
 	}
 	snapshot := session.TurnSnapshot{ID: turnID}
 	apply(&snapshot)

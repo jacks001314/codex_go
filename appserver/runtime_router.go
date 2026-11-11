@@ -10230,6 +10230,14 @@ func turnInterruptRuntimeError(err error) error {
 	if err == nil {
 		return nil
 	}
+	if errors.Is(err, turn.ErrNoActiveTurnToInterrupt) {
+		return jsonRPCInvalidRequest("no active turn to interrupt")
+	}
+	if errors.Is(err, turn.ErrInterruptTurnMismatch) {
+		message := strings.TrimSpace(err.Error())
+		message = strings.TrimSpace(strings.TrimPrefix(message, turn.ErrInterruptTurnMismatch.Error()+":"))
+		return jsonRPCInvalidRequest(message)
+	}
 	message := strings.TrimSpace(err.Error())
 	if strings.Contains(message, " is not active") {
 		return jsonRPCInvalidRequest(message)
