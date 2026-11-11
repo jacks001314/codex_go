@@ -73,6 +73,9 @@ type SideChatPromptsLoadedMsg struct {
 }
 
 type SideOpenResultMsg struct {
+	// RequestID identifies the newest accepted open; older completions are
+	// ignored after the user selects another chat or cancels (Rust #60599).
+	RequestID      int
 	ParentThreadID string
 	SideThreadID   string
 	Response       AgentThreadSwitchResponse
@@ -200,6 +203,9 @@ func (m *Model) closeSidebarChooser() bubbletea.Cmd {
 	if m == nil || !m.sidebarChooserOpen {
 		return nil
 	}
+	// Closing the chooser owns the sidebar again, so an in-flight attach must
+	// not switch conversations later (Rust #60599).
+	m.cancelSideChatOpen()
 	m.sidebarChooserOpen = false
 	m.sidebarChooserFocused = false
 	m.sidebarChooserParent = ""
@@ -213,6 +219,18 @@ func (m *Model) closeSidebarChooser() bubbletea.Cmd {
 
 // sidebarChooserListActions are the shared `list` context actions the chooser
 // honours, in tui/keymap.go order (Rust keymap.rs list bindings).
+
+// cancelSideChatOpen invalidates an in-flight saved-chat attach so its
+// completion cannot switch conversations after the user cancels
+// (Rust #60599 sidebar_loading supersession).
+func (m *Model) cancelSideChatOpen() {
+	if m == nil || m.sideOpeningThreadID == "" {
+		return
+	}
+	m.sideOpenRequest++
+	m.sideOpeningThreadID = ""
+}
+
 var sidebarChooserListActions = []string{
 	"move_up", "move_down", "page_up", "page_down", "jump_top", "jump_bottom", "accept", "cancel",
 }
@@ -302,10 +320,10 @@ func (m *Model) updateSidebarChooserKey(msg keymsg.KeyMsg) (bool, bubbletea.Cmd)
 	}
 	switch action {
 	case "move_up":
-		m.sidebarChoice = clamp(m.sidebarChoice - 1)
+		m.moveSidebarChooserChoice(-1)
 		return true, nil
 	case "move_down":
-		m.sidebarChoice = clamp(m.sidebarChoice + 1)
+		m.moveSidebarChooserChoice(1)
 		return true, nil
 	case "page_up":
 		m.sidebarChoice = clamp(m.sidebarChoice - m.sidebarChooserPageRows())
@@ -325,9 +343,27 @@ func (m *Model) updateSidebarChooserKey(msg keymsg.KeyMsg) (bool, bubbletea.Cmd)
 		m.armSelectExitGuard(keySpecFromKeyMsg(msg))
 		return true, m.acceptSidebarChooser()
 	case "cancel":
+		m.cancelSideChatOpen()
 		return true, m.closeSidebarChooser()
 	}
 	return false, nil
+}
+
+// moveSidebarChooserChoice moves the chooser selection for the sidebar_up and
+// sidebar_down leader chords (Rust #60152 leader_defaults).
+func (m *Model) moveSidebarChooserChoice(delta int) {
+	if m == nil || !m.sidebarChooserVisible() || !m.sidebarChooserFocused {
+		return
+	}
+	last := m.sidebarChooserChoiceCount() - 1
+	next := m.sidebarChoice + delta
+	if next < 0 {
+		next = 0
+	}
+	if next > last {
+		next = max(last, 0)
+	}
+	m.sidebarChoice = next
 }
 
 // sidebarTabStripVisible reports whether a tab strip is on screen: the chooser
@@ -548,9 +584,15 @@ func (m *Model) acceptSidebarChooser() bubbletea.Cmd {
 		parentThreadID := m.sidebarChooserParent
 		sideThreadID := choice.ThreadID
 		open := m.onOpenSideChat
+		// Rust #60599: prepare saved chats in the background, keep the chooser
+		// usable, and let a newer selection supersede this one.
+		m.sideOpenRequest++
+		request := m.sideOpenRequest
+		m.sideOpeningThreadID = sideThreadID
+		m.refreshTranscript()
 		return func() bubbletea.Msg {
 			response, err := open(parentThreadID, sideThreadID)
-			return SideOpenResultMsg{ParentThreadID: parentThreadID, SideThreadID: sideThreadID, Response: response, Err: err}
+			return SideOpenResultMsg{RequestID: request, ParentThreadID: parentThreadID, SideThreadID: sideThreadID, Response: response, Err: err}
 		}
 	}
 }
@@ -649,7 +691,11 @@ func (m *Model) renderSidebarChooser(width int, height int) string {
 	case SideChatDiscoveryFailed:
 		lines = append(lines, "\x1b[31m"+m.sidebarDiscoveryError+"\x1b[39m")
 	default:
-		lines = append(lines, "")
+		if m.sideOpeningThreadID != "" {
+			lines = append(lines, "… Opening side chat…")
+		} else {
+			lines = append(lines, "")
+		}
 	}
 	if !m.sidebarChatCreationAvailable() {
 		lines = append(lines, sidebarWaitingSideChats, "", "Esc back")
@@ -693,6 +739,9 @@ func (m *Model) renderSidebarChooser(width int, height int) string {
 		}
 	}
 	footer := "Enter open · Esc back · ↑/↓ move"
+	if m.sideOpeningThreadID != "" {
+		footer = "Esc cancel · Enter open · ↑/↓ move"
+	}
 	if height > 0 {
 		budget := height - len(lines) - 1
 		if budget < 0 {
@@ -813,6 +862,11 @@ func (m *Model) applySideOpenResult(msg SideOpenResultMsg) bubbletea.Cmd {
 	if m == nil || m.State == nil {
 		return nil
 	}
+	if msg.RequestID != 0 && msg.RequestID != m.sideOpenRequest {
+		// A newer selection (or a cancelled chooser) owns the sidebar now.
+		return nil
+	}
+	m.sideOpeningThreadID = ""
 	sideThreadID := strings.TrimSpace(msg.SideThreadID)
 	parentThreadID := strings.TrimSpace(msg.ParentThreadID)
 	if msg.Err != nil {
@@ -826,13 +880,23 @@ func (m *Model) applySideOpenResult(msg SideOpenResultMsg) bubbletea.Cmd {
 	if side := m.liveSideTab(sideThreadID); side != nil {
 		return batchSideCommands(m.closeSidebarChooser(), m.activateRetainedSideConversation(side, ""))
 	}
+	// Rust #60599: live notifications that arrived while the saved chat was
+	// loading are buffered; replay them only when the resumed snapshot is
+	// empty, mirroring the agent-switch rule that avoids duplicate items.
+	sideMessages := cloneSideMessages(msg.Response.Messages)
+	if buffered := m.backgroundThreadEvents[sideThreadID]; len(buffered) > 0 {
+		if len(sideMessages) == 0 {
+			sideMessages = applyBufferedThreadReplay(sideMessages, filterResolvedMisalignmentReplayEvents(buffered))
+		}
+		delete(m.backgroundThreadEvents, sideThreadID)
+	}
 	side := &activeSideConversation{
 		ParentThreadID:    parentThreadID,
 		SideThreadID:      sideThreadID,
 		ParentMessages:    cloneSideMessages(m.State.Messages),
 		ParentStatus:      strings.TrimSpace(m.State.Status),
 		ParentPlaceholder: m.composer.Placeholder,
-		SideMessages:      cloneSideMessages(msg.Response.Messages),
+		SideMessages:      sideMessages,
 		SideStatus:        firstNonEmpty(strings.TrimSpace(msg.Response.Status), "idle"),
 		SidePlaceholder:   "Ask Codex in side conversation",
 		ShowingSide:       true,

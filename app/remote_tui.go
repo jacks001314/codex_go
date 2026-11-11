@@ -473,6 +473,12 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 	}
 	tuiTelemetry := startInteractiveTUITelemetry(root, interactiveDaemonSelectionReason(root, endpoint, interactiveRemoteEndpointIsExplicitRemote(root)), appServerMode, nil)
 	defer tuiTelemetry.close()
+	// Rust #60662: finish a required gateway device sign-in before this session
+	// reads models or opens the alt screen. Explicit remote workspaces own their
+	// own credentials, so maybeRunGatewayDeviceLogin skips them.
+	if err := maybeRunGatewayDeviceLogin(ctx, root, endpoint, stdout); err != nil {
+		return err
+	}
 	// Rust #47889: keep a bounded tail of this TUI process's diagnostics so a
 	// feedback upload can stage it as client-logs.txt on the app-server host.
 	defer InstallTUIClientLogCapture()()

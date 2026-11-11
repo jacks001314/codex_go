@@ -9,6 +9,20 @@ import (
 	codextui "codex_go/tui"
 )
 
+// keyChordRevealDelay mirrors Rust #60637: a pending prefix reveals its guide
+// only after fast two-stroke shortcuts had time to complete.
+const keyChordRevealDelay = 350 * time.Millisecond
+
+// KeyChordRevealMsg re-renders after the reveal delay. The pending state itself
+// is the source of truth, so the message carries no payload.
+type KeyChordRevealMsg struct{}
+
+// KeyChordTimeoutMsg expires the pending prefix that scheduled it. Stale ticks
+// from an older prefix are ignored by comparing the recorded start time.
+type KeyChordTimeoutMsg struct {
+	Started time.Time
+}
+
 func (m *Model) clearKeyChord() {
 	if m == nil {
 		return
@@ -47,8 +61,15 @@ func (m *Model) handleKeyChordKey(keySpec string, now time.Time) (bool, bubblete
 	if m.keyChordPrefixConfigured(keySpec) {
 		m.pendingKeyChordPrefix = keySpec
 		m.pendingKeyChordStarted = now
-		m.notice = "Waiting for the second key of the shortcut chord."
-		return true, nil
+		if strings.Contains(m.notice, "second key of the shortcut chord") {
+			m.notice = ""
+		}
+		return true, bubbletea.Batch(
+			bubbletea.Tick(keyChordRevealDelay, func(time.Time) bubbletea.Msg { return KeyChordRevealMsg{} }),
+			bubbletea.Tick(codextui.LeaderChordTimeout, func(time.Time) bubbletea.Msg {
+				return KeyChordTimeoutMsg{Started: now}
+			}),
+		)
 	}
 	return false, nil
 }

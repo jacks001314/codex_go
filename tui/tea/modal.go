@@ -1097,6 +1097,10 @@ func (m *Model) respondModal(cancelled bool) bubbletea.Cmd {
 	} else if cancelled {
 		m.notice = "Cancelled"
 	}
+	if modal.kind == ModalKindGeneric && modal.id == sideTabCloseModalID {
+		m.modal = nil
+		return m.respondSideTabCloseModal(response.OptionID, cancelled)
+	}
 	if modal.kind == ModalKindGeneric && modal.id == resumeCWDPromptID {
 		return m.finishResumeCWDPrompt(response)
 	}

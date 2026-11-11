@@ -32,7 +32,7 @@ func TestKeymapPageRowsLikeRust(t *testing.T) {
 	tabs := KeymapPageTabs(rows)
 
 	all := keymapPageTabByLabel(t, tabs, "All")
-	if all.Summary != "167 actions, 0 customized, 19 unbound." {
+	if all.Summary != "170 actions, 0 customized, 22 unbound." {
 		t.Fatalf("all summary = %q (rows=%d)", all.Summary, len(rows))
 	}
 	if got := keymapPageTabByLabel(t, tabs, "Common").Summary; got != "21 actions." {
@@ -42,12 +42,12 @@ func TestKeymapPageRowsLikeRust(t *testing.T) {
 	if customized.Summary != "0 actions." || len(customized.Rows) != 0 {
 		t.Fatalf("customized tab = %q rows:%d", customized.Summary, len(customized.Rows))
 	}
-	unbound := keymapPageTabByLabel(t, tabs, "Unbound (19)")
-	if unbound.Summary != "19 actions." || len(unbound.Rows) != 19 {
+	unbound := keymapPageTabByLabel(t, tabs, "Unbound (22)")
+	if unbound.Summary != "22 actions." || len(unbound.Rows) != 22 {
 		t.Fatalf("unbound tab = %q rows:%d", unbound.Summary, len(unbound.Rows))
 	}
 	wantUnbound := []string{
-		"Open Agents", "Toggle Vim Mode", "Toggle Fast Mode",
+		"Open Agents", "Toggle Vim Mode", "Toggle Fast Mode", "Close Sidebar Tab", "Sidebar Up", "Sidebar Down",
 		"Focus Main Composer", "Focus Sidebar Tabs", "Focus Sidebar Content", "Focus Pane Left",
 		"Focus Pane Right", "Hide Pane", "Toggle Pane Zoom",
 		"Minimize Pane Width", "Maximize Pane Width", "Equalize Pane Widths",
@@ -61,7 +61,7 @@ func TestKeymapPageRowsLikeRust(t *testing.T) {
 	}
 
 	counts := map[string]int{
-		"App": 36, "Composer": 5, "Editor": 17, "Vim": 69,
+		"App": 39, "Composer": 5, "Editor": 17, "Vim": 69,
 		"Navigation": 21, "Agents": 11, "Approval": 8,
 	}
 	for label, want := range counts {
@@ -102,7 +102,7 @@ func TestKeymapPageRowsLikeRust(t *testing.T) {
 	for index, tab := range tabs {
 		labels[index] = tab.Label
 	}
-	wantLabels := []string{"All", "Common", "Customized (0)", "Unbound (19)", "App", "Composer", "Editor", "Vim", "Navigation", "Agents", "Approval", "Debug"}
+	wantLabels := []string{"All", "Common", "Customized (0)", "Unbound (22)", "App", "Composer", "Editor", "Vim", "Navigation", "Agents", "Approval", "Debug"}
 	if len(labels) != len(wantLabels) {
 		t.Fatalf("tabs = %#v", labels)
 	}

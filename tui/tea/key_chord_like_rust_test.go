@@ -39,8 +39,8 @@ func TestConfiguredKeyChordSubmitsLikeRust(t *testing.T) {
 	if len(requests) != 0 || model.pendingKeyChordPrefix != "ctrl-x" {
 		t.Fatalf("first stroke submitted=%#v pending=%q", requests, model.pendingKeyChordPrefix)
 	}
-	if !strings.Contains(model.notice, "second key") {
-		t.Fatalf("pending chord notice = %q", model.notice)
+	if strings.Contains(model.notice, "second key") {
+		t.Fatalf("pending chord still uses the footer notice: %q", model.notice)
 	}
 	model.Update(key(keymsg.KeyCtrlS))
 	if len(requests) != 1 || requests[0].Prompt != "send with chord" {

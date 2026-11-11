@@ -39,6 +39,7 @@ func (m *Model) handleLeaderChordKey(keySpec string, allow func(action string) b
 		if keySpec == prefix {
 			m.leaderChordPending = true
 			m.leaderChordStartedAt = now
+			m.leaderChordPrefix = keySpec
 			m.leaderChordActions = actions
 			return true, nil
 		}
@@ -63,6 +64,9 @@ var leaderShortcuts = []struct {
 	{"global", "focus_main_composer", true},
 	{"global", "focus_sidebar_content", true},
 	{"global", "focus_sidebar_tabs", true},
+	{"global", "close_sidebar_tab", true},
+	{"global", "sidebar_up", true},
+	{"global", "sidebar_down", true},
 	{"global", "hide_pane", true},
 	{"global", "focus_pane_left", true},
 	{"global", "focus_pane_right", true},
@@ -83,6 +87,9 @@ var implicitWorkspaceLeaderCompletions = map[string][]string{
 	"global.focus_main_composer":   {"c"},
 	"global.focus_sidebar_content": {"s"},
 	"global.focus_sidebar_tabs":    {"t"},
+	"global.close_sidebar_tab":     {"w"},
+	"global.sidebar_up":            {"shift-tab", "up", "k"},
+	"global.sidebar_down":          {"tab", "down", "j"},
 	"global.hide_pane":             {"-"},
 	"global.focus_pane_left":       {"left", "h"},
 	"global.focus_pane_right":      {"right", "l"},
@@ -183,6 +190,14 @@ func (m *Model) dispatchLeaderAction(action string) bubbletea.Cmd {
 		return m.focusSidebarContent()
 	case "global.focus_sidebar_tabs":
 		return m.openSidebarChooser()
+	case "global.close_sidebar_tab":
+		return m.closeSidebarTab()
+	case "global.sidebar_up":
+		m.moveSidebarChooserChoice(-1)
+		return nil
+	case "global.sidebar_down":
+		m.moveSidebarChooserChoice(1)
+		return nil
 	case "global.hide_pane":
 		return m.hideFocusedSidePane()
 	case "global.toggle_pane_zoom":
@@ -210,6 +225,7 @@ func (m *Model) clearLeaderChord() {
 	}
 	m.leaderChordPending = false
 	m.leaderChordStartedAt = time.Time{}
+	m.leaderChordPrefix = ""
 	m.leaderChordCompletion = ""
 	m.leaderChordActions = nil
 	m.leaderChordAction = ""

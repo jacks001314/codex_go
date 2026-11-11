@@ -93,6 +93,8 @@ func (m *Model) resetThreadScopedState() {
 	m.mainFind = mainTranscriptFind{}
 	m.activityFocus = transcriptActivityFocus{}
 	m.activityFollow = true
+	m.transcriptSelection.clear()
+	m.transcriptSelectionRegion = transcriptMouseSelectionRegion{}
 	m.transcriptUnseenActivity = false
 	m.transcriptHistoryPartial = false
 	m.transcriptSeenRevisionSet = false

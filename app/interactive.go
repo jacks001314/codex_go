@@ -1567,6 +1567,11 @@ func isRealTerminal(value any) bool {
 }
 
 func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Reader, stdout io.Writer, stderr io.Writer, worktreeStartup *interactiveWorktreeStartup, forkedSession *session.Record) error {
+	// Rust #60662: a gateway that needs device sign-in is completed before the
+	// terminal is initialized, including for resumed and worktree launches.
+	if err := maybeRunGatewayDeviceLogin(ctx, root, nil, stdout); err != nil {
+		return err
+	}
 	if worktreeStartup != nil {
 		// A launch that exits before binding a thread keeps the checkout on disk
 		// and prints Rust's recovery instructions.
