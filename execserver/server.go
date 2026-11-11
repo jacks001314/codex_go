@@ -2709,11 +2709,14 @@ func prepareExecProcess(params *ExecParams, allowedSymlinkedCodexHome string) ([
 		ResolvedPermissionProfileJSON: profileJSON,
 		CWD:                           cwd,
 		WorkspaceRoots:                sandboxContext.WorkspaceRoots,
-		UseLegacyLandlock:             sandboxContext.UseLegacyLandlock,
-		AllowNetworkForProxy:          params.EnforceManagedNetwork,
-		ManagedNetworkJSON:            managedNetworkJSON,
-		AllowedSymlinkedCodexHome:     allowedSymlinkedCodexHome,
-		Command:                       command,
+		// Rust #60663: the execution host supplies the helper binaries and the
+		// validated managed-network CA bundle the sandboxed child must read.
+		SandboxReadableRoots:      execServerRuntimeReadablePaths(params),
+		UseLegacyLandlock:         sandboxContext.UseLegacyLandlock,
+		AllowNetworkForProxy:      params.EnforceManagedNetwork,
+		ManagedNetworkJSON:        managedNetworkJSON,
+		AllowedSymlinkedCodexHome: allowedSymlinkedCodexHome,
+		Command:                   command,
 	})
 	if err != nil {
 		return nil, "", sandbox.SandboxTypeNone, requestError(-32602, fmt.Sprintf("failed to prepare process sandbox: %v", err))
@@ -2744,6 +2747,46 @@ func prepareExecProcess(params *ExecParams, allowedSymlinkedCodexHome string) ([
 		plan.Command = wrapped
 	}
 	return plan.Command, plan.CWD, plan.SandboxType, nil
+}
+
+// execServerRuntimeReadablePaths lists executor-owned files that restricted
+// reads must expose to a sandboxed child (Rust #60663): the helper executable
+// that re-enters the sandbox to apply seccomp, and the CA bundle selected by
+// the child environment for a managed network. Paths are validated on this
+// host and deduplicated; a relative or missing path is ignored.
+func execServerRuntimeReadablePaths(params *ExecParams) []string {
+	var paths []string
+	if runtime.GOOS == "linux" {
+		if executable, err := os.Executable(); err == nil {
+			if absolute, absErr := filepath.Abs(executable); absErr == nil {
+				paths = append(paths, filepath.Clean(absolute))
+			}
+		}
+		if helper, err := exec.LookPath("codex-linux-sandbox"); err == nil {
+			if absolute, absErr := filepath.Abs(helper); absErr == nil {
+				paths = append(paths, filepath.Clean(absolute))
+			}
+		}
+	}
+	if params != nil {
+		for _, key := range []string{"CODEX_CA_CERTIFICATE", "SSL_CERT_FILE"} {
+			path := strings.TrimSpace(params.Env[key])
+			if path == "" || !filepath.IsAbs(path) {
+				continue
+			}
+			paths = append(paths, filepath.Clean(path))
+		}
+	}
+	seen := map[string]bool{}
+	out := paths[:0]
+	for _, path := range paths {
+		if path == "" || seen[path] {
+			continue
+		}
+		seen[path] = true
+		out = append(out, path)
+	}
+	return out
 }
 
 // managedNetworkSandboxContextJSON serializes the prepared managed-network

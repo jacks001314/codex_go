@@ -4016,6 +4016,13 @@ func threadEnvironmentsFromRecord(record *session.Record) []ThreadEnvironment {
 	if selections == nil {
 		return nil
 	}
+	return threadEnvironmentsFromSelections(selections)
+}
+
+// threadEnvironmentsFromSelections converts validated turn environment
+// selections into the protocol shape used by thread and settings snapshots
+// (Rust #60655).
+func threadEnvironmentsFromSelections(selections []map[string]any) []ThreadEnvironment {
 	out := make([]ThreadEnvironment, 0, len(selections))
 	for _, selected := range selections {
 		cwd := strings.TrimSpace(firstNonEmpty(

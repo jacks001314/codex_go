@@ -289,8 +289,13 @@ type SettingsUpdateParams struct {
 	// (Rust #44905).
 	DisabledPluginIDs *[]string `json:"disabledPluginIds,omitempty"`
 	CWD               *string   `json:"cwd,omitempty"`
-	ApprovalPolicy    *string   `json:"approvalPolicy,omitempty"`
-	ApprovalsReviewer *string   `json:"approvalsReviewer,omitempty"`
+	// Environments replaces the environments used by future turns. Omitted or
+	// null preserves the selection unless cwd is also provided, which selects
+	// the defaults for that directory; an explicit empty list clears it
+	// (Rust #60655).
+	Environments      *[]map[string]any `json:"environments,omitempty"`
+	ApprovalPolicy    *string           `json:"approvalPolicy,omitempty"`
+	ApprovalsReviewer *string           `json:"approvalsReviewer,omitempty"`
 	// RequestedApprovalsReviewer records the explicit choice separately from
 	// the effective value (Rust #59272). Direct settings updates leave it unset.
 	RequestedApprovalsReviewer *string                    `json:"requestedApprovalsReviewer,omitempty"`
@@ -393,7 +398,11 @@ type Settings struct {
 	// filter plugin capabilities (Rust #44905).
 	DisabledPluginIDs []string `json:"disabledPluginIds"`
 	CWD               string   `json:"cwd"`
-	ApprovalPolicy    string   `json:"approvalPolicy"`
+	// Environments is the ordered selection for future turns, primary first.
+	// nil means the server does not expose the selection; an empty list means
+	// none are selected (Rust #60655).
+	Environments   *[]ThreadEnvironment `json:"environments"`
+	ApprovalPolicy string               `json:"approvalPolicy"`
 	// ApprovalsReviewer is the effective reviewer after managed requirements.
 	ApprovalsReviewer string `json:"approvalsReviewer"`
 	// RequestedApprovalsReviewer keeps the explicit selection so a resume can
@@ -420,25 +429,27 @@ func (s *Settings) MarshalJSON() ([]byte, error) {
 		return []byte("null"), nil
 	}
 	return json.Marshal(struct {
-		DisabledPluginIDs          []string       `json:"disabledPluginIds"`
-		CWD                        string         `json:"cwd"`
-		ApprovalPolicy             any            `json:"approvalPolicy"`
-		ApprovalsReviewer          string         `json:"approvalsReviewer"`
-		RequestedApprovalsReviewer string         `json:"requestedApprovalsReviewer,omitempty"`
-		SandboxPolicy              any            `json:"sandboxPolicy"`
-		ActivePermissionProfile    any            `json:"activePermissionProfile"`
-		Model                      string         `json:"model"`
-		ModelProvider              string         `json:"modelProvider"`
-		ServiceTier                *string        `json:"serviceTier"`
-		Effort                     *string        `json:"effort"`
-		Summary                    *string        `json:"summary"`
-		CollaborationMode          map[string]any `json:"collaborationMode"`
-		Personality                *string        `json:"personality"`
-		InstructionSources         []string       `json:"instructionSources"`
-		RuntimeWorkspaceRoots      []string       `json:"runtimeWorkspaceRoots"`
+		DisabledPluginIDs          []string             `json:"disabledPluginIds"`
+		CWD                        string               `json:"cwd"`
+		Environments               *[]ThreadEnvironment `json:"environments"`
+		ApprovalPolicy             any                  `json:"approvalPolicy"`
+		ApprovalsReviewer          string               `json:"approvalsReviewer"`
+		RequestedApprovalsReviewer string               `json:"requestedApprovalsReviewer,omitempty"`
+		SandboxPolicy              any                  `json:"sandboxPolicy"`
+		ActivePermissionProfile    any                  `json:"activePermissionProfile"`
+		Model                      string               `json:"model"`
+		ModelProvider              string               `json:"modelProvider"`
+		ServiceTier                *string              `json:"serviceTier"`
+		Effort                     *string              `json:"effort"`
+		Summary                    *string              `json:"summary"`
+		CollaborationMode          map[string]any       `json:"collaborationMode"`
+		Personality                *string              `json:"personality"`
+		InstructionSources         []string             `json:"instructionSources"`
+		RuntimeWorkspaceRoots      []string             `json:"runtimeWorkspaceRoots"`
 	}{
 		DisabledPluginIDs:          append([]string{}, s.DisabledPluginIDs...),
 		CWD:                        s.CWD,
+		Environments:               cloneThreadEnvironments(s.Environments),
 		ApprovalPolicy:             threadSettingsApprovalPolicy(s.ApprovalPolicy),
 		ApprovalsReviewer:          threadSettingsApprovalsReviewer(s.ApprovalsReviewer),
 		RequestedApprovalsReviewer: threadSettingsApprovalsReviewer(s.RequestedApprovalsReviewer),
@@ -906,6 +917,10 @@ func (s *ThreadExtraService) UpdateSettingsWithCommit(params *SettingsUpdatePara
 	if params.CWD != nil {
 		settings.CWD = *params.CWD
 	}
+	if params.Environments != nil {
+		environments := threadEnvironmentsFromSelections(*params.Environments)
+		settings.Environments = &environments
+	}
 	if params.ApprovalPolicy != nil {
 		settings.ApprovalPolicy = *params.ApprovalPolicy
 	}
@@ -973,6 +988,7 @@ func (s *ThreadExtraService) Settings(threadID string) *Settings {
 
 func cloneSettings(settings Settings) Settings {
 	settings.DisabledPluginIDs = append([]string{}, settings.DisabledPluginIDs...)
+	settings.Environments = cloneThreadEnvironments(settings.Environments)
 	settings.ActivePermissionProfile = cloneString(settings.ActivePermissionProfile)
 	settings.ServiceTier = cloneString(settings.ServiceTier)
 	settings.Effort = cloneString(settings.Effort)
@@ -982,6 +998,18 @@ func cloneSettings(settings Settings) Settings {
 	settings.InstructionSources = append([]string(nil), settings.InstructionSources...)
 	settings.RuntimeWorkspaceRoots = append([]string(nil), settings.RuntimeWorkspaceRoots...)
 	return settings
+}
+
+func cloneThreadEnvironments(values *[]ThreadEnvironment) *[]ThreadEnvironment {
+	if values == nil {
+		return nil
+	}
+	out := make([]ThreadEnvironment, len(*values))
+	for i := range *values {
+		out[i] = (*values)[i]
+		out[i].RuntimeWorkspaceRoots = append([]string(nil), (*values)[i].RuntimeWorkspaceRoots...)
+	}
+	return &out
 }
 
 // SetActiveDisabledPluginIDs records the plugin selection of the thread's

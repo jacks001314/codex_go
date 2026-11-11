@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -1331,6 +1332,36 @@ func (m *EnvironmentManager) DefaultEnvironmentID() (string, bool) {
 		return "", false
 	}
 	return id, true
+}
+
+// DefaultEnvironmentIDs returns the ordered environment selection used for
+// new thread startup (Rust #60655 EnvironmentManager::default_environment_ids):
+// the provider default first, followed by every other registered environment.
+func (m *EnvironmentManager) DefaultEnvironmentIDs() []string {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.hasProvider || m.providerDefault.Kind != execserverclient.EnvironmentDefaultID {
+		return nil
+	}
+	defaultID := strings.TrimSpace(m.providerDefault.ID)
+	if defaultID == "" || defaultID == execserverclient.LocalEnvironmentID {
+		return nil
+	}
+	ids := make([]string, 0, len(m.records)+1)
+	ids = append(ids, defaultID)
+	others := make([]string, 0, len(m.records))
+	for id := range m.records {
+		id = strings.TrimSpace(id)
+		if id == "" || id == defaultID {
+			continue
+		}
+		others = append(others, id)
+	}
+	sort.Strings(others)
+	return append(ids, others...)
 }
 
 func (m *EnvironmentManager) Remove(environmentID string) bool {

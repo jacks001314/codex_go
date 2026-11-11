@@ -9293,11 +9293,16 @@ func (r *RuntimeRouter) validateTurnEnvironmentSelections(environments []map[str
 		return nil
 	}
 	manager := r.requireEnvironment()
+	seen := make(map[string]bool, len(environments))
 	for i := range environments {
 		environmentID := selectionEnvironmentID(environments[i])
 		if environmentID == "" {
 			return jsonRPCInvalidRequest("environmentId is required")
 		}
+		if seen[environmentID] {
+			return jsonRPCInvalidRequest(fmt.Sprintf("duplicate turn environment id `%s`", environmentID))
+		}
+		seen[environmentID] = true
 		cwd := firstNonEmpty(
 			threadItemStringFromAnyMap(environments[i], "cwd"),
 			threadItemStringFromAnyMap(environments[i], "CWD"),
@@ -9305,6 +9310,9 @@ func (r *RuntimeRouter) validateTurnEnvironmentSelections(environments []map[str
 		cwd = strings.TrimSpace(cwd)
 		if !isAbsoluteAppPath(cwd) {
 			return jsonRPCInvalidRequest(fmt.Sprintf("invalid cwd for environment `%s`: path `%s` does not use absolute POSIX or Windows path syntax", environmentID, cwd))
+		}
+		if len(cwd) > 8*1024 {
+			return jsonRPCInvalidRequest("turn environment working directory exceeds the maximum size")
 		}
 		if _, ok := manager.Record(environmentID); !ok {
 			return jsonRPCInvalidRequest(fmt.Sprintf("unknown turn environment id `%s`", environmentID))
@@ -9467,6 +9475,9 @@ func (r *RuntimeRouter) commitThreadSettingsUpdateWithConnection(params *Setting
 	if r == nil || params == nil {
 		return nil, nil
 	}
+	if err := r.resolveThreadSettingsEnvironments(params); err != nil {
+		return nil, err
+	}
 	service := r.requireThreadExtras()
 	// Rust #59111: an incoming settings write is normalized against the latest
 	// provider catalog before it is committed and persisted.
@@ -9485,6 +9496,9 @@ func (r *RuntimeRouter) commitThreadSettingsUpdateWithConnection(params *Setting
 	}
 	r.prewarmMCPThread(params.ThreadID)
 	if committed != nil {
+		if environments := r.threadSettingsEnvironmentsForNotification(params); environments != nil {
+			committed.Environments = environments
+		}
 		notification := &SettingsUpdatedNotification{
 			ThreadID:       strings.TrimSpace(params.ThreadID),
 			ThreadSettings: *committed,
@@ -10468,7 +10482,7 @@ func (r *RuntimeRouter) applyLiveThreadModelSettings(thread *Thread) {
 }
 
 func (r *RuntimeRouter) persistThreadSettingsUpdate(params *SettingsUpdateParams, committed *Settings) error {
-	if r == nil || params == nil || (params.ApprovalPolicy == nil && params.Permissions == nil && params.DisabledPluginIDs == nil && params.CollaborationMode == nil && params.Model == nil && params.ServiceTier == nil && params.Effort == nil && params.Summary == nil && params.Personality == nil && params.CWD == nil && params.RuntimeWorkspaceRoots == nil) {
+	if r == nil || params == nil || (params.ApprovalPolicy == nil && params.Permissions == nil && params.DisabledPluginIDs == nil && params.Environments == nil && params.CollaborationMode == nil && params.Model == nil && params.ServiceTier == nil && params.Effort == nil && params.Summary == nil && params.Personality == nil && params.CWD == nil && params.RuntimeWorkspaceRoots == nil) {
 		return nil
 	}
 	threadID := session.ThreadID(strings.TrimSpace(params.ThreadID))
@@ -10479,6 +10493,15 @@ func (r *RuntimeRouter) persistThreadSettingsUpdate(params *SettingsUpdateParams
 		return nil
 	}
 	record.Metadata.Extra = ensureRecordExtra(record.Metadata.Extra)
+	if params.Environments != nil {
+		// Rust #60655: a thread settings update replaces the selection used by
+		// future turns. An empty list clears the persisted selection.
+		if len(*params.Environments) == 0 {
+			delete(record.Metadata.Extra, runtimeEnvironmentSelectionsExtraKey)
+		} else {
+			record.Metadata.Extra[runtimeEnvironmentSelectionsExtraKey] = cloneMapSlice(*params.Environments)
+		}
+	}
 	configOverrides := threadRecordConfigOverrides(record)
 	if configOverrides == nil {
 		configOverrides = map[string]any{}
@@ -10554,6 +10577,9 @@ func (r *RuntimeRouter) persistThreadSettingsUpdate(params *SettingsUpdateParams
 	}
 	if err := r.runtimeSaveThreadRecord(record); err != nil {
 		return err
+	}
+	if params.Environments != nil {
+		r.propagateInheritedEnvironmentConfigurations(string(threadID), *params.Environments)
 	}
 	appliedPolicy := strings.TrimSpace(record.Metadata.ApprovalPolicy)
 	if committed != nil && strings.TrimSpace(committed.ApprovalPolicy) != "" {
