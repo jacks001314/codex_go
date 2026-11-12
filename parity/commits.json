@@ -46694,8 +46694,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "implementation_pending",
-   "evidence": []
+   "status": "complete",
+   "evidence": [
+    "Fallback titles mirror Rust fallback_thread_title: tui/app/thread_title.go FallbackThreadTitle strips markdown with goldmark, collapses whitespace, caps the input at 2000 characters and the line at 60 characters (59 plus an ellipsis, trailing space trimmed). The TUI applies it as the immediate thread name (tui/tea/thread_title_automatic.go) and the embedded interactive path reuses it (app/interactive.go interactiveAutoThreadTitle).",
+    "Generation failures keep the fallback: tui/tea/thread_title_automatic.go persists the excerpt before requesting a title and applyAutomaticThreadTitle leaves it in place when the structured turn errors or ParseGeneratedThreadTitle rejects the reply; app/recap.go already runs the hidden title turn read-only with approval policy never and Ephemeral so it never enters the visible conversation.",
+    "Tests: go test ./tui/app -run FallbackThreadTitle -count=1; go test ./tui/tea -run 'AutomaticThreadTitle|FallbackThreadTitle' -count=1; go test ./app -run InteractiveAutoThreadTitle -count=1; go test ./tui/app ./tui/tea ./app -count=1.",
+    "plan: update/plan_2026_11_12.md"
+   ]
   },
   {
    "sha": "ec51be0772c9d6fcc3613a73864f465155b6d439",

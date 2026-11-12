@@ -8,7 +8,6 @@ import (
 
 	"codex_go/protocol"
 	codextui "codex_go/tui"
-	tuiapp "codex_go/tui/app"
 	bottompane "codex_go/tui/bottom_pane"
 	chatwidget "codex_go/tui/chatwidget"
 )
@@ -105,15 +104,70 @@ func TestAutomaticThreadTitleRenameFailureClearsProvisionalLikeRust(t *testing.T
 	}
 }
 
-// TestProvisionalThreadTitleBoundsLikeRust covers normalization and the
-// 36-rune limit.
-func TestProvisionalThreadTitleBoundsLikeRust(t *testing.T) {
-	if got := tuiapp.ProvisionalThreadTitle("/status"); got != "" {
-		t.Fatalf("slash command provisional title = %q", got)
+// TestAutomaticThreadTitleUsesFallbackExcerptLikeRust covers Rust #60842:
+// the immediate title is a Markdown-stripped single line, capped at 60
+// characters, instead of the raw first message.
+func TestAutomaticThreadTitleUsesFallbackExcerptLikeRust(t *testing.T) {
+	model, renames, _ := automaticTitleModel(t, nil, `{"title":"Generated title"}`)
+	cmd := model.applyItemCompleted(&protocol.ThreadItem{
+		ID:   "user-1",
+		Type: "user_message",
+		Text: "## Fix the login timeout\n\n" + strings.Repeat("界", 70),
+	})
+	want := "Fix the login timeout " + strings.Repeat("界", 59-22) + "\u2026"
+	if model.State.ThreadName != want {
+		t.Fatalf("fallback title = %q, want %q", model.State.ThreadName, want)
 	}
-	got := tuiapp.ProvisionalThreadTitle(strings.Repeat("界", 40))
-	if len([]rune(got)) != 36 {
-		t.Fatalf("provisional runes = %d", len([]rune(got)))
+	runTeaCmd(t, model, cmd)
+	if model.State.ThreadName != "Generated title" {
+		t.Fatalf("generated title = %q", model.State.ThreadName)
+	}
+	if len(*renames) != 2 || (*renames)[0] != "thread-auto:"+want {
+		t.Fatalf("renames = %#v", *renames)
+	}
+}
+
+// TestAutomaticThreadTitleKeepsFallbackWhenGenerationFailsLikeRust covers
+// Rust #60842: a failed or invalid title keeps the first-message excerpt.
+func TestAutomaticThreadTitleKeepsFallbackWhenGenerationFailsLikeRust(t *testing.T) {
+	for name, suggestion := range map[string]string{
+		"error":   "",
+		"invalid": `{"title":"   "}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			state := codextui.NewState(nil)
+			state.SetThreadID("thread-auto")
+			renames := []string{}
+			model := NewModel(state, Options{
+				Width:  100,
+				Height: 30,
+				OnRenameThread: func(threadID string, rename string) error {
+					renames = append(renames, threadID+":"+rename)
+					return nil
+				},
+				OnSuggestThreadName: func(_ string, _ RecapThreadOptions, _ string, _ map[string]any) (string, error) {
+					if name == "error" {
+						return "", errors.New("title generation failed")
+					}
+					return suggestion, nil
+				},
+			})
+			cmd := model.applyItemCompleted(&protocol.ThreadItem{
+				ID:   "user-1",
+				Type: "user_message",
+				Text: "# Fix the login timeout",
+			})
+			if model.State.ThreadName != "Fix the login timeout" {
+				t.Fatalf("fallback title = %q", model.State.ThreadName)
+			}
+			runTeaCmd(t, model, cmd)
+			if model.State.ThreadName != "Fix the login timeout" {
+				t.Fatalf("fallback title was lost: %q", model.State.ThreadName)
+			}
+			if len(renames) != 1 || renames[0] != "thread-auto:Fix the login timeout" {
+				t.Fatalf("renames = %#v", renames)
+			}
+		})
 	}
 }
 

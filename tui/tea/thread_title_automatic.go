@@ -35,7 +35,9 @@ func (m *Model) startAutomaticThreadTitle(text string) bubbletea.Cmd {
 		return nil
 	}
 	prompt := strings.TrimSpace(text)
-	provisional := tuiapp.ProvisionalThreadTitle(prompt)
+	// Rust #60842: desktop shows a single line of the first message until the
+	// generated title arrives, and keeps it when generation fails.
+	provisional := tuiapp.FallbackThreadTitle(prompt)
 	if provisional == "" {
 		return nil
 	}

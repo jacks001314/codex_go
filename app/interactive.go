@@ -2013,12 +2013,12 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 	return runPendingDaemonUpdate(ctx, tuiTelemetry, model, stdout, stderr)
 }
 
-// interactiveAutoThreadTitle derives a provisional thread title from the first
-// user prompt (normalized whitespace, 36-char bound, no slash commands). It is
-// the Go automatic-thread-naming baseline for #42749 until a model-generated
-// title request is available.
+// interactiveAutoThreadTitle derives the first-message thread title used by the
+// embedded TUI: markdown is stripped, whitespace collapses, and the line is
+// capped at 60 characters with an ellipsis. Rust #60842 keeps this fallback
+// title when automatic generation fails.
 func interactiveAutoThreadTitle(prompt string) string {
-	return tuiapp.ProvisionalThreadTitle(prompt)
+	return tuiapp.FallbackThreadTitle(prompt)
 }
 
 // interactiveLocalThreadStartParams builds the thread/start parameters for the

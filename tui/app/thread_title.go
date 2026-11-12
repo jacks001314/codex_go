@@ -5,6 +5,10 @@ import (
 	"io"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/ast"
+	"github.com/yuin/goldmark/text"
 )
 
 // Rust parity: codex-rs/tui/src/app/thread_title.rs (#40495).
@@ -29,19 +33,62 @@ type generatedThreadTitle struct {
 	Title string `json:"title"`
 }
 
-// ProvisionalThreadTitle derives the immediate first-message title: no slash
-// commands, normalized whitespace, bounded to the display limit.
-func ProvisionalThreadTitle(prompt string) string {
-	prompt = strings.TrimSpace(prompt)
-	if prompt == "" || strings.HasPrefix(prompt, "/") {
+// FallbackThreadTitle mirrors Rust #60842 fallback_thread_title: the first
+// message shown as a single line until (and instead of) a generated title. The
+// markdown formatting is dropped, whitespace collapses, and a title longer than
+// 60 characters keeps 59 characters plus an ellipsis.
+func FallbackThreadTitle(message string) string {
+	const (
+		maxChars       = 60
+		inputCharLimit = 2000
+	)
+	trimmed := strings.TrimSpace(message)
+	if trimmed == "" {
 		return ""
 	}
-	title := strings.Join(strings.Fields(prompt), " ")
-	runes := []rune(title)
-	if len(runes) > ThreadTitleMaxChars {
-		runes = runes[:ThreadTitleMaxChars]
+	runes := []rune(trimmed)
+	if len(runes) > inputCharLimit {
+		trimmed = string(runes[:inputCharLimit])
 	}
-	return string(runes)
+	plain := threadTitlePlainText(trimmed)
+	title := strings.Join(strings.Fields(plain), " ")
+	if title == "" {
+		return ""
+	}
+	titleRunes := []rune(title)
+	if len(titleRunes) > maxChars {
+		head := strings.TrimRight(string(titleRunes[:maxChars-1]), " ")
+		return head + "\u2026"
+	}
+	return title
+}
+
+// threadTitlePlainText drops markdown formatting while keeping text, inline
+// code and word breaks (Rust walks pulldown-cmark events for the same effect).
+func threadTitlePlainText(markdown string) string {
+	source := []byte(markdown)
+	root := goldmark.DefaultParser().Parse(text.NewReader(source))
+	var builder strings.Builder
+	_ = ast.Walk(root, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			switch node.Kind() {
+			case ast.KindParagraph, ast.KindHeading, ast.KindListItem, ast.KindCodeBlock, ast.KindFencedCodeBlock:
+				builder.WriteByte(' ')
+			}
+			return ast.WalkContinue, nil
+		}
+		switch typed := node.(type) {
+		case *ast.Text:
+			builder.Write(typed.Segment.Value(source))
+			if typed.SoftLineBreak() || typed.HardLineBreak() {
+				builder.WriteByte(' ')
+			}
+		case *ast.ThematicBreak:
+			builder.WriteByte(' ')
+		}
+		return ast.WalkContinue, nil
+	})
+	return builder.String()
 }
 
 // ThreadTitleOutputSchema constrains the temporary structured title turn.
