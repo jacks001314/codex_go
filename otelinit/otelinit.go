@@ -155,6 +155,7 @@ func otelHeadersHelperConfig(resolved config.OtelConfig, options Options) *telem
 		Command:         command,
 		CWD:             otelCodexHome(options.CodexHome),
 		RefreshInterval: interval,
+		Policy:          options.NetworkPolicy,
 	}
 }
 

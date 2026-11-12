@@ -47090,13 +47090,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
     "config/otel.go resolves and validates otel.headers_helper and otel.headers_helper_refresh_interval_ms; otelinit maps them onto one shared helper that runs from CODEX_HOME with Rust's 29-minute default cadence.",
-    "telemetry/headers_helper.go runs one background worker for all explicit HTTP signals; a failed refresh replaces the cache with the error, so exports are blocked instead of falling back to stale or static credentials.",
+    "config/config.go's PROJECT_LOCAL_CONFIG_DENYLIST already strips `otel` from repository-local configuration, so a project cannot set the helper.",
+    "telemetry/headers_helper.go runs one background worker for all explicit HTTP signals; a failed refresh replaces the cache with the error, so exports are blocked instead of falling back to stale or static credentials, and each helper run holds a revocable AcquireForUnsupportedSDK network permit that cancels the process on revocation.",
     "The OTLP HTTP log, trace, and metric exporters merge helper headers over the static ones, disable redirects while a helper is configured, and leave the gRPC exporters on static headers.",
-    "Tests: telemetry/otel_headers_helper_like_rust_test.go (refresh, block, recovery, header precedence) and config/otel_headers_helper_like_rust_test.go (resolution and validation).",
-    "Residual: Rust forbids repository-local configuration from setting the helper and holds a revocable network permit while executing it; Go merges config layers before resolution and runs the helper without an application network policy."
+    "Tests: telemetry/otel_headers_helper_like_rust_test.go (refresh, block, recovery, header precedence, network policy) and config/otel_headers_helper_like_rust_test.go (resolution and validation)."
    ]
   }
  ]

@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"codex_go/headershelper"
+	"codex_go/network"
 )
 
 func newInjectedHeadersHelper(t *testing.T, interval time.Duration, run func(context.Context, string, string) (headershelper.Headers, error)) *otelHeadersHelper {
@@ -139,5 +141,36 @@ func TestOTLPLogsExporterUsesRefreshedHeadersLikeRust(t *testing.T) {
 	}
 	if headers.Get("X-Auth") != "fresh" || headers.Get("X-Static") != "kept" || headers.Get("X-Helper") != "yes" {
 		t.Fatalf("export headers = %#v", headers)
+	}
+}
+
+// Mirrors Rust #61028: the helper can open its own sockets, so a restricted
+// application policy disables it entirely instead of running it unobserved.
+func TestOTelHeadersHelperRespectsNetworkPolicyLikeRust(t *testing.T) {
+	target, err := url.Parse("https://collector.test/v1/logs")
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	policy := network.NetworkPolicy{}.RestrictToEndpoints([]*url.URL{target})
+	ran := make(chan struct{}, 1)
+	helper := &otelHeadersHelper{
+		ready:  make(chan struct{}),
+		stop:   make(chan struct{}),
+		policy: policy,
+		run: func(context.Context, string, string) (headershelper.Headers, error) {
+			ran <- struct{}{}
+			return headerResponse(t, `{"X-Auth":"should-not-run"}`), nil
+		},
+	}
+	go helper.loop("helper", t.TempDir(), time.Hour)
+	t.Cleanup(helper.Close)
+
+	if _, err := helper.headersForExport(context.Background()); !errors.Is(err, network.ErrNetworkPolicyUnsupportedTransport) {
+		t.Fatalf("headersForExport() error = %v, want the unsupported-transport policy error", err)
+	}
+	select {
+	case <-ran:
+		t.Fatal("the helper ran under a restricted network policy")
+	default:
 	}
 }

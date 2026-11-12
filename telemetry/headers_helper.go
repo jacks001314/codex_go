@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"codex_go/headershelper"
+	"codex_go/network"
 )
 
 // DefaultOTelHeadersHelperRefreshInterval is Rust's 29-minute default refresh.
@@ -21,6 +22,10 @@ type OTelHeadersHelperConfig struct {
 	Command         string
 	CWD             string
 	RefreshInterval time.Duration
+	// Policy is the application policy the helper runs under. The script can
+	// open its own sockets, so it needs the same revocable permit as an SDK that
+	// cannot enforce individual destinations (Rust #61028).
+	Policy network.NetworkPolicy
 }
 
 // otelHeadersHelper refreshes collector headers on a background worker. One
@@ -35,6 +40,7 @@ type otelHeadersHelper struct {
 	stop    chan struct{}
 
 	stopOnce sync.Once
+	policy   network.NetworkPolicy
 	run      func(context.Context, string, string) (headershelper.Headers, error)
 }
 
@@ -53,9 +59,10 @@ func startOTelHeadersHelper(config *OTelHeadersHelperConfig) (*otelHeadersHelper
 		interval = DefaultOTelHeadersHelperRefreshInterval
 	}
 	helper := &otelHeadersHelper{
-		ready: make(chan struct{}),
-		stop:  make(chan struct{}),
-		run:   headershelper.Run,
+		ready:  make(chan struct{}),
+		stop:   make(chan struct{}),
+		policy: config.Policy,
+		run:    headershelper.Run,
 	}
 	go helper.loop(command, config.CWD, interval)
 	return helper, nil
@@ -64,7 +71,7 @@ func startOTelHeadersHelper(config *OTelHeadersHelperConfig) (*otelHeadersHelper
 func (h *otelHeadersHelper) loop(command string, cwd string, interval time.Duration) {
 	first := true
 	for {
-		fetched, err := h.run(context.Background(), command, cwd)
+		fetched, err := h.execute(context.Background(), command, cwd)
 		h.mu.Lock()
 		if err != nil {
 			h.headers = nil
@@ -85,6 +92,38 @@ func (h *otelHeadersHelper) loop(command string, cwd string, interval time.Durat
 			timer.Stop()
 			return
 		}
+	}
+}
+
+// execute runs one helper invocation under a revocable network permit. A
+// revoking policy cancels the running helper process instead of waiting for it.
+func (h *otelHeadersHelper) execute(ctx context.Context, command string, cwd string) (headershelper.Headers, error) {
+	permit, err := h.policy.AcquireForUnsupportedSDK()
+	if err != nil {
+		return headershelper.Headers{}, err
+	}
+	defer permit.Release()
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	type outcome struct {
+		headers headershelper.Headers
+		err     error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		headers, runErr := h.run(runCtx, command, cwd)
+		done <- outcome{headers: headers, err: runErr}
+	}()
+	select {
+	case result := <-done:
+		if checkErr := permit.Check(); checkErr != nil {
+			return headershelper.Headers{}, checkErr
+		}
+		return result.headers, result.err
+	case <-permit.Revoked():
+		cancel()
+		<-done
+		return headershelper.Headers{}, network.ErrNetworkPolicyRevoked
 	}
 }
 
