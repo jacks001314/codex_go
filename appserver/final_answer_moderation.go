@@ -43,12 +43,15 @@ func (r *RuntimeRouter) recordFinalAnswerModeration(threadID string, turnID stri
 	if key == "" {
 		return
 	}
+	// Rust #60904: the answer item carries the narrowed moderation contract,
+	// not the stream's wrapper object.
+	normalized := normalizeFinalAnswerModeration(metadata)
 	r.finalAnswerModerationMu.Lock()
 	defer r.finalAnswerModerationMu.Unlock()
 	if r.finalAnswerModeration == nil {
 		r.finalAnswerModeration = map[string]any{}
 	}
-	r.finalAnswerModeration[key] = metadata
+	r.finalAnswerModeration[key] = normalized
 }
 
 // takeFinalAnswerModeration returns the moderation metadata recorded for one

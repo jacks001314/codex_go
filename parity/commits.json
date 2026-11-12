@@ -46560,8 +46560,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "implementation_pending",
-   "evidence": []
+   "status": "complete",
+   "evidence": [
+    "historynotes/testdata/tool_schemas.json pins all nine tool parameter schemas; TestHistoryNotesToolSchemasMatchSnapshotLikeRust and TestHistoryNotesEncryptedFieldsStayMarkedLikeRust.",
+    "plan: update/plan_2026_11_12.md"
+   ]
   },
   {
    "sha": "4f8205c8084168d264083b4113ac00490484555f",
@@ -46570,8 +46573,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "implementation_pending",
-   "evidence": []
+   "status": "not_applicable",
+   "evidence": [
+    "String -> ContextWindowId newtype refactor; the wire format is unchanged and Go stores window ids as strings throughout history, rollout and state."
+   ]
   },
   {
    "sha": "95dcd1e8378021080bf380e42587ef891f611897",
@@ -46606,8 +46611,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "implementation_pending",
-   "evidence": []
+   "status": "complete",
+   "evidence": [
+    "Go's history/notes tool schemas already express the typed request contract (nullable anyOf, minimum, enums, encrypted extension); the snapshot above freezes that surface so drift fails the build.",
+    "plan: update/plan_2026_11_12.md"
+   ]
   },
   {
    "sha": "340a18ed7cd0aea3bc218838d9ac1f0f30efb1ac",
@@ -46616,8 +46624,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "implementation_pending",
-   "evidence": []
+   "status": "not_applicable",
+   "evidence": [
+    "Go derives model-facing ids deterministically from the thread id plus the item payload (responsesLiteItemID) instead of keeping an allocation registry, so there are no reserved allocations to restore in saved history."
+   ]
   },
   {
    "sha": "c1934fc99e6b40ddff4261c910ce7733e3abea26",
@@ -46733,8 +46743,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "implementation_pending",
-   "evidence": []
+   "status": "complete",
+   "evidence": [
+    "mcp/http_client.go refreshOAuthTokenForRequest holds the cross-process credential lock through the authoritative re-read, adopts a competitor's newer credential and never replays a retired refresh token; retireRefreshTokenWithLockHeld compares the stored credential before retiring.",
+    "plan: update/plan_2026_11_12.md"
+   ]
   },
   {
    "sha": "3a45bbba3cae5b73ed17615ae2bfcb682cf5ecfd",
@@ -46743,8 +46756,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "implementation_pending",
-   "evidence": []
+   "status": "not_applicable",
+   "evidence": [
+    "Rust's in-process app-server client waits for an initialized acknowledgement. Go's in-process handshake is synchronous: app/local_tui_init.go calls the router directly and the response returns after initialize is processed, so there is no async acknowledgement to wait for."
+   ]
   },
   {
    "sha": "f096185f3a2369f19971ccc6e5b2fb6030904648",
@@ -46801,8 +46816,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "implementation_pending",
-   "evidence": []
+   "status": "complete",
+   "evidence": [
+    "appserver/agent_message_display.go validates the versioned display contract (show/hide/block, version 1) and leaves an unreadable instruction restricted; the answer item now carries the narrowed {moderated, display} object; TestAgentMessageDisplay* cover both modes and the fail-closed path.",
+    "plan: update/plan_2026_11_12.md"
+   ]
   },
   {
    "sha": "561f0f5cf0f29c62bd3233c54dc21fcaf4a61c33",
@@ -46851,8 +46869,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "implementation_pending",
-   "evidence": []
+   "status": "not_applicable",
+   "evidence": [
+    "Same design difference: Go has no thread-local model-facing id generator state to replay or compact; ids are a pure function of the payload."
+   ]
   },
   {
    "sha": "5a529c2909eb7f169b1f1fb2ed4893718504ffba",
@@ -46941,8 +46961,10 @@
    "domains": [
     "codex_go"
    ],
-   "status": "implementation_pending",
-   "evidence": []
+   "status": "not_applicable",
+   "evidence": [
+    "Go strips only unprefixed ids from requests (stripResponseInputItemID) and has no allocation metadata to preserve when a provider echoes a bare id."
+   ]
   },
   {
    "sha": "6bfdc75f0d9e6fae313234f694839866d7c63c39",
@@ -46951,8 +46973,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "implementation_pending",
-   "evidence": []
+   "status": "complete",
+   "evidence": [
+    "Reactive MCP OAuth refreshes run under their own bounded context and persist only through the locked transaction, so cancelling the originating request cannot abandon a half-applied credential.",
+    "plan: update/plan_2026_11_12.md"
+   ]
   }
  ]
 }
