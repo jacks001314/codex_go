@@ -46834,8 +46834,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "implementation_pending",
-   "evidence": []
+   "status": "partial",
+   "evidence": [
+    "Legacy exposure aligns: appserver/mcp_executor_discovery.go applyExecutorMCPServers merges executor-discovered declarations by name and keeps the first environment's server, letting a same-environment plugin registration be replaced by that executor's config, which matches the Rust legacy branch of #60905 (McpServerExposure::Legacy keeps one winner per name).",
+    "Residual: the environment-qualified mode is not implemented. Rust threads an McpServerKey (name plus environment id) through catalogs, connections, tool calls, resources and approval tracking and exposes environment-scoped tools under stable environment namespaces when the disabled-by-default multi_environment_mcp feature is on. Go still keys mcp.RuntimeConfig.Servers, ResolvedCatalog.Servers, MCPService client caches and per-server approvals by name string (mcp/config.go, mcp/catalog_priority.go, mcp/api.go), so same-named servers on different executors cannot be addressed independently, scoped resource listings carry no environment_id, and executor-scoped elicitation review cannot resolve the owning environment's permissions.",
+    "The feature flag is registered but inert: features/features.go already lists multi_environment_mcp as under development and disabled by default.",
+    "Follow-up needs one ServerKey refactor across the mcp package (catalog, connection pool, tool naming, resources, approvals) plus app-server resource request plumbing; tracked in update/plan_2026_11_12.md."
+   ]
   },
   {
    "sha": "c95b72ed6f00348c6da5ab95b740398094023ce8",
