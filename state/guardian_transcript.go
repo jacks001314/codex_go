@@ -64,6 +64,14 @@ type GuardianTranscriptEntry struct {
 	// assistant answers and encrypted native evidence stay required, so a
 	// budget that cannot fit them rejects the review instead.
 	Optional bool
+	// SelectedExecResult marks a Code Mode exec output whose completed nested
+	// tool calls include one the host selected for its own elastic reservation
+	// (Rust #60914 BudgetPriority::SelectedExecResult).
+	SelectedExecResult bool
+	// ExecNestedTools lists the nested tool names the host recorded for this
+	// exec output. The elastic preparation decides which of them the configured
+	// selection names, so collection stays configuration-free.
+	ExecNestedTools []string
 	// Historical marks user instructions and manual approvals. They stay
 	// complete through collection and retention; only the complete-request
 	// budget may shorten them, oldest first, after optional evidence is gone

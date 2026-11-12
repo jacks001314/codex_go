@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"strings"
 
 	codexctx "codex_go/context"
 	"codex_go/state"
@@ -71,6 +72,7 @@ func guardianSyncElasticBudgetFromValues(values map[string]any) (*state.Guardian
 		return nil, fmt.Errorf("sync_elastic_sections is required when sync_elastic_budgeting is enabled")
 	}
 	sections := make(map[state.GuardianElasticSection]state.GuardianElasticSectionLimits, len(rawSections))
+	var selectedExecToolNames []string
 	for name, rawLimits := range rawSections {
 		table, ok := rawLimits.(map[string]any)
 		if !ok {
@@ -78,7 +80,7 @@ func guardianSyncElasticBudgetFromValues(values map[string]any) (*state.Guardian
 		}
 		for field := range table {
 			switch field {
-			case "min_total_section_tokens", "max_section_entry_tokens", "max_total_section_tokens":
+			case "min_total_section_tokens", "max_section_entry_tokens", "max_total_section_tokens", "nested_tool_names":
 			default:
 				return nil, fmt.Errorf("features.guardianv2.sync_elastic_sections.%s: unknown field %q", name, field)
 			}
@@ -112,9 +114,16 @@ func guardianSyncElasticBudgetFromValues(values map[string]any) (*state.Guardian
 		if _, duplicate := sections[section]; duplicate {
 			return nil, fmt.Errorf("duplicate sync_elastic_sections section: %s", name)
 		}
+		nestedToolNames, nestedErr := guardianElasticNestedToolNames(table, name, section)
+		if nestedErr != nil {
+			return nil, nestedErr
+		}
+		if len(nestedToolNames) > 0 {
+			selectedExecToolNames = nestedToolNames
+		}
 		sections[section] = limits
 	}
-	policy := &state.GuardianElasticBudgetConfig{Sections: sections}
+	policy := &state.GuardianElasticBudgetConfig{Sections: sections, SelectedExecToolNames: selectedExecToolNames}
 	if err := policy.Validate(); err != nil {
 		return nil, err
 	}
@@ -139,4 +148,44 @@ func guardianElasticConfigToken(table map[string]any, field string, section stri
 func guardianElasticConfigNonNegativeInt(raw any) (int, bool) {
 	value, ok := configInt(raw)
 	return value, ok && value >= 0
+}
+
+// guardianElasticNestedToolNames reads the exact nested Code Mode tool names
+// that select transcript_selected_exec_results evidence (Rust #60914). Only
+// that section may carry them, and the list must be non-empty with no blank
+// entries.
+func guardianElasticNestedToolNames(table map[string]any, name string, section state.GuardianElasticSection) ([]string, error) {
+	raw, present := table["nested_tool_names"]
+	if section != state.GuardianElasticSectionTranscriptSelectedExecResults {
+		if present {
+			return nil, fmt.Errorf("nested_tool_names is only supported for transcript_selected_exec_results, found in %s", name)
+		}
+		return nil, nil
+	}
+	if !present || raw == nil {
+		return nil, fmt.Errorf("transcript_selected_exec_results requires nonempty nested_tool_names")
+	}
+	values, ok := raw.([]any)
+	if !ok {
+		if strings, ok := raw.([]string); ok {
+			values = make([]any, 0, len(strings))
+			for _, value := range strings {
+				values = append(values, value)
+			}
+		} else {
+			return nil, fmt.Errorf("features.guardianv2.sync_elastic_sections.%s.nested_tool_names must be a list of strings", name)
+		}
+	}
+	if len(values) == 0 {
+		return nil, fmt.Errorf("transcript_selected_exec_results requires nonempty nested_tool_names")
+	}
+	names := make([]string, 0, len(values))
+	for _, value := range values {
+		text, ok := value.(string)
+		if !ok || strings.TrimSpace(text) == "" {
+			return nil, fmt.Errorf("transcript_selected_exec_results requires nonempty nested_tool_names")
+		}
+		names = append(names, strings.TrimSpace(text))
+	}
+	return names, nil
 }

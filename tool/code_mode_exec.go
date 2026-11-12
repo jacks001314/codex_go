@@ -2756,6 +2756,16 @@ func codeModeIdentifier(value string) string {
 	return b.String()
 }
 
+// CodeModeNestedIdentifier normalizes a nested tool key the way Code Mode
+// exposes it, so a host-selected name matches its normalized spelling
+// (Rust normalize_code_mode_identifier, #60914).
+func CodeModeNestedIdentifier(value string) string {
+	if identifier := codeModeIdentifier(value); identifier != "" {
+		return identifier
+	}
+	return "_"
+}
+
 func normalizeNestedExecOutput(value string) string {
 	if marker := strings.Index(value, "Output:\n"); marker >= 0 {
 		value = value[marker+len("Output:\n"):]

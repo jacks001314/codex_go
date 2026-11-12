@@ -31,6 +31,7 @@ import (
 	"codex_go/session"
 	"codex_go/state"
 	"codex_go/telemetry"
+	"codex_go/tool"
 	"codex_go/turn"
 	"codex_go/utils"
 
@@ -1582,6 +1583,9 @@ reviewAttempt:
 				if omittedCallID != "" {
 					entries = state.GuardianTranscriptWithoutProposedCall(entries, omittedCallID)
 				}
+				if elasticBudget != nil && len(elasticBudget.SelectedExecToolNames) > 0 {
+					markGuardianSelectedExecResults(entries, elasticBudget.SelectedExecToolNames)
+				}
 				options.TranscriptOmissionNote = selection.OmissionNote
 			} else if entries == nil {
 				entries = make([]state.GuardianTranscriptEntry, 0, len(transcript))
@@ -2583,6 +2587,64 @@ func guardianTranscriptRetainedSource(
 	return nil, ""
 }
 
+// guardianExecOutputNestedTools returns the nested Code Mode tool names the
+// host recorded for one tool output, or nil when the item is not an output or
+// its inventory is not final (Rust #60914 reads the same recorded inventory).
+func (r *RuntimeRouter) guardianExecOutputNestedTools(threadID string, item *session.Item) []string {
+	if r == nil || item == nil {
+		return nil
+	}
+	itemType := strings.ToLower(strings.TrimSpace(item.Type))
+	switch itemType {
+	case "function_call_output", "custom_tool_call_output", "tool_output":
+	default:
+		return nil
+	}
+	callID := strings.TrimSpace(item.CallID)
+	if callID == "" {
+		return nil
+	}
+	recorder := r.executedToolCallRecorder(threadID)
+	if recorder == nil {
+		return nil
+	}
+	names, ok := recorder.ExecOutputNestedToolNames(callID)
+	if !ok {
+		return nil
+	}
+	return names
+}
+
+// markGuardianSelectedExecResults flags the transcript entries whose recorded
+// nested calls match the configured selection, in either their recorded or
+// normalized Code Mode spelling (Rust #60914).
+func markGuardianSelectedExecResults(entries []state.GuardianTranscriptEntry, selected []string) {
+	if len(entries) == 0 || len(selected) == 0 {
+		return
+	}
+	wanted := make(map[string]bool, len(selected)*2)
+	for _, name := range selected {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		wanted[name] = true
+		wanted[tool.CodeModeNestedIdentifier(name)] = true
+	}
+	if len(wanted) == 0 {
+		return
+	}
+	for index := range entries {
+		for _, name := range entries[index].ExecNestedTools {
+			name = strings.TrimSpace(name)
+			if wanted[name] || wanted[tool.CodeModeNestedIdentifier(name)] {
+				entries[index].SelectedExecResult = true
+				break
+			}
+		}
+	}
+}
+
 // guardianReviewTranscriptSelection collects the full host snapshot, applies
 // the shared synchronous profile's request caps and aggregate retention, and
 // preserves original entry numbering for JSON records (#43806, #51465).
@@ -2699,6 +2761,7 @@ func (r *RuntimeRouter) guardianCollectTranscriptWithProfile(threadID string, pr
 	seenNativeAgentMessageIDs := map[string][]byte{}
 	for i := range items {
 		item := items[i]
+		execNestedTools := r.guardianExecOutputNestedTools(threadID, &item)
 		// Rust #54316 (guardian-context/src/history.rs): compaction summaries are
 		// excluded from the transcript while the surrounding user messages
 		// survive, including a message whose text matches the summary.
@@ -2791,10 +2854,11 @@ func (r *RuntimeRouter) guardianCollectTranscriptWithProfile(threadID string, pr
 			}
 			collected = append(collected, guardianCollectedTranscriptEntry{
 				entry: state.GuardianTranscriptEntry{
-					Author:   "tool",
-					Label:    label,
-					LineRole: lineRole,
-					Text:     text,
+					Author:          "tool",
+					Label:           label,
+					LineRole:        lineRole,
+					Text:            text,
+					ExecNestedTools: execNestedTools,
 				},
 				evidence: state.TranscriptEvidenceEntry{
 					Kind:          state.GuardianTranscriptTool,

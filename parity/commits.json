@@ -46855,8 +46855,14 @@
    "domains": [
     "codex_go"
    ],
-   "status": "implementation_pending",
-   "evidence": []
+   "status": "complete",
+   "evidence": [
+    "state/guardian_elastic_budget.go adds the transcript_selected_exec_results section (Rust ElasticSection::TranscriptSelectedExecResults) with a zero default reservation, an optional selected_exec_tool_names list on GuardianElasticBudgetConfig with matching marshal/unmarshal, and config/guardian_elastic_config.go accepts nested_tool_names only for that section, rejecting missing, empty or blank names and any other section that carries them.",
+    "state/guardian_elastic_allocation.go maps the new GuardianElasticPrioritySelectedExecResult retention to its own allocation section, and state.GuardianTranscriptEntry.Retention honours a SelectedExecResult flag; appserver/guardian_reviewer.go marks entries by matching the recorded inventory against the configured names in recorded or normalized Code Mode spelling (tool.CodeModeNestedIdentifier).",
+    "Inventory source mirrors Rust's host-recorded completed nested calls: turn.ExecutedToolCallRecorder.ExecOutputNestedToolNames returns the final inventory only for the output that owns the cell, appserver.guardianExecOutputNestedTools reads it per tool output, and the elastic prompt path only marks entries when the section is configured.",
+    "Tests: config/guardian_elastic_selected_exec_like_rust_test.go (valid selection, missing/empty/blank names, wrong section, zero default); state/guardian_elastic_selected_exec_like_rust_test.go (section allocation, retention priority, parsing); turn/executed_tool_calls_selected_exec_like_rust_test.go (open cell, ownership, final inventory); appserver/guardian_selected_exec_results_like_rust_test.go (selection matching and recorder reads). go test ./config ./state ./turn -count=1; go test ./appserver -count=1; go build ./...",
+    "Residual: the recorder holding nested inventories is per thread and per process; after a resume it is recreated and seeded from MCP attribution only, so exec outputs recorded before the process restart are not matched until they are recorded again. Rust reconstructs ExecutedToolCalls from history; a Go history seed for retained cell bindings remains. plan: update/plan_2026_11_12.md"
+   ]
   },
   {
    "sha": "27294165dc163ce67bcb7fd68a7ac745fe20d517",

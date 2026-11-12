@@ -37,7 +37,7 @@
   ]
  },
  "certificationBlockers": [
-  "Per-commit certification of the 3821 upstream commits in bd19459358f534ed1cae464ec13d56600aeb45f2..6bfdc75f0d9e6fae313234f694839866d7c63c39 is in progress; parity/commits.json records every commit with its audit status (3121 complete, 660 not applicable, 5 implementation_pending, 0 audit_pending, 0 regression_pending, 31 partial, 4 blocked_precondition)",
+  "Per-commit certification of the 3821 upstream commits in bd19459358f534ed1cae464ec13d56600aeb45f2..6bfdc75f0d9e6fae313234f694839866d7c63c39 is in progress; parity/commits.json records every commit with its audit status (3122 complete, 660 not applicable, 4 implementation_pending, 0 audit_pending, 0 regression_pending, 31 partial, 4 blocked_precondition)",
   "4 commits are blocked on architecture: #40625 (Ignore closed agents when changing directories), #42841 (Add a native Windows MXC sandbox adapter), #43624 (Add macOS user verification with Secure Enclave signing), #55378 (Migrate the Windows MXC sandbox to `mxc-sdk`)",
   "31 commits are partial and keep the candidate open: #54776, #57267, #58718, #58720, #59003, #59739, #59767, #59944, #59987, #59988, #59994, #59995, #59999, #60000, #60001, #60002, #60018, #60019, #60020, #60021, #60022, #60026, #60027, #60029, #60031, #60032, #60046, #60048, #60075, #60172, #60905; each entry's evidence records the residual it was judged against",
   "4 domains remain open in parity/domains.json: alignment-control (partial), sqlite-runtime-version (partial), sdk-cancellation (partial), cross-platform-release (partial)",

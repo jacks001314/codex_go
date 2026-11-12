@@ -156,6 +156,11 @@ func (e GuardianTranscriptEntry) Retention() GuardianElasticRetention {
 	if !e.Optional {
 		return GuardianElasticRequired()
 	}
+	if e.SelectedExecResult {
+		// Rust #60914: the host reserved this exec output's evidence separately
+		// from ordinary tool output.
+		return GuardianElasticOptional(GuardianElasticPrioritySelectedExecResult)
+	}
 	role := strings.ToLower(strings.TrimSpace(e.LineRole + " " + e.Label + " " + e.Author))
 	if strings.Contains(role, "tool") {
 		return GuardianElasticOptional(GuardianElasticPriorityTool)

@@ -17,6 +17,11 @@ const GuardianElasticImageTokenReservation = 10_000
 // selects the transcript tool allocation group.
 const GuardianElasticPriorityTool = "tool"
 
+// GuardianElasticPrioritySelectedExecResult names the optional retention
+// priority of a Code Mode exec output selected by nested tool name (Rust
+// BudgetPriority::SelectedExecResult, #60914).
+const GuardianElasticPrioritySelectedExecResult = "selected_exec_result"
+
 // GuardianElasticRetention marks one item required or optional. Required and
 // historical evidence is never removed by elastic allocation.
 type GuardianElasticRetention struct {
@@ -289,6 +294,9 @@ type guardianElasticDemand struct {
 // use the message group.
 func guardianElasticAllocationSection(section string, retention GuardianElasticRetention) (GuardianElasticSection, error) {
 	if section == "conversation_transcript" {
+		if retention.Optional && retention.Priority == GuardianElasticPrioritySelectedExecResult {
+			return GuardianElasticSectionTranscriptSelectedExecResults, nil
+		}
 		if retention.Optional && retention.Priority == GuardianElasticPriorityTool {
 			return GuardianElasticSectionTranscriptTools, nil
 		}
@@ -439,6 +447,7 @@ func (demand *guardianElasticDemand) exceedsMaximum(config GuardianElasticBudget
 var guardianElasticSectionOrder = []GuardianElasticSection{
 	GuardianElasticSectionTranscriptMessages,
 	GuardianElasticSectionTranscriptTools,
+	GuardianElasticSectionTranscriptSelectedExecResults,
 	GuardianElasticSectionRootConversationMessages,
 	GuardianElasticSectionRetainedUserInstructions,
 	GuardianElasticSectionTrustedUserAnswers,

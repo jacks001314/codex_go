@@ -16,6 +16,10 @@ type GuardianElasticSection string
 const (
 	GuardianElasticSectionTranscriptMessages GuardianElasticSection = "transcript_messages"
 	GuardianElasticSectionTranscriptTools    GuardianElasticSection = "transcript_tools"
+	// GuardianElasticSectionTranscriptSelectedExecResults isolates the Code Mode
+	// exec outputs the host selected by nested tool name so they receive their
+	// own reservation and entry cap (Rust #60914). Omitted, it reserves zero.
+	GuardianElasticSectionTranscriptSelectedExecResults GuardianElasticSection = "transcript_selected_exec_results"
 	// Round 1017 (#58388) renamed the remaining groups for the source section
 	// that owns their evidence.
 	GuardianElasticSectionRootConversationMessages GuardianElasticSection = "root_conversation_messages"
@@ -164,7 +168,10 @@ func (l *GuardianElasticSectionLimits) UnmarshalJSON(data []byte) error {
 // (Rust ElasticBudgetConfig). It is validated when decoded; it is not an
 // activation switch and does not change fixed request preparation.
 type GuardianElasticBudgetConfig struct {
-	Sections map[GuardianElasticSection]GuardianElasticSectionLimits
+	// SelectedExecToolNames lists the exact nested Code Mode tool names whose
+	// exec output belongs to transcript_selected_exec_results (Rust #60914).
+	SelectedExecToolNames []string
+	Sections              map[GuardianElasticSection]GuardianElasticSectionLimits
 }
 
 // GuardianElasticDefaultInstructionTokens mirrors Rust's MAX_INSTRUCTION_TOKENS
@@ -226,6 +233,9 @@ func (c GuardianElasticBudgetConfig) SectionLimits(section GuardianElasticSectio
 		tokens = entries.MessageTokens
 	case GuardianElasticSectionTranscriptTools:
 		tokens = entries.ToolTokens
+	case GuardianElasticSectionTranscriptSelectedExecResults:
+		// Rust #60914: selected exec results reserve nothing unless configured.
+		return GuardianElasticSectionLimits{}
 	}
 	if tokens <= 0 {
 		tokens = GuardianElasticDefaultInstructionTokens
@@ -240,14 +250,16 @@ func (c GuardianElasticBudgetConfig) MarshalJSON() ([]byte, error) {
 		sections[string(section)] = limits
 	}
 	return json.Marshal(struct {
-		Sections map[string]GuardianElasticSectionLimits `json:"sections"`
-	}{sections})
+		SelectedExecToolNames []string                                `json:"selected_exec_tool_names,omitempty"`
+		Sections              map[string]GuardianElasticSectionLimits `json:"sections"`
+	}{c.SelectedExecToolNames, sections})
 }
 
 // UnmarshalJSON rejects unknown fields, unknown groups and invalid limits.
 func (c *GuardianElasticBudgetConfig) UnmarshalJSON(data []byte) error {
 	var fields struct {
-		Sections map[string]GuardianElasticSectionLimits `json:"sections"`
+		SelectedExecToolNames []string                                `json:"selected_exec_tool_names"`
+		Sections              map[string]GuardianElasticSectionLimits `json:"sections"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
@@ -265,6 +277,6 @@ func (c *GuardianElasticBudgetConfig) UnmarshalJSON(data []byte) error {
 		}
 		sections[section] = limits
 	}
-	*c = GuardianElasticBudgetConfig{Sections: sections}
+	*c = GuardianElasticBudgetConfig{Sections: sections, SelectedExecToolNames: fields.SelectedExecToolNames}
 	return nil
 }

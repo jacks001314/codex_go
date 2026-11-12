@@ -845,6 +845,28 @@ func (r *ExecutedToolCallRecorder) bindingForOutput(outputCallID string) *retain
 	return r.provisional[outputCallID]
 }
 
+// ExecOutputNestedToolNames returns the nested Code Mode call names recorded
+// for one exec output when that output owns the cell and its inventory is
+// final. Rust #60914 consults the same inventory so Guardian can reserve
+// selected exec output separately from ordinary tool evidence.
+func (r *ExecutedToolCallRecorder) ExecOutputNestedToolNames(outputCallID string) ([]string, bool) {
+	outputCallID = strings.TrimSpace(outputCallID)
+	if r == nil || outputCallID == "" {
+		return nil, false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	binding := r.bindingForOutput(outputCallID)
+	if binding == nil || !binding.complete || binding.originCallID != outputCallID {
+		return nil, false
+	}
+	names := make([]string, 0, len(binding.calls))
+	for _, call := range binding.calls {
+		names = append(names, call.call.Name)
+	}
+	return names, true
+}
+
 func (r *ExecutedToolCallRecorder) RegisterCell(cellID string, outputCallID string) {
 	r.registerGroup("cell:"+strings.TrimSpace(cellID), outputCallID, false)
 }
