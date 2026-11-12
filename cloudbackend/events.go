@@ -240,6 +240,30 @@ func cloudErrorNotification(threadID string, message string) Notification {
 	}
 }
 
+// NotificationCloudStreamDisconnected tells the in-process TUI that a quiet
+// reopen is in flight for a conversation whose reply stream was lost (Rust
+// #60969's accepted ThreadStreamDisconnected). It travels only over the Cloud
+// transport, never the socket app-server protocol.
+const NotificationCloudStreamDisconnected appserver.NotificationMethod = "cloud/streamDisconnected"
+
+// NotificationCloudStreamReconnected tells the in-process TUI that a live
+// stream is installed again, so held input may be released.
+const NotificationCloudStreamReconnected appserver.NotificationMethod = "cloud/streamReconnected"
+
+func cloudStreamDisconnectedNotification(threadID string) Notification {
+	return Notification{
+		Method: NotificationCloudStreamDisconnected,
+		Params: map[string]any{"threadId": threadID},
+	}
+}
+
+func cloudStreamReconnectedNotification(threadID string) Notification {
+	return Notification{
+		Method: NotificationCloudStreamReconnected,
+		Params: map[string]any{"threadId": threadID},
+	}
+}
+
 func cloudStreamEndedNotification(threadID string) Notification {
 	notification := cloudErrorNotification(threadID, "Cloud stream ended. Reopen the conversation to reconnect.")
 	notification.streamDisconnect = true

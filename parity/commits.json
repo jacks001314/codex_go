@@ -46990,13 +46990,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "partial",
+   "status": "complete",
    "evidence": [
-    "cloudbackend/idle_recovery.go adds the Rust #60969 state machine: a clean EOF or a Timeout/Canceled/Unknown/DeadlineExceeded/Internal/Unavailable end is transient; only an observed-idle conversation whose stream stayed open for 15s is offered a quiet Attach; the episode runs 0/500ms/1s attempts inside an 8s budget, rechecks LoginCurrent before every attempt, keeps the first buffered event, supersedes the queued disconnection on success, and reports the loss on failure.",
+    "cloudbackend/idle_recovery.go implements Rust #60969's state machine: a clean EOF or a Timeout/Canceled/Unknown/DeadlineExceeded/Internal/Unavailable end is transient; only an observed-idle conversation whose stream stayed open for 15s is offered a quiet Attach; the episode runs 0/500ms/1s attempts inside an 8s budget, rechecks LoginCurrent before every attempt, keeps the first buffered event, supersedes the queued disconnection on success, and reports the loss on failure.",
     "cloudclient.New sends HTTP/2 keepalive pings (10s interval, 60s timeout, PermitWithoutStream=false), matching Rust cloud_client's HTTP2_KEEP_ALIVE_INTERVAL/TIMEOUT so a quiet Attach survives intermediaries.",
     "app/remote_tui_cloud.go wires cloudTUILoginChecker, which re-reads the stored ChatGPT auth mode, FedRAMP flag, account id, access token, and token expiry before every recovery attempt.",
-    "Tests: cloudbackend/idle_recovery_like_rust_test.go covers transient classification, quiet reopen with buffered first event, busy/explicit reopen, the 15s stability window, credential changes, transient retry, permanent failure, and explicit offer acceptance.",
-    "Residual: the Go TUI has no thread_stream_disconnected composer state, so input submitted while a stream is lost still fails instead of queueing; hidden/dirty views are expressed through the ReconnectIdleThread/Displayed hook and are not yet driven by TUI events."
+    "The backend reports the accepted loss and the settled stream as internal cloud/streamDisconnected and cloud/streamReconnected notifications; app/remote_tui.go maps them to CloudStreamDisconnectedMsg/CloudStreamReconnectedMsg, and tui/tea holds submitted input in the composer queue until the reconnect, then drains it.",
+    "Tests: cloudbackend/idle_recovery_like_rust_test.go (transient classification, quiet reopen with buffered first event, busy/explicit reopen, 15s stability window, credential changes, transient retry, permanent failure, explicit acceptance, explicit-reopen release), tui/tea/cloud_stream_hold_like_rust_test.go (hold and drain, other-thread isolation), app/remote_tui_cloud_stream_signals_like_rust_test.go."
    ]
   },
   {

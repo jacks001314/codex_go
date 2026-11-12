@@ -667,6 +667,19 @@ type ModelRetryStatusMsg struct {
 	Active  bool
 }
 
+// CloudStreamDisconnectedMsg reports that the Cloud reply stream of ThreadID
+// was lost and a quiet reopen is in flight. Submitted input is held in the
+// composer queue until the stream settles (Rust #60969).
+type CloudStreamDisconnectedMsg struct {
+	ThreadID string
+}
+
+// CloudStreamReconnectedMsg reports that ThreadID has a live stream again, so
+// held input may be released.
+type CloudStreamReconnectedMsg struct {
+	ThreadID string
+}
+
 // WorkingStatusHeaderMsg replaces the working indicator's header with the
 // latest streaming reasoning summary line (Rust #43921). An empty Text (or
 // Text for another thread) clears the override so the default header returns.
@@ -3076,6 +3089,9 @@ type Model struct {
 	submitRequests               []SubmitRequest
 	queued                       []queuedSubmission
 	pendingSteers                []pendingSteerSubmission
+	// cloudStreamDisconnectedThreadID holds submitted input while the Cloud
+	// reply stream of that conversation is being reopened (Rust #60969).
+	cloudStreamDisconnectedThreadID string
 	// pendingSteersThreadID is the thread that owns pendingSteers. Steers for
 	// other threads are parked in threadPendingSteers, mirroring Rust #42451's
 	// per-thread ThreadInputState snapshots.
@@ -4247,6 +4263,11 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 	case AuthRecoveryMsg:
 		m.applyAuthRecoveryMessage(msg)
 		return m, nil
+	case CloudStreamDisconnectedMsg:
+		m.applyCloudStreamDisconnected(msg)
+		return m, m.refreshStatusControlsCmd()
+	case CloudStreamReconnectedMsg:
+		return m, m.applyCloudStreamReconnected(msg)
 	case ModelRetryStatusMsg:
 		if msg.Active {
 			m.retryActivityMessage = strings.TrimSpace(msg.Message)
@@ -6985,6 +7006,14 @@ func (m *Model) submitRequest(request SubmitRequest, parseCommand bool) bubblete
 	if strings.TrimSpace(request.ClientID) == "" {
 		request.ClientID = uuid.NewString()
 	}
+	// Rust #60969: a lost Cloud reply stream holds submissions in the composer
+	// queue instead of rejecting them, and the quiet reopen drains the queue.
+	if m.cloudStreamDisconnectedThreadID != "" && m.cloudStreamDisconnectedThreadID == m.currentThreadID() {
+		m.queued = append(m.queued, queuedSubmission{Request: cloneSubmitRequest(request), ParseCommand: parseCommand, Literal: request.LiteralInput})
+		m.notice = "Reconnecting to the Cloud conversation\u2026"
+		m.refreshTranscript()
+		return nil
+	}
 	// Rust holds a user turn while the session waits for the Reserve switch, so
 	// the queued prompt is not sent on the blocked model.
 	if m.rateLimitRecoveryPending {
@@ -7365,6 +7394,39 @@ func (m *Model) deferPendingSteers() {
 	}
 	m.pendingSteers = nil
 	m.rejectedSteers = append(m.rejectedSteers, deferred...)
+}
+
+// applyCloudStreamDisconnected holds submissions for the displayed
+// conversation while its reply stream is being reopened.
+func (m *Model) applyCloudStreamDisconnected(msg CloudStreamDisconnectedMsg) {
+	if m == nil {
+		return
+	}
+	threadID := strings.TrimSpace(msg.ThreadID)
+	if threadID == "" || threadID != m.currentThreadID() {
+		return
+	}
+	m.cloudStreamDisconnectedThreadID = threadID
+	m.notice = "Reconnecting to the Cloud conversation\u2026"
+	m.refreshTranscript()
+}
+
+// applyCloudStreamReconnected releases the hold and drains one queued prompt
+// when the conversation is idle again.
+func (m *Model) applyCloudStreamReconnected(msg CloudStreamReconnectedMsg) bubbletea.Cmd {
+	if m == nil {
+		return nil
+	}
+	threadID := strings.TrimSpace(msg.ThreadID)
+	if threadID == "" || threadID != m.cloudStreamDisconnectedThreadID {
+		return nil
+	}
+	m.cloudStreamDisconnectedThreadID = ""
+	if m.notice == "Reconnecting to the Cloud conversation\u2026" {
+		m.notice = ""
+	}
+	m.refreshTranscript()
+	return m.submitNextQueued()
 }
 
 func (m *Model) submitNextQueued() bubbletea.Cmd {

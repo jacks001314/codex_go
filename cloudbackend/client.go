@@ -423,7 +423,9 @@ func (c *Client) streamEnded(active *attachment, endErr error) {
 	c.recordStreamLoss(threadID)
 	if observedIdle && stable && transientCloudError(endErr) && c.offerIdleReconnect(threadID) {
 		// The accepted quiet reopen owns this loss; it is reported again only
-		// if the episode fails.
+		// if the episode fails. The in-process TUI holds submitted input until
+		// the reconnect settles (Rust #60969).
+		c.holdStreamInput(threadID)
 		return
 	}
 	c.enqueue(cloudStreamEndedNotification(threadID))
@@ -452,6 +454,7 @@ func (c *Client) replaceAttachment(ctx context.Context, threadID string) error {
 		c.recovery.installed = time.Now()
 		c.active = &attachment{threadID: threadID, events: events, errs: errs, cancel: cancel}
 		c.supersedeStreamLosses(threadID)
+		c.notifyStreamReconnected(threadID)
 		c.forwardEvent(threadID, event)
 		return nil
 	default:
@@ -472,6 +475,9 @@ func (c *Client) replaceAttachment(ctx context.Context, threadID string) error {
 	c.recovery.installed = time.Now()
 	c.active = &attachment{threadID: threadID, events: events, errs: errs, cancel: cancel}
 	c.supersedeStreamLosses(threadID)
+	// An explicit reopen (resume) is the escape hatch that releases input held
+	// while a quiet reopen was failing.
+	c.notifyStreamReconnected(threadID)
 	return nil
 }
 

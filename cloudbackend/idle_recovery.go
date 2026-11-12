@@ -65,6 +65,9 @@ type idleRecovery struct {
 	// observedIdle is nil until either the activation snapshot or the first
 	// status event establishes whether the conversation is idle.
 	observedIdle *bool
+	// disconnectedThread is the conversation whose in-process client was told
+	// to hold input; the next live stream for it releases the hold.
+	disconnectedThread string
 }
 
 type idleRecoveryResult struct {
@@ -131,6 +134,7 @@ func (c *Client) notifyIdleConnected(threadID string) {
 		return
 	}
 	c.recovery.state = idleReconnectConnected
+	c.notifyStreamReconnected(threadID)
 	if c.recoveryOptions.OnReconnected != nil {
 		c.recoveryOptions.OnReconnected(threadID)
 	}
@@ -279,6 +283,26 @@ func (c *Client) handleIdleRecoveryResult(result idleRecoveryResult) {
 	if c.recovery.observedIdle == nil || *c.recovery.observedIdle {
 		c.notifyIdleConnected(result.threadID)
 	}
+}
+
+// holdStreamInput tells the in-process client to hold submissions for threadID
+// until a live stream is installed again.
+func (c *Client) holdStreamInput(threadID string) {
+	if c == nil || strings.TrimSpace(threadID) == "" {
+		return
+	}
+	c.recovery.disconnectedThread = threadID
+	c.enqueue(cloudStreamDisconnectedNotification(threadID))
+}
+
+// notifyStreamReconnected releases a hold once a live stream for the same
+// conversation is installed, whether by the quiet reopen or an explicit one.
+func (c *Client) notifyStreamReconnected(threadID string) {
+	if c == nil || c.recovery.disconnectedThread == "" || c.recovery.disconnectedThread != threadID {
+		return
+	}
+	c.recovery.disconnectedThread = ""
+	c.enqueue(cloudStreamReconnectedNotification(threadID))
 }
 
 // cancelIdleRecovery drops an offered or opening quiet Attach. It reports the

@@ -108,6 +108,10 @@ func TestIdleRecoveryReopensIdleDisplayedStreamLikeRust(t *testing.T) {
 	close(initialEvents)
 	close(initialErrs)
 	client.forwardNextNonBlocking()
+	held := client.testNotifications()
+	if len(held) != 1 || held[0].Method != NotificationCloudStreamDisconnected {
+		t.Fatalf("notifications before reconnect = %#v, want the input hold", held)
+	}
 	client.handleIdleRecoveryResult(awaitRecoveryResult(t, client))
 
 	if attaches != 2 {
@@ -126,8 +130,12 @@ func TestIdleRecoveryReopensIdleDisplayedStreamLikeRust(t *testing.T) {
 		t.Fatal("reconnected event was not reported")
 	}
 	notifications := client.testNotifications()
-	if len(notifications) != 1 || notifications[0].Method != appserver.NotificationWarning {
-		t.Fatalf("notifications = %#v, want only the buffered first event", notifications)
+	methods := map[appserver.NotificationMethod]bool{}
+	for _, notification := range notifications {
+		methods[notification.Method] = true
+	}
+	if len(notifications) != 2 || !methods[NotificationCloudStreamReconnected] || !methods[appserver.NotificationWarning] {
+		t.Fatalf("notifications = %#v, want the release plus the buffered first event", notifications)
 	}
 	// The recovered stream keeps forwarding.
 	recoveredEvents <- serverRequestEvent()
@@ -220,8 +228,9 @@ func TestIdleRecoveryAbortsWhenCredentialsChangeLikeRust(t *testing.T) {
 	}
 	client.handleIdleRecoveryResult(awaitRecoveryResult(t, client))
 	notifications := client.testNotifications()
-	if len(notifications) != 1 || notifications[0].Method != appserver.NotificationError {
-		t.Fatalf("notifications = %#v, want the disconnect error after the abandoned episode", notifications)
+	if len(notifications) != 2 || notifications[0].Method != NotificationCloudStreamDisconnected ||
+		notifications[1].Method != appserver.NotificationError {
+		t.Fatalf("notifications = %#v, want the held input then the disconnect error", notifications)
 	}
 }
 
@@ -292,8 +301,9 @@ func TestIdleRecoveryReportsLossOnPermanentFailureLikeRust(t *testing.T) {
 		t.Fatalf("recovery state = %v, want inactive", client.recovery.state)
 	}
 	notifications := client.testNotifications()
-	if len(notifications) != 1 || notifications[0].Method != appserver.NotificationError {
-		t.Fatalf("notifications = %#v, want the disconnect error", notifications)
+	if len(notifications) != 2 || notifications[0].Method != NotificationCloudStreamDisconnected ||
+		notifications[1].Method != appserver.NotificationError {
+		t.Fatalf("notifications = %#v, want the held input then the disconnect error", notifications)
 	}
 }
 
@@ -336,5 +346,40 @@ func TestIdleRecoveryAcceptsOfferedStreamExplicitlyLikeRust(t *testing.T) {
 	client.handleIdleRecoveryResult(awaitRecoveryResult(t, client))
 	if client.active == nil || client.active.threadID != "thread" {
 		t.Fatalf("active attachment = %#v, want the accepted quiet reopen", client.active)
+	}
+}
+
+// Mirrors Rust #60969: an explicit reopen is the escape hatch that releases
+// input held while a quiet reopen kept failing.
+func TestIdleRecoveryReleasesHeldInputOnExplicitReopenLikeRust(t *testing.T) {
+	fake := &fakeCloud{}
+	initialEvents, initialErrs := openStream()
+	reopenedEvents, reopenedErrs := openStream()
+	attaches := 0
+	fake.attach = func(context.Context, string) (<-chan cloudclient.Event, <-chan error, error) {
+		attaches++
+		if attaches == 1 {
+			return initialEvents, initialErrs, nil
+		}
+		return reopenedEvents, reopenedErrs, nil
+	}
+	client := newRecoveryTestClient(fake, IdleRecoveryOptions{LoginCurrent: func() bool { return false }})
+	if err := client.replaceAttachment(context.Background(), "thread"); err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	client.recovery.installed = time.Now().Add(-time.Minute)
+	client.setObservedIdle(true)
+	close(initialEvents)
+	close(initialErrs)
+	client.forwardNextNonBlocking()
+	client.handleIdleRecoveryResult(awaitRecoveryResult(t, client))
+	client.testNotifications()
+
+	if err := client.replaceAttachment(context.Background(), "thread"); err != nil {
+		t.Fatalf("explicit reopen: %v", err)
+	}
+	notifications := client.testNotifications()
+	if len(notifications) != 1 || notifications[0].Method != NotificationCloudStreamReconnected {
+		t.Fatalf("notifications = %#v, want the explicit-reopen release", notifications)
 	}
 }

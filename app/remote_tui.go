@@ -27,6 +27,7 @@ import (
 	"codex_go/appserverdaemon"
 	"codex_go/auth"
 	"codex_go/cli"
+	"codex_go/cloudbackend"
 	"codex_go/cloudclient"
 	"codex_go/codexuds"
 	"codex_go/config"
@@ -5540,6 +5541,33 @@ func sideParentStatusForTurnStatus(status appserver.TurnStatus) (codextea.SidePa
 
 func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMessage) error {
 	method := appserver.NotificationMethod(strings.TrimSpace(message.Method))
+	// Rust #60969: the Cloud transport reports a lost reply stream and its
+	// quiet reopen as internal events, so the TUI can hold submitted input
+	// instead of surfacing an error for a conversation that reconnects itself.
+	switch method {
+	case cloudbackend.NotificationCloudStreamDisconnected:
+		var payload struct {
+			ThreadID string `json:"threadId"`
+		}
+		if err := json.Unmarshal(message.Params, &payload); err != nil {
+			return err
+		}
+		if c.notificationThreadIsActive(payload.ThreadID) {
+			c.send(codextea.CloudStreamDisconnectedMsg{ThreadID: payload.ThreadID})
+		}
+		return nil
+	case cloudbackend.NotificationCloudStreamReconnected:
+		var payload struct {
+			ThreadID string `json:"threadId"`
+		}
+		if err := json.Unmarshal(message.Params, &payload); err != nil {
+			return err
+		}
+		if c.notificationThreadIsActive(payload.ThreadID) {
+			c.send(codextea.CloudStreamReconnectedMsg{ThreadID: payload.ThreadID})
+		}
+		return nil
+	}
 	switch method {
 	case appserver.NotificationAccountUpdated:
 		var payload auth.AccountUpdatedNotification
