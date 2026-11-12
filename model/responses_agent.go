@@ -316,6 +316,9 @@ type responsesWebsocketSession struct {
 	// the connection (Rust #55969).
 	messages   chan responsesWebsocketReadResult
 	readerDone chan struct{}
+	// maxMessageBytes is the peer's advertised request size limit from the
+	// handshake (Rust #60841); zero means the server advertised none.
+	maxMessageBytes int
 }
 
 func websocketAuthRevision(snapshot *auth.AuthDotJSON) (uint64, bool) {
@@ -1521,6 +1524,7 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 		// in the turn carries it.
 		if response != nil {
 			r.rememberTurnStateFromHeaders(request, response.Header)
+			session.maxMessageBytes = responsesWebsocketMaxMessageBytes(response.Header)
 		}
 	}
 	payload := websocketResponseCreatePayload(apiRequest, request.PreviousResponseID, nil, request.Trace)
@@ -1530,7 +1534,17 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 	// and clears the flag on that same attempt.
 	afterPrewarm := request.PreviousResponseFromPrewarm
 	r.recordWebsocketContinuation(continuationMode, continuationReason, "generation", afterPrewarm)
-	writeErr := writeResponsesWebsocketMessage(ctx, conn, websocket.MessageText, marshalResponsesMessage(payload))
+	message := marshalResponsesMessage(payload)
+	// Rust #60841: never publish a request the peer already told us it cannot
+	// accept. Falling straight back to HTTP keeps the turn alive (#60840).
+	if session.maxMessageBytes > 0 && len(message) > session.maxMessageBytes {
+		recordWebsocketEvent(r.Metrics, "message_too_large", false, 0)
+		r.disableWebsockets()
+		session.mu.Unlock()
+		locked = false
+		return r.runHTTP(ctx, request)
+	}
+	writeErr := writeResponsesWebsocketMessage(ctx, conn, websocket.MessageText, message)
 	r.recordWebsocketRequest(writeErr, time.Since(requestStartedAt))
 	r.recordWebsocketRequestRecord(ctx, writeErr, time.Since(requestStartedAt), connectionReused)
 	if writeErr == nil {
@@ -1625,6 +1639,12 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 				// Mail already requires a follow-up even when the producer
 				// exited before receiving the interrupt.
 				return drainedAgentResponse(accumulator, request, r.ProviderID), nil
+			}
+			if !receivedEvent && websocketOversizedClose(err) {
+				// Rust #60840: close code 1009 before any text means the peer
+				// refused the request size; retrying the socket cannot help.
+				r.disableWebsockets()
+				return r.runHTTP(ctx, request)
 			}
 			if !receivedEvent && !transportRetried {
 				session.mu.Unlock()
@@ -1754,6 +1774,33 @@ const responsesWebsocketFragmentSize = 1024 * 1024
 // payloads larger than 1 MiB into bounded frames with continuation opcodes and
 // a final frame (Rust #60522 send_message). Bytes are never re-encoded, so a
 // multibyte UTF-8 character may cross a frame boundary unchanged.
+// responsesWebsocketMaxMessageBytes reads the handshake's advertised request
+// size limit (Rust #60841).
+func responsesWebsocketMaxMessageBytes(header http.Header) int {
+	if header == nil {
+		return 0
+	}
+	raw := strings.TrimSpace(header.Get("x-codex-websocket-max-message-bytes"))
+	if raw == "" {
+		return 0
+	}
+	limit, err := strconv.Atoi(raw)
+	if err != nil || limit <= 0 {
+		return 0
+	}
+	return limit
+}
+
+// websocketOversizedClose reports the peer's 1009 close, which Rust maps to
+// ApiError::WebsocketMessageTooLarge (#60840).
+func websocketOversizedClose(err error) bool {
+	var closeErr websocket.CloseError
+	if errors.As(err, &closeErr) {
+		return closeErr.Code == websocket.StatusMessageTooBig
+	}
+	return false
+}
+
 func writeResponsesWebsocketMessage(ctx context.Context, conn *websocket.Conn, typ websocket.MessageType, payload []byte) error {
 	if conn == nil {
 		return errors.New("responses websocket connection is nil")

@@ -46658,8 +46658,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "implementation_pending",
-   "evidence": []
+   "status": "complete",
+   "evidence": [
+    "model/responses_agent.go treats a 1009 close before any text as an oversized request and switches to HTTP immediately (websocketOversizedClose); TestWebsocketOversizedCloseLikeRust.",
+    "plan: update/plan_2026_11_12.md"
+   ]
   },
   {
    "sha": "ed7ca22bb60ad0e7dbfd3d71687debf6ece91a6b",
@@ -46668,8 +46671,11 @@
    "domains": [
     "codex_go"
    ],
-   "status": "implementation_pending",
-   "evidence": []
+   "status": "complete",
+   "evidence": [
+    "model/responses_agent.go records x-codex-websocket-max-message-bytes from the handshake and refuses to publish a larger response.create, falling back to HTTP; responsesWebsocketMaxMessageBytes, TestResponsesWebsocketMaxMessageBytesLikeRust.",
+    "plan: update/plan_2026_11_12.md"
+   ]
   },
   {
    "sha": "54b90f98a5724b688bf78793de5c21aca29ecec2",
