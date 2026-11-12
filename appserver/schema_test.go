@@ -187,8 +187,8 @@ func TestPrecomputedExportArtifactsMatchTargetRustCommit(t *testing.T) {
 		// byte-for-byte from app-server-protocol/schema/precomputed/ after the
 		// attached-thread search, in-progress thread/sample, environment
 		// settings and file-backed audio protocol changes.
-		{"stable", stablePrecomputedExports, "0213200411a08a1e60a132241ed97376af7312b518d9a3097183b35bf24fcf86"},
-		{"experimental", experimentalPrecomputedExports, "51428010c7d568b9dc9e34f02a2251e5381e3a34be8a7f2f0a1797df513e1895"},
+		{"stable", stablePrecomputedExports, "9353f9d67256837fa6b0f9bb70a774892e8f9175cbf2194a3cd8e9ad92dbb196"},
+		{"experimental", experimentalPrecomputedExports, "cd55e1c6ee25c36ef19a61e20bcdda71c2f5513ababb53d48a554b457c74aa59"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"codex_go/gitutil"
 	"codex_go/mcp"
@@ -22,6 +23,7 @@ import (
 	"codex_go/session"
 	"codex_go/state"
 	"codex_go/turn"
+	"codex_go/utils"
 )
 
 const (
@@ -3047,27 +3049,20 @@ func buildThreadSearchOccurrences(record *session.Record, params *ThreadSearchOc
 	if err != nil {
 		return nil, err
 	}
-	needle := strings.ToLower(strings.TrimSpace(params.SearchTerm))
+	needle := strings.TrimSpace(params.SearchTerm)
 	all := make([]ThreadSearchOccurrence, 0)
 	turns := turnsFromRecord(record)
 	for turnIndex, turn := range turns {
 		for _, item := range summarizeTurnItems(turn.Items, turn.Status) {
 			text := visibleOccurrenceText(item)
-			lower := strings.ToLower(text)
-			searchFrom := 0
-			for searchFrom <= len(lower) {
-				rel := strings.Index(lower[searchFrom:], needle)
-				if rel < 0 {
-					break
-				}
-				byteStart := searchFrom + rel
-				byteEnd := byteStart + len(needle)
+			// Rust #60759: occurrences match under Unicode default case
+			// folding while the reported range stays on source characters.
+			for _, match := range utils.FoldedRanges(text, needle, 0) {
 				all = append(all, ThreadSearchOccurrence{
 					TurnID: turn.ID, ItemID: item.ID, Snippet: text,
-					SnippetMatchRange: ThreadSearchTextRange{Start: utf16Offset(text[:byteStart]), End: utf16Offset(text[:byteEnd])},
+					SnippetMatchRange: ThreadSearchTextRange{Start: utf16Offset(text[:match[0]]), End: utf16Offset(text[:match[1]])},
 					TurnCursor:        strconv.Itoa(turnIndex),
 				})
-				searchFrom = byteEnd
 			}
 		}
 	}
@@ -6880,6 +6875,14 @@ func reverseTurns(turns []Turn) {
 	}
 }
 
+const (
+	searchSnippetContextBeforeChars = 48
+	searchSnippetContextAfterChars  = 96
+)
+
+// searchSnippet mirrors Rust #60846 (rollout/src/search.rs excerpt_around_match):
+// the match position comes from the raw text so queries may span newlines and
+// tabs, while only the excerpt window is whitespace-normalized.
 func searchSnippet(record *session.Record, term string) string {
 	if record == nil {
 		return ""
@@ -6889,23 +6892,74 @@ func searchSnippet(record *session.Record, term string) string {
 		haystacks = append(haystacks, item.Text)
 	}
 	needle := strings.ToLower(strings.TrimSpace(term))
+	if needle == "" {
+		return record.Preview
+	}
 	for _, value := range haystacks {
 		lower := strings.ToLower(value)
 		index := strings.Index(lower, needle)
 		if index < 0 {
 			continue
 		}
-		start := index - 40
-		if start < 0 {
-			start = 0
+		start := searchSnippetCharStartBefore(value, index, searchSnippetContextBeforeChars)
+		end := searchSnippetCharEndAfter(value, index+len(needle), searchSnippetContextAfterChars)
+		snippet := normalizeSearchPreview(value[start:end])
+		if snippet == "" {
+			continue
 		}
-		end := index + len(term) + 40
-		if end > len(value) {
-			end = len(value)
+		if start > 0 {
+			snippet = "... " + snippet
 		}
-		return strings.TrimSpace(value[start:end])
+		if end < len(value) {
+			snippet += " ..."
+		}
+		return snippet
 	}
 	return record.Preview
+}
+
+// normalizeSearchPreview is Rust's normalize_preview_text: whitespace runs
+// collapse to single spaces and the result is trimmed.
+func normalizeSearchPreview(text string) string {
+	return strings.Join(strings.Fields(text), " ")
+}
+
+// searchSnippetCharStartBefore walks back at most charsBefore runes from
+// byteIndex so the excerpt never splits a UTF-8 sequence.
+func searchSnippetCharStartBefore(text string, byteIndex int, charsBefore int) int {
+	if byteIndex <= 0 {
+		return 0
+	}
+	count := 0
+	index := byteIndex
+	for index > 0 {
+		_, size := utf8.DecodeLastRuneInString(text[:index])
+		index -= size
+		count++
+		if count >= charsBefore {
+			return index
+		}
+	}
+	return 0
+}
+
+// searchSnippetCharEndAfter walks at most charsAfter runes forward from
+// byteIndex.
+func searchSnippetCharEndAfter(text string, byteIndex int, charsAfter int) int {
+	if byteIndex >= len(text) {
+		return len(text)
+	}
+	count := 0
+	index := byteIndex
+	for index < len(text) {
+		_, size := utf8.DecodeRuneInString(text[index:])
+		index += size
+		count++
+		if count >= charsAfter {
+			return index
+		}
+	}
+	return len(text)
 }
 
 func sessionItemFromRaw(raw json.RawMessage, now time.Time, index int) (session.Item, error) {

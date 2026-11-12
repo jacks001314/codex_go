@@ -67,6 +67,8 @@ func incrementalToolsEnabledForTurn(cfg *config.Config, info *model.ModelInfo, p
 		feature = "incremental_tools"
 	case model.IsBedrockProviderID(strings.TrimSpace(providerID)):
 		feature = "incremental_tools_legacy"
+	case strings.TrimSpace(providerID) == model.GCPProviderID:
+		feature = "incremental_tools_legacy_gcp"
 	default:
 		return false
 	}

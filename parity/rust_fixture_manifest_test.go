@@ -167,7 +167,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// skills_extension/discovery_grants_tests.rs.
 			// Re-anchored to upstream 9018f3a3: #60665 added the mixed MCP
 			// content Code Mode scenario snapshot.
-			Files: 473,
+			Files: 476,
 			Owner: "turn, model, tool, session",
 			Focus: "core agent loop, model client, session, tools, sandbox, resume",
 			Required: []string{

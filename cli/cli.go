@@ -21,6 +21,7 @@ const (
 	CommandExec              Command = "exec"
 	CommandReview            Command = "review"
 	CommandLogin             Command = "login"
+	CommandGitCredential     Command = "git-credential"
 	CommandLogout            Command = "logout"
 	CommandMCP               Command = "mcp"
 	CommandPlugin            Command = "plugin"
@@ -56,6 +57,7 @@ var knownCommands = map[string]Command{
 	"e":                   CommandExec,
 	"review":              CommandReview,
 	"login":               CommandLogin,
+	"git-credential":      CommandGitCredential,
 	"logout":              CommandLogout,
 	"mcp":                 CommandMCP,
 	"plugin":              CommandPlugin,
@@ -201,6 +203,13 @@ type LoginOptions struct {
 	IssuerBaseURL   string
 	ClientID        string
 	Action          string
+	ConfigOverrides []string
+}
+
+// GitCredentialOptions mirrors Rust's hidden `git-credential` subcommand
+// (#60746): an operation plus the config overrides that select the login.
+type GitCredentialOptions struct {
+	Operation       string
 	ConfigOverrides []string
 }
 
@@ -791,6 +800,7 @@ type Parsed struct {
 	Root              RootOptions
 	Exec              ExecOptions
 	Login             LoginOptions
+	GitCredential     GitCredentialOptions
 	Features          FeatureOptions
 	MCP               MCPOptions
 	Plugin            PluginOptions
@@ -1051,6 +1061,8 @@ func parseSubcommand(p *Parsed, args []string) (*Parsed, error) {
 		return p, parseLogin(args, &p.Login)
 	case CommandLogout:
 		return p, parseLogout(args, &p.Login)
+	case CommandGitCredential:
+		return p, parseGitCredential(args, &p.GitCredential)
 	case CommandFeatures:
 		return p, parseFeatures(args, &p.Features)
 	case CommandMCP:
@@ -2239,6 +2251,46 @@ func parseLogout(args []string, login *LoginOptions) error {
 			login.ConfigOverrides = append(login.ConfigOverrides, shortAttachedValue(arg, "-c"))
 		default:
 			return unexpectedSubcommandArgumentError("logout", arg)
+		}
+	}
+	return nil
+}
+
+// parseGitCredential mirrors clap's single positional `<OPERATION>` plus the
+// flattened config override flags.
+func parseGitCredential(args []string, opts *GitCredentialOptions) error {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "-c" || arg == "--config":
+			value, next, err := requireValue(args, i, arg)
+			if err != nil {
+				return err
+			}
+			opts.ConfigOverrides = append(opts.ConfigOverrides, value)
+			i = next
+		case strings.HasPrefix(arg, "--config="):
+			opts.ConfigOverrides = append(opts.ConfigOverrides, strings.TrimPrefix(arg, "--config="))
+		case strings.HasPrefix(arg, "-c"):
+			opts.ConfigOverrides = append(opts.ConfigOverrides, shortAttachedValue(arg, "-c"))
+		case strings.HasPrefix(arg, "-"):
+			return unexpectedSubcommandArgumentError("git-credential", arg)
+		default:
+			if opts.Operation != "" {
+				return unexpectedSubcommandArgumentError("git-credential", arg)
+			}
+			switch arg {
+			case "get", "store", "erase", "capability":
+				opts.Operation = arg
+			default:
+				return invalidValueError(arg, "<OPERATION>", []string{"get", "store", "erase", "capability"})
+			}
+		}
+	}
+	if opts.Operation == "" {
+		return &UsageError{
+			Message: "the following required arguments were not provided:\n  <OPERATION>",
+			Usage:   "Usage: codex git-credential [OPTIONS] <OPERATION>",
 		}
 	}
 	return nil

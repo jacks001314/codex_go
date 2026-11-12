@@ -352,8 +352,8 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// app-server-protocol/src/protocol/common.rs gained the attached-thread
 		// search, in-progress thread/sample, environment settings and late-abort
 		// surfaces; both pins are the LF-normalized digest of the target checkout.
-		{Path: "Cargo.toml", SHA256: "6864e0f338c382e7056999cb8338d1d22a7a29a7b577639294355a9b1dea7363"},
-		{Path: "cli/src/lib.rs", SHA256: "bc73cee3f5714a1ab90ca8853bbaa74f16dc5abd6edc6bb888d8648b6c49f14a"},
+		{Path: "Cargo.toml", SHA256: "208b880db06958ab88508e7c3b3a916503fc725e10a62a61b76b2ddb76f6c1b8"},
+		{Path: "cli/src/lib.rs", SHA256: "ca6bac75eda919c2792dee2cb16e758419e7a26e6993ccf1d809a9b3f67b261e"},
 		// Re-pinned to upstream 8ae55c863d (#47411): the shared network policy
 		// runs through embedded Codex startup.
 		// Re-anchored to head 5b0b253035 via 1fbe15c962 (#51595): the two
@@ -381,13 +381,13 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// unavailable images (#57585) and the catalog-heading metadata changed.
 		// Re-anchored to upstream 68b67f0ff4: model providers and catalogs share
 		// runtime authentication through ProviderAuthContext (#57607).
-		{Path: "core/src/client.rs", SHA256: "544c428df0ebe2eb7e99bdaf507eb7873d6a8ec8e4e193885b3bfa37a200d03f"},
+		{Path: "core/src/client.rs", SHA256: "285318ee800ed7752a0ab4e4455109f7527a54587accfd9f35ac502beea41fdd"},
 		// Re-pinned to upstream 8ae55c863d (#47207/#47248/#47377/#47648): the
 		// gateway OAuth, MCP resource-target, realtime reasoning-status and
 		// executor bearer-token requests.
 		// Round-112 re-anchor to 8196bcdc18: thread/sample/cancel joined the
 		// client request definitions.
-		{Path: "app-server-protocol/src/protocol/common.rs", SHA256: "37f54d16134ccf8fdbe4b74b8369237daed7f6ceb5e0de54fc11a5fdb26dbdf0"},
+		{Path: "app-server-protocol/src/protocol/common.rs", SHA256: "6b4b0f986a779696cdacaa9075b6b3043f5666ec75db4f57828d709087f508ea"},
 		// Re-pinned to upstream 8ae55c863d (#46917/#47028/#47207/#47407): the
 		// provider-requirements, message-board, gateway-auth and network-policy
 		// suites joined the module list.

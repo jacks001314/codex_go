@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
  "rustFromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
- "rustToInclusive": "9018f3a3b021082ef186ddd6503c0b4fd7a26260",
+ "rustToInclusive": "6bfdc75f0d9e6fae313234f694839866d7c63c39",
  "commits": [
   {
    "sha": "27c05a52e0cdf93ef7db5a96ccaf88d6b9095472",
@@ -46517,6 +46517,419 @@
     "eventmap/eventmap.go, utils/outputtrunc.go, context/fragments.go, session/history.go and tool/code_mode_exec.go preserve input_audio file_id references; TestToolOutputPartsPreservesFileAudioLikeRust, TestTruncateFunctionOutputItemsTreatsFileAudioLikeRust, TestFileAudioReferencesSurviveHistoryLikeRust.",
     "plan: update/plan_2026_11_11.md"
    ]
+  },
+  {
+   "sha": "9752e0e0bdb28aa2d21169078a6c4ae3ea9615d2",
+   "subject": "Add a Git credential helper for existing Codex logins (#60746)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "cli git-credential subcommand plus app/git_credential.go; app/git_credential_like_rust_test.go covers capability, single-record read, file-backed gate and destination allow-list.",
+    "plan: update/plan_2026_11_12.md"
+   ]
+  },
+  {
+   "sha": "c320b5c69e74755a6efd4075ff01d4524ad6a4bf",
+   "subject": "Label seed arguments in the model-facing ID recovery test (#60748)",
+   "kind": "test",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "Rust-only test rename in codex-rs/utils model-facing ID recovery test; no Go counterpart."
+   ]
+  },
+  {
+   "sha": "d9a32c178951695f365faa36a39d542e06a96e4f",
+   "subject": "Capture saved Daybreak preferences for native helpers (#60749)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "implementation_pending",
+   "evidence": []
+  },
+  {
+   "sha": "2b60119af8072af8e842b271f5272e82378cd0f9",
+   "subject": "Add snapshot coverage for history and notes tool contracts (#60753)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "implementation_pending",
+   "evidence": []
+  },
+  {
+   "sha": "4f8205c8084168d264083b4113ac00490484555f",
+   "subject": "Use typed context window IDs throughout thread persistence (#60757)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "implementation_pending",
+   "evidence": []
+  },
+  {
+   "sha": "95dcd1e8378021080bf380e42587ef891f611897",
+   "subject": "Fix Unicode caseless matching in thread search (#60759)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "utils.FoldedRanges (lowercase then default case fold with source-boundary mapping); session store and thread/searchOccurrences use it; TestFoldedRangesMatchRustDefaultCaseFold.",
+    "plan: update/plan_2026_11_12.md"
+   ]
+  },
+  {
+   "sha": "3a89580f08c985e99b9cc99df53c67fb8482ef93",
+   "subject": "Hand off approved plans through attachments in fresh sessions (#60763)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "implementation_pending",
+   "evidence": []
+  },
+  {
+   "sha": "32234ddac478f362ef12f3bf3c26d1861ea54b4a",
+   "subject": "Derive history and notes tool schemas from typed requests (#60770)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "implementation_pending",
+   "evidence": []
+  },
+  {
+   "sha": "340a18ed7cd0aea3bc218838d9ac1f0f30efb1ac",
+   "subject": "Preserve model-facing ID allocations in saved history (#60771)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "implementation_pending",
+   "evidence": []
+  },
+  {
+   "sha": "c1934fc99e6b40ddff4261c910ce7733e3abea26",
+   "subject": "Resolve saved Daybreak choices for each subagent turn (#60773)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "implementation_pending",
+   "evidence": []
+  },
+  {
+   "sha": "e58bf8f5233b51e7cd1679d947e3028c1ed91b06",
+   "subject": "Centralize synchronous Guardian reviewer selection (#60784)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "implementation_pending",
+   "evidence": []
+  },
+  {
+   "sha": "9e6d1c5278b6e65059f7e5f610561a3f4be0aa0d",
+   "subject": "Preserve retained assistant revisions across rollout replay (#60839)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "implementation_pending",
+   "evidence": []
+  },
+  {
+   "sha": "bc3ccba6e1cbf466c29240edb8d1d0fa81638ad7",
+   "subject": "Fall back to HTTP immediately for oversized WebSocket requests (#60840)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "implementation_pending",
+   "evidence": []
+  },
+  {
+   "sha": "ed7ca22bb60ad0e7dbfd3d71687debf6ece91a6b",
+   "subject": "Honor advertised WebSocket message size limits (#60841)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "implementation_pending",
+   "evidence": []
+  },
+  {
+   "sha": "54b90f98a5724b688bf78793de5c21aca29ecec2",
+   "subject": "Make TUI thread titles resilient to generation failures (#60842)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "implementation_pending",
+   "evidence": []
+  },
+  {
+   "sha": "ec51be0772c9d6fcc3613a73864f465155b6d439",
+   "subject": "Deduplicate file search results from overlapping roots (#60845)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "filesearch.Run deduplicates roots and attributes overlapping paths to the deepest root; TestOverlappingRootsShareResultSlotsByPath.",
+    "plan: update/plan_2026_11_12.md"
+   ]
+  },
+  {
+   "sha": "367c67560251322c2836e5e0b719cea5e2bb74cb",
+   "subject": "Fix thread search snippets for whitespace-containing queries (#60846)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "searchSnippet matches raw text and normalizes only the excerpt window; TestSearchSnippetNormalizesWhitespaceOnlyAfterMatching, TestSearchSnippetKeepsEllipsesForTrimmedWindows.",
+    "plan: update/plan_2026_11_12.md"
+   ]
+  },
+  {
+   "sha": "b117b2d6fe4434a368412d4fd526c8bc333404dc",
+   "subject": "Enable incremental tool declarations by default for GCP (#60848)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "features registry adds incremental_tools_legacy_gcp (stable, default on) and promotes incremental_tools_legacy to stable; incrementalToolsEnabledForTurn gates GCP separately; TestIncrementalToolProviderFlagsLikeRust.",
+    "plan: update/plan_2026_11_12.md"
+   ]
+  },
+  {
+   "sha": "392ced7d3a9160fd35d40c606359869215f50522",
+   "subject": "Protect MCP OAuth persistence from stale credential writes (#60849)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "implementation_pending",
+   "evidence": []
+  },
+  {
+   "sha": "3a45bbba3cae5b73ed17615ae2bfcb682cf5ecfd",
+   "subject": "Wait for the in-process initialization handshake to finish (#60871)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "implementation_pending",
+   "evidence": []
+  },
+  {
+   "sha": "f096185f3a2369f19971ccc6e5b2fb6030904648",
+   "subject": "Fix Windows atomic writes and refresh build maintenance (#60872)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "implementation_pending",
+   "evidence": []
+  },
+  {
+   "sha": "d27e7c1a8d1b10fa9db9d83afb51f277ff6002f9",
+   "subject": "Stabilize tracing in the cancellation timing test (#60882)",
+   "kind": "test",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "Rust-only tracing stabilization inside a Rust cancellation timing test; no Go counterpart."
+   ]
+  },
+  {
+   "sha": "14e039906c927fb54e30c54e947eb7123e386815",
+   "subject": "Use the Responses API for issue label suggestions (#60897)",
+   "kind": "test",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "Touches only .github/scripts/issue_labeler.py; the Go repository has no issue labeler script."
+   ]
+  },
+  {
+   "sha": "9248df5978cfc7186b3311eec932c006615adf29",
+   "subject": "Include bundled bubblewrap in the root metadata test fixture (#60898)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "implementation_pending",
+   "evidence": []
+  },
+  {
+   "sha": "8a4b226ad5d69978d62cf0c5a20c41420431a93e",
+   "subject": "Version answer display instructions and restrict unsupported payloads (#60904)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "implementation_pending",
+   "evidence": []
+  },
+  {
+   "sha": "561f0f5cf0f29c62bd3233c54dc21fcaf4a61c33",
+   "subject": "Keep same-named MCP servers separate across environments (#60905)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "implementation_pending",
+   "evidence": []
+  },
+  {
+   "sha": "c95b72ed6f00348c6da5ab95b740398094023ce8",
+   "subject": "Reserve Guardian context budget for selected Code Mode exec results (#60914)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "implementation_pending",
+   "evidence": []
+  },
+  {
+   "sha": "27294165dc163ce67bcb7fd68a7ac745fe20d517",
+   "subject": "Preserve Command Center task ownership across backend switches (#60929)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "implementation_pending",
+   "evidence": []
+  },
+  {
+   "sha": "c93732887e2e098d6119b2f2a0d1d5d1b9151f52",
+   "subject": "Preserve legacy sandbox templates in TUI permission conversions (#60936)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "implementation_pending",
+   "evidence": []
+  },
+  {
+   "sha": "77cbcdb4a6ddee3955130aed667a298004997237",
+   "subject": "Preserve thread-local model ID state across replay and compaction (#60942)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "implementation_pending",
+   "evidence": []
+  },
+  {
+   "sha": "5a529c2909eb7f169b1f1fb2ed4893718504ffba",
+   "subject": "Preserve file permissions during repeated Windows sandbox setup (#60943)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "implementation_pending",
+   "evidence": []
+  },
+  {
+   "sha": "d7840f9f22f330dd67e0a1638f66591ae221df36",
+   "subject": "Reconcile Windows runtime registration after service privilege errors (#60944)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "implementation_pending",
+   "evidence": []
+  },
+  {
+   "sha": "1b7c0252586f3701493bb7c9331290c06346b842",
+   "subject": "Report biometric type in user verification responses (#60948)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "implementation_pending",
+   "evidence": []
+  },
+  {
+   "sha": "64acaba91cd8dfca2fa3f7e50b166b1ef32e8752",
+   "subject": "Refactor shortcut overlay binding construction (#60962)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "implementation_pending",
+   "evidence": []
+  },
+  {
+   "sha": "5c3ff1dabf644169f4bd74b215719f381e4fdb3f",
+   "subject": "Validate the issue labeler's API key before sending requests (#60964)",
+   "kind": "test",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "Touches only .github/scripts/issue_labeler.py; the Go repository has no issue labeler script."
+   ]
+  },
+  {
+   "sha": "f988ada4bf1be6c1786b20b154cef7a0dce837c9",
+   "subject": "Reconnect idle Cloud conversations after transient stream loss (#60969)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "implementation_pending",
+   "evidence": []
+  },
+  {
+   "sha": "0702ebed4d6878c40bb90e01ef33039b21c6e1fc",
+   "subject": "Lowercase service tier names in the model status line (#60972)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "implementation_pending",
+   "evidence": []
+  },
+  {
+   "sha": "cbd494409262f23c4d8534b993337a5b4e2f522e",
+   "subject": "Preserve allocated response item IDs in requests (#60977)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "implementation_pending",
+   "evidence": []
+  },
+  {
+   "sha": "6bfdc75f0d9e6fae313234f694839866d7c63c39",
+   "subject": "Make reactive MCP OAuth refreshes cancellation-safe (#60981)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "implementation_pending",
+   "evidence": []
   }
  ]
 }

@@ -38,16 +38,16 @@ func TestSubcommandHelpRequestsLikeRust(t *testing.T) {
 			}
 		})
 	}
-	if pages != 81 {
-		t.Fatalf("captured %d subcommand pages, want 81 (plus the root page)", pages)
+	if pages != 82 {
+		t.Fatalf("captured %d subcommand pages, want 82 (plus the root page)", pages)
 	}
 }
 
 // TestSubcommandHelpPagesArePopulatedLikeRust checks every rendered page is a
 // newline-terminated block and that the usage tables cover the same paths.
 func TestSubcommandHelpPagesArePopulatedLikeRust(t *testing.T) {
-	if len(subcommandHelpPages) != 82 || len(subcommandShortHelpPages) != 82 {
-		t.Fatalf("captured %d/%d pages, want 82/82", len(subcommandHelpPages), len(subcommandShortHelpPages))
+	if len(subcommandHelpPages) != 83 || len(subcommandShortHelpPages) != 83 {
+		t.Fatalf("captured %d/%d pages, want 83/83", len(subcommandHelpPages), len(subcommandShortHelpPages))
 	}
 	for path, lines := range subcommandHelpPages {
 		if len(lines) == 0 {

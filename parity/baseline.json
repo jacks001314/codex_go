@@ -1,13 +1,13 @@
 {
  "schemaVersion": 1,
- "frozenAt": "2026-11-11",
- "plan": "update/plan_2026_11_11.md",
+ "frozenAt": "2026-11-12",
+ "plan": "update/plan_2026_11_12.md",
  "verified": {
   "rustCommit": "67f0994b532b8740f14b5b738af7b7b2a915b1d6",
   "parityManifest": "parity.json"
  },
  "target": {
-  "rustCommit": "9018f3a3b021082ef186ddd6503c0b4fd7a26260",
+  "rustCommit": "6bfdc75f0d9e6fae313234f694839866d7c63c39",
   "rustBranch": "main",
   "goStartCommit": "5e25b91daebea89b54db643b2d70ee4c930f9cd7"
  },
@@ -37,7 +37,7 @@
   ]
  },
  "certificationBlockers": [
-  "Per-commit certification of the 3782 upstream commits in bd19459358f534ed1cae464ec13d56600aeb45f2..9018f3a3b021082ef186ddd6503c0b4fd7a26260 is in progress; parity/commits.json records every commit with its audit status (3102 complete, 646 not applicable, 0 audit_pending, 0 regression_pending, 30 partial, 4 blocked_precondition)",
+  "Per-commit certification of the 3821 upstream commits in bd19459358f534ed1cae464ec13d56600aeb45f2..6bfdc75f0d9e6fae313234f694839866d7c63c39 is in progress; parity/commits.json records every commit with its audit status (3107 complete, 650 not applicable, 30 implementation_pending, 0 audit_pending, 0 regression_pending, 30 partial, 4 blocked_precondition)",
   "4 commits are blocked on architecture: #40625 (Ignore closed agents when changing directories), #42841 (Add a native Windows MXC sandbox adapter), #43624 (Add macOS user verification with Secure Enclave signing), #55378 (Migrate the Windows MXC sandbox to `mxc-sdk`)",
   "30 commits are partial and keep the candidate open: #54776, #57267, #58718, #58720, #59003, #59739, #59767, #59944, #59987, #59988, #59994, #59995, #59999, #60000, #60001, #60002, #60018, #60019, #60020, #60021, #60022, #60026, #60027, #60029, #60031, #60032, #60046, #60048, #60075, #60172; each entry's evidence records the residual it was judged against",
   "4 domains remain open in parity/domains.json: alignment-control (partial), sqlite-runtime-version (partial), sdk-cancellation (partial), cross-platform-release (partial)",

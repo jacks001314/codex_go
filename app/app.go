@@ -123,6 +123,10 @@ func RunWithOptions(ctx context.Context, args []string, stdin io.Reader, stdout,
 		logout := parsed.Login
 		logout.ConfigOverrides = append(append([]string(nil), parsed.Root.ConfigOverrides...), logout.ConfigOverrides...)
 		return runLogout(ctx, logout, stderr)
+	case cli.CommandGitCredential:
+		credential := parsed.GitCredential
+		credential.ConfigOverrides = append(append([]string(nil), parsed.Root.ConfigOverrides...), credential.ConfigOverrides...)
+		return runGitCredential(ctx, credential, stdin, stdout, stderr)
 	case cli.CommandFeatures:
 		return runFeatures(parsed.Features, parsed.Root, stdout, stderr)
 	case cli.CommandMCP:

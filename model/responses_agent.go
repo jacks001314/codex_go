@@ -2739,9 +2739,11 @@ func responsesToolsContainType(tools []any, toolType string) bool {
 }
 
 // responsesProviderPublishesLegacyIncrementalTools reports the providers whose
-// regular Responses route publishes incremental tool declarations behind
-// `incremental_tools_legacy`. Rust #60617 extends the #60040 gate from the two
-// bundled Amazon Bedrock providers to Google Cloud Vertex AI.
+// regular Responses route can publish incremental tool declarations. Rust
+// #60848 splits the former shared feature gate into `incremental_tools_legacy`
+// (Amazon Bedrock, default off) and `incremental_tools_legacy_gcp` (Google
+// Cloud Vertex AI, default on); both are resolved per turn in
+// incrementalToolsEnabledForTurn, so this only names the providers.
 func responsesProviderPublishesLegacyIncrementalTools(name string) bool {
 	info := ProviderInfo{Name: strings.TrimSpace(name)}
 	return info.IsAmazonBedrock() || info.IsGCP()

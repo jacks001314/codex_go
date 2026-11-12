@@ -495,6 +495,7 @@ type subcommandUsageText struct {
 
 var subcommandUsageTexts = map[string]subcommandUsageText{
 	"login":                             {"Usage: codex login [OPTIONS] [COMMAND]", false},
+	"git-credential":                    {"Usage: codex git-credential [OPTIONS] <OPERATION>", true},
 	"review":                            {"Usage: codex review [OPTIONS] [PROMPT]", true},
 	"logout":                            {"Usage: codex logout [OPTIONS]", false},
 	"mcp list":                          {"Usage: codex mcp list [OPTIONS]", false},
@@ -1694,6 +1695,9 @@ var clapCommandLongFlags = map[string][]string{
 	},
 	"logout": {
 		"config", "enable", "disable", "help",
+	},
+	"git-credential": {
+		"config", "help",
 	},
 	"mcp": {
 		"config", "enable", "disable", "help",

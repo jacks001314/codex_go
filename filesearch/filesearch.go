@@ -90,12 +90,26 @@ func Run(ctx context.Context, pattern string, roots []string, options Options) (
 	}
 	matches := []FileMatch{}
 	total := 0
+	// Rust #60845: repeated roots collapse to one walk, and a path reachable
+	// from several requested roots is reported once, attributed to the deepest
+	// root that contains it.
+	uniqueRoots := make([]string, 0, len(roots))
+	seenRoots := make(map[string]bool, len(roots))
 	for _, root := range roots {
 		absRoot, err := filepath.Abs(root)
 		if err != nil {
 			return nil, err
 		}
-		err = filepath.WalkDir(absRoot, func(path string, entry os.DirEntry, walkErr error) error {
+		absRoot = filepath.Clean(absRoot)
+		if seenRoots[absRoot] {
+			continue
+		}
+		seenRoots[absRoot] = true
+		uniqueRoots = append(uniqueRoots, absRoot)
+	}
+	seenEntries := make(map[string]bool)
+	for _, absRoot := range uniqueRoots {
+		err := filepath.WalkDir(absRoot, func(path string, entry os.DirEntry, walkErr error) error {
 			if walkErr != nil {
 				return nil
 			}
@@ -111,11 +125,23 @@ func Run(ctx context.Context, pattern string, roots []string, options Options) (
 				}
 				return nil
 			}
-			relative, err := filepath.Rel(absRoot, path)
+			ownerRoot := deepestRootFor(path, uniqueRoots)
+			if ownerRoot == "" {
+				return nil
+			}
+			relative, err := filepath.Rel(ownerRoot, path)
 			if err != nil || relative == "." {
 				return nil
 			}
 			relative = filepath.ToSlash(relative)
+			key := ownerRoot + "\x00" + relative
+			if seenEntries[key] {
+				if entry.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			seenEntries[key] = true
 			if excluded(relative, options.Exclude) {
 				if entry.IsDir() {
 					return filepath.SkipDir
@@ -132,10 +158,10 @@ func Run(ctx context.Context, pattern string, roots []string, options Options) (
 				matchType = MatchDirectory
 			}
 			if options.ComputeIndices {
-				matches = append(matches, FileMatch{Score: score, Path: relative, MatchType: matchType, Root: absRoot, Indices: indices})
+				matches = append(matches, FileMatch{Score: score, Path: relative, MatchType: matchType, Root: ownerRoot, Indices: indices})
 				return nil
 			}
-			matches = append(matches, FileMatch{Score: score, Path: relative, MatchType: matchType, Root: absRoot})
+			matches = append(matches, FileMatch{Score: score, Path: relative, MatchType: matchType, Root: ownerRoot})
 			return nil
 		})
 		if err != nil {
@@ -155,6 +181,22 @@ func Run(ctx context.Context, pattern string, roots []string, options Options) (
 		matches = matches[:options.Limit]
 	}
 	return &Results{Matches: matches, TotalMatchCount: total}, nil
+}
+
+// deepestRootFor reports the requested root that most specifically contains
+// path, so nested roots share one result instead of duplicating their subtree.
+func deepestRootFor(path string, roots []string) string {
+	best := ""
+	for _, root := range roots {
+		rel, err := filepath.Rel(root, path)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			continue
+		}
+		if len(root) > len(best) {
+			best = root
+		}
+	}
+	return best
 }
 
 func Score(pattern string, candidate string) (int, []int, bool) {

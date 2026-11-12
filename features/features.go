@@ -227,9 +227,19 @@ var Registry = []Spec{
 	// development and off by default.
 	{Key: "command_sessions_world_state", Stage: StageUnderDevelopment},
 	{Key: "incremental_tools", Stage: StageStable, DefaultEnabled: true},
-	// Rust #59832: publish incremental tool declarations on regular OpenAI
-	// Responses requests, independently of the Responses Lite flag.
-	{Key: "incremental_tools_legacy", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust #59832: publish incremental tool declarations on regular Amazon
+	// Bedrock Responses requests, independently of the Responses Lite flag.
+	{Key: "incremental_tools_legacy", Stage: StageStable, DefaultEnabled: false},
+	// Rust #60848: the same declarations on regular Google Cloud Vertex AI
+	// Responses requests ship enabled by default and toggle separately from
+	// the Bedrock flag.
+	{Key: "incremental_tools_legacy_gcp", Stage: StageStable, DefaultEnabled: true},
+	// Rust #60749/#60773: capture the saved Daybreak choice for native helpers
+	// and their turns. Under development and off by default.
+	{Key: "daybreak_program_propagation", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust #60905: keep same-named HTTP MCP servers discovered on different
+	// executors separate. Under development and off by default.
+	{Key: "multi_environment_mcp", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	// Rust (codex-rs/features/src/lib.rs #58405): omit the model ID
 	// announcement from incremental context after a model switch while still
 	// sending changed base instructions and tool definitions.

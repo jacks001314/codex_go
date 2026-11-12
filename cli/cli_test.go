@@ -369,6 +369,8 @@ func normalizeRustCommandName(name string) string {
 		return "stdio-to-uds"
 	case "TcpTunnel":
 		return "tcp-tunnel"
+	case "GitCredential":
+		return "git-credential"
 	default:
 		if name == strings.ToUpper(name[:1])+name[1:] {
 			return strings.ToLower(name[:1]) + name[1:]

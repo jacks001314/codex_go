@@ -59,6 +59,12 @@ func commandOverrideDiagnostic(parsed *cli.Parsed) overrideDiagnostic {
 			prefix: "Error parsing -c overrides: ",
 			silent: true,
 		}
+	case cli.CommandGitCredential:
+		return overrideDiagnostic{
+			raw:    joinOverrideScopes(parsed.Root.ConfigOverrides, parsed.GitCredential.ConfigOverrides),
+			prefix: "Error parsing -c overrides: ",
+			silent: true,
+		}
 	case cli.CommandFeatures:
 		return overrideDiagnostic{
 			raw: joinOverrideScopes(parsed.Root.ConfigOverrides, parsed.Features.ConfigOverrides),

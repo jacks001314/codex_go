@@ -53,8 +53,8 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	// Re-anchored to upstream 9018f3a3: the safety-recourse (#60613), pending
 	// key-chord guide (#60637), MCP startup (#60622) and composer footer
 	// row-budget (#60680-#60683) suites added nine goldens.
-	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1529 {
-		t.Fatalf("Rust TUI snapshot total drift: got %d want 1529", got)
+	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1531 {
+		t.Fatalf("Rust TUI snapshot total drift: got %d want 1531", got)
 	}
 
 	gotDirs := rustTUISnapshotDirs(t, root)
@@ -166,7 +166,9 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// Re-anchored to 9018f3a3: the pending key-chord guide (#60637)
 			// added two app goldens and the saved-chat loading states (#60599)
 			// added one.
-			Files:    90,
+			// Re-anchored to 6bfdc75f: the command-center ownership and Cloud
+			// reconnect work (#60929/#60969) added one app golden.
+			Files:    91,
 			Owner:    "tui/app",
 			Focus:    "app-level catalog and migration prompts",
 			Priority: []string{"app", "model"},
@@ -339,7 +341,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// pets-unavailable notice; #48015 added the declined-tool-suggestion
 			// snapshot; #48116 added the two Max-reasoning footer snapshots.
 			// Re-anchored to a7a9d82f: the rate-limit recovery notice (#60435) and one more golden landed.
-			Files:    339,
+			Files:    340,
 			Owner:    "tui/chatwidget, tui/tea",
 			Focus:    "main chat widget terminal snapshots for status lines, approvals, plugins, hooks, review, usage, and unified exec",
 			Priority: []string{"approval", "status", "history", "unified-exec", "review"},

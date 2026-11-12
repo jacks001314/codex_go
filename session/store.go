@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"codex_go/protocol"
+	"codex_go/utils"
 )
 
 const (
@@ -501,20 +502,14 @@ func (s *Store) SearchMessageOccurrences(threadID ThreadID, searchTerm string) (
 			}
 			text = strings.Join(parts, "\n")
 		}
-		lower := strings.ToLower(text)
-		for from := 0; from <= len(lower); {
-			rel := strings.Index(lower[from:], needle)
-			if rel < 0 {
-				break
-			}
-			start := from + rel
-			end := start + len(needle)
-			turnID, _ := item.Data["turn_id"].(string)
-			if turnID == "" {
-				turnID, _ = item.Data["turnId"].(string)
-			}
-			out = append(out, MessageOccurrence{TurnID: turnID, ItemID: item.ID, Text: text, Start: start, End: end})
-			from = end
+		turnID, _ := item.Data["turn_id"].(string)
+		if turnID == "" {
+			turnID, _ = item.Data["turnId"].(string)
+		}
+		// Rust #60759: thread search matches under Unicode default case
+		// folding, so final sigma, sigma and the "ss" fold of "ß" all hit.
+		for _, match := range utils.FoldedRanges(text, needle, 0) {
+			out = append(out, MessageOccurrence{TurnID: turnID, ItemID: item.ID, Text: text, Start: match[0], End: match[1]})
 		}
 	}
 	return out, nil

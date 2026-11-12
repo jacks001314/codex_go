@@ -63,6 +63,39 @@ func TestRunHonorsExcludesAndLimit(t *testing.T) {
 	}
 }
 
+func TestOverlappingRootsShareResultSlotsByPath(t *testing.T) {
+	dir := t.TempDir()
+	parent := dir
+	child := filepath.Join(dir, "sub")
+	if err := os.MkdirAll(child, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	for _, root := range []string{parent, child} {
+		if err := os.WriteFile(filepath.Join(root, "target.txt"), nil, 0o600); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+	for _, roots := range [][]string{
+		{parent, child, parent},
+		{child, parent, child},
+	} {
+		results, err := Run(context.Background(), "target", roots, Options{Limit: 2})
+		if err != nil {
+			t.Fatalf("run: %v", err)
+		}
+		if results.TotalMatchCount != 2 || len(results.Matches) != 2 {
+			t.Fatalf("roots %v produced %d/%d matches, want 2/2: %#v", roots, results.TotalMatchCount, len(results.Matches), results.Matches)
+		}
+		got := map[string]string{}
+		for _, match := range results.Matches {
+			got[match.Root] = match.Path
+		}
+		if got[parent] != "target.txt" || got[child] != "target.txt" {
+			t.Fatalf("roots %v attributed paths %#v", roots, got)
+		}
+	}
+}
+
 func TestFileNameFromPath(t *testing.T) {
 	if got := FileNameFromPath("foo/bar.txt"); got != "bar.txt" {
 		t.Fatalf("unexpected basename: %q", got)
