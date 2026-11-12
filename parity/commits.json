@@ -46891,8 +46891,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "implementation_pending",
-   "evidence": []
+   "status": "complete",
+   "evidence": [
+    "ProvisionOnly setup for a registered runtime now verifies both persistent sandbox directories before writing them: sandbox/windowssandbox/bin/setup_main/win/run_windows.go adds directoryACLPolicy (verify inherited, apply inherited, apply protected), opens the directory read-only with DirectoryOpenExisting for verification, and skips both writes when directoryDACLMatchesPolicy reports the explicit ACEs match byte for byte with only inherited entries after them.",
+    "directoryDACLMatchesPolicy compares complete ACE bytes through GetSecurityInfo/GetAce (flags, mask and trustee) and requires INHERITED_ACE on any trailing entry, so extra explicit permissions or a changed mask still fall back to applying the directory policy in order. The bin directory keeps the protected policy.",
+    "Tests: sandbox/windowssandbox/bin/setup_main/win/persistent_acl_like_rust_windows_test.go repeats registered setup and verifies a file moved into the sandbox stays unwritable for the sandbox group while a newly created file inherits write access, plus an exact-policy comparison case; go test ./sandbox/windowssandbox/bin/setup_main/win ./sandbox/windowssandbox -count=1.",
+    "plan: update/plan_2026_11_12.md"
+   ]
   },
   {
    "sha": "d7840f9f22f330dd67e0a1638f66591ae221df36",

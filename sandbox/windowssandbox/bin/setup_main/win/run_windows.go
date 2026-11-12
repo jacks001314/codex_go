@@ -3,6 +3,7 @@
 package win
 
 import (
+	"bytes"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"codex_go/sandbox/windowssandbox"
 	json "github.com/goccy/go-json"
@@ -734,7 +736,7 @@ func lockSandboxBinDir(payload *setupPayload, sandboxGroupSID []byte, log io.Wri
 		uint32(windows.FILE_GENERIC_READ|windows.FILE_GENERIC_WRITE|windows.FILE_GENERIC_EXECUTE|windows.DELETE),
 		// Rust #42330: the bin dir is often inside the workspace, so inherited
 		// write/delete ACEs would let the sandbox replace its own runner.
-		true,
+		directoryACLApplyProtected,
 		payload.Mode == setupModeProvision,
 	)
 	if err != nil {
@@ -749,6 +751,34 @@ func lockSandboxBinDir(payload *setupPayload, sandboxGroupSID []byte, log io.Wri
 }
 
 func lockPersistentSandboxDirs(payload *setupPayload, sandboxGroupSID []byte, log io.Writer) error {
+	// Rust #60943: a registered runtime only rewrites the persistent directory
+	// policies when verification fails. Reapplying them would change the
+	// permissions of files that were moved into the sandbox directory since the
+	// previous setup.
+	if !registeredPersistentDirectoriesConfigured(payload, sandboxGroupSID) {
+		if err := applyPersistentDirectoryPolicy(payload, sandboxGroupSID, directoryACLApplyInherited); err != nil {
+			return err
+		}
+	}
+	sandboxDir := windowssandbox.SandboxDir(payload.CodexHome)
+	legacyUsers := filepath.Join(sandboxDir, "sandbox_users.json")
+	if err := os.Remove(legacyUsers); err != nil && !os.IsNotExist(err) {
+		setupLogLine(log, fmt.Sprintf("remove legacy sandbox users file failed: %v", err))
+	}
+	return nil
+}
+
+// registeredPersistentDirectoriesConfigured reports whether both persistent
+// sandbox directories already carry exactly the explicit policy with only
+// inherited entries after it.
+func registeredPersistentDirectoriesConfigured(payload *setupPayload, sandboxGroupSID []byte) bool {
+	return payload != nil &&
+		payload.Mode == setupModeProvision &&
+		payload.Runtime == string(windowssandbox.SetupRuntimeRegistered) &&
+		applyPersistentDirectoryPolicy(payload, sandboxGroupSID, directoryACLVerifyInherited) == nil
+}
+
+func applyPersistentDirectoryPolicy(payload *setupPayload, sandboxGroupSID []byte, policy directoryACLPolicy) error {
 	sandboxDir := windowssandbox.SandboxDir(payload.CodexHome)
 	err := lockSandboxDir(
 		sandboxDir,
@@ -757,7 +787,7 @@ func lockPersistentSandboxDirs(payload *setupPayload, sandboxGroupSID []byte, lo
 		windows.SET_ACCESS,
 		uint32(windows.FILE_GENERIC_READ|windows.FILE_GENERIC_WRITE|windows.FILE_GENERIC_EXECUTE|windows.DELETE),
 		uint32(windows.FILE_GENERIC_READ|windows.FILE_GENERIC_WRITE|windows.FILE_GENERIC_EXECUTE),
-		false,
+		policy,
 		payload.Mode == setupModeProvision,
 	)
 	if err != nil {
@@ -771,30 +801,118 @@ func lockPersistentSandboxDirs(payload *setupPayload, sandboxGroupSID []byte, lo
 		windows.DENY_ACCESS,
 		uint32(windows.FILE_GENERIC_READ|windows.FILE_GENERIC_WRITE|windows.FILE_GENERIC_EXECUTE|windows.DELETE),
 		uint32(windows.FILE_GENERIC_READ|windows.FILE_GENERIC_WRITE|windows.FILE_GENERIC_EXECUTE),
-		false,
+		policy,
 		payload.Mode == setupModeProvision,
 	)
 	if err != nil {
 		return setupFailuref(windowssandbox.SetupErrorHelperSandboxLockFailed, "lock sandbox secrets dir %s failed: %s", secretsDir, windowssandbox.SetupErrorChain(err))
 	}
-	legacyUsers := filepath.Join(sandboxDir, "sandbox_users.json")
-	if err := os.Remove(legacyUsers); err != nil && !os.IsNotExist(err) {
-		setupLogLine(log, fmt.Sprintf("remove legacy sandbox users file failed: %v", err))
-	}
 	return nil
 }
 
-func lockSandboxDir(dir string, realUser string, sandboxGroupSID []byte, sandboxGroupAccessMode windows.ACCESS_MODE, sandboxGroupMask uint32, realUserMask uint32, protectDACL bool, pinned bool) error {
+// directoryACLPolicy selects how a sandbox directory's DACL is handled
+// (Rust #60943 DirectoryAcl).
+type directoryACLPolicy int
+
+const (
+	// directoryACLVerifyInherited only reads the DACL and fails unless it
+	// already matches the explicit policy followed by inherited entries.
+	directoryACLVerifyInherited directoryACLPolicy = iota
+	// directoryACLApplyInherited writes the explicit policy, keeping inherited
+	// entries after it.
+	directoryACLApplyInherited
+	// directoryACLApplyProtected writes a protected policy that excludes
+	// inherited entries.
+	directoryACLApplyProtected
+)
+
+// errDirectoryPermissionsDiffer reports a DACL that does not carry exactly the
+// expected explicit policy followed by inherited entries.
+var errDirectoryPermissionsDiffer = errors.New("metadata directory permissions differ")
+
+// directoryDACLMatchesPolicy compares complete ACEs so extra explicit
+// permissions or a changed mask still require an update, while inherited
+// entries may follow the explicit policy (Rust #60943 metadata_policy_matches).
+func directoryDACLMatchesPolicy(handle windows.Handle, expected *windows.ACL) (bool, error) {
+	descriptor, err := windows.GetSecurityInfo(handle, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		return false, err
+	}
+	defer runtime.KeepAlive(descriptor)
+	current, _, err := descriptor.DACL()
+	if err != nil {
+		if err == windows.ERROR_OBJECT_NOT_FOUND {
+			return false, nil
+		}
+		return false, err
+	}
+	currentACEs, err := directoryDACLEntries(current)
+	if err != nil {
+		return false, err
+	}
+	explicitEntries, err := directoryDACLEntries(expected)
+	if err != nil {
+		return false, err
+	}
+	if len(currentACEs) < len(explicitEntries) {
+		return false, nil
+	}
+	for index := range explicitEntries {
+		if !bytes.Equal(currentACEs[index], explicitEntries[index]) {
+			return false, nil
+		}
+	}
+	for _, ace := range currentACEs[len(explicitEntries):] {
+		if len(ace) < 2 || ace[1]&byte(windows.INHERITED_ACE) == 0 {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// directoryDACLEntries returns each ACE as the exact bytes Windows stored, so
+// comparison covers flags, masks and trustees.
+func directoryDACLEntries(acl *windows.ACL) ([][]byte, error) {
+	if acl == nil {
+		return nil, nil
+	}
+	entries := make([][]byte, 0, int(acl.AceCount))
+	for index := uint32(0); index < uint32(acl.AceCount); index++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(acl, index, &ace); err != nil {
+			return nil, err
+		}
+		if ace == nil {
+			return nil, errors.New("nil access control entry")
+		}
+		size := int(ace.Header.AceSize)
+		if size < 4 {
+			return nil, fmt.Errorf("invalid access control entry size %d", size)
+		}
+		entries = append(entries, append([]byte(nil), unsafe.Slice((*byte)(unsafe.Pointer(ace)), size)...))
+	}
+	return entries, nil
+}
+
+func lockSandboxDir(dir string, realUser string, sandboxGroupSID []byte, sandboxGroupAccessMode windows.ACCESS_MODE, sandboxGroupMask uint32, realUserMask uint32, policy directoryACLPolicy, pinned bool) error {
 	var pinnedHandle windows.Handle
 	if pinned {
 		// Rust #42342: service provisioning applies the DACL through a pinned,
 		// reparse-free handle, so the mutation cannot be redirected after path
 		// validation.
+		// Verification only reads the DACL and must not create the directory
+		// (Rust #60943), so a missing directory falls back to the write path.
+		desiredAccess := uint32(windows.READ_CONTROL | windows.WRITE_DAC)
+		disposition := windowssandbox.DirectoryOpenOrCreate
+		if policy == directoryACLVerifyInherited {
+			desiredAccess = windows.READ_CONTROL
+			disposition = windowssandbox.DirectoryOpenExisting
+		}
 		handle, err := windowssandbox.OpenDirectoryNoReparse(
 			dir,
-			windows.READ_CONTROL|windows.WRITE_DAC,
+			desiredAccess,
 			windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
-			windowssandbox.DirectoryOpenOrCreate,
+			disposition,
 		)
 		if err != nil {
 			return err
@@ -817,7 +935,7 @@ func lockSandboxDir(dir string, realUser string, sandboxGroupSID []byte, sandbox
 		return err
 	}
 	systemMask := uint32(windows.FILE_GENERIC_READ | windows.FILE_GENERIC_WRITE | windows.FILE_GENERIC_EXECUTE | windows.DELETE)
-	if protectDACL {
+	if policy == directoryACLApplyProtected {
 		// Rust #59745: the SYSTEM helper must be able to reapply the bin policy to
 		// existing children, so a protected bin DACL also grants inheritable WRITE_DAC.
 		systemMask |= windows.WRITE_DAC
@@ -855,8 +973,24 @@ func lockSandboxDir(dir string, realUser string, sandboxGroupSID []byte, sandbox
 	if err != nil {
 		return err
 	}
+	if policy == directoryACLVerifyInherited {
+		if !pinned {
+			return errors.New("verification requires a service directory handle")
+		}
+		matches, err := directoryDACLMatchesPolicy(pinnedHandle, newACL)
+		runtime.KeepAlive(sids)
+		runtime.KeepAlive(explicitEntries)
+		runtime.KeepAlive(newACL)
+		if err != nil {
+			return err
+		}
+		if !matches {
+			return errDirectoryPermissionsDiffer
+		}
+		return nil
+	}
 	securityInformation := windows.SECURITY_INFORMATION(windows.DACL_SECURITY_INFORMATION)
-	if protectDACL {
+	if policy == directoryACLApplyProtected {
 		securityInformation |= windows.PROTECTED_DACL_SECURITY_INFORMATION
 	}
 	var setErr error
