@@ -906,6 +906,77 @@ func TestModelSteersPromptWhileRunningAndCommitsWithoutFutureQueue(t *testing.T)
 	}
 }
 
+func TestModelQueuesSubmissionWhileTurnStartPendingLikeRust(t *testing.T) {
+	state := codextui.NewState(nil)
+	var submitted []SubmitRequest
+	steered := 0
+	model := NewModel(state, Options{
+		OnSubmitRequest: func(request SubmitRequest) bubbletea.Cmd {
+			submitted = append(submitted, request)
+			return func() bubbletea.Msg { return nil }
+		},
+		OnSteerRequest: func(SubmitRequest, string) error {
+			steered++
+			return nil
+		},
+	})
+	model.composer.SetValue("first")
+	if _, cmd := model.Update(key(keymsg.KeyEnter)); cmd == nil {
+		t.Fatal("first submission returned no command")
+	}
+	if len(submitted) != 1 || !model.userTurnPendingStart {
+		t.Fatalf("pending start = %v, submissions = %#v", model.userTurnPendingStart, submitted)
+	}
+
+	// Rust input_flow.rs:63-81: a submission whose turn/started has not
+	// arrived yet cannot steer, so it queues as a follow-up.
+	model.composer.SetValue("second")
+	model.Update(key(keymsg.KeyEnter))
+	if steered != 0 {
+		t.Fatalf("pending-start submission steered %d times", steered)
+	}
+	if got := model.QueuedRequests(); len(got) != 1 || got[0].Prompt != "second" {
+		t.Fatalf("queued requests = %#v", got)
+	}
+	if !strings.Contains(model.viewString(), "Queued follow-up inputs") {
+		t.Fatalf("queued preview missing:\n%s", model.viewString())
+	}
+
+	model.Update(ThreadEventMsg{Event: protocol.TurnStarted()})
+	if model.userTurnPendingStart {
+		t.Fatal("turn/started did not clear the pending start flag")
+	}
+	model.composer.SetValue("third")
+	_, cmd := model.Update(key(keymsg.KeyEnter))
+	if cmd == nil {
+		t.Fatal("steer command is nil")
+	}
+	_ = cmd()
+	if steered != 1 {
+		t.Fatalf("steers after turn start = %d, want 1", steered)
+	}
+}
+
+func TestModelRejectedSteerSubmitsWhenIdleLikeRust(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetStatus("idle")
+	var submitted []SubmitRequest
+	model := NewModel(state, Options{
+		OnSubmitRequest: func(request SubmitRequest) bubbletea.Cmd {
+			submitted = append(submitted, request)
+			return nil
+		},
+	})
+	model.pendingSteers = []pendingSteerSubmission{{ID: "steer-1", Request: SubmitRequest{Prompt: "late steer"}}}
+	model.Update(SteerResultMsg{ClientID: "steer-1", Err: errors.New("no active turn to steer")})
+	// Rust starts a fresh turn when a steer races the end of its turn
+	// (user_message_submission.rs:159-166) instead of parking the input until
+	// the next prompt.
+	if len(submitted) != 1 || submitted[0].Prompt != "late steer" {
+		t.Fatalf("resubmitted requests = %#v", submitted)
+	}
+}
+
 func TestModelRejectedSteerFallsBackAtTurnCompletion(t *testing.T) {
 	state := codextui.NewState(nil)
 	state.SetStatus("running")

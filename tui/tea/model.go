@@ -2341,6 +2341,11 @@ type Model struct {
 	misalignmentReview        *misalignmentReview
 	misalignmentReviewSerial  uint64
 	currentTurnID             string
+	// userTurnPendingStart mirrors Rust input_queue.user_turn_pending_start:
+	// a user turn was dispatched but its turn/started has not arrived yet, so
+	// the server has no active turn to steer (chatwidget/input_queue.rs:35,
+	// input_flow.rs:64-81).
+	userTurnPendingStart bool
 	// delegatedTurns is the append-only set of turns opened by a realtime voice
 	// handoff. Rust keeps the marker past TurnCompleted (ThreadEventStore::
 	// delegated_turns); the thread-scoped reset clears it on a thread switch.
@@ -4315,7 +4320,11 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		return m, nil
 	case SteerResultMsg:
 		m.applySteerResult(msg)
-		return m, nil
+		// A steer rejected after the turn ended would otherwise wait for the
+		// next user prompt; Rust retries it as a fresh turn instead
+		// (user_message_submission.rs:159-166). submitNextQueued is a no-op
+		// while the turn is still running.
+		return m, m.submitNextQueued()
 	case SteerCommittedMsg:
 		m.commitPendingSteers(msg.Count)
 		return m, nil
@@ -5195,6 +5204,13 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 			if m.isUserTurnPendingOrRunning() {
 				if cmd, handled := m.submitRunningSlashCommand(); handled {
 					return m, cmd
+				}
+				// Rust input_flow.rs:63-81: a prompt whose turn/start has not
+				// produced turn/started yet has no active turn to steer, so
+				// Enter queues it as a follow-up instead of recording a
+				// rejected steer that waits for the end of the turn.
+				if m.userTurnPendingStart {
+					return m, m.queueComposer(true)
 				}
 				return m, m.steerComposer()
 			}
@@ -7023,7 +7039,13 @@ func (m *Model) submitRequest(request SubmitRequest, parseCommand bool) bubblete
 	m.submitRequests = append(m.submitRequests, cloneSubmitRequest(request))
 	m.refreshTranscript()
 	if m.onSubmitRequest != nil {
-		return m.onSubmitRequest(request)
+		cmd := m.onSubmitRequest(request)
+		if cmd != nil {
+			// Rust input_submission.rs:552-555 marks the submission pending
+			// start until the turn/started receipt arrives.
+			m.userTurnPendingStart = true
+		}
+		return cmd
 	}
 	if m.onSubmit != nil {
 		return m.onSubmit(displayPrompt)
@@ -7971,6 +7993,8 @@ func (m *Model) captureTurnElapsed() {
 func (m *Model) applyTurnCompleted(message TurnCompletedMsg) bubbletea.Cmd {
 	questionDrafts := m.takeQuestionDrafts()
 	m.clearSafetyBuffering()
+	// Rust on_task_complete clears the pending start flag (turn_runtime.rs:199).
+	m.userTurnPendingStart = false
 	m.flushComputerActivityGroup()
 	m.flushActiveExecCell()
 	m.deferPendingSteers()
@@ -8088,6 +8112,9 @@ func (m *Model) applyTurnInterrupted(message TurnInterruptedMsg) {
 	}
 	questionDrafts := m.takeQuestionDrafts()
 	m.clearSafetyBuffering()
+	// Rust finalizes the pending start alongside the interrupted turn
+	// (turn_runtime.rs:372).
+	m.userTurnPendingStart = false
 	if !m.isTaskRunning() {
 		m.flushDeferredSubAgentActivity()
 		return
@@ -8179,6 +8206,9 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 		// frame that paints it must be requested up front (Rust's
 		// `frame_requester.schedule_frame_in(remaining)`).
 		m.currentTurnID = strings.TrimSpace(firstNonEmpty(event.TurnID, event.InternalTurnID))
+		// Rust on_task_started clears user_turn_pending_start (turn_runtime.rs:93);
+		// the server now has an active turn, so later input can steer it.
+		m.userTurnPendingStart = false
 		m.turnFinalAnswerSeen = false
 		m.clearMisalignmentForNewTurn(event.TurnID)
 		// Rust #54114: a new turn clears the retained result before any work.

@@ -23,6 +23,9 @@ func (m *Model) resetThreadScopedState() {
 	// listener, snapshots, and pending state so /side can reopen it later.
 	m.deactivateSideConversation()
 	m.currentTurnID = ""
+	// Rust rebuilds the widget per thread, so a submission that was still
+	// waiting for turn/started does not carry over to the next thread.
+	m.userTurnPendingStart = false
 	// Rust swaps in a freshly built widget per thread; delegated-turn markers
 	// are thread-scoped, so the next thread must not inherit them.
 	m.delegatedTurns = map[string]struct{}{}
