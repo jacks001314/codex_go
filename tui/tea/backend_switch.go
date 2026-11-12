@@ -65,18 +65,27 @@ type pendingBackendRequest struct {
 // noteThreadBackend records the backend that serves a displayed thread (Rust
 // #58457 thread ownership tracking). Ownership outlives the picker row that
 // listed the thread, so a later selection keeps the backend that adopted it.
-func (m *Model) noteThreadBackend(threadID string, owner codextui.BackendID) {
+//
+// Rust #60929 keeps the first observed backend: a conversation belongs to one
+// backend even when a later listing or connection reports it elsewhere. A
+// conflicting observation is ignored and reported so callers can refuse to
+// route the thread through the wrong backend.
+func (m *Model) noteThreadBackend(threadID string, owner codextui.BackendID) bool {
 	if m == nil {
-		return
+		return false
 	}
 	threadID = strings.TrimSpace(threadID)
 	if threadID == "" || owner.IsZero() {
-		return
+		return false
 	}
 	if m.threadBackend == nil {
 		m.threadBackend = map[string]codextui.BackendID{}
 	}
+	if existing, ok := m.threadBackend[threadID]; ok && !existing.IsZero() {
+		return existing == owner
+	}
 	m.threadBackend[threadID] = owner
+	return true
 }
 
 // threadBackendOwner reports the backend a thread was last displayed through.

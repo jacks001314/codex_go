@@ -46882,8 +46882,12 @@
    "domains": [
     "codex_go"
    ],
-   "status": "implementation_pending",
-   "evidence": []
+   "status": "partial",
+   "evidence": [
+    "Implemented the ownership half of Rust #60929: tui/tea/backend_switch.go noteThreadBackend now keeps the first observed backend for a thread and reports a conflicting observation instead of overwriting ownership, matching BackendRegistry::observe; selectionBackend keeps preferring the recorded owner over a stale listing stamp, so opening a retained task routes through its owning backend. Tests: tui/tea/backend_ownership_like_rust_test.go.",
+    "Residual: Go's agents overview is still single-backend for discovery state. Per-backend discovery cursors, initialization and pins, backend-scoped refreshes and usage requests, background archive/delete notifications that do not consume the displayed backend's pagination budget, blank-session idleness verification with a history-read fallback before reusing cached sessions, draft restoration that resumes saved history with current collaboration settings, and interactive-only cloud discovery pages are not implemented.",
+    "Verification: go test ./tui/tea -count=1; go build ./...; plan: update/plan_2026_11_12.md"
+   ]
   },
   {
    "sha": "c93732887e2e098d6119b2f2a0d1d5d1b9151f52",
