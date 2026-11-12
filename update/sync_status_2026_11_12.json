@@ -57,6 +57,14 @@
   },
   "roundCommits": [
     {
+      "sha": "35174b33",
+      "subject": "docs: point the 2026-11-12 plan at the generated sync status snapshot"
+    },
+    {
+      "sha": "01662ca9",
+      "subject": "codex_go: make the sync status snapshot reproducible from any checkout"
+    },
+    {
       "sha": "2eded9ea",
       "subject": "codex_go: record a reproducible 2026-11-12 sync status snapshot"
     },
