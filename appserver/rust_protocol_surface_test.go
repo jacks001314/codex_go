@@ -207,6 +207,7 @@ func TestRustProtocolMethodSurfaceAgainstGoConstants(t *testing.T) {
 		string(MethodProjectMove):                            true,
 		string(MethodProjectDelete):                          true,
 		string(MethodThreadItemsRead):                        true,
+		string(MethodThreadPrepareApprovedPlan):              true,
 		string(MethodThreadReadStateUpdate):                  true,
 		string(MethodThreadTimelineList):                     true,
 		string(MethodPluginSearch):                           true,

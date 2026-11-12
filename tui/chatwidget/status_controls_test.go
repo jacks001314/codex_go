@@ -585,3 +585,29 @@ func TestStatusLineProfileAndProviderItemsLikeRust(t *testing.T) {
 		t.Fatalf("setup order = %v, want provider after profile", StatusLineItemIDs(AllStatusLineItems()))
 	}
 }
+
+// TestStatusLineLowercasesServiceTierLikeRust pins Rust #60972: the status
+// line renders the service tier lowercased, while the terminal title keeps the
+// configured spelling.
+func TestStatusLineLowercasesServiceTierLikeRust(t *testing.T) {
+	state := NewStatusControlsState(StatusControlsRuntime{
+		CWD:             "/repo",
+		ModelName:       "gpt-5.4",
+		ReasoningEffort: "xhigh",
+		ProcessingTier:  "UltraFast",
+	})
+	value, ok := state.StatusLineValueForItem(bottompane.StatusLineModelWithReasoning)
+	if !ok {
+		t.Fatal("status line model-with-reasoning missing")
+	}
+	if got, want := value, "gpt-5.4 xhigh ultrafast"; got != want {
+		t.Fatalf("status line = %q, want %q", got, want)
+	}
+	title, ok := state.TerminalTitleValueForItem(TerminalTitleModelWithReasoning)
+	if !ok {
+		t.Fatal("terminal title model-with-reasoning missing")
+	}
+	if got, want := title, "gpt-5.4 xhigh UltraFast"; got != want {
+		t.Fatalf("terminal title = %q, want %q", got, want)
+	}
+}

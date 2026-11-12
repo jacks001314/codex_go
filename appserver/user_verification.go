@@ -146,8 +146,18 @@ func (p *UserVerificationVerifyParams) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// UserVerificationBiometricType is the native authentication method that
+// signed this proof (Rust #60948). It is approval context, not signed data.
+type UserVerificationBiometricType string
+
+const (
+	UserVerificationBiometricFingerprint UserVerificationBiometricType = "fingerprint"
+)
+
 type UserVerificationVerifyResponse struct {
 	Proof UserVerificationProof `json:"proof"`
+	// BiometricType is omitted by older servers (#60948).
+	BiometricType *UserVerificationBiometricType `json:"biometricType,omitempty"`
 }
 
 type UserVerificationCancelParams struct {

@@ -92,6 +92,7 @@ const (
 	MethodThreadItemsRead                    Method = "thread/items/read"
 	MethodThreadTurnsList                    Method = "thread/turns/list"
 	MethodThreadInjectItems                  Method = "thread/inject_items"
+	MethodThreadPrepareApprovedPlan          Method = "thread/prepareApprovedPlan"
 	MethodThreadGuardianReview               Method = "thread/guardianReview"
 	MethodThreadRealtimeStart                Method = "thread/realtime/start"
 	MethodThreadRealtimeAppendAudio          Method = "thread/realtime/appendAudio"
@@ -3744,6 +3745,28 @@ func (p *ThreadInjectItemsParams) Validate() error {
 }
 
 type ThreadInjectItemsResponse struct{}
+
+// ThreadPrepareApprovedPlanParams mirrors Rust #60763: prepare an approved
+// plan for the first turn of a fresh thread.
+type ThreadPrepareApprovedPlanParams struct {
+	ThreadID string `json:"threadId"`
+	Markdown string `json:"markdown"`
+	// AttachmentPath is the absolute app-server copy of the plan, if any.
+	AttachmentPath *string `json:"attachmentPath,omitempty"`
+}
+
+func (p *ThreadPrepareApprovedPlanParams) Validate() error {
+	if p == nil || strings.TrimSpace(p.ThreadID) == "" {
+		return fmt.Errorf("%w: threadId is required", ErrInvalidRequest)
+	}
+	return nil
+}
+
+// ThreadPrepareApprovedPlanResponse carries the first user prompt. When no
+// attachment is readable the plan is already in the thread's context.
+type ThreadPrepareApprovedPlanResponse struct {
+	Prompt string `json:"prompt"`
+}
 
 type ThreadTurnsListParams struct {
 	ThreadID      string        `json:"threadId"`

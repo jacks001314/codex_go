@@ -362,3 +362,24 @@ func (p *slowUserVerificationProvider) Delete() (*UserVerificationDeleteResponse
 func (p *slowUserVerificationProvider) Verify(UserVerificationVerifyParams) (*UserVerificationVerifyResponse, error) {
 	return &UserVerificationVerifyResponse{}, nil
 }
+
+// TestUserVerificationVerifyResponseBiometricTypeLikeRust pins Rust #60948:
+// older servers omit biometricType and it stays empty, while a native Touch ID
+// signature reports the fingerprint method alongside the proof.
+func TestUserVerificationVerifyResponseBiometricTypeLikeRust(t *testing.T) {
+	var older UserVerificationVerifyResponse
+	if err := json.Unmarshal([]byte(`{"proof":{"credentialId":"credential","signature":"signature"}}`), &older); err != nil {
+		t.Fatalf("decode older response: %v", err)
+	}
+	if older.BiometricType != nil {
+		t.Fatalf("older response biometric type = %v, want empty", *older.BiometricType)
+	}
+
+	var newer UserVerificationVerifyResponse
+	if err := json.Unmarshal([]byte(`{"proof":{"credentialId":"credential","signature":"signature"},"biometricType":"fingerprint"}`), &newer); err != nil {
+		t.Fatalf("decode newer response: %v", err)
+	}
+	if newer.BiometricType == nil || *newer.BiometricType != UserVerificationBiometricFingerprint {
+		t.Fatalf("biometric type = %v, want fingerprint", newer.BiometricType)
+	}
+}

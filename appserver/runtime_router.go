@@ -3742,6 +3742,7 @@ func experimentalAPIMethod(method Method) bool {
 		MethodThreadItemsRead,
 		MethodThreadPredictionRequest,
 		MethodThreadSample,
+		MethodThreadPrepareApprovedPlan,
 		MethodThreadGuardianReview,
 		MethodThreadSampleCancel,
 		MethodThreadQueueAdd,
@@ -3959,6 +3960,9 @@ func (r *RuntimeRouter) dispatch(request *Request) (result any, err error) {
 				return nil, err
 			}
 			return r.handleThreadInjectItemsRuntime(request)
+		}
+		if request.Method == MethodThreadPrepareApprovedPlan {
+			return r.handleThreadPrepareApprovedPlanRuntime(request)
 		}
 		if request.Method == MethodThreadIncrementElicitation || request.Method == MethodThreadIncrementElicitationLegacy || request.Method == MethodThreadDecrementElicitation || request.Method == MethodThreadDecrementElicitationLegacy {
 			if err := r.rejectNotLoadedThreadRuntimeRequest(request); err != nil {

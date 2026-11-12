@@ -328,11 +328,15 @@ func (p *darwinUserVerificationProvider) Verify(params UserVerificationVerifyPar
 	if signErr != nil {
 		return nil, signErr.rpcError()
 	}
+	biometricType := UserVerificationBiometricFingerprint
 	return &UserVerificationVerifyResponse{
 		Proof: UserVerificationProof{
 			CredentialID: credentialID,
 			Signature:    base64.RawURLEncoding.EncodeToString(signature),
 		},
+		// Rust #60948: Touch ID reports the biometric method that approved the
+		// signature so approvals can show it as context.
+		BiometricType: &biometricType,
 	}, nil
 }
 

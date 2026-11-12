@@ -713,6 +713,30 @@ func (s *StatusControlsState) refreshTerminalTitleFromSelections(selections Stat
 	result.TerminalTitleRendered = ok
 }
 
+// modelWithReasoningDisplayName mirrors Rust's model_with_reasoning_display_name
+// plus the #60972 split: the status line passes lowercaseTier=true, the
+// terminal title keeps the service tier spelling as configured.
+func (s *StatusControlsState) modelWithReasoningDisplayName(lowercaseTier bool) (string, bool) {
+	model, ok := nonEmptyTrimmed(s.Runtime.ModelName)
+	if !ok {
+		return "", false
+	}
+	// Rust's model_with_reasoning_display_name always appends the label,
+	// including the default label (chatwidget/status_surfaces.rs).
+	reasoning := StatusLineReasoningEffortLabel(s.Runtime.ReasoningEffort)
+	value := model
+	if reasoning != "" {
+		value += " " + reasoning
+	}
+	if tier, ok := nonEmptyTrimmed(s.Runtime.ProcessingTier); ok {
+		if lowercaseTier {
+			tier = strings.ToLower(tier)
+		}
+		value += " " + tier
+	}
+	return value, true
+}
+
 func (s *StatusControlsState) StatusLineValueForItem(item bottompane.StatusLineItem) (string, bool) {
 	if s == nil {
 		return "", false
@@ -721,21 +745,9 @@ func (s *StatusControlsState) StatusLineValueForItem(item bottompane.StatusLineI
 	case bottompane.StatusLineModelName:
 		return nonEmptyTrimmed(s.Runtime.ModelName)
 	case bottompane.StatusLineModelWithReasoning:
-		model, ok := nonEmptyTrimmed(s.Runtime.ModelName)
-		if !ok {
-			return "", false
-		}
-		// Rust's model_with_reasoning_display_name always appends the label,
-		// including the default label (chatwidget/status_surfaces.rs).
-		reasoning := StatusLineReasoningEffortLabel(s.Runtime.ReasoningEffort)
-		value := model
-		if reasoning != "" {
-			value += " " + reasoning
-		}
-		if tier, ok := nonEmptyTrimmed(s.Runtime.ProcessingTier); ok {
-			value += " " + tier
-		}
-		return value, true
+		// Rust #60972: the status line lowercases the service tier while the
+		// terminal title keeps the configured spelling.
+		return s.modelWithReasoningDisplayName(true)
 	case bottompane.StatusLineReasoning:
 		return StatusLineReasoningEffortLabel(s.Runtime.ReasoningEffort), true
 	case bottompane.StatusLineCurrentDir:
@@ -1041,7 +1053,7 @@ func (s *StatusControlsState) TerminalTitleValueForItem(item TerminalTitleItem) 
 		}
 		return TruncateTerminalTitlePart(value, 32), true
 	case TerminalTitleModelWithReasoning:
-		value, ok := s.StatusLineValueForItem(bottompane.StatusLineModelWithReasoning)
+		value, ok := s.modelWithReasoningDisplayName(false)
 		if !ok {
 			return "", false
 		}
