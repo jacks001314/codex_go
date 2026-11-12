@@ -46906,8 +46906,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "implementation_pending",
-   "evidence": []
+   "status": "complete",
+   "evidence": [
+    "windowsandboxservice/registered_packages_register_windows.go: registrationResult.check now takes a registeredForTarget closure and accepts only a terminal AsyncStatus::Error with HRESULT 0x80073D28 (ERROR_PACKAGED_SERVICE_REQUIRES_ADMIN_PRIVILEGES, Win32 15656) when that closure confirms the postcondition; every other status or HRESULT keeps Rust's phase=deployment error.",
+    "windowsandboxservice/registered_runtime_windows.go: provision records each account's alias path and passes registeredRuntimeTargetReady, which impersonates the managed account to inspect the execution alias without following the reparse point (os.Lstat plus FILE_ATTRIBUTE_REPARSE_POINT) and then requires the exact package to be registered for that target SID through runtimeRegisteredPackages (Go's equivalent of Rust FindUsers with InstallState::Installed). A missing alias, a query error or a missing package rejects the reconciliation.",
+    "Tests: windowsandboxservice/registered_credentials_like_rust_test.go TestRegistrationResultReconcilesOnlyServicePrivilegeErrorsLikeRust covers reconciled success, missing target registration, cancellation and unrelated access denied, and asserts the check runs only for the matching status and deployment error; go test ./windowsandboxservice -count=1; go build ./...",
+    "plan: update/plan_2026_11_12.md"
+   ]
   },
   {
    "sha": "1b7c0252586f3701493bb7c9331290c06346b842",

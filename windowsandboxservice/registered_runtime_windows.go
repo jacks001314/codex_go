@@ -5,7 +5,10 @@ package windowsandboxservice
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"time"
 	"unsafe"
 
@@ -449,6 +452,7 @@ func ProvisionRegisteredRuntime(
 	}
 	profiles := make([]*RuntimeAccountProfile, 0, 2)
 	installed := make([]bool, 0, 2)
+	aliasPaths := make([]string, 0, 2)
 	accounts := make([]windowssandbox.RuntimeAccountRegistration, 0, 2)
 	closed := make([]bool, 0, 2)
 	release := true
@@ -507,6 +511,7 @@ func ProvisionRegisteredRuntime(
 			UserSID:   profile.UserSID,
 			AliasPath: &aliasPath,
 		})
+		aliasPaths = append(aliasPaths, aliasPath)
 		installed = append(installed, hasPackage)
 	}
 	receiptCurrent := runtime.ReadyForPackage(fullName) && sameRuntimeAccounts(runtime.Accounts, accounts)
@@ -548,7 +553,9 @@ func ProvisionRegisteredRuntime(
 			}
 			result := readRegistrationResult(operation, status)
 			operation.Close()
-			if err := result.check(); err != nil {
+			if err := result.check(func() bool {
+				return registeredRuntimeTargetReady(profile, aliasPaths[index], fullName, family)
+			}); err != nil {
 				return err
 			}
 			packages, err := runtimeRegisteredPackages(profile.UserSID, family)
@@ -604,6 +611,52 @@ func logonRegisteredRuntimeAccount(identity *ClientIdentity, account windowssand
 		return 0, err
 	}
 	return token, nil
+}
+
+// registeredRuntimeTargetReady reports whether a registration that failed with
+// the packaged-service privilege error still satisfies its postcondition: the
+// execution alias exists as a reparse point when queried as the target user and
+// the exact package is registered for the target SID (Rust #60944).
+func registeredRuntimeTargetReady(profile *RuntimeAccountProfile, aliasPath string, fullName string, family string) bool {
+	if profile == nil {
+		return false
+	}
+	aliasPresent, err := runtimeAliasIsReparsePoint(profile.Token(), aliasPath)
+	if err != nil || !aliasPresent {
+		return false
+	}
+	packages, err := runtimeRegisteredPackages(profile.UserSID, family)
+	if err != nil {
+		return false
+	}
+	for _, name := range packages {
+		if name == fullName {
+			return true
+		}
+	}
+	return false
+}
+
+// runtimeAliasIsReparsePoint inspects the alias path as the managed account,
+// without following the reparse point (Rust symlink_metadata).
+func runtimeAliasIsReparsePoint(profileToken windows.Token, aliasPath string) (bool, error) {
+	if strings.TrimSpace(aliasPath) == "" {
+		return false, nil
+	}
+	var present bool
+	err := withOwnerImpersonation(profileToken, func() error {
+		info, err := os.Lstat(aliasPath)
+		if err != nil {
+			return err
+		}
+		data, ok := info.Sys().(*syscall.Win32FileAttributeData)
+		if !ok {
+			return nil
+		}
+		present = data.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0
+		return nil
+	})
+	return present, err
 }
 
 // registeredRunnerAlias is the package-scoped alias path the receipt records.

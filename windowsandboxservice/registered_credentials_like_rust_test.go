@@ -17,7 +17,7 @@ func TestRegistrationResultCheckReportsSuccessLikeRust(t *testing.T) {
 		status:  asyncStatusCompleted,
 		details: &deploymentDetails{activityID: packageManagerIID},
 	}
-	if err := result.check(); err != nil {
+	if err := result.check(nil); err != nil {
 		t.Fatalf("check(success) error = %v", err)
 	}
 }
@@ -27,7 +27,7 @@ func TestRegistrationResultCheckReportsDeploymentFailureLikeRust(t *testing.T) {
 		status:  asyncStatusError,
 		details: &deploymentDetails{extendedError: 0x80073CF3, activityID: packageManagerIID},
 	}
-	err := result.check()
+	err := result.check(nil)
 	if err == nil {
 		t.Fatal("check(deployment failure) = nil")
 	}
@@ -48,7 +48,7 @@ func TestRegistrationResultCheckKeepsGetResultsFailureLikeRust(t *testing.T) {
 		status:     asyncStatusError,
 		detailsErr: hresultError(0x80070005),
 	}
-	err := result.check()
+	err := result.check(nil)
 	if err == nil || !strings.Contains(err.Error(), "phase=GetResults get_results=0x80070005") {
 		t.Fatalf("check(get results failure) error = %v", err)
 	}
@@ -63,7 +63,7 @@ func TestRegistrationResultCheckKeepsDiagnosticGetterFailuresLikeRust(t *testing
 			activityIDErr:    hresultError(0x80004003),
 		},
 	}
-	err := result.check()
+	err := result.check(nil)
 	if err == nil {
 		t.Fatal("check(diagnostic failures) = nil")
 	}
@@ -217,5 +217,45 @@ func TestCredentialsNeedRepairPropagatesOtherLogonFailuresLikeRust(t *testing.T)
 		return 0, failure
 	}); !errors.Is(err, failure) {
 		t.Fatalf("CredentialsNeedRepair(logon failure) error = %v", err)
+	}
+}
+
+// TestRegistrationResultReconcilesOnlyServicePrivilegeErrorsLikeRust pins Rust
+// #60944: only a terminal service-privilege error may succeed through the
+// target-registration check, and only when that check reports the exact
+// postcondition.
+func TestRegistrationResultReconcilesOnlyServicePrivilegeErrorsLikeRust(t *testing.T) {
+	const accessDenied = 0x80070005
+	cases := []struct {
+		name       string
+		status     int32
+		code       uint32
+		registered bool
+		wantOK     bool
+		wantCheck  bool
+	}{
+		{"reconciled", asyncStatusError, errorPackagedServiceRequiresAdminPrivileges, true, true, true},
+		{"missing target registration", asyncStatusError, errorPackagedServiceRequiresAdminPrivileges, false, false, true},
+		{"canceled", asyncStatusCanceled, errorPackagedServiceRequiresAdminPrivileges, true, false, false},
+		{"unrelated access denied", asyncStatusError, accessDenied, true, false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			checked := false
+			result := &registrationResult{
+				status:  tc.status,
+				details: &deploymentDetails{extendedError: tc.code, activityID: packageManagerIID},
+			}
+			err := result.check(func() bool {
+				checked = true
+				return tc.registered
+			})
+			if checked != tc.wantCheck {
+				t.Fatalf("registration check called = %v, want %v", checked, tc.wantCheck)
+			}
+			if (err == nil) != tc.wantOK {
+				t.Fatalf("check() error = %v, wantOK %v", err, tc.wantOK)
+			}
+		})
 	}
 }

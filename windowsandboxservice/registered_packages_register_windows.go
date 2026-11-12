@@ -76,8 +76,16 @@ func readRegistrationResult(async *AsyncOperation, status int32) *registrationRe
 	return result
 }
 
+// errorPackagedServiceRequiresAdminPrivileges is Win32 error 15656 surfaced as
+// an HRESULT by deployment results (Rust #60944).
+const errorPackagedServiceRequiresAdminPrivileges uint32 = 0x80073D28
+
 // check reports the deployment outcome with Rust's phase context.
-func (result *registrationResult) check() error {
+// registeredForTarget may reconcile a terminal service-privilege error: Windows
+// reports it after another deployment already registered the same package
+// version for the target account, so the exact postcondition is checked before
+// the error is accepted as a success.
+func (result *registrationResult) check(registeredForTarget func() bool) error {
 	if result == nil {
 		return errors.New("missing managed runtime registration result")
 	}
@@ -107,6 +115,11 @@ func (result *registrationResult) check() error {
 			context,
 			hresultText(result.details.extendedErrorErr),
 		)
+	}
+	if result.status == asyncStatusError &&
+		result.details.extendedError == errorPackagedServiceRequiresAdminPrivileges &&
+		registeredForTarget != nil && registeredForTarget() {
+		return nil
 	}
 	if int32(result.details.extendedError) < 0 {
 		return fmt.Errorf(
