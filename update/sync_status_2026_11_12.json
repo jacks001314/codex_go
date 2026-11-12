@@ -5,7 +5,6 @@
     "fromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
     "toInclusive": "c0cc9fc820f62e4dbdde68214dd6d792d6c8a7ee"
   },
-  "goHead": "c3864fdac14bdc715cc0211a2690def268c8d707",
   "ledger": {
     "total": 3825,
     "counts": {
@@ -57,6 +56,10 @@
     ]
   },
   "roundCommits": [
+    {
+      "sha": "2eded9ea",
+      "subject": "codex_go: record a reproducible 2026-11-12 sync status snapshot"
+    },
     {
       "sha": "c3864fda",
       "subject": "codex_go: hold queued input across Cloud stream reconnects (#60969)"

@@ -42,7 +42,6 @@ const snapshot = {
   date,
   source: "Rust openai/codex -> Go jacks001314/codex_go",
   rustRange: { fromExclusive: ledger.rustFromExclusive, toInclusive: ledger.rustToInclusive },
-  goHead: git("rev-parse", "HEAD"),
   ledger: { total: ledger.commits.length, counts, implementationPending: pending, partial, blockedPrecondition: blocked },
   roundCommits: round,
 };
