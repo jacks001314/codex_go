@@ -1,0 +1,133 @@
+{
+  "date": "2026_11_12",
+  "source": "Rust openai/codex -> Go jacks001314/codex_go",
+  "rustRange": {
+    "fromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
+    "toInclusive": "c0cc9fc820f62e4dbdde68214dd6d792d6c8a7ee"
+  },
+  "goHead": "c3864fdac14bdc715cc0211a2690def268c8d707",
+  "ledger": {
+    "total": 3825,
+    "counts": {
+      "complete": 3129,
+      "not_applicable": 660,
+      "blocked_precondition": 4,
+      "partial": 32
+    },
+    "implementationPending": [],
+    "partial": [
+      "#54776",
+      "#57267",
+      "#58718",
+      "#58720",
+      "#59003",
+      "#59739",
+      "#59767",
+      "#59944",
+      "#59987",
+      "#59988",
+      "#59994",
+      "#59995",
+      "#59999",
+      "#60000",
+      "#60001",
+      "#60002",
+      "#60018",
+      "#60019",
+      "#60020",
+      "#60021",
+      "#60022",
+      "#60026",
+      "#60027",
+      "#60029",
+      "#60031",
+      "#60032",
+      "#60046",
+      "#60048",
+      "#60075",
+      "#60172",
+      "#60905",
+      "#60929"
+    ],
+    "blockedPrecondition": [
+      "#40625",
+      "#42841",
+      "#43624",
+      "#55378"
+    ]
+  },
+  "roundCommits": [
+    {
+      "sha": "c3864fda",
+      "subject": "codex_go: hold queued input across Cloud stream reconnects (#60969)"
+    },
+    {
+      "sha": "0db1f359",
+      "subject": "codex_go: finish the OTel headers helper policy wiring (#61028)"
+    },
+    {
+      "sha": "701dc887",
+      "subject": "codex_go: sync the 2026-11-12 continuation (#60969 #61014 #61017 #61018 #61028)"
+    },
+    {
+      "sha": "be7f5f42",
+      "subject": "codex_go: keep the first observed backend owning a thread (#60929)"
+    },
+    {
+      "sha": "b769ec24",
+      "subject": "codex_go: propagate saved Daybreak choices to native helpers (#60749 #60773)"
+    },
+    {
+      "sha": "777c0708",
+      "subject": "docs: record the Daybreak helper propagation gap for the next round"
+    },
+    {
+      "sha": "16c99904",
+      "subject": "codex_go: reserve Guardian budget for selected Code Mode exec output (#60914)"
+    },
+    {
+      "sha": "31fee766",
+      "subject": "docs: note the remaining sync prerequisites in the 2026-11-12 plan"
+    },
+    {
+      "sha": "221d2b17",
+      "subject": "codex_go: keep delivered assistant revisions across replay (#60839)"
+    },
+    {
+      "sha": "363a069d",
+      "subject": "codex_go: reconcile Windows runtime registrations after service privilege errors (#60944)"
+    },
+    {
+      "sha": "42f7cf8b",
+      "subject": "codex_go: stop rewriting Windows sandbox ACLs on every setup (#60943)"
+    },
+    {
+      "sha": "8f2352f0",
+      "subject": "codex_go: record the multi-environment MCP audit residual (#60905)"
+    },
+    {
+      "sha": "be776d20",
+      "subject": "codex_go: keep the first-message title when generation fails (#60842)"
+    },
+    {
+      "sha": "d7f6ef3d",
+      "subject": "codex_go: version the answer display contract and pin the history/notes schemas (#60904 #60753 #60770)"
+    },
+    {
+      "sha": "4a86a472",
+      "subject": "codex_go: honour the peer's websocket message limit (#60840 #60841)"
+    },
+    {
+      "sha": "7629c180",
+      "subject": "codex_go: align approved plan handoff, biometric type and status tier casing (#60763 #60948 #60972)"
+    },
+    {
+      "sha": "145b51b0",
+      "subject": "codex_go: start the #60746..#60981 sync and land the CLI, search, and feature-gate slices"
+    },
+    {
+      "sha": "0836b8de",
+      "subject": "codex_go: queue input while a turn is pending start instead of rejecting the steer"
+    }
+  ]
+}
