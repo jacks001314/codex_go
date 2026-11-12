@@ -308,6 +308,15 @@ func (c *runtimeAgentController) spawnAgentWithReservedID(ctx context.Context, a
 		c.cleanupProvisionalSpawn(string(threadID))
 		return nil, recordRuntimeAgentSpawnFailure(c, ctx, err, tool.AgentErrorContextChildStartup, forkMode)
 	}
+	if err := c.recordSpawnHelperDaybreakIntent(string(threadID)); err != nil {
+		c.cleanupProvisionalSpawn(string(threadID))
+		return nil, recordRuntimeAgentSpawnFailure(c, ctx, err, tool.AgentErrorContextChildStartup, forkMode)
+	}
+	helperProgram, err := c.resolveHelperDaybreakProgram(string(threadID), record)
+	if err != nil {
+		c.cleanupProvisionalSpawn(string(threadID))
+		return nil, recordRuntimeAgentSpawnFailure(c, ctx, err, tool.AgentErrorContextChildStartup, forkMode)
+	}
 	prompt := agentStringValue(args.Message)
 	inputAdmissionStartedAt := time.Now()
 	if prompt != "" || len(args.Items) > 0 {
@@ -315,7 +324,7 @@ func (c *runtimeAgentController) spawnAgentWithReservedID(ctx context.Context, a
 			c.cleanupProvisionalSpawn(string(threadID))
 			return nil, recordRuntimeAgentSpawnFailure(c, ctx, err, tool.AgentErrorContextInputAdmission, forkMode)
 		}
-		params := &turn.TurnStartParams{ThreadID: string(threadID), CWD: c.cwd, Model: modelID, Environments: cloneMapSlice(inheritedEnvironments), ParentTurnID: c.parentTurnID, RootTurnID: c.rootTurnID, TurnTrigger: c.turnTrigger, CoreCyberAccessProgram: c.cyberAccessProgram}
+		params := &turn.TurnStartParams{ThreadID: string(threadID), CWD: c.cwd, Model: modelID, Environments: cloneMapSlice(inheritedEnvironments), ParentTurnID: c.parentTurnID, RootTurnID: c.rootTurnID, TurnTrigger: c.turnTrigger, CoreCyberAccessProgram: helperProgram}
 		if inheritDisabledPluginIDs {
 			values := append([]string{}, disabledPluginIDs...)
 			params.DisabledPluginIDs = &values
@@ -620,10 +629,15 @@ func (c *runtimeAgentController) SendInput(ctx context.Context, args *agent.Send
 	if err != nil {
 		return &agent.SendInputResult{SubmissionID: ""}, nil
 	}
-	if _, err := c.router.threadRecord(session.ThreadID(target), true, false); err != nil {
+	targetRecord, err := c.router.threadRecord(session.ThreadID(target), true, false)
+	if err != nil {
 		if errors.Is(err, session.ErrThreadNotFound) {
 			return &agent.SendInputResult{SubmissionID: ""}, nil
 		}
+		return nil, err
+	}
+	helperProgram, err := c.resolveHelperDaybreakProgram(target, targetRecord)
+	if err != nil {
 		return nil, err
 	}
 	if active := c.router.activeRuntimeTurnSnapshot(target); active != nil {
@@ -638,7 +652,7 @@ func (c *runtimeAgentController) SendInput(ctx context.Context, args *agent.Send
 	if prompt == "" && len(args.Items) == 0 {
 		return nil, fmt.Errorf("message or items is required")
 	}
-	response, err := c.router.handleTurnStart(requestWithInternalParams(MethodTurnStart, turn.TurnStartParams{ThreadID: target, Prompt: prompt, AdditionalInputItems: append([]any(nil), args.Items...), ParentTurnID: c.parentTurnID, CoreCyberAccessProgram: c.cyberAccessProgram}))
+	response, err := c.router.handleTurnStart(requestWithInternalParams(MethodTurnStart, turn.TurnStartParams{ThreadID: target, Prompt: prompt, AdditionalInputItems: append([]any(nil), args.Items...), ParentTurnID: c.parentTurnID, CoreCyberAccessProgram: helperProgram}))
 	if err != nil {
 		return nil, err
 	}

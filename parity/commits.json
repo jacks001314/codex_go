@@ -46550,8 +46550,14 @@
    "domains": [
     "codex_go"
    ],
-   "status": "implementation_pending",
-   "evidence": []
+   "status": "complete",
+   "evidence": [
+    "appserver/helper_daybreak.go mirrors Rust helper_daybreak.rs/turn.rs: a spawn captures the parent thread's saved Daybreak preference and the ChatGPT account that owns it, stores the intent per helper thread on the RuntimeRouter (the Go analogue of thread extension data), and resolves the program before the helper's first turn and every followup.",
+    "Rust #60749/#60773 behaviour: the helper's own saved Daybreak preference takes precedence; otherwise the inherited choice is resolved against the child model's advertised access programs (model.ModelAccessPrograms.SelectSaved) and the account is revalidated, failing with Rust's 'has changed. Start a new subagent.' message; an inherited Daybreak Blue/Red program without a saved choice is adapted to the child model (Blue before Red) and dropped when the child cannot use Daybreak.",
+    "Wiring: appserver/agent_controller.go records the intent at spawn and passes the resolved program in the child's first turn/start and in followup turn/start instead of always forwarding the parent's program; the whole path is gated on the disabled-by-default daybreak_program_propagation feature resolved from the parent turn config.",
+    "Tests: appserver/helper_daybreak_like_rust_test.go covers saved on/off/unset selection, incompatible choices (no Standard, no Daybreak), missing metadata, inherited adaptation, intent retention per helper and the account-change message; go test ./appserver -count=1; go build ./...",
+    "Residual: Go has no pending-thread-metadata store, so a preference written before thread materialization is only visible once it lands on the record; thread/read already reports the stored preference, and mid-turn model changes are not deferred because Go resolves the program for the whole turn. plan: update/plan_2026_11_12.md"
+   ]
   },
   {
    "sha": "2b60119af8072af8e842b271f5272e82378cd0f9",
@@ -46636,8 +46642,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "implementation_pending",
-   "evidence": []
+   "status": "complete",
+   "evidence": [
+    "appserver/helper_daybreak.go also covers Rust #60773's per-subagent resolution: the child's own saved Daybreak choice wins on every helper turn, otherwise the spawn-time inherited choice is resolved against the child model's advertised access programs, and an implicit inherited Daybreak Blue/Red program is adapted to the child model (Blue before Red) or dropped when unsupported.",
+    "Account binding: the ChatGPT account that owned the saved choice is captured at spawn and revalidated before a helper turn uses it; a changed account fails with Rust's 'The account for this subagent's saved Daybreak choice has changed. Start a new subagent.' instead of sending the request. Incompatible saved choices fail before the model request with Rust's 'does not advertise Daybreak support' / 'does not advertise Standard' messages, and nested spawns inherit the child turn's resolved program through the controller.",
+    "Tests: appserver/helper_daybreak_like_rust_test.go covers on/off/unset selection, incompatible choices, missing metadata, inherited adaptation and the account-change message; go test ./appserver -run HelperDaybreak -count=1; go test ./appserver -count=1; go build ./...",
+    "Residual: Go resolves the program per turn from the turn's model, so a mid-turn model change is naturally deferred to the next turn; Go has no persisted rejected-input path for this error, and pending thread metadata is not modelled (only the stored DaybreakEnabled preference). plan: update/plan_2026_11_12.md"
+   ]
   },
   {
    "sha": "e58bf8f5233b51e7cd1679d947e3028c1ed91b06",

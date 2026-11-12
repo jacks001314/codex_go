@@ -592,6 +592,10 @@ type RuntimeRouter struct {
 	serverRequestGuards   map[string]*ThreadStatusActiveGuard
 	executedToolCallsMu   sync.Mutex
 	executedToolCalls     map[string]*turn.ExecutedToolCallRecorder
+	// helperDaybreak keeps each native helper's spawn-time Daybreak intent, the
+	// Go analogue of Rust's thread extension data (Rust #60749).
+	helperDaybreakMu sync.Mutex
+	helperDaybreak   map[string]helperDaybreakIntent
 	// invocationRegistries holds the live V2 tool-call registry of each thread
 	// (Rust #57586 HostToolInvocationLookup). Host child creation looks a call up
 	// here before preparing or starting a reserved child.
