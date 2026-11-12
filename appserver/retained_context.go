@@ -304,6 +304,11 @@ func (r *RuntimeRouter) recordRetainedUserMessages(context *retainedctx.Retained
 			continue
 		}
 		context.RecordAssistantMessage(record.message, record.source)
+		// Rust #60839: reuse the revision captured when the delivery was
+		// recorded so live and replayed evidence share one version.
+		if record.retainedSource != nil {
+			context.RestoreSourceRevision(record.retainedSource)
+		}
 	}
 }
 
@@ -562,13 +567,22 @@ func (r *RuntimeRouter) annotateRetainedHarnessMetadata(threadID session.ThreadI
 	// batch. The order then travels with the call, so a delayed output can retain
 	// its assistant text at the call's position instead of the completion order.
 	annotateMissingRetainedInputOrders(context, items)
+	historyLength := len(r.retainedCallLookupHistory(threadID))
 	delivered := r.deliveredAssistantRecords(threadID, items)
 	retainInherited := !r.turnThreadIsSubagent(threadKey)
 	for _, record := range delivered {
 		if record.source.Inherited && !retainInherited {
 			continue
 		}
-		context.RecordAssistantMessage(record.message, record.source)
+		captured := context.RecordAssistantMessage(record.message, record.source)
+		// Rust #60839: persist the captured revision next to the tool output so
+		// a replay can reuse it; older readers keep the text and order.
+		if captured == nil {
+			continue
+		}
+		if offset := record.itemIndex - historyLength; offset >= 0 && offset < len(items) {
+			annotateSessionItemHarnessMetadata(&items[offset], captured, 0, false)
+		}
 	}
 	// Rust records a delivery's sender snapshot before its retained message
 	// (ContextManager::record_annotated_items -> record_sender_user_messages).
@@ -602,6 +616,12 @@ func (r *RuntimeRouter) annotateRetainedHarnessMetadata(threadID session.ThreadI
 type deliveredAssistantEvidence struct {
 	message retainedctx.RetainedUserMessage
 	source  retainedctx.RetainedInputSource
+	// retainedSource is the host-captured revision persisted with the tool
+	// output so a replay restores it instead of minting a new one (Rust #60839).
+	retainedSource *retainedctx.RetainedSource
+	// itemIndex locates the tool output inside the history slice that produced
+	// this evidence, so the append path can annotate the item it is writing.
+	itemIndex int
 }
 
 // deliveredAssistantRecords mirrors the delivered-assistant arm of Rust's
@@ -652,8 +672,10 @@ func deliveredAssistantRecordsFromHistory(items []session.Item) []deliveredAssis
 			message.MessageID = &id
 		}
 		records = append(records, deliveredAssistantEvidence{
-			message: message,
-			source:  retainedctx.RetainedInputSourceFromMetadata(harnessMetadataFromSessionItem(call)),
+			message:        message,
+			source:         retainedctx.RetainedInputSourceFromMetadata(harnessMetadataFromSessionItem(call)),
+			retainedSource: metadata.RetainedSource,
+			itemIndex:      index,
 		})
 	}
 	return records

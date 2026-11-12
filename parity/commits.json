@@ -46658,8 +46658,14 @@
    "domains": [
     "codex_go"
    ],
-   "status": "implementation_pending",
-   "evidence": []
+   "status": "complete",
+   "evidence": [
+    "appserver/retained_context.go: recording a confirmed delivered assistant message now keeps the host-captured RetainedSource and writes its revision into the tool output's harness metadata (retained_source plus the existing delivered_assistant_message), mirroring Rust #60839's captured source on the persisted delivery record. Older records without the field still replay with a fresh revision.",
+    "Replay reuses the revision: retainedRecordForSessionItem/recordRetainedUserMessages restore the persisted retained_source on the recorded message, and the delivered-assistant replay pass calls RestoreSourceRevision with the revision carried by the output item, so live and replayed retained sources compare equal instead of allocating new versions.",
+    "Tests: appserver/retained_context_delivery_revision_like_rust_test.go compares live versus replayed delivered revisions through a persisted thread and asserts the output item carries the live revision; go test ./appserver -run 'DeliveredAssistant' -count=1; go test ./appserver -count=1; go test ./retainedctx ./rollout -count=1.",
+    "Residual (architecture): the next_item_ordinal compaction metadata and next_model_id_ordinals helper have no Go equivalent because Go mints opaque UUID retained revisions (retainedctx.NewResponseItemID) instead of seeded model-facing ordinals; Go's compactionResumeMetadata is a read-only partial view, so Rust-written ordinals are ignored rather than rejected.",
+    "plan: update/plan_2026_11_12.md"
+   ]
   },
   {
    "sha": "bc3ccba6e1cbf466c29240edb8d1d0fa81638ad7",
@@ -46869,8 +46875,13 @@
    "domains": [
     "codex_go"
    ],
-   "status": "implementation_pending",
-   "evidence": []
+   "status": "not_applicable",
+   "evidence": [
+    "N/A by architecture (audit): Rust needs lossless legacy-template conversions because PermissionProfile stores a FileSystemSandboxPolicy with special paths and must project back to SandboxPolicy. Go's sandbox.PermissionProfile already holds the legacy *SandboxPolicy plus explicit DeniedReadEntries (sandbox/permissions.go), so there is no lossy conversion layer to fix.",
+    "Child-thread inheritance already preserves the template: app/dynamic_tools_helpers.go dynamicSandboxFromResume returns the resumed sandbox object unchanged as both the thread/start mode and the first turn policy, so duplicate writable roots, fixed roots, network access and exclude_tmpdir_env_var/exclude_slash_tmp survive, no workspace metadata is probed, and an external sandbox without a permission profile is rejected with Rust's message. Managed profiles continue to be inherited by id in app/dynamic_tools.go.",
+    "Temporary structured threads keep the read-only guarantee: app/recap.go temporaryStructuredSandboxIsReadOnly accepts only a read-only policy, which is the managed-and-no-writable-entry condition of Rust #60936 expressed on Go's legacy policy model (fails closed for anything with write access).",
+    "Verification: go test ./app -run 'RecapPermissions|DynamicTool|ThreadStartSandbox' -count=1; plan: update/plan_2026_11_12.md"
+   ]
   },
   {
    "sha": "77cbcdb4a6ddee3955130aed667a298004997237",
