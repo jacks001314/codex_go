@@ -1,6 +1,6 @@
 # Codex Go
 
-The latest audited alignment target is Rust `main` at `6bfdc75f0d9e6fae313234f694839866d7c63c39`; see [the 
+The latest audited alignment target is Rust `main` at `c0cc9fc820f62e4dbdde68214dd6d792d6c8a7ee`; see [the 
 2026-11-12 sync record](./update/plan_2026_11_12.md).
 [parity.json](./parity.json) records the current SDK and implementation evidence. Candidate baseline, commit, domain, and contract state live under [parity/](./parity/); only `parity/baseline.json` with `certificationReady: true` denotes a fully certified release.
 

@@ -98,8 +98,11 @@ type ResponsesStreamEvent struct {
 	ReasoningPart      *ResponsesReasoningPart
 	Usage              *AgentUsage
 	UsageMetadata      *ResponseUsageMetadata
-	EndTurn            *bool
-	RawType            string
+	// ReasoningRemovals reports the replayed reasoning items the API dropped.
+	// Nil means the response did not report input transformations at all.
+	ReasoningRemovals *ReasoningRemovals
+	EndTurn           *bool
+	RawType           string
 }
 
 // terminalProviderStreamError recognizes Rust's `parse_terminal_provider_error`
@@ -802,14 +805,18 @@ func parseResponsesStreamWithTreatment(ctx context.Context, reader io.Reader, re
 			elapsed := time.Since(streamStartedAt).Milliseconds()
 			ttftMillis = &elapsed
 		}
-		if streamedEvent != nil && streamedEvent.Kind == ResponsesStreamEventCompleted &&
-			streamedEvent.Usage != nil && telemetrySink != nil {
-			telemetrySink.RecordSSEEventCompleted(ctx, SSECompletedRecord{
-				Usage:           *streamedEvent.Usage,
-				TTFTMillis:      ttftMillis,
-				ServiceTier:     requestServiceTier(request),
-				ReasoningEffort: requestReasoningEffort(request),
-			})
+		if streamedEvent != nil && streamedEvent.Kind == ResponsesStreamEventCompleted && telemetrySink != nil {
+			completedRecord := SSECompletedRecord{
+				TTFTMillis:        ttftMillis,
+				ServiceTier:       requestServiceTier(request),
+				ReasoningEffort:   requestReasoningEffort(request),
+				ReasoningRemovals: streamedEvent.ReasoningRemovals,
+			}
+			if streamedEvent.Usage != nil {
+				completedRecord.Usage = *streamedEvent.Usage
+				completedRecord.UsageReported = true
+			}
+			telemetrySink.RecordSSEEventCompleted(ctx, completedRecord)
 		}
 		receivingSpan.End()
 		handleResponsesSpan.End()
@@ -1482,6 +1489,7 @@ func (a *responsesStreamAccumulator) apply(sse *responsesSSEEvent, handler Respo
 		}
 		usage, hasUsage := usageFromStreamEventData(sse.Data)
 		usageMetadata, hasUsageMetadata := usageMetadataFromStreamEventData(sse.Data)
+		reasoningRemovals := reasoningRemovalsFromStreamEventData(sse.Data)
 		a.responseID = firstNonEmptyResponseValue(a.responseID, responseIDFromEventData(sse.Data))
 		if hasUsage {
 			a.usage = usage
@@ -1492,10 +1500,11 @@ func (a *responsesStreamAccumulator) apply(sse *responsesSSEEvent, handler Respo
 			endTurn = responsesBoolPointer(false)
 		}
 		event := &ResponsesStreamEvent{
-			Kind:       ResponsesStreamEventCompleted,
-			ResponseID: a.responseID,
-			RawType:    rawType,
-			EndTurn:    endTurn,
+			Kind:              ResponsesStreamEventCompleted,
+			ResponseID:        a.responseID,
+			RawType:           rawType,
+			EndTurn:           endTurn,
+			ReasoningRemovals: reasoningRemovals,
 		}
 		if hasUsage {
 			usageCopy := usage
@@ -2686,6 +2695,100 @@ func usageMetadataFromStreamEventData(data []byte) (*ResponseUsageMetadata, bool
 		return nil, false
 	}
 	return metadata, true
+}
+
+// ReasoningRemovalReason is one bounded category of replayed reasoning removal
+// the API reports (Rust #61017).
+type ReasoningRemovalReason string
+
+const (
+	ReasoningRemovalOrganizationMismatch ReasoningRemovalReason = "organization_mismatch"
+	ReasoningRemovalEndUserMismatch      ReasoningRemovalReason = "end_user_mismatch"
+	ReasoningRemovalModelMismatch        ReasoningRemovalReason = "model_mismatch"
+	ReasoningRemovalPrefixMismatch       ReasoningRemovalReason = "prefix_mismatch"
+	ReasoningRemovalTurnBoundary         ReasoningRemovalReason = "turn_boundary"
+	ReasoningRemovalOther                ReasoningRemovalReason = "other"
+)
+
+// AllReasoningRemovalReasons lists every metric category, including the bucket
+// that groups unrecognized API reasons.
+var AllReasoningRemovalReasons = []ReasoningRemovalReason{
+	ReasoningRemovalOrganizationMismatch,
+	ReasoningRemovalEndUserMismatch,
+	ReasoningRemovalModelMismatch,
+	ReasoningRemovalPrefixMismatch,
+	ReasoningRemovalTurnBoundary,
+	ReasoningRemovalOther,
+}
+
+// ReasoningRemovals carries the reasoning items the API removed from the
+// replayed input, counted by bounded reason. An empty report means the response
+// described its input transformations without removals; a nil report means the
+// response did not describe them at all.
+type ReasoningRemovals struct {
+	Counts map[ReasoningRemovalReason]int64
+}
+
+// HasPrefixMismatch reports whether the API removed reasoning because the
+// replayed prefix no longer matched.
+func (r *ReasoningRemovals) HasPrefixMismatch() bool {
+	if r == nil {
+		return false
+	}
+	return r.Counts[ReasoningRemovalPrefixMismatch] > 0
+}
+
+// reasoningRemovalsFromStreamEventData parses the diagnostic
+// `input_transformations` report of a completed response. Missing, null, or
+// malformed reports stay unavailable so they never fail a valid response.
+func reasoningRemovalsFromStreamEventData(data []byte) *ReasoningRemovals {
+	var payload struct {
+		Response struct {
+			InputTransformations json.RawMessage `json:"input_transformations"`
+		} `json:"response"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return nil
+	}
+	raw := bytes.TrimSpace(payload.Response.InputTransformations)
+	if len(raw) == 0 || raw[0] != '[' {
+		return nil
+	}
+	var transformations []struct {
+		Type   string `json:"type"`
+		Action string `json:"action"`
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal(raw, &transformations); err != nil {
+		return nil
+	}
+	counts := map[ReasoningRemovalReason]int64{}
+	for _, transformation := range transformations {
+		if transformation.Type != "reasoning" || transformation.Action != "removed" {
+			continue
+		}
+		counts[reasoningRemovalReasonFromAPI(transformation.Reason)]++
+	}
+	return &ReasoningRemovals{Counts: counts}
+}
+
+// reasoningRemovalReasonFromAPI maps the provider's reason string onto a
+// bounded metric category.
+func reasoningRemovalReasonFromAPI(reason string) ReasoningRemovalReason {
+	switch ReasoningRemovalReason(reason) {
+	case ReasoningRemovalOrganizationMismatch:
+		return ReasoningRemovalOrganizationMismatch
+	case ReasoningRemovalEndUserMismatch:
+		return ReasoningRemovalEndUserMismatch
+	case ReasoningRemovalModelMismatch:
+		return ReasoningRemovalModelMismatch
+	case ReasoningRemovalPrefixMismatch:
+		return ReasoningRemovalPrefixMismatch
+	case ReasoningRemovalTurnBoundary:
+		return ReasoningRemovalTurnBoundary
+	default:
+		return ReasoningRemovalOther
+	}
 }
 
 func responseIDFromEventData(data []byte) string {

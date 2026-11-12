@@ -73,15 +73,21 @@ type OtelSettings struct {
 	// NetworkPolicy is the application policy the OTLP HTTP export clients
 	// enforce (Rust #47408 makes managed HTTP exports cancellable).
 	NetworkPolicy network.NetworkPolicy
+	// HeadersHelper refreshes collector credentials for the explicit OTLP HTTP
+	// exporters (Rust #61028). Nil keeps the static headers.
+	HeadersHelper *OTelHeadersHelperConfig
+
+	headersHelper *otelHeadersHelper
 }
 
 // OtelProvider mirrors codex-otel's OtelProvider for the metrics, logging, and
 // tracing pipelines.
 type OtelProvider struct {
-	metrics      *MetricsClient
-	logs         *LogsClient
-	traces       *TracesClient
-	shutdownOnce sync.Once
+	metrics       *MetricsClient
+	logs          *LogsClient
+	traces        *TracesClient
+	headersHelper *otelHeadersHelper
+	shutdownOnce  sync.Once
 }
 
 // NewOtelProvider mirrors OtelProvider::try_new. It returns a nil provider
@@ -96,8 +102,14 @@ func NewOtelProvider(settings OtelSettings) (*OtelProvider, error) {
 	metricsExporter := ResolveOtelExporter(settings.MetricsExporter)
 	logsExporter := ResolveOtelExporter(settings.Exporter)
 	traceExporter := ResolveOtelExporter(settings.TraceExporter)
+	headersHelper, err := startOTelHeadersHelper(settings.HeadersHelper)
+	if err != nil {
+		return nil, err
+	}
+	settings.headersHelper = headersHelper
 	if metricsExporter.Kind == OtelExporterNone && logsExporter.Kind == OtelExporterNone &&
 		traceExporter.Kind == OtelExporterNone {
+		headersHelper.Close()
 		// Tracestate propagation is process-global; clear it when these settings
 		// do not install an active provider.
 		if err := SetTracestateEntries(nil); err != nil {
@@ -153,7 +165,10 @@ func NewOtelProvider(settings OtelSettings) (*OtelProvider, error) {
 	if err := SetTracestateEntries(settings.Tracestate); err != nil {
 		return nil, err
 	}
-	return &OtelProvider{metrics: metrics, logs: logs, traces: traces}, nil
+	if metrics == nil && logs == nil && traces == nil {
+		headersHelper.Close()
+	}
+	return &OtelProvider{metrics: metrics, logs: logs, traces: traces, headersHelper: headersHelper}, nil
 }
 
 // ValidateSpanAttributes mirrors codex-otel's validate_span_attributes: the
@@ -178,6 +193,7 @@ func tracesClientOptions(settings OtelSettings, exporter OtelExporter) (TracesCl
 		Headers:        exporter.Headers,
 		TLS:            exporter.TLS,
 		SpanAttributes: settings.SpanAttributes,
+		HeaderHelper:   settings.headersHelper,
 	}
 	switch exporter.Kind {
 	case OtelExporterOtlpHTTP:
@@ -208,6 +224,7 @@ func logsClientOptions(settings OtelSettings, exporter OtelExporter) (LogsClient
 		Endpoint:       exporter.Endpoint,
 		Headers:        exporter.Headers,
 		TLS:            exporter.TLS,
+		HeaderHelper:   settings.headersHelper,
 	}
 	switch exporter.Kind {
 	case OtelExporterOtlpHTTP:
@@ -237,6 +254,7 @@ func metricsClientOptions(settings OtelSettings, exporter OtelExporter) (Metrics
 		Endpoint:       exporter.Endpoint,
 		Headers:        exporter.Headers,
 		TLS:            exporter.TLS,
+		HeaderHelper:   settings.headersHelper,
 	}
 	switch exporter.Kind {
 	case OtelExporterOtlpHTTP:
@@ -320,6 +338,7 @@ func (p *OtelProvider) Shutdown(ctx context.Context) error {
 		if logsErr := p.logs.Shutdown(ctx); logsErr != nil && err == nil {
 			err = logsErr
 		}
+		p.headersHelper.Close()
 	})
 	return err
 }

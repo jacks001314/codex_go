@@ -13,6 +13,14 @@ import (
 func (c *Client) forwardEvent(threadID string, event cloudclient.Event) {
 	if status, ok := event.ThreadStatusFor(threadID); ok {
 		c.status[threadID] = status
+		// Rust tracks whether the conversation is idle so a lost reply stream
+		// can be reopened quietly, and reports the reopen once it is connected.
+		if fields, ok := status.(map[string]any); ok && fields["type"] == "idle" {
+			c.setObservedIdle(true)
+			c.notifyIdleConnected(threadID)
+		} else {
+			c.observeIdleBusy()
+		}
 		return
 	}
 	switch event.Kind {
@@ -48,6 +56,7 @@ func (c *Client) forwardTranscript(threadID string, event cloudclient.Transcript
 			return
 		}
 		if update.Kind == cloudclient.TranscriptTurnStarted {
+			c.observeIdleBusy()
 			c.enqueue(Notification{
 				Method: appserver.NotificationTurnStarted,
 				Params: appserver.TurnStartedNotification{ThreadID: threadID, Turn: turn},
@@ -58,6 +67,7 @@ func (c *Client) forwardTranscript(threadID string, event cloudclient.Transcript
 			Method: appserver.NotificationTurnCompleted,
 			Params: appserver.TurnCompletedNotification{ThreadID: threadID, Turn: turn},
 		})
+		c.notifyIdleConnected(threadID)
 	case cloudclient.TranscriptAgentMessageDelta:
 		c.enqueue(Notification{
 			Method: appserver.NotificationAgentMessageDelta,

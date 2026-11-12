@@ -51,6 +51,9 @@ type SessionTelemetryMetadata struct {
 	AppVersion string
 	// TerminalType is the client's terminal name.
 	TerminalType string
+	// ProductSKU is the bounded product attribution the session reports with
+	// metrics, when the host knows it (Rust metadata.product_sku).
+	ProductSKU string
 }
 
 // LogRecordSink receives the log-only records the session telemetry emits.

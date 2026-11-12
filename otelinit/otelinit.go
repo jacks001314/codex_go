@@ -7,6 +7,11 @@
 package otelinit
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
 	"codex_go/config"
 	"codex_go/network"
 	"codex_go/telemetry"
@@ -33,6 +38,9 @@ type Options struct {
 	// process-global metrics client. Rust's TUI daemon telemetry uses the
 	// app-server-client builder for the same reason.
 	SkipGlobalMetricsInstall bool
+	// CodexHome is the working directory of the OTel headers helper (Rust runs
+	// it from CODEX_HOME). An empty value resolves CODEX_HOME or ~/.codex.
+	CodexHome string
 }
 
 // BuildProvider mirrors otel_init::build_provider: resolve the effective
@@ -67,6 +75,7 @@ func BuildProvider(options Options) (*telemetry.OtelProvider, error) {
 		runtimeMetrics = options.Config.FeatureSettings()["runtime_metrics"]
 	}
 	provider, err := telemetry.NewOtelProvider(telemetry.OtelSettings{
+		HeadersHelper:   otelHeadersHelperConfig(resolved, options),
 		Environment:     resolved.Environment,
 		ServiceName:     options.ServiceName,
 		ServiceVersion:  options.ServiceVersion,
@@ -127,6 +136,41 @@ func otelExporter(kind config.OtelExporterKind) telemetry.OtelExporter {
 	default:
 		return telemetry.OtelExporter{Kind: telemetry.OtelExporterNone}
 	}
+}
+
+// otelHeadersHelperConfig maps `otel.headers_helper` and its refresh cadence
+// onto the shared helper the explicit OTLP HTTP exporters use (Rust #61028).
+// The command runs from CODEX_HOME; repository-local configuration is not
+// filtered here because the Go config layers are merged before resolution.
+func otelHeadersHelperConfig(resolved config.OtelConfig, options Options) *telemetry.OTelHeadersHelperConfig {
+	command := strings.TrimSpace(resolved.HeadersHelper)
+	if command == "" {
+		return nil
+	}
+	interval := telemetry.DefaultOTelHeadersHelperRefreshInterval
+	if resolved.HeadersHelperRefreshIntervalMS > 0 {
+		interval = time.Duration(resolved.HeadersHelperRefreshIntervalMS) * time.Millisecond
+	}
+	return &telemetry.OTelHeadersHelperConfig{
+		Command:         command,
+		CWD:             otelCodexHome(options.CodexHome),
+		RefreshInterval: interval,
+	}
+}
+
+// otelCodexHome resolves the helper's working directory.
+func otelCodexHome(configured string) string {
+	if home := strings.TrimSpace(configured); home != "" {
+		return home
+	}
+	if home := strings.TrimSpace(os.Getenv("CODEX_HOME")); home != "" {
+		return home
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".codex")
 }
 
 func otelTLSConfig(tlsConfig *config.OtelTLSConfig) *telemetry.OTLPHTTPTLSConfig {

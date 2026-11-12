@@ -37,6 +37,8 @@ type TracesClientOptions struct {
 	Now            func() time.Time
 	// NewID overrides span/trace id generation (tests).
 	NewID func(size int) string
+	// HeaderHelper supplies refreshed collector headers for the HTTP transport.
+	HeaderHelper *otelHeadersHelper
 }
 
 // TracesClient records spans and exports them through an OTLP exporter.
@@ -95,12 +97,13 @@ func NewTracesClient(options TracesClientOptions) *TracesClient {
 		})
 	default:
 		client.exporter = NewOTLPTracesExporter(OTLPTracesExporterOptions{
-			Endpoint:   options.Endpoint,
-			Headers:    options.Headers,
-			HTTPClient: options.HTTPClient,
-			Timeout:    options.Timeout,
-			TLS:        options.TLS,
-			Protocol:   options.Protocol,
+			Endpoint:     options.Endpoint,
+			Headers:      options.Headers,
+			HTTPClient:   options.HTTPClient,
+			Timeout:      options.Timeout,
+			TLS:          options.TLS,
+			Protocol:     options.Protocol,
+			HeaderHelper: options.HeaderHelper,
 		})
 	}
 	if client.exporter == nil {

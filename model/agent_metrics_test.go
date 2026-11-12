@@ -588,8 +588,9 @@ func TestParseResponsesStreamRecordsCompletedUsageLikeRust(t *testing.T) {
 		t.Fatalf("record = %#v", record)
 	}
 
-	// A completion without usage reports nothing (Rust only calls the emitter for
-	// a response that carries usage).
+	// A completion without usage still reaches the emitter, because the
+	// reasoning-replay classification runs for every completed response
+	// (Rust #61017); the record itself reports no usage.
 	empty := &recordingTelemetrySink{}
 	if _, err := parseResponsesStreamWithMetrics(
 		context.Background(),
@@ -602,8 +603,11 @@ func TestParseResponsesStreamRecordsCompletedUsageLikeRust(t *testing.T) {
 	); err != nil {
 		t.Fatalf("parseResponsesStreamWithMetrics() error = %v", err)
 	}
-	if len(empty.sseCompleted) != 0 {
-		t.Fatalf("completed records = %#v", empty.sseCompleted)
+	if len(empty.sseCompleted) != 1 {
+		t.Fatalf("completed records = %#v, want the usage-less completion", empty.sseCompleted)
+	}
+	if empty.sseCompleted[0].UsageReported {
+		t.Fatalf("record = %#v, want no reported usage", empty.sseCompleted[0])
 	}
 }
 

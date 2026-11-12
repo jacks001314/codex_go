@@ -11,6 +11,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"time"
 
 	"codex_go/appserver"
 	"codex_go/auth"
@@ -67,7 +68,36 @@ func openCloudTUIAppServer(ctx context.Context, root *cli.RootOptions) (cloudApp
 	if err != nil {
 		return nil, err
 	}
-	return cloudbackend.Connect(ctx, client, account), nil
+	// A lost reply stream of the displayed conversation is reopened quietly,
+	// but only while the stored ChatGPT credentials still match the ones this
+	// client was opened with (Rust #60969).
+	return cloudbackend.ConnectWithIdleRecovery(ctx, client, account, cloudbackend.IdleRecoveryOptions{
+		LoginCurrent: cloudTUILoginChecker(accessToken, accountID),
+	}), nil
+}
+
+// cloudTUILoginChecker re-reads the stored ChatGPT credentials before each
+// quiet reopen (Rust idle::Login::current). Recovery is abandoned when the
+// auth mode, account, token, or token validity changed.
+func cloudTUILoginChecker(accessToken string, accountID string) func() bool {
+	return func() bool {
+		resolved, err := auth.NewStore(auth.DefaultCodexHome()).Resolve()
+		if err != nil || resolved == nil || resolved.Auth.Mode() != "chatgpt" {
+			return false
+		}
+		if fedramp, _ := resolved.Auth.Tokens["chatgpt_account_is_fedramp"].(bool); fedramp {
+			return false
+		}
+		token, _ := resolved.Auth.Tokens["access_token"].(string)
+		account := cloudTUIAuthString(resolved.Auth.Tokens, "account_id", "chatgpt_account_id")
+		if token != accessToken || account != accountID {
+			return false
+		}
+		if expiry, ok := auth.JWTAccessTokenExpiration(token); ok && !expiry.IsZero() && !time.Now().Before(expiry) {
+			return false
+		}
+		return true
+	}
 }
 
 // cloudTUIAuthString reads the first non-empty string among keys.

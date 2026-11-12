@@ -87,6 +87,8 @@ type MetricsClientOptions struct {
 	// StatsigEnabled mirrors Rust's `cfg!(debug_assertions)` guard for the
 	// built-in route: the Statsig default resolves to the OTLP endpoint only in
 	// builds that opt in.
+	// HeaderHelper supplies refreshed collector headers for the HTTP transport.
+	HeaderHelper   *otelHeadersHelper
 	StatsigEnabled bool
 	// ExportInterval is the periodic export cadence. Zero uses Rust's periodic
 	// reader default; a negative value disables the background loop so the
@@ -221,12 +223,13 @@ func NewMetricsClient(options MetricsClientOptions) *MetricsClient {
 			client.exporter = exporter
 		}
 	} else if exporter := NewOTLPMetricsExporter(OTLPMetricsExporterOptions{
-		Endpoint:   endpoint,
-		Headers:    headers,
-		HTTPClient: options.HTTPClient,
-		Timeout:    options.Timeout,
-		TLS:        options.TLS,
-		Protocol:   options.Protocol,
+		Endpoint:     endpoint,
+		Headers:      headers,
+		HTTPClient:   options.HTTPClient,
+		Timeout:      options.Timeout,
+		TLS:          options.TLS,
+		Protocol:     options.Protocol,
+		HeaderHelper: options.HeaderHelper,
 	}); exporter != nil {
 		client.exporter = exporter
 	}

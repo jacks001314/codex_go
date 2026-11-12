@@ -20,6 +20,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -28,6 +29,11 @@ import (
 const (
 	requestTimeout  = 150 * time.Second
 	maxMessageBytes = 64 * 1024 * 1024
+	// HTTP/2 keepalive pings keep the long-lived Attach stream from being
+	// reaped by an intermediate proxy while it is quiet (Rust cloud_client
+	// HTTP2_KEEP_ALIVE_INTERVAL / HTTP2_KEEP_ALIVE_TIMEOUT).
+	keepAliveInterval = 10 * time.Second
+	keepAliveTimeout  = 60 * time.Second
 )
 
 var (
@@ -120,6 +126,11 @@ func New(endpoint string, credentials Credentials) (*Client, error) {
 	}
 	conn, err := grpc.NewClient(parsed.Host,
 		grpc.WithTransportCredentials(transport),
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time:                keepAliveInterval,
+			Timeout:             keepAliveTimeout,
+			PermitWithoutStream: false,
+		}),
 		grpc.WithDefaultCallOptions(
 			grpc.ForceCodec(rawCodec{}),
 			grpc.MaxCallRecvMsgSize(maxMessageBytes),

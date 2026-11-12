@@ -9,6 +9,9 @@ import (
 // Metric names emitted by Codex, mirroring codex-rs/otel/src/metrics/names.rs.
 // Keep the values byte-for-byte identical to Rust: they are the OTLP instrument
 // names and the Statsig-disabled list matches on exact strings.
+// ReasoningItemsRemovedBoundaries are Rust's fixed removal-count buckets.
+var ReasoningItemsRemovedBoundaries = []float64{0, 1, 2, 4, 8, 16, 32, 64, 128, 256}
+
 const (
 	ToolCallCountMetric                        = "codex.tool.call"
 	ToolCallDurationMetric                     = "codex.tool.call.duration_ms"
@@ -42,6 +45,14 @@ const (
 	ResponsesAPIEngineServiceTTFTDurationMetric = "codex.responses_api_engine_service_ttft.duration_ms"
 	ResponsesAPIEngineIAPITBTDurationMetric     = "codex.responses_api_engine_iapi_tbt.duration_ms"
 	ResponsesAPIEngineServiceTBTDurationMetric  = "codex.responses_api_engine_service_tbt.duration_ms"
+	// ReasoningReplayCountMetric classifies every completed response's
+	// reasoning-replay report (Rust #61017). The `report` tag distinguishes an
+	// unavailable report, a report with no removals, a prefix mismatch, and
+	// other reported removals.
+	ReasoningReplayCountMetric = "codex.responses.reasoning_replay"
+	// ReasoningItemsRemovedMetric observes the reported removals per completed
+	// response and bounded reason, including zero observations.
+	ReasoningItemsRemovedMetric                 = "codex.responses.reasoning_items_removed"
 	TurnE2EDurationMetric                       = "codex.turn.e2e_duration_ms"
 	TurnTTFTDurationMetric                      = "codex.turn.ttft.duration_ms"
 	TurnTTFMDurationMetric                      = "codex.turn.ttfm.duration_ms"

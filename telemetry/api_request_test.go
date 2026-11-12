@@ -228,6 +228,7 @@ func TestRecordSSEEventCompletedRoutesLogAndTraceLikeRust(t *testing.T) {
 	span := tracesClient.Tracer().StartSpan("handle_responses", nil)
 	ttft := int64(137)
 	session.RecordSSEEventCompleted(WithSpan(context.Background(), span), model.SSECompletedRecord{
+		UsageReported: true,
 		Usage: model.AgentUsage{
 			InputTokens:           7,
 			CachedInputTokens:     2,
@@ -306,7 +307,8 @@ func TestRecordSSEEventCompletedOmitsUnsetCounts(t *testing.T) {
 	session := NewSessionTelemetry(SessionTelemetryMetadata{ConversationID: "thread-1"})
 	session.Logs = logsClient
 	session.RecordSSEEventCompleted(context.Background(), model.SSECompletedRecord{
-		Usage: model.AgentUsage{InputTokens: 7, OutputTokens: 3, TotalTokens: 10},
+		UsageReported: true,
+		Usage:         model.AgentUsage{InputTokens: 7, OutputTokens: 3, TotalTokens: 10},
 	})
 	if err := logsClient.Flush(context.Background()); err != nil {
 		t.Fatalf("Flush() error = %v", err)

@@ -182,6 +182,7 @@ type OTLPMetricsExporter struct {
 	timeout      time.Duration
 	requireHTTPS bool
 	protocol     string
+	headerHelper *otelHeadersHelper
 }
 
 // MetricsExporter posts one encoded batch to the configured OTLP endpoint. It
@@ -209,6 +210,10 @@ type OTLPMetricsExporterOptions struct {
 	// Protocol selects the OTLP/HTTP payload encoding: OtelHTTPProtocolJSON
 	// (the default) or OtelHTTPProtocolBinary.
 	Protocol string
+	// HeaderHelper refreshes collector credentials from a shared helper. Its
+	// headers override the static ones, and a failed refresh suspends exports
+	// (Rust #61028).
+	HeaderHelper *otelHeadersHelper
 }
 
 // OTLPHTTPTLSConfig mirrors codex-otel's OtelTlsConfig for OTLP HTTP: the CA
@@ -235,7 +240,7 @@ func NewOTLPMetricsExporter(options OTLPMetricsExporterOptions) *OTLPMetricsExpo
 	var requireHTTPS bool
 	if client == nil {
 		var err error
-		client, requireHTTPS, err = buildOTLPHTTPClient(options.TLS, timeout)
+		client, requireHTTPS, err = buildOTLPHTTPClientWithRedirects(options.TLS, timeout, options.HeaderHelper == nil)
 		if err != nil {
 			// Rust fails provider initialization on a TLS configuration error;
 			// the Go client has no error channel yet, so it reports the problem
@@ -251,6 +256,7 @@ func NewOTLPMetricsExporter(options OTLPMetricsExporterOptions) *OTLPMetricsExpo
 		timeout:      timeout,
 		requireHTTPS: requireHTTPS,
 		protocol:     options.Protocol,
+		headerHelper: options.HeaderHelper,
 	}
 }
 
@@ -278,8 +284,20 @@ func currentOTLPExportPolicy() network.NetworkPolicy {
 // HTTP exporter: the CA certificate disables the built-in roots, and a client
 // certificate/private key pair is required together and forces HTTPS.
 func buildOTLPHTTPClient(tlsOptions *OTLPHTTPTLSConfig, timeout time.Duration) (HTTPDoer, bool, error) {
+	return buildOTLPHTTPClientWithRedirects(tlsOptions, timeout, true)
+}
+
+// buildOTLPHTTPClientWithRedirects builds the OTLP HTTP client, optionally
+// refusing redirects (a credential helper must not re-send its headers to the
+// redirect target).
+func buildOTLPHTTPClientWithRedirects(tlsOptions *OTLPHTTPTLSConfig, timeout time.Duration, allowRedirects bool) (HTTPDoer, bool, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	client := &http.Client{Transport: transport, Timeout: timeout}
+	if !allowRedirects {
+		client.CheckRedirect = func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		}
+	}
 	if policy := currentOTLPExportPolicy(); policy.IsScoped() {
 		client.Transport = &network.PolicyRoundTripper{Policy: policy, Next: client.Transport}
 	}
@@ -362,7 +380,15 @@ func (e *OTLPMetricsExporter) Export(ctx context.Context, request OTLPExportMetr
 		return err
 	}
 	httpRequest.Header.Set("Content-Type", contentType)
-	for key, value := range e.headers {
+	headers := e.headers
+	if e.headerHelper != nil {
+		refreshed, err := e.headerHelper.headersForExport(requestCtx)
+		if err != nil {
+			return err
+		}
+		headers = mergeExportHeaders(e.headers, refreshed)
+	}
+	for key, value := range headers {
 		httpRequest.Header.Set(key, value)
 	}
 	response, err := e.httpClient.Do(httpRequest)

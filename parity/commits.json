@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
  "rustFromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
- "rustToInclusive": "6bfdc75f0d9e6fae313234f694839866d7c63c39",
+ "rustToInclusive": "c0cc9fc820f62e4dbdde68214dd6d792d6c8a7ee",
  "commits": [
   {
    "sha": "27c05a52e0cdf93ef7db5a96ccaf88d6b9095472",
@@ -46990,8 +46990,14 @@
    "domains": [
     "codex_go"
    ],
-   "status": "implementation_pending",
-   "evidence": []
+   "status": "partial",
+   "evidence": [
+    "cloudbackend/idle_recovery.go adds the Rust #60969 state machine: a clean EOF or a Timeout/Canceled/Unknown/DeadlineExceeded/Internal/Unavailable end is transient; only an observed-idle conversation whose stream stayed open for 15s is offered a quiet Attach; the episode runs 0/500ms/1s attempts inside an 8s budget, rechecks LoginCurrent before every attempt, keeps the first buffered event, supersedes the queued disconnection on success, and reports the loss on failure.",
+    "cloudclient.New sends HTTP/2 keepalive pings (10s interval, 60s timeout, PermitWithoutStream=false), matching Rust cloud_client's HTTP2_KEEP_ALIVE_INTERVAL/TIMEOUT so a quiet Attach survives intermediaries.",
+    "app/remote_tui_cloud.go wires cloudTUILoginChecker, which re-reads the stored ChatGPT auth mode, FedRAMP flag, account id, access token, and token expiry before every recovery attempt.",
+    "Tests: cloudbackend/idle_recovery_like_rust_test.go covers transient classification, quiet reopen with buffered first event, busy/explicit reopen, the 15s stability window, credential changes, transient retry, permanent failure, and explicit offer acceptance.",
+    "Residual: the Go TUI has no thread_stream_disconnected composer state, so input submitted while a stream is lost still fails instead of queueing; hidden/dirty views are expressed through the ReconnectIdleThread/Displayed hook and are not yet driven by TUI events."
+   ]
   },
   {
    "sha": "0702ebed4d6878c40bb90e01ef33039b21c6e1fc",
@@ -47029,6 +47035,68 @@
    "evidence": [
     "Reactive MCP OAuth refreshes run under their own bounded context and persist only through the locked transaction, so cancelling the originating request cannot abandon a half-applied credential.",
     "plan: update/plan_2026_11_12.md"
+   ]
+  },
+  {
+   "sha": "b75ec48a2c90c2fb683f519d1fe1a5b24420003e",
+   "subject": "Preserve active recovery turns when clients reconnect (#61014)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "Go reserves the core turn slot at admission (ThreadManager.reserveTurn writes m.active before TurnStarted is published), and every idle check (idleThreadEvictable, scheduleThreadIdleUnload, unloadIdleChildThread) reads ThreadManager.ActiveTurn, so a recovery turn cannot be treated as idle and evicted.",
+    "Go's thread/resume applies overrides to the loaded thread in place and never shuts it down, so the Rust rebuild path that could interrupt recovery does not exist here.",
+    "appserver/recovery_turn_slot_like_rust_test.go holds a reserved slot with an idle thread status and verifies idle eviction does not run and a resume with a model override keeps the slot and the loaded thread.",
+    "plan: update/plan_2026_11_12.md"
+   ]
+  },
+  {
+   "sha": "64b8d019c8881acf1a8bc337db6a1f91eaef3076",
+   "subject": "Record reasoning replay removal metrics (#61017)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "model/responses_stream.go parses response.input_transformations into bounded ReasoningRemovalReason counts (organization/end-user/model/prefix mismatch, turn boundary, other); a missing, null, or non-array report stays unavailable without failing the response, and an empty array is a usable zero report.",
+    "telemetry records codex.responses.reasoning_replay with the report classification (unavailable / no_removals_reported / prefix_mismatch_reported / removals_reported, plus product_sku) for every completed response, and codex.responses.reasoning_items_removed with Rust's 0..256 boundaries for each bounded reason including zeros.",
+    "Tests: model/responses_reasoning_replay_like_rust_test.go and telemetry/reasoning_replay_metrics_like_rust_test.go.",
+    "plan: update/plan_2026_11_12.md"
+   ]
+  },
+  {
+   "sha": "88c58562580aa4abe2da6ce4d7676bf171682230",
+   "subject": "Extract HTTP headers helper execution into a shared crate (#61018)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "New headershelper package owns shell-command construction (Windows passes the command through SysProcAttr.CmdLine so cmd.exe sees the helper's own quotes), bounded execution (10s, 64 KiB), process-tree termination, JSON parsing, and rejection of invalid or duplicate header names.",
+    "headershelper.Headers marks helper values as sensitive: String/GoString report only the count, so debug output redacts collector credentials.",
+    "mcp/http_headers_helper.go now delegates execution and parsing to the shared package while keeping MCP environment setup and its reserved-header validation.",
+    "Tests: headershelper/headershelper_like_rust_test.go covers parser rejection, debug redaction, and real command execution.",
+    "plan: update/plan_2026_11_12.md"
+   ]
+  },
+  {
+   "sha": "c0cc9fc820f62e4dbdde68214dd6d792d6c8a7ee",
+   "subject": "Add refreshable headers for OTLP HTTP exporters (#61028)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "partial",
+   "evidence": [
+    "config/otel.go resolves and validates otel.headers_helper and otel.headers_helper_refresh_interval_ms; otelinit maps them onto one shared helper that runs from CODEX_HOME with Rust's 29-minute default cadence.",
+    "telemetry/headers_helper.go runs one background worker for all explicit HTTP signals; a failed refresh replaces the cache with the error, so exports are blocked instead of falling back to stale or static credentials.",
+    "The OTLP HTTP log, trace, and metric exporters merge helper headers over the static ones, disable redirects while a helper is configured, and leave the gRPC exporters on static headers.",
+    "Tests: telemetry/otel_headers_helper_like_rust_test.go (refresh, block, recovery, header precedence) and config/otel_headers_helper_like_rust_test.go (resolution and validation).",
+    "Residual: Rust forbids repository-local configuration from setting the helper and holds a revocable network permit while executing it; Go merges config layers before resolution and runs the helper without an application network policy."
    ]
   }
  ]

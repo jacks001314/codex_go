@@ -270,6 +270,10 @@ type OTLPTracesExporterOptions struct {
 	Timeout    time.Duration
 	TLS        *OTLPHTTPTLSConfig
 	Protocol   string
+	// HeaderHelper refreshes collector credentials from a shared helper. Its
+	// headers override the static ones, and a failed refresh suspends exports
+	// (Rust #61028).
+	HeaderHelper *otelHeadersHelper
 }
 
 // OTLPTracesExporter posts encoded span batches to one OTLP/HTTP endpoint.
@@ -280,6 +284,7 @@ type OTLPTracesExporter struct {
 	timeout      time.Duration
 	requireHTTPS bool
 	protocol     string
+	headerHelper *otelHeadersHelper
 }
 
 // NewOTLPTracesExporter builds the OTLP/HTTP span exporter.
@@ -296,7 +301,7 @@ func NewOTLPTracesExporter(options OTLPTracesExporterOptions) *OTLPTracesExporte
 	var requireHTTPS bool
 	if client == nil {
 		var err error
-		client, requireHTTPS, err = buildOTLPHTTPClient(options.TLS, timeout)
+		client, requireHTTPS, err = buildOTLPHTTPClientWithRedirects(options.TLS, timeout, options.HeaderHelper == nil)
 		if err != nil {
 			logTracesExportFailure(err)
 			return nil
@@ -309,6 +314,7 @@ func NewOTLPTracesExporter(options OTLPTracesExporterOptions) *OTLPTracesExporte
 		timeout:      timeout,
 		requireHTTPS: requireHTTPS,
 		protocol:     options.Protocol,
+		headerHelper: options.HeaderHelper,
 	}
 }
 
@@ -357,7 +363,15 @@ func (e *OTLPTracesExporter) Export(ctx context.Context, request OTLPExportTrace
 		return err
 	}
 	httpRequest.Header.Set("Content-Type", contentType)
-	for key, value := range e.headers {
+	headers := e.headers
+	if e.headerHelper != nil {
+		refreshed, err := e.headerHelper.headersForExport(requestCtx)
+		if err != nil {
+			return err
+		}
+		headers = mergeExportHeaders(e.headers, refreshed)
+	}
+	for key, value := range headers {
 		httpRequest.Header.Set(key, value)
 	}
 	response, err := e.httpClient.Do(httpRequest)

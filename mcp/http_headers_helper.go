@@ -1,27 +1,14 @@
 package mcp
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
-	"os"
-	"os/exec"
-	"runtime"
 	"strings"
 	"sync"
-	"time"
 
-	"codex_go/envutil"
-	"golang.org/x/net/http/httpguts"
-)
-
-const (
-	mcpHTTPHeadersHelperTimeout   = 10 * time.Second
-	maxMCPHTTPHeadersHelperOutput = 64 * 1024
-	mcpHTTPHeadersHelperOutputEnv = "CODEX_PLUGIN_METRICS_OUTPUT" // reserved by plugin metrics; kept separate for symmetry
+	"codex_go/headershelper"
 )
 
 var mcpHTTPHeadersHelperReserved = map[string]bool{
@@ -189,57 +176,37 @@ func cloneHTTPHeaderForHelper(header http.Header) http.Header {
 	return header.Clone()
 }
 
+// runMCPHTTPHeadersHelper executes the helper through the shared runner and
+// keeps MCP's reserved-header contract (Rust #61018 keeps that validation in
+// rmcp-client).
 func runMCPHTTPHeadersHelper(command string, cwd string) (http.Header, error) {
 	return runMCPHTTPHeadersHelperContext(context.Background(), command, cwd)
 }
 
 func runMCPHTTPHeadersHelperContext(ctx context.Context, command string, cwd string) (http.Header, error) {
-	ctx, cancel := context.WithTimeout(ctx, mcpHTTPHeadersHelperTimeout)
-	defer cancel()
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		comspec := os.Getenv("COMSPEC")
-		if strings.TrimSpace(comspec) == "" {
-			comspec = "cmd.exe"
-		}
-		cmd = exec.CommandContext(ctx, comspec, "/Q", "/D", "/C", command)
-	} else {
-		cmd = exec.CommandContext(ctx, "sh", "-c", command)
-	}
-	cmd.Dir = cwd
-	// Rust #48238: the headers helper is a stdio-only child, so it must not
-	// allocate a console window when the CLI itself has no console.
-	envutil.SuppressConsoleWindow(cmd)
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
+	headers, err := headershelper.Run(ctx, command, cwd)
+	if err != nil {
 		return nil, fmt.Errorf("MCP HTTP headers helper failed: %w", err)
 	}
-	if stdout.Len() > maxMCPHTTPHeadersHelperOutput {
-		return nil, fmt.Errorf("MCP HTTP headers helper output exceeds 64 KiB")
-	}
-	return parseMCPHTTPHeadersHelperOutput(stdout.Bytes())
+	return mcpHTTPHeadersFromHelper(headers)
 }
 
+// parseMCPHTTPHeadersHelperOutput parses one helper response and applies MCP's
+// reserved-header contract.
 func parseMCPHTTPHeadersHelperOutput(data []byte) (http.Header, error) {
-	var values map[string]string
-	if err := json.Unmarshal(data, &values); err != nil {
-		return nil, fmt.Errorf("MCP HTTP headers helper must output a JSON object of strings")
+	headers, err := headershelper.Parse(data)
+	if err != nil {
+		return nil, fmt.Errorf("MCP HTTP headers helper failed: %w", err)
 	}
-	headers := http.Header{}
-	for name, value := range values {
+	return mcpHTTPHeadersFromHelper(headers)
+}
+
+func mcpHTTPHeadersFromHelper(helperHeaders headershelper.Headers) (http.Header, error) {
+	headers := helperHeaders.HTTPHeader()
+	for name := range headers {
 		if mcpHTTPHeadersHelperReserved[strings.ToLower(name)] {
 			return nil, fmt.Errorf("MCP HTTP headers helper returned a reserved header")
 		}
-		if !httpguts.ValidHeaderFieldName(name) || !httpguts.ValidHeaderFieldValue(value) {
-			return nil, fmt.Errorf("MCP HTTP headers helper returned an invalid header")
-		}
-		if headers.Get(name) != "" {
-			return nil, fmt.Errorf("MCP HTTP headers helper returned duplicate header names")
-		}
-		headers.Set(name, value)
 	}
 	return headers, nil
 }

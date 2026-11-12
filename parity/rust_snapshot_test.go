@@ -188,6 +188,7 @@ func rustWorkspaceMembersSnapshot() []string {
 		"hooks",
 		"history",
 		"http-client",
+		"http-headers-helper",
 		"secrets",
 		"exec",
 		"file-system",
@@ -352,7 +353,7 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// app-server-protocol/src/protocol/common.rs gained the attached-thread
 		// search, in-progress thread/sample, environment settings and late-abort
 		// surfaces; both pins are the LF-normalized digest of the target checkout.
-		{Path: "Cargo.toml", SHA256: "208b880db06958ab88508e7c3b3a916503fc725e10a62a61b76b2ddb76f6c1b8"},
+		{Path: "Cargo.toml", SHA256: "9ceb09af8e851b62aa52c9850ade930895753688abbd9674de37d96853c49ae2"},
 		{Path: "cli/src/lib.rs", SHA256: "ca6bac75eda919c2792dee2cb16e758419e7a26e6993ccf1d809a9b3f67b261e"},
 		// Re-pinned to upstream 8ae55c863d (#47411): the shared network policy
 		// runs through embedded Codex startup.
@@ -381,7 +382,7 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// unavailable images (#57585) and the catalog-heading metadata changed.
 		// Re-anchored to upstream 68b67f0ff4: model providers and catalogs share
 		// runtime authentication through ProviderAuthContext (#57607).
-		{Path: "core/src/client.rs", SHA256: "285318ee800ed7752a0ab4e4455109f7527a54587accfd9f35ac502beea41fdd"},
+		{Path: "core/src/client.rs", SHA256: "fd2ebaeffd41032f37844ffd8eda71960cd31b38434bcb9da55c1de135b07208"},
 		// Re-pinned to upstream 8ae55c863d (#47207/#47248/#47377/#47648): the
 		// gateway OAuth, MCP resource-target, realtime reasoning-status and
 		// executor bearer-token requests.
@@ -403,7 +404,7 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// that file to core/tests/windows_sandbox.rs.
 		// Re-anchored to upstream e8e6a922c0: the reserved-child spawn suite
 		// joined the module list (#57586).
-		{Path: "core/tests/suite/mod.rs", SHA256: "7be731c535c06f113f673900c92297dab6d6d71fc514917c41e8fa8f65570743"},
+		{Path: "core/tests/suite/mod.rs", SHA256: "18ef0067576ebb390108b2f506669d12c8be28e2c175719c38930873d8c3dfa1"},
 	}
 }
 

@@ -185,6 +185,7 @@ func (c *Client) startThread(ctx context.Context, params json.RawMessage) (json.
 	if err := c.replaceAttachment(ctx, startResponse.Thread.ID); err != nil {
 		return nil, internalRPCError(err)
 	}
+	c.noteActivationStatus(startResponse.Thread.Status.Type)
 	c.loaded = resumeResponse
 	c.warnedPartialHistory = ""
 	encoded, err := json.Marshal(startResponse)
@@ -227,6 +228,7 @@ func (c *Client) resumeThread(ctx context.Context, params json.RawMessage) (json
 	if err := c.replaceAttachment(ctx, resume.ThreadID); err != nil {
 		return nil, internalRPCError(err)
 	}
+	c.noteActivationStatus(settings.Thread.Status.Type)
 	c.loaded = settings
 	c.warnedPartialHistory = ""
 	return encoded, nil

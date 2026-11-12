@@ -42,6 +42,8 @@ type LogsClientOptions struct {
 	Timeout        time.Duration
 	// QueueSize bounds the pending records; zero uses DefaultLogsQueueSize.
 	QueueSize int
+	// HeaderHelper supplies refreshed collector headers for the HTTP transport.
+	HeaderHelper *otelHeadersHelper
 	// Now overrides the clock (tests).
 	Now func() time.Time
 }
@@ -92,12 +94,13 @@ func NewLogsClient(options LogsClientOptions) *LogsClient {
 		})
 	default:
 		client.exporter = NewOTLPLogsExporter(OTLPLogsExporterOptions{
-			Endpoint:   options.Endpoint,
-			Headers:    options.Headers,
-			HTTPClient: options.HTTPClient,
-			Timeout:    options.Timeout,
-			TLS:        options.TLS,
-			Protocol:   options.Protocol,
+			Endpoint:     options.Endpoint,
+			Headers:      options.Headers,
+			HTTPClient:   options.HTTPClient,
+			Timeout:      options.Timeout,
+			TLS:          options.TLS,
+			Protocol:     options.Protocol,
+			HeaderHelper: options.HeaderHelper,
 		})
 	}
 	if client.exporter == nil {

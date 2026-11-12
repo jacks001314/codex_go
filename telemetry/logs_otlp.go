@@ -194,6 +194,10 @@ type OTLPLogsExporterOptions struct {
 	// Protocol selects the OTLP/HTTP payload encoding: OtelHTTPProtocolJSON
 	// (the default) or OtelHTTPProtocolBinary.
 	Protocol string
+	// HeaderHelper refreshes collector credentials from a shared helper. Its
+	// headers override the static ones, and a failed refresh suspends exports
+	// (Rust #61028).
+	HeaderHelper *otelHeadersHelper
 }
 
 // OTLPLogsExporter posts encoded log batches to one OTLP/HTTP endpoint.
@@ -204,6 +208,7 @@ type OTLPLogsExporter struct {
 	timeout      time.Duration
 	requireHTTPS bool
 	protocol     string
+	headerHelper *otelHeadersHelper
 }
 
 // NewOTLPLogsExporter builds the OTLP/HTTP log exporter.
@@ -220,7 +225,9 @@ func NewOTLPLogsExporter(options OTLPLogsExporterOptions) *OTLPLogsExporter {
 	var requireHTTPS bool
 	if client == nil {
 		var err error
-		client, requireHTTPS, err = buildOTLPHTTPClient(options.TLS, timeout)
+		// A credential helper must not follow redirects: the refreshed headers
+		// would travel to the redirect target.
+		client, requireHTTPS, err = buildOTLPHTTPClientWithRedirects(options.TLS, timeout, options.HeaderHelper == nil)
 		if err != nil {
 			logLogsExportFailure(err)
 			return nil
@@ -233,6 +240,7 @@ func NewOTLPLogsExporter(options OTLPLogsExporterOptions) *OTLPLogsExporter {
 		timeout:      timeout,
 		requireHTTPS: requireHTTPS,
 		protocol:     options.Protocol,
+		headerHelper: options.HeaderHelper,
 	}
 }
 
@@ -281,7 +289,15 @@ func (e *OTLPLogsExporter) Export(ctx context.Context, request OTLPExportLogsReq
 		return err
 	}
 	httpRequest.Header.Set("Content-Type", contentType)
-	for key, value := range e.headers {
+	headers := e.headers
+	if e.headerHelper != nil {
+		refreshed, err := e.headerHelper.headersForExport(requestCtx)
+		if err != nil {
+			return err
+		}
+		headers = mergeExportHeaders(e.headers, refreshed)
+	}
+	for key, value := range headers {
 		httpRequest.Header.Set(key, value)
 	}
 	response, err := e.httpClient.Do(httpRequest)

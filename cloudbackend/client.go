@@ -13,6 +13,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"time"
 
 	"codex_go/appserver"
 	"codex_go/cloudclient"
@@ -124,6 +125,11 @@ type Client struct {
 	streamMu     sync.Mutex
 	streamLosses map[string]*streamLossState
 
+	runCtx          context.Context
+	recoveryOptions IdleRecoveryOptions
+	recovery        idleRecovery
+	recoveryResults chan idleRecoveryResult
+
 	projectMu    sync.Mutex
 	localProject *cloudclient.ProjectEnvironment
 
@@ -165,19 +171,28 @@ type streamLossState struct {
 // Connect opens an app-server client backed by the authenticated native Cloud
 // client. The returned client owns source and closes it with Close.
 func Connect(ctx context.Context, source cloudSource, account json.RawMessage) *Client {
+	return ConnectWithIdleRecovery(ctx, source, account, IdleRecoveryOptions{})
+}
+
+// ConnectWithIdleRecovery opens an app-server client that quietly reopens the
+// lost reply stream of the attached Cloud conversation (Rust #60969).
+func ConnectWithIdleRecovery(ctx context.Context, source cloudSource, account json.RawMessage, options IdleRecoveryOptions) *Client {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	client := &Client{
-		source:   source,
-		account:  cloneRawMessage(account),
-		requests: make(chan *pendingRequest, commandBufferSize),
-		done:     make(chan struct{}),
-		closed:   make(chan struct{}),
-		cancel:   cancel,
-		outCh:    make(chan Notification),
-		status:   map[string]any{},
+		source:          source,
+		account:         cloneRawMessage(account),
+		requests:        make(chan *pendingRequest, commandBufferSize),
+		done:            make(chan struct{}),
+		closed:          make(chan struct{}),
+		cancel:          cancel,
+		outCh:           make(chan Notification),
+		status:          map[string]any{},
+		runCtx:          runCtx,
+		recoveryOptions: options,
+		recoveryResults: make(chan idleRecoveryResult, 1),
 	}
 	client.outCond = sync.NewCond(&client.outMu)
 	go client.pumpNotifications()
@@ -262,6 +277,7 @@ func (c *Client) Close() {
 	}
 	c.closeOnce.Do(func() {
 		close(c.closed)
+		c.cancelIdleRecovery()
 		c.cancel()
 		if c.active != nil {
 			c.active.cancel()
@@ -283,7 +299,17 @@ func (c *Client) run(ctx context.Context) {
 			if pending == nil {
 				return
 			}
+			// A deliberate selection owns the next attachment, even when its
+			// handshake fails (Rust cloud_backend run_worker).
+			var canceledRoot string
+			var canceledOpening bool
+			if pending.method == appserver.MethodThreadStart || pending.method == appserver.MethodThreadResume {
+				canceledRoot, canceledOpening = c.cancelIdleRecovery()
+			}
 			result, rpcErr := c.handleRequest(ctx, pending.method, pending.params, pending.mode, pending.typed)
+			if rpcErr != nil && canceledOpening {
+				c.reportStreamLoss(canceledRoot)
+			}
 			pending.reply <- requestReply{result: result, err: rpcErr}
 		}
 	}
@@ -306,6 +332,9 @@ func waitWhileListening[T any](c *Client, ctx context.Context, op func() (T, err
 			select {
 			case result := <-finished:
 				return result.value, result.err
+			case recovered := <-c.recoveryResults:
+				c.handleIdleRecoveryResult(recovered)
+				continue
 			case event, ok := <-active.events:
 				c.forwardStreamEvent(active, event, ok)
 				continue
@@ -317,6 +346,9 @@ func waitWhileListening[T any](c *Client, ctx context.Context, op func() (T, err
 		select {
 		case result := <-finished:
 			return result.value, result.err
+		case recovered := <-c.recoveryResults:
+			c.handleIdleRecoveryResult(recovered)
+			continue
 		case <-ctx.Done():
 			var zero T
 			return zero, ctx.Err()
@@ -327,7 +359,7 @@ func waitWhileListening[T any](c *Client, ctx context.Context, op func() (T, err
 // forwardStreamEvent handles one event from the active attachment.
 func (c *Client) forwardStreamEvent(active *attachment, event cloudclient.Event, ok bool) {
 	if !ok {
-		c.streamEnded(active)
+		c.streamEnded(active, nil)
 		return
 	}
 	c.forwardEvent(active.threadID, event)
@@ -338,7 +370,7 @@ func (c *Client) forwardStreamEvent(active *attachment, event cloudclient.Event,
 // the end of the stream.
 func (c *Client) forwardStreamError(active *attachment, err error, ok bool) {
 	if ok && err != nil {
-		c.streamEnded(active)
+		c.streamEnded(active, err)
 		return
 	}
 	if !ok {
@@ -348,6 +380,11 @@ func (c *Client) forwardStreamError(active *attachment, err error, ok bool) {
 
 // forwardNextNonBlocking notices a ready stream end before a turn is sent.
 func (c *Client) forwardNextNonBlocking() {
+	select {
+	case recovered := <-c.recoveryResults:
+		c.handleIdleRecoveryResult(recovered)
+	default:
+	}
 	active := c.active
 	if active == nil {
 		return
@@ -368,14 +405,28 @@ func (c *Client) forwardNextNonBlocking() {
 	}
 }
 
-func (c *Client) streamEnded(active *attachment) {
+func (c *Client) streamEnded(active *attachment, endErr error) {
 	if c.active != active {
 		return
 	}
 	c.active.cancel()
 	c.active = nil
-	c.recordStreamLoss(active.threadID)
-	c.enqueue(cloudStreamEndedNotification(active.threadID))
+	threadID := active.threadID
+	// Rust only offers a quiet reopen for an idle conversation whose stream had
+	// been installed long enough to prove that it stays open, and only when the
+	// end was transient.
+	stable := c.recovery.installed.IsZero() || time.Since(c.recovery.installed) >= idleRecoveryStableWindow
+	observedIdle := c.recovery.observedIdle != nil && *c.recovery.observedIdle
+	c.recovery.state = idleReconnectInactive
+	c.recovery.root = ""
+	c.recovery.pending = false
+	c.recordStreamLoss(threadID)
+	if observedIdle && stable && transientCloudError(endErr) && c.offerIdleReconnect(threadID) {
+		// The accepted quiet reopen owns this loss; it is reported again only
+		// if the episode fails.
+		return
+	}
+	c.enqueue(cloudStreamEndedNotification(threadID))
 }
 
 // replaceAttachment opens threadID and activates it only once its stream is
@@ -397,6 +448,8 @@ func (c *Client) replaceAttachment(ctx context.Context, threadID string) error {
 			return notConnected
 		}
 		delete(c.status, threadID)
+		c.resetIdleRecovery()
+		c.recovery.installed = time.Now()
 		c.active = &attachment{threadID: threadID, events: events, errs: errs, cancel: cancel}
 		c.supersedeStreamLosses(threadID)
 		c.forwardEvent(threadID, event)
@@ -415,6 +468,8 @@ func (c *Client) replaceAttachment(ctx context.Context, threadID string) error {
 	default:
 	}
 	delete(c.status, threadID)
+	c.resetIdleRecovery()
+	c.recovery.installed = time.Now()
 	c.active = &attachment{threadID: threadID, events: events, errs: errs, cancel: cancel}
 	c.supersedeStreamLosses(threadID)
 	return nil
@@ -482,11 +537,17 @@ func (c *Client) admitTurn(threadID string) error {
 	if c.active == nil || c.active.threadID != strings.TrimSpace(threadID) {
 		return rejectCloudInput("Cloud stream is not connected. Reopen the conversation before sending.")
 	}
+	// A pending mutation clears the idle observation until the stream reports
+	// status again (Rust sets observed_idle to None for selected mutations).
+	c.recovery.observedIdle = nil
 	return nil
 }
 
 func (c *Client) detach(threadID string) {
 	delete(c.status, threadID)
+	if c.recovery.pending && c.recovery.root == threadID || c.active != nil && c.active.threadID == threadID {
+		c.resetIdleRecovery()
+	}
 	if c.active != nil && c.active.threadID == threadID {
 		c.active.cancel()
 		c.active = nil

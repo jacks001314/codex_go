@@ -73,10 +73,16 @@ type WebsocketConnectRecord struct {
 // `codex.sse_event` record (Rust's SessionTelemetry::sse_event_completed).
 type SSECompletedRecord struct {
 	Usage AgentUsage
+	// UsageReported distinguishes a response without usage from one whose usage
+	// was zero; the log record is emitted only when the response carried it.
+	UsageReported bool
 	// TTFTMillis is absent when the stream never reported an output item.
 	TTFTMillis      *int64
 	ServiceTier     string
 	ReasoningEffort string
+	// ReasoningRemovals is the response's input-transformation report; nil
+	// means the response did not report reasoning removals at all.
+	ReasoningRemovals *ReasoningRemovals
 }
 
 // WebsocketRequestRecord carries the values of one websocket request send
