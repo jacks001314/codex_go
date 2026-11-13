@@ -250,7 +250,76 @@ func NewRequestUserInputHandlerWithModes(responder UserInputResponder, modes []s
 }
 
 func (h *RequestUserInputHandler) Spec() Spec {
-	return Spec{Name: PlainName("request_user_input"), Description: requestUserInputToolDescription(h.availableModes), Exposure: ExposureDirectModelOnly}
+	return Spec{
+		Name:        PlainName("request_user_input"),
+		Description: requestUserInputToolDescription(h.availableModes),
+		InputSchema: requestUserInputInputSchema(),
+		Exposure:    ExposureDirectModelOnly,
+	}
+}
+
+// requestUserInputInputSchema mirrors Rust's create_request_user_input_tool
+// (core/src/tools/handlers/request_user_input_spec.rs). Without it the tool was
+// advertised with an empty parameter object, so a model following the tool list
+// called it with no questions and the handler rejected the call.
+//
+// autoResolutionMs stays part of the Go contract because the Go description
+// advertises it; Rust #36410 deprecated the field but keeps accepting it on the
+// wire.
+func requestUserInputInputSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"questions": map[string]any{
+				"type":        "array",
+				"description": "Questions to show the user. Prefer 1 and do not exceed 3",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"id": map[string]any{
+							"type":        "string",
+							"description": "Stable identifier for mapping answers (snake_case).",
+						},
+						"header": map[string]any{
+							"type":        "string",
+							"description": "Short header label shown in the UI (12 or fewer chars).",
+						},
+						"question": map[string]any{
+							"type":        "string",
+							"description": "Single-sentence prompt shown to the user.",
+						},
+						"options": map[string]any{
+							"type":        "array",
+							"description": "Provide 2-3 mutually exclusive choices. Put the recommended option first and suffix its label with \"(Recommended)\". Do not include an \"Other\" option in this list; the client will add a free-form \"Other\" option automatically.",
+							"items": map[string]any{
+								"type": "object",
+								"properties": map[string]any{
+									"label": map[string]any{
+										"type":        "string",
+										"description": "User-facing label (1-5 words).",
+									},
+									"description": map[string]any{
+										"type":        "string",
+										"description": "One short sentence explaining impact/tradeoff if selected.",
+									},
+								},
+								"required":             []string{"label", "description"},
+								"additionalProperties": false,
+							},
+						},
+					},
+					"required":             []string{"id", "header", "question", "options"},
+					"additionalProperties": false,
+				},
+			},
+			"autoResolutionMs": map[string]any{
+				"type":        "integer",
+				"description": "Optional non-blocking timeout in milliseconds; must be between 60000 and 240000. Omit when explicit user input is required.",
+			},
+		},
+		"required":             []string{"questions"},
+		"additionalProperties": false,
+	}
 }
 
 func normalizeRequestUserInputAvailableModes(modes []string) []string {
@@ -291,10 +360,15 @@ func requestUserInputAllowedModesText(modes []string) string {
 func (h *RequestUserInputHandler) Execute(ctx context.Context, invocation *Invocation) (*Output, error) {
 	var args RequestUserInputArgs
 	if err := invocation.DecodeArguments(&args); err != nil {
-		return nil, err
+		// Rust's parse_arguments reports malformed tool arguments to the model
+		// (FunctionCallError::RespondToModel) so the turn can continue; a raw
+		// error here would be escalated to a fatal turn error instead.
+		return nil, RespondToModel("failed to parse function arguments: " + err.Error())
 	}
 	if err := args.Normalize(); err != nil {
-		return nil, err
+		// Rust's normalize_request_user_input_tool_args maps validation failures
+		// to RespondToModel for the same reason.
+		return nil, RespondToModel(err.Error())
 	}
 	response := &UserInputResponse{Answers: map[string]string{}}
 	var err error
