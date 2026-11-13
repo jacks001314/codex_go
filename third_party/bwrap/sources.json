@@ -12,6 +12,30 @@
       "bytes": 129260
     }
   ],
+  "prebuilt": [
+    {
+      "goos": "linux",
+      "goarch": "amd64",
+      "target": "x86_64-unknown-linux-musl",
+      "upstream": "openai/codex",
+      "upstreamRelease": "rust-v0.167.2",
+      "url": "https://github.com/openai/codex/releases/download/rust-v0.167.2/bwrap-x86_64-unknown-linux-musl.tar.gz",
+      "sha256": "03cb0d2b151648693e3817c47068773ae4b7327c19fe25eab8c61c4c2865838a",
+      "bytes": 261598,
+      "member": "bwrap-x86_64-unknown-linux-musl"
+    },
+    {
+      "goos": "linux",
+      "goarch": "arm64",
+      "target": "aarch64-unknown-linux-musl",
+      "upstream": "openai/codex",
+      "upstreamRelease": "rust-v0.167.2",
+      "url": "https://github.com/openai/codex/releases/download/rust-v0.167.2/bwrap-aarch64-unknown-linux-musl.tar.gz",
+      "sha256": "981ad41ab3db4eda82140aae28aa8527b20688db986a05ca0ecdbb4dd3ef0654",
+      "bytes": 254906,
+      "member": "bwrap-aarch64-unknown-linux-musl"
+    }
+  ],
   "targets": [
     { "goos": "linux", "goarch": "amd64" },
     { "goos": "linux", "goarch": "arm64" }

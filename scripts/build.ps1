@@ -215,4 +215,19 @@ if ((Split-Path -Leaf $OutputDir) -eq "bin") {
     } else {
         Write-Warning "ripgrep for $GOOS/$GOARCH is not prepared; run third_party/ripgrep/prepare_ripgrep.py --platform $GOOS-$GOARCH"
     }
+
+    # Linux packages carry the sandbox launcher the CLI runs when no system bwrap
+    # is on PATH (Rust codex-resources/bwrap). A Windows host stages the pinned
+    # upstream binary with --prebuilt instead of compiling bubblewrap.
+    if ($GOOS -eq "linux") {
+        $PreparedBwrap = Join-Path $Root "third_party/bwrap/build/$GOOS-$GOARCH/bin/bwrap"
+        if (Test-Path -LiteralPath $PreparedBwrap) {
+            $ResourcesDir = Join-Path $OutputDir "codex-resources"
+            New-Item -ItemType Directory -Force -Path $ResourcesDir | Out-Null
+            Copy-Item -LiteralPath $PreparedBwrap -Destination (Join-Path $ResourcesDir "bwrap") -Force
+            Write-Host "==> Staged bwrap"
+        } else {
+            Write-Warning "bubblewrap for $GOOS/$GOARCH is not prepared; run third_party/bwrap/prepare_bwrap.py --platform $GOOS-$GOARCH --prebuilt"
+        }
+    }
 }

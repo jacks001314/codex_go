@@ -1820,3 +1820,102 @@ func TestRuntimeRouterSkillsListRefreshesExternallyChangedPluginSkillLikeRust(t 
 		}
 	}
 }
+
+func TestDiscoverPropagatesAgentPluginRootsLikeRust(t *testing.T) {
+	pluginRoot := t.TempDir()
+	root := filepath.Join(pluginRoot, "skills")
+	skillDir := filepath.Join(root, "review")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, SkillFilename), []byte("---\nname: review\ndescription: review\n---\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	agentEntries, _, err := discover(SkillsRoot{Path: root, Scope: "plugin", PluginID: "acme.tools@local", PluginRoot: pluginRoot, AgentPlugin: true}, HostSkillFileSystem{})
+	if err != nil {
+		t.Fatalf("discover(agent plugin) error = %v", err)
+	}
+	if len(agentEntries) != 1 || !agentEntries[0].AgentPlugin {
+		t.Fatalf("agent plugin entries = %#v", agentEntries)
+	}
+
+	hostEntries, _, err := discover(SkillsRoot{Path: root, Scope: "repo"}, HostSkillFileSystem{})
+	if err != nil {
+		t.Fatalf("discover(host) error = %v", err)
+	}
+	if len(hostEntries) != 1 || hostEntries[0].AgentPlugin {
+		t.Fatalf("host entries = %#v", hostEntries)
+	}
+}
+
+func TestDiscoverAgentPluginRootsUseDirectChildrenLikeRust(t *testing.T) {
+	pluginRoot := t.TempDir()
+	skillsRoot := filepath.Join(pluginRoot, "skills")
+	for _, relative := range []string{"direct", "nested/too-deep"} {
+		skillDir := filepath.Join(skillsRoot, filepath.FromSlash(relative))
+		if err := os.MkdirAll(skillDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		contents := "---\nname: " + filepath.Base(skillDir) + "\ndescription: demo\n---\n"
+		if err := os.WriteFile(filepath.Join(skillDir, SkillFilename), []byte(contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rootLevel := "---\nname: root-level\ndescription: demo\n---\n"
+	if err := os.WriteFile(filepath.Join(skillsRoot, SkillFilename), []byte(rootLevel), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, skillErrors, err := discover(SkillsRoot{Path: skillsRoot, Scope: "plugin", PluginID: "demo@test", PluginRoot: pluginRoot, AgentPlugin: true}, HostSkillFileSystem{})
+	if err != nil {
+		t.Fatalf("discover() error = %v", err)
+	}
+	if len(skillErrors) != 0 {
+		t.Fatalf("errors = %#v", skillErrors)
+	}
+	if len(entries) != 1 || entries[0].Name != "direct" || !entries[0].AgentPlugin {
+		t.Fatalf("entries = %#v", entries)
+	}
+
+	recursiveEntries, _, err := discover(SkillsRoot{Path: skillsRoot, Scope: "plugin", PluginID: "demo@test", PluginRoot: pluginRoot}, HostSkillFileSystem{})
+	if err != nil {
+		t.Fatalf("discover(recursive) error = %v", err)
+	}
+	names := map[string]bool{}
+	for _, entry := range recursiveEntries {
+		names[entry.Name] = true
+	}
+	for _, want := range []string{"direct", "too-deep", "root-level"} {
+		if !names[want] {
+			t.Fatalf("recursive discovery missing %q: %#v", want, names)
+		}
+	}
+}
+
+func TestDiscoverAgentPluginRootsSkipSkillsOutsidePluginRootLikeRust(t *testing.T) {
+	pluginRoot := t.TempDir()
+	skillsRoot := filepath.Join(pluginRoot, "skills")
+	if err := os.MkdirAll(skillsRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	escaped := filepath.Join(outside, "escaped")
+	if err := os.MkdirAll(escaped, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(escaped, SkillFilename), []byte("---\nname: escaped\ndescription: demo\n---\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(escaped, filepath.Join(skillsRoot, "escaped")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	entries, skillErrors, err := discover(SkillsRoot{Path: skillsRoot, Scope: "plugin", PluginID: "demo@test", PluginRoot: pluginRoot, AgentPlugin: true}, HostSkillFileSystem{})
+	if err != nil {
+		t.Fatalf("discover() error = %v", err)
+	}
+	if len(skillErrors) != 0 || len(entries) != 0 {
+		t.Fatalf("entries = %#v errors = %#v", entries, skillErrors)
+	}
+}

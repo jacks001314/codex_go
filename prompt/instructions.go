@@ -397,6 +397,7 @@ type InstructionsSkillMetadata struct {
 	ShortDescription        string
 	RoutingMetadata         string
 	PluginID                string
+	AgentPlugin             bool
 	RemotePluginID          string
 	Contents                string
 	AllowImplicitInvocation *bool

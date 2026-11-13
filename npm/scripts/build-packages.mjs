@@ -51,6 +51,14 @@ function run(command, commandArgs, options = {}) {
   if (result.status !== 0) throw new Error(`${command} failed with exit code ${result.status}`);
 }
 
+// An incomplete package is rejected when a managed daemon installs from it, so
+// stop before packing and name the command that stages the missing artifact.
+function requireStagedArtifact(file, hint) {
+  if (!existsSync(file)) {
+    throw new Error(`missing required package artifact ${path.relative(root, file)}; ${hint}`);
+  }
+}
+
 for (const target of targets) {
   const suffix = `${target.npmOS}-${target.npmCPU}`;
   const packageDir = path.join(stageRoot, `codex-go-${suffix}`);
@@ -122,7 +130,7 @@ for (const target of targets) {
     license: "Apache-2.0",
     os: [target.npmOS],
     cpu: [target.npmCPU],
-    files: ["vendor"],
+    files: ["vendor", "NOTICE"],
     repository: { type: "git", url: "git+https://github.com/jacks001314/codex_go.git" },
     ...(postinstall ? { scripts: { postinstall } } : {}),
   }, null, 2)}\n`);
@@ -139,7 +147,10 @@ for (const target of targets) {
     cpSync(preparedRipgrep, path.join(targetDir, "codex-path", ripgrepName));
     try { chmodSync(path.join(targetDir, "codex-path", ripgrepName), 0o755); } catch {}
   } else {
-    console.warn(`ripgrep for ${target.goos}/${target.goarch} is not prepared; run third_party/ripgrep/prepare_ripgrep.py --platform ${target.goos}-${target.goarch}`);
+    throw new Error(
+      `ripgrep for ${target.goos}/${target.goarch} is not prepared; run ` +
+      `python3 third_party/ripgrep/prepare_ripgrep.py --platform ${target.goos}-${target.goarch}`,
+    );
   }
   // Linux packages carry the sandbox launcher the CLI runs when no system bwrap
   // is on PATH (Rust codex-resources/bwrap); the package is rejected as a daemon
@@ -151,9 +162,31 @@ for (const target of targets) {
       cpSync(preparedBwrap, path.join(targetDir, "codex-resources", "bwrap"));
       try { chmodSync(path.join(targetDir, "codex-resources", "bwrap"), 0o755); } catch {}
     } else {
-      console.warn(`bubblewrap for ${target.goos}/${target.goarch} is not prepared; run third_party/bwrap/prepare_bwrap.py --platform ${target.goos}-${target.goarch}`);
+      throw new Error(
+        `bubblewrap for ${target.goos}/${target.goarch} is not prepared; run ` +
+        `python3 third_party/bwrap/prepare_bwrap.py --platform ${target.goos}-${target.goarch} --prebuilt`,
+      );
     }
   }
+  const requiredArtifacts = [
+    [executable, `build ./cmd/codex for ${target.goos}/${target.goarch}`],
+    [path.join(binDir, codeModeHostName), "build ./cmd/codex-code-mode-host"],
+    [path.join(binDir, execServerName), "build ./cmd/codex-exec-server"],
+    [path.join(targetDir, "codex-path", ripgrepName), "stage the bundled search backend"],
+    [path.join(targetDir, "codex-package.json"), "write the package manifest"],
+  ];
+  if (target.goos === "linux") {
+    requiredArtifacts.push([
+      path.join(targetDir, "codex-resources", "bwrap"),
+      `run python3 third_party/bwrap/prepare_bwrap.py --platform ${target.goos}-${target.goarch} --prebuilt`,
+    ]);
+  }
+  if (target.goos === "windows") {
+    for (const helper of ["codex-command-runner", "codex-windows-sandbox-setup", "codex-windows-sandbox-service"]) {
+      requiredArtifacts.push([path.join(targetDir, "codex-resources", `${helper}.exe`), "build the Windows sandbox helper"]);
+    }
+  }
+  for (const [file, hint] of requiredArtifacts) requireStagedArtifact(file, hint);
   run("npm", ["pack", packageDir, "--pack-destination", outputDir]);
 }
 

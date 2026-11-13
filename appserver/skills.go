@@ -64,6 +64,7 @@ type SkillsListEntry struct {
 	Dependencies     *SkillDependencies  `json:"dependencies,omitempty"`
 	Enabled          bool                `json:"enabled"`
 	PluginID         string              `json:"pluginId,omitempty"`
+	AgentPlugin      bool                `json:"-"`
 	RemotePluginID   string              `json:"-"`
 	Policy           *SkillPolicy        `json:"-"`
 	Contents         string              `json:"-"`
@@ -254,6 +255,7 @@ type SkillsRoot struct {
 	PluginID       string
 	RemotePluginID string
 	PluginRoot     string
+	AgentPlugin    bool
 	CWDs           []string
 	// FileSystem overrides the service accessor for this root (Rust #59279
 	// HostSkillRoot::repository uses the turn authority, host roots keep host).
@@ -836,7 +838,10 @@ func discover(root SkillsRoot, override ...SkillFileSystem) ([]SkillsListEntry, 
 		return nil, nil, err
 	}
 	if !info.IsDir() && filepath.Base(rootPath) == SkillFilename {
-		entry, skillErr, ok := entryFromPath(access, rootPath, root.Scope, root.PluginID, root.RemotePluginID, root.PluginRoot)
+		if root.AgentPlugin {
+			return nil, nil, nil
+		}
+		entry, skillErr, ok := entryFromPath(access, rootPath, root.Scope, root.PluginID, root.RemotePluginID, root.PluginRoot, root.AgentPlugin)
 		if skillErr != nil {
 			skillErr.ApplicableCWDs = append([]string(nil), root.CWDs...)
 			return nil, []SkillErrorInfo{*skillErr}, nil
@@ -854,7 +859,7 @@ func discover(root SkillsRoot, override ...SkillFileSystem) ([]SkillsListEntry, 
 	if !info.IsDir() {
 		return nil, nil, nil
 	}
-	entries, skillErrors, err := walkSkillRoot(access, rootPath, root.Scope, root.PluginID, root.RemotePluginID, root.PluginRoot, root.CWDs)
+	entries, skillErrors, err := walkSkillRoot(access, rootPath, root.Scope, root.PluginID, root.RemotePluginID, root.PluginRoot, root.AgentPlugin, root.CWDs)
 	return entries, skillErrors, err
 }
 
@@ -865,15 +870,20 @@ type skillRootWalker struct {
 	pluginID       string
 	remotePluginID string
 	pluginRoot     string
-	applicableCWDs []string
-	followSymlinks bool
-	seenDirs       map[string]bool
-	directoryCount int
-	entries        []SkillsListEntry
-	errors         []SkillErrorInfo
+	agentPlugin    bool
+	// canonicalPluginRoot and maxChildDirDepth model Rust's DirectChildren
+	// discovery mode for agent-plugin roots.
+	canonicalPluginRoot string
+	maxChildDirDepth    int
+	applicableCWDs      []string
+	followSymlinks      bool
+	seenDirs            map[string]bool
+	directoryCount      int
+	entries             []SkillsListEntry
+	errors              []SkillErrorInfo
 }
 
-func walkSkillRoot(access SkillFileSystem, rootPath string, scope string, pluginID string, remotePluginID string, pluginRoot string, applicableCWDs []string) ([]SkillsListEntry, []SkillErrorInfo, error) {
+func walkSkillRoot(access SkillFileSystem, rootPath string, scope string, pluginID string, remotePluginID string, pluginRoot string, agentPlugin bool, applicableCWDs []string) ([]SkillsListEntry, []SkillErrorInfo, error) {
 	walker := &skillRootWalker{
 		fs:             skillFileSystemOrHost(access),
 		root:           rootPath,
@@ -881,10 +891,20 @@ func walkSkillRoot(access SkillFileSystem, rootPath string, scope string, plugin
 		pluginID:       pluginID,
 		remotePluginID: remotePluginID,
 		pluginRoot:     pluginRoot,
+		agentPlugin:    agentPlugin,
 		applicableCWDs: append([]string(nil), applicableCWDs...),
 		followSymlinks: !strings.EqualFold(strings.TrimSpace(scope), "system"),
 		seenDirs:       map[string]bool{},
 		directoryCount: 1,
+	}
+	walker.maxChildDirDepth = skillMaxScanDepth
+	if agentPlugin {
+		walker.maxChildDirDepth = 1
+		if resolved, err := walker.fs.EvalSymlinks(strings.TrimSpace(walker.pluginRoot)); err == nil {
+			walker.canonicalPluginRoot = filepath.Clean(resolved)
+		} else if strings.TrimSpace(walker.pluginRoot) != "" {
+			walker.canonicalPluginRoot = filepath.Clean(walker.pluginRoot)
+		}
 	}
 	walker.markSeen(rootPath)
 	if err := walker.walkDir(rootPath, 0); err != nil {
@@ -947,7 +967,7 @@ func (w *skillRootWalker) walkSymlink(path string, name string, parentDepth int)
 }
 
 func (w *skillRootWalker) walkChildDir(path string, depth int) error {
-	if depth > skillMaxScanDepth {
+	if depth > w.maxChildDirDepth {
 		return nil
 	}
 	if w.directoryCount >= skillMaxDirsPerRoot {
@@ -963,7 +983,10 @@ func (w *skillRootWalker) walkChildDir(path string, depth int) error {
 }
 
 func (w *skillRootWalker) addSkill(path string) {
-	entry, skillErr, ok := entryFromPath(w.fs, path, w.scope, w.pluginID, w.remotePluginID, w.pluginRoot)
+	if w.agentPlugin && !w.agentPluginSkillPathAllowed(path) {
+		return
+	}
+	entry, skillErr, ok := entryFromPath(w.fs, path, w.scope, w.pluginID, w.remotePluginID, w.pluginRoot, w.agentPlugin)
 	if skillErr != nil {
 		skillErr.ApplicableCWDs = append([]string(nil), w.applicableCWDs...)
 		w.errors = append(w.errors, *skillErr)
@@ -974,6 +997,33 @@ func (w *skillRootWalker) addSkill(path string) {
 		entry.ApplicableCWDs = append([]string(nil), w.applicableCWDs...)
 		w.entries = append(w.entries, entry)
 	}
+}
+
+// agentPluginSkillPathAllowed mirrors Rust's DirectChildren checks
+// (ext/skills/src/loader/host.rs): a skill must be a regular SKILL.md that sits
+// directly under a child directory of the skills root and resolves inside the
+// plugin root. Rejected skills are skipped silently, like Rust.
+func (w *skillRootWalker) agentPluginSkillPathAllowed(path string) bool {
+	if filepath.Clean(filepath.Dir(filepath.Dir(path))) != filepath.Clean(w.root) {
+		return false
+	}
+	resolved, err := w.fs.EvalSymlinks(path)
+	if err != nil {
+		return false
+	}
+	if w.canonicalPluginRoot == "" || !pathWithinSkillRoot(w.canonicalPluginRoot, filepath.Clean(resolved)) {
+		return false
+	}
+	info, err := w.fs.Stat(path)
+	return err == nil && info.Mode().IsRegular()
+}
+
+func pathWithinSkillRoot(root string, path string) bool {
+	relative, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
+	if err != nil || filepath.IsAbs(relative) {
+		return false
+	}
+	return relative == "." || (relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)))
 }
 
 func (w *skillRootWalker) markSeen(path string) {
@@ -989,7 +1039,7 @@ func (w *skillRootWalker) dirIdentity(path string) string {
 	return filepath.Clean(path)
 }
 
-func entryFromPath(access SkillFileSystem, path string, scope string, pluginID string, remotePluginID string, pluginRoot string) (SkillsListEntry, *SkillErrorInfo, bool) {
+func entryFromPath(access SkillFileSystem, path string, scope string, pluginID string, remotePluginID string, pluginRoot string, agentPlugin bool) (SkillsListEntry, *SkillErrorInfo, bool) {
 	skillDir := filepath.Dir(path)
 	name := filepath.Base(skillDir)
 	data, err := skillFileSystemOrHost(access).ReadFile(path)
@@ -1009,7 +1059,7 @@ func entryFromPath(access SkillFileSystem, path string, scope string, pluginID s
 	name = parsed.Name
 	description := parsed.Description
 	shortDescription := parsed.ShortDescription
-	entry := SkillsListEntry{Name: name, Path: canonicalSkillPathForIdentity(path), Scope: firstNonEmpty(scope, "local"), Description: description, ShortDescription: shortDescription, Enabled: true, PluginID: pluginID, RemotePluginID: remotePluginID}
+	entry := SkillsListEntry{Name: name, Path: canonicalSkillPathForIdentity(path), Scope: firstNonEmpty(scope, "local"), Description: description, ShortDescription: shortDescription, Enabled: true, PluginID: pluginID, RemotePluginID: remotePluginID, AgentPlugin: agentPlugin}
 	// Rust 72d937ed4d (#37144): keep the discovery path (which may differ
 	// from the canonical identity for symlinked skills) so catalog entries
 	// can advertise the path under the configured skill root while still
@@ -1431,6 +1481,7 @@ func dedupeSkillsByPath(entries []SkillsListEntry) []SkillsListEntry {
 		key := skillPathIdentityKey(entry.Path)
 		if index, ok := seen[key]; ok {
 			out[index].ApplicableCWDs = mergeSkillCWDs(out[index].ApplicableCWDs, entry.ApplicableCWDs)
+			out[index].AgentPlugin = out[index].AgentPlugin || entry.AgentPlugin
 			continue
 		}
 		seen[key] = len(out)
