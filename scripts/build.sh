@@ -219,7 +219,7 @@ EOF
       cp -f "$PREPARED_BWRAP" "$OUTPUT_DIR/codex-resources/bwrap"
       echo "==> Staged bwrap"
     else
-      echo "==> WARNING: bubblewrap for $TARGET_GOOS/$TARGET_GOARCH is not prepared; run third_party/bwrap/prepare_bwrap.py --platform $TARGET_GOOS-$TARGET_GOARCH"
+      echo "==> WARNING: bubblewrap for $TARGET_GOOS/$TARGET_GOARCH is not prepared; run third_party/bwrap/prepare_bwrap.py --platform $TARGET_GOOS-$TARGET_GOARCH --prebuilt"
     fi
   fi
 fi

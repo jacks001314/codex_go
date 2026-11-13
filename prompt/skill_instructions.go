@@ -2,6 +2,7 @@ package prompt
 
 import (
 	"fmt"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -10,6 +11,19 @@ const (
 	SkillNameMaxBytes       = 256
 	SkillPathMaxBytes       = 1024
 )
+
+// SkillPromptContentsBounded mirrors Rust's skill injection paths. Host roots
+// are bounded only when the skill came from an agent-plugin root
+// (ext/skills/src/host_prompt.rs, discovery mode DirectChildren); catalog
+// entries from every other authority (executor, orchestrator, cloud, custom)
+// are always bounded (ext/skills/src/extension.rs).
+func SkillPromptContentsBounded(skill InstructionsSkillMetadata) bool {
+	if skill.AgentPlugin {
+		return true
+	}
+	kind := strings.ToLower(strings.TrimSpace(skill.AuthorityKind))
+	return kind != "" && kind != "host"
+}
 
 func TruncateSkillInstructionFields(name string, path string, contents string) (string, string, string, bool) {
 	contents, contentsTruncated := TruncateSkillUTF8Bytes(contents, SkillMainPromptMaxBytes)

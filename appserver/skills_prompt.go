@@ -133,7 +133,12 @@ func BuildHostSkillsPromptContext(options *HostSkillsPromptOptions) (*HostSkills
 			}
 			contents = string(data)
 		}
-		name, renderPath, contents, truncated := promptctx.TruncateSkillInstructionFields(skill.Name, firstNonEmpty(skill.LocatorPath, skill.Path), contents)
+		renderPath := firstNonEmpty(skill.LocatorPath, skill.Path)
+		name := skill.Name
+		truncated := false
+		if promptctx.SkillPromptContentsBounded(skill) {
+			name, renderPath, contents, truncated = promptctx.TruncateSkillInstructionFields(skill.Name, renderPath, contents)
+		}
 		rendered := contextfrag.Render(contextfrag.NewSkillInstructions(name, renderPath, contents))
 		if item := buildRenderedMessage(rendered); item != nil {
 			result.InputItems = append(result.InputItems, item)

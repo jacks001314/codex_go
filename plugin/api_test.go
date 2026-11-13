@@ -2173,3 +2173,62 @@ func TestPathsMatchAfterNormalizationLikeRust(t *testing.T) {
 		t.Fatal("empty paths should fall back to direct equality")
 	}
 }
+
+func TestEnabledSkillRootsMarkAgentPluginRootsLikeRust(t *testing.T) {
+	agentRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(agentRoot, "skills", "review"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentRoot, "skills", "review", "SKILL.md"), []byte("---\nname: review\ndescription: review\n---\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentRoot, AgentPluginManifestRelativePath), []byte(`{"$schema":"`+AgentPluginSchemaURI+`","name":"acme.tools"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	legacyRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(legacyRoot, "skills", "review"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacyRoot, "skills", "review", "SKILL.md"), []byte("---\nname: review\ndescription: review\n---\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(legacyRoot, ".codex-plugin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacyRoot, ".codex-plugin", "plugin.json"), []byte(`{"name":"legacy.tools"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	service := NewPluginService()
+	for _, pluginCase := range []struct {
+		root      string
+		manifest  string
+		pluginID  string
+		agentMode bool
+	}{
+		{root: agentRoot, manifest: filepath.Join(agentRoot, AgentPluginManifestRelativePath), pluginID: "acme.tools@local", agentMode: true},
+		{root: legacyRoot, manifest: filepath.Join(legacyRoot, ".codex-plugin", "plugin.json"), pluginID: "legacy.tools@local", agentMode: false},
+	} {
+		service.AddPlugin(PluginDetail{
+			Summary: PluginSummary{
+				ID:        pluginCase.pluginID,
+				Name:      pluginCase.pluginID,
+				HasSkills: true,
+				Installed: true,
+				Enabled:   true,
+				Source:    PluginSource{Type: "local", Path: pluginCase.root},
+			},
+			ManifestPath: pluginCase.manifest,
+		})
+	}
+	roots := service.EnabledSkillRoots()
+	if len(roots) != 2 {
+		t.Fatalf("enabled roots = %#v", roots)
+	}
+	for _, root := range roots {
+		wantAgent := root.PluginID == "acme.tools@local"
+		if root.AgentPlugin != wantAgent {
+			t.Fatalf("root %s AgentPlugin = %v, want %v", root.PluginID, root.AgentPlugin, wantAgent)
+		}
+	}
+}

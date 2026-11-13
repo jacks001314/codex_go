@@ -11587,7 +11587,7 @@ func (r *RuntimeRouter) pluginSkillEntriesAndErrorsForRuntime(threadID string) (
 	entries := make([]SkillsListEntry, 0)
 	errors := make([]SkillErrorInfo, 0)
 	for _, root := range roots {
-		discovered, discoveredErrors, err := discover(SkillsRoot{Path: root.Root, Scope: "plugin", PluginID: root.PluginID, RemotePluginID: root.RemotePluginID, PluginRoot: filepath.Dir(root.Root)}, HostSkillFileSystem{})
+		discovered, discoveredErrors, err := discover(SkillsRoot{Path: root.Root, Scope: "plugin", PluginID: root.PluginID, RemotePluginID: root.RemotePluginID, PluginRoot: filepath.Dir(root.Root), AgentPlugin: root.AgentPlugin}, HostSkillFileSystem{})
 		if err != nil {
 			return nil, nil, err
 		}
@@ -12204,6 +12204,7 @@ func promptSkillMetadataFromEntriesWithPolicy(entries []SkillsListEntry, preferS
 				ShortDescription:        entry.ShortDescription,
 				RoutingMetadata:         promptSkillRoutingMetadata(entry.Interface),
 				PluginID:                entry.PluginID,
+				AgentPlugin:             entry.AgentPlugin,
 				RemotePluginID:          entry.RemotePluginID,
 				Contents:                entry.Contents,
 				AllowImplicitInvocation: allowImplicit,
@@ -13170,7 +13171,11 @@ func (r *RuntimeRouter) skillInstructionsInputItemWithProvider(threadID string, 
 		}
 	}
 	renderPath := firstNonEmpty(skill.LocatorPath, skill.Path)
-	name, renderPath, contents, truncated := promptctx.TruncateSkillInstructionFields(skill.Name, renderPath, contents)
+	name := skill.Name
+	truncated := false
+	if promptctx.SkillPromptContentsBounded(skill) {
+		name, renderPath, contents, truncated = promptctx.TruncateSkillInstructionFields(skill.Name, renderPath, contents)
+	}
 	var fragment *contextfrag.SkillInstructions
 	if strings.EqualFold(strings.TrimSpace(skill.AuthorityKind), string(skillprovider.SourceExecutor)) && !skill.AllowsImplicitInvocation() {
 		fragment = contextfrag.NewSkillInstructionsWithExecutorResourceAccess(name, renderPath, contents, &contextfrag.ExecutorSkillResourceAccess{

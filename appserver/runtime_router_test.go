@@ -15932,10 +15932,11 @@ func TestRuntimeRouterSkillInstructionsInputItemTruncatesMainPromptLikeRust(t *t
 	items := router.explicitSkillInputItems("thread-skill-truncation", &turn.TurnStartParams{
 		Prompt: "[$" + name + "](" + locatorPath + ")",
 	}, []promptctx.InstructionsSkillMetadata{{
-		Name:        name,
-		Path:        "environment://remote/skills/long/SKILL.md",
-		LocatorPath: locatorPath,
-		Contents:    contents,
+		Name:          name,
+		Path:          "environment://remote/skills/long/SKILL.md",
+		LocatorPath:   locatorPath,
+		Contents:      contents,
+		AuthorityKind: "executor",
 	}})
 	if len(items) != 1 {
 		t.Fatalf("explicitSkillInputItems() = %#v", items)
@@ -29534,5 +29535,59 @@ func TestRestoreConversationWindowIgnoresNonUUIDv7IdentityLikeRust(t *testing.T)
 	}
 	if _, ok := protocol.ParseContextWindowID(id); !ok {
 		t.Fatalf("expected a fresh UUIDv7 context window id, got %q", id)
+	}
+}
+
+func TestRuntimeRouterHostSkillInstructionsStayUnboundedLikeRust(t *testing.T) {
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{})
+	router.SetNotificationSink(sink)
+
+	skillPath := filepath.Join(t.TempDir(), "skills", "release", SkillFilename)
+	contents := strings.Repeat("h", promptctx.SkillMainPromptMaxBytes+16) + "HOST_SKILL_TAIL"
+	items := router.explicitSkillInputItems("thread-host-unbounded", &turn.TurnStartParams{
+		Input: []turn.TurnUserInput{{Type: "skill", Name: "release", Path: skillPath}},
+	}, []promptctx.InstructionsSkillMetadata{{
+		Name:     "release",
+		Path:     skillPath,
+		Contents: contents,
+	}})
+	if len(items) != 1 {
+		t.Fatalf("explicitSkillInputItems() = %#v", items)
+	}
+	text := inputItemText(items)
+	if !strings.Contains(text, "HOST_SKILL_TAIL") || !strings.Contains(text, contents) {
+		t.Fatalf("host skill contents were truncated like Rust host prompts never are:\n%s", text)
+	}
+	if warnings := warningNotificationsForTest(sink); len(warnings) != 0 {
+		t.Fatalf("warnings = %#v", warnings)
+	}
+}
+
+func TestRuntimeRouterAgentPluginSkillInstructionsStayBoundedLikeRust(t *testing.T) {
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{})
+	router.SetNotificationSink(sink)
+
+	skillPath := filepath.Join(t.TempDir(), "plugins", "acme.tools", "skills", "review", SkillFilename)
+	contents := strings.Repeat("p", promptctx.SkillMainPromptMaxBytes+16) + "PLUGIN_SKILL_TAIL"
+	items := router.explicitSkillInputItems("thread-agent-plugin", &turn.TurnStartParams{
+		Input: []turn.TurnUserInput{{Type: "skill", Name: "acme.tools:review", Path: skillPath}},
+	}, []promptctx.InstructionsSkillMetadata{{
+		Name:        "acme.tools:review",
+		Path:        skillPath,
+		Contents:    contents,
+		AgentPlugin: true,
+	}})
+	if len(items) != 1 {
+		t.Fatalf("explicitSkillInputItems() = %#v", items)
+	}
+	text := inputItemText(items)
+	if strings.Contains(text, "PLUGIN_SKILL_TAIL") || !strings.Contains(text, strings.Repeat("p", promptctx.SkillMainPromptMaxBytes)) {
+		t.Fatalf("agent plugin skill contents were not bounded:\n%s", text)
+	}
+	warnings := warningNotificationsForTest(sink)
+	if len(warnings) != 1 || warnings[0].Message != promptctx.SkillMainPromptTruncatedWarning("acme.tools:review") {
+		t.Fatalf("warnings = %#v", warnings)
 	}
 }

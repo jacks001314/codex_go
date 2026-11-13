@@ -609,6 +609,7 @@ type EnabledSkillRoot struct {
 	RemotePluginID  string
 	PluginNamespace string
 	Root            string
+	AgentPlugin     bool
 }
 
 type SkillInterface struct {
@@ -2909,6 +2910,18 @@ func (s *PluginService) EnabledHookSources() []HookSource {
 	return sources
 }
 
+// pluginRootUsesAgentPluginManifest reports whether the plugin at pluginRoot is
+// an Agent Plugins v1 plugin. Rust models those roots with
+// SkillDiscoveryMode::DirectChildren and bounds their skill prompts.
+func pluginRootUsesAgentPluginManifest(pluginRoot string) bool {
+	data, err := os.ReadFile(filepath.Join(strings.TrimSpace(pluginRoot), AgentPluginManifestRelativePath))
+	if err != nil {
+		return false
+	}
+	status, err := AgentPluginSchemaStatusForContents(data)
+	return err == nil && status == AgentPluginSchemaSupported
+}
+
 func (s *PluginService) EnabledSkillRoots() []EnabledSkillRoot {
 	if s == nil {
 		return nil
@@ -2928,6 +2941,7 @@ func (s *PluginService) EnabledSkillRoots() []EnabledSkillRoot {
 			PluginID:        detail.Summary.ID,
 			RemotePluginID:  detail.Summary.RemotePluginID,
 			PluginNamespace: firstNonEmpty(detail.Summary.Name, detail.Summary.ID),
+			AgentPlugin:     pluginRootUsesAgentPluginManifest(pluginRoot),
 			Root:            filepath.Join(pluginRoot, "skills"),
 		})
 	}

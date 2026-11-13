@@ -5609,6 +5609,7 @@ func interactivePromptSkillMetadataFromEntries(entries []appserver.SkillsListEnt
 				Path:                    strings.TrimSpace(entry.Path),
 				Description:             strings.TrimSpace(description),
 				PluginID:                strings.TrimSpace(entry.PluginID),
+				AgentPlugin:             entry.AgentPlugin,
 				RemotePluginID:          strings.TrimSpace(entry.RemotePluginID),
 				Contents:                entry.Contents,
 				AllowImplicitInvocation: allowImplicit,
@@ -5629,7 +5630,10 @@ func interactiveSkillInstructionsInputItem(skill promptctx.InstructionsSkillMeta
 		contents = string(data)
 	}
 	renderPath := firstNonEmptyLocal(skill.LocatorPath, skill.Path)
-	name, renderPath, contents, _ := promptctx.TruncateSkillInstructionFields(skill.Name, renderPath, contents)
+	name := skill.Name
+	if promptctx.SkillPromptContentsBounded(skill) {
+		name, renderPath, contents, _ = promptctx.TruncateSkillInstructionFields(skill.Name, renderPath, contents)
+	}
 	rendered := contextfrag.Render(contextfrag.NewSkillInstructions(name, renderPath, contents))
 	if rendered == nil || strings.TrimSpace(rendered.Content) == "" {
 		return nil

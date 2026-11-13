@@ -78,6 +78,19 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
+      # The managed daemon refuses a package without its bundled search backend
+      # and Linux sandbox launcher. ripgrep is downloaded per target; bwrap
+      # comes from the pinned upstream Codex release so both Linux architectures
+      # can be staged on this single x64 runner.
+      - name: Stage packaged tools
+        run: |
+          set -euo pipefail
+          for target in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64 windows-amd64 windows-arm64; do
+            python3 third_party/ripgrep/prepare_ripgrep.py --platform "$target"
+          done
+          for target in linux-amd64 linux-arm64; do
+            python3 third_party/bwrap/prepare_bwrap.py --platform "$target" --prebuilt
+          done
       - name: Stage npm packages (6 platforms)
         run: node npm/scripts/build-packages.mjs --version "$VERSION" --output-dir "dist/v$VERSION/npm"
       - name: Publish npm packages
