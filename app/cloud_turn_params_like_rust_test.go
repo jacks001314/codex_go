@@ -23,12 +23,13 @@ import (
 // Rust #57267 (codex-rs/tui/src/app_server_session.rs:1611-1634): turn/start
 // carries the turn identity, inputs, trigger and additional context, but a
 // server-owned conversation must not send the client's cwd, permissions, model,
-// effort, summary, service tier or collaboration mode.
+// effort, summary or collaboration mode. #61178 carries a conversation-scoped
+// speed choice on the next new turn.
 func TestCloudTurnStartOmitsClientSettingsLikeRust(t *testing.T) {
 	body := sendTurnStartAgainstFakeServer(t, ThreadParamsModeCloud)
 	for _, key := range []string{
 		"cwd", "model", "approvalPolicy", "sandboxPolicy", "permissions", "config",
-		"effort", "summary", "serviceTier", "collaborationMode", "runtimeWorkspaceRoots",
+		"effort", "summary", "collaborationMode", "runtimeWorkspaceRoots",
 	} {
 		if raw, ok := body[key]; ok {
 			t.Fatalf("cloud turn/start sent client-owned %q = %s", key, raw)
@@ -42,6 +43,21 @@ func TestCloudTurnStartOmitsClientSettingsLikeRust(t *testing.T) {
 	var threadID string
 	if err := json.Unmarshal(body["threadId"], &threadID); err != nil || threadID != "thread-cloud" {
 		t.Fatalf("cloud threadId = %s (err %v), want thread-cloud", body["threadId"], err)
+	}
+	var tier string
+	if err := json.Unmarshal(body["serviceTier"], &tier); err != nil || tier != "priority" {
+		t.Fatalf("cloud serviceTier = %s (err %v), want priority", body["serviceTier"], err)
+	}
+}
+
+func TestCloudTurnStartClearsServiceTierWithExplicitNullLikeRust(t *testing.T) {
+	body := sendTurnStartAgainstFakeServerWithTier(t, ThreadParamsModeCloud, "default")
+	raw, ok := body["serviceTier"]
+	if !ok {
+		t.Fatalf("cloud turn/start omitted the explicit service tier clear: %#v", body)
+	}
+	if string(raw) != "null" {
+		t.Fatalf("cloud serviceTier = %s, want null", raw)
 	}
 }
 
@@ -66,6 +82,10 @@ func TestClientOwnedTurnStartKeepsSettingsLikeRust(t *testing.T) {
 // a websocket fake server and returns the turn/start params actually written to
 // the wire.
 func sendTurnStartAgainstFakeServer(t *testing.T, mode ThreadParamsMode) map[string]json.RawMessage {
+	return sendTurnStartAgainstFakeServerWithTier(t, mode, "priority")
+}
+
+func sendTurnStartAgainstFakeServerWithTier(t *testing.T, mode ThreadParamsMode, tier string) map[string]json.RawMessage {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -120,7 +140,7 @@ func sendTurnStartAgainstFakeServer(t *testing.T, mode ThreadParamsMode) map[str
 		ModelReasoningEffort: "high",
 	}}
 	state := codextui.NewState(&codextui.Options{Model: "gpt-5", CWD: `D:\repo`, ReasoningEffort: "high"})
-	state.ServiceTier = "priority"
+	state.ServiceTier = tier
 	messages := make(chan bubbletea.Msg, 8)
 	client := &remoteAppServerTUIClient{
 		endpoint:         endpoint,

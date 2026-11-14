@@ -63,6 +63,11 @@ func (m *Model) applyServiceTierCommand(command bottompane.ServiceTierCommand) b
 	}
 	m.State.ServiceTier = next
 	m.savedServiceTier = next
+	if m.serverOwnedSettings {
+		m.notice = serviceTierSelectionNotice(next)
+		m.refreshTranscript()
+		return nil
+	}
 	if m.onWriteSettings == nil {
 		m.notice = "Service tier set to " + next
 		m.refreshTranscript()
@@ -73,4 +78,15 @@ func (m *Model) applyServiceTierCommand(command bottompane.ServiceTierCommand) b
 		configValue = "fast"
 	}
 	return m.writeSettings(settingsWriteKindServiceTier, []SettingsEdit{{KeyPath: "service_tier", Value: configValue}})
+}
+
+func serviceTierSelectionNotice(tier string) string {
+	label := tier
+	switch tier {
+	case chatwidget.ServiceTierDefaultRequestValue:
+		label = "standard"
+	case chatwidget.ServiceTierFastRequestValue:
+		label = "fast"
+	}
+	return "Selected " + label + " speed for the next new turn in this conversation"
 }

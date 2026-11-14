@@ -1286,6 +1286,10 @@ type Options struct {
 	// sessions this model can select (Rust #54681). A zero value binds the
 	// model to this process's embedded/daemon backend.
 	BackendID codextui.BackendID
+	// ServerOwnedSettings marks a conversation whose execution settings live on
+	// the app server (Rust ThreadParamsMode::Cloud). A speed selected here is
+	// scoped to the next new turn and must not be written to user config.
+	ServerOwnedSettings bool
 	// TerminalSizeContext is the launch context recorded with
 	// `codex.tui.start` and reused for `codex.tui.terminal_size` (Rust #53859).
 	// It never carries the terminal size buckets themselves.
@@ -1830,6 +1834,9 @@ type Model struct {
 	// with (Rust #54681). It survives connection replacement: picker targets
 	// from another backend are rejected before resume/fork/unarchive.
 	backendID codextui.BackendID
+	// serverOwnedSettings is true for native Cloud conversations whose speed is
+	// conversation-scoped rather than persisted as a user default (Rust #61178).
+	serverOwnedSettings bool
 	// threadBackend records which backend serves each thread this model has
 	// displayed (Rust #58457 thread ownership tracking). Recorded ownership wins
 	// over a picker row's stale listing stamp, so an adopted session does not
@@ -3492,6 +3499,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		serviceTierCommands:              serviceTierCommandsForPolicy(options.FeatureSettings, constrainServiceTierCommandsByRequirements(options.ServiceTierRequirements, options.ServiceTierCommands)),
 		savedServiceTier:                 strings.TrimSpace(state.ServiceTier),
 		serviceTierRequirements:          options.ServiceTierRequirements,
+		serverOwnedSettings:              options.ServerOwnedSettings,
 		sessionItems:                     append([]codextui.SessionSummary(nil), options.SessionPickerItems...),
 		sessionCWD:                       strings.TrimSpace(options.SessionPickerCWD),
 		profile:                          strings.TrimSpace(options.Profile),

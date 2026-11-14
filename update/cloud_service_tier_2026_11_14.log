@@ -1,0 +1,30 @@
+== cloud turn params ==
+=== RUN   TestCloudTurnStartOmitsClientSettingsLikeRust
+--- PASS: TestCloudTurnStartOmitsClientSettingsLikeRust (0.00s)
+=== RUN   TestCloudTurnStartClearsServiceTierWithExplicitNullLikeRust
+--- PASS: TestCloudTurnStartClearsServiceTierWithExplicitNullLikeRust (0.00s)
+=== RUN   TestClientOwnedTurnStartKeepsSettingsLikeRust
+--- PASS: TestClientOwnedTurnStartKeepsSettingsLikeRust (0.01s)
+=== RUN   TestCloudTurnStartOmitsPermissionsLikeRust
+--- PASS: TestCloudTurnStartOmitsPermissionsLikeRust (0.00s)
+=== RUN   TestCloudTurnStartIgnoresActivePermissionProfileLikeRust
+--- PASS: TestCloudTurnStartIgnoresActivePermissionProfileLikeRust (0.00s)
+PASS
+ok  	codex_go/app	0.139s
+== cloud tier selection ==
+=== RUN   TestCloudServiceTierSelectionStaysConversationScopedLikeRust
+--- PASS: TestCloudServiceTierSelectionStaysConversationScopedLikeRust (0.00s)
+=== RUN   TestClientOwnedServiceTierSelectionStillWritesSettings
+--- PASS: TestClientOwnedServiceTierSelectionStillWritesSettings (0.00s)
+PASS
+ok  	codex_go/tui/tea	0.121s
+== turn marshal ==
+=== RUN   TestTurnParamsMarshalRustStableRequestShape
+--- PASS: TestTurnParamsMarshalRustStableRequestShape (0.00s)
+PASS
+ok  	codex_go/turn	0.037s
+== cloud packages ==
+ok  	codex_go/cloudbackend	0.568s
+ok  	codex_go/cloudclient	0.026s
+== vet ==
+vet exit=0

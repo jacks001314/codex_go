@@ -61,6 +61,11 @@ func (m *Model) applyFastServiceTier() bubbletea.Cmd {
 	}
 	m.State.ServiceTier = next
 	m.savedServiceTier = next
+	if m.serverOwnedSettings {
+		m.notice = serviceTierSelectionNotice(next)
+		m.refreshTranscript()
+		return nil
+	}
 	if m.onWriteSettings == nil {
 		m.notice = "Service tier set to " + next
 		m.refreshTranscript()

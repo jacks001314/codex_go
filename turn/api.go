@@ -420,49 +420,36 @@ func (p *TurnStartParams) CloneDynamicTools() []DynamicToolSpec {
 }
 
 func (p *TurnStartParams) MarshalJSON() ([]byte, error) {
-	return json.Marshal(struct {
-		ThreadID            string              `json:"threadId"`
-		ClientUserMessageID string              `json:"clientUserMessageId,omitempty"`
-		Input               []TurnUserInput     `json:"input"`
-		ToolOutput          *TurnToolOutput     `json:"toolOutput,omitempty"`
-		TurnTrigger         string              `json:"turnTrigger,omitempty"`
-		ParentTurnID        string              `json:"parentTurnId,omitempty"`
-		RootTurnID          string              `json:"rootTurnId,omitempty"`
-		CWD                 string              `json:"cwd,omitempty"`
-		ApprovalPolicy      any                 `json:"approvalPolicy,omitempty"`
-		ApprovalsReviewer   *string             `json:"approvalsReviewer,omitempty"`
-		SandboxPolicy       any                 `json:"sandboxPolicy,omitempty"`
-		Model               string              `json:"model,omitempty"`
-		ServiceTier         *string             `json:"serviceTier,omitempty"`
-		PromptCacheTTL      *string             `json:"promptCacheTtl,omitempty"`
-		Effort              *string             `json:"effort,omitempty"`
-		Summary             *string             `json:"summary,omitempty"`
-		Personality         *string             `json:"personality,omitempty"`
-		OutputSchema        any                 `json:"outputSchema,omitempty"`
-		CollaborationMode   map[string]any      `json:"collaborationMode,omitempty"`
-		CyberAccessProgram  *CyberAccessProgram `json:"cyberAccessProgram,omitempty"`
-	}{
-		ThreadID:            p.ThreadID,
-		ClientUserMessageID: p.ClientUserMessageID,
-		Input:               userInputsForJSONWithPrompt(p.Input, p.Prompt),
-		ToolOutput:          p.ToolOutput,
-		TurnTrigger:         p.TurnTrigger,
-		ParentTurnID:        p.ParentTurnID,
-		RootTurnID:          p.RootTurnID,
-		CWD:                 p.CWD,
-		ApprovalPolicy:      p.ApprovalPolicy,
-		ApprovalsReviewer:   p.ApprovalsReviewer,
-		SandboxPolicy:       p.SandboxPolicy,
-		Model:               p.Model,
-		ServiceTier:         p.ServiceTier,
-		PromptCacheTTL:      p.PromptCacheTTL,
-		Effort:              p.Effort,
-		Summary:             p.Summary,
-		Personality:         p.Personality,
-		OutputSchema:        p.OutputSchema,
-		CollaborationMode:   p.CollaborationMode,
-		CyberAccessProgram:  p.CyberAccessProgram,
-	})
+	type turnStartParamsAlias TurnStartParams
+	copied := turnStartParamsAlias(*p)
+	// The host-side Prompt is a shorthand for an extra text input; the wire
+	// shape carries it inside `input` and omits the internal `prompt` field.
+	copied.Input = userInputsForJSONWithPrompt(p.Input, p.Prompt)
+	if copied.Input == nil {
+		copied.Input = []TurnUserInput{}
+	}
+	copied.Prompt = ""
+	encoded, err := json.Marshal(&copied)
+	if err != nil {
+		return nil, err
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &object); err != nil {
+		return nil, err
+	}
+	// These host-side/legacy fields are not part of the app-server turn/start
+	// wire even though they retain JSON tags for local callers.
+	for _, key := range []string{
+		"responsesapiClientMetadata", "responsesapiClientMetadataPatch",
+		"originator", "runtimeWorkspaceRoots", "multiAgentMode",
+	} {
+		delete(object, key)
+	}
+	if p.ServiceTierSet && p.ServiceTier == nil {
+		// ServiceTierSet distinguishes an omitted field from an explicit null.
+		object["serviceTier"] = json.RawMessage("null")
+	}
+	return json.Marshal(object)
 }
 
 func (p *TurnStartParams) UnmarshalJSON(data []byte) error {

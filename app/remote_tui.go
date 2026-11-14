@@ -609,8 +609,9 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		// (Rust #54681). Without this the remote TUI starts with a zero backend
 		// id, so the first `/fork` or command-center fork of a fresh session was
 		// rejected with "This session belongs to a different backend".
-		BackendID:          backendID,
-		SessionPickerItems: sessionPickerItems,
+		BackendID:           backendID,
+		ServerOwnedSettings: paramsMode.SettingsOwner() == ThreadSettingsOwnerServer,
+		SessionPickerItems:  sessionPickerItems,
 		OnListSessionPickerItems: func() ([]codextui.SessionSummary, string, error) {
 			items, notice := interactiveRemoteSessionPickerItems(ctx, root, endpoint, backendID)
 			return items, notice, nil
@@ -4101,7 +4102,9 @@ func (c *remoteAppServerTUIClient) startTurn(ctx context.Context, root *cli.Root
 	if admitter, ok := c.transport.(cloudQuestionAnswerAdmitter); ok && usesCloudQuestionAnswerAdmission(c.threadParamsMode, request) {
 		return admitCloudUserMessage(ctx, admitter, params)
 	}
-	id, err := c.sendRequest(ctx, appserver.MethodTurnStart, params)
+	// Marshal through the pointer so TurnStartParams can emit serviceTier:null
+	// when a Cloud conversation clears its selected speed.
+	id, err := c.sendRequest(ctx, appserver.MethodTurnStart, &params)
 	if err != nil {
 		return "", err
 	}
@@ -6462,7 +6465,20 @@ func remoteTurnStartParamsForMode(mode ThreadParamsMode, root *cli.RootOptions, 
 	if mode.SettingsOwner() == ThreadSettingsOwnerServer {
 		// Rust #57267 (app_server_session.rs:1620-1634): a native hosted
 		// conversation keeps cwd, workspace roots, permissions, model, effort,
-		// summary, service tier and collaboration mode on the server.
+		// summary and collaboration mode on the server. #61178 adds one
+		// conversation-scoped exception: a speed chosen in the TUI travels with
+		// the next new turn. An empty value inherits; "default" must be sent as
+		// an explicit null so it clears a previously selected tier.
+		if mode == ThreadParamsModeCloud && state != nil {
+			switch tier := strings.TrimSpace(state.ServiceTier); tier {
+			case "":
+				// Preserve the server's inherited tier.
+			case chatwidget.ServiceTierDefaultRequestValue:
+				params.ServiceTierSet = true
+			default:
+				params.ServiceTier = &tier
+			}
+		}
 		return params, nil
 	}
 	if request.CollaborationMode == nil {
