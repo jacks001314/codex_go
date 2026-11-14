@@ -125,3 +125,49 @@ func TestConsecutiveLegacyAdmissionsPreserveLiveDenials(t *testing.T) {
 		t.Fatal("second update discarded live denial")
 	}
 }
+
+func TestNamedPermissionAdmissionPreservesLiveDenialsLikeRust(t *testing.T) {
+	threadRouter, record, cwd := newPersistedResumeSettingsFixture(t)
+	denied := filepath.Join(cwd, "secret")
+	record.Metadata.Extra["permission_profile"] = map[string]any{
+		"type":    "managed",
+		"network": "restricted",
+		"file_system": map[string]any{
+			"type": "restricted",
+			"entries": []map[string]any{
+				{"path": map[string]any{"type": "path", "path": denied}, "access": "deny"},
+			},
+		},
+	}
+	if err := threadRouter.store.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: threadRouter,
+		Config:       config.NewConfigService(t.TempDir()),
+	})
+	defer router.Close()
+	legacy := "read-only"
+	if _, err := router.commitThreadSettingsUpdate(&SettingsUpdateParams{ThreadID: string(record.ID), SandboxPolicy: &legacy}, false); err != nil {
+		t.Fatal(err)
+	}
+	before, err := sandbox.ParseRuntimePermissionProfileJSON(string(router.threadSettingsForTurn(string(record.ID)).normalizedPermissionProfile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !before.DeniesReadPath(denied) {
+		t.Fatalf("legacy setup lost deny-read restriction for %s: %+v", denied, before.DeniedReadEntries)
+	}
+	named := sandbox.BuiltInPermissionProfileDangerFullAccess
+	if _, err := router.commitThreadSettingsUpdate(&SettingsUpdateParams{ThreadID: string(record.ID), Permissions: &named}, false); err != nil {
+		t.Fatal(err)
+	}
+	settings := router.threadSettingsForTurn(string(record.ID))
+	profile, err := sandbox.ParseRuntimePermissionProfileJSON(string(settings.normalizedPermissionProfile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !profile.DeniesReadPath(denied) {
+		t.Fatalf("named admission lost deny-read restriction for %s: %+v", denied, profile.DeniedReadEntries)
+	}
+}

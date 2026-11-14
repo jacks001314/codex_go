@@ -15,7 +15,7 @@ func TestPreserveDeniedReadsRetainsGlobDepthWithoutMutatingInputs(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, requested := range []PermissionProfile{ReadOnlyPermissionProfile(), {SandboxPolicy: &SandboxPolicy{Kind: SandboxDangerFullAccess}}, {SandboxPolicy: NewWorkspaceWritePolicy()}} {
+	for _, requested := range []PermissionProfile{ReadOnlyPermissionProfile(), FullAccessPermissionProfile(), {SandboxPolicy: &SandboxPolicy{Kind: SandboxDangerFullAccess}}, {SandboxPolicy: NewWorkspaceWritePolicy()}} {
 		result, err := PreserveDeniedReads(requested, *current)
 		if err != nil {
 			t.Fatal(err)

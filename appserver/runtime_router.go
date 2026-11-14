@@ -9509,6 +9509,10 @@ func (r *RuntimeRouter) commitThreadSettingsUpdateWithConnection(params *Setting
 		if settings == nil {
 			settings = &Settings{}
 		}
+		currentProfile, currentErr := r.permissionProfileForSettingsPreservation(params.ThreadID, settings)
+		if currentErr != nil {
+			return nil, currentErr
+		}
 		settings.ActivePermissionProfile = cloneString(params.Permissions)
 		settings.normalizedPermissionProfile = nil
 		if params.CWD != nil {
@@ -9527,6 +9531,16 @@ func (r *RuntimeRouter) commitThreadSettingsUpdateWithConnection(params *Setting
 		raw, err := sandbox.RuntimePermissionProfileJSON(*profile)
 		if err != nil {
 			return nil, err
+		}
+		if currentProfile != nil {
+			merged, err := sandbox.PreserveDeniedReads(*profile, *currentProfile)
+			if err != nil {
+				return nil, err
+			}
+			raw, err = sandbox.RuntimePermissionProfileJSON(*merged)
+			if err != nil {
+				return nil, err
+			}
 		}
 		normalized.normalizedPermissionProfile = json.RawMessage(raw)
 	}

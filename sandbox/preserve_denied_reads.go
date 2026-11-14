@@ -23,14 +23,27 @@ func PreserveDeniedReads(requested PermissionProfile, current PermissionProfile)
 	if err := json.Unmarshal([]byte(previous), &old); err != nil {
 		return nil, err
 	}
+	hasDenials := old.FileSys != nil
+	if hasDenials {
+		hasDenials = false
+		for _, entry := range old.FileSys.Entries {
+			if entry.Access == string(FileSystemAccessDeny) {
+				hasDenials = true
+				break
+			}
+		}
+	}
+	if next.Type == "disabled" && hasDenials {
+		// Rust converts a disabled profile's unrestricted filesystem policy to
+		// a managed restricted policy when existing deny-read entries must be
+		// retained. Full access remains enabled because a disabled profile has
+		// no separate network restriction.
+		next.Type = "managed"
+		next.Network = string(NetworkEnabled)
+		next.FileSys = &rustPermissionFilesystem{Type: "restricted"}
+	}
 	if next.FileSys == nil || old.FileSys == nil {
 		return ParseRuntimePermissionProfileJSON(raw)
-	}
-	hasDenials := false
-	for _, entry := range old.FileSys.Entries {
-		if entry.Access == string(FileSystemAccessDeny) {
-			hasDenials = true
-		}
 	}
 	if next.FileSys.Type == "unrestricted" && hasDenials {
 		next.FileSys = &rustPermissionFilesystem{Type: "restricted", Entries: []rustPermissionFilesystemEntry{{Path: rustPermissionFilesystemPath{Type: "special", Value: rustPermissionFilesystemSpecial{Kind: "root"}}, Access: string(FileSystemAccessWrite)}}}
