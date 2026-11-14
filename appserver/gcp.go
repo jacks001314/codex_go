@@ -137,6 +137,10 @@ func (r *RuntimeRouter) handleGcpSetup(request *Request) (*GcpSetupResponse, err
 	// is relative and must fail validation, and only an omitted value clears the
 	// user override.
 	settings := []config.ProviderSetting{
+		// Rust #61420: the requested project and location choose the Vertex AI
+		// endpoint, so setup clears the active user layer's base_url override. A
+		// higher-precedence layer that still supplies it fails the preview.
+		{Key: "base_url", Value: nil},
 		{Key: "project_id", Value: &projectID},
 		{Key: "location", Value: &location},
 		{Key: "credential_file", Value: params.CredentialFile},
@@ -153,9 +157,6 @@ func (r *RuntimeRouter) handleGcpSetup(request *Request) (*GcpSetupResponse, err
 	// `prepare_provider_config`; verify_credentials merges them onto the
 	// built-in defaults exactly once.
 	provider := configured[model.GCPProviderID]
-	if strings.TrimSpace(provider.BaseURL) != "" {
-		return nil, jsonRPCInvalidRequest("Google Cloud has a custom `base_url`. Clear `model_providers.gcp.base_url` before configuring a project and location.")
-	}
 	permit, err := r.gcpSetupNetworkPermit()
 	if err != nil {
 		return nil, jsonRPCInvalidRequest(err.Error())

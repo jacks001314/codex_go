@@ -178,7 +178,10 @@ func TestGCPSetupSavesOverridesRestoresADCRefreshesCatalogLikeRust(t *testing.T)
 	t.Setenv(model.GCPLocationEnvVar, "ambient-location")
 
 	catalogPath, catalog := writeGCPModelCatalog(t, home)
+	// Rust #61420: an existing user endpoint override is cleared by setup instead
+	// of blocking it.
 	configBody := "model_catalog_json = " + tomlString(catalogPath) + "\n" +
+		"[model_providers.gcp]\nbase_url = \"https://vertex.example.com/v1\"\n" +
 		"[model_providers.gcp.http_headers]\nX-Existing = \"preserved\"\n"
 	if err := os.WriteFile(config.ConfigPath(home), []byte(configBody), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -217,6 +220,9 @@ func TestGCPSetupSavesOverridesRestoresADCRefreshesCatalogLikeRust(t *testing.T)
 	headers, _ := provider["http_headers"].(map[string]any)
 	if headers["X-Existing"] != "preserved" {
 		t.Fatalf("http_headers = %#v", provider["http_headers"])
+	}
+	if _, ok := provider["base_url"]; ok {
+		t.Fatalf("setup must clear the user base_url override: %#v", provider)
 	}
 	if _, err := os.Stat(filepath.Join(startup, "credential-log")); err != nil {
 		t.Fatalf("credential log in startup cwd: %v", err)
@@ -325,9 +331,12 @@ func TestGCPSetupRejectsPolicyAndEndpointConflictsBeforeSavingLikeRust(t *testin
 			wantWriteErrorCode: string(config.ConfigWriteLayerReadonly),
 		},
 		{
-			name:        "custom base url",
-			configBody:  "[model_providers.gcp]\nbase_url = \"https://vertex.example.com/v1\"\n",
-			wantMessage: "Google Cloud has a custom `base_url`",
+			// Rust #61420: only a higher-precedence endpoint override still
+			// conflicts; the user layer's own override is cleared by setup.
+			name:               "managed base url override",
+			managedBody:        "[model_providers.gcp]\nbase_url = \"https://vertex.example.com/v1\"\n",
+			wantMessage:        "Cannot configure `model_providers.gcp.base_url`: Overridden by legacy managed_config.toml",
+			wantWriteErrorCode: string(config.ConfigWriteLayerReadonly),
 		},
 		{
 			name:               "required provider selection",
