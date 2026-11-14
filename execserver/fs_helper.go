@@ -417,6 +417,13 @@ func fsSandboxCommand(ctx *FileSystemSandboxContext, profile *sandbox.Permission
 		return nil, nil, requestError(-32602, fmt.Sprintf("failed to prepare fs sandbox: %v", err))
 	}
 	runSandboxIntegrityChecks(plan, string(ctx.SandboxOverride), cwd, plan.Command, env)
+	// Rust #61276: a filesystem helper must never run outside a sandbox. A
+	// non-Windows executor cannot provide the Windows token sandbox a request
+	// asked for, so it reports SandboxUnavailable instead of running the helper
+	// unconfined.
+	if fsHelperWindowsSandboxUnavailable(runtime.GOOS, ctx, cwd) {
+		return nil, nil, requestError(-32602, "filesystem sandbox cannot be enforced on this executor")
+	}
 	if runtime.GOOS != "windows" {
 		return plan.Command, env, nil
 	}
@@ -452,6 +459,23 @@ func fsSandboxCommand(ctx *FileSystemSandboxContext, profile *sandbox.Permission
 	// runtime selection, not a shell-supplied override (Rust #45550).
 	windowssandbox.ApplyWrapperRuntimeEnv(env)
 	return append([]string{executable}, args...), env, nil
+}
+
+// fsHelperWindowsSandboxUnavailable reports whether a filesystem-helper request
+// asks for a Windows token sandbox on an executor that cannot enforce it
+// (Rust #61276 SandboxUnavailable).
+func fsHelperWindowsSandboxUnavailable(goos string, ctx *FileSystemSandboxContext, cwd string) bool {
+	if goos == "windows" || ctx == nil {
+		return false
+	}
+	if !executorPathUsesWindowsConvention(cwd) {
+		return false
+	}
+	selection, err := selectWindowsSandboxForExecutor(ctx.WindowsSandboxLevel, cwd)
+	if err != nil {
+		return false
+	}
+	return selection != WindowsSandboxSelectionDisabled
 }
 
 // fsSandboxRunPlan prepares the shared permission boundary used by both the
