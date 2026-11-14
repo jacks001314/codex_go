@@ -3183,6 +3183,19 @@ func (s *PluginService) materializeMarketplacePluginDetailForUpgrade(detail *Plu
 	return s.materializeMarketplacePluginDetailWithOptions(detail, true)
 }
 
+// reloadMarketplacePluginDetailAfterRefresh rebuilds the catalog entry from the
+// tree that the version refresh just activated. Clearing the cached manifest
+// path forces the normal materialization path to re-read version, description,
+// and skills instead of cloning stale metadata.
+func (s *PluginService) reloadMarketplacePluginDetailAfterRefresh(detail *PluginDetail) (*PluginDetail, error) {
+	if detail == nil {
+		return nil, fmt.Errorf("%w: plugin detail is required", ErrInvalidPluginRequest)
+	}
+	reload := cloneDetail(*detail)
+	reload.ManifestPath = ""
+	return s.materializeMarketplacePluginDetail(&reload)
+}
+
 func (s *PluginService) materializeMarketplacePluginDetailWithOptions(detail *PluginDetail, force bool) (*PluginDetail, error) {
 	if detail == nil {
 		return nil, fmt.Errorf("%w: plugin detail is required", ErrInvalidPluginRequest)

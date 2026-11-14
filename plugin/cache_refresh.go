@@ -7,7 +7,24 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 )
+
+// pluginDetailHasRefreshableGitSource keeps cache refreshes on remote sources
+// whose current tree may be compared with a newly staged one. Local plugins
+// have nothing to fetch, and an installed Git plugin must be checked even when
+// its existing cache manifest is readable.
+func pluginDetailHasRefreshableGitSource(detail *PluginDetail) bool {
+	if detail == nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(detail.Summary.Source.Type)) {
+	case "git", "git-subdir":
+		return strings.TrimSpace(detail.Summary.Source.URL) != ""
+	default:
+		return false
+	}
+}
 
 // refreshMarketplacePluginVersion downloads to staging and preserves the active
 // tree when the publisher changes content without changing its version.
@@ -15,7 +32,7 @@ func (s *PluginService) refreshMarketplacePluginVersion(detail *PluginDetail) (b
 	return s.refreshMarketplacePluginVersionChecked(detail, false, false)
 }
 func (s *PluginService) refreshMarketplacePluginVersionChecked(detail *PluginDetail, requireCurrent bool, force bool, reloads ...MarketplaceConfigReload) (bool, error) {
-	if detail == nil || !pluginDetailNeedsMarketplaceMaterialization(detail) {
+	if !pluginDetailHasRefreshableGitSource(detail) {
 		return false, nil
 	}
 	source, subdir, err := parsedMarketplacePluginSource(&detail.Summary.Source)
@@ -145,7 +162,7 @@ func (s *PluginService) startNonCuratedCacheRefresh(force bool, configured []Plu
 		}
 	}
 	for _, detail := range candidates {
-		if !detail.Summary.Installed || IsReservedMarketplaceName(detail.Summary.MarketplaceName) || !pluginDetailNeedsMarketplaceMaterialization(&detail) {
+		if !detail.Summary.Installed || IsReservedMarketplaceName(detail.Summary.MarketplaceName) || !pluginDetailHasRefreshableGitSource(&detail) {
 			continue
 		}
 		raw, _ := json.Marshal(detail.Summary.Source)
@@ -174,7 +191,7 @@ func (s *PluginService) startNonCuratedCacheRefresh(force bool, configured []Plu
 			for {
 				updated, err := s.refreshMarketplacePluginVersionChecked(&detail, reload == nil, refreshForce, reload)
 				if err == nil && updated {
-					refreshed, loadErr := s.materializeMarketplacePluginDetail(&detail)
+					refreshed, loadErr := s.reloadMarketplacePluginDetailAfterRefresh(&detail)
 					if loadErr != nil {
 						err = loadErr
 					} else {

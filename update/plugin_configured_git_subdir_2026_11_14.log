@@ -1,0 +1,13 @@
+== targeted tests ==
+=== RUN   TestPluginReadMaterializesConfiguredGitSubdirLikeRust
+--- PASS: TestPluginReadMaterializesConfiguredGitSubdirLikeRust (0.36s)
+=== RUN   TestFirstConfiguredPluginRefreshKeepsSameGitSubdirVersion
+--- PASS: TestFirstConfiguredPluginRefreshKeepsSameGitSubdirVersion (1.44s)
+PASS
+ok  	codex_go/appserver	1.913s
+== go test ./plugin ==
+ok  	codex_go/plugin	2.162s
+== go test ./appserver plugin group ==
+ok  	codex_go/appserver	7.588s
+== go vet ==
+vet exit=0
