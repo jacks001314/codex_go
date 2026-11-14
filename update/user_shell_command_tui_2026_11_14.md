@@ -18,4 +18,4 @@ Rust 的 ChatWidget 在提交前识别 `!` 命令：不走模型回合，而是�
 
 验证：`go vet ./tui/tea ./app ./appserver` 退出 0；`go test ./tui/tea -count=1` 通过（47.5s）；`go test ./app -count=1` 通过（40.1s）；`go test ./appserver -run "ShellCommand|RunLocalUserShell" -count=1` 通过。日志见 `user_shell_command_tui_2026_11_14.log`。
 
-说明：内嵌执行器目前使用 `cmd.exe /c` / `/bin/sh -lc` 的会话 shell 回退，未接入 app-server 的 shell snapshot 与线程环境策略；远程路径由服务端完整执行。这一差异记录为后续细化项。
+说明：内嵌执行器优先使用环境中的登录 shell（`SHELL`/`COMSPEC`），未接入 app-server 的 shell snapshot 与线程环境策略；远程路径由服务端完整执行。这一差异记录为后续细化项。

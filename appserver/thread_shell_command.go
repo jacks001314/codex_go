@@ -97,7 +97,7 @@ func RunLocalUserShellCommand(ctx context.Context, threadID string, command stri
 	defer cancel()
 
 	output := &localUserShellOutput{}
-	argv := threadShellCommandArgv(command)
+	argv := localUserShellCommandArgv(command)
 	cmd := osexec.CommandContext(runCtx, argv[0], argv[1:]...)
 	if strings.TrimSpace(cwd) != "" {
 		cmd.Dir = cwd
@@ -680,6 +680,21 @@ func threadShellCommandArgv(command string) []string {
 		return []string{"cmd.exe", "/c", command}
 	}
 	return []string{"/bin/sh", "-lc", command}
+}
+
+// localUserShellCommandArgv prefers the environment's login shell so the
+// embedded TUI runs the command the way the session shell would, falling back
+// to the platform default when the environment reports none.
+func localUserShellCommandArgv(command string) []string {
+	shellPath := strings.TrimSpace(os.Getenv("SHELL"))
+	if runtime.GOOS == "windows" {
+		shellPath = strings.TrimSpace(os.Getenv("COMSPEC"))
+	}
+	if shellPath != "" {
+		sessionShell := &tool.Shell{Type: tool.DetectShellType(shellPath), Path: shellPath}
+		return sessionShell.DeriveExecArgs(command, true)
+	}
+	return threadShellCommandArgv(command)
 }
 
 func threadShellCommandItem(run *threadShellCommandRun, itemID string, processID string, status CommandExecutionStatus, aggregatedOutput string, exitCode *int64, durationMS *int64, createdAtMS int64, sandboxBackend *string) ThreadItem {
