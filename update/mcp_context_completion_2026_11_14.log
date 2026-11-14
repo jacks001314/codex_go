@@ -1,0 +1,47 @@
+== explicit context tests ==
+=== RUN   TestDisabledRegistrationIsNameVeto
+=== RUN   TestDisabledRegistrationIsNameVeto/plugin
+=== RUN   TestDisabledRegistrationIsNameVeto/selected_plugin
+=== RUN   TestDisabledRegistrationIsNameVeto/config
+=== RUN   TestDisabledRegistrationIsNameVeto/compatibility
+=== RUN   TestDisabledRegistrationIsNameVeto/extension
+--- PASS: TestDisabledRegistrationIsNameVeto (0.00s)
+    --- PASS: TestDisabledRegistrationIsNameVeto/plugin (0.00s)
+    --- PASS: TestDisabledRegistrationIsNameVeto/selected_plugin (0.00s)
+    --- PASS: TestDisabledRegistrationIsNameVeto/config (0.00s)
+    --- PASS: TestDisabledRegistrationIsNameVeto/compatibility (0.00s)
+    --- PASS: TestDisabledRegistrationIsNameVeto/extension (0.00s)
+=== RUN   TestHostContributionContextPreservesIdentityAcrossOverrides
+--- PASS: TestHostContributionContextPreservesIdentityAcrossOverrides (0.00s)
+PASS
+ok  	codex_go/mcp	0.036s
+=== RUN   TestMCPExplicitDisabledPluginsOverrideThreadProjection
+=== RUN   TestMCPExplicitDisabledPluginsOverrideThreadProjection/inherited
+=== RUN   TestMCPExplicitDisabledPluginsOverrideThreadProjection/explicit
+=== RUN   TestMCPExplicitDisabledPluginsOverrideThreadProjection/clear
+=== RUN   TestMCPExplicitDisabledPluginsOverrideThreadProjection/host
+=== RUN   TestMCPExplicitDisabledPluginsOverrideThreadProjection/host_restricted
+=== RUN   TestMCPExplicitDisabledPluginsOverrideThreadProjection/unrelated
+--- PASS: TestMCPExplicitDisabledPluginsOverrideThreadProjection (0.01s)
+    --- PASS: TestMCPExplicitDisabledPluginsOverrideThreadProjection/inherited (0.00s)
+    --- PASS: TestMCPExplicitDisabledPluginsOverrideThreadProjection/explicit (0.00s)
+    --- PASS: TestMCPExplicitDisabledPluginsOverrideThreadProjection/clear (0.00s)
+    --- PASS: TestMCPExplicitDisabledPluginsOverrideThreadProjection/host (0.00s)
+    --- PASS: TestMCPExplicitDisabledPluginsOverrideThreadProjection/host_restricted (0.00s)
+    --- PASS: TestMCPExplicitDisabledPluginsOverrideThreadProjection/unrelated (0.00s)
+=== RUN   TestMCPExplicitOriginatorOnlyChangesCompatibilityApps
+--- PASS: TestMCPExplicitOriginatorOnlyChangesCompatibilityApps (0.00s)
+=== RUN   TestMCPHostContextEnvironmentReadiness
+--- PASS: TestMCPHostContextEnvironmentReadiness (0.00s)
+=== RUN   TestMCPExplicitOriginatorReachesHTTPTransport
+--- PASS: TestMCPExplicitOriginatorReachesHTTPTransport (1.26s)
+=== RUN   TestMCPHostEmptySelectionRestrictsRemoteRegistrations
+--- PASS: TestMCPHostEmptySelectionRestrictsRemoteRegistrations (0.00s)
+=== RUN   TestMCPHostReadyEnvironmentHonorsOwnerDenyPolicy
+--- PASS: TestMCPHostReadyEnvironmentHonorsOwnerDenyPolicy (0.00s)
+PASS
+ok  	codex_go/appserver	1.371s
+== mcp full ==
+ok  	codex_go/mcp	33.225s
+== vet ==
+vet exit=0
