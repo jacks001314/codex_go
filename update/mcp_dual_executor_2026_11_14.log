@@ -1,0 +1,16 @@
+== dual executor scope ==
+=== RUN   TestDualExecutorSameNamedMCPServerStaysScopedLikeRust
+--- PASS: TestDualExecutorSameNamedMCPServerStaysScopedLikeRust (1.27s)
+PASS
+ok  	codex_go/appserver	1.355s
+== local exec item scope ==
+=== RUN   TestMCPToolCallProtocolItemCarriesEnvironmentScopeLikeRust
+--- PASS: TestMCPToolCallProtocolItemCarriesEnvironmentScopeLikeRust (0.00s)
+PASS
+ok  	codex_go/exec	0.085s
+== mcp full ==
+ok  	codex_go/mcp	33.226s
+== appserver mcp/executor ==
+ok  	codex_go/appserver	10.847s
+== vet ==
+vet exit=0

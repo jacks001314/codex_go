@@ -50,6 +50,10 @@ func TestReadClientEnvironmentTextStreamRejectsOversizedFile(t *testing.T) {
 }
 
 func startExecServerTestClient(t *testing.T) (interface{ Close() error }, *execserverclient.Client) {
+	return startExecServerTestClientForEnvironment(t, "executor-skill-stream-test")
+}
+
+func startExecServerTestClientForEnvironment(t *testing.T, environmentID string) (interface{ Close() error }, *execserverclient.Client) {
 	t.Helper()
 	serverCtx, cancel := context.WithCancel(context.Background())
 	urlCh := make(chan string, 1)
@@ -65,7 +69,7 @@ func startExecServerTestClient(t *testing.T) (interface{ Close() error }, *execs
 		cancel()
 		t.Fatal("exec-server URL was not reported")
 	}
-	client, err := execserverclient.DialClient(context.Background(), serverURL, "executor-skill-stream-test")
+	client, err := execserverclient.DialClient(context.Background(), serverURL, environmentID)
 	if err != nil {
 		t.Fatalf("DialClient() error = %v", err)
 	}
