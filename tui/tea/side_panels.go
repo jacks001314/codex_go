@@ -298,16 +298,13 @@ func (m *Model) paneStatusForThread(threadID string) string {
 // dims it, mirroring Rust #61141's unfocused treatment (no hyperlinks).
 func (m *Model) renderDimmedPaneStatus(threadID string, status string, width int, maxRows int) string {
 	status = strings.TrimSpace(status)
-	if status == "" || width <= 0 {
+	if status == "" || width <= 0 || maxRows <= 0 {
 		return ""
 	}
 	// Structured status content reflows with its colours intact (Rust #61141).
 	if m != nil {
 		if spans := m.paneStatusSpans[strings.TrimSpace(threadID)]; len(spans) > 0 {
 			rows := wrapPaneStatusSpans(spans, width)
-			if maxRows <= 0 {
-				maxRows = 3
-			}
 			if len(rows) > maxRows {
 				rows = rows[:maxRows]
 			}
@@ -321,9 +318,6 @@ func (m *Model) renderDimmedPaneStatus(threadID string, status string, width int
 		}
 	}
 	rows := codextui.WrapLine(status, codextui.WrapOptions{Width: width, BreakWords: true})
-	if maxRows <= 0 {
-		maxRows = 3
-	}
 	if len(rows) > maxRows {
 		rows = rows[:maxRows]
 	}
@@ -333,23 +327,52 @@ func (m *Model) renderDimmedPaneStatus(threadID string, status string, width int
 	return strings.Join(rows, "\n")
 }
 
-// paneStatusRowBudget mirrors Rust #61141's shared row allocation: a taller
-// pane gives the status more rows, but the transcript always keeps at least one.
+// sidePaneComposerHeightLimit mirrors Rust #61141's composer_height_limit: the
+// inactive composer may claim up to two thirds of the pane, or eight rows on
+// short panes when they fit.
+func sidePaneComposerHeightLimit(height int) int {
+	if height <= 0 {
+		return 0
+	}
+	limit := height * 2 / 3
+	if limit < 8 {
+		limit = 8
+	}
+	if limit > height {
+		limit = height
+	}
+	return limit
+}
+
+// sidePaneFooterCap mirrors the footer cap Rust derives from the composer
+// limit: clamp((limit+2)/4, 2, 4).
+func sidePaneFooterCap(height int) int {
+	cap := (sidePaneComposerHeightLimit(height) + 2) / 4
+	if cap < 2 {
+		cap = 2
+	}
+	if cap > 4 {
+		cap = 4
+	}
+	return cap
+}
+
+// paneStatusRowBudget mirrors Rust #61141's FooterLayout allocation for an
+// unfocused side pane. The composer keeps its rows and one hint row stays
+// reserved, so the status may use whatever the footer cap leaves; a pane with
+// no room reports zero rows instead of squeezing the transcript out.
 func paneStatusRowBudget(height int) int {
 	if height <= 0 {
-		return 1
+		return 0
 	}
-	budget := height / 3
-	if budget < 1 {
-		budget = 1
+	composer := min(max(height-1, 0), 3)
+	available := max(height-composer, 0)
+	cap := min(sidePaneFooterCap(height), available)
+	status := cap - 1
+	if status < 0 {
+		status = 0
 	}
-	if budget > 4 {
-		budget = 4
-	}
-	if limit := height - 1; budget > limit && limit >= 1 {
-		budget = limit
-	}
-	return budget
+	return status
 }
 
 // joinSidePanes draws each pane window, pads the left column to the divider,

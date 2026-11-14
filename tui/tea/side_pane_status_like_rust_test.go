@@ -56,7 +56,7 @@ func TestSidePaneStatusRowBudgetLikeRust(t *testing.T) {
 		height int
 		want   int
 	}{
-		{1, 1}, {2, 1}, {6, 2}, {12, 4}, {40, 4}, {0, 1},
+		{0, 0}, {1, 0}, {2, 0}, {6, 1}, {12, 1}, {20, 2}, {24, 3}, {40, 3},
 	} {
 		if got := paneStatusRowBudget(tc.height); got != tc.want {
 			t.Fatalf("paneStatusRowBudget(%d) = %d, want %d", tc.height, got, tc.want)
