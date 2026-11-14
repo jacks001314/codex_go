@@ -484,7 +484,7 @@ func fsSandboxRunPlan(ctx *FileSystemSandboxContext, profile *sandbox.Permission
 	// Legacy Landlock does not need runtime executable grants (Rust #61138).
 	var readableRoots []string
 	if !ctx.UseLegacyLandlock {
-		readableRoots = fsHelperReadableRoots(executable)
+		readableRoots = fsHelperReadableRoots(executable, ctx.codexLinuxSandboxExe)
 	}
 
 	plan, err := sandbox.BuildCommandRunPlan(&sandbox.CommandRunRequest{
@@ -501,6 +501,7 @@ func fsSandboxRunPlan(ctx *FileSystemSandboxContext, profile *sandbox.Permission
 		// executables; granting the containing directory would make unrelated
 		// sibling files readable.
 		SandboxReadableRoots:      readableRoots,
+		CodexLinuxSandboxExe:      ctx.codexLinuxSandboxExe,
 		SandboxDisableNetwork:     true,
 		UseLegacyLandlock:         ctx.UseLegacyLandlock,
 		AllowedSymlinkedCodexHome: allowedSymlinkedCodexHome,
@@ -539,14 +540,26 @@ func fsHelperLaunchRoot(cwd string) string {
 	return volume + string(filepath.Separator)
 }
 
-// fsHelperReadableRoots returns the absolute readable roots for a filesystem
-// helper: only the helper executable itself (Rust helper_read_roots #38561).
-func fsHelperReadableRoots(executable string) []string {
-	executable = strings.TrimSpace(executable)
-	if executable == "" {
-		return nil
+// fsHelperReadableRoots returns the exact executables a filesystem helper may
+// read. The Go helper is the current executable; a separately dispatched Linux
+// sandbox launcher is granted too when it differs (Rust helper_read_roots
+// #38561/#61138). Parent directories are never granted.
+func fsHelperReadableRoots(executable, linuxSandboxExe string) []string {
+	var roots []string
+	seen := map[string]bool{}
+	for _, path := range []string{executable, linuxSandboxExe} {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		path = filepath.Clean(path)
+		if seen[path] {
+			continue
+		}
+		seen[path] = true
+		roots = append(roots, path)
 	}
-	return []string{filepath.Clean(executable)}
+	return roots
 }
 
 func fsHelperEnvironment() map[string]string {

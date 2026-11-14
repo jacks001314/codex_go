@@ -256,9 +256,14 @@ type Server struct {
 	// host resolved from its top-level user config (Rust #42716). It is
 	// trusted startup state, never read from a request.
 	allowedSymlinkedCodexHome string
-	v2Discovery               *v2DiscoveryManager
-	shellSnapshots            *shellSnapshotManager
-	credentialBrokers         network.RemoteCredentialBrokerCache
+	// codexLinuxSandboxExe is the host runtime's Linux sandbox launcher
+	// (Rust #61138 ExecServerRuntimeOptions::codex_linux_sandbox_exe). It is
+	// trusted executor startup state and only grants the helper executable
+	// itself; it never expands the workspace or network policy.
+	codexLinuxSandboxExe string
+	v2Discovery          *v2DiscoveryManager
+	shellSnapshots       *shellSnapshotManager
+	credentialBrokers    network.RemoteCredentialBrokerCache
 	// missingWatch holds the newest missing-path observation for this
 	// connection (Rust #57598 missing_watch.rs).
 	missingWatch missingWatchState
@@ -358,11 +363,32 @@ func (s *Server) allowedSymlinkedCodexHomeValue() string {
 	return s.allowedSymlinkedCodexHome
 }
 
+// SetCodexLinuxSandboxExe records the Linux sandbox launcher used by process
+// and filesystem-helper sandbox plans. Other platforms keep the value empty.
+func (s *Server) SetCodexLinuxSandboxExe(path string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.codexLinuxSandboxExe = strings.TrimSpace(path)
+}
+
+func (s *Server) codexLinuxSandboxExeValue() string {
+	if s == nil {
+		return ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.codexLinuxSandboxExe
+}
+
 func (s *Server) applyFSSandboxRuntimeOptions(sandboxContext *FileSystemSandboxContext) {
 	if sandboxContext == nil {
 		return
 	}
 	sandboxContext.allowedSymlinkedCodexHome = s.allowedSymlinkedCodexHomeValue()
+	sandboxContext.codexLinuxSandboxExe = s.codexLinuxSandboxExeValue()
 }
 
 // SetAllowedSymlinkedCodexHome attaches the trusted host-resolved macOS
@@ -373,6 +399,16 @@ func (c *FileSystemSandboxContext) SetAllowedSymlinkedCodexHome(path string) {
 		return
 	}
 	c.allowedSymlinkedCodexHome = strings.TrimSpace(path)
+}
+
+// SetCodexLinuxSandboxExe attaches the trusted Linux sandbox launcher to an
+// in-process filesystem sandbox context. Remote executors resolve their own
+// value; the field is never serialized.
+func (c *FileSystemSandboxContext) SetCodexLinuxSandboxExe(path string) {
+	if c == nil {
+		return
+	}
+	c.codexLinuxSandboxExe = strings.TrimSpace(path)
 }
 
 type fileHandleEntry struct {
@@ -683,6 +719,9 @@ type FileSystemSandboxContext struct {
 	// allowedSymlinkedCodexHome is trusted executor startup state, never a
 	// request field (Rust #42716).
 	allowedSymlinkedCodexHome string
+	// codexLinuxSandboxExe is trusted executor startup state, never a request
+	// field (Rust #61138 ExecServerRuntimeOptions).
+	codexLinuxSandboxExe string
 }
 
 type WindowsSandboxProxySettingsMode string

@@ -1,0 +1,17 @@
+== linux launcher helper tests ==
+=== RUN   TestFSHelperReadableRootsIncludeLinuxSandboxLauncherLikeRust
+--- PASS: TestFSHelperReadableRootsIncludeLinuxSandboxLauncherLikeRust (0.00s)
+=== RUN   TestFSHelperPlanCarriesLinuxSandboxLauncherLikeRust
+--- PASS: TestFSHelperPlanCarriesLinuxSandboxLauncherLikeRust (0.00s)
+=== RUN   TestServerAppliesLinuxSandboxLauncherToFSSandboxContext
+--- PASS: TestServerAppliesLinuxSandboxLauncherToFSSandboxContext (0.00s)
+=== RUN   TestFSHelperPermissionBoundaryLikeRust
+--- PASS: TestFSHelperPermissionBoundaryLikeRust (0.00s)
+PASS
+ok  	codex_go/execserver	0.045s
+== execserver full ==
+ok  	codex_go/execserver	20.653s
+== app execserver ==
+ok  	codex_go/app	5.905s
+== vet ==
+vet exit=0

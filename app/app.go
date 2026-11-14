@@ -202,7 +202,7 @@ func RunWithOptions(ctx context.Context, args []string, stdin io.Reader, stdout,
 	case cli.CommandStdioToUDS:
 		return runStdioToUDS(&parsed.StdioToUDS, stdin, stdout)
 	case cli.CommandExecServer:
-		return runExecServer(ctx, &parsed.ExecServer, &parsed.Root, stdin, stdout)
+		return runExecServer(ctx, &parsed.ExecServer, &parsed.Root, stdin, stdout, runOpts)
 	case cli.CommandSandbox:
 		sandboxOpts := sandboxOptionsForRun(parsed)
 		var dispatchPaths *cli.DispatchPaths
@@ -971,7 +971,7 @@ func isWindowsNamedPipePath(path string) bool {
 	return strings.HasPrefix(strings.ToLower(path), `\\.\pipe\`)
 }
 
-func runExecServer(ctx context.Context, opts *cli.ExecServerOptions, root *cli.RootOptions, stdin io.Reader, stdout io.Writer) error {
+func runExecServer(ctx context.Context, opts *cli.ExecServerOptions, root *cli.RootOptions, stdin io.Reader, stdout io.Writer, runOpts *RunOptions) error {
 	strictConfig := opts.StrictConfig
 	var rootConfigOverrides []string
 	if root != nil {
@@ -1031,6 +1031,16 @@ func runExecServer(ctx context.Context, opts *cli.ExecServerOptions, root *cli.R
 	server := execserver.NewServerWithHTTPClient(httpClient)
 	server.SetPreferMXC(preferMXC)
 	server.SetAllowedSymlinkedCodexHome(loadedConfig.AllowedSymlinkedCodexHome())
+	if executable, err := os.Executable(); err == nil {
+		// Rust #61138: the executor's filesystem helper must be able to read the
+		// Linux sandbox launcher without granting its parent directory.
+		var dispatchPaths *cli.DispatchPaths
+		if runOpts != nil && runOpts.DispatchPaths != nil {
+			paths := *runOpts.DispatchPaths
+			dispatchPaths = &paths
+		}
+		server.SetCodexLinuxSandboxExe(cli.LinuxSandboxExePath(dispatchPaths, executable))
+	}
 	// Rust #48568: carry the trusted startup routing flag into the executor's
 	// managed network proxy launch (exec-server/src/process_sandbox.rs).
 	server.SetProxyPrivateIPsViaUpstream(opts.ProxyPrivateIPsViaUpstream)
