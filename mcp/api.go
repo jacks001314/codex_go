@@ -264,6 +264,9 @@ func (t MCPToolInfo) MarshalJSON() ([]byte, error) {
 
 type MCPServerStatus struct {
 	Name string `json:"name,omitempty"`
+	// EnvironmentID names the registration scope that contributed this server
+	// (Rust #61257). Nil means a thread-wide registration or an older status.
+	EnvironmentID *string `json:"environmentId,omitempty"`
 	// source records the catalog registration source used to decide whether a
 	// plugin-contributed server is a selected-plugin server. It is intentionally
 	// internal: the wire status uses PluginID for plugin attribution instead.
@@ -1447,6 +1450,7 @@ func (s *MCPService) ConfiguredStatuses() []MCPServerStatus {
 	for _, status := range s.servers {
 		cloned := cloneMCPServerStatus(status)
 		if config, ok := configs[cloned.effectiveName()]; ok {
+			cloned.EnvironmentID = mcpStatusEnvironmentID(&config)
 			cloned.AuthStatus = s.authStatusForConfig(cloned.effectiveName(), &config)
 			cloned.HTTPOrigin = mcpServerHTTPOrigin(&config)
 		}
@@ -1692,6 +1696,7 @@ func (s *MCPService) ListStatusCheckedWithObserver(params *MCPListServerStatusPa
 		// no source and no event.
 		cloned.catalogSource = ""
 		if config, ok := configs[cloned.effectiveName()]; ok {
+			cloned.EnvironmentID = mcpStatusEnvironmentID(&config)
 			cloned.AuthStatus = s.authStatusForConfig(cloned.effectiveName(), &config)
 			cloned.HTTPOrigin = mcpServerHTTPOrigin(&config)
 		}
@@ -3326,6 +3331,20 @@ func (s *MCPService) serverEnvironmentID(server string) string {
 	return strings.TrimSpace(config.EffectiveEnvironmentID())
 }
 
+// mcpStatusEnvironmentID reports the registration scope a status belongs to.
+// Thread-wide and local registrations keep the field unset so older clients see
+// the same shape (Rust #61257).
+func mcpStatusEnvironmentID(config *ServerConfig) *string {
+	if config == nil {
+		return nil
+	}
+	environmentID := strings.TrimSpace(config.EffectiveEnvironmentID())
+	if environmentID == "" || environmentID == DefaultMCPServerEnvironmentID {
+		return nil
+	}
+	return &environmentID
+}
+
 // mcpEnvironmentSelectorError rejects an explicit environmentId that does not
 // name the registration the request resolved (Rust #61257). Omitting the
 // selector keeps the historical name-only routing.
@@ -4058,6 +4077,7 @@ func cancelOAuthLogins(logins []*OAuthLoginServer) {
 func cloneMCPServerStatus(status MCPServerStatus) MCPServerStatus {
 	status.RuntimeStatus = cloneMCPConnectionStatus(status.RuntimeStatus)
 	status.PluginID = cloneStringPtr(status.PluginID)
+	status.EnvironmentID = cloneStringPtr(status.EnvironmentID)
 	status.HTTPOrigin = cloneStringPtr(status.HTTPOrigin)
 	status.ServerCapabilities = cloneMCPRawMessage(status.ServerCapabilities)
 	status.ToolListMeta = cloneMCPRawMessage(status.ToolListMeta)

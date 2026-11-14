@@ -834,8 +834,11 @@ type MCPServerStartupFailureReason string
 const MCPServerStartupFailureReauthenticationRequired MCPServerStartupFailureReason = "reauthenticationRequired"
 
 type MCPServerStatusUpdatedNotification struct {
-	ThreadID      *string                        `json:"threadId"`
-	Name          string                         `json:"name"`
+	ThreadID *string `json:"threadId"`
+	Name     string  `json:"name"`
+	// EnvironmentID is the registration scope, not necessarily the server's
+	// execution environment (Rust #61257).
+	EnvironmentID *string                        `json:"environmentId,omitempty"`
 	Status        string                         `json:"status"`
 	Error         *string                        `json:"error"`
 	FailureReason *MCPServerStartupFailureReason `json:"failureReason"`
@@ -845,12 +848,14 @@ func (n *MCPServerStatusUpdatedNotification) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
 		ThreadID      *string                        `json:"threadId"`
 		Name          string                         `json:"name"`
+		EnvironmentID *string                        `json:"environmentId,omitempty"`
 		Status        string                         `json:"status"`
 		Error         *string                        `json:"error"`
 		FailureReason *MCPServerStartupFailureReason `json:"failureReason"`
 	}{
 		ThreadID:      cloneStringPtrAppserver(n.ThreadID),
 		Name:          n.Name,
+		EnvironmentID: cloneStringPtrAppserver(n.EnvironmentID),
 		Status:        normalizeMCPServerStartupStatus(n.Status),
 		Error:         cloneStringPtrAppserver(n.Error),
 		FailureReason: cloneMCPServerStartupFailureReasonPtr(n.FailureReason),

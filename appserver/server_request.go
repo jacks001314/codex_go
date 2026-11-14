@@ -330,9 +330,12 @@ func (p *DynamicToolCallParams) MarshalJSON() ([]byte, error) {
 }
 
 type MCPElicitationRequestParams struct {
-	ThreadID        string  `json:"threadId"`
-	TurnID          *string `json:"turnId"`
-	ServerName      string  `json:"serverName"`
+	ThreadID   string  `json:"threadId"`
+	TurnID     *string `json:"turnId"`
+	ServerName string  `json:"serverName"`
+	// EnvironmentID scopes the request to one registration of the server
+	// (Rust #61257).
+	EnvironmentID   *string `json:"environmentId,omitempty"`
 	Mode            string  `json:"mode"`
 	Meta            any     `json:"_meta"`
 	Message         string  `json:"message"`
@@ -373,20 +376,22 @@ func (p *MCPElicitationRequestParams) MarshalJSON() ([]byte, error) {
 			turnID = *p.TurnID
 		}
 		return json.Marshal(map[string]any{
-			"threadId":    p.ThreadID,
-			"turnId":      turnID,
-			"serverName":  serverName,
-			"mode":        mode,
-			"_meta":       p.Meta,
-			"title":       p.Title,
-			"description": p.Description,
-			"challenge":   p.Challenge,
+			"threadId":      p.ThreadID,
+			"turnId":        turnID,
+			"serverName":    serverName,
+			"environmentId": p.EnvironmentID,
+			"mode":          mode,
+			"_meta":         p.Meta,
+			"title":         p.Title,
+			"description":   p.Description,
+			"challenge":     p.Challenge,
 		})
 	}
 	return json.Marshal(struct {
 		ThreadID        string  `json:"threadId"`
 		TurnID          *string `json:"turnId"`
 		ServerName      string  `json:"serverName"`
+		EnvironmentID   *string `json:"environmentId,omitempty"`
 		Mode            string  `json:"mode"`
 		Meta            any     `json:"_meta"`
 		Message         string  `json:"message"`
@@ -397,6 +402,7 @@ func (p *MCPElicitationRequestParams) MarshalJSON() ([]byte, error) {
 		ThreadID:        p.ThreadID,
 		TurnID:          p.TurnID,
 		ServerName:      serverName,
+		EnvironmentID:   p.EnvironmentID,
 		Mode:            mode,
 		Meta:            p.Meta,
 		Message:         p.Message,
