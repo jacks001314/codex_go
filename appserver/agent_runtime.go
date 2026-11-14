@@ -132,6 +132,7 @@ func (r *RuntimeRouter) ensureGuardianReviewerWithPrewarm(agent model.AgentRunne
 		modelReviewer.activeTurnID = r.guardianActiveTurnID
 		modelReviewer.transcript = r.guardianReviewTranscript
 		modelReviewer.transcriptSelection = r.guardianReviewTranscriptSelectionForBudgeting
+		modelReviewer.transcriptSnapshot = r.guardianReviewTranscriptSnapshotForReview
 		modelReviewer.transcriptFormat = r.guardianTranscriptFormatForThread
 		modelReviewer.feedbackCaptureEnabled = r.guardianFeedbackCaptureEnabled
 		modelReviewer.persistFeedback = r.persistGuardianReviewFeedback

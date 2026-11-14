@@ -112,6 +112,9 @@ func TestGuardianSynchronousReviewUsesElasticBudgetingLikeRust(t *testing.T) {
 	reviewer.transcriptSelection = func(string, guardianTranscriptBudgeting) guardianTranscriptSelection {
 		return guardianTranscriptSelection{Entries: entries}
 	}
+	// The injected selection replaces the router's request capture, which would
+	// otherwise prepare the same review from the (empty) host transcript.
+	reviewer.transcriptSnapshot = nil
 	reviewer.syncImageContextWindow = func(string, string) (int64, bool) { return 50_000, true }
 
 	decision, message, err := reviewer.Review(context.Background(), threadID, turnID, "call-elastic", state.Action{

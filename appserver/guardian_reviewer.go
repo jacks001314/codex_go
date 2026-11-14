@@ -209,7 +209,14 @@ type modelGuardianReviewer struct {
 	// including native encrypted agent messages that cannot be rendered as text
 	// (#49038), plus the retention omission and truncation observations.
 	transcriptSelection func(threadID string, budgeting guardianTranscriptBudgeting) guardianTranscriptSelection
-	transcriptFormat    func(threadID string) state.GuardianTranscriptFormat
+	// transcriptSnapshot captures the host's original transcript evidence once
+	// per review, so every request-preparation pass reads the same capture.
+	// Rust #61185 caches the fixed root view for reuse; this reviewer prepares
+	// its fixed and elastic section limits from one snapshot instead of
+	// re-collecting the host between passes. Nil keeps the per-call
+	// transcriptSelection path.
+	transcriptSnapshot func(threadID string) *guardianReviewTranscriptSnapshot
+	transcriptFormat   func(threadID string) state.GuardianTranscriptFormat
 	// feedbackCaptureEnabled gates the bounded failed-review records exported
 	// by log-enabled feedback uploads (#41936): ephemeral threads and disabled
 	// feedback collection retain nothing.
@@ -1454,6 +1461,13 @@ func (r *modelGuardianReviewer) review(ctx context.Context, threadID, turnID, ta
 	// identity before the attempt loop so a retry keeps the same classification
 	// turn, while parent_turn_id stays the turn that requested the review.
 	classificationTurnID := r.classificationTurnID()
+	// Rust #61185: one captured snapshot serves every preparation pass of the
+	// request, so the fixed view and the elastic allocation read identical
+	// original evidence. The staleness check below still re-reads live history.
+	var transcriptSnapshot *guardianReviewTranscriptSnapshot
+	if r.transcriptSnapshot != nil {
+		transcriptSnapshot = r.transcriptSnapshot(threadID)
+	}
 	attempts := 0
 	var assessment *state.Assessment
 	var response *model.AgentResponse
@@ -1467,8 +1481,8 @@ reviewAttempt:
 	if r.transcriptFormat != nil {
 		transcriptFormat = r.transcriptFormat(threadID)
 	}
-	if r.transcriptSelection != nil {
-		selection := r.transcriptSelection(threadID, guardianTranscriptBudgetingFixed)
+	if r.transcriptSelection != nil || transcriptSnapshot != nil {
+		selection := r.transcriptSelectionForSnapshot(threadID, transcriptSnapshot, guardianTranscriptBudgetingFixed)
 		transcriptEntries = selection.Entries
 		transcriptOmissionNote = selection.OmissionNote
 		transcript = state.RenderGuardianTranscript(transcriptEntries, transcriptFormat)
@@ -1577,8 +1591,8 @@ reviewAttempt:
 		if contextBudgeting == codexctx.GuardianContextBudgetingElastic {
 			// Rust #60498: elastic preparation keeps the captured originals so
 			// the configured allocation decides which whole entries survive.
-			if r.transcriptSelection != nil {
-				selection := r.transcriptSelection(threadID, guardianTranscriptBudgetingElastic)
+			if r.transcriptSelection != nil || transcriptSnapshot != nil {
+				selection := r.transcriptSelectionForSnapshot(threadID, transcriptSnapshot, guardianTranscriptBudgetingElastic)
 				entries = selection.Entries
 				if omittedCallID != "" {
 					entries = state.GuardianTranscriptWithoutProposedCall(entries, omittedCallID)
@@ -2534,6 +2548,51 @@ type guardianTranscriptSelection struct {
 	Truncations  []state.TranscriptTruncationObservation
 }
 
+// guardianReviewTranscriptSnapshot is one host transcript capture shared by
+// every request-preparation pass of a single Guardian review. Rust #61185
+// caches the bounded root view for reuse and keeps the originals until request
+// preparation; the Go reviewer keeps one collection so the fixed view and the
+// elastic allocation cannot see different history.
+type guardianReviewTranscriptSnapshot struct {
+	profile   state.ContextProfile
+	collected []guardianCollectedTranscriptEntry
+	fixed     *guardianTranscriptSelection
+}
+
+// selection prepares the captured originals for the caller's budgeting mode.
+// The fixed view is prepared once and reused; elastic preparation keeps the
+// captured originals so its whole-entry allocation decides what survives.
+func (s *guardianReviewTranscriptSnapshot) selection(budgeting guardianTranscriptBudgeting) guardianTranscriptSelection {
+	if s == nil {
+		return guardianTranscriptSelection{}
+	}
+	if budgeting != guardianTranscriptBudgetingFixed {
+		return prepareGuardianTranscriptSelection(s.collected, s.profile, budgeting)
+	}
+	if s.fixed == nil {
+		prepared := prepareGuardianTranscriptSelection(s.collected, s.profile, budgeting)
+		s.fixed = &prepared
+	}
+	return *s.fixed
+}
+
+// transcriptSelectionForSnapshot resolves one preparation pass from the
+// review's captured snapshot, falling back to the per-call selection hook when
+// the reviewer was built without one.
+func (r *modelGuardianReviewer) transcriptSelectionForSnapshot(
+	threadID string,
+	snapshot *guardianReviewTranscriptSnapshot,
+	budgeting guardianTranscriptBudgeting,
+) guardianTranscriptSelection {
+	if snapshot != nil {
+		return snapshot.selection(budgeting)
+	}
+	if r != nil && r.transcriptSelection != nil {
+		return r.transcriptSelection(threadID, budgeting)
+	}
+	return guardianTranscriptSelection{}
+}
+
 // guardianReviewTranscriptEntries returns the retained transcript entries.
 func (r *RuntimeRouter) guardianReviewTranscriptEntries(threadID string) []state.GuardianTranscriptEntry {
 	return r.guardianReviewTranscriptSelection(threadID).Entries
@@ -2721,6 +2780,21 @@ func (r *RuntimeRouter) guardianReviewTranscriptSelectionForBudgeting(
 		profile,
 		budgeting,
 	)
+}
+
+// guardianReviewTranscriptSnapshotForReview captures the host transcript once
+// per review request. Rust #61185 caches the bounded root view so fixed and
+// elastic preparation read the same originals; this snapshot is shared by both
+// preparations and by retries of the same review.
+func (r *RuntimeRouter) guardianReviewTranscriptSnapshotForReview(threadID string) *guardianReviewTranscriptSnapshot {
+	if r == nil {
+		return nil
+	}
+	profile := r.guardianReviewTranscriptProfile(threadID)
+	return &guardianReviewTranscriptSnapshot{
+		profile:   profile,
+		collected: r.guardianCollectTranscriptWithProfile(threadID, profile),
+	}
 }
 
 // guardianReviewTranscriptProfile resolves the synchronous reviewer transcript
