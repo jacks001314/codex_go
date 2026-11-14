@@ -492,7 +492,7 @@ func isolatedPluginGitEnv() ([]string, bool) {
 		"GIT_TERMINAL_PROMPT=0",
 		"GIT_OPTIONAL_LOCKS=0",
 		"GIT_CONFIG_NOSYSTEM=1",
-		"GIT_CONFIG_GLOBAL="+os.DevNull,
+		"GIT_CONFIG_GLOBAL=/dev/null",
 		"PATH="+trustedPath,
 		"NoDefaultCurrentDirectoryInExePath=1",
 	), true

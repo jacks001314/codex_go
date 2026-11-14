@@ -119,7 +119,8 @@ func (s rustFeatureSpec) expectedDefault() bool {
 // registry: every `FeatureSpec` in Rust's features crate must exist in Go's
 // `features.Registry` with the same stage and default enablement (resolving the
 // OS-conditional stage and `cfg!(windows)` default for the running host), and Go
-// must not carry a feature key Rust retired.
+// must not carry a feature key Rust retired or an unrecorded ahead-of-anchor
+// feature.
 func TestFeaturesRegistryMatchesRust(t *testing.T) {
 	root := rustSnapshotRoot(t)
 	source := string(mustReadParityFile(t, filepath.Join(root, "features", "src", "lib.rs")))
@@ -144,8 +145,16 @@ func TestFeaturesRegistryMatchesRust(t *testing.T) {
 			t.Errorf("feature %q defaultEnabled = %v, want %v", key, got, want)
 		}
 	}
+	// The parity anchor predates Rust #61213, but the Go port carries the
+	// corresponding registry key so the implemented behavior can be gated.
+	knownAheadOfAnchor := map[string]bool{
+		"catalog_apps_instructions": true,
+	}
 	for key := range goByKey {
 		if _, ok := rustSpecs[key]; !ok {
+			if knownAheadOfAnchor[key] {
+				continue
+			}
 			t.Errorf("Go registry has feature %q that Rust does not declare", key)
 		}
 	}

@@ -22,7 +22,9 @@ func TestRustFeatureKeySurfaceAgainstGo(t *testing.T) {
 	}
 	sort.Strings(goKeys)
 
-	knownGoOnly := []string{}
+	// The parity anchor predates Rust #61213; Go already carries this key for
+	// the implemented Apps catalog instruction gate.
+	knownGoOnly := []string{"catalog_apps_instructions"}
 	knownRustOnly := []string{}
 	assertKnownSurfaceDiff(t, "feature key", rustKeys, goKeys, knownRustOnly, knownGoOnly)
 }
@@ -140,8 +142,8 @@ func rustStructPublicFields(t *testing.T, path string, structName string) []stri
 
 func assertKnownSurfaceDiff(t *testing.T, label string, rustValues []string, goValues []string, knownRustOnly []string, knownGoOnly []string) {
 	t.Helper()
-	rustOnly := missingStrings(goValues, rustValues)
-	goOnly := missingStrings(rustValues, goValues)
+	rustOnly := missingStrings(rustValues, goValues)
+	goOnly := missingStrings(goValues, rustValues)
 	sort.Strings(knownRustOnly)
 	sort.Strings(knownGoOnly)
 	if strings.Join(rustOnly, "\x00") != strings.Join(knownRustOnly, "\x00") || strings.Join(goOnly, "\x00") != strings.Join(knownGoOnly, "\x00") {

@@ -321,6 +321,7 @@ func goTopLevelDirectoriesSnapshot() []string {
 		"skillprovider",
 		"stability",
 		"state",
+		"statuslineprovider",
 		"systemskills",
 		"tcptunnel",
 		"telemetry",

@@ -1,7 +1,6 @@
 package plugin
 
 import (
-	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -36,7 +35,7 @@ func TestIsolatedPluginGitEnvStripsScopedConfigLikeRust(t *testing.T) {
 		}
 	}
 	joined := strings.Join(env, "\x00")
-	if !strings.Contains(joined, "GIT_CONFIG_GLOBAL="+os.DevNull) {
+	if !strings.Contains(joined, "GIT_CONFIG_GLOBAL=/dev/null") {
 		t.Fatal("isolated GIT_CONFIG_GLOBAL was not set to the empty trusted config")
 	}
 	trustedPath, _ := envutil.TrustedSystemPath()
@@ -57,7 +56,7 @@ func TestIsolatedGitNullConfigWorksWithGit(t *testing.T) {
 	if !ok {
 		t.Skip("trusted environment unavailable")
 	}
-	command := exec.Command(git, "config", "--file", os.DevNull, "--list")
+	command := exec.Command(git, "config", "--file", "/dev/null", "--list")
 	command.Env = env
 	output, err := command.CombinedOutput()
 	if err != nil || len(output) != 0 {
