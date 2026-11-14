@@ -532,6 +532,12 @@ func (e *ToolExecutor) Execute(ctx context.Context, invocation *tool.Invocation)
 	}
 	data["server"] = e.resolvedServerName()
 	data["tool"] = e.resolvedRemoteToolName()
+	// Rust #61257 carries the registration scope of an environment-owned MCP
+	// server into the tool-call record; a local registration reports none.
+	if environmentID := e.mcpService().serverEnvironmentID(e.resolvedServerName()); environmentID != "" &&
+		environmentID != DefaultMCPServerEnvironmentID {
+		data["environmentId"] = environmentID
+	}
 	if e.readOnlyHint != nil {
 		data["read_only_hint"] = *e.readOnlyHint
 	}

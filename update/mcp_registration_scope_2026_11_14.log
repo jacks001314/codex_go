@@ -18,3 +18,9 @@ exit=0
 == go test ./app -run MCP|Mcp ==
 ok  	codex_go/app	2.965s
 exit=0
+== go test ./exec (scope slice) ==
+ok  	codex_go/exec	16.179s
+exit=0
+== go test ./appserver scope wire ==
+ok  	codex_go/appserver	6.075s
+exit=0

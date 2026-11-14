@@ -26,7 +26,8 @@ Rust 6fcfa75a9（PR #61257）要求同名 MCP 服务在不同环境中保持独�
 
 ## 仍未完成
 
-- 本地 `exec` 工具执行器（`exec/exec.go`）没有把 MCP 工具调用实际命中的作用域写进 `protocol.ThreadItem`，本地执行路径的历史条目仍不带环境标签；远程 app-server 事件与恢复会话已覆盖。
+- 本地执行链路已补上：`ToolExecutor` 把环境作用域写入工具输出数据，`exec.mcpToolCallProtocolItem` 落到 `protocol.ThreadItem`，app-server v2 `mcpToolCall` 条目序列化 `environmentId`；canonical rollout 记录是否原样保留该字段尚未单独核对。
 - `OauthCancel` 协议参数没有 `environmentId`，取消时按第一条注册解析。
 - 宿主机 `mcp_servers` 表本身仍是“一名一条”，跨环境同名声明来自执行器发现路径；这与 Rust 的配置来源一致，但多环境端到端 app-server 集成测试仍只有单元级覆盖，尚未跑真实双执行器进程。
 - #61257 仍为“部分”：真实 SDK/app-server 双环境端到端认证未执行。
+

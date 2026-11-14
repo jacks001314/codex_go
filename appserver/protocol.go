@@ -1397,10 +1397,13 @@ func (i *ThreadItem) marshalPayloadJSON() ([]byte, error) {
 		})
 	case "mcpToolCall":
 		return json.Marshal(struct {
-			Type              string  `json:"type"`
-			ID                string  `json:"id"`
-			Server            string  `json:"server"`
-			Tool              string  `json:"tool"`
+			Type   string `json:"type"`
+			ID     string `json:"id"`
+			Server string `json:"server"`
+			Tool   string `json:"tool"`
+			// EnvironmentID identifies the MCP registration scope (Rust
+			// #61257); local registrations omit it.
+			EnvironmentID     *string `json:"environmentId,omitempty"`
 			Status            string  `json:"status"`
 			Arguments         any     `json:"arguments"`
 			AppContext        any     `json:"appContext"`
@@ -1416,6 +1419,7 @@ func (i *ThreadItem) marshalPayloadJSON() ([]byte, error) {
 			ID:                threadItemExternalID(i),
 			Server:            threadItemMCPServer(i),
 			Tool:              threadItemMCPTool(i),
+			EnvironmentID:     threadItemStringPtrFromData(i.Data, "environmentId", "environment_id"),
 			Status:            threadItemMCPStatus(i),
 			Arguments:         threadItemJSONValueFromData(i.Data, "arguments", "input", "rawArguments", "raw_arguments"),
 			AppContext:        threadItemMCPAppContext(i),

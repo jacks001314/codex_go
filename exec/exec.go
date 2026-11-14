@@ -4693,7 +4693,7 @@ func mcpToolCallProtocolItem(execution *turn.ToolExecutionResult, status string)
 	if execution.Output != nil && status == "failed" {
 		callErr = &protocol.MCPToolError{Message: firstNonEmpty(strings.TrimSpace(execution.Output.Body), "MCP tool call failed")}
 	}
-	return protocol.MCPToolCallItem(
+	item := protocol.MCPToolCallItem(
 		firstNonEmpty(invocation.CallID, "mcp-tool-call"),
 		server,
 		toolName,
@@ -4702,6 +4702,15 @@ func mcpToolCallProtocolItem(execution *turn.ToolExecutionResult, status string)
 		callErr,
 		status,
 	)
+	// Rust #61257 records the registration scope of an environment-owned MCP
+	// server with the tool call so a transcript can tell same-named servers in
+	// different environments apart.
+	if execution.Output != nil {
+		if environmentID := execStringFromAny(execution.Output.Data["environmentId"]); environmentID != "" {
+			item.ServerEnvironmentID = &environmentID
+		}
+	}
+	return item
 }
 
 func mcpToolCallStatusFromOutput(output *tool.Output) string {
