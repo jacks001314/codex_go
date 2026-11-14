@@ -873,6 +873,12 @@ func (m *Model) renderStatusHeader() string {
 		accent := func(value bottompane.StatusLineAccent) string {
 			return statusLineAccentSGR(m.tuiTheme, value)
 		}
+		if threadID := strings.TrimSpace(m.State.ThreadID); threadID != "" {
+			if m.paneStatusText == nil {
+				m.paneStatusText = map[string]string{}
+			}
+			m.paneStatusText[threadID] = result.StatusLine.PlainText()
+		}
 		threadColor := ""
 		if threadID := strings.TrimSpace(m.State.ThreadID); threadID != "" {
 			threadColor = codextui.ThreadColorSGR(codextui.ThreadColorForTheme(threadID, m.tuiTheme))
