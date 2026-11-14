@@ -1749,6 +1749,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		AnimationsEnabled:          settings.AnimationsEnabled,
 		Effects:                    settings.Effects,
 		StatusLineUseColors:        settings.StatusLineUseColors,
+		StatusLineProvider:         settings.StatusLineProvider.Clone(),
 		StatusLineItems:            optionalTUISettingList(settings.StatusLineItems),
 		TerminalTitleItems:         optionalTUISettingList(settings.TerminalTitleItems),
 		QuestionEscBack:            settings.QuestionEscBack,
@@ -2979,6 +2980,7 @@ func interactiveSettingsFromConfig(loaded *config.Config) codextea.SettingsWrite
 		CollapseTurnDetails:        interactiveCollapseTurnDetails(values),
 		AlternateScreenMode:        interactiveAlternateScreenMode(values),
 		StatusLineUseColors:        interactiveStatusLineUseColors(values),
+		StatusLineProvider:         interactiveStatusLineProviderFromConfig(values),
 		StatusLineItems:            interactiveTUIStringListFromConfig(values, "status_line"),
 		TerminalTitleItems:         interactiveTUIStringListFromConfig(values, "terminal_title"),
 		QuestionEscBack:            interactiveQuestionEscBack(values),
@@ -3134,6 +3136,26 @@ func interactiveNoAltScreenFromValues(root *cli.RootOptions, values map[string]a
 		FullscreenTranscript: interactiveFullscreenTranscript(values),
 		AlternateScreenMode:  interactiveAlternateScreenMode(values),
 	}, terminalAppOverSSH)
+}
+
+// interactiveStatusLineProviderFromConfig resolves the local-only
+// `tui.status_line_provider` selection (#61211). Malformed values have already
+// failed strict config validation; this accessor keeps the last-known nil state
+// for programmatic configs.
+func interactiveStatusLineProviderFromConfig(values map[string]any) *config.StatusLineProviderSelection {
+	tui, ok := values["tui"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	raw, ok := tui["status_line_provider"]
+	if !ok {
+		return nil
+	}
+	selection, err := config.StatusLineProviderSelectionFromValue(raw)
+	if err != nil {
+		return nil
+	}
+	return selection
 }
 
 // interactiveStatusLineUseColors resolves the configured

@@ -27,6 +27,7 @@ const (
 	settingsWriteKindQuickDial              = "quick_dial"
 	settingsWriteKindTUIMode                = "tui_mode"
 	settingsWriteKindConfig                 = "config"
+	settingsWriteKindStatusLineProvider     = "status_line_provider"
 )
 
 // initialPersonality carries the configured personality into the model's
@@ -607,6 +608,9 @@ func (m *Model) applyLocalSettingsValues(result SettingsWriteResult) {
 		m.statusControls.StatusLineConfigured = true
 		m.statusControls.StatusLineIDs = cloneTUIStringList(*result.StatusLineItems)
 		m.statusLineConfiguredByUser = true
+	}
+	if result.StatusLineProvider != nil {
+		m.statusLineProvider = result.StatusLineProvider.Clone()
 	}
 	if result.TerminalTitleItems != nil {
 		m.ensureStatusControls()

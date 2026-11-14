@@ -443,6 +443,9 @@ type SettingsWriteResult struct {
 	// contain an empty list, which explicitly disables that surface.
 	StatusLineItems    *[]string
 	TerminalTitleItems *[]string
+	// StatusLineProvider is the saved `tui.status_line_provider` selection.
+	// Nil preserves the live value during a settings reload.
+	StatusLineProvider *config.StatusLineProviderSelection
 	// QuestionEscBack is the configured `tui.question_esc_back` value (Rust
 	// #42889). Nil preserves the current value.
 	QuestionEscBack *bool
@@ -1752,6 +1755,7 @@ type Options struct {
 	AvailableRateLimitResetCredits *int64
 	StatusLineItems                []string
 	TerminalTitleItems             []string
+	StatusLineProvider             *config.StatusLineProviderSelection
 	Notifications                  *chatwidget.NotificationsSetting
 	NotificationMethod             codextui.NotificationMethod
 	NotificationCondition          codextui.NotificationCondition
@@ -3008,8 +3012,10 @@ type Model struct {
 	sideStartPending           bool
 	statusControls             *chatwidget.StatusControlsState
 	statusLineConfiguredByUser bool
-	statusSurfaceOverrides     statusSurfaceOverrides
-	lastTerminalTitleSequence  string
+	// statusLineProvider is the live local `tui.status_line_provider` choice.
+	statusLineProvider        *config.StatusLineProviderSelection
+	statusSurfaceOverrides    statusSurfaceOverrides
+	lastTerminalTitleSequence string
 	// Time-varying terminal-title animation state (Rust #46832): progress
 	// drives the working spinner and title drives the blocked prefix blink.
 	terminalTitleSpinnerText     string
@@ -3665,6 +3671,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onReadReviewBranches:             options.OnReadReviewBranches,
 		onReadReviewCommits:              options.OnReadReviewCommits,
 		statusLineConfiguredByUser:       options.StatusLineItems != nil,
+		statusLineProvider:               options.StatusLineProvider.Clone(),
 		rateLimitSnapshots:               map[string]chatwidget.RateLimitSnapshot{},
 		rateLimitSwitchPrompt:            chatwidget.RateLimitSwitchPromptIdle,
 		hideRateLimitModelNudge:          boolPtrValueTea(options.HideRateLimitModelNudge),

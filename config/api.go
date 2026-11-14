@@ -2311,6 +2311,10 @@ func (s *ConfigService) SetPackagedDefaultsLayer(path string) error {
 	if !exists {
 		return fmt.Errorf("packaged defaults config file %s not found", path)
 	}
+	if err := validateIgnoredStatusLineProvider(values); err != nil {
+		return err
+	}
+	stripIgnoredStatusLineProvider(values)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.packagedDefaultsLayer = &Layer{
@@ -3146,6 +3150,9 @@ func (s *ConfigService) readLayersForCWDOptions(cwd string, profile string, igno
 			}
 			if exists {
 				resolveProjectRelativeConfigValues(projectValues, dotCodexFolder)
+				if err := validateIgnoredStatusLineProvider(projectValues); err != nil {
+					return nil, err
+				}
 				sanitizeProjectConfigValues(projectValues, brokerState, trustedProviderEnvKeys)
 			}
 			layers = append(layers, Layer{
@@ -3192,6 +3199,7 @@ func (s *ConfigService) packagedDefaultsLayerForRead() *Layer {
 	if exe, err := os.Executable(); err == nil {
 		file = exe
 	}
+	stripIgnoredStatusLineProvider(values)
 	return &Layer{
 		Name:    LayerSource{Type: LayerSourcePackagedDefaults, File: file},
 		Version: configVersion(values),

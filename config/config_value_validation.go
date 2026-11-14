@@ -449,6 +449,8 @@ func validateConfigFieldValue(kind configFieldKind, value any, path string, coll
 		return validateConfigEnumValue(kind, value, path)
 	case configKindUntaggedEnum:
 		return validateConfigUntaggedEnumValue(kind, value, path)
+	case configKindStatusLineSelection:
+		return validateStatusLineProviderValue(value, path)
 	}
 	return nil
 }

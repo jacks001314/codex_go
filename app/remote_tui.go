@@ -581,6 +581,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		AnimationsEnabled:            settings.AnimationsEnabled,
 		Effects:                      settings.Effects,
 		StatusLineUseColors:          settings.StatusLineUseColors,
+		StatusLineProvider:           settings.StatusLineProvider.Clone(),
 		StatusLineItems:              optionalTUISettingList(settings.StatusLineItems),
 		TerminalTitleItems:           optionalTUISettingList(settings.TerminalTitleItems),
 		QuestionEscBack:              settings.QuestionEscBack,

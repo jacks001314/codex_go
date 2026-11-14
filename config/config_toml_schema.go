@@ -53,6 +53,9 @@ const (
 	// configKindUntaggedStruct is an untagged enum of a boolean and a struct,
 	// like `tools.web_search`.
 	configKindUntaggedStruct
+	// configKindStatusLineSelection is `Default` or an exact {server, tool}
+	// table (Rust StatusLineSelection).
+	configKindStatusLineSelection
 )
 
 // configFieldKind is the deserializer shape of one config.toml field: the kind
@@ -221,6 +224,7 @@ var configTuiFields = map[string]configFieldKind{
 	"right_click_paste":               {kind: configKindEnum, variants: []string{"auto", "on", "off"}},
 	"alternate_screen":                {kind: configKindEnum, variants: []string{"auto", "always", "never"}},
 	"status_line":                     {kind: configKindStringSequence},
+	"status_line_provider":            {kind: configKindStatusLineSelection, expected: "StatusLineSelection"},
 	"status_line_use_colors":          {kind: configKindBool},
 	"terminal_title":                  {kind: configKindStringSequence},
 	"theme":                           {kind: configKindString},

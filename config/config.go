@@ -392,6 +392,12 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 		if !exists {
 			return nil, fmt.Errorf("packaged defaults config file %s not found", packagedDefaultsPath)
 		}
+		// Packaged defaults are strictly validated even though this local-only
+		// selection is ignored from that layer (#61211).
+		if err := validateIgnoredStatusLineProvider(packagedDefaults); err != nil {
+			return nil, err
+		}
+		stripIgnoredStatusLineProvider(packagedDefaults)
 		values = packagedDefaults
 	} else {
 		// Rust #38179: when no packaged-defaults path is supplied, always
@@ -400,6 +406,10 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 		if err != nil {
 			return nil, err
 		}
+		if err := validateIgnoredStatusLineProvider(embedded); err != nil {
+			return nil, err
+		}
+		stripIgnoredStatusLineProvider(embedded)
 		values = embedded
 	}
 	featureLayers := []Layer{{
@@ -463,6 +473,9 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 			}
 			if exists {
 				resolveProjectRelativeConfigValues(projectValues, filepath.Dir(path))
+				if err := validateIgnoredStatusLineProvider(projectValues); err != nil {
+					return nil, err
+				}
 				sanitizeProjectConfigValues(projectValues, brokerState, trustedProviderEnvKeys)
 				chatgptBaseURLExplicit = chatgptBaseURLExplicit || configValuePresent(projectValues, "chatgpt_base_url")
 				mergeConfigMaps(values, projectValues)
@@ -996,6 +1009,9 @@ func LoadEffectiveWithOptions(codexHome string, opts *EffectiveOptions) (*Config
 	if err := ValidateTUIPresets(cfg.Values); err != nil {
 		return nil, err
 	}
+	if err := validateIgnoredStatusLineProvider(cfg.Values); err != nil {
+		return nil, err
+	}
 	if opts != nil && opts.StrictConfig {
 		if err := validateKnownTopLevelConfigFields(cfg.Values); err != nil {
 			return nil, err
@@ -1266,6 +1282,7 @@ var knownTuiConfigFields = map[string]struct{}{
 	"right_click_paste":               {},
 	"alternate_screen":                {},
 	"status_line":                     {},
+	"status_line_provider":            {},
 	"status_line_use_colors":          {},
 	"terminal_title":                  {},
 	"theme":                           {},
@@ -3853,6 +3870,12 @@ func sanitizeProjectConfigValues(values map[string]any, broker CredentialBrokerP
 	// increase (#39873): permission-mode cycling shortcuts are session-only and
 	// are stripped from project config.
 	if tui, ok := values["tui"].(map[string]any); ok {
+		// Rust #61211: the statusline provider is a local-only preference, so a
+		// repository may not select an MCP server for the client.
+		if _, ok := tui["status_line_provider"]; ok {
+			delete(tui, "status_line_provider")
+			ignored = append(ignored, "tui.status_line_provider")
+		}
 		if keymap, ok := tui["keymap"].(map[string]any); ok {
 			if chat, ok := keymap["chat"].(map[string]any); ok {
 				for _, key := range []string{"previous_permission_mode", "next_permission_mode"} {
@@ -4029,6 +4052,12 @@ func normalizeConfigKeyAliasesDeep(value any, path []string) any {
 func mergeConfigMapsAt(dst map[string]any, src map[string]any, path []string) {
 	for key, value := range src {
 		childPath := append(append([]string(nil), path...), key)
+		// A server and tool identify one provider; a higher layer replaces the
+		// complete identity instead of inheriting half of a lower one (#61211).
+		if isStatusLineProviderPath(childPath) {
+			dst[key] = cloneConfigValue(value)
+			continue
+		}
 		if _, ok := structuredFeatureName(childPath); ok {
 			// Mirrors Rust merge_toml_values_at_path's multi_agent_v2 handling
 			// (config/src/merge.rs): a legacy boolean toggle converts to an
