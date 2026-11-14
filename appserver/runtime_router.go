@@ -4038,6 +4038,10 @@ func (r *RuntimeRouter) dispatch(request *Request) (result any, err error) {
 			if err := r.rejectRunningThreadResumeStalePath(request); err != nil {
 				return nil, err
 			}
+			request, err = r.prepareUnsubscribedIdleResume(request)
+			if err != nil {
+				return nil, err
+			}
 			request, err = r.prepareSubscribedIdleResume(request)
 			if err != nil {
 				return nil, err

@@ -314,6 +314,30 @@ func (m *ThreadManager) AcquireLifecycleWriters(store *session.Store, threadIDs 
 	return locks, nil
 }
 
+// CloseLiveThreadsFor closes the managed writers for the listed threads while
+// they are still registered. Callers use the outcome to decide whether the
+// runtime can be forgotten; ReleaseLiveThreads then removes it.
+func (m *ThreadManager) CloseLiveThreadsFor(threadIDs []session.ThreadID) error {
+	if m == nil {
+		return nil
+	}
+	m.liveThreadsMu.Lock()
+	liveThreads := make([]*managedLiveThread, 0, len(threadIDs))
+	for _, threadID := range threadIDs {
+		if liveThread := m.liveThreads[threadID]; liveThread != nil {
+			liveThreads = append(liveThreads, liveThread)
+		}
+	}
+	m.liveThreadsMu.Unlock()
+	var firstErr error
+	for i := len(liveThreads) - 1; i >= 0; i-- {
+		if err := liveThreads[i].Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
 func (m *ThreadManager) ReleaseLiveThreads(threadIDs []session.ThreadID) {
 	if m == nil {
 		return
