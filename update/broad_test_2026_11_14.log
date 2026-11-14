@@ -1,0 +1,43 @@
+ok  	codex_go/tui	30.251s
+ok  	codex_go/tui/agents_overview	4.214s
+ok  	codex_go/tui/analytics	3.251s
+ok  	codex_go/tui/anim	0.879s
+ok  	codex_go/tui/app	0.762s
+?   	codex_go/tui/app_server_session	[no test files]
+?   	codex_go/tui/bin	[no test files]
+ok  	codex_go/tui/bottom_pane	0.597s
+ok  	codex_go/tui/bottom_pane/chat_composer	0.124s
+ok  	codex_go/tui/bottom_pane/mentions_v2	0.108s
+ok  	codex_go/tui/bottom_pane/request_user_input	0.760s
+ok  	codex_go/tui/bottom_pane/textarea	0.556s
+ok  	codex_go/tui/chatwidget	0.518s
+?   	codex_go/tui/chatwidget/tokens	[no test files]
+?   	codex_go/tui/chatwidget/tokens/chart	[no test files]
+ok  	codex_go/tui/diffview	2.412s
+ok  	codex_go/tui/exec_cell	0.762s
+?   	codex_go/tui/external_agent_config_migration	[no test files]
+ok  	codex_go/tui/footerhint	0.553s
+ok  	codex_go/tui/history_cell	0.587s
+ok  	codex_go/tui/ide_context	1.712s
+ok  	codex_go/tui/imagedecode	0.758s
+?   	codex_go/tui/keymap_setup	[no test files]
+?   	codex_go/tui/keymsg	[no test files]
+ok  	codex_go/tui/markdown	0.744s
+?   	codex_go/tui/markdown_render	[no test files]
+?   	codex_go/tui/mousemsg	[no test files]
+ok  	codex_go/tui/notifications	1.267s
+ok  	codex_go/tui/onboarding	1.452s
+ok  	codex_go/tui/onboarding/auth	0.538s
+ok  	codex_go/tui/overlay	0.739s
+ok  	codex_go/tui/pets	2.592s
+?   	codex_go/tui/public_widgets	[no test files]
+?   	codex_go/tui/render	[no test files]
+ok  	codex_go/tui/status	0.242s
+ok  	codex_go/tui/streaming	0.330s
+ok  	codex_go/tui/styles	0.872s
+ok  	codex_go/tui/tea	50.234s
+ok  	codex_go/tui/transcript_image	0.877s
+ok  	codex_go/tui/tui	0.904s
+ok  	codex_go/tui/welcome	0.618s
+ok  	codex_go/state	64.750s
+ok  	codex_go/mcp	35.521s
