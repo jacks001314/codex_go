@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"codex_go/apps"
 	"codex_go/session"
@@ -68,4 +69,30 @@ func TestAppsCatalogGuidanceInTurnRequestAndHistory(t *testing.T) {
 	if count := strings.Count(string(encoded), "literal catalog guidance"); count == 0 {
 		t.Fatalf("compaction lost apps guidance: %s", encoded)
 	}
+
+	// A later turn must keep the replacement context's guidance exactly once.
+	// Reopen the persisted thread through a fresh router to cover recovery after
+	// compaction rather than relying on in-memory turn state.
+	record.Items = sessionItemsFromCompactItems(replacement.Items, time.Now().UTC())
+	if err := store.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	afterAgent := newRecordingRuntimeAgent("after compaction")
+	afterSink := NewNotificationBuffer()
+	afterRouter := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store), Turns: turn.NewTurnService(), Agent: afterAgent, ThreadStatus: NewThreadStatusManager(),
+		Apps: apps.NewAppService([]apps.AppEntry{{ID: "drive", Name: "Drive", IsAccessible: true, IsEnabled: true, EnabledExplicit: true}}),
+	})
+	t.Cleanup(func() { _ = afterRouter.Close() })
+	afterRouter.SetNotificationSink(afterSink)
+	after := afterRouter.Handle(requestWithParams(t, IntID(3), MethodTurnStart, turn.TurnStartParams{ThreadID: id, Prompt: "after compaction"}))
+	if after.Error != nil {
+		t.Fatal(after.Error)
+	}
+	afterRequest := waitForRuntimeAgentRequest(t, afterAgent)
+	afterJSON, _ := json.Marshal(afterRequest.InputItems)
+	if count := strings.Count(string(afterJSON), "literal catalog guidance"); count != 1 {
+		t.Fatalf("post-compaction guidance count = %d: %s", count, afterJSON)
+	}
+	waitForTurnCompletedStatus(t, afterSink, after.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
 }

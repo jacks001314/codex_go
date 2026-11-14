@@ -1,0 +1,9 @@
+== apps compaction continue ==
+=== RUN   TestAppsCatalogGuidanceInTurnRequestAndHistory
+--- PASS: TestAppsCatalogGuidanceInTurnRequestAndHistory (0.52s)
+PASS
+ok  	codex_go/appserver	0.827s
+== appserver full ==
+ok  	codex_go/appserver	253.767s
+== go vet ==
+vet exit=0
