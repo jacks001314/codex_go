@@ -877,6 +877,9 @@ func (m *Model) renderStatusHeader() string {
 			if m.paneStatusText == nil {
 				m.paneStatusText = map[string]string{}
 			}
+			if m.paneStatusStyled == nil {
+				m.paneStatusStyled = map[string]string{}
+			}
 			m.paneStatusText[threadID] = result.StatusLine.PlainText()
 		}
 		threadColor := ""
@@ -885,7 +888,14 @@ func (m *Model) renderStatusHeader() string {
 		}
 		base = result.StatusLine.RenderStyled(threadColor, accent, false)
 	}
-	return m.attachPlanModeStatusIndicator(base)
+	base = m.attachPlanModeStatusIndicator(base)
+	if threadID := strings.TrimSpace(m.State.ThreadID); threadID != "" && strings.TrimSpace(base) != "" {
+		if m.paneStatusStyled == nil {
+			m.paneStatusStyled = map[string]string{}
+		}
+		m.paneStatusStyled[threadID] = base
+	}
+	return base
 }
 
 // attachPlanModeStatusIndicator mirrors Rust #49037's fullscreen status

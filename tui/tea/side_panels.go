@@ -263,7 +263,7 @@ func (m *Model) renderSidePaneTranscript(cache *transcriptMessageCache, threadID
 		"sidepane|"+threadID,
 	)
 	if status = strings.TrimSpace(status); status != "" {
-		statusRows := m.renderDimmedPaneStatus(status, width, maxStatusRows)
+		statusRows := m.renderDimmedPaneStatus(threadID, status, width, maxStatusRows)
 		if statusRows != "" {
 			if content != "" {
 				content += "\n"
@@ -296,10 +296,18 @@ func (m *Model) paneStatusForThread(threadID string) string {
 
 // renderDimmedPaneStatus wraps an inactive pane's status to the pane width and
 // dims it, mirroring Rust #61141's unfocused treatment (no hyperlinks).
-func (m *Model) renderDimmedPaneStatus(status string, width int, maxRows int) string {
+func (m *Model) renderDimmedPaneStatus(threadID string, status string, width int, maxRows int) string {
 	status = strings.TrimSpace(status)
 	if status == "" || width <= 0 {
 		return ""
+	}
+	// A themed line that already fits keeps its colours; wider lines fall back
+	// to the plain rewrap below (Rust #61141 keeps structured content).
+	if m != nil {
+		if styled := strings.TrimSpace(m.paneStatusStyled[strings.TrimSpace(threadID)]); styled != "" &&
+			codextui.DisplayWidth(styled) <= width {
+			return "\x1b[2m" + styled + "\x1b[0m"
+		}
 	}
 	rows := codextui.WrapLine(status, codextui.WrapOptions{Width: width, BreakWords: true})
 	if maxRows <= 0 {

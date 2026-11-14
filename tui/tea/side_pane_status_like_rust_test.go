@@ -26,7 +26,7 @@ func TestSidePaneStatusContentLikeRust(t *testing.T) {
 		t.Fatalf("unfocused pane status = %q", got)
 	}
 
-	rendered := model.renderDimmedPaneStatus("alpha beta gamma delta epsilon zeta", 12, 3)
+	rendered := model.renderDimmedPaneStatus("thread-parent", "alpha beta gamma delta epsilon zeta", 12, 3)
 	rows := strings.Split(rendered, "\n")
 	if len(rows) < 2 || len(rows) > 3 {
 		t.Fatalf("wrapped rows = %d (%q)", len(rows), rendered)
@@ -61,5 +61,25 @@ func TestSidePaneStatusRowBudgetLikeRust(t *testing.T) {
 		if got := paneStatusRowBudget(tc.height); got != tc.want {
 			t.Fatalf("paneStatusRowBudget(%d) = %d, want %d", tc.height, got, tc.want)
 		}
+	}
+}
+
+// A themed status that fits the pane keeps its colour under the dim wrapper.
+func TestSidePaneStatusKeepsThemeWhenItFitsLikeRust(t *testing.T) {
+	model := NewModel(codextui.NewState(nil), Options{Width: 120, Height: 40})
+	model.paneStatusText = map[string]string{"thread-side": "themed status"}
+	model.paneStatusStyled = map[string]string{"thread-side": "\x1b[36mthemed\x1b[0m status"}
+
+	rendered := model.renderDimmedPaneStatus("thread-side", "themed status", 40, 3)
+	if !strings.Contains(rendered, "\x1b[36m") {
+		t.Fatalf("styled status lost its colour: %q", rendered)
+	}
+	if !strings.HasPrefix(rendered, "\x1b[2m") || !strings.HasSuffix(rendered, "\x1b[0m") {
+		t.Fatalf("styled status is not dimmed: %q", rendered)
+	}
+
+	narrow := model.renderDimmedPaneStatus("thread-side", "themed status", 8, 3)
+	if strings.Contains(narrow, "\x1b[36m") {
+		t.Fatalf("narrow pane reused an overflowing styled line: %q", narrow)
 	}
 }

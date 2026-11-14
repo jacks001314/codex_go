@@ -2963,6 +2963,9 @@ type Model struct {
 	// paneStatusText retains the plain status line of each thread so side panes
 	// can render their own dimmed status content (Rust #61141).
 	paneStatusText map[string]string
+	// paneStatusStyled keeps the themed status line for panes wide enough to
+	// show it without rewrapping.
+	paneStatusStyled map[string]string
 	// sideZoomed shows the focused conversation full width (Rust #59595).
 	sideZoomed bool
 	// sideWidthPercent is the saved sidebar share of the split; 0 means the
