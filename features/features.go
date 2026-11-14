@@ -228,9 +228,10 @@ var Registry = []Spec{
 	// development and off by default.
 	{Key: "command_sessions_world_state", Stage: StageUnderDevelopment},
 	{Key: "incremental_tools", Stage: StageStable, DefaultEnabled: true},
-	// Rust #59832: publish incremental tool declarations on regular Amazon
-	// Bedrock Responses requests, independently of the Responses Lite flag.
-	{Key: "incremental_tools_legacy", Stage: StageStable, DefaultEnabled: false},
+	// Rust #59832/#61426: publish incremental tool declarations on regular Amazon
+	// Bedrock Responses requests by default, independently of the Responses Lite
+	// flag; `incremental_tools_legacy = false` still opts out.
+	{Key: "incremental_tools_legacy", Stage: StageStable, DefaultEnabled: true},
 	// Rust #60848: the same declarations on regular Google Cloud Vertex AI
 	// Responses requests ship enabled by default and toggle separately from
 	// the Bedrock flag.

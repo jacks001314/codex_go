@@ -503,8 +503,13 @@ func TestIncrementalToolsEnabledForTurnLikeRust(t *testing.T) {
 	if incrementalToolsEnabledForTurn(liteStableOff, lite, model.OpenAIProviderID) {
 		t.Fatal("the legacy flag must not enable lite windows on its own")
 	}
-	if incrementalToolsEnabledForTurn(enabled, full, model.AmazonBedrockProviderID) {
-		t.Fatal("regular Responses need the legacy feature")
+	if !incrementalToolsEnabledForTurn(disabled, full, model.AmazonBedrockProviderID) {
+		t.Fatal("regular Amazon Bedrock Responses enable incremental tools by default")
+	}
+	legacyOff := &config.Config{Values: map[string]any{"features": map[string]any{"incremental_tools_legacy": false}}}
+	if incrementalToolsEnabledForTurn(legacyOff, full, model.AmazonBedrockProviderID) ||
+		incrementalToolsEnabledForTurn(legacyOff, full, model.AmazonBedrockRuntimeProviderID) {
+		t.Fatal("an explicit incremental_tools_legacy = false must keep legacy declarations")
 	}
 	if !incrementalToolsEnabledForTurn(legacy, full, model.AmazonBedrockProviderID) {
 		t.Fatal("regular Amazon Bedrock Responses must honor incremental_tools_legacy")
