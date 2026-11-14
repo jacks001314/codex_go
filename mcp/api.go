@@ -170,6 +170,9 @@ type MCPListServerStatusParams struct {
 	Limit    *uint32                `json:"limit,omitempty"`
 	Detail   *MCPServerStatusDetail `json:"detail,omitempty"`
 	ThreadID *string                `json:"threadId,omitempty"`
+	// EnvironmentID selects one registration scope when the same server name is
+	// registered under several environments (Rust #61257).
+	EnvironmentID *string `json:"environmentId,omitempty"`
 	// ServerName limits discovery to one server; combined with ThreadID the
 	// thread's existing MCP connection is reused (Rust #48783).
 	ServerName *string `json:"serverName,omitempty"`
@@ -416,6 +419,7 @@ type MCPServerOauthLoginParams struct {
 	Name               string                            `json:"name,omitempty"`
 	ServerName         string                            `json:"serverName,omitempty"`
 	ThreadID           *string                           `json:"threadId,omitempty"`
+	EnvironmentID      *string                           `json:"environmentId,omitempty"`
 	ClientRegistration *MCPServerOauthClientRegistration `json:"clientRegistration,omitempty"`
 	Scopes             []string                          `json:"scopes,omitempty"`
 	TimeoutSecs        *uint64                           `json:"timeoutSecs,omitempty"`
@@ -507,10 +511,11 @@ type MCPServerOauthCancelResponse struct{}
 type MCPServerRefreshResponse struct{}
 
 type MCPResourceReadParams struct {
-	ThreadID   *string `json:"threadId,omitempty"`
-	Server     string  `json:"server,omitempty"`
-	ServerName string  `json:"serverName,omitempty"`
-	URI        string  `json:"uri"`
+	ThreadID      *string `json:"threadId,omitempty"`
+	Server        string  `json:"server,omitempty"`
+	ServerName    string  `json:"serverName,omitempty"`
+	EnvironmentID *string `json:"environmentId,omitempty"`
+	URI           string  `json:"uri"`
 	// Meta is caller-provided MCP request metadata forwarded on resources/read.
 	// Account and turn-routing keys are reserved for the host.
 	Meta map[string]any `json:"_meta,omitempty"`
@@ -657,17 +662,18 @@ func (c *MCPResourceContent) MarshalJSON() ([]byte, error) {
 type MCPToolCallParams struct {
 	// Context carries the caller's trace context through the MCP transport and
 	// any nested server-request responses (Rust #47212).
-	Context    context.Context `json:"-"`
-	ThreadID   string          `json:"threadId,omitempty"`
-	TurnID     string          `json:"turnId,omitempty"`
-	ItemID     string          `json:"itemId,omitempty"`
-	Server     string          `json:"server,omitempty"`
-	Tool       string          `json:"tool,omitempty"`
-	ServerName string          `json:"serverName,omitempty"`
-	ToolName   string          `json:"toolName,omitempty"`
-	Arguments  any             `json:"arguments,omitempty"`
-	Meta       any             `json:"_meta,omitempty"`
-	CallID     string          `json:"-"`
+	Context       context.Context `json:"-"`
+	ThreadID      string          `json:"threadId,omitempty"`
+	TurnID        string          `json:"turnId,omitempty"`
+	ItemID        string          `json:"itemId,omitempty"`
+	Server        string          `json:"server,omitempty"`
+	Tool          string          `json:"tool,omitempty"`
+	ServerName    string          `json:"serverName,omitempty"`
+	ToolName      string          `json:"toolName,omitempty"`
+	EnvironmentID *string         `json:"environmentId,omitempty"`
+	Arguments     any             `json:"arguments,omitempty"`
+	Meta          any             `json:"_meta,omitempty"`
+	CallID        string          `json:"-"`
 
 	// SessionID, WindowID and OriginItemID feed the request `_meta` only (Rust
 	// with_mcp_tool_call_ids_meta, #40866/#45409); the tools/call wire params
@@ -1713,6 +1719,19 @@ func (s *MCPService) ListStatusCheckedWithObserver(params *MCPListServerStatusPa
 		}
 		servers = filtered
 	}
+	// An explicit environment selector keeps only the registration stored under
+	// that scope (Rust #61257); an unknown environment yields an empty page.
+	if params != nil && params.EnvironmentID != nil {
+		requested := strings.TrimSpace(*params.EnvironmentID)
+		filtered := make([]MCPServerStatus, 0, len(servers))
+		for _, status := range servers {
+			config, ok := configs[status.effectiveName()]
+			if ok && strings.TrimSpace(config.EffectiveEnvironmentID()) == requested {
+				filtered = append(filtered, status)
+			}
+		}
+		servers = filtered
+	}
 	servers = s.populateStatusInventories(params, detail, observer, servers, configs, dynamicConfigs, threadID)
 	sort.SliceStable(servers, func(i int, j int) bool {
 		return servers[i].effectiveName() < servers[j].effectiveName()
@@ -2474,8 +2493,13 @@ func (s *MCPService) OauthLogin(params *MCPServerOauthLoginParams) (*MCPServerOa
 	// Rust #56266: a requirements denial also blocks the standalone login HTTP
 	// client (including its headers helper), so report it instead of minting an
 	// unusable authorization URL.
-	if config, ok := s.serverConfigIncludingDisabled(name); ok && managedconfig.MCPDisabledByManagedRequirements(config.DisabledReason) {
-		return nil, invalidMCPRequest("the MCP server is disabled by managed requirements")
+	if config, ok := s.serverConfigIncludingDisabled(name); ok {
+		if err := mcpEnvironmentSelectorError(config.EffectiveEnvironmentID(), params.EnvironmentID); err != nil {
+			return nil, err
+		}
+		if managedconfig.MCPDisabledByManagedRequirements(config.DisabledReason) {
+			return nil, invalidMCPRequest("the MCP server is disabled by managed requirements")
+		}
 	}
 	// Rust #49276: the login attempt id is minted by the app-server when the
 	// login starts, returned in this response and echoed in the completion
@@ -2755,6 +2779,11 @@ func (s *MCPService) ReadResource(params *MCPResourceReadParams) (*MCPResourceRe
 	if server == "" || uri == "" {
 		return nil, invalidMCPRequest("server and uri are required")
 	}
+	if config, ok := s.serverConfig(server); ok {
+		if err := mcpEnvironmentSelectorError(config.EffectiveEnvironmentID(), params.EnvironmentID); err != nil {
+			return nil, err
+		}
+	}
 	if err := validateMCPResourceOrigin(params); err != nil {
 		return nil, err
 	}
@@ -2945,6 +2974,9 @@ func (s *MCPService) CallTool(params *MCPToolCallParams) (*MCPToolCallResponse, 
 	var serverConfigValue *ServerConfig
 	serverEnvironmentID := ""
 	if config, ok := s.serverConfig(server); ok {
+		if err := mcpEnvironmentSelectorError(config.EffectiveEnvironmentID(), params.EnvironmentID); err != nil {
+			return nil, err
+		}
 		configCopy := config
 		serverConfigValue = &configCopy
 		serverEnvironmentID = config.EffectiveEnvironmentID()
@@ -3292,6 +3324,23 @@ func (s *MCPService) serverEnvironmentID(server string) string {
 		return ""
 	}
 	return strings.TrimSpace(config.EffectiveEnvironmentID())
+}
+
+// mcpEnvironmentSelectorError rejects an explicit environmentId that does not
+// name the registration the request resolved (Rust #61257). Omitting the
+// selector keeps the historical name-only routing.
+func mcpEnvironmentSelectorError(registered string, selector *string) error {
+	if selector == nil {
+		return nil
+	}
+	requested := strings.TrimSpace(*selector)
+	if requested == "" {
+		return nil
+	}
+	if requested != strings.TrimSpace(registered) {
+		return invalidMCPRequest("mcp server is not registered in environment " + requested)
+	}
+	return nil
 }
 
 func (s *MCPService) listInventoryForConfig(name string, config *ServerConfig, threadID string, skipResourceTemplates bool) (*stdioInventory, error) {
