@@ -1,0 +1,11 @@
+== go vet ./tui ./tui/tea ./app ./appserver ==
+exit=0
+== go test ./tui -count=1 ==
+ok  	codex_go/tui	10.024s
+exit=0
+== go test ./tui/tea -count=1 ==
+ok  	codex_go/tui/tea	47.411s
+exit=0
+== go test ./app -count=1 ==
+ok  	codex_go/app	40.412s
+exit=0

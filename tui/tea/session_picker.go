@@ -617,6 +617,7 @@ func (m *Model) applyForkSummary(selection codextui.SessionSelection, summary *c
 		m.noteThreadHandoff(m.currentThreadID(), summary.ThreadID)
 		m.deactivateSideConversation()
 		m.switchThreadID(summary.ThreadID)
+		m.insertThreadLineage(summary)
 		m.inheritTaskToolCapability(threadID, summary.ThreadID)
 		decision.Value = summary.ThreadID
 		return decision, "Forked session " + summary.ThreadID, true
@@ -852,6 +853,7 @@ func (m *Model) applyResumeResponseWithCWD(threadID string, response SessionResu
 	m.setThreadUnavailable(false)
 	m.State.Messages = append([]codextui.Message(nil), response.Messages...)
 	m.State.BumpMessagesRevision()
+	m.insertThreadLineage(response.Summary)
 	m.insertSessionHeader()
 	// Rust startup.rs / session_lifecycle.rs #45980: a summary-only read-only
 	// snapshot tells the user that intermediate items are unavailable.

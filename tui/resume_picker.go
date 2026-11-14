@@ -241,6 +241,13 @@ type SessionSummary struct {
 	// (Rust #43360): resuming or switching applies it so later turns use the
 	// thread's model instead of the local default.
 	Model string
+	// ForkedFromID is the parent thread of a forked conversation (Rust
+	// ThreadSessionState.forked_from_id, #61183). It is per selection, so a
+	// resumed thread never inherits another thread's parent.
+	ForkedFromID string
+	// ForkParentTitle caches the parent's display name for the fork event line.
+	// An unavailable parent leaves it empty and the line shows only the id.
+	ForkParentTitle string
 	// DaybreakEnabled is the thread's persisted Daybreak preference, restored
 	// on resume (Rust session.daybreak_enabled, #49861).
 	DaybreakEnabled bool

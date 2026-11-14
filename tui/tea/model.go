@@ -10880,6 +10880,24 @@ func (m *Model) insertSessionHeader() {
 	m.sessionHeaderShown = true
 }
 
+// insertThreadLineage paints the fork event line for a resumed or forked
+// conversation (Rust session_flow.rs, #61183). It reads this selection's own
+// summary, so another thread's fork parent cannot leak across a switch.
+func (m *Model) insertThreadLineage(summary *codextui.SessionSummary) {
+	if m == nil || m.State == nil || summary == nil {
+		return
+	}
+	forked := strings.TrimSpace(summary.ForkedFromID)
+	if forked == "" {
+		return
+	}
+	line := chatwidget.ForkedThreadEventLine(forked, strings.TrimSpace(summary.ForkParentTitle))
+	if strings.TrimSpace(line) == "" {
+		return
+	}
+	m.insertHistoryMessageAt(0, []string{line}, []string{line})
+}
+
 // startupSessionTooltip resolves the non-first-event session header tip (Rust's
 // `tooltips::get_tooltip(auth_plan, keymap)` gated on
 // `local_settings.tui.show_tooltips`, Rust #49093). An empty string leaves the

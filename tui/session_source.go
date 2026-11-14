@@ -198,6 +198,8 @@ func sessionSummaryFromRecord(store *session.Store, record *session.Record) Sess
 		Branch:   record.Metadata.Git["branch"],
 		Provider: strings.TrimSpace(record.Metadata.ModelProvider),
 		Model:    strings.TrimSpace(record.Metadata.Model),
+		// Rust #61183: the thread's own persisted fork parent.
+		ForkedFromID: strings.TrimSpace(string(record.ForkedFromID)),
 		// Rust session.daybreak_enabled (#49861): the stored thread preference.
 		DaybreakEnabled: record.Metadata.DaybreakEnabled != nil && *record.Metadata.DaybreakEnabled,
 		CreatedAt:       record.CreatedAt,
@@ -226,6 +228,10 @@ func sessionSummaryFromAppServerThread(thread *appserver.Thread, archived bool) 
 	if thread.Model != nil {
 		model = strings.TrimSpace(*thread.Model)
 	}
+	forkedFromID := ""
+	if thread.ForkedFromID != nil {
+		forkedFromID = strings.TrimSpace(*thread.ForkedFromID)
+	}
 	return SessionSummary{
 		ThreadID: strings.TrimSpace(thread.ID),
 		Path:     path,
@@ -235,6 +241,8 @@ func sessionSummaryFromAppServerThread(thread *appserver.Thread, archived bool) 
 		Branch:   branch,
 		Provider: strings.TrimSpace(thread.ModelProvider),
 		Model:    model,
+		// Rust #61183: the thread's own fork parent, not the primary session's.
+		ForkedFromID: forkedFromID,
 		// Rust session.daybreak_enabled (#49861): the app-server thread's
 		// persisted Daybreak preference.
 		DaybreakEnabled: thread.DaybreakEnabled != nil && *thread.DaybreakEnabled,

@@ -4507,7 +4507,15 @@ func firstSessionSummary(store *session.Store, record *session.Record) *codextui
 	if len(summaries) == 0 {
 		return nil
 	}
-	return &summaries[0]
+	summary := &summaries[0]
+	// Rust #61183: the fork line shows the parent's cached title when the
+	// parent is still readable, and only the id otherwise.
+	if forked := strings.TrimSpace(summary.ForkedFromID); forked != "" && store != nil {
+		if parent, err := store.Read(session.ThreadID(forked), true, false); err == nil && parent != nil {
+			summary.ForkParentTitle = strings.TrimSpace(parent.Title)
+		}
+	}
+	return summary
 }
 
 func interactiveSessionMessagesFromRecord(record *session.Record, projection reasoningProjection, showRawReasoning bool) []codextui.Message {

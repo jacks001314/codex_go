@@ -2101,6 +2101,20 @@ func remoteTUISameCWD(a string, b string) bool {
 	return a == b
 }
 
+// remoteTUIForkParentTitle caches the parent name of a forked thread. Rust
+// #61183 keeps the title beside forked_from_id and clears it when the parent
+// changes; an unreadable parent leaves the id-only fork line.
+func remoteTUIForkParentTitle(ctx context.Context, client *remoteAppServerTUIClient, summary *codextui.SessionSummary) {
+	if summary == nil || strings.TrimSpace(summary.ForkedFromID) == "" {
+		return
+	}
+	parent, err := remoteTUIReadThread(ctx, client, strings.TrimSpace(summary.ForkedFromID), false)
+	if err != nil || parent == nil || parent.Name == nil {
+		return
+	}
+	summary.ForkParentTitle = strings.TrimSpace(*parent.Name)
+}
+
 // remoteTUIResumeResponseFromThread builds the TUI resume response from a
 // thread snapshot shared by the resume and read-only fallback paths.
 func remoteTUIResumeResponseFromThread(thread *appserver.Thread) codextea.SessionResumeResponse {
@@ -2393,16 +2407,18 @@ func remoteTUISessionSummaryFromThread(thread *appserver.Thread, archived bool) 
 		branch = strings.TrimSpace(*thread.GitInfo.Branch)
 	}
 	return &codextui.SessionSummary{
-		ThreadID:  string(record.ID),
-		Path:      path,
-		Title:     record.Title,
-		Preview:   record.Preview,
-		CWD:       record.Metadata.CWD,
-		Branch:    branch,
-		Provider:  record.Metadata.ModelProvider,
-		CreatedAt: record.CreatedAt,
-		UpdatedAt: sessionRecordRecency(record),
-		Archived:  record.Archived,
+		ThreadID: string(record.ID),
+		Path:     path,
+		Title:    record.Title,
+		Preview:  record.Preview,
+		CWD:      record.Metadata.CWD,
+		Branch:   branch,
+		Provider: record.Metadata.ModelProvider,
+		// Rust #61183: the selected thread's own fork parent.
+		ForkedFromID: strings.TrimSpace(string(record.ForkedFromID)),
+		CreatedAt:    record.CreatedAt,
+		UpdatedAt:    sessionRecordRecency(record),
+		Archived:     record.Archived,
 	}
 }
 
