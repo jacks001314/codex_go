@@ -185,6 +185,7 @@ func emitCodexTurnEventForTest(t *testing.T, router *RuntimeRouter, params *turn
 		nil,
 		nil,
 		nil,
+		nil,
 	)
 }
 

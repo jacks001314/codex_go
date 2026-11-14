@@ -8723,6 +8723,9 @@ func (r *RuntimeRouter) handleTurnStart(request *Request) (*turn.TurnStartRespon
 	if err := params.Validate(); err != nil {
 		return nil, err
 	}
+	// Rust #61215: dictation provenance is per accepted input, never part of
+	// the Responses request metadata.
+	captureTurnStartDictation(params)
 	if err := r.runPendingSessionStartHook(context.Background(), params); err != nil {
 		return nil, err
 	}
@@ -9956,12 +9959,14 @@ func (r *RuntimeRouter) handleTurnSteer(request *Request) (*turn.TurnSteerRespon
 	if err := validateTurnUserInputImageURLs(params.Input); err != nil {
 		return nil, err
 	}
+	captureTurnSteerDictation(params)
 	response, err := r.requireTurns().Steer(params)
 	if err != nil {
 		r.emitCodexTurnSteerAnalyticsEvent(context.Background(), connectionID, params, nil, telemetry.TurnSteerResultRejected, turnSteerAnalyticsRejectionReason(err), createdAt)
 		return nil, turnSteerRuntimeError(err)
 	}
 	acceptedTurnID = response.TurnID
+	r.noteAcceptedTurnDictation(params.ThreadID, response.TurnID, params.UsedDictation)
 	// Rust reports the steered user input like a turn start
 	// (SessionTelemetry::user_prompt).
 	r.emitUserPromptRecords(context.Background(), params.ThreadID, params.Prompt, params.Input)
@@ -21990,6 +21995,9 @@ func (r *RuntimeRouter) startTurnRuntimeAsync(params *turn.TurnStartParams, resp
 		cancel()
 		r.emitTurnRuntimeError(params.ThreadID, response.Turn.ID, err)
 		return
+	}
+	if turnStartHasUserInput(paramsCopy) {
+		r.noteAcceptedTurnDictation(paramsCopy.ThreadID, response.Turn.ID, paramsCopy.UsedDictation)
 	}
 	// Rust replaces AgentStatus::Interrupted with Running when a turn starts,
 	// so an explicit follow-up re-enables later automatic wakes.

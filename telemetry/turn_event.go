@@ -126,28 +126,32 @@ type CodexTurnEventParams struct {
 	CodexErrorHTTPStatusCode             *uint16                      `json:"codex_error_http_status_code"`
 	UsageLimitWindowMinutes              *uint16                      `json:"usage_limit_window_minutes"`
 	SteerCount                           *int                         `json:"steer_count"`
-	RunningBackgroundProcessCount        *int                         `json:"running_background_process_count"`
-	TotalToolCallCount                   *int                         `json:"total_tool_call_count"`
-	ShellCommandCount                    *int                         `json:"shell_command_count"`
-	FileChangeCount                      *int                         `json:"file_change_count"`
-	MCPToolCallCount                     *int                         `json:"mcp_tool_call_count"`
-	DynamicToolCallCount                 *int                         `json:"dynamic_tool_call_count"`
-	SubagentToolCallCount                *int                         `json:"subagent_tool_call_count"`
-	WebSearchCount                       *int                         `json:"web_search_count"`
-	ImageGenerationCount                 *int                         `json:"image_generation_count"`
-	InputTokens                          *int64                       `json:"input_tokens"`
-	CachedInputTokens                    *int64                       `json:"cached_input_tokens"`
-	CacheWriteInputTokens                *int64                       `json:"cache_write_input_tokens"`
-	OutputTokens                         *int64                       `json:"output_tokens"`
-	ReasoningOutputTokens                *int64                       `json:"reasoning_output_tokens"`
-	TotalTokens                          *int64                       `json:"total_tokens"`
-	BeforeFirstSamplingMS                uint64                       `json:"before_first_sampling_ms"`
-	SamplingMS                           uint64                       `json:"sampling_ms"`
-	BetweenSamplingOverheadMS            uint64                       `json:"between_sampling_overhead_ms"`
-	ToolBlockingMS                       uint64                       `json:"tool_blocking_ms"`
-	AfterLastSamplingMS                  uint64                       `json:"after_last_sampling_ms"`
-	SamplingRequestCount                 uint32                       `json:"sampling_request_count"`
-	SamplingRetryCount                   uint32                       `json:"sampling_retry_count"`
+	// UsedDictation is true when any accepted input used dictation. False is
+	// reported only when every accepted input has known, non-dictation
+	// provenance; nil means unknown (Rust #61215).
+	UsedDictation                 *bool  `json:"used_dictation,omitempty"`
+	RunningBackgroundProcessCount *int   `json:"running_background_process_count"`
+	TotalToolCallCount            *int   `json:"total_tool_call_count"`
+	ShellCommandCount             *int   `json:"shell_command_count"`
+	FileChangeCount               *int   `json:"file_change_count"`
+	MCPToolCallCount              *int   `json:"mcp_tool_call_count"`
+	DynamicToolCallCount          *int   `json:"dynamic_tool_call_count"`
+	SubagentToolCallCount         *int   `json:"subagent_tool_call_count"`
+	WebSearchCount                *int   `json:"web_search_count"`
+	ImageGenerationCount          *int   `json:"image_generation_count"`
+	InputTokens                   *int64 `json:"input_tokens"`
+	CachedInputTokens             *int64 `json:"cached_input_tokens"`
+	CacheWriteInputTokens         *int64 `json:"cache_write_input_tokens"`
+	OutputTokens                  *int64 `json:"output_tokens"`
+	ReasoningOutputTokens         *int64 `json:"reasoning_output_tokens"`
+	TotalTokens                   *int64 `json:"total_tokens"`
+	BeforeFirstSamplingMS         uint64 `json:"before_first_sampling_ms"`
+	SamplingMS                    uint64 `json:"sampling_ms"`
+	BetweenSamplingOverheadMS     uint64 `json:"between_sampling_overhead_ms"`
+	ToolBlockingMS                uint64 `json:"tool_blocking_ms"`
+	AfterLastSamplingMS           uint64 `json:"after_last_sampling_ms"`
+	SamplingRequestCount          uint32 `json:"sampling_request_count"`
+	SamplingRetryCount            uint32 `json:"sampling_retry_count"`
 	// ToolsChangeCount is the number of sampling requests in the turn whose full
 	// model-visible tool list differed from the previous request's list
 	// (Rust #50964 `CodexTurnEventParams::tools_change_count`).
@@ -203,6 +207,7 @@ type CodexTurnEventInput struct {
 	CodexErrorHTTPStatusCode             *uint16
 	UsageLimitWindowMinutes              *uint16
 	SteerCount                           *int
+	UsedDictation                        *bool
 	RunningBackgroundProcessCount        *int
 	ToolCounts                           *CodexTurnToolCounts
 	TokenUsage                           *CodexTurnTokenUsage
@@ -337,6 +342,7 @@ func NewCodexTurnEvent(input CodexTurnEventInput) CodexTurnEventRequest {
 			CodexErrorHTTPStatusCode:             input.CodexErrorHTTPStatusCode,
 			UsageLimitWindowMinutes:              input.UsageLimitWindowMinutes,
 			SteerCount:                           input.SteerCount,
+			UsedDictation:                        input.UsedDictation,
 			RunningBackgroundProcessCount:        input.RunningBackgroundProcessCount,
 			TotalToolCallCount:                   toolCountPtr(input.ToolCounts, func(c CodexTurnToolCounts) int { return c.Total }),
 			ShellCommandCount:                    toolCountPtr(input.ToolCounts, func(c CodexTurnToolCounts) int { return c.ShellCommand }),

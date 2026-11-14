@@ -73,6 +73,9 @@ type activeRuntimeTurn struct {
 	ConnectionID   string
 	RunConfig      *appTurnRunConfig
 	SteerCount     int
+	// Dictation aggregates accepted user-input provenance for this turn
+	// (Rust #61215): any true wins, unknown blocks a false report.
+	Dictation turnDictationState
 	// TaskStarted records that a reserved automatic wake passed the
 	// post-discovery revalidation and now owns its reserved mail (Rust sets
 	// `ActiveTurn.task` at the same boundary). Before it is set, an interrupt
@@ -2115,6 +2118,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		// submitted request before the error reaches the client.
 		err = r.attributeRejectedAudio(ctx, threadID, submittedInputItems, err)
 		steerCount := r.activeRuntimeTurnSteerCount(threadID, turnID)
+		usedDictation := r.activeRuntimeTurnUsedDictation(threadID, turnID)
 		if ctx.Err() != nil {
 			r.clearActiveRuntimeTurn(threadID, turnID)
 			return
@@ -2124,15 +2128,17 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		}
 		r.clearActiveRuntimeTurn(threadID, turnID)
 		r.finishTurnWithErrorAnalytics(threadID, turnID, startedAtMS, err, &turnCompletionAnalyticsContext{
-			ConnectionID: connectionID,
-			Params:       params,
-			RunConfig:    runConfig,
-			Timing:       timingState,
-			SteerCount:   steerCount,
+			ConnectionID:  connectionID,
+			Params:        params,
+			RunConfig:     runConfig,
+			Timing:        timingState,
+			SteerCount:    steerCount,
+			UsedDictation: usedDictation,
 		})
 		return
 	}
 	steerCount := r.activeRuntimeTurnSteerCount(threadID, turnID)
+	usedDictation := r.activeRuntimeTurnUsedDictation(threadID, turnID)
 	planIdentities := r.planIdentitiesForTurn(threadID, turnID)
 	r.unifiedExecPersistMu.Lock()
 	if !r.consumeCompletedRuntimeTurn(threadID, turnID) {
@@ -2362,7 +2368,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	r.maybeDispatchNextQueuedSubmission(threadID)
 	r.deliverRuntimeAgentCompletion(threadID, agent.AgentMessageStatus{Kind: agent.AgentMessageStatusCompleted, Message: lastAgentMessageFromThreadItems(threadItems)})
 	r.maybeWakeRootForPendingAgentMessages(threadID)
-	r.emitCodexTurnAnalyticsEvent(ctx, connectionID, params, record, runConfig, result, TurnStatusCompleted, startedAt, completedAt, durationMS, steerCount, nil, nil, nil, nil, nil, timingState)
+	r.emitCodexTurnAnalyticsEvent(ctx, connectionID, params, record, runConfig, result, TurnStatusCompleted, startedAt, completedAt, durationMS, steerCount, usedDictation, nil, nil, nil, nil, nil, timingState)
 	r.emitAcceptedLineFingerprintsAnalyticsEvent(ctx, threadID, turnID, runConfig, completedAt)
 	r.clearActiveDiffTracker(threadID, turnID)
 }
@@ -2745,6 +2751,7 @@ func (r *RuntimeRouter) runReviewRuntime(ctx context.Context, params *turn.TurnS
 	defer finishReviewTurn()
 	if err != nil {
 		steerCount := r.activeRuntimeTurnSteerCount(threadID, turnID)
+		usedDictation := r.activeRuntimeTurnUsedDictation(threadID, turnID)
 		if ctx.Err() != nil {
 			r.clearActiveRuntimeTurn(threadID, turnID)
 			return
@@ -2756,14 +2763,16 @@ func (r *RuntimeRouter) runReviewRuntime(ctx context.Context, params *turn.TurnS
 		// instead of losing the failure behind the exit item.
 		r.notifyReviewRuntimeFailure(threadID, turnID, err)
 		r.finishReviewRuntimeFallbackCompleted(threadID, turnID, record.StartedAt, startedAtMS, &turnCompletionAnalyticsContext{
-			ConnectionID: connectionID,
-			Params:       params,
-			RunConfig:    runConfig,
-			SteerCount:   steerCount,
+			ConnectionID:  connectionID,
+			Params:        params,
+			RunConfig:     runConfig,
+			SteerCount:    steerCount,
+			UsedDictation: usedDictation,
 		})
 		return
 	}
 	steerCount := r.activeRuntimeTurnSteerCount(threadID, turnID)
+	usedDictation := r.activeRuntimeTurnUsedDictation(threadID, turnID)
 	r.unifiedExecPersistMu.Lock()
 	if !r.consumeCompletedRuntimeTurn(threadID, turnID) {
 		r.unifiedExecPersistMu.Unlock()
@@ -2814,7 +2823,7 @@ func (r *RuntimeRouter) runReviewRuntime(ctx context.Context, params *turn.TurnS
 	r.notifyTurnCompletedOnce(&TurnCompletedNotification{ThreadID: threadID, Turn: completedTurn})
 	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnCompleted(threadID))
 	r.deliverRuntimeAgentCompletion(threadID, agent.AgentMessageStatus{Kind: agent.AgentMessageStatusCompleted, Message: reviewFinalAgentMessage(result)})
-	r.emitCodexTurnAnalyticsEvent(ctx, connectionID, params, record, runConfig, result, TurnStatusCompleted, startedAt, completedAt, durationMS, steerCount, nil, nil, nil, nil, nil, nil)
+	r.emitCodexTurnAnalyticsEvent(ctx, connectionID, params, record, runConfig, result, TurnStatusCompleted, startedAt, completedAt, durationMS, steerCount, usedDictation, nil, nil, nil, nil, nil, nil)
 	r.clearActiveDiffTracker(threadID, turnID)
 }
 
@@ -4922,6 +4931,7 @@ type turnCompletionAnalyticsContext struct {
 	// profile was frozen (Rust #57201 reports incomplete, never disabled).
 	Timing                               *turn.TimingState
 	SteerCount                           int
+	UsedDictation                        *bool
 	TurnError                            CodexErrorInfo
 	CodexErrorKind                       *string
 	CodexErrorHTTPStatusCode             *uint16
@@ -4934,12 +4944,32 @@ func analyticsContextFromActiveRuntimeTurn(active *activeRuntimeTurn) *turnCompl
 		return nil
 	}
 	return &turnCompletionAnalyticsContext{
-		ConnectionID: active.ConnectionID,
-		Params:       cloneTurnStartParams(active.Params),
-		RunConfig:    active.RunConfig,
-		Timing:       active.Timing,
-		SteerCount:   active.SteerCount,
+		ConnectionID:  active.ConnectionID,
+		Params:        cloneTurnStartParams(active.Params),
+		RunConfig:     active.RunConfig,
+		Timing:        active.Timing,
+		SteerCount:    active.SteerCount,
+		UsedDictation: active.Dictation.analyticsValue(),
 	}
+}
+
+func (r *RuntimeRouter) noteAcceptedTurnDictation(threadID string, turnID string, used *bool) {
+	if r == nil {
+		return
+	}
+	r.threads.UpdateTurn(strings.TrimSpace(threadID), strings.TrimSpace(turnID), func(active *activeRuntimeTurn) {
+		if active != nil {
+			active.Dictation = mergeTurnDictation(active.Dictation, used)
+		}
+	})
+}
+
+func (r *RuntimeRouter) activeRuntimeTurnUsedDictation(threadID string, turnID string) *bool {
+	active := r.activeRuntimeTurnStateSnapshot(threadID, turnID)
+	if active == nil {
+		return nil
+	}
+	return active.Dictation.analyticsValue()
 }
 
 func (r *RuntimeRouter) finishTurnWithError(threadID string, turnID string, startedAtMS int64, err error) {
@@ -5138,7 +5168,7 @@ func (r *RuntimeRouter) emitTurnCompletionAnalytics(ctx context.Context, analyti
 	}
 	startedAt := time.UnixMilli(startedAtMS).UTC()
 	record := &turn.TurnRecord{ID: turnID}
-	r.emitCodexTurnAnalyticsEvent(ctx, analytics.ConnectionID, analytics.Params, record, analytics.RunConfig, analytics.Result, status, startedAt, completedAt, durationMS, analytics.SteerCount, analytics.TurnError, analytics.CodexErrorKind, analytics.CodexErrorHTTPStatusCode, analytics.UsageLimitWindowMinutes, analytics.ExplicitClientInterruptRequestedAtMS, analytics.Timing)
+	r.emitCodexTurnAnalyticsEvent(ctx, analytics.ConnectionID, analytics.Params, record, analytics.RunConfig, analytics.Result, status, startedAt, completedAt, durationMS, analytics.SteerCount, analytics.UsedDictation, analytics.TurnError, analytics.CodexErrorKind, analytics.CodexErrorHTTPStatusCode, analytics.UsageLimitWindowMinutes, analytics.ExplicitClientInterruptRequestedAtMS, analytics.Timing)
 }
 
 type turnAnalyticsErrorFields struct {
@@ -9749,7 +9779,7 @@ func countTurnUserInputImages(inputs []turn.TurnUserInput) int {
 	return count
 }
 
-func (r *RuntimeRouter) emitCodexTurnAnalyticsEvent(ctx context.Context, connectionID string, params *turn.TurnStartParams, record *turn.TurnRecord, runConfig *appTurnRunConfig, result *turn.AgentLoopResult, status TurnStatus, startedAt time.Time, completedAt time.Time, durationMS int64, steerCount int, turnError CodexErrorInfo, codexErrorKind *string, codexErrorHTTPStatusCode *uint16, usageLimitWindowMinutes *uint16, explicitClientInterruptRequestedAtMS *uint64, timing *turn.TimingState) {
+func (r *RuntimeRouter) emitCodexTurnAnalyticsEvent(ctx context.Context, connectionID string, params *turn.TurnStartParams, record *turn.TurnRecord, runConfig *appTurnRunConfig, result *turn.AgentLoopResult, status TurnStatus, startedAt time.Time, completedAt time.Time, durationMS int64, steerCount int, usedDictation *bool, turnError CodexErrorInfo, codexErrorKind *string, codexErrorHTTPStatusCode *uint16, usageLimitWindowMinutes *uint16, explicitClientInterruptRequestedAtMS *uint64, timing *turn.TimingState) {
 	if r == nil || r.services.Analytics == nil || params == nil || record == nil || runConfig == nil || r.threadAnalyticsDisabled(params.ThreadID) {
 		return
 	}
@@ -9797,6 +9827,7 @@ func (r *RuntimeRouter) emitCodexTurnAnalyticsEvent(ctx context.Context, connect
 		CodexErrorHTTPStatusCode:             codexErrorHTTPStatusCode,
 		UsageLimitWindowMinutes:              usageLimitWindowMinutes,
 		SteerCount:                           intPtrAppserver(steerCount),
+		UsedDictation:                        usedDictation,
 		RunningBackgroundProcessCount:        intPtrAppserver(r.requireThreadExtras().CountBackgroundTerminals(params.ThreadID)),
 		ToolCounts:                           analyticsTurnToolCounts(result),
 		TokenUsage:                           analyticsTurnTokenUsage(result),

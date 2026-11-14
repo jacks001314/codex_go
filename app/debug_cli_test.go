@@ -59,10 +59,10 @@ func TestDebugAppServerSendMessageV2(t *testing.T) {
 
 func TestDebugTraceReduce(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{"trace_id":"trace-1"}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{"schema_version":2,"trace_id":"trace-1"}`), 0o600); err != nil {
 		t.Fatalf("WriteFile manifest error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "trace.jsonl"), []byte(`{"seq":1,"type":"thread_started","thread_id":"thread-1"}`+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "trace.jsonl"), []byte(`{"schema_version":2,"seq":1,"type":"thread_started","thread_id":"thread-1"}`+"\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile trace error = %v", err)
 	}
 	outputPath := filepath.Join(dir, "custom-state.json")

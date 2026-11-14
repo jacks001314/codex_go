@@ -68,6 +68,7 @@ func TestVoiceHandoffAttributesAnalyticsAfterRealtimeClosesLikeRust(t *testing.T
 		startedAt.Add(time.Second),
 		1000,
 		0,
+		nil,
 		nil, nil, nil, nil, nil, nil,
 	)
 	assertVoiceSessionParam(t, waitForCodexTurnEvent(t, sink, turnID).EventParams.VoiceSessionID, "work-voice-123")

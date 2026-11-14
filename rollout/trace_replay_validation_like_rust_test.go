@@ -29,10 +29,10 @@ func TestReplayTraceBundleRequiresTerminatedCompletionMarkerLikeRust(t *testing.
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			if err := os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{"trace_id":"trace-1"}`), 0o600); err != nil {
+			if err := os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{"schema_version":2,"trace_id":"trace-1"}`), 0o600); err != nil {
 				t.Fatalf("WriteFile manifest error = %v", err)
 			}
-			if err := os.WriteFile(filepath.Join(dir, "trace.jsonl"), []byte(tc.trace), 0o600); err != nil {
+			if err := os.WriteFile(filepath.Join(dir, "trace.jsonl"), []byte(withTraceEventSchema(tc.trace)), 0o600); err != nil {
 				t.Fatalf("WriteFile trace error = %v", err)
 			}
 			reduced, err := ReplayTraceBundle(dir)
@@ -67,10 +67,10 @@ func TestReplayTraceBundleValidatesPayloadBodiesLikeRust(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			if err := os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{"trace_id":"trace-1"}`), 0o600); err != nil {
+			if err := os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{"schema_version":2,"trace_id":"trace-1"}`), 0o600); err != nil {
 				t.Fatalf("WriteFile manifest error = %v", err)
 			}
-			if err := os.WriteFile(filepath.Join(dir, "trace.jsonl"), []byte(event), 0o600); err != nil {
+			if err := os.WriteFile(filepath.Join(dir, "trace.jsonl"), []byte(withTraceEventSchema(event)), 0o600); err != nil {
 				t.Fatalf("WriteFile trace error = %v", err)
 			}
 			if !tc.missing {

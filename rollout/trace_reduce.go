@@ -14,6 +14,14 @@ import (
 
 const ReducedStateFileName = "state.json"
 
+// Trace bundles are replayable only by the exact binary that wrote them. The
+// Go reducer enforces the same on-disk schema pins as Rust #61199 instead of
+// attempting a cross-version migration.
+const (
+	traceManifestSchemaVersion = 2
+	traceRawEventSchemaVersion = 2
+)
+
 type TraceReduceOptions struct {
 	BundleDir string
 	Output    string
@@ -108,6 +116,9 @@ func ReplayTraceBundle(bundleDir string) (*ReducedTrace, error) {
 				break
 			}
 			continue
+		}
+		if err := validateTraceRawEventSchema(raw); err != nil {
+			return nil, err
 		}
 		// Rust #58172: a short write or copy can leave the entire marker except
 		// its final newline. Only the writer's complete record establishes clean
@@ -227,6 +238,31 @@ func validateTracePayload(path string) error {
 	return nil
 }
 
+func validateTraceRawEventSchema(raw map[string]any) error {
+	version, ok := traceSchemaVersion(raw["schema_version"])
+	if !ok || version != traceRawEventSchemaVersion {
+		return fmt.Errorf("unsupported trace event schema %v (expected %d). Run the exact Codex executable that recorded this bundle", raw["schema_version"], traceRawEventSchemaVersion)
+	}
+	return nil
+}
+
+func traceSchemaVersion(value any) (int, bool) {
+	switch typed := value.(type) {
+	case float64:
+		if typed != float64(int(typed)) {
+			return 0, false
+		}
+		return int(typed), true
+	case int:
+		return typed, true
+	case json.Number:
+		parsed, err := typed.Int64()
+		return int(parsed), err == nil
+	default:
+		return 0, false
+	}
+}
+
 func readTraceManifest(path string) (map[string]any, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -234,10 +270,14 @@ func readTraceManifest(path string) (map[string]any, error) {
 	}
 	manifest := map[string]any{}
 	if len(strings.TrimSpace(string(data))) == 0 {
-		return manifest, nil
+		return nil, fmt.Errorf("trace manifest is empty")
 	}
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		return nil, err
+	}
+	version, ok := traceSchemaVersion(manifest["schema_version"])
+	if !ok || version != traceManifestSchemaVersion {
+		return nil, fmt.Errorf("unsupported manifest schema %v (expected %d). Run the exact Codex executable that recorded this bundle", manifest["schema_version"], traceManifestSchemaVersion)
 	}
 	return manifest, nil
 }

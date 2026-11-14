@@ -314,6 +314,9 @@ type TurnStartParams struct {
 	// (Rust #57538 TurnInputRequest::user_item_uuid). It is never part of the
 	// app-server wire; in-process hosts set it directly.
 	UserItemUUID string `json:"-"`
+	// UsedDictation records the per-input provenance removed from Responses
+	// metadata before sampling (Rust #61215 codex_app_used_dictation).
+	UsedDictation *bool `json:"-"`
 	// UserInputExtensionData is host-only data delivered with this input's
 	// completion callback (Rust #59455). It never enters model input, the
 	// app-server wire, or persisted history.
@@ -598,6 +601,9 @@ type TurnSteerParams struct {
 	// UserItemUUID is the host-assigned UUID for this steer's Responses item
 	// (Rust #57538); it is never part of the app-server wire.
 	UserItemUUID string `json:"-"`
+	// UsedDictation records the steer's per-input provenance after the metadata
+	// key is removed before sampling (Rust #61215 codex_app_used_dictation).
+	UsedDictation *bool `json:"-"`
 	// UserInputExtensionData is host-only data delivered with this steer's
 	// user-message completion (Rust #59455). It is never model-visible or
 	// persisted.
