@@ -523,6 +523,10 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		buildCommit:         doctor.Version(),
 		realtimeSettings:    interactiveRemoteRealtimeSettings(endpoint, func() string { return state.CWD }),
 		listVoicesWithError: interactiveRemoteRealtimeVoices(endpoint),
+		// Rust #61172: the TUI owns the WebRTC peer connection and negotiates
+		// the call with this process's provider and credentials; the remote
+		// app-server only joins the existing call.
+		ownCall: clientOwnedVoiceCall(auth.DefaultCodexHome(), func() string { return state.CWD }, nil),
 		startSession: func(callCtx context.Context, params realtime.StartParams) error {
 			client, err := openRemoteSessionClient(callCtx, endpoint)
 			if err != nil {

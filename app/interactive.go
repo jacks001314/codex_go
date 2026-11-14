@@ -1722,8 +1722,11 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		buildCommit:      doctor.Version(),
 		realtimeSettings: voiceSettings,
 		listVoices:       voiceVoices,
-		startSession:     voiceStart,
-		stopSession:      voiceStop,
+		// Rust #61172: the embedded TUI also owns the peer connection, so the
+		// in-process app-server joins the call instead of creating one.
+		ownCall:      clientOwnedVoiceCall(auth.DefaultCodexHome(), func() string { return state.CWD }, nil),
+		startSession: voiceStart,
+		stopSession:  voiceStop,
 	})
 	// Rust #47417: probe the terminal before the first frame so `auto` can keep
 	// native scrollback for Apple Terminal over SSH. The probe runs once per

@@ -313,6 +313,22 @@ func createRealtimeWebRTCCall(ctx context.Context, backend *TransportBackendConf
 	return &realtimeWebRTCCall{SDP: string(answer), CallID: callID}, nil
 }
 
+// CreateWebRTCCall negotiates a realtime WebRTC call and returns the provider's
+// SDP answer together with the call id an observer attaches to (Rust #61172:
+// the TUI owns the peer connection). The caller supplies the backend
+// credentials it already resolved; the app-server later joins the same call
+// through the existingCall transport.
+func CreateWebRTCCall(ctx context.Context, backend *TransportBackendConfig, config *SessionConfig) (string, string, error) {
+	if backend == nil || config == nil {
+		return "", "", fmt.Errorf("create realtime call: missing backend or session configuration")
+	}
+	call, err := createRealtimeWebRTCCall(ctx, backend, config)
+	if err != nil {
+		return "", "", err
+	}
+	return call.SDP, call.CallID, nil
+}
+
 func realtimeCallBody(baseURL string, config *SessionConfig) ([]byte, string, error) {
 	if config.Voice == "" && strings.Contains(baseURL, "/backend-api") {
 		clone := *config

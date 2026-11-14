@@ -46,6 +46,11 @@ type voiceRuntimeOptions struct {
 	// startSession asks the app-server to start the thread's realtime session
 	// with the helper's offer.
 	startSession func(ctx context.Context, params realtime.StartParams) error
+	// ownCall negotiates the WebRTC call from this process and returns the
+	// start request that attaches the app-server to it, plus the SDP answer the
+	// helper must apply (Rust #61172 client-created calls). When set it replaces
+	// startSession's server-side negotiation.
+	ownCall func(ctx context.Context, threadID string, offerSDP string, settings VoiceSettings) (realtime.StartParams, string, error)
 	// stopSession ends the thread's realtime session.
 	stopSession func(ctx context.Context, threadID string) error
 }
@@ -79,6 +84,12 @@ type voiceRuntime struct {
 	mu       sync.Mutex
 	session  *voicehost.StartedSession
 	threadID string
+	// generation invalidates startup attempts that were still negotiating when
+	// voice stopped, and pendingAttempt keeps only the newest start eligible to
+	// attach (Rust #61172: canceling or restarting voice attaches only the new
+	// attempt, including a result that was already queued).
+	generation     uint64
+	pendingAttempt uint64
 }
 
 func newVoiceRuntime(options voiceRuntimeOptions) *voiceRuntime {
@@ -93,6 +104,7 @@ var startVoiceSession = func(ctx context.Context, options voicehost.SessionOptio
 
 // startCmd launches the helper and posts its offer for one startup attempt.
 func (r *voiceRuntime) startCmd(threadID string, attemptID uint64) bubbletea.Cmd {
+	generation := r.beginStartAttempt(attemptID)
 	return func() bubbletea.Msg {
 		threadID = strings.TrimSpace(threadID)
 		if threadID == "" {
@@ -135,6 +147,47 @@ func (r *voiceRuntime) startCmd(threadID string, attemptID uint64) bubbletea.Cmd
 		if err != nil {
 			return voiceStartFailureMessage(attemptID, err)
 		}
+		if r.options.ownCall != nil {
+			// Rust #61172: the TUI negotiates the media call itself and then
+			// attaches the app-server through existingCall. The provider's
+			// answer goes to the helper before the observer joins, so a failed
+			// attachment retires the helper instead of leaving it half open.
+			params, answer, err := r.options.ownCall(ctx, threadID, started.OfferSDP, settings)
+			if err != nil {
+				started.Handle.Close()
+				return codextea.VoiceAnswerResultMsg{
+					AttemptID: attemptID,
+					Err:       err,
+					Cause:     "app_server_request",
+					Message:   "Failed to start voice mode: " + err.Error(),
+				}
+			}
+			if !r.acceptsStartAttempt(generation, attemptID) {
+				// A retired attempt must not touch the helper or the observer:
+				// Rust drops the queued call result after a stop (Rust #61172).
+				started.Handle.Close()
+				return voiceSupersededStart(attemptID)
+			}
+			if result := voiceApplyHelperAnswer(attemptID, started, answer); result != nil {
+				started.Handle.Close()
+				return *result
+			}
+			if err := r.options.startSession(ctx, params); err != nil {
+				started.Handle.Close()
+				return codextea.VoiceAnswerResultMsg{
+					AttemptID: attemptID,
+					Err:       err,
+					Cause:     "app_server_request",
+					Message:   "Failed to start voice mode: " + err.Error(),
+				}
+			}
+			if !r.acceptsStartAttempt(generation, attemptID) {
+				started.Handle.Close()
+				return voiceSupersededStart(attemptID)
+			}
+			r.setSession(started, threadID)
+			return codextea.VoiceHelperAttachedMsg{AttemptID: attemptID}
+		}
 		params, err := r.startParams(ctx, threadID, started.OfferSDP, settings)
 		if err != nil {
 			started.Handle.Close()
@@ -144,6 +197,10 @@ func (r *voiceRuntime) startCmd(threadID string, attemptID uint64) bubbletea.Cmd
 				Cause:     "app_server_request",
 				Message:   "Failed to start voice mode: " + err.Error(),
 			}
+		}
+		if !r.acceptsStartAttempt(generation, attemptID) {
+			started.Handle.Close()
+			return voiceSupersededStart(attemptID)
 		}
 		if err := r.options.startSession(ctx, params); err != nil {
 			// The app-server never accepted the offer, so the helper is
@@ -156,8 +213,46 @@ func (r *voiceRuntime) startCmd(threadID string, attemptID uint64) bubbletea.Cmd
 				Message:   "Failed to start voice mode: " + err.Error(),
 			}
 		}
+		if !r.acceptsStartAttempt(generation, attemptID) {
+			started.Handle.Close()
+			return voiceSupersededStart(attemptID)
+		}
 		r.setSession(started, threadID)
 		return codextea.VoiceHelperAttachedMsg{AttemptID: attemptID}
+	}
+}
+
+// beginStartAttempt records the generation a startup belongs to and marks it
+// as the only attempt allowed to attach.
+func (r *voiceRuntime) beginStartAttempt(attemptID uint64) uint64 {
+	if r == nil {
+		return 0
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.pendingAttempt = attemptID
+	return r.generation
+}
+
+// acceptsStartAttempt reports whether one startup may still attach: voice was
+// not stopped since it began and no newer attempt replaced it.
+func (r *voiceRuntime) acceptsStartAttempt(generation, attemptID uint64) bool {
+	if r == nil {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.generation == generation && r.pendingAttempt == attemptID
+}
+
+// voiceSupersededStart reports a startup whose attempt lost its claim. The TUI
+// ignores results for retired attempts; the helper is already closed.
+func voiceSupersededStart(attemptID uint64) codextea.VoiceAnswerResultMsg {
+	return codextea.VoiceAnswerResultMsg{
+		AttemptID: attemptID,
+		Err:       errors.New("voice start was superseded"),
+		Cause:     "connection_unknown",
+		Message:   "Voice conversation did not start",
 	}
 }
 
@@ -227,27 +322,44 @@ func (r *voiceRuntime) applyAnswerCmd(threadID string, attemptID uint64, answer 
 				Message:   "Failed to connect voice mode: voice helper is not running",
 			}
 		}
-		if err := session.Handle.ApplyAnswerSDP(answer); err != nil {
-			// The failed control send is less specific than the WebRTC error the
-			// actor stored; Rust keeps the stored error (realtime.rs #52756).
-			if cause, message, ok := session.Handle.TakeError(); ok {
-				return codextea.VoiceAnswerResultMsg{
-					AttemptID: attemptID,
-					Err:       err,
-					Cause:     voiceFailureCause(cause),
-					Message:   "Voice conversation failed: " + message,
-				}
-			}
-			cause := voiceFailureCause(err)
-			return codextea.VoiceAnswerResultMsg{
-				AttemptID: attemptID,
-				Err:       err,
-				Cause:     cause,
-				Message:   "Failed to connect voice mode: " + err.Error(),
-			}
+		if result := voiceApplyHelperAnswer(attemptID, session, answer); result != nil {
+			return *result
 		}
 		return codextea.VoiceAnswerResultMsg{AttemptID: attemptID}
 	}
+}
+
+// applyVoiceAnswerSDP applies one negotiated answer to the helper. Tests
+// replace it because a faithful handle requires the packaged helper process.
+var applyVoiceAnswerSDP = func(handle *voicehost.SessionHandle, answer string) error {
+	return handle.ApplyAnswerSDP(answer)
+}
+
+// voiceApplyHelperAnswer applies a negotiated answer and reports a failure in
+// the shape the voice widget expects. The failed control send is less specific
+// than the WebRTC error the actor stored, so the stored error wins (Rust
+// realtime.rs #52756).
+func voiceApplyHelperAnswer(attemptID uint64, session *voicehost.StartedSession, answer string) *codextea.VoiceAnswerResultMsg {
+	if session == nil || strings.TrimSpace(answer) == "" {
+		return nil
+	}
+	if err := applyVoiceAnswerSDP(session.Handle, answer); err != nil {
+		if cause, message, ok := session.Handle.TakeError(); ok {
+			return &codextea.VoiceAnswerResultMsg{
+				AttemptID: attemptID,
+				Err:       err,
+				Cause:     voiceFailureCause(cause),
+				Message:   "Voice conversation failed: " + message,
+			}
+		}
+		return &codextea.VoiceAnswerResultMsg{
+			AttemptID: attemptID,
+			Err:       err,
+			Cause:     voiceFailureCause(err),
+			Message:   "Failed to connect voice mode: " + err.Error(),
+		}
+	}
+	return nil
 }
 
 // voiceStartFailureMessage classifies a helper startup failure, preserving the
@@ -297,6 +409,10 @@ func (r *voiceRuntime) close(notifyServer bool) error {
 	if r == nil {
 		return nil
 	}
+	r.mu.Lock()
+	r.generation++
+	r.pendingAttempt = 0
+	r.mu.Unlock()
 	session, threadID := r.takeSession()
 	if session != nil {
 		session.Handle.Close()
@@ -349,6 +465,7 @@ func (r *voiceRuntime) setSession(session *voicehost.StartedSession, threadID st
 	defer r.mu.Unlock()
 	r.session = session
 	r.threadID = threadID
+	r.pendingAttempt = 0
 }
 
 func (r *voiceRuntime) takeSession() (*voicehost.StartedSession, string) {
