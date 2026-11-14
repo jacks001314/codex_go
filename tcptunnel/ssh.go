@@ -121,7 +121,7 @@ func oauthBearer(token string) (string, error) {
 	if !valid {
 		return "", errors.New("invalid OAuth access token")
 	}
-	return CredentialBearer.Header(token)
+	return bearerHeader(token)
 }
 
 // RunSSHProxy relays one SSH session over HTTP/3 CONNECT. The access token is

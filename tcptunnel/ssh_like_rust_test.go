@@ -11,7 +11,6 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/base64"
 
 	"io"
 	"net"
@@ -307,71 +306,49 @@ func TestSSHReportsRejectedConnectByStatusOnly(t *testing.T) {
 	}
 }
 
-const (
-	ersJWTHeader = "eyJ0eXAiOiJjY2EtdHVubmVsK2p3dCJ9"
-	ersJWTv1     = ersJWTHeader + ".eyJ2ZXIiOjF9.fixture"
-	ersJWTv2     = ersJWTHeader + ".eyJ2ZXIiOjJ9.fixture"
-)
+// Mirrors Rust #61428: a Portals listener requires OAuth CONNECT metadata and
+// rejects a missing or non-OAuth declaration before reading any credential.
+func TestPortalsListenerRequiresOAuthMetadataLikeRust(t *testing.T) {
+	for _, metadata := range []string{"[]", `[["x-portals-auth-mode","bearer"]]`} {
+		input := newControlInput(bufioReader(metadata+"\nopaque-token\n"), true, PublicGateway)
+		if got := <-input.metadata; got.err == nil || !strings.Contains(got.err.Error(), "Portals requires OAuth CONNECT metadata") {
+			t.Fatalf("metadata = %#v, want the OAuth requirement", got)
+		}
+		if token, ok := <-input.tokens; ok {
+			t.Fatalf("credential read after rejection: %#v", token)
+		}
+	}
+	// A gateway request that supplies no metadata at all fails the same way.
+	input := newControlInput(bufioReader("opaque-token\n"), false, PublicGateway)
+	if got := <-input.metadata; got.err == nil || !strings.Contains(got.err.Error(), "Portals requires OAuth CONNECT metadata") {
+		t.Fatalf("metadata = %#v, want the OAuth requirement", got)
+	}
+}
 
-// TestPortalsListenerTunnelVersionsLikeRust covers startup and renewal (#61260).
-func TestPortalsListenerTunnelVersionsLikeRust(t *testing.T) {
-	for _, first := range []string{ersJWTv1, ersJWTv2} {
-		for _, renewed := range []string{ersJWTv1, ersJWTv2} {
-			input := newControlInput(bufioReader(first+"\n"+renewed+"\n"), false, PublicGateway)
-			if metadata := <-input.metadata; metadata.err != nil {
-				t.Fatal(metadata.err)
-			}
-			for _, want := range []string{first, renewed} {
-				got := <-input.tokens
-				if got.err != nil || got.auth != "Bearer "+want {
-					t.Fatalf("token = %#v, want fixture %q", got, want)
-				}
-			}
+// Mirrors Rust #61428: OAuth metadata satisfies the gateway contract, so every
+// token is an opaque bearer, including values that look like ERS tunnel JWTs.
+func TestPortalsListenerAcceptsOpaqueBearerWithOAuthMetadataLikeRust(t *testing.T) {
+	tokens := []string{"opaque-token", "header.claims.signature", "a.b"}
+	input := newControlInput(bufioReader(`[["x-portals-auth-mode","oauth"]]`+"\n"+strings.Join(tokens, "\n")+"\n"), true, PublicGateway)
+	if got := <-input.metadata; got.err != nil {
+		t.Fatal(got.err)
+	}
+	for _, want := range tokens {
+		got := <-input.tokens
+		if got.err != nil || got.auth != "Bearer "+want {
+			t.Fatalf("token = %#v, want %q as an opaque bearer", got, want)
 		}
 	}
 }
 
-// TestTunnelCredentialRejectsMalformedVersionsLikeRust keeps invalid claims rejected.
-func TestTunnelCredentialRejectsMalformedVersionsLikeRust(t *testing.T) {
-	for _, claims := range []string{`{"ver":3}`, `{"ver":"1"}`, `{"ver":"2"}`, `{"ver":1.0}`, `{"ver":2e0}`, `{}`, `null`, `invalid-json`} {
-		token := ersJWTHeader + "." + base64.RawURLEncoding.EncodeToString([]byte(claims)) + ".fixture"
-		for _, mode := range []TunnelCredential{CredentialBearer, CredentialErsTunnelJWT} {
-			if _, err := mode.Header(token); err == nil {
-				t.Errorf("accepted claims %s in mode %v", claims, mode)
-			}
-		}
+// Mirrors Rust #61428: only known Portals gateways require the OAuth metadata.
+func TestOtherOriginsDoNotRequireOAuthMetadataLikeRust(t *testing.T) {
+	input := newControlInput(bufioReader("[]\nopaque-token\n"), true, "https://proxy.example")
+	if got := <-input.metadata; got.err != nil {
+		t.Fatal(got.err)
 	}
-	for _, token := range []string{ersJWTv1, ersJWTv2} {
-		parts := strings.Split(token, ".")
-		for _, invalid := range []string{parts[0] + "." + parts[1], parts[0] + "." + parts[1] + ".", token + ".extra"} {
-			if _, err := CredentialErsTunnelJWT.Header(invalid); err == nil {
-				t.Errorf("accepted malformed fixture %q", invalid)
-			}
-		}
-	}
-	for _, invalid := range []string{"opaque", "malformed.parts", "eyJ0eXAiOiJKV1QifQ.eyJ2ZXIiOjF9.fixture"} {
-		if _, err := CredentialErsTunnelJWT.Header(invalid); err == nil {
-			t.Errorf("accepted non-ERS fixture %q", invalid)
-		}
-	}
-}
-
-func TestOtherBearerModesAcceptErsVersionsLikeRust(t *testing.T) {
-	unrelated := "eyJ0eXAiOiJKV1QifQ.eyJ2ZXIiOjF9.fixture"
-	for _, tc := range []struct{ origin, metadata string }{
-		{PublicGateway, `[["x-portals-auth-mode","oauth"]]`},
-		{"https://proxy.example", "[]"},
-	} {
-		input := newControlInput(bufioReader(tc.metadata+"\n"+unrelated+"\n"+ersJWTv1+"\n"+ersJWTv2+"\n"), true, tc.origin)
-		if metadata := <-input.metadata; metadata.err != nil {
-			t.Fatal(metadata.err)
-		}
-		for _, want := range []string{unrelated, ersJWTv1, ersJWTv2} {
-			got := <-input.tokens
-			if got.err != nil || got.auth != "Bearer "+want {
-				t.Fatalf("token = %#v, want fixture %q", got, want)
-			}
-		}
+	if got := <-input.tokens; got.err != nil || got.auth != "Bearer opaque-token" {
+		t.Fatalf("token = %#v", got)
 	}
 }
 
