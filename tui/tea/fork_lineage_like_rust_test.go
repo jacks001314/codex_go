@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"codex_go/protocol"
 	codextui "codex_go/tui"
 )
 
@@ -40,5 +41,24 @@ func TestResumeShowsTargetForkLineageLikeRust(t *testing.T) {
 	}, "/repo")
 	if content := model.transcriptContent(); !strings.Contains(content, "Thread forked from thread-missing") {
 		t.Fatalf("id-only lineage missing: %q", content)
+	}
+}
+
+// A thread/started notification carries the child's own fork parent (Rust
+// #61183), and the line is painted once even when a resume summary already
+// showed it.
+func TestThreadStartedCarriesForkParentOnceLikeRust(t *testing.T) {
+	model := NewModel(codextui.NewState(nil), Options{Width: 120, Height: 40})
+	model.State.SetThreadID("thread-old")
+
+	started := protocol.ThreadEvent{
+		Type:     "thread.started",
+		ThreadID: "thread-child",
+		Metadata: ThreadLineageMetadata{ForkedFromID: "thread-parent"},
+	}
+	model.Update(ThreadEventMsg{Event: started})
+	model.Update(ThreadEventMsg{Event: started})
+	if count := strings.Count(model.transcriptContent(), "Thread forked from thread-parent"); count != 1 {
+		t.Fatalf("fork line count = %d, want 1: %q", count, model.transcriptContent())
 	}
 }

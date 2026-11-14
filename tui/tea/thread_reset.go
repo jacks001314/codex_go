@@ -55,6 +55,9 @@ func (m *Model) resetThreadScopedState() {
 	m.completedThreadIDs = map[string]bool{}
 	m.Transcript.startedThreadIDs = map[string]bool{}
 	m.Transcript.completedThreadIDs = map[string]bool{}
+	// The fork line belongs to the transcript being discarded (#61183).
+	m.lineageThreadID = ""
+	m.lineageForkedFrom = ""
 	m.lastTurnError = ""
 	// The previous thread's Daybreak preference is thread-scoped (Rust #49861).
 	m.daybreakEnabled = false

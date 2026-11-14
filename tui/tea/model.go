@@ -870,6 +870,13 @@ type ThreadEventMsg struct {
 	Event protocol.ThreadEvent
 }
 
+// ThreadLineageMetadata carries the fork parent of a thread/started
+// notification (Rust #61183). The event's ThreadID names the child; the title
+// is resolved separately because the notification only carries the parent id.
+type ThreadLineageMetadata struct {
+	ForkedFromID string
+}
+
 type ThreadScopedEventMsg struct {
 	ThreadID string
 	Event    protocol.ThreadEvent
@@ -2143,6 +2150,11 @@ type Model struct {
 	// replacement is installed; a notification already queued for it must be
 	// dropped here so a late thread/started cannot switch the view back.
 	outgoingThreadID string
+	// lineageThreadID and lineageForkedFrom remember the fork line painted for
+	// the displayed thread, so a thread/started notification that follows a
+	// resume summary does not paint it twice (Rust #61183).
+	lineageThreadID   string
+	lineageForkedFrom string
 	// providerError carries the provider admission failure that kept the chat
 	// readable but read-only (Rust #58202), and providerErrorRolloutPath is the
 	// frozen conversation's saved history path used by the continuation draft.
@@ -8431,6 +8443,9 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 			m.resetThreadScopedState()
 		}
 		m.switchThreadID(event.ThreadID)
+		if metadata, ok := event.Metadata.(ThreadLineageMetadata); ok {
+			m.insertThreadLineageFor(event.ThreadID, metadata.ForkedFromID, "")
+		}
 		// The startup warnings entry was waiting for a thread id (Rust
 		// pending_header).
 		m.renderStartupWarnings()
@@ -10884,18 +10899,37 @@ func (m *Model) insertSessionHeader() {
 // conversation (Rust session_flow.rs, #61183). It reads this selection's own
 // summary, so another thread's fork parent cannot leak across a switch.
 func (m *Model) insertThreadLineage(summary *codextui.SessionSummary) {
-	if m == nil || m.State == nil || summary == nil {
+	if summary == nil {
 		return
 	}
-	forked := strings.TrimSpace(summary.ForkedFromID)
+	m.insertThreadLineageFor(summary.ThreadID, summary.ForkedFromID, summary.ForkParentTitle)
+}
+
+// insertThreadLineageFor paints at most one fork line for the displayed
+// thread. A resume summary and the thread/started notification that follows it
+// both describe the same parent; the second one is skipped.
+func (m *Model) insertThreadLineageFor(threadID string, forkedFromID string, parentTitle string) {
+	if m == nil || m.State == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		threadID = strings.TrimSpace(m.State.ThreadID)
+	}
+	forked := strings.TrimSpace(forkedFromID)
 	if forked == "" {
 		return
 	}
-	line := chatwidget.ForkedThreadEventLine(forked, strings.TrimSpace(summary.ForkParentTitle))
+	if m.lineageThreadID == threadID && m.lineageForkedFrom == forked {
+		return
+	}
+	line := chatwidget.ForkedThreadEventLine(forked, strings.TrimSpace(parentTitle))
 	if strings.TrimSpace(line) == "" {
 		return
 	}
 	m.insertHistoryMessageAt(0, []string{line}, []string{line})
+	m.lineageThreadID = threadID
+	m.lineageForkedFrom = forked
 }
 
 // startupSessionTooltip resolves the non-first-event session header tip (Rust's

@@ -5683,7 +5683,13 @@ func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMes
 				return nil
 			}
 			c.noteNotificationThreadID(threadID)
-			c.send(codextea.ThreadEventMsg{Event: protocol.ThreadStarted(threadID)})
+			event := protocol.ThreadStarted(threadID)
+			if payload.Thread.ForkedFromID != nil {
+				// Rust #61183: a thread/started notification supplies the
+				// target thread's own fork parent.
+				event.Metadata = codextea.ThreadLineageMetadata{ForkedFromID: strings.TrimSpace(*payload.Thread.ForkedFromID)}
+			}
+			c.send(codextea.ThreadEventMsg{Event: event})
 		}
 	case appserver.NotificationTurnStarted:
 		var payload appserver.TurnStartedNotification

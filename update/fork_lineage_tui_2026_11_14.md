@@ -11,8 +11,8 @@ Rust `ThreadSessionState::set_fork_parent` 在 `thread/read` 重建和 `ThreadSt
 回归：
 
 - `tui/session_source_lineage_like_rust_test.go`：record 与 app-server thread 都带出自己的 `ForkedFromID`，无父线程为空。
-- `tui/tea/fork_lineage_like_rust_test.go`：恢复 fork 会话显示 `• Thread forked from Parent chat (thread-parent)`；切到无父线程的会话后 fork 行消失；父线程不可读时显示 id-only 行。
+- `tui/tea/fork_lineage_like_rust_test.go`：恢复 fork 会话显示 `• Thread forked from Parent chat (thread-parent)`；切到无父线程的会话后 fork 行消失；父线程不可读时显示 id-only 行；`thread/started` 携带父线程且重复通知只画一次。
 
-验证：`go vet ./tui ./tui/tea ./app ./appserver` 退出 0；`go test ./tui -count=1`（10.0s）、`go test ./tui/tea -count=1`（47.4s）、`go test ./app -count=1`（40.4s）通过。日志见 `fork_lineage_tui_2026_11_14.log`。
+验证：`go vet ./tui ./tui/tea ./app ./appserver` 退出 0；`go test ./tui -count=1`（9.2s）、`go test ./tui/tea -count=1`（47.4s）、`go test ./app -count=1`（39.6s）通过。日志见 `fork_lineage_tui_2026_11_14.log`。
 
-仍未完成：仅通过 `thread/started` 通知发现、没有经过恢复/分叉摘要的会话不会插入 fork 行；这不再造成父指针污染（tea 模型不缓存跨线程的父字段），但外部 fork 的展示仍待接线。
+`thread/started` 通知现携带目标线程的 `ForkedFromID`（`ThreadLineageMetadata`），tea 模型在切换后插入 id-only fork 行，并与恢复摘要画出的行去重；父线程标题只在恢复/分叉摘要路径解析。

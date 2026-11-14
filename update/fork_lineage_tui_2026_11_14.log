@@ -1,11 +1,11 @@
 == go vet ./tui ./tui/tea ./app ./appserver ==
 exit=0
 == go test ./tui -count=1 ==
-ok  	codex_go/tui	10.024s
+ok  	codex_go/tui	9.200s
 exit=0
 == go test ./tui/tea -count=1 ==
-ok  	codex_go/tui/tea	47.411s
+ok  	codex_go/tui/tea	47.443s
 exit=0
 == go test ./app -count=1 ==
-ok  	codex_go/app	40.412s
+ok  	codex_go/app	39.561s
 exit=0
