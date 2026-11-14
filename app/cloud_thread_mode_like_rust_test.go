@@ -18,7 +18,84 @@ import (
 	"codex_go/appserverdaemon"
 	"codex_go/cli"
 	codextui "codex_go/tui"
+	codextea "codex_go/tui/tea"
 )
+
+// Rust thread_routing.rs: a Cloud conversation rejects `!` shell commands
+// before thread/shellCommand is sent, so the next prompt can proceed.
+func TestCloudUserShellCommandRejectedLikeRust(t *testing.T) {
+	run := interactiveRemoteUserShellCommand(context.Background(), nil, ThreadParamsModeCloud)
+	message, ok := run("thread-1", "ls")().(codextea.UserShellCommandResultMsg)
+	if !ok {
+		t.Fatal("shell command did not report a result message")
+	}
+	if message.Err == nil || message.Err.Error() != cloudUserShellCommandUnavailableMessage {
+		t.Fatalf("error = %v, want %q", message.Err, cloudUserShellCommandUnavailableMessage)
+	}
+	if message.ThreadID != "thread-1" || message.Command != "ls" {
+		t.Fatalf("result = %#v", message)
+	}
+}
+
+// A non-Cloud conversation sends the command through thread/shellCommand on
+// the app server, matching Rust's RunUserShellCommand arm.
+func TestRemoteUserShellCommandSendsThreadShellCommandLikeRust(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	paramsCh := make(chan appserver.ShellCommandParams, 1)
+	serverErrs := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			remoteTUITestSendErr(serverErrs, err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		for {
+			req, err := remoteTUITestReadRequest(ctx, conn)
+			if err != nil {
+				if websocket.CloseStatus(err) == websocket.StatusNormalClosure || ctx.Err() != nil {
+					return
+				}
+				remoteTUITestSendErr(serverErrs, err)
+				return
+			}
+			switch req.Method {
+			case string(appserver.MethodInitialize):
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
+			case string(appserver.MethodThreadShellCommand):
+				var params appserver.ShellCommandParams
+				if err := json.Unmarshal(req.Params, &params); err != nil {
+					remoteTUITestSendErr(serverErrs, err)
+					return
+				}
+				paramsCh <- params
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
+			default:
+				remoteTUITestSendErr(serverErrs, fmt.Errorf("unexpected method %s", req.Method))
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	endpoint := appserverdaemon.NewWebSocketEndpoint("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	run := interactiveRemoteUserShellCommand(ctx, endpoint, ThreadParamsModeRemote)
+	message, ok := run("thread-shell", "echo hi")().(codextea.UserShellCommandResultMsg)
+	if !ok || message.Err != nil {
+		t.Fatalf("shell command result = %#v (ok=%v)", message, ok)
+	}
+	select {
+	case params := <-paramsCh:
+		if params.ThreadID != "thread-shell" || params.Command != "echo hi" {
+			t.Fatalf("thread/shellCommand params = %#v", params)
+		}
+	case err := <-serverErrs:
+		t.Fatalf("server error: %v", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("thread/shellCommand was not sent")
+	}
+}
 
 // Rust #57267 (codex-rs/tui/src/app_server_session.rs:360-402): the transport
 // selects ThreadParamsMode, Cloud hands settings to the server, and only Cloud

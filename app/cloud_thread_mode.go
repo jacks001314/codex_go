@@ -73,6 +73,10 @@ func (m ThreadParamsMode) UsesRemoteWorkspace() bool {
 // (app_server_session.rs:1196).
 const cloudThreadForkUnsupportedMessage = "Cloud conversations cannot be forked in the TUI yet."
 
+// cloudUserShellCommandUnavailableMessage is the exact Rust rejection text for
+// RunUserShellCommand in a Cloud conversation (thread_routing.rs).
+const cloudUserShellCommandUnavailableMessage = "Shell commands starting with ! are unavailable in Cloud conversations."
+
 // cloudThreadForkError mirrors the fork guard at app_server_session.rs:1195.
 func cloudThreadForkError(mode ThreadParamsMode) error {
 	if mode == ThreadParamsModeCloud {

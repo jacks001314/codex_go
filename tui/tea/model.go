@@ -184,6 +184,20 @@ func probeTerminalColorsForTUI(input io.Reader, output io.Writer) io.Reader {
 
 type SubmitRequestFunc func(request SubmitRequest) bubbletea.Cmd
 
+// UserShellCommandFunc runs one `!` shell command for a conversation. The
+// returned command performs the host call and reports acceptance or failure
+// through UserShellCommandResultMsg; the command's own turn/item events arrive
+// through the host's normal event stream (Rust #61216 thread/shellCommand).
+type UserShellCommandFunc func(threadID string, command string) bubbletea.Cmd
+
+// UserShellCommandResultMsg reports the outcome of a UserShellCommandFunc.
+// A nil Err means the host accepted the command and its events will follow.
+type UserShellCommandResultMsg struct {
+	ThreadID string
+	Command  string
+	Err      error
+}
+
 type SteerRequestFunc func(request SubmitRequest, clientID string) error
 
 type InterruptFunc func() bubbletea.Cmd
@@ -1342,6 +1356,7 @@ type Options struct {
 	CollapseTurnDetails       *bool
 	OnSubmit                  SubmitFunc
 	OnSubmitRequest           SubmitRequestFunc
+	OnUserShellCommand        UserShellCommandFunc
 	OnSteerRequest            SteerRequestFunc
 	OnInterrupt               InterruptFunc
 	OnInterruptMCPStartup     InterruptFunc
@@ -2606,6 +2621,7 @@ type Model struct {
 	petLoadPending        string
 	onSubmit              SubmitFunc
 	onSubmitRequest       SubmitRequestFunc
+	onUserShellCommand    UserShellCommandFunc
 	onSteerRequest        SteerRequestFunc
 	onInterrupt           InterruptFunc
 	onInterruptMCPStartup InterruptFunc
@@ -3490,6 +3506,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		tuiPet:                           normalizePetIDTea(options.TUIPet),
 		onSubmit:                         options.OnSubmit,
 		onSubmitRequest:                  options.OnSubmitRequest,
+		onUserShellCommand:               options.OnUserShellCommand,
 		onSteerRequest:                   options.OnSteerRequest,
 		onInterrupt:                      options.OnInterrupt,
 		onInterruptMCPStartup:            options.OnInterruptMCPStartup,
@@ -4381,6 +4398,8 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 	case SteerCommittedMsg:
 		m.commitPendingSteers(msg.Count)
 		return m, nil
+	case UserShellCommandResultMsg:
+		return m, m.applyUserShellCommandResult(msg)
 	case MCPStartupUpdateMsg:
 		return m, m.applyMCPStartupUpdate(msg)
 	case StartupConfigWarningMsg:
@@ -7075,6 +7094,12 @@ func (m *Model) submitRequest(request SubmitRequest, parseCommand bool) bubblete
 			return m.applyCommand(invocation)
 		}
 	}
+	// Rust input_submission.rs: a leading `!` in shell mode runs a local shell
+	// command instead of starting a model turn. Literal `!` text (a deleted
+	// prefix or a pasted leading space) keeps the ordinary prompt path.
+	if m.userShellCommandRequest(request) {
+		return m.submitUserShellCommand(request)
+	}
 	if strings.TrimSpace(request.CyberAccessProgram) == "" {
 		program, err := m.cyberAccessProgramForTurn()
 		if err != nil {
@@ -7142,6 +7167,69 @@ func slashInvocationDispatchable(invocation *codextui.CommandInvocation) bool {
 	return chatwidget.CommandSupportsInlineArgs(invocation.Command)
 }
 
+// userShellCommandRequest reports whether request is a `!` shell command the
+// host can run, as opposed to literal text that only starts with `!`.
+func (m *Model) userShellCommandRequest(request SubmitRequest) bool {
+	return m != nil && m.onUserShellCommand != nil && !request.LiteralInput &&
+		strings.HasPrefix(strings.TrimSpace(request.Prompt), "!")
+}
+
+// submitUserShellCommand mirrors Rust's submit_shell_command_with_history: an
+// empty command shows the help hint, a real command owns the pending turn
+// receipt until turn/started, and the full text joins prompt history.
+func (m *Model) submitUserShellCommand(request SubmitRequest) bubbletea.Cmd {
+	if m == nil || m.State == nil || m.onUserShellCommand == nil {
+		return nil
+	}
+	text := strings.TrimSpace(request.Prompt)
+	command := strings.TrimSpace(strings.TrimPrefix(text, "!"))
+	if command == "" {
+		m.applyHistoryCell(historycell.NewInfoEvent(chatwidget.UserShellCommandHelpTitle, chatwidget.UserShellCommandHelpHint))
+		return nil
+	}
+	threadID := strings.TrimSpace(m.State.ThreadID)
+	if threadID == "" {
+		m.addErrorHistoryMessage("'!' is unavailable before the session starts.")
+		return nil
+	}
+	// Rust prepare_local_op_submission: the shell command owns the next turn
+	// receipt, so queued input waits for it and /copy stops targeting the last
+	// assistant response.
+	m.statusCopyTargets = nil
+	m.userTurnPendingStart = true
+	m.Transcript.lastTurnError = ""
+	m.setStatus("running")
+	m.notice = ""
+	m.inputHistory = append(m.inputHistory, text)
+	m.inputHistoryElements = append(m.inputHistoryElements, cloneComposerTextElements(request.TextElements))
+	m.inputHistoryBash = append(m.inputHistoryBash, true)
+	m.resetInputHistoryNavigation()
+	return m.onUserShellCommand(threadID, command)
+}
+
+// applyUserShellCommandResult handles the host's answer for a `!` command. A
+// rejection (for example a Cloud conversation) clears the pending start so the
+// next prompt can run, shows the error, and drains the queue like Rust's
+// reject_user_shell_command.
+func (m *Model) applyUserShellCommandResult(msg UserShellCommandResultMsg) bubbletea.Cmd {
+	if m == nil || m.State == nil || msg.Err == nil {
+		return nil
+	}
+	if threadID := strings.TrimSpace(msg.ThreadID); threadID != "" && threadID != strings.TrimSpace(m.State.ThreadID) {
+		return nil
+	}
+	message := strings.TrimSpace(msg.Err.Error())
+	if message == "" {
+		message = "Shell command failed."
+	}
+	m.userTurnPendingStart = false
+	m.setStatus("idle")
+	m.addErrorHistoryMessage(message)
+	m.notice = ""
+	m.refreshTranscript()
+	return m.submitNextQueued()
+}
+
 func (m *Model) queueComposer(parseCommand bool) bubbletea.Cmd {
 	if m == nil {
 		return nil
@@ -7196,6 +7284,11 @@ func (m *Model) steerComposer() bubbletea.Cmd {
 // steerComposerWithSource steers the running turn and records why the input was
 // sent (Rust #60462).
 func (m *Model) steerComposerWithSource(source SubmitSource) bubbletea.Cmd {
+	if m != nil && m.composerPrefix == composerPrefixShell && m.onUserShellCommand != nil {
+		// Rust input_submission.rs runs `!` commands as a user shell submission
+		// regardless of the key that would otherwise steer the running turn.
+		return m.submitComposerWithSource(source)
+	}
 	if m == nil || m.onSteerRequest == nil {
 		return m.queueComposer(true)
 	}

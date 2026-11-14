@@ -40,6 +40,158 @@ type threadShellCommandRun struct {
 	RunConfig    *appTurnRunConfig
 }
 
+// LocalUserShellCommandStart describes the item an embedder paints before a
+// local user shell command runs. The embedded TUI has no app-server round trip
+// to emit thread/shellCommand notifications, so it mirrors the same item here.
+type LocalUserShellCommandStart struct {
+	ItemID      string
+	ProcessID   string
+	Command     string
+	CWD         string
+	StartedAtMS int64
+}
+
+// LocalUserShellCommandResult is the completed user shell command item.
+type LocalUserShellCommandResult struct {
+	ItemID        string
+	ProcessID     string
+	Command       string
+	CWD           string
+	StartedAtMS   int64
+	CompletedAtMS int64
+	DurationMS    int64
+	ExitCode      int64
+	Status        CommandExecutionStatus
+	Output        string
+}
+
+// RunLocalUserShellCommand executes one user shell command in-process. Rust's
+// embedded TUI reaches its in-process app server for thread/shellCommand; the
+// Go TUI drives turns through codexexec, so a host without an app-server RPC
+// runs the same full-access user shell task here. onStart receives the item to
+// paint while the command is running.
+func RunLocalUserShellCommand(ctx context.Context, threadID string, command string, cwd string, timeout time.Duration, onStart func(LocalUserShellCommandStart)) *LocalUserShellCommandResult {
+	threadID = strings.TrimSpace(threadID)
+	command = strings.TrimSpace(command)
+	now := time.Now().UTC()
+	itemID := "user-shell-" + safeIdentifier(threadID) + "-" + safeIdentifier(fmt.Sprintf("%d", now.UnixNano()))
+	processID := "process-" + safeIdentifier(itemID)
+	startedAtMS := now.UnixMilli()
+	if onStart != nil {
+		onStart(LocalUserShellCommandStart{
+			ItemID:      itemID,
+			ProcessID:   processID,
+			Command:     command,
+			CWD:         cwd,
+			StartedAtMS: startedAtMS,
+		})
+	}
+	if timeout <= 0 {
+		// Rust's thread shell command defaults to one hour.
+		timeout = time.Hour
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	output := &localUserShellOutput{}
+	argv := threadShellCommandArgv(command)
+	cmd := osexec.CommandContext(runCtx, argv[0], argv[1:]...)
+	if strings.TrimSpace(cwd) != "" {
+		cmd.Dir = cwd
+	}
+	env := os.Environ()
+	if threadID != "" {
+		env = append(env, "CODEX_THREAD_ID="+threadID)
+	}
+	cmd.Env = env
+	envutil.SuppressConsoleWindow(cmd)
+
+	startedAt := time.Now()
+	exitCode := int64(1)
+	status := CommandExecutionFailed
+	if stdout, err := cmd.StdoutPipe(); err != nil {
+		output.write("failed to capture stdout: " + err.Error())
+	} else if stderr, err := cmd.StderrPipe(); err != nil {
+		output.write("failed to capture stderr: " + err.Error())
+	} else if err := cmd.Start(); err != nil {
+		if runCtx.Err() == context.DeadlineExceeded {
+			output.write("Timeout")
+			exitCode = -1
+		} else {
+			output.write("failed to start shell command: " + err.Error())
+		}
+	} else {
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_, _ = io.Copy(output, stdout)
+		}()
+		go func() {
+			defer wg.Done()
+			_, _ = io.Copy(output, stderr)
+		}()
+		waitErr := cmd.Wait()
+		wg.Wait()
+		if waitErr != nil && runCtx.Err() == context.DeadlineExceeded {
+			if strings.TrimSpace(output.String()) != "" {
+				output.write("\n")
+			}
+			output.write("Timeout")
+			exitCode = -1
+		} else {
+			code, waitFailure := commandExecExitCode(runCtx, waitErr)
+			exitCode = int64(code)
+			if waitFailure != nil {
+				if strings.TrimSpace(output.String()) != "" {
+					output.write("\n")
+				}
+				output.write(waitFailure.Error())
+				exitCode = 1
+			} else if exitCode == 0 {
+				status = CommandExecutionCompleted
+			}
+		}
+	}
+	durationMS := time.Since(startedAt).Milliseconds()
+	return &LocalUserShellCommandResult{
+		ItemID:        itemID,
+		ProcessID:     processID,
+		Command:       command,
+		CWD:           cwd,
+		StartedAtMS:   startedAtMS,
+		CompletedAtMS: time.Now().UTC().UnixMilli(),
+		DurationMS:    durationMS,
+		ExitCode:      exitCode,
+		Status:        status,
+		Output:        output.String(),
+	}
+}
+
+type localUserShellOutput struct {
+	mu     sync.Mutex
+	buffer bytes.Buffer
+}
+
+func (o *localUserShellOutput) Write(data []byte) (int, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.buffer.Write(data)
+}
+
+func (o *localUserShellOutput) write(text string) {
+	_, _ = o.Write([]byte(text))
+}
+
+func (o *localUserShellOutput) String() string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.buffer.String()
+}
+
 // threadShellCommandLaunch prepares a user shell command the way Rust's
 // `tasks/user_shell.rs` does: the session's own shell runs it as a login
 // command, the session's shell snapshot is replayed so the user's aliases,

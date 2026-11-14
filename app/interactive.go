@@ -46,6 +46,7 @@ import (
 	"codex_go/runtimeauth"
 	"codex_go/sandbox"
 	"codex_go/session"
+	usershell "codex_go/shell"
 	"codex_go/state"
 	"codex_go/tool"
 	codextui "codex_go/tui"
@@ -1974,6 +1975,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 			}
 			return interactiveTurnCommandWithRequest(ctx, root, turnRunner, state, request, approvalBroker, elicitationBroker, userInputBroker, interrupts)
 		},
+		OnUserShellCommand: interactiveLocalUserShellCommand(ctx, root, state, store),
 		OnSteerRequest: func(request codextea.SubmitRequest, _ string) error {
 			cwd := ""
 			if root != nil {
@@ -5137,6 +5139,123 @@ func interactiveApproveAutoReviewDenialHandler() codextea.AutoReviewDenialApprov
 
 func interactiveTurnCommand(ctx context.Context, root *cli.RootOptions, runner interactiveTurnRunner, state *codextui.State, prompt string, approvalBroker *interactiveApprovalBroker, elicitationBroker *interactiveElicitationBroker, userInputBroker *interactiveUserInputBroker) bubbletea.Cmd {
 	return interactiveTurnCommandWithRequest(ctx, root, runner, state, codextea.SubmitRequest{Prompt: prompt}, approvalBroker, elicitationBroker, userInputBroker)
+}
+
+// interactiveLocalUserShellCommand runs a `!` command for the embedded TUI.
+// Rust's embedded TUI sends thread/shellCommand to its in-process app server;
+// Go drives turns through codexexec and has no app-server session, so the same
+// standalone user-shell task runs here and is announced as a turn with item
+// events. The full-access command is the explicit `/shell` escape hatch, like
+// appserver.threadShellCommandLaunch.
+func interactiveLocalUserShellCommand(ctx context.Context, root *cli.RootOptions, state *codextui.State, store *session.Store) codextea.UserShellCommandFunc {
+	return func(threadID string, command string) bubbletea.Cmd {
+		threadID = strings.TrimSpace(threadID)
+		command = strings.TrimSpace(command)
+		return func() bubbletea.Msg {
+			messages := make(chan bubbletea.Msg, 64)
+			go func() {
+				defer close(messages)
+				turnID := "user-shell-" + uuid.NewString()
+				send := func(message bubbletea.Msg) {
+					select {
+					case messages <- message:
+					case <-ctx.Done():
+					}
+				}
+				cwd := ""
+				if state != nil {
+					cwd = strings.TrimSpace(state.CWD)
+				}
+				if cwd == "" && root != nil {
+					cwd = strings.TrimSpace(root.Shared.CWD)
+				}
+				// Rust #44611 announces the standalone shell turn before its item
+				// so the TUI clears user_turn_pending_start and shows the timer.
+				send(codextea.ThreadScopedEventMsg{ThreadID: threadID, Event: protocol.TurnStartedWithID(turnID)})
+				result := appserver.RunLocalUserShellCommand(ctx, threadID, command, cwd, time.Hour, func(start appserver.LocalUserShellCommandStart) {
+					item := protocol.ThreadItem{
+						ID:      start.ItemID,
+						Type:    "command_execution",
+						Command: start.Command,
+						Status:  string(appserver.CommandExecutionInProgress),
+						Metadata: map[string]any{
+							"source":      string(appserver.CommandExecutionSourceUserShell),
+							"cwd":         start.CWD,
+							"processId":   start.ProcessID,
+							"startedAtMs": start.StartedAtMS,
+						},
+					}
+					send(codextea.ThreadScopedEventMsg{ThreadID: threadID, Event: protocol.ItemStartedAt(item, start.StartedAtMS)})
+				})
+				exitCode := int(result.ExitCode)
+				item := protocol.ThreadItem{
+					ID:               result.ItemID,
+					Type:             "command_execution",
+					Command:          result.Command,
+					AggregatedOutput: &result.Output,
+					ExitCode:         &exitCode,
+					Status:           string(result.Status),
+					Metadata: map[string]any{
+						"source":        string(appserver.CommandExecutionSourceUserShell),
+						"cwd":           result.CWD,
+						"processId":     result.ProcessID,
+						"startedAtMs":   result.StartedAtMS,
+						"durationMs":    result.DurationMS,
+						"completedAtMs": result.CompletedAtMS,
+					},
+				}
+				send(codextea.ThreadScopedEventMsg{ThreadID: threadID, Event: protocol.ItemCompleted(item)})
+				record := usershell.NewCommandRecord(command, usershell.ExecOutput{
+					ExitCode: exitCode,
+					Duration: time.Duration(result.DurationMS) * time.Millisecond,
+					Stdout:   result.Output,
+				}, 20_000)
+				persistInteractiveUserShellRecord(store, threadID, turnID, record)
+				// The command item carries the exit status; the standalone shell
+				// turn itself completes, matching appserver.runThreadShellCommand.
+				send(codextea.ThreadScopedEventMsg{ThreadID: threadID, Event: protocol.TurnCompletedWithStatus(protocol.Usage{}, turnID, false)})
+			}()
+			return codextea.StreamStartedMsg{Messages: messages}
+		}
+	}
+}
+
+// persistInteractiveUserShellRecord keeps the executed command and its output
+// in the thread rollout so the next turn, replay, or resume sees the same
+// <user_shell_command> record Rust appends.
+func persistInteractiveUserShellRecord(store *session.Store, threadID string, turnID string, record *usershell.CommandRecord) {
+	if store == nil || record == nil || strings.TrimSpace(threadID) == "" {
+		return
+	}
+	_, _ = store.AppendItem(session.ThreadID(strings.TrimSpace(threadID)), session.Item{
+		ID:        "user-shell-record-" + safeIdentifierLocal(turnID),
+		Type:      "message",
+		Role:      "user",
+		Text:      record.Render(),
+		CreatedAt: time.Now().UTC(),
+		Metadata: map[string]any{
+			"kind":    "user_shell_command",
+			"turnId":  turnID,
+			"command": record.Command,
+		},
+	})
+}
+
+func safeIdentifierLocal(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "0"
+	}
+	var builder strings.Builder
+	for _, char := range value {
+		switch {
+		case char >= 'a' && char <= 'z', char >= 'A' && char <= 'Z', char >= '0' && char <= '9', char == '-', char == '_':
+			builder.WriteRune(char)
+		default:
+			builder.WriteByte('_')
+		}
+	}
+	return builder.String()
 }
 
 // interactiveLocalGoalContinuationCommand returns the /goal continuation hook:

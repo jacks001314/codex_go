@@ -718,7 +718,8 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		OnSubmitRequest: func(request codextea.SubmitRequest) bubbletea.Cmd {
 			return interactiveRemoteTurnCommandWithTaskTools(ctx, root, endpoint, state, request, brokers, taskToolsHost, interrupts)
 		},
-		OnSteerRequest: interrupts.steer,
+		OnUserShellCommand: interactiveRemoteUserShellCommand(ctx, endpoint, paramsMode),
+		OnSteerRequest:     interrupts.steer,
 		OnInterrupt: func() bubbletea.Cmd {
 			return interrupts.interruptCommand()
 		},
@@ -2038,6 +2039,30 @@ func interactiveRemoteResumeSessionHandler(ctx context.Context, endpoint *appser
 		response.OlderHistoryCursor = olderCursor
 		response.ProviderError = providerErr
 		return response, nil
+	}
+}
+
+// interactiveRemoteUserShellCommand sends thread/shellCommand for a remote TUI
+// conversation. Cloud conversations reject `!` commands before the request,
+// mirroring Rust's thread_routing.rs RunUserShellCommand arm.
+func interactiveRemoteUserShellCommand(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint, mode ThreadParamsMode) codextea.UserShellCommandFunc {
+	return func(threadID string, command string) bubbletea.Cmd {
+		return func() bubbletea.Msg {
+			if mode == ThreadParamsModeCloud {
+				return codextea.UserShellCommandResultMsg{ThreadID: threadID, Command: command, Err: errors.New(cloudUserShellCommandUnavailableMessage)}
+			}
+			client, err := openRemoteSessionClient(ctx, endpoint)
+			if err != nil {
+				return codextea.UserShellCommandResultMsg{ThreadID: threadID, Command: command, Err: err}
+			}
+			defer client.close()
+			var response appserver.ShellCommandResponse
+			err = remoteSessionRequest(ctx, client, appserver.MethodThreadShellCommand, appserver.ShellCommandParams{
+				ThreadID: strings.TrimSpace(threadID),
+				Command:  strings.TrimSpace(command),
+			}, &response)
+			return codextea.UserShellCommandResultMsg{ThreadID: threadID, Command: command, Err: err}
+		}
 	}
 }
 
