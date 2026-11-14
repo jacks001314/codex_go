@@ -31,6 +31,10 @@ func TestModelCatalogOriginatorsPartitionHeadersAndCachesLikeRust(t *testing.T) 
 		"codex_work_desktop": originatorTestCatalog("codex_work_desktop", VisibilityList),
 		"codex_work_mobile":  originatorTestCatalog("codex_work_mobile", VisibilityList),
 		"chatgpt_cca":        originatorTestCatalog("chatgpt_cca", VisibilityList),
+		"orbit_cca":          originatorTestCatalog("orbit_cca", VisibilityList),
+		"orbit_cca_web":      originatorTestCatalog("orbit_cca_web", VisibilityList),
+		"orbit_cca_desktop":  originatorTestCatalog("orbit_cca_desktop", VisibilityList),
+		"orbit_cca_mobile":   originatorTestCatalog("orbit_cca_mobile", VisibilityList),
 	}
 	var mu sync.Mutex
 	calls := map[string]int{}
@@ -87,7 +91,7 @@ func TestModelCatalogOriginatorsPartitionHeadersAndCachesLikeRust(t *testing.T) 
 		}
 	}
 
-	originators := []string{"codex_work_cca", "codex_work_web", "codex_work_desktop", "codex_work_mobile", "chatgpt_cca"}
+	originators := []string{"codex_work_cca", "codex_work_web", "codex_work_desktop", "codex_work_mobile", "chatgpt_cca", "orbit_cca", "orbit_cca_web", "orbit_cca_desktop", "orbit_cca_mobile"}
 	type catalogResult struct {
 		name string
 		desc string
@@ -137,7 +141,7 @@ func TestModelCatalogOriginatorsPartitionHeadersAndCachesLikeRust(t *testing.T) 
 	}
 	mu.Unlock()
 
-	for _, name := range []string{"models_cache.json", "models_cache.codex_work_cca.json", "models_cache.chatgpt_cca.json"} {
+	for _, name := range []string{"models_cache.json", "models_cache.codex_work_cca.json", "models_cache.chatgpt_cca.json", "models_cache.orbit_cca.json", "models_cache.orbit_cca_mobile.json"} {
 		if _, err := os.Stat(filepath.Join(home, name)); err != nil {
 			t.Fatalf("cache %s: %v", name, err)
 		}
@@ -149,13 +153,21 @@ func TestModelCatalogOriginatorsPartitionHeadersAndCachesLikeRust(t *testing.T) 
 		t.Fatal("restarted manager did not select codex_work_cca")
 	}
 	_ = restarted.RawModelCatalog(RefreshOnlineIfUncached)
+	restartedOrbit, ok := ModelsManagerForOriginatorWithOK(restarted, "orbit_cca")
+	if !ok {
+		t.Fatal("restarted manager did not select orbit_cca")
+	}
+	orbitCatalog := restartedOrbit.RawModelCatalog(RefreshOnlineIfUncached)
+	if len(orbitCatalog.Models) != 1 || orbitCatalog.Models[0].Description != "orbit_cca" {
+		t.Fatalf("restarted orbit catalog = %#v", orbitCatalog.Models)
+	}
 	workCatalog := restartedWork.RawModelCatalog(RefreshOnlineIfUncached)
 	if len(workCatalog.Models) != 1 || workCatalog.Models[0].Description != "codex_work_cca" {
 		t.Fatalf("restarted work catalog = %#v", workCatalog.Models)
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	for _, originator := range []string{"provider-default", "codex_work_cca"} {
+	for _, originator := range []string{"provider-default", "codex_work_cca", "orbit_cca"} {
 		if calls[originator] != 1 {
 			t.Fatalf("restart refetched originator %q (%d requests)", originator, calls[originator])
 		}

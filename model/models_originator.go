@@ -18,6 +18,12 @@ const (
 	ModelCatalogOriginatorWorkDesktop ModelCatalogOriginator = "codex_work_desktop"
 	ModelCatalogOriginatorWorkMobile  ModelCatalogOriginator = "codex_work_mobile"
 	ModelCatalogOriginatorChatGPT     ModelCatalogOriginator = "chatgpt_cca"
+	// Rust #61384: Orbit clients see their own model catalogs, partitioned by
+	// surface like the Work originators.
+	ModelCatalogOriginatorOrbit        ModelCatalogOriginator = "orbit_cca"
+	ModelCatalogOriginatorOrbitWeb     ModelCatalogOriginator = "orbit_cca_web"
+	ModelCatalogOriginatorOrbitDesktop ModelCatalogOriginator = "orbit_cca_desktop"
+	ModelCatalogOriginatorOrbitMobile  ModelCatalogOriginator = "orbit_cca_mobile"
 )
 
 // ParseModelCatalogOriginator returns the bounded set of originators migrated
@@ -28,7 +34,11 @@ func ParseModelCatalogOriginator(originator string) (ModelCatalogOriginator, boo
 		ModelCatalogOriginatorWorkWeb,
 		ModelCatalogOriginatorWorkDesktop,
 		ModelCatalogOriginatorWorkMobile,
-		ModelCatalogOriginatorChatGPT:
+		ModelCatalogOriginatorChatGPT,
+		ModelCatalogOriginatorOrbit,
+		ModelCatalogOriginatorOrbitWeb,
+		ModelCatalogOriginatorOrbitDesktop,
+		ModelCatalogOriginatorOrbitMobile:
 		return value, true
 	default:
 		return "", false
