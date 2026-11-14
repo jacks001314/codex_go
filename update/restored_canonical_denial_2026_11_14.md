@@ -1,0 +1,9 @@
+# 恢复权限的规范JSON合并修复
+
+发现restoredPermissionProfileResolution仅向DeniedReadEntries追加当前managed规则，但已解析profile的runtimeJSON优先，实际launcher序列化没有新增规则。新测试先解析一个有glob深度的managed profile，恢复时追加当前配置的拒绝路径，再重新解析ProfileJSON检查实际权限；修复前确实失败。
+
+现用PreserveDeniedReads合并实际规范表示，保留原glob_scan_max_depth和enforcement；无效managed denial解析不再被静默忽略，该恢复候选被拒绝。disabled/external wire无filesystem的语义保持，仍保留legacy字段投影，不声称此类执行边界强制本地拒绝。
+
+相关恢复/下一轮/持久化回归0.507s通过，go vet ./appserver及Master diff --check通过；代码和日志已同步Master。新断言同时检查输入快照不变。
+
+整体未完成：#61134实时named配置来源、完整CWD及事务语义仍待处理。完整appserver会话84456继续运行，早于本修复，不能证明最新代码全包通过。MCP作用域、其它核心/TUI、Linux验证、commit/push尚未完成。

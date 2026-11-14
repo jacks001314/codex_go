@@ -36,6 +36,7 @@ type Spec struct {
 }
 
 var Registry = []Spec{
+	{Key: "catalog_apps_instructions", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	// Rust (codex-rs/features/src/lib.rs #45766): preview five-hour and weekly
 	// allowance history for consumer accounts in /analytics.
 	{

@@ -1,0 +1,7 @@
+# 订阅idle resume审批与匿名权限响应
+
+在live settings响应处理中补齐ApprovalPolicy、ApprovalsReviewer。存在normalizedPermissionProfile时解析当前匿名profile并返回其legacy sandbox，清除旧ActivePermissionProfile；无匿名raw则沿用当前命名identity或legacy policy。未将新请求覆盖应用到现有线程。
+
+扩展集成回归：在内存设置never审批及read-only规范化匿名权限而不更新旧record，修复前response审批和sandbox为空。修复后与running resume用例联合通过；vet见同名_vet日志。
+
+命名profile分支目前只同步identity，完整有效sandbox策略仍需解析；无订阅者重建以及其他live响应字段仍待完成。整体同步未完成，旧全模块运行不代表当前新增代码已全量通过。

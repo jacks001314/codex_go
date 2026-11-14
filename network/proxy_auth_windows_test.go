@@ -14,11 +14,11 @@ import (
 
 func TestNewHTTPClientUsesProxyAuthTransportForSystemProxy(t *testing.T) {
 	client := NewHTTPClient(true, 0)
-	if _, ok := client.Transport.(*proxyAuthTransport); !ok {
+	if _, ok := client.Transport.(*compressionTransport).next.(*proxyAuthTransport); !ok {
 		t.Fatalf("Transport = %T, want *proxyAuthTransport", client.Transport)
 	}
 	direct := NewHTTPClient(false, 0)
-	if _, ok := direct.Transport.(*http.Transport); !ok {
+	if _, ok := direct.Transport.(*compressionTransport).next.(*http.Transport); !ok {
 		t.Fatalf("direct Transport = %T, want *http.Transport", direct.Transport)
 	}
 }
@@ -71,7 +71,7 @@ func TestNewHTTPClientSystemProxyAuthenticatesLikeRust(t *testing.T) {
 	base.Proxy = http.ProxyURL(proxyURL)
 	base.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 	client.Transport = ReplaceBaseTransport(client.Transport, base)
-	roundTripper, ok := client.Transport.(*proxyAuthTransport)
+	roundTripper, ok := client.Transport.(*compressionTransport).next.(*proxyAuthTransport)
 	if !ok {
 		t.Fatalf("Transport = %T, want *proxyAuthTransport", client.Transport)
 	}

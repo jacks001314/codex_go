@@ -1,0 +1,9 @@
+# Realtime #61259 请求边界修正（2026-11-14）
+
+上游证据：upstream_61259.patch，commit b05266d61b04efd4aa783316acf7b36476fe4066。turn_processor明确仅对请求version=V3、voice缺省且不附加existingCall的启动重载最新voice（包括清空值）。
+
+此前Go在effectiveRealtimeThreadConfig中按线程配置版本判断，导致请求V3/线程V1未更新，反向请求、缺省版本、显式voice、existingCall则不必要地更新。现将StartParams传入该配置函数，严格按请求条件重载。已有清空偏好测试保留并改为显式V3请求。
+
+新增TestRealtimeVoiceReloadRequestBoundaryLikeRust覆盖上述五种情况。修复前五例全失败，修复后通过。证据日志：realtime_voice_boundary_red_2026_11_14.log、realtime_voice_boundary_green_2026_11_14.log。定向appserver测试0.268s、realtime默认值测试0.036s；realtime全包结果见realtime_reaudit_full_2026_11_14.log；go vet ./appserver ./realtime退出0，见realtime_voice_boundary_vet_2026_11_14.log。
+
+已核实现有V3默认模型gpt-live-1.1-codex、API默认marin/backend-api默认cove、显式voice保持及V3目录marin。#61259尚不整体关闭：TUI启动/保存目录调用及最新配置加载对session layers的保留语义仍待核实。本轮没有commit/push，也没有推进认证基线。先前启动的appserver全包session16306仍在运行，不能作为本轮新代码的全量验证。

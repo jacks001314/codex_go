@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"codex_go/appserver"
@@ -21,7 +22,7 @@ func (r *recordingInteractiveVoiceRouter) Handle(request *appserver.Request) *ap
 		return &appserver.Response{JSONRPC: "2.0", ID: request.ID, Result: &appserver.InitializeResponse{}}
 	case appserver.MethodThreadRealtimeListVoices:
 		return &appserver.Response{JSONRPC: "2.0", ID: request.ID, Result: &realtime.ListVoicesResponse{
-			Voices: realtime.VoicesList{V1: []realtime.Voice{"maple", "juniper"}, DefaultV1: "maple"},
+			Voices: realtime.VoicesList{V1: []realtime.Voice{"maple", "juniper"}, DefaultV1: "maple", V3: []realtime.Voice{"marin", "viola"}},
 		}}
 	case appserver.MethodConfigRead:
 		return &appserver.Response{JSONRPC: "2.0", ID: request.ID, Result: &config.ConfigReadResponse{
@@ -83,7 +84,7 @@ func TestInteractiveLocalVoiceSettingsFallsBackToBuiltinCatalog(t *testing.T) {
 	if !ok {
 		t.Fatalf("settings message = %T", message)
 	}
-	if len(result.Voices) == 0 || result.Current == "" {
+	if len(result.Voices) == 0 || result.Current != "" {
 		t.Fatalf("builtin settings = %#v", result)
 	}
 }
@@ -162,5 +163,93 @@ func TestRealtimeNotificationMessageMapsWirePayloads(t *testing.T) {
 	}
 	if _, ok := realtimeNotificationMessage(nil); ok {
 		t.Fatal("nil notification was mapped")
+	}
+}
+
+func TestInteractiveLocalVoicePickerUsesV3LikeRust(t *testing.T) {
+	router := &recordingInteractiveVoiceRouter{}
+	result := interactiveLocalVoiceSettings(func() interactiveVoiceRouter { return router })()().(codextea.VoiceSettingsMsg)
+	if len(result.Voices) != 2 || result.Voices[0] != "marin" {
+		t.Fatalf("voices=%v", result.Voices)
+	}
+}
+
+type failingVoiceConfigRouter struct{ code int }
+
+func (r failingVoiceConfigRouter) Handle(req *appserver.Request) *appserver.Response {
+	return &appserver.Response{JSONRPC: "2.0", ID: req.ID, Error: &appserver.ResponseError{Code: r.code, Message: "config/read unavailable"}}
+}
+func TestLocalVoiceSettingsReadErrorsLikeRust(t *testing.T) {
+	for _, code := range []int{-32601, -32603} {
+		settings, _, _, _ := interactiveLocalVoiceCallbacks(func() interactiveVoiceRouter { return failingVoiceConfigRouter{code: code} })
+		got := settings(context.Background())
+		if (got.VoiceErr != "") != (code == -32603) {
+			t.Fatalf("code=%d settings=%#v", code, got)
+		}
+	}
+}
+
+type voiceSaveConfirmationRouter struct {
+	value    any
+	readCode int
+	status   config.WriteStatus
+}
+
+func (r voiceSaveConfirmationRouter) Handle(req *appserver.Request) *appserver.Response {
+	response := &appserver.Response{JSONRPC: "2.0", ID: req.ID}
+	if req.Method == appserver.MethodConfigBatchWrite {
+		response.Result = &config.ConfigWriteResponse{Status: r.status}
+		return response
+	}
+	if r.readCode != 0 {
+		response.Error = &appserver.ResponseError{Code: r.readCode, Message: "config/read unavailable"}
+		return response
+	}
+	response.Result = &config.ConfigReadResponse{Config: map[string]any{"realtime": map[string]any{"voice": r.value}}}
+	return response
+}
+func TestLocalVoiceSaveRequiresEffectiveSelectionLikeRust(t *testing.T) {
+	for _, tc := range []struct {
+		value   any
+		code    int
+		status  config.WriteStatus
+		wantErr bool
+	}{
+		{nil, 0, config.WriteOK, true}, {"future-voice", 0, config.WriteOK, true}, {"cove", 0, config.WriteOK, true}, {"marin", 0, config.WriteOK, false},
+		{nil, -32601, config.WriteOK, false}, {nil, -32601, config.WriteOKOverridden, true}, {nil, -32603, config.WriteOK, true},
+	} {
+		router := voiceSaveConfirmationRouter{value: tc.value, readCode: tc.code, status: tc.status}
+		saved := interactiveLocalVoiceSaver(func() interactiveVoiceRouter { return router })("marin")().(codextea.VoiceSavedMsg)
+		if (saved.Err != nil) != tc.wantErr || (tc.wantErr && !saved.Saved) {
+			t.Fatalf("case=%#v save=%#v", tc, saved)
+		}
+	}
+}
+
+func TestLocalVoiceReadsCurrentCWDLikeRust(t *testing.T) {
+	router := &recordingInteractiveVoiceRouter{}
+	current := "project-one"
+	cwd := func() string { return current }
+	settings, _, _, _ := interactiveLocalVoiceCallbacks(func() interactiveVoiceRouter { return router }, cwd)
+	settings(context.Background())
+	current = "project-two"
+	interactiveLocalVoiceSettings(func() interactiveVoiceRouter { return router }, cwd)()()
+	interactiveLocalVoiceSaver(func() interactiveVoiceRouter { return router }, cwd)("juniper")()
+	var got []string
+	for _, request := range router.requests {
+		if request.Method != appserver.MethodConfigRead {
+			continue
+		}
+		var params config.ConfigReadParams
+		if err := json.Unmarshal(request.Params, &params); err != nil {
+			t.Fatal(err)
+		}
+		if params.CWD == nil || !params.IncludeLayers {
+			t.Fatalf("params=%#v", params)
+		}
+		got = append(got, *params.CWD)
+	}
+	if len(got) != 3 || got[0] != "project-one" || got[1] != "project-two" || got[2] != "project-two" {
+		t.Fatalf("cwd reads=%v", got)
 	}
 }

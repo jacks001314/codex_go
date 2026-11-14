@@ -9,6 +9,7 @@ import (
 
 	"codex_go/model"
 	"codex_go/sandbox"
+	"codex_go/turn"
 )
 
 func TestGoalStoreSetGetClear(t *testing.T) {
@@ -503,5 +504,46 @@ func TestThreadExtraServiceNullServiceTierUsesDefaultRequestValue(t *testing.T) 
 	}
 	if !strings.Contains(string(data), `"serviceTier":"`+model.ServiceTierDefaultRequestValue+`"`) {
 		t.Fatalf("settings payload = %s", data)
+	}
+}
+
+func TestSettingsPermissionSelectionReplacesPreviousKind(t *testing.T) {
+	service := NewThreadExtraService()
+	named, legacy := ":read-only", "danger-full-access"
+	if _, err := service.UpdateSettings(&SettingsUpdateParams{ThreadID: "thread", Permissions: &named}); err != nil {
+		t.Fatal(err)
+	}
+	before := service.Settings("thread")
+	_, committed, err := service.UpdateSettingsWithCommit(&SettingsUpdateParams{ThreadID: "thread", SandboxPolicy: &legacy})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if committed.ActivePermissionProfile != nil {
+		t.Fatalf("legacy selection retained named identity: %v", *committed.ActivePermissionProfile)
+	}
+	if before.ActivePermissionProfile == nil || *before.ActivePermissionProfile != named {
+		t.Fatal("previous snapshot mutated")
+	}
+	next := &turn.TurnStartParams{}
+	applyThreadSettingsEnvironmentConfigToTurnStartParams(next, committed)
+	if next.Permissions != nil || next.SandboxPolicy != legacy {
+		t.Fatalf("next turn permissions=%v sandbox=%v", next.Permissions, next.SandboxPolicy)
+	}
+	_, committed, err = service.UpdateSettingsWithCommit(&SettingsUpdateParams{ThreadID: "thread", Permissions: &named})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if committed.SandboxPolicy != "" {
+		t.Fatalf("named selection retained legacy policy: %s", committed.SandboxPolicy)
+	}
+	explicitLegacy := &turn.TurnStartParams{SandboxPolicy: legacy}
+	applyThreadSettingsEnvironmentConfigToTurnStartParams(explicitLegacy, committed)
+	if explicitLegacy.Permissions != nil {
+		t.Fatal("inherited named profile overrides explicit legacy policy")
+	}
+	explicitNamed := &turn.TurnStartParams{Permissions: &named}
+	applyThreadSettingsEnvironmentConfigToTurnStartParams(explicitNamed, &Settings{SandboxPolicy: legacy})
+	if explicitNamed.SandboxPolicy != nil {
+		t.Fatal("inherited legacy policy conflicts with explicit named profile")
 	}
 }

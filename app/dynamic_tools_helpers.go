@@ -592,6 +592,7 @@ func (e *dynamicToolExecutor) startTurn(threadID string, tool string, prompt str
 	params := turn.TurnStartParams{
 		ThreadID: strings.TrimSpace(threadID),
 		ToolOutput: &turn.TurnToolOutput{
+			Retain:    true,
 			Name:      tool,
 			Namespace: DynamicToolNamespace,
 			Output:    turn.ToolOutputText(prompt),

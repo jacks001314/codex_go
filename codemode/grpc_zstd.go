@@ -89,3 +89,12 @@ func (r *grpcZstdReader) Read(p []byte) (int, error) {
 	}
 	return n, err
 }
+
+// Close releases the decoder when a caller stops before EOF (for example at a size limit).
+func (r *grpcZstdReader) Close() error {
+	if !r.closed {
+		r.closed = true
+		r.decoder.Close()
+	}
+	return nil
+}

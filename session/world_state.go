@@ -3,6 +3,7 @@ package session
 import "encoding/json"
 
 type WorldState struct {
+	AppsInstructions       json.RawMessage `json:"appsInstructions,omitempty"`
 	Model                  json.RawMessage `json:"model,omitempty"`
 	Personality            json.RawMessage `json:"personality,omitempty"`
 	ContextWindowGuidance  json.RawMessage `json:"contextWindowGuidance,omitempty"`

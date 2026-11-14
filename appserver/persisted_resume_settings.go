@@ -114,6 +114,9 @@ func (s persistedResumeSettings) restore(record *session.Record, overrides threa
 			if err := json.Unmarshal(s.UnnamedPermissionProfileJSON, &decoded); err == nil {
 				record.Metadata.Extra = ensureRecordExtra(record.Metadata.Extra)
 				record.Metadata.Extra["permission_profile"] = decoded
+				// An owned unnamed snapshot replaces an older named selection.
+				// Otherwise future turns ignore the restored profile (#61134).
+				record.Metadata.ActivePermissionProfile = ""
 				restored.changed = true
 			}
 		}

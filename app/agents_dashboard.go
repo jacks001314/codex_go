@@ -101,6 +101,9 @@ func agentsOverviewRowsFromThreadsWithReadReceipts(threads []*appserver.Thread, 
 		if thread == nil || strings.TrimSpace(thread.ID) == "" {
 			continue
 		}
+		if !agentsOverviewThreadVisible(thread) {
+			continue // ephemeral or attached side thread: not a command-center root
+		}
 		if thread.ParentThreadID != nil && strings.TrimSpace(*thread.ParentThreadID) != "" {
 			continue // subagent thread: folded into the root row
 		}
@@ -221,6 +224,17 @@ func agentsOverviewRowsFromRecords(records []session.Record, currentThreadID str
 		rows = append(rows, row)
 	}
 	return rows
+}
+
+// agentsOverviewThreadVisible mirrors Rust #61218
+// agents_overview_discovery::is_visible_in_agents_overview: saved side chats
+// attached to another thread are excluded from the command center, while the
+// parent remains visible.
+func agentsOverviewThreadVisible(thread *appserver.Thread) bool {
+	if thread == nil || thread.Ephemeral {
+		return false
+	}
+	return thread.AttachedToThreadID == nil || strings.TrimSpace(*thread.AttachedToThreadID) == ""
 }
 
 // agentsOverviewChildrenByRoot folds every descendant thread under its root so
@@ -567,7 +581,7 @@ func (s *remoteAgentsDashboardSource) listRecentThreadsForSourceKindsWithReadRec
 		}
 		for index := range response.Data {
 			thread := &response.Data[index]
-			if thread.Ephemeral || (thread.ParentThreadID != nil && strings.TrimSpace(*thread.ParentThreadID) != "") {
+			if !agentsOverviewThreadVisible(thread) || (thread.ParentThreadID != nil && strings.TrimSpace(*thread.ParentThreadID) != "") {
 				continue
 			}
 			if len(recent) >= limit {

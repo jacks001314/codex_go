@@ -85,6 +85,7 @@ func (s *PluginService) StartCuratedRepoSync(onChanged func()) bool {
 		// command-scoped Git configuration.
 		isolated := *gitMaterializer
 		isolated.Automatic = true
+		isolated.CodexHome = codexHome
 		materializer = &isolated
 	}
 	s.mu.Unlock()

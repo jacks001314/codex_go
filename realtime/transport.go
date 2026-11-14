@@ -54,8 +54,8 @@ type TransportBackendConfig struct {
 	// (Rust #60003/#60055). A nil hook keeps the static Headers snapshot, so
 	// callers that never wired runtime auth are unaffected.
 	RuntimeAuthHeaders func(ctx context.Context, endpoint string) (http.Header, error)
-	QueryParams       map[string]string
-	PrepareCall       func(context.Context, *http.Request, []byte) error
+	QueryParams        map[string]string
+	PrepareCall        func(context.Context, *http.Request, []byte) error
 }
 
 type realtimeWebRTCCall struct {
@@ -314,6 +314,11 @@ func createRealtimeWebRTCCall(ctx context.Context, backend *TransportBackendConf
 }
 
 func realtimeCallBody(baseURL string, config *SessionConfig) ([]byte, string, error) {
+	if config.Voice == "" && strings.Contains(baseURL, "/backend-api") {
+		clone := *config
+		clone.Voice = VoiceCove
+		config = &clone
+	}
 	update := realtimeSessionUpdate(config)
 	sessionValue, _ := update["session"].(map[string]any)
 	delete(sessionValue, "id")

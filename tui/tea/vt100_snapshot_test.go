@@ -1,11 +1,12 @@
 package tea
 
 import (
-	codextui "codex_go/tui"
 	"strconv"
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	codextui "codex_go/tui"
 )
 
 func TestVirtualTerminalAppliesVT100CursorAndClear(t *testing.T) {
@@ -25,6 +26,7 @@ func TestVirtualTerminalAppliesVT100CursorAndClear(t *testing.T) {
 
 func TestModelVT100TerminalSnapshotMainView(t *testing.T) {
 	state := codextui.NewState(&codextui.Options{
+		CWD:             "/repo",
 		Model:           "gpt-5",
 		ApprovalPolicy:  "on-request",
 		Sandbox:         "workspace-write",

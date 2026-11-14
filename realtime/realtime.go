@@ -452,9 +452,11 @@ func requireJSONField(raw map[string]json.RawMessage, name string) error {
 
 func isKnownVoice(voice Voice) bool {
 	voices := BuiltinVoices()
-	for _, candidate := range append(append([]Voice(nil), voices.V1...), voices.V2...) {
-		if voice == candidate {
-			return true
+	for _, catalog := range [][]Voice{voices.V1, voices.V2, voices.V3} {
+		for _, candidate := range catalog {
+			if voice == candidate {
+				return true
+			}
 		}
 	}
 	return false
@@ -561,7 +563,7 @@ func (p *StartParams) Normalized(defaultModel string, defaultVersion Version, de
 	model := defaultModel
 	if model == "" {
 		if version == VersionV3 {
-			model = "gpt-live-1-codex"
+			model = "gpt-live-1.1-codex"
 		} else {
 			model = "gpt-realtime-1.5"
 		}
@@ -575,7 +577,7 @@ func (p *StartParams) Normalized(defaultModel string, defaultVersion Version, de
 		// default is ignored.
 		voice = ""
 	}
-	if voice == "" {
+	if voice == "" && version != VersionV3 {
 		voices := BuiltinVoices()
 		voice = voices.DefaultForVersion(version)
 	}
@@ -583,7 +585,7 @@ func (p *StartParams) Normalized(defaultModel string, defaultVersion Version, de
 		voice = *p.Voice
 	}
 	voices := BuiltinVoices()
-	if !voices.Supports(version, voice) {
+	if voice != "" && !voices.Supports(version, voice) {
 		return nil, fmt.Errorf("%w: realtime voice %q is not supported for %s", ErrInvalidRealtimeRequest, voice, version)
 	}
 	includeStartupContext := true
@@ -878,6 +880,7 @@ func BuiltinVoices() VoicesList {
 			VoiceArbor,
 			VoiceSol,
 			VoiceCove,
+			VoiceMarin,
 			VoiceAube,
 			VoiceBubbie,
 			VoiceHaetsal,

@@ -248,3 +248,22 @@ func TestInjectApplyPatchEnvHandlesNilMap(t *testing.T) {
 		t.Fatalf("InjectApplyPatchEnv(nil) = %#v", out)
 	}
 }
+
+func TestSPIFFEIdentityEnvironmentScrubLikeRust(t *testing.T) {
+	values := map[string]string{
+		"OPENAI_IDENTITY_TOKEN_SOURCE": "spiffe",
+		"openai_spiffe_audience":       "test-audience",
+		"OpenAI_Spiffe_Id":             "spiffe://example.org/test",
+		"SPIFFE_ENDPOINT_SOCKET":       "unix:///test/agent.sock",
+		"PATH":                         "test-path",
+	}
+	ScrubMap(values)
+	if len(values) != 2 || values["SPIFFE_ENDPOINT_SOCKET"] != "unix:///test/agent.sock" || values["PATH"] != "test-path" {
+		t.Fatalf("scrubbed environment=%v", values)
+	}
+	for _, name := range []string{"OPENAI_IDENTITY_TOKEN_SOURCE", "openai_identity_token_source", "OPENAI_SPIFFE_AUDIENCE", "openai_spiffe_audience", "OPENAI_SPIFFE_ID", "openai_spiffe_id"} {
+		if !IsNonInheritableEnvVar(name) {
+			t.Errorf("%s must not be inherited", name)
+		}
+	}
+}

@@ -3,9 +3,11 @@ package auth
 import (
 	"context"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"unicode/utf8"
 )
 
 // Workload identity environment selection (Rust 96c8be200c, #38188):
@@ -16,6 +18,10 @@ import (
 const (
 	OpenAIFederationRuleIDEnv        = "OPENAI_FEDERATION_RULE_ID"
 	OpenAIIdentityTokenFileEnv       = "OPENAI_IDENTITY_TOKEN_FILE"
+	OpenAIIdentityTokenSourceEnv     = "OPENAI_IDENTITY_TOKEN_SOURCE"
+	OpenAISPIFFEAudienceEnv          = "OPENAI_SPIFFE_AUDIENCE"
+	OpenAISPIFFEIDEnv                = "OPENAI_SPIFFE_ID"
+	SPIFFEEndpointSocketEnv          = "SPIFFE_ENDPOINT_SOCKET"
 	OpenAIWorkloadIdentityContextEnv = "OPENAI_WORKLOAD_IDENTITY_CONTEXT"
 
 	// WorkloadIdentitySource labels ResolvedAuth from the workload identity
@@ -127,28 +133,45 @@ func workloadInvalidConfig(message string) error {
 type workloadIdentityProcessEnv struct {
 	federationRuleID        string
 	identityTokenFile       string
+	identityTokenSource     string
+	spiffeEndpoint          string
+	spiffeAudience          string
+	spiffeID                string
 	workloadIdentityContext string
 	hasFederationRule       bool
 	hasIdentityToken        bool
+	hasIdentityTokenSource  bool
+	hasSPIFFEEndpoint       bool
+	hasSPIFFEAudience       bool
+	hasSPIFFEID             bool
 }
 
 func workloadReadProcessEnv() workloadIdentityProcessEnv {
 	return workloadIdentityProcessEnv{
 		federationRuleID:        strings.TrimSpace(readNonEmptyEnv(OpenAIFederationRuleIDEnv)),
 		identityTokenFile:       readNonEmptyEnv(OpenAIIdentityTokenFileEnv),
+		identityTokenSource:     os.Getenv(OpenAIIdentityTokenSourceEnv),
 		workloadIdentityContext: readNonEmptyEnv(OpenAIWorkloadIdentityContextEnv),
 		hasFederationRule:       osEnvPresent(OpenAIFederationRuleIDEnv),
 		hasIdentityToken:        osEnvPresent(OpenAIIdentityTokenFileEnv),
+		hasIdentityTokenSource:  osEnvPresent(OpenAIIdentityTokenSourceEnv),
+		hasSPIFFEEndpoint:       osEnvPresent(SPIFFEEndpointSocketEnv),
+		hasSPIFFEAudience:       osEnvPresent(OpenAISPIFFEAudienceEnv),
+		hasSPIFFEID:             osEnvPresent(OpenAISPIFFEIDEnv),
+		spiffeEndpoint:          os.Getenv(SPIFFEEndpointSocketEnv),
+		spiffeAudience:          os.Getenv(OpenAISPIFFEAudienceEnv),
+		spiffeID:                os.Getenv(OpenAISPIFFEIDEnv),
 	}
 }
 
 func (e workloadIdentityProcessEnv) hasMarker() bool {
-	return e.hasFederationRule || e.hasIdentityToken
+	return e.hasFederationRule || e.hasIdentityToken || e.hasIdentityTokenSource || e.hasSPIFFEAudience || e.hasSPIFFEID
 }
 
 // workloadIdentitySessionConfig is a fully validated, exchange-ready session
 // configuration (Rust WorkloadIdentitySessionConfig).
 type workloadIdentitySessionConfig struct {
+	spiffe                  *spiffeAssertionSource
 	assertionFile           string
 	environment             workloadIdentityEnvironment
 	federationRuleID        string
@@ -158,16 +181,25 @@ type workloadIdentitySessionConfig struct {
 }
 
 func (c workloadIdentitySessionConfig) fingerprint() workloadIdentityFingerprint {
-	return workloadIdentityFingerprint{
+	fingerprint := workloadIdentityFingerprint{
 		assertionFile:           c.assertionFile,
 		environment:             c.environment,
 		federationRuleID:        c.federationRuleID,
 		tokenURL:                c.tokenURL,
 		workloadIdentityContext: c.workloadIdentityContext,
 	}
+	if c.spiffe != nil {
+		fingerprint.spiffe = *c.spiffe
+		fingerprint.hasSPIFFE = true
+	}
+	return fingerprint
 }
 
 func (c workloadIdentitySessionConfig) exchange() (*WorkloadIdentityExchange, error) {
+	if c.spiffe != nil {
+		source := *c.spiffe
+		return NewWorkloadIdentityExchange(WorkloadIdentityConfig{spiffe: &source, FederationRuleID: c.federationRuleID, WorkloadIdentityContext: c.workloadIdentityContext}, c.tokenURL, c.httpClient)
+	}
 	config, err := NewWorkloadIdentityConfig(c.federationRuleID, c.assertionFile, c.workloadIdentityContext)
 	if err != nil {
 		return nil, err
@@ -176,6 +208,8 @@ func (c workloadIdentitySessionConfig) exchange() (*WorkloadIdentityExchange, er
 }
 
 type workloadIdentityFingerprint struct {
+	spiffe                  spiffeAssertionSource
+	hasSPIFFE               bool
 	assertionFile           string
 	environment             workloadIdentityEnvironment
 	federationRuleID        string
@@ -194,10 +228,50 @@ func resolveWorkloadIdentityConfig(baseURL string, env workloadIdentityProcessEn
 	if !env.hasFederationRule || env.federationRuleID == "" {
 		return nil, workloadInvalidConfig("workload identity requires " + OpenAIFederationRuleIDEnv)
 	}
-	if !env.hasIdentityToken || env.identityTokenFile == "" {
+	if !utf8.ValidString(env.identityTokenSource) {
+		return nil, workloadInvalidConfig("workload identity variable " + OpenAIIdentityTokenSourceEnv + " is invalid")
+	}
+	if env.hasIdentityTokenSource && env.identityTokenSource == "" {
+		return nil, workloadInvalidConfig("OPENAI_IDENTITY_TOKEN_SOURCE must be file or spiffe")
+	}
+	var source *spiffeAssertionSource
+	switch env.identityTokenSource {
+	case "", "file":
+		if env.hasSPIFFEAudience || env.hasSPIFFEID {
+			return nil, workloadInvalidConfig("SPIFFE settings require OPENAI_IDENTITY_TOKEN_SOURCE=spiffe")
+		}
+	case "spiffe":
+		if env.hasIdentityToken {
+			return nil, workloadInvalidConfig("SPIFFE authentication cannot also set OPENAI_IDENTITY_TOKEN_FILE")
+		}
+		endpoint, err := workloadRequiredUnicode(env.spiffeEndpoint, env.hasSPIFFEEndpoint, SPIFFEEndpointSocketEnv)
+		if err != nil {
+			return nil, err
+		}
+		audience, err := workloadRequiredUnicode(env.spiffeAudience, env.hasSPIFFEAudience, OpenAISPIFFEAudienceEnv)
+		if err != nil {
+			return nil, err
+		}
+		if !utf8.ValidString(env.spiffeID) {
+			return nil, workloadInvalidConfig("workload identity variable " + OpenAISPIFFEIDEnv + " is invalid")
+		}
+		if !spiffePlatformSupported {
+			return nil, workloadInvalidConfig("SPIFFE Workload API authentication requires a Unix platform")
+		}
+		if env.hasSPIFFEID && env.spiffeID == "" {
+			return nil, workloadInvalidConfig("the SPIFFE ID is invalid")
+		}
+		source, err = newSPIFFEAssertionSource(endpoint, audience, env.spiffeID)
+		if err != nil {
+			return nil, err
+		}
+	default:
+		return nil, workloadInvalidConfig("OPENAI_IDENTITY_TOKEN_SOURCE must be file or spiffe")
+	}
+	if source == nil && (!env.hasIdentityToken || env.identityTokenFile == "") {
 		return nil, workloadInvalidConfig("workload identity requires " + OpenAIIdentityTokenFileEnv)
 	}
-	if !filepathIsAbsolute(env.identityTokenFile) {
+	if source == nil && !filepathIsAbsolute(env.identityTokenFile) {
 		return nil, workloadInvalidConfig(OpenAIIdentityTokenFileEnv + " must be an absolute path")
 	}
 	environment, err := classifyWorkloadAuthEnvironment(baseURL)
@@ -205,6 +279,7 @@ func resolveWorkloadIdentityConfig(baseURL string, env workloadIdentityProcessEn
 		return nil, err
 	}
 	return &workloadIdentitySessionConfig{
+		spiffe:                  source,
 		assertionFile:           env.identityTokenFile,
 		environment:             environment,
 		federationRuleID:        env.federationRuleID,
@@ -519,4 +594,16 @@ func WorkloadIdentityPermanentError(err error) *RefreshTokenFailedError {
 		Reason:  RefreshTokenFailedOther,
 		Message: err.Error(),
 	}
+}
+
+// workloadRequiredUnicode preserves the missing/invalid distinction in Rust's
+// required_unicode while keeping environment values out of errors.
+func workloadRequiredUnicode(value string, present bool, variable string) (string, error) {
+	if !present {
+		return "", workloadInvalidConfig("workload identity requires " + variable)
+	}
+	if !utf8.ValidString(value) || strings.TrimSpace(value) == "" {
+		return "", workloadInvalidConfig("workload identity variable " + variable + " is invalid")
+	}
+	return strings.TrimSpace(value), nil
 }

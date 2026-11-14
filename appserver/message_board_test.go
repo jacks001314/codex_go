@@ -308,7 +308,7 @@ func TestMessageBoardHostNotifyQueuesForIdleRecipientsLikeRust(t *testing.T) {
 func TestMessageBoardRemoteConfigParsesAndOpensEphemeralGateLikeRust(t *testing.T) {
 	remote := map[string]any{
 		"url":          "https://board.example/v1",
-		"bearer_token": "research-board-credential-for-runtime-test",
+		"bearer_token": "remote-board-credential-for-runtime-test",
 	}
 	cfg := &config.Config{Values: map[string]any{"features": map[string]any{
 		"agent_message_board": true,
@@ -328,7 +328,7 @@ func TestMessageBoardRemoteConfigParsesAndOpensEphemeralGateLikeRust(t *testing.
 	if v2.MessageBoardRemote.URL != "https://board.example/v1" {
 		t.Fatalf("remote URL = %q", v2.MessageBoardRemote.URL)
 	}
-	if v2.MessageBoardRemote.BearerToken == nil || *v2.MessageBoardRemote.BearerToken != "research-board-credential-for-runtime-test" {
+	if v2.MessageBoardRemote.BearerToken == nil || *v2.MessageBoardRemote.BearerToken != "remote-board-credential-for-runtime-test" {
 		t.Fatalf("remote bearer token = %v", v2.MessageBoardRemote.BearerToken)
 	}
 	if v2.MessageBoardRemote.BearerTokenEnvVar != nil {
@@ -382,7 +382,7 @@ func TestRemoteMessageBoardPrecedesLocalBoardsLikeRust(t *testing.T) {
 	home := t.TempDir()
 	store := session.NewStore(filepath.Join(home, "sessions"))
 
-	const token = "research-board-credential-for-runtime-test"
+	const token = "remote-board-credential-for-runtime-test"
 	const clockAt int64 = 1781717655
 	type boardCall struct {
 		path string
@@ -604,7 +604,7 @@ func TestRemoteMessageBoardCredentialResolutionLikeRust(t *testing.T) {
 	})
 	defer router.Close()
 	host := &messageBoardHost{router: router, tree: "thread-1", caller: "thread-1"}
-	const token = "research-board-credential-for-runtime-test"
+	const token = "remote-board-credential-for-runtime-test"
 	openRemote := func(remote *config.RemoteMessageBoardConfig) (agentboard.Board, error) {
 		return agentboard.OpenBoardBackend(context.Background(), agentboard.BoardBackend{
 			Kind: agentboard.BoardBackendRemote,

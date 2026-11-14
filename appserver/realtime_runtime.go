@@ -382,7 +382,7 @@ func (r *RuntimeRouter) realtimeStartOptions(params *realtime.StartParams) (*rea
 	if r == nil || params == nil || r.services.Config == nil {
 		return nil, nil
 	}
-	cfg, record, err := r.effectiveRealtimeThreadConfig(params.ThreadID)
+	cfg, record, err := r.effectiveRealtimeThreadConfig(params)
 	if err != nil {
 		return nil, err
 	}
@@ -524,8 +524,8 @@ func (r *RuntimeRouter) realtimeRuntimeAuthHeaders(cfg *config.Config) func(ctx 
 	return provider.HeadersForDestination
 }
 
-func (r *RuntimeRouter) effectiveRealtimeThreadConfig(threadID string) (*config.Config, *session.Record, error) {
-	threadID = strings.TrimSpace(threadID)
+func (r *RuntimeRouter) effectiveRealtimeThreadConfig(start *realtime.StartParams) (*config.Config, *session.Record, error) {
+	threadID := strings.TrimSpace(start.ThreadID)
 	var record *session.Record
 	var err error
 	if r != nil && r.services.ThreadRouter != nil && r.services.ThreadRouter.store != nil && threadID != "" {
@@ -541,6 +541,29 @@ func (r *RuntimeRouter) effectiveRealtimeThreadConfig(threadID string) (*config.
 	cfg, err := r.effectiveConfigForTurn(params)
 	if err != nil {
 		return nil, nil, err
+	}
+	// Only new, explicitly V3 requests without a voice reload the preference.
+	// Preserve a cleared preference instead of inheriting the thread snapshot.
+	attachesExistingCall := start.Transport != nil && start.Transport.Type == "existingCall"
+	if start.Version != nil && *start.Version == realtime.VersionV3 && start.Voice == nil && !attachesExistingCall && r.services.Config != nil {
+		current, loadErr := config.LoadWithOptions(r.services.Config.CodexHome(), &config.LoadOptions{CWD: turnCWD(params)})
+		if loadErr != nil {
+			return nil, nil, loadErr
+		}
+		// Thread request overrides are retained session flags, not stale file values.
+		applyRuntimeConfigOverrides(current, turnConfigOverrides(params))
+		values := map[string]any{}
+		if old, ok := cfg.Values["realtime"].(map[string]any); ok {
+			for key, value := range old {
+				values[key] = value
+			}
+		}
+		delete(values, "voice")
+		if voice := realtimeVoiceFromConfig(current); voice != "" {
+			values["voice"] = string(voice)
+		}
+		delete(cfg.Values, "realtime.voice")
+		cfg.Values["realtime"] = values
 	}
 	return cfg, record, nil
 }

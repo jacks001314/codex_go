@@ -21,8 +21,11 @@ func noFollowSymlinkComponent(path string) (string, error) {
 	separator := string(os.PathSeparator)
 	parts := strings.Split(rest, separator)
 	current := volume
-	if current == "" {
-		current = separator
+	if strings.HasPrefix(rest, separator) {
+		// Preserve the root separator: C:foo is drive-relative, unlike C:\\foo.
+		current += separator
+	} else if current == "" {
+		current = "."
 	}
 	for _, part := range parts {
 		if part == "" {

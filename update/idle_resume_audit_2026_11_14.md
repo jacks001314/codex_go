@@ -1,0 +1,9 @@
+# #61136 idle loaded resume 审计
+
+Rust d3fc4a7 改动 collect_resume_override_mismatches：按permission profile label比较，external兼容danger-full-access。当前上游thread_processor.rs约4747行调用后，对mismatch仅在无订阅者、Idle、非Running、无active turn且允许direct input时关闭并移除缓存线程；关闭完成后重新读取rollout再cold resume。否则保留现有线程、忽略覆盖。
+
+Go已实现active-turn sandbox label诊断（resume_sandbox_label.go），但runtime_router.go applyThreadResumeSettingsUpdate仅在activeRuntimeTurnSnapshot非nil时跳过更新，空闲loaded且有订阅者时未对应Rust保留语义。applyThreadResumeRuntimeWorkspaceRoots也独立持久化覆盖，applyThreadResumePersistedPermissions影响响应；仅改settings函数会造成响应/持久化分歧。
+
+已定位现有可复用边界：ThreadManager.Subscribers、threadIsLoaded、thread_idle_lifecycle.go的订阅/active检查和销毁路径。后续需在resume入口作一次统一决策，确保原订阅者判断在新订阅注册前完成，统一影响响应、workspace roots、settings、permissions、rollout恢复；无订阅者重建必须先等待shutdown完成。需覆盖订阅idle忽略、无订阅idle重建、active忽略、shutdown失败保留及parent-owned child限制。
+
+本轮只完成上述具体调用链审计，未修改恢复行为。不能声明#61136完成。最新全模块回归session88859仍在运行，整体同步未完成。

@@ -327,6 +327,8 @@ func (m *Model) applyAgentSwitchResult(message AgentSwitchResultMsg) {
 		m.switchThreadID(entry.ThreadID)
 		messages := append([]codextui.Message(nil), message.Response.Messages...)
 		buffered := m.backgroundThreadEvents[entry.ThreadID]
+		m.reconcileConfirmedSessionInput(entry.ThreadID, messages)
+		m.reconcileBufferedSessionInput(entry.ThreadID, buffered)
 		// Only replay the buffer when the persisted thread is empty (the typical
 		// running-agent case). Completed content is authoritative once persisted,
 		// and replaying item events on top of it would duplicate messages.
@@ -404,6 +406,7 @@ func (m *Model) applyAgentSwitchResult(message AgentSwitchResultMsg) {
 	}
 	m.setThreadUnavailable(message.Response.Entry.IsClosed)
 	m.restorePendingAgentsOverviewDraft()
+	m.resumedQueueThreadID = m.currentThreadID()
 	m.refreshTranscript()
 }
 

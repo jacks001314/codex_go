@@ -2,7 +2,7 @@ package tcptunnel
 
 // Go parity for Rust's tcp-tunnel ssh_tests.rs and the SSH half of lib_tests.rs
 // (Rust #60568): route selection, credential boundaries, binary stdio relay,
-// half-close propagation, gateway EOF, rejection by status, and ERS v2 tunnel
+// half-close propagation, gateway EOF, rejection by status, and ERS v1/v2 tunnel
 // JWTs for Portals listeners.
 
 import (
@@ -11,7 +11,8 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"fmt"
+	"encoding/base64"
+
 	"io"
 	"net"
 	"net/http"
@@ -312,62 +313,64 @@ const (
 	ersJWTv2     = ersJWTHeader + ".eyJ2ZXIiOjJ9.fixture"
 )
 
-// TestPortalsListenerRequiresV2TunnelJWTAtStartupAndOnRenewal mirrors Rust's
-// portals_jwt_listener_requires_v2_at_startup_and_on_renewal.
-func TestPortalsListenerRequiresV2TunnelJWTAtStartupAndOnRenewal(t *testing.T) {
-	for _, invalid := range []string{
-		ersJWTv1,
-		"opaque",
-		"malformed.parts",
-		ersJWTHeader + ".e30.fixture",
-	} {
-		input := newControlInput(bufioReader(invalid), false, PublicGateway)
-		if metadata := <-input.metadata; metadata.err != nil {
-			t.Fatalf("metadata error = %v", metadata.err)
+// TestPortalsListenerTunnelVersionsLikeRust covers startup and renewal (#61260).
+func TestPortalsListenerTunnelVersionsLikeRust(t *testing.T) {
+	for _, first := range []string{ersJWTv1, ersJWTv2} {
+		for _, renewed := range []string{ersJWTv1, ersJWTv2} {
+			input := newControlInput(bufioReader(first+"\n"+renewed+"\n"), false, PublicGateway)
+			if metadata := <-input.metadata; metadata.err != nil {
+				t.Fatal(metadata.err)
+			}
+			for _, want := range []string{first, renewed} {
+				got := <-input.tokens
+				if got.err != nil || got.auth != "Bearer "+want {
+					t.Fatalf("token = %#v, want fixture %q", got, want)
+				}
+			}
 		}
-		token := <-input.tokens
-		if token.err == nil || token.err.Error() != "Portals requires an ERS-issued v2 tunnel JWT" {
-			t.Fatalf("token error for %q = %v", invalid, token.err)
-		}
-	}
-
-	input := newControlInput(bufioReader(fmt.Sprintf("%s\n%s\n%s\n", ersJWTv2, ersJWTv2, ersJWTv1)), false, PublicGateway)
-	if metadata := <-input.metadata; metadata.err != nil {
-		t.Fatalf("metadata error = %v", metadata.err)
-	}
-	initial := <-input.tokens
-	if initial.err != nil || initial.auth != "Bearer "+ersJWTv2 {
-		t.Fatalf("initial token = %#v", initial)
-	}
-	second := <-input.tokens
-	if second.err != nil || second.auth != "Bearer "+ersJWTv2 {
-		t.Fatalf("renewal token = %#v", second)
-	}
-	renewal := <-input.tokens
-	if renewal.err == nil || renewal.err.Error() != "Portals requires an ERS-issued v2 tunnel JWT" {
-		t.Fatalf("v1 renewal error = %v", renewal.err)
 	}
 }
 
-// TestOtherBearerModesRejectErsV1AndAcceptUnrelatedJWTs mirrors Rust's
-// other_bearer_modes_reject_ers_v1_and_accept_unrelated_jwts.
-func TestOtherBearerModesRejectErsV1AndAcceptUnrelatedJWTs(t *testing.T) {
+// TestTunnelCredentialRejectsMalformedVersionsLikeRust keeps invalid claims rejected.
+func TestTunnelCredentialRejectsMalformedVersionsLikeRust(t *testing.T) {
+	for _, claims := range []string{`{"ver":3}`, `{"ver":"1"}`, `{"ver":"2"}`, `{"ver":1.0}`, `{"ver":2e0}`, `{}`, `null`, `invalid-json`} {
+		token := ersJWTHeader + "." + base64.RawURLEncoding.EncodeToString([]byte(claims)) + ".fixture"
+		for _, mode := range []TunnelCredential{CredentialBearer, CredentialErsTunnelJWT} {
+			if _, err := mode.Header(token); err == nil {
+				t.Errorf("accepted claims %s in mode %v", claims, mode)
+			}
+		}
+	}
+	for _, token := range []string{ersJWTv1, ersJWTv2} {
+		parts := strings.Split(token, ".")
+		for _, invalid := range []string{parts[0] + "." + parts[1], parts[0] + "." + parts[1] + ".", token + ".extra"} {
+			if _, err := CredentialErsTunnelJWT.Header(invalid); err == nil {
+				t.Errorf("accepted malformed fixture %q", invalid)
+			}
+		}
+	}
+	for _, invalid := range []string{"opaque", "malformed.parts", "eyJ0eXAiOiJKV1QifQ.eyJ2ZXIiOjF9.fixture"} {
+		if _, err := CredentialErsTunnelJWT.Header(invalid); err == nil {
+			t.Errorf("accepted non-ERS fixture %q", invalid)
+		}
+	}
+}
+
+func TestOtherBearerModesAcceptErsVersionsLikeRust(t *testing.T) {
 	unrelated := "eyJ0eXAiOiJKV1QifQ.eyJ2ZXIiOjF9.fixture"
-	for _, testCase := range []struct{ origin, metadata string }{
+	for _, tc := range []struct{ origin, metadata string }{
 		{PublicGateway, `[["x-portals-auth-mode","oauth"]]`},
 		{"https://proxy.example", "[]"},
 	} {
-		input := newControlInput(bufioReader(fmt.Sprintf("%s\n%s\n%s\n", testCase.metadata, unrelated, ersJWTv1)), true, testCase.origin)
+		input := newControlInput(bufioReader(tc.metadata+"\n"+unrelated+"\n"+ersJWTv1+"\n"+ersJWTv2+"\n"), true, tc.origin)
 		if metadata := <-input.metadata; metadata.err != nil {
-			t.Fatalf("metadata error = %v", metadata.err)
+			t.Fatal(metadata.err)
 		}
-		initial := <-input.tokens
-		if initial.err != nil || initial.auth != "Bearer "+unrelated {
-			t.Fatalf("initial token = %#v", initial)
-		}
-		renewal := <-input.tokens
-		if renewal.err == nil || renewal.err.Error() != "Portals requires an ERS-issued v2 tunnel JWT" {
-			t.Fatalf("ERS v1 renewal error = %v", renewal.err)
+		for _, want := range []string{unrelated, ersJWTv1, ersJWTv2} {
+			got := <-input.tokens
+			if got.err != nil || got.auth != "Bearer "+want {
+				t.Fatalf("token = %#v, want fixture %q", got, want)
+			}
 		}
 	}
 }

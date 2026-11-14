@@ -1399,6 +1399,8 @@ type PluginService struct {
 	marketplaceRevision           MarketplaceRevisionResolver
 	marketplaceConfigPath         string
 	marketplaceStartupUpgradeBusy bool
+	cacheRefreshPending           map[string]bool
+	cacheRefreshChecked           map[string]bool
 	suggestedProvider             SuggestedPluginProvider
 	suggestedProviderKey          string
 	suggestedCache                *SuggestedPluginList
@@ -3267,6 +3269,12 @@ func parsedMarketplacePluginSource(source *PluginSource) (*ParsedMarketplaceSour
 		refName = cloneStringPtr(source.SHA)
 	}
 	parsed, err := ParseMarketplaceSource(source.URL, refName)
+	// Typed plugin Git sources can use a local Git URL (Rust #61129).
+	// Keep the separate marketplace CLI shorthand parser unchanged.
+	if strings.HasPrefix(strings.TrimSpace(source.URL), "file://") {
+		parsed = &ParsedMarketplaceSource{Kind: MarketplaceSourceGit, URL: strings.TrimSpace(source.URL), RefName: refName}
+		err = nil
+	}
 	if err != nil {
 		return nil, "", fmt.Errorf("%w: invalid marketplace plugin source: %v", ErrInvalidPluginRequest, err)
 	}

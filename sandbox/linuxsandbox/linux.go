@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/bmatcuk/doublestar/v4"
-	seccomp "github.com/elastic/go-seccomp-bpf"
 	json "github.com/goccy/go-json"
 	"github.com/landlock-lsm/go-landlock/landlock"
 	"github.com/spf13/pflag"
@@ -51,18 +50,6 @@ var proxyEnvKeys = map[string]bool{
 	"DOCKER_HTTP_PROXY":      true,
 	"DOCKER_HTTPS_PROXY":     true,
 }
-
-type linuxNetworkSeccompMode int
-
-const (
-	linuxNetworkSeccompNone linuxNetworkSeccompMode = iota
-	linuxNetworkSeccompRestricted
-	linuxNetworkSeccompProxyRouted
-	// linuxNetworkSeccompVmSocketRestricted mirrors the upstream
-	// `NetworkSeccompMode::VmSocketRestricted` mode: it denies `AF_VSOCK`
-	// sockets while leaving ordinary networking untouched.
-	linuxNetworkSeccompVmSocketRestricted
-)
 
 type linuxPermissionProfile struct {
 	Filesystem     *linuxFilesystemPolicy
@@ -864,78 +851,8 @@ func linuxNetworkSeccompModeForProfile(profile *linuxPermissionProfile, allowNet
 // `io_uring_setup`/`io_uring_enter`/`io_uring_register`, because io_uring can
 // create sockets (including `AF_VSOCK`) without going through `socket`.
 func installLinuxNetworkSeccompFilter(mode linuxNetworkSeccompMode, managedNetwork *linuxManagedNetworkContext) error {
-	groups := []seccomp.SyscallGroup{}
-	if mode != linuxNetworkSeccompVmSocketRestricted {
-		groups = append(groups, seccomp.SyscallGroup{Action: seccomp.ActionErrno, Names: []string{
-			"ptrace",
-			"process_vm_readv",
-			"process_vm_writev",
-		}})
-	}
-	groups = append(groups, seccomp.SyscallGroup{Action: seccomp.ActionErrno, Names: []string{
-		"io_uring_setup",
-		"io_uring_enter",
-		"io_uring_register",
-	}})
-	switch mode {
-	case linuxNetworkSeccompRestricted:
-		groups = append(groups,
-			seccomp.SyscallGroup{Action: seccomp.ActionErrno, Names: []string{
-				"connect",
-				"accept",
-				"accept4",
-				"bind",
-				"listen",
-				"getpeername",
-				"getsockname",
-				"shutdown",
-				"sendto",
-				"sendmmsg",
-				"recvmmsg",
-				"getsockopt",
-				"setsockopt",
-			}},
-			seccomp.SyscallGroup{Action: seccomp.ActionErrno, NamesWithCondtions: []seccomp.NameWithConditions{
-				{Name: "socket", Conditions: []seccomp.Condition{{Argument: 0, Operation: seccomp.NotEqual, Value: uint64(unix.AF_UNIX)}}},
-				{Name: "socketpair", Conditions: []seccomp.Condition{{Argument: 0, Operation: seccomp.NotEqual, Value: uint64(unix.AF_UNIX)}}},
-			}},
-		)
-	case linuxNetworkSeccompProxyRouted:
-		// IP sockets stay allowed inside the isolated namespace so the command
-		// can reach the local routing bridge. A standalone AF_UNIX socket is
-		// denied unless the effective managed-network policy grants
-		// `dangerously_allow_all_unix_sockets`; AF_UNIX socket pairs stay
-		// allowed either way (see the socketpair rule below).
-		deniedSocketFamilies := []seccomp.Condition{
-			{Argument: 0, Operation: seccomp.NotEqual, Value: uint64(unix.AF_INET)},
-			{Argument: 0, Operation: seccomp.NotEqual, Value: uint64(unix.AF_INET6)},
-		}
-		if managedNetwork != nil && managedNetwork.DangerouslyAllowAllUnixSockets {
-			deniedSocketFamilies = append(deniedSocketFamilies, seccomp.Condition{Argument: 0, Operation: seccomp.NotEqual, Value: uint64(unix.AF_UNIX)})
-		}
-		groups = append(groups,
-			seccomp.SyscallGroup{Action: seccomp.ActionErrno, NamesWithCondtions: []seccomp.NameWithConditions{
-				{Name: "socket", Conditions: deniedSocketFamilies},
-				{Name: "socketpair", Conditions: []seccomp.Condition{{Argument: 0, Operation: seccomp.NotEqual, Value: uint64(unix.AF_UNIX)}}},
-			}},
-		)
-	case linuxNetworkSeccompVmSocketRestricted:
-		// Deny only the VM socket family; every other family, including
-		// `AF_UNIX`, keeps the behaviour of an unrestricted network policy.
-		groups = append(groups, seccomp.SyscallGroup{Action: seccomp.ActionErrno, NamesWithCondtions: []seccomp.NameWithConditions{
-			{Name: "socket", Conditions: []seccomp.Condition{{Argument: 0, Operation: seccomp.Equal, Value: uint64(unix.AF_VSOCK)}}},
-			{Name: "socketpair", Conditions: []seccomp.Condition{{Argument: 0, Operation: seccomp.Equal, Value: uint64(unix.AF_VSOCK)}}},
-		}})
-	}
-	filter := seccomp.Filter{
-		NoNewPrivs: true,
-		Flag:       seccomp.FilterFlagTSync,
-		Policy: seccomp.Policy{
-			DefaultAction: seccomp.ActionAllow,
-			Syscalls:      groups,
-		},
-	}
-	if err := seccomp.LoadFilter(filter); err != nil {
+	groups := networkSeccompGroups(mode, managedNetwork != nil && managedNetwork.DangerouslyAllowAllUnixSockets)
+	if err := loadNetworkSeccomp(groups); err != nil {
 		return fmt.Errorf("failed to load seccomp filter: %w", err)
 	}
 	return nil

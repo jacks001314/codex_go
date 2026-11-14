@@ -218,9 +218,9 @@ func TestRealtimeSettingsFromConfigValues(t *testing.T) {
 			want:   VoiceSettings{},
 		},
 		{
-			name:   "non-string voice is ignored",
+			name:   "non-string voice is rejected",
 			values: map[string]any{"realtime": map[string]any{"voice": 3}},
-			want:   VoiceSettings{},
+			want:   VoiceSettings{VoiceErr: "realtime.voice must be a string"},
 		},
 		{
 			name:   "non-string model is ignored",
@@ -253,44 +253,36 @@ func TestVoiceRuntimeResolvesVoice(t *testing.T) {
 	if voice, err := runtime.resolveVoice(context.Background(), VoiceSettings{Voice: "not-a-voice", VoiceSet: true}); err != nil || voice != nil {
 		t.Fatalf("unknown voice = %#v", voice)
 	}
-	// An absent preference falls back to the builtin default for v1.
+	// The provider chooses the default only when the request is serialized.
 	fallback, err := runtime.resolveVoice(context.Background(), VoiceSettings{})
-	if err != nil {
-		t.Fatalf("resolve fallback voice: %v", err)
-	}
-	voices := realtime.BuiltinVoices()
-	builtin := voices.DefaultForVersion(realtime.VersionV1)
-	if fallback == nil || *fallback != builtin {
-		t.Fatalf("fallback voice = %#v, want %q", fallback, builtin)
+	if err != nil || fallback != nil {
+		t.Fatalf("unset voice=%v, err=%v", fallback, err)
 	}
 }
 
-func TestVoiceRuntimeUsesServerVoiceList(t *testing.T) {
-	served := realtime.VoicesList{
-		V1:        []realtime.Voice{"served-default"},
-		V2:        []realtime.Voice{"served-default"},
-		DefaultV1: "served-default",
-	}
-	runtime := newVoiceRuntime(voiceRuntimeOptions{
-		listVoices: func(context.Context) realtime.VoicesList { return served },
-	})
-	fallback, err := runtime.resolveVoice(context.Background(), VoiceSettings{})
-	if err != nil {
-		t.Fatalf("resolve served voice: %v", err)
-	}
-	if fallback == nil || *fallback != realtime.Voice("served-default") {
-		t.Fatalf("fallback voice = %#v", fallback)
-	}
-}
-
-func TestVoiceRuntimePropagatesCatalogFailure(t *testing.T) {
-	runtime := newVoiceRuntime(voiceRuntimeOptions{
-		listVoicesWithError: func(context.Context) (realtime.VoicesList, error) {
-			return realtime.VoicesList{}, errors.New("catalog unavailable")
-		},
-	})
-	if voice, err := runtime.resolveVoice(context.Background(), VoiceSettings{Voice: "cove", VoiceSet: true}); err == nil || voice != nil {
-		t.Fatalf("catalog failure = %#v/%v, want error", voice, err)
+func TestVoiceRuntimeStartsWithoutCatalogLikeRust(t *testing.T) {
+	for _, settings := range []VoiceSettings{{}, {Voice: "marin", VoiceSet: true}, {Voice: "unknown", VoiceSet: true}} {
+		runtime := newVoiceRuntime(voiceRuntimeOptions{
+			listVoices: func(context.Context) realtime.VoicesList {
+				t.Fatal("startup queried legacy catalog")
+				return realtime.VoicesList{}
+			},
+			listVoicesWithError: func(context.Context) (realtime.VoicesList, error) {
+				t.Error("startup queried catalog")
+				return realtime.VoicesList{}, errors.New("catalog unavailable")
+			},
+		})
+		params, err := runtime.startParams(context.Background(), "thread-1", "offer", settings)
+		if err != nil {
+			t.Fatalf("start params: %v", err)
+		}
+		if settings.Voice == "marin" {
+			if params.Voice == nil || *params.Voice != realtime.VoiceMarin {
+				t.Fatalf("explicit voice=%v", params.Voice)
+			}
+		} else if params.Voice != nil {
+			t.Fatalf("unspecified/unknown voice=%v", params.Voice)
+		}
 	}
 }
 
@@ -626,6 +618,25 @@ func TestSendRemoteTurnErrorKeepsServerErrorsOnline(t *testing.T) {
 	for message := range messages {
 		if _, ok := message.(codextea.AppServerDisconnectMsg); ok {
 			t.Fatal("a JSON-RPC error was reported as a transport disconnect")
+		}
+	}
+}
+
+func TestRealtimeVoiceConfigParsingLikeRust(t *testing.T) {
+	for _, raw := range []any{"future-voice", " cove ", nil} {
+		got := RealtimeSettingsFromConfigValues(map[string]any{"realtime": map[string]any{"voice": raw}})
+		if got.VoiceSet || got.VoiceErr != "" {
+			t.Fatalf("raw=%v settings=%#v", raw, got)
+		}
+	}
+	for _, raw := range []any{true, 4, []any{"cove"}, map[string]any{}} {
+		got := RealtimeSettingsFromConfigValues(map[string]any{"realtime": map[string]any{"voice": raw}})
+		if got.VoiceErr == "" {
+			t.Fatalf("raw=%v accepted", raw)
+		}
+		runtime := newVoiceRuntime(voiceRuntimeOptions{})
+		if _, err := runtime.startParams(context.Background(), "thread-1", "offer", got); err == nil {
+			t.Fatal("invalid voice reached start request")
 		}
 	}
 }

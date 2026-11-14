@@ -151,8 +151,23 @@ func restoredPermissionProfileResolution(cfg *config.Config, saved *sandbox.Perm
 	restored := *saved
 	restored.DeniedReadEntries = append([]sandbox.FileSystemSandboxEntry(nil), saved.DeniedReadEntries...)
 	if cfg.Requirements != nil {
-		if denials, err := config.FilesystemDenyReadEntriesFromPermissions(cfg.Requirements.Permissions, utils.NativePathConvention()); err == nil {
-			restored.DeniedReadEntries = config.AppendFilesystemDenyReadEntries(restored.DeniedReadEntries, denials)
+		denials, err := config.FilesystemDenyReadEntriesFromPermissions(cfg.Requirements.Permissions, utils.NativePathConvention())
+		if err != nil {
+			return nil, false
+		}
+		if len(denials) > 0 {
+			// Updating only DeniedReadEntries leaves canonical runtimeJSON stale.
+			// Merge into the representation the sandbox launcher actually uses.
+			required := sandbox.ReadOnlyPermissionProfile()
+			required.DeniedReadEntries = denials
+			merged, err := sandbox.PreserveDeniedReads(restored, required)
+			if err != nil {
+				return nil, false
+			}
+			// Keep the legacy deny projection for disabled/external profiles,
+			// whose wire enforcement intentionally has no filesystem section.
+			merged.DeniedReadEntries = config.AppendFilesystemDenyReadEntries(restored.DeniedReadEntries, denials)
+			restored = *merged
 		}
 	}
 	raw, err := sandbox.RuntimePermissionProfileJSON(restored)

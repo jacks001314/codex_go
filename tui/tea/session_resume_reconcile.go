@@ -3,15 +3,32 @@ package tea
 import (
 	"strings"
 
+	"codex_go/protocol"
 	codextui "codex_go/tui"
 )
+
+// reconcileBufferedSessionInput consumes receipts independently of transcript
+// replay: a read-only or already populated snapshot still confirms delivery.
+func (m *Model) reconcileBufferedSessionInput(threadID string, events []protocol.ThreadEvent) {
+	var receipts []codextui.Message
+	for _, event := range events {
+		if event.Type != "item.completed" || !isUserMessageThreadItem(event.Item) {
+			continue
+		}
+		if event.ThreadID != "" && event.ThreadID != threadID {
+			continue
+		}
+		receipts = append(receipts, codextui.Message{Role: codextui.RoleUser, ClientID: event.Item.ClientID})
+	}
+	m.reconcileConfirmedSessionInput(threadID, receipts)
+}
 
 // reconcileConfirmedSessionInput removes submissions the resumed history
 // already contains (Rust #59817 App::reconcile_saved_session_input and
 // ThreadInputState::reconcile_confirmed_messages). Matching uses the client
 // message id, so two submissions with identical text stay distinct: only the
-// acknowledged id is dropped and the remaining input is eligible for delivery
-// again.
+// acknowledged id is dropped. Unconfirmed submitted steers continue to hold
+// the unsent queue until a matching receipt arrives.
 func (m *Model) reconcileConfirmedSessionInput(threadID string, messages []codextui.Message) {
 	if m == nil {
 		return

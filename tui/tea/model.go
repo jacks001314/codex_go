@@ -915,8 +915,10 @@ type VoiceSettingsMsg struct {
 
 // VoiceSavedMsg reports a persisted voice preference.
 type VoiceSavedMsg struct {
-	Voice string
-	Err   error
+	// EffectiveVoice is non-nil when configuration was read successfully; empty means no preference.
+	EffectiveVoice *string
+	Voice          string
+	Err            error
 	// Saved reports that the preference reached disk even though its effective
 	// value could not be confirmed.
 	Saved bool
@@ -2080,8 +2082,10 @@ type Model struct {
 	frozenReadReceipt     *threadReadReceipt
 	// agentsOverviewGrouping is the live Command Center grouping kept across
 	// dashboard opens (Rust #50786 AgentsOverviewState::grouping).
-	agentsOverviewGrouping agentsoverview.Grouping
-	agentsOverviewDrafts   map[string]string
+	agentsOverviewGrouping              agentsoverview.Grouping
+	agentsOverviewDrafts                map[string]string
+	agentsOverviewDraftShellModes       map[string]bool
+	agentsOverviewPendingDraftShellMode *bool
 	// agentsOverviewDraftPastes keeps the pending large pastes of a saved draft
 	// so returning to that thread restores its placeholders too (Rust
 	// ThreadComposerState::pending_pastes).
@@ -3088,6 +3092,8 @@ type Model struct {
 	historySearchMentionBindings []string
 	submitRequests               []SubmitRequest
 	queued                       []queuedSubmission
+	threadQueuedInput            map[string]queuedThreadInput
+	resumedQueueThreadID         string
 	pendingSteers                []pendingSteerSubmission
 	// cloudStreamDisconnectedThreadID holds submitted input while the Cloud
 	// reply stream of that conversation is being reopened (Rust #60969).
@@ -4056,6 +4062,9 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		} else {
 			cmd = bubbletea.Batch(cmd, daybreakCmd)
 		}
+	}
+	if queueCmd := next.consumeResumedQueue(); queueCmd != nil {
+		cmd = bubbletea.Batch(cmd, queueCmd)
 	}
 	return next, cmd
 }
@@ -7236,6 +7245,11 @@ func (m *Model) commitPendingSteers(count int) {
 		m.State.AddUserPromptMessage(display, promptText, localImages, remoteImages, promptElements)
 	}
 	m.pendingSteers = append([]pendingSteerSubmission(nil), m.pendingSteers[count:]...)
+	if len(m.pendingSteers) == 0 {
+		// The last receipt releases the queue hold. Submit only after this
+		// update finishes, using the same thread and eligibility checks as resume.
+		m.resumedQueueThreadID = m.currentThreadID()
+	}
 	m.refreshTranscript()
 }
 
@@ -7269,7 +7283,9 @@ func (m *Model) switchThreadID(threadID string) {
 		return
 	}
 	threadID = strings.TrimSpace(threadID)
+	m.stashQueuedThreadInput()
 	m.State.SetThreadID(threadID)
+	m.restoreQueuedThreadInput(threadID)
 	m.syncGoalForCurrentThread()
 	m.setPendingSteerThread(threadID)
 	m.noteThreadBackend(threadID, m.backendID)
@@ -7431,6 +7447,10 @@ func (m *Model) applyCloudStreamReconnected(msg CloudStreamReconnectedMsg) bubbl
 
 func (m *Model) submitNextQueued() bubbletea.Cmd {
 	if m == nil || !m.isIdle() {
+		return nil
+	}
+	// Submitted steers remain uncertain until a matching receipt arrives (#61216).
+	if m.readOnlyThread || m.userTurnPendingStart || len(m.pendingSteers) > 0 {
 		return nil
 	}
 	// Rust #55682: a permissions selection holds queued prompts until the
@@ -11546,6 +11566,9 @@ func (m *Model) applyVoicePickerOption(optionID string) bubbletea.Cmd {
 func (m *Model) applyVoiceSaved(msg VoiceSavedMsg) {
 	if m == nil {
 		return
+	}
+	if msg.EffectiveVoice != nil {
+		m.voicePreference = *msg.EffectiveVoice
 	}
 	if msg.Err != nil {
 		if msg.Saved {

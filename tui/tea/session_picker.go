@@ -260,7 +260,12 @@ func (m *Model) applyResumePickerSelection(selection codextui.SessionSelection) 
 	}
 	if switching && attached != "" && attached == target {
 		if draft, ok := m.agentsOverviewDrafts[target]; ok {
-			m.setComposerPrompt(draft)
+			if mode, exists := m.agentsOverviewDraftShellModes[target]; exists {
+				m.setComposerPromptWithMode(draft, mode)
+			} else {
+				m.setComposerPrompt(draft)
+			}
+			delete(m.agentsOverviewDraftShellModes, target)
 			delete(m.agentsOverviewDrafts, target)
 		} else {
 			// Rust builds a fresh chat widget when the task has no saved input
@@ -565,6 +570,11 @@ func (m *Model) applyForkCurrentSessionResult(msg forkCurrentSessionMsg) bubblet
 		m.setReadOnlyThread(false)
 		m.restoreComposerInputState(msg.retained, true)
 		m.movePendingSteersToFork(msg.sourceThreadID, decision.Value, msg.retainedSteers)
+		// A locked-view fork explicitly moves unsent input to the editable
+		// conversation; ordinary resume keeps it with its original owner.
+		if m.currentThreadID() == decision.Value {
+			m.restoreQueuedThreadInput(msg.sourceThreadID)
+		}
 		m.notice = "Fork created. You can continue here."
 	case forkOriginAgentsOverview:
 		// The command center hands the new session back to the shell.
@@ -885,6 +895,7 @@ func (m *Model) applyResumeResponseWithCWD(threadID string, response SessionResu
 	// Rust #59319: replayed command history must not become live terminals; the
 	// displayed thread's own terminals come from the app server after replay.
 	m.requestBackgroundTerminalRestore()
+	m.resumedQueueThreadID = m.currentThreadID()
 }
 
 func normalizeSessionPickerDensityTea(value string) codextui.SessionListDensity {

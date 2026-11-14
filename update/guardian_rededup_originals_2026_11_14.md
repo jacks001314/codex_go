@@ -1,0 +1,7 @@
+# Guardian 弹性去重保留原文
+
+发现 rededuplicateGuardianElasticRetained 在section构建之后仍调用固定预算RenderRetainedInstructions，重新丢弃长原文。已改用原始候选渲染，与弹性section初次构建一致。
+
+扩展同步/异步长用户与assistant证据回归，先构建section再执行实际rededup，确认无交付来源时原文仍完整。Guardian/Retained/Elastic组合测试通过，state vet退出0。日志guardian_rededup_originals_2026_11_14.log。
+
+全量无缓存串行测试session34226仍运行，当前进入appserver用例。该运行启动于本次修复前，不覆盖本次修复；最终需重新验证受影响包。#61185完整请求缓存/异步链路与整体剩余计划未完成，未提交推送。

@@ -65,6 +65,10 @@ func TestRuntimeRouterRuntimeWorkspaceRootsEmptyVsOmittedLikeRust(t *testing.T) 
 		return &Request{JSONRPC: "2.0", ID: IntID(id), Method: MethodThreadResume, Params: encoded}
 	}
 
+	// Exercise cold restoration: live subscribed resumes ignore overrides (#61136).
+	waitNotificationTestTurnWorkers(t, router)
+	router.markThreadUnloaded(threadID)
+	router.threads.ReleaseLiveThreads([]session.ThreadID{session.ThreadID(threadID)})
 	omitted := router.Handle(resumeRaw(3, &nextCWD, nil))
 	if omitted.Error != nil {
 		t.Fatalf("resume omitted roots error = %+v", omitted.Error)
@@ -72,6 +76,8 @@ func TestRuntimeRouterRuntimeWorkspaceRootsEmptyVsOmittedLikeRust(t *testing.T) 
 	assertRuntimeRoots(t, omitted.Result.(*ThreadResumeResponse).RuntimeWorkspaceRoots, nextCWD, extra)
 
 	empty := []string{}
+	router.markThreadUnloaded(threadID)
+	router.threads.ReleaseLiveThreads([]session.ThreadID{session.ThreadID(threadID)})
 	cleared := router.Handle(resumeRaw(4, &cwd, &empty))
 	if cleared.Error != nil {
 		t.Fatalf("resume explicit empty roots error = %+v", cleared.Error)

@@ -1,0 +1,7 @@
+# 权限接纳前转换（#61134部分）
+
+将legacy sandboxPolicy转换及已有profile拒绝条目合并从持久化阶段提取为normalizeLegacySettingsPermissionProfile。commitThreadSettingsUpdateWithConnection先在请求副本上捕获规范JSON，成功后才修改ThreadExtraService；持久化复用此快照，直接调用持久化的旧测试路径保留转换兼容。
+
+新增TestInvalidLegacyPermissionAdmissionLeavesSettingsUnchanged：非法sandbox与新model同时提交，必须报错且原命名权限、model、sandbox字段不变，调用方参数不变。修复前失败invalid policy admitted，修复后与legacy写入、冷恢复、权限设置及commit快照回归通过0.883s。go vet ./appserver和Master worktree diff --check通过，代码和日志同步Master。
+
+本次保证权限解析/规范化错误发生在内存设置发布前；不声称磁盘I/O失败时完整事务回滚。当前合并源仍为已有metadata permission_profile，实时命名权限配置/完整CWD语义及后续turn规范profile消费仍需对齐。#61134和整体同步未完成，appserver剩余两项全包失败尚未解决。

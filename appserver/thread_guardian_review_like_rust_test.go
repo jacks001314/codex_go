@@ -3,6 +3,7 @@ package appserver
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -10,9 +11,74 @@ import (
 	"time"
 
 	"codex_go/mcp"
+	"codex_go/model"
 	"codex_go/session"
 	"codex_go/state"
 )
+
+// Direct RPC retries share the live approval reviewer, but never the actor's
+// response chain or another parent's review history (Rust #61163).
+func TestThreadGuardianReviewReusesHistoryWithinParent(t *testing.T) {
+	var previous []string
+	reviewer := newModelGuardianReviewer(guardianAgentFunc(func(_ context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+		previous = append(previous, request.PreviousResponseID)
+		return &model.AgentResponse{
+			ResponseID: fmt.Sprintf("review-%d", len(previous)),
+			Message:    `{"riskLevel":"medium","userAuthorization":"high","outcome":"allow","rationale":"reviewed"}`,
+		}, nil
+	}))
+	router := guardianReviewTestRouter(t, reviewer,
+		`{"type":"function_call","name":"exec_command","call_id":"recorded-call","arguments":"{\"cmd\":\"echo reviewed > guardian-direct.txt\",\"sandbox_permissions\":\"require_escalated\"}"}`,
+	)
+	store := router.services.ThreadRouter.store
+	parent, err := store.Load(session.ThreadID("guardian-review-thread"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := mustJSON(t, parent.Items)
+	other := *parent
+	other.ID = session.ThreadID("other-parent")
+	other.SessionID = string(other.ID)
+	if err := store.Create(&other); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{string(parent.ID), string(parent.ID), string(other.ID), string(parent.ID)} {
+		response := router.Handle(guardianReviewRequest(t, id))
+		if response.Error != nil {
+			t.Fatalf("review %q: %+v", id, response.Error)
+		}
+		if got := guardianReviewResponseJSON(t, response); !strings.Contains(got, `"rationale":"reviewed"`) {
+			t.Fatalf("review %q did not run the model: %s", id, got)
+		}
+	}
+	want := []string{"", "review-1", "", "review-2"}
+	if fmt.Sprint(previous) != fmt.Sprint(want) {
+		t.Fatalf("review continuation IDs = %q, want %q", previous, want)
+	}
+	decision, _, err := reviewer.Review(context.Background(), string(parent.ID), "live-turn", "live-call", state.Action{Type: "command", Command: "echo live", CWD: router.services.DefaultCWD})
+	if err != nil || decision != state.DecisionApproved {
+		t.Fatalf("live approval after direct reviews: decision=%s err=%v", decision, err)
+	}
+	response := router.Handle(guardianReviewRequest(t, string(parent.ID)))
+	if response.Error != nil {
+		t.Fatalf("direct review after live approval: %+v", response.Error)
+	}
+	if len(previous) != 6 || previous[4] != "review-4" || previous[5] != "review-5" {
+		t.Fatalf("direct/live shared continuation = %q", previous)
+	}
+	for _, id := range []session.ThreadID{parent.ID, other.ID} {
+		after, err := store.Load(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(mustJSON(t, after.Items)) != string(before) {
+			t.Fatalf("review changed actor history for %q", id)
+		}
+	}
+	if matches, err := filepath.Glob(filepath.Join(router.services.DefaultCWD, "guardian-direct.txt")); err != nil || len(matches) != 0 {
+		t.Fatalf("recorded command side effects: matches=%v err=%v", matches, err)
+	}
+}
 
 // Mirrors Rust #58119 `thread/guardianReview`: an idle thread's final injected
 // exec_command is reviewed without being executed, and the structured
@@ -144,8 +210,12 @@ func TestThreadGuardianReviewReturnsAssessmentLikeRust(t *testing.T) {
 		t.Fatalf("omitted call id = %q, want exec-review", got)
 	}
 	// Direct review never runs the command.
-	if _, err := filepath.Glob(filepath.Join(router.services.DefaultCWD, "guardian-direct.txt")); err != nil {
+	matches, err := filepath.Glob(filepath.Join(router.services.DefaultCWD, "guardian-direct.txt"))
+	if err != nil {
 		t.Fatalf("glob: %v", err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("direct review executed the recorded command: %v", matches)
 	}
 }
 
@@ -229,6 +299,72 @@ func TestThreadGuardianReviewRecordedMCPLikeRust(t *testing.T) {
 			t.Fatalf("response = %+v, want an unsupported-tool error", response)
 		}
 	})
+}
+
+func TestThreadGuardianReviewInheritsParentPersistence(t *testing.T) {
+	for _, ephemeral := range []bool{false, true} {
+		t.Run(fmt.Sprintf("ephemeral=%v", ephemeral), func(t *testing.T) {
+			router := guardianReviewTestRouter(t, nil,
+				`{"type":"function_call","name":"exec_command","call_id":"recorded-call","arguments":"{\"cmd\":\"echo reviewed > guardian-direct.txt\",\"sandbox_permissions\":\"require_escalated\"}"}`,
+			)
+			parent, err := router.services.ThreadRouter.store.Load(session.ThreadID("guardian-review-thread"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			parent.ID = "persistence-parent"
+			parent.SessionID = "persistence-session"
+			parent.Metadata.Extra = map[string]any{"ephemeral": ephemeral}
+			if err := router.services.ThreadRouter.store.Create(parent); err != nil {
+				t.Fatal(err)
+			}
+			var captured *model.AgentRequest
+			router.services.Agent = guardianAgentFunc(func(_ context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+				captured = request
+				return &model.AgentResponse{Message: `{"riskLevel":"medium","userAuthorization":"high","outcome":"allow","rationale":"reviewed"}`}, nil
+			})
+			response := router.Handle(guardianReviewRequest(t, string(parent.ID)))
+			if response.Error != nil {
+				t.Fatalf("direct review: %+v", response.Error)
+			}
+			if captured == nil {
+				t.Fatalf("model not called: %s", guardianReviewResponseJSON(t, response))
+			}
+			if captured.Ephemeral != ephemeral || captured.SessionID != parent.SessionID {
+				t.Fatalf("review persistence = %v/%q, want %v/%q", captured.Ephemeral, captured.SessionID, ephemeral, parent.SessionID)
+			}
+		})
+	}
+}
+
+func TestThreadGuardianReviewRetryUsesCurrentApprovalPolicy(t *testing.T) {
+	var previous []string
+	reviewer := newModelGuardianReviewer(guardianAgentFunc(func(_ context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+		previous = append(previous, request.PreviousResponseID)
+		return &model.AgentResponse{ResponseID: fmt.Sprintf("policy-%d", len(previous)), Message: `{"riskLevel":"medium","userAuthorization":"high","outcome":"allow","rationale":"current policy"}`}, nil
+	}))
+	router := guardianReviewTestRouter(t, reviewer,
+		`{"type":"function_call","name":"request_permissions","call_id":"grant","arguments":"{\"permissions\":{\"network\":{\"enabled\":true}}}"}`,
+	)
+	for _, policy := range []string{"on-request", "never", "on-request"} {
+		if _, err := router.services.ThreadExtras.UpdateSettings(&SettingsUpdateParams{ThreadID: "guardian-review-thread", ApprovalPolicy: &policy}); err != nil {
+			t.Fatal(err)
+		}
+		response := router.Handle(guardianReviewRequest(t, "guardian-review-thread"))
+		if response.Error != nil {
+			t.Fatalf("policy %q: %+v", policy, response.Error)
+		}
+		got := guardianReviewResponseJSON(t, response)
+		if policy == "never" {
+			if got != `{"callId":"grant","assessment":null}` || len(previous) != 1 {
+				t.Fatalf("never policy should skip current review: response=%s calls=%d", got, len(previous))
+			}
+		} else if !strings.Contains(got, `"rationale":"current policy"`) {
+			t.Fatalf("policy %q did not reassess: %s", policy, got)
+		}
+	}
+	if len(previous) != 2 || previous[0] != "" || previous[1] != "policy-1" {
+		t.Fatalf("review chain after policy change = %q, want empty then policy-1", previous)
+	}
 }
 
 func TestThreadGuardianReviewSkipsAssessmentWhenPolicyAllowsLikeRust(t *testing.T) {

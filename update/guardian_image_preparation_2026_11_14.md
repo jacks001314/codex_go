@@ -1,0 +1,7 @@
+# #61185 Node REPL 图像准备验证
+
+Go NodeReplReviewEvidence 只保存图片URL，ImageRefs不包含detail，MultimodalInputItemsFiltered生成的图片也不携带detail；因此当前路径的新证据在去重/计费前已具备上游要求的无detail形式，无需新增生产转换。
+
+新增TestGuardianNewImagesHaveNoDetailAndPreserveEvidence：已提交old引用被过滤，重复new只保留一次；新图片没有detail；修改生成的输入不会改写证据快照；准备阶段不会把new提前标记为已提交。连同现有图像/NodeREPL回归通过，context vet退出0。日志同名log。
+
+验证范围是NodeREPL引用和输入生成路径，不等于异步评分器所有输入图像路径已完成对齐。#61185共享快照/缓存及完整请求链路仍待核查；总体同步未完成。串行全量测试会话11367仍运行，应继续读取JSON事件而非重复启动。

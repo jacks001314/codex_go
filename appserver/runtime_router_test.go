@@ -10462,12 +10462,22 @@ func sortedToolSpecKeysForTest(specs map[string]tool.Spec) []string {
 }
 
 func TestRuntimeRouterDispatchesThreadExtrasAndRealtime(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(config.ConfigPath(home), []byte("[permissions.trusted.filesystem]\n\":minimal\" = \"read\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := session.NewStore(t.TempDir())
+	now := time.Now().UTC()
+	if err := store.Create(&session.Record{ID: "thread-1", SessionID: "thread-1", CreatedAt: now, UpdatedAt: now, Metadata: session.Metadata{CWD: home}}); err != nil {
+		t.Fatal(err)
+	}
 	extras := NewThreadExtraService()
 	extras.SetBackgroundTerminals("thread-1", []BackgroundTerminal{
 		{ItemID: "item-1", ProcessID: "proc-1", Command: "sleep", CWD: "D:/repo"},
 	})
 	sink := NewNotificationBuffer()
-	router := NewRuntimeRouter(RuntimeServices{ThreadExtras: extras})
+	router := NewRuntimeRouter(RuntimeServices{ThreadExtras: extras, ThreadRouter: NewRouter(store), Config: config.NewConfigService(home)})
+	defer closeNotificationTestRouter(t, router)
 	router.SetNotificationSink(sink)
 	router.requireThreadStatus().UpsertThread("thread-1", false)
 
@@ -10516,7 +10526,7 @@ func TestRuntimeRouterDispatchesThreadExtrasAndRealtime(t *testing.T) {
 		Permissions: &permissions,
 	}))
 	if settingsUpdate.Error != nil {
-		t.Fatalf("settings update = %+v", settingsUpdate)
+		t.Fatalf("settings update error = %+v", settingsUpdate.Error)
 	}
 	settingsNotification := threadSettingsNotification(t, sink, "thread-1")
 	if settingsNotification.ThreadSettings.Model != "gpt-settings" ||
@@ -11072,6 +11082,16 @@ func TestRuntimeRouterTurnStartAcceptsCollaborationModeOverrideLikeRust(t *testi
 		Turns:        turn.NewTurnService(),
 		Agent:        agent,
 		ThreadStatus: NewThreadStatusManager(),
+	})
+	t.Cleanup(func() {
+		waitCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := router.threads.WaitForTurnWorkers(waitCtx); err != nil {
+			t.Errorf("wait for turn cleanup: %v", err)
+		}
+		if err := router.services.ThreadRouter.Close(); err != nil {
+			t.Errorf("close thread writers: %v", err)
+		}
 	})
 	router.SetNotificationSink(sink)
 
@@ -13250,6 +13270,7 @@ func TestRuntimeRouterTurnStartRuntimeWorkspaceRootsResumeFromLoadedThread(t *te
 		t.Fatalf("resume runtimeWorkspaceRoots = %#v", resumeResult.RuntimeWorkspaceRoots)
 	}
 
+	// Rust #61136: a subscribed idle runtime ignores resume overrides.
 	resumeRoot := t.TempDir()
 	resumeExplicit := router.Handle(requestWithParams(t, IntID(4), MethodThreadResume, ThreadResumeParams{
 		ThreadID:              threadID,
@@ -13260,7 +13281,7 @@ func TestRuntimeRouterTurnStartRuntimeWorkspaceRootsResumeFromLoadedThread(t *te
 		t.Fatalf("explicit resume error: %+v", resumeExplicit.Error)
 	}
 	resumeExplicitResult := resumeExplicit.Result.(*ThreadResumeResponse)
-	if len(resumeExplicitResult.RuntimeWorkspaceRoots) != 1 || !sameAppPath(resumeExplicitResult.RuntimeWorkspaceRoots[0], resumeRoot) {
+	if len(resumeExplicitResult.RuntimeWorkspaceRoots) != 1 || !sameAppPath(resumeExplicitResult.RuntimeWorkspaceRoots[0], extraRoot) {
 		t.Fatalf("explicit resume runtimeWorkspaceRoots = %#v", resumeExplicitResult.RuntimeWorkspaceRoots)
 	}
 	record, err = store.Read(session.ThreadID(threadID), true, true)
@@ -13268,7 +13289,7 @@ func TestRuntimeRouterTurnStartRuntimeWorkspaceRootsResumeFromLoadedThread(t *te
 		t.Fatalf("Read explicit resume record error = %v", err)
 	}
 	recordRoots = stringSliceFromAny(record.Metadata.Extra["runtime_workspace_roots"])
-	if len(recordRoots) != 1 || !sameAppPath(recordRoots[0], resumeRoot) {
+	if len(recordRoots) != 1 || !sameAppPath(recordRoots[0], extraRoot) {
 		t.Fatalf("explicit resume record runtime roots = %#v", recordRoots)
 	}
 }
@@ -20093,6 +20114,7 @@ func TestRuntimeRouterCommandExecutionEmitsAnalyticsLikeRust(t *testing.T) {
 		DefaultCWD:            t.TempDir(),
 		AnalyticsRPCTransport: telemetry.AppServerRPCTransportInProcess,
 	})
+	defer closeNotificationTestRouter(t, router)
 	router.SetNotificationSink(sink)
 
 	initialize := requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
@@ -20125,8 +20147,8 @@ func TestRuntimeRouterCommandExecutionEmitsAnalyticsLikeRust(t *testing.T) {
 		t.Fatalf("turn/start error: %+v", response.Error)
 	}
 	turnID := response.Result.(*turn.TurnStartResponse).Turn.ID
-	waitForItemCompleted(t, sink, "cmd-analytics")
 	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+	waitForItemCompleted(t, sink, "cmd-analytics")
 
 	event := waitForCommandExecutionAnalyticsEvent(t, analyticsSink, turnID)
 	params := event.EventParams
@@ -20193,6 +20215,7 @@ func TestRuntimeRouterFileChangeEmitsAnalyticsLikeRust(t *testing.T) {
 		DefaultCWD:            cwd,
 		AnalyticsRPCTransport: telemetry.AppServerRPCTransportInProcess,
 	})
+	defer closeNotificationTestRouter(t, router)
 	router.SetNotificationSink(sink)
 
 	initialize := requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
@@ -20226,8 +20249,8 @@ func TestRuntimeRouterFileChangeEmitsAnalyticsLikeRust(t *testing.T) {
 		t.Fatalf("turn/start error: %+v", response.Error)
 	}
 	turnID := response.Result.(*turn.TurnStartResponse).Turn.ID
-	waitForItemCompleted(t, sink, "patch-analytics")
 	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
+	waitForItemCompleted(t, sink, "patch-analytics")
 
 	event := waitForFileChangeAnalyticsEvent(t, analyticsSink, turnID)
 	params := event.EventParams
@@ -21075,6 +21098,13 @@ func TestRuntimeRouterDynamicToolCallEmitsAnalyticsLikeRust(t *testing.T) {
 func TestRuntimeRouterMCPToolCallEmitsAnalyticsLikeRust(t *testing.T) {
 	var toolCallParams map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			if r.Header.Get("Mcp-Session-Id") != "session-mcp-analytics" {
+				t.Errorf("unexpected MCP session being closed: %q", r.Header.Get("Mcp-Session-Id"))
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		var request struct {
 			ID     int64           `json:"id"`
 			Method string          `json:"method"`
@@ -21138,6 +21168,7 @@ func TestRuntimeRouterMCPToolCallEmitsAnalyticsLikeRust(t *testing.T) {
 			"sdk": {Config: mcp.ServerConfig{URL: server.URL, Enabled: true}},
 		}}),
 	})
+	defer closeNotificationTestRouter(t, router)
 	router.SetNotificationSink(sink)
 
 	connectionID := "conn-mcp-analytics"
@@ -24757,7 +24788,8 @@ func TestRuntimeRouterPlanModeStreamsProposedPlanItem(t *testing.T) {
 		t.Fatalf("turn start error: %+v", turnStart.Error)
 	}
 	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
-	planItemID := safeIdentifier(turnID) + "-plan"
+	planDelta := waitForPlanDelta(t, sink, turnID, "- Step 1\n")
+	planItemID := planDelta.ItemID
 
 	waitForAgentDelta(t, sink, turnID, "Intro\n")
 	waitForAgentDelta(t, sink, turnID, "Outro")
@@ -24765,7 +24797,7 @@ func TestRuntimeRouterPlanModeStreamsProposedPlanItem(t *testing.T) {
 	if planStarted.Item["type"] != "plan" || planStarted.Item["responseId"] != "resp-plan" {
 		t.Fatalf("plan started item = %#v", planStarted.Item)
 	}
-	planDelta := waitForPlanDelta(t, sink, turnID, "- Step 1\n")
+	planDelta = waitForPlanDelta(t, sink, turnID, "- Step 1\n")
 	if planDelta.ItemID != planItemID {
 		t.Fatalf("plan delta = %+v", planDelta)
 	}
@@ -24795,6 +24827,7 @@ func TestRuntimeRouterApplyPatchEmitsTurnDiffUpdated(t *testing.T) {
 		Agent:        agent,
 		ThreadStatus: NewThreadStatusManager(),
 	})
+	defer closeNotificationTestRouter(t, router)
 	router.SetNotificationSink(sink)
 
 	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
@@ -24815,6 +24848,7 @@ func TestRuntimeRouterApplyPatchEmitsTurnDiffUpdated(t *testing.T) {
 	}
 	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
 
+	waitNotificationTestTurnWorkers(t, router)
 	diff := waitForTurnDiffUpdated(t, sink, turnID)
 	if diff.ThreadID != threadID || !strings.Contains(diff.Diff, "diff.txt") || !strings.Contains(diff.Diff, "+hello diff") {
 		t.Fatalf("turn diff notification = %+v", diff)
@@ -24836,6 +24870,7 @@ func TestRuntimeRouterUpdatePlanEmitsTurnPlanUpdated(t *testing.T) {
 		Agent:        &updatePlanRuntimeAgent{},
 		ThreadStatus: NewThreadStatusManager(),
 	})
+	defer closeNotificationTestRouter(t, router)
 	router.SetNotificationSink(sink)
 
 	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
@@ -25161,6 +25196,7 @@ func TestRuntimeRouterAPIKeyOpenAIProviderIncludesHostedImageGeneration(t *testi
 		ThreadStatus: NewThreadStatusManager(),
 		HTTPClient:   server.Client(),
 	})
+	defer closeNotificationTestRouter(t, router)
 	router.SetNotificationSink(sink)
 
 	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
@@ -29589,5 +29625,24 @@ func TestRuntimeRouterAgentPluginSkillInstructionsStayBoundedLikeRust(t *testing
 	warnings := warningNotificationsForTest(sink)
 	if len(warnings) != 1 || warnings[0].Message != promptctx.SkillMainPromptTruncatedWarning("acme.tools:review") {
 		t.Fatalf("warnings = %#v", warnings)
+	}
+}
+
+// A completed notification precedes tail writes to the rollout. Test-owned
+// directories may be removed only after those workers and writers are done.
+func waitNotificationTestTurnWorkers(t *testing.T, router *RuntimeRouter) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := router.threads.WaitForTurnWorkers(ctx); err != nil {
+		t.Errorf("wait for notification test workers: %v", err)
+	}
+}
+
+func closeNotificationTestRouter(t *testing.T, router *RuntimeRouter) {
+	t.Helper()
+	waitNotificationTestTurnWorkers(t, router)
+	if err := router.Close(); err != nil {
+		t.Errorf("close notification test router: %v", err)
 	}
 }

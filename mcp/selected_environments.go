@@ -129,7 +129,7 @@ func (s *SelectedEnvironments) Authority() *EnvironmentAuthority {
 		return nil
 	}
 	authority := &EnvironmentAuthority{
-		Scoped:      len(s.selections) > 0,
+		Scoped:      true,
 		Unlimited:   map[string]bool{},
 		Restricted:  map[string]*managedconfig.EnvironmentMCPPolicy{},
 		Unavailable: map[string]bool{},
@@ -161,8 +161,13 @@ func (s *SelectedEnvironments) Authority() *EnvironmentAuthority {
 // per-step contributor callback, so the projection site passes this context and
 // publishes the same snapshot on the projected runtime config.
 type MCPServerContributionContext struct {
-	threadID             string
-	selectedEnvironments *SelectedEnvironments
+	hostOnly                bool
+	sessionSource           string
+	originator              string
+	disabledPluginIDs       []string
+	disabledPluginsExplicit bool
+	threadID                string
+	selectedEnvironments    *SelectedEnvironments
 }
 
 // NewMCPServerContributionContext captures the contribution context for one
@@ -194,3 +199,41 @@ func (c MCPServerContributionContext) WithSelectedEnvironments(selected *Selecte
 	c.selectedEnvironments = selected.Clone()
 	return c
 }
+
+// WithDisabledPluginIDs captures an explicit plugin restriction snapshot.
+// An empty list deliberately clears inherited restrictions.
+func (c MCPServerContributionContext) WithDisabledPluginIDs(ids []string) MCPServerContributionContext {
+	c.disabledPluginIDs = append([]string(nil), ids...)
+	c.disabledPluginsExplicit = true
+	return c
+}
+
+// DisabledPluginIDs returns a copy and whether the caller supplied a snapshot.
+func (c MCPServerContributionContext) DisabledPluginIDs() ([]string, bool) {
+	return append([]string(nil), c.disabledPluginIDs...), c.disabledPluginsExplicit
+}
+
+// WithOriginator captures the host identity used by the implicit Apps server.
+func (c MCPServerContributionContext) WithOriginator(originator string) MCPServerContributionContext {
+	c.originator = strings.TrimSpace(originator)
+	return c
+}
+
+// Originator returns the explicit host identity, or empty for global discovery.
+func (c MCPServerContributionContext) Originator() string { return c.originator }
+
+// NewHostMCPServerContributionContext carries host identity without live step
+// extension state. Restrictions and environment snapshots can be supplied
+// explicitly with the With methods (Rust #61283).
+func NewHostMCPServerContributionContext(threadID, originator, sessionSource string) MCPServerContributionContext {
+	c := NewMCPServerContributionContext(threadID, nil).WithOriginator(originator).WithDisabledPluginIDs(nil)
+	c.hostOnly = true
+	c.sessionSource = strings.TrimSpace(sessionSource)
+	return c
+}
+
+// HostOnly reports whether live step extension state must be excluded.
+func (c MCPServerContributionContext) HostOnly() bool { return c.hostOnly }
+
+// SessionSource returns the host-supplied source of this session.
+func (c MCPServerContributionContext) SessionSource() string { return c.sessionSource }

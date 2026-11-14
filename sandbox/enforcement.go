@@ -1,8 +1,10 @@
 package sandbox
 
 import (
+	"encoding/json"
 	"os"
 	pathpkg "path"
+	"slices"
 	"strings"
 
 	"codex_go/sandbox/sandboxpath"
@@ -20,7 +22,7 @@ import (
 // backend enforces. Paths keep Seatbelt's POSIX spelling because the runtime
 // profile is platform independent until a backend binds it.
 func ResolveFileSystemPermissionsForEnforcement(profile *PermissionProfile, cwd string, projection sandboxpath.FileSystemPolicyProjection) (sandboxpath.ResolvedFileSystemPermissions, error) {
-	wire := rustPermissionProfileWireFromPermissionProfile(profile)
+	wire := enforcementPermissionWire(profile)
 	if profile == nil || profile.Disabled {
 		return sandboxpath.ResolvedFileSystemPermissions{}, nil
 	}
@@ -35,8 +37,36 @@ func ResolveFileSystemPermissionsForEnforcement(profile *PermissionProfile, cwd 
 			return wire.canReadPathWithCWD(path, cwd)
 		},
 		DecorateWritableRoots: func(roots []string) []sandboxpath.WritableRoot {
-			return sandboxpath.WritableRootsWithProtectedSubpaths(roots)
+			out := sandboxpath.WritableRootsWithProtectedSubpaths(roots)
+			if profile.runtimeJSON == "" {
+				return out
+			}
+			entries := profile.RuntimeFileSystemEntries()
+			filtered := out[:0]
+			for _, root := range out {
+				if ResolveFileSystemEntryAccess(entries, root.Root, cwd) != FileSystemAccessWrite {
+					continue
+				}
+				for _, entry := range entries {
+					path := ResolveFileSystemEntryPath(entry.Path, cwd)
+					if path == "" || path == root.Root || !sandboxpath.PathWithin(path, root.Root) {
+						continue
+					}
+					if ResolveFileSystemEntryAccess(entries, path, cwd) == FileSystemAccessWrite {
+						continue
+					}
+					if !slices.Contains(root.ReadOnlySubpaths, path) {
+						root.ReadOnlySubpaths = append(root.ReadOnlySubpaths, path)
+					}
+				}
+				filtered = append(filtered, root)
+			}
+			return filtered
 		},
+	}
+	if profile.runtimeJSON != "" && wire.FileSys != nil {
+		req.HasFullDiskReadAccess = wire.FileSys.Type == "unrestricted"
+		req.HasFullDiskWriteAccess = wire.FileSys.Type == "unrestricted"
 	}
 	resolved, err := sandboxpath.ResolveForEnforcement(req)
 	if err != nil {
@@ -83,7 +113,7 @@ func isRootPathForPolicy(path string) bool {
 // enforcementEntries resolves the profile's wire entries into concrete paths
 // and glob patterns for the shared resolver.
 func enforcementEntries(profile *PermissionProfile, cwd string) []sandboxpath.EnforcementEntry {
-	wire := rustPermissionProfileWireFromPermissionProfile(profile)
+	wire := enforcementPermissionWire(profile)
 	if wire.FileSys == nil || wire.FileSys.Type != "restricted" {
 		return nil
 	}
@@ -154,4 +184,16 @@ func joinPathForHost(root string, element string) string {
 		return pathpkg.Join(root, element)
 	}
 	return joinSeatbeltPath(root, element)
+}
+
+// Canonical runtime data retains restrictions the legacy projection cannot
+// represent (for example a read-only subtree inside a writable workspace).
+func enforcementPermissionWire(profile *PermissionProfile) rustPermissionProfileWire {
+	if profile != nil && profile.runtimeJSON != "" {
+		var wire rustPermissionProfileWire
+		if json.Unmarshal([]byte(profile.runtimeJSON), &wire) == nil {
+			return wire
+		}
+	}
+	return rustPermissionProfileWireFromPermissionProfile(profile)
 }

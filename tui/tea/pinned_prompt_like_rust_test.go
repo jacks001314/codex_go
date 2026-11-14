@@ -1,18 +1,18 @@
 package tea
 
 import (
-	mousemsg "codex_go/tui/mousemsg"
 	"fmt"
 	"strings"
 	"testing"
 
 	codextui "codex_go/tui"
+	mousemsg "codex_go/tui/mousemsg"
 	"codex_go/utils"
 )
 
 func pinnedPromptModel(t *testing.T, width int) *Model {
 	t.Helper()
-	state := codextui.NewState(nil)
+	state := codextui.NewState(&codextui.Options{CWD: "/repo"})
 	for i := 0; i < 12; i++ {
 		state.AddMessage(codextui.RoleUser, fmt.Sprintf("prompt-%d", i))
 		state.AddMessage(codextui.RoleAssistant, fmt.Sprintf("answer-%d line one\nline two\nline three", i))

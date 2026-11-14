@@ -333,7 +333,7 @@ var configTomlFields = map[string]configFieldKind{
 	"js_repl_node_module_dirs":                   {kind: configKindSequence},
 	"js_repl_node_path":                          {kind: configKindPathString},
 	"log_dir":                                    {kind: configKindPathString},
-	"marketplaces":                               {kind: configKindMap},
+	"marketplaces":                               {kind: configKindStructMap, expected: "MarketplaceConfig", fields: configMarketplaceFields},
 	"mcp_enterprise_managed_auth":                {kind: configKindStruct, expected: "McpEnterpriseManagedAuthConfig", fields: configMcpEnterpriseManagedAuthFields, required: []string{"idp"}},
 	"mcp_oauth_callback_port":                    {kind: configKindInteger, expected: "u16"},
 	"mcp_oauth_callback_url":                     {kind: configKindString},

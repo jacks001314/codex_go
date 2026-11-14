@@ -65,6 +65,7 @@ type ThreadSessionDefaults struct {
 
 type ThreadReadSnapshot struct {
 	ThreadID      string
+	ForkedFromID  *string
 	ThreadName    *string
 	ModelProvider string
 	CWD           string
@@ -138,6 +139,7 @@ func SessionStateForThreadRead(primary *ThreadSessionState, defaults ThreadSessi
 	}
 
 	session.ThreadID = thread.ThreadID
+	session.setForkParent(thread.ForkedFromID)
 	session.WindowsSandboxHost = HostFromEnvironments(thread.Environments)
 	session.ThreadName = cloneStringPointer(thread.ThreadName)
 	session.ModelProviderID = thread.ModelProvider
@@ -153,6 +155,21 @@ func SessionStateForThreadRead(primary *ThreadSessionState, defaults ThreadSessi
 	}
 	session.MessageHistory = nil
 	return session
+}
+
+// setForkParent binds cached lineage to the target thread (#61183).
+func (s *ThreadSessionState) setForkParent(parent *string) {
+	var next *string
+	if parent != nil {
+		if id, ok := ParseAppServerThreadID(*parent); ok {
+			next = &id
+		}
+	}
+	if (s.ForkedFromID == nil) != (next == nil) ||
+		(s.ForkedFromID != nil && next != nil && *s.ForkedFromID != *next) {
+		s.ForkParentTitle = nil
+	}
+	s.ForkedFromID = next
 }
 
 func (s ThreadSessionState) Clone() ThreadSessionState {

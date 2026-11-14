@@ -1,0 +1,9 @@
+# SPIFFE来源接入交换（2026-11-14）
+
+新增socket URI与audience/ID构造校验：绝对unix路径、URI路径解码、拒绝query/fragment/NUL/host及非Unix URI；ID使用前轮规范化。Unix分支构造SPIFFE来源并跳过文件要求，Windows仍按上游拒绝。
+
+workloadIdentitySessionConfig与WorkloadIdentityConfig携带私有SPIFFE来源；exchange根据来源调用fetchAssertion或既有文件读取。session fingerprint包含来源是否存在、socketPath、audience、ID，避免配置改变被视为同一会话。保留公开文件构造器兼容。
+
+测试覆盖URI解码与非法URI、三个来源字段改变指纹、构造交换确实选择SPIFFE而无assertionFile、取消获取。相关auth回归及vet退出0，见spiffe_exchange_wiring_2026_11_14.log与spiffe_exchange_wiring_vet_2026_11_14.log。
+
+尚未验证原生Unix成功获取→HTTP token交换→刷新/agent重启链路；错误重试分类及非Windows非Unix平台边界仍待补。不是完整SPIFFE认证完成声明。整体同步未完成，未commit/push。

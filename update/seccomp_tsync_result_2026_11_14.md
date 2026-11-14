@@ -1,0 +1,9 @@
+# seccomp TSYNC非errno失败处理
+
+审计发现loadNetworkSeccomp忽略seccomp syscall返回值，只检查errno。Linux SECCOMP_FILTER_FLAG_TSYNC在目标线程filter tree不兼容时可返回正数TID且errno=0，表示同步失败。已修复：非零返回值报告带线程ID的错误，不能继续当作过滤器安装成功。
+
+新增Linux amd64原生回归TestNativeSeccompRejectsUnsynchronizedThread：在隔离子进程中固定主线程，另一个固定OS线程安装独立allow-all过滤器并保持存活，再调用生产加载器；期望拒绝不同步的filter tree。原四模式内核探针保持。
+
+Windows上GOOS=linux GOARCH=amd64 go test -c及go vet ./sandbox/linuxsandbox均退出0。仅交叉编译/静态检查通过，尚未在Linux上执行上述测试；jacks在线，创建验证子Agent授权仍待用户回复。没有创建任何Agent或改变其他Agent目标。
+
+源文件已同步Master，测试二进制仅本地不提交。全模块回归29603仍在运行；此次改动为Linux专用，不改变当前Windows测试输入。整体同步和Linux认证、commit/push尚未完成。

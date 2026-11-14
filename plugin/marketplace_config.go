@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"codex_go/utils"
+
 	"github.com/pelletier/go-toml/v2"
 )
 
@@ -140,6 +142,18 @@ func recordMarketplaceConfig(configPath string, marketplace *Marketplace) error 
 	}
 	if len(marketplace.SparsePaths) > 0 {
 		entry["sparse_paths"] = append([]string(nil), marketplace.SparsePaths...)
+	}
+	if existing, ok := marketplaces[marketplace.Name].(map[string]any); ok {
+		oldSource, sourceOK := existing["source"].(string)
+		sameSource := sourceOK && oldSource == marketplaceConfigSource(marketplace)
+		if sourceOK && marketplace.SourceType == string(MarketplaceSourceLocal) {
+			sameSource = utils.PathsMatchAfterNormalization(oldSource, marketplaceConfigSource(marketplace))
+		}
+		if existing["source_type"] == marketplace.SourceType && sameSource {
+			if value, present := existing["auto_update"]; present {
+				entry["auto_update"] = value
+			}
+		}
 	}
 	marketplaces[marketplace.Name] = entry
 	return writeMarketplaceConfig(configPath, values)

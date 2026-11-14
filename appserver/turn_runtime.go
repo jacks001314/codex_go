@@ -64,14 +64,15 @@ import (
 )
 
 type activeRuntimeTurn struct {
-	ThreadID     string
-	TurnID       string
-	Cancel       context.CancelFunc
-	StartedAtMS  int64
-	Params       *turn.TurnStartParams
-	ConnectionID string
-	RunConfig    *appTurnRunConfig
-	SteerCount   int
+	PlanIdentities *planItemIdentities
+	ThreadID       string
+	TurnID         string
+	Cancel         context.CancelFunc
+	StartedAtMS    int64
+	Params         *turn.TurnStartParams
+	ConnectionID   string
+	RunConfig      *appTurnRunConfig
+	SteerCount     int
 	// TaskStarted records that a reserved automatic wake passed the
 	// post-discovery revalidation and now owns its reserved mail (Rust sets
 	// `ActiveTurn.task` at the same boundary). Before it is set, an interrupt
@@ -602,6 +603,7 @@ func (r *RuntimeRouter) responsesStreamHandler(threadID string, turnID string, p
 		return func(event *model.ResponsesStreamEvent) {}
 	}
 	state := newResponsesStreamNotificationState(turnStartPlanMode(params), turnID)
+	state.planIdentities = r.planIdentitiesForTurn(threadID, turnID)
 	state.metrics = r.services.TurnMetrics
 	if turn := r.activeRuntimeTurnStateSnapshot(threadID, turnID); turn != nil && turn.StartedAtMS > 0 {
 		state.turnStartedAtMS = turn.StartedAtMS
@@ -632,6 +634,7 @@ type responsesStreamNotificationState struct {
 	reasoningSummaryByItem    map[string]map[int]string
 	planMode                  bool
 	planItemID                string
+	planIdentities            *planItemIdentities
 	planParser                map[string]*proposedPlanStreamParser
 	planStarted               bool
 	startedAgentItems         map[string]bool
@@ -661,7 +664,7 @@ func newResponsesStreamNotificationState(planMode bool, turnID string) *response
 		patchInputs:            map[string]string{},
 		patchFingerprints:      map[string]string{},
 		planMode:               planMode,
-		planItemID:             safeIdentifier(turnID) + "-plan",
+		planIdentities:         &planItemIdentities{},
 		planParser:             map[string]*proposedPlanStreamParser{},
 		startedAgentItems:      map[string]bool{},
 		agentItemPhases:        map[string]string{},
@@ -1052,6 +1055,7 @@ func (r *RuntimeRouter) notifyPlanItemStarted(threadID string, turnID string, st
 		return
 	}
 	state.planStarted = true
+	state.planItemID = state.planIdentities.begin(state.activeResponseID)
 	item := ThreadItem{
 		ID:         state.planItemID,
 		Type:       "plan",
@@ -1070,6 +1074,10 @@ func (r *RuntimeRouter) notifyPlanItemStarted(threadID string, turnID string, st
 func (r *RuntimeRouter) notifyResponsesStreamEvent(threadID string, turnID string, event *model.ResponsesStreamEvent, state *responsesStreamNotificationState) {
 	if r == nil || event == nil {
 		return
+	}
+	if event.Kind == model.ResponsesStreamEventCreated && event.ResponseID != state.activeResponseID {
+		state.planStarted = false
+		state.planParser = map[string]*proposedPlanStreamParser{}
 	}
 	state.rememberResponse(event)
 	if event.Kind == model.ResponsesStreamEventCreated {
@@ -1152,11 +1160,14 @@ func (r *RuntimeRouter) notifyResponsesStreamEvent(threadID string, turnID strin
 		if event.Item != nil && event.Item.Type == "image_generation_call" {
 			r.promoteRealtimeAgentItem(threadID, turnID, firstNonEmpty(event.ItemID, event.Item.ID))
 		}
+		if state.planMode && event.Item != nil && (event.Item.Type == "agent_message" || event.Item.Type == "message") {
+			r.finishPlanModeAgentItem(threadID, turnID, firstNonEmpty(event.ItemID, event.Item.ID, "agent-message-"+safeIdentifier(turnID)), state)
+			if _, text, hasPlan := splitProposedPlanText(event.Item.Text); hasPlan {
+				state.planIdentities.recordCompletion(state.activeResponseID, text)
+			}
+		}
 		if len(event.RawItem) == 0 {
 			return
-		}
-		if state.planMode && event.Item != nil && event.Item.Type == "agent_message" {
-			r.finishPlanModeAgentItem(threadID, turnID, firstNonEmpty(event.ItemID, event.Item.ID, "agent-message-"+safeIdentifier(turnID)), state)
 		}
 		if !state.experimentalRawEvents {
 			return
@@ -2122,6 +2133,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		return
 	}
 	steerCount := r.activeRuntimeTurnSteerCount(threadID, turnID)
+	planIdentities := r.planIdentitiesForTurn(threadID, turnID)
 	r.unifiedExecPersistMu.Lock()
 	if !r.consumeCompletedRuntimeTurn(threadID, turnID) {
 		r.unifiedExecPersistMu.Unlock()
@@ -2135,7 +2147,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		items = append(items, runConfig.ExtraSessionItems()...)
 	}
 	items = append(items, r.drainPendingUnifiedExecItems(threadID, turnID)...)
-	items = append(items, r.sessionItemsForTurn(turnID, params, result, startedAt)...)
+	items = append(items, r.sessionItemsForTurn(turnID, params, result, startedAt, planIdentities)...)
 	if promptPersisted {
 		items = withoutRuntimeUserPromptItem(items, turnID)
 	}
@@ -5620,7 +5632,7 @@ func contentTokenCountsByItemID(result *turn.AgentLoopResult) map[string]*uint64
 	return counts
 }
 
-func (r *RuntimeRouter) sessionItemsForTurn(turnID string, params *turn.TurnStartParams, result *turn.AgentLoopResult, createdAt time.Time) []session.Item {
+func (r *RuntimeRouter) sessionItemsForTurn(turnID string, params *turn.TurnStartParams, result *turn.AgentLoopResult, createdAt time.Time, identities ...*planItemIdentities) []session.Item {
 	if params == nil {
 		return nil
 	}
@@ -5632,12 +5644,16 @@ func (r *RuntimeRouter) sessionItemsForTurn(turnID string, params *turn.TurnStar
 	if result == nil {
 		return items
 	}
+	planIDs := r.planIdentitiesForTurn(params.ThreadID, turnID)
+	if len(identities) > 0 && identities[0] != nil {
+		planIDs = identities[0]
+	}
 	responses := result.ModelResponses()
 	executionIndex := 0
 	if len(responses) > 0 {
 		planMode := turnStartPlanMode(params)
-		planItemAdded := false
 		for responseIndex, response := range responses {
+			planItemAdded := false
 			if response == nil {
 				continue
 			}
@@ -5705,7 +5721,7 @@ func (r *RuntimeRouter) sessionItemsForTurn(turnID string, params *turn.TurnStar
 					if hasPlan && !planItemAdded {
 						planItemAdded = true
 						items = append(items, session.Item{
-							ID:         safeIdentifier(turnID) + "-plan",
+							ID:         planIDs.complete(firstNonEmpty(response.ResponseID, fmt.Sprintf("response-%d", responseIndex))),
 							Type:       "plan",
 							Text:       planText,
 							CreatedAt:  createdAt,
@@ -5749,7 +5765,7 @@ func (r *RuntimeRouter) sessionItemsForTurn(turnID string, params *turn.TurnStar
 					if hasPlan && !planItemAdded {
 						planItemAdded = true
 						items = append(items, session.Item{
-							ID:         safeIdentifier(turnID) + "-plan",
+							ID:         planIDs.complete(firstNonEmpty(response.ResponseID, fmt.Sprintf("response-%d", responseIndex))),
 							Type:       "plan",
 							Text:       planText,
 							CreatedAt:  createdAt,
@@ -5813,6 +5829,35 @@ func (r *RuntimeRouter) sessionItemsForTurn(turnID string, params *turn.TurnStar
 	for executionIndex < len(result.ToolExecutions) {
 		items = append(items, sessionItemsForAppToolExecution(turnID, &result.ToolExecutions[executionIndex], createdAt)...)
 		executionIndex++
+	}
+	// A completed output item survives a later stream failure even when the
+	// model runner only returns the successful retry's response.
+	var retainedPlans []session.Item
+	for _, plan := range planIDs.completedPlans() {
+		found := false
+		for _, item := range items {
+			if item.ID == plan.ID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			retainedPlans = append(retainedPlans, session.Item{ID: plan.ID, Type: "plan", Text: plan.Text, ResponseID: plan.ResponseID, CreatedAt: createdAt, Metadata: appTurnMetadata(turnID, map[string]any{"responseId": plan.ResponseID, "response_id": plan.ResponseID})})
+		}
+	}
+	if len(retainedPlans) > 0 {
+		// Keep turn inputs ahead of output, and failed-attempt completions
+		// ahead of the successful retry's plan.
+		index := len(items)
+		for i, item := range items {
+			if item.Type == "plan" {
+				index = i
+				break
+			}
+		}
+		combined := append([]session.Item(nil), items[:index]...)
+		combined = append(combined, retainedPlans...)
+		items = append(combined, items[index:]...)
 	}
 	if result.SampledThroughSequence != nil {
 		for i := range items {
@@ -8955,6 +9000,13 @@ func (r *RuntimeRouter) appTurnConfigWithOptions(ctx context.Context, threadID s
 	} else if item != nil {
 		inputItems = append(inputItems, item)
 	}
+	var appsGuidanceItems []session.Item
+	if item, err := r.appsGuidanceWorldStateInputItem(threadID, cfg, modelInfo); err != nil {
+		return nil, err
+	} else if item != nil {
+		inputItems = append(inputItems, item)
+		appsGuidanceItems = append(appsGuidanceItems, appsGuidanceSessionItem(turnID, item, time.UnixMilli(startedAtMS).UTC()))
+	}
 	recommendedPluginItems := r.recommendedPluginInputItems(threadID, cfg, modelInfo)
 	inputItems = append(inputItems, r.explicitAppInputItems(threadID, params, cfg)...)
 	// Rust #45716: the explicitly named connectors join the thread's selection
@@ -8980,6 +9032,7 @@ func (r *RuntimeRouter) appTurnConfigWithOptions(ctx context.Context, threadID s
 	}
 	instructions = r.instructionsWithMemoryToolContext(cfg, instructions)
 	sessionItems := additionalContextSessionItems(turnID, additionalContextItems, time.UnixMilli(startedAtMS).UTC())
+	sessionItems = append(sessionItems, appsGuidanceItems...)
 	sessionItems = append(sessionItems, currentTimeSessionItems...)
 	sessionItems = append(sessionItems, realtimeStateSessionItems...)
 	sessionItems = append(sessionItems, permissionsSessionItems...)

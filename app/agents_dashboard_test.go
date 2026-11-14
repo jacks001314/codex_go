@@ -32,6 +32,32 @@ func dashboardThreadRows() []*appserver.Thread {
 	}
 }
 
+func TestAgentsOverviewHidesAttachedAndEphemeralThreadsLikeRust(t *testing.T) {
+	threads := dashboardThreadRows()
+	parent := "root-1"
+	threads = append(threads,
+		&appserver.Thread{ID: "attached-side", AttachedToThreadID: &parent, Preview: "saved side chat", Status: appserver.IdleStatus()},
+		&appserver.Thread{ID: "ephemeral-side", Ephemeral: true, Preview: "temporary side chat", Status: appserver.IdleStatus()},
+	)
+	rows := agentsOverviewRowsFromThreads(threads, "root-1")
+	byID := map[string]agentsoverview.Row{}
+	for _, row := range rows {
+		byID[row.ThreadID] = row
+	}
+	if _, ok := byID["attached-side"]; ok {
+		t.Fatalf("attached side chat leaked into overview rows: %#v", rows)
+	}
+	if _, ok := byID["ephemeral-side"]; ok {
+		t.Fatalf("ephemeral thread leaked into overview rows: %#v", rows)
+	}
+	if _, ok := byID["root-1"]; !ok {
+		t.Fatalf("attached side chat removed its parent root: %#v", rows)
+	}
+	if got := byID["root-1"].ChildThreadIDs; len(got) != 1 || got[0] != "sub-1" {
+		t.Fatalf("root-1 child threads = %#v, want sub-1", got)
+	}
+}
+
 func TestAgentsOverviewRowsFromThreadsLikeRust(t *testing.T) {
 	rows := agentsOverviewRowsFromThreads(dashboardThreadRows(), "root-1")
 	if len(rows) != 4 {

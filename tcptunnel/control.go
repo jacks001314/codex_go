@@ -76,10 +76,10 @@ type TunnelCredential int
 
 const (
 	// CredentialBearer accepts any non-empty token but rejects ERS tunnel JWTs
-	// that predate the v2 wire version.
+	// with unsupported wire versions.
 	CredentialBearer TunnelCredential = iota
 	// CredentialErsTunnelJWT additionally requires every token to be an
-	// ERS-issued v2 tunnel JWT.
+	// ERS-issued v1 or v2 tunnel JWT.
 	CredentialErsTunnelJWT
 )
 
@@ -107,7 +107,7 @@ func (c TunnelCredential) Read(reader *bufio.Reader) (*string, error) {
 }
 
 // Header validates one token and renders the Authorization value. Tokens that
-// announce themselves as ERS tunnel JWTs are checked for the v2 wire version;
+// announce themselves as ERS tunnel JWTs are checked for supported v1/v2 wire versions;
 // the gateway still verifies the signature.
 func (c TunnelCredential) Header(token string) (string, error) {
 	if token == "" {
@@ -121,8 +121,8 @@ func (c TunnelCredential) Header(token string) (string, error) {
 		}
 	}
 	if ers || c == CredentialErsTunnelJWT {
-		if !ers || len(parts) != 3 || parts[2] == "" || !jwtVersionTwo(parts[1]) {
-			return "", fmt.Errorf("Portals requires an ERS-issued v2 tunnel JWT")
+		if !ers || len(parts) != 3 || parts[2] == "" || !jwtSupportedVersion(parts[1]) {
+			return "", fmt.Errorf("Portals requires an ERS-issued v1 or v2 tunnel JWT")
 		}
 	}
 	auth := "Bearer " + token
@@ -151,14 +151,19 @@ func jwtSegment(segment string) (map[string]any, bool) {
 	return object, true
 }
 
-// jwtVersionTwo reports whether the claims segment carries ver equal to 2.
-func jwtVersionTwo(segment string) bool {
-	claims, ok := jwtSegment(segment)
-	if !ok {
+// jwtSupportedVersion accepts integer v1 and v2 claims, matching Rust as_u64.
+func jwtSupportedVersion(segment string) bool {
+	decoded, err := base64.RawURLEncoding.DecodeString(segment)
+	if err != nil {
 		return false
 	}
-	version, ok := claims["ver"].(float64)
-	return ok && version == 2
+	var claims struct {
+		Version uint64 `json:"ver"`
+	}
+	if err := json.Unmarshal(decoded, &claims); err != nil {
+		return false
+	}
+	return claims.Version == 1 || claims.Version == 2
 }
 
 // readBoundedLine mirrors Rust's `Read::take(limit + 1).read_until(b'\n', ..)`:
@@ -255,7 +260,7 @@ func newControlInput(reader *bufio.Reader, connectHeadersStdin bool, proxyOrigin
 			headers = parsed
 		}
 		input.metadata <- controlMetadata{headers: headers}
-		// Portals listeners need ERS-issued v2 tunnel JWTs unless the caller
+		// Portals listeners need ERS-issued v1 or v2 tunnel JWTs unless the caller
 		// selected OAuth mode explicitly (Rust #60568).
 		credential := CredentialBearer
 		if containsString(GatewayOrigins, proxyOrigin) && headers.Get("x-portals-auth-mode") != "oauth" {

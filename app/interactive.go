@@ -1716,7 +1716,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 	// in-process app-server, so the embedded TUI exposes the same /voice
 	// surface as the remote TUI.
 	voiceSession := newLocalVoiceSession()
-	voiceSettings, voiceVoices, voiceStart, voiceStop := interactiveLocalVoiceCallbacks(voiceSession.ensureRouter)
+	voiceSettings, voiceVoices, voiceStart, voiceStop := interactiveLocalVoiceCallbacks(voiceSession.ensureRouter, func() string { return state.CWD })
 	voice := newVoiceRuntime(voiceRuntimeOptions{
 		buildCommit:      doctor.Version(),
 		realtimeSettings: voiceSettings,
@@ -1822,8 +1822,8 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		// The picker, the saver, and delegated speech share the same
 		// persistent voice router as the start/stop callbacks; a nil factory
 		// here would fall back to the builtin catalog and fail to persist.
-		OnVoiceSettings:  interactiveLocalVoiceSettings(voiceSession.ensureRouter),
-		OnVoiceSaveVoice: interactiveLocalVoiceSaver(voiceSession.ensureRouter),
+		OnVoiceSettings:  interactiveLocalVoiceSettings(voiceSession.ensureRouter, func() string { return state.CWD }),
+		OnVoiceSaveVoice: interactiveLocalVoiceSaver(voiceSession.ensureRouter, func() string { return state.CWD }),
 		// Rust #49437/#49836: the device rows list through a short-lived local
 		// helper and persist audio.microphone / audio.speaker /
 		// audio.microphone_channel through the embedded config service.

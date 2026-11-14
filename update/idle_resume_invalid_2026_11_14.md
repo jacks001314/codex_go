@@ -1,0 +1,5 @@
+# Idle resume非法live权限快照拒绝
+
+applySubscribedIdleResumeModelSnapshot返回error，匿名normalizedPermissionProfile解析失败向RuntimeRouter传播，阻止成功响应及后续新增订阅。此前失败被静默忽略，可能返回旧策略。测试注入非法内存快照，修复前resume成功，修复后明确错误。
+
+联合订阅idle及running恢复集成测试通过0.476s，go vet ./appserver退出0。此检查位于response处理阶段，不声称整个resume事务回滚；更早入口校验以及命名权限/无订阅重建仍待完成。整体同步未完成。

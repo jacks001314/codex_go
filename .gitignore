@@ -10,6 +10,9 @@
 fuck.*
 code.exe
 bin/
+!/npm/codex/bin/
+/npm/codex/bin/*
+!/npm/codex/bin/signals.test.mjs
 !sandbox/windowssandbox/bin/
 !sandbox/windowssandbox/bin/**
 dist/

@@ -521,7 +521,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		// The packaged helper is stamped with the same version, so the
 		// same-build handshake succeeds in releases and in dev builds.
 		buildCommit:         doctor.Version(),
-		realtimeSettings:    interactiveRemoteRealtimeSettings(endpoint),
+		realtimeSettings:    interactiveRemoteRealtimeSettings(endpoint, func() string { return state.CWD }),
 		listVoicesWithError: interactiveRemoteRealtimeVoices(endpoint),
 		startSession: func(callCtx context.Context, params realtime.StartParams) error {
 			client, err := openRemoteSessionClient(callCtx, endpoint)
@@ -786,8 +786,8 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 			return voice.setMicrophoneMuted(muted)
 		},
 		OnVoicePeaks:     voice.peaks,
-		OnVoiceSettings:  interactiveRemoteVoiceSettings(endpoint),
-		OnVoiceSaveVoice: interactiveRemoteVoiceSaver(endpoint),
+		OnVoiceSettings:  interactiveRemoteVoiceSettings(endpoint, func() string { return state.CWD }),
+		OnVoiceSaveVoice: interactiveRemoteVoiceSaver(endpoint, func() string { return state.CWD }),
 		// Rust #49437/#49836: the device rows list through a short-lived local
 		// helper (audio runs on the TUI's machine) and persist audio.microphone
 		// / audio.speaker / audio.microphone_channel through the endpoint.

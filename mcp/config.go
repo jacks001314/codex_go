@@ -81,17 +81,19 @@ func (m McpOAuthRefreshMode) String() string {
 }
 
 type ServerConfig struct {
-	Command           string            `json:"command,omitempty"`
-	Args              []string          `json:"args,omitempty"`
-	Env               map[string]string `json:"env,omitempty"`
-	EnvVars           []EnvVar          `json:"env_vars,omitempty"`
-	CWD               string            `json:"cwd,omitempty"`
-	URL               string            `json:"url,omitempty"`
-	BearerTokenEnvVar string            `json:"bearer_token_env_var,omitempty"`
-	HTTPHeaders       map[string]string `json:"http_headers,omitempty"`
-	EnvHTTPHeaders    map[string]string `json:"env_http_headers,omitempty"`
-	HTTPHeadersHelper string            `json:"http_headers_helper,omitempty"`
-	OAuthClientID     string            `json:"oauth_client_id,omitempty"`
+	// appsDiscoveryOwner is trusted runtime identity, never accepted from config JSON.
+	appsDiscoveryOwner string
+	Command            string            `json:"command,omitempty"`
+	Args               []string          `json:"args,omitempty"`
+	Env                map[string]string `json:"env,omitempty"`
+	EnvVars            []EnvVar          `json:"env_vars,omitempty"`
+	CWD                string            `json:"cwd,omitempty"`
+	URL                string            `json:"url,omitempty"`
+	BearerTokenEnvVar  string            `json:"bearer_token_env_var,omitempty"`
+	HTTPHeaders        map[string]string `json:"http_headers,omitempty"`
+	EnvHTTPHeaders     map[string]string `json:"env_http_headers,omitempty"`
+	HTTPHeadersHelper  string            `json:"http_headers_helper,omitempty"`
+	OAuthClientID      string            `json:"oauth_client_id,omitempty"`
 	// OAuthClientSecret is the configured secret for a pre-registered
 	// confidential OAuth client (Rust #47891). It is only valid with a client
 	// ID and is used for token exchange/refresh instead of persisting it in the
@@ -1417,6 +1419,10 @@ func CodexAppsServerConfig(baseURL string, productSKU string, runtimeAuth *Runti
 		StartupTimeout:   30 * time.Second,
 		CatalogItemLimit: maxCodexAppsCatalogItems,
 		ApplyHTTPRequest: runtimeAuthRequestApplier(runtimeAuth),
+	}
+	if runtimeAuth != nil && runtimeAuth.RuntimeProvider == nil && (runtimeAuth.AccountID != "" || runtimeAuth.ChatGPTUserID != "") {
+		identity, _ := json.Marshal([]string{runtimeAuth.AccountID, runtimeAuth.ChatGPTUserID})
+		config.appsDiscoveryOwner = string(identity)
 	}
 	if strings.TrimSpace(os.Getenv(codexConnectorsTokenEnvVar)) != "" {
 		config.BearerTokenEnvVar = codexConnectorsTokenEnvVar

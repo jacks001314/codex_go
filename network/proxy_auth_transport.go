@@ -14,6 +14,8 @@ func BaseTransport(roundTripper http.RoundTripper) *http.Transport {
 		return http.DefaultTransport.(*http.Transport)
 	case *http.Transport:
 		return transport
+	case *compressionTransport:
+		return BaseTransport(transport.next)
 	case *proxyAuthTransport:
 		return transport.base
 	case *PolicyRoundTripper:
@@ -30,6 +32,8 @@ func ReplaceBaseTransport(roundTripper http.RoundTripper, base *http.Transport) 
 	switch transport := roundTripper.(type) {
 	case nil, *http.Transport:
 		return base
+	case *compressionTransport:
+		return &compressionTransport{next: ReplaceBaseTransport(transport.next, base)}
 	case *proxyAuthTransport:
 		return newProxyAuthTransport(base)
 	case *PolicyRoundTripper:
@@ -55,6 +59,12 @@ func WithoutSystemProxy(roundTripper http.RoundTripper) (http.RoundTripper, bool
 		direct := transport.Clone()
 		direct.Proxy = nil
 		return direct, true
+	case *compressionTransport:
+		next, ok := WithoutSystemProxy(transport.next)
+		if !ok {
+			return nil, false
+		}
+		return &compressionTransport{next: next}, true
 	case *proxyAuthTransport:
 		direct := transport.base.Clone()
 		direct.Proxy = nil

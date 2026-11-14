@@ -870,3 +870,14 @@ func TestModelVoiceMeterHistoryKeepsQuietSamplesLikeRust(t *testing.T) {
 		t.Fatalf("meter did not settle to silence: %q", meterLine)
 	}
 }
+
+func TestVoiceSavedUpdatesConfirmedEffectivePreferenceLikeRust(t *testing.T) {
+	for _, effective := range []string{"", "cove"} {
+		model := NewModel(codextui.NewState(nil), Options{Width: 100, Height: 30})
+		model.voicePreference = "juniper"
+		model.applyVoiceSaved(VoiceSavedMsg{Voice: "marin", Saved: true, EffectiveVoice: &effective, Err: errors.New("saved but not applied")})
+		if model.voicePreference != effective {
+			t.Fatalf("preference=%q want=%q", model.voicePreference, effective)
+		}
+	}
+}

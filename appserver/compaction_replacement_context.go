@@ -103,6 +103,28 @@ func (r *RuntimeRouter) buildCompactionReplacementContext(ctx context.Context, r
 			initialContextItems = append(initialContextItems, commandSessions.Item)
 		}
 	}
+	// A replacement window has no retained Apps fragment, even when the
+	// regular turn builder suppressed unchanged guidance in the old window.
+	filtered := make([]any, 0, len(initialContextItems))
+	for _, item := range initialContextItems {
+		raw, ok := item.(map[string]any)
+		if ok && raw["role"] == "developer" && isAppsGuidanceText(textFromInputItemContent(raw["content"])) {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	initialContextItems = filtered
+	appsItem, appsErr := r.appsGuidanceWorldStateItem(request.ThreadID, runConfig.Config, runConfig.ModelInfo, true)
+	if appsErr != nil {
+		return nil, appsErr
+	}
+	if appsItem != nil {
+		initialContextItems = append(initialContextItems, appsItem)
+	}
+	latest, err = r.threadRecord(session.ThreadID(request.ThreadID), true, true)
+	if err != nil {
+		return nil, err
+	}
 	items, err := compactItemsFromInputItems(initialContextItems, startedAt)
 	if err != nil {
 		return nil, err

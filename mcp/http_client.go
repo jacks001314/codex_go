@@ -281,10 +281,23 @@ func listMCPHTTPInventoryWithClient(client *httpClient) (*stdioInventory, error)
 // skipResourceTemplates is set the template listing is not requested and the
 // reported template list stays empty (Rust #57861: hosted Apps always answers
 // `resources/templates/list` with an empty list).
-func listMCPHTTPInventoryWithOptions(client *httpClient, serverName string, threadID string, roots []MCPRoot, skipResourceTemplates bool) (*stdioInventory, error) {
+func listMCPHTTPInventoryWithOptions(client *httpClient, serverName string, threadID string, roots []MCPRoot, skipResourceTemplates bool, startupScope ...string) (*stdioInventory, error) {
 	result := &stdioInventory{}
 	options := &httpClientCallOptions{ServerName: serverName, ThreadID: threadID, Roots: roots}
-	tools, toolListMeta, err := listMCPHTTPTools(client, options)
+	var tools []MCPToolInfo
+	var toolListMeta json.RawMessage
+	var err error
+	if len(startupScope) > 0 && startupScope[0] != "" {
+		timeout := client.config.StartupTimeout
+		if timeout <= 0 {
+			timeout = 30 * time.Second
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		tools, toolListMeta, err = listAppsStartupTools(ctx, client, options, startupScope[0], &sharedAppsStartupListings)
+	} else {
+		tools, toolListMeta, err = listMCPHTTPTools(client, options)
+	}
 	// Capabilities are captured during the initialization that the tools call
 	// triggers, so read them after the attempt even when discovery failed.
 	if client != nil {

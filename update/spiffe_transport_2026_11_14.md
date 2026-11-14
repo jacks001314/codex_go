@@ -1,0 +1,7 @@
+# SPIFFE gRPC获取器（2026-11-14）
+
+新增spiffeAssertionSource.fetchAssertion/fetchWithDialer：生产dialer使用Unix socket；每次创建并关闭独立grpc.ClientConn，10秒context上限，发送/SpiffeWorkloadAPI/FetchJWTSVID及workload.spiffe.io=true；请求字段audience=1、spiffe_id=2，响应svids=1、svid=2，沿用上游最小protobuf契约。响应接入selectSPIFFEAssertion。错误只保留gRPC code，超时为固定Unavailable错误。
+
+内存gRPC服务测试覆盖真实protobuf编码/解码、方法路径、metadata、audience/ID、两次获取两次连接、服务端PermissionDenied详细消息脱敏、短调用context超时。测试与相关auth回归及vet退出0，日志spiffe_transport_2026_11_14.log、spiffe_transport_regression_2026_11_14.log、spiffe_transport_vet_2026_11_14.log。
+
+尚未从workloadIdentitySessionConfig接入交换；未运行原生Unix socket/agent重启/交换刷新集成测试。该传输工具函数不是可用SPIFFE认证的完成声明。整体同步未完成，未commit/push。

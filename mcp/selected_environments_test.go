@@ -101,8 +101,8 @@ func TestSelectedEnvironmentsDistinguishAbsentFromExplicitlyEmptyLikeRust(t *tes
 	if authority == nil {
 		t.Fatal("explicitly empty snapshot must still produce an authority")
 	}
-	if authority.Scoped {
-		t.Fatalf("explicitly empty snapshot must stay unscoped: %#v", authority)
+	if !authority.Scoped {
+		t.Fatalf("explicitly empty snapshot must retain selection scope: %#v", authority)
 	}
 	if clone := empty.Clone(); clone == nil {
 		t.Fatal("clone of explicitly empty snapshot must stay non-nil")

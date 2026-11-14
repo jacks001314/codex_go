@@ -216,7 +216,12 @@ child.on("error", (error) => {
 
 for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
   process.on(signal, () => {
-    if (!child.killed) child.kill(signal);
+    // A successful kill only means the signal was sent, not that the child exited.
+    try {
+      child.kill(signal);
+    } catch {
+      // The child may have exited between receiving and forwarding the signal.
+    }
   });
 }
 

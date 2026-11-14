@@ -72,13 +72,13 @@ func composeGuardianElasticPromptSections(
 	if items := SenderUserMessagesSectionItems(options.RetainedContext); len(items) > 0 {
 		add("sender_user_messages", guardianElasticTextItems(items, GuardianElasticRequired(), true), false)
 	}
-	retained := RenderRetainedInstructionSectionsForPresentation(options.RetainedContext, options.Presentation)
+	retained := OriginalRetainedInstructionSections(options.RetainedContext, options.Presentation)
 	retained = ApplyRetainedOmissionDeduplication(retained, options.PreviousRetainedOmissions, HasLegacyRetainedOrder(options.RetainedContext))
 	add("retained_user_instructions", guardianElasticRetainedItems(retained.Instructions), false)
 	if options.Presentation != ActionPresentationAsync {
 		add("retained_assistant_context", guardianElasticTextItems(retained.AssistantContext, GuardianElasticOptional(GuardianElasticPriorityCommentary), true), false)
 	}
-	if items := TrustedUserAnswersSectionItems(RenderVerifiedAnswers(options.RetainedContext).Fragments); len(items) > 0 {
+	if items := TrustedUserAnswersSectionItems(CollectOriginalVerifiedAnswers(options.RetainedContext).Fragments); len(items) > 0 {
 		add("trusted_user_answers", guardianElasticVerifiedAnswerItems(items), false)
 	}
 
@@ -232,7 +232,7 @@ func rededuplicateGuardianElasticRetained(
 		return false, nil
 	}
 	sources := contextValue.RequiredTranscriptSources(selected)
-	fragments := RenderRetainedInstructions(options.RetainedContext)
+	fragments := renderRetainedInstructions(options.RetainedContext, true)
 	remaining := RemoveDeliveredRetainedInstructions(fragments, sources, nil)
 	var updated RetainedInstructionSections
 	if options.Presentation == ActionPresentationAsync {

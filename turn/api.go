@@ -331,6 +331,12 @@ type TurnStartParams struct {
 	ApprovalsReviewer         *string           `json:"approvalsReviewer,omitempty"`
 	SandboxPolicy             any               `json:"sandboxPolicy,omitempty"`
 	Permissions               *string           `json:"permissions,omitempty"`
+	// InheritedPermissionProfileJSON carries an admitted live named selection,
+	// distinct from an explicit request override and the unnamed rollout base.
+	InheritedPermissionProfileJSON  string   `json:"-"`
+	InheritedPermissionProfileID    string   `json:"-"`
+	InheritedPermissionProfileCWD   string   `json:"-"`
+	InheritedPermissionProfileRoots []string `json:"-"`
 	// PersistedPermissionProfile is the unnamed runtime profile recovered from
 	// the thread-owned rollout snapshot. It is a fallback only: explicit
 	// permission overrides and managed requirements take priority, and it is

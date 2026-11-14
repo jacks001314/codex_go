@@ -147,6 +147,7 @@ func (m *Model) applyAgentsCommand() bubbletea.Cmd {
 		return nil
 	}
 	m.agentsOverviewPendingDraft = nil
+	m.agentsOverviewPendingDraftShellMode = nil
 	m.agentsOverview = agentsoverview.New(nil, "", false)
 	// Rust #60271: Escape returns to the chat only when one exists; an initial
 	// agents overview without a thread keeps the dashboard open.
@@ -1083,6 +1084,7 @@ func (m *Model) applyAgentsOverviewNewSession(message agentsOverviewNewSessionMs
 	}
 	// Rust attaches a new session with a fresh chat widget, so the composer
 	// starts empty unless a command-center task is being dispatched.
+	m.agentsOverviewPendingDraftShellMode = nil
 	if prompt != "" {
 		draft := prompt
 		m.agentsOverviewPendingDraft = &draft
@@ -1366,7 +1368,12 @@ func (m *Model) openAgentsOverviewThread(threadID string) bubbletea.Cmd {
 	if current != "" && current != threadID {
 		m.captureAgentsOverviewDraft(current)
 	}
+	m.agentsOverviewPendingDraftShellMode = nil
 	if saved, ok := m.agentsOverviewDrafts[threadID]; ok {
+		if mode, exists := m.agentsOverviewDraftShellModes[threadID]; exists {
+			m.agentsOverviewPendingDraftShellMode = &mode
+		}
+		delete(m.agentsOverviewDraftShellModes, threadID)
 		draft := saved
 		m.agentsOverviewPendingDraft = &draft
 		m.agentsOverviewPendingDraftPastes = append([]composerPendingPaste(nil), m.agentsOverviewDraftPastes[threadID]...)
@@ -1407,10 +1414,15 @@ func (m *Model) captureAgentsOverviewDraft(threadID string) {
 	draft := m.composerText()
 	if strings.TrimSpace(draft) == "" && len(m.pendingPastes) == 0 {
 		delete(m.agentsOverviewDrafts, threadID)
+		delete(m.agentsOverviewDraftShellModes, threadID)
 		delete(m.agentsOverviewDraftPastes, threadID)
 		return
 	}
 	m.agentsOverviewDrafts[threadID] = draft
+	if m.agentsOverviewDraftShellModes == nil {
+		m.agentsOverviewDraftShellModes = map[string]bool{}
+	}
+	m.agentsOverviewDraftShellModes[threadID] = m.isBangShellCommand()
 	if len(m.pendingPastes) == 0 {
 		delete(m.agentsOverviewDraftPastes, threadID)
 		return
@@ -1429,8 +1441,14 @@ func (m *Model) restorePendingAgentsOverviewDraft() {
 		return
 	}
 	draft := *m.agentsOverviewPendingDraft
+	mode := m.agentsOverviewPendingDraftShellMode
 	m.agentsOverviewPendingDraft = nil
-	m.setComposerPrompt(draft)
+	m.agentsOverviewPendingDraftShellMode = nil
+	if mode != nil {
+		m.setComposerPromptWithMode(draft, *mode)
+	} else {
+		m.setComposerPrompt(draft)
+	}
 	m.restorePendingPastes(m.agentsOverviewPendingDraftPastes)
 	m.agentsOverviewPendingDraftPastes = nil
 }
@@ -1440,6 +1458,7 @@ func (m *Model) restorePendingAgentsOverviewDraft() {
 func (m *Model) discardPendingAgentsOverviewDraft() {
 	if m != nil {
 		m.agentsOverviewPendingDraft = nil
+		m.agentsOverviewPendingDraftShellMode = nil
 	}
 }
 

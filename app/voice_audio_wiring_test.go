@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -399,10 +400,15 @@ func (r *voiceAudioLocalRouterLikeRust) Handle(request *appserver.Request) *apps
 // voiceAudioRemoteAppServerLikeRust serves initialize, config/read,
 // config/batchWrite and thread/realtime/listVoices over a real websocket.
 type voiceAudioRemoteAppServerLikeRust struct {
-	endpoint     *appserverdaemon.RemoteAppServerEndpoint
-	config       map[string]any
-	ignoreWrites bool
-	writes       []config.ConfigBatchWriteParams
+	reads              []config.ConfigReadParams
+	endpoint           *appserverdaemon.RemoteAppServerEndpoint
+	config             map[string]any
+	ignoreWrites       bool
+	catalogError       bool
+	configReadError    bool
+	configReadRPCError *remoteRPCError
+	writeStatus        config.WriteStatus
+	writes             []config.ConfigBatchWriteParams
 }
 
 func newVoiceAudioRemoteAppServerLikeRust(t *testing.T, initial map[string]any) *voiceAudioRemoteAppServerLikeRust {
@@ -424,6 +430,18 @@ func newVoiceAudioRemoteAppServerLikeRust(t *testing.T, initial map[string]any) 
 			case appserver.MethodInitialize:
 				envelope["result"] = map[string]any{}
 			case appserver.MethodConfigRead:
+				var readParams config.ConfigReadParams
+				if err := json.Unmarshal(request.Params, &readParams); err == nil {
+					server.reads = append(server.reads, readParams)
+				}
+				if server.configReadRPCError != nil {
+					envelope["error"] = server.configReadRPCError
+					break
+				}
+				if server.configReadError {
+					envelope["error"] = map[string]any{"code": -32603, "message": "config unavailable"}
+					break
+				}
 				envelope["result"] = map[string]any{"config": server.config, "origins": map[string]any{}}
 			case appserver.MethodConfigBatchWrite:
 				var params config.ConfigBatchWriteParams
@@ -435,10 +453,14 @@ func newVoiceAudioRemoteAppServerLikeRust(t *testing.T, initial map[string]any) 
 				if !server.ignoreWrites {
 					applyVoiceAudioConfigEditsLikeRust(server.config, params.Edits)
 				}
-				envelope["result"] = map[string]any{}
+				envelope["result"] = map[string]any{"status": server.writeStatus}
 			case appserver.MethodThreadRealtimeListVoices:
+				if server.catalogError {
+					envelope["error"] = map[string]any{"code": -32603, "message": "catalog unavailable"}
+					break
+				}
 				envelope["result"] = map[string]any{
-					"voices": map[string]any{"v1": []string{"maple", "juniper"}, "defaultV1": "maple"},
+					"voices": map[string]any{"v1": []string{"maple", "juniper"}, "v3": []string{"marin", "viola"}, "defaultV1": "maple"},
 				}
 			default:
 				envelope["error"] = map[string]any{"code": -32601, "message": "unexpected method " + request.Method}
@@ -515,4 +537,125 @@ func voiceAudioUpdateLikeRust(t *testing.T, model *codextea.Model, message any) 
 		t.Fatalf("updated model = %T", updated)
 	}
 	return next, command
+}
+
+func TestRemoteVoiceV3PickerAndSaveWithoutCatalogLikeRust(t *testing.T) {
+	server := newVoiceAudioRemoteAppServerLikeRust(t, map[string]any{})
+	settings := interactiveRemoteVoiceSettings(server.endpoint)()().(codextea.VoiceSettingsMsg)
+	if settings.Err != nil || settings.Current != "" || len(settings.Voices) != 2 || settings.Voices[0] != "marin" {
+		t.Fatalf("settings=%#v", settings)
+	}
+	server.catalogError = true
+	saved := interactiveRemoteVoiceSaver(server.endpoint)("marin")().(codextea.VoiceSavedMsg)
+	if saved.Err != nil || saved.Voice != "marin" {
+		t.Fatalf("save=%#v", saved)
+	}
+	picker := interactiveRemoteVoiceSettings(server.endpoint)()().(codextea.VoiceSettingsMsg)
+	if picker.Err == nil {
+		t.Fatal("picker must report catalog failure")
+	}
+}
+
+func TestRemoteVoiceSaveReportsConfigReadFailureLikeRust(t *testing.T) {
+	server := newVoiceAudioRemoteAppServerLikeRust(t, map[string]any{})
+	server.configReadError = true
+	saved := interactiveRemoteVoiceSaver(server.endpoint)("marin")().(codextea.VoiceSavedMsg)
+	if saved.Err == nil || !saved.Saved {
+		t.Fatalf("save=%#v, want persisted but confirmation failed", saved)
+	}
+	if len(server.writes) != 1 {
+		t.Fatalf("writes=%d", len(server.writes))
+	}
+}
+
+func TestRemoteVoiceSaveLegacyConfigReadLikeRust(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		code    int
+		message string
+		status  config.WriteStatus
+		wantErr bool
+	}{
+		{"missing", -32601, "method not found", config.WriteOK, false},
+		{"old enum", -32600, "unknown variant config/read", config.WriteOK, false},
+		{"old method", -32600, "unknown method config/read", config.WriteOK, false},
+		{"overridden", -32601, "method not found", config.WriteOKOverridden, true},
+		{"unrelated invalid request", -32600, "unknown method other", config.WriteOK, true},
+		{"internal", -32603, "config/read failed", config.WriteOK, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := newVoiceAudioRemoteAppServerLikeRust(t, map[string]any{})
+			server.configReadRPCError = &remoteRPCError{Code: tc.code, Message: tc.message}
+			server.writeStatus = tc.status
+			saved := interactiveRemoteVoiceSaver(server.endpoint)("marin")().(codextea.VoiceSavedMsg)
+			if (saved.Err != nil) != tc.wantErr || (tc.wantErr && !saved.Saved) {
+				t.Fatalf("save=%#v wantErr=%v", saved, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestRemoteVoiceSettingsReadErrorsLikeRust(t *testing.T) {
+	for _, code := range []int{-32601, -32603} {
+		t.Run(strconv.Itoa(code), func(t *testing.T) {
+			server := newVoiceAudioRemoteAppServerLikeRust(t, map[string]any{})
+			server.configReadRPCError = &remoteRPCError{Code: code, Message: "config/read unavailable"}
+			settings := interactiveRemoteRealtimeSettings(server.endpoint)(context.Background())
+			if (settings.VoiceErr != "") != (code == -32603) {
+				t.Fatalf("settings=%#v", settings)
+			}
+			picker := interactiveRemoteVoiceSettings(server.endpoint)()().(codextea.VoiceSettingsMsg)
+			if (picker.Err != nil) != (code == -32603) {
+				t.Fatalf("picker=%#v", picker)
+			}
+		})
+	}
+}
+
+func TestRemoteVoiceSaveRequiresEffectiveSelectionLikeRust(t *testing.T) {
+	for _, raw := range []any{nil, "future-voice", "cove", "marin"} {
+		server := newVoiceAudioRemoteAppServerLikeRust(t, map[string]any{"realtime": map[string]any{"voice": raw}})
+		server.ignoreWrites = true
+		saved := interactiveRemoteVoiceSaver(server.endpoint)("marin")().(codextea.VoiceSavedMsg)
+		wantErr := raw != "marin"
+		if saved.EffectiveVoice == nil {
+			t.Fatal("successful read omitted effective preference")
+		}
+		wantEffective := ""
+		if raw == "marin" || raw == "cove" {
+			wantEffective = raw.(string)
+		}
+		if *saved.EffectiveVoice != wantEffective {
+			t.Fatalf("effective=%q", *saved.EffectiveVoice)
+		}
+		if (saved.Err != nil) != wantErr || (wantErr && !saved.Saved) {
+			t.Fatalf("raw=%v save=%#v", raw, saved)
+		}
+	}
+}
+
+func TestRemoteVoiceReadsCurrentCWDLikeRust(t *testing.T) {
+	server := newVoiceAudioRemoteAppServerLikeRust(t, map[string]any{})
+	current := "project-one"
+	cwd := func() string { return current }
+	reader := interactiveRemoteRealtimeSettings(server.endpoint, cwd)
+	reader(context.Background())
+	current = "project-two"
+	interactiveRemoteVoiceSettings(server.endpoint, cwd)()()
+	saved := interactiveRemoteVoiceSaver(server.endpoint, cwd)("marin")().(codextea.VoiceSavedMsg)
+	if saved.Err != nil {
+		t.Fatal(saved.Err)
+	}
+	if len(server.reads) != 3 {
+		t.Fatalf("reads=%v", server.reads)
+	}
+	for i, params := range server.reads {
+		want := "project-two"
+		if i == 0 {
+			want = "project-one"
+		}
+		if params.CWD == nil || *params.CWD != want || !params.IncludeLayers {
+			t.Fatalf("read %d=%#v", i, params)
+		}
+	}
 }

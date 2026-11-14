@@ -1,0 +1,7 @@
+# 当前命名权限的接纳来源
+
+新增normalizeThreadLegacySettings：legacy设置接纳除了保留已保存profile的deny，还读取当前Settings/record选择的命名profile，在当前CWD和runtime roots下通过effectiveConfigForTurn及threadDefaultSandboxPermissionProfile解析，再合并其deny规则。解析错误发生在发布设置前。
+
+新增TestLegacyAdmissionPreservesUnmaterializedNamedDenials：仅保存命名audit配置及拒绝路径，不写permission_profile快照，接纳read-only后检查下一轮实际profile仍拒绝该路径。与接纳错误、legacy持久化、规范JSON合并及下一轮相关测试一起通过0.186s；go vet ./appserver与Master diff --check通过。代码及日志同步Master。
+
+当前没有Config服务的嵌入/测试router仍使用已有快照来源；未声称覆盖所有扩展来源。完整CWD迁移和git目录保护、I/O事务及所有命名profile更新分支仍需对齐。完整appserver会话84456仍运行且早于本修复。整体核心/TUI同步、Linux原生验证、commit/push未完成。

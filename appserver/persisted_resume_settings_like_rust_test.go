@@ -178,6 +178,10 @@ func TestColdForkRestoresOwnedSettingsOverStaleTurnContextLikeRust(t *testing.T)
 
 func TestColdResumeRestoresOwnedUnnamedPermissionProfileLikeRust(t *testing.T) {
 	router, record, cwd := newPersistedResumeSettingsFixture(t)
+	record.Metadata.ActivePermissionProfile = "read-only"
+	if err := router.store.Save(record); err != nil {
+		t.Fatal(err)
+	}
 	recorder, err := rollout.Resume(router.threadRolloutPath(record))
 	if err != nil {
 		t.Fatalf("rollout.Resume() error = %v", err)
@@ -215,6 +219,9 @@ func TestColdResumeRestoresOwnedUnnamedPermissionProfileLikeRust(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read() error = %v", err)
 	}
+	if updated.Metadata.ActivePermissionProfile != "" {
+		t.Fatalf("stale named profile survived cold restore: %s", updated.Metadata.ActivePermissionProfile)
+	}
 	raw, ok := updated.Metadata.Extra["permission_profile"]
 	if !ok {
 		t.Fatalf("permission_profile metadata = %#v, want the owned unnamed profile", updated.Metadata.Extra)
@@ -225,5 +232,38 @@ func TestColdResumeRestoresOwnedUnnamedPermissionProfileLikeRust(t *testing.T) {
 	}
 	if !strings.Contains(string(encoded), `"disabled"`) {
 		t.Fatalf("permission_profile metadata = %s, want the owned profile", encoded)
+	}
+}
+
+func TestLegacySettingsUpdatePersistsAnonymousPermissionSnapshot(t *testing.T) {
+	threadRouter, record, _ := newPersistedResumeSettingsFixture(t)
+	record.Metadata.ActivePermissionProfile = "workspace"
+	if err := threadRouter.store.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: threadRouter})
+	defer router.Close()
+	legacy := "read-only"
+	params := &SettingsUpdateParams{ThreadID: string(record.ID), SandboxPolicy: &legacy}
+	_, committed, err := router.requireThreadExtras().UpdateSettingsWithCommit(params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := router.persistThreadSettingsUpdate(params, committed); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := threadRouter.store.Read(record.ID, true, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Metadata.ActivePermissionProfile != "" {
+		t.Fatalf("persisted named identity=%q", saved.Metadata.ActivePermissionProfile)
+	}
+	persisted, ok := threadRouter.latestPersistedResumeSettings(saved)
+	if !ok || persisted.ActivePermissionProfile != nil || persisted.UnnamedPermissionProfile == nil {
+		t.Fatalf("persisted=%+v found=%v", persisted, ok)
+	}
+	if got := persisted.UnnamedPermissionProfile.LegacySandboxPolicy().Kind; got != sandbox.SandboxReadOnly {
+		t.Fatalf("restored sandbox=%s", got)
 	}
 }

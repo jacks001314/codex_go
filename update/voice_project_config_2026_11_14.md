@@ -1,0 +1,9 @@
+# Voice真实项目配置与V3校验（2026-11-14）
+
+新增TestVoiceProjectConfigFollowsCurrentDirectoryLikeRust，使用两个真实临时项目及.gcode/config.toml、用户配置中的trust声明、真实RuntimeRouter和ConfigService。验证目录切换后voice从cove变viola，picker一致；保存用户marin时项目viola仍覆盖，返回已保存未应用及有效viola。
+
+测试首次失败：第二项目voice被清空。定位realtime.isKnownVoice只遍历V1/V2，未包含已有V3目录。修复为遍历全部三版目录，新增TestKnownVoiceIncludesEntireV3Catalog约束每个V3值；这同时修复V3专属语音的配置解析/协议已知值校验。
+
+相关app/realtime回归通过0.203s/0.127s，go vet ./app ./realtime退出0。失败日志voice_project_config_2026_11_14.log、通过日志voice_project_config_green_2026_11_14.log、vet日志voice_project_config_vet_2026_11_14.log。
+
+此测试证明cwd参数确实改变有效配置，不仅是请求字段。整体同步仍未完成，未commit/push。

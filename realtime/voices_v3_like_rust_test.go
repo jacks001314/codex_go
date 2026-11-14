@@ -13,7 +13,7 @@ func TestBuiltinVoicesExposeV3LikeRust(t *testing.T) {
 	voices := BuiltinVoices()
 	want := []Voice{
 		VoiceJuniper, VoiceMaple, VoiceSpruce, VoiceEmber, VoiceVale,
-		VoiceBreeze, VoiceArbor, VoiceSol, VoiceCove,
+		VoiceBreeze, VoiceArbor, VoiceSol, VoiceCove, VoiceMarin,
 		VoiceAube, VoiceBubbie, VoiceHaetsal, VoiceHanul, VoiceHimari,
 		VoiceLeher, VoiceMiko, VoiceNeer, VoicePorto, VoiceRindo, VoiceRio,
 		VoiceRivage, VoiceSelva, VoiceSonna, VoiceTinta, VoiceViola,
@@ -27,8 +27,8 @@ func TestBuiltinVoicesExposeV3LikeRust(t *testing.T) {
 	if !voices.Supports(VersionV3, VoiceViola) {
 		t.Fatal("a v3-only voice was rejected for v3")
 	}
-	if voices.Supports(VersionV3, VoiceMarin) {
-		t.Fatal("a v2-only voice was accepted for v3")
+	if !voices.Supports(VersionV3, VoiceMarin) {
+		t.Fatal("marin was rejected for v3")
 	}
 	if voices.Supports(VersionV1, VoiceViola) {
 		t.Fatal("a v3-only voice was accepted for v1")
@@ -40,11 +40,9 @@ func TestRealtimeV3VoiceValidationAndJSONLikeRust(t *testing.T) {
 	if _, err := params.Normalized("model", VersionV3, VoiceViola); err != nil {
 		t.Fatalf("Normalized(v3, viola) error = %v", err)
 	}
-	if _, err := params.Normalized("model", VersionV3, VoiceMarin); err == nil ||
-		!strings.Contains(err.Error(), "not supported for v3") {
-		t.Fatalf("Normalized(v3, marin) error = %v, want a v3 rejection", err)
+	if _, err := params.Normalized("model", VersionV3, VoiceMarin); err != nil {
+		t.Fatalf("marin rejected: %v", err)
 	}
-
 	var decoded VoicesList
 	if err := json.Unmarshal([]byte(`{"v1":[],"v2":[],"defaultV1":"cove","defaultV2":"marin"}`), &decoded); err != nil {
 		t.Fatalf("Unmarshal(VoicesList) error = %v", err)
@@ -58,5 +56,46 @@ func TestRealtimeV3VoiceValidationAndJSONLikeRust(t *testing.T) {
 	}
 	if !strings.Contains(string(encoded), `"v3":[]`) {
 		t.Fatalf("encoded voices = %s, want an empty v3 array", encoded)
+	}
+}
+
+func TestKnownVoiceIncludesEntireV3Catalog(t *testing.T) {
+	for _, voice := range BuiltinVoices().V3 {
+		if !IsKnownVoice(voice) {
+			t.Errorf("V3 voice %q rejected", voice)
+		}
+	}
+}
+
+func TestV3VoiceStartProtocolPreservesCatalogValues(t *testing.T) {
+	for _, voice := range BuiltinVoices().V3 {
+		t.Run(string(voice), func(t *testing.T) {
+			wire, err := json.Marshal(map[string]any{"threadId": "thread-1", "outputModality": "audio", "version": "v3", "voice": voice})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var params StartParams
+			if err := json.Unmarshal(wire, &params); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := params.Normalized("", VersionV3, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Voice != voice {
+				t.Fatalf("voice=%q want=%q", cfg.Voice, voice)
+			}
+			session := realtimeSessionUpdate(cfg)["session"].(map[string]any)
+			output := session["audio"].(map[string]any)["output"].(map[string]any)
+			if output["voice"] != voice {
+				t.Fatalf("wire voice=%v want=%q", output["voice"], voice)
+			}
+		})
+	}
+	for _, raw := range []string{`"future-voice"`, `" viola "`, `3`, `true`} {
+		var params StartParams
+		if err := json.Unmarshal([]byte(`{"threadId":"thread-1","outputModality":"audio","version":"v3","voice":`+raw+`}`), &params); err == nil {
+			t.Fatalf("invalid wire voice %s accepted", raw)
+		}
 	}
 }

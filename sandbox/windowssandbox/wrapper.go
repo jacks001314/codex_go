@@ -32,6 +32,7 @@ const (
 	sandboxLevelFlag                     = "--windows-sandbox-level"
 	writeRootsJSONFlag                   = "--write-roots-json"
 	workspaceRootFlag                    = "--workspace-root"
+	emptyWorkspaceRootsFlag              = "--empty-workspace-roots"
 )
 
 type WindowsSandboxLevel string
@@ -108,8 +109,11 @@ func CreateWindowsSandboxCommandArgsForPermissionProfile(req WindowsSandboxComma
 		string(req.WindowsSandboxLevel),
 	}
 	workspaceRoots := req.WorkspaceRoots
-	if len(workspaceRoots) == 0 {
+	if workspaceRoots == nil {
 		workspaceRoots = []string{req.CommandCWD}
+	} else if len(workspaceRoots) == 0 {
+		// Preserve an explicit empty selection across the wrapper process.
+		args = append(args, emptyWorkspaceRootsFlag)
 	}
 	for _, root := range workspaceRoots {
 		args = append(args, workspaceRootFlag, root)
@@ -196,6 +200,10 @@ func ParseWindowsSandboxWrapperArgs(args []string) (*WindowsSandboxWrapperReques
 				return nil, err
 			}
 			req.CommandCWD, i = value, next
+		case emptyWorkspaceRootsFlag:
+			if req.WorkspaceRoots == nil {
+				req.WorkspaceRoots = []string{}
+			}
 		case workspaceRootFlag:
 			value, next, err := nextFlagValue(args, i, arg)
 			if err != nil {
@@ -525,7 +533,7 @@ func (r *WindowsSandboxCommandArgsRequest) validateParsed() error {
 			return fmt.Errorf("%s must be absolute: %s", workspaceRootFlag, root)
 		}
 	}
-	if len(r.WorkspaceRoots) == 0 {
+	if r.WorkspaceRoots == nil {
 		r.WorkspaceRoots = []string{filepath.Clean(r.CommandCWD)}
 	}
 	return nil

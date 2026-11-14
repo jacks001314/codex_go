@@ -146,7 +146,7 @@ func localVoiceRequest(router interactiveVoiceRouter, id appserver.RequestID, me
 		return nil, fmt.Errorf("%s failed in TUI: no response", method)
 	}
 	if response.Error != nil {
-		return nil, fmt.Errorf("%s failed in TUI: %s", method, strings.TrimSpace(response.Error.Message))
+		return nil, fmt.Errorf("%s failed in TUI: %w", method, &remoteRPCError{Code: response.Error.Code, Message: strings.TrimSpace(response.Error.Message)})
 	}
 	return response.Result, nil
 }
@@ -154,7 +154,7 @@ func localVoiceRequest(router interactiveVoiceRouter, id appserver.RequestID, me
 // interactiveLocalVoiceCallbacks builds the voiceRuntime callbacks against the
 // persistent in-process router. The router is initialized once by the session;
 // the callbacks only issue their own requests.
-func interactiveLocalVoiceCallbacks(factory interactiveVoiceRouterFactory) (
+func interactiveLocalVoiceCallbacks(factory interactiveVoiceRouterFactory, cwd ...func() string) (
 	func(context.Context) VoiceSettings,
 	func(context.Context) realtime.VoicesList,
 	func(context.Context, realtime.StartParams) error,
@@ -168,13 +168,16 @@ func interactiveLocalVoiceCallbacks(factory interactiveVoiceRouterFactory) (
 		if router == nil {
 			return VoiceSettings{}
 		}
-		result, err := localVoiceRequest(router, appserver.IntID(2), appserver.MethodConfigRead, config.ConfigReadParams{})
+		result, err := localVoiceRequest(router, appserver.IntID(2), appserver.MethodConfigRead, voiceConfigReadParams(cwd))
 		if err != nil {
-			return VoiceSettings{}
+			if voiceConfigReadUnsupported(err) {
+				return VoiceSettings{}
+			}
+			return VoiceSettings{VoiceErr: err.Error()}
 		}
 		response, ok := result.(*config.ConfigReadResponse)
 		if !ok || response == nil {
-			return VoiceSettings{}
+			return VoiceSettings{VoiceErr: "config/read returned an invalid response"}
 		}
 		return RealtimeSettingsFromConfigValues(response.Config)
 	}
@@ -215,19 +218,19 @@ func interactiveLocalVoiceCallbacks(factory interactiveVoiceRouterFactory) (
 }
 
 // interactiveLocalVoiceSettings opens the voice picker with the local catalog.
-func interactiveLocalVoiceSettings(factory interactiveVoiceRouterFactory) func() bubbletea.Cmd {
-	settings, voices, _, _ := interactiveLocalVoiceCallbacks(factory)
+func interactiveLocalVoiceSettings(factory interactiveVoiceRouterFactory, cwd ...func() string) func() bubbletea.Cmd {
+	settings, voices, _, _ := interactiveLocalVoiceCallbacks(factory, cwd...)
 	return func() bubbletea.Cmd {
 		return func() bubbletea.Msg {
 			ctx := context.Background()
 			catalog := voices(ctx)
 			current := settings(ctx)
-			name := current.Voice
-			if !current.VoiceSet {
-				name = string(catalog.DefaultV1)
+			if current.VoiceErr != "" {
+				return codextea.VoiceSettingsMsg{Err: errors.New(current.VoiceErr)}
 			}
+			name := current.Voice
 			return codextea.VoiceSettingsMsg{
-				Voices:  RealtimeVoiceNames(catalog.V1),
+				Voices:  RealtimeVoiceNames(catalog.V3),
 				Current: name,
 				// Rust #49437: the settings tree shows the machine-local
 				// audio.microphone / audio.speaker / audio.microphone_channel
@@ -240,11 +243,10 @@ func interactiveLocalVoiceSettings(factory interactiveVoiceRouterFactory) func()
 
 // interactiveLocalVoiceSaver persists the chosen voice through the local config
 // write RPC and confirms it is the effective preference.
-func interactiveLocalVoiceSaver(factory interactiveVoiceRouterFactory) func(voice string) bubbletea.Cmd {
+func interactiveLocalVoiceSaver(factory interactiveVoiceRouterFactory, cwd ...func() string) func(voice string) bubbletea.Cmd {
 	if factory == nil {
 		factory = func() interactiveVoiceRouter { return nil }
 	}
-	settings, _, _, _ := interactiveLocalVoiceCallbacks(factory)
 	return func(voice string) bubbletea.Cmd {
 		return func() bubbletea.Msg {
 			// The factory is defaulted above, so a missing local runtime
@@ -253,20 +255,38 @@ func interactiveLocalVoiceSaver(factory interactiveVoiceRouterFactory) func(voic
 			if router == nil {
 				return codextea.VoiceSavedMsg{Voice: voice, Err: errors.New("config write failed in TUI: app-server is unavailable")}
 			}
-			if _, err := localVoiceRequest(router, appserver.IntID(2), appserver.MethodConfigBatchWrite, config.ConfigBatchWriteParams{
+			result, err := localVoiceRequest(router, appserver.IntID(2), appserver.MethodConfigBatchWrite, config.ConfigBatchWriteParams{
 				Edits: []config.ConfigEdit{{
 					KeyPath:       "realtime.voice",
 					Value:         voice,
 					MergeStrategy: config.MergeReplace,
 				}},
-			}); err != nil {
+			})
+			if err != nil {
 				return codextea.VoiceSavedMsg{Voice: voice, Err: err}
 			}
-			ctx := context.Background()
-			if effective := settings(ctx); effective.VoiceSet && strings.TrimSpace(effective.Voice) != voice {
-				return codextea.VoiceSavedMsg{Voice: voice, Err: errors.New("the saved voice is overridden by a managed setting")}
+			read, err := localVoiceRequest(router, appserver.IntID(3), appserver.MethodConfigRead, voiceConfigReadParams(cwd))
+			if err != nil {
+				if voiceConfigReadUnsupported(err) {
+					written, ok := result.(*config.ConfigWriteResponse)
+					if ok && written != nil && written.Status != config.WriteOKOverridden {
+						return codextea.VoiceSavedMsg{Voice: voice}
+					}
+				}
+				return codextea.VoiceSavedMsg{Voice: voice, Saved: true, Err: err}
 			}
-			return codextea.VoiceSavedMsg{Voice: voice}
+			response, ok := read.(*config.ConfigReadResponse)
+			if !ok || response == nil {
+				return codextea.VoiceSavedMsg{Voice: voice, Saved: true, Err: errors.New("config/read returned an invalid response")}
+			}
+			effective := RealtimeSettingsFromConfigValues(response.Config)
+			if effective.VoiceErr != "" {
+				return codextea.VoiceSavedMsg{Voice: voice, Saved: true, Err: errors.New(effective.VoiceErr)}
+			}
+			if !effective.VoiceSet || effective.Voice != voice {
+				return codextea.VoiceSavedMsg{Voice: voice, EffectiveVoice: &effective.Voice, Saved: true, Err: errors.New("the saved voice is overridden by a managed setting")}
+			}
+			return codextea.VoiceSavedMsg{Voice: voice, EffectiveVoice: &effective.Voice}
 		}
 	}
 }

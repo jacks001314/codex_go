@@ -80,11 +80,13 @@ func (s *PluginService) upgradeConfiguredMarketplaces(values map[string]any, mar
 		if gitMaterializer, ok := materializer.(*GitMarketplaceMaterializer); ok {
 			isolated := *gitMaterializer
 			isolated.Automatic = true
+			isolated.CodexHome = codexHome
 			materializer = &isolated
 		}
 		if gitResolver, ok := resolver.(*GitMarketplaceRevisionResolver); ok {
 			isolated := *gitResolver
 			isolated.Automatic = true
+			isolated.CodexHome = codexHome
 			resolver = &isolated
 		}
 	}
@@ -227,7 +229,11 @@ func upgradeConfiguredGitMarketplace(
 	var staged *MarketplaceStagingDir
 	var err error
 	if builtinGit {
-		staged, err = stageGitMarketplaceClone(installRoot, destination, "marketplace upgrade directory", source, sparsePaths, automatic)
+		codexHome := ""
+		if git, ok := materializer.(*GitMarketplaceMaterializer); ok {
+			codexHome = git.trustedHome()
+		}
+		staged, err = stageGitMarketplaceClone(installRoot, destination, "marketplace upgrade directory", source, sparsePaths, automatic, codexHome)
 		if err != nil {
 			return err
 		}

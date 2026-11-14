@@ -1,0 +1,7 @@
+# 有订阅者的idle resume入口修复（#61136部分）
+
+在运行中history/path校验后、ThreadRouter.dispatch之前，判断线程已loaded、无active turn且已有订阅者。复制请求并去除配置覆盖字段，使后续response、workspace持久化、settings及permissions走同一请求；保留history/path/paging/client/allowedTools。判断早于installThreadSubscription。
+
+新增集成测试通过真实router启动线程、物化rollout、注册observer并确认idle；resume请求不同model/CWD。修复前响应与settings均变成替换值，修复后保持原值。与TestRuntimeRouterThreadResumeRunningIgnoresOverrideMismatch联合通过0.274s，vet退出0。
+
+仍需更多配置字段、live settings与record不同、InternalParams请求等边界验证；无订阅idle关闭/移除/重读rollout重建及失败回退尚未实现。不声明#61136完成。既有全模块88859启动早于本轮代码，不作为本轮最终全量认证。

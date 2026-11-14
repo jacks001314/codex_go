@@ -22,6 +22,7 @@ func normalizeSnapshotStatusPath(view string) string {
 func TestModelTerminalSnapshots(t *testing.T) {
 	t.Run("wide region chrome", func(t *testing.T) {
 		state := codextui.NewState(&codextui.Options{
+			CWD:             "/repo",
 			Model:           "gpt-5",
 			ApprovalPolicy:  "on-request",
 			Sandbox:         "workspace-write",
@@ -69,6 +70,7 @@ func TestModelTerminalSnapshots(t *testing.T) {
 
 	t.Run("main view", func(t *testing.T) {
 		state := codextui.NewState(&codextui.Options{
+			CWD:             "/repo",
 			Model:           "gpt-5",
 			ApprovalPolicy:  "on-request",
 			Sandbox:         "workspace-write",

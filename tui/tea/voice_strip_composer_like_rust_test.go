@@ -12,6 +12,8 @@ import (
 func voiceComposerModel(t *testing.T) *Model {
 	t.Helper()
 	model, _, _ := newVoiceTestModel(t)
+	// Keep the fit threshold independent of the checkout path.
+	model.State.CWD = "/repo"
 	model.realtimeHelperAttached = true
 	model.VoiceConversation.MarkVoiceBackendStarted()
 	model.VoiceConversation.MarkVoiceWebRTCConnected()

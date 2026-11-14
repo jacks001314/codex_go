@@ -136,7 +136,7 @@ func TestSandboxOverrideCarriedThroughFilesystemSandboxLikeRust(t *testing.T) {
 		if context.SandboxOverride != override {
 			t.Fatalf("prepareFSSandbox(%q) override = %q", override, context.SandboxOverride)
 		}
-		if cwd == "" || len(workspaceRoots) != 1 {
+		if cwd == "" || workspaceRoots == nil || len(workspaceRoots) != 0 {
 			t.Fatalf("prepareFSSandbox(%q) cwd = %q, roots = %#v", override, cwd, workspaceRoots)
 		}
 	}

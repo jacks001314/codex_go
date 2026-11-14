@@ -1,0 +1,7 @@
+# Idle resume内部参数兼容
+
+prepareSubscribedIdleResume先复制Request，在存在InternalParams时序列化到副本Params后再DecodeParams及过滤。这样避免DecodeParams对空Params的原地归一化影响调用者，也避免只读wire Params丢失内部请求的threadId及excludeTurns。
+
+扩展订阅idle集成用例验证内部参数threadId/excludeTurns保留、model/CWD覆盖删除、调用者InternalParams保持原对象。修改前线程ID和分页标志丢失，见before日志；修改后与running resume集成用例联合测试见after日志，vet见vet日志。
+
+这里只补齐订阅idle入口的内部对象处理。无订阅者关闭重建、live settings响应等仍待完成；整体同步未完成。

@@ -1874,6 +1874,22 @@ func (s *MCPService) listCatalogIfStable(name string, config *ServerConfig, thre
 // nor hammers the connection.
 func (s *MCPService) discoverToolCatalogForStatus(name string, config *ServerConfig, threadID string, retained MCPServerStatus) (*stdioInventory, error) {
 	skipResourceTemplates := retained.hostOwnedApps
+	if retained.hostOwnedApps && config != nil && config.URL != "" {
+		client := s.httpClientForServer(name, config)
+		if !client.isInitialized() {
+			if err := ValidateExecutorDiscoveryCredentialPolicy(name, config); err != nil {
+				return nil, err
+			}
+			if err := ValidateServerAuth(name, config); err != nil {
+				return nil, err
+			}
+			roots := s.rootsForThread(threadID)
+			scope := s.appsStartupDiscoveryScope(name, config, roots)
+			if scope != "" {
+				return listMCPHTTPInventoryWithOptions(client, name, threadID, roots, skipResourceTemplates, scope)
+			}
+		}
+	}
 	if !s.mcpToolListRefreshApplies(name) {
 		return s.listInventoryForConfig(name, config, threadID, skipResourceTemplates)
 	}
@@ -3408,6 +3424,7 @@ func mcpConnectionCacheKeyWithFeatures(config *ServerConfig, openAIForm bool, us
 		return fmt.Sprintf("%#v|openaiForm=%t|userVerification=%t|requestAuth=%t|protocolMode=%d|readOnlyTools=%t|credentialPolicy=%s", cloned, openAIForm, userVerification, applyHTTPRequest, config.ProtocolMode, config.RequiresReadOnlyTools, credentialPolicy)
 	}
 	key := fmt.Sprintf("%s|openaiForm=%t|userVerification=%t|requestAuth=%t|protocolMode=%d|readOnlyTools=%t|credentialPolicy=%s", data, openAIForm, userVerification, applyHTTPRequest, config.ProtocolMode, config.RequiresReadOnlyTools, credentialPolicy)
+	key += "|appsOwner=" + config.appsDiscoveryOwner
 	for _, reference := range mcpReferencedEnvironmentVariables(config) {
 		key += "\x1f" + reference
 	}

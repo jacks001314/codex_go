@@ -30,6 +30,7 @@ type WorkloadIdentityExchange struct {
 }
 
 type WorkloadIdentityConfig struct {
+	spiffe                  *spiffeAssertionSource
 	AssertionFile           string
 	FederationRuleID        string
 	WorkloadIdentityContext string
@@ -293,7 +294,13 @@ func (e *WorkloadIdentityExchange) InvalidateIfCurrent(observedTokenVersion uint
 }
 
 func (e *WorkloadIdentityExchange) exchange(ctx context.Context) (WorkloadIdentityToken, error) {
-	assertion, err := readWorkloadAssertion(e.config.AssertionFile)
+	var assertion string
+	var err error
+	if e.config.spiffe != nil {
+		assertion, err = e.config.spiffe.fetchAssertion(ctx)
+	} else {
+		assertion, err = readWorkloadAssertion(e.config.AssertionFile)
+	}
 	if err != nil {
 		return WorkloadIdentityToken{}, err
 	}
@@ -364,7 +371,11 @@ func workloadErrorIsTransient(err error) bool {
 	if errors.As(err, &assertion) {
 		return workloadAssertionErrorIsTransient(assertion.err)
 	}
-	return err == workloadErrExchangeUnavailable
+	var spiffeRejected spiffeRejectedError
+	if errors.As(err, &spiffeRejected) {
+		return spiffeRejected.IsTransient()
+	}
+	return errors.Is(err, workloadErrExchangeUnavailable) || errors.Is(err, workloadErrSPIFFEUnavailable)
 }
 
 func workloadAssertionErrorIsTransient(err error) bool {

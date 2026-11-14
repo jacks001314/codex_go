@@ -81,6 +81,22 @@ func cloudMessage(params turn.TurnStartParams) (cloudclient.AddUserMessageReques
 	normalized.TurnTrigger = ""
 	normalized.Model = ""
 	normalized.Effort = nil
+	var tier *string
+	tierSet := params.ServiceTierSet || params.ServiceTier != nil
+	if trigger == "user" {
+		tier = params.ServiceTier
+		if tier != nil {
+			switch *tier {
+			case "default":
+				tier = nil
+			case "fast", "priority", "flex", "ultrafast":
+			default:
+				return cloudclient.AddUserMessageRequest{}, rejectCloudInput("This service tier is unavailable in Cloud.")
+			}
+		}
+		normalized.ServiceTier = nil
+		normalized.ServiceTierSet = false
+	}
 	if !reflect.DeepEqual(normalized, turn.TurnStartParams{}) {
 		return cloudclient.AddUserMessageRequest{}, rejectCloudInput("Changing cloud settings or sending structured input is not supported yet.")
 	}
@@ -117,6 +133,8 @@ func cloudMessage(params turn.TurnStartParams) (cloudclient.AddUserMessageReques
 		TurnTrigger:         turnTrigger,
 		Model:               model,
 		Effort:              effort,
+		ServiceTier:         tier,
+		ServiceTierSet:      tierSet,
 		Mode:                cloudclient.SubmissionStartIfIdle,
 		SharedAccess:        false,
 	}, nil

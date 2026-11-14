@@ -10,7 +10,7 @@ import (
 // resetThreadScopedState drops transcript state owned by the previous thread so
 // history or tool events queued by it cannot repopulate the new thread's replay
 // (Rust #43994 reset_for_thread_switch). The composer draft, pending async
-// questions, queued follow-ups, and user settings are deliberately preserved.
+// questions and user settings are preserved; follow-ups are parked by thread.
 func (m *Model) resetThreadScopedState() {
 	if m == nil {
 		return
@@ -92,7 +92,7 @@ func (m *Model) resetThreadScopedState() {
 	// per-thread ThreadInputState; switching away parks them, and switching back
 	// restores them unless a completion receipt already acknowledged them.
 	m.stashPendingSteers()
-	m.rejectedSteers = nil
+	m.stashQueuedThreadInput()
 	m.mainFind = mainTranscriptFind{}
 	m.activityFocus = transcriptActivityFocus{}
 	m.activityFollow = true

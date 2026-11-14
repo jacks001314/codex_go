@@ -28,6 +28,7 @@ func TestThreadStartFinishingAfterConnectionCloseStillUnloadsLikeRust(t *testing
 	if loaded := router.requireThreadStatus().LoadedThreadIDs(); len(loaded) != 0 {
 		t.Fatalf("thread/loaded/list = %#v, want empty", loaded)
 	}
+	waitForNotificationMethod(t, sink, NotificationThreadClosed)
 	closed := latestNotificationPayload[ThreadClosedNotification](t, sink, NotificationThreadClosed)
 	if closed.ThreadID != "child" {
 		t.Fatalf("thread/closed payload = %+v", closed)
@@ -53,6 +54,7 @@ func TestEphemeralThreadStartFinishingAfterConnectionCloseStillUnloadsLikeRust(t
 	if loaded := router.requireThreadStatus().LoadedThreadIDs(); len(loaded) != 0 {
 		t.Fatalf("thread/loaded/list = %#v, want empty", loaded)
 	}
+	waitForNotificationMethod(t, sink, NotificationThreadClosed)
 	closed := latestNotificationPayload[ThreadClosedNotification](t, sink, NotificationThreadClosed)
 	if closed.ThreadID != "ephemeral-root" {
 		t.Fatalf("thread/closed payload = %+v", closed)

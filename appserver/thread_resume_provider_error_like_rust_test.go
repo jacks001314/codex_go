@@ -122,6 +122,11 @@ base_url = 'https://old.example/v1'
 		t.Fatalf("resumed provider = %q, want old_provider", got)
 	}
 
+	// This assertion concerns a cold resume, not a subscribed live rejoin.
+	if err := router.Close(); err != nil {
+		t.Fatal(err)
+	}
+	router = newManagedProviderRouter(t, home)
 	modelOverride := "gpt-5.2-codex"
 	resumed := router.Handle(requestWithParams(t, IntID(2), MethodThreadResume, &ThreadResumeParams{ThreadID: threadID, Model: &modelOverride}))
 	if resumed.Error != nil {

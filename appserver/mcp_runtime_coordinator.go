@@ -406,14 +406,17 @@ func mcpRuntimeConfigFingerprint(cfg *config.Config) string {
 // stays significant, matching Rust's slice comparison of the captured
 // selections.
 func mcpEnvironmentRuntimeFingerprint(params *turn.TurnStartParams) string {
-	if params == nil || len(params.Environments) == 0 {
+	if params == nil {
 		return ""
 	}
-	data, err := json.Marshal(params.Environments)
+	data, err := json.Marshal(struct {
+		Environments []map[string]any `json:"environments"`
+		Originator   string           `json:"originator"`
+	}{params.Environments, strings.TrimSpace(params.Originator)})
 	if err != nil {
 		// The selections came from decoded JSON, so this is unreachable in
 		// practice; fall back to the environment ids so a change still differs.
-		return strings.Join(selectedEnvironmentIDs(params), "\x00")
+		return strings.Join(selectedEnvironmentIDs(params), "\x00") + "|originator=" + strings.TrimSpace(params.Originator)
 	}
 	return string(data)
 }

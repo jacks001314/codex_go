@@ -144,7 +144,7 @@ func normalizedPromptEditItemType(item appserver.ThreadItem) string {
 func threadSessionStateFromPromptEditResponse(thread *appserver.Thread, source ThreadSessionState) ThreadSessionState {
 	result := source.Clone()
 	result.ThreadID = thread.ID
-	result.ForkedFromID = thread.ForkedFromID
+	result.setForkParent(thread.ForkedFromID)
 	result.ThreadName = thread.Name
 	result.ModelProviderID = thread.ModelProvider
 	result.CWD = thread.CWD

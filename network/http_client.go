@@ -16,7 +16,7 @@ func NewHTTPClient(respectSystemProxy bool, timeout time.Duration) *http.Client 
 	}
 	return &http.Client{
 		Timeout:   timeout,
-		Transport: roundTripper,
+		Transport: &compressionTransport{next: roundTripper},
 	}
 }
 

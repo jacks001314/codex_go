@@ -37,13 +37,6 @@ var fsHelperCommandForExecutable = func(executable string) []string {
 	return []string{executable, FSHelperArg1}
 }
 
-func windowsSandboxProxySettingsModeForFS(mode WindowsSandboxProxySettingsMode) windowssandbox.ProxySettingsMode {
-	if mode == WindowsSandboxProxySettingsPreserve {
-		return windowssandbox.ProxySettingsPreserve
-	}
-	return windowssandbox.ProxySettingsReconcile
-}
-
 type fsHelperRequest struct {
 	Operation string          `json:"operation"`
 	Params    json.RawMessage `json:"params"`
@@ -340,9 +333,6 @@ func prepareFSSandboxForOperation(ctx *FileSystemSandboxContext, operation strin
 		}
 		workspaceRoots = append(workspaceRoots, native)
 	}
-	if len(workspaceRoots) == 0 {
-		workspaceRoots = []string{cwd}
-	}
 	return true, profile, profileJSON, cwd, workspaceRoots, nil
 }
 
@@ -419,24 +409,7 @@ func fsSandboxCommand(ctx *FileSystemSandboxContext, profile *sandbox.Permission
 	}
 	env := fsHelperEnvironment()
 	helperCommand := fsHelperCommandForExecutable(executable)
-	plan, err := sandbox.BuildCommandRunPlan(&sandbox.CommandRunRequest{
-		ResolvedPermissionProfile:     profile,
-		ResolvedPermissionProfileID:   "exec-server-fs-helper",
-		ResolvedPermissionProfileJSON: profileJSON,
-		CWD:                           cwd,
-		WorkspaceRoots:                workspaceRoots,
-		// Rust #46112: requests carry absolute paths, so launch the helper from
-		// the filesystem root. The policy cwd still anchors relative permission
-		// rules and the Windows sandbox payload.
-		CommandCWD: fsHelperLaunchRoot(cwd),
-		// Rust #38561: filesystem helpers only need access to their own
-		// executables; granting the containing directory would make unrelated
-		// sibling files readable.
-		SandboxReadableRoots:      fsHelperReadableRoots(executable),
-		UseLegacyLandlock:         ctx.UseLegacyLandlock,
-		AllowedSymlinkedCodexHome: allowedSymlinkedCodexHome,
-		Command:                   helperCommand,
-	})
+	plan, err := fsSandboxRunPlan(ctx, profile, profileJSON, cwd, workspaceRoots, allowedSymlinkedCodexHome, executable, helperCommand)
 	if err != nil {
 		return nil, nil, requestError(-32602, fmt.Sprintf("failed to prepare fs sandbox: %v", err))
 	}
@@ -455,17 +428,17 @@ func fsSandboxCommand(ctx *FileSystemSandboxContext, profile *sandbox.Permission
 		return nil, nil, requestError(-32602, "failed to prepare fs sandbox: native MXC is unavailable on this executor")
 	}
 	if selection == WindowsSandboxSelectionDisabled {
-		return helperCommand, env, nil
+		return nil, nil, requestError(-32602, "filesystem sandbox cannot be enforced on this executor")
 	}
 	level := selection.restrictedTokenLevel()
 	args, err := windowssandbox.CreateWindowsSandboxCommandArgsForPermissionProfile(windowssandbox.WindowsSandboxCommandArgsRequest{
 		Command:                          helperCommand,
-		CommandCWD:                       cwd,
+		CommandCWD:                       plan.CommandCWD,
 		WorkspaceRoots:                   workspaceRoots,
 		Env:                              env,
-		PermissionProfile:                profile,
+		PermissionProfile:                plan.PermissionProfile,
 		WindowsSandboxLevel:              level,
-		ProxySettingsMode:                windowsSandboxProxySettingsModeForFS(ctx.WindowsSandboxProxySettingsMode),
+		ProxySettingsMode:                windowssandbox.ProxySettingsPreserve,
 		ReadRootsIncludePlatformDefaults: true,
 		CodexHome:                        fsHelperCodexHome(),
 		// Rust #44658: filesystem helpers run through short-lived wrappers, so
@@ -479,6 +452,52 @@ func fsSandboxCommand(ctx *FileSystemSandboxContext, profile *sandbox.Permission
 	// runtime selection, not a shell-supplied override (Rust #45550).
 	windowssandbox.ApplyWrapperRuntimeEnv(env)
 	return append([]string{executable}, args...), env, nil
+}
+
+// fsSandboxRunPlan prepares the shared permission boundary used by both the
+// platform sandbox command and the Windows restricted-token wrapper.
+func fsSandboxRunPlan(ctx *FileSystemSandboxContext, profile *sandbox.PermissionProfile, profileJSON string, cwd string, workspaceRoots []string, allowedSymlinkedCodexHome, executable string, helperCommand []string) (*sandbox.CommandRunPlan, error) {
+	// Legacy Landlock does not need runtime executable grants (Rust #61138).
+	var readableRoots []string
+	if !ctx.UseLegacyLandlock {
+		readableRoots = fsHelperReadableRoots(executable)
+	}
+
+	plan, err := sandbox.BuildCommandRunPlan(&sandbox.CommandRunRequest{
+		ResolvedPermissionProfile:     profile,
+		ResolvedPermissionProfileID:   "exec-server-fs-helper",
+		ResolvedPermissionProfileJSON: profileJSON,
+		CWD:                           cwd,
+		WorkspaceRoots:                workspaceRoots,
+		// Rust #46112: requests carry absolute paths, so launch the helper from
+		// the filesystem root. The policy cwd still anchors relative permission
+		// rules and the Windows sandbox payload.
+		CommandCWD: fsHelperLaunchRoot(cwd),
+		// Rust #38561: filesystem helpers only need access to their own
+		// executables; granting the containing directory would make unrelated
+		// sibling files readable.
+		SandboxReadableRoots:      readableRoots,
+		SandboxDisableNetwork:     true,
+		UseLegacyLandlock:         ctx.UseLegacyLandlock,
+		AllowedSymlinkedCodexHome: allowedSymlinkedCodexHome,
+		Command:                   helperCommand,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if runtime.GOOS == "windows" {
+		bound, err := sandbox.BindWindowsHelperDenialGlobs(plan.PermissionProfile, cwd)
+		if err != nil {
+			return nil, err
+		}
+		plan.PermissionProfile = bound
+		plan.PermissionProfileJSON, err = sandbox.RuntimePermissionProfileJSON(*bound)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return plan, nil
+
 }
 
 // fsHelperLaunchRoot returns the filesystem root that contains the policy cwd.

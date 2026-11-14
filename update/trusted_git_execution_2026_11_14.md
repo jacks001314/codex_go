@@ -1,0 +1,7 @@
+# Trusted Git 生产查询接入（部分）
+
+GitMarketplaceRevisionResolver新增CodexHome，自动upgradeConfiguredMarketplaces从服务快照传入home。MarketplaceRevision通过runMarketplaceGitOutputEnvWithHome执行ls-remote；自动、无cwd且有明确home时创建trusted repository guard，defer Close覆盖CombinedOutput整个运行期。手动和已有checkout操作仍保留原选择。
+
+真实Git回归 TestAutomaticGitUsesTrustedRepositoryAndCleansUp 调用生产执行器的rev-parse --absolute-git-dir，确认Git选中home/.tmp/.staging内的仓库，返回后仓库目录已清理。plugin全包通过2.033s，vet退出0。
+
+尚未完成：materializer/stage/clone调用链的CodexHome传递；没有home的旧自动入口尚不启用guard；跨进程死亡/并发checkout保护验证和symlink测试。故#61180及整体同步仍未完成，不宣称所有自动Git都已经隔离。

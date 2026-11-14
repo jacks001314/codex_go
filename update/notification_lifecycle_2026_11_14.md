@@ -1,0 +1,9 @@
+# appserver通知测试生命周期修正
+
+完整回归39925中，ApplyPatchEmitsTurnDiffUpdated在2秒内未收到diff事件，UpdatePlanEmitsTurnPlanUpdated在TempDir删除时目录非空。修改前两项定向重复5次通过2.770s，因此未独立复现全包diff超时，不能声称已证明全部失败根因。
+
+源码检查确认测试在turn/completed后直接退出，没有等待后台tail写入或关闭router。现为两项测试添加defer：等待turn workers完成，再关闭router（先于testing.TempDir清理）。diff断言在worker完成屏障后读取通知，仍保留原diff内容断言和完成状态断言。只改测试，不改生产通知时序。
+
+修改后两项重复10次通过10.179s，go vet ./appserver与Master worktree diff --check通过。代码及前后日志已同步Master。已启动包含最新权限生产修复和通知测试修正的appserver完整回归，输出appserver_full_permissions_notifications_2026_11_14.log，尚未完成。
+
+整体同步仍未完成，#61134实时权限/未来turn快照消费、MCP作用域、其它核心/TUI功能、Linux原生验证与commit/push仍待处理。

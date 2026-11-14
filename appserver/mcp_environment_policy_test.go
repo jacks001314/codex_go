@@ -204,8 +204,8 @@ func TestTurnEnvironmentSelectionsDistinguishAbsentFromExplicitlyEmptyLikeRust(t
 	if explicit.Len() != 0 || len(explicit.EnvironmentIDs()) != 0 {
 		t.Fatalf("explicitly empty snapshot = len %d ids %#v", explicit.Len(), explicit.EnvironmentIDs())
 	}
-	if authority := mcpEnvironmentAuthorityForTurn(&turn.TurnStartParams{Environments: []map[string]any{}}); authority == nil || authority.Scoped {
-		t.Fatalf("explicitly empty selection authority = %#v, want an unscoped authority", authority)
+	if authority := mcpEnvironmentAuthorityForTurn(&turn.TurnStartParams{Environments: []map[string]any{}}); authority == nil || !authority.Scoped {
+		t.Fatalf("explicitly empty selection authority = %#v, want an explicitly scoped empty authority", authority)
 	}
 }
 

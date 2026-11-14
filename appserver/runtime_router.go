@@ -4038,6 +4038,10 @@ func (r *RuntimeRouter) dispatch(request *Request) (result any, err error) {
 			if err := r.rejectRunningThreadResumeStalePath(request); err != nil {
 				return nil, err
 			}
+			request, err = r.prepareSubscribedIdleResume(request)
+			if err != nil {
+				return nil, err
+			}
 			result, err := r.services.ThreadRouter.dispatch(request)
 			if err != nil {
 				return nil, err
@@ -4090,6 +4094,9 @@ func (r *RuntimeRouter) dispatch(request *Request) (result any, err error) {
 			r.applyThreadResumePersistedPermissions(result, request)
 			r.applyThreadResumeCollaborationMode(result, resumeConfig)
 			if err := r.applyRunningThreadResumeSnapshot(result, request); err != nil {
+				return nil, err
+			}
+			if err := r.applySubscribedIdleResumeModelSnapshot(result); err != nil {
 				return nil, err
 			}
 			r.markThreadResumeSessionStartSource(result, request)
@@ -6678,6 +6685,13 @@ func (r *RuntimeRouter) applyThreadStartConfigSnapshot(response *ThreadStartResp
 		// `permissions` is the named-profile table and must not be clobbered by
 		// the selection (#45981).
 		sessionDefaults["default_permissions"] = *params.Permissions
+		// Keep the admitted selection in live settings and checkpoints, too.
+		// Otherwise a later cwd-only update loses the profile label (#61195).
+		record.Metadata.ActivePermissionProfile = strings.TrimSpace(*params.Permissions)
+		_, _ = r.requireThreadExtras().UpdateSettings(&SettingsUpdateParams{
+			ThreadID:    response.Thread.ID,
+			Permissions: cloneString(params.Permissions),
+		})
 	}
 	if len(sessionDefaults) > 0 {
 		record.Metadata.Extra["config"] = sessionDefaults
@@ -9063,6 +9077,7 @@ func (r *RuntimeRouter) applyRunningThreadResumeSnapshot(result any, request *Re
 	if activeTurnMetadata == nil {
 		return nil
 	}
+	r.warnRunningResumeSandboxOverride(&params, activeTurnMetadata.ID)
 	activeTurnFull := activeTurnMetadata
 	if !params.ExcludeTurns {
 		if full := r.activeRuntimeTurnSnapshot(threadID); full != nil {
@@ -9483,6 +9498,44 @@ func (r *RuntimeRouter) commitThreadSettingsUpdateWithConnection(params *Setting
 	if r == nil || params == nil {
 		return nil, nil
 	}
+	// Capture permission normalization before any settings are published. Work
+	// on a copy so callers can reuse compatibility input for previews (#61134).
+	normalized := *params
+	if params.Permissions != nil {
+		settings := r.threadSettingsForTurn(params.ThreadID)
+		if settings == nil {
+			settings = &Settings{}
+		}
+		settings.ActivePermissionProfile = cloneString(params.Permissions)
+		settings.normalizedPermissionProfile = nil
+		if params.CWD != nil {
+			if params.RuntimeWorkspaceRoots == nil {
+				settings.RuntimeWorkspaceRoots = retargetRuntimeWorkspaceRoots(settings.RuntimeWorkspaceRoots, settings.CWD, *params.CWD)
+			}
+			settings.CWD = *params.CWD
+		}
+		if params.RuntimeWorkspaceRoots != nil {
+			settings.RuntimeWorkspaceRoots = append([]string{}, params.RuntimeWorkspaceRoots...)
+		}
+		profile, err := r.subscribedIdlePermissionProfile(params.ThreadID, settings)
+		if err != nil {
+			return nil, err
+		}
+		raw, err := sandbox.RuntimePermissionProfileJSON(*profile)
+		if err != nil {
+			return nil, err
+		}
+		normalized.normalizedPermissionProfile = json.RawMessage(raw)
+	}
+	if params.SandboxPolicy != nil && params.Permissions == nil {
+		record, _ := r.threadRecord(session.ThreadID(strings.TrimSpace(params.ThreadID)), false, false)
+		profile, err := r.normalizeThreadLegacySettings(params, record)
+		if err != nil {
+			return nil, err
+		}
+		normalized.normalizedPermissionProfile = profile
+	}
+	params = &normalized
 	if err := r.resolveThreadSettingsEnvironments(params); err != nil {
 		return nil, err
 	}
@@ -9657,11 +9710,30 @@ func applyThreadSettingsEnvironmentConfigToTurnStartParams(params *turn.TurnStar
 	if params == nil || settings == nil {
 		return
 	}
-	if params.Permissions == nil && settings.ActivePermissionProfile != nil {
-		params.Permissions = cloneString(settings.ActivePermissionProfile)
-	}
-	if !turnStartSandboxPolicyPresent(params.SandboxPolicy) && strings.TrimSpace(settings.SandboxPolicy) != "" {
-		params.SandboxPolicy = settings.SandboxPolicy
+	if params.Permissions == nil && !turnStartSandboxPolicyPresent(params.SandboxPolicy) {
+		if settings.ActivePermissionProfile != nil {
+			params.Permissions = cloneString(settings.ActivePermissionProfile)
+			// A live inherited selection has already been admitted. Explicit
+			// request selections never enter this branch.
+			if params.CWD == settings.CWD && len(params.Environments) == 0 && (params.RuntimeWorkspaceRoots == nil || slices.Equal(params.RuntimeWorkspaceRoots, settings.RuntimeWorkspaceRoots)) {
+				params.InheritedPermissionProfileID = *settings.ActivePermissionProfile
+				params.InheritedPermissionProfileJSON = string(settings.normalizedPermissionProfile)
+				params.InheritedPermissionProfileCWD = params.CWD
+				roots := params.RuntimeWorkspaceRoots
+				if roots == nil {
+					roots = settings.RuntimeWorkspaceRoots
+				}
+				params.InheritedPermissionProfileRoots = append([]string(nil), roots...)
+			}
+		} else if len(settings.normalizedPermissionProfile) > 0 {
+			// The admitted canonical snapshot includes inherited denials that
+			// cannot be represented by the legacy mode string (#61134).
+			if profile, err := sandbox.ParseRuntimePermissionProfileJSON(string(settings.normalizedPermissionProfile)); err == nil {
+				params.PersistedPermissionProfile = profile
+			}
+		} else if strings.TrimSpace(settings.SandboxPolicy) != "" {
+			params.SandboxPolicy = settings.SandboxPolicy
+		}
 	}
 	if params.RuntimeWorkspaceRoots == nil && len(settings.RuntimeWorkspaceRoots) > 0 {
 		params.RuntimeWorkspaceRoots = append([]string(nil), settings.RuntimeWorkspaceRoots...)
@@ -10498,7 +10570,7 @@ func (r *RuntimeRouter) applyLiveThreadModelSettings(thread *Thread) {
 }
 
 func (r *RuntimeRouter) persistThreadSettingsUpdate(params *SettingsUpdateParams, committed *Settings) error {
-	if r == nil || params == nil || (params.ApprovalPolicy == nil && params.Permissions == nil && params.DisabledPluginIDs == nil && params.Environments == nil && params.CollaborationMode == nil && params.Model == nil && params.ServiceTier == nil && params.Effort == nil && params.Summary == nil && params.Personality == nil && params.CWD == nil && params.RuntimeWorkspaceRoots == nil) {
+	if r == nil || params == nil || (params.ApprovalPolicy == nil && params.Permissions == nil && params.SandboxPolicy == nil && params.DisabledPluginIDs == nil && params.Environments == nil && params.CollaborationMode == nil && params.Model == nil && params.ServiceTier == nil && params.Effort == nil && params.Summary == nil && params.Personality == nil && params.CWD == nil && params.RuntimeWorkspaceRoots == nil) {
 		return nil
 	}
 	threadID := session.ThreadID(strings.TrimSpace(params.ThreadID))
@@ -10507,6 +10579,23 @@ func (r *RuntimeRouter) persistThreadSettingsUpdate(params *SettingsUpdateParams
 		// The thread may only exist in-memory (e.g. before its first turn);
 		// durable persistence is best-effort.
 		return nil
+	}
+	if params.SandboxPolicy != nil {
+		encoded := params.normalizedPermissionProfile
+		if len(encoded) == 0 {
+			var err error
+			encoded, err = normalizeLegacySettingsPermissionProfile(*params.SandboxPolicy, record)
+			if err != nil {
+				return err
+			}
+		}
+		var snapshot map[string]any
+		if err := json.Unmarshal([]byte(encoded), &snapshot); err != nil {
+			return err
+		}
+		record.Metadata.Extra = ensureRecordExtra(record.Metadata.Extra)
+		record.Metadata.Extra["permission_profile"] = snapshot
+		record.Metadata.ActivePermissionProfile = ""
 	}
 	record.Metadata.Extra = ensureRecordExtra(record.Metadata.Extra)
 	if params.Environments != nil {
@@ -12853,6 +12942,17 @@ func (r *RuntimeRouter) handlePluginList(request *Request) (*plugin.PluginListRe
 			FeaturedPluginIDs:     []string{},
 		}, nil
 	}
+	// A full/local inventory starts the background version check once for
+	// each installed non-curated source.
+	refreshLocal := len(params.MarketplaceKinds) == 0
+	for _, kind := range params.MarketplaceKinds {
+		if kind == "local" {
+			refreshLocal = true
+		}
+	}
+	if refreshLocal && r.services.Config == nil {
+		r.requirePlugins().StartNonCuratedCacheRefreshWithMode(params.ForceRefetch, r.effectivePluginsChanged)
+	}
 	response := r.requirePlugins().List(&params)
 	// Rust #40954/#41208: surface marketplaces declared in the effective config
 	// stack for every requested cwd (project plugin/marketplace config) in
@@ -12873,6 +12973,22 @@ func (r *RuntimeRouter) handlePluginList(request *Request) (*plugin.PluginListRe
 		read, err := r.services.Config.Read(readParams)
 		if err != nil || read == nil || pluginCatalogDisabledFromValues(read.Config) {
 			continue
+		}
+		if refreshLocal {
+			reload := func() (map[string]any, error) {
+				current, err := r.services.Config.Read(readParams)
+				if err != nil {
+					return nil, err
+				}
+				if current == nil {
+					return nil, errors.New("plugin config reload returned no values")
+				}
+				if pluginCatalogDisabledFromValues(current.Config) {
+					return map[string]any{}, nil
+				}
+				return current.Config, nil
+			}
+			r.requirePlugins().StartConfiguredPluginCacheRefresh(read.Config, params.ForceRefetch, reload, r.effectivePluginsChanged)
 		}
 		if entries, loadErrors := r.services.Plugins.ResolveConfigMarketplaces(read.Config); len(entries) > 0 || len(loadErrors) > 0 {
 			response.Marketplaces = mergePluginMarketplaceEntries(response.Marketplaces, entries)
@@ -13577,7 +13693,7 @@ func (r *RuntimeRouter) configureMCPFromConfigChecked() error {
 
 func (r *RuntimeRouter) runtimeMCPConfig(values map[string]any, codexHome string, runtimeAuth *mcp.RuntimeAuth, requirements *config.ConfigRequirements) *mcp.RuntimeConfig {
 	// Threadless discovery carries no captured selection (Rust `None`).
-	return r.runtimeMCPConfigForThread(mcp.NewMCPServerContributionContext("", nil), values, codexHome, runtimeAuth, requirements)
+	return r.runtimeMCPConfigForThread(mcp.NewHostMCPServerContributionContext("", "", ""), values, codexHome, runtimeAuth, requirements)
 }
 
 // runtimeMCPConfigForThread builds the MCP runtime config for one thread
@@ -13586,7 +13702,38 @@ func (r *RuntimeRouter) runtimeMCPConfig(values map[string]any, codexHome string
 // without changing shared plugin state (Rust #44655). The contribution context
 // carries the ordered executor selection captured for this projection, which is
 // published on the returned config for MCP contributors (#51503).
-func (r *RuntimeRouter) runtimeMCPConfigForThread(contributionContext mcp.MCPServerContributionContext, values map[string]any, codexHome string, runtimeAuth *mcp.RuntimeAuth, requirements *config.ConfigRequirements) *mcp.RuntimeConfig {
+func (r *RuntimeRouter) runtimeMCPConfigForThread(contributionContext mcp.MCPServerContributionContext, values map[string]any, codexHome string, runtimeAuth *mcp.RuntimeAuth, requirements *config.ConfigRequirements) (result *mcp.RuntimeConfig) {
+	defer func() {
+		if result != nil && contributionContext.SelectedEnvironments() != nil {
+			authority := contributionContext.SelectedEnvironments().Authority()
+			result.EnvironmentAuthority = authority
+			for name, registration := range result.Servers {
+				if !authority.AllowsRegistration(name, registration) {
+					registration.Config.Enabled = false
+					if registration.Config.DisabledReason == "" {
+						registration.Config.DisabledReason = "environment unavailable or restricted"
+					}
+					result.Servers[name] = registration
+				}
+			}
+		}
+		if result == nil || contributionContext.Originator() == "" {
+			return
+		}
+		registration, ok := result.Servers[mcp.CodexAppsServerName]
+		if !ok || registration.Source != "compatibility" {
+			return
+		}
+		headers := make(map[string]string, len(registration.Config.HTTPHeaders)+1)
+		for key, value := range registration.Config.HTTPHeaders {
+			if !strings.EqualFold(key, "originator") {
+				headers[key] = value
+			}
+		}
+		headers["originator"] = contributionContext.Originator()
+		registration.Config.HTTPHeaders = headers
+		result.Servers[mcp.CodexAppsServerName] = registration
+	}()
 	threadID := contributionContext.ThreadID()
 	base := mcp.RuntimeConfigFromValuesWithAuthAndRequirements(values, codexHome, runtimeAuth, requirements)
 	if selections := contributionContext.SelectedEnvironments(); selections != nil {
@@ -13615,26 +13762,30 @@ func (r *RuntimeRouter) runtimeMCPConfigForThread(contributionContext mcp.MCPSer
 	}
 	var contributions []plugin.MCPServerContribution
 	v2Supplied := false
-	if snapshot := r.activeStepCapabilitySnapshot(threadID); snapshot != nil {
-		if executorCatalog := snapshot.executorPluginCatalog(); executorCatalog != nil {
-			// Rust #55301: a supplied V2 inventory (including a complete empty
-			// one) replaces legacy plugin contribution discovery. Merge cloud
-			// metadata by canonical identity and preserve executor-local plugins.
-			v2Supplied = true
-			// Rust #56530 measures the catalog the MCP runtime publishes.
-			r.recordExecutorPluginCatalog(threadID, executorCatalog)
-			policy := plugin.PluginsConfigTomlFromValues(values)
-			merged := plugin.MergePluginCatalogs(executorCatalog, r.services.Plugins.CloudPluginCatalog())
-			contributions = merged.MCPServerContributions(policy.Plugins)
+	if !contributionContext.HostOnly() {
+		if snapshot := r.activeStepCapabilitySnapshot(threadID); snapshot != nil {
+			if executorCatalog := snapshot.executorPluginCatalog(); executorCatalog != nil {
+				// Rust #55301: a supplied V2 inventory (including a complete empty
+				// one) replaces legacy plugin contribution discovery. Merge cloud
+				// metadata by canonical identity and preserve executor-local plugins.
+				v2Supplied = true
+				// Rust #56530 measures the catalog the MCP runtime publishes.
+				r.recordExecutorPluginCatalog(threadID, executorCatalog)
+				policy := plugin.PluginsConfigTomlFromValues(values)
+				merged := plugin.MergePluginCatalogs(executorCatalog, r.services.Plugins.CloudPluginCatalog())
+				contributions = merged.MCPServerContributions(policy.Plugins)
+			}
 		}
 	}
 	if !v2Supplied {
 		contributions = r.services.Plugins.EnabledMCPServerContributions()
 	}
-	contributions = r.filterDisabledPluginMCPContributions(
-		threadID,
-		r.filterRetiredPluginEMAAuthContributions(values, contributions),
-	)
+	disabledPlugins, explicit := contributionContext.DisabledPluginIDs()
+	if !explicit {
+		disabledPlugins = r.threadDisabledPluginIDs(threadID)
+	}
+	contributions = filterMCPContributionsByDisabledIDs(disabledPlugins,
+		r.filterRetiredPluginEMAAuthContributions(values, contributions))
 	overlays := make([]mcp.ConfigOverlay, 0, len(contributions))
 	for _, contribution := range contributions {
 		server := mcp.ServerConfigFromValues(contribution.Config)
@@ -13784,7 +13935,10 @@ func (r *RuntimeRouter) filterDisabledPluginMCPContributions(threadID string, co
 	if r == nil || len(contributions) == 0 {
 		return contributions
 	}
-	disabled := r.threadDisabledPluginIDs(threadID)
+	return filterMCPContributionsByDisabledIDs(r.threadDisabledPluginIDs(threadID), contributions)
+}
+
+func filterMCPContributionsByDisabledIDs(disabled []string, contributions []plugin.MCPServerContribution) []plugin.MCPServerContribution {
 	if len(disabled) == 0 {
 		return contributions
 	}
@@ -16629,6 +16783,9 @@ func (r *RuntimeRouter) managedMCPServiceForThread(threadID string, cfg *config.
 	environmentFingerprint := mcpEnvironmentRuntimeFingerprint(turnParams)
 	environmentAuthority := environmentSelections.Authority()
 	contributionContext := mcp.NewMCPServerContributionContext(threadID, environmentSelections)
+	if turnParams != nil {
+		contributionContext = contributionContext.WithOriginator(turnParams.Originator)
+	}
 	// Rust #57287 (`McpServersDisabled`): a prediction fork with MCP disabled
 	// projects no executor-owned servers either, and discovery is skipped.
 	mcpServersDisabled := r.threadMCPServersDisabled(threadID)
@@ -19820,6 +19977,7 @@ func (r *RuntimeRouter) currentWriteStdinPermissionProfile(request *tool.WriteSt
 	if cfg == nil {
 		return nil, nil
 	}
+
 	cwd := ""
 	if request != nil {
 		cwd = strings.TrimSpace(request.CWD)
@@ -20652,6 +20810,17 @@ func threadDefaultSandboxPermissionProfile(cfg *config.Config, cwd string, param
 	}
 	if cfg == nil {
 		return nil, nil
+	}
+	// Requirements can constrain the selected name as well as its grants.
+	// Re-resolve through the policy-aware path whenever requirements exist.
+	if params != nil && params.InheritedPermissionProfileJSON != "" && params.InheritedPermissionProfileID == profileID && cfg.Requirements == nil &&
+		params.InheritedPermissionProfileCWD == cwd && len(params.Environments) == 0 &&
+		slices.Equal(params.InheritedPermissionProfileRoots, params.RuntimeWorkspaceRoots) {
+		profile, err := sandbox.ParseRuntimePermissionProfileJSON(params.InheritedPermissionProfileJSON)
+		if err != nil {
+			return nil, fmt.Errorf("invalid inherited permission profile: %w", err)
+		}
+		return &config.SandboxPermissionProfileResolution{ID: profileID, Profile: profile, ProfileJSON: params.InheritedPermissionProfileJSON}, nil
 	}
 	if params != nil && params.Permissions == nil {
 		if restored, ok := restoredPermissionProfileResolution(cfg, params.PersistedPermissionProfile); ok {

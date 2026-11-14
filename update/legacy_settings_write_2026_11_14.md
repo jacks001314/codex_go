@@ -1,0 +1,11 @@
+# legacy权限设置持久化补齐（#61134部分）
+
+修复 persistThreadSettingsUpdate 忽略纯sandboxPolicy更新的提前返回。现在将legacy请求转换为匿名运行时权限profile、清除记录中的命名身份、写入metadata；随后既有ThreadSettingsApplied逻辑将此匿名profile写入rollout。
+
+新增真实store/rollout回归 TestLegacySettingsUpdatePersistsAnonymousPermissionSnapshot：先保存workspace身份，更新read-only，检查存储身份已清除，latestPersistedResumeSettings读取到匿名read-only。修复前失败（persisted named identity=workspace），修复后通过。
+
+新增 sandbox.PreserveDeniedReads：在managed filesystem允许范围替换时保留原快照deny条目及glob_scan_max_depth；unrestricted在存在deny时转为root write加deny，按完整条目去重；不改变请求的enforcement。测试覆盖read-only、workspace、unrestricted请求、幂等及输入不变。测试输入不变断言最初错误比较原始JSON和解析后的规范JSON，已改为比较调用前后规范快照。
+
+最终sandbox/appserver定向测试分别0.024s/0.915s通过，go vet ./sandbox ./appserver通过。最终日志 legacy_settings_write_final_2026_11_14.log，修复前写入失败见legacy_settings_write_before_2026_11_14.log。代码和日志已同步Master。
+
+边界：本次仅从已保存permission_profile快照继承denials；当前命名配置/实时权限的完整admission合并、preview不修改输入、异常时原子提交、CWD相关git目录保护仍需核实补齐，#61134保持部分完成。整体仍有appserver diff通知/目录清理失败、MCP作用域及其它核心/TUI同步、Linux验证和commit/push未完成。

@@ -22,6 +22,10 @@ import (
 // without running it and returns Guardian's structured assessment, or a null
 // assessment when the approval policy skips review.
 
+// ThreadGuardianReviewParams identifies an idle thread's final recorded call.
+// Sequential direct reviews and live approvals can share Guardian history while
+// keeping it separate from the actor and inheriting parent persistence intent.
+// Each retry reassesses the final call under the current policy (Rust #61163).
 type ThreadGuardianReviewParams struct {
 	ThreadID string `json:"threadId"`
 }

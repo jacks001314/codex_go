@@ -963,7 +963,21 @@ func TestProcessStartFailureRemovesReservationAndClosedIDsRemainReservedLikeRust
 	if runtime.GOOS == "windows" {
 		command = []string{"powershell", "-NoProfile", "-Command", "exit 0"}
 	}
-	if _, err := server.startProcess(context.Background(), &ExecParams{
+	// Hold the closed notification until the duplicate-ID assertion finishes.
+	// A 75ms retention window can otherwise expire while startProcess resolves
+	// the executable on a busy Windows machine.
+	closedNotification := make(chan struct{})
+	releaseNotification := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseNotification) }) }
+	defer release()
+	ctx := context.WithValue(context.Background(), processNotifierContextKey{}, processNotifier(func(method string, _ any) {
+		if method == MethodProcessClosed {
+			close(closedNotification)
+			<-releaseNotification
+		}
+	}))
+	if _, err := server.startProcess(ctx, &ExecParams{
 		ProcessID: processID,
 		Argv:      command,
 		EnvPolicy: &ExecEnvPolicy{Inherit: "all", IgnoreDefaultExcludes: true},
@@ -971,16 +985,10 @@ func TestProcessStartFailureRemovesReservationAndClosedIDsRemainReservedLikeRust
 	}); err != nil {
 		t.Fatalf("retry startProcess() error = %v", err)
 	}
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		state := server.lookup(processID)
-		state.mu.Lock()
-		closed := state.closed
-		state.mu.Unlock()
-		if closed {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
+	select {
+	case <-closedNotification:
+	case <-time.After(10 * time.Second):
+		t.Fatal("process did not close")
 	}
 	if _, err := server.startProcess(context.Background(), &ExecParams{
 		ProcessID: processID,
@@ -990,7 +998,8 @@ func TestProcessStartFailureRemovesReservationAndClosedIDsRemainReservedLikeRust
 	}); err == nil || !strings.Contains(err.Error(), "process reserved already exists") {
 		t.Fatalf("duplicate closed start error = %v", err)
 	}
-	deadline = time.Now().Add(3 * time.Second)
+	release()
+	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) && server.lookup(processID) != nil {
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -1514,7 +1523,10 @@ func TestFilesystemCloseReleasesCapacityWhileReadUsesFileLikeRust(t *testing.T) 
 	}
 }
 
-func TestFilesystemSandboxContextRunsThroughHelperLikeRust(t *testing.T) {
+func TestFilesystemRequiredSandboxRejectsReadWhenDisabled(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows disabled sandbox rejection")
+	}
 	path := filepath.Join(t.TempDir(), "secret.txt")
 	if err := os.WriteFile(path, []byte("secret"), 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
@@ -1527,19 +1539,21 @@ func TestFilesystemSandboxContextRunsThroughHelperLikeRust(t *testing.T) {
 	params := &FSReadFileParams{
 		Path: path,
 		Sandbox: &FileSystemSandboxContext{
-			Permissions:         json.RawMessage(`{"type":"managed","file_system":{"type":"restricted","entries":[]},"network":"restricted"}`),
+			Permissions:         json.RawMessage(`{"type":"managed","file_system":{"type":"restricted","entries":[{"path":{"type":"glob_pattern","pattern":"*.txt"},"access":"deny"}]},"network":"restricted"}`),
 			CWD:                 filepath.Dir(path),
 			WindowsSandboxLevel: "disabled",
 		},
 	}
+	required, _, _, _, _, prepErr := prepareFSSandboxForOperation(params.Sandbox, MethodFSReadFile)
+	if prepErr != nil || !required {
+		t.Fatalf("expected restricted read: required=%v err=%v", required, prepErr)
+	}
 	response, err := readFile(params)
-	if err != nil {
-		t.Fatalf("readFile(sandbox) error = %v", err)
+	var failure *requestFailure
+	if !errors.As(err, &failure) || failure.code != -32602 || !strings.Contains(failure.message, "filesystem sandbox cannot be enforced") {
+		t.Fatalf("disabled helper must reject restricted read, got response=%v err=%v", response, err)
 	}
-	data, err := base64.StdEncoding.DecodeString(response.DataBase64)
-	if err != nil || string(data) != "secret" {
-		t.Fatalf("readFile(sandbox) data = %q, err = %v", data, err)
-	}
+
 }
 
 func TestReadFileRejectsFilesOverRustLimit(t *testing.T) {

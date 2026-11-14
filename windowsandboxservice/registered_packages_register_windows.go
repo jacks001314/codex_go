@@ -86,6 +86,10 @@ const errorPackagedServiceRequiresAdminPrivileges uint32 = 0x80073D28
 // version for the target account, so the exact postcondition is checked before
 // the error is accepted as a success.
 func (result *registrationResult) check(registeredForTarget func() bool) error {
+	return result.checkWithEventIDs(registeredForTarget, appxFailureEventIDs)
+}
+
+func (result *registrationResult) checkWithEventIDs(registeredForTarget func() bool, eventIDs func(windows.GUID) string) error {
 	if result == nil {
 		return errors.New("missing managed runtime registration result")
 	}
@@ -122,10 +126,17 @@ func (result *registrationResult) check(registeredForTarget func() bool) error {
 		return nil
 	}
 	if int32(result.details.extendedError) < 0 {
+		suffix := ""
+		if result.details.activityIDErr == nil && result.details.activityID != (windows.GUID{}) && eventIDs != nil {
+			if ids := eventIDs(result.details.activityID); ids != "" {
+				suffix = " appx_event_ids=" + ids
+			}
+		}
 		return fmt.Errorf(
-			"%s phase=deployment extended_error=0x%08X",
+			"%s phase=deployment extended_error=0x%08X%s",
 			context,
 			result.details.extendedError,
+			suffix,
 		)
 	}
 	return nil

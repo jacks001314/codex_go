@@ -1,0 +1,9 @@
+# seccomp加载线程绑定
+
+检查生产调用点：loadNetworkSeccomp设置PR_SET_NO_NEW_PRIVS后安装TSYNC过滤器，调用方没有LockOSThread。no_new_privs为线程属性，Go goroutine可以在两个系统调用之间迁移，导致过滤器安装在没有该前置属性的线程上。
+
+已在加载器内、构造BPF后、prctl前加入runtime.LockOSThread，defer解锁覆盖prctl和seccomp syscall及所有错误返回。已有调用者如已锁定线程，Go嵌套锁计数保持其外层绑定。编译BPF的纯计算不占用固定线程。
+
+Linux amd64交叉编译和go vet退出0，源码已同步Master。真实内核测试仍待Linux执行，尚未收到创建验证子Agent授权，不宣称原生通过。
+
+最新Windows全模块回归29603仍运行，已见agent/agentboard/app/applypatch/apps包pass事件，appserver尚无最终结果。本轮Linux专用修复不进入该Windows构建。整体同步未完成。

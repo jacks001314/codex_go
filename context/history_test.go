@@ -74,6 +74,7 @@ func TestDropLastUserTurnsTrimsContextUpdatesAboveRolledBackTurn(t *testing.T) {
 		outputMessage("assistant", "a1", "turn 1 assistant"),
 		textMessage("developer", "d1", "<managed_developer_instructions>\nROLLED_BACK_MANAGED_INSTRUCTIONS\n</managed_developer_instructions>"),
 		textMessage("developer", "d2", "<apps_instructions>\nROLLED_BACK_APPS_INSTRUCTIONS"),
+		textMessage("developer", "catalog-apps", "<catalog_apps_instructions>literal catalog instructions</catalog_apps_instructions>"),
 		textMessage("developer", "d3", "<plugins_instructions>\nROLLED_BACK_PLUGIN_INSTRUCTIONS"),
 		textMessage("developer", "d4", "<environments_instructions>\nROLLED_BACK_ENVIRONMENT_INSTRUCTIONS"),
 		textMessage("developer", "d5", "<collaboration_mode>ROLLED_BACK_DEV_INSTRUCTIONS</collaboration_mode>"),

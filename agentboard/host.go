@@ -22,10 +22,10 @@ const (
 // Host supplies tree-scoped membership, clock and notification access.
 //
 // The host remains authoritative for membership even when runtimes are
-// unloaded. Clock reads use the posting agent's configured source, including
-// simulated time. Notification admission is atomic with turn completion:
-// inactive agents are skipped, and no notification may start work or survive
-// into a later turn.
+// unloaded. Clock reads use the posting agent's configured source.
+// Notifications follow the host's queue-only agent-message scheduling and wake
+// policy, and may be buffered for an idle recipient. Acceptance does not mean
+// that the recipient model has consumed the notification.
 type Host interface {
 	// AgentPath returns the caller's path in this board's tree.
 	AgentPath(ctx context.Context, caller string) (agent.AgentPath, error)

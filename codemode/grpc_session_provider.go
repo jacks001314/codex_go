@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"codex_go/network"
 	"codex_go/tool"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -128,7 +129,13 @@ func (p *GrpcCodeModeSessionProvider) connect(ctx context.Context) (*remoteConne
 			grpc.MaxCallSendMsgSize(ProtocolMaxFrameBytes),
 		),
 	}, grpcDialOptionsForEndpoint(p.endpoint, p.httpClient)...)
-	transport, err := DialGrpcTransport(ctx, grpcTargetForEndpoint(p.endpoint), options...)
+	var transport remoteTransport
+	var err error
+	if strings.HasPrefix(p.endpoint, "http://") || strings.HasPrefix(p.endpoint, "https://") {
+		transport, err = newGrpcHTTPTransport(ctx, p.endpoint, p.httpClient)
+	} else {
+		transport, err = DialGrpcTransport(ctx, grpcTargetForEndpoint(p.endpoint), options...)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -191,7 +198,7 @@ func grpcDialOptionsForEndpoint(endpoint string, httpClient *http.Client) []grpc
 	options := []grpc.DialOption{}
 	tlsConfigured := false
 	if httpClient != nil {
-		if transport, ok := httpClient.Transport.(*http.Transport); ok && transport.DialContext != nil {
+		if transport := network.BaseTransport(httpClient.Transport); transport != nil && transport.DialContext != nil {
 			dial := transport.DialContext
 			options = append(options, grpc.WithContextDialer(func(ctx context.Context, address string) (net.Conn, error) {
 				return dial(ctx, "tcp", address)

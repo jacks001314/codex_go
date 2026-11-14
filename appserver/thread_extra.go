@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -283,6 +284,9 @@ func (s *GoalStore) Clear(params *GoalClearParams) (*GoalClearResponse, error) {
 }
 
 type SettingsUpdateParams struct {
+	// normalizedPermissionProfile is captured before committing a legacy update.
+	normalizedPermissionProfile json.RawMessage
+
 	ThreadID string `json:"threadId"`
 	// DisabledPluginIDs replaces this thread's disabled plugin IDs. Omitted or
 	// null preserves the saved list; an explicit empty list clears it
@@ -394,6 +398,9 @@ func (o *ThreadExtraOptionalString) MarshalJSON() ([]byte, error) {
 type SettingsUpdateResponse struct{}
 
 type Settings struct {
+	// normalizedPermissionProfile retains the accepted legacy restrictions for future turns.
+	normalizedPermissionProfile json.RawMessage
+
 	// DisabledPluginIDs is the saved per-thread selection. It does not yet
 	// filter plugin capabilities (Rust #44905).
 	DisabledPluginIDs []string `json:"disabledPluginIds"`
@@ -911,10 +918,23 @@ func (s *ThreadExtraService) UpdateSettingsWithCommit(params *SettingsUpdatePara
 	defer s.mu.Unlock()
 	s.ensureLocked()
 	settings := s.settings[params.ThreadID]
+	// Canonical named snapshots are bound to their admission paths. Keep the
+	// identity but resolve it again after a path change unless this update also
+	// supplies a newly admitted permission selection.
+	if settings.ActivePermissionProfile != nil && params.Permissions == nil && params.SandboxPolicy == nil &&
+		((params.CWD != nil && *params.CWD != settings.CWD) ||
+			(params.RuntimeWorkspaceRoots != nil && !slices.Equal(params.RuntimeWorkspaceRoots, settings.RuntimeWorkspaceRoots))) {
+		settings.normalizedPermissionProfile = nil
+	}
 	if params.DisabledPluginIDs != nil {
 		settings.DisabledPluginIDs = append([]string{}, (*params.DisabledPluginIDs)...)
 	}
 	if params.CWD != nil {
+		// Rust #61195: keep the selected profile while moving runtime roots.
+		// Explicit roots below replace this selection instead of being retargeted.
+		if params.RuntimeWorkspaceRoots == nil {
+			settings.RuntimeWorkspaceRoots = retargetRuntimeWorkspaceRoots(settings.RuntimeWorkspaceRoots, settings.CWD, *params.CWD)
+		}
 		settings.CWD = *params.CWD
 	}
 	if params.Environments != nil {
@@ -933,9 +953,14 @@ func (s *ThreadExtraService) UpdateSettingsWithCommit(params *SettingsUpdatePara
 	}
 	if params.SandboxPolicy != nil {
 		settings.SandboxPolicy = *params.SandboxPolicy
+		settings.normalizedPermissionProfile = append(json.RawMessage(nil), params.normalizedPermissionProfile...)
+		// Legacy admission replaces the named identity (Rust #61134).
+		settings.ActivePermissionProfile = nil
 	}
 	if params.Permissions != nil {
 		settings.ActivePermissionProfile = cloneString(params.Permissions)
+		settings.normalizedPermissionProfile = append(json.RawMessage(nil), params.normalizedPermissionProfile...)
+		settings.SandboxPolicy = ""
 	}
 	if params.Model != nil {
 		settings.Model = *params.Model
@@ -987,6 +1012,7 @@ func (s *ThreadExtraService) Settings(threadID string) *Settings {
 }
 
 func cloneSettings(settings Settings) Settings {
+	settings.normalizedPermissionProfile = append(json.RawMessage(nil), settings.normalizedPermissionProfile...)
 	settings.DisabledPluginIDs = append([]string{}, settings.DisabledPluginIDs...)
 	settings.Environments = cloneThreadEnvironments(settings.Environments)
 	settings.ActivePermissionProfile = cloneString(settings.ActivePermissionProfile)

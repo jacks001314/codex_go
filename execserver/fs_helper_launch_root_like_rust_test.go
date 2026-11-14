@@ -1,14 +1,11 @@
 package execserver
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
-
-	"codex_go/utils"
 )
 
 // Rust #46112 launches the filesystem helper from the filesystem root so a
@@ -44,54 +41,56 @@ func TestFSHelperLaunchRootLikeRust(t *testing.T) {
 	}
 }
 
-// TestFSHelperReadSurvivesRemovedPolicyCWDLikeRust is the Go counterpart of
-// Rust's apply_patch-after-removal regression: the policy cwd is gone, yet an
-// absolute-path filesystem RPC still reaches the sandboxed helper because it
-// launches from the filesystem root.
-func TestFSHelperReadSurvivesRemovedPolicyCWDLikeRust(t *testing.T) {
+// A removed policy cwd must not become the helper launch cwd. Validate the
+// actual plan without disabling the sandbox to run a restricted read.
+func TestFSHelperPlanSurvivesRemovedPolicyCWDLikeRust(t *testing.T) {
 	if runtime.GOOS != "windows" {
-		t.Skip("the piped helper launch is covered on Windows; other hosts need the platform sandbox")
-	}
-	target := filepath.Join(t.TempDir(), "allowed.txt")
-	if err := os.WriteFile(target, []byte("allowed"), 0o600); err != nil {
-		t.Fatalf("write allowed file: %v", err)
-	}
-	deniedURI, err := utils.FromHostNativePath(filepath.Join(t.TempDir(), "denied"))
-	if err != nil {
-		t.Fatalf("denied path URI: %v", err)
+		t.Skip("Windows helper policy binding")
 	}
 	selected := filepath.Join(t.TempDir(), "selected")
-	if err := os.MkdirAll(selected, 0o755); err != nil {
-		t.Fatalf("create selected directory: %v", err)
+	if err := os.Mkdir(selected, 0o700); err != nil {
+		t.Fatal(err)
 	}
-	oldCommand := fsHelperCommandForExecutable
-	fsHelperCommandForExecutable = func(string) []string {
-		return []string{os.Args[0], "-test.run=^TestExecServerFSHelperProcess$", "--", FSHelperArg1}
-	}
-	defer func() { fsHelperCommandForExecutable = oldCommand }()
-	// Remove the policy cwd before the request: launching the helper with this
-	// directory as its working directory would fail at process start.
 	if err := os.Remove(selected); err != nil {
-		t.Fatalf("remove selected directory: %v", err)
+		t.Fatal(err)
 	}
-	// The deny entry forces the sandboxed helper path. Sandbox enforcement is
-	// disabled here, so this test isolates helper launch behaviour.
-	permissions := json.RawMessage(`{"type":"managed","file_system":{"type":"restricted","entries":[` +
-		`{"path":{"type":"path","path":"` + deniedURI.String() + `"},"access":"deny"}]},"network":"restricted"}`)
-	params := &FSReadFileParams{
-		Path: target,
-		Sandbox: &FileSystemSandboxContext{
-			Permissions:         permissions,
-			CWD:                 selected,
-			WindowsSandboxLevel: "disabled",
-		},
+	raw := json.RawMessage(`{"type":"managed","file_system":{"type":"restricted","entries":[{"path":{"type":"glob_pattern","pattern":"hidden/*.env"},"access":"deny"}]},"network":"restricted"}`)
+	ctx := &FileSystemSandboxContext{Permissions: raw, CWD: selected, WorkspaceRoots: []string{selected}}
+	required, profile, profileJSON, cwd, roots, err := prepareFSSandboxForOperation(ctx, MethodFSReadFile)
+	if err != nil || !required {
+		t.Fatalf("prepare required=%v err=%v", required, err)
 	}
-	response, err := readFile(params)
+	executable, err := os.Executable()
 	if err != nil {
-		t.Fatalf("readFile(sandbox, removed cwd) error = %v", err)
+		t.Fatal(err)
 	}
-	data, err := base64.StdEncoding.DecodeString(response.DataBase64)
-	if err != nil || string(data) != "allowed" {
-		t.Fatalf("readFile(sandbox, removed cwd) data = %q, err = %v", data, err)
+	plan, err := fsSandboxRunPlan(ctx, profile, profileJSON, cwd, roots, "", executable, []string{executable})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.CommandCWD != fsHelperLaunchRoot(selected) || plan.CWD != selected {
+		t.Fatalf("command cwd=%q policy cwd=%q", plan.CommandCWD, plan.CWD)
+	}
+	var wire struct {
+		FileSystem struct {
+			Entries []struct {
+				Path struct {
+					Pattern string `json:"pattern"`
+				} `json:"path"`
+			} `json:"entries"`
+		} `json:"file_system"`
+	}
+	if err := json.Unmarshal([]byte(plan.PermissionProfileJSON), &wire); err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(selected, "hidden", "*.env")
+	found := false
+	for _, entry := range wire.FileSystem.Entries {
+		if entry.Path.Pattern == want {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("missing anchored denial %q in %s", want, plan.PermissionProfileJSON)
 	}
 }

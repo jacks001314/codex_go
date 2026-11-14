@@ -42,6 +42,8 @@ func (c *Client) handleRequest(
 		return c.readThread(params)
 	case appserver.MethodThreadLoadedList:
 		return c.loadedThreadList()
+	case appserver.MethodThreadSetName:
+		return c.setThreadName(ctx, params)
 	case appserver.MethodThreadArchive:
 		return c.archiveThread(ctx, params)
 	case appserver.MethodThreadUnarchive:
@@ -622,4 +624,33 @@ func cloneInt64Pointer(value *int64) *int64 {
 	}
 	clone := *value
 	return &clone
+}
+
+func (c *Client) setThreadName(ctx context.Context, params json.RawMessage) (json.RawMessage, *RPCError) {
+	var request appserver.ThreadSetNameParams
+	if err := json.Unmarshal(params, &request); err != nil {
+		return nil, internalRPCError(err)
+	}
+	name := strings.TrimSpace(request.Name)
+	if strings.TrimSpace(request.ThreadID) == "" {
+		return nil, internalRPCError(cloudclient.ErrInvalidThreadID)
+	}
+	if name == "" {
+		return nil, internalRPCError(cloudclient.ErrInvalidThreadName)
+	}
+	source, ok := c.source.(interface {
+		SetThreadName(context.Context, string, string) error
+	})
+	if !ok {
+		return nil, unsupportedOperation(appserver.MethodThreadSetName)
+	}
+	_, err := waitWhileListening(c, ctx, func() (struct{}, error) { return struct{}{}, source.SetThreadName(ctx, request.ThreadID, name) })
+	if err != nil {
+		return nil, internalRPCError(err)
+	}
+	if c.loaded != nil && c.loaded.Thread != nil && c.loaded.Thread.ID == request.ThreadID {
+		c.loaded.Thread.Name = &name
+	}
+	c.enqueue(Notification{Method: appserver.NotificationThreadNameUpdated, Params: &appserver.ThreadNameUpdatedNotification{ThreadID: request.ThreadID, ThreadName: &name}})
+	return json.RawMessage(`{}`), nil
 }

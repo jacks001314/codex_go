@@ -246,6 +246,14 @@ func (s *realtimeTransportSession) close() error {
 }
 
 func realtimeSessionUpdate(config *SessionConfig) map[string]any {
+	if config.Voice == "" {
+		clone := *config
+		clone.Voice = VoiceMarin
+		if config.Version == VersionV1 {
+			clone.Voice = VoiceCove
+		}
+		config = &clone
+	}
 	instructions := config.Prompt
 	switch config.Version {
 	case VersionV1:

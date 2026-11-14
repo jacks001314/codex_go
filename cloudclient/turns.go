@@ -107,10 +107,13 @@ type AddUserMessageRequest struct {
 	// Model and Effort stage the next new turn's model settings (Rust #60651).
 	// Omit both to inherit the thread settings; a model alone uses its default
 	// effort. Queue mode cannot carry either setting.
-	Model        *string
-	Effort       *string
-	Mode         SubmissionMode
-	SharedAccess bool
+	// ServiceTierSet distinguishes inheritance from an explicit null clearing the tier.
+	ServiceTierSet bool
+	ServiceTier    *string
+	Model          *string
+	Effort         *string
+	Mode           SubmissionMode
+	SharedAccess   bool
 }
 
 type InterruptTurnRequest struct {
@@ -232,7 +235,7 @@ func validAddUserMessageRequest(request AddUserMessageRequest) bool {
 	if strings.TrimSpace(request.ThreadID) == "" || strings.TrimSpace(request.ClientUserMessageID) == "" {
 		return false
 	}
-	if (request.Model != nil || request.Effort != nil) && request.Mode == SubmissionQueue {
+	if (request.Model != nil || request.Effort != nil || request.ServiceTierSet || request.ServiceTier != nil) && request.Mode == SubmissionQueue {
 		return false
 	}
 	hasContent := false
@@ -355,6 +358,18 @@ func encodeAddUserMessageRequest(request AddUserMessageRequest) []byte {
 	if request.Model != nil {
 		out = protowire.AppendTag(out, 12, protowire.BytesType)
 		out = protowire.AppendString(out, *request.Model)
+	}
+	if request.ServiceTierSet || request.ServiceTier != nil {
+		var tier []byte
+		if request.ServiceTier == nil {
+			tier = protowire.AppendTag(tier, 2, protowire.BytesType)
+			tier = protowire.AppendBytes(tier, nil)
+		} else {
+			tier = protowire.AppendTag(tier, 1, protowire.BytesType)
+			tier = protowire.AppendString(tier, *request.ServiceTier)
+		}
+		out = protowire.AppendTag(out, 20, protowire.BytesType)
+		out = protowire.AppendBytes(out, tier)
 	}
 	out = protowire.AppendTag(out, 23, protowire.BytesType)
 	out = protowire.AppendString(out, request.ThreadID)

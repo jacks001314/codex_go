@@ -14,8 +14,8 @@ import (
 
 func TestNewHTTPClientCanDisableSystemProxy(t *testing.T) {
 	client := NewHTTPClient(false, 0)
-	transport, ok := client.Transport.(*http.Transport)
-	if !ok {
+	transport := BaseTransport(client.Transport)
+	if transport == nil {
 		t.Fatalf("Transport = %T", client.Transport)
 	}
 	if transport.Proxy != nil {
@@ -36,6 +36,8 @@ func underlyingHTTPTransport(t *testing.T, roundTripper http.RoundTripper) *http
 	switch transport := roundTripper.(type) {
 	case *http.Transport:
 		return transport
+	case *compressionTransport:
+		return underlyingHTTPTransport(t, transport.next)
 	case *proxyAuthTransport:
 		return transport.base
 	default:

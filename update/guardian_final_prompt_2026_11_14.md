@@ -1,0 +1,10 @@
+# Guardian 最终提示词回归
+
+此前仅验证构建section和rededup的原文保留；本轮扩展到 BuildGuardianElasticPromptPartsWithSectionCosts 完整预算准备、分配、去重和最终渲染。
+
+- 同步/异步两种presentation：超过固定限制的已验证答案完整出现在最终提示词。
+- 配置retained_user_instructions单项4000 tokens、组最低10000 tokens：超过固定限制的用户指令完整出现在最终提示词。
+- assistant原文仍覆盖构建与rededup阶段，本轮未新增其最终分配断言，不能将用户指令结果扩展为assistant最终分配已验证。
+- 两项最终提示词测试通过，随后Guardian/Retained/Elastic组合回归及state vet通过。日志guardian_final_prompt_2026_11_14.log与guardian_final_combined_2026_11_14.log。
+
+全量无缓存测试session34226仍正常推进appserver用例。#61185剩余请求缓存/异步采样链路及其他同步项未完成，尚未提交推送。

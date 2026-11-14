@@ -422,3 +422,13 @@ var configToolsFields = map[string]configFieldKind{
 	"experimental_request_user_input": {kind: configKindStruct, expected: "ExperimentalRequestUserInput", fields: configRequestUserInputFields},
 	"update_plan":                     {kind: configKindStruct, expected: "UpdatePlanToolConfig", fields: configUpdatePlanFields},
 }
+
+var configMarketplaceFields = map[string]configFieldKind{
+	"auto_update":   {kind: configKindBool},
+	"last_updated":  {kind: configKindString},
+	"last_revision": {kind: configKindString},
+	"source_type":   {kind: configKindEnum, variants: []string{"git", "local"}},
+	"source":        {kind: configKindString},
+	"ref":           {kind: configKindString},
+	"sparse_paths":  {kind: configKindStringSequence},
+}

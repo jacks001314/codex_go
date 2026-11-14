@@ -10,6 +10,7 @@ package execserver
 // destination, and values are never echoed in diagnostics.
 
 import (
+	codexnetwork "codex_go/network"
 	"context"
 	"errors"
 	"fmt"
@@ -210,7 +211,7 @@ func loopbackDirectWebSocketClient(ctx context.Context, serverURL string, base *
 	}
 	var transport *http.Transport
 	if base != nil {
-		if existing, ok := base.Transport.(*http.Transport); ok && existing != nil {
+		if existing := codexnetwork.BaseTransport(base.Transport); existing != nil {
 			transport = existing.Clone()
 		} else if base.Transport != nil {
 			return base, nil
@@ -236,6 +237,12 @@ func loopbackDirectWebSocketClient(ctx context.Context, serverURL string, base *
 		return nil, lastErr
 	}
 	client := &http.Client{Transport: transport}
+	if base != nil {
+		direct, ok := codexnetwork.WithoutSystemProxy(base.Transport)
+		if ok {
+			client.Transport = codexnetwork.ReplaceBaseTransport(direct, transport)
+		}
+	}
 	if base != nil {
 		client.Timeout = base.Timeout
 		client.CheckRedirect = base.CheckRedirect

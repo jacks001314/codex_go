@@ -214,3 +214,34 @@ func TestTurnContextRecordsPersistedPermissionProfileLikeRust(t *testing.T) {
 func stringPointerForPersistedProfileTest(value string) *string {
 	return &value
 }
+
+func TestRestoredCanonicalProfileIncludesCurrentManagedDenials(t *testing.T) {
+	saved, err := sandbox.ParseRuntimePermissionProfileJSON(`{"type":"managed","network":"restricted","file_system":{"type":"restricted","glob_scan_max_depth":2,"entries":[{"path":{"type":"special","value":{"kind":"root"}},"access":"read"}]}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := sandbox.RuntimePermissionProfileJSON(*saved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	denied := filepath.Join(t.TempDir(), "secret")
+	cfg := &config.Config{Requirements: &config.ConfigRequirements{Permissions: map[string]any{"filesystem": map[string]any{"deny_read": []any{denied}}}}}
+	resolution, ok := restoredPermissionProfileResolution(cfg, saved)
+	if !ok {
+		t.Fatal("profile not restored")
+	}
+	reparsed, err := sandbox.ParseRuntimePermissionProfileJSON(resolution.ProfileJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reparsed.DeniesReadPath(denied) {
+		t.Fatalf("canonical launcher JSON omitted managed denial: %s", resolution.ProfileJSON)
+	}
+	if !strings.Contains(resolution.ProfileJSON, `"glob_scan_max_depth":2`) {
+		t.Fatal("lost saved scan bound")
+	}
+	after, _ := sandbox.RuntimePermissionProfileJSON(*saved)
+	if before != after {
+		t.Fatal("restoration mutated saved profile")
+	}
+}

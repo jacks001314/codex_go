@@ -186,6 +186,10 @@ func RetainedAssistantMessage(message *retainedctx.RetainedUserMessage) (RootMes
 // bounded originals in acceptance order, placeholder-free omission notices, and
 // verified answers deferred to the answers section.
 func RenderRetainedInstructions(context *retainedctx.RetainedContext) []RetainedInstructionItem {
+	return renderRetainedInstructions(context, false)
+}
+
+func renderRetainedInstructions(context *retainedctx.RetainedContext, originals bool) []RetainedInstructionItem {
 	if context == nil {
 		return nil
 	}
@@ -204,7 +208,7 @@ func RenderRetainedInstructions(context *retainedctx.RetainedContext) []Retained
 			message := labeled.Entry.UserMessage
 			text := "Retained source order: " + labeled.Label + "\n" +
 				RootMessage{Kind: RootMessageUser, Text: message.Text}.Render()
-			if message.Complete && len(text) <= budget {
+			if message.Complete && (originals || len(text) <= budget) {
 				fragments = append(fragments, RetainedInstructionItem{Content: text, Kind: RetainedInstructionUserInstruction, Source: source})
 			} else {
 				complete = false
@@ -216,9 +220,13 @@ func RenderRetainedInstructions(context *retainedctx.RetainedContext) []Retained
 				// neither a fragment nor an omission notice.
 				continue
 			}
-			if assistant, ok := RetainedAssistantMessage(message); ok {
+			assistant, ok := RetainedAssistantMessage(message)
+			if originals && message.Complete {
+				assistant, ok = RootMessage{Kind: RootMessageAssistant, Text: message.Text}, true
+			}
+			if ok {
 				text := "Retained source order: " + labeled.Label + "\n" + assistant.Render()
-				if len(text) <= budget {
+				if originals || len(text) <= budget {
 					fragments = append(fragments, RetainedInstructionItem{Content: text, Kind: RetainedInstructionAssistantContext, Source: source})
 					continue
 				}
@@ -740,4 +748,35 @@ func RenderVerifiedAnswers(context *retainedctx.RetainedContext) RenderedVerifie
 		fragments = append([]string{RootMessage{Kind: RootMessageIncompleteVerifiedAnswers}.Render()}, fragments...)
 	}
 	return RenderedVerifiedAnswers{Fragments: fragments, Complete: complete}
+}
+
+// CollectOriginalVerifiedAnswers retains complete answer candidates until the
+// elastic request budget selects whole entries (Rust #61185).
+func CollectOriginalVerifiedAnswers(context *retainedctx.RetainedContext) RenderedVerifiedAnswers {
+	complete := context == nil || context.VerifiedAnswersComplete()
+	var fragments []string
+	if context != nil {
+		for _, labeled := range RetainedSourceOrderLabels(context) {
+			if answer := labeled.Entry.VerifiedAnswer; answer != nil {
+				fragments = append(fragments, "Retained source order: "+labeled.Label+"\n"+RenderOriginalVerifiedAnswer(answer))
+			}
+		}
+	}
+	if !complete {
+		fragments = append([]string{RootMessage{Kind: RootMessageIncompleteVerifiedAnswers}.Render()}, fragments...)
+	}
+	return RenderedVerifiedAnswers{Fragments: fragments, Complete: complete}
+}
+
+// OriginalRetainedInstructionSections defers entry-size limits until elastic
+// request preparation while preserving role layout and omission notices.
+func OriginalRetainedInstructionSections(context *retainedctx.RetainedContext, presentation ActionPresentation) RetainedInstructionSections {
+	fragments := renderRetainedInstructions(context, true)
+	if len(fragments) == 0 {
+		return RetainedInstructionSections{}
+	}
+	if presentation == ActionPresentationAsync {
+		return retainedInstructionSectionPair(fragments, HasLegacyRetainedOrder(context))
+	}
+	return RetainedInstructionSections{Instructions: retainedInstructionsSectionItems(fragments, HasLegacyRetainedOrder(context))}
 }

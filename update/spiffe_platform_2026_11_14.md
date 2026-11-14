@@ -1,0 +1,7 @@
+# SPIFFE必填设置与Windows边界（2026-11-14）
+
+依照upstream_61207.patch：spiffe来源冲突检查后要求SPIFFE_ENDPOINT_SOCKET及OPENAI_SPIFFE_AUDIENCE；上游构造器在非Unix返回UnsupportedSpiffePlatform。
+
+本轮Go读取endpoint/audience并检查缺省；当前Windows平台完整配置明确返回SPIFFE Workload API authentication requires a Unix platform，不再误报缺少token file。合成配置测试覆盖缺少endpoint、缺少audience、Windows平台错误；auth相关回归及vet退出0，见spiffe_platform_2026_11_14.log和spiffe_platform_vet_2026_11_14.log。
+
+未完成：Unix正常来源仍未接入，URI/ID校验、获取、刷新、指纹及Unix平台矩阵待实现。本轮不声称SPIFFE可用，也不声称所有非Unix平台已覆盖。整体同步未完成，未commit/push。

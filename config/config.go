@@ -1472,7 +1472,7 @@ func validateKnownTopLevelConfigFields(values map[string]any) error {
 		// deny_unknown_fields): each marketplace entry allows the Rust fields.
 		known := map[string]bool{
 			"last_updated": true, "last_revision": true, "source_type": true,
-			"source": true, "ref": true, "sparse_paths": true,
+			"source": true, "ref": true, "sparse_paths": true, "auto_update": true,
 		}
 		for name, raw := range marketplaces {
 			entry, ok := raw.(map[string]any)

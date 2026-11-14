@@ -7,9 +7,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"codex_go/envutil"
@@ -93,12 +93,14 @@ type GitMarketplaceMaterializer struct {
 	// Automatic isolates background marketplace/plugin git operations from
 	// repository-scoped or command-scoped Git configuration (Rust #39520).
 	Automatic bool
+	CodexHome string
 }
 
 type GitMarketplaceRevisionResolver struct {
 	// Automatic isolates background marketplace/plugin git operations from
 	// repository-scoped or command-scoped Git configuration (Rust #39520).
 	Automatic bool
+	CodexHome string
 }
 
 type MarketplaceRevisionResolverFunc func(source *ParsedMarketplaceSource) (string, error)
@@ -112,18 +114,25 @@ func defaultMarketplaceInstallRoot() string {
 }
 
 func (m *GitMarketplaceMaterializer) MaterializeMarketplace(source *ParsedMarketplaceSource, sparsePaths []string, destination string) error {
-	return materializeGitMarketplace(source, sparsePaths, destination, false, m != nil && m.Automatic)
+	return materializeGitMarketplace(source, sparsePaths, destination, false, m != nil && m.Automatic, m.trustedHome())
 }
 
 func (m *GitMarketplaceMaterializer) MaterializeMarketplacePlugin(source *ParsedMarketplaceSource, destination string) error {
-	return materializeGitMarketplace(source, nil, destination, false, m != nil && m.Automatic)
+	return materializeGitMarketplace(source, nil, destination, false, m != nil && m.Automatic, m.trustedHome())
 }
 
 func (m *GitMarketplaceMaterializer) UpgradeMarketplace(source *ParsedMarketplaceSource, sparsePaths []string, destination string) error {
-	return materializeGitMarketplace(source, sparsePaths, destination, true, m != nil && m.Automatic)
+	return materializeGitMarketplace(source, sparsePaths, destination, true, m != nil && m.Automatic, m.trustedHome())
 }
 
-func materializeGitMarketplace(source *ParsedMarketplaceSource, sparsePaths []string, destination string, replaceExisting bool, automatic bool) error {
+func (m *GitMarketplaceMaterializer) trustedHome() string {
+	if m == nil {
+		return ""
+	}
+	return m.CodexHome
+}
+
+func materializeGitMarketplace(source *ParsedMarketplaceSource, sparsePaths []string, destination string, replaceExisting bool, automatic bool, codexHome string) error {
 	if source == nil || source.Kind != MarketplaceSourceGit {
 		return nil
 	}
@@ -152,7 +161,7 @@ func materializeGitMarketplace(source *ParsedMarketplaceSource, sparsePaths []st
 	if replaceExisting {
 		referenceDestination = destination
 	}
-	staged, err := stageGitMarketplaceClone(parent, referenceDestination, "marketplace directory", source, sparsePaths, automatic)
+	staged, err := stageGitMarketplaceClone(parent, referenceDestination, "marketplace directory", source, sparsePaths, automatic, codexHome)
 	if err != nil {
 		return err
 	}
@@ -215,7 +224,11 @@ func (r *GitMarketplaceRevisionResolver) MarketplaceRevision(source *ParsedMarke
 	if source.RefName != nil && strings.TrimSpace(*source.RefName) != "" {
 		ref = strings.TrimSpace(*source.RefName)
 	}
-	output, err := runMarketplaceGitOutput(nil, r != nil && r.Automatic, "ls-remote", source.URL, ref)
+	codexHome := ""
+	if r != nil {
+		codexHome = r.CodexHome
+	}
+	output, err := runMarketplaceGitOutputEnvWithHome(nil, r != nil && r.Automatic, codexHome, nil, "ls-remote", source.URL, ref)
 	if err != nil {
 		return "", err
 	}
@@ -231,14 +244,14 @@ func (r *GitMarketplaceRevisionResolver) MarketplaceRevision(source *ParsedMarke
 // its objects so already-fetched commits are not downloaded again (Rust
 // #60528); a failed reference clone restarts in a new staging directory and
 // falls back to a plain clone, exactly like an unsupported Git version.
-func stageGitMarketplaceClone(installRoot string, destination string, description string, source *ParsedMarketplaceSource, sparsePaths []string, automatic bool) (*MarketplaceStagingDir, error) {
+func stageGitMarketplaceClone(installRoot string, destination string, description string, source *ParsedMarketplaceSource, sparsePaths []string, automatic bool, codexHome string) (*MarketplaceStagingDir, error) {
 	staged, err := newMarketplaceStagingDir(installRoot)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temporary %s in %s: %w", description, installRoot, err)
 	}
 	if strings.TrimSpace(destination) != "" {
 		if reference, ok := resolveMarketplaceCloneReference(destination, automatic); ok && marketplaceGitSupportsAlternateRefs(automatic) {
-			if err := cloneGitMarketplaceSource(source.URL, source.RefName, sparsePaths, staged.Path(), &reference, automatic); err == nil {
+			if err := cloneGitMarketplaceSource(source.URL, source.RefName, sparsePaths, staged.Path(), &reference, automatic, codexHome); err == nil {
 				return staged, nil
 			}
 			staged.Close()
@@ -248,7 +261,7 @@ func stageGitMarketplaceClone(installRoot string, destination string, descriptio
 			}
 		}
 	}
-	if err := cloneGitMarketplaceSource(source.URL, source.RefName, sparsePaths, staged.Path(), nil, automatic); err != nil {
+	if err := cloneGitMarketplaceSource(source.URL, source.RefName, sparsePaths, staged.Path(), nil, automatic, codexHome); err != nil {
 		staged.Close()
 		return nil, err
 	}
@@ -340,7 +353,7 @@ func parseMarketplaceGitRelease(output string) (int, int, bool) {
 	return major, minor, true
 }
 
-func cloneGitMarketplaceSource(url string, refName *string, sparsePaths []string, destination string, reference *marketplaceCloneReference, automatic bool) error {
+func cloneGitMarketplaceSource(url string, refName *string, sparsePaths []string, destination string, reference *marketplaceCloneReference, automatic bool, codexHome string) error {
 	args := make([]string, 0, 12)
 	var extraEnv []string
 	if reference != nil {
@@ -351,7 +364,7 @@ func cloneGitMarketplaceSource(url string, refName *string, sparsePaths []string
 	}
 	if len(sparsePaths) == 0 {
 		args = append(args, "--", url, destination)
-		if _, err := runMarketplaceGitOutputEnv(nil, automatic, extraEnv, args...); err != nil {
+		if _, err := runMarketplaceGitOutputEnvWithHome(nil, automatic, codexHome, extraEnv, args...); err != nil {
 			return err
 		}
 		if refName != nil && strings.TrimSpace(*refName) != "" {
@@ -362,7 +375,7 @@ func cloneGitMarketplaceSource(url string, refName *string, sparsePaths []string
 		return nil
 	}
 	args = append(args, "--filter=blob:none", "--no-checkout", "--", url, destination)
-	if _, err := runMarketplaceGitOutputEnv(nil, automatic, extraEnv, args...); err != nil {
+	if _, err := runMarketplaceGitOutputEnvWithHome(nil, automatic, codexHome, extraEnv, args...); err != nil {
 		return err
 	}
 	args = append([]string{"sparse-checkout", "set"}, sparsePaths...)
@@ -388,6 +401,10 @@ func runMarketplaceGitOutput(cwd *string, automatic bool, args ...string) (strin
 // runMarketplaceGitOutputEnv runs Git with caller-supplied environment entries
 // in addition to the trusted or ambient environment.
 func runMarketplaceGitOutputEnv(cwd *string, automatic bool, extraEnv []string, args ...string) (string, error) {
+	return runMarketplaceGitOutputEnvWithHome(cwd, automatic, "", extraEnv, args...)
+}
+
+func runMarketplaceGitOutputEnvWithHome(cwd *string, automatic bool, codexHome string, extraEnv []string, args ...string) (string, error) {
 	command := exec.Command("git", args...)
 	if automatic {
 		// Rust #42324: resolve the Git executable from trusted installation
@@ -412,6 +429,16 @@ func runMarketplaceGitOutputEnv(cwd *string, automatic bool, extraEnv []string, 
 	if cwd != nil {
 		command.Dir = *cwd
 	}
+	if automatic && cwd == nil && !(len(args) == 1 && args[0] == "--version") {
+		if strings.TrimSpace(codexHome) == "" {
+			return "", errors.New("Codex home is required for automatic Git repository operations")
+		}
+		guard, err := configureTrustedGitRepository(command, codexHome)
+		if err != nil {
+			return "", err
+		}
+		defer guard.Close()
+	}
 	// Rust #48483: marketplace git is piped, so it must not allocate a console
 	// window when the CLI itself has no console.
 	envutil.SuppressConsoleWindow(command)
@@ -421,9 +448,6 @@ func runMarketplaceGitOutputEnv(cwd *string, automatic bool, extraEnv []string, 
 	}
 	return "", fmt.Errorf("git %s failed: %w\n%s", strings.Join(args, " "), err, strings.TrimSpace(string(output)))
 }
-
-var isolatedGitConfigOnce sync.Once
-var isolatedGitConfigPathValue string
 
 // isolatedPluginGitEnv returns an environment for automatic plugin git
 // operations with repository-scoped Git configuration variables removed and
@@ -436,22 +460,24 @@ func isolatedPluginGitEnv() ([]string, bool) {
 	if !ok {
 		return nil, false
 	}
-	isolatedGitConfigOnce.Do(func() {
-		dir, err := os.MkdirTemp("", "codex-plugin-git-")
-		if err != nil {
-			isolatedGitConfigPathValue = os.DevNull
-			return
-		}
-		isolatedGitConfigPathValue = filepath.Join(dir, "empty-gitconfig")
-		_ = os.WriteFile(isolatedGitConfigPathValue, nil, 0o600)
-	})
+
 	var env []string
 	for _, pair := range os.Environ() {
 		name := pair
 		if idx := strings.IndexByte(pair, '='); idx >= 0 {
 			name = pair[:idx]
 		}
+		if runtime.GOOS == "windows" {
+			name = strings.ToUpper(name)
+		}
 		switch {
+		case name == "GIT_ALTERNATE_OBJECT_DIRECTORIES", name == "GIT_CEILING_DIRECTORIES",
+			name == "GIT_COMMON_DIR", name == "GIT_CONFIG", name == "GIT_DIR",
+			name == "GIT_DISCOVERY_ACROSS_FILESYSTEM", name == "GIT_GRAFT_FILE",
+			name == "GIT_IMPLICIT_WORK_TREE", name == "GIT_INDEX_FILE", name == "GIT_NAMESPACE",
+			name == "GIT_OBJECT_DIRECTORY", name == "GIT_PREFIX", name == "GIT_REPLACE_REF_BASE",
+			name == "GIT_SHALLOW_FILE", name == "GIT_WORK_TREE", name == "GIT_OPTIONAL_LOCKS":
+			continue
 		case name == "GIT_CONFIG_COUNT", name == "GIT_CONFIG_PARAMETERS",
 			name == "GIT_CONFIG_SYSTEM", name == "GIT_CONFIG_GLOBAL",
 			name == "GIT_EXEC_PATH", name == "GIT_TEMPLATE_DIR", name == "DEVELOPER_DIR",
@@ -464,8 +490,9 @@ func isolatedPluginGitEnv() ([]string, bool) {
 	}
 	return append(env,
 		"GIT_TERMINAL_PROMPT=0",
+		"GIT_OPTIONAL_LOCKS=0",
 		"GIT_CONFIG_NOSYSTEM=1",
-		"GIT_CONFIG_GLOBAL="+isolatedGitConfigPathValue,
+		"GIT_CONFIG_GLOBAL="+os.DevNull,
 		"PATH="+trustedPath,
 		"NoDefaultCurrentDirectoryInExePath=1",
 	), true

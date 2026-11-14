@@ -60,6 +60,7 @@ type VoiceSettings struct {
 	// explicit name.
 	Voice    string
 	VoiceSet bool
+	VoiceErr string
 	// Audio is the machine-local device preference the conversation opens with
 	// (Rust `audio.microphone` / `audio.speaker` / `audio.microphone_channel`).
 	// It mirrors the Rust webrtc facade, whose single open_devices entry point
@@ -113,6 +114,9 @@ func (r *voiceRuntime) startCmd(threadID string, attemptID uint64) bubbletea.Cmd
 		ctx, cancel := context.WithTimeout(context.Background(), voiceStartTimeout)
 		defer cancel()
 		settings := r.voiceSettings(ctx)
+		if settings.VoiceErr != "" {
+			return codextea.VoiceAnswerResultMsg{AttemptID: attemptID, Err: errors.New(settings.VoiceErr), Cause: "app_server_request", Message: "Failed to start voice mode: " + settings.VoiceErr}
+		}
 		if settings.AudioErr != "" {
 			// The helper is not started at all: the Rust TUI refuses to open a
 			// conversation whose stored audio preference cannot be read.
@@ -195,32 +199,20 @@ func (r *voiceRuntime) startParams(ctx context.Context, threadID string, offerSD
 	return params, nil
 }
 
-// resolveVoice mirrors the Rust resolver: an explicit preference is used when
-// it names a known voice and is dropped when it does not parse; an absent or
-// null preference falls back to the version's default voice.
-func (r *voiceRuntime) resolveVoice(ctx context.Context, settings VoiceSettings) (*realtime.Voice, error) {
-	voices := realtime.BuiltinVoices()
-	if r.options.listVoicesWithError != nil {
-		listed, err := r.options.listVoicesWithError(ctx)
-		if err != nil {
-			return nil, err
-		}
-		voices = listed
-	} else if r.options.listVoices != nil {
-		voices = r.options.listVoices(ctx)
+// resolveVoice preserves an unset preference for the provider-specific default.
+// Known explicit voices do not depend on the server's picker catalog.
+func (r *voiceRuntime) resolveVoice(_ context.Context, settings VoiceSettings) (*realtime.Voice, error) {
+	if settings.VoiceErr != "" {
+		return nil, errors.New(settings.VoiceErr)
 	}
-	if settings.VoiceSet {
-		configured := realtime.Voice(strings.TrimSpace(settings.Voice))
-		if !realtime.IsKnownVoice(configured) {
-			return nil, nil
-		}
-		return &configured, nil
-	}
-	fallback := voices.DefaultForVersion(realtime.VersionV1)
-	if fallback == "" {
+	if !settings.VoiceSet {
 		return nil, nil
 	}
-	return &fallback, nil
+	configured := realtime.Voice(strings.TrimSpace(settings.Voice))
+	if !realtime.IsKnownVoice(configured) {
+		return nil, nil
+	}
+	return &configured, nil
 }
 
 // applyAnswerCmd applies the remote answer and reports the outcome.
@@ -372,19 +364,21 @@ func (r *voiceRuntime) takeSession() (*voicehost.StartedSession, string) {
 	return session, threadID
 }
 
-// interactiveRemoteRealtimeSettings reads the effective realtime model and
-// voice preference from the app-server. A read failure keeps the built-in
-// defaults, which is what the Rust TUI does when the server cannot report them.
-func interactiveRemoteRealtimeSettings(endpoint *appserverdaemon.RemoteAppServerEndpoint) func(context.Context) VoiceSettings {
+// interactiveRemoteRealtimeSettings tolerates only unsupported config/read.
+// Other read failures are surfaced before starting audio or opening the picker.
+func interactiveRemoteRealtimeSettings(endpoint *appserverdaemon.RemoteAppServerEndpoint, cwd ...func() string) func(context.Context) VoiceSettings {
 	return func(ctx context.Context) VoiceSettings {
 		client, err := openRemoteSessionClient(ctx, endpoint)
 		if err != nil {
-			return VoiceSettings{}
+			return VoiceSettings{VoiceErr: err.Error()}
 		}
 		defer client.close()
 		var response config.ConfigReadResponse
-		if err := remoteSessionRequest(ctx, client, appserver.MethodConfigRead, config.ConfigReadParams{}, &response); err != nil {
-			return VoiceSettings{}
+		if err := remoteSessionRequest(ctx, client, appserver.MethodConfigRead, voiceConfigReadParams(cwd), &response); err != nil {
+			if voiceConfigReadUnsupported(err) {
+				return VoiceSettings{}
+			}
+			return VoiceSettings{VoiceErr: err.Error()}
 		}
 		return RealtimeSettingsFromConfigValues(response.Config)
 	}
@@ -407,8 +401,12 @@ func RealtimeSettingsFromConfigValues(values map[string]any) VoiceSettings {
 		return settings
 	}
 	if name, ok := raw.(string); ok {
-		settings.Voice = name
-		settings.VoiceSet = true
+		if realtime.IsKnownVoice(realtime.Voice(name)) {
+			settings.Voice = name
+			settings.VoiceSet = true
+		}
+	} else {
+		settings.VoiceErr = "realtime.voice must be a string"
 	}
 	return settings
 }
@@ -534,7 +532,7 @@ const voiceSettingsTimeout = 15 * time.Second
 // interactiveRemoteVoiceSettings fetches the voice catalog and the effective
 // preference for the settings picker. The TUI uses V3, which shares the V1
 // voice catalog.
-func interactiveRemoteVoiceSettings(endpoint *appserverdaemon.RemoteAppServerEndpoint) func() bubbletea.Cmd {
+func interactiveRemoteVoiceSettings(endpoint *appserverdaemon.RemoteAppServerEndpoint, cwd ...func() string) func() bubbletea.Cmd {
 	return func() bubbletea.Cmd {
 		return func() bubbletea.Msg {
 			ctx, cancel := context.WithTimeout(context.Background(), voiceSettingsTimeout)
@@ -543,13 +541,13 @@ func interactiveRemoteVoiceSettings(endpoint *appserverdaemon.RemoteAppServerEnd
 			if err != nil {
 				return codextea.VoiceSettingsMsg{Err: err}
 			}
-			settings := interactiveRemoteRealtimeSettings(endpoint)(ctx)
-			current := settings.Voice
-			if !settings.VoiceSet {
-				current = string(voices.DefaultV1)
+			settings := interactiveRemoteRealtimeSettings(endpoint, cwd...)(ctx)
+			if settings.VoiceErr != "" {
+				return codextea.VoiceSettingsMsg{Err: errors.New(settings.VoiceErr)}
 			}
+			current := settings.Voice
 			return codextea.VoiceSettingsMsg{
-				Voices:  RealtimeVoiceNames(voices.V1),
+				Voices:  RealtimeVoiceNames(voices.V3),
 				Current: current,
 				// Rust #49437: the settings tree shows the machine-local
 				// audio.microphone / audio.speaker / audio.microphone_channel
@@ -571,7 +569,7 @@ func RealtimeVoiceNames(voices []realtime.Voice) []string {
 
 // interactiveRemoteVoiceSaver persists the chosen voice and confirms it is the
 // effective preference, mirroring the Rust save-and-confirm flow.
-func interactiveRemoteVoiceSaver(endpoint *appserverdaemon.RemoteAppServerEndpoint) func(voice string) bubbletea.Cmd {
+func interactiveRemoteVoiceSaver(endpoint *appserverdaemon.RemoteAppServerEndpoint, cwd ...func() string) func(voice string) bubbletea.Cmd {
 	return func(voice string) bubbletea.Cmd {
 		return func() bubbletea.Msg {
 			ctx, cancel := context.WithTimeout(context.Background(), voiceSettingsTimeout)
@@ -592,24 +590,30 @@ func interactiveRemoteVoiceSaver(endpoint *appserverdaemon.RemoteAppServerEndpoi
 			if err != nil {
 				return codextea.VoiceSavedMsg{Voice: voice, Err: err}
 			}
-			if _, err := interactiveRemoteRealtimeVoices(endpoint)(ctx); err != nil {
-				return codextea.VoiceSavedMsg{
-					Voice: voice,
-					Saved: true,
-					Err:   fmt.Errorf("the effective voice could not be confirmed: %w", err),
-				}
-			}
 			// A managed layer can override the saved value, in which case the
 			// preference is stored but not applied.
-			settings := interactiveRemoteRealtimeSettings(endpoint)(ctx)
-			if settings.VoiceSet && strings.TrimSpace(settings.Voice) != voice {
+			var effective config.ConfigReadResponse
+			if err := remoteSessionRequest(ctx, client, appserver.MethodConfigRead, voiceConfigReadParams(cwd), &effective); err != nil {
+				if voiceConfigReadUnsupported(err) {
+					if response.Status != config.WriteOKOverridden {
+						return codextea.VoiceSavedMsg{Voice: voice}
+					}
+					return codextea.VoiceSavedMsg{Voice: voice, Saved: true, Err: errors.New("the saved voice is overridden, but this server cannot read effective settings")}
+				}
+				return codextea.VoiceSavedMsg{Voice: voice, Saved: true, Err: fmt.Errorf("the effective voice could not be confirmed: %w", err)}
+			}
+			settings := RealtimeSettingsFromConfigValues(effective.Config)
+			if settings.VoiceErr != "" {
+				return codextea.VoiceSavedMsg{Voice: voice, Saved: true, Err: errors.New(settings.VoiceErr)}
+			}
+			if !settings.VoiceSet || settings.Voice != voice {
 				return codextea.VoiceSavedMsg{
-					Voice: voice,
+					Voice: voice, EffectiveVoice: &settings.Voice,
 					Saved: true,
 					Err:   errors.New("the saved voice is overridden by a managed setting"),
 				}
 			}
-			return codextea.VoiceSavedMsg{Voice: voice}
+			return codextea.VoiceSavedMsg{Voice: voice, EffectiveVoice: &settings.Voice}
 		}
 	}
 }
@@ -917,4 +921,25 @@ func remoteVoiceAudioConfig(endpoint *appserverdaemon.RemoteAppServerEndpoint) v
 			return effectiveAudioSelection(response.Config)
 		},
 	}
+}
+
+// voiceConfigReadUnsupported matches Rust's config/read compatibility boundary.
+func voiceConfigReadUnsupported(err error) bool {
+	var rpcErr *remoteRPCError
+	if !errors.As(err, &rpcErr) {
+		return false
+	}
+	return rpcErr.Code == -32601 || rpcErr.Code == -32600 && strings.Contains(rpcErr.Message, "config/read") && (strings.Contains(rpcErr.Message, "unknown variant") || strings.Contains(rpcErr.Message, "unknown method"))
+}
+
+// Resolve cwd at request time so switching threads cannot retain a stale project.
+func voiceConfigReadParams(cwd []func() string) config.ConfigReadParams {
+	params := config.ConfigReadParams{IncludeLayers: true}
+	if len(cwd) > 0 && cwd[0] != nil {
+		value := strings.TrimSpace(cwd[0]())
+		if value != "" {
+			params.CWD = &value
+		}
+	}
+	return params
 }

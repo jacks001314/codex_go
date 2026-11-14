@@ -42,7 +42,7 @@ type MultiAgentV2Config struct {
 	// ephemeral sessions.
 	MessageBoardInMemory bool
 	// MessageBoardRemote mirrors `features.multi_agent_v2.message_board_remote`:
-	// a board provisioned by the research host. When set, the remote board is
+	// connection settings for a remote message board. When set, that board is
 	// used in preference to local or in-memory storage, including in ephemeral
 	// sessions (Rust #49267).
 	MessageBoardRemote *RemoteMessageBoardConfig

@@ -23,6 +23,7 @@ type clientCatalogTestServer struct {
 	tools       []string
 	fail        bool
 	lists       int
+	optOut      bool
 	calls       int
 	blockCalls  <-chan struct{}
 	callStarted chan struct{}
@@ -52,9 +53,16 @@ func newClientCatalogTestServer(t *testing.T, tools ...string) *clientCatalogTes
 		}
 		switch request.Method {
 		case "initialize":
+			ts.mu.Lock()
+			optOut := ts.optOut
+			ts.mu.Unlock()
+			capabilities := map[string]any{"tools": map[string]any{}}
+			if optOut {
+				capabilities["experimental"] = map[string]any{MCPToolCatalogCacheCapability: map[string]any{"cacheable": false}}
+			}
 			writeHTTPMCPResponse(t, w, request.ID, map[string]any{
 				"protocolVersion": defaultMCPProtocol,
-				"capabilities":    map[string]any{"tools": map[string]any{}},
+				"capabilities":    capabilities,
 				"serverInfo":      map[string]string{"name": "catalog", "version": "1"},
 			})
 		case "notifications/initialized":

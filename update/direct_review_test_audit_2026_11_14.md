@@ -1,0 +1,7 @@
+# 直接Guardian审核测试审计
+
+修复TestThreadGuardianReviewReturnsAssessmentLikeRust中无效的非执行断言：原先只检查filepath.Glob是否报错，即使目标文件存在也会通过；现在检查matches必须为空。生产代码未变。
+
+直接审核相关测试及review session reset回归通过，日志direct_review_regression_2026_11_14.log；appserver vet退出0。#61163仍需连续真实审核调用的模型历史复用、父线程隔离及持久化验证。
+
+全局无缓存串行测试的appserver包已在02:10:31通过，Elapsed444.051s（JSON日志中的package pass事件）。全局session34226仍继续后续包，不能宣布全量通过。整体同步未完成，未提交推送。

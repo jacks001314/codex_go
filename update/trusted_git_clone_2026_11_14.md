@@ -1,0 +1,7 @@
+# Trusted Git 自动克隆接入
+
+GitMarketplaceMaterializer增加CodexHome，透传materialize→stage→clone→runMarketplaceGitOutputEnvWithHome。自动upgrade、cache refresh、curated sync从各自service快照设置home；内置upgrade的直接stage路径也读取materializer home。初次clone通过trusted GIT_DIR执行，checkout/sparse-checkout继续在目标仓库执行。
+
+TestAutomaticCloneUsesTrustedHome使用真实Git初始化本地源，通过生产materializer自动克隆，确认目标.git/HEAD存在、home/.tmp/.staging存在且克隆结束为空，证明guard创建并清理。plugin全包2.091s通过，go vet ./plugin退出0。
+
+仍待：没有明确home的自动入口当前兼容旧路径；需要明确错误或安全home解析策略。跨进程退出/并发checkout保护和staging symlink拒绝测试尚未完成。因此#61180与整体同步仍未完成。

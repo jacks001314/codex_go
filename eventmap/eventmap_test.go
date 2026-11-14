@@ -214,6 +214,7 @@ func TestContextualDeveloperPrefixesLikeRust(t *testing.T) {
 		"<managed_developer_instructions>",
 		"<persistent_mode>",
 		"<apps_instructions>",
+		"<catalog_apps_instructions>",
 		"<collaboration_mode>",
 		"<multi_agent_role>",
 		"<multi_agent_mode>",

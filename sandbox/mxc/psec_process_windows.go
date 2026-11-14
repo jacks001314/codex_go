@@ -169,7 +169,7 @@ func launchNative(request *NativeRequest) (int, error) {
 	if err := windows.CreateProcess(nil, commandLine, nil, nil, true, creationFlags, environmentPointer, workingDirectory, &startup.startup.StartupInfo, &processInfo); err != nil {
 		// Error 87 means the PSEC handle was rejected: report it as a launch
 		// failure, never retry outside the sandbox.
-		return 0, fmt.Errorf("CreateProcessW(SecurityEnvironment): %w", err)
+		return 0, nativeProcessLaunchError(err)
 	}
 	defer windows.CloseHandle(processInfo.Process)
 	defer windows.CloseHandle(processInfo.Thread)

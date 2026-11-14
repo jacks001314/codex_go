@@ -1,0 +1,9 @@
+# MCP synchronization audit #61257 / #61283
+
+TUI full package retest completed: session 4452 exit 0, codex_go/tui/tea 59.357s. Its evidence is tui_full_after_paths_2026_11_14.log. This closes the four failures from the previous global test, not the overall upstream synchronization.
+
+Upstream #61257 (6fcfa75a9f) changes 190 files: same-named servers require registration-scoped inventory/status/routing and optional environmentId on client operations, plus protocol and TUI propagation. Go mcp/api.go currently stores servers/configs/HTTP clients/stdio clients by string server name (MCPService fields around 800-809; constructor around 938). ServerEnvironmentID on call preparation is json:"-" and is not a public environment selector. Therefore existing selected-environment support does not prove registration scope parity. Must update inventory identity and lookup semantics together before adding protocol selectors, preserving legacy routing when omitted and rejecting unknown selectors.
+
+Upstream #61283 (c899e21cda) makes contribution context explicit. Go mcp/selected_environments.go MCPServerContributionContext currently carries threadID and selectedEnvironments only. appserver/runtime_router.go runtimeMCPConfigForThread reads selections from this context but obtains plugin disable state and live executor catalog from router thread state. It has no host-only originator/session source or explicit disabled plugin list. Needed: explicit host/global context API, use it throughout config projection, pass originator headers and restrictions, and test host-only projection without live discovery.
+
+No new MCP behavior is claimed this turn; these are verified implementation gaps, not N/A entries. Next implementation should start with explicit context projection and its no-live-state tests, followed by scoped registry/client operations. Remaining core/TUI plan entries and Linux validation still prevent completion; no commit/push.
