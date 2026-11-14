@@ -16889,6 +16889,7 @@ func (r *RuntimeRouter) managedMCPServiceForThread(threadID string, cfg *config.
 	service := r.mcpRuntimes.serviceForThread(threadID, cfg, authRevision, environmentFingerprint, func(cfg *config.Config) *mcp.MCPService {
 		service := mcp.NewMCPService(runtimeConfig(cfg))
 		r.configureMCPService(service)
+		r.observeMCPStartupStatus(service, threadID)
 		return service
 	}, func(service *mcp.MCPService, cfg *config.Config) {
 		service.ApplyRuntimeConfig(runtimeConfig(cfg))

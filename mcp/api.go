@@ -58,6 +58,11 @@ const (
 // "reauthenticationRequired") and is nil unless the server failed.
 type MCPStartupObserver func(name string, status MCPServerStartupState, failureReason *string, err error)
 
+// MCPStartupStatusListener observes registration-scoped startup transitions.
+// It carries the environment so identical server names in different
+// environments stay distinguishable (Rust #61257).
+type MCPStartupStatusListener func(name string, environmentID string, status MCPServerStartupState, failureReason *string, err error)
+
 type MCPAuthStatus string
 
 const (
@@ -839,13 +844,17 @@ type MCPService struct {
 	// staging MCP server is trusted for policy metadata.
 	chatGPTBaseURL string
 	oauthLogins    map[string]*OAuthLoginServer
-	oauth          *OAuthStore
-	resourceCache  *MCPResourceCache
-	elicitation    MCPElicitationHandler
-	progress       MCPProgressHandler
-	roots          MCPRootsProvider
-	oauthComplete  MCPOAuthLoginCompletionHandler
-	invocations    *MCPInvocationRegistry
+	// startupListeners observe startup transitions for the thread or process
+	// that owns this service (Rust #61257 startup notifications).
+	startupListeners      map[uint64]MCPStartupStatusListener
+	nextStartupListenerID uint64
+	oauth                 *OAuthStore
+	resourceCache         *MCPResourceCache
+	elicitation           MCPElicitationHandler
+	progress              MCPProgressHandler
+	roots                 MCPRootsProvider
+	oauthComplete         MCPOAuthLoginCompletionHandler
+	invocations           *MCPInvocationRegistry
 	// oauthCompleteListeners let multiple in-process consumers observe the same
 	// login completion while the app-server handler remains installed.
 	oauthCompleteListeners map[uint64]MCPOAuthLoginCompletionHandlerFunc
@@ -2317,6 +2326,7 @@ func (s *MCPService) recordInventoryStatus(name string, status MCPServerStatus, 
 		s.mu.Unlock()
 		return
 	}
+	previousState := current.State
 	current.State = status.State
 	current.Error = cloneStringPtr(status.Error)
 	current.AuthStatus = status.AuthStatus
@@ -2342,6 +2352,9 @@ func (s *MCPService) recordInventoryStatus(name string, status MCPServerStatus, 
 	}
 	config := s.configs[name]
 	s.mu.Unlock()
+	if status.State != previousState {
+		s.notifyStartupStatus(name, status.State, status.FailureReason, nil)
+	}
 	if status.State == MCPServerReady {
 		oauthResolved := s.authStatusForConfig(name, &config) == MCPAuthOAuth
 		if key, eligible := mcpToolCatalogGraceKeyWithFeatures(name, &config, s.openAIForm, s.openAIForm && status.hostOwnedApps, status.PluginID != nil, oauthResolved); eligible {
@@ -2360,6 +2373,57 @@ func (s *MCPService) markServerStartupStarted(name string) {
 	}
 	s.starting[name]++
 	s.mu.Unlock()
+	s.notifyStartupStatus(name, MCPServerStarting, nil, nil)
+}
+
+// AddStartupStatusListener registers a startup observer and returns a function
+// that removes it. A nil listener is a no-op.
+func (s *MCPService) AddStartupStatusListener(listener MCPStartupStatusListener) func() {
+	if s == nil || listener == nil {
+		return func() {}
+	}
+	s.mu.Lock()
+	if s.startupListeners == nil {
+		s.startupListeners = map[uint64]MCPStartupStatusListener{}
+	}
+	s.nextStartupListenerID++
+	id := s.nextStartupListenerID
+	s.startupListeners[id] = listener
+	s.mu.Unlock()
+	return func() {
+		s.mu.Lock()
+		delete(s.startupListeners, id)
+		s.mu.Unlock()
+	}
+}
+
+// notifyStartupStatus delivers one transition with the registration's
+// environment. Listeners run after the service lock is released.
+func (s *MCPService) notifyStartupStatus(name string, status MCPServerStartupState, failureReason *string, err error) {
+	if s == nil {
+		return
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return
+	}
+	s.mu.Lock()
+	listeners := make([]MCPStartupStatusListener, 0, len(s.startupListeners))
+	for _, listener := range s.startupListeners {
+		listeners = append(listeners, listener)
+	}
+	config, ok := s.configs[name]
+	s.mu.Unlock()
+	if len(listeners) == 0 {
+		return
+	}
+	environmentID := ""
+	if ok {
+		environmentID = config.EffectiveEnvironmentID()
+	}
+	for _, listener := range listeners {
+		listener(name, environmentID, status, cloneStringPtr(failureReason), err)
+	}
 }
 
 func sharedOptionalStartupDeadlineForKey(key string, fallback time.Time) time.Time {
