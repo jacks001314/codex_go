@@ -1,0 +1,8 @@
+ok  	codex_go/network	10.897s
+ok  	codex_go/tcptunnel	10.100s
+ok  	codex_go/codemode	4.034s
+ok  	codex_go/sandbox/windowssandbox	2.937s
+ok  	codex_go/config	1.523s
+ok  	codex_go/plugin	3.197s
+ok  	codex_go/cloudclient	0.040s
+ok  	codex_go/cloudbackend	0.571s
