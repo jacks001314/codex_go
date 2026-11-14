@@ -407,6 +407,12 @@ func fsSandboxCommand(ctx *FileSystemSandboxContext, profile *sandbox.Permission
 	if err != nil {
 		return nil, nil, err
 	}
+	// Rust #61276 rejects a policy working directory that does not exist on
+	// this executor before any sandbox preparation runs; the helper must never
+	// receive a path it cannot anchor permissions to.
+	if err := validateFSHelperPolicyCWD(runtime.GOOS, cwd); err != nil {
+		return nil, nil, requestError(-32602, err.Error())
+	}
 	env := fsHelperEnvironment()
 	helperCommand := fsHelperCommandForExecutable(executable)
 	plan, err := fsSandboxRunPlan(ctx, profile, profileJSON, cwd, workspaceRoots, allowedSymlinkedCodexHome, executable, helperCommand)
@@ -459,6 +465,26 @@ func fsSandboxCommand(ctx *FileSystemSandboxContext, profile *sandbox.Permission
 	// runtime selection, not a shell-supplied override (Rust #45550).
 	windowssandbox.ApplyWrapperRuntimeEnv(env)
 	return append([]string{executable}, args...), env, nil
+}
+
+// validateFSHelperPolicyCWD rejects a policy working directory whose absolute
+// path convention does not match the executor (Rust #61276's native_path
+// "sandbox policy cwd" / "sandbox workspace root" checks). An empty or
+// convention-less value is left to the sandbox plan, which already anchors
+// relative rules to the launch root.
+func validateFSHelperPolicyCWD(goos string, cwd string) error {
+	cwd = strings.TrimSpace(cwd)
+	if cwd == "" {
+		return nil
+	}
+	convention := fsSandboxPathConvention(cwd)
+	if convention == "" {
+		return nil
+	}
+	if (goos == "windows") != (convention == utils.ConventionWindows) {
+		return fmt.Errorf("'%s' is invalid on '%s'", cwd, goos)
+	}
+	return nil
 }
 
 // fsHelperWindowsSandboxUnavailable reports whether a filesystem-helper request
