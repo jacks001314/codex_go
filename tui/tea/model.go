@@ -5808,6 +5808,15 @@ func (m *Model) statusLineContent() string {
 	if m == nil {
 		return ""
 	}
+	// Rust #61219: a thread viewed without a live attachment (saved history,
+	// an external-writer snapshot, or a closed/unavailable conversation) hides
+	// the status line and context usage. Token-usage notifications can arrive
+	// for those snapshots too; they must not make the footer visible again.
+	// An interactive resume clears both states, including a read-only
+	// permission profile, which is not itself a history view.
+	if m.readOnlyThread || m.threadUnavailable {
+		return ""
+	}
 	statusLine := m.renderStatusHeader()
 	if m.renderedSelection.active && m.renderedSelection.region != renderedRegionStatus {
 		// Reuse the existing status row so the selectable footer and tip rows

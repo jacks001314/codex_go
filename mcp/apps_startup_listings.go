@@ -17,10 +17,11 @@ type appsStartupListings struct {
 }
 
 type appsStartupListing struct {
-	done  chan struct{}
-	tools []MCPToolInfo
-	meta  json.RawMessage
-	err   error
+	done    chan struct{}
+	tools   []MCPToolInfo
+	meta    json.RawMessage
+	err     error
+	waiters int
 }
 
 func (s *appsStartupListings) fetch(ctx context.Context, scope string, fetch func(context.Context) ([]MCPToolInfo, json.RawMessage, error)) ([]MCPToolInfo, json.RawMessage, error) {
@@ -48,7 +49,13 @@ func (s *appsStartupListings) fetch(ctx context.Context, scope string, fetch fun
 			s.mu.Unlock()
 			return tools, meta, err
 		}
+		active.waiters++
 		s.mu.Unlock()
+		defer func() {
+			s.mu.Lock()
+			active.waiters--
+			s.mu.Unlock()
+		}()
 		select {
 		case <-ctx.Done():
 			return nil, nil, ctx.Err()
@@ -63,6 +70,21 @@ func (s *appsStartupListings) fetch(ctx context.Context, scope string, fetch fun
 			// A failed owner does not poison another independent MCP connection.
 		}
 	}
+}
+
+// waiting reports how many callers are currently attached to the in-flight
+// listing for scope. It is used by overlap regressions to synchronize with the
+// sharing boundary rather than sleeping.
+func (s *appsStartupListings) waiting(scope string) int {
+	if s == nil {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if active := s.pending[scope]; active != nil {
+		return active.waiters
+	}
+	return 0
 }
 
 // listAppsStartupTools initializes this connection independently before joining

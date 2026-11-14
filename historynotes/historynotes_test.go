@@ -82,6 +82,33 @@ func TestHistoryNotesBackendPostsContextAndAuthLikeRust(t *testing.T) {
 	}
 }
 
+// TestHistoryNotesForwardsUnknownCatalogArgumentsLikeRust covers Rust #61251:
+// the HTTP proxy keeps catalog-defined future arguments verbatim alongside the
+// trusted session/agent context.
+func TestHistoryNotesForwardsUnknownCatalogArgumentsLikeRust(t *testing.T) {
+	var gotBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		data, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(data, &gotBody)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+	backend := &Backend{BaseURL: server.URL, HTTPDoer: server.Client().Do}
+	if _, err := backend.Call(context.Background(), "alpha/history/v2/list_windows", "session-1", "root", map[string]any{
+		"future_catalog_parameter": map[string]any{"mode": "future"},
+	}); err != nil {
+		t.Fatalf("Call() error = %v", err)
+	}
+	future, ok := gotBody["future_catalog_parameter"].(map[string]any)
+	if !ok || future["mode"] != "future" {
+		t.Fatalf("future catalog argument = %#v", gotBody["future_catalog_parameter"])
+	}
+	contextValue, ok := gotBody["context"].(map[string]any)
+	if !ok || contextValue["session_id"] != "session-1" || contextValue["current_agent_name"] != "root" {
+		t.Fatalf("trusted context = %#v", gotBody["context"])
+	}
+}
+
 func TestHistoryNotesToolValidationAndExecutionLikeRust(t *testing.T) {
 	var gotPath string
 	var gotLimit json.Number

@@ -468,6 +468,38 @@ func TestTranscriptImageSixelClearsOnRemovalLikeRust(t *testing.T) {
 	}
 }
 
+// TestTranscriptImageClearsBeforeReflowLikeRust covers the Go renderer boundary
+// of Rust #61196: when new history moves a retained preview, the old pixels are
+// erased before the replacement text frame can scroll them into history.
+func TestTranscriptImageClearsBeforeReflowLikeRust(t *testing.T) {
+	imageData := &transcript_image.TranscriptImage{
+		Protocol:   pets.ImageProtocolSixel,
+		Columns:    2,
+		Rows:       1,
+		Pixels:     image.NewRGBA(image.Rect(0, 0, 16, 16)),
+		CellWidth:  8,
+		CellHeight: 16,
+	}
+	var output bytes.Buffer
+	images := newTranscriptImageRuntime(&output, nil)
+	images.setFrame([]transcriptImagePlan{{image: imageData, contentRow: 0, columns: 2, rows: 1}}, 10, 0, 5, 80, 24, true)
+	writer := &petOutputWriter{runtime: newPetRuntime(&output, nil), images: images}
+	if _, err := writer.Write([]byte("first frame")); err != nil {
+		t.Fatalf("write first frame: %v", err)
+	}
+	output.Reset()
+	// A new history row shifts the retained image down before the next frame.
+	images.setFrame([]transcriptImagePlan{{image: imageData, contentRow: 1, columns: 2, rows: 1}}, 10, 0, 5, 80, 24, true)
+	if _, err := writer.Write([]byte("history insertion")); err != nil {
+		t.Fatalf("write reflow frame: %v", err)
+	}
+	clearAt := strings.Index(output.String(), "\x1b7")
+	textAt := strings.Index(output.String(), "history insertion")
+	if clearAt < 0 || textAt < 0 || clearAt > textAt {
+		t.Fatalf("preview clear must precede replacement text, clear=%d text=%d output=%q", clearAt, textAt, output.String())
+	}
+}
+
 func TestViewImageToolCallBecomesPreviewCellLikeRust(t *testing.T) {
 	path := writeTranscriptTestPNG(t, 40, 32)
 	model := transcriptImageModel(t, historycell.NewPlainHistoryCell([]string{"seed"}))

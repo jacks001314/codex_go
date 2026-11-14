@@ -361,6 +361,66 @@ func TestAppsStartupServicesHonorInitializeOptOut(t *testing.T) {
 	}
 }
 
+func TestAppsStartupServicesShareSuccessfulOverlap(t *testing.T) {
+	server := newClientCatalogTestServer(t, "lookup")
+	release := make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	defer unblock()
+	server.setBlockLists(release)
+	first := newClientCatalogTestService(t, server, nil)
+	second := newClientCatalogTestService(t, server, nil)
+	config := ServerConfig{URL: server.url(), Enabled: true, StartupTimeout: 2 * time.Second, appsDiscoveryOwner: t.Name(), CodexHome: t.TempDir()}
+	status := MCPServerStatus{hostOwnedApps: true}
+	ownerInventory := make(chan *stdioInventory, 1)
+	ownerDone := make(chan error, 1)
+	go func() {
+		inventory, err := first.discoverToolCatalogForStatus(CodexAppsServerName, &config, "", status)
+		ownerInventory <- inventory
+		ownerDone <- err
+	}()
+	select {
+	case <-server.listStarted:
+	case <-time.After(time.Second):
+		t.Fatal("owner did not list")
+	}
+	waiterDone := make(chan *stdioInventory, 1)
+	waiterErr := make(chan error, 1)
+	go func() {
+		inventory, err := second.discoverToolCatalogForStatus(CodexAppsServerName, &config, "", status)
+		waiterDone <- inventory
+		waiterErr <- err
+	}()
+	// Wait for the waiter to attach to the in-flight listing before publishing
+	// it, so this exercises successful sharing rather than a later startup.
+	scope := first.appsStartupDiscoveryScope(CodexAppsServerName, &config, nil)
+	deadline := time.Now().Add(time.Second)
+	for sharedAppsStartupListings.waiting(scope) == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if sharedAppsStartupListings.waiting(scope) == 0 {
+		t.Fatal("second service did not join the in-flight startup listing")
+	}
+	unblock()
+	if err := <-ownerDone; err != nil {
+		t.Fatalf("owner discovery error = %v", err)
+	}
+	if err := <-waiterErr; err != nil {
+		t.Fatalf("waiter discovery error = %v", err)
+	}
+	owner := <-ownerInventory
+	waiter := <-waiterDone
+	if server.listCount() != 1 {
+		t.Fatalf("shared overlap list count = %d, want 1", server.listCount())
+	}
+	if owner == nil || waiter == nil || len(owner.Tools) != 1 || len(waiter.Tools) != 1 || owner.Tools[0].Name != "lookup" || waiter.Tools[0].Name != "lookup" {
+		t.Fatalf("owner=%v waiter=%v", owner, waiter)
+	}
+	if first.httpClients[CodexAppsServerName].client == second.httpClients[CodexAppsServerName].client {
+		t.Fatal("services shared a connection")
+	}
+}
+
 func TestAppsConnectionIdentityChangesWithTrustedOwner(t *testing.T) {
 	first := CodexAppsServerConfig("https://example.test", "", &RuntimeAuth{AccountID: "first", ChatGPTUserID: "user"})
 	second := CodexAppsServerConfig("https://example.test", "", &RuntimeAuth{AccountID: "second", ChatGPTUserID: "user"})
