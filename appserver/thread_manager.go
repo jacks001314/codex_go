@@ -887,6 +887,30 @@ func (m *ThreadManager) ActiveTurn(threadID string) *activeRuntimeTurn {
 	return cloneActiveRuntimeTurn(m.active[strings.TrimSpace(threadID)])
 }
 
+// WaitTurnEnd waits until one registered turn leaves the active-turn slot so a
+// caller that stopped a turn can report the work that actually stopped (Rust
+// #61198 agent-tree suspension). The slot is cleared during the turn's own
+// teardown, so this never shortens the turn: it only observes the handoff.
+func (m *ThreadManager) WaitTurnEnd(ctx context.Context, threadID string, turnID string) error {
+	if m == nil || strings.TrimSpace(turnID) == "" {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	threadID = strings.TrimSpace(threadID)
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+	for m.ActiveTurnID(threadID) == turnID {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+	return nil
+}
+
 // ActiveTurnID mirrors Rust #46305 (`ThreadState::active_turn_id`): callers
 // that only need the active turn's identity must not pay for a turn snapshot,
 // which clones the turn's start parameters and inputs.

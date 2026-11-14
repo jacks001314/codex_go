@@ -815,6 +815,110 @@ func (c *runtimeAgentController) closeAgentTarget(target string) (string, error)
 	return "", err
 }
 
+// SuspendedAgentTree reports the turns one agent-tree suspension interrupted.
+// Rust #61198 returns the root turn and each named V2 child turn so a
+// replacement host resumes exactly the work that was running.
+type SuspendedAgentTree struct {
+	RootTurnID string
+	ChildTurns map[string]string
+}
+
+// SuspendAgentTree stops the target's open tree without closing it: active
+// turns of the target and its open descendants are cancelled and awaited, while
+// thread records, environments and queued agent mail stay intact so the tree
+// can be loaded again without starting model turns (Rust #61198
+// suspend_agent_tree).
+func (c *runtimeAgentController) SuspendAgentTree(ctx context.Context, target string) (*SuspendedAgentTree, error) {
+	if c == nil || c.router == nil || c.router.threads == nil {
+		return nil, fmt.Errorf("agent runtime is unavailable")
+	}
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return nil, fmt.Errorf("target is required")
+	}
+	rootID, err := c.closeAgentTarget(target)
+	if err != nil {
+		return nil, err
+	}
+	threadIDs := []string{rootID}
+	if c.router.services.SpawnGraph != nil {
+		open := agent.ThreadSpawnEdgeOpen
+		descendants, listErr := c.router.services.SpawnGraph.ListThreadSpawnDescendants(rootID, &open)
+		if listErr != nil {
+			return nil, listErr
+		}
+		threadIDs = append(threadIDs, descendants...)
+	}
+	suspended := &SuspendedAgentTree{}
+	type stoppedTurn struct {
+		threadID string
+		turnID   string
+	}
+	stopped := make([]stoppedTurn, 0, len(threadIDs))
+	for _, threadID := range threadIDs {
+		active := c.router.threads.ActiveTurn(threadID)
+		if active == nil || strings.TrimSpace(active.TurnID) == "" {
+			continue
+		}
+		if threadID == rootID {
+			suspended.RootTurnID = active.TurnID
+		} else {
+			if suspended.ChildTurns == nil {
+				suspended.ChildTurns = map[string]string{}
+			}
+			suspended.ChildTurns[threadID] = active.TurnID
+		}
+		stopped = append(stopped, stoppedTurn{threadID: threadID, turnID: active.TurnID})
+		if active.Cancel != nil {
+			active.Cancel()
+		}
+	}
+	for _, turn := range stopped {
+		if err := c.router.threads.WaitTurnEnd(ctx, turn.threadID, turn.turnID); err != nil {
+			return suspended, err
+		}
+	}
+	return suspended, nil
+}
+
+// LoadSuspendedAgent restores one suspended agent's identity under the current
+// root without starting a model turn (Rust #61198 load_suspended_agent). The
+// stored record supplies the recorded ancestors and agent path; mail the
+// suspension preserved is left queued for the next turn.
+func (c *runtimeAgentController) LoadSuspendedAgent(ctx context.Context, target string) (*session.Record, error) {
+	if c == nil || c.router == nil {
+		return nil, fmt.Errorf("agent runtime is unavailable")
+	}
+	id := strings.TrimSpace(target)
+	if id == "" {
+		return nil, fmt.Errorf("id is required")
+	}
+	record, err := c.router.threadRecord(session.ThreadID(id), true, false)
+	if errors.Is(err, session.ErrThreadNotFound) {
+		return nil, fmt.Errorf("agent %s is not available", id)
+	}
+	if err != nil {
+		return nil, err
+	}
+	metadata := agent.Metadata{
+		ThreadID: id,
+		Path:     agent.AgentPath(record.Metadata.AgentPath),
+		Nickname: record.Metadata.AgentNickname,
+		Role:     record.Metadata.AgentRole,
+	}
+	registry := c.registry
+	if registry == nil {
+		registry = c.router.runtimeAgentRegistry(c.rootID)
+	}
+	if registry != nil {
+		registry.RegisterSpawnedThread(metadata)
+	}
+	if c.router.agentRegistry != nil && c.router.agentRegistry != registry {
+		c.router.agentRegistry.RegisterSpawnedThread(metadata)
+	}
+	return record, nil
+}
+
 // persistedAgentRecord reports whether a thread record belongs to a spawned
 // agent, which close_agent can still shut down after the runtime was unloaded.
 func persistedAgentRecord(record *session.Record) bool {

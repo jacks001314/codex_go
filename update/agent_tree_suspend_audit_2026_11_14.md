@@ -34,3 +34,19 @@ ok  codex_go/app         42.395s
 ok  codex_go/mcp         31.291s
 ok  codex_go/tui/tea     48.321s
 ```
+## 本轮补齐：Go 侧 suspend/load API
+
+- `runtimeAgentController.SuspendAgentTree(ctx, target)`：解析目标线程，按 `SpawnGraph` 列出开放后代，取消目标与后代的活动回合并等待其离位（`ThreadManager.WaitTurnEnd`），返回 `SuspendedAgentTree{RootTurnID, ChildTurns}`；线程记录、环境与排队邮件保持不动，重复调用返回空结果。
+- `runtimeAgentController.LoadSuspendedAgent(ctx, target)`：从 store/rollout 读取记录并按 `AgentPath`/昵称/角色重新登记身份，不启动任何模型回合；未知 id 报错。
+- `ThreadManager.WaitTurnEnd`：等待某个已登记回合离开活动槽（5ms 轮询，受 ctx 约束），只观察回合自身的清理，不缩短回合。
+- 未覆盖：Rust 在挂起成功前把未投递的终端子结果写入父历史；Go 的子结果仍在进程内 `agentMessages` 队列，跨进程挂起/重启会丢失。Go 也没有 Rust 的 per-thread writer 关闭步骤，rollout 由 recorder 逐次写入。
+
+回归（`appserver/agent_suspend_like_rust_test.go`）：
+
+- 根与开放子代理的活动回合都进入返回值，取消后活动槽清空，记录与排队邮件保留，重复挂起为空。
+- 加载挂起子代理恢复路径与身份且不启动回合；未知/空 id 报错。
+- 调用方取消时返回错误、但仍报告已捕获的回合 id。
+
+```
+go test ./appserver -run "SuspendAgentTree|LoadSuspendedAgent" -count=1   # 通过
+```
