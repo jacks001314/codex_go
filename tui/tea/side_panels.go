@@ -171,7 +171,7 @@ func (m *Model) renderSideWorkspace(width int, height int) (string, bool) {
 		// The chooser belongs to the parent conversation, so the live
 		// transcript stays on the left while the list paints on the right
 		// (Rust #59739).
-		left = m.renderSidePaneTranscript(parentCache, m.sidebarParentThreadID(), m.State.Messages, leftWidth, m.paneStatusForThread(m.sidebarParentThreadID()))
+		left = m.renderSidePaneTranscript(parentCache, m.sidebarParentThreadID(), m.State.Messages, leftWidth, m.paneStatusForThread(m.sidebarParentThreadID()), paneStatusRowBudget(height))
 		right = m.renderSidebarChooser(rightWidth, height)
 	} else {
 		parentMessages := side.ParentMessages
@@ -183,8 +183,9 @@ func (m *Model) renderSideWorkspace(width int, height int) (string, bool) {
 		} else {
 			parentMessages = m.State.Messages
 		}
-		left = m.renderSidePaneTranscript(parentCache, side.ParentThreadID, parentMessages, leftWidth, m.paneStatusWhenUnfocused(sideFocused, side.ParentThreadID))
-		right = m.renderSidePaneTranscript(sideCache, side.SideThreadID, sideMessages, rightWidth, m.paneStatusWhenUnfocused(!sideFocused, side.SideThreadID))
+		budget := paneStatusRowBudget(height)
+		left = m.renderSidePaneTranscript(parentCache, side.ParentThreadID, parentMessages, leftWidth, m.paneStatusWhenUnfocused(sideFocused, side.ParentThreadID), budget)
+		right = m.renderSidePaneTranscript(sideCache, side.SideThreadID, sideMessages, rightWidth, m.paneStatusWhenUnfocused(!sideFocused, side.SideThreadID), budget)
 		// Rust #59784 paints the sibling tabs above the side transcript.
 		right = m.renderSidebarTabStrip(rightWidth) + "\n" + right
 	}
@@ -237,7 +238,7 @@ func (m *Model) sideResizeHint(sideWidth int) string {
 	return codextui.TruncateWithEllipsis(hint, max(m.width, 1))
 }
 
-func (m *Model) renderSidePaneTranscript(cache *transcriptMessageCache, threadID string, messages []codextui.Message, width int, status string) string {
+func (m *Model) renderSidePaneTranscript(cache *transcriptMessageCache, threadID string, messages []codextui.Message, width int, status string, maxStatusRows int) string {
 	if m == nil || m.State == nil || width <= 0 {
 		return ""
 	}
@@ -262,7 +263,7 @@ func (m *Model) renderSidePaneTranscript(cache *transcriptMessageCache, threadID
 		"sidepane|"+threadID,
 	)
 	if status = strings.TrimSpace(status); status != "" {
-		statusRows := m.renderDimmedPaneStatus(status, width)
+		statusRows := m.renderDimmedPaneStatus(status, width, maxStatusRows)
 		if statusRows != "" {
 			if content != "" {
 				content += "\n"
@@ -295,19 +296,41 @@ func (m *Model) paneStatusForThread(threadID string) string {
 
 // renderDimmedPaneStatus wraps an inactive pane's status to the pane width and
 // dims it, mirroring Rust #61141's unfocused treatment (no hyperlinks).
-func (m *Model) renderDimmedPaneStatus(status string, width int) string {
+func (m *Model) renderDimmedPaneStatus(status string, width int, maxRows int) string {
 	status = strings.TrimSpace(status)
 	if status == "" || width <= 0 {
 		return ""
 	}
 	rows := codextui.WrapLine(status, codextui.WrapOptions{Width: width, BreakWords: true})
-	if len(rows) > 3 {
-		rows = rows[:3]
+	if maxRows <= 0 {
+		maxRows = 3
+	}
+	if len(rows) > maxRows {
+		rows = rows[:maxRows]
 	}
 	for i, row := range rows {
 		rows[i] = "\x1b[2m" + codextui.TruncateWithEllipsis(row, width) + "\x1b[0m"
 	}
 	return strings.Join(rows, "\n")
+}
+
+// paneStatusRowBudget mirrors Rust #61141's shared row allocation: a taller
+// pane gives the status more rows, but the transcript always keeps at least one.
+func paneStatusRowBudget(height int) int {
+	if height <= 0 {
+		return 1
+	}
+	budget := height / 3
+	if budget < 1 {
+		budget = 1
+	}
+	if budget > 4 {
+		budget = 4
+	}
+	if limit := height - 1; budget > limit && limit >= 1 {
+		budget = limit
+	}
+	return budget
 }
 
 // joinSidePanes draws each pane window, pads the left column to the divider,

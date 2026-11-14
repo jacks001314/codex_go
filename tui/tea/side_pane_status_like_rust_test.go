@@ -26,7 +26,7 @@ func TestSidePaneStatusContentLikeRust(t *testing.T) {
 		t.Fatalf("unfocused pane status = %q", got)
 	}
 
-	rendered := model.renderDimmedPaneStatus("alpha beta gamma delta epsilon zeta", 12)
+	rendered := model.renderDimmedPaneStatus("alpha beta gamma delta epsilon zeta", 12, 3)
 	rows := strings.Split(rendered, "\n")
 	if len(rows) < 2 || len(rows) > 3 {
 		t.Fatalf("wrapped rows = %d (%q)", len(rows), rendered)
@@ -40,11 +40,26 @@ func TestSidePaneStatusContentLikeRust(t *testing.T) {
 		}
 	}
 
-	content := model.renderSidePaneTranscript(&transcriptMessageCache{}, "thread-side", nil, 20, "side status")
+	content := model.renderSidePaneTranscript(&transcriptMessageCache{}, "thread-side", nil, 20, "side status", 3)
 	if !strings.Contains(content, "side status") {
 		t.Fatalf("pane transcript missing status: %q", content)
 	}
-	if content := model.renderSidePaneTranscript(&transcriptMessageCache{}, "thread-side", nil, 20, ""); strings.Contains(content, "side status") {
+	if content := model.renderSidePaneTranscript(&transcriptMessageCache{}, "thread-side", nil, 20, "", 3); strings.Contains(content, "side status") {
 		t.Fatalf("focused pane rendered status: %q", content)
+	}
+}
+
+// Rust #61141: status rows scale with the pane height while the transcript
+// keeps at least one visible row.
+func TestSidePaneStatusRowBudgetLikeRust(t *testing.T) {
+	for _, tc := range []struct {
+		height int
+		want   int
+	}{
+		{1, 1}, {2, 1}, {6, 2}, {12, 4}, {40, 4}, {0, 1},
+	} {
+		if got := paneStatusRowBudget(tc.height); got != tc.want {
+			t.Fatalf("paneStatusRowBudget(%d) = %d, want %d", tc.height, got, tc.want)
+		}
 	}
 }
