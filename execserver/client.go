@@ -298,11 +298,20 @@ func (c RpcCompletion) recordReceipt(ctx context.Context, method string) {
 	if delay < 0 {
 		delay = 0
 	}
-	emitExecServerTraceEvent(ctx, execServerResponseReceivedEvent, map[string]string{
+	fields := map[string]string{
 		"rpc.method":          method,
 		"outcome":             outcome,
 		"reader_to_caller_ns": strconv.FormatInt(delay, 10),
-	})
+	}
+	if method == MethodProcessStart && c.response.Error != nil {
+		// Rust #61358: record the failed process/start error code and the
+		// structured error kind attached to the response.
+		fields["process.start_error_code"] = strconv.Itoa(c.response.Error.Code)
+		if kind, ok := processStartErrorKindFromData(c.response.Error.Data); ok {
+			fields["process.start_error_kind"] = string(kind)
+		}
+	}
+	emitExecServerTraceEvent(ctx, execServerResponseReceivedEvent, fields)
 }
 
 type clientTransportError struct {
@@ -440,8 +449,9 @@ type clientResponse struct {
 	ID     json.RawMessage `json:"id"`
 	Result json.RawMessage `json:"result"`
 	Error  *struct {
-		Code    int    `json:"code"`
-		Message string `json:"message"`
+		Code    int             `json:"code"`
+		Message string          `json:"message"`
+		Data    json.RawMessage `json:"data"`
 	} `json:"error"`
 }
 

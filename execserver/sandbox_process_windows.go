@@ -49,7 +49,7 @@ func startExecServerSandboxProcess(params *ExecParams) (*startedExecServerSandbo
 		// Availability is the launcher's own PSEC probe, so this check and
 		// sandbox.WindowsMXCAvailable() cannot disagree.
 		if !sandbox.WindowsMXCAvailable() {
-			return nil, true, requestError(-32602, "native MXC is unavailable on this executor")
+			return nil, true, processSandboxUnavailableFailure("native MXC is unavailable on this executor")
 		}
 		session, err := startExecServerMXCProcess(params, &sandboxContext)
 		if err != nil {
@@ -82,7 +82,7 @@ func startExecServerSandboxProcess(params *ExecParams) (*startedExecServerSandbo
 		return nil, true, requestError(-32602, fmt.Sprintf("invalid sandbox permission profile: %v", err))
 	}
 	if profile.Disabled {
-		return nil, true, requestError(-32602, "sandbox intent cannot be enforced on this executor")
+		return nil, true, processSandboxUnavailableFailure("sandbox intent cannot be enforced on this executor")
 	}
 	workspaceRoots := make([]string, 0, len(sandboxContext.WorkspaceRoots))
 	for _, root := range sandboxContext.WorkspaceRoots {
@@ -129,7 +129,7 @@ func startExecServerSandboxProcess(params *ExecParams) (*startedExecServerSandbo
 		ProxyEnforced:       params.EnforceManagedNetwork,
 	})
 	if err != nil {
-		return nil, true, err
+		return nil, true, processStartSpawnFailure(err)
 	}
 	return &startedExecServerSandboxProcess{
 		stdin:     session.Stdin,
@@ -176,7 +176,7 @@ func startExecServerMXCProcess(params *ExecParams, sandboxContext *FileSystemSan
 		return nil, requestError(-32602, fmt.Sprintf("invalid sandbox permission profile: %v", err))
 	}
 	if profile.Disabled {
-		return nil, requestError(-32602, "sandbox intent cannot be enforced on this executor")
+		return nil, processSandboxUnavailableFailure("sandbox intent cannot be enforced on this executor")
 	}
 	env := childEnv(params)
 	// A managed-network launch is "proxied" whenever the request carries the
@@ -206,11 +206,11 @@ func startExecServerMXCProcess(params *ExecParams, sandboxContext *FileSystemSan
 	}
 	policy, err := mxc.PrepareFileSystemPolicy(profile, cwd, env, cwd)
 	if err != nil {
-		return nil, err
+		return nil, processStartSpawnFailure(err)
 	}
 	egress, ingress, err := mxc.TranslateNetworkPolicy(profile.AllowsNetwork(), managed)
 	if err != nil {
-		return nil, err
+		return nil, processStartSpawnFailure(err)
 	}
 	request := &mxc.NativeRequest{
 		ScriptCode:       windowssandbox.ArgvToCommandLine(argv),
@@ -231,7 +231,7 @@ func startExecServerMXCProcess(params *ExecParams, sandboxContext *FileSystemSan
 	}
 	session, err := mxc.SpawnLiveSession(request)
 	if err != nil {
-		return nil, err
+		return nil, processStartSpawnFailure(err)
 	}
 	return &startedExecServerSandboxProcess{
 		stdin:     session.Stdin,
@@ -266,7 +266,7 @@ func startExecServerMXCTTYProcess(
 	}
 	args, err := mxc.CreateCommandArgs(params.Argv, *profile, cwd, managed, launcherEnv)
 	if err != nil {
-		return nil, err
+		return nil, processStartSpawnFailure(err)
 	}
 	executable, err := os.Executable()
 	if err != nil {
@@ -274,7 +274,7 @@ func startExecServerMXCTTYProcess(
 	}
 	session, err := mxc.SpawnLauncherSession(executable, args, launcherEnv, cwd)
 	if err != nil {
-		return nil, err
+		return nil, processStartSpawnFailure(err)
 	}
 	return &startedExecServerSandboxProcess{
 		stdin:     session.Stdin,

@@ -201,11 +201,15 @@ type response struct {
 type rpcError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
+	// Data carries the optional structured error payload. Rust parity:
+	// #61358 attaches a tagged ProcessStartErrorData here for process/start.
+	Data json.RawMessage `json:"data,omitempty"`
 }
 
 type requestFailure struct {
 	code    int
 	message string
+	data    json.RawMessage
 }
 
 func (e *requestFailure) Error() string {
@@ -2171,7 +2175,7 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 		if startErr != nil {
 			state.telemetry.spawnFailed(sandboxType)
 			s.releaseStartingProcess(params.ProcessID, state)
-			return nil, startErr
+			return nil, processStartSpawnFailure(startErr)
 		}
 		if supported {
 			// Rust #41436: answer blocking terminal queries from the PTY and
@@ -2327,7 +2331,7 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 		_ = stdoutWriter.Close()
 		_ = stderrReader.Close()
 		_ = stderrWriter.Close()
-		return nil, err
+		return nil, processStartSpawnFailure(err)
 	}
 	// The child owns its duplicated ends now; the parent's copies must close or
 	// the capture goroutines never see EOF.
@@ -2758,13 +2762,13 @@ func prepareExecProcess(params *ExecParams, allowedSymlinkedCodexHome string) ([
 		Command:                   command,
 	})
 	if err != nil {
-		return nil, "", sandbox.SandboxTypeNone, requestError(-32602, fmt.Sprintf("failed to prepare process sandbox: %v", err))
+		return nil, "", sandbox.SandboxTypeNone, processSandboxPreparationFailure(err)
 	}
 	if err := plan.UnsupportedError(); err != nil {
-		return nil, "", sandbox.SandboxTypeNone, requestError(-32602, "sandbox intent cannot be enforced on this executor")
+		return nil, "", sandbox.SandboxTypeNone, processSandboxUnavailableFailure("sandbox intent cannot be enforced on this executor")
 	}
 	if profile.Disabled {
-		return nil, "", sandbox.SandboxTypeNone, requestError(-32602, "sandbox intent cannot be enforced on this executor")
+		return nil, "", sandbox.SandboxTypeNone, processSandboxUnavailableFailure("sandbox intent cannot be enforced on this executor")
 	}
 	runSandboxIntegrityChecks(plan, string(sandboxContext.SandboxOverride), cwd, plan.Command, params.Env)
 	plan.CWD = cwd
@@ -2781,7 +2785,7 @@ func prepareExecProcess(params *ExecParams, allowedSymlinkedCodexHome string) ([
 			managedNetworkJSON,
 		)
 		if wrapErr != nil {
-			return nil, "", sandbox.SandboxTypeNone, requestError(-32602, fmt.Sprintf("failed to prepare process sandbox: %v", wrapErr))
+			return nil, "", sandbox.SandboxTypeNone, processSandboxPreparationFailure(wrapErr)
 		}
 		plan.Command = wrapped
 	}
@@ -4273,7 +4277,7 @@ func errorResponse(id RequestID, code int, message string) response {
 func errorResponseForRequest(id RequestID, err error) response {
 	var failure *requestFailure
 	if errors.As(err, &failure) {
-		return errorResponse(id, failure.code, failure.message)
+		return response{ID: id, Error: &rpcError{Code: failure.code, Message: failure.message, Data: failure.data}}
 	}
 	return errorResponse(id, -32603, err.Error())
 }
