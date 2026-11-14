@@ -245,6 +245,11 @@ func resumeMCPToolCallItem(item session.Item, output session.Item, hasOutput boo
 	}
 	projected := protocol.MCPToolCallItem(callID, server, tool, arguments, result, callErr, status)
 	projected.CallID = callID
+	// Rust #61257 persists the MCP registration scope with the tool call so a
+	// resumed transcript keeps the environment label.
+	if environmentID := strings.TrimSpace(interactiveSessionItemDataString(item, "environmentId")); environmentID != "" {
+		projected.ServerEnvironmentID = &environmentID
+	}
 	return projected
 }
 

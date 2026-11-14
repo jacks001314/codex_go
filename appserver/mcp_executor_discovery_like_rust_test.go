@@ -304,6 +304,53 @@ func TestExecutorMCPProjectionPreservesExistingOwnershipLikeRust(t *testing.T) {
 	}
 }
 
+// Two selected environments may declare the same MCP server name; Rust #61257
+// keeps each registration under its own scope instead of letting the first
+// environment's declaration hide the second.
+func TestExecutorMCPProjectionKeepsSameNamedServerPerEnvironmentLikeRust(t *testing.T) {
+	manager := NewEnvironmentManager(EnvironmentShellInfo{Name: "sh", Path: "/bin/sh"}, "file:///workspace")
+	selections := make([]map[string]any, 0, 2)
+	cache := newRuntimeCapabilityDiscoveryV2Cache()
+	for _, environmentID := range []string{"executor-1", "executor-2"} {
+		if _, err := manager.Add(&EnvironmentAddParams{EnvironmentID: environmentID, ExecServerURL: "ws://127.0.0.1:1"}); err != nil {
+			t.Fatal(err)
+		}
+		record, ok := manager.Record(environmentID)
+		if !ok || record == nil {
+			t.Fatalf("executor record %q missing", environmentID)
+		}
+		selection := map[string]any{"environmentId": environmentID, "cwd": "file:///workspace"}
+		key, err := executorMCPDiscoveryKey(*record, "file:///workspace", selection)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cache.storeExecutorMCPDiscovery(environmentID, executorMCPDiscoveryResult{
+			key: key,
+			servers: []executorMCPServer{
+				{name: "notes", config: mcp.ServerConfig{URL: "http://" + environmentID + "/notes", Enabled: true}},
+			},
+		})
+		selections = append(selections, selection)
+	}
+	runtimeConfig := &mcp.RuntimeConfig{Servers: map[string]mcp.ServerRegistration{}}
+	router := &RuntimeRouter{services: RuntimeServices{Environment: manager}}
+	cache.applyExecutorMCPServers(router, runtimeConfig, selections, nil)
+
+	if len(runtimeConfig.Servers) != 2 {
+		t.Fatalf("registered servers = %#v, want one per environment", runtimeConfig.Servers)
+	}
+	for _, environmentID := range []string{"executor-1", "executor-2"} {
+		_, registration, ok := runtimeConfig.ServerRegistrationFor("notes", environmentID)
+		if !ok {
+			t.Fatalf("notes missing for %s: %#v", environmentID, runtimeConfig.Servers)
+		}
+		if registration.Config.URL != "http://"+environmentID+"/notes" ||
+			registration.CredentialPolicy != mcp.CredentialPolicyExecutorOnly {
+			t.Fatalf("notes registration for %s = %#v", environmentID, registration)
+		}
+	}
+}
+
 func TestSelectedExecutorProjectsHTTPMCPServersLikeRust(t *testing.T) {
 	reader := &mcpExecutorDiscoveryTestReader{response: &execserverclient.EnvironmentConfigReadResponse{
 		Config: execserverclient.EnvironmentConfigLayerStack{Layers: []execserverclient.EnvironmentConfigLayer{

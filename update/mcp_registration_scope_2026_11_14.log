@@ -1,0 +1,20 @@
+== go build ./... ==
+exit=0
+== go vet ==
+exit=0
+== go test ./mcp ==
+ok  	codex_go/mcp	33.254s
+exit=0
+== go test ./protocol ./tui/history_cell ==
+ok  	codex_go/protocol	0.050s
+ok  	codex_go/tui/history_cell	0.124s
+exit=0
+== go test ./tui/tea ==
+ok  	codex_go/tui/tea	47.484s
+exit=0
+== go test ./appserver -run MCP|Mcp ==
+ok  	codex_go/appserver	6.261s
+exit=0
+== go test ./app -run MCP|Mcp ==
+ok  	codex_go/app	2.965s
+exit=0

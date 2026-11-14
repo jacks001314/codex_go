@@ -150,17 +150,21 @@ type ThreadItem struct {
 	// Results carries the structured results a web search returned, mirroring
 	// Rust's `WebSearchItem { results }`. The pointer keeps Rust's distinction
 	// between an absent field and a present-but-empty array.
-	Results           *[]any                       `json:"results,omitempty"`
-	Changes           []FileChange                 `json:"changes,omitempty"`
-	Server            string                       `json:"server,omitempty"`
-	Tool              string                       `json:"tool,omitempty"`
-	SenderThreadID    string                       `json:"sender_thread_id,omitempty"`
-	ReceiverThreadIDs *[]string                    `json:"receiver_thread_ids,omitempty"`
-	Prompt            *string                      `json:"prompt,omitempty"`
-	AgentsStates      *map[string]CollabAgentState `json:"agents_states,omitempty"`
-	ActivityKind      string                       `json:"kind,omitempty"`
-	AgentThreadID     string                       `json:"agent_thread_id,omitempty"`
-	AgentPath         string                       `json:"agent_path,omitempty"`
+	Results *[]any       `json:"results,omitempty"`
+	Changes []FileChange `json:"changes,omitempty"`
+	Server  string       `json:"server,omitempty"`
+	Tool    string       `json:"tool,omitempty"`
+	// ServerEnvironmentID is the MCP registration scope a tool call reached
+	// (Rust #61257). It stays nil for local and thread-wide registrations,
+	// which also keeps older records readable.
+	ServerEnvironmentID *string                      `json:"environmentId,omitempty"`
+	SenderThreadID      string                       `json:"sender_thread_id,omitempty"`
+	ReceiverThreadIDs   *[]string                    `json:"receiver_thread_ids,omitempty"`
+	Prompt              *string                      `json:"prompt,omitempty"`
+	AgentsStates        *map[string]CollabAgentState `json:"agents_states,omitempty"`
+	ActivityKind        string                       `json:"kind,omitempty"`
+	AgentThreadID       string                       `json:"agent_thread_id,omitempty"`
+	AgentPath           string                       `json:"agent_path,omitempty"`
 	// Model and ReasoningEffort are the resolved settings of a started sub-agent
 	// activity (Rust #51463); older records and other activity kinds omit them.
 	Model           *string        `json:"model,omitempty"`
@@ -504,23 +508,27 @@ func (i ThreadItem) MarshalJSON() ([]byte, error) {
 			arguments = *i.Arguments
 		}
 		return marshalThreadItemJSON(struct {
-			ID        string         `json:"id"`
-			Type      string         `json:"type"`
-			Server    string         `json:"server"`
-			Tool      string         `json:"tool"`
-			Arguments any            `json:"arguments"`
-			Result    *MCPToolResult `json:"result"`
-			Error     *MCPToolError  `json:"error"`
-			Status    string         `json:"status"`
+			ID     string `json:"id"`
+			Type   string `json:"type"`
+			Server string `json:"server"`
+			Tool   string `json:"tool"`
+			// EnvironmentID identifies the registration scope of the call
+			// (Rust #61257); omitempty keeps local registrations unchanged.
+			EnvironmentID *string        `json:"environmentId,omitempty"`
+			Arguments     any            `json:"arguments"`
+			Result        *MCPToolResult `json:"result"`
+			Error         *MCPToolError  `json:"error"`
+			Status        string         `json:"status"`
 		}{
-			ID:        i.ID,
-			Type:      i.Type,
-			Server:    i.Server,
-			Tool:      i.Tool,
-			Arguments: arguments,
-			Result:    i.Result,
-			Error:     i.CallError,
-			Status:    i.Status,
+			ID:            i.ID,
+			Type:          i.Type,
+			Server:        i.Server,
+			Tool:          i.Tool,
+			EnvironmentID: i.ServerEnvironmentID,
+			Arguments:     arguments,
+			Result:        i.Result,
+			Error:         i.CallError,
+			Status:        i.Status,
 		})
 	case "collab_tool_call":
 		receivers := []string{}

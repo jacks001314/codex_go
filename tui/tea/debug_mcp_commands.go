@@ -214,6 +214,7 @@ func cloneMcpServerStatuses(values []historycell.McpServerStatus) []historycell.
 	for i := range values {
 		out[i] = historycell.McpServerStatus{
 			Name:              values[i].Name,
+			EnvironmentID:     values[i].EnvironmentID,
 			RuntimeStatus:     values[i].RuntimeStatus,
 			Auth:              values[i].Auth,
 			Tools:             append([]string(nil), values[i].Tools...),

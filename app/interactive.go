@@ -2534,6 +2534,7 @@ func interactiveHistoryMCPStatuses(statuses []mcp.MCPServerStatus) []historycell
 		}
 		out = append(out, historycell.McpServerStatus{
 			Name:              name,
+			EnvironmentID:     mcpStatusEnvironmentIDValue(status.EnvironmentID),
 			RuntimeStatus:     mcpRuntimeStatusWire(status.RuntimeStatus),
 			Auth:              interactiveMCPAuthStatusDisplay(status.AuthStatus),
 			Tools:             interactiveMCPToolNames(status.Tools),
@@ -2549,6 +2550,15 @@ func mcpRuntimeStatusWire(status *mcp.MCPConnectionStatus) string {
 		return ""
 	}
 	return string(*status)
+}
+
+// mcpStatusEnvironmentIDValue flattens a status's optional registration scope
+// for the TUI history cells (Rust #61257).
+func mcpStatusEnvironmentIDValue(environmentID *string) string {
+	if environmentID == nil {
+		return ""
+	}
+	return strings.TrimSpace(*environmentID)
 }
 
 func interactiveMCPAuthStatusDisplay(status mcp.MCPAuthStatus) string {

@@ -15,6 +15,9 @@ type McpInvocation struct {
 	Server    string
 	Tool      string
 	Arguments string
+	// EnvironmentID names the MCP registration scope the call reached (Rust
+	// #61257). It is empty for local and thread-wide registrations.
+	EnvironmentID string
 }
 
 type McpToolResult struct {
@@ -229,7 +232,10 @@ func EmptyMCPOutput() PlainHistoryCell {
 }
 
 type McpServerStatus struct {
-	Name              string
+	Name string
+	// EnvironmentID names the registration scope this status describes
+	// (Rust #61257); empty for local and thread-wide registrations.
+	EnvironmentID     string
 	RuntimeStatus     string
 	Auth              string
 	Tools             []string
@@ -270,7 +276,10 @@ func NewMCPToolsOutputFromStatuses(statuses []McpServerStatus, detail bool) McpT
 	lines := []string{"/mcp", "", "\U0001f50c  MCP Tools", ""}
 	statuses = append([]McpServerStatus(nil), statuses...)
 	sort.Slice(statuses, func(i, j int) bool {
-		return statuses[i].Name < statuses[j].Name
+		if statuses[i].Name != statuses[j].Name {
+			return statuses[i].Name < statuses[j].Name
+		}
+		return statuses[i].EnvironmentID < statuses[j].EnvironmentID
 	})
 	hasTools := false
 	for _, status := range statuses {
@@ -289,7 +298,11 @@ func NewMCPToolsOutputFromStatuses(statuses []McpServerStatus, detail bool) McpT
 		if count == 1 {
 			unit = "tool"
 		}
-		lines = append(lines, "  \u2022 "+strings.TrimSpace(status.Name)+": "+label+" ("+strconv.Itoa(count)+" "+unit+")")
+		name := strings.TrimSpace(status.Name)
+		if environment := strings.TrimSpace(status.EnvironmentID); environment != "" {
+			name += " (environment " + environment + ")"
+		}
+		lines = append(lines, "  \u2022 "+name+": "+label+" ("+strconv.Itoa(count)+" "+unit+")")
 		if !detail {
 			continue
 		}
@@ -346,7 +359,11 @@ func NewMcpInventoryLoading() PlainHistoryCell {
 
 func formatMcpInvocation(invocation McpInvocation) string {
 	args := strings.TrimSpace(invocation.Arguments)
-	return strings.TrimSpace(invocation.Server) + "." + strings.TrimSpace(invocation.Tool) + "(" + args + ")"
+	line := strings.TrimSpace(invocation.Server) + "." + strings.TrimSpace(invocation.Tool) + "(" + args + ")"
+	if environment := strings.TrimSpace(invocation.EnvironmentID); environment != "" {
+		line += " (environment " + environment + ")"
+	}
+	return line
 }
 
 func formatMcpResources(resources []McpResource) string {

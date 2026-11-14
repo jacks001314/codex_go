@@ -6684,7 +6684,7 @@ func remoteProtocolItemFromPayload(payload appserver.ThreadItemPayload, complete
 		} else if status == "" {
 			status = "completed"
 		}
-		return protocol.MCPToolCallItem(
+		item := protocol.MCPToolCallItem(
 			id,
 			remotePayloadString(payload, "server"),
 			remotePayloadString(payload, "tool"),
@@ -6693,6 +6693,12 @@ func remoteProtocolItemFromPayload(payload appserver.ThreadItemPayload, complete
 			remoteMCPToolError(payload["error"]),
 			status,
 		)
+		// Rust #61257 carries the MCP registration scope on the tool-call item
+		// so the transcript can distinguish same-named environment servers.
+		if environmentID := remotePayloadString(payload, "environmentId"); environmentID != "" {
+			item.ServerEnvironmentID = &environmentID
+		}
+		return item
 	case "collabAgentToolCall":
 		status := remotePayloadString(payload, "status")
 		if !completed || status == "inProgress" {

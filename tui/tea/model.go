@@ -9417,6 +9417,7 @@ func (m *Model) appendComputerActivityCall(item *protocol.ThreadItem) {
 		m.Transcript.finishAssistantPreambleBeforeTool(m.State)
 	}
 	invocation := historycell.McpInvocation{Server: strings.TrimSpace(item.Server), Tool: strings.TrimSpace(item.Tool)}
+	invocation.EnvironmentID = protocolServerEnvironmentID(item)
 	if item.Arguments != nil {
 		invocation.Arguments = compactMCPArguments(*item.Arguments)
 	}
@@ -9512,6 +9513,9 @@ func (m *Model) renderMCPToolCallItem(item *protocol.ThreadItem, completed bool)
 	if toolName := strings.TrimSpace(item.Tool); toolName != "" {
 		state.Invocation.Tool = toolName
 	}
+	if environment := protocolServerEnvironmentID(item); environment != "" {
+		state.Invocation.EnvironmentID = environment
+	}
 	if item.Arguments != nil {
 		state.Invocation.Arguments = compactMCPArguments(*item.Arguments)
 	}
@@ -9536,6 +9540,15 @@ func (m *Model) renderMCPToolCallItem(item *protocol.ThreadItem, completed bool)
 func mcpToolCallInProgress(status string) bool {
 	status = strings.ToLower(strings.TrimSpace(status))
 	return status == "" || status == "in_progress" || status == "inprogress" || status == "running"
+}
+
+// protocolServerEnvironmentID returns the MCP registration scope a tool-call
+// item reached (Rust #61257); empty for local and thread-wide registrations.
+func protocolServerEnvironmentID(item *protocol.ThreadItem) string {
+	if item == nil || item.ServerEnvironmentID == nil {
+		return ""
+	}
+	return strings.TrimSpace(*item.ServerEnvironmentID)
 }
 
 func (m *Model) renderWebSearchItem(item *protocol.ThreadItem, completed bool) {

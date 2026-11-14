@@ -220,29 +220,59 @@ func (s *runtimeCapabilityDiscoveryV2Cache) applyExecutorMCPServers(router *Runt
 			if name == "" || name == mcp.CodexAppsServerName {
 				continue
 			}
-			if _, duplicate := registered[name]; duplicate {
+			// Rust #61257 keeps registrations keyed by scope, so a server that
+			// another environment already registered stays available under its
+			// own key instead of being dropped.
+			key := mcp.ServerRegistrationKey(name, environmentID)
+			if !executorMCPRuntimeHasServerNamed(runtimeConfig, name) {
+				// A lone registration keeps its bare name so legacy name-only
+				// routing and persisted identities keep working (Rust #61257).
+				key = name
+			}
+			if _, duplicate := registered[key]; duplicate {
 				continue
 			}
-			if existing, ok := runtimeConfig.Servers[name]; ok {
+			if existingKey, existing, ok := runtimeConfig.ServerRegistrationFor(name, environmentID); ok {
 				source := mcp.SourceFromRegistration(&existing)
-				if existing.Config.EffectiveEnvironmentID() != environmentID ||
-					(source != mcp.CatalogSourcePlugin && source != mcp.CatalogSourceSelectedPlugin) {
+				key = existingKey
+				if source != mcp.CatalogSourcePlugin && source != mcp.CatalogSourceSelectedPlugin {
 					continue
 				}
+			} else if executorMCPRuntimeHasServerNamed(runtimeConfig, name) {
+				key = mcp.ServerRegistrationKey(name, environmentID)
 			}
 			serverConfig := discovered.config
 			serverConfig.EnvironmentID = environmentID
 			serverConfig.CredentialPolicy = mcp.CredentialPolicyExecutorOnly
 			applyExecutorMCPRequirements(name, &serverConfig, requirements)
-			runtimeConfig.Servers[name] = mcp.ServerRegistration{
+			runtimeConfig.Servers[key] = mcp.ServerRegistration{
 				Name:             name,
 				Config:           serverConfig,
 				Source:           string(mcp.CatalogSourceConfig),
 				CredentialPolicy: mcp.CredentialPolicyExecutorOnly,
 			}
-			registered[name] = struct{}{}
+			registered[key] = struct{}{}
 		}
 	}
+}
+
+// executorMCPRuntimeHasServerNamed reports whether any scope already holds a
+// server with this name.
+func executorMCPRuntimeHasServerNamed(runtime *mcp.RuntimeConfig, name string) bool {
+	if runtime == nil {
+		return false
+	}
+	name = strings.TrimSpace(name)
+	for key, registration := range runtime.Servers {
+		registrationName := strings.TrimSpace(registration.Name)
+		if registrationName == "" {
+			registrationName, _ = mcp.SplitServerRegistrationKey(key)
+		}
+		if registrationName == name {
+			return true
+		}
+	}
+	return false
 }
 
 func executorHTTPMCPServers(response *execserverclient.EnvironmentConfigReadResponse, environmentID string, httpClient executorHTTPDoer) ([]executorMCPServer, error) {

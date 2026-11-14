@@ -269,6 +269,10 @@ func (t MCPToolInfo) MarshalJSON() ([]byte, error) {
 
 type MCPServerStatus struct {
 	Name string `json:"name,omitempty"`
+	// key is the registration scope this status is stored under. It is
+	// internal-only: the wire status identifies a registration by name plus an
+	// optional environment id (Rust #61257).
+	key string
 	// EnvironmentID names the registration scope that contributed this server
 	// (Rust #61257). Nil means a thread-wide registration or an older status.
 	EnvironmentID *string `json:"environmentId,omitempty"`
@@ -813,6 +817,14 @@ type MCPService struct {
 	mu      sync.Mutex
 	servers map[string]MCPServerStatus
 	configs map[string]ServerConfig
+	// serverOrder preserves registration attribution order so a name-only
+	// lookup selects the first registration of that name, which is Rust
+	// #61257's legacy routing when no environment selector is supplied.
+	serverOrder []string
+	// serverNames maps a registration key to its published server name. A
+	// same-named registration in another environment is stored under a scope
+	// key, and this map keeps its display name.
+	serverNames map[string]string
 	// disabledConfigs retains disabled registrations so login and diagnostics can
 	// report why they are unavailable (Rust #56266).
 	disabledConfigs map[string]ServerConfig
@@ -953,7 +965,7 @@ type cachedMCPStdioClient struct {
 }
 
 func NewMCPService(runtime *RuntimeConfig) *MCPService {
-	service := &MCPService{servers: map[string]MCPServerStatus{}, configs: map[string]ServerConfig{}, disabledConfigs: map[string]ServerConfig{}, dynamicConfig: map[string]bool{}, required: map[string]bool{}, starting: map[string]int{}, httpClients: map[string]*cachedMCPHTTPClient{}, stdioClients: map[string]*cachedMCPStdioClient{}, oauthLogins: map[string]*OAuthLoginServer{}, resourceCache: NewMCPResourceCache(nil), generation: 1, appsMCPProductSKU: DefaultCodexAppsMCPProductSKU, invocations: NewMCPInvocationRegistry(), sharedDefinitions: newSharedMCPDefinitions()}
+	service := &MCPService{servers: map[string]MCPServerStatus{}, configs: map[string]ServerConfig{}, serverNames: map[string]string{}, disabledConfigs: map[string]ServerConfig{}, dynamicConfig: map[string]bool{}, required: map[string]bool{}, starting: map[string]int{}, httpClients: map[string]*cachedMCPHTTPClient{}, stdioClients: map[string]*cachedMCPStdioClient{}, oauthLogins: map[string]*OAuthLoginServer{}, resourceCache: NewMCPResourceCache(nil), generation: 1, appsMCPProductSKU: DefaultCodexAppsMCPProductSKU, invocations: NewMCPInvocationRegistry(), sharedDefinitions: newSharedMCPDefinitions()}
 	if runtime != nil {
 		// Rust reads `config.apps_mcp_product_sku.as_deref().unwrap_or(..)`; Go's
 		// runtime config cannot distinguish an absent SKU from an empty one, so
@@ -986,14 +998,17 @@ func NewMCPService(runtime *RuntimeConfig) *MCPService {
 		if strings.TrimSpace(runtime.CodexHome) != "" {
 			service.oauth = NewOAuthStoreWithMode(runtime.CodexHome, runtime.OAuthCredentialsStoreMode)
 		}
-		for name, registration := range runtime.Servers {
-			name = strings.TrimSpace(name)
+		service.serverOrder = sortedRegistrationKeys(runtime.Servers)
+		for _, key := range service.serverOrder {
+			registration := runtime.Servers[key]
+			name := strings.TrimSpace(registration.Name)
 			if name == "" {
-				name = strings.TrimSpace(registration.Name)
+				name, _ = SplitServerRegistrationKey(key)
 			}
 			if name == "" {
 				continue
 			}
+			service.serverNames[key] = name
 			info := MCPServerInfo{Name: name, Command: firstNonEmptyMCP(registration.Config.Command, registration.Config.URL), Args: append([]string(nil), registration.Config.Args...)}
 			config := cloneServerConfig(&registration.Config)
 			config.ProtocolMode = effectiveMCPProtocolMode(runtime, name, registration)
@@ -1018,22 +1033,22 @@ func NewMCPService(runtime *RuntimeConfig) *MCPService {
 				config.CodexHome = runtime.CodexHome
 			}
 			if registration.Config.Required {
-				service.required[name] = true
+				service.required[key] = true
 			}
 			if !registration.Config.Enabled {
-				service.disabledConfigs[name] = config
+				service.disabledConfigs[key] = config
 				continue
 			}
 			if !mcpRegistrationEnvironmentAvailable(name, registration, runtime) {
 				continue
 			}
-			service.configs[name] = config
+			service.configs[key] = config
 			authStatus := service.authStatusForConfig(name, &config)
 			var pluginID *string
 			if strings.TrimSpace(registration.PluginID) != "" {
 				pluginID = cloneStringPtr(&registration.PluginID)
 			}
-			service.servers[name] = MCPServerStatus{
+			service.servers[key] = MCPServerStatus{
 				Name:           name,
 				PluginID:       pluginID,
 				pluginHostRoot: strings.TrimSpace(registration.PluginHostRoot),
@@ -1135,6 +1150,8 @@ func (s *MCPService) ApplyRuntimeConfig(runtime *RuntimeConfig) {
 	oldOAuthLogins := s.oauthLoginsForCancelLocked()
 	s.servers = refreshed.servers
 	s.configs = refreshed.configs
+	s.serverOrder = refreshed.serverOrder
+	s.serverNames = refreshed.serverNames
 	s.disabledConfigs = refreshed.disabledConfigs
 	s.dynamicConfig = refreshed.dynamicConfig
 	s.required = refreshed.required
@@ -1163,6 +1180,146 @@ func (s *MCPService) ApplyRuntimeConfig(runtime *RuntimeConfig) {
 	retireCachedStdioClients(oldStdioClients)
 	cancelOAuthLogins(oldOAuthLogins)
 	s.clearResourceCache()
+}
+
+// publishedServerNameLocked reports the server name a registration key
+// publishes. A scope key keeps the display name of the registration it stores
+// (Rust #61257).
+func (s *MCPService) publishedServerNameLocked(key string) string {
+	if name := strings.TrimSpace(s.serverNames[key]); name != "" {
+		return name
+	}
+	name, _ := SplitServerRegistrationKey(key)
+	return name
+}
+
+// serverKeyLocked resolves a name-only server reference to its first
+// registration, preserving the legacy lookup when no environment selector is
+// supplied (Rust #61257).
+func (s *MCPService) serverKeyLocked(name string) (string, bool) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", false
+	}
+	if _, ok := s.configs[name]; ok {
+		return name, true
+	}
+	if _, ok := s.disabledConfigs[name]; ok {
+		return name, true
+	}
+	if _, ok := s.servers[name]; ok {
+		return name, true
+	}
+	return s.firstServerKeyForNameLocked(name)
+}
+
+func (s *MCPService) firstServerKeyForNameLocked(name string) (string, bool) {
+	for _, key := range s.serverOrder {
+		if s.publishedServerNameLocked(key) != name {
+			continue
+		}
+		if _, ok := s.configs[key]; ok {
+			return key, true
+		}
+		if _, ok := s.disabledConfigs[key]; ok {
+			return key, true
+		}
+		if _, ok := s.servers[key]; ok {
+			return key, true
+		}
+	}
+	return "", false
+}
+
+// registerServerKeyLocked records one registration key in attribution order so
+// later name-only lookups keep selecting the first registration of a name.
+// The caller must hold s.mu.
+func (s *MCPService) registerServerKeyLocked(key, name string) {
+	if s.serverNames == nil {
+		s.serverNames = map[string]string{}
+	}
+	s.serverNames[key] = strings.TrimSpace(name)
+	for _, existing := range s.serverOrder {
+		if existing == key {
+			return
+		}
+	}
+	s.serverOrder = append(s.serverOrder, key)
+}
+
+func mcpEnvironmentIDFromSelector(selector *string) string {
+	if selector == nil || strings.TrimSpace(*selector) == "" {
+		return DefaultMCPServerEnvironmentID
+	}
+	return strings.TrimSpace(*selector)
+}
+
+// claimRegistrationKeyLocked returns the key one (name, environment) scope is
+// stored under, claiming the bare server name while it is still free so a
+// lone registration keeps its legacy identity (Rust #61257). The caller must
+// hold s.mu.
+func (s *MCPService) claimRegistrationKeyLocked(name, environmentID string) string {
+	name = strings.TrimSpace(name)
+	environmentID = strings.TrimSpace(environmentID)
+	if environmentID == "" {
+		environmentID = DefaultMCPServerEnvironmentID
+	}
+	for _, key := range s.serverOrder {
+		if s.publishedServerNameLocked(key) != name {
+			continue
+		}
+		config, ok := s.configs[key]
+		if !ok {
+			if config, ok = s.disabledConfigs[key]; !ok {
+				if status, statusOK := s.servers[key]; statusOK {
+					if mcpEnvironmentIDFromSelector(status.EnvironmentID) == environmentID {
+						return key
+					}
+				}
+				continue
+			}
+		}
+		if config.EffectiveEnvironmentID() == environmentID {
+			return key
+		}
+	}
+	if _, taken := s.serverNames[name]; !taken {
+		return name
+	}
+	scoped := ServerRegistrationKey(name, environmentID)
+	if scoped == name {
+		scoped = name + serverScopeKeySeparator + DefaultMCPServerEnvironmentID
+	}
+	return scoped
+}
+
+// serverKeyForEnvironmentLocked resolves a server reference with an optional
+// environment selector: an absent selector keeps the first registration, while
+// an explicit one has to name a registered scope (Rust #61257).
+func (s *MCPService) serverKeyForEnvironmentLocked(name string, environmentID *string) (string, bool) {
+	if environmentID == nil {
+		return s.serverKeyLocked(name)
+	}
+	requested := strings.TrimSpace(*environmentID)
+	if requested == "" {
+		return s.serverKeyLocked(name)
+	}
+	name = strings.TrimSpace(name)
+	for _, key := range s.serverOrder {
+		if s.publishedServerNameLocked(key) != name {
+			continue
+		}
+		config, ok := s.configs[key]
+		if !ok {
+			if config, ok = s.disabledConfigs[key]; !ok {
+				continue
+			}
+		}
+		if config.EffectiveEnvironmentID() == requested {
+			return key, true
+		}
+	}
+	return "", false
 }
 
 func preserveMCPServerInventory(next map[string]MCPServerStatus, previous map[string]MCPServerStatus, name string) {
@@ -1231,7 +1388,12 @@ func (s *MCPService) SetServer(status MCPServerStatus) {
 		return
 	}
 	status.Name = name
-	s.servers[name] = cloneMCPServerStatus(status)
+	key, ok := s.serverKeyForEnvironmentLocked(name, status.EnvironmentID)
+	if !ok {
+		key = s.claimRegistrationKeyLocked(name, mcpEnvironmentIDFromSelector(status.EnvironmentID))
+	}
+	s.registerServerKeyLocked(key, name)
+	s.servers[key] = cloneMCPServerStatus(status)
 	s.clearResourceCache()
 }
 
@@ -1252,15 +1414,20 @@ func (s *MCPService) SetServerConfig(name string, config *ServerConfig) {
 	if s.required == nil {
 		s.required = map[string]bool{}
 	}
-	oldHTTPClient := s.deleteHTTPClientLocked(name)
-	oldStdioClient := s.deleteStdioClientLocked(name)
-	oldOAuthLogin := s.deleteOAuthLoginLocked(name)
+	environmentID := DefaultMCPServerEnvironmentID
+	if config != nil {
+		environmentID = config.EffectiveEnvironmentID()
+	}
+	key := s.claimRegistrationKeyLocked(name, environmentID)
+	oldHTTPClient := s.deleteHTTPClientLocked(key)
+	oldStdioClient := s.deleteStdioClientLocked(key)
+	oldOAuthLogin := s.deleteOAuthLoginLocked(key)
 	if config == nil {
-		delete(s.configs, name)
-		delete(s.disabledConfigs, name)
-		delete(s.dynamicConfig, name)
-		delete(s.required, name)
-		delete(s.servers, name)
+		delete(s.configs, key)
+		delete(s.disabledConfigs, key)
+		delete(s.dynamicConfig, key)
+		delete(s.required, key)
+		delete(s.servers, key)
 		s.clearResourceCache()
 		s.mu.Unlock()
 		closeHTTPClients([]*httpClient{oldHTTPClient})
@@ -1269,18 +1436,19 @@ func (s *MCPService) SetServerConfig(name string, config *ServerConfig) {
 		return
 	}
 	if !config.Enabled {
-		delete(s.configs, name)
+		delete(s.configs, key)
 		if s.disabledConfigs == nil {
 			s.disabledConfigs = map[string]ServerConfig{}
 		}
-		s.disabledConfigs[name] = cloneServerConfig(config)
-		delete(s.dynamicConfig, name)
+		s.registerServerKeyLocked(key, name)
+		s.disabledConfigs[key] = cloneServerConfig(config)
+		delete(s.dynamicConfig, key)
 		if config.Required {
-			s.required[name] = true
+			s.required[key] = true
 		} else {
-			delete(s.required, name)
+			delete(s.required, key)
 		}
-		delete(s.servers, name)
+		delete(s.servers, key)
 		s.clearResourceCache()
 		s.mu.Unlock()
 		closeHTTPClients([]*httpClient{oldHTTPClient})
@@ -1288,7 +1456,7 @@ func (s *MCPService) SetServerConfig(name string, config *ServerConfig) {
 		cancelOAuthLogins([]*OAuthLoginServer{oldOAuthLogin})
 		return
 	}
-	delete(s.disabledConfigs, name)
+	delete(s.disabledConfigs, key)
 	cloned := cloneServerConfig(config)
 	if strings.TrimSpace(cloned.OAuthServerName) == "" {
 		cloned.OAuthServerName = name
@@ -1299,15 +1467,16 @@ func (s *MCPService) SetServerConfig(name string, config *ServerConfig) {
 	if s.servers == nil {
 		s.servers = map[string]MCPServerStatus{}
 	}
-	s.configs[name] = cloned
-	s.dynamicConfig[name] = true
+	s.registerServerKeyLocked(key, name)
+	s.configs[key] = cloned
+	s.dynamicConfig[key] = true
 	if cloned.Required {
-		s.required[name] = true
+		s.required[key] = true
 	} else {
-		delete(s.required, name)
+		delete(s.required, key)
 	}
 	info := MCPServerInfo{Name: name, Command: firstNonEmptyMCP(cloned.Command, cloned.URL), Args: append([]string(nil), cloned.Args...)}
-	s.servers[name] = MCPServerStatus{
+	s.servers[key] = MCPServerStatus{
 		Name:       name,
 		Server:     info,
 		ServerInfo: &info,
@@ -1331,10 +1500,11 @@ func (s *MCPService) ConfiguredToolOutputLimit(serverName, toolName string) *int
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	config, ok := s.configs[strings.TrimSpace(serverName)]
+	key, ok := s.serverKeyLocked(serverName)
 	if !ok {
 		return nil
 	}
+	config := s.configs[key]
 	toolConfig, ok := config.Tools[strings.TrimSpace(toolName)]
 	if !ok || toolConfig.OutputTokenLimit == nil || *toolConfig.OutputTokenLimit <= 0 {
 		return nil
@@ -1456,9 +1626,10 @@ func (s *MCPService) ConfiguredStatuses() []MCPServerStatus {
 	for name, config := range s.configs {
 		configs[name] = cloneServerConfig(&config)
 	}
-	for _, status := range s.servers {
+	for key, status := range s.servers {
 		cloned := cloneMCPServerStatus(status)
-		if config, ok := configs[cloned.effectiveName()]; ok {
+		cloned.key = key
+		if config, ok := configs[key]; ok {
 			cloned.EnvironmentID = mcpStatusEnvironmentID(&config)
 			cloned.AuthStatus = s.authStatusForConfig(cloned.effectiveName(), &config)
 			cloned.HTTPOrigin = mcpServerHTTPOrigin(&config)
@@ -1467,7 +1638,10 @@ func (s *MCPService) ConfiguredStatuses() []MCPServerStatus {
 	}
 	s.mu.Unlock()
 	sort.SliceStable(statuses, func(i int, j int) bool {
-		return statuses[i].effectiveName() < statuses[j].effectiveName()
+		if statuses[i].effectiveName() != statuses[j].effectiveName() {
+			return statuses[i].effectiveName() < statuses[j].effectiveName()
+		}
+		return statuses[i].key < statuses[j].key
 	})
 	return statuses
 }
@@ -1498,9 +1672,9 @@ func (s *MCPService) ValidateRequiredServers(threadID string) error {
 	}
 	s.mu.Lock()
 	required := make([]string, 0, len(s.required))
-	for name, enabled := range s.required {
+	for key, enabled := range s.required {
 		if enabled {
-			required = append(required, name)
+			required = append(required, key)
 		}
 	}
 	s.mu.Unlock()
@@ -1524,14 +1698,15 @@ func (s *MCPService) ValidateRequiredServers(threadID string) error {
 	s.mu.Lock()
 	failures := make([]string, 0, len(required))
 	for _, name := range required {
+		display := s.publishedServerNameLocked(name)
 		config, configOK := s.configs[name]
 		if !configOK || !config.Enabled {
-			failures = append(failures, fmt.Sprintf("%s: required MCP server `%s` was not initialized", name, name))
+			failures = append(failures, fmt.Sprintf("%s: required MCP server `%s` was not initialized", display, display))
 			continue
 		}
 		status, statusOK := s.servers[name]
 		if !statusOK {
-			failures = append(failures, fmt.Sprintf("%s: required MCP server `%s` was not initialized", name, name))
+			failures = append(failures, fmt.Sprintf("%s: required MCP server `%s` was not initialized", display, display))
 			continue
 		}
 		switch status.State {
@@ -1543,7 +1718,7 @@ func (s *MCPService) ValidateRequiredServers(threadID string) error {
 			if reason == "" {
 				reason = string(status.State)
 			}
-			failures = append(failures, fmt.Sprintf("%s: %s", name, reason))
+			failures = append(failures, fmt.Sprintf("%s: %s", display, reason))
 		}
 	}
 	s.mu.Unlock()
@@ -1641,11 +1816,16 @@ func (s *MCPService) WaitForServerStartup(ctx context.Context, name string, thre
 		return nil
 	}
 	s.mu.Lock()
-	config, ok := s.configs[name]
-	status := cloneMCPServerStatus(s.servers[name])
-	starting := s.starting[name] > 0
+	key, ok := s.serverKeyLocked(name)
+	if !ok {
+		s.mu.Unlock()
+		return nil
+	}
+	config := s.configs[key]
+	status := cloneMCPServerStatus(s.servers[key])
+	starting := s.starting[key] > 0
 	s.mu.Unlock()
-	if !ok || !config.Enabled {
+	if !config.Enabled {
 		return nil
 	}
 	if !starting && (status.State == "" || status.State == MCPServerReady) {
@@ -1653,7 +1833,7 @@ func (s *MCPService) WaitForServerStartup(ctx context.Context, name string, thre
 	}
 	done := make(chan mcpInventoryStatusResult, 1)
 	go func() {
-		done <- s.inventoryStatusForConfig(0, name, &config, status, false, strings.TrimSpace(threadID))
+		done <- s.inventoryStatusForConfig(0, key, &config, status, false, strings.TrimSpace(threadID))
 	}()
 	if ctx == nil {
 		ctx = context.Background()
@@ -1696,15 +1876,16 @@ func (s *MCPService) ListStatusCheckedWithObserver(params *MCPListServerStatusPa
 	for name, dynamic := range s.dynamicConfig {
 		dynamicConfigs[name] = dynamic
 	}
-	for _, status := range s.servers {
+	appendStatus := func(key string, status MCPServerStatus) {
 		cloned := cloneMCPServerStatus(status)
+		cloned.key = key
 		// The catalog source is per call: the stored status keeps the source its catalog
 		// was last obtained with, but only a read that touches the catalog this time
 		// reports one (Rust #51215 emits the record where the catalog is materialized,
 		// not on every later status read), so a read that materializes nothing records
 		// no source and no event.
 		cloned.catalogSource = ""
-		if config, ok := configs[cloned.effectiveName()]; ok {
+		if config, ok := configs[key]; ok {
 			cloned.EnvironmentID = mcpStatusEnvironmentID(&config)
 			cloned.AuthStatus = s.authStatusForConfig(cloned.effectiveName(), &config)
 			cloned.HTTPOrigin = mcpServerHTTPOrigin(&config)
@@ -1717,9 +1898,27 @@ func (s *MCPService) ListStatusCheckedWithObserver(params *MCPListServerStatusPa
 			cloned.ResourceTemplates = nil
 		}
 		if threadID != "" {
-			cloned.RuntimeStatus = s.runtimeConnectionStatus(cloned.effectiveName(), s.starting[cloned.effectiveName()] > 0)
+			cloned.RuntimeStatus = s.runtimeConnectionStatus(key, s.starting[key] > 0)
 		}
 		servers = append(servers, cloned)
+	}
+	// Attribution order decides which same-named registration a name-only
+	// lookup selects (Rust #61257), so list in that order and append any status
+	// registered outside the runtime projection afterwards.
+	seen := make(map[string]bool, len(s.servers))
+	for _, key := range s.serverOrder {
+		status, ok := s.servers[key]
+		if !ok {
+			continue
+		}
+		seen[key] = true
+		appendStatus(key, status)
+	}
+	for key, status := range s.servers {
+		if seen[key] {
+			continue
+		}
+		appendStatus(key, status)
 	}
 	s.mu.Unlock()
 	// Rust #48783: an unknown server name yields an empty page, and a known one
@@ -1729,6 +1928,11 @@ func (s *MCPService) ListStatusCheckedWithObserver(params *MCPListServerStatusPa
 		for _, status := range servers {
 			if status.effectiveName() == selected {
 				filtered = append(filtered, status)
+				// Rust #61257 keeps the legacy first-registration lookup when
+				// the caller omits the environment selector.
+				if params == nil || params.EnvironmentID == nil || strings.TrimSpace(*params.EnvironmentID) == "" {
+					break
+				}
 			}
 		}
 		servers = filtered
@@ -1739,7 +1943,7 @@ func (s *MCPService) ListStatusCheckedWithObserver(params *MCPListServerStatusPa
 		requested := strings.TrimSpace(*params.EnvironmentID)
 		filtered := make([]MCPServerStatus, 0, len(servers))
 		for _, status := range servers {
-			config, ok := configs[status.effectiveName()]
+			config, ok := configs[status.key]
 			if ok && strings.TrimSpace(config.EffectiveEnvironmentID()) == requested {
 				filtered = append(filtered, status)
 			}
@@ -1842,11 +2046,15 @@ func (s *MCPService) cachedToolListRevision(name string) uint64 {
 	name = strings.TrimSpace(name)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	key, ok := s.serverKeyLocked(name)
+	if !ok {
+		key = name
+	}
 	var revision uint64
-	if cached := s.httpClients[name]; cached != nil && cached.client != nil {
+	if cached := s.httpClients[key]; cached != nil && cached.client != nil {
 		revision = cached.client.toolsListRevision()
 	}
-	if cached := s.stdioClients[name]; cached != nil && cached.client != nil {
+	if cached := s.stdioClients[key]; cached != nil && cached.client != nil {
 		if stdioRevision := cached.client.toolsListRevision(); stdioRevision > revision {
 			revision = stdioRevision
 		}
@@ -2006,15 +2214,16 @@ func (s *MCPService) populateStatusInventories(params *MCPListServerStatusParams
 	// unrelated servers are neither started nor connected.
 	selectedServer := mcpServerNameFilter(params)
 	for i := range servers {
+		key := servers[i].key
 		name := servers[i].effectiveName()
 		if selectedServer != "" && name != selectedServer {
 			continue
 		}
-		config, ok := configs[name]
+		config, ok := configs[key]
 		if !ok {
 			continue
 		}
-		if dynamicConfigs[name] && (params == nil || params.Detail == nil) {
+		if dynamicConfigs[key] && (params == nil || params.Detail == nil) {
 			notifyMCPStartupObserver(observer, name, servers[i].State, servers[i].FailureReason, nil)
 			continue
 		}
@@ -2075,14 +2284,14 @@ func (s *MCPService) populateStatusInventories(params *MCPListServerStatusParams
 			}
 		}
 		notifyMCPStartupObserver(observer, name, MCPServerStarting, nil, nil)
-		pending[i] = name
+		pending[i] = key
 		if config.Required || required[name] || selectedPluginRequired || (IsCodexAppsMCPServerName(name) && len(servers[i].Tools) == 0) {
 			requiredIndexes[i] = true
 		}
-		s.markServerStartupStarted(name)
+		s.markServerStartupStarted(key)
 		go func(index int, serverName string, serverConfig ServerConfig, status MCPServerStatus) {
 			resultCh <- s.inventoryStatusForConfig(index, serverName, &serverConfig, status, detail.includesInventory(), threadID)
-		}(i, name, config, cloneMCPServerStatus(servers[i]))
+		}(i, key, config, cloneMCPServerStatus(servers[i]))
 	}
 	applyResult := func(result mcpInventoryStatusResult) {
 		if _, ok := pending[result.Index]; !ok {
@@ -2240,7 +2449,8 @@ func (s *MCPService) inventoryStatusForConfig(index int, name string, config *Se
 	if err != nil && status.AuthStatus == MCPAuthOAuth && mcpErrAuthenticationRequired(err) {
 		status.AuthStatus = MCPAuthNotLoggedIn
 	}
-	s.recordInventoryStatus(status.effectiveName(), status, true, includeInventory)
+	status.key = strings.TrimSpace(name)
+	s.recordInventoryStatus(status.key, status, true, includeInventory)
 	return mcpInventoryStatusResult{Index: index, Status: status, Err: err}
 }
 
@@ -2321,12 +2531,17 @@ func (s *MCPService) recordInventoryStatus(name string, status MCPServerStatus, 
 		return
 	}
 	s.mu.Lock()
-	current, ok := s.servers[name]
+	key := strings.TrimSpace(name)
+	if status.key != "" {
+		key = status.key
+	}
+	current, ok := s.servers[key]
 	if !ok {
 		s.mu.Unlock()
 		return
 	}
 	previousState := current.State
+	current.key = key
 	current.State = status.State
 	current.Error = cloneStringPtr(status.Error)
 	current.AuthStatus = status.AuthStatus
@@ -2344,21 +2559,21 @@ func (s *MCPService) recordInventoryStatus(name string, status MCPServerStatus, 
 		current.Resources = append([]MCPResource(nil), status.Resources...)
 		current.ResourceTemplates = append([]MCPResourceTemplate(nil), status.ResourceTemplates...)
 	}
-	s.servers[name] = cloneMCPServerStatus(current)
-	if s.starting[name] <= 1 {
-		delete(s.starting, name)
+	s.servers[key] = cloneMCPServerStatus(current)
+	if s.starting[key] <= 1 {
+		delete(s.starting, key)
 	} else {
-		s.starting[name]--
+		s.starting[key]--
 	}
-	config := s.configs[name]
+	config := s.configs[key]
 	s.mu.Unlock()
 	if status.State != previousState {
-		s.notifyStartupStatus(name, status.State, status.FailureReason, nil)
+		s.notifyStartupStatus(key, status.State, status.FailureReason, nil)
 	}
 	if status.State == MCPServerReady {
-		oauthResolved := s.authStatusForConfig(name, &config) == MCPAuthOAuth
-		if key, eligible := mcpToolCatalogGraceKeyWithFeatures(name, &config, s.openAIForm, s.openAIForm && status.hostOwnedApps, status.PluginID != nil, oauthResolved); eligible {
-			clearSharedOptionalStartupDeadlineForKey(key)
+		oauthResolved := s.authStatusForConfig(displayMCPServerName(key), &config) == MCPAuthOAuth
+		if graceKey, eligible := mcpToolCatalogGraceKeyWithFeatures(key, &config, s.openAIForm, s.openAIForm && status.hostOwnedApps, status.PluginID != nil, oauthResolved); eligible {
+			clearSharedOptionalStartupDeadlineForKey(graceKey)
 		}
 	}
 }
@@ -2422,7 +2637,7 @@ func (s *MCPService) notifyStartupStatus(name string, status MCPServerStartupSta
 		environmentID = config.EffectiveEnvironmentID()
 	}
 	for _, listener := range listeners {
-		listener(name, environmentID, status, cloneStringPtr(failureReason), err)
+		listener(displayMCPServerName(name), environmentID, status, cloneStringPtr(failureReason), err)
 	}
 }
 
@@ -2559,6 +2774,12 @@ func (s *MCPService) OauthLogin(params *MCPServerOauthLoginParams) (*MCPServerOa
 	if err != nil {
 		return nil, err
 	}
+	loginKey := name
+	var scopedConfig ServerConfig
+	scopedOK := false
+	if key, config, ok := s.serverConfigForScope(name, params.EnvironmentID); ok {
+		loginKey, scopedConfig, scopedOK = key, config, true
+	}
 	// Rust #56266: a requirements denial also blocks the standalone login HTTP
 	// client (including its headers helper), so report it instead of minting an
 	// unusable authorization URL.
@@ -2575,7 +2796,8 @@ func (s *MCPService) OauthLogin(params *MCPServerOauthLoginParams) (*MCPServerOa
 	// notification, so a client can match the two.
 	loginID := NewMCPOAuthLoginID()
 	url := "http://localhost/oauth/" + name
-	if config, ok := s.serverConfig(name); ok && strings.TrimSpace(config.URL) != "" {
+	if scopedOK && strings.TrimSpace(scopedConfig.URL) != "" {
+		config := scopedConfig
 		if config.EffectiveAuth() == ServerAuthEMAAuth {
 			// Enterprise MCP authorization is managed by Codex account
 			// enterprise sign-in (Rust #55334); ordinary MCP OAuth login is
@@ -2585,7 +2807,7 @@ func (s *MCPService) OauthLogin(params *MCPServerOauthLoginParams) (*MCPServerOa
 		if config.EffectiveAuth() == ServerAuthChatGPT && !config.IsLocalEnvironment() {
 			return nil, invalidMCPRequest("OAuth login is not supported for executor-owned ChatGPT MCP servers")
 		}
-		if loginURL, ok, loginErr := s.startOAuthLoginServer(name, &config, params, loginID); loginErr != nil {
+		if loginURL, ok, loginErr := s.startOAuthLoginServer(loginKey, name, &config, params, loginID); loginErr != nil {
 			// Rust surfaces a refused authorization server out of
 			// `perform_oauth_login`; never hide it behind a guessed URL.
 			return nil, loginErr
@@ -2596,7 +2818,7 @@ func (s *MCPService) OauthLogin(params *MCPServerOauthLoginParams) (*MCPServerOa
 			// non-registered authorize URL when the server cannot register.
 			return nil, invalidMCPRequest("MCP OAuth login requires dynamic client registration (clientRegistration=dcr), but the server does not advertise a registration endpoint")
 		} else {
-			client := s.httpClientForServer(name, &config).oauthHTTPClient(mcpOAuthLoginDiscoveryTimeout(params.TimeoutSecs))
+			client := s.httpClientForServer(loginKey, &config).oauthHTTPClient(mcpOAuthLoginDiscoveryTimeout(params.TimeoutSecs))
 			fallbackURL, fallbackErr := buildMCPOAuthURLForLogin(&config, params.Scopes, params.TimeoutSecs, client)
 			if fallbackErr != nil {
 				return nil, fallbackErr
@@ -2629,9 +2851,13 @@ func (s *MCPService) OauthCancel(params *MCPServerOauthCancelParams) (*MCPServer
 	var login *OAuthLoginServer
 	if s != nil {
 		s.mu.Lock()
+		key := name
+		if resolved, ok := s.serverKeyLocked(name); ok {
+			key = resolved
+		}
 		if s.oauthLogins != nil {
-			login = s.oauthLogins[name]
-			delete(s.oauthLogins, name)
+			login = s.oauthLogins[key]
+			delete(s.oauthLogins, key)
 		}
 		s.mu.Unlock()
 	}
@@ -2645,7 +2871,7 @@ func (s *MCPService) OauthCancel(params *MCPServerOauthCancelParams) (*MCPServer
 	return &MCPServerOauthCancelResponse{}, nil
 }
 
-func (s *MCPService) startOAuthLoginServer(name string, config *ServerConfig, params *MCPServerOauthLoginParams, loginID string) (string, bool, error) {
+func (s *MCPService) startOAuthLoginServer(loginKey, name string, config *ServerConfig, params *MCPServerOauthLoginParams, loginID string) (string, bool, error) {
 	if s == nil || config == nil || params == nil || strings.TrimSpace(config.URL) == "" {
 		return "", false, nil
 	}
@@ -2658,7 +2884,7 @@ func (s *MCPService) startOAuthLoginServer(name string, config *ServerConfig, pa
 		return "", false, nil
 	}
 	callbackTimeout := mcpOAuthLoginTimeout(params.TimeoutSecs)
-	client := s.httpClientForServer(name, config).oauthHTTPClient(0)
+	client := s.httpClientForServer(loginKey, config).oauthHTTPClient(0)
 	ctx := context.Background()
 	discovery, err := DiscoverStreamableHTTPOAuth(ctx, config.URL, client)
 	if mcpOAuthIssuerBindingRejected(err) {
@@ -2703,7 +2929,7 @@ func (s *MCPService) startOAuthLoginServer(name string, config *ServerConfig, pa
 	if params.ThreadID != nil {
 		threadID = strings.TrimSpace(*params.ThreadID)
 	}
-	s.trackOAuthLogin(name, threadID, loginID, login)
+	s.trackOAuthLogin(loginKey, threadID, loginID, login)
 	return login.AuthorizationURL, true, nil
 }
 
@@ -2765,7 +2991,7 @@ func (s *MCPService) trackOAuthLogin(name string, threadID string, loginID strin
 
 func (s *MCPService) notifyOAuthLoginCompleted(name string, threadID string, loginID string, result *OAuthLoginServerResult) {
 	completion := &MCPOAuthLoginCompletion{
-		Name:     name,
+		Name:     displayMCPServerName(name),
 		ThreadID: threadID,
 		// Rust #49276: the completion carries the id minted when the login
 		// started, so it matches OauthLogin's response for the same attempt.
@@ -2848,10 +3074,12 @@ func (s *MCPService) ReadResource(params *MCPResourceReadParams) (*MCPResourceRe
 	if server == "" || uri == "" {
 		return nil, invalidMCPRequest("server and uri are required")
 	}
-	if config, ok := s.serverConfig(server); ok {
-		if err := mcpEnvironmentSelectorError(config.EffectiveEnvironmentID(), params.EnvironmentID); err != nil {
-			return nil, err
-		}
+	serverKey := server
+	key, config, configOK := s.serverConfigForScope(server, params.EnvironmentID)
+	if configOK {
+		serverKey = key
+	} else if err := mcpEnvironmentSelectorRegistrationError(server, params.EnvironmentID); err != nil {
+		return nil, err
 	}
 	if err := validateMCPResourceOrigin(params); err != nil {
 		return nil, err
@@ -2868,7 +3096,7 @@ func (s *MCPService) ReadResource(params *MCPResourceReadParams) (*MCPResourceRe
 	threadID := threadIDFromResourceReadParams(params)
 	roots := s.rootsForThread(threadID)
 	cacheKey := &MCPResourceCacheKey{
-		Server:   server,
+		Server:   serverKey,
 		URI:      uri,
 		ThreadID: threadID,
 		RootsKey: mcpRootsCacheKey(roots),
@@ -2894,12 +3122,12 @@ func (s *MCPService) ReadResource(params *MCPResourceReadParams) (*MCPResourceRe
 			response.OriginCallID = strings.TrimSpace(params.OriginCallID)
 		}
 	}
-	if config, ok := s.serverConfig(server); ok {
+	if configOK {
 		if strings.TrimSpace(config.URL) != "" {
 			if err := ValidateServerAuth(server, &config); err != nil {
 				return nil, err
 			}
-			response, err = readMCPHTTPResourceWithClient(nil, s.httpClientForServer(server, &config), server, roots, s.elicitationHandlerForServer(server), s.progressHandler(), &request)
+			response, err = readMCPHTTPResourceWithClient(nil, s.httpClientForServer(serverKey, &config), server, roots, s.elicitationHandlerForServer(server), s.progressHandler(), &request)
 			if err != nil {
 				return nil, err
 			}
@@ -2910,7 +3138,7 @@ func (s *MCPService) ReadResource(params *MCPResourceReadParams) (*MCPResourceRe
 			return response, nil
 		}
 		if strings.TrimSpace(config.Command) != "" {
-			response, err = readMCPStdioResourceWithLease(s.stdioClientForServer(server, &config), s.stdioConnectionLease(server), server, roots, s.elicitationHandlerForServer(server), s.progressHandler(), &request)
+			response, err = readMCPStdioResourceWithLease(s.stdioClientForServer(serverKey, &config), s.stdioConnectionLease(serverKey), server, roots, s.elicitationHandlerForServer(server), s.progressHandler(), &request)
 			if err != nil {
 				return nil, err
 			}
@@ -3042,10 +3270,9 @@ func (s *MCPService) CallTool(params *MCPToolCallParams) (*MCPToolCallResponse, 
 	var stdioTarget *stdioClient
 	var serverConfigValue *ServerConfig
 	serverEnvironmentID := ""
-	if config, ok := s.serverConfig(server); ok {
-		if err := mcpEnvironmentSelectorError(config.EffectiveEnvironmentID(), params.EnvironmentID); err != nil {
-			return nil, err
-		}
+	serverKey := server
+	if key, config, ok := s.serverConfigForScope(server, params.EnvironmentID); ok {
+		serverKey = key
 		configCopy := config
 		serverConfigValue = &configCopy
 		serverEnvironmentID = config.EffectiveEnvironmentID()
@@ -3053,10 +3280,12 @@ func (s *MCPService) CallTool(params *MCPToolCallParams) (*MCPToolCallResponse, 
 			if err := ValidateServerAuth(server, &config); err != nil {
 				return nil, err
 			}
-			httpTarget = s.httpClientForServer(server, &config)
+			httpTarget = s.httpClientForServer(serverKey, &config)
 		} else if strings.TrimSpace(config.Command) != "" {
-			stdioTarget = s.stdioClientForServer(server, &config)
+			stdioTarget = s.stdioClientForServer(serverKey, &config)
 		}
+	} else if err := mcpEnvironmentSelectorRegistrationError(server, params.EnvironmentID); err != nil {
+		return nil, err
 	}
 	effective, meta := s.prepareToolCallSandboxState(server, serverEnvironmentID, stdioTarget != nil, params, httpTarget.sandboxStateMetaNegotiated(), stdioTarget.sandboxStateMetaNegotiated())
 	// The read-only marker belongs to the resolved metadata, so it survives a
@@ -3324,10 +3553,14 @@ func (s *MCPService) serverConfigIncludingDisabled(name string) (ServerConfig, b
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	name = strings.TrimSpace(name)
-	if config, ok := s.configs[name]; ok {
+	key, keyOK := s.serverKeyLocked(name)
+	if !keyOK {
+		key = name
+	}
+	if config, ok := s.configs[key]; ok {
 		return cloneServerConfig(&config), true
 	}
-	if config, ok := s.disabledConfigs[name]; ok {
+	if config, ok := s.disabledConfigs[key]; ok {
 		return cloneServerConfig(&config), true
 	}
 	return ServerConfig{}, false
@@ -3339,11 +3572,33 @@ func (s *MCPService) serverConfig(name string) (ServerConfig, bool) {
 	if s.configs == nil {
 		return ServerConfig{}, false
 	}
-	config, ok := s.configs[name]
-	if !ok || !config.Enabled {
+	key, ok := s.serverKeyLocked(name)
+	if !ok {
+		return ServerConfig{}, false
+	}
+	config := s.configs[key]
+	if !config.Enabled {
 		return ServerConfig{}, false
 	}
 	return cloneServerConfig(&config), true
+}
+
+// serverConfigForScope resolves one (name, optional environment) reference to
+// the registration key and its enabled config. Rust #61257 routes an explicit
+// environment selector to that exact registration while an omitted selector
+// keeps the legacy first-registration lookup.
+func (s *MCPService) serverConfigForScope(name string, environmentID *string) (string, ServerConfig, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key, ok := s.serverKeyForEnvironmentLocked(name, environmentID)
+	if !ok {
+		return "", ServerConfig{}, false
+	}
+	config, ok := s.configs[key]
+	if !ok || !config.Enabled {
+		return "", ServerConfig{}, false
+	}
+	return key, cloneServerConfig(&config), true
 }
 
 // ServerConfigForServer returns the effective runtime configuration for an
@@ -3363,11 +3618,15 @@ func (s *MCPService) ResolvedServerForServer(name string) (ResolvedServer, bool)
 	name = strings.TrimSpace(name)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	config, ok := s.configs[name]
-	if !ok || !config.Enabled {
+	key, ok := s.serverKeyLocked(name)
+	if !ok {
 		return ResolvedServer{}, false
 	}
-	status, ok := s.servers[name]
+	config := s.configs[key]
+	if !config.Enabled {
+		return ResolvedServer{}, false
+	}
+	status, ok := s.servers[key]
 	if !ok {
 		return ResolvedServer{}, false
 	}
@@ -3424,6 +3683,17 @@ func mcpEnvironmentSelectorError(registered string, selector *string) error {
 		return invalidMCPRequest("mcp server is not registered in environment " + requested)
 	}
 	return nil
+}
+
+// mcpEnvironmentSelectorRegistrationError reports an explicit environment
+// selector that matches no registration of the requested server. Rust #61257
+// answers such a call with "unknown MCP server"; an omitted selector keeps the
+// legacy name-only path and therefore never fails here.
+func mcpEnvironmentSelectorRegistrationError(server string, selector *string) error {
+	if selector == nil || strings.TrimSpace(*selector) == "" {
+		return nil
+	}
+	return invalidMCPRequest("unknown MCP server `" + strings.TrimSpace(server) + "` in environment `" + strings.TrimSpace(*selector) + "`")
 }
 
 func (s *MCPService) listInventoryForConfig(name string, config *ServerConfig, threadID string, skipResourceTemplates bool) (*stdioInventory, error) {
@@ -3816,7 +4086,11 @@ func (s *MCPService) serverAllowsUserVerification(serverName string) bool {
 }
 
 func (s *MCPService) serverAllowsUserVerificationLocked(serverName string) bool {
-	return mcpServerAllowsUserVerification(s.servers, serverName, s.userVerification)
+	key, ok := s.serverKeyLocked(serverName)
+	if !ok {
+		key = strings.TrimSpace(serverName)
+	}
+	return mcpServerAllowsUserVerification(s.servers, key, s.userVerification)
 }
 
 func mcpServerAllowsUserVerification(servers map[string]MCPServerStatus, serverName string, userVerification bool) bool {
@@ -3873,14 +4147,15 @@ func (s *MCPService) oauthLoginCompletionHandler() MCPOAuthLoginCompletionHandle
 func (s *MCPService) requiredServerAvailable(name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.required == nil || !s.required[name] {
+	key, keyOK := s.serverKeyLocked(name)
+	if !keyOK || s.required == nil || !s.required[key] {
 		return nil
 	}
-	config, configOK := s.configs[name]
+	config, configOK := s.configs[key]
 	if !configOK || !config.Enabled {
 		return invalidMCPRequest(fmt.Sprintf("required MCP server %q is not enabled", name))
 	}
-	status, statusOK := s.servers[name]
+	status, statusOK := s.servers[key]
 	if !statusOK {
 		return invalidMCPRequest(fmt.Sprintf("required MCP server %q is missing", name))
 	}

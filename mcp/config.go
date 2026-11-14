@@ -608,10 +608,33 @@ func NewManager(baseServers map[string]ServerRegistration) *Manager {
 }
 
 func (m *Manager) RuntimeConfig(base RuntimeConfig, overlays []ConfigOverlay) *RuntimeConfig {
-	servers := cloneRegistrations(m.baseServers)
-	for name, registration := range base.Servers {
-		registration.Name = name
-		servers[name] = cloneRegistration(&registration)
+	// MCP inventory is keyed by registration scope (Rust #61257), so a server
+	// registered under one name in two environments keeps two entries. A local
+	// registration keeps its bare name and therefore its legacy identity.
+	servers := make(map[string]ServerRegistration, len(m.baseServers)+len(base.Servers))
+	register := func(key string, registration ServerRegistration) {
+		name, keyEnvironmentID := SplitServerRegistrationKey(key)
+		if trimmed := strings.TrimSpace(registration.Name); trimmed != "" {
+			name = trimmed
+		} else {
+			registration.Name = name
+		}
+		environmentID := keyEnvironmentID
+		if configured := strings.TrimSpace(registration.Config.EnvironmentID); configured != "" && configured != DefaultMCPServerEnvironmentID {
+			environmentID = configured
+		}
+		if environmentID == DefaultMCPServerEnvironmentID {
+			registration.Config.EnvironmentID = ""
+		} else {
+			registration.Config.EnvironmentID = environmentID
+		}
+		servers[ServerRegistrationKey(name, environmentID)] = cloneRegistration(&registration)
+	}
+	for key, registration := range m.baseServers {
+		register(key, registration)
+	}
+	for key, registration := range base.Servers {
+		register(key, registration)
 	}
 	// Rust #56266: an explicit disable must survive runtime overlays, which only
 	// replace a registration's transport and source. A requirements denial also
@@ -650,14 +673,15 @@ func (m *Manager) RuntimeConfig(base RuntimeConfig, overlays []ConfigOverlay) *R
 		if source == "" {
 			source = CatalogSourceExtension
 		}
-		if current, ok := servers[overlay.Name]; ok && CatalogSourcePriority(SourceFromRegistration(&current)) > CatalogSourcePriority(source) {
+		key := ServerRegistrationKey(overlay.Name, overlay.Config.EffectiveEnvironmentID())
+		if current, ok := servers[key]; ok && CatalogSourcePriority(SourceFromRegistration(&current)) > CatalogSourcePriority(source) {
 			continue
 		}
 		if overlay.Remove {
-			delete(servers, overlay.Name)
+			delete(servers, key)
 			continue
 		}
-		servers[overlay.Name] = ServerRegistration{
+		servers[key] = ServerRegistration{
 			Name:              overlay.Name,
 			Config:            cloneServerConfig(&overlay.Config),
 			Source:            string(source),
@@ -680,14 +704,14 @@ func (m *Manager) RuntimeConfig(base RuntimeConfig, overlays []ConfigOverlay) *R
 	}
 	for name := range requirementsDisabled {
 		registration, ok := servers[name]
-		if !ok || isHostOwnedCodexAppsRegistration(name, registration) {
+		if !ok || isHostOwnedCodexAppsRegistration(registration.Name, registration) {
 			continue
 		}
 		disableMCPRegistrationByRequirements(&registration)
 		servers[name] = registration
 	}
 	out := base
-	out.Servers = servers
+	out.Servers = ScopedServerKeys(servers)
 	out.Requirements = managedconfig.CloneConfigRequirements(base.Requirements)
 	normalizeMCPServerChatGPTAuth(out.Servers, out.ChatGPTBaseURL)
 	applyManagedMCPRequirements(out.Servers, out.Requirements)
@@ -768,7 +792,11 @@ func applyManagedMCPRequirements(servers map[string]ServerRegistration, requirem
 		}
 	}
 	emptyGlobalAllowlist := requirements.MCPServers != nil && len(requirements.MCPServers) == 0
-	for name, registration := range servers {
+	for key, registration := range servers {
+		name := registration.Name
+		if name == "" {
+			name, _ = SplitServerRegistrationKey(key)
+		}
 		source := SourceFromRegistration(&registration)
 		switch source {
 		case CatalogSourcePlugin, CatalogSourceSelectedPlugin:
@@ -794,7 +822,7 @@ func applyManagedMCPRequirements(servers map[string]ServerRegistration, requirem
 				}
 			}
 		}
-		servers[name] = registration
+		servers[key] = registration
 	}
 }
 

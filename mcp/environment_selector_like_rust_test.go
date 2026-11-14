@@ -42,10 +42,10 @@ func TestMCPEnvironmentSelectorRejectsUnknownScopeLikeRust(t *testing.T) {
 	service := environmentSelectorFixture()
 	envA, envB := "env-a", "env-b"
 
-	if _, err := service.CallTool(&MCPToolCallParams{Server: "docs", Tool: "search", EnvironmentID: &envB}); err == nil || !strings.Contains(err.Error(), "not registered in environment env-b") {
+	if _, err := service.CallTool(&MCPToolCallParams{Server: "docs", Tool: "search", EnvironmentID: &envB}); err == nil || !strings.Contains(err.Error(), "unknown MCP server") {
 		t.Fatalf("CallTool(env-b) error = %v", err)
 	}
-	if _, err := service.ReadResource(&MCPResourceReadParams{Server: "docs", URI: "docs://page", EnvironmentID: &envB}); err == nil || !strings.Contains(err.Error(), "not registered in environment env-b") {
+	if _, err := service.ReadResource(&MCPResourceReadParams{Server: "docs", URI: "docs://page", EnvironmentID: &envB}); err == nil || !strings.Contains(err.Error(), "unknown MCP server") {
 		t.Fatalf("ReadResource(env-b) error = %v", err)
 	}
 	if _, err := service.OauthLogin(&MCPServerOauthLoginParams{Name: "docs", EnvironmentID: &envB}); err == nil || !strings.Contains(err.Error(), "not registered in environment env-b") {
@@ -54,7 +54,7 @@ func TestMCPEnvironmentSelectorRejectsUnknownScopeLikeRust(t *testing.T) {
 
 	// The matching selector reaches the transport layer instead of being
 	// rejected by the scope check.
-	if _, err := service.CallTool(&MCPToolCallParams{Server: "docs", Tool: "search", EnvironmentID: &envA}); err != nil && strings.Contains(err.Error(), "not registered in environment") {
+	if _, err := service.CallTool(&MCPToolCallParams{Server: "docs", Tool: "search", EnvironmentID: &envA}); err != nil && strings.Contains(err.Error(), "unknown MCP server") {
 		t.Fatalf("CallTool(env-a) rejected the matching scope: %v", err)
 	}
 }
@@ -62,7 +62,7 @@ func TestMCPEnvironmentSelectorRejectsUnknownScopeLikeRust(t *testing.T) {
 func TestMCPEnvironmentSelectorIgnoresEmptyValueLikeRust(t *testing.T) {
 	service := environmentSelectorFixture()
 	empty := "  "
-	if _, err := service.CallTool(&MCPToolCallParams{Server: "docs", Tool: "search", EnvironmentID: &empty}); err != nil && strings.Contains(err.Error(), "not registered in environment") {
+	if _, err := service.CallTool(&MCPToolCallParams{Server: "docs", Tool: "search", EnvironmentID: &empty}); err != nil && strings.Contains(err.Error(), "unknown MCP server") {
 		t.Fatalf("empty selector rejected: %v", err)
 	}
 }
