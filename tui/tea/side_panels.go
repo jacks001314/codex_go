@@ -167,27 +167,13 @@ func (m *Model) renderSideWorkspace(width int, height int) (string, bool) {
 	sideCache := &transcriptMessageCache{}
 	left := ""
 	right := ""
-	if m.sidebarChooserVisible() {
+	chooser := m.sidebarChooserVisible()
+	if chooser {
 		// The chooser belongs to the parent conversation, so the live
 		// transcript stays on the left while the list paints on the right
 		// (Rust #59739).
 		left = m.renderSidePaneTranscript(parentCache, m.sidebarParentThreadID(), m.State.Messages, leftWidth, m.paneStatusForThread(m.sidebarParentThreadID()), paneStatusRowBudget(height))
 		right = m.renderSidebarChooser(rightWidth, height)
-	} else {
-		parentMessages := side.ParentMessages
-		sideMessages := side.SideMessages
-		// The focused snapshot is the live transcript; the inactive copy is the
-		// retained one captured when focus last changed.
-		if sideFocused {
-			sideMessages = m.State.Messages
-		} else {
-			parentMessages = m.State.Messages
-		}
-		budget := paneStatusRowBudget(height)
-		left = m.renderSidePaneTranscript(parentCache, side.ParentThreadID, parentMessages, leftWidth, m.paneStatusWhenUnfocused(sideFocused, side.ParentThreadID), budget)
-		right = m.renderSidePaneTranscript(sideCache, side.SideThreadID, sideMessages, rightWidth, m.paneStatusWhenUnfocused(!sideFocused, side.SideThreadID), budget)
-		// Rust #59784 paints the sibling tabs above the side transcript.
-		right = m.renderSidebarTabStrip(rightWidth) + "\n" + right
 	}
 	// Rust #59928 paints the strip on the pane's first row; record which screen
 	// row that is so the pointer hit test follows the painted origin. An inset
@@ -213,7 +199,34 @@ func (m *Model) renderSideWorkspace(width int, height int) (string, bool) {
 	} else {
 		parentFirst = m.transcript.YOffset
 	}
-	rendered, parentFirst, sideFirst, parentMax, sideMax := joinSidePanes(left, right, leftWidth, height, parentFirst, sideFirst)
+	rendered := ""
+	parentMax, sideMax := 0, 0
+	if chooser {
+		rendered, parentFirst, sideFirst, parentMax, sideMax = joinSidePanes(left, right, leftWidth, height, parentFirst, sideFirst)
+	} else {
+		parentMessages := side.ParentMessages
+		sideMessages := side.SideMessages
+		// The focused snapshot is the live transcript; the inactive copy is the
+		// retained one captured when focus last changed.
+		if sideFocused {
+			sideMessages = m.State.Messages
+		} else {
+			parentMessages = m.State.Messages
+		}
+		parentDraft, sideDraft := m.sidePaneDraftPreviews(sideFocused)
+		leftLines, leftFirst, leftMax := m.composeSidePane(side.ParentThreadID,
+			m.renderSidePaneContent(parentCache, side.ParentThreadID, parentMessages, leftWidth),
+			m.paneStatusWhenUnfocused(sideFocused, side.ParentThreadID), parentDraft, leftWidth, height, parentFirst)
+		rightLines, rightFirst, rightMax := m.composeSidePane(side.SideThreadID,
+			m.renderSidePaneContent(sideCache, side.SideThreadID, sideMessages, rightWidth),
+			m.paneStatusWhenUnfocused(!sideFocused, side.SideThreadID), sideDraft, rightWidth, height, sideFirst)
+		// Rust #59784 paints the sibling tabs on the side pane's first row.
+		if m.sidebarTabStripVisible() {
+			rightLines = prependSidePaneRow(rightLines, m.renderSidebarTabStrip(rightWidth))
+		}
+		rendered = zipSidePanes(leftLines, rightLines, leftWidth, height)
+		parentFirst, sideFirst, parentMax, sideMax = leftFirst, rightFirst, leftMax, rightMax
+	}
 	if side != nil {
 		side.ParentViewMax = parentMax
 		side.SideViewMax = sideMax
@@ -239,6 +252,23 @@ func (m *Model) sideResizeHint(sideWidth int) string {
 }
 
 func (m *Model) renderSidePaneTranscript(cache *transcriptMessageCache, threadID string, messages []codextui.Message, width int, status string, maxStatusRows int) string {
+	content := m.renderSidePaneContent(cache, threadID, messages, width)
+	if status = strings.TrimSpace(status); status != "" {
+		statusRows := m.renderDimmedPaneStatus(threadID, status, width, maxStatusRows)
+		if statusRows != "" {
+			if content != "" {
+				content += "\n"
+			}
+			content += statusRows
+		}
+	}
+	return content
+}
+
+// renderSidePaneContent renders one pane's transcript without its retained
+// status or draft; the pane composition paints those as fixed bottom rows
+// (Rust #61141 keeps them out of the scrolling transcript).
+func (m *Model) renderSidePaneContent(cache *transcriptMessageCache, threadID string, messages []codextui.Message, width int) string {
 	if m == nil || m.State == nil || width <= 0 {
 		return ""
 	}
@@ -262,15 +292,6 @@ func (m *Model) renderSidePaneTranscript(cache *transcriptMessageCache, threadID
 		false,
 		"sidepane|"+threadID,
 	)
-	if status = strings.TrimSpace(status); status != "" {
-		statusRows := m.renderDimmedPaneStatus(threadID, status, width, maxStatusRows)
-		if statusRows != "" {
-			if content != "" {
-				content += "\n"
-			}
-			content += statusRows
-		}
-	}
 	return content
 }
 
@@ -373,6 +394,142 @@ func paneStatusRowBudget(height int) int {
 		status = 0
 	}
 	return status
+}
+
+// sidePaneFrame is the fixed row allocation of one side pane: the scrolling
+// transcript keeps the rest, and the bottom rows hold the retained status, the
+// inactive composer preview, and a blank hint row (Rust #61141).
+type sidePaneFrame struct {
+	transcript int
+	status     int
+	composer   int
+	hint       int
+}
+
+func sidePaneFrameFor(height int) sidePaneFrame {
+	if height <= 0 {
+		return sidePaneFrame{transcript: 1}
+	}
+	status := paneStatusRowBudget(height)
+	composer := min(max(height-1, 0), 3)
+	hint := 0
+	if height-status-composer >= 1 {
+		hint = 1
+	}
+	// Rust leaves one separator row between the transcript and the footer.
+	transcript := height - status - composer - hint - 1
+	for transcript < 1 && composer > 0 {
+		composer--
+		transcript = height - status - composer - hint - 1
+	}
+	if transcript < 1 && hint > 0 {
+		hint = 0
+		transcript = height - status - composer - hint - 1
+	}
+	if transcript < 1 {
+		transcript = 1
+	}
+	return sidePaneFrame{transcript: transcript, status: status, composer: composer, hint: hint}
+}
+
+// sidePaneDraftPreviews returns the draft the inactive pane previews. The
+// composer belongs to the focused conversation, so only the other side shows
+// its saved draft.
+func (m *Model) sidePaneDraftPreviews(sideFocused bool) (parentDraft string, sideDraft string) {
+	if m == nil || m.activeSide == nil {
+		return "", ""
+	}
+	if sideFocused {
+		return m.activeSide.ParentDraft, ""
+	}
+	return "", m.activeSide.SideDraft
+}
+
+// composeSidePane builds exactly `height` rows: the windowed transcript, the
+// dimmed retained status, the inactive draft preview, and a blank hint row.
+func (m *Model) composeSidePane(threadID string, content string, status string, draft string, width int, height int, first int) ([]string, int, int) {
+	frame := sidePaneFrameFor(height)
+	lines, clamped, maxFirst := sidePaneWindow(content, frame.transcript, first)
+	rows := make([]string, 0, height)
+	rows = append(rows, lines...)
+	for len(rows) < frame.transcript {
+		rows = append(rows, "")
+	}
+	if frame.status > 0 {
+		if statusRows := m.renderDimmedPaneStatus(threadID, status, width, frame.status); statusRows != "" {
+			rows = append(rows, strings.Split(statusRows, "\n")...)
+		}
+	}
+	for len(rows) < frame.transcript+frame.status+1 {
+		rows = append(rows, "")
+	}
+	rows = append(rows, m.renderDimmedPaneDraft(draft, width, frame.composer)...)
+	for len(rows) < height {
+		rows = append(rows, "")
+	}
+	if len(rows) > height {
+		rows = rows[:height]
+	}
+	return rows, clamped, maxFirst
+}
+
+// renderDimmedPaneDraft previews the inactive conversation's draft inside the
+// rows reserved for its composer.
+func (m *Model) renderDimmedPaneDraft(draft string, width int, maxRows int) []string {
+	draft = strings.TrimRight(draft, "\r\n")
+	if strings.TrimSpace(draft) == "" || width <= 2 || maxRows <= 0 {
+		return nil
+	}
+	inner := max(width-2, 1)
+	wrapped := make([]string, 0, maxRows)
+	for _, line := range strings.Split(draft, "\n") {
+		wrapped = append(wrapped, codextui.WrapLine(line, codextui.WrapOptions{Width: inner, BreakWords: true})...)
+		if len(wrapped) >= maxRows {
+			break
+		}
+	}
+	if len(wrapped) > maxRows {
+		wrapped = wrapped[:maxRows]
+	}
+	rows := make([]string, 0, len(wrapped))
+	for index, row := range wrapped {
+		prefix := "  "
+		if index == 0 {
+			prefix = "\u203a "
+		}
+		rows = append(rows, "\x1b[2m"+prefix+codextui.TruncateWithEllipsis(row, inner)+"\x1b[0m")
+	}
+	return rows
+}
+
+// zipSidePanes joins two already-composed panes row by row, padding the left
+// column to the divider.
+func zipSidePanes(left []string, right []string, leftWidth int, height int) string {
+	if height <= 0 {
+		return ""
+	}
+	rows := make([]string, 0, height)
+	for index := 0; index < height; index++ {
+		line := ""
+		if index < len(left) {
+			line = left[index]
+		}
+		content := ""
+		if index < len(right) {
+			content = right[index]
+		}
+		rows = append(rows, padSidePaneLine(line, leftWidth)+sideWorkspaceDivider+content)
+	}
+	return strings.Join(rows, "\n")
+}
+
+// prependSidePaneRow paints the sibling tab strip above the side transcript,
+// matching Rust #59784's placement. The pane keeps a fixed height, so the
+// added row drops the last one.
+func prependSidePaneRow(lines []string, row string) []string {
+	out := make([]string, 0, len(lines)+1)
+	out = append(out, row)
+	return append(out, lines...)
 }
 
 // joinSidePanes draws each pane window, pads the left column to the divider,

@@ -1,0 +1,5 @@
+== go vet ./tui/tea ==
+exit=0
+== go test ./tui/tea -count=1 ==
+ok  	codex_go/tui/tea	47.510s
+exit=0
