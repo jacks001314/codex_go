@@ -1,0 +1,171 @@
+ok  	codex_go/agent	1.163s
+ok  	codex_go/agentboard	7.284s
+ok  	codex_go/app	106.327s
+ok  	codex_go/applypatch	1.558s
+ok  	codex_go/apps	1.190s
+ok  	codex_go/appserver	325.150s
+ok  	codex_go/appserverdaemon	16.849s
+ok  	codex_go/attachmentstore	0.340s
+ok  	codex_go/audiofiles	0.352s
+ok  	codex_go/audioutil	0.398s
+ok  	codex_go/auth	19.212s
+ok  	codex_go/chatgptapi	0.677s
+ok  	codex_go/cli	1.651s
+ok  	codex_go/cloudbackend	0.973s
+ok  	codex_go/cloudclient	1.587s
+?   	codex_go/cmd/codex	[no test files]
+ok  	codex_go/cmd/codex-code-mode-host	1.575s
+?   	codex_go/cmd/codex-command-runner	[no test files]
+ok  	codex_go/cmd/codex-exec-server	0.805s
+ok  	codex_go/cmd/codex-message-board-mcp	2.313s
+?   	codex_go/cmd/codex-network-proxy	[no test files]
+?   	codex_go/cmd/codex-voice-host	[no test files]
+?   	codex_go/cmd/codex-windows-sandbox-service	[no test files]
+?   	codex_go/cmd/codex-windows-sandbox-setup	[no test files]
+ok  	codex_go/cmd/internal/codexmain	0.228s
+ok  	codex_go/codemode	9.894s
+?   	codex_go/codemode/grpc	[no test files]
+ok  	codex_go/codexapi	0.877s
+ok  	codex_go/codexuds	2.785s
+ok  	codex_go/compact	0.481s
+ok  	codex_go/config	7.370s
+ok  	codex_go/context	0.186s
+ok  	codex_go/criticalpath	0.106s
+ok  	codex_go/daemonrecovery	0.212s
+exit status 0xc0000005
+FAIL	codex_go/doctor	8.545s
+ok  	codex_go/envutil	0.264s
+ok  	codex_go/eventmap	1.974s
+exit status 0xc0000005
+FAIL	codex_go/exec	8.527s
+ok  	codex_go/execpolicy	1.933s
+ok  	codex_go/execserver	31.444s
+ok  	codex_go/execserver/hostconfig	2.087s
+ok  	codex_go/features	0.591s
+ok  	codex_go/filesearch	0.191s
+ok  	codex_go/gitutil	8.322s
+ok  	codex_go/gitutils	1.502s
+ok  	codex_go/guardiancontext	0.094s
+ok  	codex_go/headershelper	0.138s
+ok  	codex_go/history	0.376s
+ok  	codex_go/historynotes	0.802s
+ok  	codex_go/install	0.849s
+?   	codex_go/internal/fakeappserver	[no test files]
+ok  	codex_go/internal/rustsrc	0.136s
+ok  	codex_go/jsonschema	0.069s
+?   	codex_go/keymapschema	[no test files]
+ok  	codex_go/keyring	1.400s
+ok  	codex_go/mcp	46.630s
+ok  	codex_go/memories	26.906s
+ok  	codex_go/memorylock	0.396s
+ok  	codex_go/mermaid	0.537s
+ok  	codex_go/metrics	0.090s
+ok  	codex_go/model	33.129s
+ok  	codex_go/modelfacingid	0.079s
+ok  	codex_go/network	13.961s
+ok  	codex_go/otelinit	0.854s
+ok  	codex_go/parity	133.849s
+ok  	codex_go/plugin	7.603s
+ok  	codex_go/processgroup	0.053s
+?   	codex_go/processhardening	[no test files]
+ok  	codex_go/prompt	1.510s
+ok  	codex_go/protocol	0.193s
+?   	codex_go/ptyio	[no test files]
+ok  	codex_go/realtime	4.594s
+ok  	codex_go/reasoningoverride	0.061s
+ok  	codex_go/recordreplay	8.771s
+ok  	codex_go/remotecontrol	4.772s
+ok  	codex_go/retainedctx	0.299s
+ok  	codex_go/review	10.636s
+ok  	codex_go/rollout	12.664s
+ok  	codex_go/runtimeauth	0.097s
+ok  	codex_go/runtimeutil	0.100s
+ok  	codex_go/safety	28.859s
+ok  	codex_go/sandbox	0.272s
+ok  	codex_go/sandbox/integrity	0.226s
+ok  	codex_go/sandbox/linuxsandbox	0.060s
+ok  	codex_go/sandbox/mxc	1.270s
+ok  	codex_go/sandbox/sandboxpath	0.126s
+ok  	codex_go/sandbox/windowssandbox	5.053s
+ok  	codex_go/sandbox/windowssandbox/bin/command_runner	0.075s
+ok  	codex_go/sandbox/windowssandbox/bin/command_runner/win	0.143s
+ok  	codex_go/sandbox/windowssandbox/bin/setup_main	0.112s
+ok  	codex_go/sandbox/windowssandbox/bin/setup_main/win	0.785s
+ok  	codex_go/sandbox/windowssandbox/conpty	0.162s
+ok  	codex_go/sandbox/windowssandbox/elevated	0.192s
+?   	codex_go/sandbox/windowssandbox/internal/setupenv	[no test files]
+ok  	codex_go/sandbox/windowssandbox/provisionservice	0.153s
+ok  	codex_go/sandbox/windowssandbox/servicepolicy	0.078s
+ok  	codex_go/sandbox/windowssandbox/unified_exec	0.068s
+ok  	codex_go/sandbox/windowssandbox/unified_exec/backends	0.057s
+ok  	codex_go/sandbox/windowssandbox/wfp	0.050s
+ok  	codex_go/scripts	0.109s
+?   	codex_go/scripts/fakeappserver	[no test files]
+ok  	codex_go/session	24.323s
+ok  	codex_go/sessionlock	0.049s
+ok  	codex_go/shell	1.584s
+ok  	codex_go/shellparse	0.044s
+ok  	codex_go/skillprovider	0.074s
+ok  	codex_go/stability/cmd/stability-trend	0.099s
+ok  	codex_go/stability/harness/disk	0.053s
+ok  	codex_go/stability/harness/metrics	0.142s
+ok  	codex_go/stability/harness/mockmodel	0.159s
+ok  	codex_go/stability/harness/netproxy	2.282s
+ok  	codex_go/stability/harness/report	0.066s
+ok  	codex_go/stability/harness/rolloutgen	0.083s
+ok  	codex_go/state	119.569s
+ok  	codex_go/statuslineprovider	0.243s
+ok  	codex_go/systemskills	0.562s
+ok  	codex_go/tcptunnel	10.122s
+ok  	codex_go/telemetry	0.562s
+ok  	codex_go/tool	144.511s
+ok  	codex_go/tooltiming	0.026s
+?   	codex_go/tracehook	[no test files]
+ok  	codex_go/tui	35.676s
+ok  	codex_go/tui/agents_overview	1.904s
+ok  	codex_go/tui/analytics	2.325s
+ok  	codex_go/tui/anim	0.132s
+ok  	codex_go/tui/app	0.694s
+?   	codex_go/tui/app_server_session	[no test files]
+?   	codex_go/tui/bin	[no test files]
+ok  	codex_go/tui/bottom_pane	1.324s
+ok  	codex_go/tui/bottom_pane/chat_composer	1.236s
+ok  	codex_go/tui/bottom_pane/mentions_v2	1.115s
+ok  	codex_go/tui/bottom_pane/request_user_input	1.015s
+ok  	codex_go/tui/bottom_pane/textarea	1.474s
+ok  	codex_go/tui/chatwidget	1.332s
+?   	codex_go/tui/chatwidget/tokens	[no test files]
+?   	codex_go/tui/chatwidget/tokens/chart	[no test files]
+ok  	codex_go/tui/diffview	0.852s
+ok  	codex_go/tui/exec_cell	1.141s
+?   	codex_go/tui/external_agent_config_migration	[no test files]
+ok  	codex_go/tui/footerhint	0.339s
+ok  	codex_go/tui/history_cell	0.649s
+ok  	codex_go/tui/ide_context	0.125s
+ok  	codex_go/tui/imagedecode	0.063s
+?   	codex_go/tui/keymap_setup	[no test files]
+?   	codex_go/tui/keymsg	[no test files]
+ok  	codex_go/tui/markdown	1.124s
+?   	codex_go/tui/markdown_render	[no test files]
+?   	codex_go/tui/mousemsg	[no test files]
+ok  	codex_go/tui/notifications	0.139s
+ok  	codex_go/tui/onboarding	0.729s
+ok  	codex_go/tui/onboarding/auth	0.137s
+ok  	codex_go/tui/overlay	0.159s
+ok  	codex_go/tui/pets	2.120s
+?   	codex_go/tui/public_widgets	[no test files]
+?   	codex_go/tui/render	[no test files]
+ok  	codex_go/tui/status	0.764s
+ok  	codex_go/tui/streaming	0.761s
+ok  	codex_go/tui/styles	0.159s
+ok  	codex_go/tui/tea	53.097s
+ok  	codex_go/tui/transcript_image	0.264s
+ok  	codex_go/tui/tui	0.941s
+ok  	codex_go/tui/welcome	0.165s
+ok  	codex_go/turn	2.136s
+ok  	codex_go/utils	0.629s
+ok  	codex_go/voicehost	43.807s
+?   	codex_go/websocketauth	[no test files]
+ok  	codex_go/windowsandboxservice	1.195s
+ok  	codex_go/worktree	12.572s
+FAIL
