@@ -83,3 +83,38 @@ func TestSidePaneStatusKeepsThemeWhenItFitsLikeRust(t *testing.T) {
 		t.Fatalf("narrow pane reused an overflowing styled line: %q", narrow)
 	}
 }
+
+// Structured status content reflows into multiple rows without losing colours.
+func TestSidePaneStatusReflowsWithThemeLikeRust(t *testing.T) {
+	model := NewModel(codextui.NewState(nil), Options{Width: 120, Height: 40})
+	spans := []paneStatusSpan{
+		{text: "model ", sgr: ""},
+		{text: "gpt-5 ", sgr: "\x1b[36m"},
+		{text: "readonly cwd /repo", sgr: ""},
+	}
+	model.paneStatusSpans = map[string][]paneStatusSpan{"thread-side": spans}
+	model.paneStatusText = map[string]string{"thread-side": "model gpt-5 readonly cwd /repo"}
+
+	rendered := model.renderDimmedPaneStatus("thread-side", "model gpt-5 readonly cwd /repo", 12, 4)
+	rows := strings.Split(rendered, "\n")
+	if len(rows) < 2 {
+		t.Fatalf("status did not reflow: %q", rendered)
+	}
+	for _, row := range rows {
+		if !strings.HasPrefix(row, "\x1b[2m") || !strings.HasSuffix(row, "\x1b[0m") {
+			t.Fatalf("row is not dimmed: %q", row)
+		}
+	}
+	coloured := false
+	for _, row := range rows {
+		if strings.Contains(row, "\x1b[36m") {
+			coloured = true
+		}
+		if width := codextui.DisplayWidth(row); width > 12 {
+			t.Fatalf("row width = %d, want <= 12: %q", width, row)
+		}
+	}
+	if !coloured {
+		t.Fatalf("reflowed status lost its colour: %q", rendered)
+	}
+}

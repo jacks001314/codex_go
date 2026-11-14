@@ -301,9 +301,20 @@ func (m *Model) renderDimmedPaneStatus(threadID string, status string, width int
 	if status == "" || width <= 0 {
 		return ""
 	}
-	// A themed line that already fits keeps its colours; wider lines fall back
-	// to the plain rewrap below (Rust #61141 keeps structured content).
+	// Structured status content reflows with its colours intact (Rust #61141).
 	if m != nil {
+		if spans := m.paneStatusSpans[strings.TrimSpace(threadID)]; len(spans) > 0 {
+			rows := wrapPaneStatusSpans(spans, width)
+			if maxRows <= 0 {
+				maxRows = 3
+			}
+			if len(rows) > maxRows {
+				rows = rows[:maxRows]
+			}
+			if len(rows) > 0 {
+				return strings.Join(rows, "\n")
+			}
+		}
 		if styled := strings.TrimSpace(m.paneStatusStyled[strings.TrimSpace(threadID)]); styled != "" &&
 			codextui.DisplayWidth(styled) <= width {
 			return "\x1b[2m" + styled + "\x1b[0m"

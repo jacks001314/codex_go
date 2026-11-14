@@ -873,18 +873,20 @@ func (m *Model) renderStatusHeader() string {
 		accent := func(value bottompane.StatusLineAccent) string {
 			return statusLineAccentSGR(m.tuiTheme, value)
 		}
+		threadColor := ""
 		if threadID := strings.TrimSpace(m.State.ThreadID); threadID != "" {
+			threadColor = codextui.ThreadColorSGR(codextui.ThreadColorForTheme(threadID, m.tuiTheme))
 			if m.paneStatusText == nil {
 				m.paneStatusText = map[string]string{}
 			}
 			if m.paneStatusStyled == nil {
 				m.paneStatusStyled = map[string]string{}
 			}
+			if m.paneStatusSpans == nil {
+				m.paneStatusSpans = map[string][]paneStatusSpan{}
+			}
 			m.paneStatusText[threadID] = result.StatusLine.PlainText()
-		}
-		threadColor := ""
-		if threadID := strings.TrimSpace(m.State.ThreadID); threadID != "" {
-			threadColor = codextui.ThreadColorSGR(codextui.ThreadColorForTheme(threadID, m.tuiTheme))
+			m.paneStatusSpans[threadID] = paneStatusSpansFromLine(result.StatusLine, threadColor, m.tuiTheme)
 		}
 		base = result.StatusLine.RenderStyled(threadColor, accent, false)
 	}
