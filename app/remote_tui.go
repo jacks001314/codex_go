@@ -5808,7 +5808,9 @@ func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMes
 			return nil
 		}
 		c.send(codextea.ModelRetryStatusMsg{Active: false})
-		c.send(codextea.ThreadEventMsg{Event: protocol.AgentMessageDelta(payload.ItemID, payload.Delta)})
+		event := protocol.AgentMessageDelta(payload.ItemID, payload.Delta)
+		event.ThreadID = payload.ThreadID
+		c.send(codextea.ThreadEventMsg{Event: event})
 	case appserver.NotificationReasoningSummaryTextDelta:
 		var payload appserver.ReasoningSummaryTextDeltaNotification
 		if err := json.Unmarshal(message.Params, &payload); err != nil {
@@ -5840,7 +5842,9 @@ func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMes
 			c.send(codextea.ThreadScopedEventMsg{ThreadID: payload.ThreadID, Event: protocol.PlanDelta(payload.ItemID, payload.Delta)})
 			return nil
 		}
-		c.send(codextea.ThreadEventMsg{Event: protocol.PlanDelta(payload.ItemID, payload.Delta)})
+		event := protocol.PlanDelta(payload.ItemID, payload.Delta)
+		event.ThreadID = payload.ThreadID
+		c.send(codextea.ThreadEventMsg{Event: event})
 	case appserver.NotificationItemStarted:
 		var payload appserver.ItemStartedNotification
 		if err := json.Unmarshal(message.Params, &payload); err != nil {
@@ -5849,8 +5853,10 @@ func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMes
 		c.sendSideParentStatusChange(payload.ThreadID, codextea.SideParentStatusChangeClearActionable, "")
 		item := remoteProtocolItemFromPayload(payload.Item, false)
 		event := protocol.ItemStarted(item)
+		event.ThreadID = payload.ThreadID
 		if strings.EqualFold(strings.TrimSpace(item.Type), "contextCompaction") && payload.StartedAtMS > 0 {
 			event = protocol.ItemStartedAt(item, payload.StartedAtMS)
+			event.ThreadID = payload.ThreadID
 		}
 		if !c.notificationThreadIsActive(payload.ThreadID) {
 			c.send(codextea.ThreadScopedEventMsg{ThreadID: payload.ThreadID, Event: event})
@@ -5868,7 +5874,9 @@ func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMes
 			return nil
 		}
 		item := remoteProtocolItemFromPayload(payload.Item, true)
-		c.send(codextea.ThreadEventMsg{Event: protocol.ItemCompleted(item)})
+		event := protocol.ItemCompleted(item)
+		event.ThreadID = payload.ThreadID
+		c.send(codextea.ThreadEventMsg{Event: event})
 	case appserver.NotificationHookStarted:
 		var payload appserver.HookRunStartedNotification
 		if err := json.Unmarshal(message.Params, &payload); err != nil {

@@ -2123,6 +2123,11 @@ type Model struct {
 	// pending fork owns the keyboard and replaces the notice with its progress
 	// line (Rust #47185 fork_in_progress).
 	forkInProgress bool
+	// outgoingThreadID names the conversation a resume, fork, or agent switch
+	// just left. Rust #61216 drains that thread's outgoing events before the
+	// replacement is installed; a notification already queued for it must be
+	// dropped here so a late thread/started cannot switch the view back.
+	outgoingThreadID string
 	// providerError carries the provider admission failure that kept the chat
 	// readable but read-only (Rust #58202), and providerErrorRolloutPath is the
 	// frozen conversation's saved history path used by the continuation draft.
@@ -7321,6 +7326,39 @@ func (m *Model) switchThreadID(threadID string) {
 	m.openPendingApprovalForThread(threadID)
 }
 
+// noteThreadHandoff records the conversation a resume, fork, or agent switch
+// left so its late notifications stop painting the replacement. Rust #61216
+// drains outgoing thread events before installing the next session; a message
+// that was already queued still has to be dropped here, or a stale
+// thread/started would switch the view back to the conversation being left.
+func (m *Model) noteThreadHandoff(previous string, next string) {
+	if m == nil {
+		return
+	}
+	previous = strings.TrimSpace(previous)
+	next = strings.TrimSpace(next)
+	if previous != "" && previous != next {
+		m.outgoingThreadID = previous
+		return
+	}
+	if next != "" && next == m.outgoingThreadID {
+		// Refreshing the previously replaced thread in place makes it live
+		// again, so events it delivers are no longer late.
+		m.outgoingThreadID = ""
+	}
+}
+
+// dropLateOutgoingEvent reports whether event belongs to the conversation a
+// handoff just left. That thread's state is rebuilt from its server snapshot
+// when it is attached again, so late notifications are discarded instead of
+// being applied to the conversation that replaced it.
+func (m *Model) dropLateOutgoingEvent(event protocol.ThreadEvent) bool {
+	if m == nil || m.outgoingThreadID == "" {
+		return false
+	}
+	return strings.TrimSpace(event.ThreadID) == m.outgoingThreadID
+}
+
 // stashPendingSteers parks the materialized pending steers under the thread
 // that owns them without resubmitting them.
 func (m *Model) stashPendingSteers() {
@@ -8280,6 +8318,12 @@ func (m *Model) interruptRunningTask() bubbletea.Cmd {
 func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 	var cmd bubbletea.Cmd
 	var questionDrafts []string
+	// Rust #61216: the conversation left by a resume, fork, or agent switch no
+	// longer owns the view. Its already-queued notifications are drained instead
+	// of repainting the replacement (a stale thread/started must not switch back).
+	if m.dropLateOutgoingEvent(event) {
+		return nil
+	}
 	// Rust #42455: delivered events feed the command center's bounded live
 	// previews while the dashboard is open.
 	if m != nil && m.agentsOverview != nil {

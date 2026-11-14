@@ -324,6 +324,7 @@ func (m *Model) applyAgentSwitchResult(message AgentSwitchResultMsg) {
 		// Rust #43994: the switched-to thread must not inherit transcript state
 		// (tool-call display, retry, review) from the thread that was active.
 		m.resetThreadScopedState()
+		m.noteThreadHandoff(m.currentThreadID(), entry.ThreadID)
 		m.switchThreadID(entry.ThreadID)
 		messages := append([]codextui.Message(nil), message.Response.Messages...)
 		buffered := m.backgroundThreadEvents[entry.ThreadID]

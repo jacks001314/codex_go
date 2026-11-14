@@ -614,6 +614,7 @@ func (m *Model) applyForkSummary(selection codextui.SessionSelection, summary *c
 			}
 		}
 		m.upsertSessionItem(*summary)
+		m.noteThreadHandoff(m.currentThreadID(), summary.ThreadID)
 		m.deactivateSideConversation()
 		m.switchThreadID(summary.ThreadID)
 		m.inheritTaskToolCapability(threadID, summary.ThreadID)
@@ -794,6 +795,7 @@ func (m *Model) applyResumeResponseWithCWD(threadID string, response SessionResu
 	if response.Summary != nil && strings.TrimSpace(response.Summary.ThreadID) != "" {
 		threadID = strings.TrimSpace(response.Summary.ThreadID)
 	}
+	m.noteThreadHandoff(previousThreadID, threadID)
 	m.resetAgentPickerRefresh(true)
 	// Rust #43994: the resumed thread's replay must not inherit transcript
 	// state from the thread that was open before.
