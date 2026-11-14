@@ -827,8 +827,10 @@ type MCPLoginStartedMsg struct {
 	RequestID string
 	Name      string
 	ThreadID  string
-	Result    MCPLoginStart
-	Err       error
+	// EnvironmentID is the registration scope the login targeted (Rust #61257).
+	EnvironmentID string
+	Result        MCPLoginStart
+	Err           error
 }
 
 // MCPLoginCompletedMsg carries one MCP OAuth completion for the originating
@@ -1763,7 +1765,7 @@ type Options struct {
 	BackgroundProcesses            []historycell.UnifiedExecProcessDetails
 	MCPServers                     []historycell.McpServerStatus
 	OnReadMCPInventory             func(detail bool) ([]historycell.McpServerStatus, error)
-	OnStartMCPLogin                func(name, threadID string) (MCPLoginStart, error)
+	OnStartMCPLogin                func(name, environmentID, threadID string) (MCPLoginStart, error)
 	OnListModels                   func(cwd string, includeHidden bool) ([]codextui.ModelPickerOption, error)
 	// StartupConfigWarnings carries the requirement-driven config warnings known
 	// at startup so they coalesce into the startup warnings entry (Rust
@@ -2465,7 +2467,7 @@ type Model struct {
 	backgroundProcesses              []historycell.UnifiedExecProcessDetails
 	mcpServers                       []historycell.McpServerStatus
 	onReadMCPInventory               func(detail bool) ([]historycell.McpServerStatus, error)
-	onStartMCPLogin                  func(name, threadID string) (MCPLoginStart, error)
+	onStartMCPLogin                  func(name, environmentID, threadID string) (MCPLoginStart, error)
 	pendingMCPLoginStart             *mcpLoginStartRequest
 	activeMCPLoginIDs                map[string]string
 	mcpLoginResultsByThread          map[string][]MCPLoginCompletedMsg

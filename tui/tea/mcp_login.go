@@ -8,16 +8,18 @@ import (
 )
 
 type mcpLoginStartRequest struct {
-	requestID string
-	name      string
-	threadID  string
+	requestID     string
+	name          string
+	environmentID string
+	threadID      string
 }
 
-func (m *Model) startMCPLogin(name string) bubbletea.Cmd {
+func (m *Model) startMCPLogin(name string, environmentID string) bubbletea.Cmd {
 	if m == nil {
 		return nil
 	}
 	name = strings.TrimSpace(name)
+	environmentID = strings.TrimSpace(environmentID)
 	threadID := ""
 	if m.State != nil {
 		threadID = strings.TrimSpace(m.State.ThreadID)
@@ -37,19 +39,21 @@ func (m *Model) startMCPLogin(name string) bubbletea.Cmd {
 	}
 	m.nextMCPLoginRequestID++
 	pending := &mcpLoginStartRequest{
-		requestID: strconv.FormatUint(m.nextMCPLoginRequestID, 10),
-		name:      name,
-		threadID:  threadID,
+		requestID:     strconv.FormatUint(m.nextMCPLoginRequestID, 10),
+		name:          name,
+		environmentID: environmentID,
+		threadID:      threadID,
 	}
 	m.pendingMCPLoginStart = pending
 	return func() bubbletea.Msg {
-		result, err := m.onStartMCPLogin(name, threadID)
+		result, err := m.onStartMCPLogin(name, environmentID, threadID)
 		return MCPLoginStartedMsg{
-			RequestID: pending.requestID,
-			Name:      name,
-			ThreadID:  threadID,
-			Result:    result,
-			Err:       err,
+			RequestID:     pending.requestID,
+			Name:          name,
+			EnvironmentID: environmentID,
+			ThreadID:      threadID,
+			Result:        result,
+			Err:           err,
 		}
 	}
 }
@@ -58,6 +62,7 @@ func (m *Model) applyMCPLoginStarted(message MCPLoginStartedMsg) bubbletea.Cmd {
 	if m == nil || m.pendingMCPLoginStart == nil ||
 		m.pendingMCPLoginStart.requestID != message.RequestID ||
 		m.pendingMCPLoginStart.name != message.Name ||
+		m.pendingMCPLoginStart.environmentID != message.EnvironmentID ||
 		m.pendingMCPLoginStart.threadID != message.ThreadID {
 		return nil
 	}

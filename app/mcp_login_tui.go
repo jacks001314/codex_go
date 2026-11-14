@@ -13,8 +13,8 @@ import (
 	codextea "codex_go/tui/tea"
 )
 
-func interactiveLocalMCPLoginStarter(service *mcp.MCPService) func(name, threadID string) (codextea.MCPLoginStart, error) {
-	return func(name, threadID string) (codextea.MCPLoginStart, error) {
+func interactiveLocalMCPLoginStarter(service *mcp.MCPService) func(name, environmentID, threadID string) (codextea.MCPLoginStart, error) {
+	return func(name, environmentID, threadID string) (codextea.MCPLoginStart, error) {
 		if service == nil {
 			return codextea.MCPLoginStart{}, errors.New("MCP sign-in is unavailable")
 		}
@@ -43,9 +43,14 @@ func interactiveLocalMCPLoginStarter(service *mcp.MCPService) func(name, threadI
 		unsubscribe = remove
 		listenerMu.Unlock()
 		thread := strings.TrimSpace(threadID)
+		var scope *string
+		if environmentID = strings.TrimSpace(environmentID); environmentID != "" {
+			scope = &environmentID
+		}
 		response, err := service.OauthLogin(&mcp.MCPServerOauthLoginParams{
-			Name:     name,
-			ThreadID: &thread,
+			Name:          name,
+			ThreadID:      &thread,
+			EnvironmentID: scope,
 		})
 		if err != nil {
 			removeListener()
@@ -89,17 +94,22 @@ func interactiveLocalMCPLoginStarter(service *mcp.MCPService) func(name, threadI
 	}
 }
 
-func interactiveRemoteMCPLoginStarter(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) func(name, threadID string) (codextea.MCPLoginStart, error) {
-	return func(name, threadID string) (codextea.MCPLoginStart, error) {
+func interactiveRemoteMCPLoginStarter(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) func(name, environmentID, threadID string) (codextea.MCPLoginStart, error) {
+	return func(name, environmentID, threadID string) (codextea.MCPLoginStart, error) {
 		client, err := openRemoteSessionClient(ctx, endpoint)
 		if err != nil {
 			return codextea.MCPLoginStart{}, err
 		}
 		thread := strings.TrimSpace(threadID)
+		var scope *string
+		if environmentID = strings.TrimSpace(environmentID); environmentID != "" {
+			scope = &environmentID
+		}
 		var response mcp.MCPServerOauthLoginResponse
 		if err := remoteSessionRequest(ctx, client, appserver.MethodMCPServerOauthLogin, mcp.MCPServerOauthLoginParams{
-			Name:     name,
-			ThreadID: &thread,
+			Name:          name,
+			ThreadID:      &thread,
+			EnvironmentID: scope,
 		}, &response); err != nil {
 			client.close()
 			return codextea.MCPLoginStart{}, err

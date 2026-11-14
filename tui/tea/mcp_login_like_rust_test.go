@@ -8,7 +8,7 @@ import (
 	codextui "codex_go/tui"
 )
 
-func mcpLoginTestModel(t *testing.T, starter func(name, threadID string) (MCPLoginStart, error)) *Model {
+func mcpLoginTestModel(t *testing.T, starter func(name, environmentID, threadID string) (MCPLoginStart, error)) *Model {
 	t.Helper()
 	state := codextui.NewState(nil)
 	state.SetThreadID("thread-login")
@@ -33,7 +33,7 @@ func modelHistoryContains(model *Model, value string) bool {
 // the matching completion into thread history.
 func TestMCPLoginCommandStartsAndCompletesLikeRust(t *testing.T) {
 	completions := make(chan MCPLoginCompletedMsg, 1)
-	model := mcpLoginTestModel(t, func(name, threadID string) (MCPLoginStart, error) {
+	model := mcpLoginTestModel(t, func(name, environmentID, threadID string) (MCPLoginStart, error) {
 		if name != "enterprise" || threadID != "thread-login" {
 			t.Fatalf("start args = %q %q", name, threadID)
 		}
@@ -125,7 +125,7 @@ func TestMCPLoginResultWaitsForOriginThreadLikeRust(t *testing.T) {
 func TestMCPLoginCommandErrorsAndUsageLikeRust(t *testing.T) {
 	model := mcpLoginTestModel(t, nil)
 	model.applyMCPCommand("login")
-	if model.notice != "Usage: /mcp [verbose | login <name>]" {
+	if model.notice != "Usage: /mcp [verbose | login <name> [--environment <id>]]" {
 		t.Fatalf("missing-name notice = %q", model.notice)
 	}
 	model.State.SetThreadID("")
@@ -134,7 +134,7 @@ func TestMCPLoginCommandErrorsAndUsageLikeRust(t *testing.T) {
 		t.Fatalf("missing active-session error: %#v", model.State.Messages)
 	}
 
-	model = mcpLoginTestModel(t, func(string, string) (MCPLoginStart, error) {
+	model = mcpLoginTestModel(t, func(string, string, string) (MCPLoginStart, error) {
 		return MCPLoginStart{}, errors.New("Unknown MCP server typo")
 	})
 	command := model.applyMCPCommand("login typo")

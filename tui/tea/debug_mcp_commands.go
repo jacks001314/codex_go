@@ -99,6 +99,32 @@ func (m *Model) defaultDebugConfigLines() []string {
 	}
 }
 
+// parseMCPLoginArguments accepts `/mcp login <name>` with an optional
+// `--environment <id>` selector (Rust #61257).
+func parseMCPLoginArguments(args string) (string, string, bool) {
+	fields := strings.Fields(args)
+	if len(fields) == 0 {
+		return "", "", false
+	}
+	name := strings.TrimSpace(fields[0])
+	environmentID := ""
+	for i := 1; i < len(fields); i++ {
+		switch {
+		case fields[i] == "--environment":
+			if i+1 >= len(fields) {
+				return "", "", false
+			}
+			environmentID = strings.TrimSpace(fields[i+1])
+			i++
+		case strings.HasPrefix(fields[i], "--environment="):
+			environmentID = strings.TrimSpace(strings.TrimPrefix(fields[i], "--environment="))
+		default:
+			return "", "", false
+		}
+	}
+	return name, environmentID, true
+}
+
 func (m *Model) applyMCPCommand(args string) bubbletea.Cmd {
 	if m == nil {
 		return nil
@@ -112,15 +138,15 @@ func (m *Model) applyMCPCommand(args string) bubbletea.Cmd {
 	case len(trimmed) > len("login") &&
 		strings.EqualFold(trimmed[:len("login")], "login") &&
 		(trimmed[len("login")] == ' ' || trimmed[len("login")] == '\t'):
-		name := strings.TrimSpace(trimmed[len("login"):])
-		if name == "" {
-			m.notice = "Usage: /mcp [verbose | login <name>]"
+		name, environmentID, ok := parseMCPLoginArguments(trimmed[len("login"):])
+		if !ok || name == "" {
+			m.notice = "Usage: /mcp [verbose | login <name> [--environment <id>]]"
 			m.refreshTranscript()
 			return nil
 		}
-		return m.startMCPLogin(name)
+		return m.startMCPLogin(name, environmentID)
 	default:
-		m.notice = "Usage: /mcp [verbose | login <name>]"
+		m.notice = "Usage: /mcp [verbose | login <name> [--environment <id>]]"
 		m.refreshTranscript()
 		return nil
 	}
