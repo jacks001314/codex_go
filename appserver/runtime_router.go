@@ -461,6 +461,9 @@ type RuntimeRouter struct {
 	// state::additional_context::AdditionalContextStore).
 	additionalContextMu sync.Mutex
 	additionalContext   map[string]map[string]storedAdditionalContext
+	// additionalContextItemSeq numbers the response-item IDs assigned to
+	// additional-context entries so compaction can recognize them (Rust #61390).
+	additionalContextItemSeq atomic.Uint64
 	// gatewayLoginMu guards gatewayLogin, the one in-flight caller-initiated
 	// gateway sign-in and the connection that owns it (Rust #47207).
 	gatewayLoginMu sync.Mutex

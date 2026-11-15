@@ -7456,6 +7456,7 @@ func (r *RuntimeRouter) compactThreadWithHistory(ctx context.Context, params *ru
 	r.notifyContextCompactionItemStarted(request.ThreadID, request.TurnID, compactionItem)
 	var backgroundCompacted *compact.Result
 	var backgroundHistory []compact.Item
+	var backgroundPrefixLen int
 	if r.threads != nil {
 		if state := r.threads.existingAsyncCompactionState(request.ThreadID); state != nil {
 			modelSlug := firstNonEmpty(strings.TrimSpace(params.Model), strings.TrimSpace(record.Metadata.Model))
@@ -7468,6 +7469,7 @@ func (r *RuntimeRouter) compactThreadWithHistory(ctx context.Context, params *ru
 			if installed, ok := installBackgroundCompactionCandidate(history, candidate, initialContext, authOwner); ok {
 				backgroundCompacted = candidate.Result
 				backgroundHistory = installed
+				backgroundPrefixLen = candidate.Prefix.Len
 			}
 		}
 	}
@@ -7504,6 +7506,36 @@ func (r *RuntimeRouter) compactThreadWithHistory(ctx context.Context, params *ru
 	}
 	if compacted == nil {
 		return nil, nil, nil
+	}
+	// Rust #61390: compaction can drop active client context while
+	// deduplication keeps later turns from re-sending unchanged values.
+	// Refresh entries the replacement kept and reinstall the ones the replaced
+	// prefix carried.
+	replacedHistory := history
+	retainedHistory := compacted.NewHistory
+	var suffixHistory []compact.Item
+	if backgroundHistory != nil {
+		prefixLen := backgroundPrefixLen
+		if prefixLen < 0 {
+			prefixLen = 0
+		}
+		if prefixLen > len(history) {
+			prefixLen = len(history)
+		}
+		replacedHistory = history[:prefixLen]
+		suffixHistory = history[prefixLen:]
+		retainedHistory = backgroundHistory
+	}
+	restoredContext, replayContextKeys := r.restoreCompactedAdditionalContext(request.ThreadID, replacedHistory, suffixHistory, retainedHistory)
+	if len(restoredContext) > 0 {
+		if backgroundHistory != nil {
+			backgroundHistory = compact.InsertInitialContextBeforeLastUserOrSummary(backgroundHistory, restoredContext)
+		} else {
+			compacted.NewHistory = compact.InsertInitialContextBeforeLastUserOrSummary(compacted.NewHistory, restoredContext)
+		}
+	}
+	if len(replayContextKeys) > 0 {
+		r.forgetAdditionalContextKeys(request.ThreadID, replayContextKeys)
 	}
 	// Record the model that produced the checkpoint, including the local
 	// fallback path. Guardian may reuse an opaque checkpoint only when this

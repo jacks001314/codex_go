@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"codex_go/compact"
 	"codex_go/config"
 	contextfrag "codex_go/context"
 	"codex_go/features"
@@ -40,14 +41,21 @@ type storedAdditionalContext struct {
 	name       string
 	kind       turn.AdditionalContextKind
 	value      string
+	// itemID is the response-item identity assigned when this value was last
+	// rendered into history, so compaction can restore it (#61390).
+	itemID string
 }
 
 // additionalContextToolOutput is a rendered untrusted context item that must
 // also be recorded as reviewable conversation history.
 type additionalContextToolOutput struct {
-	key   string
-	name  string
-	value string
+	key        string
+	name       string
+	value      string
+	kind       turn.AdditionalContextKind
+	itemID     string
+	toolOutput bool
+	rendered   string
 }
 
 func (s storedAdditionalContext) equal(other storedAdditionalContext) bool {
@@ -105,12 +113,19 @@ func (r *RuntimeRouter) mergeAdditionalContext(threadID string, values map[strin
 	for _, key := range sortedStoredAdditionalContextKeys(next) {
 		stored := next[key]
 		if prior, ok := previous[key]; ok && prior.equal(stored) {
+			// Keep the response-item identity so compaction can find the
+			// history item this value already produced (#61390).
+			stored.itemID = prior.itemID
+			next[key] = stored
 			continue
 		}
+		stored.itemID = r.nextAdditionalContextItemID(key)
+		next[key] = stored
 		if stored.toolOutput {
 			items = append(items, additionalContextToolOutputModelItem(stored.name, stored.value))
 			persisted = append(persisted, additionalContextToolOutput{
 				key: key, name: stored.name, value: stored.value,
+				kind: stored.kind, itemID: stored.itemID, toolOutput: true,
 			})
 			continue
 		}
@@ -134,6 +149,10 @@ func (r *RuntimeRouter) mergeAdditionalContext(threadID string, values map[strin
 				"text": rendered.Content,
 			}},
 		})
+		persisted = append(persisted, additionalContextToolOutput{
+			key: key, value: stored.value, kind: stored.kind,
+			itemID: stored.itemID, rendered: rendered.Content,
+		})
 	}
 	return developer, items, persisted
 }
@@ -147,9 +166,11 @@ func additionalContextToolOutputModelItem(name string, value string) map[string]
 	}
 }
 
-// additionalContextSessionItems records client-supplied tool-output context in
-// conversation history. The provenance stays in harness metadata so the item
-// replayed to the acting model keeps exactly the tool-output payload it saw.
+// additionalContextSessionItems records client-supplied context in
+// conversation history. Tool outputs keep harness provenance so the item
+// replayed to the acting model keeps exactly the payload it saw; untrusted
+// message context is recorded as a plain user message (Rust #61390 keeps both
+// forms addressable by response-item ID across compaction).
 func additionalContextSessionItems(turnID string, outputs []additionalContextToolOutput, createdAt time.Time) []session.Item {
 	if len(outputs) == 0 {
 		return nil
@@ -157,9 +178,35 @@ func additionalContextSessionItems(turnID string, outputs []additionalContextToo
 	harnessMetadata, _ := json.Marshal(map[string]any{"additional_context_tool_output": true})
 	items := make([]session.Item, 0, len(outputs))
 	for index, output := range outputs {
+		id := firstNonEmpty(output.itemID, "additional-context-"+safeIdentifier(turnID)+"-"+safeIdentifier(output.key)+"-"+strconv.Itoa(index+1))
+		if !output.toolOutput {
+			if strings.TrimSpace(output.rendered) == "" {
+				continue
+			}
+			content := []map[string]any{{"type": "input_text", "text": output.rendered}}
+			payload, _ := json.Marshal(map[string]any{
+				"type":    "message",
+				"role":    "user",
+				"content": content,
+			})
+			items = append(items, session.Item{
+				ID:        id,
+				Type:      "message",
+				Role:      "user",
+				Text:      output.rendered,
+				CreatedAt: createdAt,
+				Data: map[string]any{
+					"role":    "user",
+					"content": content,
+				},
+				Metadata: appTurnMetadata(turnID, nil),
+				Raw:      payload,
+			})
+			continue
+		}
 		payload, _ := json.Marshal(additionalContextToolOutputModelItem(output.name, output.value))
 		items = append(items, session.Item{
-			ID:        "additional-context-" + safeIdentifier(turnID) + "-" + safeIdentifier(output.key) + "-" + strconv.Itoa(index+1),
+			ID:        id,
 			Type:      "function_call_output",
 			Name:      output.name,
 			Namespace: additionalContextToolNamespace,
@@ -191,6 +238,132 @@ func (r *RuntimeRouter) forgetAdditionalContext(threadID string) {
 	r.additionalContextMu.Lock()
 	defer r.additionalContextMu.Unlock()
 	delete(r.additionalContext, threadID)
+}
+
+// nextAdditionalContextItemID returns a unique response-item ID for one emitted
+// additional-context entry (Rust ItemIdGenerator).
+func (r *RuntimeRouter) nextAdditionalContextItemID(key string) string {
+	if r == nil {
+		return "additional-context-" + safeIdentifier(key)
+	}
+	sequence := r.additionalContextItemSeq.Add(1)
+	return "additional-context-" + safeIdentifier(key) + "-" + strconv.FormatUint(sequence, 10)
+}
+
+// restoreCompactedAdditionalContext reinstalls active additional-context items
+// after a compaction replacement (Rust #61390
+// AdditionalContextStore::restore_compacted_items). Items that the replaced
+// prefix carried are refreshed in place when the replacement kept them,
+// otherwise they are returned for insertion before the preserved user prompt.
+// Instruction-delivered fragments never enter history, so they are reported for
+// re-emission on the next turn.
+func (r *RuntimeRouter) restoreCompactedAdditionalContext(threadID string, replaced []compact.Item, suffix []compact.Item, retained []compact.Item) ([]compact.Item, []string) {
+	if r == nil {
+		return nil, nil
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return nil, nil
+	}
+	r.additionalContextMu.Lock()
+	stored := make(map[string]storedAdditionalContext, len(r.additionalContext[threadID]))
+	for key, value := range r.additionalContext[threadID] {
+		stored[key] = value
+	}
+	r.additionalContextMu.Unlock()
+	if len(stored) == 0 {
+		return nil, nil
+	}
+	active := make(map[string]string, len(stored))
+	for key, value := range stored {
+		if value.itemID != "" {
+			active[value.itemID] = key
+		}
+	}
+	retainedAt := make(map[string]int, len(retained))
+	for index := range retained {
+		if id := strings.TrimSpace(retained[index].ID); id != "" {
+			if _, ok := active[id]; ok {
+				retainedAt[id] = index
+			}
+		}
+	}
+	restored := []compact.Item{}
+	for index := range replaced {
+		id := strings.TrimSpace(replaced[index].ID)
+		if _, ok := active[id]; !ok {
+			continue
+		}
+		delete(active, id)
+		if position, found := retainedAt[id]; found {
+			// Generic retention may have shortened the active value. Keep its
+			// position and checkpoint metadata, with the original bounded
+			// payload.
+			retained[position] = replaceAdditionalContextPayload(retained[position], replaced[index])
+			continue
+		}
+		restored = append(restored, cloneAdditionalContextCompactItem(replaced[index]))
+	}
+	surviving := make(map[string]struct{}, len(suffix)+len(retained))
+	for index := range suffix {
+		surviving[strings.TrimSpace(suffix[index].ID)] = struct{}{}
+	}
+	for index := range retained {
+		surviving[strings.TrimSpace(retained[index].ID)] = struct{}{}
+	}
+	for index := range restored {
+		surviving[strings.TrimSpace(restored[index].ID)] = struct{}{}
+	}
+	replay := []string{}
+	for _, key := range sortedStoredAdditionalContextKeys(stored) {
+		value := stored[key]
+		// Only instruction-delivered fragments need re-emission: untrusted
+		// message context is recorded as a session item, and a queued value
+		// arrives with its input.
+		if value.toolOutput || value.kind != turn.AdditionalContextApplication || value.itemID == "" {
+			continue
+		}
+		if _, ok := surviving[value.itemID]; ok {
+			continue
+		}
+		replay = append(replay, key)
+	}
+	return restored, replay
+}
+
+func replaceAdditionalContextPayload(target compact.Item, source compact.Item) compact.Item {
+	replacement := cloneAdditionalContextCompactItem(source)
+	replacement.ID = target.ID
+	replacement.Created = target.Created
+	replacement.HistorySequence = target.HistorySequence
+	replacement.SampledThroughSequence = target.SampledThroughSequence
+	return replacement
+}
+
+func cloneAdditionalContextCompactItem(item compact.Item) compact.Item {
+	cloned := item
+	cloned.Content = append([]compact.ContentPart(nil), item.Content...)
+	cloned.Data = cloneAnyMapForRouter(item.Data)
+	cloned.Raw = append(json.RawMessage(nil), item.Raw...)
+	return cloned
+}
+
+// forgetAdditionalContextKeys drops the deduplication markers for values whose
+// instruction-delivered fragments must reach the model again after compaction.
+func (r *RuntimeRouter) forgetAdditionalContextKeys(threadID string, keys []string) {
+	if r == nil || len(keys) == 0 {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return
+	}
+	r.additionalContextMu.Lock()
+	defer r.additionalContextMu.Unlock()
+	values := r.additionalContext[threadID]
+	for _, key := range keys {
+		delete(values, key)
+	}
 }
 
 // derivedAdditionalContextToolName turns an opaque source key into a bounded
