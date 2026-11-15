@@ -52,6 +52,28 @@ func backendSwitchSelection(owner codextui.BackendID) codextui.SessionSelection 
 	}
 }
 
+// finishBackendSwitch runs the captured preparation command and feeds its
+// result back through Update, mirroring the Bubble Tea program that owns the
+// asynchronous handoff.
+func finishBackendSwitch(t *testing.T, model *Model) {
+	t.Helper()
+	if model.pendingBackendSwitch == nil {
+		t.Fatal("no pending backend switch")
+	}
+	cmd := model.consumeBackendSwitchCmd()
+	if cmd == nil {
+		t.Fatal("pending backend switch command = nil")
+	}
+	msg := cmd()
+	if _, ok := msg.(backendSwitchResultMsg); !ok {
+		t.Fatalf("backend switch command returned %T", msg)
+	}
+	model.Update(msg)
+	if model.pendingBackendSwitch != nil {
+		t.Fatal("backend switch stayed pending after its result")
+	}
+}
+
 // TestCrossBackendResumeAdoptsOwningBackendLikeRust locks Rust #58457: selecting
 // a conversation listed by another backend prepares it through that owner and
 // only then replaces the displayed conversation.
@@ -70,9 +92,10 @@ func TestCrossBackendResumeAdoptsOwningBackendLikeRust(t *testing.T) {
 	})
 
 	decision, notice, complete := model.applySessionSelection(backendSwitchSelection(owner))
-	if decision == nil || !complete || !strings.Contains(notice, "thread-dest") {
+	if decision != nil || complete || notice != "" || model.pendingBackendSwitch == nil {
 		t.Fatalf("decision=%#v notice=%q complete=%v", decision, notice, complete)
 	}
+	finishBackendSwitch(t, model)
 	if resumeCalls != 0 {
 		t.Fatalf("same-backend resume ran %d times for a foreign selection", resumeCalls)
 	}
@@ -94,8 +117,8 @@ func TestCrossBackendResumeAdoptsOwningBackendLikeRust(t *testing.T) {
 	if len(model.State.Messages) != 1 || model.State.Messages[0].Text != "destination history" {
 		t.Fatalf("transcript = %#v", model.State.Messages)
 	}
-	if decision.Value != "thread-dest" {
-		t.Fatalf("decision value = %q", decision.Value)
+	if !strings.Contains(model.notice, "thread-dest") {
+		t.Fatalf("notice after switch = %q", model.notice)
 	}
 	if got := model.composerText(); got != "keep this draft" {
 		t.Fatalf("composer draft = %q", got)
@@ -113,9 +136,13 @@ func TestBackendSwitchPreparationFailureKeepsCurrentSessionLikeRust(t *testing.T
 	}, nil)
 
 	decision, notice, complete := model.applySessionSelection(backendSwitchSelection(owner))
+	if decision != nil || complete || notice != "" || model.pendingBackendSwitch == nil {
+		t.Fatalf("decision=%#v notice=%q complete=%v", decision, notice, complete)
+	}
+	finishBackendSwitch(t, model)
 	const want = "Failed to prepare session backend: config/read failed while checking remote project trust"
-	if decision != nil || !complete || notice != want {
-		t.Fatalf("decision=%#v notice=%q complete=%v want %q", decision, notice, complete, want)
+	if model.notice != want {
+		t.Fatalf("notice=%q want %q", model.notice, want)
 	}
 	if model.backendID != from {
 		t.Fatalf("displayed backend = %v, want %v", model.backendID, from)
@@ -185,9 +212,10 @@ func TestRecordedOwnershipWinsOverStalePickerStampLikeRust(t *testing.T) {
 	model := backendSwitchModel(t, from, func(BackendSwitchRequest) (BackendSwitchResult, error) {
 		return BackendSwitchResult{Response: backendSwitchResponse()}, nil
 	}, nil)
-	if decision, notice, _ := model.applySessionSelection(backendSwitchSelection(owner)); decision == nil {
-		t.Fatalf("initial switch notice = %q", notice)
+	if decision, notice, complete := model.applySessionSelection(backendSwitchSelection(owner)); decision != nil || complete || notice != "" {
+		t.Fatalf("initial switch decision=%#v notice=%q complete=%v", decision, notice, complete)
 	}
+	finishBackendSwitch(t, model)
 
 	var resumed codextui.SessionSelection
 	model.onResumeSession = func(selection codextui.SessionSelection) (SessionResumeResponse, error) {

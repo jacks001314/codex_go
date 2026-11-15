@@ -170,11 +170,16 @@ func (m *Model) finishResumeCWDPrompt(response ModalResponse) bubbletea.Cmd {
 	if pending.selection != nil {
 		selection := *pending.selection
 		selection.ResumeCWD = cwd
-		decision, notice, _ := m.applySessionSelection(selection)
+		decision, notice, complete := m.applySessionSelection(selection)
 		if strings.TrimSpace(notice) != "" {
 			m.notice = strings.TrimSpace(notice)
 		} else {
 			m.notice = strings.TrimSpace(pending.optionLabel)
+		}
+		// A cross-backend handoff completes off the update loop; it delivers
+		// the modal response itself once the destination is prepared.
+		if decision == nil && !complete {
+			return cmd
 		}
 		var callback bubbletea.Cmd
 		if m.onModalResponse != nil {

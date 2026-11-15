@@ -4,7 +4,11 @@ import (
 	"errors"
 	"strings"
 
+	bubbletea "charm.land/bubbletea/v2"
+
 	codextui "codex_go/tui"
+	"codex_go/tui/keymsg"
+	"codex_go/tui/mousemsg"
 )
 
 // Rust #58457 (tui/src/app/backend_selection.rs resume_backend_session): the
@@ -48,6 +52,32 @@ type BackendSwitchRequest struct {
 // displayed conversation.
 type BackendSwitchResult struct {
 	Response SessionResumeResponse
+}
+
+// backendSwitchResultMsg delivers the prepared conversation back to the update
+// loop. Rust #61481 runs the Cloud handoff as an awaited future while the TUI
+// keeps handling draft input, so the Go handoff leaves the update loop through
+// this message instead of blocking it.
+type backendSwitchResultMsg struct {
+	id     uint64
+	result BackendSwitchResult
+	err    error
+}
+
+// pendingBackendSwitch is one cross-backend preparation owned by the model.
+// The request fields are captured so the Cmd goroutine never reads the model.
+type pendingBackendSwitch struct {
+	id             uint64
+	request        BackendSwitchRequest
+	selection      codextui.SessionSelection
+	decision       *PickerDecision
+	resolvedCWD    string
+	responseID     string
+	responseOption string
+	// fromAgentsOverview distinguishes the command-center resume flow, which
+	// captures and restores per-task drafts around the switch.
+	fromAgentsOverview bool
+	switching          bool
 }
 
 // ErrBackendSwitchUnavailable reports that the host cannot reach the owning
@@ -131,6 +161,11 @@ func (m *Model) applyBackendSwitchSelection(selection codextui.SessionSelection,
 	if m.onSwitchBackendSession == nil {
 		return m.failBackendSwitch(backendSwitchUnavailableMessage)
 	}
+	if m.pendingBackendSwitch != nil {
+		// Rust keeps the pending handoff as the only navigation owner, so a
+		// second selection waits instead of replacing its destination.
+		return m.failBackendSwitch("Wait for the current session switch to finish.")
+	}
 	resolved, needsPrompt, resolveNotice := m.resolveResumeSelectionCWD(selection)
 	if strings.TrimSpace(resolveNotice) != "" {
 		return nil, resolveNotice, true
@@ -140,20 +175,92 @@ func (m *Model) applyBackendSwitchSelection(selection codextui.SessionSelection,
 		return nil, "", false
 	}
 	resolved.Target.BackendID = owner
-	result, err := m.onSwitchBackendSession(BackendSwitchRequest{
-		FromBackendID: m.backendID,
-		FromThreadID:  strings.TrimSpace(m.currentThreadID()),
-		Target:        resolved.Target,
-		ResumeCWD:     resolved.ResumeCWD,
-	})
-	if err != nil {
-		detail := strings.TrimSpace(err.Error())
+	state := &pendingBackendSwitch{
+		id: m.nextBackendSwitchID(),
+		request: BackendSwitchRequest{
+			FromBackendID: m.backendID,
+			FromThreadID:  strings.TrimSpace(m.currentThreadID()),
+			Target:        resolved.Target,
+			ResumeCWD:     resolved.ResumeCWD,
+		},
+		selection:          resolved,
+		decision:           decision,
+		resolvedCWD:        resolved.ResumeCWD,
+		fromAgentsOverview: m.agentsOverview != nil,
+		switching:          threadID != strings.TrimSpace(m.currentThreadID()),
+	}
+	if state.decision == nil {
+		state.decision = &PickerDecision{Kind: string(selection.Kind), Value: threadID}
+	}
+	state.responseOption = firstNonEmpty(state.decision.Value, threadID)
+	// A picker owns the accepted selection; Rust closes it before the handoff
+	// paints its connecting state, and the modal response is delivered once the
+	// destination has been prepared.
+	if m.modal != nil {
+		// The accepted selection owns the open surface; the handoff paints its
+		// own progress and reports the modal response on adoption.
+		state.responseID = m.modal.id
+		m.modal = nil
+	}
+	m.pendingBackendSwitch = state
+	m.backendSwitchCmd = m.beginBackendSwitchCommand(state)
+	return nil, "", false
+}
+
+// beginBackendSwitchCommand runs the destination preparation on its own
+// goroutine. The closure captures only immutable request values, so quitting or
+// abandoning the switch cannot race with a torn-down model.
+func (m *Model) beginBackendSwitchCommand(state *pendingBackendSwitch) bubbletea.Cmd {
+	if m == nil || state == nil || m.onSwitchBackendSession == nil {
+		return nil
+	}
+	hook := m.onSwitchBackendSession
+	request := state.request
+	id := state.id
+	return func() bubbletea.Msg {
+		result, err := hook(request)
+		return backendSwitchResultMsg{id: id, result: result, err: err}
+	}
+}
+
+func (m *Model) nextBackendSwitchID() uint64 {
+	m.backendSwitchSeq++
+	return m.backendSwitchSeq
+}
+
+// consumeBackendSwitchCmd hands the initial preparation command to the
+// Bubble Tea program after the update that started it.
+func (m *Model) consumeBackendSwitchCmd() bubbletea.Cmd {
+	if m == nil || m.backendSwitchCmd == nil {
+		return nil
+	}
+	cmd := m.backendSwitchCmd
+	m.backendSwitchCmd = nil
+	return cmd
+}
+
+// applyBackendSwitchResult adopts a prepared destination. A result whose
+// generation no longer matches belongs to an abandoned handoff and is dropped
+// without touching the displayed conversation.
+func (m *Model) applyBackendSwitchResult(message backendSwitchResultMsg) bubbletea.Cmd {
+	if m == nil {
+		return nil
+	}
+	state := m.pendingBackendSwitch
+	if state == nil || state.id != message.id {
+		return nil
+	}
+	m.pendingBackendSwitch = nil
+	if message.err != nil {
+		detail := strings.TrimSpace(message.err.Error())
 		if detail == "" {
 			detail = "unknown error"
 		}
-		return m.failBackendSwitch(backendSwitchPrepareFailedPrefix + detail)
+		m.failBackendSwitch(backendSwitchPrepareFailedPrefix + detail)
+		return nil
 	}
-	next := owner
+	result := message.result
+	next := state.selection.Target.BackendID
 	if result.Response.Summary != nil && !result.Response.Summary.BackendID.IsZero() {
 		next = result.Response.Summary.BackendID
 	}
@@ -163,17 +270,18 @@ func (m *Model) applyBackendSwitchSelection(selection codextui.SessionSelection,
 		// that now serves it (Rust backends.displayed = destination_slot).
 		m.backendID = next
 	}
-	if state := m.agentsOverviewBackendPeek(next); state != nil {
+	if backendState := m.agentsOverviewBackendPeek(next); backendState != nil {
 		// Preparing the destination succeeded, so it is reachable again.
-		state.disconnected = false
+		backendState.disconnected = false
 	}
 	// Rust #61596: pagination and failure state follow the destination backend
 	// instead of being reset by the switch.
 	m.syncAgentsOverviewBackendView()
+	decision := state.decision
 	if decision == nil {
-		decision = &PickerDecision{Kind: string(selection.Kind), Value: threadID}
+		decision = &PickerDecision{Kind: string(state.selection.Kind), Value: strings.TrimSpace(state.selection.Target.ThreadID)}
 	}
-	resolvedCWD := resolved.ResumeCWD
+	resolvedCWD := state.resolvedCWD
 	if result.Response.Summary != nil {
 		m.upsertSessionItem(*result.Response.Summary)
 		if id := strings.TrimSpace(result.Response.Summary.ThreadID); id != "" {
@@ -181,15 +289,166 @@ func (m *Model) applyBackendSwitchSelection(selection codextui.SessionSelection,
 		}
 		// A session-directory choice prefers the handler's freshly read summary
 		// over the possibly stale picker row (same rule as a same-backend resume).
-		if strings.TrimSpace(selection.Target.CWD) != "" && sameResumeCWD(resolved.ResumeCWD, selection.Target.CWD) {
+		if strings.TrimSpace(state.selection.Target.CWD) != "" && sameResumeCWD(state.resolvedCWD, state.selection.Target.CWD) {
 			if summaryCWD := strings.TrimSpace(result.Response.Summary.CWD); summaryCWD != "" {
 				resolvedCWD = summaryCWD
 			}
 		}
 	}
+	threadID := strings.TrimSpace(state.selection.Target.ThreadID)
 	m.applyResumeResponseWithResolvedCWD(threadID, result.Response, resolvedCWD)
 	m.flushBackendRequests()
-	return decision, strings.TrimSpace(m.State.RenderSetting("Thread", firstNonEmpty(decision.Value, threadID))), true
+	if state.fromAgentsOverview && state.switching {
+		// Rust #42419 keeps each task's composer draft across the command-center
+		// resume; the asynchronous handoff must restore it when the destination
+		// is finally adopted.
+		m.restoreAgentsOverviewResumeDraft(strings.TrimSpace(decision.Value))
+		m.maybeCloseAgentsOverviewAfterResume(strings.TrimSpace(m.currentThreadID()))
+	}
+	m.notice = strings.TrimSpace(m.State.RenderSetting("Thread", firstNonEmpty(decision.Value, threadID)))
+	m.refreshTranscript()
+	if m.onModalResponse == nil || strings.TrimSpace(state.responseID) == "" {
+		return nil
+	}
+	optionID := state.responseOption
+	if strings.TrimSpace(decision.Value) != "" {
+		optionID = decision.Value
+	}
+	return m.onModalResponse(ModalResponse{
+		ID:       state.responseID,
+		Kind:     ModalKindPicker,
+		OptionID: optionID,
+		Picker:   decision,
+	})
+}
+
+// updateBackendSwitchKey keeps the composer editable while a cross-backend
+// handoff runs. Ctrl+C first clears the draft (Rust
+// `cancel_cloud_handoff_input`), then quits when no input surface owns it;
+// Ctrl+D quits only with an empty draft. Submission and app shortcuts wait for
+// the handoff to finish (Rust RestrictedInputMode::DraftHandoff).
+func (m *Model) updateBackendSwitchKey(msg keymsg.KeyMsg) (bubbletea.Cmd, bool) {
+	if m == nil || m.pendingBackendSwitch == nil {
+		return nil, false
+	}
+	// A pre-existing modal, overlay or alternate screen keeps its normal key
+	// ownership; the handoff only edits the conversation composer.
+	if m.modal != nil || m.overlay != nil || m.agentsOverview != nil ||
+		(m.analyticsDashboard != nil && m.analyticsDashboard.active) || m.readOnlyThread {
+		return nil, false
+	}
+	switch msg.Type {
+	case keymsg.KeyCtrlC:
+		m.activeKeyChord = ""
+		m.pendingKeyChordPrefix = ""
+		if m.cancelBackendSwitchDraftInput() {
+			return nil, true
+		}
+		if m.backendSwitchNoPopupActive() {
+			m.abandonBackendSwitch()
+			return m.quitCmd(), true
+		}
+		return nil, true
+	case keymsg.KeyCtrlD:
+		if m.composerIsEmpty() && m.backendSwitchNoPopupActive() {
+			m.abandonBackendSwitch()
+			return m.quitCmd(), true
+		}
+		return nil, true
+	}
+	if m.warningsView != nil {
+		return m.updateWarningsViewKey(msg), true
+	}
+	spec := keySpecFromKeyMsg(msg)
+	if m.keyMatches("composer", "submit", spec) || m.keyMatches("composer", "queue", spec) {
+		return nil, true
+	}
+	if isImagePasteKey(msg) {
+		return m.pasteClipboardShortcut(), true
+	}
+	if msg.Type == keymsg.KeyRunes && msg.Paste {
+		if pasted := string(msg.Runes); pasted != "" {
+			m.insertComposerPaste(pasted)
+			m.extendComposerPasteWindow(m.currentTime())
+		}
+		return nil, true
+	}
+	now := m.currentTime()
+	if msg.Type == keymsg.KeyRunes {
+		m.noteComposerRunes(msg.Runes, now)
+	}
+	if msg.Type == keymsg.KeyEnter {
+		// Enter cannot submit during the handoff; only a legacy paste newline
+		// survives, matching Rust's RestrictedInputMode::DraftHandoff.
+		if m.shouldPasteBurstEnterInsertNewline(now) {
+			m.extendComposerPasteWindow(now)
+			return m.insertComposerNewline(), true
+		}
+		return nil, true
+	}
+	if msg.Type == keymsg.KeyTab {
+		if m.shouldPasteBurstTabInsertInsteadOfShortcut(now) {
+			m.insertComposerPasteTab()
+			m.extendComposerPasteWindow(now)
+		}
+		return nil, true
+	}
+	composerBefore := m.composer.Value()
+	if handled, prefixCmd := m.handleComposerPrefixKey(msg); handled {
+		m.syncComposerElements(composerBefore)
+		return prefixCmd, true
+	}
+	if handled, selectionCmd := m.applyComposerSelectionKey(msg); handled {
+		m.syncComposerPrefixAfterEdit(composerBefore)
+		m.syncComposerElements(composerBefore)
+		return selectionCmd, true
+	}
+	var composerCmd bubbletea.Cmd
+	m.composer, composerCmd = m.composer.Update(mousemsg.OriginalMessage(keymsg.OriginalMessage(msg)))
+	m.syncComposerPrefixAfterEdit(composerBefore)
+	m.syncComposerElements(composerBefore)
+	return composerCmd, true
+}
+
+// cancelBackendSwitchDraftInput flushes buffered paste state into the draft and
+// applies Ctrl+C's draft-cancellation step. It reports whether the draft owned
+// the keystroke.
+func (m *Model) cancelBackendSwitchDraftInput() bool {
+	if m == nil {
+		return false
+	}
+	// Go inserts pasted text immediately; settling the burst window is the
+	// equivalent of Rust's flush_composer_paste_burst.
+	m.composerPasteEnterUntil = nil
+	if m.composerIsEmpty() {
+		return false
+	}
+	m.resetComposer()
+	m.refreshTranscript()
+	return true
+}
+
+// backendSwitchNoPopupActive mirrors Rust's `no_modal_or_popup_active`: the
+// prompt, completion popups, warnings view, feature questions and the quick
+// dial menu all keep Ctrl+C for themselves.
+func (m *Model) backendSwitchNoPopupActive() bool {
+	if m == nil {
+		return true
+	}
+	return m.modal == nil && m.overlay == nil && m.warningsView == nil &&
+		!m.slashPopup.Active && !m.skillPopup.Active && m.mentionPopup == nil &&
+		!m.asyncQuestions.Expanded() && !m.quickDialMenu &&
+		(m.historySearch == nil || !m.historySearch.Active)
+}
+
+// abandonBackendSwitch forgets the pending handoff so its late result cannot
+// replace the active attachment (Rust drops the abandoned Cloud start).
+func (m *Model) abandonBackendSwitch() {
+	if m == nil {
+		return
+	}
+	m.pendingBackendSwitch = nil
+	m.backendSwitchCmd = nil
 }
 
 // failBackendSwitch renders a refused handoff without touching the displayed

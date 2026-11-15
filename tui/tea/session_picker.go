@@ -265,28 +265,51 @@ func (m *Model) applyResumePickerSelection(selection codextui.SessionSelection) 
 		attached = strings.TrimSpace(m.State.ThreadID)
 	}
 	if switching && attached != "" && attached == target {
-		if draft, ok := m.agentsOverviewDrafts[target]; ok {
-			if mode, exists := m.agentsOverviewDraftShellModes[target]; exists {
-				m.setComposerPromptWithMode(draft, mode)
-			} else {
-				m.setComposerPrompt(draft)
-			}
-			delete(m.agentsOverviewDraftShellModes, target)
-			delete(m.agentsOverviewDrafts, target)
-		} else {
-			// Rust builds a fresh chat widget when the task has no saved input
-			// state, so the composer starts empty instead of carrying the
-			// previous task's draft.
-			m.resetComposer()
-		}
+		m.restoreAgentsOverviewResumeDraft(target)
 	}
-	if m.agentsOverview != nil && attached != "" && attached == target && m.isTaskRunning() {
-		// Rust sets ViewCompletion::Accepted and redraws when the resumed task
-		// has a turn in flight; an idle task keeps the command center open.
-		m.agentsOverview.Completion = agentsoverview.CompletionAccepted
-		m.closeAgentsOverview()
-	}
+	m.maybeCloseAgentsOverviewAfterResume(attached)
 	return decision, notice, complete
+}
+
+// restoreAgentsOverviewResumeDraft installs the destination task's saved draft
+// after a command-center resume (Rust #42419).
+func (m *Model) restoreAgentsOverviewResumeDraft(target string) {
+	if m == nil {
+		return
+	}
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return
+	}
+	if draft, ok := m.agentsOverviewDrafts[target]; ok {
+		if mode, exists := m.agentsOverviewDraftShellModes[target]; exists {
+			m.setComposerPromptWithMode(draft, mode)
+		} else {
+			m.setComposerPrompt(draft)
+		}
+		delete(m.agentsOverviewDraftShellModes, target)
+		delete(m.agentsOverviewDrafts, target)
+		return
+	}
+	// Rust builds a fresh chat widget when the task has no saved input state,
+	// so the composer starts empty instead of carrying the previous draft.
+	m.resetComposer()
+}
+
+// maybeCloseAgentsOverviewAfterResume keeps the command center open for an idle
+// task and returns to the conversation when the resumed task is running.
+func (m *Model) maybeCloseAgentsOverviewAfterResume(attached string) {
+	if m == nil || m.agentsOverview == nil {
+		return
+	}
+	attached = strings.TrimSpace(attached)
+	if attached == "" || !m.isTaskRunning() {
+		return
+	}
+	// Rust sets ViewCompletion::Accepted and redraws when the resumed task has
+	// a turn in flight; an idle task keeps the command center open.
+	m.agentsOverview.Completion = agentsoverview.CompletionAccepted
+	m.closeAgentsOverview()
 }
 
 func (m *Model) openSessionActionConfirmation(selection codextui.SessionSelection) {

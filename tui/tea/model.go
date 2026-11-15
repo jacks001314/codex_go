@@ -2821,12 +2821,17 @@ type Model struct {
 	onResumeSession                 SessionResumeFunc
 	onUnarchiveThread               func(threadID string) error
 	onSwitchBackendSession          BackendSwitchFunc
-	onPromptEdit                    PromptEditFunc
-	onRenameThread                  ThreadRenameFunc
-	onLogout                        LogoutFunc
-	onReadAgents                    AgentThreadReaderFunc
-	onSwitchAgent                   AgentThreadSwitchFunc
-	onReconnectThreadApprovals      ThreadApprovalReconnectFunc
+	// backendSwitchSeq identifies cross-backend handoffs so a late result from
+	// an abandoned switch is ignored (Rust #61481).
+	backendSwitchSeq           uint64
+	pendingBackendSwitch       *pendingBackendSwitch
+	backendSwitchCmd           bubbletea.Cmd
+	onPromptEdit               PromptEditFunc
+	onRenameThread             ThreadRenameFunc
+	onLogout                   LogoutFunc
+	onReadAgents               AgentThreadReaderFunc
+	onSwitchAgent              AgentThreadSwitchFunc
+	onReconnectThreadApprovals ThreadApprovalReconnectFunc
 	// statusCopyTargets holds the most recent /status output for /copy
 	// (Rust #43055); cleared by any other command, user message, or response.
 	statusCopyTargets *statusCopyTargets
@@ -4209,6 +4214,9 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 	if queueCmd := next.consumeResumedQueue(); queueCmd != nil {
 		cmd = bubbletea.Batch(cmd, queueCmd)
 	}
+	if switchCmd := next.consumeBackendSwitchCmd(); switchCmd != nil {
+		cmd = bubbletea.Batch(cmd, switchCmd)
+	}
 	return next, cmd
 }
 
@@ -4459,6 +4467,8 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 	case NewSessionStartFailedMsg:
 		m.applyNewSessionStartFailed(msg)
 		return m, m.refreshStatusControlsCmd()
+	case backendSwitchResultMsg:
+		return m, m.applyBackendSwitchResult(msg)
 	case TurnCompletedMsg:
 		if m.applyInactiveThreadTurnCompleted(msg) {
 			return m, m.refreshStatusControlsCmd()
@@ -4945,6 +4955,11 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		}
 		return m, bubbletea.Batch(cmds...)
 	case keymsg.KeyMsg:
+		// Rust #61481: a cross-backend handoff leaves the update loop running,
+		// so the draft stays editable and Ctrl+C can abandon the switch.
+		if cmd, handled := m.updateBackendSwitchKey(msg); handled {
+			return m, cmd
+		}
 		// Rust #59595/#59824: keyboard resize mode consumes arrows, h/l, shift
 		// arrows and Enter/Esc before any other handler sees them.
 		if handled, cmd := m.handleSidePaneResizeKey(msg); handled {
@@ -5426,6 +5441,14 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 			return m, m.insertComposerNewline()
 		}
 	case mousemsg.MouseMsg:
+		if m.pendingBackendSwitch != nil {
+			// The handoff accepts only the right-click paste trigger; other
+			// transcript and navigation gestures wait for adoption.
+			if cmd := m.startRightClickPaste(msg); cmd != nil {
+				return m, cmd
+			}
+			return m, nil
+		}
 		m.clearLeaderChord()
 		if handled, cmd := m.handleSidePaneMouse(msg); handled {
 			return m, cmd
