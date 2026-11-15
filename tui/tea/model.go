@@ -1679,6 +1679,10 @@ type Options struct {
 	// OnWriteModelProviderConfig persists provider edits through the connected
 	// app server's modelProvider/config/write method.
 	OnWriteModelProviderConfig ModelProviderConfigWriteFunc
+	// OnSetModelProviderDefault persists the new-chat provider through the
+	// dedicated modelProvider/default/set method (Rust #61438). Nil falls back to
+	// the generic configuration write path, which older servers still accept.
+	OnSetModelProviderDefault ModelProviderDefaultSetFunc
 	// ModelProviderClientOverride pins the provider selected by this client's
 	// launch settings. While set, the server's new-chat default is read-only.
 	ModelProviderClientOverride string
@@ -2729,6 +2733,7 @@ type Model struct {
 	onListPermissionProfiles   func() ([]chatwidget.CustomPermissionProfile, bool, error)
 	onListModelProviders       ModelProviderListFunc
 	onWriteModelProviderConfig ModelProviderConfigWriteFunc
+	onSetModelProviderDefault  ModelProviderDefaultSetFunc
 	providerClientOverride     string
 	// configProviderGeneration invalidates in-flight model provider browser
 	// requests when the popup is dismissed or reopened (Rust #59541). It lives
@@ -3597,6 +3602,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onListPermissionProfiles:         options.OnListPermissionProfiles,
 		onListModelProviders:             options.OnListModelProviders,
 		onWriteModelProviderConfig:       options.OnWriteModelProviderConfig,
+		onSetModelProviderDefault:        options.OnSetModelProviderDefault,
 		providerClientOverride:           strings.TrimSpace(options.ModelProviderClientOverride),
 		sideWidthPercent:                 options.SidebarWidthPercent,
 		onListCollaborationModes:         options.OnListCollaborationModes,

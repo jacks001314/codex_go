@@ -8,6 +8,7 @@ import (
 
 	"codex_go/appserver"
 	appserverdaemon "codex_go/appserverdaemon"
+	"codex_go/config"
 	"codex_go/model"
 	codextea "codex_go/tui/tea"
 )
@@ -61,4 +62,44 @@ func interactiveRemoteModelProviderWriter(ctx context.Context, endpoint *appserv
 		}
 		return response, nil
 	}
+}
+
+// interactiveRemoteModelProviderDefaultSetter persists the new-chat provider
+// through the connected app server's dedicated method (Rust #61438). An older
+// server reports the method as unsupported so the TUI can prompt for an update,
+// while a lost reply stays retryable without claiming the write failed.
+func interactiveRemoteModelProviderDefaultSetter(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) codextea.ModelProviderDefaultSetFunc {
+	return func(params model.ProviderDefaultSetParams) (config.ConfigWriteResponse, error) {
+		reqCtx, cancel := remoteTUIAccountRequestContext(ctx)
+		defer cancel()
+		client, err := openRemoteSessionClient(reqCtx, endpoint)
+		if err != nil {
+			return config.ConfigWriteResponse{}, fmt.Errorf("%w: %v", codextea.ErrModelProviderDefaultUnconfirmed, err)
+		}
+		defer client.close()
+		var response config.ConfigWriteResponse
+		if err := remoteSessionRequest(reqCtx, client, appserver.MethodModelProviderDefaultSet, params, &response); err != nil {
+			if remoteTUIModelProviderDefaultUnsupported(err) {
+				return config.ConfigWriteResponse{}, codextea.ErrModelProviderDefaultUnsupported
+			}
+			var rpcErr *remoteRPCError
+			if errors.As(err, &rpcErr) && rpcErr != nil {
+				return config.ConfigWriteResponse{}, err
+			}
+			return config.ConfigWriteResponse{}, fmt.Errorf("%w: %v", codextea.ErrModelProviderDefaultUnconfirmed, err)
+		}
+		return response, nil
+	}
+}
+
+// remoteTUIModelProviderDefaultUnsupported reports an app server that predates
+// modelProvider/default/set.
+func remoteTUIModelProviderDefaultUnsupported(err error) bool {
+	var rpcErr *remoteRPCError
+	if !errors.As(err, &rpcErr) || rpcErr == nil {
+		return false
+	}
+	method := string(appserver.MethodModelProviderDefaultSet)
+	return rpcErr.Code == -32601 ||
+		(rpcErr.Code == -32600 && strings.HasPrefix(rpcErr.Message, fmt.Sprintf("Invalid request: unknown variant `%s`", method)))
 }

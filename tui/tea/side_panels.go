@@ -13,7 +13,7 @@ import (
 
 // Rust parity: codex-rs/tui/src/app/owned_transcript.rs and app.rs (#58992).
 //
-// With the disabled-by-default `tui_workspace` feature, a side conversation is
+// With the default-enabled `tui_workspace` feature, a side conversation is
 // shown beside its parent instead of replacing it. Only the focused
 // conversation owns the composer, so drawing both transcripts cannot change
 // where input goes.

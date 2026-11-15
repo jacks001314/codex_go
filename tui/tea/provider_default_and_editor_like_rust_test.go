@@ -21,14 +21,14 @@ func providerPageWithDefaultControl() model.ProviderListResponse {
 }
 
 func TestConfigPanelProviderDefaultSelectionLikeRust(t *testing.T) {
-	var wrote []config.ConfigBatchWriteParams
+	var wrote []model.ProviderDefaultSetParams
 	m := NewModel(codextui.NewState(nil), Options{
 		Width:                100,
 		Height:               30,
 		OnListModelProviders: func() (model.ProviderListResponse, error) { return providerPageWithDefaultControl(), nil },
-		OnWriteHookConfig: func(params config.ConfigBatchWriteParams) error {
+		OnSetModelProviderDefault: func(params model.ProviderDefaultSetParams) (config.ConfigWriteResponse, error) {
 			wrote = append(wrote, params)
-			return nil
+			return config.ConfigWriteResponse{Status: config.WriteOK}, nil
 		},
 	})
 	m.State.ThreadID = "thread-providers"
@@ -48,11 +48,11 @@ func TestConfigPanelProviderDefaultSelectionLikeRust(t *testing.T) {
 		t.Fatal("space/default action produced no write")
 	}
 	m = applyCmd(t, m, writeCmd)
-	if len(wrote) != 1 || len(wrote[0].Edits) != 1 || wrote[0].Edits[0].KeyPath != "model_provider" || wrote[0].Edits[0].Value != "gateway" {
+	if len(wrote) != 1 || wrote[0].ProviderID != "gateway" {
 		t.Fatalf("default provider write = %#v", wrote)
 	}
 	reload := m.modal.configPanel.providers
-	if reload == nil || reload.defaultID != "gateway" || !strings.Contains(reload.notice, "/new now uses gateway") {
+	if reload == nil || reload.defaultID != "gateway" || !strings.Contains(reload.notice, "New chats now use Gateway.") {
 		t.Fatalf("saved default state = %#v", reload)
 	}
 }
@@ -74,6 +74,57 @@ func TestConfigPanelProviderClientOverrideLocksDefaultLikeRust(t *testing.T) {
 	}
 	if strings.Contains(view, "space set default") {
 		t.Fatalf("client override still offered default selection: %q", view)
+	}
+}
+
+func TestConfigPanelProviderDefaultOverrideAndUnsupportedRPC(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		resp config.ConfigWriteResponse
+		want string
+	}{
+		{
+			name: "overridden",
+			resp: config.ConfigWriteResponse{
+				Status:             config.WriteOKOverridden,
+				OverriddenMetadata: &config.OverriddenMetadata{Message: "Managed configuration overrides this choice."},
+			},
+			want: "Saved Gateway. Managed configuration overrides this choice.",
+		},
+		{
+			name: "unsupported",
+			err:  ErrModelProviderDefaultUnsupported,
+			want: "Update the connected app server to change the default model provider.",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := NewModel(codextui.NewState(nil), Options{
+				Width:                100,
+				Height:               30,
+				OnListModelProviders: func() (model.ProviderListResponse, error) { return providerPageWithDefaultControl(), nil },
+				OnSetModelProviderDefault: func(model.ProviderDefaultSetParams) (config.ConfigWriteResponse, error) {
+					return tc.resp, tc.err
+				},
+			})
+			m.State.ThreadID = "thread-providers"
+			m.State.Provider = "openai"
+			m = applyCmd(t, m, openProviderBrowser(t, m))
+			m.Update(key(keymsg.KeyDown))
+			updated, writeCmd := m.Update(key(keymsg.KeySpace))
+			m = updated.(*Model)
+			if writeCmd == nil {
+				t.Fatal("space/default action produced no write")
+			}
+			m = applyCmd(t, m, writeCmd)
+			reload := m.modal.configPanel.providers
+			if reload == nil || !strings.Contains(reload.notice, tc.want) {
+				t.Fatalf("default notice = %#v, want %q", reload, tc.want)
+			}
+			if tc.err != nil && reload.defaultID != "openai" {
+				t.Fatalf("unsupported write changed the default: %#v", reload)
+			}
+		})
 	}
 }
 

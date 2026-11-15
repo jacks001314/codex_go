@@ -620,6 +620,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		OnListPermissionProfiles:    interactiveRemoteListPermissionProfiles(ctx, endpoint),
 		OnListModelProviders:        interactiveRemoteModelProviderList(ctx, endpoint),
 		OnWriteModelProviderConfig:  interactiveRemoteModelProviderWriter(ctx, endpoint),
+		OnSetModelProviderDefault:   interactiveRemoteModelProviderDefaultSetter(ctx, endpoint),
 		ModelProviderClientOverride: interactiveRemoteModelProviderClientOverride(root),
 		SidebarWidthPercent:         interactiveSidebarWidthPercent(root),
 		OnUpdateThreadPermissions:   interactiveRemoteUpdateThreadPermissions(ctx, endpoint),

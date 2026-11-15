@@ -183,9 +183,10 @@ var Registry = []Spec{
 	// temporary tree-scoped HTTP MCP message board instead of requiring plugin
 	// or endpoint configuration. It takes precedence over agent_message_board.
 	{Key: "agent_message_board_mcp", Stage: StageUnderDevelopment, DefaultEnabled: false},
-	// Rust (codex-rs/features/src/lib.rs #58992): show the parent conversation
-	// beside its side conversation in the TUI when the terminal is wide enough.
-	{Key: "tui_workspace", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust (codex-rs/features/src/lib.rs #58992, #61352): show the parent
+	// conversation beside its side conversation in the TUI when the terminal is
+	// wide enough. Stable and enabled by default.
+	{Key: "tui_workspace", Stage: StageStable, DefaultEnabled: true},
 	{Key: "enable_fanout", Stage: StageRemoved},
 	{Key: "apps", Stage: StageStable, DefaultEnabled: true},
 	{Key: "enable_mcp_apps", Stage: StageUnderDevelopment},

@@ -51,6 +51,27 @@ func interactiveLocalModelProviderWriter(root *cli.RootOptions) codextea.ModelPr
 	}
 }
 
+// interactiveLocalModelProviderDefaultSetter persists the new-chat provider
+// through the embedded app server's dedicated default-provider method
+// (Rust #61438).
+func interactiveLocalModelProviderDefaultSetter(root *cli.RootOptions) codextea.ModelProviderDefaultSetFunc {
+	return func(params model.ProviderDefaultSetParams) (config.ConfigWriteResponse, error) {
+		router := appserver.NewRuntimeRouter(appserver.RuntimeServices{
+			Config:     interactiveConfigService(root),
+			DefaultCWD: interactiveSessionPickerCWD(root),
+		})
+		defer router.Close()
+		response, err := router.ModelProviderDefaultSet(params)
+		if err != nil {
+			return config.ConfigWriteResponse{}, err
+		}
+		if response == nil {
+			return config.ConfigWriteResponse{}, errors.New("modelProvider/default/set returned no response")
+		}
+		return *response, nil
+	}
+}
+
 // interactiveLocalModelProviderClientOverride mirrors Rust
 // AppServerSession::client_provider_override_for_new_chats for embedded
 // sessions: only an invocation-level selection pins the provider, because the

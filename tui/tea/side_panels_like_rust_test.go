@@ -30,9 +30,9 @@ func TestSideWorkspaceWidthsRespectMinimumAndSplitLikeRust(t *testing.T) {
 // The panes need the `tui_workspace` feature and an open side conversation.
 func TestSidePaneLayoutRequiresFeatureAndOpenSideConversationLikeRust(t *testing.T) {
 	side := &activeSideConversation{ParentThreadID: "root", SideThreadID: "side", ShowingSide: true}
-	withoutFeature := &Model{activeSide: side}
+	withoutFeature := &Model{featureSettings: map[string]bool{sideWorkspaceFeatureKey: false}, activeSide: side}
 	if _, _, _, ok := withoutFeature.sidePaneLayout(140); ok {
-		t.Fatal("panes rendered without the tui_workspace feature")
+		t.Fatal("panes rendered with the tui_workspace feature disabled")
 	}
 	withoutSide := &Model{featureSettings: map[string]bool{sideWorkspaceFeatureKey: true}}
 	if _, _, _, ok := withoutSide.sidePaneLayout(140); ok {

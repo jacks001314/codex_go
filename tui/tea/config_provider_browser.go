@@ -26,6 +26,19 @@ type ModelProviderListFunc func() (model.ProviderListResponse, error)
 // through the connected app server.
 type ModelProviderConfigWriteFunc func(params model.ProviderConfigWriteParams) (model.ProviderConfigWriteResponse, error)
 
+// ModelProviderDefaultSetFunc persists the new-chat provider through the
+// dedicated modelProvider/default/set method (Rust #61438).
+type ModelProviderDefaultSetFunc func(params model.ProviderDefaultSetParams) (config.ConfigWriteResponse, error)
+
+var (
+	// ErrModelProviderDefaultUnsupported reports an app server that predates the
+	// dedicated default-provider method.
+	ErrModelProviderDefaultUnsupported = errors.New("model provider default method is unsupported")
+	// ErrModelProviderDefaultUnconfirmed reports a write whose outcome is
+	// unknown, such as a lost transport reply. The server may have committed it.
+	ErrModelProviderDefaultUnconfirmed = errors.New("model provider default write was not confirmed")
+)
+
 type configProviderBrowserState struct {
 	generation       uint64
 	loading          bool
@@ -72,10 +85,12 @@ type configProviderEditorState struct {
 }
 
 type configPanelProviderWriteResultMsg struct {
-	generation uint64
-	kind       string
-	providerID string
-	err        error
+	generation   uint64
+	kind         string
+	providerID   string
+	providerName string
+	response     config.ConfigWriteResponse
+	err          error
 }
 
 // currentChatProviderID mirrors Rust chat.thread_id().map(|_|
@@ -834,8 +849,24 @@ func (m *Model) writeConfigProviderDefaultCmd(browser *configProviderBrowserStat
 	browser.notice = "Saving model provider…"
 	generation := browser.generation
 	providerID := provider.ID
+	providerName := strings.TrimSpace(provider.Name)
+	if providerName == "" {
+		providerName = providerID
+	}
+	setDefault := m.onSetModelProviderDefault
 	writer := m.onWriteHookConfig
 	return func() bubbletea.Msg {
+		if setDefault != nil {
+			response, err := setDefault(model.ProviderDefaultSetParams{ProviderID: providerID})
+			return configPanelProviderWriteResultMsg{
+				generation:   generation,
+				kind:         "default",
+				providerID:   providerID,
+				providerName: providerName,
+				response:     response,
+				err:          err,
+			}
+		}
 		if writer == nil {
 			return configPanelProviderWriteResultMsg{generation: generation, kind: "default", providerID: providerID, err: errors.New("config/batchWrite is unavailable")}
 		}
@@ -843,7 +874,7 @@ func (m *Model) writeConfigProviderDefaultCmd(browser *configProviderBrowserStat
 			Edits:            []config.ConfigEdit{{KeyPath: "model_provider", Value: providerID, MergeStrategy: config.MergeReplace}},
 			ReloadUserConfig: true,
 		})
-		return configPanelProviderWriteResultMsg{generation: generation, kind: "default", providerID: providerID, err: err}
+		return configPanelProviderWriteResultMsg{generation: generation, kind: "default", providerID: providerID, providerName: providerName, err: err}
 	}
 }
 
@@ -885,14 +916,36 @@ func (m *Model) applyConfigPanelProviderWriteResult(msg configPanelProviderWrite
 			browser.editor.err = message
 			return nil
 		}
-		browser.notice = "Could not save provider: " + message
+		switch {
+		case msg.kind == "default" && errors.Is(msg.err, ErrModelProviderDefaultUnsupported):
+			browser.notice = "Update the connected app server to change the default model provider."
+		case msg.kind == "default" && errors.Is(msg.err, ErrModelProviderDefaultUnconfirmed):
+			// The server may have committed the write before its reply was lost.
+			browser.notice = "Could not confirm whether " + msg.providerName + " was saved: " + modelProviderDefaultErrorDetail(msg.err, ErrModelProviderDefaultUnconfirmed)
+			m.notice = browser.notice
+			m.addErrorHistoryMessage(browser.notice)
+			browser.loading = true
+			return m.fetchConfigProvidersCmd(browser.generation)
+		default:
+			browser.notice = "Could not save provider: " + message
+		}
 		m.notice = browser.notice
 		m.addErrorHistoryMessage(browser.notice)
 		return nil
 	}
 	if msg.kind == "default" {
 		browser.defaultID = msg.providerID
-		browser.notice = "/new now uses " + msg.providerID + ". Restart the app server and TUI to refresh /model."
+		if msg.response.Status == config.WriteOKOverridden {
+			reason := "A higher-priority setting overrides this choice."
+			if msg.response.OverriddenMetadata != nil {
+				if detail := strings.TrimSpace(msg.response.OverriddenMetadata.Message); detail != "" {
+					reason = detail
+				}
+			}
+			browser.notice = "Saved " + msg.providerName + ". " + reason
+		} else {
+			browser.notice = "New chats now use " + msg.providerName + "."
+		}
 	} else {
 		browser.editor = nil
 		browser.details = nil
@@ -901,4 +954,15 @@ func (m *Model) applyConfigPanelProviderWriteResult(msg configPanelProviderWrite
 	m.notice = browser.notice
 	browser.loading = true
 	return m.fetchConfigProvidersCmd(browser.generation)
+}
+
+// modelProviderDefaultErrorDetail returns the underlying error text without the
+// sentinel prefix used to classify it.
+func modelProviderDefaultErrorDetail(err error, sentinel error) string {
+	message := strings.TrimSpace(err.Error())
+	prefix := sentinel.Error()
+	if trimmed, ok := strings.CutPrefix(message, prefix); ok {
+		message = strings.TrimSpace(strings.TrimPrefix(trimmed, ":"))
+	}
+	return message
 }
