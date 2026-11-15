@@ -2126,10 +2126,14 @@ type Model struct {
 	agentsOverviewKnownRows  map[string]agentsoverview.Row
 	agentsOverviewKnownOrder []string
 	agentsOverviewNotice     string
-	agentsOverviewBusy       bool
-	agentsOverviewRefresh    int
-	agentsOverviewPending    bool
-	agentsOverviewInflight   bool
+	// agentsOverviewArchiveError keeps a failed background archive visible
+	// across the command-center refresh it triggers (Rust #61619 keeps the
+	// error until the user leaves or dismisses it).
+	agentsOverviewArchiveError string
+	agentsOverviewBusy         bool
+	agentsOverviewRefresh      int
+	agentsOverviewPending      bool
+	agentsOverviewInflight     bool
 	// agentsOverviewInflightFor names the backend that owns the shared refresh
 	// slot, and agentsOverviewBackends keeps queued refreshes, Show more
 	// requests, refill counts, and failures per backend (Rust #61596).
@@ -2151,6 +2155,12 @@ type Model struct {
 	agentsOverviewDrafts                map[string]string
 	agentsOverviewDraftShellModes       map[string]bool
 	agentsOverviewPendingDraftShellMode *bool
+	// footerHintOverride replaces the passive footer row while a local
+	// operation blocks the conversation (Rust set_footer_hint_override).
+	footerHintOverride string
+	// pendingCurrentArchives tracks background `/archive` requests so the
+	// target task stays hidden until the server answers (Rust #61619).
+	pendingCurrentArchives map[string]*pendingCurrentArchive
 	// agentsOverviewDraftPastes keeps the pending large pastes of a saved draft
 	// so returning to that thread restores its placeholders too (Rust
 	// ThreadComposerState::pending_pastes).
@@ -4671,6 +4681,12 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		return m, m.applySideStartResult(msg)
 	case SideCloseResultMsg:
 		return m, m.applySideCloseResult(msg)
+	case currentArchiveSideCleanupMsg:
+		return m, m.applyCurrentArchiveSideCleanup(msg)
+	case currentThreadArchiveMsg:
+		return m, m.applyCurrentThreadArchive(msg)
+	case archiveWaitFinishedMsg:
+		return m, m.applyArchiveWaitFinished(msg)
 	case SideParentStatusChangeMsg:
 		m.applySideParentStatusChange(msg)
 		return m, nil
@@ -5105,14 +5121,12 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 			if m.inSideConversation() {
 				return m, m.returnFromSideConversation()
 			}
-			m.closeClipboardWorker()
-			return m, bubbletea.Quit
+			return m, m.quitCmd()
 		case keymsg.KeyCtrlD:
 			if m.modal != nil && (m.modal.externalAgentMigration != nil || m.modal.hooksBrowser != nil || m.modal.pluginBrowser != nil || m.modal.keymapInspector != nil) {
 				return m, m.updateModal(msg)
 			}
-			m.closeClipboardWorker()
-			return m, bubbletea.Quit
+			return m, m.quitCmd()
 		case keymsg.KeyCtrlV:
 			// Bubble Tea does not provide a portable text-paste message on all
 			// terminals. Read the native clipboard explicitly and insert it into
@@ -5766,6 +5780,11 @@ func (m *Model) viewString() string {
 func (m *Model) footerHelpLine() (string, bool) {
 	footerLine := footerHelpText
 	footerAlreadyStyled := false
+	if override := strings.TrimSpace(m.footerHintOverride); override != "" {
+		// Rust ChatWidget::set_footer_hint_override paints progress in the
+		// passive footer row while a local operation blocks the conversation.
+		return override, false
+	}
 	if m.shortcutOverlay {
 		// Rust paints the close hint in the passive row while the reference is
 		// open (shortcut_overlay::close_hint).
@@ -11511,8 +11530,7 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 	}
 	switch invocation.Command {
 	case codextui.CommandExit:
-		m.closeClipboardWorker()
-		return bubbletea.Quit
+		return m.quitCmd()
 	case codextui.CommandKeymap:
 		m.applyKeymapCommand(invocation.Args)
 	case codextui.CommandStatus:

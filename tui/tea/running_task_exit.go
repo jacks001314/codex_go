@@ -58,10 +58,10 @@ func (m *Model) applyRunningTaskExit(optionID string) bubbletea.Cmd {
 	}
 	switch strings.TrimSpace(optionID) {
 	case runningTaskExitBackground:
-		return bubbletea.Quit
+		return m.quitCmd()
 	case runningTaskExitStopAndQuit:
 		interrupt := m.interruptRunningTask()
-		return bubbletea.Sequence(interrupt, bubbletea.Quit)
+		return bubbletea.Sequence(interrupt, m.quitCmd())
 	default:
 		return m.interruptRunningTask()
 	}

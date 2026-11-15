@@ -2034,15 +2034,14 @@ func interactiveRemoteResumeSessionHandler(ctx context.Context, endpoint *appser
 		// writer and reports the thread's saved settings. When another app owns
 		// the conversation the resume fails with the active-writer conflict and
 		// the TUI falls back to a read-only history snapshot.
-		var resumed appserver.ThreadResumeResponse
 		resumeParams, err := remoteTUIResumeParams(root, threadID, resumeCWD)
 		if err != nil {
 			return codextea.SessionResumeResponse{}, err
 		}
-		resumeErr := remoteSessionRequest(ctx, client, appserver.MethodThreadResume, resumeParams, &resumed)
-		if resumeErr == nil && resumed.Thread != nil {
+		resumed, resumeErr := remoteTUIResumeThreadForNavigation(ctx, client, resumeParams)
+		if resumeErr == nil && resumed != nil && resumed.Thread != nil {
 			response := remoteTUIResumeResponseFromThread(resumed.Thread)
-			response.ThreadSettings = remoteTUISettingsFromResume(&resumed)
+			response.ThreadSettings = remoteTUISettingsFromResume(resumed)
 			return response, nil
 		}
 		providerErr := remoteTUIModelProviderError(resumeErr)
@@ -2094,6 +2093,12 @@ func interactiveRemoteUserShellCommand(ctx context.Context, endpoint *appserverd
 // directory untouched (tui/src/app_server_session.rs:thread_cwd_from_config).
 func remoteTUIResumeParams(root *cli.RootOptions, threadID string, resumeCWD string) (appserver.ThreadResumeParams, error) {
 	params := appserver.ThreadResumeParams{ThreadID: strings.TrimSpace(threadID)}
+	if interactiveRemoteSelectsCloud(root) {
+		// Cloud conversations resume by ID with saved settings; their history
+		// is loaded separately through the prepared attachment (Rust #61490).
+		params.ExcludeTurns = true
+		return params, nil
+	}
 	if interactiveRemoteEndpointIsExplicitRemote(root) {
 		// Rust #43330: a remote task resumes with the permissions saved on its
 		// server, so an explicit launch override is refused rather than sent.
@@ -2635,11 +2640,10 @@ func interactiveRemoteSwitchAgentThread(ctx context.Context, endpoint *appserver
 	if err != nil {
 		return codextea.AgentThreadSwitchResponse{}, err
 	}
-	var resumed appserver.ThreadResumeResponse
-	resumeErr := remoteSessionRequest(ctx, client, appserver.MethodThreadResume, resumeParams, &resumed)
-	if resumeErr == nil && resumed.Thread != nil {
+	resumed, resumeErr := remoteTUIResumeThreadForNavigation(ctx, client, resumeParams)
+	if resumeErr == nil && resumed != nil && resumed.Thread != nil {
 		response := remoteTUIAgentSwitchResponseFromThread(resumed.Thread)
-		response.ThreadSettings = remoteTUISettingsFromResume(&resumed)
+		response.ThreadSettings = remoteTUISettingsFromResume(resumed)
 		return response, nil
 	}
 	providerErr := remoteTUIModelProviderError(resumeErr)
@@ -3819,6 +3823,18 @@ func runInteractiveRemoteTurn(ctx context.Context, root *cli.RootOptions, endpoi
 		threadID = startedThreadID
 		if state != nil {
 			state.SetThreadID(threadID)
+		}
+	}
+	if threadID != "" && client.threadParamsMode == ThreadParamsModeCloud {
+		// A Cloud session is an in-process backend owned by this connection, so
+		// every turn reattaches to the saved task before sending (Rust #61490).
+		var resumed appserver.ThreadResumeResponse
+		if err := remoteSessionRequest(ctx, client, appserver.MethodThreadResume, appserver.ThreadResumeParams{
+			ThreadID:     strings.TrimSpace(threadID),
+			ExcludeTurns: true,
+		}, &resumed); err != nil {
+			sendRemoteTurnError(messages, err)
+			return
 		}
 	}
 	turnID, err := client.startTurn(ctx, root, state, threadID, request)

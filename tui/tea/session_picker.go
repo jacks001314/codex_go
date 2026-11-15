@@ -238,6 +238,12 @@ func (m *Model) applyResumePickerSelection(selection codextui.SessionSelection) 
 		return m.applySessionSelection(selection)
 	}
 	target := strings.TrimSpace(selection.Target.ThreadID)
+	if m.currentThreadArchivePending(target) {
+		// Rust resume_preparation.rs: a task that is still being archived
+		// cannot be resumed or attached again.
+		m.notice = "This task is still being archived."
+		return nil, m.notice, false
+	}
 	current := ""
 	if m.State != nil {
 		current = strings.TrimSpace(m.State.ThreadID)
@@ -321,8 +327,11 @@ func (m *Model) openCurrentSessionActionConfirmation(kind codextui.SessionSelect
 		},
 	}
 	title := "Archive this session?"
-	body := "Are you sure? This will archive the current session and exit Codex"
-	confirmLabel := "Yes, archive and exit"
+	// Rust #44337 removed the exit promise: a shared or remote session returns
+	// to the command center, while only an embedded session without dashboard
+	// actions still exits after the archive request.
+	body := "Are you sure? This will archive the current session"
+	confirmLabel := "Yes, archive"
 	confirmDescription := "Archive this session now"
 	// Rust #50764 (codex-rs/tui/src/chatwidget/slash_dispatch.rs):
 	// /archive stays available while a turn is running, and the confirmation warns
@@ -639,6 +648,9 @@ func (m *Model) applySessionSelection(selection codextui.SessionSelection) (*Pic
 	case codextui.SessionSelectionResume:
 		if threadID == "" {
 			return decision, "Resume failed: missing thread id", true
+		}
+		if m.currentThreadArchivePending(threadID) {
+			return nil, "This task is still being archived.", true
 		}
 		// Rust #58457: a selection owned by another backend is resumed through
 		// that owner; only a same-backend selection takes the local path.

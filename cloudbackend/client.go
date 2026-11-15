@@ -135,11 +135,17 @@ type Client struct {
 	projectMu    sync.Mutex
 	localProject *cloudclient.ProjectEnvironment
 
+	prepared chan *preparedRequest
+
 	// Dispatch-goroutine state.
 	loaded               *appserver.ThreadResumeResponse
 	active               *attachment
 	status               map[string]any
 	warnedPartialHistory string
+	// warningSink captures a history warning for a prepared resume instead of
+	// publishing it while the replacement task is still provisional.
+	warningSink   *Notification
+	preparedState *preparedState
 }
 
 type pendingRequest struct {
@@ -208,6 +214,7 @@ func ConnectWithOptions(ctx context.Context, source cloudSource, account json.Ra
 		recoveryOptions: options.IdleRecovery,
 		titleGenerator:  options.TitleGenerator,
 		recoveryResults: make(chan idleRecoveryResult, 1),
+		prepared:        make(chan *preparedRequest, preparedChannelSize),
 	}
 	client.outCond = sync.NewCond(&client.outMu)
 	go client.pumpNotifications()
@@ -321,11 +328,18 @@ func (c *Client) Close() {
 
 func (c *Client) run(ctx context.Context) {
 	defer close(c.done)
+	defer c.discardPrepared()
 	defer c.stopNotifications()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case request := <-c.prepared:
+			if request == nil {
+				return
+			}
+			c.handlePreparedRequest(request)
+			continue
 		case saved := <-c.nameSaves:
 			if saved == nil {
 				return
@@ -348,7 +362,13 @@ func (c *Client) run(ctx context.Context) {
 			if requestCtx == nil {
 				requestCtx = ctx
 			}
+			unloads := c.pendingUnloadsPrepared(pending)
 			result, rpcErr := c.handleRequest(requestCtx, pending.method, pending.params, pending.mode, pending.typed)
+			if unloads && rpcErr == nil {
+				// A successful archive or unsubscribe removes the provisional
+				// attachment the same way it removes a loaded conversation.
+				c.discardPrepared()
+			}
 			if pending.cancel != nil {
 				pending.cancel()
 			}
@@ -484,13 +504,28 @@ func (c *Client) streamEnded(active *attachment, endErr error) {
 
 // replaceAttachment opens threadID and activates it only once its stream is
 // usable, so a failed replacement keeps the previous attachment.
-func (c *Client) replaceAttachment(ctx context.Context, threadID string) error {
+// openedAttachment is one Attach stream that has been verified but not yet
+// installed as the active attachment (Rust cloud_backend OpenReplyStream).
+type openedAttachment struct {
+	threadID string
+	events   <-chan cloudclient.Event
+	errs     <-chan error
+	cancel   context.CancelFunc
+	first    *cloudclient.Event
+}
+
+// openAttachment verifies an Attach handshake without displacing the active
+// attachment. A server can close Attach immediately after returning successful
+// headers, so a closed stream is rejected while a healthy quiet stream is
+// accepted without an event.
+func (c *Client) openAttachment(ctx context.Context, threadID string) (*openedAttachment, error) {
 	streamCtx, cancel := context.WithCancel(ctx)
 	events, errs, err := c.source.Attach(streamCtx, threadID)
 	if err != nil {
 		cancel()
-		return err
+		return nil, err
 	}
+	opened := &openedAttachment{threadID: threadID, events: events, errs: errs, cancel: cancel}
 	notConnected := errors.New("Cloud conversation activated but its stream did not connect. Reopen it before sending.")
 	// Prefer a ready event so a buffered frame is not mistaken for a closed
 	// stream when both channels are already ready.
@@ -498,16 +533,10 @@ func (c *Client) replaceAttachment(ctx context.Context, threadID string) error {
 	case event, ok := <-events:
 		if !ok {
 			cancel()
-			return notConnected
+			return nil, notConnected
 		}
-		delete(c.status, threadID)
-		c.resetIdleRecovery()
-		c.recovery.installed = time.Now()
-		c.active = &attachment{threadID: threadID, events: events, errs: errs, cancel: cancel}
-		c.supersedeStreamLosses(threadID)
-		c.notifyStreamReconnected(threadID)
-		c.forwardEvent(threadID, event)
-		return nil
+		opened.first = &event
+		return opened, nil
 	default:
 	}
 	// A server can close Attach immediately after returning successful headers.
@@ -517,21 +546,34 @@ func (c *Client) replaceAttachment(ctx context.Context, threadID string) error {
 		if !ok || err != nil {
 			// The stream ended before producing anything, so it never connected.
 			cancel()
-			return notConnected
+			return nil, notConnected
 		}
+		opened.errs = nil
 	default:
+	}
+	return opened, nil
+}
+
+// replaceAttachment opens threadID and activates it only once its stream is
+// usable, so a failed replacement keeps the previous attachment.
+func (c *Client) replaceAttachment(ctx context.Context, threadID string) error {
+	opened, err := c.openAttachment(ctx, threadID)
+	if err != nil {
+		return err
 	}
 	delete(c.status, threadID)
 	c.resetIdleRecovery()
 	c.recovery.installed = time.Now()
-	c.active = &attachment{threadID: threadID, events: events, errs: errs, cancel: cancel}
+	c.active = &attachment{threadID: threadID, events: opened.events, errs: opened.errs, cancel: opened.cancel}
 	c.supersedeStreamLosses(threadID)
 	// An explicit reopen (resume) is the escape hatch that releases input held
 	// while a quiet reopen was failing.
 	c.notifyStreamReconnected(threadID)
+	if opened.first != nil {
+		c.forwardEvent(threadID, *opened.first)
+	}
 	return nil
 }
-
 func (c *Client) recordStreamLoss(threadID string) {
 	threadID = strings.TrimSpace(threadID)
 	if threadID == "" {
@@ -609,6 +651,16 @@ func (c *Client) detach(threadID string) {
 		c.active.cancel()
 		c.active = nil
 	}
+}
+
+// enqueueWarning routes a warning raised while a prepared resume is loading its
+// history to the provisional state instead of publishing it.
+func (c *Client) enqueueWarning(notification Notification) {
+	if c.warningSink != nil {
+		*c.warningSink = notification
+		return
+	}
+	c.enqueue(notification)
 }
 
 // enqueue appends a notification without blocking request handling.

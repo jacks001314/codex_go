@@ -131,6 +131,12 @@ func TestCloudThreadParamsModeLikeRust(t *testing.T) {
 	if got := threadParamsModeForLaunch(&cli.RootOptions{Remote: "wss://example.com/rpc"}); got != ThreadParamsModeRemote {
 		t.Fatalf("launch mode with --remote = %v, want remote", got)
 	}
+	if got := threadParamsModeForLaunch(&cli.RootOptions{Remote: "cloud"}); got != ThreadParamsModeCloud {
+		t.Fatalf("launch mode with --remote cloud = %v, want cloud", got)
+	}
+	if got := threadParamsModeForLaunch(&cli.RootOptions{Remote: "cloud://"}); got != ThreadParamsModeCloud {
+		t.Fatalf("launch mode with --remote cloud:// = %v, want cloud", got)
+	}
 	if got := threadParamsModeForTransport(appServerTransportCloud); got != ThreadParamsModeCloud {
 		t.Fatalf("cloud transport mode = %v, want cloud", got)
 	}
@@ -144,6 +150,9 @@ func TestCloudThreadParamsModeLikeRust(t *testing.T) {
 	}
 	if got := threadParamsModeForEndpoint(appserverdaemon.NewWebSocketEndpoint("wss://example.com/rpc", nil)); got != ThreadParamsModeRemote {
 		t.Fatalf("remote endpoint mode = %v, want remote", got)
+	}
+	if got := threadParamsModeForEndpoint(appserverdaemon.NewCloudEndpoint()); got != ThreadParamsModeCloud {
+		t.Fatalf("cloud endpoint mode = %v, want cloud", got)
 	}
 }
 

@@ -8475,7 +8475,7 @@ func TestModelArchiveCommandConfirmsCurrentSessionAndExits(t *testing.T) {
 
 	typeText(t, model, "/archive")
 	model.Update(key(keymsg.KeyEnter))
-	if view := model.viewString(); !strings.Contains(view, "Archive this session?") || !strings.Contains(view, "This will archive the current session and exit Codex") || !strings.Contains(view, "No, keep this session") {
+	if view := model.viewString(); !strings.Contains(view, "Archive this session?") || !strings.Contains(view, "This will archive the current session") || !strings.Contains(view, "No, keep this session") {
 		t.Fatalf("archive confirmation view:\n%s", view)
 	}
 	model.Update(key(keymsg.KeyDown))

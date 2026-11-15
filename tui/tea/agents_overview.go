@@ -170,6 +170,7 @@ func (m *Model) applyAgentsCommand() bubbletea.Cmd {
 	m.agentsOverview.SetHiddenThreads(m.agentsOverviewHidden)
 	m.agentsOverviewNotice = ""
 	m.agentsOverviewBusy = false
+	m.agentsOverviewArchiveError = ""
 	// Invalidate pages requested by a previous dashboard session instead of
 	// restarting the sequence where a late page could match (Rust #61596).
 	m.agentsOverviewRefresh++
@@ -381,6 +382,9 @@ func (m *Model) applyAgentsOverviewSearch(message agentsOverviewSearchMsg) {
 			continue
 		}
 		existing[threadID] = true
+		// Rust #61490: a task found only by history search still belongs to the
+		// backend that served the page, so a later selection routes back to it.
+		m.noteThreadBackend(threadID, m.backendID)
 		m.agentsOverview.Rows = append(m.agentsOverview.Rows, row)
 	}
 }
@@ -418,7 +422,11 @@ func (m *Model) applyAgentsOverviewList(message agentsOverviewListMsg) bubbletea
 		backendState.failed = false
 		backendState.disconnected = false
 	}
-	m.agentsOverviewNotice = ""
+	if m.agentsOverviewArchiveError != "" {
+		m.agentsOverviewNotice = m.agentsOverviewArchiveError
+	} else {
+		m.agentsOverviewNotice = ""
+	}
 	m.agentsOverview.SetShowMoreLoading(false)
 	m.agentsOverview.SetShowMoreFailed(false)
 	if len(m.agentsOverviewRemoved) > 0 {
@@ -744,7 +752,7 @@ func (m *Model) updateAgentsOverviewKey(msg keymsg.KeyMsg) bubbletea.Cmd {
 		}
 	}
 	if keySpec == "ctrl-c" {
-		return bubbletea.Quit
+		return m.quitCmd()
 	}
 	// Rust #44970: the selected task's usage estimate follows the selection.
 	if m.agentsOverview != nil && m.agentsOverview.Selected != selectedBefore {
@@ -1407,6 +1415,12 @@ func (m *Model) openAgentsOverviewThread(threadID string) bubbletea.Cmd {
 		return nil
 	}
 	threadID = strings.TrimSpace(threadID)
+	if m.currentThreadArchivePending(threadID) {
+		// Rust #61619 ignores a selection for a task that is still being
+		// archived; the row is hidden until the request resolves.
+		m.notice = "This task is still being archived."
+		return nil
+	}
 	current := ""
 	if m.State != nil {
 		current = strings.TrimSpace(m.State.ThreadID)

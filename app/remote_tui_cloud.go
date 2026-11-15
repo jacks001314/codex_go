@@ -405,3 +405,227 @@ func (t *cloudAppServerTransport) handleWrite(payload []byte) {
 	}
 	t.enqueue(encoded)
 }
+
+// cloudResumePreparer is the optional prepared-resume capability of a Cloud
+// requester (Rust #61490 AppServerRequestHandle::Cloud).
+type cloudResumePreparer interface {
+	PrepareThreadResume(ctx context.Context, params appserver.ThreadResumeParams) (*appserver.ThreadResumeResponse, *cloudbackend.PreparedResume, *cloudbackend.RPCError)
+}
+
+// cloudPreparedResume exposes the Cloud backend's prepared-resume handle for a
+// session whose transport is the in-process Cloud bridge.
+func (c *remoteAppServerTUIClient) cloudPreparedResume() (cloudResumePreparer, bool) {
+	if c == nil {
+		return nil, false
+	}
+	transport, ok := c.transport.(*cloudAppServerTransport)
+	if !ok || transport == nil || transport.client == nil {
+		return nil, false
+	}
+	preparer, ok := transport.client.(cloudResumePreparer)
+	return preparer, ok
+}
+
+// remoteTUICloudInitialHistoryTurns mirrors Rust INITIAL_HISTORY_TURN_LIMIT.
+const remoteTUICloudInitialHistoryTurns = 5
+
+// remoteTUICloudHistoryItemPageLimit mirrors Rust HISTORY_ITEM_PAGE_LIMIT.
+const remoteTUICloudHistoryItemPageLimit = 100
+
+// remoteTUILoadCloudInitialHistory hydrates a provisional Cloud attachment:
+// the newest turn page plus every thread item page that continues from it,
+// extending the turn window when an item belongs to an older turn (Rust
+// hydrate_initial_thread_history, HistoryHydrationScope::Initial). The
+// attachment is not displayed until the caller commits it.
+func remoteTUILoadCloudInitialHistory(ctx context.Context, prepared *cloudbackend.PreparedResume, threadID string) ([]appserver.Turn, error) {
+	if prepared == nil {
+		return nil, errors.New("Cloud resume preparation is unavailable")
+	}
+	threadID = strings.TrimSpace(threadID)
+	limit := remoteTUICloudInitialHistoryTurns
+	result, rpcErr := prepared.Request(ctx, appserver.MethodThreadTurnsList, appserver.ThreadTurnsListParams{
+		ThreadID:      threadID,
+		Limit:         &limit,
+		SortDirection: appserver.SortDesc,
+		ItemsView:     appserver.TurnItemsNotLoaded,
+	})
+	if rpcErr != nil {
+		return nil, &remoteRPCError{Code: rpcErr.Code, Message: rpcErr.Message}
+	}
+	var page appserver.TurnsPage
+	if err := json.Unmarshal(result, &page); err != nil {
+		return nil, errors.New("The cloud returned an unsupported history page.")
+	}
+	turns := make([]appserver.Turn, 0, len(page.Data))
+	// The page arrives newest first; the transcript replays chronologically.
+	for index := len(page.Data) - 1; index >= 0; index-- {
+		turns = append(turns, page.Data[index])
+	}
+	nextTurnCursor := ""
+	if page.NextCursor != nil {
+		nextTurnCursor = strings.TrimSpace(*page.NextCursor)
+	}
+	seenTurnCursors := map[string]bool{}
+	seenItemCursors := map[string]bool{}
+	itemCursor := ""
+	for {
+		itemLimit := remoteTUICloudHistoryItemPageLimit
+		params := appserver.ThreadItemsListParams{
+			ThreadID:      threadID,
+			Limit:         &itemLimit,
+			SortDirection: appserver.SortDesc,
+		}
+		if itemCursor != "" {
+			params.Cursor = &appserver.ThreadItemsListCursor{Opaque: itemCursor}
+		}
+		result, rpcErr := prepared.Request(ctx, appserver.MethodThreadItemsList, params)
+		if rpcErr != nil {
+			return nil, &remoteRPCError{Code: rpcErr.Code, Message: rpcErr.Message}
+		}
+		var itemsPage appserver.ThreadItemsListResponse
+		if err := json.Unmarshal(result, &itemsPage); err != nil {
+			return nil, errors.New("The cloud returned an unsupported history items page.")
+		}
+		for _, entry := range itemsPage.Data {
+			turnID := strings.TrimSpace(entry.TurnID)
+			// The item window can reach past the first turn page when the
+			// newest turns are itemless, so fetch the turns it belongs to.
+			for turnID != "" && cloudHistoryTurnIndex(turns, turnID) < 0 && nextTurnCursor != "" {
+				turnLimit := remoteTUICloudHistoryItemPageLimit
+				turnCursor := nextTurnCursor
+				turnParams := appserver.ThreadTurnsListParams{
+					ThreadID:      threadID,
+					Cursor:        &turnCursor,
+					Limit:         &turnLimit,
+					SortDirection: appserver.SortDesc,
+					ItemsView:     appserver.TurnItemsNotLoaded,
+				}
+				turnResult, turnErr := prepared.Request(ctx, appserver.MethodThreadTurnsList, turnParams)
+				if turnErr != nil {
+					return nil, &remoteRPCError{Code: turnErr.Code, Message: turnErr.Message}
+				}
+				var turnPage appserver.TurnsPage
+				if err := json.Unmarshal(turnResult, &turnPage); err != nil {
+					return nil, errors.New("The cloud returned an unsupported history page.")
+				}
+				prependCloudHistoryTurns(&turns, turnPage.Data)
+				nextTurnCursor = advanceCloudHistoryCursor(nextTurnCursor, turnPage.NextCursor, seenTurnCursors)
+			}
+			index := cloudHistoryTurnIndex(turns, turnID)
+			if index < 0 || cloudHistoryTurnHasItem(turns[index].Items, entry.Item.ID) {
+				continue
+			}
+			// Item pages arrive newest first; prepending keeps each turn in
+			// chronological order.
+			turns[index].Items = append([]appserver.ThreadItem{entry.Item}, turns[index].Items...)
+			turns[index].ItemsView = appserver.TurnItemsSummary
+		}
+		itemCursor = advanceCloudHistoryCursor(itemCursor, itemsPage.NextCursor, seenItemCursors)
+		if itemCursor == "" {
+			break
+		}
+	}
+	return turns, nil
+}
+
+func cloudHistoryTurnIndex(turns []appserver.Turn, turnID string) int {
+	turnID = strings.TrimSpace(turnID)
+	if turnID == "" {
+		return -1
+	}
+	for index := range turns {
+		if strings.TrimSpace(turns[index].ID) == turnID {
+			return index
+		}
+	}
+	return -1
+}
+
+func cloudHistoryTurnHasItem(items []appserver.ThreadItem, itemID string) bool {
+	itemID = strings.TrimSpace(itemID)
+	if itemID == "" {
+		return false
+	}
+	for _, item := range items {
+		if strings.TrimSpace(item.ID) == itemID {
+			return true
+		}
+	}
+	return false
+}
+
+func prependCloudHistoryTurns(turns *[]appserver.Turn, older []appserver.Turn) {
+	if turns == nil || len(older) == 0 {
+		return
+	}
+	known := make(map[string]struct{}, len(*turns)+len(older))
+	for _, turn := range *turns {
+		known[turn.ID] = struct{}{}
+	}
+	prepended := make([]appserver.Turn, 0, len(older))
+	for index := len(older) - 1; index >= 0; index-- {
+		if _, duplicate := known[older[index].ID]; duplicate {
+			continue
+		}
+		known[older[index].ID] = struct{}{}
+		prepended = append(prepended, older[index])
+	}
+	*turns = append(prepended, *turns...)
+}
+
+func advanceCloudHistoryCursor(current string, next *string, seen map[string]bool) string {
+	if current != "" {
+		seen[current] = true
+	}
+	if next == nil {
+		return ""
+	}
+	trimmed := strings.TrimSpace(*next)
+	if trimmed == "" || seen[trimmed] {
+		return ""
+	}
+	seen[trimmed] = true
+	return trimmed
+}
+
+// remoteTUIResumeThreadForNavigation resumes a saved task without displacing
+// the displayed conversation until its initial history is ready (Rust #61490).
+func remoteTUIResumeThreadForNavigation(ctx context.Context, client *remoteAppServerTUIClient, params appserver.ThreadResumeParams) (*appserver.ThreadResumeResponse, error) {
+	if client == nil {
+		return nil, errors.New("remote app-server transport is not connected")
+	}
+	if client.threadParamsMode != ThreadParamsModeCloud {
+		var resumed appserver.ThreadResumeResponse
+		if err := remoteSessionRequest(ctx, client, appserver.MethodThreadResume, params, &resumed); err != nil {
+			return nil, err
+		}
+		return &resumed, nil
+	}
+	preparer, ok := client.cloudPreparedResume()
+	if !ok {
+		return nil, errors.New("Cloud task navigation is unavailable. Reopen Codex to reconnect.")
+	}
+	params.ThreadID = strings.TrimSpace(params.ThreadID)
+	params.CWD = nil
+	params.ExcludeTurns = true
+	settings, prepared, rpcErr := preparer.PrepareThreadResume(ctx, params)
+	if rpcErr != nil {
+		return nil, &remoteRPCError{Code: rpcErr.Code, Message: rpcErr.Message}
+	}
+	if prepared == nil {
+		return nil, errors.New("Cloud resume did not return a prepared conversation.")
+	}
+	turns, err := remoteTUILoadCloudInitialHistory(ctx, prepared, params.ThreadID)
+	if err != nil {
+		prepared.Discard()
+		return nil, err
+	}
+	if rpcErr := prepared.Commit(ctx); rpcErr != nil {
+		prepared.Discard()
+		return nil, &remoteRPCError{Code: rpcErr.Code, Message: rpcErr.Message}
+	}
+	if settings.Thread != nil {
+		settings.Thread.Turns = turns
+	}
+	return settings, nil
+}

@@ -386,7 +386,7 @@ func (c *Client) listItems(ctx context.Context, params json.RawMessage) (json.Ra
 	if len(response.Data) != len(page.Data) && c.warnedPartialHistory != list.ThreadID {
 		c.warnedPartialHistory = list.ThreadID
 		threadID := list.ThreadID
-		c.enqueue(Notification{
+		c.enqueueWarning(Notification{
 			Method: appserver.NotificationWarning,
 			Params: appserver.WarningNotification{
 				ThreadID: &threadID,

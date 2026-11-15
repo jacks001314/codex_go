@@ -2,6 +2,7 @@ package app
 
 import (
 	"errors"
+	"strings"
 
 	"codex_go/appserver"
 	"codex_go/appserverdaemon"
@@ -126,9 +127,12 @@ func threadParamsModeForTransport(kind appServerTransportKind) ThreadParamsMode 
 }
 
 // interactiveAppServerTransport mirrors Rust AppServerTarget::thread_params_mode
-// (lib.rs:400-406): only an explicit `--remote` target is Remote. Go has no
-// cloud app-server transport yet, so the launch path never reports Cloud.
+// (lib.rs:400-406): the hosted `--remote cloud` target is Cloud, any other
+// explicit remote is Remote, and everything else runs embedded.
 func interactiveAppServerTransport(root *cli.RootOptions) appServerTransportKind {
+	if interactiveRemoteSelectsCloud(root) {
+		return appServerTransportCloud
+	}
 	if interactiveRemoteEndpointIsExplicitRemote(root) {
 		return appServerTransportRemote
 	}
@@ -141,10 +145,11 @@ func threadParamsModeForLaunch(root *cli.RootOptions) ThreadParamsMode {
 }
 
 // endpointAppServerTransport resolves the transport from an already-opened
-// endpoint. It is the fallback for clients created without launch options;
-// Embedded and Remote produce identical request parameters, so the distinction
-// only documents intent until the cloud transport lands.
+// endpoint. It is the fallback for clients created without launch options.
 func endpointAppServerTransport(endpoint *appserverdaemon.RemoteAppServerEndpoint) appServerTransportKind {
+	if endpoint != nil && endpoint.Kind == appserverdaemon.RemoteEndpointCloud {
+		return appServerTransportCloud
+	}
 	if endpoint == nil || interactiveRemoteEndpointIsLocal(endpoint) {
 		return appServerTransportEmbedded
 	}
@@ -155,4 +160,14 @@ func endpointAppServerTransport(endpoint *appserverdaemon.RemoteAppServerEndpoin
 // endpoint alone.
 func threadParamsModeForEndpoint(endpoint *appserverdaemon.RemoteAppServerEndpoint) ThreadParamsMode {
 	return threadParamsModeForTransport(endpointAppServerTransport(endpoint))
+}
+
+// interactiveRemoteSelectsCloud reports whether the launch address selects the
+// hosted Cloud backend (Rust AppServerTarget::Cloud for `--remote cloud`).
+func interactiveRemoteSelectsCloud(root *cli.RootOptions) bool {
+	if root == nil {
+		return false
+	}
+	trimmed := strings.TrimSpace(root.Remote)
+	return strings.EqualFold(trimmed, "cloud") || strings.HasPrefix(strings.ToLower(trimmed), "cloud://")
 }

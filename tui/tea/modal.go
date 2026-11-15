@@ -1131,6 +1131,31 @@ func (m *Model) respondModal(cancelled bool) bubbletea.Cmd {
 		}
 	}
 	notice := ""
+	// Rust #61619: archiving the displayed task returns to the command center
+	// immediately and lets the server finish in the background. The task stays
+	// hidden, its draft and approvals are retained, and a failure makes it
+	// visible again instead of exiting or dropping the conversation.
+	if !cancelled && modal.exitAfterSessionAction && modal.sessionAction != nil &&
+		modal.sessionAction.Kind == codextui.SessionSelectionArchive &&
+		m.commandCenterAvailable() &&
+		strings.TrimSpace(modal.sessionAction.Target.ThreadID) == m.currentThreadID() {
+		selection := *modal.sessionAction
+		m.modal = nil
+		response.Picker = &PickerDecision{Kind: string(selection.Kind), Value: strings.TrimSpace(selection.Target.ThreadID)}
+		var callback bubbletea.Cmd
+		if m.onModalResponse != nil {
+			callback = m.onModalResponse(response)
+		}
+		archive := m.beginCurrentThreadArchive(selection)
+		switch {
+		case archive == nil:
+			return callback
+		case callback == nil:
+			return archive
+		default:
+			return bubbletea.Batch(archive, callback)
+		}
+	}
 	if modal.kind == ModalKindPicker && (modal.modelPicker != nil || modal.modelReasoning != nil || modal.planReasoningScope != nil || modal.sessionPicker != nil || modal.sessionAction != nil) {
 		decision, pickerNotice, complete := m.resolveModelPickerModal(modal, response.OptionID, cancelled)
 		if !complete {
