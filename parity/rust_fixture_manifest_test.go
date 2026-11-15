@@ -168,7 +168,10 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// Re-anchored to upstream 9018f3a3: #60665 added the mixed MCP
 			// content Code Mode scenario snapshot.
 			// #61017 added core/tests/suite/reasoning_replay_metrics.rs.
-			Files: 477,
+			// Re-anchored to upstream a394ff9cf6: #61372/#61480/#61619 added
+			// the transparent-TCP, realtime-history and archive-command-center
+			// suites and snapshots.
+			Files: 484,
 			Owner: "turn, model, tool, session",
 			Focus: "core agent loop, model client, session, tools, sandbox, resume",
 			Required: []string{
@@ -194,7 +197,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// startup-warning, warnings-viewer and effect-toggle coverage.
 			// Re-anchored to upstream 4d3ed3f3b4 for the two chatwidget
 			// fixtures added by the parallel TUI lane's upstream window.
-			Files: 142,
+			Files: 143,
 			Owner: "tui",
 			Focus: "chat widget behavior and snapshot coverage",
 			Required: []string{

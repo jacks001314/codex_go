@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
  "rustFromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
- "rustToInclusive": "c0cc9fc820f62e4dbdde68214dd6d792d6c8a7ee",
+ "rustToInclusive": "a394ff9cf66e9c17258077e8f8295178ca0c2025",
  "commits": [
   {
    "sha": "27c05a52e0cdf93ef7db5a96ccaf88d6b9095472",
@@ -47097,6 +47097,2010 @@
     "telemetry/headers_helper.go runs one background worker for all explicit HTTP signals; a failed refresh replaces the cache with the error, so exports are blocked instead of falling back to stale or static credentials, and each helper run holds a revocable AcquireForUnsupportedSDK network permit that cancels the process on revocation.",
     "The OTLP HTTP log, trace, and metric exporters merge helper headers over the static ones, disable redirects while a helper is configured, and leave the gRPC exporters on static headers.",
     "Tests: telemetry/otel_headers_helper_like_rust_test.go (refresh, block, recovery, header precedence, network policy) and config/otel_headers_helper_like_rust_test.go (resolution and validation)."
+   ]
+  },
+  {
+   "sha": "1d529e0266b0ed42753f94564b61204370ee1445",
+   "subject": "Simplify non-curated plugin cache refreshes (#61129)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_13.md records: 已完成：配置源派生、强制刷新、同版本保留、真实 Git 首轮列表、已缓存 Git 插件版本检查与配置 marketplace 子目录读取均覆盖。见 plugin_configured_git_subdir_2026_11_14.md"
+   ]
+  },
+  {
+   "sha": "a7aab624ab48a59e5571747b1d8e1e8e8f0c1cfb",
+   "subject": "Use permission profiles in sandbox tests and documentation (#61133)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "plan_2026_11_13.md records: 不适用：仅 Rust Linux Sandbox README 与 Rust 单测/CLI 参数测试改用 PermissionProfile；Go 无对应测试 API，见 rust_only_refactors_2026_11_14.md"
+   ]
+  },
+  {
+   "sha": "1f1f6ebb6c156d5ab1d4745155f340b897b24f02",
+   "subject": "Normalize permission updates at session settings admission (#61134)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_13.md records: 已完成：legacy/named 两个分支都保留 live deny-read（named 分支本轮补齐），CWD+legacy 转换使用新工作目录并保护 `.git` 指针外部元数据，身份清除、rollout/冷恢复/下一轮/连续更新、glob 深度均已验证；磁盘落地时序审计与 Rust 内存先发布一致。见 named_permission_preservation_2026_11_14.md"
+   ]
+  },
+  {
+   "sha": "d3fc4a73b0419514bf54dd3916054cf6e02d3889",
+   "subject": "Compare resume sandbox overrides using permission profile labels (#61136)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_13.md records: 已完成：运行中恢复按规范 profile 标签诊断（external 兼容 full-access）；无订阅者 idle 加载线程在覆盖不匹配时先关闭 writer/资源再冷恢复，关闭失败保留 live 线程并告警；有订阅者/活动回合保持 live 配置。回归见 idle_resume_rebuild_2026_11_14.md"
+   ]
+  },
+  {
+   "sha": "6aa83e5eee5499f7babaa6fd42cda9b3a39c9bc3",
+   "subject": "Centralize filesystem helper sandbox preparation (#61138)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "partial",
+   "evidence": [
+    "plan_2026_11_13.md records: 部分：空工作区不回退 CWD、helper 禁网、Windows 消费最终 profile；非 legacy 路径已授权并传递独立 Linux sandbox launcher（精确文件、父目录不授权），legacy 保持无运行时读取授权。真实 Linux 隔离与根别名规范化待补。见 fs_helper_boundary_2026_11_14.md、fs_helper_linux_launcher_2026_11_14.md"
+   ]
+  },
+  {
+   "sha": "d0edb0b1fa55e74486c5dd8a0a4fbcf75410ec79",
+   "subject": "Preserve multiline status lines in unfocused chat panes (#61141)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_13.md records: 已完成：未聚焦面板按结构化 span 重排并保留主题色，状态行预算按 Rust FooterLayout 推导，固定 footer 绘制 dim 状态 → 未聚焦侧草稿预览（`› ` 前缀）→ 空白 hint，tab strip 固定在首行。见 side_pane_status_2026_11_14.md、side_pane_styled_2026_11_14.md、side_pane_status_budget_alignment_2026_11_14.md、side_pane_draft_preview_2026_11_14.md"
+   ]
+  },
+  {
+   "sha": "ce3031018ef130e653ed4d9c5bb971652de97161",
+   "subject": "Remove the legacy sandbox policy setter from `Config` (#61144)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_13.md records: 已审计：Rust内部API删除/等价转换与测试重写，无对应Go API需删除；config/sandbox全包及vet通过。权限行为缺口仍归#61134/#61195。见permission_cleanup_audit_2026_11_14.md"
+   ]
+  },
+  {
+   "sha": "672e99fed8da8e5efc3268c52cddc4fc97ffd078",
+   "subject": "Fix code-mode session admission retries for proxy HTTP 503 responses (#61153)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_13.md records: 已完成：已修复代理503状态保留；codemode全包测试及vet通过；本轮复验见 completed_items_reverify_2026_11_14.log"
+   ]
+  },
+  {
+   "sha": "d2f76324729d7c4a2b3225cfe42c7dbf162d98b7",
+   "subject": "Ignore Hickory DNSSEC advisories while DNSSEC is disabled (#61156)",
+   "kind": "release",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "plan_2026_11_13.md records: 不适用：仅 Rust Cargo Hickory DNSSEC 审计例外，Go 无该依赖"
+   ]
+  },
+  {
+   "sha": "e61a08f9ecb93a29d5379b123bee047fff0c7a24",
+   "subject": "Reuse Guardian reviewer history for direct reviews (#61163)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_13.md records: 已完成（Go 请求层等价）：连续 RPC 与 live approval 共享响应链、父线程隔离、actor 历史不变、无命令执行、重试按当前策略及继承持久化意图均通过；协议注释已同步。见 direct_review_complete_2026_11_14.md"
+   ]
+  },
+  {
+   "sha": "ae50f973f51665c65bd86d393e7c09172c5f57a1",
+   "subject": "Refactor TUI sidebar layout and focus handling around panels (#61167)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_13.md records: 已完成：Rust 内部 Chooser→Panel 重命名与 helper 化；Go 内容由 chooser/side 状态派生，几何、transcript 可见性、焦点路由与 HUD 提示均有独立 helper，无对应 API 需改名。定向回归通过。见 sidebar_panels_audit_2026_11_14.md"
+   ]
+  },
+  {
+   "sha": "72532ecae5efe500d9e722f3ed5214e63cc8098a",
+   "subject": "Negotiate realtime voice calls in the TUI (#61172)",
+   "kind": "release",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_13.md records: 已完成：新增 realtime.CreateWebRTCCall 与 app clientOwnedVoiceCall，TUI 用本地 provider/凭据建呼（V3 /live、线程头、共享实时提示词），再以 existingCall 挂接 app-server；answer 先于挂接应用，停止使在途启动失效、重启只保留最新尝试；远端与内嵌 TUI 均启用。真实音频/平台认证仍待真实设备。见 realtime_tui_client_call_2026_11_14.md"
+   ]
+  },
+  {
+   "sha": "b279cfb170df7bd2f6dc891cd08d032116533efb",
+   "subject": "Enable conversation-scoped speed selection for Cloud turns (#61178)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_13.md records: 已完成：Cloud turn/start 携带会话速度，空值继承、default 显式 null 清除；TUI Cloud 选择只更新会话状态不写配置；指针序列化与遗留字段过滤回归通过，appserver 全包 255.692s。见 cloud_service_tier_2026_11_14.md"
+   ]
+  },
+  {
+   "sha": "c37f817556df251ced030ebcd146effa90c35952",
+   "subject": "Reclaim abandoned trusted Git repositories (#61180)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_13.md records: 已接入自动查询/clone；真实Git退出清理、跨进程锁保护/弃置回收通过；Windows symlink测试权限不足跳过，Linux验证待补。见trusted_git_process_2026_11_14.md"
+   ]
+  },
+  {
+   "sha": "bbd0d2b2fbc573e4d58670833d9649bfbe3598dd",
+   "subject": "Fix pagination for unindexed threads sorted by ascending recency (#61181)",
+   "kind": "persistence",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_13.md records: 已完成：已有等效实现；新增启动后文件、provider过滤与两页cursor回归通过；本轮复验见 completed_items_reverify_2026_11_14.log"
+   ]
+  },
+  {
+   "sha": "c432cf0253ed90a2f208cc96918091ba1867edd8",
+   "subject": "Support renaming cloud threads (#61182)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_13.md records: 已完成：已实现云线程重命名，cloudclient/cloudbackend 全包测试及 vet 通过；本轮复验见 completed_items_reverify_2026_11_14.log"
+   ]
+  },
+  {
+   "sha": "2bb2e20d6aa8ded4d6da6babebb3b61b3c50efb7",
+   "subject": "Fix fork parent metadata in reconstructed TUI sessions (#61183)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_13.md records: 已完成：thread/read 会话重建及提示编辑响应使用目标父线程并清理缓存标题；TUI 会话摘要按线程携带 ForkedFromID/ForkParentTitle，恢复/分叉显示目标父线程 fork 行（不可读时 id-only）；thread/started 通知携带目标线程父指针并去重；远程恢复读取父线程标题，本地恢复从 store 读取。tui/app/tui/tea 全包与 vet 通过。见 thread_lineage_2026_11_14.md、fork_lineage_tui_2026_11_14.md"
+   ]
+  },
+  {
+   "sha": "d4242793f70c4ee471d7903a2c448bface1bc38e",
+   "subject": "Defer Guardian context limits to request preparation (#61185)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_13.md records: 已完成：弹性路径保留原始答案/指令直至最终分配，rededup 同步修复；根上下文和 NodeREPL 图像不变性已测试；本次补齐请求快照复用——一次复核只抓取一份原始 transcript，固定视图准备一次并缓存，弹性准备与重试共享同一份原始证据，staleness 检查仍读实时历史；异步评分链路与异步图像路径在 Go 无对应实现。见 guardian_state_full_2026_11_14.md、guardian_request_snapshot_2026_11_14.md"
+   ]
+  },
+  {
+   "sha": "d0221bc9471109ae027082d6fcacbc73b8b8e3aa",
+   "subject": "Keep plan item IDs unique after completion (#61186)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_13.md records: 已完成：已实现；真实HTTP断流重试、工具续跑及磁盘ID一致性通过；本轮复验见 completed_items_reverify_2026_11_14.log"
+   ]
+  },
+  {
+   "sha": "4490060db60a2053bc3c6095127cfc10a9f3e34d",
+   "subject": "Add authenticated GCS caching for Bazel CI and releases (#61187)",
+   "kind": "release",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "plan_2026_11_13.md records: 不适用当前Go构建：无Bazel/GCS链，详见build_scope_audit_2026_11_14.md"
+   ]
+  },
+  {
+   "sha": "f242b49c8adda8f7bb1e5ff225df22295ac8e07b",
+   "subject": "Remove redundant legacy permission helpers (#61194)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_13.md records: 已审计：Rust内部API删除/等价转换与测试重写，无对应Go API需删除；config/sandbox全包及vet通过。权限行为缺口仍归#61134/#61195。见permission_cleanup_audit_2026_11_14.md"
+   ]
+  },
+  {
+   "sha": "9908717ddb274aab3a9653d5301ca20dd64b62c2",
+   "subject": "Preserve permission profiles across working directory updates (#61195)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_13.md records: 已完成：CWD-only 更新保留 profile ID、独立 read grant、runtime roots 重定向；端到端断言新工作区普通文件可写、新 `.git/config` 与旧工作区不可写，持久化 profile 快照不变。见 named_permission_preservation_2026_11_14.md 与 cwd_permission_preservation_test.go"
+   ]
+  },
+  {
+   "sha": "ea1b6ad1cf2c39dacf10bf1f2667d9c6f7e7eb3f",
+   "subject": "Clear inline image previews before history insertion can scroll them (#61196)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_13.md records: 已完成（Go 渲染边界）：位置/滚动变化时 beforeWrite 先清除旧 Sixel/Kitty 像素再写替换文本；新增 reflow 顺序回归，tui/tea 全包通过。见 transcript_image_reflow_2026_11_14.md"
+   ]
+  },
+  {
+   "sha": "cdfcc18dbaf34b103f0f368925e6768d0f3b8471",
+   "subject": "Clarify remote message board and clock documentation (#61197)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_13.md records: 已完成：已对齐Go连接/时钟/host通知说明与测试fixture措辞；实际idle队列行为已有实现，消息板定向回归通过；本轮复验见 completed_items_reverify_2026_11_14.log"
+   ]
+  },
+  {
+   "sha": "fae87361f44705ac524b7ce950ee531920779533",
+   "subject": "Add graceful agent-tree suspension and recovery (#61198)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "partial",
+   "evidence": [
+    "plan_2026_11_13.md records: 部分：已实现 Go 等价 suspend_agent_tree/load_suspended_agent——取消并等待根与开放后代的活动回合、返回 turn id，加载恢复身份不启动回合，线程记录/环境/排队邮件保留，重复挂起为空，调用方取消时如实报错；未覆盖 Rust 挂起前把未投递子结果写入父历史（Go 仍在进程内队列，跨进程会丢失）。上游这两个 API 仅由 core 集成测试调用。见 agent_tree_suspend_audit_2026_11_14.md"
+   ]
+  },
+  {
+   "sha": "94fc72960265bcd80b0dbda249dde104cae2bdd3",
+   "subject": "Align rollout trace replay with the same-binary contract (#61199)",
+   "kind": "persistence",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_13.md records: 已完成（Go reducer/replay 等价边界）：manifest 与每条 raw event 强制 schema_version=2，空/缺失/不匹配均带同二进制提示拒绝；reduce/replay、debug CLI 与 rollout 全包通过。见 rollout_trace_same_binary_2026_11_14.md"
+   ]
+  },
+  {
+   "sha": "16e27626e654b29cc2ea696a545b2cd5f29db136",
+   "subject": "Unify TUI status content and layout caching in `StatusLine` (#61200)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_13.md records: 已完成：已审计：Rust 内部 FooterContent/StatusLine 布局缓存重构；Go 的 statusControls+renderStatusHeader 已承担内容/换行/主题渲染缓存，无对应旧 API 需删除。见 rust_only_refactors_2026_11_14.md；本轮复验见 completed_items_reverify_2026_11_14.log"
+   ]
+  },
+  {
+   "sha": "1f175fa3c4af6a3f2e8d51971c3734b4a0aaca6b",
+   "subject": "Clean up Rust error handling and OTLP test assertions (#61201)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "plan_2026_11_13.md records: 不适用：仅 Rust Box/bail 语法与 OTLP 测试断言重构，无 Go 行为契约；见 rust_only_refactors_2026_11_14.md"
+   ]
+  },
+  {
+   "sha": "caf0d30005bc8487c9505d0d09fcd1d2e600660d",
+   "subject": "Upgrade the Rust toolchain to 1.99.1 (#61205)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "plan_2026_11_13.md records: 不适用：已逐项审计45文件；Rust构建/Clippy兼容及等价重构，无新增Go行为契约；见rust_toolchain_audit_2026_11_14.md"
+   ]
+  },
+  {
+   "sha": "1bda8861137c2a598455702fd259bf2b8fd09e96",
+   "subject": "Enforce Linux seccomp restrictions for x32 syscalls (#61206)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "partial",
+   "evidence": [
+    "plan_2026_11_13.md records: 部分：已接入 native/x32/旧别名同条件 BPF 编译，VM 回归及 Linux amd64 交叉编译/vet 通过；真实 Linux 与全模式验证待完成。见 x32_seccomp_2026_11_14.md"
+   ]
+  },
+  {
+   "sha": "6242064da0412b4c12176a2e53ef91afb333002d",
+   "subject": "Add SPIFFE JWT-SVID support for workload identity authentication (#61207)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_13.md records: Source selection/conflicts, environment filtering, ID/URI validation, gRPC fetch, token exchange routing/fingerprint and retry classification implemented. Windows auth tests pass; native Unix restart/refresh test cross-compiles but remains unexecuted. See spiffe_platform_tags_2026_11_14.md"
+   ]
+  },
+  {
+   "sha": "f562a7b3e23302c36964baf2770c98e1e3b0091f",
+   "subject": "Retain TUI delegation prompts in thread model history (#61210)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_13.md records: 已完成：已实现 retain=true；create_thread/send_message_to_thread 真实 WebSocket 请求回归先红后绿，app/realtime/tui 全包与 vet 通过。见 delegation_retention_2026_11_14.md；本轮复验见 completed_items_reverify_2026_11_14.log"
+   ]
+  },
+  {
+   "sha": "8cdabf23aecf8fbd668e513e2e6258b93c98bd63",
+   "subject": "Add local status line provider configuration (#61211)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_13.md records: 已完成：新增严格 `default`/`{server,tool}` 配置联合、项目与打包默认忽略但保留校验、provider 身份整替换、本地设置/Options 携带及 reload 合并；config/app/tea 定向与全包通过。见 statusline_provider_config_2026_11_14.md"
+   ]
+  },
+  {
+   "sha": "6c7ecc322f65e88b075ccb16a79122aea8150771",
+   "subject": "Add persistence support for status line provider selections (#61212)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_13.md records: 已完成：StatusLineProviderConfigEdit 以 MergeReplace 写入 `tui.status_line_provider`，ConfigService 持久化读回通过；TUI SaveStatusLineProvider 仅成功 reload 后更新 live 值。见 statusline_provider_config_2026_11_14.md"
+   ]
+  },
+  {
+   "sha": "83a23c09366d82cd0cb469c64c3e55d04d71c87a",
+   "subject": "Support model catalog Apps usage instructions (#61213)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_13.md records: 已完成：catalog 原文解析、三重门控、历史保留/回滚、checkpoint 缺失语义、压缩重建及压缩后冷加载继续回合均覆盖；appserver 全包 253.767s 通过。见 apps_compaction_continue_2026_11_14.md"
+   ]
+  },
+  {
+   "sha": "006911a31363d39d08849eec779949e345dd5f7c",
+   "subject": "Track dictation usage from accepted user inputs (#61215)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_13.md records: 已完成：按接受输入捕获并移除元数据标记，start/steer 聚合 any-true/unknown/false 语义，完成/错误/review 进入 used_dictation；定向与 appserver 全包通过。见 dictation_analytics_2026_11_14.md"
+   ]
+  },
+  {
+   "sha": "5183e1dcb2c35870ed7a966b69e66ed438f00c11",
+   "subject": "Preserve thread input across TUI session resumes (#61216)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_13.md records: 已完成：恢复选择器/任务面板保留草稿 shell 模式与字面量 !；按线程停放/恢复待发与重试队列、未确认 steer 与只读出队门禁、历史/缓冲回执核对、迟到回执唤醒、恢复/任务切换队列派发、旧线程迟到事件丢弃均已接线；TUI 现通过 thread/shellCommand 执行 ! 命令（远程 RPC + 内嵌本地用户 shell 任务），Cloud 会话按 Rust 文案拒绝并清空 pending。见 late_receipt_2026_11_14.md、resume_handoff_event_drain_2026_11_14.md、user_shell_command_tui_2026_11_14.md"
+   ]
+  },
+  {
+   "sha": "1111483b4836b7c220ac2f08bbaa5b50e3d0052e",
+   "subject": "Hide attached threads from the agents overview (#61218)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_13.md records: 已完成：本地与远程总览共用 visible 谓词，过滤 ephemeral 与 attached side chat；回归通过。见 agents_overview_attached_2026_11_14.md"
+   ]
+  },
+  {
+   "sha": "fdad70ba5d373f7c679fc582a9cbedf216849934",
+   "subject": "Hide TUI status details for read-only history (#61219)",
+   "kind": "persistence",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_13.md records: 已完成：refresh/only-read/unavailable 快照隐藏状态行与 context usage，token 更新不会复活；交互式 resume（含 read-only 权限）恢复。定向与 tui/tea 全包通过。见 read_only_history_status_2026_11_14.md"
+   ]
+  },
+  {
+   "sha": "e1340f2ea8d4b6a8577e734fe940fdcf46710514",
+   "subject": "Deduplicate overlapping Apps startup tool listings (#61220)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_13.md records: 已完成：mcp/apps_startup_listings.go 按完整 discovery scope 共享重叠 tools/list，独立连接、超时/取消重试、失败不污染、opt-out 与快照隔离均有回归，定向测试通过。见 apps_startup_overlap_2026_11_14.md"
+   ]
+  },
+  {
+   "sha": "662daabad243727bc66b9960f6ab3810228b66fa",
+   "subject": "Forward repeated signals through the npm wrapper (#61221)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_13.md records: 已实现重复信号转发，Node 9 项测试通过；Linux 真实进程验证待执行"
+   ]
+  },
+  {
+   "sha": "e73744b3f46dcc6786ab08405c2715c898511281",
+   "subject": "Store rollout trace payloads in compressed shards (#61222)",
+   "kind": "persistence",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "plan_2026_11_13.md records: 不适用（当前 Go 范围）：Go 仅实现 trace bundle replay/reduce，没有 Rust rollout-trace writer/shard 子系统；本提交的 shard writer 改动无对应代码。见 rust_only_refactors_2026_11_14.md"
+   ]
+  },
+  {
+   "sha": "a46f05e2e3af66e2fb8d951c66aa53e20fe8c57d",
+   "subject": "Include AppX event IDs in Windows runtime registration errors (#61224)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_13.md records: 原生查询与错误摘要已实现，服务全包及vet通过；真实匹配事件待验证"
+   ]
+  },
+  {
+   "sha": "818bde09950cab06c18808f540037aa8e5d616a5",
+   "subject": "Include Win32 error codes in MXC process launch failures (#61227)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_13.md records: 已完成：已实现原生Errno数字与错误链保留；MXC全包及vet通过；本轮复验见 completed_items_reverify_2026_11_14.log"
+   ]
+  },
+  {
+   "sha": "553c764e8b99fa519e9c6eb9b657875ef0f5e1c1",
+   "subject": "Add a missing semicolon in the realtime call test helper (#61228)",
+   "kind": "test",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "plan_2026_11_13.md records: 不适用：仅 Rust 测试 helper 补分号"
+   ]
+  },
+  {
+   "sha": "91621372af40425b81fdc8ed13e33177f76e5533",
+   "subject": "Add MCP inventory support for statusline providers (#61248)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_13.md records: 已完成（Go 库层等价）：global inventory 分页与游标重复拒绝、仅显式 httpOrigin=null 的本地 server、plugin 身份解析、targeted 单 server 校验；与 Rust 一样为 staged 能力，UI 接线不在本提交。见 statusline_provider_library_2026_11_14.md"
+   ]
+  },
+  {
+   "sha": "2de2e03d0b71db990cf4e2dacd8cb0e961eb4cef",
+   "subject": "Resolve MCP statusline providers and read thread-scoped resources (#61249)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_13.md records: 已完成（Go 库层等价）：5 秒 lookup、项目层 mcp_servers/plugins/marketplaces 作用域、global 与 live 同 plugin owner、connected 校验、线程资源读取及 statusline snapshot _meta；见 statusline_provider_library_2026_11_14.md"
+   ]
+  },
+  {
+   "sha": "95e0103a5de64e6a097349c37a3f84c42decc8f4",
+   "subject": "Add bounded streaming discovery for statusline providers (#61250)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_13.md records: 已完成（Go 库层等价）：5 秒总时限、2 秒 inventory head start、最多 4 个 named probe、晚到 catalog 取消 probe、超时/取消/失败更新；go test -race 通过。见 statusline_provider_library_2026_11_14.md"
+   ]
+  },
+  {
+   "sha": "aa5f492031f7edb75a40973d19eda8efb9512c61",
+   "subject": "Refactor history and notes tools around backend traits (#61251)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_13.md records: 已完成（Go 等价）：HTTP 代理透传工具参数并合并可信 context，未知 future_catalog_parameter 原样转发；新增回归且 historynotes 全包通过。见 history_notes_backend_2026_11_14.md"
+   ]
+  },
+  {
+   "sha": "b8dde1eb4048520a8b6e982a27bc99ef5b2dfe7f",
+   "subject": "Move rollout trace recording to a background worker (#61253)",
+   "kind": "persistence",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "plan_2026_11_13.md records: 不适用（当前 Go 范围）：Go 无 rollout-trace 后台 writer；replay/reduce 契约已由 #61199 覆盖。见 rust_only_refactors_2026_11_14.md"
+   ]
+  },
+  {
+   "sha": "c123aa2c10e3a11e17d67617f98c19169da13149",
+   "subject": "Fix Bazel tool resolution for bubblewrap and voice builds (#61254)",
+   "kind": "release",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "plan_2026_11_13.md records: 不适用当前构建：hashlib摘要且无Bazel/GLib语音recipe，见构建审计"
+   ]
+  },
+  {
+   "sha": "7b2ed14efe872527bae38cde98a402859e351bac",
+   "subject": "Honor `PIP_INDEX_URL` for V8 Python dependencies (#61255)",
+   "kind": "release",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "plan_2026_11_13.md records: 不适用：无V8 pip.parse/Bazel依赖链，Go使用Sobek"
+   ]
+  },
+  {
+   "sha": "7eaaee4270006aec62499da46c66b5f140d47160",
+   "subject": "Block `request_key` in Linux network sandbox filters (#61256)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "partial",
+   "evidence": [
+    "plan_2026_11_13.md records: 部分：实现已核实（非 VmSocketRestricted 模式拒绝 request_key，含原生探测用例），linux/amd64 交叉构建与 linuxsandbox 包测试通过；真实 Linux 原生执行待补。见 request_key_impl_verify_2026_11_14.md"
+   ]
+  },
+  {
+   "sha": "6fcfa75a9ffa861c75f43baa17720da504b51a98",
+   "subject": "Preserve MCP registration scope across client operations (#61257)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_13.md records: 已完成：注册表/状态/工具/资源/OAuth 按 (name, environment) 隔离，本地 exec 条目携带作用域；两个独立 exec-server 连接上的同名 MCP 服务端到端路由、状态来源及关闭路由不回退均有回归。见 mcp_dual_executor_2026_11_14.md"
+   ]
+  },
+  {
+   "sha": "b05266d61b04efd4aa783316acf7b36476fe4066",
+   "subject": "Update realtime model and honor provider-specific voice defaults (#61259)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_13.md records: Core defaults/reload and TUI startup, V3 picker, save confirmation, legacy config/read, typed values, effective UI preference implemented. Targeted tests/vet pass. Integrated app/realtime/tui full tests pass after latest cwd changes (continuation 149). Dynamic cwd and real project config tests pass; V3-only voice validation fixed and realtime full tests pass. Real audio/platform certification remains open. See realtime_v3_protocol_2026_11_14.md"
+   ]
+  },
+  {
+   "sha": "0f26d21ff05ecaf06f0c2641159a2416ba1bb994",
+   "subject": "Accept ERS v1 and v2 tunnel JWTs (#61260)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_13.md records: 已完成：已实现，tcptunnel 全包测试与 vet 通过；本轮复验见 completed_items_reverify_2026_11_14.log"
+   ]
+  },
+  {
+   "sha": "72be4508546f03b02d4da0a6c44775720e355d98",
+   "subject": "Refactor session window access and async compaction test setup (#61263)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "plan_2026_11_13.md records: 不适用：仅 Rust 会话状态锁读取与 TestEnv 测试搭建重构；Go async compaction/线程管理已有独立实现与回归。见 rust_only_refactors_2026_11_14.md"
+   ]
+  },
+  {
+   "sha": "16280e19b1f7ff05aae75177072cd3e2c8b65efd",
+   "subject": "Enable gzip and zstd support in the shared HTTP client (#61264)",
+   "kind": "release",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_13.md records: 已完成：已实现共享 gzip/zstd 解压，network 全包测试通过；本轮复验见 completed_items_reverify_2026_11_14.log"
+   ]
+  },
+  {
+   "sha": "454bf339f0da9eff8904936b0036ab85e8719d29",
+   "subject": "Set the environment field in statusline MCP requests (#61272)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_13.md records: 已完成：statusline inventory 与 resource/read 请求均显式携带 environmentId=null，并保留既有 server 选择；测试逐请求断言。见 statusline_provider_library_2026_11_14.md"
+   ]
+  },
+  {
+   "sha": "5045589550122ec4f073d10e3d66a0813bcb7be0",
+   "subject": "Consolidate Windows filesystem helper sandbox preparation (#61276)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "partial",
+   "evidence": [
+    "plan_2026_11_13.md records: 部分：wrapper 显式空工作区贯穿 argv/解析/CaptureRequest；非 Windows 执行器收到 Windows 令牌沙箱请求时返回 SandboxUnavailable；helper 固定 Preserve proxy 语义、单一 run plan 准备；新增非本机策略 cwd 拒绝（形如 '<cwd>' is invalid on '<os>'，先于沙箱准备），execserver 全包 20.270s 通过。真实 Linux 隔离与根别名规范化待补。见 fs_wrapper_roots_2026_11_14.md、fs_helper_windows_unavailable_2026_11_14.md、fs_helper_policy_cwd_like_rust_test.go"
+   ]
+  },
+  {
+   "sha": "c899e21cda29fdd422898ffa54893f67ece34039",
+   "subject": "Accept explicit contribution context for MCP runtime configuration (#61283)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_13.md records: 已完成：host-only 投影排除 live 执行器清单；originator/session source/显式禁用/环境快照与全 overlay 后权威过滤均有回归；Go 无 thread_init 载体，活动步使用冻结快照，host-only 使用进程级贡献加显式收窄且不修改共享插件。见 mcp_context_completion_2026_11_14.md"
+   ]
+  },
+  {
+   "sha": "69231e119bfca0b14453515e97d99688ce1c47c9",
+   "subject": "Add and preserve the marketplace auto-update setting (#61286)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_13.md records: 已完成：已实现，config/plugin 全包测试和 vet 通过；本轮复验见 completed_items_reverify_2026_11_14.log"
+   ]
+  },
+  {
+   "sha": "c79dfb1d9cc531e0b091b802edd44665edee9b81",
+   "subject": "Centralize managed network proxy startup (#61337)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "Go already centralizes managed proxy startup in network.StartProxyManagedNetwork (used by execserver) with the PolicyDecider and BlockedObserver carried on ProxyConfig; the Rust change extracts an internal helper and adds no new Go contract."
+   ]
+  },
+  {
+   "sha": "9d12d007b278af2320a2c9c237d275c26f4b7686",
+   "subject": "Record host-confirmed Code Mode wait targets in rollout traces (#61338)",
+   "kind": "persistence",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "Depends on the Rust rollout-trace writer, which Go does not implement (same conclusion as 9ac8c3f8d7); resume sandbox label diagnostics are covered by appserver/resume_sandbox_label_test.go."
+   ]
+  },
+  {
+   "sha": "a4b69a0ae98944569ea3acc67dffec8c45a78d35",
+   "subject": "Add session-scoped stores for stable model-facing IDs (#61339)",
+   "kind": "persistence",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "state/session_model_ids.go implements the session-scoped stable model-facing ID store with migration 0063_session_model_ids.sql (Add session-scoped stable model-facing ID stores like Rust (#61339)); upstream exposes that store only through ThreadStore::model_ids()."
+   ]
+  },
+  {
+   "sha": "7844815bd75f8e20ffe3e9f031d261e2956a981c",
+   "subject": "Add opt-in prompt image sanitization (#61341)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "safe_image_decoder feature adds the sanitizer limits, metadata stripping, and EXIF orientation handling (plan_2026_11_16.md)."
+   ]
+  },
+  {
+   "sha": "61c106ed66c0c5b4880cff07eddffd53e1df299e",
+   "subject": "Cancel abandoned cloud thread list requests (#61342)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_14.md records: 已完成（2026-11-15，等价实现）：Cloud worker 的每次请求携带派生 ctx，调用方放弃/取消时 `ListThreads` 的原生调用随即取消并让 worker 返回队列；新增 thread/list 与后续 GetAccount 探针回归。Rust 通过响应接收端关闭实现，Go 以请求 ctx 表达同一约束（TUI 传输暂无逐请求 ctx，主链路一致）"
+   ]
+  },
+  {
+   "sha": "d17887a8d1a7d3e800fb9fb4cb9dd419c147910b",
+   "subject": "Title saved side chats from their first direct input (#61343)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "Saved side chats take their first direct input as the title, attached forks use attachToSource/excludeTurns and the tui_side_chat source, and closing archives instead of deleting (plan_2026_11_16.md)."
+   ]
+  },
+  {
+   "sha": "c33002259e28db9e87807cedebfb25299d95a2c6",
+   "subject": "Add per-item retention policies for injected history (#61344)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "thread/injectItems accepts raw ResponseItems and {item, retention} wrappers with strict policies; retention=always persists as retain_across_windows (plan_2026_11_16.md)."
+   ]
+  },
+  {
+   "sha": "a655b50de9d06e9d50eb13087f9def8f103d97b5",
+   "subject": "Add opt-in elastic budgeting for asynchronous Guardian requests (#61345)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "Applies only to Rust ext/guardian-v2/async_scorer; Go deliberately has no asynchronous Guardian scorer (see the #44569 note in appserver/guardian_reviewer.go)."
+   ]
+  },
+  {
+   "sha": "6919e2cd8ee5d07ab2d983e497772a8ecbf60ce1",
+   "subject": "Apply elastic entry caps to Guardian classifier evidence (#61346)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "Applies only to Rust ext/guardian-v2/async_scorer; Go deliberately has no asynchronous Guardian scorer (see the #44569 note in appserver/guardian_reviewer.go)."
+   ]
+  },
+  {
+   "sha": "76cf0f45ec44e488297cd27e1b1a951f02c31bfe",
+   "subject": "Reserve item ID overhead before elastic context allocation (#61347)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "Applies only to Rust ext/guardian-v2/async_scorer; Go deliberately has no asynchronous Guardian scorer (see the #44569 note in appserver/guardian_reviewer.go)."
+   ]
+  },
+  {
+   "sha": "d87330d91e2309aea3b82286961340181d145ab4",
+   "subject": "Add managed CA defaults for Deno and Google Cloud SDK (#61349)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_14.md records: 已完成（2026-11-15）：`DENO_CERT`/`CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE` 仅在未设置时指向托管 CA bundle（空字符串视为显式保留），不参与代理信任根；`NIX_SSL_CERT_FILE` 纳入信任根键；shell 快照过滤生成的 child-only 默认值；受限沙箱仅授予托管网络下生成的 CA bundle 读权限；见 network/proxy_certs_test.go 与 execserver/runtime_readable_paths_like_rust_test.go"
+   ]
+  },
+  {
+   "sha": "f8580db4725c6a51a5ee2de0980a8b8b0659e143",
+   "subject": "Reflect accepted cloud model selections in TUI status (#61350)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "Status surfaces use the catalog display label: the status line and terminal title already resolved it, and tui.State.ModelDisplayName now feeds the /status card while Model keeps the id; TestCloudModelSelectionReflectsAcceptedStatusLikeRust covers the status line, /status, and reasoning-only /model after acceptance."
+   ]
+  },
+  {
+   "sha": "a60197d6a06b026f7afb72e7f7469ea8ec95683e",
+   "subject": "Expose canonical network proxy policy patterns (#61351)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_14.md records: 已完成（2026-11-15）：`CanonicalAllowProxyPattern`/`CanonicalDenyProxyPattern`/`CanonicalReviewProxyPattern` 按 Rust 语义校验并生成比较键（grant 保留 IPv6 拼写与本地通配端口，restriction 压缩 IPv6；`?*.` 归一为 `*.`），managed network 双拼写比较改用权限相关身份；见 network/proxy_policy_canonical_like_rust_test.go"
+   ]
+  },
+  {
+   "sha": "4ccf87254a1bbeb24e59261f66f39e3bc4b64453",
+   "subject": "Mark the TUI workspace as stable and enable it by default (#61352)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "features/features.go sets tui_workspace to stable and enabled by default; tui/tea/side_panels_like_rust_test.go exercises the disabled path."
+   ]
+  },
+  {
+   "sha": "2bad26e03f9f38f228d5d99d6a1a3ea1442cd9e7",
+   "subject": "Centralize TUI read-only view checks (#61353)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_16.md records Go's externalWriterView() read-only guard and ThreadSessionState.IsReadOnly covering parent-owned threads, which is the equivalent of the Rust writer refactor."
+   ]
+  },
+  {
+   "sha": "60fb26f6ba50a118045eb0089814b366bb5296a8",
+   "subject": "Avoid rewriting unchanged Guardian channel descriptions (#61354)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "Guardian-v3 housekeeper channel routing has no Go counterpart because Go has no guardian-v3 subsystem, so there is no description rewrite to deduplicate."
+   ]
+  },
+  {
+   "sha": "76a8ca3914ec86807340367e8ba41e2f207e722a",
+   "subject": "Upgrade Bazel rules_rs to 0.2.3 (#61355)",
+   "kind": "persistence",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "macOS signer-service and Bazel configuration belong to the Rust build chain; Go's release pipeline is independent."
+   ]
+  },
+  {
+   "sha": "ae12a9d645774982fe9deda590dc1f237d249d1d",
+   "subject": "Add deferred MCP reprojection for the next regular turn (#61356)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_14.md records: 已完成（2026-11-15）：`requestMCPReprojectOnNextTurn` 与 dirty 状态分离并在常规 turn/started 后、绑定工具前 claim，重复请求合并且 prewarm 不消费；见 TestDeferredMCPReprojectionSurvivesPrewarmAndRunsAtTurnStartLikeRust"
+   ]
+  },
+  {
+   "sha": "3f2603f2a261f7cb8a479dcae274bfe7ad5c7155",
+   "subject": "Clarify removal scope for profile MCP servers (#61357)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_14.md records: 已完成（2026-11-15）：`-p/--profile` 贯通 MCP 配置加载；profile 定义的 server 输出 profile settings 路径与 remove 仅改全局配置的说明，全局继承项保留 remove 提示；见 app/mcp_cli_test.go"
+   ]
+  },
+  {
+   "sha": "dd8cee982245a4e1aa181127ab712acc0db9f989",
+   "subject": "Add structured error kinds for exec-server process starts (#61358)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_14.md records: 已完成：process/start 错误携带 data{\"kind\"}（spawnNotFound/spawnPermissionDenied/spawnFailed/sandboxUnavailable/sandboxPreparation），client receipt 记录 error_code/error_kind；go test ./execserver 20.8s 通过"
+   ]
+  },
+  {
+   "sha": "4413deac572eb5d4cdb49295794cbe30f8622935",
+   "subject": "Resolve queued attachment paths against the thread working directory (#61359)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_14.md records: 已完成：队列 add/update 把相对 localImage/localAudio 路径按线程记录 cwd 解析，绝对路径保留，无 cwd 时报 invalid request；go test ./appserver 349.259s 通过"
+   ]
+  },
+  {
+   "sha": "6d99161bced769f68a60e3c37e5dd4fc6fbad44c",
+   "subject": "Limit MCP status discovery to the requested page (#61365)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_14.md records: 已完成（2026-11-15）：状态发现先按完整注册身份排序/筛选/分页，仅对页内服务器执行发现；见 TestListStatusPaginationLimitsDiscoveryLikeRust / TestPaginatedStatusKeepsSameNamedEnvironmentPagesLikeRust"
+   ]
+  },
+  {
+   "sha": "400a1e1e82bc558bd52df2c603829e894385bf67",
+   "subject": "Use native permission profiles for diagnostics and sandbox checks (#61369)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "Depends on the Rust rollout-trace writer, which Go does not implement (same conclusion as 9ac8c3f8d7); resume sandbox label diagnostics are covered by appserver/resume_sandbox_label_test.go."
+   ]
+  },
+  {
+   "sha": "ba3071a66dfaff1e2d4b2dc12a33c559469d614c",
+   "subject": "Remove BuildBuddy presets from the checked-in Bazel configuration (#61370)",
+   "kind": "release",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "macOS signer-service and Bazel configuration belong to the Rust build chain; Go's release pipeline is independent."
+   ]
+  },
+  {
+   "sha": "9e48702b3a41fcd11ad03194af219449d08cc5bd",
+   "subject": "Add opt-in signer-service support for macOS releases (#61371)",
+   "kind": "release",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "macOS signer-service and Bazel configuration belong to the Rust build chain; Go's release pipeline is independent."
+   ]
+  },
+  {
+   "sha": "7194b2177643f3c639cfc5b29f6398c545b0e7e2",
+   "subject": "Add opt-in transparent TCP routing for Linux sandboxes (#61372)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "Linux sandbox transparent TCP: TUN plus gVisor tcpip, 127.0.0.53 DNS stub, ProxyRoutedTransparentTCP seccomp, and exec-server --linux-sandbox-transparent-tcp/--tcp-upstream-proxy (plan_2026_11_16.md)."
+   ]
+  },
+  {
+   "sha": "a46c5be77eac0dc856f677a099a6a7702edd578b",
+   "subject": "Delegate installed plugin recommendation filtering to the endpoint (#61374)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_14.md records: 已完成（2026-11-15）：suggested 端点请求携带 `includeInstalled=false`，客户端不再按已安装插件过滤建议，仅保留 tool_suggest 禁用过滤；见 plugin/suggested_test.go"
+   ]
+  },
+  {
+   "sha": "f579388d521334532811bcb30fe1046b429dfac9",
+   "subject": "Remove unused workspace entries and simplify Rust code (#61379)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_14.md records: 已等价/不适用：Cargo 依赖与 Rust 测试清理无对应；Go safety.permitsWrite 已是 `!introducesProtectedMetadata` 单表达式"
+   ]
+  },
+  {
+   "sha": "9d11b38fe77f2f981eb4aa1db2556105ed3f557a",
+   "subject": "Add cell-aware mouse selection to transcript tables (#61380)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "Same transcript table selection batch as 68c63d72d3; tui/tea/transcript_table_mark_like_rust_test.go covers mouse cell selection."
+   ]
+  },
+  {
+   "sha": "e40b0e62e259b6c155ea60f8daf484ee2d1b0428",
+   "subject": "Update the harness provenance comment in context history (#61381)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_14.md records: 已完成（2026-11-15）：context.IsAPIMessage 注释同步为 config updates 与 internal system messages 均需 provenance"
+   ]
+  },
+  {
+   "sha": "4aac2eacc5ae2ac5af80abb383c7fabbaa7c6190",
+   "subject": "Make clock reads synchronous and remove client clock requests (#61382)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_16.md records removal of currentTime/read and the host-provided TimeProvider (RuntimeRouterOptions.TimeProvider / SetTimeProvider)."
+   ]
+  },
+  {
+   "sha": "c5b6bf1f212c42f88971f2797c49359fd0932758",
+   "subject": "Keep the composer responsive while opening new conversations (#61383)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "The composer stays editable while a new conversation opens, Enter queues instead of starting a second session, and a failure restores the full draft; TestNewConversationComposerHandoffLikeRust."
+   ]
+  },
+  {
+   "sha": "52ff3d1a353953ccc08a39bdfc66a5fda9b08d0e",
+   "subject": "Support Orbit originators in model catalog partitioning (#61384)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_14.md records: 已完成：新增 orbit_cca / orbit_cca_web / orbit_cca_desktop / orbit_cca_mobile 四个独立 originator（独立 manager 与磁盘缓存），隔离/缓存复用/重启复用回归通过"
+   ]
+  },
+  {
+   "sha": "14813d36167e5148e51830624d0e76241049d5e1",
+   "subject": "Add configurable idle heartbeats to Code Mode gRPC streams (#61385)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "partial",
+   "evidence": [
+    "[code_mode] heartbeat_interval_s is parsed and exposed (config.CodeModeHeartbeatIntervalSeconds, TestCodeModeHeartbeatIntervalLikeRust), but Go's Code Mode host only implements the JSON-frame Transport RPC, so the typed OpenSession/SubscribeToToolCalls stream that sends and consumes heartbeats is still missing."
+   ]
+  },
+  {
+   "sha": "826b6e8199e6cb91d1edc4d04f70e56bf8d75539",
+   "subject": "Reuse cloud plugin catalogs across turns until invalidated (#61386)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_14.md records: 已完成（2026-11-15）：完整无告警云插件目录按 auth/provider scope 跨 turn 复用，scope 变化立即失效；见 TestRefreshCloudPluginCatalogForStepReusesCompleteCatalogAcrossTurnsLikeRust / InvalidatesOnProviderChangeLikeRust"
+   ]
+  },
+  {
+   "sha": "42f950cd112ab385aa34bb79ef377da8dca85dd6",
+   "subject": "Refresh plugin recommendations when tooling state changes (#61387)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_14.md records: 已完成（2026-11-15，等价实现）：建议缓存按 service scope（provider key）保存 `checked_at` 与 tooling marker，1s 复用窗内不再探测；超过窗口先探测 `/ps/plugins/tooling-state/turtle`（250ms 超时），marker 缺失/失败/未变时保留目录，变化才刷新；刷新失败保留上一版；见 plugin/suggested_tooling_state_like_rust_test.go。Go 的候选按 turn 生成，缓存刷新即影响下一轮推荐"
+   ]
+  },
+  {
+   "sha": "0276c8143d4e55a93a15456ed3af961b22891fe5",
+   "subject": "Include the Windows sandbox service in release builds (#61388)",
+   "kind": "release",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_16.md records scripts/build.sh and build.ps1 already including codex-windows-sandbox-service in Windows release builds."
+   ]
+  },
+  {
+   "sha": "1c76c0bc088f96fd62506d920783973a4b76e36f",
+   "subject": "Reduce session submission channel memory with boxed payloads (#61389)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "Go session submission channel payloads are already slices/pointers, so there is no boxed-payload allocation change to mirror (plan_2026_11_16.md)."
+   ]
+  },
+  {
+   "sha": "347143f140109e2736f788a2f70e6ef1216c498e",
+   "subject": "Preserve active additional context across compaction (#61390)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_14.md records: 已完成（2026-11-15）：按 response-item ID 记录上下文条目，压缩后刷新保留项、补回被替换前缀丢弃项（插在保留用户消息前），指令型片段在下一轮重发；见 additional_context_compaction_like_rust_test.go"
+   ]
+  },
+  {
+   "sha": "f5fb19fc4a453435edadf968a1bee819d3a0586b",
+   "subject": "Normalize managed network requirements before merging (#61391)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_14.md records: 已完成（2026-11-15）：双拼写按代理选择器身份比较（allow/deny 区分、IPv6 规范化、review_domains），一致才接受；cloud 片段逐片校验且错误只列片段名不泄露策略值；见 permissions_network_requirements_like_rust_test.go 与 cloud_config_test.go"
+   ]
+  },
+  {
+   "sha": "f941a5fb927b429e2575cf32da8b27472255683a",
+   "subject": "Add optional release IDs to cloud plugin source locations (#61393)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_14.md records: 已完成（2026-11-15）：`PluginSourceLocation.ReleaseID` 承载云目录选择的不透明 release，克隆保留且参与合并时的位置身份比较；见 plugin/cloud_release_id_like_rust_test.go"
+   ]
+  },
+  {
+   "sha": "5158e9780e7c7983efb899baf4a427b313587b22",
+   "subject": "Add opt-in file-backed tool audio (#61394)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "file_backed_tool_audio feature: inline tool audio crosses the persistence boundary into attachments, history keeps file_id, replay skips re-upload, and truncation/budget accounting is preserved (plan_2026_11_16.md)."
+   ]
+  },
+  {
+   "sha": "f626b8fde93ff50ae00a3c8bab3db86f2c85a9ec",
+   "subject": "Remove legacy sandbox-policy accessors from configuration (#61395)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "Go has no Config::legacy_sandbox_policy accessor; LegacySandboxPolicy() is only a profile-derived attribute and resume diagnostics already use normalized labels."
+   ]
+  },
+  {
+   "sha": "c5ef97aa892c7ec9b651ec5da9f471571cad4e15",
+   "subject": "Add default model provider selection to the app server (#61397)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_14.md records: 已完成（2026-11-15）：`modelProvider/default/set` 持久化 `model_provider`、校验 managed/未知 provider 并失效目录，见 appserver/model_provider_default.go"
+   ]
+  },
+  {
+   "sha": "e8f5d2bb5555c3496d25b5fbd8c75a20e87c2b06",
+   "subject": "Restore shared connector metadata for Codex Apps tools (#61398)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_14.md records: 已完成（2026-11-15）：每页 tools/list 按 connector_id 从 `_meta.openai/apps` 回填 connector_name/connector_description，仅 codex_apps 生效，模型侧命名空间/描述正确；见 http_client.go 与 TestCodexAppsListToolsRestoresSharedConnectorMetadataLikeRust"
+   ]
+  },
+  {
+   "sha": "0b297ec5ee0eddbab6c2447127fcde3f97f6e336",
+   "subject": "Retry incomplete cloud catalogs with exponential backoff (#61400)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_14.md records: 已完成（2026-11-15）：部分目录/带告警目录继续可用并从 5s 起指数退避至 5min，完整无告警才清除退避；新的部分结果直接替换旧目录；见 appserver/cloud_catalog_refresh_test.go 与 plugin/cloud_catalog_test.go"
+   ]
+  },
+  {
+   "sha": "43ca762a59b19ec7c1e82dab6992f4467dca923c",
+   "subject": "Release MCP OAuth read locks before keyring access (#61401)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_14.md records: 已完成（2026-11-15，等价实现）：本地加密 secrets 先读取密文快照、随后才访问 keyring；Set/Delete 复用同一次 keyring 查询；已有加密文件缺少 keyring 口令时显式报错且绝不生成替换口令；无文件 Delete 不访问 keyring。Go 无 Rust aggregate secrets 共享/独占文件锁层，以读取顺序约束等价落地；见 safety/secrets_update_locking_like_rust_test.go"
+   ]
+  },
+  {
+   "sha": "61bedf383f668031a406c0fdb2799c10e780f599",
+   "subject": "Update Daybreak links in TUI cybersecurity notices (#61402)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_14.md records: 已完成（2026-11-15）：Apply 链接改 chatgpt.com/admin/status-and-access，Astra 链接改 20001258 文档锚点，快照断言同步"
+   ]
+  },
+  {
+   "sha": "68847438b51025ede9c3b83708a9d6e23e8292e3",
+   "subject": "Add a structured status-line snapshot for the displayed thread (#61403)",
+   "kind": "persistence",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "Upstream statusline_state() is annotated expect(dead_code, reason = staged for provider reads) with no runtime consumer; Go's status-line preview values come from the bottom-pane preview data instead (plan_2026_11_16.md)."
+   ]
+  },
+  {
+   "sha": "38cdc4d65561e35848d252276f015fbd909efb9b",
+   "subject": "Show the primary executor's workspace in TUI status surfaces (#61405)",
+   "kind": "persistence",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "Upstream statusline_state() is annotated expect(dead_code, reason = staged for provider reads) with no runtime consumer; Go's status-line preview values come from the bottom-pane preview data instead (plan_2026_11_16.md)."
+   ]
+  },
+  {
+   "sha": "91ae3d10bf4c37ba31eb6dc99d32d8cca896dbec",
+   "subject": "Expose token usage totals in statusline state (#61408)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "Upstream statusline_state() is annotated expect(dead_code, reason = staged for provider reads) with no runtime consumer; Go's status-line preview values come from the bottom-pane preview data instead (plan_2026_11_16.md)."
+   ]
+  },
+  {
+   "sha": "e87cd55ed96c6194189eadaff87a70076a948dbb",
+   "subject": "Expose context usage in statusline state (#61409)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "Upstream statusline_state() is annotated expect(dead_code, reason = staged for provider reads) with no runtime consumer; Go's status-line preview values come from the bottom-pane preview data instead (plan_2026_11_16.md)."
+   ]
+  },
+  {
+   "sha": "5ca2007abe0f514f62c14e333075fb1faf968cc4",
+   "subject": "Expose thread costs in statusline state and reject stale usage reads (#61410)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "Upstream statusline_state() is annotated expect(dead_code, reason = staged for provider reads) with no runtime consumer; Go's status-line preview values come from the bottom-pane preview data instead (plan_2026_11_16.md)."
+   ]
+  },
+  {
+   "sha": "641e2e362ca781b8fe350c396441d49e34dab35e",
+   "subject": "Ignore stale workspace headline requests and archived messages (#61411)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "Upstream statusline_state() is annotated expect(dead_code, reason = staged for provider reads) with no runtime consumer; Go's status-line preview values come from the bottom-pane preview data instead (plan_2026_11_16.md)."
+   ]
+  },
+  {
+   "sha": "4495f7ce1741d80cdc356594a13c5207c1aa3649",
+   "subject": "Expose the workspace headline in structured status-line state (#61415)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "Upstream statusline_state() is annotated expect(dead_code, reason = staged for provider reads) with no runtime consumer; Go's status-line preview values come from the bottom-pane preview data instead (plan_2026_11_16.md)."
+   ]
+  },
+  {
+   "sha": "fb0715949b076011acb1b46f8c76879c459a227a",
+   "subject": "Expose Codex rate limits in statusline state (#61417)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "Upstream statusline_state() is annotated expect(dead_code, reason = staged for provider reads) with no runtime consumer; Go's status-line preview values come from the bottom-pane preview data instead (plan_2026_11_16.md)."
+   ]
+  },
+  {
+   "sha": "ad8b7f113454cb54899c12ae61624beb503d1bc7",
+   "subject": "Require a government workspace for the government backend (#61418)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_14.md records: 已完成（2026-11-15）：商业工作区命中 gov 后端拒绝并映射 relogin，见 appserver/workspace_routing_test.go"
+   ]
+  },
+  {
+   "sha": "2d5bfb7931a44d1ecc2b85b18b0abce35f3a45b1",
+   "subject": "Resolve pasted Windows paths with wslpath in WSL (#61419)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_14.md records: 已完成（2026-11-15）：wslpath + mountinfo 回退与越界拒绝，见 tui/clipboard_paste_test.go"
+   ]
+  },
+  {
+   "sha": "51f0b53d8b07d18800e28d8755a59bee60fb4ca3",
+   "subject": "Clear the user endpoint override during GCP setup (#61420)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_14.md records: 已完成：setup 预览中清除用户层 model_providers.gcp.base_url（成功后由项目/位置决定 endpoint），更高优先层仍提供 base_url 时按 layer-readonly 拒绝，认证失败不写配置；见 appserver/gcp.go 与 GCP 回归"
+   ]
+  },
+  {
+   "sha": "4598f3379098eb52a1d18fdb5363eb57a84fcf00",
+   "subject": "Use thread-scoped model catalogs for model lookups (#61421)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "appserver/thread_model_catalog.go keeps per-provider catalogs keyed by the thread's owning provider; TestThreadModelCatalogUsesOwningProviderLikeRust covers lookups against that provider."
+   ]
+  },
+  {
+   "sha": "68c63d72d38fd4274cdff32c1e65198c3150c666",
+   "subject": "Add keyboard table selection to the transcript (#61422)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "pager.mark_markdown enters the keymap catalog and leader v dispatches selection; tui/tea/transcript_table_mark_like_rust_test.go covers keyboard and mouse cell selection."
+   ]
+  },
+  {
+   "sha": "01806453b03b18388afa90920ba3778f66b02fa6",
+   "subject": "Refill the transcript viewport when collapsing tool groups (#61424)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_16.md records the collapsed tool-group viewport refill; TestCollapsingScrolledToolGroupRefillsViewportLikeRust locks the clamp to the new bottom limit across renders."
+   ]
+  },
+  {
+   "sha": "27e2227b2b49a541eb799af8f8efb7032b1ef202",
+   "subject": "Enable incremental tools by default for Amazon Bedrock (#61426)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_14.md records: 已完成：incremental_tools_legacy 默认开启（Bedrock 两个 provider），显式 false 仍可关闭；见 features/features.go 与 incremental_tools 回归"
+   ]
+  },
+  {
+   "sha": "005f910210e8aa8c92b230e4d0a314d252033914",
+   "subject": "Require OAuth CONNECT metadata for Portals TCP tunnels (#61428)",
+   "kind": "release",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_14.md records: 已完成：Portals CONNECT 必须带 x-portals-auth-mode: oauth，token 按不透明 bearer；见 tcptunnel/control.go 与 ssh_like_rust_test.go"
+   ]
+  },
+  {
+   "sha": "6d919e65e20dcb1b916be8acd113b394d4dd6cc9",
+   "subject": "Refresh cloud plugin and skill catalogs during step preparation (#61429)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "appserver/cloud_catalog_refresh.go refreshes plugin and skill catalogs per step with auth/provider scope reuse and backoff (plan_2026_11_16.md)."
+   ]
+  },
+  {
+   "sha": "de83e7674a69b9ae18544dd1fbf53f31bfe8c640",
+   "subject": "Instrument MCP OAuth credential store locks (#61430)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "Go's MCP OAuth credential store has no Rust file/secrets lock layer (same conclusion as 43ca762a59), so there is no lock to instrument."
+   ]
+  },
+  {
+   "sha": "9ac8c3f8d71ec12d57d89485d62f731769f6bf6f",
+   "subject": "Close abandoned tool dispatch traces as aborted (#61434)",
+   "kind": "persistence",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "plan_2026_11_14.md records: 不适用（当前 Go 范围）：Go 无 Rust rollout-trace 运行时 writer/dispatch handle，replay/reduce 契约由 #61199 覆盖"
+   ]
+  },
+  {
+   "sha": "8afe928a76fd9013a0127edae5ed2de7508036e2",
+   "subject": "Avoid starting dormant REPL servers for cleanup hooks (#61437)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_14.md records: 已完成（2026-11-15）：内置 node_repl/cua_repl `turn_ended` 清理调用携带 skip 标记；仅当注册来自 config、本地 stdio、legacy 协议、从未请求启动且无活动连接时直接返回空成功；普通 hook 仍等待启动。新增 eligibility 与端到端 hook 回归"
+   ]
+  },
+  {
+   "sha": "9825e4b2fe69d997dbf533e228445d50095e6ba8",
+   "subject": "Use the provider default RPC in the TUI (#61438)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "config_provider_browser.go writes the default provider through modelProvider/default/set with unsupported and unconfirmed errors (plan_2026_11_16.md)."
+   ]
+  },
+  {
+   "sha": "e9919f4b4ef9aa4b15af92589c7f44581d1ad26a",
+   "subject": "Add process-local launch directories for shared MCP servers (#61444)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "Hidden --plugin-mcp-launch-cwd/--mcp-launch-cwd flags parse three-value triples in cli/cli.go, appserver gating requires mcp_shared_repl_cwd plus mcp_connection_sharing in runtime_router.go, and cli/mcp_launch_cwd_flags_like_rust_test.go plus appserver/mcp_launch_cwds_like_rust_test.go cover them."
+   ]
+  },
+  {
+   "sha": "32cec881b72360957d30ff48f94e038945603818",
+   "subject": "Add thread ID inclusion filters to `thread/list` (#61446)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_14.md records: 已完成（2026-11-15）：`includedThreadIds` 校验/过滤/分页/索引优先，见 appserver/thread_list_inclusions_test.go"
+   ]
+  },
+  {
+   "sha": "d26406987e5c2e1f7bae77e3ba2a1bca3fed4767",
+   "subject": "Add explicit cloud catalog refresh before turn admission (#61449)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "appserver/cloud_catalog_refresh.go refreshes the cloud plugin catalog before turn admission; same batch as 6d919e65e2."
+   ]
+  },
+  {
+   "sha": "c2c1ebba0a7985ebee065c5492233a843b84c4c6",
+   "subject": "Add optional tool output rendering for context window hints (#61452)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "config/token_budget.go accepts context_window_as_tool_output and appserver/context_window_context.go renders <context_window> as tool output, covered by context_window_tool_output_like_rust_test.go."
+   ]
+  },
+  {
+   "sha": "ecf54824c6e72757d8ce9dfc85e2bbea57ff75fd",
+   "subject": "Refactor session mail recording and compaction metadata capture (#61461)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "Upstream-only refactor and test move; Go already captures checkpointResumeMetadata before writing the checkpoint and uses the delivery handle directly for inter-agent records."
+   ]
+  },
+  {
+   "sha": "336b19ab26e0d4e36b16d8a21d668632cd800207",
+   "subject": "Move JSON byte counting into `codex-utils-string` (#61465)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "plan_2026_11_14.md records: 不适用（纯模块搬迁）：Go 无 core::utils::json 拆分，等价的 len(json.Marshal) 直接用于 model/responses_agent.go 的 15MiB 上限"
+   ]
+  },
+  {
+   "sha": "5943d7acdf01b293c950397844dd37aa70779df4",
+   "subject": "Persist timestamped realtime frames before acknowledging completion (#61473)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "RealtimeItem.ObservedAtMS plus the frame and sessionEndInputSaved protocol forms; realtime/realtime_frames_like_rust_test.go and appserver/thread_realtime_like_rust_test.go cover timestamped frames persisted before completion."
+   ]
+  },
+  {
+   "sha": "05229d1874d4e04bc746a9954c71931a1ab852c6",
+   "subject": "Add snapshot pagination for persisted realtime history (#61480)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_16.md records thread/realtime/list pagination (100 default, 1..500 cap, session/window/eventId filters, observedAt or position ordering, cursors bound to the query and snapshotEnd); appserver/thread_realtime_like_rust_test.go covers it."
+   ]
+  },
+  {
+   "sha": "6ddb87e700537bf95e4b920422b6a449df2f991d",
+   "subject": "Allow Ctrl+C to quit during Cloud session switches (#61481)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "cloudbackend skips an abandoned queued thread/start, and the TUI now runs the cross-backend handoff off the update loop so Ctrl+C clears the draft and then quits; backend-switch tests include TestBackendSwitchCtrlCClearsDraftThenQuitsLikeRust."
+   ]
+  },
+  {
+   "sha": "7924f95421a326bb66426a3ce232b72550948470",
+   "subject": "Keep archived threads read-only and support unarchiving in the TUI (#61486)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "Archived threads render read-only with U to unarchive; tui/tea archive tests and app unarchive tests cover the frozen transcript, recovery, and resume rejection paths (plan_2026_11_16.md)."
+   ]
+  },
+  {
+   "sha": "048431dcbecc510f1879c9421a97220016ecac44",
+   "subject": "Harden Git remote collection and limit remote URL metadata (#61488)",
+   "kind": "release",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_15.md records: 已落地"
+   ]
+  },
+  {
+   "sha": "d659419fe7f7a9a32295ec9d1995a98f4b3f4a20",
+   "subject": "Preserve the current Cloud task until navigation is ready (#61490)",
+   "kind": "persistence",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_15.md records: 已落地"
+   ]
+  },
+  {
+   "sha": "b1573f102413e96a6481087922bf425231222dee",
+   "subject": "Describe context and permissions per environment behind a feature flag (#61494)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_15.md records: 已落地"
+   ]
+  },
+  {
+   "sha": "65a5410f72dac1f4b40862c34ef0a8b71b12834a",
+   "subject": "Add trusted request-country metadata to Responses requests (#61535)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_15.md records: 已落地"
+   ]
+  },
+  {
+   "sha": "81b995a6c9a4c978f399775cfa5ce50702368749",
+   "subject": "Unify model request hook lifecycles across sampling and compaction (#61562)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_15.md records: 已落地"
+   ]
+  },
+  {
+   "sha": "92c1a4dc2e1ff83dd0d2f06f15f03df21b8cb2f2",
+   "subject": "Add response processing after completion and usage accounting (#61577)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_15.md records: 已落地（responses.process_mode + after_complete 结算）"
+   ]
+  },
+  {
+   "sha": "f226c9ccfb9762eb5b8fa5d45b43262304f5a360",
+   "subject": "Recheck rollout budgets before starting tool work (#61578)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_15.md records: 已落地（tool handler + MCP handoff 复核）"
+   ]
+  },
+  {
+   "sha": "c8e4cbcd9476795a08080f02e3bc09a64f6da80d",
+   "subject": "Support fractional rollout budgets and configurable context reminders (#61579)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_15.md records: 已落地"
+   ]
+  },
+  {
+   "sha": "c8c3f70893f4bd2ba7f3d7bd263867b1fa31eba4",
+   "subject": "Account for synchronous MCP post-hook costs in rollout budgets (#61580)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_15.md records: 已落地（structuredContent 计价、校验/溢出、UsageAccountingFailed）"
+   ]
+  },
+  {
+   "sha": "2e61e8ec4e1c733d6e78e9429e26de1e4dd34c0a",
+   "subject": "Record neutral interruption markers for rollout budget stops (#61581)",
+   "kind": "persistence",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_15.md records: 已落地（中性 turn_aborted developer marker）"
+   ]
+  },
+  {
+   "sha": "ce82e38b168917e97480ab9e6a9d7fab96f2d037",
+   "subject": "Gate new rollout work on shared budget exhaustion (#61582)",
+   "kind": "persistence",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_15.md records: 已落地（按根线程共享预算、generation/tool/MCP 门禁）"
+   ]
+  },
+  {
+   "sha": "eaa25e1f43a564abd4df9d66115ff3f30ade98cc",
+   "subject": "Refactor rollout budget checks and turn completion state (#61583)",
+   "kind": "persistence",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_15.md records: 已落地（生成前门禁、pending input/inline compaction 预算门禁、final/commentary 既有语义）"
+   ]
+  },
+  {
+   "sha": "3b8bd2ee7e95b058192151b3468093a5a67655f8",
+   "subject": "Add request IDs and attempt numbers to model request hooks (#61587)",
+   "kind": "protocol",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_15.md records: 已落地"
+   ]
+  },
+  {
+   "sha": "e8e5108c9798da1ccdf78e9627a0c2c8f97a15fd",
+   "subject": "Scope TUI history item lookups to their owning turns (#61595)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_15.md records: 已落地（旧历史分页按 (turnId,itemId) 归属、跳过回退边界）"
+   ]
+  },
+  {
+   "sha": "b7056f3408522716b6643c8b3e23ce7c9b53b041",
+   "subject": "Keep agent overview refresh state scoped to each backend (#61596)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_15.md records: 已落地（按后端 refresh 队列/Show more/refill/失败/断连，迟到分页丢弃，pin 归属）"
+   ]
+  },
+  {
+   "sha": "8e30237f643c7c379e2473708a051b942cd99c33",
+   "subject": "Report Cloud stream recovery failures and cancel abandoned reads (#61599)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_15.md records: 已落地"
+   ]
+  },
+  {
+   "sha": "b016cd18472588606c04af565528c4cd6746a41f",
+   "subject": "Enable automatic titles for Cloud conversations (#61600)",
+   "kind": "security",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_15.md records: 已落地"
+   ]
+  },
+  {
+   "sha": "02e745f3a081686a6e95700877fa43145c86f583",
+   "subject": "Return to the command center while archiving a task (#61619)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_15.md records: 已落地"
+   ]
+  },
+  {
+   "sha": "ee344ca9458351a6ea102795fa73110ad3ede5dc",
+   "subject": "Clarify window ID discovery in history tool guidance (#61622)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_15.md records: 已落地"
+   ]
+  },
+  {
+   "sha": "5cb38e79842a0e0a6dca5bb97874163e8ee50129",
+   "subject": "Fix config reads with relative working directories (#61663)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "plan_2026_11_15.md records: 已等价（补回归）"
+   ]
+  },
+  {
+   "sha": "87fccdc1bc0bc9af04db844a23d9c025f3b82000",
+   "subject": "Defer plugin manifest loading until marketplace entries are selected (#61686)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "MarketplaceSelection defers manifest reads, keeps first-source priority across scopes, and applies policy.products visibility; TestConfiguredMarketplaceSelectionDefersDiscardedManifestReadsLikeRust and the marketplace product/merge tests cover it."
+   ]
+  },
+  {
+   "sha": "375a6b1653ed7007354c2f44d2d4dcfb5f4d150f",
+   "subject": "Add TUI review ownership and risk guidance (#61688)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "not_applicable",
+   "evidence": [
+    "Upstream only adds codex-rs/tui/OWNERS and TEMPEST_REVIEW process metadata; it changes no CLI or TUI behavior and Go has no matching review process."
+   ]
+  },
+  {
+   "sha": "9017fd33f3b9b2485fef9d061ed3802aa47bf480",
+   "subject": "Keep pasted text inline in TUI goals (#61690)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "materializeGoalDraft expands pending pastes before images and the length limit; short goals keep pasted text inline and oversized expansions fall back to goal-objective.md."
+   ]
+  },
+  {
+   "sha": "03cb329415f3abd4216181443405ef32d5da8143",
+   "subject": "Fix status detail truncation for wide Unicode characters (#61692)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "Status detail continuation lines indent to the prefix width and truncate by display width; the 10-column wide-character regression asserts each line fits and the last line renders the ellipsis."
+   ]
+  },
+  {
+   "sha": "1a2a9299c1ae0965ef9303e30a7fa7c4b00ed886",
+   "subject": "Discard unsaved experimental feature edits on cancel (#61694)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "Esc, Ctrl+C, and the remapped list.cancel close the experimental-feature popup without saving, and the footer renders as you configure the bindings."
+   ]
+  },
+  {
+   "sha": "a394ff9cf66e9c17258077e8f8295178ca0c2025",
+   "subject": "Restore the terminal's original alternate-scroll mode (#61697)",
+   "kind": "runtime",
+   "domains": [
+    "codex_go"
+   ],
+   "status": "complete",
+   "evidence": [
+    "Startup probes CSI ? 1007 $ p and restores the original alternate-scroll mode; owned screens disable 1007, static pagers enable it, and the editor handoff restores the initial mode."
    ]
   }
  ]

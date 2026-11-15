@@ -29,6 +29,9 @@ func (m *Model) applyStatusCommand() bubbletea.Cmd {
 	refreshing := m.State.HasChatGPTAccount && m.onReadRateLimits != nil
 	snapshot := *m.State
 	snapshot.Messages = nil
+	// Rust #61350: the status card shows the catalog display label while the
+	// snapshot keeps the model id for copy targets and selection.
+	snapshot.ModelDisplayName = m.modelDisplayName(m.State.Model)
 	snapshot.RateLimits = append([]codextui.RateLimitStatus(nil), m.State.RateLimits...)
 	snapshot.RateLimitsRefreshing = refreshing
 	// Rust #48754: the status card is borderless and wraps, so the old

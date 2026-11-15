@@ -200,6 +200,7 @@ func TestRustThreadRealtimeSurfaceAgainstGo(t *testing.T) {
 		string(realtime.MethodAppendText),
 		string(realtime.MethodAppendSpeech),
 		string(realtime.MethodStop),
+		string(realtime.MethodList),
 		string(realtime.MethodListVoices),
 		string(realtime.NotificationStarted),
 		string(realtime.NotificationItemAdded),

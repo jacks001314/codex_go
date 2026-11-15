@@ -172,8 +172,12 @@ type State struct {
 	// StartupThreadPending reports whether this process has not created or
 	// attached to a thread yet, so the first thread/start uses the launch's
 	// explicit permission choices (Rust StartupLaunchChoices).
-	StartupThreadPending    bool
-	Model                   string
+	StartupThreadPending bool
+	Model                string
+	// ModelDisplayName is the catalog display label for Model. Only display
+	// surfaces use it; selection, persistence, and /copy keep the model id
+	// (Rust #46503/#61350 status_model_display_name).
+	ModelDisplayName        string
 	ReasoningEffort         string
 	PlanMode                bool
 	PlanModeReasoningEffort string
@@ -520,7 +524,9 @@ func (s *State) RenderStatusCardWidth(width int) string {
 	if !s.RemoteConnection {
 		modelDetails += ", summaries auto"
 	}
-	model := displayValue(s.Model, "default") + " (" + modelDetails + ")"
+	// Rust #61350: the card shows the catalog display label (status_model_display_name) and falls back to the model id when the catalog has no label.
+	modelName := displayValue(s.ModelDisplayName, displayValue(s.Model, "default"))
+	model := modelName + " (" + modelDetails + ")"
 	header := ">_ OpenAI Codex"
 	if version := strings.TrimSpace(s.CLIVersion); version != "" {
 		header += " (v" + version + ")"

@@ -47,7 +47,7 @@ func currentArchiveTestModel(t *testing.T, archive func() error) *Model {
 	return model
 }
 
-func confirmCurrentArchive(t *testing.T, model *Model) bubbletea.Cmd {
+func confirmCurrentArchive(t *testing.T, model *Model) (*Model, bubbletea.Cmd) {
 	t.Helper()
 	model.openCurrentSessionActionConfirmation(codextui.SessionSelectionArchive)
 	if model.modal == nil {
@@ -55,8 +55,7 @@ func confirmCurrentArchive(t *testing.T, model *Model) bubbletea.Cmd {
 	}
 	model.Update(key(keymsg.KeyDown))
 	updated, cmd := model.Update(key(keymsg.KeyEnter))
-	*model = *(updated.(*Model))
-	return cmd
+	return updated.(*Model), cmd
 }
 
 // collectBatchMsgs runs every command in a batch concurrently and streams the
@@ -96,7 +95,7 @@ func collectBatchMsgs(cmd bubbletea.Cmd) <-chan bubbletea.Msg {
 
 // runTeaCmdTree also executes the commands returned by Update, which is how
 // bubbletea delivers a follow-up batch (side cleanup -> archive request).
-func runTeaCmdTree(t *testing.T, model *Model, cmd bubbletea.Cmd) {
+func runTeaCmdTree(t *testing.T, model *Model, cmd bubbletea.Cmd) *Model {
 	t.Helper()
 	queue := []bubbletea.Cmd{cmd}
 	for steps := 0; len(queue) > 0 && steps < 100; steps++ {
@@ -114,9 +113,10 @@ func runTeaCmdTree(t *testing.T, model *Model, cmd bubbletea.Cmd) {
 			continue
 		}
 		updated, next := model.Update(msg)
-		*model = *(updated.(*Model))
+		model = updated.(*Model)
 		queue = append(queue, next)
 	}
+	return model
 }
 
 func TestCurrentArchiveOpensCommandCenterBeforeServerRepliesLikeRust(t *testing.T) {
@@ -129,7 +129,7 @@ func TestCurrentArchiveOpensCommandCenterBeforeServerRepliesLikeRust(t *testing.
 	})
 	typeText(t, model, "Unsent draft")
 
-	cmd := confirmCurrentArchive(t, model)
+	model, cmd := confirmCurrentArchive(t, model)
 	if cmd == nil {
 		t.Fatal("confirmed archive returned no command")
 	}
@@ -203,11 +203,11 @@ func TestCurrentArchiveFailureRestoresTaskAndDraftLikeRust(t *testing.T) {
 	})
 	typeText(t, model, "Unsent draft")
 
-	cmd := confirmCurrentArchive(t, model)
+	model, cmd := confirmCurrentArchive(t, model)
 	if cmd == nil {
 		t.Fatal("confirmed archive returned no command")
 	}
-	runTeaCmdTree(t, model, cmd)
+	model = runTeaCmdTree(t, model, cmd)
 
 	if model.agentsOverview == nil {
 		t.Fatal("failed archive left the command center")
@@ -256,7 +256,7 @@ func TestCurrentArchiveWaitsForSideChatCleanupLikeRust(t *testing.T) {
 			})
 			typeText(t, model, "Unsent draft")
 
-			cmd := confirmCurrentArchive(t, model)
+			model, cmd := confirmCurrentArchive(t, model)
 			if cmd == nil {
 				t.Fatal("confirmed archive returned no command")
 			}
@@ -266,7 +266,7 @@ func TestCurrentArchiveWaitsForSideChatCleanupLikeRust(t *testing.T) {
 			if got := strings.TrimSpace(model.State.ThreadID); got != "archive-me" {
 				t.Fatalf("side cleanup detached the task early: %q", got)
 			}
-			runTeaCmdTree(t, model, cmd)
+			model = runTeaCmdTree(t, model, cmd)
 
 			if closeErr != nil {
 				if archives != 0 {

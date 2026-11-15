@@ -67,11 +67,13 @@ func TestRustConfigSchemaSurfaceAgainstGo(t *testing.T) {
 	// IncludeEnvironmentContextTime accessor). Go subsequently recognized
 	// another upstream top-level key, moving the pinned Go count to 111 while
 	// the Rust schema count stays 103.
-	if len(rustKeys) != 103 {
-		t.Fatalf("Rust config.schema.json top-level property count = %d, want 103 (pinned baseline)", len(rustKeys))
+	// Re-anchored to upstream a394ff9cf6: `code_mode` and `responses` join the
+	// Rust schema (105), and Go already recognizes both (113).
+	if len(rustKeys) != 105 {
+		t.Fatalf("Rust config.schema.json top-level property count = %d, want 105 (pinned baseline)", len(rustKeys))
 	}
-	if len(goKeys) != 111 {
-		t.Fatalf("Go recognized top-level config key count = %d, want 111 (pinned baseline)", len(goKeys))
+	if len(goKeys) != 113 {
+		t.Fatalf("Go recognized top-level config key count = %d, want 113 (pinned baseline)", len(goKeys))
 	}
 
 	rustSet := stringSet(rustKeys)

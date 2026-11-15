@@ -353,15 +353,19 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// app-server-protocol/src/protocol/common.rs gained the attached-thread
 		// search, in-progress thread/sample, environment settings and late-abort
 		// surfaces; both pins are the LF-normalized digest of the target checkout.
-		{Path: "Cargo.toml", SHA256: "9ceb09af8e851b62aa52c9850ade930895753688abbd9674de37d96853c49ae2"},
-		{Path: "cli/src/lib.rs", SHA256: "ca6bac75eda919c2792dee2cb16e758419e7a26e6993ccf1d809a9b3f67b261e"},
+		// Re-anchored to upstream a394ff9cf6: the workspace manifest, CLI,
+		// exec, core client and protocol surfaces advanced across the
+		// 9018f3a3..a394ff9cf6 window; every hash below is the LF-normalized
+		// digest of the new anchor checkout.
+		{Path: "Cargo.toml", SHA256: "e3e0bbf9cd54cbfe05e6d72f63206a2b3c4fe8a7dce939877db25d2f4634ac50"},
+		{Path: "cli/src/lib.rs", SHA256: "4697a126821c57aeae21dcc8c396ffba4466dd5395271085d586ea413d9729a0"},
 		// Re-pinned to upstream 8ae55c863d (#47411): the shared network policy
 		// runs through embedded Codex startup.
 		// Re-anchored to head 5b0b253035 via 1fbe15c962 (#51595): the two
 		// ThreadListParams literals in resolve_resume_thread_id gained
 		// `excluded_thread_ids: None` (mechanical consequence of the
 		// thread/list exclusion field; Go side already landed as sync551).
-		{Path: "exec/src/lib.rs", SHA256: "05490e995c4672cbe585cffb8514cb1df0fe7b5be452b947782c86efbb10cd72"},
+		{Path: "exec/src/lib.rs", SHA256: "b7c816735a4c6d9d1f82979149423cf164dde71cc4b575035bbcf9d6af670ac1"},
 		// Re-pinned to upstream 7498521d (#46319): exec JSON web-search items
 		// now carry the structured results array.
 		{Path: "exec/src/exec_events.rs", SHA256: "dafa872d7e86a099e56e28a329dcb9c03db90ed768c3b88cca8c91d46dc1d0e5"},
@@ -382,13 +386,13 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// unavailable images (#57585) and the catalog-heading metadata changed.
 		// Re-anchored to upstream 68b67f0ff4: model providers and catalogs share
 		// runtime authentication through ProviderAuthContext (#57607).
-		{Path: "core/src/client.rs", SHA256: "fd2ebaeffd41032f37844ffd8eda71960cd31b38434bcb9da55c1de135b07208"},
+		{Path: "core/src/client.rs", SHA256: "3f98dc13bd6308ce7f5da4de4c0fb09d6814c7cbb2bda9733bb5bdfdf0c64a62"},
 		// Re-pinned to upstream 8ae55c863d (#47207/#47248/#47377/#47648): the
 		// gateway OAuth, MCP resource-target, realtime reasoning-status and
 		// executor bearer-token requests.
 		// Round-112 re-anchor to 8196bcdc18: thread/sample/cancel joined the
 		// client request definitions.
-		{Path: "app-server-protocol/src/protocol/common.rs", SHA256: "6b4b0f986a779696cdacaa9075b6b3043f5666ec75db4f57828d709087f508ea"},
+		{Path: "app-server-protocol/src/protocol/common.rs", SHA256: "930339f6d0e1454b7fdc8bea4f58af03e4229a3621bed22891349e98b08285c1"},
 		// Re-pinned to upstream 8ae55c863d (#46917/#47028/#47207/#47407): the
 		// provider-requirements, message-board, gateway-auth and network-policy
 		// suites joined the module list.

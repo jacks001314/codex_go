@@ -19,6 +19,7 @@ const (
 	MethodAppendText   Method = "thread/realtime/appendText"
 	MethodAppendSpeech Method = "thread/realtime/appendSpeech"
 	MethodStop         Method = "thread/realtime/stop"
+	MethodList         Method = "thread/realtime/list"
 	MethodListVoices   Method = "thread/realtime/listVoices"
 
 	NotificationStarted             NotificationMethod = "thread/realtime/started"

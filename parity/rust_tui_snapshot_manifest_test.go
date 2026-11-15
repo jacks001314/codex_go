@@ -53,8 +53,10 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	// Re-anchored to upstream 9018f3a3: the safety-recourse (#60613), pending
 	// key-chord guide (#60637), MCP startup (#60622) and composer footer
 	// row-budget (#60680-#60683) suites added nine goldens.
-	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1531 {
-		t.Fatalf("Rust TUI snapshot total drift: got %d want 1531", got)
+	// Re-anchored to upstream a394ff9cf6: the #61346-#61697 window moved the
+	// footer golden into bottom_pane and added six more goldens (1531 -> 1537).
+	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1537 {
+		t.Fatalf("Rust TUI snapshot total drift: got %d want 1537", got)
 	}
 
 	gotDirs := rustTUISnapshotDirs(t, root)
@@ -129,7 +131,8 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// snapshot is gone and the dir now holds 85 files.
 			// Re-anchored to a7a9d82f: the recovery-notice and transcript work
 			// added one app-level golden.
-			Files:    107,
+			// Re-anchored to upstream a394ff9cf6: one more app-level golden.
+			Files:    108,
 			Owner:    "tui/app, tui/chatwidget",
 			Focus:    "desktop history UI, cancelled-turn composer restore, and thread goal action rendering",
 			Priority: []string{"app", "composer", "history"},
@@ -232,12 +235,15 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// snapshots; #46734/#46749/#46751 added the clipped mention popup,
 			// the customized shortcut overlays and the narrow warnings view.
 			// Re-anchored to a7a9d82f: one bottom-pane golden was added.
-			Files:    262,
+			// Re-anchored to upstream a394ff9cf6: the prepared footer viewport
+			// golden moved here from bottom_pane/footer (263).
+			Files:    263,
 			Owner:    "tui/bottom_pane",
 			Focus:    "composer, footer, slash popup, approval overlays, MCP elicitation, queued input, and bottom pane layout",
 			Priority: []string{"composer", "approval", "status", "mcp", "slash"},
 			Required: []string{
 				"tui/src/bottom_pane/snapshots/codex_tui__bottom_pane__chat_composer__tests__empty.snap",
+				"tui/src/bottom_pane/snapshots/codex_tui__bottom_pane__status_line__tests__prepared_tree_paints_only_the_footer_viewport.snap",
 				"tui/src/bottom_pane/snapshots/codex_tui__bottom_pane__tests__slash_command_popup_dismissed.snap",
 				"tui/src/bottom_pane/snapshots/codex_tui__bottom_pane__approval_overlay__tests__approval_overlay_permissions_prompt.snap",
 				"tui/src/bottom_pane/snapshots/codex_tui__bottom_pane__approval_overlay__tests__network_exec_prompt.snap",
@@ -251,18 +257,6 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 				"tui/src/bottom_pane/snapshots/codex_tui__bottom_pane__multi_select_picker__tests__picker_appearance_renders_checkboxes_preview_and_overflow.snap",
 				"tui/src/bottom_pane/snapshots/codex_tui__bottom_pane__warnings_view__tests__warnings_narrow.snap",
 				"tui/src/bottom_pane/snapshots/codex_tui__bottom_pane__shortcut_overlay__tests__shortcut_overlay_customized_wsl.snap",
-			},
-		},
-		{
-			Path: "tui/src/bottom_pane/footer/snapshots",
-			// Rust #60026/#60029 (8e7ccd8472/7cdb219883): the prepared footer
-			// UI tree paints only its own viewport at its natural width.
-			Files:    1,
-			Owner:    "tui/bottom_pane",
-			Focus:    "prepared footer UI tree viewport painting",
-			Priority: []string{"status"},
-			Required: []string{
-				"tui/src/bottom_pane/footer/snapshots/codex_tui__bottom_pane__footer__footer_content__tests__prepared_tree_uses_its_natural_width_and_paints_only_the_footer_viewport.snap",
 			},
 		},
 		{
@@ -514,7 +508,8 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// header snapshots with the boxed card.
 			// Re-anchored to 9018f3a3: the safe key-chord guide (#60637) and
 			// the headless gateway device-code prompt (#60662) added two.
-			Files:    217,
+			// Re-anchored to upstream a394ff9cf6: one more golden.
+			Files:    218,
 			Owner:    "tui, tui/markdown, tui/app",
 			Focus:    "diff render, markdown render, keymap, resume picker, pager overlay, model migration, and status indicator snapshots",
 			Priority: []string{"diff", "markdown", "status", "session", "keymap"},
@@ -547,7 +542,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// text helpers, follow control, prompt header, search,
 			// selection hints, composer gap, and the compact/detailed copy
 			// presentations.
-			Files:    47,
+			Files:    50,
 			Owner:    "tui/transcript_view",
 			Focus:    "interactive transcript viewport: layout cache, text/tab rendering, prompt header, search, selection hints, and copy feedback",
 			Priority: []string{"history", "app", "composer"},
@@ -581,7 +576,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		},
 		{
 			Path:     "tui/src/tui/snapshots",
-			Files:    4,
+			Files:    5,
 			Owner:    "tui",
 			Focus:    "terminal scrollback viewport growth strategies (standard insertion without CSI S)",
 			Priority: []string{"render"},

@@ -22,9 +22,9 @@ func TestRustFeatureKeySurfaceAgainstGo(t *testing.T) {
 	}
 	sort.Strings(goKeys)
 
-	// The parity anchor predates Rust #61213; Go already carries this key for
-	// the implemented Apps catalog instruction gate.
-	knownGoOnly := []string{"catalog_apps_instructions"}
+	// Re-anchored to upstream a394ff9cf6: Rust #61213 landed, so Go's Apps
+	// catalog instruction gate now matches the upstream feature table.
+	knownGoOnly := []string{}
 	knownRustOnly := []string{}
 	assertKnownSurfaceDiff(t, "feature key", rustKeys, goKeys, knownRustOnly, knownGoOnly)
 }
@@ -40,12 +40,15 @@ func TestRustConfigTomlTopLevelSurfaceSnapshot(t *testing.T) {
 	// Re-anchored to head 4eb4a65407 (round-90 pin advance): ConfigToml gains
 	// include_environment_context_time (Option<bool>, unwrap_or(true)), taking
 	// the top-level count from 105 to 106.
-	if len(fields) != 106 {
-		t.Fatalf("Rust ConfigToml top-level field count drift: got %d want 106", len(fields))
+	// Re-anchored to upstream a394ff9cf6: `code_mode` and `responses` join
+	// ConfigToml, taking the count from 106 to 108.
+	if len(fields) != 108 {
+		t.Fatalf("Rust ConfigToml top-level field count drift: got %d want 108", len(fields))
 	}
 	for _, required := range []string{
 		"agents",
 		"cloud",
+		"code_mode",
 		"daybreak",
 		"features",
 		"include_environment_context_time",
@@ -54,6 +57,7 @@ func TestRustConfigTomlTopLevelSurfaceSnapshot(t *testing.T) {
 		"model_post_turn_compact_threshold_percent",
 		"model_provider",
 		"model_providers",
+		"responses",
 		"tools",
 	} {
 		if !surfaceContainsString(fields, required) {

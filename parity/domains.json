@@ -1,6 +1,6 @@
 {
  "schemaVersion": 1,
- "targetRustCommit": "c0cc9fc820f62e4dbdde68214dd6d792d6c8a7ee",
+ "targetRustCommit": "a394ff9cf66e9c17258077e8f8295178ca0c2025",
  "allowedIdentityMappings": [
   {
    "rust": "codex",
