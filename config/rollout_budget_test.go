@@ -28,7 +28,8 @@ func TestRolloutBudgetConfigResolvesLikeRust(t *testing.T) {
 	}
 	want := &RolloutBudgetConfig{
 		EnforceLimit:              true,
-		LimitTokens:               100000,
+		LimitBudget:               100000,
+		ReminderAtContextStart:    true,
 		ReminderAtRemainingTokens: []int64{50000, 25000, 10000},
 		SamplingTokenWeight:       1.0,
 		PrefillTokenWeight:        0.1,
@@ -121,7 +122,7 @@ func TestRolloutBudgetConfigRejectsEnabledWithoutLimitLikeRust(t *testing.T) {
 	} {
 		cfg := &Config{Values: map[string]any{"features": features}}
 		_, err := cfg.RolloutBudgetConfig()
-		if err == nil || !strings.Contains(err.Error(), "features.rollout_budget.limit_tokens is required") {
+		if err == nil || !strings.Contains(err.Error(), "features.rollout_budget requires limit_tokens or limit_budget") {
 			t.Fatalf("enabled without limit error = %v, want limit_tokens required", err)
 		}
 	}
@@ -133,9 +134,9 @@ func TestRolloutBudgetConfigRejectsInvalidValuesLikeRust(t *testing.T) {
 		toml map[string]any
 		want string
 	}{
-		{"limit zero", map[string]any{"enabled": true, "limit_tokens": int64(0), "reminder_at_remaining_tokens": []any{int64(500)}}, "must be positive"},
+		{"limit zero", map[string]any{"enabled": true, "limit_tokens": int64(0), "reminder_at_remaining_tokens": []any{int64(500)}}, "allowance must be finite and positive"},
 		{"reminder missing", map[string]any{"enabled": true, "limit_tokens": int64(1000)}, "reminder_at_remaining_tokens is required"},
-		{"reminder above limit", map[string]any{"enabled": true, "limit_tokens": int64(1000), "reminder_at_remaining_tokens": []any{int64(2000)}}, "positive values below limit_tokens"},
+		{"reminder above limit", map[string]any{"enabled": true, "limit_tokens": int64(1000), "reminder_at_remaining_tokens": []any{int64(2000)}}, "positive values below the rollout allowance"},
 		{"negative weight", map[string]any{"enabled": true, "limit_tokens": int64(1000), "reminder_at_remaining_tokens": []any{int64(500)}, "sampling_token_weight": -1.0}, "finite and non-negative"},
 	}
 	for _, tc := range cases {

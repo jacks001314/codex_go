@@ -75,7 +75,7 @@ func TestIncompleteResponseUsageIsSpentWithoutReplacingTheBaselineLikeRust(t *te
 			// A budget small enough that charging the reported usage exhausts it:
 			// the turn still has to fail with its own terminal error.
 			budget := runtimeutil.NewBudget()
-			budget.Configure(runtimeutil.BudgetConfig{LimitTokens: 1})
+			budget.Configure(runtimeutil.BudgetConfig{LimitBudget: 1})
 			router.rolloutBudgetOnce.Do(func() {})
 			router.rolloutBudget = budget
 			params := &turn.TurnStartParams{Config: map[string]any{}}

@@ -99,7 +99,7 @@ func TestForegroundIncompleteCompactionSpendsWithoutReplacingTheBaselineLikeRust
 	const threadID = "thread-incomplete-compaction-foreground"
 	router, store := compactionAccountingThread(t, threadID)
 	budget := runtimeutil.NewBudget()
-	budget.Configure(runtimeutil.BudgetConfig{LimitTokens: 1})
+	budget.Configure(runtimeutil.BudgetConfig{LimitBudget: 1})
 	router.rolloutBudgetOnce.Do(func() {})
 	router.rolloutBudget = budget
 
@@ -150,7 +150,7 @@ func TestBackgroundIncompleteCompactionOnlyChargesTheBudgetLikeRust(t *testing.T
 	const threadID = "thread-incomplete-compaction-background"
 	router, store := compactionAccountingThread(t, threadID)
 	budget := runtimeutil.NewBudget()
-	budget.Configure(runtimeutil.BudgetConfig{LimitTokens: 1})
+	budget.Configure(runtimeutil.BudgetConfig{LimitBudget: 1})
 	router.rolloutBudgetOnce.Do(func() {})
 	router.rolloutBudget = budget
 
@@ -196,7 +196,7 @@ func TestIncompleteCompactionWithoutUsageIsNotEstimatedLikeRust(t *testing.T) {
 	const threadID = "thread-incomplete-compaction-no-usage"
 	router, store := compactionAccountingThread(t, threadID)
 	budget := runtimeutil.NewBudget()
-	budget.Configure(runtimeutil.BudgetConfig{LimitTokens: 1})
+	budget.Configure(runtimeutil.BudgetConfig{LimitBudget: 1})
 	router.rolloutBudgetOnce.Do(func() {})
 	router.rolloutBudget = budget
 

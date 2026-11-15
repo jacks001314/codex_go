@@ -938,11 +938,12 @@ func (r *RuntimeRouter) rolloutBudgetForSession() *runtimeutil.Budget {
 		}
 		budget := runtimeutil.NewBudget()
 		budget.Configure(runtimeutil.BudgetConfig{
-			LimitTokens:               resolved.LimitTokens,
+			LimitBudget:               resolved.LimitBudget,
 			Advisory:                  !resolved.EnforceLimit,
 			PrefillTokenWeight:        resolved.PrefillTokenWeight,
 			SamplingTokenWeight:       resolved.SamplingTokenWeight,
 			ReminderAtRemainingTokens: resolved.ReminderAtRemainingTokens,
+			ReminderAtContextStart:    &resolved.ReminderAtContextStart,
 		})
 		r.rolloutBudget = budget
 	})
@@ -953,10 +954,10 @@ func (r *RuntimeRouter) rolloutBudgetForSession() *runtimeutil.Budget {
 // into the model when a rollout-budget threshold is crossed, mirroring Rust's
 // RolloutBudgetContext (core/src/context/rollout_budget.rs) with its
 // `<rollout_budget>` markers and exact body wording.
-func rolloutBudgetReminderMessage(remainingTokens int64) any {
+func rolloutBudgetReminderMessage(remainingUnits float64) any {
 	return model.DeveloperMessageInputItem(fmt.Sprintf(
-		"<rollout_budget>\nYou have %d weighted tokens left in the shared session token budget.\n</rollout_budget>",
-		remainingTokens,
+		"<rollout_budget>\nYou have %s weighted tokens left in the shared session token budget.\n</rollout_budget>",
+		strconv.FormatFloat(remainingUnits, 'f', -1, 64),
 	))
 }
 
@@ -995,7 +996,7 @@ func (r *RuntimeRouter) rolloutBudgetFollowUp(threadID string) turn.SamplingFoll
 			return nil
 		}
 		budget.MarkReminderDelivered(threadID, windowID, *reminder)
-		if item := rolloutBudgetReminderMessage(reminder.RemainingTokens); item != nil {
+		if item := rolloutBudgetReminderMessage(reminder.RemainingUnits); item != nil {
 			return []any{item}
 		}
 		return nil

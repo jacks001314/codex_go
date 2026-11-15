@@ -11,11 +11,30 @@ import (
 type RolloutBudgetConfig struct {
 	// EnforceLimit stops turns once the shared budget is exhausted. It defaults
 	// to true; false keeps accounting and reminders advisory (Rust #57187).
-	EnforceLimit              bool
-	LimitTokens               int64
+	EnforceLimit bool
+	// LimitBudget is a positive, finite allowance, including fractional opaque
+	// units. `limit_tokens` is retained as a legacy integer alias (Rust #61579).
+	LimitBudget float64
+	// ReminderAtContextStart restates the balance when a thread starts or its
+	// context is compacted. Defaults to true.
+	ReminderAtContextStart    bool
 	ReminderAtRemainingTokens []int64
 	SamplingTokenWeight       float64
 	PrefillTokenWeight        float64
+}
+
+// RolloutBudgetThresholdReached reports whether the actual fractional balance
+// is at or below an integer threshold. The balance is rounded up so thresholds
+// above 2^53 stay exact (Rust #61579).
+func RolloutBudgetThresholdReached(remainingUnits float64, threshold int64) bool {
+	rounded := math.Ceil(remainingUnits)
+	if math.IsInf(rounded, 1) || rounded >= 9223372036854775808.0 {
+		return false
+	}
+	if rounded <= -9223372036854775808.0 {
+		return true
+	}
+	return int64(rounded) <= threshold
 }
 
 // RolloutBudgetConfig resolves `features.rollout_budget` with the same
@@ -50,7 +69,7 @@ func (c *Config) RolloutBudgetConfig() (*RolloutBudgetConfig, error) {
 		return nil, nil
 	}
 	if toml == nil {
-		return nil, fmt.Errorf("features.rollout_budget.limit_tokens is required when rollout_budget is enabled")
+		return nil, fmt.Errorf("features.rollout_budget requires limit_tokens or limit_budget when enabled")
 	}
 
 	enforceLimit := true
@@ -60,20 +79,45 @@ func (c *Config) RolloutBudgetConfig() (*RolloutBudgetConfig, error) {
 		return nil, fmt.Errorf("features.rollout_budget.enforce_limit must be a boolean")
 	}
 
-	limit, ok := int64ConfigValue(toml["limit_tokens"])
-	if !ok {
-		return nil, fmt.Errorf("features.rollout_budget.limit_tokens is required when rollout_budget is enabled")
+	limitTokens, hasLimitTokens := toml["limit_tokens"]
+	limitBudgetValue, hasLimitBudget := toml["limit_budget"]
+	if hasLimitTokens && hasLimitBudget {
+		return nil, fmt.Errorf("features.rollout_budget.limit_tokens and limit_budget cannot both be set")
 	}
-	if limit <= 0 {
-		return nil, fmt.Errorf("features.rollout_budget.limit_tokens must be positive")
+	var limit float64
+	if hasLimitBudget {
+		value, ok := float64ConfigValue(limitBudgetValue)
+		if !ok {
+			return nil, fmt.Errorf("features.rollout_budget.limit_budget must be a number")
+		}
+		limit = value
+	} else {
+		value, ok := int64ConfigValue(limitTokens)
+		if !ok {
+			return nil, fmt.Errorf("features.rollout_budget requires limit_tokens or limit_budget when enabled")
+		}
+		limit = float64(value)
+	}
+	if math.IsNaN(limit) || math.IsInf(limit, 0) || limit <= 0 {
+		return nil, fmt.Errorf("features.rollout_budget allowance must be finite and positive")
+	}
+	reminderAtContextStart := true
+	if value, ok := toml["reminder_at_context_start"].(bool); ok {
+		reminderAtContextStart = value
+	} else if _, present := toml["reminder_at_context_start"]; present {
+		return nil, fmt.Errorf("features.rollout_budget.reminder_at_context_start must be a boolean")
 	}
 	reminders, ok := int64SliceConfigValue(toml["reminder_at_remaining_tokens"])
 	if !ok {
 		return nil, fmt.Errorf("features.rollout_budget.reminder_at_remaining_tokens is required when rollout_budget is enabled")
 	}
 	for _, reminder := range reminders {
-		if reminder <= 0 || reminder >= limit {
-			return nil, fmt.Errorf("features.rollout_budget.reminder_at_remaining_tokens must contain only positive values below limit_tokens")
+		tooHigh := RolloutBudgetThresholdReached(limit, reminder)
+		if !hasLimitBudget {
+			tooHigh = reminder >= int64(limit)
+		}
+		if reminder <= 0 || tooHigh {
+			return nil, fmt.Errorf("features.rollout_budget.reminder_at_remaining_tokens must contain only positive values below the rollout allowance")
 		}
 	}
 
@@ -95,7 +139,8 @@ func (c *Config) RolloutBudgetConfig() (*RolloutBudgetConfig, error) {
 	}
 	return &RolloutBudgetConfig{
 		EnforceLimit:              enforceLimit,
-		LimitTokens:               limit,
+		LimitBudget:               limit,
+		ReminderAtContextStart:    reminderAtContextStart,
 		ReminderAtRemainingTokens: reminders,
 		SamplingTokenWeight:       sampling,
 		PrefillTokenWeight:        prefill,

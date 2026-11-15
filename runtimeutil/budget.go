@@ -35,8 +35,59 @@ func (u *TokenUsage) NonCachedInput() int64 {
 	return nonCached
 }
 
+// BudgetUnitsSum accumulates validated, nonnegative charges without dropping
+// small contributions after a large one (Rust protocol::BudgetUnitsSum,
+// #61579). An unrepresentable total stays infinite.
+type BudgetUnitsSum struct {
+	total     float64
+	remainder float64
+}
+
+// Add charges units using compensated summation.
+func (s *BudgetUnitsSum) Add(units float64) {
+	if s == nil || units == 0 || math.IsInf(s.total, 1) {
+		return
+	}
+	if math.IsInf(units, 1) {
+		s.total = math.Inf(1)
+		s.remainder = 0
+		return
+	}
+	// Near math.MaxFloat64 the first addition can overflow before a negative
+	// remainder brings it back into range, so halve both inputs for that step.
+	scale := 1.0
+	if math.IsInf(s.total+units, 1) {
+		scale = 0.5
+	}
+	previous := s.total * scale
+	units *= scale
+	sum := previous + units
+	lost := (previous - sum) + units
+	if previous < units {
+		lost = (units - sum) + previous
+	}
+	remainder := s.remainder*scale + lost
+	next := math.Max(sum+remainder, previous)
+	s.total = next / scale
+	if math.IsInf(s.total, 1) {
+		s.remainder = 0
+		return
+	}
+	s.remainder = ((sum - next) + remainder) / scale
+}
+
+// Total reports the posted spending so far.
+func (s *BudgetUnitsSum) Total() float64 {
+	if s == nil {
+		return 0
+	}
+	return s.total
+}
+
 type BudgetConfig struct {
-	LimitTokens int64
+	// LimitBudget is the positive, finite allowance in budget units. Spending
+	// exactly this amount is allowed.
+	LimitBudget float64
 	// Advisory keeps shared accounting and budget reminders active without
 	// stopping turns once the budget is exhausted (Rust
 	// `features.rollout_budget.enforce_limit = false`, #57187). The zero value
@@ -45,18 +96,22 @@ type BudgetConfig struct {
 	PrefillTokenWeight        float64
 	SamplingTokenWeight       float64
 	ReminderAtRemainingTokens []int64
+	// ReminderAtContextStart restates the balance when a thread starts or its
+	// context is compacted. Nil defaults to true (Rust #61579).
+	ReminderAtContextStart *bool
 }
 
 type BudgetReminder struct {
-	RemainingTokens int64
-	ReminderIndex   int64
+	RemainingUnits float64
+	ReminderIndex  int64
 }
 
 type Budget struct {
 	mu         sync.Mutex
 	configured bool
+	exhausted  bool
 	config     BudgetConfig
-	used       float64
+	posted     BudgetUnitsSum
 	deliveries map[string]budgetDelivery
 }
 
@@ -105,8 +160,19 @@ func (b *Budget) RecordUsage(usage TokenUsage) (bool, error) {
 	} else {
 		units = float64(max64(usage.OutputTokens, 0))*b.config.SamplingTokenWeight + float64((&usage).NonCachedInput())*b.config.PrefillTokenWeight
 	}
-	b.used += units
-	return !b.config.Advisory && b.used >= float64(b.config.LimitTokens), nil
+	b.posted.Add(units)
+	// Equality is allowed, including one rounding step (0.1 + 0.2 versus 0.3).
+	exhausted := !b.config.Advisory && (math.IsInf(b.posted.Total(), 1) || b.posted.Total() > math.Nextafter(b.config.LimitBudget, math.Inf(1)))
+	if exhausted {
+		b.stopNewToolsLocked()
+	}
+	return exhausted, nil
+}
+
+// stopNewToolsLocked marks the shared session budget as exhausted so new tool
+// work is gated (Rust RolloutBudget::stop_new_tools).
+func (b *Budget) stopNewToolsLocked() {
+	b.exhausted = true
 }
 
 func (b *Budget) PendingReminder(threadID string, windowID string) *BudgetReminder {
@@ -115,20 +181,42 @@ func (b *Budget) PendingReminder(threadID string, windowID string) *BudgetRemind
 	if !b.configured {
 		return nil
 	}
-	remaining := int64(float64(b.config.LimitTokens) - b.used)
-	if remaining < 0 {
-		remaining = 0
-	}
+	remaining := math.Max(b.config.LimitBudget-b.posted.Total(), 0)
 	var index int64
 	for _, threshold := range b.config.ReminderAtRemainingTokens {
-		if remaining <= threshold {
+		if RolloutBudgetThresholdReached(remaining, threshold) {
 			index++
 		}
 	}
-	if delivery, ok := b.deliveries[threadID]; ok && delivery.WindowID == windowID && delivery.ReminderIndex >= index {
+	previous, hasDelivery := b.deliveries[threadID]
+	previousIndex := int64(0)
+	if hasDelivery {
+		previousIndex = previous.ReminderIndex
+	}
+	crossedThreshold := index > previousIndex
+	reminderAtContextStart := b.config.ReminderAtContextStart == nil || *b.config.ReminderAtContextStart
+	newWindow := reminderAtContextStart && (!hasDelivery || previous.WindowID != windowID)
+	if !crossedThreshold && !newWindow {
 		return nil
 	}
-	return &BudgetReminder{RemainingTokens: remaining, ReminderIndex: index}
+	return &BudgetReminder{RemainingUnits: remaining, ReminderIndex: index}
+}
+
+// RolloutBudgetThresholdReached reports whether the actual fractional balance
+// is at or below an integer threshold. The balance is rounded up, not the
+// threshold, so thresholds above 2^53 stay exact (Rust #61579).
+func RolloutBudgetThresholdReached(remainingUnits float64, threshold int64) bool {
+	if math.IsNaN(remainingUnits) {
+		return false
+	}
+	rounded := math.Ceil(remainingUnits)
+	if math.IsInf(rounded, 1) || rounded >= 9223372036854775808.0 {
+		return false
+	}
+	if rounded <= -9223372036854775808.0 {
+		return true
+	}
+	return int64(rounded) <= threshold
 }
 
 func (b *Budget) MarkReminderDelivered(threadID string, windowID string, reminder BudgetReminder) {
@@ -151,4 +239,11 @@ func max64(a int64, b int64) int64 {
 		return a
 	}
 	return b
+}
+
+// Exhausted reports whether the shared budget has stopped new tool work.
+func (b *Budget) Exhausted() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.exhausted
 }

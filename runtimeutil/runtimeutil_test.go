@@ -46,7 +46,7 @@ func TestSessionMessages(t *testing.T) {
 func TestBudgetUsageReminderAndRearm(t *testing.T) {
 	budget := NewBudget()
 	budget.Configure(BudgetConfig{
-		LimitTokens:               100,
+		LimitBudget:               100,
 		PrefillTokenWeight:        1,
 		SamplingTokenWeight:       2,
 		ReminderAtRemainingTokens: []int64{50, 10},
@@ -59,7 +59,7 @@ func TestBudgetUsageReminderAndRearm(t *testing.T) {
 		t.Fatalf("exhausted = true, want false")
 	}
 	reminder := budget.PendingReminder("thread", "window")
-	if reminder == nil || reminder.RemainingTokens != 40 || reminder.ReminderIndex != 1 {
+	if reminder == nil || reminder.RemainingUnits != 40 || reminder.ReminderIndex != 1 {
 		t.Fatalf("reminder = %+v", reminder)
 	}
 	budget.MarkReminderDelivered("thread", "window", *reminder)
@@ -82,7 +82,7 @@ func TestBudgetUsageReminderAndRearm(t *testing.T) {
 func TestBudgetAdvisoryChargesWithoutExhaustingLikeRust(t *testing.T) {
 	budget := NewBudget()
 	budget.Configure(BudgetConfig{
-		LimitTokens:               10,
+		LimitBudget:               10,
 		PrefillTokenWeight:        1,
 		SamplingTokenWeight:       1,
 		ReminderAtRemainingTokens: []int64{5},
@@ -96,7 +96,7 @@ func TestBudgetAdvisoryChargesWithoutExhaustingLikeRust(t *testing.T) {
 		t.Fatal("advisory budget reported exhaustion")
 	}
 	reminder := budget.PendingReminder("thread", "window")
-	if reminder == nil || reminder.RemainingTokens != 0 {
+	if reminder == nil || reminder.RemainingUnits != 0 {
 		t.Fatalf("advisory reminder = %+v, want zero remaining", reminder)
 	}
 	exhausted, err = budget.RecordUsage(TokenUsage{OutputTokens: 100})
@@ -111,7 +111,7 @@ func TestBudgetAdvisoryChargesWithoutExhaustingLikeRust(t *testing.T) {
 func TestBudgetRecordUsagePrefersProviderRolloutBudgetUnits(t *testing.T) {
 	budget := NewBudget()
 	budget.Configure(BudgetConfig{
-		LimitTokens:         100,
+		LimitBudget:         100,
 		PrefillTokenWeight:  1,
 		SamplingTokenWeight: 2,
 	})
@@ -129,19 +129,27 @@ func TestBudgetRecordUsagePrefersProviderRolloutBudgetUnits(t *testing.T) {
 	if exhausted {
 		t.Fatal("exhausted = true with 2.5 units against a 100 limit, want false")
 	}
-	// Reaching the limit through provider units must report exhaustion.
+	// Spending exactly the allowance is allowed (Rust #61579).
 	exhausted, err = budget.RecordUsage(TokenUsage{CodexRolloutBudgetUnits: json.Number("97.5")})
 	if err != nil {
 		t.Fatalf("RecordUsage error = %v", err)
 	}
+	if exhausted {
+		t.Fatal("exhausted = true after exactly 100 units, want false")
+	}
+	// Any further charge exhausts the shared allowance.
+	exhausted, err = budget.RecordUsage(TokenUsage{CodexRolloutBudgetUnits: json.Number("0.1")})
+	if err != nil {
+		t.Fatalf("RecordUsage error = %v", err)
+	}
 	if !exhausted {
-		t.Fatal("exhausted = false after 100 total units, want true")
+		t.Fatal("exhausted = false after 100.1 total units, want true")
 	}
 }
 
 func TestBudgetRecordUsageRejectsInvalidProviderUnits(t *testing.T) {
 	budget := NewBudget()
-	budget.Configure(BudgetConfig{LimitTokens: 100, PrefillTokenWeight: 1, SamplingTokenWeight: 1})
+	budget.Configure(BudgetConfig{LimitBudget: 100, PrefillTokenWeight: 1, SamplingTokenWeight: 1})
 	for _, value := range []string{"-1", "NaN", "Inf", "-Inf", "not-a-number"} {
 		_, err := budget.RecordUsage(TokenUsage{CodexRolloutBudgetUnits: json.Number(value)})
 		if !errors.Is(err, ErrInvalidRolloutBudgetUnits) {
