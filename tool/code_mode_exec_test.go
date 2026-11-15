@@ -580,6 +580,11 @@ func TestCodeModeExecForwardsMCPStructuredImageAndAudioContent(t *testing.T) {
 	if items[3]["audio_url"] != "data:audio/wav;base64,YXVkaW8=" {
 		t.Fatalf("audio item = %#v", items[3])
 	}
+	// Rust CodeModeToolOutput::output_budget_applied is always true, so a
+	// file-backed clip keeps the producer's limit through storage repair.
+	if !output.OutputBudgetApplied {
+		t.Fatal("code mode output budget not marked applied")
+	}
 }
 
 func TestCodeModeExecTimers(t *testing.T) {

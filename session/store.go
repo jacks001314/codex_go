@@ -104,6 +104,19 @@ type Item struct {
 	Metadata         map[string]any `json:"metadata,omitempty"`
 	CreatedAtOrdinal uint64         `json:"created_at_ordinal,omitempty"`
 	UpdatedAtOrdinal uint64         `json:"updated_at_ordinal,omitempty"`
+	// FileBackedToolAudioPending marks a freshly constructed function or custom
+	// tool output whose inline audio must pass through the attachment store
+	// before persistence (Rust #61394 `prepare_new_items`). It is never
+	// serialized: a replayed item already carries file references.
+	FileBackedToolAudioPending bool `json:"-"`
+	// ProducerBoundedToolAudio reports that the tool producer already applied
+	// its own output budget (Rust `producer_bounded_tool_audio`). It bounds the
+	// repair placeholder when storage replaces a retained clip. Never serialized.
+	ProducerBoundedToolAudio bool `json:"-"`
+	// ToolAudioHistoryPolicy carries the model truncation policy that produced
+	// this fresh tool output so the append boundary can apply it after audio
+	// validation when file-backed audio is disabled. Never serialized.
+	ToolAudioHistoryPolicy *utils.TruncationPolicy `json:"-"`
 }
 
 func (s *Store) ListItems(threadID ThreadID, options ListItemsOptions) (*ItemPage, error) {

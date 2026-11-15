@@ -3424,7 +3424,7 @@ func responsesInputItemsWithStore(request *AgentRequest, store attachmentstore.S
 	}
 	items = prepareResponseInputImagesWithStoreModeDecoder(items, store, responsesImagePrepOrigin(request), responsesImagePrepMode(request), responsesImageDecoder(request))
 	items = stripImageReplaySources(items)
-	items = replaceUnresolvableImageFiles(items, store)
+	items = replaceUnresolvableMediaFiles(items, store)
 	return items
 }
 
@@ -3728,28 +3728,43 @@ func stripImageReplaySources(items []any) []any {
 // original reference; only the prepared request is projected.
 const UnavailableImagePlaceholder = "[image unavailable]"
 
+// UnavailableToolAudioPlaceholder replaces a file-backed tool clip the store
+// confirms is missing at request time (Rust #61394 media_availability). Saved
+// history keeps the reference so a restored file becomes usable again.
+const UnavailableToolAudioPlaceholder = "audio content omitted because its file is unavailable"
+
 // maxConcurrentImageAvailabilityChecks bounds how many distinct file images are
 // probed at once (Rust #57835).
 const maxConcurrentImageAvailabilityChecks = 8
 
-// replaceUnresolvableImageFiles checks every distinct file image in the
-// prepared request concurrently and replaces the confirmed-missing ones with a
-// text placeholder in messages and tool outputs. References whose store cannot
-// answer (including the inline default) are retained, matching Rust #57585.
-func replaceUnresolvableImageFiles(items []any, store attachmentstore.Store) []any {
+// replaceUnresolvableMediaFiles checks every distinct file image and
+// file-backed tool clip in the prepared request concurrently and replaces the
+// confirmed-missing ones with text placeholders. Message audio is user input and
+// stays under the uploaded-audio rejection projection. References whose store
+// cannot answer (including the inline default) are retained, matching Rust
+// #57585 and #61394.
+func replaceUnresolvableMediaFiles(items []any, store attachmentstore.Store) []any {
 	if len(items) == 0 || store == nil {
 		return items
 	}
-	candidates := map[string]struct{}{}
+	images := map[string]struct{}{}
+	audio := map[string]struct{}{}
 	for _, item := range items {
-		collectFileImageIDs(item, candidates)
+		collectMediaFileIDs(item, false, images, audio)
 	}
-	if len(candidates) == 0 {
+	if len(images) == 0 && len(audio) == 0 {
 		return items
 	}
-	ids := make([]string, 0, len(candidates))
-	for fileID := range candidates {
+	ids := make([]string, 0, len(images)+len(audio))
+	seen := map[string]bool{}
+	for fileID := range images {
 		ids = append(ids, fileID)
+		seen[fileID] = true
+	}
+	for fileID := range audio {
+		if !seen[fileID] {
+			ids = append(ids, fileID)
+		}
 	}
 	sort.Strings(ids)
 	var missing sync.Map
@@ -3768,13 +3783,19 @@ func replaceUnresolvableImageFiles(items []any, store attachmentstore.Store) []a
 		}()
 	}
 	wait.Wait()
-	unavailable := map[string]bool{}
+	unavailableImages := map[string]bool{}
+	unavailableAudio := map[string]bool{}
 	missing.Range(func(key, _ any) bool {
 		fileID, _ := key.(string)
-		unavailable[fileID] = true
+		if _, ok := images[fileID]; ok {
+			unavailableImages[fileID] = true
+		}
+		if _, ok := audio[fileID]; ok {
+			unavailableAudio[fileID] = true
+		}
 		return true
 	})
-	if len(unavailable) == 0 {
+	if len(unavailableImages) == 0 && len(unavailableAudio) == 0 {
 		return items
 	}
 	for _, item := range items {
@@ -3782,28 +3803,40 @@ func replaceUnresolvableImageFiles(items []any, store attachmentstore.Store) []a
 		if !ok {
 			continue
 		}
-		replaceUnavailableImagesInItem(itemMap, unavailable)
+		replaceUnavailableMediaInItem(itemMap, unavailableImages, unavailableAudio)
 	}
 	return items
 }
 
-// collectFileImageIDs walks the request shapes that carry image references:
-// message `content`, and `output`/`content_items` for tool outputs.
-func collectFileImageIDs(value any, ids map[string]struct{}) {
+// collectMediaFileIDs walks the request shapes that carry file references:
+// message `content` images, and both images and audio in tool-output
+// `output`/`content_items`.
+func collectMediaFileIDs(value any, toolOutput bool, images map[string]struct{}, audio map[string]struct{}) {
 	switch typed := value.(type) {
 	case map[string]any:
 		if fileImageID(typed) != "" {
-			ids[fileImageID(typed)] = struct{}{}
+			images[fileImageID(typed)] = struct{}{}
 			return
+		}
+		if toolOutput && fileAudioID(typed) != "" {
+			audio[fileAudioID(typed)] = struct{}{}
+			return
+		}
+		childToolOutput := toolOutput
+		switch typed["type"] {
+		case "function_call_output", "custom_tool_call_output":
+			childToolOutput = true
+		case "message":
+			childToolOutput = false
 		}
 		for _, key := range []string{"content", "output", "content_items"} {
 			if child, ok := typed[key]; ok {
-				collectFileImageIDs(child, ids)
+				collectMediaFileIDs(child, childToolOutput, images, audio)
 			}
 		}
 	case []any:
 		for _, child := range typed {
-			collectFileImageIDs(child, ids)
+			collectMediaFileIDs(child, toolOutput, images, audio)
 		}
 	}
 }
@@ -3818,16 +3851,35 @@ func fileImageID(block map[string]any) string {
 	return strings.TrimSpace(fileID)
 }
 
+// fileAudioID returns the file reference of a tool-output audio block, or ""
+// when the block is inline or not audio.
+func fileAudioID(block map[string]any) string {
+	itemType, _ := block["type"].(string)
+	switch itemType {
+	case "input_audio", "inputAudio", "audio":
+	default:
+		return ""
+	}
+	if audioURL, _ := block["audio_url"].(string); strings.TrimSpace(audioURL) != "" {
+		return ""
+	}
+	if audioURL, _ := block["audioUrl"].(string); strings.TrimSpace(audioURL) != "" {
+		return ""
+	}
+	fileID, _ := block["file_id"].(string)
+	return strings.TrimSpace(fileID)
+}
+
 func isResponseImageBlock(block map[string]any) bool {
 	itemType, _ := block["type"].(string)
 	return itemType == "input_image" || itemType == "image"
 }
 
-func replaceUnavailableImagesInItem(item map[string]any, unavailable map[string]bool) {
+func replaceUnavailableMediaInItem(item map[string]any, unavailableImages, unavailableAudio map[string]bool) {
 	if content, ok := item["content"].([]any); ok {
 		for index, part := range content {
 			block, ok := part.(map[string]any)
-			if !ok || !unavailableFileImage(block, unavailable) {
+			if !ok || !unavailableFileImage(block, unavailableImages) {
 				continue
 			}
 			content[index] = map[string]any{"type": "input_text", "text": UnavailableImagePlaceholder}
@@ -3836,26 +3888,30 @@ func replaceUnavailableImagesInItem(item map[string]any, unavailable map[string]
 	}
 	for _, key := range []string{"output", "content_items"} {
 		if child, ok := item[key]; ok {
-			replaceUnavailableImagesInOutput(child, unavailable)
+			replaceUnavailableMediaInOutput(child, unavailableImages, unavailableAudio)
 		}
 	}
 }
 
-func replaceUnavailableImagesInOutput(value any, unavailable map[string]bool) {
+func replaceUnavailableMediaInOutput(value any, unavailableImages, unavailableAudio map[string]bool) {
 	switch typed := value.(type) {
 	case []any:
 		for index, part := range typed {
 			block, ok := part.(map[string]any)
-			if ok && unavailableFileImage(block, unavailable) {
+			if ok && unavailableFileImage(block, unavailableImages) {
 				typed[index] = map[string]any{"type": "input_text", "text": UnavailableImagePlaceholder}
 				continue
 			}
-			replaceUnavailableImagesInOutput(part, unavailable)
+			if ok && unavailableFileAudio(block, unavailableAudio) {
+				typed[index] = map[string]any{"type": "input_text", "text": UnavailableToolAudioPlaceholder}
+				continue
+			}
+			replaceUnavailableMediaInOutput(part, unavailableImages, unavailableAudio)
 		}
 	case map[string]any:
 		for _, key := range []string{"content", "output", "content_items"} {
 			if child, ok := typed[key]; ok {
-				replaceUnavailableImagesInOutput(child, unavailable)
+				replaceUnavailableMediaInOutput(child, unavailableImages, unavailableAudio)
 			}
 		}
 	}
@@ -3863,6 +3919,10 @@ func replaceUnavailableImagesInOutput(value any, unavailable map[string]bool) {
 
 func unavailableFileImage(block map[string]any, unavailable map[string]bool) bool {
 	return unavailable[fileImageID(block)]
+}
+
+func unavailableFileAudio(block map[string]any, unavailable map[string]bool) bool {
+	return unavailable[fileAudioID(block)]
 }
 
 // setResponseContentItemKind reclassifies a replaced message content item so

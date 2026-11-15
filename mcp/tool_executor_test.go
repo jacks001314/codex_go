@@ -95,6 +95,10 @@ func TestMCPToolExecutorRunsCall(t *testing.T) {
 	if output.Data["server"] != "memory" || output.Data["tool"] != "create_entities" {
 		t.Fatalf("raw MCP identity = %#v", output.Data)
 	}
+	// Rust McpToolOutput::output_budget_applied is always true.
+	if !output.OutputBudgetApplied {
+		t.Fatal("MCP output budget not marked applied")
+	}
 	spec := executor.Spec()
 	if spec.Name.Key() != "memory.create_entities" || spec.Description != "Create memory entities" || spec.InputSchema["type"] != "object" {
 		t.Fatalf("Spec = %#v", spec)

@@ -243,6 +243,12 @@ type Output struct {
 	// context must mark the thread's memory mode polluted. It is never
 	// serialized.
 	ContainsExternalContext bool `json:"-"`
+	// OutputBudgetApplied reports that the complete model-visible result was
+	// already limited by its producer, mirroring Rust
+	// `ToolOutput::output_budget_applied`. MCP and Code Mode set it so a
+	// storage-error placeholder can stay within the result the model would
+	// otherwise have received. It is never serialized.
+	OutputBudgetApplied bool `json:"-"`
 }
 
 type Executor interface {

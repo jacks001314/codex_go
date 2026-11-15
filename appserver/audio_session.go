@@ -234,6 +234,23 @@ func withAudioRemovalGuidance(err error) error {
 func compactHistoryPromptItems(history []compact.Item) []any {
 	out := make([]any, 0, len(history))
 	for _, item := range history {
+		switch strings.ToLower(strings.TrimSpace(item.Type)) {
+		case "function_call_output", "custom_tool_call_output", "tool_output":
+			// File-backed tool audio competes for error attribution exactly like
+			// a live tool result, so the submitted projection keeps the output
+			// content items instead of only its type.
+			entry := map[string]any{
+				"type":    "function_call_output",
+				"call_id": firstNonEmpty(item.CallID, stringFromMap(item.Data, "call_id")),
+			}
+			if value, ok := item.Data["content_items"]; ok {
+				entry["output"] = value
+			} else if text := compact.ItemText(&item); text != "" {
+				entry["output"] = text
+			}
+			out = append(out, entry)
+			continue
+		}
 		if !strings.EqualFold(strings.TrimSpace(item.Type), "message") {
 			out = append(out, map[string]any{"type": item.Type})
 			continue

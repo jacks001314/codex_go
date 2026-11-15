@@ -44,6 +44,14 @@ type FunctionCallOutputContentItem struct {
 	EncryptedContent string
 }
 
+// MeasuredFunctionCallOutputContentItem pairs one content item with the token
+// charge its producer measured. Audio keeps its charge through truncation and
+// storage; other parts carry zero (Rust `truncate_measured_tool_output`).
+type MeasuredFunctionCallOutputContentItem struct {
+	Item        FunctionCallOutputContentItem
+	AudioTokens int
+}
+
 func BytesPolicy(limit int) TruncationPolicy {
 	return TruncationPolicy{Mode: PolicyBytes, Limit: limit}
 }
@@ -267,13 +275,43 @@ func TruncateFunctionOutputItemsWithPolicy(items []FunctionCallOutputContentItem
 	return truncateOutputItems(items, policy, audioutil.EstimateAudioTokenCount, nil)
 }
 
+// TruncateMeasuredFunctionOutputItems applies the mixed-output policy to owned,
+// premeasured parts without decoding audio again.
+func TruncateMeasuredFunctionOutputItems(items []MeasuredFunctionCallOutputContentItem, policy TruncationPolicy) []MeasuredFunctionCallOutputContentItem {
+	return truncateMeasuredOutputItems(items, policy, nil)
+}
+
 func truncateOutputItems(
 	items []FunctionCallOutputContentItem,
 	policy TruncationPolicy,
 	estimateAudioTokenCount func(string) int,
 	boundaries []OutputBoundary,
 ) []FunctionCallOutputContentItem {
-	out := make([]FunctionCallOutputContentItem, 0, len(items))
+	measured := make([]MeasuredFunctionCallOutputContentItem, len(items))
+	for i := range items {
+		charge := 0
+		if items[i].Kind == ContentInputAudio {
+			charge = audioutil.MaxFileAudioTokens
+			if items[i].FileID == "" && estimateAudioTokenCount != nil {
+				charge = estimateAudioTokenCount(items[i].AudioURL)
+			}
+		}
+		measured[i] = MeasuredFunctionCallOutputContentItem{Item: items[i], AudioTokens: charge}
+	}
+	truncated := truncateMeasuredOutputItems(measured, policy, boundaries)
+	out := make([]FunctionCallOutputContentItem, 0, len(truncated))
+	for i := range truncated {
+		out = append(out, truncated[i].Item)
+	}
+	return out
+}
+
+func truncateMeasuredOutputItems(
+	items []MeasuredFunctionCallOutputContentItem,
+	policy TruncationPolicy,
+	boundaries []OutputBoundary,
+) []MeasuredFunctionCallOutputContentItem {
+	out := make([]MeasuredFunctionCallOutputContentItem, 0, len(items))
 	remainingBudget := (&policy).ByteBudget()
 	if policy.Mode == PolicyTokens {
 		remainingBudget = (&policy).TokenBudget()
@@ -283,7 +321,8 @@ func truncateOutputItems(
 	nextBoundary := 0
 
 	for i := range items {
-		item := &items[i]
+		item := &items[i].Item
+		audioTokens := items[i].AudioTokens
 		itemOut := len(out)
 		itemPolicy := TruncationPolicy{Mode: policy.Mode, Limit: remainingBudget}
 		var textEdit *TextTruncation
@@ -313,20 +352,16 @@ func truncateOutputItems(
 				} else {
 					truncated := *item
 					truncated.Text = snippet
-					out = append(out, truncated)
+					out = append(out, MeasuredFunctionCallOutputContentItem{Item: truncated})
 				}
 				remainingBudget = 0
 			}
 		case ContentInputImage, ContentEncryptedContent:
 			keep = true
 		case ContentInputAudio:
-			tokenCost := audioutil.MaxFileAudioTokens
-			if item.FileID == "" && estimateAudioTokenCount != nil {
-				tokenCost = estimateAudioTokenCount(item.AudioURL)
-			}
-			cost := tokenCost
+			cost := audioTokens
 			if policy.Mode == PolicyBytes {
-				cost = ApproxBytesForTokens(tokenCost)
+				cost = ApproxBytesForTokens(audioTokens)
 			}
 			if cost <= remainingBudget {
 				remainingBudget -= cost
@@ -345,7 +380,7 @@ func truncateOutputItems(
 			nextBoundary++
 		}
 		if keep {
-			out = append(out, *item)
+			out = append(out, items[i])
 		}
 	}
 	// End boundaries precede generated omission counts: counts are not original
@@ -356,15 +391,19 @@ func truncateOutputItems(
 	}
 
 	if omittedTextItems > 0 {
-		out = append(out, FunctionCallOutputContentItem{
-			Kind: ContentInputText,
-			Text: fmt.Sprintf("[omitted %d text items ...]", omittedTextItems),
+		out = append(out, MeasuredFunctionCallOutputContentItem{
+			Item: FunctionCallOutputContentItem{
+				Kind: ContentInputText,
+				Text: fmt.Sprintf("[omitted %d text items ...]", omittedTextItems),
+			},
 		})
 	}
 	if omittedAudioItems > 0 {
-		out = append(out, FunctionCallOutputContentItem{
-			Kind: ContentInputText,
-			Text: fmt.Sprintf("[omitted %d audio items ...]", omittedAudioItems),
+		out = append(out, MeasuredFunctionCallOutputContentItem{
+			Item: FunctionCallOutputContentItem{
+				Kind: ContentInputText,
+				Text: fmt.Sprintf("[omitted %d audio items ...]", omittedAudioItems),
+			},
 		})
 	}
 	return out

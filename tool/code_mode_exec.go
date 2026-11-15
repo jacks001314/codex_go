@@ -864,6 +864,10 @@ func (e *codeModeExecExecutor) Execute(ctx context.Context, invocation *Invocati
 	startedAt := time.Now().UTC()
 	var callCellID string
 	output, err := e.execute(ctx, invocation, &callCellID)
+	if output != nil {
+		// Rust CodeModeToolOutput::output_budget_applied is always true.
+		output.OutputBudgetApplied = true
+	}
 	// Rust's CodeModeToolCallGuard publishes the call's Completed fact when the
 	// handler returns, with the cell it ran in and its terminal status.
 	e.observeCodeModeCallCompletion(invocation.CallID, CodeModeExecToolName, &callCellID, startedAt, codeModeHostDurationFromOutput(output), codeModeCallStatusFor(ctx, output, err))
@@ -2400,6 +2404,10 @@ func (e *codeModeWaitExecutor) Spec() Spec {
 func (e *codeModeWaitExecutor) Execute(ctx context.Context, invocation *Invocation) (*Output, error) {
 	startedAt := time.Now().UTC()
 	output, err := e.execute(ctx, invocation)
+	if output != nil {
+		// Rust CodeModeToolOutput::output_budget_applied is always true.
+		output.OutputBudgetApplied = true
+	}
 	// Rust's CodeModeToolCallGuard publishes the wait call's Completed fact with
 	// the cell it resumed.
 	var cellID *string

@@ -2174,6 +2174,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	}
 	items = append(items, r.drainPendingUnifiedExecItems(threadID, turnID)...)
 	items = append(items, r.sessionItemsForTurn(turnID, params, result, startedAt, planIdentities)...)
+	items = r.prepareFileBackedToolAudioForTurn(params, items)
 	if promptPersisted {
 		items = withoutRuntimeUserPromptItem(items, turnID)
 	}
@@ -5981,6 +5982,59 @@ func (r *RuntimeRouter) sessionItemsForTurn(turnID string, params *turn.TurnStar
 	return items
 }
 
+// prepareFileBackedToolAudioForTurn mirrors Rust #61394
+// `Session::prepare_conversation_items_for_history` for fresh tool audio: when
+// the feature is enabled, inline clips are validated, budgeted, and uploaded
+// before the items are persisted. Measured durations are recorded immediately
+// so the following continuation compaction check charges the real clip size.
+// It runs at the durable history append boundary, matching Rust's
+// `record_conversation_items`; mid-turn compaction only estimates from the
+// still-inline result.
+func (r *RuntimeRouter) prepareFileBackedToolAudioForTurn(params *turn.TurnStartParams, items []session.Item) []session.Item {
+	if params == nil || len(items) == 0 {
+		return items
+	}
+	enabled := false
+	defaultLimit := 10_000
+	var policy *utils.TruncationPolicy
+	if cfg, err := r.effectiveConfigForTurn(params); err == nil && cfg != nil {
+		enabled = features.Enabled(cfg.FeatureSettings(), "file_backed_tool_audio")
+		modelID := firstNonEmpty(turnParamModel(params), stringConfigValue(cfg, "model"), defaultModelForAppTurn())
+		if modelPolicy := appModelTruncationPolicy(r.modelInfoForRuntimeWithConfig(modelID, cfg)); modelPolicy != nil {
+			policy = modelPolicy
+			allowance := modelPolicy.WithSerializationAllowance()
+			if limit := (&allowance).TokenBudget(); limit > 0 {
+				defaultLimit = limit
+			}
+		}
+	}
+	if !enabled {
+		for i := range items {
+			if !items[i].FileBackedToolAudioPending {
+				continue
+			}
+			items[i].FileBackedToolAudioPending = false
+			// With the feature off the clip stays inline; apply the history
+			// budget Rust records after prepare_response_items.
+			itemPolicy := items[i].ToolAudioHistoryPolicy
+			if itemPolicy == nil {
+				itemPolicy = policy
+			}
+			session.ApplyHistoryTruncationBudget(&items[i], itemPolicy, true)
+			items[i].ToolAudioHistoryPolicy = nil
+		}
+		return items
+	}
+	store := attachmentstore.StoreOrDefault(r.attachmentStoreForAudio())
+	threadID := strings.TrimSpace(params.ThreadID)
+	ephemeral := r.threadIsEphemeral(threadID)
+	ids := session.PrepareFileBackedToolAudio(items, store, threadID, ephemeral, defaultLimit)
+	if len(ids) > 0 {
+		audiofiles.Resolve(context.Background(), store, r.audioDurationsFor(threadID), ids)
+	}
+	return items
+}
+
 // trustedConfigurationUpdateSessionItems extracts harness-authored
 // configuration_update items from internal additional input items. Client wire
 // inputs cannot reach this path because AdditionalInputItems is not serialized
@@ -8651,7 +8705,22 @@ func sessionItemForAppToolOutput(turnID string, execution *turn.ToolExecutionRes
 	}
 	functionOrCustom := execution.Invocation.Payload.Kind == tool.PayloadFunction ||
 		execution.Invocation.Payload.Kind == tool.PayloadCustom
-	session.ApplyHistoryTruncationBudget(&item, execution.Invocation.Truncation, functionOrCustom)
+	if session.ItemHasInlineToolAudio(&item) {
+		// Rust prepare_response_items validates and canonicalizes fresh tool
+		// audio before history truncation, so an undecodable clip costs only its
+		// placeholder in the budget.
+		session.PrepareInlineToolAudio(&item)
+	}
+	if session.ItemHasInlineToolAudio(&item) {
+		// Rust #61394: the audio-aware history budget and the attachment store
+		// both run at the record boundary. The marker is consumed before the
+		// item is persisted and never reaches the rollout.
+		item.FileBackedToolAudioPending = true
+		item.ProducerBoundedToolAudio = execution.Output.OutputBudgetApplied
+		item.ToolAudioHistoryPolicy = execution.Invocation.Truncation
+	} else {
+		session.ApplyHistoryTruncationBudget(&item, execution.Invocation.Truncation, functionOrCustom)
+	}
 	if execution.Output.Success && execution.Output.DeliveredAssistantMessage != "" {
 		mergeSessionItemHarnessMetadata(&item, map[string]any{
 			"delivered_assistant_message": execution.Output.DeliveredAssistantMessage,

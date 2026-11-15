@@ -562,11 +562,12 @@ func (e *ToolExecutor) Execute(ctx context.Context, invocation *tool.Invocation)
 		data[openAIFileHookInputKey] = rewrittenArguments
 	}
 	return &tool.Output{
-		Success:            !mcpToolCallIsError(response),
-		Body:               body,
-		Data:               data,
-		LogPreview:         mcpLogPreview(body),
-		ToolResultMetadata: e.capturedResultMetadata(response),
+		Success:             !mcpToolCallIsError(response),
+		Body:                body,
+		Data:                data,
+		LogPreview:          mcpLogPreview(body),
+		ToolResultMetadata:  e.capturedResultMetadata(response),
+		OutputBudgetApplied: true,
 	}, nil
 }
 

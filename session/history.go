@@ -39,6 +39,9 @@ func ApplyHistoryTruncationBudget(item *Item, policy *utils.TruncationPolicy, fu
 	if item == nil || !functionOrCustom {
 		return
 	}
+	if toolAudioBudgetAppliedForItem(item) {
+		return
+	}
 	limit, ok := historyTruncationTokenLimit(item)
 	if !ok {
 		if policy == nil {
@@ -47,6 +50,16 @@ func ApplyHistoryTruncationBudget(item *Item, policy *utils.TruncationPolicy, fu
 		allowance := policy.WithSerializationAllowance()
 		limit = (&allowance).TokenBudget()
 		mergeHistoryHarnessMetadata(item, map[string]any{historyTruncationTokenLimitKey: limit})
+	}
+	ApplyHistoryTruncationLimit(item, limit)
+}
+
+// ApplyHistoryTruncationLimit bounds a recorded tool output with an already
+// resolved history token limit. Rust `ContextManager::record` uses the same
+// limit for the body whether it came from the model policy or a tool override.
+func ApplyHistoryTruncationLimit(item *Item, limit int) {
+	if item == nil || limit < 0 {
+		return
 	}
 	truncation := utils.TokensPolicy(limit)
 	if item.Data != nil {
@@ -91,6 +104,14 @@ func historyTruncationTokenLimit(item *Item) (int, bool) {
 	default:
 		return 0, false
 	}
+}
+
+func toolAudioBudgetAppliedForItem(item *Item) bool {
+	if item == nil {
+		return false
+	}
+	applied, _ := harnessMetadata(item.Data)[toolAudioBudgetApplied].(bool)
+	return applied
 }
 
 func mergeHistoryHarnessMetadata(item *Item, fields map[string]any) {
@@ -717,6 +738,9 @@ func historyToolOutputType(itemType string) bool {
 }
 
 func historyToolOutputTruncationLimit(item *Item, options *HistoryBuildOptions) (int, bool) {
+	if toolAudioBudgetAppliedForItem(item) {
+		return 0, false
+	}
 	if limit, ok := historyTruncationTokenLimit(item); ok {
 		return limit, true
 	}

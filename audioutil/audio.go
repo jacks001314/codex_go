@@ -105,25 +105,35 @@ func IsDataURL(audioURL string) bool {
 // PrepareAudioURL validates and canonicalizes one audio data URL. On success it
 // returns the canonical `data:<mime>;base64,<payload>` form.
 func PrepareAudioURL(audioURL string) (string, error) {
+	mime, data, err := DecodeAudioURL(audioURL)
+	if err != nil {
+		return "", err
+	}
+	return AudioDataURL(mime, data), nil
+}
+
+// DecodeAudioURL validates one audio data URL and returns its canonical media
+// type with the decoded payload bytes (Rust `decode_audio`).
+func DecodeAudioURL(audioURL string) (string, []byte, error) {
 	if !IsDataURL(audioURL) {
-		return "", fmt.Errorf("%w: audio input must be a data URL", ErrInvalidDataURL)
+		return "", nil, fmt.Errorf("%w: audio input must be a data URL", ErrInvalidDataURL)
 	}
 	metadata, payload, ok := strings.Cut(audioURL, ",")
 	if !ok {
-		return "", fmt.Errorf("%w: missing payload separator", ErrInvalidDataURL)
+		return "", nil, fmt.Errorf("%w: missing payload separator", ErrInvalidDataURL)
 	}
 	if len(metadata) < len("data:") {
-		return "", fmt.Errorf("%w: missing data URL prefix", ErrInvalidDataURL)
+		return "", nil, fmt.Errorf("%w: missing data URL prefix", ErrInvalidDataURL)
 	}
 	metadata = metadata[len("data:"):]
 	parts := strings.Split(metadata, ";")
 	mime := strings.TrimSpace(parts[0])
 	if mime == "" {
-		return "", fmt.Errorf("%w: missing media type", ErrInvalidDataURL)
+		return "", nil, fmt.Errorf("%w: missing media type", ErrInvalidDataURL)
 	}
 	canonicalMIME, ok := CanonicalAudioMIME(mime)
 	if !ok {
-		return "", ErrUnsupportedFormat
+		return "", nil, ErrUnsupportedFormat
 	}
 	base64Encoded := false
 	for _, part := range parts[1:] {
@@ -132,22 +142,52 @@ func PrepareAudioURL(audioURL string) (string, error) {
 		}
 	}
 	if !base64Encoded {
-		return "", fmt.Errorf("%w: audio payload is not base64 encoded", ErrInvalidDataURL)
+		return "", nil, fmt.Errorf("%w: audio payload is not base64 encoded", ErrInvalidDataURL)
 	}
 	if len(payload) > maxPromptAudioBase64Bytes {
-		return "", fmt.Errorf("%w (%d bytes; max %d bytes)", ErrAudioTooLarge, len(payload), MaxPromptAudioInputBytes)
+		return "", nil, fmt.Errorf("%w (%d bytes; max %d bytes)", ErrAudioTooLarge, len(payload), MaxPromptAudioInputBytes)
 	}
 	decoded, err := base64.StdEncoding.DecodeString(payload)
 	if err != nil {
-		return "", fmt.Errorf("%w: invalid base64 payload", ErrInvalidDataURL)
+		return "", nil, fmt.Errorf("%w: invalid base64 payload", ErrInvalidDataURL)
 	}
 	if len(decoded) == 0 {
-		return "", fmt.Errorf("%w: audio payload is empty", ErrInvalidDataURL)
+		return "", nil, fmt.Errorf("%w: audio payload is empty", ErrInvalidDataURL)
 	}
 	if len(decoded) > MaxPromptAudioInputBytes {
-		return "", fmt.Errorf("%w (%d bytes; max %d bytes)", ErrAudioTooLarge, len(decoded), MaxPromptAudioInputBytes)
+		return "", nil, fmt.Errorf("%w (%d bytes; max %d bytes)", ErrAudioTooLarge, len(decoded), MaxPromptAudioInputBytes)
 	}
-	return "data:" + canonicalMIME + ";base64," + base64.StdEncoding.EncodeToString(decoded), nil
+	return canonicalMIME, decoded, nil
+}
+
+// PrepareAndMeasureInlineAudio validates the data URL and measures its decoded
+// duration in one pass, returning the canonical URL and its token estimate
+// (Rust `prepare_and_measure_inline_audio`).
+func PrepareAndMeasureInlineAudio(audioURL string) (string, int, error) {
+	mime, data, err := DecodeAudioURL(audioURL)
+	if err != nil {
+		return "", 0, err
+	}
+	canonical := AudioDataURL(mime, data)
+	return canonical, DecodedAudioTokenCount(mime, data, canonical), nil
+}
+
+// AudioDataURL builds the canonical inline representation of decoded audio.
+func AudioDataURL(mime string, data []byte) string {
+	return "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data)
+}
+
+// DecodedAudioTokenCount charges decoded audio by container duration, falling
+// back to the canonical URL's byte approximation when the duration is unknown.
+func DecodedAudioTokenCount(mime string, data []byte, fallbackURL string) int {
+	if seconds, ok := durationForMIME(mime, data); ok {
+		tokens := seconds * tokensPerSecond
+		if tokens >= float64(maxInt) {
+			return maxInt
+		}
+		return int(ceil(tokens))
+	}
+	return approxTokenCount(fallbackURL)
 }
 
 // EstimateAudioTokenCount returns the model token estimate for an audio URL:

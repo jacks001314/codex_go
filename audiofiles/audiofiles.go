@@ -313,7 +313,7 @@ func (s RejectedSet) Has(fileID string) bool {
 // request can confirm decoding only when it carries a file this model and
 // provider have not accepted yet.
 func PendingConfirmation(previous *Accepted, turnID, model, provider string, items []any) *Accepted {
-	ids := FileAudioIDs(items)
+	ids := messageFileAudioIDs(items)
 	if len(ids) == 0 {
 		return nil
 	}
@@ -334,13 +334,35 @@ func PendingConfirmation(previous *Accepted, turnID, model, provider string, ite
 	return &Accepted{TurnID: turnID, Model: model, Provider: provider, FileIDs: ids}
 }
 
+// messageFileAudioIDs returns uploaded file audio carried by message content.
+// Rust `pending_audio_confirmation` only inspects `ResponseItem::Message`, so a
+// file-backed tool clip never enters the accepted fresh-upload set.
+func messageFileAudioIDs(items []any) []string {
+	out := make([]string, 0, 2)
+	seen := map[string]bool{}
+	for _, value := range items {
+		item, ok := value.(map[string]any)
+		if !ok || strings.TrimSpace(stringFromAny(item["type"])) != "message" {
+			continue
+		}
+		walkContentSources(item["content"], false, func(source source) {
+			if source.kind != sourceAudio || source.fileID == "" || seen[source.fileID] {
+				return
+			}
+			seen[source.fileID] = true
+			out = append(out, source.fileID)
+		})
+	}
+	return out
+}
+
 // FileAudioIDs returns the uploaded audio file IDs carried by prompt items, in
 // order and without duplicates.
 func FileAudioIDs(items []any) []string {
 	out := make([]string, 0, 2)
 	seen := map[string]bool{}
 	walkItemSources(items, func(source source) {
-		if source.kind == sourceAudio && source.fileID != "" && !seen[source.fileID] {
+		if (source.kind == sourceAudio || source.kind == sourceToolFileAudio) && source.fileID != "" && !seen[source.fileID] {
 			seen[source.fileID] = true
 			out = append(out, source.fileID)
 		}
@@ -353,6 +375,7 @@ type sourceKind int
 const (
 	sourceAudio sourceKind = iota
 	sourceInlineAudio
+	sourceToolFileAudio
 	sourceFileImage
 	sourceOpaque
 )
@@ -372,31 +395,35 @@ func walkItemSources(items []any, visit func(source)) {
 		}
 		switch strings.TrimSpace(stringFromAny(item["type"])) {
 		case "message":
-			walkContentSources(item["content"], visit)
+			walkContentSources(item["content"], false, visit)
 		case "function_call_output", "custom_tool_call_output":
-			walkContentSources(item["output"], visit)
+			walkContentSources(item["output"], true, visit)
 		case "compaction", "context_compaction":
 			visit(source{kind: sourceOpaque})
 		}
 	}
 }
 
-func walkContentSources(value any, visit func(source)) {
+func walkContentSources(value any, toolOutput bool, visit func(source)) {
 	switch content := value.(type) {
 	case []any:
 		for _, raw := range content {
-			walkContentSources(raw, visit)
+			walkContentSources(raw, toolOutput, visit)
 		}
 	case []map[string]any:
 		for _, raw := range content {
-			walkContentSources(raw, visit)
+			walkContentSources(raw, toolOutput, visit)
 		}
 	case map[string]any:
 		switch strings.TrimSpace(stringFromAny(content["type"])) {
 		case "input_audio", "inputAudio", "audio":
 			fileID := firstNonEmptyString(content["file_id"], content["fileId"])
 			if fileID != "" && firstNonEmptyString(content["audio_url"], content["audioUrl"], content["url"]) == "" {
-				visit(source{kind: sourceAudio, fileID: fileID})
+				kind := sourceAudio
+				if toolOutput {
+					kind = sourceToolFileAudio
+				}
+				visit(source{kind: kind, fileID: fileID})
 				return
 			}
 			visit(source{kind: sourceInlineAudio})
@@ -413,11 +440,11 @@ func walkContentSources(value any, visit func(source)) {
 // SubmittedFileAudio). The prompt itself may be released while the provider
 // streams, so attribution only looks at this snapshot.
 type Submitted struct {
-	FileIDs        []string
-	candidate      int
-	hasCandidate   bool
-	hasInlineAudio bool
-	hasFileImage   bool
+	FileIDs           []string
+	candidate         int
+	hasCandidate      bool
+	hasCompetingAudio bool
+	hasCompetingFile  bool
 }
 
 // SubmittedFromRequest mirrors Rust SubmittedFileAudio::from_request. A single
@@ -431,10 +458,16 @@ func SubmittedFromRequest(items []any, accepted *Accepted, clearCheckpoints []st
 		switch kind {
 		case sourceAudio:
 			submitted.FileIDs = append(submitted.FileIDs, fileID)
+		case sourceToolFileAudio:
+			// Rust `FileErrorSource::ToolFileAudio` never contributes a file id:
+			// tool clips are only a competing source, so a provider failure can
+			// never be attributed to them as if they were user uploads.
+			submitted.hasCompetingAudio = true
+			submitted.hasCompetingFile = true
 		case sourceInlineAudio:
-			submitted.hasInlineAudio = true
+			submitted.hasCompetingAudio = true
 		case sourceFileImage:
-			submitted.hasFileImage = true
+			submitted.hasCompetingFile = true
 		case sourceOpaque:
 			known := false
 			for _, value := range clearCheckpoints {
@@ -486,31 +519,35 @@ func walkItemSourcesDetailed(items []any, visit func(kind sourceKind, fileID, ci
 		}
 		switch strings.TrimSpace(stringFromAny(item["type"])) {
 		case "message":
-			walkContentSourcesDetailed(item["content"], visit)
+			walkContentSourcesDetailed(item["content"], false, visit)
 		case "function_call_output", "custom_tool_call_output":
-			walkContentSourcesDetailed(item["output"], visit)
+			walkContentSourcesDetailed(item["output"], true, visit)
 		case "compaction", "context_compaction":
 			visit(sourceOpaque, "", strings.TrimSpace(stringFromAny(item["encrypted_content"])))
 		}
 	}
 }
 
-func walkContentSourcesDetailed(value any, visit func(kind sourceKind, fileID, ciphertext string)) {
+func walkContentSourcesDetailed(value any, toolOutput bool, visit func(kind sourceKind, fileID, ciphertext string)) {
 	switch content := value.(type) {
 	case []any:
 		for _, raw := range content {
-			walkContentSourcesDetailed(raw, visit)
+			walkContentSourcesDetailed(raw, toolOutput, visit)
 		}
 	case []map[string]any:
 		for _, raw := range content {
-			walkContentSourcesDetailed(raw, visit)
+			walkContentSourcesDetailed(raw, toolOutput, visit)
 		}
 	case map[string]any:
 		switch strings.TrimSpace(stringFromAny(content["type"])) {
 		case "input_audio", "inputAudio", "audio":
 			fileID := firstNonEmptyString(content["file_id"], content["fileId"])
 			if fileID != "" && firstNonEmptyString(content["audio_url"], content["audioUrl"], content["url"]) == "" {
-				visit(sourceAudio, fileID, "")
+				kind := sourceAudio
+				if toolOutput {
+					kind = sourceToolFileAudio
+				}
+				visit(kind, fileID, "")
 				return
 			}
 			visit(sourceInlineAudio, "", "")
@@ -541,13 +578,13 @@ func (s *Submitted) rejectedIndex(err error) (int, bool) {
 	}
 	uniqueFile := len(s.FileIDs) == 1
 	if IsInvalidAudioInput(err) {
-		// Rust: !has_inline_audio && (unique_file || per_recording).
-		if !s.hasInlineAudio && (uniqueFile || PerRecordingAudioError(err)) {
+		// Rust: !has_competing_audio && (unique_file || per_recording).
+		if !s.hasCompetingAudio && (uniqueFile || PerRecordingAudioError(err)) {
 			return s.candidate, true
 		}
 		return 0, false
 	}
-	if uniqueFile && !s.hasFileImage && IsUnknownFileError(err) {
+	if uniqueFile && !s.hasCompetingFile && IsUnknownFileError(err) {
 		return s.candidate, true
 	}
 	return 0, false

@@ -290,6 +290,9 @@ var Registry = []Spec{
 	{Key: "view_image", Stage: StageStable, DefaultEnabled: true},
 	{Key: "image_resize_notice", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "safe_image_decoder", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust #61394: prepare fresh function and custom tool audio through this
+	// host's attachment store before persistence. Disabled by default.
+	{Key: "file_backed_tool_audio", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	// Rust #59282: unified image preparation is stable and enabled by default
 	// for models that support original image detail or Responses Lite.
 	{Key: "unified_image_budget", Stage: StageStable, DefaultEnabled: true},
