@@ -335,8 +335,58 @@ func listMCPHTTPToolsWithContext(ctx context.Context, client *httpClient, option
 		if err := client.CallWithOptionsContext(ctx, options, "tools/list", mcpListParamsForCursorWithConfig(client.config, cursor), &response); err != nil {
 			return nil, nil, nil, err
 		}
+		// Rust #61398: Codex Apps pages may carry connector names and
+		// descriptions in the shared `openai/apps` page metadata. Restore them
+		// onto each tool before conversion so model-visible namespaces and
+		// descriptions stay correct across pages.
+		if options != nil && IsCodexAppsMCPServerName(options.ServerName) {
+			restoreCodexAppsSharedConnectorMetadata(response.Tools, response.Meta)
+		}
 		return response.Tools, response.Meta, response.NextCursor, nil
 	})
+}
+
+// restoreCodexAppsSharedConnectorMetadata copies nonempty connector metadata
+// from a Codex Apps page's shared `openai/apps` entry onto the matching tool by
+// `connector_id` (Rust #61398). Regular MCP servers never take this path.
+func restoreCodexAppsSharedConnectorMetadata(tools []MCPToolInfo, pageMeta json.RawMessage) {
+	if len(tools) == 0 || len(pageMeta) == 0 {
+		return
+	}
+	var envelope struct {
+		Apps []map[string]any `json:"openai/apps"`
+	}
+	if err := json.Unmarshal(pageMeta, &envelope); err != nil {
+		return
+	}
+	shared := make(map[string]map[string]any, len(envelope.Apps))
+	for _, app := range envelope.Apps {
+		if connectorID := connectorMetaString(app, "connectorId"); connectorID != "" {
+			shared[connectorID] = app
+		}
+	}
+	if len(shared) == 0 {
+		return
+	}
+	for i := range tools {
+		meta, ok := tools[i].Meta.(map[string]any)
+		if !ok {
+			continue
+		}
+		connectorID := strings.TrimSpace(connectorMetaString(meta, "connector_id", "connectorId"))
+		app, ok := shared[connectorID]
+		if !ok {
+			continue
+		}
+		for sharedKey, toolKey := range map[string]string{
+			"connectorName":        "connector_name",
+			"connectorDescription": "connector_description",
+		} {
+			if value, ok := app[sharedKey].(string); ok && strings.TrimSpace(value) != "" {
+				meta[toolKey] = value
+			}
+		}
+	}
 }
 
 func listMCPHTTPResources(client *httpClient, options *httpClientCallOptions) ([]MCPResource, error) {

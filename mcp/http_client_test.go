@@ -688,6 +688,116 @@ func TestHTTPMCPCatalogPaginationUsesOneConfiguredTimeout(t *testing.T) {
 	}
 }
 
+// TestCodexAppsListToolsRestoresSharedConnectorMetadataLikeRust mirrors Rust
+// #61398: every Codex Apps tools page restores connector names and descriptions
+// from the shared `openai/apps` metadata keyed by connector id.
+func TestCodexAppsListToolsRestoresSharedConnectorMetadataLikeRust(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			ID     int64           `json:"id"`
+			Method string          `json:"method"`
+			Params json.RawMessage `json:"params"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		switch request.Method {
+		case "initialize":
+			w.Header().Set(mcpHTTPSessionIDHeader, "apps-session")
+			writeHTTPMCPResponse(t, w, request.ID, map[string]any{
+				"protocolVersion": defaultMCPProtocol,
+				"capabilities":    map[string]any{},
+				"serverInfo":      map[string]string{"name": "codex_apps", "version": "test"},
+			})
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/list":
+			if mcpTestCursorParam(t, request.Params) == "" {
+				writeHTTPMCPResponse(t, w, request.ID, map[string]any{
+					"tools": []map[string]any{{
+						"name":        "connector_a.search",
+						"description": "Search records.",
+						"inputSchema": map[string]any{"type": "object"},
+						"_meta":       map[string]any{"connector_id": "connector_a"},
+					}},
+					"_meta": map[string]any{"openai/apps": []any{map[string]any{
+						"connectorId":          "connector_a",
+						"connectorName":        "Calendar",
+						"connectorDescription": "Plan events.",
+					}}},
+					"nextCursor": "page2",
+				})
+				return
+			}
+			writeHTTPMCPResponse(t, w, request.ID, map[string]any{
+				"tools": []map[string]any{{
+					"name":        "connector_b.search",
+					"description": "Search records.",
+					"inputSchema": map[string]any{"type": "object"},
+					"_meta":       map[string]any{"connector_id": "connector_b"},
+				}},
+				"_meta": map[string]any{"openai/apps": []any{map[string]any{
+					"connectorId":          "connector_b",
+					"connectorName":        "Notes",
+					"connectorDescription": "Find notes.",
+				}}},
+			})
+		default:
+			writeHTTPMCPError(t, w, request.ID, -32601, "not found")
+		}
+	}))
+	defer server.Close()
+
+	config := &ServerConfig{URL: server.URL, Enabled: true}
+	tools, _, err := listMCPHTTPTools(newMCPHTTPClient(config), &httpClientCallOptions{ServerName: CodexAppsServerName})
+	if err != nil {
+		t.Fatalf("listMCPHTTPTools() error = %v", err)
+	}
+	if len(tools) != 2 {
+		t.Fatalf("tools = %#v", tools)
+	}
+	for index, want := range []struct{ name, description string }{
+		{"Calendar", "Plan events."},
+		{"Notes", "Find notes."},
+	} {
+		meta, ok := tools[index].Meta.(map[string]any)
+		if !ok {
+			t.Fatalf("tools[%d].Meta = %#v", index, tools[index].Meta)
+		}
+		if meta["connector_name"] != want.name || meta["connector_description"] != want.description {
+			t.Fatalf("tools[%d] restored metadata = %#v, want %q/%q", index, meta, want.name, want.description)
+		}
+	}
+
+	runtimeTools := RuntimeToolsFromStatuses([]MCPServerStatus{{
+		Name:  CodexAppsServerName,
+		State: MCPServerReady,
+		Tools: tools,
+	}})
+	if len(runtimeTools) != 2 {
+		t.Fatalf("runtime tools = %#v", runtimeTools)
+	}
+	for index, want := range []struct{ namespace, description string }{
+		{"mcp__codex_apps__calendar", "Plan events."},
+		{"mcp__codex_apps__notes", "Find notes."},
+	} {
+		if runtimeTools[index].CallableNamespace != want.namespace || runtimeTools[index].NamespaceDescription != want.description {
+			t.Fatalf("runtimeTools[%d] = %#v, want namespace %q description %q", index, runtimeTools[index], want.namespace, want.description)
+		}
+	}
+
+	regularTools, _, err := listMCPHTTPTools(newMCPHTTPClient(config), &httpClientCallOptions{ServerName: "regular"})
+	if err != nil {
+		t.Fatalf("regular listMCPHTTPTools() error = %v", err)
+	}
+	for index := range regularTools {
+		meta, _ := regularTools[index].Meta.(map[string]any)
+		if _, present := meta["connector_name"]; present {
+			t.Fatalf("regular server tool %d received shared connector metadata: %#v", index, meta)
+		}
+	}
+}
+
 func TestMCPStatusNilParamsDefaultsToFullInventory(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request struct {
