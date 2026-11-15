@@ -649,6 +649,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		OnSessionAction:             interactiveRemoteSessionActionHandler(ctx, endpoint, root, backendID),
 		OnListBackgroundTerminals:   interactiveRemoteListBackgroundTerminals(ctx, endpoint),
 		OnResumeSession:             interactiveRemoteResumeSessionHandler(ctx, endpoint, root, backendID),
+		OnUnarchiveThread:           interactiveRemoteUnarchiveThreadHandler(ctx, endpoint),
 		OnSwitchBackendSession:      interactiveBackendSwitchHandler(interactiveRemoteResumeSessionHandler(ctx, endpoint, root, backendID), backendID),
 		OnContinueSafetyRecourse:    interactiveRemoteContinueSafetyRecourse(ctx, endpoint, root, state, backendID),
 		OnPromptEdit:                interactiveRemotePromptEditHandler(ctx, endpoint, root, state, taskToolsHost),

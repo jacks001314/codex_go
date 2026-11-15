@@ -225,6 +225,26 @@ func interactiveRemoteAgentsOverviewArchive(ctx context.Context, endpoint *appse
 	}
 }
 
+// interactiveRemoteUnarchiveThreadHandler unarchives the displayed conversation
+// from the TUI's archived read-only view (Rust #61486). It uses a short-lived
+// client like the other interactiveRemote handlers so the notification stream
+// keeps owning the live attachment.
+func interactiveRemoteUnarchiveThreadHandler(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) func(threadID string) error {
+	return func(threadID string) error {
+		threadID = strings.TrimSpace(threadID)
+		if threadID == "" {
+			return errors.New("unarchive requires a thread id")
+		}
+		client, err := openRemoteSessionClient(ctx, endpoint)
+		if err != nil {
+			return err
+		}
+		defer client.close()
+		var response appserver.ThreadUnarchiveResponse
+		return remoteSessionRequest(ctx, client, appserver.MethodThreadUnarchive, appserver.ThreadUnarchiveParams{ThreadID: threadID}, &response)
+	}
+}
+
 func interactiveRemoteAgentsOverviewDelete(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) codextea.AgentsOverviewDeleteFunc {
 	return func(threadID string) error {
 		client, err := openRemoteSessionClient(ctx, endpoint)

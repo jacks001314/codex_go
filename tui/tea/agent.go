@@ -792,6 +792,17 @@ func (m *Model) agentThreadArchived(threadID string) bool {
 // setAgentPickerThreadVisibility updates picker visibility after a local archive or
 // unarchive, preserving the selected thread id while rows change.
 func (m *Model) setAgentPickerThreadVisibility(threadID string, archived bool) bubbletea.Cmd {
+	return m.setAgentThreadVisibility(threadID, archived, false)
+}
+
+// setAgentThreadVisibilityFromNotification applies an archive/unarchive
+// notification. Rust's update_archived_thread path (#61486) keeps a displayed
+// thread's pending steers for recovery, unlike a local archive (#42451).
+func (m *Model) setAgentThreadVisibilityFromNotification(threadID string, archived bool) bubbletea.Cmd {
+	return m.setAgentThreadVisibility(threadID, archived, true)
+}
+
+func (m *Model) setAgentThreadVisibility(threadID string, archived bool, preserveSteers bool) bubbletea.Cmd {
 	if m == nil {
 		return nil
 	}
@@ -799,6 +810,7 @@ func (m *Model) setAgentPickerThreadVisibility(threadID string, archived bool) b
 	if threadID == "" {
 		return nil
 	}
+	displayedHere := m.currentThreadID() == threadID
 	_, cached := m.agentEntry(threadID)
 	if m.archivedAgentThreads == nil {
 		m.archivedAgentThreads = map[string]bool{}
@@ -816,8 +828,11 @@ func (m *Model) setAgentPickerThreadVisibility(threadID string, archived bool) b
 			m.archivedAgentThreads[visibleID] = true
 			m.agentsOverviewRemoved[visibleID] = true
 			// Rust #42451 keeps pending steer state only for live threads; an
-			// archived thread must not restore it later.
-			m.dropPendingSteersForThread(visibleID)
+			// archived thread must not restore it later. #61486 keeps the
+			// displayed thread's steers so a resume after unarchive can retry.
+			if !(preserveSteers && displayedHere && visibleID == threadID) {
+				m.dropPendingSteersForThread(visibleID)
+			}
 			if visibleID == threadID {
 				m.agentThreadArchiveCause[visibleID] = "self"
 			} else if m.agentThreadArchiveCause[visibleID] == "" {
@@ -856,6 +871,15 @@ func (m *Model) setAgentPickerThreadVisibility(threadID string, archived bool) b
 		m.agentPickerRefreshFollowUp = true
 	}
 	m.refreshAgentPickerAfterVisibilityChange()
+	// Rust #61486: archiving the displayed conversation freezes its cached
+	// transcript; unarchiving it reattaches while the view is still displayed.
+	if displayedHere {
+		if archived {
+			m.setArchivedThread(true)
+		} else if m.archivedView() {
+			m.resumeArchivedThread(threadID)
+		}
+	}
 	if !archived && !cached {
 		return m.refreshAgentPickerThreadsCmd()
 	}

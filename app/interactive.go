@@ -1801,6 +1801,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		OnListCollaborationModes:    interactiveLocalListCollaborationModes(),
 		OnWorkingDirectoryChange:    interactiveWorkingDirectoryChangeHandler(root),
 		OnResumeSession:             interactiveResumeSessionHandler(root),
+		OnUnarchiveThread:           interactiveUnarchiveThreadHandler(),
 		OnSwitchBackendSession:      interactiveBackendSwitchHandler(interactiveResumeSessionHandler(root), codextui.ProcessBackendID()),
 		OnContinueSafetyRecourse:    interactiveContinueSafetyRecourse(root),
 		OnPromptEdit:                interactivePromptEditHandler(root),
@@ -4446,6 +4447,20 @@ func reconcileStateForDesktopHandoff(codexHome string, rolloutPath string) error
 func archivedSessionStartError(threadID session.ThreadID) error {
 	id := strings.TrimSpace(string(threadID))
 	return errors.New("session " + id + " is archived. Run `codex unarchive " + id + "` to unarchive it first.")
+}
+
+// interactiveUnarchiveThreadHandler unarchives the displayed conversation from
+// the TUI's archived read-only view (Rust #61486). The embedded store owns the
+// record, matching the app server's thread/unarchive.
+func interactiveUnarchiveThreadHandler() func(threadID string) error {
+	return func(threadID string) error {
+		threadID = strings.TrimSpace(threadID)
+		if threadID == "" {
+			return errors.New("unarchive requires a thread id")
+		}
+		_, err := newSessionStore().Unarchive(session.ThreadID(threadID))
+		return err
+	}
 }
 
 func interactiveResumeSessionHandler(root *cli.RootOptions) codextea.SessionResumeFunc {

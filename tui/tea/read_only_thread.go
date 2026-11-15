@@ -21,33 +21,64 @@ func (m *Model) setReadOnlyThread(readOnly bool) {
 	if m == nil {
 		return
 	}
-	if readOnly && !m.readOnlyThread {
+	if !readOnly {
+		m.leaveReadOnlyThread()
+		return
+	}
+	m.enterReadOnlyThread(false)
+}
+
+// setArchivedThread enters or leaves the archived read-only state (Rust
+// ChatWidget::show_read_only_thread(ReadOnlyThread::Archived), #61486). The
+// cached transcript, drafts, pending steers, and question answers stay intact
+// while the thread is frozen.
+func (m *Model) setArchivedThread(archived bool) {
+	if m == nil {
+		return
+	}
+	if !archived {
+		m.leaveReadOnlyThread()
+		return
+	}
+	m.enterReadOnlyThread(true)
+}
+
+func (m *Model) enterReadOnlyThread(archived bool) {
+	if m == nil || (m.readOnlyThread && m.archivedThread == archived) {
+		return
+	}
+	if !m.readOnlyThread {
 		// Rust #43253/#47320: the locked view hides the composer but keeps the
 		// draft, so a successful retry or a fork (#47185) can continue with it.
 		m.readOnlyDraft = m.captureComposerInputState()
 	}
-	m.readOnlyThread = readOnly
-	if readOnly {
-		m.threadUnavailable = false
-		if m.State != nil {
-			m.freezeViewedReadReceipt(m.State.ThreadID)
-		}
-	}
-	if !readOnly {
-		m.frozenReadReceipt = nil
-		if draft := m.readOnlyDraft; draft != nil {
-			m.readOnlyDraft = nil
-			m.restoreComposerInputState(draft, false)
-		}
-		return
+	m.readOnlyThread = true
+	m.archivedThread = archived
+	m.threadUnavailable = false
+	if m.State != nil {
+		m.freezeViewedReadReceipt(m.State.ThreadID)
 	}
 	// Block input while preserving the transcript; drafts and queued messages
-	// survive for a successful retry.
+	// survive for a successful retry or unarchive. resetComposer also dismisses
+	// transient composer searches (Rust #61486).
 	m.resetComposer()
 	m.attachments = nil
 	m.composerMentionBindings = nil
 	m.composerPasteEnterUntil = nil
 	m.notice = ""
+}
+
+func (m *Model) leaveReadOnlyThread() {
+	if m == nil {
+		return
+	}
+	m.frozenReadReceipt = nil
+	m.readOnlyThread = false
+	m.archivedThread = false
+	if draft := m.readOnlyDraft; draft != nil {
+		m.readOnlyDraft = nil
+		m.restoreComposerInputState(draft, false)
+	}
 }
 
 // externalWriterView mirrors Rust ChatWidget::is_external_writer_view: the
@@ -56,7 +87,13 @@ func (m *Model) setReadOnlyThread(readOnly bool) {
 // external-writer view, so Escape navigation must not treat it as locked
 // (#47320).
 func (m *Model) externalWriterView() bool {
-	return m != nil && m.readOnlyThread && m.providerError == nil
+	return m != nil && m.readOnlyThread && !m.archivedThread && m.providerError == nil
+}
+
+// archivedView mirrors Rust ChatWidget::is_archived_view: the conversation is
+// frozen because it was archived, so only U (unarchive) recovers it.
+func (m *Model) archivedView() bool {
+	return m != nil && m.readOnlyThread && m.archivedThread
 }
 
 // composerInputState is the retained input of a locked conversation (Rust
@@ -224,12 +261,21 @@ func (m *Model) handleReadOnlyThreadKey(msg keymsg.KeyMsg, keySpec string) bubbl
 			// editable copy of the thread without taking the source lease. Ctrl
 			// and Super combinations arrive as their own key types, so a rune
 			// without Alt is the unmodified (or shifted) press Rust accepts, and a
-			// blocking view keeps ownership of the key.
-			if !msg.Alt && m.modal == nil {
+			// blocking view keeps ownership of the key. #61486 keeps the shortcut
+			// on the external-writer view only.
+			if m.externalWriterView() && !msg.Alt && m.modal == nil {
 				return m.applyForkCurrentSession("")
 			}
 		case 'r', 'R':
-			return m.retryReadOnlyThread()
+			// The archived view advertises U instead of retrying a resume the
+			// server keeps rejecting (Rust app/input.rs).
+			if !m.archivedView() {
+				return m.retryReadOnlyThread()
+			}
+		case 'u', 'U':
+			if m.archivedView() {
+				return m.unarchiveArchivedThread()
+			}
 		case 'q', 'Q':
 			return bubbletea.Quit
 		}
@@ -253,6 +299,14 @@ func (m *Model) retryReadOnlyThread() bubbletea.Cmd {
 		ResumeCWD: m.State.CWD,
 	})
 	if err != nil {
+		// Rust #61486: a resume that reports the archived thread turns the
+		// cached view into the archived read-only notice instead of a bare
+		// retry failure.
+		if _, archived := archivedSessionGuidanceForThread(err, threadID); archived {
+			m.setArchivedThread(true)
+			m.refreshTranscript()
+			return nil
+		}
 		m.notice = "Retry failed: " + strings.TrimSpace(err.Error())
 		m.refreshTranscript()
 		return nil
@@ -264,8 +318,82 @@ func (m *Model) retryReadOnlyThread() bubbletea.Cmd {
 	return nil
 }
 
-// renderReadOnlyThreadNotice renders the external-writer card in place of the
-// composer (Rust ExternalWriterNotice).
+// unarchiveArchivedThread handles U in the archived view: unarchive the
+// displayed thread, then reattach it (Rust #61486 app/input.rs). A failed
+// unarchive keeps the archived view and its retained draft.
+func (m *Model) unarchiveArchivedThread() bubbletea.Cmd {
+	if m == nil || m.State == nil {
+		return nil
+	}
+	threadID := strings.TrimSpace(m.State.ThreadID)
+	if threadID == "" {
+		return nil
+	}
+	if m.onUnarchiveThread == nil {
+		m.notice = "Failed to unarchive thread: unarchiving is unavailable for this session"
+		m.refreshTranscript()
+		return nil
+	}
+	if err := m.onUnarchiveThread(threadID); err != nil && !activeWriterError(err) && !alreadyUnarchivedThreadError(err, threadID) {
+		m.notice = "Failed to unarchive thread: " + strings.TrimSpace(err.Error())
+		m.refreshTranscript()
+		return nil
+	}
+	return m.resumeArchivedThread(threadID)
+}
+
+// resumeArchivedThread reattaches a thread after another client unarchived it
+// or U restored it. A writer conflict or recovery failure leaves the archived
+// view (and its draft) in place.
+func (m *Model) resumeArchivedThread(threadID string) bubbletea.Cmd {
+	if m == nil || m.State == nil || m.onResumeSession == nil {
+		return nil
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return nil
+	}
+	response, err := m.onResumeSession(codextui.SessionSelection{
+		Kind:      codextui.SessionSelectionResume,
+		Target:    codextui.SessionTarget{BackendID: m.backendID, ThreadID: threadID, CWD: m.State.CWD},
+		ResumeCWD: m.State.CWD,
+	})
+	if err != nil {
+		// Rust keeps the archive flag when resume could not replace the view.
+		m.notice = "Failed to resume thread: " + strings.TrimSpace(err.Error())
+		m.refreshTranscript()
+		return nil
+	}
+	if response.Summary != nil {
+		m.upsertSessionItem(*response.Summary)
+	}
+	delete(m.archivedAgentThreads, threadID)
+	m.applyResumeResponse(threadID, response)
+	return nil
+}
+
+// alreadyUnarchivedThreadError reports the server's missing-archive rejection:
+// another client may have unarchived the thread before its notification arrived.
+func alreadyUnarchivedThreadError(err error, threadID string) bool {
+	if err == nil || strings.TrimSpace(threadID) == "" {
+		return false
+	}
+	return strings.Contains(err.Error(), "no archived rollout found for thread id "+strings.TrimSpace(threadID))
+}
+
+// activeWriterError reports the server's "another client owns the thread"
+// rejection. Rust proceeds to resume on that error and lets the resume surface
+// the writer conflict without clearing the archive flag.
+func activeWriterError(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(err.Error())
+	return strings.Contains(text, "active writer") || strings.Contains(text, "another client")
+}
+
+// renderReadOnlyThreadNotice renders the read-only card in place of the
+// composer (Rust ReadOnlyThreadNotice).
 func (m *Model) renderReadOnlyThreadNotice() string {
 	if m == nil {
 		return ""
@@ -277,11 +405,22 @@ func (m *Model) renderReadOnlyThreadNotice() string {
 	}
 	width := max(m.width, 20)
 	contentWidth := max(width-4, 10)
+	// Rust #61486: the archived card drops the lock prefix and retry wording;
+	// only the recovery key changes ownership of the footer.
 	title := "\U0001f512  This conversation is open in another app"
-	// Rust #47112: the retry hint is lowercase ("r to retry") and only the key
-	// itself carries the accent style.
-	retry := "r to retry"
-	retryStyled := m.readOnlyAccentText("r") + " to retry"
+	hint := "r to retry"
+	hintStyled := m.readOnlyAccentText("r") + " to retry"
+	message := "Close it there and press R to continue here."
+	indent := "    "
+	if m.archivedThread {
+		title = "This thread was archived"
+		// Rust #47112: the hint is lowercase and only the key itself carries the
+		// accent style.
+		hint = "u to unarchive"
+		hintStyled = m.readOnlyAccentText("u") + " to unarchive"
+		message = "Press U to unarchive this thread and continue here."
+		indent = ""
+	}
 	lines := codextui.AdaptiveWrapLine(title, codextui.WrapOptions{
 		Width:      contentWidth,
 		BreakWords: true,
@@ -289,18 +428,18 @@ func (m *Model) renderReadOnlyThreadNotice() string {
 	if len(lines) == 0 {
 		lines = []string{title}
 	}
-	if len(lines) == 1 && codextui.DisplayWidth(lines[0])+codextui.DisplayWidth(retry)+2 <= contentWidth {
-		gap := contentWidth - codextui.DisplayWidth(lines[0]) - codextui.DisplayWidth(retry)
-		lines[0] = lines[0] + strings.Repeat(" ", gap) + retryStyled
+	if len(lines) == 1 && codextui.DisplayWidth(lines[0])+codextui.DisplayWidth(hint)+2 <= contentWidth {
+		gap := contentWidth - codextui.DisplayWidth(lines[0]) - codextui.DisplayWidth(hint)
+		lines[0] = lines[0] + strings.Repeat(" ", gap) + hintStyled
 	} else {
-		lines = append(lines, retryStyled)
+		lines = append(lines, hintStyled)
 	}
 	lines = append(lines, codextui.AdaptiveWrapLine(
-		"Close it there and press R to continue here.",
+		message,
 		codextui.WrapOptions{
 			Width:            contentWidth,
-			InitialIndent:    "    ",
-			SubsequentIndent: "    ",
+			InitialIndent:    indent,
+			SubsequentIndent: indent,
 			BreakWords:       true,
 		},
 	)...)
@@ -312,11 +451,15 @@ func (m *Model) renderReadOnlyThreadNotice() string {
 	return card + "\n" + footer
 }
 
-// readOnlyFooterLine mirrors Rust ExternalWriterNotice::footer_lines: the retry
-// key, the command-center key when one is available (Left/Esc, or Esc once Left
-// was remapped), the exit keys, and the transcript shortcut.
+// readOnlyFooterLine mirrors Rust ReadOnlyThreadNotice::footer_lines: the
+// recovery key (retry for an external writer, unarchive for an archived
+// thread), the command-center key when one is available (Left/Esc, or Esc once
+// Left was remapped), the exit keys, and the transcript shortcut.
 func (m *Model) readOnlyFooterLine() string {
 	items := []string{"r retry", "f fork"}
+	if m.archivedThread {
+		items = []string{"u unarchive"}
+	}
 	if m.commandCenterAvailable() {
 		key := "Esc"
 		if m.agentsNavigationKeyAvailable() {

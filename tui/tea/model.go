@@ -1393,6 +1393,10 @@ type Options struct {
 	OnSessionAction          SessionActionFunc
 	OnWorkingDirectoryChange WorkingDirectoryChangeFunc
 	OnResumeSession          SessionResumeFunc
+	// OnUnarchiveThread unarchives a displayed conversation before the TUI
+	// resumes it (Rust #61486: `U` in the archived read-only view). A nil hook
+	// keeps unarchiving unavailable and reports the failure as a notice.
+	OnUnarchiveThread func(threadID string) error
 	// OnSwitchBackendSession prepares a picker selection owned by another
 	// backend (Rust #58457). Nil keeps such selections unavailable without
 	// touching the displayed conversation.
@@ -2188,6 +2192,11 @@ type Model struct {
 	// readOnlyThread marks a conversation opened read-only because another app
 	// owns it (Rust #43253).
 	readOnlyThread bool
+	// archivedThread marks the read-only view shown because the conversation was
+	// archived, either before it opened or by another client while displayed
+	// (Rust ChatWidget::ReadOnlyThread::Archived, #61486). It is only meaningful
+	// while readOnlyThread is set.
+	archivedThread bool
 	// readOnlyDraft retains the composer draft while the external-writer view
 	// hides it, so a retry or a fork can continue with the same input
 	// (Rust #43253/#47185 capture_thread_input_state).
@@ -2807,6 +2816,7 @@ type Model struct {
 	onSessionAction                 SessionActionFunc
 	onWorkingDirectoryChange        WorkingDirectoryChangeFunc
 	onResumeSession                 SessionResumeFunc
+	onUnarchiveThread               func(threadID string) error
 	onSwitchBackendSession          BackendSwitchFunc
 	onPromptEdit                    PromptEditFunc
 	onRenameThread                  ThreadRenameFunc
@@ -3635,6 +3645,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onSessionAction:                  options.OnSessionAction,
 		onWorkingDirectoryChange:         options.OnWorkingDirectoryChange,
 		onResumeSession:                  options.OnResumeSession,
+		onUnarchiveThread:                options.OnUnarchiveThread,
 		onSwitchBackendSession:           options.OnSwitchBackendSession,
 		onContinueSafetyRecourse:         options.OnContinueSafetyRecourse,
 		onPromptEdit:                     options.OnPromptEdit,
@@ -4794,7 +4805,7 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 	case AgentListResultMsg:
 		return m, m.applyAgentListResult(msg)
 	case AgentThreadVisibilityMsg:
-		return m, m.setAgentPickerThreadVisibility(msg.ThreadID, msg.Archived)
+		return m, m.setAgentThreadVisibilityFromNotification(msg.ThreadID, msg.Archived)
 	case AgentThreadReadStateMsg:
 		m.applyAgentThreadReadState(msg)
 		return m, nil
@@ -7525,6 +7536,13 @@ func (m *Model) switchThreadID(threadID string) {
 	// Rust #58720: selecting a waiting thread replays the approval request that
 	// arrived while it was inactive.
 	m.openPendingApprovalForThread(threadID)
+	// Rust #61486 preserves the archived state across thread selection: a
+	// cached archived conversation reopens frozen instead of attaching live.
+	if m.agentThreadArchived(threadID) {
+		m.setArchivedThread(true)
+	} else if m.archivedView() {
+		m.setArchivedThread(false)
+	}
 }
 
 // noteThreadHandoff records the conversation a resume, fork, or agent switch
