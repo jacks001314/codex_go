@@ -20,6 +20,17 @@ func (c *Config) ValidateGuardianSyncElasticBudget() error {
 	return err
 }
 
+// ValidateGuardianAsyncElasticBudget decodes and validates the asynchronous
+// Guardian section policy (Rust #61345). It is independent of the synchronous
+// switch and only fails configuration load when enabled.
+func (c *Config) ValidateGuardianAsyncElasticBudget() error {
+	if c == nil {
+		return nil
+	}
+	_, err := guardianAsyncElasticBudgetFromValues(c.Values)
+	return err
+}
+
 // GuardianSyncElasticBudget returns the frozen synchronous Guardian section
 // policy, or nil when fixed budgeting is selected.
 func (c *Config) GuardianSyncElasticBudget() (*state.GuardianElasticBudgetConfig, error) {
@@ -27,6 +38,15 @@ func (c *Config) GuardianSyncElasticBudget() (*state.GuardianElasticBudgetConfig
 		return nil, nil
 	}
 	return guardianSyncElasticBudgetFromValues(c.Values)
+}
+
+// GuardianAsyncElasticBudget returns the frozen asynchronous Guardian section
+// policy, or nil when fixed budgeting is selected (Rust #61345).
+func (c *Config) GuardianAsyncElasticBudget() (*state.GuardianElasticBudgetConfig, error) {
+	if c == nil {
+		return nil, nil
+	}
+	return guardianAsyncElasticBudgetFromValues(c.Values)
 }
 
 // GuardianContextBudgeting returns the capture and request policy selected by
@@ -45,6 +65,14 @@ func (c *Config) GuardianContextBudgeting() codexctx.GuardianContextBudgeting {
 }
 
 func guardianSyncElasticBudgetFromValues(values map[string]any) (*state.GuardianElasticBudgetConfig, error) {
+	return guardianElasticBudgetFromValues(values, "sync")
+}
+
+func guardianAsyncElasticBudgetFromValues(values map[string]any) (*state.GuardianElasticBudgetConfig, error) {
+	return guardianElasticBudgetFromValues(values, "async")
+}
+
+func guardianElasticBudgetFromValues(values map[string]any, prefix string) (*state.GuardianElasticBudgetConfig, error) {
 	if values == nil {
 		return nil, nil
 	}
@@ -56,40 +84,42 @@ func guardianSyncElasticBudgetFromValues(values map[string]any) (*state.Guardian
 	if !ok || guardian == nil {
 		return nil, nil
 	}
-	rawEnabled, present := guardian["sync_elastic_budgeting"]
+	budgetingKey := prefix + "_elastic_budgeting"
+	sectionsKey := prefix + "_elastic_sections"
+	rawEnabled, present := guardian[budgetingKey]
 	if !present || rawEnabled == nil {
 		return nil, nil
 	}
 	enabled, ok := rawEnabled.(bool)
 	if !ok {
-		return nil, fmt.Errorf("features.guardianv2.sync_elastic_budgeting must be a boolean")
+		return nil, fmt.Errorf("features.guardianv2.%s must be a boolean", budgetingKey)
 	}
 	if !enabled {
 		return nil, nil
 	}
-	rawSections, ok := guardian["sync_elastic_sections"].(map[string]any)
+	rawSections, ok := guardian[sectionsKey].(map[string]any)
 	if !ok || len(rawSections) == 0 {
-		return nil, fmt.Errorf("sync_elastic_sections is required when sync_elastic_budgeting is enabled")
+		return nil, fmt.Errorf("%s is required when %s is enabled", sectionsKey, budgetingKey)
 	}
 	sections := make(map[state.GuardianElasticSection]state.GuardianElasticSectionLimits, len(rawSections))
 	var selectedExecToolNames []string
 	for name, rawLimits := range rawSections {
 		table, ok := rawLimits.(map[string]any)
 		if !ok {
-			return nil, fmt.Errorf("features.guardianv2.sync_elastic_sections.%s must be a table", name)
+			return nil, fmt.Errorf("features.guardianv2.%s.%s must be a table", sectionsKey, name)
 		}
 		for field := range table {
 			switch field {
 			case "min_total_section_tokens", "max_section_entry_tokens", "max_total_section_tokens", "nested_tool_names":
 			default:
-				return nil, fmt.Errorf("features.guardianv2.sync_elastic_sections.%s: unknown field %q", name, field)
+				return nil, fmt.Errorf("features.guardianv2.%s.%s: unknown field %q", sectionsKey, name, field)
 			}
 		}
-		minimum, err := guardianElasticConfigToken(table, "min_total_section_tokens", name, true)
+		minimum, err := guardianElasticConfigToken(table, "min_total_section_tokens", sectionsKey, name, true)
 		if err != nil {
 			return nil, err
 		}
-		entry, err := guardianElasticConfigToken(table, "max_section_entry_tokens", name, true)
+		entry, err := guardianElasticConfigToken(table, "max_section_entry_tokens", sectionsKey, name, true)
 		if err != nil {
 			return nil, err
 		}
@@ -100,7 +130,7 @@ func guardianSyncElasticBudgetFromValues(values map[string]any) (*state.Guardian
 		if rawMaximum, exists := table["max_total_section_tokens"]; exists && rawMaximum != nil {
 			maximum, ok := guardianElasticConfigNonNegativeInt(rawMaximum)
 			if !ok {
-				return nil, fmt.Errorf("features.guardianv2.sync_elastic_sections.%s.max_total_section_tokens must be a non-negative integer", name)
+				return nil, fmt.Errorf("features.guardianv2.%s.%s.max_total_section_tokens must be a non-negative integer", sectionsKey, name)
 			}
 			limits, err = limits.WithMaxTotalSectionTokens(maximum)
 			if err != nil {
@@ -112,9 +142,12 @@ func guardianSyncElasticBudgetFromValues(values map[string]any) (*state.Guardian
 			return nil, err
 		}
 		if _, duplicate := sections[section]; duplicate {
-			return nil, fmt.Errorf("duplicate sync_elastic_sections section: %s", name)
+			return nil, fmt.Errorf("duplicate %s section: %s", sectionsKey, name)
 		}
-		nestedToolNames, nestedErr := guardianElasticNestedToolNames(table, name, section)
+		if prefix == "async" && section == state.GuardianElasticSectionTranscriptSelectedExecResults {
+			return nil, fmt.Errorf("transcript_selected_exec_results is only supported for sync elastic budgeting")
+		}
+		nestedToolNames, nestedErr := guardianElasticNestedToolNames(table, sectionsKey, name, section)
 		if nestedErr != nil {
 			return nil, nestedErr
 		}
@@ -130,17 +163,17 @@ func guardianSyncElasticBudgetFromValues(values map[string]any) (*state.Guardian
 	return policy, nil
 }
 
-func guardianElasticConfigToken(table map[string]any, field string, section string, required bool) (int, error) {
+func guardianElasticConfigToken(table map[string]any, field string, sectionsKey string, section string, required bool) (int, error) {
 	raw, present := table[field]
 	if !present {
 		if required {
-			return 0, fmt.Errorf("features.guardianv2.sync_elastic_sections.%s.%s is required", section, field)
+			return 0, fmt.Errorf("features.guardianv2.%s.%s.%s is required", sectionsKey, section, field)
 		}
 		return 0, nil
 	}
 	value, ok := guardianElasticConfigNonNegativeInt(raw)
 	if !ok {
-		return 0, fmt.Errorf("features.guardianv2.sync_elastic_sections.%s.%s must be a non-negative integer", section, field)
+		return 0, fmt.Errorf("features.guardianv2.%s.%s.%s must be a non-negative integer", sectionsKey, section, field)
 	}
 	return value, nil
 }
@@ -154,7 +187,7 @@ func guardianElasticConfigNonNegativeInt(raw any) (int, bool) {
 // that select transcript_selected_exec_results evidence (Rust #60914). Only
 // that section may carry them, and the list must be non-empty with no blank
 // entries.
-func guardianElasticNestedToolNames(table map[string]any, name string, section state.GuardianElasticSection) ([]string, error) {
+func guardianElasticNestedToolNames(table map[string]any, sectionsKey string, name string, section state.GuardianElasticSection) ([]string, error) {
 	raw, present := table["nested_tool_names"]
 	if section != state.GuardianElasticSectionTranscriptSelectedExecResults {
 		if present {
@@ -173,7 +206,7 @@ func guardianElasticNestedToolNames(table map[string]any, name string, section s
 				values = append(values, value)
 			}
 		} else {
-			return nil, fmt.Errorf("features.guardianv2.sync_elastic_sections.%s.nested_tool_names must be a list of strings", name)
+			return nil, fmt.Errorf("features.guardianv2.%s.%s.nested_tool_names must be a list of strings", sectionsKey, name)
 		}
 	}
 	if len(values) == 0 {
