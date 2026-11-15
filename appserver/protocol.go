@@ -141,6 +141,7 @@ const (
 	MethodModelList                              Method = "model/list"
 	MethodModelProviderList                      Method = "modelProvider/list"
 	MethodModelProviderConfigWrite               Method = "modelProvider/config/write"
+	MethodModelProviderDefaultSet                Method = "modelProvider/default/set"
 	MethodModelProviderCapabilitiesRead          Method = "modelProvider/capabilities/read"
 	MethodPermissionProfileList                  Method = "permissionProfile/list"
 	MethodCollaborationModeList                  Method = "collaborationMode/list"

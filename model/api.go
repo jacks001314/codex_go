@@ -231,6 +231,12 @@ type ProviderCapabilitiesReadResponse struct {
 // ProviderListParams is the empty request body for modelProvider/list.
 type ProviderListParams struct{}
 
+// ProviderDefaultSetParams mirrors Rust's ModelProviderDefaultSetParams: the
+// configured provider used by default for new threads and unscoped model lists.
+type ProviderDefaultSetParams struct {
+	ProviderID string `json:"providerId"`
+}
+
 // ProviderListResponse mirrors Rust's app-server ModelProviderListResponse.
 type ProviderListResponse struct {
 	Data              []ProviderSummary `json:"data"`
