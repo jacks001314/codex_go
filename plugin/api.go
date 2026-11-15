@@ -1404,6 +1404,9 @@ type PluginService struct {
 	suggestedProvider             SuggestedPluginProvider
 	suggestedProviderKey          string
 	suggestedCache                *SuggestedPluginList
+	suggestedCheckedAt            time.Time
+	suggestedToolingChangedAt     string
+	suggestedToolingMarkerKnown   bool
 	suggestedGeneration           uint64
 	suggestedFetch                *suggestedPluginFetch
 	cloudCapabilities             []CapabilitySummary
