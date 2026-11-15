@@ -4,9 +4,41 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"codex_go/mcp"
 )
+
+// TestBundledReplCleanupLeavesDormantServerLikeRust mirrors Rust #61437: the
+// bundled cleanup returns an empty success without starting a never-used REPL,
+// while an ordinary hook still waits for startup.
+func TestBundledReplCleanupLeavesDormantServerLikeRust(t *testing.T) {
+	service := mcp.NewMCPService(&mcp.RuntimeConfig{Servers: map[string]mcp.ServerRegistration{
+		"node_repl": {Config: mcp.ServerConfig{
+			Command:        "mcp-definitely-missing-node-repl",
+			Enabled:        true,
+			StartupTimeout: time.Second,
+		}},
+	}})
+	defer service.Close()
+	router := NewRuntimeRouter(RuntimeServices{MCP: service})
+
+	output, err := router.Execute(context.Background(), HookMcpCall{
+		Server:                 "node_repl",
+		Tool:                   "turn_ended",
+		SkipDormantReplCleanup: true,
+	})
+	if err != nil || output.Text != "" {
+		t.Fatalf("dormant cleanup = %#v, %v; want empty success", output, err)
+	}
+	if !service.IsDormantPrivateStdio("node_repl", "") {
+		t.Fatal("bundled cleanup started the dormant REPL server")
+	}
+
+	if _, err := router.Execute(context.Background(), HookMcpCall{Server: "node_repl", Tool: "turn_ended"}); err == nil {
+		t.Fatal("ordinary hook should still wait for server startup")
+	}
+}
 
 func TestMcpHookResponseTextJoinsTextAndStructuredContent(t *testing.T) {
 	response := &mcp.MCPToolCallResponse{Content: []mcp.MCPToolCallContent{

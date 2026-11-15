@@ -48,6 +48,11 @@ func (r *RuntimeRouter) Execute(ctx context.Context, call HookMcpCall) (HookMcpO
 	if filter := mcp.ToolFilterFromServerConfig(&config); filter != nil && !filter.Allows(toolName) {
 		return HookMcpOutput{}, fmt.Errorf("MCP hook tool %q is disabled for server %q", toolName, server)
 	}
+	// Rust #61437: a bundled REPL cleanup has no process to clean up when the
+	// configured local stdio server's startup was never requested.
+	if call.SkipDormantReplCleanup && service.IsDormantPrivateStdio(server, call.EnvironmentID) {
+		return HookMcpOutput{}, nil
+	}
 	// Rust #55263: a dormant cached server starts on demand for the hook, and
 	// the hook timeout covers startup plus the call.
 	if err := service.WaitForServerStartup(ctx, server, ""); err != nil {

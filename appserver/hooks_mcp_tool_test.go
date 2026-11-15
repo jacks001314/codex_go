@@ -10,22 +10,24 @@ import (
 )
 
 type recordingMcpToolHookExecutor struct {
-	server     string
-	tool       string
-	input      map[string]any
-	envID      string
-	meta       map[string]any
-	output     string
-	structured any
-	err        error
-	timeout    time.Duration
-	called     bool
+	server      string
+	tool        string
+	skipDormant bool
+	input       map[string]any
+	envID       string
+	meta        map[string]any
+	output      string
+	structured  any
+	err         error
+	timeout     time.Duration
+	called      bool
 }
 
 func (e *recordingMcpToolHookExecutor) Execute(ctx context.Context, call HookMcpCall) (HookMcpOutput, error) {
 	e.called = true
 	e.server = call.Server
 	e.tool = call.Tool
+	e.skipDormant = call.SkipDormantReplCleanup
 	e.input = call.Input
 	e.envID = call.EnvironmentID
 	e.meta = call.Metadata
@@ -263,4 +265,54 @@ func jsonEncodeHookRunForTest(result *HookRunResult) string {
 		return ""
 	}
 	return string(data)
+}
+
+// TestBundledReplCleanupFlagLikeRust mirrors Rust #61437: only a builtin
+// node_repl/cua_repl turn_ended handler may skip dormant cleanup startup.
+func TestBundledReplCleanupFlagLikeRust(t *testing.T) {
+	runner := NewHookRunner()
+	executor := &recordingMcpToolHookExecutor{output: `{}`}
+	runner.McpToolHookExecutor = executor
+	cases := []struct {
+		builtin bool
+		server  string
+		tool    string
+		want    bool
+	}{
+		{builtin: true, server: "node_repl", tool: "turn_ended", want: true},
+		{builtin: true, server: "cua_repl", tool: "turn_ended", want: true},
+		{builtin: false, server: "node_repl", tool: "turn_ended", want: false},
+		{builtin: true, server: "security", tool: "turn_ended", want: false},
+		{builtin: true, server: "node_repl", tool: "cleanup", want: false},
+	}
+	for _, testCase := range cases {
+		server, toolName := testCase.server, testCase.tool
+		executor.skipDormant = false
+		result, err := runner.RunStop(context.Background(), &HookStopRequest{
+			ThreadID: "thread-1",
+			TurnID:   "turn-1",
+			CWD:      t.TempDir(),
+			Hooks: []HookMetadata{{
+				Key:         "mcp-stop",
+				EventName:   HookEventStop,
+				HandlerType: HookHandlerMCPTool,
+				Server:      &server,
+				Tool:        &toolName,
+				TimeoutSec:  5,
+				Source:      HookSourcePlugin,
+				Enabled:     true,
+				TrustStatus: HookTrustTrusted,
+				Builtin:     testCase.builtin,
+			}},
+		})
+		if err != nil {
+			t.Fatalf("RunStop(%s/%s) error = %v", testCase.server, testCase.tool, err)
+		}
+		if len(result.Runs) != 1 || result.Runs[0].Status != HookRunCompleted {
+			t.Fatalf("RunStop(%s/%s) runs = %+v", testCase.server, testCase.tool, result.Runs)
+		}
+		if executor.skipDormant != testCase.want {
+			t.Fatalf("RunStop(%s/%s) skip dormant = %v, want %v", testCase.server, testCase.tool, executor.skipDormant, testCase.want)
+		}
+	}
 }

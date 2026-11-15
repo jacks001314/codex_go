@@ -821,6 +821,10 @@ type MCPService struct {
 	// lookup selects the first registration of that name, which is Rust
 	// #61257's legacy routing when no environment selector is supplied.
 	serverOrder []string
+	// startupRequested records registrations whose startup was asked for at
+	// least once, even if the connection has since closed. Bundled REPL cleanup
+	// may skip only a server whose startup was never requested (Rust #61437).
+	startupRequested map[string]bool
 	// serverNames maps a registration key to its published server name. A
 	// same-named registration in another environment is stored under a scope
 	// key, and this map keeps its display name.
@@ -965,7 +969,7 @@ type cachedMCPStdioClient struct {
 }
 
 func NewMCPService(runtime *RuntimeConfig) *MCPService {
-	service := &MCPService{servers: map[string]MCPServerStatus{}, configs: map[string]ServerConfig{}, serverNames: map[string]string{}, disabledConfigs: map[string]ServerConfig{}, dynamicConfig: map[string]bool{}, required: map[string]bool{}, starting: map[string]int{}, httpClients: map[string]*cachedMCPHTTPClient{}, stdioClients: map[string]*cachedMCPStdioClient{}, oauthLogins: map[string]*OAuthLoginServer{}, resourceCache: NewMCPResourceCache(nil), generation: 1, appsMCPProductSKU: DefaultCodexAppsMCPProductSKU, invocations: NewMCPInvocationRegistry(), sharedDefinitions: newSharedMCPDefinitions()}
+	service := &MCPService{servers: map[string]MCPServerStatus{}, configs: map[string]ServerConfig{}, serverNames: map[string]string{}, disabledConfigs: map[string]ServerConfig{}, dynamicConfig: map[string]bool{}, required: map[string]bool{}, starting: map[string]int{}, startupRequested: map[string]bool{}, httpClients: map[string]*cachedMCPHTTPClient{}, stdioClients: map[string]*cachedMCPStdioClient{}, oauthLogins: map[string]*OAuthLoginServer{}, resourceCache: NewMCPResourceCache(nil), generation: 1, appsMCPProductSKU: DefaultCodexAppsMCPProductSKU, invocations: NewMCPInvocationRegistry(), sharedDefinitions: newSharedMCPDefinitions()}
 	if runtime != nil {
 		// Rust reads `config.apps_mcp_product_sku.as_deref().unwrap_or(..)`; Go's
 		// runtime config cannot distinguish an absent SKU from an empty one, so
@@ -1156,6 +1160,13 @@ func (s *MCPService) ApplyRuntimeConfig(runtime *RuntimeConfig) {
 	s.dynamicConfig = refreshed.dynamicConfig
 	s.required = refreshed.required
 	s.starting = refreshed.starting
+	nextStartupRequested := map[string]bool{}
+	for key := range s.configs {
+		if s.startupRequested[key] || nextHTTPClients[key] != nil || nextStdioClients[key] != nil {
+			nextStartupRequested[key] = true
+		}
+	}
+	s.startupRequested = nextStartupRequested
 	s.httpClients = nextHTTPClients
 	s.stdioClients = nextStdioClients
 	s.oauthLogins = map[string]*OAuthLoginServer{}
@@ -1855,6 +1866,64 @@ func (s *MCPService) WaitForServerStartup(ctx context.Context, name string, thre
 		}
 		return nil
 	}
+}
+
+func (s *MCPService) markStartupRequestedLocked(key string) {
+	if s == nil || strings.TrimSpace(key) == "" {
+		return
+	}
+	if s.startupRequested == nil {
+		s.startupRequested = map[string]bool{}
+	}
+	s.startupRequested[key] = true
+}
+
+// IsDormantPrivateStdio reports whether a bundled REPL cleanup has nothing to
+// clean up: the registration is configured (not plugin-contributed), local,
+// uses the legacy stdio transport, was never asked to start, and has no live
+// connection. Other calls still wait for startup (Rust #61437).
+func (s *MCPService) IsDormantPrivateStdio(name string, environmentID string) bool {
+	if s == nil {
+		return false
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return false
+	}
+	var environment *string
+	if trimmed := strings.TrimSpace(environmentID); trimmed != "" {
+		environment = &trimmed
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key, ok := s.serverKeyForEnvironmentLocked(name, environment)
+	if !ok {
+		return false
+	}
+	config, ok := s.configs[key]
+	if !ok || !config.Enabled {
+		return false
+	}
+	if strings.TrimSpace(config.Command) == "" || !config.IsLocalEnvironment() {
+		return false
+	}
+	if config.ProtocolMode != MCPProtocolLegacy {
+		return false
+	}
+	status, ok := s.servers[key]
+	if !ok || status.source != CatalogSourceConfig {
+		return false
+	}
+	if s.startupRequested[key] || s.starting[key] > 0 {
+		return false
+	}
+	if cached := s.stdioClients[key]; cached != nil && cached.client != nil && !cached.client.isClosed() {
+		return false
+	}
+	if cached := s.httpClients[key]; cached != nil && cached.client != nil && !cached.client.isClosed() {
+		return false
+	}
+	return true
 }
 
 func (s *MCPService) ListStatusCheckedWithObserver(params *MCPListServerStatusParams, observer MCPStartupObserver) (*MCPListServerStatusResponse, error) {
@@ -2591,6 +2660,7 @@ func (s *MCPService) markServerStartupStarted(name string) {
 	if s.starting == nil {
 		s.starting = map[string]int{}
 	}
+	s.markStartupRequestedLocked(name)
 	s.starting[name]++
 	s.mu.Unlock()
 	s.notifyStartupStatus(name, MCPServerStarting, nil, nil)
@@ -3737,6 +3807,7 @@ func (s *MCPService) httpClientForServer(name string, config *ServerConfig) *htt
 	if s.httpClients == nil {
 		s.httpClients = map[string]*cachedMCPHTTPClient{}
 	}
+	s.markStartupRequestedLocked(name)
 	openAIForm := s.openAIForm
 	userVerification := s.serverAllowsUserVerificationLocked(name)
 	sharedHTTPClient := s.sharedHTTPClient
@@ -3917,6 +3988,7 @@ func (s *MCPService) stdioClientForServer(name string, config *ServerConfig) *st
 	if s.stdioClients == nil {
 		s.stdioClients = map[string]*cachedMCPStdioClient{}
 	}
+	s.markStartupRequestedLocked(name)
 	openAIForm := s.openAIForm
 	userVerification := s.serverAllowsUserVerificationLocked(name)
 	authChanges := s.authChangeSource

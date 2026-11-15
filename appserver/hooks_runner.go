@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"codex_go/envutil"
+	"codex_go/mcp"
 	"codex_go/runtimeutil"
 	"codex_go/telemetry"
 )
@@ -44,12 +45,15 @@ type HookRunner struct {
 // HookMcpCall mirrors Rust HookMcpCall: one MCP tool call requested by a
 // configured mcp_tool hook handler.
 type HookMcpCall struct {
-	Server        string
-	Tool          string
-	EnvironmentID string
-	Metadata      map[string]any
-	Input         map[string]any
-	Timeout       time.Duration
+	// SkipDormantReplCleanup lets a bundled REPL cleanup return an empty
+	// success when the local stdio server was never started (Rust #61437).
+	SkipDormantReplCleanup bool
+	Server                 string
+	Tool                   string
+	EnvironmentID          string
+	Metadata               map[string]any
+	Input                  map[string]any
+	Timeout                time.Duration
 }
 
 // HookMcpOutput mirrors Rust HookMcpOutput: the text interpreted using
@@ -454,6 +458,9 @@ func (r *HookRunner) runMcpToolHook(ctx context.Context, metadata HookMetadata, 
 	}
 	execCtx, cancel := context.WithTimeout(ctx, remaining)
 	output, err := r.McpToolHookExecutor.Execute(execCtx, HookMcpCall{
+		SkipDormantReplCleanup: metadata.Builtin &&
+			mcp.IsNodeReplBackedServer(ptrStringValue(metadata.Server)) &&
+			ptrStringValue(metadata.Tool) == "turn_ended",
 		Server:        ptrStringValue(metadata.Server),
 		Tool:          ptrStringValue(metadata.Tool),
 		EnvironmentID: strings.TrimSpace(ptrStringValue(metadata.EnvironmentID)),
