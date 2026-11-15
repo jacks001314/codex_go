@@ -11,6 +11,7 @@ import (
 	contextfrag "codex_go/context"
 	"codex_go/install"
 	"codex_go/model"
+	"codex_go/protocol"
 	"codex_go/retainedctx"
 	"codex_go/session"
 	"codex_go/tool"
@@ -243,6 +244,10 @@ type agentCompactRunner struct {
 	// promptCacheTTL is the compaction turn's minimum prompt-cache lifetime
 	// (Rust turn_context.prompt_cache_ttl, #59480).
 	promptCacheTTL string
+	// requestCountry is the trusted host country captured by the step that
+	// issued the compaction (Rust #61535 compaction_responses_metadata). The
+	// zero value omits the field.
+	requestCountry protocol.RequestCountry
 	// clientMetadata is the compaction turn's Responses client metadata
 	// (Rust `Session::compaction_responses_metadata`): the turn-metadata
 	// document reports the compaction request kind and the turn's identity.
@@ -324,6 +329,7 @@ func (r *agentCompactRunner) Compact(ctx context.Context, request *compact.Reque
 		// program must not inherit a different turn's selection (#48224).
 		CyberAccessProgram: strings.TrimSpace(r.cyberAccessProgram),
 		PromptCacheTTL:     strings.TrimSpace(r.promptCacheTTL),
+		RequestCountry:     r.requestCountry,
 	})
 	if err != nil {
 		return nil, err

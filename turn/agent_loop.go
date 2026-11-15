@@ -126,6 +126,9 @@ type AgentStepSettings struct {
 	ReasoningSummary string
 	ServiceTier      string
 	ClientMetadata   map[string]string
+	// RequestCountry replaces the trusted host country for later sampling steps.
+	// Nil preserves the current value (Rust #61535 TurnSettingsUpdate).
+	RequestCountry *protocol.RequestCountry
 	// HookPermissionMode is the step's effective approval policy in the hook
 	// vocabulary (Rust #45248 hook_permission_mode(step_context.settings)).
 	HookPermissionMode string
@@ -206,7 +209,10 @@ type AgentLoopRequest struct {
 	// snake_case, empty when none was selected or the provider is not OpenAI).
 	// Rust carries it on the turn context and copies it into every Prompt
 	// (#44893), so it reaches the request body only for a ChatGPT account.
-	CyberAccessProgram      string
+	CyberAccessProgram string
+	// RequestCountry is the trusted host country captured for this turn's
+	// Responses requests (Rust #61535).
+	RequestCountry          protocol.RequestCountry
 	ClientMetadata          map[string]string
 	ClientMetadataTransform ClientMetadataTransform
 	// Trace is the W3C trace context of the request that started this turn
@@ -431,6 +437,7 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 		stepReasoningEffort := request.ReasoningEffort
 		stepReasoningSummary := request.ReasoningSummary
 		stepServiceTier := request.ServiceTier
+		stepRequestCountry := request.RequestCountry
 		stepHookPermissionMode := ""
 		if iteration > 0 && request.StepSettings != nil {
 			if settings := request.StepSettings(); settings != nil {
@@ -440,6 +447,9 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 				stepReasoningEffort = settings.ReasoningEffort
 				stepReasoningSummary = settings.ReasoningSummary
 				stepServiceTier = settings.ServiceTier
+				if settings.RequestCountry != nil {
+					stepRequestCountry = *settings.RequestCountry
+				}
 				if mode := strings.TrimSpace(settings.HookPermissionMode); mode != "" {
 					stepHookPermissionMode = mode
 				}
@@ -648,6 +658,7 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			PromptCacheKey:               request.PromptCacheKey,
 			PromptCacheTTL:               request.PromptCacheTTL,
 			CyberAccessProgram:           request.CyberAccessProgram,
+			RequestCountry:               stepRequestCountry,
 			RequiredCyberAccessPrograms:  append([]string(nil), request.RequiredCyberAccessPrograms...),
 			ClientMetadata:               cloneStringMap(clientMetadata),
 			MCPAttribution:               l.mcpAttributionSnapshot(),

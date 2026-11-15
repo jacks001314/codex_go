@@ -358,6 +358,9 @@ type TurnStartParams struct {
 	// thread's tier and is ignored when the request steers a turn (Rust
 	// TurnStartParams::service_tier_for_turn).
 	ServiceTierForTurn *string `json:"serviceTierForTurn,omitempty"`
+	// RequestCountry overrides the trusted host country for this turn's
+	// Codex-backend Responses requests ("XX" means explicitly unknown).
+	RequestCountry *string `json:"requestCountry,omitempty"`
 	// DirectOnlyToolNamespaces overrides the thread's direct-only Code Mode
 	// namespaces for the turn this request starts. A nil pointer inherits the
 	// thread configuration; a non-nil empty slice clears it for this turn.
@@ -500,6 +503,11 @@ func (p *TurnStartParams) Validate() error {
 	}
 	if err := validateTurnEnvironmentCWDs(p.Environments); err != nil {
 		return err
+	}
+	if p.RequestCountry != nil {
+		if _, err := protocol.ParseRequestCountry(*p.RequestCountry); err != nil {
+			return err
+		}
 	}
 	if p.ToolOutput != nil {
 		if strings.TrimSpace(p.ToolOutput.Name) == "" {
@@ -699,6 +707,9 @@ type TurnSettingsUpdateParams struct {
 	// of the active turn without changing the thread's saved default selection.
 	// A non-nil empty slice explicitly selects no environments.
 	Environments []map[string]any `json:"environments,omitempty"`
+	// RequestCountry replaces the trusted host country for subsequent steps of
+	// this turn without changing the thread default ("XX" means unknown).
+	RequestCountry *string `json:"requestCountry,omitempty"`
 }
 
 func (p *TurnSettingsUpdateParams) MarshalJSON() ([]byte, error) {
@@ -760,8 +771,13 @@ func (p *TurnSettingsUpdateParams) Validate() error {
 	if strings.TrimSpace(p.TurnID) == "" {
 		return fmt.Errorf("%w: turnId is required", ErrInvalidTurnRequest)
 	}
-	if p.ApprovalsReviewer == nil && p.Model == nil && p.Effort == nil && p.Summary == nil && !p.ServiceTierSet && p.ServiceTier == nil && p.Environments == nil {
+	if p.ApprovalsReviewer == nil && p.Model == nil && p.Effort == nil && p.Summary == nil && !p.ServiceTierSet && p.ServiceTier == nil && p.Environments == nil && p.RequestCountry == nil {
 		return fmt.Errorf("%w: at least one turn setting update is required", ErrInvalidTurnRequest)
+	}
+	if p.RequestCountry != nil {
+		if _, err := protocol.ParseRequestCountry(*p.RequestCountry); err != nil {
+			return err
+		}
 	}
 	if err := validateTurnEnvironmentCWDs(p.Environments); err != nil {
 		return err

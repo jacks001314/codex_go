@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"codex_go/model"
+	"codex_go/protocol"
 	"codex_go/sandbox"
 	"codex_go/session"
 	"github.com/google/uuid"
@@ -315,6 +316,10 @@ type SettingsUpdateParams struct {
 	PersonalitySet             bool                       `json:"-"`
 	RuntimeWorkspaceRoots      []string                   `json:"runtimeWorkspaceRoots,omitempty"`
 	Extra                      map[string]string          `json:"extra,omitempty"`
+	// RequestCountry replaces the trusted host country used by future turns.
+	// Omitted or null preserves the current value; "XX" selects the explicit
+	// unknown country (Rust #61535).
+	RequestCountry *string `json:"requestCountry,omitempty"`
 }
 
 func (p *SettingsUpdateParams) UnmarshalJSON(data []byte) error {
@@ -414,21 +419,22 @@ type Settings struct {
 	ApprovalsReviewer string `json:"approvalsReviewer"`
 	// RequestedApprovalsReviewer keeps the explicit selection so a resume can
 	// restore it once a requirement is removed (Rust #59272).
-	RequestedApprovalsReviewer string         `json:"requestedApprovalsReviewer,omitempty"`
-	SandboxPolicy              string         `json:"sandboxPolicy"`
-	ActivePermissionProfile    *string        `json:"activePermissionProfile,omitempty"`
-	Model                      string         `json:"model"`
-	ModelProvider              string         `json:"modelProvider"`
-	ServiceTier                *string        `json:"serviceTier"`
-	Effort                     *string        `json:"effort,omitempty"`
-	Summary                    *string        `json:"summary,omitempty"`
-	CollaborationMode          map[string]any `json:"collaborationMode,omitempty"`
-	MultiAgentMode             string         `json:"multiAgentMode"`
-	Personality                *string        `json:"personality,omitempty"`
-	PersonalitySet             bool           `json:"-"`
-	InstructionSources         []string       `json:"instructionSources,omitempty"`
-	InstructionSourcesSet      bool           `json:"-"`
-	RuntimeWorkspaceRoots      []string       `json:"runtimeWorkspaceRoots,omitempty"`
+	RequestedApprovalsReviewer string                  `json:"requestedApprovalsReviewer,omitempty"`
+	SandboxPolicy              string                  `json:"sandboxPolicy"`
+	ActivePermissionProfile    *string                 `json:"activePermissionProfile,omitempty"`
+	Model                      string                  `json:"model"`
+	ModelProvider              string                  `json:"modelProvider"`
+	ServiceTier                *string                 `json:"serviceTier"`
+	Effort                     *string                 `json:"effort,omitempty"`
+	Summary                    *string                 `json:"summary,omitempty"`
+	CollaborationMode          map[string]any          `json:"collaborationMode,omitempty"`
+	MultiAgentMode             string                  `json:"multiAgentMode"`
+	Personality                *string                 `json:"personality,omitempty"`
+	PersonalitySet             bool                    `json:"-"`
+	InstructionSources         []string                `json:"instructionSources,omitempty"`
+	InstructionSourcesSet      bool                    `json:"-"`
+	RuntimeWorkspaceRoots      []string                `json:"runtimeWorkspaceRoots,omitempty"`
+	RequestCountry             protocol.RequestCountry `json:"requestCountry,omitempty"`
 }
 
 func (s *Settings) MarshalJSON() ([]byte, error) {
@@ -453,6 +459,7 @@ func (s *Settings) MarshalJSON() ([]byte, error) {
 		Personality                *string              `json:"personality"`
 		InstructionSources         []string             `json:"instructionSources"`
 		RuntimeWorkspaceRoots      []string             `json:"runtimeWorkspaceRoots"`
+		RequestCountry             any                  `json:"requestCountry,omitempty"`
 	}{
 		DisabledPluginIDs:          append([]string{}, s.DisabledPluginIDs...),
 		CWD:                        s.CWD,
@@ -471,6 +478,7 @@ func (s *Settings) MarshalJSON() ([]byte, error) {
 		Personality:                cloneString(s.Personality),
 		InstructionSources:         append([]string(nil), s.InstructionSources...),
 		RuntimeWorkspaceRoots:      append([]string(nil), s.RuntimeWorkspaceRoots...),
+		RequestCountry:             requestCountryJSONValue(s.RequestCountry),
 	})
 }
 
@@ -488,6 +496,7 @@ func (s *Settings) UnmarshalJSON(data []byte) error {
 		ApprovalPolicy          json.RawMessage `json:"approvalPolicy"`
 		SandboxPolicy           json.RawMessage `json:"sandboxPolicy"`
 		ActivePermissionProfile json.RawMessage `json:"activePermissionProfile"`
+		RequestCountry          json.RawMessage `json:"requestCountry"`
 	}
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		return err
@@ -508,8 +517,25 @@ func (s *Settings) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	settings.ActivePermissionProfile = activeProfile
+	if raw := bytes.TrimSpace(decoded.RequestCountry); len(raw) > 0 && string(raw) != "null" {
+		var country protocol.RequestCountry
+		if err := json.Unmarshal(raw, &country); err != nil {
+			return err
+		}
+		settings.RequestCountry = country
+	}
 	*s = settings
 	return nil
+}
+
+// requestCountryJSONValue renders an omitted country as nil so the settings
+// snapshot omits the field, while an explicit unknown country renders as JSON
+// null (Rust #61535).
+func requestCountryJSONValue(country protocol.RequestCountry) any {
+	if country.IsOmitted() {
+		return nil
+	}
+	return country
 }
 
 // settingsApprovalPolicyMode normalizes the wire form of approvalPolicy into
@@ -994,6 +1020,13 @@ func (s *ThreadExtraService) UpdateSettingsWithCommit(params *SettingsUpdatePara
 	}
 	if params.RuntimeWorkspaceRoots != nil {
 		settings.RuntimeWorkspaceRoots = append([]string(nil), params.RuntimeWorkspaceRoots...)
+	}
+	if params.RequestCountry != nil {
+		country, err := protocol.ParseRequestCountry(*params.RequestCountry)
+		if err != nil {
+			return nil, nil, err
+		}
+		settings.RequestCountry = country
 	}
 	s.settings[params.ThreadID] = settings
 	committed := cloneSettings(settings)

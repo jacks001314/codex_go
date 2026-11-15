@@ -2011,6 +2011,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		PromptCacheTTL:               runConfig.PromptCacheTTL,
 		ServiceTier:                  runConfig.ServiceTier,
 		CyberAccessProgram:           runConfig.CyberAccessProgram,
+		RequestCountry:               runConfig.RequestCountry,
 		RequiredCyberAccessPrograms:  r.requiredCyberAccessProgramsForThread(threadID),
 		UsageTags:                    runConfig.UsageTags,
 		ClientMetadata:               cloneStringMap(runConfig.ClientMetadata),
@@ -2728,6 +2729,7 @@ func (r *RuntimeRouter) runReviewRuntime(ctx context.Context, params *turn.TurnS
 		PromptCacheKey:               runConfig.PromptCacheKey,
 		PromptCacheTTL:               runConfig.PromptCacheTTL,
 		ServiceTier:                  runConfig.ServiceTier,
+		RequestCountry:               runConfig.RequestCountry,
 		UsageTags:                    runConfig.UsageTags,
 		ClientMetadata:               cloneStringMap(runConfig.ClientMetadata),
 		Trace:                        params.Trace,
@@ -7401,7 +7403,7 @@ func (r *RuntimeRouter) compactThreadWithHistory(ctx context.Context, params *ru
 	compacted := backgroundCompacted
 	if compacted == nil {
 		remoteOptions := &compact.RemoteOptions{
-			Runner:               r.compactRunnerForRecord(record, request, params.Model, r.compactProgramForAttempt(params, record), ""),
+			Runner:               r.compactRunnerForRecord(record, request, params.Model, r.compactProgramForAttempt(params, record), r.capturedRequestCountryForTurn(params.ThreadID, request.TurnID), ""),
 			MaxSummaryChars:      4000,
 			InitialContext:       initialContext,
 			InjectBeforeLastUser: true,
@@ -7791,7 +7793,7 @@ func (r *RuntimeRouter) compactProgramForAttempt(params *runtimeCompactRequest, 
 	return program
 }
 
-func (r *RuntimeRouter) compactRunnerForRecord(record *session.Record, request *compact.Request, modelOverride string, cyberAccessProgram string, promptCacheTTL string) compact.RemoteRunner {
+func (r *RuntimeRouter) compactRunnerForRecord(record *session.Record, request *compact.Request, modelOverride string, cyberAccessProgram string, requestCountry protocol.RequestCountry, promptCacheTTL string) compact.RemoteRunner {
 	if r == nil {
 		return nil
 	}
@@ -7868,6 +7870,7 @@ func (r *RuntimeRouter) compactRunnerForRecord(record *session.Record, request *
 		modelHash:          modelHash,
 		effort:             compactionEffort,
 		cyberAccessProgram: strings.TrimSpace(cyberAccessProgram),
+		requestCountry:     requestCountry,
 		promptCacheTTL:     strings.TrimSpace(promptCacheTTL),
 		clientMetadata:     r.compactResponsesClientMetadata(record, request, compactModel),
 		sessionID:          firstNonEmpty(strings.TrimSpace(record.SessionID), strings.TrimSpace(string(record.ID))),
@@ -8779,6 +8782,9 @@ type appTurnRunConfig struct {
 	// override (Rust #59481). Nil inherits the thread configuration and an empty
 	// non-nil slice clears it for this turn only.
 	DirectOnlyToolNamespaces *[]string
+	// RequestCountry is the trusted host country captured for this turn
+	// (Rust #61535). The zero value omits the field.
+	RequestCountry protocol.RequestCountry
 	// UsageTags is the turn's usage-tag diagnostics document (Rust #46501),
 	// carried on the sampling-request span as `tags_json`.
 	UsageTags                       map[string]string
@@ -9279,6 +9285,7 @@ func (r *RuntimeRouter) appTurnConfigWithOptions(ctx context.Context, threadID s
 		PromptCacheTTL:                 stringPtrValue(params.PromptCacheTTL),
 		ServiceTier:                    serviceTier,
 		CyberAccessProgram:             appCyberAccessProgramForTurn(params, modelProviderConfig.ProviderID),
+		RequestCountry:                 requestCountryForTurn(r.requestCountryForThread(threadID), params),
 		DirectOnlyToolNamespaces:       cloneStringSlicePointer(params.DirectOnlyToolNamespaces),
 		// Rust #46501: the span carries the usage-tag document alongside the
 		// turn's resolved settings.
@@ -10161,6 +10168,10 @@ func (r *RuntimeRouter) turnStepSettingsProvider(threadID string, turnID string)
 			settings.ReasoningEffort = strings.TrimSpace(active.RunConfig.ReasoningEffort)
 			settings.ReasoningSummary = strings.TrimSpace(active.RunConfig.ReasoningSummary)
 			settings.ServiceTier = strings.TrimSpace(active.RunConfig.ServiceTier)
+			if !active.RunConfig.RequestCountry.IsOmitted() {
+				country := active.RunConfig.RequestCountry
+				settings.RequestCountry = &country
+			}
 			settings.ClientMetadata = stepTurnClientMetadata(active.RunConfig.ClientMetadata, r.modelInfoForRuntime(settings.Model), settings.Model, settings.ReasoningEffort)
 		}
 		if settings.Model == "" && active.Params != nil {

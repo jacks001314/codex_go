@@ -1712,6 +1712,9 @@ type ThreadStartParams struct {
 	// AllowedTools restricts the thread's tool inventory for its lifetime. An
 	// empty list disables all tools; nil preserves ordinary setup (Rust #45711).
 	AllowedTools *[]string `json:"allowedTools,omitempty"`
+	// RequestCountry is the trusted host country for the thread's Responses
+	// requests; "XX" selects the explicit unknown country (Rust #61535).
+	RequestCountry *string `json:"requestCountry,omitempty"`
 }
 
 func (p *ThreadStartParams) UnmarshalJSON(data []byte) error {
@@ -1744,6 +1747,9 @@ func (p *ThreadStartParams) Validate() error {
 	}
 	if _, _, err := threadUnloadDelayFromConfig(p.Config); err != nil {
 		return jsonRPCInvalidRequest(err.Error())
+	}
+	if err := validateRequestCountry(p.RequestCountry); err != nil {
+		return err
 	}
 	tools, err := normalizeThreadStartDynamicTools(p.DynamicTools)
 	if err != nil {
@@ -1997,6 +2003,8 @@ type ThreadResumeParams struct {
 	RuntimeWorkspaceRoots []string                  `json:"runtimeWorkspaceRoots,omitempty"`
 	// AllowedTools must be supplied again when resuming, matching Rust #45711.
 	AllowedTools *[]string `json:"allowedTools,omitempty"`
+	// RequestCountry replaces the saved trusted host country when supplied.
+	RequestCountry *string `json:"requestCountry,omitempty"`
 }
 
 func (p *ThreadResumeParams) UnmarshalJSON(data []byte) error {
@@ -2041,6 +2049,19 @@ func (p *ThreadResumeParams) Validate() error {
 		return err
 	}
 	if _, _, err := threadUnloadDelayFromConfig(p.Config); err != nil {
+		return jsonRPCInvalidRequest(err.Error())
+	}
+	if err := validateRequestCountry(p.RequestCountry); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateRequestCountry(value *string) error {
+	if value == nil {
+		return nil
+	}
+	if _, err := protocol.ParseRequestCountry(*value); err != nil {
 		return jsonRPCInvalidRequest(err.Error())
 	}
 	return nil

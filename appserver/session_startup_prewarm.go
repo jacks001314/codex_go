@@ -144,6 +144,9 @@ func (r *RuntimeRouter) scheduleStartupPrewarm(response *ThreadStartResponse) {
 			Model:           modelID,
 			ServiceTier:     serviceTier,
 			ReasoningEffort: effort,
+			// Rust #61535: the startup prewarm turn captures the thread's
+			// trusted host country like any other sampling request.
+			RequestCountry: r.requestCountryForThread(threadID),
 			// Rust #47912: thread/start registers the creating connection before
 			// the startup prewarm dials, so the handshake can request attestation
 			// for the thread. The request therefore carries the thread id and the
@@ -271,9 +274,12 @@ func (r *RuntimeRouter) scheduleHistoryPrewarm(threadID string) {
 			Model:           modelID,
 			ServiceTier:     strings.TrimSpace(record.Metadata.ServiceTier),
 			ReasoningEffort: effort,
-			Instructions:    instructions,
-			InputItems:      historyItems,
-			ThreadID:        threadID,
+			// Rust #61535: the idle-thread prewarm turn captures the thread's
+			// saved country; a later live update keeps the socket reusable.
+			RequestCountry: r.requestCountryForThread(threadID),
+			Instructions:   instructions,
+			InputItems:     historyItems,
+			ThreadID:       threadID,
 			// Rust #47912 applies to the idle-thread prewarm as well: the
 			// handshake resolves attestation through the creating connection.
 			AttestationProvider: r.appServerAttestationProvider(),

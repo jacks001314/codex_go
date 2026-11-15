@@ -26,6 +26,7 @@ import (
 	"codex_go/mcp"
 	"codex_go/model"
 	"codex_go/network"
+	"codex_go/protocol"
 	"codex_go/retainedctx"
 	"codex_go/sandbox"
 	"codex_go/session"
@@ -781,6 +782,13 @@ type guardianWebSocketRunner interface {
 }
 
 func (r *guardianSessionRunner) Prewarm(ctx context.Context) error {
+	return r.PrewarmWithRequestCountry(ctx, protocol.RequestCountry{})
+}
+
+// PrewarmWithRequestCountry arms the reviewer trunk with the captured parent
+// step country so the generate:false warmup matches the review request
+// (Rust #61535 startup prewarm settings capture).
+func (r *guardianSessionRunner) PrewarmWithRequestCountry(ctx context.Context, country protocol.RequestCountry) error {
 	if r == nil || r.agent == nil {
 		return nil
 	}
@@ -796,6 +804,7 @@ func (r *guardianSessionRunner) Prewarm(ctx context.Context) error {
 	response, err := prewarmer.Prewarm(ctx, &model.AgentRequest{
 		Model: model.DefaultApprovalReviewPreferredModel, TaskKind: model.AgentTaskReview, Originator: "guardian",
 		ClientMetadata: map[string]string{"x-openai-subagent": "guardian"},
+		RequestCountry: country,
 	})
 	if err == nil && response != nil && strings.TrimSpace(response.ResponseID) != "" {
 		r.previous = strings.TrimSpace(response.ResponseID)
@@ -1007,10 +1016,16 @@ func newModelGuardianReviewer(agent model.AgentRunner) GuardianReviewer {
 }
 
 func (r *modelGuardianReviewer) Prewarm(ctx context.Context) error {
+	return r.PrewarmWithRequestCountry(ctx, protocol.RequestCountry{})
+}
+
+// PrewarmWithRequestCountry mirrors Rust prepare_review_prewarm, which captures
+// the parent startup turn's request country before warming the reviewer pool.
+func (r *modelGuardianReviewer) PrewarmWithRequestCountry(ctx context.Context, country protocol.RequestCountry) error {
 	if r == nil || r.agent == nil {
 		return nil
 	}
-	return r.sessionFor(guardianReviewerTrunkSession).Prewarm(ctx)
+	return r.sessionFor(guardianReviewerTrunkSession).PrewarmWithRequestCountry(ctx, country)
 }
 
 // guardianReviewerTrunkSession is the session that receives startup prewarming
@@ -1863,11 +1878,14 @@ reviewAttempt:
 		// (turn_start_options.cyber_access_program), normalized to Blue for
 		// either Daybreak selection.
 		CyberAccessProgram: plan.CyberAccessProgram,
-		TaskKind:           model.AgentTaskReview,
-		ThreadID:           threadID,
-		SessionID:          plan.SessionID,
-		TurnID:             classificationTurnID,
-		Originator:         "guardian",
+		// Rust #61535 forwards the captured parent step country so the review
+		// request carries the same trusted host metadata as the reviewed turn.
+		RequestCountry: plan.RequestCountry,
+		TaskKind:       model.AgentTaskReview,
+		ThreadID:       threadID,
+		SessionID:      plan.SessionID,
+		TurnID:         classificationTurnID,
+		Originator:     "guardian",
 		// Rust #40742 preserves the parent's persistence setting for the
 		// reviewer session; Go carries it as the request's ephemeral intent.
 		Ephemeral: plan.Ephemeral,

@@ -299,6 +299,12 @@ func (c *runtimeAgentController) spawnAgentWithReservedID(ctx context.Context, a
 	// child's authorization. Keep an empty independent history so later child
 	// items are recorded while the fallback cannot re-read the forked parent.
 	c.router.captureGuardianReviewHistory(string(threadID), nil)
+	// Rust #61535: a spawned agent inherits the issuing step's captured trusted
+	// host country as its thread default.
+	if country := c.router.capturedRequestCountryForThread(c.parentID); !country.IsOmitted() {
+		record.Metadata.Extra = ensureRecordExtra(record.Metadata.Extra)
+		record.Metadata.Extra[requestCountryExtraKey] = requestCountryExtraValue(country)
+	}
 	if err := c.router.runtimeSaveThreadRecord(record); err != nil {
 		c.cleanupProvisionalSpawn(string(threadID))
 		return nil, recordRuntimeAgentSpawnFailure(c, ctx, err, tool.AgentErrorContextChildStartup, forkMode)

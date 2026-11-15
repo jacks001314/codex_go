@@ -458,26 +458,30 @@ type responsesAgentRequest struct {
 	// Rust #49675: keep the routing fields first. encoding/json serializes
 	// struct fields in declaration order, and gateways may inspect a request
 	// body incrementally before buffering a potentially multi-megabyte input.
-	Model                string                       `json:"model"`
-	Stream               bool                         `json:"stream"`
-	ServiceTier          string                       `json:"service_tier,omitempty"`
-	Instructions         string                       `json:"instructions,omitempty"`
-	Input                []any                        `json:"input"`
-	Tools                []any                        `json:"tools,omitempty"`
-	ToolChoice           string                       `json:"tool_choice,omitempty"`
-	ParallelToolCalls    bool                         `json:"parallel_tool_calls"`
-	Reasoning            *responsesReasoning          `json:"reasoning,omitempty"`
-	Store                bool                         `json:"store"`
-	StreamOptions        *responsesStreamOptions      `json:"stream_options,omitempty"`
-	Include              []string                     `json:"include,omitempty"`
-	PromptCacheKey       string                       `json:"prompt_cache_key,omitempty"`
-	PromptCacheOptions   *responsesPromptCacheOptions `json:"prompt_cache_options,omitempty"`
-	Text                 *responsesTextParam          `json:"text,omitempty"`
-	ClientMetadata       map[string]string            `json:"client_metadata,omitempty"`
-	AccessPrograms       *AccessPrograms              `json:"access_programs,omitempty"`
-	UseResponsesLite     bool                         `json:"-"`
-	IncludeTimingMetrics bool                         `json:"-"`
-	BetaFeaturesHeader   string                       `json:"-"`
+	Model              string                       `json:"model"`
+	Stream             bool                         `json:"stream"`
+	ServiceTier        string                       `json:"service_tier,omitempty"`
+	Instructions       string                       `json:"instructions,omitempty"`
+	Input              []any                        `json:"input"`
+	Tools              []any                        `json:"tools,omitempty"`
+	ToolChoice         string                       `json:"tool_choice,omitempty"`
+	ParallelToolCalls  bool                         `json:"parallel_tool_calls"`
+	Reasoning          *responsesReasoning          `json:"reasoning,omitempty"`
+	Store              bool                         `json:"store"`
+	StreamOptions      *responsesStreamOptions      `json:"stream_options,omitempty"`
+	Include            []string                     `json:"include,omitempty"`
+	PromptCacheKey     string                       `json:"prompt_cache_key,omitempty"`
+	PromptCacheOptions *responsesPromptCacheOptions `json:"prompt_cache_options,omitempty"`
+	Text               *responsesTextParam          `json:"text,omitempty"`
+	ClientMetadata     map[string]string            `json:"client_metadata,omitempty"`
+	AccessPrograms     *AccessPrograms              `json:"access_programs,omitempty"`
+	// RequestCountry is omitted when the host did not supply one; an explicit
+	// unknown country serializes as null so the server cannot fall back to
+	// request provenance (Rust #61535).
+	RequestCountry       *protocol.RequestCountry `json:"request_country,omitempty"`
+	UseResponsesLite     bool                     `json:"-"`
+	IncludeTimingMetrics bool                     `json:"-"`
+	BetaFeaturesHeader   string                   `json:"-"`
 }
 
 // responsesPromptCacheOptions mirrors Rust's PromptCacheOptions (#59480).
@@ -1251,6 +1255,9 @@ func (r *ResponsesAgentRunner) Prewarm(ctx context.Context, request *AgentReques
 	if apiRequest.AccessPrograms != nil {
 		payload["access_programs"] = apiRequest.AccessPrograms
 	}
+	if apiRequest.RequestCountry != nil {
+		payload["request_country"] = apiRequest.RequestCountry
+	}
 	requestStartedAt := time.Now()
 	r.recordWebsocketContinuation("full", "prewarm", "warmup", false)
 	writeErr := writeResponsesWebsocketMessage(connectCtx, conn, websocket.MessageText, marshalResponsesMessage(payload))
@@ -1984,6 +1991,9 @@ func websocketResponseCreatePayload(apiRequest *responsesAgentRequest, previousR
 	if apiRequest.AccessPrograms != nil {
 		payload["access_programs"] = apiRequest.AccessPrograms
 	}
+	if apiRequest.RequestCountry != nil {
+		payload["request_country"] = apiRequest.RequestCountry
+	}
 	return payload
 }
 
@@ -2489,6 +2499,10 @@ func (r *ResponsesAgentRunner) buildResponsesAgentRequest(request *AgentRequest,
 		UseResponsesLite:     modelInfo.UseResponsesLite,
 		IncludeTimingMetrics: request.IncludeTimingMetrics,
 		BetaFeaturesHeader:   strings.TrimSpace(request.BetaFeaturesHeader),
+	}
+	if r.usesCodexBackend() && !request.RequestCountry.IsOmitted() {
+		country := request.RequestCountry
+		apiRequest.RequestCountry = &country
 	}
 	apiRequest.Reasoning = responsesReasoningParam(request, &modelInfo)
 	apiRequest.StreamOptions = responsesStreamOptionsForRequest(request, apiRequest.Reasoning, r.providerName())

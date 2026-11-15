@@ -16,6 +16,7 @@ import (
 	"codex_go/install"
 	"codex_go/model"
 	"codex_go/network"
+	"codex_go/protocol"
 	"codex_go/retainedctx"
 	"codex_go/sandbox"
 	"codex_go/session"
@@ -65,7 +66,7 @@ func (r *RuntimeRouter) requireAgentForTurn(params *turn.TurnStartParams) model.
 				prewarm = false
 			}
 		}
-		r.ensureGuardianReviewerWithPrewarm(agent, prewarm)
+		r.ensureGuardianReviewerWithRequestCountry(agent, prewarm, r.capturedRequestCountryForThread(params.ThreadID))
 		return agent
 	}
 	r.services.Agent = &model.UnavailableAgentRunner{Err: err}
@@ -118,6 +119,12 @@ func (r *RuntimeRouter) ensureGuardianReviewer(agent model.AgentRunner) Guardian
 }
 
 func (r *RuntimeRouter) ensureGuardianReviewerWithPrewarm(agent model.AgentRunner, prewarm bool) GuardianReviewer {
+	return r.ensureGuardianReviewerWithRequestCountry(agent, prewarm, protocol.RequestCountry{})
+}
+
+// ensureGuardianReviewerWithRequestCountry also seeds the reviewer pool's
+// startup prewarm with the parent step's captured country (Rust #61535).
+func (r *RuntimeRouter) ensureGuardianReviewerWithRequestCountry(agent model.AgentRunner, prewarm bool, country protocol.RequestCountry) GuardianReviewer {
 	if r == nil {
 		return nil
 	}
@@ -194,7 +201,7 @@ func (r *RuntimeRouter) ensureGuardianReviewerWithPrewarm(agent model.AgentRunne
 			go func() {
 				ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 				defer cancel()
-				_ = modelReviewer.Prewarm(ctx)
+				_ = modelReviewer.PrewarmWithRequestCountry(ctx, country)
 			}()
 		}
 	}
@@ -695,6 +702,10 @@ type guardianReviewPlan struct {
 	// (Rust #44574): the review session samples with the parent step's setting
 	// instead of the current catalog default.
 	ReasoningSummary string
+	// RequestCountry is the reviewed step's captured trusted host country
+	// (Rust #61535 GuardianReviewContext.request_country). The review request
+	// carries it so the reviewer cannot fall back to request provenance.
+	RequestCountry protocol.RequestCountry
 }
 
 // guardianReviewPlanForTurn mirrors Rust resolve_review_model: every review
@@ -835,6 +846,7 @@ func (r *RuntimeRouter) guardianReviewPlanForTurnContext(ctx context.Context, th
 		NodeReplPolicy:     guardianNodeReplPolicy(autoReview),
 		CyberAccessProgram: model.GuardianCyberAccessProgram(active.RunConfig.CyberAccessProgram),
 		ReasoningSummary:   reasoningSummary,
+		RequestCountry:     active.RunConfig.RequestCountry,
 	}
 	var parentEnvironments []map[string]any
 	if active.Params != nil {

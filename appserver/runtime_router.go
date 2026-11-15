@@ -6381,6 +6381,14 @@ func (r *RuntimeRouter) handleEphemeralThreadForkRuntime(request *Request) (*Thr
 			record.Items = append(record.Items, predictionMCPUnavailableNoticeItem(runtimeRouterNow(r).UTC()))
 		}
 	}
+	// Rust #61535 fork_options_from_parent: a prediction fork copies the live
+	// parent's captured request country into its initial thread settings.
+	if params.ExperimentalPredictionMode {
+		if country := r.capturedRequestCountryForThread(string(sourceID)); !country.IsOmitted() {
+			record.Metadata.Extra = ensureRecordExtra(record.Metadata.Extra)
+			record.Metadata.Extra[requestCountryExtraKey] = requestCountryExtraValue(country)
+		}
+	}
 	r.saveEphemeralThreadRecord(record)
 	responseRecord := record
 	if params.ExcludeTurns {
@@ -6696,6 +6704,12 @@ func (r *RuntimeRouter) applyThreadStartConfigSnapshot(response *ThreadStartResp
 		_, _ = r.requireThreadExtras().UpdateSettings(&SettingsUpdateParams{
 			ThreadID:    response.Thread.ID,
 			Permissions: cloneString(params.Permissions),
+		})
+	}
+	if params.RequestCountry != nil {
+		_, _ = r.requireThreadExtras().UpdateSettings(&SettingsUpdateParams{
+			ThreadID:       response.Thread.ID,
+			RequestCountry: cloneString(params.RequestCountry),
 		})
 	}
 	if len(sessionDefaults) > 0 {
@@ -9476,6 +9490,10 @@ func threadResumeSettingsUpdateParams(params *ThreadResumeParams, threadID strin
 		update.PersonalitySet = true
 		hasUpdate = true
 	}
+	if params.RequestCountry != nil {
+		update.RequestCountry = cloneString(params.RequestCountry)
+		hasUpdate = true
+	}
 	return update, hasUpdate
 }
 
@@ -9767,6 +9785,96 @@ func (r *RuntimeRouter) threadSettingsForTurn(threadID string) *Settings {
 		return nil
 	}
 	return r.services.ThreadExtras.Settings(threadID)
+}
+
+// requestCountryForThread returns the saved trusted host country that future
+// turns on this thread send on Codex-backend Responses requests (Rust #61535).
+func (r *RuntimeRouter) requestCountryForThread(threadID string) protocol.RequestCountry {
+	threadID = strings.TrimSpace(threadID)
+	if settings := r.threadSettingsForTurn(threadID); settings != nil && !settings.RequestCountry.IsOmitted() {
+		return settings.RequestCountry
+	}
+	// A spawned child or prediction fork inherits the parent step's country
+	// before it materializes its own settings, so the record carries the
+	// inherited default (Rust #61535 start_thread request_country).
+	if r != nil && threadID != "" {
+		if record, err := r.threadRecord(session.ThreadID(threadID), false, false); err == nil && record != nil {
+			if raw := strings.TrimSpace(stringFromMap(record.Metadata.Extra, requestCountryExtraKey)); raw != "" {
+				if country, parseErr := protocol.ParseRequestCountry(raw); parseErr == nil {
+					return country
+				}
+			}
+		}
+	}
+	return protocol.RequestCountry{}
+}
+
+// requestCountryExtraKey stores a thread's inherited trusted host country on
+// its persisted record so children and forks keep the parent step's value
+// without materializing a full settings snapshot (Rust #61535).
+const requestCountryExtraKey = "request_country"
+
+// requestCountryExtraValue renders a country for record storage; the explicit
+// unknown country is preserved as `XX`.
+func requestCountryExtraValue(country protocol.RequestCountry) string {
+	if code, ok := country.KnownCountry(); ok {
+		return code
+	}
+	if country.IsOmitted() {
+		return ""
+	}
+	return `XX`
+}
+
+// capturedRequestCountryForTurn returns the request country captured by the
+// active turn's current sampling step (Rust step_settings.request_country,
+// #61535). A live turn/settings update therefore reaches the next step, while
+// the thread default stays untouched.
+func (r *RuntimeRouter) capturedRequestCountryForTurn(threadID, turnID string) protocol.RequestCountry {
+	if r == nil {
+		return protocol.RequestCountry{}
+	}
+	threadID = strings.TrimSpace(threadID)
+	turnID = strings.TrimSpace(turnID)
+	if active := r.activeRuntimeTurnStateSnapshot(threadID, turnID); active != nil &&
+		active.RunConfig != nil && !active.RunConfig.RequestCountry.IsOmitted() {
+		return active.RunConfig.RequestCountry
+	}
+	return r.requestCountryForThread(threadID)
+}
+
+// capturedRequestCountryForThread snapshots the live parent setting for forks
+// and agent spawns that inherit the issuing step's captured settings
+// (Rust #61535 fork_options_from_parent / SpawnAgentOptions).
+func (r *RuntimeRouter) capturedRequestCountryForThread(threadID string) protocol.RequestCountry {
+	if r == nil {
+		return protocol.RequestCountry{}
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return protocol.RequestCountry{}
+	}
+	if r.threads != nil {
+		if active := r.threads.ActiveTurn(threadID); active != nil &&
+			active.RunConfig != nil && !active.RunConfig.RequestCountry.IsOmitted() {
+			return active.RunConfig.RequestCountry
+		}
+	}
+	return r.requestCountryForThread(threadID)
+}
+
+// requestCountryForTurn applies an explicit turn-start country to the thread
+// default (Rust #61535). An invalid value was already rejected with the
+// request, so it falls back to the saved default here.
+func requestCountryForTurn(saved protocol.RequestCountry, params *turn.TurnStartParams) protocol.RequestCountry {
+	if params == nil || params.RequestCountry == nil {
+		return saved
+	}
+	country, err := protocol.ParseRequestCountry(*params.RequestCountry)
+	if err != nil {
+		return saved
+	}
+	return country
 }
 
 // threadDisabledPluginIDs returns the thread's saved disabled-plugin selection,
@@ -10191,6 +10299,14 @@ func (r *RuntimeRouter) updateActiveTurnRuntimeSettings(params *turn.TurnSetting
 		}
 		if params.Environments != nil {
 			active.Params.Environments = cloneMapSlice(params.Environments)
+		}
+		if params.RequestCountry != nil {
+			if country, err := protocol.ParseRequestCountry(*params.RequestCountry); err == nil {
+				active.Params.RequestCountry = cloneString(params.RequestCountry)
+				if active.RunConfig != nil {
+					active.RunConfig.RequestCountry = country
+				}
+			}
 		}
 	})
 }

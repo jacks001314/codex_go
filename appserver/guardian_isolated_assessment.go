@@ -125,6 +125,7 @@ func (r *modelGuardianReviewer) AssessIsolated(ctx context.Context, input guardi
 		Endpoint:           r.reviewEndpointValue(threadID, turnID),
 		ReasoningEffort:    plan.Selection.ReasoningEffort,
 		CyberAccessProgram: plan.CyberAccessProgram,
+		RequestCountry:     plan.RequestCountry,
 		TaskKind:           model.AgentTaskReview,
 		ThreadID:           threadID,
 		SessionID:          plan.SessionID,

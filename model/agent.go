@@ -104,7 +104,10 @@ type AgentRequest struct {
 	// snake_case, empty when the turn selected none). It reaches the request body
 	// only for a ChatGPT-authenticated account (Rust #44893 / for_auth).
 	CyberAccessProgram string
-	ClientMetadata     map[string]string
+	// RequestCountry is the trusted host country carried on Codex-backend
+	// Responses requests (Rust #61535). The zero value omits the field.
+	RequestCountry protocol.RequestCountry
+	ClientMetadata map[string]string
 	// MCPAttribution is the thread's cumulative MCP tools/call attribution
 	// snapshot (Rust CodexResponsesMetadata::mcp_attribution). It is body-only
 	// and reaches the request only when the resolved provider is granted
