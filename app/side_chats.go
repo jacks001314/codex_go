@@ -2,11 +2,14 @@ package app
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"codex_go/appserver"
 	"codex_go/appserverdaemon"
 	"codex_go/cli"
+	"codex_go/rollout"
 	"codex_go/session"
 	codextui "codex_go/tui"
 	codextea "codex_go/tui/tea"
@@ -28,21 +31,81 @@ func interactiveEmbeddedListSideChats(store *session.Store) codextea.SideChatLis
 		if store == nil || parentThreadID == "" {
 			return nil, nil
 		}
-		page, err := store.List(session.ListOptions{
-			PageSize:       sideChatListPageLimit,
-			SortDirection:  session.SortAsc,
-			Relation:       &session.RelationFilter{AttachedThreadsOf: session.ThreadID(parentThreadID)},
-			IncludeHistory: false,
-		})
-		if err != nil {
-			return nil, err
+		records := make([]session.Record, 0, sideChatListPageLimit)
+		cursor := ""
+		for pageIndex := 0; pageIndex < sideChatListMaxPages; pageIndex++ {
+			page, err := store.List(session.ListOptions{
+				PageSize:      sideChatListPageLimit,
+				Cursor:        cursor,
+				SortDirection: session.SortAsc,
+				Relation:      &session.RelationFilter{AttachedThreadsOf: session.ThreadID(parentThreadID)},
+			})
+			if err != nil {
+				return nil, err
+			}
+			for _, summary := range page.Records {
+				record := embeddedSideChatLocalRecord(store, summary)
+				if record == nil {
+					continue
+				}
+				if embeddedAttachedSideChat(*record) {
+					records = append(records, *record)
+				}
+			}
+			if strings.TrimSpace(page.NextCursor) == "" {
+				break
+			}
+			cursor = page.NextCursor
 		}
-		choices := make([]codextea.SideChatChoice, 0, len(page.Records))
-		for index := range page.Records {
-			choices = append(choices, embeddedSideChatChoice(page.Records[index]))
+		choices := make([]codextea.SideChatChoice, 0, len(records))
+		entries := embeddedSideChatNameEntries(store, records)
+		for index := range records {
+			choice := embeddedSideChatChoice(records[index])
+			if entry, ok := entries[choice.ThreadID]; ok && embeddedInheritedSideChatName(records[index], choice.Name, entry) {
+				choice.Name = ""
+				choice.Preview = embeddedSideChatPreview(records[index])
+			}
+			choices = append(choices, choice)
 		}
 		return choices, nil
 	}
+}
+
+// embeddedAttachedSideChat keeps only saved attached side chats. Rust reads the
+// child's own policy and boundary checkpoint before listing it.
+func embeddedAttachedSideChat(record session.Record) bool {
+	if record.AttachedThreadParentID == "" {
+		return false
+	}
+	_, ok := sideChatContextCheckpoint(record.Items)
+	return ok
+}
+
+// embeddedSideChatLocalRecord loads only the child's own rollout records.
+// Reading the materialized store record would prepend inherited paginated
+// history, which must not label or qualify the side chat (Rust
+// side_context_checkpoint walks the child rollout).
+func embeddedSideChatLocalRecord(store *session.Store, summary session.Record) *session.Record {
+	record, err := store.Read(summary.ID, true, false)
+	if err != nil || record == nil {
+		return nil
+	}
+	codexHome := filepath.Dir(store.Root())
+	// Forks inherit the source's rollout_path in their metadata, so locate the
+	// child's own rollout by id instead of trusting that field.
+	path, err := rollout.FindThreadPath(codexHome, string(record.ID), record.Archived)
+	if err != nil {
+		return nil
+	}
+	if path == "" {
+		return nil
+	}
+	local, err := rollout.RecordFromPath(path, record.Archived)
+	if err != nil || local == nil {
+		return nil
+	}
+	local.Title = record.Title
+	return local
 }
 
 func embeddedSideChatChoice(record session.Record) codextea.SideChatChoice {
@@ -51,16 +114,69 @@ func embeddedSideChatChoice(record session.Record) codextea.SideChatChoice {
 		Name:     strings.TrimSpace(record.Title),
 	}
 	if choice.Name == "" {
-		choice.Preview = firstSideChatPromptFromRecord(record)
-		if choice.Preview == "" {
-			choice.Preview = firstSideChatPromptLine(record.Preview)
-		}
+		choice.Preview = embeddedSideChatPreview(record)
 	}
 	return choice
 }
 
+func embeddedSideChatPreview(record session.Record) string {
+	if len(record.Items) == 0 {
+		return firstSideChatPromptLine(record.Preview)
+	}
+	// Rust reads the preview from the child's own visible history. An attached
+	// fork inherits the parent's summary preview, which must not label it.
+	return firstSideChatPromptFromRecord(record)
+}
+
+func embeddedSideChatNameEntries(store *session.Store, records []session.Record) map[string]rollout.SessionIndexEntry {
+	if store == nil || len(records) == 0 {
+		return nil
+	}
+	threadIDs := make(map[string]struct{}, len(records))
+	for _, record := range records {
+		if strings.TrimSpace(record.Title) != "" {
+			threadIDs[strings.TrimSpace(string(record.ID))] = struct{}{}
+		}
+	}
+	if len(threadIDs) == 0 {
+		return nil
+	}
+	entries, err := rollout.FindThreadNameEntriesByIDs(filepath.Dir(store.Root()), threadIDs)
+	if err != nil {
+		return nil
+	}
+	return entries
+}
+
+// embeddedInheritedSideChatName reports whether a saved chat still carries the
+// name it inherited at fork. Older servers wrote that name during the fork,
+// before the side-chat boundary; a later write is an explicit rename (Rust
+// side_chat_history).
+func embeddedInheritedSideChatName(record session.Record, name string, entry rollout.SessionIndexEntry) bool {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return false
+	}
+	if strings.TrimSpace(entry.ThreadName) != name {
+		return false
+	}
+	opened, ok := sideChatContextCheckpoint(record.Items)
+	if !ok {
+		return false
+	}
+	written, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(entry.UpdatedAt))
+	if err != nil {
+		return false
+	}
+	return !written.After(opened)
+}
+
 func firstSideChatPromptFromRecord(record session.Record) string {
-	messages := interactiveSessionMessagesFromRecord(&record, reasoningProjectionChatWidget, false)
+	items := record.Items
+	if index, _, ok := sideChatContextCheckpointIndex(items); ok {
+		items = items[index+1:]
+	}
+	messages := interactiveSessionMessagesFromItems(items, record.Metadata.CWD, reasoningProjectionChatWidget, false)
 	for _, message := range messages {
 		if message.Role != codextui.RoleUser {
 			continue
@@ -137,11 +253,20 @@ func interactiveRemoteListSideChats(ctx context.Context, endpoint *appserverdaem
 				break
 			}
 			for _, thread := range response.Data {
+				if thread.ThreadSource == nil || strings.TrimSpace(string(*thread.ThreadSource)) != codextea.AttachedSideChatThreadSource {
+					continue
+				}
 				choice := codextea.SideChatChoice{ThreadID: strings.TrimSpace(thread.ID)}
 				if choice.ThreadID == "" {
 					continue
 				}
+				if thread.Name != nil {
+					choice.Name = strings.TrimSpace(*thread.Name)
+				}
 				choice.Preview = firstSideChatPromptLine(thread.Preview)
+				if choice.Name != "" {
+					choice.Preview = ""
+				}
 				choices = append(choices, choice)
 			}
 			if response.NextCursor == nil || strings.TrimSpace(*response.NextCursor) == "" {

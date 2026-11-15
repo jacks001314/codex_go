@@ -8335,6 +8335,15 @@ func (r *RuntimeRouter) handleActiveThreadForkRuntime(request *Request) (any, bo
 	} else {
 		r.saveEphemeralThreadRecord(record)
 	}
+	// Rust thread_fork copies the source name into the persisted fork metadata
+	// and session index before the TUI installs a side-chat boundary. Saved side
+	// chats use that indexed timestamp to tell an inherited name from a rename.
+	if !params.Ephemeral && explicitThreadName(record) {
+		if err := rollout.AppendThreadName(codexHomeFromSessionStore(r.services.ThreadRouter.store), string(record.ID), record.Title); err != nil {
+			r.rollbackRuntimeForkInitialization(record)
+			return nil, true, err
+		}
+	}
 	if params.AttachToSource && r.services.StateRuntime != nil {
 		path := r.services.ThreadRouter.threadRolloutPath(record)
 		if strings.TrimSpace(path) != "" {

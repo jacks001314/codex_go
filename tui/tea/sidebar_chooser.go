@@ -1024,6 +1024,12 @@ func (m *Model) sidebarChooserPrompt(choice SideChatChoice) string {
 }
 
 func (m *Model) sidebarChatCreationAvailable() bool {
+	return m.sidebarChatCreationAvailableFor(m.sidebarChooserParent)
+}
+
+// sidebarChatCreationAvailableFor reports whether the parent has the first
+// user turn that Rust requires before a side chat can be created.
+func (m *Model) sidebarChatCreationAvailableFor(parentThreadID string) bool {
 	if m == nil || m.State == nil || strings.TrimSpace(m.State.ThreadID) == "" {
 		return false
 	}
@@ -1033,7 +1039,7 @@ func (m *Model) sidebarChatCreationAvailable() bool {
 		}
 	}
 	// A parent that already has side chats necessarily had a main-chat turn.
-	return len(m.sidebarTabsFor(m.sidebarChooserParent)) > 0
+	return len(m.sidebarTabsFor(parentThreadID)) > 0
 }
 
 func (m *Model) liveSideTab(threadID string) *activeSideConversation {

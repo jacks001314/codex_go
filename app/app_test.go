@@ -3179,7 +3179,9 @@ func TestInteractiveRemoteStartSideForksAndInjectsBoundary(t *testing.T) {
 					remoteTUITestSendErr(serverErrs, err)
 					return
 				}
-				if params.ThreadID != "thread-side" || len(params.Items) != 1 || !strings.Contains(string(params.Items[0]), "Side conversation boundary.") {
+				if params.ThreadID != "thread-side" || len(params.Items) != 2 ||
+					!strings.Contains(string(params.Items[0]), "side_conversation") ||
+					!strings.Contains(string(params.Items[1]), "Side conversation boundary.") {
 					remoteTUITestSendErr(serverErrs, fmt.Errorf("inject params = %#v", params))
 					return
 				}

@@ -208,6 +208,36 @@ func FindThreadNamesByIDs(codexHome string, threadIDs map[string]struct{}) (map[
 	return names, nil
 }
 
+// FindThreadNameEntriesByIDs returns the latest usable name entry for each
+// requested id. Side-chat discovery compares its timestamp with the fork
+// checkpoint to tell an inherited name from an explicit rename (Rust #61343).
+func FindThreadNameEntriesByIDs(codexHome string, threadIDs map[string]struct{}) (map[string]SessionIndexEntry, error) {
+	if len(threadIDs) == 0 {
+		return map[string]SessionIndexEntry{}, nil
+	}
+	entries, err := readSessionIndex(codexHome)
+	if err != nil {
+		return nil, err
+	}
+	remaining := make(map[string]struct{}, len(threadIDs))
+	for id := range threadIDs {
+		remaining[id] = struct{}{}
+	}
+	found := make(map[string]SessionIndexEntry, len(threadIDs))
+	for i := len(entries) - 1; i >= 0 && len(remaining) > 0; i-- {
+		entry := entries[i]
+		if _, ok := remaining[entry.ID]; !ok {
+			continue
+		}
+		if strings.TrimSpace(entry.ThreadName) == "" {
+			continue
+		}
+		found[entry.ID] = entry
+		delete(remaining, entry.ID)
+	}
+	return found, nil
+}
+
 // SessionMetaCandidate pairs a readable rollout path with its session header.
 type SessionMetaCandidate struct {
 	Path string

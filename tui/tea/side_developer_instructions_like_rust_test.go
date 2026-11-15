@@ -24,7 +24,10 @@ func TestSideDeveloperInstructionsKeepExistingPolicyLikeRust(t *testing.T) {
 	if !strings.HasPrefix(got, "Existing developer policy.\n\n") {
 		t.Fatalf("existing policy must lead the developer instructions: %q", got)
 	}
-	if got := SideDeveloperInstructions("   "); got != SideDeveloperInstructionText {
-		t.Fatalf("blank SideDeveloperInstructions() = %q, want side text", got)
+	if got := SideDeveloperInstructions("   "); got != SideDeveloperInstructionsFor("", SideChatStorageTemporary) {
+		t.Fatalf("blank SideDeveloperInstructions() = %q, want temporary side text", got)
+	}
+	if attached := SideDeveloperInstructionsFor("Existing developer policy.", SideChatStorageAttached); strings.Contains(attached, sideTemporaryInstructionSuffix) {
+		t.Fatalf("attached side instructions kept the temporary restriction: %q", attached)
 	}
 }

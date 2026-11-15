@@ -15,11 +15,14 @@ const threadTitleSuggestionModel = "gpt-5.6-luna"
 // ThreadNameSuggestedMsg reports the result of a /rename title suggestion
 // (Rust #40495).
 type ThreadNameSuggestedMsg struct {
-	ThreadID      string
-	RequestID     uint64
-	Suggestion    string
-	OK            bool
-	Automatic     bool
+	ThreadID   string
+	RequestID  uint64
+	Suggestion string
+	OK         bool
+	Automatic  bool
+	// SideChat marks an automatic title for a saved side chat, whose inherited
+	// parent name may be replaced by the first direct input (Rust #61343).
+	SideChat      bool
 	ExpectedTitle string
 	FallbackTitle string
 	RenameFailed  bool
@@ -128,6 +131,9 @@ func (m *Model) applyThreadNameSuggested(message ThreadNameSuggestedMsg) bubblet
 		return nil
 	}
 	if message.Automatic {
+		if message.SideChat {
+			return m.applyAutomaticSideChatThreadTitle(message)
+		}
 		return m.applyAutomaticThreadTitle(message)
 	}
 	if strings.TrimSpace(message.ThreadID) != strings.TrimSpace(m.State.ThreadID) {

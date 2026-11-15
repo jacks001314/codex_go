@@ -275,3 +275,135 @@ func (m *Model) applyAutomaticThreadNameSaved(message AutomaticThreadNameSavedMs
 	m.refreshTranscript()
 	return m.refreshStatusControlsCmd()
 }
+
+// startSideChatAutomaticThreadTitle titles a saved side chat from its first
+// successful direct text input (Rust #61343). The inherited parent name stays
+// visible until the generated or fallback title is saved.
+func (m *Model) startSideChatAutomaticThreadTitle(text string) bubbletea.Cmd {
+	if m == nil || m.State == nil || m.automaticThreadTitlePending {
+		return nil
+	}
+	side := m.activeSide
+	if side == nil || !side.ShowingSide || !side.Storage.Attached() {
+		return nil
+	}
+	threadID := strings.TrimSpace(side.SideThreadID)
+	if threadID == "" || threadID != strings.TrimSpace(m.State.ThreadID) {
+		return nil
+	}
+	if !side.TitleEligible {
+		return nil
+	}
+	// The first submitted user message consumes title eligibility even when it
+	// carries no text; image-only input keeps the inherited name (Rust #61343).
+	side.TitleEligible = false
+	if m.readOnlyThread || m.threadUnavailable {
+		return nil
+	}
+	expected := strings.TrimSpace(side.InheritedName)
+	if strings.TrimSpace(m.State.ThreadName) != expected {
+		return nil
+	}
+	provisional := tuiapp.FallbackThreadTitle(strings.TrimSpace(text))
+	if provisional == "" {
+		return nil
+	}
+
+	m.automaticThreadTitleEpoch.Add(1)
+	epoch := m.automaticThreadTitleEpoch.Load()
+	m.automaticThreadTitlePending = true
+	m.automaticThreadTitleThreadID = threadID
+	m.automaticThreadTitleExpected = expected
+
+	requestID := m.nextThreadNameSuggestionRequest()
+	generate := m.onSuggestThreadName
+	options := RecapThreadOptions{
+		Model:             m.threadTitleModel(),
+		ModelProvider:     strings.TrimSpace(m.State.Provider),
+		CWD:               strings.TrimSpace(m.State.CWD),
+		PermissionProfile: strings.TrimSpace(m.State.Sandbox),
+		ThreadSource:      "thread_title",
+	}
+	if options.Model == threadTitleSuggestionModel {
+		options.Effort = "low"
+	}
+	titlePrompt := tuiapp.ThreadTitlePrompt(strings.TrimSpace(text))
+	schema := tuiapp.ThreadTitleOutputSchema()
+	return func() bubbletea.Msg {
+		if m.automaticThreadTitleEpoch.Load() != epoch {
+			return nil
+		}
+		message := ThreadNameSuggestedMsg{
+			ThreadID:      threadID,
+			RequestID:     requestID,
+			ExpectedTitle: expected,
+			FallbackTitle: provisional,
+			Automatic:     true,
+			SideChat:      true,
+		}
+		if generate != nil {
+			response, err := generate(threadID, options, titlePrompt, schema)
+			if err == nil {
+				message.Suggestion, message.OK = tuiapp.ParseGeneratedThreadTitle(response)
+			}
+		}
+		return message
+	}
+}
+
+// applyAutomaticSideChatThreadTitle saves the generated title, or the first
+// message fallback, while the saved name still matches the inherited parent
+// name. A manual rename wins over the automatic result.
+func (m *Model) applyAutomaticSideChatThreadTitle(message ThreadNameSuggestedMsg) bubbletea.Cmd {
+	if m == nil || m.State == nil {
+		return nil
+	}
+	threadID := strings.TrimSpace(message.ThreadID)
+	if threadID != m.automaticThreadTitleThreadID {
+		return nil
+	}
+	side := m.activeSide
+	if side == nil || strings.TrimSpace(side.SideThreadID) != threadID {
+		side = m.retainedSideConversationForThread(threadID)
+	}
+	if side == nil || !side.Storage.Attached() {
+		m.automaticThreadTitlePending = false
+		return nil
+	}
+	expected := strings.TrimSpace(message.ExpectedTitle)
+	if threadID == strings.TrimSpace(m.State.ThreadID) && strings.TrimSpace(m.State.ThreadName) != expected {
+		m.automaticThreadTitlePending = false
+		return nil
+	}
+	m.automaticThreadTitlePending = false
+	title := ""
+	if message.OK {
+		title = strings.TrimSpace(message.Suggestion)
+	}
+	if title == "" {
+		title = strings.TrimSpace(message.FallbackTitle)
+	}
+	if title == "" {
+		return nil
+	}
+	rename := m.onRenameThread
+	epoch := m.automaticThreadTitleEpoch.Load()
+	// Keep the event loop free while the title is persisted. The epoch guards
+	// against a manual rename racing the automatic save.
+	return func() bubbletea.Msg {
+		if m.automaticThreadTitleEpoch.Load() != epoch {
+			return nil
+		}
+		var err error
+		if rename != nil {
+			err = rename(threadID, title)
+		}
+		return AutomaticThreadNameSavedMsg{
+			ThreadID: threadID,
+			Title:    title,
+			Expected: expected,
+			Epoch:    epoch,
+			Err:      err,
+		}
+	}
+}

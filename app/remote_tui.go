@@ -1466,41 +1466,66 @@ func interactiveRemoteStartSide(ctx context.Context, root *cli.RootOptions, endp
 	if parentThreadID == "" {
 		return codextea.SideStartResponse{}, errors.New("remote thread/fork requires a parent thread id")
 	}
-	forkParams, err := remoteSideThreadForkParamsForMode(threadParamsModeForLaunch(root), root, state, parentThreadID, params.RuntimeWorkspaceRoots)
+	storage := params.Storage
+	if !storage.Attached() {
+		storage = codextea.SideChatStorageTemporary
+	}
+	forkAndInject := func(storage codextea.SideChatStorage) (*appserver.ThreadForkResponse, error) {
+		forkParams, err := remoteSideThreadForkParamsForMode(threadParamsModeForLaunch(root), root, state, parentThreadID, params.RuntimeWorkspaceRoots, storage)
+		if err != nil {
+			return nil, err
+		}
+		// A side conversation forked from a task-tools thread keeps the namespace
+		// (Rust ThreadToolTransport::configure_mcp).
+		mergeTaskToolsMCPConfig(&forkParams.Config, taskToolsHost)
+		var forkResponse appserver.ThreadForkResponse
+		if err := remoteSessionRequest(reqCtx, client, appserver.MethodThreadFork, forkParams, &forkResponse); err != nil {
+			// A paginated parent rejects an ephemeral fork that copies turns; the
+			// child then inherits the source lineage and pages its own history.
+			if forkParams.ExcludeTurns || !isHistoryPaginationUnsupportedError(err) {
+				return nil, err
+			}
+			forkParams.ExcludeTurns = true
+			forkResponse = appserver.ThreadForkResponse{}
+			if retryErr := remoteSessionRequest(reqCtx, client, appserver.MethodThreadFork, forkParams, &forkResponse); retryErr != nil {
+				return nil, retryErr
+			}
+		}
+		if forkResponse.Thread == nil || strings.TrimSpace(forkResponse.Thread.ID) == "" {
+			return nil, errors.New("thread/fork response did not include a side thread id")
+		}
+		sideThreadID := strings.TrimSpace(forkResponse.Thread.ID)
+		var injectResponse appserver.ThreadInjectItemsResponse
+		injectParams := appserver.ThreadInjectItemsParams{
+			ThreadID: sideThreadID,
+			Items: []json.RawMessage{
+				codextea.SideConversationPolicyItem(storage),
+				codextea.SideBoundaryPromptItem(),
+			},
+		}
+		if err := remoteSessionRequest(reqCtx, client, appserver.MethodThreadInjectItems, injectParams, &injectResponse); err != nil {
+			return nil, fmt.Errorf("prepare side conversation %s: %w", sideThreadID, err)
+		}
+		return &forkResponse, nil
+	}
+	forkResponse, err := forkAndInject(storage)
+	if err != nil && storage.Attached() && isAttachedSideChatUnsupportedError(err) {
+		storage = codextea.SideChatStorageTemporary
+		forkResponse, err = forkAndInject(storage)
+	}
 	if err != nil {
 		return codextea.SideStartResponse{}, err
 	}
-	// A side conversation forked from a task-tools thread keeps the namespace
-	// (Rust ThreadToolTransport::configure_mcp).
-	mergeTaskToolsMCPConfig(&forkParams.Config, taskToolsHost)
-	var forkResponse appserver.ThreadForkResponse
-	if err := remoteSessionRequest(reqCtx, client, appserver.MethodThreadFork, forkParams, &forkResponse); err != nil {
-		// A paginated parent rejects an ephemeral fork that copies turns; the
-		// child then inherits the source lineage and pages its own history.
-		if forkParams.ExcludeTurns || !isHistoryPaginationUnsupportedError(err) {
-			return codextea.SideStartResponse{}, err
-		}
-		forkParams.ExcludeTurns = true
-		forkResponse = appserver.ThreadForkResponse{}
-		if retryErr := remoteSessionRequest(reqCtx, client, appserver.MethodThreadFork, forkParams, &forkResponse); retryErr != nil {
-			return codextea.SideStartResponse{}, retryErr
-		}
-	}
-	if forkResponse.Thread == nil || strings.TrimSpace(forkResponse.Thread.ID) == "" {
-		return codextea.SideStartResponse{}, errors.New("thread/fork response did not include a side thread id")
-	}
 	sideThreadID := strings.TrimSpace(forkResponse.Thread.ID)
-	var injectResponse appserver.ThreadInjectItemsResponse
-	injectParams := appserver.ThreadInjectItemsParams{
-		ThreadID: sideThreadID,
-		Items:    []json.RawMessage{codextea.SideBoundaryPromptItem()},
-	}
-	if err := remoteSessionRequest(reqCtx, client, appserver.MethodThreadInjectItems, injectParams, &injectResponse); err != nil {
-		return codextea.SideStartResponse{}, fmt.Errorf("prepare side conversation %s: %w", sideThreadID, err)
+	inheritedName := ""
+	if forkResponse.Thread.Name != nil {
+		inheritedName = strings.TrimSpace(*forkResponse.Thread.Name)
 	}
 	return codextea.SideStartResponse{
 		ParentThreadID: parentThreadID,
 		SideThreadID:   sideThreadID,
+		Storage:        storage,
+		InheritedName:  inheritedName,
 	}, nil
 }
 
@@ -1516,6 +1541,16 @@ func interactiveRemoteCloseSide(ctx context.Context, endpoint *appserverdaemon.R
 		return codextea.SideCloseResponse{}, err
 	}
 	defer client.close()
+	// Rust archives an attached side chat instead of deleting it; the archive
+	// action removes it from the saved Side chats list but keeps its history.
+	if params.Storage.Attached() {
+		var archiveResponse appserver.ThreadArchiveResponse
+		archiveParams := appserver.ThreadArchiveParams{ThreadID: sideThreadID}
+		if err := remoteSessionRequest(reqCtx, client, appserver.MethodThreadArchive, archiveParams, &archiveResponse); err != nil {
+			return codextea.SideCloseResponse{}, err
+		}
+		return codextea.SideCloseResponse{}, nil
+	}
 	// Rust `App::discard_side_thread` interrupts the side thread's running turn
 	// through `AppServerSession::turn_interrupt` before it unsubscribes; a side
 	// thread that is only unsubscribed keeps its turn running on the server, since
@@ -6387,13 +6422,13 @@ func remoteThreadStartParams(root *cli.RootOptions, state *codextui.State) (apps
 }
 
 func remoteSideThreadForkParams(root *cli.RootOptions, state *codextui.State, parentThreadID string, runtimeWorkspaceRoots []string) (appserver.ThreadForkParams, error) {
-	return remoteSideThreadForkParamsForMode(threadParamsModeForLaunch(root), root, state, parentThreadID, runtimeWorkspaceRoots)
+	return remoteSideThreadForkParamsForMode(threadParamsModeForLaunch(root), root, state, parentThreadID, runtimeWorkspaceRoots, codextea.SideChatStorageTemporary)
 }
 
 // remoteSideThreadForkParamsForMode mirrors the cloud fork guard at
 // app_server_session.rs:1195-1197: a server-owned conversation cannot be forked
 // from the TUI yet, including the side-conversation path.
-func remoteSideThreadForkParamsForMode(mode ThreadParamsMode, root *cli.RootOptions, state *codextui.State, parentThreadID string, runtimeWorkspaceRoots []string) (appserver.ThreadForkParams, error) {
+func remoteSideThreadForkParamsForMode(mode ThreadParamsMode, root *cli.RootOptions, state *codextui.State, parentThreadID string, runtimeWorkspaceRoots []string, storage codextea.SideChatStorage) (appserver.ThreadForkParams, error) {
 	if err := cloudThreadForkError(mode); err != nil {
 		return appserver.ThreadForkParams{}, err
 	}
@@ -6406,7 +6441,7 @@ func remoteSideThreadForkParamsForMode(mode ThreadParamsMode, root *cli.RootOpti
 	if err != nil {
 		return appserver.ThreadForkParams{}, err
 	}
-	developerInstructions := codextea.SideDeveloperInstructions("")
+	developerInstructions := codextea.SideDeveloperInstructionsFor("", storage)
 	params := appserver.ThreadForkParams{
 		ThreadID:              parentThreadID,
 		HistoryMode:           session.ForkAll,
@@ -6415,7 +6450,9 @@ func remoteSideThreadForkParamsForMode(mode ThreadParamsMode, root *cli.RootOpti
 		DeveloperInstructions: &developerInstructions,
 		Config:                configValues,
 		Sandbox:               remoteSandboxMode(shared.Sandbox),
-		Ephemeral:             true,
+		Ephemeral:             !storage.Attached(),
+		AttachToSource:        storage.Attached(),
+		ExcludeTurns:          storage.Attached(),
 	}
 	if cwd := strings.TrimSpace(shared.CWD); cwd != "" {
 		params.CWD = &cwd
@@ -6435,6 +6472,9 @@ func remoteSideThreadForkParamsForMode(mode ThreadParamsMode, root *cli.RootOpti
 		params.RuntimeWorkspaceRoots = append([]string(nil), runtimeWorkspaceRoots...)
 	}
 	source := appserver.ThreadSourceUser
+	if storage.Attached() {
+		source = appserver.ThreadSource(codextea.AttachedSideChatThreadSource)
+	}
 	params.ThreadSource = &source
 	return params, nil
 }

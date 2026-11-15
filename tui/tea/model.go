@@ -8934,7 +8934,11 @@ func (m *Model) applyItemCompleted(item *protocol.ThreadItem) bubbletea.Cmd {
 		// Rust keeps the desktop question-reply envelope out of title
 		// generation; otherwise the JSON envelope becomes the thread name.
 		if len(codextui.ParseAsyncQuestionReplies(userText)) == 0 {
-			countdownCmd = bubbletea.Batch(countdownCmd, m.startAutomaticThreadTitle(userText))
+			if m.activeSide != nil && m.activeSide.ShowingSide && m.activeSide.Storage.Attached() {
+				countdownCmd = bubbletea.Batch(countdownCmd, m.startSideChatAutomaticThreadTitle(userText))
+			} else {
+				countdownCmd = bubbletea.Batch(countdownCmd, m.startAutomaticThreadTitle(userText))
+			}
 		}
 	case "agent_message":
 		// Rust #43055: an assistant response returns /copy to response copying.
@@ -11542,7 +11546,8 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 	if invocation.Command != codextui.CommandCopy {
 		m.statusCopyTargets = nil
 	}
-	if m.inSideConversation() && !sideSlashCommandAllowed(invocation.Command) {
+	attachedSideRename := invocation.Command == codextui.CommandRename && m.activeSide != nil && m.activeSide.Storage.Attached()
+	if m.inSideConversation() && !sideSlashCommandAllowed(invocation.Command) && !attachedSideRename {
 		message := sideSlashUnavailableMessage(invocation.Name)
 		if invocation.Command == codextui.CommandRename {
 			message = SideRenameBlockMessage

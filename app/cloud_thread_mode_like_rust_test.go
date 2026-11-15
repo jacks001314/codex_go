@@ -294,11 +294,11 @@ func TestCloudThreadForkRejectedLikeRust(t *testing.T) {
 	}
 
 	state := codextui.NewState(nil)
-	_, err := remoteSideThreadForkParamsForMode(ThreadParamsModeCloud, &cli.RootOptions{}, state, "thread-parent", nil)
+	_, err := remoteSideThreadForkParamsForMode(ThreadParamsModeCloud, &cli.RootOptions{}, state, "thread-parent", nil, codextea.SideChatStorageTemporary)
 	if err == nil || err.Error() != cloudThreadForkUnsupportedMessage {
 		t.Fatalf("side fork params error = %v, want %q", err, cloudThreadForkUnsupportedMessage)
 	}
-	params, err := remoteSideThreadForkParamsForMode(ThreadParamsModeRemote, &cli.RootOptions{}, state, "thread-parent", nil)
+	params, err := remoteSideThreadForkParamsForMode(ThreadParamsModeRemote, &cli.RootOptions{}, state, "thread-parent", nil, codextea.SideChatStorageTemporary)
 	if err != nil {
 		t.Fatalf("remote side fork params: %v", err)
 	}

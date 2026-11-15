@@ -395,6 +395,27 @@ func localSessionHasRollout(store *session.Store, threadID session.ThreadID, arc
 }
 
 func localSessionRouterRequest(store *session.Store, method appserver.Method, params any) (any, func(), error) {
+	router, closeRouter, err := openLocalSessionRouter(store)
+	if err != nil {
+		return nil, nil, err
+	}
+	rawParams, err := json.Marshal(params)
+	if err != nil {
+		closeRouter()
+		return nil, nil, err
+	}
+	response := router.Handle(&appserver.Request{ID: appserver.IntID(1), Method: method, Params: rawParams})
+	if response.Error != nil {
+		closeRouter()
+		return nil, nil, errors.New(response.Error.Message)
+	}
+	return response.Result, closeRouter, nil
+}
+
+// openLocalSessionRouter builds the in-process router the TUI uses for local
+// history operations. The state runtime is required for attached-thread
+// filters, so saved side chats can be forked and discovered (#61343).
+func openLocalSessionRouter(store *session.Store) (*appserver.Router, func(), error) {
 	if store == nil {
 		return nil, nil, errors.New("session store is nil")
 	}
@@ -420,17 +441,7 @@ func localSessionRouterRequest(store *session.Store, method appserver.Method, pa
 	}
 	router = appserver.NewRouter(store)
 	router.SetStateRuntime(runtime)
-	rawParams, err := json.Marshal(params)
-	if err != nil {
-		closeRuntime()
-		return nil, nil, err
-	}
-	response := router.Handle(&appserver.Request{ID: appserver.IntID(1), Method: method, Params: rawParams})
-	if response.Error != nil {
-		closeRuntime()
-		return nil, nil, errors.New(response.Error.Message)
-	}
-	return response.Result, closeRuntime, nil
+	return router, closeRuntime, nil
 }
 
 func loadSessionRuntimeConfig(opts *cli.SessionOptions, root *cli.RootOptions) error {

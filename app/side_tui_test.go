@@ -74,7 +74,8 @@ func TestInteractiveLocalSideCoordinatorForksInjectsAndDeletes(t *testing.T) {
 	if ephemeral, _ := side.Metadata.Extra["ephemeral"].(bool); !ephemeral {
 		t.Fatalf("side ephemeral metadata = %#v", side.Metadata.Extra)
 	}
-	if len(side.Items) != 3 || side.Items[2].Role != "user" || side.Items[2].Text != codextea.SideBoundaryPrompt {
+	if len(side.Items) != 4 || side.Items[2].Role != "developer" || !strings.Contains(side.Items[2].Text, "<side_conversation>") ||
+		side.Items[3].Role != "user" || side.Items[3].Text != codextea.SideBoundaryPrompt {
 		t.Fatalf("side items = %#v", side.Items)
 	}
 	// The CWD override must not drop the parent's runtime workspace roots
@@ -167,14 +168,17 @@ func TestInteractiveLocalSideCoordinatorForkIncludesLiveParentItems(t *testing.T
 	if err != nil {
 		t.Fatalf("Read(side) error = %v", err)
 	}
-	if len(side.Items) != 5 {
-		t.Fatalf("side items = %#v, want inherited user, live suffix, and boundary", side.Items)
+	if len(side.Items) != 6 {
+		t.Fatalf("side items = %#v, want inherited user, live suffix, policy, and boundary", side.Items)
 	}
 	if side.Items[0].ID != "user-1" || side.Items[1].ID != "assistant-2" || side.Items[2].CallID != "call-2" || side.Items[3].CallID != "call-2" {
 		t.Fatalf("side live item order = %#v", side.Items)
 	}
-	if side.Items[4].Text != codextea.SideBoundaryPrompt {
-		t.Fatalf("side boundary item = %#v", side.Items[4])
+	if side.Items[4].Role != "developer" || !strings.Contains(side.Items[4].Text, "<side_conversation>") {
+		t.Fatalf("side policy item = %#v", side.Items[4])
+	}
+	if side.Items[5].Text != codextea.SideBoundaryPrompt {
+		t.Fatalf("side boundary item = %#v", side.Items[5])
 	}
 }
 
