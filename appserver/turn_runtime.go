@@ -2018,7 +2018,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		Trace:                        params.Trace,
 		CWD:                          firstNonEmpty(params.CWD, r.services.DefaultCWD),
 		Tracer:                       r.sessionTelemetryForThread(threadID),
-		OnModelRequest:               r.modelRequestHookCallback(threadID, firstNonEmpty(params.CWD, r.services.DefaultCWD)),
+		OnModelRequest:               r.modelRequestHookCallback(threadID, firstNonEmpty(runConfig.SessionID, threadID), firstNonEmpty(params.CWD, r.services.DefaultCWD)),
 		StepSettings:                 r.turnStepSettingsProvider(threadID, turnID),
 		StepInputItems:               r.turnStepInputItemsProvider(threadID, turnID, runConfig),
 		AttestationProvider:          runConfig.AttestationProvider,
@@ -2735,7 +2735,7 @@ func (r *RuntimeRouter) runReviewRuntime(ctx context.Context, params *turn.TurnS
 		Trace:                        params.Trace,
 		CWD:                          firstNonEmpty(params.CWD, r.services.DefaultCWD),
 		Tracer:                       r.sessionTelemetryForThread(threadID),
-		OnModelRequest:               r.modelRequestHookCallback(threadID, firstNonEmpty(params.CWD, r.services.DefaultCWD)),
+		OnModelRequest:               r.modelRequestHookCallback(threadID, firstNonEmpty(runConfig.SessionID, threadID), firstNonEmpty(params.CWD, r.services.DefaultCWD)),
 		AttestationProvider:          runConfig.AttestationProvider,
 		PostToolInputItems:           runConfig.PostToolInputItems,
 		DisableHostedImageGeneration: true,
@@ -7403,7 +7403,7 @@ func (r *RuntimeRouter) compactThreadWithHistory(ctx context.Context, params *ru
 	compacted := backgroundCompacted
 	if compacted == nil {
 		remoteOptions := &compact.RemoteOptions{
-			Runner:               r.compactRunnerForRecord(record, request, params.Model, r.compactProgramForAttempt(params, record), r.capturedRequestCountryForTurn(params.ThreadID, request.TurnID), ""),
+			Runner:               r.compactRunnerForRecord(record, request, params.Model, r.compactProgramForAttempt(params, record), r.capturedRequestCountryForTurn(params.ThreadID, request.TurnID), "", model.SamplingKindForegroundCompaction),
 			MaxSummaryChars:      4000,
 			InitialContext:       initialContext,
 			InjectBeforeLastUser: true,
@@ -7793,7 +7793,7 @@ func (r *RuntimeRouter) compactProgramForAttempt(params *runtimeCompactRequest, 
 	return program
 }
 
-func (r *RuntimeRouter) compactRunnerForRecord(record *session.Record, request *compact.Request, modelOverride string, cyberAccessProgram string, requestCountry protocol.RequestCountry, promptCacheTTL string) compact.RemoteRunner {
+func (r *RuntimeRouter) compactRunnerForRecord(record *session.Record, request *compact.Request, modelOverride string, cyberAccessProgram string, requestCountry protocol.RequestCountry, promptCacheTTL string, samplingKind model.SamplingKind) compact.RemoteRunner {
 	if r == nil {
 		return nil
 	}
@@ -7871,6 +7871,8 @@ func (r *RuntimeRouter) compactRunnerForRecord(record *session.Record, request *
 		effort:             compactionEffort,
 		cyberAccessProgram: strings.TrimSpace(cyberAccessProgram),
 		requestCountry:     requestCountry,
+		samplingKind:       samplingKind,
+		onModelRequest:     r.modelRequestAttemptHook(string(record.ID), firstNonEmpty(strings.TrimSpace(record.SessionID), string(record.ID)), strings.TrimSpace(record.Metadata.CWD)),
 		promptCacheTTL:     strings.TrimSpace(promptCacheTTL),
 		clientMetadata:     r.compactResponsesClientMetadata(record, request, compactModel),
 		sessionID:          firstNonEmpty(strings.TrimSpace(record.SessionID), strings.TrimSpace(string(record.ID))),

@@ -340,7 +340,11 @@ func (r *ResponsesAgentRunner) runStreaming(ctx context.Context, request *AgentR
 		fields["stream_attempt"] = attempt + 1
 		fields["stream_max_retries"] = maxRetries
 		responsesDiagnostic("sampling.start", fields)
+		// Rust #61562: each opened response stream pairs its own hooks, and
+		// #61587 keeps the request id stable while the attempt number rises.
+		attemptHooks := request.beginModelRequestAttempt(ctx, request.Model)
 		response, err := r.runStreamingOncePreemptible(ctx, request, apiRequest)
+		attemptHooks.finish(ctx, response, err)
 		if err != nil && errors.Is(err, errResponsesSamplingPreempted) {
 			// Rust #48141: a signaled step yields the request instead of
 			// consuming a retry, and the connection state is dropped so the

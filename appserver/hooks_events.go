@@ -72,14 +72,22 @@ type HookInterruptRequest struct {
 
 // HookModelRequestRequest is one observation-only model request lifecycle event
 // (Rust #55144). Hook output cannot veto the request or alter model context.
+// Kind, RequestID, AttemptNumber and ResponseID carry the per-attempt identity
+// added by Rust #61562/#61587; SessionID is the shared session the thread
+// belongs to while ThreadID identifies the issuing thread.
 type HookModelRequestRequest struct {
 	ThreadID       string
+	SessionID      string
 	TurnID         string
 	CWD            string
 	TranscriptPath *string
 	Model          string
 	Phase          string
 	Status         string
+	Kind           string
+	RequestID      string
+	AttemptNumber  int
+	ResponseID     *string
 	Error          *string
 	TokenUsage     *model.AgentUsage
 	AgentID        string
@@ -481,12 +489,28 @@ func HookInputJSON(request any) (string, error) {
 	var input map[string]any
 	switch typed := request.(type) {
 	case *HookModelRequestRequest:
+		sessionID := strings.TrimSpace(typed.SessionID)
+		if sessionID == "" {
+			sessionID = typed.ThreadID
+		}
+		kind := strings.TrimSpace(typed.Kind)
+		if kind == "" {
+			kind = "sampling"
+		}
+		attemptNumber := typed.AttemptNumber
+		if attemptNumber < 1 {
+			attemptNumber = 1
+		}
 		input = map[string]any{
-			"session_id":      typed.ThreadID,
+			"session_id":      sessionID,
+			"thread_id":       typed.ThreadID,
 			"turn_id":         typed.TurnID,
 			"transcript_path": nullableStringValue(typed.TranscriptPath),
 			"cwd":             typed.CWD,
 			"model":           typed.Model,
+			"kind":            kind,
+			"request_id":      typed.RequestID,
+			"attempt_number":  attemptNumber,
 			"agent_id":        typed.AgentID,
 			"agent_type":      typed.AgentType,
 		}
@@ -494,6 +518,7 @@ func HookInputJSON(request any) (string, error) {
 			input["hook_event_name"] = "PostModelRequest"
 			input["status"] = typed.Status
 			input["error"] = nullableStringValue(typed.Error)
+			input["response_id"] = nullableStringValue(typed.ResponseID)
 			if typed.TokenUsage != nil {
 				input["token_usage"] = map[string]any{
 					"input_tokens":  typed.TokenUsage.InputTokens,

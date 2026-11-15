@@ -14,6 +14,7 @@ import (
 	"codex_go/retainedctx"
 	"codex_go/state"
 	"codex_go/tool"
+	"github.com/google/uuid"
 )
 
 type AgentLoopOptions struct {
@@ -299,19 +300,56 @@ type AgentLoopRequest struct {
 type AgentPreSamplingValidation func(ctx context.Context, iteration int) error
 
 // ModelRequestHookEvent describes one model request lifecycle milestone.
+// ThreadID, TurnID and CWD are supplied by the turn; Kind, RequestID,
+// AttemptNumber and ResponseID come from the model attempt that reported it
+// (Rust #61562/#61587).
 type ModelRequestHookEvent struct {
-	Phase    string
-	Status   string
-	Error    string
-	Model    string
-	ThreadID string
-	TurnID   string
-	CWD      string
-	Usage    *model.AgentUsage
+	Phase         string
+	Status        string
+	Kind          string
+	RequestID     string
+	AttemptNumber int
+	ResponseID    string
+	Error         string
+	Model         string
+	ThreadID      string
+	TurnID        string
+	CWD           string
+	Usage         *model.AgentUsage
 }
 
 // ModelRequestHook is one observation-only model request callback.
 type ModelRequestHook func(ctx context.Context, event ModelRequestHookEvent)
+
+// bridgeModelRequestHook adapts the model attempt hook to the turn event by
+// adding the thread, turn and cwd the model layer does not carry (Rust
+// #61562's ModelRequestHookInput).
+func bridgeModelRequestHook(hook ModelRequestHook, threadID, turnID, cwd string) model.ModelRequestHook {
+	if hook == nil {
+		return nil
+	}
+	return func(ctx context.Context, event model.ModelRequestHookEvent) {
+		var usage *model.AgentUsage
+		if event.Usage != nil {
+			value := *event.Usage
+			usage = &value
+		}
+		hook(ctx, ModelRequestHookEvent{
+			Phase:         event.Phase,
+			Status:        event.Status,
+			Kind:          string(event.Kind),
+			RequestID:     event.RequestID,
+			AttemptNumber: event.AttemptNumber,
+			ResponseID:    event.ResponseID,
+			Error:         event.Error,
+			Model:         event.Model,
+			ThreadID:      threadID,
+			TurnID:        turnID,
+			CWD:           cwd,
+			Usage:         usage,
+		})
+	}
+}
 
 type AgentLoopResult struct {
 	Response          *model.AgentResponse
@@ -609,11 +647,6 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 				return nil, err
 			}
 		}
-		if request.OnModelRequest != nil {
-			request.OnModelRequest(stepCtx, ModelRequestHookEvent{
-				Phase: "pre", Model: stepModel, ThreadID: request.ThreadID, TurnID: request.TurnID, CWD: request.CWD,
-			})
-		}
 		unifiedImageBudget := request.UnifiedImageBudget
 		if request.UnifiedImageBudgetForModel != nil {
 			unifiedImageBudget = request.UnifiedImageBudgetForModel(stepModel)
@@ -659,6 +692,12 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			PromptCacheTTL:               request.PromptCacheTTL,
 			CyberAccessProgram:           request.CyberAccessProgram,
 			RequestCountry:               stepRequestCountry,
+			// Rust #61562/#61587: the model runner pairs Pre/PostModelRequest
+			// hooks per opened response stream. One sampling iteration is one
+			// generation, so its request id stays stable across retries.
+			SamplingKind:                 model.SamplingKindSampling,
+			RequestID:                    uuid.NewString(),
+			OnModelRequest:               bridgeModelRequestHook(request.OnModelRequest, request.ThreadID, request.TurnID, request.CWD),
 			RequiredCyberAccessPrograms:  append([]string(nil), request.RequiredCyberAccessPrograms...),
 			ClientMetadata:               cloneStringMap(clientMetadata),
 			MCPAttribution:               l.mcpAttributionSnapshot(),
@@ -691,25 +730,6 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			},
 		})
 		sampling.CloseAt(l.now())
-		if request.OnModelRequest != nil {
-			status := "completed"
-			errorText := ""
-			if err != nil {
-				status = "failed"
-				errorText = err.Error()
-				if stepCtx.Err() != nil {
-					status = "cancelled"
-				}
-			}
-			var usage *model.AgentUsage
-			if response != nil {
-				usage = &response.Usage
-			}
-			request.OnModelRequest(stepCtx, ModelRequestHookEvent{
-				Phase: "post", Status: status, Error: errorText, Model: stepModel,
-				ThreadID: request.ThreadID, TurnID: request.TurnID, CWD: request.CWD, Usage: usage,
-			})
-		}
 		if response != nil && sampledThrough != nil {
 			value := *sampledThrough
 			response.SampledThroughSequence = &value

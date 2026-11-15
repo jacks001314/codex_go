@@ -248,6 +248,12 @@ type agentCompactRunner struct {
 	// issued the compaction (Rust #61535 compaction_responses_metadata). The
 	// zero value omits the field.
 	requestCountry protocol.RequestCountry
+	// samplingKind labels the compaction's Pre/PostModelRequest hook pairs
+	// (Rust #61562): foreground or background compaction.
+	samplingKind model.SamplingKind
+	// onModelRequest observes the compaction request's hook lifecycle. Rust
+	// pairs the hooks per compaction attempt with the compaction kind.
+	onModelRequest model.ModelRequestHook
 	// clientMetadata is the compaction turn's Responses client metadata
 	// (Rust `Session::compaction_responses_metadata`): the turn-metadata
 	// document reports the compaction request kind and the turn's identity.
@@ -330,6 +336,8 @@ func (r *agentCompactRunner) Compact(ctx context.Context, request *compact.Reque
 		CyberAccessProgram: strings.TrimSpace(r.cyberAccessProgram),
 		PromptCacheTTL:     strings.TrimSpace(r.promptCacheTTL),
 		RequestCountry:     r.requestCountry,
+		SamplingKind:       r.samplingKind,
+		OnModelRequest:     r.onModelRequest,
 	})
 	if err != nil {
 		return nil, err

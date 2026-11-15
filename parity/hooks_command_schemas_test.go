@@ -182,6 +182,90 @@ func TestRustHooksCommandSchemasCoverGoInputSurface(t *testing.T) {
 	}
 }
 
+// modelRequestHookSchemaRustRev pins the upstream commit that owns the
+// per-attempt model request hook identity (Rust #61562/#61587). candidateRustTo
+// predates model-request hook inputs, so this contract is verified against the
+// commit that introduced the current surface instead.
+const modelRequestHookSchemaRustRev = "b016cd18472588606c04af565528c4cd6746a41f"
+
+// TestRustModelRequestHookSchemaCoversGoInputSurface is the shared-fixture
+// differential for the model-request hook input: Go must emit exactly the
+// fields the current Rust schema declares, including the per-attempt identity
+// added by #61562/#61587.
+func TestRustModelRequestHookSchemaCoversGoInputSurface(t *testing.T) {
+	root := rustSnapshotRoot(t)
+	rustRepo := filepath.Dir(root)
+	fixture := "codex-rs/hooks/schema/generated/model-request.command.input.schema.json"
+	schemaData := gitOutput(t, rustRepo, "show", modelRequestHookSchemaRustRev+":"+fixture)
+	var schema struct {
+		Properties map[string]any `json:"properties"`
+		Required   []string       `json:"required"`
+		OneOf      []struct {
+			Properties map[string]any `json:"properties"`
+		} `json:"oneOf"`
+	}
+	if err := json.Unmarshal(schemaData, &schema); err != nil {
+		t.Fatalf("unmarshal Rust schema: %v", err)
+	}
+	// The event-specific fields live in oneOf branches keyed by
+	// hook_event_name, so the declared-key surface is their union.
+	declared := map[string]any{}
+	for key, value := range schema.Properties {
+		declared[key] = value
+	}
+	for _, branch := range schema.OneOf {
+		for key, value := range branch.Properties {
+			declared[key] = value
+		}
+	}
+	responseID := "resp-1"
+	requests := map[string]any{
+		"pre": &appserver.HookModelRequestRequest{
+			ThreadID: "thread-1", SessionID: "session-1", TurnID: "turn-1", CWD: "/repo",
+			Model: "gpt-5", Phase: "pre", Kind: "sampling", RequestID: "request-1", AttemptNumber: 1,
+		},
+		"post": &appserver.HookModelRequestRequest{
+			ThreadID: "thread-1", SessionID: "session-1", TurnID: "turn-1", CWD: "/repo",
+			Model: "gpt-5", Phase: "post", Status: "completed", Kind: "sampling",
+			RequestID: "request-1", AttemptNumber: 1, ResponseID: &responseID,
+		},
+	}
+	props := stringSet(sortedKeys(declared))
+	required := stringSet(schema.Required)
+	for name, request := range requests {
+		t.Run(name, func(t *testing.T) {
+			inputJSON, err := appserver.HookInputJSON(request)
+			if err != nil {
+				t.Fatalf("HookInputJSON: %v", err)
+			}
+			var emitted map[string]any
+			if err := json.Unmarshal([]byte(inputJSON), &emitted); err != nil {
+				t.Fatalf("unmarshal emitted input: %v", err)
+			}
+			for _, key := range sortedKeys(emitted) {
+				if !props[key] {
+					t.Fatalf("Go hook input emits undeclared key %q\nemitted: %s", key, inputJSON)
+				}
+			}
+			for _, key := range sortedSetKeys(required) {
+				if _, ok := emitted[key]; !ok {
+					t.Fatalf("Go hook input missing required schema property %q\nemitted: %s", key, inputJSON)
+				}
+			}
+			for _, key := range []string{"session_id", "thread_id", "kind", "request_id", "attempt_number"} {
+				if _, ok := emitted[key]; !ok {
+					t.Fatalf("Go hook input missing attempt identity %q\nemitted: %s", key, inputJSON)
+				}
+			}
+			if name == "post" {
+				if emitted["response_id"] != "resp-1" {
+					t.Fatalf("post response_id = %#v", emitted["response_id"])
+				}
+			}
+		})
+	}
+}
+
 func sortedKeys(values map[string]any) []string {
 	out := make([]string, 0, len(values))
 	for key := range values {

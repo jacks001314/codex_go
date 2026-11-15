@@ -107,7 +107,21 @@ type AgentRequest struct {
 	// RequestCountry is the trusted host country carried on Codex-backend
 	// Responses requests (Rust #61535). The zero value omits the field.
 	RequestCountry protocol.RequestCountry
-	ClientMetadata map[string]string
+	// SamplingKind labels this generation's Pre/PostModelRequest hook pairs as
+	// ordinary sampling or foreground/background compaction (Rust #61562).
+	// Empty means sampling.
+	SamplingKind SamplingKind
+	// RequestID identifies one model generation across harness retries and
+	// model fallback (Rust #61587). The Responses runner generates one when
+	// empty so every attempt of this Run reports the same id.
+	RequestID string
+	// OnModelRequest observes each provider attempt's Pre/PostModelRequest
+	// lifecycle (Rust #61562). The Responses runner pairs the hooks per attempt;
+	// other runners leave it unused.
+	OnModelRequest ModelRequestHook
+	// modelRequestHooks carries the per-Run hook state shared by retries.
+	modelRequestHooks *modelRequestHooks
+	ClientMetadata    map[string]string
 	// MCPAttribution is the thread's cumulative MCP tools/call attribution
 	// snapshot (Rust CodexResponsesMetadata::mcp_attribution). It is body-only
 	// and reaches the request only when the resolved provider is granted

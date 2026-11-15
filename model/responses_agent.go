@@ -2405,14 +2405,29 @@ func (r *ResponsesAgentRunner) Run(ctx context.Context, request *AgentRequest) (
 	if err != nil {
 		return nil, err
 	}
+	// Rust #61562/#61587: one hook lifecycle per opened response stream, with a
+	// request id that stays stable across this generation's retries. The
+	// terminal response.completed event is held until the attempt's synchronous
+	// post hook finishes (Rust response_delivery.rs).
+	request = request.withModelRequestHookState()
+	held := newHeldTerminalResponsesStreamHandler(request.StreamHandler)
+	if held != nil {
+		request.StreamHandler = held.handle
+	}
 	// Rust ModelClientSession::stream prefers the Responses WebSocket transport
 	// whenever the provider advertises support and session fallback has not
 	// disabled it. The same choice applies to every Responses turn, not only the
 	// Guardian prewarm path.
 	if r.responsesWebSocketEnabled() {
-		return r.runWebSocket(ctx, request, "", "", false, &authRecoveryState{})
+		attempt := request.beginModelRequestAttempt(ctx, request.Model)
+		response, err := r.runWebSocket(ctx, request, "", "", false, &authRecoveryState{})
+		attempt.finish(ctx, response, err)
+		held.flush()
+		return response, err
 	}
-	return r.runHTTP(ctx, request)
+	response, err := r.runHTTP(ctx, request)
+	held.flush()
+	return response, err
 }
 
 // buildResponsesAgentRequest is the single request builder shared by the HTTP
@@ -2557,7 +2572,7 @@ func serializeMcpAttributionBounded(attribution retainedctx.McpAttribution) stri
 	return string(encoded)
 }
 
-func (r *ResponsesAgentRunner) runHTTP(ctx context.Context, request *AgentRequest) (*AgentResponse, error) {
+func (r *ResponsesAgentRunner) runHTTP(ctx context.Context, request *AgentRequest) (response *AgentResponse, err error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -2571,6 +2586,10 @@ func (r *ResponsesAgentRunner) runHTTP(ctx context.Context, request *AgentReques
 	if apiRequest.Stream {
 		return r.runStreaming(ctx, request, apiRequest)
 	}
+	// A non-streaming Responses request opens exactly one response stream, so
+	// it pairs one Pre/PostModelRequest lifecycle (Rust #61562).
+	attempt := request.beginModelRequestAttempt(ctx, request.Model)
+	defer func() { attempt.finish(ctx, response, err) }()
 	httpResponse, preempted, err := r.runResponsesHTTPRequestPreemptible(ctx, request, apiRequest)
 	receivedAt := time.Now()
 	if preempted {
