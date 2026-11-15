@@ -979,26 +979,61 @@ func (r *RuntimeRouter) realtimeTimelineActive(threadID string) bool {
 // persistRealtimeHistoryItems appends the canonical realtime items to the
 // thread rollout in event order (Rust RolloutItem::RealtimeItem, #41924).
 // Ephemeral threads have no rollout, so the recorder path is a no-op for them.
-func (r *RuntimeRouter) persistRealtimeHistoryItems(threadID string, items []realtime.RealtimeItem) {
+// sealFrames flushes the recorder before the caller publishes lifecycle
+// notifications, so a completion acknowledgement never outruns durable history
+// (Rust #61473).
+func (r *RuntimeRouter) persistRealtimeHistoryItems(threadID string, items []realtime.RealtimeItem, sealFrames bool) error {
 	if r == nil || len(items) == 0 || !r.hasRuntimeThreadStore() {
-		return
+		return nil
 	}
 	threadID = strings.TrimSpace(threadID)
 	if threadID == "" {
-		return
+		return nil
 	}
 	payloads := make([]json.RawMessage, 0, len(items))
 	for _, item := range items {
 		encoded, err := item.MarshalRolloutJSON()
 		if err != nil {
-			return
+			return err
 		}
 		payloads = append(payloads, encoded)
 	}
 	now := runtimeRouterNow(r).UTC()
-	_ = r.withRuntimeRollout(threadID, func(recorder *rollout.Recorder) error {
-		return rollout.AppendRealtimeItems(recorder, payloads, now)
+	return r.withRuntimeRollout(threadID, func(recorder *rollout.Recorder) error {
+		if err := rollout.AppendRealtimeItems(recorder, payloads, now); err != nil {
+			return err
+		}
+		if sealFrames {
+			return recorder.Flush()
+		}
+		return nil
 	})
+}
+
+// realtimeFramesEnabled enrolls state-backed threads in canonical realtime
+// frames (Rust #61473 LocalThreadStore::realtime_frames_enabled).
+func (r *RuntimeRouter) realtimeFramesEnabled(string) bool {
+	if r == nil || r.services.StateRuntime == nil {
+		return false
+	}
+	return r.hasRuntimeThreadStore()
+}
+
+// realtimeObservationClockFloor restores the non-decreasing observation clock
+// floor from the thread rollout or its newest compaction checkpoint.
+func (r *RuntimeRouter) realtimeObservationClockFloor(threadID string) *int64 {
+	if r == nil || strings.TrimSpace(threadID) == "" {
+		return nil
+	}
+	path, err := rollout.FindThreadPath(r.codexHomeForRollout(), threadID, false)
+	if err != nil || strings.TrimSpace(path) == "" {
+		return nil
+	}
+	lines, _, err := rollout.Load(path)
+	if err != nil {
+		return nil
+	}
+	return rollout.ObservationClockFloor(lines)
 }
 
 // sealRealtimeUserInput seals live transcript segments before a typed user

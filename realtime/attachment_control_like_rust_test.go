@@ -150,7 +150,7 @@ func TestRealtimeAttachmentCancelReleasesPendingHandshakeLikeRust(t *testing.T) 
 	if err != nil {
 		t.Fatalf("the next attachment failed: %v", err)
 	}
-	if state == nil || state.Config.RealtimeSessionID != "thread-attach-cancel" {
+	if state == nil || state.Config.RealtimeSessionID == "" || state.Config.RealtimeSessionID == "thread-attach-cancel" {
 		t.Fatalf("published state = %#v", state)
 	}
 	if len(notifications) == 0 || notifications[0].Method != NotificationStarted {

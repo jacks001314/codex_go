@@ -117,7 +117,8 @@ func TestStartParamsNormalizeDefaultsAndPrompt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("normalize: %v", err)
 	}
-	if config.Version != VersionV1 || config.Voice != VoiceCove || config.Model != "rt-model" || config.RealtimeSessionID != "thread-a" {
+	if config.Version != VersionV1 || config.Voice != VoiceCove || config.Model != "rt-model" ||
+		config.RealtimeSessionID == "" || config.RealtimeSessionID == "thread-a" {
 		t.Fatalf("defaults not applied: %+v", config)
 	}
 	if !config.PromptSet || config.Prompt != "" {
@@ -819,7 +820,9 @@ func TestManagerRealWebsocketV3IsBidirectionalAndOrdered(t *testing.T) {
 	if handshakeInfo.path != "/v1/live" || !strings.Contains(handshakeInfo.query, "model=gpt-live-1.1-codex") {
 		t.Fatalf("realtime URL = %s?%s", handshakeInfo.path, handshakeInfo.query)
 	}
-	if handshakeInfo.header.Get("Authorization") != "Bearer test" || handshakeInfo.header.Get("Openai-Alpha") != "quicksilver=v2" || handshakeInfo.header.Get("X-Session-Id") != "thread-v3" {
+	sessionHeader := handshakeInfo.header.Get("X-Session-Id")
+	if handshakeInfo.header.Get("Authorization") != "Bearer test" || handshakeInfo.header.Get("Openai-Alpha") != "quicksilver=v2" ||
+		sessionHeader == "" || sessionHeader == "thread-v3" {
 		t.Fatalf("realtime headers = %#v", handshakeInfo.header)
 	}
 	if handshakeInfo.update["type"] != "session.update" {

@@ -10,6 +10,18 @@ func (m *Manager) historyForLocked(threadID string) *RealtimeHistoryState {
 	state := m.history[threadID]
 	if state == nil {
 		state = &RealtimeHistoryState{}
+		now := m.now
+		if now != nil {
+			state.nowMS = func() int64 { return now().UnixMilli() }
+		}
+		if m.historyFrames != nil {
+			state.SetFramesEnabled(m.historyFrames(threadID))
+		} else {
+			state.SetFramesEnabled(false)
+		}
+		if m.historyClockFloor != nil {
+			state.RestoreObservationClockFloor(m.historyClockFloor(threadID))
+		}
 		m.history[threadID] = state
 	}
 	return state
@@ -26,9 +38,10 @@ func (m *Manager) historyFor(threadID string) *RealtimeHistoryState {
 }
 
 // SetHistoryItemSink installs the host callback that persists canonical
-// realtime items in event order. It runs before the matching lifecycle
-// notifications, mirroring Rust's append-then-notify ordering.
-func (m *Manager) SetHistoryItemSink(sink func(string, []RealtimeItem)) {
+// realtime items in event order. sealFrames asks the host to reach its
+// durability barrier before the matching lifecycle notifications are
+// acknowledged (Rust #61473 append-then-flush-then-notify ordering).
+func (m *Manager) SetHistoryItemSink(sink func(string, []RealtimeItem, bool) error) {
 	if m == nil {
 		return
 	}
@@ -49,6 +62,29 @@ func (m *Manager) SetHistoryEnabled(enabled func(string) bool) {
 	m.mu.Unlock()
 }
 
+// SetFrameEnrollment installs the host predicate that enrolls a thread in
+// canonical realtime frames. Enrollment is cached per thread at first use
+// (Rust #61473 Session::initialize_realtime_history).
+func (m *Manager) SetFrameEnrollment(enabled func(string) bool) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.historyFrames = enabled
+	m.mu.Unlock()
+}
+
+// SetObservationClockFloorProvider installs the reader for the non-decreasing
+// observation clock floor persisted by a rollout or compaction checkpoint.
+func (m *Manager) SetObservationClockFloorProvider(provider func(string) *int64) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.historyClockFloor = provider
+	m.mu.Unlock()
+}
+
 // historyPublicationEnabled reports whether canonical history applies to the
 // thread.
 func (m *Manager) historyPublicationEnabled(threadID string) bool {
@@ -59,16 +95,17 @@ func (m *Manager) historyPublicationEnabled(threadID string) bool {
 }
 
 // persistHistoryItems hands the canonical items to the host sink.
-func (m *Manager) persistHistoryItems(threadID string, items []RealtimeItem) {
+func (m *Manager) persistHistoryItems(threadID string, items []RealtimeItem, sealFrames bool) error {
 	if len(items) == 0 {
-		return
+		return nil
 	}
 	m.mu.Lock()
 	sink := m.historyItemSink
 	m.mu.Unlock()
 	if sink != nil {
-		sink(threadID, items)
+		return sink(threadID, items, sealFrames)
 	}
+	return nil
 }
 
 // publishHistoryEffects emits the live transcript stream, persists the durable
@@ -78,7 +115,12 @@ func (m *Manager) publishHistoryEffects(threadID string, effects RealtimeEventEf
 		return nil
 	}
 	notifications := transcriptStreamNotifications(threadID, effects)
-	m.persistHistoryItems(threadID, effects.Items)
+	if err := m.persistHistoryItems(threadID, effects.Items, effects.SealFrames); err != nil {
+		// Rust acknowledges durable history only after the append (and, for
+		// sealed frames, flush) barrier. Keep the live transcript stream but
+		// suppress the lifecycle completion.
+		return notifications
+	}
 	return append(notifications, historyLifecycleNotifications(threadID, effects.Items)...)
 }
 
@@ -111,7 +153,13 @@ func transcriptStreamNotifications(threadID string, effects RealtimeEventEffects
 func historyLifecycleNotifications(threadID string, items []RealtimeItem) []Notification {
 	var notifications []Notification
 	for _, item := range items {
-		if item.Content.Kind != RealtimeItemKindTranscriptSegment {
+		// Turn-input acceptance and session-end receipts are durable history,
+		// not live conversation items (Rust #61473).
+		if item.Content.Kind == RealtimeItemKindTurnInputAccepted ||
+			item.Content.Kind == RealtimeItemKindSessionEndInput {
+			continue
+		}
+		if item.Content.Kind != RealtimeItemKindTranscriptSegment && item.Content.Kind != RealtimeItemKindFrame {
 			notifications = append(notifications, Notification{
 				Method: NotificationItemStarted,
 				Params: ItemStartedNotification{ThreadID: threadID, Item: item},

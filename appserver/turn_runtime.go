@@ -4880,6 +4880,7 @@ func checkpointResumeMetadata(rolloutPath string, threadID string, turnID string
 	}
 	lines := checkpointRolloutLines(rolloutPath)
 	resume.TurnAttribution = rollout.ReconstructTurnAttribution(lines)
+	resume.ObservationClockFloorMS = rollout.ObservationClockFloor(lines)
 	// Rust #57553: the checkpoint carries the producing thread's persisted
 	// dynamic-tool catalog so compaction never drops a replacement or a clear.
 	if id := strings.TrimSpace(threadID); id != "" {

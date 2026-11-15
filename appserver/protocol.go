@@ -13,6 +13,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/google/uuid"
+
 	"codex_go/gitutil"
 	"codex_go/mcp"
 	"codex_go/model"
@@ -99,6 +101,7 @@ const (
 	MethodThreadRealtimeAppendText           Method = "thread/realtime/appendText"
 	MethodThreadRealtimeAppendSpeech         Method = "thread/realtime/appendSpeech"
 	MethodThreadRealtimeStop                 Method = "thread/realtime/stop"
+	MethodThreadRealtimeList                 Method = "thread/realtime/list"
 	MethodThreadRealtimeListVoices           Method = "thread/realtime/listVoices"
 
 	MethodTurnStart                              Method = "turn/start"
@@ -3671,6 +3674,61 @@ func (e ThreadTimelineEntry) MarshalJSON() ([]byte, error) {
 	default:
 		return nil, fmt.Errorf("unknown thread timeline entry type %q", e.Type)
 	}
+}
+
+// ThreadRealtimeListParams mirrors Rust's experimental thread/realtime/list
+// params (#61480): an immutable snapshot of persisted realtime history,
+// independent of turn pagination or a live runtime.
+type ThreadRealtimeListParams struct {
+	ThreadID                string               `json:"threadId"`
+	SessionID               *string              `json:"sessionId,omitempty"`
+	FromObservedAtMS        *int64               `json:"fromObservedAtMs,omitempty"`
+	ToObservedAtMS          *int64               `json:"toObservedAtMs,omitempty"`
+	Order                   *ThreadRealtimeOrder `json:"order,omitempty"`
+	AfterPosition           *uint64              `json:"afterPosition,omitempty"`
+	EventID                 *string              `json:"eventId,omitempty"`
+	Cursor                  *string              `json:"cursor,omitempty"`
+	Limit                   *int                 `json:"limit,omitempty"`
+	SnapshotEnd             *uint64              `json:"snapshotEnd,omitempty"`
+	RequiredThroughPosition *uint64              `json:"requiredThroughPosition,omitempty"`
+}
+
+func (p *ThreadRealtimeListParams) Validate() error {
+	if p == nil || strings.TrimSpace(p.ThreadID) == "" {
+		return jsonRPCInvalidRequest("thread/realtime/list params require a thread id")
+	}
+	if _, err := uuid.Parse(strings.TrimSpace(p.ThreadID)); err != nil {
+		return jsonRPCInvalidRequest("invalid thread id: " + err.Error())
+	}
+	return nil
+}
+
+type ThreadRealtimeOrder string
+
+const (
+	ThreadRealtimeOrderObservedAt ThreadRealtimeOrder = "observedAt"
+	ThreadRealtimeOrderPosition   ThreadRealtimeOrder = "position"
+)
+
+type ThreadRealtimeCoverage string
+
+const (
+	ThreadRealtimeCoverageUnsupported ThreadRealtimeCoverage = "unsupported"
+	ThreadRealtimeCoveragePending     ThreadRealtimeCoverage = "pending"
+	ThreadRealtimeCoverageReady       ThreadRealtimeCoverage = "ready"
+)
+
+type ThreadRealtimeEntry struct {
+	Position uint64                `json:"position"`
+	Item     realtime.RealtimeItem `json:"item"`
+}
+
+type ThreadRealtimeListResponse struct {
+	Data                      []ThreadRealtimeEntry  `json:"data"`
+	NextCursor                *string                `json:"nextCursor"`
+	SnapshotEnd               uint64                 `json:"snapshotEnd"`
+	ProjectedThroughItemIndex uint64                 `json:"projectedThroughItemIndex"`
+	Coverage                  ThreadRealtimeCoverage `json:"coverage"`
 }
 
 // ThreadItemsReadParams mirrors Rust's experimental ThreadItemsReadParams

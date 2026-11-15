@@ -1460,6 +1460,8 @@ func (r *Router) dispatch(request *Request) (any, error) {
 		return r.handleThreadItemsList(request)
 	case MethodThreadTimelineList:
 		return r.handleThreadTimelineList(request)
+	case MethodThreadRealtimeList:
+		return r.handleThreadRealtimeList(request)
 	case MethodThreadItemsRead:
 		return r.handleThreadItemsRead(request)
 	case MethodThreadTurnsList:
@@ -4627,6 +4629,86 @@ func paginatedTimelineHistoryError(err error) error {
 		}
 	}
 	return fmt.Errorf("failed to list thread timeline: %w", err)
+}
+
+// handleThreadRealtimeList ports Rust's experimental thread/realtime/list
+// (#61480): persisted frames and receipts read through an immutable snapshot.
+func (r *Router) handleThreadRealtimeList(request *Request) (*ThreadRealtimeListResponse, error) {
+	var params ThreadRealtimeListParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if err := params.Validate(); err != nil {
+		return nil, err
+	}
+	if r.state == nil {
+		return unsupportedThreadRealtimeResponse(), nil
+	}
+	limit := 100
+	if params.Limit != nil {
+		limit = *params.Limit
+	}
+	var order state.ThreadRealtimeOrder
+	if params.Order != nil {
+		order = state.ThreadRealtimeOrder(*params.Order)
+	}
+	page, err := r.state.ListThreadRealtime(context.Background(), state.ThreadRealtimeListParams{
+		ThreadID:                params.ThreadID,
+		SessionID:               params.SessionID,
+		FromObservedAtMS:        params.FromObservedAtMS,
+		ToObservedAtMS:          params.ToObservedAtMS,
+		Order:                   order,
+		AfterPosition:           params.AfterPosition,
+		EventID:                 params.EventID,
+		Cursor:                  params.Cursor,
+		PageSize:                limit,
+		SnapshotEnd:             params.SnapshotEnd,
+		RequiredThroughPosition: params.RequiredThroughPosition,
+	})
+	if err != nil {
+		return nil, paginatedRealtimeHistoryError(err)
+	}
+	return buildThreadRealtimeResponse(page)
+}
+
+func buildThreadRealtimeResponse(page *state.ThreadRealtimePage) (*ThreadRealtimeListResponse, error) {
+	response := &ThreadRealtimeListResponse{
+		Data:                      make([]ThreadRealtimeEntry, 0, len(page.Data)),
+		NextCursor:                page.NextCursor,
+		SnapshotEnd:               page.SnapshotEnd,
+		ProjectedThroughItemIndex: page.ProjectedThroughItemIndex,
+		Coverage:                  ThreadRealtimeCoverage(page.Coverage),
+	}
+	for _, stored := range page.Data {
+		var item realtime.RealtimeItem
+		if err := item.UnmarshalRolloutJSON(stored.ItemJSON); err != nil {
+			return nil, fmt.Errorf("failed to deserialize realtime history item at position %d: %w", stored.Position, err)
+		}
+		response.Data = append(response.Data, ThreadRealtimeEntry{Position: stored.Position, Item: item})
+	}
+	return response, nil
+}
+
+func unsupportedThreadRealtimeResponse() *ThreadRealtimeListResponse {
+	return &ThreadRealtimeListResponse{
+		Data:     []ThreadRealtimeEntry{},
+		Coverage: ThreadRealtimeCoverageUnsupported,
+	}
+}
+
+func paginatedRealtimeHistoryError(err error) error {
+	var historyErr *state.ThreadHistoryError
+	if errors.As(err, &historyErr) {
+		switch historyErr.Kind {
+		case state.ThreadHistoryInvalidRequest:
+			return jsonRPCInvalidRequest(historyErr.Error())
+		case state.ThreadHistoryUnsupported:
+			return methodNotFound("thread/realtime/list is not supported yet")
+		case state.ThreadHistoryNotFound:
+			return jsonRPCInvalidRequest("no rollout found for thread id " + historyErr.ThreadID)
+		}
+	}
+	return fmt.Errorf("failed to list realtime history: %w", err)
 }
 
 func (r *Router) buildPaginatedThreadTurnsResponse(params *ThreadTurnsListParams, options *turnsResponseOptions) (*TurnsPage, error) {

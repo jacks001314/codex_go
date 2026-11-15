@@ -4,7 +4,10 @@ package realtime
 // order, ephemeral threads publish no history, and typed input seals segments
 // unless it is a realtime handoff delegation.
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestRealtimeItemRolloutJSONMatchesCoreWireShapeLikeRust(t *testing.T) {
 	cases := []struct {
@@ -43,7 +46,7 @@ func TestRealtimeItemRolloutJSONMatchesCoreWireShapeLikeRust(t *testing.T) {
 		if err := decoded.UnmarshalRolloutJSON(encoded); err != nil {
 			t.Fatalf("UnmarshalRolloutJSON(%s) error = %v", testCase.item.ID, err)
 		}
-		if decoded != testCase.item {
+		if !reflect.DeepEqual(decoded, testCase.item) {
 			t.Fatalf("round trip %s = %#v, want %#v", testCase.item.ID, decoded, testCase.item)
 		}
 	}
@@ -52,11 +55,12 @@ func TestRealtimeItemRolloutJSONMatchesCoreWireShapeLikeRust(t *testing.T) {
 func TestManagerPersistsCanonicalHistoryInEventOrderLikeRust(t *testing.T) {
 	manager := NewManager()
 	var persisted [][]RealtimeItem
-	manager.SetHistoryItemSink(func(threadID string, items []RealtimeItem) {
+	manager.SetHistoryItemSink(func(threadID string, items []RealtimeItem, _ bool) error {
 		if threadID != "thread-a" {
 			t.Fatalf("sink thread = %q", threadID)
 		}
 		persisted = append(persisted, append([]RealtimeItem(nil), items...))
+		return nil
 	})
 
 	history := manager.historyFor("thread-a")
@@ -96,7 +100,10 @@ func TestManagerSkipsHistoryForEphemeralThreadsLikeRust(t *testing.T) {
 	manager := NewManager()
 	manager.SetHistoryEnabled(func(threadID string) bool { return threadID != "ephemeral" })
 	persisted := 0
-	manager.SetHistoryItemSink(func(string, []RealtimeItem) { persisted++ })
+	manager.SetHistoryItemSink(func(string, []RealtimeItem, bool) error {
+		persisted++
+		return nil
+	})
 	history := manager.historyFor("ephemeral")
 
 	if notifications := manager.publishHistoryEffects("ephemeral", history.StartSession("session-1")); len(notifications) != 0 {
@@ -116,8 +123,9 @@ func TestManagerSkipsHistoryForEphemeralThreadsLikeRust(t *testing.T) {
 func TestSealUserInputSkipsRealtimeDelegationLikeRust(t *testing.T) {
 	manager := NewManager()
 	var persisted []RealtimeItem
-	manager.SetHistoryItemSink(func(_ string, items []RealtimeItem) {
+	manager.SetHistoryItemSink(func(_ string, items []RealtimeItem, _ bool) error {
 		persisted = append(persisted, items...)
+		return nil
 	})
 	history := manager.historyFor("thread-a")
 	manager.publishHistoryEffects("thread-a", history.StartSession("session-1"))

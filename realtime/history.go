@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 
 	"github.com/google/uuid"
@@ -21,6 +22,7 @@ import (
 type RealtimeItem struct {
 	ID                string
 	RealtimeSessionID string
+	ObservedAtMS      *int64
 	Content           RealtimeItemContent
 }
 
@@ -29,9 +31,12 @@ type RealtimeItemKind string
 
 const (
 	RealtimeItemKindSessionStarted    RealtimeItemKind = "realtimeSessionStarted"
+	RealtimeItemKindFrame             RealtimeItemKind = "frame"
 	RealtimeItemKindTranscriptSegment RealtimeItemKind = "transcriptSegment"
 	RealtimeItemKindBemItemPromoted   RealtimeItemKind = "bemItemPromoted"
 	RealtimeItemKindSessionClosed     RealtimeItemKind = "realtimeSessionClosed"
+	RealtimeItemKindTurnInputAccepted RealtimeItemKind = "turnInputAccepted"
+	RealtimeItemKindSessionEndInput   RealtimeItemKind = "sessionEndInputSaved"
 )
 
 // RealtimeTranscriptRole identifies who spoke a transcript segment.
@@ -76,6 +81,31 @@ type RealtimeItemContent struct {
 	ItemID       string
 	Presentation BemItemPresentation
 	Outcome      RealtimeSessionOutcome
+	HandoffID    string
+	HandoffMode  RealtimeHandoffMode
+	SourceEvents []string
+	InputItemID  string
+	Input        string
+}
+
+// RealtimeHandoffMode records how an accepted realtime input entered the agent
+// turn (Rust RealtimeHandoffMode).
+type RealtimeHandoffMode string
+
+const (
+	RealtimeHandoffModeStart RealtimeHandoffMode = "start"
+	RealtimeHandoffModeSteer RealtimeHandoffMode = "steer"
+)
+
+// RealtimeFrameChannels carries the payloads of one realtime frame.
+type RealtimeFrameChannels struct {
+	VoiceTranscript RealtimeVoiceTranscript
+}
+
+// RealtimeVoiceTranscript is the V1 voice payload of a realtime frame.
+type RealtimeVoiceTranscript struct {
+	Role RealtimeTranscriptRole
+	Text string
 }
 
 // MarshalJSON emits the Rust wire shape for the selected kind.
@@ -83,6 +113,8 @@ func (c RealtimeItemContent) MarshalJSON() ([]byte, error) {
 	switch c.Kind {
 	case RealtimeItemKindSessionStarted:
 		return []byte(`{"type":"realtimeSessionStarted"}`), nil
+	case RealtimeItemKindFrame:
+		return marshalFrameChannels(c)
 	case RealtimeItemKindTranscriptSegment:
 		if !validTranscriptRole(c.Role) {
 			return nil, fmt.Errorf("invalid realtime transcript role %q", c.Role)
@@ -102,6 +134,29 @@ func (c RealtimeItemContent) MarshalJSON() ([]byte, error) {
 			return nil, fmt.Errorf("invalid realtime session outcome %q", c.Outcome)
 		}
 		return []byte(`{"type":"realtimeSessionClosed","outcome":` + jsonString(string(c.Outcome)) + `}`), nil
+	case RealtimeItemKindTurnInputAccepted:
+		mode, err := marshalHandoffMode(c.HandoffMode)
+		if err != nil {
+			return nil, err
+		}
+		sources, err := json.Marshal(c.SourceEvents)
+		if err != nil {
+			return nil, err
+		}
+		return []byte(`{"type":"turnInputAccepted","handoffId":` + jsonString(c.HandoffID) +
+			`,"turnId":` + jsonString(c.TurnID) +
+			`,"mode":` + mode +
+			`,"sourceEventIds":` + string(sources) +
+			`,"inputItemId":` + jsonString(c.InputItemID) +
+			`,"input":` + jsonString(c.Input) + `}`), nil
+	case RealtimeItemKindSessionEndInput:
+		sources, err := json.Marshal(c.SourceEvents)
+		if err != nil {
+			return nil, err
+		}
+		return []byte(`{"type":"sessionEndInputSaved","sourceEventIds":` + string(sources) +
+			`,"inputItemId":` + jsonString(c.InputItemID) +
+			`,"input":` + jsonString(c.Input) + `}`), nil
 	default:
 		return nil, fmt.Errorf("invalid realtime item kind %q", c.Kind)
 	}
@@ -121,6 +176,10 @@ func (i RealtimeItem) MarshalJSON() ([]byte, error) {
 	builder.WriteString(jsonString(i.ID))
 	builder.WriteString(`,"realtimeSessionId":`)
 	builder.WriteString(jsonString(i.RealtimeSessionID))
+	if i.ObservedAtMS != nil {
+		builder.WriteString(`,"observedAtMs":`)
+		builder.WriteString(fmt.Sprintf("%d", *i.ObservedAtMS))
+	}
 	if body := content[1:]; len(body) > 1 {
 		builder.WriteByte(',')
 		builder.Write(body)
@@ -152,6 +211,25 @@ func jsonString(value string) string {
 	return string(encoded)
 }
 
+// marshalFrameChannels emits V1's only frame channel. The core and app-server
+// wire shapes share the channel names.
+func marshalFrameChannels(c RealtimeItemContent) ([]byte, error) {
+	if !validTranscriptRole(c.Role) {
+		return nil, fmt.Errorf("invalid realtime transcript role %q", c.Role)
+	}
+	return []byte(`{"type":"frame","channels":{"voice_transcript":{"role":` + jsonString(string(c.Role)) +
+		`,"text":` + jsonString(c.Text) + `}}}`), nil
+}
+
+func marshalHandoffMode(mode RealtimeHandoffMode) (string, error) {
+	switch mode {
+	case RealtimeHandoffModeStart, RealtimeHandoffModeSteer:
+		return jsonString(string(mode)), nil
+	default:
+		return "", fmt.Errorf("invalid realtime handoff mode %q", mode)
+	}
+}
+
 // MarshalRolloutJSON emits the canonical snake_case wire shape persisted in a
 // `realtime_item` rollout record (Rust RolloutItem::RealtimeItem).
 func (i RealtimeItem) MarshalRolloutJSON() ([]byte, error) {
@@ -164,6 +242,10 @@ func (i RealtimeItem) MarshalRolloutJSON() ([]byte, error) {
 	builder.WriteString(jsonString(i.ID))
 	builder.WriteString(`,"realtime_session_id":`)
 	builder.WriteString(jsonString(i.RealtimeSessionID))
+	if i.ObservedAtMS != nil {
+		builder.WriteString(`,"observed_at_ms":`)
+		builder.WriteString(fmt.Sprintf("%d", *i.ObservedAtMS))
+	}
 	if body := content[1:]; len(body) > 1 {
 		builder.WriteByte(',')
 		builder.Write(body)
@@ -176,6 +258,8 @@ func (c RealtimeItemContent) marshalRolloutJSON() ([]byte, error) {
 	switch c.Kind {
 	case RealtimeItemKindSessionStarted:
 		return []byte(`{"type":"realtime_session_started"}`), nil
+	case RealtimeItemKindFrame:
+		return marshalFrameChannels(c)
 	case RealtimeItemKindTranscriptSegment:
 		if !validTranscriptRole(c.Role) {
 			return nil, fmt.Errorf("invalid realtime transcript role %q", c.Role)
@@ -195,6 +279,29 @@ func (c RealtimeItemContent) marshalRolloutJSON() ([]byte, error) {
 			return nil, fmt.Errorf("invalid realtime session outcome %q", c.Outcome)
 		}
 		return []byte(`{"type":"realtime_session_closed","outcome":` + jsonString(string(c.Outcome)) + `}`), nil
+	case RealtimeItemKindTurnInputAccepted:
+		mode, err := marshalHandoffMode(c.HandoffMode)
+		if err != nil {
+			return nil, err
+		}
+		sources, err := json.Marshal(c.SourceEvents)
+		if err != nil {
+			return nil, err
+		}
+		return []byte(`{"type":"turn_input_accepted","handoff_id":` + jsonString(c.HandoffID) +
+			`,"turn_id":` + jsonString(c.TurnID) +
+			`,"mode":` + mode +
+			`,"source_event_ids":` + string(sources) +
+			`,"input_item_id":` + jsonString(c.InputItemID) +
+			`,"input":` + jsonString(c.Input) + `}`), nil
+	case RealtimeItemKindSessionEndInput:
+		sources, err := json.Marshal(c.SourceEvents)
+		if err != nil {
+			return nil, err
+		}
+		return []byte(`{"type":"session_end_input_saved","source_event_ids":` + string(sources) +
+			`,"input_item_id":` + jsonString(c.InputItemID) +
+			`,"input":` + jsonString(c.Input) + `}`), nil
 	default:
 		return nil, fmt.Errorf("invalid realtime item kind %q", c.Kind)
 	}
@@ -235,11 +342,15 @@ func (i *RealtimeItem) UnmarshalRolloutJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
+	observedAt, err := optionalRealtimeInt64(fields, "observed_at_ms")
+	if err != nil {
+		return err
+	}
 	content, err := decodeRealtimeRolloutContent(fields)
 	if err != nil {
 		return err
 	}
-	*i = RealtimeItem{ID: id, RealtimeSessionID: sessionID, Content: content}
+	*i = RealtimeItem{ID: id, RealtimeSessionID: sessionID, ObservedAtMS: observedAt, Content: content}
 	return nil
 }
 
@@ -253,6 +364,8 @@ func decodeRealtimeRolloutContent(fields map[string]json.RawMessage) (RealtimeIt
 	switch kind {
 	case "realtime_session_started":
 		return RealtimeItemContent{Kind: RealtimeItemKindSessionStarted}, nil
+	case "frame":
+		return decodeFrameChannels(fields)
 	case "transcript_segment":
 		role, err := requiredRealtimeString(fields, "role")
 		if err != nil {
@@ -305,6 +418,10 @@ func decodeRealtimeRolloutContent(fields map[string]json.RawMessage) (RealtimeIt
 			Kind:    RealtimeItemKindSessionClosed,
 			Outcome: RealtimeSessionOutcome(outcome),
 		}, nil
+	case "turn_input_accepted":
+		return decodeTurnInputAccepted(fields, "handoff_id", "turn_id", "source_event_ids", "input_item_id")
+	case "session_end_input_saved":
+		return decodeSessionEndInputSaved(fields, "source_event_ids", "input_item_id")
 	default:
 		return RealtimeItemContent{}, fmt.Errorf("unknown realtime item kind %q", kind)
 	}
@@ -359,7 +476,9 @@ func (i *RealtimeItem) UnmarshalJSON(data []byte) error {
 	}
 	for key := range fields {
 		switch key {
-		case "id", "realtimeSessionId", "type", "role", "text", "turnId", "itemId", "presentation", "outcome":
+		case "id", "realtimeSessionId", "observedAtMs", "type", "role", "text", "turnId", "itemId",
+			"presentation", "outcome", "channels", "handoffId", "mode", "sourceEventIds",
+			"inputItemId", "input":
 		default:
 			return fmt.Errorf("unknown realtime item field %q", key)
 		}
@@ -372,11 +491,15 @@ func (i *RealtimeItem) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
+	observedAt, err := optionalRealtimeInt64(fields, "observedAtMs")
+	if err != nil {
+		return err
+	}
 	content, err := decodeRealtimeItemContent(fields)
 	if err != nil {
 		return err
 	}
-	*i = RealtimeItem{ID: id, RealtimeSessionID: sessionID, Content: content}
+	*i = RealtimeItem{ID: id, RealtimeSessionID: sessionID, ObservedAtMS: observedAt, Content: content}
 	return nil
 }
 
@@ -432,6 +555,8 @@ func decodeRealtimeItemContent(fields map[string]json.RawMessage) (RealtimeItemC
 	switch content.Kind {
 	case RealtimeItemKindSessionStarted:
 		return content, nil
+	case RealtimeItemKindFrame:
+		return decodeFrameChannels(fields)
 	case RealtimeItemKindTranscriptSegment:
 		role, err := requiredRealtimeString(fields, "role")
 		if err != nil {
@@ -478,9 +603,147 @@ func decodeRealtimeItemContent(fields map[string]json.RawMessage) (RealtimeItemC
 			return RealtimeItemContent{}, fmt.Errorf("unknown realtime session outcome %q", outcome)
 		}
 		return content, nil
+	case RealtimeItemKindTurnInputAccepted:
+		return decodeTurnInputAccepted(fields, "handoffId", "turnId", "sourceEventIds", "inputItemId")
+	case RealtimeItemKindSessionEndInput:
+		return decodeSessionEndInputSaved(fields, "sourceEventIds", "inputItemId")
 	default:
 		return RealtimeItemContent{}, fmt.Errorf("unknown realtime item kind %q", kind)
 	}
+}
+
+// decodeFrameChannels reads V1's sparse channel envelope.
+func decodeFrameChannels(fields map[string]json.RawMessage) (RealtimeItemContent, error) {
+	raw, ok := fields["channels"]
+	if !ok {
+		return RealtimeItemContent{}, fmt.Errorf("missing field channels")
+	}
+	var channels map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &channels); err != nil {
+		return RealtimeItemContent{}, fmt.Errorf("field channels must be an object: %w", err)
+	}
+	transcript, ok := channels["voice_transcript"]
+	if !ok {
+		return RealtimeItemContent{}, fmt.Errorf("frame channels require voice_transcript")
+	}
+	var voice map[string]json.RawMessage
+	if err := json.Unmarshal(transcript, &voice); err != nil {
+		return RealtimeItemContent{}, fmt.Errorf("field voice_transcript must be an object: %w", err)
+	}
+	role, err := requiredRealtimeString(voice, "role")
+	if err != nil {
+		return RealtimeItemContent{}, err
+	}
+	if !validTranscriptRole(RealtimeTranscriptRole(role)) {
+		return RealtimeItemContent{}, fmt.Errorf("unknown realtime transcript role %q", role)
+	}
+	text, err := requiredRealtimeString(voice, "text")
+	if err != nil {
+		return RealtimeItemContent{}, err
+	}
+	return RealtimeItemContent{
+		Kind: RealtimeItemKindFrame,
+		Role: RealtimeTranscriptRole(role),
+		Text: text,
+	}, nil
+}
+
+func decodeTurnInputAccepted(fields map[string]json.RawMessage, handoffKey, turnKey, sourcesKey, inputItemKey string) (RealtimeItemContent, error) {
+	handoffID, err := requiredRealtimeString(fields, handoffKey)
+	if err != nil {
+		return RealtimeItemContent{}, err
+	}
+	turnID, err := requiredRealtimeString(fields, turnKey)
+	if err != nil {
+		return RealtimeItemContent{}, err
+	}
+	mode, err := decodeHandoffMode(fields)
+	if err != nil {
+		return RealtimeItemContent{}, err
+	}
+	sources, err := requiredRealtimeStrings(fields, sourcesKey)
+	if err != nil {
+		return RealtimeItemContent{}, err
+	}
+	inputItemID, err := requiredRealtimeString(fields, inputItemKey)
+	if err != nil {
+		return RealtimeItemContent{}, err
+	}
+	input, err := requiredRealtimeString(fields, "input")
+	if err != nil {
+		return RealtimeItemContent{}, err
+	}
+	return RealtimeItemContent{
+		Kind:         RealtimeItemKindTurnInputAccepted,
+		HandoffID:    handoffID,
+		TurnID:       turnID,
+		HandoffMode:  mode,
+		SourceEvents: sources,
+		InputItemID:  inputItemID,
+		Input:        input,
+	}, nil
+}
+
+func decodeSessionEndInputSaved(fields map[string]json.RawMessage, sourcesKey, inputItemKey string) (RealtimeItemContent, error) {
+	sources, err := requiredRealtimeStrings(fields, sourcesKey)
+	if err != nil {
+		return RealtimeItemContent{}, err
+	}
+	inputItemID, err := requiredRealtimeString(fields, inputItemKey)
+	if err != nil {
+		return RealtimeItemContent{}, err
+	}
+	input, err := requiredRealtimeString(fields, "input")
+	if err != nil {
+		return RealtimeItemContent{}, err
+	}
+	return RealtimeItemContent{
+		Kind:         RealtimeItemKindSessionEndInput,
+		SourceEvents: sources,
+		InputItemID:  inputItemID,
+		Input:        input,
+	}, nil
+}
+
+func decodeHandoffMode(fields map[string]json.RawMessage) (RealtimeHandoffMode, error) {
+	value, err := requiredRealtimeString(fields, "mode")
+	if err != nil {
+		return "", err
+	}
+	mode := RealtimeHandoffMode(value)
+	switch mode {
+	case RealtimeHandoffModeStart, RealtimeHandoffModeSteer:
+		return mode, nil
+	default:
+		return "", fmt.Errorf("unknown realtime handoff mode %q", value)
+	}
+}
+
+func requiredRealtimeStrings(fields map[string]json.RawMessage, name string) ([]string, error) {
+	raw, ok := fields[name]
+	if !ok {
+		return nil, fmt.Errorf("missing field %s", name)
+	}
+	var values []string
+	if err := json.Unmarshal(raw, &values); err != nil {
+		return nil, fmt.Errorf("field %s must be a string array: %w", name, err)
+	}
+	if values == nil {
+		values = []string{}
+	}
+	return values, nil
+}
+
+func optionalRealtimeInt64(fields map[string]json.RawMessage, name string) (*int64, error) {
+	raw, ok := fields[name]
+	if !ok || string(raw) == "null" {
+		return nil, nil
+	}
+	var value int64
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return nil, fmt.Errorf("field %s must be an integer: %w", name, err)
+	}
+	return &value, nil
 }
 
 // requiredRealtimeString reads a required string field.
@@ -525,6 +788,9 @@ type RealtimeTranscriptStream struct {
 
 // RealtimeEventEffects is the reducer output for one observed event.
 type RealtimeEventEffects struct {
+	// SealFrames reports that durable frame history must reach disk before a
+	// completion notification acknowledges it (Rust RealtimeEventEffects).
+	SealFrames       bool
 	Order            RealtimeEventOrder
 	Items            []RealtimeItem
 	TranscriptStream *RealtimeTranscriptStream
@@ -535,11 +801,100 @@ func (e RealtimeEventEffects) Empty() bool {
 	return len(e.Items) == 0 && e.TranscriptStream == nil
 }
 
+// observationClock assigns first-observed timestamps for one thread owner.
+// Wall-clock rollback never moves a later observation backward.
+type observationClock struct {
+	lastAssignedMS *int64
+}
+
+func (c *observationClock) observe(wallClockMS int64) int64 {
+	if c.lastAssignedMS == nil || wallClockMS > *c.lastAssignedMS {
+		value := wallClockMS
+		c.lastAssignedMS = &value
+	}
+	return *c.lastAssignedMS
+}
+
+func (c *observationClock) floorMS() *int64 {
+	if c.lastAssignedMS == nil {
+		return nil
+	}
+	value := *c.lastAssignedMS
+	return &value
+}
+
+func (c *observationClock) restoreFloor(ms *int64) {
+	if ms != nil {
+		c.observe(*ms)
+	}
+}
+
+// SetFramesEnabled resolves this thread's frame enrollment. Enrollment is
+// cached after the first call, matching Rust's first-successful-lookup rule.
+func (s *RealtimeHistoryState) SetFramesEnabled(enabled bool) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.framesKnown {
+		return
+	}
+	s.frames = enabled
+	s.framesKnown = true
+}
+
+// RestoreObservationClockFloor restores the non-decreasing clock floor from a
+// rollout or compaction checkpoint.
+func (s *RealtimeHistoryState) RestoreObservationClockFloor(floorMS *int64) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.observationClock.restoreFloor(floorMS)
+}
+
+// ObservationClockFloor reports the current floor for a compaction checkpoint.
+func (s *RealtimeHistoryState) ObservationClockFloor() *int64 {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.observationClock.floorMS()
+}
+
+// SetObservationClock overrides the wall clock for tests.
+func (s *RealtimeHistoryState) SetObservationClock(now func() int64) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.nowMS = now
+}
+
+// framesEnabled reports the cached enrollment. Callers hold s.mu.
+func (s *RealtimeHistoryState) framesEnabled() bool {
+	return s.framesKnown && s.frames
+}
+
+// observeNow assigns the next observation timestamp. Callers hold s.mu.
+func (s *RealtimeHistoryState) observeNow() int64 {
+	now := time.Now().UnixMilli
+	if s.nowMS != nil {
+		now = s.nowMS
+	}
+	return s.observationClock.observe(now())
+}
+
 type activeSegment struct {
-	sessionID string
-	id        string
-	role      RealtimeTranscriptRole
-	text      string
+	sessionID    string
+	id           string
+	role         RealtimeTranscriptRole
+	text         string
+	observedAtMS *int64
 }
 
 type activeTranscriptSegments struct {
@@ -581,6 +936,15 @@ type streamingAgentMessage struct {
 // served by the rollout index.
 type RealtimeHistoryState struct {
 	mu sync.Mutex
+
+	// observationClock assigns first-observed timestamps that never move
+	// backward for this thread owner (Rust ObservationClock).
+	observationClock observationClock
+	// frames is resolved once at first use. Unenrolled threads keep the legacy
+	// transcript_segment spelling without observed timestamps.
+	frames      bool
+	framesKnown bool
+	nowMS       func() int64
 
 	activeSessionID string
 	segments        activeTranscriptSegments
@@ -651,15 +1015,26 @@ func (s *RealtimeHistoryState) StartSession(sessionID string) RealtimeEventEffec
 	s.sealSegments(&items, false)
 	s.activeSessionID = sessionID
 	s.failed = false
+	var observedAt *int64
+	itemID := ""
+	if s.framesEnabled() {
+		// The call ID lets a reader seek directly to its opening position.
+		itemID = "realtime-session-start:" + sessionID
+		value := s.observeNow()
+		observedAt = &value
+	} else {
+		itemID = s.nextID()
+	}
 	items = append(items, RealtimeItem{
-		ID:                s.nextID(),
+		ID:                itemID,
 		RealtimeSessionID: sessionID,
+		ObservedAtMS:      observedAt,
 		Content:           RealtimeItemContent{Kind: RealtimeItemKindSessionStarted},
 	})
 	if s.activeTurnID != "" {
 		s.sessionByTurnLocked()[s.activeTurnID] = sessionID
 	}
-	return RealtimeEventEffects{Order: RealtimeOrderAfterEvent, Items: items}
+	return RealtimeEventEffects{SealFrames: s.framesEnabled(), Order: RealtimeOrderAfterEvent, Items: items}
 }
 
 // BindTurnSession records which session produced the given turn, mirroring the
@@ -739,7 +1114,7 @@ func (s *RealtimeHistoryState) TranscriptDelta(role RealtimeTranscriptRole, delt
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return RealtimeEventEffects{TranscriptStream: s.addDelta(role, delta)}
+	return RealtimeEventEffects{SealFrames: s.framesEnabled(), TranscriptStream: s.addDelta(role, delta)}
 }
 
 // TranscriptDone seals the active segment for the role and reports any items.
@@ -751,7 +1126,7 @@ func (s *RealtimeHistoryState) TranscriptDone(role RealtimeTranscriptRole, text 
 	defer s.mu.Unlock()
 	var items []RealtimeItem
 	stream := s.finishSegment(&items, role, text)
-	return RealtimeEventEffects{Items: items, TranscriptStream: stream}
+	return RealtimeEventEffects{SealFrames: s.framesEnabled(), Items: items, TranscriptStream: stream}
 }
 
 // SessionClosed seals the session and appends the closing item.
@@ -773,12 +1148,18 @@ func (s *RealtimeHistoryState) SessionClosed() RealtimeEventEffects {
 		outcome = RealtimeSessionOutcomeFailed
 	}
 	s.failed = false
+	var observedAt *int64
+	if s.framesEnabled() {
+		value := s.observeNow()
+		observedAt = &value
+	}
 	items = append(items, RealtimeItem{
 		ID:                s.nextID(),
 		RealtimeSessionID: sessionID,
+		ObservedAtMS:      observedAt,
 		Content:           RealtimeItemContent{Kind: RealtimeItemKindSessionClosed, Outcome: outcome},
 	})
-	return RealtimeEventEffects{Order: RealtimeOrderAfterEvent, Items: items}
+	return RealtimeEventEffects{SealFrames: s.framesEnabled(), Order: RealtimeOrderAfterEvent, Items: items}
 }
 
 // ObserveAgentItem records a completed or started backing agent item and
@@ -794,7 +1175,7 @@ func (s *RealtimeHistoryState) ObserveAgentItem(turnID, itemID, text string, com
 	}
 	var items []RealtimeItem
 	s.observeAssistantMessage(&items, turnID, itemID, text)
-	return RealtimeEventEffects{Items: items}
+	return RealtimeEventEffects{SealFrames: s.framesEnabled(), Items: items}
 }
 
 // StreamAgentMessageDelta accumulates streaming agent text and re-evaluates
@@ -811,7 +1192,7 @@ func (s *RealtimeHistoryState) StreamAgentMessageDelta(turnID, itemID, delta str
 	s.streamingAgent.text += delta
 	var items []RealtimeItem
 	s.observeAssistantMessage(&items, turnID, itemID, s.streamingAgent.text)
-	return RealtimeEventEffects{Items: items}
+	return RealtimeEventEffects{SealFrames: s.framesEnabled(), Items: items}
 }
 
 // FinishStreamingAgentMessage clears the streaming buffer when its item
@@ -841,7 +1222,7 @@ func (s *RealtimeHistoryState) PromoteAgentItem(turnID, itemID string, presentat
 	defer s.mu.Unlock()
 	var items []RealtimeItem
 	s.addPromotion(&items, turnID, itemID, presentation)
-	return RealtimeEventEffects{Items: items}
+	return RealtimeEventEffects{SealFrames: s.framesEnabled(), Items: items}
 }
 
 // SealUserInput seals the live segments before a new user message enters the
@@ -857,7 +1238,7 @@ func (s *RealtimeHistoryState) SealUserInput() RealtimeEventEffects {
 	}
 	var items []RealtimeItem
 	s.sealSegments(&items, true)
-	return RealtimeEventEffects{Order: RealtimeOrderBeforeEvent, Items: items}
+	return RealtimeEventEffects{SealFrames: s.framesEnabled(), Order: RealtimeOrderBeforeEvent, Items: items}
 }
 
 // SealUserInputForPrompt seals the live segments before a typed user turn
@@ -878,7 +1259,7 @@ func (s *RealtimeHistoryState) SealUserInputForPrompt(prompt string) RealtimeEve
 	}
 	var items []RealtimeItem
 	s.sealSegments(&items, true)
-	return RealtimeEventEffects{Order: RealtimeOrderBeforeEvent, Items: items}
+	return RealtimeEventEffects{SealFrames: s.framesEnabled(), Order: RealtimeOrderBeforeEvent, Items: items}
 }
 
 // shouldSealUserInputLocked reports whether live segments need sealing. Callers
@@ -911,15 +1292,22 @@ func (s *RealtimeHistoryState) addDelta(role RealtimeTranscriptRole, delta strin
 		*slot = &activeSegment{sessionID: sessionID, id: s.nextID(), role: role}
 	}
 	segment := *slot
+	frames := s.framesEnabled()
+	var observedAt *int64
+	if frames {
+		if segment.observedAtMS == nil {
+			value := s.observeNow()
+			segment.observedAtMS = &value
+		}
+		observedAt = segment.observedAtMS
+	}
 	var startedItem *RealtimeItem
 	if segment.text == "" {
 		item := RealtimeItem{
 			ID:                segment.id,
 			RealtimeSessionID: segment.sessionID,
-			Content: RealtimeItemContent{
-				Kind: RealtimeItemKindTranscriptSegment,
-				Role: segment.role,
-			},
+			ObservedAtMS:      observedAt,
+			Content:           speechContent(frames, segment.role, ""),
 		}
 		startedItem = &item
 	}
@@ -969,11 +1357,8 @@ func (s *RealtimeHistoryState) sealActiveSegment(items *[]RealtimeItem, segment 
 		*items = append(*items, RealtimeItem{
 			ID:                segment.id,
 			RealtimeSessionID: segment.sessionID,
-			Content: RealtimeItemContent{
-				Kind: RealtimeItemKindTranscriptSegment,
-				Role: segment.role,
-				Text: segment.text,
-			},
+			ObservedAtMS:      segment.observedAtMS,
+			Content:           speechContent(s.framesEnabled(), segment.role, segment.text),
 		})
 	}
 	if continuation {
@@ -988,6 +1373,16 @@ func (s *RealtimeHistoryState) sealActiveSegment(items *[]RealtimeItem, segment 
 	}
 }
 
+// speechContent selects the canonical spelling for one voice transcript.
+// Enrolled threads write V1 frames; legacy and unenrolled writers keep the
+// original transcript_segment variant.
+func speechContent(frames bool, role RealtimeTranscriptRole, text string) RealtimeItemContent {
+	if frames {
+		return RealtimeItemContent{Kind: RealtimeItemKindFrame, Role: role, Text: text}
+	}
+	return RealtimeItemContent{Kind: RealtimeItemKindTranscriptSegment, Role: role, Text: text}
+}
+
 func (s *RealtimeHistoryState) addPromotion(items *[]RealtimeItem, turnID, itemID string, presentation BemItemPresentation) {
 	sessionID, ok := s.sessionByTurnLocked()[turnID]
 	if !ok || sessionID == "" {
@@ -999,9 +1394,15 @@ func (s *RealtimeHistoryState) addPromotion(items *[]RealtimeItem, turnID, itemI
 	}
 	s.promotedKeysLocked()[key] = true
 	s.sealSegments(items, true)
+	var observedAt *int64
+	if s.framesEnabled() {
+		value := s.observeNow()
+		observedAt = &value
+	}
 	*items = append(*items, RealtimeItem{
 		ID:                s.nextID(),
 		RealtimeSessionID: sessionID,
+		ObservedAtMS:      observedAt,
 		Content: RealtimeItemContent{
 			Kind:         RealtimeItemKindBemItemPromoted,
 			TurnID:       turnID,

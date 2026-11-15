@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/google/uuid"
 )
 
 const (
@@ -600,9 +602,22 @@ func (p *StartParams) Normalized(defaultModel string, defaultVersion Version, de
 	if p.CodexResponsesAsItems != nil {
 		codexResponsesAsItems = *p.CodexResponsesAsItems
 	}
+	sessionID := stringValue(p.RealtimeSessionID)
+	if sessionID == "" {
+		switch transport.Type {
+		case "existingCall":
+			sessionID = transport.CallID
+		default:
+			if id, err := uuid.NewV7(); err == nil {
+				sessionID = id.String()
+			} else {
+				sessionID = uuid.NewString()
+			}
+		}
+	}
 	return &SessionConfig{
 		ThreadID:                            p.ThreadID,
-		RealtimeSessionID:                   firstNonEmptyString(stringValue(p.RealtimeSessionID), p.ThreadID),
+		RealtimeSessionID:                   sessionID,
 		VoiceSessionID:                      stringValue(p.VoiceSessionID),
 		Model:                               model,
 		OutputModality:                      p.OutputModality,
@@ -1037,8 +1052,10 @@ type Manager struct {
 	transport          *TransportBackendConfig
 	notificationSink   func(Notification)
 	eventSink          func(string, Event)
-	historyItemSink    func(string, []RealtimeItem)
+	historyItemSink    func(string, []RealtimeItem, bool) error
 	historyEnabled     func(string) bool
+	historyFrames      func(string) bool
+	historyClockFloor  func(string) *int64
 	now                func() time.Time
 	shutdown           bool
 	backgroundTaskWait sync.WaitGroup

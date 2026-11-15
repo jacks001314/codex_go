@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -332,13 +333,16 @@ type ThreadGoal struct {
 }
 
 type Recorder struct {
-	mu          sync.Mutex
-	path        string
-	file        *os.File
-	paginated   bool
-	threadID    string
-	nextOrdinal uint64
-	afterFlush  func(string)
+	mu                  sync.Mutex
+	path                string
+	file                *os.File
+	paginated           bool
+	threadID            string
+	nextOrdinal         uint64
+	afterFlush          func(string)
+	realtimeSyncPending bool
+	directoriesToSync   []string
+	directoriesResolved bool
 }
 
 type CreateParams struct {
@@ -398,6 +402,10 @@ func NewRecorder(params *CreateParams) (*Recorder, error) {
 	if path == "" {
 		path = PathForThread(params.CodexHome, params.ThreadID, now)
 	}
+	directoriesToSync, err := rolloutDirectoriesToSync(path)
+	if err != nil {
+		return nil, err
+	}
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
@@ -407,10 +415,12 @@ func NewRecorder(params *CreateParams) (*Recorder, error) {
 		return nil, err
 	}
 	recorder := &Recorder{
-		path:      path,
-		file:      file,
-		paginated: strings.EqualFold(strings.TrimSpace(params.HistoryMode), "paginated"),
-		threadID:  params.ThreadID,
+		path:                path,
+		file:                file,
+		paginated:           strings.EqualFold(strings.TrimSpace(params.HistoryMode), "paginated"),
+		threadID:            params.ThreadID,
+		directoriesToSync:   directoriesToSync,
+		directoriesResolved: true,
 	}
 	if recorder.paginated && params.HistoryBase != nil {
 		recorder.nextOrdinal = params.HistoryBase.EndOrdinalExclusive
@@ -534,7 +544,46 @@ func resume(path string) (*Recorder, error) {
 			return nil, err
 		}
 	}
-	return &Recorder{path: plain, file: file, paginated: paginated, threadID: threadID, nextOrdinal: nextOrdinal}, nil
+	directoriesToSync, err := rolloutDirectoriesToSync(plain)
+	if err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	return &Recorder{
+		path:                plain,
+		file:                file,
+		paginated:           paginated,
+		threadID:            threadID,
+		nextOrdinal:         nextOrdinal,
+		directoriesToSync:   directoriesToSync,
+		directoriesResolved: true,
+	}, nil
+}
+
+// rolloutDirectoriesToSync lists the directory entries whose durability must
+// be confirmed after creating a rollout file. Creating the file changes its
+// parent; creating date directories changes each missing ancestor too (Rust
+// #61473 RolloutWriterState::directories_to_sync).
+func rolloutDirectoriesToSync(path string) ([]string, error) {
+	if runtime.GOOS == "windows" {
+		return nil, nil
+	}
+	var directories []string
+	for directory := filepath.Dir(path); ; directory = filepath.Dir(directory) {
+		directories = append(directories, directory)
+		_, err := os.Stat(directory)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+		parent := filepath.Dir(directory)
+		if parent == directory {
+			break
+		}
+	}
+	return directories, nil
 }
 
 // refreshRolloutModifiedTime makes a restored transcript look active. A
@@ -1495,6 +1544,9 @@ type CompactionResumeMetadata struct {
 	// checkpoint time (Rust #57553 CompactionResumeMetadata::dynamic_tools).
 	// An explicit resume override is not persisted here.
 	DynamicTools *DynamicToolsSnapshot `json:"dynamic_tools,omitempty"`
+	// ObservationClockFloorMS retains the realtime observation clock floor when
+	// older history is omitted from the resume context (Rust #61473).
+	ObservationClockFloorMS *int64 `json:"observation_clock_floor_ms,omitempty"`
 }
 
 // DynamicToolsSnapshot is one thread's dynamic-tool catalog, including an
@@ -1704,6 +1756,66 @@ func (r *Recorder) AppendLine(line Line) error {
 	if r.paginated {
 		r.nextOrdinal++
 	}
+	if line.Type == "realtime_item" {
+		payload := line.Payload
+		if len(line.RealtimeItem) > 0 {
+			payload = line.RealtimeItem
+		}
+		if realtimeObservationPresent(payload) {
+			r.realtimeSyncPending = true
+		}
+	}
+	return nil
+}
+
+func realtimeObservationPresent(payload json.RawMessage) bool {
+	if len(payload) == 0 {
+		return false
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &fields); err != nil {
+		return false
+	}
+	raw, ok := fields["observed_at_ms"]
+	return ok && len(raw) > 0 && string(raw) != "null"
+}
+
+// syncRealtimeDirectoriesLocked confirms the directory barriers required by
+// the first realtime observation. Callers hold r.mu. A failure leaves the
+// barrier pending so the next flush retries it.
+func (r *Recorder) syncRealtimeDirectoriesLocked() error {
+	if !r.realtimeSyncPending {
+		return nil
+	}
+	if runtime.GOOS == "windows" {
+		r.realtimeSyncPending = false
+		return nil
+	}
+	if !r.directoriesResolved {
+		directories, err := rolloutDirectoriesToSync(r.path)
+		if err != nil {
+			return err
+		}
+		r.directoriesToSync = directories
+		r.directoriesResolved = true
+	}
+	for _, directory := range r.directoriesToSync {
+		file, err := os.Open(directory)
+		if err != nil {
+			return err
+		}
+		syncErr := file.Sync()
+		closeErr := file.Close()
+		if syncErr != nil {
+			return syncErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+	}
+	r.directoriesToSync = nil
+	r.directoriesResolved = false
+	r.realtimeSyncPending = false
 	return nil
 }
 
@@ -1714,6 +1826,9 @@ func (r *Recorder) Flush() error {
 		return nil
 	}
 	err := r.file.Sync()
+	if err == nil {
+		err = r.syncRealtimeDirectoriesLocked()
+	}
 	path, callback := r.path, r.afterFlush
 	r.mu.Unlock()
 	if err == nil && callback != nil {
@@ -1725,10 +1840,18 @@ func (r *Recorder) Flush() error {
 func (r *Recorder) Close() error {
 	r.mu.Lock()
 	if r.file == nil {
+		syncErr := r.syncRealtimeDirectoriesLocked()
+		path, callback := r.path, r.afterFlush
 		r.mu.Unlock()
-		return nil
+		if syncErr == nil && callback != nil {
+			callback(path)
+		}
+		return syncErr
 	}
 	syncErr := r.file.Sync()
+	if syncErr == nil {
+		syncErr = r.syncRealtimeDirectoriesLocked()
+	}
 	closeErr := r.file.Close()
 	r.file = nil
 	path, callback := r.path, r.afterFlush

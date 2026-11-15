@@ -211,6 +211,7 @@ func TestRustProtocolMethodSurfaceAgainstGoConstants(t *testing.T) {
 		string(MethodThreadPrepareApprovedPlan):              true,
 		string(MethodThreadReadStateUpdate):                  true,
 		string(MethodThreadTimelineList):                     true,
+		string(MethodThreadRealtimeList):                     true,
 		string(MethodPluginSearch):                           true,
 	}
 	knownMissing := map[string]bool{}

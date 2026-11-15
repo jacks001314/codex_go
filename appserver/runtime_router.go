@@ -1286,6 +1286,8 @@ func (r *RuntimeRouter) SetNotificationSink(sink NotificationSink) {
 		_, ephemeral := r.ephemeralThreadRecord(session.ThreadID(threadID), false)
 		return !ephemeral
 	})
+	r.requireRealtime().SetFrameEnrollment(r.realtimeFramesEnabled)
+	r.requireRealtime().SetObservationClockFloorProvider(r.realtimeObservationClockFloor)
 }
 
 func (r *RuntimeRouter) SetServerRequestSink(sink ServerRequestSink) {
@@ -3853,6 +3855,7 @@ func experimentalAPIMethod(method Method) bool {
 		MethodThreadReadStateUpdate,
 		MethodThreadSearchOccurrences,
 		MethodThreadTimelineList,
+		MethodThreadRealtimeList,
 		MethodTurnSettingsUpdate,
 		MethodProcessKill,
 		MethodProcessResizePty,
@@ -4077,6 +4080,9 @@ func (r *RuntimeRouter) dispatch(request *Request) (result any, err error) {
 		}
 		if request.Method == MethodThreadTimelineList {
 			return r.handleThreadTimelineListRuntime(request)
+		}
+		if request.Method == MethodThreadRealtimeList {
+			return r.handleThreadRealtimeListRuntime(request)
 		}
 		if request.Method == MethodThreadItemsRead {
 			return r.handleThreadItemsReadRuntime(request)
@@ -4774,6 +4780,22 @@ func (r *RuntimeRouter) handleThreadTimelineListRuntime(request *Request) (*Thre
 		return r.services.ThreadRouter.handleThreadTimelineList(request)
 	}
 	return nil, methodNotFound("thread/timeline/list is not supported yet")
+}
+
+// handleThreadRealtimeListRuntime serves persisted realtime history without
+// loading a runtime or requiring turn pagination state to be hydrated.
+func (r *RuntimeRouter) handleThreadRealtimeListRuntime(request *Request) (*ThreadRealtimeListResponse, error) {
+	var params ThreadRealtimeListParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if err := params.Validate(); err != nil {
+		return nil, err
+	}
+	if r.services.ThreadRouter != nil && r.services.StateRuntime != nil {
+		return r.services.ThreadRouter.handleThreadRealtimeList(request)
+	}
+	return unsupportedThreadRealtimeResponse(), nil
 }
 
 // handleThreadItemsReadRuntime mirrors handleThreadItemsListRuntime for the
@@ -22355,7 +22377,7 @@ func isThreadMethod(method Method) bool {
 		MethodThreadAttachmentAdd, MethodThreadAttachmentList, MethodThreadAttachmentRemove,
 		MethodThreadAttachmentOwnerList,
 		MethodThreadSearch, MethodThreadLoadedList, MethodThreadItemsList,
-		MethodThreadItemsRead, MethodThreadTimelineList,
+		MethodThreadItemsRead, MethodThreadTimelineList, MethodThreadRealtimeList,
 		MethodThreadTurnsList, MethodThreadRevert,
 		MethodThreadSample,
 		MethodThreadGuardianReview,

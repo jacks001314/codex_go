@@ -3,6 +3,7 @@ package realtime
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"testing"
 )
 
@@ -94,7 +95,7 @@ func TestRealtimeItemWireShapeMatchesRust(t *testing.T) {
 			if decoded.ID != test.item.ID || decoded.RealtimeSessionID != test.item.RealtimeSessionID {
 				t.Fatalf("decoded identity = %#v", decoded)
 			}
-			if decoded.Content != test.item.Content {
+			if !reflect.DeepEqual(decoded.Content, test.item.Content) {
 				t.Fatalf("decoded content = %#v, want %#v", decoded.Content, test.item.Content)
 			}
 			reencoded, err := json.Marshal(decoded)

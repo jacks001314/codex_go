@@ -289,7 +289,7 @@ func TestRuntimeMigrationInventoryMatchesFrozenRustCounts(t *testing.T) {
 		RuntimeDBLogs:          2,
 		RuntimeDBGoals:         2,
 		RuntimeDBMemories:      2,
-		RuntimeDBThreadHistory: 8,
+		RuntimeDBThreadHistory: 9,
 	}
 	for kind, count := range want {
 		migrations, err := loadRuntimeMigrations(kind)

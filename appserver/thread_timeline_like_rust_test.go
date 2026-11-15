@@ -29,7 +29,7 @@ func TestThreadTimelineListMixesItemsAndRealtimeLikeRust(t *testing.T) {
 		RealtimeSessionID: "voice-1",
 		Content:           realtime.RealtimeItemContent{Kind: realtime.RealtimeItemKindSessionStarted},
 	}
-	h.router.persistRealtimeHistoryItems(threadID, []realtime.RealtimeItem{started})
+	h.router.persistRealtimeHistoryItems(threadID, []realtime.RealtimeItem{started}, false)
 
 	appender, err := rollout.Resume(path)
 	if err != nil {
@@ -66,7 +66,7 @@ func TestThreadTimelineListMixesItemsAndRealtimeLikeRust(t *testing.T) {
 			Text: "Checking staging",
 		},
 	}
-	h.router.persistRealtimeHistoryItems(threadID, []realtime.RealtimeItem{transcript})
+	h.router.persistRealtimeHistoryItems(threadID, []realtime.RealtimeItem{transcript}, false)
 
 	completer, err := rollout.Resume(path)
 	if err != nil {

@@ -60,13 +60,16 @@ func TestThreadHistoryMigrationsUseSQLxChecksums(t *testing.T) {
 		6: "02ed82d375adb58b5c0c09e0154f3331d507cea7af446d12324e5653cdba9a91f84afd38cf2a29f33030614689deb9de",
 		7: "9334adb4cda792116a47b69a19e3840ae3806b08773ef1794043fe0aa72891360acb1a0a8431084d53c568482c5fdd20",
 		8: "94635cd58535adb1679f4ad07a9d14231b69004405fa88a22db1b6a7e5feac8b6b66ad97ea16fce464b99bff5b3548d3",
+		// Upstream 05229d1874 (#61480): observation-time, session and position
+		// indexes over the realtime item projection.
+		9: "4def92ea0f557ec6333bfe80798c89eb5ac3bd569058a502846fc630aed20f774cd8de3628cd8af740c1be94dd8216b1",
 	}
 	migrations, err := loadRuntimeMigrations(RuntimeDBThreadHistory)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(migrations) != 8 {
-		t.Fatalf("thread history migration count = %d, want 8", len(migrations))
+	if len(migrations) != 9 {
+		t.Fatalf("thread history migration count = %d, want 9", len(migrations))
 	}
 	for _, migration := range migrations {
 		var description string
