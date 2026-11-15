@@ -37,6 +37,9 @@ type ViewImageStepSettings struct {
 	// UnifiedImageBudget mirrors Rust's `unified_image_budget_enabled`: the step's
 	// image detail values are hidden and the image always keeps original detail.
 	UnifiedImageBudget bool
+	// SafeImageDecoder mirrors the safe_image_decoder feature captured for the
+	// sampling step that issued the call.
+	SafeImageDecoder bool
 }
 
 type ViewImageOptions struct {
@@ -44,7 +47,10 @@ type ViewImageOptions struct {
 	CanRequestOriginalDetail bool
 	// UnifiedImageBudget hides the `detail` argument and output hint like Rust's
 	// ViewImageToolOptions::unified_image_budget (view_image_spec.rs).
-	UnifiedImageBudget   bool
+	UnifiedImageBudget bool
+	// SafeImageDecoder switches validation to the reviewed sanitizer: the image
+	// is decoded and re-encoded without source metadata under strict limits.
+	SafeImageDecoder     bool
 	IncludeEnvironmentID bool
 	// StepSettings, when set, resolves the issuing step's model capabilities so a
 	// mid-turn model switch is honored instead of the turn's initial model.
@@ -82,16 +88,16 @@ func NewViewImageHandler(options ViewImageOptions) *ViewImageHandler {
 // capabilities resolves the issuing step's image capabilities, falling back to
 // the turn-start options when no step resolver is installed or no active step is
 // available.
-func (h *ViewImageHandler) capabilities() (supportsImageInput bool, canRequestOriginalDetail bool, unifiedImageBudget bool) {
+func (h *ViewImageHandler) capabilities() (supportsImageInput bool, canRequestOriginalDetail bool, unifiedImageBudget bool, safeImageDecoder bool) {
 	if h == nil {
-		return true, false, false
+		return true, false, false, false
 	}
 	if h.options.StepSettings != nil {
 		if settings, ok := h.options.StepSettings(); ok {
-			return settings.SupportsImageInput, settings.CanRequestOriginalDetail, settings.UnifiedImageBudget
+			return settings.SupportsImageInput, settings.CanRequestOriginalDetail, settings.UnifiedImageBudget, settings.SafeImageDecoder
 		}
 	}
-	return true, h.options.CanRequestOriginalDetail, h.options.UnifiedImageBudget
+	return true, h.options.CanRequestOriginalDetail, h.options.UnifiedImageBudget, h.options.SafeImageDecoder
 }
 
 func (h *ViewImageHandler) Spec() Spec {
@@ -139,7 +145,7 @@ func (h *ViewImageHandler) Execute(ctx context.Context, invocation *Invocation) 
 	// Rust #44242 checks the captured step model before touching the arguments,
 	// so a model without image input is rejected rather than served stale
 	// turn-start capabilities.
-	supportsImageInput, canRequestOriginalDetail, unifiedImageBudget := h.capabilities()
+	supportsImageInput, canRequestOriginalDetail, unifiedImageBudget, safeImageDecoder := h.capabilities()
 	if !supportsImageInput {
 		return nil, RespondToModel(viewImageUnsupportedMessage)
 	}
@@ -193,13 +199,24 @@ func (h *ViewImageHandler) Execute(ctx context.Context, invocation *Invocation) 
 	if !metadata.IsFile {
 		return nil, RespondToModel(fmt.Sprintf("image path `%s` is not a file", modelPath))
 	}
+	if safeImageDecoder && metadata.Size > utils.MaxSanitizedImageBytes {
+		return nil, RespondToModel(viewImageInvalidMessage)
+	}
 	data, err := fileSystem.ReadFile(ctx, path, nil)
 	if err != nil {
 		return nil, RespondToModel(fmt.Sprintf("unable to read image at `%s`: %v", modelPath, err))
 	}
 	// Reject non-images before their bytes can reach code mode without changing
-	// valid image bytes, metadata, or centralized image preparation.
-	if _, _, err := image.Decode(bytes.NewReader(data)); err != nil {
+	// valid image bytes, metadata, or centralized image preparation. The
+	// sanitizer path validates by decoding and re-encoding under its limits.
+	if safeImageDecoder {
+		if len(data) > utils.MaxSanitizedImageBytes {
+			return nil, RespondToModel(viewImageInvalidMessage)
+		}
+		if _, err := utils.LoadForPromptBytesWithDecoder(modelPath, data, utils.ModeOriginal, nil, utils.DecoderSanitizer); err != nil {
+			return nil, RespondToModel(viewImageInvalidMessage)
+		}
+	} else if _, _, err := image.Decode(bytes.NewReader(data)); err != nil {
 		return nil, RespondToModel(viewImageInvalidMessage)
 	}
 	// The history insertion path owns image preparation and resizing.

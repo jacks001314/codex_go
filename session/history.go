@@ -549,7 +549,9 @@ func sanitizeHistoryInputItem(input any) any {
 		}
 		// Harness metadata records provenance for storage and compaction; it is
 		// not part of the model-visible item (Rust #52671 keeps retention
-		// annotations out of model requests).
+		// annotations out of model requests). Sanitizer replay sources are the
+		// exception: request preparation needs them to reproduce saved images.
+		replaySources := harnessImageReplaySources(typed["harness_metadata"])
 		delete(typed, "harness_metadata")
 		// Preserve harness-owned content classifications through history
 		// sanitization: content_item_kinds are model-visible and must survive
@@ -557,11 +559,18 @@ func sanitizeHistoryInputItem(input any) any {
 		passthrough, _ := typed["internal_chat_message_metadata_passthrough"].(map[string]any)
 		delete(typed, "internal_chat_message_metadata_passthrough")
 		if passthrough != nil {
+			preserved := map[string]any{}
 			if kinds, ok := passthrough["content_item_kinds"]; ok {
-				typed["internal_chat_message_metadata_passthrough"] = map[string]any{
-					"content_item_kinds": kinds,
-				}
+				preserved["content_item_kinds"] = kinds
 			}
+			if replaySources != nil {
+				preserved["image_replay_sources"] = replaySources
+			}
+			if len(preserved) > 0 {
+				typed["internal_chat_message_metadata_passthrough"] = preserved
+			}
+		} else if replaySources != nil {
+			typed["internal_chat_message_metadata_passthrough"] = map[string]any{"image_replay_sources": replaySources}
 		}
 		if itemType == "message" {
 			normalizeHistoryMessageContentTypes(typed)
@@ -585,6 +594,26 @@ func sanitizeHistoryInputItem(input any) any {
 	default:
 		return input
 	}
+}
+
+// harnessImageReplaySources reads the sanitizer replay records out of an item's
+// harness metadata so request preparation can consult them on later turns.
+func harnessImageReplaySources(value any) any {
+	var metadata map[string]any
+	switch typed := value.(type) {
+	case map[string]any:
+		metadata = typed
+	case json.RawMessage:
+		_ = json.Unmarshal(typed, &metadata)
+	case string:
+		if strings.TrimSpace(typed) != "" {
+			_ = json.Unmarshal([]byte(typed), &metadata)
+		}
+	}
+	if metadata == nil {
+		return nil
+	}
+	return metadata["image_replay_sources"]
 }
 
 // normalizeHistoryMessageContentTypes rewrites message content block types to

@@ -52,6 +52,9 @@ type ToolRegistryOptions struct {
 	MCPTools      []mcp.RuntimeToolInfo
 	MCPConnectors []mcp.RuntimeConnector
 	MCPExposure   tool.Exposure
+	// SafeImageDecoder mirrors the safe_image_decoder feature: MCP image content
+	// is validated through the reviewed sanitizer.
+	SafeImageDecoder bool
 	// AppsConfigValues is the effective `[apps]` config section, used for the
 	// per-connector tool-exposure omissions Rust reads from the config layer
 	// stack in its tool spec plan (#46035). Nil disables connector omissions.
@@ -1198,6 +1201,7 @@ func registerMCPToolSet(registry *tool.Registry, options *ToolRegistryOptions, t
 			ConnectorID:                       info.ConnectorID,
 			ConnectorName:                     info.ConnectorName,
 			PluginID:                          info.PluginID,
+			SafeImageDecoder:                  options.SafeImageDecoder,
 			Model:                             options.Model,
 			TurnMetadata:                      options.MCPTurnMetadata,
 			AppsMCPProductSKU:                 options.MCPAppsProductSKU,

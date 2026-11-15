@@ -2,6 +2,7 @@ package eventmap
 
 import (
 	"bytes"
+	"crypto/sha1"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -228,6 +229,20 @@ type ImagePrepResponseItem struct {
 	Content []ImagePrepContentItem
 }
 
+// ImagePrepReplaySource mirrors Rust history::ImageReplaySource: the original
+// inline image saved beside a sanitized image so resume and fork can reproduce
+// the exact prepared bytes without re-encoding an already encoded JPEG.
+type ImagePrepReplaySource struct {
+	// PreparedURLDigest is the SHA-1 digest of the prepared data URL.
+	PreparedURLDigest []byte
+	// Detail is the image detail hint recorded with the source (omitted when
+	// the item carried none).
+	Detail ImagePrepDetail
+	// OriginalDataURL always uses Rust's replay prefix
+	// `data:application/octet-stream;base64,`.
+	OriginalDataURL string
+}
+
 func PrepareImagePrepResponseItems(items []ImagePrepResponseItem) []ImagePrepResponseItem {
 	return PrepareImagePrepResponseItemsWithStore(attachmentstore.StoreOrDefault(nil), ImagePrepOrigin{}, items)
 }
@@ -264,8 +279,17 @@ func PrepareImagePrepContentWithNotices(items []ImagePrepContentItem) ([]ImagePr
 // store decides whether the prepared bytes stay inline or become a file
 // reference, exactly like Rust's `prepare_image` -> `AttachmentStore::upload`.
 func PrepareImagePrepContentWithNoticesAndStore(store attachmentstore.Store, origin ImagePrepOrigin, items []ImagePrepContentItem) ([]ImagePrepContentItem, []ImagePrepResize, error) {
+	prepared, resized, _, err := PrepareImagePrepContentWithNoticesStoreDecoder(store, origin, items, utils.DecoderLegacy)
+	return prepared, resized, err
+}
+
+// PrepareImagePrepContentWithNoticesStoreDecoder prepares image content items
+// with an explicit prompt image decoder and reports the replay sources that
+// must be persisted beside sanitized images.
+func PrepareImagePrepContentWithNoticesStoreDecoder(store attachmentstore.Store, origin ImagePrepOrigin, items []ImagePrepContentItem, decoder utils.Decoder) ([]ImagePrepContentItem, []ImagePrepResize, []ImagePrepReplaySource, error) {
 	out := make([]ImagePrepContentItem, len(items))
 	var resized []ImagePrepResize
+	var replay []ImagePrepReplaySource
 	imageCount := 0
 	for _, item := range items {
 		if item.Kind == ImagePrepContentImage {
@@ -280,7 +304,7 @@ func PrepareImagePrepContentWithNoticesAndStore(store attachmentstore.Store, ori
 			continue
 		}
 		imageNumber++
-		prepared, err := PrepareImagePrepImageWithStoreResult(store, origin, item.ImageURL, item.Detail)
+		prepared, err := PrepareImagePrepImageWithStoreResultModeDecoder(store, origin, item.ImageURL, item.Detail, ImagePrepModeDetailBased, decoder)
 		if err != nil {
 			out[i] = ImagePrepContentItem{Kind: ImagePrepContentText, Text: ImagePrepPlaceholderForError(err)}
 			continue
@@ -295,6 +319,11 @@ func PrepareImagePrepContentWithNoticesAndStore(store attachmentstore.Store, ori
 		} else {
 			item.FileID = ""
 			item.ImageURL = prepared.URL
+			if decoder == utils.DecoderSanitizer && prepared.URL != "" && prepared.URL != items[i].ImageURL {
+				if source, ok := imagePrepReplaySource(items[i].ImageURL, prepared.URL, items[i].Detail); ok {
+					replay = append(replay, source)
+				}
+			}
 		}
 		out[i] = item
 		if prepared.Resize != nil {
@@ -308,7 +337,33 @@ func PrepareImagePrepContentWithNoticesAndStore(store attachmentstore.Store, ori
 			})
 		}
 	}
-	return out, resized, nil
+	return out, resized, replay, nil
+}
+
+// imagePrepReplaySource builds Rust's replay record when a sanitizer produced
+// different bytes for an inline image. The source payload is the original
+// base64 body, so replay never needs the original MIME label.
+func imagePrepReplaySource(originalURL string, preparedURL string, detail ImagePrepDetail) (ImagePrepReplaySource, bool) {
+	_, sourcePayload, ok := strings.Cut(originalURL, ",")
+	if !ok {
+		return ImagePrepReplaySource{}, false
+	}
+	preparedPayload, ok := strings.CutPrefix(preparedURL, "data:")
+	if !ok {
+		return ImagePrepReplaySource{}, false
+	}
+	if _, preparedPayload, ok = strings.Cut(preparedPayload, ","); !ok {
+		return ImagePrepReplaySource{}, false
+	}
+	if sourcePayload == preparedPayload {
+		return ImagePrepReplaySource{}, false
+	}
+	digest := sha1.Sum([]byte(preparedURL))
+	return ImagePrepReplaySource{
+		PreparedURLDigest: append([]byte(nil), digest[:]...),
+		Detail:            detail,
+		OriginalDataURL:   "data:application/octet-stream;base64," + sourcePayload,
+	}, true
 }
 
 func prepareImagePrepContent(store attachmentstore.Store, origin ImagePrepOrigin, items []ImagePrepContentItem) []ImagePrepContentItem {
@@ -373,7 +428,13 @@ func PrepareImagePrepImageWithStoreResult(store attachmentstore.Store, origin Im
 // PrepareImagePrepImageWithStoreResultMode is
 // PrepareImagePrepImageWithStoreResult for an explicit Rust ImagePreparationMode.
 func PrepareImagePrepImageWithStoreResultMode(store attachmentstore.Store, origin ImagePrepOrigin, imageURL string, detail ImagePrepDetail, mode ImagePrepMode) (*ImagePrepResult, error) {
-	prepared, err := PrepareImagePrepImageWithResultMode(imageURL, detail, mode)
+	return PrepareImagePrepImageWithStoreResultModeDecoder(store, origin, imageURL, detail, mode, utils.DecoderLegacy)
+}
+
+// PrepareImagePrepImageWithStoreResultModeDecoder is
+// PrepareImagePrepImageWithStoreResultMode with an explicit prompt image decoder.
+func PrepareImagePrepImageWithStoreResultModeDecoder(store attachmentstore.Store, origin ImagePrepOrigin, imageURL string, detail ImagePrepDetail, mode ImagePrepMode, decoder utils.Decoder) (*ImagePrepResult, error) {
+	prepared, err := PrepareImagePrepImageWithResultModeDecoder(imageURL, detail, mode, decoder)
 	if err != nil {
 		return nil, err
 	}
@@ -433,6 +494,12 @@ func PrepareImagePrepImageWithResult(imageURL string, detail ImagePrepDetail) (*
 // budget and never rejects `low`, because the mode overrides the hint
 // (image_preparation.rs resize_image).
 func PrepareImagePrepImageWithResultMode(imageURL string, detail ImagePrepDetail, mode ImagePrepMode) (*ImagePrepResult, error) {
+	return PrepareImagePrepImageWithResultModeDecoder(imageURL, detail, mode, utils.DecoderLegacy)
+}
+
+// PrepareImagePrepImageWithResultModeDecoder is PrepareImagePrepImageWithResultMode
+// for an explicit prompt image decoder.
+func PrepareImagePrepImageWithResultModeDecoder(imageURL string, detail ImagePrepDetail, mode ImagePrepMode, decoder utils.Decoder) (*ImagePrepResult, error) {
 	if IsImagePrepRemoteURL(imageURL) {
 		return nil, ErrImagePrepRemoteURLUnsupported
 	}
@@ -468,7 +535,7 @@ func PrepareImagePrepImageWithResultMode(imageURL string, detail ImagePrepDetail
 	if detail == ImagePrepDetailOriginal {
 		limits = UnifiedImageLimits
 	}
-	prepared, err := prepareImagePrepDecoded(decoded, limits)
+	prepared, err := prepareImagePrepDecodedWithDecoder(decoded, limits, decoder)
 	if err != nil {
 		return nil, err
 	}
@@ -481,6 +548,33 @@ func PrepareImagePrepImageWithResultMode(imageURL string, detail ImagePrepDetail
 // PNG/JPEG/WebP (Rust can_preserve_source_bytes) and re-encoded as PNG for
 // other decodable formats (GIF), mirroring Rust load_for_prompt_bytes.
 func prepareImagePrepDecoded(payload []byte, limits PromptImageResizeLimits) (*ImagePrepResult, error) {
+	return prepareImagePrepDecodedWithDecoder(payload, limits, utils.DecoderLegacy)
+}
+
+func prepareImagePrepDecodedWithDecoder(payload []byte, limits PromptImageResizeLimits, decoder utils.Decoder) (*ImagePrepResult, error) {
+	if decoder == utils.DecoderSanitizer {
+		encoded, err := utils.LoadForPromptBytesWithDecoder("prompt image", payload, utils.ModeResizeLimits, &utils.ResizeLimits{
+			MaxDimension: limits.MaxDimension,
+			MaxPatches:   int(limits.MaxPatches),
+		}, decoder)
+		if err != nil {
+			return nil, imagePrepSanitizerError(err)
+		}
+		result := &ImagePrepResult{
+			URL:          imagePrepDataURL(encoded.Mime, encoded.Bytes),
+			MIME:         encoded.Mime,
+			EncodedBytes: encoded.Bytes,
+		}
+		if encoded.SourceWidth != encoded.Width || encoded.SourceHeight != encoded.Height {
+			result.Resize = &ImagePrepResize{
+				SourceWidth:    encoded.SourceWidth,
+				SourceHeight:   encoded.SourceHeight,
+				PreparedWidth:  encoded.Width,
+				PreparedHeight: encoded.Height,
+			}
+		}
+		return result, nil
+	}
 	format, img, sourceWidth, sourceHeight, err := decodeImagePrepBytes(payload)
 	if err != nil {
 		return nil, err
@@ -677,6 +771,19 @@ func ImagePrepPlaceholderForError(err error) string {
 	default:
 		return ImagePrepProcessingErrorPlaceholder
 	}
+}
+
+// imagePrepSanitizerError maps utils sanitizer failures onto the image
+// preparation error classes a caller uses for placeholders.
+func imagePrepSanitizerError(err error) error {
+	var processing *utils.ProcessingError
+	if errors.As(err, &processing) {
+		switch processing.Kind {
+		case "image_too_large", "image_too_many_pixels":
+			return fmt.Errorf("%w: %s", ErrImagePrepTooLarge, processing.Error())
+		}
+	}
+	return fmt.Errorf("%w: %v", ErrImagePrepInvalidDataURL, err)
 }
 
 func IsImagePrepRemoteURL(imageURL string) bool {

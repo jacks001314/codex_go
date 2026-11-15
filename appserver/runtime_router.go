@@ -18099,6 +18099,7 @@ func (r *RuntimeRouter) stepToolSurfaceRefresher(router *tool.Router, params *tu
 		options := *base
 		options.CanRequestOriginalDetail = info != nil && info.SupportsImageDetailOriginal
 		options.UnifiedImageBudget = unifiedImageBudgetEnabled(cfg, info)
+		options.SafeImageDecoder = features.Enabled(cfg.FeatureSettings(), "safe_image_decoder")
 		handler := tool.NewViewImageHandler(options)
 		registry := router.Registry()
 		if _, ok := registry.Lookup(tool.PlainName(tool.ViewImageToolName)); !ok {
@@ -18160,6 +18161,7 @@ func (r *RuntimeRouter) buildTurnRuntimeContext(ctx context.Context, params *tur
 	resolveCodeModeMessages := func(string) *model.CodeModeToolMessages { return nil }
 	unifiedImageBudgetForTurn := false
 	resolveUnifiedImageBudget := func(string) bool { return false }
+	safeImageDecoder := false
 	if turnConfig != nil {
 		modelID := ""
 		originator := ""
@@ -18191,6 +18193,7 @@ func (r *RuntimeRouter) buildTurnRuntimeContext(ctx context.Context, params *tur
 			return info != nil && (info.UseResponsesLite || info.SupportsImageDetailOriginal)
 		}
 		unifiedImageBudgetForTurn = resolveUnifiedImageBudget(modelID)
+		safeImageDecoder = features.Enabled(turnConfig.FeatureSettings(), "safe_image_decoder")
 	}
 	allowedTools := r.threadAllowedToolsForThread(params.ThreadID)
 	// Rust #57586 installs HostToolInvocationLookup on V2 threads so a host can
@@ -18211,6 +18214,7 @@ func (r *RuntimeRouter) buildTurnRuntimeContext(ctx context.Context, params *tur
 		ToolMetadataMetrics:          r.services.TurnMetrics,
 		CodeModeMessages:             codeModeMessages,
 		UnifiedImageBudget:           unifiedImageBudgetForTurn,
+		SafeImageDecoder:             safeImageDecoder,
 		AllowedTools:                 allowedTools,
 		CodeModeMessagesForModel:     resolveCodeModeMessages,
 		UnifiedImageBudgetForModel:   resolveUnifiedImageBudget,
@@ -18656,6 +18660,7 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	options.AllowedTools = allowedTools
 	options.CodexVersion = appServerVersion()
 	options.ToolMode = turnToolMode
+	options.SafeImageDecoder = cfg != nil && features.Enabled(cfg.FeatureSettings(), "safe_image_decoder")
 	// The model catalog decides whether apply_patch is advertised (Rust
 	// model_info.apply_patch_tool_type). A missing model keeps the legacy
 	// app-server surface.
@@ -19681,6 +19686,7 @@ func (r *RuntimeRouter) viewImageOptionsForTurn(cfg *config.Config, params *turn
 		CWD:                      cwd,
 		CanRequestOriginalDetail: canRequestOriginalDetail,
 		UnifiedImageBudget:       unifiedImageBudgetEnabled(cfg, info),
+		SafeImageDecoder:         cfg != nil && features.Enabled(cfg.FeatureSettings(), "safe_image_decoder"),
 		IncludeEnvironmentID:     r.includeEnvironmentIDForTurn(cfg, params),
 		// Rust #20647: view_image reads the selected environment's filesystem.
 		EnvironmentFileSystems: tool.NewUnifiedExecEnvironmentFileSystems(r.unifiedExecEnvironmentsForTurn(params), cwd),
@@ -19705,6 +19711,7 @@ func (r *RuntimeRouter) viewImageOptionsForTurn(cfg *config.Config, params *turn
 				SupportsImageInput:       appModelInfoSupportsImageInput(stepInfo),
 				CanRequestOriginalDetail: stepInfo.SupportsImageDetailOriginal,
 				UnifiedImageBudget:       unifiedImageBudgetEnabled(cfg, stepInfo),
+				SafeImageDecoder:         cfg != nil && features.Enabled(cfg.FeatureSettings(), "safe_image_decoder"),
 			}, true
 		},
 	}

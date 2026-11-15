@@ -50,6 +50,9 @@ type RuntimeOptions struct {
 	// UnifiedImageBudgetForModel refreshes the mode above when a
 	// step switches models.
 	UnifiedImageBudgetForModel func(model string) bool
+	// SafeImageDecoder mirrors the safe_image_decoder feature: request image
+	// preparation decodes and re-encodes images through the sanitizer.
+	SafeImageDecoder bool
 	// CodeModeDefaultExecYieldTime substitutes
 	// {{ default_exec_yield_time_ms }} in catalog exec text.
 	CodeModeDefaultExecYieldTime time.Duration
@@ -160,6 +163,7 @@ type Runtime struct {
 	codeModeDefaultExecYieldTime time.Duration
 	unifiedImageBudget           bool
 	unifiedImageBudgetFor        func(model string) bool
+	safeImageDecoder             bool
 	dynamicToolMu                sync.Mutex
 	dynamicToolCaller            DynamicToolCaller
 	dynamicToolThreadID          string
@@ -231,6 +235,7 @@ func NewRuntime(options *RuntimeOptions) *Runtime {
 		codeModeDefaultExecYieldTime: options.CodeModeDefaultExecYieldTime,
 		unifiedImageBudget:           options.UnifiedImageBudget,
 		unifiedImageBudgetFor:        options.UnifiedImageBudgetForModel,
+		safeImageDecoder:             options.SafeImageDecoder,
 		dynamicToolCaller:            options.DynamicToolCaller,
 		dynamicToolThreadID:          strings.TrimSpace(options.DynamicToolThreadID),
 		dynamicToolTurnID:            strings.TrimSpace(options.DynamicToolTurnID),
@@ -501,6 +506,7 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 			ReasoningEffort:              request.ReasoningEffort,
 			ReasoningSummary:             request.ReasoningSummary,
 			UnifiedImageBudget:           r.unifiedImageBudget,
+			SafeImageDecoder:             r.safeImageDecoder,
 			DropReasoningEffortUpdates:   request.DropReasoningEffortUpdates,
 			ConcurrentReasoningSummaries: request.ConcurrentReasoningSummaries,
 			ModelVerbosity:               request.ModelVerbosity,
@@ -551,6 +557,7 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 		return &AgentLoopResult{Response: response, Responses: []*model.AgentResponse{response}, InputItems: resultInputItems, InitialInputCount: len(request.InputItems), Usage: response.Usage, Iterations: 1, TimingProfile: &profile}, nil
 	}
 	loopRequest := *request
+	loopRequest.SafeImageDecoder = r.safeImageDecoder
 	if loopRequest.CriticalPathTiming && loopRequest.Timing == nil {
 		loopRequest.Timing = NewTimingState()
 	}

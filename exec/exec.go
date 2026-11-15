@@ -1683,6 +1683,7 @@ func (r *Runner) runAgentTurn(ctx context.Context, req *Request, agent model.Age
 		Router:                       router,
 		ToolRegistrationMetrics:      r.otelMetricsSink(),
 		Hooks:                        r.Hooks,
+		SafeImageDecoder:             run.Config != nil && features.Enabled(run.Config.FeatureSettings(), "safe_image_decoder"),
 		SteerMailbox:                 run.SteerMailbox,
 		Now:                          r.now,
 		MaxTurns:                     r.MaxToolTurns,
@@ -1808,6 +1809,9 @@ func (r *Runner) toolRouterForRequest(req *Request, run *agentRunConfig) (*tool.
 	options := turn.DefaultToolRegistryOptions(requestCWD(req))
 	options.CodexVersion = execHumanVersion()
 	options.UnifiedExec = r.UnifiedExec
+	if run != nil && run.Config != nil {
+		options.SafeImageDecoder = features.Enabled(run.Config.FeatureSettings(), "safe_image_decoder")
+	}
 	if run != nil && run.Config != nil {
 		// Rust resolves the model-visible utility surface from the effective
 		// config before the registry is built: update_plan only exists when
@@ -2167,11 +2171,13 @@ func execViewImageOptions(cwd string, info *model.ModelInfo, featureSettings map
 		CWD:                      cwd,
 		CanRequestOriginalDetail: canRequestOriginalDetail,
 		UnifiedImageBudget:       unifiedImageBudget,
+		SafeImageDecoder:         features.Enabled(featureSettings, "safe_image_decoder"),
 		StepSettings: func() (tool.ViewImageStepSettings, bool) {
 			return tool.ViewImageStepSettings{
 				SupportsImageInput:       supportsImage,
 				CanRequestOriginalDetail: canRequestOriginalDetail,
 				UnifiedImageBudget:       unifiedImageBudget,
+				SafeImageDecoder:         features.Enabled(featureSettings, "safe_image_decoder"),
 			}, true
 		},
 	}

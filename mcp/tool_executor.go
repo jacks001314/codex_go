@@ -112,6 +112,9 @@ type ToolExecutorOptions struct {
 	// (Rust #58378). Nil omits both keys unless the turn installed one.
 	AgentMetadataRecipient *AgentMCPMetadataRecipient
 	ToolRequestMetaHook    *MCPToolRequestMetaHook
+	// SafeImageDecoder mirrors the safe_image_decoder feature: MCP image content
+	// is validated through the selected prompt image decoder.
+	SafeImageDecoder bool
 	// ToolAdmission runs after approval and immediately before dispatch. It
 	// lets the host reject a stale prepared call when another provider has since
 	// taken ownership of the thread.
@@ -243,6 +246,7 @@ type ToolExecutor struct {
 	mcpSourceObserver             func(source McpCallSource)
 	toolInputSchemaMaxBytes       int
 	codeModeInputSchemaMaxBytes   int
+	safeImageDecoder              bool
 }
 
 func NewToolExecutor(options *ToolExecutorOptions) *ToolExecutor {
@@ -297,7 +301,15 @@ func NewToolExecutor(options *ToolExecutorOptions) *ToolExecutor {
 	executor.captureResultMetadata = options.CaptureResultMetadata
 	executor.connectorAuthFailureObserver = options.ConnectorAuthFailureObserver
 	executor.mcpSourceObserver = options.MCPSourceObserver
+	executor.safeImageDecoder = options.SafeImageDecoder
 	return executor
+}
+
+func (e *ToolExecutor) decoder() utils.Decoder {
+	if e != nil && e.safeImageDecoder {
+		return utils.DecoderSanitizer
+	}
+	return utils.DecoderLegacy
 }
 
 func RegisterToolExecutor(registry *tool.Registry, options *ToolExecutorOptions) error {
@@ -525,7 +537,7 @@ func (e *ToolExecutor) Execute(ctx context.Context, invocation *tool.Invocation)
 	// Rust #40737: MCP results become typed function-call output content items.
 	// Encrypted content and unstructured content stay as content items, while
 	// structured content is serialized to text.
-	body, contentItems, useContentItems := mcpFunctionCallOutput(response)
+	body, contentItems, useContentItems := mcpFunctionCallOutput(response, e.decoder())
 	data := mcpToolResponseData(response)
 	if useContentItems {
 		data["content_items"] = contentItems
@@ -1101,8 +1113,8 @@ func MCPToolResponseText(response *MCPToolCallResponse) string {
 // (#40737): a single encrypted content item forces content items, otherwise a
 // non-null structured result is serialized to text, and everything else becomes
 // typed content items.
-func mcpFunctionCallOutput(response *MCPToolCallResponse) (body string, contentItems []any, useContentItems bool) {
-	contentItems = mcpToolModelContentItems(response)
+func mcpFunctionCallOutput(response *MCPToolCallResponse, decoder utils.Decoder) (body string, contentItems []any, useContentItems bool) {
+	contentItems = mcpToolModelContentItems(response, decoder)
 	for _, item := range contentItems {
 		if entry, ok := item.(map[string]any); ok && entry["type"] == "encrypted_content" {
 			return MCPToolResponseText(response), contentItems, true
@@ -1128,18 +1140,20 @@ const (
 // mcpToolModelContentItems mirrors Rust convert_mcp_content_to_items: text,
 // image, and audio become typed items; unknown or malformed content is
 // preserved as serialized text so no result is silently dropped.
-func mcpToolModelContentItems(response *MCPToolCallResponse) []any {
+func mcpToolModelContentItems(response *MCPToolCallResponse, decoder utils.Decoder) []any {
 	if response == nil {
 		return []any{}
 	}
 	items := make([]any, 0, len(response.Content))
 	for i := range response.Content {
-		items = append(items, mcpContentToModelItem(response.Content[i].Map()))
+		if item := mcpContentToModelItem(response.Content[i].Map(), decoder); item != nil {
+			items = append(items, item)
+		}
 	}
 	return items
 }
 
-func mcpContentToModelItem(content map[string]any) any {
+func mcpContentToModelItem(content map[string]any, decoder utils.Decoder) any {
 	contentType, _ := content["type"].(string)
 	switch contentType {
 	case "text":
@@ -1158,9 +1172,13 @@ func mcpContentToModelItem(content map[string]any) any {
 		if !ok {
 			return mcpUnknownContentItem(content)
 		}
+		imageURL := mcpContentDataURL(data, mcpContentMimeType(content))
+		if _, err := utils.LoadDataURLForPromptWithDecoder(imageURL, utils.ModeOriginal, decoder); err != nil {
+			return nil
+		}
 		return map[string]any{
 			"type":      "input_image",
-			"image_url": mcpContentDataURL(data, mcpContentMimeType(content)),
+			"image_url": imageURL,
 			"detail":    mcpContentImageDetail(content),
 		}
 	case "audio":

@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"codex_go/tool"
+	"codex_go/utils"
 )
 
 // TestAgentPluginOversizedSchemaDegradesToAcceptAnything mirrors Rust
@@ -620,7 +621,7 @@ func TestMCPToolModelContentItemsPreserveEncryptedContentLikeRust(t *testing.T) 
 			"_meta": map[string]any{"codex/encryptedContent": true},
 		}},
 	}}
-	got := mcpToolModelContentItems(response)
+	got := mcpToolModelContentItems(response, utils.DecoderLegacy)
 	want := []any{
 		map[string]any{"type": "input_text", "text": "Lookup completed"},
 		map[string]any{"type": "encrypted_content", "encrypted_content": "gAAAA-test"},
@@ -633,16 +634,17 @@ func TestMCPToolModelContentItemsPreserveEncryptedContentLikeRust(t *testing.T) 
 // Mirrors Rust convert_mcp_content_to_items (#40737): media and unknown
 // content are preserved as typed items instead of dropping or flattening them.
 func TestMCPToolModelContentItemsConvertMediaAndUnknownLikeRust(t *testing.T) {
+	const pngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 	response := &MCPToolCallResponse{Content: []MCPToolCallContent{
 		{Type: "text", Text: "hello"},
 		{Type: "image", Raw: map[string]any{
 			"type":     "image",
-			"data":     "data:image/png;base64,Zm9v",
+			"data":     "data:image/png;base64," + pngBase64,
 			"mimeType": "image/png",
 		}},
 		{Type: "image", Raw: map[string]any{
 			"type":     "image",
-			"data":     "Zm9v",
+			"data":     pngBase64,
 			"mimeType": "image/png",
 			"_meta":    map[string]any{"codex/imageDetail": "original"},
 		}},
@@ -656,11 +658,11 @@ func TestMCPToolModelContentItemsConvertMediaAndUnknownLikeRust(t *testing.T) {
 			"uri":  "file:///tmp/x",
 		}},
 	}}
-	got := mcpToolModelContentItems(response)
+	got := mcpToolModelContentItems(response, utils.DecoderLegacy)
 	want := []any{
 		map[string]any{"type": "input_text", "text": "hello"},
-		map[string]any{"type": "input_image", "image_url": "data:image/png;base64,Zm9v", "detail": "high"},
-		map[string]any{"type": "input_image", "image_url": "data:image/png;base64,Zm9v", "detail": "original"},
+		map[string]any{"type": "input_image", "image_url": "data:image/png;base64," + pngBase64, "detail": "high"},
+		map[string]any{"type": "input_image", "image_url": "data:image/png;base64," + pngBase64, "detail": "original"},
 		map[string]any{"type": "input_audio", "audio_url": "data:audio/wav;base64,Zm9v"},
 		map[string]any{"type": "input_text", "text": `{"type":"resource","uri":"file:///tmp/x"}`},
 	}
@@ -676,7 +678,7 @@ func TestMCPFunctionCallOutputPrefersStructuredTextUnlessEncrypted(t *testing.T)
 		Content:           []MCPToolCallContent{{Type: "text", Text: "hello"}},
 		StructuredContent: map[string]any{"answer": 42},
 	}
-	body, items, useItems := mcpFunctionCallOutput(structured)
+	body, items, useItems := mcpFunctionCallOutput(structured, utils.DecoderLegacy)
 	if body != `{"answer":42}` || items != nil || useItems {
 		t.Fatalf("structured output = %q, %#v, %t", body, items, useItems)
 	}
@@ -689,7 +691,7 @@ func TestMCPFunctionCallOutputPrefersStructuredTextUnlessEncrypted(t *testing.T)
 		},
 		StructuredContent: map[string]any{"answer": 42},
 	}
-	_, items, useItems = mcpFunctionCallOutput(encrypted)
+	_, items, useItems = mcpFunctionCallOutput(encrypted, utils.DecoderLegacy)
 	if !useItems || len(items) != 1 {
 		t.Fatalf("encrypted output items = %#v, use=%t", items, useItems)
 	}

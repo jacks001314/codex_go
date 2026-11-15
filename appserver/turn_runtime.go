@@ -29,6 +29,7 @@ import (
 	"codex_go/agentboard"
 	"codex_go/applypatch"
 	"codex_go/apps"
+	"codex_go/attachmentstore"
 	"codex_go/audiofiles"
 	"codex_go/auth"
 	"codex_go/codexapi"
@@ -14189,9 +14190,16 @@ func (r *RuntimeRouter) preparedUserMessageInputItem(turnID string, params *turn
 		return nil, nil
 	}
 	content, _ := item.(map[string]any)["content"].([]map[string]any)
-	prepared, resized := prepareUserMessageContentImages(content)
+	decoder := r.safeImageDecoderForTurn(params)
+	store := attachmentstore.StoreOrDefault(nil)
+	if r.threads != nil {
+		store = r.threads.AttachmentStore()
+	}
+	origin := eventmap.ImagePrepOrigin{ThreadID: strings.TrimSpace(params.ThreadID), Ephemeral: r.threadIsEphemeral(params.ThreadID)}
+	prepared, resized, replay := prepareUserMessageContentImagesWithStore(store, origin, content, decoder)
 	item.(map[string]any)["content"] = prepared
 	r.setPreparedUserMessageContent(turnID, prepared)
+	attachImageReplaySources(item, replay)
 	if !r.imageResizeNoticeEnabledForTurn(params) || len(resized) == 0 {
 		return item, nil
 	}
@@ -14284,6 +14292,18 @@ func (r *RuntimeRouter) imageResizeNoticeEnabledForTurn(params *turn.TurnStartPa
 	return false
 }
 
+// safeImageDecoderForTurn mirrors Rust's prompt_image_decoder(features) for the
+// turn's effective configuration.
+func (r *RuntimeRouter) safeImageDecoderForTurn(params *turn.TurnStartParams) utils.Decoder {
+	if r == nil {
+		return utils.DecoderLegacy
+	}
+	if cfg, err := r.effectiveConfigForTurn(params); err == nil && cfg != nil && features.Enabled(cfg.FeatureSettings(), "safe_image_decoder") {
+		return utils.DecoderSanitizer
+	}
+	return utils.DecoderLegacy
+}
+
 func (r *RuntimeRouter) imageResizeNoticeEnabledForSteer(params *turn.TurnSteerParams) bool {
 	if r == nil || params == nil {
 		return false
@@ -14300,8 +14320,16 @@ func (r *RuntimeRouter) imageResizeNoticeEnabledForSteer(params *turn.TurnSteerP
 // content blocks, replacing input_image data URLs with prepared (possibly
 // resized) versions and returning the resize records in image-number order.
 func prepareUserMessageContentImages(content []map[string]any) ([]map[string]any, []eventmap.ImagePrepResize) {
+	prepared, resized, _ := prepareUserMessageContentImagesWithStore(attachmentstore.StoreOrDefault(nil), eventmap.ImagePrepOrigin{}, content, utils.DecoderLegacy)
+	return prepared, resized
+}
+
+// prepareUserMessageContentImagesWithStore prepares user message images with an
+// explicit decoder and store, returning Rust's replay records for sanitized
+// images.
+func prepareUserMessageContentImagesWithStore(store attachmentstore.Store, origin eventmap.ImagePrepOrigin, content []map[string]any, decoder utils.Decoder) ([]map[string]any, []eventmap.ImagePrepResize, []eventmap.ImagePrepReplaySource) {
 	if len(content) == 0 {
-		return content, nil
+		return content, nil, nil
 	}
 	items := make([]eventmap.ImagePrepContentItem, len(content))
 	// Rust #58430 prepare_message_content only rewrites ContentItem::InputImage
@@ -14328,9 +14356,9 @@ func prepareUserMessageContentImages(content []map[string]any) ([]map[string]any
 			items[i] = eventmap.ImagePrepContentItem{Kind: eventmap.ImagePrepContentText}
 		}
 	}
-	prepared, resized, err := eventmap.PrepareImagePrepContentWithNotices(items)
+	prepared, resized, replay, err := eventmap.PrepareImagePrepContentWithNoticesStoreDecoder(store, origin, items, decoder)
 	if err != nil {
-		return content, nil
+		return content, nil, nil
 	}
 	out := make([]map[string]any, len(prepared))
 	for i, item := range prepared {
@@ -14365,7 +14393,48 @@ func prepareUserMessageContentImages(content []map[string]any) ([]map[string]any
 			out[i] = block
 		}
 	}
-	return out, resized
+	return out, resized, replay
+}
+
+// attachImageReplaySources records sanitizer replay sources on both the
+// persisted harness metadata and the request-time metadata passthrough. The
+// latter survives history sanitization for later turns and is stripped before
+// the request reaches the API.
+func attachImageReplaySources(item any, sources []eventmap.ImagePrepReplaySource) {
+	if len(sources) == 0 {
+		return
+	}
+	message, ok := item.(map[string]any)
+	if !ok || message == nil {
+		return
+	}
+	records := make([]map[string]any, 0, len(sources))
+	for _, source := range sources {
+		digest := make([]int, len(source.PreparedURLDigest))
+		for i, value := range source.PreparedURLDigest {
+			digest[i] = int(value)
+		}
+		record := map[string]any{
+			"prepared_url_digest": digest,
+			"original_data_url":   source.OriginalDataURL,
+		}
+		if source.Detail != "" {
+			record["detail"] = string(source.Detail)
+		}
+		records = append(records, record)
+	}
+	harness, _ := message["harness_metadata"].(map[string]any)
+	if harness == nil {
+		harness = map[string]any{}
+	}
+	harness["image_replay_sources"] = records
+	message["harness_metadata"] = harness
+	passthrough, _ := message["internal_chat_message_metadata_passthrough"].(map[string]any)
+	if passthrough == nil {
+		passthrough = map[string]any{}
+	}
+	passthrough["image_replay_sources"] = records
+	message["internal_chat_message_metadata_passthrough"] = passthrough
 }
 
 func inputContentFromTurnUserInputs(prompt string, inputs []turn.TurnUserInput) []map[string]any {

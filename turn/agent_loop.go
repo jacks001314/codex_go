@@ -178,9 +178,12 @@ type AgentLoopRequest struct {
 	// UnifiedImageBudgetForModel reports unified_image_budget_enabled for the
 	// model of the sampling step, so request image preparation follows it.
 	UnifiedImageBudgetForModel func(model string) bool
-	HostedTools                []any
-	Store                      bool
-	PreviousResponseID         string
+	// SafeImageDecoder carries the safe_image_decoder feature into every
+	// sampling request.
+	SafeImageDecoder   bool
+	HostedTools        []any
+	Store              bool
+	PreviousResponseID string
 	// PreviousResponseFromPrewarm marks PreviousResponseID as the response a
 	// prewarm prepared, so only the first sampling request is tagged
 	// after_prewarm (Rust #48812).
@@ -691,6 +694,7 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			IncrementalTools:             request.IncrementalTools,
 			Model:                        stepModel,
 			UnifiedImageBudget:           unifiedImageBudget,
+			SafeImageDecoder:             request.SafeImageDecoder,
 			ProviderID:                   request.ProviderID,
 			TaskKind:                     request.TaskKind,
 			ThreadID:                     request.ThreadID,

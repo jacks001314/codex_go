@@ -47,7 +47,10 @@ type AgentRequest struct {
 	// image preparation ignores each image detail hint and applies the
 	// original-detail budget instead.
 	UnifiedImageBudget bool
-	ProviderID         string
+	// SafeImageDecoder mirrors the `safe_image_decoder` feature: request image
+	// preparation decodes and re-encodes images through the sanitizer.
+	SafeImageDecoder bool
+	ProviderID       string
 	// Endpoint selects the Responses-compatible backend route. The zero value
 	// is the standard /responses route; Guardian callers may opt into /guardian.
 	Endpoint ResponsesEndpoint

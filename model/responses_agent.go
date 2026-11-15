@@ -3,6 +3,7 @@ package model
 import (
 	"bytes"
 	"context"
+	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
@@ -33,6 +34,7 @@ import (
 	"codex_go/network"
 	"codex_go/protocol"
 	"codex_go/retainedctx"
+	"codex_go/utils"
 
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
@@ -3420,9 +3422,19 @@ func responsesInputItemsWithStore(request *AgentRequest, store attachmentstore.S
 	if !request.Store && !request.ItemIDsEnabled {
 		items = stripResponseInputItemIDs(items)
 	}
-	items = prepareResponseInputImagesWithStoreMode(items, store, responsesImagePrepOrigin(request), responsesImagePrepMode(request))
+	items = prepareResponseInputImagesWithStoreModeDecoder(items, store, responsesImagePrepOrigin(request), responsesImagePrepMode(request), responsesImageDecoder(request))
+	items = stripImageReplaySources(items)
 	items = replaceUnresolvableImageFiles(items, store)
 	return items
+}
+
+// responsesImageDecoder mirrors Rust's prompt_image_decoder(features): the
+// sanitizer is selected only when the safe_image_decoder feature is enabled.
+func responsesImageDecoder(request *AgentRequest) utils.Decoder {
+	if request != nil && request.SafeImageDecoder {
+		return utils.DecoderSanitizer
+	}
+	return utils.DecoderLegacy
 }
 
 // responsesImagePrepOrigin mirrors the origin Rust's image preparation carries
@@ -3488,6 +3500,10 @@ func responsesImagePrepMode(request *AgentRequest) eventmap.ImagePrepMode {
 }
 
 func prepareResponseInputImagesWithStoreMode(items []any, store attachmentstore.Store, origin eventmap.ImagePrepOrigin, mode eventmap.ImagePrepMode) []any {
+	return prepareResponseInputImagesWithStoreModeDecoder(items, store, origin, mode, utils.DecoderLegacy)
+}
+
+func prepareResponseInputImagesWithStoreModeDecoder(items []any, store attachmentstore.Store, origin eventmap.ImagePrepOrigin, mode eventmap.ImagePrepMode, decoder utils.Decoder) []any {
 	if len(items) == 0 {
 		return items
 	}
@@ -3499,33 +3515,37 @@ func prepareResponseInputImagesWithStoreMode(items []any, store attachmentstore.
 		return items
 	}
 	var normalized []any
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.UseNumber()
-	if err := decoder.Decode(&normalized); err != nil {
+	jsonDecoder := json.NewDecoder(bytes.NewReader(data))
+	jsonDecoder.UseNumber()
+	if err := jsonDecoder.Decode(&normalized); err != nil {
 		return items
 	}
-	prepareResponseInputImageBlocks(normalized, store, origin, mode)
+	prepareResponseInputImageBlocks(normalized, store, origin, mode, decoder, nil)
 	return normalized
 }
 
-func prepareResponseInputImageBlocks(value any, store attachmentstore.Store, origin eventmap.ImagePrepOrigin, mode eventmap.ImagePrepMode) {
+func prepareResponseInputImageBlocks(value any, store attachmentstore.Store, origin eventmap.ImagePrepOrigin, mode eventmap.ImagePrepMode, decoder utils.Decoder, inherited []eventmap.ImagePrepReplaySource) {
 	switch typed := value.(type) {
 	case map[string]any:
-		prepareResponseInputImageBlock(typed, store, origin, mode)
+		replay := imageReplaySourcesFromMessage(typed)
+		if len(replay) == 0 {
+			replay = inherited
+		}
+		prepareResponseInputImageBlock(typed, store, origin, mode, decoder, replay)
 		md, _ := typed["internal_chat_message_metadata_passthrough"].(map[string]any)
 		kinds, _ := md["content_item_kinds"].([]any)
 		for _, key := range []string{"content", "output", "content_items"} {
 			if child, ok := typed[key]; ok {
 				if key == "content" && kinds != nil {
-					prepareResponseInputImageContentWithKinds(child, kinds, store, origin, mode)
+					prepareResponseInputImageContentWithKinds(child, kinds, store, origin, mode, decoder, replay)
 				} else {
-					prepareResponseInputImageBlocks(child, store, origin, mode)
+					prepareResponseInputImageBlocks(child, store, origin, mode, decoder, replay)
 				}
 			}
 		}
 	case []any:
 		for _, child := range typed {
-			prepareResponseInputImageBlocks(child, store, origin, mode)
+			prepareResponseInputImageBlocks(child, store, origin, mode, decoder, inherited)
 		}
 	}
 }
@@ -3534,14 +3554,14 @@ func prepareResponseInputImageBlocks(value any, store attachmentstore.Store, ori
 // while updating content_item_kinds for image-preparation failures, mirroring
 // Rust image_preparation.rs which tags failed images as images.preparation_error
 // (#40281).
-func prepareResponseInputImageContentWithKinds(value any, kinds []any, store attachmentstore.Store, origin eventmap.ImagePrepOrigin, mode eventmap.ImagePrepMode) {
+func prepareResponseInputImageContentWithKinds(value any, kinds []any, store attachmentstore.Store, origin eventmap.ImagePrepOrigin, mode eventmap.ImagePrepMode, decoder utils.Decoder, replay []eventmap.ImagePrepReplaySource) {
 	content, ok := value.([]any)
 	if !ok {
-		prepareResponseInputImageBlocks(value, store, origin, mode)
+		prepareResponseInputImageBlocks(value, store, origin, mode, decoder, replay)
 		return
 	}
 	for i, block := range content {
-		prepareResponseInputImageBlock(block.(map[string]any), store, origin, mode)
+		prepareResponseInputImageBlock(block.(map[string]any), store, origin, mode, decoder, replay)
 		if i < len(kinds) && kinds[i] == "user.image" {
 			if m, ok := block.(map[string]any); ok && m["type"] == "input_text" && blockWasPreparationError(m) {
 				kinds[i] = "images.preparation_error"
@@ -3559,7 +3579,7 @@ func blockWasPreparationError(block map[string]any) bool {
 	return strings.HasPrefix(strings.TrimSpace(text), imagePrepErrorPrefix)
 }
 
-func prepareResponseInputImageBlock(block map[string]any, store attachmentstore.Store, origin eventmap.ImagePrepOrigin, mode eventmap.ImagePrepMode) {
+func prepareResponseInputImageBlock(block map[string]any, store attachmentstore.Store, origin eventmap.ImagePrepOrigin, mode eventmap.ImagePrepMode, decoder utils.Decoder, replay []eventmap.ImagePrepReplaySource) {
 	itemType, _ := block["type"].(string)
 	if itemType != "input_image" && itemType != "image" {
 		return
@@ -3571,7 +3591,11 @@ func prepareResponseInputImageBlock(block map[string]any, store attachmentstore.
 		return
 	}
 	detail := eventmap.ImagePrepDetail(responseToolString(block["detail"]))
-	prepared, err := eventmap.PrepareImagePrepImageWithStoreResultMode(store, origin, imageURL, detail, mode)
+	prepareURL := imageURL
+	if decoder == utils.DecoderSanitizer {
+		prepareURL = imageReplayOriginalURL(imageURL, detail, replay)
+	}
+	prepared, err := eventmap.PrepareImagePrepImageWithStoreResultModeDecoder(store, origin, prepareURL, detail, mode, decoder)
 	if err != nil {
 		// Replace an image that cannot be processed with a placeholder text
 		// block, matching Rust image_preparation.rs.
@@ -3599,6 +3623,104 @@ func prepareResponseInputImageBlock(block map[string]any, store attachmentstore.
 		// budget is active; Responses Lite strips it before sending.
 		block["detail"] = string(eventmap.ImagePrepDetailOriginal)
 	}
+}
+
+// imageReplayOriginalURL mirrors Rust replay_image_url: a sanitized image's
+// prepared URL is matched by digest (and detail) so resume and fork regenerate
+// the prepared bytes from the saved original instead of re-encoding them.
+func imageReplayOriginalURL(imageURL string, detail eventmap.ImagePrepDetail, sources []eventmap.ImagePrepReplaySource) string {
+	if len(sources) == 0 {
+		return imageURL
+	}
+	digest := sha1.Sum([]byte(imageURL))
+	for _, source := range sources {
+		if source.Detail != detail {
+			continue
+		}
+		if !strings.HasPrefix(source.OriginalDataURL, "data:application/octet-stream;base64,") {
+			continue
+		}
+		if len(source.PreparedURLDigest) == 32 {
+			continue
+		}
+		if bytes.Equal(source.PreparedURLDigest, digest[:]) {
+			return source.OriginalDataURL
+		}
+	}
+	return imageURL
+}
+
+// imageReplaySourcesFromMessage reads the persisted replay records from a
+// message's internal metadata passthrough.
+func imageReplaySourcesFromMessage(message map[string]any) []eventmap.ImagePrepReplaySource {
+	metadata, _ := message["internal_chat_message_metadata_passthrough"].(map[string]any)
+	if metadata == nil {
+		return nil
+	}
+	raw, _ := metadata["image_replay_sources"].([]any)
+	if len(raw) == 0 {
+		return nil
+	}
+	sources := make([]eventmap.ImagePrepReplaySource, 0, len(raw))
+	for _, entry := range raw {
+		record, ok := entry.(map[string]any)
+		if !ok {
+			continue
+		}
+		var digest []byte
+		switch value := record["prepared_url_digest"].(type) {
+		case []byte:
+			digest = value
+		case string:
+			decoded, err := base64.StdEncoding.DecodeString(value)
+			if err != nil {
+				continue
+			}
+			digest = decoded
+		case []any:
+			for _, item := range value {
+				number, ok := item.(json.Number)
+				if !ok {
+					continue
+				}
+				byteValue, err := number.Int64()
+				if err != nil || byteValue < 0 || byteValue > 255 {
+					continue
+				}
+				digest = append(digest, byte(byteValue))
+			}
+		}
+		original, _ := record["original_data_url"].(string)
+		if len(digest) != 20 || original == "" {
+			continue
+		}
+		sources = append(sources, eventmap.ImagePrepReplaySource{
+			PreparedURLDigest: digest,
+			Detail:            eventmap.ImagePrepDetail(responseToolString(record["detail"])),
+			OriginalDataURL:   original,
+		})
+	}
+	return sources
+}
+
+// stripImageReplaySources removes the host-only replay records before the
+// request is serialized; persistence keeps them in harness metadata.
+func stripImageReplaySources(items []any) []any {
+	for _, item := range items {
+		message, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		metadata, _ := message["internal_chat_message_metadata_passthrough"].(map[string]any)
+		if metadata == nil {
+			continue
+		}
+		delete(metadata, "image_replay_sources")
+		if len(metadata) == 0 {
+			delete(message, "internal_chat_message_metadata_passthrough")
+		}
+	}
+	return items
 }
 
 // UnavailableImagePlaceholder replaces a file image the attachment store

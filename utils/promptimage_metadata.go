@@ -42,6 +42,61 @@ func ExtractPromptImageSourceMetadata(payload []byte) PromptImageSourceMetadata 
 	return PromptImageSourceMetadata{ICCProfile: metadata.iccProfile, EXIF: metadata.exif}
 }
 
+// extractRawPromptImageICCProfile returns the source container's ICC profile
+// without the RGB color-space filter used when preserving metadata. The
+// sanitizer asks the profile parser to decide whether a conversion applies,
+// mirroring Rust's decoder.icc_profile() accessor.
+func extractRawPromptImageICCProfile(format promptImageFormat, payload []byte) []byte {
+	switch format {
+	case promptImageFormatPNG:
+		chunks, ok := parsePNGChunks(payload)
+		if !ok {
+			return nil
+		}
+		for _, chunk := range chunks {
+			if chunk.kind != "iCCP" {
+				continue
+			}
+			separator := bytes.IndexByte(chunk.data, 0)
+			if separator < 0 || separator+2 > len(chunk.data) || chunk.data[separator+1] != 0 {
+				continue
+			}
+			reader, err := zlib.NewReader(bytes.NewReader(chunk.data[separator+2:]))
+			if err != nil {
+				continue
+			}
+			profile, err := io.ReadAll(io.LimitReader(reader, MaxPromptImageInputBytes))
+			_ = reader.Close()
+			if err == nil {
+				return profile
+			}
+		}
+	case promptImageFormatJPEG:
+		segments, ok := jpegSegments(payload)
+		if !ok {
+			return nil
+		}
+		var icc []byte
+		for _, segment := range segments {
+			if segment.marker == 0xe2 && len(segment.data) > 14 && bytes.Equal(segment.data[:12], []byte("ICC_PROFILE\x00")) {
+				icc = append(icc, segment.data[14:]...)
+			}
+		}
+		return icc
+	case promptImageFormatWebP:
+		chunks, ok := parseWebPChunks(payload)
+		if !ok {
+			return nil
+		}
+		for _, chunk := range chunks {
+			if chunk.kind == "ICCP" {
+				return append([]byte(nil), chunk.data...)
+			}
+		}
+	}
+	return nil
+}
+
 // ApplyPromptImageMetadataToContainer inserts the source metadata into freshly
 // encoded PNG or JPEG bytes (Rust's apply_image_metadata); mime selects the
 // container and any other value leaves the bytes untouched.
