@@ -274,31 +274,38 @@ func (m *Model) toggleExperimentalSelection() {
 }
 
 // updateExperimentalModal handles the /experimental popup's keys. Space toggles
-// the selected writable feature, Enter saves and keeps the popup open while the
-// write is in flight, and a second Enter or Esc closes it while the write
-// finishes (Rust ExperimentalFeaturesView::handle_key_event / on_ctrl_c).
+// the selected writable feature, accept saves and keeps the popup open while
+// the write is in flight, and a second accept or cancel closes it. Cancel only
+// closes the popup: pending edits are discarded and never written (Rust
+// ExperimentalFeaturesView::handle_key_event / on_ctrl_c, #61694).
 func (m *Model) updateExperimentalModal(message keymsg.KeyMsg) bubbletea.Cmd {
 	if m == nil || m.modal == nil || m.modal.kind != ModalKindExperimental {
 		return nil
 	}
-	switch message.Type {
-	case keymsg.KeyEsc:
-		// Rust on_ctrl_c: retry the unconfirmed rows (or save pending changes),
-		// then close; the write continues independently.
-		cmd := m.saveExperimentalFeatures()
-		m.modal = nil
-		m.refreshTranscript()
-		return cmd
-	case keymsg.KeySpace:
+	keySpec := keySpecFromKeyMsg(message)
+	// Rust handles Space before consulting the list keymap, so a cancel remap
+	// to Space still toggles the selected feature.
+	if message.Type == keymsg.KeySpace || (message.Type == keymsg.KeyRunes && string(message.Runes) == " ") {
 		m.toggleExperimentalSelection()
 		return nil
-	case keymsg.KeyEnter:
+	}
+	if message.Type == keymsg.KeyEnter || m.keyMatches("list", "accept", keySpec) {
 		if m.experimentalFeaturesSaving || !m.experimentalFeaturesHaveUpdates() {
 			m.modal = nil
 			m.refreshTranscript()
 			return nil
 		}
 		return m.saveExperimentalFeatures()
+	}
+	if message.Type == keymsg.KeyEsc || message.Type == keymsg.KeyCtrlC ||
+		m.keyMatches("list", "cancel", keySpec) {
+		// Rust on_ctrl_c (#61694): cancel discards the pending selections and
+		// closes without emitting a write, even after a failed save.
+		m.modal = nil
+		m.refreshTranscript()
+		return nil
+	}
+	switch message.Type {
 	case keymsg.KeyUp:
 		m.moveModalSelection(-1)
 		m.disarmModalOption()
@@ -309,8 +316,6 @@ func (m *Model) updateExperimentalModal(message keymsg.KeyMsg) bubbletea.Cmd {
 		return nil
 	case keymsg.KeyRunes:
 		switch string(message.Runes) {
-		case " ":
-			m.toggleExperimentalSelection()
 		case "k":
 			m.moveModalSelection(-1)
 			m.disarmModalOption()

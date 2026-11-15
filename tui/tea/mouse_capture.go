@@ -63,5 +63,12 @@ func (m *Model) syncMouseCapture() bubbletea.Cmd {
 		return nil
 	}
 	m.mouseCaptureActive = desired
+	// Rust MouseCapture::apply calls AlternateScreen::configure_input, which
+	// keeps DEC private mode 1007 opposite the capture policy: captured mouse
+	// events drive the viewport directly, while an uncaptured surface hands the
+	// wheel back to the terminal (#57284, #61697).
+	if m.ownedScreen || m.overlay != nil {
+		m.configureAlternateScroll(!desired)
+	}
 	return nil
 }

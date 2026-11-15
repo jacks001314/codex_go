@@ -59,11 +59,29 @@ func TestStartupReplayOmitsTerminalColorRepliesInterleavedWithBracketedPasteLike
 }
 
 // Keys, mouse reports, cursor-position replies, and the probe's own DA1 reply
-// all survive: Rust only strips completed OSC replies.
+// all survive: Rust only strips completed color and alternate-scroll replies.
 func TestStartupReplayKeepsKeysAndProbeReportsLikeRust(t *testing.T) {
 	input := []byte("\x1b[?64;1;2c\x1b[20;10R\x1b[<64;5;3Mhi\x1b]10;rgb:eeee/eeee/eeee\x07!")
 	want := "\x1b[?64;1;2c\x1b[20;10R\x1b[<64;5;3Mhi!"
 	if got := StartupReplayInput(input); string(got) != want {
 		t.Fatalf("startup replay = %q, want %q", got, want)
+	}
+}
+
+func TestStartupReplayOmitsAlternateScrollReportsLikeRust(t *testing.T) {
+	input := []byte("\x1b[?1007;1$yabc\x1b[?1007;2$y\x1b[?1007;0$y")
+	if got := StartupReplayInput(input); string(got) != "abc" {
+		t.Fatalf("alternate-scroll reports = %q, want %q", got, "abc")
+	}
+
+	insidePaste := []byte("\x1b[200~hello\x1b[?1007;3$y world\x1b[201~")
+	wantPaste := "\x1b[200~hello world\x1b[201~"
+	if got := StartupReplayInput(insidePaste); string(got) != wantPaste {
+		t.Fatalf("report inside paste = %q, want %q", got, wantPaste)
+	}
+
+	const partial = "typed\x1b[?1007;1$"
+	if got := StartupReplayInput([]byte(partial)); string(got) != partial {
+		t.Fatalf("partial report = %q, want it preserved", got)
 	}
 }

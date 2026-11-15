@@ -40,6 +40,10 @@ func (m *Model) openExternalEditor() bubbletea.Cmd {
 		m.notice = "Failed to open editor: editor command did not start"
 		return nil
 	}
+	// Rust AlternateScreen::release_input restores the terminal's initial
+	// alternate-scroll mode before an editor takes over the input modes
+	// (#61697). applyExternalEditorFinished reapplies this TUI's mode.
+	m.restoreAlternateScroll()
 	// Rust #52725 clears the terminal program status before handing the
 	// terminal to an external program. Bubble Tea sequences the clear write
 	// before entering its Exec command, while the completion message is handled
@@ -86,6 +90,7 @@ func (m *Model) applyExternalEditorFinished(message ExternalEditorFinishedMsg) {
 		return
 	}
 	m.editorActive = false
+	m.configureAlternateScrollForSurface()
 	if message.Err != nil {
 		text := "Failed to open editor: " + message.Err.Error()
 		if errors.Is(message.Err, errExternalEditorMissing) {

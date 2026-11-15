@@ -93,16 +93,42 @@ func TestParseKeyboardEnhancementSupportMatchesRust(t *testing.T) {
 	}
 }
 
+func TestParseAlternateScrollReportMatchesRust(t *testing.T) {
+	for _, testCase := range []struct {
+		input   string
+		enabled bool
+	}{
+		{"\x1b[?1007;1$y", true},
+		{"\x1b[?1007;3$y", true},
+		{"\x1b[?1007;0$y", false},
+		{"\x1b[?1007;2$y", false},
+		{"\x1b[?1007;4$y", false},
+	} {
+		enabled, ok := ParseAlternateScrollReport([]byte(testCase.input))
+		if !ok || enabled != testCase.enabled {
+			t.Fatalf("report %q = %v, %v", testCase.input, enabled, ok)
+		}
+	}
+	for _, malformed := range []string{"\x1b[?1007;5$y", "\x1b[?1007;1$", "x\x1b[?1007;1$y"} {
+		if _, ok := ParseAlternateScrollReport([]byte(malformed)); ok {
+			t.Fatalf("malformed report %q parsed", malformed)
+		}
+	}
+}
+
 func TestStartupProbeParsesBatchedTerminalResponses(t *testing.T) {
 	probe := StartupProbe{}
 	sawSupportedKeyboard := false
 	UpdateStartupProbe(
 		&probe,
 		&sawSupportedKeyboard,
-		[]byte("\x1b[20;10R\x1b]11;rgb:1111/1111/1111\x07\x1b[?64;1;2c\x1b]10;rgb:eeee/eeee/eeee\x1b\\\x1b[?7u\x1b[>1;95;0c"),
+		[]byte("\x1b[?1007;1$y\x1b[20;10R\x1b]11;rgb:1111/1111/1111\x07\x1b[?64;1;2c\x1b]10;rgb:eeee/eeee/eeee\x1b\\\x1b[?7u\x1b[>1;95;0c"),
 		StartupKeyboardEnhancementProbeQuery,
 	)
 
+	if probe.AlternateScrollEnabled == nil || !*probe.AlternateScrollEnabled {
+		t.Fatalf("alternate scroll = %#v", probe.AlternateScrollEnabled)
+	}
 	if probe.CursorPosition == nil || *probe.CursorPosition != (TerminalPosition{X: 9, Y: 19}) {
 		t.Fatalf("cursor = %#v", probe.CursorPosition)
 	}

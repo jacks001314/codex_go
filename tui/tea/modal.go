@@ -2191,7 +2191,14 @@ func (m *Model) renderModal() string {
 	if m.modal.statusLineSetup != nil || m.modal.terminalTitleSetup != nil {
 		footer = firstNonEmpty(m.modal.footerHint, "space toggle \u00b7 enter save \u00b7 esc cancel")
 	} else if m.modal.kind == ModalKindExperimental {
-		footer = firstNonEmpty(m.modal.footerHint, "space toggle \u00b7 enter save \u00b7 esc save/close")
+		parts := []string{"space toggle"}
+		if accept := m.listPrimaryHint("accept"); accept != "" {
+			parts = append(parts, accept+" save")
+		}
+		if cancel := m.listPrimaryHint("cancel"); cancel != "" {
+			parts = append(parts, cancel+" cancel")
+		}
+		footer = firstNonEmpty(m.modal.footerHint, strings.Join(parts, " \u00b7 "))
 	}
 	if m.modal.userInput != nil {
 		switch {

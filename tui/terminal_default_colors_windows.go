@@ -96,6 +96,9 @@ func probePlatformTerminalDefaultColors(timeout time.Duration) (DefaultColors, [
 	// Windows never queries DA2, so the startup identity is known to be
 	// something other than Apple Terminal over SSH (Rust #47417).
 	SetTerminalAppOverSSHFromStartupProbe(boolPtrTerminalProbe(false))
+	// Rust only queries DEC private mode 1007 on Unix; Windows leaves the
+	// initial scroll mode unknown (#61697).
+	SetAlternateScrollFromStartupProbe(nil)
 	output, ok := windowsStdHandle(stdOutputHandle)
 	if !ok {
 		return DefaultColors{}, nil, false

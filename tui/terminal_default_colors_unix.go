@@ -11,14 +11,15 @@ import (
 	"github.com/charmbracelet/x/term"
 )
 
-// terminalStartupProbeQuery adds the primary device attributes (DA1) request
-// ahead of the OSC 10/11 colors. Rust's startup probe asks for DA1 too: its
-// reply finishes keyboard detection and records that the terminal can be asked
-// to drain outstanding reports at exit (#57391). For an SSH session outside a
+// terminalStartupProbeQuery queries alternate-scroll mode before DA1 so the
+// mode report acts as a barrier even when 1007 is unsupported (Rust #61697). It
+// then asks for DA1 ahead of the OSC 10/11 colors: the DA1 reply finishes
+// keyboard detection and records that the terminal can be asked to drain
+// outstanding reports at exit (#57391). For an SSH session outside a
 // multiplexer the secondary query (DA2) is appended so the reply pair can
 // identify Apple Terminal (#47417).
 func terminalStartupProbeQuery(queryIdentity bool) string {
-	query := "\x1b[c" + terminalColorProbeQuery
+	query := "\x1b[?1007$p\x1b[c" + terminalColorProbeQuery
 	if queryIdentity {
 		query += "\x1b[>c"
 	}
@@ -37,6 +38,7 @@ func probePlatformTerminalDefaultColors(timeout time.Duration) (DefaultColors, [
 	timeout = defaultTerminalColorProbeTimeout(timeout)
 	queryIdentity := StartupProbeQueryTerminalIdentity()
 	SetTerminalAppOverSSHFromStartupProbe(nil)
+	SetAlternateScrollFromStartupProbe(nil)
 	if !queryIdentity {
 		SetTerminalAppOverSSHFromStartupProbe(boolPtrTerminalProbe(false))
 	}
@@ -72,6 +74,11 @@ func probePlatformTerminalDefaultColors(timeout time.Duration) (DefaultColors, [
 		n, err := file.Read(chunk)
 		if n > 0 {
 			buffer = append(buffer, chunk[:n]...)
+			if _, known := InitialAlternateScrollKnown(); !known {
+				if enabled, ok := FindAlternateScrollReport(buffer); ok {
+					SetAlternateScrollFromStartupProbe(&enabled)
+				}
+			}
 			if FindPrimaryDeviceAttributes(buffer) {
 				setTerminalDA1Supported(true)
 			}

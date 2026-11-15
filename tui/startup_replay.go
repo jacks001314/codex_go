@@ -10,15 +10,16 @@ import (
 // The startup probe reads the terminal's replies directly from stdin, so any
 // keystroke that arrives during the probe window must be handed back to the
 // TUI's input loop (Rust hands the leftover bytes to crossterm's event parser).
-// Completed OSC replies are dropped; everything else is preserved, including
-// bracketed paste framing and the probe's own DA1 reply, which stays an
-// unrecognized CSI sequence the input parser consumes without emitting a key.
+// Completed OSC replies and DECRQM replies for alternate-scroll mode are
+// dropped; everything else is preserved, including bracketed paste framing and
+// the probe's own DA1 reply, which stays an unrecognized CSI sequence the input
+// parser consumes without emitting a key.
 const maxReplayedOSCBytes = 1024
 
 // StartupReplayInput returns the terminal input that arrived during the
-// startup probe minus the completed OSC replies the probe consumed. A bounded
-// incomplete OSC prefix is preserved so an unread continuation stays
-// parser-framed.
+// startup probe minus the completed OSC and alternate-scroll replies the probe
+// consumed. A bounded incomplete OSC prefix is preserved so an unread
+// continuation stays parser-framed.
 func StartupReplayInput(input []byte) []byte {
 	pasteStart := []byte("\x1b[200~")
 	pasteEnd := []byte("\x1b[201~")
@@ -26,6 +27,12 @@ func StartupReplayInput(input []byte) []byte {
 	cursor := 0
 	insidePaste := false
 	for cursor < len(input) {
+		if cursor+alternateScrollReportLen <= len(input) {
+			if _, ok := ParseAlternateScrollReport(input[cursor : cursor+alternateScrollReportLen]); ok {
+				cursor += alternateScrollReportLen
+				continue
+			}
+		}
 		if insidePaste {
 			if bytes.HasPrefix(input[cursor:], pasteEnd) {
 				replay = append(replay, pasteEnd...)

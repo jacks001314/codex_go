@@ -37,6 +37,7 @@ type TerminalPosition struct {
 }
 
 type StartupProbe struct {
+	AlternateScrollEnabled       *bool
 	CursorPosition               *TerminalPosition
 	DefaultColors                *DefaultColors
 	KeyboardEnhancementSupported *bool
@@ -44,6 +45,35 @@ type StartupProbe struct {
 	// terminal is Apple Terminal over SSH (Rust #47417). It stays nil while a
 	// requested DA1/DA2 identity probe has not yet seen both replies.
 	TerminalAppOverSSH *bool
+}
+
+// alternateScrollReportLen is the fixed length of a DECRQM reply for mode
+// 1007: ESC [ ? 1 0 0 7 ; P s $ y.
+const alternateScrollReportLen = 11
+
+// ParseAlternateScrollReport parses a complete DECRQM reply for DEC private
+// mode 1007. Modes 1 and 3 mean enabled; 0, 2, and 4 mean disabled. Rust
+// terminal_probe::alternate_scroll_report only accepts these exact replies.
+func ParseAlternateScrollReport(input []byte) (bool, bool) {
+	switch string(input) {
+	case "\x1b[?1007;1$y", "\x1b[?1007;3$y":
+		return true, true
+	case "\x1b[?1007;0$y", "\x1b[?1007;2$y", "\x1b[?1007;4$y":
+		return false, true
+	default:
+		return false, false
+	}
+}
+
+// FindAlternateScrollReport scans a startup-probe buffer for the first complete
+// DECRQM reply for mode 1007, mirroring Rust's `buffer.windows(11).find_map`.
+func FindAlternateScrollReport(buffer []byte) (bool, bool) {
+	for start := 0; start+alternateScrollReportLen <= len(buffer); start++ {
+		if enabled, ok := ParseAlternateScrollReport(buffer[start : start+alternateScrollReportLen]); ok {
+			return enabled, true
+		}
+	}
+	return false, false
 }
 
 // StartupProbeQueryTerminalIdentity mirrors Rust's `query_identity`: the DA2
@@ -238,6 +268,11 @@ func FindPrimaryDeviceAttributes(buffer []byte) bool {
 func UpdateStartupProbe(probe *StartupProbe, sawSupportedKeyboard *bool, buffer []byte, keyboardProbe StartupKeyboardEnhancementProbe) {
 	if probe == nil {
 		return
+	}
+	if probe.AlternateScrollEnabled == nil {
+		if enabled, ok := FindAlternateScrollReport(buffer); ok {
+			probe.AlternateScrollEnabled = boolPtrTerminalProbe(enabled)
+		}
 	}
 	if probe.CursorPosition == nil {
 		if position, ok := ParseCursorPosition(buffer); ok {

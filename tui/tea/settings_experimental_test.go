@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	bubbletea "charm.land/bubbletea/v2"
+
 	codextui "codex_go/tui"
 	"codex_go/tui/chatwidget"
 	"codex_go/tui/keymsg"
@@ -348,5 +350,114 @@ func TestModelExperimentalPopupRetainsUnconfirmedOnFailureLikeRust(t *testing.T)
 	}
 	if model.modal != nil {
 		t.Fatal("popup stayed open after the successful retry")
+	}
+}
+
+// Rust #61694: cancel closes the popup without saving pending toggles. The
+// cancel action can be Esc, Ctrl+C, or a remapped list.cancel key, and it also
+// discards unconfirmed changes after a failed write.
+func TestModelExperimentalCancelDiscardsEditsLikeRust(t *testing.T) {
+	for _, testCase := range []struct {
+		name       string
+		keymapSet  []string
+		cancelKey  keymsg.KeyMsg
+		failedSave bool
+	}{
+		{name: "escape", cancelKey: key(keymsg.KeyEsc)},
+		{name: "ctrl+c", cancelKey: key(keymsg.KeyCtrlC)},
+		{name: "remapped", keymapSet: []string{"f2"}, cancelKey: keymsg.KeyMsg{Type: keymsg.KeyF2}},
+		{name: "after failed save", cancelKey: key(keymsg.KeyEsc), failedSave: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			var writes [][]SettingsEdit
+			keymapConfig := codextui.NewKeymapConfig()
+			if len(testCase.keymapSet) > 0 {
+				if err := keymapConfig.Set("list", "cancel", testCase.keymapSet); err != nil {
+					t.Fatalf("configure list.cancel: %v", err)
+				}
+			}
+			state := codextui.NewState(nil)
+			state.SetThreadID("thread-1")
+			model := NewModel(state, Options{
+				KeymapConfig: keymapConfig,
+				OnReadExperimentalFeatures: func(string) ([]ExperimentalFeatureEntry, error) {
+					return []ExperimentalFeatureEntry{{
+						Name: "beta_feature", DisplayName: "Beta feature", Stage: "beta", Enabled: false,
+					}}, nil
+				},
+				OnWriteSettings: func(edits []SettingsEdit) (SettingsWriteResult, error) {
+					writes = append(writes, append([]SettingsEdit(nil), edits...))
+					if testCase.failedSave {
+						return SettingsWriteResult{}, errors.New("write failed")
+					}
+					return SettingsWriteResult{FeatureSettings: map[string]bool{"beta_feature": true}}, nil
+				},
+			})
+			typeText(t, model, "/experimental")
+			_, cmd := model.Update(key(keymsg.KeyEnter))
+			runTeaCmd(t, model, cmd)
+			model.Update(key(keymsg.KeySpace))
+			if !model.experimentalItems[0].Enabled {
+				t.Fatal("feature did not toggle")
+			}
+			if testCase.failedSave {
+				_, saveCmd := model.Update(key(keymsg.KeyEnter))
+				runTeaCmd(t, model, saveCmd)
+				if len(writes) != 1 || model.modal == nil {
+					t.Fatalf("failed save did not leave the popup open: writes=%d modal=%#v", len(writes), model.modal)
+				}
+			}
+
+			_, closeCmd := model.Update(testCase.cancelKey)
+			if model.modal != nil {
+				t.Fatal("cancel did not close the popup")
+			}
+			if closeCmd != nil {
+				if _, quit := closeCmd().(bubbletea.QuitMsg); quit {
+					t.Fatal("experimental cancel quit the session")
+				}
+			}
+			wantWrites := 0
+			if testCase.failedSave {
+				wantWrites = 1
+			}
+			if len(writes) != wantWrites {
+				t.Fatalf("cancel wrote settings: %#v", writes)
+			}
+		})
+	}
+}
+
+// Rust #61694: the experimental popup footer says esc cancel, not save/close,
+// and follows the configured list.cancel binding.
+func TestModelExperimentalFooterUsesCancelHintLikeRust(t *testing.T) {
+	model := NewModel(codextui.NewState(nil), Options{
+		Width: 100, Height: 30,
+		OnReadExperimentalFeatures: func(string) ([]ExperimentalFeatureEntry, error) {
+			return []ExperimentalFeatureEntry{{Name: "beta", DisplayName: "Beta", Stage: "beta"}}, nil
+		},
+	})
+	typeText(t, model, "/experimental")
+	_, cmd := model.Update(key(keymsg.KeyEnter))
+	runTeaCmd(t, model, cmd)
+	if view := model.viewString(); !strings.Contains(view, "esc cancel") || strings.Contains(view, "save/close") {
+		t.Fatalf("default experimental footer:\n%s", view)
+	}
+
+	keymapConfig := codextui.NewKeymapConfig()
+	if err := keymapConfig.Set("list", "cancel", []string{"f2"}); err != nil {
+		t.Fatalf("configure list.cancel: %v", err)
+	}
+	remapped := NewModel(codextui.NewState(nil), Options{
+		Width: 100, Height: 30, KeymapConfig: keymapConfig,
+		OnReadExperimentalFeatures: func(string) ([]ExperimentalFeatureEntry, error) {
+			return []ExperimentalFeatureEntry{{Name: "beta", DisplayName: "Beta", Stage: "beta"}}, nil
+		},
+	})
+	typeText(t, remapped, "/experimental")
+	_, cmd = remapped.Update(key(keymsg.KeyEnter))
+	runTeaCmd(t, remapped, cmd)
+	if view := remapped.viewString(); !strings.Contains(strings.ToLower(view), "f2 cancel") {
+		t.Fatalf("remapped experimental footer:\n%s", view)
 	}
 }

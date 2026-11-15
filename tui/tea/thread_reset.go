@@ -110,6 +110,6 @@ func (m *Model) resetThreadScopedState() {
 		m.overlay = nil
 		m.overlayTranscript = false
 		m.overlayAltScreen = false
-		m.setAlternateScroll(false)
+		m.configureAlternateScrollForSurface()
 	}
 }

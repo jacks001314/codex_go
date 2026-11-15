@@ -2285,6 +2285,9 @@ type Model struct {
 	// itself. Rust's owned transcript, including bounded composer scrolling,
 	// only applies there.
 	ownedScreen bool
+	// alternateScroll records the terminal's initial DEC private mode 1007 and
+	// whether this TUI changed it (Rust #61697).
+	alternateScroll alternateScrollState
 	// localSettings is the staged record of this launcher's client-owned
 	// preferences (Rust #51510 App::local_settings): only a successful
 	// configuration reload replaces it, and it is applied to the live state when
@@ -3534,6 +3537,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		composer:                     composer,
 		noAltScreen:                  options.NoAltScreen,
 		ownedScreen:                  options.usesOwnedScreen(),
+		alternateScroll:              newAlternateScrollState(),
 		mouseCaptureActive:           options.usesOwnedScreen(),
 		composerTopRow:               -1,
 		composerTextTopRow:           -1,
@@ -3907,6 +3911,11 @@ func NewModel(state *codextui.State, options Options) *Model {
 }
 
 func NewProgram(ctx context.Context, state *codextui.State, options Options, input io.Reader, output io.Writer) *bubbletea.Program {
+	program, _ := newProgramWithModel(ctx, state, options, input, output)
+	return program
+}
+
+func newProgramWithModel(ctx context.Context, state *codextui.State, options Options, input io.Reader, output io.Writer) (*bubbletea.Program, *Model) {
 	options = resolveProgramSize(options, input, output)
 	model := NewModel(state, options)
 	programOptions := []bubbletea.ProgramOption{}
@@ -3948,7 +3957,7 @@ func NewProgram(ctx context.Context, state *codextui.State, options Options, inp
 	// Program.Send is that notification channel, so animation frames are drawn
 	// only while a surface asks for them.
 	model.frames.attach(program.Send)
-	return program
+	return program, model
 }
 
 // usesOwnedScreen reports whether this launch owns the full screen. Rust's
@@ -4023,7 +4032,15 @@ func Run(ctx context.Context, state *codextui.State, options Options, input io.R
 	// that window are replayed into the input loop instead of being dropped.
 	terminalInput := input
 	input = probeTerminalColorsForTUI(input, output)
-	final, err := NewProgram(ctx, state, options, input, output).Run()
+	program, initialModel := newProgramWithModel(ctx, state, options, input, output)
+	// Rust AlternateScreen::restore returns DEC private mode 1007 to the state
+	// recorded by the startup probe before the process releases the terminal
+	// (#61697). A failed earlier cleanup leaves the state dirty, so this call
+	// retries it. The deferred restore also covers Bubble Tea's panic path.
+	defer func() {
+		initialModel.restoreAlternateScroll()
+	}()
+	final, err := program.Run()
 	// Rust #57391: reports the terminal generated while mouse/focus reporting
 	// was still enabled must be drained before stdin returns to the shell.
 	// Panic unwinding flushes queued input without waiting for a DA1 reply.
@@ -4073,7 +4090,7 @@ func (m *Model) Init() bubbletea.Cmd {
 	// whenever the owned transcript captures the mouse, so a terminal never
 	// rewrites the wheel into Up/Down keys before the transcript sees it.
 	if m.ownedScreen {
-		m.setAlternateScroll(false)
+		m.configureAlternateScroll(false)
 	}
 	if m.sizeMonitorEnabled {
 		// Rust #43603: recover resize notifications tmux can drop.
@@ -5121,6 +5138,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 				// Rust #60319: Ctrl+C dismisses the chooser and returns focus to
 				// the main composer, preserving its draft.
 				return m, batchSideCommands(m.closeSidebarChooser(), m.focusMainComposer())
+			}
+			if m.modal != nil && m.modal.kind == ModalKindExperimental {
+				return m, m.updateModal(msg)
 			}
 			if m.modal != nil && (m.modal.customPrompt != nil || m.modal.manageSkills != nil || m.modal.externalAgentMigration != nil || m.modal.hooksBrowser != nil || m.modal.pluginBrowser != nil || m.modal.keymapInspector != nil) {
 				return m, m.updateModal(msg)
@@ -12820,11 +12840,11 @@ func (m *Model) closeTranscriptOverlay() bubbletea.Cmd {
 		// state so a later Esc starts over instead of resuming a stale selection.
 		m.resetBacktrackState()
 	}
-	// Restore the wheel-to-terminal behavior once the overlay is gone; mouse
-	// tracking was never enabled, so the alternate screen is the only mode to
-	// leave.
-	m.setAlternateScroll(false)
 	m.overlayAltScreen = false
+	// Restore the wheel-to-terminal policy once the overlay is gone. An owned
+	// transcript keeps 1007 disabled; an inline pager returns to whatever mode
+	// the terminal started with (Rust #61697).
+	m.configureAlternateScrollForSurface()
 	return nil
 }
 
@@ -12838,10 +12858,10 @@ func (m *Model) openPagerTerminalMode() bubbletea.Cmd {
 	// terminal and use alternate scroll so the wheel still pages the overlay.
 	// `--no-alt-screen` keeps the overlay inline.
 	capture := m.overlayMouseCapture.captures(m.ownedScreen)
-	m.setAlternateScroll(!capture)
 	if !m.noAltScreen {
 		m.overlayAltScreen = true
 	}
+	m.configureAlternateScroll(!capture)
 	return nil
 }
 
@@ -12851,16 +12871,7 @@ func (m *Model) openPagerTerminalMode() bubbletea.Cmd {
 // scroll without capturing the mouse. The write is serialized through the pet
 // runtime output mutex so it never interleaves with frame text.
 func (m *Model) setAlternateScroll(enabled bool) {
-	if m == nil || m.petRuntime == nil || m.petRuntime.out == nil {
-		return
-	}
-	seq := "\x1b[?1007l"
-	if enabled {
-		seq = "\x1b[?1007h"
-	}
-	m.petRuntime.mu.Lock()
-	defer m.petRuntime.mu.Unlock()
-	_, _ = m.petRuntime.out.Write([]byte(seq))
+	_ = m.writeAlternateScrollMode(enabled)
 }
 
 func (m *Model) syncTranscriptOverlay() {

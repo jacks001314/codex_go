@@ -39,10 +39,15 @@ var (
 	// terminalAppOverSSH is -1 until the startup probe settles the identity,
 	// 0 for every other terminal, and 1 for Apple Terminal over SSH.
 	terminalAppOverSSH atomic.Int32
+	// terminalAlternateScroll is -1 until the startup probe reports DEC private
+	// mode 1007, 0 when the terminal starts with alternate scroll disabled, and
+	// 1 when it starts enabled (Rust #61697).
+	terminalAlternateScroll atomic.Int32
 )
 
 func init() {
 	terminalAppOverSSH.Store(-1)
+	terminalAlternateScroll.Store(-1)
 }
 
 // TerminalAppOverSSH reports whether the startup probe identified Apple
@@ -85,6 +90,48 @@ func SetTerminalAppOverSSHForTest(value *bool) func() {
 	previous := terminalAppOverSSH.Load()
 	SetTerminalAppOverSSHFromStartupProbe(value)
 	return func() { terminalAppOverSSH.Store(previous) }
+}
+
+// InitialAlternateScrollEnabled reports the DEC private mode 1007 state
+// recorded by the startup probe. Unknown defaults to false, matching Rust's
+// `alternate_scroll_enabled.unwrap_or(false)`.
+func InitialAlternateScrollEnabled() bool {
+	return terminalAlternateScroll.Load() == 1
+}
+
+// InitialAlternateScrollKnown reports whether the startup probe observed the
+// terminal's alternate-scroll mode.
+func InitialAlternateScrollKnown() (bool, bool) {
+	switch terminalAlternateScroll.Load() {
+	case 0:
+		return false, true
+	case 1:
+		return true, true
+	default:
+		return false, false
+	}
+}
+
+// SetAlternateScrollFromStartupProbe records the terminal's initial DEC private
+// mode 1007 state. A nil value marks it unknown.
+func SetAlternateScrollFromStartupProbe(value *bool) {
+	if value == nil {
+		terminalAlternateScroll.Store(-1)
+		return
+	}
+	if *value {
+		terminalAlternateScroll.Store(1)
+		return
+	}
+	terminalAlternateScroll.Store(0)
+}
+
+// SetInitialAlternateScrollForTest installs an initial scroll mode and returns
+// a restore function.
+func SetInitialAlternateScrollForTest(value *bool) func() {
+	previous := terminalAlternateScroll.Load()
+	SetAlternateScrollFromStartupProbe(value)
+	return func() { terminalAlternateScroll.Store(previous) }
 }
 
 // DefaultTerminalColors reports the terminal's default foreground/background
