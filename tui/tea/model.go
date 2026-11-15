@@ -2130,6 +2130,14 @@ type Model struct {
 	agentsOverviewRefresh    int
 	agentsOverviewPending    bool
 	agentsOverviewInflight   bool
+	// agentsOverviewInflightFor names the backend that owns the shared refresh
+	// slot, and agentsOverviewBackends keeps queued refreshes, Show more
+	// requests, refill counts, and failures per backend (Rust #61596).
+	agentsOverviewInflightFor codextui.BackendID
+	agentsOverviewBackends    map[codextui.BackendID]*agentsOverviewBackendRefresh
+	// agentsOverviewPinBackend owns the in-flight pin change so a completion
+	// from another backend cannot clear it (Rust #61596 AgentsOverviewPinToggled).
+	agentsOverviewPinBackend codextui.BackendID
 	// unreadThreadRevisions retains the receipt revision behind each visible
 	// unread result. A focused conversation acknowledges it at most once per
 	// view (Rust #58263).
@@ -4425,6 +4433,12 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		reconnectThreads := m.retireThreadApprovalsForReconnect()
 		m.dropStaleBackendRequests()
 		m.handleAppServerDisconnect()
+		// Rust #61596: a disconnected backend has no registered request handle,
+		// so its "Show more" row disappears and stale reads are cancelled.
+		if state := m.agentsOverviewBackendState(m.backendID); state != nil {
+			state.disconnected = true
+		}
+		m.cancelAgentsOverviewRefresh(m.backendID)
 		return m, bubbletea.Batch(m.refreshStatusControlsCmd(), m.reconnectThreadApprovalsCmd(reconnectThreads))
 	case TurnInterruptedMsg:
 		if m.applyInactiveThreadTurnInterrupted(msg) {

@@ -812,6 +812,7 @@ func (m *Model) setAgentPickerThreadVisibility(threadID string, archived bool) b
 	closure := m.agentThreadVisibilityClosure(threadID)
 	for _, visibleID := range closure {
 		if archived {
+			m.noteAgentsOverviewRemovedThread(visibleID)
 			m.archivedAgentThreads[visibleID] = true
 			m.agentsOverviewRemoved[visibleID] = true
 			// Rust #42451 keeps pending steer state only for live threads; an
@@ -823,6 +824,7 @@ func (m *Model) setAgentPickerThreadVisibility(threadID string, archived bool) b
 				m.agentThreadArchiveCause[visibleID] = "parent:" + threadID
 			}
 		} else {
+			m.restoreAgentsOverviewRemovedThread(visibleID)
 			delete(m.agentsOverviewRemoved, visibleID)
 			cause := m.agentThreadArchiveCause[visibleID]
 			if visibleID == threadID || cause == "parent:"+threadID || !m.archivedAgentThreads[visibleID] {

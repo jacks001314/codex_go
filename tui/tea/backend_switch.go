@@ -163,6 +163,13 @@ func (m *Model) applyBackendSwitchSelection(selection codextui.SessionSelection,
 		// that now serves it (Rust backends.displayed = destination_slot).
 		m.backendID = next
 	}
+	if state := m.agentsOverviewBackendPeek(next); state != nil {
+		// Preparing the destination succeeded, so it is reachable again.
+		state.disconnected = false
+	}
+	// Rust #61596: pagination and failure state follow the destination backend
+	// instead of being reset by the switch.
+	m.syncAgentsOverviewBackendView()
 	if decision == nil {
 		decision = &PickerDecision{Kind: string(selection.Kind), Value: threadID}
 	}

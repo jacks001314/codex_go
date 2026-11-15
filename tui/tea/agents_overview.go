@@ -88,6 +88,7 @@ type agentsOverviewListMsg struct {
 	rows      []agentsoverview.Row
 	err       error
 	requestID int
+	backendID codextui.BackendID
 	// pinsKnown is true when the pin listing ran successfully, pinsSupported
 	// reports whether the server has shared thread sections, and pinnedThreads
 	// is the shared section order (Rust #51500 list_pinned_threads result).
@@ -98,9 +99,10 @@ type agentsOverviewListMsg struct {
 }
 
 type agentsOverviewPinMsg struct {
-	threadID string
-	pinned   bool
-	err      error
+	threadID  string
+	pinned    bool
+	err       error
+	backendID codextui.BackendID
 }
 
 type agentsOverviewNewSessionMsg struct {
@@ -168,9 +170,13 @@ func (m *Model) applyAgentsCommand() bubbletea.Cmd {
 	m.agentsOverview.SetHiddenThreads(m.agentsOverviewHidden)
 	m.agentsOverviewNotice = ""
 	m.agentsOverviewBusy = false
-	m.agentsOverviewRefresh = 0
+	// Invalidate pages requested by a previous dashboard session instead of
+	// restarting the sequence where a late page could match (Rust #61596).
+	m.agentsOverviewRefresh++
 	m.agentsOverviewPending = false
 	m.agentsOverviewInflight = false
+	m.agentsOverviewInflightFor = codextui.BackendID{}
+	m.syncAgentsOverviewBackendView()
 	m.agentsOverviewLifecycle = nil
 	m.agentsOverviewLifecycleProgress = ""
 	m.applyAgentsOverviewKeymapHints()
@@ -289,21 +295,33 @@ func (m *Model) refreshAgentsOverviewCmd() bubbletea.Cmd {
 		m.agentsOverviewNotice = "The agents dashboard is unavailable in this runtime."
 		return nil
 	}
+	// Rust #61596: refresh bookkeeping belongs to the backend that owns the
+	// request. A disconnected backend has no cursor to page.
+	owner := m.backendID
+	backendState := m.agentsOverviewBackendState(owner)
+	if backendState != nil && backendState.disconnected {
+		return nil
+	}
 	if m.agentsOverviewInflight {
-		// Coalesce notification-driven refreshes (Rust refresh_pending).
-		m.agentsOverviewPending = true
+		// Coalesce notification-driven refreshes per backend (Rust #61596
+		// pending_refresh_backends) and keep the shared slot occupied.
+		m.agentsOverviewPending = m.agentsOverviewInflightFor == owner
+		if backendState != nil {
+			backendState.pending = true
+		}
 		return nil
 	}
 	m.agentsOverviewRefresh++
 	requestID := m.agentsOverviewRefresh
 	m.agentsOverviewInflight = true
+	m.agentsOverviewInflightFor = owner
 	currentThreadID := ""
 	if m.State != nil {
 		currentThreadID = strings.TrimSpace(m.State.ThreadID)
 	}
 	return func() bubbletea.Msg {
 		rows, err := m.onAgentsOverviewRefresh(currentThreadID)
-		message := agentsOverviewListMsg{rows: rows, err: err, requestID: requestID}
+		message := agentsOverviewListMsg{rows: rows, err: err, requestID: requestID, backendID: owner}
 		// Rust #51500: the same refresh also discovers the shared pinned section
 		// (including tasks outside the recent-task window). A failing pin listing
 		// is a warning that leaves the known pins alone.
@@ -371,19 +389,34 @@ func (m *Model) applyAgentsOverviewList(message agentsOverviewListMsg) bubbletea
 	if m == nil || m.agentsOverview == nil {
 		return nil
 	}
+	owner := message.backendID
+	if owner.IsZero() && !m.backendID.IsZero() {
+		owner = m.backendID
+	}
+	backendState := m.agentsOverviewBackendState(owner)
 	if message.requestID != 0 && message.requestID != m.agentsOverviewRefresh {
+		// A page from a cancelled refresh must not consume any backend's
+		// refill budget or replace the window (Rust #61596 cancel_stale_reads).
 		return nil
 	}
-	m.agentsOverviewInflight = false
+	if m.agentsOverviewInflight && m.agentsOverviewInflightFor == owner {
+		m.agentsOverviewInflight = false
+		m.agentsOverviewInflightFor = codextui.BackendID{}
+	}
 	if message.err != nil {
-		// Rust #49106: a failed page request keeps the row as a retry target.
-		m.agentsOverview.SetShowMoreFailed(true)
-		m.agentsOverviewNotice = "Failed to load shared agents: " + strings.TrimSpace(message.err.Error())
-		if m.agentsOverviewPending {
-			m.agentsOverviewPending = false
-			return m.refreshAgentsOverviewCmd()
+		if backendState != nil {
+			backendState.failed = true
+			backendState.pending = true
 		}
-		return nil
+		// Rust #49106: a failed page request keeps the row as a retry target.
+		m.agentsOverviewNotice = "Failed to load shared agents: " + strings.TrimSpace(message.err.Error())
+		m.agentsOverviewPending = false
+		m.syncAgentsOverviewBackendView()
+		return m.drainAgentsOverviewRefreshQueue()
+	}
+	if backendState != nil {
+		backendState.failed = false
+		backendState.disconnected = false
 	}
 	m.agentsOverviewNotice = ""
 	m.agentsOverview.SetShowMoreLoading(false)
@@ -397,6 +430,7 @@ func (m *Model) applyAgentsOverviewList(message agentsOverviewListMsg) bubbletea
 		}
 		message.rows = rows
 	}
+	newRoots := m.countNewAgentsOverviewRoots(message.rows)
 	message.rows = m.mergeAgentsOverviewRows(message.rows)
 	m.rememberAgentsOverviewReadStates(message.rows)
 	switch {
@@ -419,12 +453,30 @@ func (m *Model) applyAgentsOverviewList(message agentsOverviewListMsg) bubbletea
 	m.markAgentsOverviewVoiceOwners(message.rows)
 	m.agentsOverview.ApplyRefresh(message.rows, m.agentsOverview.SelectedThreadID())
 	m.syncAgentsOverviewUsageLines()
-	usageCmd := m.refreshAgentsOverviewUsageCmd()
-	if m.agentsOverviewPending {
-		m.agentsOverviewPending = false
-		return bubbletea.Batch(m.refreshAgentsOverviewCmd(), usageCmd)
+	if backendState != nil {
+		if backendState.refill > 0 && newRoots > 0 {
+			refilled := newRoots
+			if refilled > backendState.refill {
+				refilled = backendState.refill
+			}
+			backendState.refill -= refilled
+		}
+		if owner == m.backendID {
+			backendState.hasMore = m.agentsOverview.HasMore()
+			if !backendState.hasMore {
+				backendState.refill = 0
+				backendState.showMore = false
+			}
+		}
 	}
-	return usageCmd
+	m.syncAgentsOverviewBackendView()
+	usageCmd := m.refreshAgentsOverviewUsageCmd()
+	m.agentsOverviewPending = false
+	drainCmd := m.drainAgentsOverviewRefreshQueue()
+	if drainCmd == nil {
+		return usageCmd
+	}
+	return bubbletea.Batch(drainCmd, usageCmd)
 }
 
 // mergeAgentsOverviewRows keeps the command center's session membership for
@@ -921,11 +973,14 @@ func (m *Model) toggleAgentsOverviewPinCmd(threadID string, pinned bool) bubblet
 	if threadID == "" {
 		return nil
 	}
+	owner := m.backendID
+	m.agentsOverviewPinBackend = owner
 	return func() bubbletea.Msg {
 		return agentsOverviewPinMsg{
-			threadID: threadID,
-			pinned:   pinned,
-			err:      m.onAgentsOverviewTogglePin(threadID, pinned),
+			threadID:  threadID,
+			pinned:    pinned,
+			err:       m.onAgentsOverviewTogglePin(threadID, pinned),
+			backendID: owner,
 		}
 	}
 }
@@ -938,6 +993,11 @@ func (m *Model) applyAgentsOverviewPin(message agentsOverviewPinMsg) bubbletea.C
 	if m == nil || m.agentsOverview == nil {
 		return nil
 	}
+	// Rust #61596: a completion belongs to the backend that started the pin.
+	if message.backendID != m.agentsOverviewPinBackend {
+		return nil
+	}
+	m.agentsOverviewPinBackend = codextui.BackendID{}
 	m.agentsOverview.SetPinPending(false)
 	if message.err != nil {
 		text := strings.TrimSpace(message.err.Error())
@@ -952,6 +1012,10 @@ func (m *Model) applyAgentsOverviewPin(message agentsOverviewPinMsg) bubbletea.C
 		return nil
 	}
 	m.agentsOverview.ApplyPinChange(message.threadID, message.pinned)
+	m.cancelAgentsOverviewRefresh(message.backendID)
+	if message.backendID != m.backendID {
+		return nil
+	}
 	return m.refreshAgentsOverviewCmd()
 }
 
@@ -1278,6 +1342,9 @@ func (m *Model) applyAgentsOverviewLifecycleResult(msg agentsOverviewLifecycleMs
 	m.agentsOverviewBusy = false
 	m.agentsOverviewLifecycle = nil
 	if msg.err != nil {
+		// The read may have started before the failed mutation; discard it so
+		// stale task state cannot land afterwards (Rust #61596).
+		m.cancelAgentsOverviewRefresh(m.backendID)
 		label := "archive"
 		if msg.action == agentsOverviewActionDelete {
 			label = "delete"
@@ -1290,6 +1357,7 @@ func (m *Model) applyAgentsOverviewLifecycleResult(msg agentsOverviewLifecycleMs
 		return nil
 	}
 	m.agentsOverviewNotice = ""
+	m.noteAgentsOverviewRemovedThread(msg.threadID)
 	if m.agentsOverviewRemoved == nil {
 		m.agentsOverviewRemoved = map[string]bool{}
 	}
@@ -1317,6 +1385,8 @@ func (m *Model) applyAgentsOverviewLifecycleResult(msg agentsOverviewLifecycleMs
 	if m.agentsOverview != nil {
 		m.agentsOverview.UnhideThread(msg.threadID)
 	}
+	// Reads started before the mutation can carry stale task or approval state.
+	m.cancelAgentsOverviewRefresh(m.backendID)
 	refreshCmd := m.refreshAgentsOverviewCmd()
 	if agentCmd == nil {
 		return refreshCmd
@@ -1473,9 +1543,11 @@ func (m *Model) closeAgentsOverview() {
 	m.agentsOverview = nil
 	m.agentsOverviewNotice = ""
 	m.agentsOverviewBusy = false
-	m.agentsOverviewRefresh = 0
+	m.agentsOverviewRefresh++
 	m.agentsOverviewPending = false
 	m.agentsOverviewInflight = false
+	m.agentsOverviewInflightFor = codextui.BackendID{}
+	m.agentsOverviewPinBackend = codextui.BackendID{}
 	m.agentsOverviewLifecycle = nil
 	m.agentsOverviewLifecycleProgress = ""
 	m.refreshTranscript()

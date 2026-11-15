@@ -14,6 +14,12 @@ func (m *Model) showMoreAgentsOverviewCmd() bubbletea.Cmd {
 	}
 	added, _ := m.agentsOverview.NextBatch()
 	if added > 0 {
+		// Rust #61596: a "Show more" request without pending refills belongs to
+		// the backend that asked for it, so its next page cannot be attributed
+		// to another backend's budget.
+		if state := m.agentsOverviewBackendState(m.backendID); state != nil && state.refill == 0 {
+			state.showMore = true
+		}
 		return m.refreshAgentsOverviewCmd()
 	}
 	return nil
