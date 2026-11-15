@@ -1950,14 +1950,19 @@ func (s *MCPService) ListStatusCheckedWithObserver(params *MCPListServerStatusPa
 		}
 		servers = filtered
 	}
-	servers = s.populateStatusInventories(params, detail, observer, servers, configs, dynamicConfigs, threadID)
+	// Ordering uses the complete registration identity, so same-named servers in
+	// different environments keep Rust's (name, environment) page order
+	// (Rust #61365 paginates over sorted `McpServerKey`s).
 	sort.SliceStable(servers, func(i int, j int) bool {
-		return servers[i].effectiveName() < servers[j].effectiveName()
+		return servers[i].key < servers[j].key
 	})
+	// Rust #61365: select the requested page before discovery so an unrelated
+	// server is never started just because it appears later in the listing.
 	page, nextCursor, err := paginateMCPStatuses(servers, params)
 	if err != nil {
 		return nil, err
 	}
+	page = s.populateStatusInventories(params, detail, observer, page, configs, dynamicConfigs, threadID)
 	return &MCPListServerStatusResponse{Data: page, NextCursor: nextCursor, Servers: page}, nil
 }
 

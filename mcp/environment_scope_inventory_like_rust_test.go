@@ -181,3 +181,65 @@ func TestSameNamedServerKeepsEnvironmentInventoryLikeRust(t *testing.T) {
 		t.Fatalf("unknown environment error = %v", err)
 	}
 }
+
+// TestPaginatedStatusKeepsSameNamedEnvironmentPagesLikeRust mirrors Rust
+// #61365: pagination keeps every same-named registration's identity,
+// authentication status, and tools instead of collapsing them by name.
+func TestPaginatedStatusKeepsSameNamedEnvironmentPagesLikeRust(t *testing.T) {
+	first := scopedInventoryTestServer(t, "http://first.example")
+	second := scopedInventoryTestServer(t, "http://second.example")
+
+	service := NewMCPService(&RuntimeConfig{Servers: map[string]ServerRegistration{
+		"notes": {
+			Name:              "notes",
+			ContributionOrder: 0,
+			Config:            ServerConfig{URL: first.URL, EnvironmentID: "env-a", Enabled: true},
+		},
+		ServerRegistrationKey("notes", "env-b"): {
+			Name:              "notes",
+			ContributionOrder: 1,
+			Config:            ServerConfig{URL: second.URL, EnvironmentID: "env-b", Enabled: true},
+		},
+	}})
+	defer service.Close()
+
+	full := &MCPServerStatusDetail{Mode: MCPServerStatusDetailFull}
+	limit := uint32(1)
+	firstPage, err := service.ListStatusChecked(&MCPListServerStatusParams{Limit: &limit, Detail: full})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(firstPage.Data) != 1 {
+		t.Fatalf("first page = %#v, want one entry", firstPage.Data)
+	}
+	if firstPage.NextCursor == nil || *firstPage.NextCursor != "1" {
+		t.Fatalf("first next cursor = %v, want 1", firstPage.NextCursor)
+	}
+	if firstPage.Data[0].EnvironmentID == nil || *firstPage.Data[0].EnvironmentID != "env-a" {
+		t.Fatalf("first page identity = %#v", firstPage.Data[0].EnvironmentID)
+	}
+	if firstPage.Data[0].HTTPOrigin == nil || *firstPage.Data[0].HTTPOrigin != first.URL {
+		t.Fatalf("first page origin = %v, want %q", firstPage.Data[0].HTTPOrigin, first.URL)
+	}
+	if len(firstPage.Data[0].Tools) != 1 || firstPage.Data[0].Tools[0].Name != "lookup" {
+		t.Fatalf("first page tools = %#v", firstPage.Data[0].Tools)
+	}
+
+	cursor := "1"
+	secondPage, err := service.ListStatusChecked(&MCPListServerStatusParams{Cursor: &cursor, Limit: &limit, Detail: full})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(secondPage.Data) != 1 || secondPage.NextCursor != nil {
+		t.Fatalf("second page = %#v next=%v", secondPage.Data, secondPage.NextCursor)
+	}
+	if secondPage.Data[0].EnvironmentID == nil || *secondPage.Data[0].EnvironmentID != "env-b" {
+		t.Fatalf("second page identity = %#v", secondPage.Data[0].EnvironmentID)
+	}
+	if secondPage.Data[0].HTTPOrigin == nil || *secondPage.Data[0].HTTPOrigin != second.URL {
+		t.Fatalf("second page origin = %v, want %q", secondPage.Data[0].HTTPOrigin, second.URL)
+	}
+	if len(secondPage.Data[0].Tools) != 1 || secondPage.Data[0].Tools[0].Name != "lookup" {
+		t.Fatalf("second page tools = %#v", secondPage.Data[0].Tools)
+	}
+}

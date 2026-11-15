@@ -206,6 +206,46 @@ type mcpStartupTestUpdate struct {
 	status MCPServerStartupState
 }
 
+// TestListStatusPaginationLimitsDiscoveryLikeRust covers Rust #61365: only the
+// servers on the requested page are started by a status listing.
+func TestListStatusPaginationLimitsDiscoveryLikeRust(t *testing.T) {
+	service := NewMCPService(&RuntimeConfig{Servers: map[string]ServerRegistration{
+		"alpha": {Config: ServerConfig{Command: "mcp-definitely-missing-alpha", Enabled: true, StartupTimeout: time.Second}},
+		"zeta":  {Config: ServerConfig{Command: "mcp-definitely-missing-zeta", Enabled: true, StartupTimeout: time.Second}},
+	}})
+	defer service.Close()
+
+	limit := uint32(1)
+	observed := []string{}
+	response, err := service.ListStatusCheckedWithObserver(&MCPListServerStatusParams{Limit: &limit}, func(name string, _ MCPServerStartupState, _ *string, _ error) {
+		observed = append(observed, name)
+	})
+	if err != nil || response == nil {
+		t.Fatalf("ListStatusCheckedWithObserver response=%#v err=%v", response, err)
+	}
+	if len(response.Data) != 1 || response.Data[0].effectiveName() != "alpha" {
+		t.Fatalf("page = %#v, want alpha only", response.Data)
+	}
+	if response.NextCursor == nil || *response.NextCursor != "1" {
+		t.Fatalf("next cursor = %v, want 1", response.NextCursor)
+	}
+	for _, name := range observed {
+		if name == "zeta" {
+			t.Fatalf("server outside the page was discovered: %#v", observed)
+		}
+	}
+	// The unpaginated listing discovers the server the first page skipped.
+	discovered := map[string]bool{}
+	if _, err := service.ListStatusCheckedWithObserver(&MCPListServerStatusParams{}, func(name string, _ MCPServerStartupState, _ *string, _ error) {
+		discovered[name] = true
+	}); err != nil {
+		t.Fatalf("unpaginated ListStatusCheckedWithObserver error = %v", err)
+	}
+	if !discovered["alpha"] || !discovered["zeta"] {
+		t.Fatalf("unpaginated discovery = %#v", discovered)
+	}
+}
+
 func TestListStatusCheckedInitializesServersConcurrently(t *testing.T) {
 	if os.Getenv("MCP_CONCURRENT_FAST_HELPER") == "1" {
 		runMCPHelperServer()
