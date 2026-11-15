@@ -301,6 +301,7 @@ var configTomlFields = map[string]configFieldKind{
 	"check_for_update_on_startup":      {kind: configKindBool},
 	"cli_auth_credentials_store":       {kind: configKindEnum, variants: []string{"file", "keyring", "auto", "ephemeral"}},
 	"cloud":                            {kind: configKindStruct, expected: "CloudToml", fields: configCloudFields},
+	"code_mode":                        {kind: configKindStruct, expected: "CodeModeToml", fields: configCodeModeFields},
 	"compact_prompt":                   {kind: configKindString},
 	"computer_use":                     {kind: configKindStruct, expected: "ComputerUseConfigToml", fields: configComputerUseFields},
 	"daybreak":                         {kind: configKindBool},

@@ -1184,6 +1184,7 @@ var knownTopLevelConfigFields = map[string]struct{}{
 	"check_for_update_on_startup":       {},
 	"cli_auth_credentials_store":        {},
 	"cloud":                             {},
+	"code_mode":                         {},
 	"compact_prompt":                    {},
 	"computer_use":                      {},
 	"daybreak":                          {},
@@ -1428,6 +1429,15 @@ func validateKnownTopLevelConfigFields(values map[string]any) error {
 	for _, key := range keys {
 		if _, ok := knownTopLevelConfigFields[key]; !ok {
 			return fmt.Errorf("unknown configuration field `%s`", key)
+		}
+	}
+	// Rust #61385: CodeModeToml denies unknown fields, so only the heartbeat
+	// interval is accepted in the top-level `[code_mode]` table.
+	if codeMode, ok := values["code_mode"].(map[string]any); ok {
+		for key := range codeMode {
+			if key != "heartbeat_interval_s" {
+				return fmt.Errorf("unknown configuration field `code_mode.%s`", key)
+			}
 		}
 	}
 	// Rust #50525 orders the strict checks as ignored fields, then `[tui]`, then
@@ -2541,6 +2551,27 @@ func (c *Config) CodeModeDefaultExecYieldTime() time.Duration {
 		return DefaultCodeModeExecYieldTime
 	}
 	return time.Duration(value) * time.Millisecond
+}
+
+// CodeModeHeartbeatIntervalSeconds mirrors Rust's top-level
+// `[code_mode] heartbeat_interval_s` (#61385): idle seconds between gRPC stream
+// heartbeats, where zero (the default) disables them. Go's gRPC code-mode path
+// carries the IPC JSON framing over the generic Transport RPC, which has no
+// typed heartbeat frames, so the value is exposed for host parity and config
+// compatibility rather than applied to a stream.
+func (c *Config) CodeModeHeartbeatIntervalSeconds() uint32 {
+	if c == nil || c.Values == nil {
+		return 0
+	}
+	table, ok := c.Values["code_mode"].(map[string]any)
+	if !ok {
+		return 0
+	}
+	seconds, ok := nonNegativeIntFromConfigValue(table["heartbeat_interval_s"])
+	if !ok || uint64(seconds) > math.MaxUint32 {
+		return 0
+	}
+	return uint32(seconds)
 }
 
 // CodeModeExperimentalShowCellOverhead mirrors Rust's

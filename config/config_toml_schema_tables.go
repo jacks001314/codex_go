@@ -113,6 +113,10 @@ var configCloudFields = map[string]configFieldKind{
 	"skills": {kind: configKindStruct, expected: "FeatureToggleToml", fields: configFeatureToggleFields},
 }
 
+var configCodeModeFields = map[string]configFieldKind{
+	"heartbeat_interval_s": {kind: configKindU32},
+}
+
 var configOrchestratorFields = map[string]configFieldKind{
 	"skills": {kind: configKindStruct, expected: "FeatureToggleToml", fields: configFeatureToggleFields},
 	"mcp":    {kind: configKindStruct, expected: "FeatureToggleToml", fields: configFeatureToggleFields},
