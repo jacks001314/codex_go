@@ -736,16 +736,10 @@ func detachedMemoryWorkspace(ctx context.Context, cwd string) (string, codexapi.
 	if hasChanges, statusErr := gitutil.HasChangesInRepo(ctx, cwd, root); statusErr == nil {
 		workspace.HasChanges = &hasChanges
 	}
-	if remotes, remoteErr := run("remote"); remoteErr == nil && remotes != "" {
-		workspace.AssociatedRemoteURLs = map[string]string{}
-		for _, name := range strings.Fields(remotes) {
-			if url, urlErr := run("remote", "get-url", name); urlErr == nil && url != "" {
-				workspace.AssociatedRemoteURLs[name] = url
-			}
-		}
-		if len(workspace.AssociatedRemoteURLs) == 0 {
-			workspace.AssociatedRemoteURLs = nil
-		}
+	// Rust #61488: read fetch URLs from NUL-delimited Git configuration so a
+	// partial clone filter can never be mistaken for a remote entry.
+	if remotes := gitutil.GetGitRemoteURLsAssumeGitRepo(ctx, cwd); len(remotes) > 0 {
+		workspace.AssociatedRemoteURLs = remotes
 	}
 	return root, workspace, true
 }

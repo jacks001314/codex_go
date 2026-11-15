@@ -1,6 +1,7 @@
 package codexapi
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -168,6 +169,233 @@ func NewResponsesMetadata(installationID string, sessionID string, threadID stri
 	}
 }
 
+// MaxTurnMetadataBytes is the Responses API's limit for one client_metadata
+// value. Turn metadata is ASCII JSON, so byte and character lengths are equal
+// (Rust #61488).
+const MaxTurnMetadataBytes = 8096
+
+// asciiJSONString encodes value as ASCII-only JSON so it is safe as an HTTP
+// header value; non-ASCII runes are escaped to \uXXXX (Rust
+// to_ascii_json_string).
+func asciiJSONString(value any) (string, bool) {
+	var buffer bytes.Buffer
+	encoder := json.NewEncoder(&buffer)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return "", false
+	}
+	encoded := strings.TrimSuffix(buffer.String(), "\n")
+	var out strings.Builder
+	out.Grow(len(encoded))
+	for _, character := range encoded {
+		if character >= 0x20 && character < 0x7f {
+			out.WriteRune(character)
+			continue
+		}
+		if character > 0xffff {
+			// Encode astral runes as a UTF-16 surrogate pair.
+			value := character - 0x10000
+			fmt.Fprintf(&out, "\\u%04x\\u%04x", 0xd800+(value>>10), 0xdc00+(value&0x3ff))
+			continue
+		}
+		fmt.Fprintf(&out, "\\u%04x", character)
+	}
+	return out.String(), true
+}
+
+// boundedTurnMetadataJSON serializes turn metadata under the Responses API
+// limit. When the document is too large it keeps every non-remote field and
+// fits complete remote URLs into the remaining budget, preferring `origin` and
+// then shorter entries. Remotes are omitted rather than truncated, so a
+// repository identity is never rewritten (Rust #61488).
+func boundedTurnMetadataJSON(payload map[string]any) (string, bool) {
+	if payload == nil {
+		return "", false
+	}
+	full, ok := asciiJSONString(payload)
+	if !ok {
+		return "", false
+	}
+	if len(full) <= MaxTurnMetadataBytes {
+		return full, true
+	}
+	switch workspaces := payload[WorkspacesKey].(type) {
+	case map[string]ResponsesWorkspace:
+		return boundResponsesWorkspaceRemotes(payload, workspaces, full)
+	case map[string]ClientWorkspaceMetadata:
+		return boundClientWorkspaceRemotes(payload, workspaces, full)
+	default:
+		return full, true
+	}
+}
+
+func boundResponsesWorkspaceRemotes(payload map[string]any, workspaces map[string]ResponsesWorkspace, full string) (string, bool) {
+	plain := make(map[string]ResponsesWorkspace, len(workspaces))
+	for path, workspace := range workspaces {
+		workspace.AssociatedRemoteURLs = nil
+		plain[path] = workspace
+	}
+	projected, ok := asciiJSONString(payloadWithWorkspaces(payload, plain))
+	if !ok {
+		return "", false
+	}
+	if len(projected) > MaxTurnMetadataBytes {
+		return full, true
+	}
+	selected := selectBoundedRemoteURLs(MaxTurnMetadataBytes-len(projected), sortedResponsesWorkspacePaths(plain),
+		func(path string) map[string]string { return workspaces[path].AssociatedRemoteURLs },
+		func(path string, remotes map[string]string) (string, bool) {
+			workspace, ok := plain[path]
+			if !ok {
+				return "", false
+			}
+			workspace.AssociatedRemoteURLs = remotes
+			return asciiJSONString(workspace)
+		})
+	for path, remotes := range selected {
+		workspace := plain[path]
+		workspace.AssociatedRemoteURLs = remotes
+		plain[path] = workspace
+	}
+	return asciiJSONString(payloadWithWorkspaces(payload, plain))
+}
+
+func boundClientWorkspaceRemotes(payload map[string]any, workspaces map[string]ClientWorkspaceMetadata, full string) (string, bool) {
+	plain := make(map[string]ClientWorkspaceMetadata, len(workspaces))
+	for path, workspace := range workspaces {
+		workspace.AssociatedRemoteURLs = nil
+		plain[path] = workspace
+	}
+	projected, ok := asciiJSONString(payloadWithWorkspaces(payload, plain))
+	if !ok {
+		return "", false
+	}
+	if len(projected) > MaxTurnMetadataBytes {
+		return full, true
+	}
+	selected := selectBoundedRemoteURLs(MaxTurnMetadataBytes-len(projected), sortedClientWorkspacePaths(plain),
+		func(path string) map[string]string { return workspaces[path].AssociatedRemoteURLs },
+		func(path string, remotes map[string]string) (string, bool) {
+			workspace, ok := plain[path]
+			if !ok {
+				return "", false
+			}
+			workspace.AssociatedRemoteURLs = remotes
+			return asciiJSONString(workspace)
+		})
+	for path, remotes := range selected {
+		workspace := plain[path]
+		workspace.AssociatedRemoteURLs = remotes
+		plain[path] = workspace
+	}
+	return asciiJSONString(payloadWithWorkspaces(payload, plain))
+}
+
+func payloadWithWorkspaces(payload map[string]any, workspaces any) map[string]any {
+	cloned := make(map[string]any, len(payload))
+	for key, value := range payload {
+		cloned[key] = value
+	}
+	cloned[WorkspacesKey] = workspaces
+	return cloned
+}
+
+type remoteURLCandidate struct {
+	path             string
+	name             string
+	url              string
+	entryLen         int
+	firstMapOverhead int
+}
+
+// selectBoundedRemoteURLs picks the remote entries that fit in budget. The
+// ordering matches Rust: `origin` first, then shorter entries, then path/name.
+func selectBoundedRemoteURLs(budget int, paths []string, remotesOf func(string) map[string]string, marshalWorkspace func(string, map[string]string) (string, bool)) map[string]map[string]string {
+	candidates := make([]remoteURLCandidate, 0)
+	for _, path := range paths {
+		remotes := remotesOf(path)
+		if len(remotes) == 0 {
+			continue
+		}
+		withoutRemotes, ok := marshalWorkspace(path, nil)
+		if !ok {
+			continue
+		}
+		// Go serializes the workspaces map's keys in order, so
+		// `associated_remote_urls` is always the first field of an object with
+		// remote URLs. The first entry therefore pays for the field separator
+		// only when another workspace field already exists.
+		firstMapOverhead := len(`"associated_remote_urls":{}`)
+		if withoutRemotes != "{}" {
+			firstMapOverhead++
+		}
+		names := make([]string, 0, len(remotes))
+		for name := range remotes {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			entry, ok := asciiJSONString([2]string{name, remotes[name]})
+			if !ok {
+				continue
+			}
+			candidates = append(candidates, remoteURLCandidate{
+				path:             path,
+				name:             name,
+				url:              remotes[name],
+				entryLen:         len(entry) - 2,
+				firstMapOverhead: firstMapOverhead,
+			})
+		}
+	}
+	sort.SliceStable(candidates, func(left, right int) bool {
+		a, b := candidates[left], candidates[right]
+		if (a.name != "origin") != (b.name != "origin") {
+			return a.name == "origin"
+		}
+		if a.entryLen != b.entryLen {
+			return a.entryLen < b.entryLen
+		}
+		if a.path != b.path {
+			return a.path < b.path
+		}
+		return a.name < b.name
+	})
+	selected := map[string]map[string]string{}
+	for _, candidate := range candidates {
+		overhead := candidate.firstMapOverhead
+		if existing, ok := selected[candidate.path]; ok && len(existing) > 0 {
+			overhead = 1
+		}
+		if candidate.entryLen+overhead > budget {
+			continue
+		}
+		budget -= candidate.entryLen + overhead
+		if selected[candidate.path] == nil {
+			selected[candidate.path] = map[string]string{}
+		}
+		selected[candidate.path][candidate.name] = candidate.url
+	}
+	return selected
+}
+
+func sortedResponsesWorkspacePaths(workspaces map[string]ResponsesWorkspace) []string {
+	paths := make([]string, 0, len(workspaces))
+	for path := range workspaces {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	return paths
+}
+
+func sortedClientWorkspacePaths(workspaces map[string]ClientWorkspaceMetadata) []string {
+	paths := make([]string, 0, len(workspaces))
+	for path := range workspaces {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	return paths
+}
 func (m *ResponsesMetadata) HasTurnMetadata() bool {
 	return m != nil && m.RequestKind != nil
 }
@@ -223,11 +451,7 @@ func (m *ResponsesMetadata) TurnMetadataJSON() (string, bool) {
 	if m == nil {
 		return "", false
 	}
-	data, err := json.Marshal(m.TurnMetadataValue())
-	if err != nil {
-		return "", false
-	}
-	return string(data), true
+	return boundedTurnMetadataJSON(m.TurnMetadataValue())
 }
 
 func (m *ResponsesMetadata) ClientMetadata() map[string]string {
@@ -260,8 +484,7 @@ func (m *ResponsesMetadata) CompatibilityHeaders() map[string]string {
 	if m.HasTurnMetadata() {
 		value := m.TurnMetadataValue()
 		delete(value, CodeModeToolNamesKey)
-		if data, err := json.Marshal(value); err == nil {
-			encoded := string(data)
+		if encoded, ok := boundedTurnMetadataJSON(value); ok {
 			out[TurnMetadataHeader] = encoded
 		}
 	}

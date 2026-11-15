@@ -32,12 +32,3 @@ func TestAcceptedLineRepoHashFromRemoteURLUsesCanonicalRemote(t *testing.T) {
 		t.Fatalf("repo hash = %#v, want %q", hash, want)
 	}
 }
-
-func TestAcceptedLineParseGitRemoteURLs(t *testing.T) {
-	remotes := acceptedLineParseGitRemoteURLs("origin\tgit@github.com:OpenAI/Codex.git (fetch)\norigin\tgit@github.com:OpenAI/Codex.git (push)\nupstream https://github.com/openai/codex.git (fetch)\n")
-	if remotes["origin"] != "git@github.com:OpenAI/Codex.git" ||
-		remotes["upstream"] != "https://github.com/openai/codex.git" ||
-		len(remotes) != 2 {
-		t.Fatalf("remotes = %#v", remotes)
-	}
-}

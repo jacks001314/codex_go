@@ -93,13 +93,9 @@ func acceptedLineGitRemoteURLForCWD(ctx context.Context, cwd string) string {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	// Rust 3149fa4b99: git metadata commands terminate the whole process tree
-	// on timeout.
-	output, err := gitutil.RunWithTimeout(ctx, 750*time.Millisecond, cwd, "remote", "-v")
-	if err != nil {
-		return ""
-	}
-	remotes := acceptedLineParseGitRemoteURLs(string(output))
+	// Rust #61488: read fetch URLs from NUL-delimited configuration so
+	// partial-clone filter text can never forge a remote entry.
+	remotes := gitutil.GetGitRemoteURLsAssumeGitRepo(ctx, cwd)
 	if len(remotes) == 0 {
 		return ""
 	}
@@ -113,28 +109,6 @@ func acceptedLineGitRemoteURLForCWD(ctx context.Context, cwd string) string {
 	sort.Strings(names)
 	return strings.TrimSpace(remotes[names[0]])
 }
-
-func acceptedLineParseGitRemoteURLs(output string) map[string]string {
-	remotes := map[string]string{}
-	for _, line := range strings.Split(strings.ReplaceAll(output, "\r\n", "\n"), "\n") {
-		line = strings.TrimSpace(line)
-		if !strings.HasSuffix(line, " (fetch)") {
-			continue
-		}
-		line = strings.TrimSuffix(line, " (fetch)")
-		name, remoteURL, ok := strings.Cut(line, "\t")
-		if !ok {
-			name, remoteURL, ok = strings.Cut(line, " ")
-		}
-		name = strings.TrimSpace(name)
-		remoteURL = strings.TrimSpace(remoteURL)
-		if ok && name != "" && remoteURL != "" {
-			remotes[name] = remoteURL
-		}
-	}
-	return remotes
-}
-
 func canonicalizeAcceptedLineGitRemoteURL(remoteURL string) string {
 	remoteURL = trimAcceptedLineGitSuffix(strings.TrimRight(strings.TrimSpace(remoteURL), "/"))
 	if remoteURL == "" {

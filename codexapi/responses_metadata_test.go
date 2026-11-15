@@ -135,3 +135,108 @@ func TestRustResponsesMetadataSubagentHeaderParity(t *testing.T) {
 		}
 	}
 }
+
+func metadataWithOriginRemote(url string) *ResponsesMetadata {
+	metadata := NewResponsesMetadata("install", "session", "thread", "window")
+	metadata.TurnID = "turn"
+	metadata.RequestKind = &ResponsesRequestKind{Kind: RequestKindTurn}
+	hasChanges := false
+	metadata.Workspaces["/workspace/東京"] = ResponsesWorkspace{
+		AssociatedRemoteURLs: map[string]string{"origin": url},
+		LatestGitCommitHash:  "abc123",
+		HasChanges:           &hasChanges,
+	}
+	return metadata
+}
+
+func unboundedTurnMetadataJSON(t *testing.T, metadata *ResponsesMetadata) string {
+	t.Helper()
+	value, ok := asciiJSONString(metadata.TurnMetadataValue())
+	if !ok {
+		t.Fatal("asciiJSONString() failed")
+	}
+	return value
+}
+
+// Rust #61488 bounds turn metadata at the Responses API limit while keeping
+// complete remote URLs and every non-remote field.
+func TestTurnMetadataKeepsExactBoundaryAndOmitsOverlongRemote(t *testing.T) {
+	prefix := "https://example.invalid/"
+	initialLen := len(unboundedTurnMetadataJSON(t, metadataWithOriginRemote(prefix)))
+	if initialLen >= MaxTurnMetadataBytes {
+		t.Fatalf("initial metadata length = %d, want below %d", initialLen, MaxTurnMetadataBytes)
+	}
+	boundaryURL := prefix + strings.Repeat("x", MaxTurnMetadataBytes-initialLen)
+	boundary := metadataWithOriginRemote(boundaryURL)
+	expected := unboundedTurnMetadataJSON(t, boundary)
+	if len(expected) != MaxTurnMetadataBytes {
+		t.Fatalf("boundary length = %d, want %d", len(expected), MaxTurnMetadataBytes)
+	}
+	encoded, ok := boundary.TurnMetadataJSON()
+	if !ok || encoded != expected {
+		t.Fatalf("boundary metadata changed at the exact limit")
+	}
+
+	over := metadataWithOriginRemote(boundaryURL + "x")
+	encoded, ok = over.TurnMetadataJSON()
+	if !ok {
+		t.Fatal("TurnMetadataJSON() failed")
+	}
+	if len(encoded) > MaxTurnMetadataBytes {
+		t.Fatalf("bounded length = %d, want at most %d", len(encoded), MaxTurnMetadataBytes)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(encoded), &payload); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	workspaces, _ := payload[WorkspacesKey].(map[string]any)
+	workspace, _ := workspaces["/workspace/東京"].(map[string]any)
+	if workspace == nil {
+		t.Fatalf("workspace metadata was dropped: %#v", payload[WorkspacesKey])
+	}
+	if _, ok := workspace["associated_remote_urls"]; ok {
+		t.Fatalf("overlong remote should be omitted, not truncated")
+	}
+	if workspace["latest_git_commit_hash"] != "abc123" || workspace["has_changes"] != false {
+		t.Fatalf("non-remote workspace fields changed: %#v", workspace)
+	}
+	if payload["thread_id"] != "thread" || payload["request_kind"] != RequestKindTurn {
+		t.Fatalf("non-workspace fields changed: %#v", payload)
+	}
+}
+
+func TestTurnMetadataSerializesAsASCII(t *testing.T) {
+	encoded := unboundedTurnMetadataJSON(t, metadataWithOriginRemote("https://example.invalid/repo.git"))
+	for _, character := range encoded {
+		if character >= 0x7f {
+			t.Fatalf("turn metadata kept a non-ASCII rune %q in %q", character, encoded)
+		}
+	}
+	if !strings.Contains(encoded, `\u6771\u4eac`) {
+		t.Fatalf("workspace path was not ASCII-escaped: %q", encoded)
+	}
+}
+
+func TestClientTurnMetadataAppliesTheSameRemoteBudget(t *testing.T) {
+	metadata := NewClientMetadata("install", "session", "thread", "window")
+	metadata.RequestKind = ClientRequestTurn
+	metadata.Workspaces["/workspace"] = ClientWorkspaceMetadata{
+		AssociatedRemoteURLs: map[string]string{
+			"origin":   "https://example.invalid/" + strings.Repeat("o", MaxTurnMetadataBytes),
+			"upstream": "https://example.invalid/upstream.git",
+		},
+	}
+	encoded, ok := metadata.TurnMetadataJSON()
+	if !ok {
+		t.Fatal("TurnMetadataJSON() failed")
+	}
+	if len(encoded) > MaxTurnMetadataBytes {
+		t.Fatalf("bounded length = %d, want at most %d", len(encoded), MaxTurnMetadataBytes)
+	}
+	if !strings.Contains(encoded, "upstream.git") {
+		t.Fatalf("shorter remote should survive the budget: %q", encoded)
+	}
+	if strings.Contains(encoded, strings.Repeat("o", 64)) {
+		t.Fatalf("overlong remote should be omitted")
+	}
+}

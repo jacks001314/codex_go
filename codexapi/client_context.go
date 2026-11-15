@@ -1,7 +1,6 @@
 package codexapi
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -335,11 +334,7 @@ func (m *ClientMetadata) TurnMetadataJSON() (string, bool) {
 	if value == nil {
 		return "", false
 	}
-	bytes, err := json.Marshal(value)
-	if err != nil {
-		return "", false
-	}
-	return string(bytes), true
+	return boundedTurnMetadataJSON(value)
 }
 
 func (m *ClientMetadata) ClientMetadata() map[string]string {
@@ -401,8 +396,7 @@ func clientCompatibilityTurnMetadataJSON(value map[string]any) (string, bool) {
 		return "", false
 	}
 	delete(value, CodeModeToolNamesKey)
-	bytes, err := json.Marshal(value)
-	return string(bytes), err == nil
+	return boundedTurnMetadataJSON(value)
 }
 
 func ClientFilterExtraMetadata(values map[string]string) map[string]string {

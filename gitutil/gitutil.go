@@ -22,9 +22,15 @@ const defaultGitTimeout = 5 * time.Second
 // (Rust #40713 SanitizedGitUrl): URL-style remotes drop their userinfo, and
 // SCP-style remotes keep only the conventional `git` SSH user while removing
 // all other usernames. The remote-helper prefix and escaped path are preserved.
+// Local paths and plain remote names are accepted unchanged, matching gix's
+// URL parser, while malformed URLs and multi-line configuration values are
+// rejected (Rust #61488).
 func SanitizeGitURL(value string) (string, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
+		return "", fmt.Errorf("invalid git remote URL")
+	}
+	if strings.ContainsAny(value, "\x00\r\n") {
 		return "", fmt.Errorf("invalid git remote URL")
 	}
 
@@ -54,6 +60,10 @@ func SanitizeGitURL(value string) (string, error) {
 
 	// URL-style scheme remotes with an authority: strip userinfo.
 	if scheme, rest, ok := strings.Cut(address, "://"); ok {
+		parsed, err := url.Parse(address)
+		if err != nil {
+			return "", fmt.Errorf("invalid git remote URL")
+		}
 		authorityEnd := len(rest)
 		// Rust #60007: Git treats '?' and '#' as authority text on non-HTTP
 		// transports, while HTTP(S) URLs end the authority at any of them.
@@ -70,9 +80,20 @@ func SanitizeGitURL(value string) (string, error) {
 		if u, p, found := strings.Cut(authority, "@"); found {
 			user = u
 			authority = p
+		} else {
+			// No credentials to remove; preserve the original representation.
+			return helperPrefix + address, nil
 		}
+		hasPassword := false
+		if parsed.User != nil {
+			_, hasPassword = parsed.User.Password()
+		}
+		preserveSSHGitUser := strings.EqualFold(scheme, "ssh") && user == "git"
 		// Preserve the conventional `git` SSH user; drop everything else.
-		if user != "" && !(strings.EqualFold(scheme, "ssh") && user == "git") {
+		if preserveSSHGitUser && !hasPassword {
+			return helperPrefix + address, nil
+		}
+		if !preserveSSHGitUser {
 			user = ""
 		}
 		if user != "" {
@@ -85,6 +106,9 @@ func SanitizeGitURL(value string) (string, error) {
 	if idx := strings.Index(address, "@"); idx > 0 {
 		user, hostAndPath := address[:idx], address[idx+1:]
 		if strings.Contains(hostAndPath, ":") {
+			if strings.HasPrefix(hostAndPath, "[") && !strings.Contains(hostAndPath, "]:") {
+				return "", fmt.Errorf("invalid git remote URL")
+			}
 			if user == "git" {
 				return helperPrefix + "git@" + hostAndPath, nil
 			}
@@ -92,11 +116,8 @@ func SanitizeGitURL(value string) (string, error) {
 		}
 	}
 
-	// Validate parseable URL forms; otherwise reject malformed remotes.
-	if parsed, err := url.Parse(address); err == nil && parsed.Scheme != "" {
-		return helperPrefix + address, nil
-	}
-	return "", fmt.Errorf("invalid git remote URL")
+	// Local paths, plain names, and non-authority URLs pass through unchanged.
+	return helperPrefix + address, nil
 }
 
 // Run executes `git args...` in cwd. On context cancellation or the default
