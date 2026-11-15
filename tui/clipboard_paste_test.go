@@ -1,8 +1,12 @@
 package tui
 
 import (
+	"errors"
+	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
+	"time"
 )
 
 func TestPasteImageErrorMessagesMatchRust(t *testing.T) {
@@ -23,19 +27,21 @@ func TestPasteImageErrorMessagesMatchRust(t *testing.T) {
 }
 
 func TestNormalizePastedPathWindowsWSLMatchesRust(t *testing.T) {
-	cases := []struct {
-		input string
-		want  string
-	}{
-		{`C:\Users\Alice\Pictures\cat.png`, `/mnt/c/Users/Alice/Pictures/cat.png`},
-		{`C:/Users/Alice/Pictures/cat.png`, `/mnt/c/Users/Alice/Pictures/cat.png`},
-		{`"D:\My Files\image.png"`, `/mnt/d/My Files/image.png`},
-		{`'E:\one\two.jpg'`, `/mnt/e/one/two.jpg`},
+	if runtime.GOOS == "linux" {
+		// Conversion depends on /bin/wslpath and this process's mount
+		// namespace; the deterministic helper coverage lives below.
+		t.Skip("drive-path expectations are environment dependent on Linux")
 	}
-	for _, tc := range cases {
-		got, ok := NormalizePastedPathWithWSL(tc.input, true)
-		if !ok || got != tc.want {
-			t.Fatalf("NormalizePastedPathWithWSL(%q) = %q ok=%v, want %q", tc.input, got, ok, tc.want)
+	for _, input := range []string{
+		`C:\Users\Alice\Pictures\cat.png`,
+		`C:/Users/Alice/Pictures/cat.png`,
+		`"D:\My Files\image.png"`,
+		`'E:\one\two.jpg'`,
+	} {
+		got, ok := NormalizePastedPathWithWSL(input, true)
+		want := filepath.Clean(stripSimpleQuotes(input))
+		if !ok || got != want {
+			t.Fatalf("NormalizePastedPathWithWSL(%q) = %q ok=%v, want %q", input, got, ok, want)
 		}
 	}
 }
@@ -55,14 +61,65 @@ func TestNormalizePastedPathUNCAndShellEscapesMatchRust(t *testing.T) {
 }
 
 func TestConvertWindowsPathToWSLMatchesRust(t *testing.T) {
-	got, ok := ConvertWindowsPathToWSL(`C:\Temp\clip.png`)
-	if !ok || got != "/mnt/c/Temp/clip.png" {
-		t.Fatalf("ConvertWindowsPathToWSL drive = %q ok=%v", got, ok)
+	dir := t.TempDir()
+	helper := filepath.Join(dir, "wslpath")
+	if err := os.WriteFile(helper, []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatal(err)
 	}
-	got, ok = ConvertWindowsPathToWSL(`Z:/a//b/c.png`)
-	if !ok || got != "/mnt/z/a/b/c.png" {
-		t.Fatalf("ConvertWindowsPathToWSL slash = %q ok=%v", got, ok)
-	}
+	mountinfo := []byte("36 25 0:32 / /mnt/c rw,relatime - 9p drvfs rw\n")
+	readMount := func(string) ([]byte, error) { return mountinfo, nil }
+
+	t.Run("helper output", func(t *testing.T) {
+		run := func(string, []string, time.Duration) ([]byte, error) {
+			return []byte("/mnt/d/My Files/image.png\n"), nil
+		}
+		got, ok := convertWindowsPathToWSL(`D:\My Files\image.png`, helper, readMount, run)
+		if !ok || got != "/mnt/d/My Files/image.png" {
+			t.Fatalf("helper conversion = %q ok=%v", got, ok)
+		}
+	})
+	t.Run("helper requires newline and absolute result", func(t *testing.T) {
+		for name, output := range map[string][]byte{
+			"missing newline": []byte("/mnt/d/image.png"),
+			"relative":        []byte("image.png\n"),
+			"empty":           nil,
+		} {
+			run := func(string, []string, time.Duration) ([]byte, error) { return output, nil }
+			if got, ok := convertWindowsPathToWSL(`D:\image.png`, helper, readMount, run); ok {
+				t.Fatalf("%s conversion = %q, want failure", name, got)
+			}
+		}
+	})
+	t.Run("helper failure", func(t *testing.T) {
+		run := func(string, []string, time.Duration) ([]byte, error) { return nil, errors.New("deadline") }
+		if got, ok := convertWindowsPathToWSL(`D:\image.png`, helper, readMount, run); ok {
+			t.Fatalf("failed helper conversion = %q", got)
+		}
+	})
+	t.Run("missing helper falls back to confirmed mount", func(t *testing.T) {
+		missing := filepath.Join(dir, "missing")
+		run := func(string, []string, time.Duration) ([]byte, error) { t.Fatal("helper must not run"); return nil, nil }
+		got, ok := convertWindowsPathToWSL(`C:\Temp\clip.png`, missing, readMount, run)
+		if !ok || got != "/mnt/c/Temp/clip.png" {
+			t.Fatalf("fallback conversion = %q ok=%v", got, ok)
+		}
+		got, ok = convertWindowsPathToWSL(`C:\a\..\b.png`, missing, readMount, run)
+		if !ok || got != "/mnt/c/b.png" {
+			t.Fatalf("fallback cleanup = %q ok=%v", got, ok)
+		}
+	})
+	t.Run("missing helper rejects unmounted or traversing paths", func(t *testing.T) {
+		missing := filepath.Join(dir, "missing")
+		run := func(string, []string, time.Duration) ([]byte, error) { return nil, nil }
+		for name, input := range map[string]string{
+			"unmounted drive":  `Z:\clip.png`,
+			"above mount root": `C:\..\clip.png`,
+		} {
+			if got, ok := convertWindowsPathToWSL(input, missing, readMount, run); ok {
+				t.Fatalf("%s conversion = %q, want failure", name, got)
+			}
+		}
+	})
 	if _, ok := ConvertWindowsPathToWSL(`\\server\share\clip.png`); ok {
 		t.Fatal("ConvertWindowsPathToWSL accepted UNC path")
 	}

@@ -1,15 +1,19 @@
 package tui
 
 import (
+	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
 
 // Rust parity: codex-rs/tui/src/clipboard_copy.rs and clipboard_paste.rs.
@@ -410,24 +414,90 @@ func IsProbablyWSLFrom(procVersion string, env map[string]string) bool {
 	return strings.TrimSpace(env["WSL_DISTRO_NAME"]) != "" || strings.TrimSpace(env["WSL_INTEROP"]) != ""
 }
 
+// wslPathHelper is the WSL-installed converter. Rust runs it without consulting
+// PATH or the working directory and bounds it to one second (#61419).
+const wslPathHelper = "/bin/wslpath"
+
+// ConvertWindowsPathToWSL resolves a Windows drive path through /bin/wslpath,
+// falling back to the default /mnt/<drive> mapping only when the helper is
+// missing and the mount is present in this process's mount namespace.
 func ConvertWindowsPathToWSL(input string) (string, bool) {
-	if strings.HasPrefix(input, `\\`) {
+	return convertWindowsPathToWSL(input, wslPathHelper, os.ReadFile, runWSLPath)
+}
+
+func convertWindowsPathToWSL(input, wslpath string, readMountinfo func(string) ([]byte, error), run func(string, []string, time.Duration) ([]byte, error)) (string, bool) {
+	if !isWindowsDrivePath(input) {
 		return "", false
 	}
-	if len(input) < 2 || input[1] != ':' {
+	if _, err := os.Stat(wslpath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			mountinfo, readErr := readMountinfo("/proc/self/mountinfo")
+			if readErr != nil {
+				return "", false
+			}
+			return windowsPathOnDefaultMount(input, mountinfo)
+		}
+		return "", false
+	}
+	// wslpath reads its working directory even for absolute paths.
+	out, err := run(wslpath, []string{"-u", input}, time.Second)
+	if err != nil || len(out) == 0 || out[len(out)-1] != '\n' {
+		return "", false
+	}
+	resolved := string(out[:len(out)-1])
+	if !path.IsAbs(resolved) {
+		return "", false
+	}
+	return resolved, true
+}
+
+func runWSLPath(name string, args []string, timeout time.Duration) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	command := exec.CommandContext(ctx, name, args...)
+	command.Dir = "/"
+	return command.Output()
+}
+
+func windowsPathOnDefaultMount(input string, mountinfo []byte) (string, bool) {
+	if !isWindowsDrivePath(input) {
 		return "", false
 	}
 	drive := input[0]
 	if drive >= 'A' && drive <= 'Z' {
 		drive = drive + ('a' - 'A')
 	}
-	if drive < 'a' || drive > 'z' {
+	mountPoint := "/mnt/" + string(drive)
+	mounted := false
+	for _, line := range strings.Split(string(mountinfo), "\n") {
+		fields := strings.Split(line, " ")
+		if len(fields) >= 5 && fields[4] == mountPoint {
+			mounted = true
+			break
+		}
+	}
+	if !mounted {
 		return "", false
 	}
-	rest := strings.TrimLeft(input[2:], `\/`)
-	parts := strings.FieldsFunc(rest, func(r rune) bool { return r == '\\' || r == '/' })
-	all := append([]string{"/mnt/" + string(drive)}, parts...)
-	return path.Clean(path.Join(all...)), true
+	resolved := mountPoint
+	for _, component := range strings.FieldsFunc(input[2:], func(r rune) bool { return r == '\\' || r == '/' }) {
+		switch component {
+		case "", ".":
+		case "..":
+			if resolved == mountPoint {
+				return "", false
+			}
+			resolved = path.Dir(resolved)
+		default:
+			resolved = path.Join(resolved, component)
+		}
+	}
+	return resolved, true
+}
+
+func isWindowsDrivePath(input string) bool {
+	return len(input) >= 3 && input[1] == ':' && (input[2] == '\\' || input[2] == '/') &&
+		((input[0] >= 'a' && input[0] <= 'z') || (input[0] >= 'A' && input[0] <= 'Z'))
 }
 
 func NormalizeWindowsPath(input string, wsl bool) (string, bool) {
@@ -439,10 +509,11 @@ func NormalizeWindowsPath(input string, wsl bool) (string, bool) {
 	if !drive && !unc {
 		return "", false
 	}
-	if wsl {
+	if wsl && runtime.GOOS == "linux" && drive {
 		if converted, ok := ConvertWindowsPathToWSL(input); ok {
 			return converted, true
 		}
+		return "", false
 	}
 	return filepath.Clean(input), true
 }
